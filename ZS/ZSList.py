@@ -81,9 +81,46 @@ class CZSList:
             if len(lst) < 3:
                 return None
             lst = lst[-3:]
-            if lst[0].dir == lst[0].parent_seg.dir:
-                lst = lst[1:]
-                return None
+            # ===== 修改点 =====
+            # 前面有中枢时：
+            #   ⑴ 笔lst[0]低点 > 中枢上边沿 → 向上突破 → 跳过向上笔
+            #   ⑵ 笔lst[0]高点 < 中枢下边沿 → 向下突破 → 跳过向下笔
+            # 前面无中枢时（最初几笔）：
+            #   ⑴ len=3：跳过第一笔(当进入段)，等第4笔进来凑[bi1,bi2,bi3]
+            #   ⑵ len>3：跳过与第一笔(进入段)同向的，找到反向笔才开始构建
+            if len(self.zs_lst) > 0:
+                zs = self.zs_lst[-1]
+                lst0_low = lst[0]._low()
+                lst0_high = lst[0]._high()
+                if lst0_low > zs.high:
+                    # ⑴ 第一笔低点高于中枢上边沿 → 向上突破 → 跳过向上笔
+                    if lst[0].is_up():
+                        lst = lst[1:]
+                        return None
+                elif lst0_high < zs.low:
+                    # ⑵ 第一笔高点低于中枢下边沿 → 向下突破 → 跳过向下笔
+                    if lst[0].is_down():
+                        lst = lst[1:]
+                        return None
+                else:
+                    raise Exception(
+                        f"over_seg: lst[0] is inside zs range, should not happen. "
+                        f"lst0_low={lst0_low:.4f} zs.high={zs.high:.4f} "
+                        f"lst0_high={lst0_high:.4f} zs.low={zs.low:.4f}"
+                    )
+            else:
+                first_pen = self.free_item_lst[0]
+                if len(self.free_item_lst) == 3:
+                    # ⑴ 前3笔：跳过第一笔(当进入段)，等第4笔进来凑[bi1,bi2,bi3]
+                    lst = lst[1:]
+                    return None
+                else:
+                    # ⑵ 超过3笔：跳过与第一笔(进入段)同向的，直到找到反向笔
+                    if lst[0].dir == first_pen.dir:
+                        lst = lst[1:]
+                        return None
+                    # lst[0]与first_pen反向，继续构建
+            # ===== 修改结束 =====
         min_high = min(item._high() for item in lst)
         max_low = max(item._low() for item in lst)
         return CZS(lst, is_sure=is_sure) if min_high > max_low else None

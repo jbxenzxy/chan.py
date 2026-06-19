@@ -154,7 +154,7 @@ class CZS(Generic[LINE_TYPE]):
         return True
 
     def in_range(self, item):
-        return has_overlap(self.low, self.high, item._low(), item._high())
+        return has_overlap(self.low, self.high, item._low(), item._high(), equal=True)
 
     def is_inside(self, seg: CSeg):
         return seg.start_bi.idx <= self.begin_bi.idx <= seg.end_bi.idx
