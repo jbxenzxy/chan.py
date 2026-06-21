@@ -1096,14 +1096,18 @@ def _refresh_stock_names():
                 name = str(info)
                 market = ""
             # 始终用pypinyin生成拼音首字母，确保搜索的一致性
+            # 通达信/新浪API中名称可能含空格（如"五 粮 液"）或全角字母（如"鲁泰Ａ"）→ 统一清理
+            name_clean = name.replace(" ", "")
+            # 全角ASCII → 半角: U+FF01-U+FF5E → U+0021-U+007E
+            name_clean = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in name_clean)
             pinyin = ""
-            if name:
+            if name_clean:
                 try:
-                    py_list = lazy_pinyin(name)
+                    py_list = lazy_pinyin(name_clean)
                     pinyin = "".join([p[0].upper() for p in py_list if p])
                 except Exception:
                     pinyin = ""
-            all_names[code] = {"name": name, "pinyin": pinyin, "market": market}
+            all_names[code] = {"name": name_clean, "pinyin": pinyin, "market": market}
     except ImportError:
         all_names = {}
         for code, info in raw_names.items():
@@ -1137,8 +1141,6 @@ def _refresh_stock_names():
         print(f"[stock][信息] 股票名称刷新完成: 共{len(all_names)}只 (上海{sh_count}, 深圳{sz_count}), 已保存到 {_STOCK_NAMES_CACHE_FILE}")
     else:
         print("[stock][警告] 股票名称刷新失败: 未获取到任何数据")
-
-    print(f"[stock][信息] 市场拉取汇总: {market_stats}")
 
     # 全部刷新完成，标记状态
     _refresh_status["running"] = False
@@ -1275,28 +1277,36 @@ def _make_chan_config():
     """统一的缠论配置，股票和期货共用"""
     from ChanConfig import CChanConfig
     return CChanConfig({
-        "trigger_step": True,
-        "bi_fx_check": "loss",
-        "bi_allow_sub_peak": True,
-        "bi_algo": "normal",
-        "bi_strict": True,
-        "bi_end_is_peak": False,
-        "seg_algo": "chan",
-        "zs_algo": "over_seg",
-        "zs_combine": False,
-        "bs_type": "1,1p,2,2s,3a,3b",
-        "min_zs_cnt": 1,
-        "bs1_peak": True,
-        "divergence_rate": 0.9,
-        "bsp2_follow_1": True,
-        "max_bs2_rate": 0.9,
-        "bsp2s_follow_2": False,
-        "max_bsp2s_lv": None,
-        "bsp3_follow_1": False,
-        "strict_bsp3": False,
-        "bsp3_peak": False,
-        "bsp3a_max_zs_cnt": 2,
-        "macd_algo": "full_area",
+        "trigger_step": True,            # 实时/回放语义：逐根推进，启用尾部虚笔和未确认结构处理
+        "bi_fx_check": "loss",           # 分型检查：loss模式（宽松）
+        "bi_allow_sub_peak": True,       # 打开后，允许笔端点的分型非局部最高/低分型；参见23/07/21~23/08/07
+        "bi_algo": "normal",             # 按缠论笔定义，非顶/底分型即成笔
+        "bi_strict": True,               # bi_algo=normal时有效；顶/底分型间，至少隔1根K线
+        "bi_end_is_peak": False,         # 关闭后，允许一笔之间有"不成笔的"更高/低分型；参见 上证指数 日K 25/09/03~25/10/31
+
+        "seg_algo": "chan",              # 利用特征序列来计算
+
+        "zs_algo": "over_seg",           # 中枢算法：跨段
+        "zs_combine": False,             # 是否中枢合并，默认为 True
+
+        "bs_type": "1,1p,2,2s,3a,3b",    # 买卖点类型：1趋背/盘背；1p实为C点；3a 中枢在1类后面；3b 中枢在1类前面
+
+        "min_zs_cnt": 1,                 # 1类（和1p类）买卖点至少要经历几个中枢，默认为 1
+        "bs1_peak": True,                # 1类（非1p类）买卖点位置是否必须是整个中枢最低点，默认为 True
+        "divergence_rate": 0.9,          # 1类（和1p类）买卖点背驰力度，默认为 0.9（1：比较中枢进笔 vs 出笔的 MACD 力度；1p：比较相邻同向笔的 MACD 力度）
+
+        "bsp2_follow_1": True,           # 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True
+        "max_bs2_rate": 0.9,             # 2类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到1类买卖点的位置
+
+        "bsp2s_follow_2": False,         # 类2买卖点是否必须跟在2类买卖点后面（2类买卖点可能由于不满足 max_bs2_rate），默认为 False
+        "max_bsp2s_lv": None,            # 类2买卖点最大层级（距离2类买卖点的笔的距离/2），默认为None，不做限制
+
+        "bsp3_follow_1": False,          # 3类买卖点是否必须跟在1类买卖点后面，默认为 True（没有1类点就不算3类点，忽视了有“小转大”的可能）
+        "strict_bsp3": False,            # 3类买卖点对应的中枢，是否要求中枢进入笔"紧邻"1类点笔，默认为 False（允许1类点笔后走个ABC，ABC是后面中枢的进入段）
+        "bsp3_peak": False,              # 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
+        "bsp3a_max_zs_cnt": 2,           # 3类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离1类点最近的那个中枢回拉产生的3a类点，越远的中枢越不可靠
+
+        "macd_algo": "full_area",        # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）
     })
 
 
@@ -1349,6 +1359,7 @@ def _cache_put(key, value):
         gc.collect()
         print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
     _analysis_cache[key] = value
+    _check_memory_and_protect()
 
 
 def _cache_get(key):
@@ -2718,66 +2729,40 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 判断是否为虚笔：is_sure=False 视为虚笔
         is_virtual = not latest_bi.get("is_sure", True)
         direction = latest_bi.get("direction", "")
-        if is_virtual:
-            # 虚笔：找到端点左边第一根K线（包含关系处理后的）
-            # 笔的结束K线索引：通过edt在K线数据中查找
-            search_edt = latest_bi["edt"]
-            end_klu_idx = None
-            for ki, k in enumerate(kline_data):
-                if k["date"] == search_edt:
-                    end_klu_idx = ki
-                    break
-            if end_klu_idx is not None and end_klu_idx > 0:
-                left_kline = kline_data[end_klu_idx - 1]
-                if direction == "down":
-                    # 向下虚笔：以左边第一根K线的最高价画线
-                    white_hline = {
-                        "price": left_kline["high"],
-                        "start_date": left_kline["date"],
-                    }
-                elif direction == "up":
-                    # 向上虚笔：以左边第一根K线的最低价画线
-                    white_hline = {
-                        "price": left_kline["low"],
-                        "start_date": left_kline["date"],
-                    }
-        else:
-            # 实笔：找到结束分型的左肩
-            end_fx_idx = latest_bi.get("end_fx_idx")
-            if end_fx_idx is not None and end_fx_idx > 0:
-                # 左肩 = 结束分型左边第一根合并K线
-                left_klc = kl_list.lst[end_fx_idx - 1]
-                # 获取左肩K线对应的所有原始K线，取其中最高/最低价
-                if hasattr(left_klc, 'lst') and left_klc.lst:
-                    high = max(klu.high for klu in left_klc.lst)
-                    low = min(klu.low for klu in left_klc.lst)
-                else:
-                    high = left_klc.high
-                    low = left_klc.low
-                # 获取左肩K线的时间（用于前端定位起始X坐标）
-                if hasattr(left_klc, 'get_high_peak_klu') and left_klc.get_high_peak_klu():
-                    ls_time = left_klc.get_high_peak_klu().time.to_str()
-                elif hasattr(left_klc, 'get_low_peak_klu') and left_klc.get_low_peak_klu():
-                    ls_time = left_klc.get_low_peak_klu().time.to_str()
-                else:
-                    ls_time = ""
-                try:
-                    ls_dt = datetime.strptime(ls_time, "%Y/%m/%d %H:%M")
-                    ls_date = ls_dt.strftime(date_fmt)
-                except:
-                    ls_date = ls_time[:16].replace("/", "-") if freq in INTRADAY_FREQS else ls_time[:10].replace("/", "-")
-                if direction == "down":
-                    # 向下实笔：以底分型左肩的最高价画线
-                    white_hline = {
-                        "price": round(high, 2),
-                        "start_date": ls_date,
-                    }
-                elif direction == "up":
-                    # 向上实笔：以顶分型左肩的最低价画线
-                    white_hline = {
-                        "price": round(low, 2),
-                        "start_date": ls_date,
-                    }
+        # 实笔/虚笔统一：左肩合并K线的高/低点（经过包含关系处理），
+        # 找到原始K线序列中 high/low 等于该值的 K线，取其时间作为起始坐标
+        end_fx_idx = latest_bi.get("end_fx_idx")
+        if end_fx_idx is not None and end_fx_idx > 0:
+            left_klc = kl_list.lst[end_fx_idx - 1]  # 左肩合并K线
+            # 取合并K线包含关系处理后的 high/low 作为画线价格
+            klc_high = left_klc.high
+            klc_low = left_klc.low
+            # 在原始K线序列中找到与合并K线 high/low 相等的那根，取它的时间
+            tgt_klu = None
+            if hasattr(left_klc, 'lst') and left_klc.lst:
+                for klu in left_klc.lst:
+                    if direction == "down" and klu.high == klc_high:
+                        tgt_klu = klu
+                        break
+                    elif direction == "up" and klu.low == klc_low:
+                        tgt_klu = klu
+                        break
+                # 如果没找到精确匹配的（浮点精度），回退到第一个K线
+                if tgt_klu is None:
+                    tgt_klu = left_klc.lst[0]
+            if tgt_klu:
+                ls_time = tgt_klu.time.to_str()
+            else:
+                ls_time = ""
+            try:
+                ls_dt = datetime.strptime(ls_time, "%Y/%m/%d %H:%M")
+                ls_date = ls_dt.strftime(date_fmt)
+            except:
+                ls_date = ls_time[:16].replace("/", "-") if freq in INTRADAY_FREQS else ls_time[:10].replace("/", "-")
+            if direction == "down":
+                white_hline = {"price": round(klc_high, 2), "start_date": ls_date}
+            elif direction == "up":
+                white_hline = {"price": round(klc_low, 2), "start_date": ls_date}
 
     # 6. 组装结果
     date_range = f"{kline_data[0]['date']} ~ {kline_data[-1]['date']}" if kline_data else ""
@@ -3167,7 +3152,6 @@ def futures_manual_select_zs(symbol, freq="15s", bi_idx="0"):
 
         from Common.CEnum import KL_TYPE, AUTYPE
         from Chan import CChan
-        from ChanConfig import CChanConfig
 
         _freq_to_kl = {
             15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
@@ -3177,16 +3161,7 @@ def futures_manual_select_zs(symbol, freq="15s", bi_idx="0"):
         }
         kl_type = _freq_to_kl.get(freq_sec, KL_TYPE.K_15S)
 
-        config = CChanConfig({
-            "trigger_step": True, "bi_fx_check": "loss", "bi_allow_sub_peak": True,
-            "bi_algo": "normal", "bi_strict": True, "bi_end_is_peak": False,
-            "seg_algo": "chan", "zs_algo": "over_seg", "zs_combine": False,
-            "bs_type": "1,1p,2,2s,3a,3b", "min_zs_cnt": 1, "bs1_peak": True,
-            "divergence_rate": 0.9, "bsp2_follow_1": True, "max_bs2_rate": 0.9,
-            "bsp2s_follow_2": False, "max_bsp2s_lv": None, "bsp3_follow_1": False,
-            "strict_bsp3": False, "bsp3_peak": False, "bsp3a_max_zs_cnt": 2,
-            "macd_algo": "full_area",
-        })
+        config = _make_chan_config()
 
         try:
             from Math.Demark import CDemarkEngine
@@ -3540,6 +3515,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             _load_stock_names_from_cache_file()
             keyword_upper = keyword.upper()
             exact_results = []
+            exact_pinyin_results = []  # 拼音或名称完全匹配（如输入"LG"精确匹配"柳工"）
             prefix_results = []
             other_results = []
 
@@ -3552,6 +3528,9 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     name = info
                     pinyin = ""
                     market = ""
+                # 归一化：全角ASCII → 半角（兼容旧缓存中"鲁泰Ａ"→"鲁泰A"）
+                name = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in name)
+                pinyin = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in pinyin)
 
                 if not name:
                     continue
@@ -3581,12 +3560,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 item = {"code": bare_code, "name": name, "pinyin": pinyin, "market": market, "type": ""}
                 if bare_code == keyword_upper:
                     exact_results.append(item)
+                elif pinyin == keyword_upper or name.upper() == keyword_upper:
+                    exact_pinyin_results.append(item)
                 elif bare_code.startswith(keyword_upper):
                     prefix_results.append(item)
                 else:
                     other_results.append(item)
 
-            results = exact_results[:10] + prefix_results[:10] + other_results[:10]
+            results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
             results = results[:10]
 
             # 期货/期指搜索：匹配本地品种名称表
@@ -5020,51 +5001,136 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (activeBtn) activeBtn.classList.add('active');
         }
 
+        // 判断是否为期货/期指代码
+        function isFuturesCode(code) {
+            return code.includes('KQ.m@') || code.includes('KQ.i@') || /^[A-Z]+\.[A-Z]/.test(code);
+        }
+        // 保存当前状态到 localStorage（仅股票，期货不保存）
+        function saveLastState() {
+            if (!chartData || !chartData.meta) return;
+            const market = chartData.meta.market;
+            if (market === 'futures') return; // 期货不保存
+            const state = {
+                code: chartData.meta.symbol,
+                freq: currentFreq,
+                name: chartData.meta.name
+            };
+            try { localStorage.setItem('chan_last_state', JSON.stringify(state)); } catch(e) {}
+        }
+        // 从 localStorage 加载上次状态，仅股票有效
+        function loadLastState() {
+            try {
+                const raw = localStorage.getItem('chan_last_state');
+                if (!raw) return null;
+                const state = JSON.parse(raw);
+                if (!state.code || !state.freq) return null;
+                if (isFuturesCode(state.code)) return null;
+                return state;
+            } catch(e) { return null; }
+        }
+
         async function init() {
             try {
-                chartData = %%CHART_DATA%%;
-                document.getElementById("stock-name").textContent = chartData.meta.name;
-                document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                document.title = "缠论分析 - " + chartData.meta.name;
-                initCanvas();
-                updateSlider();
-                // 根据数据中的 freq 自动识别周期
-                if (chartData.meta.freq === "5分钟") {
-                    currentFreq = "5m";
-                } else if (chartData.meta.freq === "30分钟") {
-                    currentFreq = "30m";
-                } else if (chartData.meta.freq === "周线") {
-                    currentFreq = "w";
-                } else {
-                    currentFreq = "d";
+                // 先尝试从 localStorage 恢复上次的股票状态
+                const savedState = loadLastState();
+                if (savedState) {
+                    // 有保存的股票状态，用初始数据占位后立即异步加载
+                    chartData = %%CHART_DATA%%;
+                    document.getElementById("stock-code-input").value = savedState.code;
+                    // 设置初始周期
+                    if (savedState.freq) {
+                        currentFreq = savedState.freq;
+                        lastStockFreq = savedState.freq;
+                    }
+                    initCanvas();
+                    updateSlider();
+                    updateFreqButtonStates(false);
+                    updateRestartBtn();
+                    updateDualBtn();
+                    // 异步加载保存的股票数据
+                    document.getElementById("loading").classList.remove("hidden");
+                    fetch("/api/stock?code=" + encodeURIComponent(savedState.code) + "&freq=" + savedState.freq)
+                        .then(resp => {
+                            if (!resp.ok) throw new Error("恢复失败");
+                            return resp.json();
+                        })
+                        .then(data => {
+                            chartData = data;
+                            saveHistory(savedState.code, data.meta.name);
+                            document.getElementById("stock-name").textContent = chartData.meta.name;
+                            document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                            document.title = "缠论分析 - " + chartData.meta.name;
+                            let returnedFreq;
+                            if (data.meta.freq === "5分钟") returnedFreq = "5m";
+                            else if (data.meta.freq === "30分钟") returnedFreq = "30m";
+                            else if (data.meta.freq === "周线") returnedFreq = "w";
+                            else returnedFreq = "d";
+                            currentFreq = returnedFreq;
+                            lastStockFreq = currentFreq;
+                            updateFreqButtonStates(false);
+                            viewCount = 377;
+                            adjustViewForSavedPoint();
+                            viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                            if (chartData.klines.length < viewCount) viewOffset = 0;
+                            showFx = false; showMa = false; showZs = true;
+                            initialized = true;
+                            updateRestartBtn();
+                            updateDualBtn();
+                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                            document.getElementById("goto-date-input").value = lastDate;
+                            updateWeekday();
+                            render();
+                            document.getElementById("loading").classList.add("hidden");
+                            generateStats();
+                            loadAnnotations();
+                            // 断开期货SSE（如果有）
+                            disconnectRealtime();
+                        })
+                        .catch(err => {
+                            console.error("恢复上次状态失败，回退到默认:", err);
+                            // 回退到默认上证指数
+                            document.getElementById("stock-code-input").value = "";
+                            initDefault();
+                        });
+                    return;
                 }
-                lastStockFreq = currentFreq; // 记录初始股票周期
-                updateFreqButtonStates(false); // 初始页面为股票，禁用 1m/15s
-                viewCount = 377;
-                  adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
-                showFx = false;
-                showMa = false;
-                showZs = true;
-                viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                // K线不足一屏时右对齐：确保最后一根K线紧贴右纵坐标
-                if (chartData.klines.length < viewCount) {
-                    viewOffset = 0;
-                }
-                initialized = true;
-                updateRestartBtn();
-                updateDualBtn();
-                const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
-                document.getElementById("goto-date-input").value = lastDate;
-                updateWeekday();
-                render();
-                document.getElementById("loading").classList.add("hidden");
-                generateStats();
-                loadAnnotations();
+                // 无保存状态，默认加载上证指数
+                initDefault();
             } catch (err) {
                 console.error("初始化失败:", err);
                 document.getElementById("loading").classList.add("hidden");
                 document.getElementById("error").classList.remove("hidden");
             }
+        }
+
+        function initDefault() {
+            chartData = %%CHART_DATA%%;
+            document.getElementById("stock-name").textContent = chartData.meta.name;
+            document.getElementById("stock-code").textContent = chartData.meta.symbol;
+            document.title = "缠论分析 - " + chartData.meta.name;
+            initCanvas();
+            updateSlider();
+            if (chartData.meta.freq === "5分钟") currentFreq = "5m";
+            else if (chartData.meta.freq === "30分钟") currentFreq = "30m";
+            else if (chartData.meta.freq === "周线") currentFreq = "w";
+            else currentFreq = "d";
+            lastStockFreq = currentFreq;
+            updateFreqButtonStates(false);
+            viewCount = 377;
+            adjustViewForSavedPoint();
+            showFx = false; showMa = false; showZs = true;
+            viewOffset = Math.max(0, chartData.klines.length - viewCount);
+            if (chartData.klines.length < viewCount) viewOffset = 0;
+            initialized = true;
+            updateRestartBtn();
+            updateDualBtn();
+            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+            document.getElementById("goto-date-input").value = lastDate;
+            updateWeekday();
+            render();
+            document.getElementById("loading").classList.add("hidden");
+            generateStats();
+            loadAnnotations();
         }
 
         function initCanvas() {
@@ -5541,7 +5607,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.stroke();
             const klinesToDraw = klines.slice(0, viewCount);
             drawMacdLabel(macdTextArea, klinesToDraw, barStep, subPixelOffset);
-            drawMacd(klinesToDraw, volArea, macdRange, barStep, barWidth, subPixelOffset);
+            drawMacd(klinesToDraw, volArea, macdRange, barStep, barWidth / 2, subPixelOffset);
             // 区间选择高亮：绘制起点A的金色标记
             if (_rangeSelect.mode === 'SELECTED_A' && _rangeSelect.startFreq === currentFreq && chartData && _rangeSelect.startSymbol === chartData.meta.symbol) {
                 const selIdx = _rangeSelect.startIdx;
@@ -7656,6 +7722,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                         render();
                                         generateStats();
                                         loadAnnotations();
+                                        saveLastState(); // 保存股票状态
                                         startRealtimeIfFutures(data);
                                     });
                             } else {
@@ -7664,6 +7731,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 render();
                                 generateStats();
                                 loadAnnotations();
+                                saveLastState(); // 保存股票状态
                                 startRealtimeIfFutures(data);
                             }
                         } else {
@@ -7671,6 +7739,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             render();
                             generateStats();
                             loadAnnotations();
+                            saveLastState(); // 保存股票状态
                             startRealtimeIfFutures(data);
                         }
                     })
@@ -8049,6 +8118,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     render();
                                     generateStats();
                                     loadAnnotations();
+                                    saveLastState(); // 保存股票状态
                                 });
                         }
                     }
@@ -8056,6 +8126,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     render();
                     generateStats();
                     loadAnnotations();
+                    saveLastState(); // 保存股票状态
                     // 期货/期指：切换到实时模式
                     startRealtimeIfFutures(data);
                 })
@@ -8918,6 +8989,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         init();
+
+        // 关闭/刷新页面时保存状态（仅股票，期货不保存）
+        window.addEventListener('beforeunload', function() { saveLastState(); });
     })();
     </script>
 </body>
