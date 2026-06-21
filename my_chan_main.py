@@ -99,6 +99,12 @@ except ImportError as e:
 # 导入通达信数据源适配器（从 chan.py 的 DataAPI 目录）
 from DataAPI.TdxAPI import CTdxAPI
 
+# 导入前复权模块（与 my_chan_main.py 放在同一目录下）
+from forward_adjust import apply_forward_adjust, get_float_shares_from_xdxr
+
+# 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
+FORWARD_ADJUST_ENABLED = True
+
 # 导入天勤数据源适配器（期货/期指）
 try:
     from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP
@@ -418,6 +424,98 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     return result
 
 
+def _aggregate_5m_to_30m(records, market="sh"):
+    """
+    将5分钟K线合成为30分钟K线（从 read_tdx_min_file 中提取的独立函数）
+    供外部在5分钟前复权后调用，避免对30分钟K线做二次复权
+    """
+    import time as _time
+    from collections import OrderedDict
+
+    if not records:
+        return []
+
+    t0 = _time.time()
+
+    # A股交易时间: 9:30-11:30, 13:00-15:00
+    # 港股交易时间: 9:30-12:00, 13:00-16:00
+    if market == 'hk':
+        def _bucket_30min(dt_obj):
+            h, m = dt_obj.hour, dt_obj.minute
+            if h == 9:
+                return dt_obj.replace(minute=0, hour=10)
+            elif h == 10:
+                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
+            elif h == 11:
+                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
+            elif h == 12:
+                return dt_obj.replace(minute=0)
+            elif h == 13:
+                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
+            elif h == 14:
+                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
+            elif h == 15:
+                return dt_obj.replace(minute=0, hour=15) if m == 0 else dt_obj.replace(minute=30)
+            elif h == 16:
+                return dt_obj.replace(minute=0)
+            return dt_obj
+    else:
+        def _bucket_30min(dt_obj):
+            h, m = dt_obj.hour, dt_obj.minute
+            if h == 9:
+                return dt_obj.replace(minute=0, hour=10)
+            elif h == 10:
+                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
+            elif h == 11:
+                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
+            elif h == 13:
+                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
+            elif h == 14:
+                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
+            elif h == 15:
+                return dt_obj.replace(minute=0)
+            return dt_obj
+
+    for r in records:
+        r["bucket"] = _bucket_30min(r["dt"])
+
+    buckets = OrderedDict()
+    for r in records:
+        b = r["bucket"]
+        if b not in buckets:
+            buckets[b] = {
+                "open": r["open"], "high": r["high"], "low": r["low"],
+                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
+            }
+        else:
+            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
+            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
+            buckets[b]["close"] = r["close"]
+            buckets[b]["vol"] += r["vol"]
+            buckets[b]["amount"] += r["amount"]
+
+    result = []
+    for b, v in buckets.items():
+        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
+        h2 = max(h2, o2, c2)
+        l2 = min(l2, o2, c2)
+        result.append({
+            "dt": b,
+            "open": round(o2, 3),
+            "high": round(h2, 3),
+            "low": round(l2, 3),
+            "close": round(c2, 3),
+            "vol": v["vol"],
+            "amount": round(v["amount"], 2),
+        })
+
+    # 清理临时 bucket 属性
+    for r in records:
+        r.pop("bucket", None)
+
+    print(f"[耗时] 合成30分钟线: {_time.time()-t0:.3f}s")
+    return result
+
 
 
 def resample_to_weekly(day_records):
@@ -522,13 +620,10 @@ def get_stock_name(market, code):
     return None
 
 
-# 流通股本缓存：按需从通达信本地gbbq文件加载
-# key: 股票代码(6位), value: 流通股本(股)
-_float_shares_cache = {}
-_float_shares_loaded = False
-
-# GBBQ缓存文件路径（保存解密后的全部流通股本数据）
-_GBBQ_CACHE_FILE = os.path.join(VIPDOC_DIR, "gbbq_cache.json")
+# 流通股本缓存：通过 xdxr 网络接口获取（与除权除息数据复用同一数据源）
+# key: (market, code), value: 流通股本(股)
+# 由 forward_adjust.get_float_shares_from_xdxr() 负责读取和缓存
+# 注意：xdxr 数据的 key 是 (market, code)，不会出现 000001.SH/000001.SZ 冲突
 
 # 股票名称缓存：从通达信行情服务器批量获取后保存到本地JSON
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
@@ -536,8 +631,8 @@ _stock_names_cache = {}
 _stock_names_loaded = False
 _STOCK_NAMES_CACHE_FILE = os.path.join(VIPDOC_DIR, "stock_names_cache.json")
 
-# 刷新状态（GBBQ + 股票名称共用）
-_gbbq_refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
+# 刷新状态（股票名称刷新用）
+_refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
 
 
 def _load_stock_names_from_cache_file():
@@ -597,6 +692,10 @@ def _inject_known_indices():
         ("399905", "中证500", "sz"),
         ("399330", "深证100", "sz"),
         ("399673", "创业板50", "sz"),
+        ("HSTECH", "恒生科技指数", "hk"),
+        ("HSI", "恒生指数", "hk"),
+        ("HSCEI", "恒生中国企业指数", "hk"),
+        ("HSCCI", "恒生香港中资企业指数", "hk"),
     ]
     try:
         from pypinyin import lazy_pinyin
@@ -893,7 +992,7 @@ def _refresh_stock_names():
       2. vipdoc/*.day 文件名（普通版，无tnf文件时的降级方案）
       3. 新浪财经API（仅在缓存为空时调用一次，建立初始缓存）
     """
-    global _stock_names_cache, _stock_names_loaded, _gbbq_refresh_status
+    global _stock_names_cache, _stock_names_loaded, _refresh_status
 
     # === 先加载已有缓存，新数据合并进去，不覆盖 ===
     raw_names = {}
@@ -1042,260 +1141,31 @@ def _refresh_stock_names():
     print(f"[stock][信息] 市场拉取汇总: {market_stats}")
 
     # 全部刷新完成，标记状态
-    _gbbq_refresh_status["running"] = False
-    _gbbq_refresh_status["step"] = ""
+    _refresh_status["running"] = False
+    _refresh_status["step"] = ""
 
 
-def _load_float_shares_from_cache_file():
-    """
-    从 gbbq_cache.json 缓存文件加载流通股本到内存。
-    返回加载的记录数，文件不存在则返回0。
-    """
-    global _float_shares_loaded
-    if _float_shares_loaded:
-        return len(_float_shares_cache)
-    if not os.path.exists(_GBBQ_CACHE_FILE):
-        return 0
-    try:
-        with open(_GBBQ_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            _float_shares_cache.update(data)
-            _float_shares_loaded = True
-            print(f"[stock][信息] 从缓存文件加载流通股本: {len(_float_shares_cache)} 只")
-            return len(_float_shares_cache)
-    except Exception as e:
-        print(f"[stock][警告] 读取缓存文件失败: {e}")
-    return 0
 
 
-def _refresh_gbbq_to_file():
-    """
-    解密全部GBBQ记录，将有效流通股本保存到 gbbq_cache.json。
-    在后台线程中运行，通过 _gbbq_refresh_status 报告进度。
-    """
-    global _float_shares_cache, _float_shares_loaded, _gbbq_refresh_status
-
-    _gbbq_refresh_status = {"running": True, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": "正在刷新GBBQ文件..."}
-
-    gbbq_file = os.path.join(TDX_HQ_CACHE, "gbbq")
-    if not os.path.exists(gbbq_file):
-        _gbbq_refresh_status["error"] = f"gbbq文件不存在: {gbbq_file}"
-        _gbbq_refresh_status["running"] = False
-        return
-
-    try:
-        from pytdx.reader.gbbq_reader import GbbqReader
-        reader = GbbqReader()
-        bin_keys = bytes.fromhex(reader.hexdump_keys)
-    except ImportError:
-        _gbbq_refresh_status["error"] = "pytdx 未安装，无法解密gbbq"
-        _gbbq_refresh_status["running"] = False
-        return
-    except Exception as e:
-        _gbbq_refresh_status["error"] = f"读取密钥失败: {e}"
-        _gbbq_refresh_status["running"] = False
-        return
-
-    try:
-        with open(gbbq_file, "rb") as f:
-            content = f.read()
-
-        count = struct.unpack("<I", content[0:4])[0]
-        data_offset = 4
-        _gbbq_refresh_status["total"] = count
-
-        # 收集所有有效记录，按代码分组保留最新日期
-        records_by_code = {}
-        processed = 0
-
-        for _ in range(count):
-            try:
-                rec = _decrypt_gbbq_record(content, data_offset, bin_keys)
-                data_offset += 29
-                code = rec[1].strip()
-
-                # 只保留 category in {2,3,5,9} 且日期最新的
-                if rec[3] in (2, 3, 5, 9):
-                    if code not in records_by_code or rec[2] > records_by_code[code][2]:
-                        records_by_code[code] = rec
-            except Exception:
-                pass
-
-            processed += 1
-            # 每处理1万条更新一次进度
-            if processed % 10000 == 0:
-                _gbbq_refresh_status["progress"] = processed
-
-        # 提取流通股本，构建 {code: 流通股数} 字典
-        result = {}
-        loaded = 0
-        for code, rec in records_by_code.items():
-            shares_wan = rec[4]  # hongli_panqianliutong
-            if shares_wan and shares_wan > 0:
-                result[code] = float(shares_wan) * 10000
-                loaded += 1
-
-        # 保存到缓存文件
-        os.makedirs(os.path.dirname(_GBBQ_CACHE_FILE), exist_ok=True)
-        with open(_GBBQ_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False)
-
-        # 同时更新内存缓存
-        _float_shares_cache = result
-        _float_shares_loaded = True
-
-        _gbbq_refresh_status["progress"] = count
-        _gbbq_refresh_status["loaded"] = loaded
-        print(f"[stock][信息] GBBQ刷新完成: 总{count}条, 有效{len(records_by_code)}只, 加载{loaded}只, 已保存到 {_GBBQ_CACHE_FILE}")
-
-        # GBBQ完成后，继续刷新股票名称
-        _gbbq_refresh_status["step"] = "正在刷新股票名称..."
-        _refresh_stock_names()
-
-    except Exception as e:
-        _gbbq_refresh_status["error"] = str(e)
-        _gbbq_refresh_status["running"] = False
-        _gbbq_refresh_status["step"] = "GBBQ刷新失败"
-        print(f"[错误] GBBQ刷新失败: {e}")
-        import traceback
-        traceback.print_exc()
-
-def _decrypt_gbbq_record(encrypt_data, data_offset, bin_keys):
-    """解密单条 gbbq 记录（29字节），返回 (market, code, datetime, category,
-    hongli_panqianliutong, peigujia_qianzongguben, songgu_qianzongguben, peigu_houzongguben)"""
-    from ctypes import c_uint32
-    clear_data = bytearray()
-    for i in range(3):
-        (eax,) = struct.unpack("<I", bin_keys[0x44: 0x44 + 4])
-        (ebx,) = struct.unpack("<I", encrypt_data[data_offset: data_offset + 4])
-        num = c_uint32(eax ^ ebx).value
-        (numold,) = struct.unpack("<I", encrypt_data[data_offset + 0x4: data_offset + 0x4 + 4])
-        for j in reversed(range(4, 0x40 + 4, 4)):
-            ebx = (num & 0xff0000) >> 16
-            (eax,) = struct.unpack("<I", bin_keys[ebx * 4 + 0x448: ebx * 4 + 0x448 + 4])
-            ebx = num >> 24
-            (eax_add,) = struct.unpack("<I", bin_keys[ebx * 4 + 0x48: ebx * 4 + 0x48 + 4])
-            eax += eax_add
-            eax = c_uint32(eax).value
-            ebx = (num & 0xff00) >> 8
-            (eax_xor,) = struct.unpack("<I", bin_keys[ebx * 4 + 0x848: ebx * 4 + 0x848 + 4])
-            eax ^= eax_xor
-            eax = c_uint32(eax).value
-            ebx = num & 0xff
-            (eax_add,) = struct.unpack("<I", bin_keys[ebx * 4 + 0xC48: ebx * 4 + 0xC48 + 4])
-            eax += eax_add
-            eax = c_uint32(eax).value
-            (eax_xor,) = struct.unpack("<I", bin_keys[j: j + 4])
-            eax ^= eax_xor
-            eax = c_uint32(eax).value
-            ebx = num
-            num = numold ^ eax
-            num = c_uint32(num).value
-            numold = ebx
-        (numold_op,) = struct.unpack("<I", bin_keys[0: 4])
-        numold ^= numold_op
-        numold = c_uint32(numold).value
-        clear_data.extend(struct.pack("<II", numold, num))
-        data_offset += 8
-    clear_data.extend(encrypt_data[data_offset: data_offset + 5])
-    (v1, v2, v3, v4, v5, v6, v7, v8) = struct.unpack("<B7sIBffff", clear_data)
-    return (v1, v2.rstrip(b"\x00").decode("utf-8"), v3, v4, v5, v6, v7, v8)
 
 
-def _load_float_shares_for_codes(codes):
-    """
-    从通达信本地 gbbq 文件加载指定股票代码的流通股本。
-    优化：直接操作二进制，只解密与自选股匹配的记录，跳过99%无关记录。
-    187158条记录中只解密几百条，速度从1分钟降到<1秒。
-    """
-    if not codes:
-        return
 
-    global _float_shares_loaded
-
-    code_set = set(codes)
-    gbbq_file = os.path.join(TDX_HQ_CACHE, "gbbq")
-    if not os.path.exists(gbbq_file):
-        return
-
-    try:
-        # 读取 pytdx 的密钥表
-        from pytdx.reader.gbbq_reader import GbbqReader
-        reader = GbbqReader()
-        bin_keys = bytes.fromhex(reader.hexdump_keys)
-    except ImportError:
-        print("[stock][信息] pytdx 未安装，跳过市值比较")
-        return
-    except Exception as e:
-        print(f"[stock][警告] 读取密钥失败: {e}")
-        return
-
-    try:
-        with open(gbbq_file, "rb") as f:
-            content = f.read()
-
-        count = struct.unpack("<I", content[0:4])[0]
-        data_offset = 4
-
-        # 收集所有匹配的记录，按代码分组保留最新日期
-        records_by_code = {}
-        matched = 0
-        skipped = 0
-
-        for _ in range(count):
-            # 只解密这条记录
-            rec = _decrypt_gbbq_record(content, data_offset, bin_keys)
-            data_offset += 29
-            code = rec[1].strip()  # rec[1] 已经是 str (decode("utf-8") 后)
-
-            if code not in code_set:
-                skipped += 1
-                continue
-
-            matched += 1
-            # rec: (market, code, datetime, category, hongli, peigu, songgu, houzong)
-            # 只保留 category in {2,3,5,9} 且日期最新的
-            if rec[3] not in (2, 3, 5, 9):
-                continue
-            if code not in records_by_code or rec[2] > records_by_code[code][2]:
-                records_by_code[code] = rec
-
-        loaded = 0
-        for code, rec in records_by_code.items():
-            shares_wan = rec[4]  # hongli_panqianliutong
-            if shares_wan and shares_wan > 0:
-                _float_shares_cache[code] = float(shares_wan) * 10000
-                loaded += 1
-
-        _float_shares_loaded = True
-        print(f"[stock][信息] 流通股本: 匹配 {matched} 条, 有效 {len(records_by_code)} 只, 加载 {loaded}/{len(code_set)} 只")
-    except Exception as e:
-        print(f"[stock][警告] 读取 gbbq 失败: {e}")
-        import traceback
-        traceback.print_exc()
 
 
 def get_stock_float_mv_local(market, code, last_close):
     """
-    从本地缓存计算流通市值（单位：亿元）。
+    通过 xdxr 网络接口计算流通市值（单位：亿元）。
     流通市值 = 最新收盘价 × 流通股本
     港股返回 None（跳过市值比较）。
-    优先从缓存文件读取，缓存文件不存在则按需解密。
+    流通股本由 forward_adjust.get_float_shares_from_xdxr() 从 xdxr 数据中提取，
+    与除权除息数据复用同一数据源，无需本地文件解密。
     """
     if market == "hk":
         return None
-    global _float_shares_loaded
-    if not _float_shares_loaded:
-        # 优先尝试从缓存文件加载
-        if _load_float_shares_from_cache_file() == 0:
-            # 缓存文件不存在，回退到按需解密
-            try:
-                _load_float_shares_for_codes([code])
-            except Exception:
-                pass
-    shares = _float_shares_cache.get(code)
-    if shares and last_close and last_close > 0:
+    if not last_close or last_close <= 0:
+        return None
+    shares = get_float_shares_from_xdxr(market, code)
+    if shares and shares > 0:
         return last_close * shares / 100000000  # 元 -> 亿元
     return None
 
@@ -1309,6 +1179,17 @@ def parse_stock_code(code):
     market: 'sh' / 'sz' / 'hk' / 'futures'
     """
     code = code.strip().upper()
+
+    # ===== 港股指数别名映射 =====
+    # 将用户输入的指数简称映射到通达信港股数据文件实际代码
+    _HK_INDEX_ALIASES = {
+        "HSTECH": ("hk", "HSTECH"),   # 恒生科技指数
+        "HSI": ("hk", "HSI"),         # 恒生指数
+        "HSCEI": ("hk", "HSCEI"),     # 恒生中国企业指数
+        "HSCCI": ("hk", "HSCCI"),     # 恒生香港中资企业指数
+    }
+    if code in _HK_INDEX_ALIASES:
+        return _HK_INDEX_ALIASES[code]
 
     # ===== 期货/期指代码识别 =====
     # 格式: EXCHANGE.SYMBOL (如 CFFEX.IM2507, SHFE.rb2505)
@@ -1327,9 +1208,17 @@ def parse_stock_code(code):
     prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', code)
     if prefix_match:
         return prefix_match.group(1).lower(), prefix_match.group(2)
+    # HK前缀 + 非数字代码（如 HKHSTECH、HKHSI）
+    prefix_alpha_match = re.match(r'^HK([A-Z]+)$', code)
+    if prefix_alpha_match:
+        return 'hk', prefix_alpha_match.group(1)
     suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', code)
     if suffix_match:
         return suffix_match.group(2).lower(), suffix_match.group(1)
+    # .HK 后缀 + 非数字代码（如 HSTECH.HK）
+    suffix_alpha_match = re.match(r'^([A-Z]+)\.HK$', code)
+    if suffix_alpha_match:
+        return 'hk', suffix_alpha_match.group(1)
     # 自动判断：5位纯数字优先识别为港股（如 00700）
     if len(code) == 5 and code.isdigit():
         return 'hk', code
@@ -1434,7 +1323,6 @@ import collections
 
 _MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合
 _analysis_cache = collections.OrderedDict()
-_CACHE_VERSION = "v2"  # 修改分析结果结构时递增，使旧缓存自动失效
 
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
@@ -1755,13 +1643,13 @@ _saved_point_times = _load_saved_point_times()
 # ============================================================
 # 文字标注持久化存储
 # ============================================================
-ANNOTATIONS_FILE = os.path.join(VIPDOC_DIR, "annotations.json")
+ANNOTATIONS_FILE = os.path.join(VIPDOC_DIR, "text_annotation.json")
 _annotations_cache = {}  # { "code_freq": [ { "date": "2024-01-15", "text": "支撑位", "y_offset": 0 }, ... ] }
 _annotations_loaded = False
 
 
 def _load_annotations():
-    """从 annotations.json 加载标注数据到内存"""
+    """从 text_annotation.json 加载标注数据到内存"""
     global _annotations_cache, _annotations_loaded
     if _annotations_loaded:
         return
@@ -1777,7 +1665,7 @@ def _load_annotations():
 
 
 def _save_annotations():
-    """保存标注数据到 annotations.json"""
+    """保存标注数据到 text_annotation.json"""
     try:
         with open(ANNOTATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(_annotations_cache, f, ensure_ascii=False, indent=2)
@@ -2248,6 +2136,7 @@ def _analyze_futures_internal(code, freq="d", end_date=None):
             "date_range": date_range,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "is_replay": bool(end_date),
+            "forward_adjust": False,
             "market": "futures",
         },
         "klines": kline_data,
@@ -2351,7 +2240,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if not os.path.exists(day_file):
             return {"error": f"找不到数据文件: {day_file}"}
 
-    cache_key = f"{_CACHE_VERSION}_{market}_{code}_{freq}"
+    cache_key = f"{market}_{code}_{freq}"
+    qualified_code = f"{code}.{market.upper()}"  # 区分沪市深市同号股票
 
     # 冷启动（无end_date）：命中缓存直接返回
     # 但如果CSV中有保存的选点，且缓存的saved_selection_date与CSV不一致，
@@ -2360,8 +2250,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     if not end_date and cached_result is not None and "result" in cached_result:
         result = cached_result["result"]
         col = FREQ_TO_COL.get(freq, "")
-        if col and code in _saved_point_times:
-            saved_sdt = _saved_point_times[code].get(col, "").strip() or None
+        if col and qualified_code in _saved_point_times:
+            saved_sdt = _saved_point_times[qualified_code].get(col, "").strip() or None
             if saved_sdt:
                 cached_saved = result.get("meta", {}).get("saved_selection_date", "")
                 if cached_saved != saved_sdt:
@@ -2380,20 +2270,36 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 复盘模式：不清空缓存，保留冷启动的 records 和 result
 
     # 1. 获取K线数据（优先从缓存读取全量数据，避免重复读文件）
+    forward_adjust_done = False
     if cached_result is not None and "records" in cached_result:
         full_records = cached_result["records"]
+        forward_adjust_done = cached_result.get("result", {}).get("meta", {}).get("forward_adjust", False)
         print(f"[stock][耗时] 从缓存获取K线: {len(full_records)}条")
     else:
         t0 = time.time()
+        # ── 各周期数据加载 + 前复权（统一在原始数据层面处理，避免二次复权）──
         if freq == '30m':
-            full_records = read_tdx_min_file(data_file, market=market, aggregate_30m=True)
-        elif freq == '5m':
+            # 30分K：先读5分原始数据 → 前复权 → 合成30分K
             full_records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
-        else:
+            if FORWARD_ADJUST_ENABLED:
+                full_records, forward_adjust_done = apply_forward_adjust(full_records, market=market, code=code)
+            full_records = _aggregate_5m_to_30m(full_records, market=market)
+        elif freq == '5m':
+            # 5分K：读取原始数据 → 前复权
+            full_records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+            if FORWARD_ADJUST_ENABLED:
+                full_records, forward_adjust_done = apply_forward_adjust(full_records, market=market, code=code)
+        elif freq == 'w':
+            # 周K：先读日线原始数据 → 前复权 → 合成周K
             full_records = read_tdx_day_file(day_file, market=market)
-        # 周线：从日线合成
-        if freq == 'w':
+            if FORWARD_ADJUST_ENABLED:
+                full_records, forward_adjust_done = apply_forward_adjust(full_records, market=market, code=code)
             full_records = resample_to_weekly(full_records)
+        else:
+            # 日K：读取原始数据 → 前复权
+            full_records = read_tdx_day_file(day_file, market=market)
+            if FORWARD_ADJUST_ENABLED:
+                full_records, forward_adjust_done = apply_forward_adjust(full_records, market=market, code=code)
         if len(full_records) < 5:
             return {"error": f"K线数据不足: 仅{len(full_records)}条"}
         print(f"[stock][耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
@@ -2448,8 +2354,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 确定起始时间：优先使用传入的start_time，其次使用CSV保存的选点
         if start_time is None:
             col = FREQ_TO_COL.get(freq, "")
-            if col and code in _saved_point_times:
-                _saved = _saved_point_times[code].get(col, "").strip() or None
+            if col and qualified_code in _saved_point_times:
+                _saved = _saved_point_times[qualified_code].get(col, "").strip() or None
                 if _saved:
                     start_time = _saved
 
@@ -2495,6 +2401,12 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     if not stock_name:
         stock_name = f"{code}.{market.upper()}"
 
+    # 2.5 前复权处理：已在数据加载阶段完成（各周期在原始数据层面统一处理）
+    # 日线：读取 → 前复权
+    # 周线：读取日线 → 前复权 → 合成周K
+    # 30分：读取5分 → 前复权 → 合成30分
+    # 5分：读取 → 前复权
+    # 此处不再重复调用，避免二次复权
 
     # 3. 使用 chan.py 进行缠论分析
     import gc
@@ -2796,8 +2708,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 获取当前周期的保存选点日期（复盘模式下不注入，防止前端误判为有选点）
     _col_meta = FREQ_TO_COL.get(freq, "")
     _saved_sdt_for_meta = ""
-    if not end_date and _col_meta and code in _saved_point_times:
-        _saved_sdt_for_meta = _saved_point_times[code].get(_col_meta, "").strip() or ""
+    if not end_date and _col_meta and qualified_code in _saved_point_times:
+        _saved_sdt_for_meta = _saved_point_times[qualified_code].get(_col_meta, "").strip() or ""
 
     # 5. 计算最新笔的白色横虚线数据
     white_hline = None
@@ -2885,6 +2797,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "saved_selection_date": _saved_sdt_for_meta,
             "is_replay": bool(end_date),
+            "forward_adjust": forward_adjust_done,
         },
         "klines": kline_data,
         "bis": bi_data,
@@ -3113,14 +3026,15 @@ def compute_dual_zs(code, freq='d', start_bi=0, end_bi=0):
         normalized_code = suffix_match.group(1)
         market = suffix_match.group(2).lower()
 
-    cache_key = f"{_CACHE_VERSION}_{market}_{normalized_code}_{freq}"
+    cache_key = f"{market}_{normalized_code}_{freq}"
+    qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
     cached = _cache_get(cache_key)
     if cached is None:
         return {"error": "请先在该周期下加载K线数据"}
     if "chan" not in cached:
         # 扫描缓存只有result没有chan，重新分析以获取完整数据
         print(f"[stock][信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
-        analyze_stock(normalized_code, freq=freq, cache_chan=True)
+        analyze_stock(f"{normalized_code}.{market.upper()}", freq=freq, cache_chan=True)
         cached = _cache_get(cache_key)
         if cached is None or "chan" not in cached:
             return {"error": "缓存中无分析数据，请重新查询"}
@@ -3166,7 +3080,8 @@ def manual_select_zs(code, freq='d', bi_idx=-1):
     elif suffix_match:
         normalized_code = suffix_match.group(1)
         market = suffix_match.group(2).lower()
-    cache_key = f"{_CACHE_VERSION}_{market}_{normalized_code}_{freq}"
+    cache_key = f"{market}_{normalized_code}_{freq}"
+    qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
     cached = _cache_get(cache_key)
     if cached is None:
         return {"error": "请先查询该股票"}
@@ -3199,11 +3114,11 @@ def manual_select_zs(code, freq='d', bi_idx=-1):
 
     # Step 2: 保存选点到CSV（保存的是左肩第一根原始K线的时间T）
     stock_name = cached.get("result", {}).get("meta", {}).get("name", "")
-    _save_point_time(normalized_code, stock_name, freq, start_time)
-    if normalized_code not in _saved_point_times:
-        _saved_point_times[normalized_code] = {}
-    _saved_point_times[normalized_code]["name"] = stock_name
-    _saved_point_times[normalized_code][FREQ_TO_COL.get(freq, "")] = start_time
+    _save_point_time(qualified_code, stock_name, freq, start_time)
+    if qualified_code not in _saved_point_times:
+        _saved_point_times[qualified_code] = {}
+    _saved_point_times[qualified_code]["name"] = stock_name
+    _saved_point_times[qualified_code][FREQ_TO_COL.get(freq, "")] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
     import gc
@@ -3212,7 +3127,7 @@ def manual_select_zs(code, freq='d', bi_idx=-1):
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
-    result = _analyze_stock_internal(normalized_code, freq=freq, start_time=start_time)
+    result = _analyze_stock_internal(f"{normalized_code}.{market.upper()}", freq=freq, start_time=start_time)
     return result
 
 
@@ -3479,7 +3394,7 @@ def scan_zxg_buy_points(freq="d"):
                 result = analyze_stock(code, freq=freq, cache_chan=False)
             if "error" in result:
                 # 分析失败，清除可能残留的缓存
-                cache_key = f"{_CACHE_VERSION}_{market}_{code}_{freq}"
+                cache_key = f"{market}_{code}_{freq}"
                 if cache_key in _analysis_cache:
                     del _analysis_cache[cache_key]
                 skipped += 1
@@ -3494,7 +3409,7 @@ def scan_zxg_buy_points(freq="d"):
             # 筛选最后一根K线上的买点
             klines = result.get("klines", [])
             if not klines:
-                cache_key = f"{_CACHE_VERSION}_{market}_{code}_{freq}"
+                cache_key = f"{market}_{code}_{freq}"
                 if cache_key in _analysis_cache:
                     del _analysis_cache[cache_key]
                 skipped += 1
@@ -3510,7 +3425,7 @@ def scan_zxg_buy_points(freq="d"):
                         "date": bsp.get("date", ""),
                     })
 
-            cache_key = f"{_CACHE_VERSION}_{market}_{code}_{freq}"
+            cache_key = f"{market}_{code}_{freq}"
             if today_buy_points:
                 # 有买点：只缓存轻量 result（cache_chan=False已处理），后续点击可直接查看
                 results.append({
@@ -3532,7 +3447,7 @@ def scan_zxg_buy_points(freq="d"):
 
         except Exception as e:
             print(f"[自选扫描] ({idx+1}/{total}) {code} 分析异常: {e}")
-            cache_key = f"{_CACHE_VERSION}_{market}_{code}_{freq}"
+            cache_key = f"{market}_{code}_{freq}"
 
     # 扫描完毕，触发一次GC回收
     gc.collect()
@@ -3768,7 +3683,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 t_analyze = time.time() - t0
                 if "error" in result:
                     # 分析失败，清除缓存，收集跳过原因（不实时打印）
-                    cache_key = f"{_CACHE_VERSION}_{code}_{freq}"
+                    cache_key = f"{code}_{freq}"
                     if cache_key in _analysis_cache:
                         del _analysis_cache[cache_key]
                     _scan_skip_log.append(f"{code} - {result['error']}")
@@ -3832,7 +3747,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
                     else:
                         # 无买/卖点：清除缓存
-                        cache_key = f"{_CACHE_VERSION}_{code}_{freq}"
+                        cache_key = f"{code}_{freq}"
                         if cache_key in _analysis_cache:
                             del _analysis_cache[cache_key]
                         t_total = time.time() - t_scan_start
@@ -3842,48 +3757,35 @@ class ChartHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 import traceback
                 _scan_skip_log.append(f"{code} - 异常: {e}")
-                cache_key = f"{_CACHE_VERSION}_{code}_{freq}"
+                cache_key = f"{code}_{freq}"
                 if cache_key in _analysis_cache:
                     del _analysis_cache[cache_key]
                 t_total = time.time() - t_scan_start
                 print(f"[耗时-扫描] {code} 异常: {e}, 总耗时{t_total:.3f}s")
                 self.send_json_response({"error": str(e)}, 200)
         elif parsed.path == "/api/scan_start":
-            # 新一轮扫描开始：清空跳过记录，优先从缓存文件加载
+            # 新一轮扫描开始：清空跳过记录
             _scan_skip_log.clear()
-            # 检查缓存文件是否存在
-            if not os.path.exists(_GBBQ_CACHE_FILE):
-                self.send_json_response({"ok": False, "need_refresh": True, "msg": "未找到缓存数据，请先点击右上角刷新按钮"}, 200)
-                return
             try:
-                _load_float_shares_from_cache_file()
                 _load_stock_names_from_cache_file()
             except Exception:
                 pass
             self.send_json_response({"ok": True}, 200)
-        elif parsed.path == "/api/gbbq_refresh":
-            # 启动GBBQ刷新（后台线程解密全部记录并保存到缓存文件）
-            if _gbbq_refresh_status["running"]:
-                self.send_json_response({"status": "already_running", **_gbbq_refresh_status}, 200)
-            else:
-                t = threading.Thread(target=_refresh_gbbq_to_file, daemon=True)
-                t.start()
-                self.send_json_response({"status": "started"}, 200)
-        elif parsed.path == "/api/gbbq_status":
-            # 查询GBBQ刷新进度
-            self.send_json_response(_gbbq_refresh_status, 200)
         elif parsed.path == "/api/refresh_stock_names":
-            # 独立刷新股票名称缓存（不依赖GBBQ）
-            def _do_refresh_names():
-                try:
-                    _refresh_stock_names()
-                except Exception as e:
-                    import traceback
-                    print(f"[错误] refresh_stock_names异常: {e}")
-                    traceback.print_exc()
-            t = threading.Thread(target=_do_refresh_names, daemon=True)
-            t.start()
-            self.send_json_response({"status": "started", "msg": "股票名称刷新已启动"}, 200)
+            # 启动股票名称刷新
+            if _refresh_status["running"]:
+                self.send_json_response({"status": "already_running", **_refresh_status}, 200)
+            else:
+                def _do_refresh_names():
+                    try:
+                        _refresh_stock_names()
+                    except Exception as e:
+                        import traceback
+                        print(f"[错误] refresh_stock_names异常: {e}")
+                        traceback.print_exc()
+                t = threading.Thread(target=_do_refresh_names, daemon=True)
+                t.start()
+                self.send_json_response({"status": "started", "msg": "股票名称刷新已启动"}, 200)
         elif parsed.path == "/api/scan_end":
             # 扫描结束：统一打印跳过记录
             if _scan_skip_log:
@@ -3903,15 +3805,20 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.send_json_response({"error": "缺少code参数"}, 400)
                 return
             normalized_code = code.strip().upper()
+            market = None
             prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', normalized_code)
             suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', normalized_code)
             if prefix_match:
+                market = prefix_match.group(1).lower()
                 normalized_code = prefix_match.group(2)
             elif suffix_match:
                 normalized_code = suffix_match.group(1)
-            _clear_saved_point_time(normalized_code, freq)
+                market = suffix_match.group(2).lower()
+            # 用 market-qualified code 区分沪市深市同号股票
+            qualified_code = f"{normalized_code}.{market.upper()}" if market else normalized_code
+            _clear_saved_point_time(qualified_code, freq)
             # 销毁该周期的缓存
-            cache_key = f"{_CACHE_VERSION}_{normalized_code}_{freq}"
+            cache_key = f"{market}_{normalized_code}_{freq}" if market else f"{normalized_code}_{freq}"
             if cache_key in _analysis_cache:
                 del _analysis_cache[cache_key]
             import gc
@@ -4713,7 +4620,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div class="stock-input">
                 <label>代码:</label>
                 <div class="stock-input-wrap">
-                    <input type="text" id="stock-code-input" placeholder="如 600519、szzs、贵州茅台" onkeydown="onInputKeydown(event)" onfocus="showHistory()" oninput="onInputChange()" />
+                    <input type="text" id="stock-code-input" placeholder="如 SZZS、GZMT、600519" onkeydown="onInputKeydown(event)" onfocus="clearInput();showHistory()" oninput="onInputChange()" />
                     <span class="stock-input-clear" id="input-clear" onclick="clearInput()" style="display:none">&times;</span>
                 </div>
                 <button onclick="loadStock()">查询</button>
@@ -4750,7 +4657,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button class="btn" id="btn-ma" onclick="toggleOverlay('ma')">均线</button>
             <button class="btn" id="btn-restart" disabled onclick="restartStock()" title="清除选点，按冷启动重新加载">重置</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
-            <button class="btn-icon" id="btn-refresh" title="刷新GBBQ数据" onclick="refreshGbbq()">
+            <button class="btn-icon" id="btn-refresh" title="刷新股票名称" onclick="refreshStockNames()">
                 <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
             </button>
             <span id="refresh-status" style="color:#a8b2d1;font-size:11px;margin-left:4px;display:none;"></span>
@@ -5676,6 +5583,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (isBottomNewZs) drawDualNewZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawWhiteHLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
             drawCrosshair(klinesToDraw, area, priceRange, volArea, macdRange, barStep, macdTextArea, subPixelOffset);
             drawPriceAxis(area, priceRange); drawMacdAxis(volArea, macdRange);
@@ -5684,14 +5592,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 if (_overlayData.rightPrice !== undefined) {
                     const labelW = 50;
                     ctx.fillStyle = "#dcdcdc"; ctx.fillRect(area.x + area.w + 2, _overlayData.rightY - 10, labelW, 20);
-                    ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left";
+                    ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
                     ctx.fillText(_overlayData.rightPrice, area.x + area.w + 6, _overlayData.rightY + 4);
                 }
                 if (_overlayData.bottomText) {
                     const d = _overlayData;
                     ctx.fillStyle = "#dcdcdc";
                     ctx.fillRect(d.bottomX, d.bottomY, d.bottomW + d.bottomPad * 2, d.bottomH);
-                    ctx.fillStyle = "#333"; ctx.textAlign = "left";
+                    ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
                     ctx.fillText(d.bottomText, d.bottomX + d.bottomPad, d.bottomY + 13);
                 }
             }
@@ -6366,6 +6274,83 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.fillText(hline.price.toFixed(2), x2 + 4, y + 4);
         }
 
+        /**
+         * 同花顺风格：在视口内标注最高价和最低价的极值K线
+         * - 数值和箭头纯白色 #FFFFFF
+         * - 高点：下边沿贴合极值线，数值 ↘；低点：上边沿贴合极值线，数值 ↗
+         * - 左侧空间不足时：高点 ↙ 数值，低点 ↖ 数值（数值显示在右侧）
+         */
+        function drawViewportHighLow(klines, area, priceRange, barStep, subPixelOffset) {
+            if (!klines.length) return;
+
+            // 找到视口内最高价和最低价的K线
+            let maxHigh = -Infinity, minLow = Infinity;
+            let maxHighIdx = -1, minLowIdx = -1;
+
+            for (let i = 0; i < klines.length; i++) {
+                const k = klines[i];
+                if (k.high > maxHigh) { maxHigh = k.high; maxHighIdx = i; }
+                if (k.low < minLow) { minLow = k.low; minLowIdx = i; }
+            }
+
+            if (maxHighIdx === -1 || minLowIdx === -1) return;
+
+            const gap = 4; // 数值与箭头间距
+
+            ctx.font = "11px monospace";
+            ctx.fillStyle = "#FFFFFF";
+
+            const arrowR = "\u2192"; // →  用于计算箭头宽度（所有箭头等宽）
+            const arrowW = ctx.measureText(arrowR).width;
+
+            /**
+             * 绘制单个极值标注
+             * @param {number} price - 极值价格
+             * @param {number} klineIdx - K线在视口内的索引
+             * @param {boolean} isHigh - 是否为高点（true=下边沿贴合, false=上边沿贴合）
+             */
+            function drawOne(price, klineIdx, isHigh) {
+                const kx = area.x + barStep * klineIdx + barStep / 2 - subPixelOffset;
+                const ky = priceToY(price, area, priceRange);
+                const text = price.toFixed(2);
+                const textW = ctx.measureText(text).width;
+
+                const needLeft = textW + gap + arrowW;
+                const canLeft = (kx - needLeft) >= area.x;
+
+                const textHeight = 11 * 1.2;  // fontSize * 行高系数
+                const a = isHigh ? (canLeft ? "\u2198" : "\u2199") : (canLeft ? "\u2197" : "\u2196");
+
+                ctx.textAlign = "left";
+
+                if (canLeft) {
+                    // 数值 ↘(高) / ↗(低)
+                    const arrowX = kx - arrowW;
+                    const textX = arrowX - gap - textW;
+                    // 箭头：保持原位置（高点bottom贴合ky，低点top贴合ky）
+                    ctx.textBaseline = isHigh ? "bottom" : "top";
+                    ctx.fillText(a, textX + textW + gap, ky);
+                    // 数值：中间对齐箭头尾端，高点往上移，低点往下移
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(text, textX, isHigh ? ky - textHeight / 2 : ky + textHeight / 2);
+                } else {
+                    // ↙(高) / ↖(低) 数值
+                    const arrowX = kx;
+                    const textX = arrowX + arrowW + gap;
+                    if (textX + textW > area.x + area.w) return;
+                    // 箭头：保持原位置
+                    ctx.textBaseline = isHigh ? "bottom" : "top";
+                    ctx.fillText(a, arrowX, ky);
+                    // 数值：中间对齐箭头尾端
+                    ctx.textBaseline = "middle";
+                    ctx.fillText(text, textX, isHigh ? ky - textHeight / 2 : ky + textHeight / 2);
+                }
+            }
+
+            drawOne(maxHigh, maxHighIdx, true);   // 高点：下边沿贴合
+            drawOne(minLow, minLowIdx, false);    // 低点：上边沿贴合
+        }
+
         function drawCrosshair(klines, area, priceRange, volArea, volRange, barStep, macdTextArea, subPixelOffset) {
             let idx, k, cx;
             if (mouseX < area.x || mouseX > area.x + area.w) {
@@ -6464,12 +6449,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     `<span class="label">低:</span> <span class="${cls}">${k.low.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">收:</span> <span class="${cls}">${k.close.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨跌:</span> <span class="${cls}">${sign}${changeVal.toFixed(2)}</span> &nbsp; ` +
-                    `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span>`;
+                    `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
+                    `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>`;
             }
 
             const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
             const weekDayStr = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
-            const clipText = `${k.date} ${weekDayStr} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}%`;
+            const clipText = `${k.date} ${weekDayStr} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
                 _bottomCurrentGlobalIdx = globalIdx;
@@ -6482,7 +6468,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function drawPriceAxis(area, priceRange) {
-            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textAlign = "left";
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             for (let i = 0; i <= 5; i++) {
                 const price = priceRange.min + (priceRange.max - priceRange.min) * (1 - i / 5);
                 const y = area.y + (area.h / 5) * i;
@@ -6491,7 +6477,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function drawMacdAxis(macdArea, macdRange) {
-            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textAlign = "left";
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             ctx.fillText(macdRange.max.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + 12);
             const zeroY = macdArea.y + macdArea.h * (macdRange.max / (macdRange.max - macdRange.min));
             ctx.fillText("0", macdArea.x + macdArea.w + 6, zeroY + 4);
@@ -6649,7 +6635,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}%`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -6994,7 +6980,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}%`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -7279,12 +7265,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     // 先检查 scan_start 的响应
                     return resps[0].json().then(function(scanStartData) {
                         if (scanStartData.need_refresh) {
-                            // 需要刷新GBBQ缓存
+                            // 需要刷新缓存数据
                             _scanRunning = false;
                             btn.classList.remove("active");
                             body.innerHTML = '<div class="scan-no-result" style="text-align:center;padding:20px;">' +
                                 '<div style="font-size:14px;color:#e94560;margin-bottom:12px;">&#9888; ' + scanStartData.msg + '</div>' +
-                                '<button class="btn" onclick="refreshGbbq();closeScanPanel();" style="margin-top:8px;">立即刷新</button>' +
+                                '<button class="btn" onclick="refreshStockNames();closeScanPanel();" style="margin-top:8px;">立即刷新</button>' +
                                 '</div>';
                             return null;
                         }
@@ -7448,27 +7434,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         // ============================================================
-        // GBBQ数据刷新（后台线程解密，轮询进度）
+        // 股票名称刷新（原 GBBQ 刷新，现在仅刷新股票名称缓存）
         // ============================================================
-        window.refreshGbbq = function() {
+        window.refreshStockNames = function() {
             var btn = document.getElementById("btn-refresh");
             var status = document.getElementById("refresh-status");
             if (btn.disabled) return;
             btn.disabled = true;
             btn.classList.add("active");
-
-            // 给刷新图标添加旋转动画
             btn.querySelector("svg").style.animation = "spin 1s linear infinite";
             status.style.display = "inline";
-            status.textContent = "正在刷新GBBQ文件...";
+            status.textContent = "正在刷新股票名称...";
 
-            fetch("/api/gbbq_refresh")
+            fetch("/api/refresh_stock_names")
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     if (data.status === "already_running") {
-                        pollGbbqStatus(btn, status);
+                        pollRefreshStatus(btn, status);
                     } else {
-                        pollGbbqStatus(btn, status);
+                        pollRefreshStatus(btn, status);
                     }
                 })
                 .catch(function(err) {
@@ -7480,13 +7464,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 });
         };
 
-        function pollGbbqStatus(btn, status) {
-            fetch("/api/gbbq_status")
+        function pollRefreshStatus(btn, status) {
+            fetch("/api/refresh_status")
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     if (data.running) {
                         status.textContent = data.step || "刷新中...";
-                        setTimeout(function() { pollGbbqStatus(btn, status); }, 500);
+                        setTimeout(function() { pollRefreshStatus(btn, status); }, 500);
                     } else {
                         btn.disabled = false;
                         btn.classList.remove("active");
@@ -7507,6 +7491,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     status.style.display = "none";
                 });
         }
+
+
 
         function renderScanResults(results, total, skipped, interrupted) {
             var body = document.getElementById("scan-body");
@@ -8854,7 +8840,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 计算标注框的布局信息（供绘制和命中检测共用）
         function getAnnotationLayout(ann, klineX, klineY, area) {
-            const font = "bold 11px 'PingFang SC', 'Microsoft YaHei', sans-serif";
+            const font = "bold 12px 'PingFang SC', 'Microsoft YaHei', sans-serif";
             ctx.font = font;
             const lineHeight = 16;
             const padX = 6, padY = 3;
@@ -8917,7 +8903,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.fillStyle = "#ffffff";
                 ctx.textAlign = "left";
                 ctx.textBaseline = "middle";
-                ctx.font = "bold 11px 'PingFang SC', 'Microsoft YaHei', sans-serif";
+                ctx.font = "bold 12px 'PingFang SC', 'Microsoft YaHei', sans-serif";
                 ctx.shadowColor = "rgba(0, 0, 0, 0.85)";
                 ctx.shadowBlur = 3;
                 for (let li = 0; li < layout.lines.length; li++) {
@@ -8928,6 +8914,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.shadowColor = "transparent";
                 ctx.shadowBlur = 0;
             });
+            ctx.textBaseline = "alphabetic"; // 恢复默认基线
         }
 
         init();
