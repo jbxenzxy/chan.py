@@ -3,7 +3,7 @@ from typing import List, Union, overload
 
 from Bi.Bi import CBi
 from Bi.BiList import CBiList
-from BuySellPoint.BSPointList import CBSPointList
+from BuySellPoint.BSPointList import CBSPointList, MyBSPointList
 from ChanConfig import CChanConfig
 from Common.CEnum import KLINE_DIR, SEG_TYPE
 from Common.ChanException import CChanException, ErrCode
@@ -44,7 +44,7 @@ class CKLine_List:
         self.zs_list = CZSList(zs_config=conf.zs_conf)
         self.segzs_list = CZSList(zs_config=conf.zs_conf)
 
-        self.bs_point_lst = CBSPointList[CBi, CBiList](bs_point_config=conf.bs_point_conf)
+        self.bs_point_lst = MyBSPointList[CBi, CBiList](bs_point_config=conf.bs_point_conf)  # 自定义买卖点（继承自 CBSPointList）
         self.seg_bs_point_lst = CBSPointList[CSeg, CSegListComm](bs_point_config=conf.seg_bs_point_conf)
 
         self.metric_model_lst = conf.GetMetricModel()
@@ -114,7 +114,7 @@ class CKLine_List:
 
         # 计算买卖点
         self.seg_bs_point_lst.cal(self.seg_list, self.segseg_list)  # 线段线段买卖点
-        self.bs_point_lst.cal(self.bi_list, self.seg_list)  # 再算笔买卖点
+        self.bs_point_lst.cal(self.bi_list, self.seg_list)  # 笔买卖点（MyBSPointList → cal_bs1point/2/3）
 
     def need_cal_step_by_step(self):
         return self.config.trigger_step

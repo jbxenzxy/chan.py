@@ -437,3 +437,95 @@ def cal_bsp3_bi_end_idx(seg: Optional[CSeg[LINE_TYPE]]):
             end_bi_idx = zs.bi_out.idx
             break
     return end_bi_idx
+
+
+# ============================================================
+# 自定义买卖点列表（继承 CBSPointList，替换 cal 内部调用）
+# ============================================================
+class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
+    """自定义买卖点计算类。
+    继承 CBSPointList，将 cal() 中的三个方法调用替换为 cal_bs1point / cal_bs2point / cal_bs3point。
+    你只需修改下面三个空方法即可实现自己的买卖点逻辑。
+    """
+
+    def cal(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+        self.clear_store_end()
+        self.clear_bsp1_end()
+        self.cal_bs1point(bi_list, seg_list)
+        self.cal_bs2point(bi_list, seg_list)
+        self.cal_bs3point(bi_list, seg_list)
+        self.update_last_pos(seg_list)
+
+    def cal_bs1point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+        """TODO: 在此实现自定义的 1 类（趋势背驰）和 1p 类（盘整背驰）买卖点计算逻辑。
+
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            seg_list: 线段列表，每个 seg 上有 zs_lst（中枢列表）、end_bi（尾笔）、is_down() 等
+
+        可用的上下文数据:
+            - self.bsp1_list / self.bsp1_dict: 已有的 1/1p 类点
+            - self.config: 买卖点配置 (CBSPointConfig)
+            - self.last_sure_seg_idx: 最后一个确认的线段索引
+            - seg_need_cal(seg): 判断线段是否需要重新计算
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T1,  bi=..., relate_bsp1=None, feature_dict={...})
+            self.add_bs(bs_type=BSP_TYPE.T1P, bi=..., relate_bsp1=None, feature_dict={...})
+        """
+        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
+        for seg in seg_list[self.last_sure_seg_idx:]:
+            if self.seg_need_cal(seg):
+                self.cal_single_bs1point(seg, bi_list)
+
+    def cal_bs2point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+        """TODO: 在此实现自定义的 2 类（回踩/回抽确认）和 2s 类（类二）买卖点计算逻辑。
+
+        参数同上。
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T2,  bi=..., relate_bsp1=..., feature_dict={...})
+            self.add_bs(bs_type=BSP_TYPE.T2S, bi=..., relate_bsp1=..., feature_dict={...})
+        """
+        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
+        for seg in seg_list[self.last_sure_seg_idx:]:
+            config = self.config.GetBSConfig(seg.is_down())
+            if BSP_TYPE.T2 not in config.target_types and BSP_TYPE.T2S not in config.target_types:
+                continue
+            if self.seg_need_cal(seg):
+                self.treat_bsp2(seg, seg_list, bi_list)
+
+    def cal_bs3point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+        """TODO: 在此实现自定义的 3a 类（中枢在1类之后）和 3b 类（中枢在1类之前）买卖点计算逻辑。
+
+        参数同上。
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T3A, bi=..., relate_bsp1=..., feature_dict={...})
+            self.add_bs(bs_type=BSP_TYPE.T3B, bi=..., relate_bsp1=..., feature_dict={...})
+        """
+        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
+        for seg in seg_list[self.last_sure_seg_idx:]:
+            if not self.seg_need_cal(seg):
+                continue
+            config = self.config.GetBSConfig(seg.is_down())
+            if BSP_TYPE.T3A not in config.target_types and BSP_TYPE.T3B not in config.target_types:
+                continue
+            if len(seg_list) > 1:
+                bsp1_bi = seg.end_bi
+                bsp1_bi_idx = bsp1_bi.idx
+                BSP_CONF = self.config.GetBSConfig(seg.is_down())
+                real_bsp1 = self.bsp1_dict.get(bsp1_bi.idx)
+                next_seg_idx = seg.idx+1
+                next_seg = seg.next
+            else:
+                next_seg = seg
+                next_seg_idx = seg.idx
+                bsp1_bi, real_bsp1 = None, None
+                bsp1_bi_idx = -1
+                BSP_CONF = self.config.GetBSConfig(seg.is_up())
+            if BSP_CONF.bsp3_follow_1 and (not bsp1_bi or bsp1_bi.idx not in self.bsp_store_flat_dict):
+                continue
+            if next_seg:
+                self.treat_bsp3_after(seg_list, next_seg, BSP_CONF, bi_list, real_bsp1, bsp1_bi_idx, next_seg_idx)
+            self.treat_bsp3_before(seg_list, seg, next_seg, bsp1_bi, BSP_CONF, bi_list, real_bsp1, next_seg_idx)
