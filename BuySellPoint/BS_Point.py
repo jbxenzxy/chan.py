@@ -11,7 +11,17 @@ LINE_TYPE = TypeVar('LINE_TYPE', CBi, CSeg)
 class CBS_Point(Generic[LINE_TYPE]):
     def __init__(self, bi: LINE_TYPE, is_buy, bs_type: BSP_TYPE, relate_bsp1: Optional['CBS_Point'], feature_dict=None):
         self.bi: LINE_TYPE = bi
-        self.klu = bi.get_end_klu()
+        end_klu = bi.get_end_klu()
+        # 尝试取右肩K线：从分型合并K线（CKLine_Combined）往后找，取右肩第一根原始K线
+        end_klc = getattr(bi, 'end_klc', None)
+        if end_klc is not None:
+            right_klc = getattr(end_klc, 'next', None)
+            if right_klc is not None and hasattr(right_klc, 'lst') and right_klc.lst:
+                self.klu = right_klc.lst[0]
+            else:
+                self.klu = end_klu
+        else:
+            self.klu = end_klu
         self.is_buy = is_buy
         self.type: List[BSP_TYPE] = [bs_type]
         self.relate_bsp1 = relate_bsp1

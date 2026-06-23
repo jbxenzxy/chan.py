@@ -107,10 +107,11 @@ FORWARD_ADJUST_ENABLED = True
 
 # 导入天勤数据源适配器（期货/期指）
 try:
-    from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP
+    from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP, FUTURES_ALIASES
     TQ_AVAILABLE = True
 except ImportError as e:
     CTqSdkAPI = None
+    FUTURES_ALIASES = {}
     TQ_AVAILABLE = False
     print(f"[stock][警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
 
@@ -1207,6 +1208,10 @@ def parse_stock_code(code):
             return 'futures', code.replace('KQ.I@', 'KQ.i@', 1)
     # ===== 期货代码识别结束 =====
 
+    # ===== 期货别名映射：支持直接输入短名称（如 PTA、IF、rb、TA 等） =====
+    if code in FUTURES_ALIASES:
+        return 'futures', FUTURES_ALIASES[code]
+
     prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', code)
     if prefix_match:
         return prefix_match.group(1).lower(), prefix_match.group(2)
@@ -1272,42 +1277,10 @@ def _get_freq_label(freq):
     labels = {'15s': '15秒', '1m': '1分钟', '5m': '5分钟', '30m': '30分钟', '60m': '60分钟', 'd': '日线', 'w': '周线'}
     return labels.get(freq, '日线')
 
-
 def _make_chan_config():
-    """统一的缠论配置，股票和期货共用"""
+    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值"""
     from ChanConfig import CChanConfig
-    return CChanConfig({
-        "trigger_step": True,            # 实时/回放语义：逐根推进，启用尾部虚笔和未确认结构处理
-        "bi_fx_check": "loss",           # 分型检查：loss模式（宽松）
-        "bi_allow_sub_peak": True,       # 打开后，允许笔端点的分型非局部最高/低分型；参见23/07/21~23/08/07
-        "bi_algo": "normal",             # 按缠论笔定义，非顶/底分型即成笔
-        "bi_strict": True,               # bi_algo=normal时有效；顶/底分型间，至少隔1根K线
-        "bi_end_is_peak": False,         # 关闭后，允许一笔之间有"不成笔的"更高/低分型；参见 上证指数 日K 25/09/03~25/10/31
-
-        "seg_algo": "chan",              # 利用特征序列来计算
-
-        "zs_algo": "over_seg",           # 中枢算法：跨段
-        "zs_combine": False,             # 是否中枢合并，默认为 True
-
-        "bs_type": "1,1p,2,2s,3a,3b",    # 买卖点类型：1趋背/盘背；1p实为段背；3a 中枢在1类后面；3b 中枢在1类前面
-
-        "min_zs_cnt": 1,                 # 1类（和1p类）买卖点至少要经历几个中枢，默认为 1
-        "bs1_peak": True,                # 1类（非1p类）买卖点位置是否必须是整个中枢最低点，默认为 True
-        "macd_algo": "full_area",        # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）
-        "divergence_rate": 0.9,          # 1类（和1p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
-
-        "bsp2_follow_1": True,           # 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True
-        "max_bs2_rate": 0.9,             # 2类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到1类买卖点的位置
-
-        "bsp2s_follow_2": False,         # 类2买卖点是否必须跟在2类买卖点后面（2类买卖点可能由于不满足 max_bs2_rate），默认为 False
-        "max_bsp2s_lv": None,            # 类2买卖点最大层级（距离2类买卖点的笔的距离/2），默认为None，不做限制
-
-        "bsp3_follow_1": False,          # 3类买卖点是否必须跟在1类买卖点后面，默认为 True（没有1类点就不算3类点，忽视了有“小转大”的可能）
-        "strict_bsp3": False,            # 3类买卖点对应的中枢，是否要求中枢进入笔"紧邻"1类点笔，默认为 False（允许1类点笔后走个ABC，ABC是后面中枢的进入段）
-        "bsp3_peak": False,              # 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
-        "bsp3a_max_zs_cnt": 2,           # 3类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离1类点最近的那个中枢回拉产生的3a类点，越远的中枢越不可靠
-    })
-
+    return CChanConfig()
 
 def _ctime_to_fmt(ctime, date_fmt):
     """将 CTime 对象转为目标日期格式。
@@ -1646,6 +1619,32 @@ def _clear_saved_point_time(code, freq):
     except Exception as e:
         print(f"[stock][警告] 清除选点失败: {e}")
 
+
+def _cleanup_all_futures_data():
+    """期货切到股票时彻底清理所有期货数据：K线缓存、分析缓存、选点记录"""
+    import gc
+    # 1. 清空 CTqSdkAPI 的K线缓存
+    if CTqSdkAPI is not None:
+        CTqSdkAPI.clear_all_cache()
+        print("[清理] 已清空期货K线缓存")
+
+    # 2. 清空分析缓存中的期货条目（key格式: futures_*）
+    keys_to_del = [k for k in _analysis_cache if k.startswith("futures_")]
+    for k in keys_to_del:
+        del _analysis_cache[k]
+    if keys_to_del:
+        print(f"[清理] 已清除 {len(keys_to_del)} 条期货分析缓存")
+
+    # 3. 清空选点记录中的期货条目（key以KQ.开头）
+    pts_to_del = [k for k in list(_saved_point_times.keys()) if k.startswith("KQ.")]
+    for k in pts_to_del:
+        del _saved_point_times[k]
+    if pts_to_del:
+        print(f"[清理] 已清除 {len(pts_to_del)} 条期货选点记录")
+
+    gc.collect()
+
+
 # 启动时加载一次选点数据
 _saved_point_times = _load_saved_point_times()
 
@@ -1817,6 +1816,54 @@ def _get_annotated_codes(freq=""):
 _load_annotations()
 
 
+def _calc_futures_white_hline(kl_list, freq, date_fmt):
+    """计算期货最新笔的白色横虚线数据（与股票逻辑一致）。
+    返回 {"price": float, "start_date": str} 或 None。"""
+    white_hline = None
+    if not kl_list or not kl_list.bi_list:
+        return white_hline
+    latest_bi = kl_list.bi_list[-1]
+    direction = "up" if latest_bi.is_up() else "down"
+    end_klc = getattr(latest_bi, 'end_klc', None)
+    if end_klc is None:
+        return white_hline
+    end_fx_idx = None
+    for idx, klc in enumerate(kl_list.lst):
+        if klc is end_klc:
+            end_fx_idx = idx
+            break
+    if end_fx_idx is None or end_fx_idx <= 0:
+        return white_hline
+    left_klc = kl_list.lst[end_fx_idx - 1]
+    klc_high = left_klc.high
+    klc_low = left_klc.low
+    tgt_klu = None
+    if hasattr(left_klc, 'lst') and left_klc.lst:
+        for klu in left_klc.lst:
+            if direction == "down" and klu.high == klc_high:
+                tgt_klu = klu
+                break
+            elif direction == "up" and klu.low == klc_low:
+                tgt_klu = klu
+                break
+        if tgt_klu is None:
+            tgt_klu = left_klc.lst[0]
+    if tgt_klu:
+        ls_time = tgt_klu.time.to_str()
+    else:
+        ls_time = ""
+    try:
+        ls_dt = datetime.strptime(ls_time, "%Y/%m/%d %H:%M")
+        ls_date = ls_dt.strftime(date_fmt)
+    except:
+        ls_date = ls_time[:16].replace("/", "-") if freq in INTRADAY_FREQS else ls_time[:10].replace("/", "-")
+    if direction == "down":
+        white_hline = {"price": round(klc_high, 2), "start_date": ls_date}
+    elif direction == "up":
+        white_hline = {"price": round(klc_low, 2), "start_date": ls_date}
+    return white_hline
+
+
 def _analyze_futures_internal(code, freq="d", end_date=None):
     """
     使用天勤数据源 + chan.py 进行期货/期指缠论分析（静态模式，HTTP 请求）
@@ -1886,17 +1933,6 @@ def _analyze_futures_internal(code, freq="d", end_date=None):
         config = _make_chan_config()
 
         try:
-            try:
-                from Math.Demark import CDemarkEngine
-                CDemarkEngine.DEMARK_LEN = 9
-                CDemarkEngine.SETUP_BIAS = 4
-                CDemarkEngine.COUNTDOWN_BIAS = 2
-                CDemarkEngine.MAX_COUNTDOWN = 13
-                CDemarkEngine.TIAOKONG_ST = True
-                CDemarkEngine.SETUP_CMP2CLOSE = True
-                CDemarkEngine.COUNTDOWN_CMP2CLOSE = True
-            except Exception:
-                pass
             chan = CChan(
                 code=code,
                 begin_time=None,
@@ -1909,7 +1945,15 @@ def _analyze_futures_internal(code, freq="d", end_date=None):
             for _snapshot in chan.step_load():
                 pass
         except Exception as e:
-            return {"error": f"chan.py 期货分析失败: {e}"}
+            import traceback
+            tb = traceback.format_exc()
+            records_info = ""
+            if records:
+                records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
+            print(f"[期货][错误] chan.py 分析失败: code={code} freq={freq}{records_info}")
+            print(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
+            print(f"[期货][错误] 完整堆栈:\n{tb}")
+            return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
 
         kl_list = chan[_get_kl_type(freq)]
         print(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
@@ -2112,7 +2156,8 @@ def _analyze_futures_internal(code, freq="d", end_date=None):
     try:
         bsp_list = chan.get_latest_bsp(idx=0, number=0)
         for bsp in bsp_list:
-            bsp_date = _ctime_to_fmt(bsp.klu.time, date_fmt)
+            klu = bsp.klu
+            bsp_date = _ctime_to_fmt(klu.time, date_fmt)
             try:
                 bsp_ts = int(datetime.strptime(bsp_date, date_fmt).timestamp()) * 1000
             except:
@@ -2121,12 +2166,15 @@ def _analyze_futures_internal(code, freq="d", end_date=None):
                 "date": bsp_date, "timestamp": bsp_ts,
                 "type": bsp.type2str(),
                 "is_buy": bsp.is_buy,
-                "price": bsp.klu.close,
-                "high": bsp.klu.high,
-                "low": bsp.klu.low,
+                "price": klu.close,
+                "high": klu.high,
+                "low": klu.low,
             })
     except Exception as e:
         print(f"[调试] 期货获取买卖点失败: {e}")
+
+    # 计算白色横虚线（最新笔分型上下沿，K线确认后才有意义）
+    white_hline = _calc_futures_white_hline(kl_list, freq, date_fmt)
 
     # 7. 组装结果
     print(f"[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): {time.time()-t_extract:.3f}s")
@@ -2456,7 +2504,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             for _snapshot in chan.step_load():
                 pass
         except Exception as e:
-            return {"error": f"chan.py 分析失败: {e}"}
+            import traceback
+            tb = traceback.format_exc()
+            records_info = ""
+            if records:
+                records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
+            print(f"[stock][错误] chan.py 分析失败: code={chan_code} freq={freq}{records_info}")
+            print(f"[stock][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
+            print(f"[stock][错误] 完整堆栈:\n{tb}")
+            return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
 
     print(f"[stock][耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 
@@ -2670,7 +2726,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     try:
         bsp_list = chan.get_latest_bsp(idx=0, number=0)
         for bsp in bsp_list:
-            bsp_date = bsp.klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else bsp.klu.time.to_str()[:10].replace("/", "-")
+            klu = bsp.klu
+            bsp_date = klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
             try:
                 bsp_dt = datetime.strptime(bsp_date, date_fmt)
                 bsp_ts = int(bsp_dt.timestamp()) * 1000
@@ -2680,9 +2737,9 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 "date": bsp_date, "timestamp": bsp_ts,
                 "type": bsp.type2str(),
                 "is_buy": bsp.is_buy,
-                "price": bsp.klu.close,
-                "high": bsp.klu.high,
-                "low": bsp.klu.low,
+                "price": klu.close,
+                "high": klu.high,
+                "low": klu.low,
             })
     except Exception as e:
         print(f"[stock][调试] 获取买卖点失败: {e}")
@@ -3126,8 +3183,13 @@ def futures_manual_select_zs(symbol, freq="15s", bi_idx="0"):
     from DataAPI.TqSdkAPI import (
         FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
         fetch_futures_kline, _extract_realtime_snapshot,
-        TQ_ACCOUNT, TQ_PASSWORD,
+        TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES,
     )
+
+    # 别名解析
+    symbol_upper = symbol.upper()
+    if symbol_upper in FUTURES_ALIASES:
+        symbol = FUTURES_ALIASES[symbol_upper]
 
     freq_sec = FREQ_SEC_MAP.get(freq, 15)
     freq_label = freq
@@ -3161,18 +3223,6 @@ def futures_manual_select_zs(symbol, freq="15s", bi_idx="0"):
         kl_type = _freq_to_kl.get(freq_sec, KL_TYPE.K_15S)
 
         config = _make_chan_config()
-
-        try:
-            from Math.Demark import CDemarkEngine
-            CDemarkEngine.DEMARK_LEN = 9
-            CDemarkEngine.SETUP_BIAS = 4
-            CDemarkEngine.COUNTDOWN_BIAS = 2
-            CDemarkEngine.MAX_COUNTDOWN = 13
-            CDemarkEngine.TIAOKONG_ST = True
-            CDemarkEngine.SETUP_CMP2CLOSE = True
-            CDemarkEngine.COUNTDOWN_CMP2CLOSE = True
-        except Exception:
-            pass
 
         chan = CChan(
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
@@ -3239,6 +3289,10 @@ def futures_manual_select_zs(symbol, freq="15s", bi_idx="0"):
         # Step 5: 提取快照并返回
         result = _extract_realtime_snapshot(chan2, kl_type, symbol, name, freq_label,
                                             saved_selection_date=start_time)
+        # 计算白色横虚线
+        _kl_list = chan2[kl_type]
+        _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+        result['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
         print(f"[{display_key}] 选点完成: {len(result['klines'])}K线, {result['meta']['bi_count']}笔, {result['meta']['zs_count']}中枢")
         return result
 
@@ -3584,6 +3638,17 @@ class ChartHandler(SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
+            # 期货别名搜索：支持用户输入短名称搜索（如 PTA、IF、rb 等）
+            for alias, full_code in FUTURES_ALIASES.items():
+                if keyword_upper in alias.upper():
+                    name = _get_futures_name(full_code)
+                    # 避免重复
+                    if not any(r["code"] == full_code for r in results):
+                        results.append({
+                            "code": full_code, "name": name, "pinyin": alias,
+                            "market": "futures", "type": "",
+                        })
+
             # 本地缓存未找到或不够，再查东方财富API补充（已注释掉，避免频繁请求被拉黑）
             # if len(results) < 10:
             #     try:
@@ -3832,7 +3897,15 @@ class ChartHandler(SimpleHTTPRequestHandler):
             if not symbol:
                 self.send_json_response({"error": "缺少symbol参数"}, 400)
                 return
+            # 别名解析
+            symbol_upper = symbol.upper()
+            if symbol_upper in FUTURES_ALIASES:
+                symbol = FUTURES_ALIASES[symbol_upper]
             _clear_saved_point_time(symbol, freq)
+            self.send_json_response({"ok": True}, 200)
+        elif parsed.path == "/api/futures_cleanup":
+            # 期货切到股票：彻底清理所有期货数据
+            _cleanup_all_futures_data()
             self.send_json_response({"ok": True}, 200)
         elif parsed.path == "/api/futures_status":
             # 新架构：每个 SSE 连接自包含，无共享引擎，始终返回 ok
@@ -3916,12 +3989,17 @@ class ChartHandler(SimpleHTTPRequestHandler):
         from tqsdk import TqApi, TqAuth
         from DataAPI.TqSdkAPI import (init_chan_symbol, _extract_realtime_snapshot,
                                        FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
-                                       TQ_ACCOUNT, TQ_PASSWORD)
+                                       TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES, _ema)
         from datetime import datetime
 
         api = None
         chan = None
         try:
+            # 别名解析：支持 PTA→KQ.m@CZCE.TA 等短名称
+            symbol_upper = symbol.upper()
+            if symbol_upper in FUTURES_ALIASES:
+                symbol = FUTURES_ALIASES[symbol_upper]
+
             freq_sec = FREQ_SEC_MAP.get(freq, 15)
             freq_label = freq
             freq_cn = FREQ_LABEL_CN.get(freq_label, freq_label)
@@ -3959,9 +4037,29 @@ class ChartHandler(SimpleHTTPRequestHandler):
             try:
                 init_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                        saved_selection_date=saved_selection_date)
+                # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
+                if klines is not None and len(klines) > 0:
+                    _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
+                    if _dns is not None:
+                        _bdt = datetime.fromtimestamp(_dns / 1e9)
+                        _bds = _bdt.strftime('%Y-%m-%d %H:%M:%S')
+                        _ex = init_data.get('klines', [])
+                        if not _ex or _ex[-1]['date'] != _bds:
+                            _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
+                                'open': round(float(_lr.get('open', 0) or 0), 3),
+                                'high': round(float(_lr.get('high', 0) or 0), 3),
+                                'low': round(float(_lr.get('low', 0) or 0), 3),
+                                'close': round(float(_lr.get('close', 0) or 0), 3),
+                                'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
+                            init_data['meta']['kline_count'] = len(_ex)
+                # 计算白色横虚线（初始快照，K线已确认状态）
+                _kl_list = chan[kl_type]
+                _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+                init_data['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
                 init_str = json.dumps(init_data, ensure_ascii=False, allow_nan=False)
                 self.wfile.write(f"event: init\ndata: {init_str}\n\n".encode("utf-8"))
                 self.wfile.flush()
+                cached_snapshot = init_data  # ★ 缓存完整快照，tick推送时更新最后一根K线OHLC
                 print(f"[{display_key}] ⑶ 推送初始快照: "
                       f"K线{init_data['meta']['kline_count']}, "
                       f"笔{init_data['meta']['bi_count']}, "
@@ -3973,19 +4071,52 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.wfile.flush()
                 return
 
-            # === 3. 实时循环：wait_update → 检测新K线 → step_load → 推送 ===
+            # === 3. 实时循环：壁钟检测周期结束 → 处理N-1 → 推送N-1/N快照 ===
+            #
+            # 策略：用系统壁钟（datetime.now()）判断K线周期是否结束，不再等天勤的
+            # klines 序列推进信号。天勤免费版 klines 推进延迟约 7 秒，但 klines[-1]
+            # 的 OHLC 在周期结束后已冻结，可以直接用于缠论计算。
+            #
+            # 流程：
+            #   1. 壁钟确认 N-1 周期结束 → 立即取 klines[-1]/[-2] 做缠论
+            #   2. 缠论计算完成后，N 周期的第一笔 tick 已到达 → 快照中直接显示 N
+            #
+            BAR_COMPLETION_BUFFER = 1.0  # 周期结束后等 N 秒（等待最后一笔 tick 到达）
             print(f"[{display_key}] ⑷ 进入实时循环 (总耗时 {time.time()-t_total:.1f}s)")
-            last_bar_time = None
-            last_realtime_period = 0
+
+            # last_bar_dt_ns: klines[-1] 的时间戳，用于检测 klines 是否推进
+            # last_processed_dt_ns: 已处理过的K线时间戳，防止同一根K线被重复处理
+            last_bar_dt_ns = None
+            last_processed_dt_ns = None
+            last_debug_print = time.time()
+
+            # 性能统计
+            t_wait_total = 0.0
+            t_tick_total = 0.0
+            t_step_total = 0.0
+            t_snapshot_total = 0.0
+            t_push_total = 0.0
+            loop_count = 0
+            tick_count = 0
+            step_count = 0
+            last_perf_print = time.time()
+
             while True:
                 try:
-                    api.wait_update(deadline=time.time() * 1e9 + 500_000_000)
+                    t_wait_start = time.time()
+                    api.wait_update(deadline=time.time() * 1e9 + 100_000_000)
+                    t_wait = time.time() - t_wait_start
+                    t_wait_total += t_wait
                 except Exception as e:
                     print(f"[{display_key}] wait_update 异常: {e}")
                     time.sleep(0.5)
                     continue
 
+                loop_count += 1
+
                 now = datetime.now()
+                now_ts = now.timestamp()
+
                 if len(klines) == 0:
                     continue
 
@@ -3994,64 +4125,216 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if dt_ns is None:
                     continue
 
-                if last_bar_time is None:
-                    last_bar_time = dt_ns
-                    last_realtime_period = 0
+                # ★ 诊断：对比 tqsdk 实时 K 线和 chan 框架内部 K 线的时间差
+                if loop_count == 1 or (loop_count % 50 == 0):
+                    chan_last_klu = None
+                    try:
+                        chan_kl_list = chan[kl_type]
+                        if chan_kl_list.lst:
+                            last_klc = chan_kl_list.lst[-1]
+                            if last_klc.lst:
+                                chan_last_klu = last_klc.lst[-1]
+                    except Exception:
+                        pass
+                    tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
+                    chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
+                    print(f"[{display_key}] [DIAG] 循环#{loop_count} | "
+                          f"tqsdk klines[-1]={tqsdk_last_dt} | "
+                          f"chan kl_list[-1]={chan_last_dt} | "
+                          f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
+
+                # 初始化
+                if last_bar_dt_ns is None:
+                    last_bar_dt_ns = dt_ns
+                    last_debug_print = now_ts
+                    print(f"[{display_key}] [DEBUG] 初始化: klines[-1]={datetime.fromtimestamp(dt_ns/1e9).strftime('%H:%M:%S')}, "
+                          f"klines行数={len(klines)}, 缓冲={BAR_COMPLETION_BUFFER}s")
                     continue
 
-                now_ts = now.timestamp()
-                realtime_period_start = (now_ts // freq_sec) * freq_sec
-                if realtime_period_start > last_realtime_period:
-                    last_realtime_period = realtime_period_start
+                # 每60秒打印一次性能统计
+                if now_ts - last_perf_print >= 60.0:
+                    last_perf_print = now_ts
+                    print(f"[{display_key}] [PERF] 循环{loop_count}次 | "
+                          f"wait_update总计={t_wait_total:.1f}s | "
+                          f"tick推送{tick_count}次总计={t_tick_total:.1f}s | "
+                          f"step_load{step_count}次总计={t_step_total:.1f}s | "
+                          f"快照提取总计={t_snapshot_total:.1f}s | "
+                          f"SSE推送总计={t_push_total:.1f}s")
+                    t_wait_total = 0.0
+                    t_tick_total = 0.0
+                    t_step_total = 0.0
+                    t_snapshot_total = 0.0
+                    t_push_total = 0.0
+                    loop_count = 0
+                    tick_count = 0
+                    step_count = 0
 
-                new_bar_completed = (dt_ns != last_bar_time)
+                # ★ DEBUG: 每2秒打印一次当前状态
+                if now_ts - last_debug_print >= 2.0:
+                    last_debug_print = now_ts
+                    bar_dt = datetime.fromtimestamp(dt_ns / 1e9)
+                    lag = now_ts - (dt_ns / 1e9 + freq_sec)
+                    pushed = (dt_ns != last_bar_dt_ns)
+                    print(f"[{display_key}] [DEBUG] 壁钟={now.strftime('%H:%M:%S')} "
+                          f"klines[-1]={bar_dt.strftime('%H:%M:%S')} "
+                          f"过期={lag:+.1f}s 推进={pushed} "
+                          f"O={last_row.get('open'):.1f} H={last_row.get('high'):.1f} "
+                          f"L={last_row.get('low'):.1f} C={last_row.get('close'):.1f}")
 
-                if new_bar_completed:
-                    last_bar_time = dt_ns
+                # --- 检测上一根K线是否已完成 ---
+                klines_pushed = (dt_ns != last_bar_dt_ns)
+
+                if klines_pushed:
+                    # klines 已推进 → 上一根K线（klines[-2]）已冻结，立即处理
                     completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
-
-                    o = float(completed_row.get("open", 0) or 0)
-                    h = float(completed_row.get("high", 0) or 0)
-                    l = float(completed_row.get("low", 0) or 0)
-                    cl = float(completed_row.get("close", 0) or 0)
-                    vol = int(completed_row.get("volume", 0) or 0)
-                    oi = float(completed_row.get("open_oi", 0) or 0)
-                    h = max(h, o, cl)
-                    l = min(l, o, cl)
-
-                    completed_dt_ns = completed_row.get("datetime")
-                    dt = datetime.fromtimestamp((completed_dt_ns or dt_ns) / 1e9)
-
-                    code_key = f"{symbol}:{freq_sec}"
-                    new_bar = {
-                        "dt": dt, "open": round(o, 3), "high": round(h, 3),
-                        "low": round(l, 3), "close": round(cl, 3),
-                        "vol": vol, "amount": round(oi, 2),
-                    }
-
-                    last_records = CTqSdkAPI.get_last_n(1, symbol=code_key)
-                    if not last_records or last_records[0]["dt"] != dt:
-                        CTqSdkAPI.append_bar(new_bar, symbol=code_key)
+                    last_bar_dt_ns = dt_ns
+                    bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
+                    print(f"[{display_key}] [DIAG] K线完成(klines推进): "
+                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
+                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
+                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
+                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
+                else:
+                    # klines 未推进 → 用壁钟判断当前K线周期是否已结束
+                    bar_end_ts = (dt_ns / 1e9) + freq_sec + BAR_COMPLETION_BUFFER
+                    if now_ts < bar_end_ts:
+                        # 周期未结束，更新缓存快照的最后一根K线OHLC后推送完整格式
+                        t_tick_start = time.time()
                         try:
-                            for _snapshot in chan.step_load():
-                                pass
-                        except Exception as e:
-                            print(f"[{display_key}] step_load 异常: {e}")
+                            if cached_snapshot is not None:
+                                ex = cached_snapshot.get('klines', [])
+                                if ex:
+                                    o = round(float(last_row.get('open', 0) or 0), 3)
+                                    h = round(float(last_row.get('high', 0) or 0), 3)
+                                    l = round(float(last_row.get('low', 0) or 0), 3)
+                                    c = round(float(last_row.get('close', 0) or 0), 3)
+                                    ex[-1]['open'] = o
+                                    ex[-1]['high'] = h
+                                    ex[-1]['low'] = l
+                                    ex[-1]['close'] = c
+                                    # ★ 实时计算最后一根K线的MACD，避免前端跳变
+                                    closes = [k['close'] for k in ex]
+                                    if len(closes) >= 26:
+                                        ema12 = _ema(closes, 12)
+                                        ema26 = _ema(closes, 26)
+                                        for i in range(len(ex)):
+                                            if i < len(ema12):
+                                                ex[i]['dif'] = round(ema12[i] - ema26[i], 4)
+                                        difs = [ex[i]['dif'] for i in range(len(ex))]
+                                        dea = _ema(difs, 9)
+                                        for i in range(len(ex)):
+                                            if i < len(dea):
+                                                ex[i]['dea'] = round(dea[i], 4)
+                                                ex[i]['macd'] = round(2 * (ex[i]['dif'] - ex[i]['dea']), 4)
+                                    cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
+                                    tick_str = json.dumps(cached_snapshot, ensure_ascii=False, allow_nan=False)
+                                    self.wfile.write(f"event: update\ndata: {tick_str}\n\n".encode("utf-8"))
+                                    self.wfile.flush()
+                                    if tick_count == 0:
+                                        print(f"[{display_key}] [DIAG] 首次tick推送: "
+                                              f"tqsdk klines[-1]={now.strftime('%H:%M:%S')} | "
+                                              f"更新最后一根K线OHLC O={o} H={h} L={l} C={c} | "
+                                              f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
+                                    t_tick_total += time.time() - t_tick_start
+                                    tick_count += 1
+                        except (BrokenPipeError, ConnectionResetError, OSError):
+                            return
+                        except Exception:
+                            pass
+                        continue
+                    # 壁钟到期，当前K线（klines[-1]）已冻结
+                    completed_row = last_row
+                    bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
+                    print(f"[{display_key}] [DIAG] K线完成(壁钟): "
+                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
+                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
+                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
+                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
 
-                    print(f"[{display_key}] 完成新K线: "
-                          f"{dt.strftime('%Y-%m-%d %H:%M:%S')} "
-                          f"O={o:.3f} H={h:.3f} L={l:.3f} C={cl:.3f}")
+                completed_dt_ns = completed_row.get("datetime")
+                if completed_dt_ns is None:
+                    continue
 
-                # 推送当前快照
-                t_push = time.time()
+                # 防止重复处理同一根K线
+                if completed_dt_ns == last_processed_dt_ns:
+                    continue
+                last_processed_dt_ns = completed_dt_ns
+
+                # 提取 OHLC
+                o = float(completed_row.get("open", 0) or 0)
+                h = float(completed_row.get("high", 0) or 0)
+                l = float(completed_row.get("low", 0) or 0)
+                cl = float(completed_row.get("close", 0) or 0)
+                vol = int(completed_row.get("volume", 0) or 0)
+                oi = float(completed_row.get("open_oi", 0) or 0)
+                h = max(h, o, cl)
+                l = min(l, o, cl)
+
+                dt = datetime.fromtimestamp(completed_dt_ns / 1e9)
+                bar_expected_end = (completed_dt_ns / 1e9) + freq_sec
+                delay = now_ts - bar_expected_end
+                source = "klines推进" if klines_pushed else "壁钟"
+
+                code_key = f"{symbol}:{freq_sec}"
+                new_bar = {
+                    "dt": dt, "open": round(o, 3), "high": round(h, 3),
+                    "low": round(l, 3), "close": round(cl, 3),
+                    "vol": vol, "amount": round(oi, 2),
+                }
+                t_append = time.time()
+
+                last_records = CTqSdkAPI.get_last_n(1, symbol=code_key)
+                t_step = 0.0
+                if not last_records or last_records[0]["dt"] != dt:
+                    CTqSdkAPI.append_bar(new_bar, symbol=code_key)
+                    t_step_start = time.time()
+                    try:
+                        for _snapshot in chan.step_load():
+                            pass
+                    except Exception as e:
+                        print(f"[{display_key}] step_load 异常: {e}")
+                    t_step = time.time() - t_step_start
+                    t_step_total += t_step
+                    step_count += 1
+
+                print(f"[{display_key}] 完成新K线[{source}]: "
+                      f"{dt.strftime('%Y-%m-%d %H:%M:%S')} "
+                      f"O={o:.3f} H={h:.3f} L={l:.3f} C={cl:.3f} "
+                      f"[壁钟={now.strftime('%H:%M:%S')} 延迟={delay:+.1f}s "
+                      f"wait_update={t_wait:.3f}s step_load={t_step:.3f}s]")
+
+                # 推送快照（此时 klines[-1] 已推进到 N 周期，快照中自然包含 N 的实时OHLC）
+                t_snap_start = time.time()
                 try:
                     update_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                        saved_selection_date=saved_selection_date)
+                    # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
+                    _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
+                    _next_ds = _next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    _ex = update_data.get('klines', [])
+                    if not _ex or _ex[-1]['date'] != _next_ds:
+                        _next_c = round(cl, 3)
+                        _ex.append({'date': _next_ds, 'timestamp': int(_next_dt.timestamp() * 1000),
+                            'open': _next_c, 'high': _next_c, 'low': _next_c, 'close': _next_c,
+                            'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
+                        update_data['meta']['kline_count'] = len(_ex)
+                    # K线确认后，计算白色横虚线（不在tick推送路径计算）
+                    _kl_list = chan[kl_type]
+                    _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+                    update_data['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
+                    cached_snapshot = update_data  # ★ 更新缓存
+                    t_snap = time.time() - t_snap_start
+                    t_snapshot_total += t_snap
                     update_str = json.dumps(update_data, ensure_ascii=False, allow_nan=False)
+                    t_serialize = time.time() - t_snap_start - t_snap
+                    t_push_start = time.time()
                     self.wfile.write(f"event: update\ndata: {update_str}\n\n".encode("utf-8"))
                     self.wfile.flush()
-                    if new_bar_completed:
-                        print(f"[{display_key}] 推送更新: 耗时 {time.time()-t_push:.1f}s")
+                    t_push = time.time() - t_push_start
+                    t_push_total += t_push
+                    print(f"[{display_key}] 推送更新: 快照提取={t_snap:.3f}s "
+                          f"JSON序列化={t_serialize:.3f}s SSE写入={t_push:.3f}s "
+                          f"(append+step_load={time.time()-t_append:.3f}s)")
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
                 except Exception as e:
@@ -4067,6 +4350,11 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     api.close()
                 except Exception:
                     pass
+            # 清理该连接的K线缓存
+            try:
+                CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{freq_sec}", None)
+            except Exception:
+                pass
 
     def do_POST(self):
         """处理 POST 请求（标注增删、扫描等）"""
@@ -4457,6 +4745,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             white-space: nowrap !important; flex-shrink: 0 !important;
             line-height: 1.2 !important;
         }
+        .scan-bsp-tag.buy0 { background: rgba(255, 105, 180, 0.3); color: #FF69B4; }
         .scan-bsp-tag.buy1 { background: rgba(233, 69, 96, 0.3); color: #FF6B8A; }
         .scan-bsp-tag.buy2 { background: rgba(255, 167, 16, 0.3); color: #FFA710; }
         .scan-bsp-tag.buy3 { background: rgba(12, 244, 155, 0.3); color: #0CF49B; }
@@ -4464,6 +4753,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .scan-bsp-tag.buy2s { background: rgba(186, 85, 211, 0.3); color: #BA55D3; }
         .scan-bsp-tag.buy3b { background: rgba(255, 215, 0, 0.3); color: #FFD700; }
         .scan-bsp-tag.buya { background: rgba(233, 69, 96, 0.2); color: #e94560; }
+        .scan-bsp-tag.sell0 { background: rgba(135, 206, 250, 0.3); color: #87CEFA; }
         .scan-bsp-tag.sell1 { background: rgba(0, 180, 80, 0.3); color: #00B450; }
         .scan-bsp-tag.sell2 { background: rgba(0, 150, 136, 0.3); color: #009688; }
         .scan-bsp-tag.sell3 { background: rgba(76, 175, 80, 0.3); color: #4CAF50; }
@@ -5911,11 +6201,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const bodyH = Math.max(1, Math.abs(closeY - openY));
 
                 if (k.close === k.open) {
-                    // 收盘价等于开盘价，用白色画
+                    // 收盘价等于开盘价，画十字线（竖线+横线，宽度一致）
                     ctx.fillStyle = "#FFFFFF";
-                    ctx.fillRect(x - 0.5, highY, 1, lowY - highY);
-                    ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1;
-                    ctx.strokeRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
+                    ctx.fillRect(x - 0.5, highY, 1, lowY - highY);          // 竖线：上影线到下影线
+                    ctx.fillRect(x - barWidth / 2, closeY - 0.5, barWidth, 1); // 横线：在收盘价位置，与竖线同宽
                 } else if (k.close > k.open) {
                     ctx.fillStyle = "#FF4444";
                     if (highY < bodyTop) {
@@ -7382,7 +7671,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     var bp = r.buy_points[j];
                                     var tp = bp.type.toLowerCase().replace(/\s/g, "");
                                     var cls = "buya";
-                                    if (tp === "1") cls = "buy1";
+                                    if (tp === "0") cls = "buy0";
+                                    else if (tp === "1") cls = "buy1";
                                     else if (tp === "2") cls = "buy2";
                                     else if (tp === "3a") cls = "buy3";
                                     else if (tp === "1p") cls = "buy1p";
@@ -7394,7 +7684,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     var sp = r.sell_points[j];
                                     var tp = sp.type.toLowerCase().replace(/\s/g, "");
                                     var cls = "sella";
-                                    if (tp === "1") cls = "sell1";
+                                    if (tp === "0") cls = "sell0";
+                                    else if (tp === "1") cls = "sell1";
                                     else if (tp === "2") cls = "sell2";
                                     else if (tp === "3a") cls = "sell3";
                                     else if (tp === "1p") cls = "sell1p";
@@ -7574,7 +7865,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         var bp = r.buy_points[j];
                         var tp = bp.type.toLowerCase().replace(/\s/g, "");
                         var cls = "buya";
-                        if (tp === "1") cls = "buy1";
+                        if (tp === "0") cls = "buy0";
+                        else if (tp === "1") cls = "buy1";
                         else if (tp === "2") cls = "buy2";
                         else if (tp === "3a") cls = "buy3";
                         else if (tp === "1p") cls = "buy1p";
@@ -7587,7 +7879,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         var sp = r.sell_points[j];
                         var tp = sp.type.toLowerCase().replace(/\s/g, "");
                         var cls = "sella";
-                        if (tp === "1") cls = "sell1";
+                        if (tp === "0") cls = "sell0";
+                        else if (tp === "1") cls = "sell1";
                         else if (tp === "2") cls = "sell2";
                         else if (tp === "3a") cls = "sell3";
                         else if (tp === "1p") cls = "sell1p";
@@ -8040,9 +8333,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             document.getElementById("stock-history").classList.remove("show");
             document.getElementById("loading").classList.remove("hidden");
-            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || /^[A-Z]+\.[A-Z]/.test(code);
+            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS"]);
+            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
+            // 判断切换前是否为期指
+            const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             // 同类继承上一周期，异类使用默认周期
-            const fetchFreq = isFuturesCode ? lastFuturesFreq : lastStockFreq;
+            let fetchFreq;
+            if (wasFutures && isFuturesCode) {
+                // 期指C → 期指D：保持C的周期
+                fetchFreq = lastFuturesFreq;
+            } else if (!wasFutures && !isFuturesCode) {
+                // 股票A → 股票B：保持A的周期
+                fetchFreq = lastStockFreq;
+            } else if (wasFutures && !isFuturesCode) {
+                // 期指 → 股票：默认日K，同时彻底清理所有期货数据
+                disconnectRealtime();
+                fetch("/api/futures_cleanup").catch(() => {});
+                fetchFreq = 'd';
+            } else {
+                // 股票 → 期指：默认15秒
+                fetchFreq = '15s';
+            }
             currentFreq = fetchFreq;
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
@@ -8222,7 +8533,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                         // 全量初始数据
                         chartData = data;
-                        saveHistory(symbol, data.meta.name);
+                        // 用后端解析后的完整代码保存历史，避免别名导致历史记录不一致
+                        const resolvedSymbol = data.meta.symbol || symbol;
+                        saveHistory(resolvedSymbol, data.meta.name);
+                        // 同步 realtimeSymbol 为解析后的完整代码
+                        realtimeSymbol = resolvedSymbol;
+                        // 更新输入框为解析后的完整代码
+                        document.getElementById("stock-code-input").value = resolvedSymbol;
                         updateRestartBtn();
                         updateDualBtn();
                         // 同步周期

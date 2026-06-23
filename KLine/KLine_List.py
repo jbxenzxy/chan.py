@@ -114,7 +114,7 @@ class CKLine_List:
 
         # 计算买卖点
         self.seg_bs_point_lst.cal(self.seg_list, self.segseg_list)  # 线段线段买卖点
-        self.bs_point_lst.cal(self.bi_list, self.seg_list)  # 笔买卖点（MyBSPointList → cal_bs1point/2/3）
+        self.bs_point_lst.cal(self.bi_list, self.zs_list)  # 笔买卖点（MyBSPointList → cal_bs0point/1/2/3）
 
     def need_cal_step_by_step(self):
         return self.config.trigger_step

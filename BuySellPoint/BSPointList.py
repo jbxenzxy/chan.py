@@ -2,7 +2,7 @@ from typing import Dict, Generic, Iterable, List, Optional, Tuple, TypeVar
 
 from Bi.Bi import CBi
 from Bi.BiList import CBiList
-from Common.CEnum import BSP_TYPE
+from Common.CEnum import BSP_TYPE, MACD_ALGO
 from Common.func_util import has_overlap
 from Seg.Seg import CSeg
 from Seg.SegListComm import CSegListComm
@@ -444,88 +444,183 @@ def cal_bsp3_bi_end_idx(seg: Optional[CSeg[LINE_TYPE]]):
 # ============================================================
 class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     """自定义买卖点计算类。
-    继承 CBSPointList，将 cal() 中的三个方法调用替换为 cal_bs1point / cal_bs2point / cal_bs3point。
-    你只需修改下面三个空方法即可实现自己的买卖点逻辑。
+
+    继承 CBSPointList，将 cal() 中的调用替换为 cal_bs0point ~ cal_bs3point。
+    你只需修改下面四个方法即可实现自己的买卖点逻辑。
+
+    与线段（seg_list）完全解耦，只依赖笔列表（bi_list）和笔中枢列表（zs_list）。
+    0类买卖点已通过 BSP_TYPE.T0 枚举正规化，无需额外 hack。
     """
 
-    def cal(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
-        self.clear_store_end()
-        self.clear_bsp1_end()
-        self.cal_bs1point(bi_list, seg_list)
-        self.cal_bs2point(bi_list, seg_list)
-        self.cal_bs3point(bi_list, seg_list)
-        self.update_last_pos(seg_list)
+    # ── 入口 ──
+    def cal(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+        self.cal_bs0point(bi_list, zs_list)
+        self.cal_bs1point(bi_list, zs_list)
+        self.cal_bs2point(bi_list, zs_list)
+        self.cal_bs3point(bi_list, zs_list)
 
-    def cal_bs1point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+    # ── 0类买卖点 ──
+    def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+        """0类买卖点计算。
+
+        算法：
+        1. 从框架的笔中枢列表 zs_list 中找到最后一个多笔中枢，即中枢A
+           中枢A由前三笔（笔1, 笔2, 笔3）重叠构成
+        2. 取最后一笔n（n≥4，即笔1.idx+3 起）作为当下笔：
+           - 笔n必须属于中枢A（与A有重叠）
+           - 向上笔n：末端高点 > 中枢A上沿
+           - 向下笔n：末端低点 < 中枢A下沿
+        3. 从笔n往回数5笔（n-4, n-3, n-2, n-1, n）
+           n-3, n-2, n-1 重叠 → 中枢B
+        4. 笔n突破中枢B（向上突破上沿，向下突破下沿）
+           且 n-4 也突破中枢B（向上：n-4低点<下沿；向下：n-4高点>上沿）
+        5. n-4为进入笔，n为离开笔，MACD full_area 背驰 → 0类买卖点
+        """
+        # ── 第一步：从笔中枢列表 zs_list 中找到最后一个多笔中枢 → 中枢A ──
+        if zs_list is None or len(zs_list) == 0:
+            return
+
+        pivot_a = None
+        for zs in reversed(zs_list):
+            if not zs.is_one_bi_zs():
+                pivot_a = zs
+                break
+
+        if pivot_a is None:
+            return
+
+        # ── 第二步：只检查最后一笔（当下笔）──
+        # 中枢A由前三笔（笔1, 笔2, 笔3）构成，笔n（n≥4）从笔1.idx + 3 开始
+        n_idx = len(bi_list) - 1
+        if n_idx < pivot_a.begin_bi.idx + 3 or n_idx < 4:
+            return
+
+        stroke_n = bi_list[n_idx]
+
+        # 虚笔不计算0类买卖点
+        if not getattr(stroke_n, 'is_sure', True):
+            return
+
+        # 已存在T0买卖点，跳过重复计算
+        if exist_bsp := self.bsp_store_flat_dict.get(stroke_n.idx):
+            if BSP_TYPE.T0 in exist_bsp.type:
+                return
+
+        # ── 条件〇：笔n属于中枢A（与中枢A有重叠）──
+        if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
+            return
+
+        # ── 条件一：笔n突破中枢A ──
+        end_klc = stroke_n.end_klc
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None
+
+        if stroke_n.is_up():
+            # 向上笔n：
+            # 条件A：末端高点 >= 中枢A波动区间高点
+            # 条件B：(末端高点 >= 中枢A上沿) AND (顶分型右肩DEA < 前一根K线DEA)
+            cond_a = stroke_n._high() >= getattr(pivot_a, 'peak_high', pivot_a.high)
+            cond_b = False
+            if stroke_n._high() >= pivot_a.high:
+                if right_klc is not None and hasattr(right_klc, 'dea') and hasattr(end_klc, 'dea'):
+                    cond_b = right_klc.dea < end_klc.dea
+            if not (cond_a or cond_b):
+                return
+        else:
+            # 向下笔n：
+            # 条件A：末端低点 <= 中枢A波动区间低点
+            # 条件B：(末端低点 <= 中枢A下沿) AND (底分型右肩DEA > 前一根K线DEA)
+            cond_a = stroke_n._low() <= getattr(pivot_a, 'peak_low', pivot_a.low)
+            cond_b = False
+            if stroke_n._low() <= pivot_a.low:
+                if right_klc is not None and hasattr(right_klc, 'dea') and hasattr(end_klc, 'dea'):
+                    cond_b = right_klc.dea > end_klc.dea
+            if not (cond_a or cond_b):
+                return
+
+        # ── 条件二：n-3, n-2, n-1 重叠 → 中枢B ──
+        s_nm1 = bi_list[n_idx - 1]  # 笔n-1
+        s_nm2 = bi_list[n_idx - 2]  # 笔n-2
+        s_nm3 = bi_list[n_idx - 3]  # 笔n-3
+        s_nm4 = bi_list[n_idx - 4]  # 笔n-4（中枢B的进入笔）
+
+        zs_b_low = max(s_nm1._low(), s_nm2._low(), s_nm3._low())
+        zs_b_high = min(s_nm1._high(), s_nm2._high(), s_nm3._high())
+        if zs_b_low > zs_b_high:  # 三笔无重叠，不构成中枢B
+            return
+
+        # ── 条件三：笔n突破中枢B，且 n-4 也突破中枢B ──
+        if stroke_n.is_up():
+            # 向上笔n：末端高点 > 中枢B上沿
+            if stroke_n._high() <= zs_b_high:
+                return
+            # n-4（进入笔）：末端低点 < 中枢B下沿
+            if s_nm4._low() >= zs_b_low:
+                return
+        else:
+            # 向下笔n：末端低点 < 中枢B下沿
+            if stroke_n._low() >= zs_b_low:
+                return
+            # n-4（进入笔）：末端高点 > 中枢B上沿
+            if s_nm4._high() <= zs_b_high:
+                return
+
+        # ── 条件四：MACD背驰判断（full_area）──
+        # 进入笔：n-4，离开笔：n
+        in_metric = s_nm4.cal_macd_metric(MACD_ALGO.FULL_AREA, is_reverse=False)
+        out_metric = stroke_n.cal_macd_metric(MACD_ALGO.FULL_AREA, is_reverse=True)
+        divergence_rate = out_metric / (in_metric + 1e-7)
+
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        is_diver = out_metric <= config.divergence_rate * in_metric
+
+        if not is_diver:
+            return
+
+        # ── 生成0类买卖点 ──
+        feature_dict = {
+            'divergence_rate': divergence_rate,
+            'bsp0_bi_amp': stroke_n.amp(),
+        }
+        self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp1=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
+
+    # ── 1类/1p 买卖点 ──
+    def cal_bs1point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
         """TODO: 在此实现自定义的 1 类（趋势背驰）和 1p 类（盘整背驰）买卖点计算逻辑。
 
         参数:
             bi_list: 笔列表，包含所有笔对象
-            seg_list: 线段列表，每个 seg 上有 zs_lst（中枢列表）、end_bi（尾笔）、is_down() 等
-
-        可用的上下文数据:
-            - self.bsp1_list / self.bsp1_dict: 已有的 1/1p 类点
-            - self.config: 买卖点配置 (CBSPointConfig)
-            - self.last_sure_seg_idx: 最后一个确认的线段索引
-            - seg_need_cal(seg): 判断线段是否需要重新计算
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
 
         生成买卖点请调用:
             self.add_bs(bs_type=BSP_TYPE.T1,  bi=..., relate_bsp1=None, feature_dict={...})
             self.add_bs(bs_type=BSP_TYPE.T1P, bi=..., relate_bsp1=None, feature_dict={...})
         """
-        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
-        for seg in seg_list[self.last_sure_seg_idx:]:
-            if self.seg_need_cal(seg):
-                self.cal_single_bs1point(seg, bi_list)
+        pass
 
-    def cal_bs2point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+    def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
         """TODO: 在此实现自定义的 2 类（回踩/回抽确认）和 2s 类（类二）买卖点计算逻辑。
 
-        参数同上。
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
 
         生成买卖点请调用:
             self.add_bs(bs_type=BSP_TYPE.T2,  bi=..., relate_bsp1=..., feature_dict={...})
             self.add_bs(bs_type=BSP_TYPE.T2S, bi=..., relate_bsp1=..., feature_dict={...})
         """
-        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
-        for seg in seg_list[self.last_sure_seg_idx:]:
-            config = self.config.GetBSConfig(seg.is_down())
-            if BSP_TYPE.T2 not in config.target_types and BSP_TYPE.T2S not in config.target_types:
-                continue
-            if self.seg_need_cal(seg):
-                self.treat_bsp2(seg, seg_list, bi_list)
+        pass
 
-    def cal_bs3point(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
+    def cal_bs3point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
         """TODO: 在此实现自定义的 3a 类（中枢在1类之后）和 3b 类（中枢在1类之前）买卖点计算逻辑。
 
-        参数同上。
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
 
         生成买卖点请调用:
             self.add_bs(bs_type=BSP_TYPE.T3A, bi=..., relate_bsp1=..., feature_dict={...})
             self.add_bs(bs_type=BSP_TYPE.T3B, bi=..., relate_bsp1=..., feature_dict={...})
         """
-        # 默认调用原始逻辑（如需完全自定义，删除以下两行）
-        for seg in seg_list[self.last_sure_seg_idx:]:
-            if not self.seg_need_cal(seg):
-                continue
-            config = self.config.GetBSConfig(seg.is_down())
-            if BSP_TYPE.T3A not in config.target_types and BSP_TYPE.T3B not in config.target_types:
-                continue
-            if len(seg_list) > 1:
-                bsp1_bi = seg.end_bi
-                bsp1_bi_idx = bsp1_bi.idx
-                BSP_CONF = self.config.GetBSConfig(seg.is_down())
-                real_bsp1 = self.bsp1_dict.get(bsp1_bi.idx)
-                next_seg_idx = seg.idx+1
-                next_seg = seg.next
-            else:
-                next_seg = seg
-                next_seg_idx = seg.idx
-                bsp1_bi, real_bsp1 = None, None
-                bsp1_bi_idx = -1
-                BSP_CONF = self.config.GetBSConfig(seg.is_up())
-            if BSP_CONF.bsp3_follow_1 and (not bsp1_bi or bsp1_bi.idx not in self.bsp_store_flat_dict):
-                continue
-            if next_seg:
-                self.treat_bsp3_after(seg_list, next_seg, BSP_CONF, bi_list, real_bsp1, bsp1_bi_idx, next_seg_idx)
-            self.treat_bsp3_before(seg_list, seg, next_seg, bsp1_bi, BSP_CONF, bi_list, real_bsp1, next_seg_idx)
+        pass

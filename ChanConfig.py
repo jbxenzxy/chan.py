@@ -21,25 +21,25 @@ class CChanConfig:
             conf = {}
         conf = ConfigWithCheck(conf)
         self.bi_conf = CBiConfig(
-            bi_algo=conf.get("bi_algo", "normal"),
-            is_strict=conf.get("bi_strict", True),
-            bi_fx_check=conf.get("bi_fx_check", "strict"),
+            bi_algo=conf.get("bi_algo", "normal"),                 # 按缠论笔定义，非顶/底分型即成笔
+            is_strict=conf.get("bi_strict", True),                 # bi_algo=normal时有效；顶/底分型间，至少隔1根K线
+            bi_fx_check=conf.get("bi_fx_check", "loss"),           # 分型检查：loss模式（宽松）
             gap_as_kl=conf.get("gap_as_kl", False),
-            bi_end_is_peak=conf.get('bi_end_is_peak', True),
-            bi_allow_sub_peak=conf.get("bi_allow_sub_peak", True),
+            bi_end_is_peak=conf.get('bi_end_is_peak', False),      # 关闭后，允许一笔之间有"不成笔的"更高/低分型；参见 上证指数 日K 25/09/03~25/10/31
+            bi_allow_sub_peak=conf.get("bi_allow_sub_peak", True), # 打开后，允许笔端点的分型非局部最高/低分型；参见23/07/21~23/08/07
         )
         self.seg_conf = CSegConfig(
-            seg_algo=conf.get("seg_algo", "chan"),
+            seg_algo=conf.get("seg_algo", "chan"),                 # 利用特征序列来计算
             left_method=conf.get("left_seg_method", "peak"),
         )
         self.zs_conf = CZSConfig(
-            need_combine=conf.get("zs_combine", True),
+            need_combine=conf.get("zs_combine", False),            # 是否中枢合并，默认为 True
             zs_combine_mode=conf.get("zs_combine_mode", "zs"),
             one_bi_zs=conf.get("one_bi_zs", False),
-            zs_algo=conf.get("zs_algo", "normal"),
+            zs_algo=conf.get("zs_algo", "over_seg"),               # 中枢算法：跨段
         )
 
-        self.trigger_step = conf.get("trigger_step", False)
+        self.trigger_step = conf.get("trigger_step", True)         # 实时/回放语义：逐根推进，启用尾部虚笔和未确认结构处理
         self.skip_step = conf.get("skip_step", 0)
 
         self.kl_data_check = conf.get("kl_data_check", True)
@@ -104,20 +104,20 @@ class CChanConfig:
 
     def set_bsp_config(self, conf):
         para_dict = {
-            "divergence_rate": float("inf"),
-            "min_zs_cnt": 1,
+            "divergence_rate": 0.9,         # 1类（和1p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
+            "min_zs_cnt": 1,                # 1类（和1p类）买卖点至少要经历几个中枢，默认为 1
             "bsp1_only_multibi_zs": True,
-            "max_bs2_rate": 0.9999,
-            "macd_algo": "peak",
-            "bs1_peak": True,
-            "bs_type": "1,1p,2,2s,3a,3b",
-            "bsp2_follow_1": True,
-            "bsp3_follow_1": True,
-            "bsp3_peak": False,
-            "bsp2s_follow_2": False,
-            "max_bsp2s_lv": None,
-            "strict_bsp3": False,
-            "bsp3a_max_zs_cnt": 1,
+            "max_bs2_rate": 0.9,            # 2类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到1类买卖点的位置
+            "macd_algo": "full_area",       # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）
+            "bs1_peak": False,              # 1类（非1p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
+            "bs_type": "0",                 # 买卖点类型：0震荡；1趋背/盘背；1p实为段背；3a 中枢在1类后面；3b 中枢在1类前面
+            "bsp2_follow_1": True,          # 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True
+            "bsp3_follow_1": False,         # 3类买卖点是否必须跟在1类买卖点后面，默认为 True（没有1类点就不算3类点，忽视了有“小转大”的可能）
+            "bsp3_peak": False,             # 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
+            "bsp2s_follow_2": False,        # 类2买卖点是否必须跟在2类买卖点后面（2类买卖点可能由于不满足 max_bs2_rate），默认为 False
+            "max_bsp2s_lv": None,           # 类2买卖点最大层级（距离2类买卖点的笔的距离/2），默认为None，不做限制
+            "strict_bsp3": False,           # 3类买卖点对应的中枢，是否要求中枢进入笔"紧邻"1类点笔，默认为 False（允许1类点笔后走个ABC，ABC是后面中枢的进入段）
+            "bsp3a_max_zs_cnt": 2,          # 3类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离1类点最近的那个中枢回拉产生的3a类点，越远的中枢越不可靠
         }
         args = {para: conf.get(para, default_value) for para, default_value in para_dict.items()}
         self.bs_point_conf = CBSPointConfig(**args)

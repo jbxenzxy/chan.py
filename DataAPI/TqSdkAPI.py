@@ -37,6 +37,45 @@ DEFAULT_FUTURES_SYMBOLS = [
     ("KQ.m@CFFEX.IM", "中证1000主连", 300, "5m"),
 ]
 
+# ===== 期货品种别名映射表 =====
+# 支持用户直接输入短名称（如 PTA、IF、rb、TA 等），自动映射到完整的主连代码
+FUTURES_ALIASES = {
+    # ===== 中金所 CFFEX =====
+    "IF": "KQ.m@CFFEX.IF", "IH": "KQ.m@CFFEX.IH", "IC": "KQ.m@CFFEX.IC",
+    "IM": "KQ.m@CFFEX.IM", "T": "KQ.m@CFFEX.T", "TF": "KQ.m@CFFEX.TF",
+    "TL": "KQ.m@CFFEX.TL", "TS": "KQ.m@CFFEX.TS",
+    # ===== 上期所 SHFE =====
+    "CU": "KQ.m@SHFE.cu", "AL": "KQ.m@SHFE.al", "ZN": "KQ.m@SHFE.zn",
+    "PB": "KQ.m@SHFE.pb", "NI": "KQ.m@SHFE.ni", "SN": "KQ.m@SHFE.sn",
+    "AO": "KQ.m@SHFE.ao", "AU": "KQ.m@SHFE.au", "AG": "KQ.m@SHFE.ag",
+    "RB": "KQ.m@SHFE.rb", "WR": "KQ.m@SHFE.wr", "HC": "KQ.m@SHFE.hc",
+    "SS": "KQ.m@SHFE.ss", "BU": "KQ.m@SHFE.bu", "RU": "KQ.m@SHFE.ru",
+    "FU": "KQ.m@SHFE.fu", "SP": "KQ.m@SHFE.sp", "BR": "KQ.m@SHFE.br",
+    # ===== 大商所 DCE =====
+    "M": "KQ.m@DCE.m", "Y": "KQ.m@DCE.y", "A": "KQ.m@DCE.a",
+    "B": "KQ.m@DCE.b", "P": "KQ.m@DCE.p", "J": "KQ.m@DCE.j",
+    "JM": "KQ.m@DCE.jm", "I": "KQ.m@DCE.i", "C": "KQ.m@DCE.c",
+    "CS": "KQ.m@DCE.cs", "L": "KQ.m@DCE.l", "V": "KQ.m@DCE.v",
+    "PP": "KQ.m@DCE.pp", "EG": "KQ.m@DCE.eg", "EB": "KQ.m@DCE.eb",
+    "PG": "KQ.m@DCE.pg", "FB": "KQ.m@DCE.fb", "BB": "KQ.m@DCE.bb",
+    "RR": "KQ.m@DCE.rr", "LH": "KQ.m@DCE.lh", "JD": "KQ.m@DCE.jd",
+    # ===== 郑商所 CZCE =====
+    "TA": "KQ.m@CZCE.TA", "PTA": "KQ.m@CZCE.TA", "MA": "KQ.m@CZCE.MA",
+    "FG": "KQ.m@CZCE.FG", "SA": "KQ.m@CZCE.SA", "SR": "KQ.m@CZCE.SR",
+    "CF": "KQ.m@CZCE.CF", "CY": "KQ.m@CZCE.CY", "OI": "KQ.m@CZCE.OI",
+    "RM": "KQ.m@CZCE.RM", "ZC": "KQ.m@CZCE.ZC", "UR": "KQ.m@CZCE.UR",
+    "PF": "KQ.m@CZCE.PF", "PK": "KQ.m@CZCE.PK", "AP": "KQ.m@CZCE.AP",
+    "CJ": "KQ.m@CZCE.CJ", "SM": "KQ.m@CZCE.SM", "SF": "KQ.m@CZCE.SF",
+    "SH": "KQ.m@CZCE.SH", "PX": "KQ.m@CZCE.PX", "LR": "KQ.m@CZCE.LR",
+    "RI": "KQ.m@CZCE.RI", "JR": "KQ.m@CZCE.JR", "WH": "KQ.m@CZCE.WH",
+    "PM": "KQ.m@CZCE.PM", "RS": "KQ.m@CZCE.RS",
+    # ===== 上海国际能源交易中心 INE =====
+    "SC": "KQ.m@INE.sc", "LU": "KQ.m@INE.lu", "NR": "KQ.m@INE.nr",
+    "BC": "KQ.m@INE.bc", "EC": "KQ.m@INE.ec",
+    # ===== 广期所 GFEX =====
+    "SI": "KQ.m@GFEX.si", "LC": "KQ.m@GFEX.lc", "PS": "KQ.m@GFEX.ps",
+}
+
 # 前端可用的周期列表（用于变灰不可用按钮）
 SUPPORTED_FREQS = ["15s", "1m", "5m", "30m"]
 DISABLED_FREQS = ["d", "w"]
@@ -81,6 +120,12 @@ class CTqSdkAPI(CCommonStockApi):
     @classmethod
     def do_close(cls):
         pass
+
+    @classmethod
+    def clear_all_cache(cls):
+        """期货切股票时清空所有K线缓存"""
+        with cls._lock:
+            cls._records_by_symbol.clear()
 
     @classmethod
     def set_data(cls, records, symbol=None):
@@ -239,6 +284,10 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
             if before_count != len(records):
                 print(f"[{display_key or symbol}] 选点过滤: {start_time} -> {before_count}条 → {len(records)}条")
 
+    # ★ 天勤免费API可能返回超过num_bars的数据，强制截断以控制step_load耗时
+    if len(records) > num_bars:
+        records = records[-num_bars:]
+
     label = SEC_TO_LABEL.get(freq_sec, f"{freq_sec}s")
     prefix = display_key if display_key else f"{symbol} {label}"
     elapsed = _time.time() - t_start
@@ -290,28 +339,7 @@ def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
         }
         kl_type = _freq_to_kl.get(freq_sec, KL_TYPE.K_15S)
 
-        config = CChanConfig({
-            "trigger_step": True, "bi_fx_check": "loss", "bi_allow_sub_peak": True,
-            "bi_algo": "normal", "bi_strict": True, "bi_end_is_peak": False,
-            "seg_algo": "chan", "zs_algo": "over_seg", "zs_combine": False,
-            "bs_type": "1,1p,2,2s,3a,3b", "min_zs_cnt": 1, "bs1_peak": True,
-            "divergence_rate": 0.9, "bsp2_follow_1": True, "max_bs2_rate": 0.9,
-            "bsp2s_follow_2": False, "max_bsp2s_lv": None, "bsp3_follow_1": False,
-            "strict_bsp3": False, "bsp3_peak": False, "bsp3a_max_zs_cnt": 2,
-            "macd_algo": "full_area",
-        })
-
-        try:
-            from Math.Demark import CDemarkEngine
-            CDemarkEngine.DEMARK_LEN = 9
-            CDemarkEngine.SETUP_BIAS = 4
-            CDemarkEngine.COUNTDOWN_BIAS = 2
-            CDemarkEngine.MAX_COUNTDOWN = 13
-            CDemarkEngine.TIAOKONG_ST = True
-            CDemarkEngine.SETUP_CMP2CLOSE = True
-            CDemarkEngine.COUNTDOWN_CMP2CLOSE = True
-        except Exception:
-            pass
+        config = CChanConfig()
 
         chan = CChan(
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
@@ -368,10 +396,65 @@ def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list):
     return ""
 
 
-def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date=""):
-    """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致"""
+def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
+    """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致。
+    lightweight=True: 仅返回最后一根K线的OHLC变化（周期内tick更新用），不遍历全量结构。
+    klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）"""
     from Common.CEnum import FX_TYPE
     kl_list = chan[kl_type]
+
+    if lightweight:
+        # ★ 优先从天勤实时 klines 读取当前形成中K线的OHLC，避免 chan 框架 kl_list 滞后
+        if klines is not None and len(klines) > 0:
+            last_row = klines.iloc[-1]
+            dt_ns = last_row.get("datetime")
+            kline_dt = "?"
+            if dt_ns is not None:
+                try:
+                    kline_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+            o = float(last_row.get("open", 0) or 0)
+            h = float(last_row.get("high", 0) or 0)
+            l = float(last_row.get("low", 0) or 0)
+            c = float(last_row.get("close", 0) or 0)
+            return {
+                "type": "tick",
+                "kline": {
+                    "date": kline_dt,
+                    "open": round(o, 3),
+                    "high": round(h, 3),
+                    "low": round(l, 3),
+                    "close": round(c, 3),
+                },
+                "meta": {
+                    "symbol": symbol, "name": name, "freq": freq_label,
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "is_realtime": True, "market": "futures",
+                },
+            }
+        # 回退：无 klines 时从 chan 框架读取
+        if len(kl_list.lst) == 0:
+            return None
+        last_klc = kl_list.lst[-1]
+        if len(last_klc.lst) == 0:
+            return None
+        last_klu = last_klc.lst[-1]
+        return {
+            "type": "tick",
+            "kline": {
+                "date": _fmt_date(last_klu.time),
+                "open": round(last_klu.open, 3),
+                "high": round(last_klu.high, 3),
+                "low": round(last_klu.low, 3),
+                "close": round(last_klu.close, 3),
+            },
+            "meta": {
+                "symbol": symbol, "name": name, "freq": freq_label,
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "is_realtime": True, "market": "futures",
+            },
+        }
 
     klines = []
     for klc in kl_list.lst:
@@ -520,6 +603,8 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 "timestamp": int(bsp.klu.time.ts * 1000) if hasattr(bsp.klu.time, 'ts') else 0,
                 "type": bsp.type2str(), "is_buy": bsp.is_buy,
                 "price": round(bsp.klu.close, 3),
+                "high": round(bsp.klu.high, 3),
+                "low": round(bsp.klu.low, 3),
             })
     except Exception:
         pass

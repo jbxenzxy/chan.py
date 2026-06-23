@@ -53,7 +53,8 @@ class CPointConfig:
         if isinstance(self.tmp_target_types, str):
             self.tmp_target_types = [t.strip() for t in self.tmp_target_types.split(",")]
         for target_t in self.tmp_target_types:
-            assert target_t in ['1', '2', '3a', '2s', '1p', '3b']
+            assert target_t in ['0', '1', '2', '3a', '2s', '1p', '3b'], \
+                f"unsupported bs_type: {target_t}, valid: 0,1,1p,2,2s,3a,3b"
         self.target_types = [_d[_type] for _type in self.tmp_target_types]
 
     def SetMacdAlgo(self, macd_algo):

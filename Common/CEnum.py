@@ -60,10 +60,11 @@ class BI_TYPE(Enum):
     TIAOKONG_VALUE = auto()
 
 
-BSP_MAIN_TYPE = Literal['1', '2', '3']
+BSP_MAIN_TYPE = Literal['0', '1', '2', '3']
 
 
 class BSP_TYPE(Enum):
+    T0 = '0'    # 0类买卖点（神之一笔，不依赖中枢/背驰）
     T1 = '1'
     T1P = '1p'
     T2 = '2'
