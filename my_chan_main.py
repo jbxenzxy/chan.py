@@ -11,7 +11,8 @@ import struct
 import re
 import threading
 import multiprocessing
-from datetime import datetime
+from datetime import datetime, timedelta
+from chinese_calendar import is_holiday
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -61,14 +62,15 @@ OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本
 SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
 SYMBOL_DISPLAY = "上证指数"
 CHAN_PATH = r"C:\my_chan_project"  # chan.py 仓库解压目录
+_LAST_STOCK_FILE = os.path.join(VIPDOC_DIR, "last_stock.json")  # 持久化上次查看的股票代码
 
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
 # 请修改为你的快期账号（注册地址: https://account.shinnytech.com）
-TQ_ENABLED = True                          # 是否启用期货实时行情（设为 False 则只保留股票功能）
-TQ_ACCOUNT = "你的快期账号"                 # 快期注册手机号/用户名/邮箱
-TQ_PASSWORD = "你的快期密码"                # 快期登录密码
+TQ_ENABLED  = True          # 是否启用期货实时行情（设为 False 则只保留股票功能）
+TQ_ACCOUNT  = "你的快期账号"  # 快期注册手机号/用户名/邮箱
+TQ_PASSWORD = "你的快期密码"  # 快期登录密码
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
 if CHAN_PATH not in sys.path:
@@ -104,6 +106,15 @@ from forward_adjust import apply_forward_adjust, get_float_shares_from_xdxr
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 FORWARD_ADJUST_ENABLED = True
+
+# 全量数据模式：True=加载全部K线不做时间截断；False=默认模式
+FULL_DATA_MODE = False
+
+# 时间截断配置（仅 FULL_DATA_MODE=False 时生效）：{周期: (天数, 显示文本)}
+TIME_TRUNCATE_CONFIG = {
+    '30m': (365, "12个月"),
+    '5m': (90, "3个月"),
+}
 
 # 导入天勤数据源适配器（期货/期指）
 try:
@@ -190,37 +201,44 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
     #     for i in [0, 1, 2, len(records)-1]:
     #         r = records[i]
     #         print(f"[stock][调试] 转换后记录{i}: date={r['dt'].strftime('%Y-%m-%d')} o={r['open']:.2f} h={r['high']:.2f} l={r['low']:.2f} c={r['close']:.2f} vol={r['vol']} amount={r['amount']}")
-    # 检测数据缺口（超过30个交易日无数据视为断层）
-    # 如果有缺口，只保留最后一段连续数据
+    _check_and_report_gaps(records)
+    return records
+
+
+def _count_trading_days(prev_dt, curr_dt):
+    """计算两个日期之间（不含两端）的A股交易日数（周一至周五且非法定节假日）"""
+    count = 0
+    d = prev_dt.date() + timedelta(days=1)
+    end = curr_dt.date()
+    while d < end:
+        if d.weekday() < 5 and not is_holiday(d):
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
+def _check_and_report_gaps(records):
+    """检测数据缺口（相邻记录间隔超过0个交易日即视为缺失K线），仅打印提示，不截断"""
     gap_indices = []
     for i in range(1, len(records)):
         prev_dt = records[i-1]["dt"]
         curr_dt = records[i]["dt"]
-        gap_days = (curr_dt - prev_dt).days
-        if gap_days > 30:
-            gap_indices.append(i)
+        gap_trading_days = _count_trading_days(prev_dt, curr_dt)
+        if gap_trading_days > 20:  # 用 >0 可识别出个股各种停牌日期（因股东大会、筹划重大事项、重大事项紧急、重大资产重组等停牌）；但打印信息太多
+            gap_indices.append((i, gap_trading_days))
+
     if gap_indices:
-        # 只保留最后一个缺口之后的数据（最后一段连续行情）
-        last_gap_idx = gap_indices[-1]
-        skipped = last_gap_idx
-        old_start = records[0]["dt"].strftime("%Y-%m-%d")
-        old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        new_start = records[last_gap_idx]["dt"].strftime("%Y-%m-%d")
-        records = records[last_gap_idx:]
-        print(f"[stock][警告] 检测到 {len(gap_indices)} 处数据缺口，已截断:")
-        print(f"[stock][警告]   原数据范围: {old_start} ~ {old_end} ({skipped+len(records)}条)")
-        print(f"[stock][警告]   截断后范围: {new_start} ~ {old_end} ({len(records)}条)")
-        print(f"[stock][警告]   跳过 {skipped} 条旧数据，只分析最后一段连续行情")
+        print(f"[stock][警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
+        for idx, (gi, gap_td) in enumerate(gap_indices):
+            prev_dt = records[gi-1]["dt"].strftime("%Y-%m-%d")
+            curr_dt = records[gi]["dt"].strftime("%Y-%m-%d")
+            print(f"[stock][警告]   缺口{idx+1}: {prev_dt} → {curr_dt} (间隔{gap_td}个交易日)")
     else:
-        # 无数据缺口，无需截断
         old_start = records[0]["dt"].strftime("%Y-%m-%d")
         old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        print(f"[stock][警告] 检测到 0 处数据缺口，无需截断:")
-        print(f"[stock][警告]   原数据范围: {old_start} ~ {old_end} ({len(records)}条)")
-        print(f"[stock][警告]   截断后范围: {old_start} ~ {old_end} ({len(records)}条)")
-        print(f"[stock][警告]   跳过 0 条旧数据")
+        print(f"[stock][信息] 检测到 0 处数据缺口")
+        print(f"[stock][信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
     print(f"[stock][调试] 共解析有效记录: {len(records)}条")
-    return records
 
 
 def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
@@ -1277,8 +1295,22 @@ def _get_freq_label(freq):
     labels = {'15s': '15秒', '1m': '1分钟', '5m': '5分钟', '30m': '30分钟', '60m': '60分钟', 'd': '日线', 'w': '周线'}
     return labels.get(freq, '日线')
 
+
 def _make_chan_config():
-    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值"""
+    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值。
+
+    配置要点：
+    - bi_fx_check="loss"       分型检查：宽松模式
+    - bi_end_is_peak=False     允许一笔之间有不成笔的更高/低分型
+    - zs_algo="over_seg"       中枢算法：跨段
+    - zs_combine=False         不合并中枢
+    - macd_algo="full_area"    MACD背驰：整根笔面积累加
+    - divergence_rate=0.9      1类买卖点MACD背驰力度
+    - max_bs2_rate=0.9         2类买卖点回撤最大比例
+    - bs1_peak=False           1类买卖点不要求必须是中枢内最高/最低点
+    - bsp3_follow_1=False      3类买卖点不要求跟在1类后面
+    - bsp3a_max_zs_cnt=2       3类买卖点最多跨越2个中枢
+    """
     from ChanConfig import CChanConfig
     return CChanConfig()
 
@@ -1305,6 +1337,10 @@ import collections
 
 _MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合
 _analysis_cache = collections.OrderedDict()
+
+# 当前分析上下文（供 analyze_sub_level_divergence 内部读取）
+_current_code = None
+_current_market = None
 
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
@@ -1647,6 +1683,32 @@ def _cleanup_all_futures_data():
 
 # 启动时加载一次选点数据
 _saved_point_times = _load_saved_point_times()
+
+
+def _save_last_stock(code, freq="d"):
+    """持久化上次查看的股票代码到JSON文件"""
+    try:
+        data = {"code": code, "freq": freq}
+        with open(_LAST_STOCK_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception as e:
+        pass  # 静默失败，不影响主流程
+
+
+def _load_last_stock():
+    """从JSON文件加载上次查看的股票代码，返回 (code, freq) 或 (None, None)"""
+    try:
+        if not os.path.exists(_LAST_STOCK_FILE):
+            return None, None
+        with open(_LAST_STOCK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        code = data.get("code", "").strip()
+        freq = data.get("freq", "d")
+        if code:
+            return code, freq
+    except Exception:
+        pass
+    return None, None
 
 
 # ============================================================
@@ -2431,27 +2493,17 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 records = [r for r in records if r["dt"] >= start_dt]
                 print(f"[stock][信息] 从选点时间 {start_time} 开始，筛选后 {len(records)} 条K线")
         else:
-            # 冷启动无选点时：按时间范围截取数据
-            # 日线：最近3年；周K：最近8年；30分：最近3个月；5分：最近1个月
-            if len(records) > 0:
+            # 冷启动无选点：默认模式下对30分和5分做时间截断（全量模式跳过）
+            if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
                 from datetime import timedelta
                 latest_dt = records[-1]["dt"]
-                if freq == 'w':
-                    cutoff = latest_dt - timedelta(days=365 * 8)
-                elif freq == 'd':
-                    cutoff = latest_dt - timedelta(days=365 * 3)
-                elif freq == '30m':
-                    cutoff = latest_dt - timedelta(days=90)
-                elif freq == '5m':
-                    cutoff = latest_dt - timedelta(days=21)
-                else:
-                    cutoff = None
-                if cutoff is not None:
-                    before_count = len(records)
-                    records = [r for r in records if r["dt"] >= cutoff]
-                    if before_count != len(records):
-                        print(f"[stock][信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推, "
-                              f"{before_count}条 -> {len(records)}条")
+                trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
+                cutoff = latest_dt - timedelta(days=trunc_days)
+                before_count = len(records)
+                records = [r for r in records if r["dt"] >= cutoff]
+                if before_count != len(records):
+                    print(f"[stock][信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
+                          f"{before_count}条 -> {len(records)}条")
 
     # 2. 获取股票名称
     t0 = time.time()
@@ -2479,18 +2531,16 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         chan_code = f"{market}.{code}"
         config = _make_chan_config()
 
+        # 设置上下文（供 cal_bs0point → _analyze_sub_level_divergence 链式调用）
+        global _current_code, _current_market
+        _current_code = code
+        _current_market = market
+
+        # 注入区间套背驰检查回调到 BSPointList 模块
+        import BuySellPoint.BSPointList as _bsp
+        _bsp._sub_divergence_check = _analyze_sub_level_divergence
+
         try:
-            try:
-                from Math.Demark import CDemarkEngine
-                CDemarkEngine.DEMARK_LEN = 9
-                CDemarkEngine.SETUP_BIAS = 4
-                CDemarkEngine.COUNTDOWN_BIAS = 2
-                CDemarkEngine.MAX_COUNTDOWN = 13
-                CDemarkEngine.TIAOKONG_ST = True
-                CDemarkEngine.SETUP_CMP2CLOSE = True
-                CDemarkEngine.COUNTDOWN_CMP2CLOSE = True
-            except Exception:
-                pass
             chan = CChan(
                 code=chan_code,
                 begin_time=None,
@@ -3046,6 +3096,732 @@ def _build_zs_from_bis(bis, all_bi_list, date_fmt):
     return zs_data, zs_stars
 
 
+# ============================================================
+# 区间套背驰判断
+# ============================================================
+# 高级别→低级别周期映射（与双窗口 getDualBottomFreq 一致）
+_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
+
+
+def _get_bi_fx_shoulder_times(bi, high_freq):
+    """
+    获取笔的分型肩部原始K线时间（与红框策略一致）。
+
+    返回:
+        (fx_a_raw_dt, fx_b_raw_dt): 左肩/右肩原始K线时间字符串
+        如果无法确定，返回 None
+    """
+    date_fmt = "%Y-%m-%d %H:%M" if high_freq in INTRADAY_FREQS else "%Y-%m-%d"
+
+    fx_a_raw_dt = ""
+    fx_b_raw_dt = ""
+    try:
+        begin_klc = bi.begin_klc
+        end_klc = bi.end_klc
+        # A: begin分型左肩第一根原始K线时间
+        left_klc = getattr(begin_klc, 'prev', None) if begin_klc else None
+        a_klu = left_klc.lst[0] if (left_klc and left_klc.lst) else (begin_klc.lst[0] if begin_klc and begin_klc.lst else None)
+        if a_klu:
+            a_t = a_klu.time.to_str()
+            try:
+                fx_a_raw_dt = datetime.strptime(a_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
+            except:
+                fx_a_raw_dt = a_t[:16].replace("/", "-") if high_freq in INTRADAY_FREQS else a_t[:10].replace("/", "-")
+        # B: end分型右肩最后一根原始K线时间
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None
+        b_klu = right_klc.lst[-1] if (right_klc and right_klc.lst) else (end_klc.lst[-1] if end_klc and end_klc.lst else None)
+        if b_klu:
+            b_t = b_klu.time.to_str()
+            try:
+                fx_b_raw_dt = datetime.strptime(b_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
+            except:
+                fx_b_raw_dt = b_t[:16].replace("/", "-") if high_freq in INTRADAY_FREQS else b_t[:10].replace("/", "-")
+    except Exception:
+        pass
+
+    if not fx_a_raw_dt or not fx_b_raw_dt:
+        return None
+    return fx_a_raw_dt, fx_b_raw_dt
+
+
+def _get_bi_direction_str(bi):
+    """获取笔的方向字符串"""
+    if hasattr(bi, 'is_up'):
+        return "up" if bi.is_up() else "down"
+    return "unknown"
+
+
+def _analyze_sub_level_divergence(bi_list):
+    """
+    区间套背驰判断：分析高级别最后一笔在低级别是否MACD背驰。
+
+    code/market 从全局 _current_code / _current_market 读取，
+    由 _analyze_stock_internal 在 step_load 前设置。
+
+    参数:
+        bi_list: 高级别笔列表（由 cal_bs0point 直接传入）
+
+    返回:
+        {"diverged": True/False, "detail": "..."}
+    """
+    global _current_code, _current_market
+    # ── 1. 前置检查 ──
+    high_bi = bi_list[-1]
+
+    high_kl_type = bi_list[0].get_begin_klu().kl_type
+    _KL_TYPE_TO_FREQ = {KL_TYPE.K_WEEK: 'w', KL_TYPE.K_DAY: 'd', KL_TYPE.K_30M: '30m', KL_TYPE.K_5M: '5m'}
+    high_freq = _KL_TYPE_TO_FREQ.get(high_kl_type)
+    if high_freq is None:
+        return {"diverged": False, "detail": f"不支持的K线类型: {high_kl_type}"}
+    if high_freq not in _SUB_FREQ_MAP:
+        return {"diverged": False, "detail": f"周期 {high_freq} 无对应的低级别，跳过背驰判断"}
+    sub_freq = _SUB_FREQ_MAP[high_freq]
+
+    # ── 2. 确定 A（左边界）和 B（右边界）时间 ──
+    # 逻辑与双窗口红框完全一致：左肩第一根K线之后 → 右肩最后一根K线
+    shoulder_times = _get_bi_fx_shoulder_times(high_bi, high_freq)
+    if shoulder_times is None:
+        return {"diverged": False, "detail": "无法确定笔的分型肩部时间"}
+    fx_a_dt, fx_b_dt = shoulder_times
+
+    high_bi_direction = _get_bi_direction_str(high_bi)
+    print(f"[区间套] 红框边界: 左肩={fx_a_dt}, 右肩={fx_b_dt}, 低级别={sub_freq}, 方向={high_bi_direction}")
+
+    # ── 3. 从缓存获取次级别已计算好的笔列表 ──
+    code = _current_code
+    market = _current_market
+    if not code or not market:
+        return {"diverged": False, "detail": "当前无分析上下文（_current_code/_current_market 未设置）"}
+
+    # 尝试从缓存获取次级别完整数据（第一次读不到则冷启动加载）
+    cache_key = f"{market}_{code}_{sub_freq}"
+    cached = _cache_get(cache_key)
+    if cached is None or "chan" not in cached:
+        print(f"[区间套] 缓存未命中: {cache_key}，触发冷启动加载次级别 {sub_freq}")
+        # 冷启动：暂时释放 _stock_analysis_lock 避免死锁，
+        # 同时保存/恢复 _current_code/_current_market 防止被覆盖
+        saved_code = _current_code
+        saved_market = _current_market
+        _stock_analysis_lock.release()
+        try:
+            analyze_stock(f"{code}.{market.upper()}", freq=sub_freq, cache_chan=True)
+        finally:
+            _stock_analysis_lock.acquire()
+            _current_code = saved_code
+            _current_market = saved_market
+        cached = _cache_get(cache_key)
+        if cached is None or "chan" not in cached:
+            print(f"[区间套] 冷启动后仍找不到低级别数据: {cache_key}，按不背驰处理")
+            return {"diverged": False, "detail": f"次级别{sub_freq}冷启动加载失败，无法分析"}
+
+    # 获取次级别完整chan对象和笔列表 L1
+    sub_date_fmt = "%Y-%m-%d %H:%M" if sub_freq in INTRADAY_FREQS else "%Y-%m-%d"
+    sub_kl_list = cached["chan"][_get_kl_type(sub_freq)]
+    sub_bi_list_full = sub_kl_list.bi_list
+    full_records = cached["records"]
+
+    if len(sub_bi_list_full) == 0:
+        return {"diverged": False, "detail": f"次级别{sub_freq}笔列表为空，无法分析"}
+
+    print(f"[区间套] 从缓存获取次级别数据: {len(full_records)}条K线, {len(sub_bi_list_full)}笔")
+
+    # ── 4. 在已有笔列表 L1 中找到 [start_bi, end_bi] ──
+    # start_bi: 第一个被 [A, B] 完全覆盖的笔
+    # end_bi:   最后一个被 [A, B] 完全覆盖的笔
+    # "完全覆盖" = 笔.start_time >= A 且 笔.end_time <= B
+    def _bi_in_range(bi, a_dt_str, b_dt_str):
+        """检查笔是否完全在 [A, B] 时间区间内"""
+        try:
+            s_time_str = bi.get_begin_klu().time.to_str()
+            e_time_str = bi.get_end_klu().time.to_str()
+            s_dt = s_time_str[:len(a_dt_str)].replace("/", "-")
+            e_dt = e_time_str[:len(b_dt_str)].replace("/", "-")
+            # 字符串比较在 YYYY-MM-DD 格式下直接可用
+            return s_dt >= a_dt_str and e_dt <= b_dt_str
+        except Exception:
+            return False
+
+    start_bi_idx = None
+    end_bi_idx = None
+
+    for i, bi in enumerate(sub_bi_list_full):
+        if _bi_in_range(bi, fx_a_dt, fx_b_dt):
+            if start_bi_idx is None:
+                start_bi_idx = i
+            end_bi_idx = i
+
+    if start_bi_idx is None or end_bi_idx is None:
+        print(f"[区间套] 在次级别笔列表中找不到完全被[A, B]覆盖的笔")
+        return {"diverged": False, "detail": f"次级别中找不到完全覆盖区间的笔，A={fx_a_dt}, B={fx_b_dt}"}
+
+    if end_bi_idx - start_bi_idx + 1 < 5:
+        # 至少需要5笔：1进入段 + 4构成中枢（含确认）
+        print(f"[区间套] 覆盖范围内仅{end_bi_idx - start_bi_idx + 1}笔，至少需要5笔才能构建中枢")
+        return {"diverged": False, "detail": f"区间内仅{end_bi_idx - start_bi_idx + 1}笔，至少需要5笔才能分析"}
+
+    # 截取笔列表 L2 = [start_bi_idx, end_bi_idx]（包含两端）
+    sub_bi_list = list(sub_bi_list_full[start_bi_idx:end_bi_idx + 1])
+    print(f"[区间套] 找到次级别笔范围: 索引[{start_bi_idx} ~ {end_bi_idx}], 共{len(sub_bi_list)}笔")
+
+    # ── 5. 基于 L2 重新计算中枢 ──
+    zs_data, zs_stars = _build_zs_from_bis(sub_bi_list, sub_bi_list_full, sub_date_fmt)
+
+    # 将 zs_data 转换为简易中枢对象，供后续背驰判断使用
+    class _DummyZS:
+        __slots__ = ('high', 'low')
+        def __init__(self, zs_info):
+            self.high = zs_info['zg']
+            self.low = zs_info['zd']
+    sub_zs_list = [_DummyZS(zs_info) for zs_info in zs_data]
+
+    # ── 6. 提取分析区间（仅用于日志），MACD 用全量数据计算以保证准确 ──
+    # 左边界：在次级别找 <= X 的最后一根K线，其下一根即为左边界
+    a_idx = -1
+    for i, r in enumerate(full_records):
+        r_date_str = r["dt"].strftime(sub_date_fmt)
+        if r_date_str <= fx_a_dt:
+            a_idx = i + 1
+    # 右边界：在次级别找 <= Y 的最后一根K线，即为右边界
+    # 注意：fx_b_dt 可能比 r_date_str 短（如日K vs 30m），需截断到相同长度后比较
+    b_len = len(fx_b_dt)
+    b_idx = -1
+    for i, r in enumerate(full_records):
+        r_date_str = r["dt"].strftime(sub_date_fmt)
+        if r_date_str[:b_len] <= fx_b_dt:
+            b_idx = i
+
+    if a_idx == -1:
+        a_idx = 0
+    if b_idx == -1:
+        b_idx = len(full_records) - 1
+    if a_idx > b_idx:
+        return {"diverged": False, "detail": f"低级别数据中无法找到有效K线区间: a_idx={a_idx}, b_idx={b_idx}"}
+
+    analysis_records = full_records[a_idx:b_idx + 1]
+    if len(analysis_records) < 5:
+        return {"diverged": False, "detail": f"分析区间内K线数据不足: 仅{len(analysis_records)}条"}
+
+    a_time = analysis_records[0]["dt"].strftime(sub_date_fmt)
+    b_time = analysis_records[-1]["dt"].strftime(sub_date_fmt)
+    print(f"[区间套] 分析区间: {a_time} → {b_time}, {len(analysis_records)}条K线, {len(sub_bi_list)}笔, {len(sub_zs_list)}中枢")
+
+    # MACD 使用全量 full_records 计算，不截取（截取K线太少会导致MACD不准）
+    full_closes = [r["close"] for r in full_records]
+    sub_macd_list = calculate_macd(full_closes)
+    print(f"[区间套] MACD基于全量 {len(full_records)} 条K线计算")
+
+    # ── 7. 分析次级别走势结构（沿用原有逻辑） ──
+    bi_count = len(sub_bi_list)
+    zs_count = len(sub_zs_list)
+
+    # 提取笔简要信息
+    sub_bis_info = []
+    for i, bi in enumerate(sub_bi_list):
+        try:
+            s = bi.get_begin_klu().time.to_str()
+            e = bi.get_end_klu().time.to_str()
+            s_dt = datetime.strptime(s, "%Y/%m/%d %H:%M").strftime(sub_date_fmt)
+            e_dt = datetime.strptime(e, "%Y/%m/%d %H:%M").strftime(sub_date_fmt)
+        except:
+            s_dt = s[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else s[:10].replace("/", "-")
+            e_dt = e[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else e[:10].replace("/", "-")
+        sub_bis_info.append({
+            "idx": i,
+            "sdt": s_dt,
+            "edt": e_dt,
+            "direction": "up" if bi.is_up() else "down",
+            "high": round(bi._high(), 2),
+            "low": round(bi._low(), 2),
+        })
+
+    # 提取中枢简要信息
+    sub_zs_info = []
+    for zs_info in zs_data:
+        sub_zs_info.append({
+            "sdt": zs_info.get("sdt", ""),
+            "edt": zs_info.get("edt", ""),
+            "zg": zs_info["zg"],
+            "zd": zs_info["zd"],
+        })
+
+    # ── 8. 判断走势类型（沿用原有逻辑） ──
+    result_type = None
+    detail = ""
+    divergence = None  # 背驰信息
+
+    if bi_count == 0:
+        result_type = "single_bi"
+        detail = "次级别无笔（数据不足）"
+    elif bi_count == 1:
+        result_type = "single_bi"
+        detail = f"次级别仅一笔（{sub_bis_info[0]['direction']}），未形成中枢"
+        # 单笔背驰判断
+        divergence = _check_single_bi_divergence(
+            sub_bi_list[0], full_records, sub_macd_list, sub_date_fmt
+        )
+        if divergence is not None:
+            if divergence["diverged"]:
+                detail += f"，但MACD背驰（笔内最高MACD柱={divergence['max_macd']:.2f}，末端={divergence['end_macd']:.2f}）"
+            else:
+                detail += f"，未背驰（笔内最高MACD柱={divergence['max_macd']:.2f}，末端={divergence['end_macd']:.2f}）"
+    elif zs_count == 0:
+        is_trend = _check_trend_maintained(sub_bis_info, high_bi_direction)
+        if is_trend:
+            result_type = "multi_bi_trend"
+            detail = f"次级别由{bi_count}笔构成，保持{high_bi_direction}趋势（反向笔未破前笔极值）"
+        else:
+            result_type = "multi_bi_trend"
+            detail = f"次级别由{bi_count}笔构成，但趋势已被破坏（反向笔破了前一笔极值）"
+        # 多笔背驰判断：比较最后两个同向笔的MACD柱子
+        if bi_count >= 3:
+            divergence = _check_multi_bi_divergence(
+                sub_bi_list, full_records, sub_macd_list, sub_date_fmt, high_bi_direction
+            )
+            if divergence is not None:
+                if divergence["diverged"]:
+                    detail += f"，MACD背驰（前笔峰值={divergence['prev_macd']:.2f}，后笔峰值={divergence['curr_macd']:.2f}）"
+                else:
+                    detail += f"，未背驰（前笔峰值={divergence['prev_macd']:.2f}，后笔峰值={divergence['curr_macd']:.2f}）"
+    elif zs_count >= 1:
+        result_type = "one_zs"
+        zs = sub_zs_info[0]
+        detail = f"次级别由{bi_count}笔构成，形成{zs_count}个中枢（ZG={zs['zg']}, ZD={zs['zd']}）"
+        # 单中枢背驰判断：进入段 vs 离开段 MACD面积比较
+        divergence = _check_one_zs_divergence(
+            sub_bi_list, sub_zs_list, full_records, sub_macd_list, high_bi_direction
+        )
+        if divergence is not None:
+            if divergence["diverged"]:
+                detail += f"，MACD面积背驰（进入段面积={divergence['in_area']:.2f}，离开段面积={divergence['out_area']:.2f}）"
+            else:
+                detail += f"，未背驰（进入段面积={divergence['in_area']:.2f}，离开段面积={divergence['out_area']:.2f}）"
+    else:
+        result_type = "multi_zs"
+        detail = f"次级别由{bi_count}笔构成，形成{zs_count}个中枢"
+
+    # 汇总背驰结论
+    diverged = divergence is not None and divergence.get("diverged", False)
+
+    # 清理局部变量（缓存对象保留）
+    import gc
+    del zs_data
+    del zs_stars
+    gc.collect()
+
+    return {"diverged": diverged, "detail": detail}
+
+
+
+def _check_single_bi_divergence(bi, records, macd_list, date_fmt):
+    """
+    检查单笔是否MACD背驰。
+
+    以向上笔为例：
+      - 笔从最低点a走到最高点b
+      - 遍历a→b之间所有K线，找到MACD柱子（histogram）的最高值
+      - 如果b点对应的MACD柱高度 < 最高值，说明价格创新高但动能已衰竭 → 背驰
+
+    向下笔时逻辑取反（关注MACD柱的最低/最负值）。
+
+    参数:
+        bi: CBi 笔对象
+        records: 分析区间的K线数据列表
+        macd_list: MACD计算结果列表（与records一一对应）
+        date_fmt: 日期格式字符串
+
+    返回:
+        dict: {
+            'diverged': bool,
+            'max_macd': float,   # 笔内最高MACD柱（向上笔）/ 最低MACD柱（向下笔）
+            'end_macd': float,   # 笔末端MACD柱
+            'max_idx': int,      # 极值出现的K线索引
+            'end_idx': int,      # 笔末端K线索引
+        }
+        如果无法定位K线，返回 None
+    """
+    if not macd_list or len(macd_list) == 0:
+        return None
+
+    is_up = bi.is_up()
+
+    # 获取笔的起始和结束时间
+    try:
+        s_time = bi.get_begin_klu().time
+        e_time = bi.get_end_klu().time
+        # CTime 转 datetime 以便与 records["dt"] 比较
+        if hasattr(s_time, 'ts'):
+            s_time = datetime.fromtimestamp(s_time.ts)
+        if hasattr(e_time, 'ts'):
+            e_time = datetime.fromtimestamp(e_time.ts)
+    except:
+        return None
+
+    # 在records中找到笔的起始和结束K线索引
+    bi_start_idx = -1
+    bi_end_idx = -1
+    for i, r in enumerate(records):
+        r_dt = r["dt"]
+        if bi_start_idx == -1 and r_dt >= s_time:
+            bi_start_idx = i
+        if r_dt <= e_time:
+            bi_end_idx = i
+
+    if bi_start_idx == -1 or bi_end_idx == -1 or bi_start_idx > bi_end_idx:
+        return None
+
+    # 确保索引在MACD范围内
+    bi_start_idx = max(0, bi_start_idx)
+    bi_end_idx = min(len(macd_list) - 1, bi_end_idx)
+
+    if bi_start_idx >= bi_end_idx:
+        return None
+
+    macd_range = macd_list[bi_start_idx:bi_end_idx + 1]
+    if not macd_range:
+        return None
+
+    if is_up:
+        # 向上笔：关注MACD柱的峰值（正值）
+        # 柱子 = macd_list[i]["macd"]
+        max_macd = macd_range[0]["macd"]
+        max_idx = bi_start_idx
+        for i, m in enumerate(macd_range):
+            if m["macd"] > max_macd:
+                max_macd = m["macd"]
+                max_idx = bi_start_idx + i
+        end_macd = macd_range[-1]["macd"]
+        end_idx = bi_start_idx + len(macd_range) - 1
+        diverged = end_macd < max_macd
+    else:
+        # 向下笔：关注MACD柱的最低值（最负值）
+        min_macd = macd_range[0]["macd"]
+        min_idx = bi_start_idx
+        for i, m in enumerate(macd_range):
+            if m["macd"] < min_macd:
+                min_macd = m["macd"]
+                min_idx = bi_start_idx + i
+        end_macd = macd_range[-1]["macd"]
+        end_idx = bi_start_idx + len(macd_range) - 1
+        # 向下笔：末端MACD柱 > 最低值（即柱子已经不如下跌最猛时那么负了）→ 背驰
+        # 但"动能衰竭"体现为：价格创新低，但MACD柱子（负值）不如之前最负 → 柱子变浅了
+        diverged = end_macd > min_macd
+        max_macd = min_macd  # 统一用max_macd字段名，但向下笔存的是最小值
+        max_idx = min_idx
+
+    return {
+        "diverged": diverged,
+        "max_macd": round(max_macd, 2),
+        "end_macd": round(end_macd, 2),
+        "max_idx": max_idx,
+        "end_idx": end_idx,
+    }
+
+
+def _get_bi_macd_peak(bi, records, macd_list, is_up):
+    """
+    获取一笔区间内MACD柱子的峰值。
+
+    向上笔：返回最高MACD柱值
+    向下笔：返回最低MACD柱值（最负值）
+
+    返回:
+        peak_macd: float 或 None
+        peak_idx: int 或 None
+    """
+    try:
+        s_time = bi.get_begin_klu().time
+        e_time = bi.get_end_klu().time
+        # CTime 转 datetime 以便与 records["dt"] 比较
+        if hasattr(s_time, 'ts'):
+            s_time = datetime.fromtimestamp(s_time.ts)
+        if hasattr(e_time, 'ts'):
+            e_time = datetime.fromtimestamp(e_time.ts)
+    except:
+        return None, None
+
+    start_idx = -1
+    end_idx = -1
+    for i, r in enumerate(records):
+        r_dt = r["dt"]
+        if start_idx == -1 and r_dt >= s_time:
+            start_idx = i
+        if r_dt <= e_time:
+            end_idx = i
+
+    if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+        return None, None
+
+    start_idx = max(0, start_idx)
+    end_idx = min(len(macd_list) - 1, end_idx)
+    if start_idx >= end_idx:
+        return None, None
+
+    macd_range = macd_list[start_idx:end_idx + 1]
+    if not macd_range:
+        return None, None
+
+    if is_up:
+        peak = macd_range[0]["macd"]
+        peak_idx = start_idx
+        for i, m in enumerate(macd_range):
+            if m["macd"] > peak:
+                peak = m["macd"]
+                peak_idx = start_idx + i
+    else:
+        peak = macd_range[0]["macd"]
+        peak_idx = start_idx
+        for i, m in enumerate(macd_range):
+            if m["macd"] < peak:
+                peak = m["macd"]
+                peak_idx = start_idx + i
+
+    return round(peak, 2), peak_idx
+
+
+def _check_multi_bi_divergence(sub_bi_list, records, macd_list, date_fmt, bi_direction):
+    """
+    检查多笔走势是否MACD背驰。
+
+    以向上笔为例（ABC 或 ABCDE）：
+      - 找到最后两个同向笔（如 ABC 中的 A 和 C，ABCDE 中的 C 和 E）
+      - 比较两笔的MACD柱子峰值
+      - 如果后一笔的峰值 < 前一笔的峰值 → 背驰（价格创新高但动能减弱）
+
+    向下笔时逻辑取反。
+
+    参数:
+        sub_bi_list: 次级别笔对象列表 (CBi 对象)
+        records: 分析区间的K线数据列表
+        macd_list: MACD计算结果列表
+        date_fmt: 日期格式字符串
+        bi_direction: 高级别笔方向 ('up' | 'down')
+
+    返回:
+        dict: {
+            'diverged': bool,
+            'prev_macd': float,   # 前一笔的MACD峰值
+            'curr_macd': float,   # 后一笔的MACD峰值
+            'prev_bi_idx': int,   # 前一笔在sub_bi_list中的索引
+            'curr_bi_idx': int,   # 后一笔在sub_bi_list中的索引
+        }
+        如果笔数不足或无法计算，返回 None
+    """
+    if len(sub_bi_list) < 3:
+        return None
+
+    is_up = (bi_direction == "up")
+
+    # 从后往前找最后两个同向笔
+    # 同向笔：与高级别笔方向一致的笔
+    last_two = []  # [(bi, bi_idx), ...] 从前往后
+    for i, bi in enumerate(sub_bi_list):
+        if bi.is_up() == is_up:
+            last_two.append((bi, i))
+            if len(last_two) > 2:
+                last_two.pop(0)  # 只保留最后两个
+
+    if len(last_two) < 2:
+        return None
+
+    prev_bi, prev_idx = last_two[0]
+    curr_bi, curr_idx = last_two[1]
+
+    # 获取前一笔和后一笔的MACD峰值
+    prev_peak, _ = _get_bi_macd_peak(prev_bi, records, macd_list, is_up)
+    curr_peak, _ = _get_bi_macd_peak(curr_bi, records, macd_list, is_up)
+
+    if prev_peak is None or curr_peak is None:
+        return None
+
+    if is_up:
+        # 向上笔：后笔峰值 < 前笔峰值 → 背驰
+        diverged = curr_peak < prev_peak
+    else:
+        # 向下笔：后笔峰值 > 前笔峰值（负值变小，即柱子变浅）→ 背驰
+        diverged = curr_peak > prev_peak
+
+    return {
+        "diverged": diverged,
+        "prev_macd": prev_peak,
+        "curr_macd": curr_peak,
+        "prev_bi_idx": prev_idx,
+        "curr_bi_idx": curr_idx,
+    }
+
+
+def _get_bi_macd_area(bi, records, macd_list):
+    """
+    计算一笔区间内MACD柱子的面积（full_area，与 Cal_MACD_area 一致）。
+
+    向上笔：只累加红柱子（macd > 0）的绝对值
+    向下笔：只累加绿柱子（macd < 0）的绝对值
+    反向柱被忽略。
+
+    返回:
+        float 或 None
+    """
+    try:
+        s_time = bi.get_begin_klu().time
+        e_time = bi.get_end_klu().time
+        # CTime 转 datetime 以便与 records["dt"] 比较
+        if hasattr(s_time, 'ts'):
+            s_time = datetime.fromtimestamp(s_time.ts)
+        if hasattr(e_time, 'ts'):
+            e_time = datetime.fromtimestamp(e_time.ts)
+    except:
+        return None
+
+    is_up = bi.is_up()
+
+    start_idx = -1
+    end_idx = -1
+    for i, r in enumerate(records):
+        r_dt = r["dt"]
+        if start_idx == -1 and r_dt >= s_time:
+            start_idx = i
+        if r_dt <= e_time:
+            end_idx = i
+
+    if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
+        return None
+
+    start_idx = max(0, start_idx)
+    end_idx = min(len(macd_list) - 1, end_idx)
+    if start_idx >= end_idx:
+        return None
+
+    area = 1e-7  # 与 Cal_MACD_area 一致，避免恰好为0
+    for m in macd_list[start_idx:end_idx + 1]:
+        if (is_up and m["macd"] > 0) or (not is_up and m["macd"] < 0):
+            area += abs(m["macd"])
+    return round(area, 2)
+
+
+def _check_one_zs_divergence(sub_bi_list, sub_zs_list, records, macd_list, bi_direction):
+    """
+    检查单中枢结构是否MACD背驰（盘整背驰），与 cal_bs0point 逻辑一致。
+
+    以高级别向上笔为例：
+      从次级别笔序列的最后一笔(n)往前数5笔 → n-4, n-3, n-2, n-1, n
+      ⑴ n-3, n-2, n-1 三笔有重叠 → 形成中枢B
+      ⑵ 笔n 突破中枢B上沿，且 笔n-4 跌破中枢B下沿（即n-4也突破中枢B）
+      ⑶ 笔n-4为进入段，笔n为离开段，比较MACD面积 → 面积缩小则背驰
+
+    向下笔时逻辑取反。
+
+    参数:
+        sub_bi_list: 次级别笔对象列表 (CBi 对象)
+        sub_zs_list: 次级别中枢列表（本函数不使用，仅保留参数兼容）
+        records: 分析区间的K线数据列表
+        macd_list: MACD计算结果列表
+        bi_direction: 高级别笔方向 ('up' | 'down')
+
+    返回:
+        dict: {
+            'diverged': bool,
+            'in_area': float,      # 进入段(n-4) MACD面积
+            'out_area': float,     # 离开段(n) MACD面积
+            'in_bi_idx': int,      # 进入笔在sub_bi_list中的索引
+            'out_bi_idx': int,     # 离开笔在sub_bi_list中的索引
+        }
+        条件不满足时返回 None
+    """
+    # ── 条件⑴：至少5笔 ──
+    if len(sub_bi_list) < 5:
+        return None
+
+    n_idx = len(sub_bi_list) - 1  # 最后一笔索引
+
+    # 取最后5笔：n-4, n-3, n-2, n-1, n
+    stroke_n = sub_bi_list[n_idx]       # 笔n（离开段）
+    s_nm1 = sub_bi_list[n_idx - 1]      # 笔n-1
+    s_nm2 = sub_bi_list[n_idx - 2]      # 笔n-2
+    s_nm3 = sub_bi_list[n_idx - 3]      # 笔n-3
+    s_nm4 = sub_bi_list[n_idx - 4]      # 笔n-4（进入段）
+
+    is_up = (bi_direction == "up")
+
+    # 笔n方向必须与高级别笔方向一致
+    if stroke_n.is_up() != is_up:
+        return None
+
+    # ── 条件⑵：n-3, n-2, n-1 三笔重叠 → 中枢B ──
+    zs_b_low = max(s_nm1._low(), s_nm2._low(), s_nm3._low())
+    zs_b_high = min(s_nm1._high(), s_nm2._high(), s_nm3._high())
+    if zs_b_low > zs_b_high:  # 三笔无重叠，不构成中枢B
+        return None
+
+    # ── 条件⑶：笔n突破中枢B，且 n-4 也突破中枢B ──
+    if is_up:
+        # 向上笔n：末端高点 > 中枢B上沿
+        if stroke_n._high() <= zs_b_high:
+            return None
+        # n-4（进入笔）：末端低点 < 中枢B下沿
+        if s_nm4._low() >= zs_b_low:
+            return None
+    else:
+        # 向下笔n：末端低点 < 中枢B下沿
+        if stroke_n._low() >= zs_b_low:
+            return None
+        # n-4（进入笔）：末端高点 > 中枢B上沿
+        if s_nm4._high() <= zs_b_high:
+            return None
+
+    # ── 条件⑷：进入段(n-4) vs 离开段(n) MACD面积比较 ──
+    in_area = _get_bi_macd_area(s_nm4, records, macd_list)
+    out_area = _get_bi_macd_area(stroke_n, records, macd_list)
+
+    if in_area is None or out_area is None or in_area == 0:
+        return None
+
+    # 与 cal_bs0point 一致的背驰阈值：out_metric <= divergence_rate * in_metric
+    divergence_rate = out_area / (in_area + 1e-7)
+    # 使用与 _make_chan_config 默认值一致的 divergence_rate=0.9
+    diverged = out_area <= 0.9 * in_area
+
+    return {
+        "diverged": diverged,
+        "in_area": in_area,
+        "out_area": out_area,
+        "divergence_rate": round(divergence_rate, 4),
+        "in_bi_idx": n_idx - 4,
+        "out_bi_idx": n_idx,
+    }
+
+
+def _check_trend_maintained(sub_bis, high_direction):
+    """
+    检查次级别多笔是否保持趋势。
+
+    以高级别向上笔为例：
+      - 正向笔（up）的低点必须逐步抬高
+      - 反向笔（down）的低点不能低于前一正向笔的低点
+    即：任何反向笔 break 不了前一笔正向笔的极值，趋势就还在。
+
+    高级别向下笔时逻辑取反。
+    """
+    if len(sub_bis) < 2:
+        return True
+
+    if high_direction == "up":
+        last_forward_low = None
+        for bi in sub_bis:
+            if bi["direction"] == "up":
+                last_forward_low = bi["low"]
+            else:
+                if last_forward_low is not None and bi["low"] < last_forward_low:
+                    return False
+    else:
+        last_forward_high = None
+        for bi in sub_bis:
+            if bi["direction"] == "down":
+                last_forward_high = bi["high"]
+            else:
+                if last_forward_high is not None and bi["high"] > last_forward_high:
+                    return False
+    return True
+
+
 def compute_dual_zs(code, freq='d', start_bi=0, end_bi=0):
     """
     双窗口新模式：从缓存中取出已计算的笔列表，截取 [start_bi, end_bi] 范围内的笔，
@@ -3514,6 +4290,10 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     self.send_json_response(result, 400)
                 else:
                     self.send_json_response(result, 200)
+                    # 非复盘模式：持久化当前股票代码，下次冷启动自动恢复
+                    # 双窗口下面窗口的请求不保存，只保存上面窗口的周期
+                    if not end_date and not params.get("dual_bottom", [""])[0]:
+                        _save_last_stock(code, freq)
             except Exception as e:
                 import traceback
                 print(f"[错误] analyze_stock异常: {e}")
@@ -5011,7 +5791,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     (function() {
         "use strict";
         let chartData = null, canvas, ctx;
-        let showBi = true, showFx = false, showMa = false, showZs = true, showSeg = false, showBsp = false;
+        let showBi = true, showFx = false, showMa = false, showZs = true, showSeg = false, showBsp = true;
         const PADDING = { top: 20, right: 22, bottom: 60, left: 10 };
         const VOL_RATIO = 0.2, GAP = 12;
         const MACD_TEXT_HEIGHT = 18;
@@ -6383,17 +7163,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
             });
 
-            if (!chartData.zs_stars || !chartData.zs_stars.length) return;
-            chartData.zs_stars.forEach(star => {
-                let idx = dateToGlobalIdx(star.date, map);
-                if (idx === undefined) return;
-                if (idx < globalStart || idx >= globalEnd) return;
-                const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
-                const y = priceToY(star.price, area, priceRange);
-                const isTop = star.mark === "G";
-                const starY = isTop ? y - 16 : y + 22;
-                drawStar(ctx, x, starY, 5, 6, 3, star.color);
-            });
+            // 进入段和离开段红绿五角星 - 已注释掉
+            // if (!chartData.zs_stars || !chartData.zs_stars.length) return;
+            // chartData.zs_stars.forEach(star => {
+            //     let idx = dateToGlobalIdx(star.date, map);
+            //     if (idx === undefined) return;
+            //     if (idx < globalStart || idx >= globalEnd) return;
+            //     const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
+            //     const y = priceToY(star.price, area, priceRange);
+            //     const isTop = star.mark === "G";
+            //     const starY = isTop ? y - 16 : y + 22;
+            //     drawStar(ctx, x, starY, 5, 6, 3, star.color);
+            // });
         }
 
         function drawStar(ctx, cx, cy, spikes, outerR, innerR, color) {
@@ -6529,17 +7310,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
             });
 
-            if (!dualNewZsData.zs_stars || !dualNewZsData.zs_stars.length) return;
-            dualNewZsData.zs_stars.forEach(star => {
-                let idx = dateToGlobalIdx(star.date, map);
-                if (idx === undefined) return;
-                if (idx < globalStart || idx >= globalEnd) return;
-                const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
-                const y = priceToY(star.price, area, priceRange);
-                const isTop = star.mark === "G";
-                const starY = isTop ? y - 16 : y + 22;
-                drawStar(ctx, x, starY, 5, 6, 3, star.color);
-            });
+            // 进入段和离开段红绿五角星 - 已注释掉
+            // if (!dualNewZsData.zs_stars || !dualNewZsData.zs_stars.length) return;
+            // dualNewZsData.zs_stars.forEach(star => {
+            //     let idx = dateToGlobalIdx(star.date, map);
+            //     if (idx === undefined) return;
+            //     if (idx < globalStart || idx >= globalEnd) return;
+            //     const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
+            //     const y = priceToY(star.price, area, priceRange);
+            //     const isTop = star.mark === "G";
+            //     const starY = isTop ? y - 16 : y + 22;
+            //     drawStar(ctx, x, starY, 5, 6, 3, star.color);
+            // });
         }
 
         function drawMaLines(klines, area, priceRange, barStep, subPixelOffset) {
@@ -7178,7 +7960,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const code = chartData.meta.symbol;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在加载" + (bottomFreq === 'd' ? '日K' : bottomFreq === '30m' ? '30分' : '5分') + "数据...";
-                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + bottomFreq)
+                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + bottomFreq + "&dual_bottom=1")
                     .then(resp => {
                         if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                         return resp.json();
@@ -8001,7 +8783,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             const newBottomFreq = getDualBottomFreq(freq);
                             if (newBottomFreq) {
                                 dualBottomFreq = newBottomFreq;
-                                return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + newBottomFreq)
+                                return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + newBottomFreq + "&dual_bottom=1")
                                     .then(resp => resp.json())
                                     .then(bottomData => {
                                         dualBottomData = bottomData;
@@ -8415,7 +9197,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         const bottomFreq = getDualBottomFreq(currentFreq);
                         if (bottomFreq) {
                             dualBottomFreq = bottomFreq;
-                            return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + bottomFreq)
+                            return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + bottomFreq + "&dual_bottom=1")
                                 .then(resp => resp.json())
                                 .then(bottomData => {
                                     dualBottomData = bottomData;
@@ -9322,8 +10104,18 @@ def main():
     print("  缠论分析 - chan.py 版本")
     print("=" * 60)
 
-    # 1. 默认加载上证指数
-    result = analyze_stock(SYMBOL_CODE, freq="d")
+    # 1. 加载上次查看的股票代码（持久化恢复），若不存在则使用默认值
+    last_code, last_freq = _load_last_stock()
+    if last_code:
+        start_code = last_code
+        start_freq = last_freq
+        print(f"[stock][信息] 恢复上次股票: {last_code} (周期: {last_freq})")
+    else:
+        start_code = SYMBOL_CODE
+        start_freq = "d"
+        print(f"[stock][信息] 使用默认股票: {start_code}")
+
+    result = analyze_stock(start_code, freq=start_freq)
     if "error" in result:
         print(f"[错误] {result['error']}")
         return

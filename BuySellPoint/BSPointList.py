@@ -14,6 +14,9 @@ from .BSPointConfig import CBSPointConfig, CPointConfig
 LINE_TYPE = TypeVar('LINE_TYPE', CBi, CSeg[CBi])
 LINE_LIST_TYPE = TypeVar('LINE_LIST_TYPE', CBiList, CSegListComm[CBi])
 
+# 区间套背驰判断回调（由 my_chan_main 注入）
+_sub_divergence_check = None
+
 
 class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
     def __init__(self, bs_point_config: CBSPointConfig):
@@ -510,6 +513,14 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
             return
 
+        # ── 区间套背驰判断：高级别一笔在次级别是否背驰，不背驰则跳过 ──
+        """
+        if _sub_divergence_check is not None:
+            result = _sub_divergence_check(bi_list)
+            if not result.get("diverged"):
+                print(f"[区间套] 跳过0类买卖点: {result.get('detail', '未知原因')}")
+                return
+        """
         # ── 条件一：笔n突破中枢A ──
         end_klc = stroke_n.end_klc
         right_klc = getattr(end_klc, 'next', None) if end_klc else None
