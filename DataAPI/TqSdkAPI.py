@@ -25,8 +25,9 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 # ============================================================
 # 天勤配置
 # ============================================================
-TQ_ACCOUNT = "13524600000"
+TQ_ACCOUNT = "13521579214"
 TQ_PASSWORD = "87654321"
+_SSE_DEBUG = False  # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 
 # 默认监控的期货品种（引擎启动时初始化 15s/1m/5m，30m 延迟按需初始化）
 # 注意：天勤主连合约不支持 d/w 周期（返回垃圾数据），已排除。
@@ -97,11 +98,24 @@ FREQ_LABEL_CN = {
 
 # 历史数据回看条数
 HISTORY_LOOKBACK_BARS = {
-    15: 4000,      # 15秒   4个交易日
+    15: 2000,      # 15秒   2个交易日
     60: 1000,      # 1分钟   4个交易日
     300: 500,      # 5分钟   10个交易日
-    900: 400,      # 15分钟  25个交易日
     1800: 300,     # 30分钟  37个交易日
+}
+
+# 期货双窗口周期映射：上窗周期 → 下窗周期
+FUTURES_DUAL_FREQ_MAP = {
+    "30m": "5m",
+    "5m": "1m",
+    "1m": "15s",
+}
+
+# 期货双窗口反向映射：下窗周期 → 上窗周期
+FUTURES_DUAL_REVERSE_MAP = {
+    "5m": "30m",
+    "1m": "5m",
+    "15s": "1m",
 }
 
 
@@ -184,7 +198,7 @@ class CTqSdkAPI(CCommonStockApi):
             if dt is None:
                 continue
             try:
-                ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, auto=False)
+                ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
             except OSError:
                 continue
 
@@ -291,13 +305,14 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
     label = SEC_TO_LABEL.get(freq_sec, f"{freq_sec}s")
     prefix = display_key if display_key else f"{symbol} {label}"
     elapsed = _time.time() - t_start
-    if records:
-        print(f"[{prefix}] ⑴ 拉取历史K线: {len(records)}根, "
-              f"{records[0]['dt'].strftime('%Y-%m-%d %H:%M:%S')} ~ "
-              f"{records[-1]['dt'].strftime('%Y-%m-%d %H:%M:%S')}, "
-              f"耗时 {elapsed:.1f}s")
-    else:
-        print(f"[{prefix}] ⑴ 拉取历史K线: 0条 (无有效数据), 耗时 {elapsed:.1f}s")
+    if _SSE_DEBUG:
+        if records:
+            print(f"[{prefix}] ⑴ 拉取历史: {len(records)}根, "
+                  f"{records[0]['dt'].strftime('%Y-%m-%d %H:%M:%S')} ~ "
+                  f"{records[-1]['dt'].strftime('%Y-%m-%d %H:%M:%S')}, "
+                  f"耗时 {elapsed:.1f}s")
+        else:
+            print(f"[{prefix}] ⑴ 拉取历史: 0条 (无有效数据), 耗时 {elapsed:.1f}s")
     return records
 
 
@@ -352,7 +367,8 @@ def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
 
         klines = api.get_kline_serial(symbol, freq_sec)
 
-        print(f"[{display_key}] ⑵ 缠论分析: 消费 {len(records)}根K线, 耗时 {_time.time()-t_chan:.1f}s")
+        if _SSE_DEBUG:
+            print(f"[{display_key}] ⑵ 缠论分析: 消费 {len(records)}根K线, 耗时 {_time.time()-t_chan:.1f}s")
         return (chan, klines, kl_type, records)
 
     except Exception as e:
@@ -507,6 +523,22 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                     if klc is bi.end_klc:
                         end_fx_idx = idx
                         break
+            # 左肩/右肩原始K线时间（用于双窗口红框定位）
+            fx_a_raw_dt = ""
+            fx_b_raw_dt = ""
+            try:
+                begin_klc = bi.begin_klc
+                end_klc = bi.end_klc
+                left_shoulder_klc = begin_klc.pre if begin_klc else None
+                if left_shoulder_klc and left_shoulder_klc.lst:
+                    a_klu = left_shoulder_klc.lst[0]
+                    fx_a_raw_dt = _fmt_date(a_klu.time)
+                right_shoulder_klc = end_klc.next if end_klc else None
+                if right_shoulder_klc and right_shoulder_klc.lst:
+                    b_klu = right_shoulder_klc.lst[-1]
+                    fx_b_raw_dt = _fmt_date(b_klu.time)
+            except Exception:
+                pass
             bis.append({
                 "sdt": _fmt_date(begin_klu.time) if begin_klu else "",
                 "edt": _fmt_date(end_klu.time) if end_klu else "",
@@ -521,6 +553,10 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 "is_sure": getattr(bi, 'is_sure', True),
                 "end_fx_idx": end_fx_idx,
                 "begin_fx_idx": begin_fx_idx,
+                "fx_a_raw_dt": fx_a_raw_dt,
+                "fx_b_raw_dt": fx_b_raw_dt,
+                "fx_a_sub_dt": "",
+                "fx_b_sub_dt": "",
             })
         except Exception:
             pass

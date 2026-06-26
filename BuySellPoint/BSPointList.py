@@ -260,7 +260,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
     def treat_bsp2s(
         self,
         seg_list: CSegListComm,
-        bi_list: LINE_LIST_TYPE,
+        bi_list: LINE_TYPE,
         bsp2_bi: LINE_TYPE,
         break_bi: LINE_TYPE,
         real_bsp1: Optional[CBS_Point],
@@ -469,17 +469,18 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         算法：
         1. 从框架的笔中枢列表 zs_list 中找到最后一个多笔中枢，即中枢A
            中枢A由前三笔（笔1, 笔2, 笔3）重叠构成
-        2. 取最后一笔n（n≥4，即笔1.idx+3 起）作为当下笔：
+        2. 取最后一笔n（n>=4，即笔1.idx+3 起）作为当下笔：
            - 笔n必须属于中枢A（与A有重叠）
-           - 向上笔n：末端高点 > 中枢A上沿
-           - 向下笔n：末端低点 < 中枢A下沿
+           - 向上笔n：末端高点 >= 中枢A中间位
+           - 向下笔n：末端低点 <= 中枢A中间位
+           - 分型右肩合并K线 vs 中间合并K线的 MACD 三指标(DIF/DEA/柱子) 至少两个走弱
         3. 从笔n往回数5笔（n-4, n-3, n-2, n-1, n）
-           n-3, n-2, n-1 重叠 → 中枢B
+           n-3, n-2, n-1 重叠 -> 中枢B
         4. 笔n突破中枢B（向上突破上沿，向下突破下沿）
            且 n-4 也突破中枢B（向上：n-4低点<下沿；向下：n-4高点>上沿）
-        5. n-4为进入笔，n为离开笔，MACD full_area 背驰 → 0类买卖点
+        5. n-4为进入笔，n为离开笔，MACD full_area 背驰 -> 0类买卖点
         """
-        # ── 第一步：从笔中枢列表 zs_list 中找到最后一个多笔中枢 → 中枢A ──
+        # ── 第一步：从笔中枢列表 zs_list 中找到最后一个多笔中枢 -> 中枢A ──
         if zs_list is None or len(zs_list) == 0:
             return
 
@@ -493,7 +494,7 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ── 第二步：只检查最后一笔（当下笔）──
-        # 中枢A由前三笔（笔1, 笔2, 笔3）构成，笔n（n≥4）从笔1.idx + 3 开始
+        # 中枢A由前三笔（笔1, 笔2, 笔3）构成，笔n（n>=4）从笔1.idx + 3 开始
         n_idx = len(bi_list) - 1
         if n_idx < pivot_a.begin_bi.idx + 3 or n_idx < 4:
             return
@@ -522,33 +523,52 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 return
         """
         # ── 条件一：笔n突破中枢A ──
-        end_klc = stroke_n.end_klc
-        right_klc = getattr(end_klc, 'next', None) if end_klc else None
+        # (1) 价格突破：向上笔高点 >= 中枢A中间位；向下笔低点 <= 中枢A中间位
+        # (2) 分型右肩K线 vs 中间K线（均为合并K线）的MACD三指标，满足两个：
+        #     DIF(大写)、DEA(大写)、macd(小写) 右肩 < 中间（向上笔）/ 右肩 > 中间（向下笔）
+        #     MACD值取自合并K线内最后一根原始K线（klc.lst[-1].macd）
+        end_klc = stroke_n.end_klc          # 分型中间合并K线
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None  # 分型右肩合并K线
+        pivot_a_mid = (pivot_a.high + pivot_a.low) / 2  # 中枢A中间位
+
+        # 从合并K线内最后一根原始K线取MACD值
+        mid_macd = end_klc.lst[-1].macd      # CMACD_item: .DIF / .DEA / .macd
+        right_macd = right_klc.lst[-1].macd if right_klc and right_klc.lst else None
 
         if stroke_n.is_up():
-            # 向上笔n：
-            # 条件A：末端高点 >= 中枢A波动区间高点
-            # 条件B：(末端高点 >= 中枢A上沿) AND (顶分型右肩DEA < 前一根K线DEA)
-            cond_a = stroke_n._high() >= getattr(pivot_a, 'peak_high', pivot_a.high)
-            cond_b = False
-            if stroke_n._high() >= pivot_a.high:
-                if right_klc is not None and hasattr(right_klc, 'dea') and hasattr(end_klc, 'dea'):
-                    cond_b = right_klc.dea < end_klc.dea
-            if not (cond_a or cond_b):
+            # (1) 向上笔：末端高点 >= 中枢A中间位
+            if stroke_n._high() < pivot_a_mid:
+                return
+            # (2) 顶分型右肩K线的 DIF/DEA/macd 至少有两个 < 中间K线
+            if right_macd is None:
+                return
+            cnt = 0
+            if right_macd.DIF < mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA < mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd < mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
                 return
         else:
-            # 向下笔n：
-            # 条件A：末端低点 <= 中枢A波动区间低点
-            # 条件B：(末端低点 <= 中枢A下沿) AND (底分型右肩DEA > 前一根K线DEA)
-            cond_a = stroke_n._low() <= getattr(pivot_a, 'peak_low', pivot_a.low)
-            cond_b = False
-            if stroke_n._low() <= pivot_a.low:
-                if right_klc is not None and hasattr(right_klc, 'dea') and hasattr(end_klc, 'dea'):
-                    cond_b = right_klc.dea > end_klc.dea
-            if not (cond_a or cond_b):
+            # (1) 向下笔：末端低点 <= 中枢A中间位
+            if stroke_n._low() > pivot_a_mid:
+                return
+            # (2) 底分型右肩K线的 DIF/DEA/macd 至少有两个 > 中间K线
+            if right_macd is None:
+                return
+            cnt = 0
+            if right_macd.DIF > mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA > mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd > mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
                 return
 
-        # ── 条件二：n-3, n-2, n-1 重叠 → 中枢B ──
+        # ── 条件二：n-3, n-2, n-1 重叠 -> 中枢B ──
         s_nm1 = bi_list[n_idx - 1]  # 笔n-1
         s_nm2 = bi_list[n_idx - 2]  # 笔n-2
         s_nm3 = bi_list[n_idx - 3]  # 笔n-3

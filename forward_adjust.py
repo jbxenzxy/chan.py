@@ -19,8 +19,8 @@
   2. pytdx 网络接口（自动测速）
 
 使用方法：
-  from forward_adjust import apply_forward_adjust
-  records = apply_forward_adjust(records, market="sh", code="600000")
+  from forward_adjust import _forward_adjust
+  records = _forward_adjust(records, market="sh", code="600000")
 """
 
 import os
@@ -433,7 +433,7 @@ def _build_adjust_events(xdxr_df):
 # ============================================================
 # 前复权主函数
 # ============================================================
-def apply_forward_adjust(records, market, code):
+def _forward_adjust(records, market, code):
     """
     对原始K线数据进行前复权处理。
 
@@ -517,7 +517,7 @@ if __name__ == "__main__":
     print("前复权模块测试")
     print("=" * 60)
 
-    result, did_adjust = apply_forward_adjust(test_records, market="sh", code="600000")
+    result, did_adjust = _forward_adjust(test_records, market="sh", code="600000")
 
     print(f"\n复权状态: {'前复权' if did_adjust else '不复权'}")
     if result:
