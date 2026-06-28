@@ -835,11 +835,11 @@ def _make_chan_config():
     - zs_algo="over_seg"       中枢算法：跨段
     - zs_combine=False         不合并中枢
     - macd_algo="full_area"    MACD背驰：整根笔面积累加
-    - divergence_rate=0.9      1类买卖点MACD背驰力度
-    - max_bs2_rate=0.9         2类买卖点回撤最大比例
-    - bs1_peak=False           1类买卖点不要求必须是中枢内最高/最低点
-    - bsp3_follow_1=False      3类买卖点不要求跟在1类后面
-    - bsp3a_max_zs_cnt=2       3类买卖点最多跨越2个中枢
+    - divergence_rate=0.9      11类买卖点MACD背驰力度
+    - max_bs22_rate=0.9        22类买卖点回撤最大比例
+    - bs11_peak=False          11类买卖点不要求必须是中枢内最高/最低点
+    - bsp33_follow_11=False    33类买卖点不要求跟在11类后面
+    - bsp33a_max_zs_cnt=2      33类买卖点最多跨越2个中枢
     """
     from ChanConfig import CChanConfig
     return CChanConfig()
@@ -875,8 +875,15 @@ _current_market = None
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
 
+# 扫描缓存计数：有买卖点最多保留前20只的缓存，超出后不再缓存
+_MAX_SCAN_CACHE = 20
+_scan_saved_cache_count = 0
+
 # 扫描锁（防止并发扫描导致内存峰值翻倍）
 _scan_lock = threading.Lock()
+
+# 扫描终止标志：前端点击中断时设True，后端检查后跳过后续请求
+_scan_aborted = False
 
 # 股票分析锁（防止并发请求时 CTdxAPI.set_data 被覆盖导致分析结果串数据）
 _stock_analysis_lock = threading.Lock()
@@ -2456,12 +2463,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         _current_code = code
         _current_market = market
 
-        """
-        # 注入区间套背驰检查回调到 BSPointList 模块
-        import BuySellPoint.BSPointList as _bsp
-        _bsp._sub_divergence_check = _analyze_sub_level_divergence
-        """
-
         try:
             # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
             _DUAL_LV_LIST = {
@@ -3497,267 +3498,6 @@ def _get_bi_direction_str(bi):
     return "unknown"
 
 
-def _analyze_sub_level_divergence(bi_list):
-    """
-    区间套背驰判断：分析高级别最后一笔在低级别是否MACD背驰。
-
-    code/market 从全局 _current_code / _current_market 读取，
-    由 _analyze_stock_internal 在 step_load 前设置。
-
-    参数:
-        bi_list: 高级别笔列表（由 cal_bs0point 直接传入）
-
-    返回:
-        {"diverged": True/False, "detail": "..."}
-    """
-    global _current_code, _current_market
-    # ── 1. 前置检查 ──
-    high_bi = bi_list[-1]
-
-    high_kl_type = bi_list[0].get_begin_klu().kl_type
-    _KL_TYPE_TO_FREQ = {KL_TYPE.K_WEEK: 'w', KL_TYPE.K_DAY: 'd', KL_TYPE.K_30M: '30m', KL_TYPE.K_5M: '5m'}
-    high_freq = _KL_TYPE_TO_FREQ.get(high_kl_type)
-    if high_freq is None:
-        return {"diverged": False, "detail": f"不支持的K线类型: {high_kl_type}"}
-    if high_freq not in _SUB_FREQ_MAP:
-        return {"diverged": False, "detail": f"周期 {high_freq} 无对应的低级别，跳过背驰判断"}
-    sub_freq = _SUB_FREQ_MAP[high_freq]
-
-    # ── 2. 确定 A（左边界）和 B（右边界）时间 ──
-    # 逻辑与双窗口红框完全一致：左肩第一根K线之后 → 右肩最后一根K线
-    shoulder_times = _get_bi_fx_shoulder_times(high_bi, high_freq)
-    if shoulder_times is None:
-        return {"diverged": False, "detail": "无法确定笔的分型肩部时间"}
-    fx_a_dt, fx_b_dt = shoulder_times
-
-    high_bi_direction = _get_bi_direction_str(high_bi)
-    print(f"[区间套] 红框边界: 左肩={fx_a_dt}, 右肩={fx_b_dt}, 低级别={sub_freq}, 方向={high_bi_direction}")
-
-    # ── 3. 从缓存获取次级别已计算好的笔列表 ──
-    code = _current_code
-    market = _current_market
-    if not code or not market:
-        return {"diverged": False, "detail": "当前无分析上下文（_current_code/_current_market 未设置）"}
-
-    # 尝试从缓存获取次级别完整数据（第一次读不到则冷启动加载）
-    cache_key = f"single_{market}_{code}_{sub_freq}"
-    cached = _cache_get(cache_key)
-    if cached is None or "chan" not in cached:
-        print(f"[区间套] 缓存未命中: {cache_key}，触发冷启动加载次级别 {sub_freq}")
-        # 冷启动：暂时释放 _stock_analysis_lock 避免死锁，
-        # 同时保存/恢复 _current_code/_current_market 防止被覆盖
-        saved_code = _current_code
-        saved_market = _current_market
-        _stock_analysis_lock.release()
-        try:
-            analyze_stock(f"{code}.{market.upper()}", freq=sub_freq, cache_chan=True)
-        finally:
-            _stock_analysis_lock.acquire()
-            _current_code = saved_code
-            _current_market = saved_market
-        cached = _cache_get(cache_key)
-        if cached is None or "chan" not in cached:
-            print(f"[区间套] 冷启动后仍找不到低级别数据: {cache_key}，按不背驰处理")
-            return {"diverged": False, "detail": f"次级别{sub_freq}冷启动加载失败，无法分析"}
-
-    # 获取次级别完整chan对象和笔列表 L1
-    sub_date_fmt = "%Y-%m-%d %H:%M" if sub_freq in INTRADAY_FREQS else "%Y-%m-%d"
-    sub_kl_list = cached["chan"][_get_kl_type(sub_freq)]
-    sub_bi_list_full = sub_kl_list.bi_list
-    full_records = cached["records"]
-
-    if len(sub_bi_list_full) == 0:
-        return {"diverged": False, "detail": f"次级别{sub_freq}笔列表为空，无法分析"}
-
-    print(f"[区间套] 从缓存获取次级别数据: {len(full_records)}条K线, {len(sub_bi_list_full)}笔")
-
-    # ── 4. 在已有笔列表 L1 中找到 [start_bi, end_bi] ──
-    # start_bi: 第一个被 [A, B] 完全覆盖的笔
-    # end_bi:   最后一个被 [A, B] 完全覆盖的笔
-    # "完全覆盖" = 笔.start_time >= A 且 笔.end_time <= B
-    def _bi_in_range(bi, a_dt_str, b_dt_str):
-        """检查笔是否完全在 [A, B] 时间区间内"""
-        try:
-            s_time_str = bi.get_begin_klu().time.to_str()
-            e_time_str = bi.get_end_klu().time.to_str()
-            s_dt = s_time_str[:len(a_dt_str)].replace("/", "-")
-            e_dt = e_time_str[:len(b_dt_str)].replace("/", "-")
-            # 字符串比较在 YYYY-MM-DD 格式下直接可用
-            return s_dt >= a_dt_str and e_dt <= b_dt_str
-        except Exception:
-            return False
-
-    start_bi_idx = None
-    end_bi_idx = None
-
-    for i, bi in enumerate(sub_bi_list_full):
-        if _bi_in_range(bi, fx_a_dt, fx_b_dt):
-            if start_bi_idx is None:
-                start_bi_idx = i
-            end_bi_idx = i
-
-    if start_bi_idx is None or end_bi_idx is None:
-        print(f"[区间套] 在次级别笔列表中找不到完全被[A, B]覆盖的笔")
-        return {"diverged": False, "detail": f"次级别中找不到完全覆盖区间的笔，A={fx_a_dt}, B={fx_b_dt}"}
-
-    if end_bi_idx - start_bi_idx + 1 < 5:
-        # 至少需要5笔：1进入段 + 4构成中枢（含确认）
-        print(f"[区间套] 覆盖范围内仅{end_bi_idx - start_bi_idx + 1}笔，至少需要5笔才能构建中枢")
-        return {"diverged": False, "detail": f"区间内仅{end_bi_idx - start_bi_idx + 1}笔，至少需要5笔才能分析"}
-
-    # 截取笔列表 L2 = [start_bi_idx, end_bi_idx]（包含两端）
-    sub_bi_list = list(sub_bi_list_full[start_bi_idx:end_bi_idx + 1])
-    print(f"[区间套] 找到次级别笔范围: 索引[{start_bi_idx} ~ {end_bi_idx}], 共{len(sub_bi_list)}笔")
-
-    # ── 5. 基于 L2 重新计算中枢 ──
-    zs_data, zs_stars = _build_zs_from_bis(sub_bi_list, sub_bi_list_full, sub_date_fmt)
-
-    # 将 zs_data 转换为简易中枢对象，供后续背驰判断使用
-    class _DummyZS:
-        __slots__ = ('high', 'low')
-        def __init__(self, zs_info):
-            self.high = zs_info['zg']
-            self.low = zs_info['zd']
-    sub_zs_list = [_DummyZS(zs_info) for zs_info in zs_data]
-
-    # ── 6. 提取分析区间（仅用于日志），MACD 用全量数据计算以保证准确 ──
-    # 左边界：在次级别找 <= X 的最后一根K线，其下一根即为左边界
-    a_idx = -1
-    for i, r in enumerate(full_records):
-        r_date_str = r["dt"].strftime(sub_date_fmt)
-        if r_date_str <= fx_a_dt:
-            a_idx = i + 1
-    # 右边界：在次级别找 <= Y 的最后一根K线，即为右边界
-    # 注意：fx_b_dt 可能比 r_date_str 短（如日K vs 30m），需截断到相同长度后比较
-    b_len = len(fx_b_dt)
-    b_idx = -1
-    for i, r in enumerate(full_records):
-        r_date_str = r["dt"].strftime(sub_date_fmt)
-        if r_date_str[:b_len] <= fx_b_dt:
-            b_idx = i
-
-    if a_idx == -1:
-        a_idx = 0
-    if b_idx == -1:
-        b_idx = len(full_records) - 1
-    if a_idx > b_idx:
-        return {"diverged": False, "detail": f"低级别数据中无法找到有效K线区间: a_idx={a_idx}, b_idx={b_idx}"}
-
-    analysis_records = full_records[a_idx:b_idx + 1]
-    if len(analysis_records) < 5:
-        return {"diverged": False, "detail": f"分析区间内K线数据不足: 仅{len(analysis_records)}条"}
-
-    a_time = analysis_records[0]["dt"].strftime(sub_date_fmt)
-    b_time = analysis_records[-1]["dt"].strftime(sub_date_fmt)
-    print(f"[区间套] 分析区间: {a_time} → {b_time}, {len(analysis_records)}条K线, {len(sub_bi_list)}笔, {len(sub_zs_list)}中枢")
-
-    # MACD 使用全量 full_records 计算，不截取（截取K线太少会导致MACD不准）
-    full_closes = [r["close"] for r in full_records]
-    sub_macd_list = calculate_macd(full_closes)
-    print(f"[区间套] MACD基于全量 {len(full_records)} 条K线计算")
-
-    # ── 7. 分析次级别走势结构（沿用原有逻辑） ──
-    bi_count = len(sub_bi_list)
-    zs_count = len(sub_zs_list)
-
-    # 提取笔简要信息
-    sub_bis_info = []
-    for i, bi in enumerate(sub_bi_list):
-        try:
-            s = bi.get_begin_klu().time.to_str()
-            e = bi.get_end_klu().time.to_str()
-            s_dt = datetime.strptime(s, "%Y/%m/%d %H:%M").strftime(sub_date_fmt)
-            e_dt = datetime.strptime(e, "%Y/%m/%d %H:%M").strftime(sub_date_fmt)
-        except:
-            s_dt = s[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else s[:10].replace("/", "-")
-            e_dt = e[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else e[:10].replace("/", "-")
-        sub_bis_info.append({
-            "idx": i,
-            "sdt": s_dt,
-            "edt": e_dt,
-            "direction": "up" if bi.is_up() else "down",
-            "high": round(bi._high(), 2),
-            "low": round(bi._low(), 2),
-        })
-
-    # 提取中枢简要信息
-    sub_zs_info = []
-    for zs_info in zs_data:
-        sub_zs_info.append({
-            "sdt": zs_info.get("sdt", ""),
-            "edt": zs_info.get("edt", ""),
-            "zg": zs_info["zg"],
-            "zd": zs_info["zd"],
-        })
-
-    # ── 8. 判断走势类型（沿用原有逻辑） ──
-    result_type = None
-    detail = ""
-    divergence = None  # 背驰信息
-
-    if bi_count == 0:
-        result_type = "single_bi"
-        detail = "次级别无笔（数据不足）"
-    elif bi_count == 1:
-        result_type = "single_bi"
-        detail = f"次级别仅一笔（{sub_bis_info[0]['direction']}），未形成中枢"
-        # 单笔背驰判断
-        divergence = _check_single_bi_divergence(
-            sub_bi_list[0], full_records, sub_macd_list, sub_date_fmt
-        )
-        if divergence is not None:
-            if divergence["diverged"]:
-                detail += f"，但MACD背驰（笔内最高MACD柱={divergence['max_macd']:.2f}，末端={divergence['end_macd']:.2f}）"
-            else:
-                detail += f"，未背驰（笔内最高MACD柱={divergence['max_macd']:.2f}，末端={divergence['end_macd']:.2f}）"
-    elif zs_count == 0:
-        is_trend = _check_trend_maintained(sub_bis_info, high_bi_direction)
-        if is_trend:
-            result_type = "multi_bi_trend"
-            detail = f"次级别由{bi_count}笔构成，保持{high_bi_direction}趋势（反向笔未破前笔极值）"
-        else:
-            result_type = "multi_bi_trend"
-            detail = f"次级别由{bi_count}笔构成，但趋势已被破坏（反向笔破了前一笔极值）"
-        # 多笔背驰判断：比较最后两个同向笔的MACD柱子
-        if bi_count >= 3:
-            divergence = _check_multi_bi_divergence(
-                sub_bi_list, full_records, sub_macd_list, sub_date_fmt, high_bi_direction
-            )
-            if divergence is not None:
-                if divergence["diverged"]:
-                    detail += f"，MACD背驰（前笔峰值={divergence['prev_macd']:.2f}，后笔峰值={divergence['curr_macd']:.2f}）"
-                else:
-                    detail += f"，未背驰（前笔峰值={divergence['prev_macd']:.2f}，后笔峰值={divergence['curr_macd']:.2f}）"
-    elif zs_count >= 1:
-        result_type = "one_zs"
-        zs = sub_zs_info[0]
-        detail = f"次级别由{bi_count}笔构成，形成{zs_count}个中枢（ZG={zs['zg']}, ZD={zs['zd']}）"
-        # 单中枢背驰判断：进入段 vs 离开段 MACD面积比较
-        divergence = _check_one_zs_divergence(
-            sub_bi_list, sub_zs_list, full_records, sub_macd_list, high_bi_direction
-        )
-        if divergence is not None:
-            if divergence["diverged"]:
-                detail += f"，MACD面积背驰（进入段面积={divergence['in_area']:.2f}，离开段面积={divergence['out_area']:.2f}）"
-            else:
-                detail += f"，未背驰（进入段面积={divergence['in_area']:.2f}，离开段面积={divergence['out_area']:.2f}）"
-    else:
-        result_type = "multi_zs"
-        detail = f"次级别由{bi_count}笔构成，形成{zs_count}个中枢"
-
-    # 汇总背驰结论
-    diverged = divergence is not None and divergence.get("diverged", False)
-
-    # 清理局部变量（缓存对象保留）
-    import gc
-    del zs_data
-    del zs_stars
-    gc.collect()
-
-    return {"diverged": diverged, "detail": detail}
-
-
-
 def _check_single_bi_divergence(bi, records, macd_list, date_fmt):
     """
     检查单笔是否MACD背驰。
@@ -4538,19 +4278,64 @@ def read_zxg_stocks():
                     code = line[2:].strip()
                     if code.isdigit():
                         stocks.append({"prefix": "hk", "code": code})
-                # 其他格式：尝试匹配任何可识别的代码
-                elif len(line) >= 4 and line.isdigit():
-                    # 可能是港股5位代码（无前缀）
-                    if len(line) == 5:
-                        stocks.append({"prefix": "hk", "code": line})
-                    elif len(line) == 6:
-                        stocks.append({"prefix": "hk", "code": "0" + line})
-                    else:
-                        # 未知格式，跳过
-                        pass
+                else:
+                    # 无法识别的格式，跳过
+                    if len(line) >= 4:
+                        print(f"[stock][警告] 自选股文件无法识别的行: {repr(line)}")
     except Exception as e:
         print(f"[错误] 读取自选股文件失败: {e}")
     return stocks
+
+
+def _save_to_zxg_blk(codes):
+    """
+    将股票代码列表追加到通达信自选股文件 zxg.blk。
+    codes: list of str，格式如 "000852.SH"、"600519.SH"
+    自动去重，已存在的不会重复添加。
+    """
+    if not os.path.exists(ZXG_BLK_PATH):
+        # 目录不存在则创建
+        os.makedirs(os.path.dirname(ZXG_BLK_PATH), exist_ok=True)
+        existing = set()
+    else:
+        existing = set()
+        try:
+            with open(ZXG_BLK_PATH, "r", encoding="gbk") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        existing.add(line)
+        except Exception:
+            pass
+
+    added = 0
+    with open(ZXG_BLK_PATH, "a", encoding="gbk") as f:
+        for code_str in codes:
+            code_str = code_str.strip().upper()
+            # 解析 "000852.SH" 格式 → 7位数字 "1000852"
+            # 或 "600519.SH" → "1600519"
+            m = re.match(r'^(\d+)\.(SH|SZ|BJ|HK)$', code_str)
+            if m:
+                code = m.group(1)
+                market = m.group(2)
+                if market == "SH":
+                    line = "1" + code
+                elif market == "SZ":
+                    line = "0" + code
+                elif market == "BJ":
+                    line = "2" + code
+                else:
+                    line = "HK" + code
+            else:
+                line = code_str  # 按原样写入
+            if line not in existing:
+                f.write(line + "\n")
+                existing.add(line)
+                added += 1
+                print(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
+
+    print(f"[自选保存] 共添加 {added} 只股票到自选股")
+    return added
 
 
 def scan_zxg_buy_points(freq="d"):
@@ -4589,15 +4374,18 @@ def scan_zxg_buy_points(freq="d"):
         else:
             continue
 
-        # 跳过明显非股票的代码
-        if code.startswith("399") or code.startswith("000") and market == "sz" and len(code) == 6 and int(code) < 1000:
-            skipped += 1
-            continue
-
         try:
+            # 自选股扫描：用 prefix 拼出带市场前缀的代码（如 SH000852），
+            # 让 _get_stock_market_code 通过 SH/SZ 前缀精确识别，不依赖 0xxxxx→sz 的硬编码推断
+            _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ"}
+            market_prefix = _PREFIX_MAP.get(prefix)
+            if not market_prefix:
+                continue
+            qualified_code = market_prefix + code  # 如 SH000852
+
             # 扫描串行化：加锁防止并发创建多个CChan导致内存峰值
             with _scan_lock:
-                result = analyze_stock(code, freq=freq, cache_chan=False)
+                result = analyze_stock(qualified_code, freq=freq, cache_chan=False)
             if "error" in result:
                 # 分析失败，清除可能残留的缓存
                 cache_key = f"single_{market}_{code}_{freq}"
@@ -4635,7 +4423,7 @@ def scan_zxg_buy_points(freq="d"):
             if today_buy_points:
                 # 有买点：只缓存轻量 result（cache_chan=False已处理），后续点击可直接查看
                 results.append({
-                    "code": code,
+                    "code": code + "." + market.upper(),
                     "name": stock_name,
                     "market": market,
                     "buy_points": today_buy_points,
@@ -4676,6 +4464,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        global _scan_aborted, _scan_saved_cache_count
         parsed = urlparse(self.path)
         if parsed.path == "/api/stock":
             params = parse_qs(parsed.query)
@@ -4900,18 +4689,35 @@ class ChartHandler(SimpleHTTPRequestHandler):
             code = params.get("code", [""])[0]
             freq = params.get("freq", ["d"])[0]
             prefix = params.get("prefix", [""])[0]
+            recent_str = params.get("recent", ["1"])[0]
+            try:
+                recent_days = max(1, int(recent_str))
+            except ValueError:
+                recent_days = 1
             if not code:
                 self.send_json_response({"error": "缺少code参数"}, 400)
                 return
             try:
                 _check_memory_and_protect()
                 t0 = time.time()
+                # 自选股扫描：用 prefix 拼出带市场前缀的代码（如 SH000852）
+                _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ"}
+                market_prefix = _PREFIX_MAP.get(prefix, "")
+                qualified_code = (market_prefix + code) if market_prefix else code
+                market = market_prefix.lower() if market_prefix else ""
+                # 检查终止标志：在获取锁之前先检查，避免排队等待
+                if _scan_aborted:
+                    self.send_json_response({"error": "扫描已终止", "aborted": True}, 200)
+                    return
                 with _scan_lock:
-                    result = analyze_stock(code, freq=freq, cache_chan=False)
+                    if _scan_aborted:
+                        self.send_json_response({"error": "扫描已终止", "aborted": True}, 200)
+                        return
+                    result = analyze_stock(qualified_code, freq=freq, cache_chan=False)
                 t_analyze = time.time() - t0
                 if "error" in result:
                     # 分析失败，清除缓存，收集跳过原因（不实时打印）
-                    cache_key = f"single_{code}_{freq}"
+                    cache_key = f"single_{market}_{code}_{freq}"
                     if cache_key in _analysis_cache:
                         del _analysis_cache[cache_key]
                     _scan_skip_log.append(f"{code} - {result['error']}")
@@ -4924,11 +4730,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     # [DEBUG] 打印API响应中的名称
                     print(f"[DEBUG-名称] /api/scan_one({code}) meta.name='{result.get('meta', {}).get('name')}', stock_name='{stock_name}'")
                     klines = result.get("klines", [])
-                    last_kline_date = klines[-1]["date"] if klines else ""
+                    # 最近N根K线的日期集合
+                    recent_dates = set()
+                    for k in klines[-recent_days:]:
+                        recent_dates.add(k.get("date", ""))
                     buy_points = []
                     sell_points = []
                     for bsp in bsps:
-                        if bsp.get("date", "") == last_kline_date:
+                        if bsp.get("date", "") in recent_dates:
                             point = {
                                 "type": bsp.get("type", ""),
                                 "price": bsp.get("price", 0),
@@ -4941,7 +4750,15 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     has_points = buy_points or sell_points
                     t_filter = time.time() - t0
                     if has_points:
-                        # 有买/卖点：保留缓存
+                        # 有买/卖点：缓存数量限制（最多前20只），超出后清除缓存
+                        cache_key = f"single_{market}_{code}_{freq}"
+                        if _scan_saved_cache_count < _MAX_SCAN_CACHE:
+                            _scan_saved_cache_count += 1
+                            # 保留缓存，后续点击可直接查看
+                        else:
+                            # 超出上限，清除缓存释放内存
+                            if cache_key in _analysis_cache:
+                                del _analysis_cache[cache_key]
                         # 计算流通市值和MA120标记
                         t0 = time.time()
                         market_val, code_val = _get_market_code(code)
@@ -4964,7 +4781,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         t_total = time.time() - t_scan_start
                         print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s 流值{t_float:.3f}s MA120{t_ma120:.3f}s) 有买卖点")
                         resp_data = {
-                            "code": code, "name": stock_name,
+                            "code": code + "." + market.upper(), "name": stock_name,
                             "buy_points": buy_points,
                             "sell_points": sell_points,
                             "last_close": klines[-1]["close"] if klines else 0,
@@ -4975,7 +4792,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
                     else:
                         # 无买/卖点：清除缓存
-                        cache_key = f"single_{code}_{freq}"
+                        cache_key = f"single_{market}_{code}_{freq}"
                         if cache_key in _analysis_cache:
                             del _analysis_cache[cache_key]
                         t_total = time.time() - t_scan_start
@@ -4985,15 +4802,17 @@ class ChartHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 import traceback
                 _scan_skip_log.append(f"{code} - 异常: {e}")
-                cache_key = f"single_{code}_{freq}"
+                cache_key = f"single_{market}_{code}_{freq}"
                 if cache_key in _analysis_cache:
                     del _analysis_cache[cache_key]
                 t_total = time.time() - t_scan_start
                 print(f"[耗时-扫描] {code} 异常: {e}, 总耗时{t_total:.3f}s")
                 self.send_json_response({"error": str(e)}, 200)
         elif parsed.path == "/api/scan_start":
-            # 新一轮扫描开始：清空跳过记录
+            # 新一轮扫描开始：清空跳过记录、缓存计数和终止标志
+            _scan_aborted = False
             _scan_skip_log.clear()
+            _scan_saved_cache_count = 0
             try:
                 _load_stock_names_from_cache_file()
             except Exception:
@@ -5025,6 +4844,35 @@ class ChartHandler(SimpleHTTPRequestHandler):
             else:
                 print("\n[扫描明细] 无跳过股票\n")
             self.send_json_response({"count": len(_scan_skip_log)}, 200)
+        elif parsed.path == "/api/scan_clear_cache":
+            # 关闭扫描面板时清除所有扫描缓存，释放内存
+            import gc
+            keys_to_remove = [k for k in _analysis_cache if k.startswith("single_")]
+            for k in keys_to_remove:
+                del _analysis_cache[k]
+            gc.collect()
+            print(f"[扫描缓存] 面板关闭，已清除 {len(keys_to_remove)} 条缓存")
+            self.send_json_response({"cleared": len(keys_to_remove)}, 200)
+        elif parsed.path == "/api/scan_abort":
+            # 前端点击中断扫描：设置后端全局终止标志
+            _scan_aborted = True
+            print("[扫描] 收到中断请求，设置终止标志")
+            self.send_json_response({"ok": True}, 200)
+        elif parsed.path == "/api/zxg_save":
+            # 保存勾选的股票到通达信自选股文件 zxg.blk
+            try:
+                params = parse_qs(parsed.query)
+                codes_str = params.get("codes", [""])[0]
+                codes = codes_str.split(",") if codes_str else []
+                if not codes:
+                    self.send_json_response({"error": "codes为空"}, 400)
+                    return
+                added = _save_to_zxg_blk(codes)
+                self.send_json_response({"ok": True, "saved": added}, 200)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                self.send_json_response({"error": str(e)}, 500)
         elif parsed.path == "/api/clear_saved_point":
             params = parse_qs(parsed.query)
             code = params.get("code", [""])[0]
@@ -6348,6 +6196,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             padding: 0 4px; line-height: 1;
         }
         .scan-close:hover { color: #e94560; }
+        .scan-save-btn {
+            font-size: 11px; color: #8892b0; cursor: pointer;
+            padding: 2px 8px; border: 1px solid #0f3460; border-radius: 3px;
+            background: transparent; margin-right: 8px;
+        }
+        .scan-save-btn:hover { color: #e94560; border-color: #e94560; }
+        .scan-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .scan-col-chk {
+            width: 18px !important; flex-shrink: 0 !important;
+            text-align: center !important;
+        }
+        .scan-col-chk input[type="checkbox"] {
+            width: 12px; height: 12px; cursor: pointer;
+            accent-color: #e94560; vertical-align: middle;
+            filter: grayscale(0.5) brightness(0.8);
+        }
         .scan-body {
             flex: 1; overflow-y: auto; padding: 8px;
             font-size: 12px;
@@ -6410,12 +6274,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             text-align: right !important;
             display: flex !important; justify-content: flex-end !important;
             gap: 2px !important; flex-wrap: nowrap !important;
+            overflow: hidden !important;
         }
         .scan-bsp-tags {
             display: inline-flex !important; gap: 2px !important;
-            flex-shrink: 0 !important; flex-wrap: nowrap !important;
-            white-space: nowrap !important;
+            flex-shrink: 0 !important; flex-wrap: wrap !important;
             vertical-align: middle !important;
+            max-height: 28px !important; overflow: hidden !important;
         }
         .scan-bsp-tag {
             display: inline-block !important;
@@ -6424,22 +6289,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             white-space: nowrap !important; flex-shrink: 0 !important;
             line-height: 1.2 !important;
         }
-        .scan-bsp-tag.buy0 { background: rgba(255, 105, 180, 0.3); color: #FF69B4; }
-        .scan-bsp-tag.buy1 { background: rgba(233, 69, 96, 0.3); color: #FF6B8A; }
-        .scan-bsp-tag.buy2 { background: rgba(255, 167, 16, 0.3); color: #FFA710; }
-        .scan-bsp-tag.buy3 { background: rgba(12, 244, 155, 0.3); color: #0CF49B; }
-        .scan-bsp-tag.buy1p { background: rgba(100, 149, 237, 0.3); color: #6495ED; }
-        .scan-bsp-tag.buy2s { background: rgba(186, 85, 211, 0.3); color: #BA55D3; }
-        .scan-bsp-tag.buy3b { background: rgba(255, 215, 0, 0.3); color: #FFD700; }
-        .scan-bsp-tag.buya { background: rgba(233, 69, 96, 0.2); color: #e94560; }
-        .scan-bsp-tag.sell0 { background: rgba(135, 206, 250, 0.3); color: #87CEFA; }
-        .scan-bsp-tag.sell1 { background: rgba(0, 180, 80, 0.3); color: #00B450; }
-        .scan-bsp-tag.sell2 { background: rgba(0, 150, 136, 0.3); color: #009688; }
-        .scan-bsp-tag.sell3 { background: rgba(76, 175, 80, 0.3); color: #4CAF50; }
-        .scan-bsp-tag.sell1p { background: rgba(0, 200, 120, 0.3); color: #00C878; }
-        .scan-bsp-tag.sell2s { background: rgba(0, 170, 100, 0.3); color: #00AA64; }
-        .scan-bsp-tag.sell3b { background: rgba(100, 200, 130, 0.3); color: #64C882; }
-        .scan-bsp-tag.sella { background: rgba(0, 200, 80, 0.2); color: #00C850; }
+        .scan-bsp-tag.buy { background: rgba(255, 68, 68, 0.25); color: #FF4444; }
+        .scan-bsp-tag.sell { background: rgba(0, 221, 0, 0.2); color: #00DD00; }
+        .scan-bsp-tag.scan-bsp-more { background: rgba(255,255,255,0.1); color: #8892b0; font-weight: 400; }
         .scan-no-result {
             text-align: center; color: #555; padding: 30px 0; font-size: 12px;
         }
@@ -6635,6 +6487,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="scan-panel" id="scan-panel">
         <div class="scan-header">
             <span class="scan-title" id="scan-title">买卖点扫描</span>
+            <button class="scan-save-btn" id="scan-save-btn" onclick="saveScanToZxg()" disabled title="保存勾选到自选股">保存到自选</button>
             <span class="scan-status" id="scan-status"></span>
             <span class="scan-close" onclick="closeScanPanel()">&times;</span>
         </div>
@@ -6679,6 +6532,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <input type="radio" name="scan-mode" value="bsp" style="accent-color:#e94560;" />
                     买/卖点
                 </label>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
+                <span>最近</span>
+                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#0a0a1a;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
+                <span>根</span>
             </div>
             <div class="annotation-dialog-btns">
                 <button class="annotation-dialog-btn" onclick="scanModeDialogCancel()">取消</button>
@@ -9295,6 +9153,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _scanRunning = false;
         let _scanAborted = false;
         let _scanMode = "ann"; // "ann" = 标注扫描, "bsp" = 买卖点扫描
+        let _scanRecentDays = 1; // 最近N根K线，默认1
+
+        // 生成买卖点标签HTML（最多显示6个，超出显示+N）
+        function buildBspTagsHtml(buyPoints, sellPoints) {
+            var MAX_TAGS = 6;
+            var allTags = [];
+            (buyPoints || []).forEach(function(bp) {
+                var tp = bp.type.replace(/\s/g, "");
+                if (tp === "0" || tp === "1" || tp === "2" || tp === "3") {
+                    allTags.push('<span class="scan-bsp-tag buy">' + bp.type + '</span>');
+                }
+            });
+            (sellPoints || []).forEach(function(sp) {
+                var tp = sp.type.replace(/\s/g, "");
+                if (tp === "0" || tp === "1" || tp === "2" || tp === "3") {
+                    allTags.push('<span class="scan-bsp-tag sell">' + sp.type + '</span>');
+                }
+            });
+            var html = '<div class="scan-bsp-tags">';
+            if (allTags.length <= MAX_TAGS) {
+                html += allTags.join('');
+            } else {
+                html += allTags.slice(0, MAX_TAGS).join('');
+                html += '<span class="scan-bsp-tag scan-bsp-more">+' + (allTags.length - MAX_TAGS) + '</span>';
+            }
+            html += '</div>';
+            return html;
+        }
 
         // 扫描模式对话框：取消
         window.scanModeDialogCancel = function() {
@@ -9306,6 +9192,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var selected = document.querySelector('input[name="scan-mode"]:checked');
             if (!selected) return;
             _scanMode = selected.value;
+            var daysInput = document.getElementById("scan-recent-days");
+            _scanRecentDays = parseInt(daysInput.value) || 1;
+            if (_scanRecentDays < 1) _scanRecentDays = 1;
+            // 持久化到 localStorage，下次打开保持上次选择
+            try {
+                localStorage.setItem("scan_mode", _scanMode);
+                localStorage.setItem("scan_recent_days", String(_scanRecentDays));
+            } catch(e) {}
             document.getElementById("scan-mode-dialog").classList.remove("show");
             // 执行实际扫描
             doStartScan();
@@ -9314,17 +9208,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         function updateScanTitle() {
             var freq = currentFreq;
             var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分"};
-            var modeLabel = _scanMode === "ann" ? "标注" : "买/卖点";
-            document.getElementById("scan-title").textContent = modeLabel + "（" + (freqLabels[freq] || freq) + "）";
+            var freqLabel = freqLabels[freq] || freq;
+            if (_scanMode === "bsp") {
+                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400">（最近' + _scanRecentDays + '根）</span>';
+            } else {
+                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400">（标注）</span>';
+            }
         }
 
         window.startScanZxg = function() {
             if (_scanRunning) {
                 // 正在扫描中，再次点击 = 中断扫描
                 _scanAborted = true;
+                var btn = document.getElementById("btn-scan");
+                btn.textContent = "正在中断...";
+                btn.disabled = true;
+                // 通知后端立即终止
+                fetch("/api/scan_abort").catch(function(){});
                 return;
             }
             // 弹出模式选择对话框
+            // 从 localStorage 恢复上次的选择
+            try {
+                var savedMode = localStorage.getItem("scan_mode");
+                if (savedMode === "bsp" || savedMode === "ann") {
+                    _scanMode = savedMode;
+                    var radio = document.querySelector('input[name="scan-mode"][value="' + savedMode + '"]');
+                    if (radio) radio.checked = true;
+                }
+                var savedDays = localStorage.getItem("scan_recent_days");
+                if (savedDays) {
+                    _scanRecentDays = parseInt(savedDays) || 1;
+                    document.getElementById("scan-recent-days").value = _scanRecentDays;
+                }
+            } catch(e) {}
             document.getElementById("scan-mode-dialog").classList.add("show");
         };
 
@@ -9416,10 +9333,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 }
                             }
                             html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                            html += chkBox(r.code);
                             html += '<span class="scan-col-name">' + r.name + '</span>';
                             html += '<span class="scan-col-code">' + r.code + '</span>';
                             html += '<span class="scan-col-ann">' + closestText + '</span>';
-                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy1">' + r.count + '条</span></span>';
+                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy">' + r.count + '条</span></span>';
                             html += '</div>';
                         });
                     }
@@ -9474,6 +9392,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     var completed = 0;
                     var hasRenderedAny = false;
 
+                    // 立即更新面板为扫描进度，不等第一批请求返回
+                    body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，已发现 0 只股票</div>';
+
                     // 扫描结束统一通知后端打印
                     function finishScan(interrupted) {
                         fetch("/api/scan_end").then(function() {
@@ -9482,7 +9403,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
 
                     // 实时更新面板：显示进度 + 已找到的买卖点股票
+                    var _updateTimer = null;
+                    var _pendingUpdate = false;
                     function updatePanel() {
+                        // 节流：最多500ms更新一次，避免阻塞主线程导致"中断扫描"按钮无响应
+                        if (_updateTimer) {
+                            _pendingUpdate = true;
+                            return;
+                        }
+                        _doUpdatePanel();
+                        _updateTimer = setInterval(function() {
+                            if (_pendingUpdate) {
+                                _pendingUpdate = false;
+                                _doUpdatePanel();
+                            } else {
+                                clearInterval(_updateTimer);
+                                _updateTimer = null;
+                            }
+                        }, 500);
+                    }
+                    function _doUpdatePanel() {
                         var progress = completed + "/" + total;
                         var found = results.length;
                         var html = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + progress + '，已发现 ' + found + ' 只股票</div>';
@@ -9492,34 +9432,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             html += '<div class="scan-summary" style="margin-top:8px;">已发现 <b>' + found + '</b> 只有买/卖点</div>';
                             for (var i = 0; i < results.length; i++) {
                                 var r = results[i];
-                                var tagsHtml = '<div class="scan-bsp-tags">';
-                                for (var j = 0; j < (r.buy_points || []).length; j++) {
-                                    var bp = r.buy_points[j];
-                                    var tp = bp.type.toLowerCase().replace(/\s/g, "");
-                                    var cls = "buya";
-                                    if (tp === "0") cls = "buy0";
-                                    else if (tp === "1") cls = "buy1";
-                                    else if (tp === "2") cls = "buy2";
-                                    else if (tp === "3a") cls = "buy3";
-                                    else if (tp === "1p") cls = "buy1p";
-                                    else if (tp === "2s") cls = "buy2s";
-                                    else if (tp === "3b") cls = "buy3b";
-                                    tagsHtml += '<span class="scan-bsp-tag ' + cls + '">' + bp.type + '</span>';
-                                }
-                                for (var j = 0; j < (r.sell_points || []).length; j++) {
-                                    var sp = r.sell_points[j];
-                                    var tp = sp.type.toLowerCase().replace(/\s/g, "");
-                                    var cls = "sella";
-                                    if (tp === "0") cls = "sell0";
-                                    else if (tp === "1") cls = "sell1";
-                                    else if (tp === "2") cls = "sell2";
-                                    else if (tp === "3a") cls = "sell3";
-                                    else if (tp === "1p") cls = "sell1p";
-                                    else if (tp === "2s") cls = "sell2s";
-                                    else if (tp === "3b") cls = "sell3b";
-                                    tagsHtml += '<span class="scan-bsp-tag ' + cls + '">' + sp.type + '</span>';
-                                }
-                                tagsHtml += '</div>';
+                                var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
                                 var mvText = '';
                                 if (r.float_mv !== undefined && r.float_mv !== null && r.float_mv < 50) {
                                     mvText = r.float_mv.toFixed(1) + '亿';
@@ -9529,6 +9442,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     maText = '牛熊线下';
                                 }
                                 html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                                html += chkBox(r.code);
                                 html += '<span class="scan-col-name">' + r.name + '</span>';
                                 html += '<span class="scan-col-code">' + r.code + '</span>';
                                 html += '<span class="scan-col-mv">' + mvText + '</span>';
@@ -9541,10 +9455,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
 
                     function checkDone() {
+                        if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                         if (_scanAborted) {
                             _scanRunning = false;
                             _scanAborted = false;
                             btn.classList.remove("active");
+                            btn.disabled = false;
                             btn.textContent = "自选扫描";
                             finishScan(true);
                             return;
@@ -9552,6 +9468,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         if (completed >= total) {
                             _scanRunning = false;
                             btn.classList.remove("active");
+                            btn.disabled = false;
                             btn.textContent = "自选扫描";
                             finishScan(false);
                             return;
@@ -9570,10 +9487,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             currentIdx++;
                         }
                         if (batch.length === 0) return;
+                        var batchDone = 0;
+                        var batchSize = batch.length;
                         batch.forEach(function(stk) {
                             var code = stk.code;
                             var prefix = stk.prefix;
-                            fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&_t=" + Date.now())
+                            fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&recent=" + _scanRecentDays + "&_t=" + Date.now())
                                 .then(function(resp) { return resp.json(); })
                                 .then(function(data) {
                                     completed++;
@@ -9582,30 +9501,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     } else if ((data.buy_points && data.buy_points.length > 0) || (data.sell_points && data.sell_points.length > 0)) {
                                         results.push(data);
                                     }
-                                    updatePanel();
-                                    if (currentIdx < total) {
-                                        launchBatch();
-                                    } else {
-                                        checkDone();
+                                    batchDone++;
+                                    if (batchDone >= batchSize) {
+                                        // 整批完成后只产生一个 setTimeout，点击事件有机会插入
+                                        setTimeout(function() {
+                                            updatePanel();
+                                            if (currentIdx < total) {
+                                                launchBatch();
+                                            } else {
+                                                checkDone();
+                                            }
+                                        }, 0);
                                     }
                                 })
                                 .catch(function(err) {
                                     completed++;
                                     skipped++;
-                                    updatePanel();
-                                    if (currentIdx < total) {
-                                        launchBatch();
-                                    } else {
-                                        checkDone();
+                                    batchDone++;
+                                    if (batchDone >= batchSize) {
+                                        setTimeout(function() {
+                                            updatePanel();
+                                            if (currentIdx < total) {
+                                                launchBatch();
+                                            } else {
+                                                checkDone();
+                                            }
+                                        }, 0);
                                     }
                                 });
                         });
                     }
 
-                    // 启动初始批次
-                    for (var i = 0; i < CONCURRENCY; i++) {
-                        launchBatch();
-                    }
+                    // 启动初始批次（单链递归，每次发5个请求，完成后通过setTimeout推迟下一批，
+                    // 让浏览器有机会处理点击"中断扫描"按钮）
+                    launchBatch();
                 })
                 .catch(function(err) {
                     _scanRunning = false;
@@ -9685,36 +9614,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             } else {
                 for (var i = 0; i < results.length; i++) {
                     var r = results[i];
-                    var tagsHtml = '<div class="scan-bsp-tags">';
-                    // 买点标签
-                    for (var j = 0; j < (r.buy_points || []).length; j++) {
-                        var bp = r.buy_points[j];
-                        var tp = bp.type.toLowerCase().replace(/\s/g, "");
-                        var cls = "buya";
-                        if (tp === "0") cls = "buy0";
-                        else if (tp === "1") cls = "buy1";
-                        else if (tp === "2") cls = "buy2";
-                        else if (tp === "3a") cls = "buy3";
-                        else if (tp === "1p") cls = "buy1p";
-                        else if (tp === "2s") cls = "buy2s";
-                        else if (tp === "3b") cls = "buy3b";
-                        tagsHtml += '<span class="scan-bsp-tag ' + cls + '">' + bp.type + '</span>';
-                    }
-                    // 卖点标签
-                    for (var j = 0; j < (r.sell_points || []).length; j++) {
-                        var sp = r.sell_points[j];
-                        var tp = sp.type.toLowerCase().replace(/\s/g, "");
-                        var cls = "sella";
-                        if (tp === "0") cls = "sell0";
-                        else if (tp === "1") cls = "sell1";
-                        else if (tp === "2") cls = "sell2";
-                        else if (tp === "3a") cls = "sell3";
-                        else if (tp === "1p") cls = "sell1p";
-                        else if (tp === "2s") cls = "sell2s";
-                        else if (tp === "3b") cls = "sell3b";
-                        tagsHtml += '<span class="scan-bsp-tag ' + cls + '">' + sp.type + '</span>';
-                    }
-                    tagsHtml += '</div>';
+                    var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
                     // 构建各列内容
                     var mvText2 = '';
                     if (r.float_mv !== undefined && r.float_mv !== null && r.float_mv < 50) {
@@ -9725,6 +9625,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         maText2 = '牛熊线下';
                     }
                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                    html += chkBox(r.code);
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
                     html += '<span class="scan-col-mv">' + mvText2 + '</span>';
@@ -9736,10 +9637,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             body.innerHTML = html;
         }
 
+        // 生成复选框HTML
+        function chkBox(code) {
+            return '<span class="scan-col-chk" onclick="event.stopPropagation()"><input type="checkbox" value="' + code + '" onchange="updateScanSaveBtn()" /></span>';
+        }
+
+        // 收集勾选的代码并更新按钮状态
+        window.updateScanSaveBtn = function() {
+            var checks = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]:checked");
+            var btn = document.getElementById("scan-save-btn");
+            btn.disabled = checks.length === 0;
+            btn.textContent = checks.length > 0 ? "保存到自选(" + checks.length + ")" : "保存到自选";
+        };
+
+        // 保存勾选到自选股
+        window.saveScanToZxg = function() {
+            var checks = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]:checked");
+            if (checks.length === 0) return;
+            var codes = [];
+            checks.forEach(function(cb) { codes.push(cb.value); });
+            var btn = document.getElementById("scan-save-btn");
+            btn.disabled = true;
+            btn.textContent = "保存中...";
+            fetch("/api/zxg_save?codes=" + encodeURIComponent(codes.join(",")))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                btn.textContent = "已保存" + data.saved + "只";
+                setTimeout(function() {
+                    btn.textContent = "保存到自选";
+                    btn.disabled = false;
+                    updateScanSaveBtn();
+                }, 2000);
+            })
+            .catch(function() {
+                btn.textContent = "保存失败";
+                btn.disabled = false;
+            });
+        };
+
         window.closeScanPanel = function() {
             // 扫描中不允许关闭面板，用户需通过"中断扫描"按钮停止
             if (_scanRunning) return;
             document.getElementById("scan-panel").classList.remove("show");
+            // 关闭面板时清除扫描缓存，释放内存
+            fetch("/api/scan_clear_cache").catch(function() {});
         };
 
         window.loadScanResult = function(code) {

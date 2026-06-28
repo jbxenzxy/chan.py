@@ -17,44 +17,44 @@ class CPointConfig:
     def __init__(self,
                  divergence_rate,
                  min_zs_cnt,
-                 bsp1_only_multibi_zs,
-                 max_bs2_rate,
+                 bsp11_only_multibi_zs,
+                 max_bs22_rate,
                  macd_algo,
-                 bs1_peak,
+                 bs11_peak,
                  bs_type,
-                 bsp2_follow_1,
-                 bsp3_follow_1,
-                 bsp3_peak,
-                 bsp2s_follow_2,
-                 max_bsp2s_lv,
-                 strict_bsp3,
-                 bsp3a_max_zs_cnt,
+                 bsp22_follow_11,
+                 bsp33_follow_11,
+                 bsp33_peak,
+                 bsp22s_follow_22,
+                 max_bsp22s_lv,
+                 strict_bsp33,
+                 bsp33a_max_zs_cnt,
                  ):
         self.divergence_rate = divergence_rate
         self.min_zs_cnt = min_zs_cnt
-        self.bsp1_only_multibi_zs = bsp1_only_multibi_zs
-        self.max_bs2_rate = max_bs2_rate
-        assert self.max_bs2_rate <= 1
+        self.bsp11_only_multibi_zs = bsp11_only_multibi_zs
+        self.max_bs22_rate = max_bs22_rate
+        assert self.max_bs22_rate <= 1
         self.SetMacdAlgo(macd_algo)
-        self.bs1_peak = bs1_peak
+        self.bs11_peak = bs11_peak
         self.tmp_target_types = bs_type
         self.target_types: List[BSP_TYPE] = []
-        self.bsp2_follow_1 = bsp2_follow_1
-        self.bsp3_follow_1 = bsp3_follow_1
-        self.bsp3_peak = bsp3_peak
-        self.bsp2s_follow_2 = bsp2s_follow_2
-        self.max_bsp2s_lv: Optional[int] = max_bsp2s_lv
-        self.strict_bsp3 = strict_bsp3
-        self.bsp3a_max_zs_cnt = bsp3a_max_zs_cnt
-        assert self.bsp3a_max_zs_cnt >= 1
+        self.bsp22_follow_11 = bsp22_follow_11
+        self.bsp33_follow_11 = bsp33_follow_11
+        self.bsp33_peak = bsp33_peak
+        self.bsp22s_follow_22 = bsp22s_follow_22
+        self.max_bsp22s_lv: Optional[int] = max_bsp22s_lv
+        self.strict_bsp33 = strict_bsp33
+        self.bsp33a_max_zs_cnt = bsp33a_max_zs_cnt
+        assert self.bsp33a_max_zs_cnt >= 1
 
     def parse_target_type(self):
         _d: Dict[str, BSP_TYPE] = {x.value: x for x in BSP_TYPE}
         if isinstance(self.tmp_target_types, str):
             self.tmp_target_types = [t.strip() for t in self.tmp_target_types.split(",")]
         for target_t in self.tmp_target_types:
-            assert target_t in ['0', '1', '2', '3a', '2s', '1p', '3b', '4', '5', '6'], \
-                f"unsupported bs_type: {target_t}, valid: 0,1,1p,2,2s,3a,3b,4,5,6"
+            assert target_t in ['0', '1', '2', '3', '11', '11p', '22', '22s', '33a', '33b'], \
+                f"unsupported bs_type: {target_t}, valid: 0,1,2,3,11,11p,22,22s,33a,33b"
         self.target_types = [_d[_type] for _type in self.tmp_target_types]
 
     def SetMacdAlgo(self, macd_algo):

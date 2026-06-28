@@ -1171,4 +1171,5 @@ if __name__ == "__main__":
     print("前复权功能：")
     print("  - _forward_adjust(): 对原始K线进行前复权处理")
     print("  - get_xdxr_data(): 获取除权除息数据（mootdx/pytdx）")
+    print("  - get_float_shares_from_xdxr(): 从xdxr提取流通股本")
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")

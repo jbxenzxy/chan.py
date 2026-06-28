@@ -9,7 +9,7 @@ LINE_TYPE = TypeVar('LINE_TYPE', CBi, CSeg)
 
 
 class CBS_Point(Generic[LINE_TYPE]):
-    def __init__(self, bi: LINE_TYPE, is_buy, bs_type: BSP_TYPE, relate_bsp1: Optional['CBS_Point'], feature_dict=None):
+    def __init__(self, bi: LINE_TYPE, is_buy, bs_type: BSP_TYPE, relate_bsp11: Optional['CBS_Point'], feature_dict=None):
         self.bi: LINE_TYPE = bi
         end_klu = bi.get_end_klu()
         # 尝试取右肩K线：从分型合并K线（CKLine_Combined）往后找，取右肩最后一根原始K线
@@ -26,7 +26,7 @@ class CBS_Point(Generic[LINE_TYPE]):
             self.klu = end_klu
         self.is_buy = is_buy
         self.type: List[BSP_TYPE] = [bs_type]
-        self.relate_bsp1 = relate_bsp1
+        self.relate_bsp11 = relate_bsp11
 
         self.bi.bsp = self  # type: ignore
         self.features = CFeatures(feature_dict)
@@ -41,12 +41,12 @@ class CBS_Point(Generic[LINE_TYPE]):
     def type2str(self):
         return ",".join([x.value for x in self.type])
 
-    def add_another_bsp_prop(self, bs_type: BSP_TYPE, relate_bsp1):
+    def add_another_bsp_prop(self, bs_type: BSP_TYPE, relate_bsp11):
         self.add_type(bs_type)
-        if self.relate_bsp1 is None:
-            self.relate_bsp1 = relate_bsp1
-        elif relate_bsp1 is not None:
-            assert self.relate_bsp1.klu.idx == relate_bsp1.klu.idx
+        if self.relate_bsp11 is None:
+            self.relate_bsp11 = relate_bsp11
+        elif relate_bsp11 is not None:
+            assert self.relate_bsp11.klu.idx == relate_bsp11.klu.idx
 
     def add_feat(self, inp1: Union[str, Dict[str, float], Dict[str, Optional[float]], 'CFeatures'], inp2: Optional[float] = None):
         self.features.add_feat(inp1, inp2)

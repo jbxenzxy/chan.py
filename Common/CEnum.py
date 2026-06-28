@@ -60,23 +60,23 @@ class BI_TYPE(Enum):
     TIAOKONG_VALUE = auto()
 
 
-BSP_MAIN_TYPE = Literal['0', '1', '2', '3']
+BSP_MAIN_TYPE = Literal['0', '1', '2', '3', '11', '22', '33']
 
 
 class BSP_TYPE(Enum):
-    T0 = '0'    # 0类买卖点（神之一笔，不依赖中枢/背驰）
-    T1 = '1'
-    T1P = '1p'
-    T2 = '2'
-    T2S = '2s'
-    T3A = '3a'  # 中枢在1类后面
-    T3B = '3b'  # 中枢在1类前面
-    T4 = '4'    # 4类买卖点（待实现）
-    T5 = '5'    # 5类买卖点（待实现）
-    T6 = '6'    # 6类买卖点（待实现）
+    T0 = '0'      # 0类买卖点（神之一笔，不依赖中枢/背驰）
+    T1 = '1'      # 1类买卖点（对应缠论一类买卖点）
+    T2 = '2'      # 2类买卖点（待实现）
+    T3 = '3'      # 3类买卖点（对应缠论三类买卖点）
+    T11 = '11'  # 11类买卖点（原1类，趋势背驰）
+    T11P = '11p'  # 11p类买卖点（原1p类，盘整背驰）
+    T22 = '22'  # 22类买卖点（原2类，回踩/回抽）
+    T22S = '22s'  # 22s类买卖点（原2s类，类二）
+    T33A = '33a'  # 33a类买卖点（原3a类，中枢在11类后面）
+    T33B = '33b'  # 33b类买卖点（原3b类，中枢在11类前面）
 
     def main_type(self) -> BSP_MAIN_TYPE:
-        return self.value[0]  # type: ignore
+        return self.value.rstrip('psab')  # type: ignore
 
 
 class AUTYPE(Enum):

@@ -104,20 +104,20 @@ class CChanConfig:
 
     def set_bsp_config(self, conf):
         para_dict = {
-            "divergence_rate": 0.9,         # 1类（和1p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
-            "min_zs_cnt": 1,                # 1类（和1p类）买卖点至少要经历几个中枢，默认为 1
-            "bsp1_only_multibi_zs": True,
-            "max_bs2_rate": 0.9,            # 2类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到1类买卖点的位置
+            "divergence_rate": 0.9,         # 11类（和11p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
+            "min_zs_cnt": 1,                # 11类（和11p类）买卖点至少要经历几个中枢，默认为 1
+            "bsp11_only_multibi_zs": True,
+            "max_bs22_rate": 0.9,           # 22类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到11类买卖点的位置
             "macd_algo": "full_area",       # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）
-            "bs1_peak": False,              # 1类（非1p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
-            "bs_type": "0,1,1p,2,2s,3a,3b,4,5,6",  # 买卖点类型：0震荡；1趋背/盘背；1p段背；2回踩/回抽；2s类二；3a中枢在1类后面；3b中枢在1类前面；4-6待实现
-            "bsp2_follow_1": True,          # 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True
-            "bsp3_follow_1": False,         # 3类买卖点是否必须跟在1类买卖点后面，默认为 True（没有1类点就不算3类点，忽视了有“小转大”的可能）
-            "bsp3_peak": False,             # 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
-            "bsp2s_follow_2": False,        # 类2买卖点是否必须跟在2类买卖点后面（2类买卖点可能由于不满足 max_bs2_rate），默认为 False
-            "max_bsp2s_lv": None,           # 类2买卖点最大层级（距离2类买卖点的笔的距离/2），默认为None，不做限制
-            "strict_bsp3": False,           # 3类买卖点对应的中枢，是否要求中枢进入笔"紧邻"1类点笔，默认为 False（允许1类点笔后走个ABC，ABC是后面中枢的进入段）
-            "bsp3a_max_zs_cnt": 2,          # 3类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离1类点最近的那个中枢回拉产生的3a类点，越远的中枢越不可靠
+            "bs11_peak": False,             # 11类（非11p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
+            "bs_type": "0,1,2,3",           # 买卖点类型：0震荡；11趋背/盘背；11p段背；22回踩/回抽；22s类22；33a中枢在11类后面；33b中枢在11类前面；1一类买卖点；2待实现；3三类买卖点
+            "bsp22_follow_11": True,        # 22类买卖点是否必须跟在11类买卖点后面（用于小转大时11类买卖点因为背驰度不足没生成），默认为 True
+            "bsp33_follow_11": False,       # 33类买卖点是否必须跟在11类买卖点后面，默认为 True（没有11类点就不算33类点，忽视了有"小转大"的可能）
+            "bsp33_peak": False,            # 33类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
+            "bsp22s_follow_22": False,      # 类22买卖点是否必须跟在22类买卖点后面（22类买卖点可能由于不满足 max_bs22_rate），默认为 False
+            "max_bsp22s_lv": None,          # 类22买卖点最大层级（距离22类买卖点的笔的距离/2），默认为None，不做限制
+            "strict_bsp33": False,          # 33类买卖点对应的中枢，是否要求中枢进入笔"紧邻"11类点笔，默认为 False（允许11类点笔后走个ABC，ABC是后面中枢的进入段）
+            "bsp33a_max_zs_cnt": 2,         # 33类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离11类点最近的那个中枢回拉产生的33a类点，越远的中枢越不可靠
         }
         args = {para: conf.get(para, default_value) for para, default_value in para_dict.items()}
         self.bs_point_conf = CBSPointConfig(**args)
@@ -125,8 +125,8 @@ class CChanConfig:
         self.seg_bs_point_conf = CBSPointConfig(**args)
         self.seg_bs_point_conf.b_conf.set("macd_algo", "slope")
         self.seg_bs_point_conf.s_conf.set("macd_algo", "slope")
-        self.seg_bs_point_conf.b_conf.set("bsp1_only_multibi_zs", False)
-        self.seg_bs_point_conf.s_conf.set("bsp1_only_multibi_zs", False)
+        self.seg_bs_point_conf.b_conf.set("bsp11_only_multibi_zs", False)
+        self.seg_bs_point_conf.s_conf.set("bsp11_only_multibi_zs", False)
 
         for k, v in conf.items():
             if isinstance(v, str):
