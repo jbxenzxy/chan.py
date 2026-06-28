@@ -752,31 +752,228 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         """
         pass
 
-    # ── 4类买卖点 ──
+    # ── 4类买卖点（对应缠论三类买卖点）──
     def cal_bs4point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
-        """TODO: 在此实现自定义的 4 类买卖点计算逻辑。
+        """4类买卖点计算（对应缠论三类买卖点，三买/三卖）。
+
+        以向下笔为例（买点）：
+        ⑴ 笔N不跟最后一个中枢重叠，但前一笔N-1跟最后一个中枢重叠
+        ⑵ 笔N向下时，笔N-1上不能有卖点；笔N向上时，笔N-1上不能有买点
+        ⑶ 向下笔的底分型右肩MACD DIF/DEA/macd三者中有两个大于底分型中间MACD值
+           → 4类买点
+
+        向上笔（卖点）同理，方向相反。
 
         参数:
             bi_list: 笔列表，包含所有笔对象
             zs_list: 笔中枢列表，可直接遍历取多笔中枢
-
-        生成买卖点请调用:
-            self.add_bs(bs_type=BSP_TYPE.T4, bi=..., relate_bsp1=..., feature_dict={...})
         """
-        pass
+        # ═══════════════════════════════════════════════════════════
+        # ── 共用检查 ──
+        # ═══════════════════════════════════════════════════════════
+        # ⑴ zs_list为空？
+        if zs_list is None or len(zs_list) == 0:
+            return
 
-    # ── 5类买卖点 ──
+        # ⑵ 找不到多笔中枢（最后一个中枢）？
+        pivot_a = None
+        for zs in reversed(zs_list):
+            if not zs.is_one_bi_zs():
+                pivot_a = zs
+                break
+        if pivot_a is None:
+            return
+
+        # ⑶ 虚笔？
+        n_idx = len(bi_list) - 1
+        stroke_n = bi_list[n_idx]          # 当下笔N
+        stroke_nm1 = bi_list[n_idx - 1]    # 前一笔N-1
+
+        if not getattr(stroke_n, 'is_sure', True):
+            return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑴：笔N不跟最后一个中枢重叠，但笔N-1重叠 ──
+        # ═══════════════════════════════════════════════════════════
+        n_overlap = has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high)
+        nm1_overlap = has_overlap(stroke_nm1._low(), stroke_nm1._high(), pivot_a.low, pivot_a.high)
+
+        if n_overlap or not nm1_overlap:
+            return  # N与中枢重叠 或 N-1不与中枢重叠 → 不满足条件
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑵：笔N-1上没有相反方向的买卖点 ──
+        # ═══════════════════════════════════════════════════════════
+        # 笔N向下（买点）→ 笔N-1向上 → 笔N-1上不能有卖点
+        # 笔N向上（卖点）→ 笔N-1向下 → 笔N-1上不能有买点
+        if self._has_bsp_for_bi(stroke_nm1.idx):
+            return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑶：分型MACD走弱判断（右肩 vs 中间）──
+        # ═══════════════════════════════════════════════════════════
+        end_klc = stroke_n.end_klc          # 分型中间合并K线
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None  # 分型右肩合并K线
+
+        mid_macd = end_klc.lst[-1].macd
+        right_macd = right_klc.lst[-1].macd if right_klc and right_klc.lst else None
+
+        if right_macd is None:
+            return
+
+        if stroke_n.is_up():
+            # 顶分型右肩K线的 DIF/DEA/macd 至少有两个 < 中间K线 → 卖点
+            cnt = 0
+            if right_macd.DIF < mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA < mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd < mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
+                return
+        else:
+            # 底分型右肩K线的 DIF/DEA/macd 至少有两个 > 中间K线 → 买点
+            cnt = 0
+            if right_macd.DIF > mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA > mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd > mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
+                return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 生成4类买卖点 ──
+        # ═══════════════════════════════════════════════════════════
+        feature_dict = {
+            'bsp4_bi_amp': stroke_n.amp(),
+        }
+        self.add_bs(bs_type=BSP_TYPE.T4, bi=stroke_n, relate_bsp1=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
+
+    # ── 5类买卖点（对应缠论一类买卖点）──
     def cal_bs5point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
-        """TODO: 在此实现自定义的 5 类买卖点计算逻辑。
+        """5类买卖点计算（对应缠论一类买卖点，一买/一卖）。
+
+        以向下笔为例（买点）：
+        ⑴ 笔N不跟最后一个中枢重叠，笔N-1也不重叠，但笔N-2跟最后一个中枢重叠
+        ⑵ 笔N向下时，笔N-1上不能有卖点；笔N向上时，笔N-1上不能有买点
+        ⑶ 向下笔的底分型右肩MACD DIF/DEA/macd三者中有两个大于底分型中间MACD值
+           → 5类买点
+
+        向上笔（卖点）同理，方向相反。
 
         参数:
             bi_list: 笔列表，包含所有笔对象
             zs_list: 笔中枢列表，可直接遍历取多笔中枢
-
-        生成买卖点请调用:
-            self.add_bs(bs_type=BSP_TYPE.T5, bi=..., relate_bsp1=..., feature_dict={...})
         """
-        pass
+        # ═══════════════════════════════════════════════════════════
+        # ── 共用检查 ──
+        # ═══════════════════════════════════════════════════════════
+        # ⑴ zs_list为空？
+        if zs_list is None or len(zs_list) == 0:
+            return
+
+        # ⑵ 找不到多笔中枢（最后一个中枢）？
+        pivot_a = None
+        for zs in reversed(zs_list):
+            if not zs.is_one_bi_zs():
+                pivot_a = zs
+                break
+        if pivot_a is None:
+            return
+
+        # ⑶ 虚笔？
+        n_idx = len(bi_list) - 1
+        stroke_n = bi_list[n_idx]          # 当下笔N
+        stroke_nm1 = bi_list[n_idx - 1]    # 前一笔N-1
+        stroke_nm2 = bi_list[n_idx - 2]    # 前二笔N-2
+
+        if not getattr(stroke_n, 'is_sure', True):
+            return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑴：笔N和N-1不跟中枢重叠，但笔N-2重叠 ──
+        # ═══════════════════════════════════════════════════════════
+        n_overlap = has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high)
+        nm1_overlap = has_overlap(stroke_nm1._low(), stroke_nm1._high(), pivot_a.low, pivot_a.high)
+        nm2_overlap = has_overlap(stroke_nm2._low(), stroke_nm2._high(), pivot_a.low, pivot_a.high)
+
+        if n_overlap or nm1_overlap or not nm2_overlap:
+            return  # N或N-1与中枢重叠 或 N-2不与中枢重叠 → 不满足条件
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑵：笔N-1上没有相反方向的买卖点 ──
+        # ═══════════════════════════════════════════════════════════
+        # 笔N向下（买点）→ 笔N-1向上 → 笔N-1上不能有卖点
+        # 笔N向上（卖点）→ 笔N-1向下 → 笔N-1上不能有买点
+        if self._has_bsp_for_bi(stroke_nm1.idx):
+            return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑶：分型MACD走弱判断（右肩 vs 中间）──
+        # ═══════════════════════════════════════════════════════════
+        end_klc = stroke_n.end_klc          # 分型中间合并K线
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None  # 分型右肩合并K线
+
+        mid_macd = end_klc.lst[-1].macd
+        right_macd = right_klc.lst[-1].macd if right_klc and right_klc.lst else None
+
+        if right_macd is None:
+            return
+
+        if stroke_n.is_up():
+            # 顶分型右肩K线的 DIF/DEA/macd 至少有两个 < 中间K线 → 卖点
+            cnt = 0
+            if right_macd.DIF < mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA < mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd < mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
+                return
+        else:
+            # 底分型右肩K线的 DIF/DEA/macd 至少有两个 > 中间K线 → 买点
+            cnt = 0
+            if right_macd.DIF > mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA > mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd > mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
+                return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 条件⑷：笔N与笔N-2的MACD峰值（PEAK）背驰判断 ──
+        # ═══════════════════════════════════════════════════════════
+        # 注意：Cal_MACD_peak() 内部已按方向过滤——
+        #   向下笔只取绿柱(MACD<0)的绝对值最大值；
+        #   向上笔只取红柱(MACD>0)的绝对值最大值。
+        #   没有对应颜色柱子时返回 1e-7（≈0）。
+        in_metric = stroke_nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False)
+        out_metric = stroke_n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
+        divergence_rate = out_metric / (in_metric + 1e-7)
+
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        is_diver = out_metric <= config.divergence_rate * in_metric
+
+        if not is_diver:
+            return
+
+        # ═══════════════════════════════════════════════════════════
+        # ── 生成5类买卖点 ──
+        # ═══════════════════════════════════════════════════════════
+        feature_dict = {
+            'bsp5_bi_amp': stroke_n.amp(),
+            'divergence_rate': divergence_rate,
+        }
+        self.add_bs(bs_type=BSP_TYPE.T5, bi=stroke_n, relate_bsp1=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
 
     # ── 6类买卖点 ──
     def cal_bs6point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
