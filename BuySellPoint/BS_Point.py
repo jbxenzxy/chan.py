@@ -12,12 +12,14 @@ class CBS_Point(Generic[LINE_TYPE]):
     def __init__(self, bi: LINE_TYPE, is_buy, bs_type: BSP_TYPE, relate_bsp1: Optional['CBS_Point'], feature_dict=None):
         self.bi: LINE_TYPE = bi
         end_klu = bi.get_end_klu()
-        # 尝试取右肩K线：从分型合并K线（CKLine_Combined）往后找，取右肩第一根原始K线
+        # 尝试取右肩K线：从分型合并K线（CKLine_Combined）往后找，取右肩最后一根原始K线
+        # 用 lst[-1] 而非 lst[0]，因为右肩KLC在包含合并后可能包含多根原始K线，
+        # 而 MACD 比较用的是 lst[-1] 的值，买卖点应标记在触发该MACD值的K线上
         end_klc = getattr(bi, 'end_klc', None)
         if end_klc is not None:
             right_klc = getattr(end_klc, 'next', None)
             if right_klc is not None and hasattr(right_klc, 'lst') and right_klc.lst:
-                self.klu = right_klc.lst[0]
+                self.klu = right_klc.lst[-1]
             else:
                 self.klu = end_klu
         else:

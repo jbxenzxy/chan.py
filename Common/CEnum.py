@@ -71,6 +71,9 @@ class BSP_TYPE(Enum):
     T2S = '2s'
     T3A = '3a'  # 中枢在1类后面
     T3B = '3b'  # 中枢在1类前面
+    T4 = '4'    # 4类买卖点（待实现）
+    T5 = '5'    # 5类买卖点（待实现）
+    T6 = '6'    # 6类买卖点（待实现）
 
     def main_type(self) -> BSP_MAIN_TYPE:
         return self.value[0]  # type: ignore

@@ -26,7 +26,7 @@ class CChanConfig:
             bi_fx_check=conf.get("bi_fx_check", "loss"),           # 分型检查：loss模式（宽松）
             gap_as_kl=conf.get("gap_as_kl", False),
             bi_end_is_peak=conf.get('bi_end_is_peak', False),      # 关闭后，允许一笔之间有"不成笔的"更高/低分型；参见 上证指数 日K 25/09/03~25/10/31
-            bi_allow_sub_peak=conf.get("bi_allow_sub_peak", True), # 打开后，允许笔端点的分型非局部最高/低分型；参见23/07/21~23/08/07
+            bi_allow_sub_peak=conf.get("bi_allow_sub_peak", True), # 打开后，允许笔端点的分型非局部最高/低分型；  参见 上证指数 日K 23/07/21~23/08/07
         )
         self.seg_conf = CSegConfig(
             seg_algo=conf.get("seg_algo", "chan"),                 # 利用特征序列来计算
@@ -110,7 +110,7 @@ class CChanConfig:
             "max_bs2_rate": 0.9,            # 2类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到1类买卖点的位置
             "macd_algo": "full_area",       # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）
             "bs1_peak": False,              # 1类（非1p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
-            "bs_type": "0",                 # 买卖点类型：0震荡；1趋背/盘背；1p实为段背；3a 中枢在1类后面；3b 中枢在1类前面
+            "bs_type": "0,1,1p,2,2s,3a,3b,4,5,6",  # 买卖点类型：0震荡；1趋背/盘背；1p段背；2回踩/回抽；2s类二；3a中枢在1类后面；3b中枢在1类前面；4-6待实现
             "bsp2_follow_1": True,          # 2类买卖点是否必须跟在1类买卖点后面（用于小转大时1类买卖点因为背驰度不足没生成），默认为 True
             "bsp3_follow_1": False,         # 3类买卖点是否必须跟在1类买卖点后面，默认为 True（没有1类点就不算3类点，忽视了有“小转大”的可能）
             "bsp3_peak": False,             # 3类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False

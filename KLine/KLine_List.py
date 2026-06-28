@@ -131,8 +131,23 @@ class CKLine_List:
                     self.lst[-2].update_fx(self.lst[-3], self.lst[-1])
                 if self.bi_list.update_bi(self.lst[-2], self.lst[-1], self.step_calculation) and self.step_calculation:
                     self.cal_seg_and_zs()
-            elif self.step_calculation and self.bi_list.try_add_virtual_bi(self.lst[-1], need_del_end=True):  # 这里的必要性参见issue#175
-                self.cal_seg_and_zs()
+            elif self.step_calculation:
+                # K线合并（包含）时，先按原逻辑尝试更新虚笔
+                try_add_result = self.bi_list.try_add_virtual_bi(self.lst[-1], need_del_end=True)
+
+                # 额外判断：如果本次包含发生在最后一笔实笔的右肩合并K线上，
+                # 则即使 try_add_virtual_bi 返回 False，也需要触发买卖点重算。
+                # 原因：右肩KLC的high/low变化会影响其内部原始K线的MACD指标，
+                # 而 cal_bs0point 正是通过比较右肩KLC与中间KLC的MACD来判断买卖点条件。
+                need_bsp_recalc = False
+                if len(self.bi_list) > 0 and self.bi_list[-1].is_sure:
+                    last_bi = self.bi_list[-1]
+                    right_klc = last_bi.end_klc.next if last_bi.end_klc else None
+                    if right_klc is not None and self.lst[-1].idx == right_klc.idx:
+                        need_bsp_recalc = True
+
+                if try_add_result or need_bsp_recalc:
+                    self.cal_seg_and_zs()
 
     def klu_iter(self, klc_begin_idx=0):
         for klc in self.lst[klc_begin_idx:]:

@@ -21,7 +21,7 @@ _sub_divergence_check = None
 class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
     def __init__(self, bs_point_config: CBSPointConfig):
         self.bsp_store_dict: Dict[BSP_TYPE, Tuple[List[CBS_Point[LINE_TYPE]], List[CBS_Point[LINE_TYPE]]]] = {}
-        self.bsp_store_flat_dict: Dict[int, CBS_Point[LINE_TYPE]] = {}
+        self.bsp_store_flat_dict: Dict[Tuple[int, int], CBS_Point[LINE_TYPE]] = {}
 
         self.bsp1_list: List[CBS_Point[LINE_TYPE]] = []
         self.bsp1_dict: Dict[int, CBS_Point[LINE_TYPE]] = {}
@@ -34,9 +34,9 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
         if bsp_type not in self.bsp_store_dict:
             self.bsp_store_dict[bsp_type] = ([], [])
         if len(self.bsp_store_dict[bsp_type][bsp.is_buy]) > 0:
-            assert self.bsp_store_dict[bsp_type][bsp.is_buy][-1].bi.idx < bsp.bi.idx, f"{bsp_type}, {bsp.is_buy} {self.bsp_store_dict[bsp_type][bsp.is_buy][-1].bi.idx} {bsp.bi.idx}"
+            assert self.bsp_store_dict[bsp_type][bsp.is_buy][-1].bi.idx <= bsp.bi.idx, f"{bsp_type}, {bsp.is_buy} {self.bsp_store_dict[bsp_type][bsp.is_buy][-1].bi.idx} {bsp.bi.idx}"
         self.bsp_store_dict[bsp_type][bsp.is_buy].append(bsp)
-        self.bsp_store_flat_dict[bsp.bi.idx] = bsp
+        self.bsp_store_flat_dict[(bsp.bi.idx, bsp.klu.idx)] = bsp
 
     def add_bsp1(self, bsp: CBS_Point[LINE_TYPE]):
         if len(self.bsp1_list) > 0:
@@ -50,7 +50,12 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
                 while len(bsp_list[is_buy]) > 0:
                     if bsp_list[is_buy][-1].bi.get_end_klu().idx <= self.last_sure_pos:
                         break
-                    del self.bsp_store_flat_dict[bsp_list[is_buy][-1].bi.idx]
+                    bi_idx = bsp_list[is_buy][-1].bi.idx
+                    flat_list = self.bsp_store_flat_dict.get(bi_idx, [])
+                    if flat_list and flat_list[-1] is bsp_list[is_buy][-1]:
+                        flat_list.pop()
+                        if not flat_list:
+                            del self.bsp_store_flat_dict[bi_idx]
                     # 同时把失效买卖点从Bi删除
                     bsp_list[is_buy][-1].bi.bsp = None
                     bsp_list[is_buy].pop()
@@ -100,6 +105,10 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
     def __len__(self):
         return len(self.bsp_store_flat_dict)
 
+    def _has_bsp_for_bi(self, bi_idx: int) -> bool:
+        """检查是否存在以 bi_idx 为键的买卖点（flat_dict 键为 (bi.idx, klu.idx)）。"""
+        return any(k[0] == bi_idx for k in self.bsp_store_flat_dict)
+
     def cal(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
         self.clear_store_end()
         self.clear_bsp1_end()
@@ -133,7 +142,12 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
         feature_dict=None,
     ):
         is_buy = bi.is_down()
-        if exist_bsp := self.bsp_store_flat_dict.get(bi.idx):
+        # 计算当前右肩K线位置，作为查找键的一部分
+        end_klc = getattr(bi, 'end_klc', None)
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None
+        cur_klu = right_klc.lst[-1] if right_klc and right_klc.lst else bi.get_end_klu()
+        # 按 (bi.idx, klu.idx) 查找：同一笔同一K线位置 → 追加类型；否则 → 新建
+        if exist_bsp := self.bsp_store_flat_dict.get((bi.idx, cur_klu.idx)):
             assert exist_bsp.is_buy == is_buy
             exist_bsp.add_another_bsp_prop(bs_type, relate_bsp1)
             if feature_dict is not None:
@@ -240,7 +254,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
                 return
             bsp2_bi = bi_list[1]
             break_bi = bi_list[0]
-        if BSP_CONF.bsp2_follow_1 and (not bsp1_bi or bsp1_bi.idx not in self.bsp_store_flat_dict):
+        if BSP_CONF.bsp2_follow_1 and (not bsp1_bi or not self._has_bsp_for_bi(bsp1_bi.idx)):
             return
         retrace_rate = bsp2_bi.amp()/break_bi.amp()
         bsp2_flag = retrace_rate <= BSP_CONF.max_bs2_rate
@@ -317,7 +331,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
                 bsp1_bi, real_bsp1 = None, None
                 bsp1_bi_idx = -1
                 BSP_CONF = self.config.GetBSConfig(seg.is_up())
-            if BSP_CONF.bsp3_follow_1 and (not bsp1_bi or bsp1_bi.idx not in self.bsp_store_flat_dict):
+            if BSP_CONF.bsp3_follow_1 and (not bsp1_bi or not self._has_bsp_for_bi(bsp1_bi.idx)):
                 continue
             if next_seg:
                 self.treat_bsp3_after(seg_list, next_seg, BSP_CONF, bi_list, real_bsp1, bsp1_bi_idx, next_seg_idx)
@@ -448,8 +462,8 @@ def cal_bsp3_bi_end_idx(seg: Optional[CSeg[LINE_TYPE]]):
 class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     """自定义买卖点计算类。
 
-    继承 CBSPointList，将 cal() 中的调用替换为 cal_bs0point ~ cal_bs3point。
-    你只需修改下面四个方法即可实现自己的买卖点逻辑。
+    继承 CBSPointList，将 cal() 中的调用替换为 cal_bs0point ~ cal_bs6point。
+    你只需修改下面七个方法即可实现自己的买卖点逻辑。
 
     与线段（seg_list）完全解耦，只依赖笔列表（bi_list）和笔中枢列表（zs_list）。
     0类买卖点已通过 BSP_TYPE.T0 枚举正规化，无需额外 hack。
@@ -461,29 +475,38 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self.cal_bs1point(bi_list, zs_list)
         self.cal_bs2point(bi_list, zs_list)
         self.cal_bs3point(bi_list, zs_list)
+        self.cal_bs4point(bi_list, zs_list)
+        self.cal_bs5point(bi_list, zs_list)
+        self.cal_bs6point(bi_list, zs_list)
 
     # ── 0类买卖点 ──
     def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
         """0类买卖点计算。
 
-        算法：
-        1. 从框架的笔中枢列表 zs_list 中找到最后一个多笔中枢，即中枢A
-           中枢A由前三笔（笔1, 笔2, 笔3）重叠构成
-        2. 取最后一笔n（n>=4，即笔1.idx+3 起）作为当下笔：
-           - 笔n必须属于中枢A（与A有重叠）
-           - 向上笔n：末端高点 >= 中枢A中间位
-           - 向下笔n：末端低点 <= 中枢A中间位
-           - 分型右肩合并K线 vs 中间合并K线的 MACD 三指标(DIF/DEA/柱子) 至少两个走弱
-        3. 从笔n往回数5笔（n-4, n-3, n-2, n-1, n）
-           n-3, n-2, n-1 重叠 -> 中枢B
-        4. 笔n突破中枢B（向上突破上沿，向下突破下沿）
-           且 n-4 也突破中枢B（向上：n-4低点<下沿；向下：n-4高点>上沿）
-        5. n-4为进入笔，n为离开笔，MACD full_area 背驰 -> 0类买卖点
+        共用检查：
+        ⑴ zs_list为空？→ 返回
+        ⑵ 找不到多笔中枢A？→ 返回
+        ⑶ 当下笔是虚笔？→ 返回
+
+        分支一：当下笔是中枢A的第3笔（笔3）
+          笔3与笔1比较MACD峰值（PEAK）背驰 → 0类买卖点
+
+        分支二：当下笔是中枢A的第n笔（n≥4）
+          1. 笔n必须属于中枢A（与A有重叠）
+          2. 向上笔n：末端高点 >= 中枢A中间位；向下笔n：末端低点 <= 中枢A中间位
+             分型右肩合并K线 vs 中间合并K线的 MACD 三指标(DIF/DEA/柱子) 至少两个走弱
+          3. n-3, n-2, n-1 重叠 -> 中枢B
+          4. 笔n突破中枢B，且 n-4 也突破中枢B
+          5. n-4为进入笔，n为离开笔，MACD full_area 背驰 -> 0类买卖点
         """
-        # ── 第一步：从笔中枢列表 zs_list 中找到最后一个多笔中枢 -> 中枢A ──
+        # ═══════════════════════════════════════════════════════════
+        # ── 共用检查 ──
+        # ═══════════════════════════════════════════════════════════
+        # ⑴ zs_list为空？
         if zs_list is None or len(zs_list) == 0:
             return
 
+        # ⑵ 找不到多笔中枢A？
         pivot_a = None
         for zs in reversed(zs_list):
             if not zs.is_one_bi_zs():
@@ -493,23 +516,97 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if pivot_a is None:
             return
 
-        # ── 第二步：只检查最后一笔（当下笔）──
-        # 中枢A由前三笔（笔1, 笔2, 笔3）构成，笔n（n>=4）从笔1.idx + 3 开始
         n_idx = len(bi_list) - 1
-        if n_idx < pivot_a.begin_bi.idx + 3 or n_idx < 4:
+        if n_idx < pivot_a.begin_bi.idx + 2:
             return
 
         stroke_n = bi_list[n_idx]
 
-        # 虚笔不计算0类买卖点
+        # ⑶ 虚笔？
         if not getattr(stroke_n, 'is_sure', True):
             return
 
-        # 已存在T0买卖点，跳过重复计算
-        if exist_bsp := self.bsp_store_flat_dict.get(stroke_n.idx):
-            if BSP_TYPE.T0 in exist_bsp.type:
+        # ═══════════════════════════════════════════════════════════
+        # ── 分支判断：第3笔 or 第n笔（n≥4）──
+        # ═══════════════════════════════════════════════════════════
+        if n_idx == pivot_a.begin_bi.idx + 2:
+            self._cal_bs0point_3rd(bi_list, pivot_a, stroke_n)
+        else:
+            self._cal_bs0point_nth(bi_list, pivot_a, n_idx, stroke_n)
+
+    # ── 分支一：第3笔（中枢A形成笔）──
+    def _cal_bs0point_3rd(self, bi_list, pivot_a, stroke_n):
+        """中枢A第3笔的0类买卖点判断。
+
+        条件：
+        1. 分型右肩K线 vs 中间K线的MACD三指标(DIF/DEA/柱子) 至少两个走弱
+        2. 比较第3笔和第1笔的MACD峰值（PEAK）：
+           - 第3笔向下：绿柱子峰值绝对值 第3笔 < 第1笔 → 背驰 → 买点
+           - 第3笔向上：红柱子峰值绝对值 第3笔 < 第1笔 → 背驰 → 卖点
+        没有对应颜色柱子时，峰值绝对值当 0 处理。
+        """
+        stroke_1 = bi_list[pivot_a.begin_bi.idx]  # 中枢A的第1笔
+
+        # ── 条件1：分型MACD走弱判断（右肩 vs 中间）──
+        end_klc = stroke_n.end_klc          # 分型中间合并K线
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None  # 分型右肩合并K线
+
+        mid_macd = end_klc.lst[-1].macd
+        right_macd = right_klc.lst[-1].macd if right_klc and right_klc.lst else None
+
+        if stroke_n.is_up():
+            # 顶分型右肩K线的 DIF/DEA/macd 至少有两个 < 中间K线
+            if right_macd is None:
+                return
+            cnt = 0
+            if right_macd.DIF < mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA < mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd < mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
+                return
+        else:
+            # 底分型右肩K线的 DIF/DEA/macd 至少有两个 > 中间K线
+            if right_macd is None:
+                return
+            cnt = 0
+            if right_macd.DIF > mid_macd.DIF:
+                cnt += 1
+            if right_macd.DEA > mid_macd.DEA:
+                cnt += 1
+            if right_macd.macd > mid_macd.macd:
+                cnt += 1
+            if cnt < 2:
                 return
 
+        # ── 条件2：MACD峰值背驰（PEAK）──
+        # 注意：Cal_MACD_peak() 内部已按方向过滤——
+        #   向下笔只取绿柱(MACD<0)的绝对值最大值；
+        #   向上笔只取红柱(MACD>0)的绝对值最大值。
+        #   没有对应颜色柱子时返回 1e-7（≈0）。
+        in_metric = stroke_1.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False)
+        out_metric = stroke_n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
+        divergence_rate = out_metric / (in_metric + 1e-7)
+
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        is_diver = out_metric <= config.divergence_rate * in_metric
+
+        if not is_diver:
+            return
+
+        feature_dict = {
+            'divergence_rate': divergence_rate,
+            'bsp0_bi_amp': stroke_n.amp(),
+        }
+        self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp1=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
+
+    # ── 分支二：第n笔（n≥4）──
+    def _cal_bs0point_nth(self, bi_list, pivot_a, n_idx, stroke_n):
+        """中枢A之后第n笔（n≥4）的0类买卖点判断（原有逻辑）。"""
         # ── 条件〇：笔n属于中枢A（与中枢A有重叠）──
         if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
             return
@@ -519,7 +616,6 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if _sub_divergence_check is not None:
             result = _sub_divergence_check(bi_list)
             if not result.get("diverged"):
-                print(f"[区间套] 跳过0类买卖点: {result.get('detail', '未知原因')}")
                 return
         """
         # ── 条件一：笔n突破中枢A ──
@@ -653,5 +749,44 @@ class MyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         生成买卖点请调用:
             self.add_bs(bs_type=BSP_TYPE.T3A, bi=..., relate_bsp1=..., feature_dict={...})
             self.add_bs(bs_type=BSP_TYPE.T3B, bi=..., relate_bsp1=..., feature_dict={...})
+        """
+        pass
+
+    # ── 4类买卖点 ──
+    def cal_bs4point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+        """TODO: 在此实现自定义的 4 类买卖点计算逻辑。
+
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T4, bi=..., relate_bsp1=..., feature_dict={...})
+        """
+        pass
+
+    # ── 5类买卖点 ──
+    def cal_bs5point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+        """TODO: 在此实现自定义的 5 类买卖点计算逻辑。
+
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T5, bi=..., relate_bsp1=..., feature_dict={...})
+        """
+        pass
+
+    # ── 6类买卖点 ──
+    def cal_bs6point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+        """TODO: 在此实现自定义的 6 类买卖点计算逻辑。
+
+        参数:
+            bi_list: 笔列表，包含所有笔对象
+            zs_list: 笔中枢列表，可直接遍历取多笔中枢
+
+        生成买卖点请调用:
+            self.add_bs(bs_type=BSP_TYPE.T6, bi=..., relate_bsp1=..., feature_dict={...})
         """
         pass

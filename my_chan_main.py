@@ -68,11 +68,10 @@ _LAST_STOCK_FILE = os.path.join(VIPDOC_DIR, "last_stock.json")  # 持久化上�
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
-# 请修改为你的快期账号（注册地址: https://account.shinnytech.com）
+# 账户和密码从 C:\new_tdx_test\vipdoc\tq_account.json 文件读取
+# 文件格式: {"account": "手机号或用户名", "password": "密码"}
 TQ_ENABLED  = True          # 是否启用期货实时行情（设为 False 则只保留股票功能）
 _SSE_DEBUG  = False         # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
-TQ_ACCOUNT  = "你的快期账号"  # 快期注册手机号/用户名/邮箱
-TQ_PASSWORD = "你的快期密码"  # 快期登录密码
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
 if CHAN_PATH not in sys.path:
@@ -101,13 +100,21 @@ except ImportError as e:
     sys.exit(1)
 
 # 导入通达信数据源适配器（从 chan.py 的 DataAPI 目录）
-from DataAPI.TdxAPI import CTdxAPI
-
-# 导入前复权模块（与 my_chan_main.py 放在同一目录下）
-from forward_adjust import _forward_adjust, get_float_shares_from_xdxr
+# 包含：K线读取、前复权、流通股本
+from DataAPI.TdxAPI import CTdxAPI, set_tdx_config, read_tdx_day_file, read_tdx_min_file, \
+    _resample_5m_to_30m, _resample_day_to_week, find_day_file, \
+    read_main_level_records, read_sub_level_records, \
+    _forward_adjust, get_float_shares_from_xdxr
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 FORWARD_ADJUST_ENABLED = True
+
+# 注入通达信数据源配置到 TdxAPI 模块
+from DataAPI.TdxAPI import set_tdx_config as _set_tdx_config
+_set_tdx_config(
+    vipdoc_dir=VIPDOC_DIR,
+    forward_adjust_enabled=FORWARD_ADJUST_ENABLED,
+)
 
 # 全量数据模式：True=加载全部K线不做时间截断；False=默认模式
 FULL_DATA_MODE = False
@@ -120,7 +127,9 @@ TIME_TRUNCATE_CONFIG = {
 
 # 导入天勤数据源适配器（期货/期指）
 try:
-    from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP, FUTURES_ALIASES
+    from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP, FUTURES_ALIASES, \
+        _get_futures_code, _get_futures_name, load_tq_account
+    load_tq_account(VIPDOC_DIR)
     TQ_AVAILABLE = True
 except ImportError as e:
     CTqSdkAPI = None
@@ -132,470 +141,10 @@ except ImportError as e:
 # ============================================================
 # 通达信数据读取
 # ============================================================
-def read_tdx_day_file(filepath, max_records=None, market=None):
-    """
-    读取通达信日线 .day 文件
-    格式：每条记录32字节
-
-    A股格式（sh/sz）：
-      日期(I4) 开盘(I4) 最高(I4) 最低(I4) 收盘(I4) 成交额(f4) 成交量(I4) 保留(I4)
-      价格需除以100得到实际价格（单位：元）
-
-    扩展市场格式（港股/期货等，ds目录）：
-      日期(I4) 开盘(f4) 最高(f4) 最低(f4) 收盘(f4) 成交量(I4) 成交额(f4) 结算价(f4)
-      价格是float类型，直接就是实际价格，不需要除以100
-    """
-    is_ext_market = (market == 'hk')
-    records = []
-    with open(filepath, "rb") as f:
-        data = f.read()
-    record_size = 32
-    total = len(data) // record_size
-    print(f"[stock][调试] 文件: {filepath}, 大小: {len(data)}字节, record_size={record_size}, 总记录数: {total}, 市场={'扩展' if is_ext_market else '标准A股'}")
-
-    if max_records and max_records < total:
-        start = (total - max_records) * record_size
-    else:
-        start = 0
-    for idx_offset, i in enumerate(range(start, len(data), record_size)):
-        row = data[i:i + record_size]
-        if len(row) < record_size:
-            break
-        try:
-            year = 0
-            month = 0
-            day = 0
-            if is_ext_market:
-                # 扩展市场（港股/期货）：价格是float，直接是实际值
-                date_int, o, h, l, c, vol, amount, jiesuan = struct.unpack('<IffffIfI', row)
-            else:
-                # 标准A股：价格是int，需除以100
-                date_int, o, h, l, c, amount, vol, _ = struct.unpack('<IIIIIfII', row)
-            # 打印前3条和最后1条原始数据（已关闭）
-            # if idx_offset < 3 or i + record_size >= len(data):
-            #     print(f"[stock][调试] 记录{idx_offset}: date={date_int} o={o} h={h} l={l} c={c} amount={amount} vol={vol}")
-            year = date_int // 10000
-            month = (date_int % 10000) // 100
-            day = date_int % 100
-            if year < 1990 or year > 2030 or month < 1 or month > 12 or day < 1 or day > 31:
-                continue
-            dt = datetime(year, month, day)
-            if is_ext_market:
-                # 扩展市场价格是float，直接使用（已经是实际价格）
-                # float精度修正，保留3位小数
-                o, h, l, c = round(o, 3), round(h, 3), round(l, 3), round(c, 3)
-            else:
-                # A股价格除以100，得到实际价格（单位：元）
-                o, h, l, c = o / 100.0, h / 100.0, l / 100.0, c / 100.0
-            # 通达信原始数据中偶尔存在OHLC不一致（如收盘价<最低价），
-            # chan.py严格校验 high>=max(o,c) 且 low<=min(o,c)，需修正
-            h = max(h, o, c)
-            l = min(l, o, c)
-            records.append({
-                "dt": dt,
-                "open": o, "high": h, "low": l, "close": c,
-                "vol": vol, "amount": amount,
-            })
-        except (ValueError, OverflowError, struct.error):
-            continue
-    # 打印转换后的前3条和最后1条（已关闭）
-    # if len(records) >= 3:
-    #     for i in [0, 1, 2, len(records)-1]:
-    #         r = records[i]
-    #         print(f"[stock][调试] 转换后记录{i}: date={r['dt'].strftime('%Y-%m-%d')} o={r['open']:.2f} h={r['high']:.2f} l={r['low']:.2f} c={r['close']:.2f} vol={r['vol']} amount={r['amount']}")
-    _check_and_report_gaps(records)
-    return records
-
-
-def _count_trading_days(prev_dt, curr_dt):
-    """计算两个日期之间（不含两端）的A股交易日数（周一至周五且非法定节假日）"""
-    count = 0
-    d = prev_dt.date() + timedelta(days=1)
-    end = curr_dt.date()
-    while d < end:
-        if d.weekday() < 5 and not is_holiday(d):
-            count += 1
-        d += timedelta(days=1)
-    return count
-
-
-def _check_and_report_gaps(records):
-    """检测数据缺口（相邻记录间隔超过0个交易日即视为缺失K线），仅打印提示，不截断"""
-    gap_indices = []
-    for i in range(1, len(records)):
-        prev_dt = records[i-1]["dt"]
-        curr_dt = records[i]["dt"]
-        gap_trading_days = _count_trading_days(prev_dt, curr_dt)
-        if gap_trading_days > 20:  # 用 >0 可识别出个股各种停牌日期（因股东大会、筹划重大事项、重大事项紧急、重大资产重组等停牌）；但打印信息太多
-            gap_indices.append((i, gap_trading_days))
-
-    if gap_indices:
-        print(f"[stock][警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
-        for idx, (gi, gap_td) in enumerate(gap_indices):
-            prev_dt = records[gi-1]["dt"].strftime("%Y-%m-%d")
-            curr_dt = records[gi]["dt"].strftime("%Y-%m-%d")
-            print(f"[stock][警告]   缺口{idx+1}: {prev_dt} → {curr_dt} (间隔{gap_td}个交易日)")
-    else:
-        old_start = records[0]["dt"].strftime("%Y-%m-%d")
-        old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        print(f"[stock][信息] 检测到 0 处数据缺口")
-        print(f"[stock][信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
-    print(f"[stock][调试] 共解析有效记录: {len(records)}条")
-
-
-def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
-    """
-    解析通达信5分钟线二进制文件(.lc5) — numpy批量读取优化版
-    通达信 .lc5 文件格式（每条记录 32 字节，小端序）：
-      H(日期) + H(时间) + f(开) + f(高) + f(低) + f(收) + f(成交额) + I(成交量) + I(保留)
-      日期编码: year = num // 2048 + 2004, month = (num % 2048) // 100, day = (num % 2048) % 100
-      时间: 从0点开始的分钟数 (HH*60+MM)
-      价格字段是 float 类型，直接使用
-    aggregate_30m=True: 从5分钟线合成为30分钟线（默认，兼容旧行为）
-    aggregate_30m=False: 直接返回5分钟线原始数据
-    """
-    import numpy as np
-    import time as _time
-    t0 = _time.time()
-
-    record_size = 32
-    with open(filepath, "rb") as f:
-        raw = f.read()
-
-    n_records = len(raw) // record_size
-    if n_records == 0:
-        return []
-
-    dt = np.dtype([
-        ("date_raw", "<u2"),
-        ("time_raw", "<u2"),
-        ("open", "<f4"),
-        ("high", "<f4"),
-        ("low", "<f4"),
-        ("close", "<f4"),
-        ("amount", "<f4"),
-        ("vol", "<u4"),
-        ("reserved", "<u4"),
-    ])
-    arr = np.frombuffer(raw[:n_records * record_size], dtype=dt)
-
-    date_raw = arr["date_raw"]
-    years = date_raw // 2048 + 2004
-    months = (date_raw % 2048) // 100
-    days = date_raw % 2048 % 100
-
-    time_raw = arr["time_raw"]
-    hours = time_raw // 60
-    minutes = time_raw % 60
-
-    valid = (
-        (years >= 1990) & (years <= 2100) &
-        (months >= 1) & (months <= 12) &
-        (days >= 1) & (days <= 31) &
-        (hours <= 23) & (minutes <= 59)
-    )
-
-    # 交易时间过滤：A股 9:30-11:30, 13:00-15:00；港股 9:30-12:00, 13:00-16:00
-    if market == 'hk':
-        valid &= (
-            ((hours == 9) & (minutes >= 30)) |
-            (hours == 10) |
-            (hours == 11) |
-            ((hours == 12) & (minutes == 0)) |
-            (hours == 13) |
-            (hours == 14) |
-            (hours == 15) |
-            ((hours == 16) & (minutes == 0))
-        )
-    else:
-        valid &= (
-            ((hours == 9) & (minutes >= 30)) |
-            (hours == 10) |
-            (hours == 11) |
-            (hours == 13) |
-            (hours == 14) |
-            ((hours == 15) & (minutes == 0))
-        )
-
-    years = years[valid]
-    months = months[valid]
-    days = days[valid]
-    hours = hours[valid]
-    minutes = minutes[valid]
-    opens = arr["open"][valid]
-    highs = arr["high"][valid]
-    lows = arr["low"][valid]
-    closes = arr["close"][valid]
-    amounts = arr["amount"][valid]
-    vols = arr["vol"][valid]
-
-    df = np.column_stack([years, months, days, hours, minutes, opens, highs, lows, closes, vols, amounts])
-
-    if len(df) == 0:
-        return []
-
-    records = []
-    for row in df:
-        yr, mo, dy, hr, mn, o, h, l, c, v, a = row
-        dt_obj = datetime(int(yr), int(mo), int(dy), int(hr), int(mn))
-        # OHLC一致性修正（通达信原始数据偶尔存在close<low或close>high）
-        h = max(float(h), float(o), float(c))
-        l = min(float(l), float(o), float(c))
-        records.append({
-            "dt": dt_obj,
-            "open": float(o),
-            "high": float(h),
-            "low": float(l),
-            "close": float(c),
-            "vol": int(v),
-            "amount": float(a),
-        })
-
-    # 如果不需要合成30分钟线，直接返回5分钟线原始数据
-    if not aggregate_30m:
-        result = []
-        for r in records:
-            result.append({
-                "dt": r["dt"],
-                "open": round(r["open"], 3),
-                "high": round(r["high"], 3),
-                "low": round(r["low"], 3),
-                "close": round(r["close"], 3),
-                "vol": r["vol"],
-                "amount": round(r["amount"], 2),
-            })
-        print(f"[耗时] 读取5分钟线: {_time.time()-t0:.3f}s")
-        return result
-
-    # 合成30分钟线
-    # A股交易时间: 9:30-11:30, 13:00-15:00
-    # 港股交易时间: 9:30-12:00, 13:00-16:00
-    if market == 'hk':
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 12:
-                return dt_obj.replace(minute=0)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0, hour=15) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 16:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-    else:
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-
-    for r in records:
-        r["bucket"] = _bucket_30min(r["dt"])
-
-    from collections import OrderedDict
-    buckets = OrderedDict()
-    for r in records:
-        b = r["bucket"]
-        if b not in buckets:
-            buckets[b] = {
-                "open": r["open"], "high": r["high"], "low": r["low"],
-                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
-            }
-        else:
-            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
-            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
-            buckets[b]["close"] = r["close"]
-            buckets[b]["vol"] += r["vol"]
-            buckets[b]["amount"] += r["amount"]
-
-    result = []
-    for b, v in buckets.items():
-        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
-        h2 = max(h2, o2, c2)
-        l2 = min(l2, o2, c2)
-        result.append({
-            "dt": b,
-            "open": round(o2, 3),
-            "high": round(h2, 3),
-            "low": round(l2, 3),
-            "close": round(c2, 3),
-            "vol": v["vol"],
-            "amount": round(v["amount"], 2),
-        })
-
-    print(f"[耗时] 读取并合成30分钟线: {_time.time()-t0:.3f}s")
-    return result
-
-
-def _resample_5m_to_30m(records, market="sh"):
-    """
-    将5分钟K线合成为30分钟K线（从 read_tdx_min_file 中提取的独立函数）
-    供外部在5分钟前复权后调用，避免对30分钟K线做二次复权
-    """
-    import time as _time
-    from collections import OrderedDict
-
-    if not records:
-        return []
-
-    t0 = _time.time()
-
-    # A股交易时间: 9:30-11:30, 13:00-15:00
-    # 港股交易时间: 9:30-12:00, 13:00-16:00
-    if market == 'hk':
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 12:
-                return dt_obj.replace(minute=0)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0, hour=15) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 16:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-    else:
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-
-    for r in records:
-        r["bucket"] = _bucket_30min(r["dt"])
-
-    buckets = OrderedDict()
-    for r in records:
-        b = r["bucket"]
-        if b not in buckets:
-            buckets[b] = {
-                "open": r["open"], "high": r["high"], "low": r["low"],
-                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
-            }
-        else:
-            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
-            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
-            buckets[b]["close"] = r["close"]
-            buckets[b]["vol"] += r["vol"]
-            buckets[b]["amount"] += r["amount"]
-
-    result = []
-    for b, v in buckets.items():
-        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
-        h2 = max(h2, o2, c2)
-        l2 = min(l2, o2, c2)
-        result.append({
-            "dt": b,
-            "open": round(o2, 3),
-            "high": round(h2, 3),
-            "low": round(l2, 3),
-            "close": round(c2, 3),
-            "vol": v["vol"],
-            "amount": round(v["amount"], 2),
-        })
-
-    # 清理临时 bucket 属性
-    for r in records:
-        r.pop("bucket", None)
-
-    print(f"[耗时] 合成30分钟线: {_time.time()-t0:.3f}s")
-    return result
 
 
 
-def _resample_day_to_week(day_records):
-    """
-    将日线数据合成为周线数据
-    规则：每周一到周五的数据合成一根周K线
-    - 周开盘价 = 本周第一个交易日的开盘价
-    - 周收盘价 = 本周最后一个交易日的收盘价
-    - 周最高价 = 本周最高价的最大值
-    - 周最低价 = 本周最低价的最小值
-    - 周成交量 = 本周成交量之和
-    - 周成交额 = 本周成交额之和
-    - 周显示日期 = 本周最后一个交易日（周五或最新）
-    """
-    if not day_records:
-        return []
-    from collections import OrderedDict
-    import datetime
 
-    weeks = OrderedDict()
-    for r in day_records:
-        dt = r["dt"]
-        # 计算该日期所在周的周一
-        monday = dt - datetime.timedelta(days=dt.weekday())
-        week_key = monday.strftime("%Y-%m-%d")
-        if week_key not in weeks:
-            weeks[week_key] = {
-                "dt": monday,
-                "open": r["open"],
-                "high": r["high"],
-                "low": r["low"],
-                "close": r["close"],
-                "vol": r["vol"],
-                "amount": r["amount"],
-                "last_dt": dt,
-            }
-        else:
-            weeks[week_key]["high"] = max(weeks[week_key]["high"], r["high"])
-            weeks[week_key]["low"] = min(weeks[week_key]["low"], r["low"])
-            weeks[week_key]["close"] = r["close"]
-            weeks[week_key]["vol"] += r["vol"]
-            weeks[week_key]["amount"] += r["amount"]
-            weeks[week_key]["last_dt"] = dt
-
-    result = []
-    for week_key, v in weeks.items():
-        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
-        h2 = max(h2, o2, c2)
-        l2 = min(l2, o2, c2)
-        result.append({
-            "dt": v["last_dt"],
-            "open": round(o2, 2),
-            "high": round(h2, 2),
-            "low": round(l2, 2),
-            "close": round(c2, 2),
-            "vol": v["vol"],
-            "amount": round(v["amount"], 2),
-        })
-    return result
 
 # ============================================================
 # MACD 计算
@@ -1169,12 +718,6 @@ def _refresh_stock_names():
 
 
 
-
-
-
-
-
-
 def get_stock_float_mv_local(market, code, last_close):
     """
     通过 xdxr 网络接口计算流通市值（单位：亿元）。
@@ -1196,24 +739,7 @@ def get_stock_float_mv_local(market, code, last_close):
 # ============================================================
 # 解析证券代码，判断市场
 # ============================================================
-def _get_futures_code(code):
-    """识别期货/期指代码，返回天勤标准代码；非期货返回 None。"""
-    # 格式: EXCHANGE.SYMBOL (如 CFFEX.IM2507, SHFE.rb2505)
-    # 或主连: KQ.m@EXCHANGE.SYMBOL, KQ.i@EXCHANGE.SYMBOL
-    # 注意：天勤要求 KQ 前缀中的 m/i 小写，所以先 upper() 匹配，再恢复小写
-    FUTURE_EXCHANGES = ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX']
-    for ex in FUTURE_EXCHANGES:
-        if code.startswith(ex + '.'):
-            return code
-        if code.startswith('KQ.M@' + ex + '.'):
-            return code.replace('KQ.M@', 'KQ.m@', 1)
-        if code.startswith('KQ.I@' + ex + '.'):
-            return code.replace('KQ.I@', 'KQ.i@', 1)
 
-    # 期货别名映射：支持直接输入短名称（如 PTA、IF、rb、TA 等）
-    if code in FUTURES_ALIASES:
-        return FUTURES_ALIASES[code]
-    return None
 
 
 def _get_stock_market_code(code):
@@ -1283,12 +809,6 @@ def _get_market_code(code):
         return 'futures', futures_code
     return _get_stock_market_code(code)
 
-
-def find_day_file(market, code):
-    """查找日线数据文件路径"""
-    if market == 'hk':
-        return os.path.join(VIPDOC_DIR, "ds", "lday", f"31#{code}.day")
-    return os.path.join(VIPDOC_DIR, market, "lday", f"{market}{code}.day")
 
 
 def _get_kl_type(freq):
@@ -1969,6 +1489,314 @@ def _fixup_dual_bis_for_sub(snapshot, top_freq_sec, bottom_freq_sec):
             bi['fx_b_sub_dt'] = ''
 
 
+
+def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
+    """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
+    由 SSE handler 调用，每个 SSE 连接自包含。
+    start_time: 选点起始时间，有值时只拉取该时间之后的K线"""
+    import time as _time
+    from Common.CEnum import KL_TYPE, AUTYPE
+    from Chan import CChan
+    from ChanConfig import CChanConfig
+    from DataAPI.TqSdkAPI import FREQ_LABEL_CN
+
+    display_label = FREQ_LABEL_CN.get(freq_label, freq_label)
+    display_key = f"{symbol}:{display_label}"
+
+    try:
+        records = fetch_futures_kline(api, symbol, freq_sec=freq_sec, display_key=display_key, start_time=start_time)
+        if len(records) > 1:
+            now = datetime.now()
+            if (now - records[-1]["dt"]).total_seconds() < freq_sec:
+                records = records[:-1]
+        CTqSdkAPI.set_data(records, symbol=f"{symbol}:{freq_sec}")
+
+        if len(records) == 0:
+            print(f"[{display_key}] ⑵ 无有效数据，跳过")
+            return None
+
+        t_chan = _time.time()
+
+        _freq_to_kl = {
+            15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
+            300: KL_TYPE.K_5M, 900: KL_TYPE.K_15M, 1800: KL_TYPE.K_30M,
+            3600: KL_TYPE.K_60M, 86400: KL_TYPE.K_DAY,
+            604800: KL_TYPE.K_WEEK, 2592000: KL_TYPE.K_MON,
+        }
+        kl_type = _freq_to_kl.get(freq_sec, KL_TYPE.K_15S)
+
+        config = CChanConfig()
+
+        chan = CChan(
+            code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
+            data_src="custom:TqSdkAPI.CTqSdkAPI",
+            lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
+        )
+
+        for _snapshot in chan.step_load():
+            pass
+
+        klines = api.get_kline_serial(symbol, freq_sec)
+
+        if _SSE_DEBUG:
+            print(f"[{display_key}] ⑵ 缠论分析: 消费 {len(records)}根K线, 耗时 {_time.time()-t_chan:.1f}s")
+        return (chan, klines, kl_type, records)
+
+    except Exception as e:
+        import traceback
+        print(f"[{display_key}] ⑵ 失败: {e}")
+        traceback.print_exc()
+        return None
+
+def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
+    """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致。
+    lightweight=True: 仅返回最后一根K线的OHLC变化（周期内tick更新用），不遍历全量结构。
+    klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）"""
+    from Common.CEnum import FX_TYPE
+    kl_list = chan[kl_type]
+
+    if lightweight:
+        # ★ 优先从天勤实时 klines 读取当前形成中K线的OHLC，避免 chan 框架 kl_list 滞后
+        if klines is not None and len(klines) > 0:
+            last_row = klines.iloc[-1]
+            dt_ns = last_row.get("datetime")
+            kline_dt = "?"
+            if dt_ns is not None:
+                try:
+                    kline_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    pass
+            o = float(last_row.get("open", 0) or 0)
+            h = float(last_row.get("high", 0) or 0)
+            l = float(last_row.get("low", 0) or 0)
+            c = float(last_row.get("close", 0) or 0)
+            return {
+                "type": "tick",
+                "kline": {
+                    "date": kline_dt,
+                    "open": round(o, 3),
+                    "high": round(h, 3),
+                    "low": round(l, 3),
+                    "close": round(c, 3),
+                },
+                "meta": {
+                    "symbol": symbol, "name": name, "freq": freq_label,
+                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "is_realtime": True, "market": "futures",
+                },
+            }
+        # 回退：无 klines 时从 chan 框架读取
+        if len(kl_list.lst) == 0:
+            return None
+        last_klc = kl_list.lst[-1]
+        if len(last_klc.lst) == 0:
+            return None
+        last_klu = last_klc.lst[-1]
+        return {
+            "type": "tick",
+            "kline": {
+                "date": _ctime_to_fmt(last_klu.time, "%Y-%m-%d %H:%M:%S"),
+                "open": round(last_klu.open, 3),
+                "high": round(last_klu.high, 3),
+                "low": round(last_klu.low, 3),
+                "close": round(last_klu.close, 3),
+            },
+            "meta": {
+                "symbol": symbol, "name": name, "freq": freq_label,
+                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "is_realtime": True, "market": "futures",
+            },
+        }
+
+    klines_out = []
+    for klc in kl_list.lst:
+        for klu in klc.lst:
+            t = klu.time
+            klines_out.append({
+                "date": _ctime_to_fmt(t, "%Y-%m-%d %H:%M:%S"),
+                "timestamp": int(t.ts * 1000) if hasattr(t, 'ts') else 0,
+                "open": round(klu.open, 3),
+                "high": round(klu.high, 3),
+                "low": round(klu.low, 3),
+                "close": round(klu.close, 3),
+                "vol": int(klu.trade_info.metric.get("volume", 0) or 0),
+                "amount": round(klu.trade_info.metric.get("turnover", 0) or 0, 2),
+            })
+
+    closes = [k["close"] for k in klines_out]
+    if len(closes) >= 26:
+        ema12 = ema(closes, 12)
+        ema26 = ema(closes, 26)
+        dif = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
+        dea = ema(dif, 9)
+        macd_vals = [2 * (d - a) for d, a in zip(dif, dea)]
+        for i in range(len(klines_out)):
+            if i < len(dif):
+                klines_out[i]["dif"] = round(dif[i], 4)
+                klines_out[i]["dea"] = round(dea[i], 4)
+                klines_out[i]["macd"] = round(macd_vals[i], 4)
+            else:
+                klines_out[i]["dif"] = 0; klines_out[i]["dea"] = 0; klines_out[i]["macd"] = 0
+    else:
+        for k in klines_out:
+            k["dif"] = 0; k["dea"] = 0; k["macd"] = 0
+
+    bis = []
+    for bi in kl_list.bi_list:
+        try:
+            direction = "up" if bi.is_up() else "down"
+            begin_klu = bi.get_begin_klu()
+            end_klu = bi.get_end_klu()
+            begin_fx_idx = None
+            if hasattr(bi, 'begin_klc') and bi.begin_klc:
+                for idx, klc in enumerate(kl_list.lst):
+                    if klc is bi.begin_klc:
+                        begin_fx_idx = idx
+                        break
+            end_fx_idx = None
+            if hasattr(bi, 'end_klc') and bi.end_klc:
+                for idx, klc in enumerate(kl_list.lst):
+                    if klc is bi.end_klc:
+                        end_fx_idx = idx
+                        break
+            # 左肩/右肩原始K线时间（用于双窗口红框定位）
+            fx_a_raw_dt = ""
+            fx_b_raw_dt = ""
+            try:
+                begin_klc = bi.begin_klc
+                end_klc = bi.end_klc
+                left_shoulder_klc = begin_klc.pre if begin_klc else None
+                if left_shoulder_klc and left_shoulder_klc.lst:
+                    a_klu = left_shoulder_klc.lst[0]
+                    fx_a_raw_dt = _ctime_to_fmt(a_klu.time, "%Y-%m-%d %H:%M:%S")
+                right_shoulder_klc = end_klc.next if end_klc else None
+                if right_shoulder_klc and right_shoulder_klc.lst:
+                    b_klu = right_shoulder_klc.lst[-1]
+                    fx_b_raw_dt = _ctime_to_fmt(b_klu.time, "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+            bis.append({
+                "sdt": _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S") if begin_klu else "",
+                "edt": _ctime_to_fmt(end_klu.time, "%Y-%m-%d %H:%M:%S") if end_klu else "",
+                "sdt_ts": int(begin_klu.time.ts * 1000) if begin_klu and hasattr(begin_klu.time, 'ts') else 0,
+                "edt_ts": int(end_klu.time.ts * 1000) if end_klu and hasattr(end_klu.time, 'ts') else 0,
+                "direction": direction,
+                "fx_a_price": round(bi.get_begin_val(), 2),
+                "fx_b_price": round(bi.get_end_val(), 2),
+                "high": round(bi._high(), 2),
+                "low": round(bi._low(), 2),
+                "power": round(abs(bi.get_end_val() - bi.get_begin_val()), 2),
+                "is_sure": getattr(bi, 'is_sure', True),
+                "end_fx_idx": end_fx_idx,
+                "begin_fx_idx": begin_fx_idx,
+                "fx_a_raw_dt": fx_a_raw_dt,
+                "fx_b_raw_dt": fx_b_raw_dt,
+                "fx_a_sub_dt": "",
+                "fx_b_sub_dt": "",
+            })
+        except Exception:
+            pass
+
+    fxs = []
+    for klc in kl_list.lst:
+        if klc.fx == FX_TYPE.TOP:
+            peak_klu = klc.get_high_peak_klu()
+            fxs.append({
+                "date": _ctime_to_fmt(peak_klu.time, "%Y-%m-%d %H:%M:%S") if peak_klu else "",
+                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
+                "mark": "G", "price": klc.high, "high": klc.high, "low": klc.low,
+            })
+        elif klc.fx == FX_TYPE.BOTTOM:
+            peak_klu = klc.get_low_peak_klu()
+            fxs.append({
+                "date": _ctime_to_fmt(peak_klu.time, "%Y-%m-%d %H:%M:%S") if peak_klu else "",
+                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
+                "mark": "D", "price": klc.low, "high": klc.high, "low": klc.low,
+            })
+
+    segs = []
+    for seg in kl_list.seg_list:
+        try:
+            direction = "up" if seg.is_up() else "down"
+            begin_klu = seg.get_begin_klu()
+            end_klu = seg.get_end_klu()
+            if direction == "up":
+                begin_price = round(begin_klu.low, 2) if begin_klu else round(seg._low(), 2)
+                end_price = round(end_klu.high, 2) if end_klu else round(seg._high(), 2)
+            else:
+                begin_price = round(begin_klu.high, 2) if begin_klu else round(seg._high(), 2)
+                end_price = round(end_klu.low, 2) if end_klu else round(seg._low(), 2)
+            segs.append({
+                "sdt": _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S") if begin_klu else "",
+                "edt": _ctime_to_fmt(end_klu.time, "%Y-%m-%d %H:%M:%S") if end_klu else "",
+                "direction": direction,
+                "begin_price": begin_price, "end_price": end_price,
+                "high": round(seg._high(), 2), "low": round(seg._low(), 2),
+                "amp": round(seg.amp(), 2),
+            })
+        except Exception:
+            pass
+
+    zs_list = []
+    for zs in kl_list.zs_list:
+        try:
+            zs_list.append({
+                "sdt": _ctime_to_fmt(zs.begin.time, "%Y-%m-%d %H:%M:%S") if zs.begin and hasattr(zs.begin, 'time') else "",
+                "edt": _ctime_to_fmt(zs.end.time, "%Y-%m-%d %H:%M:%S") if zs.end and hasattr(zs.end, 'time') else "",
+                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, "%Y-%m-%d %H:%M:%S"),
+                "zg": round(zs.high, 2), "zd": round(zs.low, 2),
+                "gg": round(zs.peak_high, 2), "dd": round(zs.peak_low, 2),
+                "dir": "up" if (zs.bi_in and zs.bi_in.is_up()) else "down",
+            })
+        except Exception:
+            pass
+
+    zs_stars = []
+    for zs in kl_list.zs_list:
+        if zs.bi_in is None:
+            continue
+        entry_bi = zs.bi_in
+        begin_klu = entry_bi.get_begin_klu()
+        if begin_klu is None:
+            continue
+        star_date = _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S")
+        star_price = entry_bi.get_begin_val()
+        if entry_bi.is_up():
+            zs_stars.append({"date": star_date, "price": round(star_price, 2), "mark": "D", "color": "red"})
+        else:
+            zs_stars.append({"date": star_date, "price": round(star_price, 2), "mark": "G", "color": "green"})
+
+    bsps = []
+    try:
+        bsp_list = chan.get_latest_bsp(idx=0, number=0)
+        for bsp in bsp_list:
+            bsps.append({
+                "date": _ctime_to_fmt(bsp.klu.time, "%Y-%m-%d %H:%M:%S"),
+                "timestamp": int(bsp.klu.time.ts * 1000) if hasattr(bsp.klu.time, 'ts') else 0,
+                "type": bsp.type2str(), "is_buy": bsp.is_buy,
+                "price": round(bsp.klu.close, 3),
+                "high": round(bsp.klu.high, 3),
+                "low": round(bsp.klu.low, 3),
+            })
+    except Exception:
+        pass
+
+    return {
+        "meta": {
+            "symbol": symbol, "name": name, "freq": freq_label,
+            "kline_count": len(klines_out), "bi_count": len(bis),
+            "fx_count": len(fxs), "zs_count": len(zs_list),
+            "seg_count": len(segs), "bsp_count": len(bsps),
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "is_realtime": True, "market": "futures",
+            "saved_selection_date": saved_selection_date,
+        },
+        "klines": klines_out, "bis": bis, "fxs": fxs, "segs": segs,
+        "zs": zs_list, "zs_stars": zs_stars, "bsps": bsps, "white_hline": None,
+    }
+
+
+
 def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None):
     """
     使用天勤数据源 + chan.py 进行期货/期指缠论分析（静态模式，HTTP 请求）
@@ -2390,7 +2218,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
               f"合并K线={len(sub_kl_list.lst)}, 笔={len(sub_kl_list.bi_list)}, 中枢={len(sub_kl_list.zs_list)}")
 
         # 提取子级别结果
-        from DataAPI.TqSdkAPI import _extract_realtime_snapshot
         sub_name = _get_futures_name(code)
         sub_result = _extract_realtime_snapshot(
             sub_chan, _get_kl_type(sub_freq), code, sub_name,
@@ -2404,156 +2231,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
               f"笔={sub_result['meta']['bi_count']}, 中枢={sub_result['meta']['zs_count']}")
 
     return result
-
-
-def _get_futures_name(code):
-    """获取期货品种的中文名称"""
-    FUTURES_NAMES = {
-        "KQ.m@CFFEX.IF": "沪深300主连", "KQ.m@CFFEX.IH": "上证50主连",
-        "KQ.m@CFFEX.IC": "中证500主连", "KQ.m@CFFEX.IM": "中证1000主连",
-        "KQ.m@CFFEX.T":  "10年国债主连", "KQ.m@CFFEX.TF": "5年国债主连",
-        "KQ.m@CFFEX.TL": "30年国债主连", "KQ.m@CFFEX.TS": "2年国债主连",
-        "KQ.m@SHFE.rb":  "螺纹钢主连", "KQ.m@SHFE.au": "沪金主连",
-        "KQ.m@SHFE.ag":  "沪银主连", "KQ.m@SHFE.cu": "沪铜主连",
-        "KQ.m@SHFE.al":  "沪铝主连", "KQ.m@SHFE.zn": "沪锌主连",
-        "KQ.m@SHFE.ni":  "沪镍主连", "KQ.m@SHFE.ru": "橡胶主连",
-        "KQ.m@SHFE.bu":  "沥青主连", "KQ.m@SHFE.fu": "燃油主连",
-        "KQ.m@SHFE.sp":  "纸浆主连", "KQ.m@SHFE.hc": "热卷主连",
-        "KQ.m@SHFE.ss":  "不锈钢主连", "KQ.m@SHFE.sn": "沪锡主连",
-        "KQ.m@SHFE.pb":  "沪铅主连", "KQ.m@SHFE.wr": "线材主连",
-        "KQ.m@SHFE.ao":  "氧化铝主连", "KQ.m@SHFE.br": "丁二烯主连",
-        "KQ.m@DCE.m":    "豆粕主连", "KQ.m@DCE.y": "豆油主连",
-        "KQ.m@DCE.a":    "豆一主连", "KQ.m@DCE.b": "豆二主连",
-        "KQ.m@DCE.p":    "棕榈油主连", "KQ.m@DCE.j": "焦炭主连",
-        "KQ.m@DCE.jm":   "焦煤主连", "KQ.m@DCE.i": "铁矿石主连",
-        "KQ.m@DCE.c":    "玉米主连", "KQ.m@DCE.cs": "淀粉主连",
-        "KQ.m@DCE.l":    "塑料主连", "KQ.m@DCE.v": "PVC主连",
-        "KQ.m@DCE.pp":   "PP主连", "KQ.m@DCE.eg": "乙二醇主连",
-        "KQ.m@DCE.eb":   "苯乙烯主连", "KQ.m@DCE.pg": "LPG主连",
-        "KQ.m@DCE.fb":   "纤维板主连", "KQ.m@DCE.bb": "胶合板主连",
-        "KQ.m@DCE.rr":   "粳米主连", "KQ.m@DCE.lh": "生猪主连",
-        "KQ.m@DCE.jd":   "鸡蛋主连", "KQ.m@CZCE.TA": "PTA主连",
-        "KQ.m@CZCE.MA":  "甲醇主连", "KQ.m@CZCE.FG": "玻璃主连",
-        "KQ.m@CZCE.SA":  "纯碱主连", "KQ.m@CZCE.SR": "白糖主连",
-        "KQ.m@CZCE.CF":  "棉花主连", "KQ.m@CZCE.CY": "棉纱主连",
-        "KQ.m@CZCE.OI":  "菜油主连", "KQ.m@CZCE.RM": "菜粕主连",
-        "KQ.m@CZCE.ZC":  "动力煤主连", "KQ.m@CZCE.UR": "尿素主连",
-        "KQ.m@CZCE.PF":  "短纤主连", "KQ.m@CZCE.PK": "花生主连",
-        "KQ.m@CZCE.AP":  "苹果主连", "KQ.m@CZCE.CJ": "红枣主连",
-        "KQ.m@CZCE.SM":  "锰硅主连", "KQ.m@CZCE.SF": "硅铁主连",
-        "KQ.m@CZCE.SH":  "烧碱主连", "KQ.m@CZCE.PX": "对二甲苯主连",
-        "KQ.m@CZCE.LR":  "晚籼稻主连", "KQ.m@CZCE.RI": "早籼稻主连",
-        "KQ.m@CZCE.JR":  "粳稻主连", "KQ.m@CZCE.WH": "强麦主连",
-        "KQ.m@CZCE.PM":  "普麦主连", "KQ.m@CZCE.RS": "菜籽主连",
-        "KQ.m@INE.sc":   "原油主连", "KQ.m@INE.lu": "低硫燃油主连",
-        "KQ.m@INE.nr":   "20号胶主连", "KQ.m@INE.bc": "国际铜主连",
-        "KQ.m@INE.ec":   "集运指数主连", "KQ.m@GFEX.si": "工业硅主连",
-        "KQ.m@GFEX.lc":  "碳酸锂主连", "KQ.m@GFEX.ps": "多晶硅主连",
-    }
-    if code in FUTURES_NAMES:
-        return FUTURES_NAMES[code]
-    # 尝试从具体合约代码中提取品种名
-    for ex in ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX']:
-        if code.startswith(ex + '.'):
-            return code  # 返回原始代码作为名称
-    return code
-
-
-def _read_sub_level_records(market, code, freq, sub_freq, records):
-    """
-    双窗口模式：加载子级别K线数据。
-    返回与主级别相同时间范围的子级别records列表。
-    数据来源与主级别一致：从通达信原始文件读取，做前复权处理。
-    """
-    import os
-    from datetime import timedelta
-
-    if sub_freq in ('30m', '5m'):
-        if market == 'hk':
-            min_file = os.path.join(VIPDOC_DIR, "ds", "fzline", f"31#{code}.lc5")
-        else:
-            min_file = os.path.join(VIPDOC_DIR, market, "fzline", f"{market}{code}.lc5")
-        if not os.path.exists(min_file):
-            print(f"[stock][警告] 子级别数据文件不存在: {min_file}")
-            return None
-        sub_records = read_tdx_min_file(min_file, market=market, aggregate_30m=False)
-        if FORWARD_ADJUST_ENABLED:
-            sub_records, _ = _forward_adjust(sub_records, market=market, code=code)
-        if sub_freq == '30m':
-            sub_records = _resample_5m_to_30m(sub_records, market=market)
-    elif sub_freq == 'd':
-        day_file = find_day_file(market, code)
-        if not os.path.exists(day_file):
-            print(f"[stock][警告] 子级别数据文件不存在: {day_file}")
-            return None
-        sub_records = read_tdx_day_file(day_file, market=market)
-        if FORWARD_ADJUST_ENABLED:
-            sub_records, _ = _forward_adjust(sub_records, market=market, code=code)
-    else:
-        return None
-
-    if len(sub_records) < 5:
-        print(f"[stock][警告] 子级别数据不足({len(sub_records)}条)")
-        return None
-
-    # 过滤到与主级别相同的时间范围（略大一点，确保边界包含）
-    if records:
-        main_start = records[0]["dt"]
-        main_end = records[-1]["dt"]
-        sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
-
-    print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条")
-    return sub_records
-
-
-def _read_main_level_records(market, code, freq, return_raw=False):
-    """
-    从通达信文件读取主级别K线数据，含前复权和周期合成。
-    各周期数据加载 + 前复权（统一在原始数据层面处理，避免二次复权）。
-
-    当 return_raw=True 时：
-      - freq='30m': 返回 (records_30m, raw_5m) 元组，raw_5m 是前复权后的5m数据
-      - freq='w':    返回 (records_w, raw_d) 元组，raw_d 是前复权后的日线数据
-    供双窗口子级别复用，避免重复读取和二次复权。
-    """
-    import os
-    if freq in ('30m', '5m'):
-        if market == 'hk':
-            data_file = os.path.join(VIPDOC_DIR, "ds", "fzline", f"31#{code}.lc5")
-        else:
-            data_file = os.path.join(VIPDOC_DIR, market, "fzline", f"{market}{code}.lc5")
-        if not os.path.exists(data_file):
-            return [] if not return_raw else ([], [])
-    else:
-        data_file = find_day_file(market, code)
-        if not os.path.exists(data_file):
-            return [] if not return_raw else ([], [])
-
-    if freq == '30m':
-        raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
-        if FORWARD_ADJUST_ENABLED:
-            raw_5m, _ = _forward_adjust(raw_5m, market=market, code=code)
-        records_30m = _resample_5m_to_30m(list(raw_5m), market=market)
-        if return_raw:
-            return records_30m, raw_5m
-        return records_30m
-    elif freq == '5m':
-        records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
-        if FORWARD_ADJUST_ENABLED:
-            records, _ = _forward_adjust(records, market=market, code=code)
-    elif freq == 'w':
-        records = read_tdx_day_file(data_file, market=market)
-        if FORWARD_ADJUST_ENABLED:
-            records, _ = _forward_adjust(records, market=market, code=code)
-        records_w = _resample_day_to_week(records)
-        if return_raw:
-            return records_w, records
-        return records_w
-    else:
-        records = read_tdx_day_file(data_file, market=market)
-        if FORWARD_ADJUST_ENABLED:
-            records, _ = _forward_adjust(records, market=market, code=code)
-    return records
 
 
 def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False):
@@ -2634,24 +2311,24 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         t0 = time.time()
         if freq == '30m' and sub_freq == '5m':
             # 优化：30m+5m 共用同一次5m文件读取和前复权，避免重复读取和二次复权
-            full_records, sub_records = _read_main_level_records(market, code, freq, return_raw=True)
+            full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         elif freq == 'w' and sub_freq == 'd':
             # 优化：w+d 共用同一次日线文件读取和前复权，避免重复读取和二次复权
-            full_records, sub_records = _read_main_level_records(market, code, freq, return_raw=True)
+            full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         else:
-            full_records = _read_main_level_records(market, code, freq)
+            full_records = read_main_level_records(market, code, freq)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
-            sub_records = _read_sub_level_records(market, code, freq, sub_freq, full_records)
+            sub_records = read_sub_level_records(market, code, freq, sub_freq, full_records)
         if sub_records is None or len(sub_records) < 5:
             print(f"[stock][警告] 子级别数据不足，退化为单级别模式")
             sub_freq = None
@@ -2665,7 +2342,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             print(f"[stock][耗时] 从缓存获取K线: {len(full_records)}条")
         else:
             t0 = time.time()
-            full_records = _read_main_level_records(market, code, freq)
+            full_records = read_main_level_records(market, code, freq)
             if len(full_records) < 5:
                 return {"error": f"K线数据不足: 仅{len(full_records)}条"}
             print(f"[stock][耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
@@ -2779,9 +2456,11 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         _current_code = code
         _current_market = market
 
+        """
         # 注入区间套背驰检查回调到 BSPointList 模块
         import BuySellPoint.BSPointList as _bsp
         _bsp._sub_divergence_check = _analyze_sub_level_divergence
+        """
 
         try:
             # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
@@ -4675,7 +4354,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     from tqsdk import TqApi, TqAuth
     from DataAPI.TqSdkAPI import (
         FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
-        fetch_futures_kline, _extract_realtime_snapshot,
+        fetch_futures_kline,
         TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES,
     )
 
@@ -5485,9 +5164,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
             self.send_json_response({"error": "天勤数据源不可用"}, 503)
             return
 
-        from DataAPI.TqSdkAPI import (init_chan_symbol, _extract_realtime_snapshot,
-                                       FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
-                                       TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES, _ema)
+        from DataAPI.TqSdkAPI import (FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
+                                       TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES)
         from tqsdk import TqApi, TqAuth
         from datetime import datetime
 
@@ -5967,9 +5645,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
         from tqsdk import TqApi, TqAuth
-        from DataAPI.TqSdkAPI import (init_chan_symbol, _extract_realtime_snapshot,
-                                       FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
-                                       TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES, _ema)
+        from DataAPI.TqSdkAPI import (FREQ_SEC_MAP, FREQ_LABEL_CN, CTqSdkAPI,
+                                       TQ_ACCOUNT, TQ_PASSWORD, FUTURES_ALIASES)
         from datetime import datetime
 
         api = None

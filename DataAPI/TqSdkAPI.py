@@ -25,9 +25,45 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 # ============================================================
 # 天勤配置
 # ============================================================
-TQ_ACCOUNT = "13521579214"
-TQ_PASSWORD = "87654321"
+TQ_ACCOUNT = ""
+TQ_PASSWORD = ""
 _SSE_DEBUG = False  # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
+
+
+def load_tq_account(config_dir):
+    """
+    从 {config_dir}/tq_account.json 文件读取天勤账户和密码。
+    文件格式: {"account": "手机号或用户名", "password": "密码"}
+
+    读取成功则更新模块级 TQ_ACCOUNT / TQ_PASSWORD；
+    文件不存在或格式错误则保持默认空值，由调用方决定是否回退到硬编码。
+    """
+    global TQ_ACCOUNT, TQ_PASSWORD
+    account_file = os.path.join(config_dir, "tq_account.json")
+    if not os.path.exists(account_file):
+        print(f"[TqSdkAPI] 账户文件不存在: {account_file}，使用默认空值")
+        return False
+    try:
+        with open(account_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            TQ_ACCOUNT = str(data.get("account", "")).strip()
+            TQ_PASSWORD = str(data.get("password", "")).strip()
+            if TQ_ACCOUNT and TQ_PASSWORD:
+                print(f"[TqSdkAPI] 已从文件加载天勤账户: {account_file}")
+                return True
+            else:
+                print(f"[TqSdkAPI] 账户文件内容不完整，请检查 account 和 password 字段: {account_file}")
+                return False
+        else:
+            print(f"[TqSdkAPI] 账户文件格式错误，应为 JSON 对象: {account_file}")
+            return False
+    except json.JSONDecodeError as e:
+        print(f"[TqSdkAPI] 账户文件 JSON 解析失败: {account_file}, 错误: {e}")
+        return False
+    except Exception as e:
+        print(f"[TqSdkAPI] 读取账户文件失败: {account_file}, 错误: {e}")
+        return False
 
 # 默认监控的期货品种（引擎启动时初始化 15s/1m/5m，30m 延迟按需初始化）
 # 注意：天勤主连合约不支持 d/w 周期（返回垃圾数据），已排除。
@@ -317,355 +353,82 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
 
 
 # ============================================================
-# chan 初始化（拉取历史 + 缠论分析，每个 SSE 连接自包含）
+# 期货代码/名称工具函数
 # ============================================================
 
 
-def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
-    """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
-    由 SSE handler 调用，每个 SSE 连接自包含。
-    start_time: 选点起始时间，有值时只拉取该时间之后的K线"""
-    from Common.CEnum import KL_TYPE, AUTYPE
-    from Chan import CChan
-    from ChanConfig import CChanConfig
+def _get_futures_code(code):
+    """识别期货/期指代码，返回天勤标准代码；非期货返回 None。"""
+    # 格式: EXCHANGE.SYMBOL (如 CFFEX.IM2507, SHFE.rb2505)
+    # 或主连: KQ.m@EXCHANGE.SYMBOL, KQ.i@EXCHANGE.SYMBOL
+    # 注意：天勤要求 KQ 前缀中的 m/i 小写，所以先 upper() 匹配，再恢复小写
+    FUTURE_EXCHANGES = ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX']
+    for ex in FUTURE_EXCHANGES:
+        if code.startswith(ex + '.'):
+            return code
+        if code.startswith('KQ.M@' + ex + '.'):
+            return code.replace('KQ.M@', 'KQ.m@', 1)
+        if code.startswith('KQ.I@' + ex + '.'):
+            return code.replace('KQ.I@', 'KQ.i@', 1)
 
-    display_label = FREQ_LABEL_CN.get(freq_label, freq_label)
-    display_key = f"{symbol}:{display_label}"
-
-    try:
-        records = fetch_futures_kline(api, symbol, freq_sec=freq_sec, display_key=display_key, start_time=start_time)
-        if len(records) > 1:
-            now = datetime.now()
-            if (now - records[-1]["dt"]).total_seconds() < freq_sec:
-                records = records[:-1]
-        CTqSdkAPI.set_data(records, symbol=f"{symbol}:{freq_sec}")
-
-        if len(records) == 0:
-            print(f"[{display_key}] ⑵ 无有效数据，跳过")
-            return None
-
-        t_chan = _time.time()
-
-        _freq_to_kl = {
-            15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
-            300: KL_TYPE.K_5M, 900: KL_TYPE.K_15M, 1800: KL_TYPE.K_30M,
-            3600: KL_TYPE.K_60M, 86400: KL_TYPE.K_DAY,
-            604800: KL_TYPE.K_WEEK, 2592000: KL_TYPE.K_MON,
-        }
-        kl_type = _freq_to_kl.get(freq_sec, KL_TYPE.K_15S)
-
-        config = CChanConfig()
-
-        chan = CChan(
-            code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
-            data_src="custom:TqSdkAPI.CTqSdkAPI",
-            lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
-        )
-
-        for _snapshot in chan.step_load():
-            pass
-
-        klines = api.get_kline_serial(symbol, freq_sec)
-
-        if _SSE_DEBUG:
-            print(f"[{display_key}] ⑵ 缠论分析: 消费 {len(records)}根K线, 耗时 {_time.time()-t_chan:.1f}s")
-        return (chan, klines, kl_type, records)
-
-    except Exception as e:
-        import traceback
-        print(f"[{display_key}] ⑵ 失败: {e}")
-        traceback.print_exc()
-        return None
+    # 期货别名映射：支持直接输入短名称（如 PTA、IF、rb、TA 等）
+    if code in FUTURES_ALIASES:
+        return FUTURES_ALIASES[code]
+    return None
 
 
-# ============================================================
-# 工具函数（chan 实体提取）
-# ============================================================
-
-def _fmt_date(ctime):
-    if ctime is None:
-        return ""
-    return datetime.fromtimestamp(ctime.ts).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _bi_overlap_range(bi, zg, zd):
-    return min(zg, bi._high()) > max(zd, bi._low())
-
-
-def _format_bi_edt(bi):
-    klu = bi.get_end_klu()
-    return _fmt_date(klu.time) if klu else ""
-
-
-def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list):
-    try:
-        end_idx = zs_obj.end_bi.idx
-        zg, zd = zs_obj.high, zs_obj.low
-    except Exception:
-        return ""
-    for bi in all_bi_list[end_idx + 1:]:
-        if _bi_overlap_range(bi, zg, zd):
-            continue
-        if getattr(bi, "next", None) is None:
-            return ""
-        return _format_bi_edt(bi)
-    return ""
-
-
-def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
-    """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致。
-    lightweight=True: 仅返回最后一根K线的OHLC变化（周期内tick更新用），不遍历全量结构。
-    klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）"""
-    from Common.CEnum import FX_TYPE
-    kl_list = chan[kl_type]
-
-    if lightweight:
-        # ★ 优先从天勤实时 klines 读取当前形成中K线的OHLC，避免 chan 框架 kl_list 滞后
-        if klines is not None and len(klines) > 0:
-            last_row = klines.iloc[-1]
-            dt_ns = last_row.get("datetime")
-            kline_dt = "?"
-            if dt_ns is not None:
-                try:
-                    kline_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    pass
-            o = float(last_row.get("open", 0) or 0)
-            h = float(last_row.get("high", 0) or 0)
-            l = float(last_row.get("low", 0) or 0)
-            c = float(last_row.get("close", 0) or 0)
-            return {
-                "type": "tick",
-                "kline": {
-                    "date": kline_dt,
-                    "open": round(o, 3),
-                    "high": round(h, 3),
-                    "low": round(l, 3),
-                    "close": round(c, 3),
-                },
-                "meta": {
-                    "symbol": symbol, "name": name, "freq": freq_label,
-                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "is_realtime": True, "market": "futures",
-                },
-            }
-        # 回退：无 klines 时从 chan 框架读取
-        if len(kl_list.lst) == 0:
-            return None
-        last_klc = kl_list.lst[-1]
-        if len(last_klc.lst) == 0:
-            return None
-        last_klu = last_klc.lst[-1]
-        return {
-            "type": "tick",
-            "kline": {
-                "date": _fmt_date(last_klu.time),
-                "open": round(last_klu.open, 3),
-                "high": round(last_klu.high, 3),
-                "low": round(last_klu.low, 3),
-                "close": round(last_klu.close, 3),
-            },
-            "meta": {
-                "symbol": symbol, "name": name, "freq": freq_label,
-                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "is_realtime": True, "market": "futures",
-            },
-        }
-
-    klines = []
-    for klc in kl_list.lst:
-        for klu in klc.lst:
-            t = klu.time
-            klines.append({
-                "date": _fmt_date(t),
-                "timestamp": int(t.ts * 1000) if hasattr(t, 'ts') else 0,
-                "open": round(klu.open, 3),
-                "high": round(klu.high, 3),
-                "low": round(klu.low, 3),
-                "close": round(klu.close, 3),
-                "vol": int(klu.trade_info.metric.get("volume", 0) or 0),
-                "amount": round(klu.trade_info.metric.get("turnover", 0) or 0, 2),
-            })
-
-    closes = [k["close"] for k in klines]
-    if len(closes) >= 26:
-        ema12 = _ema(closes, 12)
-        ema26 = _ema(closes, 26)
-        dif = [e12 - e26 for e12, e26 in zip(ema12, ema26)]
-        dea = _ema(dif, 9)
-        macd_vals = [2 * (d - a) for d, a in zip(dif, dea)]
-        for i in range(len(klines)):
-            if i < len(dif):
-                klines[i]["dif"] = round(dif[i], 4)
-                klines[i]["dea"] = round(dea[i], 4)
-                klines[i]["macd"] = round(macd_vals[i], 4)
-            else:
-                klines[i]["dif"] = 0; klines[i]["dea"] = 0; klines[i]["macd"] = 0
-    else:
-        for k in klines:
-            k["dif"] = 0; k["dea"] = 0; k["macd"] = 0
-
-    bis = []
-    for bi in kl_list.bi_list:
-        try:
-            direction = "up" if bi.is_up() else "down"
-            begin_klu = bi.get_begin_klu()
-            end_klu = bi.get_end_klu()
-            begin_fx_idx = None
-            if hasattr(bi, 'begin_klc') and bi.begin_klc:
-                for idx, klc in enumerate(kl_list.lst):
-                    if klc is bi.begin_klc:
-                        begin_fx_idx = idx
-                        break
-            end_fx_idx = None
-            if hasattr(bi, 'end_klc') and bi.end_klc:
-                for idx, klc in enumerate(kl_list.lst):
-                    if klc is bi.end_klc:
-                        end_fx_idx = idx
-                        break
-            # 左肩/右肩原始K线时间（用于双窗口红框定位）
-            fx_a_raw_dt = ""
-            fx_b_raw_dt = ""
-            try:
-                begin_klc = bi.begin_klc
-                end_klc = bi.end_klc
-                left_shoulder_klc = begin_klc.pre if begin_klc else None
-                if left_shoulder_klc and left_shoulder_klc.lst:
-                    a_klu = left_shoulder_klc.lst[0]
-                    fx_a_raw_dt = _fmt_date(a_klu.time)
-                right_shoulder_klc = end_klc.next if end_klc else None
-                if right_shoulder_klc and right_shoulder_klc.lst:
-                    b_klu = right_shoulder_klc.lst[-1]
-                    fx_b_raw_dt = _fmt_date(b_klu.time)
-            except Exception:
-                pass
-            bis.append({
-                "sdt": _fmt_date(begin_klu.time) if begin_klu else "",
-                "edt": _fmt_date(end_klu.time) if end_klu else "",
-                "sdt_ts": int(begin_klu.time.ts * 1000) if begin_klu and hasattr(begin_klu.time, 'ts') else 0,
-                "edt_ts": int(end_klu.time.ts * 1000) if end_klu and hasattr(end_klu.time, 'ts') else 0,
-                "direction": direction,
-                "fx_a_price": round(bi.get_begin_val(), 2),
-                "fx_b_price": round(bi.get_end_val(), 2),
-                "high": round(bi._high(), 2),
-                "low": round(bi._low(), 2),
-                "power": round(abs(bi.get_end_val() - bi.get_begin_val()), 2),
-                "is_sure": getattr(bi, 'is_sure', True),
-                "end_fx_idx": end_fx_idx,
-                "begin_fx_idx": begin_fx_idx,
-                "fx_a_raw_dt": fx_a_raw_dt,
-                "fx_b_raw_dt": fx_b_raw_dt,
-                "fx_a_sub_dt": "",
-                "fx_b_sub_dt": "",
-            })
-        except Exception:
-            pass
-
-    fxs = []
-    for klc in kl_list.lst:
-        if klc.fx == FX_TYPE.TOP:
-            peak_klu = klc.get_high_peak_klu()
-            fxs.append({
-                "date": _fmt_date(peak_klu.time) if peak_klu else "",
-                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
-                "mark": "G", "price": klc.high, "high": klc.high, "low": klc.low,
-            })
-        elif klc.fx == FX_TYPE.BOTTOM:
-            peak_klu = klc.get_low_peak_klu()
-            fxs.append({
-                "date": _fmt_date(peak_klu.time) if peak_klu else "",
-                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
-                "mark": "D", "price": klc.low, "high": klc.high, "low": klc.low,
-            })
-
-    segs = []
-    for seg in kl_list.seg_list:
-        try:
-            direction = "up" if seg.is_up() else "down"
-            begin_klu = seg.get_begin_klu()
-            end_klu = seg.get_end_klu()
-            if direction == "up":
-                begin_price = round(begin_klu.low, 2) if begin_klu else round(seg._low(), 2)
-                end_price = round(end_klu.high, 2) if end_klu else round(seg._high(), 2)
-            else:
-                begin_price = round(begin_klu.high, 2) if begin_klu else round(seg._high(), 2)
-                end_price = round(end_klu.low, 2) if end_klu else round(seg._low(), 2)
-            segs.append({
-                "sdt": _fmt_date(begin_klu.time) if begin_klu else "",
-                "edt": _fmt_date(end_klu.time) if end_klu else "",
-                "direction": direction,
-                "begin_price": begin_price, "end_price": end_price,
-                "high": round(seg._high(), 2), "low": round(seg._low(), 2),
-                "amp": round(seg.amp(), 2),
-            })
-        except Exception:
-            pass
-
-    zs_list = []
-    for zs in kl_list.zs_list:
-        try:
-            zs_list.append({
-                "sdt": _fmt_date(zs.begin.time) if zs.begin and hasattr(zs.begin, 'time') else "",
-                "edt": _fmt_date(zs.end.time) if zs.end and hasattr(zs.end, 'time') else "",
-                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list),
-                "zg": round(zs.high, 2), "zd": round(zs.low, 2),
-                "gg": round(zs.peak_high, 2), "dd": round(zs.peak_low, 2),
-                "dir": "up" if (zs.bi_in and zs.bi_in.is_up()) else "down",
-            })
-        except Exception:
-            pass
-
-    zs_stars = []
-    for zs in kl_list.zs_list:
-        if zs.bi_in is None:
-            continue
-        entry_bi = zs.bi_in
-        begin_klu = entry_bi.get_begin_klu()
-        if begin_klu is None:
-            continue
-        star_date = _fmt_date(begin_klu.time)
-        star_price = entry_bi.get_begin_val()
-        if entry_bi.is_up():
-            zs_stars.append({"date": star_date, "price": round(star_price, 2), "mark": "D", "color": "red"})
-        else:
-            zs_stars.append({"date": star_date, "price": round(star_price, 2), "mark": "G", "color": "green"})
-
-    bsps = []
-    try:
-        bsp_list = chan.get_latest_bsp(idx=0, number=0)
-        for bsp in bsp_list:
-            bsps.append({
-                "date": _fmt_date(bsp.klu.time),
-                "timestamp": int(bsp.klu.time.ts * 1000) if hasattr(bsp.klu.time, 'ts') else 0,
-                "type": bsp.type2str(), "is_buy": bsp.is_buy,
-                "price": round(bsp.klu.close, 3),
-                "high": round(bsp.klu.high, 3),
-                "low": round(bsp.klu.low, 3),
-            })
-    except Exception:
-        pass
-
-    return {
-        "meta": {
-            "symbol": symbol, "name": name, "freq": freq_label,
-            "kline_count": len(klines), "bi_count": len(bis),
-            "fx_count": len(fxs), "zs_count": len(zs_list),
-            "seg_count": len(segs), "bsp_count": len(bsps),
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "is_realtime": True, "market": "futures",
-            "saved_selection_date": saved_selection_date,
-        },
-        "klines": klines, "bis": bis, "fxs": fxs, "segs": segs,
-        "zs": zs_list, "zs_stars": zs_stars, "bsps": bsps, "white_hline": None,
+def _get_futures_name(code):
+    """获取期货品种的中文名称"""
+    FUTURES_NAMES = {
+        "KQ.m@CFFEX.IF": "沪深300主连", "KQ.m@CFFEX.IH": "上证50主连",
+        "KQ.m@CFFEX.IC": "中证500主连", "KQ.m@CFFEX.IM": "中证1000主连",
+        "KQ.m@CFFEX.T":  "10年国债主连", "KQ.m@CFFEX.TF": "5年国债主连",
+        "KQ.m@CFFEX.TL": "30年国债主连", "KQ.m@CFFEX.TS": "2年国债主连",
+        "KQ.m@SHFE.rb":  "螺纹钢主连", "KQ.m@SHFE.au": "沪金主连",
+        "KQ.m@SHFE.ag":  "沪银主连", "KQ.m@SHFE.cu": "沪铜主连",
+        "KQ.m@SHFE.al":  "沪铝主连", "KQ.m@SHFE.zn": "沪锌主连",
+        "KQ.m@SHFE.ni":  "沪镍主连", "KQ.m@SHFE.ru": "橡胶主连",
+        "KQ.m@SHFE.bu":  "沥青主连", "KQ.m@SHFE.fu": "燃油主连",
+        "KQ.m@SHFE.sp":  "纸浆主连", "KQ.m@SHFE.hc": "热卷主连",
+        "KQ.m@SHFE.ss":  "不锈钢主连", "KQ.m@SHFE.sn": "沪锡主连",
+        "KQ.m@SHFE.pb":  "沪铅主连", "KQ.m@SHFE.wr": "线材主连",
+        "KQ.m@SHFE.ao":  "氧化铝主连", "KQ.m@SHFE.br": "丁二烯主连",
+        "KQ.m@DCE.m":    "豆粕主连", "KQ.m@DCE.y": "豆油主连",
+        "KQ.m@DCE.a":    "豆一主连", "KQ.m@DCE.b": "豆二主连",
+        "KQ.m@DCE.p":    "棕榈油主连", "KQ.m@DCE.j": "焦炭主连",
+        "KQ.m@DCE.jm":   "焦煤主连", "KQ.m@DCE.i": "铁矿石主连",
+        "KQ.m@DCE.c":    "玉米主连", "KQ.m@DCE.cs": "淀粉主连",
+        "KQ.m@DCE.l":    "塑料主连", "KQ.m@DCE.v": "PVC主连",
+        "KQ.m@DCE.pp":   "PP主连", "KQ.m@DCE.eg": "乙二醇主连",
+        "KQ.m@DCE.eb":   "苯乙烯主连", "KQ.m@DCE.pg": "LPG主连",
+        "KQ.m@DCE.fb":   "纤维板主连", "KQ.m@DCE.bb": "胶合板主连",
+        "KQ.m@DCE.rr":   "粳米主连", "KQ.m@DCE.lh": "生猪主连",
+        "KQ.m@DCE.jd":   "鸡蛋主连", "KQ.m@CZCE.TA": "PTA主连",
+        "KQ.m@CZCE.MA":  "甲醇主连", "KQ.m@CZCE.FG": "玻璃主连",
+        "KQ.m@CZCE.SA":  "纯碱主连", "KQ.m@CZCE.SR": "白糖主连",
+        "KQ.m@CZCE.CF":  "棉花主连", "KQ.m@CZCE.CY": "棉纱主连",
+        "KQ.m@CZCE.OI":  "菜油主连", "KQ.m@CZCE.RM": "菜粕主连",
+        "KQ.m@CZCE.ZC":  "动力煤主连", "KQ.m@CZCE.UR": "尿素主连",
+        "KQ.m@CZCE.PF":  "短纤主连", "KQ.m@CZCE.PK": "花生主连",
+        "KQ.m@CZCE.AP":  "苹果主连", "KQ.m@CZCE.CJ": "红枣主连",
+        "KQ.m@CZCE.SM":  "锰硅主连", "KQ.m@CZCE.SF": "硅铁主连",
+        "KQ.m@CZCE.SH":  "烧碱主连", "KQ.m@CZCE.PX": "对二甲苯主连",
+        "KQ.m@CZCE.LR":  "晚籼稻主连", "KQ.m@CZCE.RI": "早籼稻主连",
+        "KQ.m@CZCE.JR":  "粳稻主连", "KQ.m@CZCE.WH": "强麦主连",
+        "KQ.m@CZCE.PM":  "普麦主连", "KQ.m@CZCE.RS": "菜籽主连",
+        "KQ.m@INE.sc":   "原油主连", "KQ.m@INE.lu": "低硫燃油主连",
+        "KQ.m@INE.nr":   "20号胶主连", "KQ.m@INE.bc": "国际铜主连",
+        "KQ.m@INE.ec":   "集运指数主连", "KQ.m@GFEX.si": "工业硅主连",
+        "KQ.m@GFEX.lc":  "碳酸锂主连", "KQ.m@GFEX.ps": "多晶硅主连",
     }
+    if code in FUTURES_NAMES:
+        return FUTURES_NAMES[code]
+    # 尝试从具体合约代码中提取品种名
+    for ex in ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX']:
+        if code.startswith(ex + '.'):
+            return code  # 返回原始代码作为名称
+    return code
 
 
-def _ema(data, period):
-    result = []
-    k = 2.0 / (period + 1)
-    for i, val in enumerate(data):
-        if i == 0:
-            result.append(val)
-        else:
-            result.append(val * k + result[-1] * (1 - k))
-    return result
+if __name__ == "__main__":
+    print("TqSdkAPI loaded successfully")
