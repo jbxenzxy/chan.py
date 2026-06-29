@@ -95,29 +95,36 @@ class CZSList:
                 if lst0_low > zs.high:
                     # ⑴ 第一笔低点高于中枢上边沿 → 向上突破 → 跳过向上笔
                     if lst[0].is_up():
-                        lst = lst[1:]
+                        # lst = lst[1:]
                         return None
                 elif lst0_high < zs.low:
                     # ⑵ 第一笔高点低于中枢下边沿 → 向下突破 → 跳过向下笔
                     if lst[0].is_down():
-                        lst = lst[1:]
+                        # lst = lst[1:]
                         return None
                 else:
-                    raise Exception(
-                        f"over_seg: lst[0] is inside zs range, should not happen. "
-                        f"lst0_low={lst0_low:.4f} zs.high={zs.high:.4f} "
-                        f"lst0_high={lst0_high:.4f} zs.low={zs.low:.4f}"
-                    )
+                    '''
+                    import traceback
+                    print(f"[ZS-警告] over_seg: lst[0] is inside zs range, 跳过")
+                    print(f"  lst[0]: idx={lst[0].idx} type={type(lst[0]).__name__} "
+                          f"low={lst0_low:.4f} high={lst0_high:.4f}")
+                    print(f"  zs[-1]: begin_bi={zs.begin_bi.idx} end_bi={zs.end_bi.idx} "
+                          f"low={zs.low:.4f} high={zs.high:.4f}")
+                    print(f"  调用栈（触发源头—笔/线段/线段线段）:")
+                    traceback.print_stack()
+                    self.clear_free_lst()
+                    '''
+                    return None
             else:
                 first_pen = self.free_item_lst[0]
                 if len(self.free_item_lst) == 3:
                     # ⑴ 前3笔：跳过第一笔(当进入段)，等第4笔进来凑[bi1,bi2,bi3]
-                    lst = lst[1:]
+                    # lst = lst[1:]
                     return None
                 else:
                     # ⑵ 超过3笔：跳过与第一笔(进入段)同向的，直到找到反向笔
                     if lst[0].dir == first_pen.dir:
-                        lst = lst[1:]
+                        # lst = lst[1:]
                         return None
                     # lst[0]与first_pen反向，继续构建
             # ===== 修改结束 =====
@@ -166,6 +173,11 @@ class CZSList:
             raise Exception(f"unknown zs_algo {self.config.zs_algo}")
         self.update_last_pos(seg_lst)
 
+    '''
+    关卡1：in_range(bi.next) = True → bi 的下一笔还在中枢内，说明中枢在延续，于是主动把 bi 追加到中枢末尾（try_add_to_end）
+    关卡2：关卡1 已经判定 in_range(bi.next) = False → bi 的下一笔已脱离中枢，bi 只是中枢内的最后一笔，什么都不做，跳过
+    核心差异就是对 bi.next 的一步前瞻：关卡1 看到后面还有笔回来，才敢把 bi 追加进去；关卡2 看到后面已经脱离，就放过 bi 不处理
+    '''
     def update_overseg_zs(self, bi: CBi | CSeg):
         if len(self.zs_lst) and len(self.free_item_lst) == 0:
             if bi.next is None:

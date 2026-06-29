@@ -11,6 +11,7 @@
 """
 
 import os
+import re
 import math
 import socket
 import struct
@@ -892,15 +893,20 @@ def _build_adjust_events(xdxr_df):
 
 
 # 前复权主函数
-def _forward_adjust(records, market, code):
+def _forward_adjust(records, market, code, end_date=None):
     """
     对原始K线数据进行前复权处理。
 
     参数:
-      records: list[dict], 原始K线数据
+      records:  list[dict], 原始K线数据
                每条记录: dt, open, high, low, close, vol, amount
-      market:  str, "sh" 或 "sz"
-      code:    str, 6位股票代码
+      market:   str, "sh" 或 "sz"
+      code:     str, 6位股票代码
+      end_date: datetime 或 None, 复盘截止日期。
+                当 end_date 不为 None 时（复盘模式），只使用 date <= end_date
+                的除权除息事件做前复权，以 end_date 为最新锚点递推。
+                当 end_date 为 None 时（冷启动模式），使用全部历史事件，
+                以最新日期为锚点递推。
 
     返回:
       (records, did_adjust): records 为前复权后的K线数据（原地修改），
@@ -928,9 +934,17 @@ def _forward_adjust(records, market, code):
     if not events:
         return records, False
 
+    # 复盘模式：只保留 end_date 及之前的除权除息事件
+    # 以 end_date 为"最新锚点"做前复权，A 之后的事件不纳入计算
+    if end_date is not None:
+        events = [(evt_date, a, b) for evt_date, a, b in events if evt_date <= end_date]
+        if not events:
+            return records, False
+
     import time as _time
     t_start = _time.time()
-    print(f"[复权][信息] {code} 共{len(events)}个除权除息事件，开始前复权...")
+    anchor_desc = f"截止到 {end_date.strftime('%Y-%m-%d')}" if end_date is not None else "全部历史"
+    print(f"[复权][信息] {code} 共{len(events)}个除权除息事件({anchor_desc})，开始前复权...")
 
     if len(records) > 1 and records[0]["dt"] > records[1]["dt"]:
         records.sort(key=lambda r: r["dt"])
@@ -956,7 +970,7 @@ def find_day_file(market, code):
     return os.path.join(_tdx_config["vipdoc_dir"], market, "lday", f"{market}{code}.day")
 
 
-def read_main_level_records(market, code, freq, return_raw=False):
+def read_main_level_records(market, code, freq, return_raw=False, end_date=None):
     """
     从通达信文件读取主级别K线数据，含前复权和周期合成。
     各周期数据加载 + 前复权（统一在原始数据层面处理，避免二次复权）。
@@ -965,6 +979,9 @@ def read_main_level_records(market, code, freq, return_raw=False):
       - freq='30m': 返回 (records_30m, raw_5m) 元组，raw_5m 是前复权后的5m数据
       - freq='w':    返回 (records_w, raw_d) 元组，raw_d 是前复权后的日线数据
     供双窗口子级别复用，避免重复读取和二次复权。
+
+    end_date: datetime 或 None, 复盘截止日期。传入后前复权只以 end_date
+              为最新锚点递推，A 之后的除权事件不参与复权。
     """
     if freq in ('30m', '5m'):
         if market == 'hk':
@@ -981,7 +998,7 @@ def read_main_level_records(market, code, freq, return_raw=False):
     if freq == '30m':
         raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
-            raw_5m, _ = _forward_adjust(raw_5m, market=market, code=code)
+            raw_5m, _ = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
         records_30m = _resample_5m_to_30m(list(raw_5m), market=market)
         if return_raw:
             return records_30m, raw_5m
@@ -989,11 +1006,11 @@ def read_main_level_records(market, code, freq, return_raw=False):
     elif freq == '5m':
         records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code)
+            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
     elif freq == 'w':
         records = read_tdx_day_file(data_file, market=market)
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code)
+            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
         records_w = _resample_day_to_week(records)
         if return_raw:
             return records_w, records
@@ -1001,15 +1018,18 @@ def read_main_level_records(market, code, freq, return_raw=False):
     else:
         records = read_tdx_day_file(data_file, market=market)
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code)
+            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
     return records
 
 
-def read_sub_level_records(market, code, freq, sub_freq, records):
+def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None):
     """
     双窗口模式：加载子级别K线数据。
     返回与主级别相同时间范围的子级别records列表。
     数据来源与主级别一致：从通达信原始文件读取，做前复权处理。
+
+    end_date: datetime 或 None, 复盘截止日期。传入后前复权只以 end_date
+              为最新锚点递推。
     """
     if sub_freq in ('30m', '5m'):
         if market == 'hk':
@@ -1021,7 +1041,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records):
             return None
         sub_records = read_tdx_min_file(min_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
-            sub_records, _ = _forward_adjust(sub_records, market=market, code=code)
+            sub_records, _ = _forward_adjust(sub_records, market=market, code=code, end_date=end_date)
         if sub_freq == '30m':
             sub_records = _resample_5m_to_30m(sub_records, market=market)
     elif sub_freq == 'd':
@@ -1031,7 +1051,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records):
             return None
         sub_records = read_tdx_day_file(day_file, market=market)
         if _tdx_config["forward_adjust_enabled"]:
-            sub_records, _ = _forward_adjust(sub_records, market=market, code=code)
+            sub_records, _ = _forward_adjust(sub_records, market=market, code=code, end_date=end_date)
     else:
         return None
 
@@ -1153,6 +1173,134 @@ class CTdxAPI_Sliced(CTdxAPI):
                 DATA_FIELD.FIELD_TURNOVER: row["amount"],
             }
             yield CKLine_Unit(klu_dict)
+
+
+# ============================================================
+# 板块文件（.blk）读写
+# ============================================================
+
+def _get_blocknew_dir():
+    """从 vipdoc_dir 推导 T0002/blocknew 目录"""
+    vipdoc = _tdx_config.get("vipdoc_dir", "")
+    if not vipdoc:
+        return ""
+    return os.path.join(os.path.dirname(vipdoc), "T0002", "blocknew")
+
+
+def get_blk_path(blk_name):
+    """
+    获取板块文件路径。
+    blk_name: "zxg" → T0002/blocknew/zxg.blk
+              "中证1000" → T0002/blocknew/中证1000.blk
+    """
+    return os.path.join(_get_blocknew_dir(), blk_name + ".blk") if _get_blocknew_dir() else ""
+
+
+def read_blk_file(blk_path):
+    """
+    读取通达信 .blk 板块文件，返回股票代码列表。
+    文件格式：GBK编码，每行一个代码。
+    A股格式：7位纯数字（1位交易所前缀 + 6位股票代码），如 "0600000"、"1600001"
+    港股格式：可能为 "HK00700" 或前缀+5位数字等
+    """
+    if not blk_path or not os.path.exists(blk_path):
+        return []
+    stocks = []
+    try:
+        with open(blk_path, "r", encoding="gbk") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if len(line) == 7 and line.isdigit():
+                    prefix = line[0]
+                    code = line[1:7]
+                    stocks.append({"prefix": prefix, "code": code})
+                elif line.startswith("31#") and len(line) == 8:
+                    code = line[3:].strip()
+                    if code.isdigit():
+                        stocks.append({"prefix": "hk", "code": code})
+                elif line.upper().startswith("HK") and len(line) > 2:
+                    code = line[2:].strip()
+                    if code.isdigit():
+                        stocks.append({"prefix": "hk", "code": code})
+    except Exception as e:
+        print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
+    return stocks
+
+
+def read_zxg_stocks():
+    """
+    读取通达信自选股文件 zxg.blk，返回股票代码列表。
+    """
+    path = get_blk_path("zxg")
+    if not os.path.exists(path):
+        print(f"[stock][警告] 自选股文件不存在: {path}")
+        return []
+    return read_blk_file(path)
+
+
+def read_zz1000_stocks():
+    """
+    读取通达信中证1000板块文件，返回股票代码列表。
+    用户需先在通达信中创建/下载"中证1000"板块。
+    """
+    path = get_blk_path("ZZ1000")
+    if not os.path.exists(path):
+        print(f"[stock][警告] 中证1000板块文件不存在: {path}")
+        return []
+    return read_blk_file(path)
+
+
+def save_to_zxg_blk(codes):
+    """
+    将股票代码列表追加到通达信自选股文件 zxg.blk。
+    codes: list of str，格式如 "000852.SH"、"600519.SH"
+    自动去重，已存在的不会重复添加。
+    """
+    path = get_blk_path("zxg")
+    if not path:
+        return 0
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        existing = set()
+    else:
+        existing = set()
+        try:
+            with open(path, "r", encoding="gbk") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        existing.add(line)
+        except Exception:
+            pass
+
+    added = 0
+    with open(path, "a", encoding="gbk") as f:
+        for code_str in codes:
+            code_str = code_str.strip().upper()
+            m = re.match(r'^(\d+)\.(SH|SZ|BJ|HK)$', code_str)
+            if m:
+                code = m.group(1)
+                market = m.group(2)
+                if market == "SH":
+                    line = "1" + code
+                elif market == "SZ":
+                    line = "0" + code
+                elif market == "BJ":
+                    line = "2" + code
+                else:
+                    line = "HK" + code
+            else:
+                line = code_str
+            if line not in existing:
+                f.write(line + "\n")
+                existing.add(line)
+                added += 1
+                print(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
+
+    print(f"[自选保存] 共添加 {added} 只股票到自选股")
+    return added
 
 
 # ============================================================

@@ -50,7 +50,7 @@ def load_tq_account(config_dir):
             TQ_ACCOUNT = str(data.get("account", "")).strip()
             TQ_PASSWORD = str(data.get("password", "")).strip()
             if TQ_ACCOUNT and TQ_PASSWORD:
-                print(f"[TqSdkAPI] 已从文件加载天勤账户: {account_file}")
+                # print(f"[TqSdkAPI] 已从文件加载天勤账户: {account_file}")
                 return True
             else:
                 print(f"[TqSdkAPI] 账户文件内容不完整，请检查 account 和 password 字段: {account_file}")
