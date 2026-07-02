@@ -22,6 +22,9 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
 from urllib.parse import urlparse, parse_qs
 
+# 区间套辅助函数（已搬迁至 BSPointList.py，红框功能复用）
+from BuySellPoint.BSPointList import _get_main_bi_time_range, _stocks_red_range, _futures_red_range, _find_sub_bi_sequence, _check_red_range_zs
+
 # ============================================================
 # 内存监控工具
 # ============================================================
@@ -105,7 +108,8 @@ from DataAPI.TdxAPI import CTdxAPI, set_tdx_config, read_tdx_day_file, read_tdx_
     _resample_5m_to_30m, _resample_day_to_week, find_day_file, \
     read_main_level_records, read_sub_level_records, \
     _forward_adjust, get_float_shares_from_xdxr, \
-    read_zxg_stocks, read_zz1000_stocks, save_to_zxg_blk
+    read_zxg_stocks, read_zz1000_stocks, save_to_zxg_blk, \
+    read_sz50_stocks, read_hs300_stocks, read_zz500_stocks
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 FORWARD_ADJUST_ENABLED = True
@@ -778,21 +782,6 @@ def _make_chan_config():
     from ChanConfig import CChanConfig
     return CChanConfig()
 
-def _ctime_to_fmt(ctime, date_fmt):
-    """将 CTime 对象转为目标日期格式。
-    使用 CTime.ts（Unix时间戳）精确格式化，避免 to_str() 丢失秒信息。"""
-    if ctime is None:
-        return ""
-    if hasattr(ctime, 'ts'):
-        return datetime.fromtimestamp(ctime.ts).strftime(date_fmt)
-    # 兼容旧调用：传入字符串
-    if isinstance(ctime, str):
-        s = ctime.replace("/", "-")
-        if date_fmt.endswith(":%S") and len(s) == 16:
-            s += ":00"
-        return s
-    return ""
-
 
 # ============================================================
 # 缠论分析（chan.py 版本）
@@ -800,16 +789,13 @@ def _ctime_to_fmt(ctime, date_fmt):
 import collections
 
 _MAX_CACHE_SIZE = 20  # 最多缓存 20 个 (股票, 周期) 组合
-_analysis_cache = collections.OrderedDict()
-
-# 当前分析上下文（供 analyze_sub_level_divergence 内部读取）
-_current_code = None
-_current_market = None
+_stocks_analysis_cache = collections.OrderedDict()
+_cache_lock = threading.RLock()  # 保护 _stocks_analysis_cache 的并发读写（可重入，兼容 _check_memory_and_protect 嵌套调用）
 
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
 
-# 扫描与冷启动共用同一个 _analysis_cache，由 LRU 20 条 + 内存保护机制统一管理
+# 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 20 条 + 内存保护机制统一管理
 # 不再需要单独的扫描缓存计数器和上限
 
 # 扫描锁（防止并发扫描导致内存峰值翻倍）
@@ -831,24 +817,26 @@ _MEMORY_LIMIT_MB = 2500            # 2.5GB 强制清理
 
 def _cache_put(key, value):
     """写入缓存，超出上限时淘汰最旧的条目（LRU语义）"""
-    if key in _analysis_cache:
-        del _analysis_cache[key]  # 移到末尾
-    elif len(_analysis_cache) >= _MAX_CACHE_SIZE:
-        oldest_key = next(iter(_analysis_cache))
-        _analysis_cache.pop(oldest_key)
-        import gc
-        gc.collect()
-        print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
-    _analysis_cache[key] = value
-    _check_memory_and_protect()
+    with _cache_lock:
+        if key in _stocks_analysis_cache:
+            del _stocks_analysis_cache[key]  # 移到末尾
+        elif len(_stocks_analysis_cache) >= _MAX_CACHE_SIZE:
+            oldest_key = next(iter(_stocks_analysis_cache))
+            _stocks_analysis_cache.pop(oldest_key)
+            import gc
+            gc.collect()
+            print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
+        _stocks_analysis_cache[key] = value
+        _check_memory_and_protect()
 
 
 def _cache_get(key):
     """读取缓存，命中时移到末尾（LRU语义）"""
-    if key not in _analysis_cache:
-        return None
-    value = _analysis_cache.pop(key)
-    _analysis_cache[key] = value
+    with _cache_lock:
+        if key not in _stocks_analysis_cache:
+            return None
+        value = _stocks_analysis_cache.pop(key)
+        _stocks_analysis_cache[key] = value
     return value
 
 
@@ -862,28 +850,37 @@ def _check_memory_and_protect():
         return
 
     import gc
-    if rss_mb > _MEMORY_LIMIT_MB:
-        _analysis_cache.clear()
-        gc.collect()
-        print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过上限 {_MEMORY_LIMIT_MB}MB，已清空全部缓存")
-    elif rss_mb > _MEMORY_WARN_THRESHOLD_MB:
-        keys_to_remove = list(_analysis_cache.keys())[:len(_analysis_cache) // 2]
-        for k in keys_to_remove:
-            del _analysis_cache[k]
-        gc.collect()
-        print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过警告线 {_MEMORY_WARN_THRESHOLD_MB}MB，已淘汰一半缓存")
+    with _cache_lock:
+        if rss_mb > _MEMORY_LIMIT_MB:
+            _stocks_analysis_cache.clear()
+            gc.collect()
+            print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过上限 {_MEMORY_LIMIT_MB}MB，已清空全部缓存")
+        elif rss_mb > _MEMORY_WARN_THRESHOLD_MB:
+            keys_to_remove = list(_stocks_analysis_cache.keys())[:len(_stocks_analysis_cache) // 2]
+            for k in keys_to_remove:
+                del _stocks_analysis_cache[k]
+            gc.collect()
+            print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过警告线 {_MEMORY_WARN_THRESHOLD_MB}MB，已淘汰一半缓存")
 
 
 def _send_windows_notification(title, message):
     """发送 Windows 10/11 Toast 通知（右下角弹出）。
-    失败时静默忽略，不影响主流程。
+    winotify 零依赖，仅需 PowerShell（Windows 内置），无需额外安装任何包。
+    只需在 venv 中执行一次: pip install winotify
+    在新线程中执行，不阻塞主流程。
     """
-    try:
-        from winotify import Notification
-        toast = Notification(app_id="缠论扫描", title=title, msg=message, duration="short")
-        toast.show()
-    except Exception:
-        pass
+    def _notify():
+        try:
+            from winotify import Notification
+            toast = Notification(app_id="缠论扫描", title=title, msg=message, duration="short")
+            toast.show()
+        except ImportError:
+            print("[通知] 未安装 winotify，请在 venv 中执行: pip install winotify")
+        except Exception as e:
+            print(f"[通知] 发送失败: {type(e).__name__}: {e}")
+
+    t = threading.Thread(target=_notify, daemon=True)
+    t.start()
 
 
 # ============================================================
@@ -894,10 +891,24 @@ SAVED_POINT_FILE = r"C:\new_tdx_test\vipdoc\double_click_dt.csv"
 SAVED_POINT_COLUMNS = ["code", "name", "y", "q", "m", "w", "d", "60m", "30m", "15m", "5m", "1m", "15s"]
 # freq -> CSV列名 的映射
 FREQ_TO_COL = {"y": "y", "q": "q", "m": "m", "w": "w", "d": "d", "60m": "60m", "30m": "30m", "15m": "15m", "5m": "5m", "1m": "1m", "15s": "15s"}
-# 日内周期集合：这些周期的选点保存/恢复需要精确到时分
-INTRADAY_FREQS = {"60m", "30m", "15m", "5m", "1m", "15s"}
-# 秒级周期：K线时间含秒，保存需精确到 HH:MM:SS
-SECOND_FREQS = {"30s", "15s"}
+# 日内周期集合：分钟级
+INTRADAY_FREQS = {"30m", "5m", "1m"}
+# 秒级周期：K线时间含秒
+SUBSECOND_FREQS = {"15s"}
+
+
+def _get_date_fmt(freq):
+    """根据周期返回统一日期格式（使用斜杠 / 分隔符，与 CChan 输出格式一致）。
+
+    - 秒级（15s）→ "%Y/%m/%d %H:%M:%S"
+    - 分钟级（30m, 5m, 1m）→ "%Y/%m/%d %H:%M"
+    - 日线及以上 → "%Y/%m/%d"
+    """
+    if freq in SUBSECOND_FREQS:
+        return "%Y/%m/%d %H:%M:%S"
+    if freq in INTRADAY_FREQS:
+        return "%Y/%m/%d %H:%M"
+    return "%Y/%m/%d"
 
 
 def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
@@ -950,51 +961,10 @@ def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
         print(f"[stock][警告] 无法获取左肩K线单元")
         return None
 
-    raw = first_klu.time.to_str()
-    if freq in SECOND_FREQS:
-        if hasattr(first_klu.time, 'ts'):
-            return datetime.fromtimestamp(first_klu.time.ts).strftime("%Y-%m-%d %H:%M:%S")
-        return raw[:19].replace("/", "-")   # fallback
-    elif freq in INTRADAY_FREQS:
-        return raw[:16].replace("/", "-")   # "2026-01-09 10:00"
-    else:
-        return raw[:10].replace("/", "-")    # "2026-01-09"
+    return first_klu.time.toFmtStr(_get_date_fmt(freq))
 
 
-def _format_bi_sdt(bi, freq):
-    """
-    从笔(bi)的起始K线单元提取日期字符串，用于选点保存和恢复匹配。
 
-    - 日线及以上周期：精确到日，格式 "YYYY-MM-DD"
-    - 日内周期（30m/15m/5m/1m）：精确到时分，格式 "YYYY-MM-DD HH:MM"
-
-    保存和恢复必须使用同一个函数，确保格式一致、精确匹配。
-    """
-    raw = bi.get_begin_klu().time.to_str()  # e.g. "2026/01/09" or "2026/01/09 10:00"
-    if freq in SECOND_FREQS:
-        return raw[:19].replace("/", "-")   # "2026-01-09 10:00:30"
-    elif freq in INTRADAY_FREQS:
-        return raw[:16].replace("/", "-")   # "2026-01-09 10:00"
-    else:
-        return raw[:10].replace("/", "-")    # "2026-01-09"
-
-
-def _format_klu_time(klu, date_fmt):
-    """把 chan.py 的 KLine_Unit 时间格式化为前端统一日期字符串。"""
-    if klu is None:
-        return ""
-    if hasattr(klu.time, 'ts'):
-        return datetime.fromtimestamp(klu.time.ts).strftime(date_fmt)
-    raw = klu.time.to_str()
-    try:
-        return datetime.strptime(raw, "%Y/%m/%d %H:%M").strftime(date_fmt)
-    except Exception:
-        return raw[:16].replace("/", "-") if len(date_fmt) > 10 else raw[:10].replace("/", "-")
-
-
-def _format_bi_edt(bi, date_fmt):
-    """从笔的结束K线单元提取结束时间。"""
-    return _format_klu_time(bi.get_end_klu(), date_fmt)
 
 
 def _bi_overlap_range(bi, zg, zd):
@@ -1021,7 +991,7 @@ def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list, date_fmt):
             continue
         if getattr(bi, "next", None) is None:
             return ""
-        return _format_bi_edt(bi, date_fmt)
+        return bi.get_end_klu().time.toFmtStr(date_fmt)
     return ""
 
 
@@ -1039,7 +1009,7 @@ def _calc_zs_confirm_edt_from_manual(zs_record, start_i, bis, date_fmt):
             continue
         if getattr(bi, "next", None) is None:
             return ""
-        return _format_bi_edt(bi, date_fmt)
+        return bi.get_end_klu().time.toFmtStr(date_fmt)
     return ""
 
 
@@ -1150,14 +1120,7 @@ def _cleanup_all_futures_data():
         CTqSdkAPI.clear_all_cache()
         print("[清理] 已清空期货K线缓存")
 
-    # 2. 清空分析缓存中的期货条目（key格式: futures_*）
-    keys_to_del = [k for k in _analysis_cache if k.startswith("futures_")]
-    for k in keys_to_del:
-        del _analysis_cache[k]
-    if keys_to_del:
-        print(f"[清理] 已清除 {len(keys_to_del)} 条期货分析缓存")
-
-    # 3. 清空选点记录中的期货条目（key以KQ.开头）
+    # 2. 清空选点记录中的期货条目（key以KQ.开头）
     pts_to_del = [k for k in list(_saved_point_times.keys()) if k.startswith("KQ.")]
     for k in pts_to_del:
         del _saved_point_times[k]
@@ -1192,8 +1155,8 @@ def _load_last_stock():
         freq = data.get("freq", "d")
         if code:
             return code, freq
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 异常: {type(e).__name__}: {e}")
     return None, None
 
 
@@ -1397,54 +1360,14 @@ def _calc_futures_white_hline(kl_list, freq, date_fmt):
         if tgt_klu is None:
             tgt_klu = left_klc.lst[0]
     if tgt_klu:
-        ls_time = tgt_klu.time.to_str()
+        ls_date = tgt_klu.time.toFmtStr(date_fmt)
     else:
-        ls_time = ""
-    try:
-        ls_dt = datetime.strptime(ls_time, "%Y/%m/%d %H:%M")
-        ls_date = ls_dt.strftime(date_fmt)
-    except:
-        ls_date = ls_time[:16].replace("/", "-") if freq in INTRADAY_FREQS else ls_time[:10].replace("/", "-")
+        ls_date = ""
     if direction == "down":
         white_hline = {"price": round(klc_high, 2), "start_date": ls_date}
     elif direction == "up":
         white_hline = {"price": round(klc_low, 2), "start_date": ls_date}
     return white_hline
-
-
-def _fixup_dual_bis_for_sub(snapshot, top_freq_sec, bottom_freq_sec):
-    """期货双窗口：将上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt（上层 K 线开始时间，天勤格式）
-    换算成子级别第一根/最后一根 K 线的时间，填入 fx_a_sub_dt/fx_b_sub_dt。
-    这样前端 calcRedRange 用 >= / <= 匹配下窗 K 线时才能定位正确。
-
-    天勤 K 线时间 = 开始时间（不同于股票 = 结束时间），因此：
-      fx_a_sub_dt = fx_a_raw_dt
-        → 上层 K 线开始 = 第一根子级别 K 线开始，直接相等
-      fx_b_sub_dt = fx_b_raw_dt + (top_freq_sec - bottom_freq_sec)
-        → 上层 K 线开始 + 上层周期 - 子周期 = 最后一根子级别 K 线开始
-        → 例：30m 线 11:00 + 30m - 5m = 11:25（最后一根 5m 线）
-    """
-    if not snapshot or 'bis' not in snapshot:
-        return
-    offset_sec = top_freq_sec - bottom_freq_sec
-    if offset_sec <= 0:
-        return
-    from datetime import timedelta
-    for bi in snapshot['bis']:
-        # 左边界：第一根子级别K线 = 上层K线开始时间，直接相等
-        bi['fx_a_sub_dt'] = bi.get('fx_a_raw_dt', '') or ''
-        # 右边界：最后一根子级别K线 = 上层K线开始 + offset
-        if bi.get('fx_b_raw_dt'):
-            try:
-                dt = datetime.strptime(bi['fx_b_raw_dt'], '%Y-%m-%d %H:%M:%S')
-                dt = dt + timedelta(seconds=offset_sec)
-                bi['fx_b_sub_dt'] = dt.strftime('%Y-%m-%d %H:%M:%S')
-            except Exception:
-                bi['fx_b_sub_dt'] = bi['fx_b_raw_dt']
-        else:
-            bi['fx_b_sub_dt'] = ''
-
-
 
 def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
@@ -1487,6 +1410,7 @@ def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
+            market_type="futures", market="KQ",
         )
 
         for _snapshot in chan.step_load():
@@ -1510,6 +1434,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
     klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）"""
     from Common.CEnum import FX_TYPE
     kl_list = chan[kl_type]
+    _date_fmt = _get_date_fmt(freq_label)
 
     if lightweight:
         # ★ 优先从天勤实时 klines 读取当前形成中K线的OHLC，避免 chan 框架 kl_list 滞后
@@ -1519,9 +1444,9 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             kline_dt = "?"
             if dt_ns is not None:
                 try:
-                    kline_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime("%Y-%m-%d %H:%M:%S")
-                except Exception:
-                    pass
+                    kline_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime(_date_fmt)
+                except Exception as e:
+                    print(f"[警告] 异常: {type(e).__name__}: {e}")
             o = float(last_row.get("open", 0) or 0)
             h = float(last_row.get("high", 0) or 0)
             l = float(last_row.get("low", 0) or 0)
@@ -1537,7 +1462,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 },
                 "meta": {
                     "symbol": symbol, "name": name, "freq": freq_label,
-                    "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "generated_at": datetime.now().strftime(_date_fmt),
                     "is_realtime": True, "market": "futures",
                 },
             }
@@ -1551,7 +1476,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
         return {
             "type": "tick",
             "kline": {
-                "date": _ctime_to_fmt(last_klu.time, "%Y-%m-%d %H:%M:%S"),
+                "date": last_klu.time.toFmtStr(_date_fmt),
                 "open": round(last_klu.open, 3),
                 "high": round(last_klu.high, 3),
                 "low": round(last_klu.low, 3),
@@ -1559,7 +1484,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             },
             "meta": {
                 "symbol": symbol, "name": name, "freq": freq_label,
-                "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "generated_at": datetime.now().strftime(_date_fmt),
                 "is_realtime": True, "market": "futures",
             },
         }
@@ -1569,8 +1494,8 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
         for klu in klc.lst:
             t = klu.time
             klines_out.append({
-                "date": _ctime_to_fmt(t, "%Y-%m-%d %H:%M:%S"),
-                "timestamp": int(t.ts * 1000) if hasattr(t, 'ts') else 0,
+                "date": t.toFmtStr(_date_fmt),
+                "timestamp": int(t.ts * 1000),
                 "open": round(klu.open, 3),
                 "high": round(klu.high, 3),
                 "low": round(klu.low, 3),
@@ -1618,24 +1543,14 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             # 左肩/右肩原始K线时间（用于双窗口红框定位）
             fx_a_raw_dt = ""
             fx_b_raw_dt = ""
-            try:
-                begin_klc = bi.begin_klc
-                end_klc = bi.end_klc
-                left_shoulder_klc = begin_klc.pre if begin_klc else None
-                if left_shoulder_klc and left_shoulder_klc.lst:
-                    a_klu = left_shoulder_klc.lst[0]
-                    fx_a_raw_dt = _ctime_to_fmt(a_klu.time, "%Y-%m-%d %H:%M:%S")
-                right_shoulder_klc = end_klc.next if end_klc else None
-                if right_shoulder_klc and right_shoulder_klc.lst:
-                    b_klu = right_shoulder_klc.lst[-1]
-                    fx_b_raw_dt = _ctime_to_fmt(b_klu.time, "%Y-%m-%d %H:%M:%S")
-            except Exception:
-                pass
+            shoulder_times = _get_main_bi_time_range(bi, _date_fmt)
+            if shoulder_times:
+                fx_a_raw_dt, fx_b_raw_dt, _, _ = shoulder_times
             bis.append({
-                "sdt": _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S") if begin_klu else "",
-                "edt": _ctime_to_fmt(end_klu.time, "%Y-%m-%d %H:%M:%S") if end_klu else "",
-                "sdt_ts": int(begin_klu.time.ts * 1000) if begin_klu and hasattr(begin_klu.time, 'ts') else 0,
-                "edt_ts": int(end_klu.time.ts * 1000) if end_klu and hasattr(end_klu.time, 'ts') else 0,
+                "sdt": begin_klu.time.toFmtStr(_date_fmt) if begin_klu else "",
+                "edt": end_klu.time.toFmtStr(_date_fmt) if end_klu else "",
+                "sdt_ts": int(begin_klu.time.ts * 1000) if begin_klu else 0,
+                "edt_ts": int(end_klu.time.ts * 1000) if end_klu else 0,
                 "direction": direction,
                 "fx_a_price": round(bi.get_begin_val(), 2),
                 "fx_b_price": round(bi.get_end_val(), 2),
@@ -1650,23 +1565,23 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 "fx_a_sub_dt": "",
                 "fx_b_sub_dt": "",
             })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     fxs = []
     for klc in kl_list.lst:
         if klc.fx == FX_TYPE.TOP:
             peak_klu = klc.get_high_peak_klu()
             fxs.append({
-                "date": _ctime_to_fmt(peak_klu.time, "%Y-%m-%d %H:%M:%S") if peak_klu else "",
-                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
+                "date": peak_klu.time.toFmtStr(_date_fmt) if peak_klu else "",
+                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu else 0,
                 "mark": "G", "price": klc.high, "high": klc.high, "low": klc.low,
             })
         elif klc.fx == FX_TYPE.BOTTOM:
             peak_klu = klc.get_low_peak_klu()
             fxs.append({
-                "date": _ctime_to_fmt(peak_klu.time, "%Y-%m-%d %H:%M:%S") if peak_klu else "",
-                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu and hasattr(peak_klu.time, 'ts') else 0,
+                "date": peak_klu.time.toFmtStr(_date_fmt) if peak_klu else "",
+                "timestamp": int(peak_klu.time.ts * 1000) if peak_klu else 0,
                 "mark": "D", "price": klc.low, "high": klc.high, "low": klc.low,
             })
 
@@ -1683,29 +1598,29 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 begin_price = round(begin_klu.high, 2) if begin_klu else round(seg._high(), 2)
                 end_price = round(end_klu.low, 2) if end_klu else round(seg._low(), 2)
             segs.append({
-                "sdt": _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S") if begin_klu else "",
-                "edt": _ctime_to_fmt(end_klu.time, "%Y-%m-%d %H:%M:%S") if end_klu else "",
+                "sdt": begin_klu.time.toFmtStr(_date_fmt) if begin_klu else "",
+                "edt": end_klu.time.toFmtStr(_date_fmt) if end_klu else "",
                 "direction": direction,
                 "begin_price": begin_price, "end_price": end_price,
                 "high": round(seg._high(), 2), "low": round(seg._low(), 2),
                 "amp": round(seg.amp(), 2),
             })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     zs_list = []
     for zs in kl_list.zs_list:
         try:
             zs_list.append({
-                "sdt": _ctime_to_fmt(zs.begin.time, "%Y-%m-%d %H:%M:%S") if zs.begin and hasattr(zs.begin, 'time') else "",
-                "edt": _ctime_to_fmt(zs.end.time, "%Y-%m-%d %H:%M:%S") if zs.end and hasattr(zs.end, 'time') else "",
-                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, "%Y-%m-%d %H:%M:%S"),
+                "sdt": zs.begin.time.toFmtStr(_date_fmt) if zs.begin and hasattr(zs.begin, 'time') else "",
+                "edt": zs.end.time.toFmtStr(_date_fmt) if zs.end and hasattr(zs.end, 'time') else "",
+                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, _date_fmt),
                 "zg": round(zs.high, 2), "zd": round(zs.low, 2),
                 "gg": round(zs.peak_high, 2), "dd": round(zs.peak_low, 2),
                 "dir": "up" if (zs.bi_in and zs.bi_in.is_up()) else "down",
             })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     zs_stars = []
     for zs in kl_list.zs_list:
@@ -1715,7 +1630,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
         begin_klu = entry_bi.get_begin_klu()
         if begin_klu is None:
             continue
-        star_date = _ctime_to_fmt(begin_klu.time, "%Y-%m-%d %H:%M:%S")
+        star_date = begin_klu.time.toFmtStr(_date_fmt)
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({"date": star_date, "price": round(star_price, 2), "mark": "D", "color": "red"})
@@ -1727,15 +1642,15 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
         bsp_list = chan.get_latest_bsp(idx=0, number=0)
         for bsp in bsp_list:
             bsps.append({
-                "date": _ctime_to_fmt(bsp.klu.time, "%Y-%m-%d %H:%M:%S"),
-                "timestamp": int(bsp.klu.time.ts * 1000) if hasattr(bsp.klu.time, 'ts') else 0,
+                "date": bsp.klu.time.toFmtStr(_date_fmt),
+                "timestamp": int(bsp.klu.time.ts * 1000),
                 "type": bsp.type2str(), "is_buy": bsp.is_buy,
                 "price": round(bsp.klu.close, 3),
                 "high": round(bsp.klu.high, 3),
                 "low": round(bsp.klu.low, 3),
             })
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     return {
         "meta": {
@@ -1743,7 +1658,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             "kline_count": len(klines_out), "bi_count": len(bis),
             "fx_count": len(fxs), "zs_count": len(zs_list),
             "seg_count": len(segs), "bsp_count": len(bsps),
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "generated_at": datetime.now().strftime(_date_fmt),
             "is_realtime": True, "market": "futures",
             "saved_selection_date": saved_selection_date,
         },
@@ -1771,92 +1686,76 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     # 确定周期秒数
     freq_sec = FREQ_SEC_MAP.get(freq, 86400)
 
-    # 0. 尝试复用 SSE 引擎缓存（避免重复连接+拉取+分析）
-    cached = None
-    try:
-        from DataAPI.TqSdkAPI import get_futures_cache
-        cached = get_futures_cache(code, freq_sec=freq_sec)
-    except Exception:
-        pass
+    # 1. 拉取历史K线（每次冷启动重新拉取天勤数据）
+    t_fetch = time.time()
+    full_records = fetch_futures_kline(code, freq_sec=freq_sec)
+    print(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
+    if len(full_records) < 5:
+        return {"error": f"K线数据不足: 仅{len(full_records)}条"}
 
-    if cached and not end_date and cached.get("freq_sec") == freq_sec:
-        # 直接使用引擎缓存的 chan + records，跳过拉取和 chan.py 分析
-        print(f"[缓存] ⑴ 复用SSE缓存: 跳过拉取+分析")
-        records = cached["records"]
-        chan = cached["chan"]
-        stock_name = cached["name"]
-        kl_list = chan[_get_kl_type(freq)]
-        print(f"[缓存] ⑶ 复用缓存chan: 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
+    # 2. 截断（end_date 复盘模式）
+    if end_date:
+        target_dt = None
+        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+            try:
+                target_dt = datetime.strptime(end_date, fmt)
+                break
+            except ValueError:
+                continue
+        if target_dt is None:
+            return {"error": f"无法解析日期: {end_date}"}
+        records = [r for r in full_records if r["dt"] <= target_dt]
+        if len(records) < 5:
+            return {"error": f"截断后K线数据不足: 仅{len(records)}条"}
     else:
-        # 1. 拉取历史K线
-        t_fetch = time.time()
-        full_records = fetch_futures_kline(code, freq_sec=freq_sec)
-        print(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
-        if len(full_records) < 5:
-            return {"error": f"K线数据不足: 仅{len(full_records)}条"}
+        records = full_records
 
-        # 2. 截断（end_date 复盘模式）
-        if end_date:
-            target_dt = None
-            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
-                try:
-                    target_dt = datetime.strptime(end_date, fmt)
-                    break
-                except ValueError:
-                    continue
-            if target_dt is None:
-                return {"error": f"无法解析日期: {end_date}"}
-            records = [r for r in full_records if r["dt"] <= target_dt]
-            if len(records) < 5:
-                return {"error": f"截断后K线数据不足: 仅{len(records)}条"}
-        else:
-            records = full_records
+    # 3. 注入数据源
+    t_set = time.time()
+    CTqSdkAPI.set_data(records, symbol=code)
+    print(f"[分析] ⑵ 注入数据源: {time.time()-t_set:.3f}s")
 
-        # 3. 注入数据源
-        t_set = time.time()
-        CTqSdkAPI.set_data(records, symbol=code)
-        print(f"[分析] ⑵ 注入数据源: {time.time()-t_set:.3f}s")
+    # 4. 获取品种名称
+    stock_name = _get_futures_name(code)
 
-        # 4. 获取品种名称
-        stock_name = _get_futures_name(code)
+    # 5. 创建 CChan 并消费
+    import gc
+    t0 = time.time()
+    config = _make_chan_config()
 
-        # 5. 创建 CChan 并消费
-        import gc
-        t0 = time.time()
-        config = _make_chan_config()
+    try:
+        chan = CChan(
+            code=code,
+            begin_time=None,
+            end_time=None,
+            data_src="custom:TqSdkAPI.CTqSdkAPI",
+            lv_list=[_get_kl_type(freq)],
+            config=config,
+            autype=AUTYPE.NONE,
+            market_type="futures", market="KQ",
+        )
+        for _snapshot in chan.step_load():
+            pass
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        records_info = ""
+        if records:
+            records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
+        print(f"[期货][错误] chan.py 分析失败: code={code} freq={freq}{records_info}")
+        print(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
+        print(f"[期货][错误] 完整堆栈:\n{tb}")
+        return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
 
-        try:
-            chan = CChan(
-                code=code,
-                begin_time=None,
-                end_time=None,
-                data_src="custom:TqSdkAPI.CTqSdkAPI",
-                lv_list=[_get_kl_type(freq)],
-                config=config,
-                autype=AUTYPE.NONE,
-            )
-            for _snapshot in chan.step_load():
-                pass
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            records_info = ""
-            if records:
-                records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
-            print(f"[期货][错误] chan.py 分析失败: code={code} freq={freq}{records_info}")
-            print(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
-            print(f"[期货][错误] 完整堆栈:\n{tb}")
-            return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
-
-        kl_list = chan[_get_kl_type(freq)]
-        print(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
+    kl_list = chan[_get_kl_type(freq)]
+    print(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
 
     # 6. 提取结果（与股票一致的格式，用 records 而非 kl_list）
 
     t_extract = time.time()
     closes = [r["close"] for r in records]
     macd_list = calculate_macd(closes)
-    date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+    date_fmt = _get_date_fmt(freq)
 
     # K线数据（从 records 构建，与股票代码一致）
     kline_data = []
@@ -1885,14 +1784,14 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             power = abs(end_val - begin_val)
             begin_klu = bi.get_begin_klu()
             end_klu = bi.get_end_klu()
-            sdt_str = _ctime_to_fmt(begin_klu.time if begin_klu else None, date_fmt)
-            edt_str = _ctime_to_fmt(end_klu.time if end_klu else None, date_fmt)
+            sdt_str = begin_klu.time.toFmtStr(date_fmt) if begin_klu else ""
+            edt_str = end_klu.time.toFmtStr(date_fmt) if end_klu else ""
             try:
-                sdt_ts = int(begin_klu.time.ts * 1000) if begin_klu and hasattr(begin_klu.time, 'ts') else 0
+                sdt_ts = int(begin_klu.time.ts * 1000) if begin_klu else 0
             except:
                 sdt_ts = 0
             try:
-                edt_ts = int(end_klu.time.ts * 1000) if end_klu and hasattr(end_klu.time, 'ts') else 0
+                edt_ts = int(end_klu.time.ts * 1000) if end_klu else 0
             except:
                 edt_ts = 0
 
@@ -1926,15 +1825,15 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 if left_shoulder_klc and left_shoulder_klc.lst:
                     a_klu = left_shoulder_klc.lst[0]
                 if a_klu:
-                    fx_a_raw_dt = _ctime_to_fmt(a_klu.time, date_fmt)
+                    fx_a_raw_dt = a_klu.time.toFmtStr(date_fmt)
                 # B: 右肩最后一根原始K线 = end_klc.next.lst[-1]
                 right_shoulder_klc = end_klc.next if end_klc else None
                 if right_shoulder_klc and right_shoulder_klc.lst:
                     b_klu = right_shoulder_klc.lst[-1]
                 if b_klu:
-                    fx_b_raw_dt = _ctime_to_fmt(b_klu.time, date_fmt)
-            except Exception:
-                pass
+                    fx_b_raw_dt = b_klu.time.toFmtStr(date_fmt)
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
             bi_data.append({
                 "sdt": sdt_str, "edt": edt_str,
@@ -1953,8 +1852,8 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 "fx_a_sub_dt": "",
                 "fx_b_sub_dt": "",
             })
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     # 提取分型（与股票路径一致）
     for klc in kl_list.lst:
@@ -1962,10 +1861,10 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             mark = "G"
             price = klc.high
             klu = klc.get_high_peak_klu()
-            fx_date = _ctime_to_fmt(klu.time, date_fmt) if klu else ""
+            fx_date = klu.time.toFmtStr(date_fmt) if klu else ""
             fx_data.append({
                 "date": fx_date,
-                "timestamp": int(klu.time.ts * 1000) if klu and hasattr(klu.time, 'ts') else 0,
+                "timestamp": int(klu.time.ts * 1000) if klu else 0,
                 "mark": mark, "price": price,
                 "high": klc.high, "low": klc.low,
             })
@@ -1973,10 +1872,10 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             mark = "D"
             price = klc.low
             klu = klc.get_low_peak_klu()
-            fx_date = _ctime_to_fmt(klu.time, date_fmt) if klu else ""
+            fx_date = klu.time.toFmtStr(date_fmt) if klu else ""
             fx_data.append({
                 "date": fx_date,
-                "timestamp": int(klu.time.ts * 1000) if klu and hasattr(klu.time, 'ts') else 0,
+                "timestamp": int(klu.time.ts * 1000) if klu else 0,
                 "mark": mark, "price": price,
                 "high": klc.high, "low": klc.low,
             })
@@ -1987,8 +1886,8 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             direction = "up" if seg.is_up() else "down"
             begin_klu = seg.get_begin_klu()
             end_klu = seg.get_end_klu()
-            sdt = _ctime_to_fmt(begin_klu.time, date_fmt) if begin_klu else ""
-            edt = _ctime_to_fmt(end_klu.time, date_fmt) if end_klu else ""
+            sdt = begin_klu.time.toFmtStr(date_fmt) if begin_klu else ""
+            edt = end_klu.time.toFmtStr(date_fmt) if end_klu else ""
             if direction == "up":
                 begin_price = round(begin_klu.low, 2) if begin_klu else round(seg._low(), 2)
                 end_price = round(end_klu.high, 2) if end_klu else round(seg._high(), 2)
@@ -2004,24 +1903,23 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 "low": round(seg._low(), 2),
                 "amp": round(seg.amp(), 2),
             })
-        except Exception:
-            pass
-
-    # 提取中枢（与股票代码完全一致，使用 _format_klu_time）
-    for zs in kl_list.zs_list:
-        try:
-            zs_data.append({
-                "sdt": _format_klu_time(zs.begin, date_fmt),
-                "edt": _format_klu_time(zs.end, date_fmt),
-                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, date_fmt),
-                "zg": round(zs.high, 2),
-                "zd": round(zs.low, 2),
-                "gg": round(zs.peak_high, 2),
-                "dd": round(zs.peak_low, 2),
-                "dir": "up" if zs.bi_in and zs.bi_in.is_up() else "down",
-            })
         except Exception as e:
-            print(f"[调试] 中枢提取失败: {type(e).__name__}: {e}")
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
+
+        for zs in kl_list.zs_list:
+            try:
+                zs_data.append({
+                    "sdt": zs.begin.time.toFmtStr(date_fmt),
+                    "edt": zs.end.time.toFmtStr(date_fmt),
+                    "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, date_fmt),
+                    "zg": round(zs.high, 2),
+                    "zd": round(zs.low, 2),
+                    "gg": round(zs.peak_high, 2),
+                    "dd": round(zs.peak_low, 2),
+                    "dir": "up" if zs.bi_in and zs.bi_in.is_up() else "down",
+                })
+            except Exception as e:
+                print(f"[调试] 中枢提取失败: {type(e).__name__}: {e}")
 
     # 中枢五角星（与股票代码完全一致）
     for zs in kl_list.zs_list:
@@ -2031,7 +1929,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         begin_klu = entry_bi.get_begin_klu()
         if begin_klu is None:
             continue
-        star_date = _ctime_to_fmt(begin_klu.time, date_fmt)
+        star_date = begin_klu.time.toFmtStr(date_fmt)
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({
@@ -2053,7 +1951,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         bsp_list = chan.get_latest_bsp(idx=0, number=0)
         for bsp in bsp_list:
             klu = bsp.klu
-            bsp_date = _ctime_to_fmt(klu.time, date_fmt)
+            bsp_date = klu.time.toFmtStr(date_fmt)
             try:
                 bsp_ts = int(datetime.strptime(bsp_date, date_fmt).timestamp()) * 1000
             except:
@@ -2162,6 +2060,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 lv_list=[_get_kl_type(sub_freq)],
                 config=sub_config,
                 autype=AUTYPE.NONE,
+                market_type="futures", market="KQ",
             )
             for _snapshot in sub_chan.step_load():
                 pass
@@ -2182,7 +2081,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         result["sub"] = sub_result
         # 将 fx_a_raw_dt/fx_b_raw_dt（天勤K线开始时间）换算为子级别时间
         top_freq_sec = FREQ_SEC_MAP.get(freq, 60)
-        _fixup_dual_bis_for_sub(result, top_freq_sec, sub_freq_sec)
+        _futures_red_range(result, top_freq_sec, sub_freq_sec, sub_freq)
         print(f"[双窗口] 子级别({sub_freq})提取完成: K线={sub_result['meta']['kline_count']}, "
               f"笔={sub_result['meta']['bi_count']}, 中枢={sub_result['meta']['zs_count']}")
 
@@ -2415,19 +2314,16 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 2. 使用 chan.py 进行缠论分析
     import gc
     # 复盘时：清空缓存恢复原始状态，再重新加载（与选点逻辑一致）
-    if end_date and cache_key in _analysis_cache:
-        del _analysis_cache[cache_key]
+    if end_date and cache_key in _stocks_analysis_cache:
+        with _cache_lock:
+            if cache_key in _stocks_analysis_cache:
+                del _stocks_analysis_cache[cache_key]
         gc.collect()
 
     t0 = time.time()
     with _stock_analysis_lock:
         chan_code = f"{market}.{code}"
         config = _make_chan_config()
-
-        # 设置上下文（供 cal_bs0point → _analyze_sub_level_divergence 链式调用）
-        global _current_code, _current_market
-        _current_code = code
-        _current_market = market
 
         try:
             # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
@@ -2457,6 +2353,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 lv_list=lv_list,
                 config=config,
                 autype=AUTYPE.NONE,
+                market_type="stock",
             )
             for _snapshot in chan.step_load():
                 pass
@@ -2545,176 +2442,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     return result
 
 
-def _build_zs_from_bis(bis, all_bi_list, date_fmt):
-    """
-    从笔列表中构建中枢，完整模拟 CZSList 的 over_seg 算法（不含合并）。
-
-    流程（对应 ZSList.py）：
-      cal_bi_zs(over_seg) → 逐笔调用 update_overseg_zs
-        → update_overseg_zs: 处理延伸/跳过 → add_to_free_lst
-          → add_to_free_lst: 加入 free_lst → try_construct_zs(over_seg)
-            → 取最后3笔 → 跳过进入段 → 检查三笔重叠 → 形成中枢 → 清空 free_lst
-
-    参数:
-        bis: 从 start_bi 到 end_bi 的笔列表（含两端）
-        all_bi_list: 完整的笔列表（用于查找进入段）
-        date_fmt: 日期格式字符串
-
-    返回:
-        zs_data: 中枢数据列表
-        zs_stars: 五角星数据列表
-    """
-    zs_data = []
-    zs_stars = []
-    if len(bis) < 4:  # over_seg 至少需要 1进入段 + 3构成中枢
-        return zs_data, zs_stars
-
-    def _fmt(klu):
-        if klu is None:
-            return ""
-        raw = klu.time.to_str()
-        try:
-            return datetime.strptime(raw, "%Y/%m/%d %H:%M").strftime(date_fmt)
-        except:
-            return raw[:16].replace("/", "-") if len(date_fmt) > 10 else raw[:10].replace("/", "-")
-
-    def _in_zs_range(bi, zg, zd):
-        """笔是否与中枢区间 [zd, zg] 有重叠（模拟 CZS.in_range）"""
-        return min(zg, bi._high()) >= max(zd, bi._low())
-
-    free_lst = []       # 模拟 CZSList.free_item_lst
-    zs_records = []     # 模拟 CZSList.zs_lst（简化版）
-
-    for bi in bis:
-        # ===== update_overseg_zs 逻辑 =====
-        if len(zs_records) and len(free_lst) == 0:
-            last_zs = zs_records[-1]
-            # 检查1: try_add_to_end — bi 本身在 ZS 范围内，且 bi.next 也在范围内，则延伸中枢
-            # 对应源码: bi.idx - zs.end_bi.idx <= 1 and zs.in_range(bi.next) and zs.try_add_to_end(bi)
-            # try_add_to_end 内部先检查 in_range(bi)，所以这里也要检查 bi 在范围内
-            if bi.next is not None:
-                if (bi.idx - last_zs['end_bi'].idx <= 1
-                        and _in_zs_range(bi.next, last_zs['zg'], last_zs['zd'])
-                        and _in_zs_range(bi, last_zs['zg'], last_zs['zd'])):
-                    # try_add_to_end 成功 → 延伸中枢（update_zs_end）
-                    last_zs['edt'] = _fmt(bi.get_end_klu())
-                    last_zs['gg'] = round(max(last_zs['gg'], bi._high()), 2)
-                    last_zs['dd'] = round(min(last_zs['dd'], bi._low()), 2)
-                    last_zs['end_bi'] = bi
-                    zs_data[-1] = {k: v for k, v in last_zs.items() if k != 'end_bi'}
-                    continue
-            # 检查2: bi 本身在 ZS 范围内且相邻 → 跳过（不加入 free_lst）
-            if _in_zs_range(bi, last_zs['zg'], last_zs['zd']) and bi.idx - last_zs['end_bi'].idx <= 1:
-                continue
-            # 否则：bi 突破中枢，加入 free_lst（继续往下走）
-            # 如果 bi 不跟最后一个中枢重叠，且 bi 不是最后一笔（有后续笔确认），设置 confirm_edt
-            if not _in_zs_range(bi, last_zs['zg'], last_zs['zd']) and not last_zs.get('confirm_edt'):
-                if bi.idx != bis[-1].idx:
-                    last_zs['confirm_edt'] = _fmt(bi.get_end_klu())
-                    zs_data[-1]['confirm_edt'] = last_zs['confirm_edt']
-
-        # ===== add_to_free_lst 逻辑 =====
-        if len(free_lst) != 0 and bi.idx == free_lst[-1].idx:
-            free_lst = free_lst[:-1]  # 笔更新，替换最后一项
-        free_lst.append(bi)
-
-        # ===== try_construct_zs(over_seg) 逻辑 =====
-        if len(free_lst) < 3:
-            continue
-
-        lst = list(free_lst[-3:])  # 取最后3笔
-
-        # --- 处理进入段 ---
-        if len(zs_records) > 0:
-            # 有前序中枢：检查突破方向
-            zs = zs_records[-1]
-            lst0_low = lst[0]._low()
-            lst0_high = lst[0]._high()
-            if lst0_low > zs['zg']:
-                # 向上突破 → 跳过向上笔（进入段）
-                if lst[0].is_up():
-                    continue  # return None，笔留在 free_lst 中等下一笔
-            elif lst0_high < zs['zd']:
-                # 向下突破 → 跳过向下笔（进入段）
-                if lst[0].is_down():
-                    continue
-            # else: lst[0] 在 ZS 内部 → 不应出现（update_overseg_zs 已过滤）
-        else:
-            # 无前序中枢：free_lst[0] 是进入段
-            first_pen = free_lst[0]
-            if len(free_lst) == 3:
-                # 只有3笔，跳过第一笔（进入段），等第4笔
-                continue
-            else:
-                # 超过3笔，跳过与进入段同向的笔
-                if lst[0].dir == first_pen.dir:
-                    continue
-                # lst[0] 与 first_pen 反向，可以构建
-
-        # 现在 lst 应该包含3笔且第1笔与进入段反向
-        if len(lst) < 3:
-            continue
-
-        b1, b2, b3 = lst[0], lst[1], lst[2]
-
-        if not getattr(b3, 'is_sure', True):
-            continue
-
-        # --- 检查三笔重叠 ---
-        min_high = min(b1._high(), b2._high(), b3._high())
-        max_low = max(b1._low(), b2._low(), b3._low())
-        if min_high <= max_low:
-            continue  # 无重叠，继续积累
-
-        # --- 形成中枢 ---
-        zg = min_high
-        zd = max_low
-        gg = max(b1._high(), b2._high(), b3._high())
-        dd = min(b1._low(), b2._low(), b3._low())
-
-        # 查找进入段笔（中枢第一笔的前一笔）
-        entry_bi = None
-        entry_dir = "up"
-        for j, bi_ref in enumerate(all_bi_list):
-            if bi_ref is b1 and j > 0:
-                entry_bi = all_bi_list[j - 1]
-                break
-        if entry_bi is not None:
-            entry_dir = "up" if entry_bi.is_up() else "down"
-
-        sdt = _fmt(b1.get_begin_klu())
-        edt = _fmt(b3.get_end_klu())
-
-        zs_rec = {
-            'sdt': sdt, 'edt': edt, 'confirm_edt': '',
-            'zg': round(zg, 2), 'zd': round(zd, 2),
-            'gg': round(gg, 2), 'dd': round(dd, 2),
-            'dir': entry_dir,
-            'end_bi': b3,
-        }
-        zs_records.append(zs_rec)
-        zs_data.append({k: v for k, v in zs_rec.items() if k != 'end_bi'})
-
-        # 添加五角星（进入段起点分型）
-        if entry_bi is not None:
-            entry_fx_klu = entry_bi.get_begin_klu()
-            if entry_fx_klu is not None:
-                try:
-                    fx_date = _fmt(entry_fx_klu)
-                except:
-                    fx_date = ""
-                star_price = entry_bi.get_begin_val()
-                if entry_bi.is_up():
-                    zs_stars.append({"date": fx_date, "price": round(star_price, 2), "mark": "D", "color": "red"})
-                else:
-                    zs_stars.append({"date": fx_date, "price": round(star_price, 2), "mark": "G", "color": "green"})
-
-        # --- 清空 free_lst（不合并） ---
-        free_lst = []
-
-    return zs_data, zs_stars
-
-
 # ============================================================
 # 提取主级别和子级别数据
 # ============================================================
@@ -2730,7 +2457,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     # 1. K线数据（含MACD）
     closes = [r["close"] for r in records]
     macd_list = calculate_macd(closes)
-    date_fmt = "%Y-%m-%d %H:%M" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+    date_fmt = _get_date_fmt(freq)
     kline_data = []
     for i, row in enumerate(records):
         macd = macd_list[i] if i < len(macd_list) else {"dif": 0, "dea": 0, "macd": 0}
@@ -2746,18 +2473,13 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         })
 
     def _parse_klu_dt(klu):
-        try:
-            return datetime.strptime(klu.time.to_str(), "%Y/%m/%d %H:%M")
-        except Exception:
-            return None
+        """将 KLU 的时间转为 datetime 对象，用于范围比较。"""
+        return datetime.fromtimestamp(klu.time.ts)
 
     def _format_klu_dt(klu, out_freq):
-        t = klu.time.to_str()
-        out_fmt = "%Y-%m-%d %H:%M" if out_freq in INTRADAY_FREQS else "%Y-%m-%d"
-        try:
-            return datetime.strptime(t, "%Y/%m/%d %H:%M").strftime(out_fmt)
-        except Exception:
-            return t[:16].replace("/", "-") if out_freq in INTRADAY_FREQS else t[:10].replace("/", "-")
+        """将 KLU 的时间格式化为目标频率对应的日期字符串。"""
+        out_fmt = _get_date_fmt(out_freq)
+        return klu.time.toFmtStr(out_fmt)
 
     def _get_parent_sub_klus(parent_klu, parent_freq):
         """获取一根主级别K线真正覆盖的子级别K线序列。"""
@@ -2792,10 +2514,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         date_to_klu = {}
         for klc in kl_list.lst:
             for klu in klc.lst:
-                try:
-                    key = datetime.strptime(klu.time.to_str(), "%Y/%m/%d %H:%M").strftime(date_fmt)
-                except:
-                    key = klu.time.to_str()[:10].replace("/", "-")
+                key = klu.time.toFmtStr(date_fmt)
                 date_to_klu[key] = klu
         for k in kline_data:
             klu = date_to_klu.get(k["date"])
@@ -2824,14 +2543,14 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             sdt_str = sdt_dt.strftime(date_fmt)
             sdt_ts = int(sdt_dt.timestamp()) * 1000
         except:
-            sdt_str = sdt[:16].replace("/", "-") if freq in INTRADAY_FREQS else sdt[:10].replace("/", "-")
+            sdt_str = sdt
             sdt_ts = 0
         try:
             edt_dt = datetime.strptime(edt, "%Y/%m/%d %H:%M")
             edt_str = edt_dt.strftime(date_fmt)
             edt_ts = int(edt_dt.timestamp()) * 1000
         except:
-            edt_str = edt[:16].replace("/", "-") if freq in INTRADAY_FREQS else edt[:10].replace("/", "-")
+            edt_str = edt
             edt_ts = 0
         begin_fx_idx = None
         if hasattr(bi, 'begin_klc') and bi.begin_klc:
@@ -2849,43 +2568,15 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         fx_b_raw_dt = ""
         a_klu = None
         b_klu = None
-        try:
-            begin_klc = bi.begin_klc
-            end_klc = bi.end_klc
-            left_shoulder_klc = begin_klc.pre if begin_klc else None
-            if left_shoulder_klc and left_shoulder_klc.lst:
-                a_klu = left_shoulder_klc.lst[0]
-            if a_klu:
-                a_t = a_klu.time.to_str()
-                try:
-                    fx_a_raw_dt = datetime.strptime(a_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
-                except:
-                    fx_a_raw_dt = a_t[:16].replace("/", "-") if freq in INTRADAY_FREQS else a_t[:10].replace("/", "-")
-            right_shoulder_klc = end_klc.next if end_klc else None
-            if right_shoulder_klc and right_shoulder_klc.lst:
-                b_klu = right_shoulder_klc.lst[-1]
-            if b_klu:
-                b_t = b_klu.time.to_str()
-                try:
-                    fx_b_raw_dt = datetime.strptime(b_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
-                except:
-                    fx_b_raw_dt = b_t[:16].replace("/", "-") if freq in INTRADAY_FREQS else b_t[:10].replace("/", "-")
-        except Exception as e:
-            print(f"[stock][调试] 获取分型肩部原始K线时间失败: {e}")
+        date_fmt = _get_date_fmt(freq)
+        shoulder_times = _get_main_bi_time_range(bi, date_fmt)
+        if shoulder_times:
+            fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu = shoulder_times
 
         if not fx_a_raw_dt or not fx_b_raw_dt:
             _fx_empty_count += 1
 
-        fx_a_sub_dt = ""
-        fx_b_sub_dt = ""
-        if dual and sub_freq:
-            try:
-                if a_klu and hasattr(a_klu, 'sub_kl_list') and a_klu.sub_kl_list:
-                    fx_a_sub_dt = _format_klu_dt(a_klu.sub_kl_list[0], sub_freq)
-                if b_klu and hasattr(b_klu, 'sub_kl_list') and b_klu.sub_kl_list:
-                    fx_b_sub_dt = _format_klu_dt(b_klu.sub_kl_list[-1], sub_freq)
-            except Exception:
-                pass
+        fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, bi) if dual and sub_freq else ("", "")
 
         bi_data.append({
             "sdt": sdt_str, "edt": edt_str,
@@ -2915,7 +2606,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             mark = "G"
             price = klc.high
             klu = klc.get_high_peak_klu()
-            fx_date = klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            fx_date = klu.time.toFmtStr(_get_date_fmt(freq))
             try:
                 fx_dt = datetime.strptime(fx_date, date_fmt)
                 fx_ts = int(fx_dt.timestamp()) * 1000
@@ -2930,7 +2621,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             mark = "D"
             price = klc.low
             klu = klc.get_low_peak_klu()
-            fx_date = klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            fx_date = klu.time.toFmtStr(_get_date_fmt(freq))
             try:
                 fx_dt = datetime.strptime(fx_date, date_fmt)
                 fx_ts = int(fx_dt.timestamp()) * 1000
@@ -2946,8 +2637,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     zs_data = []
     for zs in kl_list.zs_list:
         zs_data.append({
-            "sdt": _format_klu_time(zs.begin, date_fmt),
-            "edt": _format_klu_time(zs.end, date_fmt),
+            "sdt": zs.begin.time.toFmtStr(date_fmt),
+            "edt": zs.end.time.toFmtStr(date_fmt),
             "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, date_fmt),
             "zg": round(zs.high, 2),
             "zd": round(zs.low, 2),
@@ -2969,7 +2660,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             sdt_dt = datetime.strptime(sdt_raw, "%Y/%m/%d %H:%M")
             star_date = sdt_dt.strftime(date_fmt)
         except:
-            star_date = sdt_raw[:16].replace("/", "-") if freq in INTRADAY_FREQS else sdt_raw[:10].replace("/", "-")
+            star_date = sdt_raw
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({
@@ -2992,7 +2683,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         bsp_list = chan.get_latest_bsp(idx=0, number=0)
         for bsp in bsp_list:
             klu = bsp.klu
-            bsp_date = klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            bsp_date = klu.time.toFmtStr(_get_date_fmt(freq))
             try:
                 bsp_dt = datetime.strptime(bsp_date, date_fmt)
                 bsp_ts = int(bsp_dt.timestamp()) * 1000
@@ -3015,8 +2706,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         direction = "up" if seg.is_up() else "down"
         begin_klu = seg.get_begin_klu()
         end_klu = seg.get_end_klu()
-        sdt = (begin_klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else begin_klu.time.to_str()[:10].replace("/", "-")) if begin_klu else ""
-        edt = (end_klu.time.to_str()[:16].replace("/", "-") if freq in INTRADAY_FREQS else end_klu.time.to_str()[:10].replace("/", "-")) if end_klu else ""
+        sdt = (begin_klu.time.toFmtStr(_get_date_fmt(freq))) if begin_klu else ""
+        edt = (end_klu.time.toFmtStr(_get_date_fmt(freq))) if end_klu else ""
         begin_price = round(begin_klu.low, 2) if begin_klu else round(seg._low(), 2)
         end_price = round(end_klu.high, 2) if end_klu else round(seg._high(), 2)
         if direction == "down":
@@ -3063,14 +2754,9 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
                 if tgt_klu is None:
                     tgt_klu = left_klc.lst[0]
             if tgt_klu:
-                ls_time = tgt_klu.time.to_str()
+                ls_date = tgt_klu.time.toFmtStr(date_fmt)
             else:
-                ls_time = ""
-            try:
-                ls_dt = datetime.strptime(ls_time, "%Y/%m/%d %H:%M")
-                ls_date = ls_dt.strftime(date_fmt)
-            except:
-                ls_date = ls_time[:16].replace("/", "-") if freq in INTRADAY_FREQS else ls_time[:10].replace("/", "-")
+                ls_date = ""
             if direction == "down":
                 white_hline = {"price": round(klc_high, 2), "start_date": ls_date}
             elif direction == "up":
@@ -3126,7 +2812,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     sub_kl_type = _get_kl_type(sub_freq)
     sub_kl_list = chan[sub_kl_type]
 
-    date_fmt = "%Y-%m-%d %H:%M" if sub_freq in INTRADAY_FREQS else "%Y-%m-%d"
+    date_fmt = _get_date_fmt(sub_freq)
 
     # 1. 提取子级别原始K线数据（从 KLU 对象中提取，用于 MACD 计算）
     raw_records = []
@@ -3181,43 +2867,26 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             sdt_str = sdt_dt.strftime(date_fmt)
             sdt_ts = int(sdt_dt.timestamp()) * 1000
         except:
-            sdt_str = sdt[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else sdt[:10].replace("/", "-")
+            sdt_str = sdt
             sdt_ts = 0
         try:
             edt_dt = datetime.strptime(edt, "%Y/%m/%d %H:%M")
             edt_str = edt_dt.strftime(date_fmt)
             edt_ts = int(edt_dt.timestamp()) * 1000
         except:
-            edt_str = edt[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else edt[:10].replace("/", "-")
+            edt_str = edt
             edt_ts = 0
 
         # 子级别的 fx_a_raw_dt/fx_b_raw_dt（分型肩部时间，用于红框定位）
+        # 和主级别共用同一个函数，逻辑完全一致
         begin_fx_idx = getattr(bi, 'begin_fx_idx', -1)
         end_fx_idx = getattr(bi, 'end_fx_idx', -1)
         fx_a_raw_dt = ""
         fx_b_raw_dt = ""
-        try:
-            if begin_fx_idx is not None and begin_fx_idx > 0:
-                left_klc = sub_kl_list.lst[begin_fx_idx - 1]
-                if left_klc.lst:
-                    fx_a_raw_dt = left_klc.lst[0].time.to_str()
-                    try:
-                        fx_a_raw_dt = datetime.strptime(fx_a_raw_dt, "%Y/%m/%d %H:%M").strftime(date_fmt)
-                    except:
-                        fx_a_raw_dt = fx_a_raw_dt[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else fx_a_raw_dt[:10].replace("/", "-")
-        except Exception:
-            pass
-        try:
-            if end_fx_idx is not None and end_fx_idx > 0:
-                right_klc = sub_kl_list.lst[end_fx_idx - 1]
-                if right_klc.lst:
-                    fx_b_raw_dt = right_klc.lst[-1].time.to_str()
-                    try:
-                        fx_b_raw_dt = datetime.strptime(fx_b_raw_dt, "%Y/%m/%d %H:%M").strftime(date_fmt)
-                    except:
-                        fx_b_raw_dt = fx_b_raw_dt[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else fx_b_raw_dt[:10].replace("/", "-")
-        except Exception:
-            pass
+        date_fmt_sub = _get_date_fmt(sub_freq)
+        shoulder_times = _get_main_bi_time_range(bi, date_fmt_sub)
+        if shoulder_times:
+            fx_a_raw_dt, fx_b_raw_dt, _, _ = shoulder_times
 
         bi_data.append({
             "sdt": sdt_str, "edt": edt_str,
@@ -3244,7 +2913,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             mark = "G"
             price = klc.high
             klu = klc.get_high_peak_klu()
-            fx_date = klu.time.to_str()[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            fx_date = klu.time.toFmtStr(_get_date_fmt(sub_freq))
             try:
                 fx_dt = datetime.strptime(fx_date, date_fmt)
                 fx_ts = int(fx_dt.timestamp()) * 1000
@@ -3259,7 +2928,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             mark = "D"
             price = klc.low
             klu = klc.get_low_peak_klu()
-            fx_date = klu.time.to_str()[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            fx_date = klu.time.toFmtStr(_get_date_fmt(sub_freq))
             try:
                 fx_dt = datetime.strptime(fx_date, date_fmt)
                 fx_ts = int(fx_dt.timestamp()) * 1000
@@ -3275,8 +2944,8 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     zs_data = []
     for zs in sub_kl_list.zs_list:
         zs_data.append({
-            "sdt": _format_klu_time(zs.begin, date_fmt),
-            "edt": _format_klu_time(zs.end, date_fmt),
+            "sdt": zs.begin.time.toFmtStr(date_fmt),
+            "edt": zs.end.time.toFmtStr(date_fmt),
             "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, sub_kl_list.bi_list, date_fmt),
             "zg": round(zs.high, 2),
             "zd": round(zs.low, 2),
@@ -3299,7 +2968,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             sdt_dt = datetime.strptime(sdt_raw, "%Y/%m/%d %H:%M")
             star_date = sdt_dt.strftime(date_fmt)
         except:
-            star_date = sdt_raw[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else sdt_raw[:10].replace("/", "-")
+            star_date = sdt_raw
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({
@@ -3317,7 +2986,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     try:
         for bsp in sub_kl_list.bs_point_lst.bsp_iter():
             klu = bsp.klu
-            bsp_date = klu.time.to_str()[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else klu.time.to_str()[:10].replace("/", "-")
+            bsp_date = klu.time.toFmtStr(_get_date_fmt(sub_freq))
             try:
                 bsp_dt = datetime.strptime(bsp_date, date_fmt)
                 bsp_ts = int(bsp_dt.timestamp()) * 1000
@@ -3340,8 +3009,8 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
         direction = "up" if seg.is_up() else "down"
         begin_klu = seg.get_begin_klu()
         end_klu = seg.get_end_klu()
-        sdt = (begin_klu.time.to_str()[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else begin_klu.time.to_str()[:10].replace("/", "-")) if begin_klu else ""
-        edt = (end_klu.time.to_str()[:16].replace("/", "-") if sub_freq in INTRADAY_FREQS else end_klu.time.to_str()[:10].replace("/", "-")) if end_klu else ""
+        sdt = (begin_klu.time.toFmtStr(_get_date_fmt(sub_freq))) if begin_klu else ""
+        edt = (end_klu.time.toFmtStr(_get_date_fmt(sub_freq))) if end_klu else ""
         begin_price = round(begin_klu.low, 2) if begin_klu else round(seg._low(), 2)
         end_price = round(end_klu.high, 2) if end_klu else round(seg._high(), 2)
         if direction == "down":
@@ -3406,501 +3075,63 @@ _FUTURES_DUAL_REVERSE_MAP = {
     "15s": "1m",
 }
 
-# 期货双窗口 SSE 下窗 CChan 全局缓存（供 /api/dual_zs 访问）
-# key: "symbol:freq"，value: CChan 对象
-_futures_dual_chan_cache = {}
+# 期货分析缓存（供 /api/dual_zs 等访问）
+# key: "symbol:freq"  (如 "KQ.m@CFFEX.IM:5m")，当前 value: CChan 对象
+# 后续可扩展为 {records, chan, result} 三元组，key可加前缀区分（single_/dual_main_/dual_sub_）
+_futures_analysis_cache = {}
 
 
-def _get_bi_fx_shoulder_times(bi, high_freq):
+def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
     """
-    获取笔的分型肩部原始K线时间（与红框策略一致）。
-
-    返回:
-        (fx_a_raw_dt, fx_b_raw_dt): 左肩/右肩原始K线时间字符串
-        如果无法确定，返回 None
-    """
-    date_fmt = "%Y-%m-%d %H:%M" if high_freq in INTRADAY_FREQS else "%Y-%m-%d"
-
-    fx_a_raw_dt = ""
-    fx_b_raw_dt = ""
-    a_klu = None
-    b_klu = None
-    try:
-        begin_klc = bi.begin_klc
-        end_klc = bi.end_klc
-        # A: 左肩第一根原始K线 = begin_klc.pre.lst[0]
-        left_shoulder_klc = begin_klc.pre if begin_klc else None
-        if left_shoulder_klc and left_shoulder_klc.lst:
-            a_klu = left_shoulder_klc.lst[0]
-        if a_klu:
-            a_t = a_klu.time.to_str()
-            try:
-                fx_a_raw_dt = datetime.strptime(a_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
-            except:
-                fx_a_raw_dt = a_t[:16].replace("/", "-") if high_freq in INTRADAY_FREQS else a_t[:10].replace("/", "-")
-        # B: 右肩最后一根原始K线 = end_klc.next.lst[-1]
-        right_shoulder_klc = end_klc.next if end_klc else None
-        if right_shoulder_klc and right_shoulder_klc.lst:
-            b_klu = right_shoulder_klc.lst[-1]
-        if b_klu:
-            b_t = b_klu.time.to_str()
-            try:
-                fx_b_raw_dt = datetime.strptime(b_t, "%Y/%m/%d %H:%M").strftime(date_fmt)
-            except:
-                fx_b_raw_dt = b_t[:16].replace("/", "-") if high_freq in INTRADAY_FREQS else b_t[:10].replace("/", "-")
-    except Exception:
-        pass
-
-    if not fx_a_raw_dt or not fx_b_raw_dt:
-        return None
-    return fx_a_raw_dt, fx_b_raw_dt
-
-
-def _get_bi_direction_str(bi):
-    """获取笔的方向字符串"""
-    if hasattr(bi, 'is_up'):
-        return "up" if bi.is_up() else "down"
-    return "unknown"
-
-
-def _check_single_bi_divergence(bi, records, macd_list, date_fmt):
-    """
-    检查单笔是否MACD背驰。
-
-    以向上笔为例：
-      - 笔从最低点a走到最高点b
-      - 遍历a→b之间所有K线，找到MACD柱子（histogram）的最高值
-      - 如果b点对应的MACD柱高度 < 最高值，说明价格创新高但动能已衰竭 → 背驰
-
-    向下笔时逻辑取反（关注MACD柱的最低/最负值）。
+    双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
+    后端内部调用 _find_sub_bi_sequence 找到被红框完全覆盖的子级别笔，再
+    用 _check_red_range_zs 重新计算中枢，返回给前端绘制。
 
     参数:
-        bi: CBi 笔对象
-        records: 分析区间的K线数据列表
-        macd_list: MACD计算结果列表（与records一一对应）
-        date_fmt: 日期格式字符串
-
-    返回:
-        dict: {
-            'diverged': bool,
-            'max_macd': float,   # 笔内最高MACD柱（向上笔）/ 最低MACD柱（向下笔）
-            'end_macd': float,   # 笔末端MACD柱
-            'max_idx': int,      # 极值出现的K线索引
-            'end_idx': int,      # 笔末端K线索引
-        }
-        如果无法定位K线，返回 None
-    """
-    if not macd_list or len(macd_list) == 0:
-        return None
-
-    is_up = bi.is_up()
-
-    # 获取笔的起始和结束时间
-    try:
-        s_time = bi.get_begin_klu().time
-        e_time = bi.get_end_klu().time
-        # CTime 转 datetime 以便与 records["dt"] 比较
-        if hasattr(s_time, 'ts'):
-            s_time = datetime.fromtimestamp(s_time.ts)
-        if hasattr(e_time, 'ts'):
-            e_time = datetime.fromtimestamp(e_time.ts)
-    except:
-        return None
-
-    # 在records中找到笔的起始和结束K线索引
-    bi_start_idx = -1
-    bi_end_idx = -1
-    for i, r in enumerate(records):
-        r_dt = r["dt"]
-        if bi_start_idx == -1 and r_dt >= s_time:
-            bi_start_idx = i
-        if r_dt <= e_time:
-            bi_end_idx = i
-
-    if bi_start_idx == -1 or bi_end_idx == -1 or bi_start_idx > bi_end_idx:
-        return None
-
-    # 确保索引在MACD范围内
-    bi_start_idx = max(0, bi_start_idx)
-    bi_end_idx = min(len(macd_list) - 1, bi_end_idx)
-
-    if bi_start_idx >= bi_end_idx:
-        return None
-
-    macd_range = macd_list[bi_start_idx:bi_end_idx + 1]
-    if not macd_range:
-        return None
-
-    if is_up:
-        # 向上笔：关注MACD柱的峰值（正值）
-        # 柱子 = macd_list[i]["macd"]
-        max_macd = macd_range[0]["macd"]
-        max_idx = bi_start_idx
-        for i, m in enumerate(macd_range):
-            if m["macd"] > max_macd:
-                max_macd = m["macd"]
-                max_idx = bi_start_idx + i
-        end_macd = macd_range[-1]["macd"]
-        end_idx = bi_start_idx + len(macd_range) - 1
-        diverged = end_macd < max_macd
-    else:
-        # 向下笔：关注MACD柱的最低值（最负值）
-        min_macd = macd_range[0]["macd"]
-        min_idx = bi_start_idx
-        for i, m in enumerate(macd_range):
-            if m["macd"] < min_macd:
-                min_macd = m["macd"]
-                min_idx = bi_start_idx + i
-        end_macd = macd_range[-1]["macd"]
-        end_idx = bi_start_idx + len(macd_range) - 1
-        # 向下笔：末端MACD柱 > 最低值（即柱子已经不如下跌最猛时那么负了）→ 背驰
-        # 但"动能衰竭"体现为：价格创新低，但MACD柱子（负值）不如之前最负 → 柱子变浅了
-        diverged = end_macd > min_macd
-        max_macd = min_macd  # 统一用max_macd字段名，但向下笔存的是最小值
-        max_idx = min_idx
-
-    return {
-        "diverged": diverged,
-        "max_macd": round(max_macd, 2),
-        "end_macd": round(end_macd, 2),
-        "max_idx": max_idx,
-        "end_idx": end_idx,
-    }
-
-
-def _get_bi_macd_peak(bi, records, macd_list, is_up):
-    """
-    获取一笔区间内MACD柱子的峰值。
-
-    向上笔：返回最高MACD柱值
-    向下笔：返回最低MACD柱值（最负值）
-
-    返回:
-        peak_macd: float 或 None
-        peak_idx: int 或 None
-    """
-    try:
-        s_time = bi.get_begin_klu().time
-        e_time = bi.get_end_klu().time
-        # CTime 转 datetime 以便与 records["dt"] 比较
-        if hasattr(s_time, 'ts'):
-            s_time = datetime.fromtimestamp(s_time.ts)
-        if hasattr(e_time, 'ts'):
-            e_time = datetime.fromtimestamp(e_time.ts)
-    except:
-        return None, None
-
-    start_idx = -1
-    end_idx = -1
-    for i, r in enumerate(records):
-        r_dt = r["dt"]
-        if start_idx == -1 and r_dt >= s_time:
-            start_idx = i
-        if r_dt <= e_time:
-            end_idx = i
-
-    if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-        return None, None
-
-    start_idx = max(0, start_idx)
-    end_idx = min(len(macd_list) - 1, end_idx)
-    if start_idx >= end_idx:
-        return None, None
-
-    macd_range = macd_list[start_idx:end_idx + 1]
-    if not macd_range:
-        return None, None
-
-    if is_up:
-        peak = macd_range[0]["macd"]
-        peak_idx = start_idx
-        for i, m in enumerate(macd_range):
-            if m["macd"] > peak:
-                peak = m["macd"]
-                peak_idx = start_idx + i
-    else:
-        peak = macd_range[0]["macd"]
-        peak_idx = start_idx
-        for i, m in enumerate(macd_range):
-            if m["macd"] < peak:
-                peak = m["macd"]
-                peak_idx = start_idx + i
-
-    return round(peak, 2), peak_idx
-
-
-def _check_multi_bi_divergence(sub_bi_list, records, macd_list, date_fmt, bi_direction):
-    """
-    检查多笔走势是否MACD背驰。
-
-    以向上笔为例（ABC 或 ABCDE）：
-      - 找到最后两个同向笔（如 ABC 中的 A 和 C，ABCDE 中的 C 和 E）
-      - 比较两笔的MACD柱子峰值
-      - 如果后一笔的峰值 < 前一笔的峰值 → 背驰（价格创新高但动能减弱）
-
-    向下笔时逻辑取反。
-
-    参数:
-        sub_bi_list: 次级别笔对象列表 (CBi 对象)
-        records: 分析区间的K线数据列表
-        macd_list: MACD计算结果列表
-        date_fmt: 日期格式字符串
-        bi_direction: 高级别笔方向 ('up' | 'down')
-
-    返回:
-        dict: {
-            'diverged': bool,
-            'prev_macd': float,   # 前一笔的MACD峰值
-            'curr_macd': float,   # 后一笔的MACD峰值
-            'prev_bi_idx': int,   # 前一笔在sub_bi_list中的索引
-            'curr_bi_idx': int,   # 后一笔在sub_bi_list中的索引
-        }
-        如果笔数不足或无法计算，返回 None
-    """
-    if len(sub_bi_list) < 3:
-        return None
-
-    is_up = (bi_direction == "up")
-
-    # 从后往前找最后两个同向笔
-    # 同向笔：与高级别笔方向一致的笔
-    last_two = []  # [(bi, bi_idx), ...] 从前往后
-    for i, bi in enumerate(sub_bi_list):
-        if bi.is_up() == is_up:
-            last_two.append((bi, i))
-            if len(last_two) > 2:
-                last_two.pop(0)  # 只保留最后两个
-
-    if len(last_two) < 2:
-        return None
-
-    prev_bi, prev_idx = last_two[0]
-    curr_bi, curr_idx = last_two[1]
-
-    # 获取前一笔和后一笔的MACD峰值
-    prev_peak, _ = _get_bi_macd_peak(prev_bi, records, macd_list, is_up)
-    curr_peak, _ = _get_bi_macd_peak(curr_bi, records, macd_list, is_up)
-
-    if prev_peak is None or curr_peak is None:
-        return None
-
-    if is_up:
-        # 向上笔：后笔峰值 < 前笔峰值 → 背驰
-        diverged = curr_peak < prev_peak
-    else:
-        # 向下笔：后笔峰值 > 前笔峰值（负值变小，即柱子变浅）→ 背驰
-        diverged = curr_peak > prev_peak
-
-    return {
-        "diverged": diverged,
-        "prev_macd": prev_peak,
-        "curr_macd": curr_peak,
-        "prev_bi_idx": prev_idx,
-        "curr_bi_idx": curr_idx,
-    }
-
-
-def _get_bi_macd_area(bi, records, macd_list):
-    """
-    计算一笔区间内MACD柱子的面积（full_area，与 Cal_MACD_area 一致）。
-
-    向上笔：只累加红柱子（macd > 0）的绝对值
-    向下笔：只累加绿柱子（macd < 0）的绝对值
-    反向柱被忽略。
-
-    返回:
-        float 或 None
-    """
-    try:
-        s_time = bi.get_begin_klu().time
-        e_time = bi.get_end_klu().time
-        # CTime 转 datetime 以便与 records["dt"] 比较
-        if hasattr(s_time, 'ts'):
-            s_time = datetime.fromtimestamp(s_time.ts)
-        if hasattr(e_time, 'ts'):
-            e_time = datetime.fromtimestamp(e_time.ts)
-    except:
-        return None
-
-    is_up = bi.is_up()
-
-    start_idx = -1
-    end_idx = -1
-    for i, r in enumerate(records):
-        r_dt = r["dt"]
-        if start_idx == -1 and r_dt >= s_time:
-            start_idx = i
-        if r_dt <= e_time:
-            end_idx = i
-
-    if start_idx == -1 or end_idx == -1 or start_idx > end_idx:
-        return None
-
-    start_idx = max(0, start_idx)
-    end_idx = min(len(macd_list) - 1, end_idx)
-    if start_idx >= end_idx:
-        return None
-
-    area = 1e-7  # 与 Cal_MACD_area 一致，避免恰好为0
-    for m in macd_list[start_idx:end_idx + 1]:
-        if (is_up and m["macd"] > 0) or (not is_up and m["macd"] < 0):
-            area += abs(m["macd"])
-    return round(area, 2)
-
-
-def _check_one_zs_divergence(sub_bi_list, sub_zs_list, records, macd_list, bi_direction):
-    """
-    检查单中枢结构是否MACD背驰（盘整背驰），与 cal_bs0point 逻辑一致。
-
-    以高级别向上笔为例：
-      从次级别笔序列的最后一笔(n)往前数5笔 → n-4, n-3, n-2, n-1, n
-      ⑴ n-3, n-2, n-1 三笔有重叠 → 形成中枢B
-      ⑵ 笔n 突破中枢B上沿，且 笔n-4 跌破中枢B下沿（即n-4也突破中枢B）
-      ⑶ 笔n-4为进入段，笔n为离开段，比较MACD面积 → 面积缩小则背驰
-
-    向下笔时逻辑取反。
-
-    参数:
-        sub_bi_list: 次级别笔对象列表 (CBi 对象)
-        sub_zs_list: 次级别中枢列表（本函数不使用，仅保留参数兼容）
-        records: 分析区间的K线数据列表
-        macd_list: MACD计算结果列表
-        bi_direction: 高级别笔方向 ('up' | 'down')
-
-    返回:
-        dict: {
-            'diverged': bool,
-            'in_area': float,      # 进入段(n-4) MACD面积
-            'out_area': float,     # 离开段(n) MACD面积
-            'in_bi_idx': int,      # 进入笔在sub_bi_list中的索引
-            'out_bi_idx': int,     # 离开笔在sub_bi_list中的索引
-        }
-        条件不满足时返回 None
-    """
-    # ── 条件⑴：至少5笔 ──
-    if len(sub_bi_list) < 5:
-        return None
-
-    n_idx = len(sub_bi_list) - 1  # 最后一笔索引
-
-    # 取最后5笔：n-4, n-3, n-2, n-1, n
-    stroke_n = sub_bi_list[n_idx]       # 笔n（离开段）
-    s_nm1 = sub_bi_list[n_idx - 1]      # 笔n-1
-    s_nm2 = sub_bi_list[n_idx - 2]      # 笔n-2
-    s_nm3 = sub_bi_list[n_idx - 3]      # 笔n-3
-    s_nm4 = sub_bi_list[n_idx - 4]      # 笔n-4（进入段）
-
-    is_up = (bi_direction == "up")
-
-    # 笔n方向必须与高级别笔方向一致
-    if stroke_n.is_up() != is_up:
-        return None
-
-    # ── 条件⑵：n-3, n-2, n-1 三笔重叠 → 中枢B ──
-    zs_b_low = max(s_nm1._low(), s_nm2._low(), s_nm3._low())
-    zs_b_high = min(s_nm1._high(), s_nm2._high(), s_nm3._high())
-    if zs_b_low > zs_b_high:  # 三笔无重叠，不构成中枢B
-        return None
-
-    # ── 条件⑶：笔n突破中枢B，且 n-4 也突破中枢B ──
-    if is_up:
-        # 向上笔n：末端高点 > 中枢B上沿
-        if stroke_n._high() <= zs_b_high:
-            return None
-        # n-4（进入笔）：末端低点 < 中枢B下沿
-        if s_nm4._low() >= zs_b_low:
-            return None
-    else:
-        # 向下笔n：末端低点 < 中枢B下沿
-        if stroke_n._low() >= zs_b_low:
-            return None
-        # n-4（进入笔）：末端高点 > 中枢B上沿
-        if s_nm4._high() <= zs_b_high:
-            return None
-
-    # ── 条件⑷：进入段(n-4) vs 离开段(n) MACD面积比较 ──
-    in_area = _get_bi_macd_area(s_nm4, records, macd_list)
-    out_area = _get_bi_macd_area(stroke_n, records, macd_list)
-
-    if in_area is None or out_area is None or in_area == 0:
-        return None
-
-    # 与 cal_bs0point 一致的背驰阈值：out_metric <= divergence_rate * in_metric
-    divergence_rate = out_area / (in_area + 1e-7)
-    # 使用与 _make_chan_config 默认值一致的 divergence_rate=0.9
-    diverged = out_area <= 0.9 * in_area
-
-    return {
-        "diverged": diverged,
-        "in_area": in_area,
-        "out_area": out_area,
-        "divergence_rate": round(divergence_rate, 4),
-        "in_bi_idx": n_idx - 4,
-        "out_bi_idx": n_idx,
-    }
-
-
-def _check_trend_maintained(sub_bis, high_direction):
-    """
-    检查次级别多笔是否保持趋势。
-
-    以高级别向上笔为例：
-      - 正向笔（up）的低点必须逐步抬高
-      - 反向笔（down）的低点不能低于前一正向笔的低点
-    即：任何反向笔 break 不了前一笔正向笔的极值，趋势就还在。
-
-    高级别向下笔时逻辑取反。
-    """
-    if len(sub_bis) < 2:
-        return True
-
-    if high_direction == "up":
-        last_forward_low = None
-        for bi in sub_bis:
-            if bi["direction"] == "up":
-                last_forward_low = bi["low"]
-            else:
-                if last_forward_low is not None and bi["low"] < last_forward_low:
-                    return False
-    else:
-        last_forward_high = None
-        for bi in sub_bis:
-            if bi["direction"] == "down":
-                last_forward_high = bi["high"]
-            else:
-                if last_forward_high is not None and bi["high"] > last_forward_high:
-                    return False
-    return True
-
-
-def compute_dual_zs(code, freq='d', start_bi=0, end_bi=0):
-    """
-    双窗口新模式：从缓存中取出已计算的笔列表，截取 [start_bi, end_bi] 范围内的笔，
-    用 _build_zs_from_bis 重新计算中枢，返回给前端绘制。
-
-    与 _build_zs_from_bis 不同的是：
-    - 不依赖完整的 chan.py 分析流程，直接从已缓存的 bi_list 中切片
-    - 仅返回中枢数据（zs + zs_stars），不返回完整 chartData
+        code:       股票代码（如 "SH000001" 或 "000001.SH"）
+        sub_freq:   子级别周期（如 "30m", "5m"）
+        left_date:  红框左边界时间字符串（子级别K线格式，如 "2025-06-15 10:00"）
+        right_date: 红框右边界时间字符串
+
+    返回: {"zs": [...]} 或 {"error": "..."}
     """
     import re
     normalized_code = code.strip().upper()
 
-    # 期货双窗口：从全局缓存获取下窗 CChan
+    # ── 期货双窗口 ──
     if normalized_code.startswith("KQ."):
-        cache_key = f"{normalized_code}:{freq}"
-        cached = _futures_dual_chan_cache.get(cache_key)
+        cache_key = f"{normalized_code}:{sub_freq}"
+        print(f"[dual_zs][期货] cache_key={cache_key}, left_date={left_date}, right_date={right_date}, sub_freq={sub_freq}")
+        cached = _futures_analysis_cache.get(cache_key)
         if cached is None:
+            print(f"[dual_zs][期货] 缓存未命中! 可用key: {list(_futures_analysis_cache.keys())}")
             return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
         chan = cached
-        kl_list = chan[_get_kl_type(freq)]
+        kl_list = chan[_get_kl_type(sub_freq)]
         bi_list = kl_list.bi_list
-        if start_bi >= len(bi_list) or end_bi >= len(bi_list):
-            return {"error": f"笔索引越界: start_bi={start_bi}, end_bi={end_bi}, 总笔数={len(bi_list)}"}
+        print(f"[dual_zs][期货] bi_list长度={len(bi_list)}, kl_list长度={len(kl_list)}")
+        date_fmt = _get_date_fmt(sub_freq)
+        print(f"[dual_zs][期货] date_fmt={date_fmt}")
+        start_bi, end_bi = _find_sub_bi_sequence(left_date, right_date, bi_list, sub_freq)
+        if start_bi is None:
+            return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
         sliced_bis = bi_list[start_bi:end_bi + 1]
-        date_fmt = "%Y-%m-%d %H:%M:%S"
-        zs_data, zs_stars = _build_zs_from_bis(sliced_bis, bi_list, date_fmt)
-        return {"zs": zs_data, "zs_stars": zs_stars}
+        print(f"[dual_zs][期货] sliced_bis长度={len(sliced_bis)}, start_bi={start_bi}, end_bi={end_bi}")
+        for i, bi in enumerate(sliced_bis[:3]):
+            bku = bi.get_begin_klu()
+            eku = bi.get_end_klu()
+            sdt = bku.time.toFmtStr(date_fmt) if bku else "None"
+            edt = eku.time.toFmtStr(date_fmt) if eku else "None"
+            dir_str = "up" if bi.is_up() else "down"
+            print(f"[dual_zs][期货]   bi[{start_bi+i}] sdt={sdt} edt={edt} dir={dir_str}")
+        zs_data = _check_red_range_zs(sliced_bis, bi_list, date_fmt)
+        print(f"[dual_zs][期货] ZS结果: zs_data长度={len(zs_data)}")
+        if zs_data:
+            for zs in zs_data:
+                print(f"[dual_zs][期货]   ZS: sdt={zs.get('sdt')}, edt={zs.get('edt')}, zg={zs.get('zg')}, zd={zs.get('zd')}")
+        return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
+    # ── 股票双窗口 ──
     market = None
     prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', normalized_code)
     suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', normalized_code)
@@ -3914,66 +3145,60 @@ def compute_dual_zs(code, freq='d', start_bi=0, end_bi=0):
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
 
-    cache_key = f"single_{market}_{normalized_code}_{freq}"
+    cache_key = f"single_{market}_{normalized_code}_{sub_freq}"
     cached = _cache_get(cache_key)
 
-    # 双窗口新模式：当前 freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
+    # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
     # dual_sub 缓存只存 result/records，不存 chan；真正可用于重算中枢的 CChan 在 dual_main 缓存里。
-    if (cached is None or "chan" not in cached) and freq in _SUB_FREQ_MAP.values():
-        for main_freq, sub_freq in _SUB_FREQ_MAP.items():
-            if sub_freq == freq:
+    if (cached is None or "chan" not in cached) and sub_freq in _SUB_FREQ_MAP.values():
+        for main_freq, _sub in _SUB_FREQ_MAP.items():
+            if _sub == sub_freq:
                 dual_main_cache_key = f"dual_main_{market}_{normalized_code}_{main_freq}"
                 main_cached = _cache_get(dual_main_cache_key)
                 if main_cached and "chan" in main_cached:
                     main_chan = main_cached["chan"]
                     try:
-                        # 验证主级别的多级别CChan中确实有子级别数据
-                        _ = main_chan[_get_kl_type(freq)]
+                        _ = main_chan[_get_kl_type(sub_freq)]
                         cached = {"chan": main_chan}
                         break
-                    except Exception:
-                        pass
-                # 兼容旧流程：如果没有 dual_main，再尝试 single 主级别缓存
+                    except Exception as e:
+                        print(f"[警告] 异常: {type(e).__name__}: {e}")
                 if cached is None or "chan" not in cached:
                     single_main_cache_key = f"single_{market}_{normalized_code}_{main_freq}"
                     main_cached = _cache_get(single_main_cache_key)
                     if main_cached and "chan" in main_cached:
                         main_chan = main_cached["chan"]
                         try:
-                            _ = main_chan[_get_kl_type(freq)]
+                            _ = main_chan[_get_kl_type(sub_freq)]
                             cached = {"chan": main_chan}
-                            print(f"[stock][信息] compute_dual_zs 从单窗口主级别缓存({main_freq})获取子级别({freq})数据")
+                            print(f"[stock][信息] compute_dual_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
                             break
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     if cached is None:
         return {"error": "请先在该周期下加载K线数据"}
     if "chan" not in cached:
-        # 扫描缓存只有result没有chan，重新分析以获取完整数据
-        print(f"[stock][信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
-        analyze_stock(f"{normalized_code}.{market.upper()}", freq=freq, cache_chan=True)
+        print(f"[stock][信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
+        analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
         cached = _cache_get(cache_key)
         if cached is None or "chan" not in cached:
             return {"error": "缓存中无分析数据，请重新查询"}
 
     chan = cached["chan"]
-    kl_list = chan[_get_kl_type(freq)]
+    kl_list = chan[_get_kl_type(sub_freq)]
     bi_list = kl_list.bi_list
 
-    if start_bi >= len(bi_list) or end_bi >= len(bi_list):
-        return {"error": f"笔索引越界: start_bi={start_bi}, end_bi={end_bi}, 总笔数={len(bi_list)}"}
+    date_fmt = _get_date_fmt(sub_freq)
 
-    # 截取指定范围的笔（含 start_bi, end_bi）
+    # ── 步骤③：后端找被红框完全覆盖的笔 ──
+    start_bi, end_bi = _find_sub_bi_sequence(left_date, right_date, bi_list, sub_freq)
+    if start_bi is None:
+        return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
+
     sliced_bis = bi_list[start_bi:end_bi + 1]
-
-    if freq in INTRADAY_FREQS:
-        date_fmt = "%Y-%m-%d %H:%M"  # 与kline date格式一致，确保前端dateToGlobalIdx能匹配
-    else:
-        date_fmt = "%Y-%m-%d"
-
-    zs_data, zs_stars = _build_zs_from_bis(sliced_bis, bi_list, date_fmt)
-    return {"zs": zs_data, "zs_stars": zs_stars}
+    zs_data = _check_red_range_zs(sliced_bis, bi_list, date_fmt)
+    return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
 
 def stock_manual_select_point(code, freq='d', bi_idx=-1):
@@ -3984,7 +3209,7 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
     流程：
     1. 通过前端传来的笔索引，找到分型左肩第一根原始K线时间T
     2. 保存T到CSV
-    3. 销毁旧CChanA及_analysis_cache中的全部中间状态，回收内存
+    3. 销毁旧CChanA及_stocks_analysis_cache中的全部中间状态，回收内存
     4. 从T开始重新读取通达信K线，创建CChanB，返回完整结果
     """
     # 标准化代码
@@ -4040,8 +3265,10 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
     import gc
-    if cache_key in _analysis_cache:
-        del _analysis_cache[cache_key]
+    if cache_key in _stocks_analysis_cache:
+        with _cache_lock:
+            if cache_key in _stocks_analysis_cache:
+                del _stocks_analysis_cache[cache_key]
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
@@ -4105,6 +3332,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
+            market_type="futures", market="KQ",
         )
         for _snapshot in chan.step_load():
             pass
@@ -4139,8 +3367,8 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         if api is not None:
             try:
                 api.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
             api = None
 
         t_conn2 = time.time()
@@ -4159,6 +3387,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
+            market_type="futures", market="KQ",
         )
         for _snapshot in chan2.step_load():
             pass
@@ -4168,7 +3397,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
                                             saved_selection_date=start_time)
         # 计算白色横虚线
         _kl_list = chan2[kl_type]
-        _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+        _date_fmt = _get_date_fmt(freq)
         result['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
         print(f"[{display_key}] 选点完成: {len(result['klines'])}K线, {result['meta']['bi_count']}笔, {result['meta']['zs_count']}中枢")
         return result
@@ -4182,13 +3411,13 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         if api is not None:
             try:
                 api.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
         if api2 is not None:
             try:
                 api2.close()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False):
@@ -4221,7 +3450,7 @@ def _quick_prefilter_pass(market, code, freq):
         if not records or len(records) < 120:
             return (True, None, None)  # 数据不足，不跳过
 
-        closes = [r.close for r in records[-120:]]
+        closes = [r["close"] if isinstance(r, dict) else r.close for r in records[-120:]]
         last_close = closes[-1]
         ma120 = sum(closes) / 120
         below_ma120 = last_close < ma120
@@ -4237,14 +3466,17 @@ def _quick_prefilter_pass(market, code, freq):
             return (False, float_mv, below_ma120)  # 价格在120周期线下方，跳过
 
         return (True, float_mv, below_ma120)
-    except Exception:
+    except Exception as e:
+        import traceback
+        print(f"[预过滤] {code} 异常: {type(e).__name__}: {e}")
+        traceback.print_exc()
         return (True, None, None)  # 出错时不跳过，让完整分析处理
 
 
 def scan_zxg_buy_points(freq="d"):
     """
     批量扫描自选股，找出当天（最后一根K线）有买点的股票。
-    扫描与冷启动共用同一个 _analysis_cache，缓存完整的 {records, chan, result}。
+    扫描与冷启动共用同一个 _stocks_analysis_cache，缓存完整的 {records, chan, result}。
     无论有无买卖点都不主动清除缓存，由 LRU 20 条 + 内存保护机制统一管理。
     返回列表，每项包含：code, name, market, buy_points(买点列表)
     """
@@ -4407,13 +3639,15 @@ class ChartHandler(SimpleHTTPRequestHandler):
             params = parse_qs(parsed.query)
             code = params.get("code", [""])[0]
             freq = params.get("freq", ["d"])[0]
-            start_bi = int(params.get("start_bi", ["-1"])[0])
-            end_bi = int(params.get("end_bi", ["-1"])[0])
-            if not code or start_bi < 0 or end_bi < 0 or start_bi > end_bi:
-                self.send_json_response({"error": "参数错误"}, 400)
+            left_date = params.get("left_date", [""])[0]
+            right_date = params.get("right_date", [""])[0]
+            print(f"[dual_zs][handler] 收到请求: code={code}, freq={freq}, left={left_date}, right={right_date}")
+            if not code or not left_date or not right_date:
+                print(f"[dual_zs][handler] 参数错误: code/left_date/right_date 为空")
+                self.send_json_response({"error": "参数错误: code/left_date/right_date 不能为空"}, 400)
                 return
             try:
-                result = compute_dual_zs(code, freq=freq, start_bi=start_bi, end_bi=end_bi)
+                result = compute_dual_red_range_zs(code, sub_freq=freq, left_date=left_date, right_date=right_date)
                 if "error" in result:
                     self.send_json_response(result, 400)
                 else:
@@ -4499,8 +3733,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                 "code": sym, "name": name, "pinyin": "",
                                 "market": "futures", "type": freq_label,
                             })
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
             # 期货别名搜索：支持用户输入短名称搜索（如 PTA、IF、rb 等）
             for alias, full_code in FUTURES_ALIASES.items():
@@ -4574,18 +3808,56 @@ class ChartHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self.send_json_response({"error": str(e)}, 500)
         elif parsed.path == "/api/scan_stock_list":
-            # 返回股票列表（根据 source 参数：zxg=自选股, zz1000=中证1000）
+            # 返回股票列表（支持逗号分隔多来源：zxg,sz50,hs300,zz500,zz1000 → 合并去重后返回）
             params = parse_qs(parsed.query)
-            source = params.get("source", ["zxg"])[0]
-            if source == "zz1000":
-                stocks = read_zz1000_stocks()
+            raw = params.get("source", ["zxg"])[0]
+            sources = [s.strip() for s in raw.split(",") if s.strip()]
+            _SOURCE_READERS = {
+                "zxg": (read_zxg_stocks, "自选股"),
+                "sz50": (read_sz50_stocks, "上证50"),
+                "hs300": (read_hs300_stocks, "沪深300"),
+                "zz500": (read_zz500_stocks, "中证500"),
+                "zz1000": (read_zz1000_stocks, "中证1000"),
+            }
+            # 先读取所有来源的股票列表
+            src_stocks = {}  # src → [(code, prefix, stock_dict), ...]
+            errors = []
+            for src in sources:
+                reader = _SOURCE_READERS.get(src)
+                if reader is None:
+                    errors.append(f"未知来源: {src}")
+                    continue
+                read_fn, label = reader
+                stocks = read_fn()
+                if not stocks and src != "zxg":
+                    errors.append(f"{label}板块文件不存在，请先在通达信中创建/下载{label}板块")
+                    continue
+                src_stocks[src] = stocks
+            # 合并去重：按出现顺序，非zxg来源优先（zxg先出现 → 后续非zxg覆盖并升级_source）
+            merged = []
+            seen = {}  # (code, prefix) → index in merged
+            for src in sources:
+                stocks = src_stocks.get(src)
                 if not stocks:
-                    self.send_json_response({"error": "中证1000板块文件不存在，请先在通达信中创建/下载中证1000板块"}, 400)
-                    return
-                self.send_json_response({"stocks": stocks, "source": "zz1000", "total": len(stocks)}, 200)
-            else:
-                stocks = read_zxg_stocks()
-                self.send_json_response({"stocks": stocks, "source": "zxg", "total": len(stocks)}, 200)
+                    continue
+                for stk in stocks:
+                    key = (stk["code"], stk["prefix"])
+                    if key not in seen:
+                        stk["_source"] = src
+                        seen[key] = len(merged)
+                        merged.append(stk)
+                    else:
+                        exist_idx = seen[key]
+                        exist_src = merged[exist_idx].get("_source", "")
+                        if exist_src == "zxg" and src != "zxg":
+                            # 升级：自选股 → 板块来源，预过滤生效
+                            merged[exist_idx]["_source"] = src
+            self.send_json_response({
+                "stocks": merged,
+                "sources": sources,
+                "total": len(merged),
+                "errors": errors if errors else None
+            }, 200)
         elif parsed.path == "/api/scan_one":
             # 扫描单只股票的买卖点（供前端逐只调用，实时显示进度）
             t_scan_start = time.time()
@@ -4594,7 +3866,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             freq = params.get("freq", ["d"])[0]
             prefix = params.get("prefix", [""])[0]
             recent_str = params.get("recent", ["1"])[0]
-            source = params.get("source", ["zxg"])[0]  # zxg=自选股, zz1000=中证1000
+            source = params.get("source", ["zxg"])[0]  # zxg=自选股, sz50=上证50, hs300=沪深300, zz500=中证500, zz1000=中证1000
             try:
                 recent_days = max(1, int(recent_str))
             except ValueError:
@@ -4614,8 +3886,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if _scan_aborted:
                     self.send_json_response({"error": "扫描已终止", "aborted": True}, 200)
                     return
-                # 中证1000扫描：预过滤（流通市值<50亿 或 价格<120周期线 → 跳过）
-                if source == "zz1000" and market:
+                # 板块扫描（上证50/沪深300/中证500/中证1000）：预过滤（流通市值<50亿 或 价格<120周期线 → 跳过）
+                if source != "zxg" and market:
                     t_pre = time.time()
                     pass_filter, pre_mv, pre_below = _quick_prefilter_pass(market, code, freq)
                     t_pre_elapsed = time.time() - t_pre
@@ -4718,8 +3990,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
             _scan_start_time = time.time()
             try:
                 _load_stock_names_from_cache_file()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
             self.send_json_response({"ok": True}, 200)
         elif parsed.path == "/api/refresh_stock_names":
             # 启动股票名称刷新
@@ -4808,8 +4080,10 @@ class ChartHandler(SimpleHTTPRequestHandler):
             _clear_saved_point_time(qualified_code, freq)
             # 销毁该周期的缓存
             cache_key = f"single_{market}_{normalized_code}_{freq}" if market else f"single_{normalized_code}_{freq}"
-            if cache_key in _analysis_cache:
-                del _analysis_cache[cache_key]
+            if cache_key in _stocks_analysis_cache:
+                with _cache_lock:
+                    if cache_key in _stocks_analysis_cache:
+                        del _stocks_analysis_cache[cache_key]
             import gc
             gc.collect()
             self.send_json_response({"ok": True}, 200)
@@ -4969,8 +4243,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 col_meta = FREQ_TO_COL.get(top_freq, "")
                 if col_meta and qualified_code in _saved_point_times:
                     saved_selection_date = _saved_point_times[qualified_code].get(col_meta, "").strip() or ""
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
             # 2. 拉取上窗历史 + chan分析
             if _SSE_DEBUG:
@@ -4989,7 +4263,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             bottom_chan, bottom_records, bottom_kl_type, _ = bottom_result
             bottom_kl_type = _get_kl_type(bottom_freq)
             # 缓存下窗 CChan 供 /api/dual_zs 访问（key 统一大写）
-            _futures_dual_chan_cache[f"{symbol.upper()}:{bottom_freq}"] = bottom_chan
+            _futures_analysis_cache[f"{symbol.upper()}:{bottom_freq}"] = bottom_chan
             if _SSE_DEBUG:
                 print(f"[{display_key}] 下窗({bottom_freq}) chan.py: 合并K线={len(bottom_chan[bottom_kl_type].lst)}, "
                       f"笔={len(bottom_chan[bottom_kl_type].bi_list)}, 中枢={len(bottom_chan[bottom_kl_type].zs_list)}")
@@ -5006,7 +4280,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             )
             # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
             # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
-            _fixup_dual_bis_for_sub(top_snapshot, top_freq_sec, bottom_freq_sec)
+            _futures_red_range(top_snapshot, top_freq_sec, bottom_freq_sec, bottom_freq)
 
             # ★ 追加上下窗当前形成中的K线（与单窗口一致），让前端立即看到，且 tick 更新正确的 K 线
             _top_klines_for_init = api.get_kline_serial(symbol, top_freq_sec)
@@ -5016,7 +4290,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 _lr = _top_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
-                    _bds = _bdt.strftime('%Y-%m-%d %H:%M:%S')
+                    _bds = _bdt.strftime(_get_date_fmt(top_freq))
                     _ex = top_snapshot.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _bds:
                         _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
@@ -5031,7 +4305,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 _lr = _bottom_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
-                    _bds = _bdt.strftime('%Y-%m-%d %H:%M:%S')
+                    _bds = _bdt.strftime(_get_date_fmt(bottom_freq))
                     _ex = bottom_snapshot.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _bds:
                         _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
@@ -5120,8 +4394,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             last_klc = chan_kl_list.lst[-1]
                             if last_klc.lst:
                                 chan_last_klu = last_klc.lst[-1]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[警告] 异常: {type(e).__name__}: {e}")
                     tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
                     chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
                     if _SSE_DEBUG:
@@ -5196,19 +4470,19 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                     ex[-1]['low'] = l; ex[-1]['close'] = c
                                     closes = [k['close'] for k in ex]
                                     if len(closes) >= 26:
-                                        ema12 = _ema(closes, 12); ema26 = _ema(closes, 26)
+                                        ema12 = ema(closes, 12); ema26 = ema(closes, 26)
                                         for i in range(len(ex)):
                                             if i < len(ema12):
                                                 ex[i]['dif'] = round(ema12[i] - ema26[i], 4)
                                         difs = [ex[i]['dif'] for i in range(len(ex))]
-                                        dea = _ema(difs, 9)
+                                        dea = ema(difs, 9)
                                         for i in range(len(ex)):
                                             if i < len(dea):
                                                 ex[i]['dea'] = round(dea[i], 4)
                                                 ex[i]['macd'] = round(2 * (ex[i]['dif'] - dea[i]), 4)
                                     cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                print(f"[警告] 异常: {type(e).__name__}: {e}")
                         return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, True
                     # 壁钟到期
                     completed_row = last_row
@@ -5274,9 +4548,9 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         saved_selection_date=saved_selection_date
                     )
                     if is_top:
-                        _fixup_dual_bis_for_sub(snapshot, freq_sec, bottom_freq_sec)
+                        _futures_red_range(snapshot, freq_sec, bottom_freq_sec, bottom_freq)
                     _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
-                    _next_ds = _next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
                     _ex = snapshot.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _next_ds:
                         _next_c = round(cl, 3)
@@ -5286,7 +4560,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         snapshot['meta']['kline_count'] = len(_ex)
                     if is_top:
                         _kl_list = chan[kl_type]
-                        _date_fmt = "%Y-%m-%d %H:%M:%S" if top_freq in INTRADAY_FREQS else "%Y-%m-%d"
+                        _date_fmt = _get_date_fmt(top_freq)
                         snapshot['white_hline'] = _calc_futures_white_hline(_kl_list, top_freq, _date_fmt)
                     cached_snapshot = snapshot
 
@@ -5372,20 +4646,20 @@ class ChartHandler(SimpleHTTPRequestHandler):
             if api is not None:
                 try:
                     api.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
                 CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{top_freq_sec}", None)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
                 CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{bottom_freq_sec}", None)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
-                _futures_dual_chan_cache.pop(f"{symbol.upper()}:{bottom_freq}", None)
-            except Exception:
-                pass
+                _futures_analysis_cache.pop(f"{symbol.upper()}:{bottom_freq}", None)
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     def _handle_sse_stream_single(self, symbol, freq="15s", start_time=None):
         """Server-Sent Events 推送端：自包含——创建TqApi → 拉取历史 → chan分析 → 快照 → 实时循环。
@@ -5460,7 +4734,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
                     if _dns is not None:
                         _bdt = datetime.fromtimestamp(_dns / 1e9)
-                        _bds = _bdt.strftime('%Y-%m-%d %H:%M:%S')
+                        _bds = _bdt.strftime(_get_date_fmt(freq))
                         _ex = init_data.get('klines', [])
                         if not _ex or _ex[-1]['date'] != _bds:
                             _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
@@ -5472,7 +4746,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             init_data['meta']['kline_count'] = len(_ex)
                 # 计算白色横虚线（初始快照，K线已确认状态）
                 _kl_list = chan[kl_type]
-                _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+                _date_fmt = _get_date_fmt(freq)
                 init_data['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
                 init_str = json.dumps(init_data, ensure_ascii=False, allow_nan=False)
                 self.wfile.write(f"event: init\ndata: {init_str}\n\n".encode("utf-8"))
@@ -5563,8 +4837,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             last_klc = chan_kl_list.lst[-1]
                             if last_klc.lst:
                                 chan_last_klu = last_klc.lst[-1]
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"[警告] 异常: {type(e).__name__}: {e}")
                     tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
                     chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
                     if _SSE_DEBUG:
@@ -5649,13 +4923,13 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                     # ★ 实时计算最后一根K线的MACD，避免前端跳变
                                     closes = [k['close'] for k in ex]
                                     if len(closes) >= 26:
-                                        ema12 = _ema(closes, 12)
-                                        ema26 = _ema(closes, 26)
+                                        ema12 = ema(closes, 12)
+                                        ema26 = ema(closes, 26)
                                         for i in range(len(ex)):
                                             if i < len(ema12):
                                                 ex[i]['dif'] = round(ema12[i] - ema26[i], 4)
                                         difs = [ex[i]['dif'] for i in range(len(ex))]
-                                        dea = _ema(difs, 9)
+                                        dea = ema(difs, 9)
                                         for i in range(len(ex)):
                                             if i < len(dea):
                                                 ex[i]['dea'] = round(dea[i], 4)
@@ -5674,8 +4948,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                     tick_count += 1
                         except (BrokenPipeError, ConnectionResetError, OSError):
                             return
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[警告] 异常: {type(e).__name__}: {e}")
                         continue
                     # 壁钟到期，当前K线（klines[-1]）已冻结
                     completed_row = last_row
@@ -5747,7 +5021,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                                        saved_selection_date=saved_selection_date)
                     # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
                     _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
-                    _next_ds = _next_dt.strftime('%Y-%m-%d %H:%M:%S')
+                    _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
                     _ex = update_data.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _next_ds:
                         _next_c = round(cl, 3)
@@ -5757,7 +5031,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         update_data['meta']['kline_count'] = len(_ex)
                     # K线确认后，计算白色横虚线（不在tick推送路径计算）
                     _kl_list = chan[kl_type]
-                    _date_fmt = "%Y-%m-%d %H:%M:%S" if freq in INTRADAY_FREQS else "%Y-%m-%d"
+                    _date_fmt = _get_date_fmt(freq)
                     update_data['white_hline'] = _calc_futures_white_hline(_kl_list, freq, _date_fmt)
                     cached_snapshot = update_data  # ★ 更新缓存
                     t_snap = time.time() - t_snap_start
@@ -5786,13 +5060,13 @@ class ChartHandler(SimpleHTTPRequestHandler):
             if api is not None:
                 try:
                     api.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"[警告] 异常: {type(e).__name__}: {e}")
             # 清理该连接的K线缓存
             try:
                 CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{freq_sec}", None)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[警告] 异常: {type(e).__name__}: {e}")
 
     def do_POST(self):
         """处理 POST 请求（标注增删、扫描等）"""
@@ -6436,16 +5710,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="annotation-dialog" id="scan-mode-dialog">
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title">股票扫描</div>
-            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描来源</div>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
+            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描来源（可多选）</div>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-source" value="zxg" checked style="accent-color:#e94560;" />
+                    <input type="checkbox" name="scan-source" value="zxg" checked style="accent-color:#e94560;" />
                     自选股
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-source" value="zz1000" style="accent-color:#e94560;" />
+                    <input type="checkbox" name="scan-source" value="sz50" style="accent-color:#e94560;" />
+                    上证50
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="hs300" style="accent-color:#e94560;" />
+                    沪深300
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="zz500" style="accent-color:#e94560;" />
+                    中证500
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="zz1000" style="accent-color:#e94560;" />
                     中证1000
                 </label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:14px;">
+                <button onclick="scanSourceSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="scanSourceSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
             </div>
             <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描模式</div>
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
@@ -6508,8 +5798,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let dualOffscreenState = false; // 状态A：当前鼠标指向的K线对应区间在下面窗口视口外
         let dualNewZsData = null;       // 双窗口新模式：红框内笔计算的新中枢数据 {zs: [...], zs_stars: [...]}
         let dualShowNewZs = false;      // 双窗口新模式：是否绘制新中枢（替代原线段/中枢/买卖点）
-        let dualNewZsStartBi = -1;      // 双窗口新模式：上次请求的起始笔索引（用于去重）
-        let dualNewZsEndBi = -1;        // 双窗口新模式：上次请求的结束笔索引（用于去重）
+        let dualNewZsLeftDate = "";     // 双窗口新模式：上次请求的红框左边界日期（用于去重）
+        let dualNewZsRightDate = "";    // 双窗口新模式：上次请求的红框右边界日期（用于去重）
         let dualNewZsFailedKey = "";    // 双窗口新模式：失败请求去重，避免同一红框反复请求
         let activeDualWindow = 'top';   // 当前激活的窗口：'top' 或 'bottom'，控制底部滚动条作用于哪个窗口
         let _ctrlPressed = false;         // Ctrl键是否按下（用于红框计算优化）
@@ -6537,7 +5827,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 辅助函数：30分钟K线显示时间
         function getKlineEndTime(dateStr, showSeconds) {
-            const parts = dateStr.split(/[-\s:]/);
+            const parts = dateStr.split(/[-\/\s:]/);
             const yy = parts[0].slice(2);
             const mm = parts[1];
             const dd = parts[2];
@@ -6545,9 +5835,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const min = parts[4];
             const ss = parts[5];
             if (showSeconds && ss !== undefined) {
-                return `${yy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+                return `${yy}/${mm}/${dd} ${hh}:${min}:${ss}`;
             }
-            return `${yy}-${mm}-${dd} ${hh}:${min}`;
+            return `${yy}/${mm}/${dd} ${hh}:${min}`;
         }
         // 双窗口：上面周期 -> 下面周期映射
         function getDualBottomFreq(topFreq) {
@@ -6578,18 +5868,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const h = String(d.getHours()).padStart(2, '0');
                     const mi = String(d.getMinutes()).padStart(2, '0');
                     const s = String(d.getSeconds()).padStart(2, '0');
-                    return `${y}-${mo}-${da} ${h}:${mi}:${s}`;
+                    return `${y}/${mo}/${da} ${h}:${mi}:${s}`;
                 } else if (dateLen >= 16) {
                     const h = String(d.getHours()).padStart(2, '0');
                     const mi = String(d.getMinutes()).padStart(2, '0');
-                    return `${y}-${mo}-${da} ${h}:${mi}`;
+                    return `${y}/${mo}/${da} ${h}:${mi}`;
                 }
-                return `${y}-${mo}-${da}`;
+                return `${y}/${mo}/${da}`;
             }
             function parse(ds) {
                 // 日期型K线（仅日期）→ 视为当日结束时刻 23:59:59.999
-                if (ds.length === 10) return new Date(ds + "T23:59:59");
-                return new Date(ds.replace(" ", "T"));
+                if (ds.length === 10) return new Date(ds.replace(/\//g, "-") + "T23:59:59");
+                return new Date(ds.replace(/\//g, "-").replace(" ", "T"));
             }
             if (isFutures) {
                 // 期货：左边界 = 当前K线时间X（精确匹配）
@@ -6616,7 +5906,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         }
         // 双窗口：根据上面窗口鼠标位置计算下面窗口高亮范围
-        function calcDualHighlight(topMouseX) {
+        function calcGrayRange(topMouseX) {
             if (!isDualWindow || !dualBottomData || !chartData) return null;
             const area = getChartArea();
             const klines = getVisibleKlines();
@@ -6669,9 +5959,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 下面窗口数据中没有匹配的K线（上面K线日期超出了下面数据范围）
             if (startIdx === -1) {
                 // 用上面K线日期与下面数据首尾日期比较来判断方向
-                const topDate = new Date(topKline.date.replace(" ", "T"));
-                const bottomFirstDate = new Date(bottomKlines[0].date.replace(" ", "T"));
-                const bottomLastDate = new Date(bottomKlines[bottomKlines.length - 1].date.replace(" ", "T"));
+                const topDate = new Date(topKline.date.replace(/\//g, "-").replace(" ", "T"));
+                const bottomFirstDate = new Date(bottomKlines[0].date.replace(/\//g, "-").replace(" ", "T"));
+                const bottomLastDate = new Date(bottomKlines[bottomKlines.length - 1].date.replace(/\//g, "-").replace(" ", "T"));
                 if (topDate < bottomFirstDate) {
                     return { startIdx: -1, endIdx: -1, isVisible: false, isLeft: true, isRight: false };
                 } else if (topDate > bottomLastDate) {
@@ -6898,7 +6188,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             initialized = true;
                             updateRestartBtn();
                             updateDualBtn();
-                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                             document.getElementById("goto-date-input").value = lastDate;
                             updateWeekday();
                             render();
@@ -6946,7 +6236,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             initialized = true;
             updateRestartBtn();
             updateDualBtn();
-            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
             document.getElementById("goto-date-input").value = lastDate;
             updateWeekday();
             render();
@@ -7049,7 +6339,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 document.getElementById("stock-code").textContent = chartData.meta.symbol;
                                 document.title = "缠论分析 - " + chartData.meta.name;
                                 if (chartData.klines.length > 0) {
-                                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                                     document.getElementById("goto-date-input").value = lastDate;
                                 }
                                 updateWeekday();
@@ -7090,7 +6380,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             document.getElementById("stock-name").textContent = chartData.meta.name;
                             document.getElementById("stock-code").textContent = chartData.meta.symbol;
                             document.title = "缠论分析 - " + chartData.meta.name;
-                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                             document.getElementById("goto-date-input").value = lastDate;
                             updateWeekday();
                             document.getElementById("loading").classList.add("hidden");
@@ -7130,7 +6420,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         if (newOffset > maxOffset) newOffset = maxOffset;
                         dualBottomViewOffset = newOffset;
                         // 重新计算高亮范围（区间已移入视口，应该变为isVisible=true）
-                        dualHighlightRange = calcDualHighlight(mouseX);
+                        dualHighlightRange = calcGrayRange(mouseX);
                         dualRedRange = dualHighlightRange ? dualHighlightRange.redRange : null;
                         dualOffscreenState = dualHighlightRange && !dualHighlightRange.isVisible;
                         renderBottom();
@@ -7143,7 +6433,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 // 7. 默认：恢复全视图
                 viewCount = 377;
                 viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                 document.getElementById("goto-date-input").value = lastDate;
                 updateWeekday();
                 render();
@@ -7266,7 +6556,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
          * @returns {number|undefined} 全局索引
          */
         function dateToGlobalIdx(date, map) {
-            return map.dateToGlobalIdx[date];
+            const result = map.dateToGlobalIdx[date];
+            if (result === undefined && window._dualZsDebugCount === undefined) {
+                window._dualZsDebugCount = 0;
+            }
+            if (result === undefined && window._dualZsDebugCount < 3) {
+                console.log("[dateToGlobalIdx] 未匹配日期: '" + date + "', 可用日期样本: " + Object.keys(map.dateToGlobalIdx).slice(0, 3).join(", "));
+                window._dualZsDebugCount++;
+            }
+            return result;
         }
 
         /**
@@ -7305,7 +6603,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             _renderChart(chartData, currentFreq, viewOffset, viewCount, mouseX, mouseY, null, null);
             // 上面窗口渲染完后，计算下面窗口高亮并重绘下面窗口
             // 注意：_renderChart 内部会临时覆盖全局变量然后恢复，
-            // 所以这里全局变量已恢复为上面窗口的值，calcDualHighlight 可以正确使用
+            // 所以这里全局变量已恢复为上面窗口的值，calcGrayRange 可以正确使用
             updateDualHighlight();
         }
 
@@ -7524,13 +6822,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     } else if (freq === '1m' || freq === '30m' || freq === '5m') {
                         shortDate = getKlineEndTime(highlightCenterDate);
                     } else if (freq === 'w') {
-                        const dateParts = highlightCenterDate.split("-");
-                        shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                        const dateParts = highlightCenterDate.split(/[-\/]/);
+                        shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                     } else {
-                        const dateParts = highlightCenterDate.split("-");
-                        shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                        const dateParts = highlightCenterDate.split(/[-\/]/);
+                        shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                     }
-                    const d = new Date(highlightCenterDate.replace(" ", "T"));
+                    const d = new Date(highlightCenterDate.replace(/\//g, "-").replace(" ", "T"));
                     const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
                     const weekDay = "周" + weekDays[d.getDay()];
                     // barsToRight: 从centerIdx到最右边可见K线
@@ -7622,7 +6920,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         function updateDualHighlight() {
             if (!isDualWindow || !dualBottomData) return;
             if (mouseX >= 0) {
-                dualHighlightRange = calcDualHighlight(mouseX);
+                dualHighlightRange = calcGrayRange(mouseX);
                 // 只有按住 Ctrl 键时才计算红框（耗资源操作），否则只显示灰框
                 dualRedRange = (_ctrlPressed && dualHighlightRange) ? dualHighlightRange.redRange : null;
                 // 更新状态A：区间是否在视口外
@@ -7644,7 +6942,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 双窗口新模式：红框出现后，请求用红框内笔计算新中枢
         function updateDualNewZs() {
+            console.log("[updateDualNewZs] 进入: isDualWindow=" + isDualWindow + " dualBottomData=" + !!dualBottomData + " dualHighlightRange=" + !!dualHighlightRange);
             if (!isDualWindow || !dualBottomData || !dualHighlightRange) {
+                console.log("[updateDualNewZs] 条件1失败: isDualWindow/dualBottomData/dualHighlightRange 为空");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -7652,7 +6952,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 return;
             }
             const rr = dualHighlightRange.redRange;
+            console.log("[updateDualNewZs] redRange=" + !!rr + " highlightRange keys=" + Object.keys(dualHighlightRange).join(","));
             if (!rr) {
+                console.log("[updateDualNewZs] 条件2失败: redRange为空");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -7661,53 +6963,47 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             const aIdx = rr.aIdx;
             const bIdx = rr.bIdx;
-            if (aIdx === undefined || bIdx === undefined) return;
+            console.log("[updateDualNewZs] aIdx=" + aIdx + " bIdx=" + bIdx);
+            if (aIdx === undefined || bIdx === undefined) {
+                console.log("[updateDualNewZs] 条件3失败: aIdx或bIdx为undefined");
+                return;
+            }
             // 红框对应的灰框区间不在当前下面窗口视口内时，不切换新中枢
+            console.log("[updateDualNewZs] isVisible=" + dualHighlightRange.isVisible);
             if (!dualHighlightRange.isVisible) {
+                console.log("[updateDualNewZs] 条件4失败: 不在视口内");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
                 }
                 return;
             }
-            // 在下面窗口的笔中，找到第一个和最后一个被红框完全覆盖的完整笔
+            // 红框左右边界时间（子级别K线格式，传给后端由 _find_sub_bi_sequence 找笔）
             const bottomKlines = dualBottomData.klines;
             const leftDate = bottomKlines[aIdx].date;
             const rightDate = bottomKlines[bIdx].date;
-            let startBi = -1, endBi = -1;
-            const bis = dualBottomData.bis || [];
-            for (let i = 0; i < bis.length; i++) {
-                const bi = bis[i];
-                if (bi.sdt >= leftDate && bi.edt <= rightDate) {
-                    if (startBi === -1) startBi = i;
-                    endBi = i;
-                }
-            }
-            if (startBi === -1 || endBi === -1 || startBi > endBi) {
-                if (dualShowNewZs) {
-                    dualShowNewZs = false;
-                    dualNewZsData = null;
-                }
-                return;
-            }
-            const requestKey = dualBottomFreq + ":" + startBi + ":" + endBi;
+            console.log("[updateDualNewZs] leftDate=" + leftDate + " rightDate=" + rightDate + " freq=" + dualBottomFreq);
+            const requestKey = dualBottomFreq + ":" + leftDate + ":" + rightDate;
             if (dualNewZsFailedKey === requestKey) {
+                console.log("[updateDualNewZs] 条件5失败: 请求已失败过, key=" + requestKey);
                 return;
             }
-            if (dualShowNewZs && dualNewZsStartBi === startBi && dualNewZsEndBi === endBi) {
+            if (dualShowNewZs && dualNewZsLeftDate === leftDate && dualNewZsRightDate === rightDate) {
+                console.log("[updateDualNewZs] 条件6: 已缓存相同请求, 跳过");
                 return;
             }
-            dualNewZsStartBi = startBi;
-            dualNewZsEndBi = endBi;
+            console.log("[updateDualNewZs] >>> 发送fetch请求到 /api/dual_zs");
+            dualNewZsLeftDate = leftDate;
+            dualNewZsRightDate = rightDate;
             dualShowNewZs = true;
             dualNewZsData = null;
             const code = dualBottomData.meta.symbol;
-            fetch("/api/dual_zs?code=" + encodeURIComponent(code) + "&freq=" + dualBottomFreq + "&start_bi=" + startBi + "&end_bi=" + endBi)
+            fetch("/api/dual_zs?code=" + encodeURIComponent(code) + "&freq=" + dualBottomFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate))
                 .then(resp => resp.json())
                 .then(data => {
                     if (data.error) {
                         console.error("[dual_zs] 后端错误:", data.error);
-                        if (dualNewZsStartBi === startBi && dualNewZsEndBi === endBi) {
+                        if (dualNewZsLeftDate === leftDate && dualNewZsRightDate === rightDate) {
                             dualNewZsFailedKey = requestKey;
                             dualShowNewZs = false;
                             dualNewZsData = null;
@@ -7715,7 +7011,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                         return;
                     }
-                    if (dualNewZsStartBi === startBi && dualNewZsEndBi === endBi) {
+                    if (dualNewZsLeftDate === leftDate && dualNewZsRightDate === rightDate) {
                         dualNewZsFailedKey = "";
                         dualNewZsData = data;
                         dualShowNewZs = true;
@@ -7724,7 +7020,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 })
                 .catch(err => {
                     console.error("[dual_zs] 请求失败:", err);
-                    if (dualNewZsStartBi === startBi && dualNewZsEndBi === endBi) {
+                    if (dualNewZsLeftDate === leftDate && dualNewZsRightDate === rightDate) {
                         dualNewZsFailedKey = requestKey;
                         dualShowNewZs = false;
                         dualNewZsData = null;
@@ -8023,8 +7319,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 双窗口新模式：绘制红框内笔计算的新中枢（替代原中枢/线段/买卖点）
         function drawDualNewZs(klines, area, priceRange, barStep, subPixelOffset) {
-            if (!dualNewZsData || !dualNewZsData.zs || !dualNewZsData.zs.length) return;
+            if (!dualNewZsData || !dualNewZsData.zs || !dualNewZsData.zs.length) {
+                console.log("[drawDualNewZs] 跳过: dualNewZsData=", dualNewZsData);
+                return;
+            }
             const map = buildGlobalDateMap();
+            console.log("[drawDualNewZs] ZS数量=" + dualNewZsData.zs.length + ", start_bi=" + dualNewZsData.start_bi + ", end_bi=" + dualNewZsData.end_bi);
             const globalStart = Math.max(0, Math.floor(viewOffset));
             const globalEnd = globalStart + viewCount;
             const rightBound = area.x + area.w;
@@ -8309,13 +7609,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m') {
                     shortDate = getKlineEndTime(k.date);
                 } else if (currentFreq === 'w') {
-                    const dateParts = k.date.split("-");
-                    shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                    const dateParts = k.date.split(/[-\/]/);
+                    shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                 } else {
-                    const dateParts = k.date.split("-");
-                    shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                    const dateParts = k.date.split(/[-\/]/);
+                    shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                 }
-                const d = new Date(k.date.replace(" ", "T"));
+                const d = new Date(k.date.replace(/\//g, "-").replace(" ", "T"));
                 const weekDay = "周" + weekDays[d.getDay()];
 
                 const rightVisibleK = klines[klines.length - 1];
@@ -8361,7 +7661,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
-            const weekDayStr = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
+            const weekDayStr = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
             const clipText = `${k.date} ${weekDayStr} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
@@ -8420,12 +7720,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m') {
                     shortDate = getKlineEndTime(klines[i].date);
                 } else if (currentFreq === 'w') {
-                    const dateParts = klines[i].date.split("-");
-                    shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                    const dateParts = klines[i].date.split(/[-\/]/);
+                    shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                 } else {
                     // 日线
-                    const dateParts = klines[i].date.split("-");
-                    shortDate = dateParts[0].slice(2) + "-" + dateParts[1] + "-" + dateParts[2];
+                    const dateParts = klines[i].date.split(/[-\/]/);
+                    shortDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
                 }
                 if (i === 0) {
                     ctx.textAlign = "left";
@@ -8552,7 +7852,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changeVal = k.close - prevClose;
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
-                    const wd = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
+                    const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
                     lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
@@ -8625,8 +7925,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 dualRedRange = null;
                 dualNewZsData = null;
                 dualShowNewZs = false;
-                dualNewZsStartBi = -1;
-                dualNewZsEndBi = -1;
+                dualNewZsLeftDate = "";
+                dualNewZsRightDate = "";
                 btn.classList.remove("active");
                 const isFuturesClose = chartData && chartData.meta && chartData.meta.market === 'futures';
                 updateFreqButtonStates(isFuturesClose);
@@ -8731,7 +8031,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             const maxOffset = Math.max(0, totalKlines - dualBottomViewCount);
                             if (newOffset > maxOffset) newOffset = maxOffset;
                             dualBottomViewOffset = newOffset;
-                            dualHighlightRange = calcDualHighlight(mouseX);
+                            dualHighlightRange = calcGrayRange(mouseX);
                             dualRedRange = dualHighlightRange ? dualHighlightRange.redRange : null;
                             dualOffscreenState = dualHighlightRange && !dualHighlightRange.isVisible;
                         } else {
@@ -8926,7 +8226,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changeVal = k.close - prevClose;
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
-                    const wd = "周" + weekDays[new Date(k.date.replace(" ", "T")).getDay()];
+                    const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
                     lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
@@ -9044,7 +8344,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                     document.getElementById("goto-date-input").value = lastDate;
                     updateWeekday();
                     document.getElementById("loading").classList.add("hidden");
@@ -9079,7 +8379,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _scanAborted = false;
         let _scanMode = "ann"; // "ann" = 标注扫描, "bsp" = 买卖点扫描
         let _scanRecentDays = 1; // 最近N根K线，默认1
-        let _scanSource = "zxg"; // "zxg" = 自选股, "zz1000" = 中证1000
+        let _scanSources = ["zxg"]; // 多选：["zxg", "sz50", "hs300", "zz500", "zz1000"]
+
+        // 扫描来源→中文标签（多选时用顿号连接）
+        function _scanSourceLabel() {
+            var map = {"zxg": "自选股", "sz50": "上证50", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000"};
+            var labels = [];
+            for (var i = 0; i < _scanSources.length; i++) {
+                labels.push(map[_scanSources[i]] || _scanSources[i]);
+            }
+            return labels.join("、");
+        }
+
+        // 全选 / 取消 扫描来源
+        window.scanSourceSelectAll = function() {
+            var cbs = document.querySelectorAll('input[name="scan-source"]');
+            for (var i = 0; i < cbs.length; i++) { cbs[i].checked = true; }
+        };
+        window.scanSourceSelectNone = function() {
+            var cbs = document.querySelectorAll('input[name="scan-source"]');
+            for (var i = 0; i < cbs.length; i++) { cbs[i].checked = false; }
+        };
+
+        console.log("[扫描模块] v2-多选版 已加载 OK");
 
         // 生成买卖点标签HTML（最多显示6个，超出显示+N）
         function buildBspTagsHtml(buyPoints, sellPoints) {
@@ -9118,8 +8440,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var selected = document.querySelector('input[name="scan-mode"]:checked');
             if (!selected) return;
             _scanMode = selected.value;
-            var sourceEl = document.querySelector('input[name="scan-source"]:checked');
-            _scanSource = sourceEl ? sourceEl.value : "zxg";
+            // 多选：读取所有勾选的 checkbox
+            var sourceCbs = document.querySelectorAll('input[name="scan-source"]:checked');
+            _scanSources = [];
+            for (var i = 0; i < sourceCbs.length; i++) {
+                _scanSources.push(sourceCbs[i].value);
+            }
+            if (_scanSources.length === 0) {
+                _scanSources = ["zxg"];
+                document.querySelector('input[name="scan-source"][value="zxg"]').checked = true;
+            }
             var daysInput = document.getElementById("scan-recent-days");
             _scanRecentDays = parseInt(daysInput.value) || 1;
             if (_scanRecentDays < 1) _scanRecentDays = 1;
@@ -9127,8 +8457,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             try {
                 localStorage.setItem("scan_mode", _scanMode);
                 localStorage.setItem("scan_recent_days", String(_scanRecentDays));
-                localStorage.setItem("scan_source", _scanSource);
+                localStorage.setItem("scan_sources", _scanSources.join(","));
             } catch(e) {}
+            console.log("[扫描对话框] 用户选择来源: " + _scanSources.join(",") + " 模式: " + _scanMode + " 最近: " + _scanRecentDays);
             document.getElementById("scan-mode-dialog").classList.remove("show");
             // 执行实际扫描
             doStartScan();
@@ -9139,7 +8470,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分"};
             var freqLabel = freqLabels[freq] || freq;
             if (_scanMode === "bsp") {
-                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400;color:#8892b0">（最近</span><span style="font-size:11px;font-weight:400;color:#e94560">' + _scanRecentDays + '</span><span style="font-size:11px;font-weight:400;color:#8892b0">根）</span>';
+                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400;color:#8892b0">[最近</span><span style="font-size:11px;font-weight:400;color:#e94560"> ' + _scanRecentDays + ' </span><span style="font-size:11px;font-weight:400;color:#8892b0">根]</span>';
             } else {
                 document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400">（标注）</span>';
             }
@@ -9170,15 +8501,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     _scanRecentDays = parseInt(savedDays) || 1;
                     document.getElementById("scan-recent-days").value = _scanRecentDays;
                 }
-                var savedSource = localStorage.getItem("scan_source");
-                if (savedSource === "zxg" || savedSource === "zz1000") {
-                    _scanSource = savedSource;
-                    var srcRadio = document.querySelector('input[name="scan-source"][value="' + savedSource + '"]');
-                    if (srcRadio) srcRadio.checked = true;
+                var savedSources = localStorage.getItem("scan_sources");
+                if (savedSources) {
+                    var arr = savedSources.split(",");
+                    var valid = [];
+                    for (var i = 0; i < arr.length; i++) {
+                        var v = arr[i].trim();
+                        if (v === "zxg" || v === "sz50" || v === "hs300" || v === "zz500" || v === "zz1000") {
+                            valid.push(v);
+                        }
+                    }
+                    if (valid.length > 0) {
+                        _scanSources = valid;
+                        // 先全部取消，再勾选保存的
+                        var allCbs = document.querySelectorAll('input[name="scan-source"]');
+                        for (var i = 0; i < allCbs.length; i++) { allCbs[i].checked = false; }
+                        for (var i = 0; i < valid.length; i++) {
+                            var cb = document.querySelector('input[name="scan-source"][value="' + valid[i] + '"]');
+                            if (cb) cb.checked = true;
+                        }
+                    }
                 }
             } catch(e) {}
             document.getElementById("scan-mode-dialog").classList.add("show");
         };
+
+        // 多来源合并：后端统一合并去重，前端只需传逗号分隔的来源列表
+        function _fetchMergedStocks(sources) {
+            return fetch("/api/scan_stock_list?source=" + sources.join(","))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.errors && data.errors.length > 0) {
+                        console.warn("[扫描] 后端合并警告:", data.errors.join("; "));
+                    }
+                    return data.stocks || [];
+                });
+        }
 
         // 实际执行扫描（由对话框确认后调用）
         function doStartScan() {
@@ -9198,24 +8556,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 标注扫描模式：直接查询标注缓存
             if (_scanMode === "ann") {
-                var sourceLabel = _scanSource === "zz1000" ? "中证1000" : "自选股";
+                var sourceLabel = _scanSourceLabel();
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在查询' + sourceLabel + '标注数据...</div>';
-                // 获取股票列表 + 标注缓存
+                // 合并多来源股票列表 + 标注缓存
                 Promise.all([
-                    fetch("/api/scan_stock_list?source=" + _scanSource),
+                    _fetchMergedStocks(_scanSources),
                     fetch("/api/annotations_scan?freq=" + freq)
                 ])
                 .then(function(resps) {
-                    return Promise.all([resps[0].json(), resps[1].json()]);
+                    return Promise.all([Promise.resolve(resps[0]), resps[1].json()]);
                 })
                 .then(function(dataArr) {
-                    var stockData = dataArr[0];
+                    var stocks = dataArr[0];
                     var annData = dataArr[1];
+                    console.log("[标注扫描] 合并后股票总数: " + (stocks ? stocks.length : 0) + " 只, 来源: " + _scanSources.join(","));
                     _scanRunning = false;
                     btn.classList.remove("active");
                     btn.textContent = "股票扫描";
 
-                    if (!stockData.stocks || stockData.stocks.length === 0) {
+                    if (!stocks || stocks.length === 0) {
                         body.innerHTML = '<div class="scan-no-result">' + sourceLabel + '列表为空或文件不存在</div>';
                         return;
                     }
@@ -9228,7 +8587,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
                     // 交叉匹配：股票列表中有标注的（用复合key匹配，避免000001.SH/000001.SZ冲突）
                     var results = [];
-                    stockData.stocks.forEach(function(stk) {
+                    stocks.forEach(function(stk) {
                         var market = stk.prefix === "1" ? "SH" : stk.prefix === "0" ? "SZ" : stk.prefix === "2" ? "BJ" : stk.prefix.toUpperCase();
                         var lookupKey = stk.code + "." + market;
                         var ann = annotatedCodes[lookupKey];
@@ -9243,7 +8602,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                     });
 
-                    var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + stockData.stocks.length + '</b> 只，有标注 <b>' + results.length + '</b> 只</div>';
+                    var html = '<div class="scan-summary">' + sourceLabel + '（合并后<b>' + stocks.length + '</b>只），有标注 <b>' + results.length + '</b> 只</div>';
                     if (results.length === 0) {
                         html += '<div class="scan-no-result">当前周期下未发现标注股票</div>';
                     } else {
@@ -9256,7 +8615,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 var closest = null;
                                 var closestDiff = Infinity;
                                 r.annotations.forEach(function(a) {
-                                    var d = new Date(a.date);
+                                    var d = new Date(a.date.replace(/\//g, "-"));
                                     if (isNaN(d.getTime())) return;
                                     var diff = Math.abs(d - today);
                                     if (diff < closestDiff) {
@@ -9289,12 +8648,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             // 买卖点扫描模式（原有逻辑）
-            // 第一步：通知后端开始新扫描 + 获取股票列表
-            var sourceLabel = _scanSource === "zz1000" ? "中证1000" : "自选股";
+            // 第一步：通知后端开始新扫描 + 合并多来源股票列表
+            var sourceLabel = _scanSourceLabel();
             body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取' + sourceLabel + '列表...</div>';
             Promise.all([
                 fetch("/api/scan_start"),
-                fetch("/api/scan_stock_list?source=" + _scanSource)
+                _fetchMergedStocks(_scanSources)
             ])
                 .then(function(resps) {
                     // 先检查 scan_start 的响应
@@ -9309,20 +8668,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 '</div>';
                             return null;
                         }
-                        // scan_start 正常，继续处理股票列表
-                        return resps[1].json();
+                        // scan_start 正常，继续处理股票列表（_fetchMergedStocks 已返回去重数组）
+                        return resps[1];
                     });
                 })
                 .then(function(data) {
                     if (data === null) return; // 已处理 need_refresh
-                    if (!data.stocks || data.stocks.length === 0) {
+                    if (!data || data.length === 0) {
                         _scanRunning = false;
                         btn.classList.remove("active");
                         body.innerHTML = '<div class="scan-no-result">' + sourceLabel + '列表为空或文件不存在</div>';
                         return;
                     }
-                    var stocks = data.stocks;
+                    var stocks = data;
                     var total = stocks.length;
+                    console.log("[买卖点扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                     var results = [];
                     var skipped = 0;
                     var currentIdx = 0;
@@ -9429,7 +8789,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         batch.forEach(function(stk) {
                             var code = stk.code;
                             var prefix = stk.prefix;
-                            fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&recent=" + _scanRecentDays + "&source=" + _scanSource + "&_t=" + Date.now())
+                            fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&recent=" + _scanRecentDays + "&source=" + (stk._source || "zxg") + "&_t=" + Date.now())
                                 .then(function(resp) { return resp.json(); })
                                 .then(function(data) {
                                     completed++;
@@ -9551,8 +8911,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         function renderScanResults(results, total, skipped, interrupted) {
             var body = document.getElementById("scan-body");
             var label = interrupted ? "（已中断）" : "";
-            var sourceLabel = _scanSource === "zz1000" ? "中证1000" : "自选股";
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，跳过 <b>' + skipped + '</b> 只，发现 <b>' + results.length + '</b> 只有买/卖点' + label + '</div>';
+            var sourceLabel = _scanSourceLabel();
+            var html = '<div class="scan-summary">' + sourceLabel + '（合并后<b>' + total + '</b>只），扫描 <b>' + (total - skipped) + '</b> 只，跳过 <b>' + skipped + '</b> 只，发现 <b>' + results.length + '</b> 只有买/卖点' + label + '</div>';
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现买卖点股票</div>';
             } else {
@@ -9685,7 +9045,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         document.getElementById("stock-name").textContent = chartData.meta.name;
                         document.getElementById("stock-code").textContent = chartData.meta.symbol;
                         document.title = "缠论分析 - " + chartData.meta.name;
-                        const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                        const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                         document.getElementById("goto-date-input").value = lastDate;
                         updateWeekday();
                         // 双窗口模式：从 data.sub 获取子级别数据（方案B）
@@ -10083,7 +9443,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10);
+                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                     document.getElementById("goto-date-input").value = lastDate;
                     updateWeekday();
                     resizeCanvas();
@@ -10225,7 +9585,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         document.getElementById("stock-code").textContent = data.meta.symbol;
                         document.title = "缠论分析 - " + data.meta.name;
                         if (data.klines.length > 0) {
-                            const lastDate = data.klines[data.klines.length - 1].date.slice(0, 10);
+                            const lastDate = data.klines[data.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
                             document.getElementById("goto-date-input").value = lastDate;
                         }
                         updateWeekday();

@@ -1252,6 +1252,42 @@ def read_zz1000_stocks():
     return read_blk_file(path)
 
 
+def read_sz50_stocks():
+    """
+    读取通达信上证50板块文件，返回股票代码列表。
+    用户需先在通达信中创建/下载"上证50"板块。
+    """
+    path = get_blk_path("SZ50")
+    if not os.path.exists(path):
+        print(f"[stock][警告] 上证50板块文件不存在: {path}")
+        return []
+    return read_blk_file(path)
+
+
+def read_hs300_stocks():
+    """
+    读取通达信沪深300板块文件，返回股票代码列表。
+    用户需先在通达信中创建/下载"沪深300"板块。
+    """
+    path = get_blk_path("HS300")
+    if not os.path.exists(path):
+        print(f"[stock][警告] 沪深300板块文件不存在: {path}")
+        return []
+    return read_blk_file(path)
+
+
+def read_zz500_stocks():
+    """
+    读取通达信中证500板块文件，返回股票代码列表。
+    用户需先在通达信中创建/下载"中证500"板块。
+    """
+    path = get_blk_path("ZZ500")
+    if not os.path.exists(path):
+        print(f"[stock][警告] 中证500板块文件不存在: {path}")
+        return []
+    return read_blk_file(path)
+
+
 def save_to_zxg_blk(codes):
     """
     将股票代码列表追加到通达信自选股文件 zxg.blk。

@@ -26,11 +26,13 @@ class CChan:
         lv_list=None,
         config=None,
         autype: AUTYPE = AUTYPE.QFQ,
+        market_type: str = None,
     ):
         if lv_list is None:
             lv_list = [KL_TYPE.K_DAY, KL_TYPE.K_60M]
         check_kltype_order(lv_list)  # lv_list顺序从高到低
         self.code = code
+        self.market_type = market_type  # "stock" / "futures" 等，传递到 CKLine_List → check_nested_divergence
         self.begin_time = str(begin_time) if isinstance(begin_time, datetime.date) else begin_time
         self.end_time = str(end_time) if isinstance(end_time, datetime.date) else end_time
         self.autype = autype
@@ -57,6 +59,7 @@ class CChan:
         obj: CChan = cls.__new__(cls)
         memo[id(self)] = obj
         obj.code = self.code
+        obj.market_type = self.market_type
         obj.begin_time = self.begin_time
         obj.end_time = self.end_time
         obj.autype = self.autype
@@ -73,6 +76,8 @@ class CChan:
         obj.kl_datas = {}
         for kl_type, ckline in self.kl_datas.items():
             obj.kl_datas[kl_type] = copy.deepcopy(ckline, memo)
+        for kl_type in obj.kl_datas:
+            obj.kl_datas[kl_type].chan = obj
         for kl_type, ckline in self.kl_datas.items():
             for klc in ckline:
                 for klu in klc.lst:
@@ -85,7 +90,8 @@ class CChan:
     def do_init(self):
         self.kl_datas: Dict[KL_TYPE, CKLine_List] = {}
         for idx in range(len(self.lv_list)):
-            self.kl_datas[self.lv_list[idx]] = CKLine_List(self.lv_list[idx], conf=self.conf)
+            self.kl_datas[self.lv_list[idx]] = CKLine_List(self.lv_list[idx], conf=self.conf, code=self.code, market_type=self.market_type)
+            self.kl_datas[self.lv_list[idx]].chan = self
 
     def load_stock_data(self, stockapi_instance: CCommonStockApi, lv) -> Iterable[CKLine_Unit]:
         for KLU_IDX, klu in enumerate(stockapi_instance.get_kl_data()):

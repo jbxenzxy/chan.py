@@ -33,9 +33,11 @@ def get_seglist_instance(seg_config: CSegConfig, lv) -> CSegListComm:
 
 
 class CKLine_List:
-    def __init__(self, kl_type, conf: CChanConfig):
+    def __init__(self, kl_type, conf: CChanConfig, code: str = "", market_type: str = None):
         self.kl_type = kl_type
         self.config = conf
+        self.code = code
+        self.market_type = market_type  # "stock" / "futures" 等，供 check_nested_divergence 区分品种
         self.lst: List[CKLine] = []  # K线列表，可递归  元素KLine类型
         self.bi_list = CBiList(bi_conf=conf.bi_conf)
         self.seg_list: CSegListComm[CBi] = get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.BI)
@@ -45,7 +47,10 @@ class CKLine_List:
         self.segzs_list = CZSList(zs_config=conf.zs_conf)
 
         self.bs_point_lst = MyBSPointList[CBi, CBiList](bs_point_config=conf.bs_point_conf)  # 自定义买卖点（继承自 CBSPointList）
+        self.bs_point_lst.parent = self  # 指向 CKLine_List，供 check_nested_divergence 使用
         self.seg_bs_point_lst = CBSPointList[CSeg, CSegListComm](bs_point_config=conf.seg_bs_point_conf)
+
+        self.chan = None  # 在 CChan do_init()设置，指向 CChan，供 check_nested_divergence 使用
 
         self.metric_model_lst = conf.GetMetricModel()
 
@@ -55,7 +60,7 @@ class CKLine_List:
         self.last_sure_segseg_start_bi_idx = -1
 
     def __deepcopy__(self, memo):
-        new_obj = CKLine_List(self.kl_type, self.config)
+        new_obj = CKLine_List(self.kl_type, self.config, self.code, self.market_type)
         memo[id(self)] = new_obj
         for klc in self.lst:
             klus_new = []
@@ -84,6 +89,7 @@ class CKLine_List:
         new_obj.zs_list = copy.deepcopy(self.zs_list, memo)
         new_obj.segzs_list = copy.deepcopy(self.segzs_list, memo)
         new_obj.bs_point_lst = copy.deepcopy(self.bs_point_lst, memo)
+        new_obj.bs_point_lst.parent = new_obj  # 恢复反向引用
         new_obj.metric_model_lst = copy.deepcopy(self.metric_model_lst, memo)
         new_obj.step_calculation = copy.deepcopy(self.step_calculation, memo)
         new_obj.seg_bs_point_lst = copy.deepcopy(self.seg_bs_point_lst, memo)

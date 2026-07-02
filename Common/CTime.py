@@ -37,6 +37,10 @@ class CTime:
             date = datetime(self.year, self.month, self.day, self.hour, self.minute, self.second)
         self.ts = date.timestamp()
 
+    def toFmtStr(self, fmt: str = "%Y/%m/%d %H:%M:%S") -> str:
+        # 将 CTime 格式化为任意目标格式字符串
+        return datetime.fromtimestamp(self.ts).strftime(fmt)
+
     def __gt__(self, t2):
         return self.ts > t2.ts
 
