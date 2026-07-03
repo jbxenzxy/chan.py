@@ -104,7 +104,7 @@ class CChanConfig:
 
     def set_bsp_config(self, conf):
         para_dict = {
-            "divergence_rate": 0.9,         # 11类（和11p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
+            "divergence_rate": 1,           # 11类（和11p类）买卖点MACD背驰力度，默认为 0.9（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 0.9×进中枢笔(前笔)MACD面积）
             "min_zs_cnt": 1,                # 11类（和11p类）买卖点至少要经历几个中枢，默认为 1
             "bsp11_only_multibi_zs": True,
             "max_bs22_rate": 0.9,           # 22类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到11类买卖点的位置

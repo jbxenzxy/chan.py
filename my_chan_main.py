@@ -23,7 +23,7 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 from urllib.parse import urlparse, parse_qs
 
 # 区间套辅助函数（已搬迁至 BSPointList.py，红框功能复用）
-from BuySellPoint.BSPointList import _get_main_bi_time_range, _stocks_red_range, _futures_red_range, _find_sub_bi_sequence, _check_red_range_zs
+from BuySellPoint.BSPointList import _get_main_bi_time_range, _stocks_red_range, _futures_red_range, _find_sub_bi_sequence, _find_sub_zs
 
 # ============================================================
 # 内存监控工具
@@ -114,9 +114,11 @@ from DataAPI.TdxAPI import CTdxAPI, set_tdx_config, read_tdx_day_file, read_tdx_
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 FORWARD_ADJUST_ENABLED = True
 
-# 调试模式：冷启动直接加载到此日期为止（仅日K生效），None表示不开启，按正常流程加载
-# 示例: DEBUG_COLD_START_END_DATE = "2026-06-29" 北方国际
-DEBUG_COLD_START_END_DATE = None
+# 调试模式：冷启动只从指定日期开始加载(所有周期有效)，None表示不开启。如果该日期前无通达信数据，则有多少加载多少
+DEBUG_COLD_START_START_DATE = None # "2024-09-10"
+
+# 调试模式：用于解决冷启动起不来的问题；冷启动加载到此日期(仅日K生效)，None表示不开启
+DEBUG_COLD_START_END_DATE = None # 示例: "2026-06-29" 北方国际
 
 # 注入通达信数据源配置到 TdxAPI 模块
 from DataAPI.TdxAPI import set_tdx_config as _set_tdx_config
@@ -1410,7 +1412,7 @@ def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
-            market_type="futures", market="KQ",
+            market_type="futures",
         )
 
         for _snapshot in chan.step_load():
@@ -1723,7 +1725,14 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     t0 = time.time()
     config = _make_chan_config()
 
+    # 每次请求重置复盘标记，避免残留前一次状态
+    from BuySellPoint.BSPointList import MyBSPointList
+    MyBSPointList.REPLAY_MODE = False
+
     try:
+        if end_date:
+            from BuySellPoint.BSPointList import MyBSPointList
+            MyBSPointList.REPLAY_MODE = True
         chan = CChan(
             code=code,
             begin_time=None,
@@ -1732,7 +1741,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             lv_list=[_get_kl_type(freq)],
             config=config,
             autype=AUTYPE.NONE,
-            market_type="futures", market="KQ",
+            market_type="futures",
         )
         for _snapshot in chan.step_load():
             pass
@@ -1746,6 +1755,9 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         print(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
         print(f"[期货][错误] 完整堆栈:\n{tb}")
         return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
+    finally:
+        if end_date:
+            MyBSPointList.REPLAY_MODE = False
 
     kl_list = chan[_get_kl_type(freq)]
     print(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
@@ -2060,7 +2072,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 lv_list=[_get_kl_type(sub_freq)],
                 config=sub_config,
                 autype=AUTYPE.NONE,
-                market_type="futures", market="KQ",
+                market_type="futures",
             )
             for _snapshot in sub_chan.step_load():
                 pass
@@ -2119,27 +2131,41 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if not sub_freq:
             return {"error": f"双窗口不支持当前周期: {freq}"}
         # 缓存 key 约定：
-        #   dual_main_{market}_{code}_{freq}  — 主级别缓存（含 CChan 对象）
-        #   dual_sub_{market}_{code}_{sub_freq}  — 子级别缓存（独立存储）
-        main_cache_key = f"dual_main_{market}_{code}_{freq}"
-        sub_cache_key = f"dual_sub_{market}_{code}_{sub_freq}"
+        #   dual_main_{market}_{code}_{freq}_{end_date}  — 主级别缓存（含 CChan 对象）
+        #   dual_sub_{market}_{code}_{sub_freq}_{end_date}  — 子级别缓存（独立存储）
+        date_suffix = end_date if end_date else "live"
+        main_cache_key = f"dual_main_{market}_{code}_{freq}_{date_suffix}"
+        sub_cache_key = f"dual_sub_{market}_{code}_{sub_freq}_{date_suffix}"
         cache_key = None  # 双窗口不使用单窗口的 cache_key，初始化为 None 防止意外引用
 
         # 查双窗口缓存（主级别和子级别必须同时存在，不会出现一个存在一个不存在）
+        # 复盘模式(end_date)不命中缓存，强制重新加载
         main_cached = _cache_get(main_cache_key)
         sub_cached = _cache_get(sub_cache_key)
-        if main_cached is not None and sub_cached is not None \
+        if not end_date and main_cached is not None and sub_cached is not None \
                 and "result" in main_cached and "result" in sub_cached:
             result = main_cached["result"]
             result["sub"] = sub_cached["result"]
             print(f"[stock][耗时] 命中双窗口缓存(freq={freq}+{sub_freq})，总耗时: 0.001s")
             return result
 
+        # 复盘模式：清除旧的双窗口缓存，强制重新加载主级别和子级别
+        if end_date:
+            import gc
+            with _cache_lock:
+                if main_cache_key in _stocks_analysis_cache:
+                    del _stocks_analysis_cache[main_cache_key]
+                if sub_cache_key in _stocks_analysis_cache:
+                    del _stocks_analysis_cache[sub_cache_key]
+            gc.collect()
+            print(f"[stock][信息] 复盘模式：已清除双窗口缓存，重新加载主级别({freq})和子级别({sub_freq})")
+
         # 未命中缓存：冷启动从文件加载双级别数据，cached_result=None 强制走文件读取
         cached_result = None
     else:
         # ===== 单窗口模式 =====
-        cache_key = f"single_{market}_{code}_{freq}"
+        date_suffix = end_date if end_date else "live"
+        cache_key = f"single_{market}_{code}_{freq}_{date_suffix}"
         cached_result = _cache_get(cache_key)
         if not end_date and cached_result is not None and "result" in cached_result:
             result = cached_result["result"]
@@ -2220,6 +2246,21 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 return {"error": f"K线数据不足: 仅{len(full_records)}条"}
             forward_adjust_done = FORWARD_ADJUST_ENABLED
             print(f"[stock][耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
+
+    # 调试模式：数据加载后立即截断起始日期（所有周期生效），后续流程对此无感知
+    # 等于在数据源层面"只加载了指定日期之后的数据"
+    if DEBUG_COLD_START_START_DATE:
+        try:
+            start_cutoff = datetime.strptime(DEBUG_COLD_START_START_DATE, "%Y-%m-%d")
+            before = len(full_records)
+            filtered = [r for r in full_records if r["dt"] >= start_cutoff]
+            if filtered:
+                full_records = filtered
+                print(f"[stock][调试] 起始日期截断({DEBUG_COLD_START_START_DATE}): {before}条 -> {len(full_records)}条")
+            else:
+                print(f"[stock][调试] 起始日期 {DEBUG_COLD_START_START_DATE} 之前无数据，保留全部{before}条")
+        except ValueError:
+            print(f"[stock][警告] DEBUG_COLD_START_START_DATE 格式错误: {DEBUG_COLD_START_START_DATE}，应为 YYYY-MM-DD")
 
     # 截断到指定日期（复盘模式：以end_date为"最新行情"）
     # 左边界与冷启动一致（同样按时间范围截取），只有右边界不同
@@ -2325,8 +2366,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         chan_code = f"{market}.{code}"
         config = _make_chan_config()
 
+        # 每次请求重置复盘标记，避免残留前一次状态
+        from BuySellPoint.BSPointList import MyBSPointList
+        MyBSPointList.REPLAY_MODE = False
+
         try:
             # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
+            if end_date:
+                from BuySellPoint.BSPointList import MyBSPointList
+                MyBSPointList.REPLAY_MODE = True
             _DUAL_LV_LIST = {
                 'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
                 'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
@@ -2367,6 +2415,9 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             print(f"[stock][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
             print(f"[stock][错误] 完整堆栈:\n{tb}")
             return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
+        finally:
+            if end_date:
+                MyBSPointList.REPLAY_MODE = False
 
     print(f"[stock][耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 
@@ -3075,23 +3126,24 @@ _FUTURES_DUAL_REVERSE_MAP = {
     "15s": "1m",
 }
 
-# 期货分析缓存（供 /api/dual_zs 等访问）
+# 期货分析缓存（供 /api/red_range_zs 等访问）
 # key: "symbol:freq"  (如 "KQ.m@CFFEX.IM:5m")，当前 value: CChan 对象
 # 后续可扩展为 {records, chan, result} 三元组，key可加前缀区分（single_/dual_main_/dual_sub_）
 _futures_analysis_cache = {}
 
 
-def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
+def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_date=None):
     """
     双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
     后端内部调用 _find_sub_bi_sequence 找到被红框完全覆盖的子级别笔，再
-    用 _check_red_range_zs 重新计算中枢，返回给前端绘制。
+    用 _find_sub_zs 重新计算中枢，返回给前端绘制。
 
     参数:
         code:       股票代码（如 "SH000001" 或 "000001.SH"）
         sub_freq:   子级别周期（如 "30m", "5m"）
         left_date:  红框左边界时间字符串（子级别K线格式，如 "2025-06-15 10:00"）
         right_date: 红框右边界时间字符串
+        end_date:   复盘日期（None=实时模式，有值=复盘模式），用于精确匹配缓存 key
 
     返回: {"zs": [...]} 或 {"error": "..."}
     """
@@ -3124,7 +3176,7 @@ def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
             edt = eku.time.toFmtStr(date_fmt) if eku else "None"
             dir_str = "up" if bi.is_up() else "down"
             print(f"[dual_zs][期货]   bi[{start_bi+i}] sdt={sdt} edt={edt} dir={dir_str}")
-        zs_data = _check_red_range_zs(sliced_bis, bi_list, date_fmt)
+        zs_data = _find_sub_zs(sliced_bis, bi_list, date_fmt)
         print(f"[dual_zs][期货] ZS结果: zs_data长度={len(zs_data)}")
         if zs_data:
             for zs in zs_data:
@@ -3145,7 +3197,8 @@ def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
 
-    cache_key = f"single_{market}_{normalized_code}_{sub_freq}"
+    date_suffix = end_date if end_date else "live"
+    cache_key = f"single_{market}_{normalized_code}_{sub_freq}_{date_suffix}"
     cached = _cache_get(cache_key)
 
     # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
@@ -3153,7 +3206,7 @@ def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
     if (cached is None or "chan" not in cached) and sub_freq in _SUB_FREQ_MAP.values():
         for main_freq, _sub in _SUB_FREQ_MAP.items():
             if _sub == sub_freq:
-                dual_main_cache_key = f"dual_main_{market}_{normalized_code}_{main_freq}"
+                dual_main_cache_key = f"dual_main_{market}_{normalized_code}_{main_freq}_{date_suffix}"
                 main_cached = _cache_get(dual_main_cache_key)
                 if main_cached and "chan" in main_cached:
                     main_chan = main_cached["chan"]
@@ -3164,14 +3217,14 @@ def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
                     except Exception as e:
                         print(f"[警告] 异常: {type(e).__name__}: {e}")
                 if cached is None or "chan" not in cached:
-                    single_main_cache_key = f"single_{market}_{normalized_code}_{main_freq}"
+                    single_main_cache_key = f"single_{market}_{normalized_code}_{main_freq}_{date_suffix}"
                     main_cached = _cache_get(single_main_cache_key)
                     if main_cached and "chan" in main_cached:
                         main_chan = main_cached["chan"]
                         try:
                             _ = main_chan[_get_kl_type(sub_freq)]
                             cached = {"chan": main_chan}
-                            print(f"[stock][信息] compute_dual_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
+                            print(f"[stock][信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
                             break
                         except Exception as e:
                             print(f"[警告] 异常: {type(e).__name__}: {e}")
@@ -3197,7 +3250,7 @@ def compute_dual_red_range_zs(code, sub_freq='d', left_date='', right_date=''):
         return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
 
     sliced_bis = bi_list[start_bi:end_bi + 1]
-    zs_data = _check_red_range_zs(sliced_bis, bi_list, date_fmt)
+    zs_data = _find_sub_zs(sliced_bis, bi_list, date_fmt)
     return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
 
@@ -3223,7 +3276,8 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
     elif suffix_match:
         normalized_code = suffix_match.group(1)
         market = suffix_match.group(2).lower()
-    cache_key = f"single_{market}_{normalized_code}_{freq}"
+    date_suffix = end_date if end_date else "live"
+    cache_key = f"single_{market}_{normalized_code}_{freq}_{date_suffix}"
     qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
     cached = _cache_get(cache_key)
     if cached is None:
@@ -3332,7 +3386,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
-            market_type="futures", market="KQ",
+            market_type="futures",
         )
         for _snapshot in chan.step_load():
             pass
@@ -3387,7 +3441,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
             code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
             data_src="custom:TqSdkAPI.CTqSdkAPI",
             lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
-            market_type="futures", market="KQ",
+            market_type="futures",
         )
         for _snapshot in chan2.step_load():
             pass
@@ -3616,7 +3670,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 traceback.print_exc()
                 self.send_json_response({"error": f"服务器内部错误: {str(e)}"}, 500)
             print_memory(f"前端操作(查询股票-{code})")
-        elif parsed.path == "/api/manual_zs":
+        elif parsed.path == "/api/stocks_manual_select_point":
             params = parse_qs(parsed.query)
             code = params.get("code", [""])[0]
             freq = params.get("freq", ["d"])[0]
@@ -3635,19 +3689,20 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 print(f"[错误] stock_manual_select_point异常: {e}")
                 traceback.print_exc()
                 self.send_json_response({"error": f"服务器内部错误: {str(e)}"}, 500)
-        elif parsed.path == "/api/dual_zs":
+        elif parsed.path == "/api/red_range_zs":
             params = parse_qs(parsed.query)
             code = params.get("code", [""])[0]
             freq = params.get("freq", ["d"])[0]
             left_date = params.get("left_date", [""])[0]
             right_date = params.get("right_date", [""])[0]
-            print(f"[dual_zs][handler] 收到请求: code={code}, freq={freq}, left={left_date}, right={right_date}")
+            end_date = params.get("end_date", [""])[0] or None
+            print(f"[dual_zs][handler] 收到请求: code={code}, freq={freq}, left={left_date}, right={right_date}, end_date={end_date}")
             if not code or not left_date or not right_date:
                 print(f"[dual_zs][handler] 参数错误: code/left_date/right_date 为空")
                 self.send_json_response({"error": "参数错误: code/left_date/right_date 不能为空"}, 400)
                 return
             try:
-                result = compute_dual_red_range_zs(code, sub_freq=freq, left_date=left_date, right_date=right_date)
+                result = compute_red_range_zs(code, sub_freq=freq, left_date=left_date, right_date=right_date, end_date=end_date)
                 if "error" in result:
                     self.send_json_response(result, 400)
                 else:
@@ -4078,16 +4133,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # 用 market-qualified code 区分沪市深市同号股票
             qualified_code = f"{normalized_code}.{market.upper()}" if market else normalized_code
             _clear_saved_point_time(qualified_code, freq)
-            # 销毁该周期的缓存
-            cache_key = f"single_{market}_{normalized_code}_{freq}" if market else f"single_{normalized_code}_{freq}"
-            if cache_key in _stocks_analysis_cache:
-                with _cache_lock:
-                    if cache_key in _stocks_analysis_cache:
-                        del _stocks_analysis_cache[cache_key]
+            cache_key = f"single_{market}_{normalized_code}_{freq}_live"
+            with _cache_lock:
+                if cache_key in _stocks_analysis_cache:
+                    del _stocks_analysis_cache[cache_key]
             import gc
             gc.collect()
             self.send_json_response({"ok": True}, 200)
-        elif parsed.path == "/api/futures_manual_zs":
+        elif parsed.path == "/api/futures_manual_select_point":
             # 期货期指双击选点
             params = parse_qs(parsed.query)
             symbol = params.get("symbol", [""])[0]
@@ -6319,8 +6372,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     document.getElementById("loading").classList.remove("hidden");
                     document.querySelector(".loading-text").textContent = "正在手选进入段...";
                     const apiPath = isFutures
-                        ? "/api/futures_manual_zs?symbol=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx
-                        : "/api/manual_zs?code=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx;
+                        ? "/api/futures_manual_select_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx
+                : "/api/stocks_manual_select_point?code=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx;
                     fetch(apiPath)
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
@@ -6992,13 +7045,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 console.log("[updateDualNewZs] 条件6: 已缓存相同请求, 跳过");
                 return;
             }
-            console.log("[updateDualNewZs] >>> 发送fetch请求到 /api/dual_zs");
+            console.log("[updateDualNewZs] >>> 发送fetch请求到 /api/red_range_zs");
             dualNewZsLeftDate = leftDate;
             dualNewZsRightDate = rightDate;
             dualShowNewZs = true;
             dualNewZsData = null;
             const code = dualBottomData.meta.symbol;
-            fetch("/api/dual_zs?code=" + encodeURIComponent(code) + "&freq=" + dualBottomFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate))
+            const isReplay = dualBottomData.meta && dualBottomData.meta.is_replay;
+            let url = "/api/red_range_zs?code=" + encodeURIComponent(code) + "&freq=" + dualBottomFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate);
+            if (isReplay) {
+                const endDate = document.getElementById("goto-date-input").value;
+                url += "&end_date=" + encodeURIComponent(endDate);
+            }
+            fetch(url)
                 .then(resp => resp.json())
                 .then(data => {
                     if (data.error) {
@@ -7228,6 +7287,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.textAlign = "right";
                 ctx.fillText(zs.zg.toFixed(2), x1 - 2, y1 - 2);
                 ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
+                // 中枢高度，标在上下沿中间位置
+                const zsHeight = zs.zg - zs.zd;
+                ctx.fillText(zsHeight.toFixed(2), x1 - 2, (y1 + y2) / 2 + 3);
             });
 
             // 进入段和离开段红绿五角星 - 已注释掉
@@ -7379,6 +7441,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.textAlign = "right";
                 ctx.fillText(zs.zg.toFixed(2), x1 - 2, y1 - 2);
                 ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
+                // 中枢高度，标在上下沿中间位置
+                const zsHeight = zs.zg - zs.zd;
+                ctx.fillText(zsHeight.toFixed(2), x1 - 2, (y1 + y2) / 2 + 3);
             });
 
             // 进入段和离开段红绿五角星 - 已注释掉
@@ -8628,7 +8693,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 }
                             }
                             html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
-                            html += chkBox(r.code);
+                            html += chkBox(r.code, isLatestBspBuy(r));
                             html += '<span class="scan-col-name">' + r.name + '</span>';
                             html += '<span class="scan-col-code">' + r.code + '</span>';
                             html += '<span class="scan-col-ann">' + closestText + '</span>';
@@ -8739,7 +8804,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     maText = '牛熊线下';
                                 }
                                 html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
-                                html += chkBox(r.code);
+                                html += chkBox(r.code, isLatestBspBuy(r));
                                 html += '<span class="scan-col-name">' + r.name + '</span>';
                                 html += '<span class="scan-col-code">' + r.code + '</span>';
                                 html += '<span class="scan-col-mv">' + mvText + '</span>';
@@ -8929,7 +8994,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         maText2 = '牛熊线下';
                     }
                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code);
+                    html += chkBox(r.code, isLatestBspBuy(r));
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
                     html += '<span class="scan-col-mv">' + mvText2 + '</span>';
@@ -8942,8 +9007,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         // 生成复选框HTML
-        function chkBox(code) {
-            return '<span class="scan-col-chk" onclick="event.stopPropagation()"><input type="checkbox" value="' + code + '" onchange="updateScanSaveBtn()" /></span>';
+        function isLatestBspBuy(r) {
+            var buyPoints = r.buy_points || [];
+            var sellPoints = r.sell_points || [];
+            if (buyPoints.length === 0 && sellPoints.length === 0) return false;
+            var lastBuyDate = buyPoints.length > 0 ? buyPoints[buyPoints.length - 1].date : "";
+            var lastSellDate = sellPoints.length > 0 ? sellPoints[sellPoints.length - 1].date : "";
+            // 最近的是买点
+            if (!lastBuyDate && !lastSellDate) return false;
+            if (!lastSellDate) return true;
+            if (!lastBuyDate) return false;
+            return lastBuyDate >= lastSellDate;
+        }
+
+        function chkBox(code, checked) {
+            return '<span class="scan-col-chk" onclick="event.stopPropagation()"><input type="checkbox" value="' + code + '" onchange="updateScanSaveBtn()" ' + (checked ? 'checked' : '') + '/></span>';
         }
 
         // 收集勾选的代码并更新按钮状态
@@ -9097,7 +9175,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!dateStr) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + "&end_date=" + encodeURIComponent(dateStr);
+            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + "&end_date=" + encodeURIComponent(dateStr) + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -9110,6 +9188,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     chartData = data;
                     updateRestartBtn();
                     updateDualBtn();
+                    // 双窗口模式：从 data.sub 恢复子级别数据
+                    if (isDualWindow && data.sub) {
+                        dualBottomData = data.sub;
+                        dualBottomViewCount = 377;
+                        dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
+                        if (dualBottomData.klines.length < dualBottomViewCount) {
+                            dualBottomViewOffset = 0;
+                        }
+                    }
                     viewCount = 377;
                     adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
                     viewOffset = Math.max(0, chartData.klines.length - viewCount);

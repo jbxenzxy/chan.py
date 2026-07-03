@@ -37,7 +37,7 @@ class CKLine_List:
         self.kl_type = kl_type
         self.config = conf
         self.code = code
-        self.market_type = market_type  # "stock" / "futures" 等，供 check_nested_divergence 区分品种
+        self.market_type = market_type  # "stock" / "futures" 等，供 check_nested_diver 区分品种
         self.lst: List[CKLine] = []  # K线列表，可递归  元素KLine类型
         self.bi_list = CBiList(bi_conf=conf.bi_conf)
         self.seg_list: CSegListComm[CBi] = get_seglist_instance(seg_config=conf.seg_conf, lv=SEG_TYPE.BI)
@@ -47,7 +47,7 @@ class CKLine_List:
         self.segzs_list = CZSList(zs_config=conf.zs_conf)
 
         self.bs_point_lst = MyBSPointList[CBi, CBiList](bs_point_config=conf.bs_point_conf)  # 自定义买卖点（继承自 CBSPointList）
-        self.bs_point_lst.parent = self  # 指向 CKLine_List，供 check_nested_divergence 使用
+        self.bs_point_lst.parent = self  # 指向 CKLine_List，供 check_nested_diver 使用
         self.seg_bs_point_lst = CBSPointList[CSeg, CSegListComm](bs_point_config=conf.seg_bs_point_conf)
 
         self.chan = None  # 在 CChan do_init()设置，指向 CChan，供 check_nested_divergence 使用
