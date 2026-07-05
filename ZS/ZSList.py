@@ -130,7 +130,7 @@ class CZSList:
             # ===== 修改结束 =====
         min_high = min(item._high() for item in lst)
         max_low = max(item._low() for item in lst)
-        return CZS(lst, is_sure=is_sure) if min_high > max_low else None
+        return CZS(lst, is_sure=is_sure) if min_high >= max_low else None
 
     def cal_bi_zs(self, bi_lst: Union[CBiList, CSegListComm], seg_lst: CSegListComm):
         while self.zs_lst and self.zs_lst[-1].begin_bi.idx >= self.last_sure_pos:

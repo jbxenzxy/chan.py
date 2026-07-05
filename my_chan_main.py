@@ -66,6 +66,7 @@ OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本
 SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
 SYMBOL_DISPLAY = "上证指数"
 CHAN_PATH = r"C:\my_chan_project"  # chan.py 仓库解压目录
+THS_DIR = r"C:\同花顺软件\同花顺"  # 同花顺安装目录，留空则不启用同花顺自选股同步（如 r"D:\同花顺软件\同花顺"）
 _LAST_STOCK_FILE = os.path.join(VIPDOC_DIR, "last_stock.json")  # 持久化上次查看的股票代码
 
 # ============================================================
@@ -147,6 +148,506 @@ except ImportError as e:
     FUTURES_ALIASES = {}
     TQ_AVAILABLE = False
     print(f"[stock][警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
+
+
+# ============================================================
+# 同花顺自选股同步
+# ============================================================
+
+def _find_ths_user_dir(ths_dir):
+    """在 THS_DIR 下查找包含 同花顺方案/hexin.ini 的用户目录，跳过游客"""
+    if not ths_dir or not os.path.isdir(ths_dir):
+        return None
+    candidates = []
+    for root, dirs, files in os.walk(ths_dir):
+        depth = root[len(ths_dir):].count(os.sep)
+        if depth > 2:
+            continue
+        dir_name = os.path.basename(root)
+        if 'guest' in dir_name.lower() or 'demo' in dir_name.lower() or 'shared' in dir_name.lower():
+            continue
+        hexin_path = os.path.join(root, "同花顺方案", "hexin.ini")
+        if os.path.exists(hexin_path):
+            try:
+                with open(hexin_path, 'r', encoding='gbk') as f:
+                    content = f.read()
+                idx = content.find('ADDTIME=')
+                if idx >= 0:
+                    end = content.find('\n', idx)
+                    line = content[idx:end] if end >= 0 else content[idx:]
+                    count = line.count('|')
+                    candidates.append((root, count))
+                    print(f"[THS] 候选目录: {dir_name} ({count}只)")
+                else:
+                    candidates.append((root, 0))
+                    print(f"[THS] 候选目录: {dir_name} (0只)")
+            except Exception:
+                candidates.append((root, 0))
+                print(f"[THS] 候选目录: {dir_name} (读取失败)")
+    if not candidates:
+        return None
+    candidates.sort(key=lambda x: x[1], reverse=True)
+    best = candidates[0][0]
+    print(f"[THS] 选定目录: {os.path.basename(best)} ({candidates[0][1]}只)")
+    return best
+
+
+def _strip_market_suffix(code):
+    """去掉 .SH/.SZ/.BJ 后缀，返回纯6位代码"""
+    return code.split('.')[0] if '.' in code else code
+
+
+def _get_ths_market_id(code):
+    """根据股票代码获取同花顺市场代码 M：沪市17、深市33、北交所151"""
+    if not code or len(code) < 6:
+        return "17"
+    c = code.strip()
+    if c.startswith('6') or c.startswith('688') or c.startswith('689') or c.startswith('510') or c.startswith('511') or c.startswith('512') or c.startswith('513') or c.startswith('515') or c.startswith('518') or c.startswith('560') or c.startswith('561') or c.startswith('563') or c.startswith('564') or c.startswith('580') or c.startswith('582'):
+        return "17"   # 沪市（含主板、科创板、沪市ETF等）
+    elif c.startswith('0') or c.startswith('3') or c.startswith('1') or c.startswith('159') or c.startswith('16'):
+        return "33"   # 深市（含主板、创业板、深市ETF/LOF等）
+    elif c.startswith('8') or c.startswith('4') or c.startswith('43'):
+        return "151"  # 北交所/新三板
+    else:
+        return "17"   # 默认沪市
+
+
+def _write_file_with_retry(file_path, write_func, max_retries=5):
+    """带重试的文件写入，解决同花顺运行时文件锁定问题"""
+    import time as _time
+    import os as _os
+    tmp_path = file_path + '.tmp'
+    for attempt in range(max_retries):
+        try:
+            write_func(tmp_path)
+            _os.replace(tmp_path, file_path)
+            return True, ""
+        except PermissionError as e:
+            if attempt < max_retries - 1:
+                wait_sec = 0.5 * (attempt + 1)
+                print(f"[THS] 文件被锁定，{wait_sec}s 后重试 ({attempt+1}/{max_retries})...")
+                _time.sleep(wait_sec)
+            else:
+                msg = f"文件被同花顺锁定，无法写入。请关闭同花顺后重试。错误: {e}"
+                try:
+                    _os.remove(tmp_path)
+                except Exception:
+                    pass
+                return False, msg
+        except Exception as e:
+            msg = f"写入失败: {e}"
+            try:
+                _os.remove(tmp_path)
+            except Exception:
+                pass
+            return False, msg
+    return False, ""
+
+
+def save_to_ths_zxg(codes):
+    """保存股票代码到同花顺自选股。
+    核心逻辑：同时写入 stockblock.ini 21=自选股（页面显示的关键）、
+    SelfStockInfo.json 和 hexin.ini，确保各文件同步。
+    """
+    import shutil
+    import json as _json
+
+    print(f"[THS] 保存自选股，输入代码: {codes}")
+    if not THS_DIR:
+        print(f"[THS] THS_DIR 未配置，跳过")
+        return 0, "THS_DIR 未配置"
+    print(f"[THS] THS_DIR={THS_DIR}")
+    user_dir = _find_ths_user_dir(THS_DIR)
+    if not user_dir:
+        msg = f"未找到同花顺用户目录，请检查 THS_DIR={THS_DIR}"
+        print(f"[THS] {msg}")
+        return 0, msg
+    print(f"[THS] 用户目录: {user_dir}")
+
+    # 统一处理代码：去市场后缀、去重
+    unique_codes = []
+    seen = set()
+    for code in codes:
+        c = _strip_market_suffix(code.strip())
+        if c and c not in seen:
+            unique_codes.append(c)
+            seen.add(c)
+
+    block_added = 0
+    json_added = 0
+    hexin_added = 0
+
+    # ========== 1. stockblock.ini（页面显示的关键）==========
+    block_path = os.path.join(user_dir, "stockblock.ini")
+    if not os.path.exists(block_path):
+        block_path = os.path.join(user_dir, "同花顺方案", "stockblock.ini")
+    if os.path.exists(block_path):
+        block_added, _ = _save_to_ths_stockblock(unique_codes, user_dir)
+    else:
+        print(f"[THS] stockblock.ini 不存在，跳过")
+
+    # ========== 2. SelfStockInfo.json ==========
+    json_candidates = ["SelfStockInfo.json", "SelfStockCache.json"]
+    for name in json_candidates:
+        p = os.path.join(user_dir, name)
+        if os.path.exists(p):
+            json_added, _ = _save_to_ths_json(unique_codes, p)
+            break
+
+    # ========== 3. hexin.ini（兼容旧版）==========
+    hexin_path = os.path.join(user_dir, "同花顺方案", "hexin.ini")
+    if os.path.exists(hexin_path):
+        hexin_added, _ = _save_to_ths_hexin(unique_codes, user_dir)
+
+    # 以 SelfStockInfo.json 的结果为准（真正数据源），stockblock.ini 仅作辅助尝试
+    total_added = json_added
+    details = []
+    if block_added > 0:
+        details.append(f"block+{block_added}")
+    if json_added > 0:
+        details.append(f"json+{json_added}")
+    if hexin_added > 0:
+        details.append(f"hexin+{hexin_added}")
+
+    if total_added > 0:
+        print(f"[THS] 保存结果: 共新增 {total_added} 只 ({', '.join(details)})")
+        return total_added, "ok"
+    else:
+        print(f"[THS] 保存结果: 无新增 ({', '.join(details) if details else '全部已存在'})")
+        return 0, "ok"
+
+
+def _save_to_ths_json(codes, json_path):
+    """写入同花顺新版 SelfStockInfo.json，同时修复已有条目的格式"""
+    import json as _json
+    import time as _time
+
+    # 读取现有 JSON
+    data = []
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = _json.load(f)
+        if not isinstance(data, list):
+            data = []
+    except Exception as e:
+        print(f"[THS] 读取 JSON 警告: {e}，将创建新列表")
+        data = []
+
+    # 获取已有代码集合 (C+M 组合去重)，同时修复已有条目的格式
+    existing = set()
+    fixed = 0
+    today = __import__('datetime').datetime.now().strftime('%Y%m%d')
+    for item in data:
+        if isinstance(item, dict):
+            c = item.get('C', '')
+            m = item.get('M', '')
+            if c:
+                existing.add(f"{c}:{m}")
+                # 修复格式：补充缺失的 P 和 T 字段
+                if 'P' not in item or item.get('P', '') == '':
+                    item['P'] = "0.00"
+                    fixed += 1
+                if 'T' not in item or item.get('T', '') == '':
+                    item['T'] = today
+                    fixed += 1
+
+    # 添加新代码（格式必须和同花顺原生一致：紧凑JSON，含P和T字段）
+    added = 0
+    for code in codes:
+        code = _strip_market_suffix(code.strip())
+        if not code:
+            continue
+        market = _get_ths_market_id(code)
+        key = f"{code}:{market}"
+        if key in existing:
+            print(f"[THS] 跳过 {code}（已存在）")
+            continue
+        # 同花顺原生格式: {"C":"600519","M":"17","P":"0.00","T":"20260705"}
+        # P字段不能留空，否则同花顺可能跳过该条目
+        new_item = {"C": code, "M": market, "P": "0.00", "T": today}
+        data.append(new_item)
+        existing.add(key)
+        print(f"[THS] 新增 {code} (M={market}, T={today})")
+        added += 1
+
+    if added == 0 and fixed == 0:
+        print(f"[THS] 无新增股票，无需修复格式")
+        return 0, "ok"
+
+    def do_write(tmp_path):
+        # 必须使用紧凑格式（无空格、无缩进），和原生文件一致
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            _json.dump(data, f, ensure_ascii=False, separators=(',', ':'))
+
+    ok, msg = _write_file_with_retry(json_path, do_write)
+    if ok:
+        print(f"[THS] SelfStockInfo.json 写入成功，新增 {added} 只，修复 {fixed} 条格式，共 {len(data)} 只")
+        return added, "ok"
+    else:
+        print(f"[THS] {msg}")
+        return 0, msg
+
+
+def _save_to_ths_stockblock(codes, user_dir):
+    """写入同花顺 stockblock.ini [BLOCK_STOCK_CONTEXT] 21=自选股"""
+    block_path = os.path.join(user_dir, "stockblock.ini")
+    if not os.path.exists(block_path):
+        block_path = os.path.join(user_dir, "同花顺方案", "stockblock.ini")
+    print(f"[THS-DEBUG] stockblock.ini 路径: {block_path}")
+    if not os.path.exists(block_path):
+        msg = "stockblock.ini 不存在"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    # 尝试多种编码读取
+    content = None
+    used_encoding = None
+    for enc in ('gbk', 'utf-8', 'utf-8-sig', 'cp936'):
+        try:
+            with open(block_path, 'r', encoding=enc) as f:
+                content = f.read()
+            used_encoding = enc
+            print(f"[THS-DEBUG] 使用编码 {enc} 读取 stockblock.ini，大小={len(content)} 字节")
+            break
+        except Exception as e:
+            print(f"[THS-DEBUG] 编码 {enc} 读取失败: {e}")
+            continue
+    if content is None:
+        msg = "无法读取 stockblock.ini，所有编码均失败"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    section_name = '[BLOCK_STOCK_CONTEXT]'
+    section_start = content.find(section_name)
+    print(f"[THS-DEBUG] {section_name} 位置: {section_start}")
+    if section_start < 0:
+        msg = f"stockblock.ini 中没有 {section_name}"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    section_body_start = section_start + len(section_name)
+    next_section = content.find('\n[', section_body_start)
+    section_end = next_section if next_section >= 0 else len(content)
+    print(f"[THS-DEBUG] section 范围: {section_body_start} ~ {section_end}")
+
+    line_prefix = '21='
+    line_start = content.find('\n' + line_prefix, section_body_start, section_end)
+    if line_start < 0:
+        line_start = content.find(line_prefix, section_body_start, section_end)
+    print(f"[THS-DEBUG] 21= 位置: {line_start}")
+
+    if line_start < 0:
+        print(f"[THS] stockblock.ini 中 21= 不存在，将自动创建")
+        new_entries = []
+        existing_codes = set()
+        for code in codes:
+            code = _strip_market_suffix(code.strip())
+            if not code or code in existing_codes:
+                continue
+            market = _get_ths_market_id(code)
+            new_entries.append(f"{market}:{code}")
+            existing_codes.add(code)
+        added = len(new_entries)
+        if added == 0:
+            return 0, "ok"
+        new_line = '\n' + line_prefix + ','.join(new_entries) + ','
+        insert_pos = section_end
+        new_content = content[:insert_pos] + new_line + content[insert_pos:]
+        print(f"[THS-DEBUG] 新建 21= 行: {repr(new_line[:200])}")
+    else:
+        if content[line_start] == '\n':
+            line_start += 1
+        line_end = content.find('\n', line_start)
+        if line_end < 0:
+            line_end = len(content)
+        old_line = content[line_start:line_end]
+        print(f"[THS-DEBUG] 原始 21= 行: {repr(old_line[:300])}")
+
+        existing_codes = set()
+        data_part = old_line.split('=', 1)[1] if '=' in old_line else ''
+        for entry in data_part.strip().split(','):
+            if ':' in entry:
+                existing_codes.add(entry.split(':')[1])
+            elif entry.strip():
+                existing_codes.add(entry.strip())
+
+        print(f"[THS] stockblock.ini 自选股已有 {len(existing_codes)} 只")
+
+        added = 0
+        new_entries = []
+        for code in codes:
+            code = _strip_market_suffix(code.strip())
+            if not code or code in existing_codes:
+                print(f"[THS] 跳过 {code}（已存在或无效）")
+                continue
+            market = _get_ths_market_id(code)
+            new_entries.append(f"{market}:{code}")
+            existing_codes.add(code)
+            print(f"[THS] 新增 {code}")
+            added += 1
+
+        if added == 0:
+            print(f"[THS] 无新增股票")
+            return 0, "ok"
+
+        old_data = data_part.strip()
+        if old_data and not old_data.endswith(','):
+            old_data += ','
+        new_data = old_data + ','.join(new_entries) + ','
+        new_line = line_prefix + new_data
+        new_content = content[:line_start] + new_line + content[line_end:]
+        print(f"[THS-DEBUG] 修改后 21= 行: {repr(new_line[:300])}")
+        print(f"[THS-DEBUG] new_content 总长度变化: {len(content)} -> {len(new_content)}")
+
+    def do_write(tmp_path):
+        with open(tmp_path, 'w', encoding=used_encoding) as f:
+            f.write(new_content)
+
+    ok, msg = _write_file_with_retry(block_path, do_write)
+    if ok:
+        print(f"[THS] stockblock.ini 写入成功，新增 {added} 只，共 {len(existing_codes)} 只")
+        # 写入后验证
+        try:
+            with open(block_path, 'r', encoding=used_encoding) as f:
+                verify_content = f.read()
+            verify_line_start = verify_content.find('21=')
+            if verify_line_start >= 0:
+                verify_line_end = verify_content.find('\n', verify_line_start)
+                if verify_line_end < 0:
+                    verify_line_end = len(verify_content)
+                verify_line = verify_content[verify_line_start:verify_line_end]
+                print(f"[THS-DEBUG] 验证读取 21= 行: {repr(verify_line[:300])}")
+            else:
+                print(f"[THS-DEBUG] 验证失败: 21= 行未找到")
+        except Exception as e:
+            print(f"[THS-DEBUG] 验证读取失败: {e}")
+        return added, "ok"
+    else:
+        print(f"[THS] {msg}")
+        return 0, msg
+
+
+def _save_to_ths_hexin(codes, user_dir):
+    """回退：写入同花顺旧版 hexin.ini [SELF_CODE_ADDTIME]"""
+    hexin_path = os.path.join(user_dir, "同花顺方案", "hexin.ini")
+    if not os.path.exists(hexin_path):
+        msg = f"hexin.ini 不存在: {hexin_path}"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    # 智能编码探测
+    content = None
+    used_encoding = None
+    try:
+        with open(hexin_path, 'rb') as f:
+            raw = f.read()
+    except Exception as e:
+        msg = f"读取 hexin.ini 失败: {e}"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    if raw.startswith(b'\xef\xbb\xbf'):
+        try:
+            content = raw.decode('utf-8-sig')
+            used_encoding = 'utf-8-sig'
+            print(f"[THS] 检测到 UTF-8 BOM")
+        except Exception:
+            pass
+    else:
+        for enc in ('utf-8', 'gbk', 'gb2312', 'cp936'):
+            try:
+                content = raw.decode(enc)
+                used_encoding = enc
+                print(f"[THS] 使用编码 {enc}")
+                break
+            except UnicodeDecodeError:
+                continue
+    if content is None or used_encoding is None:
+        msg = "无法解码 hexin.ini"
+        print(f"[THS] {msg}")
+        return 0, msg
+
+    # 精准定位 [SELF_CODE_ADDTIME]
+    section_name = '[SELF_CODE_ADDTIME]'
+    section_start = content.find(section_name)
+
+    if section_start < 0:
+        print(f"[THS] {section_name} 不存在，将自动创建")
+        today = __import__('datetime').datetime.now().strftime('%Y%m%d')
+        new_entries = []
+        existing_codes = set()
+        for code in codes:
+            code = _strip_market_suffix(code.strip())
+            if not code or code in existing_codes:
+                continue
+            new_entries.append(f"{code}:{today}")
+            existing_codes.add(code)
+        added = len(new_entries)
+        if added == 0:
+            return 0, "ok"
+        sep = '\n' if content.endswith('\n') else '\n\n'
+        new_section = f"{sep}{section_name}\nADDTIME=" + '|'.join(new_entries) + '|\n'
+        new_content = content + new_section
+    else:
+        section_body_start = section_start + len(section_name)
+        next_section = content.find('\n[', section_body_start)
+        section_end = next_section if next_section >= 0 else len(content)
+
+        addtime_start = content.find('ADDTIME=', section_body_start, section_end)
+        if addtime_start < 0:
+            msg = f"{section_name} 中没有 ADDTIME= 字段"
+            print(f"[THS] {msg}")
+            return 0, msg
+
+        line_end = content.find('\n', addtime_start)
+        if line_end < 0:
+            line_end = len(content)
+        old_line = content[addtime_start:line_end]
+
+        existing_codes = set()
+        data_part = old_line.split('=', 1)[1] if '=' in old_line else ''
+        for entry in data_part.strip().split('|'):
+            if ':' in entry:
+                existing_codes.add(entry.split(':')[0])
+            elif entry.strip():
+                existing_codes.add(entry.strip())
+
+        print(f"[THS] 自选股已有 {len(existing_codes)} 只")
+
+        added = 0
+        new_entries = []
+        today = __import__('datetime').datetime.now().strftime('%Y%m%d')
+        for code in codes:
+            code = _strip_market_suffix(code.strip())
+            if not code or code in existing_codes:
+                print(f"[THS] 跳过 {code}（已存在或无效）")
+                continue
+            new_entries.append(f"{code}:{today}")
+            existing_codes.add(code)
+            print(f"[THS] 新增 {code}")
+            added += 1
+
+        if added == 0:
+            return 0, "ok"
+
+        old_data = data_part.strip()
+        if old_data and not old_data.endswith('|'):
+            old_data += '|'
+        new_data = old_data + '|'.join(new_entries) + '|'
+        new_line = 'ADDTIME=' + new_data
+        new_content = content[:addtime_start] + new_line + content[line_end:]
+
+    def do_write(tmp_path):
+        with open(tmp_path, 'w', encoding=used_encoding) as f:
+            f.write(new_content)
+
+    ok, msg = _write_file_with_retry(hexin_path, do_write)
+    if ok:
+        print(f"[THS] hexin.ini 写入成功，新增 {added} 只，共 {len(existing_codes)} 只")
+        return added, "ok"
+    else:
+        print(f"[THS] {msg}")
+        return 0, msg
 
 
 # ============================================================
@@ -1670,7 +2171,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
 
 
 
-def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None):
+def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None, step=None):
     """
     使用天勤数据源 + chan.py 进行期货/期指缠论分析（静态模式，HTTP 请求）
     与股票分析输出格式一致，便于前端复用同一套图表渲染逻辑。
@@ -1678,6 +2179,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     dual=True: 双窗口模式，返回 result 含 sub 字段（两个独立 CChan 对象）。
     existing_chan: 双窗口模式下，复用已有的单窗口 CChan 对象（匹配周期则复用）。
     existing_records: 对应 existing_chan 的 records。
+    step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期。
     """
     import time
     t_start = time.time()
@@ -1706,6 +2208,25 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 continue
         if target_dt is None:
             return {"error": f"无法解析日期: {end_date}"}
+
+        # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===
+        if step is not None:
+            step = int(step)
+            if step != 0:
+                anchor_idx = None
+                for i in range(len(full_records) - 1, -1, -1):
+                    if full_records[i]["dt"] <= target_dt:
+                        anchor_idx = i
+                        break
+                if anchor_idx is not None:
+                    new_idx = anchor_idx + step
+                    if 0 <= new_idx < len(full_records):
+                        target_dt = full_records[new_idx]["dt"]
+                        end_date = target_dt.strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"[futures][箭头] step={step}: {full_records[anchor_idx]['dt']} → {target_dt} (idx {anchor_idx} → {new_idx})")
+                    else:
+                        print(f"[futures][箭头] step={step} 越界: idx {anchor_idx} → {new_idx}, 共{len(full_records)}条")
+
         records = [r for r in full_records if r["dt"] <= target_dt]
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条"}
@@ -2100,12 +2621,13 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     return result
 
 
-def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False):
+def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None):
     """
     使用通达信数据源 + chan.py 进行股票/指数缠论分析（内部实现，不处理期货分流）
     返回与 czsc 版本兼容的 JSON 数据结构
     end_date: 复盘截止日期，有值时以该日期为"最新行情"
     start_time: 选点起始时间，有值时只加载该时间之后的K线（不设数量限制）
+    step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期
     cache_chan: 是否缓存CChan对象。扫描模式设为False以节省内存。
     """
     import time
@@ -2277,10 +2799,24 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if matched_fmt == "%Y-%m-%d" and freq in INTRADAY_FREQS:
             target_dt = target_dt.replace(hour=23, minute=59, second=59)
 
-        # 如果选择的日期不早于最新行情，视为正常冷启动而非复盘
-        if full_records and target_dt >= full_records[-1]["dt"]:
-            print(f"[stock][信息] 选择的日期({end_date})不早于最新行情，按冷启动处理")
-            end_date = None
+        # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===
+        if step is not None:
+            step = int(step)
+            if step != 0:
+                # 找到 end_date 对应的K线索引（精确匹配或 ≤ target_dt 的最后一根）
+                anchor_idx = None
+                for i in range(len(full_records) - 1, -1, -1):
+                    if full_records[i]["dt"] <= target_dt:
+                        anchor_idx = i
+                        break
+                if anchor_idx is not None:
+                    new_idx = anchor_idx + step
+                    if 0 <= new_idx < len(full_records):
+                        target_dt = full_records[new_idx]["dt"]
+                        end_date = target_dt.strftime("%Y-%m-%d %H:%M:%S")
+                        print(f"[stock][箭头] step={step}: {full_records[anchor_idx]['dt']} → {target_dt} (idx {anchor_idx} → {new_idx})")
+                    else:
+                        print(f"[stock][箭头] step={step} 越界: idx {anchor_idx} → {new_idx}, 共{len(full_records)}条")
 
     if end_date:
         # 复盘模式：左右边界截断
@@ -3180,7 +3716,7 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
         print(f"[dual_zs][期货] ZS结果: zs_data长度={len(zs_data)}")
         if zs_data:
             for zs in zs_data:
-                print(f"[dual_zs][期货]   ZS: sdt={zs.get('sdt')}, edt={zs.get('edt')}, zg={zs.get('zg')}, zd={zs.get('zd')}")
+                print(f"[dual_zs][期货]   ZS: sdt={zs.get('sdt')}, edt={zs.get('edt')}, zg={zs.get('zg'):.2f}, zd={zs.get('zd'):.2f}")
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
     # ── 股票双窗口 ──
@@ -3474,7 +4010,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 
 
-def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False):
+def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None):
     """公开分析入口：先识别市场，再分流到股票或期货的并列内部流程。
     股票/指数：走通达信数据源，支持 cache_chan 和 dual 双窗口。
     期货/期指：走天勤数据源，dual=True 时使用两个独立 CChan 对象。
@@ -3483,9 +4019,9 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False):
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
     if market == 'futures':
-        return _analyze_futures_internal(normalized_code, freq=freq, end_date=end_date, dual=dual)
+        return _analyze_futures_internal(normalized_code, freq=freq, end_date=end_date, dual=dual, step=step)
     stock_code = f"{normalized_code}.{market.upper()}"
-    return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan, dual=dual)
+    return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan, dual=dual, step=step)
 
 
 # ============================================================
@@ -3649,13 +4185,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
             code = params.get("code", [""])[0]
             freq = params.get("freq", ["d"])[0]
             end_date = params.get("end_date", [""])[0] or None
+            step = params.get("step", [None])[0]
             dual = params.get("dual", ["0"])[0] == "1"
             if not code:
                 self.send_json_response({"error": "请输入股票代码"}, 400)
                 print_memory(f"前端操作(查询股票-{code or '空'})")
                 return
             try:
-                result = analyze_stock(code, freq=freq, end_date=end_date, dual=dual)
+                result = analyze_stock(code, freq=freq, end_date=end_date, dual=dual, step=step)
                 if "error" in result:
                     self.send_json_response(result, 400)
                 else:
@@ -3946,12 +4483,13 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     t_pre = time.time()
                     pass_filter, pre_mv, pre_below = _quick_prefilter_pass(market, code, freq)
                     t_pre_elapsed = time.time() - t_pre
+                    pre_mv_fmt = f"{pre_mv:.2f}" if pre_mv is not None else "?"
                     if not pass_filter:
-                        _scan_skip_log.append(f"{code} - 预过滤跳过(流通市值={pre_mv}亿, 120MA线下={pre_below})")
-                        print(f"[预过滤] {code} 跳过 (市值={pre_mv}亿, 低于120MA={pre_below}), 耗时{t_pre_elapsed:.3f}s")
+                        _scan_skip_log.append(f"{code} - 预过滤跳过(流通市值={pre_mv_fmt}亿, 120MA线下={pre_below})")
+                        print(f"[预过滤] {code} 跳过 (市值={pre_mv_fmt}亿, 低于120MA={pre_below}), 耗时{t_pre_elapsed:.3f}s")
                         self.send_json_response({"error": "预过滤跳过", "skipped": True, "float_mv": pre_mv, "below_ma120": pre_below}, 200)
                         return
-                    print(f"[预过滤] {code} 通过 (市值={pre_mv}亿, 低于120MA={pre_below}), 耗时{t_pre_elapsed:.3f}s")
+                    print(f"[预过滤] {code} 通过 (市值={pre_mv_fmt}亿, 低于120MA={pre_below}), 耗时{t_pre_elapsed:.3f}s")
                 # 检查终止标志：在获取锁之前先检查，避免排队等待
                 if _scan_aborted:
                     self.send_json_response({"error": "扫描已终止", "aborted": True}, 200)
@@ -4099,7 +4637,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             print("[扫描] 收到中断请求，设置终止标志")
             self.send_json_response({"ok": True}, 200)
         elif parsed.path == "/api/zxg_save":
-            # 保存勾选的股票到通达信自选股文件 zxg.blk
+            # 保存勾选的股票到通达信 && 同花顺自选股
             try:
                 params = parse_qs(parsed.query)
                 codes_str = params.get("codes", [""])[0]
@@ -4107,8 +4645,20 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if not codes:
                     self.send_json_response({"error": "codes为空"}, 400)
                     return
-                added = save_to_zxg_blk(codes)
-                self.send_json_response({"ok": True, "saved": added}, 200)
+                # 原始代码（带后缀，如 600150.SH），给通达信用
+                codes_raw = [c.strip() for c in codes]
+                # 纯6位代码，给同花顺用
+                codes_plain = [_strip_market_suffix(c.strip()) for c in codes]
+                codes_plain = list(dict.fromkeys(codes_plain))  # 去重保序
+                tdx_added = save_to_zxg_blk(codes_raw)
+                ths_added, ths_msg = save_to_ths_zxg(codes_plain)
+                print(f"[THS] 保存结果: tdx={tdx_added}, ths={ths_added}, msg={ths_msg}")
+                self.send_json_response({
+                    "ok": True,
+                    "tdx_saved": tdx_added,
+                    "ths_saved": ths_added,
+                    "ths_msg": ths_msg,
+                }, 200)
             except Exception as e:
                 import traceback
                 traceback.print_exc()
@@ -5185,8 +5735,10 @@ class ChartHandler(SimpleHTTPRequestHandler):
         body = json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8")
         json_time = time.time() - t_json
         body_kb = len(body) / 1024
+        # 细粒度计时：序列化 / 发送HTTP头 / 写入socket 三个环节分别计时
         if body_kb > 100 or json_time > 0.1:
             print(f"[stock][耗时] JSON序列化: {json_time:.3f}s ({body_kb:.0f}KB)")
+        t_header = time.time()
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -5194,7 +5746,13 @@ class ChartHandler(SimpleHTTPRequestHandler):
         self.send_header("Pragma", "no-cache")
         self.send_header("Expires", "0")
         self.end_headers()
+        header_time = time.time() - t_header
+        t_write = time.time()
         self.wfile.write(body)
+        write_time = time.time() - t_write
+        # 汇总：任一环节超 50ms 就打印明细，方便定位瓶颈
+        if json_time > 0.05 or header_time > 0.05 or write_time > 0.05:
+            print(f"[stock][耗时] 响应明细 序列化={json_time:.3f}s 头部={header_time:.3f}s 写入={write_time:.3f}s ({body_kb:.0f}KB)")
 
     def log_message(self, format, *args):
         pass
@@ -5489,6 +6047,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             text-overflow: ellipsis !important; white-space: nowrap !important;
             color: #8892b0 !important; font-weight: 400 !important;
         }
+        .scan-col-freq {
+            width: 40px !important; flex-shrink: 0 !important;
+            text-align: left !important; color: #e94560 !important;
+            font-size: 11px !important; white-space: nowrap !important;
+            padding-left: 6px !important;
+        }
         .scan-col-code {
             width: 85px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #8892b0 !important;
@@ -5632,6 +6196,52 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             background: #e94560; border-color: #e94560; color: #fff;
         }
         .annotation-dialog-btn.primary:hover { background: #d63850; }
+        /* BSP过滤设置对话框 */
+        .bsp-filter-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px;
+        }
+        .bsp-filter-label {
+            display: flex; align-items: center; gap: 8px; cursor: pointer;
+            font-size: 13px; color: #a8b2d1; padding: 6px 10px; border-radius: 4px;
+            background: #1a1a2e; transition: background 0.2s;
+            white-space: nowrap; overflow: visible;
+        }
+        .bsp-filter-label:hover { background: #0f3460; }
+        .bsp-filter-label input[type="checkbox"] { accent-color: #e94560; }
+        /* 设置抽屉（右侧滑入） */
+        .settings-drawer-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.35); z-index: 9999;
+            opacity: 0; visibility: hidden; transition: opacity 0.25s, visibility 0.25s;
+        }
+        .settings-drawer-overlay.show { opacity: 1; visibility: visible; }
+        .settings-drawer {
+            position: fixed; top: 0; right: 0; bottom: 0;
+            width: 360px; max-width: 92vw;
+            background: #16213e; border-left: 1px solid #0f3460;
+            box-shadow: -8px 0 32px rgba(0,0,0,0.4);
+            z-index: 10000;
+            transform: translateX(100%); transition: transform 0.28s ease;
+            display: flex; flex-direction: column;
+        }
+        .settings-drawer.show { transform: translateX(0); }
+        .settings-drawer-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 18px; border-bottom: 1px solid #0f3460;
+        }
+        .settings-drawer-title { font-size: 14px; font-weight: 600; color: #e0e0e0; }
+        .settings-drawer-close {
+            font-size: 20px; color: #8892b0; cursor: pointer; line-height: 1;
+            padding: 0 4px;
+        }
+        .settings-drawer-close:hover { color: #e94560; }
+        .settings-drawer-body {
+            flex: 1; overflow-y: auto; padding: 16px 18px;
+        }
+        .settings-drawer-footer {
+            padding: 12px 18px; border-top: 1px solid #0f3460;
+            display: flex; justify-content: flex-end; gap: 8px;
+        }
         .annotation-list-item {
             font-size: 11px; color: #8892b0; padding: 2px 0;
             cursor: pointer; display: flex; justify-content: space-between;
@@ -5681,12 +6291,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="header-right">
             <div class="goto-date">
-                <span class="date-arrow" onclick="dateStep(-1)" title="前一天">&#9664;</span>
+                <span class="date-arrow" id="date-arrow-left" onclick="dateStep(-1)" title="前一天">&#9664;</span>
                 <span class="date-input-wrap">
-                    <input type="date" id="goto-date-input" min="1990-01-01" max="2099-12-31" onchange="handleDateChange()" onkeydown="handleDateKeydown(event)" onblur="handleDateBlur()" oninput="handleDateInput(event)" />
+                    <input type="date" id="goto-date-input" onchange="handleDateChange()" onkeydown="handleDateKeydown(event)" onblur="handleDateBlur()" oninput="handleDateInput(event)" />
                     <span class="date-weekday" id="date-weekday"></span>
                 </span>
-                <span class="date-arrow" onclick="dateStep(1)" title="后一天">&#9654;</span>
+                <span class="date-arrow" id="date-arrow-right" onclick="dateStep(1)" title="后一天">&#9654;</span>
             </div>
             <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
                 <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
@@ -5695,14 +6305,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
                 <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
-                <button class="btn" id="btn-ma" onclick="toggleOverlay('ma')">均线</button>
             <button class="btn" id="btn-restart" disabled onclick="restartStock()" title="清除选点，按冷启动重新加载">重置</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
             <button class="btn-icon" id="btn-refresh" title="刷新股票名称" onclick="refreshStockNames()">
                 <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
             </button>
             <span id="refresh-status" style="color:#a8b2d1;font-size:11px;margin-left:4px;display:none;"></span>
-            <button class="btn-icon" id="btn-settings" title="设置">
+            <button class="btn-icon" id="btn-settings" title="设置" onclick="openBspSettings()">
                 <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"/></svg>
             </button>
         </div>
@@ -5727,7 +6336,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="scan-panel" id="scan-panel">
         <div class="scan-header">
             <span class="scan-title" id="scan-title">买卖点扫描</span>
-            <button class="scan-save-btn" id="scan-save-btn" onclick="saveScanToZxg()" disabled title="保存勾选到自选股">保存到自选</button>
+            <button class="scan-save-btn" id="scan-save-btn" onclick="saveScanToZxg()" disabled title="保存勾选到通达信+同花顺自选股">保存到自选</button>
             <span class="scan-status" id="scan-status"></span>
             <span class="scan-close" onclick="closeScanPanel()">&times;</span>
         </div>
@@ -5744,8 +6353,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="annotation-menu-item" id="annotation-menu-edit-one" onclick="annotationEditAnnotation()" style="display:none;">修改标注</div>
         <div class="annotation-menu-item" id="annotation-menu-delete-one" onclick="annotationDeleteAnnotation()" style="display:none;">删除标注</div>
         <div class="annotation-menu-item" id="annotation-menu-add" onclick="annotationAdd()">添加标注</div>
-        <div class="annotation-menu-divider" id="annotation-menu-divider"></div>
         <div class="annotation-menu-item danger" id="annotation-menu-del-all" onclick="annotationDeleteAllGlobal()">删除全部</div>
+        <div class="annotation-menu-divider" id="annotation-menu-divider"></div>
+        <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘到此</div>
+        <div class="annotation-menu-divider" id="annotation-menu-divider2"></div>
+        <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">反转视图</div>
     </div>
     <!-- 文字标注输入对话框 -->
     <div class="annotation-dialog" id="annotation-dialog">
@@ -5793,15 +6405,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描模式</div>
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-mode" value="ann" checked style="accent-color:#e94560;" />
+                    <input type="radio" name="scan-mode" value="ann" checked onchange="updateScanRecentDisabled()" style="accent-color:#e94560;" />
                     标注
                 </label>
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-mode" value="bsp" style="accent-color:#e94560;" />
+                    <input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;" />
                     买/卖点
                 </label>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
+            <div id="scan-recent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
                 <span>最近</span>
                 <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#0a0a1a;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
                 <span>根</span>
@@ -5812,12 +6424,114 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             </div>
         </div>
     </div>
+    <!-- 设置抽屉（买卖点过滤 + 均线周期） -->
+    <div class="settings-drawer-overlay" id="bsp-filter-overlay" onclick="closeBspSettings()"></div>
+    <aside class="settings-drawer" id="bsp-filter-dialog">
+        <div class="settings-drawer-header">
+            <span class="settings-drawer-title">显示设置</span>
+            <span class="settings-drawer-close" onclick="closeBspSettings()">&times;</span>
+        </div>
+        <div class="settings-drawer-body">
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型（可多选）</div>
+            <div class="bsp-filter-grid">
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="0" checked onchange="onBspFilterChange(this)" />
+                    0类（中枢震荡）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="1" checked onchange="onBspFilterChange(this)" />
+                    1类（趋势背驰）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="2" checked onchange="onBspFilterChange(this)" />
+                    2类（二买/二卖）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="3" checked onchange="onBspFilterChange(this)" />
+                    3类（三买/三卖）
+                </label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:18px;">
+                <button onclick="bspFilterSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="bspFilterSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
+            </div>
+
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">均线周期（可多选，斐波那契数列）</div>
+            <div class="bsp-filter-grid" id="ma-periods-grid">
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="5" onchange="onMaPeriodChange(this)" /><span style="color:#FF6B6B">●</span> MA5</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="8" onchange="onMaPeriodChange(this)" /><span style="color:#FFD93D">●</span> MA8</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="13" onchange="onMaPeriodChange(this)" /><span style="color:#6BCB77">●</span> MA13</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="21" onchange="onMaPeriodChange(this)" /><span style="color:#4D96FF">●</span> MA21</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="34" onchange="onMaPeriodChange(this)" /><span style="color:#C780FA">●</span> MA34</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="55" onchange="onMaPeriodChange(this)" /><span style="color:#FF9F40">●</span> MA55</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="89" onchange="onMaPeriodChange(this)" /><span style="color:#00CED1">●</span> MA89</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="144" onchange="onMaPeriodChange(this)" /><span style="color:#FF69B4">●</span> MA144</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="233" onchange="onMaPeriodChange(this)" /><span style="color:#A8A8A8">●</span> MA233</label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:14px;">
+                <button onclick="maPeriodsSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="maPeriodsSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
+            </div>
+        </div>
+    </aside>
     <script>
     (function() {
         "use strict";
         let chartData = null, canvas, ctx;
         let showBi = true, showFx = false, showMa = false, showZs = true, showSeg = false, showBsp = true;
-        // 周期→秒数映射（灰框/红框通用公式用）
+        // BSP买卖点类型过滤：默认全部显示（0,1,2,3 对应 bs_type 配置）
+        let bspFilter = { '0': true, '1': true, '2': true, '3': true };
+        // 均线周期：选中的周期集合，默认空（不显示均线）。showMa 由是否有选中周期决定。
+        const MA_PERIODS = [5, 8, 13, 21, 34, 55, 89, 144, 233];
+        const MA_COLORS = { 5:'#FF6B6B', 8:'#FFD93D', 13:'#6BCB77', 21:'#4D96FF', 34:'#C780FA', 55:'#FF9F40', 89:'#00CED1', 144:'#FF69B4', 233:'#A8A8A8' };
+        let maPeriods = {};  // {5: true, 13: true, ...}
+        // 从 localStorage 恢复叠加层开关状态
+        function loadOverlaySettings() {
+            try {
+                const raw = localStorage.getItem('chan_overlay_settings');
+                if (!raw) return;
+                const s = JSON.parse(raw);
+                if (typeof s.showBi === 'boolean') showBi = s.showBi;
+                if (typeof s.showFx === 'boolean') showFx = s.showFx;
+                if (typeof s.showZs === 'boolean') showZs = s.showZs;
+                if (typeof s.showSeg === 'boolean') showSeg = s.showSeg;
+                if (typeof s.showBsp === 'boolean') showBsp = s.showBsp;
+                if (s.bspFilter && typeof s.bspFilter === 'object') {
+                    for (var k in s.bspFilter) { bspFilter[k] = s.bspFilter[k]; }
+                }
+                // 兼容旧版 showMa 布尔：若为 true 且无 maPeriods，迁移为 {5:true,120:true}
+                if (s.maPeriods && typeof s.maPeriods === 'object') {
+                    for (var p in s.maPeriods) { maPeriods[p] = s.maPeriods[p]; }
+                } else if (s.showMa === true) {
+                    maPeriods = { '5': true, '120': true };
+                }
+            } catch(e) {}
+        }
+        // 保存叠加层开关状态到 localStorage
+        function saveOverlaySettings() {
+            try {
+                const s = {
+                    showBi: showBi, showFx: showFx,
+                    showZs: showZs, showSeg: showSeg, showBsp: showBsp,
+                    bspFilter: bspFilter,
+                    maPeriods: maPeriods
+                };
+                localStorage.setItem('chan_overlay_settings', JSON.stringify(s));
+            } catch(e) {}
+        }
+        // showMa 由是否有选中均线周期决定
+        function getShowMa() { return Object.keys(maPeriods).some(function(p){ return maPeriods[p]; }); }
+        // 根据保存的设置更新按钮 UI 状态
+        function applyOverlayButtonStates() {
+            document.getElementById("btn-bi").classList.toggle("active", showBi);
+            document.getElementById("btn-fx").classList.toggle("active", showFx);
+            document.getElementById("btn-zs").classList.toggle("active", showZs);
+            document.getElementById("btn-seg").classList.toggle("active", showSeg);
+            document.getElementById("btn-bsp").classList.toggle("active", showBsp);
+        }
+        // 启动时加载保存的设置
+        loadOverlaySettings();
+        // 频率→秒数映射
         const FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
         const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
         const VOL_RATIO = 0.2, GAP = 12;
@@ -5842,6 +6556,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let dualBottomViewOffset = 0, dualBottomViewCount = 377;
         let dualBottomMouseX = -1, dualBottomMouseY = -1;
         let topCanvas, topCtx, bottomCanvas, bottomCtx;
+        // 反转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
+        let _isMirrorMode = false;
         let dualBottomIsDragging = false, dualBottomDragStartX = 0, dualBottomDragStartOffset = 0;
         let dualBottomMouseDownX = 0, dualBottomMouseDownY = 0; // 底部窗口点击坐标
         let _bottomCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
@@ -5865,6 +6581,73 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _annotationClickTarget = null; // 右键点击命中的标注对象 {date, text, y_offset}，null表示未命中
         let _annotationEditOldText = "";   // 编辑模式下被修改的旧文字
         let _annotationDialogMode = "add"; // "add" 或 "edit"
+
+        // ===== 日期输入框：按周期切换 date / datetime-local =====
+        const INTRADAY_FREQS_JS = ["30m", "5m", "1m", "15s"];
+        function isIntradayFreq(freq) { return INTRADAY_FREQS_JS.indexOf(freq) >= 0; }
+
+        // K线日期 → 输入框格式
+        // K线日期: "2026/07/02" / "2026/07/02 10:35" / "2026/07/02 10:35:00"
+        // date: "2026-07-02"  /  datetime-local: "2026-07-02T10:35"
+        function klineDateToInput(klineDate, freq) {
+            if (!klineDate) return "";
+            var d = klineDate.replace(/\//g, "-");
+            if (isIntradayFreq(freq)) {
+                var dt = d.slice(0, 16);       // "YYYY-MM-DD HH:MM"
+                return dt.replace(" ", "T");
+            }
+            return d.slice(0, 10);
+        }
+
+        // 输入框值 → 后端API格式
+        // date: "2026-07-02" / datetime-local: "2026-07-02T10:35"
+        // API: "2026-07-02" / "2026-07-02 10:35"
+        function inputDateToApi(inputVal, freq) {
+            if (!inputVal) return "";
+            if (isIntradayFreq(freq)) return inputVal.replace("T", " ");
+            return inputVal.slice(0, 10);
+        }
+
+        // 切换输入框 type 属性（date ↔ datetime-local）
+        function updateDateInputType() {
+            var input = document.getElementById("goto-date-input");
+            var weekday = document.getElementById("date-weekday");
+            var isIntra = isIntradayFreq(currentFreq);
+            var oldVal = input.value;
+            if (isIntra) {
+                input.type = "datetime-local";
+                input.step = (currentFreq === "15s") ? "15" : "60";
+                input.min = "1990-01-01T00:00";
+                input.max = "2099-12-31T23:59";
+                input.style.width = "180px";
+                if (oldVal && oldVal.indexOf("T") < 0) oldVal = oldVal + "T09:30";
+                if (weekday) weekday.style.right = "38px";
+            } else {
+                input.type = "date";
+                input.step = "1";
+                input.min = "1990-01-01";
+                input.max = "2099-12-31";
+                input.style.width = "130px";
+                if (oldVal && oldVal.indexOf("T") >= 0) oldVal = oldVal.slice(0, 10);
+                if (weekday) weekday.style.right = "28px";
+            }
+            input.value = oldVal;
+            // 记录 datetime-local 打开选择器前的时间部分
+            // 用于判断用户是否选了分钟（仅日期变化时时间不变，不触发）
+            if (isIntra) {
+                input.onfocus = function() {
+                    var v = input.value;
+                    _dtPickerTimeBefore = v.indexOf("T") >= 0 ? v.split("T")[1] : "";
+                };
+            } else {
+                input.onfocus = null;
+            }
+            // 箭头提示
+            var la = document.getElementById("date-arrow-left");
+            var ra = document.getElementById("date-arrow-right");
+            if (la) la.title = isIntra ? "前一根" : "前一天";
+            if (ra) ra.title = isIntra ? "后一根" : "后一天";
+        }
 
         // 实时模式（期货/期指 SSE 推送）
         let isRealtimeMode = false;       // 是否处于实时模式
@@ -6232,16 +7015,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             else returnedFreq = "d";
                             currentFreq = returnedFreq;
                             lastStockFreq = currentFreq;
+                            updateDateInputType();
                             updateFreqButtonStates(false);
                             viewCount = 377;
                             adjustViewForSavedPoint();
                             viewOffset = Math.max(0, chartData.klines.length - viewCount);
                             if (chartData.klines.length < viewCount) viewOffset = 0;
-                            showFx = false; showMa = false; showZs = true;
+                            applyOverlayButtonStates();
                             initialized = true;
                             updateRestartBtn();
                             updateDualBtn();
-                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                            const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                             document.getElementById("goto-date-input").value = lastDate;
                             updateWeekday();
                             render();
@@ -6279,17 +7063,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             else if (chartData.meta.freq === "30分钟") currentFreq = "30m";
             else if (chartData.meta.freq === "周线") currentFreq = "w";
             else currentFreq = "d";
+            updateDateInputType();
             lastStockFreq = currentFreq;
             updateFreqButtonStates(false);
             viewCount = 377;
             adjustViewForSavedPoint();
-            showFx = false; showMa = false; showZs = true;
+            applyOverlayButtonStates();
             viewOffset = Math.max(0, chartData.klines.length - viewCount);
             if (chartData.klines.length < viewCount) viewOffset = 0;
             initialized = true;
             updateRestartBtn();
             updateDualBtn();
-            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+            const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
             document.getElementById("goto-date-input").value = lastDate;
             updateWeekday();
             render();
@@ -6392,7 +7177,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 document.getElementById("stock-code").textContent = chartData.meta.symbol;
                                 document.title = "缠论分析 - " + chartData.meta.name;
                                 if (chartData.klines.length > 0) {
-                                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                                     document.getElementById("goto-date-input").value = lastDate;
                                 }
                                 updateWeekday();
@@ -6422,6 +7207,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             } else {
                                 currentFreq = "d";
                             }
+                            updateDateInputType();
                             // 同步按钮状态
                             document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
                             document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
@@ -6433,7 +7219,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             document.getElementById("stock-name").textContent = chartData.meta.name;
                             document.getElementById("stock-code").textContent = chartData.meta.symbol;
                             document.title = "缠论分析 - " + chartData.meta.name;
-                            const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                            const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                             document.getElementById("goto-date-input").value = lastDate;
                             updateWeekday();
                             document.getElementById("loading").classList.add("hidden");
@@ -6486,7 +7272,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 // 7. 默认：恢复全视图
                 viewCount = 377;
                 viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                 document.getElementById("goto-date-input").value = lastDate;
                 updateWeekday();
                 render();
@@ -6583,6 +7369,93 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             return { min: min - margin, max: max + margin };
         }
 
+        // 反转视图：对数据做镜像变换（价格取负 + high/low互换 + 方向取反）
+        // 变换后所有绘制函数自动正确：涨K线变跌K线、MACD红柱变绿柱、笔/中枢方向自动镜像
+        function _mirrorChartData(data) {
+            if (!data) return data;
+            // 浅拷贝顶层，klines/bis等数组深拷贝（不能修改原始缓存）
+            var m = Object.assign({}, data);
+            // K线: open→-open, close→-close, high↔low互换取负, macd/dif/dea取负
+            m.klines = (data.klines || []).map(function(k) {
+                var nk = Object.assign({}, k);
+                nk.open = -k.open;
+                nk.close = -k.close;
+                nk.high = -k.low;   // 原low取负 → 新high
+                nk.low = -k.high;   // 原high取负 → 新low
+                if (k.dif !== undefined) nk.dif = -k.dif;
+                if (k.dea !== undefined) nk.dea = -k.dea;
+                if (k.macd !== undefined) nk.macd = -k.macd;
+                return nk;
+            });
+            // 笔: direction up↔down, 价格取负, high↔low互换
+            m.bis = (data.bis || []).map(function(b) {
+                var nb = Object.assign({}, b);
+                nb.direction = b.direction === 'up' ? 'down' : 'up';
+                nb.fx_a_price = -b.fx_a_price;
+                nb.fx_b_price = -b.fx_b_price;
+                nb.high = -b.low;
+                nb.low = -b.high;
+                return nb;
+            });
+            // 分型: mark G↔D, price取负, high↔low互换
+            m.fxs = (data.fxs || []).map(function(f) {
+                var nf = Object.assign({}, f);
+                nf.mark = f.mark === 'G' ? 'D' : 'G';
+                nf.price = -f.price;
+                nf.high = -f.low;
+                nf.low = -f.high;
+                return nf;
+            });
+            // 中枢: zg↔zd互换取负, gg↔dd互换取负, dir up↔down
+            m.zs = (data.zs || []).map(function(z) {
+                var nz = Object.assign({}, z);
+                nz.zg = -z.zd;
+                nz.zd = -z.zg;
+                nz.gg = -z.dd;
+                nz.dd = -z.gg;
+                nz.dir = z.dir === 'up' ? 'down' : 'up';
+                return nz;
+            });
+            // 线段: direction up↔down, 价格取负, high↔low互换
+            m.segs = (data.segs || []).map(function(s) {
+                var ns = Object.assign({}, s);
+                ns.direction = s.direction === 'up' ? 'down' : 'up';
+                ns.begin_price = -s.begin_price;
+                ns.end_price = -s.end_price;
+                ns.high = -s.low;
+                ns.low = -s.high;
+                return ns;
+            });
+            // 买卖点: is_buy取反, 价格取负, high↔low互换
+            m.bsps = (data.bsps || []).map(function(b) {
+                var nb = Object.assign({}, b);
+                nb.is_buy = !b.is_buy;
+                nb.price = -b.price;
+                nb.high = -b.low;
+                nb.low = -b.high;
+                return nb;
+            });
+            // 中枢星标: price取负, mark G↔D, color red↔green
+            m.zs_stars = (data.zs_stars || []).map(function(s) {
+                var ns = Object.assign({}, s);
+                ns.price = -s.price;
+                ns.mark = s.mark === 'G' ? 'D' : 'G';
+                ns.color = s.color === 'red' ? 'green' : 'red';
+                return ns;
+            });
+            // 白色水平线: price取负
+            if (data.white_hline) {
+                m.white_hline = Object.assign({}, data.white_hline);
+                m.white_hline.price = -data.white_hline.price;
+            }
+            return m;
+        }
+
+        // 反转模式下的价格显示：取绝对值
+        function _fmtPrice(p) {
+            return (_isMirrorMode ? Math.abs(p) : p).toFixed(2);
+        }
+
         function priceToY(price, area, priceRange) {
             return area.y + area.h - (price - priceRange.min) / (priceRange.max - priceRange.min) * area.h;
         }
@@ -6674,6 +7547,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function _renderChart(data, freq, vOffset, vCount, mX, mY, highlightRange, redRange) {
             if (!data || !ctx) return;
+            // 反转视图模式：对数据做镜像变换（不修改原始缓存，仅影响渲染）
+            if (_isMirrorMode) {
+                data = _mirrorChartData(data);
+            }
             // 临时覆盖全局变量供绘制函数使用
             const _savedViewOffset = viewOffset, _savedViewCount = viewCount;
             const _savedMouseX = mouseX, _savedMouseY = mouseY;
@@ -6808,7 +7685,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             drawCandles(klinesToDraw, area, priceRange, barStep, barWidth, subPixelOffset);
-            if (showMa) {
+            if (getShowMa()) {
                 try { drawMaLines(klinesToDraw, area, priceRange, barStep, subPixelOffset); }
                 catch (e) { console.error("[drawMaLines错误]", e); }
             }
@@ -7285,11 +8162,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.font = "10px monospace";
                 ctx.fillStyle = textColor;
                 ctx.textAlign = "right";
-                ctx.fillText(zs.zg.toFixed(2), x1 - 2, y1 - 2);
-                ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
+                ctx.fillText(_fmtPrice(zs.zg), x1 - 2, y1 - 2);
+                ctx.fillText(_fmtPrice(zs.zd), x1 - 2, y2 + 10);
                 // 中枢高度，标在上下沿中间位置
                 const zsHeight = zs.zg - zs.zd;
-                ctx.fillText(zsHeight.toFixed(2), x1 - 2, (y1 + y2) / 2 + 3);
+                ctx.fillText(_fmtPrice(zsHeight), x1 - 2, (y1 + y2) / 2 + 3);
             });
 
             // 进入段和离开段红绿五角星 - 已注释掉
@@ -7358,6 +8235,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 let idx = dateToGlobalIdx(bsp.date, map);
                 if (idx === undefined) return;
                 if (idx < globalStart || idx >= globalEnd) return;
+                if (bspFilter && !bspFilter[bsp.type]) return;  // 按用户设置过滤类型
                 const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
                 const isBuy = bsp.is_buy;
                 // 用K线外侧价格定位：买点用low，卖点用high
@@ -7439,11 +8317,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 ctx.font = "10px monospace";
                 ctx.fillStyle = textColor;
                 ctx.textAlign = "right";
-                ctx.fillText(zs.zg.toFixed(2), x1 - 2, y1 - 2);
-                ctx.fillText(zs.zd.toFixed(2), x1 - 2, y2 + 10);
+                ctx.fillText(_fmtPrice(zs.zg), x1 - 2, y1 - 2);
+                ctx.fillText(_fmtPrice(zs.zd), x1 - 2, y2 + 10);
                 // 中枢高度，标在上下沿中间位置
                 const zsHeight = zs.zg - zs.zd;
-                ctx.fillText(zsHeight.toFixed(2), x1 - 2, (y1 + y2) / 2 + 3);
+                ctx.fillText(_fmtPrice(zsHeight), x1 - 2, (y1 + y2) / 2 + 3);
             });
 
             // 进入段和离开段红绿五角星 - 已注释掉
@@ -7465,46 +8343,39 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const start = Math.max(0, Math.floor(viewOffset));
             const allKlines = chartData.klines;
             const n = allKlines.length;
-            const ma5 = new Array(n).fill(null);
-            const ma120 = new Array(n).fill(null);
-            let sum5 = 0;
-            for (let i = 0; i < n; i++) {
-                sum5 += allKlines[i].close;
-                if (i >= 5) sum5 -= allKlines[i - 5].close;
-                if (i >= 4) ma5[i] = sum5 / 5;
+            // 收集已选中的均线周期（按周期升序，短周期画在上层）
+            const periods = [];
+            for (var p in maPeriods) {
+                if (maPeriods[p]) periods.push(parseInt(p, 10));
             }
-            let sum120 = 0;
-            for (let i = 0; i < n; i++) {
-                sum120 += allKlines[i].close;
-                if (i >= 120) sum120 -= allKlines[i - 120].close;
-                if (i >= 119) ma120[i] = sum120 / 120;
-            }
-            ctx.strokeStyle = "#FFFFFF"; ctx.lineWidth = 1;
-            ctx.beginPath();
-            let started = false;
-            for (let i = 0; i < klines.length; i++) {
-                const globalIdx = start + i;
-                if (globalIdx < n && ma5[globalIdx] !== null && !isNaN(ma5[globalIdx])) {
-                    const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
-                    const y = priceToY(ma5[globalIdx], area, priceRange);
-                    if (!started) { ctx.moveTo(x, y); started = true; }
-                    else ctx.lineTo(x, y);
+            periods.sort(function(a, b) { return a - b; });
+            if (periods.length === 0) return;
+            ctx.lineWidth = 1;
+            for (let pi = 0; pi < periods.length; pi++) {
+                const period = periods[pi];
+                if (period <= 0 || period > n) continue;
+                // 滑动窗口计算该周期均线
+                const ma = new Array(n).fill(null);
+                let sum = 0;
+                for (let i = 0; i < n; i++) {
+                    sum += allKlines[i].close;
+                    if (i >= period) sum -= allKlines[i - period].close;
+                    if (i >= period - 1) ma[i] = sum / period;
                 }
-            }
-            ctx.stroke();
-            ctx.strokeStyle = "#888888"; ctx.lineWidth = 1;
-            ctx.beginPath();
-            started = false;
-            for (let i = 0; i < klines.length; i++) {
-                const globalIdx = start + i;
-                if (globalIdx < n && ma120[globalIdx] !== null && !isNaN(ma120[globalIdx])) {
-                    const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
-                    const y = priceToY(ma120[globalIdx], area, priceRange);
-                    if (!started) { ctx.moveTo(x, y); started = true; }
-                    else ctx.lineTo(x, y);
+                ctx.strokeStyle = MA_COLORS[period] || "#FFFFFF";
+                ctx.beginPath();
+                let started = false;
+                for (let i = 0; i < klines.length; i++) {
+                    const globalIdx = start + i;
+                    if (globalIdx < n && ma[globalIdx] !== null && !isNaN(ma[globalIdx])) {
+                        const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
+                        const y = priceToY(ma[globalIdx], area, priceRange);
+                        if (!started) { ctx.moveTo(x, y); started = true; }
+                        else ctx.lineTo(x, y);
+                    }
                 }
+                ctx.stroke();
             }
-            ctx.stroke();
         }
 
         // 画最新笔的白色横虚线（同一时间只有一根）
@@ -7543,7 +8414,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.fillStyle = "#FFFFFF";
             ctx.font = "11px monospace";
             ctx.textAlign = "left";
-            ctx.fillText(hline.price.toFixed(2), x2 + 4, y + 4);
+            ctx.fillText(_fmtPrice(hline.price), x2 + 4, y + 4);
         }
 
         /**
@@ -7584,7 +8455,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             function drawOne(price, klineIdx, isHigh) {
                 const kx = area.x + barStep * klineIdx + barStep / 2 - subPixelOffset;
                 const ky = priceToY(price, area, priceRange);
-                const text = price.toFixed(2);
+                const text = _fmtPrice(price);
                 const textW = ctx.measureText(text).width;
 
                 const needLeft = textW + gap + arrowW;
@@ -7642,14 +8513,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const crosshairEndY = volArea.y + volArea.h;
                 ctx.strokeStyle = COLORS.crosshair; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
                 ctx.beginPath(); ctx.moveTo(cx, area.y); ctx.lineTo(cx, crosshairEndY); ctx.stroke();
-                if (mouseY >= area.y && mouseY <= area.y + area.h) {
+                if (mouseY >= area.y && mouseY <= crosshairEndY) {
                     ctx.beginPath(); ctx.moveTo(area.x, mouseY); ctx.lineTo(area.x + area.w, mouseY); ctx.stroke();
                 }
                 ctx.setLineDash([]);
                 if (mouseY >= area.y && mouseY <= area.y + area.h) {
                     const price = yToPrice(mouseY, area, priceRange);
                     _overlayData = _overlayData || {};
-                    _overlayData.rightPrice = price.toFixed(2);
+                    _overlayData.rightPrice = _fmtPrice(price);
                     _overlayData.rightY = mouseY;
                 }
             }
@@ -7715,11 +8586,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 双窗口：下面窗口渲染时，仅当鼠标不在下面窗口上（mouseX<0）才跳过 OHLC 更新
             // 避免"鼠标在上面窗口时，下面窗口的最后一根K线数据覆盖上面窗口的 OHLC"
             if (!(window._isRenderingBottom && mouseX < 0)) {
+                // 反转模式下显示原始价格：open/close取绝对值，high/low互换后取绝对值
+                const dispOpen = _isMirrorMode ? Math.abs(k.open) : k.open;
+                const dispHigh = _isMirrorMode ? Math.abs(k.low) : k.high;   // k.low=-orig_high → |k.low|=orig_high
+                const dispLow = _isMirrorMode ? Math.abs(k.high) : k.low;    // k.high=-orig_low → |k.high|=orig_low
+                const dispClose = _isMirrorMode ? Math.abs(k.close) : k.close;
                 document.getElementById("crosshair-info").innerHTML =
-                    `<span class="label">开:</span> <span class="${cls}">${k.open.toFixed(2)}</span> &nbsp; ` +
-                    `<span class="label">高:</span> <span class="${cls}">${k.high.toFixed(2)}</span> &nbsp; ` +
-                    `<span class="label">低:</span> <span class="${cls}">${k.low.toFixed(2)}</span> &nbsp; ` +
-                    `<span class="label">收:</span> <span class="${cls}">${k.close.toFixed(2)}</span> &nbsp; ` +
+                    `<span class="label">开:</span> <span class="${cls}">${dispOpen.toFixed(2)}</span> &nbsp; ` +
+                    `<span class="label">高:</span> <span class="${cls}">${dispHigh.toFixed(2)}</span> &nbsp; ` +
+                    `<span class="label">低:</span> <span class="${cls}">${dispLow.toFixed(2)}</span> &nbsp; ` +
+                    `<span class="label">收:</span> <span class="${cls}">${dispClose.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨跌:</span> <span class="${cls}">${sign}${changeVal.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
                     `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>`;
@@ -7727,7 +8603,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
             const weekDayStr = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-            const clipText = `${k.date} ${weekDayStr} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`;
+            // 剪贴板文本同样显示原始价格
+            const clipOpen = _isMirrorMode ? Math.abs(k.open) : k.open;
+            const clipHigh = _isMirrorMode ? Math.abs(k.low) : k.high;
+            const clipLow = _isMirrorMode ? Math.abs(k.high) : k.low;
+            const clipClose = _isMirrorMode ? Math.abs(k.close) : k.close;
+            const clipText = `${k.date} ${weekDayStr} 开:${clipOpen.toFixed(2)} 高:${clipHigh.toFixed(2)} 低:${clipLow.toFixed(2)} 收:${clipClose.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
                 _bottomCurrentGlobalIdx = globalIdx;
@@ -7744,7 +8625,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             for (let i = 0; i <= 5; i++) {
                 const price = priceRange.min + (priceRange.max - priceRange.min) * (1 - i / 5);
                 const y = area.y + (area.h / 5) * i;
-                ctx.fillText(price.toFixed(2), area.x + area.w + 6, y + 4);
+                ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
             }
         }
 
@@ -7949,12 +8830,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             toast._timer = setTimeout(() => { toast.style.opacity = "0"; }, 1000);
         }
 
-        // Esc键取消区间选择
+        // Esc键取消区间选择 / 关闭设置抽屉
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && _rangeSelect.mode === 'SELECTED_A') {
-                _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                showDualToast("区间选择已取消");
-                render();
+            if (e.key === 'Escape') {
+                var drawer = document.getElementById("bsp-filter-dialog");
+                if (drawer.classList.contains("show")) {
+                    closeBspSettings();
+                    return;
+                }
+                if (_rangeSelect.mode === 'SELECTED_A') {
+                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+                    showDualToast("区间选择已取消");
+                    render();
+                }
             }
         });
         document.addEventListener('keyup', function(e) {
@@ -8317,14 +9205,86 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         window.toggleOverlay = function(type) {
             if (type === "bi") { showBi = !showBi; document.getElementById("btn-bi").classList.toggle("active", showBi); }
             else if (type === "fx") { showFx = !showFx; document.getElementById("btn-fx").classList.toggle("active", showFx); }
-            else if (type === "ma") { showMa = !showMa; document.getElementById("btn-ma").classList.toggle("active", showMa); }
             else if (type === "zs") { showZs = !showZs; document.getElementById("btn-zs").classList.toggle("active", showZs); }
             else if (type === "seg") { showSeg = !showSeg; document.getElementById("btn-seg").classList.toggle("active", showSeg); }
             else if (type === "bsp") { showBsp = !showBsp; document.getElementById("btn-bsp").classList.toggle("active", showBsp); }
+            saveOverlaySettings();
             render();
         };
 
         window.toggleStats = function() { document.getElementById("stats-panel").classList.toggle("show"); };
+
+        // ── BSP买卖点类型过滤 + 均线周期设置 ──
+        window.openBspSettings = function() {
+            // 打开前同步当前过滤状态到复选框
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = bspFilter[cbs[i].value];
+            }
+            // 同步均线周期复选框
+            var macbs = document.querySelectorAll('#bsp-filter-dialog input[name="ma-period"]');
+            for (var i = 0; i < macbs.length; i++) {
+                macbs[i].checked = !!maPeriods[macbs[i].value];
+            }
+            document.getElementById("bsp-filter-dialog").classList.add("show");
+            document.getElementById("bsp-filter-overlay").classList.add("show");
+        };
+        window.closeBspSettings = function() {
+            document.getElementById("bsp-filter-dialog").classList.remove("show");
+            document.getElementById("bsp-filter-overlay").classList.remove("show");
+        };
+        // 即时生效：单个买卖点复选框变化
+        window.onBspFilterChange = function(cb) {
+            bspFilter[cb.value] = cb.checked;
+            saveOverlaySettings();
+            render();
+        };
+        // 即时生效：单个均线周期复选框变化
+        window.onMaPeriodChange = function(cb) {
+            if (cb.checked) maPeriods[cb.value] = true;
+            else delete maPeriods[cb.value];
+            showMa = getShowMa();
+            saveOverlaySettings();
+            render();
+        };
+        window.bspFilterSelectAll = function() {
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = true;
+                bspFilter[cbs[i].value] = true;
+            }
+            saveOverlaySettings();
+            render();
+        };
+        window.bspFilterSelectNone = function() {
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = false;
+                bspFilter[cbs[i].value] = false;
+            }
+            saveOverlaySettings();
+            render();
+        };
+        window.maPeriodsSelectAll = function() {
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="ma-period"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = true;
+                maPeriods[cbs[i].value] = true;
+            }
+            showMa = getShowMa();
+            saveOverlaySettings();
+            render();
+        };
+        window.maPeriodsSelectNone = function() {
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="ma-period"]');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].checked = false;
+            }
+            maPeriods = {};
+            showMa = getShowMa();
+            saveOverlaySettings();
+            render();
+        };
 
         // 辅助：根据chartData中的saved_selection_date恢复重启按钮状态
         function updateRestartBtn() {
@@ -8397,6 +9357,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     } else {
                         currentFreq = "d";
                     }
+                    updateDateInputType();
                     document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
                     document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
                     document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
@@ -8409,7 +9370,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                     document.getElementById("goto-date-input").value = lastDate;
                     updateWeekday();
                     document.getElementById("loading").classList.add("hidden");
@@ -8445,6 +9406,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _scanMode = "ann"; // "ann" = 标注扫描, "bsp" = 买卖点扫描
         let _scanRecentDays = 1; // 最近N根K线，默认1
         let _scanSources = ["zxg"]; // 多选：["zxg", "sz50", "hs300", "zz500", "zz1000"]
+
+        // 扫描模式切换时，控制"最近N根"输入框的灰化状态
+        // 标注扫描：只要有标注就命中，与日期无关，输入框置灰
+        // 买卖点扫描：需要按最近N根K线过滤，输入框可用
+        function updateScanRecentDisabled() {
+            var row = document.getElementById("scan-recent-row");
+            var input = document.getElementById("scan-recent-days");
+            if (!row || !input) return;
+            var selected = document.querySelector('input[name="scan-mode"]:checked');
+            var isAnn = selected && selected.value === "ann";
+            if (isAnn) {
+                row.style.opacity = "0.35";
+                row.style.pointerEvents = "none";
+                input.disabled = true;
+            } else {
+                row.style.opacity = "1";
+                row.style.pointerEvents = "";
+                input.disabled = false;
+            }
+        }
+        window.updateScanRecentDisabled = updateScanRecentDisabled;
 
         // 扫描来源→中文标签（多选时用顿号连接）
         function _scanSourceLabel() {
@@ -8535,9 +9517,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分"};
             var freqLabel = freqLabels[freq] || freq;
             if (_scanMode === "bsp") {
-                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400;color:#8892b0">[最近</span><span style="font-size:11px;font-weight:400;color:#e94560"> ' + _scanRecentDays + ' </span><span style="font-size:11px;font-weight:400;color:#8892b0">根]</span>';
+                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560"> ' + _scanRecentDays + ' </b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span>';
             } else {
-                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400">（标注）</span>';
+                // 标注扫描：显示全周期，不再显示当前周期
+                document.getElementById("scan-title").textContent = "扫描全周期";
             }
         }
 
@@ -8588,6 +9571,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                 }
             } catch(e) {}
+            // 根据当前模式设置"最近N根"输入框的灰化状态
+            updateScanRecentDisabled();
             document.getElementById("scan-mode-dialog").classList.add("show");
         };
 
@@ -8619,14 +9604,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             updateScanTitle();
             status.textContent = "";
 
-            // 标注扫描模式：直接查询标注缓存
+            // 标注扫描模式：直接查询标注缓存（全周期，不按 freq 过滤）
             if (_scanMode === "ann") {
                 var sourceLabel = _scanSourceLabel();
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在查询' + sourceLabel + '标注数据...</div>';
-                // 合并多来源股票列表 + 标注缓存
+                // 合并多来源股票列表 + 标注缓存（不传 freq，返回全部周期的标注）
                 Promise.all([
                     _fetchMergedStocks(_scanSources),
-                    fetch("/api/annotations_scan?freq=" + freq)
+                    fetch("/api/annotations_scan")
                 ])
                 .then(function(resps) {
                     return Promise.all([Promise.resolve(resps[0]), resps[1].json()]);
@@ -8644,32 +9629,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         return;
                     }
 
-                    // 构建标注代码集合（key: "code.market"，如 "000001.SH"）
-                    var annotatedCodes = {};
+                    // 构建标注记录数组（按 "code.market" 分组，保留同一股票多个周期的记录）
+                    var annotatedByCode = {};
                     (annData.codes || []).forEach(function(c) {
-                        annotatedCodes[c.code + "." + c.market] = c;
+                        var k = c.code + "." + c.market;
+                        if (!annotatedByCode[k]) annotatedByCode[k] = [];
+                        annotatedByCode[k].push(c);
                     });
+
+                    // 周期→中文标签
+                    var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
 
                     // 交叉匹配：股票列表中有标注的（用复合key匹配，避免000001.SH/000001.SZ冲突）
                     var results = [];
                     stocks.forEach(function(stk) {
                         var market = stk.prefix === "1" ? "SH" : stk.prefix === "0" ? "SZ" : stk.prefix === "2" ? "BJ" : stk.prefix.toUpperCase();
                         var lookupKey = stk.code + "." + market;
-                        var ann = annotatedCodes[lookupKey];
-                        if (ann) {
-                            results.push({
-                                code: stk.code + "." + market,
-                                name: ann.name || (stk.code + "." + market),
-                                freq: ann.freq,
-                                count: ann.count,
-                                annotations: ann.annotations || []
+                        var annList = annotatedByCode[lookupKey];
+                        if (annList) {
+                            // 同一股票可能有多个周期的标注，每个周期一条记录
+                            annList.forEach(function(ann) {
+                                results.push({
+                                    code: stk.code + "." + market,
+                                    name: ann.name || (stk.code + "." + market),
+                                    freq: ann.freq,
+                                    freqLabel: freqLabelMap[ann.freq] || ann.freq,
+                                    count: ann.count,
+                                    annotations: ann.annotations || []
+                                });
                             });
                         }
                     });
 
-                    var html = '<div class="scan-summary">' + sourceLabel + '（合并后<b>' + stocks.length + '</b>只），有标注 <b>' + results.length + '</b> 只</div>';
+                    var html = '<div class="scan-summary">' + sourceLabel + '（合并后<b>' + stocks.length + '</b>只），有标注 <b>' + results.length + '</b> 条</div>';
                     if (results.length === 0) {
-                        html += '<div class="scan-no-result">当前周期下未发现标注股票</div>';
+                        html += '<div class="scan-no-result">未发现标注股票</div>';
                     } else {
                         results.forEach(function(r) {
                             // 取日期最靠近当前日期的标注文字，最多8字
@@ -8692,16 +9686,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     closestText = closest.length > 11 ? closest.substring(0, 11) + "..." : closest;
                                 }
                             }
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + r.freq + '\')" title="点击查看K线图">';
                             html += chkBox(r.code, isLatestBspBuy(r));
                             html += '<span class="scan-col-name">' + r.name + '</span>';
                             html += '<span class="scan-col-code">' + r.code + '</span>';
+                            html += '<span class="scan-col-freq">' + r.freqLabel + '</span>';
                             html += '<span class="scan-col-ann">' + closestText + '</span>';
                             html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy">' + r.count + '条</span></span>';
                             html += '</div>';
                         });
                     }
                     body.innerHTML = html;
+                    updateScanSaveBtn();
                 })
                 .catch(function(err) {
                     _scanRunning = false;
@@ -8803,7 +9799,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 if (r.below_ma120 === true) {
                                     maText = '牛熊线下';
                                 }
-                                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                                html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + currentFreq + '\')" title="点击查看K线图">';
                                 html += chkBox(r.code, isLatestBspBuy(r));
                                 html += '<span class="scan-col-name">' + r.name + '</span>';
                                 html += '<span class="scan-col-code">' + r.code + '</span>';
@@ -8814,6 +9810,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             }
                         }
                         body.innerHTML = html;
+                        updateScanSaveBtn();
                     }
 
                     function checkDone() {
@@ -8993,7 +9990,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     if (r.below_ma120 === true) {
                         maText2 = '牛熊线下';
                     }
-                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\')" title="点击查看K线图">';
+                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + currentFreq + '\')" title="点击查看K线图">';
                     html += chkBox(r.code, isLatestBspBuy(r));
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
@@ -9004,6 +10001,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             body.innerHTML = html;
+            updateScanSaveBtn();
         }
 
         // 生成复选框HTML
@@ -9027,12 +10025,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         // 收集勾选的代码并更新按钮状态
         window.updateScanSaveBtn = function() {
             var checks = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]:checked");
+            var allCbs = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]");
             var btn = document.getElementById("scan-save-btn");
-            btn.disabled = checks.length === 0;
+            btn.disabled = allCbs.length === 0;
             btn.textContent = checks.length > 0 ? "保存到自选(" + checks.length + ")" : "保存到自选";
         };
 
-        // 保存勾选到自选股
+        // 保存勾选到自选股（通达信+同花顺）
         window.saveScanToZxg = function() {
             var checks = document.querySelectorAll("#scan-body .scan-col-chk input[type=checkbox]:checked");
             if (checks.length === 0) return;
@@ -9044,16 +10043,48 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             fetch("/api/zxg_save?codes=" + encodeURIComponent(codes.join(",")))
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                btn.textContent = "已保存" + data.saved + "只";
+                console.log("[THS] 保存响应:", data);
+                // 保存结果用与扫描面板汇总行一致的亮度：普通文字 #a8b2d1，高亮数字/状态 #e94560
+                btn.style.opacity = "1";
+                var parts = [];
+                if (data.tdx_saved > 0) {
+                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#e94560'>" + data.tdx_saved + "</span><span style='color:#a8b2d1'> 只</span>");
+                } else {
+                    parts.push("<span style='color:#a8b2d1'>通达信：</span><span style='color:#e94560'> 已保存</span>");
+                }
+                // 同花顺状态：区分成功/已存在/失败/未配置
+                if (data.ths_saved > 0) {
+                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#e94560'>" + data.ths_saved + "</span><span style='color:#a8b2d1'> 只</span>");
+                } else if (!data.ths_msg || data.ths_msg === "THS_DIR 未配置") {
+                    // 未配置同花顺目录，静默不显示
+                } else if (data.ths_msg === "ok") {
+                    parts.push("<span style='color:#a8b2d1'>同花顺：</span><span style='color:#e94560'> 已保存</span>");
+                } else {
+                    parts.push("<span style='color:#a8b2d1'>同花顺：失败</span>");
+                    console.warn("[THS] 保存失败:", data.ths_msg);
+                }
+                btn.innerHTML = parts.join("&nbsp;&nbsp;&nbsp;");
+                // 如果同花顺保存成功且数量>0，提示可能需要重启同花顺才能看到
+                if (data.ths_saved > 0) {
+                    setTimeout(function() {
+                        alert("同花顺自选股已保存，如界面未显示请重启同花顺。");
+                    }, 100);
+                } else if (data.ths_msg && data.ths_msg !== "ok" && data.ths_msg !== "THS_DIR 未配置") {
+                    setTimeout(function() {
+                        alert("同花顺保存失败: " + data.ths_msg);
+                    }, 100);
+                }
                 setTimeout(function() {
                     btn.textContent = "保存到自选";
                     btn.disabled = false;
+                    btn.style.opacity = "";
                     updateScanSaveBtn();
                 }, 2000);
             })
             .catch(function() {
                 btn.textContent = "保存失败";
                 btn.disabled = false;
+                btn.style.opacity = "";
             });
         };
 
@@ -9065,9 +10096,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             fetch("/api/scan_clear_cache").catch(function() {});
         };
 
-        window.loadScanResult = function(code) {
+        window.loadScanResult = function(code, freq) {
             // 加载该股票到当前页面，不关闭面板
+            // 传入 freq（标注所在周期），确保用正确的周期加载K线，避免标注因周期不匹配而不显示
             document.getElementById("stock-code-input").value = code;
+            if (freq) {
+                lastStockFreq = freq; // 让 loadStock 使用标注所在的周期
+            }
             loadStock();
         };
 
@@ -9078,6 +10113,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
             }
             currentFreq = freq;
+            updateDateInputType();
             updateDualBtn();
             const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             if (isFutures) {
@@ -9123,7 +10159,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         document.getElementById("stock-name").textContent = chartData.meta.name;
                         document.getElementById("stock-code").textContent = chartData.meta.symbol;
                         document.title = "缠论分析 - " + chartData.meta.name;
-                        const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                        const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq);
                         document.getElementById("goto-date-input").value = lastDate;
                         updateWeekday();
                         // 双窗口模式：从 data.sub 获取子级别数据（方案B）
@@ -9168,6 +10204,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         window.gotoDate = function() {
+            // 重置所有日期输入标志位，避免上次手动输入/键盘操作阻塞后续日历点击
+            _dateKeyEnter = false;
+            _dateKeyArrow = false;
+            _dateManualTyping = false;
             if (!chartData) return;
             // 复盘模式下断开实时连接
             disconnectRealtime();
@@ -9175,7 +10215,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!dateStr) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + "&end_date=" + encodeURIComponent(dateStr) + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
+            const apiDate = inputDateToApi(dateStr, freq);
+            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + "&end_date=" + encodeURIComponent(apiDate) + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -9204,13 +10245,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     if (chartData.klines.length < viewCount) {
                         viewOffset = 0;
                     }
-                    // K线不足一屏时右对齐
-                    if (chartData.klines.length < viewCount) {
-                        viewOffset = 0;
-                    }
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
+                    // 复盘后输入框显示实际最后一根K线日期
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
                     resizeCanvas();
                     render();
                     loadAnnotations();
@@ -9226,6 +10267,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false, _dateStepIgnore = false;
+        let _dtPickerTimeBefore = "";  // 记录 datetime-local 打开选择器前的时间部分，用于判断是否选了分钟
         window.handleDateKeydown = function(e) {
             if (e.key === 'Enter') { _dateKeyEnter = true; gotoDate(); return; }
             if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; return; }
@@ -9233,10 +10275,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
         window.handleDateChange = function() {
             if (_dateStepIgnore) return;
+            // 更新星期显示
             updateWeekday();
+            // 键盘/手动输入 → 不触发（Enter 已在 handleDateKeydown 中处理）
             if (_dateKeyEnter) { _dateKeyEnter = false; return; }
             if (_dateKeyArrow) { _dateKeyArrow = false; return; }
             if (_dateManualTyping) { _dateManualTyping = false; return; }
+            // datetime-local：仅当时间部分变化时才触发（用户选了分钟），
+            // 仅选日期时时间部分不变 → 不触发
+            var input = document.getElementById("goto-date-input");
+            if (input.type === "datetime-local") {
+                var v = input.value;
+                var currentTime = v.indexOf("T") >= 0 ? v.split("T")[1] : "";
+                if (currentTime && currentTime === _dtPickerTimeBefore) {
+                    // 时间未变，用户只选了日期 → 不触发
+                    return;
+                }
+            }
             gotoDate();
         };
         window.handleDateBlur = function() {
@@ -9259,7 +10314,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 年份部分超过4位时截断到4位，并尝试将焦点移到月份位置
             const firstDash = val.indexOf('-');
             if (firstDash === -1) {
-                // 值中还没有 '-'，可能是纯年份数字
                 if (val.length > 4) {
                     input.value = val.substring(0, 4);
                     setTimeout(() => { try { input.setSelectionRange(5, 5); } catch(_) {} }, 10);
@@ -9273,39 +10327,75 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             updateWeekday();
+            // 不再在 oninput 中触发 gotoDate，统一由 onchange 处理
+            // datetime-local 的 onchange 在选择器关闭时触发，且仅当时间变化时才执行
         };
 
         window.dateStep = function(delta) {
             if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
             var input = document.getElementById("goto-date-input");
-            var baseDate = input.value.trim();
-            if (!baseDate) return;
-            var parts = baseDate.split('-');
-            if (parts.length !== 3) return;
-            var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-            d.setDate(d.getDate() + delta);
-            // 右箭头：不允许超过今天实际日期
-            if (delta > 0) {
-                var today = new Date();
-                var todayD = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-                if (d > todayD) return;
-            }
-            var yyyy = d.getFullYear();
-            var mm = String(d.getMonth() + 1).padStart(2, '0');
-            var dd = String(d.getDate()).padStart(2, '0');
+            var currentEndDate = inputDateToApi(input.value.trim(), currentFreq);
+            if (!currentEndDate) return;
             _dateStepIgnore = true;
-            input.value = yyyy + '-' + mm + '-' + dd;
-            updateWeekday();
-            gotoDate();
+            fetchStep(currentEndDate, delta);
             _dateStepIgnore = false;
         };
+
+        // 发送 step 请求，后端在 full_records 中偏移定位，全自动处理节假日/调休/跨周
+        function fetchStep(endDate, delta) {
+            var code = chartData.meta.symbol;
+            var freq = currentFreq;
+            var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+                + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
+                + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
+            document.getElementById("goto-date-input").disabled = true;
+            document.getElementById("loading").classList.remove("hidden");
+            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
+            fetch(url)
+                .then(resp => {
+                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
+                    return resp.json();
+                })
+                .then(data => {
+                    chartData = data;
+                    updateRestartBtn();
+                    updateDualBtn();
+                    if (isDualWindow && data.sub) {
+                        dualBottomData = data.sub;
+                        dualBottomViewCount = 377;
+                        dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
+                        if (dualBottomData.klines.length < dualBottomViewCount) dualBottomViewOffset = 0;
+                    }
+                    viewCount = 377;
+                    adjustViewForSavedPoint();
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    if (chartData.klines.length < viewCount) viewOffset = 0;
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    var lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
+                    resizeCanvas();
+                    render();
+                    loadAnnotations();
+                })
+                .catch(err => { alert("箭头跳转失败: " + err.message); })
+                .finally(() => {
+                    document.getElementById("loading").classList.add("hidden");
+                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                    document.getElementById("goto-date-input").disabled = false;
+                });
+        }
 
         window.updateWeekday = function() {
             var input = document.getElementById("goto-date-input");
             var span = document.getElementById("date-weekday");
             var v = input.value.trim();
             if (!v) { span.textContent = ""; return; }
-            var parts = v.split('-');
+            // 提取日期部分（兼容 datetime-local 的 T 分隔符）
+            var datePart = v.split("T")[0];
+            var parts = datePart.split('-');
             if (parts.length !== 3) { span.textContent = ""; return; }
             var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
             var weekNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
@@ -9479,6 +10569,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 fetchFreq = '1m';
             }
             currentFreq = fetchFreq;
+            updateDateInputType();
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
                 connectRealtimeInit(code, fetchFreq);
@@ -9508,6 +10599,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                     currentFreq = returnedFreq;
                     lastStockFreq = currentFreq; // 更新股票周期记忆
+                    updateDateInputType();
                     updateFreqButtonStates(false);
                     viewCount = 377;
                     adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
@@ -9524,13 +10616,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     document.getElementById("btn-fx").classList.toggle("active", showFx);
                     document.getElementById("btn-bi").classList.toggle("active", showBi);
                     document.getElementById("btn-zs").classList.toggle("active", showZs);
-                    document.getElementById("btn-ma").classList.toggle("active", showMa);
                     document.getElementById("btn-seg").classList.toggle("active", showSeg);
                     document.getElementById("btn-bsp").classList.toggle("active", showBsp);
                     document.getElementById("stock-name").textContent = chartData.meta.name;
                     document.getElementById("stock-code").textContent = chartData.meta.symbol;
                     document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = chartData.klines[chartData.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                     document.getElementById("goto-date-input").value = lastDate;
                     updateWeekday();
                     resizeCanvas();
@@ -9672,7 +10763,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         document.getElementById("stock-code").textContent = data.meta.symbol;
                         document.title = "缠论分析 - " + data.meta.name;
                         if (data.klines.length > 0) {
-                            const lastDate = data.klines[data.klines.length - 1].date.slice(0, 10).replace(/\//g, "-");
+                            const lastDate = klineDateToInput(data.klines[data.klines.length - 1].date, currentFreq);
                             document.getElementById("goto-date-input").value = lastDate;
                         }
                         updateWeekday();
@@ -10266,10 +11357,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             .then(function(resp) { return resp.json(); })
             .then(function(data) {
                 if (data.ok) {
+                    // 先本地移除，立即刷新界面
                     annotations = annotations.filter(function(a) {
                         return !(a.date === dateStr && a.text === text);
                     });
                     render();
+                    // 再从服务器重新加载，确保与后端真实状态完全一致
+                    loadAnnotations();
+                } else {
+                    // 后端未找到匹配标注：标注可能存在于其他周期下
+                    // 重新加载以同步本地状态，并提示用户
+                    console.warn("[标注] 后端未找到匹配标注(code=" + code + ", freq=" + freq + ")，重新加载标注数据");
+                    loadAnnotations();
+                    alert("未找到该标注，可能标注存在于其他周期下。\n当前周期: " + freq + "\n请切换到添加标注时使用的周期再试。");
                 }
             })
             .catch(function(err) { console.error("删除标注失败:", err); });
@@ -10329,21 +11429,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const menuDeleteOne = document.getElementById("annotation-menu-delete-one");
             const menuEditOne = document.getElementById("annotation-menu-edit-one");
             const menuAdd = document.getElementById("annotation-menu-add");
+            const menuReplay = document.getElementById("annotation-menu-replay");
             const menuDivider = document.getElementById("annotation-menu-divider");
             const menuDelAll = document.getElementById("annotation-menu-del-all");
+            const menuDivider2 = document.getElementById("annotation-menu-divider2");
+            const menuMirror = document.getElementById("annotation-menu-mirror");
+            // 更新反转视图菜单项文字（显示当前状态）
+            menuMirror.textContent = _isMirrorMode ? "取消反转" : "反转视图";
             if (_annotationClickTarget) {
                 menuDeleteOne.style.display = "block";
                 menuEditOne.style.display = "block";
                 menuAdd.style.display = "none";
+                menuReplay.style.display = "none";
                 menuDivider.style.display = "none";
                 menuDelAll.style.display = "none";
             } else {
                 menuDeleteOne.style.display = "none";
                 menuEditOne.style.display = "none";
                 menuAdd.style.display = "block";
+                menuReplay.style.display = "block";
                 menuDivider.style.display = "block";
                 menuDelAll.style.display = "block";
             }
+            // 反转视图始终显示（与标注操作无关，是全局视图模式）
+            menuDivider2.style.display = "block";
+            menuMirror.style.display = "block";
 
             menu.style.left = e.clientX + "px";
             menu.style.top = e.clientY + "px";
@@ -10369,6 +11479,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             setTimeout(function() {
                 document.getElementById("annotation-dialog-input").focus();
             }, 100);
+        };
+
+        // 复盘到右键点击的K线日期（等价于在复盘日期输入框中输入该日期）
+        window.annotationReplayToHere = function() {
+            document.getElementById("annotation-menu").classList.remove("show");
+            if (!_annotationTargetDate) return;
+            var input = document.getElementById("goto-date-input");
+            var dateStr;
+            if (isIntradayFreq(currentFreq)) {
+                // 日内周期：保留完整时间，转成 datetime-local 格式
+                dateStr = klineDateToInput(_annotationTargetDate, currentFreq);
+            } else {
+                // 日K/周K：只取日期部分
+                dateStr = _annotationTargetDate.slice(0, 10).replace(/\//g, "-");
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+                    alert("无法识别该K线日期: " + _annotationTargetDate);
+                    return;
+                }
+            }
+            // 若与当前日期相同，仍强制重新复盘（避免用户改了其他条件后无响应）
+            input.value = dateStr;
+            if (typeof updateWeekday === "function") updateWeekday();
+            gotoDate();
+        };
+
+        // 切换反转视图模式（K线涨跌互换、MACD红绿互换、缠论结构镜像）
+        // 保底策略：如果反图渲染出错，自动切回正图并从后端重新加载，确保正图永远正确
+        window.toggleMirrorMode = function() {
+            document.getElementById("annotation-menu").classList.remove("show");
+            var prevMode = _isMirrorMode;
+            _isMirrorMode = !_isMirrorMode;
+            try {
+                render();
+            } catch(e) {
+                console.error("[反转视图] 渲染出错，自动恢复正图:", e);
+                _isMirrorMode = false;
+                // chartData 可能被镜像数据污染（_renderChart 中途异常未恢复），
+                // 从后端重新加载（命中缓存仅 0.001s），彻底恢复正图
+                try {
+                    loadStock();
+                } catch(e2) {
+                    console.error("[反转视图] 恢复失败:", e2);
+                }
+            }
         };
 
         // 删除右键点击命中的标注
