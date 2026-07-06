@@ -1268,19 +1268,7 @@ def _get_freq_label(freq):
 
 
 def _make_chan_config():
-    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值。
-
-    配置要点：
-    - bi_fx_check="loss"       分型检查：宽松模式
-    - bi_end_is_peak=False     允许一笔之间有不成笔的更高/低分型
-    - zs_algo="over_seg"       中枢算法：跨段
-    - zs_combine=False         不合并中枢
-    - macd_algo="full_area"    MACD背驰：整根笔面积累加
-    - divergence_rate=0.9      11类买卖点MACD背驰力度
-    - max_bs22_rate=0.9        22类买卖点回撤最大比例
-    - bs11_peak=False          11类买卖点不要求必须是中枢内最高/最低点
-    - bsp33_follow_11=False    33类买卖点不要求跟在11类后面
-    - bsp33a_max_zs_cnt=2      33类买卖点最多跨越2个中枢
+    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值
     """
     from ChanConfig import CChanConfig
     return CChanConfig()
@@ -2200,7 +2188,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     # 2. 截断（end_date 复盘模式）
     if end_date:
         target_dt = None
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
             try:
                 target_dt = datetime.strptime(end_date, fmt)
                 break
@@ -2208,7 +2196,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 continue
         if target_dt is None:
             return {"error": f"无法解析日期: {end_date}"}
-
         # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===
         if step is not None:
             step = int(step)
@@ -2247,13 +2234,13 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     config = _make_chan_config()
 
     # 每次请求重置复盘标记，避免残留前一次状态
-    from BuySellPoint.BSPointList import MyBSPointList
-    MyBSPointList.REPLAY_MODE = False
+    from BuySellPoint.BSPointList import CMyBSPointList
+    CMyBSPointList.REPLAY_MODE = False
 
     try:
         if end_date:
-            from BuySellPoint.BSPointList import MyBSPointList
-            MyBSPointList.REPLAY_MODE = True
+            from BuySellPoint.BSPointList import CMyBSPointList
+            CMyBSPointList.REPLAY_MODE = True
         chan = CChan(
             code=code,
             begin_time=None,
@@ -2278,7 +2265,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
     finally:
         if end_date:
-            MyBSPointList.REPLAY_MODE = False
+            CMyBSPointList.REPLAY_MODE = False
 
     kl_list = chan[_get_kl_type(freq)]
     print(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
@@ -2655,7 +2642,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 缓存 key 约定：
         #   dual_main_{market}_{code}_{freq}_{end_date}  — 主级别缓存（含 CChan 对象）
         #   dual_sub_{market}_{code}_{sub_freq}_{end_date}  — 子级别缓存（独立存储）
-        date_suffix = end_date if end_date else "live"
+        date_suffix = "live"
         main_cache_key = f"dual_main_{market}_{code}_{freq}_{date_suffix}"
         sub_cache_key = f"dual_sub_{market}_{code}_{sub_freq}_{date_suffix}"
         cache_key = None  # 双窗口不使用单窗口的 cache_key，初始化为 None 防止意外引用
@@ -2711,7 +2698,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # ===== 0. 提前解析 end_date（复盘模式需要先知道 target_dt，以便传给前复权） =====
     target_dt = None
     if end_date:
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
             try:
                 target_dt = datetime.strptime(end_date, fmt)
                 break
@@ -2789,7 +2776,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     if end_date:
         # 确定日期格式（用于校正日内周期的时分秒），target_dt 已在前面解析
         matched_fmt = None
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
             try:
                 datetime.strptime(end_date, fmt)
                 matched_fmt = fmt
@@ -2855,7 +2842,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             # 从选点时间开始过滤，不做数量限制
             from datetime import timedelta
             start_dt = None
-            for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+            for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
                 try:
                     start_dt = datetime.strptime(start_time, fmt)
                     break
@@ -2903,14 +2890,14 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         config = _make_chan_config()
 
         # 每次请求重置复盘标记，避免残留前一次状态
-        from BuySellPoint.BSPointList import MyBSPointList
-        MyBSPointList.REPLAY_MODE = False
+        from BuySellPoint.BSPointList import CMyBSPointList
+        CMyBSPointList.REPLAY_MODE = False
 
         try:
             # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
             if end_date:
-                from BuySellPoint.BSPointList import MyBSPointList
-                MyBSPointList.REPLAY_MODE = True
+                from BuySellPoint.BSPointList import CMyBSPointList
+                CMyBSPointList.REPLAY_MODE = True
             _DUAL_LV_LIST = {
                 'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
                 'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
@@ -2953,7 +2940,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
         finally:
             if end_date:
-                MyBSPointList.REPLAY_MODE = False
+                CMyBSPointList.REPLAY_MODE = False
 
     print(f"[stock][耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 
@@ -3812,7 +3799,7 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
     elif suffix_match:
         normalized_code = suffix_match.group(1)
         market = suffix_match.group(2).lower()
-    date_suffix = end_date if end_date else "live"
+    date_suffix = "live"
     cache_key = f"single_{market}_{normalized_code}_{freq}_{date_suffix}"
     qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
     cached = _cache_get(cache_key)
@@ -4470,7 +4457,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 _check_memory_and_protect()
                 t0 = time.time()
                 # 自选股扫描：用 prefix 拼出带市场前缀的代码（如 SH000852）
-                _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ"}
+                # 港股：prefix="hk"，拼出 HK03690，让 _get_stock_market_code 通过 HK 前缀精确识别
+                _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ", "hk": "HK"}
                 market_prefix = _PREFIX_MAP.get(prefix, "")
                 qualified_code = (market_prefix + code) if market_prefix else code
                 market = market_prefix.lower() if market_prefix else ""
@@ -6272,7 +6260,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <label>代码:</label>
                 <div class="stock-input-wrap">
                     <input type="text" id="stock-code-input" placeholder="如 SZZS、GZMT、600519" onkeydown="onInputKeydown(event)" onfocus="clearInput();showHistory()" oninput="onInputChange()" />
-                    <span class="stock-input-clear" id="input-clear" onclick="clearInput()" style="display:none">&times;</span>
+                    <span class="stock-input-clear" id="input-clear" onclick="clearInput();document.getElementById('stock-code-input').focus()" style="display:none">&times;</span>
                 </div>
                 <button onclick="loadStock()">查询</button>
                 <div class="stock-history" id="stock-history"></div>
@@ -6617,8 +6605,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (isIntra) {
                 input.type = "datetime-local";
                 input.step = (currentFreq === "15s") ? "15" : "60";
-                input.min = "1990-01-01T00:00";
-                input.max = "2099-12-31T23:59";
+                // 股票：限定盘中时间 09:00-15:59；期货：全天
+                var isStock = chartData && chartData.meta && chartData.meta.symbol && !isFuturesCode(chartData.meta.symbol);
+                if (isStock) {
+                    input.min = "1990-01-01T09:00";
+                    input.max = "2099-12-31T15:59";
+                } else {
+                    input.min = "1990-01-01T00:00";
+                    input.max = "2099-12-31T23:59";
+                }
                 input.style.width = "180px";
                 if (oldVal && oldVal.indexOf("T") < 0) oldVal = oldVal + "T09:30";
                 if (weekday) weekday.style.right = "38px";
@@ -6632,12 +6627,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 if (weekday) weekday.style.right = "28px";
             }
             input.value = oldVal;
-            // 记录 datetime-local 打开选择器前的时间部分
-            // 用于判断用户是否选了分钟（仅日期变化时时间不变，不触发）
+            // datetime-local：picker 打开时记录原始值
             if (isIntra) {
                 input.onfocus = function() {
                     var v = input.value;
-                    _dtPickerTimeBefore = v.indexOf("T") >= 0 ? v.split("T")[1] : "";
+                    if (!v) return;
+                    _datePickerInteracted = false;
+                    _datePickerInputCount = 0;
+                    _dateFocusOriginal = v;
                 };
             } else {
                 input.onfocus = null;
@@ -8641,7 +8638,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace";
             const area = getChartArea(), volArea = getVolArea();
             const dateY = volArea.y + volArea.h + 28;
-            const minPixelGap = currentFreq === '30m' ? 110 : 70;
+            // 用 measureText 动态计算日期标签实际宽度，避免缩放时写死像素值导致重叠
+            let sampleDate;
+            if (currentFreq === '15s') {
+                sampleDate = getKlineEndTime(klines[0].date, true);
+            } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m' || currentFreq === '60m') {
+                sampleDate = getKlineEndTime(klines[0].date);
+            } else {
+                const dateParts = klines[0].date.split(/[-\/]/);
+                sampleDate = dateParts[0].slice(2) + "/" + dateParts[1] + "/" + dateParts[2];
+            }
+            const textWidth = ctx.measureText(sampleDate).width;
+            const minPixelGap = textWidth + 10;  // 文本宽度 + 10px 间距
             const interval = Math.max(1, Math.ceil(minPixelGap / barStep));
             const indices = [];
             indices.push(0);
@@ -8653,9 +8661,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const x1 = area.x + barStep * indices[j - 1] + barStep / 2 - subPixelOffset;
                 const x2 = area.x + barStep * indices[j] + barStep / 2 - subPixelOffset;
                 if (x2 - x1 < minPixelGap) {
-                    if (indices[j - 1] === 0) indices.splice(j - 1, 1);
-                    else if (indices[j] === klines.length - 1) indices.splice(j - 1, 1);
-                    else indices.splice(j, 1);
+                    if (indices[j - 1] === 0) {
+                        // 保护首标签：移除第二个
+                        indices.splice(j, 1);
+                    } else if (indices[j] === klines.length - 1) {
+                        // 保护尾标签：移除倒数第二个
+                        indices.splice(j - 1, 1);
+                    } else {
+                        indices.splice(j, 1);
+                    }
                 }
             }
             indices.forEach(i => {
@@ -10208,6 +10222,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             _dateKeyEnter = false;
             _dateKeyArrow = false;
             _dateManualTyping = false;
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
             if (!chartData) return;
             // 复盘模式下断开实时连接
             disconnectRealtime();
@@ -10267,7 +10283,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false, _dateStepIgnore = false;
-        let _dtPickerTimeBefore = "";  // 记录 datetime-local 打开选择器前的时间部分，用于判断是否选了分钟
+        let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
+        let _dateFocusOriginal = "";       // onfocus 保存的原始值，用于 blur 恢复
+        let _datePickerInteracted = false; // datetime-local picker 中用户有过交互，blur 时不恢复原始值
+        let _datePickerInputCount = 0;     // datetime-local picker 打开后真实交互次数
         window.handleDateKeydown = function(e) {
             if (e.key === 'Enter') { _dateKeyEnter = true; gotoDate(); return; }
             if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; return; }
@@ -10275,28 +10294,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
         window.handleDateChange = function() {
             if (_dateStepIgnore) return;
-            // 更新星期显示
             updateWeekday();
             // 键盘/手动输入 → 不触发（Enter 已在 handleDateKeydown 中处理）
             if (_dateKeyEnter) { _dateKeyEnter = false; return; }
             if (_dateKeyArrow) { _dateKeyArrow = false; return; }
             if (_dateManualTyping) { _dateManualTyping = false; return; }
-            // datetime-local：仅当时间部分变化时才触发（用户选了分钟），
-            // 仅选日期时时间部分不变 → 不触发
-            var input = document.getElementById("goto-date-input");
-            if (input.type === "datetime-local") {
-                var v = input.value;
-                var currentTime = v.indexOf("T") >= 0 ? v.split("T")[1] : "";
-                if (currentTime && currentTime === _dtPickerTimeBefore) {
-                    // 时间未变，用户只选了日期 → 不触发
-                    return;
-                }
-            }
+            // input 已处理（datetime-local "今天"），change 跳过避免重复
+            if (_dateInputTriggered) { _dateInputTriggered = false; return; }
+            // datetime-local 正常完成（用户选完日期+小时+分钟，picker关闭）→ 触发
+            _dateFocusOriginal = "";
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
             gotoDate();
         };
         window.handleDateBlur = function() {
             const input = document.getElementById("goto-date-input");
-            const v = input.value;
+            var v = input.value;
+            // picker 打开后用户未交互 → 恢复原始值
+            if (_dateFocusOriginal && !_datePickerInteracted) {
+                input.value = _dateFocusOriginal;
+                _dateFocusOriginal = "";
+            }
+            _dateFocusOriginal = "";
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
+            v = input.value;
             if (!v) return;
             const parts = v.split('-');
             if (parts.length === 3) {
@@ -10305,13 +10327,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     input.value = parts[0] + '-' + parts[1] + '-31';
                 }
             }
+            // 股票 datetime-local：小时超出盘中范围(09-15)则自动修正
+            if (input.type === "datetime-local" && chartData && chartData.meta && !isFuturesCode(chartData.meta.symbol)) {
+                var p = input.value.split('T');
+                if (p.length === 2) {
+                    var tp = p[1].split(':');
+                    var hh = parseInt(tp[0], 10);
+                    if (hh < 9) input.value = p[0] + 'T09:' + tp[1];
+                    else if (hh > 15) input.value = p[0] + 'T15:' + tp[1];
+                }
+            }
             updateWeekday();
         };
         window.handleDateInput = function(e) {
             const input = e.target;
             const val = input.value;
             if (!val) return;
-            // 年份部分超过4位时截断到4位，并尝试将焦点移到月份位置
+            // 年份部分超过4位时截断到4位
             const firstDash = val.indexOf('-');
             if (firstDash === -1) {
                 if (val.length > 4) {
@@ -10327,8 +10359,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             updateWeekday();
-            // 不再在 oninput 中触发 gotoDate，统一由 onchange 处理
-            // datetime-local 的 onchange 在选择器关闭时触发，且仅当时间变化时才执行
+            // 键盘输入 → 不在此处理（等待 Enter 或 change）
+            if (_dateManualTyping || _dateKeyEnter || _dateKeyArrow) return;
+            // datetime-local 日历交互：
+            // - 用户选了日期/时间 → 标记 _datePickerInteracted，blur 时不再恢复原始值
+            // - 第1次交互，日期=今天 且 时间≠原始时间 → "今天"按钮，立即触发
+            // - 其他情况：不触发，等 change（正常完成选日期+小时+分钟后触发）
+            if (input.type === "datetime-local" && _dateFocusOriginal) {
+                _datePickerInteracted = true;
+                _datePickerInputCount++;
+                if (_datePickerInputCount === 1) {
+                    var curParts = val.split('T');
+                    var origParts = _dateFocusOriginal.split('T');
+                    var todayStr = new Date().toISOString().slice(0, 10);
+                    if (curParts.length === 2 && origParts.length === 2 && curParts[0] === todayStr && curParts[1] !== origParts[1]) {
+                        // "今天"按钮：日期=今天 且 时间变了 → 设为 23:59，立即触发
+                        input.value = curParts[0] + 'T23:59';
+                        _dateFocusOriginal = "";
+                        _datePickerInteracted = false;
+                        _datePickerInputCount = 0;
+                        _dateInputTriggered = true;
+                        gotoDate();
+                        return;
+                    }
+                }
+            }
         };
 
         window.dateStep = function(delta) {
@@ -10430,7 +10485,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         window.clearInput = function() {
             const input = document.getElementById("stock-code-input");
             input.value = "";
-            input.focus();
             document.getElementById("input-clear").style.display = "none";
         };
         let searchTimer = null;

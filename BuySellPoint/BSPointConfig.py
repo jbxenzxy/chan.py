@@ -62,6 +62,7 @@ class CPointConfig:
             "area": MACD_ALGO.AREA,
             "peak": MACD_ALGO.PEAK,
             "full_area": MACD_ALGO.FULL_AREA,
+            "full_area_ext": MACD_ALGO.FULL_AREA_EXT,
             "diff": MACD_ALGO.DIFF,
             "slope": MACD_ALGO.SLOPE,
             "amp": MACD_ALGO.AMP,

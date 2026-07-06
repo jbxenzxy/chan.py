@@ -117,6 +117,7 @@ class MACD_ALGO(Enum):
     AREA = auto()
     PEAK = auto()
     FULL_AREA = auto()
+    FULL_AREA_EXT = auto()
     DIFF = auto()
     SLOPE = auto()
     AMP = auto()

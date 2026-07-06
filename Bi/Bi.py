@@ -193,6 +193,8 @@ class CBi:
             return self.Cal_MACD_peak()
         elif macd_algo == MACD_ALGO.FULL_AREA:
             return self.Cal_MACD_area()
+        elif macd_algo == MACD_ALGO.FULL_AREA_EXT:
+            return self.Cal_MACD_area_ext()
         elif macd_algo == MACD_ALGO.DIFF:
             return self.Cal_MACD_diff()
         elif macd_algo == MACD_ALGO.SLOPE:
@@ -233,6 +235,55 @@ class CBi:
                 if (self.is_down() and klu.macd.macd < 0) or (self.is_up() and klu.macd.macd > 0):
                     _s += abs(klu.macd.macd)
         return _s
+
+    @make_cache
+    def Cal_MACD_area_ext(self):
+        """
+        扩展的 MACD 全程面积算法：
+        - 向下笔：G(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
+        - 向上笔：G(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
+        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area。
+        """
+        _s = 1e-7
+        begin_klu = self.get_begin_klu()
+        end_klu = self.get_end_klu()
+
+        same_dir_sum = 0.0             # G: 同向柱子绝对值之和
+        counter_bars: List[float] = []  # 反向柱子，按时间顺序排列
+
+        for klc in self.klc_lst:
+            for klu in klc.lst:
+                if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
+                    continue
+                if self.is_down():
+                    if klu.macd.macd < 0:       # 绿柱，同向
+                        same_dir_sum += abs(klu.macd.macd)
+                    else:                         # 红柱，反向
+                        counter_bars.append(klu.macd.macd)
+                else:  # 向上笔
+                    if klu.macd.macd > 0:        # 红柱，同向
+                        same_dir_sum += abs(klu.macd.macd)
+                    else:                         # 绿柱，反向
+                        counter_bars.append(klu.macd.macd)
+
+        if not counter_bars:
+            return same_dir_sum + _s
+
+        # 找峰值：向下笔取最大值，向上笔取最小值（绝对值最大）
+        peak_val = max(counter_bars) if self.is_down() else min(counter_bars)
+
+        # 从后往前找最后一个等于峰值的索引
+        peak_idx = len(counter_bars) - 1
+        for i in range(len(counter_bars) - 1, -1, -1):
+            if counter_bars[i] == peak_val:
+                peak_idx = i
+                break
+
+        count = len(counter_bars) - peak_idx   # 峰到末尾的柱子数
+        Y = sum(abs(counter_bars[j]) for j in range(peak_idx, len(counter_bars)))
+        X = abs(peak_val) * count
+
+        return same_dir_sum + (X - Y) + _s
 
     @make_cache
     def Cal_MACD_peak(self):
