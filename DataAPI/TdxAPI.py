@@ -27,6 +27,23 @@ from Common.CEnum import AUTYPE, KL_TYPE, DATA_FIELD
 from DataAPI.CommonStockAPI import CCommonStockApi
 from KLine.KLine_Unit import CKLine_Unit
 
+# 通达信研究行业 X代码↔881代码映射表（从官方PDF 3.6节提取）
+# 使用显式路径加载，避免 Python import 缓存问题
+_TDXHY_X_TO_881 = {}
+_TDXHY_881_TO_X = {}
+_mapping_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdxhy_mapping_data.py")
+if os.path.exists(_mapping_path):
+    try:
+        _mapping_ns = {}
+        exec(open(_mapping_path, encoding="utf-8").read(), _mapping_ns)
+        _TDXHY_X_TO_881 = _mapping_ns.get("_TDXHY_X_TO_881", {})
+        _TDXHY_881_TO_X = _mapping_ns.get("_TDXHY_881_TO_X", {})
+        print(f"[TdxAPI] 加载映射表: X→881={len(_TDXHY_X_TO_881)}条, 881→X={len(_TDXHY_881_TO_X)}条 (路径: {_mapping_path})")
+    except Exception as e:
+        print(f"[TdxAPI] ⚠️ tdxhy_mapping_data 加载失败: {e}")
+else:
+    print(f"[TdxAPI] ⚠️ tdxhy_mapping_data.py 不存在: {_mapping_path}")
+
 
 # ============================================================
 # 模块级配置（由 my_chan_main.py 调用 set_tdx_config() 设置）
@@ -47,9 +64,9 @@ def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
 
 # pytdx 行情服务器地址列表（用于前复权 xdxr 数据获取）
 PYTDX_SERVERS = [
+    ('115.238.90.165', 7709),   # 最快的服务器，放在第一位
     ('119.147.212.81', 7709),
     ('120.76.152.2', 7709),
-    ('115.238.90.165', 7709),
     ('180.153.18.170', 7709),
     ('218.75.126.9', 7709),
     ('60.12.136.250', 7709),
@@ -623,107 +640,111 @@ def _normalize_xdxr_df(df):
     return df
 
 
-# 策略1: mootdx Quotes 网络接口（优先）
-def _get_xdxr_mootdx(market, code):
-    """通过 mootdx Quotes 网络接口获取除权除息数据"""
+# ============================================================
+# xdxr 网络连接管理（连接复用 + 线程锁，防止多线程并发冲突）
+# ============================================================
+import threading as _threading
+_xdxr_lock = _threading.Lock()
+
+# mootdx Quotes 单例连接（建一次，所有股票复用）
+_mootdx_client = None
+_mootdx_client_ready = False
+
+def _ensure_mootdx_client():
+    """确保 mootdx Quotes 客户端已连接，返回 client 或 None。线程安全。"""
+    global _mootdx_client, _mootdx_client_ready
+    if _mootdx_client_ready and _mootdx_client is not None:
+        return _mootdx_client
     try:
         from mootdx.quotes import Quotes
-    except ImportError:
+        _mootdx_client = Quotes.factory(market='std', bestip=False, timeout=10)
+        _mootdx_client_ready = True
+        return _mootdx_client
+    except Exception:
+        _mootdx_client_ready = False
+        _mootdx_client = None
         return None
 
-    import threading as _threading
 
-    # 用 bestip=False 绕过 pytdx 的 select_best_ip（它可能因版本冲突卡死）
-    # 10s 超时兜底，防止 factory() 内部阻塞
-    for bestip, timeout_val in [(False, 10)]:
-        result = [None]
-
-        def _fetch():
-            try:
-                client = Quotes.factory(market='std', bestip=bestip, timeout=timeout_val)
-                df = client.xdxr(symbol=code)
-                if df is not None and len(df) > 0:
-                    result[0] = _normalize_xdxr_df(df)
-            except Exception:
-                pass
-
-        t = _threading.Thread(target=_fetch, daemon=True)
-        t.start()
-        t.join(timeout=timeout_val + 5)
-        if result[0] is not None:
-            return result[0]
-
+def _get_xdxr_mootdx(market, code):
+    """通过 mootdx Quotes 单例连接获取除权除息数据。在锁内调用。"""
+    client = _ensure_mootdx_client()
+    if client is None:
+        return None
+    try:
+        df = client.xdxr(symbol=code)
+        if df is not None and len(df) > 0:
+            return _normalize_xdxr_df(df)
+    except Exception:
+        _mootdx_client_ready = False
+        _mootdx_client = None
     return None
 
 
-# 策略2: pytdx 网络接口（自动测速，备用）
+# pytdx TdxHq_API 单例连接（建一次，所有股票复用）
+_pytdx_api = None
+_pytdx_api_ready = False
+
+def _ensure_pytdx_api():
+    """确保 pytdx TdxHq_API 已连接，返回 api 或 None。线程安全。"""
+    global _pytdx_api, _pytdx_api_ready
+    if _pytdx_api_ready and _pytdx_api is not None:
+        return _pytdx_api
+    try:
+        from pytdx.hq import TdxHq_API
+        host, port = _find_pytdx_server()
+        if not host:
+            return None
+        _pytdx_api = TdxHq_API()
+        if not _pytdx_api.connect(host, port):
+            _pytdx_api = None
+            _pytdx_api_ready = False
+            return None
+        _pytdx_api_ready = True
+        return _pytdx_api
+    except Exception:
+        _pytdx_api = None
+        _pytdx_api_ready = False
+        return None
+
+
 def _find_pytdx_server():
-    """找到可用的 pytdx 服务器，抑制版本冲突警告"""
-    # 抑制 pytdx 内部版本冲突的日志刷屏
-    for name in ['pytdx', 'mootdx']:
-        logger = logging.getLogger(name)
-        logger.setLevel(logging.ERROR)
-
-    import threading as _threading
+    """找到可用的 pytdx 服务器（内部用 daemon 线程做超时探测）"""
     result = [None]
-
     def _select():
         try:
             from pytdx.util.best_ip import select_best_ip
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                result[0] = select_best_ip()
+            result[0] = select_best_ip()
         except Exception:
             pass
-
     t = _threading.Thread(target=_select, daemon=True)
     t.start()
     t.join(timeout=10)
-
     if result[0] and isinstance(result[0], dict) and 'ip' in result[0]:
-        host = result[0]['ip']
-        port = result[0].get('port', 7709)
-        return host, port
-
-    # TCP 扫描列表
+        return result[0]['ip'], result[0].get('port', 7709)
     for host, port in PYTDX_SERVERS:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(1.5)
-            result = sock.connect_ex((host, port))
+            _r = sock.connect_ex((host, port))
             sock.close()
-            if result == 0:
+            if _r == 0:
                 return host, port
         except Exception:
             continue
-
     return None, None
 
 
 def _get_xdxr_pytdx(market, code):
-    """通过 pytdx 网络接口获取除权除息数据"""
-    try:
-        from pytdx.hq import TdxHq_API
-    except ImportError:
+    """通过 pytdx 单例连接获取除权除息数据。在锁内调用。"""
+    api = _ensure_pytdx_api()
+    if api is None:
         return None
-
-    host, port = _find_pytdx_server()
-    if not host:
-        return None
-
     mkt = 1 if market.lower() == 'sh' else 0
-
     try:
-        api = TdxHq_API()
-        if not api.connect(host, port):
-            return None
-
         data = api.get_xdxr_info(mkt, code)
-        api.disconnect()
-
         if not data:
             return None
-
         rows = []
         for item in data:
             rows.append({
@@ -738,22 +759,19 @@ def _get_xdxr_pytdx(market, code):
             })
         df = pd.DataFrame(rows)
         return _normalize_xdxr_df(df)
-
     except Exception:
-        try:
-            api.disconnect()
-        except Exception:
-            pass
+        _pytdx_api_ready = False
+        _pytdx_api = None
         return None
 
 
 # xdxr 独立缓存：key=(market, code)，同一股票跨周期不重复拉取
-# 除权除息是历史数据（已发生的事件不会变），永久有效，冷启动时自然刷新
 _xdxr_cache = {}
 
 def get_xdxr_data(market, code):
     """
     获取指定股票的除权除息数据。
+    线程安全：多线程并发时，网络请求串行化，避免 pytdx socket 竞争。
 
     优先级：
       1. 缓存（内存命中，跳过网络请求）
@@ -765,29 +783,26 @@ def get_xdxr_data(market, code):
     其中 fenhong/songgu/zhuanzeng/peigu 均为"每10股"单位。
     返回 None 表示无除权除息数据或所有方法均失败。
     """
-    # 仅沪深市场有 xdxr 数据源（mootdx/pytdx 不支持港股 ds）
     if market.lower() not in ('sh', 'sz'):
         return None
 
     cache_key = (market, code)
-    if cache_key in _xdxr_cache:
-        return _xdxr_cache[cache_key]
+    with _xdxr_lock:
+        if cache_key in _xdxr_cache:
+            return _xdxr_cache[cache_key]
 
-    # 策略1: mootdx（优先）
-    df = _get_xdxr_mootdx(market, code)
-    if df is not None and len(df) > 0:
-        _xdxr_cache[cache_key] = df
-        return df
+        df = _get_xdxr_mootdx(market, code)
+        if df is not None and len(df) > 0:
+            _xdxr_cache[cache_key] = df
+            return df
 
-    # 策略2: pytdx（备用）
-    df = _get_xdxr_pytdx(market, code)
-    if df is not None and len(df) > 0:
-        _xdxr_cache[cache_key] = df
-        return df
+        df = _get_xdxr_pytdx(market, code)
+        if df is not None and len(df) > 0:
+            _xdxr_cache[cache_key] = df
+            return df
 
-    # 无除权数据也缓存 None，避免重复重试
-    _xdxr_cache[cache_key] = None
-    return None
+        _xdxr_cache[cache_key] = None
+        return None
 
 
 def get_float_shares_from_xdxr(market, code):
@@ -1187,6 +1202,14 @@ def _get_blocknew_dir():
     return os.path.join(os.path.dirname(vipdoc), "T0002", "blocknew")
 
 
+def _get_hq_cache_dir():
+    """从 vipdoc_dir 推导 T0002/hq_cache 目录"""
+    vipdoc = _tdx_config.get("vipdoc_dir", "")
+    if not vipdoc:
+        return ""
+    return os.path.join(os.path.dirname(vipdoc), "T0002", "hq_cache")
+
+
 def get_blk_path(blk_name):
     """
     获取板块文件路径。
@@ -1288,6 +1311,562 @@ def read_zz500_stocks():
     return read_blk_file(path)
 
 
+# ============================================================
+# 板块成分股缓存（网络下载，全量缓存，支持所有88指数）
+# ============================================================
+_BLOCK_GN_CACHE = None       # dict: sector_name → [{"code","prefix","name"}, ...]
+_BLOCK_GN_CACHE_LOADED = False
+
+
+def _download_block_file(api, host, port, block_file):
+    """通过已连接的 PyTDX API 下载单个板块文件并返回原始字节"""
+    meta = api.get_block_info_meta(block_file)
+    if not meta or 'size' not in meta or meta['size'] == 0:
+        return None
+
+    total_size = meta['size']
+
+    ONE_CHUNK = 0x7530
+    chunks = (total_size + ONE_CHUNK - 1) // ONE_CHUNK
+    raw_data = bytearray()
+
+    for seg in range(chunks):
+        start = seg * ONE_CHUNK
+        chunk_size = min(ONE_CHUNK, total_size - start)
+        piece = api.get_block_info(block_file, start, chunk_size)
+        if piece is None or len(piece) == 0:
+            return None
+        raw_data.extend(piece)
+
+    if len(raw_data) >= total_size:
+        return raw_data
+    elif len(raw_data) > 386:
+        return raw_data
+    return None
+
+
+def _download_block_gn_from_network():
+    """
+    通过 PyTDX 网络接口下载全量板块成分股数据。
+    
+    下载 block_hy(二级行业) + block_zs(指数) + block_gn(概念) + block_fg(风格) 四个文件并合并。
+    注意：block.dat 只有精选指数（约100条），不含行业板块，不能替代上述文件。
+    
+    磁盘缓存逻辑：
+      1. block_cache_dir 即 _tdx_config['vipdoc_dir']（和 stock_names.json 同目录）
+      2. 每个 block_*.dat 先尝试读本地文件，存在直接解析
+      3. 本地不存在才从服务器下载，下载后写入本地文件
+      4. 结果缓存在全局 _BLOCK_GN_CACHE，下次程序启动再走磁盘缓存
+
+    返回 dict: {sector_name: [{"code": "000001", "prefix": "0", "name": "000001"}, ...], ...}
+    """
+    global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
+    if _BLOCK_GN_CACHE_LOADED:
+        return _BLOCK_GN_CACHE or {}
+
+    result = {}
+
+    # 本地缓存目录 = T0002/hq_cache/（和 tdxzs.cfg / tdxhy.cfg 同目录）
+    vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
+    if vipdoc_dir:
+        block_cache_dir = os.path.join(os.path.dirname(vipdoc_dir), "T0002", "hq_cache")
+    else:
+        block_cache_dir = None
+
+    try:
+        from pytdx.hq import TdxHq_API
+    except ImportError:
+        _BLOCK_GN_CACHE_LOADED = True
+        return {}
+
+    # 通达信服务器提供的板块文件（通过网络 get_block_info 协议下载）
+    # block_zs.dat: 精选指数板块（沪深300、中证500等）
+    # block_gn.dat: 概念板块（8805xx，锂电池、人工智能等）
+    # block_fg.dat: 风格板块（8808xx，大盘股、小盘股等）
+    # 注意：block_hy.dat（二级行业，含880491"半导体"）不在服务器上，
+    #       它只存在于本地 T0002/hq_cache/ 目录，格式也不同（480字节/条 vs 2800字节/条）
+    candidate_files = [
+        "block_zs.dat",
+        "block_gn.dat",
+        "block_fg.dat",
+        "block.dat",
+    ]
+
+    result = {}
+    need_download = []
+
+    # Step 1: 先读本地文件
+    if block_cache_dir:
+        for bf in candidate_files:
+            local_path = os.path.join(block_cache_dir, bf)
+            if not os.path.exists(local_path):
+                need_download.append(bf)
+                continue
+            try:
+                with open(local_path, "rb") as f:
+                    raw = f.read()
+                parsed = _parse_raw_block_gn(raw, bf)
+                if parsed:
+                    print(f"[板块成分股] ✅ 从本地缓存读取 {bf}: {len(parsed)} 个板块")
+                    result.update(parsed)
+            except Exception as e:
+                print(f"[板块成分股] ⚠️ 本地缓存 {bf} 读取失败，尝试从网络下载: {e}")
+                need_download.append(bf)
+    else:
+        # 没有配置通达信目录，全部从网络下载
+        need_download = candidate_files[:]
+
+    servers = PYTDX_SERVERS[:]
+
+    if need_download:
+        print(f"[板块成分股] 需从网络下载: {need_download}")
+    else:
+        print(f"[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
+
+    for host, port in servers:
+        if not need_download:
+            break
+        try:
+            api = TdxHq_API(multithread=True)
+            if not api.connect(host, port):
+                continue
+
+            # Step 1: 快速探测哪些文件存在（只取 meta，不下载）
+            existing_files = []
+            for bf in need_download:
+                try:
+                    meta = api.get_block_info_meta(bf)
+                    if meta and meta.get('size', 0) > 0:
+                        existing_files.append(bf)
+                except Exception:
+                    pass
+            if not existing_files:
+                api.disconnect()
+                continue
+
+            # Step 2: 下载并解析，写入本地缓存
+            for bf in existing_files:
+                raw = _download_block_file(api, host, port, bf)
+                if raw and len(raw) > 386:
+                    parsed = _parse_raw_block_gn(raw, bf)
+                    if parsed:
+                        result.update(parsed)
+                        # 写入本地缓存文件
+                        if block_cache_dir:
+                            try:
+                                os.makedirs(block_cache_dir, exist_ok=True)
+                                local_path = os.path.join(block_cache_dir, bf)
+                                with open(local_path, "wb") as f:
+                                    f.write(raw)
+                            except Exception as e:
+                                pass
+                        need_download.remove(bf)
+
+            api.disconnect()
+            if not need_download:
+                break
+
+        except TypeError as e:
+            import traceback
+            traceback.print_exc()
+            continue
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            continue
+
+    if not result:
+        print("[板块成分股] 所有服务器均下载失败，板块数据不可用")
+        _BLOCK_GN_CACHE_LOADED = True
+        return {}
+
+    _BLOCK_GN_CACHE = result
+    _BLOCK_GN_CACHE_LOADED = True
+    print(f"[板块成分股] 解析完成，共 {len(result)} 个板块有成分股数据")
+    return result
+
+
+def refresh_block_files():
+    """
+    公开函数：强制刷新板块文件，下载 block_zs.dat、block_gn.dat、block_fg.dat、block.dat 到 hq_cache 目录。
+    
+    两种使用场景：
+      1. 用户主动点击刷新按钮 -> 重置缓存，删除旧文件，重新下载
+      2. 代码中用到时自动触发 -> _download_block_gn_from_network() 内部已处理（本地不存在才下载）
+    
+    下载后文件存放在 T0002/hq_cache/ 目录，和 tdxzs.cfg / tdxhy.cfg 同目录。
+    """
+    global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
+
+    # 获取 hq_cache 目录
+    vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
+    if vipdoc_dir:
+        block_cache_dir = os.path.join(os.path.dirname(vipdoc_dir), "T0002", "hq_cache")
+    else:
+        block_cache_dir = None
+
+    if not block_cache_dir:
+        print("[板块刷新] 无法确定 hq_cache 目录，跳过板块文件下载")
+        return
+
+    # 确保目录存在
+    os.makedirs(block_cache_dir, exist_ok=True)
+
+    # 删除旧文件，确保下载最新数据
+    block_files = ["block_zs.dat", "block_gn.dat", "block_fg.dat", "block.dat"]
+    deleted_count = 0
+    for bf in block_files:
+        local_path = os.path.join(block_cache_dir, bf)
+        if os.path.exists(local_path):
+            try:
+                os.remove(local_path)
+                deleted_count += 1
+            except Exception as e:
+                print(f"[板块刷新] 删除 {bf} 失败: {e}")
+
+    # 重置缓存标志，触发重新下载
+    _BLOCK_GN_CACHE = None
+    _BLOCK_GN_CACHE_LOADED = False
+
+    # 调用下载函数（会自动下载并保存到 hq_cache）
+    _download_block_gn_from_network()
+
+
+def _parse_raw_block_gn(data, block_file="block_gn.dat"):
+    """
+    解析 block_*.dat 二进制数据（完全参考 pytdx BlockReader 源码）。
+    block_gn.dat / block_zs.dat / block_fg.dat 格式相同。
+    格式：384字节文件头 + 2字节板块数 + N条板块记录
+
+    每条板块记录：
+      9字节名称(GBK) + 2字节成分股数(uint16) + 2字节类别(uint16)
+      + 成分股列表(每只7字节，UTF-8编码，格式如 "0000001" = 市场前缀+6位代码)
+    每条记录固定占 2800 字节（从成分股列表起始位置算起，包含股票代码数据 + 尾部填充）
+    """
+    import struct
+    result = {}
+
+    if len(data) < 386:
+        return result
+
+    # 跳过384字节文件头，读取板块数量
+    pos = 384
+    block_count = struct.unpack_from("<H", data, pos)[0]
+    pos += 2
+
+    for i in range(block_count):
+        if pos + 13 > len(data):
+            break
+
+        # 板块名称（9字节 GBK）
+        raw_name = data[pos:pos + 9]
+        pos += 9
+        block_name = raw_name.decode("gbk", errors="ignore").rstrip("\x00")
+
+        # 成分股数量 + 板块类别（各2字节 uint16 LE）
+        stock_count, block_type = struct.unpack_from("<HH", data, pos)
+        pos += 4
+
+        # 记录成分股列表起始位置（用于后续跳转到下一条记录）
+        block_stock_begin = pos
+
+        # 调试打印：只保留 block_count 总数打印，不打印单个板块（已移除详细输出）
+
+        if block_name and stock_count > 0 and stock_count < 10000:
+            stocks = []
+            for j in range(stock_count):
+                if pos + 7 > len(data):
+                    break
+                raw_stock = data[pos:pos + 7]
+                pos += 7
+                # 关键：使用 UTF-8 解码（与 pytdx BlockReader 一致）
+                one_code = raw_stock.decode("utf-8", errors="ignore").rstrip("\x00")
+                # block_*.dat 中存储的是 6 位纯数字股票代码（如 "600028"）
+                if len(one_code) == 6 and one_code.isdigit():
+                    # 根据代码规则推断市场前缀
+                    first = one_code[0]
+                    if first in "689":
+                        prefix = "1"   # 沪市（含主板、科创板）
+                    elif first in "03":
+                        prefix = "0"   # 深市（含主板、创业板）
+                    elif first in "24":
+                        prefix = "2"   # 北交所/新三板
+                    else:
+                        prefix = "1"   # 默认沪市
+                    stocks.append({
+                        "code": one_code,
+                        "prefix": prefix,
+                        "name": one_code,
+                    })
+
+            if stocks:
+                result[block_name] = stocks
+
+        # 跳到下一个板块：从 block_stock_begin 起跳过 2800 字节
+        # （参考 pytdx BlockReader: pos = block_stock_begin + 2800）
+        pos = block_stock_begin + 2800
+
+    return result
+
+
+def get_index_stocks(sector_code):
+    """
+    根据通达信板块指数代码，获取其成分股列表。
+
+    支持的类型：
+    - 881xxx: 研究行业(新版) → 本地 tdxhy.cfg
+    - 880xxx: 概念/风格板块 → tdxzs.cfg + block_*.dat
+    - 000xxx/399xxx: 标准指数 → AKShare (中证指数公司)
+
+    返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
+    """
+    print(f"\n[板块成分股] 查询 sector_code={sector_code}")
+
+    # Step 1: 881xxx（研究行业新版）→ 本地 tdxhy.cfg
+    if sector_code.startswith("881"):
+        return _read_tdxhy_sector_stocks(sector_code)
+
+    # Step 2: 标准指数（000xxx / 399xxx 等）→ AKShare 统一获取
+    if not sector_code.startswith("88"):
+        return _read_standard_index_stocks(sector_code)
+
+    # Step 3: 880xxx（概念/风格板块）→ tdxzs.cfg + block_*.dat
+    hq_cache = _get_hq_cache_dir()
+    sector_name = None
+    if hq_cache:
+        tdxzs_file = os.path.join(hq_cache, "tdxzs.cfg")
+        if os.path.exists(tdxzs_file):
+            try:
+                with open(tdxzs_file, "r", encoding="gbk", errors="ignore") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        parts = line.split("|")
+                        if len(parts) >= 2:
+                            name = parts[0].strip()
+                            code = parts[1].strip()
+                            if "." in code:
+                                code = code.split(".")[0]
+                            if code == sector_code:
+                                sector_name = name
+                                break
+            except Exception as e:
+                print(f"[板块成分股] 读取tdxzs.cfg失败: {e}")
+
+    if not sector_name:
+        print(f"[板块成分股] 未在tdxzs.cfg中找到板块代码 {sector_code}")
+        return []
+
+    # 8803xx-8804xx（旧版行业）无成分股数据
+    if sector_code.startswith("8803") or sector_code.startswith("8804"):
+        print(f"[板块成分股] 旧版行业代码 {sector_code}，无成分股数据。请使用 881 研究行业代码。")
+        return []
+
+    # 从 block_*.dat 缓存中查找
+    cache = _download_block_gn_from_network()
+    stocks = cache.get(sector_name, [])
+
+    if stocks:
+        print(f"[板块成分股] ✅ 从网络缓存找到 '{sector_name}' 共 {len(stocks)} 只成分股")
+    else:
+        print(f"[板块成分股] ❌ 网络缓存中未找到板块 '{sector_name}'")
+
+    return stocks
+
+
+def _read_standard_index_stocks(sector_code):
+    """
+    通过 AKShare index_stock_cons_csindex 获取标准指数（000xxx / 399xxx）成分股。
+    数据来源：中证指数官网，数据权威无重复。
+    """
+    import time as _time
+    print(f"[板块成分股-DEBUG] _read_standard_index_stocks('{sector_code}') 开始 @ {_time.strftime('%H:%M:%S')}")
+    try:
+        import akshare as ak
+        print(f"[板块成分股-DEBUG] akshare 导入成功, 版本={getattr(ak, '__version__', '未知')}")
+    except ImportError:
+        print(f"[板块成分股] AKShare 未安装，无法获取标准指数成分股")
+        return []
+
+    try:
+        print(f"[板块成分股-DEBUG] 调用 ak.index_stock_cons_csindex(symbol='{sector_code}') ...")
+        t0 = _time.time()
+        df = ak.index_stock_cons_csindex(symbol=sector_code)
+        t1 = _time.time()
+        if df is None or df.empty:
+            print(f"[板块成分股] AKShare(csindex) 返回空数据: {sector_code}")
+            return []
+        print(f"[板块成分股-DEBUG] csindex 耗时 {t1-t0:.2f}s, shape={df.shape}, columns={list(df.columns)[:5]}")
+
+        stocks = []
+        code_col = None
+        for col in ["成分券代码", "品种代码", "代码", "con_code", "symbol", "stock_code"]:
+            if col in df.columns:
+                code_col = col
+                break
+
+        if code_col is None:
+            print(f"[板块成分股] AKShare 返回未知列名: {list(df.columns)}")
+            return []
+        print(f"[板块成分股-DEBUG] 识别到代码列: '{code_col}'")
+
+        seen_codes = set()
+        dup_codes = []
+        for _, row in df.iterrows():
+            code = str(row[code_col]).strip()
+            if "." in code:
+                code = code.split(".")[0]
+            if len(code) == 6 and code.isdigit():
+                if code in seen_codes:
+                    dup_codes.append(code)
+                    continue
+                seen_codes.add(code)
+                first = code[0]
+                if first in "689":
+                    prefix = "1"
+                elif first in "03":
+                    prefix = "0"
+                elif first in "24":
+                    prefix = "2"
+                else:
+                    prefix = "1"
+                stocks.append({"code": code, "prefix": prefix, "name": code})
+
+        if dup_codes:
+            print(f"[板块成分股-DEBUG] 发现重复成分股 {len(dup_codes)} 只: {dup_codes[:10]}{'...' if len(dup_codes) > 10 else ''}")
+        print(f"[板块成分股] ✅ AKShare(csindex) 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+        return stocks
+
+    except Exception as e:
+        print(f"[板块成分股] AKShare(csindex) 获取 {sector_code} 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
+# ============================================================
+# 研究行业成分股（新版，881xxx代码，从本地 tdxhy.cfg 读取）
+# ============================================================
+_TDXHY_CACHE = None       # dict: X_code → [{"code","prefix","name"}, ...]
+_TDXHY_CACHE_LOADED = False
+
+
+def _parse_tdxhy_cfg():
+    """
+    解析本地 tdxhy.cfg 文件，构建 X代码 → 成分股映射。
+    
+    tdxhy.cfg 格式：market|stock_code|old_T_code|||new_X_code
+    例如：0|000001|T1001|||X500102
+    
+    返回：{X_code: [{"code","prefix","name"}, ...]}
+    """
+    global _TDXHY_CACHE, _TDXHY_CACHE_LOADED
+    if _TDXHY_CACHE_LOADED:
+        return _TDXHY_CACHE or {}
+
+    _TDXHY_CACHE_LOADED = True
+    result = {}
+
+    hq_cache = _get_hq_cache_dir()
+    if not hq_cache:
+        print("[板块成分股] hq_cache 目录不存在，无法读取 tdxhy.cfg")
+        _TDXHY_CACHE = result
+        return result
+
+    tdxhy_path = os.path.join(hq_cache, "tdxhy.cfg")
+    if not os.path.exists(tdxhy_path):
+        print(f"[板块成分股] tdxhy.cfg 不存在: {tdxhy_path}")
+        _TDXHY_CACHE = result
+        return result
+
+    try:
+        with open(tdxhy_path, "r", encoding="gbk", errors="ignore") as f:
+            lines = f.readlines()
+    except Exception as e:
+        print(f"[板块成分股] 读取 tdxhy.cfg 失败: {e}")
+        _TDXHY_CACHE = result
+        return result
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("|")
+        if len(parts) < 6:
+            continue
+        market = parts[0]
+        stock_code = parts[1]
+        x_code = parts[5].strip()
+        if not x_code:
+            continue
+
+        # 市场前缀映射
+        prefix_map = {"0": "0", "1": "1", "2": "2"}
+        prefix = prefix_map.get(market, market)
+
+        if x_code not in result:
+            result[x_code] = []
+        result[x_code].append({"code": stock_code, "prefix": prefix, "name": stock_code})
+
+    _TDXHY_CACHE = result
+    print(f"[板块成分股] 解析 tdxhy.cfg 完成: {len(lines)} 行, {len(result)} 个X代码, "
+          f"共 {sum(len(v) for v in result.values())} 条股票映射")
+    return result
+
+
+def _read_tdxhy_sector_stocks(sector_code):
+    """
+    根据 881xxx 研究行业代码，从 tdxhy.cfg 获取成分股。
+    
+    对于父级X代码（如 X4001 半导体），聚合并所有子级X代码的股票。
+    对于子级X代码（如 X400101 半导体材料），只返回该子级股票。
+    
+    返回：[{"code":"000001","prefix":"0","name":"000001"}, ...]
+    """
+    if sector_code not in _TDXHY_881_TO_X:
+        print(f"[板块成分股] 881代码 {sector_code} 不在映射表中")
+        return []
+
+    x_code, sector_name = _TDXHY_881_TO_X[sector_code]
+    print(f"[板块成分股] 板块名称: '{sector_name}' (代码={sector_code}, X={x_code})")
+
+    # 解析 tdxhy.cfg
+    x_to_stocks = _parse_tdxhy_cfg()
+    if not x_to_stocks:
+        print("[板块成分股] tdxhy.cfg 缓存为空")
+        return []
+
+    # 找到所有属于该X代码的子级代码
+    children = [c for c in x_to_stocks if c.startswith(x_code)]
+    all_stocks = []
+    for child in sorted(children):
+        child_stocks = x_to_stocks.get(child, [])
+        all_stocks.extend(child_stocks)
+
+    if children:
+        level = "父级" if len(children) > 1 else "子级"
+        child_codes = sorted(children)[:5]
+        more = f" ...共{len(children)}个" if len(children) > 5 else ""
+        print(f"[板块成分股] {level}聚合: X={x_code} → 子级={child_codes}{more} → 共 {len(all_stocks)} 只成分股")
+
+    # 去重
+    seen = set()
+    stocks = []
+    for s in all_stocks:
+        key = s["code"]
+        if key not in seen:
+            seen.add(key)
+            stocks.append(s)
+
+    if stocks:
+        print(f"[板块成分股] ✅ tdxhy.cfg 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
+    else:
+        print(f"[板块成分股] ❌ tdxhy.cfg 中未找到 '{sector_name}' 的成分股")
+
+    return stocks
+
+
 def save_to_zxg_blk(codes):
     """
     将股票代码列表追加到通达信自选股文件 zxg.blk。
@@ -1357,3 +1936,6 @@ if __name__ == "__main__":
     print("  - get_xdxr_data(): 获取除权除息数据（mootdx/pytdx）")
     print("  - get_float_shares_from_xdxr(): 从xdxr提取流通股本")
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")
+    print("")
+    print("板块功能：")
+    print("  - get_index_stocks(): 获取指数/板块成分股（88x→tdxhy/block, 标准指数→AKShare）")
