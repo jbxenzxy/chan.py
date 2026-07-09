@@ -764,7 +764,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       nth_in_pivot=nth_in_pivot,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # ⑴ 离开笔4有效突破(中枢A)
+        # 离开笔4有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
             base_range, ratio, _ = self._compute_base_range(pivot_a)
             r = self.BS0_ZS_BREAK_RATIO
@@ -787,12 +787,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # ⑵ 离开笔4区间套背驰(用MACD模拟)
+        # ⑴ 离开笔4区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_4th', '跳过: MACD拐头不满足')
             return
 
-        # ⑶ 中枢A，离开笔和进入笔，MACD面积背驰
+        # ⑵ 中枢A，离开笔和进入笔，MACD面积背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
@@ -850,7 +850,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       nm4_high=s_nm4._high(), nm4_low=s_nm4._low(),
                       nm4_dir='up' if s_nm4.is_up() else 'down')
 
-        # ⑴ 中枢B有效(三笔重叠 + 进入笔有效)
+        # 中枢B有效(三笔重叠 + 进入笔有效)
         is_valid, zs_b = self._is_valid_zs(s_nm4, s_nm3, s_nm2, s_nm1)
         if not is_valid:
             self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 中枢B无效')
@@ -858,7 +858,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         self._dbg_bs0('_cal_bs0point_nth_nzs', '中枢B有效', zs_b_high=zs_b.high, zs_b_low=zs_b.low)
 
-        # ⑵ 离开笔有效突破(中枢B)
+        # 离开笔有效突破(中枢B)
         if not self._is_valid_out_bi(stroke_n, zs_b):
             base_range, ratio, _ = self._compute_base_range(zs_b)
             r = self.BS0_ZS_BREAK_RATIO
@@ -881,12 +881,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return False
 
-        # ⑶ 离开笔区间套背驰(用MACD模拟)
+        # ⑴ 离开笔区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: MACD拐头不满足')
             return
 
-        # ⑷ 中枢B，离开笔和进入笔，MACD面积背驰
+        # ⑵ 中枢B，离开笔和进入笔，MACD面积背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         in_metric = s_nm4.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
@@ -922,7 +922,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       entry_bi_idx=entry_bi.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # ⑴ 离开笔6/8有效突破(中枢A)
+        # 离开笔6/8有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
             base_range, ratio, _ = self._compute_base_range(pivot_a)
             r = self.BS0_ZS_BREAK_RATIO
@@ -945,12 +945,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # ⑵ 离开笔6/8区间套背驰(用MACD模拟)
+        # ⑴ 离开笔6/8区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: MACD拐头不满足')
             return
 
-        # ⑶ 中枢A，离开笔6/8和进入笔，MACD面积背驰
+        # ⑵ 中枢A，离开笔6/8和进入笔，MACD面积背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
@@ -1007,6 +1007,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 return name
         return None
 
+    # ── 模式→c段起点偏移量映射 ──
+    # A: N,N-1不重叠, N-2重叠 → c段起点 = N-2, 偏移2
+    # B: N,N-1,N-2,N-3不重叠, N-4重叠 → c段起点 = N-4, 偏移4
+    # C: N,N-1,N-2,N-3,N-4,N-5不重叠, N-6重叠 → c段起点 = N-6, 偏移6
+    _BS1_C_OFFSET = {'A': 2, 'B': 4, 'C': 6}
+
     def cal_bs1point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
         self._dbg_bs1('cal_bs1point', '进入', bi_cnt=len(bi_list))
 
@@ -1030,63 +1036,71 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       stroke_n_idx=stroke_n.idx)
 
         # 笔N的极值必须突破笔N-2的极值
-        # 向下笔（买点）：笔N低点 <= 笔N-2低点（创新低）
-        # 向上笔（卖点）：笔N高点 >= 笔N-2高点（创新高）
+        # 向下笔（买点）：笔N低点 < 笔N-2低点（创新低）
+        # 向上笔（卖点）：笔N高点 > 笔N-2高点（创新高）
         stroke_nm2 = bi_list[stroke_n.idx - 2]  # 第N-2笔
-        if stroke_n.is_down() and stroke_n._low() > stroke_nm2._low():
+        if stroke_n.is_down() and stroke_n._low() >= stroke_nm2._low():
             self._dbg_bs1('cal_bs1point', '跳过: 向下笔未创新低',
                           stroke_n_idx=stroke_n.idx,
                           n_low=stroke_n._low(), nm2_low=stroke_nm2._low())
             return
-        if stroke_n.is_up() and stroke_n._high() < stroke_nm2._high():
+        if stroke_n.is_up() and stroke_n._high() <= stroke_nm2._high():
             self._dbg_bs1('cal_bs1point', '跳过: 向上笔未创新高',
                           stroke_n_idx=stroke_n.idx,
                           n_high=stroke_n._high(), nm2_high=stroke_nm2._high())
             return
 
-        '''
-        # 笔N两端的高度差 >= 笔N-2两端的高度差
-        if stroke_n.amp() < stroke_nm2.amp():
-            self._dbg_bs1('cal_bs1point', '跳过: 笔N相比N-2，振幅不足',
-                          stroke_n_idx=stroke_n.idx,
-                          n_amp=stroke_n.amp(), nm2_amp=stroke_nm2.amp())
-            return
-        
-        # 笔N-1上没有相反方向的买卖点
-        # 笔N向下（买点）→ 笔N-1向上 → 笔N-1上不能有卖点
-        # 笔N向上（卖点）→ 笔N-1向下 → 笔N-1上不能有买点
-        if self._has_bsp_for_bi(stroke_nm1.idx):
-            return
-        '''
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
 
-        # ⑴ 当下笔区间套背驰(用MACD模拟)
-        if not self._is_macd_diver(stroke_n):
-            self._dbg_bs1('cal_bs1point', '跳过: MACD拐头不满足',
-                          stroke_n_idx=stroke_n.idx)
-            return
-
-        # ⑵ 最近同向比，笔N与笔N-2的MACD峰值(PEAK)背驰
+        # ⑴ 次级别峰值背驰：笔N(c₂) 与 笔N-2(c₁) 的MACD峰值(PEAK)背驰
         in_metric = stroke_nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
         out_metric = stroke_n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
-        is_buy = stroke_n.is_down()
-        config = self.config.GetBSConfig(is_buy)
         is_diver = out_metric <= config.divergence_rate * in_metric
         if not is_diver:
-            self._dbg_bs1('cal_bs1point', '跳过: 最近同向笔，MACD峰值未背驰',
+            self._dbg_bs1('cal_bs1point', '跳过: 最近同向笔，MACD峰值未背驰(c₁ vs c₂)',
                           stroke_n_idx=stroke_n.idx,
                           in_metric=in_metric, out_metric=out_metric,
                           divergence_rate=divergence_rate,
                           threshold=config.divergence_rate)
             return
 
+        # ⑵ 本级别趋势背驰：c段全体(c₁+c₂+...) vs 中枢进入笔(b)，MACD面积比较
+        # c段 = 最后重叠笔的顶分型 → 笔N底分型，包含所有同向笔
+        c_offset = self._BS1_C_OFFSET[matched_pattern]
+        c_metric = 0.0
+        for i in range(c_offset, -1, -1):  # N-c_offset 到 N（含）
+            s = bi_list[stroke_n.idx - i]
+            if (is_buy and s.is_down()) or (not is_buy and s.is_up()):
+                c_metric += s.cal_macd_metric(config.macd_algo, is_reverse=True)
+
+        entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
+        entry_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False)
+        c_divergence_rate = c_metric / (entry_metric + 1e-7)
+        is_c_diver = c_metric < config.divergence_rate * entry_metric
+        if not is_c_diver:
+            self._dbg_bs1('cal_bs1point', '跳过: c段全体与进入笔，MACD面积未背驰(c vs b)',
+                          stroke_n_idx=stroke_n.idx,
+                          pattern=matched_pattern,
+                          c_offset=c_offset,
+                          c_metric=round(c_metric, 2),
+                          entry_metric=round(entry_metric, 2),
+                          c_divergence_rate=round(c_divergence_rate, 2),
+                          threshold=round(config.divergence_rate, 2))
+            return
+
         # ── 生成1类买卖点 ──
         self._dbg_bs1('cal_bs1point', 'OK 生成1类买卖点',
                       stroke_n_idx=stroke_n.idx, is_buy=is_buy,
-                      divergence_rate=divergence_rate)
+                      divergence_rate=divergence_rate,
+                      c_divergence_rate=c_divergence_rate,
+                      pattern=matched_pattern)
         feature_dict = {
             'bsp1_bi_amp': stroke_n.amp(),
             'divergence_rate': divergence_rate,
+            'c_divergence_rate': c_divergence_rate,
+            'pattern': matched_pattern,
         }
         self.add_bs(bs_type=BSP_TYPE.T1, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)
@@ -1095,7 +1109,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # ── 2类买卖点 ──
     # ═══════════════════════════════════════════════════════════
     def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
-        return
 
         # ── 共用检查 ──
         result = self._get_pivot_and_cur_bi(bi_list, zs_list)
@@ -1103,54 +1116,35 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
         pivot_a, stroke_n = result
 
-        # 保护性检查：访问 stroke_n.idx - 6 需要至少6笔
-        if stroke_n.idx < 6:
+        # 重叠条件: 仅 B/C 两种模式
+        # B: N,N-1,N-2,N-3不重叠, N-4重叠
+        # C: N,N-1,N-2,N-3,N-4,N-5不重叠, N-6重叠
+        matched_pattern = self._check_bs1_overlap(bi_list, stroke_n, pivot_a)
+        if matched_pattern not in ('B', 'C'):
             return
 
-        # 笔N，N-1，N-2，N-3，N-4，N-5都不跟中枢重叠，笔N-6跟中枢重叠
-        stroke_nm1 = bi_list[stroke_n.idx - 1]  # 前一笔N-1
-        stroke_nm2 = bi_list[stroke_n.idx - 2]  # 前二笔N-2
-        stroke_nm3 = bi_list[stroke_n.idx - 3]  # 前三笔N-3
-        stroke_nm4 = bi_list[stroke_n.idx - 4]  # 前四笔N-4
-        stroke_nm5 = bi_list[stroke_n.idx - 5]  # 前五笔N-5
-        stroke_nm6 = bi_list[stroke_n.idx - 6]  # 前六笔N-6
-        n_overlap = has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high)
-        nm1_overlap = has_overlap(stroke_nm1._low(), stroke_nm1._high(), pivot_a.low, pivot_a.high)
-        nm2_overlap = has_overlap(stroke_nm2._low(), stroke_nm2._high(), pivot_a.low, pivot_a.high)
-        nm3_overlap = has_overlap(stroke_nm3._low(), stroke_nm3._high(), pivot_a.low, pivot_a.high)
-        nm4_overlap = has_overlap(stroke_nm4._low(), stroke_nm4._high(), pivot_a.low, pivot_a.high)
-        nm5_overlap = has_overlap(stroke_nm5._low(), stroke_nm5._high(), pivot_a.low, pivot_a.high)
-        nm6_overlap = has_overlap(stroke_nm6._low(), stroke_nm6._high(), pivot_a.low, pivot_a.high)
-
-        if n_overlap or nm1_overlap or nm2_overlap or nm3_overlap or nm4_overlap or nm5_overlap or not nm6_overlap:
-            return
-
-        # 笔N的末端极值不破笔N-2的极值（二买不创新低 / 二卖不创新高）
+        # 笔N不创新低/不创新高（与1类相反，2类核心特征）
         # 向下笔（二买）：笔N低点 >= 笔N-2低点
         # 向上笔（二卖）：笔N高点 <= 笔N-2高点
+        stroke_nm2 = bi_list[stroke_n.idx - 2]
         if stroke_n.is_down() and stroke_n._low() < stroke_nm2._low():
             return
         if stroke_n.is_up() and stroke_n._high() > stroke_nm2._high():
             return
 
-        # 当下笔区间套背驰(用MACD模拟)
+        # 笔N-2上必须有买卖点（一买确认后才有二买）
+        if not self._has_bsp_for_bi(stroke_nm2.idx):
+            return
+
+        # ⑴ 当下笔区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             return
 
-        # 笔N与笔N-2的MACD峰值（PEAK）背驰判断
-        in_metric = stroke_nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False)
-        out_metric = stroke_n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
-        divergence_rate = out_metric / (in_metric + 1e-7)
-        is_buy = stroke_n.is_down()
-        config = self.config.GetBSConfig(is_buy)
-        is_diver = out_metric <= config.divergence_rate * in_metric
-        if not is_diver:
-            return
-
         # ── 生成2类买卖点 ──
+        is_buy = stroke_n.is_down()
         feature_dict = {
             'bsp2_bi_amp': stroke_n.amp(),
-            'divergence_rate': divergence_rate,
+            'pattern': matched_pattern,
         }
         self.add_bs(bs_type=BSP_TYPE.T2, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)

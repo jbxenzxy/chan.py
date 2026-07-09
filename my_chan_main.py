@@ -8,12 +8,10 @@ import sys
 import os
 import json
 import time
-import struct
 import re
 import threading
 import multiprocessing
 from datetime import datetime, timedelta
-from chinese_calendar import is_holiday
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -26,45 +24,12 @@ from urllib.parse import urlparse, parse_qs
 from BuySellPoint.BSPointList import _get_main_bi_time_range, _stocks_red_range, _futures_red_range, _find_sub_bi_sequence, _find_sub_zs
 
 # ============================================================
-# 内存监控工具
-# ============================================================
-def get_memory_info():
-    """获取当前进程内存占用（跨平台）"""
-    try:
-        import psutil
-        process = psutil.Process(os.getpid())
-        mem_info = process.memory_info()
-        return mem_info.rss / (1024 * 1024)  # 转换为 MB
-    except ImportError:
-        try:
-            import resource
-            rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            # macOS 返回的是字节，Linux 返回的是 KB
-            if sys.platform == "darwin":
-                return rss / (1024 * 1024)
-            else:
-                return rss / 1024
-        except Exception:
-            return None
-
-
-_memory_print_count = 0
-_memory_baseline = None
-_freq_order = {'w': 0, 'd': 1, '30m': 2, '5m': 3}
-
-
-def print_memory(label="当前"):
-    """打印内存占用信息（带递增计数器、相对基线增量、缓存统计）"""
-    pass  # 调试阶段已结束，关闭内存监控输出
-
-# ============================================================
 # 配置区域 - 请根据你的实际环境修改
 # ============================================================
 VIPDOC_DIR = r"C:\new_tdx_test\vipdoc"  # 通达信vipdoc目录
 TDX_HQ_CACHE = r"C:\new_tdx_test\T0002\hq_cache"  # 通达信hq_cache目录（shm.tnf/szm.tnf）
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本所在目录）
 SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
-SYMBOL_DISPLAY = "上证指数"
 CHAN_PATH = r"C:\my_chan_project"  # chan.py 仓库解压目录
 _LAST_STOCK_FILE = os.path.join(VIPDOC_DIR, "last_stock.json")  # 持久化上次查看的股票代码
 
@@ -73,7 +38,6 @@ _LAST_STOCK_FILE = os.path.join(VIPDOC_DIR, "last_stock.json")  # 持久化上�
 # ============================================================
 # 账户和密码从 C:\new_tdx_test\vipdoc\tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
-TQ_ENABLED  = True          # 是否启用期货实时行情（设为 False 则只保留股票功能）
 _SSE_DEBUG  = False         # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
@@ -89,25 +53,17 @@ if SCRIPT_DIR not in sys.path:
 try:
     from Chan import CChan
     from ChanConfig import CChanConfig
-    from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE, BI_DIR, FX_TYPE, BSP_TYPE
-    from Common.CTime import CTime
-    from KLine.KLine_Unit import CKLine_Unit
-    from KLine.KLine_List import CKLine_List
-    from DataAPI.CommonStockAPI import CCommonStockApi
-    CHAN_AVAILABLE = True
-    #print("\n[stock][信息] https://github.com/Vespa314/chan.py 导入成功！！")
+    from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
 except ImportError as e:
-    CHAN_AVAILABLE = False
     print(f"\n[错误] chan.py 导入失败: {e}")
     print(f"[提示] 请确保 CHAN_PATH = r'{CHAN_PATH}' 指向正确的 chan.py 仓库目录")
     sys.exit(1)
 
 # 导入通达信数据源适配器（从 chan.py 的 DataAPI 目录）
 # 包含：K线读取、前复权、流通股本
-from DataAPI.TdxAPI import CTdxAPI, set_tdx_config, read_tdx_day_file, read_tdx_min_file, \
-    _resample_5m_to_30m, _resample_day_to_week, find_day_file, \
+from DataAPI.TdxAPI import CTdxAPI, \
     read_main_level_records, read_sub_level_records, \
-    _forward_adjust, get_float_shares_from_xdxr, \
+    get_float_shares_from_xdxr, \
     read_zxg_stocks, read_zz1000_stocks, save_to_zxg_blk, \
     read_sz50_stocks, read_hs300_stocks, read_zz500_stocks, \
     get_index_stocks, refresh_block_files
@@ -147,7 +103,7 @@ except ImportError as e:
     CTqSdkAPI = None
     FUTURES_ALIASES = {}
     TQ_AVAILABLE = False
-    print(f"[stock][警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
+    print(f"[警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
 
 
 # ============================================================
@@ -158,11 +114,6 @@ try:
     _THS_CLOUD_AVAILABLE = True
 except ImportError:
     _THS_CLOUD_AVAILABLE = False
-
-
-def _strip_market_suffix(code):
-    """去掉 .SH/.SZ/.BJ 后缀，返回纯6位代码"""
-    return code.split('.')[0] if '.' in code else code
 
 
 # ============================================================
@@ -227,9 +178,11 @@ def _get_stock_name(market, code):
 _stock_names_cache = {}
 _stock_names_loaded = False
 _STOCK_NAMES_CACHE_FILE = os.path.join(VIPDOC_DIR, "stock_names.json")
+_STOCK_PE_TTM_FILE = os.path.join(VIPDOC_DIR, "stock_pettm.json")
 
 # 刷新状态（股票名称刷新用）
 _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
+
 
 
 def _load_stock_names_from_cache_file():
@@ -242,7 +195,6 @@ def _load_stock_names_from_cache_file():
     if _stock_names_loaded:
         return len(_stock_names_cache)
     if not os.path.exists(_STOCK_NAMES_CACHE_FILE):
-        _inject_known_indices()
         return 0
     try:
         with open(_STOCK_NAMES_CACHE_FILE, "r", encoding="utf-8") as f:
@@ -263,47 +215,245 @@ def _load_stock_names_from_cache_file():
                     migrated[key] = info
             _stock_names_cache.update(migrated)
             _stock_names_loaded = True
-            print(f"[stock][信息] 从缓存文件加载股票名称: {len(_stock_names_cache)} 只")
-            _inject_known_indices()
+            print(f"[信息] 从缓存文件加载股票名称: {len(_stock_names_cache)} 只")
             return len(_stock_names_cache)
     except Exception as e:
-        print(f"[stock][警告] 读取股票名称缓存失败: {e}")
-    _inject_known_indices()
+        print(f"[警告] 读取股票名称缓存失败: {e}")
     return 0
 
 
-def _inject_known_indices():
-    """将常用指数注入缓存，确保中文名称和拼音首字母始终正确。"""
-    _KNOWN_INDICES = [
-        ("399001", "深证成指", "sz"),
-        ("999999", "上证指数", "sh"),
-        ("000001", "上证指数", "sh"),
-        ("399006", "创业板指", "sz"),
-        ("399005", "中小板指", "sz"),
-        ("000016", "上证50", "sh"),
-        ("000300", "沪深300", "sh"),
-        ("399300", "沪深300", "sz"),
-        ("000688", "科创50", "sh"),
-        ("000852", "中证1000", "sh"),
-        ("000905", "中证500", "sh"),
-        ("399905", "中证500", "sz"),
-        ("399330", "深证100", "sz"),
-        ("399673", "创业板50", "sz"),
-        ("HSTECH", "恒生科技指数", "hk"),
-        ("HSI", "恒生指数", "hk"),
-        ("HSCEI", "恒生中国企业指数", "hk"),
-        ("HSCCI", "恒生香港中资企业指数", "hk"),
-    ]
+# ============================================================
+# PE-TTM 缓存（腾讯接口，增量刷新）
+# ============================================================
+_pe_ttm_cache = {}       # {code: float}  纯数字代码 → PE-TTM值
+_pe_ttm_loaded = False
+
+# 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm.json）
+# key: market+code（如 "sh600519"）, value: "沪深300"|"中证500"|"中证1000"
+_index_belong_cache = {}
+_index_belong_loaded = False
+
+
+def _load_pe_ttm_cache():
+    """从 stock_pettm.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
+    向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}"""
+    global _pe_ttm_cache, _pe_ttm_loaded, _index_belong_cache, _index_belong_loaded
+    if _pe_ttm_loaded:
+        return _pe_ttm_cache
+    _pe_ttm_loaded = True
+    _index_belong_loaded = True
+    if not os.path.exists(_STOCK_PE_TTM_FILE):
+        return _pe_ttm_cache
     try:
-        from pypinyin import lazy_pinyin
-        for code, name, market in _KNOWN_INDICES:
-            py = "".join([p[0].upper() for p in lazy_pinyin(name) if p])
-            compound_key = market + code
-            _stock_names_cache[compound_key] = {"name": name, "pinyin": py, "market": market}
+        with open(_STOCK_PE_TTM_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            pe_count = 0
+            idx_count = 0
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    # 新格式：{"pe_ttm": float, "index": str}
+                    pe_val = v.get("pe_ttm")
+                    idx_val = v.get("index")
+                    if isinstance(pe_val, (int, float)) and pe_val > 0:
+                        _pe_ttm_cache[k] = pe_val
+                        pe_count += 1
+                    if isinstance(idx_val, str) and idx_val:
+                        _index_belong_cache[k] = idx_val
+                        idx_count += 1
+                elif isinstance(v, (int, float)) and v > 0:
+                    # 旧格式：直接是数字
+                    _pe_ttm_cache[k] = v
+                    pe_count += 1
+        print(f"[PE-TTM] 从缓存加载 PE-TTM {pe_count} 条, 指数归属 {idx_count} 条")
+    except Exception as e:
+        print(f"[PE-TTM] 加载缓存失败: {e}")
+    return _pe_ttm_cache
+
+
+def _get_pe_ttm(market, code):
+    """获取单只股票的 PE-TTM 值，未缓存则返回 None。key 为 market+code 避免沪市深市同号冲突。"""
+    _load_pe_ttm_cache()
+    return _pe_ttm_cache.get(market + code)
+
+
+def _get_index_belong(market, code):
+    """获取单只股票的指数归属（沪深300/中证500/中证1000），未缓存则返回 None。"""
+    _load_pe_ttm_cache()
+    return _index_belong_cache.get(market + code)
+
+
+# AKShare 指数代码 → 市场前缀映射
+_AKSHARE_EXCHANGE_MAP = {
+    "上海证券交易所": "sh",
+    "深圳证券交易所": "sz",
+}
+# AKShare 指数代码 → 归属名称
+_AKSHARE_INDEX_MAP = {
+    "000300": "沪深300",
+    "000905": "中证500",
+    "000852": "中证1000",
+}
+
+
+def _fetch_index_belong_from_akshare():
+    """
+    通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
+    构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
+    如果 AKShare 不可用或网络异常，返回空字典。
+    """
+    global _index_belong_cache
+    try:
+        import akshare as ak
     except ImportError:
-        for code, name, market in _KNOWN_INDICES:
-            compound_key = market + code
-            _stock_names_cache[compound_key] = {"name": name, "pinyin": "", "market": market}
+        print("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
+        return _index_belong_cache
+
+    result = {}
+    for index_code, index_name in _AKSHARE_INDEX_MAP.items():
+        try:
+            df = ak.index_stock_cons_csindex(symbol=index_code)
+            count = 0
+            for _, row in df.iterrows():
+                stock_code = str(row["成分券代码"]).zfill(6)
+                exchange = str(row["交易所"])
+                mkt = _AKSHARE_EXCHANGE_MAP.get(exchange, "")
+                if mkt and stock_code.isdigit() and len(stock_code) == 6:
+                    result[mkt + stock_code] = index_name
+                    count += 1
+            print(f"[指数归属] {index_name}({index_code}): 获取 {count} 只成分股")
+        except Exception as e:
+            print(f"[指数归属] {index_name}({index_code}) 获取失败: {e}")
+
+    _index_belong_cache = result
+    print(f"[指数归属] 共获取 {len(result)} 只股票的指数归属")
+    return result
+
+
+def _refresh_pe_ttm():
+    """
+    通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm.json。
+    从 stock_names.json 中读取所有股票代码，分批请求腾讯接口。
+    """
+    global _pe_ttm_cache
+    import requests as req
+    _refresh_status["step"] = "刷新PE-TTM..."
+    _load_pe_ttm_cache()  # 先加载已有缓存
+
+    # 从 stock_names.json 收集所有纯数字股票代码
+    if not os.path.exists(_STOCK_NAMES_CACHE_FILE):
+        print("[PE-TTM] stock_names.json 不存在，无法刷新")
+        _refresh_status["error"] = "stock_names.json 不存在，请先刷新股票名称"
+        return
+
+    try:
+        with open(_STOCK_NAMES_CACHE_FILE, "r", encoding="utf-8") as f:
+            names_data = json.load(f)
+    except Exception as e:
+        print(f"[PE-TTM] 读取 stock_names.json 失败: {e}")
+        _refresh_status["error"] = f"读取 stock_names.json 失败: {e}"
+        return
+
+    if not isinstance(names_data, dict):
+        _refresh_status["error"] = "stock_names.json 格式错误"
+        return
+
+    # 收集股票代码并构建腾讯代码列表
+    codes = []
+    for key, info in names_data.items():
+        if not isinstance(info, dict):
+            continue
+        mkt = info.get("market", "")
+        # 提取纯数字代码
+        code = key
+        if not code.isdigit() and len(key) > 1:
+            # 复合键如 sh000001 → 提取数字部分
+            code = key[2:] if key[:2] in ("sh", "sz", "bj", "hk") else key
+        # A股6位，港股5位
+        code_len = len(code) if code.isdigit() else 0
+        if mkt == "hk" and code_len == 5:
+            codes.append((mkt, code))
+        elif mkt in ("sh", "sz", "bj") and code_len == 6:
+            codes.append((mkt, code))
+
+    total = len(codes)
+    _refresh_status["total"] = total
+    _refresh_status["loaded"] = 0
+    print(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
+
+    BATCH_SIZE = 300
+    new_count = 0
+    got_set = set()  # 本次成功获取到PE-TTM的代码
+    for i in range(0, total, BATCH_SIZE):
+        batch = codes[i:i + BATCH_SIZE]
+        q_codes = [f"{mkt}{code}" for mkt, code in batch]
+        url = "https://qt.gtimg.cn/q=" + ",".join(q_codes)
+        try:
+            resp = req.get(url, timeout=10)
+            for line in resp.text.strip().split("\n"):
+                if "v_" not in line:
+                    continue
+                try:
+                    # 腾讯接口格式: v_sh600519="1~贵州茅台~600519~...~[39]市盈率~..."
+                    parts = line.split('="')[1].strip().strip('";')
+                    fields = parts.split("~")
+                    # 从行前缀提取市场: v_sh... → sh, v_sz... → sz, v_hk... → hk
+                    line_mkt = line[2:4] if len(line) > 4 else ""
+                    if len(fields) > 39:
+                        stock_code = fields[2]
+                        pe_str = fields[39]  # 市盈率(动态)
+                        if stock_code and stock_code.isdigit() and pe_str and pe_str.replace(".", "").replace("-", "").isdigit():
+                            pe_val = float(pe_str)
+                            if pe_val > 0:
+                                cache_key = line_mkt + stock_code if line_mkt else stock_code
+                                got_set.add(cache_key)
+                                if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
+                                    _pe_ttm_cache[cache_key] = pe_val
+                                    new_count += 1
+                except (ValueError, TypeError, IndexError):
+                    pass
+        except Exception as e:
+            print(f"[PE-TTM] 第{i//BATCH_SIZE+1}批失败: {e}")
+
+        _refresh_status["loaded"] = min(i + BATCH_SIZE, total)
+        print(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
+
+    # 统计未获取到的股票
+    all_queried = {mkt + code for mkt, code in codes}
+    missed = all_queried - got_set
+    if missed:
+        missed_list = sorted(missed)[:20]
+        print(f"[PE-TTM] 未获取到PE-TTM: {len(missed)} 只 (如: {', '.join(missed_list)}{'...' if len(missed) > 20 else ''})")
+
+    # 刷新指数归属（AKShare在线获取，与PE-TTM一起保存）
+    _refresh_status["step"] = "刷新指数归属..."
+    print("[指数归属] ========== 开始刷新指数归属 ==========")
+    _fetch_index_belong_from_akshare()
+
+    # 保存到文件（合并PE-TTM和指数归属，过滤掉旧格式的纯数字key）
+    try:
+        os.makedirs(os.path.dirname(_STOCK_PE_TTM_FILE), exist_ok=True)
+        # 找出所有有PE-TTM或指数归属的股票代码
+        all_keys = set(_pe_ttm_cache.keys()) | set(_index_belong_cache.keys())
+        combined = {}
+        for k in all_keys:
+            if k.isdigit() and len(k) == 6:
+                continue  # 过滤旧格式纯数字key
+            entry = {}
+            pe_val = _pe_ttm_cache.get(k)
+            idx_val = _index_belong_cache.get(k)
+            if isinstance(pe_val, (int, float)) and pe_val > 0:
+                entry["pe_ttm"] = pe_val
+            if idx_val:
+                entry["index"] = idx_val
+            if entry:
+                combined[k] = entry
+        with open(_STOCK_PE_TTM_FILE, "w", encoding="utf-8") as f:
+            json.dump(combined, f, ensure_ascii=False)
+        print(f"[PE-TTM] 刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {_STOCK_PE_TTM_FILE}")
+    except Exception as e:
+        print(f"[PE-TTM] 保存失败: {e}")
+        _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
 
 
 def _collect_codes_from_vipdoc():
@@ -375,6 +525,8 @@ def _collect_codes_from_vipdoc():
         return False
 
     # === 收集A股代码 ===
+    sh_count = 0
+    sz_count = 0
     for mkt_dir, prefix in [("sh", "sh"), ("sz", "sz")]:
         lday_dir = os.path.join(VIPDOC_DIR, mkt_dir, "lday")
         if not os.path.isdir(lday_dir):
@@ -386,8 +538,13 @@ def _collect_codes_from_vipdoc():
                     compound_key = mkt_dir + code
                     if compound_key not in result:
                         result[compound_key] = {"name": "", "pinyin": "", "market": mkt_dir}
+                        if mkt_dir == "sh":
+                            sh_count += 1
+                        else:
+                            sz_count += 1
 
     # === 收集港股代码（ds目录）===
+    hk_count = 0
     ds_lday_dir = os.path.join(VIPDOC_DIR, "ds", "lday")
     if os.path.isdir(ds_lday_dir):
         for fname in os.listdir(ds_lday_dir):
@@ -400,8 +557,8 @@ def _collect_codes_from_vipdoc():
                     compound_key = "hk" + hk_code
                     if compound_key not in result:
                         result[compound_key] = {"name": "", "pinyin": "", "market": "hk"}
+                        hk_count += 1
 
-    print(f"[stock][调试] 代码收集明细: A股{sum(1 for v in result.values() if v['market'] != 'hk')}只, 港股{sum(1 for v in result.values() if v['market'] == 'hk')}只")
     return result
 
 
@@ -437,7 +594,6 @@ def _fetch_names_from_sina_once(codes_dict):
         else:
             a_stock_codes.append((bare_code, market))
 
-    print(f"[stock][信息] 从新浪API获取名称：A股{len(a_stock_codes)}只 + 港股{len(hk_codes)}只")
     filled = 0
     hk_filled = 0
     batch_size = 50
@@ -485,10 +641,8 @@ def _fetch_names_from_sina_once(codes_dict):
                                     codes_dict[compound_key]["name"] = name
                                     filled += 1
                             break
-                if batch_num % 20 == 0 or batch_num == total_batches:
-                    print(f"[stock][信息] 新浪API(A股): {batch_num}/{total_batches}, 累计{filled}只")
             except Exception as e:
-                print(f"[stock][警告] 新浪API(A股)批次{batch_num}失败: {e}")
+                print(f"[刷新]   新浪A股批次{batch_num}失败: {e}")
             if batch_num < total_batches:
                 time.sleep(0.5)
 
@@ -529,14 +683,11 @@ def _fetch_names_from_sina_once(codes_dict):
                             codes_dict[compound_key]["name"] = name
                             filled += 1
                             hk_filled += 1
-                if batch_num % 10 == 0 or batch_num == total_batches:
-                    print(f"[stock][信息] 腾讯API(港股): {batch_num}/{total_batches}, 本轮累计{hk_filled}只")
             except Exception as e:
-                print(f"[stock][警告] 腾讯API(港股)批次{batch_num}失败: {e}")
+                print(f"[刷新]   腾讯港股批次{batch_num}失败: {e}")
             if batch_num < total_batches:
                 time.sleep(0.5)
 
-    print(f"[stock][信息] API补全完成: 共{filled}只 (A股{filled-hk_filled}, 港股{hk_filled})")
     return filled
 
 
@@ -554,6 +705,7 @@ def _refresh_stock_names():
     _refresh_status["running"] = True
     _refresh_status["step"] = "刷新股票名..."
     _refresh_status["error"] = None
+    print("[刷新] ========== 开始刷新股票名称 ==========")
 
     # === 先加载已有缓存，新数据合并进去，不覆盖 ===
     raw_names = {}
@@ -564,38 +716,54 @@ def _refresh_stock_names():
                 raw_names[code] = info
             else:
                 raw_names[code] = {"name": info, "pinyin": ""}
-        print(f"[stock][信息] 已加载现有缓存 {len(raw_names)} 只，将在此基础上合并新数据")
+        print(f"[刷新] 步骤1/5 加载缓存: 已加载 {len(raw_names)} 只")
     else:
-        print("[stock][信息] 无现有缓存，将从本地文件全新读取")
+        print("[刷新] 步骤1/5 加载缓存: 无缓存，全新读取")
 
     # === 方案1: vipdoc .day文件名收集代码 ===
     # .day 文件覆盖所有已下载过K线数据的股票
-    print("[stock][信息] 从vipdoc文件名收集代码...")
     vipdoc_codes = _collect_codes_from_vipdoc()
-    vipdoc_added = 0
+    # 统计扫描结果
+    v_sh = sum(1 for v in vipdoc_codes.values() if v.get("market") == "sh")
+    v_sz = sum(1 for v in vipdoc_codes.values() if v.get("market") == "sz")
+    v_hk = sum(1 for v in vipdoc_codes.values() if v.get("market") == "hk")
+    v_total = v_sh + v_sz + v_hk
+    cache_before = len(raw_names)
+    vipdoc_new = 0   # 缓存中没有的新代码
+    vipdoc_filled = 0  # 缓存中有但无名称，从vipdoc补全
     for code, info in vipdoc_codes.items():
         if code not in raw_names:
             raw_names[code] = info
-            vipdoc_added += 1
+            vipdoc_new += 1
         elif not raw_names[code].get("name"):
             raw_names[code]["name"] = info.get("name", "")
-            vipdoc_added += 1
-    print(f"[stock][信息] 从vipdoc文件名收集到 {len(vipdoc_codes)} 只，新增 {vipdoc_added} 只")
+            vipdoc_filled += 1
+    print(f"[刷新] 步骤2/5 合并扫描: vipdoc共{v_total}只 (sh{v_sh}+sz{v_sz}+ds{v_hk}), 缓存{cache_before}只, 合并后{len(raw_names)}只 (新增{vipdoc_new}只)")
 
     # === 方案2: 新浪API补全缺失的名称 ===
     # 即使已有缓存，如果有新发现的代码（如港股）没有名称，也要补全
     codes_without_name = [c for c, info in raw_names.items() if not info.get("name")]
     if codes_without_name:
-        print(f"[stock][信息] 有 {len(codes_without_name)} 只代码无名称，尝试从新浪API补全...")
+        a_no = sum(1 for c in codes_without_name if raw_names[c].get("market") != "hk")
+        hk_no = sum(1 for c in codes_without_name if raw_names[c].get("market") == "hk")
+        print(f"[刷新] 步骤3/5 补全名称: {len(codes_without_name)} 只无名称 (A股{a_no}, 港股{hk_no})")
         temp_dict = {c: raw_names[c] for c in codes_without_name}
         filled = _fetch_names_from_sina_once(temp_dict)
         for code, info in temp_dict.items():
             if info.get("name"):
                 raw_names[code] = info
-        print(f"[stock][信息] 新浪API补全完成: {filled} 只")
+        failed = len(codes_without_name) - filled
+        if failed > 0:
+            print(f"[刷新] 步骤3/5 补全名称: 成功 {filled} 只, 失败 {failed} 只")
+        else:
+            print(f"[刷新] 步骤3/5 补全名称: 全部成功 {filled} 只")
+    else:
+        print("[刷新] 步骤3/5 补全名称: 无需补全")
 
     # === 补充通达信板块指数名称（88xxxx系列，如880491半导体、881319半导体）===
-    # 旧版(880xxx)从 tdxzs.cfg 读取
+    # 88xxxx代码不以标准A股格式开头，_is_a_stock_code() 会过滤掉，所以不在 raw_names 中。
+    # 来源: tdxzs.cfg（通达信配置文件）和 tdxhy_mapping_data.py（本地映射表）
+    tdxzs_filled = 0
     tdxzs_file = os.path.join(TDX_HQ_CACHE, "tdxzs.cfg")
     if os.path.exists(tdxzs_file):
         try:
@@ -610,18 +778,23 @@ def _refresh_stock_names():
                         code = parts[1].strip()
                         if "." in code:
                             code = code.split(".")[0]
-                        if name and code and code not in raw_names:
-                            # 跳过 8803xx-8804xx（旧版行业），由 881 研究行业替代
-                            # 8805xx（概念）和 8808xx（风格）保留，它们可从网络获取成分股
-                            if code.startswith("8803") or code.startswith("8804"):
-                                continue
-                            # 通达信板块指数代码（88xxxx），使用 sh 市场前缀
-                            compound_key = "sh" + code
+                        if not name or not code:
+                            continue
+                        # 跳过 8803xx-8804xx（旧版行业），由 881 研究行业替代
+                        if code.startswith("8803") or code.startswith("8804"):
+                            continue
+                        compound_key = "sh" + code
+                        if compound_key not in raw_names:
                             raw_names[compound_key] = {"name": name, "pinyin": "", "market": "sh"}
+                            tdxzs_filled += 1
+                        elif not raw_names[compound_key].get("name"):
+                            raw_names[compound_key]["name"] = name
+                            tdxzs_filled += 1
         except Exception as e:
-            print(f"[stock][警告] 读取tdxzs.cfg失败: {e}")
+            print(f"[刷新]   读取tdxzs.cfg失败: {e}")
 
-    # 新版研究行业(881xxx)从 tdxhy_mapping_data 读取（显式路径加载，避免 import 问题）
+    # 新版研究行业(881xxx)从 tdxhy_mapping_data 读取
+    tdxhy_filled = 0
     _mapping_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "DataAPI", "tdxhy_mapping_data.py")
     if os.path.exists(_mapping_path):
         try:
@@ -629,14 +802,20 @@ def _refresh_stock_names():
             exec(open(_mapping_path, encoding="utf-8").read(), _mapping_ns)
             _TDXHY_881_TO_X = _mapping_ns.get("_TDXHY_881_TO_X", {})
             for code_881, (x_code, name) in _TDXHY_881_TO_X.items():
-                if code_881 not in raw_names:
-                    compound_key = "sh" + code_881
+                compound_key = "sh" + code_881
+                if compound_key not in raw_names:
                     raw_names[compound_key] = {"name": name, "pinyin": "", "market": "sh"}
-            print(f"[stock][信息] 已加载 {len(_TDXHY_881_TO_X)} 个新版研究行业指数名称")
+                    tdxhy_filled += 1
+                elif not raw_names[compound_key].get("name"):
+                    raw_names[compound_key]["name"] = name
+                    tdxhy_filled += 1
         except Exception as e:
-            print(f"[stock][警告] 加载 tdxhy_mapping_data 失败: {e}")
+            print(f"[刷新]   加载tdxhy_mapping_data失败: {e}")
     else:
-        print(f"[stock][警告] tdxhy_mapping_data.py 不存在: {_mapping_path}")
+        print(f"[刷新]   tdxhy_mapping_data.py不存在: {_mapping_path}")
+
+    block_filled = tdxzs_filled + tdxhy_filled
+    print(f"[刷新] 步骤4/5 补充板块: tdxzs.cfg +{tdxzs_filled}条, tdxhy +{tdxhy_filled}条, 共补全 {block_filled} 条板块")
 
     # === 统一用pypinyin生成拼音首字母（忽略tnf文件中的拼音，确保格式一致） ===
     try:
@@ -675,33 +854,58 @@ def _refresh_stock_names():
 
     # === 过滤 ST、*ST、退市股票，不写入缓存 ===
     filtered_count = 0
+    filtered_empty = 0
+    filtered_st = 0
+    filtered_delist = 0
     for code in list(all_names.keys()):
         name = all_names[code].get("name", "")
-        if not name or name.startswith("*ST") or name.startswith("ST") or "退" in name:
+        if not name:
             del all_names[code]
             filtered_count += 1
-    if filtered_count > 0:
-        print(f"[stock][信息] 过滤掉 {filtered_count} 只（ST/*ST/退市）")
-
+            filtered_empty += 1
+        elif name.startswith("*ST") or name.startswith("ST"):
+            del all_names[code]
+            filtered_count += 1
+            filtered_st += 1
+        elif "退" in name:
+            del all_names[code]
+            filtered_count += 1
+            filtered_delist += 1
     if all_names:
         os.makedirs(os.path.dirname(_STOCK_NAMES_CACHE_FILE), exist_ok=True)
         with open(_STOCK_NAMES_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(all_names, f, ensure_ascii=False)
         _stock_names_cache = all_names
         _stock_names_loaded = True
-        _inject_known_indices()
         sh_count = sum(1 for c in all_names if all_names[c].get("market") == "sh")
         sz_count = sum(1 for c in all_names if all_names[c].get("market") == "sz")
-        print(f"[stock][信息] 股票名称刷新完成: 共{len(all_names)}只 (上海{sh_count}, 深圳{sz_count}), 已保存到 {_STOCK_NAMES_CACHE_FILE}")
+        hk_count = sum(1 for c in all_names if all_names[c].get("market") == "hk")
+        if filtered_count > 0:
+            parts = []
+            if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
+            if filtered_delist: parts.append(f"退市 {filtered_delist}只")
+            if filtered_empty: parts.append(f"无名 {filtered_empty}只")
+            print(f"[刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
+        else:
+            print(f"[刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
     else:
-        print("[stock][警告] 股票名称刷新失败: 未获取到任何数据")
+        print("[刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
 
     # 刷新板块文件（block_zs.dat / block_gn.dat / block_fg.dat / block.dat）
+    print("[刷新] ========== 开始刷新板块文件 ==========")
     _refresh_status["step"] = "刷新成分股..."
     try:
         refresh_block_files()
     except Exception as e:
-        print(f"[stock][警告] 板块文件刷新失败: {e}")
+        print(f"[刷新] 板块文件刷新失败: {e}")
+
+    # 刷新 PE-TTM（增量更新 stock_pettm.json）
+    print("[PE-TTM] ========== 开始刷新PE-TTM ==========")
+    try:
+        _refresh_pe_ttm()
+    except Exception as e:
+        print(f"[PE-TTM] PE-TTM 刷新失败: {e}")
+        _refresh_status["error"] = f"PE-TTM 刷新失败: {e}"
 
     # 全部刷新完成，标记状态
     _refresh_status["running"] = False
@@ -833,7 +1037,7 @@ import collections
 
 _MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合
 _stocks_analysis_cache = collections.OrderedDict()
-_cache_lock = threading.RLock()  # 保护 _stocks_analysis_cache 的并发读写（可重入，兼容 _check_memory_and_protect 嵌套调用）
+_cache_lock = threading.RLock()  # 保护 _stocks_analysis_cache 的并发读写
 
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
@@ -906,10 +1110,6 @@ def _fetch_float_mc_from_tencent(stock_list):
             print(f"[流通市值] 腾讯接口第{i//BATCH_SIZE+1}批失败: {type(e).__name__}: {e}")
     return all_mv
 
-def _refresh_float_mc_cache():
-    """保留为空壳，已由 _fetch_float_mc_from_tencent 替代。"""
-    pass
-
 def _update_float_mc_cache(mv_dict):
     """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。"""
     global _float_mc_cache, _float_mc_loaded
@@ -928,8 +1128,8 @@ def _get_float_mc_from_cache(code):
     """从缓存获取流通市值（亿元），未命中返回None。"""
     return _float_mc_cache.get(code)
 
-# 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 20 条 + 内存保护机制统一管理
-# 不再需要单独的扫描缓存计数器和上限
+# 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
+# 扫描时：有买点才保留缓存，否则释放
 
 # 扫描锁（防止并发扫描导致内存峰值翻倍）
 _scan_lock = threading.Lock()
@@ -946,13 +1146,11 @@ _page_index_code = None
 # 股票分析锁（防止并发请求时 CTdxAPI.set_data 被覆盖导致分析结果串数据）
 _stock_analysis_lock = threading.Lock()
 
-# 内存保护阈值
-_MEMORY_WARN_THRESHOLD_MB = 1500   # 1.5GB 警告
-_MEMORY_LIMIT_MB = 2500            # 2.5GB 强制清理
-
 
 def _cache_put(key, value):
-    """写入缓存，超出上限时淘汰最旧的条目（LRU语义）"""
+    """写入缓存，超出上限时淘汰最旧的条目（LRU语义）。
+    内存由 LRU 50 条上限 + 扫描时逐只释放非买点缓存共同控制。
+    """
     with _cache_lock:
         if key in _stocks_analysis_cache:
             del _stocks_analysis_cache[key]  # 移到末尾
@@ -963,7 +1161,6 @@ def _cache_put(key, value):
             gc.collect()
             print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
         _stocks_analysis_cache[key] = value
-        _check_memory_and_protect()
 
 
 def _cache_get(key):
@@ -976,27 +1173,11 @@ def _cache_get(key):
     return value
 
 
-def _check_memory_and_protect():
-    """检查内存，超过阈值时自动清理缓存"""
-    try:
-        import psutil
-        process = psutil.Process(os.getpid())
-        rss_mb = process.memory_info().rss / (1024 * 1024)
-    except Exception:
-        return
-
-    import gc
+def _cache_remove(key):
+    """从缓存中删除指定条目（不触发 GC，由调用方在适当时机统一回收）"""
     with _cache_lock:
-        if rss_mb > _MEMORY_LIMIT_MB:
-            _stocks_analysis_cache.clear()
-            gc.collect()
-            print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过上限 {_MEMORY_LIMIT_MB}MB，已清空全部缓存")
-        elif rss_mb > _MEMORY_WARN_THRESHOLD_MB:
-            keys_to_remove = list(_stocks_analysis_cache.keys())[:len(_stocks_analysis_cache) // 2]
-            for k in keys_to_remove:
-                del _stocks_analysis_cache[k]
-            gc.collect()
-            print(f"[内存保护] 内存 {rss_mb:.0f}MB 超过警告线 {_MEMORY_WARN_THRESHOLD_MB}MB，已淘汰一半缓存")
+        if key in _stocks_analysis_cache:
+            del _stocks_analysis_cache[key]
 
 
 def _send_windows_notification(title, message):
@@ -1080,7 +1261,7 @@ def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
             break
 
     if mid_idx is None or mid_idx <= 0:
-        print(f"[stock][警告] 无法定位分型中间K线在kl_list.lst中的位置")
+        print(f"[警告] 无法定位分型中间K线在kl_list.lst中的位置")
         return None
 
     # 左肩 = 分型合并K线的前一个合并K线
@@ -1094,7 +1275,7 @@ def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
         first_klu = (left_klc.get_high_peak_klu() or left_klc.get_low_peak_klu())
 
     if first_klu is None:
-        print(f"[stock][警告] 无法获取左肩K线单元")
+        print(f"[警告] 无法获取左肩K线单元")
         return None
 
     return first_klu.time.toFmtStr(_get_date_fmt(freq))
@@ -1131,24 +1312,6 @@ def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list, date_fmt):
     return ""
 
 
-def _calc_zs_confirm_edt_from_manual(zs_record, start_i, bis, date_fmt):
-    """
-    手选/保存选点模式下，根据自建中枢记录和后续笔序列计算确认结束时间。
-    start_i 是中枢内部最后一笔之后的扫描位置。
-    """
-    zg, zd = zs_record["zg"], zs_record["zd"]
-    i = start_i
-    while i < len(bis):
-        bi = bis[i]
-        if _bi_overlap_range(bi, zg, zd):
-            i += 1
-            continue
-        if getattr(bi, "next", None) is None:
-            return ""
-        return bi.get_end_klu().time.toFmtStr(date_fmt)
-    return ""
-
-
 def _load_saved_point_times():
     """从CSV文件加载所有选点记录，返回 {code: {col: value}} 字典"""
     points = {}
@@ -1163,7 +1326,7 @@ def _load_saved_point_times():
                 if code:
                     points[code] = row
     except Exception as e:
-        print(f"[stock][警告] 读取选点文件失败: {e}")
+        print(f"[警告] 读取选点文件失败: {e}")
     return points
 
 def _save_point_time(code, name, freq, sdt):
@@ -1207,9 +1370,9 @@ def _save_point_time(code, name, freq, sdt):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        print(f"[stock][信息] 保存选点成功: {code} {freq} {col}={sdt}")
+        print(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
     except Exception as e:
-        print(f"[stock][警告] 保存选点文件失败: {e}")
+        print(f"[警告] 保存选点文件失败: {e}")
 
 
 def _clear_saved_point_time(code, freq):
@@ -1243,9 +1406,9 @@ def _clear_saved_point_time(code, freq):
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
-        print(f"[stock][信息] 清除选点成功: {code} {freq}")
+        print(f"[信息] 清除选点成功: {code} {freq}")
     except Exception as e:
-        print(f"[stock][警告] 清除选点失败: {e}")
+        print(f"[警告] 清除选点失败: {e}")
 
 
 def _cleanup_all_futures_data():
@@ -1313,9 +1476,9 @@ def _load_annotations():
         try:
             with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
                 _annotations_cache = json.load(f)
-            print(f"[stock][信息] 标注数据已加载: {len(_annotations_cache)} 个条目")
+            print(f"[信息] 标注数据已加载: {len(_annotations_cache)} 个条目")
         except Exception as e:
-            print(f"[stock][警告] 加载标注数据失败: {e}")
+            print(f"[警告] 加载标注数据失败: {e}")
             _annotations_cache = {}
     _annotations_loaded = True
 
@@ -1326,7 +1489,7 @@ def _save_annotations():
         with open(ANNOTATIONS_FILE, "w", encoding="utf-8") as f:
             json.dump(_annotations_cache, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[stock][警告] 保存标注数据失败: {e}")
+        print(f"[警告] 保存标注数据失败: {e}")
 
 
 def _get_annotation_key(code, freq):
@@ -2274,7 +2437,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 调试模式：冷启动注入截止日期（仅日K生效）
     if not end_date and DEBUG_COLD_START_END_DATE and freq == 'd':
         end_date = DEBUG_COLD_START_END_DATE
-        print(f"[stock][调试] 冷启动使用截止日期: {end_date}")
+        print(f"[调试] 冷启动使用截止日期: {end_date}")
 
     # ===== 双窗口模式：独立缓存系统 =====
     # 双窗口与单窗口完全独立，各自拥有独立的 CChan 对象和缓存 key
@@ -2300,7 +2463,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 and "result" in main_cached and "result" in sub_cached:
             result = main_cached["result"]
             result["sub"] = sub_cached["result"]
-            print(f"[stock][耗时] 命中双窗口缓存(freq={freq}+{sub_freq})，总耗时: 0.001s")
+            print(f"[耗时] 命中双窗口缓存(freq={freq}+{sub_freq})，总耗时: 0.001s")
             return result
 
         # 复盘模式：清除旧的双窗口缓存，强制重新加载主级别和子级别
@@ -2312,7 +2475,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 if sub_cache_key in _stocks_analysis_cache:
                     del _stocks_analysis_cache[sub_cache_key]
             gc.collect()
-            print(f"[stock][信息] 复盘模式：已清除双窗口缓存，重新加载主级别({freq})和子级别({sub_freq})")
+            print(f"[信息] 复盘模式：已清除双窗口缓存，重新加载主级别({freq})和子级别({sub_freq})")
 
         # 未命中缓存：冷启动从文件加载双级别数据，cached_result=None 强制走文件读取
         cached_result = None
@@ -2329,15 +2492,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 if saved_sdt:
                     cached_saved = result.get("meta", {}).get("saved_selection_date", "")
                     if cached_saved != saved_sdt:
-                        print(f"[stock][信息] 缓存选点({cached_saved})与CSV({saved_sdt})不一致，跳过缓存")
+                        print(f"[信息] 缓存选点({cached_saved})与CSV({saved_sdt})不一致，跳过缓存")
                     else:
-                        print(f"[stock][耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
+                        print(f"[耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
                         return result
                 else:
-                    print(f"[stock][耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
+                    print(f"[耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
                     return result
             else:
-                print(f"[stock][耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
+                print(f"[耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
                 return result
 
     # ===== 0. 提前解析 end_date（复盘模式需要先知道 target_dt，以便传给前复权） =====
@@ -2366,24 +2529,24 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
-            print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
-            print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
+            print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
+            print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         elif freq == 'w' and sub_freq == 'd':
             # 优化：w+d 共用同一次日线文件读取和前复权，避免重复读取和二次复权
             full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
-            print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
-            print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
+            print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
+            print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         else:
             full_records = read_main_level_records(market, code, freq, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
-            print(f"[stock][耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
+            print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             sub_records = read_sub_level_records(market, code, freq, sub_freq, full_records, end_date=target_dt)
         forward_adjust_done = FORWARD_ADJUST_ENABLED
         if sub_records is None or len(sub_records) < 5:
-            print(f"[stock][警告] 子级别数据不足，退化为单级别模式")
+            print(f"[警告] 子级别数据不足，退化为单级别模式")
             sub_freq = None
     else:
         # ────────────────────────────────────
@@ -2392,14 +2555,14 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if not end_date and cached_result is not None and "records" in cached_result:
             full_records = cached_result["records"]
             forward_adjust_done = cached_result.get("result", {}).get("meta", {}).get("forward_adjust", False)
-            print(f"[stock][耗时] 从缓存获取K线: {len(full_records)}条")
+            print(f"[耗时] 从缓存获取K线: {len(full_records)}条")
         else:
             t0 = time.time()
             full_records = read_main_level_records(market, code, freq, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"K线数据不足: 仅{len(full_records)}条"}
             forward_adjust_done = FORWARD_ADJUST_ENABLED
-            print(f"[stock][耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
+            print(f"[耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
 
     # 调试模式：数据加载后立即截断起始日期（所有周期生效），后续流程对此无感知
     # 等于在数据源层面"只加载了指定日期之后的数据"
@@ -2410,11 +2573,11 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             filtered = [r for r in full_records if r["dt"] >= start_cutoff]
             if filtered:
                 full_records = filtered
-                print(f"[stock][调试] 起始日期截断({DEBUG_COLD_START_START_DATE}): {before}条 -> {len(full_records)}条")
+                print(f"[调试] 起始日期截断({DEBUG_COLD_START_START_DATE}): {before}条 -> {len(full_records)}条")
             else:
-                print(f"[stock][调试] 起始日期 {DEBUG_COLD_START_START_DATE} 之前无数据，保留全部{before}条")
+                print(f"[调试] 起始日期 {DEBUG_COLD_START_START_DATE} 之前无数据，保留全部{before}条")
         except ValueError:
-            print(f"[stock][警告] DEBUG_COLD_START_START_DATE 格式错误: {DEBUG_COLD_START_START_DATE}，应为 YYYY-MM-DD")
+            print(f"[警告] DEBUG_COLD_START_START_DATE 格式错误: {DEBUG_COLD_START_START_DATE}，应为 YYYY-MM-DD")
 
     # 截断到指定日期（复盘模式：以end_date为"最新行情"）
     # 左边界与冷启动一致（同样按时间范围截取），只有右边界不同
@@ -2446,31 +2609,25 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                     if 0 <= new_idx < len(full_records):
                         target_dt = full_records[new_idx]["dt"]
                         end_date = target_dt.strftime("%Y-%m-%d %H:%M:%S")
-                        print(f"[stock][箭头] step={step}: {full_records[anchor_idx]['dt']} → {target_dt} (idx {anchor_idx} → {new_idx})")
+                        print(f"[箭头] step={step}: {full_records[anchor_idx]['dt']} → {target_dt} (idx {anchor_idx} → {new_idx})")
                     else:
-                        print(f"[stock][箭头] step={step} 越界: idx {anchor_idx} → {new_idx}, 共{len(full_records)}条")
+                        print(f"[箭头] step={step} 越界: idx {anchor_idx} → {new_idx}, 共{len(full_records)}条")
 
     if end_date:
-        # 复盘模式：左右边界截断，左边界 = max(冷启动cutoff, 选点日期)
-        from datetime import timedelta
-        if freq == 'w':
-            cutoff = target_dt - timedelta(days=365 * 8)
-        elif freq == 'd':
-            cutoff = target_dt - timedelta(days=365 * 3)
-        elif freq == '30m':
-            cutoff = target_dt - timedelta(days=90)
-        elif freq == '5m':
-            cutoff = target_dt - timedelta(days=21)
-        else:
-            cutoff = None
+        # 复盘模式：右边界 = target_dt，左边界与冷启动一致
+        records = [r for r in full_records if r["dt"] <= target_dt]
+        if len(records) < 5:
+            return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
 
-        # 读取CSV保存的选点，如果选点日期 ≤ 复盘日期，则左边界 = max(cutoff, 选点)
+        # 读取CSV保存的选点，如果选点日期 ≤ 复盘日期，则左边界 = 选点
         if start_time is None:
             col = FREQ_TO_COL.get(freq, "")
             if col and qualified_code in _saved_point_times:
                 _saved = _saved_point_times[qualified_code].get(col, "").strip() or None
                 if _saved:
                     start_time = _saved
+
+        from datetime import timedelta
         if start_time is not None:
             start_dt = None
             for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
@@ -2480,20 +2637,24 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 except ValueError:
                     continue
             if start_dt is not None and start_dt <= target_dt:
-                # 选点日期 ≤ 复盘日期：左边界取较晚者
-                if cutoff is None or start_dt > cutoff:
-                    cutoff = start_dt
-                    print(f"[stock][信息] 复盘选点: 左边界使用选点时间 {start_time}")
-
-        before_count = len(full_records)
-        if cutoff is not None:
-            records = [r for r in full_records if cutoff <= r["dt"] <= target_dt]
+                before_count = len(records)
+                records = [r for r in records if r["dt"] >= start_dt]
+                print(f"[信息] 复盘选点: 从选点时间 {start_time} 开始，筛选后 {before_count}条 -> {len(records)}条")
         else:
-            records = [r for r in full_records if r["dt"] <= target_dt]
+            # 无选点：与冷启动一致，对30分/5分做时间截断，日K/周K不截断
+            if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
+                trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
+                cutoff = target_dt - timedelta(days=trunc_days)
+                before_count = len(records)
+                records = [r for r in records if r["dt"] >= cutoff]
+                if before_count != len(records):
+                    print(f"[信息] 复盘截断(freq={freq}): 从{target_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
+                          f"{before_count}条 -> {len(records)}条")
+
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
-        print(f"[stock][信息] 复盘范围(freq={freq}) {cutoff.strftime('%Y-%m-%d') if cutoff else '最早'} ~ {end_date}, "
-              f"全量{before_count}条 -> {len(records)}条")
+        print(f"[信息] 复盘范围(freq={freq}) {records[0]['dt'].strftime('%Y-%m-%d')} ~ {records[-1]['dt'].strftime('%Y-%m-%d')}, "
+              f"全量{len(full_records)}条 -> {len(records)}条")
     else:
         records = full_records
         # 确定起始时间：优先使用传入的start_time，其次使用CSV保存的选点
@@ -2516,7 +2677,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                     continue
             if start_dt is not None:
                 records = [r for r in records if r["dt"] >= start_dt]
-                print(f"[stock][信息] 从选点时间 {start_time} 开始，筛选后 {len(records)} 条K线")
+                print(f"[信息] 从选点时间 {start_time} 开始，筛选后 {len(records)} 条K线")
         else:
             # 冷启动无选点：默认模式下对30分和5分做时间截断（全量模式跳过）
             if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
@@ -2527,7 +2688,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 before_count = len(records)
                 records = [r for r in records if r["dt"] >= cutoff]
                 if before_count != len(records):
-                    print(f"[stock][信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
+                    print(f"[信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
                           f"{before_count}条 -> {len(records)}条")
 
     # 双窗口：子级别数据同步截断到主级别时间范围
@@ -2550,12 +2711,12 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                     except ValueError:
                         continue
                 if sub_saved_dt is not None and sub_saved_dt > main_start:
-                    print(f"[stock][信息] 子级别({sub_freq})选点晚于上窗起始: {sub_saved} > {main_start.strftime('%Y/%m/%d')}, 使用选点")
+                    print(f"[信息] 子级别({sub_freq})选点晚于上窗起始: {sub_saved} > {main_start.strftime('%Y/%m/%d')}, 使用选点")
                     main_start = sub_saved_dt
         sub_before = len(sub_records)
         sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
         if sub_before != len(sub_records):
-            print(f"[stock][信息] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_records)}条")
+            print(f"[信息] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_records)}条")
 
     # 2. 使用 chan.py 进行缠论分析
     import gc
@@ -2616,15 +2777,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             records_info = ""
             if records:
                 records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
-            print(f"[stock][错误] chan.py 分析失败: code={chan_code} freq={freq}{records_info}")
-            print(f"[stock][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
-            print(f"[stock][错误] 完整堆栈:\n{tb}")
+            print(f"[错误] chan.py 分析失败: code={chan_code} freq={freq}{records_info}")
+            print(f"[错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
+            print(f"[错误] 完整堆栈:\n{tb}")
             return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
         finally:
             if end_date:
                 CMyBSPointList.REPLAY_MODE = False
 
-    print(f"[stock][耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
+    print(f"[耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 
     # 4. 提取主级别结果
     result = _extract_main_level_data(chan, freq, records, market, code, 
@@ -2636,20 +2797,20 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 双窗口模式：提取子级别数据
     sub_result = None
     if dual and sub_freq:
-        print(f"[stock][调试] 双窗口模式: dual={dual}, sub_freq={sub_freq}, chan类型={type(chan).__name__}")
+        print(f"[调试] 双窗口模式: dual={dual}, sub_freq={sub_freq}, chan类型={type(chan).__name__}")
         try:
             sub_result = _extract_sub_level_data(chan, sub_freq, code, market)
         except Exception as e:
             import traceback
-            print(f"[stock][错误] 提取子级别数据失败: {type(e).__name__}: {e}")
-            print(f"[stock][错误] 堆栈:\n{traceback.format_exc()}")
+            print(f"[错误] 提取子级别数据失败: {type(e).__name__}: {e}")
+            print(f"[错误] 堆栈:\n{traceback.format_exc()}")
 
     if sub_result:
         result["sub"] = sub_result
 
     mode_str = f" [复盘到 {end_date}]" if end_date else ""
-    print(f"[stock][信息] 查询 {code}.{market.upper()} 完成{mode_str}: {result['meta']['kline_count']}条K线, {result['meta']['bi_count']}笔, {result['meta']['fx_count']}分型, {result['meta']['zs_count']}中枢, {result['meta']['seg_count']}线段, {result['meta']['bsp_count']}买卖点")
-    print(f"[stock][耗时] 总耗时: {time.time()-t_start:.3f}s")
+    print(f"[信息] 查询 {code}.{market.upper()} 完成{mode_str}: {result['meta']['kline_count']}条K线, {result['meta']['bi_count']}笔, {result['meta']['fx_count']}分型, {result['meta']['zs_count']}中枢, {result['meta']['seg_count']}线段, {result['meta']['bsp_count']}买卖点")
+    print(f"[耗时] 总耗时: {time.time()-t_start:.3f}s")
 
     # 缓存策略：
     # - 单窗口：缓存到 single_{market}_{code}_{freq}
@@ -2693,7 +2854,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     if end_date:
         t_gc = time.time()
         gc.collect()
-        print(f"[stock][耗时]   复盘后GC回收: {time.time()-t_gc:.3f}s")
+        print(f"[耗时]   复盘后GC回收: {time.time()-t_gc:.3f}s")
 
     return result
 
@@ -2852,9 +3013,6 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "fx_b_sub_dt": fx_b_sub_dt,
         })
 
-    if _fx_empty_count > 0:
-        print(f"[stock][调试] 笔 fx_a/fx_b 空值总数: {_fx_empty_count}/{len(bi_data)}")
-
     # 3. 分型数据
     fx_data = []
     for klc in kl_list.lst:
@@ -2954,7 +3112,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
                 "low": klu.low,
             })
     except Exception as e:
-        print(f"[stock][调试] 获取买卖点失败: {e}")
+        print(f"[调试] 获取买卖点失败: {e}")
 
     # 6. 线段数据
     seg_data = []
@@ -2979,7 +3137,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "amp": round(seg.amp(), 2),
         })
 
-    print(f"[stock][耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: {time.time()-t0:.3f}s")
+    print(f"[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: {time.time()-t0:.3f}s")
 
     # 获取当前周期的保存选点日期
     _col_meta = FREQ_TO_COL.get(freq, "")
@@ -3021,7 +3179,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     # 8. 组装结果
     date_range = f"{kline_data[0]['date']} ~ {kline_data[-1]['date']}" if kline_data else ""
 
-    print(f"[stock][耗时] 主级别提取结果: {time.time()-t0:.3f}s (K线={len(kline_data)} 笔={len(bi_data)} 中枢={len(zs_data)} 线段={len(seg_data)} 买卖点={len(bsp_data)})")
+    print(f"[耗时] 主级别提取结果: {time.time()-t0:.3f}s (K线={len(kline_data)} 笔={len(bi_data)} 中枢={len(zs_data)} 线段={len(seg_data)} 买卖点={len(bsp_data)})")
 
     stock_name = _get_stock_name(market, code)
     if not stock_name:
@@ -3044,6 +3202,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "saved_selection_date": _saved_sdt_for_meta,
             "is_replay": bool(end_date),
             "forward_adjust": forward_adjust_done,
+            "pe_ttm": _get_pe_ttm(market, code),
+            "index_belong": _get_index_belong(market, code),
         },
         "klines": kline_data,
         "bis": bi_data,
@@ -3257,7 +3417,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
                 "low": klu.low,
             })
     except Exception as e:
-        print(f"[stock][调试] 子级别获取买卖点失败: {e}")
+        print(f"[调试] 子级别获取买卖点失败: {e}")
 
     # 9. 构建 seg_data
     seg_data = []
@@ -3307,7 +3467,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
         "bsps": bsp_data,
     }
 
-    print(f"[stock][耗时] 子级别({sub_freq})提取: {time.time()-t_start:.3f}s (K线={len(kline_data)} 笔={len(bi_data)} 分型={len(fx_data)} 中枢={len(zs_data)} 线段={len(seg_data)} 买卖点={len(bsp_data)})")
+    print(f"[耗时] 子级别({sub_freq})提取: {time.time()-t_start:.3f}s (K线={len(kline_data)} 笔={len(bi_data)} 分型={len(fx_data)} 中枢={len(zs_data)} 线段={len(seg_data)} 买卖点={len(bsp_data)})")
     return sub_result
 
 
@@ -3322,13 +3482,6 @@ _FUTURES_DUAL_FREQ_MAP = {
     "30m": "5m",
     "5m": "1m",
     "1m": "15s",
-}
-
-# 期货双窗口反向映射：下窗周期 → 上窗周期（用于切换时确定上窗周期）
-_FUTURES_DUAL_REVERSE_MAP = {
-    "5m": "30m",
-    "1m": "5m",
-    "15s": "1m",
 }
 
 # 期货分析缓存（供 /api/red_range_zs 等访问）
@@ -3429,7 +3582,7 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
                         try:
                             _ = main_chan[_get_kl_type(sub_freq)]
                             cached = {"chan": main_chan}
-                            print(f"[stock][信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
+                            print(f"[信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
                             break
                         except Exception as e:
                             print(f"[警告] 异常: {type(e).__name__}: {e}")
@@ -3437,7 +3590,7 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
     if cached is None:
         return {"error": "请先在该周期下加载K线数据"}
     if "chan" not in cached:
-        print(f"[stock][信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
+        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
         analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
         cached = _cache_get(cache_key)
         if cached is None or "chan" not in cached:
@@ -3490,7 +3643,7 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
 
     if "chan" not in cached:
         # 扫描缓存只有result没有chan，重新分析以获取完整数据
-        print(f"[stock][信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
+        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
         analyze_stock(normalized_code, freq=freq, cache_chan=True)
         cached = _cache_get(cache_key)
         if cached is None or "chan" not in cached:
@@ -3755,104 +3908,26 @@ def _debug_read_page_index_stocks(sector_code):
     return result
 
 
-def scan_zxg_buy_points(freq="d"):
-    """
-    批量扫描自选股，找出当天（最后一根K线）有买点的股票。
-    扫描与冷启动共用同一个 _stocks_analysis_cache，缓存完整的 {records, chan, result}。
-    无论有无买卖点都不主动清除缓存，由 LRU 20 条 + 内存保护机制统一管理。
-    返回列表，每项包含：code, name, market, buy_points(买点列表)
-    """
-    import gc
+def read_tdxhy_l2_indices():
+    """返回所有二级行业板块指数列表（X+4位代码对应的881yyy），共125个"""
+    from DataAPI.TdxAPI import _TDXHY_X_TO_881 as _x_to_881
+    result = []
+    for x_code, (name, code_881) in _x_to_881.items():
+        digits = x_code[1:]  # 去掉X
+        if len(digits) == 4:  # X+4位 = 二级行业
+            result.append({"code": code_881, "prefix": "1", "name": name})
+    return result
 
-    stocks = read_zxg_stocks()
-    if not stocks:
-        return {"error": "自选股为空或文件不存在", "total": 0, "results": []}
 
-    results = []
-    skipped = 0
-    total = len(stocks)
-
-    print(f"[自选扫描] 开始扫描 {total} 只自选股，周期={_get_freq_label(freq)}")
-
-    for idx, stk in enumerate(stocks):
-        # 内存保护：每10只检查一次
-        if (idx + 1) % 10 == 0:
-            _check_memory_and_protect()
-
-        code = stk["code"]
-        prefix = stk["prefix"]
-        # 转换为市场标识
-        if prefix == "1":
-            market = "sh"
-        elif prefix == "0":
-            market = "sz"
-        elif prefix == "2":
-            market = "bj"  # 北交所，通达信可能没有数据
-        else:
-            continue
-
-        try:
-            # 自选股扫描：用 prefix 拼出带市场前缀的代码（如 SH000852），
-            # 让 _get_stock_market_code 通过 SH/SZ 前缀精确识别，不依赖 0xxxxx→sz 的硬编码推断
-            _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ"}
-            market_prefix = _PREFIX_MAP.get(prefix)
-            if not market_prefix:
-                continue
-            qualified_code = market_prefix + code  # 如 SH000852
-
-            # 扫描串行化：加锁防止并发创建多个CChan导致内存峰值
-            # cache_chan=True：与冷启动一致，缓存完整的 {records, chan, result}
-            with _scan_lock:
-                result = analyze_stock(qualified_code, freq=freq, cache_chan=True)
-            if "error" in result:
-                skipped += 1
-                continue
-
-            bsps = result.get("bsps", [])
-            stock_name = result.get("meta", {}).get("name", f"{code}.{market.upper()}")
-            # [DEBUG] 打印扫描中meta信息
-            print(f"[DEBUG-名称] scan_zxg_buy_points({code}, {freq}) meta.name='{result.get('meta', {}).get('name')}', meta={result.get('meta', {})}")
-            print(f"[DEBUG-名称] scan_zxg_buy_points({code}, {freq}) stock_name='{stock_name}'")
-
-            # 筛选最后一根K线上的买点
-            klines = result.get("klines", [])
-            if not klines:
-                skipped += 1
-                continue
-            last_kline_date = klines[-1]["date"]
-
-            today_buy_points = []
-            for bsp in bsps:
-                if bsp.get("is_buy", False) and bsp.get("date", "") == last_kline_date:
-                    today_buy_points.append({
-                        "type": bsp.get("type", ""),
-                        "price": bsp.get("price", 0),
-                        "date": bsp.get("date", ""),
-                    })
-
-            if today_buy_points:
-                # 有买点：缓存已由 analyze_stock 写入（完整三项），后续点击可直接查看
-                results.append({
-                    "code": code + "." + market.upper(),
-                    "name": stock_name,
-                    "market": market,
-                    "buy_points": today_buy_points,
-                    "last_close": klines[-1]["close"],
-                })
-                print(f"[自选扫描] ({idx+1}/{total}) {stock_name}({code}) 发现 {len(today_buy_points)} 个买点")
-            # 无买点也不清除缓存，由 LRU 自然淘汰
-
-            # 进度反馈（每10只打印一次）
-            if (idx + 1) % 10 == 0 or idx == total - 1:
-                print(f"[自选扫描] 进度: {idx+1}/{total}, 已发现 {len(results)} 只买点股")
-
-        except Exception as e:
-            print(f"[自选扫描] ({idx+1}/{total}) {code} 分析异常: {e}")
-
-    # 扫描完毕，触发一次GC回收
-    gc.collect()
-    print(f"[自选扫描] 扫描完成: 共{total}只, 扫描{total-skipped}只, 跳过{skipped}只, 发现{len(results)}只有买/卖点")
-    return {"error": None, "total": total, "skipped": skipped, "results": results}
+def read_tdxhy_l3_indices():
+    """返回所有三级行业板块指数列表（X+6位代码对应的881yyy），共315个"""
+    from DataAPI.TdxAPI import _TDXHY_X_TO_881 as _x_to_881
+    result = []
+    for x_code, (name, code_881) in _x_to_881.items():
+        digits = x_code[1:]  # 去掉X
+        if len(digits) == 6:  # X+6位 = 三级行业
+            result.append({"code": code_881, "prefix": "1", "name": name})
+    return result
 
 
 # ============================================================
@@ -3881,7 +3956,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
             dual = params.get("dual", ["0"])[0] == "1"
             if not code:
                 self.send_json_response({"error": "请输入股票代码"}, 400)
-                print_memory(f"前端操作(查询股票-{code or '空'})")
                 return
             try:
                 result = analyze_stock(code, freq=freq, end_date=end_date, dual=dual, step=step)
@@ -3898,7 +3972,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 print(f"[错误] analyze_stock异常: {e}")
                 traceback.print_exc()
                 self.send_json_response({"error": f"服务器内部错误: {str(e)}"}, 500)
-            print_memory(f"前端操作(查询股票-{code})")
         elif parsed.path == "/api/stocks_manual_select_point":
             params = parse_qs(parsed.query)
             code = params.get("code", [""])[0]
@@ -4033,59 +4106,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             "code": full_code, "name": name, "pinyin": alias,
                             "market": "futures", "type": "",
                         })
-
-            # 本地缓存未找到或不够，再查东方财富API补充（已注释掉，避免频繁请求被拉黑）
-            # if len(results) < 10:
-            #     try:
-            #         import urllib.request
-            #         url = f"http://searchapi.eastmoney.com/api/suggest/get?input={urllib.parse.quote(keyword)}&type=14&token=D43BF722C8E33BDC906FB84D85E326E&count=10"
-            #         req = urllib.request.Request(url, headers={
-            #             "User-Agent": "Mozilla/5.0",
-            #             "Referer": "https://quote.eastmoney.com/"
-            #         })
-            #         with urllib.request.urlopen(req, timeout=5) as resp:
-            #             text = resp.read().decode("utf-8", errors="ignore")
-            #         data = json.loads(text)
-            #         for item in data.get("QuotationCodeTable", {}).get("Data", []):
-            #             code = item.get("Code", "")
-            #             jys = item.get("JYS", "")
-            #             name = item.get("Name", "")
-            #             sec_type = item.get("SecurityType", "")
-            #             if sec_type not in ("1", "2", "3", "5", "6", "19", "25"):
-            #                 continue
-            #             if jys not in ("0", "1", "2", "3", "6", "23", "80", "HK"):
-            #                 continue
-            #             if code in ("002002",):
-            #                 continue
-            #             if name.startswith("*ST") or name.startswith("ST"):
-            #                 continue
-            #             if jys == "1" and code == "000001" and "上证" in name:
-            #                 code = "999999"
-            #             if any(r["code"] == code for r in results):
-            #                 continue
-            #             if jys == "HK":
-            #                 market = "hk"
-            #             elif jys in ("1", "2"):
-            #                 market = "sh"
-            #             elif jys in ("0", "3", "6", "80"):
-            #                 market = "sz"
-            #             elif jys == "23":
-            #                 market = "sh"
-            #             else:
-            #                 market = "sz"
-            #             results.append({
-            #                 "code": code,
-            #                 "name": name,
-            #                 "pinyin": item.get("PinYin", ""),
-            #                 "market": market,
-            #                 "type": item.get("SecurityTypeName", ""),
-            #             })
-            #             if len(results) >= 10:
-            #                 break
-            #     except Exception as e:
-            #         import traceback
-            #         print(f"[错误] 搜索异常: {e}")
-            #         traceback.print_exc()
             self.send_json_response({"results": results}, 200)
         elif parsed.path == "/api/zxg_list":
             # 返回自选股列表（供前端逐只扫描）
@@ -4109,6 +4129,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     lambda: _debug_read_page_index_stocks(_page_index_code),
                     "成分股",
                 ),
+                "tdxhy2": (read_tdxhy_l2_indices, "板块指数2"),
+                "tdxhy3": (read_tdxhy_l3_indices, "板块指数3"),
             }
             # 先读取所有来源的股票列表
             src_stocks = {}  # src → [(code, prefix, stock_dict), ...]
@@ -4120,7 +4142,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     continue
                 read_fn, label = reader
                 stocks = read_fn()
-                if not stocks and src != "zxg" and src != "page_index":
+                if not stocks and src not in ("zxg", "page_index", "tdxhy2", "tdxhy3"):
                     errors.append(f"{label}板块文件不存在，请先在通达信中创建/下载{label}板块")
                     continue
                 src_stocks[src] = stocks
@@ -4143,34 +4165,36 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         if exist_src == "zxg" and src != "zxg":
                             # 升级：自选股 → 板块来源，预过滤生效
                             merged[exist_idx]["_source"] = src
-            # 批量获取流通市值：先调腾讯接口获取最新数据，失败则加载本地缓存兜底
-            try:
-                t_mc = time.time()
-                mv_dict = _fetch_float_mc_from_tencent(merged)
-                total_stocks = len(merged)
-                got_count = len(mv_dict)
-                miss_count = total_stocks - got_count
-                if mv_dict:
-                    _update_float_mc_cache(mv_dict)
-                    if miss_count == 0:
-                        print(f"[流通市值] ✅ AKShare(腾讯接口) 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
-                    else:
-                        print(f"[流通市值] ⚠️ AKShare(腾讯接口) 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
-                else:
-                    print(f"[流通市值] 腾讯接口未返回数据，尝试加载本地缓存...")
-                    _load_float_mc_cache()
-                    if _float_mc_loaded:
-                        print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
-                    else:
-                        print(f"[流通市值] 腾讯接口和本地缓存均无数据")
-            except Exception as e:
-                print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，尝试加载本地缓存...")
+            # 批量获取流通市值：仅当包含非板块指数来源时才调腾讯接口
+            _need_float_mc = any(s not in ("tdxhy2", "tdxhy3") for s in sources)
+            if _need_float_mc:
                 try:
-                    _load_float_mc_cache()
-                    if _float_mc_loaded:
-                        print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
-                except Exception as e2:
-                    print(f"[流通市值] 加载本地缓存也失败: {e2}")
+                    t_mc = time.time()
+                    mv_dict = _fetch_float_mc_from_tencent(merged)
+                    total_stocks = len(merged)
+                    got_count = len(mv_dict)
+                    miss_count = total_stocks - got_count
+                    if mv_dict:
+                        _update_float_mc_cache(mv_dict)
+                        if miss_count == 0:
+                            print(f"[流通市值] ✅ AKShare(腾讯接口) 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
+                        else:
+                            print(f"[流通市值] ⚠️ AKShare(腾讯接口) 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
+                    else:
+                        print(f"[流通市值] 腾讯接口未返回数据，尝试加载本地缓存...")
+                        _load_float_mc_cache()
+                        if _float_mc_loaded:
+                            print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
+                        else:
+                            print(f"[流通市值] 腾讯接口和本地缓存均无数据")
+                except Exception as e:
+                    print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，尝试加载本地缓存...")
+                    try:
+                        _load_float_mc_cache()
+                        if _float_mc_loaded:
+                            print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
+                    except Exception as e2:
+                        print(f"[流通市值] 加载本地缓存也失败: {e2}")
             # 后端预过滤：对非自选股来源，提前剔除ST/流通市值<50亿
             pre_filtered = merged
             pre_skip_count = 0
@@ -4180,8 +4204,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 filtered = []
                 for stk in merged:
                     src = stk.get("_source", "zxg")
-                    # 自选股不做预过滤
-                    if src == "zxg":
+                    # 自选股和板块指数不做预过滤
+                    if src in ("zxg", "tdxhy2", "tdxhy3"):
                         filtered.append(stk)
                         continue
                     code = stk.get("code", "")
@@ -4231,7 +4255,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.send_json_response({"error": "缺少code参数"}, 400)
                 return
             try:
-                _check_memory_and_protect()
                 t0 = time.time()
                 # 自选股扫描：用 prefix 拼出带市场前缀的代码（如 SH000852）
                 # 港股：prefix="hk"，拼出 HK03690，让 _get_stock_market_code 通过 HK 前缀精确识别
@@ -4284,6 +4307,18 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                 sell_points.append(point)
                     has_points = buy_points or sell_points
                     t_filter = time.time() - t0
+
+                    # 缓存策略：与扫描展示一致——最近N根K线有买点才保留缓存
+                    # 不能用 bsps[-1] 判断，因为整个历史的最后一个买卖点
+                    # 可能是很久以前的买点，导致大量无意义缓存挤占空间
+                    # 用 _get_market_code 解析 qualified_code，确保与 _analyze_stock_internal
+                    # 内部构造 cache_key 时使用的 market/code 完全一致
+                    if not buy_points:
+                        mkt, cd = _get_market_code(qualified_code)
+                        if mkt and cd:
+                            cache_key = f"single_{mkt}_{cd}_{freq}_live"
+                            _cache_remove(cache_key)
+
                     if has_points:
                         # 有买/卖点：缓存已由 analyze_stock 写入（完整三项），后续点击可直接查看
                         # 计算流通市值
@@ -4310,7 +4345,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         }
                         print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
                     else:
-                        # 无买/卖点：不清除缓存，由 LRU 自然淘汰
+                        # 无买卖点：已释放缓存，不保留
                         t_total = time.time() - t_scan_start
                         print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 无买卖点")
                         resp_data = {"code": code, "buy_points": [], "sell_points": []}
@@ -4337,7 +4372,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.send_json_response({"error": "缺少code参数"}, 400)
         elif parsed.path == "/api/scan_start":
             # 新一轮扫描开始：清空跳过记录和终止标志，记录开始时间
-            # 缓存由 LRU 20 条 + 内存保护机制统一管理，不再主动清除
+            # 扫描过程中逐只判断：有买点才保留缓存，否则释放
             _scan_aborted = False
             _scan_skip_log.clear()
             _scan_start_time = time.time()
@@ -4391,7 +4426,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 _scan_start_time = None  # 重置，避免重复通知
             self.send_json_response({"count": len(_scan_skip_log)}, 200)
         elif parsed.path == "/api/scan_clear_cache":
-            # 关闭扫描面板：缓存由 LRU 20 条 + 内存保护机制统一管理，不再主动清除
+            # 关闭扫描面板：缓存由扫描时逐只判断管理，此处不再做全量清除
             print("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
             self.send_json_response({"cleared": 0}, 200)
         elif parsed.path == "/api/scan_abort":
@@ -4410,31 +4445,36 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     return
                 # 原始代码（带后缀，如 600150.SH），给通达信用
                 codes_raw = [c.strip() for c in codes]
-                # 纯6位代码，给同花顺用
-                codes_plain = [_strip_market_suffix(c.strip()) for c in codes]
-                codes_plain = list(dict.fromkeys(codes_plain))  # 去重保序
+                # 完整代码（带后缀），给同花顺用——保留后缀避免 000001.SZ/000001.SH 冲突
+                codes_ths = list(dict.fromkeys(codes_raw))  # 去重保序
+                # 通达信：本地自选股文件写入
+                print(f"[保存] 通达信: 输入 {len(codes_raw)} 只, 代码={codes_raw}")
                 tdx_added = save_to_zxg_blk(codes_raw)
+                print(f"[保存] 通达信: 实际写入 {tdx_added} 只")
+
                 # 同花顺：云端 API 同步
                 ths_added = 0
                 ths_msg = ""
+                print(f"[保存] 同花顺: 输入 {len(codes_ths)} 只, 代码={codes_ths}")
                 if _THS_CLOUD_AVAILABLE:
                     try:
-                        cloud_result = save_scan_to_ths_cloud(codes_plain)
+                        cloud_result = save_scan_to_ths_cloud(codes_ths)
                         if "error" in cloud_result:
                             raise Exception(cloud_result["error"])
                         ths_added = len(cloud_result.get("added", []))
                         ths_msg = "ok"
-                        print(f"[THS] 云端保存: 新增{ths_added}, 跳过{len(cloud_result.get('skipped',[]))}, 失败{len(cloud_result.get('failed',[]))}")
+                        print(f"[保存] 同花顺: 新增{ths_added}, 跳过{len(cloud_result.get('skipped',[]))}, 失败{len(cloud_result.get('failed',[]))}")
                     except Exception as e:
                         err_str = str(e)
                         if "登录状态失效" in err_str or "Cookie" in err_str:
                             ths_msg = "Cookie过期，请运行 ths_capture_cookie.py 重新获取"
                         else:
                             ths_msg = f"云端同步失败: {err_str}"
-                        print(f"[THS] 云端同步失败: {err_str}")
+                        print(f"[保存] 同花顺: {ths_msg}")
                 else:
                     ths_msg = "ths_cloud_api.py 未找到，请确保该文件在脚本同目录"
-                print(f"[THS] 保存结果: tdx={tdx_added}, ths={ths_added}, msg={ths_msg}")
+                    print(f"[保存] 同花顺: {ths_msg}")
+                print(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
                 self.send_json_response({
                     "ok": True,
                     "tdx_saved": tdx_added,
@@ -4574,7 +4614,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.wfile.write(content)
             else:
                 self.send_error(404)
-            print_memory(f"前端操作(请求文件-{parsed.path})")
 
     def _handle_sse_stream_dual(self, symbol, top_freq="1m", bottom_freq=None, start_time=None):
         """Server-Sent Events 双窗口推送端：两个独立 CChan 对象，一次 SSE 连接推送两个周期数据。
@@ -5519,7 +5558,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
         body_kb = len(body) / 1024
         # 细粒度计时：序列化 / 发送HTTP头 / 写入socket 三个环节分别计时
         if body_kb > 100 or json_time > 0.1:
-            print(f"[stock][耗时] JSON序列化: {json_time:.3f}s ({body_kb:.0f}KB)")
+            print(f"[耗时] JSON序列化: {json_time:.3f}s ({body_kb:.0f}KB)")
         t_header = time.time()
         self.send_response(status_code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -5534,7 +5573,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
         write_time = time.time() - t_write
         # 汇总：任一环节超 50ms 就打印明细，方便定位瓶颈
         if json_time > 0.05 or header_time > 0.05 or write_time > 0.05:
-            print(f"[stock][耗时] 响应明细 序列化={json_time:.3f}s 头部={header_time:.3f}s 写入={write_time:.3f}s ({body_kb:.0f}KB)")
+            print(f"[耗时] 响应明细 序列化={json_time:.3f}s 头部={header_time:.3f}s 写入={write_time:.3f}s ({body_kb:.0f}KB)")
 
     def log_message(self, format, *args):
         pass
@@ -6105,7 +6144,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
             <button class="btn" id="btn-restart" disabled onclick="restartStock()" title="清除选点，按冷启动重新加载">重置</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
-            <button class="btn-icon" id="btn-refresh" title="刷新股票名称" onclick="refreshStockNames()">
+            <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、PE-TTM和指数归属" onclick="refreshStockNames()">
                 <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
             </button>
             <span id="refresh-status" style="color:#a8b2d1;font-size:11px;margin-left:4px;display:none;"></span>
@@ -6176,8 +6215,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <div class="annotation-dialog" id="scan-mode-dialog">
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title">股票扫描</div>
+            <div id="scan-source-section">
             <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描来源（可多选）</div>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px;">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
                     <input type="checkbox" name="scan-source" value="zxg" checked style="accent-color:#e94560;" />
                     自选股
@@ -6186,25 +6226,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <input type="checkbox" name="scan-source" value="page_index" style="accent-color:#e94560;" />
                     成分股
                 </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="tdxhy2" style="accent-color:#e94560;" />
+                    板块指数2
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="tdxhy3" style="accent-color:#e94560;" />
+                    板块指数3
+                </label>
             </div>
             <div style="display:flex;gap:6px;margin-bottom:14px;">
                 <button onclick="scanSourceSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
                 <button onclick="scanSourceSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
             </div>
-            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描模式</div>
-            <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;">
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-mode" value="ann" checked onchange="updateScanRecentDisabled()" style="accent-color:#e94560;" />
-                    标注
-                </label>
-                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
-                    <input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;" />
-                    买/卖点
-                </label>
             </div>
             <div id="scan-recent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
                 <span>最近</span>
-                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#0a0a1a;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
+                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#1a1a2e;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
                 <span>根</span>
             </div>
             <div id="scan-freq-row" style="margin-bottom:14px;">
@@ -6215,6 +6253,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="30m" style="accent-color:#e94560;margin-right:4px;" />30分</label>
                     <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="5m" style="accent-color:#e94560;margin-right:4px;" />5分</label>
                 </div>
+            </div>
+            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描模式</div>
+            <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;" />标注</label>
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;" />买/卖点</label>
             </div>
             <div class="annotation-dialog-btns">
                 <button class="annotation-dialog-btn" onclick="scanModeDialogCancel()">取消</button>
@@ -6402,8 +6445,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         // API: "2026-07-02" / "2026-07-02 10:35"
         function inputDateToApi(inputVal, freq) {
             if (!inputVal) return "";
-            if (isIntradayFreq(freq)) return inputVal.replace("T", " ");
-            return inputVal.slice(0, 10);
+            if (isIntradayFreq(freq)) return inputVal.replace("T", " ").replace(/-/g, "/");
+            return inputVal.slice(0, 10).replace(/-/g, "/");
         }
 
         // 切换输入框 type 属性（date ↔ datetime-local）
@@ -8410,7 +8453,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     `<span class="label">收:</span> <span class="${cls}">${dispClose.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨跌:</span> <span class="${cls}">${sign}${changeVal.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
-                    `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>`;
+                    `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>` +
+                    (chartData.meta.pe_ttm != null ? ` &nbsp; <span class="label">PE-TTM:</span> <span class="label">${chartData.meta.pe_ttm.toFixed(2)}</span>` : "") +
+                    (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "");
             }
 
             const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
@@ -8420,7 +8465,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const clipHigh = _isMirrorMode ? Math.abs(k.low) : k.high;
             const clipLow = _isMirrorMode ? Math.abs(k.high) : k.low;
             const clipClose = _isMirrorMode ? Math.abs(k.close) : k.close;
-            const clipText = `${k.date} ${weekDayStr} 开:${clipOpen.toFixed(2)} 高:${clipHigh.toFixed(2)} 低:${clipLow.toFixed(2)} 收:${clipClose.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`;
+            const clipText = `${k.date} ${weekDayStr} 开:${clipOpen.toFixed(2)} 高:${clipHigh.toFixed(2)} 低:${clipLow.toFixed(2)} 收:${clipClose.toFixed(2)}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
                 _bottomCurrentGlobalIdx = globalIdx;
@@ -8628,7 +8673,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + chartData.meta.pe_ttm.toFixed(2) : ""}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -9009,7 +9054,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + chartData.meta.pe_ttm.toFixed(2) : ""}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -9270,12 +9315,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     freqRow.style.pointerEvents = "";
                 }
             }
+            // 标注模式下灰化"扫描来源"区域（标注扫描与来源无关）
+            var srcSection = document.getElementById("scan-source-section");
+            if (srcSection) {
+                if (isAnn) {
+                    srcSection.style.opacity = "0.35";
+                    srcSection.style.pointerEvents = "none";
+                } else {
+                    srcSection.style.opacity = "1";
+                    srcSection.style.pointerEvents = "";
+                }
+            }
         }
         window.updateScanRecentDisabled = updateScanRecentDisabled;
 
         // 扫描来源→中文标签（多选时用顿号连接）
         function _scanSourceLabel() {
-            var map = {"zxg": "自选股", "sz50": "上证50", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000", "page_index": "成分股"};
+            var map = {"zxg": "自选股", "sz50": "上证50", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000", "page_index": "成分股", "tdxhy2": "板块指数2", "tdxhy3": "板块指数3"};
             var labels = [];
             for (var i = 0; i < _scanSources.length; i++) {
                 labels.push(map[_scanSources[i]] || _scanSources[i]);
@@ -9409,7 +9465,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     var valid = [];
                     for (var i = 0; i < arr.length; i++) {
                         var v = arr[i].trim();
-                        if (v === "zxg" || v === "sz50" || v === "hs300" || v === "zz500" || v === "zz1000" || v === "page_index") {
+                        if (v === "zxg" || v === "sz50" || v === "hs300" || v === "zz500" || v === "zz1000" || v === "page_index" || v === "tdxhy2" || v === "tdxhy3") {
                             valid.push(v);
                         }
                     }
@@ -9484,76 +9540,35 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             updateScanTitle();
             status.textContent = "";
 
-            // 标注扫描模式：直接查询标注缓存（全周期，不按 freq 过滤）
+            // 标注扫描模式：直接查询标注缓存（全周期，不按 freq 过滤，与扫描来源无关）
             if (_scanMode === "ann") {
-                var sourceLabel = _scanSourceLabel();
-                body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在查询' + sourceLabel + '标注数据...</div>';
-                // 合并多来源股票列表 + 标注缓存（不传 freq，返回全部周期的标注）
-                Promise.all([
-                    _fetchMergedStocks(_scanSources),
-                    fetch("/api/annotations_scan")
-                ])
-                .then(function(resps) {
-                    return Promise.all([Promise.resolve(resps[0]), resps[1].json()]);
-                })
-                .then(function(dataArr) {
-                    var stocks = dataArr[0];
-                    var annData = dataArr[1];
-                    console.log("[标注扫描] 合并后股票总数: " + (stocks ? stocks.length : 0) + " 只, 来源: " + _scanSources.join(","));
+                body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在查询标注数据...</div>';
+                fetch("/api/annotations_scan")
+                .then(function(resp) { return resp.json(); })
+                .then(function(annData) {
+                    console.log("[标注扫描] 完成，共 " + (annData.codes ? annData.codes.length : 0) + " 条记录");
                     _scanRunning = false;
                     btn.classList.remove("active");
                     btn.textContent = "股票扫描";
 
-                    if (!stocks || stocks.length === 0) {
-                        body.innerHTML = '<div class="scan-no-result">' + sourceLabel + '列表为空或文件不存在</div>';
-                        return;
-                    }
+                    var codes = annData.codes || [];
 
-                    // 构建标注记录数组（按 "code.market" 分组，保留同一股票多个周期的记录）
-                    var annotatedByCode = {};
-                    (annData.codes || []).forEach(function(c) {
-                        var k = c.code + "." + c.market;
-                        if (!annotatedByCode[k]) annotatedByCode[k] = [];
-                        annotatedByCode[k].push(c);
-                    });
-
-                    // 周期→中文标签
-                    var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
-
-                    // 交叉匹配：股票列表中有标注的（用复合key匹配，避免000001.SH/000001.SZ冲突）
-                    var results = [];
-                    stocks.forEach(function(stk) {
-                        var market = stk.prefix === "1" ? "SH" : stk.prefix === "0" ? "SZ" : stk.prefix === "2" ? "BJ" : stk.prefix.toUpperCase();
-                        var lookupKey = stk.code + "." + market;
-                        var annList = annotatedByCode[lookupKey];
-                        if (annList) {
-                            // 同一股票可能有多个周期的标注，每个周期一条记录
-                            annList.forEach(function(ann) {
-                                results.push({
-                                    code: stk.code + "." + market,
-                                    name: ann.name || (stk.code + "." + market),
-                                    freq: ann.freq,
-                                    freqLabel: freqLabelMap[ann.freq] || ann.freq,
-                                    count: ann.count,
-                                    annotations: ann.annotations || []
-                                });
-                            });
-                        }
-                    });
-
-                    var html = '<div class="scan-summary">' + sourceLabel + '（合并后<b>' + stocks.length + '</b>只），有标注 <b>' + results.length + '</b> 条</div>';
-                    if (results.length === 0) {
+                    var html = '<div class="scan-summary">全周期标注 <b>' + codes.length + '</b> 条</div>';
+                    if (codes.length === 0) {
                         html += '<div class="scan-no-result">未发现标注股票</div>';
                     } else {
-                        results.forEach(function(r) {
-                            // 取日期最靠近当前日期的标注文字，最多8字
+                        var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
+                        codes.forEach(function(c) {
+                            var rCode = c.code + "." + c.market;
+                            var rFreqLabel = freqLabelMap[c.freq] || c.freq;
+                            // 取日期最靠近当前日期的标注文字，最多11字
                             var closestText = "";
-                            if (r.annotations && r.annotations.length > 0) {
+                            if (c.annotations && c.annotations.length > 0) {
                                 var today = new Date();
                                 today.setHours(0, 0, 0, 0);
                                 var closest = null;
                                 var closestDiff = Infinity;
-                                r.annotations.forEach(function(a) {
+                                c.annotations.forEach(function(a) {
                                     var d = new Date(a.date.replace(/\//g, "-"));
                                     if (isNaN(d.getTime())) return;
                                     var diff = Math.abs(d - today);
@@ -9566,13 +9581,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     closestText = closest.length > 11 ? closest.substring(0, 11) + "..." : closest;
                                 }
                             }
-                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + r.freq + '\')" title="点击查看K线图">';
-                            html += chkBox(r.code, isLatestBspBuy(r));
-                            html += '<span class="scan-col-name">' + r.name + '</span>';
-                            html += '<span class="scan-col-code">' + r.code + '</span>';
-                            html += '<span class="scan-col-freq">' + r.freqLabel + '</span>';
+                            html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + rCode + '\', \'' + c.freq + '\')" title="点击查看K线图">';
+                            html += chkBox(rCode, false);
+                            html += '<span class="scan-col-name">' + (c.name || rCode) + '</span>';
+                            html += '<span class="scan-col-code">' + rCode + '</span>';
+                            html += '<span class="scan-col-freq">' + rFreqLabel + '</span>';
                             html += '<span class="scan-col-ann">' + closestText + '</span>';
-                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy">' + r.count + '条</span></span>';
+                            html += '<span class="scan-col-tags"><span class="scan-bsp-tag buy">' + c.count + '条</span></span>';
                             html += '</div>';
                         });
                     }
@@ -10112,7 +10127,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const code = chartData.meta.symbol;
             const freq = currentFreq;
             const apiDate = inputDateToApi(dateStr, freq);
-            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + "&end_date=" + encodeURIComponent(apiDate) + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
+            // 日期是今天 → 冷启动（不传 end_date，加载全部K线）
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const isToday = dateStr.startsWith(todayStr);
+            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+                + (isToday ? "" : "&end_date=" + encodeURIComponent(apiDate))
+                + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -11696,11 +11716,11 @@ def main():
     if last_code:
         start_code = last_code
         start_freq = last_freq
-        print(f"[stock][信息] 恢复上次股票: {last_code} (周期: {last_freq})")
+        print(f"[信息] 恢复上次股票: {last_code} (周期: {last_freq})")
     else:
         start_code = SYMBOL_CODE
         start_freq = "d"
-        print(f"[stock][信息] 使用默认股票: {start_code}")
+        print(f"[信息] 使用默认股票: {start_code}")
 
     result = analyze_stock(start_code, freq=start_freq)
     if "error" in result:
@@ -11715,7 +11735,7 @@ def main():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     html_size = os.path.getsize(html_path)
-    print(f"[stock][信息] HTML页面已生成: {html_path} ({html_size/1024/1024:.1f}MB)")
+    print(f"[信息] HTML页面已生成: {html_path} ({html_size/1024/1024:.1f}MB)")
 
     # 3. 启动HTTP服务器（流通股本在扫描时按需加载，只加载自选股列表中的股票）
     port = 18081  # 使用18081，避免与czsc版本的18080冲突
@@ -11723,14 +11743,13 @@ def main():
     server_thread = threading.Thread(target=server.serve_forever, daemon=False)
     server_thread.start()
     url = f"http://127.0.0.1:{port}/chan_chart.html"
-    print(f"[stock][信息] HTTP服务器已启动: {url}\n")
-    print_memory("程序启动后")
+    print(f"[信息] HTTP服务器已启动: {url}\n")
 
     try:
         server_thread.join()
     except KeyboardInterrupt:
         server.shutdown()
-        print("\n[stock][信息] 服务器已停止")
+        print("\n[信息] 服务器已停止")
 
     print("=" * 60)
 

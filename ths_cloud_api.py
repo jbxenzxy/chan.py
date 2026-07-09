@@ -115,17 +115,20 @@ class THSCloudAPI:
             )
         return result
 
-    def add_stock(self, code: str, marketid: str = "17") -> dict:
+    def add_stock(self, code: str, marketid: str = None) -> dict:
         """
         添加单只自选股
         :param code: 股票代码，如 "600519"
-        :param marketid: 市场代码，沪市=17, 深市=33, 北交所=151
+        :param marketid: 市场代码（可选，不传时由同花顺根据代码自动识别）
         :return: {"errorCode": 0, "errorMsg": ""} 表示成功
         """
+        params = {"op": "add", "stockcode": code}
+        if marketid is not None:
+            params["marketid"] = marketid
         resp = self._request(
             "get",
             "/newcircle/group/modifySelfStock/",
-            {"op": "add", "stockcode": code},
+            params,
         )
         return self._parse_jsonp(resp, "modifyStock")
 
@@ -153,22 +156,32 @@ class THSCloudAPI:
         """
         # 先获取已有的自选股，避免重复添加
         existing = self.get_self_stocks()
-        existing_set = set()
+        existing_set = set()   # 带 marketid，如 "600519:17"
+        existing_codes = set() # 纯 code，用于 marketid=None 的港股去重
         for item in existing:
             existing_set.add(f"{item['code']}:{item.get('marketid', '')}")
+            existing_codes.add(item['code'])
 
         result = {"added": [], "skipped": [], "failed": []}
         for code, marketid in stocks:
-            if f"{code}:{marketid}" in existing_set:
-                result["skipped"].append(code)
-                print(f"[THS-API] 跳过 {code}（已存在）")
-                continue
+            # marketid=None（港股）时只按 code 去重；有 marketid 时按 code:marketid 去重
+            if marketid is None:
+                if code in existing_codes:
+                    result["skipped"].append(code)
+                    print(f"[THS-API] 跳过 {code}（已存在）")
+                    continue
+            else:
+                if f"{code}:{marketid}" in existing_set:
+                    result["skipped"].append(code)
+                    print(f"[THS-API] 跳过 {code}（已存在）")
+                    continue
 
             resp = self.add_stock(code, marketid)
             if resp.get("errorCode") == 0:
                 result["added"].append(code)
                 print(f"[THS-API] ✓ {code} 添加成功")
-                existing_set.add(f"{code}:{marketid}")
+                existing_set.add(f"{code}:{marketid or ''}")
+                existing_codes.add(code)
             else:
                 result["failed"].append({"code": code, "msg": resp.get("errorMsg", "未知错误")})
                 print(f"[THS-API] ✗ {code} 失败: {resp.get('errorMsg')}")
@@ -249,7 +262,37 @@ def get_market_id(code: str) -> str:
     - 美股=169
     - 板块/概念=48
     """
-    c = code.strip().replace(".SH", "").replace(".SZ", "").replace(".BJ", "").replace(".HK", "").upper()
+    code_upper = code.strip().upper()
+
+    # 港股：带 .HK 后缀 或 HK+4位数字 或 K+5位数字
+    if code_upper.endswith(".HK"):
+        return "177"
+    if code_upper.startswith("HK") or code_upper.startswith("K"):
+        return "177"
+    # 港股指数：HS+数字
+    if code_upper.startswith("HS"):
+        return "176"
+    # 美股：纯字母
+    if code_upper.isalpha() and len(code_upper) >= 2:
+        return "169"
+
+    # 根据后缀确定市场基础，再细分为指数/股票
+    if code_upper.endswith(".SH"):
+        c = code_upper[:-3]  # 去掉 .SH
+        # 沪市指数：000xxx, 1A/1B, 880xxx, 881xxx 等
+        if c.startswith(("000", "1A", "1B", "88")) or len(c) < 6:
+            return "16"
+        return "17"
+    if code_upper.endswith(".SZ"):
+        c = code_upper[:-3]  # 去掉 .SZ
+        if c.startswith("399"):
+            return "32"
+        return "33"
+    if code_upper.endswith(".BJ"):
+        return "151"
+
+    # 无后缀：按纯数字推断
+    c = code_upper
     if not c:
         return "17"
 
@@ -307,16 +350,24 @@ def save_scan_to_ths_cloud(
     if not api.check_login():
         return {"error": "登录状态失效，请更新 Cookie"}
 
-    # 处理代码格式
+    # 处理代码格式：保留后缀给 get_market_id 识别港股，纯数字给 API 调用
     stocks = []
     for code in codes:
         c = code.strip()
-        # 去掉市场后缀
-        if "." in c:
-            c = c.split(".")[0]
-        if c:
-            marketid = get_market_id(c)
-            stocks.append((c, marketid))
+        if not c:
+            continue
+        marketid = get_market_id(c)  # 传原始代码（带后缀），让 get_market_id 识别 .HK
+        plain = c.split(".")[0] if "." in c else c
+        if marketid == "177":
+            # 港股：stockcode = HK + 4位数字（去前导零后补零到4位）
+            # 抓包确认：00020.HK → stockcode=HK0020
+            hk_num = plain.lstrip("0").zfill(4)
+            hk_code = "HK" + hk_num
+            print(f"[THS-API] save_scan: {code} -> {hk_code}(港股)")
+            stocks.append((hk_code, None))
+        else:
+            print(f"[THS-API] save_scan: {code} -> {plain}(marketid={marketid})")
+            stocks.append((plain, marketid))
 
     if not stocks:
         return {"error": "无有效股票代码"}

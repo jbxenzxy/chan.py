@@ -1,218 +1,416 @@
 """
-同花顺 Cookie 自动捕获工具（Edge 版）
-三种方式：
-  1. webdriver-manager 自动下载 EdgeDriver → Selenium 自动捕获
-  2. browser-cookie3 直接从 Edge 本地数据库读取
-  3. 手动粘贴 Cookie（100% 可靠的后备方案）
+同花顺云端自选股同步模块
+通过同花顺 Web API 直接增删自选股，云端实时同步，无需重启客户端。
 
-用法：
-    python ths_capture_cookie.py
+使用方法：
+  1. 浏览器打开 https://t.10jqka.com.cn 并登录同花顺账号
+  2. F12 → Network → 刷新页面 → 点击任意请求 → Request Headers → 复制 Cookie 值
+  3. 将 Cookie 写入 ths_captured_cookie.txt 文件（与脚本同目录），或通过环境变量 THS_COOKIE 设置
 """
 
-import os
-import time
+import requests
 import json
-import sys
-
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-COOKIE_FILE = os.path.join(SCRIPT_DIR, "ths_captured_cookie.txt")
-LOGIN_URL = "https://upass.10jqka.com.cn/login"
-TARGET_URL = "https://t.10jqka.com.cn"
+import time
+import re
+import os
 
 
-def method_selenium_webdriver_manager():
-    """使用 webdriver-manager 自动管理 EdgeDriver"""
-    try:
-        from selenium import webdriver
-        from selenium.webdriver.edge.options import Options
-        from selenium.webdriver.edge.service import Service
-        from webdriver_manager.microsoft import EdgeChromiumDriverManager
-    except ImportError as e:
-        print(f"缺少依赖: {e}")
-        print("请运行: pip install selenium webdriver-manager --break-system-packages")
-        return False
+class THSCloudAPI:
+    """同花顺云端自选股 API"""
 
-    print("=" * 60)
-    print("  同花顺 Cookie 自动捕获（Edge）")
-    print("=" * 60)
-    print()
-    print("即将打开 Edge 浏览器，请在浏览器中登录同花顺。")
-    print("登录成功后自动捕获 Cookie，无需任何操作。")
-    print("=" * 60)
-    print()
+    BASE_URL = "https://t.10jqka.com.cn"
 
-    options = Options()
-    options.add_argument("--disable-blink-features=AutomationControlled")
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    # 市场代码映射（通过 API 探测确认）
+    MARKET_ID = {
+        "16": "沪市(指数)",
+        "17": "沪市",
+        "20": "沪市(ETF等)",
+        "32": "深市(指数)",
+        "33": "深市",
+        "48": "板块/概念",
+        "151": "北交所",
+        "87": "北交所(旧)",
+        "169": "美股",
+        "176": "港股(指数)",
+        "177": "港股",
+        "0": "未知",
+    }
 
-    driver = None
-    try:
-        print("[1/3] 自动下载/匹配 EdgeDriver...")
-        service = Service(EdgeChromiumDriverManager().install())
-        driver = webdriver.Edge(service=service, options=options)
-        driver.execute_script(
-            "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-        )
+    def __init__(self, cookie: str = None, cookie_file: str = None):
+        """
+        初始化 API
+        :param cookie: 同花顺登录后的完整 Cookie 字符串
+        :param cookie_file: Cookie 文件路径，默认读取同目录下的 ths_captured_cookie.txt
+        """
+        if cookie:
+            self.cookie = cookie
+        elif cookie_file and os.path.exists(cookie_file):
+            with open(cookie_file, 'r', encoding='utf-8') as f:
+                self.cookie = f.read().strip()
+        else:
+            # 尝试从默认位置读取
+            default_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ths_captured_cookie.txt")
+            if os.path.exists(default_path):
+                with open(default_path, 'r', encoding='utf-8') as f:
+                    self.cookie = f.read().strip()
+            else:
+                # 尝试环境变量
+                self.cookie = os.environ.get("THS_COOKIE", "")
 
-        print("[2/3] 打开登录页面，请在浏览器中登录...")
-        driver.get(LOGIN_URL)
-        time.sleep(2)
+        if not self.cookie:
+            raise ValueError(
+                "未找到同花顺 Cookie。请运行 ths_capture_cookie.py 重新获取。\n"
+                "  手动方式：在脚本同目录创建 ths_captured_cookie.txt 文件并写入 Cookie"
+            )
 
-        max_wait = 300
-        check_interval = 2
-        for i in range(max_wait // check_interval):
-            time.sleep(check_interval)
-            try:
-                url = driver.current_url
-                if "upass" not in url and "login" not in url.lower():
-                    break
-                if "退出" in driver.page_source:
-                    break
-            except Exception:
-                pass
-            if i % 10 == 0:
-                print(f"   等待中... ({(i+1)*check_interval}s)")
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Referer": "https://upass.10jqka.com.cn/login",
+            "Cookie": self.cookie,
+            "DNT": "1",
+        }
 
-        print("[3/3] 登录成功，提取 Cookie...")
-        driver.get(TARGET_URL)
-        time.sleep(3)
-        cookies = driver.get_cookies()
-
-        if not cookies:
-            print("❌ 未获取到 Cookie")
-            return False
-
-        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-        with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-            f.write(cookie_str)
-
-        print(f"✅ 成功！{len(cookies)} 个 Cookie → {COOKIE_FILE}")
-        return True
-
-    except Exception as e:
-        print(f"❌ Selenium 方式失败: {e}")
-        return False
-    finally:
-        if driver:
-            try:
-                driver.quit()
-            except Exception:
-                pass
-
-
-def method_browser_cookie3():
-    """从 Edge 本地数据库直接读取 Cookie（无需开浏览器）"""
-    try:
-        import browser_cookie3
-    except ImportError:
-        print("缺少 browser-cookie3，请运行: pip install browser-cookie3 --break-system-packages")
-        return False
-
-    print("=" * 60)
-    print("  从 Edge 本地读取 Cookie")
-    print("=" * 60)
-    print("前提：你之前用 Edge 登录过同花顺且未清除 Cookie。")
-    print()
-
-    domains = ["10jqka.com.cn", "t.10jqka.com.cn", "upass.10jqka.com.cn"]
-    all_cookies = []
-
-    for domain in domains:
+    def _parse_jsonp(self, text: str, callback_name: str = "selfStock") -> dict:
+        """解析 JSONP 响应"""
+        if not text:
+            return {"errorCode": -1, "errorMsg": "empty response"}
         try:
-            cj = browser_cookie3.edge(domain_name=domain)
-            cookies = list(cj)
-            if cookies:
-                all_cookies.extend(cookies)
-                print(f"  从 {domain} 获取 {len(cookies)} 个 Cookie")
+            # 尝试直接 JSON 解析
+            if text.strip().startswith("{"):
+                return json.loads(text)
+            # JSONP 格式
+            pattern = re.compile(rf"{re.escape(callback_name)}\((.*)\);?", re.DOTALL)
+            match = pattern.search(text)
+            if match:
+                return json.loads(match.group(1))
+            # 尝试通用 JSONP 解析
+            if "(" in text and text.endswith(");"):
+                json_str = text[text.index("(") + 1 : -2]
+                return json.loads(json_str)
         except Exception as e:
-            print(f"  {domain}: {e}")
+            print(f"[THS-API] JSONP 解析失败: {e}")
+        return {"errorCode": -1, "errorMsg": "parse error"}
 
-    if not all_cookies:
-        print("❌ 未找到同花顺 Cookie，请先在 Edge 中登录 https://t.10jqka.com.cn")
-        return False
+    def check_login(self) -> bool:
+        """检查登录状态"""
+        resp = self._request("get", "/newcircle/group/getSelfStockWithMarket/")
+        data = self._parse_jsonp(resp)
+        return data.get("errorCode") == 0
 
-    cookie_str = "; ".join(f"{c.name}={c.value}" for c in all_cookies)
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        f.write(cookie_str)
+    def get_self_stocks(self) -> list[dict]:
+        """
+        获取当前自选股列表
+        返回: [{"code": "600519", "marketid": "17", "market_name": "沪市"}, ...]
+        """
+        resp = self._request("get", "/newcircle/group/getSelfStockWithMarket/")
+        data = self._parse_jsonp(resp)
+        if data.get("errorCode") != 0:
+            print(f"[THS-API] 获取自选股失败: {data.get('errorMsg')}")
+            return []
+        result = data.get("result", [])
+        for item in result:
+            item["market_name"] = self.MARKET_ID.get(
+                item.get("marketid", ""), "未知"
+            )
+        return result
 
-    print(f"✅ 成功！共 {len(all_cookies)} 个 Cookie → {COOKIE_FILE}")
-    return True
+    def add_stock(self, code: str, marketid: str = "17") -> dict:
+        """
+        添加单只自选股
+        :param code: 股票代码，如 "600519"
+        :param marketid: 市场代码，沪市=17, 深市=33, 北交所=151
+        :return: {"errorCode": 0, "errorMsg": ""} 表示成功
+        """
+        params = {"op": "add", "stockcode": code, "marketid": marketid}
+        print(f"[THS-API][调试] add_stock URL: {self.BASE_URL}/newcircle/group/modifySelfStock/ params={params}")
+        resp = self._request(
+            "get",
+            "/newcircle/group/modifySelfStock/",
+            params,
+        )
+        return self._parse_jsonp(resp, "modifyStock")
 
+    def delete_stock(self, code: str, marketid: str = "17") -> dict:
+        """
+        删除单只自选股
+        :param code: 股票代码
+        :param marketid: 市场代码
+        """
+        resp = self._request(
+            "get",
+            "/newcircle/group/modifySelfStock/",
+            {"op": "del", "stockcode": code, "marketid": marketid},
+        )
+        return self._parse_jsonp(resp, "modifyStock")
 
-def method_manual_input():
-    """兜底方案：让用户手动粘贴 Cookie"""
-    print("=" * 60)
-    print("  手动输入 Cookie")
-    print("=" * 60)
-    print()
-    print("获取步骤：")
-    print("  1. Edge 打开 https://t.10jqka.com.cn 并登录")
-    print("  2. 按 F12 → Application → Cookies → 10jqka.com.cn")
-    print("  3. 或者 F12 → Network → 刷新 → 点击任意请求 →")
-    print("     Request Headers → 复制 Cookie 整行值")
-    print()
-    print("将 Cookie 粘贴到下方（粘贴后按 Enter，然后按 Ctrl+Z 再按 Enter）：")
-    print("-" * 60)
+    def batch_add(
+        self, stocks: list[tuple[str, str]], delay: float = 0.5
+    ) -> dict:
+        """
+        批量添加自选股
+        :param stocks: [(code, marketid), ...] 如 [("600519", "17"), ("000001", "33")]
+        :param delay: 每次请求间隔（秒），避免触发频率限制
+        :return: {"added": [...], "skipped": [...], "failed": [...]}
+        """
+        # 先获取已有的自选股，避免重复添加
+        existing = self.get_self_stocks()
+        existing_set = set()
+        for item in existing:
+            existing_set.add(f"{item['code']}:{item.get('marketid', '')}")
 
-    lines = []
-    print("请输入 Cookie（支持多行粘贴，输入空行结束）：")
-    while True:
+        result = {"added": [], "skipped": [], "failed": []}
+        for code, marketid in stocks:
+            print(f"[THS-API][调试] 准备添加: code={code}, marketid={marketid}")
+            if f"{code}:{marketid}" in existing_set:
+                result["skipped"].append(code)
+                print(f"[THS-API] 跳过 {code}（已存在）")
+                continue
+
+            resp = self.add_stock(code, marketid)
+            print(f"[THS-API][调试] API响应: {resp}")
+            if resp.get("errorCode") == 0:
+                result["added"].append(code)
+                print(f"[THS-API] ✓ {code} 添加成功")
+                existing_set.add(f"{code}:{marketid}")
+            else:
+                result["failed"].append({"code": code, "msg": resp.get("errorMsg", "未知错误")})
+                print(f"[THS-API] ✗ {code} 失败: {resp.get('errorMsg')}")
+
+            time.sleep(delay)
+
+        total = len(result["added"]) + len(result["skipped"]) + len(result["failed"])
+        print(
+            f"[THS-API] 批量操作完成: {total}只, "
+            f"新增{len(result['added'])}只, "
+            f"跳过{len(result['skipped'])}只, "
+            f"失败{len(result['failed'])}只"
+        )
+        return result
+
+    def batch_replace(self, stocks: list[tuple[str, str]], delay: float = 0.3) -> dict:
+        """
+        全量替换自选股（先删除所有，再添加新的）
+        注意：此操作会清空现有自选股！
+        :param stocks: [(code, marketid), ...]
+        :return: {"deleted": int, "added": [...], "failed": [...]}
+        """
+        result = {"deleted": 0, "added": [], "failed": []}
+
+        # 1. 获取并删除所有现有自选股
+        existing = self.get_self_stocks()
+        print(f"[THS-API] 当前自选股 {len(existing)} 只，准备全量替换...")
+        for item in existing:
+            self.delete_stock(item["code"], item.get("marketid", "17"))
+            result["deleted"] += 1
+            time.sleep(delay * 0.5)
+
+        # 2. 添加新的
+        add_result = self.batch_add(stocks, delay=delay)
+        result["added"] = add_result["added"]
+        result["failed"] = add_result["failed"]
+
+        print(
+            f"[THS-API] 全量替换完成: 删除{result['deleted']}只, "
+            f"新增{len(result['added'])}只, 失败{len(result['failed'])}只"
+        )
+        return result
+
+    def _request(self, method: str, path: str, params: dict = None) -> str:
+        """发送 HTTP 请求"""
+        ts = int(time.time() * 1000)
+        url = f"{self.BASE_URL}{path}"
+        if params is None:
+            params = {}
+        params["_"] = str(ts)
+
         try:
-            line = input()
-            if not line.strip():
-                break
-            lines.append(line.strip())
-        except EOFError:
-            break
-
-    cookie_str = " ".join(lines)
-    # 去掉可能带入的 "Cookie: " 前缀
-    cookie_str = cookie_str.replace("Cookie: ", "").replace("cookie: ", "").strip()
-
-    if not cookie_str or len(cookie_str) < 20:
-        print("❌ Cookie 太短或为空，请重试。")
-        return False
-
-    with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-        f.write(cookie_str)
-
-    print(f"✅ Cookie 已保存到 {COOKIE_FILE}（{len(cookie_str)} 字符）")
-    return True
+            if method.lower() == "get":
+                resp = requests.get(url, headers=self.headers, params=params, timeout=15)
+            else:
+                resp = requests.post(url, headers=self.headers, data=params, timeout=15)
+            print(f"[THS-API][调试] 请求URL: {resp.url}")
+            print(f"[THS-API][调试] 响应(前500字): {resp.text[:500]}")
+            resp.raise_for_status()
+            return resp.text
+        except requests.exceptions.Timeout:
+            print(f"[THS-API] 请求超时: {url}")
+            return ""
+        except requests.exceptions.RequestException as e:
+            print(f"[THS-API] 请求失败: {e}")
+            return ""
 
 
-def main():
-    print()
-    print("请选择捕获方式：")
-    print("  [1] Selenium 自动捕获（打开 Edge，自动检测登录）")
-    print("  [2] 从 Edge 本地读取（无需开浏览器，如果之前登录过）")
-    print("  [3] 手动粘贴 Cookie（100% 可靠，但需要你手动复制）")
-    print()
+# ============================================================
+# 辅助函数：从股票代码推断市场ID
+# ============================================================
 
-    choice = input("请输入选项 [1/2/3]（默认 1）: ").strip() or "1"
+def get_market_id(code: str) -> str:
+    """
+    根据股票代码推断同花顺市场ID
+    - 沪市股票=17, 沪市指数=16, 沪市ETF=20
+    - 深市股票=33, 深市指数=32
+    - 北交所=151
+    - 港股=177, 港股指数=176
+    - 美股=169
+    - 板块/概念=48
+    """
+    code_upper = code.strip().upper()
 
-    success = False
-    if choice == "1":
-        success = method_selenium_webdriver_manager()
-        if not success:
-            print()
-            print("Selenium 方式失败，尝试从 Edge 本地读取...")
-            success = method_browser_cookie3()
-    elif choice == "2":
-        success = method_browser_cookie3()
-    elif choice == "3":
-        success = method_manual_input()
+    # 港股：带 .HK 后缀 或 HK+4位数字 或 K+5位数字
+    if code_upper.endswith(".HK"):
+        return "177"
+    if code_upper.startswith("HK") or code_upper.startswith("K"):
+        return "177"
+    # 港股指数：HS+数字
+    if code_upper.startswith("HS"):
+        return "176"
+    # 美股：纯字母
+    if code_upper.isalpha() and len(code_upper) >= 2:
+        return "169"
+
+    # 根据后缀确定市场基础，再细分为指数/股票
+    if code_upper.endswith(".SH"):
+        c = code_upper[:-3]  # 去掉 .SH
+        # 沪市指数：000xxx, 1A/1B, 880xxx, 881xxx 等
+        if c.startswith(("000", "1A", "1B", "88")) or len(c) < 6:
+            return "16"
+        return "17"
+    if code_upper.endswith(".SZ"):
+        c = code_upper[:-3]  # 去掉 .SZ
+        if c.startswith("399"):
+            return "32"
+        return "33"
+    if code_upper.endswith(".BJ"):
+        return "151"
+
+    # 无后缀：按纯数字推断
+    c = code_upper
+    if not c:
+        return "17"
+
+    # 港股：HK+4位数字 或 K+5位数字（港股通） 或纯5位数字
+    if c.startswith("HK") or c.startswith("K"):
+        return "177"
+    # 港股指数：HS+数字
+    if c.startswith("HS"):
+        return "176"
+    # 美股：纯字母
+    if c.isalpha() and len(c) >= 2:
+        return "169"
+
+    # 沪深指数
+    if c.startswith("1A") or c.startswith("1B"):
+        return "16"
+    if c.startswith("399"):
+        return "32"
+
+    # 纯数字股票代码
+    if len(c) < 6:
+        return "17"
+    if c.startswith(("6", "688", "689", "5")):
+        return "17"   # 沪市（主板、科创板、ETF）
+    elif c.startswith(("0", "3", "1", "159", "16")):
+        return "33"   # 深市（主板、创业板、ETF/LOF）
+    elif c.startswith(("8", "4", "43")):
+        return "151"  # 北交所/新三板
+    elif c.startswith("88"):
+        return "48"   # 板块/概念
+    return "17"
+
+
+# ============================================================
+# 便捷函数：直接保存扫描结果到同花顺云自选
+# ============================================================
+
+def save_scan_to_ths_cloud(
+    codes: list[str],
+    cookie: str = None,
+    cookie_file: str = None,
+    replace: bool = False,
+) -> dict:
+    """
+    将扫描结果保存到同花顺云端自选股
+
+    :param codes: 股票代码列表，如 ["600519", "000001.SZ", "300750"]
+    :param cookie: 同花顺 Cookie
+    :param cookie_file: Cookie 文件路径
+    :param replace: True=全量替换, False=增量添加
+    :return: 操作结果
+    """
+    api = THSCloudAPI(cookie=cookie, cookie_file=cookie_file)
+
+    if not api.check_login():
+        return {"error": "登录状态失效，请更新 Cookie"}
+
+    # 处理代码格式：保留后缀给 get_market_id 识别港股，纯数字给 API 调用
+    stocks = []
+    for code in codes:
+        c = code.strip()
+        if not c:
+            continue
+        marketid = get_market_id(c)  # 传原始代码（带后缀），让 get_market_id 识别 .HK
+        plain = c.split(".")[0] if "." in c else c
+        if marketid == "177":
+            # 港股：使用纯数字代码，不加 K 前缀
+            # 同花顺 API 中港股使用纯数字代码（如 00020）+ marketid=177
+            # 若代码以 0 开头，追加测试去掉前导零的版本（如 00020 → 20）
+            print(f"[THS-API][调试] save_scan: 原始={code}, plain={plain}, marketid={marketid}")
+            stocks.append((plain, marketid))
+            if plain.startswith("0"):
+                alt_plain = plain.lstrip("0") or "0"
+                stocks.append((alt_plain, marketid))
+                print(f"[THS-API][调试] save_scan: 原始={code}, 备选 plain={alt_plain}, marketid={marketid}")
+        else:
+            print(f"[THS-API][调试] save_scan: 原始={code}, 处理后 plain={plain}, marketid={marketid}")
+            stocks.append((plain, marketid))
+
+    if not stocks:
+        return {"error": "无有效股票代码"}
+
+    if replace:
+        return api.batch_replace(stocks)
     else:
-        print("无效选项")
-        return
+        return api.batch_add(stocks)
 
-    if success:
-        print()
-        print("🎉 现在可以测试同步功能：")
-        print(f"   python {os.path.join(SCRIPT_DIR, 'ths_cloud_api.py')}")
-    else:
-        print()
-        print("⚠️  所有方式都失败了，请用选项 3 手动粘贴 Cookie。")
 
+# ============================================================
+# 命令行测试
+# ============================================================
 
 if __name__ == "__main__":
-    main()
+    print("=" * 60)
+    print("同花顺云端自选股同步 - 测试")
+    print("=" * 60)
+
+    try:
+        api = THSCloudAPI()
+        if api.check_login():
+            print("✅ 登录状态有效")
+            stocks = api.get_self_stocks()
+            print(f"当前自选股: {len(stocks)} 只\n")
+
+            # 按 marketid 分组显示
+            by_market = {}
+            for s in stocks:
+                mid = s.get("marketid", "?")
+                name = api.MARKET_ID.get(mid, f"未知({mid})")
+                if name not in by_market:
+                    by_market[name] = []
+                by_market[name].append(s["code"])
+
+            for name in sorted(by_market.keys()):
+                codes = by_market[name]
+                print(f"  [{name}] ({len(codes)}只)")
+                for c in codes:
+                    print(f"    {c}")
+                print()
+        else:
+            print("❌ 登录状态失效，请检查 Cookie")
+    except ValueError as e:
+        print(f"❌ {e}")
+        print("\n请按以下步骤获取 Cookie：")
+        print("  1. 浏览器打开 https://t.10jqka.com.cn 并登录")
+        print("  2. F12 → Network → 刷新页面")
+        print("  3. 点击任意请求 → Request Headers → 复制 Cookie 值")
+        print("  4. 将 Cookie 保存到 ths_captured_cookie.txt 文件中")

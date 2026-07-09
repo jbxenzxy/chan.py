@@ -105,7 +105,7 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
         data = f.read()
     record_size = 32
     total = len(data) // record_size
-    print(f"[stock][调试] 文件: {filepath}, 大小: {len(data)}字节, record_size={record_size}, 总记录数: {total}, 市场={'扩展' if is_ext_market else '标准A股'}")
+    print(f"[调试] 文件: {filepath}, 大小: {len(data)}字节, record_size={record_size}, 总记录数: {total}, 市场={'扩展' if is_ext_market else '标准A股'}")
 
     if max_records and max_records < total:
         start = (total - max_records) * record_size
@@ -176,17 +176,17 @@ def _check_and_report_gaps(records):
             gap_indices.append((i, gap_trading_days))
 
     if gap_indices:
-        print(f"[stock][警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
+        print(f"[警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
         for idx, (gi, gap_td) in enumerate(gap_indices):
             prev_dt = records[gi-1]["dt"].strftime("%Y-%m-%d")
             curr_dt = records[gi]["dt"].strftime("%Y-%m-%d")
-            print(f"[stock][警告]   缺口{idx+1}: {prev_dt} -> {curr_dt} (间隔{gap_td}个交易日)")
+            print(f"[警告]   缺口{idx+1}: {prev_dt} -> {curr_dt} (间隔{gap_td}个交易日)")
     else:
         old_start = records[0]["dt"].strftime("%Y-%m-%d")
         old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        print(f"[stock][信息] 检测到 0 处数据缺口")
-        print(f"[stock][信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
-    print(f"[stock][调试] 共解析有效记录: {len(records)}条")
+        print(f"[信息] 检测到 0 处数据缺口")
+        print(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
+    print(f"[调试] 共解析有效记录: {len(records)}条")
 
 
 def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
@@ -1052,7 +1052,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         else:
             min_file = os.path.join(_tdx_config["vipdoc_dir"], market, "fzline", f"{market}{code}.lc5")
         if not os.path.exists(min_file):
-            print(f"[stock][警告] 子级别数据文件不存在: {min_file}")
+            print(f"[警告] 子级别数据文件不存在: {min_file}")
             return None
         sub_records = read_tdx_min_file(min_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
@@ -1062,7 +1062,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
     elif sub_freq == 'd':
         day_file = find_day_file(market, code)
         if not os.path.exists(day_file):
-            print(f"[stock][警告] 子级别数据文件不存在: {day_file}")
+            print(f"[警告] 子级别数据文件不存在: {day_file}")
             return None
         sub_records = read_tdx_day_file(day_file, market=market)
         if _tdx_config["forward_adjust_enabled"]:
@@ -1071,7 +1071,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         return None
 
     if len(sub_records) < 5:
-        print(f"[stock][警告] 子级别数据不足({len(sub_records)}条)")
+        print(f"[警告] 子级别数据不足({len(sub_records)}条)")
         return None
 
     # 过滤到与主级别相同的时间范围（略大一点，确保边界包含）
@@ -1080,7 +1080,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         main_end = records[-1]["dt"]
         sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
 
-    print(f"[stock][信息] 子级别({sub_freq})数据加载: {len(sub_records)}条")
+    print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条")
     return sub_records
 
 
@@ -1258,7 +1258,7 @@ def read_zxg_stocks():
     """
     path = get_blk_path("zxg")
     if not os.path.exists(path):
-        print(f"[stock][警告] 自选股文件不存在: {path}")
+        print(f"[警告] 自选股文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1270,7 +1270,7 @@ def read_zz1000_stocks():
     """
     path = get_blk_path("ZZ1000")
     if not os.path.exists(path):
-        print(f"[stock][警告] 中证1000板块文件不存在: {path}")
+        print(f"[警告] 中证1000板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1282,7 +1282,7 @@ def read_sz50_stocks():
     """
     path = get_blk_path("SZ50")
     if not os.path.exists(path):
-        print(f"[stock][警告] 上证50板块文件不存在: {path}")
+        print(f"[警告] 上证50板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1294,7 +1294,7 @@ def read_hs300_stocks():
     """
     path = get_blk_path("HS300")
     if not os.path.exists(path):
-        print(f"[stock][警告] 沪深300板块文件不存在: {path}")
+        print(f"[警告] 沪深300板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1306,7 +1306,7 @@ def read_zz500_stocks():
     """
     path = get_blk_path("ZZ500")
     if not os.path.exists(path):
-        print(f"[stock][警告] 中证500板块文件不存在: {path}")
+        print(f"[警告] 中证500板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
