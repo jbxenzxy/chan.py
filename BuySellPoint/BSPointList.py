@@ -728,6 +728,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs0('_cal_bs0point_3rd', '进入', stroke_n_idx=stroke_n.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过，不生成买卖点
+        fx_level = self._is_strong_fx(stroke_n)
+        if fx_level == 0:
+            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 弱分型（中继概率大）',
+                          stroke_n_idx=stroke_n.idx)
+            return
+
         # ⑴ 当下笔3区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_3rd', '跳过: MACD拐头不满足')
@@ -785,6 +792,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           base_range=round(base_range, 2),
                           threshold=round(threshold, 2), actual=actual,
                           condition=cond)
+            return
+
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
+            self._dbg_bs0('_cal_bs0point_4th', '跳过: 弱分型（中继概率大）',
+                          stroke_n_idx=stroke_n.idx)
             return
 
         # ⑴ 离开笔4区间套背驰(用MACD模拟)
@@ -881,6 +894,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return False
 
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
+            self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 弱分型（中继概率大）',
+                          stroke_n_idx=stroke_n.idx)
+            return
+
         # ⑴ 离开笔区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: MACD拐头不满足')
@@ -889,7 +908,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ⑵ 中枢B，离开笔和进入笔，MACD面积背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
-        in_metric = s_nm4.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
+        in_metric = s_nm4.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
@@ -917,6 +936,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         分析逻辑：当n=6或8时，主分析未找到买卖点，改用中枢A进入段与笔n做MACD全面积比较
         进入段为 pivot_a.begin_bi 的前一笔，离开段为 stroke_n
         """
+        return
+
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
         self._dbg_bs0('_cal_bs0point_nth_ozs', '进入', stroke_n_idx=stroke_n.idx,
                       entry_bi_idx=entry_bi.idx,
@@ -945,6 +966,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
+            self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: 弱分型（中继概率大）',
+                          stroke_n_idx=stroke_n.idx)
+            return
+
         # ⑴ 离开笔6/8区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: MACD拐头不满足')
@@ -953,7 +980,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ⑵ 中枢A，离开笔6/8和进入笔，MACD面积背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
@@ -1041,41 +1068,75 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         stroke_nm2 = bi_list[stroke_n.idx - 2]  # 第N-2笔
         if stroke_n.is_down() and stroke_n._low() >= stroke_nm2._low():
             self._dbg_bs1('cal_bs1point', '跳过: 向下笔未创新低',
-                          stroke_n_idx=stroke_n.idx,
+                          n_idx=stroke_n.idx,
+                          n_2_idx=stroke_nm2.idx,
                           n_low=stroke_n._low(), nm2_low=stroke_nm2._low())
             return
         if stroke_n.is_up() and stroke_n._high() <= stroke_nm2._high():
             self._dbg_bs1('cal_bs1point', '跳过: 向上笔未创新高',
-                          stroke_n_idx=stroke_n.idx,
+                          n_idx=stroke_n.idx,
+                          n_2_idx=stroke_nm2.idx,
                           n_high=stroke_n._high(), nm2_high=stroke_nm2._high())
+            return
+
+        # 笔N的极值必须突破中枢A的波动区间
+        # 向下笔（买点）：笔N低点 < 中枢A波动区间最低点(peak_low)
+        # 向上笔（卖点）：笔N高点 > 中枢A波动区间最高点(peak_high)
+        if stroke_n.is_down() and stroke_n._low() >= pivot_a.peak_low:
+            self._dbg_bs1('cal_bs1point', '跳过: 向下笔未跌破中枢波动区间最低点',
+                          n_idx=stroke_n.idx,
+                          n_low=stroke_n._low(), peak_low=pivot_a.peak_low)
+            return
+        if stroke_n.is_up() and stroke_n._high() <= pivot_a.peak_high:
+            self._dbg_bs1('cal_bs1point', '跳过: 向上笔未突破中枢波动区间最高点',
+                          n_idx=stroke_n.idx,
+                          n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
+            return
+
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
+            self._dbg_bs0('cal_bs1point', '跳过: 弱分型（中继概率大）',
+                          stroke_n_idx=stroke_n.idx)
+            return
+
+        # ⑴ 当下笔区间套背驰(用MACD模拟)
+        if not self._is_macd_diver(stroke_n):
+            self._dbg_bs0('cal_bs1point', '跳过: MACD拐头不满足')
             return
 
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
 
-        # ⑴ 次级别峰值背驰：笔N(c₂) 与 笔N-2(c₁) 的MACD峰值(PEAK)背驰
-        in_metric = stroke_nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅在 MACD_ALGO.AREA 时有用
-        out_metric = stroke_n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
-        divergence_rate = out_metric / (in_metric + 1e-7)
-        is_diver = out_metric <= config.divergence_rate * in_metric
+        # ⑵ 次级别峰值背驰：笔N(c₂) 与 笔N-2(c₁) 的MACD峰值(PEAK)背驰
+        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_nm2, config)
+        divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs1('cal_bs1point', '跳过: 最近同向笔，MACD峰值未背驰(c₁ vs c₂)',
-                          stroke_n_idx=stroke_n.idx,
-                          in_metric=in_metric, out_metric=out_metric,
+                          c1_idx=stroke_nm2.idx,
+                          c2_idx=stroke_n.idx,
+                          nm2_metric=nm2_metric, n_metric=n_metric,
                           divergence_rate=divergence_rate,
                           threshold=config.divergence_rate)
             return
 
-        # ⑵ 本级别趋势背驰：c段全体(c₁+c₂+...) vs 中枢进入笔(b)，MACD面积比较
+        # ⑶ 本级别趋势背驰：c段全体(c₁+c₂+...) vs 中枢进入笔(b)，MACD面积比较
         # c段 = 最后重叠笔的顶分型 → 笔N底分型，包含所有同向笔
         c_offset = self._BS1_C_OFFSET[matched_pattern]
         c_metric = 0.0
+        c_bi_idxs = []  # c段同向笔的索引（c₁+c₂+...）
         for i in range(c_offset, -1, -1):  # N-c_offset 到 N（含）
             s = bi_list[stroke_n.idx - i]
             if (is_buy and s.is_down()) or (not is_buy and s.is_up()):
                 c_metric += s.cal_macd_metric(config.macd_algo, is_reverse=True)
+                c_bi_idxs.append(s.idx)
 
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
+        # 进入段与离开段方向相反（如进入段向上、离开段向下）→ 跳过，不在策略中
+        if (is_buy and entry_bi.is_up()) or (not is_buy and entry_bi.is_down()):
+            self._dbg_bs1('cal_bs1point', '跳过: 进入段与离开段反向',
+                          entry_bi_idx=entry_bi.idx,
+                          c2_idx=stroke_n.idx)
+            return
         entry_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False)
         c_divergence_rate = c_metric / (entry_metric + 1e-7)
         is_c_diver = c_metric < config.divergence_rate * entry_metric
@@ -1083,8 +1144,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             self._dbg_bs1('cal_bs1point', '跳过: c段全体与进入笔，MACD面积未背驰(c vs b)',
                           stroke_n_idx=stroke_n.idx,
                           pattern=matched_pattern,
-                          c_offset=c_offset,
+                          c_bi_idxs=c_bi_idxs,
                           c_metric=round(c_metric, 2),
+                          entry_bi_idx=entry_bi.idx,
                           entry_metric=round(entry_metric, 2),
                           c_divergence_rate=round(c_divergence_rate, 2),
                           threshold=round(config.divergence_rate, 2))
@@ -1095,7 +1157,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                       divergence_rate=divergence_rate,
                       c_divergence_rate=c_divergence_rate,
-                      pattern=matched_pattern)
+                      pattern=matched_pattern,
+                      c_bi_idxs=c_bi_idxs,
+                      entry_bi_idx=entry_bi.idx)
         feature_dict = {
             'bsp1_bi_amp': stroke_n.amp(),
             'divergence_rate': divergence_rate,
@@ -1136,6 +1200,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if not self._has_bsp_for_bi(stroke_nm2.idx):
             return
 
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
+            return
+
         # ⑴ 当下笔区间套背驰(用MACD模拟)
         if not self._is_macd_diver(stroke_n):
             return
@@ -1165,6 +1233,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         nm1_overlap = has_overlap(stroke_nm1._low(), stroke_nm1._high(), pivot_a.low, pivot_a.high)
 
         if n_overlap or not nm1_overlap:
+            return
+
+        # 分型强弱过滤：弱分型（中继概率大）直接跳过
+        if self._is_strong_fx(stroke_n) == 0:
             return
 
         # MACD拐头判断（右肩 vs 中间），MACD值取自合并K线内最后一根原始K线（klc.lst[-1].macd）
@@ -1207,6 +1279,227 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return None
 
         return (pivot_a, stroke_n)
+
+    @staticmethod
+    def _is_strong_fx(bi):
+        """
+        判断当下笔的结束分型是否为强势分型
+        参考缠论原文：
+          - 第82课《分型结构的心理因素》：第三根K线强弱判断
+          - 第79课《分型的辅助操作》：5周期均线辅助过滤
+        简化说明：
+          - 忽略第二根K线形态（长上/下影、长阴/阳）的判断，降低参数复杂度
+          - 第三根K线"区间"指整根K线的最高~最低（high~low），非实体部分
+        返回:
+            int: 0=弱分型（中继概率大）, 1=强势分型, 2=最强分型
+        """
+        # 1. 提取构成分型的三根K线
+        # k2 = bi.end_klc（分型中间一根，笔的结束点）
+        k2_klc = bi.end_klc
+        if k2_klc is None:
+            return 0
+        # k1 = 左肩（笔内倒数第二根合并K线）
+        k1_klc = getattr(k2_klc, 'pre', None)
+        if k1_klc is None:
+            return 0
+        # k3 = 右肩（笔外紧接的下一根合并K线，不在 bi.klc_lst 中）
+        k3_klc = getattr(k2_klc, 'next', None)
+        if k3_klc is None:
+            return 0
+
+        # 从 klc 提取 OHLC
+        # CKLine 合并K线有 .high / .low 属性，.open / .close 需从 .lst 取
+        def _ohlc(klc):
+            lst = klc.lst
+            o = lst[0].open
+            c = lst[-1].close
+            return o, klc.high, klc.low, c
+
+        k1_o, k1_h, k1_l, k1_c = _ohlc(k1_klc)
+        k2_o, k2_h, k2_l, k2_c = _ohlc(k2_klc)
+        k3_o, k3_h, k3_l, k3_c = _ohlc(k3_klc)
+
+        # 2. 计算5周期均线（原始K线级别）
+        # MA5 = 最近5根原始K线（klu）收盘价的均值，以 k3 为最新
+        # k3 是合并K线（klc），可能包含多根原始K线；需从 k3 的 .lst
+        # 向前回溯，通过 .pre 链跨 klc 获取，直到凑够5根原始K线
+        klu_close_5 = []
+        cur = k3_klc
+        while len(klu_close_5) < 5:
+            # 从当前合并K线的原始K线列表中，从后往前取（最新优先）
+            for klu in reversed(cur.lst):
+                if len(klu_close_5) >= 5:
+                    break
+                klu_close_5.append(klu.close)
+            if len(klu_close_5) >= 5:
+                break
+            cur = getattr(cur, 'pre', None)
+            if cur is None:
+                return 0
+        ma5 = sum(klu_close_5) / 5.0
+
+        # 3. 分型方向：向下笔 → 结束于底分型，向上笔 → 结束于顶分型
+        is_bottom = bi.is_down()
+
+        # 4. 计算区间中点（区间 = high ~ low，非实体）
+        k2_mid = (k2_h + k2_l) / 2.0
+        k1_mid = (k1_h + k1_l) / 2.0
+
+        if is_bottom:
+            # ── 底分型 ──
+            # 第82课镜像：第三根以阳线收在第二根区间一半之上
+            cond1 = k3_c > k3_o and k3_c > k2_mid
+            # 第79课：收盘价站上5周期均线
+            cond2 = k3_c > ma5
+
+            if not (cond1 and cond2):
+                return 0  # 弱分型
+
+            # 第82课镜像：第三根最高价突破第一根最高价，且收盘收在第一根区间一半之上
+            if k3_h > k1_h and k3_c > k1_mid:
+                return 2  # 最强分型
+            return 1      # 强势分型
+
+        else:
+            # ── 顶分型 ──
+            # 第82课原文：第三根不能以阳线收在第二根区间一半之上
+            cond1 = k3_c < k3_o and k3_c < k2_mid
+            # 第79课：收盘价跌破5周期均线
+            cond2 = k3_c < ma5
+
+            if not (cond1 and cond2):
+                return 0  # 弱分型
+
+            # 第82课原文：第三根跌破第一根低点，且不能高收到第一根区间一半之上
+            if k3_l < k1_l and k3_c < k1_mid:
+                return 2  # 最强分型
+            return 1      # 强势分型
+
+    @staticmethod
+    def _is_valid_zs(entry_bi, bi3, bi2, bi1):
+        """检查是否构成有效中枢。
+
+        有效中枢需要同时满足：
+        1. 三笔（bi1, bi2, bi3）有重叠区间，形成中枢
+        2. 进入笔有效：不被下一反向笔吃掉
+           - 向上进入笔：起始端低点 < 下一反向笔末端低点
+           - 向下进入笔：起始端高点 > 下一反向笔末端高点
+
+        Args:
+            entry_bi: 进入笔
+            bi3, bi2, bi1: 构成中枢的三笔（按顺序）
+
+        Returns:
+            (True, zs_obj): 有效中枢，zs_obj 有 .high 和 .low 属性
+            (False, None): 无效中枢
+        """
+        zs_low = max(bi1._low(), bi2._low(), bi3._low())
+        zs_high = min(bi1._high(), bi2._high(), bi3._high())
+        if zs_low > zs_high:
+            return False, None
+
+        # 进入笔振幅需 >= bi3振幅 * 1.5
+        if entry_bi.amp() < bi3.amp() * 1.5:
+            return False, None
+
+        # peak_high/peak_low：中枢内所有笔（bi1/bi2/bi3）的极值，即波动区间
+        zs_peak_high = max(bi1._high(), bi2._high(), bi3._high())
+        zs_peak_low = min(bi1._low(), bi2._low(), bi3._low())
+        zs = type('_ZS', (), {
+            'high': zs_high, 'low': zs_low,
+            'peak_high': zs_peak_high, 'peak_low': zs_peak_low,
+        })()
+        return True, zs
+
+    @staticmethod
+    def _is_valid_out_bi(stroke_n, zs):
+        """检查离开笔是否有效突破中枢
+
+        向上笔高点 >= 中枢下沿 + 基准区间 × BS0_ZS_BREAK_RATIO
+        向下笔低点 <= 中枢上沿 - 基准区间 × BS0_ZS_BREAK_RATIO
+
+        基准区间由 _compute_base_range 计算（smoothstep 平滑过渡）。
+        """
+        base_range, _, _ = CMyBSPointList._compute_base_range(zs)
+        if base_range < 0:
+            return False
+
+        r = CMyBSPointList.BS0_ZS_BREAK_RATIO
+        if stroke_n.is_up():
+            return stroke_n._high() >= zs.low + base_range * r
+        else:
+            return stroke_n._low() <= zs.high - base_range * r
+
+    @staticmethod
+    def _compute_base_range(zs):
+        """计算有效突破判断的基准区间（smoothstep 平滑过渡）
+
+        - zs_range = zs.high - zs.low（中枢重叠区间高度）
+        - peak_range = zs.peak_high - zs.peak_low（中枢波动区间高度）
+        - 当 peak_range / zs_range 在 [1.0, 2.0] 之间时，用 smoothstep
+          在 zs_range 和 peak_range 之间平滑过渡。
+        - ratio <= 1.0 → 返回 zs_range
+        - ratio >= 2.0 → 返回 peak_range
+
+        Returns:
+            (base_range, ratio, used_zs_range): 基准区间、波动比例、是否仅用重叠区间
+        """
+        zs_range = zs.high - zs.low
+        if zs_range <= 0:
+            return zs_range, 0.0, True
+
+        peak_range = zs.peak_high - zs.peak_low
+        ratio = peak_range / zs_range
+        if ratio <= 1.0:
+            return zs_range, ratio, True
+        elif ratio >= 2.0:
+            return peak_range, ratio, False
+        else:
+            # smoothstep: 3t² - 2t³, 在两端一阶导数为0，过渡自然
+            t = ratio - 1.0          # 将 [1.0, 2.0] 映射到 [0, 1]
+            weight = t * t * (3 - 2 * t)
+            return zs_range + (peak_range - zs_range) * weight, ratio, False
+
+    @staticmethod
+    def _is_macd_diver(stroke_n):
+        """
+        MACD模拟背驰判断
+          向上笔(卖点)：右肩 macd < 当前这笔 macd 峰值(红柱最大值)
+          向下笔(买点)：右肩 macd > 当前这笔 macd 峰值(绿柱最小值)
+        """
+        # 计算当前笔MACD柱子峰值
+        # 向上笔取最大红柱，向下笔取最小绿柱(最负)
+        peak_macd = 1e-7
+        for klc in stroke_n.klc_lst:
+            for klu in klc.lst:
+                if stroke_n.is_up():
+                    # peak_macd 要么是某个正值，要么是 1e-7（笔内全是负柱的极端情况）
+                    if klu.macd.macd > peak_macd:
+                        peak_macd = klu.macd.macd
+                else:
+                    # peak_macd 要么是某个负值，要么是 1e-7（笔内全是正柱的极端情况）
+                    if klu.macd.macd < peak_macd:
+                        peak_macd = klu.macd.macd
+
+        end_klc = stroke_n.end_klc
+        right_klc = getattr(end_klc, 'next', None)
+        if right_klc is None:
+            return False
+        right_macd = right_klc.lst[-1].macd.macd
+        if stroke_n.is_up():
+            return right_macd < peak_macd
+        else:
+            return right_macd > peak_macd
+
+    @staticmethod
+    def _is_nearest_same_direction_diver(n, nm2, config):
+        """最近同向笔MACD背驰比较
+        比较当下笔N与其最近同向笔N-2的MACD峰值(PEAK)，判断当下笔力度是否不足
+        """
+        n_metric = n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
+        is_diver = n_metric < config.divergence_rate * nm2_metric
+        return is_diver, n_metric, nm2_metric
 
     @staticmethod
     def _is_return_zero_axis(bi_list, pivot_a, stroke_n, dbg_func=None):
@@ -1255,124 +1548,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                      dif_ratio=round(dif_ratio, 2))
         return True
 
-    @staticmethod
-    def _compute_base_range(zs):
-        """计算有效突破判断的基准区间（smoothstep 平滑过渡）
-
-        - zs_range = zs.high - zs.low（中枢重叠区间高度）
-        - peak_range = zs.peak_high - zs.peak_low（中枢波动区间高度）
-        - 当 peak_range / zs_range 在 [1.0, 2.0] 之间时，用 smoothstep
-          在 zs_range 和 peak_range 之间平滑过渡。
-        - ratio <= 1.0 → 返回 zs_range
-        - ratio >= 2.0 → 返回 peak_range
-
-        Returns:
-            (base_range, ratio, used_zs_range): 基准区间、波动比例、是否仅用重叠区间
-        """
-        zs_range = zs.high - zs.low
-        if zs_range <= 0:
-            return zs_range, 0.0, True
-
-        peak_range = zs.peak_high - zs.peak_low
-        ratio = peak_range / zs_range
-        if ratio <= 1.0:
-            return zs_range, ratio, True
-        elif ratio >= 2.0:
-            return peak_range, ratio, False
-        else:
-            # smoothstep: 3t² - 2t³, 在两端一阶导数为0，过渡自然
-            t = ratio - 1.0          # 将 [1.0, 2.0] 映射到 [0, 1]
-            weight = t * t * (3 - 2 * t)
-            return zs_range + (peak_range - zs_range) * weight, ratio, False
-
-    @staticmethod
-    def _is_valid_out_bi(stroke_n, zs):
-        """检查离开笔是否有效突破中枢
-
-        向上笔高点 >= 中枢下沿 + 基准区间 × BS0_ZS_BREAK_RATIO
-        向下笔低点 <= 中枢上沿 - 基准区间 × BS0_ZS_BREAK_RATIO
-
-        基准区间由 _compute_base_range 计算（smoothstep 平滑过渡）。
-        """
-        base_range, _, _ = CMyBSPointList._compute_base_range(zs)
-        if base_range < 0:
-            return False
-
-        r = CMyBSPointList.BS0_ZS_BREAK_RATIO
-        if stroke_n.is_up():
-            return stroke_n._high() >= zs.low + base_range * r
-        else:
-            return stroke_n._low() <= zs.high - base_range * r
-
-    @staticmethod
-    def _is_macd_diver(stroke_n):
-        """
-        MACD模拟背驰判断
-          向上笔(卖点)：右肩 macd < 当前这笔 macd 峰值(红柱最大值)
-          向下笔(买点)：右肩 macd > 当前这笔 macd 峰值(绿柱最小值)
-        """
-        # 计算当前笔MACD柱子峰值
-        # 向上笔取最大红柱，向下笔取最小绿柱(最负)
-        peak_macd = 1e-7
-        for klc in stroke_n.klc_lst:
-            for klu in klc.lst:
-                if stroke_n.is_up():
-                    # peak_macd 要么是某个正值，要么是 1e-7（笔内全是负柱的极端情况）
-                    if klu.macd.macd > peak_macd:
-                        peak_macd = klu.macd.macd
-                else:
-                    # peak_macd 要么是某个负值，要么是 1e-7（笔内全是正柱的极端情况）
-                    if klu.macd.macd < peak_macd:
-                        peak_macd = klu.macd.macd
-
-        end_klc = stroke_n.end_klc
-        right_klc = getattr(end_klc, 'next', None)
-        if right_klc is None:
-            return False
-        right_macd = right_klc.lst[-1].macd.macd
-        if stroke_n.is_up():
-            return right_macd < peak_macd
-        else:
-            return right_macd > peak_macd
-
-    @staticmethod
-    def _is_valid_zs(entry_bi, bi3, bi2, bi1):
-        """检查是否构成有效中枢。
-
-        有效中枢需要同时满足：
-        1. 三笔（bi1, bi2, bi3）有重叠区间，形成中枢
-        2. 进入笔有效：不被下一反向笔吃掉
-           - 向上进入笔：起始端低点 < 下一反向笔末端低点
-           - 向下进入笔：起始端高点 > 下一反向笔末端高点
-
-        Args:
-            entry_bi: 进入笔
-            bi3, bi2, bi1: 构成中枢的三笔（按顺序）
-
-        Returns:
-            (True, zs_obj): 有效中枢，zs_obj 有 .high 和 .low 属性
-            (False, None): 无效中枢
-        """
-        zs_low = max(bi1._low(), bi2._low(), bi3._low())
-        zs_high = min(bi1._high(), bi2._high(), bi3._high())
-        if zs_low > zs_high:
-            return False, None
-
-        # 进入笔振幅需 >= bi3振幅 * 1.5
-        if entry_bi.amp() < bi3.amp() * 1.5:
-            return False, None
-
-        # peak_high/peak_low：中枢内所有笔（bi1/bi2/bi3）的极值，即波动区间
-        zs_peak_high = max(bi1._high(), bi2._high(), bi3._high())
-        zs_peak_low = min(bi1._low(), bi2._low(), bi3._low())
-        zs = type('_ZS', (), {
-            'high': zs_high, 'low': zs_low,
-            'peak_high': zs_peak_high, 'peak_low': zs_peak_low,
-        })()
-        return True, zs
-
-
-# ═══════════════════════════════════════════════════════════
+    # ═══════════════════════════════════════════════════════════
 # 区间套辅助函数（从 my_chan_main.py 搬迁至此）
 # 主要用于 check_nested_diver 计算背驰，
 # 红框功能（my_chan_main.py）通过 import 复用
@@ -1806,7 +1982,7 @@ def _check_sub_multi_bi_diver(bi_list):
     if prev_same_dir is None:
         return {"diverged": False, "detail": "未找到前一个同向笔"}
 
-    prev_peak = prev_same_dir.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 参数仅在 MACD_ALGO.AREA 才有意义
+    prev_peak = prev_same_dir.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
     curr_peak = last_bi.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
     is_diver = curr_peak <= prev_peak * CMyBSPointList.NESTED_MACD_DIVER_RATIO
     detail = (

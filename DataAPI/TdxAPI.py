@@ -1242,6 +1242,8 @@ def read_blk_file(blk_path):
                 elif line.startswith("31#") and len(line) == 8:
                     code = line[3:].strip()
                     if code.isdigit():
+                        # 去除前导零，与HK格式统一，避免同一只港股在31#和HK格式下被重复计数
+                        code = code.lstrip("0") or "0"
                         stocks.append({"prefix": "hk", "code": code})
                 elif line.upper().startswith("HK") and len(line) > 2:
                     code = line[2:].strip()
