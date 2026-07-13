@@ -95,11 +95,11 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
       日期(I4) 开盘(I4) 最高(I4) 最低(I4) 收盘(I4) 成交额(f4) 成交量(I4) 保留(I4)
       价格需除以100得到实际价格（单位：元）
 
-    扩展市场格式（港股/期货等，ds目录）：
+    扩展市场格式（港股/通达信扩展指数等，ds目录）：
       日期(I4) 开盘(f4) 最高(f4) 最低(f4) 收盘(f4) 成交量(I4) 成交额(f4) 结算价(f4)
       价格是float类型，直接就是实际价格，不需要除以100
     """
-    is_ext_market = (market == 'hk')
+    is_ext_market = (market in ('hk', 'ds'))
     records = []
     with open(filepath, "rb") as f:
         data = f.read()
@@ -959,7 +959,7 @@ def _forward_adjust(records, market, code, end_date=None):
     import time as _time
     t_start = _time.time()
     anchor_desc = f"截止到 {end_date.strftime('%Y-%m-%d')}" if end_date is not None else "全部历史"
-    print(f"[复权][信息] {code} 共{len(events)}个除权除息事件({anchor_desc})，开始前复权...")
+    print(f"[复权] {code} 共{len(events)}个除权除息事件({anchor_desc})，开始前复权...")
 
     if len(records) > 1 and records[0]["dt"] > records[1]["dt"]:
         records.sort(key=lambda r: r["dt"])
@@ -974,7 +974,7 @@ def _forward_adjust(records, market, code, end_date=None):
                 r["close"] = r["close"] * a + b
                 adjusted_count += 1
 
-    print(f"[复权][信息] {code} 前复权完成，耗时 {_time.time()-t_start:.3f}s")
+    print(f"[复权] {code} 前复权完成，耗时 {_time.time()-t_start:.3f}s")
     return records, True
 
 
@@ -982,6 +982,8 @@ def find_day_file(market, code):
     """查找日线数据文件路径"""
     if market == 'hk':
         return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"31#{code}.day")
+    if market == 'ds':
+        return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"62#{code}.day")
     return os.path.join(_tdx_config["vipdoc_dir"], market, "lday", f"{market}{code}.day")
 
 
@@ -1001,6 +1003,8 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
     if freq in ('30m', '5m'):
         if market == 'hk':
             data_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"31#{code}.lc5")
+        elif market == 'ds':
+            data_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"62#{code}.lc5")
         else:
             data_file = os.path.join(_tdx_config["vipdoc_dir"], market, "fzline", f"{market}{code}.lc5")
         if not os.path.exists(data_file):
@@ -1049,6 +1053,8 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
     if sub_freq in ('30m', '5m'):
         if market == 'hk':
             min_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"31#{code}.lc5")
+        elif market == 'ds':
+            min_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"62#{code}.lc5")
         else:
             min_file = os.path.join(_tdx_config["vipdoc_dir"], market, "fzline", f"{market}{code}.lc5")
         if not os.path.exists(min_file):
@@ -1242,12 +1248,14 @@ def read_blk_file(blk_path):
                 elif line.startswith("31#") and len(line) == 8:
                     code = line[3:].strip()
                     if code.isdigit():
-                        # 去除前导零，与HK格式统一，避免同一只港股在31#和HK格式下被重复计数
-                        code = code.lstrip("0") or "0"
+                        # 统一补前导零到5位（与通达信文件名一致），避免同一只港股格式不统一
+                        code = code.zfill(5)
                         stocks.append({"prefix": "hk", "code": code})
                 elif line.upper().startswith("HK") and len(line) > 2:
                     code = line[2:].strip()
                     if code.isdigit():
+                        # 统一补前导零到5位（与通达信文件名一致）
+                        code = code.zfill(5)
                         stocks.append({"prefix": "hk", "code": code})
     except Exception as e:
         print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
@@ -1318,6 +1326,8 @@ def read_zz500_stocks():
 # ============================================================
 _BLOCK_GN_CACHE = None       # dict: sector_name → [{"code","prefix","name"}, ...]
 _BLOCK_GN_CACHE_LOADED = False
+_INFOHARBOR_BLOCK_CACHE = None       # dict: sector_code → {"name": str, "stocks": [...]}
+_INFOHARBOR_BLOCK_CACHE_LOADED = False
 
 
 def _download_block_file(api, host, port, block_file):
@@ -1347,7 +1357,79 @@ def _download_block_file(api, host, port, block_file):
     return None
 
 
-def _download_block_gn_from_network():
+
+
+def _safe_replace_file(path, raw_data):
+    """先写临时文件，再用 os.replace 原子替换正式文件；失败时保留旧文件。"""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(raw_data)
+        os.replace(tmp_path, path)
+        return True
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def _validate_downloaded_block_file(file_name, raw_data):
+    """下载后做轻量格式校验，校验通过才覆盖旧文件。"""
+    if not raw_data:
+        return False
+
+    if file_name == "infoharbor_block.dat":
+        try:
+            head = raw_data[:4096].decode("gbk", errors="ignore")
+        except Exception:
+            return False
+        return "#GN_" in head or "#FG_" in head or "#ZS_" in head
+
+    if file_name in ("block_zs.dat", "block_gn.dat", "block_fg.dat", "block.dat"):
+        if len(raw_data) < 386:
+            return False
+        try:
+            block_count = struct.unpack_from("<H", raw_data, 384)[0]
+        except Exception:
+            return False
+        return 0 < block_count < 10000
+
+    return False
+
+
+def _safe_refresh_one_block_file(api, host, port, file_name, block_cache_dir, progress_callback=None):
+    """下载单个板块文件，成功校验后再覆盖旧文件；失败时旧文件保持不变。"""
+    if progress_callback:
+        progress_callback(f"下载成分股: {file_name}...")
+    try:
+        meta = api.get_block_info_meta(file_name)
+        total_size = int(meta.get("size", 0) or 0) if meta else 0
+        if total_size <= 0:
+            print(f"[板块刷新] {file_name} 服务端 size 无效，保留旧文件")
+            return False
+
+        raw = _download_block_file(api, host, port, file_name)
+        if not raw or len(raw) != total_size:
+            print(f"[板块刷新] {file_name} 下载不完整，保留旧文件: {len(raw) if raw else 0}/{total_size}")
+            return False
+
+        if not _validate_downloaded_block_file(file_name, raw):
+            print(f"[板块刷新] {file_name} 格式校验失败，保留旧文件")
+            return False
+
+        local_path = os.path.join(block_cache_dir, file_name)
+        _safe_replace_file(local_path, raw)
+        print(f"[板块刷新] ✅ {file_name} 刷新成功: {total_size} 字节")
+        return True
+    except Exception as e:
+        print(f"[板块刷新] {file_name} 刷新失败，保留旧文件: {e}")
+        return False
+
+
+def _download_block_gn_from_network(progress_callback=None):
     """
     通过 PyTDX 网络接口下载全量板块成分股数据。
     
@@ -1448,21 +1530,25 @@ def _download_block_gn_from_network():
 
             # Step 2: 下载并解析，写入本地缓存
             for bf in existing_files:
+                if progress_callback:
+                    progress_callback(f"下载成分股: {bf}...")
+                print(f"[板块成分股] 开始下载 {bf}...")
                 raw = _download_block_file(api, host, port, bf)
                 if raw and len(raw) > 386:
                     parsed = _parse_raw_block_gn(raw, bf)
                     if parsed:
                         result.update(parsed)
-                        # 写入本地缓存文件
-                        if block_cache_dir:
+                        print(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
+                        # 写入本地缓存文件：先写临时文件，校验成功后原子替换，避免下载失败破坏旧文件
+                        if block_cache_dir and _validate_downloaded_block_file(bf, raw):
                             try:
-                                os.makedirs(block_cache_dir, exist_ok=True)
                                 local_path = os.path.join(block_cache_dir, bf)
-                                with open(local_path, "wb") as f:
-                                    f.write(raw)
+                                _safe_replace_file(local_path, raw)
                             except Exception as e:
-                                pass
+                                print(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
                         need_download.remove(bf)
+                else:
+                    print(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
 
             api.disconnect()
             if not need_download:
@@ -1488,19 +1574,19 @@ def _download_block_gn_from_network():
     return result
 
 
-def refresh_block_files():
+def refresh_block_files(progress_callback=None):
     """
-    公开函数：强制刷新板块文件，下载 block_zs.dat、block_gn.dat、block_fg.dat、block.dat 到 hq_cache 目录。
-    
-    两种使用场景：
-      1. 用户主动点击刷新按钮 -> 重置缓存，删除旧文件，重新下载
-      2. 代码中用到时自动触发 -> _download_block_gn_from_network() 内部已处理（本地不存在才下载）
-    
-    下载后文件存放在 T0002/hq_cache/ 目录，和 tdxzs.cfg / tdxhy.cfg 同目录。
+    公开函数：强制刷新板块文件。
+
+    安全刷新策略：
+      1. 不先删除旧文件；
+      2. 先从 PyTDX 下载到内存；
+      3. 校验成功后写入 .tmp，再用 os.replace 原子替换；
+      4. 任一文件刷新失败时保留旧文件。
     """
     global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
+    global _INFOHARBOR_BLOCK_CACHE, _INFOHARBOR_BLOCK_CACHE_LOADED
 
-    # 获取 hq_cache 目录
     vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
     if vipdoc_dir:
         block_cache_dir = os.path.join(os.path.dirname(vipdoc_dir), "T0002", "hq_cache")
@@ -1511,27 +1597,51 @@ def refresh_block_files():
         print("[板块刷新] 无法确定 hq_cache 目录，跳过板块文件下载")
         return
 
-    # 确保目录存在
     os.makedirs(block_cache_dir, exist_ok=True)
 
-    # 删除旧文件，确保下载最新数据
-    block_files = ["block_zs.dat", "block_gn.dat", "block_fg.dat", "block.dat"]
-    deleted_count = 0
-    for bf in block_files:
-        local_path = os.path.join(block_cache_dir, bf)
-        if os.path.exists(local_path):
-            try:
-                os.remove(local_path)
-                deleted_count += 1
-            except Exception as e:
-                print(f"[板块刷新] 删除 {bf} 失败: {e}")
+    block_files = [
+        "infoharbor_block.dat",
+        "block_zs.dat",
+        "block_gn.dat",
+        "block_fg.dat",
+        "block.dat",
+    ]
 
-    # 重置缓存标志，触发重新下载
+    try:
+        from pytdx.hq import TdxHq_API
+    except ImportError:
+        print("[板块刷新] pytdx 未安装，无法刷新板块文件；保留旧文件")
+        return
+
+    refreshed = 0
+    for host, port in PYTDX_SERVERS[:]:
+        try:
+            api = TdxHq_API(multithread=True)
+            if not api.connect(host, port):
+                continue
+            print(f"[板块刷新] 已连接服务器 {host}:{port}")
+            for bf in block_files:
+                if _safe_refresh_one_block_file(api, host, port, bf, block_cache_dir, progress_callback=progress_callback):
+                    refreshed += 1
+            api.disconnect()
+            break
+        except Exception as e:
+            print(f"[板块刷新] 服务器 {host}:{port} 刷新失败: {e}")
+            try:
+                api.disconnect()
+            except Exception:
+                pass
+            continue
+
+    if refreshed == 0:
+        print("[板块刷新] 所有文件均未刷新成功，继续使用旧文件")
+    else:
+        print(f"[板块刷新] 刷新完成: {refreshed}/{len(block_files)} 个文件成功")
+
     _BLOCK_GN_CACHE = None
     _BLOCK_GN_CACHE_LOADED = False
-
-    # 调用下载函数（会自动下载并保存到 hq_cache）
-    _download_block_gn_from_network()
+    _INFOHARBOR_BLOCK_CACHE = None
+    _INFOHARBOR_BLOCK_CACHE_LOADED = False
 
 
 def _parse_raw_block_gn(data, block_file="block_gn.dat"):
@@ -1611,13 +1721,128 @@ def _parse_raw_block_gn(data, block_file="block_gn.dat"):
     return result
 
 
+
+
+def _parse_infoharbor_block(raw_data):
+    """
+    解析新版通达信 infoharbor_block.dat。
+
+    样例格式：
+      #GN_商业航天,522,880548,20240530,20260710,,
+      0#000026,0#000032,1#600xxx,...
+
+    返回:
+      {
+        "880548": {"name": "商业航天", "type": "GN", "stocks": [...]},
+        ...
+      }
+    """
+    result = {}
+    if not raw_data:
+        return result
+
+    try:
+        text = raw_data.decode("gbk", errors="ignore")
+    except Exception:
+        return result
+
+    current = None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            parts = line.split(",")
+            title = parts[0][1:].strip()
+            if "_" in title:
+                block_type, block_name = title.split("_", 1)
+            else:
+                block_type, block_name = "", title
+            declared_count = 0
+            if len(parts) > 1 and parts[1].strip().isdigit():
+                declared_count = int(parts[1].strip())
+            block_code = parts[2].strip() if len(parts) > 2 else ""
+            current = {
+                "type": block_type,
+                "name": block_name,
+                "declared_count": declared_count,
+                "stocks": [],
+            }
+            if block_code:
+                result[block_code] = current
+            continue
+
+        if current is None:
+            continue
+
+        for token in line.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            m = re.fullmatch(r"(\d)#(\d{5,6})", token)
+            if not m:
+                continue
+            prefix, code = m.group(1), m.group(2)
+            current["stocks"].append({
+                "code": code,
+                "prefix": prefix,
+                "name": code,
+            })
+
+    # 仅保留数量自洽且有成分股的板块；declared_count=0 的空板块不参与成分股查询
+    filtered = {}
+    for code, item in result.items():
+        stocks = item.get("stocks", [])
+        declared = item.get("declared_count", 0)
+        if stocks and (declared == 0 or declared == len(stocks)):
+            filtered[code] = item
+    return filtered
+
+
+def _read_infoharbor_blocks():
+    """读取本地 infoharbor_block.dat，返回 sector_code → 成分股信息。"""
+    global _INFOHARBOR_BLOCK_CACHE, _INFOHARBOR_BLOCK_CACHE_LOADED
+    if _INFOHARBOR_BLOCK_CACHE_LOADED:
+        return _INFOHARBOR_BLOCK_CACHE or {}
+
+    result = {}
+    hq_cache = _get_hq_cache_dir()
+    if hq_cache:
+        path = os.path.join(hq_cache, "infoharbor_block.dat")
+        if os.path.exists(path):
+            try:
+                with open(path, "rb") as f:
+                    raw = f.read()
+                result = _parse_infoharbor_block(raw)
+                if result:
+                    print(f"[板块成分股] ✅ 从 infoharbor_block.dat 读取 {len(result)} 个带代码板块")
+            except Exception as e:
+                print(f"[板块成分股] ⚠️ 读取 infoharbor_block.dat 失败: {e}")
+
+    _INFOHARBOR_BLOCK_CACHE = result
+    _INFOHARBOR_BLOCK_CACHE_LOADED = True
+    return result
+
+
+def _read_infoharbor_sector_stocks(sector_code):
+    """优先按 880xxx 代码从 infoharbor_block.dat 读取成分股。"""
+    blocks = _read_infoharbor_blocks()
+    item = blocks.get(sector_code)
+    if not item:
+        return []
+    stocks = item.get("stocks", [])
+    if stocks:
+        print(f"[板块成分股] ✅ 从 infoharbor_block.dat 找到 '{item.get('name', sector_code)}' 共 {len(stocks)} 只成分股")
+    return stocks
+
+
 def get_index_stocks(sector_code):
     """
     根据通达信板块指数代码，获取其成分股列表。
 
     支持的类型：
     - 881xxx: 研究行业(新版) → 本地 tdxhy.cfg
-    - 880xxx: 概念/风格板块 → tdxzs.cfg + block_*.dat
+    - 880xxx: 概念/风格板块 → 优先 infoharbor_block.dat，失败再用 tdxzs.cfg + block_*.dat
     - 000xxx/399xxx: 标准指数 → AKShare (中证指数公司)
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
@@ -1632,7 +1857,12 @@ def get_index_stocks(sector_code):
     if not sector_code.startswith("88"):
         return _read_standard_index_stocks(sector_code)
 
-    # Step 3: 880xxx（概念/风格板块）→ tdxzs.cfg + block_*.dat
+    # Step 3: 880xxx（概念/风格板块）→ 优先读取 infoharbor_block.dat
+    stocks = _read_infoharbor_sector_stocks(sector_code)
+    if stocks:
+        return stocks
+
+    # Step 4: infoharbor 不可用时，回退到 tdxzs.cfg + block_*.dat
     hq_cache = _get_hq_cache_dir()
     sector_name = None
     if hq_cache:
@@ -1670,9 +1900,12 @@ def get_index_stocks(sector_code):
     stocks = cache.get(sector_name, [])
 
     if stocks:
-        print(f"[板块成分股] ✅ 从网络缓存找到 '{sector_name}' 共 {len(stocks)} 只成分股")
+        if len(stocks) >= 400:
+            print(f"[板块成分股] ⚠️ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只，可能受 400 只上限影响")
+        else:
+            print(f"[板块成分股] ✅ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
     else:
-        print(f"[板块成分股] ❌ 网络缓存中未找到板块 '{sector_name}'")
+        print(f"[板块成分股] ❌ 旧 block_*.dat 缓存中未找到板块 '{sector_name}'")
 
     return stocks
 
@@ -1907,7 +2140,8 @@ def save_to_zxg_blk(codes):
                 elif market == "BJ":
                     line = "2" + code
                 else:
-                    line = "HK" + code
+                    # 港股统一保存为5位（与通达信文件名一致）
+                    line = "HK" + code.zfill(5)
             else:
                 line = code_str
             if line not in existing:

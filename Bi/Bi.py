@@ -195,6 +195,10 @@ class CBi:
             return self.Cal_MACD_area()
         elif macd_algo == MACD_ALGO.FULL_AREA_EXT:
             return self.Cal_MACD_area_ext()
+        elif macd_algo == MACD_ALGO.DIF:
+            return self.Cal_MACD_dif()
+        elif macd_algo == MACD_ALGO.DEA:
+            return self.Cal_MACD_dea()
         elif macd_algo == MACD_ALGO.DIFF:
             return self.Cal_MACD_diff()
         elif macd_algo == MACD_ALGO.SLOPE:
@@ -295,6 +299,30 @@ class CBi:
                         peak = abs(klu.macd.macd)
                     elif self.is_up() and klu.macd.macd > 0:
                         peak = abs(klu.macd.macd)
+        return peak
+
+    @make_cache
+    def Cal_MACD_dif(self):
+        peak = 1e-7
+        for klc in self.klc_lst:
+            for klu in klc.lst:
+                if abs(klu.macd.DIF) > peak:
+                    if self.is_down() and klu.macd.DIF < 0:
+                        peak = abs(klu.macd.DIF)
+                    elif self.is_up() and klu.macd.DIF > 0:
+                        peak = abs(klu.macd.DIF)
+        return peak
+
+    @make_cache
+    def Cal_MACD_dea(self):
+        peak = 1e-7
+        for klc in self.klc_lst:
+            for klu in klc.lst:
+                if abs(klu.macd.DEA) > peak:
+                    if self.is_down() and klu.macd.DEA < 0:
+                        peak = abs(klu.macd.DEA)
+                    elif self.is_up() and klu.macd.DEA > 0:
+                        peak = abs(klu.macd.DEA)
         return peak
 
     def Cal_MACD_half(self, is_reverse):

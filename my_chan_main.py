@@ -60,10 +60,9 @@ except ImportError as e:
     sys.exit(1)
 
 # 导入通达信数据源适配器（从 chan.py 的 DataAPI 目录）
-# 包含：K线读取、前复权、流通股本
+# 包含：K线读取、前复权
 from DataAPI.TdxAPI import CTdxAPI, \
     read_main_level_records, read_sub_level_records, \
-    get_float_shares_from_xdxr, \
     read_zxg_stocks, read_zz1000_stocks, save_to_zxg_blk, \
     read_sz50_stocks, read_hs300_stocks, read_zz500_stocks, \
     get_index_stocks, refresh_block_files
@@ -156,6 +155,8 @@ def _get_stock_name(market, code):
     """获取股票名称。从本地缓存文件读取，缓存不存在则返回None。
     港股5位代码（如00700）和A股6位代码（如000700）是不同证券，绝不互相回退。
     """
+    if market == "ds" and code == "932000":
+        return "中证2000"
     _load_stock_names_from_cache_file()
     compound_key = market + code
     info = _stock_names_cache.get(compound_key)
@@ -167,11 +168,6 @@ def _get_stock_name(market, code):
         return info
     return None
 
-
-# 流通股本缓存：通过 xdxr 网络接口获取（与除权除息数据复用同一数据源）
-# key: (market, code), value: 流通股本(股)
-# 由 forward_adjust.get_float_shares_from_xdxr() 负责读取和缓存
-# 注意：xdxr 数据的 key 是 (market, code)，不会出现 000001.SH/000001.SZ 冲突
 
 # 股票名称缓存：从通达信行情服务器批量获取后保存到本地JSON
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
@@ -222,6 +218,31 @@ def _load_stock_names_from_cache_file():
     return 0
 
 
+
+
+def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
+    """先写临时文件并校验 JSON 可读，再用 os.replace 覆盖正式文件；失败时保留旧文件。"""
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
+        with open(tmp_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+        if not isinstance(loaded, type(data)):
+            raise ValueError("临时 JSON 文件类型校验失败")
+        os.replace(tmp_path, path)
+        return True
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
 # ============================================================
 # PE-TTM 缓存（腾讯接口，增量刷新）
 # ============================================================
@@ -255,13 +276,13 @@ def _load_pe_ttm_cache():
                     # 新格式：{"pe_ttm": float, "index": str}
                     pe_val = v.get("pe_ttm")
                     idx_val = v.get("index")
-                    if isinstance(pe_val, (int, float)) and pe_val > 0:
+                    if isinstance(pe_val, (int, float)) and pe_val != 0:
                         _pe_ttm_cache[k] = pe_val
                         pe_count += 1
                     if isinstance(idx_val, str) and idx_val:
                         _index_belong_cache[k] = idx_val
                         idx_count += 1
-                elif isinstance(v, (int, float)) and v > 0:
+                elif isinstance(v, (int, float)) and v != 0:
                     # 旧格式：直接是数字
                     _pe_ttm_cache[k] = v
                     pe_count += 1
@@ -296,11 +317,11 @@ _AKSHARE_INDEX_MAP = {
 }
 
 
-def _fetch_index_belong_from_akshare():
+def _fetch_index_belong_from_akshare(timeout=30):
     """
     通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
     构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
-    如果 AKShare 不可用或网络异常，返回空字典。
+    如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
     """
     global _index_belong_cache
     try:
@@ -309,9 +330,10 @@ def _fetch_index_belong_from_akshare():
         print("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
         return _index_belong_cache
 
-    result = {}
-    for index_code, index_name in _AKSHARE_INDEX_MAP.items():
+    def _fetch_one(index_code, index_name):
         try:
+            _refresh_status["step"] = f"刷新指数归属: {index_name}..."
+            print(f"[指数归属] 开始获取 {index_name}({index_code})...")
             df = ak.index_stock_cons_csindex(symbol=index_code)
             count = 0
             for _, row in df.iterrows():
@@ -324,6 +346,16 @@ def _fetch_index_belong_from_akshare():
             print(f"[指数归属] {index_name}({index_code}): 获取 {count} 只成分股")
         except Exception as e:
             print(f"[指数归属] {index_name}({index_code}) 获取失败: {e}")
+
+    import concurrent.futures
+    result = {}
+    for index_code, index_name in _AKSHARE_INDEX_MAP.items():
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_fetch_one, index_code, index_name)
+            try:
+                future.result(timeout=timeout)
+            except concurrent.futures.TimeoutError:
+                print(f"[指数归属] {index_name}({index_code}) 获取超时({timeout}s)，跳过")
 
     _index_belong_cache = result
     print(f"[指数归属] 共获取 {len(result)} 只股票的指数归属")
@@ -404,7 +436,7 @@ def _refresh_pe_ttm():
                         pe_str = fields[39]  # 市盈率(动态)
                         if stock_code and stock_code.isdigit() and pe_str and pe_str.replace(".", "").replace("-", "").isdigit():
                             pe_val = float(pe_str)
-                            if pe_val > 0:
+                            if pe_val != 0:
                                 cache_key = line_mkt + stock_code if line_mkt else stock_code
                                 got_set.add(cache_key)
                                 if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
@@ -442,15 +474,14 @@ def _refresh_pe_ttm():
             entry = {}
             pe_val = _pe_ttm_cache.get(k)
             idx_val = _index_belong_cache.get(k)
-            if isinstance(pe_val, (int, float)) and pe_val > 0:
+            if isinstance(pe_val, (int, float)) and pe_val != 0:
                 entry["pe_ttm"] = pe_val
             if idx_val:
                 entry["index"] = idx_val
             if entry:
                 combined[k] = entry
-        with open(_STOCK_PE_TTM_FILE, "w", encoding="utf-8") as f:
-            json.dump(combined, f, ensure_ascii=False)
-        print(f"[PE-TTM] 刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {_STOCK_PE_TTM_FILE}")
+        _safe_write_json_file(_STOCK_PE_TTM_FILE, combined, ensure_ascii=False)
+        print(f"[PE-TTM] 刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已安全保存到 {_STOCK_PE_TTM_FILE}")
     except Exception as e:
         print(f"[PE-TTM] 保存失败: {e}")
         _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
@@ -873,8 +904,7 @@ def _refresh_stock_names():
             filtered_delist += 1
     if all_names:
         os.makedirs(os.path.dirname(_STOCK_NAMES_CACHE_FILE), exist_ok=True)
-        with open(_STOCK_NAMES_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(all_names, f, ensure_ascii=False)
+        _safe_write_json_file(_STOCK_NAMES_CACHE_FILE, all_names, ensure_ascii=False)
         _stock_names_cache = all_names
         _stock_names_loaded = True
         sh_count = sum(1 for c in all_names if all_names[c].get("market") == "sh")
@@ -895,7 +925,9 @@ def _refresh_stock_names():
     print("[刷新] ========== 开始刷新板块文件 ==========")
     _refresh_status["step"] = "刷新成分股..."
     try:
-        refresh_block_files()
+        def _set_step(msg):
+            _refresh_status["step"] = msg
+        refresh_block_files(progress_callback=_set_step)
     except Exception as e:
         print(f"[刷新] 板块文件刷新失败: {e}")
 
@@ -913,24 +945,6 @@ def _refresh_stock_names():
 
 
 
-def get_stock_float_mc_local(market, code, last_close):
-    """
-    通过 xdxr 网络接口计算流通市值（单位：亿元）。
-    流通市值 = 最新收盘价 × 流通股本
-    港股返回 None（跳过市值比较）。
-    流通股本由 forward_adjust.get_float_shares_from_xdxr() 从 xdxr 数据中提取，
-    与除权除息数据复用同一数据源，无需本地文件解密。
-    """
-    if market == "hk":
-        return None
-    if not last_close or last_close <= 0:
-        return None
-    shares = get_float_shares_from_xdxr(market, code)
-    if shares and shares > 0:
-        return last_close * shares / 100000000  # 元 -> 亿元
-    return None
-
-
 # ============================================================
 # 解析证券代码，判断市场
 # ============================================================
@@ -939,6 +953,16 @@ def get_stock_float_mc_local(market, code, last_close):
 
 def _get_stock_market_code(code):
     """识别股票/指数代码，返回 (market, code)；无法识别返回 (None, code)。"""
+    # 通达信扩展市场指数别名：中证2000 本地K线在 ds 目录，文件名为 62#932000
+    _DS_INDEX_ALIASES = {
+        "ZZ2": ("ds", "932000"),
+        "ZZ2000": ("ds", "932000"),
+        "中证2000": ("ds", "932000"),
+        "932000": ("ds", "932000"),
+    }
+    if code in _DS_INDEX_ALIASES:
+        return _DS_INDEX_ALIASES[code]
+
     # 港股指数别名映射：将用户输入的指数简称映射到通达信港股数据文件实际代码
     _HK_INDEX_ALIASES = {
         "HSTECH": ("hk", "HSTECH"),   # 恒生科技指数
@@ -949,16 +973,30 @@ def _get_stock_market_code(code):
     if code in _HK_INDEX_ALIASES:
         return _HK_INDEX_ALIASES[code]
 
-    prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', code)
+    # 港股数字代码规范化：通达信文件统一使用5位（4位需补前导零，如 9926 -> 09926）
+    def _norm_hk(c):
+        if c.isdigit() and len(c) == 4:
+            return '0' + c
+        return c
+
+    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', code)
     if prefix_match:
-        return prefix_match.group(1).lower(), prefix_match.group(2)
+        mkt = prefix_match.group(1).lower()
+        c = prefix_match.group(2)
+        if mkt == 'ds':
+            return mkt, c
+        return mkt, _norm_hk(c) if mkt == 'hk' else c
     # HK前缀 + 非数字代码（如 HKHSTECH、HKHSI）
     prefix_alpha_match = re.match(r'^HK([A-Z]+)$', code)
     if prefix_alpha_match:
         return 'hk', prefix_alpha_match.group(1)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', code)
+    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', code)
     if suffix_match:
-        return suffix_match.group(2).lower(), suffix_match.group(1)
+        mkt = suffix_match.group(2).lower()
+        c = suffix_match.group(1)
+        if mkt == 'ds':
+            return mkt, c
+        return mkt, _norm_hk(c) if mkt == 'hk' else c
     # .HK 后缀 + 非数字代码（如 HSTECH.HK）
     suffix_alpha_match = re.match(r'^([A-Z]+)\.HK$', code)
     if suffix_alpha_match:
@@ -973,6 +1011,9 @@ def _get_stock_market_code(code):
         hk_file = os.path.join(VIPDOC_DIR, "ds", "lday", f"31#{code}.day")
         if os.path.exists(hk_file):
             return 'hk', code
+        ds_file = os.path.join(VIPDOC_DIR, "ds", "lday", f"62#{code}.day")
+        if os.path.exists(ds_file):
+            return 'ds', code
     # A股判断
     if code.startswith('6'):
         return 'sh', code
@@ -992,13 +1033,16 @@ def _get_stock_market_code(code):
     f = os.path.join(VIPDOC_DIR, "ds", "lday", f"31#{code}.day")
     if os.path.exists(f):
         return 'hk', code
+    f = os.path.join(VIPDOC_DIR, "ds", "lday", f"62#{code}.day")
+    if os.path.exists(f):
+        return 'ds', code
     return None, code
 
 
 def _get_market_code(code):
     """
     解析代码，返回 (market, code)
-    market: 'sh' / 'sz' / 'hk' / 'futures'
+    market: 'sh' / 'sz' / 'hk' / 'ds' / 'futures'
     """
     code = code.strip().upper()
     futures_code = _get_futures_code(code)
@@ -1111,10 +1155,9 @@ def _fetch_float_mc_from_tencent(stock_list):
     return all_mv
 
 def _update_float_mc_cache(mv_dict):
-    """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。"""
+    """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。
+    调用方应确保 _load_float_mc_cache() 已先执行。"""
     global _float_mc_cache, _float_mc_loaded
-    # 先确保旧缓存已加载到内存，再合并新数据，避免部分获取时丢失未覆盖的旧数据
-    _load_float_mc_cache()
     _float_mc_cache.update(mv_dict)
     _float_mc_loaded = True
     # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底）
@@ -1595,7 +1638,7 @@ def _get_annotated_codes(freq=""):
         # 期货代码（如 KQ.m@SHFE.rb）没有市场后缀，保持不变
         market = ""
         bare_code = code_with_suffix
-        for suffix in [".SH", ".SZ", ".HK", ".BJ"]:
+        for suffix in [".SH", ".SZ", ".HK", ".BJ", ".DS"]:
             if code_with_suffix.upper().endswith(suffix):
                 market = suffix[1:]  # 去掉点号
                 bare_code = code_with_suffix[:-len(suffix)]
@@ -1988,7 +2031,22 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
     # 1. 拉取历史K线（每次冷启动重新拉取天勤数据）
     t_fetch = time.time()
-    full_records = fetch_futures_kline(code, freq_sec=freq_sec)
+    from tqsdk import TqApi, TqAuth
+    from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD, FREQ_LABEL_CN
+    _display_key = f"{code}:{FREQ_LABEL_CN.get(freq, freq)}"
+    _api = None
+    try:
+        _api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
+        full_records = fetch_futures_kline(_api, code, freq_sec=freq_sec, display_key=_display_key)
+    except Exception as _e:
+        print(f"[期货][错误] 天勤拉取K线失败: {type(_e).__name__}: {_e}")
+        return {"error": f"天勤拉取K线失败: {type(_e).__name__}: {_e}"}
+    finally:
+        if _api is not None:
+            try:
+                _api.close()
+            except Exception as _e:
+                print(f"[警告] 关闭天勤连接异常: {type(_e).__name__}: {_e}")
     print(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
     if len(full_records) < 5:
         return {"error": f"K线数据不足: 仅{len(full_records)}条"}
@@ -2355,7 +2413,20 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
         # 拉取子级别历史K线
         t_sub_fetch = time.time()
-        sub_full_records = fetch_futures_kline(code, freq_sec=sub_freq_sec)
+        _sub_display_key = f"{code}:{FREQ_LABEL_CN.get(sub_freq, sub_freq)}"
+        _api_sub = None
+        try:
+            _api_sub = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
+            sub_full_records = fetch_futures_kline(_api_sub, code, freq_sec=sub_freq_sec, display_key=_sub_display_key)
+        except Exception as _e:
+            print(f"[双窗口][错误] 子级别天勤拉取K线失败: {type(_e).__name__}: {_e}")
+            return result
+        finally:
+            if _api_sub is not None:
+                try:
+                    _api_sub.close()
+                except Exception as _e:
+                    print(f"[警告] 关闭天勤子级别连接异常: {type(_e).__name__}: {_e}")
         print(f"[双窗口] 子级别({sub_freq})拉取K线: {time.time()-t_sub_fetch:.3f}s, {len(sub_full_records)}条")
 
         if len(sub_full_records) < 5:
@@ -2430,6 +2501,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     t_start = time.time()
 
     market, code = _get_stock_market_code(code.strip().upper())
+    # print(f"[调试-_analyze_stock_internal] 解析后market={market}, code={code}, freq={freq}")
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
 
@@ -2561,6 +2633,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             t0 = time.time()
             full_records = read_main_level_records(market, code, freq, end_date=target_dt)
             if len(full_records) < 5:
+                print(f"[调试-K线不足] code={code}, market={market}, freq={freq}, target_dt={target_dt}, records={len(full_records)}")
                 return {"error": f"K线数据不足: 仅{len(full_records)}条"}
             forward_adjust_done = FORWARD_ADJUST_ENABLED
             print(f"[耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
@@ -2996,6 +3069,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
 
         fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, bi) if dual and sub_freq else ("", "")
 
+        from BuySellPoint.BSPointList import CMyBSPointList
+        fx_strength = CMyBSPointList._is_strong_fx(bi) if hasattr(bi, 'end_klc') and bi.end_klc else 0
         bi_data.append({
             "idx": bi.idx,
             "sdt": sdt_str, "edt": edt_str,
@@ -3013,6 +3088,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "fx_b_raw_dt": fx_b_raw_dt,
             "fx_a_sub_dt": fx_a_sub_dt,
             "fx_b_sub_dt": fx_b_sub_dt,
+            "fx_strength": fx_strength,
         })
 
     # 3. 分型数据
@@ -3190,6 +3266,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     result = {
         "meta": {
             "symbol": f"{code}.{market.upper()}",
+            "market": market,
             "name": stock_name,
             "freq": _get_freq_label(freq),
             "chan_version": "chan.py",
@@ -3449,6 +3526,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     sub_result = {
         "meta": {
             "symbol": f"{code}.{market.upper()}",
+            "market": market,
             "name": "",
             "freq": _get_freq_label(sub_freq),
             "chan_version": "chan.py",
@@ -3546,8 +3624,8 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
 
     # ── 股票双窗口 ──
     market = None
-    prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', normalized_code)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', normalized_code)
+    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
+    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
     if prefix_match:
         market = prefix_match.group(1).lower()
         normalized_code = prefix_match.group(2)
@@ -3629,8 +3707,8 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
     # 标准化代码
     normalized_code = code.strip().upper()
     market = None
-    prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', normalized_code)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', normalized_code)
+    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
+    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
     if prefix_match:
         market = prefix_match.group(1).lower()
         normalized_code = prefix_match.group(2)
@@ -3841,6 +3919,7 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     期货/期指：走天勤数据源，dual=True 时使用两个独立 CChan 对象。
     """
     market, normalized_code = _get_market_code(code)
+    # print(f"[调试-analyze_stock] 输入code={code}, 识别market={market}, normalized_code={normalized_code}")
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
     if market == 'futures':
@@ -3872,21 +3951,13 @@ def _quick_prefilter_pass(market, code):
         except Exception:
             pass  # 名称查找失败不跳过
 
-        # 2. 流通市值过滤：优先从腾讯/AKShare缓存获取，fallback到xdxr本地数据
+        # 2. 流通市值过滤：从缓存获取（阶段一已确保缓存有数据）
         float_mc = _get_float_mc_from_cache(code)
         if float_mc is not None:
             if float_mc < 50:
                 return (False, float_mc, "流通市值<50亿")
         else:
-            shares = get_float_shares_from_xdxr(market, code)
-            if shares:
-                records_tmp = read_main_level_records(market, code, "d")
-                last_close = (records_tmp[-1]["close"] if isinstance(records_tmp[-1], dict) else records_tmp[-1].close) if records_tmp else 0
-                float_mc = (shares * last_close) / 1e8
-                if float_mc < 50:
-                    return (False, float_mc, "流通市值<50亿")
-            else:
-                print(f"[预过滤] {code} 流通市值未知(xdxr和缓存均无数据)")
+            print(f"[预过滤] {code} 流通市值未知")
 
         return (True, float_mc, None)
     except Exception as e:
@@ -4033,6 +4104,25 @@ class ChartHandler(SimpleHTTPRequestHandler):
             prefix_results = []
             other_results = []
 
+            # 手工补充通达信扩展市场指数，后续仍走统一的搜索结果选择与 analyze_stock 流程
+            manual_items = [
+                {"code": "932000", "name": "中证2000", "pinyin": "ZZ2", "market": "ds", "type": "指数"},
+            ]
+            for item in manual_items:
+                bare_code = item["code"]
+                name = item["name"]
+                pinyin = item.get("pinyin", "")
+                if not (keyword_upper in bare_code or keyword_upper in name.upper() or keyword_upper in pinyin):
+                    continue
+                if bare_code == keyword_upper:
+                    exact_results.append(item)
+                elif pinyin == keyword_upper or name.upper() == keyword_upper or keyword_upper in pinyin:
+                    exact_pinyin_results.append(item)
+                elif bare_code.startswith(keyword_upper):
+                    prefix_results.append(item)
+                else:
+                    other_results.append(item)
+
             for compound_key, info in _stock_names_cache.items():
                 if isinstance(info, dict):
                     name = info.get("name", "")
@@ -4171,6 +4261,10 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # 批量获取流通市值：仅当包含非板块指数来源时才调腾讯接口
             _need_float_mc = any(s not in ("tdxhy2", "tdxhy3") for s in sources)
             if _need_float_mc:
+                # 先加载本地缓存，让内存中总有旧数据可用（即使腾讯接口失败）
+                _load_float_mc_cache()
+                if _float_mc_loaded:
+                    print(f"[流通市值] 本地缓存已加载 {len(_float_mc_cache)} 只")
                 try:
                     t_mc = time.time()
                     mv_dict = _fetch_float_mc_from_tencent(merged)
@@ -4184,20 +4278,9 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         else:
                             print(f"[流通市值] ⚠️ AKShare(腾讯接口) 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
                     else:
-                        print(f"[流通市值] 腾讯接口未返回数据，尝试加载本地缓存...")
-                        _load_float_mc_cache()
-                        if _float_mc_loaded:
-                            print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
-                        else:
-                            print(f"[流通市值] 腾讯接口和本地缓存均无数据")
+                        print(f"[流通市值] 腾讯接口未返回数据，使用本地缓存")
                 except Exception as e:
-                    print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，尝试加载本地缓存...")
-                    try:
-                        _load_float_mc_cache()
-                        if _float_mc_loaded:
-                            print(f"[流通市值] 使用本地缓存 {len(_float_mc_cache)} 只")
-                    except Exception as e2:
-                        print(f"[流通市值] 加载本地缓存也失败: {e2}")
+                    print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
             # 后端预过滤：对非自选股来源，提前剔除ST/流通市值<50亿
             pre_filtered = merged
             pre_skip_count = 0
@@ -4290,7 +4373,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     bsps = result.get("bsps", [])
                     stock_name = result.get("meta", {}).get("name", f"{code}")
                     # [DEBUG] 打印API响应中的名称
-                    print(f"[DEBUG-名称] /api/scan_one({code}) meta.name='{result.get('meta', {}).get('name')}', stock_name='{stock_name}'")
+                    # print(f"[DEBUG-名称] /api/scan_one({code}) meta.name='{result.get('meta', {}).get('name')}', stock_name='{stock_name}'")
                     klines = result.get("klines", [])
                     t_filter = 0
 
@@ -4299,34 +4382,24 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     if scan_mode == "fx_d":
                         bis = result.get("bis", [])
                         is_fx_d = False
+                        fx_strength = 0
                         if bis:
                             last_bi = bis[-1]
                             # 最后一笔必须是已确认的向下实笔
                             if last_bi.get("is_sure", True) and last_bi.get("direction") == "down":
                                 is_fx_d = True
+                                fx_strength = last_bi.get("fx_strength", 0)
                         t_filter = time.time() - t0
 
                         if is_fx_d:
-                            # 计算流通市值
-                            t0 = time.time()
-                            market_val, code_val = _get_market_code(code)
-                            if not market_val:
-                                if prefix == "hk":
-                                    market_val = "hk"
-                                elif prefix in ("0", "1"):
-                                    market_val = "sh" if prefix == "1" else "sz"
-                                else:
-                                    market_val = prefix
-                            float_mc = get_stock_float_mc_local(market_val, code_val, klines[-1]["close"] if klines else 0)
-                            t_float = time.time() - t0
                             t_total = time.time() - t_scan_start
-                            print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s 流值{t_float:.3f}s) 是底分型")
+                            print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 是底分型")
                             resp_data = {
                                 "code": code + "." + market.upper(), "name": stock_name,
                                 "is_fx_d": True,
                                 "last_close": klines[-1]["close"] if klines else 0,
-                                "float_mc": float_mc,
                                 "freq": freq,
+                                "fx_strength": fx_strength,
                             }
                         else:
                             # 不是底分型：释放缓存
@@ -4374,29 +4447,16 @@ class ChartHandler(SimpleHTTPRequestHandler):
 
                     if has_points:
                         # 有买/卖点：缓存已由 analyze_stock 写入（完整三项），后续点击可直接查看
-                        # 计算流通市值
-                        t0 = time.time()
-                        market_val, code_val = _get_market_code(code)
-                        if not market_val:
-                            if prefix == "hk":
-                                market_val = "hk"
-                            elif prefix in ("0", "1"):
-                                market_val = "sh" if prefix == "1" else "sz"
-                            else:
-                                market_val = prefix
-                        float_mc = get_stock_float_mc_local(market_val, code_val, klines[-1]["close"] if klines else 0)
-                        t_float = time.time() - t0
                         t_total = time.time() - t_scan_start
-                        print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s 流值{t_float:.3f}s) 有买卖点")
+                        print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 有买卖点")
                         resp_data = {
                             "code": code + "." + market.upper(), "name": stock_name,
                             "buy_points": buy_points,
                             "sell_points": sell_points,
                             "last_close": klines[-1]["close"] if klines else 0,
-                            "float_mc": float_mc,
                             "freq": freq,
                         }
-                        print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
+                        # print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
                     else:
                         # 无买卖点：已释放缓存，不保留
                         t_total = time.time() - t_scan_start
@@ -4547,8 +4607,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 return
             normalized_code = code.strip().upper()
             market = None
-            prefix_match = re.match(r'^(SH|SZ|HK)(\d+)$', normalized_code)
-            suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK)$', normalized_code)
+            prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
+            suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
             if prefix_match:
                 market = prefix_match.group(1).lower()
                 normalized_code = prefix_match.group(2)
@@ -5986,6 +6046,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .scan-bsp-tag.buy { background: rgba(255, 68, 68, 0.25); color: #FF4444; }
         .scan-bsp-tag.sell { background: rgba(0, 221, 0, 0.2); color: #00DD00; }
         .scan-bsp-tag.fx-d { background: rgba(255, 120, 120, 0.2); color: #ff7878; }
+        .scan-bsp-tag.fx-weak { background: rgba(180, 180, 180, 0.2); color: #b0b0b0; }
+        .scan-bsp-tag.fx-strong { background: rgba(255, 165, 0, 0.2); color: #ffa500; }
+        .scan-bsp-tag.fx-strongest { background: rgba(255, 68, 68, 0.3); color: #ff4444; font-weight: 600; }
         .scan-bsp-tag.scan-bsp-more { background: rgba(255,255,255,0.1); color: #8892b0; font-weight: 400; }
         .scan-no-result {
             text-align: center; color: #555; padding: 30px 0; font-size: 12px;
@@ -8529,7 +8592,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     `<span class="label">涨跌:</span> <span class="${cls}">${sign}${changeVal.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
                     `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>` +
-                    (chartData.meta.pe_ttm != null ? ` &nbsp; <span class="label">PE-TTM:</span> <span class="label">${chartData.meta.pe_ttm.toFixed(2)}</span>` : "") +
+                    (chartData.meta.pe_ttm != null ? ` &nbsp; <span class="label">PE-TTM:</span> <span class="label">${chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损"}</span>` : "") +
                     (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "");
             }
 
@@ -8748,7 +8811,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + chartData.meta.pe_ttm.toFixed(2) : ""}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + (chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损") : ""}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -9129,7 +9192,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + chartData.meta.pe_ttm.toFixed(2) : ""}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + (chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损") : ""}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -9594,12 +9657,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     if (radio) radio.checked = true;
                 }
             } catch(e) {}
-            // "成分股"选项一直可见：当前页面是88xxxx板块指数时可用，否则灰化禁用
+            // "成分股"选项一直可见：当前页面是可获取成分股的指数时可用，否则灰化禁用
             var pageIndexLabel = document.getElementById("label-page-index");
             var pageIndexCb = document.querySelector('input[name="scan-source"][value="page_index"]');
             if (pageIndexLabel && pageIndexCb) {
                 var isSectorIndex = chartData && chartData.meta && chartData.meta.symbol &&
-                    /^(88\d{4}|399\d{3}|000\d{3})/.test(chartData.meta.symbol);
+                    /^(88\d{4}|399\d{3}|000\d{3}|932\d{3})/.test(chartData.meta.symbol);
                 if (isSectorIndex) {
                     pageIndexLabel.style.opacity = "1";
                     pageIndexLabel.style.pointerEvents = "";
@@ -9713,7 +9776,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 底分型扫描模式：找到指定周期中最后一个分型是底分型的个股
             if (_scanMode === "fx_d") {
                 var sourceLabel = _scanSourceLabel();
-                body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取 ' + sourceLabel + '...</div>';
+                body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
                 var freq = _scanFreq;
                 Promise.all([
                     fetch("/api/scan_start"),
@@ -9751,7 +9814,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         var completed = 0;
                         var hasRenderedAny = false;
 
-                        body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，底分型 0 只</div>';
+                        body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，底分型 0 只（0 / 0 / 0）</div>';
 
                         function finishScan(interrupted) {
                             fetch("/api/scan_end").then(function() {
@@ -9780,7 +9843,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         function _doUpdatePanel() {
                             var progress = completed + "/" + total;
                             var totalSkipped = preSkipped + skipped;
-                            var html = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + progress + '，跳过 ' + totalSkipped + ' 只，底分型 ' + results.length + ' 只</div>';
+                            var strongest = 0, strong = 0, weak = 0;
+                            for (var i = 0; i < results.length; i++) {
+                                var s = results[i].fx_strength;
+                                if (s === 2) { strongest++; }
+                                else if (s === 1) { strong++; }
+                                else { weak++; }
+                            }
+                            var fxSummary = results.length + ' 只（' + strongest + ' / ' + strong + ' / ' + weak + '）';
+                            var html = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + progress + '，跳过 ' + totalSkipped + ' 只，底分型 ' + fxSummary + '</div>';
                             if (results.length > 0) {
                                 hasRenderedAny = true;
                                 var shCount = 0, szCount = 0, bjCount = 0, hkCount = 0;
@@ -9800,16 +9871,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 html += '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
                                 for (var i = 0; i < results.length; i++) {
                                     var r = results[i];
-                                    var mvText = '';
-                                    if (r.float_mc !== undefined && r.float_mc !== null && r.float_mc < 50) {
-                                        mvText = r.float_mc.toFixed(1) + '亿';
-                                    }
+                                    var fxLabel = '底分型';
+                                    var fxClass = 'fx-d';
+                                    var checked = false;
+                                    if (r.fx_strength === 2) { fxLabel = '最强分型'; fxClass = 'fx-strongest'; checked = true; }
+                                    else if (r.fx_strength === 1) { fxLabel = '强分型'; fxClass = 'fx-strong'; checked = true; }
+                                    else { fxLabel = '弱分型'; fxClass = 'fx-weak'; }
                                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                                    html += chkBox(r.code, true);
+                                    html += chkBox(r.code, checked);
                                     html += '<span class="scan-col-name">' + r.name + '</span>';
                                     html += '<span class="scan-col-code">' + r.code + '</span>';
-                                    html += '<span class="scan-col-mv">' + mvText + '</span>';
-                                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag fx-d">底分型</span></span>';
+                                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + fxClass + '">' + fxLabel + '</span></span>';
                                     html += '</div>';
                                 }
                             }
@@ -9911,7 +9983,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 买卖点扫描模式（原有逻辑）
             // 第一步：通知后端开始新扫描 + 合并多来源股票列表
             var sourceLabel = _scanSourceLabel();
-            body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取 ' + sourceLabel + '...</div>';
+            body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
             Promise.all([
                 fetch("/api/scan_start"),
                 _fetchMergedStocks(_scanSources, freq)
@@ -10010,15 +10082,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             for (var i = 0; i < results.length; i++) {
                                 var r = results[i];
                                 var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
-                                var mvText = '';
-                                if (r.float_mc !== undefined && r.float_mc !== null && r.float_mc < 50) {
-                                    mvText = r.float_mc.toFixed(1) + '亿';
-                                }
                                 html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
                                 html += chkBox(r.code, isLatestBspBuy(r));
                                 html += '<span class="scan-col-name">' + r.name + '</span>';
                                 html += '<span class="scan-col-code">' + r.code + '</span>';
-                                html += '<span class="scan-col-mv">' + mvText + '</span>';
                                 html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
                                 html += '</div>';
                             }
@@ -10199,16 +10266,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 for (var i = 0; i < results.length; i++) {
                     var r = results[i];
                     var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
-                    // 构建各列内容
-                    var mvText2 = '';
-                    if (r.float_mc !== undefined && r.float_mc !== null && r.float_mc < 50) {
-                        mvText2 = r.float_mc.toFixed(1) + '亿';
-                    }
                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
                     html += chkBox(r.code, isLatestBspBuy(r));
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += '<span class="scan-col-mv">' + mvText2 + '</span>';
                     html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
                     html += '</div>';
                 }
@@ -10222,22 +10283,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var body = document.getElementById("scan-body");
             var label = interrupted ? "（已中断）" : "";
             var sourceLabel = _scanSourceLabel();
-            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，底分型 <b>' + results.length + '</b> 只' + label + '</div>';
+            var strongest = 0, strong = 0, weak = 0;
+            for (var i = 0; i < results.length; i++) {
+                var s = results[i].fx_strength;
+                if (s === 2) { strongest++; }
+                else if (s === 1) { strong++; }
+                else { weak++; }
+            }
+            var fxSummary = results.length + ' 只（' + strongest + ' / ' + strong + ' / ' + weak + '）';
+            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，底分型 <b>' + fxSummary + '</b>' + label + '</div>';
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现底分型股票</div>';
             } else {
                 for (var i = 0; i < results.length; i++) {
                     var r = results[i];
-                    var mvText2 = '';
-                    if (r.float_mc !== undefined && r.float_mc !== null && r.float_mc < 50) {
-                        mvText2 = r.float_mc.toFixed(1) + '亿';
-                    }
+                    var fxLabel = '底分型';
+                    var fxClass = 'fx-d';
+                    var checked = false;
+                    if (r.fx_strength === 2) { fxLabel = '最强分型'; fxClass = 'fx-strongest'; checked = true; }
+                    else if (r.fx_strength === 1) { fxLabel = '强分型'; fxClass = 'fx-strong'; checked = true; }
+                    else { fxLabel = '弱分型'; fxClass = 'fx-weak'; }
                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                    html += chkBox(r.code, true);
+                    html += chkBox(r.code, checked);
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
-                    html += '<span class="scan-col-mv">' + mvText2 + '</span>';
-                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag fx-d">底分型</span></span>';
+                    html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + fxClass + '">' + fxLabel + '</span></span>';
                     html += '</div>';
                 }
             }
@@ -10453,18 +10523,42 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             _datePickerInteracted = false;
             _datePickerInputCount = 0;
             if (!chartData) return;
-            // 复盘模式下断开实时连接
-            disconnectRealtime();
-            const dateStr = document.getElementById("goto-date-input").value.trim();
-            if (!dateStr) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
+            const dateStr = document.getElementById("goto-date-input").value.trim();
+            if (!dateStr) return;
             const apiDate = inputDateToApi(dateStr, freq);
             // 日期是今天 → 冷启动（不传 end_date，加载全部K线）
             // 用本地日期避免 UTC 时区偏移（如 UTC+8 凌晨 0-8 点 toISOString 会返回昨天）
             const now = new Date();
             const todayStr = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
             const isToday = dateStr.startsWith(todayStr);
+            // 期货：判断是否"回到最新/实时"——请求时间 ≥ 最后一根K线时间才算
+            // （日内期货所有K线都是今天，不能用 isToday 判断，否则所有日内复盘都被拦截）
+            const isFutures = chartData.meta.market === 'futures';
+            const lastKlineInput = (chartData.klines && chartData.klines.length > 0)
+                ? klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq)
+                : "";
+            const wantLive = isFutures && dateStr >= lastKlineInput;
+            if (wantLive) {
+                document.getElementById("goto-date-input").disabled = true;
+                document.getElementById("loading").classList.remove("hidden");
+                document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
+                if (isDualWindow && getDualBottomFreq(freq)) {
+                    disconnectRealtime();
+                    connectRealtimeDual(code, freq, getDualBottomFreq(freq));
+                } else {
+                    // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
+                    const savedDate = chartData.meta.saved_selection_date || null;
+                    connectRealtimeInit(code, freq, savedDate);
+                }
+                document.getElementById("goto-date-input").disabled = false;
+                document.getElementById("loading").classList.add("hidden");
+                document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                return;
+            }
+            // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
+            disconnectRealtime();
             const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
                 + (isToday ? "" : "&end_date=" + encodeURIComponent(apiDate))
                 + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
@@ -10694,7 +10788,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         const HISTORY_KEY = "chan_stock_history";
-        const MAX_HISTORY = 10;
+        const MAX_HISTORY = 20;
         // 归一化股票代码：将 880974.SH / SH880974 / sh880974 统一为 sh880974
         function normalizeCode(code) {
             if (!code) return "";
@@ -10702,13 +10796,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 期货/期指代码（含 KQ.m@、KQ.i@、大写.大写 格式）不做转换
             if (c.includes('KQ.m@') || c.includes('KQ.i@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
             // 匹配 880974.SH 或 880974.sh 格式 → 转为 sh880974
-            const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ)$/i);
+            const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ|DS)$/i);
             if (dotMatch) return dotMatch[2].toLowerCase() + dotMatch[1];
             // 匹配 SH880974 / sz000001 格式 → 转为小写前缀
-            const prefixMatch = c.match(/^(SH|SZ|HK|BJ)(\d+)$/i);
+            const prefixMatch = c.match(/^(SH|SZ|HK|BJ|DS)(\d+)$/i);
             if (prefixMatch) return prefixMatch[1].toLowerCase() + prefixMatch[2];
             return c;
         }
+        // 固定快捷入口：五大核心指数，常驻历史列表顶部，不参与保存/删除/清除
+        const FIXED_INDICES = [
+            {code: "sh000001", name: "上证指数"},
+            {code: "sz399001", name: "深证成指"},
+            {code: "sh000300", name: "沪深300"},
+            {code: "sh000905", name: "中证500"},
+            {code: "sh000852", name: "中证1000"},
+            {code: "sz399006", name: "创业板指"},
+            {code: "sh000688", name: "科创50"},
+        ];
+        const FIXED_CODES = new Set(FIXED_INDICES.map(x => normalizeCode(x.code)));
+        function isFixedCode(code) { return FIXED_CODES.has(normalizeCode(code)); }
         function getHistory() {
             try {
                 let list = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
@@ -10718,6 +10824,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         function saveHistory(code, name) {
             const normCode = normalizeCode(code);
+            // 固定快捷入口不写入历史，避免与顶部固定区重复
+            if (isFixedCode(normCode)) return;
             let list = getHistory();
             list = list.filter(c => normalizeCode(c.code) !== normCode);
             list.unshift({code: normCode, name: name || ""});
@@ -10732,7 +10840,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         window.clearHistory = function() {
             localStorage.removeItem(HISTORY_KEY);
-            document.getElementById("stock-history").classList.remove("show");
+            // 仅清除用户历史，固定快捷入口保留并重新渲染
+            showHistory();
         };
         window.clearInput = function() {
             const input = document.getElementById("stock-code-input");
@@ -10835,13 +10944,26 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         window.showHistory = function() {
             const list = getHistory();
             const el = document.getElementById("stock-history");
-            if (!list.length) { el.classList.remove("show"); return; }
-            el.innerHTML = list.map(c => {
+            // 重置搜索态，确保历史视图下键盘导航不会误用旧的搜索结果
+            searchResults = [];
+            selectedIndex = -1;
+            // 顶部固定快捷入口区（不可删除）
+            let html = FIXED_INDICES.map(item => {
+                const safe = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+                return `<div class="stock-history-item"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${item.code} - ${item.name}</span></div>`;
+            }).join("");
+            // 用户浏览历史区（可单条删除）；首项顶部加分割线，与底部"清除全部"风格一致
+            html += list.map((c, i) => {
                 const safe = c.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
                 const label = c.name ? c.code + " - " + c.name : c.code;
-                return `<div class="stock-history-item"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
+                const sepStyle = i === 0 ? 'border-top:1px solid #0f3460;' : '';
+                return `<div class="stock-history-item" style="${sepStyle}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
             }).join("");
-            el.innerHTML += `<div class="stock-history-clear" onclick="event.stopPropagation();clearHistory()">清除全部</div>`;
+            // 有用户历史时才显示"清除全部"（仅清用户历史，不影响固定项）
+            if (list.length) {
+                html += `<div class="stock-history-clear" onclick="event.stopPropagation();clearHistory()">清除全部</div>`;
+            }
+            el.innerHTML = html;
             el.classList.add("show");
         };
         document.addEventListener("click", function(e) {
@@ -12076,7 +12198,7 @@ def main():
     html_size = os.path.getsize(html_path)
     print(f"[信息] HTML页面已生成: {html_path} ({html_size/1024/1024:.1f}MB)")
 
-    # 3. 启动HTTP服务器（流通股本在扫描时按需加载，只加载自选股列表中的股票）
+    # 3. 启动HTTP服务器
     port = 18081  # 使用18081，避免与czsc版本的18080冲突
     server = ThreadingHTTPServer(("127.0.0.1", port), ChartHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=False)
