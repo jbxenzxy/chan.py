@@ -2293,20 +2293,20 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         except Exception as e:
             print(f"[警告] 异常: {type(e).__name__}: {e}")
 
-        for zs in kl_list.zs_list:
-            try:
-                zs_data.append({
-                    "sdt": zs.begin.time.toFmtStr(date_fmt),
-                    "edt": zs.end.time.toFmtStr(date_fmt),
-                    "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, date_fmt),
-                    "zg": round(zs.high, 2),
-                    "zd": round(zs.low, 2),
-                    "gg": round(zs.peak_high, 2),
-                    "dd": round(zs.peak_low, 2),
-                    "dir": "up" if zs.bi_in and zs.bi_in.is_up() else "down",
-                })
-            except Exception as e:
-                print(f"[调试] 中枢提取失败: {type(e).__name__}: {e}")
+    for zs in kl_list.zs_list:
+        try:
+            zs_data.append({
+                "sdt": zs.begin.time.toFmtStr(date_fmt),
+                "edt": zs.end.time.toFmtStr(date_fmt),
+                "confirm_edt": _calc_zs_confirm_edt_from_bis(zs, kl_list.bi_list, date_fmt),
+                "zg": round(zs.high, 2),
+                "zd": round(zs.low, 2),
+                "gg": round(zs.peak_high, 2),
+                "dd": round(zs.peak_low, 2),
+                "dir": "up" if zs.bi_in and zs.bi_in.is_up() else "down",
+            })
+        except Exception as e:
+            print(f"[调试] 中枢提取失败: {type(e).__name__}: {e}")
 
     # 中枢五角星（与股票代码完全一致）
     for zs in kl_list.zs_list:
@@ -4775,18 +4775,29 @@ class ChartHandler(SimpleHTTPRequestHandler):
 
             # 1. 查询选点状态
             saved_selection_date = ""
+            top_start_time = start_time
+            bottom_start_time = start_time
             try:
                 qualified_code = symbol
                 col_meta = FREQ_TO_COL.get(top_freq, "")
                 if col_meta and qualified_code in _saved_point_times:
                     saved_selection_date = _saved_point_times[qualified_code].get(col_meta, "").strip() or ""
+                    # 如果外部没传start_time，从CSV读取选点
+                    if top_start_time is None and saved_selection_date:
+                        top_start_time = saved_selection_date
+                # 下窗也查询选点
+                bottom_col_meta = FREQ_TO_COL.get(bottom_freq, "")
+                if bottom_col_meta and qualified_code in _saved_point_times:
+                    bottom_saved = _saved_point_times[qualified_code].get(bottom_col_meta, "").strip() or ""
+                    if bottom_start_time is None and bottom_saved:
+                        bottom_start_time = bottom_saved
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 
             # 2. 拉取上窗历史 + chan分析
             if _SSE_DEBUG:
                 print(f"[{display_key}] 拉取上窗({top_freq})历史K线...")
-            top_result = init_chan_symbol(api, symbol, name, top_freq_sec, top_freq_label, start_time=start_time)
+            top_result = init_chan_symbol(api, symbol, name, top_freq_sec, top_freq_label, start_time=top_start_time)
             top_chan, top_records, top_kl_type, _ = top_result
             top_kl_type = _get_kl_type(top_freq)
             if _SSE_DEBUG:
@@ -4796,7 +4807,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # 3. 拉取下窗历史 + chan分析
             if _SSE_DEBUG:
                 print(f"[{display_key}] 拉取下窗({bottom_freq})历史K线...")
-            bottom_result = init_chan_symbol(api, symbol, name, bottom_freq_sec, bottom_freq_label, start_time=start_time)
+            bottom_result = init_chan_symbol(api, symbol, name, bottom_freq_sec, bottom_freq_label, start_time=bottom_start_time)
             bottom_chan, bottom_records, bottom_kl_type, _ = bottom_result
             bottom_kl_type = _get_kl_type(bottom_freq)
             # 缓存下窗 CChan 供 /api/dual_zs 访问（key 统一大写）
@@ -6311,7 +6322,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="annotation-menu-item" id="annotation-menu-add" onclick="annotationAdd()">添加标注</div>
         <div class="annotation-menu-item danger" id="annotation-menu-del-all" onclick="annotationDeleteAllGlobal()">删除全部</div>
         <div class="annotation-menu-divider" id="annotation-menu-divider"></div>
-        <div class="annotation-menu-item" id="annotation-menu-restart" onclick="restartStock()" style="display:none;">取消选点</div>
+        <div class="annotation-menu-item" id="annotation-menu-restart" onclick="cancelSelectedPoint()" style="display:none;">取消选点</div>
         <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘到此</div>
         <div class="annotation-menu-divider" id="annotation-menu-divider2"></div>
         <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">反转视图</div>
@@ -6563,7 +6574,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!klineDate) return "";
             var d = klineDate.replace(/\//g, "-");
             if (isIntradayFreq(freq)) {
-                var dt = d.slice(0, 16);       // "YYYY-MM-DD HH:MM"
+                var dt = d.slice(0, 19);       // "YYYY-MM-DD HH:MM:SS"（15秒含秒，分钟级不越界）
                 return dt.replace(" ", "T");
             }
             return d.slice(0, 10);
@@ -6596,9 +6607,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     input.min = "1990-01-01T00:00";
                     input.max = "2099-12-31T23:59";
                 }
-                input.style.width = "180px";
+                if (currentFreq === "15s") {
+                    input.style.width = "190px";
+                    if (weekday) weekday.style.right = "28px";
+                } else {
+                    input.style.width = "170px";
+                    if (weekday) weekday.style.right = "28px";
+                }
                 if (oldVal && oldVal.indexOf("T") < 0) oldVal = oldVal + "T09:30";
-                if (weekday) weekday.style.right = "38px";
             } else {
                 input.type = "date";
                 input.step = "1";
@@ -6624,8 +6640,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 箭头提示
             var la = document.getElementById("date-arrow-left");
             var ra = document.getElementById("date-arrow-right");
-            if (la) la.title = isIntra ? "前一根" : "前一天";
-            if (ra) ra.title = isIntra ? "后一根" : "后一天";
+            if (la) la.title = (currentFreq === "d") ? "前一天" : "前一根";
+            if (ra) ra.title = (currentFreq === "d") ? "后一天" : "后一根";
         }
 
         // 实时模式（期货/期指 SSE 推送）
@@ -8115,6 +8131,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const globalStart = Math.max(0, Math.floor(viewOffset));
             const globalEnd = globalStart + viewCount;
             const rightBound = area.x + area.w;
+            const isReplay = chartData.meta && chartData.meta.is_replay;
 
             chartData.zs.forEach(zs => {
                 let sIdx = dateToGlobalIdx(zs.sdt, map);
@@ -9348,7 +9365,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         // ============================================================
         // 重启：清除选点，按冷启动重新加载
         // ============================================================
-        window.restartStock = function() {
+        window.cancelSelectedPoint = function() {
+            document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
             // 双窗口模式和复盘模式不允许重置
             if (isDualWindow) { showDualToast("双窗口模式，不支持重置"); return; }
@@ -9364,7 +9382,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 fetch("/api/futures_clear_saved_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq)
                     .then(resp => resp.json())
                     .then(() => {
-                        document.getElementById("loading").classList.add("hidden");
+                        // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
+                        // 如果提前隐藏loading，会导致SSE重连失败时没有任何加载反馈
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                         connectRealtimeInit(code, freq);  // 冷启动，不带start_time
                     })
@@ -10516,6 +10535,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         window.gotoDate = function() {
+            // 键盘Enter提供了精确日期，应在重置前捕获，用于跳过 isToday 安全网
+            const keyEnter = _dateKeyEnter;
             // 重置所有日期输入标志位，避免上次手动输入/键盘操作阻塞后续日历点击
             _dateKeyEnter = false;
             _dateKeyArrow = false;
@@ -10552,15 +10573,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const savedDate = chartData.meta.saved_selection_date || null;
                     connectRealtimeInit(code, freq, savedDate);
                 }
-                document.getElementById("goto-date-input").disabled = false;
-                document.getElementById("loading").classList.add("hidden");
-                document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                // 不在这里隐藏loading，SSE的init事件回调会处理loading隐藏和input恢复
                 return;
             }
             // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
             disconnectRealtime();
+            // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
+            // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
+            // 期货：wantLive已判断"回实时"，走到这里说明wantLive=false，始终传end_date
+            const needEndDate = isFutures ? true : (!isToday || keyEnter);
             const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
-                + (isToday ? "" : "&end_date=" + encodeURIComponent(apiDate))
+                + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
                 + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
@@ -10634,11 +10657,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             _dateFocusOriginal = "";
             _datePickerInteracted = false;
             _datePickerInputCount = 0;
+            // 期货兜底：Edge点击日历"今天"时handleDateInput的检测可能未触发，
+            // 此时dateStr的日期=今天但时间未变，wantLive可能为false，应强制设为23:59再判断
+            if (chartData && chartData.meta && chartData.meta.market === 'futures') {
+                var input2 = document.getElementById("goto-date-input");
+                if (input2.type === "datetime-local") {
+                    var now3 = new Date();
+                    var ts3 = now3.getFullYear() + '-' + String(now3.getMonth()+1).padStart(2,'0') + '-' + String(now3.getDate()).padStart(2,'0');
+                    if (input2.value.startsWith(ts3)) {
+                        input2.value = ts3 + 'T23:59';
+                    }
+                }
+            }
             gotoDate();
         };
         window.handleDateBlur = function() {
             const input = document.getElementById("goto-date-input");
             var v = input.value;
+            // 期货兜底：复盘后点击日历"今天"，Edge的step="15"输入框可能不触发input/change事件
+            // 在blur时检测：如果当前处于复盘状态(chartData.meta.is_replay)且日期=今天 → 强制设23:59并触发gotoDate
+            if (chartData && chartData.meta && chartData.meta.market === 'futures'
+                && chartData.meta.is_replay && input.type === "datetime-local") {
+                var nowB = new Date();
+                var tsB = nowB.getFullYear() + '-' + String(nowB.getMonth()+1).padStart(2,'0') + '-' + String(nowB.getDate()).padStart(2,'0');
+                var datePart = v.split('T')[0] || "";
+                if (datePart === tsB) {
+                    // 用户点了"今天"但input/change未触发 → 直接恢复实时
+                    input.value = tsB + 'T23:59';
+                    _dateFocusOriginal = "";
+                    _datePickerInteracted = false;
+                    _datePickerInputCount = 0;
+                    gotoDate();
+                    return;
+                }
+            }
             // picker 打开后用户未交互 → 恢复原始值
             if (_dateFocusOriginal && !_datePickerInteracted) {
                 input.value = _dateFocusOriginal;
@@ -10716,11 +10768,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
         };
 
+        // 期货：记录实时进入复盘时的边界日期（最后一根K线日期），右箭头至此自动重连
+        let _futuresRealtimeBorderDate = null;
+
         window.dateStep = function(delta) {
             if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
             var input = document.getElementById("goto-date-input");
+            var isFutures = chartData.meta && chartData.meta.market === 'futures';
+
+            // === 期货实时模式 ===
+            if (isFutures && isRealtimeMode) {
+                if (delta > 0) return; // 右箭头：已在最新，无需操作
+                // 左箭头：先记录进入复盘前的最后一根K线日期，再断开SSE进入复盘
+                if (chartData.klines.length > 0) {
+                    _futuresRealtimeBorderDate = chartData.klines[chartData.klines.length - 1].date;
+                    input.value = klineDateToInput(_futuresRealtimeBorderDate, currentFreq);
+                }
+                disconnectRealtime();
+                isRealtimeMode = false;
+            }
+
             var currentEndDate = inputDateToApi(input.value.trim(), currentFreq);
             if (!currentEndDate) return;
+
             _dateStepIgnore = true;
             fetchStep(currentEndDate, delta);
             _dateStepIgnore = false;
@@ -10764,6 +10834,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     resizeCanvas();
                     render();
                     loadAnnotations();
+                    // 期货复盘模式：右箭头返回的最后一根K线 > 进入复盘时的边界 → 重连实时
+                    var isFutures = chartData.meta && chartData.meta.market === 'futures';
+                    if (isFutures && delta > 0 && _futuresRealtimeBorderDate) {
+                        if (chartData.klines[chartData.klines.length - 1].date >= _futuresRealtimeBorderDate) {
+                            var savedDate = chartData.meta.saved_selection_date || null;
+                            connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
+                        }
+                    }
                 })
                 .catch(err => { alert("箭头跳转失败: " + err.message); })
                 .finally(() => {
@@ -11139,6 +11217,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function connectRealtimeInit(symbol, freq, startTime) {
             disconnectRealtime();
+            _futuresRealtimeBorderDate = null; // 清除期货复盘边界
             realtimeStopped = false;  // 用户主动操作，允许重连
             reconnectCount = 0; // 用户主动操作，重置重连计数
             realtimeSymbol = symbol;
@@ -11202,12 +11281,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                         updateWeekday();
                         document.getElementById("loading").classList.add("hidden");
+                        document.getElementById("goto-date-input").disabled = false;
                         resizeCanvas();
                         render();
                         generateStats();
                     } catch(e) {
                         console.error('初始数据解析失败:', e);
                         document.getElementById("loading").classList.add("hidden");
+                        document.getElementById("goto-date-input").disabled = false;
                     }
                 });
 
@@ -11290,10 +11371,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         }
                         document.getElementById("loading").classList.add("hidden");
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                        document.getElementById("goto-date-input").disabled = false;
                         updateFreqButtonStates(true);
                         render();
                     } catch (e) {
                         console.error('双窗口init解析失败:', e);
+                        document.getElementById("goto-date-input").disabled = false;
                     }
                 });
 
@@ -11938,6 +12021,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 若与当前日期相同，仍强制重新复盘（避免用户改了其他条件后无响应）
             input.value = dateStr;
             if (typeof updateWeekday === "function") updateWeekday();
+            _dateKeyEnter = true;  // 复用keyEnter标志，gotoDate中跳过isToday安全网，始终传end_date
             gotoDate();
         };
 

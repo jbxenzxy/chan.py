@@ -322,7 +322,7 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
     # 如果有选点时间，过滤记录
     if start_time is not None and records:
         start_dt = None
-        for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]:
+        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
             try:
                 start_dt = datetime.strptime(start_time, fmt)
                 break
