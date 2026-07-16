@@ -485,7 +485,7 @@ def _get_kl_type(freq):
     return _FREQ_TO_KL_TYPE.get(freq, KL_TYPE.K_DAY)
 
 # 双窗口 freq 配对（上窗→下窗）
-_STOCK_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
+_STOCKS_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
 _FUTURES_SUB_FREQ_MAP = {'30m': '5m', '5m': '1m', '1m': '15s'}
 
 
@@ -507,6 +507,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     DEBUG_BS1 = True               # 1类调试总开关
     DEBUG_BS2 = True               # 2类调试总开关
     DEBUG_BS3 = True               # 3类调试总开关
+    DEBUG_BS = True                # 区间套背驰调试总开关
     REPLAY_MODE = False            # 复盘模式标记（仅在复盘模式下输出调试信息），无需手动设置
     BS0_ZS_BREAK_RATIO = 0.8       # 离开笔有效突破中枢的比例阈值
     BS0_OUT_IN_RATIO = 0.8         # 离开笔振幅 >= 进入笔振幅的比例阈值
@@ -581,21 +582,64 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             line += f' | {extra}'
         print(line)
 
+    @classmethod
+    def _dbg_bs(cls, func, msg, **kwargs):
+        """区间套背驰调试输出（仅在复盘模式下生效）。
+        Args:
+            func: 函数名
+            msg: 调试信息
+            **kwargs: 附加键值对，自动格式化
+        """
+        if not cls.DEBUG_BS or not cls.REPLAY_MODE:
+            return
+        extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
+        line = f'[BS] {func}: {msg}'
+        if extra:
+            line += f' | {extra}'
+        print(line)
+
     # ── 入口 ──
     def cal(self, bi_list: LINE_LIST_TYPE, zs_list=None):
-        # 虚笔无分型，静默返回，避免后续买卖点函数打印无效调试信息
-        if self._is_cur_bi_virtual(bi_list):
+        # ① 中枢/实笔/分型 前置检查
+        result = self.cal_bsp_precondition(bi_list, zs_list)
+        if result is None:
             return
+        pivot_a, stroke_n = result
 
-        # 区间套不背驰，双窗口模式下，静默返回
+        # ② 区间套不背 → 静默返回
         is_diver = self.check_nested_diver(bi_list, zs_list)
         if not is_diver:
             return
+        
+        self.cal_bs0point(bi_list, zs_list, pivot_a, stroke_n)
+        self.cal_bs1point(bi_list, zs_list, pivot_a, stroke_n)
+        self.cal_bs2point(bi_list, zs_list, pivot_a, stroke_n)
+        self.cal_bs3point(bi_list, zs_list, pivot_a, stroke_n)
 
-        self.cal_bs0point(bi_list, zs_list)
-        self.cal_bs1point(bi_list, zs_list)
-        self.cal_bs2point(bi_list, zs_list)
-        self.cal_bs3point(bi_list, zs_list)
+    @classmethod
+    def cal_bsp_precondition(cls, bi_list, zs_list):
+        """买卖点前置检查：中枢存在 + 实笔 + 强势分型，缺一即返回 None"""
+        # ⑴ 中枢检查
+        if zs_list is None or len(zs_list) == 0:
+            return None
+        pivot_a = None
+        for zs in reversed(zs_list):
+            if not zs.is_one_bi_zs():
+                pivot_a = zs
+                break
+        if pivot_a is None:
+            return None
+
+        # ⑵ 实笔检查（过滤虚笔）
+        stroke_n = bi_list[-1]
+        if cls._is_virtual_bi(bi_list):
+            return None
+
+        # ⑶ 分型检查（过滤弱分型/中继）
+        if cls._is_strong_fx(stroke_n) == 0:
+            return None
+
+        return (pivot_a, stroke_n)
 
     def check_nested_diver(self, bi_list, zs_list):
         """
@@ -618,9 +662,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             raise RuntimeError("[check_nested_diver] 严重Bug：market_type 未设置！")
 
         is_stocks = (market_type == "stock")
-        # 双窗口 freq 配对：上窗 freq 确定下窗 freq
+        # 双窗口 freq 配对：上窗 main_freq 确定下窗 sub_freq
         if is_stocks:
-            sub_freq = _STOCK_SUB_FREQ_MAP.get(main_freq)
+            sub_freq = _STOCKS_SUB_FREQ_MAP.get(main_freq)
         else:
             sub_freq = _FUTURES_SUB_FREQ_MAP.get(main_freq)
 
@@ -634,21 +678,24 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 此处 sub_kl_list 指某级别整个K线列表对象，包含该级别的所有 合并K线、bi_list、zs_list等
             sub_kl_list = chan[sub_kl_type]
         except Exception:
-            # print(f"[check_nested_diver] 单窗口无子 or 双窗口无孙: {sub_kl_type} → 按子级别背驰处理！！！")
+            self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
+                         sub_kl_type=sub_kl_type)
             return True # 按子级别背驰处理
 
-        # print(f"[check_nested_diver] 市场类型={market_type}, code={parent.code}, 主周期={main_freq}, 子周期={sub_freq}")
+        '''
+        self._dbg_bs('check_nested_diver', '双窗口可用',
+                     market_type=market_type, code=parent.code,
+                     main_freq=main_freq, sub_freq=sub_freq)
+        '''
 
         sub_bi_list = sub_kl_list.bi_list
         if len(sub_bi_list) == 0:
             # 上/下窗，历史K线不对齐(如：日K加载多于30分)
-            # print(f"[check_nested_diver] 双窗口-无子级别 → 按子级别背驰处理！！！")
-            return False # 按子级别不背驰处理
-
+            self._dbg_bs('check_nested_diver', '双窗口-无子级别 → 按子级别背驰处理')
+            return True  # 按子级别背驰处理
+        
         # 1. 确定主级别一笔的左右边界 [A,B] 及 KLU 对象
         main_bi = bi_list[-1]
-        if not getattr(main_bi, 'is_sure', True):
-            return False # 主级别虚笔无右肩，按子级别不背驰处理
         main_date_fmt = _get_date_fmt(main_freq)
         shoulder_result = _get_main_bi_time_range(main_bi, main_date_fmt)
         if shoulder_result is None:
@@ -669,63 +716,53 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             fx_b_sub_dt = snapshot['bis'][0].get('fx_b_sub_dt', '')
 
         if not fx_a_sub_dt or not fx_b_sub_dt:
-            # 主级别历史K线多于子级别的情况下，主级别左肩在子级别找不到对应K线
-            print(f"[check_nested_diver] 无法确定子级别[C,D]: fx_a='{fx_a_sub_dt}', fx_b='{fx_b_sub_dt}' → 可能子级别K线不够")
-            return False # 按子级别不背驰处理
+            self._dbg_bs('check_nested_diver', '无法确定子级别[C,D] → 可能子级别K线不够',
+                         fx_a=fx_a_sub_dt, fx_b=fx_b_sub_dt)
+            return True  # 按子级别背驰处理
 
         # 3. 在子级别笔列表中找被红框完全覆盖的笔
         start_bi_idx, end_bi_idx = _find_sub_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq)
         if start_bi_idx is None or end_bi_idx is None:
-            # raise RuntimeError("[check_nested_diver] 严重Bug：找不到被红框[C,D]完全覆盖的笔")
-            print(f"[check_nested_diver] 找不到被红框[C,D]完全覆盖的笔: fx_a='{fx_a_sub_dt}', fx_b='{fx_b_sub_dt}'")
-            return False  # 按子级别不背驰处理
+            self._dbg_bs('check_nested_diver', '找不到被红框[C,D]完全覆盖的笔',
+                         fx_a=fx_a_sub_dt, fx_b=fx_b_sub_dt)
+            return True  # 按子级别背驰处理
 
         sub_bi_sliced = list(sub_bi_list[start_bi_idx:end_bi_idx + 1])
         bi_count = len(sub_bi_sliced)
-        print(f"[check_nested_diver] 子级别笔范围: 索引[{start_bi_idx} ~ {end_bi_idx}], 共{bi_count}笔")
+        self._dbg_bs('check_nested_diver', '子级别笔范围',
+                     start_bi_idx=start_bi_idx, end_bi_idx=end_bi_idx,
+                     bi_count=bi_count)
 
         # 4. 判断子级别笔序列是否形成中枢
         sub_date_fmt = _get_date_fmt(sub_freq)
         zs_data = _find_sub_zs(sub_bi_sliced, sub_bi_list, sub_date_fmt)
         has_zs = len(zs_data) > 0
-
         if has_zs:
             # 场景二：笔序列形成中枢（1个或多个）
             result = _check_sub_zs_diver(sub_bi_sliced, main_bi, zs_data)
-            print(f"[check_nested_diver] 有中枢背驰判断: {result['detail']}")
+            self._dbg_bs('check_nested_diver', '有中枢背驰判断',
+                         detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
 
         # 场景一：笔序列不形成任何中枢
         if bi_count == 1:
             # 子场景⑴：只有一笔
             result = _check_sub_single_bi_diver(sub_bi_sliced[0])
-            print(f"[check_nested_diver] 单笔背驰判断: {result['detail']}")
+            self._dbg_bs('check_nested_diver', '单笔背驰判断',
+                         detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
         else:
             # 子场景⑵：有多笔但不形成中枢
             result = _check_sub_multi_bi_diver(sub_bi_sliced)
-            print(f"[check_nested_diver] 多笔无中枢背驰判断: {result['detail']}")
+            self._dbg_bs('check_nested_diver', '多笔无中枢背驰判断',
+                         detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
 
     # ═══════════════════════════════════════════════════════════
     # ── 0类买卖点(中枢震荡) ──
     # ═══════════════════════════════════════════════════════════
-    def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+    def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs0('cal_bs0point', '进入......', bi_cnt=len(bi_list))
-
-        # 公用检查
-        result = self._get_pivot_and_cur_bi(bi_list, zs_list)
-        if result is None:
-            self._dbg_bs0('cal_bs0point', '跳过: 无有效中枢')
-            return
-        pivot_a, stroke_n = result
-
-        # 弱分型(中继概率大)直接跳过，不生成买/卖点
-        fx_level = self._is_strong_fx(stroke_n)
-        if fx_level == 0:
-            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 弱分型（中继概率大）',
-                          stroke_n_idx=stroke_n.idx)
-            return
 
         # 笔N与中枢A要有重叠
         if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
@@ -1091,21 +1128,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # C: N,N-1,N-2,N-3,N-4,N-5不重叠, N-6重叠 → c段起点 = N-6, 偏移6
     _BS1_C_OFFSET = {'A': 2, 'B': 4, 'C': 6}
 
-    def cal_bs1point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+    def cal_bs1point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs1('cal_bs1point', '进入......', bi_cnt=len(bi_list))
 
-        # 公用检查
-        result = self._get_pivot_and_cur_bi(bi_list, zs_list)
-        if result is None:
-            self._dbg_bs1('cal_bs1point', '跳过: 无有效中枢')
-            return
-        pivot_a, stroke_n = result
-
-        # 弱分型(中继概率大)直接跳过，不生成买/卖点
-        if self._is_strong_fx(stroke_n) == 0:
-            self._dbg_bs1('cal_bs1point', '跳过: 弱分型（中继概率大）',
-                          stroke_n_idx=stroke_n.idx)
-            return
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
 
         # 重叠条件: A/B/C 三种模式任一满足即可
         # A: N,N-1不重叠, N-2重叠
@@ -1150,16 +1178,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # 进入段与离开段方向相反（如进入段向上、离开段向下）→ 跳过，不在策略中
-        entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
-        if (stroke_n.is_down() and entry_bi.is_up()) or (stroke_n.is_up() and entry_bi.is_down()):
-            self._dbg_bs1('cal_bs1point', '跳过: 进入段与离开段反向',
-                          entry_bi_idx=entry_bi.idx,
-                          c2_idx=stroke_n.idx)
-            return
-
-        is_buy = stroke_n.is_down()
-        config = self.config.GetBSConfig(is_buy)
         # 次级别：笔N(c₂) 与 笔N-2(c₁) 的MACD峰值(PEAK)背驰
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
@@ -1183,31 +1201,41 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
         '''
 
-        # 本级别：c段全体(c₁+c₂+...) vs 中枢进入笔(b)，MACD面积比较
-        # c段 = 最后重叠笔的顶分型 → 笔N底分型，包含所有同向笔
-        c_offset = self._BS1_C_OFFSET[matched_pattern]
-        c_metric = 0.0
-        c_bi_idxs = []  # c段同向笔的索引（c₁+c₂+...）
-        for i in range(c_offset, -1, -1):  # N-c_offset 到 N（含）
-            s = bi_list[stroke_n.idx - i]
-            if (is_buy and s.is_down()) or (not is_buy and s.is_up()):
-                c_metric += s.cal_macd_metric(config.macd_algo, is_reverse=True)
-                c_bi_idxs.append(s.idx)
+        # 进入段与离开段方向相反时(如进入段向上、离开段向下)，跳过c段全体与进入笔的MACD面积比较，直接放行
+        is_opposite_dir = (stroke_n.is_down() and entry_bi.is_up()) or (stroke_n.is_up() and entry_bi.is_down())
+        if not is_opposite_dir:
+            # 本级别：c段全体(c₁+c₂+...) vs 中枢进入笔(b)，MACD面积比较
+            # c段 = 最后重叠笔的顶分型 → 笔N底分型，包含所有同向笔
+            c_offset = self._BS1_C_OFFSET[matched_pattern]
+            c_metric = 0.0
+            c_bi_idxs = []  # c段同向笔的索引（c₁+c₂+...）
+            for i in range(c_offset, -1, -1):  # N-c_offset 到 N（含）
+                s = bi_list[stroke_n.idx - i]
+                if (is_buy and s.is_down()) or (not is_buy and s.is_up()):
+                    c_metric += s.cal_macd_metric(config.macd_algo, is_reverse=True)
+                    c_bi_idxs.append(s.idx)
 
-        entry_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False)
-        c_divergence_rate = c_metric / (entry_metric + 1e-7)
-        is_c_diver = c_metric < config.divergence_rate * entry_metric
-        if not is_c_diver:
-            self._dbg_bs1('cal_bs1point', '跳过: c段全体与进入笔，MACD面积未背驰',
-                          stroke_n_idx=stroke_n.idx,
-                          pattern=matched_pattern,
-                          c_bi_idxs=c_bi_idxs,
-                          c_metric=round(c_metric, 2),
+            entry_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False)
+            c_divergence_rate = c_metric / (entry_metric + 1e-7)
+            is_c_diver = c_metric < config.divergence_rate * entry_metric
+            if not is_c_diver:
+                self._dbg_bs1('cal_bs1point', '跳过: c段全体与进入笔，MACD面积未背驰',
+                              stroke_n_idx=stroke_n.idx,
+                              pattern=matched_pattern,
+                              c_bi_idxs=c_bi_idxs,
+                              c_metric=round(c_metric, 2),
+                              entry_bi_idx=entry_bi.idx,
+                              entry_metric=round(entry_metric, 2),
+                              c_divergence_rate=round(c_divergence_rate, 2),
+                              threshold=round(config.divergence_rate, 2))
+                return
+        else:
+            self._dbg_bs1('cal_bs1point', '进入段与离开段反向，跳过中枢两端MACD面积背驰判断',
                           entry_bi_idx=entry_bi.idx,
-                          entry_metric=round(entry_metric, 2),
-                          c_divergence_rate=round(c_divergence_rate, 2),
-                          threshold=round(config.divergence_rate, 2))
-            return
+                          c2_idx=stroke_n.idx)
+            # 方向相反时，给后续调试输出和feature_dict设置默认值
+            c_bi_idxs = []
+            c_divergence_rate = 0.0
 
         # ── 生成1类买卖点 ──
         self._dbg_bs1('cal_bs1point', 'OK 生成1类买/卖点',
@@ -1229,21 +1257,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # ═══════════════════════════════════════════════════════════
     # ── 2类买卖点 ──
     # ═══════════════════════════════════════════════════════════
-    def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+    def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs2('cal_bs2point', '进入......', bi_cnt=len(bi_list))
-
-        # 公用检查
-        result = self._get_pivot_and_cur_bi(bi_list, zs_list)
-        if result is None:
-            self._dbg_bs2('cal_bs2point', '跳过: 无有效中枢')
-            return
-        pivot_a, stroke_n = result
-
-        # 弱分型(中继概率大)直接跳过，不生成买/卖点
-        if self._is_strong_fx(stroke_n) == 0:
-            self._dbg_bs2('cal_bs2point', '跳过: 弱分型（中继概率大）',
-                          stroke_n_idx=stroke_n.idx)
-            return
 
         # 重叠条件: 仅 B/C 两种模式
         # B: N,N-1,N-2,N-3不重叠, N-4重叠
@@ -1295,21 +1310,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # ═══════════════════════════════════════════════════════════
     # ── 3类买卖点 ──
     # ═══════════════════════════════════════════════════════════
-    def cal_bs3point(self, bi_list: LINE_LIST_TYPE, zs_list=None):
+    def cal_bs3point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs3('cal_bs3point', '进入......', bi_cnt=len(bi_list))
-
-        # 公用检查
-        result = self._get_pivot_and_cur_bi(bi_list, zs_list)
-        if result is None:
-            self._dbg_bs3('cal_bs3point', '跳过: 无有效中枢')
-            return
-        pivot_a, stroke_n = result
-
-        # 弱分型(中继概率大)直接跳过，不生成买/卖点
-        if self._is_strong_fx(stroke_n) == 0:
-            self._dbg_bs3('cal_bs3point', '跳过: 弱分型（中继概率大）',
-                          stroke_n_idx=stroke_n.idx)
-            return
 
         # 笔N不跟最后一个中枢重叠，但笔N-1重叠
         stroke_nm1 = bi_list[stroke_n.idx - 1]  # 前一笔N-1
@@ -1336,26 +1338,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self.add_bs(bs_type=BSP_TYPE.T3, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)
 
-    @classmethod
-    def _get_pivot_and_cur_bi(cls, bi_list, zs_list):
-        if zs_list is None or len(zs_list) == 0:
-            return None
-        pivot_a = None
-        for zs in reversed(zs_list):
-            if not zs.is_one_bi_zs():
-                pivot_a = zs
-                break
-        if pivot_a is None:
-            return None
-
-        stroke_n = bi_list[-1]
-        if cls._is_cur_bi_virtual(bi_list):
-            return None
-
-        return (pivot_a, stroke_n)
-
     @staticmethod
-    def _is_cur_bi_virtual(bi_list):
+    def _is_virtual_bi(bi_list):
         """判断当下笔是否为虚笔。"""
         if bi_list is None or len(bi_list) == 0:
             return False
@@ -1772,15 +1756,12 @@ def _futures_red_range(snapshot, top_freq_sec, bottom_freq_sec, sub_freq=None):
     out_fmt = _get_date_fmt(sub_freq) if sub_freq else "%Y/%m/%d %H:%M:%S"
 
     if not snapshot:
-        print("[futures_red_range] 快照为空，跳过")
         return
     bis = snapshot.get('bis')
     if not bis:
-        print("[futures_red_range] 快照中无 bis 数据，跳过")
         return
 
     if top_freq_sec <= bottom_freq_sec:
-        print(f"[futures_red_range] 周期不合法: top={top_freq_sec}s <= bottom={bottom_freq_sec}s，跳过")
         return
 
     offset_sec = top_freq_sec - bottom_freq_sec
@@ -1792,7 +1773,17 @@ def _futures_red_range(snapshot, top_freq_sec, bottom_freq_sec, sub_freq=None):
         raw_b = bi.get('fx_b_raw_dt', '') or ''
 
         # 左边界：第一根子级别 K 线 = 上层 K 线开始时间
-        bi['fx_a_sub_dt'] = raw_a
+        if raw_a:
+            dt_a = None
+            for fmt in _PARSE_DATE_FORMATS:
+                try:
+                    dt_a = datetime.strptime(raw_a, fmt)
+                    break
+                except ValueError:
+                    continue
+            bi['fx_a_sub_dt'] = dt_a.strftime(out_fmt) if dt_a else raw_a
+        else:
+            bi['fx_a_sub_dt'] = ''
 
         # 右边界：最后一根子级别 K 线 = 上层 K 线开始 + offset
         if not raw_b:
@@ -1810,8 +1801,6 @@ def _futures_red_range(snapshot, top_freq_sec, bottom_freq_sec, sub_freq=None):
 
         if dt is None:
             fail_count += 1
-            if fail_count <= 3:
-                print(f"[futures_red_range] fx_b_raw_dt 日期解析失败: '{raw_b}'")
             bi['fx_b_sub_dt'] = raw_b  # 回退：保留原始值
             continue
 
@@ -1820,14 +1809,9 @@ def _futures_red_range(snapshot, top_freq_sec, bottom_freq_sec, sub_freq=None):
             bi['fx_b_sub_dt'] = dt.strftime(out_fmt)
         except OverflowError:
             fail_count += 1
-            if fail_count <= 3:
-                print(f"[futures_red_range] timedelta 溢出: raw_b='{raw_b}', offset={offset_sec}s")
             bi['fx_b_sub_dt'] = raw_b
 
-    if skip_count > 0:
-        print(f"[futures_red_range] {skip_count}/{len(bis)} 笔 fx_b_raw_dt 为空，fx_b_sub_dt 置空")
-    if fail_count > 0:
-        print(f"[futures_red_range] {fail_count}/{len(bis)} 笔 fx_b_sub_dt 换算失败，回退到原始值")
+    
 
 
 def _find_sub_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
@@ -1846,41 +1830,27 @@ def _find_sub_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
     返回: (start_bi_idx, end_bi_idx) 或 (None, None)
     """
     if not fx_a_sub_dt or not fx_b_sub_dt:
-        print(f"[_find_sub_bi_sequence] 红框边界为空: fx_a='{fx_a_sub_dt}', fx_b='{fx_b_sub_dt}'")
         return None, None
 
     sub_date_fmt = _get_date_fmt(sub_freq)
     start_bi_idx = None
     end_bi_idx = None
-    skipped_count = 0
 
     for i, bi in enumerate(sub_bi_list):
         begin_klu = bi.get_begin_klu()
         end_klu = bi.get_end_klu()
         if begin_klu is None or end_klu is None:
-            skipped_count += 1
             continue
         try:
             s_dt = begin_klu.time.toFmtStr(sub_date_fmt)
             e_dt = end_klu.time.toFmtStr(sub_date_fmt)
-        except (AttributeError, ValueError, TypeError) as e:
-            skipped_count += 1
-            if skipped_count <= 3:
-                print(f"[_find_sub_bi_sequence] 笔{i}时间格式化失败: {type(e).__name__}: {e}")
+        except (AttributeError, ValueError, TypeError):
             continue
 
         if s_dt >= fx_a_sub_dt and e_dt <= fx_b_sub_dt:
             if start_bi_idx is None:
                 start_bi_idx = i
             end_bi_idx = i
-
-    if skipped_count > 0:
-        print(f"[_find_sub_bi_sequence] 跳过 {skipped_count}/{len(sub_bi_list)} 笔（缺少K线或时间格式化失败）")
-
-    if start_bi_idx is not None:
-        print(f"[_find_sub_bi_sequence] 红框内笔范围: [{start_bi_idx}, {end_bi_idx}], 共 {end_bi_idx - start_bi_idx + 1} 笔")
-    else:
-        print(f"[_find_sub_bi_sequence] 红框内无完整笔: fx_a='{fx_a_sub_dt}', fx_b='{fx_b_sub_dt}'")
 
     return start_bi_idx, end_bi_idx
 
@@ -1904,9 +1874,7 @@ def _find_sub_zs(bis, all_bi_list, date_fmt):
         zs_data: 中枢数据列表
     """
     zs_data = []
-    print(f"[_find_sub_zs] 输入bis数量={len(bis)}, date_fmt={date_fmt}")
     if len(bis) < 4:  # over_seg 至少需要 1进入段 + 3构成中枢
-        print(f"[_find_sub_zs] bis不足4根，无法形成中枢，返回空")
         return zs_data
 
     def _in_zs_range(bi, zg, zd):
@@ -2011,7 +1979,6 @@ def _find_sub_zs(bis, all_bi_list, date_fmt):
 
         free_lst = []
 
-    print(f"[_find_sub_zs] 完成: 红框中枢数量={len(zs_data)}")
     return zs_data
 
 
