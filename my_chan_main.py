@@ -21,7 +21,7 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 from urllib.parse import urlparse, parse_qs
 
 # 区间套辅助函数（已搬迁至 BSPointList.py，红框功能复用）
-from BuySellPoint.BSPointList import _get_main_bi_time_range, _stocks_red_range, _futures_red_range, _find_sub_bi_sequence, _find_sub_zs
+from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures_red_range, _red_range_bi_sequence, _red_range_amp
 
 # ============================================================
 # 配置区域 - 请根据你的实际环境修改
@@ -1790,6 +1790,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
     from Common.CEnum import FX_TYPE
     kl_list = chan[kl_type]
     _date_fmt = _get_date_fmt(freq_label)
+    _meta_freq_label = _get_freq_label(freq_label)
 
     if lightweight:
         # ★ 优先从天勤实时 klines 读取当前形成中K线的OHLC，避免 chan 框架 kl_list 滞后
@@ -1816,7 +1817,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                     "close": round(c, 3),
                 },
                 "meta": {
-                    "symbol": symbol, "name": name, "freq": freq_label,
+                    "symbol": symbol, "name": name, "freq": _meta_freq_label,
                     "generated_at": datetime.now().strftime(_date_fmt),
                     "is_realtime": True, "market": "futures",
                 },
@@ -1838,7 +1839,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 "close": round(last_klu.close, 3),
             },
             "meta": {
-                "symbol": symbol, "name": name, "freq": freq_label,
+                "symbol": symbol, "name": name, "freq": _meta_freq_label,
                 "generated_at": datetime.now().strftime(_date_fmt),
                 "is_realtime": True, "market": "futures",
             },
@@ -1898,7 +1899,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             # 左肩/右肩原始K线时间（用于双窗口红框定位）
             fx_a_raw_dt = ""
             fx_b_raw_dt = ""
-            shoulder_times = _get_main_bi_time_range(bi, _date_fmt)
+            shoulder_times = _main_bi_range(bi, _date_fmt)
             if shoulder_times:
                 fx_a_raw_dt, fx_b_raw_dt, _, _ = shoulder_times
             bis.append({
@@ -2009,7 +2010,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
 
     return {
         "meta": {
-            "symbol": symbol, "name": name, "freq": freq_label,
+            "symbol": symbol, "name": name, "freq": _meta_freq_label,
             "kline_count": len(klines_out), "bi_count": len(bis),
             "fx_count": len(fxs), "zs_count": len(zs_list),
             "seg_count": len(segs), "bsp_count": len(bsps),
@@ -2485,6 +2486,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             print(f"[双窗口] 子级别({sub_freq}) chan.py 分析失败: {e}")
             return result
 
+        _futures_analysis_cache[f"{code.upper()}:{sub_freq}"] = sub_chan
         sub_kl_list = sub_chan[_get_kl_type(sub_freq)]
         print(f"[双窗口] 子级别({sub_freq}) chan.py分析: {time.time()-t_sub_chan:.3f}s, "
               f"合并K线={len(sub_kl_list.lst)}, 笔={len(sub_kl_list.bi_list)}, 中枢={len(sub_kl_list.zs_list)}")
@@ -2493,12 +2495,12 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         sub_name = _get_futures_name(code)
         sub_result = _extract_realtime_snapshot(
             sub_chan, _get_kl_type(sub_freq), code, sub_name,
-            _get_freq_label(sub_freq), klines=None
+            sub_freq, klines=None
         )
         result["sub"] = sub_result
         # 将 fx_a_raw_dt/fx_b_raw_dt（天勤K线开始时间）换算为子级别时间
-        top_freq_sec = FREQ_SEC_MAP.get(freq, 60)
-        _futures_red_range(result, top_freq_sec, sub_freq_sec, sub_freq)
+        main_freq_sec = FREQ_SEC_MAP.get(freq, 60)
+        _futures_red_range(result, main_freq_sec, sub_freq_sec, sub_freq)
         print(f"[双窗口] 子级别({sub_freq})提取完成: K线={sub_result['meta']['kline_count']}, "
               f"笔={sub_result['meta']['bi_count']}, 中枢={sub_result['meta']['zs_count']}")
 
@@ -3078,7 +3080,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         a_klu = None
         b_klu = None
         date_fmt = _get_date_fmt(freq)
-        shoulder_times = _get_main_bi_time_range(bi, date_fmt)
+        shoulder_times = _main_bi_range(bi, date_fmt)
         if shoulder_times:
             fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu = shoulder_times
 
@@ -3319,7 +3321,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     从多级别 CChan 中提取子级别的 K线、笔、分型、中枢、线段、买卖点数据。
     用于双窗口模式，前端无需再发独立的 API 请求加载下面窗口数据。
 
-    返回格式与主级别 result 一致，前端可直接用作 dualBottomData。
+    返回格式与主级别 result 一致，前端可直接用作 dualSubData。
     """
     t_start = time.time()
     sub_kl_type = _get_kl_type(sub_freq)
@@ -3397,7 +3399,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
         fx_a_raw_dt = ""
         fx_b_raw_dt = ""
         date_fmt_sub = _get_date_fmt(sub_freq)
-        shoulder_times = _get_main_bi_time_range(bi, date_fmt_sub)
+        shoulder_times = _main_bi_range(bi, date_fmt_sub)
         if shoulder_times:
             fx_a_raw_dt, fx_b_raw_dt, _, _ = shoulder_times
 
@@ -3573,7 +3575,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 # ============================================================
 # 区间套背驰判断
 # ============================================================
-# 高级别→低级别周期映射（与双窗口 getDualBottomFreq 一致）
+# 高级别→低级别周期映射（与双窗口 getDualSubFreq 一致）
 _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
 
 # 期货双窗口周期映射：上窗周期 → 下窗周期
@@ -3592,8 +3594,8 @@ _futures_analysis_cache = {}
 def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_date=None):
     """
     双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
-    后端内部调用 _find_sub_bi_sequence 找到被红框完全覆盖的子级别笔，再
-    用 _find_sub_zs 重新计算中枢，返回给前端绘制。
+    后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再
+    用 _red_range_amp 重新计算中枢，返回给前端绘制。
 
     参数:
         code:       股票代码（如 "SH000001" 或 "000001.SH"）
@@ -3617,11 +3619,11 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
         kl_list = chan[_get_kl_type(sub_freq)]
         bi_list = kl_list.bi_list
         date_fmt = _get_date_fmt(sub_freq)
-        start_bi, end_bi = _find_sub_bi_sequence(left_date, right_date, bi_list, sub_freq)
+        start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
         if start_bi is None:
             return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
         sliced_bis = bi_list[start_bi:end_bi + 1]
-        zs_data = _find_sub_zs(sliced_bis, bi_list, date_fmt)
+        zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
     # ── 股票双窗口 ──
@@ -3686,12 +3688,12 @@ def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_da
     date_fmt = _get_date_fmt(sub_freq)
 
     # ── 步骤③：后端找被红框完全覆盖的笔 ──
-    start_bi, end_bi = _find_sub_bi_sequence(left_date, right_date, bi_list, sub_freq)
+    start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
     if start_bi is None:
         return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
 
     sliced_bis = bi_list[start_bi:end_bi + 1]
-    zs_data = _find_sub_zs(sliced_bis, bi_list, date_fmt)
+    zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
     return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
 
@@ -4720,8 +4722,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.send_json_response({"error": "缺少symbol参数"}, 400)
                 return
             if dual:
-                bottom_freq = params.get("bottom_freq", [""])[0] or None
-                self._handle_sse_stream_dual(symbol, freq, bottom_freq=bottom_freq, start_time=start_time)
+                sub_freq_var = params.get("sub_freq", [""])[0] or None
+                self._handle_sse_stream_dual(symbol, freq, sub_freq=sub_freq_var, start_time=start_time)
             else:
                 self._handle_sse_stream_single(symbol, freq, start_time=start_time)
             return
@@ -4764,7 +4766,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             else:
                 self.send_error(404)
 
-    def _handle_sse_stream_dual(self, symbol, top_freq="1m", bottom_freq=None, start_time=None):
+    def _handle_sse_stream_dual(self, symbol, main_freq="1m", sub_freq=None, start_time=None):
         """Server-Sent Events 双窗口推送端：两个独立 CChan 对象，一次 SSE 连接推送两个周期数据。
         与股票双窗口解耦，使用独立的 TqApi 连接和独立的 CChan 对象。
         """
@@ -4778,12 +4780,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
         from datetime import datetime
 
         # 确定周期
-        if not bottom_freq:
-            bottom_freq = _FUTURES_DUAL_FREQ_MAP.get(top_freq, "15s")
-        top_freq_sec = FREQ_SEC_MAP.get(top_freq, 60)
-        bottom_freq_sec = FREQ_SEC_MAP.get(bottom_freq, 15)
+        if not sub_freq:
+            sub_freq = _FUTURES_DUAL_FREQ_MAP.get(main_freq, "15s")
+        main_freq_sec = FREQ_SEC_MAP.get(main_freq, 60)
+        sub_freq_sec = FREQ_SEC_MAP.get(sub_freq, 15)
 
-        display_key = f"{symbol} 双窗口({top_freq}/{bottom_freq})"
+        display_key = f"{symbol} 双窗口({main_freq}/{sub_freq})"
         if _SSE_DEBUG:
             print(f"\n[{display_key}] ═══ SSE双窗口连接建立 ═══")
 
@@ -4796,8 +4798,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
         self.end_headers()
 
         api = None
-        top_chan = None
-        bottom_chan = None
+        main_chan = None
+        sub_chan = None
         try:
             # 别名解析
             symbol_upper = symbol.upper()
@@ -4806,76 +4808,76 @@ class ChartHandler(SimpleHTTPRequestHandler):
 
             api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
             name = _get_futures_name(symbol)
-            top_freq_label = top_freq
-            bottom_freq_label = bottom_freq
+            main_freq_label = main_freq
+            sub_freq_label = sub_freq
 
             # 1. 查询选点状态
             saved_selection_date = ""
-            top_start_time = start_time
-            bottom_start_time = start_time
+            main_start_time = start_time
+            sub_start_time = start_time
             try:
                 qualified_code = symbol
-                col_meta = FREQ_TO_COL.get(top_freq, "")
+                col_meta = FREQ_TO_COL.get(main_freq, "")
                 if col_meta and qualified_code in _saved_point_times:
                     saved_selection_date = _saved_point_times[qualified_code].get(col_meta, "").strip() or ""
                     # 如果外部没传start_time，从CSV读取选点
-                    if top_start_time is None and saved_selection_date:
-                        top_start_time = saved_selection_date
+                    if main_start_time is None and saved_selection_date:
+                        main_start_time = saved_selection_date
                 # 下窗也查询选点
-                bottom_col_meta = FREQ_TO_COL.get(bottom_freq, "")
-                if bottom_col_meta and qualified_code in _saved_point_times:
-                    bottom_saved = _saved_point_times[qualified_code].get(bottom_col_meta, "").strip() or ""
-                    if bottom_start_time is None and bottom_saved:
-                        bottom_start_time = bottom_saved
+                sub_col_meta = FREQ_TO_COL.get(sub_freq, "")
+                if sub_col_meta and qualified_code in _saved_point_times:
+                    sub_saved = _saved_point_times[qualified_code].get(sub_col_meta, "").strip() or ""
+                    if sub_start_time is None and sub_saved:
+                        sub_start_time = sub_saved
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 
             # 2. 拉取上窗历史 + chan分析
             if _SSE_DEBUG:
-                print(f"[{display_key}] 拉取上窗({top_freq})历史K线...")
-            top_result = init_chan_symbol(api, symbol, name, top_freq_sec, top_freq_label, start_time=top_start_time)
-            top_chan, top_records, top_kl_type, _ = top_result
-            top_kl_type = _get_kl_type(top_freq)
+                print(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
+            main_result = init_chan_symbol(api, symbol, name, main_freq_sec, main_freq_label, start_time=main_start_time)
+            main_chan, main_records, main_kl_type, _ = main_result
+            main_kl_type = _get_kl_type(main_freq)
             if _SSE_DEBUG:
-                print(f"[{display_key}] 上窗({top_freq}) chan.py: 合并K线={len(top_chan[top_kl_type].lst)}, "
-                      f"笔={len(top_chan[top_kl_type].bi_list)}, 中枢={len(top_chan[top_kl_type].zs_list)}")
+                print(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "
+                      f"笔={len(main_chan[main_kl_type].bi_list)}, 中枢={len(main_chan[main_kl_type].zs_list)}")
 
             # 3. 拉取下窗历史 + chan分析
             if _SSE_DEBUG:
-                print(f"[{display_key}] 拉取下窗({bottom_freq})历史K线...")
-            bottom_result = init_chan_symbol(api, symbol, name, bottom_freq_sec, bottom_freq_label, start_time=bottom_start_time)
-            bottom_chan, bottom_records, bottom_kl_type, _ = bottom_result
-            bottom_kl_type = _get_kl_type(bottom_freq)
+                print(f"[{display_key}] 拉取下窗({sub_freq})历史K线...")
+            sub_result = init_chan_symbol(api, symbol, name, sub_freq_sec, sub_freq_label, start_time=sub_start_time)
+            sub_chan, sub_records, sub_kl_type, _ = sub_result
+            sub_kl_type = _get_kl_type(sub_freq)
             # 缓存下窗 CChan 供 /api/dual_zs 访问（key 统一大写）
-            _futures_analysis_cache[f"{symbol.upper()}:{bottom_freq}"] = bottom_chan
+            _futures_analysis_cache[f"{symbol.upper()}:{sub_freq}"] = sub_chan
             if _SSE_DEBUG:
-                print(f"[{display_key}] 下窗({bottom_freq}) chan.py: 合并K线={len(bottom_chan[bottom_kl_type].lst)}, "
-                      f"笔={len(bottom_chan[bottom_kl_type].bi_list)}, 中枢={len(bottom_chan[bottom_kl_type].zs_list)}")
+                print(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
+                      f"笔={len(sub_chan[sub_kl_type].bi_list)}, 中枢={len(sub_chan[sub_kl_type].zs_list)}")
 
             # 7. 提取初始快照
             t_snap = time.time()
-            top_snapshot = _extract_realtime_snapshot(
-                top_chan, top_kl_type, symbol, name, top_freq_label,
+            main_snapshot = _extract_realtime_snapshot(
+                main_chan, main_kl_type, symbol, name, main_freq_label,
                 saved_selection_date=saved_selection_date
             )
-            bottom_snapshot = _extract_realtime_snapshot(
-                bottom_chan, bottom_kl_type, symbol, name, bottom_freq_label,
+            sub_snapshot = _extract_realtime_snapshot(
+                sub_chan, sub_kl_type, symbol, name, sub_freq_label,
                 klines=None
             )
             # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
             # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
-            _futures_red_range(top_snapshot, top_freq_sec, bottom_freq_sec, bottom_freq)
+            _futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
 
             # ★ 追加上下窗当前形成中的K线（与单窗口一致），让前端立即看到，且 tick 更新正确的 K 线
-            _top_klines_for_init = api.get_kline_serial(symbol, top_freq_sec)
-            _bottom_klines_for_init = api.get_kline_serial(symbol, bottom_freq_sec)
+            _main_klines_for_init = api.get_kline_serial(symbol, main_freq_sec)
+            _sub_klines_for_init = api.get_kline_serial(symbol, sub_freq_sec)
             # 上窗
-            if _top_klines_for_init is not None and len(_top_klines_for_init) > 0:
-                _lr = _top_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
+            if _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
+                _lr = _main_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
-                    _bds = _bdt.strftime(_get_date_fmt(top_freq))
-                    _ex = top_snapshot.get('klines', [])
+                    _bds = _bdt.strftime(_get_date_fmt(main_freq))
+                    _ex = main_snapshot.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _bds:
                         _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
                             'open': round(float(_lr.get('open', 0) or 0), 3),
@@ -4884,14 +4886,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             'close': round(float(_lr.get('close', 0) or 0), 3),
                             'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
                         _inherit_macd_for_preview_bar(_ex)
-                        top_snapshot['meta']['kline_count'] = len(_ex)
+                        main_snapshot['meta']['kline_count'] = len(_ex)
             # 下窗
-            if _bottom_klines_for_init is not None and len(_bottom_klines_for_init) > 0:
-                _lr = _bottom_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
+            if _sub_klines_for_init is not None and len(_sub_klines_for_init) > 0:
+                _lr = _sub_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
                 if _dns is not None:
                     _bdt = datetime.fromtimestamp(_dns / 1e9)
-                    _bds = _bdt.strftime(_get_date_fmt(bottom_freq))
-                    _ex = bottom_snapshot.get('klines', [])
+                    _bds = _bdt.strftime(_get_date_fmt(sub_freq))
+                    _ex = sub_snapshot.get('klines', [])
                     if not _ex or _ex[-1]['date'] != _bds:
                         _ex.append({'date': _bds, 'timestamp': int(_bdt.timestamp() * 1000),
                             'open': round(float(_lr.get('open', 0) or 0), 3),
@@ -4900,14 +4902,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             'close': round(float(_lr.get('close', 0) or 0), 3),
                             'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
                         _inherit_macd_for_preview_bar(_ex)
-                        bottom_snapshot['meta']['kline_count'] = len(_ex)
+                        sub_snapshot['meta']['kline_count'] = len(_ex)
             if _SSE_DEBUG:
                 print(f"[{display_key}] 初始快照提取: {time.time()-t_snap:.3f}s")
 
             # 8. 推送双窗口 init 事件
             init_data = {
-                "main": top_snapshot,
-                "sub": bottom_snapshot,
+                "main": main_snapshot,
+                "sub": sub_snapshot,
             }
             init_str = json.dumps(init_data, ensure_ascii=False, allow_nan=False)
             self.wfile.write(f"event: init\ndata: {init_str}\n\n".encode("utf-8"))
@@ -4916,8 +4918,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 print(f"[{display_key}] 推送init")
 
             # 缓存快照用于 tick 路径
-            top_cached_snapshot = top_snapshot
-            bottom_cached_snapshot = bottom_snapshot
+            main_cached_snapshot = main_snapshot
+            sub_cached_snapshot = sub_snapshot
 
             # 9. 实时循环：壁钟检测周期结束 → 处理N-1 → 推送N-1/N快照
             #
@@ -4935,15 +4937,15 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 print(f"[{display_key}] ⑷ 实时循环 (总耗时 {time.time()-t_total:.1f}s)")
 
             # 保存两个窗口的 klines 引用供实时更新使用
-            top_klines = api.get_kline_serial(symbol, top_freq_sec)
-            bottom_klines = api.get_kline_serial(symbol, bottom_freq_sec)
+            main_klines = api.get_kline_serial(symbol, main_freq_sec)
+            sub_klines = api.get_kline_serial(symbol, sub_freq_sec)
 
             # last_bar_dt_ns: klines[-1] 的时间戳，用于检测 klines 是否推进
             # last_processed_dt_ns: 已处理过的K线时间戳，防止同一根K线被重复处理
-            top_last_bar_dt_ns = None
-            top_last_processed_dt_ns = None
-            bottom_last_bar_dt_ns = None
-            bottom_last_processed_dt_ns = None
+            main_last_bar_dt_ns = None
+            main_last_processed_dt_ns = None
+            sub_last_bar_dt_ns = None
+            sub_last_processed_dt_ns = None
             last_debug_print = time.time()
 
             # 性能统计
@@ -4960,7 +4962,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # ---- 定义单窗口K线处理函数（避免 continue 跳过另一个窗口） ----
             def _process_one_window(klines, chan, kl_type, freq_sec, freq_label,
                                      cached_snapshot, last_bar_dt_ns, last_processed_dt_ns,
-                                     is_top, window_label):
+                                     is_main, window_label):
                 """处理单个窗口的K线检测，返回 (updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, need_tick)"""
                 nonlocal last_debug_print, last_perf_print, loop_count, tick_count, step_count
                 nonlocal t_wait_total, t_tick_total, t_step_total, t_snapshot_total, t_push_total
@@ -5133,8 +5135,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         chan, kl_type, symbol, name, freq_label,
                         saved_selection_date=saved_selection_date
                     )
-                    if is_top:
-                        _futures_red_range(snapshot, freq_sec, bottom_freq_sec, bottom_freq)
+                    if is_main:
+                        _futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
                     _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                     _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
                     _ex = snapshot.get('klines', [])
@@ -5145,10 +5147,10 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             'vol': 0, 'amount': 0, 'dif': 0, 'dea': 0, 'macd': 0})
                         _inherit_macd_for_preview_bar(_ex)
                         snapshot['meta']['kline_count'] = len(_ex)
-                    if is_top:
+                    if is_main:
                         _kl_list = chan[kl_type]
-                        _date_fmt = _get_date_fmt(top_freq)
-                        snapshot['white_hline'] = _calc_futures_white_hline(_kl_list, top_freq, _date_fmt)
+                        _date_fmt = _get_date_fmt(main_freq)
+                        snapshot['white_hline'] = _calc_futures_white_hline(_kl_list, main_freq, _date_fmt)
                     cached_snapshot = snapshot
 
                 return updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
@@ -5179,22 +5181,22 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 now_ts = now.timestamp()
 
                 # 处理上窗
-                top_updated, top_cached_snapshot, top_last_bar_dt_ns, top_last_processed_dt_ns, top_need_tick = \
-                    _process_one_window(top_klines, top_chan, top_kl_type, top_freq_sec, top_freq_label,
-                                        top_cached_snapshot, top_last_bar_dt_ns, top_last_processed_dt_ns,
-                                        is_top=True, window_label="上窗")
+                main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
+                    _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
+                                        main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,
+                                        is_main=True, window_label="上窗")
 
                 # 处理下窗
-                bottom_updated, bottom_cached_snapshot, bottom_last_bar_dt_ns, bottom_last_processed_dt_ns, bottom_need_tick = \
-                    _process_one_window(bottom_klines, bottom_chan, bottom_kl_type, bottom_freq_sec, bottom_freq_label,
-                                        bottom_cached_snapshot, bottom_last_bar_dt_ns, bottom_last_processed_dt_ns,
-                                        is_top=False, window_label="下窗")
+                sub_updated, sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns, sub_need_tick = \
+                    _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
+                                        sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns,
+                                        is_main=False, window_label="下窗")
 
                 # 推送：tick模式或K线完成模式
-                if top_need_tick or bottom_need_tick:
+                if main_need_tick or sub_need_tick:
                     # tick推送：统一发送双窗口数据
                     t_tick_start = time.time()
-                    tick_data = {"main": top_cached_snapshot, "sub": bottom_cached_snapshot}
+                    tick_data = {"main": main_cached_snapshot, "sub": sub_cached_snapshot}
                     tick_str = json.dumps(tick_data, ensure_ascii=False, allow_nan=False)
                     try:
                         self.wfile.write(f"event: update\ndata: {tick_str}\n\n".encode("utf-8"))
@@ -5208,9 +5210,9 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             print(f"[{display_key}] [DIAG] 首次tick推送: "
                               f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
 
-                if top_updated or bottom_updated:
+                if main_updated or sub_updated:
                     t_snap_start = time.time()
-                    update_data = {"main": top_cached_snapshot, "sub": bottom_cached_snapshot}
+                    update_data = {"main": main_cached_snapshot, "sub": sub_cached_snapshot}
                     update_str = json.dumps(update_data, ensure_ascii=False, allow_nan=False)
                     t_push_start = time.time()
                     try:
@@ -5236,15 +5238,15 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 except Exception as e:
                     print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
-                CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{top_freq_sec}", None)
+                CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{main_freq_sec}", None)
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
-                CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{bottom_freq_sec}", None)
+                CTqSdkAPI._records_by_symbol.pop(f"{symbol}:{sub_freq_sec}", None)
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
             try:
-                _futures_analysis_cache.pop(f"{symbol.upper()}:{bottom_freq}", None)
+                _futures_analysis_cache.pop(f"{symbol.upper()}:{sub_freq}", None)
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 
@@ -6145,14 +6147,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             line-height: 1.4;
         }
         /* 双窗口模式样式 */
-        #chart-top, #chart-bottom {
+        #chart-main, #chart-sub {
             width: 100%; position: relative; cursor: crosshair; overflow: hidden;
         }
-        #chart-top { height: 50%; border-bottom: 2px solid #0f3460; }
-        #chart-bottom { height: 50%; }
-        #chart-top canvas, #chart-bottom canvas { display: block; }
-        #chart-top.dual-active { outline: 2px solid rgba(233, 69, 96, 0.5); outline-offset: -2px; }
-        #chart-bottom.dual-active { outline: 2px solid rgba(233, 69, 96, 0.5); outline-offset: -2px; }
+        #chart-main { height: 50%; border-bottom: 2px solid #0f3460; }
+        #chart-sub { height: 50%; }
+        #chart-main canvas, #chart-sub canvas { display: block; }
+        #chart-main.dual-active { outline: 2px solid rgba(233, 69, 96, 0.5); outline-offset: -2px; }
+        #chart-sub.dual-active { outline: 2px solid rgba(233, 69, 96, 0.5); outline-offset: -2px; }
         .dual-separator {
             height: 2px; background: #e94560; width: 100%;
         }
@@ -6374,7 +6376,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="annotation-menu-item danger" id="annotation-menu-del-all" onclick="annotationDeleteAllGlobal()">删除全部</div>
         <div class="annotation-menu-divider" id="annotation-menu-divider"></div>
         <div class="annotation-menu-item" id="annotation-menu-restart" onclick="cancelSelectedPoint()" style="display:none;">取消选点</div>
-        <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘到此</div>
+        <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘至此</div>
         <div class="annotation-menu-divider" id="annotation-menu-divider2"></div>
         <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">反转视图</div>
     </div>
@@ -6577,19 +6579,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let lastFuturesFreq = '1m'; // 期货上下文上次使用的周期（同类切换继承）
         // 双窗口状态
         let isDualWindow = false;
-        let dualBottomData = null;
-        let dualBottomFreq = '';
-        let dualBottomViewOffset = 0, dualBottomViewCount = 377;
-        let dualBottomMouseX = -1, dualBottomMouseY = -1;
-        let topCanvas, topCtx, bottomCanvas, bottomCtx;
+        let dualSubData = null;
+        let dualSubFreq = '';
+        let dualSubViewOffset = 0, dualSubViewCount = 377;
+        let dualSubMouseX = -1, dualSubMouseY = -1;
+        let mainCanvas, mainCtx, subCanvas, subCtx;
         // 反转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
         let _isMirrorMode = false;
         // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
         let _restartEnabled = false;
-        let dualBottomIsDragging = false, dualBottomDragStartX = 0, dualBottomDragStartOffset = 0;
-        let dualBottomMouseDownX = 0, dualBottomMouseDownY = 0; // 底部窗口点击坐标
-        let _bottomCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
-        let _bottomClipText = ""; // 底部窗口当前K线信息文本
+        let dualSubIsDragging = false, dualSubDragStartX = 0, dualSubDragStartOffset = 0;
+        let dualSubMouseDownX = 0, dualSubMouseDownY = 0; // 底部窗口点击坐标
+        let _subCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
+        let _subClipText = ""; // 底部窗口当前K线信息文本
         let dualHighlightRange = null; // {startIdx, endIdx} 下面窗口高亮范围（灰框）
         let dualRedRange = null;     // {beforeStart, beforeEnd, afterStart, afterEnd} 下面窗口红框范围
         let dualOffscreenState = false; // 状态A：当前鼠标指向的K线对应区间在下面窗口视口外
@@ -6598,7 +6600,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let dualNewZsLeftDate = "";     // 双窗口新模式：上次请求的红框左边界日期（用于去重）
         let dualNewZsRightDate = "";    // 双窗口新模式：上次请求的红框右边界日期（用于去重）
         let dualNewZsFailedKey = "";    // 双窗口新模式：失败请求去重，避免同一红框反复请求
-        let activeDualWindow = 'top';   // 当前激活的窗口：'top' 或 'bottom'，控制底部滚动条作用于哪个窗口
+        let activeDualWindow = 'main';   // 当前激活的窗口：'top' 或 'bottom'，控制底部滚动条作用于哪个窗口
         let _ctrlPressed = false;         // Ctrl键是否按下（用于红框计算优化）
 
         // 文字标注状态
@@ -6714,14 +6716,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             return `${yy}/${mm}/${dd} ${hh}:${min}`;
         }
         // 双窗口：上面周期 -> 下面周期映射
-        function getDualBottomFreq(topFreq) {
+        function getDualSubFreq(mainFreq) {
             // 股票周期映射
-            if (topFreq === 'w') return 'd';
-            if (topFreq === 'd') return '30m';
-            if (topFreq === '30m') return '5m';
+            if (mainFreq === 'w') return 'd';
+            if (mainFreq === 'd') return '30m';
+            if (mainFreq === '30m') return '5m';
             // 期货周期映射（股票5m无对应，期货5m→1m）
-            if (topFreq === '5m') return '1m';
-            if (topFreq === '1m') return '15s';
+            if (mainFreq === '5m') return '1m';
+            if (mainFreq === '1m') return '15s';
             return null; // 5m(股票)/15s(期货)无对应
         }
         // 双窗口：获取上面窗口某根K线对应的灰框边界（子级别K线时间字符串）
@@ -6730,9 +6732,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         //   股票：K线时间=结束时间。左边界=(上一根时间Y + bottom_sec)，右边界=当前时间X
         //         日期型K线（如d/w）无时分秒，解析时视为当日结束时刻(23:59:59)
         // 返回 {start: string|null, end: string|null}，null 表示边界在数据范围外
-        function getTopKlineTimeRange(kline, idx, klines, isFutures, bottomFreq) {
-            const bottomSec = FREQ_SEC_MAP_JS[bottomFreq];
-            if (!bottomSec) return null;
+        function getMainKlineTimeRange(kline, idx, klines, isFutures, subFreq) {
+            const subSec = FREQ_SEC_MAP_JS[subFreq];
+            if (!subSec) return null;
             const dateLen = kline.date.length;  // 19=含秒, 16=含分, 10=仅日期
             function fmt(d) {
                 const y = d.getFullYear();
@@ -6758,20 +6760,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (isFutures) {
                 // 期货：左边界 = 当前K线时间X（精确匹配）
                 const start = kline.date;
-                // 右边界 = (下一根K线时间Y - bottom_sec) 记为Z
+                // 右边界 = (下一根K线时间Y - sub_sec) 记为Z
                 let end = null;
                 if (idx + 1 < klines.length) {
                     const nextD = parse(klines[idx + 1].date);
-                    const endD = new Date(nextD.getTime() - bottomSec * 1000);
+                    const endD = new Date(nextD.getTime() - subSec * 1000);
                     end = fmt(endD);
                 }
                 return { start, end };
             } else {
-                // 股票：左边界 = (上一根K线时间Y + bottom_sec) 记为Z
+                // 股票：左边界 = (上一根K线时间Y + sub_sec) 记为Z
                 let start = null;
                 if (idx > 0) {
                     const prevD = parse(klines[idx - 1].date);
-                    const startD = new Date(prevD.getTime() + bottomSec * 1000);
+                    const startD = new Date(prevD.getTime() + subSec * 1000);
                     start = fmt(startD);
                 }
                 // 右边界 = 当前K线时间X（精确匹配）
@@ -6781,7 +6783,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
         // 双窗口：根据上面窗口鼠标位置计算下面窗口高亮范围
         function calcGrayRange(topMouseX) {
-            if (!isDualWindow || !dualBottomData || !chartData) return null;
+            if (!isDualWindow || !dualSubData || !chartData) return null;
             const area = getChartArea();
             const klines = getVisibleKlines();
             if (!klines.length) return null;
@@ -6790,69 +6792,69 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const subPixelOffset = (viewOffset - Math.floor(viewOffset)) * barStep;
             const idx = Math.floor((topMouseX - area.x + subPixelOffset) / barStep);
             if (idx < 0 || idx >= klines.length) return null;
-            const topKline = klines[idx];
-            const bottomKlines = dualBottomData.klines;
+            const mainKline = klines[idx];
+            const subKlines = dualSubData.klines;
             let startIdx = -1, endIdx = -1;
             // 方案B：优先使用 sub_kl_times（后端多级别CChan返回的子级别K线时间列表）
-            if (topKline.sub_kl_times && topKline.sub_kl_times.length > 0) {
-                const subTimes = topKline.sub_kl_times;
+            if (mainKline.sub_kl_times && mainKline.sub_kl_times.length > 0) {
+                const subTimes = mainKline.sub_kl_times;
                 const firstTime = subTimes[0];
                 const lastTime = subTimes[subTimes.length - 1];
-                for (let i = 0; i < bottomKlines.length; i++) {
-                    const bk = bottomKlines[i];
+                for (let i = 0; i < subKlines.length; i++) {
+                    const bk = subKlines[i];
                     if (bk.date >= firstTime && startIdx === -1) startIdx = i;
                     if (bk.date <= lastTime) endIdx = i;
                 }
             } else {
                 // 通用方案：利用相邻K线时间精确计算灰框边界
                 const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
-                const timeRange = getTopKlineTimeRange(topKline, idx, klines, isFutures, dualBottomFreq);
+                const timeRange = getMainKlineTimeRange(mainKline, idx, klines, isFutures, dualSubFreq);
                 if (!timeRange) return null;
                 // 左边界：用 >= 匹配（字符串比较对 ISO 日期天然正确）
                 if (timeRange.start) {
-                    for (let i = 0; i < bottomKlines.length; i++) {
-                        if (bottomKlines[i].date >= timeRange.start) { startIdx = i; break; }
+                    for (let i = 0; i < subKlines.length; i++) {
+                        if (subKlines[i].date >= timeRange.start) { startIdx = i; break; }
                     }
                 }
                 // 右边界：用前缀匹配（兼容 d→30m 等跨格式场景），回退 <=
                 if (timeRange.end) {
                     const endLen = timeRange.end.length;
-                    for (let i = bottomKlines.length - 1; i >= 0; i--) {
-                        if (bottomKlines[i].date.slice(0, endLen) === timeRange.end) { endIdx = i; break; }
+                    for (let i = subKlines.length - 1; i >= 0; i--) {
+                        if (subKlines[i].date.slice(0, endLen) === timeRange.end) { endIdx = i; break; }
                     }
                     if (endIdx === -1) {
-                        for (let i = 0; i < bottomKlines.length; i++) {
-                            if (bottomKlines[i].date <= timeRange.end) endIdx = i;
+                        for (let i = 0; i < subKlines.length; i++) {
+                            if (subKlines[i].date <= timeRange.end) endIdx = i;
                         }
                     }
                 }
                 // 边界在数据范围外：用首/尾替代
                 if (timeRange.start === null && startIdx === -1) startIdx = 0;
-                if (timeRange.end === null && endIdx === -1) endIdx = bottomKlines.length - 1;
+                if (timeRange.end === null && endIdx === -1) endIdx = subKlines.length - 1;
             }
             // 下面窗口数据中没有匹配的K线（上面K线日期超出了下面数据范围）
             if (startIdx === -1) {
                 // 用上面K线日期与下面数据首尾日期比较来判断方向
-                const topDate = new Date(topKline.date.replace(/\//g, "-").replace(" ", "T"));
-                const bottomFirstDate = new Date(bottomKlines[0].date.replace(/\//g, "-").replace(" ", "T"));
-                const bottomLastDate = new Date(bottomKlines[bottomKlines.length - 1].date.replace(/\//g, "-").replace(" ", "T"));
-                if (topDate < bottomFirstDate) {
+                const topDate = new Date(mainKline.date.replace(/\//g, "-").replace(" ", "T"));
+                const subFirstDate = new Date(subKlines[0].date.replace(/\//g, "-").replace(" ", "T"));
+                const subLastDate = new Date(subKlines[subKlines.length - 1].date.replace(/\//g, "-").replace(" ", "T"));
+                if (topDate < subFirstDate) {
                     return { startIdx: -1, endIdx: -1, isVisible: false, isLeft: true, isRight: false };
-                } else if (topDate > bottomLastDate) {
+                } else if (topDate > subLastDate) {
                     return { startIdx: -1, endIdx: -1, isVisible: false, isLeft: false, isRight: true };
                 }
                 return null;
             }
             // 判断高亮范围是否在下面窗口当前视口内
-            const bottomGlobalStart = Math.max(0, Math.floor(dualBottomViewOffset));
-            const bottomGlobalEnd = bottomGlobalStart + dualBottomViewCount;
-            const isVisible = (startIdx < bottomGlobalEnd && endIdx >= bottomGlobalStart);
-            const isLeft = endIdx < bottomGlobalStart;   // 整个区间在视口左边
-            const isRight = startIdx >= bottomGlobalEnd;
+            const subGlobalStart = Math.max(0, Math.floor(dualSubViewOffset));
+            const subGlobalEnd = subGlobalStart + dualSubViewCount;
+            const isVisible = (startIdx < subGlobalEnd && endIdx >= subGlobalStart);
+            const isLeft = endIdx < subGlobalStart;   // 整个区间在视口左边
+            const isRight = startIdx >= subGlobalEnd;
             let redRange = null;
             if (_ctrlPressed) {
                 try {
-                    redRange = calcRedRange(topKline, bottomKlines, startIdx, endIdx);
+                    redRange = calcRedRange(mainKline, subKlines, startIdx, endIdx);
                 } catch (e) {
                     console.error("[红框] calcRedRange异常:", e);
                     window._lastCalcRedRangeError = String(e);
@@ -6863,20 +6865,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 双窗口红框：鼠标指向上面K线所属笔的外沿区间（分型左肩→右肩）
         // 注意：使用 chartData.bis（复数），JSON 字段名是 "bis"
-        function calcRedRange(topKline, bottomKlines, grayStart, grayEnd) {
+        function calcRedRange(mainKline, subKlines, grayStart, grayEnd) {
             console.log("[红框] === 进入 calcRedRange ===");
-            console.log("[红框] topKline.date=" + topKline.date + " grayStart=" + grayStart + " grayEnd=" + grayEnd);
+            console.log("[红框] mainKline.date=" + mainKline.date + " grayStart=" + grayStart + " grayEnd=" + grayEnd);
             console.log("[红框] chartData.bis=" + (chartData && chartData.bis ? "长度" + chartData.bis.length : "null"));
-            console.log("[红框] bottomKlines.length=" + bottomKlines.length);
+            console.log("[红框] subKlines.length=" + subKlines.length);
             if (!chartData || !chartData.bis || !chartData.bis.length) {
                 console.log("[红框] ❌ chartData 或 chartData.bis 为空，返回null");
                 window._lastRedFrameStatus = { state: "SKIP", reason: "chartData或bis为空" };
                 updateRedFrameDebug();
                 return null;
             }
-            const d = topKline.date;
+            const d = mainKline.date;
             let bi = null;
-            // 找到topKline所属的笔（交界处归属右边）
+            // 找到mainKline所属的笔（交界处归属右边）
             for (let i = 0; i < chartData.bis.length; i++) {
                 const b = chartData.bis[i];
                 if (d >= b.sdt && d < b.edt) { bi = b; console.log("[红框] 找到笔(主循环): idx=" + i + " sdt=" + b.sdt + " edt=" + b.edt + " dir=" + b.direction); break; }
@@ -6887,12 +6889,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             if (!bi) {
-                console.log("[红框] ❌ 未找到所属笔，topKline.date=" + d + " 不在任何笔的[sdt, edt)范围内");
+                console.log("[红框] ❌ 未找到所属笔，mainKline.date=" + d + " 不在任何笔的[sdt, edt)范围内");
                 window._lastRedFrameStatus = { state: "SKIP", reason: "未找到所属笔", topDate: d, biCount: chartData.bis.length };
                 updateRedFrameDebug();
                 return null;
             }
             const aDt = bi.fx_a_sub_dt || bi.fx_a_raw_dt, bDt = bi.fx_b_sub_dt || bi.fx_b_raw_dt;
+            console.log("[红框] 边界值: fx_a_sub_dt='" + (bi.fx_a_sub_dt || "(空)") + "' fx_b_sub_dt='" + (bi.fx_b_sub_dt || "(空)") + "' fx_a_raw_dt='" + (bi.fx_a_raw_dt || "(空)") + "' fx_b_raw_dt='" + (bi.fx_b_raw_dt || "(空)") + "'");
+            console.log("[红框] 最终使用: aDt='" + aDt + "' bDt='" + bDt + "'");
             if (!aDt || !bDt) {
                 console.log("[红框] ❌ aDt='" + (aDt || "") + "' bDt='" + (bDt || "") + "' 为空");
                 console.log("[红框]    bi.sdt=" + bi.sdt + " bi.edt=" + bi.edt + " bi.direction=" + bi.direction);
@@ -6904,10 +6908,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 双窗口下直接就是次级别K线时间，>= / <= 精确匹配即可
             const aLen = aDt.length, bLen = bDt.length;
             let aIdx = -1, bIdx = -1;
-            const bottomFirstDate = bottomKlines[0].date.slice(0, aLen);
-            const bottomLastDate = bottomKlines[bottomKlines.length - 1].date.slice(0, bLen);
-            for (let i = 0; i < bottomKlines.length; i++) {
-                const bk = bottomKlines[i];
+            const subFirstDate = subKlines[0].date.slice(0, aLen);
+            const subLastDate = subKlines[subKlines.length - 1].date.slice(0, bLen);
+            for (let i = 0; i < subKlines.length; i++) {
+                const bk = subKlines[i];
                 // A: 红框左边界（次级别第一根）
                 if (aIdx === -1 && bk.date.slice(0, aLen) >= aDt) aIdx = i;
                 // B: 红框右边界（次级别最后一根）
@@ -6915,10 +6919,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             // 参照灰框处理：笔区间完全在底部数据范围之外 → 不显示红框，返回null
             if (aIdx === -1 && bIdx === -1) {
-                if (aDt > bottomLastDate) {
-                    window._lastRedFrameStatus = { state: "SKIP", reason: "笔区间在底部数据右侧", aDt: aDt, bottomLast: bottomLastDate };
-                } else if (bDt < bottomFirstDate) {
-                    window._lastRedFrameStatus = { state: "SKIP", reason: "笔区间在底部数据左侧", bDt: bDt, bottomFirst: bottomFirstDate };
+                if (aDt > subLastDate) {
+                    window._lastRedFrameStatus = { state: "SKIP", reason: "笔区间在底部数据右侧", aDt: aDt, bottomLast: subLastDate };
+                } else if (bDt < subFirstDate) {
+                    window._lastRedFrameStatus = { state: "SKIP", reason: "笔区间在底部数据左侧", bDt: bDt, bottomFirst: subFirstDate };
                 } else {
                     window._lastRedFrameStatus = { state: "SKIP", reason: "笔区间无匹配", aDt: aDt, bDt: bDt };
                 }
@@ -6927,15 +6931,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             // 部分重叠：aIdx 或 bIdx 为 -1 时，截断到可见范围
             if (aIdx === -1) aIdx = 0;
-            if (bIdx === -1) bIdx = bottomKlines.length - 1;
+            if (bIdx === -1) bIdx = subKlines.length - 1;
             if (aIdx > bIdx) {
                 window._lastRedFrameStatus = { state: "SKIP", reason: "aIdx>bIdx", aIdx: aIdx, bIdx: bIdx };
                 updateRedFrameDebug();
                 return null;
             }
             // 红框时间：使用下方K线时间（精确到分钟），确保30m/5m图表显示完整时间
-            const leftDate = bottomKlines[aIdx].date;
-            const rightDate = bottomKlines[bIdx].date;
+            const leftDate = subKlines[aIdx].date;
+            const rightDate = subKlines[bIdx].date;
             // before: 笔区间在灰框之前的部分 [aIdx, grayStart-1]
             const beforeStart = aIdx, beforeEnd = Math.min(grayStart - 1, bIdx);
             // after: 笔区间在灰框之后的部分 [grayEnd+1, bIdx]
@@ -7126,7 +7130,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const container = document.getElementById("chart-container");
             canvas = document.createElement("canvas");
             container.appendChild(canvas); ctx = canvas.getContext("2d");
-            topCanvas = canvas; topCtx = ctx;
+            mainCanvas = canvas; mainCtx = ctx;
             resizeCanvas();
             window.addEventListener("resize", () => { resizeCanvas(); render(); });
             // 上面窗口事件
@@ -7289,19 +7293,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     return;
                 }
                 // 6. 双击空白处
-                if (isDualWindow && dualOffscreenState && dualHighlightRange && dualBottomData) {
+                if (isDualWindow && dualOffscreenState && dualHighlightRange && dualSubData) {
                     // 状态A：让下面窗口平移到对应区间
                     const hr = dualHighlightRange;
                     if (hr.startIdx >= 0 && hr.endIdx >= 0) {
                         const centerIdx = (hr.startIdx + hr.endIdx) / 2;
-                        const totalKlines = dualBottomData.klines.length;
-                        let newOffset = Math.round(centerIdx - dualBottomViewCount / 2);
+                        const totalKlines = dualSubData.klines.length;
+                        let newOffset = Math.round(centerIdx - dualSubViewCount / 2);
                         // 左边不够：左对齐
                         if (newOffset < 0) newOffset = 0;
                         // 右边不够：右对齐（最后一根K线贴右边缘）
-                        const maxOffset = Math.max(0, totalKlines - dualBottomViewCount);
+                        const maxOffset = Math.max(0, totalKlines - dualSubViewCount);
                         if (newOffset > maxOffset) newOffset = maxOffset;
-                        dualBottomViewOffset = newOffset;
+                        dualSubViewOffset = newOffset;
                         // 重新计算高亮范围（区间已移入视口，应该变为isVisible=true）
                         dualHighlightRange = calcGrayRange(mouseX);
                         dualRedRange = dualHighlightRange ? dualHighlightRange.redRange : null;
@@ -7331,15 +7335,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const w = container.clientWidth;
                 const hTop = container.clientHeight / 2;
                 const hBottom = container.clientHeight / 2;
-                if (topCanvas) {
-                    topCanvas.width = w * dpr; topCanvas.height = hTop * dpr;
-                    topCanvas.style.width = w + "px"; topCanvas.style.height = hTop + "px";
-                    topCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                if (mainCanvas) {
+                    mainCanvas.width = w * dpr; mainCanvas.height = hTop * dpr;
+                    mainCanvas.style.width = w + "px"; mainCanvas.style.height = hTop + "px";
+                    mainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 }
-                if (bottomCanvas) {
-                    bottomCanvas.width = w * dpr; bottomCanvas.height = hBottom * dpr;
-                    bottomCanvas.style.width = w + "px"; bottomCanvas.style.height = hBottom + "px";
-                    bottomCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                if (subCanvas) {
+                    subCanvas.width = w * dpr; subCanvas.height = hBottom * dpr;
+                    subCanvas.style.width = w + "px"; subCanvas.style.height = hBottom + "px";
+                    subCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
                 }
             } else {
                 // 单窗口模式
@@ -7562,13 +7566,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function renderSingle() {
             if (!chartData || !ctx) return;
-            canvas = topCanvas; ctx = topCtx;
+            canvas = mainCanvas; ctx = mainCtx;
             _renderChart(chartData, currentFreq, viewOffset, viewCount, mouseX, mouseY, null, null);
         }
 
         function renderTop() {
-            if (!chartData || !topCtx) return;
-            canvas = topCanvas; ctx = topCtx;
+            if (!chartData || !mainCtx) return;
+            canvas = mainCanvas; ctx = mainCtx;
             updateActiveWindowClass();
             _renderChart(chartData, currentFreq, viewOffset, viewCount, mouseX, mouseY, null, null);
             // 上面窗口渲染完后，计算下面窗口高亮并重绘下面窗口
@@ -7578,13 +7582,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function renderBottom() {
-            if (!dualBottomData || !bottomCtx) return;
+            if (!dualSubData || !subCtx) return;
             updateDualNewZs();  // 双窗口新模式：检查红框完整性，决定是否请求新中枢
             updateActiveWindowClass();
             const _savedCanvas = canvas, _savedCtx = ctx;
-            canvas = bottomCanvas; ctx = bottomCtx;
+            canvas = subCanvas; ctx = subCtx;
             window._isRenderingBottom = true;  // 标记：下面窗口渲染中，drawCrosshair 不更新 OHLC
-            _renderChart(dualBottomData, dualBottomFreq, dualBottomViewOffset, dualBottomViewCount, dualBottomMouseX, dualBottomMouseY, dualHighlightRange, dualRedRange);
+            _renderChart(dualSubData, dualSubFreq, dualSubViewOffset, dualSubViewCount, dualSubMouseX, dualSubMouseY, dualHighlightRange, dualRedRange);
             window._isRenderingBottom = false;
             canvas = _savedCanvas; ctx = _savedCtx;
         }
@@ -7737,11 +7741,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (showFx) drawFxMarkers(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             // 双窗口新模式：红框出现后立即进入新中枢模式。
             // 请求返回前也先隐藏原中枢/线段/买卖点，避免红框出现后仍显示旧结构。
-            const isBottomNewZs = (data === dualBottomData && dualShowNewZs);
-            if (showZs && !isBottomNewZs) drawZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
-            if (showSeg && !isBottomNewZs) drawSegLines(klinesToDraw, area, priceRange, barStep, subPixelOffset);
-            if (showBsp && !isBottomNewZs) drawBspMarkers(klinesToDraw, area, priceRange, barStep, subPixelOffset);
-            if (isBottomNewZs) drawDualNewZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            const isSubNewZs = (data === dualSubData && dualShowNewZs);
+            if (showZs && !isSubNewZs) drawZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            if (showSeg && !isSubNewZs) drawSegLines(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            if (showBsp && !isSubNewZs) drawBspMarkers(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            if (isSubNewZs) drawDualNewZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawWhiteHLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
@@ -7892,7 +7896,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 上面窗口鼠标移动时更新下面窗口高亮并重绘下面窗口
         function updateDualHighlight() {
-            if (!isDualWindow || !dualBottomData) return;
+            if (!isDualWindow || !dualSubData) return;
             if (mouseX >= 0) {
                 dualHighlightRange = calcGrayRange(mouseX);
                 // 只有按住 Ctrl 键时才计算红框（耗资源操作），否则只显示灰框
@@ -7916,9 +7920,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 双窗口新模式：红框出现后，请求用红框内笔计算新中枢
         function updateDualNewZs() {
-            console.log("[updateDualNewZs] 进入: isDualWindow=" + isDualWindow + " dualBottomData=" + !!dualBottomData + " dualHighlightRange=" + !!dualHighlightRange);
-            if (!isDualWindow || !dualBottomData || !dualHighlightRange) {
-                console.log("[updateDualNewZs] 条件1失败: isDualWindow/dualBottomData/dualHighlightRange 为空");
+            console.log("[updateDualNewZs] 进入: isDualWindow=" + isDualWindow + " dualSubData=" + !!dualSubData + " dualHighlightRange=" + !!dualHighlightRange);
+            if (!isDualWindow || !dualSubData || !dualHighlightRange) {
+                console.log("[updateDualNewZs] 条件1失败: isDualWindow/dualSubData/dualHighlightRange 为空");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -7952,12 +7956,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
                 return;
             }
-            // 红框左右边界时间（子级别K线格式，传给后端由 _find_sub_bi_sequence 找笔）
-            const bottomKlines = dualBottomData.klines;
-            const leftDate = bottomKlines[aIdx].date;
-            const rightDate = bottomKlines[bIdx].date;
-            console.log("[updateDualNewZs] leftDate=" + leftDate + " rightDate=" + rightDate + " freq=" + dualBottomFreq);
-            const requestKey = dualBottomFreq + ":" + leftDate + ":" + rightDate;
+            // 红框左右边界时间（子级别K线格式，传给后端由 _red_range_bi_sequence 找笔）
+            const subKlines = dualSubData.klines;
+            const leftDate = subKlines[aIdx].date;
+            const rightDate = subKlines[bIdx].date;
+            console.log("[updateDualNewZs] leftDate=" + leftDate + " rightDate=" + rightDate + " freq=" + dualSubFreq);
+            const requestKey = dualSubFreq + ":" + leftDate + ":" + rightDate;
             if (dualNewZsFailedKey === requestKey) {
                 console.log("[updateDualNewZs] 条件5失败: 请求已失败过, key=" + requestKey);
                 return;
@@ -7971,9 +7975,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             dualNewZsRightDate = rightDate;
             dualShowNewZs = true;
             dualNewZsData = null;
-            const code = dualBottomData.meta.symbol;
-            const isReplay = dualBottomData.meta && dualBottomData.meta.is_replay;
-            let url = "/api/red_range_zs?code=" + encodeURIComponent(code) + "&freq=" + dualBottomFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate);
+            const code = dualSubData.meta.symbol;
+            const isReplay = dualSubData.meta && dualSubData.meta.is_replay;
+            let url = "/api/red_range_zs?code=" + encodeURIComponent(code) + "&freq=" + dualSubFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate);
             if (isReplay) {
                 const endDate = document.getElementById("goto-date-input").value;
                 url += "&end_date=" + encodeURIComponent(endDate);
@@ -8336,7 +8340,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     eIdx = zs.edt ? dateToGlobalIdx(zs.edt, map) : undefined;
                 }
                 if (eIdx === undefined) {
-                    eIdx = dualBottomData.klines.length - 1;
+                    eIdx = dualSubData.klines.length - 1;
                 }
                 // 最后一个中枢，未被确认打破 → 延伸到红框右边界
                 if (zsIdx === dualNewZsData.zs.length - 1 && !zs.confirm_edt && dualRedRange && dualRedRange.bIdx !== undefined) {
@@ -8667,8 +8671,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const clipText = `${k.date} ${weekDayStr} 开:${clipOpen.toFixed(2)} 高:${clipHigh.toFixed(2)} 低:${clipLow.toFixed(2)} 收:${clipClose.toFixed(2)}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
-                _bottomCurrentGlobalIdx = globalIdx;
-                _bottomClipText = clipText;
+                _subCurrentGlobalIdx = globalIdx;
+                _subClipText = clipText;
             } else {
                 // 上面窗口
                 _currentGlobalIdx = globalIdx;
@@ -8781,7 +8785,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function onWheel(e) {
             e.preventDefault();
-            if (isDualWindow) { activeDualWindow = 'top'; updateActiveWindowClass(); updateSlider(); }
+            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); }
             const area = getChartArea();
             const klines = chartData.klines;
             const barStep = area.w / viewCount;
@@ -8817,7 +8821,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         function onMouseDown(e) {
             isDragging = true; dragStartX = e.clientX; dragStartOffset = viewOffset; canvas.style.cursor = "grabbing";
             _mouseDownX = e.clientX; _mouseDownY = e.clientY;
-            if (isDualWindow) { activeDualWindow = 'top'; updateActiveWindowClass(); updateSlider(); }
+            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); }
         }
         function onMouseMove(e) {
             const rect = canvas.getBoundingClientRect();
@@ -8948,10 +8952,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 更新双窗口激活状态视觉提示
         function updateActiveWindowClass() {
-            const topDiv = document.getElementById("chart-top");
-            const bottomDiv = document.getElementById("chart-bottom");
-            if (topDiv) topDiv.classList.toggle("dual-active", activeDualWindow === 'top');
-            if (bottomDiv) bottomDiv.classList.toggle("dual-active", activeDualWindow === 'bottom');
+            const mainDiv = document.getElementById("chart-main");
+            const subDiv = document.getElementById("chart-sub");
+            if (mainDiv) mainDiv.classList.toggle("dual-active", activeDualWindow === 'main');
+            if (subDiv) subDiv.classList.toggle("dual-active", activeDualWindow === 'sub');
         }
 
         // 双窗口切换
@@ -8961,9 +8965,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (isDualWindow) {
                 // 关闭双窗口
                 isDualWindow = false;
-                activeDualWindow = 'top';
-                dualBottomData = null;
-                dualBottomFreq = '';
+                activeDualWindow = 'main';
+                dualSubData = null;
+                dualSubFreq = '';
                 dualHighlightRange = null;
                 dualRedRange = null;
                 dualNewZsData = null;
@@ -8975,11 +8979,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 updateFreqButtonStates(isFuturesClose);
                 // 恢复单canvas布局
                 const container = document.getElementById("chart-container");
-                const topDiv = document.getElementById("chart-top");
-                const bottomDiv = document.getElementById("chart-bottom");
-                if (topDiv) topDiv.remove();
-                if (bottomDiv) bottomDiv.remove();
-                canvas = topCanvas; ctx = topCtx;
+                const mainDiv = document.getElementById("chart-main");
+                const subDiv = document.getElementById("chart-sub");
+                if (mainDiv) mainDiv.remove();
+                if (subDiv) subDiv.remove();
+                canvas = mainCanvas; ctx = mainCtx;
                 container.appendChild(canvas);
                 resizeCanvas();
                 // 期货：关闭双窗口后重连单SSE
@@ -8991,50 +8995,50 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             } else {
                 // 开启双窗口
-                const bottomFreq = getDualBottomFreq(currentFreq);
-                if (!bottomFreq) {
+                const subFreq = getDualSubFreq(currentFreq);
+                if (!subFreq) {
                     // 5分周期无对应，提示
                     return;
                 }
                 isDualWindow = true;
-                dualBottomFreq = bottomFreq;
+                dualSubFreq = subFreq;
                 btn.classList.add("active");
                 // 创建双窗口布局
                 const container = document.getElementById("chart-container");
                 // 保存原始canvas引用
-                const origCanvas = topCanvas;
+                const origCanvas = mainCanvas;
                 // 清空容器
                 container.innerHTML = '';
                 // 创建上面窗口
-                const topDiv = document.createElement("div");
-                topDiv.id = "chart-top";
-                topDiv.appendChild(origCanvas);
-                container.appendChild(topDiv);
+                const mainDiv = document.createElement("div");
+                mainDiv.id = "chart-main";
+                mainDiv.appendChild(origCanvas);
+                container.appendChild(mainDiv);
                 // 创建下面窗口
-                const bottomDiv = document.createElement("div");
-                bottomDiv.id = "chart-bottom";
-                bottomCanvas = document.createElement("canvas");
-                bottomCtx = bottomCanvas.getContext("2d");
-                bottomDiv.appendChild(bottomCanvas);
-                container.appendChild(bottomDiv);
+                const subDiv = document.createElement("div");
+                subDiv.id = "chart-sub";
+                subCanvas = document.createElement("canvas");
+                subCtx = subCanvas.getContext("2d");
+                subDiv.appendChild(subCanvas);
+                container.appendChild(subDiv);
                 // 添加下面窗口事件
-                bottomCanvas.addEventListener("wheel", onBottomWheel, { passive: false });
-                bottomCanvas.addEventListener("mousedown", onBottomMouseDown);
-                bottomCanvas.addEventListener("mousemove", onBottomMouseMove);
-                bottomCanvas.addEventListener("mouseup", onBottomMouseUp);
-                bottomCanvas.addEventListener("mouseleave", onBottomMouseLeave);
-                bottomCanvas.addEventListener("dblclick", function(e) {
-                    if (!dualBottomData) return;
-                    const rect = bottomCanvas.getBoundingClientRect();
+                subCanvas.addEventListener("wheel", onSubWheel, { passive: false });
+                subCanvas.addEventListener("mousedown", onSubMouseDown);
+                subCanvas.addEventListener("mousemove", onSubMouseMove);
+                subCanvas.addEventListener("mouseup", onSubMouseUp);
+                subCanvas.addEventListener("mouseleave", onSubMouseLeave);
+                subCanvas.addEventListener("dblclick", function(e) {
+                    if (!dualSubData) return;
+                    const rect = subCanvas.getBoundingClientRect();
                     const clickX = e.clientX - rect.left;
                     const clickY = e.clientY - rect.top;
                     // 临时切换全局变量以使用 getChartArea 等函数
                     const _savedCanvas = canvas, _savedCtx = ctx;
                     const _savedViewOffset = viewOffset, _savedViewCount = viewCount;
                     const _savedChartData = chartData, _savedFreq = currentFreq;
-                    canvas = bottomCanvas; ctx = bottomCtx;
-                    viewOffset = dualBottomViewOffset; viewCount = dualBottomViewCount;
-                    chartData = dualBottomData; currentFreq = dualBottomFreq;
+                    canvas = subCanvas; ctx = subCtx;
+                    viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+                    chartData = dualSubData; currentFreq = dualSubFreq;
                     const area = getChartArea();
                     const klines = getVisibleKlines();
                     if (!klines.length) { canvas = _savedCanvas; ctx = _savedCtx; viewOffset = _savedViewOffset; viewCount = _savedViewCount; chartData = _savedChartData; currentFreq = _savedFreq; return; }
@@ -9064,16 +9068,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     // 双击K线上无效，双击空白处
                     if (clickedOnKline) return;
                     // 状态A：让下面窗口平移到对应区间
-                    if (dualOffscreenState && dualHighlightRange && dualBottomData) {
+                    if (dualOffscreenState && dualHighlightRange && dualSubData) {
                         const hr = dualHighlightRange;
                         if (hr.startIdx >= 0 && hr.endIdx >= 0) {
                             const centerIdx = (hr.startIdx + hr.endIdx) / 2;
-                            const totalKlines = dualBottomData.klines.length;
-                            let newOffset = Math.round(centerIdx - dualBottomViewCount / 2);
+                            const totalKlines = dualSubData.klines.length;
+                            let newOffset = Math.round(centerIdx - dualSubViewCount / 2);
                             if (newOffset < 0) newOffset = 0;
-                            const maxOffset = Math.max(0, totalKlines - dualBottomViewCount);
+                            const maxOffset = Math.max(0, totalKlines - dualSubViewCount);
                             if (newOffset > maxOffset) newOffset = maxOffset;
-                            dualBottomViewOffset = newOffset;
+                            dualSubViewOffset = newOffset;
                             dualHighlightRange = calcGrayRange(mouseX);
                             dualRedRange = dualHighlightRange ? dualHighlightRange.redRange : null;
                             dualOffscreenState = dualHighlightRange && !dualHighlightRange.isVisible;
@@ -9084,10 +9088,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         return;
                     }
                     // 默认：恢复下面窗口全视图
-                    dualBottomViewCount = 377;
-                    dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                    if (dualBottomData.klines.length < dualBottomViewCount) {
-                        dualBottomViewOffset = 0;
+                    dualSubViewCount = 377;
+                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                    if (dualSubData.klines.length < dualSubViewCount) {
+                        dualSubViewOffset = 0;
                     }
                     renderBottom();
                 });
@@ -9104,7 +9108,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
                 if (isFutures) {
                     // 期货双窗口：使用 connectRealtimeDual，自带完整的 init/update/error 处理与自动跟随逻辑
-                    connectRealtimeDual(code, currentFreq, bottomFreq);
+                    connectRealtimeDual(code, currentFreq, subFreq);
                 } else {
                     // 股票双窗口：HTTP 请求
                     fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + currentFreq + "&dual=1")
@@ -9115,11 +9119,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         .then(data => {
                             if (data.sub) {
                                 chartData = data;
-                                dualBottomData = data.sub;
-                                dualBottomViewCount = 377;
-                                dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                                if (dualBottomData.klines.length < dualBottomViewCount) {
-                                    dualBottomViewOffset = 0;
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
                                 }
                                 document.getElementById("loading").classList.add("hidden");
                                 document.querySelector(".loading-text").textContent = "正在加载K线数据...";
@@ -9132,9 +9136,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         .catch(err => {
                             alert("加载下面窗口数据失败: " + err.message);
                             isDualWindow = false;
-                            activeDualWindow = 'top';
-                            dualBottomData = null;
-                            dualBottomFreq = '';
+                            activeDualWindow = 'main';
+                            dualSubData = null;
+                            dualSubFreq = '';
                             btn.classList.remove("active");
                             updateFreqButtonStates(false);
                             const container2 = document.getElementById("chart-container");
@@ -9144,7 +9148,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             ci2.id = "crosshair-info";
                             container2.appendChild(ci2);
                             container2.appendChild(origCanvas);
-                            canvas = topCanvas; ctx = topCtx;
+                            canvas = mainCanvas; ctx = mainCtx;
                             resizeCanvas();
                             render();
                             document.getElementById("loading").classList.add("hidden");
@@ -9155,20 +9159,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         // 下面窗口的事件处理
-        function onBottomWheel(e) {
+        function onSubWheel(e) {
             e.preventDefault();
-            if (!dualBottomData) return;
-            activeDualWindow = 'bottom';
+            if (!dualSubData) return;
+            activeDualWindow = 'sub';
             updateActiveWindowClass();
             updateSlider();
             const savedCanvas = canvas; const savedCtx = ctx;
             const savedViewOffset = viewOffset; const savedViewCount = viewCount;
-            canvas = bottomCanvas; ctx = bottomCtx;
-            viewOffset = dualBottomViewOffset; viewCount = dualBottomViewCount;
-            const rect = bottomCanvas.getBoundingClientRect();
+            canvas = subCanvas; ctx = subCtx;
+            viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+            const rect = subCanvas.getBoundingClientRect();
             const bMouseX = e.clientX - rect.left;
             const area = getChartArea();
-            const klines = dualBottomData.klines;
+            const klines = dualSubData.klines;
             const barStep = area.w / viewCount;
             const ratio = Math.max(0, Math.min(1, (bMouseX - area.x) / area.w));
             const mouseKIdx = ratio * viewCount;
@@ -9180,65 +9184,65 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const maxOffset = klines.length - newViewCount;
             if (mouseKIdx >= viewCount - 1) {
                 const rightGlobalIdx = viewOffset + viewCount - 1;
-                dualBottomViewCount = newViewCount;
-                dualBottomViewOffset = Math.max(0, Math.min(maxOffset, rightGlobalIdx - newViewCount + 1));
+                dualSubViewCount = newViewCount;
+                dualSubViewOffset = Math.max(0, Math.min(maxOffset, rightGlobalIdx - newViewCount + 1));
             } else {
                 const anchorGlobalIdx = viewOffset + mouseKIdx;
                 let newViewOffset = anchorGlobalIdx - ratio * newViewCount;
                 newViewOffset = Math.max(0, newViewOffset);
                 if (newViewOffset > maxOffset) newViewOffset = maxOffset;
-                dualBottomViewCount = newViewCount;
-                dualBottomViewOffset = newViewOffset;
+                dualSubViewCount = newViewCount;
+                dualSubViewOffset = newViewOffset;
             }
             canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
             renderBottom();
         }
 
-        function onBottomMouseDown(e) {
-            dualBottomIsDragging = true;
-            dualBottomDragStartX = e.clientX;
-            dualBottomDragStartOffset = dualBottomViewOffset;
-            dualBottomMouseDownX = e.clientX;
-            dualBottomMouseDownY = e.clientY;
-            bottomCanvas.style.cursor = "grabbing";
-            activeDualWindow = 'bottom';
+        function onSubMouseDown(e) {
+            dualSubIsDragging = true;
+            dualSubDragStartX = e.clientX;
+            dualSubDragStartOffset = dualSubViewOffset;
+            dualSubMouseDownX = e.clientX;
+            dualSubMouseDownY = e.clientY;
+            subCanvas.style.cursor = "grabbing";
+            activeDualWindow = 'sub';
             updateActiveWindowClass();
             updateSlider();
         }
 
-        function onBottomMouseMove(e) {
-            const rect = bottomCanvas.getBoundingClientRect();
-            dualBottomMouseX = e.clientX - rect.left;
-            dualBottomMouseY = e.clientY - rect.top;
-            if (dualBottomIsDragging && dualBottomData) {
+        function onSubMouseMove(e) {
+            const rect = subCanvas.getBoundingClientRect();
+            dualSubMouseX = e.clientX - rect.left;
+            dualSubMouseY = e.clientY - rect.top;
+            if (dualSubIsDragging && dualSubData) {
                 const savedCanvas = canvas; const savedCtx = ctx;
                 const savedViewOffset = viewOffset; const savedViewCount = viewCount;
-                canvas = bottomCanvas; ctx = bottomCtx;
-                viewOffset = dualBottomViewOffset; viewCount = dualBottomViewCount;
-                dualBottomViewOffset = dualBottomDragStartOffset - (e.clientX - dualBottomDragStartX) / (getChartArea().w / viewCount);
-                dualBottomViewOffset = Math.max(0, Math.min(dualBottomData.klines.length - dualBottomViewCount, dualBottomViewOffset));
+                canvas = subCanvas; ctx = subCtx;
+                viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+                dualSubViewOffset = dualSubDragStartOffset - (e.clientX - dualSubDragStartX) / (getChartArea().w / viewCount);
+                dualSubViewOffset = Math.max(0, Math.min(dualSubData.klines.length - dualSubViewCount, dualSubViewOffset));
                 canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
             }
             renderBottom();
         }
 
-        function onBottomMouseUp(e) {
-            dualBottomIsDragging = false;
-            bottomCanvas.style.cursor = "crosshair";
+        function onSubMouseUp(e) {
+            dualSubIsDragging = false;
+            subCanvas.style.cursor = "crosshair";
             // 只处理左键点击（非拖拽）
-            if (e.button !== 0 || Math.abs(e.clientX - dualBottomMouseDownX) >= 5 || Math.abs(e.clientY - dualBottomMouseDownY) >= 5) return;
-            if (_bottomCurrentGlobalIdx < 0 || !dualBottomData) return;
+            if (e.button !== 0 || Math.abs(e.clientX - dualSubMouseDownX) >= 5 || Math.abs(e.clientY - dualSubMouseDownY) >= 5) return;
+            if (_subCurrentGlobalIdx < 0 || !dualSubData) return;
 
             // === Ctrl+点击：区间选择模式切换（底部窗口）===
             if (e.ctrlKey) {
                 if (_rangeSelect.mode === 'IDLE') {
                     _rangeSelect = {
                         mode: 'SELECTED_A',
-                        startIdx: _bottomCurrentGlobalIdx,
-                        startFreq: dualBottomFreq,
-                        startSymbol: dualBottomData.meta.symbol
+                        startIdx: _subCurrentGlobalIdx,
+                        startFreq: dualSubFreq,
+                        startSymbol: dualSubData.meta.symbol
                     };
-                    const startDate = dualBottomData.klines[_bottomCurrentGlobalIdx].date.split(' ')[0];
+                    const startDate = dualSubData.klines[_subCurrentGlobalIdx].date.split(' ')[0];
                     showDualToast("区间起点: " + startDate + "，点击另一根K线完成选择");
                     renderBottom();
                 } else {
@@ -9252,14 +9256,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // === 普通点击：如果在选择模式中，完成区间选择（底部窗口）===
             if (_rangeSelect.mode === 'SELECTED_A') {
                 // 验证：同一股票、同一周期
-                if (_rangeSelect.startFreq !== dualBottomFreq || _rangeSelect.startSymbol !== dualBottomData.meta.symbol) {
+                if (_rangeSelect.startFreq !== dualSubFreq || _rangeSelect.startSymbol !== dualSubData.meta.symbol) {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
                     showDualToast("股票或周期已变更，区间选择已取消");
                     return;
                 }
-                const a = Math.min(_rangeSelect.startIdx, _bottomCurrentGlobalIdx);
-                const b = Math.max(_rangeSelect.startIdx, _bottomCurrentGlobalIdx);
-                const klines = dualBottomData.klines;
+                const a = Math.min(_rangeSelect.startIdx, _subCurrentGlobalIdx);
+                const b = Math.max(_rangeSelect.startIdx, _subCurrentGlobalIdx);
+                const klines = dualSubData.klines;
                 const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
                 const lines = [];
                 for (let i = a; i <= b; i++) {
@@ -9280,15 +9284,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
 
             // === 普通模式：复制当前K线信息 ===
-            if (_bottomClipText) {
-                navigator.clipboard.writeText(_bottomClipText).catch(() => {});
+            if (_subClipText) {
+                navigator.clipboard.writeText(_subClipText).catch(() => {});
             }
         }
 
-        function onBottomMouseLeave() {
-            dualBottomIsDragging = false;
-            dualBottomMouseX = -1; dualBottomMouseY = -1;
-            bottomCanvas.style.cursor = "crosshair";
+        function onSubMouseLeave() {
+            dualSubIsDragging = false;
+            dualSubMouseX = -1; dualSubMouseY = -1;
+            subCanvas.style.cursor = "crosshair";
             renderBottom();
         }
 
@@ -9459,7 +9463,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 .then(resp => resp.json())
                 .then(() => {
                     // Step 2: 冷启动重新加载
-                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : ""));
+                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
@@ -9502,11 +9506,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     updateDualBtn();
                     // 双窗口模式：从 data.sub 恢复子级别数据
                     if (isDualWindow && data.sub) {
-                        dualBottomData = data.sub;
-                        dualBottomViewCount = 377;
-                        dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                        if (dualBottomData.klines.length < dualBottomViewCount) {
-                            dualBottomViewOffset = 0;
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) {
+                            dualSubViewOffset = 0;
                         }
                     }
                 })
@@ -9949,6 +9953,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 if (bjCount > 0) marketParts.push("北京 <b>" + bjCount + "</b> 只");
                                 if (hkCount > 0) marketParts.push("香港 <b>" + hkCount + "</b> 只");
                                 html += '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
+                                // 按分型强度降序排序（最强分型→强分型→弱分型）
+                                results.sort(function(a, b) { return b.fx_strength - a.fx_strength; });
                                 for (var i = 0; i < results.length; i++) {
                                     var r = results[i];
                                     var fxLabel = '底分型';
@@ -10571,6 +10577,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现底分型股票</div>';
             } else {
+                // 按分型强度降序排序（最强分型→强分型→弱分型）
+                results.sort(function(a, b) { return b.fx_strength - a.fx_strength; });
                 for (var i = 0; i < results.length; i++) {
                     var r = results[i];
                     var fxLabel = '底分型';
@@ -10758,15 +10766,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     disconnectRealtime();
                     if (isDualWindow) {
                         // 双窗口模式：用双窗口SSE
-                        const newBottomFreq = getDualBottomFreq(freq);
-                        dualBottomFreq = newBottomFreq;
-                        connectRealtimeDual(code, freq, newBottomFreq);
+                        const newSubFreq = getDualSubFreq(freq);
+                        dualSubFreq = newSubFreq;
+                        connectRealtimeDual(code, freq, newSubFreq);
                     } else {
                         connectRealtimeInit(code, freq);
                     }
                     return;
                 }
-                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : ""))
+                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
                     .then(resp => {
                         if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                         return resp.json();
@@ -10790,15 +10798,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                         updateWeekday();
                         // 双窗口模式：从 data.sub 获取子级别数据（方案B）
                         if (isDualWindow) {
-                            const newBottomFreq = getDualBottomFreq(freq);
-                            if (newBottomFreq) {
-                                dualBottomFreq = newBottomFreq;
+                            const newSubFreq = getDualSubFreq(freq);
+                            if (newSubFreq) {
+                                dualSubFreq = newSubFreq;
                                 if (data.sub) {
-                                    dualBottomData = data.sub;
-                                    dualBottomViewCount = 377;
-                                    dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                                    if (dualBottomData.klines.length < dualBottomViewCount) {
-                                        dualBottomViewOffset = 0;
+                                    dualSubData = data.sub;
+                                    dualSubViewCount = 377;
+                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                    if (dualSubData.klines.length < dualSubViewCount) {
+                                        dualSubViewOffset = 0;
                                     }
                                 }
                             } else {
@@ -10860,9 +10868,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
-                if (isDualWindow && getDualBottomFreq(freq)) {
+                if (isDualWindow && getDualSubFreq(freq)) {
                     disconnectRealtime();
-                    connectRealtimeDual(code, freq, getDualBottomFreq(freq));
+                    connectRealtimeDual(code, freq, getDualSubFreq(freq));
                 } else {
                     // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
                     const savedDate = chartData.meta.saved_selection_date || null;
@@ -10879,7 +10887,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const needEndDate = isFutures ? true : (!isToday || keyEnter);
             const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
-                + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -10894,11 +10902,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     updateDualBtn();
                     // 双窗口模式：从 data.sub 恢复子级别数据
                     if (isDualWindow && data.sub) {
-                        dualBottomData = data.sub;
-                        dualBottomViewCount = 377;
-                        dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                        if (dualBottomData.klines.length < dualBottomViewCount) {
-                            dualBottomViewOffset = 0;
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) {
+                            dualSubViewOffset = 0;
                         }
                     }
                     viewCount = 377;
@@ -11097,7 +11105,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var freq = currentFreq;
             var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
                 + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
-                + (isDualWindow && getDualBottomFreq(freq) ? "&dual=1" : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -11111,10 +11119,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     updateRestartBtn();
                     updateDualBtn();
                     if (isDualWindow && data.sub) {
-                        dualBottomData = data.sub;
-                        dualBottomViewCount = 377;
-                        dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                        if (dualBottomData.klines.length < dualBottomViewCount) dualBottomViewOffset = 0;
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) dualSubViewOffset = 0;
                     }
                     viewCount = 377;
                     adjustViewForSavedPoint();
@@ -11380,9 +11388,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
                 if (isDualWindow) {
-                    const bottomFreq = getDualBottomFreq(fetchFreq);
-                    if (bottomFreq) {
-                        connectRealtimeDual(code, fetchFreq, bottomFreq);
+                    const subFreq = getDualSubFreq(fetchFreq);
+                    if (subFreq) {
+                        connectRealtimeDual(code, fetchFreq, subFreq);
                         return;
                     }
                 }
@@ -11390,7 +11398,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 return;
             }
             updateFreqButtonStates(false); // 股票：禁用 1m/15s，启用 d/w
-            fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + fetchFreq + (isDualWindow && getDualBottomFreq(fetchFreq) ? "&dual=1" : ""))
+            fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                     return resp.json();
@@ -11441,15 +11449,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     resizeCanvas();
                     // 双窗口模式下同时加载下面窗口数据
                     if (isDualWindow) {
-                        const bottomFreq = getDualBottomFreq(currentFreq);
-                        if (bottomFreq) {
-                            dualBottomFreq = bottomFreq;
+                        const subFreq = getDualSubFreq(currentFreq);
+                        if (subFreq) {
+                            dualSubFreq = subFreq;
                             if (data.sub) {
-                                dualBottomData = data.sub;
-                                dualBottomViewCount = 377;
-                                dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                                if (dualBottomData.klines.length < dualBottomViewCount) {
-                                    dualBottomViewOffset = 0;
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
                                 }
                             }
                         }
@@ -11598,11 +11606,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
-        function connectRealtimeDual(symbol, topFreq, bottomFreq) {
+        function connectRealtimeDual(symbol, mainFreq, subFreq) {
             disconnectRealtime();
             realtimeSymbol = symbol;
-            realtimeFreq = topFreq;
-            dualBottomFreq = bottomFreq;
+            realtimeFreq = mainFreq;
+            dualSubFreq = subFreq;
             isRealtimeMode = true;
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
@@ -11611,7 +11619,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             try {
                 let sseUrl = '/api/futures_stream?symbol=' + encodeURIComponent(symbol)
-                    + '&freq=' + topFreq + '&dual=1&bottom_freq=' + bottomFreq;
+                    + '&freq=' + mainFreq + '&dual=1&sub_freq=' + subFreq;
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
 
@@ -11642,11 +11650,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             updateWeekday();
                         }
                         if (data.sub) {
-                            dualBottomData = data.sub;
-                            dualBottomViewCount = 377;
-                            dualBottomViewOffset = Math.max(0, dualBottomData.klines.length - dualBottomViewCount);
-                            if (dualBottomData.klines.length < dualBottomViewCount) {
-                                dualBottomViewOffset = 0;
+                            dualSubData = data.sub;
+                            dualSubViewCount = 377;
+                            dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                            if (dualSubData.klines.length < dualSubViewCount) {
+                                dualSubViewOffset = 0;
                             }
                         }
                         document.getElementById("loading").classList.add("hidden");
@@ -11837,20 +11845,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             if (data.sub) {
                 // 保存子窗口的缩放和位置
-                const oldSubCount = dualBottomData && dualBottomData.klines ? dualBottomData.klines.length : 0;
-                const savedSubCount = dualBottomViewCount || 377;
-                const savedSubOffset = dualBottomViewOffset || 0;
+                const oldSubCount = dualSubData && dualSubData.klines ? dualSubData.klines.length : 0;
+                const savedSubCount = dualSubViewCount || 377;
+                const savedSubOffset = dualSubViewOffset || 0;
                 const wasSubAtRightEdge = (savedSubOffset + savedSubCount >= oldSubCount);
 
-                dualBottomData = data.sub;
+                dualSubData = data.sub;
 
                 const newSubCount = data.sub.klines ? data.sub.klines.length : 0;
                 const subDelta = newSubCount - oldSubCount;
-                dualBottomViewCount = savedSubCount;
+                dualSubViewCount = savedSubCount;
                 if (wasSubAtRightEdge && subDelta > 0) {
-                    dualBottomViewOffset = Math.max(0, savedSubOffset + subDelta);
+                    dualSubViewOffset = Math.max(0, savedSubOffset + subDelta);
                 } else {
-                    dualBottomViewOffset = savedSubOffset;
+                    dualSubViewOffset = savedSubOffset;
                 }
             }
             updateSlider();
@@ -11888,9 +11896,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function updateSlider() {
             // 双窗口模式下，使用激活窗口的数据
-            const data = (isDualWindow && activeDualWindow === 'bottom' && dualBottomData) ? dualBottomData : chartData;
-            const vo = (isDualWindow && activeDualWindow === 'bottom') ? dualBottomViewOffset : viewOffset;
-            const vc = (isDualWindow && activeDualWindow === 'bottom') ? dualBottomViewCount : viewCount;
+            const data = (isDualWindow && activeDualWindow === 'sub' && dualSubData) ? dualSubData : chartData;
+            const vo = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewOffset : viewOffset;
+            const vc = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewCount : viewCount;
             if (!data || !data.klines.length) return;
             const track = document.getElementById("slider-track");
             const win = document.getElementById("slider-window");
@@ -11926,7 +11934,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const si = data.klines.findIndex(k => k.date === zs.sdt);
                 return si >= globalStart && si < globalEnd;
             });
-            const winLabel = isDualWindow ? (activeDualWindow === 'bottom' ? '[下窗] ' : '[上窗] ') : '';
+            const winLabel = isDualWindow ? (activeDualWindow === 'sub' ? '[下窗] ' : '[上窗] ') : '';
             label.textContent = winLabel + startDate + " - " + endDate + "   [K线]: " + displayCount + "/" + totalKlines + "   [分型]: " + visFxs.length + "/" + data.fxs.length + "   [笔]: " + visBis.length + "/" + data.bis.length + "   [中枢]: " + visZs.length + "/" + data.zs.length;
         }
 
@@ -11942,37 +11950,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
             // 获取当前激活窗口的 data
             function getActiveData() {
-                if (isDualWindow && activeDualWindow === 'bottom' && dualBottomData) {
-                    return dualBottomData;
+                if (isDualWindow && activeDualWindow === 'sub' && dualSubData) {
+                    return dualSubData;
                 }
                 return chartData;
             }
             // 获取当前激活窗口的 viewOffset
             function getActiveViewOffset() {
-                if (isDualWindow && activeDualWindow === 'bottom') {
-                    return dualBottomViewOffset;
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    return dualSubViewOffset;
                 }
                 return viewOffset;
             }
             // 设置当前激活窗口的 viewOffset
             function setActiveViewOffset(v) {
-                if (isDualWindow && activeDualWindow === 'bottom') {
-                    dualBottomViewOffset = v;
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    dualSubViewOffset = v;
                 } else {
                     viewOffset = v;
                 }
             }
             // 获取当前激活窗口的 viewCount
             function getActiveViewCount() {
-                if (isDualWindow && activeDualWindow === 'bottom') {
-                    return dualBottomViewCount;
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    return dualSubViewCount;
                 }
                 return viewCount;
             }
             // 设置当前激活窗口的 viewCount
             function setActiveViewCount(v) {
-                if (isDualWindow && activeDualWindow === 'bottom') {
-                    dualBottomViewCount = v;
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    dualSubViewCount = v;
                 } else {
                     viewCount = v;
                 }
@@ -11980,14 +11988,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 渲染当前激活窗口
             function renderActive() {
                 updateActiveWindowClass();
-                if (isDualWindow && activeDualWindow === 'bottom') {
+                if (isDualWindow && activeDualWindow === 'sub') {
                     // 直接渲染下面窗口，跳过 updateDualNewZs() 避免滑块操作时误清除红框新中枢
-                    if (!dualBottomData || !bottomCtx) return;
+                    if (!dualSubData || !subCtx) return;
                     const _savedCanvas = canvas, _savedCtx = ctx;
-                    canvas = bottomCanvas; ctx = bottomCtx;
+                    canvas = subCanvas; ctx = subCtx;
                     window._isRenderingBottom = true;
-                    _renderChart(dualBottomData, dualBottomFreq, dualBottomViewOffset, dualBottomViewCount,
-                        dualBottomMouseX, dualBottomMouseY, dualHighlightRange, dualRedRange);
+                    _renderChart(dualSubData, dualSubFreq, dualSubViewOffset, dualSubViewCount,
+                        dualSubMouseX, dualSubMouseY, dualHighlightRange, dualRedRange);
                     window._isRenderingBottom = false;
                     canvas = _savedCanvas; ctx = _savedCtx;
                 } else if (isDualWindow) {
@@ -12515,7 +12523,7 @@ def main():
     print("=" * 60)
     print("  缠论分析 - chan.py 版本")
     print("=" * 60)
-
+    
     # 1. 加载上次查看的代码和周期（持久化恢复），若不存在则使用默认值
     last_code, last_freq = _load_last_code_freq()
     if last_code:
