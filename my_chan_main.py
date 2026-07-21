@@ -8893,7 +8893,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + (chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损") : ""}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
@@ -9274,7 +9274,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const changePct = prevClose !== 0 ? (changeVal / prevClose * 100).toFixed(2) : "0.00";
                     const sign = changeVal >= 0 ? "+" : "";
                     const wd = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)} 涨跌:${sign}${changeVal.toFixed(2)} 涨幅:${sign}${changePct}% 复权:${chartData.meta.forward_adjust ? "前复权" : "不复权"}${chartData.meta.pe_ttm != null ? " PE-TTM:" + (chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损") : ""}`);
+                    lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
                 showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
