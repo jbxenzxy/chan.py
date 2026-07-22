@@ -9745,8 +9745,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var pageIndexLabel = document.getElementById("label-page-index");
             var pageIndexCb = document.querySelector('input[name="scan-source"][value="page_index"]');
             if (pageIndexLabel && pageIndexCb) {
-                var isSectorIndex = chartData && chartData.meta && chartData.meta.symbol &&
-                    /^(88\d{4}|399\d{3}|000\d{3}|932\d{3})/.test(chartData.meta.symbol);
+                var sym = chartData && chartData.meta && chartData.meta.symbol;
+                // 可获取成分股的指数：通达信板块(88xxxx)、深市指数(399xxx)、中证系列(932xxx)、
+                // 上海指数(000xxx)。注意排除深市主板股票(000xxx.SZ)的误判。
+                var isSectorIndex = sym && (
+                    /^88\d{4}/.test(sym) || /^399\d{3}/.test(sym) || /^932\d{3}/.test(sym) ||
+                    (/^000\d{3}/.test(sym) && !/\.[Ss][Zz]$/.test(sym))
+                );
                 if (isSectorIndex) {
                     pageIndexLabel.style.opacity = "1";
                     pageIndexLabel.style.pointerEvents = "";
@@ -10361,6 +10366,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             if (bjCount > 0) marketParts.push("北京 <b>" + bjCount + "</b> 只");
                             if (hkCount > 0) marketParts.push("香港 <b>" + hkCount + "</b> 只");
                             html += '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
+                            // 按最新买卖点类型排序：先买点后卖点，内部 1→2→3→0
+                            results.sort(function(a, b) { return getLatestBspSortKey(a) - getLatestBspSortKey(b); });
                             for (var i = 0; i < results.length; i++) {
                                 var r = results[i];
                                 var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
@@ -10545,6 +10552,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (results.length === 0) {
                 html += '<div class="scan-no-result">当前周期下未发现买卖点股票</div>';
             } else {
+                // 按最新买卖点类型排序：一类(1)→二类(2)→三类(3)→0类(0)
+                results.sort(function(a, b) { return getLatestBspSortKey(a) - getLatestBspSortKey(b); });
                 for (var i = 0; i < results.length; i++) {
                     var r = results[i];
                     var tagsHtml = buildBspTagsHtml(r.buy_points, r.sell_points);
@@ -10649,6 +10658,31 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!lastSellDate) return true;
             if (!lastBuyDate) return false;
             return lastBuyDate >= lastSellDate;
+        }
+
+        // 获取最新买卖点的两层排序键：
+        // 第一层：先买点(0) 后卖点(1)；第二层：1→2→3→0
+        // 返回数值越小排越前：买点一类→1, 买点二类→2, 买点三类→3, 买点0类→4,
+        //                       卖点一类→11, 卖点二类→12, 卖点三类→13, 卖点0类→14, 无买卖点→99
+        function getLatestBspSortKey(r) {
+            var buyPoints = r.buy_points || [];
+            var sellPoints = r.sell_points || [];
+            if (buyPoints.length === 0 && sellPoints.length === 0) return 99;
+            var lastBuyDate = buyPoints.length > 0 ? buyPoints[buyPoints.length - 1].date : "";
+            var lastSellDate = sellPoints.length > 0 ? sellPoints[sellPoints.length - 1].date : "";
+            var latestPoint = null;
+            var isBuy = false;
+            if (!lastSellDate) { latestPoint = buyPoints[buyPoints.length - 1]; isBuy = true; }
+            else if (!lastBuyDate) { latestPoint = sellPoints[sellPoints.length - 1]; isBuy = false; }
+            else if (lastBuyDate >= lastSellDate) { latestPoint = buyPoints[buyPoints.length - 1]; isBuy = true; }
+            else { latestPoint = sellPoints[sellPoints.length - 1]; isBuy = false; }
+            var tp = (latestPoint.type || "").replace(/\s/g, "");
+            var typeKey = 99;
+            if (tp === "1") typeKey = 1;
+            else if (tp === "2") typeKey = 2;
+            else if (tp === "3") typeKey = 3;
+            else if (tp === "0") typeKey = 4;
+            return (isBuy ? 0 : 10) + typeKey;
         }
 
         function chkBox(code, checked) {
