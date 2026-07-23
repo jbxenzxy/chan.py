@@ -7764,8 +7764,30 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const d = _overlayData;
                     ctx.fillStyle = "#dcdcdc";
                     ctx.fillRect(d.bottomX, d.bottomY, d.bottomW + d.bottomPad * 2, d.bottomH);
-                    ctx.fillStyle = "#333"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-                    ctx.fillText(d.bottomText, d.bottomX + d.bottomPad, d.bottomY + 13);
+                    ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+                    // 跌时分段绘制：回本百分比用红色
+                    if (d.bottomIsDown) {
+                        const txt = d.bottomText;
+                        const lastParen = txt.lastIndexOf(")");
+                        if (lastParen > 0) {
+                            const before = txt.substring(0, lastParen);
+                            const after = txt.substring(lastParen);
+                            // 找回本部分：最后一个 /+XX.XX%
+                            const slashIdx = before.lastIndexOf("/+");
+                            if (slashIdx > 0) {
+                                ctx.fillText(before.substring(0, slashIdx), d.bottomX + d.bottomPad, d.bottomY + 13);
+                                const prefixW = ctx.measureText(before.substring(0, slashIdx)).width;
+                                ctx.fillStyle = "#fd1050";
+                                ctx.fillText(before.substring(slashIdx) + after, d.bottomX + d.bottomPad + prefixW, d.bottomY + 13);
+                            } else {
+                                ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
+                            }
+                        } else {
+                            ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
+                        }
+                    } else {
+                        ctx.fillText(d.bottomText, d.bottomX + d.bottomPad, d.bottomY + 13);
+                    }
                 }
             }
             // 双窗口：在所有绘制完成后，画视口外指示箭头（确保不被覆盖）
@@ -7819,7 +7841,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     const totalChange = rightVisibleK.close - startPrice;
                     const totalChangePct = startPrice !== 0 ? (totalChange / startPrice * 100).toFixed(2) : "0.00";
                     const tcSign = totalChange >= 0 ? "+" : "";
-                    const extraText = ` ${barsToRight}根 ${tcSign}${totalChange.toFixed(2)}(${tcSign}${totalChangePct}%)`;
+                    // 跌时在括号内追加回本所需涨幅
+                    let pctText = `${tcSign}${totalChangePct}%`;
+                    if (totalChange < 0) {
+                        const absPct = Math.abs(parseFloat(totalChangePct));
+                        if (absPct > 0 && absPct < 100) {
+                            const recoverPct = (absPct / (100 - absPct) * 100).toFixed(2);
+                            pctText += `/+${recoverPct}%`;
+                        }
+                    }
+                    const extraText = ` ${barsToRight}根 ${tcSign}${totalChange.toFixed(2)}(${pctText})`;
                     const dateText = shortDate + " " + weekDay + extraText;
                     ctx.font = "11px monospace";
                     const textW = ctx.measureText(dateText).width;
@@ -7832,7 +7863,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ctx.fillStyle = "#dcdcdc";
                     ctx.fillRect(labelX, labelY, textW + labelPad * 2, labelH);
                     ctx.fillStyle = "#333"; ctx.textAlign = "left";
-                    ctx.fillText(dateText, labelX + labelPad, labelY + 13);
+                    if (totalChange < 0) {
+                        // 分段绘制：前半部分黑色，回本百分比红色
+                        const recoverSuffix = `/+${(Math.abs(parseFloat(totalChangePct)) / (100 - Math.abs(parseFloat(totalChangePct))) * 100).toFixed(2)}%`;
+                        const recoverPart = `/${recoverSuffix})`;
+                        const splitIdx = dateText.lastIndexOf(recoverPart);
+                        if (splitIdx > 0) {
+                            ctx.fillText(dateText.substring(0, splitIdx), labelX + labelPad, labelY + 13);
+                            const prefixW = ctx.measureText(dateText.substring(0, splitIdx)).width;
+                            ctx.fillStyle = "#fd1050";
+                            ctx.fillText(dateText.substring(splitIdx), labelX + labelPad + prefixW, labelY + 13);
+                        } else {
+                            ctx.fillText(dateText, labelX + labelPad, labelY + 13);
+                        }
+                    } else {
+                        ctx.fillText(dateText, labelX + labelPad, labelY + 13);
+                    }
                 }
             }
             // 恢复全局变量
@@ -8621,7 +8667,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const totalChangePct = startPrice !== 0 ? (totalChange / startPrice * 100).toFixed(2) : "0.00";
                 const tcSign = totalChange >= 0 ? "+" : "";
 
-                const extraText = ` ${barsToRight}根 ${tcSign}${totalChange.toFixed(2)}(${tcSign}${totalChangePct}%)`;
+                // 跌时在括号内追加回本所需涨幅
+                let pctText = `${tcSign}${totalChangePct}%`;
+                if (totalChange < 0) {
+                    const absPct = Math.abs(parseFloat(totalChangePct));
+                    if (absPct > 0 && absPct < 100) {
+                        const recoverPct = (absPct / (100 - absPct) * 100).toFixed(2);
+                        pctText += `/+${recoverPct}%`;
+                    }
+                }
+                const extraText = ` ${barsToRight}根 ${tcSign}${totalChange.toFixed(2)}(${pctText})`;
                 const dateText = shortDate + " " + weekDay + extraText;
 
                 ctx.font = "11px monospace";
@@ -8634,6 +8689,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const labelY = area.y + area.h - labelH;
                 _overlayData = _overlayData || {};
                 _overlayData.bottomText = dateText;
+                _overlayData.bottomIsDown = totalChange < 0;
                 _overlayData.bottomX = labelX;
                 _overlayData.bottomY = labelY;
                 _overlayData.bottomW = textW;
