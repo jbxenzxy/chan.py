@@ -9,9 +9,11 @@ import os
 import json
 import time
 import re
+import struct
 import threading
 import multiprocessing
 from datetime import datetime, timedelta
+from chinese_calendar import is_holiday
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -26,17 +28,18 @@ from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures
 # ============================================================
 # 配置区域 - 请根据你的实际环境修改
 # ============================================================
-VIPDOC_DIR = r"C:\new_tdx_test\vipdoc"  # 通达信vipdoc目录
-TDX_HQ_CACHE = r"C:\new_tdx_test\T0002\hq_cache"  # 通达信hq_cache目录（shm.tnf/szm.tnf）
+TDX_INSTALL_DIR = r"C:\new_tdx_hd_test"  # 通达信安装目录（改目录只需修改本行）
+VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")  # 通达信vipdoc目录
+TDX_HQ_CACHE = os.path.join(TDX_INSTALL_DIR, "T0002", "hq_cache")  # 通达信hq_cache目录（shm.tnf/szm.tnf）
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本所在目录）
 SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
 CHAN_PATH = r"C:\my_chan_project"  # chan.py 仓库解压目录
-_LAST_CODE_FREQ_FILE = os.path.join(VIPDOC_DIR, "last_code_freq.json")  # 持久化上次查看的代码和周期
+LAST_CODE_FREQ_FILE = os.path.join(VIPDOC_DIR, "last_code_freq.json")  # 持久化上次查看的代码和周期
 
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
-# 账户和密码从 C:\new_tdx_test\vipdoc\tq_account.json 文件读取
+# 账户和密码从 VIPDOC_DIR（即 TDX_INSTALL_DIR\vipdoc）下 tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
 _SSE_DEBUG  = False         # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 
@@ -118,6 +121,614 @@ except ImportError:
 # ============================================================
 # 通达信数据读取
 # ============================================================
+
+# ============================================================
+# 盘后数据下载引擎（基于 eltdx）
+# ============================================================
+try:
+    from eltdx import TdxClient
+    _ELTDX_AVAILABLE = True
+except ImportError:
+    _ELTDX_AVAILABLE = False
+    TdxClient = None
+    print("[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx")
+
+# 下载状态管理
+_download_state = {
+    "running": False,
+    "aborted": False,
+    "progress": 0,        # 0-100
+    "total_stocks": 0,
+    "completed_stocks": 0,
+    "current_stock": "",
+    "current_category": "",
+    "errors": [],
+    "start_time": None,
+    "end_time": None,
+    "bytes_written": 0,
+    "files_written": 0,
+}
+_download_lock = threading.Lock()
+
+# TDX 市场代码映射
+TDX_MARKET_MAP = {
+    "sh": 1,   # 上海
+    "sz": 0,   # 深圳
+    "bj": 2,   # 北京
+}
+
+# 扩展市场（港股）代码前缀
+HK_CODE_PREFIX = "31"  # 港股在 ds/lday 下的文件名前缀
+DS_CODE_PREFIX = "62"  # 扩展市场指数在 ds/lday 下的文件名前缀
+
+
+def _tdx_day_record(date_int, open_milli, high_milli, low_milli, close_milli, amount, volume, last_close_milli=None, is_ext_market=False):
+    """
+    将 K 线数据打包为 TDX .day 格式的 32 字节记录
+    参数 open_milli/high_milli/low_milli/close_milli 为千分价格单位（price * 1000），来自 KlineBar.*_price_milli
+    volume 为实际股数，来自 KlineBar.volume_wire_value
+    last_close_milli 为前一根K线收盘价千分价，来自 KlineBar.last_close_price_milli
+    A股(sh/sz/bj): IIIIIfII - 日期(I) 开(I) 高(I) 低(I) 收(I) 成交额(f) 成交量(I) 上日收盘(I)
+                    价格是 int，单位是厘（(千分价+5) // 10 四舍五入）
+    扩展市场(ds/hk): IffffIfI - 日期(I) 开(f) 高(f) 低(f) 收(f) 成交量(I) 成交额(f) 结算价(f)
+                    价格是 float，千分价 / 1000 还原为实际价格
+    """
+    # 四舍五入: (x + 5) // 10 替代 x // 10，避免整除向下截断
+    last_close_cent = (last_close_milli + 5) // 10 if last_close_milli is not None else 0
+    if is_ext_market:
+        return struct.pack(
+            "<IffffIfI",
+            date_int,                          # 日期 YYYYMMDD
+            open_milli / 1000.0,               # 开盘价
+            high_milli / 1000.0,               # 最高价
+            low_milli / 1000.0,                # 最低价
+            close_milli / 1000.0,              # 收盘价
+            round(volume),                     # 成交量（股）四舍五入取整
+            float(amount),                     # 成交额（元）
+            0,                                 # 结算价
+        )
+    else:
+        return struct.pack(
+            "<IIIIIfII",
+            date_int,                          # 日期 YYYYMMDD
+            (open_milli + 5) // 10,            # 开盘价（厘）四舍五入
+            (high_milli + 5) // 10,            # 最高价（厘）
+            (low_milli + 5) // 10,             # 最低价（厘）
+            (close_milli + 5) // 10,           # 收盘价（厘）
+            float(amount),                     # 成交额（元）
+            round(volume),                     # 成交量（股）四舍五入取整
+            last_close_cent,                   # 上日收盘（厘）
+        )
+
+
+def _tdx_min_record(date_int, minute_int, open_price, high, low, close, amount, volume):
+    """
+    将分钟线数据打包为 TDX .lc1/.lc5 格式的 32 字节记录
+    格式: HHfffffII - 日期(H) + 时间(H) + 开(f) + 高(f) + 低(f) + 收(f) + 成交额(f) + 成交量(I) + 保留(I)
+    日期编码: year = num // 2048 + 2004, month = (num % 2048) // 100, day = (num % 2048) % 100
+    时间编码: 从0点开始的分钟数 (HH*60+MM)
+    价格字段是 float 类型，直接使用
+    成交量字段是 unsigned int 类型（与 TdxAPI.py read_tdx_min_file 的 numpy dtype 一致）
+    """
+    return struct.pack(
+        "<HHfffffII",
+        date_int & 0xFFFF,                 # 压缩日期: (year-2004)*2048+month*100+day
+        minute_int & 0xFFFF,               # 分钟: HH*60+MM
+        float(open_price),                 # 开盘价
+        float(high),                       # 最高价
+        float(low),                        # 最低价
+        float(close),                      # 收盘价
+        float(amount),                     # 成交额
+        int(volume),                       # 成交量 (unsigned int)
+        0,                                 # 保留
+    )
+
+
+def _date_to_int(dt):
+    """将 datetime 对象转为 YYYYMMDD 整数"""
+    return dt.year * 10000 + dt.month * 100 + dt.day
+
+
+def _date_to_min_packed(dt):
+    """
+    将 datetime 对象转为 TDX 分钟线压缩日期格式
+    year = num // 2048 + 2004  →  num = (year - 2004) * 2048 + month * 100 + day
+    """
+    return (dt.year - 2004) * 2048 + dt.month * 100 + dt.day
+
+
+def _ensure_dir(path):
+    """确保目录存在"""
+    os.makedirs(path, exist_ok=True)
+
+
+def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, start_date=None, progress_callback=None):
+    """
+    下载单只股票的日 K 线数据并写入 .day 文件
+    market: 'sh' | 'sz' | 'bj' | 'ds' | 'hk'
+    code_prefix: 扩展市场代码前缀（'31#' 或 '62#'），仅 ds/hk 市场使用
+    start_date: str 如 "2021-07-28"，只下载此日期及之后的K线；None 表示只拉最新
+    """
+    try:
+        is_ext = (market in ('ds', 'hk'))
+        # 解析起始日期
+        min_date_int = None
+        if start_date:
+            try:
+                parts = start_date.split("-")
+                min_date_int = int(parts[0]) * 10000 + int(parts[1]) * 100 + int(parts[2])
+            except Exception:
+                pass
+
+        # 确定文件路径
+        if is_ext:
+            prefix = code_prefix or "31#"
+            mkt_dir = os.path.join(vipdoc_dir, "ds", "lday")
+            filename = f"{prefix}{code}.day"
+            full_code = f"{prefix}{code}"
+        else:
+            mkt_dir = os.path.join(vipdoc_dir, market, "lday")
+            filename = f"{market}{code}.day"
+            full_code = f"{market}{code}"
+
+        _ensure_dir(mkt_dir)
+        file_path = os.path.join(mkt_dir, filename)
+
+        if start_date is None:
+            # === 最新模式：每天执行，只拉服务器最新1页，去重后追加 ===
+            existing_dates = set()
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        while True:
+                            rec = f.read(32)
+                            if len(rec) < 32:
+                                break
+                            d = struct.unpack_from("<I", rec, 0)[0]
+                            existing_dates.add(d)
+                except Exception:
+                    pass
+
+            try:
+                series = client.bars.all(full_code, period="day", max_pages=1)
+            except Exception as e:
+                print(f"[下载警告] {full_code} 日线拉取失败: {e}")
+                return 0, 0, None
+
+            if not series or not series.bars:
+                return 0, 0, None
+
+            new_records = 0
+            max_date_int = 0
+            with open(file_path, "ab") as f:
+                for bar in series.bars:
+                    d = bar.time
+                    date_int = _date_to_int(d)
+                    if date_int in existing_dates:
+                        continue
+                    record = _tdx_day_record(
+                        date_int,
+                        bar.open_price_milli, bar.high_price_milli,
+                        bar.low_price_milli, bar.close_price_milli,
+                        bar.amount,
+                        bar.volume_wire_value,
+                        last_close_milli=bar.last_close_price_milli,
+                        is_ext_market=is_ext,
+                    )
+                    f.write(record)
+                    new_records += 1
+                    if date_int > max_date_int:
+                        max_date_int = date_int
+
+            return new_records, 1, max_date_int if max_date_int > 0 else None
+
+        else:
+            # === 指定日期模式：分页拉取，当某页最老数据早于目标日期时提前终止 ===
+            bars = []
+            start = 0
+            page_size = 800
+            while True:
+                try:
+                    page = client.bars.get(full_code, period="day", start=start, count=page_size)
+                except Exception as e:
+                    print(f"[下载警告] {full_code} 日线分页拉取失败: {e}")
+                    break
+                if not hasattr(page, "bars") or not page.bars:
+                    break
+                bars.extend(page.bars)
+                # 检查该页最老的那条是否已早于目标日期：后续页只会更老，终止
+                oldest_date_int = _date_to_int(page.bars[-1].time)
+                if min_date_int is not None and oldest_date_int < min_date_int:
+                    break
+                if page.count < page_size:
+                    break
+                start += page_size
+
+            if not bars:
+                return 0, 0, None
+
+            records = []
+            max_date_int = 0
+            for bar in bars:
+                d = bar.time
+                date_int = _date_to_int(d)
+                if min_date_int is not None and date_int < min_date_int:
+                    continue
+                record = _tdx_day_record(
+                    date_int,
+                    bar.open_price_milli, bar.high_price_milli,
+                    bar.low_price_milli, bar.close_price_milli,
+                    bar.amount,
+                    bar.volume_wire_value,
+                    last_close_milli=bar.last_close_price_milli,
+                    is_ext_market=is_ext,
+                )
+                records.append(record)
+                if date_int > max_date_int:
+                    max_date_int = date_int
+
+            if records:
+                with open(file_path, "wb") as f:
+                    for rec in records:
+                        f.write(rec)
+
+            return len(records), 1, max_date_int if max_date_int > 0 else None
+
+    except Exception as e:
+        raise e
+
+
+def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=None, start_date=None, progress_callback=None):
+    """
+    下载单只股票的分钟 K 线数据
+    period: '1m' | '5m'
+    code_prefix: 扩展市场代码前缀（'31#' 或 '62#'），仅 ds/hk 市场使用
+    start_date: str 如 "2025-07-28"，只下载此日期及之后的分钟线；None 表示只拉最新
+    """
+    try:
+        is_ext = (market in ('ds', 'hk'))
+        # 解析起始日期
+        min_date_int = None
+        if start_date:
+            try:
+                parts = start_date.split("-")
+                min_date_int = int(parts[0]) * 10000 + int(parts[1]) * 100 + int(parts[2])
+            except Exception:
+                pass
+
+        # 确定文件路径和扩展名
+        if period == "5m":
+            ext = "lc5"
+            sub_dir = "fzline"
+        else:
+            ext = "lc1"
+            sub_dir = "minline"
+
+        if is_ext:
+            prefix = code_prefix or "31#"
+            mkt_dir = os.path.join(vipdoc_dir, "ds", sub_dir)
+            filename = f"{prefix}{code}.{ext}"
+            full_code = f"{prefix}{code}"
+        else:
+            mkt_dir = os.path.join(vipdoc_dir, market, sub_dir)
+            filename = f"{market}{code}.{ext}"
+            full_code = f"{market}{code}"
+
+        _ensure_dir(mkt_dir)
+        file_path = os.path.join(mkt_dir, filename)
+
+        if start_date is None:
+            # === 最新模式：每天执行，只拉服务器最新1页，去重后追加 ===
+            existing_keys = set()
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "rb") as f:
+                        while True:
+                            rec = f.read(32)
+                            if len(rec) < 32:
+                                break
+                            date_val = struct.unpack_from("<H", rec, 0)[0]
+                            min_val = struct.unpack_from("<H", rec, 2)[0]
+                            existing_keys.add((date_val, min_val))
+                except Exception:
+                    pass
+
+            try:
+                series = client.bars.all(full_code, period=period, max_pages=1)
+            except Exception as e:
+                print(f"[下载警告] {full_code} {period} 拉取失败: {e}")
+                return 0, 0, None
+
+            if not series or not series.bars:
+                return 0, 0, None
+
+            new_records = 0
+            max_date_int = 0
+            with open(file_path, "ab") as f:
+                for bar in series.bars:
+                    d = bar.time
+                    date_int = _date_to_int(d)
+                    date_packed = _date_to_min_packed(d)
+                    minute_int = d.hour * 60 + d.minute
+                    key = (date_packed, minute_int)
+                    if key in existing_keys:
+                        continue
+                    record = _tdx_min_record(
+                        date_packed, minute_int,
+                        bar.open, bar.high, bar.low, bar.close,
+                        bar.amount,
+                        bar.volume_wire_value,
+                    )
+                    f.write(record)
+                    new_records += 1
+                    if date_int > max_date_int:
+                        max_date_int = date_int
+
+            return new_records, 1, max_date_int if max_date_int > 0 else None
+
+        else:
+            # === 指定日期模式：分页拉取，当某页最老数据早于目标日期时提前终止 ===
+            bars = []
+            start = 0
+            page_size = 800
+            while True:
+                try:
+                    page = client.bars.get(full_code, period=period, start=start, count=page_size)
+                except Exception as e:
+                    print(f"[下载警告] {full_code} {period} 分页拉取失败: {e}")
+                    break
+                if not hasattr(page, "bars") or not page.bars:
+                    break
+                bars.extend(page.bars)
+                # 检查该页最老的那条是否已早于目标日期：后续页只会更老，终止
+                oldest_date_int = _date_to_int(page.bars[-1].time)
+                if min_date_int is not None and oldest_date_int < min_date_int:
+                    break
+                if page.count < page_size:
+                    break
+                start += page_size
+
+            if not bars:
+                return 0, 0, None
+
+            records = []
+            max_date_int = 0
+            for bar in bars:
+                d = bar.time
+                date_int = _date_to_int(d)
+                if min_date_int is not None and date_int < min_date_int:
+                    continue
+                date_packed = _date_to_min_packed(d)
+                minute_int = d.hour * 60 + d.minute
+                record = _tdx_min_record(
+                    date_packed, minute_int,
+                    bar.open, bar.high, bar.low, bar.close,
+                    bar.amount,
+                    bar.volume_wire_value,
+                )
+                records.append(record)
+                if date_int > max_date_int:
+                    max_date_int = date_int
+
+            if records:
+                with open(file_path, "wb") as f:
+                    for rec in records:
+                        f.write(rec)
+
+            return len(records), 1, max_date_int if max_date_int > 0 else None
+
+    except Exception as e:
+        raise e
+
+
+def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=None, progress_callback=None):
+    """
+    后台下载任务主函数
+    categories: list of dict, e.g. [{"type": "day", "market": "sh"}, ...]
+    day_start_str: str 如 "2021-07-28"，日线起始日期；None 表示下载全部
+    min_start_str: str 如 "2025-07-28"，分钟线起始日期；None 表示下载全部
+    """
+    global _download_state
+
+    with _download_lock:
+        _download_state["running"] = True
+        _download_state["aborted"] = False
+        _download_state["progress"] = 0
+        _download_state["total_stocks"] = 0
+        _download_state["completed_stocks"] = 0
+        _download_state["current_stock"] = ""
+        _download_state["current_category"] = ""
+        _download_state["errors"] = []
+        _download_state["start_time"] = time.time()
+        _download_state["bytes_written"] = 0
+        _download_state["files_written"] = 0
+        _download_state["latest_data_date"] = None
+
+    try:
+        # 收集所有需要下载的股票
+        all_tasks = []
+        print(f"[下载] 开始收集代码列表, 共 {len(categories)} 个分类: {categories}")
+        print(f"[下载] VIPDOC_DIR={vipdoc_dir}, day_start={day_start_str}, min_start={min_start_str}")
+
+        # 构建 (market, type) 快速查找集合
+        wanted_market_types = set()
+        for cat in categories:
+            mkt = cat["market"]
+            if mkt in ("ds", "hk"):
+                print(f"[下载] {mkt}: eltdx 不支持港股市场，跳过")
+                _download_state["errors"].append(f"港股/扩展市场({mkt})暂不支持，请使用其他方式获取港股数据")
+                continue
+            wanted_market_types.add((mkt, cat["type"]))
+
+        if not wanted_market_types:
+            print("[下载] 没有需要下载的分类")
+            _download_state["running"] = False
+            return
+
+        with TdxClient(timeout=10) as client:
+            with _download_lock:
+                _download_state["current_category"] = "获取A股代码列表"
+
+            # 使用 eltdx 内置的 A 股过滤（基于服务端返回的 category 字段）
+            a_share_codes = client.get_a_share_codes_all()
+            print(f"[下载] 从服务器获取到 {len(a_share_codes)} 只A股代码")
+
+            # 按市场和类型分配到任务列表
+            market_counts = {}
+            for full_code in a_share_codes:
+                exchange = full_code[:2]  # "sh", "sz", "bj"
+                code = full_code[2:]      # 6位数字代码
+
+                for (mkt, cat_type) in wanted_market_types:
+                    if exchange == mkt:
+                        all_tasks.append({
+                            "code": code,
+                            "market": exchange,
+                            "type": cat_type,
+                            "code_prefix": None,
+                        })
+                        market_counts[mkt] = market_counts.get(mkt, 0) + 1
+
+            for mkt, cnt in sorted(market_counts.items()):
+                # 每个市场的任务数 = A股数 × 该市场在wanted中的类型数
+                type_count = sum(1 for (mm, ct) in wanted_market_types if mm == mkt)
+                stock_count = cnt // type_count if type_count > 0 else cnt
+                print(f"[下载] {mkt}: {stock_count} 只A股 × {type_count} 种类型 = {cnt} 个任务")
+
+            # 开始逐只下载
+            total = len(all_tasks)
+            print(f"[下载] 代码收集完成, 共 {total} 只股票, {len(_download_state['errors'])} 个错误")
+            with _download_lock:
+                _download_state["total_stocks"] = total
+
+            completed = 0
+
+            print(f"[下载] 开始逐只下载...")
+            for i, task in enumerate(all_tasks):
+                with _download_lock:
+                    if _download_state["aborted"]:
+                        break
+                    prefix_display = (task.get("code_prefix") or "") + task["code"]
+                    _download_state["current_stock"] = f"{task['market']}:{prefix_display}"
+                    if total > 0:
+                        _download_state["progress"] = (completed * 100) // total
+
+                try:
+                    code_prefix = task.get("code_prefix")
+                    if task["type"] == "day":
+                        records, files, max_date = _download_day_kline(
+                            client, task["code"], task["market"],
+                            vipdoc_dir, code_prefix=code_prefix,
+                            start_date=day_start_str,
+                            progress_callback=progress_callback
+                        )
+                    else:  # 5m
+                        records, files, max_date = _download_min_kline(
+                            client, task["code"], task["market"],
+                            task["type"], vipdoc_dir,
+                            code_prefix=code_prefix,
+                            start_date=min_start_str,
+                            progress_callback=progress_callback
+                        )
+                    completed += 1
+                    with _download_lock:
+                        _download_state["completed_stocks"] = completed
+                        _download_state["files_written"] += files
+                        if max_date and (not _download_state["latest_data_date"] or max_date > _download_state["latest_data_date"]):
+                            _download_state["latest_data_date"] = max_date
+                except Exception as e:
+                    err_msg = f"{task['market']}{(task.get('code_prefix') or '')}{task['code']}: {str(e)[:80]}"
+                    if completed < 5:  # 只打印前5个错误详情
+                        print(f"[下载] 错误: {err_msg}")
+                    with _download_lock:
+                        _download_state["errors"].append(err_msg)
+                        _download_state["completed_stocks"] = completed + 1
+                    completed += 1
+
+                # 每 10 只股票更新一次进度
+                if i % 10 == 0:
+                    with _download_lock:
+                        if total > 0:
+                            _download_state["progress"] = (completed * 100) // total
+
+    except Exception as e:
+        with _download_lock:
+            _download_state["errors"].append(f"下载引擎异常: {e}")
+        print(f"[下载] 引擎异常: {e}")
+    finally:
+        with _download_lock:
+            _download_state["running"] = False
+            _download_state["progress"] = 100
+            _download_state["end_time"] = time.time()
+        latest = _download_state.get("latest_data_date")
+        print(f"[下载] 下载任务结束, 完成 {_download_state['completed_stocks']}/{_download_state['total_stocks']} 只, 错误 {len(_download_state['errors'])} 个, 最新数据日期 {latest}")
+        if _download_state["errors"]:
+            for err in _download_state["errors"][:5]:
+                print(f"  [下载错误] {err}")
+        # 检查最新数据日期，提示用户
+        today_int = int(datetime.now().strftime("%Y%m%d"))
+        if latest and latest < today_int:
+            from chinese_calendar import is_workday
+            if is_workday(datetime.now().date()):
+                print(f"[下载] 提示: 服务器最新数据日期为 {latest}，今日({today_int})数据尚未更新，请稍后再试")
+            else:
+                print(f"[下载] 提示: 今日为非交易日，最新数据日期为 {latest}")
+
+
+def _start_download(vipdoc_dir, categories, day_start=None, min_start=None):
+    """启动后台下载线程"""
+    global _download_state
+    with _download_lock:
+        if _download_state["running"]:
+            return False, "下载任务已在运行中"
+
+    thread = threading.Thread(
+        target=_download_task,
+        args=(vipdoc_dir, categories, day_start, min_start),
+        daemon=True,
+    )
+    thread.start()
+    return True, "下载已启动"
+
+
+def _stop_download():
+    """停止下载"""
+    global _download_state
+    with _download_lock:
+        if not _download_state["running"]:
+            return False, "没有正在运行的下载任务"
+        _download_state["aborted"] = True
+    return True, "正在停止下载..."
+
+
+def _get_download_status():
+    """获取下载状态"""
+    global _download_state
+    with _download_lock:
+        status = dict(_download_state)
+        # 将 latest_data_date (int 如 20260728) 转为可读字符串，并判断是否已到最新交易日
+        latest_date_int = status.get("latest_data_date")
+        if latest_date_int:
+            y = latest_date_int // 10000
+            m = (latest_date_int % 10000) // 100
+            d = latest_date_int % 100
+            status["latest_data_date_str"] = f"{y}-{m:02d}-{d:02d}"
+            # 查找最新交易日
+            today = datetime.now()
+            check_date = today
+            max_days_back = 10
+            for _ in range(max_days_back):
+                if check_date.weekday() < 5 and not is_holiday(check_date):
+                    break
+                check_date = check_date - timedelta(days=1)
+            latest_td_int = check_date.year * 10000 + check_date.month * 100 + check_date.day
+            status["latest_trading_day_str"] = check_date.strftime("%Y-%m-%d")
+            status["data_is_latest"] = (latest_date_int >= latest_td_int)
+        else:
+            status["latest_data_date_str"] = None
+            status["latest_trading_day_str"] = None
+            status["data_is_latest"] = None
+        return status
 
 
 
@@ -1259,7 +1870,7 @@ def _send_windows_notification(title, message):
 # ============================================================
 # 手选进入段选点保存/恢复
 # ============================================================
-SAVED_POINT_FILE = r"C:\new_tdx_test\vipdoc\double_click_dt.csv"
+SAVED_POINT_FILE = os.path.join(VIPDOC_DIR, "double_click_dt.csv")
 # CSV列：股票代码,股票名,年K选点,季K选点,月K选点,周K选点,日K选点,30分选点,15分选点,5分选点,1分选点
 SAVED_POINT_COLUMNS = ["code", "name", "y", "q", "m", "w", "d", "60m", "30m", "15m", "5m", "1m", "15s"]
 # freq -> CSV列名 的映射
@@ -1493,7 +2104,7 @@ def _save_last_code_freq(code, freq="d"):
     """持久化上次查看的代码和周期到JSON文件（股票和期货通用）"""
     try:
         data = {"code": code, "freq": freq}
-        with open(_LAST_CODE_FREQ_FILE, "w", encoding="utf-8") as f:
+        with open(LAST_CODE_FREQ_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
     except Exception as e:
         pass  # 静默失败，不影响主流程
@@ -1502,9 +2113,9 @@ def _save_last_code_freq(code, freq="d"):
 def _load_last_code_freq():
     """从JSON文件加载上次查看的代码和周期，返回 (code, freq) 或 (None, None)"""
     try:
-        if not os.path.exists(_LAST_CODE_FREQ_FILE):
+        if not os.path.exists(LAST_CODE_FREQ_FILE):
             return None, None
-        with open(_LAST_CODE_FREQ_FILE, "r", encoding="utf-8") as f:
+        with open(LAST_CODE_FREQ_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
         code = data.get("code", "").strip()
         freq = data.get("freq", "d")
@@ -4743,6 +5354,39 @@ class ChartHandler(SimpleHTTPRequestHandler):
             freq = params.get("freq", [""])[0]
             codes = _get_annotated_codes(freq)
             self.send_json_response({"codes": codes, "total": len(codes)}, 200)
+        elif parsed.path == "/api/tdx_download_start":
+            # 盘后数据下载：启动下载任务
+            if not _ELTDX_AVAILABLE:
+                self.send_json_response({"error": "eltdx 未安装，请先 pip install eltdx"}, 400)
+                return
+            try:
+                body_len = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(body_len)) if body_len > 0 else {}
+            except Exception:
+                body = {}
+            params = parse_qs(parsed.query)
+            # 支持 GET 参数和 POST body
+            categories_json = body.get("categories") or params.get("categories", ["[]"])[0]
+            try:
+                categories = json.loads(categories_json) if isinstance(categories_json, str) else categories_json
+            except Exception:
+                self.send_json_response({"error": "categories 参数格式错误"}, 400)
+                return
+            if not categories:
+                self.send_json_response({"error": "请选择要下载的数据类型"}, 400)
+                return
+            day_start = body.get("day_start") or ""
+            min_start = body.get("min_start") or ""
+            ok, msg = _start_download(VIPDOC_DIR, categories, day_start=day_start or None, min_start=min_start or None)
+            self.send_json_response({"ok": ok, "message": msg}, 200 if ok else 409)
+        elif parsed.path == "/api/tdx_download_status":
+            # 盘后数据下载：查询下载进度
+            status = _get_download_status()
+            self.send_json_response(status, 200)
+        elif parsed.path == "/api/tdx_download_stop":
+            # 盘后数据下载：停止下载
+            ok, msg = _stop_download()
+            self.send_json_response({"ok": ok, "message": msg}, 200)
         else:
             filepath = os.path.join(OUTPUT_DIR, parsed.path.lstrip("/"))
             if os.path.isfile(filepath):
@@ -5715,6 +6359,19 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 self.send_json_response({"ok": success}, 200)
             else:
                 self.send_json_response({"error": f"未知action: {action}"}, 400)
+        elif parsed.path == "/api/tdx_download_start":
+            # 盘后数据下载：启动下载任务
+            if not _ELTDX_AVAILABLE:
+                self.send_json_response({"error": "eltdx 未安装，请先 pip install eltdx"}, 400)
+                return
+            categories = body.get("categories") or []
+            if not categories:
+                self.send_json_response({"error": "请选择要下载的数据类型"}, 400)
+                return
+            day_start = body.get("day_start") or ""
+            min_start = body.get("min_start") or ""
+            ok, msg = _start_download(VIPDOC_DIR, categories, day_start=day_start or None, min_start=min_start or None)
+            self.send_json_response({"ok": ok, "message": msg}, 200 if ok else 409)
         else:
             self.send_json_response({"error": "未知路径"}, 404)
 
@@ -6117,6 +6774,74 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .scan-no-result {
             text-align: center; color: #555; padding: 30px 0; font-size: 12px;
         }
+        /* 盘后数据下载面板 */
+        .download-panel-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); z-index: 2000; display: none;
+        }
+        .download-panel-overlay.show { display: block; }
+        .download-panel {
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 440px; max-height: 80vh; background: #1a1a2e; border: 1px solid #0f3460;
+            border-radius: 8px; z-index: 2001; display: none; flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+        }
+        .download-panel.show { display: flex; }
+        .download-panel-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; border-bottom: 1px solid #0f3460;
+        }
+        .download-panel-title { color: #e0e0e0; font-size: 14px; font-weight: 600; }
+        .download-panel-close { color: #8892b0; cursor: pointer; font-size: 20px; line-height: 1; }
+        .download-panel-close:hover { color: #e94560; }
+        .download-panel-body {
+            padding: 16px; overflow-y: auto; flex: 1;
+        }
+        .download-section { margin-bottom: 14px; }
+        .download-section-title {
+            color: #e94560; font-size: 12px; font-weight: 600; margin-bottom: 8px;
+            padding-bottom: 4px; border-bottom: 1px solid #0f3460;
+        }
+        .download-check {
+            display: inline-block; margin-right: 16px; margin-bottom: 6px;
+            color: #a8b2d1; font-size: 12px; cursor: pointer;
+        }
+        .download-check input { margin-right: 4px; accent-color: #e94560; }
+        .download-date-input {
+            width: 100%; padding: 5px 8px; background: #1a1a2e; border: 1px solid #0f3460;
+            border-radius: 4px; color: #e0e0e0; font-size: 12px; outline: none;
+            box-sizing: border-box;
+        }
+        .download-date-input:focus { border-color: #e94560; }
+        .download-progress-wrap { margin: 12px 0; }
+        .download-progress-bar {
+            height: 6px; background: #2a2a4a; border-radius: 3px; overflow: hidden;
+        }
+        .download-progress-fill {
+            height: 100%; background: linear-gradient(90deg, #e94560, #ff6b6b);
+            width: 0%; transition: width 0.3s; border-radius: 3px;
+        }
+        .download-progress-text {
+            color: #a8b2d1; font-size: 11px; text-align: center; margin-top: 4px;
+        }
+        .download-status {
+            color: #8892b0; font-size: 11px; margin: 6px 0; min-height: 16px;
+            word-break: break-all;
+        }
+        .download-btns {
+            display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px;
+        }
+        .download-btn {
+            padding: 5px 16px; border-radius: 4px; font-size: 12px;
+            cursor: pointer; border: 1px solid #0f3460; background: #1a1a2e;
+            color: #a8b2d1; transition: all 0.2s;
+        }
+        .download-btn:hover { background: #0f3460; color: #e0e0e0; }
+        .download-btn.primary {
+            background: #e94560; border-color: #e94560; color: #fff;
+        }
+        .download-btn.primary:hover { background: #d63850; }
+        .download-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .range-slider {
             position: fixed; bottom: 0; left: 0; width: 100%; height: 32px;
             background: rgba(22, 33, 62, 0.92); z-index: 100;
@@ -6323,6 +7048,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
                 <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
+            <button class="btn" id="btn-download" onclick="toggleDownloadPanel()" title="盘后数据下载">盘后下载</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
             <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、PE-TTM和指数归属" onclick="refreshStockNames()">
                 <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
@@ -6362,6 +7088,41 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
         <div class="scan-body" id="scan-body">
             <div class="scan-empty">点击上方"股票扫描"按钮开始</div>
+        </div>
+    </div>
+    <!-- 盘后数据下载面板 -->
+    <div class="download-panel-overlay" id="download-panel-overlay" onclick="if(event.target===this)closeDownloadPanel()"></div>
+    <div class="download-panel" id="download-panel">
+        <div class="download-panel-header">
+            <span class="download-panel-title">盘后数据下载</span>
+            <span class="download-panel-close" onclick="closeDownloadPanel()">&times;</span>
+        </div>
+        <div class="download-panel-body">
+            <div class="download-section">
+                <div class="download-section-title">日线（默认5年前）</div>
+                <input type="date" class="download-date-input" id="dl-day-start" value="2021-07-28" />
+            </div>
+            <div class="download-section">
+                <div class="download-section-title">分钟线（默认6个月前）</div>
+                <input type="date" class="download-date-input" id="dl-min-start" value="2026-01-28" />
+            </div>
+            <div class="download-section">
+                <div class="download-section-title">沪深京市场</div>
+                <label class="download-check"><input type="checkbox" id="dl-hsj-day" checked> 日线 (.day)</label>
+                <label class="download-check"><input type="checkbox" id="dl-hsj-5m" checked> 5分钟 (.lc5)</label>
+            </div>
+            <div class="download-progress-wrap" id="download-progress-wrap" style="display:none;">
+                <div class="download-progress-bar">
+                    <div class="download-progress-fill" id="download-progress-fill"></div>
+                </div>
+                <div class="download-progress-text" id="download-progress-text">0%</div>
+            </div>
+            <div class="download-status" id="download-status"></div>
+            <div class="download-btns">
+                <button class="download-btn primary" id="dl-btn-start" onclick="startDownload()">开始下载</button>
+                <button class="download-btn" id="dl-btn-stop" onclick="stopDownload()" style="display:none;">停止下载</button>
+                <button class="download-btn" onclick="closeDownloadPanel()">关闭</button>
+            </div>
         </div>
     </div>
     <div class="redframe-debug" id="redframe-debug" style="position:fixed;bottom:10px;right:10px;background:#1a1a2e;color:#fff;border:1px solid #e94560;border-radius:4px;padding:6px 10px;font-size:11px;font-family:monospace;z-index:9999;display:none;max-width:320px;pointer-events:none;">
@@ -9383,6 +10144,156 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 panel.classList.remove("show");
                 document.removeEventListener("click", _onClickOutsideStats);
             }
+        }
+
+        // ── 盘后数据下载 ──
+        var _downloadTimer = null;
+        var _downloadRunning = false;
+
+        window.toggleDownloadPanel = function() {
+            var panel = document.getElementById("download-panel");
+            var overlay = document.getElementById("download-panel-overlay");
+            if (panel.classList.contains("show")) {
+                closeDownloadPanel();
+            } else {
+                panel.classList.add("show");
+                overlay.classList.add("show");
+                // 如果正在下载中，恢复进度显示
+                if (_downloadRunning) {
+                    _startPolling();
+                }
+            }
+        };
+
+        window.closeDownloadPanel = function() {
+            document.getElementById("download-panel").classList.remove("show");
+            document.getElementById("download-panel-overlay").classList.remove("show");
+        };
+
+        function _buildCategories() {
+            var cats = [];
+            // 沪深京市场：日线勾选 → sh/sz/bj
+            if (document.getElementById("dl-hsj-day") && document.getElementById("dl-hsj-day").checked) {
+                cats.push({type: "day", market: "sh"}, {type: "day", market: "sz"}, {type: "day", market: "bj"});
+            }
+            // 沪深京市场：5分钟勾选 → sh/sz/bj
+            if (document.getElementById("dl-hsj-5m") && document.getElementById("dl-hsj-5m").checked) {
+                cats.push({type: "5m", market: "sh"}, {type: "5m", market: "sz"}, {type: "5m", market: "bj"});
+            }
+            return cats;
+        }
+
+        window.startDownload = function() {
+            var cats = _buildCategories();
+            if (cats.length === 0) {
+                alert("请至少选择一项要下载的数据类型");
+                return;
+            }
+            var dayStart = document.getElementById("dl-day-start").value || "";
+            var minStart = document.getElementById("dl-min-start").value || "";
+            _downloadRunning = true;
+            document.getElementById("dl-btn-start").style.display = "none";
+            document.getElementById("dl-btn-stop").style.display = "";
+            document.getElementById("download-progress-wrap").style.display = "";
+            document.getElementById("download-status").textContent = "正在连接服务器...";
+
+            console.log("[下载] 启动下载:", {categories: cats, day_start: dayStart, min_start: minStart});
+            fetch("/api/tdx_download_start", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({categories: cats, day_start: dayStart, min_start: minStart})
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                console.log("[下载] 启动响应:", data);
+                if (data.ok) {
+                    document.getElementById("download-status").textContent = data.message;
+                    _startPolling();
+                } else {
+                    _downloadRunning = false;
+                    document.getElementById("download-status").textContent = "启动失败: " + (data.message || data.error || "未知错误");
+                    _resetDownloadUI();
+                }
+            })
+            .catch(function(err) {
+                _downloadRunning = false;
+                document.getElementById("download-status").textContent = "启动失败: " + err.message;
+                _resetDownloadUI();
+            });
+        };
+
+        window.stopDownload = function() {
+            fetch("/api/tdx_download_stop")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                document.getElementById("download-status").textContent = data.message;
+                _downloadRunning = false;
+                _resetDownloadUI();
+                if (_downloadTimer) { clearInterval(_downloadTimer); _downloadTimer = null; }
+            });
+        };
+
+        function _startPolling() {
+            if (_downloadTimer) clearInterval(_downloadTimer);
+            _downloadTimer = setInterval(_pollDownloadStatus, 1000);
+        }
+
+        function _pollDownloadStatus() {
+            fetch("/api/tdx_download_status")
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var pct = data.progress || 0;
+                document.getElementById("download-progress-fill").style.width = pct + "%";
+                document.getElementById("download-progress-text").textContent =
+                    pct + "% (" + (data.completed_stocks || 0) + "/" + (data.total_stocks || 0) + ")";
+                var statusText = "";
+                if (data.current_category) {
+                    statusText += "[" + data.current_category + "] ";
+                }
+                if (data.current_stock) {
+                    statusText += data.current_stock;
+                }
+                if (data.errors && data.errors.length > 0) {
+                    statusText += " | 错误: " + data.errors.length + " 条";
+                    // 显示前三条错误信息
+                    var firstErrors = data.errors.slice(0, 3).join(" ; ");
+                    statusText += " [" + firstErrors + "]";
+                }
+                document.getElementById("download-status").textContent = statusText || "下载中...";
+
+                if (!data.running) {
+                    // 下载完成
+                    _downloadRunning = false;
+                    _resetDownloadUI();
+                    if (_downloadTimer) { clearInterval(_downloadTimer); _downloadTimer = null; }
+                    var errorCount = data.errors ? data.errors.length : 0;
+                    var msg = "下载完成！共 " + (data.completed_stocks || 0) + " 只股票";
+                    if (errorCount > 0) {
+                        msg += "，" + errorCount + " 个错误";
+                        console.log("[下载] 错误明细:", data.errors);
+                    }
+                    console.log("[下载] 完成:", msg, "latest_data_date:", data.latest_data_date_str, "data_is_latest:", data.data_is_latest);
+                    document.getElementById("download-status").textContent = msg;
+                    document.getElementById("download-progress-text").textContent = "100%";
+                    document.getElementById("download-progress-fill").style.width = "100%";
+                    // 检测数据是否最新交易日
+                    if (data.data_is_latest === false) {
+                        var dataDate = data.latest_data_date_str || "未知";
+                        var tdDate = data.latest_trading_day_str || "未知";
+                        setTimeout(function() {
+                            alert("⚠ 注意：TDX 服务器数据尚未更新到最新交易日\n\n本地数据最新日期: " + dataDate + "\n最新交易日: " + tdDate + "\n\n建议在收盘后再次点击下载获取最新数据。");
+                        }, 300);
+                    }
+                }
+            })
+            .catch(function(err) {
+                console.error("轮询下载状态失败:", err);
+            });
+        }
+
+        function _resetDownloadUI() {
+            document.getElementById("dl-btn-start").style.display = "";
+            document.getElementById("dl-btn-stop").style.display = "none";
         }
 
         // ── BSP买卖点类型过滤 + 均线周期设置 ──
