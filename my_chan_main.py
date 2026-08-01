@@ -974,12 +974,15 @@ def _fetch_index_belong_from_akshare(timeout=30):
     import concurrent.futures
     result = {}
     for index_code, index_name in _AKSHARE_INDEX_MAP.items():
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
             future = executor.submit(_fetch_one, index_code, index_name)
             try:
                 future.result(timeout=timeout)
             except concurrent.futures.TimeoutError:
                 print(f"[指数归属] {index_name}({index_code}) 获取超时({timeout}s)，跳过")
+        finally:
+            executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
 
     _index_belong_cache = result
     print(f"[指数归属] 共获取 {len(result)} 只股票的指数归属")
@@ -3230,25 +3233,24 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         t0 = time.time()
         if freq == '30m' and sub_freq == '5m':
             # 优化：30m+5m 共用同一次5m文件读取和前复权，避免重复读取和二次复权
-            full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
+            full_records, sub_records, forward_adjust_done = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         elif freq == 'w' and sub_freq == 'd':
             # 优化：w+d 共用同一次日线文件读取和前复权，避免重复读取和二次复权
-            full_records, sub_records = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
+            full_records, sub_records, forward_adjust_done = read_main_level_records(market, code, freq, return_raw=True, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条 (复用前复权)")
         else:
-            full_records = read_main_level_records(market, code, freq, end_date=target_dt)
+            full_records, forward_adjust_done = read_main_level_records(market, code, freq, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
             print(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             sub_records = read_sub_level_records(market, code, freq, sub_freq, full_records, end_date=target_dt)
-        forward_adjust_done = FORWARD_ADJUST_ENABLED
         if sub_records is None or len(sub_records) < 5:
             print(f"[警告] 子级别数据不足，退化为单级别模式")
             sub_freq = None
@@ -3262,11 +3264,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             print(f"[耗时] 从缓存获取K线: {len(full_records)}条")
         else:
             t0 = time.time()
-            full_records = read_main_level_records(market, code, freq, end_date=target_dt)
+            full_records, forward_adjust_done = read_main_level_records(market, code, freq, end_date=target_dt)
             if len(full_records) < 5:
                 print(f"[调试-K线不足] code={code}, market={market}, freq={freq}, target_dt={target_dt}, records={len(full_records)}")
                 return {"error": f"K线数据不足: 仅{len(full_records)}条"}
-            forward_adjust_done = FORWARD_ADJUST_ENABLED
             print(f"[耗时] 读取数据文件: {time.time()-t0:.3f}s, {len(full_records)}条K线")
 
     # 调试模式：数据加载后立即截断起始日期（所有周期生效），后续流程对此无感知
@@ -6513,6 +6514,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .freq-btn.active { background: #e94560; border-color: #e94560; color: #fff; }
         .freq-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .freq-btn:disabled:hover { background: #1a1a2e; color: #a8b2d1; }
+        #btn-dual { margin-left: 4px; }
         .realtime-badge {
             display: none; align-items: center; gap: 4px; padding: 2px 8px;
             border-radius: 10px; background: #27ae60; color: #fff; font-size: 11px;
@@ -7029,6 +7031,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button class="freq-btn active" id="btn-5m" onclick="switchFreq('5m')">5分</button>
                 <button class="freq-btn" id="btn-1m" onclick="switchFreq('1m')">1分</button>
                 <button class="freq-btn" id="btn-15s" onclick="switchFreq('15s')">15秒</button>
+                <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
             </span>
             <span class="realtime-badge" id="realtime-badge" title="实时推送中">● 实时</span>
         </div>
@@ -7041,8 +7044,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 </span>
                 <span class="date-arrow" id="date-arrow-right" onclick="dateStep(1)" title="后一天">&#9654;</span>
             </div>
-            <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
-                <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
+            <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
                 <button class="btn active" id="btn-bi" onclick="toggleOverlay('bi')">笔</button>
                 <button class="btn" id="btn-seg" onclick="toggleOverlay('seg')">线段</button>
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>

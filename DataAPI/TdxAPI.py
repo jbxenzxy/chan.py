@@ -4,7 +4,7 @@
 
 前复权功能：
   基于通达信除权除息数据（xdxr），对原始K线进行前复权处理。
-  数据获取策略（按优先级）：mootdx Quotes 网络接口 -> pytdx 网络接口（自动测速）。
+  数据获取策略（按优先级）：eltdx -> mootdx Quotes 网络接口 -> pytdx 网络接口（自动测速）。
   通过 set_tdx_config(forward_adjust_enabled=True) 启用。
 
 使用方法：将此文件放到 chan.py 仓库的 DataAPI/ 目录下
@@ -546,8 +546,9 @@ def _resample_day_to_week(day_records):
 #                 / (1 + 送股比例 + 转增比例 + 配股比例)
 # 前复权递推方式：从最新日期向前，遇到除权除息日时，该日之前的所有OHLC都乘以 a 再加 b。
 # 数据获取策略（按优先级）：
-#   1. mootdx Quotes 网络接口（优先，已验证可用）
-#   2. pytdx 网络接口（自动测速）
+#   1. eltdx（优先，基于 7709 协议，字段与 mootdx 完全等价）
+#   2. mootdx Quotes 网络接口（备用）
+#   3. pytdx 网络接口（自动测速，最后备用）
 # ============================================================
 
 # mootdx / pytdx 返回的列名可能不同，统一标准化
@@ -645,6 +646,45 @@ def _normalize_xdxr_df(df):
 # ============================================================
 import threading as _threading
 _xdxr_lock = _threading.Lock()
+
+# ============================================================
+# eltdx 除权除息（优先，基于 7709 协议 0x000f 命令）
+# ============================================================
+def _get_xdxr_eltdx(market, code):
+    """通过 eltdx 获取除权除息数据。在锁内调用。
+    返回与 _normalize_xdxr_df 兼容的 DataFrame，失败返回 None。
+    eltdx 的 XdxrRecord 字段：code, date, category, fenhong, peigujia, songzhuangu, peigu
+    与 mootdx 返回的字段完全等价（同为 7709 协议 0x000f 命令）。
+    """
+    try:
+        from eltdx import TdxClient
+        market_code = f"{market.lower()}{code}"
+        with TdxClient(timeout=10) as client:
+            records = client.get_xdxr(market_code)
+        if not records:
+            return None
+        # 将 XdxrRecord 列表转为 DataFrame，再走统一的 _normalize_xdxr_df 标准化
+        rows = []
+        for r in records:
+            # XdxrRecord.date 是 datetime.date 类型，需转为 datetime.datetime
+            d = r.date
+            if d is not None and not isinstance(d, datetime):
+                d = datetime(d.year, d.month, d.day)
+            rows.append({
+                'code': r.code,
+                'date': d,
+                'category': r.category,
+                'fenhong': float(r.fenhong),
+                'peigujia': float(r.peigujia),
+                'songzhuangu': float(r.songzhuangu),
+                'peigu': float(r.peigu),
+            })
+        df = pd.DataFrame(rows)
+        if len(df) == 0:
+            return None
+        return _normalize_xdxr_df(df)
+    except Exception:
+        return None
 
 # mootdx Quotes 单例连接（建一次，所有股票复用）
 _mootdx_client = None
@@ -775,8 +815,9 @@ def get_xdxr_data(market, code):
 
     优先级：
       1. 缓存（内存命中，跳过网络请求）
-      2. mootdx Quotes（优先，已验证可用）
-      3. pytdx（自动测速，备用）
+      2. eltdx（优先，基于 7709 协议，字段与 mootdx 完全等价）
+      3. mootdx Quotes（备用）
+      4. pytdx（自动测速，最后备用）
 
     返回 pandas DataFrame，统一列名：
       date, category, fenhong, peigu, peigujia, songgu, zhuanzeng
@@ -790,6 +831,11 @@ def get_xdxr_data(market, code):
     with _xdxr_lock:
         if cache_key in _xdxr_cache:
             return _xdxr_cache[cache_key]
+
+        df = _get_xdxr_eltdx(market, code)
+        if df is not None and len(df) > 0:
+            _xdxr_cache[cache_key] = df
+            return df
 
         df = _get_xdxr_mootdx(market, code)
         if df is not None and len(df) > 0:
@@ -992,9 +1038,12 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
     从通达信文件读取主级别K线数据，含前复权和周期合成。
     各周期数据加载 + 前复权（统一在原始数据层面处理，避免二次复权）。
 
+    返回值统一为 (records, did_adjust) 二元组，did_adjust 表示是否实际执行了前复权。
+    当 return_raw=True 时，返回 (records, raw_records, did_adjust) 三元组。
+
     当 return_raw=True 时：
-      - freq='30m': 返回 (records_30m, raw_5m) 元组，raw_5m 是前复权后的5m数据
-      - freq='w':    返回 (records_w, raw_d) 元组，raw_d 是前复权后的日线数据
+      - freq='30m': 返回 (records_30m, raw_5m, did_adjust) 三元组，raw_5m 是前复权后的5m数据
+      - freq='w':    返回 (records_w, raw_d, did_adjust) 三元组，raw_d 是前复权后的日线数据
     供双窗口子级别复用，避免重复读取和二次复权。
 
     end_date: datetime 或 None, 复盘截止日期。传入后前复权只以 end_date
@@ -1008,37 +1057,42 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
         else:
             data_file = os.path.join(_tdx_config["vipdoc_dir"], market, "fzline", f"{market}{code}.lc5")
         if not os.path.exists(data_file):
-            return [] if not return_raw else ([], [])
+            return ([], [], False) if return_raw else ([], False)
     else:
         data_file = find_day_file(market, code)
         if not os.path.exists(data_file):
-            return [] if not return_raw else ([], [])
+            return ([], [], False) if return_raw else ([], False)
 
     if freq == '30m':
         raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
-            raw_5m, _ = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
+            raw_5m, did_adjust = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
         records_30m = _resample_5m_to_30m(list(raw_5m), market=market)
         if return_raw:
-            return records_30m, raw_5m
-        return records_30m
+            return records_30m, raw_5m, did_adjust
+        return records_30m, did_adjust
     elif freq == '5m':
         records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
+            records, did_adjust = _forward_adjust(records, market=market, code=code, end_date=end_date)
+        return records, did_adjust
     elif freq == 'w':
         records = read_tdx_day_file(data_file, market=market)
+        did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
+            records, did_adjust = _forward_adjust(records, market=market, code=code, end_date=end_date)
         records_w = _resample_day_to_week(records)
         if return_raw:
-            return records_w, records
-        return records_w
+            return records_w, records, did_adjust
+        return records_w, did_adjust
     else:
         records = read_tdx_day_file(data_file, market=market)
+        did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
-            records, _ = _forward_adjust(records, market=market, code=code, end_date=end_date)
-    return records
+            records, did_adjust = _forward_adjust(records, market=market, code=code, end_date=end_date)
+        return records, did_adjust
 
 
 def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None):
@@ -2169,7 +2223,7 @@ if __name__ == "__main__":
     print("")
     print("前复权功能：")
     print("  - _forward_adjust(): 对原始K线进行前复权处理")
-    print("  - get_xdxr_data(): 获取除权除息数据（mootdx/pytdx）")
+    print("  - get_xdxr_data(): 获取除权除息数据（eltdx -> mootdx -> pytdx）")
     print("  - get_float_shares_from_xdxr(): 从xdxr提取流通股本")
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")
     print("")

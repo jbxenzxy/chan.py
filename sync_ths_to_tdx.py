@@ -22,6 +22,51 @@ from DataAPI.TdxAPI import set_tdx_config
 
 CONFIG_FILE = os.path.join(script_dir, ".sync_tdx_config")
 
+# ============================================================
+# 同花顺板块编码规则（88xxxx 开头为同花顺私有指数，同步时跳过）
+# ============================================================
+# 号段         分类                  示例
+# ----------  --------------------  --------------------------
+# 881xxx      行业板块               881121 半导体
+# 882xxx      地域板块               882007 深圳、882010 贵州
+# 884xxx      行业板块（细分）        884068 专业工程
+# 885xxx      概念板块（老号段）      885312 物联网
+# 886xxx      概念板块（新号段）      886078 商业航天
+#
+# ============================================================
+# 通达信板块编码规则（88xxxx 开头为通达信私有指数，写入时保留不覆盖）
+# ============================================================
+# 号段         分类              说明
+# ----------  ----------------  ------------------------------
+# 8802xx      地域板块           如 880207 北京板块
+# 8803xx      行业板块(旧)       已被 881xxx 替代
+# 8804xx      行业板块(旧)       已被 881xxx 替代
+# 8805xx      概念板块           如 880545 云计算
+# 8808xx      风格板块           如 880866 近期新低
+# 8809xx      概念板块（扩展）    如 880904 机器人概念、880917 央企改革
+# 881xxx      研究行业           替代了 8803xx/8804xx
+#
+# ======================================================================================
+# 两地映射关系
+# ======================================================================================
+# 板块类型     同花顺               通达信               映射难度
+# ----------  ------------------  ------------------  ----------------------------------
+# 地域         882xxx              8802xx              号段不同但名称一一对应，可按名称自动匹配
+# 行业         881xxx / 884xxx     881xxx              号段相同但代码不同，需静态映射
+# 概念         885xxx / 886xxx     8805xx / 8809xx     号段完全不同，需静态映射
+# 风格         无                  8808xx              同花顺无此分类，无需处理
+#
+# ==================================================================
+# 处理策略
+#   同花顺侧：88xxxx 开头私有指数、标准指数均跳过，不同步
+#   通达信侧：88xxxx 开头私有指数、标准指数均保留不覆盖，且保持在自选股列表开头
+# ==================================================================
+#
+# 标准指数（两边代码一致，不同步，各自保留）
+# 000001 上证指数    399001 深证成指    000300 沪深300
+# 000905 中证500    000852 中证1000    399006 创业板指    000688 科创50
+STANDARD_INDEX_CODES = {"000001", "000300", "000905", "000852", "000688", "399001", "399006"}
+
 
 def setup_tdx_config():
     """从多个来源读取 vipdoc_dir 配置，找到后缓存到本地文件"""
@@ -34,7 +79,6 @@ def setup_tdx_config():
                 vipdoc_dir = f.read().strip()
             if vipdoc_dir and os.path.isdir(vipdoc_dir):
                 set_tdx_config(vipdoc_dir=vipdoc_dir)
-                print(f"[配置] 从缓存读取: {vipdoc_dir}")
                 return True
         except Exception:
             pass
@@ -49,26 +93,74 @@ def setup_tdx_config():
             f.write(vipdoc_dir)
         return True
 
-    # 3. 从 my_chan_main.py 解析 VIPDOC_DIR
+    # 3. 从 my_chan_main.py 解析 TDX_INSTALL_DIR 和 VIPDOC_DIR
     main_file = os.path.join(script_dir, "my_chan_main.py")
     if os.path.exists(main_file):
         try:
+            tdx_install_dir = None
+            vipdoc_dir = None
             with open(main_file, "r", encoding="utf-8") as f:
                 for line in f:
-                    m = re.search(r'VIPDOC_DIR\s*=\s*.*?["\'](.+?)["\']', line)
+                    # 解析 TDX_INSTALL_DIR = r"C:\..." 或 TDX_INSTALL_DIR = "C:\..."
+                    m = re.search(r'TDX_INSTALL_DIR\s*=\s*r?["\'](.+?)["\']', line)
                     if m:
+                        tdx_install_dir = m.group(1)
+                        continue
+                    # 解析 VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")
+                    # 或 VIPDOC_DIR = "C:\..." 直接写死的路径
+                    m = re.search(r'VIPDOC_DIR\s*=\s*os\.path\.join\(TDX_INSTALL_DIR,\s*["\'](.+?)["\']\)', line)
+                    if m:
+                        # 从 TDX_INSTALL_DIR + 子目录拼接
+                        sub_dir = m.group(1)
+                        if tdx_install_dir:
+                            vipdoc_dir = os.path.join(tdx_install_dir, sub_dir)
+                        continue
+                    m = re.search(r'VIPDOC_DIR\s*=\s*r?["\'](.+?)["\']', line)
+                    if m:
+                        # 直接写死的路径
                         vipdoc_dir = m.group(1)
-                        set_tdx_config(vipdoc_dir=vipdoc_dir)
-                        print(f"[配置] 从 my_chan_main.py 读取: {vipdoc_dir}")
-                        # 缓存到本地
-                        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                            f.write(vipdoc_dir)
-                        return True
+                        continue
+            if vipdoc_dir and os.path.isdir(vipdoc_dir):
+                set_tdx_config(vipdoc_dir=vipdoc_dir)
+                print(f"[配置] 从 my_chan_main.py 读取: {vipdoc_dir}")
+                # 缓存到本地
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    f.write(vipdoc_dir)
+                return True
         except Exception:
             pass
 
-    print("[警告] 未找到通达信配置，请设置环境变量: $env:TDX_VIPDOC_DIR = \"C:\\new_tdx_test\\vipdoc\"")
+    print("[警告] 未找到通达信配置，请设置环境变量: $env:TDX_VIPDOC_DIR = \"C:\\new_tdx_hd_test\\vipdoc\"")
     return False
+
+
+# 标准指数在 TDX zxg.blk 中的格式（SH=1前缀, SZ=0前缀）
+TDX_STANDARD_INDICES = {"1000001", "0399001", "1000300", "1000905", "1000852", "0399006", "1000688"}
+
+
+def _read_preserved_codes(blk_path):
+    """
+    读取通达信 zxg.blk 中已有的保留代码（标准指数 + 88xxxx 私有指数）
+    替换模式时保留，不被覆盖，并保持在文件开头
+    注意：通达信 zxg.blk 中 88xxxx 代码带 SH 前缀 1，格式为 188xxxx
+    :param blk_path: zxg.blk 完整路径
+    :return: [保留代码列表]
+    """
+    if not os.path.exists(blk_path):
+        return []
+    codes = []
+    try:
+        with open(blk_path, "r", encoding="gbk") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                # 匹配: 88xxxx（无前缀）或 188xxxx（SH前缀）或 标准指数（SH/SZ前缀）
+                if line.startswith("88") or line.startswith("188") or line in TDX_STANDARD_INDICES:
+                    codes.append(line)
+    except Exception:
+        pass
+    return codes
 
 
 def find_tdx_zxg_path():
@@ -171,7 +263,6 @@ def write_tdx_zxg_direct_to_file(blk_path, codes_list):
     with open(blk_path, "w", encoding="gbk") as f:
         f.write("\n".join(lines) + "\n")
 
-    print(f"[保存] 全量写入 {len(lines)} 只到 {blk_path}")
     return len(lines)
 
 
@@ -228,11 +319,10 @@ def main():
     if not api.check_login():
         print("[错误] 同花顺登录状态失效，请更新 Cookie")
         sys.exit(1)
-    print("[OK] 同花顺登录有效\n")
+    print("[OK] 同花顺登录有效")
 
     # 3. 获取同花顺自选股
     stocks = api.get_self_stocks()
-    print(f"[获取] 同花顺自选股: {len(stocks)} 只")
 
     if not stocks:
         print("同花顺自选股为空，无需同步")
@@ -251,11 +341,8 @@ def main():
         except Exception:
             pass
 
-    print()
-    if save_fn:
-        print(f"[检测] 找到 DataAPI.save_to_zxg_blk（与股票扫描共用同一个写入函数）")
-        if zxg_blk_path:
-            print(f"[检测] 通达信自选股文件: {zxg_blk_path}")
+    if zxg_blk_path:
+        pass
     elif zxg_dir:
         print(f"[检测] 通达信自选股目录: {zxg_dir}")
     else:
@@ -291,13 +378,15 @@ def main():
         "169": ("US", False),  # 美股（不支持）
     }
 
-    codes_tdx = []  # 通达信格式（带后缀的 A/港股，或原始代码的指数）
-    skipped = []
+    codes_tdx = []       # 通达信格式（带后缀的 A/港股，或原始代码的指数）
+    skipped = []         # 不支持的（美股、未知市场等）
+    skipped_normal = []  # 正常跳过的（标准指数、板块/概念）
     by_market = {}
 
     for s in stocks:
         mid = s.get("marketid", "")
         code = s.get("code", "")
+        name = s.get("name", "")
         info = marketid_info.get(mid)
 
         if not info:
@@ -306,9 +395,9 @@ def main():
 
         suffix, is_index = info
 
-        # 跳过板块/概念（marketid=48）
+        # 板块/概念（marketid=48）：88xxxx 开头为同花顺私有指数，跳过
         if mid == "48":
-            skipped.append(f"{code}(板块/概念)")
+            skipped_normal.append(f"{code}(板块/概念, {name})")
             continue
 
         # 美股不支持
@@ -323,7 +412,6 @@ def main():
                 continue
         if suffix == "HK" and code.startswith("K"):
             code = code[1:]
-            print(f"[修复] 港股代码: 旧格式 K -> {code}")
         if suffix == "HK" and code.startswith("HK"):
             code = code[2:]
 
@@ -341,45 +429,58 @@ def main():
         else:
             full_code = f"{code}.{suffix}"
 
+        # 标准指数（上证指数、深证成指、沪深300 等）不同步
+        if code in STANDARD_INDEX_CODES:
+            skipped_normal.append(f"{full_code}(标准指数, {name})")
+            continue
+
         codes_tdx.append(full_code)
         market_label = api.MARKET_ID.get(mid, mid)
         by_market.setdefault(market_label, []).append(full_code)
 
     # 显示预览
-    print()
+    parts = []
     for label in sorted(by_market.keys()):
         items = by_market[label]
-        print(f"  [{label}] {len(items)} 只: {', '.join(items)}")
-    if skipped:
-        print(f"\n  [跳过] {len(skipped)} 只（指数/板块/不支持的）: {', '.join(skipped[:10])}")
-        if len(skipped) > 10:
-            print(f"         ... 等共 {len(skipped)} 只")
+        parts.append(f"{label}：{len(items)}只")
+    print(f"[获取] 同花顺自选股: {len(stocks)} 只（{'   '.join(parts)}）")
 
-    print(f"\n  合计: 可同步 {len(codes_tdx)} 只, 跳过 {len(skipped)} 只")
+    # 读取通达信侧保留代码（标准指数 + 88xxxx 私有指数）
+    preserved = []
+    if zxg_blk_path:
+        preserved = _read_preserved_codes(zxg_blk_path)
+    elif zxg_dir:
+        preserved = _read_preserved_codes(os.path.join(zxg_dir, "zxg.blk"))
+    if preserved:
+        print(f"[保留] {len(preserved)}只：标准指数 + 88xxxx 私有指数")
+
+    if skipped:
+        # 过滤掉 88xxxx 板块/概念（已在 skipped_normal 中统计）
+        unsupported = [s for s in skipped if not (
+            s.startswith("88") or "marketid=48" in s
+        )]
+        if unsupported:
+            print(f"[不支持] {len(unsupported)}只：{', '.join(unsupported)}")
+
+    print(f"合计：可同步{len(codes_tdx)}只 到 通达信自选股{zxg_blk_path or os.path.join(zxg_dir, 'zxg.blk')}")
 
     if args.preview:
-        print("\n[预览模式] 不写入文件")
+        print("[预览模式] 不写入文件")
         return
 
-    # 5. 写入通达信（默认替换模式：清空后再写入）
+    # 5. 写入通达信（默认替换模式：清空后再写入，但保留标准指数和 88xxxx 私有指数）
     codes_tdx = list(dict.fromkeys(codes_tdx))
     replace = not args.append  # 默认替换，--append 时不清空
 
     if save_fn:
-        # 过滤：A股(.SH/.SZ/.BJ)、港股(.HK)、指数(原始代码，无后缀)
         codes_to_write = [c for c in codes_tdx if "." not in c or c.rsplit(".", 1)[1] in ("SH", "SZ", "BJ", "HK")]
         if replace and zxg_blk_path:
-            # 替换模式：直接全量写入，绕过 save_to_zxg_blk 的追加+去重逻辑
-            # save_to_zxg_blk 内部用追加模式打开文件，如果清空操作和它之间
-            # 有任何时序问题，或者它读到的路径和我们清空的不一致，就会导致
-            # 旧数据残留。直接写入可以完全避免这个问题。
-            print(f"[写入] 替换模式：直接全量写入 {zxg_blk_path}")
+            all_codes = preserved + codes_to_write
+            all_codes = list(dict.fromkeys(all_codes))
             os.makedirs(os.path.dirname(zxg_blk_path), exist_ok=True)
-            written = write_tdx_zxg_direct_to_file(zxg_blk_path, codes_to_write)
+            write_tdx_zxg_direct_to_file(zxg_blk_path, all_codes)
         else:
-            print(f"[写入] 使用 DataAPI.save_to_zxg_blk（追加模式）")
-            written = save_fn(codes_to_write)
-        print(f"[完成] 写入 {written} 只到通达信自选股")
+            save_fn(codes_to_write)
     else:
         if not zxg_dir:
             print("[错误] 未找到通达信自选股目录")
@@ -387,14 +488,12 @@ def main():
             sys.exit(1)
         if replace:
             block_file = os.path.join(zxg_dir, "zxg.blk")
-            if os.path.exists(block_file):
-                with open(block_file, "w", encoding="gbk") as f:
-                    f.write("")
-                print(f"[写入] 已清空 {block_file}")
-        written = write_tdx_zxg_direct(zxg_dir, codes_to_write)
-        print(f"[完成] 写入 {written} 只到通达信自选股")
-
-    print("\n[提示] 请在通达信中刷新自选股查看")
+            codes_to_write = [c for c in codes_tdx if "." not in c or c.rsplit(".", 1)[1] in ("SH", "SZ", "BJ", "HK")]
+            all_codes = preserved + codes_to_write
+            all_codes = list(dict.fromkeys(all_codes))
+            write_tdx_zxg_direct_to_file(block_file, all_codes)
+        else:
+            write_tdx_zxg_direct(zxg_dir, codes_to_write)
 
 
 if __name__ == "__main__":
