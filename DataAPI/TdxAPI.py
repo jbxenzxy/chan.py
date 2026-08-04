@@ -38,7 +38,6 @@ if os.path.exists(_mapping_path):
         exec(open(_mapping_path, encoding="utf-8").read(), _mapping_ns)
         _TDXHY_X_TO_881 = _mapping_ns.get("_TDXHY_X_TO_881", {})
         _TDXHY_881_TO_X = _mapping_ns.get("_TDXHY_881_TO_X", {})
-        print(f"[TdxAPI] 加载映射表: X→881={len(_TDXHY_X_TO_881)}条, 881→X={len(_TDXHY_881_TO_X)}条 (路径: {_mapping_path})")
     except Exception as e:
         print(f"[TdxAPI] ⚠️ tdxhy_mapping_data 加载失败: {e}")
 else:

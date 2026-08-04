@@ -798,7 +798,7 @@ def _get_stock_name(market, code):
 _stock_names_cache = {}
 _stock_names_loaded = False
 _STOCK_NAMES_CACHE_FILE = os.path.join(VIPDOC_DIR, "stock_names.json")
-_STOCK_PE_TTM_FILE = os.path.join(VIPDOC_DIR, "stock_pettm.json")
+_STOCK_PE_TTM_FILE = os.path.join(VIPDOC_DIR, "stock_pettm_index.json")
 
 # 刷新状态（股票名称刷新用）
 _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
@@ -835,7 +835,7 @@ def _load_stock_names_from_cache_file():
                     migrated[key] = info
             _stock_names_cache.update(migrated)
             _stock_names_loaded = True
-            print(f"[信息] 从缓存文件加载股票名称: {len(_stock_names_cache)} 只")
+            print(f"[信息] 从缓存文件加载股票名称: {len(_stock_names_cache)}只")
             return len(_stock_names_cache)
     except Exception as e:
         print(f"[警告] 读取股票名称缓存失败: {e}")
@@ -873,14 +873,14 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 _pe_ttm_cache = {}       # {code: float}  纯数字代码 → PE-TTM值
 _pe_ttm_loaded = False
 
-# 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm.json）
+# 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm_index.json）
 # key: market+code（如 "sh600519"）, value: "沪深300"|"中证500"|"中证1000"
 _index_belong_cache = {}
 _index_belong_loaded = False
 
 
 def _load_pe_ttm_cache():
-    """从 stock_pettm.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
+    """从 stock_pettm_index.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
     向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}"""
     global _pe_ttm_cache, _pe_ttm_loaded, _index_belong_cache, _index_belong_loaded
     if _pe_ttm_loaded:
@@ -910,7 +910,7 @@ def _load_pe_ttm_cache():
                     # 旧格式：直接是数字
                     _pe_ttm_cache[k] = v
                     pe_count += 1
-        print(f"[PE-TTM] 从缓存加载 PE-TTM {pe_count} 条, 指数归属 {idx_count} 条")
+        print(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
     except Exception as e:
         print(f"[PE-TTM] 加载缓存失败: {e}")
     return _pe_ttm_cache
@@ -967,7 +967,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
                 if mkt and stock_code.isdigit() and len(stock_code) == 6:
                     result[mkt + stock_code] = index_name
                     count += 1
-            print(f"[指数归属] {index_name}({index_code}): 获取 {count} 只成分股")
+            print(f"[指数归属] {index_name}({index_code}): 已成功获取 {count}只 成分股")
         except Exception as e:
             print(f"[指数归属] {index_name}({index_code}) 获取失败: {e}")
 
@@ -985,13 +985,12 @@ def _fetch_index_belong_from_akshare(timeout=30):
             executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
 
     _index_belong_cache = result
-    print(f"[指数归属] 共获取 {len(result)} 只股票的指数归属")
     return result
 
 
 def _refresh_pe_ttm():
     """
-    通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm.json。
+    通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm_index.json。
     从 stock_names.json 中读取所有股票代码，分批请求腾讯接口。
     """
     global _pe_ttm_cache
@@ -1108,7 +1107,7 @@ def _refresh_pe_ttm():
             if entry:
                 combined[k] = entry
         _safe_write_json_file(_STOCK_PE_TTM_FILE, combined, ensure_ascii=False)
-        print(f"[PE-TTM] 刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已安全保存到 {_STOCK_PE_TTM_FILE}")
+        print(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {_STOCK_PE_TTM_FILE}")
     except Exception as e:
         print(f"[PE-TTM] 保存失败: {e}")
         _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
@@ -1300,7 +1299,7 @@ def _fetch_names_from_sina_once(codes_dict):
                                     filled += 1
                             break
             except Exception as e:
-                print(f"[刷新]   新浪A股批次{batch_num}失败: {e}")
+                print(f"[股名刷新]   新浪A股批次{batch_num}失败: {e}")
             if batch_num < total_batches:
                 time.sleep(0.5)
 
@@ -1342,7 +1341,7 @@ def _fetch_names_from_sina_once(codes_dict):
                             filled += 1
                             hk_filled += 1
             except Exception as e:
-                print(f"[刷新]   腾讯港股批次{batch_num}失败: {e}")
+                print(f"[股名刷新]   腾讯港股批次{batch_num}失败: {e}")
             if batch_num < total_batches:
                 time.sleep(0.5)
 
@@ -1363,7 +1362,7 @@ def _refresh_stock_names():
     _refresh_status["running"] = True
     _refresh_status["step"] = "刷新股票名..."
     _refresh_status["error"] = None
-    print("[刷新] ========== 开始刷新股票名称 ==========")
+    print("[股名刷新] ========== 开始刷新股票名称 ==========")
 
     # === 先加载已有缓存，新数据合并进去，不覆盖 ===
     raw_names = {}
@@ -1374,9 +1373,9 @@ def _refresh_stock_names():
                 raw_names[code] = info
             else:
                 raw_names[code] = {"name": info, "pinyin": ""}
-        print(f"[刷新] 步骤1/5 加载缓存: 已加载 {len(raw_names)} 只")
+        print(f"[股名刷新] 步骤1/5 加载缓存: 已加载 {len(raw_names)} 只")
     else:
-        print("[刷新] 步骤1/5 加载缓存: 无缓存，全新读取")
+        print("[股名刷新] 步骤1/5 加载缓存: 无缓存，全新读取")
 
     # === 方案1: vipdoc .day文件名收集代码 ===
     # .day 文件覆盖所有已下载过K线数据的股票
@@ -1396,7 +1395,7 @@ def _refresh_stock_names():
         elif not raw_names[code].get("name"):
             raw_names[code]["name"] = info.get("name", "")
             vipdoc_filled += 1
-    print(f"[刷新] 步骤2/5 合并扫描: vipdoc共{v_total}只 (sh{v_sh}+sz{v_sz}+ds{v_hk}), 缓存{cache_before}只, 合并后{len(raw_names)}只 (新增{vipdoc_new}只)")
+    print(f"[股名刷新] 步骤2/5 合并扫描: vipdoc共{v_total}只 (sh{v_sh}+sz{v_sz}+ds{v_hk}), 缓存{cache_before}只, 合并后{len(raw_names)}只 (新增{vipdoc_new}只)")
 
     # === 方案2: 新浪API补全缺失的名称 ===
     # 即使已有缓存，如果有新发现的代码（如港股）没有名称，也要补全
@@ -1404,7 +1403,7 @@ def _refresh_stock_names():
     if codes_without_name:
         a_no = sum(1 for c in codes_without_name if raw_names[c].get("market") != "hk")
         hk_no = sum(1 for c in codes_without_name if raw_names[c].get("market") == "hk")
-        print(f"[刷新] 步骤3/5 补全名称: {len(codes_without_name)} 只无名称 (A股{a_no}, 港股{hk_no})")
+        print(f"[股名刷新] 步骤3/5 补全名称: {len(codes_without_name)} 只无名称 (A股{a_no}, 港股{hk_no})")
         temp_dict = {c: raw_names[c] for c in codes_without_name}
         filled = _fetch_names_from_sina_once(temp_dict)
         for code, info in temp_dict.items():
@@ -1412,11 +1411,11 @@ def _refresh_stock_names():
                 raw_names[code] = info
         failed = len(codes_without_name) - filled
         if failed > 0:
-            print(f"[刷新] 步骤3/5 补全名称: 成功 {filled} 只, 失败 {failed} 只")
+            print(f"[股名刷新] 步骤3/5 补全名称: 成功 {filled} 只, 失败 {failed} 只")
         else:
-            print(f"[刷新] 步骤3/5 补全名称: 全部成功 {filled} 只")
+            print(f"[股名刷新] 步骤3/5 补全名称: 全部成功 {filled} 只")
     else:
-        print("[刷新] 步骤3/5 补全名称: 无需补全")
+        print("[股名刷新] 步骤3/5 补全名称: 无需补全")
 
     # === 补充通达信板块指数名称（88xxxx系列，如880491半导体、881319半导体）===
     # 88xxxx代码不以标准A股格式开头，_is_a_stock_code() 会过滤掉，所以不在 raw_names 中。
@@ -1449,7 +1448,7 @@ def _refresh_stock_names():
                             raw_names[compound_key]["name"] = name
                             tdxzs_filled += 1
         except Exception as e:
-            print(f"[刷新]   读取tdxzs.cfg失败: {e}")
+            print(f"[股名刷新]   读取tdxzs.cfg失败: {e}")
 
     # 新版研究行业(881xxx)从 tdxhy_mapping_data 读取
     tdxhy_filled = 0
@@ -1468,12 +1467,12 @@ def _refresh_stock_names():
                     raw_names[compound_key]["name"] = name
                     tdxhy_filled += 1
         except Exception as e:
-            print(f"[刷新]   加载tdxhy_mapping_data失败: {e}")
+            print(f"[股名刷新]   加载tdxhy_mapping_data失败: {e}")
     else:
-        print(f"[刷新]   tdxhy_mapping_data.py不存在: {_mapping_path}")
+        print(f"[股名刷新]   tdxhy_mapping_data.py不存在: {_mapping_path}")
 
     block_filled = tdxzs_filled + tdxhy_filled
-    print(f"[刷新] 步骤4/5 补充板块: tdxzs.cfg +{tdxzs_filled}条, tdxhy +{tdxhy_filled}条, 共补全 {block_filled} 条板块")
+    print(f"[股名刷新] 步骤4/5 补充板块: tdxzs.cfg +{tdxzs_filled}条, tdxhy +{tdxhy_filled}条, 共补全 {block_filled} 条板块")
 
     # === 统一用pypinyin生成拼音首字母（忽略tnf文件中的拼音，确保格式一致） ===
     try:
@@ -1542,23 +1541,23 @@ def _refresh_stock_names():
             if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
             if filtered_delist: parts.append(f"退市 {filtered_delist}只")
             if filtered_empty: parts.append(f"无名 {filtered_empty}只")
-            print(f"[刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
+            print(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
         else:
-            print(f"[刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
+            print(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
     else:
-        print("[刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
+        print("[股名刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
 
     # 刷新板块文件（block_zs.dat / block_gn.dat / block_fg.dat / block.dat）
-    print("[刷新] ========== 开始刷新板块文件 ==========")
+    print("[板块刷新] ========== 开始刷新板块文件 ==========")
     _refresh_status["step"] = "刷新成分股..."
     try:
         def _set_step(msg):
             _refresh_status["step"] = msg
         refresh_block_files(progress_callback=_set_step)
     except Exception as e:
-        print(f"[刷新] 板块文件刷新失败: {e}")
+        print(f"[板块刷新] 板块文件刷新失败: {e}")
 
-    # 刷新 PE-TTM（增量更新 stock_pettm.json）
+    # 刷新 PE-TTM（增量更新 stock_pettm_index.json）
     print("[PE-TTM] ========== 开始刷新PE-TTM ==========")
     try:
         _refresh_pe_ttm()
@@ -5082,6 +5081,16 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             else:
                                 sell_points.append(point)
                     has_points = buy_points or sell_points
+
+                    # 120周期均线：判断最新价是否在120均线上方
+                    below_ma120 = False
+                    ma120_val = 0
+                    closes = [k.get("close", 0) for k in klines]
+                    last_close = klines[-1]["close"] if klines else 0
+                    if last_close > 0 and len(closes) >= 120:
+                        ma120_val = round(sum(closes[-120:]) / 120, 2)
+                        below_ma120 = last_close < ma120_val
+
                     t_filter = time.time() - t0
 
                     # 缓存策略：与扫描展示一致——最近N根K线有买点才保留缓存
@@ -5105,6 +5114,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             "sell_points": sell_points,
                             "last_close": klines[-1]["close"] if klines else 0,
                             "freq": freq,
+                            "below_ma120": below_ma120,
+                            "ma120_val": ma120_val,
                         }
                         # print(f"[DEBUG-名称] /api/scan_one({code}) resp_data.name='{resp_data['name']}'")
                     else:
@@ -6729,6 +6740,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .scan-col-ma {
             width: 56px !important; flex-shrink: 0 !important;
             text-align: left !important; color: #8892b0 !important;
+            font-size: 11px !important; white-space: nowrap !important;
+        }
+        .scan-col-ma.warn {
+            color: #e94560 !important; font-weight: 600 !important;
         }
         .scan-col-ann {
             flex: 1 1 auto !important; min-width: 0 !important;
@@ -7160,7 +7175,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title">股票扫描</div>
             <div id="scan-source-section">
-            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描来源（可多选）</div>
+            <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描来源</div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
                 <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
                     <input type="checkbox" name="scan-source" value="zxg" checked style="accent-color:#e94560;" />
@@ -7184,13 +7199,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button onclick="scanSourceSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
             </div>
             </div>
-            <div id="scan-recent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
-                <span>最近</span>
-                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#1a1a2e;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
-                <span>根</span>
-            </div>
             <div id="scan-freq-row" style="margin-bottom:14px;">
-                <div style="margin-bottom:6px;font-size:12px;color:#8892b0;">扫描周期</div>
+                <div style="margin-bottom:6px;font-size:12px;color:#e94560;">扫描周期</div>
                 <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;">
                     <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="w" style="accent-color:#e94560;margin-right:4px;" />周K</label>
                     <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="d" checked style="accent-color:#e94560;margin-right:4px;" />日K</label>
@@ -7198,7 +7208,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="5m" style="accent-color:#e94560;margin-right:4px;" />5分</label>
                 </div>
             </div>
-            <div style="margin-bottom:10px;font-size:12px;color:#8892b0;">扫描模式</div>
+            <div id="scan-recent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
+                <span>最近</span>
+                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#1a1a2e;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;" />
+                <span>根</span>
+            </div>
+            <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描模式</div>
             <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;" />标注</label>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ma" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;" />均线</label>
@@ -7206,8 +7221,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;" />买/卖点</label>
             </div>
             <div class="annotation-dialog-btns">
-                <button class="annotation-dialog-btn" onclick="scanModeDialogCancel()">取消</button>
                 <button class="annotation-dialog-btn primary" onclick="scanModeDialogConfirm()">确认</button>
+                <button class="annotation-dialog-btn" onclick="scanModeDialogCancel()">取消</button>
             </div>
         </div>
     </div>
@@ -7246,8 +7261,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">均线周期（可多选，斐波那契数列）</div>
             <div class="bsp-filter-grid" id="ma-periods-grid">
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="5" onchange="onMaPeriodChange(this)" /><span style="color:#FFFFFF">●</span> MA5</label>
-                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="13" onchange="onMaPeriodChange(this)" /><span style="color:#F77F00">●</span> MA13</label>
-                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="21" onchange="onMaPeriodChange(this)" /><span style="color:#FCBF49">●</span> MA21</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="13" onchange="onMaPeriodChange(this)" /><span style="color:#FCBF49">●</span> MA13</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="21" onchange="onMaPeriodChange(this)" /><span style="color:#F77F00">●</span> MA21</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="34" onchange="onMaPeriodChange(this)" /><span style="color:#90BE6D">●</span> MA34</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="55" onchange="onMaPeriodChange(this)" /><span style="color:#22D3EE">●</span> MA55</label>
                 <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="89" onchange="onMaPeriodChange(this)" /><span style="color:#3B82F6">●</span> MA89</label>
@@ -7277,7 +7292,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let bspFilter = { '0': true, '1': true, '2': true, '3': true };
         // 均线周期：选中的周期集合，默认空（不显示均线）
         const MA_PERIODS = [5, 13, 21, 34, 55, 89, 144, 233];
-        const MA_COLORS = { 5:'#FFFFFF', 13:'#F77F00', 21:'#FCBF49', 34:'#90BE6D', 55:'#22D3EE', 89:'#3B82F6', 144:'#A8A8A8', 233:'#8822DD' };
+        const MA_COLORS = { 5:'#FFFFFF', 13:'#FCBF49', 21:'#F77F00', 34:'#90BE6D', 55:'#22D3EE', 89:'#3B82F6', 144:'#A8A8A8', 233:'#8822DD' };
         let maPeriods = {};  // {5: true, 13: true, ...}
         // 从 localStorage 恢复叠加层开关状态
         function loadOverlaySettings() {
@@ -7727,7 +7742,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             up: "#FF4444", down: "#00DD00", bi: "#FFD700",
             crosshair: "rgba(255,255,255,0.3)",
             macdUp: "rgba(253,16,80,0.6)", macdDown: "rgba(12,244,155,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
-            dif: "#FFFFFF", dea: "#ffa710", // 原值: dea="#FFD700"
+            dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
         };
 
         // 根据市场类型更新频率按钮的启用/禁用状态
@@ -10597,6 +10612,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             return html;
         }
 
+        // 生成120均线列HTML
+        function buildMa120Html(data) {
+            if (data.below_ma120 === undefined || data.ma120_val === undefined) return '<span class="scan-col-ma">--</span>';
+            if (data.ma120_val === 0) return '<span class="scan-col-ma">--</span>';
+            if (data.below_ma120) {
+                return '<span class="scan-col-ma warn">↓' + data.ma120_val + '</span>';
+            } else {
+                return '<span class="scan-col-ma">↑' + data.ma120_val + '</span>';
+            }
+        }
+
         // 扫描模式对话框：取消
         window.scanModeDialogCancel = function() {
             document.getElementById("scan-mode-dialog").classList.remove("show");
@@ -11344,6 +11370,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                 html += chkBox(r.code, isLatestBspBuy(r));
                                 html += '<span class="scan-col-name">' + r.name + '</span>';
                                 html += '<span class="scan-col-code">' + r.code + '</span>';
+                                html += buildMa120Html(r);
                                 html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
                                 html += '</div>';
                             }
@@ -11530,6 +11557,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     html += chkBox(r.code, isLatestBspBuy(r));
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
+                    html += buildMa120Html(r);
                     html += '<span class="scan-col-tags">' + tagsHtml + '</span>';
                     html += '</div>';
                 }
@@ -13551,7 +13579,6 @@ def main():
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
     html_size = os.path.getsize(html_path)
-    print(f"[信息] HTML页面已生成: {html_path} ({html_size/1024/1024:.1f}MB)")
 
     # 3. 启动HTTP服务器
     port = 18081  # 使用18081，避免与czsc版本的18080冲突
