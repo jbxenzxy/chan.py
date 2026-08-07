@@ -4,14 +4,7 @@
 功能：读取通达信本地K线数据，进行缠论分析，生成K线图网页
 """
 
-import sys
-import os
-import json
-import time
-import re
-import struct
-import threading
-import multiprocessing
+import sys, os, json, time, re, struct, threading, multiprocessing
 from datetime import datetime, timedelta
 from chinese_calendar import is_holiday
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -30,6 +23,7 @@ from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures
 # ============================================================
 TDX_INSTALL_DIR = r"C:\new_tdx_hd_test"  # 通达信安装目录（改目录只需修改本行）
 VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")  # 通达信vipdoc目录
+DOWNLOAD_DIR = os.path.join(VIPDOC_DIR, "eltdx")  # 盘后下载数据保存目录（VIPDOC_DIR下的eltdx子目录）
 TDX_HQ_CACHE = os.path.join(TDX_INSTALL_DIR, "T0002", "hq_cache")  # 通达信hq_cache目录（shm.tnf/szm.tnf）
 OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本所在目录）
 SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
@@ -166,25 +160,25 @@ def _tdx_day_record(date_int, open_milli, high_milli, low_milli, close_milli, am
     """
     将 K 线数据打包为 TDX .day 格式的 32 字节记录
     参数 open_milli/high_milli/low_milli/close_milli 为千分价格单位（price * 1000），来自 KlineBar.*_price_milli
-    volume 为实际股数，来自 KlineBar.volume_wire_value
+    volume 为实际手数，来自 KlineBar.volume_wire_value
     last_close_milli 为前一根K线收盘价千分价，来自 KlineBar.last_close_price_milli
     A股(sh/sz/bj): IIIIIfII - 日期(I) 开(I) 高(I) 低(I) 收(I) 成交额(f) 成交量(I) 上日收盘(I)
                     价格是 int，单位是厘（(千分价+5) // 10 四舍五入）
-    扩展市场(ds/hk): IffffIfI - 日期(I) 开(f) 高(f) 低(f) 收(f) 成交量(I) 成交额(f) 结算价(f)
+    扩展市场(ds/hk): IfffffII - 日期(I) 开(f) 高(f) 低(f) 收(f) 成交额(f) 成交量(I) 结算价(I)
                     价格是 float，千分价 / 1000 还原为实际价格
     """
     # 四舍五入: (x + 5) // 10 替代 x // 10，避免整除向下截断
     last_close_cent = (last_close_milli + 5) // 10 if last_close_milli is not None else 0
     if is_ext_market:
         return struct.pack(
-            "<IffffIfI",
+            "<IfffffII",
             date_int,                          # 日期 YYYYMMDD
             open_milli / 1000.0,               # 开盘价
             high_milli / 1000.0,               # 最高价
             low_milli / 1000.0,                # 最低价
             close_milli / 1000.0,              # 收盘价
-            round(volume),                     # 成交量（股）四舍五入取整
             float(amount),                     # 成交额（元）
+            round(volume),                     # 成交量（手）四舍五入取整
             0,                                 # 结算价
         )
     else:
@@ -196,7 +190,7 @@ def _tdx_day_record(date_int, open_milli, high_milli, low_milli, close_milli, am
             (low_milli + 5) // 10,             # 最低价（厘）
             (close_milli + 5) // 10,           # 收盘价（厘）
             float(amount),                     # 成交额（元）
-            round(volume),                     # 成交量（股）四舍五入取整
+            round(volume),                     # 成交量（手）四舍五入取整
             last_close_cent,                   # 上日收盘（厘）
         )
 
@@ -545,10 +539,13 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
         _download_state["latest_data_date"] = None
 
     try:
+        # 确保下载目录存在
+        os.makedirs(vipdoc_dir, exist_ok=True)
+
         # 收集所有需要下载的股票
         all_tasks = []
         print(f"[下载] 开始收集代码列表, 共 {len(categories)} 个分类: {categories}")
-        print(f"[下载] VIPDOC_DIR={vipdoc_dir}, day_start={day_start_str}, min_start={min_start_str}")
+        print(f"[下载] DOWNLOAD_DIR={vipdoc_dir}, day_start={day_start_str}, min_start={min_start_str}")
 
         # 构建 (market, type) 快速查找集合
         wanted_market_types = set()
@@ -3954,8 +3951,8 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
                 "high": klu.high,
                 "low": klu.low,
                 "close": klu.close,
-                "vol": getattr(klu, 'vol', 0),
-                "amount": getattr(klu, 'amount', 0),
+                "vol": int(klu.trade_info.metric.get("volume", 0) or 0),
+                "amount": round(klu.trade_info.metric.get("turnover", 0) or 0, 2),
             })
 
     # 2. 计算 MACD
@@ -4787,21 +4784,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
             results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
             results = results[:10]
 
-            # 期货/期指搜索：匹配本地品种名称表
-            try:
-                from DataAPI.TqSdkAPI import DEFAULT_FUTURES_SYMBOLS
-                _futures_search = _get_futures_name  # 使用本地函数
-                for sym, name, freq_sec, freq_label in DEFAULT_FUTURES_SYMBOLS:
-                    if keyword_upper in sym.upper() or keyword_upper in name.upper():
-                        # 避免重复（如果主连代码恰好命中）
-                        if not any(r["code"] == sym for r in results):
-                            results.append({
-                                "code": sym, "name": name, "pinyin": "",
-                                "market": "futures", "type": freq_label,
-                            })
-            except Exception as e:
-                print(f"[警告] 异常: {type(e).__name__}: {e}")
-
+            # 期货/期指搜索：统一走别名分支，与商品期货处理一致
+            # （金融期货 IM/IF/IH/IC 也通过 FUTURES_ALIASES 命中，避免 DEFAULT_FUTURES_SYMBOLS 的周期字段泄漏到搜索结果）
             # 期货别名搜索：支持用户输入短名称搜索（如 PTA、IF、rb 等）
             for alias, full_code in FUTURES_ALIASES.items():
                 if keyword_upper in alias.upper():
@@ -5053,8 +5037,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             "last_close": round(last_close, 2),
                             "freq": freq,
                         }
-                        # 类0~2 保留缓存（类似买点扫描），类3~8 释放缓存
-                        if ma_category > 2:
+                        # 类0~3 保留缓存（类似买点扫描），类4~8 释放缓存
+                        if ma_category > 3:
                             mkt, cd = _get_market_code(qualified_code)
                             if mkt and cd:
                                 cache_key = f"single_{mkt}_{cd}_{freq}_live"
@@ -5389,7 +5373,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 return
             day_start = body.get("day_start") or ""
             min_start = body.get("min_start") or ""
-            ok, msg = _start_download(VIPDOC_DIR, categories, day_start=day_start or None, min_start=min_start or None)
+            ok, msg = _start_download(DOWNLOAD_DIR, categories, day_start=day_start or None, min_start=min_start or None)
             self.send_json_response({"ok": ok, "message": msg}, 200 if ok else 409)
         elif parsed.path == "/api/tdx_download_status":
             # 盘后数据下载：查询下载进度
@@ -5751,7 +5735,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 l = float(completed_row.get("low", 0) or 0)
                 cl = float(completed_row.get("close", 0) or 0)
                 vol = int(completed_row.get("volume", 0) or 0)
-                oi = float(completed_row.get("open_oi", 0) or 0)
                 h = max(h, o, cl); l = min(l, o, cl)
 
                 dt = datetime.fromtimestamp(completed_dt_ns / 1e9)
@@ -5762,7 +5745,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 code_key = f"{symbol}:{freq_sec}"
                 new_bar = {"dt": dt, "open": round(o, 3), "high": round(h, 3),
                            "low": round(l, 3), "close": round(cl, 3),
-                           "vol": vol, "amount": round(oi, 2)}
+                           "vol": vol, "amount": 0}  # 天勤K线无成交额，amount置0（前端期货显成交量vol）
 
                 last_records = CTqSdkAPI.get_last_n(1, symbol=code_key)
                 updated = False
@@ -6222,7 +6205,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 l = float(completed_row.get("low", 0) or 0)
                 cl = float(completed_row.get("close", 0) or 0)
                 vol = int(completed_row.get("volume", 0) or 0)
-                oi = float(completed_row.get("open_oi", 0) or 0)
                 h = max(h, o, cl)
                 l = min(l, o, cl)
 
@@ -6235,7 +6217,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 new_bar = {
                     "dt": dt, "open": round(o, 3), "high": round(h, 3),
                     "low": round(l, 3), "close": round(cl, 3),
-                    "vol": vol, "amount": round(oi, 2),
+                    "vol": vol, "amount": 0,  # 天勤K线无成交额，amount置0（前端期货显成交量vol）
                 }
                 t_append = time.time()
 
@@ -6382,7 +6364,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 return
             day_start = body.get("day_start") or ""
             min_start = body.get("min_start") or ""
-            ok, msg = _start_download(VIPDOC_DIR, categories, day_start=day_start or None, min_start=min_start or None)
+            ok, msg = _start_download(DOWNLOAD_DIR, categories, day_start=day_start or None, min_start=min_start or None)
             self.send_json_response({"ok": ok, "message": msg}, 200 if ok else 409)
         else:
             self.send_json_response({"error": "未知路径"}, 404)
@@ -7117,11 +7099,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="download-panel-body">
             <div class="download-section">
                 <div class="download-section-title">日线（默认5年前）</div>
-                <input type="date" class="download-date-input" id="dl-day-start" value="2021-07-28" />
+                <input type="date" class="download-date-input" id="dl-day-start" />
             </div>
             <div class="download-section">
                 <div class="download-section-title">分钟线（默认6个月前）</div>
-                <input type="date" class="download-date-input" id="dl-min-start" value="2026-01-28" />
+                <input type="date" class="download-date-input" id="dl-min-start" />
             </div>
             <div class="download-section">
                 <div class="download-section-title">沪深京市场</div>
@@ -7274,6 +7256,19 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 <button onclick="maPeriodsSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
             </div>
 
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">坐标系</div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
+                <label class="bsp-filter-label">
+                    <input type="radio" name="coord-system" value="linear" onchange="onCoordSystemChange(this)" />
+                    普通坐标系 + 等差网格
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="radio" name="coord-system" value="log" onchange="onCoordSystemChange(this)" />
+                    对数坐标系 + 等比网格
+                </label>
+            </div>
+            <div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>
+
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">其他</div>
             <div class="bsp-filter-grid">
                 <label class="bsp-filter-label">
@@ -7294,6 +7289,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         const MA_PERIODS = [5, 13, 21, 34, 55, 89, 144, 233];
         const MA_COLORS = { 5:'#FFFFFF', 13:'#FCBF49', 21:'#F77F00', 34:'#90BE6D', 55:'#22D3EE', 89:'#3B82F6', 144:'#A8A8A8', 233:'#8822DD' };
         let maPeriods = {};  // {5: true, 13: true, ...}
+        let _logScale = false; // 坐标系模式：false=普通坐标系+等差网格, true=对数坐标系+等比网格
+        let _showVolume = false; // 上窗/单窗 底部区域显示模式：false=MACD, true=成交额（双击切换）
+        let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
         // 从 localStorage 恢复叠加层开关状态
         function loadOverlaySettings() {
             try {
@@ -7306,12 +7304,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 if (typeof s.showSeg === 'boolean') showSeg = s.showSeg;
                 if (typeof s.showBsp === 'boolean') showBsp = s.showBsp;
                 if (typeof s.showBiIdx === 'boolean') showBiIdx = s.showBiIdx;
+                if (typeof s.showVolume === 'boolean') _showVolume = s.showVolume;
+                if (typeof s.showSubVolume === 'boolean') _subShowVolume = s.showSubVolume;
                 if (s.bspFilter && typeof s.bspFilter === 'object') {
                     for (var k in s.bspFilter) { bspFilter[k] = s.bspFilter[k]; }
                 }
                 if (s.maPeriods && typeof s.maPeriods === 'object') {
                     for (var p in s.maPeriods) { maPeriods[p] = s.maPeriods[p]; }
                 }
+                if (typeof s.logScale === 'boolean') _logScale = s.logScale;
             } catch(e) {}
         }
         // 保存叠加层开关状态到 localStorage
@@ -7320,8 +7321,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const s = {
                     showBi: showBi, showFx: showFx,
                     showZs: showZs, showSeg: showSeg, showBsp: showBsp, showBiIdx: showBiIdx,
+                    showVolume: _showVolume,
+                    showSubVolume: _subShowVolume,
                     bspFilter: bspFilter,
-                    maPeriods: maPeriods
+                    maPeriods: maPeriods,
+                    logScale: _logScale
                 };
                 localStorage.setItem('chan_overlay_settings', JSON.stringify(s));
             } catch(e) {}
@@ -7335,8 +7339,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById("btn-seg").classList.toggle("active", showSeg);
             document.getElementById("btn-bsp").classList.toggle("active", showBsp);
         }
+        // 坐标系切换（设置抽屉内 radio 触发）
+        window.onCoordSystemChange = function(el) {
+            if (el.value === 'log') {
+                _logScale = true;
+            } else {
+                _logScale = false;
+            }
+            saveOverlaySettings();
+            render();
+        };
+        window.initCoordSystemRadio = function() {
+            var radios = document.getElementsByName('coord-system');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (_logScale && radios[i].value === 'log') || (!_logScale && radios[i].value === 'linear');
+            }
+        };
         // 启动时加载保存的设置
         loadOverlaySettings();
+        initCoordSystemRadio();
         // 频率→秒数映射
         const FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
         const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
@@ -7354,7 +7375,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let initialized = false;
         let currentFreq = 'd'; // 当前周期: d=日K, 30m=30分钟
         let lastStockFreq = 'd';     // 股票上下文上次使用的周期（同类切换继承）
-        let lastFuturesFreq = '1m'; // 期货上下文上次使用的周期（同类切换继承）
+        let lastFuturesFreq = '5m'; // 期货上下文上次使用的周期（同类切换继承）
         // 双窗口状态
         let isDualWindow = false;
         let dualSubData = null;
@@ -7924,6 +7945,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const clickX = e.clientX - rect.left;
                 const clickY = e.clientY - rect.top;
                 const area = getChartArea();
+                const volArea = getVolArea();
+                const macdTextArea = getMacdTextArea();
+                // 0. 底部区域（MACD/成交额标签+图表区）双击切换显示模式
+                const bottomTop = macdTextArea.y;
+                const bottomBottom = volArea.y + volArea.h;
+                if (clickX >= area.x && clickX <= area.x + area.w &&
+                    clickY >= bottomTop && clickY <= bottomBottom) {
+                    _showVolume = !_showVolume;
+                    saveOverlaySettings();
+                    render();
+                    return;
+                }
                 // 1. 只在K线主图区域内有效
                 if (clickX < area.x || clickX > area.x + area.w ||
                     clickY < area.y || clickY > area.y + area.h) {
@@ -8177,7 +8210,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             let min = Infinity, max = -Infinity;
             klines.forEach(k => { if (k.low < min) min = k.low; if (k.high > max) max = k.high; });
             const margin = (max - min) * 0.05;
-            return { min: min - margin, max: max + margin };
+            min = min - margin;
+            max = max + margin;
+            // 对数坐标系要求价格为正（价格为0或负时无法取对数，退化为普通坐标的range）
+            if (_logScale && min <= 0) {
+                min = 0.001;
+            }
+            return { min: min, max: max };
         }
 
         function getMacdRange(klines) {
@@ -8191,8 +8230,32 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 if (k.dea < min) min = k.dea;
                 if (k.dea > max) max = k.dea;
             });
+            // 全为0时兜底，避免下游 drawMacd/drawMacdAxis 除以零
+            if (min === 0 && max === 0) return { min: -1, max: 1 };
             const margin = Math.max(Math.abs(max), Math.abs(min)) * 0.1;
             return { min: min - margin, max: max + margin };
+        }
+
+        // 期货显示成交量(vol)，股票显示成交额(amount)——天勤K线无成交额字段，故期货改用成交量
+        function isFuturesMode() {
+            return !!(chartData && chartData.meta && chartData.meta.market === 'futures');
+        }
+        // 取底部柱状指标值：期货=成交量(vol)，股票=成交额(amount)
+        function getVolMetric(k) {
+            if (!k) return 0;
+            return isFuturesMode() ? (k.vol || 0) : (k.amount || 0);
+        }
+        // 底部指标标签：期货"成交量(手)"，股票"成交额"
+        function getVolLabel() {
+            return isFuturesMode() ? "成交量(手)" : "成交额";
+        }
+        function getVolumeRange(klines) {
+            if (!klines.length) return { min: 0, max: 1 };
+            let max = 0;
+            klines.forEach(k => { const v = getVolMetric(k); if (v > max) max = v; });
+            // 全为0时兜底，避免底部柱状区域空白
+            if (max === 0) return { min: 0, max: 1 };
+            return { min: 0, max: max * 1.05 };
         }
 
         // 反转视图：对数据做镜像变换（价格取负 + high/low互换 + 方向取反）
@@ -8283,10 +8346,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function priceToY(price, area, priceRange) {
+            if (_logScale) {
+                // 对数坐标系：价格取对数后线性映射（价格必须为正，否则回退到range.min）
+                const safePrice = (price > 0) ? price : priceRange.min;
+                const logMin = Math.log(priceRange.min);
+                const logMax = Math.log(priceRange.max);
+                const logPrice = Math.log(safePrice);
+                return area.y + area.h - (logPrice - logMin) / (logMax - logMin) * area.h;
+            }
             return area.y + area.h - (price - priceRange.min) / (priceRange.max - priceRange.min) * area.h;
         }
 
         function yToPrice(y, area, priceRange) {
+            if (_logScale) {
+                const logMin = Math.log(priceRange.min);
+                const logMax = Math.log(priceRange.max);
+                const ratio = (area.y + area.h - y) / area.h;
+                return Math.exp(logMin + ratio * (logMax - logMin));
+            }
             return priceRange.min + (area.y + area.h - y) / area.h * (priceRange.max - priceRange.min);
         }
 
@@ -8382,10 +8459,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const _savedMouseX = mouseX, _savedMouseY = mouseY;
             const _savedCurrentFreq = currentFreq;
             const _savedChartData = chartData;
+            const _savedShowVolume = _showVolume;
             viewOffset = vOffset; viewCount = vCount;
             mouseX = mX; mouseY = mY;
             currentFreq = freq;
             chartData = data;
+            // 双窗口模式：下窗使用独立的 _subShowVolume，不与上窗联动
+            if (data === dualSubData) _showVolume = _subShowVolume;
             const w = canvas.clientWidth, h = canvas.clientHeight;
             ctx.fillStyle = COLORS.bg; ctx.fillRect(0, 0, w, h);
             const klines = getVisibleKlines();
@@ -8394,11 +8474,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 mouseX = _savedMouseX; mouseY = _savedMouseY;
                 currentFreq = _savedCurrentFreq;
                 chartData = _savedChartData;
+                _showVolume = _savedShowVolume;
                 return;
             }
             const area = getChartArea(), volArea = getVolArea();
             const macdTextArea = getMacdTextArea();
-            const priceRange = getPriceRange(klines), macdRange = getMacdRange(klines);
+            const priceRange = getPriceRange(klines), macdRange = getMacdRange(klines), volRange = getVolumeRange(klines);
             const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
             const barWidth = Math.max(1, (area.w / effectiveCount) * 0.7);
             const barStep = area.w / effectiveCount;
@@ -8483,7 +8564,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.stroke();
             const klinesToDraw = klines.slice(0, viewCount);
             drawMacdLabel(macdTextArea, klinesToDraw, barStep, subPixelOffset);
-            drawMacd(klinesToDraw, volArea, macdRange, barStep, barWidth / 2, subPixelOffset);
+            if (_showVolume) {
+                drawVolume(klinesToDraw, volArea, volRange, barStep, barWidth, subPixelOffset);
+            } else {
+                drawMacd(klinesToDraw, volArea, macdRange, barStep, barWidth / 2, subPixelOffset);
+            }
             // 区间选择高亮：绘制起点A的金色标记
             if (_rangeSelect.mode === 'SELECTED_A' && _rangeSelect.startFreq === currentFreq && chartData && _rangeSelect.startSymbol === chartData.meta.symbol) {
                 const selIdx = _rangeSelect.startIdx;
@@ -8528,8 +8613,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
-            drawCrosshair(klinesToDraw, area, priceRange, volArea, macdRange, barStep, macdTextArea, subPixelOffset);
-            drawPriceAxis(area, priceRange); drawMacdAxis(volArea, macdRange);
+            drawCrosshair(klinesToDraw, area, priceRange, volArea, _showVolume ? volRange : macdRange, barStep, macdTextArea, subPixelOffset);
+            drawPriceAxis(area, priceRange);
+            if (_showVolume) {
+                drawVolumeAxis(volArea, volRange);
+            } else {
+                drawMacdAxis(volArea, macdRange);
+            }
             drawDateAxis(klinesToDraw, barStep, subPixelOffset);
             if (_overlayData) {
                 if (_overlayData.rightPrice !== undefined) {
@@ -8664,6 +8754,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             mouseX = _savedMouseX; mouseY = _savedMouseY;
             currentFreq = _savedCurrentFreq;
             chartData = _savedChartData;
+            _showVolume = _savedShowVolume;
             // 只在主窗口（上面窗口或单窗口）更新统计
             if (data === _savedChartData || !isDualWindow) {
                 generateStats();
@@ -8839,9 +8930,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function drawGrid(area, range) {
             ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
-            for (let i = 0; i <= 5; i++) {
-                const y = area.y + (area.h / 5) * i;
-                ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+            if (_logScale) {
+                // 等比坐标：网格线按对数均匀分布，视觉上"下密上疏"
+                const logMin = Math.log(range.min);
+                const logMax = Math.log(range.max);
+                for (let i = 0; i <= 5; i++) {
+                    const logPrice = logMin + (logMax - logMin) * (i / 5);
+                    const price = Math.exp(logPrice);
+                    const y = priceToY(price, area, range);
+                    ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+                }
+            } else {
+                // 等差坐标：网格线按像素等距分布
+                for (let i = 0; i <= 5; i++) {
+                    const y = area.y + (area.h / 5) * i;
+                    ctx.beginPath(); ctx.moveTo(area.x, y); ctx.lineTo(area.x + area.w, y); ctx.stroke();
+                }
             }
         }
 
@@ -8909,6 +9013,27 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.beginPath(); ctx.moveTo(macdArea.x, zeroY); ctx.lineTo(macdArea.x + macdArea.w, zeroY); ctx.stroke();
         }
 
+        function drawVolume(klines, volArea, volRange, barStep, barWidth, subPixelOffset) {
+            // 底部柱状图（股票=成交额，期货=成交量）：与K线风格一致
+            //   红柱（涨）= 空心，颜色 #FF4444，与阳K线一致
+            //   绿柱（跌）= 实心，颜色 #54fcfc，与阴K线一致
+            klines.forEach((k, i) => {
+                const x = volArea.x + barStep * i + barStep / 2 - subPixelOffset;
+                const isUp = k.close > k.open;
+                const volH = (getVolMetric(k) / volRange.max) * volArea.h;
+                const y = volArea.y + volArea.h - volH;
+                if (isUp) {
+                    // 红柱：空心，只画边框
+                    ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
+                    ctx.strokeRect(x - barWidth / 2, y, barWidth, volH);
+                } else {
+                    // 绿柱：实心
+                    ctx.fillStyle = "#54fcfc";
+                    ctx.fillRect(x - barWidth / 2, y, barWidth, volH);
+                }
+            });
+        }
+
         function drawBiLines(klines, area, priceRange, barStep, subPixelOffset) {
             if (!chartData || !chartData.bis.length) return;
             const map = buildGlobalDateMap();
@@ -8962,17 +9087,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (targetK) {
                 ctx.font = "11px monospace"; ctx.textAlign = "left";
                 const lineY = textArea.y + 11;
-                ctx.fillStyle = COLORS.textLight;
-                ctx.fillText("MACD(12,26,9)", textArea.x + 4, lineY);
-                let xPos = textArea.x + 4 + ctx.measureText("MACD(12,26,9) ").width;
-                ctx.fillStyle = COLORS.dif;
-                ctx.fillText("DIF:" + targetK.dif.toFixed(2), xPos, lineY);
-                xPos += ctx.measureText("DIF:" + targetK.dif.toFixed(2) + " ").width;
-                ctx.fillStyle = COLORS.dea;
-                ctx.fillText("DEA:" + targetK.dea.toFixed(2), xPos, lineY);
-                xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
-                ctx.fillStyle = targetK.macd >= 0 ? "#FF4444" : "#00DD00";
-                ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
+                if (_showVolume) {
+                    // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
+                    const isUp = targetK.close > targetK.open;
+                    const volColor = isUp ? "#FF4444" : "#00DD00";
+                    const vLabel = getVolLabel();
+                    ctx.fillStyle = "#a8b2d1";
+                    ctx.fillText(vLabel + ":", textArea.x + 4, lineY);
+                    let xPos = textArea.x + 4 + ctx.measureText(vLabel + ":").width;
+                    ctx.fillStyle = volColor;
+                    const val = getVolMetric(targetK);
+                    const valLabel = isFuturesMode()
+                        ? (val >= 10000 ? (val / 10000).toFixed(2) + "万" : Math.round(val).toString())
+                        : (val >= 100000000 ? (val / 100000000).toFixed(2) + "亿" :
+                           val >= 10000 ? (val / 10000).toFixed(2) + "万" : val.toFixed(2));
+                    ctx.fillText(valLabel, xPos, lineY);
+                } else {
+                    ctx.fillStyle = COLORS.textLight;
+                    ctx.fillText("MACD(12,26,9)", textArea.x + 4, lineY);
+                    let xPos = textArea.x + 4 + ctx.measureText("MACD(12,26,9) ").width;
+                    ctx.fillStyle = COLORS.dif;
+                    ctx.fillText("DIF:" + targetK.dif.toFixed(2), xPos, lineY);
+                    xPos += ctx.measureText("DIF:" + targetK.dif.toFixed(2) + " ").width;
+                    ctx.fillStyle = COLORS.dea;
+                    ctx.fillText("DEA:" + targetK.dea.toFixed(2), xPos, lineY);
+                    xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
+                    ctx.fillStyle = targetK.macd >= 0 ? "#FF4444" : "#00DD00";
+                    ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
+                }
             }
         }
 
@@ -9516,10 +9658,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function drawPriceAxis(area, priceRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-            for (let i = 0; i <= 5; i++) {
-                const price = priceRange.min + (priceRange.max - priceRange.min) * (1 - i / 5);
-                const y = area.y + (area.h / 5) * i;
-                ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
+            if (_logScale) {
+                // 对数坐标系：价格标签按对数均匀分布
+                const logMin = Math.log(priceRange.min);
+                const logMax = Math.log(priceRange.max);
+                for (let i = 0; i <= 5; i++) {
+                    const logPrice = logMin + (logMax - logMin) * (1 - i / 5);
+                    const price = Math.exp(logPrice);
+                    const y = priceToY(price, area, priceRange);
+                    ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
+                }
+            } else {
+                // 普通坐标系：价格标签按算术均匀分布
+                for (let i = 0; i <= 5; i++) {
+                    const price = priceRange.min + (priceRange.max - priceRange.min) * (1 - i / 5);
+                    const y = area.y + (area.h / 5) * i;
+                    ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
+                }
             }
         }
 
@@ -9529,6 +9684,29 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const zeroY = macdArea.y + macdArea.h * (macdRange.max / (macdRange.max - macdRange.min));
             ctx.fillText("0", macdArea.x + macdArea.w + 6, zeroY + 4);
             ctx.fillText(macdRange.min.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + macdArea.h - 4);
+        }
+
+        function drawVolumeAxis(volArea, volRange) {
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+            // 显示最大指标值（股票=成交额万/亿，期货=成交量手/万）
+            const maxLabel = formatVolume(volRange.max);
+            ctx.fillText(maxLabel, volArea.x + volArea.w + 6, volArea.y + 12);
+            // 显示中间值
+            const midLabel = formatVolume(volRange.max / 2);
+            ctx.fillText(midLabel, volArea.x + volArea.w + 6, volArea.y + volArea.h / 2 + 4);
+            // 底部显示0
+            ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
+        }
+
+        // 格式化底部柱状指标数字（股票成交额：万/亿；期货成交量：手，万级用万）
+        function formatVolume(vol) {
+            if (isFuturesMode()) {
+                if (vol >= 10000) return (vol / 10000).toFixed(2) + "万";
+                return Math.round(vol).toString();
+            }
+            if (vol >= 100000000) return (vol / 100000000).toFixed(2) + "亿";
+            if (vol >= 10000) return (vol / 10000).toFixed(2) + "万";
+            return vol.toFixed(0);
         }
 
         function drawDateAxis(klines, barStep, subPixelOffset) {
@@ -9808,6 +9986,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 dualShowNewZs = false;
                 dualNewZsLeftDate = "";
                 dualNewZsRightDate = "";
+                // 隐藏红框调试面板
+                const dbg = document.getElementById("redframe-debug");
+                if (dbg) dbg.style.display = "none";
                 btn.classList.remove("active");
                 const isFuturesClose = chartData && chartData.meta && chartData.meta.market === 'futures';
                 updateFreqButtonStates(isFuturesClose);
@@ -9874,6 +10055,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
                     chartData = dualSubData; currentFreq = dualSubFreq;
                     const area = getChartArea();
+                    const volArea = getVolArea();
+                    const macdTextArea = getMacdTextArea();
+                    // 底部区域双击切换显示模式
+                    const bottomTop = macdTextArea.y;
+                    const bottomBottom = volArea.y + volArea.h;
+                    if (clickX >= area.x && clickX <= area.x + area.w &&
+                        clickY >= bottomTop && clickY <= bottomBottom) {
+                        _subShowVolume = !_subShowVolume;
+                        saveOverlaySettings();
+                        canvas = _savedCanvas; ctx = _savedCtx;
+                        viewOffset = _savedViewOffset; viewCount = _savedViewCount;
+                        chartData = _savedChartData; currentFreq = _savedFreq;
+                        renderBottom();
+                        return;
+                    }
                     const klines = getVisibleKlines();
                     if (!klines.length) { canvas = _savedCanvas; ctx = _savedCtx; viewOffset = _savedViewOffset; viewCount = _savedViewCount; chartData = _savedChartData; currentFreq = _savedFreq; return; }
                     const priceRange = getPriceRange(klines);
@@ -10173,6 +10369,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (panel.classList.contains("show")) {
                 closeDownloadPanel();
             } else {
+                // 动态计算默认日期：日线=5年前，分钟线=6个月前
+                var today = new Date();
+                var y5 = new Date(today.getFullYear() - 5, today.getMonth(), today.getDate());
+                var m6 = new Date(today.getFullYear(), today.getMonth() - 6, today.getDate());
+                var defaultDay = y5.toISOString().slice(0, 10);
+                var defaultMin = m6.toISOString().slice(0, 10);
+                document.getElementById("dl-day-start").value = defaultDay;
+                document.getElementById("dl-min-start").value = defaultMin;
+
                 panel.classList.add("show");
                 overlay.classList.add("show");
                 // 如果正在下载中，恢复进度显示
@@ -10328,6 +10533,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 同步笔索引复选框
             var biIdxCb = document.querySelector('#bsp-filter-dialog input[name="show-bi-idx"]');
             if (biIdxCb) biIdxCb.checked = showBiIdx;
+            initCoordSystemRadio();
             document.getElementById("bsp-filter-dialog").classList.add("show");
             document.getElementById("bsp-filter-overlay").classList.add("show");
         };
@@ -10672,14 +10878,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分"};
             var freqLabel = freqLabels[_scanFreq] || _scanFreq;
             if (_scanMode === "bsp") {
-                document.getElementById("scan-title").innerHTML = freqLabel + ' <span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560"> ' + _scanRecentDays + ' </b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span>';
+                document.getElementById("scan-title").innerHTML = freqLabel + '<span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560">' + _scanRecentDays + '</b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span> 买/卖点';
             } else if (_scanMode === "ma") {
-                document.getElementById("scan-title").textContent = freqLabel + " 均线分类";
+                document.getElementById("scan-title").textContent = freqLabel + " 均线";
             } else if (_scanMode === "fx_d") {
                 document.getElementById("scan-title").textContent = freqLabel + " 底分型";
             } else {
                 // 标注扫描：显示全周期，不再显示当前周期
-                document.getElementById("scan-title").textContent = "扫描全周期";
+                document.getElementById("scan-title").textContent = "全周期 标注";
             }
         }
 
@@ -10807,7 +11013,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
                     var codes = annData.codes || [];
 
-                    var html = '<div class="scan-summary">全周期标注 <b>' + codes.length + '</b> 条</div>';
+                    var html = '<div class="scan-summary">全周期 标注 <b>' + codes.length + '</b> 条</div>';
                     if (codes.length === 0) {
                         html += '<div class="scan-no-result">未发现标注股票</div>';
                     } else {
@@ -11157,7 +11363,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                                     var catClass = 'ma-cat' + cat;
                                     var catLabel = '类' + cat;
                                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
-                                    html += chkBox(r.code, cat <= 2);
+                                    html += chkBox(r.code, cat <= 3);
                                     html += '<span class="scan-col-name">' + r.name + '</span>';
                                     html += '<span class="scan-col-code">' + r.code + '</span>';
                                     html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + catClass + '">' + catLabel + '</span></span>';
@@ -11630,7 +11836,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     var cat = r.ma_category;
                     var catClass = 'ma-cat' + cat;
                     var catLabel = '类' + cat;
-                    var checked = cat <= 2;
+                    var checked = cat <= 3;
                     html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
                     html += chkBox(r.code, checked);
                     html += '<span class="scan-col-name">' + r.name + '</span>';
@@ -12411,8 +12617,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 fetch("/api/futures_cleanup").catch(() => {});
                 fetchFreq = 'd';
             } else {
-                // 股票 → 期指：默认1分钟
-                fetchFreq = '1m';
+                // 股票 → 期指：默认5分钟
+                fetchFreq = '5m';
             }
             currentFreq = fetchFreq;
             updateDateInputType();

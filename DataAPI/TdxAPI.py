@@ -95,7 +95,7 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
       价格需除以100得到实际价格（单位：元）
 
     扩展市场格式（港股/通达信扩展指数等，ds目录）：
-      日期(I4) 开盘(f4) 最高(f4) 最低(f4) 收盘(f4) 成交量(I4) 成交额(f4) 结算价(f4)
+      日期(I4) 开盘(f4) 最高(f4) 最低(f4) 收盘(f4) 成交额(f4) 成交量(I4) 结算价(I4)
       价格是float类型，直接就是实际价格，不需要除以100
     """
     is_ext_market = (market in ('hk', 'ds'))
@@ -120,7 +120,7 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
             day = 0
             if is_ext_market:
                 # 扩展市场（港股/期货）：价格是float，直接是实际值
-                date_int, o, h, l, c, vol, amount, jiesuan = struct.unpack('<IffffIfI', row)
+                date_int, o, h, l, c, amount, vol, _ = struct.unpack('<IfffffII', row)
             else:
                 # 标准A股：价格是int，需除以100
                 date_int, o, h, l, c, amount, vol, _ = struct.unpack('<IIIIIfII', row)
@@ -272,6 +272,14 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     closes = arr["close"][valid]
     amounts = arr["amount"][valid]
     vols = arr["vol"][valid]
+    reserved = arr["reserved"][valid]
+
+    # 检测是否为指数文件（指数 .lc5 的保留字段存的是涨跌家数，非零；个股 .lc5 保留字段为 0）
+    # 经通达信官方确认：指数的分钟线数据只有成交额，没有成交量。
+    # 指数 .lc5 文件中成交量字段实际存的是"成交额/100"（非真实成交量），需要忽略，成交量设为0。
+    is_index = len(reserved) > 0 and np.any(reserved != 0)
+    if is_index:
+        print(f"[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
 
     df = np.column_stack([years, months, days, hours, minutes, opens, highs, lows, closes, vols, amounts])
 
@@ -291,7 +299,7 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
             "high": float(h),
             "low": float(l),
             "close": float(c),
-            "vol": int(v),
+            "vol": int(v) // 100,  # 通达信 .lc5 成交量单位是"股"，除以100转为"手"（柱状图已改用成交额绘制，此字段仅作参考）
             "amount": float(a),
         })
 
@@ -1283,7 +1291,10 @@ def read_blk_file(blk_path):
     读取通达信 .blk 板块文件，返回股票代码列表。
     文件格式：GBK编码，每行一个代码。
     A股格式：7位纯数字（1位交易所前缀 + 6位股票代码），如 "0600000"、"1600001"
-    港股格式：可能为 "HK00700" 或前缀+5位数字等
+    港股个股：31#{5位代码}，如 31#00700
+    港股指数：27#{HZ代码}，如 27#HZ5489
+    美股个股：74#{代码}，如 74#XBI
+    美股指数：12#A_{代码}，如 12#A_NBI
     """
     if not blk_path or not os.path.exists(blk_path):
         return []
@@ -1295,21 +1306,31 @@ def read_blk_file(blk_path):
                 if not line:
                     continue
                 if len(line) == 7 and line.isdigit():
+                    # A 股：7位纯数字（前缀0/1/2 + 6位代码）
                     prefix = line[0]
                     code = line[1:7]
                     stocks.append({"prefix": prefix, "code": code})
                 elif line.startswith("31#") and len(line) == 8:
+                    # 港股个股：31# + 5位数字
                     code = line[3:].strip()
                     if code.isdigit():
-                        # 统一补前导零到5位（与通达信文件名一致），避免同一只港股格式不统一
                         code = code.zfill(5)
                         stocks.append({"prefix": "hk", "code": code})
-                elif line.upper().startswith("HK") and len(line) > 2:
-                    code = line[2:].strip()
-                    if code.isdigit():
-                        # 统一补前导零到5位（与通达信文件名一致）
-                        code = code.zfill(5)
+                elif line.startswith("74#") and len(line) > 3:
+                    # 美股个股：74# + 代码（如 74#XBI）
+                    code = line[3:].strip()
+                    if code:
+                        stocks.append({"prefix": "us", "code": code})
+                elif line.startswith("27#") and len(line) > 3:
+                    # 港股指数：27# + HZ代码（如 27#HZ5489）
+                    code = line[3:].strip()
+                    if code:
                         stocks.append({"prefix": "hk", "code": code})
+                elif line.startswith("12#") and len(line) > 3:
+                    # 美股指数：12# + 代码（如 12#A_NBI）
+                    code = line[3:].strip()
+                    if code:
+                        stocks.append({"prefix": "us", "code": code})
     except Exception as e:
         print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
     return stocks
@@ -2155,11 +2176,31 @@ def _read_tdxhy_sector_stocks(sector_code):
     return stocks
 
 
+# 港股指数 同花顺代码 → 通达信内部代码映射
+# 注意：同花顺 API 返回的是 HS+数字 代码（如 HS2083），不是显示名（如 HSTECH）
+#       须与 sync_ths_to_tdx.py 中的 HK_INDEX_MAP 保持一致
+_ZXG_HK_INDEX_MAP = {
+    "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
+    "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
+}
+# 美股指数（非个股）映射
+_ZXG_US_INDEX_MAP = {
+    "NBI": "A_NBI",
+}
+
+
 def save_to_zxg_blk(codes):
     """
     将股票代码列表追加到通达信自选股文件 zxg.blk。
-    codes: list of str，格式如 "000852.SH"、"600519.SH"
+    codes: list of str，格式如 "000852.SH"、"600519.SH"、"00700.HK"、"NBI.US"
     自动去重，已存在的不会重复添加。
+
+    各市场输出格式：
+      A 股：     {前缀}{6位代码}    如 1600519
+      港股个股：  31#{5位代码}       如 31#00700
+      港股指数：  27#{HZ代码}       如 27#HZ5489
+      美股个股：  74#{代码}         如 74#XBI
+      美股指数：  12#A_{代码}       如 12#A_NBI
     """
     path = get_blk_path("zxg")
     if not path:
@@ -2182,7 +2223,8 @@ def save_to_zxg_blk(codes):
     with open(path, "a", encoding="gbk") as f:
         for code_str in codes:
             code_str = code_str.strip().upper()
-            m = re.match(r'^(\d+)\.(SH|SZ|BJ|HK)$', code_str)
+            # A 股：纯数字 + SH/SZ/BJ 后缀
+            m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', code_str)
             if m:
                 code = m.group(1)
                 market = m.group(2)
@@ -2190,13 +2232,32 @@ def save_to_zxg_blk(codes):
                     line = "1" + code
                 elif market == "SZ":
                     line = "0" + code
-                elif market == "BJ":
+                else:  # BJ
                     line = "2" + code
-                else:
-                    # 港股统一保存为5位（与通达信文件名一致）
-                    line = "HK" + code.zfill(5)
             else:
-                line = code_str
+                # 港股 / 美股：代码可能含字母（如 NBI.US、HSIDI.HK）
+                m2 = re.match(r'^(\w+)\.(HK|US)$', code_str)
+                if m2:
+                    code = m2.group(1)
+                    market = m2.group(2)
+                    if market == "HK":
+                        if code in _ZXG_HK_INDEX_MAP:
+                            # 港股指数：27# + 通达信内部代码
+                            line = "27#" + _ZXG_HK_INDEX_MAP[code]
+                        else:
+                            # 港股个股：31# + 5位代码
+                            line = "31#" + code.zfill(5)
+                    else:  # US
+                        if code in _ZXG_US_INDEX_MAP:
+                            # 美股指数：12# + 通达信内部代码
+                            line = "12#" + _ZXG_US_INDEX_MAP[code]
+                        else:
+                            # 美股个股：74# + 原始代码
+                            line = "74#" + code
+                else:
+                    # 无法识别的格式，跳过
+                    print(f"[自选保存] 跳过无法识别的代码: {code_str}")
+                    continue
             if line not in existing:
                 f.write(line + "\n")
                 existing.add(line)

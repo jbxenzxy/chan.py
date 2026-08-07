@@ -309,7 +309,8 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
         l = float(row.get("low", 0) or 0)
         c = float(row.get("close", 0) or 0)
         vol = int(row.get("volume", 0) or 0)
-        oi = float(row.get("open_oi", 0) or 0)
+        # 天勤K线无成交额字段（仅tick/quote有），前端期货改显成交量(vol)；amount置0占位以保持record结构
+        # 原代码误用持仓量(open_oi)冒充成交额，已清除
 
         # 跳过全零 OHLC（天勤未返回有效数据）
         if o == 0 and h == 0 and l == 0 and c == 0:
@@ -325,7 +326,7 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
             "low": round(l, 3),
             "close": round(c, 3),
             "vol": vol,
-            "amount": round(oi, 2),
+            "amount": 0,  # 天勤K线无成交额，置0占位（前端期货显示成交量vol）
         })
 
     # 如果有选点时间，过滤记录
