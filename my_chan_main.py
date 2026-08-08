@@ -7138,7 +7138,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="annotation-menu-item" id="annotation-menu-restart" onclick="cancelSelectedPoint()" style="display:none;">取消选点</div>
         <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘至此</div>
         <div class="annotation-menu-divider" id="annotation-menu-divider2"></div>
-        <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">反转视图</div>
+        <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">翻转视图</div>
     </div>
     <!-- 文字标注输入对话框 -->
     <div class="annotation-dialog" id="annotation-dialog">
@@ -7383,7 +7383,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let dualSubViewOffset = 0, dualSubViewCount = 377;
         let dualSubMouseX = -1, dualSubMouseY = -1;
         let mainCanvas, mainCtx, subCanvas, subCtx;
-        // 反转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
+        // 翻转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
         let _isMirrorMode = false;
         // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
         let _restartEnabled = false;
@@ -8209,6 +8209,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!klines.length) return { min: 0, max: 100 };
             let min = Infinity, max = -Infinity;
             klines.forEach(k => { if (k.low < min) min = k.low; if (k.high > max) max = k.high; });
+            // 翻转视图+对数坐标：价格已取负，用绝对值构建范围（与同花顺行为一致）
+            if (_logScale && _isMirrorMode) {
+                let absMin = Infinity, absMax = -Infinity;
+                klines.forEach(k => {
+                    const al = Math.abs(k.low), ah = Math.abs(k.high);
+                    if (al < absMin) absMin = al;
+                    if (ah > absMax) absMax = ah;
+                });
+                const margin = (absMax - absMin) * 0.05;
+                return { min: absMin - margin, max: absMax + margin };
+            }
             const margin = (max - min) * 0.05;
             min = min - margin;
             max = max + margin;
@@ -8258,7 +8269,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             return { min: 0, max: max * 1.05 };
         }
 
-        // 反转视图：对数据做镜像变换（价格取负 + high/low互换 + 方向取反）
+        // 翻转视图：对数据做镜像变换（价格取负 + high/low互换 + 方向取反）
         // 变换后所有绘制函数自动正确：涨K线变跌K线、MACD红柱变绿柱、笔/中枢方向自动镜像
         function _mirrorChartData(data) {
             if (!data) return data;
@@ -8346,6 +8357,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function priceToY(price, area, priceRange) {
+            if (_logScale && _isMirrorMode) {
+                // 反转+对数：价格已取负，用绝对值参与对数计算，并反转Y轴映射
+                // 高绝对值→底部，低绝对值→顶部（与同花顺翻转坐标行为一致）
+                const absPrice = Math.abs(price);
+                const logMin = Math.log(priceRange.min);
+                const logMax = Math.log(priceRange.max);
+                const logPrice = Math.log(absPrice);
+                return area.y + (logPrice - logMin) / (logMax - logMin) * area.h;
+            }
             if (_logScale) {
                 // 对数坐标系：价格取对数后线性映射（价格必须为正，否则回退到range.min）
                 const safePrice = (price > 0) ? price : priceRange.min;
@@ -8358,6 +8378,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function yToPrice(y, area, priceRange) {
+            if (_logScale && _isMirrorMode) {
+                // 反转+对数：Y轴映射已反转，ratio从顶部算起，返回负值匹配镜像数据
+                const logMin = Math.log(priceRange.min);
+                const logMax = Math.log(priceRange.max);
+                const ratio = (y - area.y) / area.h;
+                return -Math.exp(logMin + ratio * (logMax - logMin));
+            }
             if (_logScale) {
                 const logMin = Math.log(priceRange.min);
                 const logMax = Math.log(priceRange.max);
@@ -8450,7 +8477,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function _renderChart(data, freq, vOffset, vCount, mX, mY, highlightRange, redRange) {
             if (!data || !ctx) return;
-            // 反转视图模式：对数据做镜像变换（不修改原始缓存，仅影响渲染）
+            // 翻转视图模式：对数据做镜像变换（不修改原始缓存，仅影响渲染）
             if (_isMirrorMode) {
                 data = _mirrorChartData(data);
             }
@@ -13457,8 +13484,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const menuDelAll = document.getElementById("annotation-menu-del-all");
             const menuDivider2 = document.getElementById("annotation-menu-divider2");
             const menuMirror = document.getElementById("annotation-menu-mirror");
-            // 更新反转视图菜单项文字（显示当前状态）
-            menuMirror.textContent = _isMirrorMode ? "取消反转" : "反转视图";
+            // 更新翻转视图菜单项文字（显示当前状态）
+            menuMirror.textContent = _isMirrorMode ? "取消翻转" : "翻转视图";
             if (_annotationClickTarget) {
                 menuDeleteOne.style.display = "block";
                 menuEditOne.style.display = "block";
@@ -13476,7 +13503,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 menuDivider.style.display = "block";
                 menuDelAll.style.display = "block";
             }
-            // 反转视图始终显示（与标注操作无关，是全局视图模式）
+            // 翻转视图始终显示（与标注操作无关，是全局视图模式）
             menuDivider2.style.display = "block";
             menuMirror.style.display = "block";
 
@@ -13530,7 +13557,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             gotoDate();
         };
 
-        // 切换反转视图模式（K线涨跌互换、MACD红绿互换、缠论结构镜像）
+        // 切换翻转视图模式（K线涨跌互换、MACD红绿互换、缠论结构镜像）
         // 保底策略：如果反图渲染出错，自动切回正图并从后端重新加载，确保正图永远正确
         window.toggleMirrorMode = function() {
             document.getElementById("annotation-menu").classList.remove("show");
@@ -13539,14 +13566,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             try {
                 render();
             } catch(e) {
-                console.error("[反转视图] 渲染出错，自动恢复正图:", e);
+                console.error("[翻转视图] 渲染出错，自动恢复正图:", e);
                 _isMirrorMode = false;
                 // chartData 可能被镜像数据污染（_renderChart 中途异常未恢复），
                 // 从后端重新加载（命中缓存仅 0.001s），彻底恢复正图
                 try {
                     loadStock();
                 } catch(e2) {
-                    console.error("[反转视图] 恢复失败:", e2);
+                    console.error("[翻转视图] 恢复失败:", e2);
                 }
             }
         };
