@@ -81,6 +81,10 @@ DEFAULT_FUTURES_SYMBOLS = [
     ("KQ.m@CFFEX.IC", "中证500主连", 15, "15s"),
     ("KQ.m@CFFEX.IC", "中证500主连", 60, "1m"),
     ("KQ.m@CFFEX.IC", "中证500主连", 300, "5m"),
+    ("KQD.m@SGX.CN", "A50主连", 15, "15s"),
+    ("KQD.m@SGX.CN", "A50主连", 60, "1m"),
+    ("KQD.m@SGX.CN", "A50主连", 300, "5m"),
+    ("KQD.m@SGX.CN", "A50主连", 1800, "30m"),
 ]
 
 # ===== 期货品种别名映射表 =====
@@ -120,6 +124,8 @@ FUTURES_ALIASES = {
     "BC": "KQ.m@INE.bc", "EC": "KQ.m@INE.ec",
     # ===== 广期所 GFEX =====
     "SI": "KQ.m@GFEX.si", "LC": "KQ.m@GFEX.lc", "PS": "KQ.m@GFEX.ps",
+    # ===== 新加坡 SGX（外盘延时） =====
+    "A50": "KQD.m@SGX.CN", "CN": "KQD.m@SGX.CN",
 }
 
 # 前端可用的周期列表（用于变灰不可用按钮）
@@ -243,7 +249,10 @@ class CTqSdkAPI(CCommonStockApi):
             if dt is None:
                 continue
             try:
-                ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+                # auto=False: 不自动将 00:00 调整为 23:59
+                # SGX A50 等外盘品种有凌晨 00:00 的分钟K线，auto=True 会导致
+                # 00:00 的 ts 被改为 23:59，使后续 00:05 的 K线时间非单调递增
+                ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, auto=False)
             except OSError:
                 continue
 
@@ -372,7 +381,7 @@ def _get_futures_code(code):
     # 格式: EXCHANGE.SYMBOL (如 CFFEX.IM2507, SHFE.rb2505)
     # 或主连: KQ.m@EXCHANGE.SYMBOL, KQ.i@EXCHANGE.SYMBOL
     # 注意：天勤要求 KQ 前缀中的 m/i 小写，所以先 upper() 匹配，再恢复小写
-    FUTURE_EXCHANGES = ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX']
+    FUTURE_EXCHANGES = ['CFFEX', 'SHFE', 'DCE', 'CZCE', 'INE', 'GFEX', 'SGX']
     for ex in FUTURE_EXCHANGES:
         if code.startswith(ex + '.'):
             return code
@@ -380,6 +389,9 @@ def _get_futures_code(code):
             return code.replace('KQ.M@', 'KQ.m@', 1)
         if code.startswith('KQ.I@' + ex + '.'):
             return code.replace('KQ.I@', 'KQ.i@', 1)
+        # 外盘延时行情: KQD.m@ 前缀
+        if code.startswith('KQD.M@' + ex + '.'):
+            return code.replace('KQD.M@', 'KQD.m@', 1)
 
     # 期货别名映射：支持直接输入短名称（如 PTA、IF、rb、TA 等）
     if code in FUTURES_ALIASES:
@@ -430,6 +442,7 @@ def _get_futures_name(code):
         "KQ.m@INE.nr":   "20号胶主连", "KQ.m@INE.bc": "国际铜主连",
         "KQ.m@INE.ec":   "集运指数主连", "KQ.m@GFEX.si": "工业硅主连",
         "KQ.m@GFEX.lc":  "碳酸锂主连", "KQ.m@GFEX.ps": "多晶硅主连",
+        "KQD.m@SGX.CN": "A50主连",
     }
     if code in FUTURES_NAMES:
         return FUTURES_NAMES[code]

@@ -4,7 +4,7 @@
 功能：读取通达信本地K线数据，进行缠论分析，生成K线图网页
 """
 
-import sys, os, json, time, re, struct, threading, multiprocessing
+import sys, os, json, time, re, struct, threading, multiprocessing, gc
 from datetime import datetime, timedelta
 from chinese_calendar import is_holiday
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -21,21 +21,22 @@ from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures
 # ============================================================
 # 配置区域 - 请根据你的实际环境修改
 # ============================================================
-TDX_INSTALL_DIR = r"C:\new_tdx_hd_test"  # 通达信安装目录（改目录只需修改本行）
-VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")  # 通达信vipdoc目录
-DOWNLOAD_DIR = os.path.join(VIPDOC_DIR, "eltdx")  # 盘后下载数据保存目录（VIPDOC_DIR下的eltdx子目录）
-TDX_HQ_CACHE = os.path.join(TDX_INSTALL_DIR, "T0002", "hq_cache")  # 通达信hq_cache目录（shm.tnf/szm.tnf）
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))  # 输出目录（脚本所在目录）
-SYMBOL_CODE = "SH000001"  # 默认股票代码（上证指数）
-CHAN_PATH = r"C:\my_chan_project"  # chan.py 仓库解压目录
-LAST_CODE_FREQ_FILE = os.path.join(VIPDOC_DIR, "last_code_freq.json")  # 持久化上次查看的代码和周期
+TDX_INSTALL_DIR = r"C:\new_tdx_hd_test"                               # 通达信安装目录（改目录只需修改本行）
+VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")                  # 通达信vipdoc目录
+DOWNLOAD_DIR = os.path.join(VIPDOC_DIR, "eltdx")                      # 盘后下载，数据保存目录
+TDX_HQ_CACHE = os.path.join(TDX_INSTALL_DIR, "T0002", "hq_cache")     # 通达信hq_cache目录（shm.tnf/szm.tnf）
+OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))               # 输出目录（脚本所在目录）
+SYMBOL_CODE = "SH000001"                                              # 默认股票代码（上证指数）
+CHAN_PATH = r"C:\my_chan_project"                                     # chan.py 仓库解压目录
+LAST_CODE_FREQ_FILE = os.path.join(VIPDOC_DIR, "last_code_freq.json") # 持久化上次查看的代码和周期
 
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
 # 账户和密码从 VIPDOC_DIR（即 TDX_INSTALL_DIR\vipdoc）下 tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
-_SSE_DEBUG  = False         # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
+_SSE_DEBUG  = False # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
+_SSE_DIAG   = True  # 双窗口进度条诊断日志开关：追踪每窗处理耗时 + 快照lastK滞后，验证“00:00+灰色”根因
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
 if CHAN_PATH not in sys.path:
@@ -60,8 +61,7 @@ except ImportError as e:
 # 包含：K线读取、前复权
 from DataAPI.TdxAPI import CTdxAPI, \
     read_main_level_records, read_sub_level_records, \
-    read_zxg_stocks, read_zz1000_stocks, save_to_zxg_blk, \
-    read_sz50_stocks, read_hs300_stocks, read_zz500_stocks, \
+    read_zxg_stocks, save_to_zxg_blk, \
     get_index_stocks, refresh_block_files
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
@@ -71,7 +71,7 @@ FORWARD_ADJUST_ENABLED = True
 DEBUG_COLD_START_START_DATE = None # "2024-09-10"
 
 # 调试模式：用于解决冷启动起不来的问题；冷启动加载到此日期(仅日K生效)，None表示不开启
-DEBUG_COLD_START_END_DATE = None # 示例: "2026-06-29" 北方国际
+DEBUG_COLD_START_END_DATE = None   # 示例: "2026-06-29" 北方国际
 
 # 注入通达信数据源配置到 TdxAPI 模块
 from DataAPI.TdxAPI import set_tdx_config as _set_tdx_config
@@ -97,7 +97,12 @@ try:
     TQ_AVAILABLE = True
 except ImportError as e:
     CTqSdkAPI = None
+    fetch_futures_kline = None
+    FREQ_SEC_MAP = {}
     FUTURES_ALIASES = {}
+    _get_futures_code = None
+    _get_futures_name = None
+    load_tq_account = None
     TQ_AVAILABLE = False
     print(f"[警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
 
@@ -109,6 +114,7 @@ try:
     from ths_cloud_api import save_scan_to_ths_cloud
     _THS_CLOUD_AVAILABLE = True
 except ImportError:
+    save_scan_to_ths_cloud = None
     _THS_CLOUD_AVAILABLE = False
 
 
@@ -172,7 +178,7 @@ def _tdx_day_record(date_int, open_milli, high_milli, low_milli, close_milli, am
     if is_ext_market:
         return struct.pack(
             "<IfffffII",
-            date_int,                          # 日期 YYYYMMDD
+            date_int,                      # 日期 YYYYMMDD
             open_milli / 1000.0,               # 开盘价
             high_milli / 1000.0,               # 最高价
             low_milli / 1000.0,                # 最低价
@@ -184,7 +190,7 @@ def _tdx_day_record(date_int, open_milli, high_milli, low_milli, close_milli, am
     else:
         return struct.pack(
             "<IIIIIfII",
-            date_int,                          # 日期 YYYYMMDD
+            date_int,                      # 日期 YYYYMMDD
             (open_milli + 5) // 10,            # 开盘价（厘）四舍五入
             (high_milli + 5) // 10,            # 最高价（厘）
             (low_milli + 5) // 10,             # 最低价（厘）
@@ -206,7 +212,7 @@ def _tdx_min_record(date_int, minute_int, open_price, high, low, close, amount, 
     """
     return struct.pack(
         "<HHfffffII",
-        date_int & 0xFFFF,                 # 压缩日期: (year-2004)*2048+month*100+day
+        date_int & 0xFFFF,             # 压缩日期: (year-2004)*2048+month*100+day
         minute_int & 0xFFFF,               # 分钟: HH*60+MM
         float(open_price),                 # 开盘价
         float(high),                       # 最高价
@@ -236,7 +242,7 @@ def _ensure_dir(path):
     os.makedirs(path, exist_ok=True)
 
 
-def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, start_date=None, progress_callback=None):
+def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, start_date=None, _progress_callback=None):
     """
     下载单只股票的日 K 线数据并写入 .day 文件
     market: 'sh' | 'sz' | 'bj' | 'ds' | 'hk'
@@ -285,8 +291,8 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
 
             try:
                 series = client.bars.all(full_code, period="day", max_pages=1)
-            except Exception as e:
-                print(f"[下载警告] {full_code} 日线拉取失败: {e}")
+            except Exception as _e:
+                print(f"[下载警告] {full_code} 日线拉取失败: {_e}")
                 return 0, 0, None
 
             if not series or not series.bars:
@@ -324,8 +330,8 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
             while True:
                 try:
                     page = client.bars.get(full_code, period="day", start=start, count=page_size)
-                except Exception as e:
-                    print(f"[下载警告] {full_code} 日线分页拉取失败: {e}")
+                except Exception as _e:
+                    print(f"[下载警告] {full_code} 日线分页拉取失败: {_e}")
                     break
                 if not hasattr(page, "bars") or not page.bars:
                     break
@@ -368,11 +374,11 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
 
             return len(records), 1, max_date_int if max_date_int > 0 else None
 
-    except Exception as e:
-        raise e
+    except Exception:
+        raise
 
 
-def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=None, start_date=None, progress_callback=None):
+def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=None, start_date=None, _progress_callback=None):
     """
     下载单只股票的分钟 K 线数据
     period: '1m' | '5m'
@@ -429,8 +435,8 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
 
             try:
                 series = client.bars.all(full_code, period=period, max_pages=1)
-            except Exception as e:
-                print(f"[下载警告] {full_code} {period} 拉取失败: {e}")
+            except Exception as _e:
+                print(f"[下载警告] {full_code} {period} 拉取失败: {_e}")
                 return 0, 0, None
 
             if not series or not series.bars:
@@ -468,8 +474,8 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
             while True:
                 try:
                     page = client.bars.get(full_code, period=period, start=start, count=page_size)
-                except Exception as e:
-                    print(f"[下载警告] {full_code} {period} 分页拉取失败: {e}")
+                except Exception as _e:
+                    print(f"[下载警告] {full_code} {period} 分页拉取失败: {_e}")
                     break
                 if not hasattr(page, "bars") or not page.bars:
                     break
@@ -511,8 +517,8 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
 
             return len(records), 1, max_date_int if max_date_int > 0 else None
 
-    except Exception as e:
-        raise e
+    except Exception:
+        raise
 
 
 def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=None, progress_callback=None):
@@ -617,7 +623,7 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
                             client, task["code"], task["market"],
                             vipdoc_dir, code_prefix=code_prefix,
                             start_date=day_start_str,
-                            progress_callback=progress_callback
+                            _progress_callback=progress_callback
                         )
                     else:  # 5m
                         records, files, max_date = _download_min_kline(
@@ -625,7 +631,7 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
                             task["type"], vipdoc_dir,
                             code_prefix=code_prefix,
                             start_date=min_start_str,
-                            progress_callback=progress_callback
+                            _progress_callback=progress_callback
                         )
                     completed += 1
                     with _download_lock:
@@ -633,8 +639,8 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
                         _download_state["files_written"] += files
                         if max_date and (not _download_state["latest_data_date"] or max_date > _download_state["latest_data_date"]):
                             _download_state["latest_data_date"] = max_date
-                except Exception as e:
-                    err_msg = f"{task['market']}{(task.get('code_prefix') or '')}{task['code']}: {str(e)[:80]}"
+                except Exception as _e:
+                    err_msg = f"{task['market']}{(task.get('code_prefix') or '')}{task['code']}: {str(_e)[:80]}"
                     if completed < 5:  # 只打印前5个错误详情
                         print(f"[下载] 错误: {err_msg}")
                     with _download_lock:
@@ -889,9 +895,9 @@ def _load_pe_ttm_cache():
     try:
         with open(_STOCK_PE_TTM_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+        pe_count = 0
+        idx_count = 0
         if isinstance(data, dict):
-            pe_count = 0
-            idx_count = 0
             for k, v in data.items():
                 if isinstance(v, dict):
                     # 新格式：{"pe_ttm": float, "index": str}
@@ -935,6 +941,7 @@ _AKSHARE_INDEX_MAP = {
     "000300": "沪深300",
     "000905": "中证500",
     "000852": "中证1000",
+    "000688": "科创50",
 }
 
 
@@ -951,22 +958,22 @@ def _fetch_index_belong_from_akshare(timeout=30):
         print("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
         return _index_belong_cache
 
-    def _fetch_one(index_code, index_name):
+    def _fetch_one(_idx_code, _idx_name):
         try:
-            _refresh_status["step"] = f"刷新指数归属: {index_name}..."
-            print(f"[指数归属] 开始获取 {index_name}({index_code})...")
-            df = ak.index_stock_cons_csindex(symbol=index_code)
+            _refresh_status["step"] = f"刷新指数归属: {_idx_name}..."
+            print(f"[指数归属] 开始获取 {_idx_name}({_idx_code})...")
+            df = ak.index_stock_cons_csindex(symbol=_idx_code)
             count = 0
             for _, row in df.iterrows():
                 stock_code = str(row["成分券代码"]).zfill(6)
                 exchange = str(row["交易所"])
                 mkt = _AKSHARE_EXCHANGE_MAP.get(exchange, "")
                 if mkt and stock_code.isdigit() and len(stock_code) == 6:
-                    result[mkt + stock_code] = index_name
+                    result[mkt + stock_code] = _idx_name
                     count += 1
-            print(f"[指数归属] {index_name}({index_code}): 已成功获取 {count}只 成分股")
+            print(f"[指数归属] {_idx_name}({_idx_code}): 已成功获取 {count}只 成分股")
         except Exception as e:
-            print(f"[指数归属] {index_name}({index_code}) 获取失败: {e}")
+            print(f"[指数归属] {_idx_name}({_idx_code}) 获取失败: {e}")
 
     import concurrent.futures
     result = {}
@@ -1036,11 +1043,11 @@ def _refresh_pe_ttm():
     _refresh_status["loaded"] = 0
     print(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
 
-    BATCH_SIZE = 300
+    batch_size = 300
     new_count = 0
     got_set = set()  # 本次成功获取到PE-TTM的代码
-    for i in range(0, total, BATCH_SIZE):
-        batch = codes[i:i + BATCH_SIZE]
+    for i in range(0, total, batch_size):
+        batch = codes[i:i + batch_size]
         q_codes = [f"{mkt}{code}" for mkt, code in batch]
         url = "https://qt.gtimg.cn/q=" + ",".join(q_codes)
         try:
@@ -1068,9 +1075,9 @@ def _refresh_pe_ttm():
                 except (ValueError, TypeError, IndexError):
                     pass
         except Exception as e:
-            print(f"[PE-TTM] 第{i//BATCH_SIZE+1}批失败: {e}")
+            print(f"[PE-TTM] 第{i//batch_size+1}批失败: {e}")
 
-        _refresh_status["loaded"] = min(i + BATCH_SIZE, total)
+        _refresh_status["loaded"] = min(i + batch_size, total)
         print(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
 
     # 统计未获取到的股票
@@ -1249,7 +1256,6 @@ def _fetch_names_from_sina_once(codes_dict):
             a_stock_codes.append((bare_code, market))
 
     filled = 0
-    hk_filled = 0
     batch_size = 50
 
     # === 第一轮：A股 ===
@@ -1303,7 +1309,6 @@ def _fetch_names_from_sina_once(codes_dict):
     # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效） ===
     if hk_codes:
         total_batches = (len(hk_codes) - 1) // batch_size + 1
-        hk_filled = 0
         for i in range(0, len(hk_codes), batch_size):
             batch = hk_codes[i:i+batch_size]
             batch_num = i // batch_size + 1
@@ -1336,7 +1341,6 @@ def _fetch_names_from_sina_once(codes_dict):
                         if name and compound_key in codes_dict:
                             codes_dict[compound_key]["name"] = name
                             filled += 1
-                            hk_filled += 1
             except Exception as e:
                 print(f"[股名刷新]   腾讯港股批次{batch_num}失败: {e}")
             if batch_num < total_batches:
@@ -1511,18 +1515,18 @@ def _refresh_stock_names():
     filtered_empty = 0
     filtered_st = 0
     filtered_delist = 0
-    for code in list(all_names.keys()):
-        name = all_names[code].get("name", "")
+    for _code in list(all_names.keys()):
+        name = all_names[_code].get("name", "")
         if not name:
-            del all_names[code]
+            del all_names[_code]
             filtered_count += 1
             filtered_empty += 1
         elif name.startswith("*ST") or name.startswith("ST"):
-            del all_names[code]
+            del all_names[_code]
             filtered_count += 1
             filtered_st += 1
         elif "退" in name:
-            del all_names[code]
+            del all_names[_code]
             filtered_count += 1
             filtered_delist += 1
     if all_names:
@@ -1752,10 +1756,10 @@ def _fetch_float_mc_from_tencent(stock_list):
     if not codes:
         return {}
     # 腾讯接口限制每次约200-300只，超过则分批
-    BATCH_SIZE = 300
+    batch_size = 300
     all_mv = {}
-    for i in range(0, len(codes), BATCH_SIZE):
-        batch = codes[i:i + BATCH_SIZE]
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i + batch_size]
         url = "https://qt.gtimg.cn/q=" + ",".join(batch)
         try:
             resp = req.get(url, timeout=5)
@@ -1774,7 +1778,7 @@ def _fetch_float_mc_from_tencent(stock_list):
                 except (ValueError, TypeError, IndexError):
                     pass
         except Exception as e:
-            print(f"[流通市值] 腾讯接口第{i//BATCH_SIZE+1}批失败: {type(e).__name__}: {e}")
+            print(f"[流通市值] 腾讯接口第{i//batch_size+1}批失败: {type(e).__name__}: {e}")
     return all_mv
 
 def _update_float_mc_cache(mv_dict):
@@ -1823,7 +1827,6 @@ def _cache_put(key, value):
         elif len(_stocks_analysis_cache) >= _MAX_CACHE_SIZE:
             oldest_key = next(iter(_stocks_analysis_cache))
             _stocks_analysis_cache.pop(oldest_key)
-            import gc
             gc.collect()
             print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
         _stocks_analysis_cache[key] = value
@@ -1931,11 +1934,11 @@ def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
         return None
 
     # 左肩 = 分型合并K线的前一个合并K线
-    left_klc = kl_list.lst[mid_idx - 1]
+    left_klc = kl_list.lst[mid_idx - 1]  # type: ignore[union-attr]
 
     # 取左肩原始K线序列的第一根（最左边）
-    if hasattr(left_klc, 'lst') and left_klc.lst:
-        first_klu = left_klc.lst[0]
+    if hasattr(left_klc, 'lst') and left_klc.lst:  # type: ignore[union-attr]
+        first_klu = left_klc.lst[0]  # type: ignore[union-attr]
     else:
         # 没有包含关系，左肩就是一根原始K线
         first_klu = (left_klc.get_high_peak_klu() or left_klc.get_low_peak_klu())
@@ -2079,7 +2082,6 @@ def _clear_saved_point_time(code, freq):
 
 def _cleanup_all_futures_data():
     """期货切到股票时彻底清理所有期货数据：K线缓存、分析缓存、选点记录"""
-    import gc
     # 1. 清空 CTqSdkAPI 的K线缓存
     if CTqSdkAPI is not None:
         CTqSdkAPI.clear_all_cache()
@@ -2142,7 +2144,7 @@ def _load_annotations():
         try:
             with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
                 _annotations_cache = json.load(f)
-            print(f"[信息] 标注数据已加载: {len(_annotations_cache)} 个条目")
+            # print(f"[信息] 标注数据已加载: {len(_annotations_cache)} 个条目")
         except Exception as e:
             print(f"[警告] 加载标注数据失败: {e}")
             _annotations_cache = {}
@@ -2292,7 +2294,7 @@ def _get_annotated_codes(freq=""):
 _load_annotations()
 
 
-def _calc_futures_white_hline(kl_list, freq, date_fmt):
+def _calc_futures_white_hline(kl_list, _freq, date_fmt):
     """计算期货最新笔的白色横虚线数据（与股票逻辑一致）。
     返回 {"price": float, "start_date": str} 或 None。"""
     white_hline = None
@@ -2304,18 +2306,18 @@ def _calc_futures_white_hline(kl_list, freq, date_fmt):
     if end_klc is None:
         return white_hline
     end_fx_idx = None
-    for idx, klc in enumerate(kl_list.lst):
+    for idx, klc in enumerate(kl_list.lst):  # type: ignore[union-attr]
         if klc is end_klc:
             end_fx_idx = idx
             break
     if end_fx_idx is None or end_fx_idx <= 0:
         return white_hline
-    left_klc = kl_list.lst[end_fx_idx - 1]
-    klc_high = left_klc.high
-    klc_low = left_klc.low
+    left_klc = kl_list.lst[end_fx_idx - 1]  # type: ignore[union-attr]
+    klc_high = left_klc.high  # type: ignore[union-attr]
+    klc_low = left_klc.low  # type: ignore[union-attr]
     tgt_klu = None
-    if hasattr(left_klc, 'lst') and left_klc.lst:
-        for klu in left_klc.lst:
+    if hasattr(left_klc, 'lst') and left_klc.lst:  # type: ignore[union-attr]
+        for klu in left_klc.lst:  # type: ignore[union-attr]
             if direction == "down" and klu.high == klc_high:
                 tgt_klu = klu
                 break
@@ -2323,7 +2325,7 @@ def _calc_futures_white_hline(kl_list, freq, date_fmt):
                 tgt_klu = klu
                 break
         if tgt_klu is None:
-            tgt_klu = left_klc.lst[0]
+            tgt_klu = left_klc.lst[0]  # type: ignore[union-attr]
     if tgt_klu:
         ls_date = tgt_klu.time.toFmtStr(date_fmt)
     else:
@@ -2334,7 +2336,7 @@ def _calc_futures_white_hline(kl_list, freq, date_fmt):
         white_hline = {"price": round(klc_low, 2), "start_date": ls_date}
     return white_hline
 
-def init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
+def init_chan_symbol(api, symbol, _name, freq_sec, freq_label, start_time=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
     start_time: 选点起始时间，有值时只拉取该时间之后的K线"""
@@ -2433,12 +2435,12 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 },
             }
         # 回退：无 klines 时从 chan 框架读取
-        if len(kl_list.lst) == 0:
+        if len(kl_list.lst) == 0:  # type: ignore[union-attr]
             return None
-        last_klc = kl_list.lst[-1]
-        if len(last_klc.lst) == 0:
+        last_klc = kl_list.lst[-1]  # type: ignore[union-attr]
+        if len(last_klc.lst) == 0:  # type: ignore[union-attr]
             return None
-        last_klu = last_klc.lst[-1]
+        last_klu = last_klc.lst[-1]  # type: ignore[union-attr]
         return {
             "type": "tick",
             "kline": {
@@ -2456,8 +2458,8 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
         }
 
     klines_out = []
-    for klc in kl_list.lst:
-        for klu in klc.lst:
+    for klc in kl_list.lst:  # type: ignore[union-attr]
+        for klu in klc.lst:  # type: ignore[union-attr]
             t = klu.time
             klines_out.append({
                 "date": t.toFmtStr(_date_fmt),
@@ -2634,7 +2636,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
 
 
 
-def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None, step=None):
+def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None, step=None, sub_freq=None):
     """
     使用天勤数据源 + chan.py 进行期货/期指缠论分析（静态模式，HTTP 请求）
     与股票分析输出格式一致，便于前端复用同一套图表渲染逻辑。
@@ -2643,6 +2645,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     existing_chan: 双窗口模式下，复用已有的单窗口 CChan 对象（匹配周期则复用）。
     existing_records: 对应 existing_chan 的 records。
     step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期。
+    sub_freq: 双窗口下窗周期。None 时使用默认映射 _FUTURES_DUAL_FREQ_MAP。
     """
     import time
     t_start = time.time()
@@ -2659,6 +2662,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD, FREQ_LABEL_CN
     _display_key = f"{code}:{FREQ_LABEL_CN.get(freq, freq)}"
     _api = None
+    full_records = []
     try:
         _api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
         full_records = fetch_futures_kline(_api, code, freq_sec=freq_sec, display_key=_display_key)
@@ -2719,7 +2723,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     stock_name = _get_futures_name(code)
 
     # 5. 创建 CChan 并消费
-    import gc
     t0 = time.time()
     config = _make_chan_config()
 
@@ -2842,8 +2845,8 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                     b_klu = right_shoulder_klc.lst[-1]
                 if b_klu:
                     fx_b_raw_dt = b_klu.time.toFmtStr(date_fmt)
-            except Exception as e:
-                print(f"[警告] 异常: {type(e).__name__}: {e}")
+            except Exception as _e:
+                print(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
             bi_data.append({
                 "idx": bi.idx,
@@ -3017,7 +3020,9 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
     # 双窗口模式：提取子级别数据（独立 CChan 对象）
     if dual:
-        sub_freq = _FUTURES_DUAL_FREQ_MAP.get(freq)
+        # 优先使用传入的 sub_freq（双窗口周期独立），否则用默认映射
+        if not sub_freq:
+            sub_freq = _FUTURES_DUAL_FREQ_MAP.get(freq)
         if not sub_freq:
             result["error"] = f"双窗口不支持当前周期: {freq}"
             return result
@@ -3025,8 +3030,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         print(f"[双窗口] 开始提取子级别({sub_freq})数据...")
 
         # 检查 existing_chan 是否匹配 sub_freq，匹配则复用
-        sub_chan = None
-        sub_records = None
         if existing_chan is not None and existing_records is not None and freq == sub_freq:
             # existing_chan 匹配的是主周期，子周期需要新建
             pass
@@ -3039,6 +3042,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         t_sub_fetch = time.time()
         _sub_display_key = f"{code}:{FREQ_LABEL_CN.get(sub_freq, sub_freq)}"
         _api_sub = None
+        sub_full_records = []
         try:
             _api_sub = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
             sub_full_records = fetch_futures_kline(_api_sub, code, freq_sec=sub_freq_sec, display_key=_sub_display_key)
@@ -3171,7 +3175,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 
         # 复盘模式：清除旧的双窗口缓存，强制重新加载主级别和子级别
         if end_date:
-            import gc
             with _cache_lock:
                 if main_cache_key in _stocks_analysis_cache:
                     del _stocks_analysis_cache[main_cache_key]
@@ -3421,7 +3424,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             print(f"[信息] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_records)}条")
 
     # 2. 使用 chan.py 进行缠论分析
-    import gc
     # 复盘时：清空缓存恢复原始状态，再重新加载（与选点逻辑一致）
     if end_date and cache_key in _stocks_analysis_cache:
         with _cache_lock:
@@ -3776,11 +3778,11 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         if begin_klu is None:
             continue
         try:
-            sdt_raw = begin_klu.time.to_str()
+            sdt_raw = begin_klu.time.to_str()  # type: ignore[union-attr]
             sdt_dt = datetime.strptime(sdt_raw, "%Y/%m/%d %H:%M")
             star_date = sdt_dt.strftime(date_fmt)
-        except:
-            star_date = sdt_raw
+        except Exception:
+            star_date = ""
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({
@@ -3855,24 +3857,23 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     white_hline = None
     if bi_data:
         latest_bi = bi_data[-1]
-        is_virtual = not latest_bi.get("is_sure", True)
         direction = latest_bi.get("direction", "")
         end_fx_idx = latest_bi.get("end_fx_idx")
         if end_fx_idx is not None and end_fx_idx > 0:
-            left_klc = kl_list.lst[end_fx_idx - 1]
-            klc_high = left_klc.high
-            klc_low = left_klc.low
+            left_klc = kl_list.lst[end_fx_idx - 1]  # type: ignore[union-attr]
+            klc_high = left_klc.high  # type: ignore[union-attr]
+            klc_low = left_klc.low  # type: ignore[union-attr]
             tgt_klu = None
-            if hasattr(left_klc, 'lst') and left_klc.lst:
-                for klu in left_klc.lst:
-                    if direction == "down" and klu.high == klc_high:
-                        tgt_klu = klu
+            if hasattr(left_klc, 'lst') and left_klc.lst:  # type: ignore[union-attr]
+                for _klu in left_klc.lst:  # type: ignore[union-attr]
+                    if direction == "down" and _klu.high == klc_high:
+                        tgt_klu = _klu
                         break
-                    elif direction == "up" and klu.low == klc_low:
-                        tgt_klu = klu
+                    elif direction == "up" and _klu.low == klc_low:
+                        tgt_klu = _klu
                         break
                 if tgt_klu is None:
-                    tgt_klu = left_klc.lst[0]
+                    tgt_klu = left_klc.lst[0]  # type: ignore[union-attr]
             if tgt_klu:
                 ls_date = tgt_klu.time.toFmtStr(date_fmt)
             else:
@@ -3939,8 +3940,8 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 
     # 1. 提取子级别原始K线数据（从 KLU 对象中提取，用于 MACD 计算）
     raw_records = []
-    for klc in sub_kl_list.lst:
-        for klu in klc.lst:
+    for klc in sub_kl_list.lst:  # type: ignore[union-attr]
+        for klu in klc.lst:  # type: ignore[union-attr]
             try:
                 dt = datetime.strptime(klu.time.to_str(), "%Y/%m/%d %H:%M")
             except:
@@ -4088,11 +4089,11 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
         if begin_klu is None:
             continue
         try:
-            sdt_raw = begin_klu.time.to_str()
+            sdt_raw = begin_klu.time.to_str()  # type: ignore[union-attr]
             sdt_dt = datetime.strptime(sdt_raw, "%Y/%m/%d %H:%M")
             star_date = sdt_dt.strftime(date_fmt)
-        except:
-            star_date = sdt_raw
+        except Exception:
+            star_date = ""
         star_price = entry_bi.get_begin_val()
         if entry_bi.is_up():
             zs_stars.append({
@@ -4369,7 +4370,6 @@ def stock_manual_select_point(code, freq='d', bi_idx=-1):
     _saved_point_times[qualified_code][FREQ_TO_COL.get(freq, "")] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
-    import gc
     if cache_key in _stocks_analysis_cache:
         with _cache_lock:
             if cache_key in _stocks_analysis_cache:
@@ -4525,17 +4525,18 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 
 
-def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None):
+def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
     """公开分析入口：先识别市场，再分流到股票或期货的并列内部流程。
     股票/指数：走通达信数据源，支持 cache_chan 和 dual 双窗口。
     期货/期指：走天勤数据源，dual=True 时使用两个独立 CChan 对象。
+    sub_freq: 双窗口下窗周期，仅期货路径使用（None 时用默认映射）。
     """
     market, normalized_code = _get_market_code(code)
     # print(f"[调试-analyze_stock] 输入code={code}, 识别market={market}, normalized_code={normalized_code}")
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
     if market == 'futures':
-        return _analyze_futures_internal(normalized_code, freq=freq, end_date=end_date, dual=dual, step=step)
+        return _analyze_futures_internal(normalized_code, freq=freq, end_date=end_date, dual=dual, step=step, sub_freq=sub_freq)
     stock_code = f"{normalized_code}.{market.upper()}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan, dual=dual, step=step)
 
@@ -4556,7 +4557,7 @@ def _quick_prefilter_pass(market, code):
         # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断）
         try:
             compound_key = ("sh" if market == "1" else "sz" if market == "0" else "bj") + code
-            info = _STOCK_NAMES_CACHE.get(compound_key, {})
+            info = _stock_names_cache.get(compound_key, {})
             name = info.get("name", "") if isinstance(info, dict) else str(info) if info else ""
             if name and (name.startswith("*ST") or name.startswith("ST") or "退" in name):
                 return (False, None, "ST")
@@ -4580,18 +4581,10 @@ def _quick_prefilter_pass(market, code):
 
 
 def _debug_read_page_index_stocks(sector_code):
-    """调试包装：打印 _page_index_code 后调用 get_index_stocks"""
-    print(f"\n[成分股-DEBUG] ========== _debug_read_page_index_stocks 被调用 ==========")
-    print(f"[成分股-DEBUG] _page_index_code = '{sector_code}'")
+    """获取当前页面指数的成分股"""
     if not sector_code:
-        print(f"[成分股-DEBUG] ❌ _page_index_code 为空，返回空列表")
         return []
-    print(f"[成分股-DEBUG] 调用 get_index_stocks('{sector_code}')...")
-    print(f"[成分股-DEBUG] 开始时间: {time.strftime('%H:%M:%S')}")
-    result = get_index_stocks(sector_code)
-    print(f"[成分股-DEBUG] 结束时间: {time.strftime('%H:%M:%S')}")
-    print(f"[成分股-DEBUG] get_index_stocks 返回 {len(result)} 只股票")
-    return result
+    return get_index_stocks(sector_code)
 
 
 def read_tdxhy_l2_indices():
@@ -4640,11 +4633,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
             end_date = params.get("end_date", [""])[0] or None
             step = params.get("step", [None])[0]
             dual = params.get("dual", ["0"])[0] == "1"
+            sub_freq_param = params.get("sub_freq", [""])[0] or None
             if not code:
                 self.send_json_response({"error": "请输入股票代码"}, 400)
                 return
             try:
-                result = analyze_stock(code, freq=freq, end_date=end_date, dual=dual, step=step)
+                result = analyze_stock(code, freq=freq, end_date=end_date, dual=dual, step=step, sub_freq=sub_freq_param)
                 if "error" in result:
                     self.send_json_response(result, 400)
                 else:
@@ -4805,16 +4799,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self.send_json_response({"error": str(e)}, 500)
         elif parsed.path == "/api/scan_stock_list":
-            # 返回股票列表（支持逗号分隔多来源：zxg,sz50,hs300,zz500,zz1000 → 合并去重后返回）
+            # 返回股票列表（支持逗号分隔多来源：zxg,page_index,tdxhy2,tdxhy3 → 合并去重后返回）
             params = parse_qs(parsed.query)
             raw = params.get("source", ["zxg"])[0]
             sources = [s.strip() for s in raw.split(",") if s.strip()]
             _SOURCE_READERS = {
                 "zxg": (read_zxg_stocks, "自选股"),
-                "sz50": (read_sz50_stocks, "上证50"),
-                "hs300": (read_hs300_stocks, "沪深300"),
-                "zz500": (read_zz500_stocks, "中证500"),
-                "zz1000": (read_zz1000_stocks, "中证1000"),
                 "page_index": (
                     lambda: _debug_read_page_index_stocks(_page_index_code),
                     "成分股",
@@ -4832,9 +4822,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     continue
                 read_fn, label = reader
                 stocks = read_fn()
-                if not stocks and src not in ("zxg", "page_index", "tdxhy2", "tdxhy3"):
-                    errors.append(f"{label}板块文件不存在，请先在通达信中创建/下载{label}板块")
-                    continue
                 src_stocks[src] = stocks
             # 合并去重：按出现顺序，非zxg来源优先（zxg先出现 → 后续非zxg覆盖并升级_source）
             merged = []
@@ -4929,7 +4916,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             freq = params.get("freq", ["d"])[0]
             prefix = params.get("prefix", [""])[0]
             recent_str = params.get("recent", ["1"])[0]
-            source = params.get("source", ["zxg"])[0]  # zxg=自选股, sz50=上证50, hs300=沪深300, zz500=中证500, zz1000=中证1000, page_index=成分股
+            source = params.get("source", ["zxg"])[0]  # zxg=自选股, page_index=成分股, tdxhy2=板块指数2, tdxhy3=板块指数3
             scan_mode = params.get("mode", [""])[0]  # "" = 买卖点扫描, "fx_d" = 底分型扫描
             try:
                 recent_days = max(1, int(recent_str))
@@ -5013,14 +5000,14 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     # 均线分类扫描模式：按最新收盘价未攻克的最小周期均线分类
                     # 8条均线 → 9类：类9=全部在均线下(最差)，类1=全部在均线上(最强)
                     if scan_mode == "ma":
-                        MA_PERIODS = [5, 13, 21, 34, 55, 89, 144, 233]
+                        ma_periods = [5, 13, 21, 34, 55, 89, 144, 233]
                         closes = [k.get("close", 0) for k in klines]
                         last_close = closes[-1] if closes else 0
                         ma_category = -1  # -1 表示无法计算（数据不足）
-                        if last_close > 0 and len(closes) >= max(MA_PERIODS):
+                        if last_close > 0 and len(closes) >= max(ma_periods):
                             # 统计收盘价攻克的均线数：对每根均线，若 close >= MA 则攻克
                             conquered = 0
-                            for p in MA_PERIODS:
+                            for p in ma_periods:
                                 ma_val = sum(closes[-p:]) / p
                                 if last_close >= ma_val:
                                     conquered += 1
@@ -5267,7 +5254,6 @@ class ChartHandler(SimpleHTTPRequestHandler):
             with _cache_lock:
                 if cache_key in _stocks_analysis_cache:
                     del _stocks_analysis_cache[cache_key]
-            import gc
             gc.collect()
             self.send_json_response({"ok": True}, 200)
         elif parsed.path == "/api/futures_manual_select_point":
@@ -5469,8 +5455,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     sub_saved = _saved_point_times[qualified_code].get(sub_col_meta, "").strip() or ""
                     if sub_start_time is None and sub_saved:
                         sub_start_time = sub_saved
-            except Exception as e:
-                print(f"[警告] 异常: {type(e).__name__}: {e}")
+            except Exception as _e:
+                print(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
             # 2. 拉取上窗历史 + chan分析
             if _SSE_DEBUG:
@@ -5564,7 +5550,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # 9. 实时循环：壁钟检测周期结束 → 处理N-1 → 推送N-1/N快照
             #
             # 策略：用系统壁钟（datetime.now()）判断K线周期是否结束，不再等天勤的
-            # klines 序列推进信号。天勤免费版 klines 推进延迟约 7 秒，但 klines[-1]
+            # klines 序列推进信号。天勤免费版 klines 推进有秒级延迟（经验观察值，
+            # 非官方数据，实际受行情源/合约/网络影响而波动），但 klines[-1]
             # 的 OHLC 在周期结束后已冻结，可以直接用于缠论计算。
             #
             # 流程：
@@ -5587,6 +5574,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
             sub_last_bar_dt_ns = None
             sub_last_processed_dt_ns = None
             last_debug_print = time.time()
+            _last_diag_print = time.time()  # 双窗口诊断日志节流时间戳
 
             # 性能统计
             t_wait_total = 0.0
@@ -5617,11 +5605,11 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if loop_count == 1 or (loop_count % 50 == 0):
                     chan_last_klu = None
                     try:
-                        chan_kl_list = chan[kl_type]
-                        if chan_kl_list.lst:
-                            last_klc = chan_kl_list.lst[-1]
-                            if last_klc.lst:
-                                chan_last_klu = last_klc.lst[-1]
+                        chan_kl_list = chan[kl_type]  # type: ignore[union-attr]
+                        if chan_kl_list.lst:  # type: ignore[union-attr]
+                            last_klc = chan_kl_list.lst[-1]  # type: ignore[union-attr]
+                            if last_klc.lst:  # type: ignore[union-attr]
+                                chan_last_klu = last_klc.lst[-1]  # type: ignore[union-attr]
                     except Exception as e:
                         print(f"[警告] 异常: {type(e).__name__}: {e}")
                     tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
@@ -5676,6 +5664,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
                     last_bar_dt_ns = dt_ns
                     bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
+                    if _SSE_DIAG:
+                        print(f"[{display_key}] [DIAG][{window_label}] K线完成(klines推进) "
+                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
+                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
+                          f"检测={now.strftime('%H:%M:%S.%f')[:-3]} 滞后{now_ts-bar_theoretical_end:+.2f}s "
+                          f"klines行数={len(klines)}")
                     if _SSE_DEBUG:
                         print(f"[{display_key}] [DIAG] K线完成(klines推进) [{window_label}] "
                           f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
@@ -5715,6 +5709,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     # 壁钟到期
                     completed_row = last_row
                     bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
+                    if _SSE_DIAG:
+                        print(f"[{display_key}] [DIAG][{window_label}] K线完成(壁钟) "
+                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
+                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
+                          f"检测={now.strftime('%H:%M:%S.%f')[:-3]} 滞后{now_ts-bar_theoretical_end:+.2f}s "
+                          f"klines行数={len(klines)} dt_ns={dt_ns} last_bar={last_bar_dt_ns}")
                     if _SSE_DEBUG:
                         print(f"[{display_key}] [DIAG] K线完成(壁钟) [{window_label}]: "
                           f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
@@ -5726,6 +5726,11 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if completed_dt_ns is None:
                     return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
                 if completed_dt_ns == last_processed_dt_ns:
+                    if _SSE_DIAG:
+                        print(f"[{display_key}] [DIAG][{window_label}] 防重拦截: "
+                          f"completed={datetime.fromtimestamp(completed_dt_ns/1e9).strftime('%H:%M:%S')} "
+                          f"== last_processed={datetime.fromtimestamp(last_processed_dt_ns/1e9).strftime('%H:%M:%S')} "
+                          f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]} 快照lastK未更新")
                     return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
                 last_processed_dt_ns = completed_dt_ns
 
@@ -5761,6 +5766,9 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     t_step = time.time() - t_step_start
                     t_step_total += t_step; step_count += 1
                     updated = True
+                    if _SSE_DIAG:
+                        print(f"[{display_key}] [DIAG][{window_label}] step_load耗时={t_step:.3f}s "
+                              f"bar={dt.strftime('%Y-%m-%d %H:%M:%S')}")
                     if _SSE_DEBUG:
                         print(f"[{display_key}] 完成新K线[{source}] [{window_label}]: "
                           f"{dt.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -5791,6 +5799,12 @@ class ChartHandler(SimpleHTTPRequestHandler):
                         _date_fmt = _get_date_fmt(main_freq)
                         snapshot['white_hline'] = _calc_futures_white_hline(_kl_list, main_freq, _date_fmt)
                     cached_snapshot = snapshot
+                    if _SSE_DIAG:
+                        _exk = cached_snapshot.get('klines', [])
+                        _lastd = _exk[-1]['date'] if _exk else "无"
+                        print(f"[{display_key}] [DIAG][{window_label}] updated分支完成: "
+                          f"completed={dt.strftime('%H:%M:%S')} 追加预览bar={_next_ds} "
+                          f"快照lastK.date={_lastd} kline_count={cached_snapshot.get('meta',{}).get('kline_count')}")
 
                 return updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
 
@@ -5801,8 +5815,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     api.wait_update(deadline=time.time() * 1e9 + 100_000_000)
                     t_wait = time.time() - t_wait_start
                     t_wait_total += t_wait
-                except Exception as e:
-                    print(f"[{display_key}] wait_update 异常: {e}")
+                except Exception as _e:
+                    print(f"[{display_key}] wait_update 异常: {_e}")
                     time.sleep(0.5)
                     continue
 
@@ -5819,17 +5833,67 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 now = datetime.now()
                 now_ts = now.timestamp()
 
-                # 处理上窗
-                main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
-                    _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
-                                        main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,
-                                        is_main=True, window_label="上窗")
-
-                # 处理下窗
+                # 处理下窗（次级别优先：区间套分析需先分析次级别）
+                _t_sub0 = time.time()
                 sub_updated, sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns, sub_need_tick = \
                     _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
                                         sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns,
                                         is_main=False, window_label="下窗")
+                _t_sub = time.time() - _t_sub0
+
+                # 处理上窗
+                _t_main0 = time.time()
+                main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
+                    _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
+                                        main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,
+                                        is_main=True, window_label="上窗")
+                _t_main = time.time() - _t_main0
+
+                if _SSE_DIAG and now_ts - _last_diag_print >= 2.0:
+                    _last_diag_print = now_ts
+                    # 诊断：复现前端“00:00+灰色”判定——快照klines[-1]是否已过期(理论结束时刻<现在)
+                    def _diag_lastk_lag(snap, label, freq_sec):
+                        try:
+                            if not snap or not snap.get('klines'):
+                                return
+                            lastK = snap['klines'][-1]
+                            dstr = lastK.get('date', '')
+                            if not dstr:
+                                return
+                            for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                                try:
+                                    kstart = datetime.strptime(dstr, fmt).timestamp()
+                                    break
+                                except ValueError:
+                                    continue
+                            else:
+                                return
+                            kend = kstart + freq_sec
+                            lag = now_ts - kend
+                            flag = "<== 已过期(前端将显示00:00+灰色)" if lag > 0 else ""
+                            print(f"[{display_key}] [DIAG][{label}] lastK={dstr} 剩余{(-lag):.1f}s "
+                                  f"过期({lag:+.1f}s) {flag}")
+                        except Exception as _e:
+                            print(f"[{display_key}] [DIAG][{label}] 解析异常: {_e}")
+                    print(f"[{display_key}] [DIAG] 单轮耗时: 下窗={_t_sub:.3f}s 上窗={_t_main:.3f}s 总={_t_sub+_t_main:.3f}s")
+                    _diag_lastk_lag(sub_cached_snapshot, "下窗", sub_freq_sec)
+                    _diag_lastk_lag(main_cached_snapshot, "上窗", main_freq_sec)
+                    # 诊断：天勤 klines[-1] 相对 last_bar_dt_ns 是否推进（推进=True 才会触发K线完成updated）
+                    try:
+                        for _kl, _lbd, _lab in ((sub_klines, sub_last_bar_dt_ns, "下窗"),
+                                                (main_klines, main_last_bar_dt_ns, "上窗")):
+                            if len(_kl) == 0:
+                                continue
+                            _ldt = _kl.iloc[-1].get("datetime")
+                            if _ldt is None:
+                                continue
+                            _ldt_s = datetime.fromtimestamp(_ldt/1e9).strftime('%H:%M:%S')
+                            _lbd_s = datetime.fromtimestamp(_lbd/1e9).strftime('%H:%M:%S') if _lbd else "None"
+                            _pushed = (_ldt != _lbd)
+                            print(f"[{display_key}] [DIAG][{_lab}] tqsdk klines[-1]={_ldt_s} "
+                                  f"last_bar_dt_ns={_lbd_s} 推进={_pushed}")
+                    except Exception as _e:
+                        print(f"[{display_key}] [DIAG] klines推进解析异常: {_e}")
 
                 # 推送：tick模式或K线完成模式
                 if main_need_tick or sub_need_tick:
@@ -5987,8 +6051,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                           f"笔{init_data['meta']['bi_count']}, "
                           f"中枢{init_data['meta']['zs_count']}, "
                           f"耗时 {time.time()-t0:.1f}s")
-            except Exception as e:
-                err = json.dumps({"error": f"快照提取失败: {e}", "symbol": symbol})
+            except Exception as _e:
+                err = json.dumps({"error": f"快照提取失败: {_e}", "symbol": symbol})
                 self.wfile.write(f"event: init\ndata: {err}\n\n".encode("utf-8"))
                 self.wfile.flush()
                 return
@@ -5996,7 +6060,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
             # === 3. 实时循环：壁钟检测周期结束 → 处理N-1 → 推送N-1/N快照 ===
             #
             # 策略：用系统壁钟（datetime.now()）判断K线周期是否结束，不再等天勤的
-            # klines 序列推进信号。天勤免费版 klines 推进延迟约 7 秒，但 klines[-1]
+            # klines 序列推进信号。天勤免费版 klines 推进有秒级延迟（经验观察值，
+            # 非官方数据，实际受行情源/合约/网络影响而波动），但 klines[-1]
             # 的 OHLC 在周期结束后已冻结，可以直接用于缠论计算。
             #
             # 流程：
@@ -6030,8 +6095,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     api.wait_update(deadline=time.time() * 1e9 + 100_000_000)
                     t_wait = time.time() - t_wait_start
                     t_wait_total += t_wait
-                except Exception as e:
-                    print(f"[{display_key}] wait_update 异常: {e}")
+                except Exception as _e:
+                    print(f"[{display_key}] wait_update 异常: {_e}")
                     time.sleep(0.5)
                     continue
 
@@ -6061,13 +6126,13 @@ class ChartHandler(SimpleHTTPRequestHandler):
                 if loop_count == 1 or (loop_count % 50 == 0):
                     chan_last_klu = None
                     try:
-                        chan_kl_list = chan[kl_type]
-                        if chan_kl_list.lst:
-                            last_klc = chan_kl_list.lst[-1]
-                            if last_klc.lst:
-                                chan_last_klu = last_klc.lst[-1]
-                    except Exception as e:
-                        print(f"[警告] 异常: {type(e).__name__}: {e}")
+                        chan_kl_list = chan[kl_type]  # type: ignore[union-attr]
+                        if chan_kl_list.lst:  # type: ignore[union-attr]
+                            last_klc = chan_kl_list.lst[-1]  # type: ignore[union-attr]
+                            if last_klc.lst:  # type: ignore[union-attr]
+                                chan_last_klu = last_klc.lst[-1]  # type: ignore[union-attr]
+                    except Exception as _e:
+                        print(f"[警告] 异常: {type(_e).__name__}: {_e}")
                     tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
                     chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
                     if _SSE_DEBUG:
@@ -6177,8 +6242,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                                     tick_count += 1
                         except (BrokenPipeError, ConnectionResetError, OSError):
                             return
-                        except Exception as e:
-                            print(f"[警告] 异常: {type(e).__name__}: {e}")
+                        except Exception as _e:
+                            print(f"[警告] 异常: {type(_e).__name__}: {_e}")
                         continue
                     # 壁钟到期，当前K线（klines[-1]）已冻结
                     completed_row = last_row
@@ -6229,8 +6294,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                     try:
                         for _snapshot in chan.step_load():
                             pass
-                    except Exception as e:
-                        print(f"[{display_key}] step_load 异常: {e}")
+                    except Exception as _e:
+                        print(f"[{display_key}] step_load 异常: {_e}")
                     t_step = time.time() - t_step_start
                     t_step_total += t_step
                     step_count += 1
@@ -6278,8 +6343,8 @@ class ChartHandler(SimpleHTTPRequestHandler):
                           f"(append+step_load={time.time()-t_append:.3f}s)")
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     return
-                except Exception as e:
-                    print(f"[{display_key}] 推送异常: {e}")
+                except Exception as _e:
+                    print(f"[{display_key}] 推送异常: {_e}")
 
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
@@ -6532,6 +6597,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         .crosshair-info .label { color: #8892b0; }
         .crosshair-info .up { color: #FF4444; }
         .crosshair-info .down { color: #00DD00; }
+        .ma-tooltip {
+            position: absolute; pointer-events: none; z-index: 20;
+            display: none; background: #16213e;
+            color: #e0e0e0; font-size: 12px; font-family: monospace;
+            padding: 6px 12px; border-radius: 4px;
+            white-space: nowrap;
+            border: 1px solid #0f3460;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        }
         .legend {
             position: fixed; bottom: 16px; left: 20px;
             display: flex; gap: 16px; padding: 8px 16px;
@@ -7060,6 +7134,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
     <div id="chart-container">
         <div class="crosshair-info" id="crosshair-info"></div>
+        <div class="ma-tooltip" id="ma-tooltip"></div>
     </div>
     <div class="range-slider" id="range-slider">
         <div class="range-slider-track" id="slider-track">
@@ -7387,6 +7462,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _isMirrorMode = false;
         // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
         let _restartEnabled = false;
+        // K线倒计时进度条（快期3风格：右上角红色进度条+剩余时间）
+        let _countdownTimer = null;
         let dualSubIsDragging = false, dualSubDragStartX = 0, dualSubDragStartOffset = 0;
         let dualSubMouseDownX = 0, dualSubMouseDownY = 0; // 底部窗口点击坐标
         let _subCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
@@ -7524,6 +7601,17 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (mainFreq === '5m') return '1m';
             if (mainFreq === '1m') return '15s';
             return null; // 5m(股票)/15s(期货)无对应
+        }
+        // 周期级别：数值越大级别越高（w=6 > d=5 > 30m=4 > 5m=3 > 1m=2 > 15s=1）
+        // 用于双窗口校验：下窗周期级别必须严格小于上窗周期级别
+        function freqLevel(freq) {
+            const levels = {'w': 6, 'd': 5, '30m': 4, '5m': 3, '1m': 2, '15s': 1};
+            return levels[freq] || 0;
+        }
+        // 周期中文标签（用于弹窗提示）
+        function freqLabel(freq) {
+            const labels = {'w': '周线', 'd': '日线', '30m': '30分钟', '5m': '5分钟', '1m': '1分钟', '15s': '15秒'};
+            return labels[freq] || freq;
         }
         // 双窗口：获取上面窗口某根K线对应的灰框边界（子级别K线时间字符串）
         // 通用方案：利用相邻K线时间，不依赖周期长度假设
@@ -7775,24 +7863,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             document.getElementById('btn-15s').disabled = !isFutures;
             // 共享周期：30m 始终启用
             document.getElementById('btn-30m').disabled = false;
-            // 5m: 股票双窗口→禁用(无下级)，期货双窗口→启用(5m→1m)
+            // 5m: 股票双窗口→禁用(无下级)，期货双窗口→全部启用（上下窗解耦）
             if (isDualWindow && isFutures) {
                 document.getElementById('btn-5m').disabled = false;
-                document.getElementById('btn-15s').disabled = true;  // 期货双窗口：15s永远禁用
+                // 期货双窗口：上下窗独立切换，15s不再禁用
             } else if (isDualWindow && !isFutures) {
                 document.getElementById('btn-5m').disabled = true;
             } else {
                 document.getElementById('btn-5m').disabled = false;
             }
-            // 同步 active 状态
+            // 同步 active 状态：双窗口下根据焦点窗口决定高亮
             document.querySelectorAll('.freq-btn').forEach(b => b.classList.remove('active'));
-            const activeBtn = document.getElementById('btn-' + currentFreq);
+            const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
+            const activeBtn = document.getElementById('btn-' + highlightFreq);
             if (activeBtn) activeBtn.classList.add('active');
         }
 
         // 判断是否为期货/期指代码
         function isFuturesCode(code) {
-            return code.includes('KQ.m@') || code.includes('KQ.i@') || /^[A-Z]+\.[A-Z]/.test(code);
+            return code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code);
         }
         // 保存当前状态到 localStorage（仅股票，仅单窗口非复盘模式）
         function saveLastState() {
@@ -8209,25 +8298,20 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!klines.length) return { min: 0, max: 100 };
             let min = Infinity, max = -Infinity;
             klines.forEach(k => { if (k.low < min) min = k.low; if (k.high > max) max = k.high; });
-            // 翻转视图+对数坐标：价格已取负，用绝对值构建范围（与同花顺行为一致）
-            if (_logScale && _isMirrorMode) {
-                let absMin = Infinity, absMax = -Infinity;
-                klines.forEach(k => {
-                    const al = Math.abs(k.low), ah = Math.abs(k.high);
-                    if (al < absMin) absMin = al;
-                    if (ah > absMax) absMax = ah;
-                });
-                const margin = (absMax - absMin) * 0.05;
-                return { min: absMin - margin, max: absMax + margin };
+            // 对数坐标系（翻转视图不改变价格范围，镜像与非镜像共用同一逻辑）：
+            //   全正 → log空间计算margin；存在非正价（前复权）→ 回退线性，避免log(<=0)无定义
+            if (_logScale) {
+                if (min <= 0) {
+                    const margin = (max - min) * 0.05;
+                    return { min: min - margin, max: max + margin };
+                }
+                const logMin = Math.log(min);
+                const logMax = Math.log(max);
+                const logMargin = (logMax - logMin) * 0.05;
+                return { min: Math.exp(logMin - logMargin), max: Math.exp(logMax + logMargin) };
             }
             const margin = (max - min) * 0.05;
-            min = min - margin;
-            max = max + margin;
-            // 对数坐标系要求价格为正（价格为0或负时无法取对数，退化为普通坐标的range）
-            if (_logScale && min <= 0) {
-                min = 0.001;
-            }
-            return { min: min, max: max };
+            return { min: min - margin, max: max + margin };
         }
 
         function getMacdRange(klines) {
@@ -8269,129 +8353,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             return { min: 0, max: max * 1.05 };
         }
 
-        // 翻转视图：对数据做镜像变换（价格取负 + high/low互换 + 方向取反）
-        // 变换后所有绘制函数自动正确：涨K线变跌K线、MACD红柱变绿柱、笔/中枢方向自动镜像
-        function _mirrorChartData(data) {
-            if (!data) return data;
-            // 浅拷贝顶层，klines/bis等数组深拷贝（不能修改原始缓存）
-            var m = Object.assign({}, data);
-            // K线: open→-open, close→-close, high↔low互换取负, macd/dif/dea取负
-            m.klines = (data.klines || []).map(function(k) {
-                var nk = Object.assign({}, k);
-                nk.open = -k.open;
-                nk.close = -k.close;
-                nk.high = -k.low;   // 原low取负 → 新high
-                nk.low = -k.high;   // 原high取负 → 新low
-                if (k.dif !== undefined) nk.dif = -k.dif;
-                if (k.dea !== undefined) nk.dea = -k.dea;
-                if (k.macd !== undefined) nk.macd = -k.macd;
-                return nk;
-            });
-            // 笔: direction up↔down, 价格取负, high↔low互换
-            m.bis = (data.bis || []).map(function(b) {
-                var nb = Object.assign({}, b);
-                nb.direction = b.direction === 'up' ? 'down' : 'up';
-                nb.fx_a_price = -b.fx_a_price;
-                nb.fx_b_price = -b.fx_b_price;
-                nb.high = -b.low;
-                nb.low = -b.high;
-                return nb;
-            });
-            // 分型: mark G↔D, price取负, high↔low互换
-            m.fxs = (data.fxs || []).map(function(f) {
-                var nf = Object.assign({}, f);
-                nf.mark = f.mark === 'G' ? 'D' : 'G';
-                nf.price = -f.price;
-                nf.high = -f.low;
-                nf.low = -f.high;
-                return nf;
-            });
-            // 中枢: zg↔zd互换取负, gg↔dd互换取负, dir up↔down
-            m.zs = (data.zs || []).map(function(z) {
-                var nz = Object.assign({}, z);
-                nz.zg = -z.zd;
-                nz.zd = -z.zg;
-                nz.gg = -z.dd;
-                nz.dd = -z.gg;
-                nz.dir = z.dir === 'up' ? 'down' : 'up';
-                return nz;
-            });
-            // 线段: direction up↔down, 价格取负, high↔low互换
-            m.segs = (data.segs || []).map(function(s) {
-                var ns = Object.assign({}, s);
-                ns.direction = s.direction === 'up' ? 'down' : 'up';
-                ns.begin_price = -s.begin_price;
-                ns.end_price = -s.end_price;
-                ns.high = -s.low;
-                ns.low = -s.high;
-                return ns;
-            });
-            // 买卖点: is_buy取反, 价格取负, high↔low互换
-            m.bsps = (data.bsps || []).map(function(b) {
-                var nb = Object.assign({}, b);
-                nb.is_buy = !b.is_buy;
-                nb.price = -b.price;
-                nb.high = -b.low;
-                nb.low = -b.high;
-                return nb;
-            });
-            // 中枢星标: price取负, mark G↔D, color red↔green
-            m.zs_stars = (data.zs_stars || []).map(function(s) {
-                var ns = Object.assign({}, s);
-                ns.price = -s.price;
-                ns.mark = s.mark === 'G' ? 'D' : 'G';
-                ns.color = s.color === 'red' ? 'green' : 'red';
-                return ns;
-            });
-            // 白色水平线: price取负
-            if (data.white_hline) {
-                m.white_hline = Object.assign({}, data.white_hline);
-                m.white_hline.price = -data.white_hline.price;
-            }
-            return m;
-        }
+        // _mirrorChartData 已废弃：翻转视图改为纯视图变换（priceToY 翻转Y轴），
+        // 不再对数据取负，前复权负价原样保留显示。颜色/MACD/方向翻转由各 draw 函数显式处理。
 
-        // 反转模式下的价格显示：取绝对值
+        // 价格显示：原样输出（含负号），翻转模式下不取绝对值
         function _fmtPrice(p) {
-            return (_isMirrorMode ? Math.abs(p) : p).toFixed(2);
+            return p.toFixed(2);
         }
 
         function priceToY(price, area, priceRange) {
-            if (_logScale && _isMirrorMode) {
-                // 反转+对数：价格已取负，用绝对值参与对数计算，并反转Y轴映射
-                // 高绝对值→底部，低绝对值→顶部（与同花顺翻转坐标行为一致）
-                const absPrice = Math.abs(price);
+            // 翻转视图：仅翻转Y轴方向，价格原值参与计算（含前复权负价）。
+            // 对数模式要求 priceRange.min>0（由 getPriceRange 保证：有非正价时回退线性）。
+            if (_logScale && priceRange.min > 0) {
                 const logMin = Math.log(priceRange.min);
                 const logMax = Math.log(priceRange.max);
-                const logPrice = Math.log(absPrice);
-                return area.y + (logPrice - logMin) / (logMax - logMin) * area.h;
+                const logPrice = Math.log(price);
+                const ratio = (logPrice - logMin) / (logMax - logMin);
+                return _isMirrorMode ? area.y + ratio * area.h : area.y + area.h - ratio * area.h;
             }
-            if (_logScale) {
-                // 对数坐标系：价格取对数后线性映射（价格必须为正，否则回退到range.min）
-                const safePrice = (price > 0) ? price : priceRange.min;
-                const logMin = Math.log(priceRange.min);
-                const logMax = Math.log(priceRange.max);
-                const logPrice = Math.log(safePrice);
-                return area.y + area.h - (logPrice - logMin) / (logMax - logMin) * area.h;
-            }
-            return area.y + area.h - (price - priceRange.min) / (priceRange.max - priceRange.min) * area.h;
+            const ratio = (price - priceRange.min) / (priceRange.max - priceRange.min);
+            return _isMirrorMode ? area.y + ratio * area.h : area.y + area.h - ratio * area.h;
         }
 
         function yToPrice(y, area, priceRange) {
-            if (_logScale && _isMirrorMode) {
-                // 反转+对数：Y轴映射已反转，ratio从顶部算起，返回负值匹配镜像数据
+            if (_logScale && priceRange.min > 0) {
                 const logMin = Math.log(priceRange.min);
                 const logMax = Math.log(priceRange.max);
-                const ratio = (y - area.y) / area.h;
-                return -Math.exp(logMin + ratio * (logMax - logMin));
-            }
-            if (_logScale) {
-                const logMin = Math.log(priceRange.min);
-                const logMax = Math.log(priceRange.max);
-                const ratio = (area.y + area.h - y) / area.h;
+                const ratio = _isMirrorMode ? (y - area.y) / area.h : (area.y + area.h - y) / area.h;
                 return Math.exp(logMin + ratio * (logMax - logMin));
             }
-            return priceRange.min + (area.y + area.h - y) / area.h * (priceRange.max - priceRange.min);
+            const ratio = _isMirrorMode ? (y - area.y) / area.h : (area.y + area.h - y) / area.h;
+            return priceRange.min + ratio * (priceRange.max - priceRange.min);
         }
 
         /**
@@ -8477,10 +8469,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function _renderChart(data, freq, vOffset, vCount, mX, mY, highlightRange, redRange) {
             if (!data || !ctx) return;
-            // 翻转视图模式：对数据做镜像变换（不修改原始缓存，仅影响渲染）
-            if (_isMirrorMode) {
-                data = _mirrorChartData(data);
-            }
+            // 翻转视图：纯视图变换（Y轴方向翻转），不修改数据。
+            // 负价（前复权）原样保留；K线/成交量/MACD/中枢/买卖点的颜色与方向翻转
+            // 由各 draw 函数依据 _isMirrorMode 显式处理。
             // 临时覆盖全局变量供绘制函数使用
             const _savedViewOffset = viewOffset, _savedViewCount = viewCount;
             const _savedMouseX = mouseX, _savedMouseY = mouseY;
@@ -8510,6 +8501,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
             const barWidth = Math.max(1, (area.w / effectiveCount) * 0.7);
             const barStep = area.w / effectiveCount;
+            const MACD_BAR_WIDTH = 2;  // MACD红绿柱固定宽度，不随K线缩放变化
             const subPixelOffset = (viewOffset - Math.floor(viewOffset)) * barStep;
             // 双窗口红框：笔外沿区间（分型左肩→右肩，跳过中间灰框部分）
             // 调试：记录到全局状态供侧边调试面板读取（保留 calcRedRange 之前设置的原因）
@@ -8594,7 +8586,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (_showVolume) {
                 drawVolume(klinesToDraw, volArea, volRange, barStep, barWidth, subPixelOffset);
             } else {
-                drawMacd(klinesToDraw, volArea, macdRange, barStep, barWidth / 2, subPixelOffset);
+                drawMacd(klinesToDraw, volArea, macdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);
             }
             // 区间选择高亮：绘制起点A的金色标记
             if (_rangeSelect.mode === 'SELECTED_A' && _rangeSelect.startFreq === currentFreq && chartData && _rangeSelect.startSymbol === chartData.meta.symbol) {
@@ -8648,43 +8640,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 drawMacdAxis(volArea, macdRange);
             }
             drawDateAxis(klinesToDraw, barStep, subPixelOffset);
-            if (_overlayData) {
-                if (_overlayData.rightPrice !== undefined) {
-                    const labelW = 50;
-                    ctx.fillStyle = "#dcdcdc"; ctx.fillRect(area.x + area.w + 2, _overlayData.rightY - 10, labelW, 20);
-                    ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-                    ctx.fillText(_overlayData.rightPrice, area.x + area.w + 6, _overlayData.rightY + 4);
-                }
-                if (_overlayData.bottomText) {
-                    const d = _overlayData;
-                    ctx.fillStyle = "#dcdcdc";
-                    ctx.fillRect(d.bottomX, d.bottomY, d.bottomW + d.bottomPad * 2, d.bottomH);
-                    ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
-                    // 跌时分段绘制：回本百分比用红色
-                    if (d.bottomIsDown) {
-                        const txt = d.bottomText;
-                        const lastParen = txt.lastIndexOf(")");
-                        if (lastParen > 0) {
-                            const before = txt.substring(0, lastParen);
-                            const after = txt.substring(lastParen);
-                            // 找回本部分：最后一个 /+XX.XX%
-                            const slashIdx = before.lastIndexOf("/+");
-                            if (slashIdx > 0) {
-                                ctx.fillText(before.substring(0, slashIdx), d.bottomX + d.bottomPad, d.bottomY + 13);
-                                const prefixW = ctx.measureText(before.substring(0, slashIdx)).width;
-                                ctx.fillStyle = "#fd1050";
-                                ctx.fillText(before.substring(slashIdx) + after, d.bottomX + d.bottomPad + prefixW, d.bottomY + 13);
-                            } else {
-                                ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
-                            }
-                        } else {
-                            ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
-                        }
-                    } else {
-                        ctx.fillText(d.bottomText, d.bottomX + d.bottomPad, d.bottomY + 13);
-                    }
-                }
-            }
+            drawCountdownBar(area);
+            _drawOverlayIfNeeded(_overlayData, area);
             // 双窗口：在所有绘制完成后，画视口外指示箭头（确保不被覆盖）
             if (offscreenIndicator) {
                 const arrowSize = 10;
@@ -8862,9 +8819,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 双窗口新模式：红框出现后，请求用红框内笔计算新中枢
         function updateDualNewZs() {
-            console.log("[updateDualNewZs] 进入: isDualWindow=" + isDualWindow + " dualSubData=" + !!dualSubData + " dualHighlightRange=" + !!dualHighlightRange);
             if (!isDualWindow || !dualSubData || !dualHighlightRange) {
-                console.log("[updateDualNewZs] 条件1失败: isDualWindow/dualSubData/dualHighlightRange 为空");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -8872,9 +8827,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 return;
             }
             const rr = dualHighlightRange.redRange;
-            console.log("[updateDualNewZs] redRange=" + !!rr + " highlightRange keys=" + Object.keys(dualHighlightRange).join(","));
             if (!rr) {
-                console.log("[updateDualNewZs] 条件2失败: redRange为空");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -8883,15 +8836,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             const aIdx = rr.aIdx;
             const bIdx = rr.bIdx;
-            console.log("[updateDualNewZs] aIdx=" + aIdx + " bIdx=" + bIdx);
             if (aIdx === undefined || bIdx === undefined) {
-                console.log("[updateDualNewZs] 条件3失败: aIdx或bIdx为undefined");
                 return;
             }
             // 红框对应的灰框区间不在当前下面窗口视口内时，不切换新中枢
-            console.log("[updateDualNewZs] isVisible=" + dualHighlightRange.isVisible);
             if (!dualHighlightRange.isVisible) {
-                console.log("[updateDualNewZs] 条件4失败: 不在视口内");
                 if (dualShowNewZs) {
                     dualShowNewZs = false;
                     dualNewZsData = null;
@@ -8902,17 +8851,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const subKlines = dualSubData.klines;
             const leftDate = subKlines[aIdx].date;
             const rightDate = subKlines[bIdx].date;
-            console.log("[updateDualNewZs] leftDate=" + leftDate + " rightDate=" + rightDate + " freq=" + dualSubFreq);
             const requestKey = dualSubFreq + ":" + leftDate + ":" + rightDate;
             if (dualNewZsFailedKey === requestKey) {
-                console.log("[updateDualNewZs] 条件5失败: 请求已失败过, key=" + requestKey);
                 return;
             }
             if (dualShowNewZs && dualNewZsLeftDate === leftDate && dualNewZsRightDate === rightDate) {
-                console.log("[updateDualNewZs] 条件6: 已缓存相同请求, 跳过");
                 return;
             }
-            console.log("[updateDualNewZs] >>> 发送fetch请求到 /api/red_range_zs");
             dualNewZsLeftDate = leftDate;
             dualNewZsRightDate = rightDate;
             dualShowNewZs = true;
@@ -8957,7 +8902,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function drawGrid(area, range) {
             ctx.strokeStyle = COLORS.grid; ctx.lineWidth = 1;
-            if (_logScale) {
+            if (_logScale && range.min > 0) {
                 // 等比坐标：网格线按对数均匀分布，视觉上"下密上疏"
                 const logMin = Math.log(range.min);
                 const logMax = Math.log(range.max);
@@ -8983,48 +8928,64 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const closeY = priceToY(k.close, area, priceRange);
                 const highY = priceToY(k.high, area, priceRange);
                 const lowY = priceToY(k.low, area, priceRange);
+                // 翻转视图下Y轴反转，highY和lowY视觉位置互换：visTop始终是视觉顶部
+                const visTop = _isMirrorMode ? lowY : highY;
+                const visBot = _isMirrorMode ? highY : lowY;
                 const bodyTop = Math.min(openY, closeY);
                 const bodyH = Math.max(1, Math.abs(closeY - openY));
 
                 if (k.close === k.open) {
                     // 收盘价等于开盘价，画十字线（竖线+横线，宽度一致）
                     ctx.fillStyle = "#FFFFFF";
-                    ctx.fillRect(x - 0.5, highY, 1, lowY - highY);          // 竖线：上影线到下影线
+                    ctx.fillRect(x - 0.5, visTop, 1, visBot - visTop);          // 竖线：上影线到下影线
                     ctx.fillRect(x - barWidth / 2, closeY - 0.5, barWidth, 1); // 横线：在收盘价位置，与竖线同宽
-                } else if (k.close > k.open) {
-                    ctx.fillStyle = "#FF4444";
-                    if (highY < bodyTop) {
-                        ctx.fillRect(x - 0.5, highY, 1, bodyTop - highY);
-                    }
-                    if (bodyTop + bodyH < lowY) {
-                        ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, lowY - bodyTop - bodyH);
-                    }
-                    ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
-                    ctx.strokeRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
                 } else {
-                    ctx.fillStyle = "#54fcfc";
-                    ctx.fillRect(x - 0.5, highY, 1, lowY - highY);
-                    ctx.fillRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
-                    ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, lowY - bodyTop - bodyH);
+                    // 翻转视图下颜色与空心/实心样式对调：原阳线(涨)显示为阴线样式，原阴线(跌)显示为阳线样式
+                    const drawAsRise = _isMirrorMode ? (k.close < k.open) : (k.close > k.open);
+                    if (drawAsRise) {
+                        // 阳线样式：空心红
+                        ctx.fillStyle = "#FF4444";
+                        if (visTop < bodyTop) {
+                            ctx.fillRect(x - 0.5, visTop, 1, bodyTop - visTop);
+                        }
+                        if (bodyTop + bodyH < visBot) {
+                            ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, visBot - bodyTop - bodyH);
+                        }
+                        ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
+                        ctx.strokeRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
+                    } else {
+                        // 阴线样式：实心青
+                        ctx.fillStyle = "#54fcfc";
+                        ctx.fillRect(x - 0.5, visTop, 1, visBot - visTop);
+                        ctx.fillRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
+                        ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, visBot - bodyTop - bodyH);
+                    }
                 }
             });
         }
 
         function drawMacd(klines, macdArea, macdRange, barStep, barWidth, subPixelOffset) {
-            const zeroY = macdArea.y + macdArea.h * (macdRange.max / (macdRange.max - macdRange.min));
+            // 翻转视图：MACD柱绕零线翻转（正柱→零线下方），颜色对调；dif/dea线Y轴翻转
+            const range = macdRange.max - macdRange.min;
+            const macdToY = (v) => _isMirrorMode
+                ? macdArea.y + (v - macdRange.min) / range * macdArea.h
+                : macdArea.y + macdArea.h - (v - macdRange.min) / range * macdArea.h;
+            // 零线Y坐标：用 macdToY(0) 统一计算，翻转模式下自动翻转（与dif/dea线一致）
+            const zeroY = macdToY(0);
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
                 const isUp = k.macd >= 0;
-                ctx.fillStyle = isUp ? COLORS.macdUp : COLORS.macdDown;
-                const macdH = Math.abs(k.macd) / (macdRange.max - macdRange.min) * macdArea.h;
-                const y = k.macd >= 0 ? zeroY - macdH : zeroY;
+                ctx.fillStyle = (_isMirrorMode ? !isUp : isUp) ? COLORS.macdUp : COLORS.macdDown;
+                const macdH = Math.abs(k.macd) / range * macdArea.h;
+                const y = isUp ? (_isMirrorMode ? zeroY : zeroY - macdH)
+                               : (_isMirrorMode ? zeroY - macdH : zeroY);
                 ctx.fillRect(x - barWidth / 2, y, barWidth, macdH);
             });
             ctx.strokeStyle = COLORS.dif; ctx.lineWidth = 1;
             ctx.beginPath();
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const y = macdArea.y + macdArea.h - (k.dif - macdRange.min) / (macdRange.max - macdRange.min) * macdArea.h;
+                const y = macdToY(k.dif);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             });
             ctx.stroke();
@@ -9032,7 +8993,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             ctx.beginPath();
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const y = macdArea.y + macdArea.h - (k.dea - macdRange.min) / (macdRange.max - macdRange.min) * macdArea.h;
+                const y = macdToY(k.dea);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             });
             ctx.stroke();
@@ -9046,10 +9007,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             //   绿柱（跌）= 实心，颜色 #54fcfc，与阴K线一致
             klines.forEach((k, i) => {
                 const x = volArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const isUp = k.close > k.open;
+                // 翻转视图：颜色与空心/实心样式对调（与drawCandles一致）
+                const drawAsRise = _isMirrorMode ? (k.close < k.open) : (k.close > k.open);
                 const volH = (getVolMetric(k) / volRange.max) * volArea.h;
+                // 成交量(额)恒为正值，柱子始终从底部向上生长，翻转视图下不翻转柱方向（仅翻转颜色）
                 const y = volArea.y + volArea.h - volH;
-                if (isUp) {
+                if (drawAsRise) {
                     // 红柱：空心，只画边框
                     ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
                     ctx.strokeRect(x - barWidth / 2, y, barWidth, volH);
@@ -9097,7 +9060,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ctx.fillStyle = "#fddd60";
                     const midX = (x1 + x2) / 2;
                     const midY = (y1 + y2) / 2;
-                    const labelY = bi.direction === "up" ? midY - 6 : midY + 12;
+                    // 翻转视图：笔方向视觉反转，标签上下位置随之翻转
+                    const labelAbove = _isMirrorMode ? (bi.direction !== "up") : (bi.direction === "up");
+                    const labelY = labelAbove ? midY - 6 : midY + 12;
                     ctx.fillText(String(bi.idx), midX, labelY);
                 }
             });
@@ -9116,8 +9081,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const lineY = textArea.y + 11;
                 if (_showVolume) {
                     // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
-                    const isUp = targetK.close > targetK.open;
-                    const volColor = isUp ? "#FF4444" : "#00DD00";
+                    // 翻转视图：颜色对调，与翻转后的成交量柱一致
+                    const volIsRise = _isMirrorMode ? (targetK.close < targetK.open) : (targetK.close > targetK.open);
+                    const volColor = volIsRise ? "#FF4444" : "#00DD00";
                     const vLabel = getVolLabel();
                     ctx.fillStyle = "#a8b2d1";
                     ctx.fillText(vLabel + ":", textArea.x + 4, lineY);
@@ -9139,7 +9105,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ctx.fillStyle = COLORS.dea;
                     ctx.fillText("DEA:" + targetK.dea.toFixed(2), xPos, lineY);
                     xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
-                    ctx.fillStyle = targetK.macd >= 0 ? "#FF4444" : "#00DD00";
+                    // 翻转视图：BAR颜色对调，与翻转后的MACD柱一致
+                    const barIsUp = _isMirrorMode ? (targetK.macd < 0) : (targetK.macd >= 0);
+                    ctx.fillStyle = barIsUp ? "#FF4444" : "#00DD00";
                     ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
                 }
             }
@@ -9159,10 +9127,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 fxNum++;
                 const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
                 const y = priceToY(fx.price, area, priceRange);
-                const isTop = fx.mark === "G";
-                const color = isTop ? COLORS.up : COLORS.down;
+                // 翻转视图：顶分型视觉变底分型，颜色与标签位置随之翻转
+                const showAsTop = _isMirrorMode ? (fx.mark !== "G") : (fx.mark === "G");
+                const color = showAsTop ? COLORS.up : COLORS.down;
                 ctx.fillStyle = color;
-                ctx.fillText(String(fxNum), x, isTop ? y - 4 : y + 10);
+                ctx.fillText(String(fxNum), x, showAsTop ? y - 4 : y + 10);
             });
         }
 
@@ -9197,7 +9166,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const y1 = priceToY(zs.zg, area, priceRange);
                 const y2 = priceToY(zs.zd, area, priceRange);
 
-                const isUp = zs.dir === "up";
+                // 翻转视图：向上中枢视觉变向下，颜色随之翻转
+                const isUp = _isMirrorMode ? (zs.dir !== "up") : (zs.dir === "up");
                 const fillColor = isUp ? "rgba(220, 50, 50, 0.10)" : "rgba(50, 180, 50, 0.10)";
                 const strokeColor = isUp ? "rgba(220, 50, 50, 0.6)" : "rgba(50, 180, 50, 0.6)";
                 const textColor = isUp ? "rgba(220, 50, 50, 0.8)" : "rgba(50, 180, 50, 0.8)";
@@ -9289,20 +9259,22 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 if (bspFilter && !bspFilter[bsp.type]) return;  // 按用户设置过滤类型
                 const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
                 const isBuy = bsp.is_buy;
-                // 用K线外侧价格定位：买点用low，卖点用high
+                // 用K线外侧价格定位：买点用low，卖点用high（锚点价格不随翻转改变）
                 const anchorPrice = isBuy ? bsp.low : bsp.high;
                 const y = priceToY(anchorPrice, area, priceRange);
-                const color = isBuy ? COLORS.up : COLORS.down;
+                // 翻转视图：买/卖视觉互换——颜色、符号、上下偏移随之翻转
+                const showAsBuy = _isMirrorMode ? !isBuy : isBuy;
+                const color = showAsBuy ? COLORS.up : COLORS.down;
                 ctx.fillStyle = color;
                 ctx.textAlign = "center";
                 ctx.textBaseline = "middle";
                 ctx.font = "bold 14px monospace";
                 // 错开偏移：买点往下放（远离五角星/分型），卖点往上放
-                const markerY = isBuy ? y + 22 : y - 22;
-                ctx.fillText(isBuy ? "▲" : "▼", x, markerY);
+                const markerY = showAsBuy ? y + 22 : y - 22;
+                ctx.fillText(showAsBuy ? "▲" : "▼", x, markerY);
                 // 买卖点类型标签再往外错开一点（与三角形同色，fillStyle已设置）
                 ctx.font = "11px sans-serif";
-                const labelY = isBuy ? markerY + 18 : markerY - 18;
+                const labelY = showAsBuy ? markerY + 18 : markerY - 18;
                 ctx.fillText(bsp.type, x, labelY);
                 ctx.textBaseline = "alphabetic";
             });
@@ -9351,7 +9323,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 const y1 = priceToY(zs.zg, area, priceRange);
                 const y2 = priceToY(zs.zd, area, priceRange);
 
-                const isUp = zs.dir === "up";
+                const isUp = _isMirrorMode ? (zs.dir !== "up") : (zs.dir === "up");
                 // 新中枢使用更醒目的颜色区分
                 const fillColor = isUp ? "rgba(220, 50, 50, 0.10)" : "rgba(50, 180, 50, 0.10)";
                 const strokeColor = isUp ? "rgba(255, 80, 80, 0.85)" : "rgba(80, 255, 80, 0.85)";
@@ -9541,8 +9513,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
 
-            drawOne(maxHigh, maxHighIdx, true);   // 高点：下边沿贴合
-            drawOne(minLow, minLowIdx, false);    // 低点：上边沿贴合
+            // 翻转视图：高低点视觉互换，isHigh随之翻转（箭头方向与文字对齐跟随Y轴翻转）
+            drawOne(maxHigh, maxHighIdx, _isMirrorMode ? false : true);   // 高点：下边沿贴合
+            drawOne(minLow, minLowIdx, _isMirrorMode ? true : false);    // 低点：上边沿贴合
         }
 
         function drawCrosshair(klines, area, priceRange, volArea, volRange, barStep, macdTextArea, subPixelOffset) {
@@ -9647,11 +9620,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             // 双窗口：下面窗口渲染时，仅当鼠标不在下面窗口上（mouseX<0）才跳过 OHLC 更新
             // 避免"鼠标在上面窗口时，下面窗口的最后一根K线数据覆盖上面窗口的 OHLC"
             if (!(window._isRenderingBottom && mouseX < 0)) {
-                // 反转模式下显示原始价格：open/close取绝对值，high/low互换后取绝对值
-                const dispOpen = _isMirrorMode ? Math.abs(k.open) : k.open;
-                const dispHigh = _isMirrorMode ? Math.abs(k.low) : k.high;   // k.low=-orig_high → |k.low|=orig_high
-                const dispLow = _isMirrorMode ? Math.abs(k.high) : k.low;    // k.high=-orig_low → |k.high|=orig_low
-                const dispClose = _isMirrorMode ? Math.abs(k.close) : k.close;
+                // 显示真实OHLC（翻转视图不改数值，前复权负价原样显示含负号）
+                const dispOpen = k.open;
+                const dispHigh = k.high;
+                const dispLow = k.low;
+                const dispClose = k.close;
                 document.getElementById("crosshair-info").innerHTML =
                     `<span class="label">开:</span> <span class="${cls}">${dispOpen.toFixed(2)}</span> &nbsp; ` +
                     `<span class="label">高:</span> <span class="${cls}">${dispHigh.toFixed(2)}</span> &nbsp; ` +
@@ -9664,13 +9637,57 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "");
             }
 
+            // 均线浮动提示：检测鼠标是否靠近某条均线，若在阈值内则显示tooltip
+            const maTooltip = document.getElementById("ma-tooltip");
+            if (mouseX >= area.x && mouseX <= area.x + area.w && mouseY >= area.y && mouseY <= area.y + area.h) {
+                const maPeriodsKeys = [];
+                for (var mp in maPeriods) { if (maPeriods[mp]) maPeriodsKeys.push(parseInt(mp, 10)); }
+                maPeriodsKeys.sort(function(a, b) { return a - b; });
+                const allN = chartData.klines.length;
+                const MA_HOVER_THRESHOLD = 10;
+                let bestPeriod = null, bestDist = Infinity;
+                for (let pi = 0; pi < maPeriodsKeys.length; pi++) {
+                    const p = maPeriodsKeys[pi];
+                    if (p <= 0 || p > allN || globalIdx < p - 1) continue;
+                    let s = 0;
+                    for (let i = globalIdx - p + 1; i <= globalIdx; i++) s += chartData.klines[i].close;
+                    const maVal = s / p;
+                    const maY = priceToY(maVal, area, priceRange);
+                    const d = Math.abs(maY - mouseY);
+                    if (d < MA_HOVER_THRESHOLD && d < bestDist) {
+                        bestDist = d;
+                        bestPeriod = p;
+                    }
+                }
+                if (bestPeriod !== null) {
+                    const bestColor = MA_COLORS[bestPeriod] || "#FFFFFF";
+                    maTooltip.innerHTML = `MA${bestPeriod}`;
+                    const containerRect = document.getElementById("chart-container").getBoundingClientRect();
+                    const canvasRect = canvas.getBoundingClientRect();
+                    const offX = canvasRect.left - containerRect.left;
+                    const offY = canvasRect.top - containerRect.top;
+                    let tx = mouseX + offX + 14;
+                    let ty = mouseY + offY - 22;
+                    maTooltip.style.display = "block";
+                    // 防止超出右边界
+                    if (tx + maTooltip.offsetWidth > containerRect.width - 4) tx = mouseX + offX - maTooltip.offsetWidth - 14;
+                    if (ty < 0) ty = mouseY + offY + 14;
+                    maTooltip.style.left = tx + "px";
+                    maTooltip.style.top = ty + "px";
+                } else {
+                    maTooltip.style.display = "none";
+                }
+            } else {
+                maTooltip.style.display = "none";
+            }
+
             const weekDays = ["日", "一", "二", "三", "四", "五", "六"];
             const weekDayStr = "周" + weekDays[new Date(k.date.replace(/\//g, "-").replace(" ", "T")).getDay()];
-            // 剪贴板文本同样显示原始价格
-            const clipOpen = _isMirrorMode ? Math.abs(k.open) : k.open;
-            const clipHigh = _isMirrorMode ? Math.abs(k.low) : k.high;
-            const clipLow = _isMirrorMode ? Math.abs(k.high) : k.low;
-            const clipClose = _isMirrorMode ? Math.abs(k.close) : k.close;
+            // 剪贴板文本：真实OHLC（翻转视图不改数值）
+            const clipOpen = k.open;
+            const clipHigh = k.high;
+            const clipLow = k.low;
+            const clipClose = k.close;
             const clipText = `${k.date} ${weekDayStr} 开:${clipOpen.toFixed(2)} 高:${clipHigh.toFixed(2)} 低:${clipLow.toFixed(2)} 收:${clipClose.toFixed(2)}`;
             if (window._isRenderingBottom) {
                 // 底部窗口：记录底部窗口的全局索引和剪贴板文本
@@ -9685,7 +9702,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function drawPriceAxis(area, priceRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-            if (_logScale) {
+            if (_logScale && priceRange.min > 0) {
                 // 对数坐标系：价格标签按对数均匀分布
                 const logMin = Math.log(priceRange.min);
                 const logMax = Math.log(priceRange.max);
@@ -9696,10 +9713,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
                 }
             } else {
-                // 普通坐标系：价格标签按算术均匀分布
+                // 普通坐标系：价格标签按算术均匀分布（Y坐标经priceToY，翻转视图下自动翻转）
                 for (let i = 0; i <= 5; i++) {
                     const price = priceRange.min + (priceRange.max - priceRange.min) * (1 - i / 5);
-                    const y = area.y + (area.h / 5) * i;
+                    const y = priceToY(price, area, priceRange);
                     ctx.fillText(_fmtPrice(price), area.x + area.w + 6, y + 4);
                 }
             }
@@ -9707,21 +9724,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         function drawMacdAxis(macdArea, macdRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-            ctx.fillText(macdRange.max.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + 12);
-            const zeroY = macdArea.y + macdArea.h * (macdRange.max / (macdRange.max - macdRange.min));
+            const range = macdRange.max - macdRange.min;
+            // 翻转视图：max/min标签位置互换（Y轴翻转），0标签位置也随Y轴翻转
+            const zeroY = _isMirrorMode
+                ? macdArea.y + (0 - macdRange.min) / range * macdArea.h
+                : macdArea.y + macdArea.h * (macdRange.max / range);
+            const topVal = _isMirrorMode ? macdRange.min : macdRange.max;
+            const botVal = _isMirrorMode ? macdRange.max : macdRange.min;
+            ctx.fillText(topVal.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + 12);
             ctx.fillText("0", macdArea.x + macdArea.w + 6, zeroY + 4);
-            ctx.fillText(macdRange.min.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + macdArea.h - 4);
+            ctx.fillText(botVal.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + macdArea.h - 4);
         }
 
         function drawVolumeAxis(volArea, volRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
-            // 显示最大指标值（股票=成交额万/亿，期货=成交量手/万）
+            // 成交量(额)恒为正值，轴标签不随翻转视图改变（0在底部、max在顶部）
             const maxLabel = formatVolume(volRange.max);
             ctx.fillText(maxLabel, volArea.x + volArea.w + 6, volArea.y + 12);
-            // 显示中间值
             const midLabel = formatVolume(volRange.max / 2);
             ctx.fillText(midLabel, volArea.x + volArea.w + 6, volArea.y + volArea.h / 2 + 4);
-            // 底部显示0
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
         }
 
@@ -9822,9 +9843,165 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             });
         }
 
+        // ===== 白框覆盖层重绘（供倒计时动画帧使用） =====
+        function _drawOverlayIfNeeded(overlayData, area) {
+            if (!overlayData) return;
+            if (overlayData.rightPrice !== undefined) {
+                const labelW = 50;
+                ctx.fillStyle = "#dcdcdc"; ctx.fillRect(area.x + area.w + 2, overlayData.rightY - 10, labelW, 20);
+                ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+                ctx.fillText(overlayData.rightPrice, area.x + area.w + 6, overlayData.rightY + 4);
+            }
+            if (overlayData.bottomText) {
+                const d = overlayData;
+                ctx.fillStyle = "#dcdcdc";
+                ctx.fillRect(d.bottomX, d.bottomY, d.bottomW + d.bottomPad * 2, d.bottomH);
+                ctx.fillStyle = "#333"; ctx.font = "11px monospace"; ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+                if (d.bottomIsDown) {
+                    const txt = d.bottomText;
+                    const lastParen = txt.lastIndexOf(")");
+                    if (lastParen > 0) {
+                        const before = txt.substring(0, lastParen);
+                        const after = txt.substring(lastParen);
+                        const slashIdx = before.lastIndexOf("/+");
+                        if (slashIdx > 0) {
+                            ctx.fillText(before.substring(0, slashIdx), d.bottomX + d.bottomPad, d.bottomY + 13);
+                            const prefixW = ctx.measureText(before.substring(0, slashIdx)).width;
+                            ctx.fillStyle = "#fd1050";
+                            ctx.fillText(before.substring(slashIdx) + after, d.bottomX + d.bottomPad + prefixW, d.bottomY + 13);
+                        } else {
+                            ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
+                        }
+                    } else {
+                        ctx.fillText(txt, d.bottomX + d.bottomPad, d.bottomY + 13);
+                    }
+                } else {
+                    ctx.fillText(d.bottomText, d.bottomX + d.bottomPad, d.bottomY + 13);
+                }
+            }
+        }
+
+        // ===== K线倒计时进度条（快期3风格） =====
+        let _countdownBounds = null; // 上窗/单窗倒计时区域边界，用于增量更新
+        let _subCountdownBounds = null; // 下窗倒计时区域边界，用于增量更新
+
+        function _calcCountdownState(freq, data) {
+            // 返回倒计时计算状态，或 null（不显示）
+            // freq/data 缺省时使用全局 currentFreq/chartData（上窗/单窗）
+            freq = freq || currentFreq;
+            data = data || chartData;
+            if (!isRealtimeMode || realtimeStartTime) return null;
+            const freqSec = FREQ_SEC_MAP_JS[freq];
+            if (!freqSec || freqSec >= 86400) return null;
+            if (!data || !data.klines || data.klines.length === 0) return null;
+
+            const lastK = data.klines[data.klines.length - 1];
+            const dateStr = lastK.date;
+            const parts = dateStr.split(/[-\/\s:]/);
+            if (parts.length < 5) return null;
+            const yy = parseInt(parts[0]), mm = parseInt(parts[1]) - 1, dd = parseInt(parts[2]);
+            const hh = parseInt(parts[3]), min = parseInt(parts[4]);
+            const ss = parts.length >= 6 ? parseInt(parts[5]) : 0;
+            const klineStart = new Date(yy, mm, dd, hh, min, ss);
+            const klineEnd = new Date(klineStart.getTime() + freqSec * 1000);
+            const now = new Date();
+            const remaining = Math.max(0, (klineEnd.getTime() - now.getTime()) / 1000);
+
+            const remMin = Math.floor(remaining / 60);
+            const remSec = Math.floor(remaining % 60);
+            const timeStr = String(remMin).padStart(2, '0') + ':' + String(remSec).padStart(2, '0');
+            const ratio = Math.min(1, Math.max(0, remaining / freqSec));
+            return { remaining, timeStr, ratio };
+        }
+
+        function _drawCountdownImpl(area, state) {
+            // 纯绘制，不计算状态（供 render 和动画帧复用）
+            const timeStr = state.timeStr;
+            const ratio = state.ratio;
+            // 确保进度条高度在物理像素层面为整数，杜绝亚像素抗锯齿导致的灰/红色段视觉错位
+            const dpr = window.devicePixelRatio || 1;
+            const barHeight = Math.round(2 * dpr) / dpr;
+
+            let barX = 0, barY = 0, barWidth = 0;
+
+            // 保存并恢复上下文状态，避免影响后续绘制
+            const savedFont = ctx.font;
+            const savedTextAlign = ctx.textAlign;
+            const savedTextBaseline = ctx.textBaseline;
+            const savedFillStyle = ctx.fillStyle;
+            try {
+                ctx.font = '11px monospace';
+                // 所有尺寸取整，避免浮点坐标导致抗锯齿差异
+                barWidth = Math.round(ctx.measureText(timeStr).width);
+                barX = Math.round(area.x + area.w - barWidth - 6);
+                // 倒计时放在K线区域右上角，与底部白框永不重叠
+                barY = Math.round(area.y + 6);
+                const elapsedW = Math.round(barWidth * (1 - ratio));
+                const redW = barWidth - elapsedW;
+
+                // 先画整条灰色底（已流逝），再叠加红色（剩余），
+                // 确保两色段共享同一矩形像素区域，杜绝拼接处亚像素错位
+                ctx.fillStyle = '#9d9da0';
+                ctx.fillRect(barX, barY, barWidth, barHeight);
+                if (redW > 0) {
+                    ctx.fillStyle = '#dd373a';
+                    ctx.fillRect(barX + elapsedW, barY, redW, barHeight);
+                }
+
+                // 时间文本
+                ctx.textAlign = 'right';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = COLORS.text;
+                ctx.fillText(timeStr, barX + barWidth, barY + barHeight + 2);
+            } finally {
+                // 恢复上下文状态（即使绘制抛异常也保证恢复）
+                ctx.font = savedFont;
+                ctx.textAlign = savedTextAlign;
+                ctx.textBaseline = savedTextBaseline;
+                ctx.fillStyle = savedFillStyle;
+            }
+
+            // 返回边界供调用方存储（上窗/下窗各自独立跟踪）
+            return { x: barX, y: barY, w: barWidth, h: barHeight + 2 + 14 };
+        }
+
+        function drawCountdownBar(area) {
+            const state = _calcCountdownState();
+            if (!state) {
+                if (canvas === subCanvas) _subCountdownBounds = null;
+                else _countdownBounds = null;
+                return;
+            }
+            const bounds = _drawCountdownImpl(area, state);
+            if (canvas === subCanvas) _subCountdownBounds = bounds;
+            else _countdownBounds = bounds;
+        }
+
+        function _redrawCountdown() {
+            if (!isRealtimeMode || realtimeStartTime) return;
+            // 全量重绘：render() 内部的 drawCountdownBar 会用最新时间重绘进度条，
+            // 避免增量擦除导致K线被擦除后不恢复（双窗口下窗焦点时上窗不重绘的问题）。
+            render();
+        }
+
+        function startCountdownTimer() {
+            stopCountdownTimer();
+            _redrawCountdown(); // 立即绘制一次
+            _countdownTimer = setInterval(_redrawCountdown, 1000);
+        }
+
+        function stopCountdownTimer() {
+            if (_countdownTimer) {
+                clearInterval(_countdownTimer);
+                _countdownTimer = null;
+            }
+            _countdownBounds = null;
+            _subCountdownBounds = null;
+        }
+
         function onWheel(e) {
             e.preventDefault();
-            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); }
+            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures'); }
             const area = getChartArea();
             const klines = chartData.klines;
             const barStep = area.w / viewCount;
@@ -9860,7 +10037,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         function onMouseDown(e) {
             isDragging = true; dragStartX = e.clientX; dragStartOffset = viewOffset; canvas.style.cursor = "grabbing";
             _mouseDownX = e.clientX; _mouseDownY = e.clientY;
-            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); }
+            if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures'); }
         }
         function onMouseMove(e) {
             const rect = canvas.getBoundingClientRect();
@@ -10152,11 +10329,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     }
                     renderBottom();
                 });
-                // 恢复crosshair-info
+                // 恢复crosshair-info和ma-tooltip（container.innerHTML='' 已删除这两个元素）
                 const crosshairInfo = document.createElement("div");
                 crosshairInfo.className = "crosshair-info";
                 crosshairInfo.id = "crosshair-info";
                 container.appendChild(crosshairInfo);
+                const maTooltip = document.createElement("div");
+                maTooltip.className = "ma-tooltip";
+                maTooltip.id = "ma-tooltip";
+                container.appendChild(maTooltip);
                 resizeCanvas();
                 const code = chartData.meta.symbol;
                 const isFutures = chartData.meta.market === 'futures';
@@ -10204,6 +10385,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                             ci2.className = "crosshair-info";
                             ci2.id = "crosshair-info";
                             container2.appendChild(ci2);
+                            const mt2 = document.createElement("div");
+                            mt2.className = "ma-tooltip";
+                            mt2.id = "ma-tooltip";
+                            container2.appendChild(mt2);
                             container2.appendChild(origCanvas);
                             canvas = mainCanvas; ctx = mainCtx;
                             resizeCanvas();
@@ -10222,6 +10407,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             activeDualWindow = 'sub';
             updateActiveWindowClass();
             updateSlider();
+            updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures');
             const savedCanvas = canvas; const savedCtx = ctx;
             const savedViewOffset = viewOffset; const savedViewCount = viewCount;
             canvas = subCanvas; ctx = subCtx;
@@ -10265,6 +10451,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             activeDualWindow = 'sub';
             updateActiveWindowClass();
             updateSlider();
+            updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures');
         }
 
         function onSubMouseMove(e) {
@@ -10631,6 +10818,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function updateDualBtn() {
+            // 双窗中始终可点（用于退出），仅在非双窗时按入口规则约束
+            if (isDualWindow) {
+                document.getElementById("btn-dual").disabled = false;
+                return;
+            }
             const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             if (isFutures) {
                 // 期货：30m/5m/1m 可双窗口，15s 不可
@@ -10680,7 +10872,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 .then(resp => resp.json())
                 .then(() => {
                     // Step 2: 冷启动重新加载
-                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""));
+                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
@@ -10745,7 +10937,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         let _scanAborted = false;
         let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
         let _scanRecentDays = 1; // 最近N根K线，默认1
-        let _scanSources = ["zxg"]; // 多选：["zxg", "sz50", "hs300", "zz500", "zz1000"]
+        let _scanSources = ["zxg"]; // 多选：["zxg", "page_index", "tdxhy2", "tdxhy3"]
         let _scanFreq = "d"; // 扫描周期，默认日K
 
         // 扫描模式切换时，控制"最近N根"输入框的灰化状态
@@ -10798,7 +10990,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
         // 扫描来源→中文标签（多选时用顿号连接）
         function _scanSourceLabel() {
-            var map = {"zxg": "自选股", "sz50": "上证50", "hs300": "沪深300", "zz500": "中证500", "zz1000": "中证1000", "page_index": "成分股", "tdxhy2": "板块指数2", "tdxhy3": "板块指数3"};
+            var map = {"zxg": "自选股", "page_index": "成分股", "tdxhy2": "板块指数2", "tdxhy3": "板块指数3"};
             var labels = [];
             for (var i = 0; i < _scanSources.length; i++) {
                 labels.push(map[_scanSources[i]] || _scanSources[i]);
@@ -10947,7 +11139,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     var valid = [];
                     for (var i = 0; i < arr.length; i++) {
                         var v = arr[i].trim();
-                        if (v === "zxg" || v === "sz50" || v === "hs300" || v === "zz500" || v === "zz1000" || v === "page_index" || v === "tdxhy2" || v === "tdxhy3") {
+                        if (v === "zxg" || v === "page_index" || v === "tdxhy2" || v === "tdxhy3") {
                             valid.push(v);
                         }
                     }
@@ -10975,10 +11167,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (pageIndexLabel && pageIndexCb) {
                 var sym = chartData && chartData.meta && chartData.meta.symbol;
                 // 可获取成分股的指数：通达信板块(88xxxx)、深市指数(399xxx)、中证系列(932xxx)、
-                // 上海指数(000xxx)。注意排除深市主板股票(000xxx.SZ)的误判。
+                // 上海中证指数(000xxx)。注意排除深市主板股票(000xxx.SZ)的误判、上证指数(000001)。
                 var isSectorIndex = sym && (
                     /^88\d{4}/.test(sym) || /^399\d{3}/.test(sym) || /^932\d{3}/.test(sym) ||
-                    (/^000\d{3}/.test(sym) && !/\.[Ss][Zz]$/.test(sym))
+                    (/^000\d{3}/.test(sym) && !/\.[Ss][Zz]$/.test(sym) && !/^000001($|[.])/.test(sym))
                 );
                 if (isSectorIndex) {
                     pageIndexLabel.style.opacity = "1";
@@ -12005,7 +12197,40 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         };
 
         window.switchFreq = function(freq) {
-            if (!chartData || currentFreq === freq) return;
+            if (!chartData) return;
+            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
+            // 期货双窗口下窗焦点：独立切换下窗周期，不联动上窗
+            if (isDualWindow && activeDualWindow === 'sub' && isFutures) {
+                if (dualSubFreq === freq) return;
+                // 校验：下窗周期必须严格小于上窗周期，否则弹窗提示并取消
+                if (freqLevel(freq) >= freqLevel(currentFreq)) {
+                    alert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
+                        + "，无法切换到" + freqLabel(freq));
+                    return;
+                }
+                // 切换周期时取消区间选择
+                if (_rangeSelect.mode === 'SELECTED_A') {
+                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+                }
+                dualSubFreq = freq;
+                updateDateInputType();
+                updateDualBtn();
+                updateFreqButtonStates(isFutures);
+                const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
+                if (code) {
+                    document.getElementById("loading").classList.remove("hidden");
+                    disconnectRealtime();
+                    connectRealtimeDual(code, currentFreq, freq);
+                }
+                return;
+            }
+            if (currentFreq === freq) return;
+            // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
+            if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
+                alert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
+                    + "，无法切换到" + freqLabel(freq));
+                return;
+            }
             // 切换周期时取消区间选择
             if (_rangeSelect.mode === 'SELECTED_A') {
                 _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
@@ -12013,26 +12238,28 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             currentFreq = freq;
             updateDateInputType();
             updateDualBtn();
-            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             if (isFutures) {
                 lastFuturesFreq = freq; // 期货上下文切换周期，记录
             } else {
                 lastStockFreq = freq;   // 股票上下文切换周期，记录
             }
             updateFreqButtonStates(isFutures);
+            // 股票双窗口：切换周期始终作用于上窗，切换后焦点回到上窗
+            if (isDualWindow && !isFutures) {
+                activeDualWindow = 'main';
+                updateActiveWindowClass();
+                updateSlider();
+            }
             // 切换周期后重新加载数据
             const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
             if (code) {
                 document.getElementById("loading").classList.remove("hidden");
                 // 期货：跳过HTTP，直接重连SSE（初始快照+增量合一）
-                const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
                 if (isFutures) {
                     disconnectRealtime();
                     if (isDualWindow) {
-                        // 双窗口模式：用双窗口SSE
-                        const newSubFreq = getDualSubFreq(freq);
-                        dualSubFreq = newSubFreq;
-                        connectRealtimeDual(code, freq, newSubFreq);
+                        // 双窗口模式：上窗周期变，下窗保持不变
+                        connectRealtimeDual(code, freq, dualSubFreq);
                     } else {
                         connectRealtimeInit(code, freq);
                     }
@@ -12132,9 +12359,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
-                if (isDualWindow && getDualSubFreq(freq)) {
+                if (isDualWindow && dualSubFreq) {
                     disconnectRealtime();
-                    connectRealtimeDual(code, freq, getDualSubFreq(freq));
+                    // 双窗口模式：保持用户独立选择的下窗周期
+                    connectRealtimeDual(code, freq, dualSubFreq);
                 } else {
                     // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
                     const savedDate = chartData.meta.saved_selection_date || null;
@@ -12151,7 +12379,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             const needEndDate = isFutures ? true : (!isToday || keyEnter);
             const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -12369,7 +12598,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             var freq = currentFreq;
             var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
                 + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                + (isDualWindow && chartData.meta.market === 'futures' && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -12406,7 +12636,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                     if (isFutures && delta > 0 && _futuresRealtimeBorderDate) {
                         if (chartData.klines[chartData.klines.length - 1].date >= _futuresRealtimeBorderDate) {
                             var savedDate = chartData.meta.saved_selection_date || null;
-                            connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
+                            if (isDualWindow && dualSubFreq) {
+                                // 双窗口模式：保持用户独立选择的下窗周期，重连双窗口SSE
+                                connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq);
+                            } else {
+                                connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
+                            }
                         }
                     }
                 })
@@ -12439,7 +12674,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             if (!code) return "";
             const c = code.trim();
             // 期货/期指代码（含 KQ.m@、KQ.i@、大写.大写 格式）不做转换
-            if (c.includes('KQ.m@') || c.includes('KQ.i@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
+            if (c.includes('KQ.m@') || c.includes('KQ.i@') || c.includes('KQD.m@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
             // 匹配 880974.SH 或 880974.sh 格式 → 转为 sh880974
             const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ|DS)$/i);
             if (dotMatch) return dotMatch[2].toLowerCase() + dotMatch[1];
@@ -12626,8 +12861,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             }
             document.getElementById("stock-history").classList.remove("show");
             document.getElementById("loading").classList.remove("hidden");
-            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS"]);
-            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
+            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS","A50","CN"]);
+            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
             // 判断切换前是否为期指
             const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             // 同类继承上一周期，异类使用默认周期
@@ -12639,25 +12874,68 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 // 股票A → 股票B：保持A的周期
                 fetchFreq = lastStockFreq;
             } else if (wasFutures && !isFuturesCode) {
-                // 期指 → 股票：默认日K，同时彻底清理所有期货数据
+                // 期指 → 股票：默认日K，重置为单窗口，同时彻底清理所有期货数据
                 disconnectRealtime();
                 fetch("/api/futures_cleanup").catch(() => {});
                 fetchFreq = 'd';
+                if (isDualWindow) {
+                    isDualWindow = false;
+                    activeDualWindow = 'main';
+                    dualSubData = null;
+                    dualSubFreq = '';
+                    dualHighlightRange = null;
+                    dualRedRange = null;
+                    dualNewZsData = null;
+                    dualShowNewZs = false;
+                    dualNewZsLeftDate = "";
+                    dualNewZsRightDate = "";
+                    document.getElementById("btn-dual").classList.remove("active");
+                    const dbg = document.getElementById("redframe-debug");
+                    if (dbg) dbg.style.display = "none";
+                    // 恢复单canvas布局
+                    const container = document.getElementById("chart-container");
+                    const mainDiv = document.getElementById("chart-main");
+                    const subDiv = document.getElementById("chart-sub");
+                    if (mainDiv) mainDiv.remove();
+                    if (subDiv) subDiv.remove();
+                    canvas = mainCanvas; ctx = mainCtx;
+                    container.appendChild(canvas);
+                    resizeCanvas();
+                }
             } else {
-                // 股票 → 期指：默认5分钟
+                // 股票 → 期指：默认5分钟，重置为单窗口
+                // 股票和期货周期体系不同（股票: w/d/30m/5m，期货: 30m/5m/1m/15s），
+                // 下窗周期无法跨市场继承，强行继承会导致下窗周期>上窗周期
                 fetchFreq = '5m';
+                if (isDualWindow) {
+                    isDualWindow = false;
+                    activeDualWindow = 'main';
+                    dualSubData = null;
+                    dualSubFreq = '';
+                    dualHighlightRange = null;
+                    dualRedRange = null;
+                    dualNewZsData = null;
+                    dualShowNewZs = false;
+                    dualNewZsLeftDate = "";
+                    dualNewZsRightDate = "";
+                    document.getElementById("btn-dual").classList.remove("active");
+                    const dbg = document.getElementById("redframe-debug");
+                    if (dbg) dbg.style.display = "none";
+                    // 恢复单canvas布局
+                    const container = document.getElementById("chart-container");
+                    const mainDiv = document.getElementById("chart-main");
+                    const subDiv = document.getElementById("chart-sub");
+                    if (mainDiv) mainDiv.remove();
+                    if (subDiv) subDiv.remove();
+                    canvas = mainCanvas; ctx = mainCtx;
+                    container.appendChild(canvas);
+                    resizeCanvas();
+                }
             }
             currentFreq = fetchFreq;
             updateDateInputType();
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
-                if (isDualWindow) {
-                    const subFreq = getDualSubFreq(fetchFreq);
-                    if (subFreq) {
-                        connectRealtimeDual(code, fetchFreq, subFreq);
-                        return;
-                    }
-                }
                 connectRealtimeInit(code, fetchFreq);
                 return;
             }
@@ -12774,6 +13052,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             realtimeFreq = freq;
             realtimeStartTime = startTime || null;
             isRealtimeMode = true;
+            startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
             badge.classList.remove('stopped');
@@ -12876,6 +13155,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             realtimeFreq = mainFreq;
             dualSubFreq = subFreq;
             isRealtimeMode = true;
+            startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
             badge.classList.remove('stopped');
@@ -12970,6 +13250,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
             realtimeFreq = freq;
             realtimeStartTime = startTime || null;
             isRealtimeMode = true;
+            startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
             badge.classList.add('visible');
             badge.classList.remove('stopped');
@@ -13014,6 +13295,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         }
 
         function disconnectRealtime() {
+            stopCountdownTimer();
             isRealtimeMode = false;
             realtimeSymbol = null;
             realtimeFreq = null;
@@ -13126,7 +13408,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
                 }
             }
             updateSlider();
-            resizeCanvas();
             render();
         }
 
@@ -13811,7 +14092,6 @@ def main():
     html_content = HTML_TEMPLATE.replace("%%CHART_DATA%%", chart_data_json)
     with open(html_path, "w", encoding="utf-8") as f:
         f.write(html_content)
-    html_size = os.path.getsize(html_path)
 
     # 3. 启动HTTP服务器
     port = 18081  # 使用18081，避免与czsc版本的18080冲突

@@ -1921,7 +1921,7 @@ def get_index_stocks(sector_code):
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
     """
-    print(f"\n[板块成分股] 查询 sector_code={sector_code}")
+    print(f"[板块成分股] 查询 sector_code={sector_code}")
 
     # Step 1: 881xxx（研究行业新版）→ 本地 tdxhy.cfg
     if sector_code.startswith("881"):
@@ -1984,71 +1984,118 @@ def get_index_stocks(sector_code):
     return stocks
 
 
+def _parse_stocks_from_df(df, source_label):
+    """从 AKShare DataFrame 中提取成分股列表（公共逻辑）"""
+    stocks = []
+    code_col = None
+    for col in ["成分券代码", "证券代码", "品种代码", "代码", "con_code", "symbol", "stock_code"]:
+        if col in df.columns:
+            code_col = col
+            break
+    if code_col is None:
+        print(f"[板块成分股] {source_label} 返回未知列名: {list(df.columns)}")
+        return []
+
+    seen_codes = set()
+    for _, row in df.iterrows():
+        code = str(row[code_col]).strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if len(code) == 6 and code.isdigit():
+            if code in seen_codes:
+                continue
+            seen_codes.add(code)
+            first = code[0]
+            if first in "689":
+                prefix = "1"
+            elif first in "03":
+                prefix = "0"
+            elif first in "24":
+                prefix = "2"
+            else:
+                prefix = "1"
+            stocks.append({"code": code, "prefix": prefix, "name": code})
+
+    return stocks
+
+
 def _read_standard_index_stocks(sector_code):
     """
-    通过 AKShare index_stock_cons_csindex 获取标准指数（000xxx / 399xxx）成分股。
-    数据来源：中证指数官网，数据权威无重复。
+    根据指数代码获取成分股。
+
+    路由逻辑：
+    - 中证指数（000300/000905/000852/000688 等）：中证指数官网 OSS XLS（官方直连）
+    - 深交所指数（399xxx）：深交所官网 ShowReport XLS（官方直连）
+    - 上证指数（000001）：综合指数，无成分股概念，返回空
     """
-    import time as _time
-    print(f"[板块成分股-DEBUG] _read_standard_index_stocks('{sector_code}') 开始 @ {_time.strftime('%H:%M:%S')}")
     try:
         import akshare as ak
-        print(f"[板块成分股-DEBUG] akshare 导入成功, 版本={getattr(ak, '__version__', '未知')}")
     except ImportError:
         print(f"[板块成分股] AKShare 未安装，无法获取标准指数成分股")
         return []
 
+    # ── 上证指数（000001）：综合指数，无成分股 ──
+    if sector_code == "000001":
+        return []
+
+    # ── 中证指数（000300/000905/000852/000688 等）→ csindex ──
+    CSI_INDICES = {"000300", "000905", "000852", "000688"}
+    if sector_code in CSI_INDICES:
+        try:
+            df = ak.index_stock_cons_csindex(symbol=sector_code)
+            if df is None or df.empty:
+                print(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
+                return []
+            stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
+            print(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+            return stocks
+        except Exception as e:
+            print(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    # ── 深交所指数（399xxx）→ 深交所官网 XLS 直连 ──
+    if sector_code.startswith("399"):
+        try:
+            import requests
+            import pandas as _pd
+            from io import BytesIO
+            url = f"https://www.szse.cn/api/report/ShowReport?SHOWTYPE=xls&CATALOGID=1747_zs&ZSDM={sector_code}"
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+            r.raise_for_status()
+            # 深交所返回 .xls，第一行是合并单元格标题"指数样本股"，pandas 读入时自动忽略
+            for engine in [None, "xlrd"]:
+                try:
+                    df = _pd.read_excel(BytesIO(r.content), dtype=str, engine=engine)
+                    break
+                except Exception:
+                    if engine is None:
+                        continue
+                    raise
+            if df is None or df.empty:
+                print(f"[板块成分股] 深交所 返回空数据: {sector_code}")
+                return []
+            stocks = _parse_stocks_from_df(df, f"深交所({sector_code})")
+            print(f"[板块成分股] ✅ 深交所 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+            return stocks
+        except Exception as e:
+            print(f"[板块成分股] 深交所 获取 {sector_code} 失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
+
+    # ── 其他指数（000xxx 非中证、932xxx 等）→ 尝试 csindex ──
     try:
-        print(f"[板块成分股-DEBUG] 调用 ak.index_stock_cons_csindex(symbol='{sector_code}') ...")
-        t0 = _time.time()
         df = ak.index_stock_cons_csindex(symbol=sector_code)
-        t1 = _time.time()
         if df is None or df.empty:
-            print(f"[板块成分股] AKShare(csindex) 返回空数据: {sector_code}")
+            print(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
             return []
-        print(f"[板块成分股-DEBUG] csindex 耗时 {t1-t0:.2f}s, shape={df.shape}, columns={list(df.columns)[:5]}")
-
-        stocks = []
-        code_col = None
-        for col in ["成分券代码", "品种代码", "代码", "con_code", "symbol", "stock_code"]:
-            if col in df.columns:
-                code_col = col
-                break
-
-        if code_col is None:
-            print(f"[板块成分股] AKShare 返回未知列名: {list(df.columns)}")
-            return []
-        print(f"[板块成分股-DEBUG] 识别到代码列: '{code_col}'")
-
-        seen_codes = set()
-        dup_codes = []
-        for _, row in df.iterrows():
-            code = str(row[code_col]).strip()
-            if "." in code:
-                code = code.split(".")[0]
-            if len(code) == 6 and code.isdigit():
-                if code in seen_codes:
-                    dup_codes.append(code)
-                    continue
-                seen_codes.add(code)
-                first = code[0]
-                if first in "689":
-                    prefix = "1"
-                elif first in "03":
-                    prefix = "0"
-                elif first in "24":
-                    prefix = "2"
-                else:
-                    prefix = "1"
-                stocks.append({"code": code, "prefix": prefix, "name": code})
-
-        if dup_codes:
-            print(f"[板块成分股-DEBUG] 发现重复成分股 {len(dup_codes)} 只: {dup_codes[:10]}{'...' if len(dup_codes) > 10 else ''}")
-        print(f"[板块成分股] ✅ AKShare(csindex) 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+        stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
+        print(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
         return stocks
-
     except Exception as e:
-        print(f"[板块成分股] AKShare(csindex) 获取 {sector_code} 失败: {e}")
+        print(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
         import traceback
         traceback.print_exc()
         return []
