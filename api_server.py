@@ -983,7 +983,20 @@ async def api_tdx_download_stop():
 # FastAPI 会优先匹配显式路由，匹配不到才 fallback 到静态文件，/docs 不受影响
 # ═══════════════════════════════════════════════════════════════════════
 
-app.mount("/", StaticFiles(directory=m.OUTPUT_DIR, html=True), name="static")
+# 兼容重定向：旧版页面路径 chan_chart.html → 新首页 index.html
+from fastapi.responses import RedirectResponse
+
+@app.get("/chan_chart.html", include_in_schema=False)
+async def chan_chart_redirect():
+    return RedirectResponse(url="/")
+
+# 第一阶段：挂载 Frontend/ 为前端页面目录（优先）
+frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Frontend")
+if os.path.isdir(frontend_dir):
+    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+else:
+    print(f"[警告] Frontend/ 目录不存在 ({frontend_dir})，回退到 OUTPUT_DIR 静态挂载")
+    app.mount("/", StaticFiles(directory=m.OUTPUT_DIR, html=True), name="static")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -991,7 +1004,22 @@ app.mount("/", StaticFiles(directory=m.OUTPUT_DIR, html=True), name="static")
 # ═══════════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
+    import socket
     import uvicorn
+
+    # ── 端口占用检测：若 18081 已被旧进程占用，先给出明确提示，避免浏览器打到旧服务 ──
+    PORT = 18081
+    try:
+        _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        _probe.bind(("127.0.0.1", PORT))
+        _probe.close()
+    except OSError:
+        print(f"[错误] 端口 {PORT} 已被占用！")
+        print(f"[错误] 可能原因：上一次启动的服务器进程仍在运行（旧版 my_chan_main.py 或 api_server.py）。")
+        print(f"[解决] 请先关闭占用 18081 端口的旧进程，再重新启动本服务。")
+        print(f"[解决] Windows 可在命令行执行: netstat -ano | findstr 18081  查看占用进程 PID，")
+        print(f"[解决] 然后执行: taskkill /PID <PID> /F  结束旧进程。")
+        sys.exit(1)
 
     last_code, last_freq = m._load_last_code_freq()
     if last_code:
@@ -999,7 +1027,7 @@ if __name__ == "__main__":
     else:
         print(f"[信息] 使用默认股票: {m.SYMBOL_CODE}")
 
-    print(f"[信息] FastAPI 服务器启动: http://127.0.0.1:18081")
-    print(f"[信息] API 文档:   http://127.0.0.1:18081/docs")
-    print(f"[信息] K线图表页:  http://127.0.0.1:18081/chan_chart.html")
-    uvicorn.run(app, host="127.0.0.1", port=18081, log_level="info")
+    print(f"[信息] FastAPI 服务器启动: http://127.0.0.1:{PORT}")
+    print(f"[信息] API 文档:   http://127.0.0.1:{PORT}/docs")
+    print(f"[信息] K线图表页:  http://127.0.0.1:{PORT}/")
+    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")

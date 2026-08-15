@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>缠论K线分析 - chan.py</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+    <div class="loading-overlay hidden" id="loading">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">正在加载K线数据...</div>
+    </div>
+    <div class="error-overlay hidden" id="error">
+        <div class="error-icon">⚠</div>
+        <div class="error-title">数据加载失败</div>
+        <div class="error-msg" id="error-msg">数据加载失败，请检查网络连接或稍后重试。</div>
+    </div>
+    <div class="header">
+        <div class="header-left">
+            <div class="stock-input">
+                <label>代码:</label>
+                <div class="stock-input-wrap">
+                    <input type="text" id="stock-code-input" placeholder="如 SZZS、GZMT、600519" onkeydown="onInputKeydown(event)" onfocus="clearInput();showHistory()" oninput="onInputChange()">
+                    <span class="stock-input-clear" id="input-clear" onclick="clearInput();document.getElementById('stock-code-input').focus()" style="display:none">×</span>
+                </div>
+                <button onclick="loadStock()">查询</button>
+                <div class="stock-history" id="stock-history"></div>
+            </div>
+            <span class="stock-name" id="stock-name">--</span>
+            <span class="stock-code" id="stock-code">--</span>
+            <span id="freq-selector">
+                <button class="freq-btn" id="btn-w" onclick="switchFreq('w')">周K</button>
+                <button class="freq-btn" id="btn-d" onclick="switchFreq('d')">日K</button>
+                <button class="freq-btn" id="btn-30m" onclick="switchFreq('30m')">30分</button>
+                <button class="freq-btn active" id="btn-5m" onclick="switchFreq('5m')">5分</button>
+                <button class="freq-btn" id="btn-1m" onclick="switchFreq('1m')">1分</button>
+                <button class="freq-btn" id="btn-15s" onclick="switchFreq('15s')">15秒</button>
+                <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
+            </span>
+            <span class="realtime-badge" id="realtime-badge" title="实时推送中">● 实时</span>
+        </div>
+        <div class="header-right">
+            <div class="goto-date">
+                <span class="date-arrow" id="date-arrow-left" onclick="dateStep(-1)" title="前一天">◀</span>
+                <span class="date-input-wrap">
+                    <input type="date" id="goto-date-input" onchange="handleDateChange()" onkeydown="handleDateKeydown(event)" onblur="handleDateBlur()" oninput="handleDateInput(event)">
+                    <span class="date-weekday" id="date-weekday"></span>
+                </span>
+                <span class="date-arrow" id="date-arrow-right" onclick="dateStep(1)" title="后一天">▶</span>
+            </div>
+            <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
+                <button class="btn active" id="btn-bi" onclick="toggleOverlay('bi')">笔</button>
+                <button class="btn" id="btn-seg" onclick="toggleOverlay('seg')">线段</button>
+                <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
+                <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
+            <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
+            <button class="btn" id="btn-download" onclick="toggleDownloadPanel()" title="盘后数据下载">盘后下载</button>
+            <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
+            <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、PE-TTM和指数归属" onclick="refreshStockNames()">
+                <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"></path></svg>
+            </button>
+            <span id="refresh-status" style="color:#a8b2d1;font-size:11px;margin-left:4px;display:none;"></span>
+            <button class="btn-icon" id="btn-settings" title="设置" onclick="openBspSettings()">
+                <svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 00-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1115.6 12 3.611 3.611 0 0112 15.6z"></path></svg>
+            </button>
+        </div>
+    </div>
+    <div id="chart-container">
+        <div class="crosshair-info" id="crosshair-info"></div>
+        <div class="ma-tooltip" id="ma-tooltip"></div>
+    </div>
+    <div class="range-slider" id="range-slider">
+        <div class="range-slider-track" id="slider-track">
+            <div class="range-slider-window" id="slider-window">
+                <div class="range-slider-handle left" id="slider-handle-left"></div>
+                <div class="range-slider-handle right" id="slider-handle-right"></div>
+            </div>
+        </div>
+        <div class="range-slider-label" id="slider-label"></div>
+    </div>
+
+    <div class="stats-panel" id="stats-panel">
+        <div class="stats-title">缠论统计</div>
+        <div id="stats-content"></div>
+    </div>
+    <div class="scan-panel" id="scan-panel">
+        <div class="scan-header">
+            <span class="scan-title" id="scan-title">买卖点扫描</span>
+            <button class="scan-save-btn" id="scan-save-btn" onclick="saveScanToZxg()" disabled="" title="保存勾选到通达信+同花顺自选股">保存到自选</button>
+            <span class="scan-status" id="scan-status"></span>
+            <span class="scan-header-right">
+            <span class="scan-minimize" onclick="toggleScanMinimize()" title="最小化面板">-</span>
+            <span class="scan-close" onclick="closeScanPanel()">×</span>
+            </span>
+        </div>
+        <div class="scan-body" id="scan-body">
+            <div class="scan-empty">点击上方"股票扫描"按钮开始</div>
+        </div>
+    </div>
+    <!-- 盘后数据下载面板 -->
+    <div class="download-panel-overlay" id="download-panel-overlay" onclick="if(event.target===this)closeDownloadPanel()"></div>
+    <div class="download-panel" id="download-panel">
+        <div class="download-panel-header">
+            <span class="download-panel-title">盘后数据下载</span>
+            <span class="download-panel-close" onclick="closeDownloadPanel()">×</span>
+        </div>
+        <div class="download-panel-body">
+            <div class="download-section">
+                <div class="download-section-title">日线（默认5年前）</div>
+                <input type="date" class="download-date-input" id="dl-day-start">
+            </div>
+            <div class="download-section">
+                <div class="download-section-title">分钟线（默认6个月前）</div>
+                <input type="date" class="download-date-input" id="dl-min-start">
+            </div>
+            <div class="download-section">
+                <div class="download-section-title">沪深京市场</div>
+                <label class="download-check"><input type="checkbox" id="dl-hsj-day" checked=""> 日线 (.day)</label>
+                <label class="download-check"><input type="checkbox" id="dl-hsj-5m" checked=""> 5分钟 (.lc5)</label>
+            </div>
+            <div class="download-progress-wrap" id="download-progress-wrap" style="display:none;">
+                <div class="download-progress-bar">
+                    <div class="download-progress-fill" id="download-progress-fill"></div>
+                </div>
+                <div class="download-progress-text" id="download-progress-text">0%</div>
+            </div>
+            <div class="download-status" id="download-status"></div>
+            <div class="download-btns">
+                <button class="download-btn primary" id="dl-btn-start" onclick="startDownload()">开始下载</button>
+                <button class="download-btn" id="dl-btn-stop" onclick="stopDownload()" style="display:none;">停止下载</button>
+                <button class="download-btn" onclick="closeDownloadPanel()">关闭</button>
+            </div>
+        </div>
+    </div>
+    <div class="redframe-debug" id="redframe-debug" style="position:fixed;bottom:10px;right:10px;background:#1a1a2e;color:#fff;border:1px solid #e94560;border-radius:4px;padding:6px 10px;font-size:11px;font-family:monospace;z-index:9999;display:none;max-width:320px;pointer-events:none;">
+        <b style="color:#e94560;">红框调试</b> | <span id="rfdb-state">--</span>
+        <span id="rfdb-detail"></span>
+    </div>
+    <!-- 文字标注右键菜单 -->
+    <div class="annotation-menu" id="annotation-menu">
+        <div class="annotation-menu-item" id="annotation-menu-edit-one" onclick="annotationEditAnnotation()" style="display:none;">修改标注</div>
+        <div class="annotation-menu-item" id="annotation-menu-delete-one" onclick="annotationDeleteAnnotation()" style="display:none;">删除标注</div>
+        <div class="annotation-menu-item" id="annotation-menu-add" onclick="annotationAdd()">添加标注</div>
+        <div class="annotation-menu-item danger" id="annotation-menu-del-all" onclick="annotationDeleteAllGlobal()">删除全部</div>
+        <div class="annotation-menu-divider" id="annotation-menu-divider"></div>
+        <div class="annotation-menu-item" id="annotation-menu-restart" onclick="cancelSelectedPoint()" style="display:none;">取消选点</div>
+        <div class="annotation-menu-item" id="annotation-menu-replay" onclick="annotationReplayToHere()">复盘至此</div>
+        <div class="annotation-menu-divider" id="annotation-menu-divider2"></div>
+        <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">翻转视图</div>
+    </div>
+    <!-- 文字标注输入对话框 -->
+    <div class="annotation-dialog" id="annotation-dialog">
+        <div class="annotation-dialog-box">
+            <div class="annotation-dialog-title" id="annotation-dialog-title">添加文字标注</div>
+            <div class="annotation-dialog-date" id="annotation-dialog-date"></div>
+            <input class="annotation-dialog-input" id="annotation-dialog-input" type="text" placeholder="输入标注文字，如：支撑位、减仓点" maxlength="50" onkeydown="annotationDialogKeydown(event)">
+            <div class="annotation-dialog-btns">
+                <button class="annotation-dialog-btn" onclick="annotationDialogCancel()">取消</button>
+                <button class="annotation-dialog-btn primary" onclick="annotationDialogConfirm()">确定</button>
+            </div>
+        </div>
+    </div>
+    <!-- 股票扫描模式选择对话框 -->
+    <div class="annotation-dialog" id="scan-mode-dialog">
+        <div class="annotation-dialog-box">
+            <div class="annotation-dialog-title">股票扫描</div>
+            <div id="scan-source-section">
+            <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描来源</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="zxg" checked="" style="accent-color:#e94560;">
+                    自选股
+                </label>
+                <label id="label-page-index" style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="page_index" style="accent-color:#e94560;">
+                    成分股
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="tdxhy2" style="accent-color:#e94560;">
+                    板块指数2
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#a8b2d1;padding:6px 10px;border-radius:4px;background:#1a1a2e;" onmouseover="this.style.background='#0f3460'" onmouseout="this.style.background='#1a1a2e'">
+                    <input type="checkbox" name="scan-source" value="tdxhy3" style="accent-color:#e94560;">
+                    板块指数3
+                </label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:14px;">
+                <button onclick="scanSourceSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="scanSourceSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
+            </div>
+            </div>
+            <div id="scan-freq-row" style="margin-bottom:14px;">
+                <div style="margin-bottom:6px;font-size:12px;color:#e94560;">扫描周期</div>
+                <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;">
+                    <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="w" style="accent-color:#e94560;margin-right:4px;">周K</label>
+                    <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="d" checked="" style="accent-color:#e94560;margin-right:4px;">日K</label>
+                    <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="30m" style="accent-color:#e94560;margin-right:4px;">30分</label>
+                    <label style="cursor:pointer;"><input type="radio" name="scan-freq" value="5m" style="accent-color:#e94560;margin-right:4px;">5分</label>
+                </div>
+            </div>
+            <div id="scan-recent-row" style="display:flex;align-items:center;gap:8px;margin-bottom:14px;font-size:12px;color:#8892b0;">
+                <span>最近</span>
+                <input type="number" id="scan-recent-days" value="1" min="1" max="100" style="width:50px;height:24px;background:#1a1a2e;border:1px solid #2a2a3e;color:#e0e0e0;border-radius:4px;text-align:center;font-size:13px;padding:0 4px;">
+                <span>根</span>
+            </div>
+            <div style="margin-bottom:10px;font-size:12px;color:#e94560;">扫描模式</div>
+            <div style="display:flex;gap:16px;font-size:13px;color:#a8b2d1;margin-bottom:14px;">
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ann" checked="" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">标注</label>
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="ma" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">均线</label>
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="fx_d" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">底分型</label>
+                <label style="cursor:pointer;"><input type="radio" name="scan-mode" value="bsp" onchange="updateScanRecentDisabled()" style="accent-color:#e94560;margin-right:4px;">买/卖点</label>
+            </div>
+            <div class="annotation-dialog-btns">
+                <button class="annotation-dialog-btn primary" onclick="scanModeDialogConfirm()">确认</button>
+                <button class="annotation-dialog-btn" onclick="scanModeDialogCancel()">取消</button>
+            </div>
+        </div>
+    </div>
+    <!-- 设置抽屉（买卖点过滤 + 均线周期） -->
+    <div class="settings-drawer-overlay" id="bsp-filter-overlay" onclick="closeBspSettings()"></div>
+    <aside class="settings-drawer" id="bsp-filter-dialog">
+        <div class="settings-drawer-header">
+            <span class="settings-drawer-title">显示设置</span>
+            <span class="settings-drawer-close" onclick="closeBspSettings()">×</span>
+        </div>
+        <div class="settings-drawer-body">
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型（可多选）</div>
+            <div class="bsp-filter-grid">
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="0" checked="" onchange="onBspFilterChange(this)">
+                    0类（中枢震荡）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="1" checked="" onchange="onBspFilterChange(this)">
+                    1类（趋势背驰）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="2" checked="" onchange="onBspFilterChange(this)">
+                    2类（二买/二卖）
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="bsp-filter" value="3" checked="" onchange="onBspFilterChange(this)">
+                    3类（三买/三卖）
+                </label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:18px;">
+                <button onclick="bspFilterSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="bspFilterSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
+            </div>
+
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">均线周期（可多选，斐波那契数列）</div>
+            <div class="bsp-filter-grid" id="ma-periods-grid">
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="5" onchange="onMaPeriodChange(this)"><span style="color:#FFFFFF">●</span> MA5</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="13" onchange="onMaPeriodChange(this)"><span style="color:#FCBF49">●</span> MA13</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="21" onchange="onMaPeriodChange(this)"><span style="color:#F77F00">●</span> MA21</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="34" onchange="onMaPeriodChange(this)"><span style="color:#90BE6D">●</span> MA34</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="55" onchange="onMaPeriodChange(this)"><span style="color:#22D3EE">●</span> MA55</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="89" onchange="onMaPeriodChange(this)"><span style="color:#3B82F6">●</span> MA89</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="144" onchange="onMaPeriodChange(this)"><span style="color:#A8A8A8">●</span> MA144</label>
+                <label class="bsp-filter-label"><input type="checkbox" name="ma-period" value="233" onchange="onMaPeriodChange(this)"><span style="color:#8822DD">●</span> MA233</label>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:14px;">
+                <button onclick="maPeriodsSelectAll()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">全选</button>
+                <button onclick="maPeriodsSelectNone()" style="font-size:11px;padding:2px 8px;background:#1a1a2e;border:1px solid #2a2a3e;color:#8892b0;border-radius:3px;cursor:pointer;">取消</button>
+            </div>
+
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">坐标系</div>
+            <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
+                <label class="bsp-filter-label">
+                    <input type="radio" name="coord-system" value="linear" onchange="onCoordSystemChange(this)">
+                    普通坐标系 + 等差网格
+                </label>
+                <label class="bsp-filter-label">
+                    <input type="radio" name="coord-system" value="log" onchange="onCoordSystemChange(this)">
+                    对数坐标系 + 等比网格
+                </label>
+            </div>
+            <div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>
+
+            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">其他</div>
+            <div class="bsp-filter-grid">
+                <label class="bsp-filter-label">
+                    <input type="checkbox" name="show-bi-idx" onchange="onShowBiIdxChange(this)">
+                    显示笔索引编号
+                </label>
+            </div>
+        </div>
+    </aside>
+    <script src="app.js?v=6"></script>
+
+</body></html>
