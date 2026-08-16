@@ -21,6 +21,7 @@ App/AppOrch.py —— 业务编排层（服务层）
     result = call_analysis("000001.SH", freq="d")
 """
 import os
+import json
 import time
 import threading
 import traceback
@@ -30,11 +31,52 @@ import my_chan_main as _m
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 引擎全局串行锁（第三方底座）
-# 引擎全局缓存（_stocks_analysis_cache 等）非线程安全 → 全局串行锁保护；
-# 阶段 2 仅 call_analysis/run_analysis 持锁，阶段 3a 其余路由迁入后全覆盖。
+# 引擎调用锁分类建档（阶段 3a）
+# =====================================================================
+# 背景（阶段 2 遗留问题）：引擎全局缓存（_stocks_analysis_cache、
+# _futures_analysis_cache、名称/PE/市值缓存等）非线程安全，但阶段 2 仅
+# call_analysis / run_analysis 持锁，api_server 有 3 处直连引擎绕锁。
+#
+# 解法（非全面串行化）：给引擎调用按「是否触碰共享状态」分类建档——
+#
+#   SERIAL（串行分析）  REST 交互式分析路径（单标的分析 / 手动选点 /
+#                      红框中枢计算 / 期货选点）。共用 _ENGINE_LOCK：
+#                      同一时刻只有一个线程进入引擎，交互延迟可接受。
+#
+#   SCAN（并行扫描）    批量扫描路径。前端按 SCAN_CONCURRENCY 并发发起
+#                      /api/scan_one。_scan_lock 为全局锁（单实例，非按
+#                      票）：锁内串行化引擎调用 analyze_stock（保护非线程
+#                      安全的引擎缓存不被并发写），锁外的预处理/结果过滤
+#                      保留并发——即并发体现在非引擎阶段，引擎阶段全局
+#                      串行（阶段 2.6 基线继承语义，本阶段零改动，收敛
+#                      计划随阶段 5 数据层拆分一并处理）。
+#
+#   SELF_CONTAINED     SSE 期货实时流。每连接独立 TqApi + CChan 对象，
+#                      不触碰 _stocks_analysis_cache（_futures_analysis_
+#                      cache 仅按 symbol:freq 键存放下窗 CChan 供
+#                      /api/dual_zs 读取，启动写入/收尾弹出，无跨连接
+#                      读改写竞争）。连接间天然隔离，不加锁。
+#
+# 约定：路由层（FrontAPI）禁止直连 m.analyze_stock 等引擎函数，
+# 一律经本层 call_* 漏斗（锁策略集中在 LOCK_POLICY 登记，
+# Test/test_phase3_guards.py 守护）。
 # ═══════════════════════════════════════════════════════════════════════
 _ENGINE_LOCK = threading.Lock()
+
+# 锁策略登记表：入口 → (类别, 说明)。守护用例校验完备性与一致性。
+LOCK_POLICY = {
+    "call_analysis":                ("SERIAL", "REST 单标的分析：共享分析缓存 → _ENGINE_LOCK"),
+    "run_analysis":                 ("SERIAL", "call_analysis 异步版：线程池执行 + _ENGINE_LOCK，不阻塞事件循环"),
+    "call_manual_select_point":     ("SERIAL", "股票手动选点：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK"),
+    "call_futures_manual_select_point": ("SERIAL", "期货手动选点：内部走期货分析链路（含期货缓存）→ _ENGINE_LOCK"),
+    "call_compute_red_range_zs":    ("SERIAL", "红框中枢计算：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK"),
+    "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
+                                      "串行调用方必须改走 call_analysis / run_analysis"),
+    "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：同 analyze_stock，阶段 5 拆分时收敛"),
+    "ScannerService.scan_one":      ("SCAN", "扫描路径：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK"),
+    "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
+    "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
+}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -117,23 +159,80 @@ async def run_analysis(code, freq="d", end_date=None, dual=False, step=None, sub
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
-    """统一的缠论分析入口（无状态，可在线程池 / ProcessPool 复用）"""
+    """统一的缠论分析入口 · 锁分类 RAW（无锁）
+
+    ⚠ 本函数是引擎原始入口的薄封装，**并非无状态**：引擎内部维护模块级
+    LRU 缓存（_stocks_analysis_cache）与名称/PE/市值等共享缓存，均非线程
+    安全。此前的「无状态，可在线程池 / ProcessPool 复用」表述有误导。
+
+    调用约定（LOCK_POLICY，见文件头）：
+      - 串行分析路径（REST 交互式）→ 必须走 call_analysis / run_analysis
+        （持 _ENGINE_LOCK），不得直调本函数；
+      - 扫描路径（SCAN）→ ScannerService.scan_one 内部调用（全局
+        _scan_lock 内串行引擎调用，锁外保留并发）；
+      - SSE 期货路径（SELF_CONTAINED）→ 独立 CChan 会话，不触共享缓存。
+    """
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq)
 
 
+def call_manual_select_point(code, freq="d", bi_idx=-1):
+    """股票手动选点 · SERIAL（持 _ENGINE_LOCK）
+
+    原路由直连 m.stock_manual_select_point 绕锁（阶段 2 遗留问题 L185），
+    阶段 3a 起统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
+    """
+    with _ENGINE_LOCK:
+        return _m.stock_manual_select_point(code, freq=freq, bi_idx=bi_idx)
+
+
+def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
+    """期货手动选点 · SERIAL（持 _ENGINE_LOCK）
+
+    内部走期货分析链路（_analyze_futures_internal，含期货缓存读写），
+    归入串行分类，与股票侧共用引擎锁。
+    """
+    with _ENGINE_LOCK:
+        return _m.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+
+
+def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
+    """红框中枢计算 · SERIAL（持 _ENGINE_LOCK）
+
+    原路由直连 m.compute_red_range_zs 绕锁（阶段 2 遗留问题 L206），
+    阶段 3a 起统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
+    """
+    with _ENGINE_LOCK:
+        return _m.compute_red_range_zs(code, sub_freq=sub_freq,
+                                       left_date=left_date, right_date=right_date,
+                                       end_date=end_date)
+
+
 def stock_manual_select_point(code, freq="d", bi_idx=-1):
-    """股票手动选点"""
+    """股票手动选点 · RAW（无锁原始入口）
+
+    ⚠ 与 analyze_stock 同理并非无状态：内部走 analyze_stock 引擎链路与
+    共享缓存。REST 调用方必须走 call_manual_select_point（持锁漏斗）；
+    本签名保留供已按 SELF_CONTAINED 分类并自带会话隔离的路径使用。
+    """
     return _m.stock_manual_select_point(code, freq=freq, bi_idx=bi_idx)
 
 
 def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
-    """期货手动选点"""
+    """期货手动选点 · RAW（无锁原始入口）
+
+    ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
+    call_futures_manual_select_point（持锁漏斗）。
+    """
     return _m.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
 
 def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
-    """红框中枢计算"""
+    """红框中枢计算 · RAW（无锁原始入口）
+
+    ⚠ 内部复用 analyze_stock 引擎与共享缓存。REST 调用方必须走
+    call_compute_red_range_zs（持锁漏斗）。
+    """
     return _m.compute_red_range_zs(code, sub_freq=sub_freq,
                                    left_date=left_date, right_date=right_date,
                                    end_date=end_date)
@@ -151,9 +250,13 @@ def extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_sel
 
 def fetch_and_inject(code, freq="d", source="tdx", end_date=None, dual=False, step=None, sub_freq=None):
     """
-    判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
-    第一版委托 analyze_stock（其内部完成数据拉取 + 分析），
-    阶段 5 后统一走 DataAPI 抽象层。
+    判断股票 / 期货 → 拉取 K 线 → 注入分析引擎 · 锁分类 RAW（无锁）
+
+    ⚠ 委托 analyze_stock（其内部完成数据拉取 + 分析），共享引擎缓存，
+    非线程安全——串行调用方须走 call_analysis / run_analysis。
+    阶段 5 拆分为独立「拉取 + 注入」流程时同步收敛锁策略。
+
+    source: tdx（通达信）/ tqsdk（天勤期货），阶段 5 后经 DataAPI 抽象层生效。
     """
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             dual=dual, step=step, sub_freq=sub_freq)
@@ -252,6 +355,186 @@ def search_stocks(q):
                 })
 
     return {"results": results}
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# REST 服务函数（阶段 3a）
+# 业务段从 api_server 路由下沉至此，路由层（FrontAPI）保持薄：
+# 参数校验 + 调本层 + 响应组装。数据访问一律经 AppData（单向依赖）。
+# ═══════════════════════════════════════════════════════════════════════
+
+def get_annotations(code, freq):
+    """获取标注数据（/api/annotations GET）"""
+    from App.AppData import app_data
+    return app_data.get_annotations_for(code, freq)
+
+
+def handle_annotation_action(body):
+    """标注增删改统一入口（/api/annotations POST，40 行校验逻辑下沉）
+
+    body: {action, code, freq, date, text, y_offset, old_text}
+    返回 (result_dict, status_code)，语义与原路由逐分支一致。
+    """
+    from App.AppData import app_data
+
+    action = body.get("action", "")
+    code = body.get("code", "")
+    freq = body.get("freq", "d")
+    date_str = body.get("date", "")
+    text = body.get("text", "")
+    y_offset = body.get("y_offset", 0)
+
+    if not code:
+        return {"error": "缺少code参数"}, 400
+
+    if action == "add":
+        if not date_str or not text:
+            return {"error": "缺少date或text参数"}, 400
+        success = app_data.add_annotation(code, freq, date_str, text, y_offset)
+        return {"ok": success, "duplicate": not success}, 200
+    elif action == "delete":
+        if not date_str or not text:
+            return {"error": "缺少date或text参数"}, 400
+        success = app_data.delete_annotation(code, freq, date_str, text)
+        return {"ok": success}, 200
+    elif action == "delete_by_date":
+        if not date_str:
+            return {"error": "缺少date参数"}, 400
+        success = app_data.delete_annotation_by_date(code, freq, date_str)
+        return {"ok": success}, 200
+    elif action == "delete_all":
+        success = app_data.delete_all_annotations(code, freq)
+        return {"ok": success}, 200
+    elif action == "update":
+        old_text = body.get("old_text", "")
+        new_text = body.get("text", "")
+        if not date_str or not old_text or not new_text:
+            return {"error": "缺少date/old_text/text参数"}, 400
+        app_data.delete_annotation(code, freq, date_str, old_text)
+        success = app_data.add_annotation(code, freq, date_str, new_text, y_offset)
+        return {"ok": success}, 200
+    else:
+        return {"error": f"未知action: {action}"}, 400
+
+
+def get_annotated_codes(freq=""):
+    """自选扫描：返回有标注的股票列表（/api/annotations_scan）"""
+    from App.AppData import app_data
+    return app_data.get_annotated_codes(freq)
+
+
+def read_zxg_stocks():
+    """读取自选股列表（/api/zxg_list）"""
+    from App.AppData import app_data
+    return app_data.read_zxg_stocks()
+
+
+def zxg_save(codes):
+    """保存勾选股票到通达信 + 同花顺自选股（/api/zxg_save，业务段下沉）
+
+    codes: 逗号分隔字符串（与原路由入参一致）
+    返回 (result_dict, status_code)。
+    """
+    from App.AppData import app_data
+
+    codes_list = codes.split(",") if codes else []
+    if not codes_list:
+        return {"error": "codes为空"}, 400
+
+    try:
+        codes_raw = [c.strip() for c in codes_list]
+        codes_ths = list(dict.fromkeys(codes_raw))
+
+        # 通达信
+        print(f"[保存] 通达信: 输入 {len(codes_raw)} 只, 代码={codes_raw}")
+        tdx_added = app_data.save_to_zxg_blk(codes_raw)
+        print(f"[保存] 通达信: 实际写入 {tdx_added} 只")
+
+        # 同花顺
+        ths_added = 0
+        ths_msg = ""
+        print(f"[保存] 同花顺: 输入 {len(codes_ths)} 只, 代码={codes_ths}")
+        if _m._THS_CLOUD_AVAILABLE:
+            try:
+                cloud_result = _m.save_scan_to_ths_cloud(codes_ths)
+                if "error" in cloud_result:
+                    raise Exception(cloud_result["error"])
+                ths_added = len(cloud_result.get("added", []))
+                ths_msg = "ok"
+                print(f"[保存] 同花顺: 新增{ths_added}, "
+                      f"跳过{len(cloud_result.get('skipped',[]))}, "
+                      f"失败{len(cloud_result.get('failed',[]))}")
+            except Exception as e:
+                err_str = str(e)
+                if "登录状态失效" in err_str or "Cookie" in err_str:
+                    ths_msg = "Cookie过期，请运行 ths_capture_cookie.py 重新获取"
+                else:
+                    ths_msg = f"云端同步失败: {err_str}"
+                print(f"[保存] 同花顺: {ths_msg}")
+        else:
+            ths_msg = "App/ths_cloud_api.py 未找到，请确保 App/ 目录完整（阶段 2 已迁入 App/）"
+            print(f"[保存] 同花顺: {ths_msg}")
+
+        print(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
+        return {
+            "ok": True,
+            "tdx_saved": tdx_added,
+            "ths_saved": ths_added,
+            "ths_msg": ths_msg,
+        }, 200
+    except Exception as exc:
+        traceback.print_exc()
+        return {"error": str(exc)}, 500
+
+
+def clear_saved_point(code, freq="d"):
+    """清除选点并同步清缓存（/api/clear_saved_point）"""
+    from App.AppData import app_data
+    return app_data.clear_saved_point(code, freq)
+
+
+def futures_clear_saved_point(symbol, freq="15s"):
+    """期货清除选点（/api/futures_clear_saved_point）：别名解析 + 清 CSV"""
+    from App.AppData import app_data
+
+    symbol_upper = symbol.upper()
+    if symbol_upper in _m.FUTURES_ALIASES:
+        symbol = _m.FUTURES_ALIASES[symbol_upper]
+    app_data.clear_saved_point_time(symbol, freq)
+    return {"ok": True}
+
+
+def save_last_code_freq(code, freq="d"):
+    """持久化上次查看代码/周期（/api/stock 成功后的副作用）"""
+    from App.AppData import app_data
+    return app_data.save_last_code_freq(code, freq)
+
+
+def load_last_code_freq():
+    """加载上次查看代码/周期（启动恢复）"""
+    from App.AppData import app_data
+    return app_data.load_last_code_freq()
+
+
+def start_download_checked(categories, day_start=None, min_start=None):
+    """盘后下载启动 · 带前置检查（/api/tdx_download_start GET/POST 共用）
+
+    categories: GET 传 JSON 字符串，POST 传 list（两形态统一在此归一）。
+    返回 (result_dict, status_code)，语义与原路由一致（含 409 冲突码）。
+    """
+    if not _m._ELTDX_AVAILABLE:
+        return {"error": "eltdx 未安装，请先 pip install eltdx"}, 400
+    if isinstance(categories, str):
+        try:
+            categories = json.loads(categories)
+        except Exception:
+            return {"error": "categories 参数格式错误"}, 400
+    if not categories:
+        return {"error": "请选择要下载的数据类型"}, 400
+    ok, msg = _m._start_download(_m.DOWNLOAD_DIR, categories,
+                                 day_start=day_start or None,
+                                 min_start=min_start or None)
+    return {"ok": ok, "message": msg}, (200 if ok else 409)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -532,18 +815,31 @@ class ScannerService:
         _need_float_mc = any(s not in ("tdxhy2", "tdxhy3") for s in sources)
         if _need_float_mc:
             _m._load_float_mc_cache()
+            if _m._float_mc_loaded:
+                print(f"[流通市值] 本地缓存已加载 {len(_m._float_mc_cache)} 只")
             try:
                 t_mc = time.time()
                 mv_dict = _m._fetch_float_mc_from_tencent(merged)
                 if mv_dict:
+                    total_stocks = len(merged)
+                    got_count = len(mv_dict)
+                    miss_count = total_stocks - got_count
                     _m._update_float_mc_cache(mv_dict)
+                    if miss_count == 0:
+                        print(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
+                    else:
+                        print(f"[流通市值] 腾讯接口 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
+                else:
+                    print("[流通市值] 腾讯接口未返回数据，使用本地缓存")
             except Exception as e:
                 print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
 
         # 后端预过滤
         pre_filtered = merged
         pre_skip_count = 0
+        pre_skip_log = []
         try:
+            t_pre_all = time.time()
             _PFX_MAP = {"0": "sz", "1": "sh", "2": "bj"}
             filtered = []
             for stk in merged:
@@ -560,9 +856,17 @@ class ScannerService:
                 pass_ok, pre_mc, skip_reason = _m._quick_prefilter_pass(market, code)
                 if not pass_ok:
                     pre_skip_count += 1
+                    pre_skip_log.append(f"[预过滤] {code} 跳过 ({skip_reason})")
                 else:
                     filtered.append(stk)
             pre_filtered = filtered
+            elapsed = time.time() - t_pre_all
+            if pre_skip_count > 0:
+                print(f"[预过滤] 批量预过滤完成: 跳过 {pre_skip_count} 只，剩余 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
+                for line in pre_skip_log:
+                    print(line)
+            else:
+                print(f"[预过滤] 批量预过滤完成: 全部通过 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
         except Exception as e:
             print(f"[预过滤] 批量预过滤异常: {type(e).__name__}: {e}")
 
@@ -576,7 +880,13 @@ class ScannerService:
 
     # ── 单只扫描 ─────────────────────────────────────────────────────
     def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode=""):
-        """扫描单只股票"""
+        """扫描单只股票 · 锁分类 SCAN
+
+        锁语义（阶段 2.6 基线继承，本阶段零改动）：引擎调用 analyze_stock
+        在全局 _scan_lock（单实例、非按票）内串行执行——保护非线程安全
+        的引擎缓存不被并发写；锁外的预处理/结果过滤仍按 SCAN_CONCURRENCY
+        并发，故扫描吞吐主要依赖非引擎阶段的并行。
+        """
         t_scan_start = time.time()
         try:
             recent_days = max(1, int(recent))
@@ -604,6 +914,7 @@ class ScannerService:
             t_analyze = time.time() - t0
             if "error" in result:
                 _m._scan_skip_log.append(f"{code} - {result['error']}")
+                print(f"[耗时-扫描] {code} 分析失败: {result['error']}, 耗时{t_analyze:.3f}s")
                 return {"error": result["error"]}
 
             t0 = time.time()
@@ -624,6 +935,8 @@ class ScannerService:
                         fx_strength = last_bi.get("fx_strength", 0)
                 t_filter = time.time() - t0
                 if is_fx_d:
+                    t_total = time.time() - t_scan_start
+                    print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 是底分型")
                     return {
                         "code": code + "." + market.upper(), "name": stock_name,
                         "is_fx_d": True,
@@ -635,6 +948,8 @@ class ScannerService:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
                         _m._cache_remove(f"single_{mkt}_{cd}_{freq}_live")
+                    t_total = time.time() - t_scan_start
+                    print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 不是底分型")
                     return {"code": code, "is_fx_d": False}
 
             # ── 均线分类扫描模式 ──
@@ -651,6 +966,8 @@ class ScannerService:
                             conquered += 1
                     ma_category = 8 - conquered
                 t_filter = time.time() - t0
+                t_total = time.time() - t_scan_start
+                print(f"[耗时-扫描-均线] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 分类:{ma_category}")
                 resp_data = {
                     "code": code + "." + market.upper(),
                     "name": stock_name,
@@ -699,6 +1016,8 @@ class ScannerService:
                     _m._cache_remove(f"single_{mkt}_{cd}_{freq}_live")
 
             if has_points:
+                t_total = time.time() - t_scan_start
+                print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 有买卖点")
                 return {
                     "code": code + "." + market.upper(), "name": stock_name,
                     "buy_points": buy_points,
@@ -709,10 +1028,14 @@ class ScannerService:
                     "ma120_val": ma120_val,
                 }
             else:
+                t_total = time.time() - t_scan_start
+                print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 无买卖点")
                 return {"code": code, "buy_points": [], "sell_points": []}
 
         except Exception as exc:
             _m._scan_skip_log.append(f"{code} - 异常: {exc}")
+            t_total = time.time() - t_scan_start
+            print(f"[耗时-扫描] {code} 异常: {exc}, 总耗时{t_total:.3f}s")
             return {"error": str(exc)}
 
     # ── 扫描生命周期 ─────────────────────────────────────────────────

@@ -1,0 +1,171 @@
+{
+ "dual": {
+  "heartbeat_count": 4,
+  "init_structure": {
+   "main": {
+    "bis": [],
+    "klines": [
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 0
+     }
+    ],
+    "meta": {
+     "bi_count": 3,
+     "bss": [],
+     "kline_count": 5,
+     "tag": "snap1",
+     "zs_count": 1
+    },
+    "tag": "snap1"
+   },
+   "sub": {
+    "bis": [],
+    "klines": [
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 10
+     },
+     {
+      "amount": 0,
+      "dea": 0.05,
+      "dif": 0.1,
+      "macd": 0.1,
+      "vol": 0
+     }
+    ],
+    "meta": {
+     "bi_count": 3,
+     "bss": [],
+     "kline_count": 5,
+     "tag": "snap2",
+     "zs_count": 1
+    },
+    "tag": "snap2"
+   }
+  },
+  "typed_count": 4,
+  "typed_sequence": [
+   "init",
+   "update",
+   "update",
+   "update"
+  ]
+ },
+ "single": {
+  "heartbeat_count": 4,
+  "init_structure": {
+   "bis": [],
+   "klines": [
+    {
+     "amount": 0,
+     "dea": 0.05,
+     "dif": 0.1,
+     "macd": 0.1,
+     "vol": 10
+    },
+    {
+     "amount": 0,
+     "dea": 0.05,
+     "dif": 0.1,
+     "macd": 0.1,
+     "vol": 10
+    },
+    {
+     "amount": 0,
+     "dea": 0.05,
+     "dif": 0.1,
+     "macd": 0.1,
+     "vol": 10
+    },
+    {
+     "amount": 0,
+     "dea": 0.05,
+     "dif": 0.1,
+     "macd": 0.1,
+     "vol": 10
+    },
+    {
+     "amount": 0,
+     "dea": 0.05,
+     "dif": 0.1,
+     "macd": 0.1,
+     "vol": 0
+    }
+   ],
+   "meta": {
+    "bi_count": 3,
+    "bss": [],
+    "kline_count": 5,
+    "tag": "snap1",
+    "zs_count": 1
+   },
+   "tag": "snap1",
+   "white_hline": {
+    "freq": "15s"
+   }
+  },
+  "typed_count": 4,
+  "typed_sequence": [
+   "init",
+   "update",
+   "update",
+   "update"
+  ]
+ }
+}

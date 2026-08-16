@@ -13,9 +13,13 @@ CI / 迁移每阶段的验收门禁）。
   4. 阶段 2 成果防护   test_phase2_guards.py        配置一致性/异常链路/引擎边界/日期契约
   5. 确定性测试        test_determinism.py          重复调用/跨路径污染/双窗口语义
   6. 行业映射完整性    test_industry_mapping.py     双路径加载不静默降级 + 条目质量
-  7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭
+  7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭（legacy 桥接）
   8. 函数映射同步      func_map_check.py            阶段 2.6：74 函数/57 状态归属
                                                      完备·无幽灵·行号无漂移
+  9. 阶段 3 成果防护   test_phase3_guards.py        锁分类/直连清零/路由收敛/墓碑/
+                                                     SSE 双实现/分层方向
+ 10. SSE 灰度比对      test_sse_gray.py             3b-1：native vs 冻结基线
+                                                     （①类型序列 ②剥离时间戳结构 ③总数）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -52,6 +56,10 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_sse_sequence.py")]),
     ("func_map_sync",
      [sys.executable, os.path.join("Test", "func_map_check.py")]),
+    ("phase3_guards",
+     [sys.executable, os.path.join("Test", "test_phase3_guards.py")]),
+    ("sse_gray",
+     [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
 ]
 
 # 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI
@@ -63,7 +71,7 @@ def run_component(name, cmd, update=False, env=None):
     real_cmd = list(cmd)
     if update and name in ("snapshot_regression", "trigger_step_replay",
                            "phase2_guards", "industry_mapping", "sse_sequence",
-                           "func_map_sync"):
+                           "func_map_sync", "phase3_guards", "sse_gray"):
         real_cmd.append("--update")
     t0 = time.time()
     try:
@@ -120,7 +128,7 @@ def main():
     n_ok = sum(1 for r in records if r["ok"])
     n_all = len(records)
     summary = {
-        "phase": "2.5",
+        "phase": "3",
         "mode": "update" if args.update else "verify",
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "python": sys.version.split()[0],

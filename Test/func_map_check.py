@@ -165,7 +165,7 @@ TARGET_FUNCS = {
     "_verify_config_consistency":   ("CFG", "启动配置自检（阶段 2 引入；随入口迁 FrontAPI 启动段或保留启动脚本）"),
 
     # ── 下线 ──
-    "main":                         ("RETIRE", "旧命令行入口（入口统一 FrontAPI 后下线；api_server 启动仍引用 SYMBOL_CODE 需先参数化）"),
+    "main":                         ("RETIRE", "旧命令行入口（阶段 3a 起启动即打印墓碑提示，服务器仅回 410；入口统一 FrontAPI 后下线）"),
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -255,51 +255,55 @@ TARGET_STATES = {
 # ═══════════════════════════════════════════════════════════════════
 TARGET_CLASSES = {
     "ThreadingHTTPServer": ("RETIRE", "旧 HTTP 服务器别名（2 行；随 ChartHandler 3b 后删）"),
-    "ChartHandler": ("FE", "1853 行/7 方法遗留服务器：do_GET 路由 3a 删除；_handle_sse_stream_dual/single SSE 生成器 3b 改写迁 FrontAPI；其余随 3b-2 拆除"),
+    "ChartHandler": ("FE", "遗留服务器 · 阶段 3a 已墓碑化：do_GET/do_POST 删除（844 行）改回 410 Gone；"
+                          "_handle_sse_stream_dual/single 保留至 3b-2（灰度 legacy 桥接在用）；"
+                          "send_json_response/log_message/handle_one_request 随类保留"),
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# ④ api_server.py → FrontAPI/AppOrch（阶段 3a 输入，粗到路由粒度）
+# ④ api_server.py → FrontAPI/AppOrch（阶段 3a 已完成 · 状态记录）
+# 31 条路由已迁入 FrontAPI.py（单一路由源）；api_server.py 退役为兼容壳；
+# 历史绕锁 3 处（L185/L206/L472）改走持锁漏斗（AppOrch.LOCK_POLICY · SERIAL）。
 # ═══════════════════════════════════════════════════════════════════
 TARGET_ROUTES = {
-    "_sse_generator":  ("FE", "SSE 桥接生成器（3b 改写为原生异步生成器后拆除）"),
-    "_json_response":  ("FE", "JSON 响应工具（随路由迁 FrontAPI）"),
-    "_SSEMockWfile":   ("RETIRE", "SSE Mock 桥接层（3b-2 拆除，设计 4.5）"),
-    "_SSEMockHandler": ("RETIRE", "SSE Mock 桥接层（同上）"),
-    "app":             ("FE", "FastAPI 实例 → FrontAPI 单一 app"),
-    "router":          ("FE", "APIRouter → 并入 FrontAPI"),
-    # 31 条 REST 路由：全部迁 FrontAPI，业务段下沉 AppOrch/AppData
-    "api_stock": ("FE", "/api/stock → FrontAPI 路由 + AppOrch.call_analysis"),
-    "api_stocks_manual_select_point": ("FE", "→ FrontAPI + AppOrch.stock_manual_select_point"),
-    "api_red_range_zs": ("FE", "→ FrontAPI + AppOrch.compute_red_range_zs"),
-    "api_search": ("FE", "→ FrontAPI + AppOrch.search_stocks（93 行业务逻辑）"),
-    "api_zxg_list": ("FE", "→ FrontAPI + AppData.read_zxg_stocks"),
-    "api_scan_stock_list": ("FE", "→ FrontAPI + AppOrch 扫描（106 行）"),
-    "api_scan_one": ("FE", "→ FrontAPI + AppOrch 扫描（162 行；直写 m._scan_* 迁移点）"),
-    "api_scan_page_index_code": ("FE", "→ FrontAPI + AppOrch 扫描"),
-    "api_scan_start": ("FE", "→ FrontAPI + ScannerService（直写 m._scan_start_time）"),
-    "api_scan_end": ("FE", "→ FrontAPI + ScannerService"),
-    "api_scan_clear_cache": ("FE", "→ FrontAPI + AppData.cache_remove"),
-    "api_scan_abort": ("FE", "→ FrontAPI + ScannerService（直写 m._scan_aborted）"),
-    "api_zxg_save": ("FE", "→ FrontAPI + AppData.save_to_zxg_blk"),
-    "api_clear_saved_point": ("FE", "→ FrontAPI + AppData.clear_saved_point"),
-    "api_futures_manual_select_point": ("FE", "→ FrontAPI + AppOrch"),
-    "api_futures_clear_saved_point": ("FE", "→ FrontAPI + AppData"),
-    "api_futures_cleanup": ("FE", "→ FrontAPI + AppOrch._cleanup_all_futures_data"),
-    "api_futures_status": ("FE", "→ FrontAPI + AppOrch 获取侧状态"),
-    "api_futures_config": ("FE", "→ FrontAPI + AppOrch"),
-    "api_futures_stream": ("FE", "SSE 端点（3b 改写）"),
-    "api_refresh_stock_names": ("FE", "→ FrontAPI + AppOrch.refresh_stock_names_async"),
-    "api_refresh_status": ("FE", "→ FrontAPI + AppOrch.refresh_status"),
-    "api_annotations_get": ("FE", "→ FrontAPI + AppData"),
-    "api_annotations_post": ("FE", "→ FrontAPI + AppData（40 行校验逻辑）"),
-    "api_annotations_scan": ("FE", "→ FrontAPI + AppData"),
-    "api_tdx_download_start_get": ("FE", "→ FrontAPI + ElTdxAPI（阶段 5）"),
-    "api_tdx_download_start_post": ("FE", "→ FrontAPI + ElTdxAPI"),
-    "api_tdx_download_status": ("FE", "→ FrontAPI + ElTdxAPI"),
-    "api_tdx_download_stop": ("FE", "→ FrontAPI + ElTdxAPI"),
-    "chan_chart_redirect": ("RETIRE", "旧页重定向（前端切 Frontend/ 后删）"),
-    "app_error_handler": ("FE", "AppError 统一处理器 → FrontAPI"),
+    "_sse_generator":  ("FE", "✓3a 已迁 FrontAPI（legacy 桥接生成器；3b-2 灰度通过后拆除）"),
+    "_json_response":  ("FE", "✓3a 已迁 FrontAPI（兼容壳再导出）"),
+    "_SSEMockWfile":   ("RETIRE", "✓3a 已迁 FrontAPI（3b-2 灰度通过后拆除）"),
+    "_SSEMockHandler": ("RETIRE", "✓3a 已迁 FrontAPI（同上）"),
+    "app":             ("FE", "✓3a 兼容壳别名 → FrontAPI 单一 app"),
+    "router":          ("FE", "✓3a 兼容壳别名 → FrontAPI router"),
+    # 31 条 REST 路由：✓3a 已全部迁入 FrontAPI.py，业务段经 AppOrch/AppData
+    "api_stock": ("FE", "✓3a /api/stock → FrontAPI + AppOrch.call_analysis（SERIAL 持锁）"),
+    "api_stocks_manual_select_point": ("FE", "✓3a → AppOrch.call_manual_select_point（SERIAL 持锁，原 L185 绕锁已补）"),
+    "api_red_range_zs": ("FE", "✓3a → AppOrch.call_compute_red_range_zs（SERIAL 持锁，原 L206 绕锁已补）"),
+    "api_search": ("FE", "✓3a → FrontAPI + AppOrch.search_stocks"),
+    "api_zxg_list": ("FE", "✓3a → FrontAPI + AppData.read_zxg_stocks"),
+    "api_scan_stock_list": ("FE", "✓3a → FrontAPI + AppOrch 扫描"),
+    "api_scan_one": ("FE", "✓3a → FrontAPI + AppOrch 扫描（SCAN 并发保留；原 L472 直连 analyze_stock 改走漏斗分类）"),
+    "api_scan_page_index_code": ("FE", "✓3a → FrontAPI + AppOrch 扫描"),
+    "api_scan_start": ("FE", "✓3a → FrontAPI + ScannerService"),
+    "api_scan_end": ("FE", "✓3a → FrontAPI + ScannerService"),
+    "api_scan_clear_cache": ("FE", "✓3a → FrontAPI + AppData.cache_remove"),
+    "api_scan_abort": ("FE", "✓3a → FrontAPI + ScannerService"),
+    "api_zxg_save": ("FE", "✓3a → FrontAPI + AppData.save_to_zxg_blk"),
+    "api_clear_saved_point": ("FE", "✓3a → FrontAPI + AppData.clear_saved_point"),
+    "api_futures_manual_select_point": ("FE", "✓3a → AppOrch.call_futures_manual_select_point（SERIAL 持锁）"),
+    "api_futures_clear_saved_point": ("FE", "✓3a → FrontAPI + AppData"),
+    "api_futures_cleanup": ("FE", "✓3a → FrontAPI + AppOrch._cleanup_all_futures_data"),
+    "api_futures_status": ("FE", "✓3a → FrontAPI + AppOrch 获取侧状态"),
+    "api_futures_config": ("FE", "✓3a → FrontAPI + AppOrch"),
+    "api_futures_stream": ("FE", "✓3a/3b-1 双实现：impl=legacy（默认零漂移）|native 原生异步生成器"),
+    "api_refresh_stock_names": ("FE", "✓3a → FrontAPI + AppOrch.refresh_stock_names_async"),
+    "api_refresh_status": ("FE", "✓3a → FrontAPI + AppOrch.refresh_status"),
+    "api_annotations_get": ("FE", "✓3a → FrontAPI + AppOrch.get_annotations"),
+    "api_annotations_post": ("FE", "✓3a → FrontAPI + AppOrch.handle_annotation_action（校验逻辑已下沉）"),
+    "api_annotations_scan": ("FE", "✓3a → FrontAPI + AppOrch.get_annotated_codes"),
+    "api_tdx_download_start_get": ("FE", "✓3a → FrontAPI + AppOrch.start_download_checked"),
+    "api_tdx_download_start_post": ("FE", "✓3a → FrontAPI + AppOrch.start_download_checked"),
+    "api_tdx_download_status": ("FE", "✓3a → FrontAPI + AppOrch.get_download_status"),
+    "api_tdx_download_stop": ("FE", "✓3a → FrontAPI + AppOrch.stop_download"),
+    "chan_chart_redirect": ("FE", "✓3a 已迁 FrontAPI（旧书签兼容重定向保留）"),
+    "app_error_handler": ("FE", "✓3a AppError 统一处理器已迁 FrontAPI（兼容壳经别名共享）"),
 }
 
 

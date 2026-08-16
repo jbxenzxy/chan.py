@@ -1,0 +1,466 @@
+# -*- coding: utf-8 -*-
+"""
+阶段 3：成果防护守护用例（3a REST 迁移 / 3b-1 SSE 双实现）
+=====================================================================
+守护阶段 3 的六类结构性成果（设计文档 V10 方案 8.6）：
+
+  ① 锁分类建档（LOCK_POLICY 登记完备 + SERIAL 实现确实持锁 + RAW 不持锁）
+  ② 直连引擎清零（FrontAPI/api_server 不再绕过 AppOrch 漏斗调引擎，
+     阶段 2 遗留问题：原 api_server 3 处直连绕锁）
+  ③ 路由收敛（api_server.py 退役为兼容壳，31 条路由单源于 FrontAPI；
+     基线冻结于 snapshots/phase3_routes.json）
+  ④ 墓碑化（ChartHandler.do_GET/do_POST 已 410；SSE 方法保留至 3b-2）
+  ⑤ SSE 双实现（impl=legacy|native 灰度开关，默认 legacy 零漂移；
+     原生生成器 + SSESource 数据源抽象就位）
+  ⑥ 分层方向（FrontAPI → AppOrch → AppData 单向，禁止反向/跨层）
+
+运行：python Test/test_phase3_guards.py           # 校验
+      python Test/test_phase3_guards.py --update   # 重冻路由基线
+"""
+import argparse
+import ast
+import inspect
+import io
+import json
+import os
+import sys
+
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(TEST_DIR)
+sys.path.insert(0, REPO_ROOT)
+
+import typing
+if not hasattr(typing, "Self"):
+    try:
+        import typing_extensions
+        typing.Self = typing_extensions.Self
+    except ImportError:
+        pass
+
+SNAPSHOTS = os.path.join(TEST_DIR, "snapshots")
+ROUTES_SNAPSHOT = os.path.join(SNAPSHOTS, "phase3_routes.json")
+
+# 阶段 3a 迁移时的路由冻结基线（api_server 遗留 29 条 + FrontAPI 自有 2 条）
+EXPECTED_ROUTES = {
+    ("GET", "/api/annotations"),
+    ("POST", "/api/annotations"),
+    ("GET", "/api/annotations_scan"),
+    ("GET", "/api/clear_saved_point"),
+    ("GET", "/api/futures_cleanup"),
+    ("GET", "/api/futures_clear_saved_point"),
+    ("GET", "/api/futures_config"),
+    ("GET", "/api/futures_manual_select_point"),
+    ("GET", "/api/futures_status"),
+    ("GET", "/api/futures_stream"),
+    ("GET", "/api/health"),
+    ("GET", "/api/red_range_zs"),
+    ("GET", "/api/refresh_status"),
+    ("GET", "/api/refresh_stock_names"),
+    ("GET", "/api/scan_abort"),
+    ("GET", "/api/scan_clear_cache"),
+    ("GET", "/api/scan_end"),
+    ("GET", "/api/scan_one"),
+    ("GET", "/api/scan_page_index_code"),
+    ("GET", "/api/scan_start"),
+    ("GET", "/api/scan_stock_list"),
+    ("GET", "/api/search"),
+    ("GET", "/api/stock"),
+    ("GET", "/api/stocks_manual_select_point"),
+    ("GET", "/api/tdx_download_start"),
+    ("POST", "/api/tdx_download_start"),
+    ("GET", "/api/tdx_download_status"),
+    ("GET", "/api/tdx_download_stop"),
+    ("GET", "/api/zxg_list"),
+    ("GET", "/api/zxg_save"),
+    ("GET", "/chan_chart.html"),
+}
+
+# REST 路由禁止直连的引擎原始入口（锁分类 SERIAL 对应的底层函数；
+# 调用必须经 AppOrch.call_* 漏斗，见 LOCK_POLICY）
+FORBIDDEN_ENGINE_CALLS = [
+    "m.analyze_stock(",
+    "_m.analyze_stock(",
+    "m._analyze_futures_internal(",
+    "_m._analyze_futures_internal(",
+    "m.stock_manual_select_point(",
+    "_m.stock_manual_select_point(",
+    "m.futures_manual_select_point(",
+    "_m.futures_manual_select_point(",
+    "m.compute_red_range_zs(",
+    "_m.compute_red_range_zs(",
+]
+
+
+def read_src(rel):
+    with io.open(os.path.join(REPO_ROOT, rel), encoding="utf-8") as f:
+        return f.read()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ① 锁分类建档
+# ═══════════════════════════════════════════════════════════════════════
+def test_lock_policy(failures):
+    """LOCK_POLICY 登记完备：SERIAL 漏斗实现确实持 _ENGINE_LOCK，RAW 不持。"""
+    from App import AppOrch as orch
+
+    required_keys = {
+        "call_analysis", "run_analysis", "call_manual_select_point",
+        "call_futures_manual_select_point", "call_compute_red_range_zs",
+        "analyze_stock", "fetch_and_inject", "ScannerService.scan_one",
+        "sse_futures_stream_single", "sse_futures_stream_dual",
+    }
+    missing = required_keys - set(orch.LOCK_POLICY)
+    if missing:
+        failures.append(f"锁分类: LOCK_POLICY 缺少登记 {sorted(missing)}")
+        print(f"[FAIL] ① 锁分类: 缺少 {sorted(missing)}")
+        return
+
+    # 每个类别必须出现的取值域（新增类别需同步更新守护）
+    for key, (cat, _desc) in orch.LOCK_POLICY.items():
+        if cat not in ("SERIAL", "SCAN", "SELF_CONTAINED", "RAW"):
+            failures.append(f"锁分类: {key} 类别 {cat!r} 不在登记域内")
+            print(f"[FAIL] ① 锁分类: {key} 类别 {cat!r} 非法")
+
+    # SERIAL 入口（AppOrch 层函数）实现必须持锁；RAW 必须不持锁
+    fn_map = {
+        "call_analysis": orch.call_analysis,
+        "call_manual_select_point": orch.call_manual_select_point,
+        "call_futures_manual_select_point": orch.call_futures_manual_select_point,
+        "call_compute_red_range_zs": orch.call_compute_red_range_zs,
+        "analyze_stock": orch.analyze_stock,
+        "fetch_and_inject": orch.fetch_and_inject,
+    }
+    bad = []
+    for name, fn in fn_map.items():
+        cat = orch.LOCK_POLICY[name][0]
+        src = inspect.getsource(fn)
+        holds = "with _ENGINE_LOCK:" in src
+        if cat == "SERIAL" and not holds:
+            bad.append(f"{name} 登记 SERIAL 但实现未持 _ENGINE_LOCK")
+        if cat == "RAW" and holds:
+            bad.append(f"{name} 登记 RAW 但实现持 _ENGINE_LOCK（与登记矛盾）")
+    # run_analysis 是 async 函数，同样校验
+    src = inspect.getsource(orch.run_analysis)
+    if "with _ENGINE_LOCK:" not in src:
+        bad.append("run_analysis 登记 SERIAL 但实现未持 _ENGINE_LOCK")
+
+    if bad:
+        failures.extend(f"锁分类: {b}" for b in bad)
+        for b in bad:
+            print(f"[FAIL] ① 锁分类: {b}")
+    else:
+        n_serial = sum(1 for c, _ in orch.LOCK_POLICY.values() if c == "SERIAL")
+        print(f"[PASS] ① 锁分类: {len(orch.LOCK_POLICY)} 项登记完备，"
+              f"{n_serial} 个 SERIAL 漏斗实现均持锁，RAW 无一持锁")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ② 直连引擎清零 + ③ 路由收敛
+# ═══════════════════════════════════════════════════════════════════════
+def test_no_direct_engine_calls(failures):
+    """FrontAPI.py 与 api_server.py 不得绕过 AppOrch 漏斗直连引擎
+    （阶段 2 遗留问题：原 api_server L185/L206/L472 三处直连绕锁）。"""
+    bad = []
+    for rel in ("FrontAPI.py", "api_server.py"):
+        src = read_src(rel)
+        for pat in FORBIDDEN_ENGINE_CALLS:
+            for i, line in enumerate(src.splitlines(), 1):
+                if pat in line and not line.strip().startswith("#"):
+                    bad.append(f"{rel}:{i} 直连引擎 {pat}")
+    if bad:
+        failures.extend(bad)
+        for b in bad[:6]:
+            print(f"[FAIL] ② 直连清零: {b}")
+        if len(bad) > 6:
+            print(f"        …共 {len(bad)} 处")
+    else:
+        print("[PASS] ② 直连清零: FrontAPI/api_server 0 处直连引擎"
+              "（4 类原始入口全部经 AppOrch.call_* 漏斗）")
+
+
+def test_rest_routes_use_funnels(failures):
+    """四条曾绕锁的路由现在必须调用持锁漏斗（运行时路由函数体校验）。"""
+    import FrontAPI
+
+    funnel_of = {
+        "api_stock": "call_analysis",
+        "api_stocks_manual_select_point": "call_manual_select_point",
+        "api_red_range_zs": "call_compute_red_range_zs",
+        "api_futures_manual_select_point": "call_futures_manual_select_point",
+    }
+    bad = []
+    for route_fn, funnel in funnel_of.items():
+        fn = getattr(FrontAPI, route_fn, None)
+        if fn is None:
+            bad.append(f"{route_fn} 不在 FrontAPI 命名空间")
+            continue
+        src = inspect.getsource(fn)
+        if f"orch.{funnel}" not in src:
+            bad.append(f"{route_fn} 未调用 orch.{funnel}（锁漏斗断链）")
+    if bad:
+        failures.extend(bad)
+        for b in bad:
+            print(f"[FAIL] ② 漏斗接线: {b}")
+    else:
+        print(f"[PASS] ② 漏斗接线: 4 条历史绕锁路由全部改走持锁漏斗"
+              f"（{', '.join(sorted(funnel_of))}）")
+
+
+def _collect_routes():
+    """枚举 app 全部 API 路由（兼容 FastAPI 0.141 的 _IncludedRouter 延迟结构）"""
+    from fastapi.routing import APIRoute
+    import api_server
+
+    out = set()
+
+    def walk(routes):
+        for r in routes:
+            if isinstance(r, APIRoute):
+                for method in (r.methods or set()):
+                    if method in ("GET", "POST", "PUT", "DELETE"):
+                        out.add((method, r.path))
+            elif type(r).__name__ == "_IncludedRouter":
+                walk(r.original_router.routes)
+
+    walk(api_server.app.routes)
+    return out
+
+
+def test_route_convergence(failures, update=False):
+    """api_server 退役为兼容壳 + 路由单源于 FrontAPI + 基线比对。"""
+    bad = []
+
+    # 3a-1 兼容壳不定义路由
+    shell_src = read_src("api_server.py")
+    for pat in ("@router.get", "@router.post", "@app.get", "@app.post",
+                "APIRouter()"):
+        if pat in shell_src:
+            bad.append(f"api_server.py 兼容壳仍包含 {pat!r}（应零路由定义）")
+
+    # 3a-2 单一 app 实例（兼容壳与 FrontAPI 指向同一对象）
+    import api_server
+    import FrontAPI
+    if api_server.app is not FrontAPI.app:
+        bad.append("api_server.app is not FrontAPI.app（双实例会导致路由双注册）")
+    if api_server.router is not FrontAPI.router:
+        bad.append("api_server.router is not FrontAPI.router")
+
+    # 3a-3 路由集合与冻结基线比对
+    current = _collect_routes()
+    os.makedirs(SNAPSHOTS, exist_ok=True)
+    if update:
+        with io.open(ROUTES_SNAPSHOT, "w", encoding="utf-8") as f:
+            json.dump(sorted(f"{m} {p}" for m, p in current), f,
+                      ensure_ascii=False, indent=1)
+        print(f"[FREEZE] ③ 路由基线已重冻: {len(current)} 条 → snapshots/phase3_routes.json")
+        return
+    frozen = set()
+    if os.path.exists(ROUTES_SNAPSHOT):
+        with io.open(ROUTES_SNAPSHOT, encoding="utf-8") as f:
+            frozen = {tuple(x.split(" ", 1)) for x in json.load(f)}
+    baseline = frozen or EXPECTED_ROUTES
+    if current != baseline:
+        only_cur = current - baseline
+        only_base = baseline - current
+        if only_cur:
+            bad.append(f"路由基线外新增: {sorted(only_cur)}")
+        if only_base:
+            bad.append(f"路由基线缺失: {sorted(only_base)}")
+
+    if bad:
+        failures.extend(bad)
+        for b in bad:
+            print(f"[FAIL] ③ 路由收敛: {b}")
+    else:
+        print(f"[PASS] ③ 路由收敛: 兼容壳零路由定义；单一 app 实例；"
+              f"{len(current)} 条路由与基线一致（单一路由源 = FrontAPI）")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ④ 墓碑化
+# ═══════════════════════════════════════════════════════════════════════
+def test_tombstone(failures):
+    """ChartHandler.do_GET/do_POST 已墓碑（410）；SSE 方法按设计保留至 3b-2。"""
+    import my_chan_main as m
+
+    bad = []
+    for name in ("do_GET", "do_POST"):
+        fn = getattr(m.ChartHandler, name, None)
+        if fn is None:
+            bad.append(f"ChartHandler.{name} 不存在")
+            continue
+        src = inspect.getsource(fn)
+        if "410" not in src:
+            bad.append(f"ChartHandler.{name} 未返回 410（墓碑失效）")
+        if len(src.splitlines()) > 40:
+            bad.append(f"ChartHandler.{name} 仍有 {len(src.splitlines())} 行"
+                       f"（墓碑应 <40 行，原分发逻辑应已删除）")
+
+    # SSE 方法保留（3b-2 灰度通过后拆除——现在拆除即失败）
+    for name in ("_handle_sse_stream_dual", "_handle_sse_stream_single"):
+        if not hasattr(m.ChartHandler, name):
+            bad.append(f"ChartHandler.{name} 已被提前拆除（应保留至 3b-2）")
+
+    # 兼容壳体量（退役后应为薄转发，<120 行）
+    n = len(read_src("api_server.py").splitlines())
+    if n > 120:
+        bad.append(f"api_server.py 兼容壳 {n} 行（应 <120，说明未真正退役）")
+
+    if bad:
+        failures.extend(bad)
+        for b in bad:
+            print(f"[FAIL] ④ 墓碑化: {b}")
+    else:
+        print("[PASS] ④ 墓碑化: do_GET/do_POST → 410 Gone；"
+              "SSE 双方法保留（3b-2 拆除）；api_server 兼容壳 "
+              f"{n} 行")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ⑤ SSE 双实现（3b-1 灰度开关）
+# ═══════════════════════════════════════════════════════════════════════
+def test_sse_dual_impl(failures):
+    """/api/futures_stream 双实现并存：impl=legacy（默认）|native + 数据源抽象。"""
+    import asyncio
+    import FrontAPI
+    from App import AppOrch as orch
+
+    bad = []
+
+    # 原生生成器 + 数据源抽象就位
+    for name in ("sse_futures_stream_single", "sse_futures_stream_dual",
+                 "SSESource", "TqSdkSource", "_sse_generator"):
+        if not hasattr(FrontAPI, name):
+            bad.append(f"FrontAPI 缺少 {name}（3b-1 原生实现/桥接缺失）")
+
+    # 锁分类登记为 SELF_CONTAINED
+    for key in ("sse_futures_stream_single", "sse_futures_stream_dual"):
+        if orch.LOCK_POLICY.get(key, ("?",))[0] != "SELF_CONTAINED":
+            bad.append(f"{key} 锁分类应为 SELF_CONTAINED")
+
+    # 路由签名：impl 参数默认 legacy（零漂移），非法值拒绝
+    fn = getattr(FrontAPI, "api_futures_stream", None)
+    if fn is None:
+        bad.append("api_futures_stream 路由函数缺失")
+    else:
+        sig = inspect.signature(fn)
+        if "impl" not in sig.parameters:
+            bad.append("/api/futures_stream 无 impl 灰度参数")
+        else:
+            dflt = sig.parameters["impl"].default
+            # FastAPI Query 对象的真实默认值在其 .default 属性
+            real = getattr(dflt, "default", dflt)
+            if real != "legacy":
+                bad.append(f"impl 默认值应为 'legacy'（零漂移），实际 {real!r}")
+
+    # 参数校验行为：非法 impl → 400（不触碰数据源）
+    async def _probe():
+        from fastapi import HTTPException
+        try:
+            await FrontAPI.api_futures_stream(
+                symbol="KQ.m@SHFE.rb", impl="bogus")
+            return "no-raise"
+        except HTTPException as e:
+            return e.status_code
+
+    st = asyncio.run(_probe())
+    if st != 400:
+        bad.append(f"非法 impl 应 400，实际 {st}")
+
+    # native 生成本身可创建（异步生成器对象可实例化，不消费即关闭）
+    try:
+        gen = FrontAPI.sse_futures_stream_single(
+            "KQ.m@SHFE.rb", freq="15s", source=FrontAPI.SSESource())
+        import types
+        if not isinstance(gen, types.AsyncGeneratorType):
+            bad.append(f"native 单窗口非异步生成器: {type(gen).__name__}")
+        asyncio.run(gen.aclose())
+        gen2 = FrontAPI.sse_futures_stream_dual(
+            "KQ.m@SHFE.rb", "1m", "15s", source=FrontAPI.SSESource())
+        if not isinstance(gen2, types.AsyncGeneratorType):
+            bad.append(f"native 双窗口非异步生成器: {type(gen2).__name__}")
+        asyncio.run(gen2.aclose())
+    except Exception as e:
+        bad.append(f"native 生成器实例化失败: {type(e).__name__}: {e}")
+
+    if bad:
+        failures.extend(bad)
+        for b in bad:
+            print(f"[FAIL] ⑤ SSE 双实现: {b}")
+    else:
+        print("[PASS] ⑤ SSE 双实现: impl=legacy|native（默认 legacy 零漂移，"
+              "非法值 400）；原生生成器 + SSESource/TqSdkSource 数据源抽象就位；"
+              "SELF_CONTAINED 登记一致")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ⑥ 分层方向（FrontAPI → AppOrch → AppData 单向）
+# ═══════════════════════════════════════════════════════════════════════
+def test_layering_direction(failures):
+    """AST 级校验：下层禁止 import 上层/跨层（设计 6.2 单向依赖）。"""
+    # (文件, 禁止出现的模块名)
+    # 注 1: AppData/AppOrch 对 my_chan_main 的委托属阶段 2 既定过渡
+    #（薄封装设计，引擎在下层，阶段 4/5 收敛），不属反向依赖；
+    # 此处仅锁定层间方向（上层模块不得被下层导入）。
+    # 注 2: my_chan_main 不在禁止清单——它是被编排的引擎底座。
+    rules = [
+        ("App/AppData.py", ["AppOrch", "FrontAPI", "api_server"]),
+        ("App/AppConfig.py", ["AppOrch", "AppData", "FrontAPI", "api_server",
+                              "my_chan_main"]),
+        ("App/AppOrch.py", ["FrontAPI", "api_server"]),
+    ]
+    bad = []
+    for rel, forbidden in rules:
+        tree = ast.parse(read_src(rel))
+        for node in ast.walk(tree):
+            names = set()
+            if isinstance(node, ast.Import):
+                names = {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = {node.module.split(".")[0]}
+                if node.level > 0:  # from . import xxx
+                    names = {a.name.split(".")[0] for a in node.names} | names
+            hit = names & set(forbidden)
+            if hit:
+                bad.append(f"{rel} L{node.lineno} 反向/跨层导入 {sorted(hit)}")
+
+    if bad:
+        failures.extend(bad)
+        for b in bad:
+            print(f"[FAIL] ⑥ 分层方向: {b}")
+    else:
+        print("[PASS] ⑥ 分层方向: AppData/AppConfig 无上层导入；"
+              "AppOrch 不导入 FrontAPI/api_server（单向依赖成立）")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 入口
+# ═══════════════════════════════════════════════════════════════════════
+def main():
+    ap = argparse.ArgumentParser(description="阶段 3 成果防护守护用例")
+    ap.add_argument("--update", action="store_true",
+                    help="重冻路由基线（路由集合变更经确认后使用）")
+    args = ap.parse_args()
+
+    failures = []
+    test_lock_policy(failures)
+    test_no_direct_engine_calls(failures)
+    test_rest_routes_use_funnels(failures)
+    test_route_convergence(failures, update=args.update)
+    if not args.update:
+        test_tombstone(failures)
+        test_sse_dual_impl(failures)
+        test_layering_direction(failures)
+
+    print()
+    if failures:
+        print(f"===== 阶段 3 成果防护: 失败 {len(failures)} 项 =====")
+        for x in failures:
+            print(" -", x)
+        return False
+    print("===== 阶段 3 成果防护: 全部通过 =====")
+    return True
+
+
+if __name__ == "__main__":
+    sys.exit(0 if main() else 1)
