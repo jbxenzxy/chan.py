@@ -23,6 +23,15 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+# Python 3.10 兼容垫片（原项目使用 typing.Self，需 3.11+；3.11+ 下自动跳过）
+import typing
+if not hasattr(typing, "Self"):
+    try:
+        from typing_extensions import Self
+        typing.Self = Self
+    except ImportError:
+        pass
+
 # ── 基础设施配置（阶段 2：环境变量 / .env 优先，见 App/AppConfig.py）──
 from App.AppConfig import app_config
 

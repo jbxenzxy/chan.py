@@ -1,0 +1,157 @@
+{
+ "phase": "2.5",
+ "mode": "verify",
+ "ran_at": "2026-08-16 08:00:24",
+ "python": "3.10.12",
+ "total": 7,
+ "passed": 7,
+ "failed": 0,
+ "components": [
+  {
+   "name": "fixtures_integrity",
+   "cmd": "../../../../usr/bin/python Test/gen_fixtures.py --check",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 0.57,
+   "output_tail": [
+    "[gen] stock_day.json: 500 bars",
+    "[gen] stock_60m.json: 2000 bars",
+    "[gen] futures_15s.json: 2400 bars",
+    "[gen] stock_day_gap.json: 495 bars",
+    "[gen] stock_day_zero_vol.json: 500 bars",
+    "[gen] fixtures_manifest.json",
+    "[CHECK] 全部一致"
+   ]
+  },
+  {
+   "name": "snapshot_regression",
+   "cmd": "../../../../usr/bin/python Test/snapshot_runner.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 6.08,
+   "output_tail": [
+    "[BS1][15s] cal_bs1point: 跳过: 重叠条件不满足(A/B/C) | stroke_n_idx=89",
+    "[BS2][15s] cal_bs2point: 进入...... | bi_idx=89",
+    "[BS2][15s] cal_bs2point: 跳过: 重叠条件不满足(B/C均不匹配) | stroke_n_idx=89 | matched_pattern=None",
+    "[BS3][15s] cal_bs3point: 进入...... | bi_idx=89",
+    "[BS3][15s] cal_bs3point: 跳过: 重叠条件不满足 | stroke_n_idx=89 | n_overlap=False | n_1_idx=88 | n_1_overlap=False | n_high=3992.02 | n_low=3834.71 | n_1_high=3992.02 | n_1_low=3977.82 | zs_high=4704.88 | zs_low=4667.89",
+    "[分析] ⑶ chan.py分析: 0.898s, 合并K线=1451, 笔=90, 中枢=9",
+    "[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): 0.024s",
+    "[信息] 期货查询 KQ.m@SHFE.rb 完成(15秒): 2000K线, 90笔, 507分型, 9中枢, 10线段, 34买卖点",
+    "[耗时] 总耗时: 0.923s",
+    "[PASS] futures_15s_end_date",
+    "",
+    "===== 快照回归: 8/8 通过 ====="
+   ]
+  },
+  {
+   "name": "trigger_step_replay",
+   "cmd": "../../../../usr/bin/python Test/test_trigger_step_replay.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 1.79,
+   "output_tail": [
+    "[耗时]   复盘后GC回收: 0.018s",
+    "[耗时] 读取数据文件: 0.000s, 500条K线",
+    "[耗时] chan.py 缠论分析: 0.104s",
+    "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.005s",
+    "[耗时] 主级别提取结果: 0.005s (K线=500 笔=17 中枢=3 线段=3 买卖点=3)",
+    "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 3买卖点",
+    "[耗时] 总耗时: 0.109s",
+    "[PASS] ① 已确认笔一致性: 14/14 三元组精确匹配（全量锚点前 14 根）",
+    "[PASS] ② 虚笔: 1 根（up 2024/08/20→2024/09/09），起点锚定全量笔端点",
+    "       [info] 回放 bi=15 seg=3 zs=2 | 全量 bi=17 seg=3 zs=3",
+    "",
+    "===== trigger_step 回放验证: 全部通过 ====="
+   ]
+  },
+  {
+   "name": "phase2_guards",
+   "cmd": "../../../../usr/bin/python Test/test_phase2_guards.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 1.5,
+   "output_tail": [
+    "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
+    "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
+    "[PASS] ① 配置一致性: 7 对路径全部一致（单一事实源 = AppConfig）",
+    "[api_server] 领域异常 NotFoundError: 测试股票不存在 (/api/stock)",
+    "[PASS] ② 领域异常链路: NotFoundError → 404 + 结构化 JSON（{\"error\":\"NotFoundError\",\"detail\":\"测试股票不存在\"}…）",
+    "[PASS] ③ 无效代码: error 字典（无法识别股票代码: INVALID_CODE）",
+    "[调试-K线不足] code=000001, market=sh, freq=xx, target_dt=None, records=0",
+    "[PASS] ③ 不支持周期: error 字典（K线数据不足: 仅0条）",
+    "[拉取] ⑴ 天勤拉取K线: 0.001s, 2400条",
+    "[PASS] ③ 期货日期契约: 连字符被拒（无法解析日期: 2024-01-31）——契约：end_date 仅支持 %Y/%m/%d 系斜杠格式",
+    "",
+    "===== 阶段 2 成果防护: 全部通过 ====="
+   ]
+  },
+  {
+   "name": "determinism",
+   "cmd": "../../../../usr/bin/python Test/test_determinism.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 4.39,
+   "output_tail": [
+    "[PASS] ② 跨路径污染检查: 股票→期货→股票，前后股票结果完全一致（CTqSdkAPI 缓存/REPLAY_MODE 等共享状态无泄漏）",
+    "[耗时] 双窗口-主级别(d)数据: 0.000s, 500条K线",
+    "[耗时] chan.py 缠论分析: 1.669s",
+    "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.015s",
+    "[耗时] 主级别提取结果: 0.015s (K线=500 笔=17 中枢=3 线段=3 买卖点=2)",
+    "[调试] 双窗口模式: dual=True, sub_freq=30m, chan类型=CChan",
+    "[耗时] 子级别(30m)提取: 0.035s (K线=2000 笔=99 分型=507 中枢=15 线段=11 买卖点=63)",
+    "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 2买卖点",
+    "[耗时] 总耗时: 1.721s",
+    "[PASS] ③ 双窗口语义: 契约/子级口径(日线+30分钟)/数量(500≤2000)/时间对齐(500 个交易日全覆盖)",
+    "",
+    "===== 确定性测试: 全部通过 ====="
+   ]
+  },
+  {
+   "name": "industry_mapping",
+   "cmd": "../../../../usr/bin/python Test/test_industry_mapping.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 0.84,
+   "output_tail": [
+    "[PASS] ① 数据文件在位: DataAPI/tdxhy_mapping_data.py (39586 bytes)",
+    "[PASS] ② TdxAPI 侧加载非空: x_to_881=470 881_to_x=470",
+    "[PASS] ② my_chan_main 侧加载非空: 881_to_x=470",
+    "[PASS] ③ 双路径内容一致: 两处 exec 加载结果完全相同",
+    "[PASS] ④ 双向互逆: 470 条全部互逆一致",
+    "[PASS] ④b 条目质量: 470 条全部合法（键/名称非空，881代码 6 位纯数字且无重复）",
+    "[PASS] ⑤ 完整性快照: n=470 sha256=ceb5b82fc917… 一致",
+    "",
+    "===== 行业映射完整性: 全部通过 ====="
+   ]
+  },
+  {
+   "name": "sse_sequence",
+   "cmd": "../../../../usr/bin/python Test/test_sse_sequence.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 1.25,
+   "output_tail": [
+    "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
+    "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
+    "[PASS] single 正常关闭: 生成器正常耗尽（0.00s, 5 帧）",
+    "[PASS] single 首事件类型: snapshot",
+    "[PASS] dual 正常关闭: 生成器正常耗尽（0.00s, 4 帧）",
+    "[PASS] dual 首事件类型: dual_snapshot",
+    "[PASS] error 正常关闭: 生成器正常耗尽（0.00s, 2 帧）",
+    "[PASS] error 首事件类型: snapshot",
+    "[PASS] error 路径: 异常已转 event:error 事件",
+    "[PASS] SSE 事件序列快照: 类型序列/首事件/事件总数 一致",
+    "",
+    "===== SSE 事件序列: 全部通过 ====="
+   ]
+  }
+ ]
+}

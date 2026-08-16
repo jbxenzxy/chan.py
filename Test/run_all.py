@@ -1,0 +1,143 @@
+# -*- coding: utf-8 -*-
+"""
+阶段 2.5：回归测试基线 —— 统一入口
+=====================================================================
+一条命令跑完整个基线，产出汇总报告。各组件独立子进程执行
+（monkeypatch 互不干扰），任一失败即整体退出码非 0（可直接接入
+CI / 迁移每阶段的验收门禁）。
+
+组件（按依赖顺序）：
+  1. fixtures 完整性   gen_fixtures.py --check      冻结输入未被手改
+  2. 核心快照回归      snapshot_runner.py --all     笔/段/中枢/买卖点 7 维度（股票+期货）
+  3. trigger_step 回放 test_trigger_step_replay.py  逐步回放收敛一致性
+  4. 阶段 2 成果防护   test_phase2_guards.py        配置一致性/异常链路/引擎边界/日期契约
+  5. 确定性测试        test_determinism.py          重复调用/跨路径污染/双窗口语义
+  6. 行业映射完整性    test_industry_mapping.py     双路径加载不静默降级 + 条目质量
+  7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭
+每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
+
+用法（在仓库根目录）：
+    python Test/run_all.py             # 全量回归（比对冻结基线）
+    python Test/run_all.py --update    # 重新冻结全部基线（迁移改动确认后）
+    python Test/run_all.py --report out.json   # 额外落盘机器可读报告
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(TEST_DIR)
+
+# (组件名, 命令) —— 顺序即执行顺序
+COMPONENTS = [
+    ("fixtures_integrity",
+     [sys.executable, os.path.join("Test", "gen_fixtures.py"), "--check"]),
+    ("snapshot_regression",
+     [sys.executable, os.path.join("Test", "snapshot_runner.py")]),
+    ("trigger_step_replay",
+     [sys.executable, os.path.join("Test", "test_trigger_step_replay.py")]),
+    ("phase2_guards",
+     [sys.executable, os.path.join("Test", "test_phase2_guards.py")]),
+    ("determinism",
+     [sys.executable, os.path.join("Test", "test_determinism.py")]),
+    ("industry_mapping",
+     [sys.executable, os.path.join("Test", "test_industry_mapping.py")]),
+    ("sse_sequence",
+     [sys.executable, os.path.join("Test", "test_sse_sequence.py")]),
+]
+
+# 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI
+COMPONENT_TIMEOUT_S = 300
+
+
+def run_component(name, cmd, update=False, env=None):
+    """执行单个组件，返回记录 dict。超时按失败处理（不无限等待）。"""
+    real_cmd = list(cmd)
+    if update and name in ("snapshot_regression", "trigger_step_replay",
+                           "phase2_guards", "industry_mapping", "sse_sequence"):
+        real_cmd.append("--update")
+    t0 = time.time()
+    try:
+        proc = subprocess.run(
+            real_cmd, cwd=REPO_ROOT, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            timeout=COMPONENT_TIMEOUT_S)
+        ok, exit_code, timed_out = proc.returncode == 0, proc.returncode, False
+        out = proc.stdout
+    except subprocess.TimeoutExpired as e:
+        ok, exit_code, timed_out = False, None, True
+        out = (e.stdout or "") + f"\n[TIMEOUT] 组件 {name} 超过 {COMPONENT_TIMEOUT_S}s 被终止"
+    elapsed = time.time() - t0
+    rec = {
+        "name": name,
+        "cmd": " ".join(os.path.relpath(c, REPO_ROOT) if os.path.isabs(c) else c
+                        for c in real_cmd),
+        "ok": ok,
+        "exit_code": exit_code,
+        "timed_out": timed_out,
+        "elapsed_s": round(elapsed, 2),
+        "output_tail": (out or "").strip().splitlines()[-12:],
+    }
+    return rec
+
+
+def main():
+    ap = argparse.ArgumentParser(description="阶段 2.5 回归测试基线统一入口")
+    ap.add_argument("--update", action="store_true",
+                    help="重新冻结全部基线（迁移改动经人工确认后使用）")
+    ap.add_argument("--report", metavar="PATH",
+                    help="额外写入机器可读 JSON 报告（默认 Test/report.json）")
+    args = ap.parse_args()
+
+    env = dict(os.environ)
+    env["PYTHONIOENCODING"] = "utf-8"
+    env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+
+    print("=" * 64)
+    print("阶段 2.5 回归测试基线" + ("（重新冻结模式）" if args.update else ""))
+    print(f"仓库: {REPO_ROOT}")
+    print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 64)
+
+    records = []
+    for name, cmd in COMPONENTS:
+        print(f"\n──── [{len(records) + 1}/{len(COMPONENTS)}] {name} ────")
+        rec = run_component(name, cmd, update=args.update, env=env)
+        records.append(rec)
+        print("\n".join(rec["output_tail"]))
+        print(f"──── {'PASS' if rec['ok'] else 'FAIL'} ({rec['elapsed_s']}s) ────")
+
+    n_ok = sum(1 for r in records if r["ok"])
+    n_all = len(records)
+    summary = {
+        "phase": "2.5",
+        "mode": "update" if args.update else "verify",
+        "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "python": sys.version.split()[0],
+        "total": n_all,
+        "passed": n_ok,
+        "failed": n_all - n_ok,
+        "components": records,
+    }
+
+    report_path = args.report or os.path.join(TEST_DIR, "report.json")
+    with open(report_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=1)
+
+    print("\n" + "=" * 64)
+    for r in records:
+        print(f"  [{'PASS' if r['ok'] else 'FAIL'}] {r['name']:<24} {r['elapsed_s']:>6}s")
+    print("=" * 64)
+    print(f"结果: {n_ok}/{n_all} 通过 | 报告: {os.path.relpath(report_path, REPO_ROOT)}")
+    if args.update:
+        print("注意: 基线已重新冻结，请 git diff Test/snapshots/ 逐项审查后提交。")
+    return n_ok == n_all
+
+
+if __name__ == "__main__":
+    sys.exit(0 if main() else 1)

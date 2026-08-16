@@ -1,0 +1,31 @@
+{
+ "dual": {
+  "event_count": 4,
+  "event_sequence": [
+   "dual_snapshot",
+   "dual_tick",
+   "dual_tick",
+   "done"
+  ],
+  "first_event": "dual_snapshot"
+ },
+ "error": {
+  "event_count": 2,
+  "event_sequence": [
+   "snapshot",
+   "error"
+  ],
+  "first_event": "snapshot"
+ },
+ "single": {
+  "event_count": 5,
+  "event_sequence": [
+   "snapshot",
+   "tick",
+   "tick",
+   "tick",
+   "done"
+  ],
+  "first_event": "snapshot"
+ }
+}

@@ -1,0 +1,5 @@
+{
+ "generator_seed": 20250816,
+ "note": "确定性合成K线；重跑 gen_fixtures.py 结果必须与此 manifest 的 sha256 一致",
+ "version": 1
+}
