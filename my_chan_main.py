@@ -19,16 +19,23 @@ from urllib.parse import urlparse, parse_qs
 from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures_red_range, _red_range_bi_sequence, _red_range_amp
 
 # ============================================================
-# 配置区域 - 请根据你的实际环境修改
+# 配置区域 —— 已中心化（阶段 2，V10 方案 7.1/7.2）
+# 基础设施配置：App/AppConfig.py（环境变量 / 仓库根 .env 优先）
+# 算法参数 + 默认代码：ChanConfig.py（SYMBOL_CODE 环境变量可覆盖）
+# 以下模块级变量保留原名，供全文件既有引用兼容；改路径只需改 .env 或环境变量
 # ============================================================
-TDX_INSTALL_DIR = r"C:\new_tdx_hd_test"                               # 通达信安装目录（改目录只需修改本行）
-VIPDOC_DIR = os.path.join(TDX_INSTALL_DIR, "vipdoc")                  # 通达信vipdoc目录
-DOWNLOAD_DIR = os.path.join(VIPDOC_DIR, "eltdx")                      # 盘后下载，数据保存目录
-TDX_HQ_CACHE = os.path.join(TDX_INSTALL_DIR, "T0002", "hq_cache")     # 通达信hq_cache目录（shm.tnf/szm.tnf）
-OUTPUT_DIR = os.path.dirname(os.path.abspath(__file__))               # 输出目录（脚本所在目录）
-SYMBOL_CODE = "SH000001"                                              # 默认股票代码（上证指数）
-CHAN_PATH = r"C:\my_chan_project"                                     # chan.py 仓库解压目录
-LAST_CODE_FREQ_FILE = os.path.join(VIPDOC_DIR, "last_code_freq.json") # 持久化上次查看的代码和周期
+from App.AppConfig import app_config
+
+TDX_INSTALL_DIR = app_config.tdx_install_dir                            # 通达信安装目录（TDX_INSTALL_DIR）
+VIPDOC_DIR = app_config.vipdoc_dir                                     # 通达信vipdoc目录
+DOWNLOAD_DIR = app_config.download_dir                                 # 盘后下载，数据保存目录
+TDX_HQ_CACHE = app_config.tdx_hq_cache                                 # 通达信hq_cache目录（shm.tnf/szm.tnf）
+OUTPUT_DIR = app_config.output_dir                                     # 输出目录（仓库根）
+CHAN_PATH = app_config.chan_path                                       # chan.py 仓库根目录
+LAST_CODE_FREQ_FILE = app_config.last_code_freq_file                   # 持久化上次查看的代码和周期
+
+from ChanConfig import get_symbol_code
+SYMBOL_CODE = get_symbol_code()                                        # 默认股票代码（SYMBOL_CODE，上证指数）
 
 # ============================================================
 # 天勤期货/期指行情配置
@@ -111,7 +118,7 @@ except ImportError as e:
 # 同花顺自选股同步（云端 API）
 # ============================================================
 try:
-    from ths_cloud_api import save_scan_to_ths_cloud
+    from App.ths_cloud_api import save_scan_to_ths_cloud   # 阶段 2：同花顺工具链迁入 App/
     _THS_CLOUD_AVAILABLE = True
 except ImportError:
     save_scan_to_ths_cloud = None
@@ -5217,7 +5224,7 @@ class ChartHandler(SimpleHTTPRequestHandler):
                             ths_msg = f"云端同步失败: {err_str}"
                         print(f"[保存] 同花顺: {ths_msg}")
                 else:
-                    ths_msg = "ths_cloud_api.py 未找到，请确保该文件在脚本同目录"
+                    ths_msg = "App/ths_cloud_api.py 未找到，请确保 App/ 目录完整（阶段 2 已迁入 App/）"
                     print(f"[保存] 同花顺: {ths_msg}")
                 print(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
                 self.send_json_response({
@@ -6515,6 +6522,41 @@ def main():
         print("\n[信息] 服务器已停止")
 
     print("=" * 60)
+
+
+# ============================================================
+# 配置单源自检（阶段 2 配置中心化过渡期防御）
+# 阶段 2 已将本文件 8 个基础设施常量改为从 App/AppConfig 读取（单源）。
+# 此自检防止未来有人将某个常量改回硬编码导致双源漂移，不一致仅告警不阻塞。
+# ============================================================
+def _verify_config_consistency():
+    """校验 my_chan_main 模块常量与 App/AppConfig 是否一致（不一致仅告警，不阻塞）"""
+    try:
+        from App.AppConfig import app_config as _app_settings
+    except Exception:
+        return  # AppConfig 不可导入（如独立运行脚本），跳过校验
+
+    _pairs = [
+        ("TDX_INSTALL_DIR", TDX_INSTALL_DIR, _app_settings.tdx_install_dir),
+        ("VIPDOC_DIR", VIPDOC_DIR, _app_settings.vipdoc_dir),
+        ("DOWNLOAD_DIR", DOWNLOAD_DIR, _app_settings.download_dir),
+        ("TDX_HQ_CACHE", TDX_HQ_CACHE, _app_settings.tdx_hq_cache),
+        ("CHAN_PATH", CHAN_PATH, _app_settings.chan_path),
+        ("OUTPUT_DIR", OUTPUT_DIR, _app_settings.output_dir),
+        ("LAST_CODE_FREQ_FILE", LAST_CODE_FREQ_FILE, _app_settings.last_code_freq_file),
+        ("_STOCK_NAMES_CACHE_FILE", _STOCK_NAMES_CACHE_FILE, _app_settings.stock_names_cache_file),
+        ("_STOCK_PE_TTM_FILE", _STOCK_PE_TTM_FILE, _app_settings.stock_pe_ttm_file),
+        ("_FLOAT_MC_CACHE_FILE", _FLOAT_MC_CACHE_FILE, _app_settings.float_mc_cache_file),
+        ("SAVED_POINT_FILE", SAVED_POINT_FILE, _app_settings.saved_point_file),
+        ("ANNOTATIONS_FILE", ANNOTATIONS_FILE, _app_settings.annotations_file),
+    ]
+    for name, legacy, app_cfg in _pairs:
+        if os.path.normpath(str(legacy)) != os.path.normpath(str(app_cfg)):
+            print(f"[配置警告] 双源不一致: my_chan_main.{name}={legacy!r} != AppConfig.{name}={app_cfg!r}")
+            print("           请同步修改 App/AppConfig.py（配置中心），阶段 3 将统一从 AppConfig 读取")
+
+
+_verify_config_consistency()
 
 
 if __name__ == "__main__":

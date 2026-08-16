@@ -8,3 +8,7 @@ config.yaml
 OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
+# 阶段 2：配置中心化（V10 方案 7.3 凭据安全）
+.env
+App/ths_captured_cookie.txt
+App/.sync_tdx_config

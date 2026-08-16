@@ -1,4 +1,6 @@
-from typing import List
+import os
+from functools import lru_cache
+from typing import List, Optional
 
 from Bi.BiConfig import CBiConfig
 from BuySellPoint.BSPointConfig import CBSPointConfig
@@ -14,11 +16,191 @@ from Math.TrendModel import CTrendModel
 from Seg.SegConfig import CSegConfig
 from ZS.ZSConfig import CZSConfig
 
+try:
+    from pydantic import field_validator
+    from pydantic_settings import BaseSettings, SettingsConfigDict
+
+    _HAVE_PYDANTIC_SETTINGS = True
+except ImportError:  # 未安装 pydantic-settings 时降级为内置环境变量解析
+    _HAVE_PYDANTIC_SETTINGS = False
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 阶段 2：算法参数配置层（V10 方案 7.1/7.2 —— 与 App/AppConfig.py 并行的双文件）
+#   环境变量 / 仓库根 .env  →  覆盖引擎默认值；显式传入 conf 优先级最高。
+#   未设置的项不进入覆盖字典，引擎行为与历史版本完全一致。
+# ═══════════════════════════════════════════════════════════════════════
+
+_REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+_ENV_FILE = os.path.join(_REPO_ROOT, ".env")
+
+# 环境变量名 → CChanConfig conf 键（均为引擎已知键，ConfigWithCheck 校验可通过）
+_ENV_KEYS = {
+    "BI_ALGO": "bi_algo",
+    "BI_STRICT": "bi_strict",
+    "BI_FX_CHECK": "bi_fx_check",
+    "GAP_AS_KL": "gap_as_kl",
+    "BI_END_IS_PEAK": "bi_end_is_peak",
+    "BI_ALLOW_SUB_PEAK": "bi_allow_sub_peak",
+    "SEG_ALGO": "seg_algo",
+    "LEFT_SEG_METHOD": "left_seg_method",
+    "ZS_COMBINE": "zs_combine",
+    "ZS_COMBINE_MODE": "zs_combine_mode",
+    "ONE_BI_ZS": "one_bi_zs",
+    "ZS_ALGO": "zs_algo",
+    "TRIGGER_STEP": "trigger_step",
+    "SKIP_STEP": "skip_step",
+    "MEAN_METRICS": "mean_metrics",
+    "TREND_METRICS": "trend_metrics",
+    "RSI_CYCLE": "rsi_cycle",
+    "KDJ_CYCLE": "kdj_cycle",
+    "CAL_DEMARK": "cal_demark",
+    "CAL_RSI": "cal_rsi",
+    "CAL_KDJ": "cal_kdj",
+    "BOLL_N": "boll_n",
+}
+
+
+def _parse_env_file(path):
+    """极简 .env 解析（与 App/AppConfig.py 同规则）：KEY=VALUE，忽略注释，去引号。"""
+    result = {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key, value = key.strip(), value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                    value = value[1:-1]
+                result[key] = value
+    except OSError:
+        pass
+    return result
+
+
+def _to_bool(raw) -> bool:
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _to_int_list(raw):
+    text = str(raw).strip()
+    if text.startswith("["):
+        text = text.strip("[]")
+    return [int(x.strip()) for x in text.split(",") if x.strip()]
+
+
+if _HAVE_PYDANTIC_SETTINGS:
+
+    class ChanEnvSettings(BaseSettings):
+        """算法参数环境面（pydantic-settings）：未设置 = None = 用引擎默认"""
+
+        model_config = SettingsConfigDict(
+            env_file=_ENV_FILE if os.path.exists(_ENV_FILE) else None,
+            env_file_encoding="utf-8",
+            extra="ignore",
+        )
+
+        symbol_code: str = "SH000001"       # 默认分析代码（V10 7.2：归 ChanConfig 管）
+        bi_algo: Optional[str] = None
+        bi_strict: Optional[bool] = None
+        bi_fx_check: Optional[str] = None
+        gap_as_kl: Optional[bool] = None
+        bi_end_is_peak: Optional[bool] = None
+        bi_allow_sub_peak: Optional[bool] = None
+        seg_algo: Optional[str] = None
+        left_seg_method: Optional[str] = None
+        zs_combine: Optional[bool] = None
+        zs_combine_mode: Optional[str] = None
+        one_bi_zs: Optional[bool] = None
+        zs_algo: Optional[str] = None
+        trigger_step: Optional[bool] = None
+        skip_step: Optional[int] = None
+        mean_metrics: Optional[List[int]] = None
+        trend_metrics: Optional[List[int]] = None
+        rsi_cycle: Optional[int] = None
+        kdj_cycle: Optional[int] = None
+        cal_demark: Optional[bool] = None
+        cal_rsi: Optional[bool] = None
+        cal_kdj: Optional[bool] = None
+        boll_n: Optional[int] = None
+
+        @field_validator("mean_metrics", "trend_metrics", mode="before")
+        @classmethod
+        def _parse_metric_list(cls, v):
+            """同时接受 JSON 数组与逗号分隔两种环境变量写法（与降级路径行为一致）"""
+            if isinstance(v, str):
+                text = v.strip()
+                if text.startswith("["):
+                    import json
+                    return json.loads(text)
+                return [int(x.strip()) for x in text.split(",") if x.strip()]
+            return v
+
+else:
+
+    class ChanEnvSettings:  # 降级实现：仅标量 + 逗号列表
+        def __init__(self):
+            merged = dict(_parse_env_file(_ENV_FILE))
+            merged.update(os.environ)
+            for env_key, conf_key in _ENV_KEYS.items():
+                raw = merged.get(env_key)
+                if raw is None or raw == "":
+                    continue
+                try:
+                    if conf_key in ("mean_metrics", "trend_metrics"):
+                        setattr(self, conf_key, _to_int_list(raw))
+                    elif conf_key in ("skip_step", "rsi_cycle", "kdj_cycle", "boll_n"):
+                        setattr(self, conf_key, int(raw))
+                    elif isinstance(raw, bool):
+                        setattr(self, conf_key, raw)
+                    elif conf_key in ("bi_strict", "gap_as_kl", "bi_end_is_peak", "bi_allow_sub_peak",
+                                      "zs_combine", "one_bi_zs", "trigger_step",
+                                      "cal_demark", "cal_rsi", "cal_kdj"):
+                        setattr(self, conf_key, _to_bool(raw))
+                    else:
+                        setattr(self, conf_key, raw)
+                except (TypeError, ValueError):
+                    print(f"[ChanConfig] 环境变量 {env_key}={raw!r} 解析失败，忽略")
+            self.symbol_code = merged.get("SYMBOL_CODE", "").strip() or "SH000001"
+
+
+@lru_cache(maxsize=1)
+def _chan_env_settings():
+    return ChanEnvSettings()
+
+
+def reload_chan_env():
+    """重新加载环境配置（测试 / 运行期改 .env 后手动刷新用）。"""
+    _chan_env_settings.cache_clear()
+
+
+def chan_env_overrides() -> dict:
+    """返回已被环境变量/.env 显式设置的算法参数 {conf键: 值}。
+
+    合并进 CChanConfig 的优先级：显式 conf > 环境变量 > 引擎内置默认。
+    """
+    s = _chan_env_settings()
+    overrides = {}
+    for env_key, conf_key in _ENV_KEYS.items():
+        value = getattr(s, conf_key, None)
+        if value is not None:
+            overrides[conf_key] = value
+    return overrides
+
+
+def get_symbol_code() -> str:
+    """默认分析代码（V10 7.2：SYMBOL_CODE 归 ChanConfig.py / .env 管）"""
+    return _chan_env_settings().symbol_code
+
 
 class CChanConfig:
     def __init__(self, conf=None):
         if conf is None:
             conf = {}
+        # 环境变量/.env 覆盖引擎默认；显式传入的 conf 优先级最高（保持既有 API 语义）
+        conf = {**chan_env_overrides(), **conf}
         conf = ConfigWithCheck(conf)
         self.bi_conf = CBiConfig(
             bi_algo=conf.get("bi_algo", "normal"),                 # 按缠论笔定义，非顶/底分型即成笔

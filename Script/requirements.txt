@@ -1,6 +1,29 @@
-baostock>=0.8.8
-ipython>=8.5.0
-matplotlib>=3.5.3
-numpy>=1.23.3
-pandas>=1.4.2
-requests>=2.22.0
+# ============================================================
+# chan.py (custom-dev 分支) 依赖清单 — 阶段 2 补全（V10 方案 8.3）
+# 按三段组织：运行必需 / 引擎可选数据源 / GUI 可选
+# 安装：pip install -r Script/requirements.txt
+# ============================================================
+
+# ── 一、运行必需（API 服务 + 分析引擎 + 通达信本地数据）──────────────
+fastapi>=0.100.0            # REST/SSE API 框架（api_server.py / FrontAPI.py）
+uvicorn[standard]>=0.23.0   # ASGI 服务器（python FrontAPI.py）
+pydantic>=2.0.0             # 数据校验（fastapi 内核依赖）
+pydantic-settings>=2.0.0    # 配置中心化（App/AppConfig.py / ChanConfig.py，.env 加载）
+requests>=2.22.0            # HTTP 客户端（行情请求 / 同花顺云端 API）
+numpy>=1.23.3               # 数值计算（指标/面积）
+pandas>=1.4.2               # K 线数据处理
+matplotlib>=3.5.3           # 图片渲染（Plot/ 遗留绘图路径）
+chinese-calendar>=1.8.0     # 交易日历（开收盘时间判定）
+pytdx>=1.72                 # 通达信协议数据读取（TdxAPI 底层）
+
+# ── 二、引擎可选数据源（按需安装；未安装时对应功能自动禁用）──────────
+tqsdk>=3.2.0                # 天勤：期货/期指实时行情与历史数据（未装则期货功能不可用）
+akshare>=1.10.0             # 指数成分股在线获取（未装则跳过在线获取）
+eltdx>=0.2.0                # 盘后下载引擎（未装则「盘后下载」按钮不可用）
+baostock>=0.8.8             # BaoStock 数据源（上游遗留实现，当前未接入）
+ccxt>=4.0.0                 # 加密货币/外盘数据源（DataAPI/ccxt.py 使用，未装则对应功能禁用）
+browser-cookie3>=0.19.0     # 同花顺 Cookie 自动捕获（App/ths_capture_cookie.py 工具）
+
+# ── 三、GUI 可选（仅独立扫描 GUI 工具需要，API 服务无需）─────────────
+PyQt6>=6.5.0                # App/ashare_bsp_scanner_gui.py 独立扫描器界面
+ipython>=8.0.0              # 上游交互绘图（Plot/ 交互式分析）

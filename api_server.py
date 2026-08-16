@@ -9,12 +9,24 @@ API 文档:  http://127.0.0.1:18081/docs
   - 所有分析函数（analyze_stock / stock_manual_select_point / …）直接复用
   - 全局变量通过 my_chan_main.xxx 访问
   - SSE 实时推送通过 mock adapter 桥接原有 handler 逻辑
+
+阶段 2（V10 方案 8.3）：
+  - 路由收敛为 APIRouter，由 FrontAPI.py（新入口）聚合挂载；本文件仍可独立运行
+  - 端口 / CHAN_PATH 等基础设施配置统一走 App/AppConfig.py（环境变量 / .env）
+  - /api/stock 经 App/AppOrch.py 业务编排层调用（引擎串行锁 + 计时日志）
 """
 
 import sys, os, json, time, threading, queue, traceback, re, gc
 
-# ── 确保 chan.py 和 my_chan_main.py 可导入 ──────────────────────────
-CHAN_PATH = os.environ.get("CHAN_PATH", r"C:\my_chan_project")
+# ── 确保仓库根目录可导入（App/ 包与 my_chan_main.py 所在目录）────────
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if _SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, _SCRIPT_DIR)
+
+# ── 基础设施配置（阶段 2：环境变量 / .env 优先，见 App/AppConfig.py）──
+from App.AppConfig import app_config
+
+CHAN_PATH = app_config.chan_path
 if CHAN_PATH not in sys.path:
     sys.path.insert(0, CHAN_PATH)
 
@@ -27,12 +39,30 @@ except ImportError as e:
     sys.exit(1)
 
 # ── FastAPI ───────────────────────────────────────────────────────────
-from fastapi import FastAPI, Query, HTTPException, Body
+from fastapi import FastAPI, Query, HTTPException, Body, APIRouter, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 
+from App import AppOrch as orch   # 阶段 2：业务编排层（引擎串行锁 + 统一计时日志）
+from App.AppOrch import AppError  # 领域异常基类（评审 A：路由层不再吞掉，统一走异常处理器）
+
 app = FastAPI(title="缠论分析 API", version="1.0.0", docs_url="/docs")
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    """领域异常统一处理（与 FrontAPI 一致；api_server 独立入口同样可用）"""
+    print(f"[api_server] 领域异常 {exc.__class__.__name__}: {exc} ({request.url.path})", flush=True)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": exc.__class__.__name__, "detail": str(exc)},
+    )
+
+# 阶段 2：路由收敛为 APIRouter —— 由 FrontAPI.py（新入口）聚合挂载；
+# 本文件保留 app 兼容组装，`python api_server.py` / `uvicorn api_server:app` 仍可独立运行。
+# 阶段 3a 将把 REST 端点逐步迁入 FrontAPI.py，届时本文件退役为纯路由模块。
+router = APIRouter()
 
 app.add_middleware(
     CORSMiddleware,
@@ -123,7 +153,7 @@ def _json_response(data, status_code: int = 200):
 # 路由 — 核心数据
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/stock")
+@router.get("/api/stock")
 async def api_stock(
     code: str = Query(...),
     freq: str = Query("d"),
@@ -136,8 +166,11 @@ async def api_stock(
     if not code:
         raise HTTPException(status_code=400, detail="请输入股票代码")
     try:
-        result = m.analyze_stock(code, freq=freq, end_date=end_date,
-                                  dual=dual, step=step, sub_freq=sub_freq)
+        # 阶段 2：经业务编排层调用（引擎串行锁 + 开始/完成计时日志）
+        result = orch.call_analysis(code, freq=freq, end_date=end_date,
+                                    dual=dual, step=step, sub_freq=sub_freq)
+    except AppError:
+        raise  # 领域异常：交给 FastAPI 统一异常处理器（评审 A，FrontAPI/api_server 均已注册）
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}")
@@ -152,7 +185,7 @@ async def api_stock(
     return _json_response(result)
 
 
-@app.get("/api/stocks_manual_select_point")
+@router.get("/api/stocks_manual_select_point")
 async def api_stocks_manual_select_point(
     code: str = Query(...),
     freq: str = Query("d"),
@@ -171,7 +204,7 @@ async def api_stocks_manual_select_point(
     return _json_response(result)
 
 
-@app.get("/api/red_range_zs")
+@router.get("/api/red_range_zs")
 async def api_red_range_zs(
     code: str = Query(...),
     freq: str = Query("d"),
@@ -198,7 +231,7 @@ async def api_red_range_zs(
 # 路由 — 搜索
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/search")
+@router.get("/api/search")
 async def api_search(q: str = Query(...)):
     """股票代码/名称/拼音搜索"""
     if not q:
@@ -298,7 +331,7 @@ async def api_search(q: str = Query(...)):
 # 路由 — 扫描
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/zxg_list")
+@router.get("/api/zxg_list")
 async def api_zxg_list():
     """返回自选股列表"""
     try:
@@ -308,7 +341,7 @@ async def api_zxg_list():
         return _json_response({"error": str(exc)}, 500)
 
 
-@app.get("/api/scan_stock_list")
+@router.get("/api/scan_stock_list")
 async def api_scan_stock_list(source: str = Query("zxg")):
     """返回股票列表（支持逗号分隔多来源）"""
     sources = [s.strip() for s in source.split(",") if s.strip()]
@@ -417,7 +450,7 @@ async def api_scan_stock_list(source: str = Query("zxg")):
     })
 
 
-@app.get("/api/scan_one")
+@router.get("/api/scan_one")
 async def api_scan_one(
     code: str = Query(...),
     freq: str = Query("d"),
@@ -582,7 +615,7 @@ async def api_scan_one(
         return _json_response({"error": str(exc)})
 
 
-@app.get("/api/scan_page_index_code")
+@router.get("/api/scan_page_index_code")
 async def api_scan_page_index_code(code: str = Query("")):
     """设置当前板块指数代码"""
     code = code.strip()
@@ -596,7 +629,7 @@ async def api_scan_page_index_code(code: str = Query("")):
         return _json_response({"error": "缺少code参数"}, 400)
 
 
-@app.get("/api/scan_start")
+@router.get("/api/scan_start")
 async def api_scan_start():
     """新一轮扫描开始"""
     m._scan_aborted = False
@@ -609,7 +642,7 @@ async def api_scan_start():
     return _json_response({"ok": True})
 
 
-@app.get("/api/scan_end")
+@router.get("/api/scan_end")
 async def api_scan_end():
     """扫描结束"""
     if m._scan_skip_log:
@@ -635,14 +668,14 @@ async def api_scan_end():
     return _json_response({"count": len(m._scan_skip_log)})
 
 
-@app.get("/api/scan_clear_cache")
+@router.get("/api/scan_clear_cache")
 async def api_scan_clear_cache():
     """关闭扫描面板"""
     print("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
     return _json_response({"cleared": 0})
 
 
-@app.get("/api/scan_abort")
+@router.get("/api/scan_abort")
 async def api_scan_abort():
     """中断扫描"""
     m._scan_aborted = True
@@ -654,7 +687,7 @@ async def api_scan_abort():
 # 路由 — 自选股保存
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/zxg_save")
+@router.get("/api/zxg_save")
 async def api_zxg_save(codes: str = Query("")):
     """保存勾选的股票到通达信+同花顺自选股"""
     codes_list = codes.split(",") if codes else []
@@ -692,7 +725,7 @@ async def api_zxg_save(codes: str = Query("")):
                     ths_msg = f"云端同步失败: {err_str}"
                 print(f"[保存] 同花顺: {ths_msg}")
         else:
-            ths_msg = "ths_cloud_api.py 未找到，请确保该文件在脚本同目录"
+            ths_msg = "App/ths_cloud_api.py 未找到，请确保 App/ 目录完整（阶段 2 已迁入 App/）"
             print(f"[保存] 同花顺: {ths_msg}")
 
         print(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
@@ -711,7 +744,7 @@ async def api_zxg_save(codes: str = Query("")):
 # 路由 — 选点管理
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/clear_saved_point")
+@router.get("/api/clear_saved_point")
 async def api_clear_saved_point(code: str = Query(...), freq: str = Query("d")):
     """清除选点"""
     if not code:
@@ -742,7 +775,7 @@ async def api_clear_saved_point(code: str = Query(...), freq: str = Query("d")):
 # 路由 — 期货/期指
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/futures_manual_select_point")
+@router.get("/api/futures_manual_select_point")
 async def api_futures_manual_select_point(
     symbol: str = Query(...),
     freq: str = Query("15s"),
@@ -761,7 +794,7 @@ async def api_futures_manual_select_point(
     return _json_response(result)
 
 
-@app.get("/api/futures_clear_saved_point")
+@router.get("/api/futures_clear_saved_point")
 async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Query("15s")):
     """期货清除选点"""
     if not symbol:
@@ -773,20 +806,20 @@ async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Qu
     return _json_response({"ok": True})
 
 
-@app.get("/api/futures_cleanup")
+@router.get("/api/futures_cleanup")
 async def api_futures_cleanup():
     """清理所有期货数据"""
     m._cleanup_all_futures_data()
     return _json_response({"ok": True})
 
 
-@app.get("/api/futures_status")
+@router.get("/api/futures_status")
 async def api_futures_status():
     """期货状态"""
     return _json_response({"ok": True, "architecture": "self-contained"})
 
 
-@app.get("/api/futures_config")
+@router.get("/api/futures_config")
 async def api_futures_config():
     """期货可用周期列表"""
     from DataAPI.TqSdkAPI import SUPPORTED_FREQS, DISABLED_FREQS
@@ -800,7 +833,7 @@ async def api_futures_config():
 # 路由 — SSE 实时推送（期货）
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/futures_stream")
+@router.get("/api/futures_stream")
 async def api_futures_stream(
     symbol: str = Query(...),
     freq: str = Query("15s"),
@@ -837,7 +870,7 @@ async def api_futures_stream(
 # 路由 — 股票名称刷新
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/refresh_stock_names")
+@router.get("/api/refresh_stock_names")
 async def api_refresh_stock_names():
     """启动股票名称刷新"""
     if m._refresh_status["running"]:
@@ -854,7 +887,7 @@ async def api_refresh_stock_names():
         return _json_response({"status": "started", "msg": "股票名称刷新已启动"})
 
 
-@app.get("/api/refresh_status")
+@router.get("/api/refresh_status")
 async def api_refresh_status():
     """查询刷新状态"""
     return _json_response(m._refresh_status)
@@ -864,7 +897,7 @@ async def api_refresh_status():
 # 路由 — 标注
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/annotations")
+@router.get("/api/annotations")
 async def api_annotations_get(code: str = Query(...), freq: str = Query("d")):
     """获取标注数据"""
     if not code:
@@ -873,7 +906,7 @@ async def api_annotations_get(code: str = Query(...), freq: str = Query("d")):
     return _json_response({"annotations": anns, "code": code, "freq": freq})
 
 
-@app.post("/api/annotations")
+@router.post("/api/annotations")
 async def api_annotations_post(body: dict = Body(...)):
     """标注增删改"""
     action = body.get("action", "")
@@ -916,7 +949,7 @@ async def api_annotations_post(body: dict = Body(...)):
         return _json_response({"error": f"未知action: {action}"}, 400)
 
 
-@app.get("/api/annotations_scan")
+@router.get("/api/annotations_scan")
 async def api_annotations_scan(freq: str = Query("")):
     """自选扫描：返回有标注的股票列表"""
     codes = m._get_annotated_codes(freq)
@@ -927,7 +960,7 @@ async def api_annotations_scan(freq: str = Query("")):
 # 路由 — 盘后下载
 # ═══════════════════════════════════════════════════════════════════════
 
-@app.get("/api/tdx_download_start")
+@router.get("/api/tdx_download_start")
 async def api_tdx_download_start_get(
     categories: str = Query("[]"),
     day_start: str = Query(""),
@@ -948,7 +981,7 @@ async def api_tdx_download_start_get(
     return _json_response({"ok": ok, "message": msg}, 200 if ok else 409)
 
 
-@app.post("/api/tdx_download_start")
+@router.post("/api/tdx_download_start")
 async def api_tdx_download_start_post(body: dict = Body(...)):
     """盘后下载启动 (POST)"""
     if not m._ELTDX_AVAILABLE:
@@ -964,14 +997,14 @@ async def api_tdx_download_start_post(body: dict = Body(...)):
     return _json_response({"ok": ok, "message": msg}, 200 if ok else 409)
 
 
-@app.get("/api/tdx_download_status")
+@router.get("/api/tdx_download_status")
 async def api_tdx_download_status():
     """盘后下载进度"""
     status = m._get_download_status()
     return _json_response(status)
 
 
-@app.get("/api/tdx_download_stop")
+@router.get("/api/tdx_download_stop")
 async def api_tdx_download_stop():
     """盘后下载停止"""
     ok, msg = m._stop_download()
@@ -986,12 +1019,15 @@ async def api_tdx_download_stop():
 # 兼容重定向：旧版页面路径 chan_chart.html → 新首页 index.html
 from fastapi.responses import RedirectResponse
 
-@app.get("/chan_chart.html", include_in_schema=False)
+@router.get("/chan_chart.html", include_in_schema=False)
 async def chan_chart_redirect():
     return RedirectResponse(url="/")
 
 # 第一阶段：挂载 Frontend/ 为前端页面目录（优先）
-frontend_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Frontend")
+# 阶段 2：路由聚合 —— 本文件全部路由挂到 router 上，由下方 include_router 挂入 app；
+# FrontAPI.py（新入口）同样 include 本 router，实现单一路由源、双入口可用。
+app.include_router(router)
+frontend_dir = app_config.frontend_dir
 if os.path.isdir(frontend_dir):
     app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
 else:
@@ -1007,17 +1043,18 @@ if __name__ == "__main__":
     import socket
     import uvicorn
 
-    # ── 端口占用检测：若 18081 已被旧进程占用，先给出明确提示，避免浏览器打到旧服务 ──
-    PORT = 18081
+    # ── 端口占用检测：若端口已被旧进程占用，先给出明确提示，避免浏览器打到旧服务 ──
+    PORT = app_config.port            # 阶段 2：端口来自 AppConfig（PORT 环境变量 / .env 可覆盖）
+    HOST = app_config.host
     try:
         _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        _probe.bind(("127.0.0.1", PORT))
+        _probe.bind((HOST, PORT))
         _probe.close()
     except OSError:
         print(f"[错误] 端口 {PORT} 已被占用！")
         print(f"[错误] 可能原因：上一次启动的服务器进程仍在运行（旧版 my_chan_main.py 或 api_server.py）。")
-        print(f"[解决] 请先关闭占用 18081 端口的旧进程，再重新启动本服务。")
-        print(f"[解决] Windows 可在命令行执行: netstat -ano | findstr 18081  查看占用进程 PID，")
+        print(f"[解决] 请先关闭占用 {PORT} 端口的旧进程，再重新启动本服务。")
+        print(f"[解决] Windows 可在命令行执行: netstat -ano | findstr {PORT}  查看占用进程 PID，")
         print(f"[解决] 然后执行: taskkill /PID <PID> /F  结束旧进程。")
         sys.exit(1)
 
@@ -1027,7 +1064,8 @@ if __name__ == "__main__":
     else:
         print(f"[信息] 使用默认股票: {m.SYMBOL_CODE}")
 
-    print(f"[信息] FastAPI 服务器启动: http://127.0.0.1:{PORT}")
-    print(f"[信息] API 文档:   http://127.0.0.1:{PORT}/docs")
-    print(f"[信息] K线图表页:  http://127.0.0.1:{PORT}/")
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    print(f"[信息] FastAPI 服务器启动: http://{HOST}:{PORT}")
+    print(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
+    print(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
+    print(f"[信息] 新版入口为 FrontAPI.py（统一异常中间件 + 健康检查），本入口保留兼容")
+    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
