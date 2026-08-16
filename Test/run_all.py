@@ -14,6 +14,8 @@ CI / 迁移每阶段的验收门禁）。
   5. 确定性测试        test_determinism.py          重复调用/跨路径污染/双窗口语义
   6. 行业映射完整性    test_industry_mapping.py     双路径加载不静默降级 + 条目质量
   7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭
+  8. 函数映射同步      func_map_check.py            阶段 2.6：74 函数/57 状态归属
+                                                     完备·无幽灵·行号无漂移
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -48,6 +50,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_industry_mapping.py")]),
     ("sse_sequence",
      [sys.executable, os.path.join("Test", "test_sse_sequence.py")]),
+    ("func_map_sync",
+     [sys.executable, os.path.join("Test", "func_map_check.py")]),
 ]
 
 # 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI
@@ -58,7 +62,8 @@ def run_component(name, cmd, update=False, env=None):
     """执行单个组件，返回记录 dict。超时按失败处理（不无限等待）。"""
     real_cmd = list(cmd)
     if update and name in ("snapshot_regression", "trigger_step_replay",
-                           "phase2_guards", "industry_mapping", "sse_sequence"):
+                           "phase2_guards", "industry_mapping", "sse_sequence",
+                           "func_map_sync"):
         real_cmd.append("--update")
     t0 = time.time()
     try:
