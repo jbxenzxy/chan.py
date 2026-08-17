@@ -9,7 +9,7 @@
 
 依赖：
   - App/ths_cloud_api.py（同目录，阶段 2 随本工具一并迁入 App/）
-  - DataAPI/TdxAPI.py（仓库根，经父目录导入）
+  - App/AppData.py（自选股写入原语，阶段 4 自 DataAPI/TdxAPI.py 收敛至此）
   - App/AppConfig.py（vipdoc 目录发现，阶段 2 起替代源码解析）
 """
 import sys
@@ -20,7 +20,7 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 repo_root = os.path.dirname(script_dir)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
-from DataAPI.TdxAPI import set_tdx_config
+from DataAPI.TdxAPI import set_tdx_config  # 数据源配置注入（板块文件原语仍在 DataAPI）
 
 CONFIG_FILE = os.path.join(script_dir, ".sync_tdx_config")
 
@@ -206,10 +206,11 @@ def find_tdx_zxg_path():
 
 
 def find_save_to_zxg_blk():
-    """尝试导入 save_to_zxg_blk 函数（DataAPI 位于仓库根 = 本脚本父目录）"""
+    """尝试导入 save_to_zxg_blk 函数（阶段 4 起实现收敛 App/AppData.py，
+    仓库根已在模块头注入 sys.path，App 包自仓库根导入）"""
     try:
-        from DataAPI.TdxAPI import save_to_zxg_blk   # 仓库根已在模块头注入 sys.path
-        return save_to_zxg_blk
+        from App.AppData import app_data   # 业务数据层：自选股存哪里、怎么存
+        return app_data.save_to_zxg_blk
     except ImportError:
         return None
 
@@ -344,12 +345,11 @@ def main():
     save_fn = find_save_to_zxg_blk()
     zxg_dir = args.tdx_path or find_tdx_zxg_path()
 
-    # 如果用了 DataAPI，从 TdxAPI 内部获取实际写入路径（用于清空操作）
+    # 如果用了 DataAPI，从数据层获取实际写入路径（用于清空操作；阶段 4 自含）
     zxg_blk_path = None
     if save_fn:
         try:
-            from DataAPI.TdxAPI import get_blk_path
-            zxg_blk_path = get_blk_path("zxg")
+            zxg_blk_path = app_data.zxg_blk_path
         except Exception:
             pass
 

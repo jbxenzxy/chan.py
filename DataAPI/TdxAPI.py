@@ -1336,15 +1336,15 @@ def read_blk_file(blk_path):
     return stocks
 
 
-def read_zxg_stocks():
-    """
-    读取通达信自选股文件 zxg.blk，返回股票代码列表。
-    """
-    path = get_blk_path("zxg")
-    if not os.path.exists(path):
-        print(f"[警告] 自选股文件不存在: {path}")
-        return []
-    return read_blk_file(path)
+# ============================================================
+# [阶段 4 墓碑] read_zxg_stocks / save_to_zxg_blk / _ZXG_HK_INDEX_MAP /
+# _ZXG_US_INDEX_MAP 已于阶段 4（数据层收敛）迁出至 App/AppData.py。
+# 自选股属业务数据层职责（存哪里、怎么存），含路径推导与 blk 解析
+# （AppData.zxg_blk_path / _read_zxg_blk_file 自含，与本模块互不依赖）；
+# 本模块的 get_blk_path / read_blk_file 仅服务自身指数成分读取。
+# 迁移入口：from App.AppData import app_data
+#           app_data.read_zxg_stocks() / app_data.save_to_zxg_blk(codes)
+# ============================================================
 
 
 def read_zz1000_stocks():
@@ -2223,97 +2223,12 @@ def _read_tdxhy_sector_stocks(sector_code):
     return stocks
 
 
-# 港股指数 同花顺代码 → 通达信内部代码映射
-# 注意：同花顺 API 返回的是 HS+数字 代码（如 HS2083），不是显示名（如 HSTECH）
-#       须与 sync_ths_to_tdx.py 中的 HK_INDEX_MAP 保持一致
-_ZXG_HK_INDEX_MAP = {
-    "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
-    "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
-}
-# 美股指数（非个股）映射
-_ZXG_US_INDEX_MAP = {
-    "NBI": "A_NBI",
-}
-
-
-def save_to_zxg_blk(codes):
-    """
-    将股票代码列表追加到通达信自选股文件 zxg.blk。
-    codes: list of str，格式如 "000852.SH"、"600519.SH"、"00700.HK"、"NBI.US"
-    自动去重，已存在的不会重复添加。
-
-    各市场输出格式：
-      A 股：     {前缀}{6位代码}    如 1600519
-      港股个股：  31#{5位代码}       如 31#00700
-      港股指数：  27#{HZ代码}       如 27#HZ5489
-      美股个股：  74#{代码}         如 74#XBI
-      美股指数：  12#A_{代码}       如 12#A_NBI
-    """
-    path = get_blk_path("zxg")
-    if not path:
-        return 0
-    if not os.path.exists(path):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        existing = set()
-    else:
-        existing = set()
-        try:
-            with open(path, "r", encoding="gbk") as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        existing.add(line)
-        except Exception:
-            pass
-
-    added = 0
-    with open(path, "a", encoding="gbk") as f:
-        for code_str in codes:
-            code_str = code_str.strip().upper()
-            # A 股：纯数字 + SH/SZ/BJ 后缀
-            m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', code_str)
-            if m:
-                code = m.group(1)
-                market = m.group(2)
-                if market == "SH":
-                    line = "1" + code
-                elif market == "SZ":
-                    line = "0" + code
-                else:  # BJ
-                    line = "2" + code
-            else:
-                # 港股 / 美股：代码可能含字母（如 NBI.US、HSIDI.HK）
-                m2 = re.match(r'^(\w+)\.(HK|US)$', code_str)
-                if m2:
-                    code = m2.group(1)
-                    market = m2.group(2)
-                    if market == "HK":
-                        if code in _ZXG_HK_INDEX_MAP:
-                            # 港股指数：27# + 通达信内部代码
-                            line = "27#" + _ZXG_HK_INDEX_MAP[code]
-                        else:
-                            # 港股个股：31# + 5位代码
-                            line = "31#" + code.zfill(5)
-                    else:  # US
-                        if code in _ZXG_US_INDEX_MAP:
-                            # 美股指数：12# + 通达信内部代码
-                            line = "12#" + _ZXG_US_INDEX_MAP[code]
-                        else:
-                            # 美股个股：74# + 原始代码
-                            line = "74#" + code
-                else:
-                    # 无法识别的格式，跳过
-                    print(f"[自选保存] 跳过无法识别的代码: {code_str}")
-                    continue
-            if line not in existing:
-                f.write(line + "\n")
-                existing.add(line)
-                added += 1
-                print(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
-
-    print(f"[自选保存] 共添加 {added} 只股票到自选股")
-    return added
-
+# ============================================================
+# [阶段 4 墓碑] save_to_zxg_blk 与 _ZXG_HK_INDEX_MAP/_ZXG_US_INDEX_MAP
+# 已迁出至 App/AppData.py（业务数据层，阶段 4 数据层收敛）。
+# 调用方式：from App.AppData import app_data
+#           app_data.save_to_zxg_blk(codes)
+# ============================================================
 
 # ============================================================
 if __name__ == "__main__":

@@ -33,35 +33,51 @@ from Test.snapshot_runner import isolate_side_effects
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 1. 配置一致性（阶段 2「配置中心化」防回归）
+# 1. 配置一致性（阶段 2「配置中心化」防回归 · 阶段 4 语义更新）
 # ═══════════════════════════════════════════════════════════════════
+# 阶段 4 起 my_chan_main 的路径别名已全部删除（阶段 2 是「别名 = 派生值」，
+# 阶段 4 升级为「别名不存在，一律 app_config.<属性> 直读」）。
+# 守护语义随之升级：① 别名不得复活；② AppData 持久化路径与 AppConfig
+# 单一事实源逐对一致（数据层落盘位置不走私）。
+_PHASE4_RETIRED_ALIASES = [
+    "TDX_INSTALL_DIR", "VIPDOC_DIR", "DOWNLOAD_DIR", "CHAN_PATH", "OUTPUT_DIR",
+    "SAVED_POINT_FILE", "ANNOTATIONS_FILE", "LAST_CODE_FREQ_FILE",
+    "_STOCK_NAMES_CACHE_FILE", "_STOCK_PE_TTM_FILE", "_FLOAT_MC_CACHE_FILE",
+    "_MAX_CACHE_SIZE",
+]
+
 def test_config_consistency(failures):
-    """my_chan_main 模块级常量必须与 AppConfig 单一事实源逐对一致。
-    阶段 2 的收敛是「常量 = app_config 派生」，若后续有人手改其中一处
-    （绕过配置中心），这里立即暴露。"""
+    """阶段 4 语义：① 路径别名清零不得复活；② AppData 路径 = AppConfig。"""
     import my_chan_main as m
     from App.AppConfig import app_config
+    from App.AppData import AppData
 
+    revived = [n for n in _PHASE4_RETIRED_ALIASES if hasattr(m, n)]
+    if revived:
+        failures.append("配置一致性: 别名复活 " + ", ".join(revived))
+        print(f"[FAIL] ① 配置一致性: {len(revived)} 个阶段 4 已删别名复活: {revived}")
+        return
+
+    d = AppData()
     pairs = [
-        ("TDX_INSTALL_DIR",  m.TDX_INSTALL_DIR,  app_config.tdx_install_dir),
-        ("VIPDOC_DIR",       m.VIPDOC_DIR,       app_config.vipdoc_dir),
-        ("DOWNLOAD_DIR",     m.DOWNLOAD_DIR,     app_config.download_dir),
-        ("CHAN_PATH",        m.CHAN_PATH,        app_config.chan_path),
-        ("OUTPUT_DIR",       m.OUTPUT_DIR,       app_config.output_dir),
-        ("SAVED_POINT_FILE", m.SAVED_POINT_FILE, app_config.saved_point_file),
-        ("ANNOTATIONS_FILE", m.ANNOTATIONS_FILE, app_config.annotations_file),
+        ("saved_point_file",      d.saved_point_file,      app_config.saved_point_file),
+        ("annotations_file",      d.annotations_file,      app_config.annotations_file),
+        ("last_code_freq_file",   d.last_code_freq_file,   app_config.last_code_freq_file),
+        ("stock_names_cache_file", d.stock_names_cache_file, app_config.stock_names_cache_file),
+        ("stock_pe_ttm_file",     d.stock_pe_ttm_file,     app_config.stock_pe_ttm_file),
+        ("float_mc_cache_file",   d.float_mc_cache_file,   app_config.float_mc_cache_file),
     ]
-    bad = [f"{n}: 引擎侧 {a!r} != 配置侧 {b!r}"
+    bad = [f"{n}: 数据层 {a!r} != 配置侧 {b!r}"
            for n, a, b in pairs
            if os.path.normpath(str(a)) != os.path.normpath(str(b))]
     if bad:
         failures.append("配置一致性: " + "; ".join(bad))
-        print(f"[FAIL] ① 配置一致性: {len(bad)} 对不一致")
+        print(f"[FAIL] ① 配置一致性: AppData {len(bad)} 对路径与 AppConfig 不一致")
         for x in bad:
             print("      -", x)
     else:
-        print(f"[PASS] ① 配置一致性: {len(pairs)} 对路径全部一致"
-              f"（单一事实源 = AppConfig）")
+        print(f"[PASS] ① 配置一致性: 别名 {len(_PHASE4_RETIRED_ALIASES)} 个清零 + "
+              f"AppData {len(pairs)} 对路径全部一致（单一事实源 = AppConfig）")
 
 
 # ═══════════════════════════════════════════════════════════════════

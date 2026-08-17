@@ -1,4 +1,8 @@
-from typing import Generic, List, Optional, Self, TypeVar
+from typing import Generic, List, Optional, TypeVar
+try:
+    from typing import Self
+except ImportError:  # Python < 3.11
+    from typing_extensions import Self
 
 from Bi.Bi import CBi
 from Common.CEnum import BI_DIR, MACD_ALGO, TREND_LINE_SIDE

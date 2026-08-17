@@ -381,10 +381,11 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
         display_key = f"{symbol}:{freq_cn}"
 
         # 如果没有传入 start_time，查询CSV中是否有保存的选点
+        # （阶段 4：经 AppOrch 漏斗读 AppData，不再直连 my_chan_main 状态）
         if start_time is None:
             col = m.FREQ_TO_COL.get(freq, "")
-            if col and symbol in m._saved_point_times:
-                _saved = m._saved_point_times[symbol].get(col, "").strip() or None
+            if col:
+                _saved = orch.get_saved_point(symbol, freq) or None
                 if _saved:
                     start_time = _saved
                     print(f"[{display_key}] 检测到保存选点: {start_time}")
@@ -758,22 +759,22 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         main_freq_label = main_freq
         sub_freq_label = sub_freq
 
-        # 1. 查询选点状态
+        # 1. 查询选点状态（阶段 4：经 AppOrch 漏斗读 AppData）
         saved_selection_date = ""
         main_start_time = start_time
         sub_start_time = start_time
         try:
             qualified_code = symbol
             col_meta = m.FREQ_TO_COL.get(main_freq, "")
-            if col_meta and qualified_code in m._saved_point_times:
-                saved_selection_date = m._saved_point_times[qualified_code].get(col_meta, "").strip() or ""
+            if col_meta:
+                saved_selection_date = orch.get_saved_point(qualified_code, main_freq)
                 # 如果外部没传start_time，从CSV读取选点
                 if main_start_time is None and saved_selection_date:
                     main_start_time = saved_selection_date
             # 下窗也查询选点
             sub_col_meta = m.FREQ_TO_COL.get(sub_freq, "")
-            if sub_col_meta and qualified_code in m._saved_point_times:
-                sub_saved = m._saved_point_times[qualified_code].get(sub_col_meta, "").strip() or ""
+            if sub_col_meta:
+                sub_saved = orch.get_saved_point(qualified_code, sub_freq)
                 if sub_start_time is None and sub_saved:
                     sub_start_time = sub_saved
         except Exception as _e:
@@ -797,8 +798,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                                              sub_freq_sec, sub_freq_label, sub_start_time)
         sub_chan, sub_records, sub_kl_type, _ = sub_result
         sub_kl_type = m._get_kl_type(sub_freq)
-        # 缓存下窗 CChan 供 /api/dual_zs 访问（key 统一大写）
-        m._futures_analysis_cache[f"{symbol.upper()}:{sub_freq}"] = sub_chan
+        # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
+        orch.futures_set_sub_chan(symbol, sub_freq, sub_chan)
         if m._SSE_DEBUG:
             print(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
                   f"笔={len(sub_chan[sub_kl_type].bi_list)}, 中枢={len(sub_chan[sub_kl_type].zs_list)}")
@@ -1238,7 +1239,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         if symbol is not None and sub_freq_sec is not None:
             await run_in_threadpool(src.cleanup_records, f"{symbol}:{sub_freq_sec}")
         try:
-            m._futures_analysis_cache.pop(f"{symbol.upper()}:{sub_freq}", None)
+            orch.futures_pop_sub_chan(symbol, sub_freq)  # 语义化漏斗失效（key 规则内聚数据层）
         except Exception as e:
             print(f"[警告] 异常: {type(e).__name__}: {e}")
 
@@ -1669,7 +1670,7 @@ if __name__ == "__main__":
         print(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
         sys.exit(1)
 
-    last_code, last_freq = m._load_last_code_freq()
+    last_code, last_freq = orch.load_last_code_freq()  # 阶段 4：AppOrch 漏斗读 AppData
     if last_code:
         print(f"[信息] 恢复上次: {last_code} (周期: {last_freq})")
     else:

@@ -538,47 +538,105 @@ def start_download_checked(categories, day_start=None, min_start=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 名称 / PE / 流通市值 缓存
+# 名称 / PE / 流通市值 / 选点 / 上次查看 缓存
+# （阶段 4：纯数据读写一律直连 AppData；获取侧刷新函数仍走引擎壳）
 # ═══════════════════════════════════════════════════════════════════════
 
 def load_stock_names_from_cache_file():
-    """加载股票名称缓存"""
-    return _m._load_stock_names_from_cache_file()
+    """加载股票名称缓存（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.load_stock_names_from_cache_file()
 
 
 def refresh_stock_names():
-    """刷新股票名称（阻塞）"""
+    """刷新股票名称（阻塞）—— 获取侧逻辑，阶段 5 前保留引擎实现"""
     return _m._refresh_stock_names()
 
 
 def load_float_mc_cache():
-    """加载流通市值缓存"""
-    return _m._load_float_mc_cache()
+    """加载流通市值缓存（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.load_float_mc_cache()
 
 
 def fetch_float_mc_from_tencent(stock_list):
-    """从腾讯接口获取流通市值"""
+    """从腾讯接口获取流通市值（获取侧）"""
     return _m._fetch_float_mc_from_tencent(stock_list)
 
 
 def update_float_mc_cache(mv_dict):
-    """更新流通市值缓存"""
-    return _m._update_float_mc_cache(mv_dict)
+    """更新流通市值缓存（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.update_float_mc_cache(mv_dict)
 
 
 def load_pe_ttm_cache():
-    """加载 PE-TTM 缓存"""
-    return _m._load_pe_ttm_cache()
+    """加载 PE-TTM 缓存（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.load_pe_ttm_cache()
 
 
 def get_pe_ttm(market, code):
-    """获取 PE-TTM"""
-    return _m._get_pe_ttm(market, code)
+    """获取 PE-TTM（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.get_pe_ttm(market, code)
 
 
 def get_index_belong(market, code):
-    """获取指数归属"""
-    return _m._get_index_belong(market, code)
+    """获取指数归属（AppData 直连，阶段 4）"""
+    from App.AppData import app_data
+    return app_data.get_index_belong(market, code)
+
+
+def get_saved_point_times():
+    """选点内存表（阶段 4：FrontAPI 经此只读访问，禁直连 my_chan_main 状态）"""
+    from App.AppData import app_data
+    return app_data.saved_point_times
+
+
+def futures_cache_get(key):
+    """期货分析缓存读（阶段 4 漏斗）"""
+    from App.AppData import app_data
+    return app_data.futures_cache_get(key)
+
+
+def futures_cache_put(key, value):
+    """期货分析缓存写（阶段 4 漏斗；SSE 双窗口下窗 chan 入缓存）"""
+    from App.AppData import app_data
+    return app_data.futures_cache_put(key, value)
+
+
+def futures_cache_pop(key, default=None):
+    """期货分析缓存失效（阶段 4 漏斗；连接关闭时释放）"""
+    from App.AppData import app_data
+    return app_data.futures_cache_pop(key, default)
+
+
+def futures_set_sub_chan(symbol, sub_freq, chan):
+    """写期货子窗 CChan（阶段 4 吸收评审：语义化漏斗，key 规则内聚数据层）"""
+    from App.AppData import app_data
+    return app_data.set_futures_sub_chan(symbol, sub_freq, chan)
+
+
+def futures_get_sub_chan(symbol, sub_freq):
+    """读期货子窗 CChan（语义化漏斗；symbol 大小写不敏感）"""
+    from App.AppData import app_data
+    return app_data.get_futures_sub_chan(symbol, sub_freq)
+
+
+def futures_pop_sub_chan(symbol, sub_freq):
+    """失效期货子窗 CChan（语义化漏斗；连接关闭时释放）"""
+    from App.AppData import app_data
+    return app_data.pop_futures_sub_chan(symbol, sub_freq)
+
+
+def get_saved_point(code, freq):
+    """查询单个选点：返回该 (code, freq) 已保存的选点时间或空串（阶段 4）"""
+    from App.AppData import app_data
+    col = app_data.freq_to_col(freq)
+    if not col:
+        return ""
+    return app_data.saved_point_times.get(code, {}).get(col, "").strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════

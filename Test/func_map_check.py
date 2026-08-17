@@ -122,40 +122,40 @@ TARGET_FUNCS = {
     "_send_windows_notification":   ("ORCH_C", "Windows 通知（ChartHandler 下载/扫描完成用）"),
 
     # ── AppData：名称/PE/归属/市值 缓存族 ──
-    "_get_stock_name":              ("DATA", "股票名查询（读 _stock_names_cache）"),
-    "_load_stock_names_from_cache_file": ("DATA", "名称缓存加载（RW _stock_names_cache/_loaded；AppOrch 已有壳）"),
-    "_safe_write_json_file":        ("DATA", "原子 JSON 写（纯；持久化底座）"),
-    "_load_pe_ttm_cache":           ("DATA", "PE 缓存加载（RW；AppOrch 已有壳）"),
-    "_get_pe_ttm":                  ("DATA", "PE 查询（AppOrch 已有壳）"),
-    "_get_index_belong":            ("DATA", "行业归属查询（AppOrch 已有壳）"),
-    "_load_float_mc_cache":         ("DATA", "流通市值加载（RW；AppOrch 已有壳）"),
-    "_update_float_mc_cache":       ("DATA", "流通市值更新（RW；AppOrch 已有壳）"),
-    "_get_float_mc_from_cache":     ("DATA", "流通市值查询"),
+    "_get_stock_name":              ("DATA", "✓4 兼容壳 → app_data.get_stock_name"),
+    "_load_stock_names_from_cache_file": ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_safe_write_json_file":        ("DATA", "✓4 兼容壳 → App/AppData.safe_write_json_file"),
+    "_load_pe_ttm_cache":           ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_get_pe_ttm":                  ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_get_index_belong":            ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_load_float_mc_cache":         ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_update_float_mc_cache":       ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    "_get_float_mc_from_cache":     ("DATA", "✓4 兼容壳 → app_data"),
 
     # ── AppData：统一缓存三件套 ──
-    "_cache_put":                   ("DATA", "缓存写（LRU；AppData 类已定义同签名）"),
-    "_cache_get":                   ("DATA", "缓存读（3 处调用）"),
-    "_cache_remove":                ("DATA", "缓存失效"),
+    "_cache_put":                   ("DATA", "✓4 兼容壳 → app_data.cache_put（LRU）"),
+    "_cache_get":                   ("DATA", "✓4 兼容壳 → app_data.cache_get"),
+    "_cache_remove":                ("DATA", "✓4 兼容壳 → app_data.cache_remove"),
 
     # ── AppData：选点持久化 ──
-    "_load_saved_point_times":      ("DATA", "选点表加载（读 SAVED_POINT_FILE；AppData 已有同签名）"),
-    "_save_point_time":             ("DATA", "选点保存（AppData 已有同签名）"),
-    "_clear_saved_point_time":      ("DATA", "选点清除（AppData 已有同签名）"),
+    "_load_saved_point_times":      ("DATA", "✓4 兼容壳 → app_data"),
+    "_save_point_time":             ("DATA", "✓4 兼容壳 → app_data"),
+    "_clear_saved_point_time":      ("DATA", "✓4 兼容壳 → app_data"),
 
     # ── AppData：上次代码/周期 ──
-    "_save_last_code_freq":         ("DATA", "上次代码周期保存（AppData 已有同签名）"),
-    "_load_last_code_freq":         ("DATA", "上次代码周期加载（AppData 已有同签名）"),
+    "_save_last_code_freq":         ("DATA", "✓4 兼容壳 → app_data"),
+    "_load_last_code_freq":         ("DATA", "✓4 兼容壳 → app_data（FrontAPI 经 AppOrch 漏斗）"),
 
     # ── AppData：标注族（9 个）──
-    "_load_annotations":            ("DATA", "标注加载（RW _annotations_cache；6 处调用，波次 1）"),
-    "_save_annotations":            ("DATA", "标注保存（4 处调用）"),
-    "_get_annotation_key":          ("DATA", "标注键构造（纯，5 处调用）"),
-    "_get_annotations_for":         ("DATA", "标注查询（AppData 已有同签名）"),
-    "_add_annotation":              ("DATA", "标注新增（AppData 已有同签名）"),
-    "_delete_annotation":           ("DATA", "标注删除（AppData 已有同签名）"),
-    "_delete_annotation_by_date":   ("DATA", "按日删标注（AppData 已有同签名）"),
-    "_delete_all_annotations":      ("DATA", "清空标注（AppData 已有同签名）"),
-    "_get_annotated_codes":         ("DATA", "有标注代码列表（AppData 已有同签名）"),
+    "_load_annotations":            ("DATA", "✓4 兼容壳 → app_data"),
+    "_save_annotations":            ("DATA", "✓4 兼容壳 → app_data"),
+    "_get_annotation_key":          ("DATA", "✓4 兼容壳 → AppData.get_annotation_key"),
+    "_get_annotations_for":         ("DATA", "✓4 兼容壳 → app_data"),
+    "_add_annotation":              ("DATA", "✓4 兼容壳 → app_data"),
+    "_delete_annotation":           ("DATA", "✓4 兼容壳 → app_data"),
+    "_delete_annotation_by_date":   ("DATA", "✓4 兼容壳 → app_data"),
+    "_delete_all_annotations":      ("DATA", "✓4 兼容壳 → app_data"),
+    "_get_annotated_codes":         ("DATA", "✓4 兼容壳 → app_data"),
 
     # ── DataAPI / 行业映射 ──
     "read_tdxhy_l2_indices":        ("TDXHY", "二级行业指数读取（阶段 5 随数据文件迁 App/）"),
@@ -173,38 +173,24 @@ TARGET_FUNCS = {
 # ═══════════════════════════════════════════════════════════════════
 TARGET_STATES = {
     # 阶段 2 已中心化的别名（常量=app_config 派生；保留只读直至下线，_verify_config_consistency 守护）
-    "TDX_INSTALL_DIR": ("CFG", "别名=app_config.tdx_install_dir（阶段 4 删）"),
-    "VIPDOC_DIR":      ("CFG", "别名=app_config.vipdoc_dir（阶段 4 删）"),
-    "DOWNLOAD_DIR":    ("CFG", "别名=app_config.download_dir（阶段 4 删）"),
-    "TDX_HQ_CACHE":    ("CFG", "别名=app_config.tdx_hq_cache（阶段 4 删）"),
-    "OUTPUT_DIR":      ("CFG", "别名=app_config.output_dir（阶段 4 删）"),
-    "CHAN_PATH":       ("CFG", "别名=app_config.chan_path（阶段 4 删）"),
-    "LAST_CODE_FREQ_FILE": ("CFG", "别名=app_config.last_code_freq_file（阶段 4 删）"),
 
     # 文件路径常量 → AppConfig
-    "_STOCK_NAMES_CACHE_FILE": ("CFG", "名称缓存文件路径 → app_config 派生属性"),
-    "_STOCK_PE_TTM_FILE":      ("CFG", "PE 缓存文件路径 → app_config"),
-    "_FLOAT_MC_CACHE_FILE":    ("CFG", "流通市值文件路径 → app_config"),
-    "SAVED_POINT_FILE":        ("CFG", "选点文件路径 → app_config"),
-    "SAVED_POINT_COLUMNS":     ("CFG", "选点表列定义 → 常量随 AppData"),
-    "ANNOTATIONS_FILE":        ("CFG", "标注文件路径 → app_config"),
+    # 配置路径别名：阶段 4 已全部删除（CFG 单源直读 app_config.<属性>）
+    # _STOCK_NAMES_CACHE_FILE/_STOCK_PE_TTM_FILE/_FLOAT_MC_CACHE_FILE/
+    # SAVED_POINT_FILE/ANNOTATIONS_FILE 等 12 个别名随阶段 4 清零，
+    # 由 _FORBIDDEN_PATH_ALIASES 守卫「不得复活」（见 test_phase4_guards）。
+    "_FORBIDDEN_PATH_ALIASES": ("CFG", "阶段 4 别名复活守卫名单（自检用常量）"),
+    "SAVED_POINT_COLUMNS":     ("CFG", "选点表列定义（= App/AppData.SAVED_POINT_COLUMNS 同值别名）"),
 
-    # 业务缓存 → AppData 实例字段（含 _loaded 惰性标志与锁）
-    "_stock_names_cache":  ("DATA", "名称缓存 → app_data._names"),
-    "_stock_names_loaded": ("DATA", "惰性标志 → app_data"),
-    "_pe_ttm_cache":       ("DATA", "PE 缓存 → app_data._pe"),
-    "_pe_ttm_loaded":      ("DATA", "惰性标志"),
-    "_index_belong_cache": ("DATA", "归属缓存 → app_data._belong"),
-    "_index_belong_loaded": ("DATA", "惰性标志"),
-    "_float_mc_cache":     ("DATA", "市值缓存 → app_data._float_mc"),
-    "_float_mc_loaded":    ("DATA", "惰性标志"),
-    "_annotations_cache":  ("DATA", "标注缓存 → app_data._annotations"),
-    "_annotations_loaded": ("DATA", "惰性标志"),
-    "_stocks_analysis_cache": ("DATA", "分析结果 LRU（5 读）→ app_data"),
-    "_futures_analysis_cache": ("DATA", "期货分析缓存 → app_data"),
-    "_cache_lock":         ("DATA", "缓存锁 → app_data 内部锁"),
-    "_MAX_CACHE_SIZE":     ("DATA", "LRU 容量常量"),
-    "_saved_point_times":  ("DATA", "选点表内存态（6 读）→ app_data"),
+    # 业务缓存 → ✓4 已收敛：别名 = app_data 实例字段（共享同一对象，身份校验见 phase4 守护）
+    "_stock_names_cache":  ("DATA", "✓4 名称缓存（= app_data._names）"),
+    "_pe_ttm_cache":       ("DATA", "✓4 PE 缓存（= app_data._pe）"),
+    "_index_belong_cache": ("DATA", "✓4 归属缓存（= app_data._belong）"),
+    "_annotations_cache":  ("DATA", "✓4 标注缓存（= app_data._annotations）"),
+    "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
+    "_futures_analysis_cache": ("DATA", "✓4 期货分析缓存（= app_data._futures_analysis_cache）"),
+    "_cache_lock":         ("DATA", "✓4 缓存锁（= app_data._cache_lock）"),
+    "_saved_point_times":  ("DATA", "✓4 选点表内存态（= app_data._saved_point_times）"),
 
     # 获取侧状态
     "_refresh_status":        ("ORCH_F", "刷新进度（3 读）→ 获取侧状态对象"),

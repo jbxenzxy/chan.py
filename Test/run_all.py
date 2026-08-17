@@ -18,7 +18,10 @@ CI / 迁移每阶段的验收门禁）。
                                                      完备·无幽灵·行号无漂移
   9. 阶段 3 成果防护   test_phase3_guards.py        锁分类/直连清零/路由收敛/墓碑/
                                                      SSE 双实现/分层方向
- 10. SSE 灰度比对      test_sse_gray.py             3b-1：native vs 冻结基线
+ 10. 阶段 4 成果防护   test_phase4_guards.py        委托壳+目标存在/状态别名同一性/
+                                                     配置别名清零/自选股收敛/语义子窗/
+                                                     分层方向/LRU 语义
+ 11. SSE 灰度比对      test_sse_gray.py             3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
@@ -58,6 +61,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "func_map_check.py")]),
     ("phase3_guards",
      [sys.executable, os.path.join("Test", "test_phase3_guards.py")]),
+    ("phase4_guards",
+     [sys.executable, os.path.join("Test", "test_phase4_guards.py")]),
     ("sse_gray",
      [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
 ]
@@ -71,7 +76,8 @@ def run_component(name, cmd, update=False, env=None):
     real_cmd = list(cmd)
     if update and name in ("snapshot_regression", "trigger_step_replay",
                            "phase2_guards", "industry_mapping", "sse_sequence",
-                           "func_map_sync", "phase3_guards", "sse_gray"):
+                           "func_map_sync", "phase3_guards", "phase4_guards",
+                           "sse_gray"):
         real_cmd.append("--update")
     t0 = time.time()
     try:
@@ -128,7 +134,7 @@ def main():
     n_ok = sum(1 for r in records if r["ok"])
     n_all = len(records)
     summary = {
-        "phase": "3",
+        "phase": "4",
         "mode": "update" if args.update else "verify",
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "python": sys.version.split()[0],

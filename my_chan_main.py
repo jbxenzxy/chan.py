@@ -22,17 +22,15 @@ from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range, _futures
 # 配置区域 —— 已中心化（阶段 2，V10 方案 7.1/7.2）
 # 基础设施配置：App/AppConfig.py（环境变量 / 仓库根 .env 优先）
 # 算法参数 + 默认代码：ChanConfig.py（SYMBOL_CODE 环境变量可覆盖）
-# 以下模块级变量保留原名，供全文件既有引用兼容；改路径只需改 .env 或环境变量
+# 阶段 4：7 个路径别名已删除，全部引用改为 app_config.<属性> 直读
 # ============================================================
 from App.AppConfig import app_config
 
-TDX_INSTALL_DIR = app_config.tdx_install_dir                            # 通达信安装目录（TDX_INSTALL_DIR）
-VIPDOC_DIR = app_config.vipdoc_dir                                     # 通达信vipdoc目录
-DOWNLOAD_DIR = app_config.download_dir                                 # 盘后下载，数据保存目录
-TDX_HQ_CACHE = app_config.tdx_hq_cache                                 # 通达信hq_cache目录（shm.tnf/szm.tnf）
-OUTPUT_DIR = app_config.output_dir                                     # 输出目录（仓库根）
-CHAN_PATH = app_config.chan_path                                       # chan.py 仓库根目录
-LAST_CODE_FREQ_FILE = app_config.last_code_freq_file                   # 持久化上次查看的代码和周期
+# 业务数据层（阶段 4：缓存/持久化/标注/自选股收敛至此，
+# 本文件同名函数降级为兼容壳，状态名为共享同一对象的别名）
+from App.AppData import app_data
+from App.AppData import SAVED_POINT_COLUMNS as AppData_SAVED_POINT_COLUMNS
+from App.AppData import FREQ_TO_COL as AppData_FREQ_TO_COL
 
 from ChanConfig import get_symbol_code
 SYMBOL_CODE = get_symbol_code()                                        # 默认股票代码（SYMBOL_CODE，上证指数）
@@ -40,14 +38,14 @@ SYMBOL_CODE = get_symbol_code()                                        # 默认�
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
-# 账户和密码从 VIPDOC_DIR（即 TDX_INSTALL_DIR\vipdoc）下 tq_account.json 文件读取
+# 账户和密码从 vipdoc（即 tdx_install_dir\vipdoc）下 tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
 _SSE_DEBUG  = False # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 _SSE_DIAG   = True  # 双窗口进度条诊断日志开关：追踪每窗处理耗时 + 快照lastK滞后，验证“00:00+灰色”根因
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
-if CHAN_PATH not in sys.path:
-    sys.path.insert(0, CHAN_PATH)
+if app_config.chan_path not in sys.path:
+    sys.path.insert(0, app_config.chan_path)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
@@ -61,14 +59,13 @@ try:
     from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
 except ImportError as e:
     print(f"\n[错误] chan.py 导入失败: {e}")
-    print(f"[提示] 请确保 CHAN_PATH = r'{CHAN_PATH}' 指向正确的 chan.py 仓库目录")
+    print(f"[提示] 请确保 CHAN_PATH = r'{app_config.chan_path}' 指向正确的 chan.py 仓库目录")
     sys.exit(1)
 
 # 导入通达信数据源适配器（从 chan.py 的 DataAPI 目录）
-# 包含：K线读取、前复权
+# 包含：K线读取、前复权（自选股读写已收敛 App/AppData.py，阶段 4）
 from DataAPI.TdxAPI import CTdxAPI, \
     read_main_level_records, read_sub_level_records, \
-    read_zxg_stocks, save_to_zxg_blk, \
     get_index_stocks, refresh_block_files
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
@@ -83,7 +80,7 @@ DEBUG_COLD_START_END_DATE = None   # 示例: "2026-06-29" 北方国际
 # 注入通达信数据源配置到 TdxAPI 模块
 from DataAPI.TdxAPI import set_tdx_config as _set_tdx_config
 _set_tdx_config(
-    vipdoc_dir=VIPDOC_DIR,
+    vipdoc_dir=app_config.vipdoc_dir,
     forward_adjust_enabled=FORWARD_ADJUST_ENABLED,
 )
 
@@ -100,7 +97,7 @@ TIME_TRUNCATE_CONFIG = {
 try:
     from DataAPI.TqSdkAPI import CTqSdkAPI, fetch_futures_kline, FREQ_SEC_MAP, FUTURES_ALIASES, \
         _get_futures_code, _get_futures_name, load_tq_account
-    load_tq_account(VIPDOC_DIR)
+    load_tq_account(app_config.vipdoc_dir)
     TQ_AVAILABLE = True
 except ImportError as e:
     CTqSdkAPI = None
@@ -783,159 +780,61 @@ def _inherit_macd_for_preview_bar(klines_list):
 
 
 # ============================================================
-# 获取股票名称
+# 获取股票名称（阶段 4：实现已收敛 App/AppData.py，此处为兼容壳）
 # ============================================================
 def _get_stock_name(market, code):
-    """获取股票名称。从本地缓存文件读取，缓存不存在则返回None。
-    港股5位代码（如00700）和A股6位代码（如000700）是不同证券，绝不互相回退。
-    """
-    if market == "ds" and code == "932000":
-        return "中证2000"
-    _load_stock_names_from_cache_file()
-    compound_key = market + code
-    info = _stock_names_cache.get(compound_key)
-    if info and isinstance(info, dict):
-        name = info.get("name", "")
-        if name:
-            return name
-    if info and isinstance(info, str) and info:
-        return info
-    return None
+    """获取股票名称（委托 app_data.get_stock_name）"""
+    return app_data.get_stock_name(market, code)
 
 
-# 股票名称缓存：从通达信行情服务器批量获取后保存到本地JSON
+# 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象，阶段 4）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
-_stock_names_cache = {}
-_stock_names_loaded = False
-_STOCK_NAMES_CACHE_FILE = os.path.join(VIPDOC_DIR, "stock_names.json")
-_STOCK_PE_TTM_FILE = os.path.join(VIPDOC_DIR, "stock_pettm_index.json")
+# （惰性标志 _names_loaded/_pe_loaded/_belong_loaded 已随实现收敛 app_data，不再留别名）
+_stock_names_cache = app_data.names_cache
 
-# 刷新状态（股票名称刷新用）
+# 刷新状态（股票名称刷新用；获取侧状态，阶段 5 前保留于此）
 _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
 
 
 
 def _load_stock_names_from_cache_file():
-    """
-    从 stock_names.json 缓存文件加载股票名称到内存。
-    返回加载的记录数，文件不存在则返回0。
-    版本迁移：自动将旧版纯数字键转换为 market+code 复合键。
-    """
-    global _stock_names_loaded
-    if _stock_names_loaded:
-        return len(_stock_names_cache)
-    if not os.path.exists(_STOCK_NAMES_CACHE_FILE):
-        return 0
-    try:
-        with open(_STOCK_NAMES_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            # 迁移：将旧版纯数字键（如 "000001"）转换为复合键（如 "sh000001"）
-            migrated = {}
-            for key, info in data.items():
-                if isinstance(info, dict) and "market" in info and info["market"]:
-                    mkt = info["market"]
-                    # 纯数字键（旧格式）→ 复合键
-                    if key.isdigit():
-                        new_key = mkt + key
-                    else:
-                        new_key = key
-                    migrated[new_key] = info
-                else:
-                    migrated[key] = info
-            _stock_names_cache.update(migrated)
-            _stock_names_loaded = True
-            print(f"[信息] 从缓存文件加载股票名称: {len(_stock_names_cache)}只")
-            return len(_stock_names_cache)
-    except Exception as e:
-        print(f"[警告] 读取股票名称缓存失败: {e}")
-    return 0
+    """从 stock_names.json 加载股票名称到内存（委托 app_data）"""
+    return app_data.load_stock_names_from_cache_file()
 
 
 
-
+# ============================================================
+# 原子 JSON 写（持久化底座；实现收敛 App/AppData.safe_write_json_file）
+# ============================================================
 def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
-    """先写临时文件并校验 JSON 可读，再用 os.replace 覆盖正式文件；失败时保留旧文件。"""
-    dir_name = os.path.dirname(path)
-    if dir_name:
-        os.makedirs(dir_name, exist_ok=True)
-    tmp_path = path + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
-        with open(tmp_path, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        if not isinstance(loaded, type(data)):
-            raise ValueError("临时 JSON 文件类型校验失败")
-        os.replace(tmp_path, path)
-        return True
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
+    """先写临时文件并校验 JSON 可读，再原子覆盖（委托 app_data）"""
+    from App.AppData import safe_write_json_file
+    return safe_write_json_file(path, data, ensure_ascii=ensure_ascii, indent=indent)
 
 
 # ============================================================
-# PE-TTM 缓存（腾讯接口，增量刷新）
+# PE-TTM 缓存（腾讯接口，增量刷新；实现收敛 App/AppData.py）
 # ============================================================
-_pe_ttm_cache = {}       # {code: float}  纯数字代码 → PE-TTM值
-_pe_ttm_loaded = False
+_pe_ttm_cache = app_data.pe_cache        # {market+code: float}  PE-TTM值（共享对象）
 
 # 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm_index.json）
 # key: market+code（如 "sh600519"）, value: "沪深300"|"中证500"|"中证1000"
-_index_belong_cache = {}
-_index_belong_loaded = False
+_index_belong_cache = app_data.belong_cache
 
 
 def _load_pe_ttm_cache():
-    """从 stock_pettm_index.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
-    向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}"""
-    global _pe_ttm_cache, _pe_ttm_loaded, _index_belong_cache, _index_belong_loaded
-    if _pe_ttm_loaded:
-        return _pe_ttm_cache
-    _pe_ttm_loaded = True
-    _index_belong_loaded = True
-    if not os.path.exists(_STOCK_PE_TTM_FILE):
-        return _pe_ttm_cache
-    try:
-        with open(_STOCK_PE_TTM_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        pe_count = 0
-        idx_count = 0
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if isinstance(v, dict):
-                    # 新格式：{"pe_ttm": float, "index": str}
-                    pe_val = v.get("pe_ttm")
-                    idx_val = v.get("index")
-                    if isinstance(pe_val, (int, float)) and pe_val != 0:
-                        _pe_ttm_cache[k] = pe_val
-                        pe_count += 1
-                    if isinstance(idx_val, str) and idx_val:
-                        _index_belong_cache[k] = idx_val
-                        idx_count += 1
-                elif isinstance(v, (int, float)) and v != 0:
-                    # 旧格式：直接是数字
-                    _pe_ttm_cache[k] = v
-                    pe_count += 1
-        print(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
-    except Exception as e:
-        print(f"[PE-TTM] 加载缓存失败: {e}")
-    return _pe_ttm_cache
+    """从 stock_pettm_index.json 加载 PE-TTM 与指数归属（委托 app_data）"""
+    return app_data.load_pe_ttm_cache()
 
 
 def _get_pe_ttm(market, code):
-    """获取单只股票的 PE-TTM 值，未缓存则返回 None。key 为 market+code 避免沪市深市同号冲突。"""
-    _load_pe_ttm_cache()
-    return _pe_ttm_cache.get(market + code)
+    """获取单只股票的 PE-TTM 值（委托 app_data）"""
+    return app_data.get_pe_ttm(market, code)
 
 
 def _get_index_belong(market, code):
-    """获取单只股票的指数归属（沪深300/中证500/中证1000），未缓存则返回 None。"""
-    _load_pe_ttm_cache()
-    return _index_belong_cache.get(market + code)
+    """获取单只股票的指数归属（委托 app_data）"""
+    return app_data.get_index_belong(market, code)
 
 
 # AKShare 指数代码 → 市场前缀映射
@@ -957,13 +856,13 @@ def _fetch_index_belong_from_akshare(timeout=30):
     通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
     构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
     如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
+    （阶段 4：归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
     """
-    global _index_belong_cache
     try:
         import akshare as ak
     except ImportError:
         print("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
-        return _index_belong_cache
+        return app_data.belong_cache
 
     def _fetch_one(_idx_code, _idx_name):
         try:
@@ -995,7 +894,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
         finally:
             executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
 
-    _index_belong_cache = result
+    app_data.replace_index_belong(result)
     return result
 
 
@@ -1004,19 +903,18 @@ def _refresh_pe_ttm():
     通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm_index.json。
     从 stock_names.json 中读取所有股票代码，分批请求腾讯接口。
     """
-    global _pe_ttm_cache
     import requests as req
     _refresh_status["step"] = "刷新PE-TTM..."
     _load_pe_ttm_cache()  # 先加载已有缓存
 
-    # 从 stock_names.json 收集所有纯数字股票代码
-    if not os.path.exists(_STOCK_NAMES_CACHE_FILE):
+    # 从 stock_names.json 收集所有纯数字股票代码（路径：AppConfig 派生属性）
+    if not os.path.exists(app_config.stock_names_cache_file):
         print("[PE-TTM] stock_names.json 不存在，无法刷新")
         _refresh_status["error"] = "stock_names.json 不存在，请先刷新股票名称"
         return
 
     try:
-        with open(_STOCK_NAMES_CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(app_config.stock_names_cache_file, "r", encoding="utf-8") as f:
             names_data = json.load(f)
     except Exception as e:
         print(f"[PE-TTM] 读取 stock_names.json 失败: {e}")
@@ -1101,7 +999,7 @@ def _refresh_pe_ttm():
 
     # 保存到文件（合并PE-TTM和指数归属，过滤掉旧格式的纯数字key）
     try:
-        os.makedirs(os.path.dirname(_STOCK_PE_TTM_FILE), exist_ok=True)
+        os.makedirs(os.path.dirname(app_config.stock_pe_ttm_file), exist_ok=True)
         # 找出所有有PE-TTM或指数归属的股票代码
         all_keys = set(_pe_ttm_cache.keys()) | set(_index_belong_cache.keys())
         combined = {}
@@ -1117,8 +1015,8 @@ def _refresh_pe_ttm():
                 entry["index"] = idx_val
             if entry:
                 combined[k] = entry
-        _safe_write_json_file(_STOCK_PE_TTM_FILE, combined, ensure_ascii=False)
-        print(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {_STOCK_PE_TTM_FILE}")
+        _safe_write_json_file(app_config.stock_pe_ttm_file, combined, ensure_ascii=False)
+        print(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {app_config.stock_pe_ttm_file}")
     except Exception as e:
         print(f"[PE-TTM] 保存失败: {e}")
         _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
@@ -1196,7 +1094,7 @@ def _collect_codes_from_vipdoc():
     sh_count = 0
     sz_count = 0
     for mkt_dir, prefix in [("sh", "sh"), ("sz", "sz")]:
-        lday_dir = os.path.join(VIPDOC_DIR, mkt_dir, "lday")
+        lday_dir = os.path.join(app_config.vipdoc_dir, mkt_dir, "lday")
         if not os.path.isdir(lday_dir):
             continue
         for fname in os.listdir(lday_dir):
@@ -1213,7 +1111,7 @@ def _collect_codes_from_vipdoc():
 
     # === 收集港股代码（ds目录）===
     hk_count = 0
-    ds_lday_dir = os.path.join(VIPDOC_DIR, "ds", "lday")
+    ds_lday_dir = os.path.join(app_config.vipdoc_dir, "ds", "lday")
     if os.path.isdir(ds_lday_dir):
         for fname in os.listdir(ds_lday_dir):
             if fname.startswith("31#") and fname.endswith(".day"):
@@ -1362,8 +1260,10 @@ def _refresh_stock_names():
     数据来源优先级：
       1. vipdoc/*.day 文件名（收集所有已下载过数据的股票代码）
       2. 新浪财经API（为无名称的代码批量查询名称）
+    （阶段 4：名称缓存由 app_data 持有；本函数只做获取与合并，
+     最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
     """
-    global _stock_names_cache, _stock_names_loaded, _refresh_status
+    global _refresh_status
 
     if _refresh_status["running"]:
         return
@@ -1429,7 +1329,7 @@ def _refresh_stock_names():
     # 88xxxx代码不以标准A股格式开头，_is_a_stock_code() 会过滤掉，所以不在 raw_names 中。
     # 来源: tdxzs.cfg（通达信配置文件）和 tdxhy_mapping_data.py（本地映射表）
     tdxzs_filled = 0
-    tdxzs_file = os.path.join(TDX_HQ_CACHE, "tdxzs.cfg")
+    tdxzs_file = os.path.join(app_config.tdx_hq_cache, "tdxzs.cfg")
     if os.path.exists(tdxzs_file):
         try:
             with open(tdxzs_file, "r", encoding="gbk", errors="ignore") as f:
@@ -1537,10 +1437,9 @@ def _refresh_stock_names():
             filtered_count += 1
             filtered_delist += 1
     if all_names:
-        os.makedirs(os.path.dirname(_STOCK_NAMES_CACHE_FILE), exist_ok=True)
-        _safe_write_json_file(_STOCK_NAMES_CACHE_FILE, all_names, ensure_ascii=False)
-        _stock_names_cache = all_names
-        _stock_names_loaded = True
+        os.makedirs(os.path.dirname(app_config.stock_names_cache_file), exist_ok=True)
+        _safe_write_json_file(app_config.stock_names_cache_file, all_names, ensure_ascii=False)
+        app_data.replace_names(all_names)  # 同对象替换：别名 _stock_names_cache 即时可见
         sh_count = sum(1 for c in all_names if all_names[c].get("market") == "sh")
         sz_count = sum(1 for c in all_names if all_names[c].get("market") == "sz")
         hk_count = sum(1 for c in all_names if all_names[c].get("market") == "hk")
@@ -1549,9 +1448,9 @@ def _refresh_stock_names():
             if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
             if filtered_delist: parts.append(f"退市 {filtered_delist}只")
             if filtered_empty: parts.append(f"无名 {filtered_empty}只")
-            print(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
+            print(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
         else:
-            print(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(_STOCK_NAMES_CACHE_FILE)}")
+            print(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
     else:
         print("[股名刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
 
@@ -1642,10 +1541,10 @@ def _get_stock_market_code(code):
         return 'hk', '0' + code
     # 6位代码：先检查是否是港股（在ds目录下有对应文件）
     if len(code) == 6 and code.isdigit():
-        hk_file = os.path.join(VIPDOC_DIR, "ds", "lday", f"31#{code}.day")
+        hk_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
         if os.path.exists(hk_file):
             return 'hk', code
-        ds_file = os.path.join(VIPDOC_DIR, "ds", "lday", f"62#{code}.day")
+        ds_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"62#{code}.day")
         if os.path.exists(ds_file):
             return 'ds', code
     # A股判断
@@ -1661,13 +1560,13 @@ def _get_stock_market_code(code):
         return 'sz', code  # 1xxxxx: 深市ETF(15/16/18)、债券等
     # 搜索
     for m in ['sh', 'sz']:
-        f = os.path.join(VIPDOC_DIR, m, "lday", f"{m}{code}.day")
+        f = os.path.join(app_config.vipdoc_dir, m, "lday", f"{m}{code}.day")
         if os.path.exists(f):
             return m, code
-    f = os.path.join(VIPDOC_DIR, "ds", "lday", f"31#{code}.day")
+    f = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
     if os.path.exists(f):
         return 'hk', code
-    f = os.path.join(VIPDOC_DIR, "ds", "lday", f"62#{code}.day")
+    f = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"62#{code}.day")
     if os.path.exists(f):
         return 'ds', code
     return None, code
@@ -1713,35 +1612,17 @@ def _make_chan_config():
 # ============================================================
 import collections
 
-_MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合
-_stocks_analysis_cache = collections.OrderedDict()
-_cache_lock = threading.RLock()  # 保护 _stocks_analysis_cache 的并发读写
+# 统一缓存（阶段 4：实现与状态收敛 App/AppData.py；别名共享同一对象）
+_stocks_analysis_cache = app_data.stocks_analysis_cache   # 分析结果 LRU
+_cache_lock = app_data.cache_lock                        # 保护缓存的并发读写
 
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
 
-# 全市场流通市值缓存（通过AKShare东财接口一次获取，保存到本地JSON）
-# key: 股票代码(6位), value: 流通市值(亿元, float)
-_float_mc_cache = {}
-_float_mc_loaded = False
-_FLOAT_MC_CACHE_FILE = os.path.join(VIPDOC_DIR, "stock_float_mc.json")
-
+# 全市场流通市值缓存（通过腾讯接口获取，本地JSON兜底；阶段 4 收敛 app_data）
 def _load_float_mc_cache():
-    """从本地JSON加载流通市值缓存（无日期限制，作为腾讯接口失败时的兜底）。"""
-    global _float_mc_loaded, _float_mc_cache
-    if _float_mc_loaded:
-        return
-    if not os.path.exists(_FLOAT_MC_CACHE_FILE):
-        return
-    try:
-        with open(_FLOAT_MC_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict) and "data" in data:
-            _float_mc_cache = data["data"]
-            _float_mc_loaded = True
-            print(f"[流通市值] 从本地缓存加载 {len(_float_mc_cache)} 只股票")
-    except Exception as e:
-        print(f"[流通市值] 读取缓存失败: {e}")
+    """从本地JSON加载流通市值缓存（委托 app_data）"""
+    return app_data.load_float_mc_cache()
 
 def _fetch_float_mc_from_tencent(stock_list):
     """通过腾讯行情接口批量获取流通市值（毫秒级，极其稳定）。
@@ -1789,21 +1670,13 @@ def _fetch_float_mc_from_tencent(stock_list):
     return all_mv
 
 def _update_float_mc_cache(mv_dict):
-    """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。
+    """将外部获取的流通市值字典合并到全局缓存并落盘（委托 app_data）。
     调用方应确保 _load_float_mc_cache() 已先执行。"""
-    global _float_mc_cache, _float_mc_loaded
-    _float_mc_cache.update(mv_dict)
-    _float_mc_loaded = True
-    # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底）
-    try:
-        with open(_FLOAT_MC_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"data": _float_mc_cache}, f, ensure_ascii=False)
-    except Exception as e:
-        print(f"[流通市值] 保存缓存文件失败: {e}")
+    return app_data.update_float_mc_cache(mv_dict)
 
 def _get_float_mc_from_cache(code):
-    """从缓存获取流通市值（亿元），未命中返回None。"""
-    return _float_mc_cache.get(code)
+    """从缓存获取流通市值（亿元），未命中返回None（委托 app_data）。"""
+    return app_data.get_float_mc_from_cache(code)
 
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
@@ -1825,35 +1698,20 @@ _stock_analysis_lock = threading.Lock()
 
 
 def _cache_put(key, value):
-    """写入缓存，超出上限时淘汰最旧的条目（LRU语义）。
+    """写入缓存，超出上限时淘汰最旧的条目（LRU语义；委托 app_data）。
     内存由 LRU 50 条上限 + 扫描时逐只释放非买点缓存共同控制。
     """
-    with _cache_lock:
-        if key in _stocks_analysis_cache:
-            del _stocks_analysis_cache[key]  # 移到末尾
-        elif len(_stocks_analysis_cache) >= _MAX_CACHE_SIZE:
-            oldest_key = next(iter(_stocks_analysis_cache))
-            _stocks_analysis_cache.pop(oldest_key)
-            gc.collect()
-            print(f"[内存] 缓存已满({_MAX_CACHE_SIZE})，淘汰: {oldest_key}")
-        _stocks_analysis_cache[key] = value
+    return app_data.cache_put(key, value)
 
 
 def _cache_get(key):
-    """读取缓存，命中时移到末尾（LRU语义）"""
-    with _cache_lock:
-        if key not in _stocks_analysis_cache:
-            return None
-        value = _stocks_analysis_cache.pop(key)
-        _stocks_analysis_cache[key] = value
-    return value
+    """读取缓存，命中时移到末尾（LRU语义；委托 app_data）"""
+    return app_data.cache_get(key)
 
 
 def _cache_remove(key):
-    """从缓存中删除指定条目（不触发 GC，由调用方在适当时机统一回收）"""
-    with _cache_lock:
-        if key in _stocks_analysis_cache:
-            del _stocks_analysis_cache[key]
+    """从缓存中删除指定条目（不触发 GC，由调用方在适当时机统一回收；委托 app_data）"""
+    return app_data.cache_remove(key)
 
 
 def _send_windows_notification(title, message):
@@ -1877,13 +1735,13 @@ def _send_windows_notification(title, message):
 
 
 # ============================================================
-# 手选进入段选点保存/恢复
+# 手选进入段选点保存/恢复（阶段 4：实现收敛 App/AppData.py，此处仅留 schema 常量供本文件消费；
+# 路径 SAVED_POINT_FILE / 持久化实现均单源于 app_data / app_config）
 # ============================================================
-SAVED_POINT_FILE = os.path.join(VIPDOC_DIR, "double_click_dt.csv")
 # CSV列：股票代码,股票名,年K选点,季K选点,月K选点,周K选点,日K选点,30分选点,15分选点,5分选点,1分选点
-SAVED_POINT_COLUMNS = ["code", "name", "y", "q", "m", "w", "d", "60m", "30m", "15m", "5m", "1m", "15s"]
+SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 # freq -> CSV列名 的映射
-FREQ_TO_COL = {"y": "y", "q": "q", "m": "m", "w": "w", "d": "d", "60m": "60m", "30m": "30m", "15m": "15m", "5m": "5m", "1m": "1m", "15s": "15s"}
+FREQ_TO_COL = AppData_FREQ_TO_COL
 # 日内周期集合：分钟级
 INTRADAY_FREQS = {"30m", "5m", "1m"}
 # 秒级周期：K线时间含秒
@@ -1989,102 +1847,17 @@ def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list, date_fmt):
 
 
 def _load_saved_point_times():
-    """从CSV文件加载所有选点记录，返回 {code: {col: value}} 字典"""
-    points = {}
-    if not os.path.exists(SAVED_POINT_FILE):
-        return points
-    try:
-        import csv
-        with open(SAVED_POINT_FILE, "r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                code = row.get("code", "").strip()
-                if code:
-                    points[code] = row
-    except Exception as e:
-        print(f"[警告] 读取选点文件失败: {e}")
-    return points
+    """从CSV文件加载所有选点记录（委托 app_data；启动加载已在 app_data 实例化时完成）"""
+    return app_data.load_saved_point_times()
 
 def _save_point_time(code, name, freq, sdt):
-    """保存或更新某只股票某个周期的选点"""
-    import csv
-    col = FREQ_TO_COL.get(freq)
-    if not col:
-        return
-    # 读取现有数据
-    rows = []
-    if os.path.exists(SAVED_POINT_FILE):
-        try:
-            with open(SAVED_POINT_FILE, "r", encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                fieldnames = reader.fieldnames
-                for row in reader:
-                    rows.append(row)
-        except:
-            fieldnames = SAVED_POINT_COLUMNS
-    else:
-        fieldnames = SAVED_POINT_COLUMNS
-
-    # 查找是否已有该代码的记录
-    found = False
-    for row in rows:
-        if row.get("code", "").strip() == code:
-            row["name"] = name
-            row[col] = sdt
-            found = True
-            break
-    if not found:
-        new_row = {"code": code, "name": name}
-        for c in SAVED_POINT_COLUMNS[2:]:
-            new_row[c] = ""
-        new_row[col] = sdt
-        rows.append(new_row)
-
-    # 写回文件
-    try:
-        with open(SAVED_POINT_FILE, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
-    except Exception as e:
-        print(f"[警告] 保存选点文件失败: {e}")
+    """保存或更新某只股票某个周期的选点（委托 app_data）"""
+    return app_data.save_point_time(code, name, freq, sdt)
 
 
 def _clear_saved_point_time(code, freq):
-    """清除某只股票某个周期在CSV中的选点，同时更新内存缓存"""
-    import csv
-    col = FREQ_TO_COL.get(freq)
-    if not col:
-        return
-    # 先清除内存缓存（无论CSV是否存在都要执行）
-    if code in _saved_point_times:
-        if col in _saved_point_times[code]:
-            _saved_point_times[code][col] = ""
-    if not os.path.exists(SAVED_POINT_FILE):
-        return
-    rows = []
-    try:
-        with open(SAVED_POINT_FILE, "r", encoding="utf-8-sig") as f:
-            reader = csv.DictReader(f)
-            fieldnames = reader.fieldnames
-            for row in reader:
-                rows.append(row)
-    except Exception:
-        return
-    # 清除该代码对应周期的选点
-    for row in rows:
-        if row.get("code", "").strip() == code:
-            row[col] = ""
-            break
-    try:
-        with open(SAVED_POINT_FILE, "w", encoding="utf-8-sig", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-        print(f"[信息] 清除选点成功: {code} {freq}")
-    except Exception as e:
-        print(f"[警告] 清除选点失败: {e}")
+    """清除某只股票某个周期在CSV中的选点，同时更新内存缓存（委托 app_data）"""
+    return app_data.clear_saved_point_time(code, freq)
 
 
 def _cleanup_all_futures_data():
@@ -2104,200 +1877,75 @@ def _cleanup_all_futures_data():
     gc.collect()
 
 
-# 启动时加载一次选点数据
-_saved_point_times = _load_saved_point_times()
+# 选点内存缓存：别名 = app_data 实例字段（共享同一对象；
+# 启动加载已随 app_data 实例化完成，本文件多处直接读该字典保持零漂移）
+_saved_point_times = app_data.saved_point_times
 
 
 def _save_last_code_freq(code, freq="d"):
-    """持久化上次查看的代码和周期到JSON文件（股票和期货通用）"""
-    try:
-        data = {"code": code, "freq": freq}
-        with open(LAST_CODE_FREQ_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False)
-    except Exception as e:
-        pass  # 静默失败，不影响主流程
+    """持久化上次查看的代码和周期到JSON文件（委托 app_data；股票和期货通用）"""
+    return app_data.save_last_code_freq(code, freq)
 
 
 def _load_last_code_freq():
-    """从JSON文件加载上次查看的代码和周期，返回 (code, freq) 或 (None, None)"""
-    try:
-        if not os.path.exists(LAST_CODE_FREQ_FILE):
-            return None, None
-        with open(LAST_CODE_FREQ_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        code = data.get("code", "").strip()
-        freq = data.get("freq", "d")
-        if code:
-            return code, freq
-    except Exception as e:
-        print(f"[警告] 异常: {type(e).__name__}: {e}")
-    return None, None
+    """从JSON文件加载上次查看的代码和周期（委托 app_data）"""
+    return app_data.load_last_code_freq()
 
 
 # ============================================================
-# 文字标注持久化存储
+# 文字标注持久化存储（阶段 4：实现收敛 App/AppData.py）
 # ============================================================
-ANNOTATIONS_FILE = os.path.join(VIPDOC_DIR, "text_annotation.json")
-_annotations_cache = {}  # { "code_freq": [ { "date": "2024-01-15", "text": "支撑位", "y_offset": 0 }, ... ] }
-_annotations_loaded = False
+# 标注缓存：别名 = app_data 实例字段（共享同一对象；启动加载已随 app_data 实例化完成）
+_annotations_cache = app_data.annotations_cache
 
 
 def _load_annotations():
-    """从 text_annotation.json 加载标注数据到内存"""
-    global _annotations_cache, _annotations_loaded
-    if _annotations_loaded:
-        return
-    if os.path.exists(ANNOTATIONS_FILE):
-        try:
-            with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
-                _annotations_cache = json.load(f)
-            # print(f"[信息] 标注数据已加载: {len(_annotations_cache)} 个条目")
-        except Exception as e:
-            print(f"[警告] 加载标注数据失败: {e}")
-            _annotations_cache = {}
-    _annotations_loaded = True
+    """从 text_annotation.json 加载标注数据到内存（委托 app_data；幂等）"""
+    return app_data.load_annotations()
 
 
 def _save_annotations():
-    """保存标注数据到 text_annotation.json"""
-    try:
-        with open(ANNOTATIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(_annotations_cache, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[警告] 保存标注数据失败: {e}")
+    """保存标注数据到 text_annotation.json（委托 app_data）"""
+    return app_data.save_annotations()
 
 
 def _get_annotation_key(code, freq):
-    """生成标注缓存的键: {code}_{freq}"""
-    return f"{code}_{freq}"
+    """生成标注缓存的键: {code}_{freq}（实现收敛 App/AppData.get_annotation_key）"""
+    from App.AppData import get_annotation_key
+    return get_annotation_key(code, freq)
 
 
 def _get_annotations_for(code, freq):
-    """获取某股票某周期的所有标注"""
-    _load_annotations()
-    key = _get_annotation_key(code, freq)
-    return _annotations_cache.get(key, [])
+    """获取某股票某周期的所有标注（委托 app_data）"""
+    return app_data.get_annotations_for(code, freq)
 
 
 def _add_annotation(code, freq, date_str, text, y_offset=0):
-    """添加一条标注（自动去重：同日期同文字不重复添加）"""
-    _load_annotations()
-    key = _get_annotation_key(code, freq)
-    if key not in _annotations_cache:
-        _annotations_cache[key] = []
-    # 去重：同日期同文字已存在则不添加
-    for ann in _annotations_cache[key]:
-        if ann.get("date") == date_str and ann.get("text") == text:
-            return False
-    _annotations_cache[key].append({
-        "date": date_str,
-        "text": text,
-        "y_offset": y_offset,
-    })
-    _save_annotations()
-    return True
+    """添加一条标注，同日期同文字去重（委托 app_data）"""
+    return app_data.add_annotation(code, freq, date_str, text, y_offset)
 
 
 def _delete_annotation(code, freq, date_str, text):
-    """删除一条标注"""
-    _load_annotations()
-    key = _get_annotation_key(code, freq)
-    if key not in _annotations_cache:
-        return False
-    before = len(_annotations_cache[key])
-    _annotations_cache[key] = [
-        ann for ann in _annotations_cache[key]
-        if not (ann.get("date") == date_str and ann.get("text") == text)
-    ]
-    if len(_annotations_cache[key]) < before:
-        if not _annotations_cache[key]:
-            del _annotations_cache[key]  # 清理空列表
-        _save_annotations()
-        return True
-    return False
+    """删除一条标注（委托 app_data）"""
+    return app_data.delete_annotation(code, freq, date_str, text)
 
 
 def _delete_annotation_by_date(code, freq, date_str):
-    """删除某日期下所有标注"""
-    _load_annotations()
-    key = _get_annotation_key(code, freq)
-    if key not in _annotations_cache:
-        return False
-    before = len(_annotations_cache[key])
-    _annotations_cache[key] = [
-        ann for ann in _annotations_cache[key]
-        if ann.get("date") != date_str
-    ]
-    if len(_annotations_cache[key]) < before:
-        if not _annotations_cache[key]:
-            del _annotations_cache[key]
-        _save_annotations()
-        return True
-    return False
+    """删除某日期下所有标注（委托 app_data）"""
+    return app_data.delete_annotation_by_date(code, freq, date_str)
 
 
 def _delete_all_annotations(code, freq):
-    """删除某股票某周期下全部标注"""
-    _load_annotations()
-    key = _get_annotation_key(code, freq)
-    if key not in _annotations_cache or not _annotations_cache[key]:
-        return False
-    del _annotations_cache[key]
-    _save_annotations()
-    return True
+    """删除某股票某周期下全部标注（委托 app_data）"""
+    return app_data.delete_all_annotations(code, freq)
 
 
 def _get_annotated_codes(freq=""):
-    """获取所有有标注的股票代码+周期列表，用于自选扫描
-    返回 bare_code + market + name，方便前端与自选股列表交叉匹配。
-    例如 key "000001.SH_d" → {"code": "000001", "market": "SH", "name": "上证指数", "freq": "d", "count": N}
-    期货 key "KQ.m@SHFE.rb_d" → {"code": "KQ.m@SHFE.rb", "market": "", "name": "", "freq": "d", "count": N}
-    """
-    _load_annotations()
-    _load_stock_names_from_cache_file()
-    result = []
-    for key, anns in _annotations_cache.items():
-        if not anns:
-            continue
-        parts = key.rsplit("_", 1)
-        if len(parts) != 2:
-            continue
-        code_with_suffix, key_freq = parts
-        if freq and key_freq != freq:
-            continue
-
-        # 解析市场后缀: 000001.SH → bare_code=000001, market=SH
-        # 期货代码（如 KQ.m@SHFE.rb）没有市场后缀，保持不变
-        market = ""
-        bare_code = code_with_suffix
-        for suffix in [".SH", ".SZ", ".HK", ".BJ", ".DS"]:
-            if code_with_suffix.upper().endswith(suffix):
-                market = suffix[1:]  # 去掉点号
-                bare_code = code_with_suffix[:-len(suffix)]
-                break
-
-        # 查询股票名称
-        name = ""
-        if market and bare_code:
-            lookup_key = market.lower() + bare_code
-            info = _stock_names_cache.get(lookup_key, {})
-            if isinstance(info, dict):
-                name = info.get("name", "")
-            elif info:
-                name = str(info)
-
-        result.append({
-            "code": bare_code,
-            "market": market,
-            "name": name,
-            "freq": key_freq,
-            "count": len(anns),
-            "annotations": [{"date": a.get("date", ""), "text": a.get("text", "")} for a in anns if a.get("text")]
-        })
-    return result
+    """获取所有有标注的股票代码+周期列表，用于自选扫描（委托 app_data）"""
+    return app_data.get_annotated_codes(freq)
 
 
-# 启动时加载标注数据
+# 启动时加载标注数据（已随 app_data 实例化完成；此处保留调用幂等无副作用）
 _load_annotations()
 
 
@@ -4204,7 +3852,8 @@ _FUTURES_DUAL_FREQ_MAP = {
 # 期货分析缓存（供 /api/red_range_zs 等访问）
 # key: "symbol:freq"  (如 "KQ.m@CFFEX.IM:5m")，当前 value: CChan 对象
 # 后续可扩展为 {records, chan, result} 三元组，key可加前缀区分（single_/dual_main_/dual_sub_）
-_futures_analysis_cache = {}
+# （阶段 4：实现与状态收敛 App/AppData.py；此处别名共享同一对象）
+_futures_analysis_cache = app_data.futures_analysis_cache
 
 
 def compute_red_range_zs(code, sub_freq='d', left_date='', right_date='', end_date=None):
@@ -5721,35 +5370,26 @@ def main():
 
 
 # ============================================================
-# 配置单源自检（阶段 2 配置中心化过渡期防御）
-# 阶段 2 已将本文件 8 个基础设施常量改为从 App/AppConfig 读取（单源）。
-# 此自检防止未来有人将某个常量改回硬编码导致双源漂移，不一致仅告警不阻塞。
+# 配置单源自检（阶段 4 收官版）
+# 阶段 2 曾以「模块常量 = AppConfig 值」的别名对做双源校验；
+# 阶段 4 起这些别名已全部删除（12 个路径别名清零），本文件一律
+# app_config.<属性> 直读，不存在第二份定义，双源漂移不可能发生。
+# 自检改为守卫「别名不得复活」：任何 *_FILE / *_DIR 式模块级路径
+# 常量重新出现即告警（结构性防回归）。
 # ============================================================
-def _verify_config_consistency():
-    """校验 my_chan_main 模块常量与 App/AppConfig 是否一致（不一致仅告警，不阻塞）"""
-    try:
-        from App.AppConfig import app_config as _app_settings
-    except Exception:
-        return  # AppConfig 不可导入（如独立运行脚本），跳过校验
+_FORBIDDEN_PATH_ALIASES = (
+    "TDX_INSTALL_DIR", "VIPDOC_DIR", "DOWNLOAD_DIR", "TDX_HQ_CACHE",
+    "CHAN_PATH", "OUTPUT_DIR", "LAST_CODE_FREQ_FILE",
+    "_STOCK_NAMES_CACHE_FILE", "_STOCK_PE_TTM_FILE", "_FLOAT_MC_CACHE_FILE",
+    "SAVED_POINT_FILE", "ANNOTATIONS_FILE",
+)
 
-    _pairs = [
-        ("TDX_INSTALL_DIR", TDX_INSTALL_DIR, _app_settings.tdx_install_dir),
-        ("VIPDOC_DIR", VIPDOC_DIR, _app_settings.vipdoc_dir),
-        ("DOWNLOAD_DIR", DOWNLOAD_DIR, _app_settings.download_dir),
-        ("TDX_HQ_CACHE", TDX_HQ_CACHE, _app_settings.tdx_hq_cache),
-        ("CHAN_PATH", CHAN_PATH, _app_settings.chan_path),
-        ("OUTPUT_DIR", OUTPUT_DIR, _app_settings.output_dir),
-        ("LAST_CODE_FREQ_FILE", LAST_CODE_FREQ_FILE, _app_settings.last_code_freq_file),
-        ("_STOCK_NAMES_CACHE_FILE", _STOCK_NAMES_CACHE_FILE, _app_settings.stock_names_cache_file),
-        ("_STOCK_PE_TTM_FILE", _STOCK_PE_TTM_FILE, _app_settings.stock_pe_ttm_file),
-        ("_FLOAT_MC_CACHE_FILE", _FLOAT_MC_CACHE_FILE, _app_settings.float_mc_cache_file),
-        ("SAVED_POINT_FILE", SAVED_POINT_FILE, _app_settings.saved_point_file),
-        ("ANNOTATIONS_FILE", ANNOTATIONS_FILE, _app_settings.annotations_file),
-    ]
-    for name, legacy, app_cfg in _pairs:
-        if os.path.normpath(str(legacy)) != os.path.normpath(str(app_cfg)):
-            print(f"[配置警告] 双源不一致: my_chan_main.{name}={legacy!r} != AppConfig.{name}={app_cfg!r}")
-            print("           请同步修改 App/AppConfig.py（配置中心），阶段 3 将统一从 AppConfig 读取")
+def _verify_config_consistency():
+    """守卫：阶段 4 删除的 12 个路径别名不得在本模块复活（仅告警，不阻塞）"""
+    import my_chan_main as _self
+    for name in _FORBIDDEN_PATH_ALIASES:
+        if hasattr(_self, name):
+            print(f"[配置警告] 路径别名复活: my_chan_main.{name}（阶段 4 已收敛 AppConfig，请直读 app_config）")
 
 
 _verify_config_consistency()
