@@ -26,6 +26,9 @@ CI / 迁移每阶段的验收门禁）。
  12. 阶段 5 成果防护   test_phase5_guards.py        获取侧抽象完善：tdxhy 迁 App/统一加载/
                                                      盘后下载收敛 ElTdxAPI/元数据接口提升/
                                                      AppOrch 委托/fetch_kline 抽象
+ 13. 阶段 6 成果防护   test_phase6_guards.py        前端组件化：组件区块/KLineChart 契约/
+                                                     window API 面冻结/事件引用/零构建/
+                                                     注册表一致/缓存击穿/合并层完整
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -68,6 +71,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_phase4_guards.py")]),
     ("phase5_guards",
      [sys.executable, os.path.join("Test", "test_phase5_guards.py")]),
+    ("phase6_guards",
+     [sys.executable, os.path.join("Test", "test_phase6_guards.py")]),
     ("sse_gray",
      [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
 ]
@@ -139,7 +144,7 @@ def main():
     n_ok = sum(1 for r in records if r["ok"])
     n_all = len(records)
     summary = {
-        "phase": "4",
+        "phase": "6",
         "mode": "update" if args.update else "verify",
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "python": sys.version.split()[0],

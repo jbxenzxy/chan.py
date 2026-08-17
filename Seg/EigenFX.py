@@ -143,17 +143,8 @@ class CEigenFX:
                         self.actual_break_flag = False
                         return True
         else:
-            if ele2_bi.next:
-                if self.is_up() and ele2_bi.next._high() > self.ele[1].high:
-                    ...
-                elif self.is_down() and ele2_bi.next._low() < self.ele[1].low:
-                    ...
-                else:
-                    self.actual_break_flag = False
-                    return True
-            else:
-                self.actual_break_flag = False
-                return True
+            self.actual_break_flag = False
+            return True
         return False
 
     def find_revert_fx(self, bi_list: CBiList, begin_idx: int, thred_value: float, break_thred: float):

@@ -1,16 +1,233 @@
     (function() {
         "use strict";
+
+// ══════════════════════════════════════════════════════════════════
+        // ChanApp 组件注册表（阶段 6 前端组件化，设计 8.9）
+        // 单文件内 10 个组件区块；注册表登记各组件对外接口（阶段 8 拆
+        // kline/、panels/ 子目录时按此契约迁移，跨组件调用走注册表或
+        // window.* 绑定，闭包内部实现不改）。控制台可经 ChanApp.components
+        // 调试各组件入口。
+// ══════════════════════════════════════════════════════════════════
+        const ChanApp = {
+            version: "6.0",
+            phase: 6,
+            components: {}
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [STATE] SharedState —— 组件共享状态（声明顺序与原文件一致，
+        // 保证初始化语义零漂移；各状态按主要使用方就近注释归属）
+// ══════════════════════════════════════════════════════════════════
+
         let chartData = null, canvas, ctx;
+
         let showBi = true, showFx = false, showZs = true, showSeg = false, showBsp = true, showBiIdx = false;
+
         // BSP买卖点类型过滤：默认全部显示（0,1,2,3 对应 bs_type 配置）
         let bspFilter = { '0': true, '1': true, '2': true, '3': true };
+
         // 均线周期：选中的周期集合，默认空（不显示均线）
         const MA_PERIODS = [5, 13, 21, 34, 55, 89, 144, 233];
+
         const MA_COLORS = { 5:'#FFFFFF', 13:'#FCBF49', 21:'#F77F00', 34:'#90BE6D', 55:'#22D3EE', 89:'#3B82F6', 144:'#A8A8A8', 233:'#8822DD' };
+
         let maPeriods = {};  // {5: true, 13: true, ...}
+
         let _logScale = false; // 坐标系模式：false=普通坐标系+等差网格, true=对数坐标系+等比网格
+
         let _showVolume = false; // 上窗/单窗 底部区域显示模式：false=MACD, true=成交额（双击切换）
+
         let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
+
+        // 频率→秒数映射
+        const FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
+
+        const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
+
+        const VOL_RATIO = 0.2, GAP = 12;
+
+        const MACD_TEXT_HEIGHT = 14;
+
+        let viewOffset = 0, viewCount = 377;
+
+        let isDragging = false, dragStartX = 0, dragStartOffset = 0;
+
+        let mouseX = -1, mouseY = -1;
+
+        let _currentClipText = "";
+
+        let _mouseDownX = 0, _mouseDownY = 0;
+
+        // 区间选择状态机: IDLE(空闲) | SELECTED_A(已选起点)
+        let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+
+        let _currentGlobalIdx = -1;
+
+        let _overlayData = null;
+
+        let initialized = false;
+
+        let currentFreq = 'd'; // 当前周期: d=日K, 30m=30分钟
+
+        let lastStockFreq = 'd';     // 股票上下文上次使用的周期（同类切换继承）
+
+        let lastFuturesFreq = '5m'; // 期货上下文上次使用的周期（同类切换继承）
+
+        // 双窗口状态
+        let isDualWindow = false;
+
+        let dualSubData = null;
+
+        let dualSubFreq = '';
+
+        let dualSubViewOffset = 0, dualSubViewCount = 377;
+
+        let dualSubMouseX = -1, dualSubMouseY = -1;
+
+        let mainCanvas, mainCtx, subCanvas, subCtx;
+
+        // 翻转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
+        let _isMirrorMode = false;
+
+        // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
+        let _restartEnabled = false;
+
+        // K线倒计时进度条（快期3风格：右上角红色进度条+剩余时间）
+        let _countdownTimer = null;
+
+        let dualSubIsDragging = false, dualSubDragStartX = 0, dualSubDragStartOffset = 0;
+
+        let dualSubMouseDownX = 0, dualSubMouseDownY = 0; // 底部窗口点击坐标
+
+        let _subCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
+
+        let _subClipText = ""; // 底部窗口当前K线信息文本
+
+        let dualHighlightRange = null; // {startIdx, endIdx} 下面窗口高亮范围（灰框）
+
+        let dualRedRange = null;     // {beforeStart, beforeEnd, afterStart, afterEnd} 下面窗口红框范围
+
+        let dualOffscreenState = false; // 状态A：当前鼠标指向的K线对应区间在下面窗口视口外
+
+        let dualNewZsData = null;       // 双窗口新模式：红框内笔计算的新中枢数据 {zs: [...], zs_stars: [...]}
+
+        let dualShowNewZs = false;      // 双窗口新模式：是否绘制新中枢（替代原线段/中枢/买卖点）
+
+        let dualNewZsLeftDate = "";     // 双窗口新模式：上次请求的红框左边界日期（用于去重）
+
+        let dualNewZsRightDate = "";    // 双窗口新模式：上次请求的红框右边界日期（用于去重）
+
+        let dualNewZsFailedKey = "";    // 双窗口新模式：失败请求去重，避免同一红框反复请求
+
+        let activeDualWindow = 'main';   // 当前激活的窗口：'top' 或 'bottom'，控制底部滚动条作用于哪个窗口
+
+        let _ctrlPressed = false;         // Ctrl键是否按下（用于红框计算优化）
+
+        // 文字标注状态
+        let annotations = [];          // 当前标注列表: [{date, text, y_offset}]
+
+        let _annotationTargetDate = ""; // 右键点击的K线日期
+
+        let _annotationTargetY = 0;     // 右键点击的Y坐标（图表内相对坐标，用于标注定位）
+
+        let _annotationTargetX = 0;     // 右键点击的X坐标（用于菜单定位）
+
+        let _annotationClickTarget = null; // 右键点击命中的标注对象 {date, text, y_offset}，null表示未命中
+
+        let _annotationEditOldText = "";   // 编辑模式下被修改的旧文字
+
+        let _annotationDialogMode = "add"; // "add" 或 "edit"
+
+        // ===== 日期输入框：按周期切换 date / datetime-local =====
+        const INTRADAY_FREQS_JS = ["30m", "5m", "1m", "15s"];
+
+        // 实时模式（期货/期指 SSE 推送）
+        let isRealtimeMode = false;       // 是否处于实时模式
+
+        let realtimeSymbol = null;        // 实时模式下当前品种代码
+
+        let realtimeFreq = null;          // 实时模式下当前周期
+
+        let realtimeStartTime = null;     // 实时模式下选点起始时间
+
+        let realtimeEventSource = null;   // SSE EventSource 对象
+
+        let realtimeConnected = false;    // SSE 是否已连接
+
+        const COLORS = {
+            bg: "#1a1a2e", grid: "rgba(255,255,255,0.04)", text: "#8892b0", textLight: "#a8b2d1",
+            up: "#FF4444", down: "#00DD00", bi: "#FFD700",
+            crosshair: "rgba(255,255,255,0.3)",
+            macdUp: "rgba(253,16,80,0.6)", macdDown: "rgba(12,244,155,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
+            dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
+        };
+
+        // ===== K线倒计时进度条（快期3风格） =====
+        let _countdownBounds = null; // 上窗/单窗倒计时区域边界，用于增量更新
+
+        let _subCountdownBounds = null; // 下窗倒计时区域边界，用于增量更新
+
+        // ── 盘后数据下载 ──
+        var _downloadTimer = null;
+
+        var _downloadRunning = false;
+
+        // ============================================================
+        // 股票买卖点扫描（逐只扫描，实时进度，可中断）
+        // ============================================================
+        let _scanRunning = false;
+
+        let _scanAborted = false;
+
+        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
+
+        let _scanRecentDays = 1; // 最近N根K线，默认1
+
+        let _scanSources = ["zxg"]; // 多选：["zxg", "page_index", "tdxhy2", "tdxhy3"]
+
+        let _scanFreq = "d"; // 扫描周期，默认日K
+
+        let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false, _dateStepIgnore = false;
+
+        let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
+
+        let _dateFocusOriginal = "";       // onfocus 保存的原始值，用于 blur 恢复
+
+        let _datePickerInteracted = false; // datetime-local picker 中用户有过交互，blur 时不恢复原始值
+
+        let _datePickerInputCount = 0;     // datetime-local picker 打开后真实交互次数
+
+        // 期货：记录实时进入复盘时的边界日期（最后一根K线日期），右箭头至此自动重连
+        let _futuresRealtimeBorderDate = null;
+
+        const HISTORY_KEY = "chan_stock_history";
+
+        const MAX_HISTORY = 20;
+
+        // 固定快捷入口：五大核心指数，常驻历史列表顶部，不参与保存/删除/清除
+        const FIXED_INDICES = [
+            {code: "sh000001", name: "上证指数"},
+            {code: "sz399001", name: "深证成指"},
+            {code: "sh000300", name: "沪深300"},
+            {code: "sh000905", name: "中证500"},
+            {code: "sh000852", name: "中证1000"},
+            {code: "sz399006", name: "创业板指"},
+            {code: "sh000688", name: "科创50"},
+        ];
+
+        const FIXED_CODES = new Set(FIXED_INDICES.map(x => normalizeCode(x.code)));
+
+        let searchTimer = null;
+
+        let searchResults = [];
+
+        let selectedIndex = -1;
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] KLineChart —— K线图表组件（渲染引擎 / 坐标系 / 交互 / 倒计时）
+        // 对外接口（ChanApp.components.KLineChart）: render, renderSingle, renderTop, renderBottom, resizeCanvas, priceToY, yToPrice, getChartArea, getVisibleKlines, getPriceRange, drawCandles, drawBiLines, drawZs, drawBspMarkers, drawMaLines, drawCrosshair, drawDateAxis, onWheel, toggleOverlay, toggleDualWindow, applyOverlayButtonStates, cancelSelectedPoint
+// ══════════════════════════════════════════════════════════════════
+
         // 从 localStorage 恢复叠加层开关状态
         function loadOverlaySettings() {
             try {
@@ -34,6 +251,7 @@
                 if (typeof s.logScale === 'boolean') _logScale = s.logScale;
             } catch(e) {}
         }
+
         // 保存叠加层开关状态到 localStorage
         function saveOverlaySettings() {
             try {
@@ -49,7 +267,9 @@
                 localStorage.setItem('chan_overlay_settings', JSON.stringify(s));
             } catch(e) {}
         }
+
         function getShowMa() { return Object.keys(maPeriods).some(function(p){ return maPeriods[p]; }); }
+
         // 根据保存的设置更新按钮 UI 状态
         function applyOverlayButtonStates() {
             document.getElementById("btn-bi").classList.toggle("active", showBi);
@@ -58,168 +278,6 @@
             document.getElementById("btn-seg").classList.toggle("active", showSeg);
             document.getElementById("btn-bsp").classList.toggle("active", showBsp);
         }
-        // 坐标系切换（设置抽屉内 radio 触发）
-        window.onCoordSystemChange = function(el) {
-            if (el.value === 'log') {
-                _logScale = true;
-            } else {
-                _logScale = false;
-            }
-            saveOverlaySettings();
-            render();
-        };
-        window.initCoordSystemRadio = function() {
-            var radios = document.getElementsByName('coord-system');
-            for (var i = 0; i < radios.length; i++) {
-                radios[i].checked = (_logScale && radios[i].value === 'log') || (!_logScale && radios[i].value === 'linear');
-            }
-        };
-        // 启动时加载保存的设置
-        loadOverlaySettings();
-        initCoordSystemRadio();
-        // 频率→秒数映射
-        const FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
-        const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
-        const VOL_RATIO = 0.2, GAP = 12;
-        const MACD_TEXT_HEIGHT = 14;
-        let viewOffset = 0, viewCount = 377;
-        let isDragging = false, dragStartX = 0, dragStartOffset = 0;
-        let mouseX = -1, mouseY = -1;
-        let _currentClipText = "";
-        let _mouseDownX = 0, _mouseDownY = 0;
-        // 区间选择状态机: IDLE(空闲) | SELECTED_A(已选起点)
-        let _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-        let _currentGlobalIdx = -1;
-        let _overlayData = null;
-        let initialized = false;
-        let currentFreq = 'd'; // 当前周期: d=日K, 30m=30分钟
-        let lastStockFreq = 'd';     // 股票上下文上次使用的周期（同类切换继承）
-        let lastFuturesFreq = '5m'; // 期货上下文上次使用的周期（同类切换继承）
-        // 双窗口状态
-        let isDualWindow = false;
-        let dualSubData = null;
-        let dualSubFreq = '';
-        let dualSubViewOffset = 0, dualSubViewCount = 377;
-        let dualSubMouseX = -1, dualSubMouseY = -1;
-        let mainCanvas, mainCtx, subCanvas, subCtx;
-        // 翻转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
-        let _isMirrorMode = false;
-        // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
-        let _restartEnabled = false;
-        // K线倒计时进度条（快期3风格：右上角红色进度条+剩余时间）
-        let _countdownTimer = null;
-        let dualSubIsDragging = false, dualSubDragStartX = 0, dualSubDragStartOffset = 0;
-        let dualSubMouseDownX = 0, dualSubMouseDownY = 0; // 底部窗口点击坐标
-        let _subCurrentGlobalIdx = -1; // 底部窗口当前鼠标指向的全局索引
-        let _subClipText = ""; // 底部窗口当前K线信息文本
-        let dualHighlightRange = null; // {startIdx, endIdx} 下面窗口高亮范围（灰框）
-        let dualRedRange = null;     // {beforeStart, beforeEnd, afterStart, afterEnd} 下面窗口红框范围
-        let dualOffscreenState = false; // 状态A：当前鼠标指向的K线对应区间在下面窗口视口外
-        let dualNewZsData = null;       // 双窗口新模式：红框内笔计算的新中枢数据 {zs: [...], zs_stars: [...]}
-        let dualShowNewZs = false;      // 双窗口新模式：是否绘制新中枢（替代原线段/中枢/买卖点）
-        let dualNewZsLeftDate = "";     // 双窗口新模式：上次请求的红框左边界日期（用于去重）
-        let dualNewZsRightDate = "";    // 双窗口新模式：上次请求的红框右边界日期（用于去重）
-        let dualNewZsFailedKey = "";    // 双窗口新模式：失败请求去重，避免同一红框反复请求
-        let activeDualWindow = 'main';   // 当前激活的窗口：'top' 或 'bottom'，控制底部滚动条作用于哪个窗口
-        let _ctrlPressed = false;         // Ctrl键是否按下（用于红框计算优化）
-
-        // 文字标注状态
-        let annotations = [];          // 当前标注列表: [{date, text, y_offset}]
-        let _annotationTargetDate = ""; // 右键点击的K线日期
-        let _annotationTargetY = 0;     // 右键点击的Y坐标（图表内相对坐标，用于标注定位）
-        let _annotationTargetX = 0;     // 右键点击的X坐标（用于菜单定位）
-        let _annotationClickTarget = null; // 右键点击命中的标注对象 {date, text, y_offset}，null表示未命中
-        let _annotationEditOldText = "";   // 编辑模式下被修改的旧文字
-        let _annotationDialogMode = "add"; // "add" 或 "edit"
-
-        // ===== 日期输入框：按周期切换 date / datetime-local =====
-        const INTRADAY_FREQS_JS = ["30m", "5m", "1m", "15s"];
-        function isIntradayFreq(freq) { return INTRADAY_FREQS_JS.indexOf(freq) >= 0; }
-
-        // K线日期 → 输入框格式
-        // K线日期: "2026/07/02" / "2026/07/02 10:35" / "2026/07/02 10:35:00"
-        // date: "2026-07-02"  /  datetime-local: "2026-07-02T10:35"
-        function klineDateToInput(klineDate, freq) {
-            if (!klineDate) return "";
-            var d = klineDate.replace(/\//g, "-");
-            if (isIntradayFreq(freq)) {
-                var dt = d.slice(0, 19);       // "YYYY-MM-DD HH:MM:SS"（15秒含秒，分钟级不越界）
-                return dt.replace(" ", "T");
-            }
-            return d.slice(0, 10);
-        }
-
-        // 输入框值 → 后端API格式
-        // date: "2026-07-02" / datetime-local: "2026-07-02T10:35"
-        // API: "2026-07-02" / "2026-07-02 10:35"
-        function inputDateToApi(inputVal, freq) {
-            if (!inputVal) return "";
-            if (isIntradayFreq(freq)) return inputVal.replace("T", " ").replace(/-/g, "/");
-            return inputVal.slice(0, 10).replace(/-/g, "/");
-        }
-
-        // 切换输入框 type 属性（date ↔ datetime-local）
-        function updateDateInputType() {
-            var input = document.getElementById("goto-date-input");
-            var weekday = document.getElementById("date-weekday");
-            var isIntra = isIntradayFreq(currentFreq);
-            var oldVal = input.value;
-            if (isIntra) {
-                input.type = "datetime-local";
-                input.step = (currentFreq === "15s") ? "15" : "60";
-                // 股票：限定盘中时间 09:00-15:59；期货：全天
-                var isStock = chartData && chartData.meta && chartData.meta.symbol && !isFuturesCode(chartData.meta.symbol);
-                if (isStock) {
-                    input.min = "1990-01-01T09:00";
-                    input.max = "2099-12-31T15:59";
-                } else {
-                    input.min = "1990-01-01T00:00";
-                    input.max = "2099-12-31T23:59";
-                }
-                if (currentFreq === "15s") {
-                    input.style.width = "190px";
-                    if (weekday) weekday.style.right = "28px";
-                } else {
-                    input.style.width = "170px";
-                    if (weekday) weekday.style.right = "28px";
-                }
-                if (oldVal && oldVal.indexOf("T") < 0) oldVal = oldVal + "T09:30";
-            } else {
-                input.type = "date";
-                input.step = "1";
-                input.min = "1990-01-01";
-                input.max = "2099-12-31";
-                input.style.width = "130px";
-                if (oldVal && oldVal.indexOf("T") >= 0) oldVal = oldVal.slice(0, 10);
-                if (weekday) weekday.style.right = "28px";
-            }
-            input.value = oldVal;
-            // datetime-local：picker 打开时记录原始值
-            if (isIntra) {
-                input.onfocus = function() {
-                    var v = input.value;
-                    if (!v) return;
-                    _datePickerInteracted = false;
-                    _datePickerInputCount = 0;
-                    _dateFocusOriginal = v;
-                };
-            } else {
-                input.onfocus = null;
-            }
-            // 箭头提示
-            var la = document.getElementById("date-arrow-left");
-            var ra = document.getElementById("date-arrow-right");
-            if (la) la.title = (currentFreq === "d") ? "前一天" : "前一根";
-            if (ra) ra.title = (currentFreq === "d") ? "后一天" : "后一根";
-        }
-
-        // 实时模式（期货/期指 SSE 推送）
-        let isRealtimeMode = false;       // 是否处于实时模式
-        let realtimeSymbol = null;        // 实时模式下当前品种代码
-        let realtimeFreq = null;          // 实时模式下当前周期
-        let realtimeStartTime = null;     // 实时模式下选点起始时间
-        let realtimeEventSource = null;   // SSE EventSource 对象
-        let realtimeConnected = false;    // SSE 是否已连接
 
         // 辅助函数：30分钟K线显示时间
         function getKlineEndTime(dateStr, showSeconds) {
@@ -235,6 +293,7 @@
             }
             return `${yy}/${mm}/${dd} ${hh}:${min}`;
         }
+
         // 双窗口：上面周期 -> 下面周期映射
         function getDualSubFreq(mainFreq) {
             // 股票周期映射
@@ -246,17 +305,7 @@
             if (mainFreq === '1m') return '15s';
             return null; // 5m(股票)/15s(期货)无对应
         }
-        // 周期级别：数值越大级别越高（w=6 > d=5 > 30m=4 > 5m=3 > 1m=2 > 15s=1）
-        // 用于双窗口校验：下窗周期级别必须严格小于上窗周期级别
-        function freqLevel(freq) {
-            const levels = {'w': 6, 'd': 5, '30m': 4, '5m': 3, '1m': 2, '15s': 1};
-            return levels[freq] || 0;
-        }
-        // 周期中文标签（用于弹窗提示）
-        function freqLabel(freq) {
-            const labels = {'w': '周线', 'd': '日线', '30m': '30分钟', '5m': '5分钟', '1m': '1分钟', '15s': '15秒'};
-            return labels[freq] || freq;
-        }
+
         // 双窗口：获取上面窗口某根K线对应的灰框边界（子级别K线时间字符串）
         // 通用方案：利用相邻K线时间，不依赖周期长度假设
         //   期货：K线时间=开始时间。左边界=当前时间X，右边界=(下一根时间Y - bottom_sec)
@@ -312,6 +361,7 @@
                 return { start, end };
             }
         }
+
         // 双窗口：根据上面窗口鼠标位置计算下面窗口高亮范围
         function calcGrayRange(topMouseX) {
             if (!isDualWindow || !dualSubData || !chartData) return null;
@@ -489,210 +539,6 @@
             window._lastRedFrameStatus = { state: "OK", reason: "calcRedRange成功", before: result.hasBefore, after: result.hasAfter, aIdx: aIdx, bIdx: bIdx, grayStart: grayStart, grayEnd: grayEnd, leftDate: result.leftDate, rightDate: result.rightDate };
             updateRedFrameDebug();
             return result;
-        }
-        const COLORS = {
-            bg: "#1a1a2e", grid: "rgba(255,255,255,0.04)", text: "#8892b0", textLight: "#a8b2d1",
-            up: "#FF4444", down: "#00DD00", bi: "#FFD700",
-            crosshair: "rgba(255,255,255,0.3)",
-            macdUp: "rgba(253,16,80,0.6)", macdDown: "rgba(12,244,155,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
-            dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
-        };
-
-        // 根据市场类型更新频率按钮的启用/禁用状态
-        function updateFreqButtonStates(isFutures) {
-            // 股票禁用 1m/15s，期货禁用 d/w
-            document.getElementById('btn-d').disabled = isFutures;
-            document.getElementById('btn-w').disabled = isFutures;
-            document.getElementById('btn-1m').disabled = !isFutures;
-            document.getElementById('btn-15s').disabled = !isFutures;
-            // 共享周期：30m 始终启用
-            document.getElementById('btn-30m').disabled = false;
-            // 5m: 股票双窗口→禁用(无下级)，期货双窗口→全部启用（上下窗解耦）
-            if (isDualWindow && isFutures) {
-                document.getElementById('btn-5m').disabled = false;
-                // 期货双窗口：上下窗独立切换，15s不再禁用
-            } else if (isDualWindow && !isFutures) {
-                document.getElementById('btn-5m').disabled = true;
-            } else {
-                document.getElementById('btn-5m').disabled = false;
-            }
-            // 同步 active 状态：双窗口下根据焦点窗口决定高亮
-            document.querySelectorAll('.freq-btn').forEach(b => b.classList.remove('active'));
-            const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
-            const activeBtn = document.getElementById('btn-' + highlightFreq);
-            if (activeBtn) activeBtn.classList.add('active');
-        }
-
-        // 判断是否为期货/期指代码
-        function isFuturesCode(code) {
-            return code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code);
-        }
-        // 保存当前状态到 localStorage（仅股票，仅单窗口非复盘模式）
-        function saveLastState() {
-            if (!chartData || !chartData.meta) return;
-            if (isDualWindow) return;  // 双窗口不保存
-            if (chartData.meta.is_replay) return;  // 复盘模式不保存
-            if (chartData.meta.market === 'futures') return;  // 期货不保存
-            const state = {
-                code: chartData.meta.symbol,
-                freq: currentFreq,
-                name: chartData.meta.name
-            };
-            try { localStorage.setItem('lastCodeFreq', JSON.stringify(state)); } catch(e) {}
-        }
-        // 从 localStorage 加载上次状态，仅股票有效
-        function loadLastCodeFreq() {
-            try {
-                const raw = localStorage.getItem('lastCodeFreq');
-                if (!raw) return null;
-                const state = JSON.parse(raw);
-                if (!state.code || !state.freq) return null;
-                if (isFuturesCode(state.code)) return null;  // 排除期货残留
-                return state;
-            } catch(e) { return null; }
-        }
-
-        async function init() {
-            try {
-                // 先尝试从 localStorage 恢复上次状态
-                const savedState = loadLastCodeFreq();
-                if (savedState) {
-                    // 有保存的股票状态，先置空，立即异步加载
-                    chartData = null;
-                    document.getElementById("stock-code-input").value = savedState.code;
-                    // 设置初始周期
-                    if (savedState.freq) {
-                        currentFreq = savedState.freq;
-                        lastStockFreq = savedState.freq;
-                    }
-                    initCanvas();
-                    updateSlider();
-                    updateFreqButtonStates(false);
-                    updateRestartBtn();
-                    updateDualBtn();
-                    // 异步加载保存的股票数据
-                    document.getElementById("loading").classList.remove("hidden");
-                    fetch("/api/stock?code=" + encodeURIComponent(savedState.code) + "&freq=" + savedState.freq, { cache: "no-store" })
-                        .then(resp => {
-                            if (!resp.ok) throw new Error("恢复失败");
-                            return resp.json();
-                        })
-                        .then(data => {
-                            // 防御：检查 API 返回数据是否完整
-                            if (!data || !data.meta) {
-                                const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
-                                throw new Error("恢复失败: " + errMsg);
-                            }
-                            chartData = data;
-                            saveHistory(savedState.code, data.meta.name);
-                            document.getElementById("stock-name").textContent = chartData.meta.name;
-                            document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                            document.title = "缠论分析 - " + chartData.meta.name;
-                            let returnedFreq;
-                            if (data.meta.freq === "5分钟") returnedFreq = "5m";
-                            else if (data.meta.freq === "30分钟") returnedFreq = "30m";
-                            else if (data.meta.freq === "周线") returnedFreq = "w";
-                            else returnedFreq = "d";
-                            currentFreq = returnedFreq;
-                            lastStockFreq = currentFreq;
-                            updateDateInputType();
-                            updateFreqButtonStates(false);
-                            viewCount = 377;
-                            adjustViewForSavedPoint();
-                            viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                            if (chartData.klines.length < viewCount) viewOffset = 0;
-                            applyOverlayButtonStates();
-                            initialized = true;
-                            updateRestartBtn();
-                            updateDualBtn();
-                            const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                            document.getElementById("goto-date-input").value = lastDate;
-                            updateWeekday();
-                            render();
-                            document.getElementById("loading").classList.add("hidden");
-                            document.getElementById("error").classList.add("hidden");
-                            generateStats();
-                            loadAnnotations();
-                            // 断开期货SSE（如果有）
-                            disconnectRealtime();
-                        })
-                        .catch(err => {
-                            console.error("恢复上次状态失败，回退到默认:", err);
-                            try {
-                                let errMsgEl2 = document.getElementById("error-msg");
-                                if (errMsgEl2) {
-                                    errMsgEl2.innerHTML = "恢复错误: " + (err && err.message ? String(err.message).replace(/</g, "&lt;") : String(err))
-                                        + "<br><br><span style='font-size:12px;color:#aaa'>name=" + (err && err.name) + "<br>stack=" + (err && err.stack ? err.stack.replace(/</g, "&lt;") : "无") + "</span>";
-                                }
-                            } catch (e3) {}
-                            // 回退到默认上证指数
-                            document.getElementById("stock-code-input").value = "";
-                            initDefault();
-                        });
-                    return;
-                }
-                // 无保存状态，默认加载上证指数
-                initDefault();
-            } catch (err) {
-                console.error("初始化失败:", err);
-                document.getElementById("loading").classList.add("hidden");
-                document.getElementById("error").classList.remove("hidden");
-            }
-        }
-
-        async function initDefault() {
-            document.getElementById("loading").classList.remove("hidden");
-            try {
-                const resp = await fetch("/api/stock?code=SH000001&freq=d", { cache: "no-store" });
-                if (!resp.ok) throw new Error("默认加载失败");
-                const data = await resp.json();
-                // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 chartData.meta.symbol 会崩溃）
-                if (!data || !data.meta) {
-                    const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
-                    throw new Error("首屏数据加载失败: " + errMsg);
-                }
-                chartData = data;
-                document.getElementById("stock-name").textContent = chartData.meta.name;
-                document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                document.title = "缠论分析 - " + chartData.meta.name;
-                initCanvas();
-                updateSlider();
-                if (chartData.meta.freq === "5分钟") currentFreq = "5m";
-                else if (chartData.meta.freq === "30分钟") currentFreq = "30m";
-                else if (chartData.meta.freq === "周线") currentFreq = "w";
-                else currentFreq = "d";
-                updateDateInputType();
-                lastStockFreq = currentFreq;
-                updateFreqButtonStates(false);
-                viewCount = 377;
-                adjustViewForSavedPoint();
-                applyOverlayButtonStates();
-                viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                if (chartData.klines.length < viewCount) viewOffset = 0;
-                initialized = true;
-                updateRestartBtn();
-                updateDualBtn();
-                const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                document.getElementById("goto-date-input").value = lastDate;
-                updateWeekday();
-                render();
-                document.getElementById("loading").classList.add("hidden");
-                document.getElementById("error").classList.add("hidden");
-                generateStats();
-                loadAnnotations();
-            } catch (err) {
-                console.error("initDefault 失败:", err);
-                // 把错误详情显示到页面上，方便用户直接查看（无需F12）
-                try {
-                    let errMsgEl = document.getElementById("error-msg");
-                    if (errMsgEl) {
-                        errMsgEl.innerHTML = "错误: " + (err && err.message ? String(err.message).replace(/</g, "&lt;") : String(err))
-                            + "<br><br><span style='font-size:12px;color:#aaa'>name=" + (err && err.name) + "<br>stack=" + (err && err.stack ? err.stack.replace(/</g, "&lt;") : "无") + "</span>";
-                    }
-                } catch (e2) {}
-                document.getElementById("loading").classList.add("hidden");
-                document.getElementById("error").classList.remove("hidden");
-            }
         }
 
         function initCanvas() {
@@ -1016,15 +862,18 @@
         function isFuturesMode() {
             return !!(chartData && chartData.meta && chartData.meta.market === 'futures');
         }
+
         // 取底部柱状指标值：期货=成交量(vol)，股票=成交额(amount)
         function getVolMetric(k) {
             if (!k) return 0;
             return isFuturesMode() ? (k.vol || 0) : (k.amount || 0);
         }
+
         // 底部指标标签：期货"成交量(手)"，股票"成交额"
         function getVolLabel() {
             return isFuturesMode() ? "成交量(手)" : "成交额";
         }
+
         function getVolumeRange(klines) {
             if (!klines.length) return { min: 0, max: 1 };
             let max = 0;
@@ -2568,10 +2417,6 @@
             }
         }
 
-        // ===== K线倒计时进度条（快期3风格） =====
-        let _countdownBounds = null; // 上窗/单窗倒计时区域边界，用于增量更新
-        let _subCountdownBounds = null; // 下窗倒计时区域边界，用于增量更新
-
         function _calcCountdownState(freq, data) {
             // 返回倒计时计算状态，或 null（不显示）
             // freq/data 缺省时使用全局 currentFreq/chartData（上窗/单窗）
@@ -2726,6 +2571,7 @@
             _mouseDownX = e.clientX; _mouseDownY = e.clientY;
             if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); updateSlider(); updateFreqButtonStates(chartData && chartData.meta && chartData.meta.market === 'futures'); }
         }
+
         function onMouseMove(e) {
             const rect = canvas.getBoundingClientRect();
             mouseX = e.clientX - rect.left; mouseY = e.clientY - rect.top;
@@ -2747,6 +2593,7 @@
                 render();
             }
         }
+
         function onMouseUp(e) {
             isDragging = false; canvas.style.cursor = "crosshair";
             // 只处理左键点击（非拖拽）
@@ -2810,6 +2657,7 @@
                 navigator.clipboard.writeText(_currentClipText).catch(() => {});
             }
         }
+
         function onMouseLeave() { isDragging = false; mouseX = -1; mouseY = -1; canvas.style.cursor = "crosshair"; if (isDualWindow) { dualOffscreenState = false; dualHighlightRange = null; dualRedRange = null; dualNewZsData = null; dualShowNewZs = false; renderTop(); } else { render(); } }
 
         // 双窗口toast提示
@@ -2826,32 +2674,6 @@
             clearTimeout(toast._timer);
             toast._timer = setTimeout(() => { toast.style.opacity = "0"; }, 1000);
         }
-
-        // Esc键取消区间选择 / 关闭设置抽屉
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape') {
-                var drawer = document.getElementById("bsp-filter-dialog");
-                if (drawer.classList.contains("show")) {
-                    closeBspSettings();
-                    return;
-                }
-                if (_rangeSelect.mode === 'SELECTED_A') {
-                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("区间选择已取消");
-                    render();
-                }
-            }
-        });
-        document.addEventListener('keyup', function(e) {
-            // 兜底：松开Ctrl时清除红框（onMouseMove用e.ctrlKey是主要检测路径）
-            if (e.key === 'Control' && isDualWindow) {
-                _ctrlPressed = false;
-                dualRedRange = null;
-                dualShowNewZs = false;
-                dualNewZsData = null;
-                renderTop();
-            }
-        });
 
         // 更新双窗口激活状态视觉提示
         function updateActiveWindowClass() {
@@ -3237,6 +3059,1126 @@
             render();
         };
 
+        // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态
+        function updateRestartBtn() {
+            var hasPoint = chartData && chartData.meta && chartData.meta.saved_selection_date;
+            var isReplay = chartData && chartData.meta && chartData.meta.is_replay;
+            _restartEnabled = hasPoint && !isDualWindow && !isReplay;
+        }
+
+        function updateDualBtn() {
+            // 双窗中始终可点（用于退出），仅在非双窗时按入口规则约束
+            if (isDualWindow) {
+                document.getElementById("btn-dual").disabled = false;
+                return;
+            }
+            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
+            if (isFutures) {
+                // 期货：30m/5m/1m 可双窗口，15s 不可
+                document.getElementById("btn-dual").disabled = (currentFreq === '15s');
+            } else {
+                // 股票：w/d/30m 可双窗口，5m 不可
+                document.getElementById("btn-dual").disabled = (currentFreq === '5m');
+            }
+        }
+
+        // ============================================================
+        // 重启：清除选点，按冷启动重新加载
+        // ============================================================
+        window.cancelSelectedPoint = function() {
+            document.getElementById("annotation-menu").classList.remove("show");
+            if (!chartData || !chartData.meta) return;
+            // 双窗口模式和复盘模式不允许重置
+            if (isDualWindow) { showDualToast("双窗口模式，不支持重置"); return; }
+            if (chartData.meta.is_replay) { showDualToast("复盘模式，不支持重置"); return; }
+            const code = chartData.meta.symbol;
+            const freq = currentFreq;
+            const isFutures = chartData.meta.market === 'futures';
+            document.getElementById("loading").classList.remove("hidden");
+            document.querySelector(".loading-text").textContent = "正在重置...";
+
+            // 期货：清除选点 + 冷启动重连SSE（无start_time）
+            if (isFutures) {
+                fetch("/api/futures_clear_saved_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq)
+                    .then(resp => resp.json())
+                    .then(() => {
+                        // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
+                        // 如果提前隐藏loading，会导致SSE重连失败时没有任何加载反馈
+                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                        connectRealtimeInit(code, freq);  // 冷启动，不带start_time
+                    })
+                    .catch(err => {
+                        document.getElementById("loading").classList.add("hidden");
+                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                        alert("重置失败: " + err.message);
+                    });
+                return;
+            }
+
+            // 股票：清除选点 + 冷启动HTTP
+            // Step 1: 调用后端清除CSV中该周期选点
+            fetch("/api/clear_saved_point?code=" + encodeURIComponent(code) + "&freq=" + freq)
+                .then(resp => resp.json())
+                .then(() => {
+                    // Step 2: 冷启动重新加载
+                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
+                })
+                .then(resp => {
+                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
+                    return resp.json();
+                })
+                .then(data => {
+                    // 全文替换 chartData
+                    chartData = data;
+                    if (chartData.meta.freq === "5分钟") {
+                        currentFreq = "5m";
+                    } else if (chartData.meta.freq === "30分钟") {
+                        currentFreq = "30m";
+                    } else if (chartData.meta.freq === "周线") {
+                        currentFreq = "w";
+                    } else {
+                        currentFreq = "d";
+                    }
+                    updateDateInputType();
+                    document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
+                    document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
+                    document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
+                    document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
+                    viewCount = 377;
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    if (chartData.klines.length < viewCount) {
+                        viewOffset = 0;
+                    }
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
+                    document.getElementById("loading").classList.add("hidden");
+                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                    resizeCanvas();
+                    render();
+                    generateStats();
+                    updateRestartBtn();
+                    updateDualBtn();
+                    // 双窗口模式：从 data.sub 恢复子级别数据
+                    if (isDualWindow && data.sub) {
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) {
+                            dualSubViewOffset = 0;
+                        }
+                    }
+                })
+                .catch(err => {
+                    document.getElementById("loading").classList.add("hidden");
+                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                    alert("重置失败: " + err.message);
+                });
+        };
+
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.KLineChart = {
+            render, renderSingle, renderTop, renderBottom, resizeCanvas,
+        priceToY, yToPrice, getChartArea, getVisibleKlines, getPriceRange,
+        drawCandles, drawBiLines, drawZs, drawBspMarkers, drawMaLines,
+        drawCrosshair, drawDateAxis, onWheel, toggleOverlay, toggleDualWindow,
+        applyOverlayButtonStates, cancelSelectedPoint
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] NavToolbar —— 导航工具栏组件（频率切换 / 日期跳转 / 坐标系统）
+        // 对外接口（ChanApp.components.NavToolbar）: switchFreq, gotoDate, dateStep, fetchStep, handleDateChange, handleDateInput, onCoordSystemChange, initCoordSystemRadio, updateFreqButtonStates, updateWeekday, adjustViewForSavedPoint
+// ══════════════════════════════════════════════════════════════════
+
+        // 坐标系切换（设置抽屉内 radio 触发）
+        window.onCoordSystemChange = function(el) {
+            if (el.value === 'log') {
+                _logScale = true;
+            } else {
+                _logScale = false;
+            }
+            saveOverlaySettings();
+            render();
+        };
+
+        window.initCoordSystemRadio = function() {
+            var radios = document.getElementsByName('coord-system');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (_logScale && radios[i].value === 'log') || (!_logScale && radios[i].value === 'linear');
+            }
+        };
+
+        function isIntradayFreq(freq) { return INTRADAY_FREQS_JS.indexOf(freq) >= 0; }
+
+        // K线日期 → 输入框格式
+        // K线日期: "2026/07/02" / "2026/07/02 10:35" / "2026/07/02 10:35:00"
+        // date: "2026-07-02"  /  datetime-local: "2026-07-02T10:35"
+        function klineDateToInput(klineDate, freq) {
+            if (!klineDate) return "";
+            var d = klineDate.replace(/\//g, "-");
+            if (isIntradayFreq(freq)) {
+                var dt = d.slice(0, 19);       // "YYYY-MM-DD HH:MM:SS"（15秒含秒，分钟级不越界）
+                return dt.replace(" ", "T");
+            }
+            return d.slice(0, 10);
+        }
+
+        // 输入框值 → 后端API格式
+        // date: "2026-07-02" / datetime-local: "2026-07-02T10:35"
+        // API: "2026-07-02" / "2026-07-02 10:35"
+        function inputDateToApi(inputVal, freq) {
+            if (!inputVal) return "";
+            if (isIntradayFreq(freq)) return inputVal.replace("T", " ").replace(/-/g, "/");
+            return inputVal.slice(0, 10).replace(/-/g, "/");
+        }
+
+        // 切换输入框 type 属性（date ↔ datetime-local）
+        function updateDateInputType() {
+            var input = document.getElementById("goto-date-input");
+            var weekday = document.getElementById("date-weekday");
+            var isIntra = isIntradayFreq(currentFreq);
+            var oldVal = input.value;
+            if (isIntra) {
+                input.type = "datetime-local";
+                input.step = (currentFreq === "15s") ? "15" : "60";
+                // 股票：限定盘中时间 09:00-15:59；期货：全天
+                var isStock = chartData && chartData.meta && chartData.meta.symbol && !isFuturesCode(chartData.meta.symbol);
+                if (isStock) {
+                    input.min = "1990-01-01T09:00";
+                    input.max = "2099-12-31T15:59";
+                } else {
+                    input.min = "1990-01-01T00:00";
+                    input.max = "2099-12-31T23:59";
+                }
+                if (currentFreq === "15s") {
+                    input.style.width = "190px";
+                    if (weekday) weekday.style.right = "28px";
+                } else {
+                    input.style.width = "170px";
+                    if (weekday) weekday.style.right = "28px";
+                }
+                if (oldVal && oldVal.indexOf("T") < 0) oldVal = oldVal + "T09:30";
+            } else {
+                input.type = "date";
+                input.step = "1";
+                input.min = "1990-01-01";
+                input.max = "2099-12-31";
+                input.style.width = "130px";
+                if (oldVal && oldVal.indexOf("T") >= 0) oldVal = oldVal.slice(0, 10);
+                if (weekday) weekday.style.right = "28px";
+            }
+            input.value = oldVal;
+            // datetime-local：picker 打开时记录原始值
+            if (isIntra) {
+                input.onfocus = function() {
+                    var v = input.value;
+                    if (!v) return;
+                    _datePickerInteracted = false;
+                    _datePickerInputCount = 0;
+                    _dateFocusOriginal = v;
+                };
+            } else {
+                input.onfocus = null;
+            }
+            // 箭头提示
+            var la = document.getElementById("date-arrow-left");
+            var ra = document.getElementById("date-arrow-right");
+            if (la) la.title = (currentFreq === "d") ? "前一天" : "前一根";
+            if (ra) ra.title = (currentFreq === "d") ? "后一天" : "后一根";
+        }
+
+        // 周期级别：数值越大级别越高（w=6 > d=5 > 30m=4 > 5m=3 > 1m=2 > 15s=1）
+        // 用于双窗口校验：下窗周期级别必须严格小于上窗周期级别
+        function freqLevel(freq) {
+            const levels = {'w': 6, 'd': 5, '30m': 4, '5m': 3, '1m': 2, '15s': 1};
+            return levels[freq] || 0;
+        }
+
+        // 周期中文标签（用于弹窗提示）
+        function freqLabel(freq) {
+            const labels = {'w': '周线', 'd': '日线', '30m': '30分钟', '5m': '5分钟', '1m': '1分钟', '15s': '15秒'};
+            return labels[freq] || freq;
+        }
+
+        // 根据市场类型更新频率按钮的启用/禁用状态
+        function updateFreqButtonStates(isFutures) {
+            // 股票禁用 1m/15s，期货禁用 d/w
+            document.getElementById('btn-d').disabled = isFutures;
+            document.getElementById('btn-w').disabled = isFutures;
+            document.getElementById('btn-1m').disabled = !isFutures;
+            document.getElementById('btn-15s').disabled = !isFutures;
+            // 共享周期：30m 始终启用
+            document.getElementById('btn-30m').disabled = false;
+            // 5m: 股票双窗口→禁用(无下级)，期货双窗口→全部启用（上下窗解耦）
+            if (isDualWindow && isFutures) {
+                document.getElementById('btn-5m').disabled = false;
+                // 期货双窗口：上下窗独立切换，15s不再禁用
+            } else if (isDualWindow && !isFutures) {
+                document.getElementById('btn-5m').disabled = true;
+            } else {
+                document.getElementById('btn-5m').disabled = false;
+            }
+            // 同步 active 状态：双窗口下根据焦点窗口决定高亮
+            document.querySelectorAll('.freq-btn').forEach(b => b.classList.remove('active'));
+            const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
+            const activeBtn = document.getElementById('btn-' + highlightFreq);
+            if (activeBtn) activeBtn.classList.add('active');
+        }
+
+        window.switchFreq = function(freq) {
+            if (!chartData) return;
+            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
+            // 期货双窗口下窗焦点：独立切换下窗周期，不联动上窗
+            if (isDualWindow && activeDualWindow === 'sub' && isFutures) {
+                if (dualSubFreq === freq) return;
+                // 校验：下窗周期必须严格小于上窗周期，否则弹窗提示并取消
+                if (freqLevel(freq) >= freqLevel(currentFreq)) {
+                    alert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
+                        + "，无法切换到" + freqLabel(freq));
+                    return;
+                }
+                // 切换周期时取消区间选择
+                if (_rangeSelect.mode === 'SELECTED_A') {
+                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+                }
+                dualSubFreq = freq;
+                updateDateInputType();
+                updateDualBtn();
+                updateFreqButtonStates(isFutures);
+                const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
+                if (code) {
+                    document.getElementById("loading").classList.remove("hidden");
+                    disconnectRealtime();
+                    connectRealtimeDual(code, currentFreq, freq);
+                }
+                return;
+            }
+            if (currentFreq === freq) return;
+            // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
+            if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
+                alert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
+                    + "，无法切换到" + freqLabel(freq));
+                return;
+            }
+            // 切换周期时取消区间选择
+            if (_rangeSelect.mode === 'SELECTED_A') {
+                _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+            }
+            currentFreq = freq;
+            updateDateInputType();
+            updateDualBtn();
+            if (isFutures) {
+                lastFuturesFreq = freq; // 期货上下文切换周期，记录
+            } else {
+                lastStockFreq = freq;   // 股票上下文切换周期，记录
+            }
+            updateFreqButtonStates(isFutures);
+            // 股票双窗口：切换周期始终作用于上窗，切换后焦点回到上窗
+            if (isDualWindow && !isFutures) {
+                activeDualWindow = 'main';
+                updateActiveWindowClass();
+                updateSlider();
+            }
+            // 切换周期后重新加载数据
+            const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
+            if (code) {
+                document.getElementById("loading").classList.remove("hidden");
+                // 期货：跳过HTTP，直接重连SSE（初始快照+增量合一）
+                if (isFutures) {
+                    disconnectRealtime();
+                    if (isDualWindow) {
+                        // 双窗口模式：上窗周期变，下窗保持不变
+                        connectRealtimeDual(code, freq, dualSubFreq);
+                    } else {
+                        connectRealtimeInit(code, freq);
+                    }
+                    return;
+                }
+                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
+                    .then(resp => {
+                        if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
+                        return resp.json();
+                    })
+                    .then(data => {
+                        chartData = data;
+                        updateRestartBtn();
+                        updateDualBtn();
+                        viewCount = 377;
+                        adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
+                        viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                        // K线不足一屏时右对齐
+                        if (chartData.klines.length < viewCount) {
+                            viewOffset = 0;
+                        }
+                        document.getElementById("stock-name").textContent = chartData.meta.name;
+                        document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                        document.title = "缠论分析 - " + chartData.meta.name;
+                        const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq);
+                        document.getElementById("goto-date-input").value = lastDate;
+                        updateWeekday();
+                        // 双窗口模式：从 data.sub 获取子级别数据（方案B）
+                        if (isDualWindow) {
+                            const newSubFreq = getDualSubFreq(freq);
+                            if (newSubFreq) {
+                                dualSubFreq = newSubFreq;
+                                if (data.sub) {
+                                    dualSubData = data.sub;
+                                    dualSubViewCount = 377;
+                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                    if (dualSubData.klines.length < dualSubViewCount) {
+                                        dualSubViewOffset = 0;
+                                    }
+                                }
+                            } else {
+                                // 新周期是5m，双窗口已关闭
+                            }
+                        }
+                        document.getElementById("loading").classList.add("hidden");
+                        render();
+                        generateStats();
+                        loadAnnotations();
+                        saveLastState(); // 保存状态
+                        startRealtimeIfFutures(data);
+                    })
+                    .catch(err => {
+                        alert("切换周期失败: " + err.message);
+                        document.getElementById("loading").classList.add("hidden");
+                    });
+            }
+        };
+
+        // 根据保存的选点日期，动态调整 viewCount 和 viewOffset
+        // 选点后后端已过滤，klines只包含选点之后的K线，直接全部显示
+        function adjustViewForSavedPoint() {
+            if (!chartData || !chartData.meta) return;
+            if (!chartData.meta.saved_selection_date) return;
+            if (!chartData.klines || chartData.klines.length === 0) return;
+            viewCount = chartData.klines.length;
+            viewOffset = 0;
+        }
+
+        window.gotoDate = function() {
+            // 键盘Enter提供了精确日期，应在重置前捕获，用于跳过 isToday 安全网
+            const keyEnter = _dateKeyEnter;
+            // 重置所有日期输入标志位，避免上次手动输入/键盘操作阻塞后续日历点击
+            _dateKeyEnter = false;
+            _dateKeyArrow = false;
+            _dateManualTyping = false;
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
+            if (!chartData) return;
+            const code = chartData.meta.symbol;
+            const freq = currentFreq;
+            const dateStr = document.getElementById("goto-date-input").value.trim();
+            if (!dateStr) return;
+            const apiDate = inputDateToApi(dateStr, freq);
+            // 日期是今天 → 冷启动（不传 end_date，加载全部K线）
+            // 用本地日期避免 UTC 时区偏移（如 UTC+8 凌晨 0-8 点 toISOString 会返回昨天）
+            const now = new Date();
+            const todayStr = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
+            const isToday = dateStr.startsWith(todayStr);
+            // 期货：判断是否"回到最新/实时"——请求时间 ≥ 最后一根K线时间才算
+            // （日内期货所有K线都是今天，不能用 isToday 判断，否则所有日内复盘都被拦截）
+            const isFutures = chartData.meta.market === 'futures';
+            const lastKlineInput = (chartData.klines && chartData.klines.length > 0)
+                ? klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq)
+                : "";
+            const wantLive = isFutures && dateStr >= lastKlineInput;
+            if (wantLive) {
+                document.getElementById("goto-date-input").disabled = true;
+                document.getElementById("loading").classList.remove("hidden");
+                document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
+                if (isDualWindow && dualSubFreq) {
+                    disconnectRealtime();
+                    // 双窗口模式：保持用户独立选择的下窗周期
+                    connectRealtimeDual(code, freq, dualSubFreq);
+                } else {
+                    // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
+                    const savedDate = chartData.meta.saved_selection_date || null;
+                    connectRealtimeInit(code, freq, savedDate);
+                }
+                // 不在这里隐藏loading，SSE的init事件回调会处理loading隐藏和input恢复
+                return;
+            }
+            // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
+            disconnectRealtime();
+            // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
+            // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
+            // 期货：wantLive已判断"回实时"，走到这里说明wantLive=false，始终传end_date
+            const needEndDate = isFutures ? true : (!isToday || keyEnter);
+            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+                + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
+            document.getElementById("goto-date-input").disabled = true;
+            document.getElementById("loading").classList.remove("hidden");
+            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
+            fetch(url)
+                .then(resp => {
+                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
+                    return resp.json();
+                })
+                .then(data => {
+                    chartData = data;
+                    updateRestartBtn();
+                    updateDualBtn();
+                    // 双窗口模式：从 data.sub 恢复子级别数据
+                    if (isDualWindow && data.sub) {
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) {
+                            dualSubViewOffset = 0;
+                        }
+                    }
+                    viewCount = 377;
+                    adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    // K线不足一屏时右对齐
+                    if (chartData.klines.length < viewCount) {
+                        viewOffset = 0;
+                    }
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    // 复盘后输入框显示实际最后一根K线日期
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
+                    resizeCanvas();
+                    render();
+                    loadAnnotations();
+                })
+                .catch(err => {
+                    alert("跳转失败: " + err.message);
+                })
+                .finally(() => {
+                    document.getElementById("loading").classList.add("hidden");
+                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                    document.getElementById("goto-date-input").disabled = false;
+                });
+        };
+
+        window.handleDateKeydown = function(e) {
+            if (e.key === 'Enter') { _dateKeyEnter = true; gotoDate(); return; }
+            if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; return; }
+            if (e.key !== 'Tab' && e.key !== 'Escape') { _dateManualTyping = true; }
+        };
+
+        window.handleDateChange = function() {
+            if (_dateStepIgnore) return;
+            updateWeekday();
+            // 键盘/手动输入 → 不触发（Enter 已在 handleDateKeydown 中处理）
+            if (_dateKeyEnter) { _dateKeyEnter = false; return; }
+            if (_dateKeyArrow) { _dateKeyArrow = false; return; }
+            if (_dateManualTyping) { _dateManualTyping = false; return; }
+            // input 已处理（datetime-local "今天"），change 跳过避免重复
+            if (_dateInputTriggered) { _dateInputTriggered = false; return; }
+            // datetime-local 正常完成（用户选完日期+小时+分钟，picker关闭）→ 触发
+            _dateFocusOriginal = "";
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
+            // 期货兜底：Edge点击日历"今天"时handleDateInput的检测可能未触发，
+            // 此时dateStr的日期=今天但时间未变，wantLive可能为false，应强制设为23:59再判断
+            if (chartData && chartData.meta && chartData.meta.market === 'futures') {
+                var input2 = document.getElementById("goto-date-input");
+                if (input2.type === "datetime-local") {
+                    var now3 = new Date();
+                    var ts3 = now3.getFullYear() + '-' + String(now3.getMonth()+1).padStart(2,'0') + '-' + String(now3.getDate()).padStart(2,'0');
+                    if (input2.value.startsWith(ts3)) {
+                        input2.value = ts3 + 'T23:59';
+                    }
+                }
+            }
+            gotoDate();
+        };
+
+        window.handleDateBlur = function() {
+            const input = document.getElementById("goto-date-input");
+            var v = input.value;
+            // 期货兜底：复盘后点击日历"今天"，Edge的step="15"输入框可能不触发input/change事件
+            // 在blur时检测：如果当前处于复盘状态(chartData.meta.is_replay)且日期=今天 → 强制设23:59并触发gotoDate
+            if (chartData && chartData.meta && chartData.meta.market === 'futures'
+                && chartData.meta.is_replay && input.type === "datetime-local") {
+                var nowB = new Date();
+                var tsB = nowB.getFullYear() + '-' + String(nowB.getMonth()+1).padStart(2,'0') + '-' + String(nowB.getDate()).padStart(2,'0');
+                var datePart = v.split('T')[0] || "";
+                if (datePart === tsB) {
+                    // 用户点了"今天"但input/change未触发 → 直接恢复实时
+                    input.value = tsB + 'T23:59';
+                    _dateFocusOriginal = "";
+                    _datePickerInteracted = false;
+                    _datePickerInputCount = 0;
+                    gotoDate();
+                    return;
+                }
+            }
+            // picker 打开后用户未交互 → 恢复原始值
+            if (_dateFocusOriginal && !_datePickerInteracted) {
+                input.value = _dateFocusOriginal;
+                _dateFocusOriginal = "";
+            }
+            _dateFocusOriginal = "";
+            _datePickerInteracted = false;
+            _datePickerInputCount = 0;
+            v = input.value;
+            if (!v) return;
+            const parts = v.split('-');
+            if (parts.length === 3) {
+                const d = parseInt(parts[2], 10);
+                if (!isNaN(d) && d > 31) {
+                    input.value = parts[0] + '-' + parts[1] + '-31';
+                }
+            }
+            // 股票 datetime-local：小时超出盘中范围(09-15)则自动修正
+            if (input.type === "datetime-local" && chartData && chartData.meta && !isFuturesCode(chartData.meta.symbol)) {
+                var p = input.value.split('T');
+                if (p.length === 2) {
+                    var tp = p[1].split(':');
+                    var hh = parseInt(tp[0], 10);
+                    if (hh < 9) input.value = p[0] + 'T09:' + tp[1];
+                    else if (hh > 15) input.value = p[0] + 'T15:' + tp[1];
+                }
+            }
+            updateWeekday();
+        };
+
+        window.handleDateInput = function(e) {
+            const input = e.target;
+            const val = input.value;
+            if (!val) return;
+            // 年份部分超过4位时截断到4位
+            const firstDash = val.indexOf('-');
+            if (firstDash === -1) {
+                if (val.length > 4) {
+                    input.value = val.substring(0, 4);
+                    setTimeout(() => { try { input.setSelectionRange(5, 5); } catch(_) {} }, 10);
+                }
+            } else {
+                const yearStr = val.substring(0, firstDash);
+                if (yearStr.length > 4) {
+                    const rest = val.substring(firstDash);
+                    input.value = yearStr.substring(0, 4) + rest;
+                    setTimeout(() => { try { input.setSelectionRange(5, 5); } catch(_) {} }, 10);
+                }
+            }
+            updateWeekday();
+            // 键盘输入 → 不在此处理（等待 Enter 或 change）
+            if (_dateManualTyping || _dateKeyEnter || _dateKeyArrow) return;
+            // datetime-local 日历交互：
+            // - 用户选了日期/时间 → 标记 _datePickerInteracted，blur 时不再恢复原始值
+            // - 第1次交互，日期=今天 且 时间≠原始时间 → "今天"按钮，立即触发
+            // - 其他情况：不触发，等 change（正常完成选日期+小时+分钟后触发）
+            if (input.type === "datetime-local" && _dateFocusOriginal) {
+                _datePickerInteracted = true;
+                _datePickerInputCount++;
+                if (_datePickerInputCount === 1) {
+                    var curParts = val.split('T');
+                    var origParts = _dateFocusOriginal.split('T');
+                    var now2 = new Date();
+                    var todayStr = now2.getFullYear() + '-' + String(now2.getMonth()+1).padStart(2,'0') + '-' + String(now2.getDate()).padStart(2,'0');
+                    if (curParts.length === 2 && origParts.length === 2 && curParts[0] === todayStr && curParts[1] !== origParts[1]) {
+                        // "今天"按钮：日期=今天 且 时间变了 → 设为 23:59，立即触发
+                        input.value = curParts[0] + 'T23:59';
+                        _dateFocusOriginal = "";
+                        _datePickerInteracted = false;
+                        _datePickerInputCount = 0;
+                        _dateInputTriggered = true;
+                        gotoDate();
+                        return;
+                    }
+                }
+            }
+        };
+
+        window.dateStep = function(delta) {
+            if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
+            var input = document.getElementById("goto-date-input");
+            var isFutures = chartData.meta && chartData.meta.market === 'futures';
+
+            // === 期货实时模式 ===
+            if (isFutures && isRealtimeMode) {
+                if (delta > 0) return; // 右箭头：已在最新，无需操作
+                // 左箭头：先记录进入复盘前的最后一根K线日期，再断开SSE进入复盘
+                if (chartData.klines.length > 0) {
+                    _futuresRealtimeBorderDate = chartData.klines[chartData.klines.length - 1].date;
+                    input.value = klineDateToInput(_futuresRealtimeBorderDate, currentFreq);
+                }
+                disconnectRealtime();
+                isRealtimeMode = false;
+            }
+
+            var currentEndDate = inputDateToApi(input.value.trim(), currentFreq);
+            if (!currentEndDate) return;
+
+            _dateStepIgnore = true;
+            fetchStep(currentEndDate, delta);
+            _dateStepIgnore = false;
+        };
+
+        // 发送 step 请求，后端在 full_records 中偏移定位，全自动处理节假日/调休/跨周
+        function fetchStep(endDate, delta) {
+            var code = chartData.meta.symbol;
+            var freq = currentFreq;
+            var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+                + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                + (isDualWindow && chartData.meta.market === 'futures' && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
+            document.getElementById("goto-date-input").disabled = true;
+            document.getElementById("loading").classList.remove("hidden");
+            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
+            fetch(url)
+                .then(resp => {
+                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
+                    return resp.json();
+                })
+                .then(data => {
+                    chartData = data;
+                    updateRestartBtn();
+                    updateDualBtn();
+                    if (isDualWindow && data.sub) {
+                        dualSubData = data.sub;
+                        dualSubViewCount = 377;
+                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                        if (dualSubData.klines.length < dualSubViewCount) dualSubViewOffset = 0;
+                    }
+                    viewCount = 377;
+                    adjustViewForSavedPoint();
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    if (chartData.klines.length < viewCount) viewOffset = 0;
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    var lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
+                    resizeCanvas();
+                    render();
+                    loadAnnotations();
+                    // 期货复盘模式：右箭头返回的最后一根K线 > 进入复盘时的边界 → 重连实时
+                    var isFutures = chartData.meta && chartData.meta.market === 'futures';
+                    if (isFutures && delta > 0 && _futuresRealtimeBorderDate) {
+                        if (chartData.klines[chartData.klines.length - 1].date >= _futuresRealtimeBorderDate) {
+                            var savedDate = chartData.meta.saved_selection_date || null;
+                            if (isDualWindow && dualSubFreq) {
+                                // 双窗口模式：保持用户独立选择的下窗周期，重连双窗口SSE
+                                connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq);
+                            } else {
+                                connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
+                            }
+                        }
+                    }
+                })
+                .catch(err => { alert("箭头跳转失败: " + err.message); })
+                .finally(() => {
+                    document.getElementById("loading").classList.add("hidden");
+                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                    document.getElementById("goto-date-input").disabled = false;
+                });
+        }
+
+        window.updateWeekday = function() {
+            var input = document.getElementById("goto-date-input");
+            var span = document.getElementById("date-weekday");
+            var v = input.value.trim();
+            if (!v) { span.textContent = ""; return; }
+            // 提取日期部分（兼容 datetime-local 的 T 分隔符）
+            var datePart = v.split("T")[0];
+            var parts = datePart.split('-');
+            if (parts.length !== 3) { span.textContent = ""; return; }
+            var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+            var weekNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+            span.textContent = weekNames[d.getDay()];
+        };
+
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.NavToolbar = {
+            switchFreq, gotoDate, dateStep, fetchStep, handleDateChange,
+        handleDateInput, onCoordSystemChange, initCoordSystemRadio,
+        updateFreqButtonStates, updateWeekday, adjustViewForSavedPoint
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] SymbolSearch —— 证券搜索组件（搜索 / 历史 / 代码加载）
+        // 对外接口（ChanApp.components.SymbolSearch）: loadStock, doSearch, showHistory, selectHistory, clearHistory, normalizeCode, isFuturesCode, getHistory, saveHistory, removeHistory
+// ══════════════════════════════════════════════════════════════════
+
+        // 判断是否为期货/期指代码
+        function isFuturesCode(code) {
+            return code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code);
+        }
+
+        // 归一化股票代码：将 880974.SH / SH880974 / sh880974 统一为 sh880974
+        function normalizeCode(code) {
+            if (!code) return "";
+            const c = code.trim();
+            // 期货/期指代码（含 KQ.m@、KQ.i@、大写.大写 格式）不做转换
+            if (c.includes('KQ.m@') || c.includes('KQ.i@') || c.includes('KQD.m@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
+            // 匹配 880974.SH 或 880974.sh 格式 → 转为 sh880974
+            const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ|DS)$/i);
+            if (dotMatch) return dotMatch[2].toLowerCase() + dotMatch[1];
+            // 匹配 SH880974 / sz000001 格式 → 转为小写前缀
+            const prefixMatch = c.match(/^(SH|SZ|HK|BJ|DS)(\d+)$/i);
+            if (prefixMatch) return prefixMatch[1].toLowerCase() + prefixMatch[2];
+            return c;
+        }
+
+        function isFixedCode(code) { return FIXED_CODES.has(normalizeCode(code)); }
+
+        function getHistory() {
+            try {
+                let list = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
+                // 兼容旧格式（纯字符串）-> 转换为新格式（{code, name}）
+                return list.map(c => typeof c === 'string' ? {code: c, name: ""} : c);
+            } catch(e) { return []; }
+        }
+
+        function saveHistory(code, name) {
+            const normCode = normalizeCode(code);
+            // 固定快捷入口不写入历史，避免与顶部固定区重复
+            if (isFixedCode(normCode)) return;
+            let list = getHistory();
+            list = list.filter(c => normalizeCode(c.code) !== normCode);
+            list.unshift({code: normCode, name: name || ""});
+            if (list.length > MAX_HISTORY) list = list.slice(0, MAX_HISTORY);
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+        }
+
+        function removeHistory(code) {
+            const normCode = normalizeCode(code);
+            let list = getHistory().filter(c => normalizeCode(c.code) !== normCode);
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
+            showHistory();
+        }
+
+        window.clearHistory = function() {
+            localStorage.removeItem(HISTORY_KEY);
+            // 仅清除用户历史，固定快捷入口保留并重新渲染
+            showHistory();
+        };
+
+        window.clearInput = function() {
+            const input = document.getElementById("stock-code-input");
+            input.value = "";
+            document.getElementById("input-clear").style.display = "none";
+        };
+
+        window.onInputChange = function() {
+            const input = document.getElementById("stock-code-input");
+            document.getElementById("input-clear").style.display = input.value ? "" : "none";
+            selectedIndex = -1;
+            const val = input.value.trim();
+            if (!val) {
+                document.getElementById("stock-history").classList.remove("show");
+                return;
+            }
+            // 带市场前缀+完整代码（如 sh600519、sz000001、hk00700），不搜索
+            // 要求前缀后紧跟5~6位数字且为完整输入，避免 SZ5 这样的拼音缩写被误拦截
+            if (/^(sh|sz|bj|hk)\d{5,6}$/i.test(val)) {
+                document.getElementById("stock-history").classList.remove("show");
+                return;
+            }
+            // 纯数字（6位）也搜索，可能有同名（如000001=平安银行/上证指数）
+            // 拼音或中文，延迟搜索
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => doSearch(val), 300);
+        };
+
+        window.onInputKeydown = function(e) {
+            const el = document.getElementById("stock-history");
+            if (!el.classList.contains("show") || !searchResults.length) {
+                if (e.key === "Enter") loadStock();
+                return;
+            }
+            const items = el.querySelectorAll(".stock-history-item");
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                selectedIndex = (selectedIndex + 1) % items.length;
+                updateSearchSelection(items);
+            } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                selectedIndex = (selectedIndex - 1 + items.length) % items.length;
+                updateSearchSelection(items);
+            } else if (e.key === "Enter") {
+                e.preventDefault();
+                if (selectedIndex >= 0 && selectedIndex < searchResults.length) {
+                    const item = searchResults[selectedIndex];
+                    selectHistory(item.market === 'futures' ? item.code : item.market + item.code);
+                } else {
+                    loadStock();
+                }
+            } else if (e.key === "Escape") {
+                el.classList.remove("show");
+            }
+        };
+
+        window.updateSearchSelection = function(items) {
+            items.forEach((item, i) => {
+                item.style.background = i === selectedIndex ? "#0f3460" : "";
+                item.style.color = i === selectedIndex ? "#e0e0e0" : "";
+            });
+        };
+
+        window.doSearch = function(keyword) {
+            fetch("/api/search?q=" + encodeURIComponent(keyword))
+                .then(r => r.json())
+                .then(data => {
+                    const el = document.getElementById("stock-history");
+                    if (data.need_refresh) {
+                        el.innerHTML = '<div class="stock-history-item" style="color:#e94560;cursor:default;padding:10px;">' + (data.msg || '') + '</div>';
+                        el.classList.add("show");
+                        return;
+                    }
+                    searchResults = data.results || [];
+                    selectedIndex = -1;
+                    if (!searchResults.length) {
+                        el.classList.remove("show");
+                        return;
+                    }
+                    el.innerHTML = searchResults.map((item, idx) => {
+                        const safeCode = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+                        const safeMarket = item.market.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+                        const fullCode = item.market === 'futures' ? safeCode : safeMarket + safeCode;
+                        const displayCode = item.market === 'futures' ? item.code : item.market + item.code;
+                        const typeMap = {"深A":"深A","沪A":"沪A","深B":"深B","沪B":"沪B","指数":"指数","基金":"基金","场外基金":"场外基金","港股":"港股"};
+                        const typeLabel = typeMap[item.type] || item.type;
+                        return `<div class="stock-history-item" data-idx="${idx}"><span onclick="selectHistory('${fullCode}')" style="flex:1;display:block">${displayCode} - ${item.name} (${item.pinyin}) <span style="color:#888;font-size:11px;margin-left:8px">${typeLabel}</span></span></div>`;
+                    }).join("");
+                    el.classList.add("show");
+                    // 焦点自动移到第一个候选
+                    selectedIndex = 0;
+                    updateSearchSelection(el.querySelectorAll(".stock-history-item"));
+                })
+                .catch(() => {});
+        };
+
+        window.toggleInputClear = function() {
+            const input = document.getElementById("stock-code-input");
+            document.getElementById("input-clear").style.display = input.value ? "" : "none";
+        };
+
+        window.removeHistory = removeHistory;
+
+        window.showHistory = function() {
+            const list = getHistory();
+            const el = document.getElementById("stock-history");
+            // 重置搜索态，确保历史视图下键盘导航不会误用旧的搜索结果
+            searchResults = [];
+            selectedIndex = -1;
+            // 顶部固定快捷入口区（不可删除）
+            let html = FIXED_INDICES.map(item => {
+                const safe = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+                return `<div class="stock-history-item"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${item.code} - ${item.name}</span></div>`;
+            }).join("");
+            // 用户浏览历史区（可单条删除）；首项顶部加分割线，与底部"清除全部"风格一致
+            html += list.map((c, i) => {
+                const safe = c.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
+                const label = c.name ? c.code + " - " + c.name : c.code;
+                const sepStyle = i === 0 ? 'border-top:1px solid #0f3460;' : '';
+                return `<div class="stock-history-item" style="${sepStyle}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
+            }).join("");
+            // 有用户历史时才显示"清除全部"（仅清用户历史，不影响固定项）
+            if (list.length) {
+                html += `<div class="stock-history-clear" onclick="event.stopPropagation();clearHistory()">清除全部</div>`;
+            }
+            el.innerHTML = html;
+            el.classList.add("show");
+        };
+
+        window.loadStock = function() {
+            const code = document.getElementById("stock-code-input").value.trim();
+            if (!code) return;
+            // 切换股票时取消区间选择
+            if (_rangeSelect.mode === 'SELECTED_A') {
+                _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+            }
+            document.getElementById("stock-history").classList.remove("show");
+            document.getElementById("loading").classList.remove("hidden");
+            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS","A50","CN"]);
+            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
+            // 判断切换前是否为期指
+            const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
+            // 同类继承上一周期，异类使用默认周期
+            let fetchFreq;
+            if (wasFutures && isFuturesCode) {
+                // 期指C → 期指D：保持C的周期
+                fetchFreq = lastFuturesFreq;
+            } else if (!wasFutures && !isFuturesCode) {
+                // 股票A → 股票B：保持A的周期
+                fetchFreq = lastStockFreq;
+            } else if (wasFutures && !isFuturesCode) {
+                // 期指 → 股票：默认日K，重置为单窗口，同时彻底清理所有期货数据
+                disconnectRealtime();
+                fetch("/api/futures_cleanup").catch(() => {});
+                fetchFreq = 'd';
+                if (isDualWindow) {
+                    isDualWindow = false;
+                    activeDualWindow = 'main';
+                    dualSubData = null;
+                    dualSubFreq = '';
+                    dualHighlightRange = null;
+                    dualRedRange = null;
+                    dualNewZsData = null;
+                    dualShowNewZs = false;
+                    dualNewZsLeftDate = "";
+                    dualNewZsRightDate = "";
+                    document.getElementById("btn-dual").classList.remove("active");
+                    const dbg = document.getElementById("redframe-debug");
+                    if (dbg) dbg.style.display = "none";
+                    // 恢复单canvas布局
+                    const container = document.getElementById("chart-container");
+                    const mainDiv = document.getElementById("chart-main");
+                    const subDiv = document.getElementById("chart-sub");
+                    if (mainDiv) mainDiv.remove();
+                    if (subDiv) subDiv.remove();
+                    canvas = mainCanvas; ctx = mainCtx;
+                    container.appendChild(canvas);
+                    resizeCanvas();
+                }
+            } else {
+                // 股票 → 期指：默认5分钟，重置为单窗口
+                // 股票和期货周期体系不同（股票: w/d/30m/5m，期货: 30m/5m/1m/15s），
+                // 下窗周期无法跨市场继承，强行继承会导致下窗周期>上窗周期
+                fetchFreq = '5m';
+                if (isDualWindow) {
+                    isDualWindow = false;
+                    activeDualWindow = 'main';
+                    dualSubData = null;
+                    dualSubFreq = '';
+                    dualHighlightRange = null;
+                    dualRedRange = null;
+                    dualNewZsData = null;
+                    dualShowNewZs = false;
+                    dualNewZsLeftDate = "";
+                    dualNewZsRightDate = "";
+                    document.getElementById("btn-dual").classList.remove("active");
+                    const dbg = document.getElementById("redframe-debug");
+                    if (dbg) dbg.style.display = "none";
+                    // 恢复单canvas布局
+                    const container = document.getElementById("chart-container");
+                    const mainDiv = document.getElementById("chart-main");
+                    const subDiv = document.getElementById("chart-sub");
+                    if (mainDiv) mainDiv.remove();
+                    if (subDiv) subDiv.remove();
+                    canvas = mainCanvas; ctx = mainCtx;
+                    container.appendChild(canvas);
+                    resizeCanvas();
+                }
+            }
+            currentFreq = fetchFreq;
+            updateDateInputType();
+            if (isFuturesCode) {
+                updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
+                connectRealtimeInit(code, fetchFreq);
+                return;
+            }
+            updateFreqButtonStates(false); // 股票：禁用 1m/15s，启用 d/w
+            fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
+                .then(resp => {
+                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
+                    return resp.json();
+                })
+                .then(data => {
+                    // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 data.meta.name 会崩溃）
+                    if (!data || !data.meta) {
+                        const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
+                        throw new Error("查询失败: " + errMsg);
+                    }
+                    saveHistory(code, data.meta.name);
+                    chartData = data;
+                    updateRestartBtn();
+                    updateDualBtn();
+                    // 根据返回数据的周期同步按钮状态
+                    let returnedFreq;
+                    if (data.meta.freq === "5分钟") {
+                        returnedFreq = "5m";
+                    } else if (data.meta.freq === "30分钟") {
+                        returnedFreq = "30m";
+                    } else if (data.meta.freq === "周线") {
+                        returnedFreq = "w";
+                    } else {
+                        returnedFreq = "d";
+                    }
+                    currentFreq = returnedFreq;
+                    lastStockFreq = currentFreq; // 更新股票周期记忆
+                    updateDateInputType();
+                    updateFreqButtonStates(false);
+                    viewCount = 377;
+                    adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    // K线不足一屏时右对齐
+                    if (chartData.klines.length < viewCount) {
+                        viewOffset = 0;
+                    }
+                    // K线不足一屏时右对齐
+                    if (chartData.klines.length < viewCount) {
+                        viewOffset = 0;
+                    }
+                    // 保持当前开关状态，不重置（切换个股时继承）
+                    document.getElementById("btn-fx").classList.toggle("active", showFx);
+                    document.getElementById("btn-bi").classList.toggle("active", showBi);
+                    document.getElementById("btn-zs").classList.toggle("active", showZs);
+                    document.getElementById("btn-seg").classList.toggle("active", showSeg);
+                    document.getElementById("btn-bsp").classList.toggle("active", showBsp);
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday();
+                    resizeCanvas();
+                    // 双窗口模式下同时加载下面窗口数据
+                    if (isDualWindow) {
+                        const subFreq = getDualSubFreq(currentFreq);
+                        if (subFreq) {
+                            dualSubFreq = subFreq;
+                            if (data.sub) {
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
+                                }
+                            }
+                        }
+                    }
+                    document.getElementById("loading").classList.add("hidden");
+                    render();
+                    generateStats();
+                    loadAnnotations();
+                    saveLastState(); // 保存状态
+                    // 期货/期指：切换到实时模式
+                    startRealtimeIfFutures(data);
+                })
+                .catch(err => {
+                    alert("查询失败: " + err.message);
+                    document.getElementById("loading").classList.add("hidden");
+                });
+        };
+
+        window.selectHistory = function(code) {
+            document.getElementById("stock-code-input").value = code;
+            document.getElementById("stock-history").classList.remove("show");
+            window.loadStock();
+        };
+
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.SymbolSearch = {
+            loadStock, doSearch, showHistory, selectHistory, clearHistory,
+        normalizeCode, isFuturesCode, getHistory, saveHistory, removeHistory
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] StatsPanel —— 统计面板组件（左侧信息 / 复盘滑块联动）
+        // 对外接口（ChanApp.components.StatsPanel）: toggleStats, generateStats, updateSlider, _onClickOutsideStats
+// ══════════════════════════════════════════════════════════════════
+
         window.toggleStats = function() {
             var panel = document.getElementById("stats-panel");
             var btn = document.getElementById("btn-stats");
@@ -3251,6 +4193,7 @@
                 }, 0);
             }
         };
+
         function _onClickOutsideStats(e) {
             var panel = document.getElementById("stats-panel");
             var btn = document.getElementById("btn-stats");
@@ -3260,9 +4203,83 @@
             }
         }
 
-        // ── 盘后数据下载 ──
-        var _downloadTimer = null;
-        var _downloadRunning = false;
+        function generateStats() {
+            if (!chartData) return;
+            const klines = getVisibleKlines();
+            if (!klines.length) return;
+            const startDate = klines[0].date, endDate = klines[klines.length - 1].date;
+            const visBis = chartData.bis.filter(bi => bi.sdt >= startDate && bi.edt <= endDate);
+            const visFxs = chartData.fxs.filter(fx => fx.date >= startDate && fx.date <= endDate);
+            const allBis = chartData.bis, allFxs = chartData.fxs;
+            let visUp = 0, visDown = 0, totalPower = 0, maxPower = 0;
+            visBis.forEach(bi => { if (bi.direction === "up") visUp++; else visDown++; totalPower += bi.power; if (bi.power > maxPower) maxPower = bi.power; });
+            const avgPower = visBis.length > 0 ? (totalPower / visBis.length).toFixed(2) : 0;
+            let allUp = 0, allDown = 0;
+            allBis.forEach(bi => { if (bi.direction === "up") allUp++; else allDown++; });
+            document.getElementById("stats-content").innerHTML = `
+                <div class="stats-row"><span class="stats-label">可见笔数</span><span class="stats-value">${visBis.length} / ${allBis.length}</span></div>
+                <div class="stats-row"><span class="stats-label">向上笔</span><span class="stats-value" style="color:#FF4444">${visUp} / ${allUp}</span></div>
+                <div class="stats-row"><span class="stats-label">向下笔</span><span class="stats-value" style="color:#00DD00">${visDown} / ${allDown}</span></div>
+                <div class="stats-row"><span class="stats-label">平均力度</span><span class="stats-value">${avgPower}</span></div>
+                <div class="stats-row"><span class="stats-label">最大力度</span><span class="stats-value" style="color:#FFD700">${maxPower.toFixed(2)}</span></div>
+                <div class="stats-row"><span class="stats-label">顶分型</span><span class="stats-value" style="color:#FF4444">${visFxs.filter(f=>f.mark==="G").length} / ${allFxs.filter(f=>f.mark==="G").length}</span></div>
+                <div class="stats-row"><span class="stats-label">底分型</span><span class="stats-value" style="color:#00DD00">${visFxs.filter(f=>f.mark==="D").length} / ${allFxs.filter(f=>f.mark==="D").length}</span></div>`;
+        }
+
+        function updateSlider() {
+            // 双窗口模式下，使用激活窗口的数据
+            const data = (isDualWindow && activeDualWindow === 'sub' && dualSubData) ? dualSubData : chartData;
+            const vo = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewOffset : viewOffset;
+            const vc = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewCount : viewCount;
+            if (!data || !data.klines.length) return;
+            const track = document.getElementById("slider-track");
+            const win = document.getElementById("slider-window");
+            const label = document.getElementById("slider-label");
+            const totalKlines = data.klines.length;
+            const trackWidth = track.clientWidth;
+            if (trackWidth <= 0) return;
+
+            const windowWidth = Math.max(10, (vc / totalKlines) * trackWidth);
+            const maxOffset = Math.max(0, totalKlines - vc);
+            const windowLeft = (vo / totalKlines) * trackWidth;
+
+            win.style.width = windowWidth + "px";
+            win.style.left = Math.max(0, Math.min(windowLeft, trackWidth - windowWidth)) + "px";
+
+            const displayCount = Math.round(vc);
+            const displayOffset = Math.round(vo);
+            const startIdx = Math.max(0, displayOffset);
+            const endIdx = Math.min(totalKlines - 1, startIdx + displayCount - 1);
+            const startDate = data.klines[startIdx].date.slice(0, 10);
+            const endDate = data.klines[endIdx].date.slice(0, 10);
+            const globalStart = Math.max(0, Math.floor(vo));
+            const globalEnd = Math.min(totalKlines, globalStart + vc);
+            const visBis = data.bis.filter(bi => {
+                const si = data.klines.findIndex(k => k.date === bi.sdt);
+                return si >= globalStart && si < globalEnd;
+            });
+            const visFxs = data.fxs.filter(fx => {
+                const fi = data.klines.findIndex(k => k.date === fx.date);
+                return fi >= globalStart && fi < globalEnd;
+            });
+            const visZs = data.zs.filter(zs => {
+                const si = data.klines.findIndex(k => k.date === zs.sdt);
+                return si >= globalStart && si < globalEnd;
+            });
+            const winLabel = isDualWindow ? (activeDualWindow === 'sub' ? '[下窗] ' : '[上窗] ') : '';
+            label.textContent = winLabel + startDate + " - " + endDate + "   [K线]: " + displayCount + "/" + totalKlines + "   [分型]: " + visFxs.length + "/" + data.fxs.length + "   [笔]: " + visBis.length + "/" + data.bis.length + "   [中枢]: " + visZs.length + "/" + data.zs.length;
+        }
+
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.StatsPanel = {
+            toggleStats, generateStats, updateSlider, _onClickOutsideStats
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] DownloadPanel —— 盘后下载面板组件（分类勾选 / 进度轮询）
+        // 对外接口（ChanApp.components.DownloadPanel）: toggleDownloadPanel, closeDownloadPanel, startDownload, stopDownload, _pollDownloadStatus, _buildCategories
+// ══════════════════════════════════════════════════════════════════
 
         window.toggleDownloadPanel = function() {
             var panel = document.getElementById("download-panel");
@@ -3419,6 +4436,18 @@
             document.getElementById("dl-btn-stop").style.display = "none";
         }
 
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.DownloadPanel = {
+            toggleDownloadPanel, closeDownloadPanel, startDownload,
+        stopDownload, _pollDownloadStatus, _buildCategories
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] BspSettingsPanel —— 买卖点设置弹窗组件（BSP 过滤 / 均线周期）
+        // 对外接口（ChanApp.components.BspSettingsPanel）: openBspSettings, closeBspSettings, onBspFilterChange, onMaPeriodChange, onShowBiIdxChange, bspFilterSelectAll, bspFilterSelectNone, maPeriodsSelectAll, maPeriodsSelectNone
+// ══════════════════════════════════════════════════════════════════
+
         // ── BSP买卖点类型过滤 + 均线周期设置 ──
         window.openBspSettings = function() {
             // 打开前同步当前过滤状态到复选框
@@ -3438,16 +4467,19 @@
             document.getElementById("bsp-filter-dialog").classList.add("show");
             document.getElementById("bsp-filter-overlay").classList.add("show");
         };
+
         window.closeBspSettings = function() {
             document.getElementById("bsp-filter-dialog").classList.remove("show");
             document.getElementById("bsp-filter-overlay").classList.remove("show");
         };
+
         // 即时生效：单个买卖点复选框变化
         window.onBspFilterChange = function(cb) {
             bspFilter[cb.value] = cb.checked;
             saveOverlaySettings();
             render();
         };
+
         // 即时生效：单个均线周期复选框变化
         window.onMaPeriodChange = function(cb) {
             if (cb.checked) maPeriods[cb.value] = true;
@@ -3455,11 +4487,13 @@
             saveOverlaySettings();
             render();
         };
+
         window.onShowBiIdxChange = function(cb) {
             showBiIdx = cb.checked;
             saveOverlaySettings();
             render();
         };
+
         window.bspFilterSelectAll = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
             for (var i = 0; i < cbs.length; i++) {
@@ -3469,6 +4503,7 @@
             saveOverlaySettings();
             render();
         };
+
         window.bspFilterSelectNone = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
             for (var i = 0; i < cbs.length; i++) {
@@ -3478,6 +4513,7 @@
             saveOverlaySettings();
             render();
         };
+
         window.maPeriodsSelectAll = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="ma-period"]');
             for (var i = 0; i < cbs.length; i++) {
@@ -3487,6 +4523,7 @@
             saveOverlaySettings();
             render();
         };
+
         window.maPeriodsSelectNone = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="ma-period"]');
             for (var i = 0; i < cbs.length; i++) {
@@ -3497,135 +4534,18 @@
             render();
         };
 
-        // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态
-        function updateRestartBtn() {
-            var hasPoint = chartData && chartData.meta && chartData.meta.saved_selection_date;
-            var isReplay = chartData && chartData.meta && chartData.meta.is_replay;
-            _restartEnabled = hasPoint && !isDualWindow && !isReplay;
-        }
 
-        function updateDualBtn() {
-            // 双窗中始终可点（用于退出），仅在非双窗时按入口规则约束
-            if (isDualWindow) {
-                document.getElementById("btn-dual").disabled = false;
-                return;
-            }
-            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
-            if (isFutures) {
-                // 期货：30m/5m/1m 可双窗口，15s 不可
-                document.getElementById("btn-dual").disabled = (currentFreq === '15s');
-            } else {
-                // 股票：w/d/30m 可双窗口，5m 不可
-                document.getElementById("btn-dual").disabled = (currentFreq === '5m');
-            }
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.BspSettingsPanel = {
+            openBspSettings, closeBspSettings, onBspFilterChange,
+        onMaPeriodChange, onShowBiIdxChange, bspFilterSelectAll, bspFilterSelectNone,
+        maPeriodsSelectAll, maPeriodsSelectNone
         };
 
-        // ============================================================
-        // 重启：清除选点，按冷启动重新加载
-        // ============================================================
-        window.cancelSelectedPoint = function() {
-            document.getElementById("annotation-menu").classList.remove("show");
-            if (!chartData || !chartData.meta) return;
-            // 双窗口模式和复盘模式不允许重置
-            if (isDualWindow) { showDualToast("双窗口模式，不支持重置"); return; }
-            if (chartData.meta.is_replay) { showDualToast("复盘模式，不支持重置"); return; }
-            const code = chartData.meta.symbol;
-            const freq = currentFreq;
-            const isFutures = chartData.meta.market === 'futures';
-            document.getElementById("loading").classList.remove("hidden");
-            document.querySelector(".loading-text").textContent = "正在重置...";
-
-            // 期货：清除选点 + 冷启动重连SSE（无start_time）
-            if (isFutures) {
-                fetch("/api/futures_clear_saved_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq)
-                    .then(resp => resp.json())
-                    .then(() => {
-                        // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
-                        // 如果提前隐藏loading，会导致SSE重连失败时没有任何加载反馈
-                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                        connectRealtimeInit(code, freq);  // 冷启动，不带start_time
-                    })
-                    .catch(err => {
-                        document.getElementById("loading").classList.add("hidden");
-                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                        alert("重置失败: " + err.message);
-                    });
-                return;
-            }
-
-            // 股票：清除选点 + 冷启动HTTP
-            // Step 1: 调用后端清除CSV中该周期选点
-            fetch("/api/clear_saved_point?code=" + encodeURIComponent(code) + "&freq=" + freq)
-                .then(resp => resp.json())
-                .then(() => {
-                    // Step 2: 冷启动重新加载
-                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
-                })
-                .then(resp => {
-                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
-                    return resp.json();
-                })
-                .then(data => {
-                    // 全文替换 chartData
-                    chartData = data;
-                    if (chartData.meta.freq === "5分钟") {
-                        currentFreq = "5m";
-                    } else if (chartData.meta.freq === "30分钟") {
-                        currentFreq = "30m";
-                    } else if (chartData.meta.freq === "周线") {
-                        currentFreq = "w";
-                    } else {
-                        currentFreq = "d";
-                    }
-                    updateDateInputType();
-                    document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
-                    document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
-                    document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
-                    document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
-                    viewCount = 377;
-                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                    if (chartData.klines.length < viewCount) {
-                        viewOffset = 0;
-                    }
-                    document.getElementById("stock-name").textContent = chartData.meta.name;
-                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                    document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                    document.getElementById("goto-date-input").value = lastDate;
-                    updateWeekday();
-                    document.getElementById("loading").classList.add("hidden");
-                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    resizeCanvas();
-                    render();
-                    generateStats();
-                    updateRestartBtn();
-                    updateDualBtn();
-                    // 双窗口模式：从 data.sub 恢复子级别数据
-                    if (isDualWindow && data.sub) {
-                        dualSubData = data.sub;
-                        dualSubViewCount = 377;
-                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                        if (dualSubData.klines.length < dualSubViewCount) {
-                            dualSubViewOffset = 0;
-                        }
-                    }
-                })
-                .catch(err => {
-                    document.getElementById("loading").classList.add("hidden");
-                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    alert("重置失败: " + err.message);
-                });
-        };
-
-        // ============================================================
-        // 股票买卖点扫描（逐只扫描，实时进度，可中断）
-        // ============================================================
-        let _scanRunning = false;
-        let _scanAborted = false;
-        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
-        let _scanRecentDays = 1; // 最近N根K线，默认1
-        let _scanSources = ["zxg"]; // 多选：["zxg", "page_index", "tdxhy2", "tdxhy3"]
-        let _scanFreq = "d"; // 扫描周期，默认日K
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] ScanPanel —— 扫描面板组件（模式对话框 / 逐只扫描 / 结果渲染 / 保存自选）
+        // 对外接口（ChanApp.components.ScanPanel）: startScanZxg, doStartScan, scanModeDialogConfirm, scanModeDialogCancel, renderScanResults, renderFxDScanResults, renderMaScanResults, saveScanToZxg, closeScanPanel, toggleScanMinimize, loadScanResult, refreshStockNames, updateScanSaveBtn, scanSourceSelectAll, scanSourceSelectNone
+// ══════════════════════════════════════════════════════════════════
 
         // 扫描模式切换时，控制"最近N根"输入框的灰化状态
         // 标注扫描：只要有标注就命中，与日期无关，输入框置灰；扫描来源也置灰
@@ -3673,6 +4593,7 @@
                 }
             }
         }
+
         window.updateScanRecentDisabled = updateScanRecentDisabled;
 
         // 扫描来源→中文标签（多选时用顿号连接）
@@ -3690,12 +4611,11 @@
             var cbs = document.querySelectorAll('input[name="scan-source"]');
             for (var i = 0; i < cbs.length; i++) { cbs[i].checked = true; }
         };
+
         window.scanSourceSelectNone = function() {
             var cbs = document.querySelectorAll('input[name="scan-source"]');
             for (var i = 0; i < cbs.length; i++) { cbs[i].checked = false; }
         };
-
-        console.log("[扫描模块] v2-多选版 已加载 OK");
 
         // 生成买卖点标签HTML（最多显示6个，超出显示+N）
         function buildBspTagsHtml(buyPoints, sellPoints) {
@@ -4585,7 +5505,7 @@
                     btn.textContent = "股票扫描";
                     body.innerHTML = '<div class="scan-no-result">读取' + sourceLabel + '失败: ' + err.message + '</div>';
                 });
-        };
+        }
 
         // ============================================================
         // 股票名称刷新（原 GBBQ 刷新，现在仅刷新股票名称缓存）
@@ -4645,8 +5565,6 @@
                     status.style.display = "none";
                 });
         }
-
-
 
         function renderScanResults(results, total, skipped, interrupted) {
             var body = document.getElementById("scan-body");
@@ -4883,838 +5801,19 @@
             loadStock();
         };
 
-        window.switchFreq = function(freq) {
-            if (!chartData) return;
-            const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
-            // 期货双窗口下窗焦点：独立切换下窗周期，不联动上窗
-            if (isDualWindow && activeDualWindow === 'sub' && isFutures) {
-                if (dualSubFreq === freq) return;
-                // 校验：下窗周期必须严格小于上窗周期，否则弹窗提示并取消
-                if (freqLevel(freq) >= freqLevel(currentFreq)) {
-                    alert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
-                        + "，无法切换到" + freqLabel(freq));
-                    return;
-                }
-                // 切换周期时取消区间选择
-                if (_rangeSelect.mode === 'SELECTED_A') {
-                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                }
-                dualSubFreq = freq;
-                updateDateInputType();
-                updateDualBtn();
-                updateFreqButtonStates(isFutures);
-                const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
-                if (code) {
-                    document.getElementById("loading").classList.remove("hidden");
-                    disconnectRealtime();
-                    connectRealtimeDual(code, currentFreq, freq);
-                }
-                return;
-            }
-            if (currentFreq === freq) return;
-            // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
-            if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
-                alert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
-                    + "，无法切换到" + freqLabel(freq));
-                return;
-            }
-            // 切换周期时取消区间选择
-            if (_rangeSelect.mode === 'SELECTED_A') {
-                _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-            }
-            currentFreq = freq;
-            updateDateInputType();
-            updateDualBtn();
-            if (isFutures) {
-                lastFuturesFreq = freq; // 期货上下文切换周期，记录
-            } else {
-                lastStockFreq = freq;   // 股票上下文切换周期，记录
-            }
-            updateFreqButtonStates(isFutures);
-            // 股票双窗口：切换周期始终作用于上窗，切换后焦点回到上窗
-            if (isDualWindow && !isFutures) {
-                activeDualWindow = 'main';
-                updateActiveWindowClass();
-                updateSlider();
-            }
-            // 切换周期后重新加载数据
-            const code = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
-            if (code) {
-                document.getElementById("loading").classList.remove("hidden");
-                // 期货：跳过HTTP，直接重连SSE（初始快照+增量合一）
-                if (isFutures) {
-                    disconnectRealtime();
-                    if (isDualWindow) {
-                        // 双窗口模式：上窗周期变，下窗保持不变
-                        connectRealtimeDual(code, freq, dualSubFreq);
-                    } else {
-                        connectRealtimeInit(code, freq);
-                    }
-                    return;
-                }
-                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
-                    .then(resp => {
-                        if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
-                        return resp.json();
-                    })
-                    .then(data => {
-                        chartData = data;
-                        updateRestartBtn();
-                        updateDualBtn();
-                        viewCount = 377;
-                        adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
-                        viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                        // K线不足一屏时右对齐
-                        if (chartData.klines.length < viewCount) {
-                            viewOffset = 0;
-                        }
-                        document.getElementById("stock-name").textContent = chartData.meta.name;
-                        document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                        document.title = "缠论分析 - " + chartData.meta.name;
-                        const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq);
-                        document.getElementById("goto-date-input").value = lastDate;
-                        updateWeekday();
-                        // 双窗口模式：从 data.sub 获取子级别数据（方案B）
-                        if (isDualWindow) {
-                            const newSubFreq = getDualSubFreq(freq);
-                            if (newSubFreq) {
-                                dualSubFreq = newSubFreq;
-                                if (data.sub) {
-                                    dualSubData = data.sub;
-                                    dualSubViewCount = 377;
-                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                    if (dualSubData.klines.length < dualSubViewCount) {
-                                        dualSubViewOffset = 0;
-                                    }
-                                }
-                            } else {
-                                // 新周期是5m，双窗口已关闭
-                            }
-                        }
-                        document.getElementById("loading").classList.add("hidden");
-                        render();
-                        generateStats();
-                        loadAnnotations();
-                        saveLastState(); // 保存状态
-                        startRealtimeIfFutures(data);
-                    })
-                    .catch(err => {
-                        alert("切换周期失败: " + err.message);
-                        document.getElementById("loading").classList.add("hidden");
-                    });
-            }
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.ScanPanel = {
+            startScanZxg, doStartScan, scanModeDialogConfirm, scanModeDialogCancel,
+        renderScanResults, renderFxDScanResults, renderMaScanResults,
+        saveScanToZxg, closeScanPanel, toggleScanMinimize, loadScanResult,
+        refreshStockNames, updateScanSaveBtn, scanSourceSelectAll, scanSourceSelectNone
         };
 
-        // 根据保存的选点日期，动态调整 viewCount 和 viewOffset
-        // 选点后后端已过滤，klines只包含选点之后的K线，直接全部显示
-        function adjustViewForSavedPoint() {
-            if (!chartData || !chartData.meta) return;
-            if (!chartData.meta.saved_selection_date) return;
-            if (!chartData.klines || chartData.klines.length === 0) return;
-            viewCount = chartData.klines.length;
-            viewOffset = 0;
-        }
-
-        window.gotoDate = function() {
-            // 键盘Enter提供了精确日期，应在重置前捕获，用于跳过 isToday 安全网
-            const keyEnter = _dateKeyEnter;
-            // 重置所有日期输入标志位，避免上次手动输入/键盘操作阻塞后续日历点击
-            _dateKeyEnter = false;
-            _dateKeyArrow = false;
-            _dateManualTyping = false;
-            _datePickerInteracted = false;
-            _datePickerInputCount = 0;
-            if (!chartData) return;
-            const code = chartData.meta.symbol;
-            const freq = currentFreq;
-            const dateStr = document.getElementById("goto-date-input").value.trim();
-            if (!dateStr) return;
-            const apiDate = inputDateToApi(dateStr, freq);
-            // 日期是今天 → 冷启动（不传 end_date，加载全部K线）
-            // 用本地日期避免 UTC 时区偏移（如 UTC+8 凌晨 0-8 点 toISOString 会返回昨天）
-            const now = new Date();
-            const todayStr = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0');
-            const isToday = dateStr.startsWith(todayStr);
-            // 期货：判断是否"回到最新/实时"——请求时间 ≥ 最后一根K线时间才算
-            // （日内期货所有K线都是今天，不能用 isToday 判断，否则所有日内复盘都被拦截）
-            const isFutures = chartData.meta.market === 'futures';
-            const lastKlineInput = (chartData.klines && chartData.klines.length > 0)
-                ? klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq)
-                : "";
-            const wantLive = isFutures && dateStr >= lastKlineInput;
-            if (wantLive) {
-                document.getElementById("goto-date-input").disabled = true;
-                document.getElementById("loading").classList.remove("hidden");
-                document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
-                if (isDualWindow && dualSubFreq) {
-                    disconnectRealtime();
-                    // 双窗口模式：保持用户独立选择的下窗周期
-                    connectRealtimeDual(code, freq, dualSubFreq);
-                } else {
-                    // 保留选点起始时间（若有），与手选后的SSE重连逻辑一致
-                    const savedDate = chartData.meta.saved_selection_date || null;
-                    connectRealtimeInit(code, freq, savedDate);
-                }
-                // 不在这里隐藏loading，SSE的init事件回调会处理loading隐藏和input恢复
-                return;
-            }
-            // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
-            disconnectRealtime();
-            // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
-            // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
-            // 期货：wantLive已判断"回实时"，走到这里说明wantLive=false，始终传end_date
-            const needEndDate = isFutures ? true : (!isToday || keyEnter);
-            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
-                + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
-                + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
-            document.getElementById("goto-date-input").disabled = true;
-            document.getElementById("loading").classList.remove("hidden");
-            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
-            fetch(url)
-                .then(resp => {
-                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
-                    return resp.json();
-                })
-                .then(data => {
-                    chartData = data;
-                    updateRestartBtn();
-                    updateDualBtn();
-                    // 双窗口模式：从 data.sub 恢复子级别数据
-                    if (isDualWindow && data.sub) {
-                        dualSubData = data.sub;
-                        dualSubViewCount = 377;
-                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                        if (dualSubData.klines.length < dualSubViewCount) {
-                            dualSubViewOffset = 0;
-                        }
-                    }
-                    viewCount = 377;
-                    adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
-                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                    // K线不足一屏时右对齐
-                    if (chartData.klines.length < viewCount) {
-                        viewOffset = 0;
-                    }
-                    document.getElementById("stock-name").textContent = chartData.meta.name;
-                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                    document.title = "缠论分析 - " + chartData.meta.name;
-                    // 复盘后输入框显示实际最后一根K线日期
-                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                    document.getElementById("goto-date-input").value = lastDate;
-                    updateWeekday();
-                    resizeCanvas();
-                    render();
-                    loadAnnotations();
-                })
-                .catch(err => {
-                    alert("跳转失败: " + err.message);
-                })
-                .finally(() => {
-                    document.getElementById("loading").classList.add("hidden");
-                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    document.getElementById("goto-date-input").disabled = false;
-                });
-        };
-
-        let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false, _dateStepIgnore = false;
-        let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
-        let _dateFocusOriginal = "";       // onfocus 保存的原始值，用于 blur 恢复
-        let _datePickerInteracted = false; // datetime-local picker 中用户有过交互，blur 时不恢复原始值
-        let _datePickerInputCount = 0;     // datetime-local picker 打开后真实交互次数
-        window.handleDateKeydown = function(e) {
-            if (e.key === 'Enter') { _dateKeyEnter = true; gotoDate(); return; }
-            if (e.key.startsWith('Arrow')) { _dateKeyArrow = true; return; }
-            if (e.key !== 'Tab' && e.key !== 'Escape') { _dateManualTyping = true; }
-        };
-        window.handleDateChange = function() {
-            if (_dateStepIgnore) return;
-            updateWeekday();
-            // 键盘/手动输入 → 不触发（Enter 已在 handleDateKeydown 中处理）
-            if (_dateKeyEnter) { _dateKeyEnter = false; return; }
-            if (_dateKeyArrow) { _dateKeyArrow = false; return; }
-            if (_dateManualTyping) { _dateManualTyping = false; return; }
-            // input 已处理（datetime-local "今天"），change 跳过避免重复
-            if (_dateInputTriggered) { _dateInputTriggered = false; return; }
-            // datetime-local 正常完成（用户选完日期+小时+分钟，picker关闭）→ 触发
-            _dateFocusOriginal = "";
-            _datePickerInteracted = false;
-            _datePickerInputCount = 0;
-            // 期货兜底：Edge点击日历"今天"时handleDateInput的检测可能未触发，
-            // 此时dateStr的日期=今天但时间未变，wantLive可能为false，应强制设为23:59再判断
-            if (chartData && chartData.meta && chartData.meta.market === 'futures') {
-                var input2 = document.getElementById("goto-date-input");
-                if (input2.type === "datetime-local") {
-                    var now3 = new Date();
-                    var ts3 = now3.getFullYear() + '-' + String(now3.getMonth()+1).padStart(2,'0') + '-' + String(now3.getDate()).padStart(2,'0');
-                    if (input2.value.startsWith(ts3)) {
-                        input2.value = ts3 + 'T23:59';
-                    }
-                }
-            }
-            gotoDate();
-        };
-        window.handleDateBlur = function() {
-            const input = document.getElementById("goto-date-input");
-            var v = input.value;
-            // 期货兜底：复盘后点击日历"今天"，Edge的step="15"输入框可能不触发input/change事件
-            // 在blur时检测：如果当前处于复盘状态(chartData.meta.is_replay)且日期=今天 → 强制设23:59并触发gotoDate
-            if (chartData && chartData.meta && chartData.meta.market === 'futures'
-                && chartData.meta.is_replay && input.type === "datetime-local") {
-                var nowB = new Date();
-                var tsB = nowB.getFullYear() + '-' + String(nowB.getMonth()+1).padStart(2,'0') + '-' + String(nowB.getDate()).padStart(2,'0');
-                var datePart = v.split('T')[0] || "";
-                if (datePart === tsB) {
-                    // 用户点了"今天"但input/change未触发 → 直接恢复实时
-                    input.value = tsB + 'T23:59';
-                    _dateFocusOriginal = "";
-                    _datePickerInteracted = false;
-                    _datePickerInputCount = 0;
-                    gotoDate();
-                    return;
-                }
-            }
-            // picker 打开后用户未交互 → 恢复原始值
-            if (_dateFocusOriginal && !_datePickerInteracted) {
-                input.value = _dateFocusOriginal;
-                _dateFocusOriginal = "";
-            }
-            _dateFocusOriginal = "";
-            _datePickerInteracted = false;
-            _datePickerInputCount = 0;
-            v = input.value;
-            if (!v) return;
-            const parts = v.split('-');
-            if (parts.length === 3) {
-                const d = parseInt(parts[2], 10);
-                if (!isNaN(d) && d > 31) {
-                    input.value = parts[0] + '-' + parts[1] + '-31';
-                }
-            }
-            // 股票 datetime-local：小时超出盘中范围(09-15)则自动修正
-            if (input.type === "datetime-local" && chartData && chartData.meta && !isFuturesCode(chartData.meta.symbol)) {
-                var p = input.value.split('T');
-                if (p.length === 2) {
-                    var tp = p[1].split(':');
-                    var hh = parseInt(tp[0], 10);
-                    if (hh < 9) input.value = p[0] + 'T09:' + tp[1];
-                    else if (hh > 15) input.value = p[0] + 'T15:' + tp[1];
-                }
-            }
-            updateWeekday();
-        };
-        window.handleDateInput = function(e) {
-            const input = e.target;
-            const val = input.value;
-            if (!val) return;
-            // 年份部分超过4位时截断到4位
-            const firstDash = val.indexOf('-');
-            if (firstDash === -1) {
-                if (val.length > 4) {
-                    input.value = val.substring(0, 4);
-                    setTimeout(() => { try { input.setSelectionRange(5, 5); } catch(_) {} }, 10);
-                }
-            } else {
-                const yearStr = val.substring(0, firstDash);
-                if (yearStr.length > 4) {
-                    const rest = val.substring(firstDash);
-                    input.value = yearStr.substring(0, 4) + rest;
-                    setTimeout(() => { try { input.setSelectionRange(5, 5); } catch(_) {} }, 10);
-                }
-            }
-            updateWeekday();
-            // 键盘输入 → 不在此处理（等待 Enter 或 change）
-            if (_dateManualTyping || _dateKeyEnter || _dateKeyArrow) return;
-            // datetime-local 日历交互：
-            // - 用户选了日期/时间 → 标记 _datePickerInteracted，blur 时不再恢复原始值
-            // - 第1次交互，日期=今天 且 时间≠原始时间 → "今天"按钮，立即触发
-            // - 其他情况：不触发，等 change（正常完成选日期+小时+分钟后触发）
-            if (input.type === "datetime-local" && _dateFocusOriginal) {
-                _datePickerInteracted = true;
-                _datePickerInputCount++;
-                if (_datePickerInputCount === 1) {
-                    var curParts = val.split('T');
-                    var origParts = _dateFocusOriginal.split('T');
-                    var now2 = new Date();
-                    var todayStr = now2.getFullYear() + '-' + String(now2.getMonth()+1).padStart(2,'0') + '-' + String(now2.getDate()).padStart(2,'0');
-                    if (curParts.length === 2 && origParts.length === 2 && curParts[0] === todayStr && curParts[1] !== origParts[1]) {
-                        // "今天"按钮：日期=今天 且 时间变了 → 设为 23:59，立即触发
-                        input.value = curParts[0] + 'T23:59';
-                        _dateFocusOriginal = "";
-                        _datePickerInteracted = false;
-                        _datePickerInputCount = 0;
-                        _dateInputTriggered = true;
-                        gotoDate();
-                        return;
-                    }
-                }
-            }
-        };
-
-        // 期货：记录实时进入复盘时的边界日期（最后一根K线日期），右箭头至此自动重连
-        let _futuresRealtimeBorderDate = null;
-
-        window.dateStep = function(delta) {
-            if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
-            var input = document.getElementById("goto-date-input");
-            var isFutures = chartData.meta && chartData.meta.market === 'futures';
-
-            // === 期货实时模式 ===
-            if (isFutures && isRealtimeMode) {
-                if (delta > 0) return; // 右箭头：已在最新，无需操作
-                // 左箭头：先记录进入复盘前的最后一根K线日期，再断开SSE进入复盘
-                if (chartData.klines.length > 0) {
-                    _futuresRealtimeBorderDate = chartData.klines[chartData.klines.length - 1].date;
-                    input.value = klineDateToInput(_futuresRealtimeBorderDate, currentFreq);
-                }
-                disconnectRealtime();
-                isRealtimeMode = false;
-            }
-
-            var currentEndDate = inputDateToApi(input.value.trim(), currentFreq);
-            if (!currentEndDate) return;
-
-            _dateStepIgnore = true;
-            fetchStep(currentEndDate, delta);
-            _dateStepIgnore = false;
-        };
-
-        // 发送 step 请求，后端在 full_records 中偏移定位，全自动处理节假日/调休/跨周
-        function fetchStep(endDate, delta) {
-            var code = chartData.meta.symbol;
-            var freq = currentFreq;
-            var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
-                + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
-                + (isDualWindow && chartData.meta.market === 'futures' && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
-            document.getElementById("goto-date-input").disabled = true;
-            document.getElementById("loading").classList.remove("hidden");
-            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
-            fetch(url)
-                .then(resp => {
-                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
-                    return resp.json();
-                })
-                .then(data => {
-                    chartData = data;
-                    updateRestartBtn();
-                    updateDualBtn();
-                    if (isDualWindow && data.sub) {
-                        dualSubData = data.sub;
-                        dualSubViewCount = 377;
-                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                        if (dualSubData.klines.length < dualSubViewCount) dualSubViewOffset = 0;
-                    }
-                    viewCount = 377;
-                    adjustViewForSavedPoint();
-                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                    if (chartData.klines.length < viewCount) viewOffset = 0;
-                    document.getElementById("stock-name").textContent = chartData.meta.name;
-                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                    document.title = "缠论分析 - " + chartData.meta.name;
-                    var lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                    document.getElementById("goto-date-input").value = lastDate;
-                    updateWeekday();
-                    resizeCanvas();
-                    render();
-                    loadAnnotations();
-                    // 期货复盘模式：右箭头返回的最后一根K线 > 进入复盘时的边界 → 重连实时
-                    var isFutures = chartData.meta && chartData.meta.market === 'futures';
-                    if (isFutures && delta > 0 && _futuresRealtimeBorderDate) {
-                        if (chartData.klines[chartData.klines.length - 1].date >= _futuresRealtimeBorderDate) {
-                            var savedDate = chartData.meta.saved_selection_date || null;
-                            if (isDualWindow && dualSubFreq) {
-                                // 双窗口模式：保持用户独立选择的下窗周期，重连双窗口SSE
-                                connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq);
-                            } else {
-                                connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
-                            }
-                        }
-                    }
-                })
-                .catch(err => { alert("箭头跳转失败: " + err.message); })
-                .finally(() => {
-                    document.getElementById("loading").classList.add("hidden");
-                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    document.getElementById("goto-date-input").disabled = false;
-                });
-        }
-
-        window.updateWeekday = function() {
-            var input = document.getElementById("goto-date-input");
-            var span = document.getElementById("date-weekday");
-            var v = input.value.trim();
-            if (!v) { span.textContent = ""; return; }
-            // 提取日期部分（兼容 datetime-local 的 T 分隔符）
-            var datePart = v.split("T")[0];
-            var parts = datePart.split('-');
-            if (parts.length !== 3) { span.textContent = ""; return; }
-            var d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
-            var weekNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-            span.textContent = weekNames[d.getDay()];
-        };
-
-        const HISTORY_KEY = "chan_stock_history";
-        const MAX_HISTORY = 20;
-        // 归一化股票代码：将 880974.SH / SH880974 / sh880974 统一为 sh880974
-        function normalizeCode(code) {
-            if (!code) return "";
-            const c = code.trim();
-            // 期货/期指代码（含 KQ.m@、KQ.i@、大写.大写 格式）不做转换
-            if (c.includes('KQ.m@') || c.includes('KQ.i@') || c.includes('KQD.m@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
-            // 匹配 880974.SH 或 880974.sh 格式 → 转为 sh880974
-            const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ|DS)$/i);
-            if (dotMatch) return dotMatch[2].toLowerCase() + dotMatch[1];
-            // 匹配 SH880974 / sz000001 格式 → 转为小写前缀
-            const prefixMatch = c.match(/^(SH|SZ|HK|BJ|DS)(\d+)$/i);
-            if (prefixMatch) return prefixMatch[1].toLowerCase() + prefixMatch[2];
-            return c;
-        }
-        // 固定快捷入口：五大核心指数，常驻历史列表顶部，不参与保存/删除/清除
-        const FIXED_INDICES = [
-            {code: "sh000001", name: "上证指数"},
-            {code: "sz399001", name: "深证成指"},
-            {code: "sh000300", name: "沪深300"},
-            {code: "sh000905", name: "中证500"},
-            {code: "sh000852", name: "中证1000"},
-            {code: "sz399006", name: "创业板指"},
-            {code: "sh000688", name: "科创50"},
-        ];
-        const FIXED_CODES = new Set(FIXED_INDICES.map(x => normalizeCode(x.code)));
-        function isFixedCode(code) { return FIXED_CODES.has(normalizeCode(code)); }
-        function getHistory() {
-            try {
-                let list = JSON.parse(localStorage.getItem(HISTORY_KEY)) || [];
-                // 兼容旧格式（纯字符串）-> 转换为新格式（{code, name}）
-                return list.map(c => typeof c === 'string' ? {code: c, name: ""} : c);
-            } catch(e) { return []; }
-        }
-        function saveHistory(code, name) {
-            const normCode = normalizeCode(code);
-            // 固定快捷入口不写入历史，避免与顶部固定区重复
-            if (isFixedCode(normCode)) return;
-            let list = getHistory();
-            list = list.filter(c => normalizeCode(c.code) !== normCode);
-            list.unshift({code: normCode, name: name || ""});
-            if (list.length > MAX_HISTORY) list = list.slice(0, MAX_HISTORY);
-            localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
-        }
-        function removeHistory(code) {
-            const normCode = normalizeCode(code);
-            let list = getHistory().filter(c => normalizeCode(c.code) !== normCode);
-            localStorage.setItem(HISTORY_KEY, JSON.stringify(list));
-            showHistory();
-        }
-        window.clearHistory = function() {
-            localStorage.removeItem(HISTORY_KEY);
-            // 仅清除用户历史，固定快捷入口保留并重新渲染
-            showHistory();
-        };
-        window.clearInput = function() {
-            const input = document.getElementById("stock-code-input");
-            input.value = "";
-            document.getElementById("input-clear").style.display = "none";
-        };
-        let searchTimer = null;
-        let searchResults = [];
-        let selectedIndex = -1;
-        window.onInputChange = function() {
-            const input = document.getElementById("stock-code-input");
-            document.getElementById("input-clear").style.display = input.value ? "" : "none";
-            selectedIndex = -1;
-            const val = input.value.trim();
-            if (!val) {
-                document.getElementById("stock-history").classList.remove("show");
-                return;
-            }
-            // 带市场前缀+完整代码（如 sh600519、sz000001、hk00700），不搜索
-            // 要求前缀后紧跟5~6位数字且为完整输入，避免 SZ5 这样的拼音缩写被误拦截
-            if (/^(sh|sz|bj|hk)\d{5,6}$/i.test(val)) {
-                document.getElementById("stock-history").classList.remove("show");
-                return;
-            }
-            // 纯数字（6位）也搜索，可能有同名（如000001=平安银行/上证指数）
-            // 拼音或中文，延迟搜索
-            clearTimeout(searchTimer);
-            searchTimer = setTimeout(() => doSearch(val), 300);
-        };
-        window.onInputKeydown = function(e) {
-            const el = document.getElementById("stock-history");
-            if (!el.classList.contains("show") || !searchResults.length) {
-                if (e.key === "Enter") loadStock();
-                return;
-            }
-            const items = el.querySelectorAll(".stock-history-item");
-            if (e.key === "ArrowDown") {
-                e.preventDefault();
-                selectedIndex = (selectedIndex + 1) % items.length;
-                updateSearchSelection(items);
-            } else if (e.key === "ArrowUp") {
-                e.preventDefault();
-                selectedIndex = (selectedIndex - 1 + items.length) % items.length;
-                updateSearchSelection(items);
-            } else if (e.key === "Enter") {
-                e.preventDefault();
-                if (selectedIndex >= 0 && selectedIndex < searchResults.length) {
-                    const item = searchResults[selectedIndex];
-                    selectHistory(item.market === 'futures' ? item.code : item.market + item.code);
-                } else {
-                    loadStock();
-                }
-            } else if (e.key === "Escape") {
-                el.classList.remove("show");
-            }
-        };
-        window.updateSearchSelection = function(items) {
-            items.forEach((item, i) => {
-                item.style.background = i === selectedIndex ? "#0f3460" : "";
-                item.style.color = i === selectedIndex ? "#e0e0e0" : "";
-            });
-        };
-        window.doSearch = function(keyword) {
-            fetch("/api/search?q=" + encodeURIComponent(keyword))
-                .then(r => r.json())
-                .then(data => {
-                    const el = document.getElementById("stock-history");
-                    if (data.need_refresh) {
-                        el.innerHTML = '<div class="stock-history-item" style="color:#e94560;cursor:default;padding:10px;">' + (data.msg || '') + '</div>';
-                        el.classList.add("show");
-                        return;
-                    }
-                    searchResults = data.results || [];
-                    selectedIndex = -1;
-                    if (!searchResults.length) {
-                        el.classList.remove("show");
-                        return;
-                    }
-                    el.innerHTML = searchResults.map((item, idx) => {
-                        const safeCode = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-                        const safeMarket = item.market.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-                        const fullCode = item.market === 'futures' ? safeCode : safeMarket + safeCode;
-                        const displayCode = item.market === 'futures' ? item.code : item.market + item.code;
-                        const typeMap = {"深A":"深A","沪A":"沪A","深B":"深B","沪B":"沪B","指数":"指数","基金":"基金","场外基金":"场外基金","港股":"港股"};
-                        const typeLabel = typeMap[item.type] || item.type;
-                        return `<div class="stock-history-item" data-idx="${idx}"><span onclick="selectHistory('${fullCode}')" style="flex:1;display:block">${displayCode} - ${item.name} (${item.pinyin}) <span style="color:#888;font-size:11px;margin-left:8px">${typeLabel}</span></span></div>`;
-                    }).join("");
-                    el.classList.add("show");
-                    // 焦点自动移到第一个候选
-                    selectedIndex = 0;
-                    updateSearchSelection(el.querySelectorAll(".stock-history-item"));
-                })
-                .catch(() => {});
-        };
-        window.toggleInputClear = function() {
-            const input = document.getElementById("stock-code-input");
-            document.getElementById("input-clear").style.display = input.value ? "" : "none";
-        };
-        window.removeHistory = removeHistory;
-        window.showHistory = function() {
-            const list = getHistory();
-            const el = document.getElementById("stock-history");
-            // 重置搜索态，确保历史视图下键盘导航不会误用旧的搜索结果
-            searchResults = [];
-            selectedIndex = -1;
-            // 顶部固定快捷入口区（不可删除）
-            let html = FIXED_INDICES.map(item => {
-                const safe = item.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-                return `<div class="stock-history-item"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${item.code} - ${item.name}</span></div>`;
-            }).join("");
-            // 用户浏览历史区（可单条删除）；首项顶部加分割线，与底部"清除全部"风格一致
-            html += list.map((c, i) => {
-                const safe = c.code.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
-                const label = c.name ? c.code + " - " + c.name : c.code;
-                const sepStyle = i === 0 ? 'border-top:1px solid #0f3460;' : '';
-                return `<div class="stock-history-item" style="${sepStyle}"><span onclick="selectHistory('${safe}')" style="flex:1;display:block">${label}</span><span class="stock-history-del" onclick="event.stopPropagation();removeHistory('${safe}')">&times;</span></div>`;
-            }).join("");
-            // 有用户历史时才显示"清除全部"（仅清用户历史，不影响固定项）
-            if (list.length) {
-                html += `<div class="stock-history-clear" onclick="event.stopPropagation();clearHistory()">清除全部</div>`;
-            }
-            el.innerHTML = html;
-            el.classList.add("show");
-        };
-        document.addEventListener("click", function(e) {
-            if (!e.target.closest(".stock-input")) {
-                document.getElementById("stock-history").classList.remove("show");
-            }
-        });
-
-        window.loadStock = function() {
-            const code = document.getElementById("stock-code-input").value.trim();
-            if (!code) return;
-            // 切换股票时取消区间选择
-            if (_rangeSelect.mode === 'SELECTED_A') {
-                _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-            }
-            document.getElementById("stock-history").classList.remove("show");
-            document.getElementById("loading").classList.remove("hidden");
-            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS","A50","CN"]);
-            const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
-            // 判断切换前是否为期指
-            const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
-            // 同类继承上一周期，异类使用默认周期
-            let fetchFreq;
-            if (wasFutures && isFuturesCode) {
-                // 期指C → 期指D：保持C的周期
-                fetchFreq = lastFuturesFreq;
-            } else if (!wasFutures && !isFuturesCode) {
-                // 股票A → 股票B：保持A的周期
-                fetchFreq = lastStockFreq;
-            } else if (wasFutures && !isFuturesCode) {
-                // 期指 → 股票：默认日K，重置为单窗口，同时彻底清理所有期货数据
-                disconnectRealtime();
-                fetch("/api/futures_cleanup").catch(() => {});
-                fetchFreq = 'd';
-                if (isDualWindow) {
-                    isDualWindow = false;
-                    activeDualWindow = 'main';
-                    dualSubData = null;
-                    dualSubFreq = '';
-                    dualHighlightRange = null;
-                    dualRedRange = null;
-                    dualNewZsData = null;
-                    dualShowNewZs = false;
-                    dualNewZsLeftDate = "";
-                    dualNewZsRightDate = "";
-                    document.getElementById("btn-dual").classList.remove("active");
-                    const dbg = document.getElementById("redframe-debug");
-                    if (dbg) dbg.style.display = "none";
-                    // 恢复单canvas布局
-                    const container = document.getElementById("chart-container");
-                    const mainDiv = document.getElementById("chart-main");
-                    const subDiv = document.getElementById("chart-sub");
-                    if (mainDiv) mainDiv.remove();
-                    if (subDiv) subDiv.remove();
-                    canvas = mainCanvas; ctx = mainCtx;
-                    container.appendChild(canvas);
-                    resizeCanvas();
-                }
-            } else {
-                // 股票 → 期指：默认5分钟，重置为单窗口
-                // 股票和期货周期体系不同（股票: w/d/30m/5m，期货: 30m/5m/1m/15s），
-                // 下窗周期无法跨市场继承，强行继承会导致下窗周期>上窗周期
-                fetchFreq = '5m';
-                if (isDualWindow) {
-                    isDualWindow = false;
-                    activeDualWindow = 'main';
-                    dualSubData = null;
-                    dualSubFreq = '';
-                    dualHighlightRange = null;
-                    dualRedRange = null;
-                    dualNewZsData = null;
-                    dualShowNewZs = false;
-                    dualNewZsLeftDate = "";
-                    dualNewZsRightDate = "";
-                    document.getElementById("btn-dual").classList.remove("active");
-                    const dbg = document.getElementById("redframe-debug");
-                    if (dbg) dbg.style.display = "none";
-                    // 恢复单canvas布局
-                    const container = document.getElementById("chart-container");
-                    const mainDiv = document.getElementById("chart-main");
-                    const subDiv = document.getElementById("chart-sub");
-                    if (mainDiv) mainDiv.remove();
-                    if (subDiv) subDiv.remove();
-                    canvas = mainCanvas; ctx = mainCtx;
-                    container.appendChild(canvas);
-                    resizeCanvas();
-                }
-            }
-            currentFreq = fetchFreq;
-            updateDateInputType();
-            if (isFuturesCode) {
-                updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
-                connectRealtimeInit(code, fetchFreq);
-                return;
-            }
-            updateFreqButtonStates(false); // 股票：禁用 1m/15s，启用 d/w
-            fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
-                .then(resp => {
-                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
-                    return resp.json();
-                })
-                .then(data => {
-                    // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 data.meta.name 会崩溃）
-                    if (!data || !data.meta) {
-                        const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
-                        throw new Error("查询失败: " + errMsg);
-                    }
-                    saveHistory(code, data.meta.name);
-                    chartData = data;
-                    updateRestartBtn();
-                    updateDualBtn();
-                    // 根据返回数据的周期同步按钮状态
-                    let returnedFreq;
-                    if (data.meta.freq === "5分钟") {
-                        returnedFreq = "5m";
-                    } else if (data.meta.freq === "30分钟") {
-                        returnedFreq = "30m";
-                    } else if (data.meta.freq === "周线") {
-                        returnedFreq = "w";
-                    } else {
-                        returnedFreq = "d";
-                    }
-                    currentFreq = returnedFreq;
-                    lastStockFreq = currentFreq; // 更新股票周期记忆
-                    updateDateInputType();
-                    updateFreqButtonStates(false);
-                    viewCount = 377;
-                    adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
-                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                    // K线不足一屏时右对齐
-                    if (chartData.klines.length < viewCount) {
-                        viewOffset = 0;
-                    }
-                    // K线不足一屏时右对齐
-                    if (chartData.klines.length < viewCount) {
-                        viewOffset = 0;
-                    }
-                    // 保持当前开关状态，不重置（切换个股时继承）
-                    document.getElementById("btn-fx").classList.toggle("active", showFx);
-                    document.getElementById("btn-bi").classList.toggle("active", showBi);
-                    document.getElementById("btn-zs").classList.toggle("active", showZs);
-                    document.getElementById("btn-seg").classList.toggle("active", showSeg);
-                    document.getElementById("btn-bsp").classList.toggle("active", showBsp);
-                    document.getElementById("stock-name").textContent = chartData.meta.name;
-                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                    document.title = "缠论分析 - " + chartData.meta.name;
-                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                    document.getElementById("goto-date-input").value = lastDate;
-                    updateWeekday();
-                    resizeCanvas();
-                    // 双窗口模式下同时加载下面窗口数据
-                    if (isDualWindow) {
-                        const subFreq = getDualSubFreq(currentFreq);
-                        if (subFreq) {
-                            dualSubFreq = subFreq;
-                            if (data.sub) {
-                                dualSubData = data.sub;
-                                dualSubViewCount = 377;
-                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                if (dualSubData.klines.length < dualSubViewCount) {
-                                    dualSubViewOffset = 0;
-                                }
-                            }
-                        }
-                    }
-                    document.getElementById("loading").classList.add("hidden");
-                    render();
-                    generateStats();
-                    loadAnnotations();
-                    saveLastState(); // 保存状态
-                    // 期货/期指：切换到实时模式
-                    startRealtimeIfFutures(data);
-                })
-                .catch(err => {
-                    alert("查询失败: " + err.message);
-                    document.getElementById("loading").classList.add("hidden");
-                });
-        };
-
-        window.selectHistory = function(code) {
-            document.getElementById("stock-code-input").value = code;
-            document.getElementById("stock-history").classList.remove("show");
-            window.loadStock();
-        };
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] RealtimeService —— 实时行情服务组件（期货 SSE 连接 / 增量上屏）
+        // 对外接口（ChanApp.components.RealtimeService）: startRealtimeIfFutures, connectRealtimeInit, connectRealtimeDual, connectRealtime, disconnectRealtime, handleRealtimeDataSingle, handleRealtimeDataDual
+// ══════════════════════════════════════════════════════════════════
 
         // ========== 期货实时模式 ==========
         function startRealtimeIfFutures(data) {
@@ -6103,216 +6202,18 @@
             render();
         }
 
-        // 页面关闭时清理 SSE
-        window.addEventListener('beforeunload', function() {
-            disconnectRealtime();
-        });
 
-        function generateStats() {
-            if (!chartData) return;
-            const klines = getVisibleKlines();
-            if (!klines.length) return;
-            const startDate = klines[0].date, endDate = klines[klines.length - 1].date;
-            const visBis = chartData.bis.filter(bi => bi.sdt >= startDate && bi.edt <= endDate);
-            const visFxs = chartData.fxs.filter(fx => fx.date >= startDate && fx.date <= endDate);
-            const allBis = chartData.bis, allFxs = chartData.fxs;
-            let visUp = 0, visDown = 0, totalPower = 0, maxPower = 0;
-            visBis.forEach(bi => { if (bi.direction === "up") visUp++; else visDown++; totalPower += bi.power; if (bi.power > maxPower) maxPower = bi.power; });
-            const avgPower = visBis.length > 0 ? (totalPower / visBis.length).toFixed(2) : 0;
-            let allUp = 0, allDown = 0;
-            allBis.forEach(bi => { if (bi.direction === "up") allUp++; else allDown++; });
-            document.getElementById("stats-content").innerHTML = `
-                <div class="stats-row"><span class="stats-label">可见笔数</span><span class="stats-value">${visBis.length} / ${allBis.length}</span></div>
-                <div class="stats-row"><span class="stats-label">向上笔</span><span class="stats-value" style="color:#FF4444">${visUp} / ${allUp}</span></div>
-                <div class="stats-row"><span class="stats-label">向下笔</span><span class="stats-value" style="color:#00DD00">${visDown} / ${allDown}</span></div>
-                <div class="stats-row"><span class="stats-label">平均力度</span><span class="stats-value">${avgPower}</span></div>
-                <div class="stats-row"><span class="stats-label">最大力度</span><span class="stats-value" style="color:#FFD700">${maxPower.toFixed(2)}</span></div>
-                <div class="stats-row"><span class="stats-label">顶分型</span><span class="stats-value" style="color:#FF4444">${visFxs.filter(f=>f.mark==="G").length} / ${allFxs.filter(f=>f.mark==="G").length}</span></div>
-                <div class="stats-row"><span class="stats-label">底分型</span><span class="stats-value" style="color:#00DD00">${visFxs.filter(f=>f.mark==="D").length} / ${allFxs.filter(f=>f.mark==="D").length}</span></div>`;
-        }
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.RealtimeService = {
+            startRealtimeIfFutures, connectRealtimeInit, connectRealtimeDual,
+        connectRealtime, disconnectRealtime, handleRealtimeDataSingle,
+        handleRealtimeDataDual
+        };
 
-        function updateSlider() {
-            // 双窗口模式下，使用激活窗口的数据
-            const data = (isDualWindow && activeDualWindow === 'sub' && dualSubData) ? dualSubData : chartData;
-            const vo = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewOffset : viewOffset;
-            const vc = (isDualWindow && activeDualWindow === 'sub') ? dualSubViewCount : viewCount;
-            if (!data || !data.klines.length) return;
-            const track = document.getElementById("slider-track");
-            const win = document.getElementById("slider-window");
-            const label = document.getElementById("slider-label");
-            const totalKlines = data.klines.length;
-            const trackWidth = track.clientWidth;
-            if (trackWidth <= 0) return;
-
-            const windowWidth = Math.max(10, (vc / totalKlines) * trackWidth);
-            const maxOffset = Math.max(0, totalKlines - vc);
-            const windowLeft = (vo / totalKlines) * trackWidth;
-
-            win.style.width = windowWidth + "px";
-            win.style.left = Math.max(0, Math.min(windowLeft, trackWidth - windowWidth)) + "px";
-
-            const displayCount = Math.round(vc);
-            const displayOffset = Math.round(vo);
-            const startIdx = Math.max(0, displayOffset);
-            const endIdx = Math.min(totalKlines - 1, startIdx + displayCount - 1);
-            const startDate = data.klines[startIdx].date.slice(0, 10);
-            const endDate = data.klines[endIdx].date.slice(0, 10);
-            const globalStart = Math.max(0, Math.floor(vo));
-            const globalEnd = Math.min(totalKlines, globalStart + vc);
-            const visBis = data.bis.filter(bi => {
-                const si = data.klines.findIndex(k => k.date === bi.sdt);
-                return si >= globalStart && si < globalEnd;
-            });
-            const visFxs = data.fxs.filter(fx => {
-                const fi = data.klines.findIndex(k => k.date === fx.date);
-                return fi >= globalStart && fi < globalEnd;
-            });
-            const visZs = data.zs.filter(zs => {
-                const si = data.klines.findIndex(k => k.date === zs.sdt);
-                return si >= globalStart && si < globalEnd;
-            });
-            const winLabel = isDualWindow ? (activeDualWindow === 'sub' ? '[下窗] ' : '[上窗] ') : '';
-            label.textContent = winLabel + startDate + " - " + endDate + "   [K线]: " + displayCount + "/" + totalKlines + "   [分型]: " + visFxs.length + "/" + data.fxs.length + "   [笔]: " + visBis.length + "/" + data.bis.length + "   [中枢]: " + visZs.length + "/" + data.zs.length;
-        }
-
-        (function() {
-            const slider = document.getElementById("range-slider");
-            const track = document.getElementById("slider-track");
-            const win = document.getElementById("slider-window");
-            const handleLeft = document.getElementById("slider-handle-left");
-            const handleRight = document.getElementById("slider-handle-right");
-            let sliderDragging = false;
-            let dragType = null;
-            let dragStartX = 0, dragStartOffset = 0, dragStartCount = 0, dragStartRightEdge = 0;
-
-            // 获取当前激活窗口的 data
-            function getActiveData() {
-                if (isDualWindow && activeDualWindow === 'sub' && dualSubData) {
-                    return dualSubData;
-                }
-                return chartData;
-            }
-            // 获取当前激活窗口的 viewOffset
-            function getActiveViewOffset() {
-                if (isDualWindow && activeDualWindow === 'sub') {
-                    return dualSubViewOffset;
-                }
-                return viewOffset;
-            }
-            // 设置当前激活窗口的 viewOffset
-            function setActiveViewOffset(v) {
-                if (isDualWindow && activeDualWindow === 'sub') {
-                    dualSubViewOffset = v;
-                } else {
-                    viewOffset = v;
-                }
-            }
-            // 获取当前激活窗口的 viewCount
-            function getActiveViewCount() {
-                if (isDualWindow && activeDualWindow === 'sub') {
-                    return dualSubViewCount;
-                }
-                return viewCount;
-            }
-            // 设置当前激活窗口的 viewCount
-            function setActiveViewCount(v) {
-                if (isDualWindow && activeDualWindow === 'sub') {
-                    dualSubViewCount = v;
-                } else {
-                    viewCount = v;
-                }
-            }
-            // 渲染当前激活窗口
-            function renderActive() {
-                updateActiveWindowClass();
-                if (isDualWindow && activeDualWindow === 'sub') {
-                    // 直接渲染下面窗口，跳过 updateDualNewZs() 避免滑块操作时误清除红框新中枢
-                    if (!dualSubData || !subCtx) return;
-                    const _savedCanvas = canvas, _savedCtx = ctx;
-                    canvas = subCanvas; ctx = subCtx;
-                    window._isRenderingBottom = true;
-                    _renderChart(dualSubData, dualSubFreq, dualSubViewOffset, dualSubViewCount,
-                        dualSubMouseX, dualSubMouseY, dualHighlightRange, dualRedRange);
-                    window._isRenderingBottom = false;
-                    canvas = _savedCanvas; ctx = _savedCtx;
-                } else if (isDualWindow) {
-                    renderTop();
-                } else {
-                    render();
-                }
-            }
-
-            function getSliderInfo() {
-                const data = getActiveData();
-                const totalKlines = data ? data.klines.length : 1;
-                const trackWidth = track.clientWidth;
-                return { totalKlines, trackWidth };
-            }
-
-            handleLeft.addEventListener("mousedown", function(e) {
-                e.preventDefault(); e.stopPropagation();
-                sliderDragging = true; dragType = "left";
-                dragStartX = e.clientX; dragStartCount = getActiveViewCount();
-                dragStartRightEdge = getActiveViewOffset() + getActiveViewCount();
-            });
-            handleRight.addEventListener("mousedown", function(e) {
-                e.preventDefault(); e.stopPropagation();
-                sliderDragging = true; dragType = "right";
-                dragStartX = e.clientX; dragStartCount = getActiveViewCount();
-                dragStartOffset = getActiveViewOffset();
-            });
-            win.addEventListener("mousedown", function(e) {
-                e.preventDefault(); e.stopPropagation();
-                sliderDragging = true; dragType = "window";
-                dragStartX = e.clientX; dragStartOffset = getActiveViewOffset();
-            });
-            track.addEventListener("mousedown", function(e) {
-                const data = getActiveData();
-                if (!data) return;
-                e.preventDefault();
-                const rect = track.getBoundingClientRect();
-                const ratio = (e.clientX - rect.left) / rect.width;
-                const totalKlines = data.klines.length;
-                const vc = getActiveViewCount();
-                const newOffset = ratio * totalKlines - vc / 2;
-                setActiveViewOffset(Math.max(0, Math.min(totalKlines - vc, newOffset)));
-                renderActive();
-            });
-
-            document.addEventListener("mousemove", function(e) {
-                if (!sliderDragging || !getActiveData()) return;
-                const { totalKlines, trackWidth } = getSliderInfo();
-                if (trackWidth <= 0) return;
-                const dx = e.clientX - dragStartX;
-                const dk = (dx / trackWidth) * totalKlines;
-
-                let vc = getActiveViewCount();
-                let vo = getActiveViewOffset();
-                if (dragType === "left") {
-                    const newCount = Math.round(Math.max(3, Math.min(totalKlines, dragStartCount - dk)));
-                    vc = newCount;
-                    vo = Math.max(0, Math.round(dragStartRightEdge - vc));
-                } else if (dragType === "right") {
-                    const newCount = Math.round(Math.max(3, Math.min(totalKlines, dragStartCount + dk)));
-                    const maxOffset = totalKlines - newCount;
-                    vc = newCount;
-                    vo = Math.min(vo, Math.max(0, maxOffset));
-                } else if (dragType === "window") {
-                    const newOffset = dragStartOffset + dk;
-                    const maxOffset = totalKlines - vc;
-                    vo = Math.max(0, Math.min(newOffset, maxOffset));
-                }
-                vc = Math.round(vc);
-                vo = Math.round(vo);
-                setActiveViewCount(vc);
-                setActiveViewOffset(vo);
-                renderActive();
-            });
-
-            document.addEventListener("mouseup", function() {
-                sliderDragging = false; dragType = null;
-            });
-        })();
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] AnnotationPanel —— 文字标注组件（标注 CRUD / 右键菜单 / 弹窗）
+        // 对外接口（ChanApp.components.AnnotationPanel）: loadAnnotations, onContextMenu, annotationAdd, annotationDialogConfirm, annotationDialogCancel, annotationEditAnnotation, annotationDeleteAnnotation, annotationDeleteAllGlobal, annotationReplayToHere, toggleMirrorMode, drawAnnotations
+// ══════════════════════════════════════════════════════════════════
 
         // ============================================================
         // 文字标注功能
@@ -6484,14 +6385,6 @@
             menu.style.top = e.clientY + "px";
             menu.classList.add("show");
         }
-
-        // 关闭右键菜单（点击其他地方）
-        document.addEventListener("click", function(e) {
-            const menu = document.getElementById("annotation-menu");
-            if (!menu.contains(e.target)) {
-                menu.classList.remove("show");
-            }
-        });
 
         // 添加标注
         window.annotationAdd = function() {
@@ -6743,8 +6636,453 @@
             ctx.textBaseline = "alphabetic"; // 恢复默认基线
         }
 
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.AnnotationPanel = {
+            loadAnnotations, onContextMenu, annotationAdd,
+        annotationDialogConfirm, annotationDialogCancel, annotationEditAnnotation,
+        annotationDeleteAnnotation, annotationDeleteAllGlobal,
+        annotationReplayToHere, toggleMirrorMode, drawAnnotations
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] Bootstrap —— 应用引导（首屏 init / 状态持久化 / 全局监听注册）
+        // 对外接口（ChanApp.components.Bootstrap）: init, initDefault, saveLastState, loadLastCodeFreq
+// ══════════════════════════════════════════════════════════════════
+
+        // 保存当前状态到 localStorage（仅股票，仅单窗口非复盘模式）
+        function saveLastState() {
+            if (!chartData || !chartData.meta) return;
+            if (isDualWindow) return;  // 双窗口不保存
+            if (chartData.meta.is_replay) return;  // 复盘模式不保存
+            if (chartData.meta.market === 'futures') return;  // 期货不保存
+            const state = {
+                code: chartData.meta.symbol,
+                freq: currentFreq,
+                name: chartData.meta.name
+            };
+            try { localStorage.setItem('lastCodeFreq', JSON.stringify(state)); } catch(e) {}
+        }
+
+        // 从 localStorage 加载上次状态，仅股票有效
+        function loadLastCodeFreq() {
+            try {
+                const raw = localStorage.getItem('lastCodeFreq');
+                if (!raw) return null;
+                const state = JSON.parse(raw);
+                if (!state.code || !state.freq) return null;
+                if (isFuturesCode(state.code)) return null;  // 排除期货残留
+                return state;
+            } catch(e) { return null; }
+        }
+
+        async function init() {
+            try {
+                // 先尝试从 localStorage 恢复上次状态
+                const savedState = loadLastCodeFreq();
+                if (savedState) {
+                    // 有保存的股票状态，先置空，立即异步加载
+                    chartData = null;
+                    document.getElementById("stock-code-input").value = savedState.code;
+                    // 设置初始周期
+                    if (savedState.freq) {
+                        currentFreq = savedState.freq;
+                        lastStockFreq = savedState.freq;
+                    }
+                    initCanvas();
+                    updateSlider();
+                    updateFreqButtonStates(false);
+                    updateRestartBtn();
+                    updateDualBtn();
+                    // 异步加载保存的股票数据
+                    document.getElementById("loading").classList.remove("hidden");
+                    fetch("/api/stock?code=" + encodeURIComponent(savedState.code) + "&freq=" + savedState.freq, { cache: "no-store" })
+                        .then(resp => {
+                            if (!resp.ok) throw new Error("恢复失败");
+                            return resp.json();
+                        })
+                        .then(data => {
+                            // 防御：检查 API 返回数据是否完整
+                            if (!data || !data.meta) {
+                                const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
+                                throw new Error("恢复失败: " + errMsg);
+                            }
+                            chartData = data;
+                            saveHistory(savedState.code, data.meta.name);
+                            document.getElementById("stock-name").textContent = chartData.meta.name;
+                            document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                            document.title = "缠论分析 - " + chartData.meta.name;
+                            let returnedFreq;
+                            if (data.meta.freq === "5分钟") returnedFreq = "5m";
+                            else if (data.meta.freq === "30分钟") returnedFreq = "30m";
+                            else if (data.meta.freq === "周线") returnedFreq = "w";
+                            else returnedFreq = "d";
+                            currentFreq = returnedFreq;
+                            lastStockFreq = currentFreq;
+                            updateDateInputType();
+                            updateFreqButtonStates(false);
+                            viewCount = 377;
+                            adjustViewForSavedPoint();
+                            viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                            if (chartData.klines.length < viewCount) viewOffset = 0;
+                            applyOverlayButtonStates();
+                            initialized = true;
+                            updateRestartBtn();
+                            updateDualBtn();
+                            const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                            document.getElementById("goto-date-input").value = lastDate;
+                            updateWeekday();
+                            render();
+                            document.getElementById("loading").classList.add("hidden");
+                            document.getElementById("error").classList.add("hidden");
+                            generateStats();
+                            loadAnnotations();
+                            // 断开期货SSE（如果有）
+                            disconnectRealtime();
+                        })
+                        .catch(err => {
+                            console.error("恢复上次状态失败，回退到默认:", err);
+                            try {
+                                let errMsgEl2 = document.getElementById("error-msg");
+                                if (errMsgEl2) {
+                                    errMsgEl2.innerHTML = "恢复错误: " + (err && err.message ? String(err.message).replace(/</g, "&lt;") : String(err))
+                                        + "<br><br><span style='font-size:12px;color:#aaa'>name=" + (err && err.name) + "<br>stack=" + (err && err.stack ? err.stack.replace(/</g, "&lt;") : "无") + "</span>";
+                                }
+                            } catch (e3) {}
+                            // 回退到默认上证指数
+                            document.getElementById("stock-code-input").value = "";
+                            initDefault();
+                        });
+                    return;
+                }
+                // 无保存状态，默认加载上证指数
+                initDefault();
+            } catch (err) {
+                console.error("初始化失败:", err);
+                document.getElementById("loading").classList.add("hidden");
+                document.getElementById("error").classList.remove("hidden");
+            }
+        }
+
+        async function initDefault() {
+            document.getElementById("loading").classList.remove("hidden");
+            try {
+                const resp = await fetch("/api/stock?code=SH000001&freq=d", { cache: "no-store" });
+                if (!resp.ok) throw new Error("默认加载失败");
+                const data = await resp.json();
+                // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 chartData.meta.symbol 会崩溃）
+                if (!data || !data.meta) {
+                    const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
+                    throw new Error("首屏数据加载失败: " + errMsg);
+                }
+                chartData = data;
+                document.getElementById("stock-name").textContent = chartData.meta.name;
+                document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                document.title = "缠论分析 - " + chartData.meta.name;
+                initCanvas();
+                updateSlider();
+                if (chartData.meta.freq === "5分钟") currentFreq = "5m";
+                else if (chartData.meta.freq === "30分钟") currentFreq = "30m";
+                else if (chartData.meta.freq === "周线") currentFreq = "w";
+                else currentFreq = "d";
+                updateDateInputType();
+                lastStockFreq = currentFreq;
+                updateFreqButtonStates(false);
+                viewCount = 377;
+                adjustViewForSavedPoint();
+                applyOverlayButtonStates();
+                viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                if (chartData.klines.length < viewCount) viewOffset = 0;
+                initialized = true;
+                updateRestartBtn();
+                updateDualBtn();
+                const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                document.getElementById("goto-date-input").value = lastDate;
+                updateWeekday();
+                render();
+                document.getElementById("loading").classList.add("hidden");
+                document.getElementById("error").classList.add("hidden");
+                generateStats();
+                loadAnnotations();
+            } catch (err) {
+                console.error("initDefault 失败:", err);
+                // 把错误详情显示到页面上，方便用户直接查看（无需F12）
+                try {
+                    let errMsgEl = document.getElementById("error-msg");
+                    if (errMsgEl) {
+                        errMsgEl.innerHTML = "错误: " + (err && err.message ? String(err.message).replace(/</g, "&lt;") : String(err))
+                            + "<br><br><span style='font-size:12px;color:#aaa'>name=" + (err && err.name) + "<br>stack=" + (err && err.stack ? err.stack.replace(/</g, "&lt;") : "无") + "</span>";
+                    }
+                } catch (e2) {}
+                document.getElementById("loading").classList.add("hidden");
+                document.getElementById("error").classList.remove("hidden");
+            }
+        }
+
+
+        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        ChanApp.components.Bootstrap = {
+            init, initDefault, saveLastState, loadLastCodeFreq
+        };
+
+
+// ══════════════════════════════════════════════════════════════════
+        // [MERGED] AppState 状态访问层 —— 合并自 A 方案交付件（阶段 6 双方案取长）
+        // 30 个共享状态变量的 getter/setter 访问器 + 8 个引导方法别名。
+        // 闭包变量仍为唯一数据源（访问器同源读写，行为零漂移）；本层不进
+        // components 注册表、不新增任何 window.* 绑定（window API 面冻结），
+        // 仅供控制台调试与阶段 8 状态迁移锚点（ChanApp.state.<变量>）。
+// ══════════════════════════════════════════════════════════════════
+        ChanApp.state = (function() {
+            const s = {};
+            Object.defineProperties(s, {
+                chartData: { get: function(){ return chartData; }, set: function(v){ chartData = v; } },
+                showBi: { get: function(){ return showBi; }, set: function(v){ showBi = v; } },
+                showFx: { get: function(){ return showFx; }, set: function(v){ showFx = v; } },
+                showZs: { get: function(){ return showZs; }, set: function(v){ showZs = v; } },
+                showSeg: { get: function(){ return showSeg; }, set: function(v){ showSeg = v; } },
+                showBsp: { get: function(){ return showBsp; }, set: function(v){ showBsp = v; } },
+                showBiIdx: { get: function(){ return showBiIdx; }, set: function(v){ showBiIdx = v; } },
+                bspFilter: { get: function(){ return bspFilter; }, set: function(v){ bspFilter = v; } },
+                maPeriods: { get: function(){ return maPeriods; }, set: function(v){ maPeriods = v; } },
+                _logScale: { get: function(){ return _logScale; }, set: function(v){ _logScale = v; } },
+                _showVolume: { get: function(){ return _showVolume; }, set: function(v){ _showVolume = v; } },
+                _subShowVolume: { get: function(){ return _subShowVolume; }, set: function(v){ _subShowVolume = v; } },
+                currentFreq: { get: function(){ return currentFreq; }, set: function(v){ currentFreq = v; } },
+                lastStockFreq: { get: function(){ return lastStockFreq; }, set: function(v){ lastStockFreq = v; } },
+                lastFuturesFreq: { get: function(){ return lastFuturesFreq; }, set: function(v){ lastFuturesFreq = v; } },
+                isDualWindow: { get: function(){ return isDualWindow; }, set: function(v){ isDualWindow = v; } },
+                dualSubData: { get: function(){ return dualSubData; }, set: function(v){ dualSubData = v; } },
+                dualSubFreq: { get: function(){ return dualSubFreq; }, set: function(v){ dualSubFreq = v; } },
+                viewOffset: { get: function(){ return viewOffset; }, set: function(v){ viewOffset = v; } },
+                viewCount: { get: function(){ return viewCount; }, set: function(v){ viewCount = v; } },
+                isRealtimeMode: { get: function(){ return isRealtimeMode; }, set: function(v){ isRealtimeMode = v; } },
+                realtimeSymbol: { get: function(){ return realtimeSymbol; }, set: function(v){ realtimeSymbol = v; } },
+                realtimeFreq: { get: function(){ return realtimeFreq; }, set: function(v){ realtimeFreq = v; } },
+                realtimeStartTime: { get: function(){ return realtimeStartTime; }, set: function(v){ realtimeStartTime = v; } },
+                realtimeConnected: { get: function(){ return realtimeConnected; }, set: function(v){ realtimeConnected = v; } },
+                annotations: { get: function(){ return annotations; }, set: function(v){ annotations = v; } },
+                initialized: { get: function(){ return initialized; }, set: function(v){ initialized = v; } },
+                _isMirrorMode: { get: function(){ return _isMirrorMode; }, set: function(v){ _isMirrorMode = v; } },
+                activeDualWindow: { get: function(){ return activeDualWindow; }, set: function(v){ activeDualWindow = v; } },
+                _ctrlPressed: { get: function(){ return _ctrlPressed; }, set: function(v){ _ctrlPressed = v; } },
+            });
+            s.loadOverlaySettings = loadOverlaySettings;
+            s.saveOverlaySettings = saveOverlaySettings;
+            s.applyOverlayButtonStates = applyOverlayButtonStates;
+            s.getShowMa = getShowMa;
+            s.saveLastState = saveLastState;
+            s.loadLastCodeFreq = loadLastCodeFreq;
+            s.init = init;
+            s.initDefault = initDefault;
+            return s;
+        })();
+
+
+// ══════════════════════════════════════════════════════════════════
+        // [EXEC] 引导执行序列 —— 顶层执行语句保持原文件相对顺序
+        //（事件监听注册顺序影响同名事件派发序，禁止重排）
+// ══════════════════════════════════════════════════════════════════
+
+        // 启动时加载保存的设置
+        loadOverlaySettings();
+
+        initCoordSystemRadio();
+
+        // Esc键取消区间选择 / 关闭设置抽屉
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                var drawer = document.getElementById("bsp-filter-dialog");
+                if (drawer.classList.contains("show")) {
+                    closeBspSettings();
+                    return;
+                }
+                if (_rangeSelect.mode === 'SELECTED_A') {
+                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+                    showDualToast("区间选择已取消");
+                    render();
+                }
+            }
+        });
+
+        document.addEventListener('keyup', function(e) {
+            // 兜底：松开Ctrl时清除红框（onMouseMove用e.ctrlKey是主要检测路径）
+            if (e.key === 'Control' && isDualWindow) {
+                _ctrlPressed = false;
+                dualRedRange = null;
+                dualShowNewZs = false;
+                dualNewZsData = null;
+                renderTop();
+            }
+        });
+
+        console.log("[扫描模块] v2-多选版 已加载 OK");
+
+        document.addEventListener("click", function(e) {
+            if (!e.target.closest(".stock-input")) {
+                document.getElementById("stock-history").classList.remove("show");
+            }
+        });
+
+        // 页面关闭时清理 SSE
+        window.addEventListener('beforeunload', function() {
+            disconnectRealtime();
+        });
+
+        (function() {
+            const slider = document.getElementById("range-slider");
+            const track = document.getElementById("slider-track");
+            const win = document.getElementById("slider-window");
+            const handleLeft = document.getElementById("slider-handle-left");
+            const handleRight = document.getElementById("slider-handle-right");
+            let sliderDragging = false;
+            let dragType = null;
+            let dragStartX = 0, dragStartOffset = 0, dragStartCount = 0, dragStartRightEdge = 0;
+
+            // 获取当前激活窗口的 data
+            function getActiveData() {
+                if (isDualWindow && activeDualWindow === 'sub' && dualSubData) {
+                    return dualSubData;
+                }
+                return chartData;
+            }
+            // 获取当前激活窗口的 viewOffset
+            function getActiveViewOffset() {
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    return dualSubViewOffset;
+                }
+                return viewOffset;
+            }
+            // 设置当前激活窗口的 viewOffset
+            function setActiveViewOffset(v) {
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    dualSubViewOffset = v;
+                } else {
+                    viewOffset = v;
+                }
+            }
+            // 获取当前激活窗口的 viewCount
+            function getActiveViewCount() {
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    return dualSubViewCount;
+                }
+                return viewCount;
+            }
+            // 设置当前激活窗口的 viewCount
+            function setActiveViewCount(v) {
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    dualSubViewCount = v;
+                } else {
+                    viewCount = v;
+                }
+            }
+            // 渲染当前激活窗口
+            function renderActive() {
+                updateActiveWindowClass();
+                if (isDualWindow && activeDualWindow === 'sub') {
+                    // 直接渲染下面窗口，跳过 updateDualNewZs() 避免滑块操作时误清除红框新中枢
+                    if (!dualSubData || !subCtx) return;
+                    const _savedCanvas = canvas, _savedCtx = ctx;
+                    canvas = subCanvas; ctx = subCtx;
+                    window._isRenderingBottom = true;
+                    _renderChart(dualSubData, dualSubFreq, dualSubViewOffset, dualSubViewCount,
+                        dualSubMouseX, dualSubMouseY, dualHighlightRange, dualRedRange);
+                    window._isRenderingBottom = false;
+                    canvas = _savedCanvas; ctx = _savedCtx;
+                } else if (isDualWindow) {
+                    renderTop();
+                } else {
+                    render();
+                }
+            }
+
+            function getSliderInfo() {
+                const data = getActiveData();
+                const totalKlines = data ? data.klines.length : 1;
+                const trackWidth = track.clientWidth;
+                return { totalKlines, trackWidth };
+            }
+
+            handleLeft.addEventListener("mousedown", function(e) {
+                e.preventDefault(); e.stopPropagation();
+                sliderDragging = true; dragType = "left";
+                dragStartX = e.clientX; dragStartCount = getActiveViewCount();
+                dragStartRightEdge = getActiveViewOffset() + getActiveViewCount();
+            });
+            handleRight.addEventListener("mousedown", function(e) {
+                e.preventDefault(); e.stopPropagation();
+                sliderDragging = true; dragType = "right";
+                dragStartX = e.clientX; dragStartCount = getActiveViewCount();
+                dragStartOffset = getActiveViewOffset();
+            });
+            win.addEventListener("mousedown", function(e) {
+                e.preventDefault(); e.stopPropagation();
+                sliderDragging = true; dragType = "window";
+                dragStartX = e.clientX; dragStartOffset = getActiveViewOffset();
+            });
+            track.addEventListener("mousedown", function(e) {
+                const data = getActiveData();
+                if (!data) return;
+                e.preventDefault();
+                const rect = track.getBoundingClientRect();
+                const ratio = (e.clientX - rect.left) / rect.width;
+                const totalKlines = data.klines.length;
+                const vc = getActiveViewCount();
+                const newOffset = ratio * totalKlines - vc / 2;
+                setActiveViewOffset(Math.max(0, Math.min(totalKlines - vc, newOffset)));
+                renderActive();
+            });
+
+            document.addEventListener("mousemove", function(e) {
+                if (!sliderDragging || !getActiveData()) return;
+                const { totalKlines, trackWidth } = getSliderInfo();
+                if (trackWidth <= 0) return;
+                const dx = e.clientX - dragStartX;
+                const dk = (dx / trackWidth) * totalKlines;
+
+                let vc = getActiveViewCount();
+                let vo = getActiveViewOffset();
+                if (dragType === "left") {
+                    const newCount = Math.round(Math.max(3, Math.min(totalKlines, dragStartCount - dk)));
+                    vc = newCount;
+                    vo = Math.max(0, Math.round(dragStartRightEdge - vc));
+                } else if (dragType === "right") {
+                    const newCount = Math.round(Math.max(3, Math.min(totalKlines, dragStartCount + dk)));
+                    const maxOffset = totalKlines - newCount;
+                    vc = newCount;
+                    vo = Math.min(vo, Math.max(0, maxOffset));
+                } else if (dragType === "window") {
+                    const newOffset = dragStartOffset + dk;
+                    const maxOffset = totalKlines - vc;
+                    vo = Math.max(0, Math.min(newOffset, maxOffset));
+                }
+                vc = Math.round(vc);
+                vo = Math.round(vo);
+                setActiveViewCount(vc);
+                setActiveViewOffset(vo);
+                renderActive();
+            });
+
+            document.addEventListener("mouseup", function() {
+                sliderDragging = false; dragType = null;
+            });
+        })();
+
+        // 关闭右键菜单（点击其他地方）
+        document.addEventListener("click", function(e) {
+            const menu = document.getElementById("annotation-menu");
+            if (!menu.contains(e.target)) {
+                menu.classList.remove("show");
+            }
+        });
+
         init();
 
         // 关闭/刷新页面时保存状态（仅股票，期货不保存）
         window.addEventListener('beforeunload', function() { saveLastState(); });
+
+
+        // 组件注册表暴露至全局（控制台调试入口；内部仍走闭包）
+        window.ChanApp = ChanApp;
+
     })();

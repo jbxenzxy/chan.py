@@ -1,19 +1,19 @@
 {
- "phase": "4",
+ "phase": "6",
  "mode": "verify",
- "ran_at": "2026-08-17 09:09:00",
+ "ran_at": "2026-08-17 12:38:36",
  "python": "3.10.12",
- "total": 12,
- "passed": 12,
+ "total": 13,
+ "passed": 13,
  "failed": 0,
  "components": [
   {
    "name": "fixtures_integrity",
-   "cmd": "../../usr/bin/python Test/gen_fixtures.py --check",
+   "cmd": "../../../../usr/bin/python3 Test/gen_fixtures.py --check",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.68,
+   "elapsed_s": 0.57,
    "output_tail": [
     "[gen] stock_day.json: 500 bars",
     "[gen] stock_60m.json: 2000 bars",
@@ -26,11 +26,11 @@
   },
   {
    "name": "snapshot_regression",
-   "cmd": "../../usr/bin/python Test/snapshot_runner.py",
+   "cmd": "../../../../usr/bin/python3 Test/snapshot_runner.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 6.29,
+   "elapsed_s": 6.6,
    "output_tail": [
     "[BS1][15s] cal_bs1point: 跳过: 重叠条件不满足(A/B/C) | stroke_n_idx=89",
     "[BS2][15s] cal_bs2point: 进入...... | bi_idx=89",
@@ -38,9 +38,9 @@
     "[BS3][15s] cal_bs3point: 进入...... | bi_idx=89",
     "[BS3][15s] cal_bs3point: 跳过: 重叠条件不满足 | stroke_n_idx=89 | n_overlap=False | n_1_idx=88 | n_1_overlap=False | n_high=3992.02 | n_low=3834.71 | n_1_high=3992.02 | n_1_low=3977.82 | zs_high=4704.88 | zs_low=4667.89",
     "[分析] ⑶ chan.py分析: 0.916s, 合并K线=1451, 笔=90, 中枢=9",
-    "[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): 0.025s",
+    "[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): 0.024s",
     "[信息] 期货查询 KQ.m@SHFE.rb 完成(15秒): 2000K线, 90笔, 507分型, 9中枢, 10线段, 34买卖点",
-    "[耗时] 总耗时: 0.942s",
+    "[耗时] 总耗时: 0.941s",
     "[PASS] futures_15s_end_date",
     "",
     "===== 快照回归: 8/8 通过 ====="
@@ -48,15 +48,15 @@
   },
   {
    "name": "trigger_step_replay",
-   "cmd": "../../usr/bin/python Test/test_trigger_step_replay.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_trigger_step_replay.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.86,
+   "elapsed_s": 2.04,
    "output_tail": [
-    "[耗时]   复盘后GC回收: 0.018s",
+    "[耗时]   复盘后GC回收: 0.020s",
     "[耗时] 读取数据文件: 0.000s, 500条K线",
-    "[耗时] chan.py 缠论分析: 0.105s",
+    "[耗时] chan.py 缠论分析: 0.106s",
     "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.005s",
     "[耗时] 主级别提取结果: 0.005s (K线=500 笔=17 中枢=3 线段=3 买卖点=3)",
     "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 3买卖点",
@@ -70,11 +70,11 @@
   },
   {
    "name": "phase2_guards",
-   "cmd": "../../usr/bin/python Test/test_phase2_guards.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_phase2_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.47,
+   "elapsed_s": 1.41,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -92,21 +92,21 @@
   },
   {
    "name": "determinism",
-   "cmd": "../../usr/bin/python Test/test_determinism.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_determinism.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.45,
+   "elapsed_s": 4.57,
    "output_tail": [
     "[PASS] ② 跨路径污染检查: 股票→期货→股票，前后股票结果完全一致（CTqSdkAPI 缓存/REPLAY_MODE 等共享状态无泄漏）",
     "[耗时] 双窗口-主级别(d)数据: 0.000s, 500条K线",
-    "[耗时] chan.py 缠论分析: 1.643s",
+    "[耗时] chan.py 缠论分析: 1.583s",
     "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.015s",
     "[耗时] 主级别提取结果: 0.015s (K线=500 笔=17 中枢=3 线段=3 买卖点=2)",
     "[调试] 双窗口模式: dual=True, sub_freq=30m, chan类型=CChan",
-    "[耗时] 子级别(30m)提取: 0.036s (K线=2000 笔=99 分型=507 中枢=15 线段=11 买卖点=63)",
+    "[耗时] 子级别(30m)提取: 0.084s (K线=2000 笔=99 分型=507 中枢=15 线段=11 买卖点=63)",
     "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 2买卖点",
-    "[耗时] 总耗时: 1.696s",
+    "[耗时] 总耗时: 1.683s",
     "[PASS] ③ 双窗口语义: 契约/子级口径(日线+30分钟)/数量(500≤2000)/时间对齐(500 个交易日全覆盖)",
     "",
     "===== 确定性测试: 全部通过 ====="
@@ -114,11 +114,11 @@
   },
   {
    "name": "industry_mapping",
-   "cmd": "../../usr/bin/python Test/test_industry_mapping.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_industry_mapping.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.82,
+   "elapsed_s": 1.18,
    "output_tail": [
     "[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py (40524 bytes)，DataAPI/ 无残留",
     "[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: x_to_881=470 881_to_x=470",
@@ -133,11 +133,11 @@
   },
   {
    "name": "sse_sequence",
-   "cmd": "../../usr/bin/python Test/test_sse_sequence.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_sse_sequence.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.34,
+   "elapsed_s": 1.45,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -155,22 +155,22 @@
   },
   {
    "name": "func_map_sync",
-   "cmd": "../../usr/bin/python Test/func_map_check.py",
+   "cmd": "../../../../usr/bin/python3 Test/func_map_check.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.58,
+   "elapsed_s": 0.54,
    "output_tail": [
     "[PASS] 映射校验: 75 函数 / 41 状态 / 2 类 / 37 路由 全部归属且与代码同步"
    ]
   },
   {
    "name": "phase3_guards",
-   "cmd": "../../usr/bin/python Test/test_phase3_guards.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_phase3_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.43,
+   "elapsed_s": 1.5,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -187,11 +187,11 @@
   },
   {
    "name": "phase4_guards",
-   "cmd": "../../usr/bin/python Test/test_phase4_guards.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_phase4_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.22,
+   "elapsed_s": 1.4,
    "output_tail": [
     "[PASS] ⑤ 分层方向: FrontAPI → AppOrch → AppData → AppConfig 单向无违反",
     "[内存] 缓存已满(50)，淘汰: __p4_probe_0",
@@ -209,11 +209,11 @@
   },
   {
    "name": "phase5_guards",
-   "cmd": "../../usr/bin/python Test/test_phase5_guards.py",
+   "cmd": "../../../../usr/bin/python3 Test/test_phase5_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.26,
+   "elapsed_s": 1.57,
    "output_tail": [
     "[PASS] ③a 基类契约: 5 个元数据属性 + fetch_kline（get_kline 家族）声明于 CCommonStockApi",
     "[PASS] ③b 基类默认实现: fetch_kline 默认 NotImplementedError",
@@ -230,15 +230,37 @@
    ]
   },
   {
-   "name": "sse_gray",
-   "cmd": "../../usr/bin/python Test/test_sse_gray.py",
+   "name": "phase6_guards",
+   "cmd": "../../../../usr/bin/python3 Test/test_phase6_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.43,
+   "elapsed_s": 0.71,
    "output_tail": [
-    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] step_load耗时=0.000s bar=2026-08-17 09:09:00",
-    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] updated分支完成: completed=09:09:00 追加预览bar=2026/08/17 09:10 快照lastK.date=2026/08/17 09:10 kline_count=5",
+    "===== 阶段 6 成果防护：前端组件化（设计 8.9） =====",
+    "[PASS] ① 组件区块完备: 10 个区块全部在位非空，顶层函数零游离（384 处 function 定义落位）",
+    "[PASS] ② KLineChart 内容契约: 渲染管线 23 个关键函数物理位于区块内（阶段 8 整体迁移单元）",
+    "[PASS] ③ window API 面冻结: 65 个绑定 == 基线 64 + ['ChanApp']（对外 API 零漂移）",
+    "[PASS] ④ index.html 事件引用完整: 48 个内联事件标识符全部解析到 window 绑定",
+    "[PASS] ⑤ 零构建/单文件约束: 无 import/export/require；Frontend/ 保持 3 文件（原生 JS 零依赖，设计 3.5/8.9）",
+    "[PASS] ⑥ JS 语法校验: node --check 通过",
+    "[PASS] ⑦ 组件注册表一致: 10 组件登记 137 条接口，全部对应真实函数；window.ChanApp 已暴露",
+    "[PASS] ⑧ 缓存击穿纪律: app.js?v=7（≥7，版本号只增不减）",
+    "[PASS] ⑨ 合并层完整（AppState 访问层）: 30 个访问器 + 8 个方法别名在位，变量与 [STATE] 声明一致；未新增 window.* 绑定（A 方案合并项）",
+    "----------------------------------------------------------------",
+    "===== 阶段 6 成果防护: 全部通过（9 类守护） ====="
+   ]
+  },
+  {
+   "name": "sse_gray",
+   "cmd": "../../../../usr/bin/python3 Test/test_sse_gray.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 1.39,
+   "output_tail": [
+    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] step_load耗时=0.000s bar=2026-08-17 12:38:36",
+    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] updated分支完成: completed=12:38:36 追加预览bar=2026/08/17 12:39 快照lastK.date=2026/08/17 12:39 kline_count=5",
     "[PASS] dual 首事件: init（共 8 帧，心跳 4 帧）",
     "[PASS] dual init 结构: main+sub 双窗口",
     "[PASS] dual 收尾: close×1 + cleanup×2（['KQ.m@SHFE.rb:60', 'KQ.m@SHFE.rb:15']）",
