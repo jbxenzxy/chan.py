@@ -107,20 +107,27 @@ def install_futures_data_source(fixture):
     saved_modules = {k: sys.modules.get(k) for k in ("tqsdk",)}
     sys.modules["tqsdk"] = fake_mod
 
-    orig_fetch = getattr(m, "fetch_futures_kline", None)
-    orig_tq_available = getattr(m, "TQ_AVAILABLE", None)
-    orig_ctqsdkapi = getattr(m, "CTqSdkAPI", None)
-
-    def _fake_fetch(api, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
-        return [dict(r) for r in records]
-
-    if orig_fetch is not None:
-        m.fetch_futures_kline = _fake_fetch
+    # 阶段 5：fetch 收归 get_kline 家族基类方法 CTqSdkAPI.fetch_kline
+    # （my_chan_main 不再持有模块级 fetch_futures_kline 符号），打桩点
+    # 改到抽象层类方法：api_cls.fetch_kline = classmethod(_fake_fetch_kline)。
     m.TQ_AVAILABLE = True
-    # CTqSdkAPI 本体可用（内存适配器）；仅当环境缺失时用占位类顶替检查
+    # CTqSdkAPI 本体可用（内存适配器）；仅当环境缺失时用真实类顶替检查
     if m.CTqSdkAPI is None:
         from DataAPI.TqSdkAPI import CTqSdkAPI as _RealCTqSdkAPI
         m.CTqSdkAPI = _RealCTqSdkAPI
+    api_cls = m.CTqSdkAPI
+
+    # 打桩点：抽象层类方法 CTqSdkAPI.fetch_kline（classmethod，
+    # 调用形如 CTqSdkAPI.fetch_kline(api, symbol, ...) → cls 自动绑定）
+    orig_fetch = api_cls.__dict__.get("fetch_kline", None)
+    orig_tq_available = getattr(m, "TQ_AVAILABLE", None)
+    orig_ctqsdkapi = getattr(m, "CTqSdkAPI", None)
+
+    def _fake_fetch_kline(cls, api, symbol, freq_sec=15, num_bars=None,
+                          display_key=None, start_time=None):
+        return [dict(r) for r in records]
+
+    api_cls.fetch_kline = classmethod(_fake_fetch_kline)
 
     def restore():
         for k, v in saved_modules.items():
@@ -128,8 +135,11 @@ def install_futures_data_source(fixture):
                 sys.modules[k] = v
             else:
                 sys.modules.pop(k, None)
+        # 还原 fetch_kline：有原始定义则还原，无则删除（回落到基类声明）
         if orig_fetch is not None:
-            m.fetch_futures_kline = orig_fetch
+            api_cls.fetch_kline = orig_fetch
+        elif "fetch_kline" in api_cls.__dict__:
+            del api_cls.fetch_kline
         if orig_tq_available is not None:
             m.TQ_AVAILABLE = orig_tq_available
         if orig_ctqsdkapi is not None:

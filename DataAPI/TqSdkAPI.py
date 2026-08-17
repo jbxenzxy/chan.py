@@ -174,9 +174,30 @@ class CTqSdkAPI(CCommonStockApi):
     """
     天勤数据源适配器，继承 CCommonStockApi 实现完整接口。
     缓存键为 "symbol:freq_sec" 格式，同品种不同周期各自独立。
+
+    阶段 5（设计 8.8）：实现 CommonStockAPI 元数据接口 ——
+    频率映射 / 别名 / 支持列表 提升为抽象层元数据属性（类属性访问），
+    fetch_kline 收归基类 get_kline 家族（委托模块级 fetch_futures_kline）。
     """
     _records_by_symbol = {}
     _lock = threading.Lock()
+
+    # ── 数据源元数据接口（覆盖 CommonStockAPI 默认空值）──────────
+    # 普通类属性（全 Python 版本兼容；@classmethod @property 在 3.11+
+    # 下 classmethod 包装 property 返回 method 对象，见 CommonStockAPI 说明）
+    FREQ_SEC_MAP = FREQ_SEC_MAP
+    FREQ_LABEL_CN = FREQ_LABEL_CN
+    FUTURES_ALIASES = FUTURES_ALIASES
+    SUPPORTED_FREQS = SUPPORTED_FREQS
+    DISABLED_FREQS = DISABLED_FREQS
+
+    @classmethod
+    def fetch_kline(cls, api, symbol, freq_sec=15, num_bars=None,
+                    display_key=None, start_time=None):
+        """拉取历史 K 线（委托模块级 fetch_futures_kline）"""
+        return fetch_futures_kline(api, symbol, freq_sec=freq_sec,
+                                   num_bars=num_bars, display_key=display_key,
+                                   start_time=start_time)
 
     @classmethod
     def do_init(cls):

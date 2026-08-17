@@ -23,6 +23,9 @@ CI / 迁移每阶段的验收门禁）。
                                                      分层方向/LRU 语义
  11. SSE 灰度比对      test_sse_gray.py             3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
+ 12. 阶段 5 成果防护   test_phase5_guards.py        获取侧抽象完善：tdxhy 迁 App/统一加载/
+                                                     盘后下载收敛 ElTdxAPI/元数据接口提升/
+                                                     AppOrch 委托/fetch_kline 抽象
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -63,6 +66,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_phase3_guards.py")]),
     ("phase4_guards",
      [sys.executable, os.path.join("Test", "test_phase4_guards.py")]),
+    ("phase5_guards",
+     [sys.executable, os.path.join("Test", "test_phase5_guards.py")]),
     ("sse_gray",
      [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
 ]
@@ -77,7 +82,7 @@ def run_component(name, cmd, update=False, env=None):
     if update and name in ("snapshot_regression", "trigger_step_replay",
                            "phase2_guards", "industry_mapping", "sse_sequence",
                            "func_map_sync", "phase3_guards", "phase4_guards",
-                           "sse_gray"):
+                           "phase5_guards", "sse_gray"):
         real_cmd.append("--update")
     t0 = time.time()
     try:

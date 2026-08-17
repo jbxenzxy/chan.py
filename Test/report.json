@@ -1,10 +1,10 @@
 {
  "phase": "4",
  "mode": "verify",
- "ran_at": "2026-08-17 03:35:22",
+ "ran_at": "2026-08-17 09:09:00",
  "python": "3.10.12",
- "total": 11,
- "passed": 11,
+ "total": 12,
+ "passed": 12,
  "failed": 0,
  "components": [
   {
@@ -13,7 +13,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.56,
+   "elapsed_s": 0.68,
    "output_tail": [
     "[gen] stock_day.json: 500 bars",
     "[gen] stock_60m.json: 2000 bars",
@@ -37,10 +37,10 @@
     "[BS2][15s] cal_bs2point: 跳过: 重叠条件不满足(B/C均不匹配) | stroke_n_idx=89 | matched_pattern=None",
     "[BS3][15s] cal_bs3point: 进入...... | bi_idx=89",
     "[BS3][15s] cal_bs3point: 跳过: 重叠条件不满足 | stroke_n_idx=89 | n_overlap=False | n_1_idx=88 | n_1_overlap=False | n_high=3992.02 | n_low=3834.71 | n_1_high=3992.02 | n_1_low=3977.82 | zs_high=4704.88 | zs_low=4667.89",
-    "[分析] ⑶ chan.py分析: 0.902s, 合并K线=1451, 笔=90, 中枢=9",
+    "[分析] ⑶ chan.py分析: 0.916s, 合并K线=1451, 笔=90, 中枢=9",
     "[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): 0.025s",
     "[信息] 期货查询 KQ.m@SHFE.rb 完成(15秒): 2000K线, 90笔, 507分型, 9中枢, 10线段, 34买卖点",
-    "[耗时] 总耗时: 0.927s",
+    "[耗时] 总耗时: 0.942s",
     "[PASS] futures_15s_end_date",
     "",
     "===== 快照回归: 8/8 通过 ====="
@@ -52,15 +52,15 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.25,
+   "elapsed_s": 1.86,
    "output_tail": [
-    "[耗时]   复盘后GC回收: 0.020s",
+    "[耗时]   复盘后GC回收: 0.018s",
     "[耗时] 读取数据文件: 0.000s, 500条K线",
-    "[耗时] chan.py 缠论分析: 0.103s",
+    "[耗时] chan.py 缠论分析: 0.105s",
     "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.005s",
     "[耗时] 主级别提取结果: 0.005s (K线=500 笔=17 中枢=3 线段=3 买卖点=3)",
     "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 3买卖点",
-    "[耗时] 总耗时: 0.108s",
+    "[耗时] 总耗时: 0.111s",
     "[PASS] ① 已确认笔一致性: 14/14 三元组精确匹配（全量锚点前 14 根）",
     "[PASS] ② 虚笔: 1 根（up 2024/08/20→2024/09/09），起点锚定全量笔端点",
     "       [info] 回放 bi=15 seg=3 zs=2 | 全量 bi=17 seg=3 zs=3",
@@ -74,7 +74,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.34,
+   "elapsed_s": 1.47,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -96,17 +96,17 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.38,
+   "elapsed_s": 4.45,
    "output_tail": [
     "[PASS] ② 跨路径污染检查: 股票→期货→股票，前后股票结果完全一致（CTqSdkAPI 缓存/REPLAY_MODE 等共享状态无泄漏）",
     "[耗时] 双窗口-主级别(d)数据: 0.000s, 500条K线",
-    "[耗时] chan.py 缠论分析: 1.562s",
-    "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.014s",
-    "[耗时] 主级别提取结果: 0.014s (K线=500 笔=17 中枢=3 线段=3 买卖点=2)",
+    "[耗时] chan.py 缠论分析: 1.643s",
+    "[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.015s",
+    "[耗时] 主级别提取结果: 0.015s (K线=500 笔=17 中枢=3 线段=3 买卖点=2)",
     "[调试] 双窗口模式: dual=True, sub_freq=30m, chan类型=CChan",
-    "[耗时] 子级别(30m)提取: 0.079s (K线=2000 笔=99 分型=507 中枢=15 线段=11 买卖点=63)",
+    "[耗时] 子级别(30m)提取: 0.036s (K线=2000 笔=99 分型=507 中枢=15 线段=11 买卖点=63)",
     "[信息] 查询 600519.SH 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 2买卖点",
-    "[耗时] 总耗时: 1.657s",
+    "[耗时] 总耗时: 1.696s",
     "[PASS] ③ 双窗口语义: 契约/子级口径(日线+30分钟)/数量(500≤2000)/时间对齐(500 个交易日全覆盖)",
     "",
     "===== 确定性测试: 全部通过 ====="
@@ -118,15 +118,15 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.17,
+   "elapsed_s": 0.82,
    "output_tail": [
-    "[PASS] ① 数据文件在位: DataAPI/tdxhy_mapping_data.py (39586 bytes)",
-    "[PASS] ② TdxAPI 侧加载非空: x_to_881=470 881_to_x=470",
-    "[PASS] ② my_chan_main 侧加载非空: 881_to_x=470",
-    "[PASS] ③ 双路径内容一致: 两处 exec 加载结果完全相同",
+    "[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py (40524 bytes)，DataAPI/ 无残留",
+    "[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: x_to_881=470 881_to_x=470",
+    "[PASS] ②b TdxAPI 源码无 exec 寻址加载",
+    "[PASS] ③ 注入链: set_tdx_hy_mapping 注入身份同一，TdxAPI 侧可直接用（与 set_tdx_config 同一注入模式）",
     "[PASS] ④ 双向互逆: 470 条全部互逆一致",
     "[PASS] ④b 条目质量: 470 条全部合法（键/名称非空，881代码 6 位纯数字且无重复）",
-    "[PASS] ⑤ 完整性快照: n=470 sha256=ceb5b82fc917… 一致",
+    "[PASS] ⑤ 完整性快照: n=470 sha256=ceb5b82fc917… 与迁移前基线一致（零内容漂移）",
     "",
     "===== 行业映射完整性: 全部通过 ====="
    ]
@@ -137,7 +137,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.29,
+   "elapsed_s": 1.34,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -159,9 +159,9 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.57,
+   "elapsed_s": 0.58,
    "output_tail": [
-    "[PASS] 映射校验: 74 函数 / 39 状态 / 2 类 / 37 路由 全部归属且与代码同步"
+    "[PASS] 映射校验: 75 函数 / 41 状态 / 2 类 / 37 路由 全部归属且与代码同步"
    ]
   },
   {
@@ -170,7 +170,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.4,
+   "elapsed_s": 1.43,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: C:\\new_tdx_hd_test/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -191,7 +191,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.33,
+   "elapsed_s": 1.22,
    "output_tail": [
     "[PASS] ⑤ 分层方向: FrontAPI → AppOrch → AppData → AppConfig 单向无违反",
     "[内存] 缓存已满(50)，淘汰: __p4_probe_0",
@@ -208,15 +208,37 @@
    ]
   },
   {
+   "name": "phase5_guards",
+   "cmd": "../../usr/bin/python Test/test_phase5_guards.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 1.26,
+   "output_tail": [
+    "[PASS] ③a 基类契约: 5 个元数据属性 + fetch_kline（get_kline 家族）声明于 CCommonStockApi",
+    "[PASS] ③b 基类默认实现: fetch_kline 默认 NotImplementedError",
+    "[PASS] ③c 实现类: CTqSdkAPI 5 属性非空且与模块级常量同一对象，fetch_kline 已实现",
+    "[PASS] ③d fetch_kline 运行时委托: 5 参数逐位透传至模块级 fetch_futures_kline（mock 验证）",
+    "[PASS] ④a DataAPI 反向依赖: 4 个模块零 import App/my_chan_main/FrontAPI",
+    "[PASS] ④b AppData 纯度: 不 import DataAPI/my_chan_main/FrontAPI/AppOrch（AppConfig 为允许终点）",
+    "[PASS] ⑤a 文件迁移: App/tdxhy_mapping_data.py 在位，DataAPI/ 无残留",
+    "[PASS] ⑤b 启动注入: import my_chan_main 即完成注入，TdxAPI 侧 470 条（基线 470）",
+    "[PASS] ⑥ 打桩点: snapshot_runner 打桩 CTqSdkAPI.fetch_kline（阶段 5 抽象层类方法）",
+    "[PASS] ⑦ 下载入口: 4 入口直连 ElTdxAPI + app_config.download_dir（零单体全局，运行时同源验证）",
+    "----------------------------------------------------------------",
+    "===== 阶段 5 成果防护: 全部通过（7 类守护） ====="
+   ]
+  },
+  {
    "name": "sse_gray",
    "cmd": "../../usr/bin/python Test/test_sse_gray.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.32,
+   "elapsed_s": 1.43,
    "output_tail": [
-    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] step_load耗时=0.000s bar=2026-08-17 03:35:22",
-    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] updated分支完成: completed=03:35:22 追加预览bar=2026/08/17 03:36 快照lastK.date=2026/08/17 03:36 kline_count=5",
+    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] step_load耗时=0.000s bar=2026-08-17 09:09:00",
+    "[KQ.m@SHFE.rb 双窗口(1m/15s)] [DIAG][上窗] updated分支完成: completed=09:09:00 追加预览bar=2026/08/17 09:10 快照lastK.date=2026/08/17 09:10 kline_count=5",
     "[PASS] dual 首事件: init（共 8 帧，心跳 4 帧）",
     "[PASS] dual init 结构: main+sub 双窗口",
     "[PASS] dual 收尾: close×1 + cleanup×2（['KQ.m@SHFE.rb:60', 'KQ.m@SHFE.rb:15']）",

@@ -28,20 +28,41 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 from KLine.KLine_Unit import CKLine_Unit
 
 # 通达信研究行业 X代码↔881代码映射表（从官方PDF 3.6节提取）
-# 使用显式路径加载，避免 Python import 缓存问题
+# ── 阶段 5（设计 8.8/4.1）：tdxhy_mapping_data.py 已整体迁入 App/ 目录 ──
+# 本模块不再按自身目录寻址加载（原 try-import App 反向依赖 + 失败静默降级
+# 空表，设计 4.4 依赖方向违反）；映射数据改由 App 层单一加载函数
+# AppData.load_tdxhy_mapping() 加载后，经 set_tdx_hy_mapping 注入（与
+# set_tdx_config 同一注入模式，DataAPI 与 App 互不依赖）。
 _TDXHY_X_TO_881 = {}
 _TDXHY_881_TO_X = {}
-_mapping_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tdxhy_mapping_data.py")
-if os.path.exists(_mapping_path):
-    try:
-        _mapping_ns = {}
-        exec(open(_mapping_path, encoding="utf-8").read(), _mapping_ns)
-        _TDXHY_X_TO_881 = _mapping_ns.get("_TDXHY_X_TO_881", {})
-        _TDXHY_881_TO_X = _mapping_ns.get("_TDXHY_881_TO_X", {})
-    except Exception as e:
-        print(f"[TdxAPI] ⚠️ tdxhy_mapping_data 加载失败: {e}")
-else:
-    print(f"[TdxAPI] ⚠️ tdxhy_mapping_data.py 不存在: {_mapping_path}")
+
+
+def set_tdx_hy_mapping(x_to_881=None, to_x=None):
+    """由 my_chan_main.py 启动时调用，注入通达信研究行业映射表
+
+    数据文件 App/tdxhy_mapping_data.py 由 AppData.load_tdxhy_mapping() 单一
+    加载（设计 8.8），本函数只收值不寻址；注入对象直存（同一 dict 身份），
+    注入前调用方为空表（跨层依赖方向保持 DataAPI → 不 import App）。
+
+    fail-fast 注入模式（设计 8.4 根除静默降级）：任一侧注入后若双表仍
+    存在空表，直接抛 ValueError，不再以空表继续运行。
+    """
+    global _TDXHY_X_TO_881, _TDXHY_881_TO_X
+    if x_to_881:
+        if not to_x and not _TDXHY_881_TO_X:
+            raise ValueError("行业映射 to_x 为空，注入失败（静默降级已禁止）")
+        _TDXHY_X_TO_881 = x_to_881
+    if to_x:
+        if not x_to_881 and not _TDXHY_X_TO_881:
+            raise ValueError("行业映射 x_to_881 为空，注入失败（静默降级已禁止）")
+        _TDXHY_881_TO_X = to_x
+    if not _TDXHY_X_TO_881 or not _TDXHY_881_TO_X:
+        raise ValueError("行业映射数据为空，注入失败（静默降级已禁止）")
+
+
+def get_tdx_hy_mapping():
+    """返回当前行业映射的只读副本 (x_to_881, to_x)（守护用例/调试用）"""
+    return dict(_TDXHY_X_TO_881), dict(_TDXHY_881_TO_X)
 
 
 # ============================================================

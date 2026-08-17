@@ -61,7 +61,8 @@ PHASE_OF = {
 #    值：(层代号, 说明)
 # ═══════════════════════════════════════════════════════════════════
 TARGET_FUNCS = {
-    # ── 盘后下载族 → DataAPI/ElTdxAPI.py（设计 8.8 点名 8 函数 + 3 个下载专用工具）──
+    # ── 盘后下载族 → DataAPI/ElTdxAPI.py（设计 8.8 点名 8 函数 + 下载专用工具，
+    #    阶段 5 已物理迁入 ElTdxAPI，check/build_map 扫描 ElTdxAPI.py 合并）──
     "_tdx_day_record":        ("ELTDX", "日线 .day 记录构造（纯）"),
     "_tdx_min_record":        ("ELTDX", "分钟 .lc1/.lc5 记录构造（纯）"),
     "_date_to_int":           ("ELTDX", "日期→pytdx int（仅下载族调用）"),
@@ -73,7 +74,8 @@ TARGET_FUNCS = {
     "_start_download":        ("ELTDX", "启动下载线程"),
     "_stop_download":         ("ELTDX", "中止下载"),
     "_get_download_status":   ("ELTDX", "下载进度查询"),
-    "_collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（设计 8.8 点名）"),
+    "collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（公开API，不含下划线前缀）"),
+    "_collect_codes_from_vipdoc": ("ELTDX", "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"),
 
     # ── 消费侧：指标计算（纯函数，波次 1 先行）──
     "ema":                        ("ORCH_E", "EMA 指标（纯）"),
@@ -207,6 +209,8 @@ TARGET_STATES = {
     # 盘后下载状态 → ElTdxAPI 类字段
     "_download_state": ("ELTDX", "下载状态 dict（4 函数共用）→ ElTdxAPI 类字段"),
     "_download_lock":  ("ELTDX", "下载锁 → ElTdxAPI 类字段"),
+    "_ELTDX_AVAILABLE": ("ELTDX", "eltdx 可用旗（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
+    "TdxClient":        ("ELTDX", "eltdx 客户端类（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
 
     # 消费侧常量
     "FREQ_TO_COL":     ("ORCH_E", "freq→选点列（6 读）→ 消费侧常量"),
@@ -317,6 +321,13 @@ def compute_waves(funcs):
 def build_map():
     auto = analyze()
     funcs, states = auto["funcs"], auto["states"]
+
+    # 阶段 5：同时扫描 DataAPI/ElTdxAPI.py，合并其函数与状态
+    eltdx_path = os.path.join(REPO_ROOT, "DataAPI", "ElTdxAPI.py")
+    if os.path.exists(eltdx_path):
+        auto_eltdx = analyze(eltdx_path)
+        funcs.update(auto_eltdx["funcs"])
+        states.update(auto_eltdx["states"])
     waves = compute_waves(funcs)
 
     # 波次内排序：被依赖多者优先
@@ -372,6 +383,13 @@ def check(update=False):
     failures = []
     auto = analyze()
     funcs, states = auto["funcs"], auto["states"]
+
+    # 阶段 5：同时扫描 DataAPI/ElTdxAPI.py，合并其函数与状态
+    eltdx_path = os.path.join(REPO_ROOT, "DataAPI", "ElTdxAPI.py")
+    if os.path.exists(eltdx_path):
+        auto_eltdx = analyze(eltdx_path)
+        funcs.update(auto_eltdx["funcs"])
+        states.update(auto_eltdx["states"])
 
     # ① 完备性：无孤儿
     orphan_f = sorted(set(funcs) - set(TARGET_FUNCS))

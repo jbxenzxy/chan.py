@@ -727,9 +727,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if is_stocks:
             fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, main_bi)
         else:
-            from DataAPI.TqSdkAPI import FREQ_SEC_MAP
-            main_freq_sec = FREQ_SEC_MAP[main_freq]
-            sub_freq_sec = FREQ_SEC_MAP[sub_freq]
+            from DataAPI.TqSdkAPI import CTqSdkAPI
+            main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP[main_freq]
+            sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP[sub_freq]
             snapshot = {'bis': [{'fx_a_raw_dt': fx_a_raw_dt, 'fx_b_raw_dt': fx_b_raw_dt}]}
             _futures_red_range(snapshot, main_freq_sec, sub_freq_sec, sub_freq)
             fx_a_sub_dt = snapshot['bis'][0].get('fx_a_sub_dt', '')

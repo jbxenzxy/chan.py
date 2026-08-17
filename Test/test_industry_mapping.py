@@ -1,18 +1,24 @@
 # -*- coding: utf-8 -*-
 """
-阶段 2.5：行业映射数据完整性用例
+行业映射数据完整性用例 · 阶段 5 后架构（原 2.5，随 8.8 迁移升级）
 =====================================================================
 设计文档 8.4：「验证 tdxhy_mapping_data.py 在迁移全过程中映射表不发生
 静默降级（阶段 5 之前任何目录调整都可能触发两处硬编码加载失效）」。
+设计文档 8.8（阶段 5）：tdxhy_mapping_data.py 整体迁入 App/ 目录
+（独立数据文件，不并入 AppData.py）；原两处 exec 硬编码寻址收敛为
+单一加载函数 AppData.load_tdxhy_mapping()，DataAPI 侧经
+set_tdx_hy_mapping 注入（与 set_tdx_config 同一注入模式）。
 
-两处硬编码加载点：
-  ① DataAPI/TdxAPI.py:34   按自身目录寻址 → 模块级 _TDXHY_X_TO_881/_TDXHY_881_TO_X
-  ② my_chan_main.py:1463   硬编码 DataAPI/ 前缀 → _refresh_stock_names 内部 exec
+验证点：
+  ① 文件迁移完成：App/tdxhy_mapping_data.py 在位，DataAPI/ 下无残留双份
+  ② 单一加载点：AppData.load_tdxhy_mapping() 非空（缺失/空表硬失败，
+     不静默降级）；DataAPI/TdxAPI.py 源码不再有按自身目录的 exec 寻址
+  ③ 注入链：set_tdx_hy_mapping 注入后 TdxAPI 侧内容一致且对象身份同一
+  ④ 双向互逆一致性 + ④b 条目质量（沿用原用例）
+  ⑤ 完整性快照：键数量 + sha256 与迁移前基线完全一致
+     （数据文件仅移动位置、内容零改动 → 哈希连续证明无静默降级）
 
-任一路径失效时只打印警告并降级为空表（功能静默退化），本用例将其
-转为硬失败，并冻结映射内容哈希作为完整性基线。
-
-运行：python Test/test_industry_mapping.py
+运行：python Test/test_industry_mapping.py [--update]
 """
 import hashlib
 import json
@@ -31,18 +37,8 @@ if not hasattr(typing, "Self"):
 SNAPSHOT = os.path.join(TEST_DIR, "snapshots", "industry_mapping_integrity.json")
 
 
-def _load_via(path_expr):
-    """按指定路径表达式 exec 加载映射（复刻两处硬编码的加载方式）"""
-    ns = {}
-    exec(open(path_expr, encoding="utf-8").read(), ns)
-    return {
-        "x_to_881": ns.get("_TDXHY_X_TO_881", {}),
-        "881_to_x": ns.get("_TDXHY_881_TO_X", {}),
-    }
-
-
 def _digest(mapping):
-    """映射内容摘要：键数量 + 规范序列化后的 sha256"""
+    """映射内容摘要：键数量 + 规范序列化后的 sha256（与阶段 2.5 基线同构）"""
     canon = json.dumps(
         {"x_to_881": mapping["x_to_881"], "881_to_x": mapping["881_to_x"]},
         ensure_ascii=False, sort_keys=True)
@@ -55,58 +51,68 @@ def main():
     failures = []
     force_update = "--update" in sys.argv
 
-    # ① 文件在位（两处加载的前提）
-    map_file = os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py")
+    # ① 文件迁移完成（阶段 5：DataAPI/ → App/，独立数据文件）
+    map_file = os.path.join(REPO_ROOT, "App", "tdxhy_mapping_data.py")
+    legacy_file = os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py")
     if not os.path.exists(map_file):
-        print("[FAIL] ① tdxhy_mapping_data.py 文件缺失:", map_file)
-        return False
-    print(f"[PASS] ① 数据文件在位: DataAPI/tdxhy_mapping_data.py "
-          f"({os.path.getsize(map_file)} bytes)")
-
-    # ② 双路径加载均非空（防静默降级）
-    from DataAPI import TdxAPI
-    via_tdxapi = {
-        "x_to_881": TdxAPI._TDXHY_X_TO_881,
-        "881_to_x": TdxAPI._TDXHY_881_TO_X,
-    }
-    if not via_tdxapi["x_to_881"] or not via_tdxapi["881_to_x"]:
-        failures.append("TdxAPI 侧映射为空（加载静默降级）")
-        print("[FAIL] ② TdxAPI 侧加载: 空表（静默降级）")
+        print("[FAIL] ① 数据文件缺失:", map_file)
+        failures.append("App/tdxhy_mapping_data.py 缺失（迁移未完成）")
+    elif os.path.exists(legacy_file):
+        print(f"[FAIL] ① DataAPI/ 下残留旧文件（双份风险）: {legacy_file}")
+        failures.append("DataAPI/tdxhy_mapping_data.py 未删除（双源风险）")
     else:
-        print(f"[PASS] ② TdxAPI 侧加载非空: "
-              f"x_to_881={len(via_tdxapi['x_to_881'])} "
-              f"881_to_x={len(via_tdxapi['881_to_x'])}")
+        print(f"[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py "
+              f"({os.path.getsize(map_file)} bytes)，DataAPI/ 无残留")
 
-    # my_chan_main 侧寻址逻辑（按其代码硬编码 DataAPI/ 前缀复刻）
-    mcm_path = os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py")
-    if not os.path.exists(mcm_path):
-        failures.append("my_chan_main 侧寻址路径失效（DataAPI/ 前缀）")
-        print("[FAIL] ② my_chan_main 侧寻址: 路径失效")
-    else:
-        via_mcm = _load_via(mcm_path)
-        if not via_mcm["881_to_x"]:
-            failures.append("my_chan_main 侧映射为空")
-            print("[FAIL] ② my_chan_main 侧加载: 空表")
+    # ② 单一加载点：AppData.load_tdxhy_mapping() 非空（防静默降级）
+    from App.AppConfig import app_config  # noqa: F401  （加载次序对齐主程序）
+    from App.AppData import app_data
+    try:
+        x_to_881, to_x = app_data.load_tdxhy_mapping()
+        loaded = {"x_to_881": x_to_881, "881_to_x": to_x}
+        if not x_to_881 or not to_x:
+            print("[FAIL] ② 单一加载: 空表（必须硬失败而非返回空）")
+            failures.append("load_tdxhy_mapping 返回空表")
         else:
-            print(f"[PASS] ② my_chan_main 侧加载非空: "
-                  f"881_to_x={len(via_mcm['881_to_x'])}")
+            print(f"[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: "
+                  f"x_to_881={len(x_to_881)} 881_to_x={len(to_x)}")
+    except ValueError as e:
+        print(f"[FAIL] ② 单一加载: 硬失败（数据文件问题）: {e}")
+        failures.append(f"load_tdxhy_mapping 硬失败: {e}")
+        return _report(failures)
 
-    # ③ 双路径内容一致
-    via_mcm = _load_via(mcm_path)
-    if via_tdxapi["881_to_x"] != via_mcm["881_to_x"]:
-        failures.append("两处加载的 881_to_x 内容不一致")
-        print("[FAIL] ③ 双路径内容一致性: 881_to_x 不一致")
-    elif via_tdxapi["x_to_881"] != via_mcm["x_to_881"]:
-        failures.append("两处加载的 x_to_881 内容不一致")
-        print("[FAIL] ③ 双路径内容一致性: x_to_881 不一致")
+    # ②b 源码级守护：DataAPI/TdxAPI.py 不再含按自身目录的 exec 寻址
+    #    （原硬编码之一；若回潮，文件移动与加载解耦的设计即被破坏）
+    tdxapi_src = open(os.path.join(REPO_ROOT, "DataAPI", "TdxAPI.py"),
+                      encoding="utf-8").read()
+    if "tdxhy_mapping_data" in tdxapi_src and "exec(" in tdxapi_src:
+        bad_zone = tdxapi_src.split("class CCommonStockApi")[0]
+        if "tdxhy_mapping_data" in bad_zone and "exec(" in bad_zone:
+            print("[FAIL] ②b TdxAPI 源码回潮 exec 寻址加载")
+            failures.append("TdxAPI.py 恢复了按自身目录的 exec 加载")
+        else:
+            print("[PASS] ②b TdxAPI 源码无 exec 寻址（仅注释提及迁移历史）")
     else:
-        print("[PASS] ③ 双路径内容一致: 两处 exec 加载结果完全相同")
+        print("[PASS] ②b TdxAPI 源码无 exec 寻址加载")
+
+    # ③ 注入链：TdxAPI 侧经 set_tdx_hy_mapping 注入，内容一致 + 身份同一
+    from DataAPI import TdxAPI
+    TdxAPI.set_tdx_hy_mapping(x_to_881, to_x)
+    if TdxAPI._TDXHY_X_TO_881 is not x_to_881 or TdxAPI._TDXHY_881_TO_X is not to_x:
+        print("[FAIL] ③ 注入链: 对象身份不同一（注入被拷贝/重建）")
+        failures.append("set_tdx_hy_mapping 注入对象身份不同一")
+    elif TdxAPI._TDXHY_881_TO_X != to_x:
+        print("[FAIL] ③ 注入链: 注入后内容不一致")
+        failures.append("注入后 TdxAPI 侧内容不一致")
+    else:
+        print("[PASS] ③ 注入链: set_tdx_hy_mapping 注入身份同一，"
+              "TdxAPI 侧可直接用（与 set_tdx_config 同一注入模式）")
 
     # ④ 双向互逆一致性
     #    _TDXHY_881_TO_X: {881code: (x_code, name)}
     #    _TDXHY_X_TO_881: {x_code:  (name,  881code)}   ← value 同为二元组，次序不同
-    fwd = via_mcm["881_to_x"]
-    rev = via_mcm["x_to_881"]
+    fwd = loaded["881_to_x"]
+    rev = loaded["x_to_881"]
     bad = []
     for code_881, pair in fwd.items():
         if not isinstance(pair, (list, tuple)) or len(pair) != 2:
@@ -121,8 +127,7 @@ def main():
     else:
         print(f"[PASS] ④ 双向互逆: {len(fwd)} 条全部互逆一致")
 
-    # ④b 条目质量校验（借鉴外部 pytest 版）：sha256 冻结管「身份不变」，
-    #     本项管「数据质量合法」——防止上游生成脚本产出格式损坏的映射表
+    # ④b 条目质量校验：sha256 冻结管「身份不变」，本项管「数据质量合法」
     quality_bad = []
     seen_881 = {}
     for x_code, pair in rev.items():          # _TDXHY_X_TO_881: {x_code: (name, 881code)}
@@ -148,8 +153,9 @@ def main():
         print(f"[PASS] ④b 条目质量: {len(rev)} 条全部合法"
               f"（键/名称非空，881代码 6 位纯数字且无重复）")
 
-    # ⑤ 完整性快照（键数量 + 内容 sha256 冻结）
-    digest = _digest(via_mcm)
+    # ⑤ 完整性快照（键数量 + 内容 sha256 冻结；基线沿用阶段 2.5——
+    #    数据文件阶段 5 仅移动位置、内容零改动，哈希连续即证明无静默降级）
+    digest = _digest(loaded)
     if force_update or not os.path.exists(SNAPSHOT):
         os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
         with open(SNAPSHOT, "w", encoding="utf-8") as f:
@@ -161,11 +167,15 @@ def main():
             expected = json.load(f)
         if expected == digest:
             print(f"[PASS] ⑤ 完整性快照: n={digest['n_881_to_x']} "
-                  f"sha256={digest['sha256'][:12]}… 一致")
+                  f"sha256={digest['sha256'][:12]}… 与迁移前基线一致（零内容漂移）")
         else:
             failures.append(f"映射内容变化: 期望 {expected} 实际 {digest}")
             print(f"[FAIL] ⑤ 完整性快照: 漂移\n  期望: {expected}\n  实际: {digest}")
 
+    return _report(failures)
+
+
+def _report(failures):
     print()
     if failures:
         print(f"===== 行业映射完整性: 失败 {len(failures)} 项 =====")

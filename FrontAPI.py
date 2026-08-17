@@ -365,19 +365,19 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
 
     src = source if source is not None else TqSdkSource()
 
-    from DataAPI.TqSdkAPI import FREQ_SEC_MAP, FREQ_LABEL_CN, FUTURES_ALIASES
+    from DataAPI.TqSdkAPI import CTqSdkAPI
 
     display_key = None
     freq_sec = None
     try:
         # 别名解析：支持 PTA→KQ.m@CZCE.TA 等短名称
         symbol_upper = symbol.upper()
-        if symbol_upper in FUTURES_ALIASES:
-            symbol = FUTURES_ALIASES[symbol_upper]
+        if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
+            symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
 
-        freq_sec = FREQ_SEC_MAP.get(freq, 15)
+        freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 15)
         freq_label = freq
-        freq_cn = FREQ_LABEL_CN.get(freq_label, freq_label)
+        freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
         display_key = f"{symbol}:{freq_cn}"
 
         # 如果没有传入 start_time，查询CSV中是否有保存的选点
@@ -735,14 +735,14 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
     """
     src = source if source is not None else TqSdkSource()
 
-    from DataAPI.TqSdkAPI import FREQ_SEC_MAP, CTqSdkAPI, FUTURES_ALIASES
+    from DataAPI.TqSdkAPI import CTqSdkAPI
     from datetime import datetime
 
     # 确定周期
     if not sub_freq:
         sub_freq = m._FUTURES_DUAL_FREQ_MAP.get(main_freq, "15s")
-    main_freq_sec = FREQ_SEC_MAP.get(main_freq, 60)
-    sub_freq_sec = FREQ_SEC_MAP.get(sub_freq, 15)
+    main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(main_freq, 60)
+    sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(sub_freq, 15)
 
     display_key = f"{symbol} 双窗口({main_freq}/{sub_freq})"
     if m._SSE_DEBUG:
@@ -751,8 +751,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
     try:
         # 别名解析
         symbol_upper = symbol.upper()
-        if symbol_upper in FUTURES_ALIASES:
-            symbol = FUTURES_ALIASES[symbol_upper]
+        if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
+            symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
 
         await run_in_threadpool(src.connect)
         name = m._get_futures_name(symbol)

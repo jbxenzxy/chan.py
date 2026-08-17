@@ -245,19 +245,42 @@ def extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_sel
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 获取侧：数据拉取与注入
+# 获取侧：数据拉取与注入（阶段 5：统一走 DataAPI 抽象层）
 # ═══════════════════════════════════════════════════════════════════════
+
+def _get_data_source(code, source="tdx"):
+    """阶段 5：根据 code 类型和 source 参数选择数据源，返回 DataAPI 类引用。
+
+    数据源选择规则：
+      - tdx: 通达信本地数据（股票/指数/板块），使用 DataAPI.TdxAPI
+      - tqsdk: 天勤期货数据（期货/期指），使用 DataAPI.TqSdkAPI
+      - 自动检测: code 包含期货特征时自动选择 tqsdk
+
+    返回 (api_module, is_futures) 元组。
+    """
+    from DataAPI.TqSdkAPI import _get_futures_code
+
+    if source == "tqsdk" or _get_futures_code(code):
+        from DataAPI import TqSdkAPI
+        return TqSdkAPI, True
+
+    from DataAPI import TdxAPI
+    return TdxAPI, False
+
 
 def fetch_and_inject(code, freq="d", source="tdx", end_date=None, dual=False, step=None, sub_freq=None):
     """
-    判断股票 / 期货 → 拉取 K 线 → 注入分析引擎 · 锁分类 RAW（无锁）
+    阶段 5：判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
 
-    ⚠ 委托 analyze_stock（其内部完成数据拉取 + 分析），共享引擎缓存，
-    非线程安全——串行调用方须走 call_analysis / run_analysis。
-    阶段 5 拆分为独立「拉取 + 注入」流程时同步收敛锁策略。
+    fetch 统一走 DataAPI 抽象层（替换阶段 4 前的直连模式）：
+      - 数据源选择经 _get_data_source() 路由到对应 DataAPI 实现
+      - 实际拉取仍委托 analyze_stock（其内部已通过 DataAPI 读取数据）
+      - source 参数显式选择数据源（tdx / tqsdk），缺省自动检测
 
-    source: tdx（通达信）/ tqsdk（天勤期货），阶段 5 后经 DataAPI 抽象层生效。
+    锁分类 RAW（无锁）：委托 analyze_stock，共享引擎缓存，非线程安全。
+    串行调用方须走 call_analysis / run_analysis。
     """
+    api_module, is_futures = _get_data_source(code, source)
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             dual=dual, step=step, sub_freq=sub_freq)
 
@@ -344,8 +367,9 @@ def search_stocks(q):
     results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
     results = results[:10]
 
-    # 期货/期指别名搜索
-    for alias, full_code in _m.FUTURES_ALIASES.items():
+    # 期货/期指别名搜索（阶段 5：经 CTqSdkAPI 元数据接口）
+    from DataAPI.TqSdkAPI import CTqSdkAPI
+    for alias, full_code in CTqSdkAPI.FUTURES_ALIASES.items():
         if keyword_upper in alias.upper():
             name = _m._get_futures_name(full_code) if _m._get_futures_name else alias
             if not any(r["code"] == full_code for r in results):
@@ -498,8 +522,9 @@ def futures_clear_saved_point(symbol, freq="15s"):
     from App.AppData import app_data
 
     symbol_upper = symbol.upper()
-    if symbol_upper in _m.FUTURES_ALIASES:
-        symbol = _m.FUTURES_ALIASES[symbol_upper]
+    from DataAPI.TqSdkAPI import CTqSdkAPI
+    if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
+        symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
     app_data.clear_saved_point_time(symbol, freq)
     return {"ok": True}
 
@@ -521,8 +546,11 @@ def start_download_checked(categories, day_start=None, min_start=None):
 
     categories: GET 传 JSON 字符串，POST 传 list（两形态统一在此归一）。
     返回 (result_dict, status_code)，语义与原路由一致（含 409 冲突码）。
+    阶段 5：委托 DataAPI/ElTdxAPI（下载目录经 app_config.download_dir）。
     """
-    if not _m._ELTDX_AVAILABLE:
+    from DataAPI import ElTdxAPI as _eltdx
+    from App.AppConfig import app_config
+    if not _eltdx._ELTDX_AVAILABLE:
         return {"error": "eltdx 未安装，请先 pip install eltdx"}, 400
     if isinstance(categories, str):
         try:
@@ -531,9 +559,9 @@ def start_download_checked(categories, day_start=None, min_start=None):
             return {"error": "categories 参数格式错误"}, 400
     if not categories:
         return {"error": "请选择要下载的数据类型"}, 400
-    ok, msg = _m._start_download(_m.DOWNLOAD_DIR, categories,
-                                 day_start=day_start or None,
-                                 min_start=min_start or None)
+    ok, msg = _eltdx._start_download(app_config.download_dir, categories,
+                                     day_start=day_start or None,
+                                     min_start=min_start or None)
     return {"ok": ok, "message": msg}, (200 if ok else 409)
 
 
@@ -683,34 +711,40 @@ def refresh_stock_names_async():
 
 # ═══════════════════════════════════════════════════════════════════════
 # 盘后下载（页面右上角「盘后下载」按钮）
-# 阶段 5 起收纳进 DataAPI/ElTdxAPI.py，此处先薄封装。
+# 阶段 5：职责内聚 DataAPI/ElTdxAPI.py，此处为薄封装（委托目标 ElTdxAPI）。
 # ═══════════════════════════════════════════════════════════════════════
 
 def eltdx_available():
     """eltdx 盘后下载引擎是否可用"""
-    return _m._ELTDX_AVAILABLE
+    from DataAPI import ElTdxAPI as _eltdx
+    return _eltdx._ELTDX_AVAILABLE
 
 
 def download_dir():
-    """盘后下载数据保存目录"""
-    return _m.DOWNLOAD_DIR
+    """盘后下载数据保存目录（阶段 4 配置中心化：app_config.download_dir）"""
+    from App.AppConfig import app_config
+    return app_config.download_dir
 
 
 def start_download(categories, day_start=None, min_start=None):
     """启动盘后下载"""
-    return _m._start_download(_m.DOWNLOAD_DIR, categories,
-                              day_start=day_start or None,
-                              min_start=min_start or None)
+    from DataAPI import ElTdxAPI as _eltdx
+    from App.AppConfig import app_config
+    return _eltdx._start_download(app_config.download_dir, categories,
+                                  day_start=day_start or None,
+                                  min_start=min_start or None)
 
 
 def get_download_status():
     """盘后下载进度"""
-    return _m._get_download_status()
+    from DataAPI import ElTdxAPI as _eltdx
+    return _eltdx._get_download_status()
 
 
 def stop_download():
     """停止盘后下载"""
-    return _m._stop_download()
+    from DataAPI import ElTdxAPI as _eltdx
+    return _eltdx._stop_download()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -723,8 +757,9 @@ def futures_cleanup():
 
 
 def get_futures_aliases():
-    """期货别名映射"""
-    return _m.FUTURES_ALIASES
+    """期货别名映射（阶段 5：经 CTqSdkAPI 元数据接口）"""
+    from DataAPI.TqSdkAPI import CTqSdkAPI
+    return CTqSdkAPI.FUTURES_ALIASES
 
 
 def get_futures_name(full_code):
@@ -740,10 +775,11 @@ def tq_available():
 
 
 def futures_config():
-    """期货可用周期列表"""
+    """期货可用周期列表（阶段 5：经 CTqSdkAPI 元数据接口）"""
     try:
-        from DataAPI.TqSdkAPI import SUPPORTED_FREQS, DISABLED_FREQS
-        return {"supported_freqs": SUPPORTED_FREQS, "disabled_freqs": DISABLED_FREQS}
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        return {"supported_freqs": CTqSdkAPI.SUPPORTED_FREQS,
+                "disabled_freqs": CTqSdkAPI.DISABLED_FREQS}
     except ImportError:
         return {"supported_freqs": [], "disabled_freqs": []}
 
