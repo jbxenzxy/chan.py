@@ -4,7 +4,7 @@
 =====================================================================
 本文件是「函数级映射」的单一事实源（机器可读部分）：
 
-  TARGET_FUNCS   my_chan_main.py 全部顶层函数 → 目标层
+  TARGET_FUNCS   App/AppEngine.py 全部顶层函数 → 目标层
   TARGET_STATES  全部模块级状态 → 收敛目标
   TARGET_CLASSES 顶层类 → 处置
   TARGET_ROUTES  api_server.py 路由 → 目标（阶段 3a 输入）
@@ -164,10 +164,9 @@ TARGET_FUNCS = {
     "read_tdxhy_l3_indices":        ("TDXHY", "三级行业指数读取（同上）"),
 
     # ── 配置 ──
-    "_verify_config_consistency":   ("CFG", "启动配置自检（阶段 2 引入；随入口迁 FrontAPI 启动段或保留启动脚本）"),
+    # _verify_config_consistency 已随 my_chan_main 下线（阶段 10.1 删除）
 
-    # ── 下线 ──
-    "main":                         ("RETIRE", "旧命令行入口（阶段 3a 起启动即打印墓碑提示，服务器仅回 410；入口统一 FrontAPI 后下线）"),
+    # ── 下线（阶段 10.1：my_chan_main.py 已删除，RETIRE 项全部物理移除）──
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -180,8 +179,7 @@ TARGET_STATES = {
     # 配置路径别名：阶段 4 已全部删除（CFG 单源直读 app_config.<属性>）
     # _STOCK_NAMES_CACHE_FILE/_STOCK_PE_TTM_FILE/_FLOAT_MC_CACHE_FILE/
     # SAVED_POINT_FILE/ANNOTATIONS_FILE 等 12 个别名随阶段 4 清零，
-    # 由 _FORBIDDEN_PATH_ALIASES 守卫「不得复活」（见 test_phase4_guards）。
-    "_FORBIDDEN_PATH_ALIASES": ("CFG", "阶段 4 别名复活守卫名单（自检用常量）"),
+    # 由 test_phase4_guards 的 _FORBIDDEN_PATH_ALIASES 守卫「不得复活」。
     "SAVED_POINT_COLUMNS":     ("CFG", "选点表列定义（= App/AppData.SAVED_POINT_COLUMNS 同值别名）"),
 
     # 业务缓存 → ✓4 已收敛：别名 = app_data 实例字段（共享同一对象，身份校验见 phase4 守护）
@@ -234,8 +232,7 @@ TARGET_STATES = {
     "_SSE_DEBUG": ("FE", "SSE 调试旗（ChartHandler 32 处 / init_chan_symbol 1 处）→ FrontAPI 常量"),
     "_SSE_DIAG":  ("FE", "SSE 诊断旗（ChartHandler 7 处）→ FrontAPI 常量"),
 
-    # 下线
-    "HTML_TEMPLATE": ("RETIRE", "死代码（阶段 1 已抽离 Frontend/，值=None 零引用）"),
+    # 下线（阶段 10.1：my_chan_main.py 已删除，RETIRE 项全部物理移除）
     "SCRIPT_DIR":    ("RETIRE", "ChartHandler 静态服务用（随 do_GET 3a 删除）"),
     "SYMBOL_CODE":   ("RETIRE", "main() 默认代码（随 main 下线；api_server:1074 启动引用先参数化）"),
 }
@@ -246,22 +243,23 @@ TARGET_STATES = {
 TARGET_CLASSES = {
     "ThreadingHTTPServer": ("RETIRE", "旧 HTTP 服务器别名（2 行；随 ChartHandler 3b 后删）"),
     "ChartHandler": ("FE", "遗留服务器 · 阶段 3a 已墓碑化：do_GET/do_POST 删除（844 行）改回 410 Gone；"
-                          "_handle_sse_stream_dual/single 保留至 3b-2（灰度 legacy 桥接在用）；"
+                          "_handle_sse_stream_dual/single 已于 3b-2 拆除（灰度通过后随 legacy 桥接下线）；"
                           "send_json_response/log_message/handle_one_request 随类保留"),
 }
 
 # ═══════════════════════════════════════════════════════════════════
 # ④ api_server.py → FrontAPI/AppOrch（阶段 3a 已完成 · 状态记录）
-# 31 条路由已迁入 FrontAPI.py（单一路由源）；api_server.py 退役为兼容壳；
-# 历史绕锁 3 处（L185/L206/L472）改走持锁漏斗（AppOrch.LOCK_POLICY · SERIAL）。
+# 31 条路由已迁入 FrontAPI.py（单一路由源）；api_server.py 已于 3b-2 后
+# 删除（原兼容壳退役）；历史绕锁 3 处（L185/L206/L472）改走持锁漏斗
+# （AppOrch.LOCK_POLICY · SERIAL）。
 # ═══════════════════════════════════════════════════════════════════
 TARGET_ROUTES = {
-    "_sse_generator":  ("FE", "✓3a 已迁 FrontAPI（legacy 桥接生成器；3b-2 灰度通过后拆除）"),
-    "_json_response":  ("FE", "✓3a 已迁 FrontAPI（兼容壳再导出）"),
-    "_SSEMockWfile":   ("RETIRE", "✓3a 已迁 FrontAPI（3b-2 灰度通过后拆除）"),
-    "_SSEMockHandler": ("RETIRE", "✓3a 已迁 FrontAPI（同上）"),
-    "app":             ("FE", "✓3a 兼容壳别名 → FrontAPI 单一 app"),
-    "router":          ("FE", "✓3a 兼容壳别名 → FrontAPI router"),
+    "_sse_generator":  ("RETIRE", "✓3a 已迁 FrontAPI，3b-2 已拆除（legacy 桥接下线）"),
+    "_json_response":  ("FE", "✓3a 已迁 FrontAPI"),
+    "_SSEMockWfile":   ("RETIRE", "✓3a 已迁 FrontAPI，3b-2 已拆除"),
+    "_SSEMockHandler": ("RETIRE", "✓3a 已迁 FrontAPI，3b-2 已拆除"),
+    "app":             ("FE", "✓3a 单一 app 实例 → FrontAPI"),
+    "router":          ("FE", "✓3a 单一 router → FrontAPI"),
     # 31 条 REST 路由：✓3a 已全部迁入 FrontAPI.py，业务段经 AppOrch/AppData
     "api_stock": ("FE", "✓3a /api/stock → FrontAPI + AppOrch.call_analysis（SERIAL 持锁）"),
     "api_stocks_manual_select_point": ("FE", "✓3a → AppOrch.call_manual_select_point（SERIAL 持锁，原 L185 绕锁已补）"),
@@ -349,7 +347,7 @@ def build_map():
 
     return {
         "phase": "2.6",
-        "source_file": "my_chan_main.py (+ api_server.py 路由附录)",
+        "source_file": "App/AppEngine.py（api_server.py 与 my_chan_main.py 已删除，路由单源于 FrontAPI）",
         "layers": {k: {"home": v[0], "desc": v[1], "phase": PHASE_OF[k]}
                    for k, v in LAYERS.items()},
         "summary": {

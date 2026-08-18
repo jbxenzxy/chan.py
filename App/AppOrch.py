@@ -26,8 +26,8 @@ import time
 import threading
 import traceback
 
-# my_chan_main 作为底层引擎（阶段 3 起逐步拆分吸收）
-import my_chan_main as _m
+# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
+from App import AppEngine as _m
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -784,18 +784,6 @@ def futures_config():
                 "disabled_freqs": CTqSdkAPI.DISABLED_FREQS}
     except ImportError:
         return {"supported_freqs": [], "disabled_freqs": []}
-
-
-def get_sse_handler(kind):
-    """返回 ChartHandler 的 SSE 处理方法（供 SSE Mock 桥接使用）
-
-    kind: "dual" → _handle_sse_stream_dual；"single" → _handle_sse_stream_single
-    阶段 3 起改写为原生异步生成器后，本接口随之移除。
-    """
-    handler = getattr(_m.ChartHandler, f"_handle_sse_stream_{kind}", None)
-    if handler is None:
-        raise ConfigError(f"未知 SSE 处理类型: {kind}")
-    return handler
 
 
 def get_stock_names_cache_file():

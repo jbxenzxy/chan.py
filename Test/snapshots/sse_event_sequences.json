@@ -1,31 +1,30 @@
 {
  "dual": {
-  "event_count": 4,
+  "event_count": 3,
   "event_sequence": [
-   "dual_snapshot",
-   "dual_tick",
-   "dual_tick",
-   "done"
+   "init",
+   "update",
+   "update"
   ],
-  "first_event": "dual_snapshot"
+  "first_event": "init",
+  "heartbeat_count": 3
  },
  "error": {
-  "event_count": 2,
+  "event_count": 1,
   "event_sequence": [
-   "snapshot",
-   "error"
+   "init"
   ],
-  "first_event": "snapshot"
+  "first_event": "init",
+  "heartbeat_count": 0
  },
  "single": {
-  "event_count": 5,
+  "event_count": 3,
   "event_sequence": [
-   "snapshot",
-   "tick",
-   "tick",
-   "tick",
-   "done"
+   "init",
+   "update",
+   "update"
   ],
-  "first_event": "snapshot"
+  "first_event": "init",
+  "heartbeat_count": 3
  }
 }

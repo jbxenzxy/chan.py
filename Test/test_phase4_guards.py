@@ -4,27 +4,27 @@
 =====================================================================
 守护阶段 4 的八类结构性成果（设计文档 V10 方案 8.7 / 4.4 / 6.3）：
 
-  ① 兼容壳纯委托：my_chan_main 26 个 DATA 族函数体为纯委托
+  ① 兼容壳纯委托：AppEngine 26 个 DATA 族函数体为纯委托
      （AST 校验：docstring + 局部 import + 单条 return app_data.* 调用），
      实现单源于 App/AppData.py；委托目标在 app_data 实例上真实存在
   ② 状态别名同对象：8 组模块级状态别名与 app_data 实例字段
      共享同一对象（identity 校验，防「悄悄改成拷贝」导致双态漂移）
-  ③ 配置别名清零：12 个路径/容量别名不得在 my_chan_main 复活
+  ③ 配置别名清零：12 个路径/容量别名不得在 AppEngine 复活
   ④ 自选股收敛：DataAPI/TdxAPI.py 不再有 read_zxg_stocks /
-     save_to_zxg_blk；ths_sync_to_tdx 与 my_chan_main 改从 AppData 取
+     save_to_zxg_blk；ths_sync_to_tdx 与 AppEngine 改从 AppData 取
   ⑤ 分层方向：FrontAPI → AppOrch → AppData → AppConfig 严格单向
-     （import 静态分析；FrontAPI 不得直连 AppData / my_chan_main 数据状态）
+     （import 静态分析；FrontAPI 不得直连 AppData / AppEngine 数据状态）
   ⑥ 启动行为零漂移 + LRU 语义：app_data 实例化即完成选点/标注加载；
      cache_put 超 50 条淘汰最旧（LRU）；cache_get 命中移尾
   ⑦ 语义化子窗接口（吸收外部评审）：set/get/pop_futures_sub_chan
      把 "{SYMBOL}:{sub_freq}" key 规则内聚于数据层，symbol 大小写
      不敏感；FrontAPI 不再手工拼 key（源码级扫描）
   ⑧ 数据层反向依赖禁令（吸收外部评审教训）：App/AppData.py 在
-     **任何层级**（模块级或函数内）都不得 import my_chan_main /
+     **任何层级**（模块级或函数内）都不得 import AppEngine /
      DataAPI / FrontAPI / AppOrch —— 防「影子数据层」模式回归
      （即引擎保留实现、数据层复制一份反向引用的双源结构）
   ⑨ 引擎引用有效性（迁移遗漏防护）：AppOrch 中全部 _m.<attr> 引用
-     必须在 my_chan_main 中可解析（AST 静态分析，含 try/except 条件
+     必须在 AppEngine 中可解析（AST 静态分析，含 try/except 条件
      导入块）—— 防阶段 4 迁移遗漏导致运行时 AttributeError
      （实测：_m.read_zxg_stocks / _m._float_mc_loaded /
      _m._STOCK_NAMES_CACHE_FILE）
@@ -59,7 +59,7 @@ def read_src(rel):
 # ═══════════════════════════════════════════════════════════════════════
 # ① 兼容壳纯委托（AST）
 # ═══════════════════════════════════════════════════════════════════════
-# 26 个 DATA 族函数：my_chan_main 同名实现必须退化为兼容壳。
+# 26 个 DATA 族函数：AppEngine 同名实现必须退化为兼容壳。
 # 允许的函数体形态：docstring + （from App.AppData import ...）+ 单条 return
 SHELL_FUNCS = [
     # 名称 / PE / 市值
@@ -132,7 +132,7 @@ def _shell_callee(fn_node):
 
 
 def test_shell_purity(failures):
-    src = read_src("my_chan_main.py")
+    src = read_src(os.path.join("App", "AppEngine.py"))
     tree = ast.parse(src)
     funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     bad = []
@@ -140,7 +140,7 @@ def test_shell_purity(failures):
     for name in SHELL_FUNCS:
         node = funcs.get(name)
         if node is None:
-            bad.append(f"{name} 不存在于 my_chan_main（兼容壳被删）")
+            bad.append(f"{name} 不存在于 AppEngine（兼容壳被删）")
             continue
         ok, why = _is_shell(node)
         if not ok:
@@ -171,7 +171,7 @@ def test_shell_purity(failures):
 # ② 状态别名同对象（运行时 identity）
 # ═══════════════════════════════════════════════════════════════════════
 ALIAS_PAIRS = [
-    # (my_chan_main 属性, app_data 内部字段属性)
+    # (AppEngine 属性, app_data 内部字段属性)
     ("_stocks_analysis_cache", "stocks_analysis_cache"),
     ("_cache_lock",            "cache_lock"),
     ("_futures_analysis_cache", "futures_analysis_cache"),
@@ -184,14 +184,14 @@ ALIAS_PAIRS = [
 
 
 def test_alias_identity(failures):
-    import my_chan_main as m
+    from App import AppEngine as m
     from App.AppData import app_data
     bad = []
     for m_name, d_prop in ALIAS_PAIRS:
         m_val = getattr(m, m_name, None)
         d_val = getattr(app_data, d_prop, None)
         if m_val is None:
-            bad.append(f"my_chan_main.{m_name} 缺失")
+            bad.append(f"AppEngine.{m_name} 缺失")
         elif d_val is None:
             bad.append(f"app_data.{d_prop} 缺失")
         elif m_val is not d_val:
@@ -216,7 +216,7 @@ RETIRED_ALIASES = [
 
 
 def test_no_revived_aliases(failures):
-    import my_chan_main as m
+    from App import AppEngine as m
     revived = [n for n in RETIRED_ALIASES if hasattr(m, n)]
     if revived:
         failures.append("配置别名复活: " + ", ".join(revived))
@@ -252,17 +252,17 @@ def test_zxg_convergence(failures):
     if "from DataAPI.TdxAPI import save_to_zxg_blk" in ths_src:
         bad.append("App/ths_sync_to_tdx.py 仍从 TdxAPI 导入 save_to_zxg_blk")
 
-    # my_chan_main 不再从 TdxAPI 导入自选股入口
-    m_src = read_src("my_chan_main.py")
+    # AppEngine 不再从 TdxAPI 导入自选股入口
+    m_src = read_src(os.path.join("App", "AppEngine.py"))
     for i, line in enumerate(m_src.splitlines(), 1):
         s = line.strip()
         if s.startswith("#"):
             continue
         if ("read_zxg_stocks" in s or "save_to_zxg_blk" in s) and "import" in s:
-            bad.append(f"my_chan_main.py:{i} 仍 import 自选股入口")
+            bad.append(f"App/AppEngine.py:{i} 仍 import 自选股入口")
 
     # AppOrch 不再残留 _m.read_zxg_stocks 引用（阶段 4 迁移遗漏防护：
-    # read_zxg_stocks 已迁至 AppOrch 模块级，my_chan_main 中已无此属性，
+    # read_zxg_stocks 已迁至 AppOrch 模块级，AppEngine 中已无此属性，
     # 残留引用会在 /api/scan_stock_list?source=zxg 时抛 AttributeError）
     orch_src = read_src(os.path.join("App", "AppOrch.py"))
     for i, line in enumerate(orch_src.splitlines(), 1):
@@ -275,7 +275,7 @@ def test_zxg_convergence(failures):
             print(f"[FAIL] ④ 自选股收敛: {b}")
     else:
         print("[PASS] ④ 自选股收敛: TdxAPI 墓碑化（实现迁 AppData），"
-              "ths_sync / my_chan_main 改道 AppData")
+              "ths_sync / AppEngine 改道 AppData")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -296,9 +296,9 @@ def _module_imports(rel):
 
 def test_layering_direction(failures):
     bad = []
-    # AppData：只准依赖标准库/第三方 + App.AppConfig（禁 FrontAPI/AppOrch/my_chan_main/DataAPI 模块级）
+    # AppData：只准依赖标准库/第三方 + App.AppConfig（禁 FrontAPI/AppOrch/AppEngine/DataAPI 模块级）
     data_mods = _module_imports(os.path.join("App", "AppData.py"))
-    for forbidden in ("FrontAPI", "api_server", "AppOrch", "my_chan_main", "DataAPI"):
+    for forbidden in ("FrontAPI", "api_server", "AppOrch", "AppEngine", "DataAPI"):
         if forbidden in data_mods:
             bad.append(f"App/AppData.py 模块级 import 了 {forbidden}（数据层不得反向/跨层依赖）")
     # AppOrch：禁 FrontAPI / api_server
@@ -314,7 +314,7 @@ def test_layering_direction(failures):
             continue
         if ("from App.AppData import" in s) or ("import App.AppData" in s):
             bad.append(f"FrontAPI.py:{i} 直连 AppData（应经 App.AppOrch 漏斗）")
-        # 直连 my_chan_main 数据层状态（阶段 4 已收敛的 8 个别名）
+        # 直连 AppEngine 数据层状态（阶段 4 已收敛的 8 个别名）
         for alias in ("_saved_point_times", "_annotations_cache",
                       "_stocks_analysis_cache", "_futures_analysis_cache"):
             if f"m.{alias}" in s:
@@ -343,13 +343,13 @@ def test_startup_and_lru(failures):
         bad.append("AppData 单例漂移（app_data 存在多实例）")
 
     # 启动加载：实例化即完成选点/标注加载（与原 import 期行为一致）
-    import my_chan_main as m
+    from App import AppEngine as m
     if not isinstance(app_data.saved_point_times, dict):
         bad.append("saved_point_times 启动加载缺失（非 dict）")
     if not app_data._annotations_loaded:
         bad.append("annotations 启动加载缺失（_annotations_loaded=False）")
     if m._saved_point_times is not app_data.saved_point_times:
-        bad.append("my_chan_main._saved_point_times 与 app_data 漂移（② 的运行时复核）")
+        bad.append("AppEngine._saved_point_times 与 app_data 漂移（② 的运行时复核）")
 
     # LRU 语义：超 50 淘汰最旧；get 命中移尾（隔离验证，不污染全局单例）
     from Test.snapshot_runner import isolate_side_effects
@@ -446,13 +446,13 @@ def test_semantic_subchan(failures):
 # ═══════════════════════════════════════════════════════════════════════
 # ⑧ 数据层反向依赖禁令（防「影子数据层」双源结构）
 # ═══════════════════════════════════════════════════════════════════════
-_FORBIDDEN_DATA_DEPS = ("my_chan_main", "FrontAPI", "api_server", "AppOrch", "DataAPI")
+_FORBIDDEN_DATA_DEPS = ("AppEngine", "FrontAPI", "api_server", "AppOrch", "DataAPI")
 
 
 def test_data_layer_purity(failures):
     """App/AppData.py 任何层级（含函数内惰性 import）都不得反向依赖上层/引擎。
 
-    外部评审实现的 AppData 在 14 处函数体内 import my_chan_main、并委托
+    外部评审实现的 AppData 在 14 处函数体内 import AppEngine、并委托
     DataAPI.TdxAPI 读写自选股 —— 数据层反向引用引擎形成「双源影子层」。
     本守护把该模式封禁为结构性红线。"""
     tree = ast.parse(read_src(os.path.join("App", "AppData.py")))
@@ -483,13 +483,11 @@ def test_data_layer_purity(failures):
 # ⑨ 引擎引用有效性（迁移遗漏防护）
 # ═══════════════════════════════════════════════════════════════════════
 def test_engine_refs_valid(failures):
-    """AppOrch 中所有 _m.<attr> 引用必须能在 my_chan_main 中解析。
+    """AppOrch 中所有 _m.<attr> 引用必须能在 AppEngine 中解析。
 
-    阶段 4 起 my_chan_main 的 DATA 族实现/常量逐步迁往 AppData/AppConfig，
-    若 AppOrch 残留对已迁走属性的 _m. 引用，运行时抛 AttributeError
-    （实测：_m.read_zxg_stocks / _m._float_mc_loaded / _m._STOCK_NAMES_CACHE_FILE）。
+    阶段 4 起 AppEngine 的 DATA 族实现/常量逐步迁往 AppData/AppConfig，
     本守护用 AST 静态分析（不 import 引擎，避免环境副作用）收集
-    my_chan_main 全部可解析名字（含 try/except 条件导入块），
+    AppEngine 全部可解析名字（含 try/except 条件导入块），
     校验 AppOrch 的 _m. 引用均在其中。
     """
     bad = []
@@ -517,7 +515,7 @@ def test_engine_refs_valid(failures):
                     names.add(a.asname or a.name)
         return names
 
-    m_names = collect_names(read_src("my_chan_main.py"))
+    m_names = collect_names(read_src(os.path.join("App", "AppEngine.py")))
     orch_tree = ast.parse(read_src(os.path.join("App", "AppOrch.py")))
     refs = set()
     for node in ast.walk(orch_tree):
@@ -528,14 +526,14 @@ def test_engine_refs_valid(failures):
 
     missing = sorted(r for r in refs if r not in m_names)
     for m in missing:
-        bad.append(f"App/AppOrch.py 引用 _m.{m}，但 my_chan_main 中已不存在（迁移遗漏，运行时 AttributeError）")
+        bad.append(f"App/AppOrch.py 引用 _m.{m}，但 AppEngine 中已不存在（迁移遗漏，运行时 AttributeError）")
 
     if bad:
         failures.extend(f"引擎引用有效性: {b}" for b in bad)
         for b in bad:
             print(f"[FAIL] ⑨ 引擎引用有效性: {b}")
     else:
-        print(f"[PASS] ⑨ 引擎引用有效性: AppOrch 全部 {len(refs)} 个 _m.<attr> 引用在 my_chan_main 中可解析")
+        print(f"[PASS] ⑨ 引擎引用有效性: AppOrch 全部 {len(refs)} 个 _m.<attr> 引用在 AppEngine 中可解析")
 
 
 # ═══════════════════════════════════════════════════════════════════════

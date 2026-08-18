@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-阶段 2.5：SSE 事件序列快照用例
+阶段 2.5：SSE 事件序列快照用例（3b-2 后改为 native 生成器回归）
 =====================================================================
 设计文档 8.4：「为两个 SSE 端点增加事件序列快照用例（首事件类型 /
 事件间隔 / 正常关闭行为），为阶段 3b 的 SSE 接口形态重写提供回归基线」。
@@ -8,16 +8,25 @@
 口径遵循 V10 灰度比对修正：事件类型序列 + 事件总数（统计性核对），
 不做逐事件内容比对（内容比对属阶段 3b 灰度验证，输入固定历史区间）。
 
-被测对象：api_server._sse_generator 桥接层 + _SSEMockHandler 协议契约
-（真实实时数据源（天勤）不可用于离线回归，故用确定性 mock handler 驱动；
-桥接层正是阶段 3b 要重写的部分，其协议行为必须先冻结）。
+3b-2 拆除 legacy 桥接后，本用例被测对象改为 native 原生异步生成器
+（sse_futures_stream_single/dual + SSESource 数据源抽象）：
+  - 首事件类型：init（含失败载荷）→ update（tick/K线完成路径）→ 心跳
+  - 正常关闭：数据源抛 SSESourceClosed → 生成器正常耗尽
+  - 异常路径：init 初始化失败（init_chan 返回 None）→ init 事件带 error
+    载荷并正常关闭（wait_update 运行时异常按设计重试，不产出 error 帧）
 
-运行：python Test/test_sse_sequence.py
+真实实时数据源（天勤）不可离线复现，故用确定性 MockSource 驱动。
+
+运行：python Test/test_sse_sequence.py [--update]
 """
+import argparse
+import asyncio
+import io
 import json
 import os
 import sys
 import time
+import traceback
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
@@ -25,127 +34,274 @@ sys.path.insert(0, REPO_ROOT)
 
 import typing
 if not hasattr(typing, "Self"):
-    import typing_extensions
-    typing.Self = typing_extensions.Self
+    try:
+        import typing_extensions
+        typing.Self = typing_extensions.Self
+    except ImportError:
+        pass
 
-import api_server
-from api_server import _sse_generator, _SSEMockHandler
+import FrontAPI
+from FrontAPI import SSESource, SSESourceClosed
 
 SNAPSHOT = os.path.join(TEST_DIR, "snapshots", "sse_event_sequences.json")
 
-# ── 确定性 mock handler：模拟单/双窗口 SSE 的典型输出节奏 ──
-SSE_FRAME = lambda event, payload: (
-    f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8"))
+SYMBOL = "KQ.m@SHFE.rb"
+NOW = time.time()
 
 
-def mock_single_stream(handler, symbol, freq, start_time):
-    """单窗口典型事件流：snapshot（首事件）→ 3×tick → done → 关闭"""
-    handler.wfile.write(SSE_FRAME("snapshot", {"symbol": symbol, "freq": freq, "n": 1}))
-    for i in range(3):
-        handler.wfile.write(SSE_FRAME("tick", {"i": i, "last": 100.0 + i}))
-    handler.wfile.write(SSE_FRAME("done", {"reason": "normal"}))
+# ── 确定性 Mock 对象（与 test_sse_gray.py 同模式）────────────────────
+class MockRow(dict):
+    def get(self, key, default=None):
+        return dict.get(self, key, default)
 
 
-def mock_dual_stream(handler, symbol, freq, sub_freq, start_time):
-    """双窗口典型事件流：dual_snapshot（首事件）→ 2×dual_tick → done"""
-    handler.wfile.write(SSE_FRAME("dual_snapshot", {"symbol": symbol, "freq": freq, "sub": sub_freq}))
-    for i in range(2):
-        handler.wfile.write(SSE_FRAME("dual_tick", {"i": i, "main": 1.0, "sub": 0.5}))
-    handler.wfile.write(SSE_FRAME("done", {"reason": "normal"}))
+class MockKlines:
+    def __init__(self, bars):
+        self.bars = list(bars)
+
+    def __len__(self):
+        return len(self.bars)
+
+    @property
+    def iloc(self):
+        return self
+
+    def __getitem__(self, idx):
+        return self.bars[idx]
 
 
-def mock_error_stream(handler, *args):
-    """异常路径：先出 1 帧再抛异常 → 应转 event:error 并正常关闭"""
-    handler.wfile.write(SSE_FRAME("snapshot", {"n": 1}))
-    raise RuntimeError("数据源中断（测试注入）")
+class MockKlu:
+    def __init__(self, ts):
+        from datetime import datetime
+        self.time = type("T", (), {"to_str": lambda _s, _t=ts: datetime.fromtimestamp(_t).isoformat()})()
 
 
-def collect(gen):
-    """采集全部事件帧：返回 (帧字节列表, 是否正常关闭)"""
-    frames, closed_normally = [], False
-    for data in gen:
-        frames.append(data)
-    # for 正常耗尽 = 哨兵收到 = 正常关闭
-    closed_normally = True
-    return frames, closed_normally
+class MockKlc:
+    def __init__(self, klus):
+        self.lst = klus
 
 
-def parse_frames(frames):
-    """解析帧 → [{event, data}]"""
-    out = []
-    for raw in frames:
-        text = raw.decode("utf-8")
-        event, data = None, None
-        for line in text.strip().split("\n"):
-            if line.startswith("event:"):
-                event = line[6:].strip()
-            elif line.startswith("data:"):
-                data = line[5:].strip()
-        out.append({"event": event, "data": data})
-    return out
+class MockKlList:
+    def __init__(self):
+        self.lst = [MockKlc([MockKlu(NOW - 200)])]
+        self.bi_list = [object()] * 3
+        self.zs_list = [object()] * 1
 
 
-def _sequence_summary(events):
-    """V10 口径：事件类型序列 + 事件总数（剥离 data 内容中的时间戳/实时价）"""
+class MockChan(dict):
+    def __init__(self):
+        super().__init__()
+        self._kl_list = MockKlList()
+
+    def __getitem__(self, key):
+        return self._kl_list
+
+
+def _bar(dt_s, o=100.0, h=101.0, l=99.0, c=100.5, vol=10):
+    return MockRow({"datetime": int(dt_s * 1e9), "open": o, "high": h,
+                    "low": l, "close": c, "volume": vol})
+
+
+def _snapshot(tag, n_klines=4):
+    from datetime import datetime, timedelta
+    base = datetime(2025, 6, 2, 9, 30, 0)
+    klines = []
+    for i in range(n_klines):
+        dt = base + timedelta(seconds=15 * i)
+        klines.append({"date": dt.strftime("%Y/%m/%d %H:%M:%S"),
+                       "timestamp": int(dt.timestamp() * 1000),
+                       "open": 100.0 + i, "high": 101.0 + i,
+                       "low": 99.0 + i, "close": 100.5 + i,
+                       "vol": 10, "amount": 0,
+                       "dif": 0.1, "dea": 0.05, "macd": 0.1})
     return {
-        "first_event": events[0]["event"] if events else None,
-        "event_sequence": [e["event"] for e in events],
-        "event_count": len(events),
+        "klines": klines,
+        "meta": {"kline_count": n_klines, "bi_count": 3, "zs_count": 1,
+                 "bss": [], "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                 "tag": tag},
+        "bis": [],
+        "tag": tag,
     }
 
 
+class MockSource(SSESource):
+    """确定性脚本驱动：wait_update 第 n 次 → 推进K线（完成路径）→ 正常关闭"""
+    CLOSED_AT = 4
+
+    def __init__(self, fail_init=False):
+        self.freq_sec = 15.0
+        self._n_wait = 0
+        self.fail_init = fail_init
+        self.calls = {"connect": 0, "init_chan": 0, "close": 0, "cleanup": []}
+        self.klines = MockKlines([_bar(NOW - 100), _bar(NOW)])
+        self._snap_counter = 0
+
+    def connect(self):
+        self.calls["connect"] += 1
+
+    def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
+        self.calls["init_chan"] += 1
+        if self.fail_init:
+            return None
+        chan = MockChan()
+        return chan, self.klines, ("kl", ), None
+
+    def get_kline_serial(self, symbol, freq_sec):
+        return self.klines
+
+    def wait_update(self, deadline_ns):
+        self._n_wait += 1
+        if self._n_wait >= self.CLOSED_AT:
+            raise SSESourceClosed("mock 脚本终局")
+        if self._n_wait == 2:
+            self.klines.bars.append(_bar(NOW + self.freq_sec, c=101.0))
+
+    def last_records(self, code_key):
+        return None
+
+    def append_bar(self, bar, code_key):
+        pass
+
+    def step_load(self, chan):
+        pass
+
+    def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
+                         saved_selection_date="", klines=None):
+        self._snap_counter += 1
+        return _snapshot(f"snap{self._snap_counter}")
+
+    def white_hline(self, kl_list, freq):
+        return {"high": 110.0, "low": 90.0, "freq": freq}
+
+    def close(self):
+        self.calls["close"] += 1
+
+    def cleanup_records(self, code_key):
+        self.calls["cleanup"].append(code_key)
+
+
+# ── 采集与断言 ───────────────────────────────────────────────────────
+async def _collect(agen):
+    frames = []
+    async for frame in agen:
+        frames.append(frame)
+    return frames
+
+
+def parse_frame(raw):
+    text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+    if text.startswith(":"):
+        return "heartbeat", None
+    lines = text.strip().split("\n")
+    event = data = None
+    for ln in lines:
+        if ln.startswith("event: "):
+            event = ln[7:]
+        elif ln.startswith("data: "):
+            data = ln[6:]
+    return event, json.loads(data) if data is not None else None
+
+
+def _sequence_summary(events):
+    """V10 口径：事件类型序列 + 事件总数（剥离 data 内容）"""
+    typed = [e for e, _ in events if e != "heartbeat"]
+    return {
+        "first_event": typed[0] if typed else None,
+        "event_sequence": typed,
+        "event_count": len(typed),
+        "heartbeat_count": sum(1 for e, _ in events if e == "heartbeat"),
+    }
+
+
+def run_case(kind, fail_init=False):
+    src = MockSource(fail_init=fail_init)
+    if kind == "single":
+        gen = FrontAPI.sse_futures_stream_single(
+            SYMBOL, freq="15s", start_time=None, source=src)
+    else:
+        gen = FrontAPI.sse_futures_stream_dual(
+            SYMBOL, "1m", "15s", start_time=None, source=src)
+    frames = asyncio.run(_collect(gen))
+    return frames, src
+
+
 def main():
+    ap = argparse.ArgumentParser(description="SSE 事件序列快照（native 生成器）")
+    ap.add_argument("--update", action="store_true",
+                    help="重冻事件序列基线（协议变更经确认后使用）")
+    args = ap.parse_args()
+
     failures = []
     summary = {}
-    force_update = "--update" in sys.argv
 
     cases = [
-        ("single", mock_single_stream, ("KQ.m@SHFE.rb", "1m", None)),
-        ("dual", mock_dual_stream, ("KQ.m@SHFE.rb", "1m", "15s", None)),
-        ("error", mock_error_stream, ("KQ.m@SHFE.rb", "1m", None)),
+        ("single", dict(kind="single")),
+        ("dual", dict(kind="dual")),
+        ("error", dict(kind="single", fail_init=True)),
     ]
-    for name, handler, args in cases:
-        t0 = time.time()
-        frames, closed = collect(_sse_generator(handler, *args))
-        elapsed = time.time() - t0
-        events = parse_frames(frames)
+    for name, kw in cases:
+        try:
+            frames, src = run_case(**kw)
+        except Exception:
+            print(f"[FAIL] {name} 驱动异常:")
+            traceback.print_exc()
+            failures.append(f"{name}: 生成器驱动抛异常")
+            continue
+
+        events = []
+        try:
+            for raw in frames:
+                events.append(parse_frame(raw))
+        except Exception as e:
+            failures.append(f"{name}: 帧解析失败 {e}")
+            print(f"[FAIL] {name} 帧解析: {e}")
+            continue
+
         s = _sequence_summary(events)
 
-        # 正常关闭行为（含异常路径：error 事件后必须正常关闭，不得悬挂）
-        if not closed:
-            failures.append(f"{name}: 流未正常关闭（哨兵未生效）")
-            print(f"[FAIL] {name} 正常关闭: 哨兵未生效")
-        else:
-            print(f"[PASS] {name} 正常关闭: 生成器正常耗尽（{elapsed:.2f}s, {len(frames)} 帧）")
-
         # 首事件类型
-        expected_first = {"single": "snapshot", "dual": "dual_snapshot", "error": "snapshot"}[name]
+        expected_first = {"single": "init", "dual": "init", "error": "init"}[name]
         if s["first_event"] != expected_first:
             failures.append(f"{name}: 首事件类型 {s['first_event']} != {expected_first}")
             print(f"[FAIL] {name} 首事件: {s['first_event']}")
         else:
             print(f"[PASS] {name} 首事件类型: {s['first_event']}")
 
-        # 异常路径专属：必须转 event:error
+        # 正常关闭行为（for 正常耗尽 = 正常关闭）
+        print(f"[PASS] {name} 正常关闭: 生成器正常耗尽（{len(frames)} 帧, "
+              f"心跳 {s['heartbeat_count']} 帧）")
+
+        # 异常路径专属：init 失败载荷（error 键）+ 无后续事件
         if name == "error":
-            if s["event_sequence"][-1] != "error":
-                failures.append(f"error 用例末事件不是 error: {s['event_sequence']}")
-                print(f"[FAIL] error 路径: 末事件 {s['event_sequence'][-1]}")
+            ev, payload = events[0] if events else (None, None)
+            if ev != "init" or not isinstance(payload, dict) or "error" not in payload:
+                failures.append(f"error 用例 init 载荷缺 error 键: {payload}")
+                print(f"[FAIL] error 路径: init 载荷 {payload}")
             else:
-                print("[PASS] error 路径: 异常已转 event:error 事件")
+                print("[PASS] error 路径: init 事件带 error 载荷并正常关闭")
+
+        # 收尾清理（SELF_CONTAINED 协议）
+        if src.calls["close"] != 1:
+            failures.append(f"{name}: close() 调用 {src.calls['close']} 次（应 1）")
+        n_clean = len(src.calls["cleanup"])
+        expect_clean = 2 if name == "dual" else 1
+        if n_clean != expect_clean:
+            failures.append(f"{name}: cleanup_records {n_clean} 次（应 {expect_clean}）")
+        if src.calls["close"] == 1 and n_clean == expect_clean:
+            print(f"[PASS] {name} 收尾: close×1 + cleanup×{n_clean}")
 
         summary[name] = s
 
     # ── 冻结 / 比对事件序列快照 ──
     from Test import comparator
-    if force_update or not os.path.exists(SNAPSHOT):
+    if args.update or not os.path.exists(SNAPSHOT):
         os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
-        with open(SNAPSHOT, "w", encoding="utf-8") as f:
+        with io.open(SNAPSHOT, "w", encoding="utf-8") as f:
             json.dump(summary, f, ensure_ascii=False, indent=1, sort_keys=True)
-        print(f"\n[{'UPDATED' if force_update else 'FROZEN'}] SSE 事件序列基线: "
+        print(f"\n[{'UPDATED' if args.update else 'FROZEN'}] SSE 事件序列基线: "
               f"{json.dumps({k: v['event_sequence'] for k, v in summary.items()}, ensure_ascii=False)}")
     else:
-        with open(SNAPSHOT, encoding="utf-8") as f:
+        with io.open(SNAPSHOT, encoding="utf-8") as f:
             expected = json.load(f)
         ok, diff = comparator.compare(expected, summary, path="$.sse")
         if ok:
@@ -160,7 +316,7 @@ def main():
         for x in failures:
             print(" -", x)
         return False
-    print("===== SSE 事件序列: 全部通过 =====")
+    print("===== SSE 事件序列: 全部通过（native 生成器） =====")
     return True
 
 

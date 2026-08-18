@@ -2,7 +2,7 @@
 """
 FrontAPI.py —— FastAPI 统一入口 · 面向前端 · REST + SSE（阶段 3 落地）
 =========================================================================
-V10 方案 8.6（3a REST 路由迁移 / 3b-1 SSE 原生异步生成器）：
+V10 方案 8.6（3a REST 路由迁移 / 3b SSE 原生异步生成器）：
 
   3a · REST 路由迁移：
     - 30 条 REST 路由收敛到本文件（单一路由源），路由保持薄：
@@ -11,19 +11,18 @@ V10 方案 8.6（3a REST 路由迁移 / 3b-1 SSE 原生异步生成器）：
       本文件不直连 m.analyze_stock / m.compute_red_range_zs /
       m.stock_manual_select_point / m.futures_manual_select_point
       （Test/test_phase3_guards.py G3 守护）；
-    - api_server.py 退役为兼容壳：app/router 为本文件别名，
-      SSE Mock 桥接层（_SSEMockWfile/_SSEMockHandler/_sse_generator）
-      亦迁至本文件（3b-2 灰度通过后随旧路径一并拆除）。
+    - api_server.py 兼容壳已于 3b-2 后删除（原 uvicorn api_server:app
+      部署脚本改用 uvicorn FrontAPI:app）。
 
-  3b-1 · SSE 原生异步生成器（本阶段上线，旧路径保持可用）：
+  3b · SSE 原生异步生成器（3b-1 上线 + 灰度 + 3b-2 拆除旧路径）：
     - ChartHandler._handle_sse_stream_dual/single（write() 式，约 1042 行）
       忠实移植为原生异步生成器 sse_futures_stream_dual/single；
     - 数据源抽象 SSESource：生产 TqSdkSource（每连接独立 TqApi+CChan，
       SELF_CONTAINED 锁分类，不加引擎锁）/ 灰度测试注入 MockSource
       （Test/test_sse_gray.py 驱动确定性比对）；
-    - /api/futures_stream 双实现并存：impl=legacy（默认，零行为漂移）|
-      impl=native。灰度 7 天（高风险档）比对无差异后翻转默认并进入
-      3b-2：拆除 ChartHandler SSE 方法与 Mock 桥接层。
+    - 3b-1 双实现并存（impl=legacy|native）灰度 7 天比对无差异后，
+      3b-2 已拆除 ChartHandler SSE 方法与 Mock 桥接层，本文件仅保留
+      native 路径（/api/futures_stream 无 impl 参数）。
 
   忠实移植口径（3b-1 与遗留实现的事件协议逐项一致）：
     - 事件名/载荷构造/错误事件：init（含失败载荷）→ update（tick 路径与
@@ -43,14 +42,11 @@ V10 方案 8.6（3a REST 路由迁移 / 3b-1 SSE 原生异步生成器）：
 启动：
     python FrontAPI.py                     # 推荐入口（端口/地址走 App/AppConfig.py）
     uvicorn FrontAPI:app --port 18081      # 等效
-兼容：
-    python api_server.py                   # 兼容入口（app 为本文件实例别名）
 """
 import sys
 import os
 import json
 import time
-import queue
 import asyncio
 import threading
 import traceback
@@ -80,8 +76,9 @@ from App.AppConfig import app_config
 from App import AppOrch as orch
 from App.AppOrch import AppError  # 领域异常统一在服务层定义（方案 7.7）
 
-# 引擎模块（import my_chan_main 触发其模块级初始化，与 api_server 行为一致）
-import my_chan_main as m  # noqa: F401  （仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗）
+# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
+# 仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗
+from App import AppEngine as m  # noqa: F401
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -90,10 +87,14 @@ import my_chan_main as m  # noqa: F401  （仅读取常量/纯函数/SSE 调试�
 
 @asynccontextmanager
 async def lifespan(app):
-    """应用生命周期：关闭时优雅回收 ProcessPool（阶段 7）。
+    """应用生命周期：关闭时优雅回收 ProcessPool 与活跃 TqSdkSource（阶段 7/10）。
 
     未回收时 Ctrl+C 会让 worker 进程在 call_queue.get() 阻塞处收到
     KeyboardInterrupt 并打印 traceback（实测 SpawnProcess-1）。
+    TqSdkSource 同理：服务器退出时事件循环即将关闭，async 生成器 finally
+    不可靠（实测），必须在此显式 _close_all_sources() 关闭所有 TqApi，
+    否则进程退出时 TqApi 内部挂起任务被销毁，触发
+    「Task was destroyed but it is pending!」级联。
     """
     yield
     try:
@@ -101,6 +102,11 @@ async def lifespan(app):
         scan_pool_shutdown()
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
+    try:
+        # run_in_threadpool：close() 内 _wait_done.wait 上限 5s，不能阻塞事件循环
+        await run_in_threadpool(_close_all_sources)
+    except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
+        print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
 
 
 app = FastAPI(title="缠论分析 API", version="1.2.0", docs_url="/docs",
@@ -165,75 +171,41 @@ def _json_response(data, status_code: int = 200):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SSE · Legacy 桥接层（自 api_server 迁入；3b-2 灰度通过后拆除）
-# 将 ChartHandler 的 write() 式 SSE 方法桥接到 StreamingResponse
-# ═══════════════════════════════════════════════════════════════════════
-
-class _SSEMockWfile:
-    """模拟 socket.SocketIO，将 write() 转为 enqueue"""
-    def __init__(self):
-        self.q = queue.Queue()
-
-    def write(self, data: bytes):
-        self.q.put(data)
-
-    def flush(self):
-        pass
-
-
-class _SSEMockHandler:
-    """模拟 ChartHandler，提供 SSE handler 所需的最小接口"""
-    def __init__(self):
-        self.wfile = _SSEMockWfile()
-
-    def send_response(self, code: int):
-        pass
-
-    def send_header(self, keyword: str, value: str):
-        pass
-
-    def end_headers(self):
-        pass
-
-    def send_json_response(self, data, status_code: int):
-        err = json.dumps(data, ensure_ascii=False, allow_nan=False)
-        self.wfile.write(f"event: error\ndata: {err}\n\n".encode("utf-8"))
-
-
-def _sse_generator(handler_method, *args):
-    """在独立线程中运行 ChartHandler 的 SSE 方法，yield 其输出"""
-    mock = _SSEMockHandler()
-
-    def _run():
-        try:
-            handler_method(mock, *args)
-        except Exception as exc:
-            traceback.print_exc()
-            err = json.dumps({"error": str(exc)}, ensure_ascii=False)
-            mock.wfile.q.put(f"event: error\ndata: {err}\n\n".encode("utf-8"))
-        finally:
-            mock.wfile.q.put(None)          # 哨兵
-
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-
-    while True:
-        data = mock.wfile.q.get()
-        if data is None:
-            break
-        yield data
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # SSE · 数据源抽象（3b-1 灰度注入点，设计 8.6-3b）
+# 3b-2 已拆除：Legacy 桥接层（_SSEMockWfile/_SSEMockHandler/_sse_generator）
+# 与 ChartHandler 旧 SSE 方法（_handle_sse_stream_dual/single）一并下线，
+# /api/futures_stream 仅保留 native 原生异步生成器路径。
 # ═══════════════════════════════════════════════════════════════════════
 
 class SSESourceClosed(Exception):
-    """数据源正常关闭信号（仅 Mock/回放数据源使用；生产 TqSdk 源永不抛出）
-
-    原生生成器收到本信号即正常收尾（等价于客户端断开后的自然结束），
-    供 Test/test_sse_gray.py 以有限脚本驱动无限循环协议。
+    """数据源正常关闭信号（Mock/回放源自然结束；生产 TqSdkSource 被
+    应用级回收（futures_cleanup / lifespan 关闭钩子）时也抛出本信号，
+    让 SSE 生成器在 wait_update 处干净退出，而非 error-loop）
     """
+
+
+# ── TqSdkSource 活跃注册表（应用级 TqApi 生命周期管理，根因修复）──────
+# Python 异步模型下，async 生成器的 finally 不是可靠的清理路径（实测）：
+#   · 任务取消（客户端断开）时 async for 异常退出不会 aclose 生成器，
+#     finally 不执行 → TqApi 泄漏；
+#   · 服务器关闭后事件循环已关，生成器 GC 时 finally 内 await 直接失败
+#     （finally 不打印，src.close() 永不执行）→ 进程退出时 TqApi 内部
+#     挂起任务被销毁，触发「Task was destroyed but it is pending!」级联。
+# 因此 TqApi 回收由注册表统一负责：/api/futures_cleanup（期指切股票）与
+# lifespan 关闭钩子（服务器退出）调用 _close_all_sources() 幂等回收。
+_ACTIVE_SOURCES = set()
+_ACTIVE_SOURCES_LOCK = threading.Lock()
+
+
+def _close_all_sources():
+    """关闭所有活跃 TqSdkSource（幂等；供 futures_cleanup 与 lifespan 关闭钩子调用）"""
+    with _ACTIVE_SOURCES_LOCK:
+        sources = list(_ACTIVE_SOURCES)
+    for src in sources:
+        try:
+            src.close()
+        except Exception as exc:  # noqa: BLE001 —— 单个源关闭失败不阻断其余
+            print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
 
 
 class SSESource:
@@ -289,17 +261,43 @@ class SSESource:
         """关闭数据源连接（异常自吞并打印，遗留行为）"""
         raise NotImplementedError
 
+    def mark_gen_exited(self):
+        """生成器 finally 置位：本连接已不再使用 api，可安全 close。
+
+        基类默认 no-op（Mock/回放源无真实 api，无需等待）；TqSdkSource
+        覆写为置位 _gen_exited，让 close() 在 api 无使用者后才 api.close()。
+        """
+        pass
+
     def cleanup_records(self, code_key):
         """清理该连接的 K 线注入缓存（异常自吞并打印，遗留行为）"""
         raise NotImplementedError
 
 
 class TqSdkSource(SSESource):
-    """生产数据源：天勤 TqApi + my_chan_main 引擎链路（忠实于遗留 ChartHandler）"""
+    """生产数据源：天勤 TqApi + my_chan_main 引擎链路（忠实于遗留 ChartHandler）
+
+    TqApi 生命周期（应用级管理，根因修复）：
+      - 每 SSE 连接独立 TqApi；实例创建即注册进 _ACTIVE_SOURCES 注册表；
+      - close() 幂等：置 _closed 旗 → 等待在途 wait_update 返回（loop 停止，
+        tqsdk 要求「loop 未运行才能 close」）→ 等待生成器 finally 置位
+        _gen_exited（确保 api 无使用者，避免「Event loop is closed」）→
+        _close_lock 串行化 api.close() → 注销；
+      - 回收入口：/api/futures_cleanup（期指切股票）与 lifespan 关闭钩子
+        （服务器退出）统一调用 _close_all_sources()；SSE 生成器 finally 仅作
+        尽力而为路径（async 生成器 finally 在取消/GC 下不可靠，实测）。
+    """
 
     def __init__(self):
         self.api = None
         self._serials = {}      # (symbol, freq_sec) → kline serial（天勤同参同对象语义）
+        self._closed = False    # 关闭旗：wait_update 检测到后抛 SSESourceClosed 让生成器干净退出
+        self._wait_done = threading.Event()
+        self._wait_done.set()   # 初始无在途 wait_update
+        self._gen_exited = threading.Event()  # 生成器 finally 置位：api 已无使用者，可安全 close
+        self._close_lock = threading.Lock()   # 串行化 api.close()（生成器 finally 与 _close_all_sources 可并发调用）
+        with _ACTIVE_SOURCES_LOCK:
+            _ACTIVE_SOURCES.add(self)
 
     def connect(self):
         from tqsdk import TqApi, TqAuth
@@ -317,7 +315,13 @@ class TqSdkSource(SSESource):
         return self._serials[key]
 
     def wait_update(self, deadline_ns):
-        return self.api.wait_update(deadline=deadline_ns)
+        self._wait_done.clear()
+        try:
+            if self._closed:
+                raise SSESourceClosed()
+            return self.api.wait_update(deadline=deadline_ns)
+        finally:
+            self._wait_done.set()
 
     def last_records(self, code_key):
         from DataAPI.TqSdkAPI import CTqSdkAPI
@@ -340,12 +344,32 @@ class TqSdkSource(SSESource):
     def white_hline(self, kl_list, freq):
         return m._calc_futures_white_hline(kl_list, freq, m._get_date_fmt(freq))
 
+    def mark_gen_exited(self):
+        """生成器 finally 置位：本连接已不再使用 api，可安全 close（幂等）"""
+        self._gen_exited.set()
+
     def close(self):
-        if self.api is not None:
-            try:
-                self.api.close()
-            except Exception as e:
-                print(f"[警告] 异常: {type(e).__name__}: {e}")
+        self._closed = True
+        try:
+            if self.api is not None:
+                # tqsdk 要求 loop 停止后才能 close：等待在途 wait_update 返回
+                # （wait_update 带 0.1s deadline，正常 0.1s 内返回；5s 为兜底上限）
+                self._wait_done.wait(timeout=5.0)
+                # 再等待生成器 finally 置位 _gen_exited：确保 api 已无使用者
+                # （生成器可能在 wait_update 返回后仍处理数据/调 get_kline_serial，
+                # 若此时 api.close() 会触发「Event loop is closed」；5s 为兜底上限，
+                # 超时说明生成器被取消/GC 已不再使用 api，可安全关闭）
+                self._gen_exited.wait(timeout=5.0)
+                # _close_lock 串行化：生成器 finally 与 _close_all_sources 可能并发
+                # 调用 close()，tqsdk api.close() 非线程安全（is_closed 检查与关闭
+                # 之间存在竞态），加锁后第二次调用见 is_closed() 直接返回。
+                with self._close_lock:
+                    self.api.close()
+        except Exception as e:
+            print(f"[警告] 异常: {type(e).__name__}: {e}")
+        finally:
+            with _ACTIVE_SOURCES_LOCK:
+                _ACTIVE_SOURCES.discard(self)
 
     def cleanup_records(self, code_key):
         try:
@@ -736,6 +760,9 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
         # 与遗留实现一致：打印连接异常后静默结束（错误已在 init 事件载荷中表达）
         print(f"[{display_key}] 连接异常: {e}")
     finally:
+        # 先置位 _gen_exited：告知 close() 本生成器已不再使用 api，可安全 api.close()
+        # （顺序关键：必须在 src.close() 之前，否则 close() 等 _gen_exited 会死锁）
+        src.mark_gen_exited()
         await run_in_threadpool(src.close)
         # 清理该连接的K线缓存
         if symbol is not None and freq_sec is not None:
@@ -1249,6 +1276,9 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         print(f"[{display_key}] 连接异常: {e}")
         traceback.print_exc()
     finally:
+        # 先置位 _gen_exited：告知 close() 本生成器已不再使用 api，可安全 api.close()
+        # （顺序关键：必须在 src.close() 之前，否则 close() 等 _gen_exited 会死锁）
+        src.mark_gen_exited()
         await run_in_threadpool(src.close)
         # 清理两个窗口的K线缓存与期货下窗缓存
         if symbol is not None and main_freq_sec is not None:
@@ -1544,7 +1574,14 @@ async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Qu
 
 @router.get("/api/futures_cleanup")
 async def api_futures_cleanup():
-    """清理所有期货数据"""
+    """清理所有期货数据（期指切股票：先回收 TqApi 连接，再清空缓存）
+
+    顺序关键：先 _close_all_sources() 关闭所有活跃 TqSdkSource（TqApi 根因
+    修复——SSE 生成器 finally 在取消/GC 下不可靠，TqApi 回收由注册表统一
+    负责），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
+    run_in_threadpool 包裹：close() 内 _wait_done.wait 上限 5s，不能阻塞事件循环。
+    """
+    await run_in_threadpool(_close_all_sources)
     await run_in_threadpool(orch.futures_cleanup)
     return _json_response({"ok": True})
 
@@ -1571,16 +1608,13 @@ async def api_futures_stream(
     start_time: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
-    impl: str = Query("legacy"),
 ):
-    """SSE 实时推送（期货单/双窗口）· 双实现并存（3b-1 灰度开关）
+    """SSE 实时推送（期货单/双窗口）· native 原生异步生成器（3b-2 已拆除旧路径）
 
-    impl=legacy（默认）：ChartHandler._handle_sse_stream_* + _sse_generator
-                         桥接（阶段 3a 前的既有路径，零行为漂移）
-    impl=native        ：FrontAPI 原生异步生成器（3b-1 忠实移植，
-                         事件协议逐项一致，见 sse_futures_stream_*）
-    灰度策略（设计 8.6-3b / 9 章）：高风险档 7 天——两实现并行响应真实
-    流量，比对事件序列无差异后翻转默认为 native，再进入 3b-2 拆除旧路径。
+    3b-1 灰度（impl=legacy|native 并行 7 天）比对无差异后，3b-2 已拆除
+    ChartHandler._handle_sse_stream_* 与 _SSEMockWfile 桥接层，本端点
+    仅保留原生异步生成器路径（sse_futures_stream_single/dual），
+    事件协议与灰度基线逐项一致（见 Test/test_sse_gray.py）。
     """
     if not symbol:
         raise HTTPException(status_code=400, detail="缺少symbol参数")
@@ -1588,21 +1622,10 @@ async def api_futures_stream(
     if not orch.tq_available():
         raise HTTPException(status_code=503, detail="天勤数据源不可用")
 
-    if impl not in ("legacy", "native"):
-        raise HTTPException(status_code=400, detail="impl 参数仅支持 legacy|native")
-
-    if impl == "native":
-        if dual:
-            gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time)
-        else:
-            gen = sse_futures_stream_single(symbol, freq, start_time)
+    if dual:
+        gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time)
     else:
-        if dual:
-            handler = orch.get_sse_handler("dual")
-            gen = _sse_generator(handler, symbol, freq, sub_freq, start_time)
-        else:
-            handler = orch.get_sse_handler("single")
-            gen = _sse_generator(handler, symbol, freq, start_time)
+        gen = sse_futures_stream_single(symbol, freq, start_time)
 
     return StreamingResponse(
         gen,
@@ -1736,7 +1759,7 @@ if __name__ == "__main__":
         _probe.close()
     except OSError:
         print(f"[错误] 端口 {PORT} 已被占用！")
-        print(f"[错误] 可能原因：api_server.py 旧入口或其他服务仍在运行。")
+        print(f"[错误] 可能原因：FrontAPI.py 或其他服务仍在运行。")
         print(f"[解决] Windows 可执行: netstat -ano | findstr {PORT} 查看占用 PID，")
         print(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
         sys.exit(1)
@@ -1751,5 +1774,5 @@ if __name__ == "__main__":
     print(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
     print(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     print(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    print(f"[信息] SSE 灰度:   /api/futures_stream?impl=legacy|native（默认 legacy，3b-1）")
+    print(f"[信息] SSE:       /api/futures_stream（native 原生生成器，3b-2 已拆除 legacy）")
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")

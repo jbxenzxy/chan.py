@@ -43,7 +43,7 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
     main_fixture/sub_fixture: fixtures 文件名；sub 为 None 时保持原函数。
     truncate_to: 若非 None，返回 dt <= truncate_to 的子集（全量截断对照用）。
     """
-    import my_chan_main as m
+    from App import AppEngine as m
     from Test.gen_fixtures import load_records
 
     main_records = load_records(os.path.join(FIXTURE_DIR, main_fixture))
@@ -89,7 +89,7 @@ def install_futures_data_source(fixture):
     """
     import sys
     import types
-    import my_chan_main as m
+    from App import AppEngine as m
     from Test.gen_fixtures import load_records
 
     records = load_records(os.path.join(FIXTURE_DIR, fixture))
@@ -158,7 +158,7 @@ def install_futures_data_source(fixture):
 # ─────────────────────────────────────────────────────────────
 def isolate_side_effects():
     """隔离引擎进程内缓存与写文件副作用，保证快照可重复采集"""
-    import my_chan_main as m
+    from App import AppEngine as m
     saved = {}
     # CChan 对象缓存：清空，测试统一用 cache_chan=False 亦不依赖该缓存
     for attr in ("_STOCK_CACHE", "_stock_cache", "_CHAN_CACHE"):
@@ -230,7 +230,7 @@ def _c_stock_d_full():
     """日线全量分析：笔/段/中枢/买卖点基线（核心快照）"""
     restore, _ = install_data_source("stock_day.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         r = m._analyze_stock_internal("600519", freq="d", end_date=None, cache_chan=False)
         return r
     finally:
@@ -244,7 +244,7 @@ def _c_stock_d_end_date():
     anchor = _tail_dt("stock_day.json", 30)
     restore, _ = install_data_source("stock_day.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_stock_internal("600519", freq="d", end_date=anchor.strftime("%Y/%m/%d"), cache_chan=False)
     finally:
         restore()
@@ -256,7 +256,7 @@ def _c_stock_d_step_m5():
     anchor = _tail_dt("stock_day.json", 60)
     restore, _ = install_data_source("stock_day.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_stock_internal("600519", freq="d", end_date=anchor.strftime("%Y/%m/%d"), cache_chan=False, step=-5)
     finally:
         restore()
@@ -266,7 +266,7 @@ def _c_stock_d_step_m5():
 def _c_multilevel():
     """多级别联立：日线主级别 + 子级别（dual=True 时子级别由 _SUB_FREQ_MAP
     自动映射，不走外部参数；子级别数据经 read_sub_level_records 通道注入）"""
-    import my_chan_main as m
+    from App import AppEngine as m
     restore, _ = install_data_source("stock_day.json", sub_fixture="stock_60m.json")
     try:
         return m._analyze_stock_internal("600519", freq="d", cache_chan=False, dual=True)
@@ -279,7 +279,7 @@ def _c_edge_gap():
     """边界：数据缺失（停牌 5 日缺口）"""
     restore, _ = install_data_source("stock_day_gap.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_stock_internal("600519", freq="d", cache_chan=False)
     finally:
         restore()
@@ -290,7 +290,7 @@ def _c_edge_zero_vol():
     """边界：零成交停牌日（ohlc 收敛为一点）"""
     restore, _ = install_data_source("stock_day_zero_vol.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_stock_internal("600519", freq="d", cache_chan=False)
     finally:
         restore()
@@ -302,7 +302,7 @@ def _c_futures_full():
     覆盖 _analyze_futures_internal 全链路（此前快照仅覆盖股票路径）。"""
     restore = install_futures_data_source("futures_15s.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s")
     finally:
         restore()
@@ -317,7 +317,7 @@ def _c_futures_end_date():
     anchor = rows[-401]["dt"]
     restore = install_futures_data_source("futures_15s.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         return m._analyze_futures_internal(
             "KQ.m@SHFE.rb", freq="15s",
             end_date=anchor.strftime("%Y/%m/%d %H:%M:%S"))

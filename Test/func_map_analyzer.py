@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-阶段 2.6：my_chan_main.py 函数级迁移映射 —— AST 静态分析器
+阶段 2.6：App/AppEngine.py 函数级迁移映射 —— AST 静态分析器
 =====================================================================
-对 my_chan_main.py 做纯静态分析（不 import、零副作用）：
+对 App/AppEngine.py 做纯静态分析（不 import、零副作用）：
+（阶段 10.1：my_chan_main.py 已删除，引擎迁入 App/AppEngine.py，
+  分析目标随之下移；DataAPI/ElTdxAPI.py 由 func_map_check 合并扫描）
 
   ① 全部顶层函数：名称/行区间/参数/首行 docstring
   ② 全部模块级状态：模块级赋值目标（排除 import 与函数定义）
@@ -21,7 +23,7 @@ import os
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TARGET = os.path.join(REPO_ROOT, "my_chan_main.py")
+TARGET = os.path.join(REPO_ROOT, "App", "AppEngine.py")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                    "func_map_auto.json")
 

@@ -4,32 +4,32 @@
 =====================================================================
 守护阶段 5 的七类结构性成果（设计文档 V10 方案 8.8 / 4.1 / 4.4）：
 
-  ① 非标准导入收敛（设计 8.8 表格逐项）：my_chan_main.py / FrontAPI.py /
-     App/AppOrch.py / api_server.py / BuySellPoint/BSPointList.py 不得再从
+  ① 非标准导入收敛（设计 8.8 表格逐项）：App/AppEngine.py / FrontAPI.py /
+     App/AppOrch.py / BuySellPoint/BSPointList.py 不得再从
      DataAPI.TqSdkAPI import FREQ_SEC_MAP / FREQ_LABEL_CN / FUTURES_ALIASES /
      SUPPORTED_FREQS / DISABLED_FREQS / fetch_futures_kline 六个符号
      （AST 级，含函数内局部 import）；元数据一律经 CTqSdkAPI 接口属性访问。
      允许：CTqSdkAPI / TQ_ACCOUNT / TQ_PASSWORD（数据源选择点与连接凭据，
      不在设计收敛表格内）。
   ② 盘后下载职责内聚：设计 8.8 点名 8 函数 + 下载专用工具 4 个全部
-     定义于 DataAPI/ElTdxAPI.py；my_chan_main 不再含下载实现体
+     定义于 DataAPI/ElTdxAPI.py；App/AppEngine 不再含下载实现体
      （兼容壳除外）；_download_state/_download_lock 与 ElTdxAPI 模块
      字段同一对象（identity，防双态漂移）。
   ③ 抽象层元数据接口：CCommonStockApi 基类声明五个元数据属性 +
      fetch_kline（get_kline 家族，默认 NotImplementedError）；CTqSdkAPI
      提供非空值且与模块级常量同一对象（值单源）。
-  ④ 依赖方向（设计 4.4）：DataAPI/* 不得 import App 层 / my_chan_main /
+  ④ 依赖方向（设计 4.4）：DataAPI/* 不得 import App 层 / AppEngine /
      FrontAPI（ElTdxAPI/CommonStockAPI/TdxAPI/TqSdkAPI 逐一 AST 校验）；
      App/AppData.py 不得 import DataAPI（防影子双源，沿用阶段 4 ⑧）。
   ⑤ tdxhy 迁移与启动注入：App/tdxhy_mapping_data.py 在位且 DataAPI/
-     无残留；import my_chan_main 即完成 set_tdx_hy_mapping 注入
+     无残留；import AppEngine 即完成 set_tdx_hy_mapping 注入
      （bootstrap 注入链运行时验证，映射非空）。
   ⑥ fetch 打桩点同步：Test/snapshot_runner.py 打桩 CTqSdkAPI.fetch_kline
      （打桩点随 get_kline 家族迁移，防快照用例回退到已删除的
      m.fetch_futures_kline 符号而真实联网）。
   ⑦ 下载入口配置化：AppOrch 下载族直连 ElTdxAPI + 目录经
      app_config.download_dir；禁 _m.DOWNLOAD_DIR 等单体全局引用
-     （该符号已随下载族迁出 my_chan_main，悬空引用为运行时
+     （该符号已随下载族迁出 AppEngine，悬空引用为运行时
      AttributeError——评审对照实现暴露，本守护防其回潮）。
 
 运行：python Test/test_phase5_guards.py          # 校验（run_all 组件）
@@ -78,7 +78,7 @@ CONVERGED_SYMBOLS = {
 }
 # 六符号收敛的真实调用点之一（BSPointList 的期货红框周期换算）
 BUSINESS_MODULES = [
-    "my_chan_main.py", "FrontAPI.py", "App/AppOrch.py", "api_server.py",
+    "App/AppEngine.py", "FrontAPI.py", "App/AppOrch.py",
     "BuySellPoint/BSPointList.py",
 ]
 
@@ -153,15 +153,15 @@ def test_eltdx_cohesion(failures):
         print(f"[PASS] ②a ElTdxAPI 函数族: {len(ELTDX_FUNCS)} 个全部在位"
               f"（设计 8.8 点名 8 + 下载专用工具 4）")
 
-    # ②b my_chan_main 不再含下载实现体（兼容壳除外，壳必须转发 _ElTdx）
-    mcm_src = read_src("my_chan_main.py")
+    # ②b AppEngine 不再含下载实现体（兼容壳除外，壳必须转发 _ElTdx）
+    mcm_src = read_src("App/AppEngine.py")
     mcm_tree = ast.parse(mcm_src)
     mcm_defs = {n.name: n for n in ast.walk(mcm_tree)
                 if isinstance(n, ast.FunctionDef)}
     impl_leak = [f for f in ELTDX_FUNCS if f in mcm_defs and f not in MCM_SHELLS]
     if impl_leak:
-        failures.append(f"② my_chan_main 残留下载实现体: {impl_leak}")
-        print(f"[FAIL] ②b my_chan_main 实现体残留: {impl_leak}")
+        failures.append(f"② AppEngine 残留下载实现体: {impl_leak}")
+        print(f"[FAIL] ②b AppEngine 实现体残留: {impl_leak}")
     else:
         # 纯壳形态校验（AST）+ 委托目标存在性校验（防薄壳假绿）
         shell_bad, callees = [], []
@@ -178,14 +178,14 @@ def test_eltdx_cohesion(failures):
             if callee not in eltdx_defs:
                 shell_bad.append(f"{fname} 委托目标 _ElTdx.{callee} 不存在（薄壳假绿）")
         if shell_bad:
-            failures.append(f"② my_chan_main 兼容壳异常: {shell_bad}")
-            print(f"[FAIL] ②b my_chan_main 兼容壳: {shell_bad}")
+            failures.append(f"② AppEngine 兼容壳异常: {shell_bad}")
+            print(f"[FAIL] ②b AppEngine 兼容壳: {shell_bad}")
         else:
-            print(f"[PASS] ②b my_chan_main: 下载实现体清零，"
+            print(f"[PASS] ②b AppEngine: 下载实现体清零，"
                   f"{len(callees)} 个兼容壳为纯委托壳且委托目标真实存在")
 
     # ②c 下载状态同对象（identity，运行时）
-    import my_chan_main as m
+    from App import AppEngine as m
     from DataAPI import ElTdxAPI
     if m._download_state is not ElTdxAPI._download_state \
             or m._download_lock is not ElTdxAPI._download_lock:
@@ -278,7 +278,7 @@ def test_metadata_interface(failures):
 # ═══════════════════════════════════════════════════════════════════════
 DATA_API_MODULES = ["DataAPI/CommonStockAPI.py", "DataAPI/TdxAPI.py",
                     "DataAPI/TqSdkAPI.py", "DataAPI/ElTdxAPI.py"]
-FORBIDDEN_UPPER = ("App", "my_chan_main", "FrontAPI", "api_server")
+FORBIDDEN_UPPER = ("App", "AppEngine", "FrontAPI", "api_server")
 
 
 def _imports_any(src):
@@ -309,13 +309,13 @@ def test_dependency_direction(failures):
             print("      -", b)
     else:
         print(f"[PASS] ④a DataAPI 反向依赖: {len(DATA_API_MODULES)} 个模块"
-              f"零 import App/my_chan_main/FrontAPI")
+              f"零 import App/AppEngine/FrontAPI")
 
-    # ④b AppData 不 import DataAPI / my_chan_main / FrontAPI / AppOrch
+    # ④b AppData 不 import DataAPI / AppEngine / FrontAPI / AppOrch
     #     （防影子双源，阶段 4 ⑧ 在阶段 5 延续；同层 AppConfig 是允许的
     #      依赖方向终点 FrontAPI → AppOrch → AppData → AppConfig）
     appdata_targets = _imports_any(read_src("App/AppData.py"))
-    forbidden_appdata = {"my_chan_main", "DataAPI", "FrontAPI",
+    forbidden_appdata = {"AppEngine", "DataAPI", "FrontAPI",
                          "api_server", "App.AppOrch"}
     hit = {t for t in appdata_targets
            if t in forbidden_appdata or t.split(".")[0] in forbidden_appdata}
@@ -323,12 +323,12 @@ def test_dependency_direction(failures):
         failures.append(f"④ App/AppData.py 反向依赖: {sorted(hit)}")
         print(f"[FAIL] ④b AppData 纯度: 反向依赖 {sorted(hit)}")
     else:
-        print("[PASS] ④b AppData 纯度: 不 import DataAPI/my_chan_main/"
+        print("[PASS] ④b AppData 纯度: 不 import DataAPI/AppEngine/"
               "FrontAPI/AppOrch（AppConfig 为允许终点）")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ⑤ tdxhy 迁移与启动注入链（运行时：import my_chan_main 即完成注入）
+# ⑤ tdxhy 迁移与启动注入链（运行时：import AppEngine 即完成注入）
 # ═══════════════════════════════════════════════════════════════════════
 def test_tdxhy_bootstrap(failures):
     in_app = os.path.exists(os.path.join(REPO_ROOT, "App", "tdxhy_mapping_data.py"))
@@ -339,17 +339,17 @@ def test_tdxhy_bootstrap(failures):
     else:
         print("[PASS] ⑤a 文件迁移: App/tdxhy_mapping_data.py 在位，DataAPI/ 无残留")
 
-    import my_chan_main as m  # noqa: F401  （bootstrap 注入在 import 时完成）
+    from App import AppEngine as m  # noqa: F401  （bootstrap 注入在 import 时完成）
     from DataAPI import TdxAPI
     x2, t2x = TdxAPI.get_tdx_hy_mapping()
     if not x2 or not t2x:
         failures.append("⑤ bootstrap 注入未生效（TdxAPI 侧映射为空）")
-        print("[FAIL] ⑤b 启动注入: import my_chan_main 后映射仍为空")
+        print("[FAIL] ⑤b 启动注入: import AppEngine 后映射仍为空")
     elif len(x2) < 400 or len(t2x) < 400:
         failures.append(f"⑤ 注入量异常: {len(x2)}/{len(t2x)}（基线 470）")
         print(f"[FAIL] ⑤b 启动注入: 映射量 {len(x2)}/{len(t2x)} 异常")
     else:
-        print(f"[PASS] ⑤b 启动注入: import my_chan_main 即完成注入，"
+        print(f"[PASS] ⑤b 启动注入: import AppEngine 即完成注入，"
               f"TdxAPI 侧 {len(t2x)} 条（基线 470）")
 
 
@@ -369,7 +369,7 @@ def test_snapshot_stub(failures):
 # ═══════════════════════════════════════════════════════════════════════
 # ⑦ 下载入口配置化
 #    AppOrch 下载族直连 ElTdxAPI + 目录经 app_config.download_dir；
-#    禁 _m.DOWNLOAD_DIR 单体全局引用（该符号已随下载族迁出 my_chan_main，
+#    禁 _m.DOWNLOAD_DIR 单体全局引用（该符号已随下载族迁出 AppEngine，
 #    悬空引用为运行时 AttributeError——本守护防其回潮）
 # ═══════════════════════════════════════════════════════════════════════
 LEGACY_REFS = ("_m.DOWNLOAD_DIR", "_m._ELTDX_AVAILABLE",

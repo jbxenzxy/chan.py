@@ -48,7 +48,7 @@ _PHASE4_RETIRED_ALIASES = [
 
 def test_config_consistency(failures):
     """阶段 4 语义：① 路径别名清零不得复活；② AppData 路径 = AppConfig。"""
-    import my_chan_main as m
+    from App import AppEngine as m
     from App.AppConfig import app_config
     from App.AppData import AppData
 
@@ -86,7 +86,7 @@ def test_config_consistency(failures):
 def test_app_error_chain(failures):
     """AppError 统一处理器：领域异常 → exc.status_code + 结构化 JSON。
     路由层不得吞异常，处理链路断裂会让前端收到 500 裸文本。"""
-    import api_server as routes
+    import FrontAPI as routes
     from App.AppOrch import NotFoundError, AppError
     from fastapi import Request
 
@@ -130,7 +130,7 @@ def test_app_error_chain(failures):
 # ═══════════════════════════════════════════════════════════════════
 def _call_stock(failures, name, **kw):
     """调用股票分析入口，断言返回 dict 且含 error（而非抛异常）"""
-    import my_chan_main as m
+    from App import AppEngine as m
     restore = isolate_side_effects()
     try:
         r = m._analyze_stock_internal(**kw)
@@ -163,7 +163,7 @@ def test_futures_boundaries(failures):
     # 3a 连字符契约（真实天勤路径中该格式同样被拒，口径需冻结）
     restore = install_futures_data_source("futures_15s.json")
     try:
-        import my_chan_main as m
+        from App import AppEngine as m
         r = m._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
                                         end_date="2024-01-31")
         if not (isinstance(r, dict) and "error" in r):

@@ -699,7 +699,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 期货：上下窗是独立的 CChan 对象，下窗缓存在 _futures_analysis_cache 中
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
             # 保证此处取到的下窗 sub_chan 是已更新到最新的笔结构。
-            from my_chan_main import _futures_analysis_cache
+            from App.AppEngine import _futures_analysis_cache
             cache_key = f"{parent.code.upper()}:{sub_freq}"
             sub_chan = _futures_analysis_cache.get(cache_key)
             if sub_chan is None:

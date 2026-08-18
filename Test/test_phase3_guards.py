@@ -7,7 +7,7 @@
   ① 锁分类建档（LOCK_POLICY 登记完备 + SERIAL 实现确实持锁 + RAW 不持锁）
   ② 直连引擎清零（FrontAPI/api_server 不再绕过 AppOrch 漏斗调引擎，
      阶段 2 遗留问题：原 api_server 3 处直连绕锁）
-  ③ 路由收敛（api_server.py 退役为兼容壳，31 条路由单源于 FrontAPI；
+  ③ 路由收敛（api_server.py 已删除，31 条路由单源于 FrontAPI；
      基线冻结于 snapshots/phase3_routes.json）
   ④ 墓碑化（ChartHandler.do_GET/do_POST 已 410；SSE 方法保留至 3b-2）
   ⑤ SSE 双实现（impl=legacy|native 灰度开关，默认 legacy 零漂移；
@@ -162,10 +162,10 @@ def test_lock_policy(failures):
 # ② 直连引擎清零 + ③ 路由收敛
 # ═══════════════════════════════════════════════════════════════════════
 def test_no_direct_engine_calls(failures):
-    """FrontAPI.py 与 api_server.py 不得绕过 AppOrch 漏斗直连引擎
+    """FrontAPI.py 不得绕过 AppOrch 漏斗直连引擎
     （阶段 2 遗留问题：原 api_server L185/L206/L472 三处直连绕锁）。"""
     bad = []
-    for rel in ("FrontAPI.py", "api_server.py"):
+    for rel in ("FrontAPI.py",):
         src = read_src(rel)
         for pat in FORBIDDEN_ENGINE_CALLS:
             for i, line in enumerate(src.splitlines(), 1):
@@ -178,7 +178,7 @@ def test_no_direct_engine_calls(failures):
         if len(bad) > 6:
             print(f"        …共 {len(bad)} 处")
     else:
-        print("[PASS] ② 直连清零: FrontAPI/api_server 0 处直连引擎"
+        print("[PASS] ② 直连清零: FrontAPI 0 处直连引擎"
               "（4 类原始入口全部经 AppOrch.call_* 漏斗）")
 
 
@@ -213,7 +213,7 @@ def test_rest_routes_use_funnels(failures):
 def _collect_routes():
     """枚举 app 全部 API 路由（兼容 FastAPI 0.141 的 _IncludedRouter 延迟结构）"""
     from fastapi.routing import APIRoute
-    import api_server
+    import FrontAPI
 
     out = set()
 
@@ -226,28 +226,13 @@ def _collect_routes():
             elif type(r).__name__ == "_IncludedRouter":
                 walk(r.original_router.routes)
 
-    walk(api_server.app.routes)
+    walk(FrontAPI.app.routes)
     return out
 
 
 def test_route_convergence(failures, update=False):
-    """api_server 退役为兼容壳 + 路由单源于 FrontAPI + 基线比对。"""
+    """路由单源于 FrontAPI（api_server.py 已删除）+ 基线比对。"""
     bad = []
-
-    # 3a-1 兼容壳不定义路由
-    shell_src = read_src("api_server.py")
-    for pat in ("@router.get", "@router.post", "@app.get", "@app.post",
-                "APIRouter()"):
-        if pat in shell_src:
-            bad.append(f"api_server.py 兼容壳仍包含 {pat!r}（应零路由定义）")
-
-    # 3a-2 单一 app 实例（兼容壳与 FrontAPI 指向同一对象）
-    import api_server
-    import FrontAPI
-    if api_server.app is not FrontAPI.app:
-        bad.append("api_server.app is not FrontAPI.app（双实例会导致路由双注册）")
-    if api_server.router is not FrontAPI.router:
-        bad.append("api_server.router is not FrontAPI.router")
 
     # 3a-3 路由集合与冻结基线比对
     current = _collect_routes()
@@ -276,55 +261,50 @@ def test_route_convergence(failures, update=False):
         for b in bad:
             print(f"[FAIL] ③ 路由收敛: {b}")
     else:
-        print(f"[PASS] ③ 路由收敛: 兼容壳零路由定义；单一 app 实例；"
-              f"{len(current)} 条路由与基线一致（单一路由源 = FrontAPI）")
+        print(f"[PASS] ③ 路由收敛: 单一路由源 = FrontAPI（api_server 已删除）；"
+              f"{len(current)} 条路由与基线一致")
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ④ 墓碑化
+# ④ 墓碑化 / 遗留入口下线（阶段 10.1 完成态）
 # ═══════════════════════════════════════════════════════════════════════
 def test_tombstone(failures):
-    """ChartHandler.do_GET/do_POST 已墓碑（410）；SSE 方法按设计保留至 3b-2。"""
-    import my_chan_main as m
+    """ChartHandler 类已整体下线（10.1：my_chan_main.py 删除，入口统一 FrontAPI）。
+
+    阶段 3a 墓碑（do_GET/do_POST → 410）→ 阶段 3b-2 拆除 SSE 旧方法 →
+    阶段 10.1 类整体删除。本守护校验最终态：ChartHandler 及其全部
+    遗留符号在 AppEngine 中零残留。
+    """
+    from App import AppEngine as m
 
     bad = []
-    for name in ("do_GET", "do_POST"):
-        fn = getattr(m.ChartHandler, name, None)
-        if fn is None:
-            bad.append(f"ChartHandler.{name} 不存在")
-            continue
-        src = inspect.getsource(fn)
-        if "410" not in src:
-            bad.append(f"ChartHandler.{name} 未返回 410（墓碑失效）")
-        if len(src.splitlines()) > 40:
-            bad.append(f"ChartHandler.{name} 仍有 {len(src.splitlines())} 行"
-                       f"（墓碑应 <40 行，原分发逻辑应已删除）")
+    # 10.1 完成态：ChartHandler 类必须整体消失（不再有墓碑类）
+    if hasattr(m, "ChartHandler"):
+        bad.append("ChartHandler 应已整体下线（10.1：遗留服务器类删除）")
+    # 遗留服务器别名/符号零残留
+    for name in ("ThreadingHTTPServer", "HTML_TEMPLATE"):
+        if hasattr(m, name):
+            bad.append(f"{name} 应已随遗留服务器下线")
 
-    # SSE 方法保留（3b-2 灰度通过后拆除——现在拆除即失败）
+    # 3b-2 拆除完成：旧 SSE 方法必须已删除（灰度通过后随 legacy 桥接下线）
     for name in ("_handle_sse_stream_dual", "_handle_sse_stream_single"):
-        if not hasattr(m.ChartHandler, name):
-            bad.append(f"ChartHandler.{name} 已被提前拆除（应保留至 3b-2）")
-
-    # 兼容壳体量（退役后应为薄转发，<120 行）
-    n = len(read_src("api_server.py").splitlines())
-    if n > 120:
-        bad.append(f"api_server.py 兼容壳 {n} 行（应 <120，说明未真正退役）")
+        if hasattr(m, name):
+            bad.append(f"ChartHandler.{name} 应已在 3b-2 拆除（legacy 桥接已下线）")
 
     if bad:
         failures.extend(bad)
         for b in bad:
             print(f"[FAIL] ④ 墓碑化: {b}")
     else:
-        print("[PASS] ④ 墓碑化: do_GET/do_POST → 410 Gone；"
-              "SSE 双方法保留（3b-2 拆除）；api_server 兼容壳 "
-              f"{n} 行")
+        print("[PASS] ④ 墓碑化: ChartHandler 整体下线（10.1）；"
+              "SSE 旧方法已拆除（3b-2）；api_server.py / my_chan_main.py 已删除")
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # ⑤ SSE 双实现（3b-1 灰度开关）
 # ═══════════════════════════════════════════════════════════════════════
 def test_sse_dual_impl(failures):
-    """/api/futures_stream 双实现并存：impl=legacy（默认）|native + 数据源抽象。"""
+    """/api/futures_stream 仅保留 native 原生实现 + 数据源抽象（3b-2 已拆除 legacy）。"""
     import asyncio
     import FrontAPI
     from App import AppOrch as orch
@@ -333,43 +313,28 @@ def test_sse_dual_impl(failures):
 
     # 原生生成器 + 数据源抽象就位
     for name in ("sse_futures_stream_single", "sse_futures_stream_dual",
-                 "SSESource", "TqSdkSource", "_sse_generator"):
+                 "SSESource", "TqSdkSource"):
         if not hasattr(FrontAPI, name):
-            bad.append(f"FrontAPI 缺少 {name}（3b-1 原生实现/桥接缺失）")
+            bad.append(f"FrontAPI 缺少 {name}（native 实现/数据源抽象缺失）")
+
+    # 不保留 legacy 桥接层符号（3b-2 已拆除）
+    for name in ("_SSEMockWfile", "_SSEMockHandler", "_sse_generator"):
+        if hasattr(FrontAPI, name):
+            bad.append(f"FrontAPI 仍含 legacy 符号 {name}（3b-2 应已删除）")
 
     # 锁分类登记为 SELF_CONTAINED
     for key in ("sse_futures_stream_single", "sse_futures_stream_dual"):
         if orch.LOCK_POLICY.get(key, ("?",))[0] != "SELF_CONTAINED":
             bad.append(f"{key} 锁分类应为 SELF_CONTAINED")
 
-    # 路由签名：impl 参数默认 legacy（零漂移），非法值拒绝
+    # 路由签名：无 impl 参数（仅 native 路径）
     fn = getattr(FrontAPI, "api_futures_stream", None)
     if fn is None:
         bad.append("api_futures_stream 路由函数缺失")
     else:
         sig = inspect.signature(fn)
-        if "impl" not in sig.parameters:
-            bad.append("/api/futures_stream 无 impl 灰度参数")
-        else:
-            dflt = sig.parameters["impl"].default
-            # FastAPI Query 对象的真实默认值在其 .default 属性
-            real = getattr(dflt, "default", dflt)
-            if real != "legacy":
-                bad.append(f"impl 默认值应为 'legacy'（零漂移），实际 {real!r}")
-
-    # 参数校验行为：非法 impl → 400（不触碰数据源）
-    async def _probe():
-        from fastapi import HTTPException
-        try:
-            await FrontAPI.api_futures_stream(
-                symbol="KQ.m@SHFE.rb", impl="bogus")
-            return "no-raise"
-        except HTTPException as e:
-            return e.status_code
-
-    st = asyncio.run(_probe())
-    if st != 400:
-        bad.append(f"非法 impl 应 400，实际 {st}")
+        if "impl" in sig.parameters:
+            bad.append("/api/futures_stream 仍含 impl 参数（3b-2 无 legacy 路径）")
 
     # native 生成本身可创建（异步生成器对象可实例化，不消费即关闭）
     try:
@@ -390,11 +355,11 @@ def test_sse_dual_impl(failures):
     if bad:
         failures.extend(bad)
         for b in bad:
-            print(f"[FAIL] ⑤ SSE 双实现: {b}")
+            print(f"[FAIL] ⑤ SSE native: {b}")
     else:
-        print("[PASS] ⑤ SSE 双实现: impl=legacy|native（默认 legacy 零漂移，"
-              "非法值 400）；原生生成器 + SSESource/TqSdkSource 数据源抽象就位；"
-              "SELF_CONTAINED 登记一致")
+        print("[PASS] ⑤ SSE native: 仅保留 native 原生路径；"
+              "原生生成器 + SSESource/TqSdkSource 数据源抽象就位；"
+              "SELF_CONTAINED 登记一致；legacy 符号已清理")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -403,14 +368,14 @@ def test_sse_dual_impl(failures):
 def test_layering_direction(failures):
     """AST 级校验：下层禁止 import 上层/跨层（设计 6.2 单向依赖）。"""
     # (文件, 禁止出现的模块名)
-    # 注 1: AppData/AppOrch 对 my_chan_main 的委托属阶段 2 既定过渡
+    # 注 1: AppData/AppOrch 对 AppEngine 的委托属阶段 2 既定过渡
     #（薄封装设计，引擎在下层，阶段 4/5 收敛），不属反向依赖；
     # 此处仅锁定层间方向（上层模块不得被下层导入）。
-    # 注 2: my_chan_main 不在禁止清单——它是被编排的引擎底座。
+    # 注 2: AppEngine 是引擎底座，AppConfig 不得反向引用。
     rules = [
         ("App/AppData.py", ["AppOrch", "FrontAPI", "api_server"]),
         ("App/AppConfig.py", ["AppOrch", "AppData", "FrontAPI", "api_server",
-                              "my_chan_main"]),
+                              "AppEngine"]),
         ("App/AppOrch.py", ["FrontAPI", "api_server"]),
     ]
     bad = []

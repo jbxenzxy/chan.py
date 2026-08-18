@@ -39,7 +39,7 @@ STEPS = [0, -1, -5, -20]    # 回放偏移序列（0=锚定当天）
 
 
 def _run(end_date=None, step=None):
-    import my_chan_main as m
+    from App import AppEngine as m
     restore, records = install_data_source(FIXTURE)
     try:
         return m._analyze_stock_internal(
