@@ -162,19 +162,7 @@ HK_CODE_PREFIX = "31"  # 港股在 ds/lday 下的文件名前缀
 DS_CODE_PREFIX = "62"  # 扩展市场指数在 ds/lday 下的文件名前缀
 
 
-def _start_download(vipdoc_dir, categories, day_start=None, min_start=None):
-    """兼容壳（阶段 5）：委托 DataAPI/ElTdxAPI"""
-    return _ElTdx._start_download(vipdoc_dir, categories, day_start=day_start, min_start=min_start)
-
-
-def _stop_download():
-    """兼容壳（阶段 5）：委托 DataAPI/ElTdxAPI"""
-    return _ElTdx._stop_download()
-
-
-def _get_download_status():
-    """兼容壳（阶段 5）：委托 DataAPI/ElTdxAPI"""
-    return _ElTdx._get_download_status()# ============================================================
+# ============================================================
 # MACD 计算
 # ============================================================
 def ema(data, period):
@@ -213,11 +201,9 @@ def _inherit_macd_for_preview_bar(klines_list):
 
 
 # ============================================================
-# 获取股票名称（阶段 4：实现已收敛 App/AppData.py，此处为兼容壳）
+# 获取股票名称（阶段 8：实现已下沉 App/utils.py，此处为兼容 import）
 # ============================================================
-def _get_stock_name(market, code):
-    """获取股票名称（委托 app_data.get_stock_name）"""
-    return app_data.get_stock_name(market, code)
+from App.utils import _get_stock_name, _get_stock_market_code, _get_market_code
 
 
 # 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象，阶段 4）
@@ -806,108 +792,9 @@ def _refresh_stock_names():
 
 # ============================================================
 # 解析证券代码，判断市场
+# （阶段 8：_get_stock_market_code / _get_market_code 已下沉 App/utils.py，
+#  顶部 from App.utils import ... 兼容导入）
 # ============================================================
-
-
-
-def _get_stock_market_code(code):
-    """识别股票/指数代码，返回 (market, code)；无法识别返回 (None, code)。"""
-    # 通达信扩展市场指数别名：中证2000 本地K线在 ds 目录，文件名为 62#932000
-    _DS_INDEX_ALIASES = {
-        "ZZ2": ("ds", "932000"),
-        "ZZ2000": ("ds", "932000"),
-        "中证2000": ("ds", "932000"),
-        "932000": ("ds", "932000"),
-    }
-    if code in _DS_INDEX_ALIASES:
-        return _DS_INDEX_ALIASES[code]
-
-    # 港股指数别名映射：将用户输入的指数简称映射到通达信港股数据文件实际代码
-    _HK_INDEX_ALIASES = {
-        "HSTECH": ("hk", "HSTECH"),   # 恒生科技指数
-        "HSI": ("hk", "HSI"),         # 恒生指数
-        "HSCEI": ("hk", "HSCEI"),     # 恒生中国企业指数
-        "HSCCI": ("hk", "HSCCI"),     # 恒生香港中资企业指数
-    }
-    if code in _HK_INDEX_ALIASES:
-        return _HK_INDEX_ALIASES[code]
-
-    # 港股数字代码规范化：通达信文件统一使用5位（4位需补前导零，如 9926 -> 09926）
-    def _norm_hk(c):
-        if c.isdigit() and len(c) == 4:
-            return '0' + c
-        return c
-
-    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', code)
-    if prefix_match:
-        mkt = prefix_match.group(1).lower()
-        c = prefix_match.group(2)
-        if mkt == 'ds':
-            return mkt, c
-        return mkt, _norm_hk(c) if mkt == 'hk' else c
-    # HK前缀 + 非数字代码（如 HKHSTECH、HKHSI）
-    prefix_alpha_match = re.match(r'^HK([A-Z]+)$', code)
-    if prefix_alpha_match:
-        return 'hk', prefix_alpha_match.group(1)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', code)
-    if suffix_match:
-        mkt = suffix_match.group(2).lower()
-        c = suffix_match.group(1)
-        if mkt == 'ds':
-            return mkt, c
-        return mkt, _norm_hk(c) if mkt == 'hk' else c
-    # .HK 后缀 + 非数字代码（如 HSTECH.HK）
-    suffix_alpha_match = re.match(r'^([A-Z]+)\.HK$', code)
-    if suffix_alpha_match:
-        return 'hk', suffix_alpha_match.group(1)
-    # 自动判断：5位纯数字优先识别为港股（如 00700）
-    if len(code) == 5 and code.isdigit():
-        return 'hk', code
-    if len(code) == 4 and code.isdigit():
-        return 'hk', '0' + code
-    # 6位代码：先检查是否是港股（在ds目录下有对应文件）
-    if len(code) == 6 and code.isdigit():
-        hk_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
-        if os.path.exists(hk_file):
-            return 'hk', code
-        ds_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"62#{code}.day")
-        if os.path.exists(ds_file):
-            return 'ds', code
-    # A股判断
-    if code.startswith('6'):
-        return 'sh', code
-    if code.startswith('5'):
-        return 'sh', code  # 5xxxxx: 沪市ETF(51/56/58/59/588)、基金(50)等
-    if code.startswith('88') or code.startswith('99'):
-        return 'sh', code  # 88xxxx: 通达信板块指数; 99xxxx: 指数
-    if code.startswith('0') or code.startswith('3'):
-        return 'sz', code
-    if code.startswith('1'):
-        return 'sz', code  # 1xxxxx: 深市ETF(15/16/18)、债券等
-    # 搜索
-    for m in ['sh', 'sz']:
-        f = os.path.join(app_config.vipdoc_dir, m, "lday", f"{m}{code}.day")
-        if os.path.exists(f):
-            return m, code
-    f = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
-    if os.path.exists(f):
-        return 'hk', code
-    f = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"62#{code}.day")
-    if os.path.exists(f):
-        return 'ds', code
-    return None, code
-
-
-def _get_market_code(code):
-    """
-    解析代码，返回 (market, code)
-    market: 'sh' / 'sz' / 'hk' / 'ds' / 'futures'
-    """
-    code = code.strip().upper()
-    futures_code = _get_futures_code(code)
-    if futures_code:
-        return 'futures', futures_code
-    return _get_stock_market_code(code)
 
 
 
@@ -1172,18 +1059,9 @@ def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list, date_fmt):
     return ""
 
 
-def _load_saved_point_times():
-    """从CSV文件加载所有选点记录（委托 app_data；启动加载已在 app_data 实例化时完成）"""
-    return app_data.load_saved_point_times()
-
 def _save_point_time(code, name, freq, sdt):
     """保存或更新某只股票某个周期的选点（委托 app_data）"""
     return app_data.save_point_time(code, name, freq, sdt)
-
-
-def _clear_saved_point_time(code, freq):
-    """清除某只股票某个周期在CSV中的选点，同时更新内存缓存（委托 app_data）"""
-    return app_data.clear_saved_point_time(code, freq)
 
 
 def _cleanup_all_futures_data():
@@ -1212,73 +1090,6 @@ def _cleanup_all_futures_data():
 # 选点内存缓存：别名 = app_data 实例字段（共享同一对象；
 # 启动加载已随 app_data 实例化完成，本文件多处直接读该字典保持零漂移）
 _saved_point_times = app_data.saved_point_times
-
-
-def _save_last_code_freq(code, freq="d"):
-    """持久化上次查看的代码和周期到JSON文件（委托 app_data；股票和期货通用）"""
-    return app_data.save_last_code_freq(code, freq)
-
-
-def _load_last_code_freq():
-    """从JSON文件加载上次查看的代码和周期（委托 app_data）"""
-    return app_data.load_last_code_freq()
-
-
-# ============================================================
-# 文字标注持久化存储（阶段 4：实现收敛 App/AppData.py）
-# ============================================================
-# 标注缓存：别名 = app_data 实例字段（共享同一对象；启动加载已随 app_data 实例化完成）
-_annotations_cache = app_data.annotations_cache
-
-
-def _load_annotations():
-    """从 text_annotation.json 加载标注数据到内存（委托 app_data；幂等）"""
-    return app_data.load_annotations()
-
-
-def _save_annotations():
-    """保存标注数据到 text_annotation.json（委托 app_data）"""
-    return app_data.save_annotations()
-
-
-def _get_annotation_key(code, freq):
-    """生成标注缓存的键: {code}_{freq}（实现收敛 App/AppData.get_annotation_key）"""
-    from App.AppData import get_annotation_key
-    return get_annotation_key(code, freq)
-
-
-def _get_annotations_for(code, freq):
-    """获取某股票某周期的所有标注（委托 app_data）"""
-    return app_data.get_annotations_for(code, freq)
-
-
-def _add_annotation(code, freq, date_str, text, y_offset=0):
-    """添加一条标注，同日期同文字去重（委托 app_data）"""
-    return app_data.add_annotation(code, freq, date_str, text, y_offset)
-
-
-def _delete_annotation(code, freq, date_str, text):
-    """删除一条标注（委托 app_data）"""
-    return app_data.delete_annotation(code, freq, date_str, text)
-
-
-def _delete_annotation_by_date(code, freq, date_str):
-    """删除某日期下所有标注（委托 app_data）"""
-    return app_data.delete_annotation_by_date(code, freq, date_str)
-
-
-def _delete_all_annotations(code, freq):
-    """删除某股票某周期下全部标注（委托 app_data）"""
-    return app_data.delete_all_annotations(code, freq)
-
-
-def _get_annotated_codes(freq=""):
-    """获取所有有标注的股票代码+周期列表，用于自选扫描（委托 app_data）"""
-    return app_data.get_annotated_codes(freq)
-
-
-# 启动时加载标注数据（已随 app_data 实例化完成；此处保留调用幂等无副作用）
-_load_annotations()
 
 
 def _calc_futures_white_hline(kl_list, _freq, date_fmt):

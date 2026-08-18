@@ -109,7 +109,7 @@ def test_lock_policy(failures):
     required_keys = {
         "call_analysis", "run_analysis", "call_manual_select_point",
         "call_futures_manual_select_point", "call_compute_red_range_zs",
-        "analyze_stock", "fetch_and_inject", "ScannerService.scan_one",
+        "analyze_stock", "fetch_and_inject", "Scanner.scan_one",
         "sse_futures_stream_single", "sse_futures_stream_dual",
     }
     missing = required_keys - set(orch.LOCK_POLICY)

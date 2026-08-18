@@ -36,7 +36,7 @@ V10 方案 8.6（3a REST 路由迁移 / 3b SSE 原生异步生成器）：
 
 锁分类（AppOrch.LOCK_POLICY，阶段 2 遗留问题的解法）：
     SERIAL         串行分析（call_* 漏斗持 _ENGINE_LOCK）
-    SCAN           并行扫描（ScannerService.scan_one，_scan_lock 防同票重入）
+    SCAN           并行扫描（Scanner.scan_one，_scan_lock 防同票重入）
     SELF_CONTAINED SSE 流（每连接独立会话，不加锁）
 
 启动：
@@ -98,7 +98,7 @@ async def lifespan(app):
     """
     yield
     try:
-        from App.ScanPool import shutdown as scan_pool_shutdown
+        from App.AppScanPool import shutdown as scan_pool_shutdown
         scan_pool_shutdown()
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
@@ -1406,7 +1406,7 @@ async def api_zxg_list():
 
 @router.get("/api/scan_stock_list")
 async def api_scan_stock_list(source: str = Query("zxg")):
-    """返回股票列表（支持逗号分隔多来源；orch.ScannerService.stock_list）"""
+    """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）"""
     result = await run_in_threadpool(orch.scanner.stock_list, source)
     return _json_response(result)
 
@@ -1420,7 +1420,7 @@ async def api_scan_one(
     source: str = Query("zxg"),
     mode: str = Query(""),
 ):
-    """扫描单只股票（orch.ScannerService.scan_one · SCAN 保留并发）"""
+    """扫描单只股票（orch.Scanner.scan_one · SCAN 保留并发）"""
     if not code:
         return _json_response({"error": "缺少code参数"}, 400)
     result = await run_in_threadpool(orch.scanner.scan_one, code, freq, prefix,
@@ -1468,7 +1468,7 @@ async def api_scan_abort():
 # ── 路由 — 阶段 7：批量扫描异步化（ProcessPool 先行）──────────────────
 # 双路径（设计 5.4/5.5）：交互单票仍走 /api/scan_one（线程池），批量走
 # ProcessPool；任务提交返回 task_id，前端轮询 /api/scan/status 获取进度
-# 与结果（设计 5.10：扫描结果经 SQLite ScanStore 跨进程共享）。
+# 与结果（设计 5.10：扫描结果经 SQLite AppScanStore 跨进程共享）。
 # RESTful 分层路由（评审「优势 1」采纳）：/api/scan/submit · /api/scan/status
 # · /api/scan/cancel；请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动
 # 生成字段 schema 与默认值。

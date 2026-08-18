@@ -4,10 +4,10 @@
 =====================================================================
 守护阶段 4 的八类结构性成果（设计文档 V10 方案 8.7 / 4.4 / 6.3）：
 
-  ① 兼容壳纯委托：AppEngine 26 个 DATA 族函数体为纯委托
+  ① 兼容壳纯委托：AppEngine 12 个 DATA 族函数体为纯委托
      （AST 校验：docstring + 局部 import + 单条 return app_data.* 调用），
      实现单源于 App/AppData.py；委托目标在 app_data 实例上真实存在
-  ② 状态别名同对象：8 组模块级状态别名与 app_data 实例字段
+  ② 状态别名同对象：7 组模块级状态别名与 app_data 实例字段
      共享同一对象（identity 校验，防「悄悄改成拷贝」导致双态漂移）
   ③ 配置别名清零：12 个路径/容量别名不得在 AppEngine 复活
   ④ 自选股收敛：DataAPI/TdxAPI.py 不再有 read_zxg_stocks /
@@ -59,23 +59,20 @@ def read_src(rel):
 # ═══════════════════════════════════════════════════════════════════════
 # ① 兼容壳纯委托（AST）
 # ═══════════════════════════════════════════════════════════════════════
-# 26 个 DATA 族函数：AppEngine 同名实现必须退化为兼容壳。
+# 12 个 DATA 族函数：AppEngine 同名实现必须退化为兼容壳。
 # 允许的函数体形态：docstring + （from App.AppData import ...）+ 单条 return
+# （阶段 8：_get_stock_name 已下沉 App/utils.py，不再属于 AppEngine 壳面；
+#  阶段 8 瘦身：选点/标注/上次代码等 13 个兼容壳已随功能域迁移删除，
+#  仅保留引擎内部仍消费的 _save_point_time）
 SHELL_FUNCS = [
     # 名称 / PE / 市值
-    "_get_stock_name", "_load_stock_names_from_cache_file", "_safe_write_json_file",
+    "_load_stock_names_from_cache_file", "_safe_write_json_file",
     "_load_pe_ttm_cache", "_get_pe_ttm", "_get_index_belong",
     "_load_float_mc_cache", "_update_float_mc_cache", "_get_float_mc_from_cache",
     # 统一缓存三件套
     "_cache_put", "_cache_get", "_cache_remove",
-    # 选点持久化
-    "_load_saved_point_times", "_save_point_time", "_clear_saved_point_time",
-    # 上次查看
-    "_save_last_code_freq", "_load_last_code_freq",
-    # 标注
-    "_load_annotations", "_save_annotations", "_get_annotation_key",
-    "_get_annotations_for", "_add_annotation", "_delete_annotation",
-    "_delete_annotation_by_date", "_delete_all_annotations", "_get_annotated_codes",
+    # 选点持久化（引擎内部手动选点仍调用）
+    "_save_point_time",
 ]
 
 # 委托目标允许的受调者（app_data 属性 / AppData 模块级函数）
@@ -179,7 +176,6 @@ ALIAS_PAIRS = [
     ("_pe_ttm_cache",          "pe_cache"),
     ("_index_belong_cache",    "belong_cache"),
     ("_saved_point_times",     "saved_point_times"),
-    ("_annotations_cache",     "annotations_cache"),
 ]
 
 
@@ -314,8 +310,8 @@ def test_layering_direction(failures):
             continue
         if ("from App.AppData import" in s) or ("import App.AppData" in s):
             bad.append(f"FrontAPI.py:{i} 直连 AppData（应经 App.AppOrch 漏斗）")
-        # 直连 AppEngine 数据层状态（阶段 4 已收敛的 8 个别名）
-        for alias in ("_saved_point_times", "_annotations_cache",
+        # 直连 AppEngine 数据层状态（阶段 4 已收敛的 7 个别名）
+        for alias in ("_saved_point_times",
                       "_stocks_analysis_cache", "_futures_analysis_cache"):
             if f"m.{alias}" in s:
                 bad.append(f"FrontAPI.py:{i} 直连 m.{alias}（数据状态须经 AppOrch/AppData）")

@@ -57,7 +57,7 @@ PHASE_OF = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# ① 函数 → 目标（74 项，须与代码一一对应）
+# ① 函数 → 目标（61 项，须与代码一一对应）
 #    值：(层代号, 说明)
 # ═══════════════════════════════════════════════════════════════════
 TARGET_FUNCS = {
@@ -71,9 +71,9 @@ TARGET_FUNCS = {
     "_download_day_kline":    ("ELTDX", "日线下载（纯，client 注入）"),
     "_download_min_kline":    ("ELTDX", "分钟下载（纯，client 注入）"),
     "_download_task":         ("ELTDX", "下载任务体（读 _download_state/_download_lock）"),
-    "_start_download":        ("ELTDX", "启动下载线程"),
-    "_stop_download":         ("ELTDX", "中止下载"),
-    "_get_download_status":   ("ELTDX", "下载进度查询"),
+    "_start_download":        ("ELTDX", "启动下载线程（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
+    "_stop_download":         ("ELTDX", "中止下载（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
+    "_get_download_status":   ("ELTDX", "下载进度查询（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
     "collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（公开API，不含下划线前缀）"),
     "_collect_codes_from_vipdoc": ("ELTDX", "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"),
 
@@ -86,8 +86,6 @@ TARGET_FUNCS = {
     "_get_kl_type":               ("ORCH_E", "freq→KL_TYPE（纯，6 处调用，波次 1）"),
     "_get_freq_label":            ("ORCH_E", "freq→中文标签（纯，4 处调用；阶段 5 可提升 DataAPI 元数据）"),
     "_get_date_fmt":              ("ORCH_E", "freq→日期格式（7 处调用，被依赖最多；读 INTRADAY_FREQS/SUBSECOND_FREQS）"),
-    "_get_market_code":           ("ORCH_E", "代码→(market,code) 短路径（analyze_stock 入口用）"),
-    "_get_stock_market_code":     ("ORCH_E", "代码→(market,code) 完整解析（读 VIPDOC_DIR 探测市场）"),
 
     # ── 消费侧：缠论结构计算 ──
     "_find_left_shoulder_time":   ("ORCH_E", "左肩时间查找（手动选点用）"),
@@ -124,7 +122,6 @@ TARGET_FUNCS = {
     "_send_windows_notification":   ("ORCH_C", "Windows 通知（ChartHandler 下载/扫描完成用）"),
 
     # ── AppData：名称/PE/归属/市值 缓存族 ──
-    "_get_stock_name":              ("DATA", "✓4 兼容壳 → app_data.get_stock_name"),
     "_load_stock_names_from_cache_file": ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_safe_write_json_file":        ("DATA", "✓4 兼容壳 → App/AppData.safe_write_json_file"),
     "_load_pe_ttm_cache":           ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
@@ -140,24 +137,9 @@ TARGET_FUNCS = {
     "_cache_remove":                ("DATA", "✓4 兼容壳 → app_data.cache_remove"),
 
     # ── AppData：选点持久化 ──
-    "_load_saved_point_times":      ("DATA", "✓4 兼容壳 → app_data"),
-    "_save_point_time":             ("DATA", "✓4 兼容壳 → app_data"),
-    "_clear_saved_point_time":      ("DATA", "✓4 兼容壳 → app_data"),
+    "_save_point_time":             ("DATA", "✓4 兼容壳 → app_data（引擎内部手动选点仍调用）"),
 
-    # ── AppData：上次代码/周期 ──
-    "_save_last_code_freq":         ("DATA", "✓4 兼容壳 → app_data"),
-    "_load_last_code_freq":         ("DATA", "✓4 兼容壳 → app_data（FrontAPI 经 AppOrch 漏斗）"),
-
-    # ── AppData：标注族（9 个）──
-    "_load_annotations":            ("DATA", "✓4 兼容壳 → app_data"),
-    "_save_annotations":            ("DATA", "✓4 兼容壳 → app_data"),
-    "_get_annotation_key":          ("DATA", "✓4 兼容壳 → AppData.get_annotation_key"),
-    "_get_annotations_for":         ("DATA", "✓4 兼容壳 → app_data"),
-    "_add_annotation":              ("DATA", "✓4 兼容壳 → app_data"),
-    "_delete_annotation":           ("DATA", "✓4 兼容壳 → app_data"),
-    "_delete_annotation_by_date":   ("DATA", "✓4 兼容壳 → app_data"),
-    "_delete_all_annotations":      ("DATA", "✓4 兼容壳 → app_data"),
-    "_get_annotated_codes":         ("DATA", "✓4 兼容壳 → app_data"),
+    # ── AppData：上次代码/周期 + 标注族（阶段 8 瘦身：随功能域迁移删除）──
 
     # ── DataAPI / 行业映射 ──
     "read_tdxhy_l2_indices":        ("TDXHY", "二级行业指数读取（阶段 5 随数据文件迁 App/）"),
@@ -170,7 +152,7 @@ TARGET_FUNCS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# ② 状态 → 收敛目标（57 项）
+# ② 状态 → 收敛目标（56 项）
 # ═══════════════════════════════════════════════════════════════════
 TARGET_STATES = {
     # 阶段 2 已中心化的别名（常量=app_config 派生；保留只读直至下线，_verify_config_consistency 守护）
@@ -186,7 +168,6 @@ TARGET_STATES = {
     "_stock_names_cache":  ("DATA", "✓4 名称缓存（= app_data._names）"),
     "_pe_ttm_cache":       ("DATA", "✓4 PE 缓存（= app_data._pe）"),
     "_index_belong_cache": ("DATA", "✓4 归属缓存（= app_data._belong）"),
-    "_annotations_cache":  ("DATA", "✓4 标注缓存（= app_data._annotations）"),
     "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
     "_futures_analysis_cache": ("DATA", "✓4 期货分析缓存（= app_data._futures_analysis_cache）"),
     "_cache_lock":         ("DATA", "✓4 缓存锁（= app_data._cache_lock）"),

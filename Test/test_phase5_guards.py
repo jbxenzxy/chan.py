@@ -110,8 +110,7 @@ ELTDX_FUNCS = [
     "collect_codes_from_vipdoc",
     "_date_to_int", "_date_to_min_packed", "_ensure_dir",
 ]
-MCM_SHELLS = ["_start_download", "_stop_download",
-              "_get_download_status", "_collect_codes_from_vipdoc"]
+MCM_SHELLS = ["_collect_codes_from_vipdoc"]
 
 
 def _shell_callee(fn_node):
@@ -379,23 +378,25 @@ LEGACY_REFS = ("_m.DOWNLOAD_DIR", "_m._ELTDX_AVAILABLE",
 
 def test_orch_download_config(failures):
     orch_src = read_src("App/AppOrch.py")
+    dl_src = read_src("App/AppDownload.py")
     bad = []
-    # 源码级：下载入口零单体全局引用；字符串字面量（docstring 注释性
-    # 历史说明）经 AST 定位行区间后豁免，仅真实代码引用计违规
-    tree_full = ast.parse(orch_src)
-    literal_lines = set()
-    for node in ast.walk(tree_full):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) \
-                and any(t in node.value for t in LEGACY_REFS):
-            literal_lines.update(range(node.lineno,
-                                       getattr(node, "end_lineno", node.lineno) + 1))
-    for i, line in enumerate(orch_src.splitlines(), 1):
-        s = line.strip()
-        if i in literal_lines or s.startswith("#"):
-            continue
-        for legacy in LEGACY_REFS:
-            if legacy in s:
-                bad.append(f"AppOrch.py:{i} 仍引用 {legacy}")
+    # 源码级：AppOrch + AppDownload 下载入口零单体全局引用；字符串字面量
+    # （docstring 注释性历史说明）经 AST 定位行区间后豁免，仅真实代码引用计违规
+    for src, label in ((orch_src, "AppOrch.py"), (dl_src, "AppDownload.py")):
+        tree_full = ast.parse(src)
+        literal_lines = set()
+        for node in ast.walk(tree_full):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) \
+                    and any(t in node.value for t in LEGACY_REFS):
+                literal_lines.update(range(node.lineno,
+                                           getattr(node, "end_lineno", node.lineno) + 1))
+        for i, line in enumerate(src.splitlines(), 1):
+            s = line.strip()
+            if i in literal_lines or s.startswith("#"):
+                continue
+            for legacy in LEGACY_REFS:
+                if legacy in s:
+                    bad.append(f"{label}:{i} 仍引用 {legacy}")
     if bad:
         failures.append(f"⑦ 下载入口配置化: {bad[:4]}")
         print(f"[FAIL] ⑦ 下载入口: {len(bad)} 处单体全局引用残留")
@@ -405,19 +406,20 @@ def test_orch_download_config(failures):
 
     # AST 级：4 个下载入口 + available/dir 均委托 ElTdxAPI，
     # 启动类入口使用 app_config.download_dir
-    tree = ast.parse(orch_src)
+    # （阶段 8 重组：下载域实现随 AppOrch 拆分迁至 App/AppDownload.py）
+    tree = ast.parse(dl_src)
     funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     for name in ("start_download", "start_download_checked",
                  "get_download_status", "stop_download"):
         node = funcs.get(name)
         if node is None:
-            bad.append(f"AppOrch.{name} 缺失")
+            bad.append(f"AppDownload.{name} 缺失")
             continue
-        seg = ast.get_source_segment(orch_src, node) or ""
+        seg = ast.get_source_segment(dl_src, node) or ""
         if "ElTdxAPI" not in seg:
-            bad.append(f"AppOrch.{name} 未委托 DataAPI/ElTdxAPI")
+            bad.append(f"AppDownload.{name} 未委托 DataAPI/ElTdxAPI")
         if name.startswith("start_download") and "app_config.download_dir" not in seg:
-            bad.append(f"AppOrch.{name} 未使用 app_config.download_dir")
+            bad.append(f"AppDownload.{name} 未使用 app_config.download_dir")
     if bad:
         failures.append(f"⑦ 下载入口配置化: {bad}")
         print(f"[FAIL] ⑦ 下载入口委托: {bad}")

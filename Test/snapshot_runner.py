@@ -165,9 +165,8 @@ def isolate_side_effects():
         if hasattr(m, attr):
             saved[attr] = getattr(m, attr)
             setattr(m, attr, {})
-    # 上次代码/周期持久化：替换为空操作（写文件副作用）
-    saved["_save_last_code_freq"] = m._save_last_code_freq
-    m._save_last_code_freq = lambda *a, **kw: None
+    # 上次代码/周期持久化：已随阶段 8 瘦身迁移删除（AppChart 委托 app_data），
+    # 快照路径不再写该文件，无需打桩
 
     def restore():
         for k, v in saved.items():

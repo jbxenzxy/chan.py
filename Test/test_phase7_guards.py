@@ -72,8 +72,8 @@ os.environ.setdefault("SCAN_CONCURRENCY", "2")
 
 APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
 FRONTAPI = os.path.join(REPO_ROOT, "FrontAPI.py")
-SCAN_STORE = os.path.join(REPO_ROOT, "App", "ScanStore.py")
-SCAN_POOL = os.path.join(REPO_ROOT, "App", "ScanPool.py")
+SCAN_STORE = os.path.join(REPO_ROOT, "App", "AppScanStore.py")
+SCAN_POOL = os.path.join(REPO_ROOT, "App", "AppScanPool.py")
 APP_ORCH = os.path.join(REPO_ROOT, "App", "AppOrch.py")
 APP_CONFIG = os.path.join(REPO_ROOT, "App", "AppConfig.py")
 ENV_EXAMPLE = os.path.join(REPO_ROOT, ".env.example")
@@ -101,30 +101,30 @@ def test_lock_policy(failures):
     from App import AppOrch as orch
 
     bad = []
-    required = {"ScannerService.submit_batch_scan", "ScannerService.scan_one"}
+    required = {"Scanner.submit_batch_scan", "Scanner.scan_one"}
     missing = required - set(orch.LOCK_POLICY)
     if missing:
         bad.append(f"LOCK_POLICY 缺少阶段 7 登记: {sorted(missing)}")
     # submit_batch_scan 必须为 SCAN_ASYNC（API 进程零持锁，引擎调用在 worker）
-    cat = orch.LOCK_POLICY.get("ScannerService.submit_batch_scan", ("", ""))[0]
+    cat = orch.LOCK_POLICY.get("Scanner.submit_batch_scan", ("", ""))[0]
     if cat != "SCAN_ASYNC":
         bad.append(f"submit_batch_scan 类别应为 SCAN_ASYNC，实际 {cat!r}")
     # scan_one 保持 SCAN（同步旧径，worker 内每 worker 独立 _scan_lock）
-    cat1 = orch.LOCK_POLICY.get("ScannerService.scan_one", ("", ""))[0]
+    cat1 = orch.LOCK_POLICY.get("Scanner.scan_one", ("", ""))[0]
     if cat1 != "SCAN":
         bad.append(f"scan_one 类别应为 SCAN，实际 {cat1!r}")
 
     # 批量提交路径：派发 worker 且不持 _ENGINE_LOCK / _scan_lock（进程隔离）
-    src_pool = read("App/ScanPool.py")
+    src_pool = read("App/AppScanPool.py")
     if "pool.submit(_worker_scan_one" not in src_pool:
-        bad.append("ScanPool 未派发 _worker_scan_one")
+        bad.append("AppScanPool 未派发 _worker_scan_one")
     if "with _ENGINE_LOCK:" in src_pool:
-        bad.append("ScanPool 持 _ENGINE_LOCK（与 SCAN_ASYNC 进程隔离语义矛盾）")
+        bad.append("AppScanPool 持 _ENGINE_LOCK（与 SCAN_ASYNC 进程隔离语义矛盾）")
 
     # worker 入口：不持 _ENGINE_LOCK（引擎调用经 scan_one 内部 _scan_lock 自理）
     src_worker = inspect.getsource(orch.scanner.__class__)  # 类级兜底
-    if "with _ENGINE_LOCK:" in read("App/ScanPool.py"):
-        bad.append("ScanPool 持 _ENGINE_LOCK（应交由 scan_one 内部锁）")
+    if "with _ENGINE_LOCK:" in read("App/AppScanPool.py"):
+        bad.append("AppScanPool 持 _ENGINE_LOCK（应交由 scan_one 内部锁）")
 
     # 交互路径 SERIAL 不动（阶段 3 守护①的回归锚点）
     if "with _ENGINE_LOCK:" not in inspect.getsource(orch.call_analysis):
@@ -163,9 +163,10 @@ def test_routes_funnel(failures):
     # 增量游标参数（W1）：/api/scan/status 必须带 since 查询参数
     if "since: int = Query(0, ge=0)" not in src:
         bad.append("/api/scan/status 缺少 since 增量游标参数（W1 未修复）")
-    # FrontAPI 禁止直连扫描任务库（分层方向 FrontAPI → AppOrch → ScanStore）
-    if "from App.ScanStore import" in src or "import ScanStore" in src:
-        bad.append("FrontAPI 直连 App/ScanStore（应经 AppOrch 漏斗）")
+    # FrontAPI 禁止直连扫描任务库（分层方向 FrontAPI → AppOrch → AppScanStore）
+    if ("from App.ScanStore import" in src or "from App.AppScanStore import" in src
+            or "import ScanStore" in src):
+        bad.append("FrontAPI 直连 App/AppScanStore（应经 AppOrch 漏斗）")
     # AppOrch 禁止反向依赖 FrontAPI
     if re.search(r"import\s+FrontAPI|from\s+FrontAPI", read("App/AppOrch.py")):
         bad.append("AppOrch 反向依赖 FrontAPI（分层方向被破坏）")
@@ -182,8 +183,8 @@ def test_routes_funnel(failures):
 # ③ 装配契约（W3/W4/W10/W11 + 合并项）
 # ═══════════════════════════════════════════════════════════════════════
 def test_pool_assembly(failures):
-    src_pool = read("App/ScanPool.py")
-    src_store = read("App/ScanStore.py")
+    src_pool = read("App/AppScanPool.py")
+    src_store = read("App/AppScanStore.py")
     bad = []
     # W4：显式 spawn 上下文（POSIX 默认 fork 在多线程 API 进程内有锁继承风险）
     if 'multiprocessing.get_context("spawn")' not in src_pool:
@@ -213,11 +214,11 @@ def test_pool_assembly(failures):
     if '"engine"' not in src_pool or '"workers"' not in src_pool:
         bad.append("提交响应缺少 engine/workers 字段（W12 未修复）")
     # W13：task_id 时间戳前缀（评审「优势 5」采纳：生成逻辑收敛到
-    # ScanStore.create_task 内部缺省自生成，格式保持可读可排序）
+    # AppScanStore.create_task 内部缺省自生成，格式保持可读可排序）
     if 'time.strftime("%Y%m%d%H%M%S")' not in src_store:
-        bad.append("ScanStore.create_task 未生成时间戳前缀 task_id（W13 未修复）")
+        bad.append("AppScanStore.create_task 未生成时间戳前缀 task_id（W13 未修复）")
     if "uuid.uuid4().hex" not in src_store:
-        bad.append("ScanStore.create_task 未生成 uuid 片段（W13 未修复）")
+        bad.append("AppScanStore.create_task 未生成 uuid 片段（W13 未修复）")
     # W7：提交入口 best-effort 清理历史任务（cleanup_old 不为死代码）
     if "cleanup_old(" not in src_pool:
         bad.append("提交入口未调用 cleanup_old（W7 未修复，库无限增长）")
@@ -254,12 +255,12 @@ REQUIRED_STORE_METHODS = {
 
 def test_store_contract(failures):
     import inspect
-    from App.ScanStore import ScanStore
+    from App.AppScanStore import ScanStore
 
     bad = []
     missing = REQUIRED_STORE_METHODS - set(dir(ScanStore))
     if missing:
-        bad.append(f"ScanStore 缺少方法: {sorted(missing)}")
+        bad.append(f"AppScanStore 缺少方法: {sorted(missing)}")
     conn_src = inspect.getsource(ScanStore._connect)
     if "PRAGMA journal_mode=WAL" not in conn_src:
         bad.append("连接未启用 WAL（读写互斥将阻塞前端轮询）")
@@ -273,7 +274,7 @@ def test_store_contract(failures):
         bad.append("put_result 非 INSERT OR IGNORE（collector 兜底将覆盖 worker 行）")
     # W2：主键 (task_id, seq)（重复 code 各占独立 seq）
     if "PRIMARY KEY (task_id, seq)" not in inspect.getsource(ScanStore.__init__) and \
-       "PRIMARY KEY (task_id, seq)" not in read("App/ScanStore.py"):
+       "PRIMARY KEY (task_id, seq)" not in read("App/AppScanStore.py"):
         bad.append("结果表主键非 (task_id, seq)（重复 code 覆盖语义缺陷）")
     # W1：get_results 增量游标（>= 含首行）
     if "seq >= ?" not in inspect.getsource(ScanStore.get_results):
@@ -282,7 +283,7 @@ def test_store_contract(failures):
     if "locked" not in inspect.getsource(ScanStore._execute).lower():
         bad.append("_execute 缺少 locked 重试（多进程锁冲突将直接失败）")
     # W8：惰性单例 + SCAN_TASK_DB 环境变量覆盖（import 零副作用）
-    store_src = read("App/ScanStore.py")
+    store_src = read("App/AppScanStore.py")
     if "def get_scan_store()" not in store_src:
         bad.append("缺少 get_scan_store() 惰性单例（W8 未修复）")
     if "SCAN_TASK_DB" not in store_src:
@@ -301,7 +302,7 @@ def test_store_contract(failures):
 # ⑤ 终止语义
 # ═══════════════════════════════════════════════════════════════════════
 def test_abort_semantics(failures):
-    src_pool = read("App/ScanPool.py")
+    src_pool = read("App/AppScanPool.py")
     bad = []
     # worker 入口检查 is_aborted（跨进程传播，快速落库 aborted 行）
     if "is_aborted(task_id)" not in src_pool:
@@ -327,7 +328,8 @@ def test_abort_semantics(failures):
     if "_scan_skip_log" not in src_pool:
         bad.append("collector 未把错误行并入 _scan_skip_log（W6 未修复）")
     # 旧接口 abort 增强：必须同步中止所有进行中的批量任务
-    if "abort_all_running" not in read("App/AppOrch.py"):
+    # （阶段 8 重组：Scanner.abort 实现随扫描域迁至 App/AppScan.py）
+    if "abort_all_running" not in read("App/AppScan.py"):
         bad.append("abort() 未调用 abort_all_running（旧接口中止对 worker 无效）")
     if bad:
         failures.extend(f"终止语义: {b}" for b in bad)
@@ -396,7 +398,7 @@ def test_frontend_polling(failures):
 # ═══════════════════════════════════════════════════════════════════════
 def test_store_smoke(failures):
     import sqlite3
-    from App.ScanStore import ScanStore
+    from App.AppScanStore import ScanStore
 
     db = os.path.join(_SMOKE_TMPDIR, "store_smoke.db")
     if os.path.exists(db):
@@ -547,7 +549,7 @@ def test_e2e_smoke(failures):
     shapes = all(isinstance(r.get("data"), dict) for r in final.get("results", []))
     if not shapes:
         bad.append("存在非 dict 结果（响应形状契约破坏）")
-    from App.ScanPool import shutdown as _pool_shutdown
+    from App.AppScanPool import shutdown as _pool_shutdown
     _pool_shutdown()
 
     if bad:

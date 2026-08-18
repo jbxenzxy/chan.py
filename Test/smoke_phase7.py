@@ -109,7 +109,7 @@ def main():
     else:
         print("[PASS] 3) 不存在任务: 正确返回 None")
 
-    from App.ScanPool import shutdown as _pool_shutdown
+    from App.AppScanPool import shutdown as _pool_shutdown
     _pool_shutdown()
 
     print("-" * 64)
