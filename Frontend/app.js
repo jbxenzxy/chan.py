@@ -179,6 +179,8 @@
 
         let _scanAborted = false;
 
+        let _scanTaskId = null; // 阶段 7：当前批量扫描 task_id（中止时立即经 /api/scan/cancel 传播）
+
         let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
 
         let _scanRecentDays = 1; // 最近N根K线，默认1
@@ -4722,8 +4724,14 @@
                 var btn = document.getElementById("btn-scan");
                 btn.textContent = "正在中断...";
                 btn.disabled = true;
-                // 通知后端立即终止
+                // 通知后端立即终止：
+                // ① 旧接口 /api/scan_abort（设置主进程标志 + 兜底中止所有批量任务）
+                // ② 新接口 /api/scan/cancel（精确中止当前 task，worker 每票前检查）
                 fetch("/api/scan_abort").catch(function(){});
+                if (_scanTaskId) {
+                    fetch("/api/scan/cancel?task_id=" + _scanTaskId).catch(function(){});
+                    _scanTaskId = null;
+                }
                 return;
             }
             // 弹出模式选择对话框
@@ -4807,6 +4815,97 @@
                     }
                     return { stocks: data.stocks || [], pre_skipped: data.pre_skipped || 0 };
                 });
+        }
+
+        // 阶段 7：批量扫描异步化（ProcessPool 先行）
+        // 提交全部股票到后端执行池（/api/scan/submit → task_id），轮询
+        // /api/scan/status?since=N 增量获取结果；中止经 /api/scan/cancel。
+        // 契约（交叉评审 W15 修复）：保留旧回调形状 onData(单票结果) 逐票
+        // 增量喂入、onDone(err, interrupted) 终态——各模式渲染/过滤逻辑
+        // 零改动，phase6 前端守护直接复用。
+        // 增量游标（W1 修复）：since 按 row.seq + 1 推进（>= 语义含首行），
+        // 避免全量回传 O(n²)；轮询失败退避重试（W5 修复）：连续 3 次熔断，
+        // 不因单次网络抖动丢弃已扫描结果。
+        function _asyncScanAll(stocks, opts, onData, onDone) {
+            var freq = opts.freq || "d";
+            var mode = opts.mode || "";
+            var recent = (opts.recent != null) ? String(opts.recent) : "1";
+            var source = opts.source || "zxg";
+            var pollTimer = null;
+            var stopped = false;
+            var failCount = 0;
+            var interrupted = false;
+
+            function finish(err) {
+                if (stopped) return;
+                stopped = true;
+                if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+                _scanTaskId = null;
+                onDone(err || null, interrupted);
+            }
+
+            fetch("/api/scan/submit", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({
+                    stocks: stocks, freq: freq, mode: mode,
+                    recent: recent, source: source
+                })
+            })
+            .then(function(r) { return r.json(); })
+            .then(function(sub) {
+                if (!sub || sub.error || !sub.task_id) {
+                    finish((sub && sub.error) ? sub.error : "提交批量扫描失败");
+                    return;
+                }
+                var taskId = sub.task_id;
+                _scanTaskId = taskId;
+                var since = 0;  // 下次期望的 seq（后端按 seq >= since 增量返回）
+                console.log("[批量扫描] 任务已提交: " + taskId + ", 共 " + sub.total +
+                            " 只, 引擎=" + sub.engine + ", 并发=" + sub.workers);
+
+                function poll() {
+                    if (stopped) return;
+                    if (_scanAborted) {
+                        interrupted = true;
+                        if (taskId) fetch("/api/scan/cancel?task_id=" + taskId).catch(function(){});
+                        // 中止后继续轮询：worker 快速落库中止行，completed 收敛 total
+                        // （保持原设计：手工终止时已扫描结果正常显示）
+                    }
+                    fetch("/api/scan/status?task_id=" + encodeURIComponent(taskId) +
+                          "&since=" + since + "&_t=" + Date.now())
+                    .then(function(r) { return r.json(); })
+                    .then(function(st) {
+                        if (stopped) return;
+                        failCount = 0;
+                        if (!st || st.error) {
+                            finish(st && st.error ? st.error : "查询扫描进度失败");
+                            return;
+                        }
+                        var rows = st.results || [];
+                        for (var i = 0; i < rows.length; i++) {
+                            since = Math.max(since, rows[i].seq + 1);
+                            onData(rows[i].data || rows[i]);
+                        }
+                        if (st.status === "done" || st.status === "aborted" || st.status === "error") {
+                            if (st.status === "aborted") interrupted = true;
+                            finish(null);
+                            return;
+                        }
+                        pollTimer = setTimeout(poll, 700);
+                    })
+                    .catch(function() {
+                        if (stopped) return;
+                        failCount++;
+                        if (failCount >= 3) { finish("轮询扫描进度连续失败"); return; }
+                        pollTimer = setTimeout(poll, 1500);
+                    });
+                }
+                poll();
+            })
+            .catch(function(err) {
+                finish(err && err.message ? err.message : String(err));
+            });
         }
 
         // 实际执行扫描（由对话框确认后调用）
@@ -4926,7 +5025,6 @@
                         console.log("[底分型扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                         var results = [];
                         var skipped = 0;
-                        var currentIdx = 0;
                         var completed = 0;
                         var hasRenderedAny = false;
 
@@ -5007,87 +5105,33 @@
                             updateScanSaveBtn();
                         }
 
-                        function checkDone() {
-                            if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
-                            if (_scanAborted) {
+                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        // （单票响应同形，模式过滤/渲染逻辑零改动）
+                        btn.textContent = "中断扫描";
+                        _asyncScanAll(stocks, {freq: freq, mode: "fx_d", recent: _scanRecentDays, source: _scanSources.join(",")}, function(data) {
+                            completed++;
+                            if (data.skipped) { skipped++; }
+                            else if (data.error) { skipped++; }
+                            else if (data.is_fx_d) { results.push(data); }
+                            updatePanel();
+                        }, function(err, interrupted) {
+                            if (err) {
+                                console.error("[底分型扫描] " + err);
                                 _scanRunning = false;
                                 _scanAborted = false;
                                 btn.classList.remove("active");
                                 btn.disabled = false;
                                 btn.textContent = "股票扫描";
-                                finishScan(true);
+                                body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
                                 return;
                             }
-                            if (completed >= total) {
-                                _scanRunning = false;
-                                btn.classList.remove("active");
-                                btn.disabled = false;
-                                btn.textContent = "股票扫描";
-                                finishScan(false);
-                                return;
-                            }
-                        }
-
-                        var CONCURRENCY = 5;
-                        btn.textContent = "中断扫描";
-
-                        function launchBatch() {
-                            if (_scanAborted) return;
-                            var batch = [];
-                            while (currentIdx < total && batch.length < CONCURRENCY) {
-                                batch.push(stocks[currentIdx]);
-                                currentIdx++;
-                            }
-                            if (batch.length === 0) return;
-                            var batchDone = 0;
-                            var batchSize = batch.length;
-                            batch.forEach(function(stk) {
-                                var code = stk.code;
-                                var prefix = stk.prefix;
-                                fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&mode=fx_d&source=" + (stk._source || "zxg") + "&_t=" + Date.now())
-                                    .then(function(resp) { return resp.json(); })
-                                    .then(function(data) {
-                                        completed++;
-                                        if (data.skipped) {
-                                            skipped++;
-                                        } else if (data.error) {
-                                            skipped++;
-                                        } else if (data.is_fx_d) {
-                                            results.push(data);
-                                        }
-                                        batchDone++;
-                                        if (batchDone >= batchSize) {
-                                            setTimeout(function() {
-                                                updatePanel();
-                                                if (currentIdx < total) {
-                                                    launchBatch();
-                                                    if (_scanAborted) { checkDone(); }
-                                                } else {
-                                                    checkDone();
-                                                }
-                                            }, 0);
-                                        }
-                                    })
-                                    .catch(function(err) {
-                                        completed++;
-                                        skipped++;
-                                        batchDone++;
-                                        if (batchDone >= batchSize) {
-                                            setTimeout(function() {
-                                                updatePanel();
-                                                if (currentIdx < total) {
-                                                    launchBatch();
-                                                    if (_scanAborted) { checkDone(); }
-                                                } else {
-                                                    checkDone();
-                                                }
-                                            }, 0);
-                                        }
-                                    });
-                            });
-                        }
-
-                        launchBatch();
+                            _scanRunning = false;
+                            _scanAborted = false;
+                            btn.classList.remove("active");
+                            btn.disabled = false;
+                            btn.textContent = "股票扫描";
+                            finishScan(interrupted);
+                        });
                     })
                     .catch(function(err) {
                         _scanRunning = false;
@@ -5200,90 +5244,40 @@
                             updateScanSaveBtn();
                         }
 
-                        function checkDone() {
-                            if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
-                            if (_scanAborted) {
+                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        // （单票响应同形，模式过滤/渲染逻辑零改动）
+                        btn.textContent = "中断扫描";
+                        _asyncScanAll(stocks, {freq: freq, mode: "ma", recent: "1", source: _scanSources.join(",")}, function(data) {
+                            completed++;
+                            if (data.skipped) { skipped++; }
+                            else if (data.error) { skipped++; }
+                            else if (data.ma_category !== undefined && data.ma_category >= 0) {
+                                results.push({
+                                    code: data.code,
+                                    name: data.name,
+                                    ma_category: data.ma_category,
+                                    last_close: data.last_close
+                                });
+                            }
+                            updatePanel();
+                        }, function(err, interrupted) {
+                            if (err) {
+                                console.error("[均线分类扫描] " + err);
                                 _scanRunning = false;
                                 _scanAborted = false;
                                 btn.classList.remove("active");
                                 btn.disabled = false;
                                 btn.textContent = "股票扫描";
-                                finishScan(true);
+                                body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
                                 return;
                             }
-                            if (completed >= total) {
-                                _scanRunning = false;
-                                btn.classList.remove("active");
-                                btn.disabled = false;
-                                btn.textContent = "股票扫描";
-                                finishScan(false);
-                                return;
-                            }
-                        }
-
-                        var CONCURRENCY = 5;
-                        btn.textContent = "中断扫描";
-
-                        function launchBatch() {
-                            if (_scanAborted) return;
-                            var batch = [];
-                            while (currentIdx < total && batch.length < CONCURRENCY) {
-                                batch.push(stocks[currentIdx]);
-                                currentIdx++;
-                            }
-                            if (batch.length === 0) return;
-                            var batchDone = 0;
-                            var batchSize = batch.length;
-                            batch.forEach(function(stk) {
-                                var code = stk.code;
-                                var prefix = stk.prefix;
-                                fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&mode=ma&source=" + (stk._source || "zxg") + "&_t=" + Date.now())
-                                    .then(function(resp) { return resp.json(); })
-                                    .then(function(data) {
-                                        completed++;
-                                        if (data.skipped) {
-                                            skipped++;
-                                        } else if (data.ma_category !== undefined && data.ma_category >= 0) {
-                                            results.push({
-                                                code: data.code,
-                                                name: data.name,
-                                                ma_category: data.ma_category,
-                                                last_close: data.last_close
-                                            });
-                                        }
-                                        batchDone++;
-                                        if (batchDone >= batchSize) {
-                                            setTimeout(function() {
-                                                updatePanel();
-                                                if (currentIdx < total) {
-                                                    launchBatch();
-                                                    if (_scanAborted) { checkDone(); }
-                                                } else {
-                                                    checkDone();
-                                                }
-                                            }, 0);
-                                        }
-                                    })
-                                    .catch(function(err) {
-                                        completed++;
-                                        skipped++;
-                                        batchDone++;
-                                        if (batchDone >= batchSize) {
-                                            setTimeout(function() {
-                                                updatePanel();
-                                                if (currentIdx < total) {
-                                                    launchBatch();
-                                                    if (_scanAborted) { checkDone(); }
-                                                } else {
-                                                    checkDone();
-                                                }
-                                            }, 0);
-                                        }
-                                    });
-                            });
-                        }
-
-                        launchBatch();
+                            _scanRunning = false;
+                            _scanAborted = false;
+                            btn.classList.remove("active");
+                            btn.disabled = false;
+                            btn.textContent = "股票扫描";
+                            finishScan(interrupted);
+                        });
                     })
                     .catch(function(err) {
                         _scanRunning = false;
@@ -5411,93 +5405,36 @@
                         updateScanSaveBtn();
                     }
 
-                    function checkDone() {
-                        if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
-                        if (_scanAborted) {
+                    // 阶段 7：提交到后端执行池，轮询增量结果
+                    // （单票响应同形，模式过滤/渲染逻辑零改动）
+                    // mode=""（空）即买卖点扫描；recent 传最近 N 根过滤
+                    btn.textContent = "中断扫描";
+                    _asyncScanAll(stocks, {freq: freq, mode: "", recent: _scanRecentDays, source: _scanSources.join(",")}, function(data) {
+                        completed++;
+                        if (data.skipped) { skipped++; }
+                        else if (data.error) { skipped++; }
+                        else if ((data.buy_points && data.buy_points.length > 0) || (data.sell_points && data.sell_points.length > 0)) {
+                            results.push(data);
+                        }
+                        updatePanel();
+                    }, function(err, interrupted) {
+                        if (err) {
+                            console.error("[买卖点扫描] " + err);
                             _scanRunning = false;
                             _scanAborted = false;
                             btn.classList.remove("active");
                             btn.disabled = false;
                             btn.textContent = "股票扫描";
-                            finishScan(true);
+                            body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
                             return;
                         }
-                        if (completed >= total) {
-                            _scanRunning = false;
-                            btn.classList.remove("active");
-                            btn.disabled = false;
-                            btn.textContent = "股票扫描";
-                            finishScan(false);
-                            return;
-                        }
-                    }
-
-                    // 第二步：并发扫描（同时发送多个请求）
-                    var CONCURRENCY = 5;  // 同时扫描5只
-                    btn.textContent = "中断扫描";
-
-                    function launchBatch() {
-                        if (_scanAborted) return;
-                        var batch = [];
-                        while (currentIdx < total && batch.length < CONCURRENCY) {
-                            batch.push(stocks[currentIdx]);
-                            currentIdx++;
-                        }
-                        if (batch.length === 0) return;
-                        var batchDone = 0;
-                        var batchSize = batch.length;
-                        batch.forEach(function(stk) {
-                            var code = stk.code;
-                            var prefix = stk.prefix;
-                            fetch("/api/scan_one?code=" + code + "&freq=" + freq + "&prefix=" + prefix + "&recent=" + _scanRecentDays + "&source=" + (stk._source || "zxg") + "&_t=" + Date.now())
-                                .then(function(resp) { return resp.json(); })
-                                .then(function(data) {
-                                    completed++;
-                                    if (data.skipped) {
-                                        // 预过滤跳过，不计入 error
-                                        skipped++;
-                                    } else if (data.error) {
-                                        skipped++;
-                                    } else if ((data.buy_points && data.buy_points.length > 0) || (data.sell_points && data.sell_points.length > 0)) {
-                                        results.push(data);
-                                    }
-                                    batchDone++;
-                                    if (batchDone >= batchSize) {
-                                        // 整批完成后只产生一个 setTimeout，点击事件有机会插入
-                                        setTimeout(function() {
-                                            updatePanel();
-                                            if (currentIdx < total) {
-                                                launchBatch();
-                                                // launchBatch 可能因 _scanAborted 提前返回，此时需手动触发 checkDone
-                                                if (_scanAborted) { checkDone(); }
-                                            } else {
-                                                checkDone();
-                                            }
-                                        }, 0);
-                                    }
-                                })
-                                .catch(function(err) {
-                                    completed++;
-                                    skipped++;
-                                    batchDone++;
-                                    if (batchDone >= batchSize) {
-                                        setTimeout(function() {
-                                            updatePanel();
-                                            if (currentIdx < total) {
-                                                launchBatch();
-                                                if (_scanAborted) { checkDone(); }
-                                            } else {
-                                                checkDone();
-                                            }
-                                        }, 0);
-                                    }
-                                });
-                        });
-                    }
-
-                    // 启动初始批次（单链递归，每次发5个请求，完成后通过setTimeout推迟下一批，
-                    // 让浏览器有机会处理点击"中断扫描"按钮）
-                    launchBatch();
+                        _scanRunning = false;
+                        _scanAborted = false;
+                        btn.classList.remove("active");
+                        btn.disabled = false;
+                        btn.textContent = "股票扫描";
+                        finishScan(interrupted);
+                    });
                 })
                 .catch(function(err) {
                     _scanRunning = false;

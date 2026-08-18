@@ -73,7 +73,8 @@ LOCK_POLICY = {
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
                                       "串行调用方必须改走 call_analysis / run_analysis"),
     "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：同 analyze_stock，阶段 5 拆分时收敛"),
-    "ScannerService.scan_one":      ("SCAN", "扫描路径：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK"),
+    "ScannerService.scan_one":      ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK；阶段 7 起前端批量扫描改走 SCAN_ASYNC，本径保留兼容"),
+    "ScannerService.submit_batch_scan": ("SCAN_ASYNC", "批量扫描提交（阶段 7）：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
     "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
 }
@@ -291,8 +292,9 @@ def fetch_and_inject(code, freq="d", source="tdx", end_date=None, dual=False, st
 
 def search_stocks(q):
     """股票代码 / 名称 / 拼音搜索（委托 my_chan_main 的缓存与别名）"""
+    from App.AppData import app_data
     _m._load_stock_names_from_cache_file()
-    if not os.path.exists(_m._STOCK_NAMES_CACHE_FILE):
+    if not os.path.exists(app_data.stock_names_cache_file):
         return {"need_refresh": True, "msg": "请先刷新股票名缓存"}
 
     keyword_upper = q.upper()
@@ -798,7 +800,8 @@ def get_sse_handler(kind):
 
 def get_stock_names_cache_file():
     """股票名称缓存文件路径"""
-    return _m._STOCK_NAMES_CACHE_FILE
+    from App.AppData import app_data
+    return app_data.stock_names_cache_file
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -870,7 +873,7 @@ class ScannerService:
         sources = [s.strip() for s in source.split(",") if s.strip()]
 
         _SOURCE_READERS = {
-            "zxg": (_m.read_zxg_stocks, "自选股"),
+            "zxg": (read_zxg_stocks, "自选股"),
             "page_index": (lambda: _m._debug_read_page_index_stocks(_m._page_index_code), "成分股"),
             "tdxhy2": (_m.read_tdxhy_l2_indices, "板块指数2"),
             "tdxhy3": (_m.read_tdxhy_l3_indices, "板块指数3"),
@@ -908,17 +911,18 @@ class ScannerService:
         # 批量获取流通市值
         _need_float_mc = any(s not in ("tdxhy2", "tdxhy3") for s in sources)
         if _need_float_mc:
-            _m._load_float_mc_cache()
-            if _m._float_mc_loaded:
-                print(f"[流通市值] 本地缓存已加载 {len(_m._float_mc_cache)} 只")
+            from App.AppData import app_data
+            load_float_mc_cache()
+            if app_data.float_mc_loaded:
+                print(f"[流通市值] 本地缓存已加载 {len(app_data.float_mc_cache)} 只")
             try:
                 t_mc = time.time()
-                mv_dict = _m._fetch_float_mc_from_tencent(merged)
+                mv_dict = fetch_float_mc_from_tencent(merged)
                 if mv_dict:
                     total_stocks = len(merged)
                     got_count = len(mv_dict)
                     miss_count = total_stocks - got_count
-                    _m._update_float_mc_cache(mv_dict)
+                    update_float_mc_cache(mv_dict)
                     if miss_count == 0:
                         print(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
                     else:
@@ -1146,7 +1150,10 @@ class ScannerService:
 
     def end(self):
         """扫描结束"""
-        if _m._scan_skip_log:
+        if _m._scan_aborted:
+            # 用户点击中止后结束：不打印"全部扫描成功"误导日志
+            print("\n[扫描明细] 扫描已中断\n")
+        elif _m._scan_skip_log:
             print(f"\n========== 扫描异常/失败股票明细 ==========")
             print(f"共 {len(_m._scan_skip_log)} 只:")
             for i, item in enumerate(_m._scan_skip_log, 1):
@@ -1169,15 +1176,56 @@ class ScannerService:
         return {"count": len(_m._scan_skip_log)}
 
     def abort(self):
-        """中断扫描"""
+        """中断扫描（旧接口，阶段 7 增强：同步中止所有进行中的批量任务）
+
+        ProcessPool worker 是独立进程，看不到主进程 _scan_aborted 标志；
+        必须同步把 ScanStore 中所有 pending/running 任务置为 aborted，
+        worker 每票前检查 is_aborted 才会真正停止。
+        """
         _m._scan_aborted = True
         print("[扫描] 收到中断请求，设置终止标志")
+        try:
+            from App.ScanStore import get_scan_store
+            aborted = get_scan_store().abort_all_running()
+            if aborted:
+                print(f"[扫描] 已中止 {aborted} 个进行中的批量任务")
+        except Exception as exc:  # noqa: BLE001 —— 兜底不阻断中止
+            print(f"[扫描] 中止批量任务异常: {type(exc).__name__}: {exc}")
         return {"ok": True}
 
     def clear_cache(self):
         """关闭扫描面板"""
         print("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
         return {"cleared": 0}
+
+    # ── 阶段 7：批量扫描异步化（ProcessPool 先行）────────────────────
+    # 薄封装：AppOrch 保持纯业务、零并发框架依赖（模块级不 import
+    # concurrent.futures），批量入口委托 App/ScanPool（入口适配器）。
+    # 双路径（设计 5.4/5.5）：交互单票仍走 scan_one（线程池），批量走
+    # ProcessPool；共享结果经 SQLite ScanStore 跨进程（设计 5.10）。
+
+    def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg"):
+        """提交批量扫描 → {task_id, total}（薄封装，委托 ScanPool）
+
+        stocks: [{code, prefix, _source}, ...]（scan_stock_list 合并列表）。
+        任务在 ProcessPool 异步执行，进度经 get_batch_scan_status 轮询。
+        """
+        from App.ScanPool import submit_batch_scan as _submit
+        return _submit(stocks, freq=freq, mode=mode, recent=recent, source=source)
+
+    def get_batch_scan_status(self, task_id, since=0):
+        """批量扫描状态轮询视图（薄封装，委托 ScanStore，增量读取）
+
+        返回 {task_id, status, total, completed, results, error}；
+        results 为 seq >= since 的增量行；任务不存在返回 None。
+        """
+        from App.ScanPool import get_status as _status
+        return _status(task_id, since=since)
+
+    def abort_batch_scan(self, task_id):
+        """中止批量扫描（薄封装，委托 ScanPool）"""
+        from App.ScanPool import abort as _abort
+        return _abort(task_id)
 
     def set_page_index_code(self, code):
         """设置当前板块指数代码"""

@@ -76,7 +76,8 @@ if _HAVE_PYDANTIC_SETTINGS:
         tdx_install_dir: str = r"C:\new_tdx_hd_test"   # 通达信安装目录（改路径只需改这一处/.env）
 
         # ── 并发 ──
-        scan_concurrency: int = 1                      # 批量扫描并发上限（阶段 7 ProcessPool 接入生效）
+        scan_concurrency: int = 1                      # 批量扫描并发上限（阶段 7 前前端并发提示，兼容保留）
+        scan_pool_workers: int = 0                     # 阶段 7 ProcessPool worker 数（0=自动按 CPU 核数；>0 优先）
 
         # ── 凭据（.env 或环境变量注入；7.3：不落缓存不写日志）──
         tq_account: str = ""                           # 天勤账号（空 = 回退 vipdoc/tq_account.json）
@@ -174,6 +175,7 @@ if _HAVE_PYDANTIC_SETTINGS:
                 "chan_path": self.chan_path,
                 "tdx_install_dir": self.tdx_install_dir,
                 "scan_concurrency": self.scan_concurrency,
+                "scan_pool_workers": self.scan_pool_workers,
                 "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
                 "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
                 "config_source": "pydantic-settings" if _HAVE_PYDANTIC_SETTINGS else "builtin-fallback",
@@ -189,6 +191,7 @@ else:
         chan_path = _REPO_ROOT
         tdx_install_dir = r"C:\new_tdx_hd_test"
         scan_concurrency = 1
+        scan_pool_workers = 0
         tq_account = ""
         tq_password = ""
         forward_adjust_enabled = True
@@ -280,6 +283,7 @@ else:
                 "chan_path": self.chan_path,
                 "tdx_install_dir": self.tdx_install_dir,
                 "scan_concurrency": self.scan_concurrency,
+                "scan_pool_workers": self.scan_pool_workers,
                 "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
                 "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
                 "config_source": "builtin-fallback",
@@ -292,6 +296,7 @@ _FIELD_TYPES = {
     "CHAN_PATH": str,
     "TDX_INSTALL_DIR": str,
     "SCAN_CONCURRENCY": int,
+    "SCAN_POOL_WORKERS": int,
     "TQ_ACCOUNT": str,
     "TQ_PASSWORD": str,
 }

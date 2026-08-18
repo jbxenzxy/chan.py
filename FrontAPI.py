@@ -54,6 +54,7 @@ import queue
 import asyncio
 import threading
 import traceback
+from contextlib import asynccontextmanager
 
 # ── 仓库根目录引导（App/ 包、my_chan_main 均位于仓库根）────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,7 +88,23 @@ import my_chan_main as m  # noqa: F401  （仅读取常量/纯函数/SSE 调试�
 # 应用组装
 # ═══════════════════════════════════════════════════════════════════════
 
-app = FastAPI(title="缠论分析 API", version="1.2.0", docs_url="/docs")
+@asynccontextmanager
+async def lifespan(app):
+    """应用生命周期：关闭时优雅回收 ProcessPool（阶段 7）。
+
+    未回收时 Ctrl+C 会让 worker 进程在 call_queue.get() 阻塞处收到
+    KeyboardInterrupt 并打印 traceback（实测 SpawnProcess-1）。
+    """
+    yield
+    try:
+        from App.ScanPool import shutdown as scan_pool_shutdown
+        scan_pool_shutdown()
+    except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
+        print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
+
+
+app = FastAPI(title="缠论分析 API", version="1.2.0", docs_url="/docs",
+              lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1415,6 +1432,60 @@ async def api_scan_clear_cache():
 async def api_scan_abort():
     """中断扫描"""
     result = await run_in_threadpool(orch.scanner.abort)
+    return _json_response(result)
+
+
+# ── 路由 — 阶段 7：批量扫描异步化（ProcessPool 先行）──────────────────
+# 双路径（设计 5.4/5.5）：交互单票仍走 /api/scan_one（线程池），批量走
+# ProcessPool；任务提交返回 task_id，前端轮询 /api/scan/status 获取进度
+# 与结果（设计 5.10：扫描结果经 SQLite ScanStore 跨进程共享）。
+# RESTful 分层路由（评审「优势 1」采纳）：/api/scan/submit · /api/scan/status
+# · /api/scan/cancel；请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动
+# 生成字段 schema 与默认值。
+
+@router.post("/api/scan/submit")
+async def api_scan_submit(stocks: list = Body(...),
+                          freq: str = Body("d"),
+                          mode: str = Body(""),
+                          recent: str = Body("1"),
+                          source: str = Body("zxg")):
+    """提交批量扫描 → {task_id, total}（ProcessPool 异步执行）
+
+    body: {stocks: [{code, prefix, _source}], freq, mode, recent, source}
+    返回 task_id；进度经 /api/scan/status 轮询。
+    """
+    if not stocks:
+        return _json_response({"error": "股票列表为空"}, 400)
+    result = await run_in_threadpool(
+        orch.scanner.submit_batch_scan, stocks, freq, mode, recent, source)
+    if "error" in result:
+        return _json_response(result, 400)
+    return _json_response(result)
+
+
+@router.get("/api/scan/status")
+async def api_scan_status(task_id: str = Query(...),
+                          since: int = Query(0, ge=0)):
+    """批量扫描状态轮询（前端每 1-2s 调用，增量读取）
+
+    since: 游标，返回 seq >= since 的结果行（含首行）；前端按
+    row.seq + 1 推进，避免全量回传 O(n²)（交叉评审 W1 修复）。
+    返回 {task_id, status, total, completed, results, error}；
+    任务不存在返回 404。
+    """
+    result = await run_in_threadpool(
+        orch.scanner.get_batch_scan_status, task_id, since)
+    if result is None:
+        return _json_response({"error": f"任务不存在: {task_id}"}, 404)
+    return _json_response(result)
+
+
+@router.get("/api/scan/cancel")
+async def api_scan_abort_task(task_id: str = Query(...)):
+    """中止批量扫描任务（worker 每票前检查中止标志）"""
+    result = await run_in_threadpool(orch.scanner.abort_batch_scan, task_id)
+    if "error" in result:
+        return _json_response(result, 404)
     return _json_response(result)
 
 

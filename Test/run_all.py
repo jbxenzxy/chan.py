@@ -29,6 +29,9 @@ CI / 迁移每阶段的验收门禁）。
  13. 阶段 6 成果防护   test_phase6_guards.py        前端组件化：组件区块/KLineChart 契约/
                                                      window API 面冻结/事件引用/零构建/
                                                      注册表一致/缓存击穿/合并层完整
+ 14. 阶段 7 成果防护   test_phase7_guards.py        批量扫描异步化：ScanStore 分层缓存/
+                                                     ScanPool ProcessPool 编排/AppOrch 薄封装/
+                                                     双路径 API/前端三模式接入/依赖方向
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -73,6 +76,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_phase5_guards.py")]),
     ("phase6_guards",
      [sys.executable, os.path.join("Test", "test_phase6_guards.py")]),
+    ("phase7_guards",
+     [sys.executable, os.path.join("Test", "test_phase7_guards.py")]),
     ("sse_gray",
      [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
 ]
@@ -144,7 +149,7 @@ def main():
     n_ok = sum(1 for r in records if r["ok"])
     n_all = len(records)
     summary = {
-        "phase": "6",
+        "phase": "7",
         "mode": "update" if args.update else "verify",
         "ran_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "python": sys.version.split()[0],

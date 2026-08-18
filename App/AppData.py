@@ -212,6 +212,10 @@ class AppData:
         return self._float_mc
 
     @property
+    def float_mc_loaded(self):
+        return self._float_mc_loaded
+
+    @property
     def saved_point_times(self):
         return self._saved_point_times
 

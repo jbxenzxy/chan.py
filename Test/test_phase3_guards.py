@@ -57,12 +57,15 @@ EXPECTED_ROUTES = {
     ("GET", "/api/refresh_status"),
     ("GET", "/api/refresh_stock_names"),
     ("GET", "/api/scan_abort"),
+    ("GET", "/api/scan/cancel"),
     ("GET", "/api/scan_clear_cache"),
     ("GET", "/api/scan_end"),
     ("GET", "/api/scan_one"),
     ("GET", "/api/scan_page_index_code"),
     ("GET", "/api/scan_start"),
+    ("GET", "/api/scan/status"),
     ("GET", "/api/scan_stock_list"),
+    ("POST", "/api/scan/submit"),
     ("GET", "/api/search"),
     ("GET", "/api/stock"),
     ("GET", "/api/stocks_manual_select_point"),
@@ -116,8 +119,9 @@ def test_lock_policy(failures):
         return
 
     # 每个类别必须出现的取值域（新增类别需同步更新守护）
+    # 阶段 7 新增 SCAN_ASYNC（批量扫描异步路径：API 进程零持锁）
     for key, (cat, _desc) in orch.LOCK_POLICY.items():
-        if cat not in ("SERIAL", "SCAN", "SELF_CONTAINED", "RAW"):
+        if cat not in ("SERIAL", "SCAN", "SCAN_ASYNC", "SELF_CONTAINED", "RAW"):
             failures.append(f"锁分类: {key} 类别 {cat!r} 不在登记域内")
             print(f"[FAIL] ① 锁分类: {key} 类别 {cat!r} 非法")
 

@@ -23,6 +23,11 @@
      **任何层级**（模块级或函数内）都不得 import my_chan_main /
      DataAPI / FrontAPI / AppOrch —— 防「影子数据层」模式回归
      （即引擎保留实现、数据层复制一份反向引用的双源结构）
+  ⑨ 引擎引用有效性（迁移遗漏防护）：AppOrch 中全部 _m.<attr> 引用
+     必须在 my_chan_main 中可解析（AST 静态分析，含 try/except 条件
+     导入块）—— 防阶段 4 迁移遗漏导致运行时 AttributeError
+     （实测：_m.read_zxg_stocks / _m._float_mc_loaded /
+     _m._STOCK_NAMES_CACHE_FILE）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -256,6 +261,14 @@ def test_zxg_convergence(failures):
         if ("read_zxg_stocks" in s or "save_to_zxg_blk" in s) and "import" in s:
             bad.append(f"my_chan_main.py:{i} 仍 import 自选股入口")
 
+    # AppOrch 不再残留 _m.read_zxg_stocks 引用（阶段 4 迁移遗漏防护：
+    # read_zxg_stocks 已迁至 AppOrch 模块级，my_chan_main 中已无此属性，
+    # 残留引用会在 /api/scan_stock_list?source=zxg 时抛 AttributeError）
+    orch_src = read_src(os.path.join("App", "AppOrch.py"))
+    for i, line in enumerate(orch_src.splitlines(), 1):
+        if "_m.read_zxg_stocks" in line:
+            bad.append(f"App/AppOrch.py:{i} 残留 _m.read_zxg_stocks（应使用模块级 read_zxg_stocks）")
+
     if bad:
         failures.extend(f"自选股收敛: {b}" for b in bad)
         for b in bad:
@@ -467,6 +480,65 @@ def test_data_layer_purity(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# ⑨ 引擎引用有效性（迁移遗漏防护）
+# ═══════════════════════════════════════════════════════════════════════
+def test_engine_refs_valid(failures):
+    """AppOrch 中所有 _m.<attr> 引用必须能在 my_chan_main 中解析。
+
+    阶段 4 起 my_chan_main 的 DATA 族实现/常量逐步迁往 AppData/AppConfig，
+    若 AppOrch 残留对已迁走属性的 _m. 引用，运行时抛 AttributeError
+    （实测：_m.read_zxg_stocks / _m._float_mc_loaded / _m._STOCK_NAMES_CACHE_FILE）。
+    本守护用 AST 静态分析（不 import 引擎，避免环境副作用）收集
+    my_chan_main 全部可解析名字（含 try/except 条件导入块），
+    校验 AppOrch 的 _m. 引用均在其中。
+    """
+    bad = []
+
+    def collect_names(src):
+        tree = ast.parse(src)
+        names = set()
+        for node in ast.walk(tree):  # 遍历所有层级（含 try/except 内条件导入）
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(node.name)
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for t in targets:
+                    if isinstance(t, ast.Name):
+                        names.add(t.id)
+                    elif isinstance(t, (ast.Tuple, ast.List)):
+                        for elt in t.elts:
+                            if isinstance(elt, ast.Name):
+                                names.add(elt.id)
+            elif isinstance(node, ast.Import):
+                for a in node.names:
+                    names.add(a.asname or a.name.split(".")[0])
+            elif isinstance(node, ast.ImportFrom):
+                for a in node.names:
+                    names.add(a.asname or a.name)
+        return names
+
+    m_names = collect_names(read_src("my_chan_main.py"))
+    orch_tree = ast.parse(read_src(os.path.join("App", "AppOrch.py")))
+    refs = set()
+    for node in ast.walk(orch_tree):
+        if isinstance(node, ast.Attribute):
+            v = node.value
+            if isinstance(v, ast.Name) and v.id == "_m":
+                refs.add(node.attr)
+
+    missing = sorted(r for r in refs if r not in m_names)
+    for m in missing:
+        bad.append(f"App/AppOrch.py 引用 _m.{m}，但 my_chan_main 中已不存在（迁移遗漏，运行时 AttributeError）")
+
+    if bad:
+        failures.extend(f"引擎引用有效性: {b}" for b in bad)
+        for b in bad:
+            print(f"[FAIL] ⑨ 引擎引用有效性: {b}")
+    else:
+        print(f"[PASS] ⑨ 引擎引用有效性: AppOrch 全部 {len(refs)} 个 _m.<attr> 引用在 my_chan_main 中可解析")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 入口
 # ═══════════════════════════════════════════════════════════════════════
 def main():
@@ -487,13 +559,14 @@ def main():
     test_startup_and_lru(failures)
     test_semantic_subchan(failures)
     test_data_layer_purity(failures)
+    test_engine_refs_valid(failures)
     print("-" * 64)
     if failures:
         print(f"===== 阶段 4 成果防护: 失败 {len(failures)} 项 =====")
         for f in failures:
             print(" -", f)
         return False
-    print("===== 阶段 4 成果防护: 全部通过（8 类守护） =====")
+    print("===== 阶段 4 成果防护: 全部通过（9 类守护） =====")
     return True
 
 
