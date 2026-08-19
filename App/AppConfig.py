@@ -7,7 +7,7 @@ App/AppConfig.py —— 基础设施配置（配置中心 · 双文件之一）
 
 加载优先级（高 → 低）：
   1. 环境变量（PORT / HOST / CHAN_PATH / TDX_INSTALL_DIR /
-     SCAN_CONCURRENCY / TQ_ACCOUNT / TQ_PASSWORD）
+     SCAN_POOL_WORKERS / TQ_ACCOUNT / TQ_PASSWORD）
   2. 仓库根目录 .env 文件（格式见 .env.example，凭据永不进 git）
   3. 本文件内的默认值（与历史硬编码行为完全一致，保证零配置可跑）
 
@@ -76,8 +76,7 @@ if _HAVE_PYDANTIC_SETTINGS:
         tdx_install_dir: str = r"C:\new_tdx_hd_test"   # 通达信安装目录（改路径只需改这一处/.env）
 
         # ── 并发 ──
-        scan_concurrency: int = 1                      # 批量扫描并发上限（阶段 7 前前端并发提示，兼容保留）
-        scan_pool_workers: int = 0                     # 阶段 7 ProcessPool worker 数（0=自动按 CPU 核数；>0 优先）
+        scan_pool_workers: int = 10                    # 阶段 7 ProcessPool worker 数（0=自动按 CPU 核数；>0 优先）
 
         # ── 凭据（.env 或环境变量注入；7.3：不落缓存不写日志）──
         tq_account: str = ""                           # 天勤账号（空 = 回退 vipdoc/tq_account.json）
@@ -92,10 +91,6 @@ if _HAVE_PYDANTIC_SETTINGS:
         }                                              # 时间截断配置（周期: (天数, 说明)）
         debug_cold_start_start_date: str | None = None # 冷启动起始日期（None=不开启）
         debug_cold_start_end_date: str | None = None   # 冷启动结束日期（None=不开启）
-
-        # ── SSE 调试（本版补充）──────────────────────────────────────
-        sse_debug: bool = False                        # SSE 推送详细调试日志
-        sse_diag: bool = True                          # 双窗口进度条诊断日志
 
         # ── 派生路径（只读属性，均由 tdx_install_dir 推导）──
         @property
@@ -174,7 +169,6 @@ if _HAVE_PYDANTIC_SETTINGS:
                 "port": self.port,
                 "chan_path": self.chan_path,
                 "tdx_install_dir": self.tdx_install_dir,
-                "scan_concurrency": self.scan_concurrency,
                 "scan_pool_workers": self.scan_pool_workers,
                 "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
                 "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
@@ -190,7 +184,6 @@ else:
         port = 18081
         chan_path = _REPO_ROOT
         tdx_install_dir = r"C:\new_tdx_hd_test"
-        scan_concurrency = 1
         scan_pool_workers = 0
         tq_account = ""
         tq_password = ""
@@ -199,8 +192,6 @@ else:
         time_truncate_config = {"30m": (180, "6个月"), "5m": (90, "3个月")}
         debug_cold_start_start_date = None
         debug_cold_start_end_date = None
-        sse_debug = False
-        sse_diag = True
 
         def __init__(self):
             # 键统一大写（与 pydantic-settings 大小写不敏感行为对齐），
@@ -282,7 +273,6 @@ else:
                 "port": self.port,
                 "chan_path": self.chan_path,
                 "tdx_install_dir": self.tdx_install_dir,
-                "scan_concurrency": self.scan_concurrency,
                 "scan_pool_workers": self.scan_pool_workers,
                 "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
                 "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
@@ -295,7 +285,6 @@ _FIELD_TYPES = {
     "PORT": int,
     "CHAN_PATH": str,
     "TDX_INSTALL_DIR": str,
-    "SCAN_CONCURRENCY": int,
     "SCAN_POOL_WORKERS": int,
     "TQ_ACCOUNT": str,
     "TQ_PASSWORD": str,

@@ -4861,8 +4861,18 @@
                 var taskId = sub.task_id;
                 _scanTaskId = taskId;
                 var since = 0;  // 下次期望的 seq（后端按 seq >= since 增量返回）
+                var _seenSeq = {};   // 已收到的 seq 去重（防并发下重复 onData）
                 console.log("[批量扫描] 任务已提交: " + taskId + ", 共 " + sub.total +
                             " 只, 引擎=" + sub.engine + ", 并发=" + sub.workers);
+
+                // 稳健游标推进：since 只在「连续已见」时可前进。
+                // 并发 worker 完成顺序随机，若用 since=max(seen)+1 快进，会把
+                // 落库慢、尚未出现在快照的中间 seq 永久跳过（进度停在~50、
+                // 扫到数量随完成顺序漂移）。正确做法：since 只推进到连续区块
+                // 边界，缺口未填前保持不动，使所有 seq 最终都能被读到。
+                function _advanceSince() {
+                    while (_seenSeq[since]) { since++; }
+                }
 
                 function poll() {
                     if (stopped) return;
@@ -4884,7 +4894,10 @@
                         }
                         var rows = st.results || [];
                         for (var i = 0; i < rows.length; i++) {
-                            since = Math.max(since, rows[i].seq + 1);
+                            var seq = rows[i].seq;
+                            if (_seenSeq[seq]) continue;      // 已处理，防重复
+                            _seenSeq[seq] = true;
+                            _advanceSince();                  // 连续区块边界推进
                             onData(rows[i].data || rows[i]);
                         }
                         if (st.status === "done" || st.status === "aborted" || st.status === "error") {

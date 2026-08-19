@@ -44,7 +44,6 @@ import multiprocessing
 import os
 import sys
 import threading
-import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 
 # ── spawn 模式引导：确保仓库根在 sys.path（App 包可导入）─────────────
@@ -151,8 +150,9 @@ def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, seq):
         status = "aborted"
     try:
         store.put_result(task_id, seq, code, status, result)
-    except Exception:  # noqa: BLE001 —— 结果落库失败不阻断扫描
-        pass
+    except Exception as _e:  # noqa: BLE001 —— 结果落库失败不阻断扫描，但记录缺口
+        _line = f"[扫描池落库失败] task={task_id} seq={seq} {code} {type(_e).__name__}: {_e}"
+        print(_line, flush=True)
     return result
 
 
@@ -199,6 +199,7 @@ def _monitor_task(task_id, futures):
     task = store.get_task(task_id)
     if task is None:
         return
+
     # 中止收敛：请求旗已置（或旧库残留 aborted 终态）→ 全部 future 完成后
     # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
     if task.get("abort_requested") or task["status"] == "aborted":

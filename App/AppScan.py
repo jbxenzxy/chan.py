@@ -14,6 +14,7 @@ App/AppScan.py —— 股票扫描功能域
 批量扫描异步化（阶段 7）：提交/状态/中止委托 AppScanPool（入口适配器），
 共享结果经 SQLite AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
+import os
 import time
 import traceback
 

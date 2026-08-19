@@ -889,22 +889,21 @@ def get_xdxr_data(market, code):
     cache_key = (market, code)
     with _xdxr_lock:
         if cache_key in _xdxr_cache:
-            return _xdxr_cache[cache_key]
+            cached = _xdxr_cache[cache_key]
+            return cached
 
-        df = _get_xdxr_eltdx(market, code)
-        if df is not None and len(df) > 0:
-            _xdxr_cache[cache_key] = df
-            return df
-
-        df = _get_xdxr_mootdx(market, code)
-        if df is not None and len(df) > 0:
-            _xdxr_cache[cache_key] = df
-            return df
-
-        df = _get_xdxr_pytdx(market, code)
-        if df is not None and len(df) > 0:
-            _xdxr_cache[cache_key] = df
-            return df
+        for _src_name, _src_fn in (
+            ("eltdx", _get_xdxr_eltdx),
+            ("mootdx", _get_xdxr_mootdx),
+            ("pytdx", _get_xdxr_pytdx),
+        ):
+            try:
+                df = _src_fn(market, code)
+            except Exception:
+                df = None
+            if df is not None and len(df) > 0:
+                _xdxr_cache[cache_key] = df
+                return df
 
         _xdxr_cache[cache_key] = None
         return None
