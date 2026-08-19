@@ -223,7 +223,8 @@ def test_pool_assembly(failures):
     if "cleanup_old(" not in src_pool:
         bad.append("提交入口未调用 cleanup_old（W7 未修复，库无限增长）")
     # spawn 安全：入口 __main__ 守卫（否则 Windows/多进程入口无限递归）
-    for entry in ("FrontAPI.py", "main.py"):
+    # main.py 已随阶段 10.1 下线（职责被 FrontAPI.py 完全吸收），仅守护现存入口
+    for entry in ("FrontAPI.py",):
         if '__name__ == "__main__"' not in read(entry):
             bad.append(f"{entry} 缺少 __main__ 守卫（spawn 安全性被破坏）")
     # 配置面

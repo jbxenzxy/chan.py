@@ -59,14 +59,14 @@
   }
  },
  "summary": {
-  "n_funcs": 57,
-  "n_states": 38,
+  "n_funcs": 56,
+  "n_states": 37,
   "n_classes": 2,
   "by_layer": {
    "ORCH_E": 19,
    "ELTDX": 13,
    "DATA": 12,
-   "ORCH_F": 7,
+   "ORCH_F": 6,
    "ORCH_S": 2,
    "TDXHY": 2,
    "CFG": 1,
@@ -79,7 +79,7 @@
    "ELTDX": 4,
    "RETIRE": 3,
    "ORCH_F": 3,
-   "FE": 2,
+   "FE": 1,
    "CFG": 1
   }
  },
@@ -90,13 +90,9 @@
    "wave": 1,
    "target": "ORCH_E",
    "depended_by": [
-    "_analyze_futures_internal",
     "_extract_main_level_data",
-    "_extract_realtime_snapshot",
     "_extract_sub_level_data",
-    "_find_left_shoulder_time",
-    "compute_red_range_zs",
-    "futures_manual_select_point"
+    "_find_left_shoulder_time"
    ],
    "calls": [],
    "reads": [
@@ -105,8 +101,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 964,
-   "line_end": 975,
+   "line_start": 974,
+   "line_end": 985,
    "n_lines": 12,
    "note": "freq→日期格式（7 处调用，被依赖最多；读 INTRADAY_FREQS/SUBSECOND_FREQS）"
   },
@@ -116,100 +112,21 @@
    "wave": 1,
    "target": "ORCH_E",
    "depended_by": [
-    "_analyze_futures_internal",
     "_analyze_stock_internal",
     "_extract_main_level_data",
-    "_extract_sub_level_data",
-    "compute_red_range_zs",
-    "stock_manual_select_point"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 801,
-   "line_end": 808,
-   "n_lines": 8,
-   "note": "freq→KL_TYPE（纯，6 处调用，波次 1）"
-  },
-  {
-   "order": 3,
-   "name": "_get_freq_label",
-   "wave": 1,
-   "target": "ORCH_E",
-   "depended_by": [
-    "_analyze_futures_internal",
-    "_extract_main_level_data",
-    "_extract_realtime_snapshot",
     "_extract_sub_level_data"
    ],
    "calls": [],
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 810,
-   "line_end": 813,
-   "n_lines": 4,
-   "note": "freq→中文标签（纯，4 处调用；阶段 5 可提升 DataAPI 元数据）"
+   "line_start": 811,
+   "line_end": 818,
+   "n_lines": 8,
+   "note": "freq→KL_TYPE（纯，6 处调用，波次 1）"
   },
   {
-   "order": 4,
-   "name": "_cache_get",
-   "wave": 1,
-   "target": "DATA",
-   "depended_by": [
-    "_analyze_stock_internal",
-    "compute_red_range_zs",
-    "stock_manual_select_point"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 920,
-   "line_end": 922,
-   "n_lines": 3,
-   "note": "✓4 兼容壳 → app_data.cache_get"
-  },
-  {
-   "order": 5,
-   "name": "_make_chan_config",
-   "wave": 1,
-   "target": "CFG",
-   "depended_by": [
-    "_analyze_futures_internal",
-    "_analyze_stock_internal",
-    "futures_manual_select_point"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 816,
-   "line_end": 820,
-   "n_lines": 5,
-   "note": "CChanConfig 构造（纯；算法参数归 ChanConfig.py）"
-  },
-  {
-   "order": 6,
-   "name": "_calc_futures_white_hline",
-   "wave": 1,
-   "target": "ORCH_E",
-   "depended_by": [
-    "_analyze_futures_internal",
-    "futures_manual_select_point"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 1095,
-   "line_end": 1135,
-   "n_lines": 41,
-   "note": "期货白线（纯）"
-  },
-  {
-   "order": 7,
+   "order": 3,
    "name": "_date_to_int",
    "wave": 1,
    "target": "ELTDX",
@@ -227,7 +144,7 @@
    "note": "日期→pytdx int（仅下载族调用）"
   },
   {
-   "order": 8,
+   "order": 4,
    "name": "_ensure_dir",
    "wave": 1,
    "target": "ELTDX",
@@ -245,7 +162,25 @@
    "note": "安全 mkdir（仅下载族调用）"
   },
   {
-   "order": 9,
+   "order": 5,
+   "name": "_get_freq_label",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [
+    "_extract_main_level_data",
+    "_extract_sub_level_data"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 820,
+   "line_end": 823,
+   "n_lines": 4,
+   "note": "freq→中文标签（纯，4 处调用；阶段 5 可提升 DataAPI 元数据）"
+  },
+  {
+   "order": 6,
    "name": "_safe_write_json_file",
    "wave": 1,
    "target": "DATA",
@@ -257,49 +192,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 228,
-   "line_end": 231,
+   "line_start": 238,
+   "line_end": 241,
    "n_lines": 4,
    "note": "✓4 兼容壳 → App/AppData.safe_write_json_file"
   },
   {
-   "order": 10,
-   "name": "_save_point_time",
-   "wave": 1,
-   "target": "DATA",
-   "depended_by": [
-    "futures_manual_select_point",
-    "stock_manual_select_point"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 1062,
-   "line_end": 1064,
-   "n_lines": 3,
-   "note": "✓4 兼容壳 → app_data（引擎内部手动选点仍调用）"
-  },
-  {
-   "order": 11,
-   "name": "ema",
-   "wave": 1,
-   "target": "ORCH_E",
-   "depended_by": [
-    "_extract_realtime_snapshot",
-    "calculate_macd"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 168,
-   "line_end": 177,
-   "n_lines": 10,
-   "note": "EMA 指标（纯）"
-  },
-  {
-   "order": 12,
+   "order": 7,
    "name": "_bi_overlap_range",
    "wave": 1,
    "target": "ORCH_E",
@@ -310,13 +209,30 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 1034,
-   "line_end": 1036,
+   "line_start": 1044,
+   "line_end": 1046,
    "n_lines": 3,
    "note": "笔与中枢区间重叠（纯）"
   },
   {
-   "order": 13,
+   "order": 8,
+   "name": "_cache_get",
+   "wave": 1,
+   "target": "DATA",
+   "depended_by": [
+    "_analyze_stock_internal"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 930,
+   "line_end": 932,
+   "n_lines": 3,
+   "note": "✓4 兼容壳 → app_data.cache_get"
+  },
+  {
+   "order": 9,
    "name": "_cache_put",
    "wave": 1,
    "target": "DATA",
@@ -327,13 +243,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 913,
-   "line_end": 917,
+   "line_start": 923,
+   "line_end": 927,
    "n_lines": 5,
    "note": "✓4 兼容壳 → app_data.cache_put（LRU）"
   },
   {
-   "order": 14,
+   "order": 10,
    "name": "_collect_codes_from_vipdoc",
    "wave": 1,
    "target": "ELTDX",
@@ -344,13 +260,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 444,
-   "line_end": 446,
+   "line_start": 454,
+   "line_end": 456,
    "n_lines": 3,
    "note": "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"
   },
   {
-   "order": 15,
+   "order": 11,
    "name": "_date_to_min_packed",
    "wave": 1,
    "target": "ELTDX",
@@ -367,7 +283,7 @@
    "note": "分钟打包 int（仅 _download_min_kline 调用）"
   },
   {
-   "order": 16,
+   "order": 12,
    "name": "_fetch_index_belong_from_akshare",
    "wave": 1,
    "target": "ORCH_F",
@@ -382,13 +298,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 273,
-   "line_end": 317,
+   "line_start": 283,
+   "line_end": 327,
    "n_lines": 45,
    "note": "行业归属拉取（写 _index_belong_cache）"
   },
   {
-   "order": 17,
+   "order": 13,
    "name": "_fetch_names_from_sina_once",
    "wave": 1,
    "target": "ORCH_F",
@@ -399,13 +315,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 449,
-   "line_end": 572,
+   "line_start": 459,
+   "line_end": 582,
    "n_lines": 124,
    "note": "新浪批量拉名（纯，HTTP 注入点）"
   },
   {
-   "order": 18,
+   "order": 14,
    "name": "_get_float_mc_from_cache",
    "wave": 1,
    "target": "DATA",
@@ -416,18 +332,52 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 890,
-   "line_end": 892,
+   "line_start": 900,
+   "line_end": 902,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data"
   },
   {
-   "order": 19,
+   "order": 15,
    "name": "_get_index_belong",
    "wave": 1,
    "target": "DATA",
    "depended_by": [
     "_extract_main_level_data"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 264,
+   "line_end": 266,
+   "n_lines": 3,
+   "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
+  },
+  {
+   "order": 16,
+   "name": "_get_pe_ttm",
+   "wave": 1,
+   "target": "DATA",
+   "depended_by": [
+    "_extract_main_level_data"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 259,
+   "line_end": 261,
+   "n_lines": 3,
+   "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
+  },
+  {
+   "order": 17,
+   "name": "_load_pe_ttm_cache",
+   "wave": 1,
+   "target": "DATA",
+   "depended_by": [
+    "_refresh_pe_ttm"
    ],
    "calls": [],
    "reads": [],
@@ -439,41 +389,7 @@
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 20,
-   "name": "_get_pe_ttm",
-   "wave": 1,
-   "target": "DATA",
-   "depended_by": [
-    "_extract_main_level_data"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 249,
-   "line_end": 251,
-   "n_lines": 3,
-   "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
-  },
-  {
-   "order": 21,
-   "name": "_load_pe_ttm_cache",
-   "wave": 1,
-   "target": "DATA",
-   "depended_by": [
-    "_refresh_pe_ttm"
-   ],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 244,
-   "line_end": 246,
-   "n_lines": 3,
-   "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
-  },
-  {
-   "order": 22,
+   "order": 18,
    "name": "_load_stock_names_from_cache_file",
    "wave": 1,
    "target": "DATA",
@@ -484,13 +400,30 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 219,
-   "line_end": 221,
+   "line_start": 229,
+   "line_end": 231,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 23,
+   "order": 19,
+   "name": "_make_chan_config",
+   "wave": 1,
+   "target": "CFG",
+   "depended_by": [
+    "_analyze_stock_internal"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 826,
+   "line_end": 830,
+   "n_lines": 5,
+   "note": "CChanConfig 构造（纯；算法参数归 ChanConfig.py）"
+  },
+  {
+   "order": 20,
    "name": "_tdx_day_record",
    "wave": 1,
    "target": "ELTDX",
@@ -507,7 +440,7 @@
    "note": "日线 .day 记录构造（纯）"
   },
   {
-   "order": 24,
+   "order": 21,
    "name": "_tdx_min_record",
    "wave": 1,
    "target": "ELTDX",
@@ -524,7 +457,39 @@
    "note": "分钟 .lc1/.lc5 记录构造（纯）"
   },
   {
-   "order": 25,
+   "order": 22,
+   "name": "ema",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [
+    "calculate_macd"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 178,
+   "line_end": 187,
+   "n_lines": 10,
+   "note": "EMA 指标（纯）"
+  },
+  {
+   "order": 23,
+   "name": "_analyze_futures_internal",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 1100,
+   "line_end": 1105,
+   "n_lines": 6,
+   "note": "期货分析核心（阶段 8 兼容壳 → App/AppSSE.py）"
+  },
+  {
+   "order": 24,
    "name": "_cache_remove",
    "wave": 1,
    "target": "DATA",
@@ -533,30 +498,28 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 925,
-   "line_end": 927,
+   "line_start": 935,
+   "line_end": 937,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data.cache_remove"
   },
   {
-   "order": 26,
-   "name": "_cleanup_all_futures_data",
+   "order": 25,
+   "name": "_calc_futures_white_hline",
    "wave": 1,
-   "target": "ORCH_F",
+   "target": "ORCH_E",
    "depended_by": [],
    "calls": [],
-   "reads": [
-    "_saved_point_times"
-   ],
+   "reads": [],
    "writes": [],
-   "pure": false,
-   "line_start": 1067,
-   "line_end": 1087,
-   "n_lines": 21,
-   "note": "期货数据清理（仅 ChartHandler/api 调用）"
+   "pure": true,
+   "line_start": 1082,
+   "line_end": 1085,
+   "n_lines": 4,
+   "note": "期货白线（阶段 8 兼容壳 → App/AppSSE.py）"
   },
   {
-   "order": 27,
+   "order": 26,
    "name": "_debug_read_page_index_stocks",
    "wave": 1,
    "target": "ORCH_S",
@@ -565,10 +528,25 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 3377,
-   "line_end": 3381,
+   "line_start": 2264,
+   "line_end": 2268,
    "n_lines": 5,
    "note": "板块成分读取（扫描调试/页面索引用）"
+  },
+  {
+   "order": 27,
+   "name": "_extract_realtime_snapshot",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 1092,
+   "line_end": 1096,
+   "n_lines": 5,
+   "note": "实时快照提取（阶段 8 兼容壳 → App/AppSSE.py）"
   },
   {
    "order": 28,
@@ -580,8 +558,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 840,
-   "line_end": 883,
+   "line_start": 850,
+   "line_end": 893,
    "n_lines": 44,
    "note": "腾讯流通市值拉取（纯）"
   },
@@ -613,8 +591,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 190,
-   "line_end": 200,
+   "line_start": 200,
+   "line_end": 210,
    "n_lines": 11,
    "note": "预览 K 线 MACD 继承（纯）"
   },
@@ -628,13 +606,28 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 836,
-   "line_end": 838,
+   "line_start": 846,
+   "line_end": 848,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
    "order": 32,
+   "name": "_save_point_time",
+   "wave": 1,
+   "target": "DATA",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 1072,
+   "line_end": 1074,
+   "n_lines": 3,
+   "note": "✓4 兼容壳 → app_data（引擎内部手动选点仍调用）"
+  },
+  {
+   "order": 33,
    "name": "_send_windows_notification",
    "wave": 1,
    "target": "ORCH_C",
@@ -643,13 +636,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 930,
-   "line_end": 947,
+   "line_start": 940,
+   "line_end": 957,
    "n_lines": 18,
    "note": "Windows 通知（ChartHandler 下载/扫描完成用）"
   },
   {
-   "order": 33,
+   "order": 34,
    "name": "_start_download",
    "wave": 1,
    "target": "ELTDX",
@@ -667,7 +660,7 @@
    "note": "启动下载线程（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
   {
-   "order": 34,
+   "order": 35,
    "name": "_stop_download",
    "wave": 1,
    "target": "ELTDX",
@@ -685,7 +678,7 @@
    "note": "中止下载（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
   {
-   "order": 35,
+   "order": 36,
    "name": "_update_float_mc_cache",
    "wave": 1,
    "target": "DATA",
@@ -694,13 +687,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 885,
-   "line_end": 888,
+   "line_start": 895,
+   "line_end": 898,
    "n_lines": 4,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 36,
+   "order": 37,
    "name": "collect_codes_from_vipdoc",
    "wave": 1,
    "target": "ELTDX",
@@ -715,24 +708,52 @@
    "note": "从 vipdoc 收集代码（公开API，不含下划线前缀）"
   },
   {
-   "order": 37,
+   "order": 38,
+   "name": "compute_red_range_zs",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 2188,
+   "line_end": 2192,
+   "n_lines": 5,
+   "note": "红框中枢计算（阶段 8 兼容壳 → App/AppChart.py）"
+  },
+  {
+   "order": 39,
+   "name": "futures_manual_select_point",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 2201,
+   "line_end": 2204,
+   "n_lines": 4,
+   "note": "期货手动选点（阶段 8 兼容壳 → App/AppSSE.py）"
+  },
+  {
+   "order": 40,
    "name": "init_chan_symbol",
    "wave": 1,
    "target": "ORCH_F",
    "depended_by": [],
    "calls": [],
-   "reads": [
-    "_SSE_DEBUG"
-   ],
+   "reads": [],
    "writes": [],
-   "pure": false,
-   "line_start": 1137,
-   "line_end": 1193,
-   "n_lines": 57,
-   "note": "TqApi 合约初始化（读 _SSE_DEBUG；仅 SSE/ChartHandler 调用）"
+   "pure": true,
+   "line_start": 1087,
+   "line_end": 1090,
+   "n_lines": 4,
+   "note": "TqApi 合约初始化（阶段 8 兼容壳 → App/AppSSE.py）"
   },
   {
-   "order": 38,
+   "order": 41,
    "name": "read_tdxhy_l2_indices",
    "wave": 1,
    "target": "TDXHY",
@@ -741,13 +762,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 3384,
-   "line_end": 3387,
+   "line_start": 2271,
+   "line_end": 2274,
    "n_lines": 4,
    "note": "二级行业指数读取（阶段 5 随数据文件迁 App/）"
   },
   {
-   "order": 39,
+   "order": 42,
    "name": "read_tdxhy_l3_indices",
    "wave": 1,
    "target": "TDXHY",
@@ -756,20 +777,33 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 3390,
-   "line_end": 3393,
+   "line_start": 2277,
+   "line_end": 2280,
    "n_lines": 4,
    "note": "三级行业指数读取（同上）"
   },
   {
-   "order": 40,
+   "order": 43,
+   "name": "stock_manual_select_point",
+   "wave": 1,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 2195,
+   "line_end": 2198,
+   "n_lines": 4,
+   "note": "股票手动选点（阶段 8 兼容壳 → App/AppChart.py）"
+  },
+  {
+   "order": 44,
    "name": "_calc_zs_confirm_edt_from_bis",
    "wave": 2,
    "target": "ORCH_E",
    "depended_by": [
-    "_analyze_futures_internal",
     "_extract_main_level_data",
-    "_extract_realtime_snapshot",
     "_extract_sub_level_data"
    ],
    "calls": [
@@ -778,18 +812,17 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 1039,
-   "line_end": 1059,
+   "line_start": 1049,
+   "line_end": 1069,
    "n_lines": 21,
    "note": "中枢确认时间（纯，4 处调用）"
   },
   {
-   "order": 41,
+   "order": 45,
    "name": "calculate_macd",
    "wave": 2,
    "target": "ORCH_E",
    "depended_by": [
-    "_analyze_futures_internal",
     "_extract_main_level_data",
     "_extract_sub_level_data"
    ],
@@ -799,33 +832,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 180,
-   "line_end": 187,
+   "line_start": 190,
+   "line_end": 197,
    "n_lines": 8,
    "note": "MACD 指标（纯，3 处调用）"
   },
   {
-   "order": 42,
-   "name": "_find_left_shoulder_time",
-   "wave": 2,
-   "target": "ORCH_E",
-   "depended_by": [
-    "futures_manual_select_point",
-    "stock_manual_select_point"
-   ],
-   "calls": [
-    "_get_date_fmt"
-   ],
-   "reads": [],
-   "writes": [],
-   "pure": false,
-   "line_start": 978,
-   "line_end": 1028,
-   "n_lines": 51,
-   "note": "左肩时间查找（手动选点用）"
-  },
-  {
-   "order": 43,
+   "order": 46,
    "name": "_download_day_kline",
    "wave": 2,
    "target": "ELTDX",
@@ -846,7 +859,7 @@
    "note": "日线下载（纯，client 注入）"
   },
   {
-   "order": 44,
+   "order": 47,
    "name": "_download_min_kline",
    "wave": 2,
    "target": "ELTDX",
@@ -868,7 +881,7 @@
    "note": "分钟下载（纯，client 注入）"
   },
   {
-   "order": 45,
+   "order": 48,
    "name": "_refresh_pe_ttm",
    "wave": 2,
    "target": "ORCH_F",
@@ -887,13 +900,30 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 320,
-   "line_end": 441,
+   "line_start": 330,
+   "line_end": 451,
    "n_lines": 122,
    "note": "PE 刷新（akshare；写缓存文件）"
   },
   {
-   "order": 46,
+   "order": 49,
+   "name": "_find_left_shoulder_time",
+   "wave": 2,
+   "target": "ORCH_E",
+   "depended_by": [],
+   "calls": [
+    "_get_date_fmt"
+   ],
+   "reads": [],
+   "writes": [],
+   "pure": false,
+   "line_start": 988,
+   "line_end": 1038,
+   "n_lines": 51,
+   "note": "左肩时间查找（手动选点用）"
+  },
+  {
+   "order": 50,
    "name": "_quick_prefilter_pass",
    "wave": 2,
    "target": "ORCH_S",
@@ -906,36 +936,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 3341,
-   "line_end": 3374,
+   "line_start": 2228,
+   "line_end": 2261,
    "n_lines": 34,
    "note": "扫描预筛（读 _stock_names_cache + 流通市值）"
   },
   {
-   "order": 47,
-   "name": "_extract_realtime_snapshot",
-   "wave": 3,
-   "target": "ORCH_E",
-   "depended_by": [
-    "_analyze_futures_internal",
-    "futures_manual_select_point"
-   ],
-   "calls": [
-    "_calc_zs_confirm_edt_from_bis",
-    "_get_date_fmt",
-    "_get_freq_label",
-    "ema"
-   ],
-   "reads": [],
-   "writes": [],
-   "pure": false,
-   "line_start": 1195,
-   "line_end": 1432,
-   "n_lines": 238,
-   "note": "实时快照提取（SSE 路径；AppOrch 已有壳 extract_realtime_snapshot）"
-  },
-  {
-   "order": 48,
+   "order": 51,
    "name": "_extract_main_level_data",
    "wave": 3,
    "target": "ORCH_E",
@@ -957,13 +964,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 2366,
-   "line_end": 2722,
+   "line_start": 1553,
+   "line_end": 1909,
    "n_lines": 357,
    "note": "主级别结果提取（357 行）"
   },
   {
-   "order": 49,
+   "order": 52,
    "name": "_extract_sub_level_data",
    "wave": 3,
    "target": "ORCH_E",
@@ -980,13 +987,13 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 2725,
-   "line_end": 2978,
+   "line_start": 1912,
+   "line_end": 2165,
    "n_lines": 254,
    "note": "子级别结果提取（254 行）"
   },
   {
-   "order": 50,
+   "order": 53,
    "name": "_download_task",
    "wave": 3,
    "target": "ELTDX",
@@ -1007,7 +1014,7 @@
    "note": "下载任务体（读 _download_state/_download_lock）"
   },
   {
-   "order": 51,
+   "order": 54,
    "name": "_refresh_stock_names",
    "wave": 3,
    "target": "ORCH_F",
@@ -1025,19 +1032,18 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 575,
-   "line_end": 789,
+   "line_start": 585,
+   "line_end": 799,
    "n_lines": 215,
    "note": "全市场名称刷新（220 行；写 _stock_names_cache；AppOrch 已有壳）"
   },
   {
-   "order": 52,
+   "order": 55,
    "name": "_analyze_stock_internal",
    "wave": 4,
    "target": "ORCH_E",
    "depended_by": [
-    "analyze_stock",
-    "stock_manual_select_point"
+    "analyze_stock"
    ],
    "calls": [
     "_cache_get",
@@ -1062,140 +1068,32 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1921,
-   "line_end": 2360,
+   "line_start": 1108,
+   "line_end": 1547,
    "n_lines": 440,
    "note": "股票分析核心（440 行：拉取→注入→CChan→提取）"
   },
   {
-   "order": 53,
-   "name": "_analyze_futures_internal",
-   "wave": 4,
-   "target": "ORCH_E",
-   "depended_by": [
-    "analyze_stock"
-   ],
-   "calls": [
-    "_calc_futures_white_hline",
-    "_calc_zs_confirm_edt_from_bis",
-    "_extract_realtime_snapshot",
-    "_get_date_fmt",
-    "_get_freq_label",
-    "_get_kl_type",
-    "_make_chan_config",
-    "calculate_macd"
-   ],
-   "reads": [
-    "_FUTURES_DUAL_FREQ_MAP",
-    "_futures_analysis_cache"
-   ],
-   "writes": [],
-   "pure": false,
-   "line_start": 1436,
-   "line_end": 1918,
-   "n_lines": 483,
-   "note": "期货分析核心（483 行：天勤→截断→CChan）"
-  },
-  {
-   "order": 54,
-   "name": "futures_manual_select_point",
-   "wave": 4,
-   "target": "ORCH_E",
-   "depended_by": [],
-   "calls": [
-    "_calc_futures_white_hline",
-    "_extract_realtime_snapshot",
-    "_find_left_shoulder_time",
-    "_get_date_fmt",
-    "_make_chan_config",
-    "_save_point_time"
-   ],
-   "reads": [
-    "FREQ_TO_COL",
-    "_saved_point_times"
-   ],
-   "writes": [],
-   "pure": false,
-   "line_start": 3182,
-   "line_end": 3319,
-   "n_lines": 138,
-   "note": "期货手动选点（AppOrch 已有壳）"
-  },
-  {
-   "order": 55,
+   "order": 56,
    "name": "analyze_stock",
    "wave": 5,
    "target": "ORCH_E",
-   "depended_by": [
-    "compute_red_range_zs",
-    "stock_manual_select_point"
-   ],
+   "depended_by": [],
    "calls": [
-    "_analyze_futures_internal",
     "_analyze_stock_internal"
    ],
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 3322,
-   "line_end": 3335,
-   "n_lines": 14,
+   "line_start": 2207,
+   "line_end": 2222,
+   "n_lines": 16,
    "note": "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"
-  },
-  {
-   "order": 56,
-   "name": "compute_red_range_zs",
-   "wave": 6,
-   "target": "ORCH_E",
-   "depended_by": [],
-   "calls": [
-    "_cache_get",
-    "_get_date_fmt",
-    "_get_kl_type",
-    "analyze_stock"
-   ],
-   "reads": [
-    "_SUB_FREQ_MAP",
-    "_futures_analysis_cache"
-   ],
-   "writes": [],
-   "pure": false,
-   "line_start": 3001,
-   "line_end": 3104,
-   "n_lines": 104,
-   "note": "红框中枢计算（AppOrch 已有壳）"
-  },
-  {
-   "order": 57,
-   "name": "stock_manual_select_point",
-   "wave": 6,
-   "target": "ORCH_E",
-   "depended_by": [],
-   "calls": [
-    "_analyze_stock_internal",
-    "_cache_get",
-    "_find_left_shoulder_time",
-    "_get_kl_type",
-    "_save_point_time",
-    "analyze_stock"
-   ],
-   "reads": [
-    "FREQ_TO_COL",
-    "_cache_lock",
-    "_saved_point_times",
-    "_stocks_analysis_cache"
-   ],
-   "writes": [],
-   "pure": false,
-   "line_start": 3107,
-   "line_end": 3179,
-   "n_lines": 73,
-   "note": "股票手动选点（AppOrch 已有壳）"
   }
  ],
  "states": {
   "SYMBOL_CODE": {
-   "line": 42,
+   "line": 53,
    "kind": "init",
    "value_hint": "get_symbol_code()",
    "target": "RETIRE",
@@ -1204,27 +1102,16 @@
    "writers": []
   },
   "_SSE_DEBUG": {
-   "line": 49,
+   "line": 60,
    "kind": "init",
    "value_hint": "False",
    "target": "FE",
    "note": "SSE 调试旗（ChartHandler 32 处 / init_chan_symbol 1 处）→ FrontAPI 常量",
-   "readers": [
-    "init_chan_symbol"
-   ],
-   "writers": []
-  },
-  "_SSE_DIAG": {
-   "line": 50,
-   "kind": "init",
-   "value_hint": "True",
-   "target": "FE",
-   "note": "SSE 诊断旗（ChartHandler 7 处）→ FrontAPI 常量",
    "readers": [],
    "writers": []
   },
   "SCRIPT_DIR": {
-   "line": 55,
+   "line": 65,
    "kind": "init",
    "value_hint": "os.path.dirname(os.path.abspath(__file__))",
    "target": "RETIRE",
@@ -1233,7 +1120,7 @@
    "writers": []
   },
   "FORWARD_ADJUST_ENABLED": {
-   "line": 78,
+   "line": 88,
    "kind": "init",
    "value_hint": "True",
    "target": "ORCH_E",
@@ -1242,7 +1129,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_START_DATE": {
-   "line": 81,
+   "line": 91,
    "kind": "init",
    "value_hint": "None",
    "target": "ORCH_E",
@@ -1253,7 +1140,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_END_DATE": {
-   "line": 84,
+   "line": 94,
    "kind": "init",
    "value_hint": "None",
    "target": "ORCH_E",
@@ -1264,7 +1151,7 @@
    "writers": []
   },
   "FULL_DATA_MODE": {
-   "line": 102,
+   "line": 112,
    "kind": "init",
    "value_hint": "False",
    "target": "ORCH_E",
@@ -1275,7 +1162,7 @@
    "writers": []
   },
   "TIME_TRUNCATE_CONFIG": {
-   "line": 105,
+   "line": 115,
    "kind": "init",
    "value_hint": "{'30m': (180, '6个月'), '5m': (90, '3个月')}",
    "target": "ORCH_E",
@@ -1286,7 +1173,7 @@
    "writers": []
   },
   "_ELTDX_AVAILABLE": {
-   "line": 146,
+   "line": 156,
    "kind": "init",
    "value_hint": "_ElTdx._ELTDX_AVAILABLE",
    "target": "ELTDX",
@@ -1295,7 +1182,7 @@
    "writers": []
   },
   "TdxClient": {
-   "line": 147,
+   "line": 157,
    "kind": "init",
    "value_hint": "_ElTdx.TdxClient",
    "target": "ELTDX",
@@ -1332,7 +1219,7 @@
    "writers": []
   },
   "TDX_MARKET_MAP": {
-   "line": 154,
+   "line": 164,
    "kind": "init",
    "value_hint": "{'sh': 1, 'sz': 0, 'bj': 2}",
    "target": "ORCH_E",
@@ -1341,7 +1228,7 @@
    "writers": []
   },
   "HK_CODE_PREFIX": {
-   "line": 161,
+   "line": 171,
    "kind": "init",
    "value_hint": "'31'",
    "target": "ORCH_E",
@@ -1350,7 +1237,7 @@
    "writers": []
   },
   "DS_CODE_PREFIX": {
-   "line": 162,
+   "line": 172,
    "kind": "init",
    "value_hint": "'62'",
    "target": "ORCH_E",
@@ -1359,7 +1246,7 @@
    "writers": []
   },
   "_stock_names_cache": {
-   "line": 212,
+   "line": 222,
    "kind": "init",
    "value_hint": "app_data.names_cache",
    "target": "DATA",
@@ -1371,7 +1258,7 @@
    "writers": []
   },
   "_refresh_status": {
-   "line": 215,
+   "line": 225,
    "kind": "init",
    "value_hint": "{'running': False, 'progress': 0, 'total': 0, 'loaded': 0, '…",
    "target": "ORCH_F",
@@ -1384,7 +1271,7 @@
    "writers": []
   },
   "_pe_ttm_cache": {
-   "line": 237,
+   "line": 247,
    "kind": "init",
    "value_hint": "app_data.pe_cache",
    "target": "DATA",
@@ -1395,7 +1282,7 @@
    "writers": []
   },
   "_index_belong_cache": {
-   "line": 241,
+   "line": 251,
    "kind": "init",
    "value_hint": "app_data.belong_cache",
    "target": "DATA",
@@ -1406,7 +1293,7 @@
    "writers": []
   },
   "_AKSHARE_EXCHANGE_MAP": {
-   "line": 260,
+   "line": 270,
    "kind": "init",
    "value_hint": "{'上海证券交易所': 'sh', '深圳证券交易所': 'sz'}",
    "target": "ORCH_F",
@@ -1417,7 +1304,7 @@
    "writers": []
   },
   "_AKSHARE_INDEX_MAP": {
-   "line": 265,
+   "line": 275,
    "kind": "init",
    "value_hint": "{'000300': '沪深300', '000905': '中证500', '000852': '中证1000', '…",
    "target": "ORCH_F",
@@ -1428,31 +1315,29 @@
    "writers": []
   },
   "_stocks_analysis_cache": {
-   "line": 829,
+   "line": 839,
    "kind": "init",
    "value_hint": "app_data.stocks_analysis_cache",
    "target": "DATA",
    "note": "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）",
    "readers": [
-    "_analyze_stock_internal",
-    "stock_manual_select_point"
+    "_analyze_stock_internal"
    ],
    "writers": []
   },
   "_cache_lock": {
-   "line": 830,
+   "line": 840,
    "kind": "init",
    "value_hint": "app_data.cache_lock",
    "target": "DATA",
    "note": "✓4 缓存锁（= app_data._cache_lock）",
    "readers": [
-    "_analyze_stock_internal",
-    "stock_manual_select_point"
+    "_analyze_stock_internal"
    ],
    "writers": []
   },
   "_scan_skip_log": {
-   "line": 833,
+   "line": 843,
    "kind": "init",
    "value_hint": "[]",
    "target": "ORCH_S",
@@ -1461,7 +1346,7 @@
    "writers": []
   },
   "_scan_lock": {
-   "line": 898,
+   "line": 908,
    "kind": "init",
    "value_hint": "threading.Lock()",
    "target": "ORCH_S",
@@ -1470,7 +1355,7 @@
    "writers": []
   },
   "_scan_aborted": {
-   "line": 901,
+   "line": 911,
    "kind": "init",
    "value_hint": "False",
    "target": "ORCH_S",
@@ -1479,7 +1364,7 @@
    "writers": []
   },
   "_scan_start_time": {
-   "line": 904,
+   "line": 914,
    "kind": "init",
    "value_hint": "None",
    "target": "ORCH_S",
@@ -1488,7 +1373,7 @@
    "writers": []
   },
   "_page_index_code": {
-   "line": 907,
+   "line": 917,
    "kind": "init",
    "value_hint": "None",
    "target": "ORCH_S",
@@ -1497,7 +1382,7 @@
    "writers": []
   },
   "_stock_analysis_lock": {
-   "line": 910,
+   "line": 920,
    "kind": "init",
    "value_hint": "threading.Lock()",
    "target": "RETIRE",
@@ -1508,7 +1393,7 @@
    "writers": []
   },
   "SAVED_POINT_COLUMNS": {
-   "line": 955,
+   "line": 965,
    "kind": "init",
    "value_hint": "AppData_SAVED_POINT_COLUMNS",
    "target": "CFG",
@@ -1517,21 +1402,19 @@
    "writers": []
   },
   "FREQ_TO_COL": {
-   "line": 957,
+   "line": 967,
    "kind": "init",
    "value_hint": "AppData_FREQ_TO_COL",
    "target": "ORCH_E",
    "note": "freq→选点列（6 读）→ 消费侧常量",
    "readers": [
     "_analyze_stock_internal",
-    "_extract_main_level_data",
-    "stock_manual_select_point",
-    "futures_manual_select_point"
+    "_extract_main_level_data"
    ],
    "writers": []
   },
   "INTRADAY_FREQS": {
-   "line": 959,
+   "line": 969,
    "kind": "init",
    "value_hint": "{'30m', '5m', '1m'}",
    "target": "ORCH_E",
@@ -1543,7 +1426,7 @@
    "writers": []
   },
   "SUBSECOND_FREQS": {
-   "line": 961,
+   "line": 971,
    "kind": "init",
    "value_hint": "{'15s'}",
    "target": "ORCH_E",
@@ -1554,53 +1437,44 @@
    "writers": []
   },
   "_saved_point_times": {
-   "line": 1092,
+   "line": 1079,
    "kind": "init",
    "value_hint": "app_data.saved_point_times",
    "target": "DATA",
    "note": "✓4 选点表内存态（= app_data._saved_point_times）",
    "readers": [
-    "_cleanup_all_futures_data",
     "_analyze_stock_internal",
-    "_extract_main_level_data",
-    "stock_manual_select_point",
-    "futures_manual_select_point"
+    "_extract_main_level_data"
    ],
    "writers": []
   },
   "_SUB_FREQ_MAP": {
-   "line": 2985,
+   "line": 2172,
    "kind": "init",
    "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m'}",
    "target": "ORCH_E",
    "note": "子级别映射（2 读）",
    "readers": [
-    "_analyze_stock_internal",
-    "compute_red_range_zs"
+    "_analyze_stock_internal"
    ],
    "writers": []
   },
   "_FUTURES_DUAL_FREQ_MAP": {
-   "line": 2988,
+   "line": 2175,
    "kind": "init",
    "value_hint": "{'30m': '5m', '5m': '1m', '1m': '15s'}",
    "target": "ORCH_E",
    "note": "期货双窗口映射",
-   "readers": [
-    "_analyze_futures_internal"
-   ],
+   "readers": [],
    "writers": []
   },
   "_futures_analysis_cache": {
-   "line": 2998,
+   "line": 2185,
    "kind": "init",
    "value_hint": "app_data.futures_analysis_cache",
    "target": "DATA",
    "note": "✓4 期货分析缓存（= app_data._futures_analysis_cache）",
-   "readers": [
-    "_analyze_futures_internal",
-    "compute_red_range_zs"
-   ],
+   "readers": [],
    "writers": []
   }
  },

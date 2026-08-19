@@ -5031,6 +5031,10 @@
                         body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，底分型 0 只（0 / 0 / 0）</div>';
 
                         function finishScan(interrupted) {
+                            // 先清掉进度节流定时器，避免其 500ms 内的最后一次 _doUpdatePanel
+                            // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
+                            if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
+                            _pendingUpdate = false;
                             fetch("/api/scan_end").then(function() {
                                 renderFxDScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                             });
@@ -5186,6 +5190,10 @@
                         body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，命中 0 只</div>';
 
                         function finishScan(interrupted) {
+                            // 先清掉进度节流定时器，避免其 500ms 内的最后一次 _doUpdatePanel
+                            // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
+                            if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
+                            _pendingUpdate = false;
                             fetch("/api/scan_end").then(function() {
                                 renderMaScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                             });
@@ -5336,6 +5344,10 @@
 
                     // 扫描结束统一通知后端打印
                     function finishScan(interrupted) {
+                        // 先清掉进度节流定时器，避免其 500ms 内的最后一次 _doUpdatePanel
+                        // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
+                        if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
+                        _pendingUpdate = false;
                         fetch("/api/scan_end").then(function() {
                             renderScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                         });

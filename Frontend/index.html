@@ -152,19 +152,21 @@
         <div class="annotation-menu-item" id="annotation-menu-mirror" onclick="toggleMirrorMode()">翻转视图</div>
     </div>
     <!-- 文字标注输入对话框 -->
-    <div class="annotation-dialog" id="annotation-dialog">
+    <!-- 点击弹窗之外的区域等价于点击"取消"（与股票扫描弹窗一致：遮罩本身触发取消） -->
+    <div class="annotation-dialog" id="annotation-dialog" onclick="if(event.target===this)annotationDialogCancel()">
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title" id="annotation-dialog-title">添加文字标注</div>
             <div class="annotation-dialog-date" id="annotation-dialog-date"></div>
             <input class="annotation-dialog-input" id="annotation-dialog-input" type="text" placeholder="输入标注文字，如：支撑位、减仓点" maxlength="50" onkeydown="annotationDialogKeydown(event)">
             <div class="annotation-dialog-btns">
-                <button class="annotation-dialog-btn" onclick="annotationDialogCancel()">取消</button>
                 <button class="annotation-dialog-btn primary" onclick="annotationDialogConfirm()">确定</button>
+                <button class="annotation-dialog-btn" onclick="annotationDialogCancel()">取消</button>
             </div>
         </div>
     </div>
     <!-- 股票扫描模式选择对话框 -->
-    <div class="annotation-dialog" id="scan-mode-dialog">
+    <!-- 点击弹窗之外的区域等价于点击"取消"（与盘后下载面板一致：遮罩本身触发取消） -->
+    <div class="annotation-dialog" id="scan-mode-dialog" onclick="if(event.target===this)scanModeDialogCancel()">
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title">股票扫描</div>
             <div id="scan-source-section">

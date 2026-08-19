@@ -91,19 +91,19 @@ TARGET_FUNCS = {
     "_find_left_shoulder_time":   ("ORCH_E", "左肩时间查找（手动选点用）"),
     "_bi_overlap_range":          ("ORCH_E", "笔与中枢区间重叠（纯）"),
     "_calc_zs_confirm_edt_from_bis": ("ORCH_E", "中枢确认时间（纯，4 处调用）"),
-    "_calc_futures_white_hline":  ("ORCH_E", "期货白线（纯）"),
+    "_calc_futures_white_hline":  ("ORCH_E", "期货白线（阶段 8 兼容壳 → App/AppSSE.py）"),
     "_make_chan_config":          ("CFG",    "CChanConfig 构造（纯；算法参数归 ChanConfig.py）"),
 
     # ── 消费侧：核心分析链 ──
     "_analyze_stock_internal":    ("ORCH_E", "股票分析核心（440 行：拉取→注入→CChan→提取）"),
-    "_analyze_futures_internal":  ("ORCH_E", "期货分析核心（483 行：天勤→截断→CChan）"),
+    "_analyze_futures_internal":  ("ORCH_E", "期货分析核心（阶段 8 兼容壳 → App/AppSSE.py）"),
     "_extract_main_level_data":   ("ORCH_E", "主级别结果提取（357 行）"),
     "_extract_sub_level_data":    ("ORCH_E", "子级别结果提取（254 行）"),
-    "_extract_realtime_snapshot": ("ORCH_E", "实时快照提取（SSE 路径；AppOrch 已有壳 extract_realtime_snapshot）"),
+    "_extract_realtime_snapshot": ("ORCH_E", "实时快照提取（阶段 8 兼容壳 → App/AppSSE.py）"),
     "analyze_stock":              ("ORCH_E", "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"),
-    "compute_red_range_zs":       ("ORCH_E", "红框中枢计算（AppOrch 已有壳）"),
-    "stock_manual_select_point":  ("ORCH_E", "股票手动选点（AppOrch 已有壳）"),
-    "futures_manual_select_point": ("ORCH_E", "期货手动选点（AppOrch 已有壳）"),
+    "compute_red_range_zs":       ("ORCH_E", "红框中枢计算（阶段 8 兼容壳 → App/AppChart.py）"),
+    "stock_manual_select_point":  ("ORCH_E", "股票手动选点（阶段 8 兼容壳 → App/AppChart.py）"),
+    "futures_manual_select_point": ("ORCH_E", "期货手动选点（阶段 8 兼容壳 → App/AppSSE.py）"),
 
     # ── 获取侧 ──
     "_fetch_names_from_sina_once":  ("ORCH_F", "新浪批量拉名（纯，HTTP 注入点）"),
@@ -111,8 +111,7 @@ TARGET_FUNCS = {
     "_refresh_pe_ttm":              ("ORCH_F", "PE 刷新（akshare；写缓存文件）"),
     "_fetch_index_belong_from_akshare": ("ORCH_F", "行业归属拉取（写 _index_belong_cache）"),
     "_fetch_float_mc_from_tencent": ("ORCH_F", "腾讯流通市值拉取（纯）"),
-    "_cleanup_all_futures_data":    ("ORCH_F", "期货数据清理（仅 ChartHandler/api 调用）"),
-    "init_chan_symbol":             ("ORCH_F", "TqApi 合约初始化（读 _SSE_DEBUG；仅 SSE/ChartHandler 调用）"),
+    "init_chan_symbol":             ("ORCH_F", "TqApi 合约初始化（阶段 8 兼容壳 → App/AppSSE.py）"),
 
     # ── 扫描 ──
     "_quick_prefilter_pass":        ("ORCH_S", "扫描预筛（读 _stock_names_cache + 流通市值）"),
@@ -211,7 +210,6 @@ TARGET_STATES = {
 
     # SSE 调试旗 → FrontAPI（随 3b SSE 生成器迁移）
     "_SSE_DEBUG": ("FE", "SSE 调试旗（ChartHandler 32 处 / init_chan_symbol 1 处）→ FrontAPI 常量"),
-    "_SSE_DIAG":  ("FE", "SSE 诊断旗（ChartHandler 7 处）→ FrontAPI 常量"),
 
     # 下线（阶段 10.1：my_chan_main.py 已删除，RETIRE 项全部物理移除）
     "SCRIPT_DIR":    ("RETIRE", "ChartHandler 静态服务用（随 do_GET 3a 删除）"),

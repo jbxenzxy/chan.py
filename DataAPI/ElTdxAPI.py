@@ -463,7 +463,11 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
             _download_state["running"] = False
             return
 
-        with TdxClient(timeout=10) as client:
+        # probe_hosts=False：关闭启动服务器探测（探测会写排名缓存
+        # tdx_server_ranking.json，Windows 下文件占用会抛 OSError →
+        # RuntimeWarning，与扫描侧 eltdx 单例修复同根因；连接失败时
+        # eltdx 内部仍会按 hosts 顺序重连，非必需）
+        with TdxClient(timeout=10, probe_hosts=False) as client:
             with _download_lock:
                 _download_state["current_category"] = "获取A股代码列表"
 

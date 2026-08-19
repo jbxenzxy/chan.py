@@ -273,8 +273,9 @@ class Scanner:
 
         锁语义（阶段 2.6 基线继承，本阶段零改动）：引擎调用 analyze_stock
         在全局 _scan_lock（单实例、非按票）内串行执行——保护非线程安全
-        的引擎缓存不被并发写；锁外的预处理/结果过滤仍按 SCAN_CONCURRENCY
-        并发，故扫描吞吐主要依赖非引擎阶段的并行。
+        的引擎缓存不被并发写；锁外的预处理/结果过滤保留并发，故同步旧径
+        扫描吞吐主要依赖非引擎阶段的并行。阶段 7 起前端批量扫描改走
+        ProcessPool（SCAN_ASYNC，worker 数自动适配 CPU），本径仅兼容。
         """
         t_scan_start = time.time()
         try:
@@ -441,9 +442,17 @@ class Scanner:
 
     def end(self):
         """扫描结束"""
+        # 耗时统一计算：控制台明细 + 右下角弹窗共用同一口径
+        elapsed = 0.0
+        if _m._scan_start_time is not None:
+            elapsed = time.time() - _m._scan_start_time
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
+
         if _m._scan_aborted:
             # 用户点击中止后结束：不打印"全部扫描成功"误导日志
-            print("\n[扫描明细] 扫描已中断\n")
+            print(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
         elif _m._scan_skip_log:
             print(f"\n========== 扫描异常/失败股票明细 ==========")
             print(f"共 {len(_m._scan_skip_log)} 只:")
@@ -451,13 +460,9 @@ class Scanner:
                 print(f"  {i}. {item}")
             print("============================================\n")
         else:
-            print("\n[扫描明细] 全部扫描成功，无异常股票\n")
+            print(f"\n[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票\n")
 
         if _m._scan_start_time is not None:
-            elapsed = time.time() - _m._scan_start_time
-            minutes = int(elapsed // 60)
-            seconds = int(elapsed % 60)
-            time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
             skip_count = len(_m._scan_skip_log)
             msg = f"耗时 {time_str}"
             if skip_count > 0:

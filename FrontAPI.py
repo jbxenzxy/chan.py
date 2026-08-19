@@ -79,6 +79,8 @@ from App.AppOrch import AppError  # 领域异常统一在服务层定义（方�
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 # 仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗
 from App import AppEngine as m  # noqa: F401
+# SSE 实时流 / 期货功能域（阶段 8：TqSdkSource 的 SSE 内部实现已迁 App/AppSSE.py）
+from App import AppSSE as _sse  # noqa: F401
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -305,8 +307,8 @@ class TqSdkSource(SSESource):
         self.api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
 
     def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
-        return m.init_chan_symbol(self.api, symbol, name, freq_sec, freq_label,
-                                  start_time=start_time)
+        return _sse.init_chan_symbol(self.api, symbol, name, freq_sec, freq_label,
+                                     start_time=start_time)
 
     def get_kline_serial(self, symbol, freq_sec):
         key = (symbol, freq_sec)
@@ -337,12 +339,12 @@ class TqSdkSource(SSESource):
 
     def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
                          saved_selection_date="", klines=None):
-        return m._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                            saved_selection_date=saved_selection_date,
-                                            klines=klines)
+        return _sse._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
+                                               saved_selection_date=saved_selection_date,
+                                               klines=klines)
 
     def white_hline(self, kl_list, freq):
-        return m._calc_futures_white_hline(kl_list, freq, m._get_date_fmt(freq))
+        return _sse._calc_futures_white_hline(kl_list, freq, m._get_date_fmt(freq))
 
     def mark_gen_exited(self):
         """生成器 finally 置位：本连接已不再使用 api，可安全 close（幂等）"""
@@ -552,11 +554,6 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                     print(f"[警告] 异常: {type(_e).__name__}: {_e}")
                 tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
                 chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
-                if m._SSE_DEBUG:
-                    print(f"[{display_key}] [DIAG] 循环#{loop_count} | "
-                          f"tqsdk klines[-1]={tqsdk_last_dt} | "
-                          f"chan kl_list[-1]={chan_last_dt} | "
-                          f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
 
             # 初始化
             if last_bar_dt_ns is None:
@@ -607,12 +604,6 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                 completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
                 last_bar_dt_ns = dt_ns
                 bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
-                if m._SSE_DEBUG:
-                    print(f"[{display_key}] [DIAG] K线完成(klines推进): "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
-                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
             else:
                 # klines 未推进 → 用壁钟判断当前K线周期是否已结束
                 bar_end_ts = (dt_ns / 1e9) + freq_sec + BAR_COMPLETION_BUFFER
@@ -647,12 +638,6 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                                             ex[i]['macd'] = round(2 * (ex[i]['dif'] - ex[i]['dea']), 4)
                                 cached_snapshot['meta']['generated_at'] = now.strftime('%Y-%m-%d %H:%M:%S')
                                 yield _sse_frame("update", cached_snapshot)
-                                if tick_count == 0:
-                                    if m._SSE_DEBUG:
-                                        print(f"[{display_key}] [DIAG] 首次tick推送: "
-                                              f"tqsdk klines[-1]={now.strftime('%H:%M:%S')} | "
-                                              f"更新最后一根K线OHLC O={o} H={h} L={l} C={c} | "
-                                              f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
                                 t_tick_total += time.time() - t_tick_start
                                 tick_count += 1
                     except Exception as _e:
@@ -661,12 +646,6 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                 # 壁钟到期，当前K线（klines[-1]）已冻结
                 completed_row = last_row
                 bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
-                if m._SSE_DEBUG:
-                    print(f"[{display_key}] [DIAG] K线完成(壁钟): "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
-                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
 
             completed_dt_ns = completed_row.get("datetime")
             if completed_dt_ns is None:
@@ -858,7 +837,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
             klines=None)
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
-        m._futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
+        # （阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py）
+        _sse._futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
 
         # ★ 追加上下窗当前形成中的K线（与单窗口一致），让前端立即看到，且 tick 更新正确的 K 线
         _main_klines_for_init = await run_in_threadpool(src.get_kline_serial, symbol, main_freq_sec)
@@ -928,7 +908,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         sub_last_bar_dt_ns = None
         sub_last_processed_dt_ns = None
         last_debug_print = time.time()
-        _last_diag_print = time.time()  # 双窗口诊断日志节流时间戳
 
         # 性能统计
         t_wait_total = 0.0
@@ -1018,18 +997,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                 completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
                 last_bar_dt_ns = dt_ns
                 bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
-                if m._SSE_DIAG:
-                    print(f"[{display_key}] [DIAG][{window_label}] K线完成(klines推进) "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测={now.strftime('%H:%M:%S.%f')[:-3]} 滞后{now_ts-bar_theoretical_end:+.2f}s "
-                          f"klines行数={len(klines)}")
-                if m._SSE_DEBUG:
-                    print(f"[{display_key}] [DIAG] K线完成(klines推进) [{window_label}] "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
-                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
             else:
                 bar_end_ts = (dt_ns / 1e9) + freq_sec + BAR_COMPLETION_BUFFER
                 if now_ts < bar_end_ts:
@@ -1063,28 +1030,11 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                 # 壁钟到期
                 completed_row = last_row
                 bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
-                if m._SSE_DIAG:
-                    print(f"[{display_key}] [DIAG][{window_label}] K线完成(壁钟) "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测={now.strftime('%H:%M:%S.%f')[:-3]} 滞后{now_ts-bar_theoretical_end:+.2f}s "
-                          f"klines行数={len(klines)} dt_ns={dt_ns} last_bar={last_bar_dt_ns}")
-                if m._SSE_DEBUG:
-                    print(f"[{display_key}] [DIAG] K线完成(壁钟) [{window_label}]: "
-                          f"bar={datetime.fromtimestamp(completed_row.get('datetime', 0)/1e9).strftime('%H:%M:%S')} "
-                          f"理论结束={datetime.fromtimestamp(bar_theoretical_end).strftime('%H:%M:%S')} "
-                          f"检测时间={now.strftime('%H:%M:%S.%f')[:-3]} "
-                          f"滞后={now_ts - bar_theoretical_end:+.2f}s")
 
             completed_dt_ns = completed_row.get("datetime")
             if completed_dt_ns is None:
                 return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
             if completed_dt_ns == last_processed_dt_ns:
-                if m._SSE_DIAG:
-                    print(f"[{display_key}] [DIAG][{window_label}] 防重拦截: "
-                          f"completed={datetime.fromtimestamp(completed_dt_ns/1e9).strftime('%H:%M:%S')} "
-                          f"== last_processed={datetime.fromtimestamp(last_processed_dt_ns/1e9).strftime('%H:%M:%S')} "
-                          f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]} 快照lastK未更新")
                 return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
             last_processed_dt_ns = completed_dt_ns
 
@@ -1119,9 +1069,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                 t_step = time.time() - t_step_start
                 t_step_total += t_step; step_count += 1
                 updated = True
-                if m._SSE_DIAG:
-                    print(f"[{display_key}] [DIAG][{window_label}] step_load耗时={t_step:.3f}s "
-                          f"bar={dt.strftime('%Y-%m-%d %H:%M:%S')}")
                 if m._SSE_DEBUG:
                     print(f"[{display_key}] 完成新K线[{source_tag}] [{window_label}]: "
                           f"{dt.strftime('%Y-%m-%d %H:%M:%S')} "
@@ -1135,7 +1082,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                     src.extract_snapshot, chan, kl_type, symbol, name, freq_label,
                     saved_selection_date)
                 if is_main:
-                    m._futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
+                    # 阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py
+                    _sse._futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(m._get_date_fmt(freq_label))
                 _ex = snapshot.get('klines', [])
@@ -1150,12 +1098,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                     _kl_list = chan[kl_type]
                     snapshot['white_hline'] = await run_in_threadpool(src.white_hline, _kl_list, main_freq)
                 cached_snapshot = snapshot
-                if m._SSE_DIAG:
-                    _exk = cached_snapshot.get('klines', [])
-                    _lastd = _exk[-1]['date'] if _exk else "无"
-                    print(f"[{display_key}] [DIAG][{window_label}] updated分支完成: "
-                          f"completed={dt.strftime('%H:%M:%S')} 追加预览bar={_next_ds} "
-                          f"快照lastK.date={_lastd} kline_count={cached_snapshot.get('meta',{}).get('kline_count')}")
 
             return updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
 
@@ -1197,52 +1139,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                                           is_main=True, window_label="上窗")
             _t_main = time.time() - _t_main0
 
-            if m._SSE_DIAG and now_ts - _last_diag_print >= 2.0:
-                _last_diag_print = now_ts
-                # 诊断：复现前端"00:00+灰色"判定——快照klines[-1]是否已过期(理论结束时刻<现在)
-                def _diag_lastk_lag(snap, label, freq_sec):
-                    try:
-                        if not snap or not snap.get('klines'):
-                            return
-                        lastK = snap['klines'][-1]
-                        dstr = lastK.get('date', '')
-                        if not dstr:
-                            return
-                        for fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
-                            try:
-                                kstart = datetime.strptime(dstr, fmt).timestamp()
-                                break
-                            except ValueError:
-                                continue
-                        else:
-                            return
-                        kend = kstart + freq_sec
-                        lag = now_ts - kend
-                        flag = "<== 已过期(前端将显示00:00+灰色)" if lag > 0 else ""
-                        print(f"[{display_key}] [DIAG][{label}] lastK={dstr} 剩余{(-lag):.1f}s "
-                              f"过期({lag:+.1f}s) {flag}")
-                    except Exception as _e:
-                        print(f"[{display_key}] [DIAG][{label}] 解析异常: {_e}")
-                print(f"[{display_key}] [DIAG] 单轮耗时: 下窗={_t_sub:.3f}s 上窗={_t_main:.3f}s 总={_t_sub+_t_main:.3f}s")
-                _diag_lastk_lag(sub_cached_snapshot, "下窗", sub_freq_sec)
-                _diag_lastk_lag(main_cached_snapshot, "上窗", main_freq_sec)
-                # 诊断：天勤 klines[-1] 相对 last_bar_dt_ns 是否推进（推进=True 才会触发K线完成updated）
-                try:
-                    for _kl, _lbd, _lab in ((sub_klines, sub_last_bar_dt_ns, "下窗"),
-                                            (main_klines, main_last_bar_dt_ns, "上窗")):
-                        if len(_kl) == 0:
-                            continue
-                        _ldt = _kl.iloc[-1].get("datetime")
-                        if _ldt is None:
-                            continue
-                        _ldt_s = datetime.fromtimestamp(_ldt/1e9).strftime('%H:%M:%S')
-                        _lbd_s = datetime.fromtimestamp(_lbd/1e9).strftime('%H:%M:%S') if _lbd else "None"
-                        _pushed = (_ldt != _lbd)
-                        print(f"[{display_key}] [DIAG][{_lab}] tqsdk klines[-1]={_ldt_s} "
-                              f"last_bar_dt_ns={_lbd_s} 推进={_pushed}")
-                except Exception as _e:
-                    print(f"[{display_key}] [DIAG] klines推进解析异常: {_e}")
-
             # 推送：tick模式或K线完成模式
             if main_need_tick or sub_need_tick:
                 # tick推送：统一发送双窗口数据
@@ -1251,10 +1147,6 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                 yield _sse_frame("update", tick_data)
                 t_tick_total += time.time() - t_tick_start
                 tick_count += 1
-                if tick_count == 1:
-                    if m._SSE_DEBUG:
-                        print(f"[{display_key}] [DIAG] 首次tick推送: "
-                              f"壁钟={now.strftime('%H:%M:%S.%f')[:-3]}")
 
             if main_updated or sub_updated:
                 t_snap_start = time.time()

@@ -1,20 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-App/AppChart.py —— 代码加载 / 图表功能域
+App/AppChart.py —— 图表交互功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：页面左上角输入股票或期货代码、切换
-周期、点击双窗口按钮、选择复盘日期等触发的一系列动作。
+按业务能力拆分（阶段 8 重设计）：本文件收纳「图表交互」触发的全部动作。
+所谓图表交互，指用户在页面上与图表发生的一切操作：
+
+  - 左上角输入股票/期货代码、切换周期、点击双窗口按钮、选择复盘日期
+    → 触发缠论引擎核心去工作（call_analysis / run_analysis / analyze_stock）
+  - 图表上手动选点（stock_manual_select_point：左肩定位 → 从 T 重拉 →
+    新 CChan → 完整 chartData）
+  - 图表上框选红框中枢（compute_red_range_zs：红框内笔序列 → 中枢重算）
+  - 搜索（search_stocks）、代码解析（get_stock_market_code 等）
+  - 选点 / 上次查看 / 期货子窗缓存漏斗
+  - 期货元数据漏斗（futures_cleanup / get_futures_aliases / futures_config
+    等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
 
 本模块收纳：
   - 分析漏斗（call_analysis / run_analysis / analyze_stock 等，持 _ENGINE_LOCK）
-  - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始入口）
+  - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
   - 数据拉取与注入（fetch_and_inject / _get_data_source）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
-  - 期货元数据（futures_cleanup / get_futures_aliases / futures_config 等）
+  - 期货元数据漏斗（futures_cleanup / get_futures_aliases / futures_config 等，
+    实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
   - 代码解析（get_stock_market_code / get_market_code / get_stock_name）
 
-依赖方向：AppChart.py → AppEngine / AppData / DataAPI（单向）
+依赖方向：AppChart.py → AppEngine / AppSSE / AppData / DataAPI（单向）
 锁定义：_ENGINE_LOCK 为引擎调用全局串行锁，本模块 call_* 漏斗持锁；
 LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
 """
@@ -26,6 +37,10 @@ import traceback
 
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 from App import AppEngine as _m
+# SSE 实时流 / 期货功能域（阶段 8：期货选点/清理/元数据实现已迁 AppSSE，此处仅漏斗）
+from App import AppSSE as _sse
+# 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
+from BuySellPoint.BSPointList import _red_range_bi_sequence, _red_range_amp
 
 
 # 引擎调用全局串行锁（锁分类 SERIAL 共用；LOCK_POLICY 登记见 AppOrch.py）
@@ -132,17 +147,84 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
     ⚠ 与 analyze_stock 同理并非无状态：内部走 analyze_stock 引擎链路与
     共享缓存。REST 调用方必须走 call_manual_select_point（持锁漏斗）；
     本签名保留供已按 SELF_CONTAINED 分类并自带会话隔离的路径使用。
+
+    流程：通过前端传来的笔索引找到分型左肩第一根原始K线时间T → 保存T到
+    CSV → 销毁旧CChan及_stocks_analysis_cache 中间状态 → 从T重新加载K线
+    创建全新CChan，返回完整 chartData。
     """
-    return _m.stock_manual_select_point(code, freq=freq, bi_idx=bi_idx)
+    import re
+    import gc
+    # 标准化代码
+    normalized_code = code.strip().upper()
+    market = None
+    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
+    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
+    if prefix_match:
+        market = prefix_match.group(1).lower()
+        normalized_code = prefix_match.group(2)
+    elif suffix_match:
+        normalized_code = suffix_match.group(1)
+        market = suffix_match.group(2).lower()
+    date_suffix = "live"
+    cache_key = f"single_{market}_{normalized_code}_{freq}_{date_suffix}"
+    qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
+    cached = _m._cache_get(cache_key)
+    if cached is None:
+        return {"error": "请先查询该股票"}
+
+    if "chan" not in cached:
+        # 扫描缓存只有result没有chan，重新分析以获取完整数据
+        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
+        analyze_stock(normalized_code, freq=freq, cache_chan=True)
+        cached = _m._cache_get(cache_key)
+        if cached is None or "chan" not in cached:
+            return {"error": "缓存中无分析数据，请重新查询"}
+
+    chan = cached["chan"]
+    kl_list = chan[_m._get_kl_type(freq)]
+    bi_list = kl_list.bi_list
+
+    target_bi_idx = int(bi_idx)
+    if target_bi_idx < 0 or target_bi_idx >= len(bi_list):
+        return {"error": f"笔索引 {bi_idx} 越界，笔总数 {len(bi_list)}"}
+
+    # 检查：选点之后至少需要4笔才能构建中枢（三笔重叠+确认判断）
+    remaining_bis = len(bi_list) - target_bi_idx - 1
+    if remaining_bis < 4:
+        return {"error": f"选点之后仅剩 {remaining_bis} 笔，至少需要4笔才能构建中枢，请重新选点"}
+
+    # Step 1: 找到左肩原始K线时间T
+    start_time = _m._find_left_shoulder_time(kl_list, bi_list, target_bi_idx, freq)
+    if start_time is None:
+        return {"error": "无法定位左肩K线时间，请重试"}
+
+    # Step 2: 保存选点到CSV（保存的是左肩第一根原始K线的时间T）
+    stock_name = cached.get("result", {}).get("meta", {}).get("name", "")
+    _m._save_point_time(qualified_code, stock_name, freq, start_time)
+    if qualified_code not in _m._saved_point_times:
+        _m._saved_point_times[qualified_code] = {}
+    _m._saved_point_times[qualified_code]["name"] = stock_name
+    _m._saved_point_times[qualified_code][_m.FREQ_TO_COL.get(freq, "")] = start_time
+
+    # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
+    if cache_key in _m._stocks_analysis_cache:
+        with _m._cache_lock:
+            if cache_key in _m._stocks_analysis_cache:
+                del _m._stocks_analysis_cache[cache_key]
+    gc.collect()
+
+    # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
+    result = _m._analyze_stock_internal(f"{normalized_code}.{market.upper()}", freq=freq, start_time=start_time)
+    return result
 
 
 def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     """期货手动选点 · RAW（无锁原始入口）
 
     ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
-    call_futures_manual_select_point（持锁漏斗）。
+    call_futures_manual_select_point（持锁漏斗）。实现已迁 App/AppSSE.py。
     """
-    return _m.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+    return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
 
 def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
@@ -150,16 +232,106 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
     ⚠ 内部复用 analyze_stock 引擎与共享缓存。REST 调用方必须走
     call_compute_red_range_zs（持锁漏斗）。
+
+    双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
+    后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再
+    用 _red_range_amp 重新计算中枢，返回给前端绘制。
     """
-    return _m.compute_red_range_zs(code, sub_freq=sub_freq,
-                                   left_date=left_date, right_date=right_date,
-                                   end_date=end_date)
+    import re
+    normalized_code = code.strip().upper()
+
+    # ── 期货双窗口 ──
+    if normalized_code.startswith("KQ."):
+        cache_key = f"{normalized_code}:{sub_freq}"
+        cached = _m._futures_analysis_cache.get(cache_key)
+        if cached is None:
+            return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
+        chan = cached
+        kl_list = chan[_m._get_kl_type(sub_freq)]
+        bi_list = kl_list.bi_list
+        date_fmt = _m._get_date_fmt(sub_freq)
+        start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
+        if start_bi is None:
+            return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
+        sliced_bis = bi_list[start_bi:end_bi + 1]
+        zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
+        return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
+
+    # ── 股票双窗口 ──
+    market = None
+    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
+    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
+    if prefix_match:
+        market = prefix_match.group(1).lower()
+        normalized_code = prefix_match.group(2)
+    elif suffix_match:
+        normalized_code = suffix_match.group(1)
+        market = suffix_match.group(2).lower()
+
+    if not market:
+        return {"error": f"无法识别股票代码: {code}"}
+
+    date_suffix = end_date if end_date else "live"
+    cache_key = f"single_{market}_{normalized_code}_{sub_freq}_{date_suffix}"
+    cached = _m._cache_get(cache_key)
+
+    # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
+    # dual_sub 缓存只存 result/records，不存 chan；真正可用于重算中枢的 CChan 在 dual_main 缓存里。
+    if (cached is None or "chan" not in cached) and sub_freq in _m._SUB_FREQ_MAP.values():
+        for main_freq, _sub in _m._SUB_FREQ_MAP.items():
+            if _sub == sub_freq:
+                dual_main_cache_key = f"dual_main_{market}_{normalized_code}_{main_freq}_{date_suffix}"
+                main_cached = _m._cache_get(dual_main_cache_key)
+                if main_cached and "chan" in main_cached:
+                    main_chan = main_cached["chan"]
+                    try:
+                        _ = main_chan[_m._get_kl_type(sub_freq)]
+                        cached = {"chan": main_chan}
+                        break
+                    except Exception as e:
+                        print(f"[警告] 异常: {type(e).__name__}: {e}")
+                if cached is None or "chan" not in cached:
+                    single_main_cache_key = f"single_{market}_{normalized_code}_{main_freq}_{date_suffix}"
+                    main_cached = _m._cache_get(single_main_cache_key)
+                    if main_cached and "chan" in main_cached:
+                        main_chan = main_cached["chan"]
+                        try:
+                            _ = main_chan[_m._get_kl_type(sub_freq)]
+                            cached = {"chan": main_chan}
+                            print(f"[信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
+                            break
+                        except Exception as e:
+                            print(f"[警告] 异常: {type(e).__name__}: {e}")
+
+    if cached is None:
+        return {"error": "请先在该周期下加载K线数据"}
+    if "chan" not in cached:
+        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
+        analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
+        cached = _m._cache_get(cache_key)
+        if cached is None or "chan" not in cached:
+            return {"error": "缓存中无分析数据，请重新查询"}
+
+    chan = cached["chan"]
+    kl_list = chan[_m._get_kl_type(sub_freq)]
+    bi_list = kl_list.bi_list
+
+    date_fmt = _m._get_date_fmt(sub_freq)
+
+    # ── 步骤③：后端找被红框完全覆盖的笔 ──
+    start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
+    if start_bi is None:
+        return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
+
+    sliced_bis = bi_list[start_bi:end_bi + 1]
+    zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
+    return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
 
 def extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
-    """从实时行情快照中提取分析所需字段（供 SSE 路径使用）"""
-    return _m._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                         saved_selection_date, lightweight, klines)
+    """从实时行情快照中提取分析所需字段（供 SSE 路径使用；实现迁 AppSSE）"""
+    return _sse.extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
+                                          saved_selection_date, lightweight, klines)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -390,8 +562,8 @@ def get_saved_point(code, freq):
 # ═══════════════════════════════════════════════════════════════════════
 
 def futures_cleanup():
-    """清理所有期货数据"""
-    return _m._cleanup_all_futures_data()
+    """清理所有期货数据（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    return _sse._cleanup_all_futures_data()
 
 
 def get_futures_aliases():
@@ -401,15 +573,13 @@ def get_futures_aliases():
 
 
 def get_futures_name(full_code):
-    """期货名称"""
-    if _m._get_futures_name:
-        return _m._get_futures_name(full_code)
-    return full_code
+    """期货名称（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    return _sse.get_futures_name(full_code)
 
 
 def tq_available():
-    """天勤数据源是否可用"""
-    return _m.TQ_AVAILABLE
+    """天勤数据源是否可用（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    return _sse.tq_available()
 
 
 def futures_config():

@@ -107,11 +107,17 @@ def _get_pool():
 
 
 def _resolve_workers(app_config):
-    """worker 数解析：scan_pool_workers > 0 用之；否则回退 scan_concurrency；
-    仍 <=0 时按 CPU 核数自动（至少 1）。钳制上限 [1, 16]（W10 修复）。"""
+    """worker 数解析：scan_pool_workers > 0 用之；否则按 CPU 核数自动适配
+    （os.cpu_count()，至少 1）。钳制上限 [1, 16]（W10 修复：防高核数机器
+    内存线性放大 OOM）。
+
+    根因修复（阶段 8 后续）：此前回退链含 scan_concurrency（阶段 7 前
+    「前端并发提示」遗留字段，默认 1），被错误复用作 worker 数回退目标，
+    导致默认配置下 worker 恒为 1、CPU 自动适配永远走不到——进程池退化为
+    单核，与 v1.0 的 _scan_lock 全局串行等价。现移除该参与，默认即自动
+    适配当前机器核数，换电脑无需改配置。
+    """
     workers = getattr(app_config, "scan_pool_workers", 0) or 0
-    if workers <= 0:
-        workers = getattr(app_config, "scan_concurrency", 0) or 0
     if workers <= 0:
         workers = os.cpu_count() or 2
     return max(1, min(_SCAN_POOL_MAX_WORKERS, workers))
@@ -234,6 +240,9 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
 
     pool, engine = _get_pool()
     workers = _resolve_workers(_get_config())
+    # 启动扫描前打印实际执行核数（worker 数 = 并行执行的进程数；先显示 CPU 核数，执行核数基于它）
+    print(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
+          f"执行核数={workers} | 引擎={engine}", flush=True)
     futures = []
     for seq, stk in enumerate(valid):
         code = stk.get("code", "")

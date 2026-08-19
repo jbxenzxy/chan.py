@@ -678,6 +678,35 @@ _xdxr_lock = _threading.Lock()
 # ============================================================
 # eltdx 除权除息（优先，基于 7709 协议 0x000f 命令）
 # ============================================================
+# eltdx TdxClient 单例复用（与 mootdx 单例对称）：每次新建 TdxClient 都会
+# 重新解析 hosts 并可能触发服务器探测（probe_hosts），探测后写排名缓存
+# （persist=True）在 Windows 下常因文件被占用抛 OSError → RuntimeWarning
+# （"unable to persist eltdx server ranking"）。扫描每票都走 xdxr，若每次
+# 新建会反复触发该警告。改为模块级单例 + probe_hosts=False：
+#   - 单例：连接复用，避免重复探测/重复解析 hosts；
+#   - probe_hosts=False：关闭启动探测（探测仅用于选最快服务器，非必需；
+#     连接失败时 eltdx 内部仍会按 hosts 顺序重连），从根上消除该警告。
+_eltdx_client = None
+_eltdx_client_ready = False
+
+def _ensure_eltdx_client():
+    """确保 eltdx TdxClient 单例已创建，返回 client 或 None。线程安全。"""
+    global _eltdx_client, _eltdx_client_ready
+    if _eltdx_client_ready and _eltdx_client is not None:
+        return _eltdx_client
+    try:
+        from eltdx import TdxClient
+        # probe_hosts=False：关闭启动服务器探测（探测会写排名缓存，
+        # Windows 下文件占用会抛 OSError → RuntimeWarning，且非必需）
+        _eltdx_client = TdxClient(timeout=10, probe_hosts=False)
+        _eltdx_client_ready = True
+        return _eltdx_client
+    except Exception:
+        _eltdx_client_ready = False
+        _eltdx_client = None
+        return None
+
+
 def _get_xdxr_eltdx(market, code):
     """通过 eltdx 获取除权除息数据。在锁内调用。
     返回与 _normalize_xdxr_df 兼容的 DataFrame，失败返回 None。
@@ -685,9 +714,11 @@ def _get_xdxr_eltdx(market, code):
     与 mootdx 返回的字段完全等价（同为 7709 协议 0x000f 命令）。
     """
     try:
-        from eltdx import TdxClient
+        client = _ensure_eltdx_client()
+        if client is None:
+            return None
         market_code = f"{market.lower()}{code}"
-        with TdxClient(timeout=10) as client:
+        with client:
             records = client.get_xdxr(market_code)
         if not records:
             return None

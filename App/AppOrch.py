@@ -5,7 +5,8 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 阶段 8 重设计：按业务能力拆分后，本文件降级为聚合入口（re-export）。
 
 拆分后各功能文件（App + 动词命名，与 AppConfig/AppData/AppEngine 平铺）：
-  - AppChart.py      代码加载 / 图表（左上角输入代码、切换周期、双窗口、复盘）
+  - AppChart.py      图表交互（左上角输入代码、切换周期、双窗口、复盘、手动选点、红框中枢）
+  - AppSSE.py        SSE 实时流（期货实时行情推送 / 期货静态分析 / 期货选点 / 期货元数据）
   - AppScan.py       股票扫描（右上角「股票扫描」按钮）
   - AppDownload.py   盘后下载（右上角「盘后下载」按钮）
   - AppRefresh.py    刷新（右上角「刷新」按钮：股票名/指数归属/PE-TTM/板块）
