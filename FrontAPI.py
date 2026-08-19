@@ -1303,23 +1303,6 @@ async def api_scan_stock_list(source: str = Query("zxg")):
     return _json_response(result)
 
 
-@router.get("/api/scan_one")
-async def api_scan_one(
-    code: str = Query(...),
-    freq: str = Query("d"),
-    prefix: str = Query(""),
-    recent: str = Query("1"),
-    source: str = Query("zxg"),
-    mode: str = Query(""),
-):
-    """扫描单只股票（orch.Scanner.scan_one · SCAN 保留并发）"""
-    if not code:
-        return _json_response({"error": "缺少code参数"}, 400)
-    result = await run_in_threadpool(orch.scanner.scan_one, code, freq, prefix,
-                                     recent, source, mode)
-    return _json_response(result)
-
-
 @router.get("/api/scan_page_index_code")
 async def api_scan_page_index_code(code: str = Query("")):
     """设置当前板块指数代码"""
@@ -1358,9 +1341,10 @@ async def api_scan_abort():
 
 
 # ── 路由 — 阶段 7：批量扫描异步化（ProcessPool 先行）──────────────────
-# 双路径（设计 5.4/5.5）：交互单票仍走 /api/scan_one（线程池），批量走
-# ProcessPool；任务提交返回 task_id，前端轮询 /api/scan/status 获取进度
-# 与结果（设计 5.10：扫描结果经 SQLite AppScanStore 跨进程共享）。
+# 双路径（设计 5.4/5.5）：交互单票原 /api/scan_one（旧版页面 chan_chart.html
+# 使用）已随旧版页面下线，批量扫描统一走 ProcessPool；任务提交返回 task_id，
+# 前端轮询 /api/scan/status 获取进度与结果（设计 5.10：扫描结果经 SQLite
+# AppScanStore 跨进程共享）。
 # RESTful 分层路由（评审「优势 1」采纳）：/api/scan/submit · /api/scan/status
 # · /api/scan/cancel；请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动
 # 生成字段 schema 与默认值。

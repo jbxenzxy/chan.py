@@ -60,7 +60,6 @@ EXPECTED_ROUTES = {
     ("GET", "/api/scan/cancel"),
     ("GET", "/api/scan_clear_cache"),
     ("GET", "/api/scan_end"),
-    ("GET", "/api/scan_one"),
     ("GET", "/api/scan_page_index_code"),
     ("GET", "/api/scan_start"),
     ("GET", "/api/scan/status"),

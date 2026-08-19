@@ -246,7 +246,6 @@ TARGET_ROUTES = {
     "api_search": ("FE", "✓3a → FrontAPI + AppOrch.search_stocks"),
     "api_zxg_list": ("FE", "✓3a → FrontAPI + AppData.read_zxg_stocks"),
     "api_scan_stock_list": ("FE", "✓3a → FrontAPI + AppOrch 扫描"),
-    "api_scan_one": ("FE", "✓3a → FrontAPI + AppOrch 扫描（SCAN 并发保留；原 L472 直连 analyze_stock 改走漏斗分类）"),
     "api_scan_page_index_code": ("FE", "✓3a → FrontAPI + AppOrch 扫描"),
     "api_scan_start": ("FE", "✓3a → FrontAPI + ScannerService"),
     "api_scan_end": ("FE", "✓3a → FrontAPI + ScannerService"),
