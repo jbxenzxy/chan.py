@@ -303,8 +303,7 @@ def test_tombstone(failures):
 # ⑤ SSE 双实现（3b-1 灰度开关）
 # ═══════════════════════════════════════════════════════════════════════
 def test_sse_dual_impl(failures):
-    """/api/futures_stream 仅保留 native 原生实现 + 数据源抽象（3b-2 已拆除 legacy）。"""
-    import asyncio
+    """/api/futures_stream 仅保留方案A 同步生成器 + 数据源抽象（3b-2 已拆除 legacy）。"""
     import FrontAPI
     from App import AppOrch as orch
 
@@ -335,21 +334,21 @@ def test_sse_dual_impl(failures):
         if "impl" in sig.parameters:
             bad.append("/api/futures_stream 仍含 impl 参数（3b-2 无 legacy 路径）")
 
-    # native 生成本身可创建（异步生成器对象可实例化，不消费即关闭）
+    # 同步生成器可创建（方案A：同步生成器对象可实例化，不消费即关闭）
     try:
         gen = FrontAPI.sse_futures_stream_single(
             "KQ.m@SHFE.rb", freq="15s", source=FrontAPI.SSESource())
         import types
-        if not isinstance(gen, types.AsyncGeneratorType):
-            bad.append(f"native 单窗口非异步生成器: {type(gen).__name__}")
-        asyncio.run(gen.aclose())
+        if not isinstance(gen, types.GeneratorType):
+            bad.append(f"方案A 单窗口非同步生成器: {type(gen).__name__}")
+        gen.close()
         gen2 = FrontAPI.sse_futures_stream_dual(
             "KQ.m@SHFE.rb", "1m", "15s", source=FrontAPI.SSESource())
-        if not isinstance(gen2, types.AsyncGeneratorType):
-            bad.append(f"native 双窗口非异步生成器: {type(gen2).__name__}")
-        asyncio.run(gen2.aclose())
+        if not isinstance(gen2, types.GeneratorType):
+            bad.append(f"方案A 双窗口非同步生成器: {type(gen2).__name__}")
+        gen2.close()
     except Exception as e:
-        bad.append(f"native 生成器实例化失败: {type(e).__name__}: {e}")
+        bad.append(f"方案A 生成器实例化失败: {type(e).__name__}: {e}")
 
     if bad:
         failures.extend(bad)

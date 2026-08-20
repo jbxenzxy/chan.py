@@ -21,7 +21,6 @@
 运行：python Test/test_sse_gray.py [--update]
 """
 import argparse
-import asyncio
 import io
 import json
 import os
@@ -216,10 +215,10 @@ class MockSource(SSESource):
 # ═══════════════════════════════════════════════════════════════════════
 # 采集与断言
 # ═══════════════════════════════════════════════════════════════════════
-async def _collect(agen):
+def _collect(gen):
     frames = []
     try:
-        async for frame in agen:
+        for frame in gen:
             frames.append(frame)
     finally:
         pass
@@ -268,7 +267,7 @@ def _strip_volatile(obj):
 
 
 def run_case(kind):
-    """驱动 native 生成器，返回 (frames, source.calls)"""
+    """驱动同步生成器，返回 (frames, source.calls)"""
     src = MockSource()
     if kind == "single":
         gen = FrontAPI.sse_futures_stream_single(
@@ -276,7 +275,7 @@ def run_case(kind):
     else:
         gen = FrontAPI.sse_futures_stream_dual(
             SYMBOL, "1m", "15s", start_time=None, source=src)
-    frames = asyncio.run(_collect(gen))
+    frames = _collect(gen)
     return frames, src
 
 

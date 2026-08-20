@@ -2,7 +2,7 @@
 """
 FrontAPI.py —— FastAPI 统一入口 · 面向前端 · REST + SSE（阶段 3 落地）
 =========================================================================
-V10 方案 8.6（3a REST 路由迁移 / 3b SSE 原生异步生成器）：
+V10 方案 8.6（3a REST 路由迁移 / 3b SSE 同步生成器·方案A）：
 
   3a · REST 路由迁移：
     - 30 条 REST 路由收敛到本文件（单一路由源），路由保持薄：
@@ -14,25 +14,24 @@ V10 方案 8.6（3a REST 路由迁移 / 3b SSE 原生异步生成器）：
     - api_server.py 兼容壳已于 3b-2 后删除（原 uvicorn api_server:app
       部署脚本改用 uvicorn FrontAPI:app）。
 
-  3b · SSE 原生异步生成器（3b-1 上线 + 灰度 + 3b-2 拆除旧路径）：
+  3b · SSE 同步生成器（方案A：每连接一条常驻线程）：
     - ChartHandler._handle_sse_stream_dual/single（write() 式，约 1042 行）
-      忠实移植为原生异步生成器 sse_futures_stream_dual/single；
+      忠实移植为同步生成器 sse_futures_stream_dual/single；
     - 数据源抽象 SSESource：生产 TqSdkSource（每连接独立 TqApi+CChan，
       SELF_CONTAINED 锁分类，不加引擎锁）/ 灰度测试注入 MockSource
       （Test/test_sse_gray.py 驱动确定性比对）；
-    - 3b-1 双实现并存（impl=legacy|native）灰度 7 天比对无差异后，
-      3b-2 已拆除 ChartHandler SSE 方法与 Mock 桥接层，本文件仅保留
-      native 路径（/api/futures_stream 无 impl 参数）。
+    - 方案A：/api/futures_stream 返回同步生成器，Starlette 在线程池中
+      迭代（iterate_in_threadpool），阻塞调用天然发生在线程内，不占
+      事件循环；每连接 = 1 条常驻线程（与遗留实现「每连接一线程」
+      语义等价，且代码更简单——无 run_in_threadpool 语法纠缠）。
 
   忠实移植口径（3b-1 与遗留实现的事件协议逐项一致）：
     - 事件名/载荷构造/错误事件：init（含失败载荷）→ update（tick 路径与
       K线完成路径）→ 心跳注释帧 ": heartbeat"，首事件类型与序列不变；
     - 阻塞引擎调用（wait_update/init_chan_symbol/step_load/快照提取）
-      经 run_in_threadpool 执行，事件循环不再被单连接独占（遗留实现
-      每连接占一线程，语义等价）；
-    - 客户端断开：遗留靠 heartbeat 写失败（BrokenPipe）退出；原生靠
-      生成器取消（GeneratorExit/CancelledError）触发 finally 清理，
-      清理动作（关 TqApi、弹 records/期货缓存）逐项一致。
+      为同步阻塞调用，直接写在线程内，事件循环不被单连接独占；
+    - 客户端断开：同步生成器在迭代线程中自然退出（BrokenPipe 写失败
+      或生成器被 GC），finally 触发清理（关 TqApi、弹 records/期货缓存）。
 
 锁分类（AppOrch.LOCK_POLICY，阶段 2 遗留问题的解法）：
     SERIAL         串行分析（call_* 漏斗持 _ENGINE_LOCK）
@@ -47,7 +46,6 @@ import sys
 import os
 import json
 import time
-import asyncio
 import threading
 import traceback
 from contextlib import asynccontextmanager
@@ -93,8 +91,9 @@ async def lifespan(app):
 
     未回收时 Ctrl+C 会让 worker 进程在 call_queue.get() 阻塞处收到
     KeyboardInterrupt 并打印 traceback（实测 SpawnProcess-1）。
-    TqSdkSource 同理：服务器退出时事件循环即将关闭，async 生成器 finally
-    不可靠（实测），必须在此显式 _close_all_sources() 关闭所有 TqApi，
+    TqSdkSource 同理：服务器退出时事件循环即将关闭，必须在此显式
+    _close_all_sources() 关闭所有 TqApi（方案A 同步生成器 finally 虽可靠，
+    但服务器退出时生成器可能仍在 wait_update 阻塞，主动回收更确定），
     否则进程退出时 TqApi 内部挂起任务被销毁，触发
     「Task was destroyed but it is pending!」级联。
     """
@@ -105,7 +104,8 @@ async def lifespan(app):
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
     try:
-        # run_in_threadpool：close() 内 _wait_done.wait 上限 5s，不能阻塞事件循环
+        # run_in_threadpool：_close_all_sources 等待各生成器线程完成
+        # api.close()（最迟 0.1s），不能阻塞事件循环
         await run_in_threadpool(_close_all_sources)
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
@@ -176,7 +176,7 @@ def _json_response(data, status_code: int = 200):
 # SSE · 数据源抽象（3b-1 灰度注入点，设计 8.6-3b）
 # 3b-2 已拆除：Legacy 桥接层（_SSEMockWfile/_SSEMockHandler/_sse_generator）
 # 与 ChartHandler 旧 SSE 方法（_handle_sse_stream_dual/single）一并下线，
-# /api/futures_stream 仅保留 native 原生异步生成器路径。
+# /api/futures_stream 仅保留方案A 同步生成器路径。
 # ═══════════════════════════════════════════════════════════════════════
 
 class SSESourceClosed(Exception):
@@ -187,20 +187,30 @@ class SSESourceClosed(Exception):
 
 
 # ── TqSdkSource 活跃注册表（应用级 TqApi 生命周期管理，根因修复）──────
-# Python 异步模型下，async 生成器的 finally 不是可靠的清理路径（实测）：
-#   · 任务取消（客户端断开）时 async for 异常退出不会 aclose 生成器，
-#     finally 不执行 → TqApi 泄漏；
-#   · 服务器关闭后事件循环已关，生成器 GC 时 finally 内 await 直接失败
-#     （finally 不打印，src.close() 永不执行）→ 进程退出时 TqApi 内部
-#     挂起任务被销毁，触发「Task was destroyed but it is pending!」级联。
-# 因此 TqApi 回收由注册表统一负责：/api/futures_cleanup（期指切股票）与
-# lifespan 关闭钩子（服务器退出）调用 _close_all_sources() 幂等回收。
+# 天勤约束：TqApi.close() 必须在 wait_update 返回后、由 wait_update 的
+# 调用线程调用（close() 检查 _loop.is_running()，运行中则抛
+# 「不能在协程中调用 close」）。因此 api.close() 永远只在生成器线程
+# （wait_update 调用者）的 finally 中执行：
+#   · 客户端断开 → gen.close() → GeneratorExit → finally（close → close_api
+#     → cleanup_records）可靠执行，close_api 内 api.close() 串行安全；
+#   · 外部主动回收（futures_cleanup / lifespan）只设置 _closed 旗，生成器
+#     下一次 wait_update 抛 SSESourceClosed 干净退出，finally 中由生成器
+#     线程完成 api.close()。
+# 注册表用于主动回收入口：/api/futures_cleanup（期指切股票）与 lifespan
+# 关闭钩子（服务器退出）调用 _close_all_sources() 设置旗并等待 _api_closed。
 _ACTIVE_SOURCES = set()
 _ACTIVE_SOURCES_LOCK = threading.Lock()
 
 
 def _close_all_sources():
-    """关闭所有活跃 TqSdkSource（幂等；供 futures_cleanup 与 lifespan 关闭钩子调用）"""
+    """关闭所有活跃 TqSdkSource（幂等；供 futures_cleanup 与 lifespan 关闭钩子调用）
+
+    只设置 _closed 旗通知各生成器线程退出，然后等待各生成器线程在
+    finally 中完成 api.close()（_api_closed 置位）。api.close() 由生成器
+    线程调用——wait_update 已返回、_loop 已停止，从机制上保证不触发
+    「不能在协程中调用 close」。生成器最迟一个 wait_update deadline
+    （0.1s）内退出，等待是确定性的。
+    """
     with _ACTIVE_SOURCES_LOCK:
         sources = list(_ACTIVE_SOURCES)
     for src in sources:
@@ -208,6 +218,12 @@ def _close_all_sources():
             src.close()
         except Exception as exc:  # noqa: BLE001 —— 单个源关闭失败不阻断其余
             print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
+    # 等待各生成器线程完成 api.close()（机制保证 0.1s 内完成）
+    for src in sources:
+        try:
+            src._api_closed.wait()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[FrontAPI] 等待 TqSdkSource 关闭异常: {type(exc).__name__}: {exc}")
 
 
 class SSESource:
@@ -218,8 +234,9 @@ class SSESource:
     /api/dual_zs 读取，启动写入/收尾弹出，无跨连接竞争）。
     灰度/测试注入 MockSource：脚本化 K 线序列驱动确定性事件流。
 
-    全部方法为同步阻塞调用——原生生成器经 run_in_threadpool 调用，
-    不阻塞事件循环（与遗留实现「每连接一线程」语义等价）。
+    全部方法为同步阻塞调用——方案A 下 SSE 生成器为同步生成器，由
+    StreamingResponse 在线程池中迭代，阻塞调用天然发生在线程内，
+    不占事件循环（每连接一条常驻线程）。
     """
 
     def connect(self):
@@ -260,14 +277,16 @@ class SSESource:
         raise NotImplementedError
 
     def close(self):
-        """关闭数据源连接（异常自吞并打印，遗留行为）"""
+        """设置关闭旗，通知生成器线程退出（不直接关闭底层连接）"""
         raise NotImplementedError
 
-    def mark_gen_exited(self):
-        """生成器 finally 置位：本连接已不再使用 api，可安全 close。
+    def close_api(self):
+        """由生成器线程调用，关闭底层连接（天勤 TqApi）。
 
-        基类默认 no-op（Mock/回放源无真实 api，无需等待）；TqSdkSource
-        覆写为置位 _gen_exited，让 close() 在 api 无使用者后才 api.close()。
+        基类默认 no-op（Mock/回放源无真实 api）。TqSdkSource 覆写为
+        api.close()。关键约束：api.close() 必须在 wait_update 返回后、
+        由 wait_update 的调用线程调用（天勤 _loop.is_running() 检查），
+        因此只能在生成器 finally（wait_update 已返回）中调用。
         """
         pass
 
@@ -281,23 +300,21 @@ class TqSdkSource(SSESource):
 
     TqApi 生命周期（应用级管理，根因修复）：
       - 每 SSE 连接独立 TqApi；实例创建即注册进 _ACTIVE_SOURCES 注册表；
-      - close() 幂等：置 _closed 旗 → 等待在途 wait_update 返回（loop 停止，
-        tqsdk 要求「loop 未运行才能 close」）→ 等待生成器 finally 置位
-        _gen_exited（确保 api 无使用者，避免「Event loop is closed」）→
-        _close_lock 串行化 api.close() → 注销；
+      - close() 只设置 _closed 旗（通知生成器退出），不直接 api.close()；
+        api.close() 由生成器线程在 finally 中经 close_api() 调用——天勤
+        要求 close 必须在 wait_update 返回后、由 wait_update 的调用线程
+        调用（_loop.is_running() 检查），生成器 finally 恰好满足该约束；
       - 回收入口：/api/futures_cleanup（期指切股票）与 lifespan 关闭钩子
-        （服务器退出）统一调用 _close_all_sources()；SSE 生成器 finally 仅作
-        尽力而为路径（async 生成器 finally 在取消/GC 下不可靠，实测）。
+        （服务器退出）统一调用 _close_all_sources() 设置旗并等待
+        _api_closed（各生成器线程完成 api.close()）。
     """
 
     def __init__(self):
         self.api = None
         self._serials = {}      # (symbol, freq_sec) → kline serial（天勤同参同对象语义）
         self._closed = False    # 关闭旗：wait_update 检测到后抛 SSESourceClosed 让生成器干净退出
-        self._wait_done = threading.Event()
-        self._wait_done.set()   # 初始无在途 wait_update
-        self._gen_exited = threading.Event()  # 生成器 finally 置位：api 已无使用者，可安全 close
-        self._close_lock = threading.Lock()   # 串行化 api.close()（生成器 finally 与 _close_all_sources 可并发调用）
+        self._close_lock = threading.Lock()   # 串行化 api.close()（多源并发关闭场景）
+        self._api_closed = threading.Event()  # api.close() 完成（生成器线程置位）
         with _ACTIVE_SOURCES_LOCK:
             _ACTIVE_SOURCES.add(self)
 
@@ -317,13 +334,9 @@ class TqSdkSource(SSESource):
         return self._serials[key]
 
     def wait_update(self, deadline_ns):
-        self._wait_done.clear()
-        try:
-            if self._closed:
-                raise SSESourceClosed()
-            return self.api.wait_update(deadline=deadline_ns)
-        finally:
-            self._wait_done.set()
+        if self._closed:
+            raise SSESourceClosed()
+        return self.api.wait_update(deadline=deadline_ns)
 
     def last_records(self, code_key):
         from DataAPI.TqSdkAPI import CTqSdkAPI
@@ -346,32 +359,37 @@ class TqSdkSource(SSESource):
     def white_hline(self, kl_list, freq):
         return _sse._calc_futures_white_hline(kl_list, freq, m._get_date_fmt(freq))
 
-    def mark_gen_exited(self):
-        """生成器 finally 置位：本连接已不再使用 api，可安全 close（幂等）"""
-        self._gen_exited.set()
-
     def close(self):
+        """设置关闭旗，通知生成器线程退出（幂等）。
+
+        不在此调用 api.close()：天勤要求 api.close() 必须在 wait_update
+        返回后、由 wait_update 的调用线程调用（_loop.is_running() 检查）。
+        外部线程（futures_cleanup / lifespan）只设置 _closed 旗，生成器
+        下一次 wait_update 抛 SSESourceClosed 干净退出，finally 中由
+        生成器线程调用 close_api() 完成 api.close()——同一线程串行，
+        从机制上保证 wait_update 已返回、_loop 已停止。
+        """
         self._closed = True
+        with _ACTIVE_SOURCES_LOCK:
+            _ACTIVE_SOURCES.discard(self)
+
+    def close_api(self):
+        """生成器线程调用：关闭天勤 TqApi（wait_update 已返回，_loop 已停止）。
+
+        只在生成器 finally 中调用（生成器线程 = wait_update 调用线程，
+        finally 在 wait_update 返回/抛异常后执行，_loop 必然已停止）。
+        _close_lock 串行化：多源并发关闭时 api.close() 非线程安全
+        （is_closed 检查与关闭之间存在竞态），加锁后第二次调用见
+        is_closed() 直接返回。
+        """
         try:
             if self.api is not None:
-                # tqsdk 要求 loop 停止后才能 close：等待在途 wait_update 返回
-                # （wait_update 带 0.1s deadline，正常 0.1s 内返回；5s 为兜底上限）
-                self._wait_done.wait(timeout=5.0)
-                # 再等待生成器 finally 置位 _gen_exited：确保 api 已无使用者
-                # （生成器可能在 wait_update 返回后仍处理数据/调 get_kline_serial，
-                # 若此时 api.close() 会触发「Event loop is closed」；5s 为兜底上限，
-                # 超时说明生成器被取消/GC 已不再使用 api，可安全关闭）
-                self._gen_exited.wait(timeout=5.0)
-                # _close_lock 串行化：生成器 finally 与 _close_all_sources 可能并发
-                # 调用 close()，tqsdk api.close() 非线程安全（is_closed 检查与关闭
-                # 之间存在竞态），加锁后第二次调用见 is_closed() 直接返回。
                 with self._close_lock:
                     self.api.close()
         except Exception as e:
             print(f"[警告] 异常: {type(e).__name__}: {e}")
         finally:
-            with _ACTIVE_SOURCES_LOCK:
-                _ACTIVE_SOURCES.discard(self)
+            self._api_closed.set()
 
     def cleanup_records(self, code_key):
         try:
@@ -382,7 +400,7 @@ class TqSdkSource(SSESource):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SSE · 原生异步生成器（3b-1，忠实移植自 ChartHandler._handle_sse_stream_*）
+# SSE · 同步生成器（方案A，忠实移植自 ChartHandler._handle_sse_stream_*）
 # ═══════════════════════════════════════════════════════════════════════
 
 def _sse_frame(event, payload) -> bytes:
@@ -390,8 +408,8 @@ def _sse_frame(event, payload) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, allow_nan=False)}\n\n".encode("utf-8")
 
 
-async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
-    """期货 SSE 单窗口 · 原生异步生成器（3b-1）
+def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
+    """期货 SSE 单窗口 · 同步生成器（方案A）
 
     忠实移植 ChartHandler._handle_sse_stream_single 的事件协议：
     init（初始快照/失败载荷）→ 实时循环（heartbeat 注释帧 + update 事件：
@@ -436,15 +454,14 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
         saved_selection_date = start_time or ""
 
         t_conn = time.time()
-        await run_in_threadpool(src.connect)
+        src.connect()
         print(f"[{display_key}] ⓪ 连接天勤: 耗时 {time.time()-t_conn:.1f}s")
 
         t_total = time.time()
         name = m._get_futures_name(symbol)  # 品种名称
 
         # === 1. 拉取历史 + chan 分析 ===
-        result = await run_in_threadpool(src.init_chan, symbol, name,
-                                         freq_sec, freq_label, start_time)
+        result = src.init_chan(symbol, name, freq_sec, freq_label, start_time)
         if result is None:
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
@@ -453,9 +470,8 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
         # === 2. 推送初始快照 ===
         t0 = time.time()
         try:
-            init_data = await run_in_threadpool(
-                src.extract_snapshot, chan, kl_type, symbol, name, freq_label,
-                saved_selection_date)
+            init_data = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
+                                             saved_selection_date)
             # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
             if klines is not None and len(klines) > 0:
                 _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
@@ -474,7 +490,7 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                         init_data['meta']['kline_count'] = len(_ex)
             # 计算白色横虚线（初始快照，K线已确认状态）
             _kl_list = chan[kl_type]
-            init_data['white_hline'] = await run_in_threadpool(src.white_hline, _kl_list, freq)
+            init_data['white_hline'] = src.white_hline(_kl_list, freq)
             yield _sse_frame("init", init_data)
             cached_snapshot = init_data  # ★ 缓存完整快照，tick推送时更新最后一根K线OHLC
             if m._SSE_DEBUG:
@@ -514,7 +530,7 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
         while True:
             try:
                 t_wait_start = time.time()
-                await run_in_threadpool(src.wait_update, time.time() * 1e9 + 100_000_000)
+                src.wait_update(time.time() * 1e9 + 100_000_000)
                 t_wait = time.time() - t_wait_start
                 t_wait_total += t_wait
             except SSESourceClosed:
@@ -522,10 +538,10 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                 return
             except Exception as _e:
                 print(f"[{display_key}] wait_update 异常: {_e}")
-                await asyncio.sleep(0.5)
+                time.sleep(0.5)
                 continue
 
-            # 心跳注释帧（客户端断开由生成器取消机制触发 finally 清理）
+            # 心跳注释帧（客户端断开由生成器线程退出触发 finally 清理）
             yield b": heartbeat\n\n"
 
             loop_count += 1
@@ -678,13 +694,13 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
             }
             t_append = time.time()
 
-            last_records = await run_in_threadpool(src.last_records, code_key)
+            last_records = src.last_records(code_key)
             t_step = 0.0
             if not last_records or last_records[0]["dt"] != dt:
-                await run_in_threadpool(src.append_bar, new_bar, code_key)
+                src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    await run_in_threadpool(src.step_load, chan)
+                    src.step_load(chan)
                 except Exception as _e:
                     print(f"[{display_key}] step_load 异常: {_e}")
                 t_step = time.time() - t_step_start
@@ -701,9 +717,8 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
             # 推送快照（此时 klines[-1] 已推进到 N 周期，快照中自然包含 N 的实时OHLC）
             t_snap_start = time.time()
             try:
-                update_data = await run_in_threadpool(
-                    src.extract_snapshot, chan, kl_type, symbol, name, freq_label,
-                    saved_selection_date)
+                update_data = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
+                                                   saved_selection_date)
                 # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(m._get_date_fmt(freq_label))
@@ -717,7 +732,7 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
                     update_data['meta']['kline_count'] = len(_ex)
                 # K线确认后，计算白色横虚线（不在tick推送路径计算）
                 _kl_list = chan[kl_type]
-                update_data['white_hline'] = await run_in_threadpool(src.white_hline, _kl_list, freq)
+                update_data['white_hline'] = src.white_hline(_kl_list, freq)
                 cached_snapshot = update_data  # ★ 更新缓存
                 t_snap = time.time() - t_snap_start
                 t_snapshot_total += t_snap
@@ -732,24 +747,22 @@ async def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=
             except Exception as _e:
                 print(f"[{display_key}] 推送异常: {_e}")
 
-    except asyncio.CancelledError:
-        # 客户端断开（生成器被取消）：与遗留 BrokenPipe 分支等价，直接收尾
-        raise
     except Exception as e:
         # 与遗留实现一致：打印连接异常后静默结束（错误已在 init 事件载荷中表达）
         print(f"[{display_key}] 连接异常: {e}")
     finally:
-        # 先置位 _gen_exited：告知 close() 本生成器已不再使用 api，可安全 api.close()
-        # （顺序关键：必须在 src.close() 之前，否则 close() 等 _gen_exited 会死锁）
-        src.mark_gen_exited()
-        await run_in_threadpool(src.close)
+        # 生成器线程收尾：close() 设置关闭旗（幂等），close_api() 由生成器
+        # 线程调用 api.close()——wait_update 已返回、_loop 已停止，串行安全。
+        # 顺序：先 close()（通知外部回收已生效）再 close_api()（真正关连接）。
+        src.close()
+        src.close_api()
         # 清理该连接的K线缓存
         if symbol is not None and freq_sec is not None:
-            await run_in_threadpool(src.cleanup_records, f"{symbol}:{freq_sec}")
+            src.cleanup_records(f"{symbol}:{freq_sec}")
 
 
-async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, source=None):
-    """期货 SSE 双窗口 · 原生异步生成器（3b-1）
+def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, source=None):
+    """期货 SSE 双窗口 · 同步生成器（方案A）
 
     忠实移植 ChartHandler._handle_sse_stream_dual 的事件协议：
     两个独立 CChan 对象、一次连接推送两个周期（下窗先处理——区间套分析
@@ -777,7 +790,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
             symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
 
-        await run_in_threadpool(src.connect)
+        src.connect()
         name = m._get_futures_name(symbol)
         main_freq_label = main_freq
         sub_freq_label = sub_freq
@@ -803,22 +816,10 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         except Exception as _e:
             print(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
-        # 2. 拉取上窗历史 + chan分析
-        if m._SSE_DEBUG:
-            print(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
-        main_result = await run_in_threadpool(src.init_chan, symbol, name,
-                                              main_freq_sec, main_freq_label, main_start_time)
-        main_chan, main_records, main_kl_type, _ = main_result
-        main_kl_type = m._get_kl_type(main_freq)
-        if m._SSE_DEBUG:
-            print(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "
-                  f"笔={len(main_chan[main_kl_type].bi_list)}, 中枢={len(main_chan[main_kl_type].zs_list)}")
-
-        # 3. 拉取下窗历史 + chan分析
+        # 2. 拉取下窗历史 + chan分析（次级别优先：区间套分析需先分析次级别）
         if m._SSE_DEBUG:
             print(f"[{display_key}] 拉取下窗({sub_freq})历史K线...")
-        sub_result = await run_in_threadpool(src.init_chan, symbol, name,
-                                             sub_freq_sec, sub_freq_label, sub_start_time)
+        sub_result = src.init_chan(symbol, name, sub_freq_sec, sub_freq_label, sub_start_time)
         sub_chan, sub_records, sub_kl_type, _ = sub_result
         sub_kl_type = m._get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
@@ -827,22 +828,30 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
             print(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
                   f"笔={len(sub_chan[sub_kl_type].bi_list)}, 中枢={len(sub_chan[sub_kl_type].zs_list)}")
 
+        # 3. 拉取上窗历史 + chan分析
+        if m._SSE_DEBUG:
+            print(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
+        main_result = src.init_chan(symbol, name, main_freq_sec, main_freq_label, main_start_time)
+        main_chan, main_records, main_kl_type, _ = main_result
+        main_kl_type = m._get_kl_type(main_freq)
+        if m._SSE_DEBUG:
+            print(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "
+                  f"笔={len(main_chan[main_kl_type].bi_list)}, 中枢={len(main_chan[main_kl_type].zs_list)}")
+
         # 7. 提取初始快照
         t_snap = time.time()
-        main_snapshot = await run_in_threadpool(
-            src.extract_snapshot, main_chan, main_kl_type, symbol, name, main_freq_label,
-            saved_selection_date=saved_selection_date)
-        sub_snapshot = await run_in_threadpool(
-            src.extract_snapshot, sub_chan, sub_kl_type, symbol, name, sub_freq_label,
-            klines=None)
+        main_snapshot = src.extract_snapshot(main_chan, main_kl_type, symbol, name, main_freq_label,
+                                             saved_selection_date=saved_selection_date)
+        sub_snapshot = src.extract_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
+                                            klines=None)
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
         # （阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py）
         _sse._futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
 
         # ★ 追加上下窗当前形成中的K线（与单窗口一致），让前端立即看到，且 tick 更新正确的 K 线
-        _main_klines_for_init = await run_in_threadpool(src.get_kline_serial, symbol, main_freq_sec)
-        _sub_klines_for_init = await run_in_threadpool(src.get_kline_serial, symbol, sub_freq_sec)
+        _main_klines_for_init = src.get_kline_serial(symbol, main_freq_sec)
+        _sub_klines_for_init = src.get_kline_serial(symbol, sub_freq_sec)
         # 上窗
         if _main_klines_for_init is not None and len(_main_klines_for_init) > 0:
             _lr = _main_klines_for_init.iloc[-1]; _dns = _lr.get('datetime')
@@ -898,8 +907,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
             print(f"[{display_key}] ⑷ 实时循环 (总耗时 {time.time()-t_total:.1f}s)")
 
         # 保存两个窗口的 klines 引用供实时更新使用
-        main_klines = await run_in_threadpool(src.get_kline_serial, symbol, main_freq_sec)
-        sub_klines = await run_in_threadpool(src.get_kline_serial, symbol, sub_freq_sec)
+        main_klines = src.get_kline_serial(symbol, main_freq_sec)
+        sub_klines = src.get_kline_serial(symbol, sub_freq_sec)
 
         # last_bar_dt_ns: klines[-1] 的时间戳，用于检测 klines 是否推进
         # last_processed_dt_ns: 已处理过的K线时间戳，防止同一根K线被重复处理
@@ -920,8 +929,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         step_count = 0
         last_perf_print = time.time()
 
-        # ---- 定义单窗口K线处理协程（避免 continue 跳过另一个窗口） ----
-        async def _process_one_window(klines, chan, kl_type, freq_sec, freq_label,
+        # ---- 定义单窗口K线处理函数（避免 continue 跳过另一个窗口） ----
+        def _process_one_window(klines, chan, kl_type, freq_sec, freq_label,
                                       cached_snapshot, last_bar_dt_ns, last_processed_dt_ns,
                                       is_main, window_label):
             """处理单个窗口的K线检测，返回 (updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, need_tick)"""
@@ -1056,14 +1065,14 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                        "low": round(l, 3), "close": round(cl, 3),
                        "vol": vol, "amount": 0}  # 天勤K线无成交额，amount置0（前端期货显成交量vol）
 
-            last_records = await run_in_threadpool(src.last_records, code_key)
+            last_records = src.last_records(code_key)
             updated = False
             t_step = 0.0
             if not last_records or last_records[0]["dt"] != dt:
-                await run_in_threadpool(src.append_bar, new_bar, code_key)
+                src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    await run_in_threadpool(src.step_load, chan)
+                    src.step_load(chan)
                 except Exception as e:
                     print(f"[{display_key}] {window_label} step_load 异常: {e}")
                 t_step = time.time() - t_step_start
@@ -1078,9 +1087,8 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
 
             # 提取完整快照
             if updated:
-                snapshot = await run_in_threadpool(
-                    src.extract_snapshot, chan, kl_type, symbol, name, freq_label,
-                    saved_selection_date)
+                snapshot = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
+                                                saved_selection_date)
                 if is_main:
                     # 阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py
                     _sse._futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
@@ -1096,7 +1104,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                     snapshot['meta']['kline_count'] = len(_ex)
                 if is_main:
                     _kl_list = chan[kl_type]
-                    snapshot['white_hline'] = await run_in_threadpool(src.white_hline, _kl_list, main_freq)
+                    snapshot['white_hline'] = src.white_hline(_kl_list, main_freq)
                 cached_snapshot = snapshot
 
             return updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
@@ -1105,7 +1113,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
         while True:
             try:
                 t_wait_start = time.time()
-                await run_in_threadpool(src.wait_update, time.time() * 1e9 + 100_000_000)
+                src.wait_update(time.time() * 1e9 + 100_000_000)
                 t_wait = time.time() - t_wait_start
                 t_wait_total += t_wait
             except SSESourceClosed:
@@ -1113,10 +1121,10 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                 return
             except Exception as _e:
                 print(f"[{display_key}] wait_update 异常: {_e}")
-                await asyncio.sleep(0.5)
+                time.sleep(0.5)
                 continue
 
-            # 心跳注释帧（客户端断开由生成器取消机制触发 finally 清理）
+            # 心跳注释帧（客户端断开由生成器线程退出触发 finally 清理）
             yield b": heartbeat\n\n"
 
             loop_count += 1
@@ -1126,7 +1134,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
             # 处理下窗（次级别优先：区间套分析需先分析次级别）
             _t_sub0 = time.time()
             sub_updated, sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns, sub_need_tick = \
-                await _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
+                _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
                                           sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns,
                                           is_main=False, window_label="下窗")
             _t_sub = time.time() - _t_sub0
@@ -1134,7 +1142,7 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
             # 处理上窗
             _t_main0 = time.time()
             main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
-                await _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
+                _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
                                           main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,
                                           is_main=True, window_label="上窗")
             _t_main = time.time() - _t_main0
@@ -1160,23 +1168,20 @@ async def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_t
                           f"JSON序列化={(time.time()-t_snap_start)-t_push_total:.3f}s "
                           f"SSE写入={t_push_total:.3f}s")
 
-    except asyncio.CancelledError:
-        # 客户端断开（生成器被取消）：与遗留 BrokenPipe 分支等价，直接收尾
-        raise
     except Exception as e:
         # 与遗留实现一致：打印连接异常后静默结束
         print(f"[{display_key}] 连接异常: {e}")
         traceback.print_exc()
     finally:
-        # 先置位 _gen_exited：告知 close() 本生成器已不再使用 api，可安全 api.close()
-        # （顺序关键：必须在 src.close() 之前，否则 close() 等 _gen_exited 会死锁）
-        src.mark_gen_exited()
-        await run_in_threadpool(src.close)
+        # 生成器线程收尾：close() 设置关闭旗（幂等），close_api() 由生成器
+        # 线程调用 api.close()——wait_update 已返回、_loop 已停止，串行安全。
+        src.close()
+        src.close_api()
         # 清理两个窗口的K线缓存与期货下窗缓存
         if symbol is not None and main_freq_sec is not None:
-            await run_in_threadpool(src.cleanup_records, f"{symbol}:{main_freq_sec}")
+            src.cleanup_records(f"{symbol}:{main_freq_sec}")
         if symbol is not None and sub_freq_sec is not None:
-            await run_in_threadpool(src.cleanup_records, f"{symbol}:{sub_freq_sec}")
+            src.cleanup_records(f"{symbol}:{sub_freq_sec}")
         try:
             orch.futures_pop_sub_chan(symbol, sub_freq)  # 语义化漏斗失效（key 规则内聚数据层）
         except Exception as e:
@@ -1452,10 +1457,11 @@ async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Qu
 async def api_futures_cleanup():
     """清理所有期货数据（期指切股票：先回收 TqApi 连接，再清空缓存）
 
-    顺序关键：先 _close_all_sources() 关闭所有活跃 TqSdkSource（TqApi 根因
-    修复——SSE 生成器 finally 在取消/GC 下不可靠，TqApi 回收由注册表统一
-    负责），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
-    run_in_threadpool 包裹：close() 内 _wait_done.wait 上限 5s，不能阻塞事件循环。
+    顺序关键：先 _close_all_sources() 设置 _closed 旗并等待各生成器线程
+    完成 api.close()（天勤要求 close 在 wait_update 返回后由生成器线程
+    调用），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
+    run_in_threadpool 包裹：_close_all_sources 等待各生成器线程完成
+    api.close()（最迟 0.1s），不能阻塞事件循环。
     """
     await run_in_threadpool(_close_all_sources)
     await run_in_threadpool(orch.futures_cleanup)
@@ -1478,18 +1484,19 @@ async def api_futures_config():
 # ── 路由 — SSE 实时推送（期货） ────────────────────────────────────────
 
 @router.get("/api/futures_stream")
-async def api_futures_stream(
+def api_futures_stream(
     symbol: str = Query(...),
     freq: str = Query("15s"),
     start_time: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
 ):
-    """SSE 实时推送（期货单/双窗口）· native 原生异步生成器（3b-2 已拆除旧路径）
+    """SSE 实时推送（期货单/双窗口）· 同步生成器（方案A）
 
-    3b-1 灰度（impl=legacy|native 并行 7 天）比对无差异后，3b-2 已拆除
-    ChartHandler._handle_sse_stream_* 与 _SSEMockWfile 桥接层，本端点
-    仅保留原生异步生成器路径（sse_futures_stream_single/dual），
+    方案A：每个 SSE 连接 = 1 条常驻线程（同步生成器 + StreamingResponse）。
+    本端点返回同步生成器 sse_futures_stream_single/dual，Starlette 检测到
+    同步迭代器后自动在线程池中迭代（iterate_in_threadpool），阻塞调用
+    （connect/wait_update/step_load 等）天然发生在线程内，不占事件循环。
     事件协议与灰度基线逐项一致（见 Test/test_sse_gray.py）。
     """
     if not symbol:
@@ -1650,5 +1657,5 @@ if __name__ == "__main__":
     print(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
     print(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     print(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    print(f"[信息] SSE:       /api/futures_stream（native 原生生成器，3b-2 已拆除 legacy）")
+    print(f"[信息] SSE:       /api/futures_stream（方案A 同步生成器，每连接一条常驻线程）")
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")

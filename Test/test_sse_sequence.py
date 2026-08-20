@@ -20,7 +20,6 @@
 运行：python Test/test_sse_sequence.py [--update]
 """
 import argparse
-import asyncio
 import io
 import json
 import os
@@ -181,9 +180,9 @@ class MockSource(SSESource):
 
 
 # ── 采集与断言 ───────────────────────────────────────────────────────
-async def _collect(agen):
+def _collect(gen):
     frames = []
-    async for frame in agen:
+    for frame in gen:
         frames.append(frame)
     return frames
 
@@ -221,7 +220,7 @@ def run_case(kind, fail_init=False):
     else:
         gen = FrontAPI.sse_futures_stream_dual(
             SYMBOL, "1m", "15s", start_time=None, source=src)
-    frames = asyncio.run(_collect(gen))
+    frames = _collect(gen)
     return frames, src
 
 
