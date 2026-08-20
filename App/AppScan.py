@@ -300,7 +300,10 @@ class Scanner:
             with _m._scan_lock:
                 if _m._scan_aborted:
                     return {"error": "扫描已终止", "aborted": True}
-                result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=True)
+                # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
+                # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
+                # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
+                result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False)
 
             t_analyze = time.time() - t0
             if "error" in result:

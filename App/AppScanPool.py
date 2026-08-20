@@ -59,6 +59,7 @@ _SCAN_POOL_FALLBACK_WORKERS = 4
 _pool = None
 _pool_engine = None          # "process_pool" | "thread_fallback"
 _pool_lock = threading.Lock()
+_pool_created_count = 0      # 池装配次数（区分首次/重新装配，用于打印）
 
 
 def _worker_init():
@@ -81,20 +82,29 @@ def _get_pool():
 
     返回 (executor, engine_tag)。降级模式下同一 worker 函数在 API 进程内
     执行：scan_one 的 _scan_lock 自动恢复旧串行语义（W3 修复）。
+
+    即用即弃（本版新增）：扫描完成即销毁（destroy_pool），故此处每次
+    装配都是全新进程、空缓存；打印区分首次装配与重新装配，便于确认
+    每次扫描状态已恢复初始。
     """
-    global _pool, _pool_engine
+    global _pool, _pool_engine, _pool_created_count
     with _pool_lock:
         if _pool is None:
             from App.AppConfig import app_config
             workers = _resolve_workers(app_config)
+            _pool_created_count += 1
             try:
                 ctx = multiprocessing.get_context("spawn")
                 _pool = ProcessPoolExecutor(max_workers=workers,
                                             mp_context=ctx,
                                             initializer=_worker_init)
                 _pool_engine = "process_pool"
-                print(f"[扫描池] ProcessPool 已装配: workers={workers} "
-                      f"(spawn)", flush=True)
+                if _pool_created_count == 1:
+                    print(f"[扫描池] ProcessPool 已装配: workers={workers} "
+                          f"(spawn)", flush=True)
+                else:
+                    print(f"[扫描池] 重新装配（上次已销毁）: workers={workers} "
+                          f"(spawn)", flush=True)
             except Exception as exc:  # noqa: BLE001 —— 受限环境降级线程池
                 print(f"[扫描池] ProcessPool 装配失败，降级线程池: "
                       f"{type(exc).__name__}: {exc}", flush=True)
@@ -204,11 +214,15 @@ def _monitor_task(task_id, futures):
     # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
     if task.get("abort_requested") or task["status"] == "aborted":
         store.set_status(task_id, "aborted")
-        return
-    if crashed:
+    elif crashed:
         store.set_status(task_id, "error", "; ".join(crash_msgs[:5]))
     else:
         store.set_status(task_id, "done")
+
+    # 扫描完成即销毁进程池（即用即弃）：所有 future 已结束，worker 进程
+    # 全部退出、各自缓存（含轻量 result）随之释放，内存归还；下次扫描
+    # 重新 spawn 全新进程、空缓存，恢复点击「股票扫描」前的初始状态。
+    destroy_pool()
 
 
 def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
@@ -287,6 +301,27 @@ def abort(task_id):
         return {"ok": True, "status": task["status"]}
     store.request_abort(task_id)
     return {"ok": True, "status": task["status"]}
+
+
+def destroy_pool():
+    """销毁执行池（扫描完成即调用，幂等）：释放 worker 进程与缓存。
+
+    与 shutdown() 的区别：shutdown 是应用退出时 atexit 调用；destroy_pool
+    是每次扫描完成后主动调用，让 worker 进程结束、各自缓存（含轻量
+    result）随之释放、内存归还，下次扫描重新 spawn 全新进程（空缓存），
+    恢复点击「股票扫描」前的初始状态（即用即弃）。
+    """
+    global _pool, _pool_engine
+    with _pool_lock:
+        if _pool is not None:
+            try:
+                _pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001 —— 关池失败不阻断主流程
+                pass
+            _pool = None
+            _pool_engine = None
+            print("[扫描池] 任务完成，销毁进程池（worker 缓存已释放）",
+                  flush=True)
 
 
 def shutdown():

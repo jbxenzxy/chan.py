@@ -177,10 +177,41 @@
   <article class="page">
 
     <header class="cover">
-      <div class="kicker">Architecture · Concurrency Model</div>
+      <div class="kicker">Architecture · Concurrency Model · <span style="color:var(--accent3)">v5.0</span></div>
       <h1>前端 → API → 服务层：多网页并发请求如何被处理</h1>
       <p class="sub">以「同时打开多个网页，查看多只股票 / 期货」为场景，讲清楚请求从浏览器发出后，在 API 层是排队还是并发、最终如何到达服务层执行。</p>
     </header>
+
+    <div class="callout ok">
+      <div class="t">v5.0 更新说明（相对 v4.0）——线程 vs 进程重量对照，沉淀生命周期策略依据</div>
+      <p>本版把「线程 vs 进程谁更重」的澄清固化进正文（2.3 末尾新增对照 callout）：</p>
+      <ol style="margin:0.4rem 0 0 1.2rem; color:var(--muted);">
+        <li><strong>明确线程轻、进程重</strong>：线程共享进程内存、创建便宜；进程独立地址空间、创建昂贵（Python <code>spawn</code> 重载解释器）。</li>
+        <li><strong>由此推导两条相反生命周期策略</strong>：线程便宜 → 线程池<strong>常驻复用</strong>；进程昂贵 + 一次性大批量 + 需隔离 → worker<strong>即用即弃</strong>（扫完 <code>destroy_pool()</code>）。</li>
+        <li><strong>纠正「谁便宜就销毁」的误读</strong>：结论恰恰相反——线程便宜该复用，进程贵但换隔离与干净状态才销毁。</li>
+      </ol>
+    </div>
+
+    <div class="callout ok">
+      <div class="t">v4.0 更新说明（相对 v3.0）——补充并发机制的「再澄清」与扫描结果持久层</div>
+      <p>在 v3.0（扫描即用即弃）基础上，本版针对下列仍易混淆的点做深化澄清：</p>
+      <ol style="margin:0.4rem 0 0 1.2rem; color:var(--muted);">
+        <li><strong>进程 → 线程 → 协程到底谁属于谁</strong>：SSE 协程不是线程，它跑在 API 进程的「事件循环线程」上；线程池的线程（至多 40，按需创建后常驻）属于 API 进程；worker 是独立进程、与 API 进程平行。见 <a href="#sec-thread-co" style="color:var(--accent)">2.3</a>。</li>
+        <li><strong>为什么用「事件循环 + 协程」，而不是每连接一个线程、也不是两个线程各跑一堆协程</strong>：关键在「协程只在 <code>await</code> 时让出线程」，IO 型任务适用协程，CPU 型任务（缠论分析无 <code>await</code>）只能靠真线程 / 真进程并行。见 <a href="#sec-io-cpu" style="color:var(--accent)">2.4</a>。</li>
+        <li><strong>扫描结果（SQLite）的删除时机与文件位置</strong>：SQLite 结果不在 future 收割时删除，而是保留约 7 天、下次提交扫描时惰性清理；默认落在 <code>C:\new_tdx_hd_test\vipdoc\scan_tasks.db</code>（WAL 模式）。见 <a href="#sec-sqlite" style="color:var(--accent)">3.6</a>。</li>
+        <li><strong>图 1 修正与 API 层启动分流</strong>：图 1 用方框套方框标出「事件循环线程（1 个线程）内嵌 SSE 协程」，并新增「API 层启动与分流」说明（先建进程 → 再建事件循环线程 → 按请求类型分三条路）。</li>
+      </ol>
+    </div>
+
+    <div class="callout ok">
+      <div class="t">v3.0 更新说明（相对 v2.0）——扫描「即用即弃」模型</div>
+      <p>代码已按 v2.0 方案验证通过，本版补充<strong>批量扫描的缓存生命周期</strong>设计，回答两个核心问题：</p>
+      <ol style="margin:0.4rem 0 0 1.2rem; color:var(--muted);">
+        <li><strong>点击扫描结果面板里的股票，走哪份缓存？</strong>——只走 API 进程内的 <code>_stocks_analysis_cache</code>（交互路径 <code>/api/stock</code>），<strong>绝不读 worker 进程的缓存</strong>。worker 缓存是扫描期的私有临时区，扫描结束即销毁，前端永远接触不到。</li>
+        <li><strong>worker 进程的 N 份缓存何时删除？</strong>——<strong>扫描完成那一刻</strong>（所有 future 收割完）就调用 <code>destroy_pool()</code> 销毁整个进程池，worker 进程退出、缓存（含轻量 result）全部释放，与「关闭扫描结果弹窗」无关——弹窗关闭时缓存早已不存在。</li>
+      </ol>
+      <p style="margin-top:0.5rem;">配套代码改动：扫描模式 <code>cache_chan=False</code>（worker 只留轻量 result，不缓存 CChan 对象与 K 线 records 这两个内存大头）+ 扫描完成即 <code>destroy_pool()</code>，控制台打印「[扫描池] 任务完成，销毁进程池（worker 缓存已释放）」确认状态恢复。</p>
+    </div>
 
     <main>
 
@@ -200,9 +231,12 @@
     end
 
     subgraph API["API 层 · FastAPI 单进程（uvicorn FrontAPI:app）"]
-        EV["异步事件循环<br>并发接收所有请求"]
-        TP["run_in_threadpool<br>默认线程池（约 40 线程）"]
-        SSE["SSE 异步生成器<br>每连接独立协程"]
+        subgraph EV["事件循环线程（1 个线程）· 并发接收所有请求 · 按类型分流"]
+            EVIN["接收 / 分流"]
+            SSE1["SSE 协程 1<br>每连接独立协程"]
+            SSE2["SSE 协程 2"]
+        end
+        TP["线程池（至多 40 线程）<br>按需创建后常驻 · run_in_threadpool"]
         POOL["ProcessPool 编排<br>executor 对象（API 进程内）"]
     end
 
@@ -213,25 +247,27 @@
         WORKER["worker 进程 ×N<br>跑服务层引擎代码"]
     end
 
-    A --&gt;|"/api/stock"| EV
-    B --&gt;|"/api/stock"| EV
-    C --&gt;|"/api/futures_stream"| EV
-    D --&gt;|"/api/futures_stream"| EV
-    E --&gt;|"POST /api/scan/submit"| EV
-    EV --&gt;|"同步阻塞调用"| TP
+    A --&gt;|"/api/stock"| EVIN
+    B --&gt;|"/api/stock"| EVIN
+    C --&gt;|"/api/futures_stream"| EVIN
+    D --&gt;|"/api/futures_stream"| EVIN
+    E --&gt;|"POST /api/scan/submit"| EVIN
+    EVIN --&gt;|"SSE 请求<br>当前线程内建协程"| SSE1
+    EVIN --&gt;|"SSE 请求"| SSE2
+    EVIN --&gt;|"股票请求<br>→ 线程池"| TP
+    EVIN --&gt;|"扫描请求<br>→ 进程池"| POOL
     TP --&gt;|"持锁排队"| LOCK
     LOCK --&gt; ENG
-    EV --&gt;|"实时流"| SSE
-    SSE --&gt; TQ
-    EV --&gt;|"批量扫描"| POOL
+    SSE1 --&gt; TQ
+    SSE2 --&gt; TQ
     POOL --&gt;|"spawn 派发"| WORKER
 
-    linkStyle 0,1,5 stroke:#4da3ff,stroke-width:2px
-    linkStyle 2,3,8,9 stroke:#37d39a,stroke-width:2px
-    linkStyle 6,7 stroke:#ff7a59,stroke-width:2px
-    linkStyle 4,10,11 stroke:#f5c542,stroke-width:2px
+    linkStyle 0,1,7 stroke:#4da3ff,stroke-width:2px
+    linkStyle 2,3,5,6,11,12 stroke:#37d39a,stroke-width:2px
+    linkStyle 9,10 stroke:#ff7a59,stroke-width:2px
+    linkStyle 4,8,13 stroke:#f5c542,stroke-width:2px
           </pre>
-          <figcaption>图 1 · 三层架构与请求分发路径（蓝=交互线程池 / 绿=SSE 实时流 / 橙=串行锁 / 黄=批量扫描）</figcaption>
+          <figcaption>图 1 · 三层架构与请求分发路径（蓝=交互线程池 / 绿=SSE 实时流 / 橙=串行锁 / 黄=批量扫描；事件循环线程用方框套方框标出「SSE 协程在线程内部」）</figcaption>
         </figure>
 
         <div class="legend">
@@ -239,6 +275,18 @@
           <span class="item"><span class="dot" style="background:var(--accent3)"></span> SSE 实时流（每连接独立）</span>
           <span class="item"><span class="dot" style="background:var(--accent4)"></span> 批量扫描（进程池）</span>
           <span class="item"><span class="dot" style="background:var(--accent2)"></span> 全局串行锁（排队点）</span>
+        </div>
+
+        <div class="callout">
+          <div class="t">API 层启动与分流：一个进程 → 一个事件循环线程 → 按请求类型分三条路</div>
+          <p><strong>启动顺序：</strong>API 进程（uvicorn 启动 <code>FrontAPI:app</code>）→ 进程内创建<strong>事件循环线程（1 个）</strong>。线程池（<code>ThreadPoolExecutor</code>）在进程内声明了<strong>容量上限（至多 40 个线程）</strong>，但并非启动时就建好全部线程——它是<strong>按需创建</strong>的：首个任务到来时才真正建线程，之后<strong>常驻复用、不销毁</strong>。事件循环线程是唯一负责「接收请求」的执行者。</p>
+          <p><strong>分流逻辑：</strong>事件循环线程收到前端请求后，按请求类型决定下一步：</p>
+          <div class="steps">
+            <div class="step"><div class="num">1</div><div class="body"><div class="t">SSE 请求（期货实时流）</div><p>在<strong>当前事件循环线程内部</strong>创建独立协程（异步生成器），协程挂在这个线程上等行情——不占线程池名额。</p></div></div>
+            <div class="step"><div class="num">2</div><div class="body"><div class="t">股票静态分析请求</div><p>提交到<strong>当前 API 进程的线程池</strong>，由 <code>run_in_threadpool</code> 调度：首个任务到来时线程池才会真正创建线程（按需创建），之后常驻复用、跑完归还线程、不销毁。线程池的 40 只是<strong>容量上限</strong>，不是一开始就建好 40 个。</p></div></div>
+            <div class="step"><div class="num">3</div><div class="body"><div class="t">批量扫描请求</div><p>创建<strong>与 API 进程平行的独立 worker 进程</strong>（spawn 出来的 ProcessPool），任务派发到这些进程里执行。</p></div></div>
+          </div>
+          <p><strong>你的描述审核：</strong>基本正确。两点修正——① 线程池不是「每来一个请求创建一个全新线程」，也不是「启动时就预建好 40 个」：它<strong>按需创建</strong>（首个任务到来才建线程）、之后常驻复用、跑完归还；40 只是容量上限。② worker 进程是 spawn 出来的<strong>独立进程</strong>，与 API 进程平行，不共享内存。其余（先建进程 → 再建事件循环线程 → 按类型分流：SSE 在线程内建协程 / 股票走线程池 / 扫描走进程池）与实现一致。</p>
         </div>
 
         <p>核心要点：<mark class="key">API 层本身是并发的</mark>——FastAPI 的事件循环能同时接收所有网页的请求，不会在「接收」环节排队。真正的排队发生在服务层的 <code>_ENGINE_LOCK</code> 全局串行锁，且只针对会触碰共享缓存的股票分析路径。</p>
@@ -262,7 +310,7 @@
           </div>
           <div class="card">
             <div class="card-title"><span class="tag green">并行执行</span>线程池</div>
-            <p>同步阻塞的引擎调用经 <code>run_in_threadpool</code> 丢进 FastAPI 默认线程池（anyio，约 40 线程）。多个请求可<strong>同时在线程池的不同线程里执行</strong>，互不阻塞事件循环。</p>
+            <p>同步阻塞的引擎调用经 <code>run_in_threadpool</code> 丢进 FastAPI 默认线程池（anyio，<strong>至多 40 个线程，按需创建后常驻</strong>）。多个请求可<strong>同时在线程池的不同线程里执行</strong>，互不阻塞事件循环。</p>
           </div>
           <div class="card">
             <div class="card-title"><span class="tag orange">串行保护</span>全局锁</div>
@@ -307,6 +355,295 @@
           <div class="t">结论</div>
           <p>两个请求<strong>同时到达、同时进入线程池</strong>，但在 <code>_ENGINE_LOCK</code> 处排队：一次只分析一只，另一只等待。所以「API 层排队」的直觉只对了一半——排队发生在服务层的锁上，而非 API 接收层。</p>
         </div>
+
+        <h3 id="sec-thread-co">2.3 进程 → 线程 → 协程：到底谁属于谁</h3>
+        <p>很多疑问的根源是混淆了「进程」「线程」「协程」三者的从属关系。规则只有一条：<strong>线程必然属于且只属于某个进程；协程不是线程，它挂在某个线程（事件循环线程）上运行</strong>。按当前部署模型（单一 uvicorn 的 <code>FrontAPI:app</code> 进程作为 API 进程），各类执行单元的归属如下：</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>执行单元</th><th>是线程吗</th><th>属于谁</th><th>创建方式</th><th>作用</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>事件循环线程</td><td>是（1 个线程）</td><td>API 进程</td><td>进程启动时创建 1 个</td><td>SSE 协程在这个线程上运行</td></tr>
+              <tr><td>SSE 协程 ×N</td><td>否（是协程）</td><td>跑在 API 进程的事件循环线程上</td><td>来一个 SSE 连接建一个</td><td>每个 SSE 连接一个独立协程去「等」数据</td></tr>
+              <tr><td>线程池线程 ×至多40</td><td>是</td><td>API 进程</td><td><strong>按需创建（首个任务到来时才建）→ 常驻复用 → 不销毁</strong></td><td>交互式同步分析（<code>call_analysis</code> 等）</td></tr>
+              <tr><td>worker 进程 ×N</td><td>否（是独立进程）</td><td>OS 层面独立，与 API 进程平行</td><td>扫描时 spawn 一批，扫完 <code>destroy_pool()</code> 销毁</td><td>批量扫描多进程跑引擎</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 760 420" width="100%" height="auto" role="img" aria-label="进程线程协程三层关系图" style="max-width:760px">
+            <defs>
+              <style>
+                .f6-t { font: 700 15px var(--font); }
+                .f6-th { font: 700 14px var(--font); }
+                .f6-ts { font: 400 12px var(--font); fill: var(--muted); }
+                .f6-tc { font: 600 13px var(--font); }
+                .f6-box { fill: var(--bg3); }
+                .f6-elbox { fill: rgba(122,92,210,0.14); stroke: #8b7bd8; }
+                .f6-elco { fill: var(--bg2); stroke: #8b7bd8; }
+                .f6-tpbox { fill: var(--bg3); stroke: var(--rule); }
+                .f6-tp { fill: var(--bg2); stroke: var(--rule); }
+                .f6-wkbox { fill: rgba(38,198,218,0.10); stroke: #26c6da; }
+                .f6-wk { fill: var(--bg2); stroke: #26c6da; }
+              </style>
+            </defs>
+
+            <!-- 外层 API 进程 -->
+            <rect x="30" y="20" width="460" height="372" rx="14" fill="var(--bg2)" stroke="var(--rule)"></rect>
+            <text x="52" y="48" class="f6-t">API 进程（uvicorn 主进程）</text>
+            <text x="52" y="68" class="f6-ts">线程属于进程 · 两者共享同一份内存</text>
+
+            <!-- 事件循环线程 -->
+            <rect x="50" y="82" width="420" height="140" rx="10" class="f6-elbox" stroke-width="1.5"></rect>
+            <text x="68" y="108" class="f6-th" fill="#8b7bd8">事件循环线程（1 个线程）</text>
+            <text x="68" y="126" class="f6-ts">协程跑在线程上 · 协作式调度</text>
+            <rect x="68" y="138" width="120" height="44" rx="8" class="f6-elco"></rect>
+            <rect x="200" y="138" width="120" height="44" rx="8" class="f6-elco"></rect>
+            <rect x="332" y="138" width="120" height="44" rx="8" class="f6-elco"></rect>
+            <text x="128" y="165" class="f6-tc" fill="var(--ink)" text-anchor="middle">SSE 协程 1</text>
+            <text x="260" y="165" class="f6-tc" fill="var(--ink)" text-anchor="middle">SSE 协程 2</text>
+            <text x="392" y="165" class="f6-tc" fill="var(--ink)" text-anchor="middle">SSE 协程 3</text>
+            <text x="68" y="204" class="f6-ts">await 时让出 · 不占独立线程</text>
+
+            <!-- 线程池 -->
+            <rect x="50" y="234" width="420" height="140" rx="10" class="f6-tpbox"></rect>
+            <text x="68" y="260" class="f6-th">线程池（至多 40 个线程）</text>
+            <text x="68" y="278" class="f6-ts">轻量 · 共享进程内存 · 按需创建后常驻</text>
+            <rect x="68" y="290" width="88" height="42" rx="8" class="f6-tp"></rect>
+            <rect x="168" y="290" width="88" height="42" rx="8" class="f6-tp"></rect>
+            <rect x="268" y="290" width="88" height="42" rx="8" class="f6-tp"></rect>
+            <rect x="368" y="290" width="88" height="42" rx="8" class="f6-tp"></rect>
+            <text x="112" y="317" class="f6-tc" fill="var(--ink)" text-anchor="middle">线程 1</text>
+            <text x="212" y="317" class="f6-tc" fill="var(--ink)" text-anchor="middle">线程 2</text>
+            <text x="312" y="317" class="f6-tc" fill="var(--ink)" text-anchor="middle">线程 3</text>
+            <text x="412" y="317" class="f6-tc" fill="var(--ink)" text-anchor="middle">线程 4</text>
+            <text x="68" y="356" class="f6-ts">… 至多 40 个 · 按需创建后常驻复用 · 交互分析跑在这里</text>
+
+            <!-- worker 进程 -->
+            <rect x="520" y="20" width="210" height="372" rx="14" class="f6-wkbox" stroke-width="1.5"></rect>
+            <text x="540" y="48" class="f6-th" fill="#26c6da">worker 进程 ×N</text>
+            <text x="540" y="68" class="f6-ts">独立进程 · 不共享内存</text>
+            <rect x="540" y="90" width="170" height="44" rx="8" class="f6-wk"></rect>
+            <rect x="540" y="146" width="170" height="44" rx="8" class="f6-wk"></rect>
+            <rect x="540" y="202" width="170" height="44" rx="8" class="f6-wk"></rect>
+            <text x="625" y="117" class="f6-tc" fill="var(--ink)" text-anchor="middle">worker 1</text>
+            <text x="625" y="173" class="f6-tc" fill="var(--ink)" text-anchor="middle">worker 2</text>
+            <text x="625" y="229" class="f6-tc" fill="var(--ink)" text-anchor="middle">worker N</text>
+            <text x="540" y="280" class="f6-ts">每个 worker 是独立 OS 进程</text>
+            <text x="540" y="298" class="f6-ts">跑扫描引擎 · 与 API 进程隔离</text>
+
+            <!-- 中间分隔 -->
+            <text x="490" y="250" class="f6-th" fill="var(--muted)" text-anchor="middle">独立</text>
+            <text x="490" y="274" class="f6-th" fill="var(--muted)" text-anchor="middle">进程</text>
+          </svg>
+          <figcaption>图 6 · 进程 → 线程 → 协程 三层关系：协程不是线程，它挂在事件循环线程上；线程必然属于进程；worker 是与 API 进程平行的独立进程</figcaption>
+        </figure>
+
+        <div class="callout">
+          <div class="t">一句话</div>
+          <p><strong>线程永远挂靠在某个进程下；协程又挂在某个线程（事件循环）下。</strong>这两个问法容易混淆：<strong>线程池的线程（至多 40，按需创建后常驻）属于 API 进程</strong>（对）；<strong>SSE 协程是线程吗？不是</strong>——它是跑在 API 进程事件循环线程上的协程。worker 进程则跟 API 进程是<strong>平行</strong>的两个主体，不在 API 进程内部，也不共享它的内存。</p>
+        </div>
+
+        <div class="callout">
+          <div class="t">线程 vs 进程：谁更「重」？—— 决定了「线程池常驻 / 进程池即用即弃」的相反策略</div>
+          <p>直觉上容易把「线程」和「进程」的轻重记反。事实是：<strong>线程轻、进程重</strong>。判断依据是「它对 OS 资源的要求」：</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>维度</th><th>线程（轻）</th><th>进程（重）</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>地址空间</td><td><strong>共享</strong>进程内存</td><td><strong>独立</strong>地址空间</td></tr>
+                <tr><td>创建成本</td><td>仅分配线程栈 / TCB，内核调度成本低（微秒级）</td><td>复制页表、Python <code>spawn</code> 还要重载解释器，很贵（毫秒级）</td></tr>
+                <tr><td>每实例内存</td><td>小（约 8MB 栈，按需提交物理页）</td><td>大（整个解释器 + 库，数百 MB）</td></tr>
+                <tr><td>隔离性</td><td>无——共享状态，需锁 / 同步</td><td>完全隔离，天然线程安全</td></tr>
+                <tr><td>复用价值</td><td>高</td><td>低</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>由此推出系统里两条<strong>相反</strong>的生命周期策略：</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th></th><th>线程池（交互路径）</th><th>worker 进程（扫描路径）</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>任务特征</td><td>高频、短小（一次点击几秒跑完）</td><td>低频、超大批量（一次扫上百只）</td></tr>
+                <tr><td>策略</td><td><strong>常驻复用</strong>：按需创建后不销毁</td><td><strong>即用即弃</strong>：扫完 <code>destroy_pool()</code> 销毁</td></tr>
+                <tr><td>原因</td><td>线程便宜，反复建毁纯粹浪费调度开销</td><td>进程 spawn 贵，但换来了隔离与干净状态；且 worker 有私有大缓存，不销毁会内存膨胀</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>关键澄清：</strong>不是「谁便宜就该销毁」——恰恰相反。<strong>线程便宜 → 该常驻复用</strong>（销毁便宜的资源还反复建毁是浪费）；<strong>进程昂贵但承载一次性大批量 + 需要隔离 → 扫完销毁</strong>，用一次 spawn 成本换「状态干净 + 内存释放」。两者策略相反，但都是各自场景下的最优解。</p>
+        </div>
+
+        <h3 id="sec-io-cpu">2.4 为什么是「事件循环 + 协程」，而不是每连接一个线程，也不是两个线程各跑一堆协程？</h3>
+        <p>这组问题的答案都指向同一个机制：<strong>协程只有在 <code>await</code> 时才让出线程；CPU 型任务从头到尾没有 <code>await</code>，协程拿到线程后根本不撒手。</strong>由此推演出三条结论：</p>
+
+        <div class="card-grid">
+          <div class="card">
+            <div class="card-title"><span class="tag blue">IO 型</span>面向前端：用协程</div>
+            <p>SSE 实时流大部分时间在等天勤行情、等网络数据——这段等待就是空闲。协程在 <code>await</code> 处让出线程，别的协程趁机来跑，所以<strong>1 个线程能挂几千个等待中的连接</strong>，「多网页并行」只花 1 个线程。</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="tag orange">CPU 型</span>面向服务：只能真线程 / 真进程</div>
+            <p>chan.py 缠论分析是纯 CPU 计算，连续算几秒都不 <code>await</code>，协程拿到线程就独占到底。<strong>40 个协程挤 1 个线程不并行，反而把其它协程全堵死</strong>，比直接用 40 线程还慢（多了切换开销）。CPU 并行必须靠真线程 / 真进程。</p>
+          </div>
+          <div class="card">
+            <div class="card-title"><span class="tag green">分工</span>协程负责「等」，线程池负责「算」</div>
+            <p>SSE 生成器内部用 <code>await run_in_threadpool(...)</code> 临时借一个线程池线程执行阻塞操作（<code>src.connect / init_chan / extract_snapshot / close</code>），跑完归还，协程回事件循环继续等。两条路径互不冲突。</p>
+          </div>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 760 380" width="100%" height="auto" role="img" aria-label="单线程多协程切换时间线" style="max-width:760px">
+            <defs>
+              <style>
+                .f7-t { font: 700 15px var(--font); }
+                .f7-th { font: 700 13px var(--font); }
+                .f7-ts { font: 400 12px var(--font); fill: var(--muted); }
+                .f7-tc { font: 600 13px var(--font); }
+                .f7-a { fill: #3b2fba; }
+                .f7-b { fill: #7b6ef6; }
+                .f7-c { fill: #6366f1; }
+                .f7-w { fill: var(--bg3); }
+                .f7-tp { fill: var(--bg2); stroke: var(--rule); }
+                .f7-arr { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+              </style>
+            </defs>
+
+            <text x="40" y="26" class="f7-t">1 个线程 · 多个协程：await 让出，线程永不空闲</text>
+
+            <!-- 时间刻度 -->
+            <g class="f7-ts" text-anchor="middle">
+              <text x="150" y="48">t0</text><text x="215" y="48">t1</text><text x="280" y="48">t2</text>
+              <text x="345" y="48">t3</text><text x="410" y="48">t4</text><text x="475" y="48">t5</text>
+              <text x="540" y="48">t6</text><text x="605" y="48">t7</text><text x="670" y="48">t8</text>
+            </g>
+
+            <!-- 协程 A -->
+            <text x="40" y="84" class="f7-th">协程 A</text>
+            <text x="40" y="100" class="f7-ts">SSE 连接 1</text>
+            <rect x="150" y="72" width="65" height="32" rx="6" class="f7-a"></rect>
+            <rect x="215" y="72" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="280" y="72" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="345" y="72" width="65" height="32" rx="6" class="f7-a"></rect>
+            <rect x="410" y="72" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="475" y="72" width="65" height="32" rx="6" class="f7-a"></rect>
+            <rect x="540" y="72" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="605" y="72" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+
+            <!-- 协程 B -->
+            <text x="40" y="164" class="f7-th">协程 B</text>
+            <text x="40" y="180" class="f7-ts">SSE 连接 2</text>
+            <rect x="150" y="152" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="215" y="152" width="65" height="32" rx="6" class="f7-b"></rect>
+            <rect x="280" y="152" width="65" height="32" rx="6" class="f7-b"></rect>
+            <rect x="345" y="152" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="410" y="152" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="475" y="152" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="540" y="152" width="65" height="32" rx="6" class="f7-b"></rect>
+            <rect x="605" y="152" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+
+            <!-- 协程 C -->
+            <text x="40" y="244" class="f7-th">协程 C</text>
+            <text x="40" y="260" class="f7-ts">SSE 连接 3</text>
+            <rect x="150" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="215" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="280" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="345" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="410" y="232" width="65" height="32" rx="6" class="f7-c"></rect>
+            <rect x="475" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="540" y="232" width="65" height="32" rx="6" class="f7-w" stroke="var(--rule)" stroke-dasharray="3 3"></rect>
+            <rect x="605" y="232" width="65" height="32" rx="6" class="f7-c"></rect>
+
+            <!-- await 标注 -->
+            <path class="f7-arr" d="M182 104 L182 128 L312 128 L312 148" marker-end="url(#f7arrow)"></path>
+            <text x="312" y="124" class="f7-ts" text-anchor="middle">A await（等网络）→ 让出 → 切到 B</text>
+
+            <!-- 事件循环线程行 -->
+            <text x="40" y="332" class="f7-th">事件循环线程（仅 1 个）</text>
+            <rect x="150" y="316" width="520" height="38" rx="6" class="f7-tp"></rect>
+            <rect x="150" y="316" width="65" height="38" rx="6" class="f7-a"></rect>
+            <rect x="215" y="316" width="65" height="38" rx="6" class="f7-b"></rect>
+            <rect x="280" y="316" width="65" height="38" rx="6" class="f7-b"></rect>
+            <rect x="345" y="316" width="65" height="38" rx="6" class="f7-a"></rect>
+            <rect x="410" y="316" width="65" height="38" rx="6" class="f7-c"></rect>
+            <rect x="475" y="316" width="65" height="38" rx="6" class="f7-a"></rect>
+            <rect x="540" y="316" width="65" height="38" rx="6" class="f7-b"></rect>
+            <rect x="605" y="316" width="65" height="38" rx="6" class="f7-c"></rect>
+            <g class="f7-tc" text-anchor="middle" fill="#fff">
+              <text x="182" y="340">A</text><text x="247" y="340">B</text><text x="312" y="340">B</text>
+              <text x="377" y="340">A</text><text x="442" y="340">C</text><text x="507" y="340">A</text>
+              <text x="572" y="340">B</text><text x="637" y="340">C</text>
+            </g>
+
+            <defs><marker id="f7arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M1 1 L7 4 L1 7 Z" fill="var(--muted)"></path></marker></defs>
+          </svg>
+          <figcaption>图 7 · 1 个线程 · 多个协程：await 让出，线程永不空闲（每个时间片只有 1 个协程占用线程；等待中的协程不占线程，A 等待时 B/C 趁机运行）</figcaption>
+        </figure>
+
+        <div class="callout">
+          <div class="t">为什么不「两个线程，一个事件循环、一个服务层 40 协程」？</div>
+          <p>你直觉里的拆法——「线程 A 面向前端跑协程、线程 B 面向服务跑协程，用 40 协程代替 40 线程」——出发点对（前后端分离、省资源），但在 CPU 这半边走不通：服务层要的是<strong>并行计算</strong>，协程给不了并行，因为它只在 <code>await</code> 让出，而 CPU 计算不 <code>await</code>。所以正确拆法不是「两端都用协程」，而是按 IO/CPU 分流：<strong>前端事件循环 + 协程（IO 型），服务层线程池（CPU 型，真并行），批量扫描再进一步用进程池（多进程，绕开 GIL 真用满多核）</strong>。</p>
+        </div>
+
+        <figure class="diagram">
+          <svg viewBox="0 0 760 336" width="100%" height="auto" role="img" aria-label="IO型与CPU型协程对比" style="max-width:760px">
+            <defs>
+              <style>
+                .f8-t { font: 700 15px var(--font); }
+                .f8-th { font: 700 14px var(--font); }
+                .f8-ts { font: 400 12px var(--font); fill: var(--muted); }
+                .f8-tc { font: 600 13px var(--font); }
+                .f8-ok { fill: #27ae60; }
+                .f8-bad { fill: #e74c3c; }
+                .f8-iobox { fill: rgba(107,91,149,0.12); stroke: #6b5b95; }
+                .f8-cpubox { fill: rgba(231,76,60,0.10); stroke: #e74c3c; }
+                .f8-step { fill: var(--bg3); stroke: var(--rule); }
+              </style>
+            </defs>
+
+            <text x="36" y="26" class="f8-t">为什么线程 B 不能用 40 个协程替代 40 个线程</text>
+            <text x="36" y="45" class="f8-ts">关键判断依据：任务会不会「await 让出」</text>
+
+            <!-- 左侧 IO 型 -->
+            <rect x="30" y="60" width="345" height="258" rx="12" class="f8-iobox" stroke-width="1.5"></rect>
+            <text x="50" y="84" class="f8-th" fill="#6b5b95">面向前端 · IO 型任务</text>
+            <text x="50" y="102" class="f8-ts">等网络、等行情推送 → 阻塞是常态</text>
+
+            <rect x="50" y="116" width="305" height="50" rx="8" class="f8-step"></rect>
+            <text x="66" y="138" class="f8-tc">执行一小段 → await</text>
+            <text x="66" y="156" class="f8-ts">等待 → 让出线程 → 别人来跑</text>
+
+            <rect x="50" y="178" width="305" height="50" rx="8" class="f8-step"></rect>
+            <text x="66" y="200" class="f8-tc">数据到了 → 恢复执行</text>
+            <text x="66" y="218" class="f8-ts">协程被唤醒 · 1 个线程挂几千个</text>
+
+            <text x="50" y="266" class="f8-th" fill="#27ae60">✓ 协程是正道</text>
+            <text x="50" y="284" class="f8-ts">等待不占资源 · 单个事件循环线程即可</text>
+
+            <!-- 右侧 CPU 型 -->
+            <rect x="385" y="60" width="345" height="258" rx="12" class="f8-cpubox" stroke-width="1.5"></rect>
+            <text x="405" y="84" class="f8-th" fill="#e74c3c">面向服务 · CPU 型任务</text>
+            <text x="405" y="102" class="f8-ts">chan.py 缠论计算 → 连续算几秒不撒手</text>
+
+            <rect x="405" y="116" width="305" height="50" rx="8" class="f8-step"></rect>
+            <text x="421" y="138" class="f8-tc">计算…计算…计算…算完</text>
+            <text x="421" y="156" class="f8-ts">全程无 await → 🔒 线程被独占</text>
+
+            <rect x="405" y="178" width="305" height="50" rx="8" class="f8-step"></rect>
+            <text x="421" y="200" class="f8-tc">40 协程挤 1 线程</text>
+            <text x="421" y="218" class="f8-ts">不并行 · 且把其它协程全堵死</text>
+
+            <text x="405" y="266" class="f8-th" fill="#e74c3c">✗ 协程反而更慢</text>
+            <text x="405" y="284" class="f8-ts">CPU 并行必须靠真线程 / 真进程</text>
+          </svg>
+          <figcaption>图 8 · 为什么「线程 B 用 40 个协程替代 40 个线程」走不通：IO 型任务有 await 让出（协程适用），CPU 型任务无 await（协程不适用）</figcaption>
+        </figure>
       </section>
 
       <!-- ══════════ 3 三条路径 ══════════ -->
@@ -356,9 +693,11 @@
 
         <h3>3.2 路径 B：期货 SSE 实时流（真正并行）</h3>
         <p>前端输入期货代码 → 建立 <code>EventSource("/api/futures_stream")</code>。这是<strong>长连接</strong>，不是一次性请求。每个连接对应一个独立的异步生成器协程，内部创建独立的 <code>TqSdkSource</code>（TqApi + CChan），连接间天然隔离、不加锁（锁分类 SELF_CONTAINED）。所以网页 C 看期货 1、网页 D 看期货 2，两个实时流<strong>并行推送</strong>，互不阻塞——这是设计上刻意为之：实时流不能受静态分析锁拖累。</p>
+        <p><strong>为什么用「每连接一个协程」而不是「每连接一个线程」、为什么一个事件循环线程就能同时喂多个连接？</strong>因为 SSE 是 IO 型任务，<strong>协程在 <code>await</code> 时让出线程</strong>：等待行情期间零占用，1 个事件循环线程靠协程切换同时服务很多连接。遇到真正需要阻塞计算的环节（连接、拉历史、取快照、关闭），协程用 <code>await run_in_threadpool(...)</code> <strong>临时借用线程池线程</strong>执行完立即归还——协程负责「等」，线程池负责「算」。这套 IO/CPU 角色分工与「为什么不把服务层的线程池也换成协程」的完整论证见 <a href="#sec-io-cpu" style="color:var(--accent)">2.4</a>。</p>
 
         <h3>3.3 路径 C：批量扫描（多进程并行）</h3>
         <p>点击「股票扫描」→ <code>POST /api/scan/submit</code> 提交全部股票清单，返回 <code>task_id</code>。后端把任务派发到 <code>ProcessPoolExecutor</code>（spawn 上下文，worker 数自动适配 CPU 核数，上限 16），每个 worker 进程独立跑引擎。结果经 SQLite <code>AppScanStore</code> 跨进程共享，前端轮询 <code>/api/scan/status</code> 增量读取。扫描与交互路径隔离，扫描时多网页交互不受影响（除 <code>_ENGINE_LOCK</code> 排队外）。</p>
+        <p><strong>生命周期（v3.0 新增「即用即弃」）：</strong>扫描是<strong>一次性任务</strong>，不是常驻服务。worker 进程在扫描期间只缓存轻量结果（<code>cache_chan=False</code>，不缓存 CChan 对象与 K 线 records 这两个内存大头）；<strong>所有股票分析完成后，<code>_monitor_task</code> 收割完 future 立即调用 <code>destroy_pool()</code> 销毁整个进程池</strong>——worker 进程全部退出、各自缓存随之释放、内存归还。下次点击「股票扫描」重新 spawn 全新进程池（空缓存），恢复初始状态。控制台打印「[扫描池] 任务完成，销毁进程池（worker 缓存已释放）」确认状态已恢复。</p>
 
         <div class="callout">
           <div class="t">ProcessPool 到底属于哪一层？——「编排在 API 层，执行在服务层」</div>
@@ -431,6 +770,7 @@
     subgraph STORE["SQLite AppScanStore<br>按 seq 落库 · 缺口校验"]
         R["results[seq] → 100 行齐全"]
     end
+    DESTROY["destroy_pool()<br>扫描完成即销毁<br>worker 退出 · 缓存释放"]
 
     S0 --&gt; Q
     S1 --&gt; Q
@@ -441,8 +781,9 @@
     W2 --&gt; R
     W16 --&gt; R
     R --&gt;|"前端连续性游标"| FE2["进度 100/100"]
+    R --&gt;|"全部 future 收割完"| DESTROY
           </pre>
-          <figcaption>图 3 · 100 只股票 · 16 worker 抢占式分发与按 seq 落库（黄=进程池路径）</figcaption>
+          <figcaption>图 3 · 100 只股票 · 16 worker 抢占式分发、按 seq 落库、完成即销毁（黄=进程池路径；v3.0 新增销毁步骤）</figcaption>
         </figure>
 
         <div class="callout">
@@ -450,6 +791,93 @@
           <p>worker 数 = <code>min(自动适配CPU核数, 16)</code>：默认读 <code>os.cpu_count()</code>（16 核 → 16 worker），显式 <code>SCAN_POOL_WORKERS</code> 可覆盖。上限钳制 16 是<strong>真实存在的代码逻辑</strong>：<code>AppScanPool._SCAN_POOL_MAX_WORKERS = 16</code>，<code>_resolve_workers()</code> 最终 <code>max(1, min(16, n))</code>。</p>
           <p><strong>为什么要有这个钳制？</strong>关键不在「核多内存也大」，而在<strong>内存是按 worker 进程算、不是按核算</strong>：每个 worker 是 spawn 出来的<strong>独立 Python 进程</strong>，要完整加载缠论引擎 + K 线 / 复权 / 缓存数据，单进程占用可达数百 MB 到 1GB+。「核多内存也大」只对消费级台式机大致成立——云服务器常见「高 vCPU + 低内存」配置（如 64 vCPU / 32GB），64 个 worker × 1GB = 64GB 直接 OOM。另外扫描的瓶颈通常<strong>不是 CPU 而是数据源</strong>（通达信服务器有请求频率限制），worker 超过 ~16 个后基本不再变快，只是白白多占内存。</p>
           <p><strong>这是不是「一刀切」？</strong>不是。钳制只是<strong>防御性默认值</strong>，不是硬限制——真遇到「核多内存也大、想拉满」的机器，改 <code>.env</code> 里 <code>SCAN_POOL_WORKERS</code> 即可覆盖（比如 32 核 128GB 设成 24）。你担心的「真遇到问题再定位」也成立：钳制防的是<strong>静默 OOM</strong>（扫描中途整个进程池崩掉、进度悬挂），比「先崩了再排查」代价小。每个 worker 在独立进程内持有自己的 <code>_scan_lock</code>，互不竞争，真正并行。</p>
+        </div>
+
+        <h3>3.5 扫描缓存生命周期：worker 缓存何时存在、何时销毁、点击结果走哪条路</h3>
+        <p>这是 v3.0 的核心补充。系统里其实有<strong>两类完全不同的 <code>_stocks_analysis_cache</code></strong>：一份在 API 进程内（常驻，交互路径用），N 份在 worker 进程内（扫描期临时，扫描结束即销毁）。两者<strong>互不可见、互不读写</strong>——进程隔离决定了它们天然是两份独立的内存。下图说明它们各自的生命周期，以及点击扫描结果时到底走哪条路：</p>
+
+        <figure class="diagram">
+          <pre class="mermaid">flowchart LR
+    subgraph API_PROC["API 进程（常驻）"]
+        CACHE["_stocks_analysis_cache<br>交互分析缓存 · 常驻"]
+        CLICK["点击扫描结果面板股票 X<br>→ fetch /api/stock?code=X"]
+    end
+    subgraph SCAN_PHASE["扫描期 · worker 进程 ×N（临时存在）"]
+        W1["worker1 私有缓存<br>cache_chan=False 仅轻量 result"]
+        W2["worker2 私有缓存"]
+        WN["workerN 私有缓存"]
+    end
+    subgraph STORE2["SQLite AppScanStore（跨进程共享）"]
+        RES["扫描结果<br>X 有买点 / 卖点"]
+    end
+
+    RES --&gt;|"面板展示 X"| CLICK
+    CLICK --&gt;|"交互路径 · 只查 API 进程缓存"| CACHE
+    W1 -.-&gt;|"扫描完成 destroy_pool()"| GONE["缓存全部释放<br>worker 进程退出"]
+    W2 -.-&gt; GONE
+    WN -.-&gt; GONE
+          </pre>
+          <figcaption>图 5 · 两类缓存的归属与点击扫描结果时的取数路径（实线=交互取数；虚线=扫描结束销毁）</figcaption>
+        </figure>
+
+        <div class="callout">
+          <div class="t">问题一：点击扫描结果面板里的股票 X，软件怎么知道去哪个缓存找？</div>
+          <p>答案是：<strong>它根本不去 worker 缓存里找</strong>。扫描结果面板里展示的「X 有买点 / 卖点」来自 SQLite <code>AppScanStore</code>（worker 写、API 读的跨进程共享表），面板本身只读这份表。当你点击 X 打开 K 线图时，前端发起的是<strong>标准的交互请求 <code>fetch("/api/stock?code=X")</code></strong>——这条请求走线程池 + <code>_ENGINE_LOCK</code>，命中或写入的是 <strong>API 进程内的 <code>_stocks_analysis_cache</code></strong>，与 worker 进程的缓存毫无关系。也就是说：<strong>worker 缓存对前端是「不可见」的</strong>，前端永远只有一条取数通道（API 进程），不存在「去 A 还是去 B 找」的选择问题——因为 worker 缓存从不对外提供读取接口。</p>
+        </div>
+
+        <div class="callout">
+          <div class="t">问题二：10 个 worker 对应 10 份缓存，何时被删除？关闭扫描结果弹窗时删吗？</div>
+          <p>不是关弹窗时删，而是<strong>扫描完成那一刻就删</strong>。生命周期如下：</p>
+          <div class="steps">
+            <div class="step"><div class="num">1</div><div class="body"><div class="t">扫描进行中</div><p>worker 进程各自持有私有缓存，但 <code>cache_chan=False</code>——只缓存轻量 result，<strong>不缓存 CChan 对象和 K 线 records</strong>（这两个才是内存大头），把扫描期内存压到最低。</p></div></div>
+            <div class="step"><div class="num">2</div><div class="body"><div class="t">全部 future 收割完</div><p><code>_monitor_task</code> 确认所有股票都落库后，调用 <code>destroy_pool()</code>：<code>pool.shutdown(wait=False, cancel_futures=True)</code>，worker 进程全部退出，各自缓存（含轻量 result）随之释放，内存归还操作系统。</p></div></div>
+            <div class="step"><div class="num">3</div><div class="body"><div class="t">扫描结果弹窗仍开着</div><p>弹窗展示的是 SQLite 里的结果，<strong>不依赖 worker 缓存</strong>，所以 worker 销毁后弹窗照常显示、点击照常打开 K 线图（走 API 进程缓存）。关不关弹窗都不影响缓存——缓存早已不存在。</p></div></div>
+            <div class="step"><div class="num">4</div><div class="body"><div class="t">下次扫描</div><p>重新 spawn 全新进程池，所有 worker 从空缓存开始，恢复点击「股票扫描」前的初始状态。控制台打印「[扫描池] 重新装配（上次已销毁）」确认。</p></div></div>
+          </div>
+        </div>
+
+        <h3 id="sec-sqlite">3.6 SQLite 扫描结果：删除时机、文件位置与 WAL</h3>
+        <p>worker 缓存是「内存里即用即弃」，但 SQLite 结果是「磁盘上的持久层」。很多人会问：既然 worker 缓存扫描完成就删了，那 <strong>SQLite 里的结果是不是也是 future 收割完就删？</strong>——<strong>不是</strong>。两者是两条完全不同的生命周期，恰恰相反，SQLite 结果必须活得比 worker 久：worker 是独立进程，销毁后内存里的东西全没了，而「面板展示 + 点击取数」的结果依赖必须落在磁盘里，否则 worker 一销毁，弹窗就什么都显示不了。</p>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>数据</th><th>存在位置</th><th>删除时机</th><th>原因</th></tr>
+            </thead>
+            <tbody>
+              <tr><td>worker 进程缓存（含轻量 result）</td><td>内存</td><td><strong>扫描完成即删</strong>（<code>destroy_pool()</code>）</td><td>内存大头，即用即弃</td></tr>
+              <tr><td>SQLite 结果（<code>scan_tasks</code> / <code>scan_results</code>）</td><td>磁盘（<code>scan_tasks.db</code>）</td><td><strong>保留约 7 天</strong>，下次提交扫描时惰性清理</td><td>弹窗要继续展示结果，必须活得比 worker 久</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="callout">
+          <div class="t">SQLite 结果的删除时机：不是 future 收割完，而是「下个周期开始前」</div>
+          <div class="steps">
+            <div class="step"><div class="num">1</div><div class="body"><div class="t">扫描完成</div><p><code>_monitor_task</code> 收割完 future 后只调 <code>destroy_pool()</code> 销毁进程池，<strong>不碰 SQLite</strong>。结果留在磁盘，弹窗在 worker 销毁后仍能正常展示、点击打开 K 线图。</p></div></div>
+            <div class="step"><div class="num">2</div><div class="body"><div class="t">下次提交扫描</div><p><code>submit_batch_scan</code> 入口 best-effort 调用 <code>store.cleanup_old(keep_seconds=7 * 86400)</code>（失败不阻断），删除 <code>created_at</code> 早于 7 天前的任务及其结果。</p></div></div>
+            <div class="step"><div class="num">3</div><div class="body"><div class="t">7 天窗口内</div><p>任务与结果一直保留，直到超过 7 天且恰好有下一次扫描提交才被清掉。目的是让旧结果存活到「新一批结果即将产生」再释放。</p></div></div>
+          </div>
+        </div>
+
+        <div class="callout">
+          <div class="t">SQLite 文件在哪、叫什么名？</div>
+          <p>默认路径是 <code>C:\new_tdx_hd_test\vipdoc\scan_tasks.db</code>。由 <code>AppScanStore._default_db_path()</code> 算出：<code>vipdoc_dir</code>（=<code>tdx_install_dir\vipdoc</code>，<code>tdx_install_dir</code> 默认 <code>C:\new_tdx_hd_test</code>，可在 <code>.env</code> 改）下的 <code>scan_tasks.db</code>。两条可改变它的途径：</p>
+          <div class="steps">
+            <div class="step"><div class="num">1</div><div class="body"><div class="t">环境变量优先</div><p><code>SCAN_TASK_DB</code> 若被设置，则使用它指定的路径（测试隔离 / 多实例用）。</p></div></div>
+            <div class="step"><div class="num">2</div><div class="body"><div class="t">否则跟随安装目录</div><p><code>.env</code> 里改 <code>tdx_install_dir</code>，<code>vipdoc_dir</code> 随之变化，DB 落在新的 <code>vipdoc</code> 下。</p></div></div>
+          </div>
+          <p><strong>注意 WAL 伴生文件：</strong>因为开了 WAL 模式，磁盘上实际会出现三个文件：<code>scan_tasks.db</code>（主库）+ <code>scan_tasks.db-wal</code>（预写日志）+ <code>scan_tasks.db-shm</code>（共享内存索引），后两个是 WAL 的正常伴生文件，不是异常。</p>
+        </div>
+
+        <div class="callout">
+          <div class="t">WAL 是什么？为什么扫描要开 WAL？</div>
+          <p>WAL 是 <strong>Write-Ahead Logging（预写式日志）</strong>的缩写，是 SQLite 的一种日志模式。普通模式（delete/journal）下，SQLite 每写一条都要先持有整个数据库的写锁，<strong>写时其它读写全部被阻塞</strong>；开 WAL 后改为：<strong>先把改动「追加」到一个日志文件（<code>.db-wal</code>），再异步合并回主库</strong>。由此带来：</p>
+          <div class="steps">
+            <div class="step"><div class="num">1</div><div class="body"><div class="t">读写不互斥</div><p>读请求和写请求可以同时进行（普通模式写时不能读）。</p></div></div>
+            <div class="step"><div class="num">2</div><div class="body"><div class="t">写冲突窗口小</div><p>写之间仍需锁，但配合 <code>busy_timeout(30s)</code> + 重试，Windows 上多进程并发写几乎不失败。</p></div></div>
+            <div class="step"><div class="num">3</div><div class="body"><div class="t">对扫描的意义</div><p>扫描正是「16 个 worker 进程同时写 <code>scan_tasks.db</code>、API 进程同时轮询读」，WAL 让这种「一写多读、读写并存」成为可能，否则 16 个 worker 并发写会在锁上频繁冲撞、进度阻塞。</p></div></div>
+          </div>
         </div>
       </section>
 
@@ -574,7 +1002,7 @@
                 <td><span class="tag blue">SCAN_ASYNC</span></td>
                 <td><code>Scanner.submit_batch_scan</code></td>
                 <td>无锁（API 进程）</td>
-                <td>ProcessPool 多进程，每 worker 独立 <code>_scan_lock</code></td>
+                <td>ProcessPool 多进程，每 worker 独立 <code>_scan_lock</code>；扫描完成即 <code>destroy_pool()</code>（即用即弃）</td>
               </tr>
             </tbody>
           </table>
@@ -623,9 +1051,19 @@
             <div class="card-title"><span class="tag green">并行执行</span>期货实时流</div>
             <p>每连接独立 TqApi + CChan，无锁并行，真正的限制是天勤账号并发连接数。</p>
           </div>
+          <div class="card">
+            <div class="card-title"><span class="tag yellow">即用即弃</span>批量扫描</div>
+            <p>worker 进程扫描期只留轻量 result（<code>cache_chan=False</code>），扫描完成即 <code>destroy_pool()</code> 销毁进程池、缓存释放、状态可恢复；点击扫描结果走 API 进程缓存，与 worker 缓存无关。</p>
+          </div>
         </div>
 
         <p>若未来需要消除股票分析的串行瓶颈，可考虑把 <code>_ENGINE_LOCK</code> 改为按标的粒度（<code>code:freq</code> 级锁），但前提是引擎缓存需先做线程安全改造——这是较大的架构改动，当前设计是有意为之的取舍。</p>
+        <div class="callout ok">
+          <div class="t">v4.0 补充：三类并发单元 + 两类「扫描缓存」的完整图景</div>
+          <p><strong>并发单元（谁属于谁）：</strong>线程必然属于某个进程——线程池的线程（至多 40，按需创建后常驻）属于 API 进程；SSE 协程不是线程，它跑在 API 进程的事件循环线程上；worker 是独立进程、与 API 进程平行。服务层要并行计算，只能靠真线程/真进程，协程只在 IO 等待（<code>await</code>）时省资源。</p>
+          <p><strong>扫描的两份数据（哪份何时删）：</strong>worker 进程缓存（内存）<strong>扫描完成即删</strong>（<code>destroy_pool()</code>，生命周期 2.3/2.4 同款「即用即弃」）；SQLite 扫描结果（磁盘 <code>scan_tasks.db</code>）<strong>保留约 7 天</strong>、下次提交扫描时 <code>cleanup_old(7天)</code> 惰性清理。SQLite 是唯一活得比 worker 久的载体，撑起「worker 销毁后弹窗仍可用」。</p>
+        </div>
+        <p><strong>v4.0 验证清单：</strong>① 扫描完成控制台出现「[扫描池] 任务完成，销毁进程池」→ 任务管理器 worker 进程消失、弹窗仍可点击打开 K 线图；② 若设了 <code>SCAN_TASK_DB</code> 或用默认路径，扫描后磁盘出现 <code>scan_tasks.db</code>（+ <code>.db-wal</code> / <code>.db-shm</code>），且不随扫描结束删除、7 天内仍在；③ <code>PRAGMA journal_mode</code> 返回 <code>wal</code>。v3.0 清单（重新装配日志、内存释放）继续有效。</p>
       </section>
 
     </main>
