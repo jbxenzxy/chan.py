@@ -9,7 +9,7 @@ App/AppSSE.py —— SSE 实时流功能域
 
 本模块收纳：
   - SSE 实时流支持（init_chan_symbol / _extract_realtime_snapshot /
-    _calc_futures_white_hline，供 FrontAPI.SSESource 调用）
+    _calc_futures_white_hline，供 FrontAPI.CSSESource 调用）
   - 期货静态分析（_analyze_futures_internal，HTTP 请求模式，与 SSE
     实时流共用天勤数据源 + CChan 分析链路）
   - 期货手动选点（futures_manual_select_point，临时 TqApi 拉全量 →
@@ -107,6 +107,16 @@ def init_chan_symbol(api, symbol, _name, freq_sec, freq_label, start_time=None):
         print(f"[{display_key}] ⑵ 失败: {e}")
         traceback.print_exc()
         return None
+
+
+def _drain_chan(chan):
+    """驱动 chan 增量计算（耗尽 step_load 生成器）。
+
+    原为数据源方法 CSSESource.step_load；彻底解耦业务后提升为服务层
+    纯业务函数，生成器经本函数消耗引擎，数据源不再关心缠论计算。
+    """
+    for _snapshot in chan.step_load():
+        pass
 
 
 def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
@@ -417,21 +427,22 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
     # 1. 拉取历史K线（每次冷启动重新拉取天勤数据）
     t_fetch = time.time()
-    from tqsdk import TqApi, TqAuth
-    from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD
+    from DataAPI.TqSdkCSSESource import CTqSdkSession
     _display_key = f"{code}:{CTqSdkAPI.FREQ_LABEL_CN.get(freq, freq)}"
-    _api = None
+    _src = None
     full_records = []
     try:
-        _api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
-        full_records = CTqSdkAPI.fetch_kline(_api, code, freq_sec=freq_sec, display_key=_display_key)
+        _src = CTqSdkSession()
+        _src.connect()
+        full_records = CTqSdkAPI.fetch_kline(_src.api, code, freq_sec=freq_sec, display_key=_display_key)
     except Exception as _e:
         print(f"[期货][错误] 天勤拉取K线失败: {type(_e).__name__}: {_e}")
         return {"error": f"天勤拉取K线失败: {type(_e).__name__}: {_e}"}
     finally:
-        if _api is not None:
+        if _src is not None:
             try:
-                _api.close()
+                _src.close()
+                _src.close_api()
             except Exception as _e:
                 print(f"[警告] 关闭天勤连接异常: {type(_e).__name__}: {_e}")
     print(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
@@ -889,8 +900,8 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     创建新 TqApi → 从T重新拉取 → 创建新CChan → 返回完整快照。
     """
     import time
-    from tqsdk import TqApi, TqAuth
-    from DataAPI.TqSdkAPI import CTqSdkAPI, TQ_ACCOUNT, TQ_PASSWORD
+    from DataAPI.TqSdkCSSESource import CTqSdkSession
+    from DataAPI.TqSdkAPI import CTqSdkAPI
 
     # 别名解析
     symbol_upper = symbol.upper()
@@ -903,11 +914,13 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     display_key = f"{symbol}:{freq_cn}"
     target_bi_idx = int(bi_idx)
 
-    api = None
-    api2 = None
+    src = None
+    src2 = None
     try:
         t_conn = time.time()
-        api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
+        src = CTqSdkSession()
+        src.connect()
+        api = src.api
         print(f"[{display_key}] ⓪ 临时连接天勤(选点): 耗时 {time.time()-t_conn:.1f}s")
 
         records = CTqSdkAPI.fetch_kline(api, symbol, freq_sec=freq_sec, display_key=display_key)
@@ -966,15 +979,19 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         _saved_point_times[symbol][FREQ_TO_COL.get(freq, "")] = start_time
 
         # Step 4: 关闭旧TqApi，创建新TqApi，从T重新拉取
-        if api is not None:
+        if src is not None:
             try:
-                api.close()
+                src.close()
+                src.close_api()
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
+            src = None
             api = None
 
         t_conn2 = time.time()
-        api2 = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
+        src2 = CTqSdkSession()
+        src2.connect()
+        api2 = src2.api
         print(f"[{display_key}] ⓪ 重新连接天勤(选点后): 耗时 {time.time()-t_conn2:.1f}s")
 
         records2 = CTqSdkAPI.fetch_kline(api2, symbol, freq_sec=freq_sec,
@@ -1010,14 +1027,16 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         traceback.print_exc()
         return {"error": f"选点失败: {str(e)}"}
     finally:
-        if api is not None:
+        if src is not None:
             try:
-                api.close()
+                src.close()
+                src.close_api()
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
-        if api2 is not None:
+        if src2 is not None:
             try:
-                api2.close()
+                src2.close()
+                src2.close_api()
             except Exception as e:
                 print(f"[警告] 异常: {type(e).__name__}: {e}")
 

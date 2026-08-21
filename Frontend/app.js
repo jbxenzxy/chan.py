@@ -179,7 +179,7 @@
 
         let _scanAborted = false;
 
-        let _scanTaskId = null; // 阶段 7：当前批量扫描 task_id（中止时立即经 /api/scan/cancel 传播）
+        let _scanTaskId = null; // 阶段 7：当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
         let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
 
@@ -634,9 +634,9 @@
                     document.getElementById("loading").classList.remove("hidden");
                     document.querySelector(".loading-text").textContent = "正在手选进入段...";
                     const apiPath = isFutures
-                        ? "/api/futures_manual_select_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx
-                : "/api/stocks_manual_select_point?code=" + encodeURIComponent(code) + "&freq=" + freq + "&bi_idx=" + clickedBiIdx;
-                    fetch(apiPath)
+                        ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx
+                : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx;
+                    fetch(apiPath, { method: "POST" })
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
                             return resp.json();
@@ -1396,7 +1396,7 @@
             dualNewZsData = null;
             const code = dualSubData.meta.symbol;
             const isReplay = dualSubData.meta && dualSubData.meta.is_replay;
-            let url = "/api/red_range_zs?code=" + encodeURIComponent(code) + "&freq=" + dualSubFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate);
+            let url = "/api/stocks/" + encodeURIComponent(code) + "/red-range?freq=" + dualSubFreq + "&left_date=" + encodeURIComponent(leftDate) + "&right_date=" + encodeURIComponent(rightDate);
             if (isReplay) {
                 const endDate = document.getElementById("goto-date-input").value;
                 url += "&end_date=" + encodeURIComponent(endDate);
@@ -2860,7 +2860,7 @@
                     connectRealtimeDual(code, currentFreq, subFreq);
                 } else {
                     // 股票双窗口：HTTP 请求
-                    fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + currentFreq + "&dual=1")
+                    fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + currentFreq + "&dual=1")
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                             return resp.json();
@@ -3101,7 +3101,7 @@
 
             // 期货：清除选点 + 冷启动重连SSE（无start_time）
             if (isFutures) {
-                fetch("/api/futures_clear_saved_point?symbol=" + encodeURIComponent(code) + "&freq=" + freq)
+                fetch("/api/futures/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                     .then(resp => resp.json())
                     .then(() => {
                         // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
@@ -3119,11 +3119,11 @@
 
             // 股票：清除选点 + 冷启动HTTP
             // Step 1: 调用后端清除CSV中该周期选点
-            fetch("/api/clear_saved_point?code=" + encodeURIComponent(code) + "&freq=" + freq)
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                 .then(resp => resp.json())
                 .then(() => {
                     // Step 2: 冷启动重新加载
-                    return fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
+                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
@@ -3400,7 +3400,7 @@
                     }
                     return;
                 }
-                fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
+                fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
                     .then(resp => {
                         if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                         return resp.json();
@@ -3512,7 +3512,7 @@
             // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
             // 期货：wantLive已判断"回实时"，走到这里说明wantLive=false，始终传end_date
             const needEndDate = isFutures ? true : (!isToday || keyEnter);
-            const url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+            const url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
                 + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
                 + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
@@ -3726,7 +3726,7 @@
         function fetchStep(endDate, delta) {
             var code = chartData.meta.symbol;
             var freq = currentFreq;
-            var url = "/api/stock?code=" + encodeURIComponent(code) + "&freq=" + freq
+            var url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                 + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
                 + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
                 + (isDualWindow && chartData.meta.market === 'futures' && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
@@ -4016,7 +4016,7 @@
             } else if (wasFutures && !isFuturesCode) {
                 // 期指 → 股票：默认日K，重置为单窗口，同时彻底清理所有期货数据
                 disconnectRealtime();
-                fetch("/api/futures_cleanup").catch(() => {});
+                fetch("/api/futures/cleanup", { method: "POST" }).catch(() => {});
                 fetchFreq = 'd';
                 if (isDualWindow) {
                     isDualWindow = false;
@@ -4080,7 +4080,7 @@
                 return;
             }
             updateFreqButtonStates(false); // 股票：禁用 1m/15s，启用 d/w
-            fetch("/api/stock?code=" + encodeURIComponent(code) + "&freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                     return resp.json();
@@ -4340,7 +4340,7 @@
             document.getElementById("download-status").textContent = "正在连接服务器...";
 
             console.log("[下载] 启动下载:", {categories: cats, day_start: dayStart, min_start: minStart});
-            fetch("/api/tdx_download_start", {
+            fetch("/api/stocks/download/start", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({categories: cats, day_start: dayStart, min_start: minStart})
@@ -4365,7 +4365,7 @@
         };
 
         window.stopDownload = function() {
-            fetch("/api/tdx_download_stop")
+            fetch("/api/stocks/download/cancel", { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 document.getElementById("download-status").textContent = data.message;
@@ -4381,7 +4381,7 @@
         }
 
         function _pollDownloadStatus() {
-            fetch("/api/tdx_download_status")
+            fetch("/api/stocks/download/read/status")
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 var pct = data.progress || 0;
@@ -4696,7 +4696,7 @@
             document.getElementById("scan-mode-dialog").classList.remove("show");
             // 如果勾选了"成分股"，通知后端当前页面指数代码
             if (_scanSources.indexOf("page_index") >= 0 && chartData && chartData.meta && chartData.meta.symbol) {
-                fetch("/api/scan_page_index_code?code=" + encodeURIComponent(chartData.meta.symbol)).catch(function(){});
+                fetch("/api/stocks/scan/set/index?code=" + encodeURIComponent(chartData.meta.symbol), { method: "PUT" }).catch(function(){});
             }
             // 执行实际扫描
             doStartScan();
@@ -4725,11 +4725,9 @@
                 btn.textContent = "正在中断...";
                 btn.disabled = true;
                 // 通知后端立即终止：
-                // ① 旧接口 /api/scan_abort（设置主进程标志 + 兜底中止所有批量任务）
-                // ② 新接口 /api/scan/cancel（精确中止当前 task，worker 每票前检查）
-                fetch("/api/scan_abort").catch(function(){});
+                // 中止：精确中止当前 task（worker 每票前检查中止标志）
                 if (_scanTaskId) {
-                    fetch("/api/scan/cancel?task_id=" + _scanTaskId).catch(function(){});
+                    fetch("/api/stocks/scan/" + _scanTaskId + "/cancel", { method: "POST" }).catch(function(){});
                     _scanTaskId = null;
                 }
                 return;
@@ -4805,7 +4803,7 @@
 
         // 多来源合并：后端统一合并去重，前端只需传逗号分隔的来源列表
         function _fetchMergedStocks(sources, freq) {
-            var url = "/api/scan_stock_list?source=" + sources.join(",");
+            var url = "/api/stocks/scan/read/candidates?source=" + sources.join(",");
             if (freq) url += "&freq=" + freq;
             return fetch(url)
                 .then(function(r) { return r.json(); })
@@ -4818,8 +4816,8 @@
         }
 
         // 阶段 7：批量扫描异步化（ProcessPool 先行）
-        // 提交全部股票到后端执行池（/api/scan/submit → task_id），轮询
-        // /api/scan/status?since=N 增量获取结果；中止经 /api/scan/cancel。
+        // 提交全部股票到后端执行池（/api/stocks/scan/submit → task_id），轮询
+        // /api/stocks/scan/{task_id}/read/status?since=N 增量获取结果；中止经 /api/stocks/scan/{task_id}/cancel。
         // 契约（交叉评审 W15 修复）：保留旧回调形状 onData(单票结果) 逐票
         // 增量喂入、onDone(err, interrupted) 终态——各模式渲染/过滤逻辑
         // 零改动，phase6 前端守护直接复用。
@@ -4844,7 +4842,7 @@
                 onDone(err || null, interrupted);
             }
 
-            fetch("/api/scan/submit", {
+            fetch("/api/stocks/scan/submit", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
@@ -4878,12 +4876,12 @@
                     if (stopped) return;
                     if (_scanAborted) {
                         interrupted = true;
-                        if (taskId) fetch("/api/scan/cancel?task_id=" + taskId).catch(function(){});
+                        if (taskId) fetch("/api/stocks/scan/" + taskId + "/cancel", { method: "POST" }).catch(function(){});
                         // 中止后继续轮询：worker 快速落库中止行，completed 收敛 total
                         // （保持原设计：手工终止时已扫描结果正常显示）
                     }
-                    fetch("/api/scan/status?task_id=" + encodeURIComponent(taskId) +
-                          "&since=" + since + "&_t=" + Date.now())
+                    fetch("/api/stocks/scan/" + encodeURIComponent(taskId) + "/read/status" +
+                          "?since=" + since + "&_t=" + Date.now())
                     .then(function(r) { return r.json(); })
                     .then(function(st) {
                         if (stopped) return;
@@ -4941,7 +4939,7 @@
             // 标注扫描模式：直接查询标注缓存（全周期，不按 freq 过滤，与扫描来源无关）
             if (_scanMode === "ann") {
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在查询标注数据...</div>';
-                fetch("/api/annotations_scan")
+                fetch("/api/stocks/scan/annotation")
                 .then(function(resp) { return resp.json(); })
                 .then(function(annData) {
                     console.log("[标注扫描] 完成，共 " + (annData.codes ? annData.codes.length : 0) + " 条记录");
@@ -5007,7 +5005,7 @@
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
                 var freq = _scanFreq;
                 Promise.all([
-                    fetch("/api/scan_start"),
+                    fetch("/api/stocks/scan/start", { method: "POST" }),
                     _fetchMergedStocks(_scanSources, freq)
                 ])
                     .then(function(resps) {
@@ -5048,7 +5046,7 @@
                             // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
                             if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                             _pendingUpdate = false;
-                            fetch("/api/scan_end").then(function() {
+                            fetch("/api/stocks/scan/end", { method: "POST" }).then(function() {
                                 renderFxDScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                             });
                         }
@@ -5165,7 +5163,7 @@
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
                 var freq = _scanFreq;
                 Promise.all([
-                    fetch("/api/scan_start"),
+                    fetch("/api/stocks/scan/start", { method: "POST" }),
                     _fetchMergedStocks(_scanSources, freq)
                 ])
                     .then(function(resps) {
@@ -5207,7 +5205,7 @@
                             // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
                             if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                             _pendingUpdate = false;
-                            fetch("/api/scan_end").then(function() {
+                            fetch("/api/stocks/scan/end", { method: "POST" }).then(function() {
                                 renderMaScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                             });
                         }
@@ -5314,7 +5312,7 @@
             var sourceLabel = _scanSourceLabel();
             body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
             Promise.all([
-                fetch("/api/scan_start"),
+                fetch("/api/stocks/scan/start", { method: "POST" }),
                 _fetchMergedStocks(_scanSources, freq)
             ])
                 .then(function(resps) {
@@ -5361,7 +5359,7 @@
                         // 把"正在扫描"写回 body，覆盖 renderScanResults 的结果（spinner 残留）
                         if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                         _pendingUpdate = false;
-                        fetch("/api/scan_end").then(function() {
+                        fetch("/api/stocks/scan/end", { method: "POST" }).then(function() {
                             renderScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
                         });
                     }
@@ -5482,7 +5480,7 @@
             status.style.display = "inline";
             status.textContent = "正在刷新股票名称...";
 
-            fetch("/api/refresh_stock_names")
+            fetch("/api/stocks/refresh", { method: "POST" })
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     if (data.status === "already_running") {
@@ -5501,7 +5499,7 @@
         };
 
         function pollRefreshStatus(btn, status) {
-            fetch("/api/refresh_status")
+            fetch("/api/stocks/refresh/read/status")
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     if (data.running) {
@@ -5696,7 +5694,7 @@
             var btn = document.getElementById("scan-save-btn");
             btn.disabled = true;
             btn.textContent = "保存中...";
-            fetch("/api/zxg_save?codes=" + encodeURIComponent(codes.join(",")))
+            fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")), { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 console.log("[THS] 保存响应:", data);
@@ -5739,7 +5737,7 @@
             if (_scanRunning) return;
             document.getElementById("scan-panel").classList.remove("show");
             // 关闭面板时清除扫描缓存，释放内存
-            fetch("/api/scan_clear_cache").catch(function() {});
+            fetch("/api/stocks/scan/close", { method: "POST" }).catch(function() {});
         };
 
         window.toggleScanMinimize = function() {
@@ -5813,7 +5811,7 @@
             // loading 由调用方（loadStock/switchFreq）已设置
 
             try {
-                let sseUrl = '/api/futures_stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq || '1m');
+                let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq || '1m');
                 if (startTime) {
                     sseUrl += '&start_time=' + encodeURIComponent(startTime);
                 }
@@ -5915,7 +5913,7 @@
             badge.textContent = '● 实时';
 
             try {
-                let sseUrl = '/api/futures_stream?symbol=' + encodeURIComponent(symbol)
+                let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol)
                     + '&freq=' + mainFreq + '&dual=1&sub_freq=' + subFreq;
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
@@ -6010,7 +6008,7 @@
             badge.textContent = '● 实时';
 
             try {
-                let sseUrl = '/api/futures_stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq);
+                let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq);
                 if (startTime) {
                     sseUrl += '&start_time=' + encodeURIComponent(startTime);
                 }
@@ -6186,7 +6184,7 @@
             if (!chartData || !chartData.meta) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            fetch("/api/annotations?code=" + encodeURIComponent(code) + "&freq=" + freq)
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/read/annotation?freq=" + freq)
                 .then(function(resp) { return resp.json(); })
                 .then(function(data) {
                     annotations = data.annotations || [];
@@ -6200,7 +6198,7 @@
             if (!chartData || !chartData.meta) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            fetch("/api/annotations", {
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/save/annotation", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -6228,7 +6226,7 @@
             if (!chartData || !chartData.meta) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            fetch("/api/annotations", {
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/save/annotation", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -6439,7 +6437,7 @@
             const code = chartData.meta.symbol;
             const freq = currentFreq;
             if (confirm("确定删除当前股票 (" + code + ") " + freq + " 周期下的全部标注吗？")) {
-                fetch("/api/annotations", {
+                fetch("/api/stocks/" + encodeURIComponent(code) + "/save/annotation", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
@@ -6488,7 +6486,7 @@
             if (!chartData || !chartData.meta) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            fetch("/api/annotations", {
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/save/annotation", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
@@ -6658,7 +6656,7 @@
                     updateDualBtn();
                     // 异步加载保存的股票数据
                     document.getElementById("loading").classList.remove("hidden");
-                    fetch("/api/stock?code=" + encodeURIComponent(savedState.code) + "&freq=" + savedState.freq, { cache: "no-store" })
+                    fetch("/api/stocks/" + encodeURIComponent(savedState.code) + "/analyze?freq=" + savedState.freq, { cache: "no-store" })
                         .then(resp => {
                             if (!resp.ok) throw new Error("恢复失败");
                             return resp.json();
@@ -6729,7 +6727,7 @@
         async function initDefault() {
             document.getElementById("loading").classList.remove("hidden");
             try {
-                const resp = await fetch("/api/stock?code=SH000001&freq=d", { cache: "no-store" });
+                const resp = await fetch("/api/stocks/" + encodeURIComponent("SH000001") + "/analyze?freq=d", { cache: "no-store" });
                 if (!resp.ok) throw new Error("默认加载失败");
                 const data = await resp.json();
                 // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 chartData.meta.symbol 会崩溃）

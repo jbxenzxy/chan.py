@@ -9,9 +9,9 @@
 不做逐事件内容比对（内容比对属阶段 3b 灰度验证，输入固定历史区间）。
 
 3b-2 拆除 legacy 桥接后，本用例被测对象改为 native 原生异步生成器
-（sse_futures_stream_single/dual + SSESource 数据源抽象）：
+（sse_futures_stream_single/dual + CSSESource 数据源抽象）：
   - 首事件类型：init（含失败载荷）→ update（tick/K线完成路径）→ 心跳
-  - 正常关闭：数据源抛 SSESourceClosed → 生成器正常耗尽
+  - 正常关闭：数据源抛 CSSESourceClosed → 生成器正常耗尽
   - 异常路径：init 初始化失败（init_chan 返回 None）→ init 事件带 error
     载荷并正常关闭（wait_update 运行时异常按设计重试，不产出 error 帧）
 
@@ -40,7 +40,8 @@ if not hasattr(typing, "Self"):
         pass
 
 import FrontAPI
-from FrontAPI import SSESource, SSESourceClosed
+from DataAPI.TqSdkCSSESource import CSSESource, CSSESourceClosed
+import App.AppSSE as _sse_mod
 
 SNAPSHOT = os.path.join(TEST_DIR, "snapshots", "sse_event_sequences.json")
 
@@ -123,27 +124,25 @@ def _snapshot(tag, n_klines=4):
     }
 
 
-class MockSource(SSESource):
-    """确定性脚本驱动：wait_update 第 n 次 → 推进K线（完成路径）→ 正常关闭"""
+class MockSource(CSSESource):
+    """确定性脚本驱动：wait_update 第 n 次 → 推进K线（完成路径）→ 正常关闭。
+
+    彻底解耦业务后仅承载数据源面（connect / get_kline_serial / wait_update /
+    last_records / append_bar / close / cleanup_records）；业务确定性桩见
+    _patch_business（后台 monkeypatch AppSSE 模块级业务函数）。
+    """
     CLOSED_AT = 4
 
     def __init__(self, fail_init=False):
+        self.api = None
         self.freq_sec = 15.0
         self._n_wait = 0
         self.fail_init = fail_init
-        self.calls = {"connect": 0, "init_chan": 0, "close": 0, "cleanup": []}
+        self.calls = {"connect": 0, "close": 0, "cleanup": []}
         self.klines = MockKlines([_bar(NOW - 100), _bar(NOW)])
-        self._snap_counter = 0
 
     def connect(self):
         self.calls["connect"] += 1
-
-    def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
-        self.calls["init_chan"] += 1
-        if self.fail_init:
-            return None
-        chan = MockChan()
-        return chan, self.klines, ("kl", ), None
 
     def get_kline_serial(self, symbol, freq_sec):
         return self.klines
@@ -151,7 +150,7 @@ class MockSource(SSESource):
     def wait_update(self, deadline_ns):
         self._n_wait += 1
         if self._n_wait >= self.CLOSED_AT:
-            raise SSESourceClosed("mock 脚本终局")
+            raise CSSESourceClosed("mock 脚本终局")
         if self._n_wait == 2:
             self.klines.bars.append(_bar(NOW + self.freq_sec, c=101.0))
 
@@ -161,22 +160,54 @@ class MockSource(SSESource):
     def append_bar(self, bar, code_key):
         pass
 
-    def step_load(self, chan):
-        pass
-
-    def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
-                         saved_selection_date="", klines=None):
-        self._snap_counter += 1
-        return _snapshot(f"snap{self._snap_counter}")
-
-    def white_hline(self, kl_list, freq):
-        return {"high": 110.0, "low": 90.0, "freq": freq}
-
     def close(self):
         self.calls["close"] += 1
 
     def cleanup_records(self, code_key):
         self.calls["cleanup"].append(code_key)
+
+
+def _patch_business(src, fail_init=False):
+    """把驱动器依赖的服务层业务函数替换为确定性桩（彻底解耦业务后 MockSource
+    不再承载 init_chan/extract/white_hline/step_load；业务在 AppSSE，测试以
+    monkeypatch 注入确定性行为并统计调用次数）。返回恢复句柄。"""
+    _sse_mod.init_chan_calls = 0
+    _sse_mod.extract_calls = 0
+    _sse_mod.white_calls = 0
+    _sse_mod.drain_calls = 0
+
+    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
+        _sse_mod.init_chan_calls += 1
+        if fail_init:
+            return None
+        chan = MockChan()
+        return chan, src.klines, ("kl",), None
+
+    def stub_extract(chan, kl_type, symbol, name, freq_label,
+                     saved_selection_date="", lightweight=False, klines=None):
+        _sse_mod.extract_calls += 1
+        return _snapshot(f"snap{_sse_mod.extract_calls}")
+
+    def stub_white_hline(kl_list, freq, date_fmt):
+        _sse_mod.white_calls += 1
+        return {"high": 110.0, "low": 90.0, "freq": freq}
+
+    def stub_drain(chan):
+        _sse_mod.drain_calls += 1
+
+    originals = {}
+    for name, stub in (("init_chan_symbol", stub_init_chan_symbol),
+                       ("_extract_realtime_snapshot", stub_extract),
+                       ("_calc_futures_white_hline", stub_white_hline),
+                       ("_drain_chan", stub_drain)):
+        originals[name] = getattr(_sse_mod, name)
+        setattr(_sse_mod, name, stub)
+
+    def restore():
+        for name, orig in originals.items():
+            setattr(_sse_mod, name, orig)
+
+    return restore
 
 
 # ── 采集与断言 ───────────────────────────────────────────────────────
@@ -214,13 +245,17 @@ def _sequence_summary(events):
 
 def run_case(kind, fail_init=False):
     src = MockSource(fail_init=fail_init)
-    if kind == "single":
-        gen = FrontAPI.sse_futures_stream_single(
-            SYMBOL, freq="15s", start_time=None, source=src)
-    else:
-        gen = FrontAPI.sse_futures_stream_dual(
-            SYMBOL, "1m", "15s", start_time=None, source=src)
-    frames = _collect(gen)
+    restore = _patch_business(src, fail_init=fail_init)
+    try:
+        if kind == "single":
+            gen = FrontAPI.sse_futures_stream_single(
+                SYMBOL, freq="15s", start_time=None, source=src)
+        else:
+            gen = FrontAPI.sse_futures_stream_dual(
+                SYMBOL, "1m", "15s", start_time=None, source=src)
+        frames = _collect(gen)
+    finally:
+        restore()
     return frames, src
 
 

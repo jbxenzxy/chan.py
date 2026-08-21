@@ -8,9 +8,9 @@
   ① 锁分类登记（W9）：LOCK_POLICY 新增 SCAN_ASYNC 类别且登记完备
      （ScannerService.submit_batch_scan / _worker_scan_one）；批量路径
      不持 _ENGINE_LOCK（进程隔离），交互路径 SERIAL 不受波及。
-  ② 路由收敛与漏斗：FrontAPI 登记三条新路由（POST /api/scan/submit、
-     GET /api/scan/status?since=、GET /api/scan/cancel），全部经
-     run_in_threadpool(orch.scanner.*) 漏斗；FrontAPI 不直连 ScanStore
+  ② 路由收敛与漏斗：FrontAPI 登记三条新路由（POST /api/stocks/scan/submit、
+     GET /api/stocks/scan/{task_id}/read/status?since=、POST /api/stocks/scan/{task_id}/cancel），
+     全部经 run_in_threadpool(orch.scanner.*) 漏斗；FrontAPI 不直连 ScanStore
      （分层方向 FrontAPI → AppOrch → AppData/ScanStore 单向）。
   ③ 装配契约（W3/W4/W10/W11 + 合并项）：ProcessPoolExecutor 以 spawn
      上下文创建（跨平台安全，防 fork 锁继承）；initializer 屏蔽 SIGINT；
@@ -27,8 +27,9 @@
      等全部 future 完成后才置 aborted 终态（中止后 completed 收敛 total）；
      collector 合并错误明细时跳过中止行（口径与旧路径一致）；
      任务级 error 终态（worker 崩溃 ≠ 静默 done）。
-  ⑥ 前端轮询契约（W1/W5/W15）：_asyncScanAll 提交 POST /api/scan/submit →
-     轮询 GET /api/scan/status；since 按 row.seq + 1 推进（增量含首行）；
+  ⑥ 前端轮询契约（W1/W5/W15）：_asyncScanAll 提交 POST /api/stocks/scan/submit →
+     轮询 GET /api/stocks/scan/{task_id}/read/status?since=N；since 按连续已见区块边界推进；
+     中止经 POST /api/stocks/scan/{task_id}/cancel；
      终态 done/aborted/error 三态停轮询；连续 3 次失败熔断（退避重试）；
      保留旧回调形状 onData(单票)/onDone(err, interrupted)（渲染零漂移）；
      批量扫描三处调用点全部走异步径，旧 /api/scan_one 并发循环清零；
@@ -147,9 +148,9 @@ def test_routes_funnel(failures):
     src = read("FrontAPI.py")
     bad = []
     expect = [
-        ('@router.post("/api/scan/submit")', "orch.scanner.submit_batch_scan"),
-        ('@router.get("/api/scan/status")', "orch.scanner.get_batch_scan_status"),
-        ('@router.get("/api/scan/cancel")', "orch.scanner.abort_batch_scan"),
+        ('@router.post("/api/stocks/scan/submit")', "orch.scanner.submit_batch_scan"),
+        ('@router.get("/api/stocks/scan/{task_id}/read/status")', "orch.scanner.get_batch_scan_status"),
+        ('@router.post("/api/stocks/scan/{task_id}/cancel")', "orch.scanner.abort_batch_scan"),
     ]
     for header, call in expect:
         body = fn_body(src, header)
@@ -160,9 +161,9 @@ def test_routes_funnel(failures):
         body_flat = re.sub(r"\s+", "", body)
         if "run_in_threadpool(" + call not in body_flat:
             bad.append(f"{header} 未经 run_in_threadpool({call}) 漏斗")
-    # 增量游标参数（W1）：/api/scan/status 必须带 since 查询参数
+    # 增量游标参数（W1）：任务状态轮询必须带 since 查询参数
     if "since: int = Query(0, ge=0)" not in src:
-        bad.append("/api/scan/status 缺少 since 增量游标参数（W1 未修复）")
+        bad.append("scan/tasks/{task_id} 状态轮询缺少 since 增量游标参数（W1 未修复）")
     # FrontAPI 禁止直连扫描任务库（分层方向 FrontAPI → AppOrch → AppScanStore）
     if ("from App.ScanStore import" in src or "from App.AppScanStore import" in src
             or "import ScanStore" in src):
@@ -325,7 +326,7 @@ def test_abort_semantics(failures):
     # collector：任务级 error 终态（worker 崩溃 ≠ 静默 done）
     if 'store.set_status(task_id, "error"' not in src_pool:
         bad.append("collector 缺少任务级 error 终态（worker 崩溃将静默标 done）")
-    # W6：错误明细并入 _scan_skip_log（/api/scan_end 汇总口径与旧路径一致）
+    # W6：错误明细并入 _scan_skip_log（/api/stocks/scan/end 汇总口径与旧路径一致）
     if "_scan_skip_log" not in src_pool:
         bad.append("collector 未把错误行并入 _scan_skip_log（W6 未修复）")
     # 旧接口 abort 增强：必须同步中止所有进行中的批量任务
@@ -349,13 +350,14 @@ def test_frontend_polling(failures):
     bad = []
     if "function _asyncScanAll(" not in src:
         bad.append("_asyncScanAll 函数缺失（批量扫描异步入口）")
-    if 'fetch("/api/scan/submit"' not in src:
-        bad.append("未提交至 POST /api/scan/submit")
-    if "/api/scan/status?task_id=" not in src:
-        bad.append("未轮询 /api/scan/status")
-    # W1：since 按 row.seq + 1 推进（增量含首行）
-    if "since = Math.max(since, rows[i].seq + 1)" not in src:
-        bad.append("since 未按 row.seq + 1 推进（增量语义破坏，存在漏读/重读）")
+    if 'fetch("/api/stocks/scan/submit",' not in src:
+        bad.append("未提交至 POST /api/stocks/scan/submit")
+    if '"/api/stocks/scan/" + encodeURIComponent(taskId) + "/read/status"' not in src:
+        bad.append("未轮询 /api/stocks/scan/{task_id}/read/status")
+    # W1 稳健游标：since 按「连续已见区块边界」推进（等价满足增量含首行；
+    # 比朴素 seq+1 更稳——并发 worker 完成顺序随机时不会漏读/重读中间 seq）
+    if "function _advanceSince()" not in src or "_seenSeq[since]" not in src:
+        bad.append("since 未按连续区块边界推进（增量语义破坏，存在漏读/重读）")
     # W15：保留旧回调形状 onData/onDone（渲染零漂移）
     if "onData(rows[i].data || rows[i])" not in src:
         bad.append("未按 onData 逐票增量喂入（W15 契约破坏）")
@@ -374,9 +376,9 @@ def test_frontend_polling(failures):
     # 旧 /api/scan_one 客户端并发循环清零
     if 'fetch("/api/scan_one' in src:
         bad.append("旧 /api/scan_one 客户端并发循环残留（应清零）")
-    # 中止立即传播：点击中止必须同步调用 /api/scan/cancel
-    if "scan/cancel" not in src:
-        bad.append("缺少 /api/scan/cancel 调用（中止无法传播到 worker）")
+    # 中止立即传播：点击中止必须同步调用 /api/stocks/scan/{task_id}/cancel
+    if '"/cancel", { method: "POST" }' not in src:
+        bad.append("缺少 scan/tasks/{id}/cancel 调用（中止无法传播到 worker）")
     # 缓存击穿（合并自对方交付）：index.html 版本号必须 ≥8
     html = read("Frontend/index.html")
     m = re.search(r"app\.js\?v=(\d+)", html)

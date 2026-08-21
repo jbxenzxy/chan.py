@@ -576,8 +576,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 602,
-   "line_end": 629,
+   "line_start": 606,
+   "line_end": 633,
    "n_lines": 28,
    "note": "下载进度查询（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
@@ -654,8 +654,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 576,
-   "line_end": 589,
+   "line_start": 580,
+   "line_end": 593,
    "n_lines": 14,
    "note": "启动下载线程（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
@@ -672,8 +672,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 592,
-   "line_end": 599,
+   "line_start": 596,
+   "line_end": 603,
    "n_lines": 8,
    "note": "中止下载（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
@@ -702,8 +702,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 632,
-   "line_end": 735,
+   "line_start": 636,
+   "line_end": 739,
    "n_lines": 104,
    "note": "从 vipdoc 收集代码（公开API，不含下划线前缀）"
   },
@@ -1009,8 +1009,8 @@
    "writes": [],
    "pure": false,
    "line_start": 419,
-   "line_end": 573,
-   "n_lines": 155,
+   "line_end": 577,
+   "n_lines": 159,
    "note": "下载任务体（读 _download_state/_download_lock）"
   },
   {
@@ -1513,121 +1513,121 @@
    "FE",
    "✓3a 单一 router → FrontAPI"
   ],
-  "api_stock": [
+  "api_stocks_analyze": [
    "FE",
-   "✓3a /api/stock → FrontAPI + AppOrch.call_analysis（SERIAL 持锁）"
+   "✓REST GET /api/stocks/{code}/analyze → AppOrch.call_analysis（SERIAL 持锁）"
   ],
-  "api_stocks_manual_select_point": [
+  "api_stocks_select_point": [
    "FE",
-   "✓3a → AppOrch.call_manual_select_point（SERIAL 持锁，原 L185 绕锁已补）"
+   "✓REST POST /api/stocks/{code}/select/point → AppOrch.call_manual_select_point（SERIAL 持锁）"
   ],
-  "api_red_range_zs": [
+  "api_stocks_red_range": [
    "FE",
-   "✓3a → AppOrch.call_compute_red_range_zs（SERIAL 持锁，原 L206 绕锁已补）"
+   "✓REST GET /api/stocks/{code}/red-range → AppOrch.call_compute_red_range_zs（SERIAL 持锁）"
+  ],
+  "api_stocks_delete_point": [
+   "FE",
+   "✓REST DELETE /api/stocks/{code}/delete/point → AppOrch.clear_saved_point"
   ],
   "api_search": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.search_stocks"
+   "✓REST GET /api/search → FrontAPI + AppOrch.search_stocks"
   ],
-  "api_zxg_list": [
+  "api_stocks_scan_save_zxg": [
    "FE",
-   "✓3a → FrontAPI + AppData.read_zxg_stocks"
+   "✓REST POST /api/stocks/scan/save/zxg → FrontAPI + AppData.save_to_zxg_blk"
   ],
-  "api_scan_stock_list": [
+  "api_stocks_scan_read_candidates": [
    "FE",
-   "✓3a → FrontAPI + AppOrch 扫描"
+   "✓REST GET /api/stocks/scan/read/candidates → FrontAPI + AppOrch 扫描"
   ],
-  "api_scan_page_index_code": [
+  "api_stocks_scan_set_index": [
    "FE",
-   "✓3a → FrontAPI + AppOrch 扫描"
+   "✓REST PUT /api/stocks/scan/set/index → FrontAPI + AppOrch 扫描"
   ],
-  "api_scan_start": [
+  "api_stocks_scan_start": [
    "FE",
-   "✓3a → FrontAPI + ScannerService"
+   "✓REST POST /api/stocks/scan/start → FrontAPI + ScannerService"
   ],
-  "api_scan_end": [
+  "api_stocks_scan_end": [
    "FE",
-   "✓3a → FrontAPI + ScannerService"
+   "✓REST POST /api/stocks/scan/end → FrontAPI + ScannerService"
   ],
-  "api_scan_clear_cache": [
+  "api_stocks_scan_close": [
    "FE",
-   "✓3a → FrontAPI + AppData.cache_remove"
+   "✓REST POST /api/stocks/scan/close → FrontAPI + AppData.cache_remove"
   ],
-  "api_scan_abort": [
+  "api_stocks_scan_submit": [
    "FE",
-   "✓3a → FrontAPI + ScannerService"
+   "✓REST POST /api/stocks/scan/submit → FrontAPI + ScannerService"
   ],
-  "api_zxg_save": [
+  "api_stocks_scan_read_status": [
    "FE",
-   "✓3a → FrontAPI + AppData.save_to_zxg_blk"
+   "✓REST GET /api/stocks/scan/{task_id}/read/status → FrontAPI + ScannerService"
   ],
-  "api_clear_saved_point": [
+  "api_stocks_scan_cancel_task": [
    "FE",
-   "✓3a → FrontAPI + AppData.clear_saved_point"
+   "✓REST POST /api/stocks/scan/{task_id}/cancel → FrontAPI + ScannerService"
   ],
-  "api_futures_manual_select_point": [
+  "api_futures_select_point": [
    "FE",
-   "✓3a → AppOrch.call_futures_manual_select_point（SERIAL 持锁）"
+   "✓REST POST /api/futures/{symbol}/select/point → AppOrch.call_futures_manual_select_point（SERIAL 持锁）"
   ],
-  "api_futures_clear_saved_point": [
+  "api_futures_delete_point": [
    "FE",
-   "✓3a → FrontAPI + AppData"
+   "✓REST DELETE /api/futures/{symbol}/delete/point → FrontAPI + AppData"
   ],
   "api_futures_cleanup": [
    "FE",
-   "✓3a → FrontAPI + AppOrch._cleanup_all_futures_data"
+   "✓REST POST /api/futures/cleanup → FrontAPI + AppOrch._cleanup_all_futures_data"
   ],
-  "api_futures_status": [
+  "api_futures_read_status": [
    "FE",
-   "✓3a → FrontAPI + AppOrch 获取侧状态"
+   "✓REST GET /api/futures/read/status → FrontAPI + AppOrch 获取侧状态"
   ],
-  "api_futures_config": [
+  "api_futures_read_config": [
    "FE",
-   "✓3a → FrontAPI + AppOrch"
+   "✓REST GET /api/futures/read/config → FrontAPI + AppOrch"
   ],
-  "api_futures_stream": [
+  "api_futures_read_stream": [
    "FE",
-   "✓3a/3b-1 双实现：impl=legacy（默认零漂移）|native 原生异步生成器"
+   "✓SSE GET /api/futures/read/stream → FrontAPI 原生异步生成器"
   ],
-  "api_refresh_stock_names": [
+  "api_stocks_refresh": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.refresh_stock_names_async"
+   "✓REST POST /api/stocks/refresh → FrontAPI + AppOrch.refresh_stock_names_async"
   ],
-  "api_refresh_status": [
+  "api_stocks_refresh_read_status": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.refresh_status"
+   "✓REST GET /api/stocks/refresh/read/status → FrontAPI + AppOrch.refresh_status"
   ],
-  "api_annotations_get": [
+  "api_stocks_read_annotation": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.get_annotations"
+   "✓REST GET /api/stocks/{code}/read/annotation → FrontAPI + AppOrch.get_annotations"
   ],
-  "api_annotations_post": [
+  "api_stocks_save_annotation": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.handle_annotation_action（校验逻辑已下沉）"
+   "✓REST POST /api/stocks/{code}/save/annotation → FrontAPI + AppOrch.handle_annotation_action"
   ],
-  "api_annotations_scan": [
+  "api_stocks_scan_annotation": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.get_annotated_codes"
+   "✓REST GET /api/stocks/scan/annotation → FrontAPI + AppOrch.get_annotated_codes"
   ],
-  "api_tdx_download_start_get": [
+  "api_stocks_download_start": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.start_download_checked"
+   "✓REST POST /api/stocks/download/start → FrontAPI + AppOrch.start_download_checked（GET+POST 双入口已合并）"
   ],
-  "api_tdx_download_start_post": [
+  "api_stocks_download_read_status": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.start_download_checked"
+   "✓REST GET /api/stocks/download/read/status → FrontAPI + AppOrch.get_download_status"
   ],
-  "api_tdx_download_status": [
+  "api_stocks_download_cancel": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.get_download_status"
+   "✓REST POST /api/stocks/download/cancel → FrontAPI + AppOrch.stop_download"
   ],
-  "api_tdx_download_stop": [
+  "api_health": [
    "FE",
-   "✓3a → FrontAPI + AppOrch.stop_download"
-  ],
-  "chan_chart_redirect": [
-   "FE",
-   "✓3a 已迁 FrontAPI（旧书签兼容重定向保留）"
+   "✓REST GET /api/health → FrontAPI 健康探活（meta 路由，v5 定稿补 api_ 前缀）"
   ],
   "app_error_handler": [
    "FE",

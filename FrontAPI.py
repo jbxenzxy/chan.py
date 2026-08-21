@@ -17,7 +17,7 @@ V10 方案 8.6（3a REST 路由迁移 / 3b SSE 同步生成器·方案A）：
   3b · SSE 同步生成器（方案A：每连接一条常驻线程）：
     - ChartHandler._handle_sse_stream_dual/single（write() 式，约 1042 行）
       忠实移植为同步生成器 sse_futures_stream_dual/single；
-    - 数据源抽象 SSESource：生产 TqSdkSource（每连接独立 TqApi+CChan，
+    - 数据源抽象 CSSESource：生产 CTqSdkSession（每连接独立 TqApi+CChan，
       SELF_CONTAINED 锁分类，不加引擎锁）/ 灰度测试注入 MockSource
       （Test/test_sse_gray.py 驱动确定性比对）；
     - 方案A：/api/futures_stream 返回同步生成器，Starlette 在线程池中
@@ -64,7 +64,7 @@ if not hasattr(typing, "Self"):
     except ImportError:
         pass
 
-from fastapi import FastAPI, Query, HTTPException, Body, APIRouter, Request
+from fastapi import FastAPI, Query, HTTPException, Body, APIRouter, Request, Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -77,8 +77,15 @@ from App.AppOrch import AppError  # 领域异常统一在服务层定义（方�
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 # 仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗
 from App import AppEngine as m  # noqa: F401
-# SSE 实时流 / 期货功能域（阶段 8：TqSdkSource 的 SSE 内部实现已迁 App/AppSSE.py）
+# SSE 实时流 / 期货功能域（阶段 8：CTqSdkSession 的 SSE 内部实现已迁 App/AppSSE.py）
 from App import AppSSE as _sse  # noqa: F401
+# SSE 数据源抽象（V10 CH5「差距重构」下沉 DataAPI；tqsdk 仅在 DataAPI 可见）
+from DataAPI.TqSdkCSSESource import (  # noqa: F401
+    CSSESource,
+    CSSESourceClosed,
+    CTqSdkSession,
+    close_all,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -87,11 +94,11 @@ from App import AppSSE as _sse  # noqa: F401
 
 @asynccontextmanager
 async def lifespan(app):
-    """应用生命周期：关闭时优雅回收 ProcessPool 与活跃 TqSdkSource（阶段 7/10）。
+    """应用生命周期：关闭时优雅回收 ProcessPool 与活跃 CTqSdkSession（阶段 7/10）。
 
     未回收时 Ctrl+C 会让 worker 进程在 call_queue.get() 阻塞处收到
     KeyboardInterrupt 并打印 traceback（实测 SpawnProcess-1）。
-    TqSdkSource 同理：服务器退出时事件循环即将关闭，必须在此显式
+    CTqSdkSession 同理：服务器退出时事件循环即将关闭，必须在此显式
     _close_all_sources() 关闭所有 TqApi（方案A 同步生成器 finally 虽可靠，
     但服务器退出时生成器可能仍在 wait_update 阻塞，主动回收更确定），
     否则进程退出时 TqApi 内部挂起任务被销毁，触发
@@ -104,11 +111,11 @@ async def lifespan(app):
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
     try:
-        # run_in_threadpool：_close_all_sources 等待各生成器线程完成
+        # run_in_threadpool：close_all 等待各生成器线程完成
         # api.close()（最迟 0.1s），不能阻塞事件循环
-        await run_in_threadpool(_close_all_sources)
+        await run_in_threadpool(close_all)
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
-        print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
+        print(f"[FrontAPI] 关闭 CTqSdkSession 异常: {type(exc).__name__}: {exc}")
 
 
 app = FastAPI(title="缠论分析 API", version="1.2.0", docs_url="/docs",
@@ -144,7 +151,7 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 
 @app.get("/api/health", tags=["meta"])
-async def health():
+async def api_health():
     """健康检查：入口标识 + 配置摘要（凭据打码，方案 7.3）"""
     return {
         "status": "ok",
@@ -179,228 +186,20 @@ def _json_response(data, status_code: int = 200):
 # /api/futures_stream 仅保留方案A 同步生成器路径。
 # ═══════════════════════════════════════════════════════════════════════
 
-class SSESourceClosed(Exception):
-    """数据源正常关闭信号（Mock/回放源自然结束；生产 TqSdkSource 被
-    应用级回收（futures_cleanup / lifespan 关闭钩子）时也抛出本信号，
-    让 SSE 生成器在 wait_update 处干净退出，而非 error-loop）
-    """
-
-
-# ── TqSdkSource 活跃注册表（应用级 TqApi 生命周期管理，根因修复）──────
-# 天勤约束：TqApi.close() 必须在 wait_update 返回后、由 wait_update 的
-# 调用线程调用（close() 检查 _loop.is_running()，运行中则抛
-# 「不能在协程中调用 close」）。因此 api.close() 永远只在生成器线程
-# （wait_update 调用者）的 finally 中执行：
-#   · 客户端断开 → gen.close() → GeneratorExit → finally（close → close_api
-#     → cleanup_records）可靠执行，close_api 内 api.close() 串行安全；
-#   · 外部主动回收（futures_cleanup / lifespan）只设置 _closed 旗，生成器
-#     下一次 wait_update 抛 SSESourceClosed 干净退出，finally 中由生成器
-#     线程完成 api.close()。
-# 注册表用于主动回收入口：/api/futures_cleanup（期指切股票）与 lifespan
-# 关闭钩子（服务器退出）调用 _close_all_sources() 设置旗并等待 _api_closed。
-_ACTIVE_SOURCES = set()
-_ACTIVE_SOURCES_LOCK = threading.Lock()
-
-
-def _close_all_sources():
-    """关闭所有活跃 TqSdkSource（幂等；供 futures_cleanup 与 lifespan 关闭钩子调用）
-
-    只设置 _closed 旗通知各生成器线程退出，然后等待各生成器线程在
-    finally 中完成 api.close()（_api_closed 置位）。api.close() 由生成器
-    线程调用——wait_update 已返回、_loop 已停止，从机制上保证不触发
-    「不能在协程中调用 close」。生成器最迟一个 wait_update deadline
-    （0.1s）内退出，等待是确定性的。
-    """
-    with _ACTIVE_SOURCES_LOCK:
-        sources = list(_ACTIVE_SOURCES)
-    for src in sources:
-        try:
-            src.close()
-        except Exception as exc:  # noqa: BLE001 —— 单个源关闭失败不阻断其余
-            print(f"[FrontAPI] 关闭 TqSdkSource 异常: {type(exc).__name__}: {exc}")
-    # 等待各生成器线程完成 api.close()（机制保证 0.1s 内完成）
-    for src in sources:
-        try:
-            src._api_closed.wait()
-        except Exception as exc:  # noqa: BLE001
-            print(f"[FrontAPI] 等待 TqSdkSource 关闭异常: {type(exc).__name__}: {exc}")
-
-
-class SSESource:
-    """SSE 流数据源抽象 · 锁分类 SELF_CONTAINED
-
-    生产实现 TqSdkSource：真实天勤连接，每 SSE 连接独立 TqApi + CChan，
-    不触碰共享分析缓存（_futures_analysis_cache 仅按下窗键存放供
-    /api/dual_zs 读取，启动写入/收尾弹出，无跨连接竞争）。
-    灰度/测试注入 MockSource：脚本化 K 线序列驱动确定性事件流。
-
-    全部方法为同步阻塞调用——方案A 下 SSE 生成器为同步生成器，由
-    StreamingResponse 在线程池中迭代，阻塞调用天然发生在线程内，
-    不占事件循环（每连接一条常驻线程）。
-    """
-
-    def connect(self):
-        """建立数据源连接（每 SSE 连接一次）"""
-        raise NotImplementedError
-
-    def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
-        """拉取历史 K 线 + chan 分析，返回 (chan, klines, kl_type, records) 或 None"""
-        raise NotImplementedError
-
-    def get_kline_serial(self, symbol, freq_sec):
-        """获取实时 K 线序列引用（同 (symbol, freq_sec) 返回同一对象，天勤语义）"""
-        raise NotImplementedError
-
-    def wait_update(self, deadline_ns):
-        """阻塞等待行情更新（deadline 纳秒壁钟）"""
-        raise NotImplementedError
-
-    def last_records(self, code_key):
-        """读取最近 N 条已注入记录（去重判断用）"""
-        raise NotImplementedError
-
-    def append_bar(self, bar, code_key):
-        """向引擎注入一根已完成 K 线"""
-        raise NotImplementedError
-
-    def step_load(self, chan):
-        """驱动 chan 增量计算（耗尽生成器）"""
-        raise NotImplementedError
-
-    def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
-                         saved_selection_date="", klines=None):
-        """从 chan 提取实时快照 dict（遗留 _extract_realtime_snapshot）"""
-        raise NotImplementedError
-
-    def white_hline(self, kl_list, freq):
-        """计算白色横虚线（遗留 _calc_futures_white_hline）"""
-        raise NotImplementedError
-
-    def close(self):
-        """设置关闭旗，通知生成器线程退出（不直接关闭底层连接）"""
-        raise NotImplementedError
-
-    def close_api(self):
-        """由生成器线程调用，关闭底层连接（天勤 TqApi）。
-
-        基类默认 no-op（Mock/回放源无真实 api）。TqSdkSource 覆写为
-        api.close()。关键约束：api.close() 必须在 wait_update 返回后、
-        由 wait_update 的调用线程调用（天勤 _loop.is_running() 检查），
-        因此只能在生成器 finally（wait_update 已返回）中调用。
-        """
-        pass
-
-    def cleanup_records(self, code_key):
-        """清理该连接的 K 线注入缓存（异常自吞并打印，遗留行为）"""
-        raise NotImplementedError
-
-
-class TqSdkSource(SSESource):
-    """生产数据源：天勤 TqApi + my_chan_main 引擎链路（忠实于遗留 ChartHandler）
-
-    TqApi 生命周期（应用级管理，根因修复）：
-      - 每 SSE 连接独立 TqApi；实例创建即注册进 _ACTIVE_SOURCES 注册表；
-      - close() 只设置 _closed 旗（通知生成器退出），不直接 api.close()；
-        api.close() 由生成器线程在 finally 中经 close_api() 调用——天勤
-        要求 close 必须在 wait_update 返回后、由 wait_update 的调用线程
-        调用（_loop.is_running() 检查），生成器 finally 恰好满足该约束；
-      - 回收入口：/api/futures_cleanup（期指切股票）与 lifespan 关闭钩子
-        （服务器退出）统一调用 _close_all_sources() 设置旗并等待
-        _api_closed（各生成器线程完成 api.close()）。
-    """
-
-    def __init__(self):
-        self.api = None
-        self._serials = {}      # (symbol, freq_sec) → kline serial（天勤同参同对象语义）
-        self._closed = False    # 关闭旗：wait_update 检测到后抛 SSESourceClosed 让生成器干净退出
-        self._close_lock = threading.Lock()   # 串行化 api.close()（多源并发关闭场景）
-        self._api_closed = threading.Event()  # api.close() 完成（生成器线程置位）
-        with _ACTIVE_SOURCES_LOCK:
-            _ACTIVE_SOURCES.add(self)
-
-    def connect(self):
-        from tqsdk import TqApi, TqAuth
-        from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD
-        self.api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
-
-    def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
-        return _sse.init_chan_symbol(self.api, symbol, name, freq_sec, freq_label,
-                                     start_time=start_time)
-
-    def get_kline_serial(self, symbol, freq_sec):
-        key = (symbol, freq_sec)
-        if key not in self._serials:
-            self._serials[key] = self.api.get_kline_serial(symbol, freq_sec)
-        return self._serials[key]
-
-    def wait_update(self, deadline_ns):
-        if self._closed:
-            raise SSESourceClosed()
-        return self.api.wait_update(deadline=deadline_ns)
-
-    def last_records(self, code_key):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        return CTqSdkAPI.get_last_n(1, symbol=code_key)
-
-    def append_bar(self, bar, code_key):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        CTqSdkAPI.append_bar(bar, symbol=code_key)
-
-    def step_load(self, chan):
-        for _snapshot in chan.step_load():
-            pass
-
-    def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
-                         saved_selection_date="", klines=None):
-        return _sse._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                               saved_selection_date=saved_selection_date,
-                                               klines=klines)
-
-    def white_hline(self, kl_list, freq):
-        return _sse._calc_futures_white_hline(kl_list, freq, m._get_date_fmt(freq))
-
-    def close(self):
-        """设置关闭旗，通知生成器线程退出（幂等）。
-
-        不在此调用 api.close()：天勤要求 api.close() 必须在 wait_update
-        返回后、由 wait_update 的调用线程调用（_loop.is_running() 检查）。
-        外部线程（futures_cleanup / lifespan）只设置 _closed 旗，生成器
-        下一次 wait_update 抛 SSESourceClosed 干净退出，finally 中由
-        生成器线程调用 close_api() 完成 api.close()——同一线程串行，
-        从机制上保证 wait_update 已返回、_loop 已停止。
-        """
-        self._closed = True
-        with _ACTIVE_SOURCES_LOCK:
-            _ACTIVE_SOURCES.discard(self)
-
-    def close_api(self):
-        """生成器线程调用：关闭天勤 TqApi（wait_update 已返回，_loop 已停止）。
-
-        只在生成器 finally 中调用（生成器线程 = wait_update 调用线程，
-        finally 在 wait_update 返回/抛异常后执行，_loop 必然已停止）。
-        _close_lock 串行化：多源并发关闭时 api.close() 非线程安全
-        （is_closed 检查与关闭之间存在竞态），加锁后第二次调用见
-        is_closed() 直接返回。
-        """
-        try:
-            if self.api is not None:
-                with self._close_lock:
-                    self.api.close()
-        except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
-        finally:
-            self._api_closed.set()
-
-    def cleanup_records(self, code_key):
-        try:
-            from DataAPI.TqSdkAPI import CTqSdkAPI
-            CTqSdkAPI._records_by_symbol.pop(code_key, None)
-        except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
+# CSSESourceClosed / CSSESource / CTqSdkSession / 注册表已由 V10 CH5
+# 「差距重构」下沉至 DataAPI/TqSdkCSSESource.py（tqsdk 仅在 DataAPI 可见）。
+# FrontAPI 在此仅以 from-import 获取，保持「薄」（见本文件顶部 import）。
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # SSE · 同步生成器（方案A，忠实移植自 ChartHandler._handle_sse_stream_*）
+# 3b-2 已拆除：Legacy 桥接层（_SSEMockWfile/_SSEMockHandler/_sse_generator）
+# 与 ChartHandler 旧 SSE 方法（_handle_sse_stream_dual/single）一并下线，
+# /api/futures_stream 仅保留方案A 同步生成器路径。
+# 数据源抽象（CSSESource/CTqSdkSession）已下沉 DataAPI/TqSdkCSSESource.py；
+# 业务函数（init_chan_symbol/_extract_realtime_snapshot/_calc_futures_white_hline/
+#   _drain_chan）在 App/AppSSE.py —— 生成器按「src 协议 + 服务层业务函数」消费，
+# 不触碰 tqsdk。
 # ═══════════════════════════════════════════════════════════════════════
 
 def _sse_frame(event, payload) -> bytes:
@@ -414,7 +213,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
     忠实移植 ChartHandler._handle_sse_stream_single 的事件协议：
     init（初始快照/失败载荷）→ 实时循环（heartbeat 注释帧 + update 事件：
     tick 路径更新末根 K 线 OHLC/MACD，K线完成路径全量快照）→ 收尾清理。
-    source 可注入（默认 TqSdkSource）；Test/test_sse_gray.py 用 MockSource
+    source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
     驱动确定性比对。锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
     import logging
@@ -424,7 +223,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
     for h in logging.root.handlers:
         h.setLevel(logging.WARNING)
 
-    src = source if source is not None else TqSdkSource()
+    src = source if source is not None else CTqSdkSession()
 
     from DataAPI.TqSdkAPI import CTqSdkAPI
 
@@ -461,7 +260,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
         name = m._get_futures_name(symbol)  # 品种名称
 
         # === 1. 拉取历史 + chan 分析 ===
-        result = src.init_chan(symbol, name, freq_sec, freq_label, start_time)
+        # 彻底解耦业务：历史拉取/chan 分析在服务层 AppSSE.init_chan_symbol
+        result = _sse.init_chan_symbol(src.api, symbol, name, freq_sec, freq_label, start_time)
         if result is None:
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
@@ -470,8 +270,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
         # === 2. 推送初始快照 ===
         t0 = time.time()
         try:
-            init_data = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
-                                             saved_selection_date)
+            init_data = _sse._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
+                                            saved_selection_date=saved_selection_date)
             # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
             if klines is not None and len(klines) > 0:
                 _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
@@ -490,7 +290,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
                         init_data['meta']['kline_count'] = len(_ex)
             # 计算白色横虚线（初始快照，K线已确认状态）
             _kl_list = chan[kl_type]
-            init_data['white_hline'] = src.white_hline(_kl_list, freq)
+            init_data['white_hline'] = _sse._calc_futures_white_hline(_kl_list, freq, _sse._get_date_fmt(freq))
             yield _sse_frame("init", init_data)
             cached_snapshot = init_data  # ★ 缓存完整快照，tick推送时更新最后一根K线OHLC
             if m._SSE_DEBUG:
@@ -533,7 +333,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
                 src.wait_update(time.time() * 1e9 + 100_000_000)
                 t_wait = time.time() - t_wait_start
                 t_wait_total += t_wait
-            except SSESourceClosed:
+            except CSSESourceClosed:
                 # 数据源正常关闭（仅 Mock/回放源）：等价客户端断开的自然结束
                 return
             except Exception as _e:
@@ -700,7 +500,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
                 src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    src.step_load(chan)
+                    _sse._drain_chan(chan)
                 except Exception as _e:
                     print(f"[{display_key}] step_load 异常: {_e}")
                 t_step = time.time() - t_step_start
@@ -717,8 +517,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
             # 推送快照（此时 klines[-1] 已推进到 N 周期，快照中自然包含 N 的实时OHLC）
             t_snap_start = time.time()
             try:
-                update_data = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
-                                                   saved_selection_date)
+                update_data = _sse._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
+                                                saved_selection_date=saved_selection_date)
                 # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(m._get_date_fmt(freq_label))
@@ -732,7 +532,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
                     update_data['meta']['kline_count'] = len(_ex)
                 # K线确认后，计算白色横虚线（不在tick推送路径计算）
                 _kl_list = chan[kl_type]
-                update_data['white_hline'] = src.white_hline(_kl_list, freq)
+                update_data['white_hline'] = _sse._calc_futures_white_hline(_kl_list, freq, _sse._get_date_fmt(freq))
                 cached_snapshot = update_data  # ★ 更新缓存
                 t_snap = time.time() - t_snap_start
                 t_snapshot_total += t_snap
@@ -766,10 +566,10 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 
     忠实移植 ChartHandler._handle_sse_stream_dual 的事件协议：
     两个独立 CChan 对象、一次连接推送两个周期（下窗先处理——区间套分析
-    需先分析次级别）。source 可注入（默认 TqSdkSource）。
+    需先分析次级别）。source 可注入（默认 CTqSdkSession）。
     锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
-    src = source if source is not None else TqSdkSource()
+    src = source if source is not None else CTqSdkSession()
 
     from DataAPI.TqSdkAPI import CTqSdkAPI
     from datetime import datetime
@@ -819,7 +619,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 2. 拉取下窗历史 + chan分析（次级别优先：区间套分析需先分析次级别）
         if m._SSE_DEBUG:
             print(f"[{display_key}] 拉取下窗({sub_freq})历史K线...")
-        sub_result = src.init_chan(symbol, name, sub_freq_sec, sub_freq_label, sub_start_time)
+        sub_result = _sse.init_chan_symbol(src.api, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time)
         sub_chan, sub_records, sub_kl_type, _ = sub_result
         sub_kl_type = m._get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
@@ -831,7 +631,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 3. 拉取上窗历史 + chan分析
         if m._SSE_DEBUG:
             print(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
-        main_result = src.init_chan(symbol, name, main_freq_sec, main_freq_label, main_start_time)
+        main_result = _sse.init_chan_symbol(src.api, symbol, name, main_freq_sec, main_freq_label, main_start_time)
         main_chan, main_records, main_kl_type, _ = main_result
         main_kl_type = m._get_kl_type(main_freq)
         if m._SSE_DEBUG:
@@ -840,10 +640,10 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 
         # 7. 提取初始快照
         t_snap = time.time()
-        main_snapshot = src.extract_snapshot(main_chan, main_kl_type, symbol, name, main_freq_label,
-                                             saved_selection_date=saved_selection_date)
-        sub_snapshot = src.extract_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
-                                            klines=None)
+        main_snapshot = _sse._extract_realtime_snapshot(main_chan, main_kl_type, symbol, name, main_freq_label,
+                                                 saved_selection_date=saved_selection_date)
+        sub_snapshot = _sse._extract_realtime_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
+                                                       klines=None)
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
         # （阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py）
@@ -1072,7 +872,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    src.step_load(chan)
+                    _sse._drain_chan(chan)
                 except Exception as e:
                     print(f"[{display_key}] {window_label} step_load 异常: {e}")
                 t_step = time.time() - t_step_start
@@ -1087,8 +887,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 
             # 提取完整快照
             if updated:
-                snapshot = src.extract_snapshot(chan, kl_type, symbol, name, freq_label,
-                                                saved_selection_date)
+                snapshot = _sse._extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
+                                                           saved_selection_date=saved_selection_date)
                 if is_main:
                     # 阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py
                     _sse._futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
@@ -1104,7 +904,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                     snapshot['meta']['kline_count'] = len(_ex)
                 if is_main:
                     _kl_list = chan[kl_type]
-                    snapshot['white_hline'] = src.white_hline(_kl_list, main_freq)
+                    snapshot['white_hline'] = _sse._calc_futures_white_hline(_kl_list, main_freq, _sse._get_date_fmt(main_freq))
                 cached_snapshot = snapshot
 
             return updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, False
@@ -1116,7 +916,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 src.wait_update(time.time() * 1e9 + 100_000_000)
                 t_wait = time.time() - t_wait_start
                 t_wait_total += t_wait
-            except SSESourceClosed:
+            except CSSESourceClosed:
                 # 数据源正常关闭（仅 Mock/回放源）：等价客户端断开的自然结束
                 return
             except Exception as _e:
@@ -1194,14 +994,31 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 # 引擎调用全部走 AppOrch 漏斗（锁分类见 AppOrch.LOCK_POLICY）。
 # ═══════════════════════════════════════════════════════════════════════
 
+# ═══════════════════════════════════════════════════════════════════════
+# API 命名规范（定稿 · 新增接口请遵守）
+# ═══════════════════════════════════════════════════════════════════════
+# 一、函数/路径统一结构：api + [stocks|futures] + 动词 + 名字
+#     股票独有带 stocks；期货独有带 futures；共用不带前缀。
+# 二、动词统一约定：
+#     读取只读数据      →  read        （不用 get）
+#     写入/持久化       →  save        （不用 write）
+#     触发类动作        →  start/end/close/cancel/submit/refresh/cleanup
+#     选点/删点         →  select / delete
+#     设置              →  set
+# 三、动作动词精确语义：
+#     end     正常结束一个进行中的过程/会话（如扫描正常收尾）
+#     close   关闭面板/界面、清理缓存（UI 层）
+#     cancel  中途终止一个进行中的任务（协作式，worker 检查标志后停止）
+#     abort   强制/紧急中断（立即停止、丢弃未完成工作；当前无使用场景，不保留端点）
+# ═══════════════════════════════════════════════════════════════════════
 router = APIRouter()
 
 
 # ── 路由 — 核心数据 ───────────────────────────────────────────────────
 
-@router.get("/api/stock")
-async def api_stock(
-    code: str = Query(...),
+@router.get("/api/stocks/{code}/analyze")
+async def api_stocks_analyze(
+    code: str = Path(...),
     freq: str = Query("d"),
     end_date: str = Query(None),
     step: str = Query(None),
@@ -1231,9 +1048,9 @@ async def api_stock(
     return _json_response(result)
 
 
-@router.get("/api/stocks_manual_select_point")
-async def api_stocks_manual_select_point(
-    code: str = Query(...),
+@router.post("/api/stocks/{code}/select/point")
+async def api_stocks_select_point(
+    code: str = Path(...),
     freq: str = Query("d"),
     bi_idx: str = Query("-1"),
 ):
@@ -1253,9 +1070,9 @@ async def api_stocks_manual_select_point(
     return _json_response(result)
 
 
-@router.get("/api/red_range_zs")
-async def api_red_range_zs(
-    code: str = Query(...),
+@router.get("/api/stocks/{code}/red-range")
+async def api_stocks_red_range(
+    code: str = Path(...),
     freq: str = Query("d"),
     left_date: str = Query(...),
     right_date: str = Query(...),
@@ -1291,25 +1108,15 @@ async def api_search(q: str = Query(...)):
 
 # ── 路由 — 扫描 ───────────────────────────────────────────────────────
 
-@router.get("/api/zxg_list")
-async def api_zxg_list():
-    """返回自选股列表"""
-    try:
-        stocks = await run_in_threadpool(orch.read_zxg_stocks)
-        return _json_response({"stocks": stocks})
-    except Exception as exc:
-        return _json_response({"error": str(exc)}, 500)
-
-
-@router.get("/api/scan_stock_list")
-async def api_scan_stock_list(source: str = Query("zxg")):
+@router.get("/api/stocks/scan/read/candidates")
+async def api_stocks_scan_read_candidates(source: str = Query("zxg")):
     """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）"""
     result = await run_in_threadpool(orch.scanner.stock_list, source)
     return _json_response(result)
 
 
-@router.get("/api/scan_page_index_code")
-async def api_scan_page_index_code(code: str = Query("")):
+@router.put("/api/stocks/scan/set/index")
+async def api_stocks_scan_set_index(code: str = Query("")):
     """设置当前板块指数代码"""
     result = await run_in_threadpool(orch.scanner.set_page_index_code, code)
     if "error" in result:
@@ -1317,53 +1124,46 @@ async def api_scan_page_index_code(code: str = Query("")):
     return _json_response(result)
 
 
-@router.get("/api/scan_start")
-async def api_scan_start():
+@router.post("/api/stocks/scan/start")
+async def api_stocks_scan_start():
     """新一轮扫描开始"""
     result = await run_in_threadpool(orch.scanner.start)
     return _json_response(result)
 
 
-@router.get("/api/scan_end")
-async def api_scan_end():
+@router.post("/api/stocks/scan/end")
+async def api_stocks_scan_end():
     """扫描结束"""
     result = await run_in_threadpool(orch.scanner.end)
     return _json_response(result)
 
 
-@router.get("/api/scan_clear_cache")
-async def api_scan_clear_cache():
+@router.post("/api/stocks/scan/close")
+async def api_stocks_scan_close():
     """关闭扫描面板"""
     result = await run_in_threadpool(orch.scanner.clear_cache)
-    return _json_response(result)
-
-
-@router.get("/api/scan_abort")
-async def api_scan_abort():
-    """中断扫描"""
-    result = await run_in_threadpool(orch.scanner.abort)
     return _json_response(result)
 
 
 # ── 路由 — 阶段 7：批量扫描异步化（ProcessPool 先行）──────────────────
 # 双路径（设计 5.4/5.5）：交互单票原 /api/scan_one（旧版页面 chan_chart.html
 # 使用）已随旧版页面下线，批量扫描统一走 ProcessPool；任务提交返回 task_id，
-# 前端轮询 /api/scan/status 获取进度与结果（设计 5.10：扫描结果经 SQLite
-# AppScanStore 跨进程共享）。
-# RESTful 分层路由（评审「优势 1」采纳）：/api/scan/submit · /api/scan/status
-# · /api/scan/cancel；请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动
-# 生成字段 schema 与默认值。
+# 前端轮询 /api/stocks/scan/{task_id}/read/status 获取进度与结果（设计 5.10：
+# 扫描结果经 SQLite AppScanStore 跨进程共享）。
+# RESTful 分层路由（评审「优势 1」采纳）：/api/stocks/scan/submit ·
+# /api/stocks/scan/{task_id}/read/status · /api/stocks/scan/{task_id}/cancel；
+# 请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动生成字段 schema 与默认值。
 
-@router.post("/api/scan/submit")
-async def api_scan_submit(stocks: list = Body(...),
-                          freq: str = Body("d"),
-                          mode: str = Body(""),
-                          recent: str = Body("1"),
-                          source: str = Body("zxg")):
+@router.post("/api/stocks/scan/submit")
+async def api_stocks_scan_submit(stocks: list = Body(...),
+                               freq: str = Body("d"),
+                               mode: str = Body(""),
+                               recent: str = Body("1"),
+                               source: str = Body("zxg")):
     """提交批量扫描 → {task_id, total}（ProcessPool 异步执行）
 
     body: {stocks: [{code, prefix, _source}], freq, mode, recent, source}
-    返回 task_id；进度经 /api/scan/status 轮询。
+    返回 task_id；进度经 /api/stocks/scan/{task_id}/read/status 轮询。
     """
     if not stocks:
         return _json_response({"error": "股票列表为空"}, 400)
@@ -1374,9 +1174,9 @@ async def api_scan_submit(stocks: list = Body(...),
     return _json_response(result)
 
 
-@router.get("/api/scan/status")
-async def api_scan_status(task_id: str = Query(...),
-                          since: int = Query(0, ge=0)):
+@router.get("/api/stocks/scan/{task_id}/read/status")
+async def api_stocks_scan_read_status(task_id: str = Path(...),
+                               since: int = Query(0, ge=0)):
     """批量扫描状态轮询（前端每 1-2s 调用，增量读取）
 
     since: 游标，返回 seq >= since 的结果行（含首行）；前端按
@@ -1391,8 +1191,8 @@ async def api_scan_status(task_id: str = Query(...),
     return _json_response(result)
 
 
-@router.get("/api/scan/cancel")
-async def api_scan_abort_task(task_id: str = Query(...)):
+@router.post("/api/stocks/scan/{task_id}/cancel")
+async def api_stocks_scan_cancel_task(task_id: str = Path(...)):
     """中止批量扫描任务（worker 每票前检查中止标志）"""
     result = await run_in_threadpool(orch.scanner.abort_batch_scan, task_id)
     if "error" in result:
@@ -1402,8 +1202,8 @@ async def api_scan_abort_task(task_id: str = Query(...)):
 
 # ── 路由 — 自选股保存 ─────────────────────────────────────────────────
 
-@router.get("/api/zxg_save")
-async def api_zxg_save(codes: str = Query("")):
+@router.post("/api/stocks/scan/save/zxg")
+async def api_stocks_scan_save_zxg(codes: str = Query("")):
     """保存勾选的股票到通达信+同花顺自选股（orch.zxg_save，业务段已下沉）"""
     data, status = await run_in_threadpool(orch.zxg_save, codes)
     return _json_response(data, status)
@@ -1411,9 +1211,12 @@ async def api_zxg_save(codes: str = Query("")):
 
 # ── 路由 — 选点管理 ───────────────────────────────────────────────────
 
-@router.get("/api/clear_saved_point")
-async def api_clear_saved_point(code: str = Query(...), freq: str = Query("d")):
-    """清除选点"""
+@router.delete("/api/stocks/{code}/delete/point")
+async def api_stocks_delete_point(
+    code: str = Path(...),
+    freq: str = Query("d"),
+):
+    """清除股票选点"""
     if not code:
         return _json_response({"error": "缺少code参数"}, 400)
     result = await run_in_threadpool(orch.clear_saved_point, code, freq)
@@ -1422,9 +1225,9 @@ async def api_clear_saved_point(code: str = Query(...), freq: str = Query("d")):
 
 # ── 路由 — 期货/期指 ──────────────────────────────────────────────────
 
-@router.get("/api/futures_manual_select_point")
-async def api_futures_manual_select_point(
-    symbol: str = Query(...),
+@router.post("/api/futures/{symbol}/select/point")
+async def api_futures_select_point(
+    symbol: str = Path(...),
     freq: str = Query("15s"),
     bi_idx: str = Query("-1"),
 ):
@@ -1444,8 +1247,8 @@ async def api_futures_manual_select_point(
     return _json_response(result)
 
 
-@router.get("/api/futures_clear_saved_point")
-async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Query("15s")):
+@router.delete("/api/futures/{symbol}/delete/point")
+async def api_futures_delete_point(symbol: str = Path(...), freq: str = Query("15s")):
     """期货清除选点"""
     if not symbol:
         return _json_response({"error": "缺少symbol参数"}, 400)
@@ -1453,29 +1256,29 @@ async def api_futures_clear_saved_point(symbol: str = Query(...), freq: str = Qu
     return _json_response(result)
 
 
-@router.get("/api/futures_cleanup")
+@router.post("/api/futures/cleanup")
 async def api_futures_cleanup():
     """清理所有期货数据（期指切股票：先回收 TqApi 连接，再清空缓存）
 
-    顺序关键：先 _close_all_sources() 设置 _closed 旗并等待各生成器线程
-    完成 api.close()（天勤要求 close 在 wait_update 返回后由生成器线程
-    调用），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
-    run_in_threadpool 包裹：_close_all_sources 等待各生成器线程完成
+    顺序关键：先 close_all（DataAPI.TqSdkCSSESource）设置 _closed 旗并等待
+    各生成器线程完成 api.close()（天勤要求 close 在 wait_update 返回后由
+    生成器线程调用），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
+    run_in_threadpool 包裹：close_all 等待各生成器线程完成
     api.close()（最迟 0.1s），不能阻塞事件循环。
     """
-    await run_in_threadpool(_close_all_sources)
+    await run_in_threadpool(close_all)
     await run_in_threadpool(orch.futures_cleanup)
     return _json_response({"ok": True})
 
 
-@router.get("/api/futures_status")
-async def api_futures_status():
+@router.get("/api/futures/read/status")
+async def api_futures_read_status():
     """期货状态"""
     return _json_response({"ok": True, "architecture": "self-contained"})
 
 
-@router.get("/api/futures_config")
-async def api_futures_config():
+@router.get("/api/futures/read/config")
+async def api_futures_read_config():
     """期货可用周期列表"""
     result = await run_in_threadpool(orch.futures_config)
     return _json_response(result)
@@ -1483,8 +1286,8 @@ async def api_futures_config():
 
 # ── 路由 — SSE 实时推送（期货） ────────────────────────────────────────
 
-@router.get("/api/futures_stream")
-def api_futures_stream(
+@router.get("/api/futures/read/stream")
+def api_futures_read_stream(
     symbol: str = Query(...),
     freq: str = Query("15s"),
     start_time: str = Query(None),
@@ -1523,15 +1326,15 @@ def api_futures_stream(
 
 # ── 路由 — 股票名称刷新 ───────────────────────────────────────────────
 
-@router.get("/api/refresh_stock_names")
-async def api_refresh_stock_names():
+@router.post("/api/stocks/refresh")
+async def api_stocks_refresh():
     """启动股票名称刷新"""
     result = await run_in_threadpool(orch.refresh_stock_names_async)
     return _json_response(result)
 
 
-@router.get("/api/refresh_status")
-async def api_refresh_status():
+@router.get("/api/stocks/refresh/read/status")
+async def api_stocks_refresh_read_status():
     """查询刷新状态"""
     result = await run_in_threadpool(orch.refresh_status)
     return _json_response(result)
@@ -1539,8 +1342,8 @@ async def api_refresh_status():
 
 # ── 路由 — 标注 ───────────────────────────────────────────────────────
 
-@router.get("/api/annotations")
-async def api_annotations_get(code: str = Query(...), freq: str = Query("d")):
+@router.get("/api/stocks/{code}/read/annotation")
+async def api_stocks_read_annotation(code: str = Path(...), freq: str = Query("d")):
     """获取标注数据"""
     if not code:
         return _json_response({"error": "缺少code参数"}, 400)
@@ -1548,15 +1351,15 @@ async def api_annotations_get(code: str = Query(...), freq: str = Query("d")):
     return _json_response({"annotations": anns, "code": code, "freq": freq})
 
 
-@router.post("/api/annotations")
-async def api_annotations_post(body: dict = Body(...)):
+@router.post("/api/stocks/{code}/save/annotation")
+async def api_stocks_save_annotation(code: str = Path(...), body: dict = Body(...)):
     """标注增删改（orch.handle_annotation_action，40 行校验逻辑已下沉）"""
     data, status = await run_in_threadpool(orch.handle_annotation_action, body)
     return _json_response(data, status)
 
 
-@router.get("/api/annotations_scan")
-async def api_annotations_scan(freq: str = Query("")):
+@router.get("/api/stocks/scan/annotation")
+async def api_stocks_scan_annotation(freq: str = Query("")):
     """自选扫描：返回有标注的股票列表"""
     codes = await run_in_threadpool(orch.get_annotated_codes, freq)
     return _json_response({"codes": codes, "total": len(codes)})
@@ -1564,21 +1367,9 @@ async def api_annotations_scan(freq: str = Query("")):
 
 # ── 路由 — 盘后下载 ───────────────────────────────────────────────────
 
-@router.get("/api/tdx_download_start")
-async def api_tdx_download_start_get(
-    categories: str = Query("[]"),
-    day_start: str = Query(""),
-    min_start: str = Query(""),
-):
-    """盘后下载启动 (GET)"""
-    data, status = await run_in_threadpool(orch.start_download_checked,
-                                           categories, day_start, min_start)
-    return _json_response(data, status)
-
-
-@router.post("/api/tdx_download_start")
-async def api_tdx_download_start_post(body: dict = Body(...)):
-    """盘后下载启动 (POST)"""
+@router.post("/api/stocks/download/start")
+async def api_stocks_download_start(body: dict = Body(...)):
+    """盘后下载启动（POST，Get+Post 双入口已合并；原 GET 入口下线）"""
     categories = body.get("categories") or []
     day_start = body.get("day_start") or ""
     min_start = body.get("min_start") or ""
@@ -1587,28 +1378,18 @@ async def api_tdx_download_start_post(body: dict = Body(...)):
     return _json_response(data, status)
 
 
-@router.get("/api/tdx_download_status")
-async def api_tdx_download_status():
+@router.get("/api/stocks/download/read/status")
+async def api_stocks_download_read_status():
     """盘后下载进度"""
     status = await run_in_threadpool(orch.get_download_status)
     return _json_response(status)
 
 
-@router.get("/api/tdx_download_stop")
-async def api_tdx_download_stop():
+@router.post("/api/stocks/download/cancel")
+async def api_stocks_download_cancel():
     """盘后下载停止"""
     ok, msg = await run_in_threadpool(orch.stop_download)
     return _json_response({"ok": ok, "message": msg})
-
-
-# ── 兼容重定向：旧版页面路径 chan_chart.html → 新首页（自 api_server 迁入）──
-from fastapi.responses import RedirectResponse
-
-
-@router.get("/chan_chart.html", include_in_schema=False)
-async def chan_chart_redirect():
-    """旧书签兼容：chan_chart.html → /（api_server 遗留路由，行为不变）"""
-    return RedirectResponse(url="/")
 
 
 # ── 路由挂载（单一路由源；api_server 兼容壳 re-export 本 router）──────

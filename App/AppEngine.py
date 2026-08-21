@@ -8,7 +8,7 @@ App/AppEngine.py —— 分析引擎层（自 my_chan_main.py 迁入）
 
 阶段 8 拆分（按业务能力收敛后，本文件回归「纯分析编排」）：
   - SSE 实时流 / 期货静态分析 / 期货选点 / 期货元数据 → 迁 App/AppSSE.py
-    （本文件仅保留同名兼容壳，供 FrontAPI.SSESource 与 Test 守护引用）
+    （本文件仅保留同名兼容壳，供 FrontAPI.CSSESource 与 Test 守护引用）
   - 手动选点 / 红框中枢（stock_manual_select_point / compute_red_range_zs）
     → 迁 App/AppChart.py（图表交互功能域；本文件保留兼容壳）
   - 期货分流：analyze_stock 在期货路径延迟导入 AppSSE（避免模块级循环依赖）

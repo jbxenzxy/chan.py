@@ -8,9 +8,9 @@
   ③ 间隔仅做统计性核对（事件总数一致即可，不做逐事件比对）。
 
 离线实现（真实天勤源不可用于回归）：
-  - MockSource（SSESource 子类）注入 FrontAPI.sse_futures_stream_single/dual，
+  - MockSource（CSSESource 子类）注入 FrontAPI.sse_futures_stream_single/dual，
     以确定性脚本驱动无限循环协议：连接 → init → tick×N → K线完成×1 →
-    tick×N → SSESourceClosed 正常收尾；
+    tick×N → CSSESourceClosed 正常收尾；
   - 壁钟确定性：过期K线（dt = T-100s）触发完成路径，新鲜K线（dt = T）
     触发 tick 路径，迭代内零 sleep，脚本步进完全确定；
   - legacy 形态等价：native 每帧字节与 FrontAPI._sse_frame 重编码逐字节
@@ -41,7 +41,9 @@ if not hasattr(typing, "Self"):
         pass
 
 import FrontAPI
-from FrontAPI import SSESource, SSESourceClosed, _sse_frame
+from FrontAPI import _sse_frame
+from DataAPI.TqSdkCSSESource import CSSESource, CSSESourceClosed
+import App.AppSSE as _sse_mod
 
 SNAPSHOT = os.path.join(TEST_DIR, "snapshots", "sse_gray_native.json")
 
@@ -138,41 +140,37 @@ def _snapshot(tag, n_klines=4):
 # ═══════════════════════════════════════════════════════════════════════
 # MockSource：脚本化驱动 SSE 协议
 # ═══════════════════════════════════════════════════════════════════════
-class MockSource(SSESource):
+class MockSource(CSSESource):
     """灰度注入数据源（锁分类同 SELF_CONTAINED：不触共享分析缓存）
+
+    彻底解耦业务后仅承载数据源面（connect / get_kline_serial / wait_update /
+    last_records / append_bar / close / cleanup_records）；init_chan/extract/
+    white_hline/step_load 已下沉服务层 AppSSE，业务确定性桩见 _patch_business。
 
     脚本（wait_update 第 n 次调用；klines 原地变更——真实天勤的
     get_kline_serial 返回同一 DataFrame 引用，生成器持有的引用随行情更新）：
       n=1 → 返回（循环初始化 last_bar，无事件）
       n=2 → klines 原地推进一根（klines 推进 → K线完成路径：
-            append_bar + step_load + 全量快照 update）
+            append_bar + _drain_chan + 全量快照 update）
       n=3,4 → 返回（当前K线新鲜 → tick 路径 ×2）
-      n=5 → 抛 SSESourceClosed → 正常收尾
+      n=5 → 抛 CSSESourceClosed → 正常收尾
     """
     CLOSED_AT = 5                 # 第 5 次抛正常关闭
 
     def __init__(self, freq_sec=15.0):
+        self.api = None
         self.freq_sec = freq_sec
         self._n_wait = 0
-        self.calls = {"connect": 0, "init_chan": 0, "extract": 0,
-                      "append_bar": [], "step_load": 0, "close": 0,
-                      "cleanup": [], "white_hline": 0}
+        self.calls = {"connect": 0, "append_bar": [], "close": 0,
+                      "cleanup": []}
         self._kl = MockKlList()
-        # 初始：一根过期K线（ilcoc[-2]，仅占位）+ 当前形成中K线（新鲜）
+        # 初始：一根过期K线（iloc[-2]，仅占位）+ 当前形成中K线（新鲜）
         self.klines = MockKlines([_bar(NOW - 100), _bar(NOW)])
         self._snap_counter = 0
 
-    # ── SSESource 协议 ──
+    # ── CSSESource 数据源面协议 ──
     def connect(self):
         self.calls["connect"] += 1
-
-    def init_chan(self, symbol, name, freq_sec, freq_label, start_time=None):
-        self.calls["init_chan"] += 1
-        kl_list = MockKlList()
-        chan = MockChan()
-        chan._kl_list = kl_list
-        # 返回 (chan, klines, kl_type, records)：单窗口用 klines，双窗口忽略
-        return chan, self.klines, ("kl", ), None
 
     def get_kline_serial(self, symbol, freq_sec):
         return self.klines
@@ -180,7 +178,7 @@ class MockSource(SSESource):
     def wait_update(self, deadline_ns):
         self._n_wait += 1
         if self._n_wait >= self.CLOSED_AT:
-            raise SSESourceClosed("mock 脚本终局")
+            raise CSSESourceClosed("mock 脚本终局")
         if self._n_wait == 2:
             # 原地推进一根（模拟天勤新K线开bar）：iloc[-1] 切到未来时间戳，
             # iloc[-2]（原当前K线）冻结 → 触发 K线完成路径
@@ -192,24 +190,55 @@ class MockSource(SSESource):
     def append_bar(self, bar, code_key):
         self.calls["append_bar"].append((code_key, bar["dt"].isoformat()))
 
-    def step_load(self, chan):
-        self.calls["step_load"] += 1
-
-    def extract_snapshot(self, chan, kl_type, symbol, name, freq_label,
-                         saved_selection_date="", klines=None):
-        self.calls["extract"] += 1
-        self._snap_counter += 1
-        return _snapshot(f"snap{self._snap_counter}")
-
-    def white_hline(self, kl_list, freq):
-        self.calls["white_hline"] += 1
-        return {"high": 110.0, "low": 90.0, "freq": freq}
-
     def close(self):
         self.calls["close"] += 1
 
     def cleanup_records(self, code_key):
         self.calls["cleanup"].append(code_key)
+
+
+def _patch_business(src):
+    """把驱动器依赖的服务层业务函数替换为确定性桩（彻底解耦业务后 MockSource
+    不再承载 init_chan/extract/white_hline/step_load；业务在 AppSSE，测试以
+    monkeypatch 注入确定性行为并统计调用次数）。返回恢复句柄。"""
+    _sse_mod.init_chan_calls = 0
+    _sse_mod.extract_calls = 0
+    _sse_mod.white_calls = 0
+    _sse_mod.drain_calls = 0
+
+    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
+        _sse_mod.init_chan_calls += 1
+        kl_list = MockKlList()
+        chan = MockChan()
+        chan._kl_list = kl_list
+        # 返回 (chan, klines, kl_type, records)：单窗口用 klines，双窗口忽略
+        return chan, src.klines, ("kl", ), None
+
+    def stub_extract(chan, kl_type, symbol, name, freq_label,
+                     saved_selection_date="", lightweight=False, klines=None):
+        _sse_mod.extract_calls += 1
+        return _snapshot(f"snap{_sse_mod.extract_calls}")
+
+    def stub_white_hline(kl_list, freq, date_fmt):
+        _sse_mod.white_calls += 1
+        return {"high": 110.0, "low": 90.0, "freq": freq}
+
+    def stub_drain(chan):
+        _sse_mod.drain_calls += 1
+
+    originals = {}
+    for name, stub in (("init_chan_symbol", stub_init_chan_symbol),
+                       ("_extract_realtime_snapshot", stub_extract),
+                       ("_calc_futures_white_hline", stub_white_hline),
+                       ("_drain_chan", stub_drain)):
+        originals[name] = getattr(_sse_mod, name)
+        setattr(_sse_mod, name, stub)
+
+    def restore():
+        for name, orig in originals.items():
+            setattr(_sse_mod, name, orig)
+
+    return restore
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -267,15 +296,19 @@ def _strip_volatile(obj):
 
 
 def run_case(kind):
-    """驱动同步生成器，返回 (frames, source.calls)"""
+    """驱动同步生成器，返回 (frames, source.calls)；业务桩经 _patch_business 注入"""
     src = MockSource()
-    if kind == "single":
-        gen = FrontAPI.sse_futures_stream_single(
-            SYMBOL, freq="15s", start_time=None, source=src)
-    else:
-        gen = FrontAPI.sse_futures_stream_dual(
-            SYMBOL, "1m", "15s", start_time=None, source=src)
-    frames = _collect(gen)
+    restore = _patch_business(src)
+    try:
+        if kind == "single":
+            gen = FrontAPI.sse_futures_stream_single(
+                SYMBOL, freq="15s", start_time=None, source=src)
+        else:
+            gen = FrontAPI.sse_futures_stream_dual(
+                SYMBOL, "1m", "15s", start_time=None, source=src)
+        frames = _collect(gen)
+    finally:
+        restore()
     return frames, src
 
 
@@ -344,12 +377,13 @@ def main():
             print(f"[PASS] {kind} 收尾: close×1 + cleanup×{n_clean}"
                   f"（{[c for c in calls['cleanup']]}）")
 
-        # K线完成路径确实发生（append_bar + step_load 至少一次）
-        if not calls["append_bar"] or calls["step_load"] < 1:
+        # K线完成路径确实发生（append_bar + _drain_chan 至少一次）
+        if not calls["append_bar"] or _sse_mod.drain_calls < 1:
             failures.append(f"{kind}: K线完成路径未触发"
-                            f"（append={len(calls['append_bar'])}, step={calls['step_load']}）")
+                            f"（append={len(calls['append_bar'])}, "
+                            f"drain={_sse_mod.drain_calls}）")
             print(f"[FAIL] {kind} 完成路径: append={len(calls['append_bar'])} "
-                  f"step={calls['step_load']}")
+                  f"drain={_sse_mod.drain_calls}")
         else:
             print(f"[PASS] {kind} 协议路径: K线完成×{len(calls['append_bar'])} "
                   f"+ tick×{seq.count('update')} 全触发")
