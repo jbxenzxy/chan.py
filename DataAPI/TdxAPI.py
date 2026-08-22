@@ -1340,51 +1340,11 @@ def get_blk_path(blk_name):
 def read_blk_file(blk_path):
     """
     读取通达信 .blk 板块文件，返回股票代码列表。
-    文件格式：GBK编码，每行一个代码。
-    A股格式：7位纯数字（1位交易所前缀 + 6位股票代码），如 "0600000"、"1600001"
-    港股个股：31#{5位代码}，如 31#00700
-    港股指数：27#{HZ代码}，如 27#HZ5489
-    美股个股：74#{代码}，如 74#XBI
-    美股指数：12#A_{代码}，如 12#A_NBI
+    P2-3 单源收敛：实现收敛到顶层 tdx_blk.parse_blk_file（与
+    App/AppData.py 自选股读取共用同一解析，不再各持一份复制）。
     """
-    if not blk_path or not os.path.exists(blk_path):
-        return []
-    stocks = []
-    try:
-        with open(blk_path, "r", encoding="gbk") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if len(line) == 7 and line.isdigit():
-                    # A 股：7位纯数字（前缀0/1/2 + 6位代码）
-                    prefix = line[0]
-                    code = line[1:7]
-                    stocks.append({"prefix": prefix, "code": code})
-                elif line.startswith("31#") and len(line) == 8:
-                    # 港股个股：31# + 5位数字
-                    code = line[3:].strip()
-                    if code.isdigit():
-                        code = code.zfill(5)
-                        stocks.append({"prefix": "hk", "code": code})
-                elif line.startswith("74#") and len(line) > 3:
-                    # 美股个股：74# + 代码（如 74#XBI）
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "us", "code": code})
-                elif line.startswith("27#") and len(line) > 3:
-                    # 港股指数：27# + HZ代码（如 27#HZ5489）
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "hk", "code": code})
-                elif line.startswith("12#") and len(line) > 3:
-                    # 美股指数：12# + 代码（如 12#A_NBI）
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "us", "code": code})
-    except Exception as e:
-        print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
-    return stocks
+    from tdx_blk import parse_blk_file
+    return parse_blk_file(blk_path)
 
 
 # ============================================================

@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AppData vs DataAPI · 职责边界说明</title>
+<style>
+  :root{
+    --bg:#0f1115;--panel:#181b22;--panel2:#1f232c;--line:#2a2f3a;
+    --text:#e8eaed;--muted:#9aa3b2;--accent:#4f8cff;--accent2:#7c5cff;
+    --good:#3ecf8e;--warn:#ffb454;--bad:#ff6b6b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:"Noto Sans CJK SC","WenQuanYi Micro Hei",system-ui,sans-serif;line-height:1.7;padding:40px 22px}
+  .wrap{max-width:960px;margin:0 auto}
+  header{margin-bottom:28px}
+  h1{font-size:24px;letter-spacing:.5px;margin-bottom:8px}
+  .sub{color:var(--muted);font-size:14px}
+  .badge{display:inline-block;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:600;margin-left:10px;vertical-align:middle}
+  .b-src{background:rgba(79,140,255,.18);color:var(--accent)}
+  .b-doc{background:rgba(124,92,255,.18);color:var(--accent2)}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 28px;margin-bottom:20px}
+  h2{font-size:18px;margin-bottom:16px;padding-bottom:10px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .secnum{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:8px;background:var(--accent2);color:#fff;font-size:13px;font-weight:700;flex:none}
+  p{color:var(--muted);font-size:14px;margin-bottom:10px}
+  code{background:var(--panel2);padding:2px 7px;border-radius:5px;font-size:13px;color:var(--text);font-family:ui-monospace,Consolas,monospace}
+  .rule{background:var(--panel2);border-left:3px solid var(--accent2);border-radius:0 10px 10px 0;padding:16px 20px;margin:14px 0}
+  .rule .r-label{color:var(--accent2);font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px}
+  .rule.eq{color:var(--text);font-size:16px;font-weight:600}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:12px 0}
+  th,td{border:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);color:var(--text);white-space:nowrap;font-size:13px}
+  .ok{color:var(--good);font-weight:700}.warn{color:var(--warn);font-weight:700}
+  .pill{display:inline-block;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600;white-space:nowrap}
+  .p-app{background:rgba(79,140,255,.16);color:var(--accent)}
+  .p-dapi{background:rgba(124,92,255,.16);color:var(--accent2)}
+  .p-both{background:rgba(62,207,142,.14);color:var(--good)}
+  ul{padding-left:22px;margin:10px 0}
+  li{font-size:14px;color:var(--muted);margin-bottom:7px}
+  .note{border-left:3px solid var(--warn);background:rgba(255,180,84,.06);padding:12px 16px;border-radius:0 8px 8px 0;font-size:13.5px;color:var(--muted);margin:12px 0}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .kbox{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .kbox h3{font-size:15px;margin-bottom:6px;color:var(--accent)}
+  .kbox h3.d{color:var(--accent2)}
+  .kbox p{font-size:13.5px;margin-bottom:4px}
+  .flow{background:var(--panel2);border-radius:10px;padding:16px 18px;font-family:ui-monospace,Consolas,monospace;font-size:13px;overflow-x:auto;margin:12px 0;line-height:2}
+  .foot{margin-top:24px;color:var(--muted);font-size:12.5px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>AppData vs DataAPI · 职责边界
+    <span class="badge b-src">单一事实源</span><span class="badge b-doc">阶段 4 数据层</span>
+  </h1>
+  <div class="sub">澄清「业务数据层 AppData.py」与「数据源抽象层 DataAPI/」的职责分工 · 归档本次架构评审结论</div>
+</header>
+
+<section>
+  <h2><span class="secnum">1</span>职责判定规则</h2>
+  <p>判断一个数据相关功能该归 <code>AppData.py</code> 还是 <code>DataAPI/</code>，不依结果形态（"几支股票"还是"几根K线"），而依<b>数据所有权与是否构成应用长期状态</b>：</p>
+  <div class="rule">
+    <div class="r-label">DataAPI · 外部适配器</div>
+    <div class="eq">只从外部读取、用完即释放（不构成应用长期业务状态）→ <code>DataAPI/</code></div>
+  </div>
+  <div class="rule">
+    <div class="r-label">AppData · 业务数据层</div>
+    <div class="eq">管理应用方承担持有/管理职责的数据（自有数据 · 缓存化/持久化的外部数据 · 计算产物）→ <code>App/AppData.py</code></div>
+  </div>
+  <p>要点：本规则的「掌握应用长期业务状态」是关键判据。外部源原始数据经应用决定缓存并写盘后，其"持有"职责转入 AppData（如股票名称、PE-TTM）；DataAPI 内部的模块级缓存（如 <code>_INFOHARBOR_BLOCK_CACHE</code>）只是避免重复拉取的获取侧优化，不转移职责，仍属 DataAPI。</p>
+</section>
+
+<section>
+  <h2><span class="secnum">2</span>两大层职责定义</h2>
+  <div class="grid2">
+    <div class="kbox">
+      <h3>AppData.py · 业务数据层</h3>
+      <p><b>问题</b>：数据存哪、怎么存、归谁管、谁长期持有</p>
+      <p><b>职责</b>：缓存、持久化、标注、自选股、行业映射、计算产物缓存</p>
+      <p><b>数据所有权</b>：应用一方</p>
+      <p><b>生命周期</b>：长期持有 · 可靠写盘 · 原子操作</p>
+      <p><b>典型能力</b>：LRU 缓存、CSV/JSON 持久化、CRUD、标注去重</p>
+    </div>
+    <div class="kbox">
+      <h3 class="d">DataAPI/ · 数据源适配器</h3>
+      <p><b>问题</b>：数据从哪拿、外部格式如何转内部结构</p>
+      <p><b>职责</b>：通达信文件、AKShare、深交所官网、TqSdk、取K线</p>
+      <p><b>数据所有权</b>：外部源</p>
+      <p><b>生命周期</b>：瞬时拉取 · 用完释放（仅保留拉取侧优化缓存）</p>
+      <p><b>典型能力</b>：网络/盘面适配、格式解析、行情获取</p>
+    </div>
+  </div>
+  <div class="note">依赖方向：<code>FrontAPI → AppOrch → AppData → AppConfig</code>；<code>AppData</code> 与 <code>DataAPI</code> 互不依赖（设计 4.4）。两者各自"自含属于自己的读取"，这是边界正确结果而非重复缺陷。</div>
+</section>
+
+<section>
+  <h2><span class="secnum">3</span>决策流程</h2>
+  <div class="flow">
+     功能触发读数据<br>
+     &nbsp;&nbsp;├─ 读的是<b style="color:var(--accent2)">外部源</b>、app 不长期持有 → <span class="pill p-dapi">DataAPI</span><br>
+     &nbsp;&nbsp;└─ app <b style="color:var(--accent)">自有 / 决定持有（缓存+持久化）/ 计算产物</b><br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ 数据获取发生在 DataAPI → 读毕<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ 是否要 app 长期持有？<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ 是 → 归 <span class="pill p-app">AppData</span>（如名称/PE 缓存）<br>
+     &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ 否 → 留在 <span class="pill p-dapi">DataAPI</span>（如成分股瞬时拉取）
+  </div>
+</section>
+
+<section>
+  <h2><span class="secnum">4</span>四源归属明细</h2>
+  <p>本次评审的核心对象——四个「选股来源」的归属判定：</p>
+  <table>
+    <thead><tr><th>来源</th><th>读取数据本质</th><th>数据所有权</th><th>归属</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>① 读自选股</b><br><code>read_zxg_stocks</code></td>
+        <td>应用自有自选清单，自己做 CRUD / 持久化（zxg.blk 读写）</td>
+        <td>应用自有</td>
+        <td><span class="pill p-app">AppData</span> ✓</td>
+      </tr>
+      <tr>
+        <td><b>② 读指数成分股</b><br><code>get_index_stocks</code></td>
+        <td>通达信板块文件 + AKShare / 深交所官网，瞬时读取即释放</td>
+        <td>外部源</td>
+        <td><span class="pill p-dapi">DataAPI</span> ✓</td>
+      </tr>
+      <tr>
+        <td><b>③ 读板块指数2</b><br><code>tdxhy_l2_indices</code></td>
+        <td>应用迁入的映射数据文件 <code>tdxhy_mapping_data.py</code></td>
+        <td>应用自有文件</td>
+        <td><span class="pill p-app">AppData</span> ✓</td>
+      </tr>
+      <tr>
+        <td><b>④ 读板块指数3</b><br><code>tdxhy_l3_indices</code></td>
+        <td>同上（同一映射文件）</td>
+        <td>应用自有文件</td>
+        <td><span class="pill p-app">AppData</span> ✓</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>整理后：<code>①③④</code> 归 AppData，<code>②</code> 归 DataAPI —— 与代码现状一致。</p>
+</section>
+
+<section>
+  <h2><span class="secnum">5</span>AppData 全部职责审计</h2>
+  <p>按上述规则逐项审计 <code>App/AppData.py</code>（878 行）当前全部职责：</p>
+  <table>
+    <thead><tr><th>职责</th><th>数据本质</th><th>判定</th><th>审计</th></tr></thead>
+    <tbody>
+      <tr><td>自选股 <code>read/save_to_zxg_blk</code></td><td>应用自有、双向管理</td><td>应用自有</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>行业映射 <code>tdxhy_l2/l3 + load_tdxhy_mapping</code></td><td>迁入 App 的数据文件</td><td>应用自有</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>文字标注 CRUD</td><td>应用持久化(text_annotation.json)</td><td>应用自有</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>手选段选点 CSV</td><td>应用持久化</td><td>应用自有</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>上次查看代码/周期</td><td>应用持久化</td><td>应用自有</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>名称 / PE-TTM / 指数归属 / 流通市值缓存</td><td>外部获取后被 app 缓存+写盘</td><td>应用持有（类1）</td><td><span class="ok">✓ 合规</span></td></tr>
+      <tr><td>分析结果 LRU / 期货 chan 缓存</td><td>计算产物</td><td>应用持有</td><td><span class="ok">✓ 合规</span></td></tr>
+    </tbody>
+  </table>
+  <div class="note"><b>审计结论</b>：将「选股四源统一到应用层」正确表述为——<b>编排入口统一（AppScan/AppOrch 统一消费四源产出清单A），数据获取实现按所有权各自归位</b>。审计未发现 AppData 含有任何不属于它的网络拉取 / 外部 K 线获取 / 用完即释放的瞬态读取。当前架构已符合本规则，<b>无需代码改动</b>。</div>
+</section>
+
+<section>
+  <h2><span class="secnum">6</span>本规则的边界与例外</h2>
+  <h3><code>.blk</code> 解析为何存在两份（非缺陷）</h3>
+  <p>AppData 解析它<b>自己的</b> <code>zxg.blk</code>（自选股，应用自有）→ 合法归 AppData；DataAPI 需要解析通达信<b>外部下发的</b> .blk 板块（服务指数成分读取）→ 合法归 DataAPI。两份解析各自自含"属于自己的那份"，是边界正确结果，而非重复缺陷——此前试图用顶层中立模块强并它们违背了本规则。</p>
+  <h3 style="margin-top:16px">「用完即释放」应读作「不构成应用长期业务状态」</h3>
+  <p>DataAPI 内部的模块级缓存仅作获取侧优化、不转移职责；真正分界的唯一判据是：<b>应用是否承担对这一数据的长期持有/管理</b>。</p>
+</section>
+
+<div class="foot">归档自架构评审 v2.x · 数据层职责边界 · 待同步至主评审报告</div>
+</div>
+
+</body></html>

@@ -86,42 +86,12 @@ def get_annotation_key(code, freq):
 def _read_zxg_blk_file(blk_path):
     """读取通达信 .blk 板块文件，返回股票代码列表（自选股存储格式知识）。
 
-    文件格式：GBK编码，每行一个代码：
-      A股 7 位纯数字（前缀 + 6 位代码）/ 港股 31# / 港股指数 27# /
-      美股 74# / 美股指数 12#A_
-    说明：DataAPI/TdxAPI.py 另持一份同名解析（服务其指数成分读取），
-    属设计 4.4「两者互不依赖」的边界代价，阶段 5 获取侧抽象统一时收敛。
+    P2-3 单源收敛：解析实现收敛到顶层 tdx_blk.parse_blk_file
+    （本模块与 DataAPI/TdxAPI.py 不再各持一份重复解析；
+    中书模块顶层 tdx_blk 供两层各自引入，维持设计 4.4 互不依赖）。
     """
-    if not blk_path or not os.path.exists(blk_path):
-        return []
-    stocks = []
-    try:
-        with open(blk_path, "r", encoding="gbk") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                if len(line) == 7 and line.isdigit():
-                    stocks.append({"prefix": line[0], "code": line[1:7]})
-                elif line.startswith("31#") and len(line) == 8:
-                    code = line[3:].strip()
-                    if code.isdigit():
-                        stocks.append({"prefix": "hk", "code": code.zfill(5)})
-                elif line.startswith("74#") and len(line) > 3:
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "us", "code": code})
-                elif line.startswith("27#") and len(line) > 3:
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "hk", "code": code})
-                elif line.startswith("12#") and len(line) > 3:
-                    code = line[3:].strip()
-                    if code:
-                        stocks.append({"prefix": "us", "code": code})
-    except Exception as e:
-        print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
-    return stocks
+    from tdx_blk import parse_blk_file
+    return parse_blk_file(blk_path)
 
 
 class AppData:

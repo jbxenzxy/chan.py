@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>取数唯一性收敛 · 影响面分析与拆分方案（评审稿）</title>
+<style>
+  :root{
+    --brand:#7c5cff; --ok:#24b071; --warn:#d9902b; --danger:#d64545;
+    --surface:#ffffff; --muted:#f5f5f9; --border:#e4e4ee;
+    --text:#23232b; --dim:#7a7a8a; --code:#b44; --code-bg:#f5f0f4;
+    --radius:10px; --sp:16px;
+    --font:system-ui,-apple-system,"Noto Sans CJK SC","WenQuanYi Micro Hei",sans-serif;
+    --mono:ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:#f3f3f8;color:var(--text);font-family:var(--font);line-height:1.6;font-size:14px}
+  .wrap{max-width:920px;margin:0 auto;padding:28px 20px 60px}
+  header{padding:20px 0 10px;border-bottom:2px solid var(--brand);margin-bottom:20px}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.5px}
+  .meta{color:var(--dim);font-size:12.5px;display:flex;flex-wrap:wrap;gap:6px 16px}
+  .meta b{color:var(--text)}
+  .ver{display:inline-block;background:var(--brand);color:#fff;font-size:11px;padding:1px 8px;border-radius:999px;vertical-align:2px;font-weight:600}
+  section{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:18px 20px;margin-bottom:18px}
+  h2{font-size:16px;margin:0 0 12px;display:flex;align-items:center;gap:8px}
+  .no{display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;background:var(--brand);color:#fff;border-radius:6px;font-size:12px;flex:none}
+  h3{font-size:14px;margin:16px 0 8px}
+  p{margin:7px 0}
+  ul,ol{margin:6px 0 6px 0;padding-left:22px}
+  li{margin:4px 0}
+  code{font-family:var(--mono);font-size:12px;background:var(--muted);border:1px solid var(--border);border-radius:4px;padding:0 4px}
+  pre{font-family:var(--mono);font-size:12px;background:var(--muted);border:1px solid var(--border);border-radius:8px;padding:12px;overflow-x:auto;line-height:1.5}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin:10px 0}
+  th,td{border:1px solid var(--border);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--muted);font-weight:600}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:1px 9px;border-radius:999px}
+  .p-ok{background:#e3f5ec;color:var(--ok)}
+  .p-mid{background:#fdeed6;color:var(--warn)}
+  .p-high{background:#fde5e5;color:var(--danger)}
+  .p-keep{background:#eeeafd;color:var(--brand)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:4px;margin-right:6px}
+  .t-do{background:#e3f5ec;color:var(--ok)}
+  .t-skip{background:#fde5e5;color:var(--danger)}
+  .t-watch{background:#fdeed6;color:var(--warn)}
+  .callout{border-left:3px solid var(--brand);background:var(--muted);padding:10px 14px;border-radius:0 8px 8px 0;margin:10px 0}
+  .callout.warn{border-color:var(--warn)}
+  .callout.ok{border-color:var(--ok)}
+  .callout.red{border-color:var(--danger)}
+  .file{font-weight:600;color:var(--brand)}
+  .dim{color:var(--dim)}
+  .fn{white-space:nowrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>取数唯一性收敛 · 影响面分析与拆分方案 <span class="ver">评审稿 v0.1</span></h1>
+  <div class="meta">
+    <span>基准代码：<b>chan.py custom-dev</b></span>
+    <span>基线：<b>Test/run_all.py 14/14 全绿</b></span>
+    <span>日期：2026-08-22</span>
+    <span>状态：<b>待评审，未实施</b></span>
+  </div>
+</header>
+
+<!-- 结论摘要 -->
+<section>
+  <h2><span class="no">0</span>结论摘要</h2>
+  <div class="callout ok">
+    <p><b>值得做、且范围比预期小：</b>真正存在重复的是<b>期货初始化片段</b>——App/AppSSE.py 内至少 5 处各自完整的「connect → fetch_kline → set_data → 周期映射 → 建 CChan → step_load」，应收敛为一个公共构造函数。这是无行为变化的重构，风险低、收益明确。</p>
+  </div>
+  <div class="callout red">
+    <p><b>要纠正上一版表述：</b>「手动选点没走统一协议」的说法不准确。<code>fetch_and_inject</code> 的 <code>source</code> 参数实际是<b>死参数</b>（选了也一律委托 <code>analyze_stock</code>）；股票走 TdxAPI 读文件、期货走 <code>CTqSdkSession.fetch_kline</code> 属<b>多源适配</b>，不是重复，架构上本就应各自实现。把股票强行统一到 <code>fetch_kline</code> 是<b>高成本低价值</b>，建议<b>不做</b>。</p>
+  </div>
+  <p><b>给决策的一句话：</b>若推进，建议只做「阶段 A + 阶段 B」（收敛 AppSSE 内期货初始化 5 处为单一 <code>_build_futures_chan</code>），不推进「阶段 C」（股票取数协议统一）。</p>
+</section>
+
+<!-- 问题精确定位 -->
+<section>
+  <h2><span class="no">1</span>问题精确定位</h2>
+  <h3>1.1 真实重复点：AppSSE.py 内期货初始化片段</h3>
+  <p>以下四处完整的「拉数 + 注入 + 建链」序列高度重复（同一套 <code>_freq_to_kl</code> 映射、<code>CChan(data_src="custom:TqSdkAPI.CTqSdkAPI", market_type="futures")</code>、<code>step_load()</code> 全量消费）：</p>
+  <table>
+    <tbody><tr><th>函数 / 行区间</th><th>用途（通道）</th><th>重复形态</th></tr>
+    <tr>
+      <td class="fn">init_chan_symbol</td><td class="fn">L62–120</td><td>SSE 单窗口实时</td>
+      <td>fetch→set_data(L82)→内联 _freq_to_kl(L90)→CChan(L100)→step_load</td>
+    </tr>
+    <tr>
+      <td class="fn">_analyze_futures_internal</td><td class="fn">L419–541</td><td>REST 静态（HTTP 返回 JSON）</td>
+      <td>fetch(L446)→set_data(L500)→CChan(L516)→step_load(L526)</td>
+    </tr>
+    <tr>
+      <td class="fn">期货选点（双窗主）</td><td class="fn">L936–960+</td><td>REST 期货手动选点</td>
+      <td>fetch(L940)→set_data(L945)→内联 _freq_to_kl(L950)→CChan(L960)</td>
+    </tr>
+    <tr>
+      <td class="fn">期货选点（双窗子）</td><td class="fn">≈L865</td><td>REST 期货手动选点（下窗）</td>
+      <td>fetch→set_data(sub_records)→内联映射→CChan</td>
+    </tr>
+  </tbody></table>
+  <p>此外：<code>_freq_to_kl</code>（秒数→KL_TYPE）在 <code>init_chan_symbol</code>（L90）与选点（L950）<b>内联两份</b>，而 <code>_analyze_futures_internal</code> 走 <code>AppEngine._get_kl_type</code> 第三份；<code>init_chan_symbol</code> 用裸 <code>CChanConfig()</code>，另两处用 <code>_make_chan_config()</code> —— 存在<b>配置语义微差异</b>，收敛时须核对。</p>
+
+  <h3>1.2 易被误判为「重复」、实际不是的项</h3>
+  <ul>
+    <li><b>股票 vs 期货取数</b>：股票经 <code>TdxAPI</code> 读本地 .day/.lc1/.lc5 文件；期货经 <code>CTqSdkSession().fetch_kline()</code> 拉天勤。这是<b>不同数据源的适配实现</b>，属多源架构的正常形态，不算重复。</li>
+    <li><b>fetch_and_inject 的 source 参数</b>：参数解析后未生效——该函数固定 <code>return _m.analyze_stock(...)</code>。它在 LOCK_POLICY 登记为 RAW、注释自述「阶段 5 拆分时收敛」，属于<b>应清理的遗留接口</b>，而非取数重复。</li>
+  </ul>
+</section>
+
+<!-- 影响面 -->
+<section>
+  <h2><span class="no">2</span>影响面分析</h2>
+  <h3>2.1 涉及文件与函数</h3>
+  <ul>
+    <li><span class="file">App/AppSSE.py</span> —— 收敛主体。<code>init_chan_symbol</code>、<code>_analyze_futures_internal</code>、期货选点（单/双窗）共 5 处初始化片段。</li>
+    <li><span class="file">App/AppEngine.py</span> —— 提供 <code>_make_chan_config</code> / <code>_get_kl_type</code> 等被复用原语，阶段 A/B 仅消费不修改。</li>
+    <li><span class="file">App/AppChart.py</span> —— <code>fetch_and_inject</code>（L361）与 <code>_get_data_source</code>；仅建议阶段 C 或「遗留接口清理」时触及。</li>
+    <li><span class="file">App/AppOrch.py</span> —— LOCK_POLICY 登记（RAW），若清理 <code>fetch_and_inject</code> 需同步；守护测试校验此表。</li>
+  </ul>
+
+  <h3>2.2 约束清单（决定拆分怎么做）</h3>
+  <table>
+    <tbody><tr><th>约束</th><th>说明</th><th>对方案的影响</th></tr>
+    <tr><td>锁分类</td><td>SSE（SELF_CONTAINED，每连接独立 TqApi+CChan）</td>
+      <td>公共构造必须<b>自含新建</b>源对象，不得共享跨连接状态。</td></tr>
+    <tr><td>生命周期</td><td>tqsdk：<code>api.close()</code> 只能在 <code>wait_update</code> 返回后同线程调用（TqSdkCSSESource.py 头注释）</td>
+      <td>静态路径与 SSE 路径的 close 时序不同，抽象时须<b>保留各自收尾</b>。</td></tr>
+    <tr><td>缓存语义</td><td>静态走 <code>_futures_analysis_cache</code>；SSE 不缓存</td>
+      <td>公共构造只负责「数据→CChan」，<b>缓存逻辑留在各调用方</b>，不并入。</td></tr>
+    <tr><td>配置差异</td><td><code>CChanConfig()</code> vs <code>_make_chan_config()</code></td>
+      <td>取 <code>_make_chan_config()</code> 为唯一来源须用 SSE 灰度/快照验证无回归。</td></tr>
+    <tr><td>测试守护</td><td>snapshot（stock+futures）、test_sse_sequence、test_sse_gray、phase5</td>
+      <td>每阶段改完必须重跑，SSE 灰度是针对「初始化→快照」回放比对的关键护栏。</td></tr>
+  </tbody></table>
+
+  <h3>2.3 直接受影响的测试</h3>
+  <div class="callout">
+    <code>Test/run_all.py</code> 中：<code>test_sse_gray.py</code>（native vs 冻结基线）、<code>test_sse_sequence.py</code>（首事件/序列）、<code>snapshot_runner.py --all</code>（期货 7 维度）、<code>test_phase5_guards.py</code>（AppSSE 依赖方向、fetch_kline 抽象）。阶段 A 属纯搬移，理论上零回归；阶段 B 因统一配置语义，须以三处护栏对比确认行为等价。
+  </div>
+</section>
+
+<!-- 拆分方案 -->
+<section>
+  <h2><span class="no">3</span>拆分方案（分期）</h2>
+
+  <h3>阶段 A —— 抽公共「数据→期货 CChan」构造函数 <span class="pill p-ok">推荐 · 低风险</span></h3>
+  <p>在 <span class="file">App/AppSSE.py</span> 新增模块级纯构造函数，收敛「set_data + 周期映射 + 建 CChan + step_load」：</p>
+  <pre>def _build_futures_chan(records, symbol, freq_sec, config=None):
+    """根据 records 构造期货 CChan 并全量消费。
+    唯一来源：_get_kl_type(freq) + _make_chan_config()（消除三份 _freq_to_kl 与配置差异）。"""
+    from ChanConfig import CChanConfig
+    CTqSdkAPI.set_data(records, symbol=f"{symbol}:{freq_sec}")
+    kl_type = _get_kl_type(freq_sec)
+    config = config or _make_chan_config()
+    chan = CChan(code=f"{symbol}:{freq_sec}", begin_time=None, end_time=None,
+                 data_src="custom:TqSdkAPI.CTqSdkAPI", lv_list=[kl_type],
+                 config=config, autype=AUTYPE.NONE, market_type="futures")
+    for _ in chan.step_load():
+        pass
+    return chan, kl_type</pre>
+  <p><b>替换范围（行为应零变化）</b>：<code>init_chan_symbol</code>（L82–108）、双窗选点主/子（L945–960+、L865 附近）。<b>验证</b>：重跑 <code>test_sse_gray</code>、<code>test_sse_sequence</code>、<code>snapshot_runner.py --all</code>，期望全绿。</p>
+
+  <h3>阶段 B —— 复用同一构造到静态期货路径 <span class="pill p-mid">推荐 · 中低风险</span></h3>
+  <p>让 <code>_analyze_futures_internal</code> 的「注入 + 建链」段（L498–527）改为调用 <code>_build_futures_chan</code>，并核对 <code>CChanConfig()</code> → <code>_make_chan_config()</code> 的配置差异是否影响静态输出。若不引入回归即合入；若有差异，则保留静态侧原配置、仅抽公共后由参数注入。<b>验证</b>：<code>snapshot_runner.py --all</code>（期货维度）+ 手动比对静态 /api/futures 输出。</p>
+
+  <h3>阶段 C ——（建议不做）股票取数协议统一 <span class="pill p-skip">不推荐</span></h3>
+  <p>为 <code>TdxAPI</code> 补一个 <code>fetch_kline</code> 以匹配 <code>CCommonStockApi</code> 协议、让 <code>_analyze_stock_internal</code> 改走协议。代价：股票路径深度耦合前复权 / 时间截断 / 冷启动 / 选点回放，改动面大且横跨 snapshot 全部股票基线；而收益仅是「概念统一」。二者本就该是多源适配，<b>不建议为形式统一冒险</b>。</p>
+
+  <h3>阶段 D ——（可选）清理遗留接口</h3>
+  <p><code>fetch_and_inject</code> 及 <code>source</code> 死参数：确认无路由引用后瘦身或标注弃用，同步 <code>LOCK_POLICY</code> 登记与守护测试。若非本期目标可延后。</p>
+
+  <h3>验收门禁</h3>
+  <ol>
+    <li>阶段 A/B 完成后 <code>python Test/run_all.py</code> 全量 14/14 全绿；</li>
+    <li><code>test_sse_gray</code> 类型序列 + 剥离时间戳结构 + 总数不变；</li>
+    <li><code>snapshot_runner.py --all</code> 期货笔/段/中枢/买卖点各维度无漂移；</li>
+    <li>阶段 B 若涉及配置语义统一，附一张「统一前后静态 /api/futures 输出 diff」作为人工评审依据。</li>
+  </ol>
+</section>
+
+<!-- 风险 -->
+<section>
+  <h2><span class="no">4</span>风险与需您拍板的三点</h2>
+  <table>
+    <tbody><tr><th>决策点</th><th>选项</th><th>建议</th></tr>
+    <tr><td>推进范围</td>
+      <td>仅 A+B（收敛期货初始化）/ A+B+D（再加清遗留接口）/ 全部含 C</td>
+      <td><span class="pill p-ok">仅 A+B</span>：低风险、收益明确；C 不推荐、D 可延后。</td></tr>
+    <tr><td>配置统一敏感性</td>
+      <td>阶段 B 统一 <code>_make_chan_config()</code> 前是否先做一次静态输出 diff 再合入</td>
+      <td><span class="pill p-mid">先 diff 再合入</span>：避免配置差异静默改变期货静态语义。</td></tr>
+    <tr><td>是否动测试契约</td>
+      <td>本次为纯重构，不应重冻任何基线；若某护栏断言了行号/内联结构导致漂移，是修代码而非改测试</td>
+      <td><span class="pill p-keep">不改基线</span>：459 行/ftl 之外的护栏均应语义等价。</td></tr>
+  </tbody></table>
+  <div class="callout warn">
+    <p><b>最大风险是「阶段 C」被顺手扩大</b>。它横跨股票 snapshot 全基线、触及前复权/冷启动，一旦回退需重冻多份基线。请明确把 C 排除在本次范围之外。</p>
+  </div>
+</section>
+
+<footer class="dim" style="margin-top:8px;font-size:12px">
+  评审要点：请对「范围=A+B」「阶段 B 配置统一前先 diff」「C 排除」三点表态；通过后我按 A → B 顺序实施，并逐阶段跑 run_all 报护栏结果。
+</footer>
+
+</div>
+
+</body></html>

@@ -198,6 +198,15 @@ class CTqSdkSession(CSSESource):
             self._serials[key] = self.api.get_kline_serial(symbol, freq_sec)
         return self._serials[key]
 
+    def fetch_kline(self, symbol, freq_sec=15, num_bars=None,
+                    display_key=None, start_time=None):
+        """拉取历史 K 线（委托 CTqSdkAPI.fetch_kline，封装底层 api 对象）。
+        V10 复审 P1-2：服务层只消费 src.* 协议，不再触碰 src.api 原始对象。"""
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        return CTqSdkAPI.fetch_kline(self.api, symbol, freq_sec=freq_sec,
+                                     num_bars=num_bars, display_key=display_key,
+                                     start_time=start_time)
+
     def wait_update(self, deadline_ns):
         if self._closed:
             raise CSSESourceClosed()

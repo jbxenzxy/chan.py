@@ -57,7 +57,8 @@ SYMBOL_CODE = get_symbol_code()                                        # 默认�
 # ============================================================
 # 账户和密码从 vipdoc（即 tdx_install_dir\vipdoc）下 tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
-_SSE_DEBUG  = False # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
+# V10 复审 P1-1：SSE 调试旗改读配置中心 AppConfig（单一事实源 app_config.sse_debug）。
+_SSE_DEBUG  = app_config.sse_debug # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
 if app_config.chan_path not in sys.path:
@@ -85,13 +86,15 @@ from DataAPI.TdxAPI import CTdxAPI, \
     get_index_stocks, refresh_block_files
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
-FORWARD_ADJUST_ENABLED = True
+# V10 复审 P1-1：改读配置中心 AppConfig，保持符号名（func_map_check ORCH_E）以兼容消费侧。
+# 之前为硬编码常量，.env / 环境变量无法生效；现单一事实源在 app_config.forward_adjust_enabled。
+FORWARD_ADJUST_ENABLED = app_config.forward_adjust_enabled
 
 # 调试模式：冷启动只从指定日期开始加载(所有周期有效)，None表示不开启。如果该日期前无通达信数据，则有多少加载多少
-DEBUG_COLD_START_START_DATE = None # "2024-09-10"
+DEBUG_COLD_START_START_DATE = app_config.debug_cold_start_start_date
 
 # 调试模式：用于解决冷启动起不来的问题；冷启动加载到此日期(仅日K生效)，None表示不开启
-DEBUG_COLD_START_END_DATE = None   # 示例: "2026-06-29" 北方国际
+DEBUG_COLD_START_END_DATE = app_config.debug_cold_start_end_date
 
 # 注入通达信数据源配置到 TdxAPI 模块
 from DataAPI.TdxAPI import set_tdx_config as _set_tdx_config
@@ -109,13 +112,12 @@ from DataAPI.TdxAPI import set_tdx_hy_mapping as _set_tdx_hy_mapping
 _set_tdx_hy_mapping(*app_data.load_tdxhy_mapping())
 
 # 全量数据模式：True=加载全部K线不做时间截断；False=默认模式
-FULL_DATA_MODE = False
+# V10 复审 P1-1：改读配置中心 AppConfig，单一事实源在 app_config.full_data_mode。
+FULL_DATA_MODE = app_config.full_data_mode
 
 # 时间截断配置（仅 FULL_DATA_MODE=False 时生效）：{周期: (天数, 显示文本)}
-TIME_TRUNCATE_CONFIG = {
-    '30m': (180, "6个月"),
-    '5m': (90, "3个月"),
-}
+# V10 复审 P1-1：改读配置中心 AppConfig，单一事实源在 app_config.time_truncate_config。
+TIME_TRUNCATE_CONFIG = app_config.time_truncate_config
 
 # 导入天勤数据源适配器（期货/期指）
 # 阶段 5（设计 8.8）：非标准导入收敛 —— 频率映射/别名/支持列表/fetch_kline
@@ -1084,10 +1086,11 @@ def _calc_futures_white_hline(kl_list, _freq, date_fmt):
     from App import AppSSE
     return AppSSE._calc_futures_white_hline(kl_list, _freq, date_fmt)
 
-def init_chan_symbol(api, symbol, _name, freq_sec, freq_label, start_time=None):
-    """TqApi 合约初始化（兼容壳 → App/AppSSE.py；阶段 8 实现已迁出）"""
+def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None):
+    """TqApi 合约初始化（兼容壳 → App/AppSSE.py；阶段 8 实现已迁出）
+    V10 复审 P1-2：首参为数据源对象 src（CTqSdkSession），与 AppSSE 签名一致。"""
     from App import AppSSE
-    return AppSSE.init_chan_symbol(api, symbol, _name, freq_sec, freq_label, start_time=start_time)
+    return AppSSE.init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=start_time)
 
 def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
     """实时快照提取（兼容壳 → App/AppSSE.py；阶段 8 实现已迁出）"""

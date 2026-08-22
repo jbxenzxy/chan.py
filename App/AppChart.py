@@ -19,6 +19,8 @@ App/AppChart.py —— 图表交互功能域
   - 分析漏斗（call_analysis / run_analysis / analyze_stock 等，持 _ENGINE_LOCK）
   - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
   - 数据拉取与注入（fetch_and_inject / _get_data_source）
+  - 审核标注（get_annotations / handle_annotation_action / delete_by_date
+    等，原 App/AppAnnotate.py，阶段随本版合入：图表右键标注属图表交互）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
   - 期货元数据漏斗（futures_cleanup / get_futures_aliases / futures_config 等，
@@ -107,6 +109,66 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     """
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 图表标注（由原 App/AppAnnotate.py 合入：图表右键标注属图表交互域）
+# 依赖方向：本小节 → AppData（单向，app_data 单例）
+# 路由见 FrontAPI /api/annotations GET、/api/stocks/{code}/save|read/annotation
+# ═══════════════════════════════════════════════════════════════════════
+
+def get_annotations(code, freq):
+    """获取标注数据（/api/annotations GET）"""
+    from App.AppData import app_data
+    return app_data.get_annotations_for(code, freq)
+
+
+def handle_annotation_action(body):
+    """标注增删改统一入口（/api/annotations POST，40 行校验逻辑下沉）
+
+    body: {action, code, freq, date, text, y_offset, old_text}
+    返回 (result_dict, status_code)，语义与原路由逐分支一致。
+    """
+    from App.AppData import app_data
+
+    action = body.get("action", "")
+    code = body.get("code", "")
+    freq = body.get("freq", "d")
+    date_str = body.get("date", "")
+    text = body.get("text", "")
+    y_offset = body.get("y_offset", 0)
+
+    if not code:
+        return {"error": "缺少code参数"}, 400
+
+    if action == "add":
+        if not date_str or not text:
+            return {"error": "缺少date或text参数"}, 400
+        success = app_data.add_annotation(code, freq, date_str, text, y_offset)
+        return {"ok": success, "duplicate": not success}, 200
+    elif action == "delete":
+        if not date_str or not text:
+            return {"error": "缺少date或text参数"}, 400
+        success = app_data.delete_annotation(code, freq, date_str, text)
+        return {"ok": success}, 200
+    elif action == "delete_by_date":
+        if not date_str:
+            return {"error": "缺少date参数"}, 400
+        success = app_data.delete_annotation_by_date(code, freq, date_str)
+        return {"ok": success}, 200
+    elif action == "delete_all":
+        success = app_data.delete_all_annotations(code, freq)
+        return {"ok": success}, 200
+    elif action == "update":
+        old_text = body.get("old_text", "")
+        new_text = body.get("text", "")
+        if not date_str or not old_text or not new_text:
+            return {"error": "缺少date/old_text/text参数"}, 400
+        app_data.delete_annotation(code, freq, date_str, old_text)
+        success = app_data.add_annotation(code, freq, date_str, new_text, y_offset)
+        return {"ok": success}, 200
+    else:
+        return {"error": f"未知action: {action}"}, 400
 
 
 def call_manual_select_point(code, freq="d", bi_idx=-1):

@@ -39,6 +39,7 @@ from App.AppChart import (
     extract_realtime_snapshot,
     _get_data_source, fetch_and_inject,
     search_stocks,
+    get_annotations, handle_annotation_action,
     clear_saved_point, futures_clear_saved_point,
     save_last_code_freq, load_last_code_freq,
     get_saved_point_times,
@@ -64,9 +65,7 @@ from App.AppRefresh import (
     load_pe_ttm_cache, get_pe_ttm, get_index_belong,
     refresh_status, refresh_stock_names_async,
 )
-from App.AppAnnotate import (
-    get_annotations, handle_annotation_action,
-)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -193,6 +192,6 @@ __all__ = [
     "load_float_mc_cache", "fetch_float_mc_from_tencent",
     "update_float_mc_cache", "load_pe_ttm_cache", "get_pe_ttm",
     "get_index_belong", "refresh_status", "refresh_stock_names_async",
-    # 标注（AppAnnotate）
+    # 标注（AppChart）
     "get_annotations", "handle_annotation_action",
 ]
