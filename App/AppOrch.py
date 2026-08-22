@@ -10,7 +10,8 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
   - AppScan.py       股票扫描（右上角「股票扫描」按钮）
   - AppDownload.py   盘后下载（右上角「盘后下载」按钮）
   - AppRefresh.py    刷新（右上角「刷新」按钮：股票名/指数归属/PE-TTM/板块）
-  - AppAnnotate.py   标注（图表右键标注）
+
+标注归 AppChart（图表右键标注属图表交互域，原 AppAnnotate 已合并删除）。
 
 本文件保留：
   - 领域异常层级（AppError 等 6 类，Test/test_phase2_guards.py 引用）
