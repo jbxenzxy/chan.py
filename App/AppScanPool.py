@@ -198,7 +198,7 @@ def _monitor_task(task_id, futures):
 
     # 错误明细并入 _scan_skip_log（中止行不计入，对齐旧路径口径）
     try:
-        from App.AppEngine import _scan_skip_log
+        from App.AppScan import _scan_skip_log
         for row in store.iter_error_rows(task_id):
             data = row.get("data") or {}
             if isinstance(data, dict) and data.get("aborted"):

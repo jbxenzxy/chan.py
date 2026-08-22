@@ -57,13 +57,25 @@ SYMBOL_CODE = get_symbol_code()                                        # 默认�
 from App.AppLog import get_logger
 log = get_logger(__name__)
 
+# 引擎纯函数/常量 + 证券代码解析公共工具（P0-1c：MACD/EMA、周期映射、
+# 日期格式、左肩定位、中枢确认、期货双窗口映射、SSE 调试旗、代码解析等
+# 自本文件下沉 App/utils.py；此处 re-import 保持对外接口不变，AppSSE
+# 亦从 App.utils 导入）
+from App.utils import (
+    _get_stock_name, _get_stock_market_code, _get_market_code,
+    _SSE_DEBUG, _FREQ_SEC_TO_KL, _get_kl_type_by_sec, _get_kl_type, _get_freq_label,
+    _make_chan_config, ema, calculate_macd, _inherit_macd_for_preview_bar,
+    INTRADAY_FREQS, SUBSECOND_FREQS, _get_date_fmt,
+    _bi_overlap_range, _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
+    _FUTURES_DUAL_FREQ_MAP,
+)
+
 # ============================================================
 # 天勤期货/期指行情配置
 # ============================================================
 # 账户和密码从 vipdoc（即 tdx_install_dir\vipdoc）下 tq_account.json 文件读取
 # 文件格式: {"account": "手机号或用户名", "password": "密码"}
 # V10 复审 P1-1：SSE 调试旗改读配置中心 AppConfig（单一事实源 app_config.sse_debug）。
-_SSE_DEBUG  = app_config.sse_debug # SSE 推送详细调试日志开关（设为 True 可恢复调试输出）
 
 # 将 chan.py 和当前脚本目录都添加到搜索路径
 if app_config.chan_path not in sys.path:
@@ -181,58 +193,14 @@ DS_CODE_PREFIX = "62"  # 扩展市场指数在 ds/lday 下的文件名前缀
 
 
 # ============================================================
-# MACD 计算
+# 获取股票名称（阶段 8：实现已下沉 App/utils.py，顶部统一 re-import 兼容）
 # ============================================================
-def ema(data, period):
-    """计算EMA"""
-    result = []
-    k = 2.0 / (period + 1)
-    for i, val in enumerate(data):
-        if i == 0:
-            result.append(val)
-        else:
-            result.append(val * k + result[-1] * (1 - k))
-    return result
-
-
-def calculate_macd(closes, fast=12, slow=26, signal=9):
-    """计算MACD"""
-    ema_fast = ema(closes, fast)
-    ema_slow = ema(closes, slow)
-    dif = [f - s for f, s in zip(ema_fast, ema_slow)]
-    dea = ema(dif, signal)
-    macd = [2 * (d - a) for d, a in zip(dif, dea)]
-    return [{"dif": dif[i], "dea": dea[i], "macd": macd[i]} for i in range(len(closes))]
-
-
-def _inherit_macd_for_preview_bar(klines_list):
-    """让预览K线（列表最后一根）继承前一根已确认K线的MACD值，避免跳变。
-    预览K线的close是假数据（壁钟触发时用冻结K线的close填充），
-    重算全序列MACD反而引入误差，不如直接继承前一根的值，
-    等后续真实tick到来时再由tick路径用真实数据重算覆盖。"""
-    if len(klines_list) < 2:
-        return
-    prev = klines_list[-2]
-    klines_list[-1]['dif'] = prev.get('dif', 0)
-    klines_list[-1]['dea'] = prev.get('dea', 0)
-    klines_list[-1]['macd'] = prev.get('macd', 0)
-
-
-# ============================================================
-# 获取股票名称（阶段 8：实现已下沉 App/utils.py，此处为兼容 import）
-# ============================================================
-from App.utils import _get_stock_name, _get_stock_market_code, _get_market_code
 
 
 # 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象，阶段 4）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
 # （惰性标志 _names_loaded/_pe_loaded/_belong_loaded 已随实现收敛 app_data，不再留别名）
 _stock_names_cache = app_data.names_cache
-
-# 刷新状态（股票名称刷新用；获取侧状态，阶段 5 前保留于此）
-_refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
-
-
 
 def _load_stock_names_from_cache_file():
     """从 stock_names.json 加载股票名称到内存（委托 app_data）"""
@@ -274,541 +242,11 @@ def _get_index_belong(market, code):
     return app_data.get_index_belong(market, code)
 
 
-# AKShare 指数代码 → 市场前缀映射
-_AKSHARE_EXCHANGE_MAP = {
-    "上海证券交易所": "sh",
-    "深圳证券交易所": "sz",
-}
-# AKShare 指数代码 → 归属名称
-_AKSHARE_INDEX_MAP = {
-    "000300": "沪深300",
-    "000905": "中证500",
-    "000852": "中证1000",
-    "000688": "科创50",
-}
-
-
-def _fetch_index_belong_from_akshare(timeout=30):
-    """
-    通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
-    构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
-    如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
-    （阶段 4：归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
-    """
-    try:
-        import akshare as ak
-    except ImportError:
-        log.info("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
-        return app_data.belong_cache
-
-    def _fetch_one(_idx_code, _idx_name):
-        try:
-            _refresh_status["step"] = f"刷新指数归属: {_idx_name}..."
-            log.info(f"[指数归属] 开始获取 {_idx_name}({_idx_code})...")
-            df = ak.index_stock_cons_csindex(symbol=_idx_code)
-            count = 0
-            for _, row in df.iterrows():
-                stock_code = str(row["成分券代码"]).zfill(6)
-                exchange = str(row["交易所"])
-                mkt = _AKSHARE_EXCHANGE_MAP.get(exchange, "")
-                if mkt and stock_code.isdigit() and len(stock_code) == 6:
-                    result[mkt + stock_code] = _idx_name
-                    count += 1
-            log.info(f"[指数归属] {_idx_name}({_idx_code}): 已成功获取 {count}只 成分股")
-        except Exception as e:
-            log.info(f"[指数归属] {_idx_name}({_idx_code}) 获取失败: {e}")
-
-    import concurrent.futures
-    result = {}
-    for index_code, index_name in _AKSHARE_INDEX_MAP.items():
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        try:
-            future = executor.submit(_fetch_one, index_code, index_name)
-            try:
-                future.result(timeout=timeout)
-            except concurrent.futures.TimeoutError:
-                log.info(f"[指数归属] {index_name}({index_code}) 获取超时({timeout}s)，跳过")
-        finally:
-            executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
-
-    app_data.replace_index_belong(result)
-    return result
-
-
-def _refresh_pe_ttm():
-    """
-    通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm_index.json。
-    从 stock_names.json 中读取所有股票代码，分批请求腾讯接口。
-    """
-    import requests as req
-    _refresh_status["step"] = "刷新PE-TTM..."
-    _load_pe_ttm_cache()  # 先加载已有缓存
-
-    # 从 stock_names.json 收集所有纯数字股票代码（路径：AppConfig 派生属性）
-    if not os.path.exists(app_config.stock_names_cache_file):
-        log.info("[PE-TTM] stock_names.json 不存在，无法刷新")
-        _refresh_status["error"] = "stock_names.json 不存在，请先刷新股票名称"
-        return
-
-    try:
-        with open(app_config.stock_names_cache_file, "r", encoding="utf-8") as f:
-            names_data = json.load(f)
-    except Exception as e:
-        log.info(f"[PE-TTM] 读取 stock_names.json 失败: {e}")
-        _refresh_status["error"] = f"读取 stock_names.json 失败: {e}"
-        return
-
-    if not isinstance(names_data, dict):
-        _refresh_status["error"] = "stock_names.json 格式错误"
-        return
-
-    # 收集股票代码并构建腾讯代码列表
-    codes = []
-    for key, info in names_data.items():
-        if not isinstance(info, dict):
-            continue
-        mkt = info.get("market", "")
-        # 提取纯数字代码
-        code = key
-        if not code.isdigit() and len(key) > 1:
-            # 复合键如 sh000001 → 提取数字部分
-            code = key[2:] if key[:2] in ("sh", "sz", "bj", "hk") else key
-        # A股6位，港股5位
-        code_len = len(code) if code.isdigit() else 0
-        if mkt == "hk" and code_len == 5:
-            codes.append((mkt, code))
-        elif mkt in ("sh", "sz", "bj") and code_len == 6:
-            codes.append((mkt, code))
-
-    total = len(codes)
-    _refresh_status["total"] = total
-    _refresh_status["loaded"] = 0
-    log.info(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
-
-    batch_size = 300
-    new_count = 0
-    got_set = set()  # 本次成功获取到PE-TTM的代码
-    for i in range(0, total, batch_size):
-        batch = codes[i:i + batch_size]
-        q_codes = [f"{mkt}{code}" for mkt, code in batch]
-        url = "https://qt.gtimg.cn/q=" + ",".join(q_codes)
-        try:
-            resp = req.get(url, timeout=10)
-            for line in resp.text.strip().split("\n"):
-                if "v_" not in line:
-                    continue
-                try:
-                    # 腾讯接口格式: v_sh600519="1~贵州茅台~600519~...~[39]市盈率~..."
-                    parts = line.split('="')[1].strip().strip('";')
-                    fields = parts.split("~")
-                    # 从行前缀提取市场: v_sh... → sh, v_sz... → sz, v_hk... → hk
-                    line_mkt = line[2:4] if len(line) > 4 else ""
-                    if len(fields) > 39:
-                        stock_code = fields[2]
-                        pe_str = fields[39]  # 市盈率(动态)
-                        if stock_code and stock_code.isdigit() and pe_str and pe_str.replace(".", "").replace("-", "").isdigit():
-                            pe_val = float(pe_str)
-                            if pe_val != 0:
-                                cache_key = line_mkt + stock_code if line_mkt else stock_code
-                                got_set.add(cache_key)
-                                if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
-                                    _pe_ttm_cache[cache_key] = pe_val
-                                    new_count += 1
-                except (ValueError, TypeError, IndexError):
-                    pass
-        except Exception as e:
-            log.info(f"[PE-TTM] 第{i//batch_size+1}批失败: {e}")
-
-        _refresh_status["loaded"] = min(i + batch_size, total)
-        log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
-
-    # 统计未获取到的股票
-    all_queried = {mkt + code for mkt, code in codes}
-    missed = all_queried - got_set
-    if missed:
-        missed_list = sorted(missed)[:20]
-        log.info(f"[PE-TTM] 未获取到PE-TTM: {len(missed)} 只 (如: {', '.join(missed_list)}{'...' if len(missed) > 20 else ''})")
-
-    # 刷新指数归属（AKShare在线获取，与PE-TTM一起保存）
-    _refresh_status["step"] = "刷新指数归属..."
-    log.info("[指数归属] ========== 开始刷新指数归属 ==========")
-    _fetch_index_belong_from_akshare()
-
-    # 保存到文件（合并PE-TTM和指数归属，过滤掉旧格式的纯数字key）
-    try:
-        os.makedirs(os.path.dirname(app_config.stock_pe_ttm_file), exist_ok=True)
-        # 找出所有有PE-TTM或指数归属的股票代码
-        all_keys = set(_pe_ttm_cache.keys()) | set(_index_belong_cache.keys())
-        combined = {}
-        for k in all_keys:
-            if k.isdigit() and len(k) == 6:
-                continue  # 过滤旧格式纯数字key
-            entry = {}
-            pe_val = _pe_ttm_cache.get(k)
-            idx_val = _index_belong_cache.get(k)
-            if isinstance(pe_val, (int, float)) and pe_val != 0:
-                entry["pe_ttm"] = pe_val
-            if idx_val:
-                entry["index"] = idx_val
-            if entry:
-                combined[k] = entry
-        _safe_write_json_file(app_config.stock_pe_ttm_file, combined, ensure_ascii=False)
-        log.info(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {app_config.stock_pe_ttm_file}")
-    except Exception as e:
-        log.info(f"[PE-TTM] 保存失败: {e}")
-        _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
-
-
 def _collect_codes_from_vipdoc(vipdoc_dir):
     """兼容壳（阶段 5）：委托 DataAPI/ElTdxAPI（vipdoc_dir 由调用方注入，设计 4.4）"""
     return _ElTdx.collect_codes_from_vipdoc(vipdoc_dir)
 
 
-def _fetch_names_from_sina_once(codes_dict):
-    """
-    一次性从新浪财经API获取股票名称，用于首次建立缓存。
-    参数 codes_dict: {code: {"name": "", ...}} —— 只获取 name 为空的条目。
-    返回补充了多少条名称。
-    注意：新浪API不支持A股和港股混合请求，必须分开调用。
-    """
-    import urllib.request
-    import time
-
-    # 只获取没有名称的代码
-    codes_missing = [compound_key for compound_key, info in codes_dict.items() if not info.get("name")]
-    if not codes_missing:
-        return 0
-
-    # 按市场分组：A股和港股必须分开请求
-    a_stock_codes = []
-    hk_codes = []
-    compound_key_map = {}  # sh000001 -> 000001
-    for compound_key in codes_missing:
-        market = codes_dict[compound_key].get("market", "")
-        # 从复合键提取纯代码：去掉前缀 sh/sz/hk
-        if market and compound_key.startswith(market):
-            bare_code = compound_key[len(market):]
-        else:
-            bare_code = compound_key
-        compound_key_map[bare_code] = compound_key
-        if market == "hk":
-            hk_codes.append(bare_code)
-        else:
-            a_stock_codes.append((bare_code, market))
-
-    filled = 0
-    batch_size = 50
-
-    # === 第一轮：A股 ===
-    if a_stock_codes:
-        total_batches = (len(a_stock_codes) - 1) // batch_size + 1
-        for i in range(0, len(a_stock_codes), batch_size):
-            batch = a_stock_codes[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            codes_str_parts = []
-            bare_to_compound = {}
-            for bare_code, market in batch:
-                codes_str_parts.append(f"{market}{bare_code}")
-                bare_to_compound[bare_code] = market + bare_code
-            codes_str = ",".join(codes_str_parts)
-            url = f"http://hq.sinajs.cn/list={codes_str}"
-            try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://finance.sina.com.cn/"
-                })
-                resp = urllib.request.urlopen(req, timeout=15)
-                content = resp.read().decode("gbk", errors="ignore")
-                for line in content.strip().split("\n"):
-                    line = line.strip()
-                    if not line or "=" not in line:
-                        continue
-                    var_part, val_part = line.split("=", 1)
-                    val_part = val_part.strip().strip('"').strip(";").strip('"')
-                    if not val_part:
-                        continue
-                    var_name = var_part.strip().replace("var ", "")
-                    for mkt_prefix in ("sh", "sz"):
-                        marker = f"hq_str_{mkt_prefix}"
-                        if var_name.startswith(marker):
-                            bare_code = var_name[len(marker):]
-                            compound_key = bare_to_compound.get(bare_code)
-                            if not compound_key:
-                                continue
-                            fields = val_part.split(",")
-                            if len(fields) >= 1:
-                                name = fields[0].strip()
-                                if name and compound_key in codes_dict:
-                                    codes_dict[compound_key]["name"] = name
-                                    filled += 1
-                            break
-            except Exception as e:
-                log.info(f"[股名刷新]   新浪A股批次{batch_num}失败: {e}")
-            if batch_num < total_batches:
-                time.sleep(0.5)
-
-    # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效） ===
-    if hk_codes:
-        total_batches = (len(hk_codes) - 1) // batch_size + 1
-        for i in range(0, len(hk_codes), batch_size):
-            batch = hk_codes[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            # 腾讯财经API：支持多只股票，用逗号分隔
-            codes_str = ",".join([f"hk{code}" for code in batch])
-            url = f"https://qt.gtimg.cn/q={codes_str}"
-            try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://finance.qq.com/"
-                })
-                resp = urllib.request.urlopen(req, timeout=15)
-                content = resp.read().decode("gbk", errors="ignore")
-                # 解析格式：v_hk00700="1~腾讯控股~00700~...";
-                for line in content.strip().split(";"):
-                    line = line.strip()
-                    if not line or "=" not in line:
-                        continue
-                    var_part, val_part = line.split("=", 1)
-                    val_part = val_part.strip().strip('"').strip(";")
-                    if not val_part:
-                        continue
-                    # 提取代码：v_hk00700 -> 00700
-                    var_name = var_part.strip().replace("v_", "").replace("hk", "")
-                    bare_code = var_name.strip()
-                    compound_key = "hk" + bare_code
-                    fields = val_part.split("~")
-                    if len(fields) >= 2:
-                        name = fields[1].strip()  # 股票名称在第2个字段
-                        if name and compound_key in codes_dict:
-                            codes_dict[compound_key]["name"] = name
-                            filled += 1
-            except Exception as e:
-                log.info(f"[股名刷新]   腾讯港股批次{batch_num}失败: {e}")
-            if batch_num < total_batches:
-                time.sleep(0.5)
-
-    return filled
-
-
-def _refresh_stock_names():
-    """
-    从本地文件批量获取全市场股票名称，保存到 stock_names.json。
-    数据来源优先级：
-      1. vipdoc/*.day 文件名（收集所有已下载过数据的股票代码）
-      2. 新浪财经API（为无名称的代码批量查询名称）
-    （阶段 4：名称缓存由 app_data 持有；本函数只做获取与合并，
-     最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
-    """
-    global _refresh_status
-
-    if _refresh_status["running"]:
-        return
-    _refresh_status["running"] = True
-    _refresh_status["step"] = "刷新股票名..."
-    _refresh_status["error"] = None
-    log.info("[股名刷新] ========== 开始刷新股票名称 ==========")
-
-    # === 先加载已有缓存，新数据合并进去，不覆盖 ===
-    raw_names = {}
-    _load_stock_names_from_cache_file()
-    if _stock_names_cache:
-        for code, info in _stock_names_cache.items():
-            if isinstance(info, dict):
-                raw_names[code] = info
-            else:
-                raw_names[code] = {"name": info, "pinyin": ""}
-        log.info(f"[股名刷新] 步骤1/5 加载缓存: 已加载 {len(raw_names)} 只")
-    else:
-        log.info("[股名刷新] 步骤1/5 加载缓存: 无缓存，全新读取")
-
-    # === 方案1: vipdoc .day文件名收集代码 ===
-    # .day 文件覆盖所有已下载过K线数据的股票
-    vipdoc_codes = _collect_codes_from_vipdoc(app_config.vipdoc_dir)
-    # 统计扫描结果
-    v_sh = sum(1 for v in vipdoc_codes.values() if v.get("market") == "sh")
-    v_sz = sum(1 for v in vipdoc_codes.values() if v.get("market") == "sz")
-    v_hk = sum(1 for v in vipdoc_codes.values() if v.get("market") == "hk")
-    v_total = v_sh + v_sz + v_hk
-    cache_before = len(raw_names)
-    vipdoc_new = 0   # 缓存中没有的新代码
-    vipdoc_filled = 0  # 缓存中有但无名称，从vipdoc补全
-    for code, info in vipdoc_codes.items():
-        if code not in raw_names:
-            raw_names[code] = info
-            vipdoc_new += 1
-        elif not raw_names[code].get("name"):
-            raw_names[code]["name"] = info.get("name", "")
-            vipdoc_filled += 1
-    log.info(f"[股名刷新] 步骤2/5 合并扫描: vipdoc共{v_total}只 (sh{v_sh}+sz{v_sz}+ds{v_hk}), 缓存{cache_before}只, 合并后{len(raw_names)}只 (新增{vipdoc_new}只)")
-
-    # === 方案2: 新浪API补全缺失的名称 ===
-    # 即使已有缓存，如果有新发现的代码（如港股）没有名称，也要补全
-    codes_without_name = [c for c, info in raw_names.items() if not info.get("name")]
-    if codes_without_name:
-        a_no = sum(1 for c in codes_without_name if raw_names[c].get("market") != "hk")
-        hk_no = sum(1 for c in codes_without_name if raw_names[c].get("market") == "hk")
-        log.info(f"[股名刷新] 步骤3/5 补全名称: {len(codes_without_name)} 只无名称 (A股{a_no}, 港股{hk_no})")
-        temp_dict = {c: raw_names[c] for c in codes_without_name}
-        filled = _fetch_names_from_sina_once(temp_dict)
-        for code, info in temp_dict.items():
-            if info.get("name"):
-                raw_names[code] = info
-        failed = len(codes_without_name) - filled
-        if failed > 0:
-            log.info(f"[股名刷新] 步骤3/5 补全名称: 成功 {filled} 只, 失败 {failed} 只")
-        else:
-            log.info(f"[股名刷新] 步骤3/5 补全名称: 全部成功 {filled} 只")
-    else:
-        log.info("[股名刷新] 步骤3/5 补全名称: 无需补全")
-
-    # === 补充通达信板块指数名称（88xxxx系列，如880491半导体、881319半导体）===
-    # 88xxxx代码不以标准A股格式开头，_is_a_stock_code() 会过滤掉，所以不在 raw_names 中。
-    # 来源: tdxzs.cfg（通达信配置文件）和 tdxhy_mapping_data.py（本地映射表）
-    tdxzs_filled = 0
-    tdxzs_file = os.path.join(app_config.tdx_hq_cache, "tdxzs.cfg")
-    if os.path.exists(tdxzs_file):
-        try:
-            with open(tdxzs_file, "r", encoding="gbk", errors="ignore") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = line.split("|")
-                    if len(parts) >= 2:
-                        name = parts[0].strip()
-                        code = parts[1].strip()
-                        if "." in code:
-                            code = code.split(".")[0]
-                        if not name or not code:
-                            continue
-                        # 跳过 8803xx-8804xx（旧版行业），由 881 研究行业替代
-                        if code.startswith("8803") or code.startswith("8804"):
-                            continue
-                        compound_key = "sh" + code
-                        if compound_key not in raw_names:
-                            raw_names[compound_key] = {"name": name, "pinyin": "", "market": "sh"}
-                            tdxzs_filled += 1
-                        elif not raw_names[compound_key].get("name"):
-                            raw_names[compound_key]["name"] = name
-                            tdxzs_filled += 1
-        except Exception as e:
-            log.info(f"[股名刷新]   读取tdxzs.cfg失败: {e}")
-
-    # 新版研究行业(881xxx)从 tdxhy_mapping_data 读取（阶段 5：单一加载函数 app_data.load_tdxhy_mapping，设计 8.8）
-    tdxhy_filled = 0
-    try:
-        _TDXHY_881_TO_X = app_data.load_tdxhy_mapping()[1]
-        for code_881, (x_code, name) in _TDXHY_881_TO_X.items():
-            compound_key = "sh" + code_881
-            if compound_key not in raw_names:
-                raw_names[compound_key] = {"name": name, "pinyin": "", "market": "sh"}
-                tdxhy_filled += 1
-            elif not raw_names[compound_key].get("name"):
-                raw_names[compound_key]["name"] = name
-                tdxhy_filled += 1
-    except Exception as e:
-        log.info(f"[股名刷新]   加载tdxhy_mapping_data失败: {e}")
-
-    block_filled = tdxzs_filled + tdxhy_filled
-    log.info(f"[股名刷新] 步骤4/5 补充板块: tdxzs.cfg +{tdxzs_filled}条, tdxhy +{tdxhy_filled}条, 共补全 {block_filled} 条板块")
-
-    # === 统一用pypinyin生成拼音首字母（忽略tnf文件中的拼音，确保格式一致） ===
-    try:
-        from pypinyin import lazy_pinyin
-        all_names = {}
-        for code, info in raw_names.items():
-            if isinstance(info, dict):
-                name = info.get("name", "")
-                market = info.get("market", "")  # 保留市场字段
-            else:
-                name = str(info)
-                market = ""
-            # 始终用pypinyin生成拼音首字母，确保搜索的一致性
-            # 通达信/新浪API中名称可能含空格（如"五 粮 液"）或全角字母（如"鲁泰Ａ"）→ 统一清理
-            name_clean = name.replace(" ", "")
-            # 全角ASCII → 半角: U+FF01-U+FF5E → U+0021-U+007E
-            name_clean = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in name_clean)
-            pinyin = ""
-            if name_clean:
-                try:
-                    py_list = lazy_pinyin(name_clean)
-                    pinyin = "".join([p[0].upper() for p in py_list if p])
-                except Exception:
-                    pinyin = ""
-            all_names[code] = {"name": name_clean, "pinyin": pinyin, "market": market}
-    except ImportError:
-        all_names = {}
-        for code, info in raw_names.items():
-            if isinstance(info, dict):
-                name = info.get("name", "")
-                market = info.get("market", "")
-            else:
-                name = str(info)
-                market = ""
-            all_names[code] = {"name": name, "pinyin": "", "market": market}
-
-    # === 过滤 ST、*ST、退市股票，不写入缓存 ===
-    filtered_count = 0
-    filtered_empty = 0
-    filtered_st = 0
-    filtered_delist = 0
-    for _code in list(all_names.keys()):
-        name = all_names[_code].get("name", "")
-        if not name:
-            del all_names[_code]
-            filtered_count += 1
-            filtered_empty += 1
-        elif name.startswith("*ST") or name.startswith("ST"):
-            del all_names[_code]
-            filtered_count += 1
-            filtered_st += 1
-        elif "退" in name:
-            del all_names[_code]
-            filtered_count += 1
-            filtered_delist += 1
-    if all_names:
-        os.makedirs(os.path.dirname(app_config.stock_names_cache_file), exist_ok=True)
-        _safe_write_json_file(app_config.stock_names_cache_file, all_names, ensure_ascii=False)
-        app_data.replace_names(all_names)  # 同对象替换：别名 _stock_names_cache 即时可见
-        sh_count = sum(1 for c in all_names if all_names[c].get("market") == "sh")
-        sz_count = sum(1 for c in all_names if all_names[c].get("market") == "sz")
-        hk_count = sum(1 for c in all_names if all_names[c].get("market") == "hk")
-        if filtered_count > 0:
-            parts = []
-            if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
-            if filtered_delist: parts.append(f"退市 {filtered_delist}只")
-            if filtered_empty: parts.append(f"无名 {filtered_empty}只")
-            log.info(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
-        else:
-            log.info(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
-    else:
-        log.info("[股名刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
-
-    # 刷新板块文件（block_zs.dat / block_gn.dat / block_fg.dat / block.dat）
-    log.info("[板块刷新] ========== 开始刷新板块文件 ==========")
-    _refresh_status["step"] = "刷新成分股..."
-    try:
-        def _set_step(msg):
-            _refresh_status["step"] = msg
-        refresh_block_files(progress_callback=_set_step)
-    except Exception as e:
-        log.info(f"[板块刷新] 板块文件刷新失败: {e}")
-
-    # 刷新 PE-TTM（增量更新 stock_pettm_index.json）
-    log.info("[PE-TTM] ========== 开始刷新PE-TTM ==========")
-    try:
-        _refresh_pe_ttm()
-    except Exception as e:
-        log.info(f"[PE-TTM] PE-TTM 刷新失败: {e}")
-        _refresh_status["error"] = f"PE-TTM 刷新失败: {e}"
-
-    # 全部刷新完成，标记状态
-    _refresh_status["running"] = False
-    _refresh_status["step"] = ""
-
-
-
-# ============================================================
 # 解析证券代码，判断市场
 # （阶段 8：_get_stock_market_code / _get_market_code 已下沉 App/utils.py，
 #  顶部 from App.utils import ... 兼容导入）
@@ -816,38 +254,8 @@ def _refresh_stock_names():
 
 
 
-# 秒数 → KL_TYPE 统一映射（唯一来源；覆盖 FREQ_SEC_MAP 全部取值。
-# 取数唯一性收敛 P0-1：消除 AppSSE 内联 _freq_to_kl 两份 + 本函数第三份）
-_FREQ_SEC_TO_KL = {
-    15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
-    180: KL_TYPE.K_3M, 300: KL_TYPE.K_5M, 900: KL_TYPE.K_15M,
-    1800: KL_TYPE.K_30M, 3600: KL_TYPE.K_60M, 86400: KL_TYPE.K_DAY,
-    604800: KL_TYPE.K_WEEK, 2592000: KL_TYPE.K_MON,
-}
-
-
-def _get_kl_type_by_sec(freq_sec):
-    """秒数 → KL_TYPE（唯一来源；AppSSE._build_futures_chan 使用）"""
-    return _FREQ_SEC_TO_KL.get(freq_sec, KL_TYPE.K_15S)
-
-
-def _get_kl_type(freq):
-    """根据频率字符串返回对应的 KL_TYPE 枚举值（委托秒数映射，经 FREQ_SEC_MAP 换算）"""
-    freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 86400) if CTqSdkAPI else 86400
-    return _get_kl_type_by_sec(freq_sec)
-
-def _get_freq_label(freq):
-    """根据频率字符串返回中文标签"""
-    labels = {'15s': '15秒', '1m': '1分钟', '5m': '5分钟', '30m': '30分钟', '60m': '60分钟', 'd': '日线', 'w': '周线'}
-    return labels.get(freq, '日线')
-
-
-def _make_chan_config():
-    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值
-    """
-    from ChanConfig import CChanConfig
-    return CChanConfig()
-
+# 秒数 → KL_TYPE 统一映射 / _get_kl_type_by_sec / _get_kl_type / _get_freq_label /
+# _make_chan_config（P0-1c 已下沉 App/utils.py，顶部 re-import 兼容）
 
 # ============================================================
 # 缠论分析（chan.py 版本）
@@ -859,58 +267,10 @@ import collections
 _stocks_analysis_cache = app_data.stocks_analysis_cache   # 分析结果 LRU
 _cache_lock = app_data.cache_lock                        # 保护缓存的并发读写
 
-# 扫描跳过记录（收集后统一打印）
-_scan_skip_log = []
-
 # 全市场流通市值缓存（通过腾讯接口获取，本地JSON兜底；阶段 4 收敛 app_data）
 def _load_float_mc_cache():
     """从本地JSON加载流通市值缓存（委托 app_data）"""
     return app_data.load_float_mc_cache()
-
-def _fetch_float_mc_from_tencent(stock_list):
-    """通过腾讯行情接口批量获取流通市值（毫秒级，极其稳定）。
-    stock_list: [{"code": "600519", "prefix": "1"}, ...]
-    返回: {code: float_mc(亿元)}，失败返回空字典。
-    """
-    if not stock_list:
-        return {}
-    import requests as req
-    # 构造腾讯代码：prefix 0→sz, 1→sh, 2→bj
-    _PFX = {"0": "sz", "1": "sh", "2": "bj"}
-    codes = []
-    for stk in stock_list:
-        code = stk.get("code", "")
-        prefix = stk.get("prefix", "")
-        mkt = _PFX.get(prefix, "")
-        if mkt and code:
-            codes.append(mkt + code)
-    if not codes:
-        return {}
-    # 腾讯接口限制每次约200-300只，超过则分批
-    batch_size = 300
-    all_mv = {}
-    for i in range(0, len(codes), batch_size):
-        batch = codes[i:i + batch_size]
-        url = "https://qt.gtimg.cn/q=" + ",".join(batch)
-        try:
-            resp = req.get(url, timeout=5)
-            for line in resp.text.strip().split("\n"):
-                if "v_" not in line:
-                    continue
-                try:
-                    # 格式: v_sh600519="1~贵州茅台~600519~...~[44]流通市值~..."
-                    parts = line.split('="')[1].strip().strip('";')
-                    fields = parts.split("~")
-                    if len(fields) > 44:
-                        stock_code = fields[2]  # 纯数字代码
-                        nmc = fields[44]  # 流通市值(亿元，腾讯接口直接返回亿元)
-                        if stock_code and nmc:
-                            all_mv[stock_code] = float(nmc)  # 已经是亿元，无需转换
-                except (ValueError, TypeError, IndexError):
-                    pass
-        except Exception as e:
-            log.info(f"[流通市值] 腾讯接口第{i//batch_size+1}批失败: {type(e).__name__}: {e}")
-    return all_mv
 
 def _update_float_mc_cache(mv_dict):
     """将外部获取的流通市值字典合并到全局缓存并落盘（委托 app_data）。
@@ -923,18 +283,6 @@ def _get_float_mc_from_cache(code):
 
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
-
-# 扫描锁（防止并发扫描导致内存峰值翻倍）
-_scan_lock = threading.Lock()
-
-# 扫描终止标志：前端点击中断时设True，后端检查后跳过后续请求
-_scan_aborted = False
-
-# 扫描开始时间：用于计算扫描耗时，在通知中显示
-_scan_start_time = None
-
-# 页面指数代码：当前页面正在查看的通达信板块指数代码（如 880491），用于"成分股"扫描来源
-_page_index_code = None
 
 # 股票分析锁（防止并发请求时 CTdxAPI.set_data 被覆盖导致分析结果串数据）
 _stock_analysis_lock = threading.Lock()
@@ -985,108 +333,9 @@ def _send_windows_notification(title, message):
 SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 # freq -> CSV列名 的映射
 FREQ_TO_COL = AppData_FREQ_TO_COL
-# 日内周期集合：分钟级
-INTRADAY_FREQS = {"30m", "5m", "1m"}
-# 秒级周期：K线时间含秒
-SUBSECOND_FREQS = {"15s"}
-
-
-def _get_date_fmt(freq):
-    """根据周期返回统一日期格式（使用斜杠 / 分隔符，与 CChan 输出格式一致）。
-
-    - 秒级（15s）→ "%Y/%m/%d %H:%M:%S"
-    - 分钟级（30m, 5m, 1m）→ "%Y/%m/%d %H:%M"
-    - 日线及以上 → "%Y/%m/%d"
-    """
-    if freq in SUBSECOND_FREQS:
-        return "%Y/%m/%d %H:%M:%S"
-    if freq in INTRADAY_FREQS:
-        return "%Y/%m/%d %H:%M"
-    return "%Y/%m/%d"
-
-
-def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
-    """
-    找到分型左肩第一根原始K线的时间T。
-
-    用户双击的分型K线是合并K线（分型中间K线），分型由三根合并K线组成：
-    左肩 | 中间（分型）| 右肩。左肩合并K线可能由多根原始K线经过包含处理形成，
-    需要找到左肩合并K线中最左边（最早）的那根原始K线对应的时间。
-
-    参数:
-        kl_list: KLine_List对象
-        bi_list: 笔列表
-        bi_idx: 前端双击命中的笔索引（该笔的begin_klu就是分型中间K线）
-        freq: 周期
-
-    返回:
-        str: 格式化的时间字符串，如 "2026-01-09" 或 "2026-01-09 10:00"
-        None: 定位失败
-    """
-    entry_bi = bi_list[bi_idx]
-    begin_klu = entry_bi.get_begin_klu()  # 分型中间K线对应的klu
-
-    # 在kl_list.lst中找到包含begin_klu的合并K线索引（分型中间位置）
-    mid_idx = None
-    for i, klc in enumerate(kl_list.lst):
-        if hasattr(klc, 'lst') and klc.lst:
-            for klu in klc.lst:
-                if klu is begin_klu:
-                    mid_idx = i
-                    break
-        if mid_idx is not None:
-            break
-
-    if mid_idx is None or mid_idx <= 0:
-        log.warning(f"[警告] 无法定位分型中间K线在kl_list.lst中的位置")
-        return None
-
-    # 左肩 = 分型合并K线的前一个合并K线
-    left_klc = kl_list.lst[mid_idx - 1]  # type: ignore[union-attr]
-
-    # 取左肩原始K线序列的第一根（最左边）
-    if hasattr(left_klc, 'lst') and left_klc.lst:  # type: ignore[union-attr]
-        first_klu = left_klc.lst[0]  # type: ignore[union-attr]
-    else:
-        # 没有包含关系，左肩就是一根原始K线
-        first_klu = (left_klc.get_high_peak_klu() or left_klc.get_low_peak_klu())
-
-    if first_klu is None:
-        log.warning(f"[警告] 无法获取左肩K线单元")
-        return None
-
-    return first_klu.time.toFmtStr(_get_date_fmt(freq))
-
-
-
-
-
-def _bi_overlap_range(bi, zg, zd):
-    """判断笔与中枢区间[zd, zg]是否严格重叠，与 chan.py has_overlap 默认语义一致。"""
-    return min(zg, bi._high()) > max(zd, bi._low())
-
-
-def _calc_zs_confirm_edt_from_bis(zs_obj, all_bi_list, date_fmt):
-    """
-    计算中枢事实确认结束时间。
-
-    zs.end/edt 表示中枢内部最后一笔的结束时间；confirm_edt 表示第一根
-    与中枢区间无重叠、且后面已经有 next 的笔的结束时间。这样可以避免
-    用尾部无后继的笔过早确认中枢结束；当 next 是虚笔时，也能符合
-    trigger_step=True 的实时语义。
-    """
-    try:
-        end_idx = zs_obj.end_bi.idx
-        zg, zd = zs_obj.high, zs_obj.low
-    except Exception:
-        return ""
-    for bi in all_bi_list[end_idx + 1:]:
-        if _bi_overlap_range(bi, zg, zd):
-            continue
-        if getattr(bi, "next", None) is None:
-            return ""
-        return bi.get_end_klu().time.toFmtStr(date_fmt)
-    return ""
+# INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt / _find_left_shoulder_time /
+# _bi_overlap_range / _calc_zs_confirm_edt_from_bis（P0-1c 已下沉
+# App/utils.py，顶部 re-import 兼容）
 
 
 def _save_point_time(code, name, freq, sdt):
@@ -2165,12 +1414,9 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 # 高级别→低级别周期映射（与双窗口 getDualSubFreq 一致）
 _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
 
-# 期货双窗口周期映射：上窗周期 → 下窗周期
-_FUTURES_DUAL_FREQ_MAP = {
-    "30m": "5m",
-    "5m": "1m",
-    "1m": "15s",
-}
+# 期货双窗口周期映射（上窗周期 → 下窗周期）：P0-1c 已下沉
+# App/utils.py（顶部 re-import _FUTURES_DUAL_FREQ_MAP 兼容），
+# 此处不再重复定义，消除 AppEngine/AppSSE 双来源。
 
 # 期货分析缓存（供 /api/red_range_zs 等访问）
 # key: "symbol:freq"  (如 "KQ.m@CFFEX.IM:5m")，当前 value: CChan 对象
@@ -2196,63 +1442,4 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     stock_code = f"{normalized_code}.{market.upper()}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan, dual=dual, step=step)
 
-
-# ============================================================
-# 扫描预过滤（ST + 流通市值）
-# ============================================================
-def _quick_prefilter_pass(market, code):
-    """
-    快速预过滤：检查ST/*ST/退市、流通市值条件。
-    用于中证1000等大范围扫描时提前跳过不满足条件的股票。
-    返回 (pass_filter, float_mc, skip_reason)：
-      - pass_filter=True 表示通过过滤，可以继续分析
-      - pass_filter=False 表示应跳过
-      - skip_reason 为跳过原因字符串（如 "ST" / "流通市值<50亿"）
-    """
-    try:
-        # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断）
-        try:
-            compound_key = ("sh" if market == "1" else "sz" if market == "0" else "bj") + code
-            info = _stock_names_cache.get(compound_key, {})
-            name = info.get("name", "") if isinstance(info, dict) else str(info) if info else ""
-            if name and (name.startswith("*ST") or name.startswith("ST") or "退" in name):
-                return (False, None, "ST")
-        except Exception:
-            pass  # 名称查找失败不跳过
-
-        # 2. 流通市值过滤：从缓存获取（阶段一已确保缓存有数据）
-        # P2-8：阈值进配置中心 app_config.scan_min_float_mc（原硬编码 50 亿）
-        _min_float_mc = app_config.scan_min_float_mc
-        float_mc = _get_float_mc_from_cache(code)
-        if float_mc is not None:
-            if float_mc < _min_float_mc:
-                return (False, float_mc, f"流通市值<{_min_float_mc:g}亿")
-        else:
-            log.info(f"[预过滤] {code} 流通市值未知")
-
-        return (True, float_mc, None)
-    except Exception as e:
-        import traceback
-        log.info(f"[预过滤] {code} 异常: {type(e).__name__}: {e}")
-        traceback.print_exc()
-        return (True, None, None)
-
-
-def _debug_read_page_index_stocks(sector_code):
-    """获取当前页面指数的成分股"""
-    if not sector_code:
-        return []
-    return get_index_stocks(sector_code)
-
-
-def read_tdxhy_l2_indices():
-    """返回所有二级行业板块指数列表（X+4位代码对应的881yyy），共125个
-    （阶段 5 兼容壳 → app_data.tdxhy_l2_indices；映射读取随数据文件迁 App/，设计 8.8）"""
-    return app_data.tdxhy_l2_indices()
-
-
-def read_tdxhy_l3_indices():
-    """返回所有三级行业板块指数列表（X+6位代码对应的881yyy），共315个
-    （阶段 5 兼容壳 → app_data.tdxhy_l3_indices；同上）"""
-    return app_data.tdxhy_l3_indices()
 

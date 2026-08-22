@@ -40,7 +40,7 @@ import traceback
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 from App import AppEngine as _m
 # P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
-from App.AppData import make_single_key, make_dual_main_key, make_futures_sub_key
+from App.AppData import app_data, make_single_key, make_dual_main_key, make_futures_sub_key
 # SSE 实时流 / 期货功能域（阶段 8：期货选点/清理/元数据实现已迁 AppSSE，此处仅漏斗）
 from App import AppSSE as _sse
 # 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
@@ -238,7 +238,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
     date_suffix = "live"
     cache_key = make_single_key(market, normalized_code, freq, date_suffix)
     qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
-    cached = _m._cache_get(cache_key)
+    cached = app_data.cache_get(cache_key)
     if cached is None:
         return {"error": "请先查询该股票"}
 
@@ -246,7 +246,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
         # 扫描缓存只有result没有chan，重新分析以获取完整数据
         log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
         analyze_stock(normalized_code, freq=freq, cache_chan=True)
-        cached = _m._cache_get(cache_key)
+        cached = app_data.cache_get(cache_key)
         if cached is None or "chan" not in cached:
             return {"error": "缓存中无分析数据，请重新查询"}
 
@@ -270,17 +270,17 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
 
     # Step 2: 保存选点到CSV（保存的是左肩第一根原始K线的时间T）
     stock_name = cached.get("result", {}).get("meta", {}).get("name", "")
-    _m._save_point_time(qualified_code, stock_name, freq, start_time)
-    if qualified_code not in _m._saved_point_times:
-        _m._saved_point_times[qualified_code] = {}
-    _m._saved_point_times[qualified_code]["name"] = stock_name
-    _m._saved_point_times[qualified_code][_m.FREQ_TO_COL.get(freq, "")] = start_time
+    app_data.save_point_time(qualified_code, stock_name, freq, start_time)
+    if qualified_code not in app_data.saved_point_times:
+        app_data.saved_point_times[qualified_code] = {}
+    app_data.saved_point_times[qualified_code]["name"] = stock_name
+    app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
-    if cache_key in _m._stocks_analysis_cache:
-        with _m._cache_lock:
-            if cache_key in _m._stocks_analysis_cache:
-                del _m._stocks_analysis_cache[cache_key]
+    if cache_key in app_data.stocks_analysis_cache:
+        with app_data.cache_lock:
+            if cache_key in app_data.stocks_analysis_cache:
+                del app_data.stocks_analysis_cache[cache_key]
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
@@ -313,7 +313,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # ── 期货双窗口 ──
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
-        cached = _m._futures_analysis_cache.get(cache_key)
+        cached = app_data.futures_analysis_cache.get(cache_key)
         if cached is None:
             return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
         chan = cached
@@ -343,7 +343,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
     date_suffix = end_date if end_date else "live"
     cache_key = make_single_key(market, normalized_code, sub_freq, date_suffix)
-    cached = _m._cache_get(cache_key)
+    cached = app_data.cache_get(cache_key)
 
     # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
     # dual_sub 缓存只存 result/records，不存 chan；真正可用于重算中枢的 CChan 在 dual_main 缓存里。
@@ -351,7 +351,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         for main_freq, _sub in _m._SUB_FREQ_MAP.items():
             if _sub == sub_freq:
                 dual_main_cache_key = make_dual_main_key(market, normalized_code, main_freq, date_suffix)
-                main_cached = _m._cache_get(dual_main_cache_key)
+                main_cached = app_data.cache_get(dual_main_cache_key)
                 if main_cached and "chan" in main_cached:
                     main_chan = main_cached["chan"]
                     try:
@@ -362,7 +362,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
                         log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
                 if cached is None or "chan" not in cached:
                     single_main_cache_key = make_single_key(market, normalized_code, main_freq, date_suffix)
-                    main_cached = _m._cache_get(single_main_cache_key)
+                    main_cached = app_data.cache_get(single_main_cache_key)
                     if main_cached and "chan" in main_cached:
                         main_chan = main_cached["chan"]
                         try:
@@ -378,7 +378,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     if "chan" not in cached:
         log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
         analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
-        cached = _m._cache_get(cache_key)
+        cached = app_data.cache_get(cache_key)
         if cached is None or "chan" not in cached:
             return {"error": "缓存中无分析数据，请重新查询"}
 

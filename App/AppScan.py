@@ -9,12 +9,17 @@ App/AppScan.py —— 股票扫描功能域
     analyze_stock、汇总结果、追踪进度）+ 全局单例 scanner
   - 自选股读写（read_zxg_stocks / zxg_save / get_annotated_codes）
   - 同花顺云端自选股（save_scan_to_ths_cloud / ths_cloud_available）
+  - 扫描预过滤 + 行业索引读取 + 扫描态（P0-1b 自 AppEngine 迁入）：
+      _quick_prefilter_pass / _debug_read_page_index_stocks /
+      read_tdxhy_l2_indices / read_tdxhy_l3_indices /
+      _scan_lock / _scan_aborted / _scan_start_time / _page_index_code / _scan_skip_log
 
 依赖方向：AppScan.py → AppEngine / AppData / AppRefresh / AppScanPool（单向）
 批量扫描异步化（阶段 7）：提交/状态/中止委托 AppScanPool（入口适配器），
 共享结果经 SQLite AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
 import os
+import threading
 import time
 import traceback
 
@@ -22,12 +27,98 @@ import traceback
 from App import AppEngine as _m
 
 # P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
-from App.AppData import make_live_key
+from App.AppData import app_data, make_live_key
+
+# 配置中心（扫描预过滤阈值等）
+from App.AppConfig import app_config
+
+# 板块成分读取（扫描来源 page_index）
+from DataAPI.TdxAPI import get_index_stocks
 
 # 刷新功能域（Scanner.stock_list 批量获取流通市值复用其漏斗）
 from App.AppRefresh import load_float_mc_cache, fetch_float_mc_from_tencent, update_float_mc_cache
 from App.AppLog import get_logger
 log = get_logger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 扫描态 + 预过滤 / 行业索引读取（P0-1b 自 AppEngine 迁入；剪切-粘贴，行为零变化）
+# ═══════════════════════════════════════════════════════════════════════
+
+# 股票名称缓存：别名 = app_data 实例字段（共享同一对象，阶段 4）
+_stock_names_cache = app_data.names_cache
+
+# 扫描跳过记录（收集后统一打印）
+_scan_skip_log = []
+
+# 扫描锁（防止并发扫描导致内存峰值翻倍）
+_scan_lock = threading.Lock()
+
+# 扫描终止标志：前端点击中断时设True，后端检查后跳过后续请求
+_scan_aborted = False
+
+# 扫描开始时间：用于计算扫描耗时，在通知中显示
+_scan_start_time = None
+
+# 页面指数代码：当前页面正在查看的通达信板块指数代码（如 880491），用于"成分股"扫描来源
+_page_index_code = None
+
+
+def _quick_prefilter_pass(market, code):
+    """
+    快速预过滤：检查ST/*ST/退市、流通市值条件。
+    用于中证1000等大范围扫描时提前跳过不满足条件的股票。
+    返回 (pass_filter, float_mc, skip_reason)：
+      - pass_filter=True 表示通过过滤，可以继续分析
+      - pass_filter=False 表示应跳过
+      - skip_reason 为跳过原因字符串（如 "ST" / "流通市值<50亿"）
+    """
+    try:
+        # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断）
+        try:
+            compound_key = ("sh" if market == "1" else "sz" if market == "0" else "bj") + code
+            info = _stock_names_cache.get(compound_key, {})
+            name = info.get("name", "") if isinstance(info, dict) else str(info) if info else ""
+            if name and (name.startswith("*ST") or name.startswith("ST") or "退" in name):
+                return (False, None, "ST")
+        except Exception:
+            pass  # 名称查找失败不跳过
+
+        # 2. 流通市值过滤：从缓存获取（阶段一已确保缓存有数据）
+        # P2-8：阈值进配置中心 app_config.scan_min_float_mc（原硬编码 50 亿）
+        _min_float_mc = app_config.scan_min_float_mc
+        float_mc = app_data.get_float_mc_from_cache(code)
+        if float_mc is not None:
+            if float_mc < _min_float_mc:
+                return (False, float_mc, f"流通市值<{_min_float_mc:g}亿")
+        else:
+            log.info(f"[预过滤] {code} 流通市值未知")
+
+        return (True, float_mc, None)
+    except Exception as e:
+        import traceback as _tb
+        log.info(f"[预过滤] {code} 异常: {type(e).__name__}: {e}")
+        _tb.print_exc()
+        return (True, None, None)
+
+
+def _debug_read_page_index_stocks(sector_code):
+    """获取当前页面指数的成分股"""
+    if not sector_code:
+        return []
+    return get_index_stocks(sector_code)
+
+
+def read_tdxhy_l2_indices():
+    """返回所有二级行业板块指数列表（X+4位代码对应的881yyy），共125个
+    （阶段 5 兼容壳 → app_data.tdxhy_l2_indices；映射读取随数据文件迁 App/，设计 8.8）"""
+    return app_data.tdxhy_l2_indices()
+
+
+def read_tdxhy_l3_indices():
+    """返回所有三级行业板块指数列表（X+6位代码对应的881yyy），共315个
+    （阶段 5 兼容壳 → app_data.tdxhy_l3_indices；同上）"""
+    return app_data.tdxhy_l3_indices()
 
 
 
@@ -135,35 +226,38 @@ class Scanner:
     # ── 状态访问器（收敛到类内部，见设计文档 6.3 节）────────────────
     @property
     def aborted(self):
-        return _m._scan_aborted
+        return _scan_aborted
 
     @aborted.setter
     def aborted(self, value):
-        _m._scan_aborted = value
+        global _scan_aborted
+        _scan_aborted = value
 
     @property
     def skip_log(self):
-        return _m._scan_skip_log
+        return _scan_skip_log
 
     @property
     def start_time(self):
-        return _m._scan_start_time
+        return _scan_start_time
 
     @start_time.setter
     def start_time(self, value):
-        _m._scan_start_time = value
+        global _scan_start_time
+        _scan_start_time = value
 
     @property
     def page_index_code(self):
-        return _m._page_index_code
+        return _page_index_code
 
     @page_index_code.setter
     def page_index_code(self, value):
-        _m._page_index_code = value
+        global _page_index_code
+        _page_index_code = value
 
     @property
     def lock(self):
-        return _m._scan_lock
+        return _scan_lock
 
     # ── 股票列表 ─────────────────────────────────────────────────────
     def stock_list(self, source="zxg"):
@@ -172,9 +266,9 @@ class Scanner:
 
         _SOURCE_READERS = {
             "zxg": (read_zxg_stocks, "自选股"),
-            "page_index": (lambda: _m._debug_read_page_index_stocks(_m._page_index_code), "成分股"),
-            "tdxhy2": (_m.read_tdxhy_l2_indices, "板块指数2"),
-            "tdxhy3": (_m.read_tdxhy_l3_indices, "板块指数3"),
+            "page_index": (lambda: _debug_read_page_index_stocks(_page_index_code), "成分股"),
+            "tdxhy2": (read_tdxhy_l2_indices, "板块指数2"),
+            "tdxhy3": (read_tdxhy_l3_indices, "板块指数3"),
         }
 
         src_stocks = {}
@@ -249,7 +343,7 @@ class Scanner:
                 if not market or not code:
                     filtered.append(stk)
                     continue
-                pass_ok, pre_mc, skip_reason = _m._quick_prefilter_pass(market, code)
+                pass_ok, pre_mc, skip_reason = _quick_prefilter_pass(market, code)
                 if not pass_ok:
                     pre_skip_count += 1
                     pre_skip_log.append(f"[预过滤] {code} 跳过 ({skip_reason})")
@@ -300,11 +394,11 @@ class Scanner:
             qualified_code = (market_prefix + code) if market_prefix else code
             market = market_prefix.lower() if market_prefix else ""
 
-            if _m._scan_aborted:
+            if _scan_aborted:
                 return {"error": "扫描已终止", "aborted": True}
 
-            with _m._scan_lock:
-                if _m._scan_aborted:
+            with _scan_lock:
+                if _scan_aborted:
                     return {"error": "扫描已终止", "aborted": True}
                 # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
                 # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
@@ -313,7 +407,7 @@ class Scanner:
 
             t_analyze = time.time() - t0
             if "error" in result:
-                _m._scan_skip_log.append(f"{code} - {result['error']}")
+                _scan_skip_log.append(f"{code} - {result['error']}")
                 log.info(f"[耗时-扫描] {code} 分析失败: {result['error']}, 耗时{t_analyze:.3f}s")
                 return {"error": result["error"]}
 
@@ -347,7 +441,7 @@ class Scanner:
                 else:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
-                        _m._cache_remove(make_live_key(mkt, cd, freq))
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
                     t_total = time.time() - t_scan_start
                     log.info(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 不是底分型")
                     return {"code": code, "is_fx_d": False}
@@ -378,7 +472,7 @@ class Scanner:
                 if ma_category > 3:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
-                        _m._cache_remove(make_live_key(mkt, cd, freq))
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
                 return resp_data
 
             # ── 买卖点扫描模式 ──
@@ -413,7 +507,7 @@ class Scanner:
             if not buy_points:
                 mkt, cd = _m._get_market_code(qualified_code)
                 if mkt and cd:
-                    _m._cache_remove(make_live_key(mkt, cd, freq))
+                    app_data.cache_remove(make_live_key(mkt, cd, freq))
 
             if has_points:
                 t_total = time.time() - t_scan_start
@@ -433,7 +527,7 @@ class Scanner:
                 return {"code": code, "buy_points": [], "sell_points": []}
 
         except Exception as exc:
-            _m._scan_skip_log.append(f"{code} - 异常: {exc}")
+            _scan_skip_log.append(f"{code} - 异常: {exc}")
             t_total = time.time() - t_scan_start
             log.info(f"[耗时-扫描] {code} 异常: {exc}, 总耗时{t_total:.3f}s")
             return {"error": str(exc)}
@@ -441,9 +535,10 @@ class Scanner:
     # ── 扫描生命周期 ─────────────────────────────────────────────────
     def start(self):
         """新一轮扫描开始"""
-        _m._scan_aborted = False
-        _m._scan_skip_log.clear()
-        _m._scan_start_time = time.time()
+        global _scan_aborted, _scan_start_time
+        _scan_aborted = False
+        _scan_skip_log.clear()
+        _scan_start_time = time.time()
         try:
             _m._load_stock_names_from_cache_file()
         except Exception as e:
@@ -452,34 +547,35 @@ class Scanner:
 
     def end(self):
         """扫描结束"""
+        global _scan_start_time
         # 耗时统一计算：控制台明细 + 右下角弹窗共用同一口径
         elapsed = 0.0
-        if _m._scan_start_time is not None:
-            elapsed = time.time() - _m._scan_start_time
+        if _scan_start_time is not None:
+            elapsed = time.time() - _scan_start_time
         minutes = int(elapsed // 60)
         seconds = int(elapsed % 60)
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
-        if _m._scan_aborted:
+        if _scan_aborted:
             # 用户点击中止后结束：不打印"全部扫描成功"误导日志
             log.info(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
-        elif _m._scan_skip_log:
+        elif _scan_skip_log:
             log.info(f"\n========== 扫描异常/失败股票明细 ==========")
-            log.info(f"共 {len(_m._scan_skip_log)} 只:")
-            for i, item in enumerate(_m._scan_skip_log, 1):
+            log.info(f"共 {len(_scan_skip_log)} 只:")
+            for i, item in enumerate(_scan_skip_log, 1):
                 log.info(f"  {i}. {item}")
             log.info("============================================\n")
         else:
             log.info(f"\n[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票\n")
 
-        if _m._scan_start_time is not None:
-            skip_count = len(_m._scan_skip_log)
+        if _scan_start_time is not None:
+            skip_count = len(_scan_skip_log)
             msg = f"耗时 {time_str}"
             if skip_count > 0:
                 msg += f"，跳过 {skip_count} 只"
             _m._send_windows_notification("扫描完成", msg)
-            _m._scan_start_time = None
-        return {"count": len(_m._scan_skip_log)}
+            _scan_start_time = None
+        return {"count": len(_scan_skip_log)}
 
     def abort(self):
         """中断扫描（旧接口，阶段 7 增强：同步中止所有进行中的批量任务）
@@ -488,7 +584,8 @@ class Scanner:
         必须同步把 AppScanStore 中所有 pending/running 任务置为 aborted，
         worker 每票前检查 is_aborted 才会真正停止。
         """
-        _m._scan_aborted = True
+        global _scan_aborted
+        _scan_aborted = True
         log.info("[扫描] 收到中断请求，设置终止标志")
         try:
             from App.AppScanStore import get_scan_store
@@ -535,11 +632,12 @@ class Scanner:
 
     def set_page_index_code(self, code):
         """设置当前板块指数代码"""
+        global _page_index_code
         code = code.strip()
         if code:
             if "." in code:
                 code = code.split(".")[0]
-            _m._page_index_code = code
+            _page_index_code = code
             log.info(f"[成分股] 已设置板块指数代码: {code}")
             return {"ok": True, "code": code}
         else:

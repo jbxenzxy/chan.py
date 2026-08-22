@@ -77,22 +77,11 @@ TARGET_FUNCS = {
     "collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（公开API，不含下划线前缀）"),
     "_collect_codes_from_vipdoc": ("ELTDX", "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"),
 
-    # ── 消费侧：指标计算（纯函数，波次 1 先行）──
-    "ema":                        ("ORCH_E", "EMA 指标（纯）"),
-    "calculate_macd":             ("ORCH_E", "MACD 指标（纯，3 处调用）"),
-    "_inherit_macd_for_preview_bar": ("ORCH_E", "预览 K 线 MACD 继承（纯）"),
+    # ── 消费侧：指标计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：周期/日期/代码 工具 ──
-    "_get_kl_type":               ("ORCH_E", "freq→KL_TYPE（纯，6 处调用，波次 1）"),
-    "_get_kl_type_by_sec":        ("ORCH_E", "秒数→KL_TYPE（P0-1 取数唯一性收敛：AppSSE._build_futures_chan 唯一来源）"),
-    "_get_freq_label":            ("ORCH_E", "freq→中文标签（纯，4 处调用；阶段 5 可提升 DataAPI 元数据）"),
-    "_get_date_fmt":              ("ORCH_E", "freq→日期格式（7 处调用，被依赖最多；读 INTRADAY_FREQS/SUBSECOND_FREQS）"),
+    # ── 消费侧：周期/日期/代码 工具（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：缠论结构计算 ──
-    "_find_left_shoulder_time":   ("ORCH_E", "左肩时间查找（手动选点用）"),
-    "_bi_overlap_range":          ("ORCH_E", "笔与中枢区间重叠（纯）"),
-    "_calc_zs_confirm_edt_from_bis": ("ORCH_E", "中枢确认时间（纯，4 处调用）"),
-    "_make_chan_config":          ("CFG",    "CChanConfig 构造（纯；算法参数归 ChanConfig.py）"),
+    # ── 消费侧：缠论结构计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
     # ── 消费侧：核心分析链 ──
     "_analyze_stock_internal":    ("ORCH_E", "股票分析核心（440 行：拉取→注入→CChan→提取）"),
@@ -100,16 +89,9 @@ TARGET_FUNCS = {
     "_extract_sub_level_data":    ("ORCH_E", "子级别结果提取（254 行）"),
     "analyze_stock":              ("ORCH_E", "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"),
 
-    # ── 获取侧 ──
-    "_fetch_names_from_sina_once":  ("ORCH_F", "新浪批量拉名（纯，HTTP 注入点）"),
-    "_refresh_stock_names":         ("ORCH_F", "全市场名称刷新（220 行；写 _stock_names_cache；AppOrch 已有壳）"),
-    "_refresh_pe_ttm":              ("ORCH_F", "PE 刷新（akshare；写缓存文件）"),
-    "_fetch_index_belong_from_akshare": ("ORCH_F", "行业归属拉取（写 _index_belong_cache）"),
-    "_fetch_float_mc_from_tencent": ("ORCH_F", "腾讯流通市值拉取（纯）"),
+    # ── 获取侧（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）──
 
-    # ── 扫描 ──
-    "_quick_prefilter_pass":        ("ORCH_S", "扫描预筛（读 _stock_names_cache + 流通市值）"),
-    "_debug_read_page_index_stocks": ("ORCH_S", "板块成分读取（扫描调试/页面索引用）"),
+    # ── 扫描（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
 
     # ── 公共工具 ──
     "_send_windows_notification":   ("ORCH_C", "Windows 通知（ChartHandler 下载/扫描完成用）"),
@@ -134,9 +116,7 @@ TARGET_FUNCS = {
 
     # ── AppData：上次代码/周期 + 标注族（阶段 8 瘦身：随功能域迁移删除）──
 
-    # ── DataAPI / 行业映射 ──
-    "read_tdxhy_l2_indices":        ("TDXHY", "二级行业指数读取（阶段 5 随数据文件迁 App/）"),
-    "read_tdxhy_l3_indices":        ("TDXHY", "三级行业指数读取（同上）"),
+    # ── DataAPI / 行业映射（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
 
     # ── 配置 ──
     # _verify_config_consistency 已随 my_chan_main 下线（阶段 10.1 删除）
@@ -169,17 +149,9 @@ TARGET_STATES = {
     "_cache_lock":         ("DATA", "✓4 缓存锁（= app_data._cache_lock）"),
     "_saved_point_times":  ("DATA", "✓4 选点表内存态（= app_data._saved_point_times）"),
 
-    # 获取侧状态
-    "_refresh_status":        ("ORCH_F", "刷新进度（3 读）→ 获取侧状态对象"),
-    "_AKSHARE_EXCHANGE_MAP":  ("ORCH_F", "akshare 交易所映射（获取侧常量）"),
-    "_AKSHARE_INDEX_MAP":     ("ORCH_F", "akshare 指数映射（获取侧常量）"),
+    # 获取侧状态（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）
 
-    # 扫描状态 → ScannerService 类字段（api_server 跨模块直写，迁移时一并改路由调用）
-    "_scan_lock":       ("ORCH_S", "扫描锁（api_server:491 直取；AppOrch:488 已暴露）→ ScannerService"),
-    "_scan_aborted":    ("ORCH_S", "中止旗（api_server 直写）→ ScannerService"),
-    "_scan_start_time": ("ORCH_S", "扫描起点时间（api_server 直写）→ ScannerService"),
-    "_page_index_code": ("ORCH_S", "页面索引代码 → ScannerService"),
-    "_scan_skip_log":   ("ORCH_S", "跳过日志（api_server:498 直写）→ ScannerService"),
+    # 扫描状态（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）
 
     # 盘后下载状态 → ElTdxAPI 类字段
     "_download_state": ("ELTDX", "下载状态 dict（4 函数共用）→ ElTdxAPI 类字段"),
@@ -189,11 +161,9 @@ TARGET_STATES = {
 
     # 消费侧常量
     "FREQ_TO_COL":     ("ORCH_E", "freq→选点列（6 读）→ 消费侧常量"),
-    "INTRADAY_FREQS":  ("ORCH_E", "日内周期集（2 读）"),
-    "SUBSECOND_FREQS": ("ORCH_E", "秒级周期集"),
     "_SUB_FREQ_MAP":   ("ORCH_E", "子级别映射（2 读）"),
-    "_FUTURES_DUAL_FREQ_MAP": ("ORCH_E", "期货双窗口映射"),
-    "_FREQ_SEC_TO_KL": ("ORCH_E", "秒数→KL_TYPE 映射（P0-1 取数唯一性收敛：_get_kl_type_by_sec 唯一来源）"),
+    # INTRADAY_FREQS / SUBSECOND_FREQS / _FREQ_SEC_TO_KL / _FUTURES_DUAL_FREQ_MAP
+    # （P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
     "TIME_TRUNCATE_CONFIG":   ("ORCH_E", "数据截断配置（→ ChanConfig/参数化）"),
     "FULL_DATA_MODE":  ("ORCH_E", "全量模式开关（→ ChanConfig）"),
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),
@@ -206,8 +176,7 @@ TARGET_STATES = {
     # 锁与引擎
     "_stock_analysis_lock": ("RETIRE", "旧引擎锁（ChartHandler 2 处；AppOrch._ENGINE_LOCK 已接替 → 随 3b 下线）"),
 
-    # SSE 调试旗 → FrontAPI（随 3b SSE 生成器迁移）
-    "_SSE_DEBUG": ("FE", "SSE 调试旗（ChartHandler 32 处 / init_chan_symbol 1 处）→ FrontAPI 常量"),
+    # SSE 调试旗（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
 
     # 下线（阶段 10.1：my_chan_main.py 已删除，RETIRE 项全部物理移除）
     "SCRIPT_DIR":    ("RETIRE", "ChartHandler 静态服务用（随 do_GET 3a 删除）"),

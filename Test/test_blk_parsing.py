@@ -213,21 +213,20 @@ def test_no_tdx_blk_regression(failures):
 
 def test_page_index_scan(failures):
     """⑦ 成分股扫描：stock_list(source=page_index) 消费 get_index_stocks 输出"""
-    import App.AppEngine as _eng
     import App.AppScan as _scan_mod
     from App.AppScan import scanner
-    orig_code = _eng._page_index_code
-    orig_read = _eng._debug_read_page_index_stocks
-    orig_pre = _eng._quick_prefilter_pass
+    orig_code = _scan_mod._page_index_code
+    orig_read = _scan_mod._debug_read_page_index_stocks
+    orig_pre = _scan_mod._quick_prefilter_pass
     orig_fetch = _scan_mod.fetch_float_mc_from_tencent
     try:
-        _eng._page_index_code = "881001"
-        _eng._debug_read_page_index_stocks = lambda code: [
+        _scan_mod._page_index_code = "881001"
+        _scan_mod._debug_read_page_index_stocks = lambda code: [
             {"code": "600519", "prefix": "1", "name": "贵州茅台"},
             {"code": "000001", "prefix": "0", "name": "平安银行"},
             {"code": "600000", "prefix": "1", "name": "浦发银行"},
         ]
-        _eng._quick_prefilter_pass = lambda market, code: (True, None, None)
+        _scan_mod._quick_prefilter_pass = lambda market, code: (True, None, None)
         _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
         got = scanner.stock_list("page_index")
         stocks = got["stocks"]
@@ -242,9 +241,9 @@ def test_page_index_scan(failures):
                 return
         print(f"[PASS] ⑦ 成分股: stock_list(source=page_index) {len(stocks)} 条，经预过滤+来源标注")
     finally:
-        _eng._page_index_code = orig_code
-        _eng._debug_read_page_index_stocks = orig_read
-        _eng._quick_prefilter_pass = orig_pre
+        _scan_mod._page_index_code = orig_code
+        _scan_mod._debug_read_page_index_stocks = orig_read
+        _scan_mod._quick_prefilter_pass = orig_pre
         _scan_mod.fetch_float_mc_from_tencent = orig_fetch
 
 
@@ -282,21 +281,20 @@ def test_tdxhy_scan(failures):
 
 def test_multi_source_merge(failures):
     """⑨ 多来源合并去重：zxg + page_index + tdxhy2 同码去重与来源覆盖"""
-    import App.AppEngine as _eng
     import App.AppScan as _scan_mod
     from App.AppScan import scanner
     from App.AppConfig import app_config
-    orig_code = _eng._page_index_code
-    orig_read = _eng._debug_read_page_index_stocks
-    orig_pre = _eng._quick_prefilter_pass
+    orig_code = _scan_mod._page_index_code
+    orig_read = _scan_mod._debug_read_page_index_stocks
+    orig_pre = _scan_mod._quick_prefilter_pass
     orig_fetch = _scan_mod.fetch_float_mc_from_tencent
     try:
-        _eng._page_index_code = "881001"
-        _eng._debug_read_page_index_stocks = lambda code: [
+        _scan_mod._page_index_code = "881001"
+        _scan_mod._debug_read_page_index_stocks = lambda code: [
             {"code": "600519", "prefix": "1", "name": "贵州茅台"},  # 与 zxg 重复
             {"code": "000002", "prefix": "0", "name": "万科A"},
         ]
-        _eng._quick_prefilter_pass = lambda market, code: (True, None, None)
+        _scan_mod._quick_prefilter_pass = lambda market, code: (True, None, None)
         _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
         with tempfile.TemporaryDirectory() as td:
             blk_dir = os.path.join(td, "T0002", "blocknew")
@@ -324,9 +322,9 @@ def test_multi_source_merge(failures):
         if not any("⑨" in f for f in failures):
             print("[PASS] ⑨ 多来源合并: zxg+page_index 去重后 3 条，来源覆盖语义正确")
     finally:
-        _eng._page_index_code = orig_code
-        _eng._debug_read_page_index_stocks = orig_read
-        _eng._quick_prefilter_pass = orig_pre
+        _scan_mod._page_index_code = orig_code
+        _scan_mod._debug_read_page_index_stocks = orig_read
+        _scan_mod._quick_prefilter_pass = orig_pre
         _scan_mod.fetch_float_mc_from_tencent = orig_fetch
 
 

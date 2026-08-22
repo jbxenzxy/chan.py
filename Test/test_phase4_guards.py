@@ -201,6 +201,57 @@ def test_alias_identity(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# ②b 状态别名零绕行（P0-2 守护：服务层不得再绕行 AppEngine 状态别名）
+# ═══════════════════════════════════════════════════════════════════════
+# P0-2 把 AppChart/AppScan/BSPointList 对 _m._cache_get/_saved_point_times/
+# _stocks_analysis_cache/_futures_analysis_cache/_cache_remove 等的绕行调用
+# 全部改为 app_data.* 公共 API。本守护封禁该模式复活（防止回归到双写路径）。
+_BYPASS_PATTERNS = [
+    "_m._cache_get", "_m._cache_put", "_m._cache_remove",
+    "_m._save_point_time", "_m._saved_point_times",
+    "_m._stocks_analysis_cache", "_m._futures_analysis_cache",
+    "_m._cache_lock", "_m.FREQ_TO_COL",
+]
+_BYPASS_IMPORTS = [
+    "from App.AppEngine import _cache_",
+    "from App.AppEngine import _saved_point_times",
+    "from App.AppEngine import _stocks_analysis_cache",
+    "from App.AppEngine import _futures_analysis_cache",
+]
+_BYPASS_FILES = [
+    os.path.join("App", "AppChart.py"),
+    os.path.join("App", "AppScan.py"),
+    os.path.join("BuySellPoint", "BSPointList.py"),
+]
+
+
+def test_no_state_bypass(failures):
+    """服务层不得绕行 AppEngine 状态别名（P0-2 成果守护）"""
+    bad = []
+    for rel in _BYPASS_FILES:
+        src = read_src(rel)
+        for i, line in enumerate(src.splitlines(), 1):
+            s = line.strip()
+            if s.startswith("#"):
+                continue
+            for pat in _BYPASS_PATTERNS:
+                if pat in s:
+                    bad.append(f"{rel}:{i} 绕行 {pat}（应改走 app_data.* 公共 API）")
+            for imp in _BYPASS_IMPORTS:
+                if imp in s:
+                    bad.append(f"{rel}:{i} 绕行导入 {imp}（应改走 app_data.* 公共 API）")
+    if bad:
+        failures.extend(f"状态别名零绕行: {b}" for b in bad)
+        for b in bad[:8]:
+            print(f"[FAIL] ②b 状态别名零绕行: {b}")
+        if len(bad) > 8:
+            print(f"        …共 {len(bad)} 处")
+    else:
+        print(f"[PASS] ②b 状态别名零绕行: {len(_BYPASS_FILES)} 个服务模块零绕行 AppEngine 状态别名"
+              f"（P0-2 已全部改走 app_data.*）")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ③ 配置别名清零（不得复活）
 # ═══════════════════════════════════════════════════════════════════════
 RETIRED_ALIASES = [
@@ -547,6 +598,7 @@ def main():
     print("=" * 64)
     test_shell_purity(failures)
     test_alias_identity(failures)
+    test_no_state_bypass(failures)
     test_no_revived_aliases(failures)
     test_zxg_convergence(failures)
     test_layering_direction(failures)

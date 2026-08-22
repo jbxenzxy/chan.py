@@ -21,10 +21,14 @@ App/AppSSE.py —— SSE 实时流功能域
     futures_config）
   - 实时快照公共包装（extract_realtime_snapshot，AppOrch re-export）
 
-依赖方向：AppSSE.py → AppEngine / AppData / DataAPI（单向）
-  - 引擎侧纯函数/常量（_get_date_fmt / _make_chan_config / ema 等）与
-    共享状态（_saved_point_times / _futures_analysis_cache）经 AppEngine
-    导入（同一对象，零漂移）；
+依赖方向：AppSSE.py → AppEngine / utils / AppData / DataAPI（单向）
+  - 引擎侧私有实现（TQ_AVAILABLE / CTqSdkAPI / _get_futures_name）经
+    AppEngine 导入；
+  - 纯函数/常量（_get_date_fmt / _make_chan_config / ema / 周期映射 /
+    中枢/左肩辅助 / _FUTURES_DUAL_FREQ_MAP / _SSE_DEBUG 等）自
+    App/utils.py 导入（与 AppEngine 统一来源，P0-1c 显式化）；
+  - 共享状态（saved_point_times / futures_analysis_cache / 选点保存）
+    一律经 app_data.* 公共 API（同一对象，零漂移）；
   - 区间套辅助（_main_bi_range / _futures_red_range / CMyBSPointList）
     来自 BuySellPoint.BSPointList（与 AppEngine 同源）。
 锁分类：SSE 路径 SELF_CONTAINED（每连接独立 TqApi+CChan，不加引擎锁）；
@@ -35,14 +39,16 @@ import time
 import traceback
 from datetime import datetime, timedelta
 
-# 引擎侧依赖（纯函数/常量/共享状态，与 AppEngine 同一对象）
+# 引擎侧依赖（仅引擎私有实现：天勤数据源 / 期货名称）
 from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name,
+)
+# 引擎纯函数/常量公共工具（P0-1c：与 AppEngine 统一从 App/utils 导入）
+from App.utils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
     ema, calculate_macd,
-    _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time, _save_point_time,
-    _futures_analysis_cache, _FUTURES_DUAL_FREQ_MAP, _saved_point_times,
-    FREQ_TO_COL, _SSE_DEBUG, _inherit_macd_for_preview_bar,
+    _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
+    _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_macd_for_preview_bar,
 )
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
@@ -800,7 +806,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             log.info(f"[双窗口] 子级别({sub_freq}) chan.py 分析失败: {e}")
             return result
 
-        _futures_analysis_cache[make_futures_sub_key(code, sub_freq)] = sub_chan
+        app_data.futures_analysis_cache[make_futures_sub_key(code, sub_freq)] = sub_chan
         sub_kl_list = sub_chan[sub_kl_type]
         log.info(f"[双窗口] 子级别({sub_freq}) chan.py分析: {time.time()-t_sub_chan:.3f}s, "
               f"合并K线={len(sub_kl_list.lst)}, 笔={len(sub_kl_list.bi_list)}, 中枢={len(sub_kl_list.zs_list)}")
@@ -883,11 +889,11 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 
         # Step 3: 保存选点到CSV
         name = _get_futures_name(symbol)
-        _save_point_time(symbol, name, freq, start_time)
-        if symbol not in _saved_point_times:
-            _saved_point_times[symbol] = {}
-        _saved_point_times[symbol]["name"] = name
-        _saved_point_times[symbol][FREQ_TO_COL.get(freq, "")] = start_time
+        app_data.save_point_time(symbol, name, freq, start_time)
+        if symbol not in app_data.saved_point_times:
+            app_data.saved_point_times[symbol] = {}
+        app_data.saved_point_times[symbol]["name"] = name
+        app_data.saved_point_times[symbol][app_data.freq_to_col(freq) or ""] = start_time
 
         # Step 4: 关闭旧TqApi，创建新TqApi，从T重新拉取
         if src is not None:
@@ -962,9 +968,9 @@ def _cleanup_all_futures_data():
         log.info("[清理] 已清空期货K线缓存")
 
     # 2. 清空选点记录中的期货条目（key以KQ.开头）
-    pts_to_del = [k for k in list(_saved_point_times.keys()) if k.startswith("KQ.")]
+    pts_to_del = [k for k in list(app_data.saved_point_times.keys()) if k.startswith("KQ.")]
     for k in pts_to_del:
-        del _saved_point_times[k]
+        del app_data.saved_point_times[k]
     if pts_to_del:
         log.info(f"[清理] 已清除 {len(pts_to_del)} 条期货选点记录")
 
@@ -1079,7 +1085,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
         # 如果没有传入 start_time，查询CSV中是否有保存的选点
         # （阶段 4：经 AppOrch 漏斗读 AppData，不再直连 my_chan_main 状态）
         if start_time is None:
-            col = FREQ_TO_COL.get(freq, "")
+            col = app_data.freq_to_col(freq) or ""
             if col:
                 _saved = _get_saved_point(symbol, freq) or None
                 if _saved:
@@ -1445,14 +1451,14 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         sub_start_time = start_time
         try:
             qualified_code = symbol
-            col_meta = FREQ_TO_COL.get(main_freq, "")
+            col_meta = app_data.freq_to_col(main_freq) or ""
             if col_meta:
                 saved_selection_date = _get_saved_point(qualified_code, main_freq)
                 # 如果外部没传start_time，从CSV读取选点
                 if main_start_time is None and saved_selection_date:
                     main_start_time = saved_selection_date
             # 下窗也查询选点
-            sub_col_meta = FREQ_TO_COL.get(sub_freq, "")
+            sub_col_meta = app_data.freq_to_col(sub_freq) or ""
             if sub_col_meta:
                 sub_saved = _get_saved_point(qualified_code, sub_freq)
                 if sub_start_time is None and sub_saved:

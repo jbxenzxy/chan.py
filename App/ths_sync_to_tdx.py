@@ -199,13 +199,13 @@ def find_tdx_zxg_path():
     # 常见通达信安装路径（兜底探测，配置中心未命中时使用）
     tdx_roots = [
         r"C:\new_tdx_hd_test",
-        r"C:\tdx",
-        r"D:\new_tdx",
-        r"D:\tdx",
-        r"C:\Program Files\new_tdx",
-        r"C:\Program Files (x86)\new_tdx",
+        r"C:\new_tdx_hd",
+        r"D:\new_tdx_hd_test",
+        r"D:\new_tdx_hd",
         r"C:\同花顺",
+        r"C:\同花顺软件",
         r"D:\同花顺",
+        r"D:\同花顺软件",
     ]
 
     for root in tdx_roots:
