@@ -184,7 +184,8 @@ def _patch_business(src, fail_init=False):
         return chan, src.klines, ("kl",), None
 
     def stub_extract(chan, kl_type, symbol, name, freq_label,
-                     saved_selection_date="", lightweight=False, klines=None):
+                     saved_selection_date="", lightweight=False, klines=None,
+                     prev_klines=None, prev_ema_state=None):
         _sse_mod.extract_calls += 1
         return _snapshot(f"snap{_sse_mod.extract_calls}")
 

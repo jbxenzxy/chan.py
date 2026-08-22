@@ -45,6 +45,9 @@ import os
 import sys
 import threading
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 # ── spawn 模式引导：确保仓库根在 sys.path（App 包可导入）─────────────
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -100,14 +103,14 @@ def _get_pool():
                                             initializer=_worker_init)
                 _pool_engine = "process_pool"
                 if _pool_created_count == 1:
-                    print(f"[扫描池] ProcessPool 已装配: workers={workers} "
-                          f"(spawn)", flush=True)
+                    log.info(f"[扫描池] ProcessPool 已装配: workers={workers} "
+                          f"(spawn)")
                 else:
-                    print(f"[扫描池] 重新装配（上次已销毁）: workers={workers} "
-                          f"(spawn)", flush=True)
+                    log.info(f"[扫描池] 重新装配（上次已销毁）: workers={workers} "
+                          f"(spawn)")
             except Exception as exc:  # noqa: BLE001 —— 受限环境降级线程池
-                print(f"[扫描池] ProcessPool 装配失败，降级线程池: "
-                      f"{type(exc).__name__}: {exc}", flush=True)
+                log.info(f"[扫描池] ProcessPool 装配失败，降级线程池: "
+                      f"{type(exc).__name__}: {exc}")
                 _pool = ThreadPoolExecutor(
                     max_workers=min(workers, _SCAN_POOL_FALLBACK_WORKERS),
                     thread_name_prefix="scan-fallback")
@@ -162,7 +165,7 @@ def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, seq):
         store.put_result(task_id, seq, code, status, result)
     except Exception as _e:  # noqa: BLE001 —— 结果落库失败不阻断扫描，但记录缺口
         _line = f"[扫描池落库失败] task={task_id} seq={seq} {code} {type(_e).__name__}: {_e}"
-        print(_line, flush=True)
+        log.info(_line)
     return result
 
 
@@ -256,8 +259,8 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
     pool, engine = _get_pool()
     workers = _resolve_workers(_get_config())
     # 启动扫描前打印实际执行核数（worker 数 = 并行执行的进程数；先显示 CPU 核数，执行核数基于它）
-    print(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
-          f"执行核数={workers} | 引擎={engine}", flush=True)
+    log.info(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
+          f"执行核数={workers} | 引擎={engine}")
     futures = []
     for seq, stk in enumerate(valid):
         code = stk.get("code", "")
@@ -320,8 +323,7 @@ def destroy_pool():
                 pass
             _pool = None
             _pool_engine = None
-            print("[扫描池] 任务完成，销毁进程池（worker 缓存已释放）",
-                  flush=True)
+            log.info("[扫描池] 任务完成，销毁进程池（worker 缓存已释放）")
 
 
 def shutdown():

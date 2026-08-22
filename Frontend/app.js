@@ -39,8 +39,8 @@
 
         let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
 
-        // 频率→秒数映射
-        const FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
+        // 频率→秒数映射（P2-8：后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
+        let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
 
         const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
 
@@ -7037,6 +7037,18 @@
         });
 
         init();
+
+        // P2-8 周期映射统一：启动时从后端 /api/health 拉取周期映射，覆盖本地兜底常量
+        (async function loadFreqMapFromBackend() {
+            try {
+                const resp = await fetch("/api/health", { cache: "no-store" });
+                if (!resp.ok) return;
+                const data = await resp.json();
+                if (data && data.freq_sec_map && Object.keys(data.freq_sec_map).length > 0) {
+                    FREQ_SEC_MAP_JS = data.freq_sec_map;
+                }
+            } catch (e) { /* 离线兜底：保留本地常量 */ }
+        })();
 
         // 关闭/刷新页面时保存状态（仅股票，期货不保存）
         window.addEventListener('beforeunload', function() { saveLastState(); });

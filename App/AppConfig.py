@@ -32,6 +32,9 @@ App/AppConfig.py —— 基础设施配置（配置中心 · 双文件之一）
 """
 import json
 import os
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _ENV_FILE = os.path.join(_REPO_ROOT, ".env")
@@ -89,6 +92,7 @@ _FIELD_DEFAULTS = {
     "CHAN_PATH": _REPO_ROOT,
     "TDX_INSTALL_DIR": _default_tdx_install_dir(),
     "SCAN_POOL_WORKERS": 0,      # 0=自动按 CPU 核数适配；>0 显式覆盖（对齐 .env.example）
+    "SCAN_MIN_FLOAT_MC": 50.0,   # P2-8：扫描预过滤流通市值下限（亿），原硬编码 float_mc < 50
     "TQ_ACCOUNT": "",
     "TQ_PASSWORD": "",
     "FORWARD_ADJUST_ENABLED": True,   # 前复权开关
@@ -106,6 +110,7 @@ _FIELD_TYPES = {
     "CHAN_PATH": str,
     "TDX_INSTALL_DIR": str,
     "SCAN_POOL_WORKERS": int,
+    "SCAN_MIN_FLOAT_MC": float,
     "TQ_ACCOUNT": str,
     "TQ_PASSWORD": str,
     "SSE_DEBUG": bool,
@@ -202,6 +207,7 @@ class _AppConfigBase:
             "chan_path": self.chan_path,
             "tdx_install_dir": self.tdx_install_dir,
             "scan_pool_workers": self.scan_pool_workers,
+            "scan_min_float_mc": self.scan_min_float_mc,
             "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
             "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
             "config_source": self._config_source,
@@ -229,6 +235,7 @@ if _HAVE_PYDANTIC_SETTINGS:
 
         # ── 并发 ──
         scan_pool_workers: int = _FIELD_DEFAULTS["SCAN_POOL_WORKERS"]  # ProcessPool worker 数（0=按核数）
+        scan_min_float_mc: float = _FIELD_DEFAULTS["SCAN_MIN_FLOAT_MC"]  # 扫描预过滤流通市值下限（亿）
 
         # ── 凭据（.env 或环境变量注入；7.3：不落缓存不写日志）──
         tq_account: str = _FIELD_DEFAULTS["TQ_ACCOUNT"]         # 天勤账号（空 = 回退 vipdoc/tq_account.json）
@@ -262,7 +269,7 @@ else:
                 try:
                     setattr(self, key.lower(), caster(raw))
                 except (TypeError, ValueError):
-                    print(f"[AppConfig] 环境变量 {key}={raw!r} 类型非法，使用默认值")
+                    log.info(f"[AppConfig] 环境变量 {key}={raw!r} 类型非法，使用默认值")
 
 
 # 全局单例：一处定义、全局引用（方案 7.1）

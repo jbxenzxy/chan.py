@@ -21,8 +21,14 @@ import traceback
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 from App import AppEngine as _m
 
+# P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
+from App.AppData import make_live_key
+
 # 刷新功能域（Scanner.stock_list 批量获取流通市值复用其漏斗）
 from App.AppRefresh import load_float_mc_cache, fetch_float_mc_from_tencent, update_float_mc_cache
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -58,14 +64,14 @@ def zxg_save(codes):
         codes_ths = list(dict.fromkeys(codes_raw))
 
         # 通达信
-        print(f"[保存] 通达信: 输入 {len(codes_raw)} 只, 代码={codes_raw}")
+        log.info(f"[保存] 通达信: 输入 {len(codes_raw)} 只, 代码={codes_raw}")
         tdx_added = app_data.save_to_zxg_blk(codes_raw)
-        print(f"[保存] 通达信: 实际写入 {tdx_added} 只")
+        log.info(f"[保存] 通达信: 实际写入 {tdx_added} 只")
 
         # 同花顺
         ths_added = 0
         ths_msg = ""
-        print(f"[保存] 同花顺: 输入 {len(codes_ths)} 只, 代码={codes_ths}")
+        log.info(f"[保存] 同花顺: 输入 {len(codes_ths)} 只, 代码={codes_ths}")
         if _m._THS_CLOUD_AVAILABLE:
             try:
                 cloud_result = _m.save_scan_to_ths_cloud(codes_ths)
@@ -73,7 +79,7 @@ def zxg_save(codes):
                     raise Exception(cloud_result["error"])
                 ths_added = len(cloud_result.get("added", []))
                 ths_msg = "ok"
-                print(f"[保存] 同花顺: 新增{ths_added}, "
+                log.info(f"[保存] 同花顺: 新增{ths_added}, "
                       f"跳过{len(cloud_result.get('skipped',[]))}, "
                       f"失败{len(cloud_result.get('failed',[]))}")
             except Exception as e:
@@ -82,12 +88,12 @@ def zxg_save(codes):
                     ths_msg = "Cookie过期，请运行 ths_capture_cookie.py 重新获取"
                 else:
                     ths_msg = f"云端同步失败: {err_str}"
-                print(f"[保存] 同花顺: {ths_msg}")
+                log.info(f"[保存] 同花顺: {ths_msg}")
         else:
             ths_msg = "App/ths_cloud_api.py 未找到，请确保 App/ 目录完整（阶段 2 已迁入 App/）"
-            print(f"[保存] 同花顺: {ths_msg}")
+            log.info(f"[保存] 同花顺: {ths_msg}")
 
-        print(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
+        log.info(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
         return {
             "ok": True,
             "tdx_saved": tdx_added,
@@ -206,7 +212,7 @@ class Scanner:
             from App.AppData import app_data
             load_float_mc_cache()
             if app_data.float_mc_loaded:
-                print(f"[流通市值] 本地缓存已加载 {len(app_data.float_mc_cache)} 只")
+                log.info(f"[流通市值] 本地缓存已加载 {len(app_data.float_mc_cache)} 只")
             try:
                 t_mc = time.time()
                 mv_dict = fetch_float_mc_from_tencent(merged)
@@ -216,13 +222,13 @@ class Scanner:
                     miss_count = total_stocks - got_count
                     update_float_mc_cache(mv_dict)
                     if miss_count == 0:
-                        print(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
+                        log.info(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
                     else:
-                        print(f"[流通市值] 腾讯接口 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
+                        log.info(f"[流通市值] 腾讯接口 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
                 else:
-                    print("[流通市值] 腾讯接口未返回数据，使用本地缓存")
+                    log.info("[流通市值] 腾讯接口未返回数据，使用本地缓存")
             except Exception as e:
-                print(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
+                log.info(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
 
         # 后端预过滤
         pre_filtered = merged
@@ -252,13 +258,13 @@ class Scanner:
             pre_filtered = filtered
             elapsed = time.time() - t_pre_all
             if pre_skip_count > 0:
-                print(f"[预过滤] 批量预过滤完成: 跳过 {pre_skip_count} 只，剩余 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
+                log.info(f"[预过滤] 批量预过滤完成: 跳过 {pre_skip_count} 只，剩余 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
                 for line in pre_skip_log:
-                    print(line)
+                    log.info(line)
             else:
-                print(f"[预过滤] 批量预过滤完成: 全部通过 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
+                log.info(f"[预过滤] 批量预过滤完成: 全部通过 {len(pre_filtered)} 只 (耗时 {elapsed:.1f}s)")
         except Exception as e:
-            print(f"[预过滤] 批量预过滤异常: {type(e).__name__}: {e}")
+            log.info(f"[预过滤] 批量预过滤异常: {type(e).__name__}: {e}")
 
         return {
             "stocks": pre_filtered,
@@ -308,7 +314,7 @@ class Scanner:
             t_analyze = time.time() - t0
             if "error" in result:
                 _m._scan_skip_log.append(f"{code} - {result['error']}")
-                print(f"[耗时-扫描] {code} 分析失败: {result['error']}, 耗时{t_analyze:.3f}s")
+                log.info(f"[耗时-扫描] {code} 分析失败: {result['error']}, 耗时{t_analyze:.3f}s")
                 return {"error": result["error"]}
 
             t0 = time.time()
@@ -330,7 +336,7 @@ class Scanner:
                 t_filter = time.time() - t0
                 if is_fx_d:
                     t_total = time.time() - t_scan_start
-                    print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 是底分型")
+                    log.info(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 是底分型")
                     return {
                         "code": code + "." + market.upper(), "name": stock_name,
                         "is_fx_d": True,
@@ -341,9 +347,9 @@ class Scanner:
                 else:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
-                        _m._cache_remove(f"single_{mkt}_{cd}_{freq}_live")
+                        _m._cache_remove(make_live_key(mkt, cd, freq))
                     t_total = time.time() - t_scan_start
-                    print(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 不是底分型")
+                    log.info(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 不是底分型")
                     return {"code": code, "is_fx_d": False}
 
             # ── 均线分类扫描模式 ──
@@ -361,7 +367,7 @@ class Scanner:
                     ma_category = 8 - conquered
                 t_filter = time.time() - t0
                 t_total = time.time() - t_scan_start
-                print(f"[耗时-扫描-均线] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 分类:{ma_category}")
+                log.info(f"[耗时-扫描-均线] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 分类:{ma_category}")
                 resp_data = {
                     "code": code + "." + market.upper(),
                     "name": stock_name,
@@ -372,7 +378,7 @@ class Scanner:
                 if ma_category > 3:
                     mkt, cd = _m._get_market_code(qualified_code)
                     if mkt and cd:
-                        _m._cache_remove(f"single_{mkt}_{cd}_{freq}_live")
+                        _m._cache_remove(make_live_key(mkt, cd, freq))
                 return resp_data
 
             # ── 买卖点扫描模式 ──
@@ -407,11 +413,11 @@ class Scanner:
             if not buy_points:
                 mkt, cd = _m._get_market_code(qualified_code)
                 if mkt and cd:
-                    _m._cache_remove(f"single_{mkt}_{cd}_{freq}_live")
+                    _m._cache_remove(make_live_key(mkt, cd, freq))
 
             if has_points:
                 t_total = time.time() - t_scan_start
-                print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 有买卖点")
+                log.info(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 有买卖点")
                 return {
                     "code": code + "." + market.upper(), "name": stock_name,
                     "buy_points": buy_points,
@@ -423,13 +429,13 @@ class Scanner:
                 }
             else:
                 t_total = time.time() - t_scan_start
-                print(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 无买卖点")
+                log.info(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 无买卖点")
                 return {"code": code, "buy_points": [], "sell_points": []}
 
         except Exception as exc:
             _m._scan_skip_log.append(f"{code} - 异常: {exc}")
             t_total = time.time() - t_scan_start
-            print(f"[耗时-扫描] {code} 异常: {exc}, 总耗时{t_total:.3f}s")
+            log.info(f"[耗时-扫描] {code} 异常: {exc}, 总耗时{t_total:.3f}s")
             return {"error": str(exc)}
 
     # ── 扫描生命周期 ─────────────────────────────────────────────────
@@ -441,7 +447,7 @@ class Scanner:
         try:
             _m._load_stock_names_from_cache_file()
         except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
+            log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
         return {"ok": True}
 
     def end(self):
@@ -456,15 +462,15 @@ class Scanner:
 
         if _m._scan_aborted:
             # 用户点击中止后结束：不打印"全部扫描成功"误导日志
-            print(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
+            log.info(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
         elif _m._scan_skip_log:
-            print(f"\n========== 扫描异常/失败股票明细 ==========")
-            print(f"共 {len(_m._scan_skip_log)} 只:")
+            log.info(f"\n========== 扫描异常/失败股票明细 ==========")
+            log.info(f"共 {len(_m._scan_skip_log)} 只:")
             for i, item in enumerate(_m._scan_skip_log, 1):
-                print(f"  {i}. {item}")
-            print("============================================\n")
+                log.info(f"  {i}. {item}")
+            log.info("============================================\n")
         else:
-            print(f"\n[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票\n")
+            log.info(f"\n[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票\n")
 
         if _m._scan_start_time is not None:
             skip_count = len(_m._scan_skip_log)
@@ -483,19 +489,19 @@ class Scanner:
         worker 每票前检查 is_aborted 才会真正停止。
         """
         _m._scan_aborted = True
-        print("[扫描] 收到中断请求，设置终止标志")
+        log.info("[扫描] 收到中断请求，设置终止标志")
         try:
             from App.AppScanStore import get_scan_store
             aborted = get_scan_store().abort_all_running()
             if aborted:
-                print(f"[扫描] 已中止 {aborted} 个进行中的批量任务")
+                log.info(f"[扫描] 已中止 {aborted} 个进行中的批量任务")
         except Exception as exc:  # noqa: BLE001 —— 兜底不阻断中止
-            print(f"[扫描] 中止批量任务异常: {type(exc).__name__}: {exc}")
+            log.info(f"[扫描] 中止批量任务异常: {type(exc).__name__}: {exc}")
         return {"ok": True}
 
     def clear_cache(self):
         """关闭扫描面板"""
-        print("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
+        log.info("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
         return {"cleared": 0}
 
     # ── 阶段 7：批量扫描异步化（ProcessPool 先行）────────────────────
@@ -534,7 +540,7 @@ class Scanner:
             if "." in code:
                 code = code.split(".")[0]
             _m._page_index_code = code
-            print(f"[成分股] 已设置板块指数代码: {code}")
+            log.info(f"[成分股] 已设置板块指数代码: {code}")
             return {"ok": True, "code": code}
         else:
             return {"error": "缺少code参数"}

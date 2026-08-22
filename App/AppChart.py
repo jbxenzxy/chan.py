@@ -39,10 +39,15 @@ import traceback
 
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 from App import AppEngine as _m
+# P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
+from App.AppData import make_single_key, make_dual_main_key, make_futures_sub_key
 # SSE 实时流 / 期货功能域（阶段 8：期货选点/清理/元数据实现已迁 AppSSE，此处仅漏斗）
 from App import AppSSE as _sse
 # 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _red_range_bi_sequence, _red_range_amp
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 
 # 引擎调用全局串行锁（锁分类 SERIAL 共用；LOCK_POLICY 登记见 AppOrch.py）
@@ -60,13 +65,13 @@ def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq
     - 开始/完成即时打印：uvicorn 仅在请求完成后记日志，挂起时控制台零输出，
       此日志是排障第一现场（阶段 1 Hotfix 教训）。
     """
-    print(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
-          f"end_date={end_date!r} dual={dual}", flush=True)
+    log.info(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
+          f"end_date={end_date!r} dual={dual}")
     t0 = time.time()
     with _ENGINE_LOCK:
         result = _m.analyze_stock(code, freq=freq, end_date=end_date,
                                   dual=dual, step=step, sub_freq=sub_freq)
-    print(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s", flush=True)
+    log.info(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
     return result
 
 
@@ -78,8 +83,8 @@ async def run_analysis(code, freq="d", end_date=None, dual=False, step=None, sub
     """
     import asyncio
     loop = asyncio.get_event_loop()
-    print(f"[api] run_analysis 开始: code={code!r} freq={freq!r} "
-          f"end_date={end_date!r} dual={dual}", flush=True)
+    log.info(f"[api] run_analysis 开始: code={code!r} freq={freq!r} "
+          f"end_date={end_date!r} dual={dual}")
     t0 = time.time()
 
     def _job():
@@ -90,7 +95,7 @@ async def run_analysis(code, freq="d", end_date=None, dual=False, step=None, sub
     try:
         return await loop.run_in_executor(None, _job)
     finally:
-        print(f"[api] run_analysis 完成: code={code!r} 耗时 {time.time() - t0:.2f}s", flush=True)
+        log.info(f"[api] run_analysis 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
@@ -176,9 +181,10 @@ def call_manual_select_point(code, freq="d", bi_idx=-1):
 
     原路由直连 m.stock_manual_select_point 绕锁（阶段 2 遗留问题 L185），
     阶段 3a 起统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
+    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
     """
     with _ENGINE_LOCK:
-        return _m.stock_manual_select_point(code, freq=freq, bi_idx=bi_idx)
+        return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx)
 
 
 def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
@@ -186,9 +192,10 @@ def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 
     内部走期货分析链路（_analyze_futures_internal，含期货缓存读写），
     归入串行分类，与股票侧共用引擎锁。
+    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
     """
     with _ENGINE_LOCK:
-        return _m.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+        return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
 
 def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
@@ -196,11 +203,12 @@ def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", e
 
     原路由直连 m.compute_red_range_zs 绕锁（阶段 2 遗留问题 L206），
     阶段 3a 起统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
+    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
     """
     with _ENGINE_LOCK:
-        return _m.compute_red_range_zs(code, sub_freq=sub_freq,
-                                       left_date=left_date, right_date=right_date,
-                                       end_date=end_date)
+        return compute_red_range_zs(code, sub_freq=sub_freq,
+                                    left_date=left_date, right_date=right_date,
+                                    end_date=end_date)
 
 
 def stock_manual_select_point(code, freq="d", bi_idx=-1):
@@ -228,7 +236,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
         normalized_code = suffix_match.group(1)
         market = suffix_match.group(2).lower()
     date_suffix = "live"
-    cache_key = f"single_{market}_{normalized_code}_{freq}_{date_suffix}"
+    cache_key = make_single_key(market, normalized_code, freq, date_suffix)
     qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
     cached = _m._cache_get(cache_key)
     if cached is None:
@@ -236,7 +244,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
 
     if "chan" not in cached:
         # 扫描缓存只有result没有chan，重新分析以获取完整数据
-        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
+        log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
         analyze_stock(normalized_code, freq=freq, cache_chan=True)
         cached = _m._cache_get(cache_key)
         if cached is None or "chan" not in cached:
@@ -304,7 +312,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
     # ── 期货双窗口 ──
     if normalized_code.startswith("KQ."):
-        cache_key = f"{normalized_code}:{sub_freq}"
+        cache_key = make_futures_sub_key(normalized_code, sub_freq)
         cached = _m._futures_analysis_cache.get(cache_key)
         if cached is None:
             return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
@@ -334,7 +342,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         return {"error": f"无法识别股票代码: {code}"}
 
     date_suffix = end_date if end_date else "live"
-    cache_key = f"single_{market}_{normalized_code}_{sub_freq}_{date_suffix}"
+    cache_key = make_single_key(market, normalized_code, sub_freq, date_suffix)
     cached = _m._cache_get(cache_key)
 
     # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
@@ -342,7 +350,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     if (cached is None or "chan" not in cached) and sub_freq in _m._SUB_FREQ_MAP.values():
         for main_freq, _sub in _m._SUB_FREQ_MAP.items():
             if _sub == sub_freq:
-                dual_main_cache_key = f"dual_main_{market}_{normalized_code}_{main_freq}_{date_suffix}"
+                dual_main_cache_key = make_dual_main_key(market, normalized_code, main_freq, date_suffix)
                 main_cached = _m._cache_get(dual_main_cache_key)
                 if main_cached and "chan" in main_cached:
                     main_chan = main_cached["chan"]
@@ -351,24 +359,24 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
                         cached = {"chan": main_chan}
                         break
                     except Exception as e:
-                        print(f"[警告] 异常: {type(e).__name__}: {e}")
+                        log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
                 if cached is None or "chan" not in cached:
-                    single_main_cache_key = f"single_{market}_{normalized_code}_{main_freq}_{date_suffix}"
+                    single_main_cache_key = make_single_key(market, normalized_code, main_freq, date_suffix)
                     main_cached = _m._cache_get(single_main_cache_key)
                     if main_cached and "chan" in main_cached:
                         main_chan = main_cached["chan"]
                         try:
                             _ = main_chan[_m._get_kl_type(sub_freq)]
                             cached = {"chan": main_chan}
-                            print(f"[信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
+                            log.info(f"[信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
                             break
                         except Exception as e:
-                            print(f"[警告] 异常: {type(e).__name__}: {e}")
+                            log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
 
     if cached is None:
         return {"error": "请先在该周期下加载K线数据"}
     if "chan" not in cached:
-        print(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
+        log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
         analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
         cached = _m._cache_get(cache_key)
         if cached is None or "chan" not in cached:
@@ -420,19 +428,18 @@ def _get_data_source(code, source="tdx"):
     return TdxAPI, False
 
 
-def fetch_and_inject(code, freq="d", source="tdx", end_date=None, dual=False, step=None, sub_freq=None):
+def fetch_and_inject(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
     """
     阶段 5：判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
 
     fetch 统一走 DataAPI 抽象层（替换阶段 4 前的直连模式）：
-      - 数据源选择经 _get_data_source() 路由到对应 DataAPI 实现
-      - 实际拉取仍委托 analyze_stock（其内部已通过 DataAPI 读取数据）
-      - source 参数显式选择数据源（tdx / tqsdk），缺省自动检测
+      - 数据源选择由 analyze_stock 内部自动检测（股票走 TdxAPI / 期货走 TqSdkAPI）
+      - 本函数为薄封装，直接委托 analyze_stock（其内部已通过 DataAPI 读取数据）
+      - source 死参数已清理（P0-2）：原参数解析后未生效，一律委托 analyze_stock
 
     锁分类 RAW（无锁）：委托 analyze_stock，共享引擎缓存，非线程安全。
     串行调用方须走 call_analysis / run_analysis。
     """
-    api_module, is_futures = _get_data_source(code, source)
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             dual=dual, step=step, sub_freq=sub_freq)
 

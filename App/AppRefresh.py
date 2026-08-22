@@ -19,6 +19,9 @@ import traceback
 
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 from App import AppEngine as _m
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -90,7 +93,7 @@ def refresh_stock_names_async():
             _m._refresh_stock_names()
         except Exception as e:
             traceback.print_exc()
-            print(f"[错误] refresh_stock_names异常: {e}")
+            log.error(f"[错误] refresh_stock_names异常: {e}")
 
     t = threading.Thread(target=_do_refresh, daemon=True)
     t.start()

@@ -163,9 +163,9 @@ def test_futures_boundaries(failures):
     # 3a 连字符契约（真实天勤路径中该格式同样被拒，口径需冻结）
     restore = install_futures_data_source("futures_15s.json")
     try:
-        from App import AppEngine as m
-        r = m._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
-                                        end_date="2024-01-31")
+        from App import AppSSE
+        r = AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
+                                             end_date="2024-01-31")
         if not (isinstance(r, dict) and "error" in r):
             failures.append(f"期货日期格式契约: 连字符应被拒，实际 {str(r)[:80]}")
             print("[FAIL] ③ 期货日期契约: 连字符 end_date 未被拒绝")

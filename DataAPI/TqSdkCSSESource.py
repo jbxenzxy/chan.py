@@ -130,6 +130,26 @@ class CSSESource(CCommonStockApi):
         """向引擎注入一根已完成 K 线"""
         raise NotImplementedError
 
+    # ── 记录缓存操作（P1-1 数据源抽象单轨化）────────────────────
+    # 原由服务层直接调用 CTqSdkAPI.set_data / get_data / get_last_n /
+    # clear_all_cache（records↔K线转换轨）；收敛后统一经 Session 协议
+    # 访问，CTqSdkAPI 降级为 Session 内部实现细节。
+    def set_data(self, records, symbol=None):
+        """注入整段K线记录到共享缓存（供 CChan 数据源读取）"""
+        raise NotImplementedError
+
+    def get_data(self, symbol=None, **kwargs):
+        """读取已注入的K线记录（副本）"""
+        raise NotImplementedError
+
+    def get_last_n(self, n=1, symbol=None):
+        """读取最近 N 条已注入记录（去重判断用）"""
+        raise NotImplementedError
+
+    def clear_all_cache(self):
+        """清空全部K线缓存（期货切股票时调用）"""
+        raise NotImplementedError
+
     def close(self):
         """设置关闭旗，通知生成器线程退出（不直接关闭底层连接）"""
         raise NotImplementedError
@@ -219,6 +239,23 @@ class CTqSdkSession(CSSESource):
     def append_bar(self, bar, code_key):
         from DataAPI.TqSdkAPI import CTqSdkAPI
         CTqSdkAPI.append_bar(bar, symbol=code_key)
+
+    # ── 记录缓存操作（P1-1 单轨化：Session 统一承载 records↔K线转换）──
+    def set_data(self, records, symbol=None):
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        CTqSdkAPI.set_data(records, symbol=symbol)
+
+    def get_data(self, symbol=None, **kwargs):
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        return CTqSdkAPI.get_data(symbol=symbol, **kwargs)
+
+    def get_last_n(self, n=1, symbol=None):
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        return CTqSdkAPI.get_last_n(n=n, symbol=symbol)
+
+    def clear_all_cache(self):
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        CTqSdkAPI.clear_all_cache()
 
     def close(self):
         """设置关闭旗，通知生成器线程退出（幂等）。

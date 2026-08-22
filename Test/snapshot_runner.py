@@ -42,8 +42,13 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
     monkeypatch 数据加载函数，返回 (restore_fn, records_ref)。
     main_fixture/sub_fixture: fixtures 文件名；sub 为 None 时保持原函数。
     truncate_to: 若非 None，返回 dt <= truncate_to 的子集（全量截断对照用）。
+
+    P1-1 数据源抽象单轨化：打桩点随引擎层迁移，改打 CTdxAPI.fetch_main_level /
+    fetch_sub_level（CommonStockAPI 适配器类方法），不再打 AppEngine 模块级
+    read_main_level_records / read_sub_level_records 符号。
     """
     from App import AppEngine as m
+    from DataAPI.TdxAPI import CTdxAPI
     from Test.gen_fixtures import load_records
 
     main_records = load_records(os.path.join(FIXTURE_DIR, main_fixture))
@@ -53,24 +58,30 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
     if sub_records is not None and truncate_to is not None:
         sub_records = [r for r in sub_records if r["dt"] <= truncate_to]
 
-    orig_main = m.read_main_level_records
-    orig_sub = m.read_sub_level_records
+    orig_main = CTdxAPI.__dict__.get("fetch_main_level")
+    orig_sub = CTdxAPI.__dict__.get("fetch_sub_level")
 
-    def fake_main(market, code, freq, return_raw=False, end_date=None, **kw):
+    def fake_main(cls, market, code, freq, return_raw=False, end_date=None, **kw):
         if return_raw:
             # 双窗口共用读取优化路径：(main, sub, forward_adjust_done)
             return list(main_records), (list(sub_records) if sub_records is not None else []), True
         return list(main_records), True
 
-    def fake_sub(market, code, freq, sub_freq, full_records, end_date=None, **kw):
+    def fake_sub(cls, market, code, freq, sub_freq, full_records, end_date=None, **kw):
         return list(sub_records) if sub_records is not None else []
 
-    m.read_main_level_records = fake_main
-    m.read_sub_level_records = fake_sub
+    CTdxAPI.fetch_main_level = classmethod(fake_main)
+    CTdxAPI.fetch_sub_level = classmethod(fake_sub)
 
     def restore():
-        m.read_main_level_records = orig_main
-        m.read_sub_level_records = orig_sub
+        if orig_main is not None:
+            CTdxAPI.fetch_main_level = orig_main
+        elif "fetch_main_level" in CTdxAPI.__dict__:
+            del CTdxAPI.fetch_main_level
+        if orig_sub is not None:
+            CTdxAPI.fetch_sub_level = orig_sub
+        elif "fetch_sub_level" in CTdxAPI.__dict__:
+            del CTdxAPI.fetch_sub_level
 
     return restore, main_records
 
@@ -301,8 +312,8 @@ def _c_futures_full():
     覆盖 _analyze_futures_internal 全链路（此前快照仅覆盖股票路径）。"""
     restore = install_futures_data_source("futures_15s.json")
     try:
-        from App import AppEngine as m
-        return m._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s")
+        from App import AppSSE
+        return AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s")
     finally:
         restore()
 
@@ -316,8 +327,8 @@ def _c_futures_end_date():
     anchor = rows[-401]["dt"]
     restore = install_futures_data_source("futures_15s.json")
     try:
-        from App import AppEngine as m
-        return m._analyze_futures_internal(
+        from App import AppSSE
+        return AppSSE._analyze_futures_internal(
             "KQ.m@SHFE.rb", freq="15s",
             end_date=anchor.strftime("%Y/%m/%d %H:%M:%S"))
     finally:

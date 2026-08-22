@@ -32,6 +32,9 @@ import re
 import threading
 
 from App.AppConfig import app_config
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -86,12 +89,84 @@ def get_annotation_key(code, freq):
 def _read_zxg_blk_file(blk_path):
     """读取通达信 .blk 板块文件，返回股票代码列表（自选股存储格式知识）。
 
-    P2-3 单源收敛：解析实现收敛到顶层 tdx_blk.parse_blk_file
-    （本模块与 DataAPI/TdxAPI.py 不再各持一份重复解析；
-    中书模块顶层 tdx_blk 供两层各自引入，维持设计 4.4 互不依赖）。
+    文件格式：GBK编码，每行一个代码：
+      A股 7 位纯数字（前缀 + 6 位代码）/ 港股 31# / 港股指数 27# /
+      美股 74# / 美股指数 12#A_
+    说明：DataAPI/TdxAPI.py 另持一份同名解析（服务其指数成分读取），
+    属设计 4.4「两者互不依赖」的边界代价（AppData-vs-DataAPI-职责边界.html §6
+    确认各自自含为正确边界，不引入顶层中立模块强并）。
     """
-    from tdx_blk import parse_blk_file
-    return parse_blk_file(blk_path)
+    if not blk_path or not os.path.exists(blk_path):
+        return []
+    stocks = []
+    try:
+        with open(blk_path, "r", encoding="gbk") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if len(line) == 7 and line.isdigit():
+                    stocks.append({"prefix": line[0], "code": line[1:7]})
+                elif line.startswith("31#") and len(line) == 8:
+                    code = line[3:].strip()
+                    if code.isdigit():
+                        stocks.append({"prefix": "hk", "code": code.zfill(5)})
+                elif line.startswith("74#") and len(line) > 3:
+                    code = line[3:].strip()
+                    if code:
+                        stocks.append({"prefix": "us", "code": code})
+                elif line.startswith("27#") and len(line) > 3:
+                    code = line[3:].strip()
+                    if code:
+                        stocks.append({"prefix": "hk", "code": code})
+                elif line.startswith("12#") and len(line) > 3:
+                    code = line[3:].strip()
+                    if code:
+                        stocks.append({"prefix": "us", "code": code})
+    except Exception as e:
+        print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
+    return stocks
+
+
+# ════════════════════════════════════════════════════════════════
+# P1-5 缓存键规范化：结构化键（消除字符串拼接歧义与漂移）
+# ════════════════════════════════════════════════════════════════
+# 股票分析缓存（_stocks_analysis_cache）改用结构化元组键：
+#   (kind, market, code, freq, date)
+# 天然 hashable、可比较、无分隔符歧义（代码/周期/日期含 "_" / ":" 也不会碰撞）。
+# 期货子窗缓存（_futures_analysis_cache）保留字符串键，但统一经
+# make_futures_sub_key 规范化（symbol 大写入键），消除 AppSSE/AppChart/
+# 语义化接口三处拼接的大小写漂移；第三方引擎（BSPointList）按同一
+# 格式拼接，兼容不变。单一事实源：所有调用方经本组工厂函数生成键，
+# 不再手工拼接字符串。
+def make_analysis_key(kind, market, code, freq, date):
+    """构造结构化分析缓存键（kind: single/dual_main/dual_sub/live）"""
+    return (kind, str(market), str(code), str(freq), str(date))
+
+
+def make_single_key(market, code, freq, date):
+    """单窗口分析缓存键（date: 复盘日期 或 "live"）"""
+    return make_analysis_key("single", market, code, freq, date)
+
+
+def make_dual_main_key(market, code, freq, date):
+    """双窗口主级别缓存键"""
+    return make_analysis_key("dual_main", market, code, freq, date)
+
+
+def make_dual_sub_key(market, code, freq, date):
+    """双窗口子级别缓存键"""
+    return make_analysis_key("dual_sub", market, code, freq, date)
+
+
+def make_live_key(market, code, freq):
+    """实时（非复盘）单窗口缓存键"""
+    return make_single_key(market, code, freq, "live")
+
+
+def make_futures_sub_key(symbol, sub_freq):
+    """期货子窗口缓存键（symbol 统一大写入键，消除大小写漂移）"""
+    return f"{symbol.upper()}:{sub_freq}"
 
 
 class AppData:
@@ -255,7 +330,7 @@ class AppData:
                 oldest_key = next(iter(self._stocks_analysis_cache))
                 self._stocks_analysis_cache.pop(oldest_key)
                 gc.collect()
-                print(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
+                log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
             self._stocks_analysis_cache[key] = value
 
     def cache_get(self, key):
@@ -289,15 +364,15 @@ class AppData:
     #    调用方不再手工拼接 "{SYMBOL}:{sub_freq}"，大小写规则单一事实源）
     def set_futures_sub_chan(self, symbol, sub_freq, chan):
         """写入期货子窗口 CChan（symbol 统一大写入键，供 /api/red_range_zs 访问）"""
-        return self.futures_cache_put(f"{symbol.upper()}:{sub_freq}", chan)
+        return self.futures_cache_put(make_futures_sub_key(symbol, sub_freq), chan)
 
     def get_futures_sub_chan(self, symbol, sub_freq):
         """读取期货子窗口 CChan（无则返回 None；symbol 大小写不敏感）"""
-        return self.futures_cache_get(f"{symbol.upper()}:{sub_freq}")
+        return self.futures_cache_get(make_futures_sub_key(symbol, sub_freq))
 
     def pop_futures_sub_chan(self, symbol, sub_freq):
         """弹出并删除期货子窗口 CChan（SSE 连接关闭 / 子级别切换时释放）"""
-        return self.futures_cache_pop(f"{symbol.upper()}:{sub_freq}", None)
+        return self.futures_cache_pop(make_futures_sub_key(symbol, sub_freq), None)
 
     # ════════════════════════════════════════════════════════════════
     # 股票名称缓存
@@ -345,10 +420,10 @@ class AppData:
                         migrated[key] = info
                 self._names.update(migrated)
                 self._names_loaded = True
-                print(f"[信息] 从缓存文件加载股票名称: {len(self._names)}只")
+                log.info(f"[信息] 从缓存文件加载股票名称: {len(self._names)}只")
                 return len(self._names)
         except Exception as e:
-            print(f"[警告] 读取股票名称缓存失败: {e}")
+            log.warning(f"[警告] 读取股票名称缓存失败: {e}")
         return 0
 
     def replace_names(self, all_names):
@@ -391,9 +466,9 @@ class AppData:
                         # 旧格式：直接是数字
                         self._pe[k] = v
                         pe_count += 1
-            print(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
+            log.info(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
         except Exception as e:
-            print(f"[PE-TTM] 加载缓存失败: {e}")
+            log.info(f"[PE-TTM] 加载缓存失败: {e}")
         return self._pe
 
     def get_pe_ttm(self, market, code):
@@ -428,9 +503,9 @@ class AppData:
                 self._float_mc.clear()
                 self._float_mc.update(data["data"])
                 self._float_mc_loaded = True
-                print(f"[流通市值] 从本地缓存加载 {len(self._float_mc)} 只股票")
+                log.info(f"[流通市值] 从本地缓存加载 {len(self._float_mc)} 只股票")
         except Exception as e:
-            print(f"[流通市值] 读取缓存失败: {e}")
+            log.info(f"[流通市值] 读取缓存失败: {e}")
 
     def update_float_mc_cache(self, mv_dict):
         """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。
@@ -442,7 +517,7 @@ class AppData:
             with open(self.float_mc_cache_file, "w", encoding="utf-8") as f:
                 json.dump({"data": self._float_mc}, f, ensure_ascii=False)
         except Exception as e:
-            print(f"[流通市值] 保存缓存文件失败: {e}")
+            log.info(f"[流通市值] 保存缓存文件失败: {e}")
 
     def get_float_mc_from_cache(self, code):
         """从缓存获取流通市值（亿元），未命中返回None。"""
@@ -465,7 +540,7 @@ class AppData:
                     if code:
                         points[code] = row
         except Exception as e:
-            print(f"[警告] 读取选点文件失败: {e}")
+            log.warning(f"[警告] 读取选点文件失败: {e}")
         return points
 
     def save_point_time(self, code, name, freq, sdt):
@@ -509,9 +584,9 @@ class AppData:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-            print(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
+            log.info(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
         except Exception as e:
-            print(f"[警告] 保存选点文件失败: {e}")
+            log.warning(f"[警告] 保存选点文件失败: {e}")
 
     def clear_saved_point_time(self, code, freq):
         """清除某只股票某个周期在CSV中的选点，同时更新内存缓存"""
@@ -544,9 +619,9 @@ class AppData:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
-            print(f"[信息] 清除选点成功: {code} {freq}")
+            log.info(f"[信息] 清除选点成功: {code} {freq}")
         except Exception as e:
-            print(f"[警告] 清除选点失败: {e}")
+            log.warning(f"[警告] 清除选点失败: {e}")
 
     def clear_saved_point(self, code, freq="d"):
         """清除选点并同步清理分析缓存（对应 /api/clear_saved_point）"""
@@ -563,7 +638,7 @@ class AppData:
 
         qualified_code = f"{normalized_code}.{market.upper()}" if market else normalized_code
         self.clear_saved_point_time(qualified_code, freq)
-        cache_key = f"single_{market}_{normalized_code}_{freq}_live"
+        cache_key = make_live_key(market, normalized_code, freq)
         with self._cache_lock:
             if cache_key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[cache_key]
@@ -594,7 +669,7 @@ class AppData:
             if code:
                 return code, freq
         except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
+            log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
         return None, None
 
     # ════════════════════════════════════════════════════════════════
@@ -612,7 +687,7 @@ class AppData:
                     self._annotations.clear()
                     self._annotations.update(data)
             except Exception as e:
-                print(f"[警告] 加载标注数据失败: {e}")
+                log.warning(f"[警告] 加载标注数据失败: {e}")
                 self._annotations.clear()
         self._annotations_loaded = True
 
@@ -622,7 +697,7 @@ class AppData:
             with open(self.annotations_file, "w", encoding="utf-8") as f:
                 json.dump(self._annotations, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"[警告] 保存标注数据失败: {e}")
+            log.warning(f"[警告] 保存标注数据失败: {e}")
 
     def get_annotations_for(self, code, freq):
         """获取某股票某周期的所有标注"""
@@ -762,7 +837,7 @@ class AppData:
         """读取通达信自选股文件 zxg.blk，返回股票代码列表。"""
         path = self.zxg_blk_path
         if not os.path.exists(path):
-            print(f"[警告] 自选股文件不存在: {path}")
+            log.warning(f"[警告] 自选股文件不存在: {path}")
             return []
         return _read_zxg_blk_file(path)
 
@@ -832,15 +907,15 @@ class AppData:
                                 line = "74#" + code
                     else:
                         # 无法识别的格式，跳过
-                        print(f"[自选保存] 跳过无法识别的代码: {code_str}")
+                        log.info(f"[自选保存] 跳过无法识别的代码: {code_str}")
                         continue
                 if line not in existing:
                     f.write(line + "\n")
                     existing.add(line)
                     added += 1
-                    print(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
+                    log.info(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
 
-        print(f"[自选保存] 共添加 {added} 只股票到自选股")
+        log.info(f"[自选保存] 共添加 {added} 只股票到自选股")
         return added
 
 

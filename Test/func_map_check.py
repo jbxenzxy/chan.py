@@ -84,6 +84,7 @@ TARGET_FUNCS = {
 
     # ── 消费侧：周期/日期/代码 工具 ──
     "_get_kl_type":               ("ORCH_E", "freq→KL_TYPE（纯，6 处调用，波次 1）"),
+    "_get_kl_type_by_sec":        ("ORCH_E", "秒数→KL_TYPE（P0-1 取数唯一性收敛：AppSSE._build_futures_chan 唯一来源）"),
     "_get_freq_label":            ("ORCH_E", "freq→中文标签（纯，4 处调用；阶段 5 可提升 DataAPI 元数据）"),
     "_get_date_fmt":              ("ORCH_E", "freq→日期格式（7 处调用，被依赖最多；读 INTRADAY_FREQS/SUBSECOND_FREQS）"),
 
@@ -91,19 +92,13 @@ TARGET_FUNCS = {
     "_find_left_shoulder_time":   ("ORCH_E", "左肩时间查找（手动选点用）"),
     "_bi_overlap_range":          ("ORCH_E", "笔与中枢区间重叠（纯）"),
     "_calc_zs_confirm_edt_from_bis": ("ORCH_E", "中枢确认时间（纯，4 处调用）"),
-    "_calc_futures_white_hline":  ("ORCH_E", "期货白线（阶段 8 兼容壳 → App/AppSSE.py）"),
     "_make_chan_config":          ("CFG",    "CChanConfig 构造（纯；算法参数归 ChanConfig.py）"),
 
     # ── 消费侧：核心分析链 ──
     "_analyze_stock_internal":    ("ORCH_E", "股票分析核心（440 行：拉取→注入→CChan→提取）"),
-    "_analyze_futures_internal":  ("ORCH_E", "期货分析核心（阶段 8 兼容壳 → App/AppSSE.py）"),
     "_extract_main_level_data":   ("ORCH_E", "主级别结果提取（357 行）"),
     "_extract_sub_level_data":    ("ORCH_E", "子级别结果提取（254 行）"),
-    "_extract_realtime_snapshot": ("ORCH_E", "实时快照提取（阶段 8 兼容壳 → App/AppSSE.py）"),
     "analyze_stock":              ("ORCH_E", "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"),
-    "compute_red_range_zs":       ("ORCH_E", "红框中枢计算（阶段 8 兼容壳 → App/AppChart.py）"),
-    "stock_manual_select_point":  ("ORCH_E", "股票手动选点（阶段 8 兼容壳 → App/AppChart.py）"),
-    "futures_manual_select_point": ("ORCH_E", "期货手动选点（阶段 8 兼容壳 → App/AppSSE.py）"),
 
     # ── 获取侧 ──
     "_fetch_names_from_sina_once":  ("ORCH_F", "新浪批量拉名（纯，HTTP 注入点）"),
@@ -111,7 +106,6 @@ TARGET_FUNCS = {
     "_refresh_pe_ttm":              ("ORCH_F", "PE 刷新（akshare；写缓存文件）"),
     "_fetch_index_belong_from_akshare": ("ORCH_F", "行业归属拉取（写 _index_belong_cache）"),
     "_fetch_float_mc_from_tencent": ("ORCH_F", "腾讯流通市值拉取（纯）"),
-    "init_chan_symbol":             ("ORCH_F", "TqApi 合约初始化（阶段 8 兼容壳 → App/AppSSE.py）"),
 
     # ── 扫描 ──
     "_quick_prefilter_pass":        ("ORCH_S", "扫描预筛（读 _stock_names_cache + 流通市值）"),
@@ -163,6 +157,9 @@ TARGET_STATES = {
     # 由 test_phase4_guards 的 _FORBIDDEN_PATH_ALIASES 守卫「不得复活」。
     "SAVED_POINT_COLUMNS":     ("CFG", "选点表列定义（= App/AppData.SAVED_POINT_COLUMNS 同值别名）"),
 
+    # 统一日志（P0-3：App/AppLog.py 框架，全项目共享）
+    "log":                     ("ORCH_C", "统一日志 logger（P0-3 App/AppLog.py；get_logger(__name__)）"),
+
     # 业务缓存 → ✓4 已收敛：别名 = app_data 实例字段（共享同一对象，身份校验见 phase4 守护）
     "_stock_names_cache":  ("DATA", "✓4 名称缓存（= app_data._names）"),
     "_pe_ttm_cache":       ("DATA", "✓4 PE 缓存（= app_data._pe）"),
@@ -196,6 +193,7 @@ TARGET_STATES = {
     "SUBSECOND_FREQS": ("ORCH_E", "秒级周期集"),
     "_SUB_FREQ_MAP":   ("ORCH_E", "子级别映射（2 读）"),
     "_FUTURES_DUAL_FREQ_MAP": ("ORCH_E", "期货双窗口映射"),
+    "_FREQ_SEC_TO_KL": ("ORCH_E", "秒数→KL_TYPE 映射（P0-1 取数唯一性收敛：_get_kl_type_by_sec 唯一来源）"),
     "TIME_TRUNCATE_CONFIG":   ("ORCH_E", "数据截断配置（→ ChanConfig/参数化）"),
     "FULL_DATA_MODE":  ("ORCH_E", "全量模式开关（→ ChanConfig）"),
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),

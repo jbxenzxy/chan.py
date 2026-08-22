@@ -14,6 +14,9 @@ import json
 import time
 import re
 import os
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 
 class THSCloudAPI:
@@ -102,7 +105,7 @@ class THSCloudAPI:
                 json_str = text[text.index("(") + 1 : -2]
                 return json.loads(json_str)
         except Exception as e:
-            print(f"[THS-API] JSONP 解析失败: {e}")
+            log.info(f"[THS-API] JSONP 解析失败: {e}")
         return {"errorCode": -1, "errorMsg": "parse error"}
 
     def check_login(self) -> bool:
@@ -119,7 +122,7 @@ class THSCloudAPI:
         resp = self._request("get", "/newcircle/group/getSelfStockWithMarket/")
         data = self._parse_jsonp(resp)
         if data.get("errorCode") != 0:
-            print(f"[THS-API] 获取自选股失败: {data.get('errorMsg')}")
+            log.info(f"[THS-API] 获取自选股失败: {data.get('errorMsg')}")
             return []
         result = data.get("result", [])
         for item in result:
@@ -181,28 +184,28 @@ class THSCloudAPI:
             if marketid is None:
                 if code in existing_codes:
                     result["skipped"].append(code)
-                    print(f"[THS-API] 跳过 {code}（已存在）")
+                    log.info(f"[THS-API] 跳过 {code}（已存在）")
                     continue
             else:
                 if f"{code}:{marketid}" in existing_set:
                     result["skipped"].append(code)
-                    print(f"[THS-API] 跳过 {code}（已存在）")
+                    log.info(f"[THS-API] 跳过 {code}（已存在）")
                     continue
 
             resp = self.add_stock(code, marketid)
             if resp.get("errorCode") == 0:
                 result["added"].append(code)
-                print(f"[THS-API] ✓ {code} 添加成功")
+                log.info(f"[THS-API] ✓ {code} 添加成功")
                 existing_set.add(f"{code}:{marketid or ''}")
                 existing_codes.add(code)
             else:
                 result["failed"].append({"code": code, "msg": resp.get("errorMsg", "未知错误")})
-                print(f"[THS-API] ✗ {code} 失败: {resp.get('errorMsg')}")
+                log.info(f"[THS-API] ✗ {code} 失败: {resp.get('errorMsg')}")
 
             time.sleep(delay)
 
         total = len(result["added"]) + len(result["skipped"]) + len(result["failed"])
-        print(
+        log.info(
             f"[THS-API] 批量操作完成: {total}只, "
             f"新增{len(result['added'])}只, "
             f"跳过{len(result['skipped'])}只, "
@@ -221,7 +224,7 @@ class THSCloudAPI:
 
         # 1. 获取并删除所有现有自选股
         existing = self.get_self_stocks()
-        print(f"[THS-API] 当前自选股 {len(existing)} 只，准备全量替换...")
+        log.info(f"[THS-API] 当前自选股 {len(existing)} 只，准备全量替换...")
         for item in existing:
             self.delete_stock(item["code"], item.get("marketid", "17"))
             result["deleted"] += 1
@@ -232,7 +235,7 @@ class THSCloudAPI:
         result["added"] = add_result["added"]
         result["failed"] = add_result["failed"]
 
-        print(
+        log.info(
             f"[THS-API] 全量替换完成: 删除{result['deleted']}只, "
             f"新增{len(result['added'])}只, 失败{len(result['failed'])}只"
         )
@@ -254,10 +257,10 @@ class THSCloudAPI:
             resp.raise_for_status()
             return resp.text
         except requests.exceptions.Timeout:
-            print(f"[THS-API] 请求超时: {url}")
+            log.info(f"[THS-API] 请求超时: {url}")
             return ""
         except requests.exceptions.RequestException as e:
-            print(f"[THS-API] 请求失败: {e}")
+            log.info(f"[THS-API] 请求失败: {e}")
             return ""
 
 
@@ -376,10 +379,10 @@ def save_scan_to_ths_cloud(
             # 抓包确认：00020.HK → stockcode=HK0020
             hk_num = plain.lstrip("0").zfill(4)
             hk_code = "HK" + hk_num
-            print(f"[THS-API] save_scan: {code} -> {hk_code}(港股)")
+            log.info(f"[THS-API] save_scan: {code} -> {hk_code}(港股)")
             stocks.append((hk_code, None))
         else:
-            print(f"[THS-API] save_scan: {code} -> {plain}(marketid={marketid})")
+            log.info(f"[THS-API] save_scan: {code} -> {plain}(marketid={marketid})")
             stocks.append((plain, marketid))
 
     if not stocks:
@@ -396,16 +399,16 @@ def save_scan_to_ths_cloud(
 # ============================================================
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("同花顺云端自选股同步 - 测试")
-    print("=" * 60)
+    log.info("=" * 60)
+    log.info("同花顺云端自选股同步 - 测试")
+    log.info("=" * 60)
 
     try:
         api = THSCloudAPI()
         if api.check_login():
-            print("✅ 登录状态有效")
+            log.info("✅ 登录状态有效")
             stocks = api.get_self_stocks()
-            print(f"当前自选股: {len(stocks)} 只\n")
+            log.info(f"当前自选股: {len(stocks)} 只\n")
 
             # 按 marketid 分组显示
             by_market = {}
@@ -418,16 +421,16 @@ if __name__ == "__main__":
 
             for name in sorted(by_market.keys()):
                 codes = by_market[name]
-                print(f"  [{name}] ({len(codes)}只)")
+                log.info(f"  [{name}] ({len(codes)}只)")
                 for c in codes:
-                    print(f"    {c}")
-                print()
+                    log.info(f"    {c}")
+                log.info("")
         else:
-            print("❌ 登录状态失效，请检查 Cookie")
+            log.info("❌ 登录状态失效，请检查 Cookie")
     except ValueError as e:
-        print(f"❌ {e}")
-        print("\n请按以下步骤获取 Cookie：")
-        print("  1. 浏览器打开 https://t.10jqka.com.cn 并登录")
-        print("  2. F12 → Network → 刷新页面")
-        print("  3. 点击任意请求 → Request Headers → 复制 Cookie 值")
-        print("  4. 将 Cookie 保存到 ths_captured_cookie.txt 文件中")
+        log.info(f"❌ {e}")
+        log.info("\n请按以下步骤获取 Cookie：")
+        log.info("  1. 浏览器打开 https://t.10jqka.com.cn 并登录")
+        log.info("  2. F12 → Network → 刷新页面")
+        log.info("  3. 点击任意请求 → Request Headers → 复制 Cookie 值")
+        log.info("  4. 将 Cookie 保存到 ths_captured_cookie.txt 文件中")

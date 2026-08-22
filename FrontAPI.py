@@ -74,6 +74,9 @@ from App.AppConfig import app_config
 from App import AppOrch as orch
 from App.AppOrch import AppError  # 领域异常统一在服务层定义（方案 7.7）
 
+from App.AppLog import get_logger, trace_id
+log = get_logger(__name__)
+
 # 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
 # 仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗
 from App import AppEngine as m  # noqa: F401
@@ -109,13 +112,13 @@ async def lifespan(app):
         from App.AppScanPool import shutdown as scan_pool_shutdown
         scan_pool_shutdown()
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
-        print(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
+        log.info(f"[FrontAPI] 关闭 ProcessPool 异常: {type(exc).__name__}: {exc}")
     try:
         # run_in_threadpool：close_all 等待各生成器线程完成
         # api.close()（最迟 0.1s），不能阻塞事件循环
         await run_in_threadpool(close_all)
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
-        print(f"[FrontAPI] 关闭 CTqSdkSession 异常: {type(exc).__name__}: {exc}")
+        log.info(f"[FrontAPI] 关闭 CTqSdkSession 异常: {type(exc).__name__}: {exc}")
 
 
 app = FastAPI(title="缠论分析 API", version="1.2.0", docs_url="/docs",
@@ -130,10 +133,29 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    """请求级 trace-id（P0-3）：入口生成一次，链路内任意位置经
+    current_trace_id() 关联；anyio 线程池自动传播 contextvar，线程内
+    的 orch.* 分析调用同样可见。请求起止各记一条，含耗时。"""
+    tid = trace_id()
+    t0 = time.time()
+    log.info("[%s] → %s %s", tid, request.method, request.url.path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        log.error("[%s] %s %s 异常", tid, request.method, request.url.path)
+        raise
+    log.info("[%s] ← %s %s %s 耗时=%.3fs",
+             tid, request.method, request.url.path, response.status_code,
+             time.time() - t0)
+    return response
+
+
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     """领域异常 → 统一日志 + 统一 JSON（状态码读取异常自身）"""
-    print(f"[FrontAPI] 领域异常 {exc.__class__.__name__}: {exc} ({request.url.path})", flush=True)
+    log.info(f"[FrontAPI] 领域异常 {exc.__class__.__name__}: {exc} ({request.url.path})")
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.__class__.__name__, "detail": str(exc)},
@@ -152,13 +174,22 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 @app.get("/api/health", tags=["meta"])
 async def api_health():
-    """健康检查：入口标识 + 配置摘要（凭据打码，方案 7.3）"""
+    """健康检查：入口标识 + 配置摘要（凭据打码，方案 7.3）+ 周期映射（P2-8 前端共享）"""
+    # P2-8 周期映射统一：后端单一事实源（CTqSdkAPI.FREQ_SEC_MAP 接口属性），
+    # 前端经 /api/health 拉取；六符号收敛（阶段 5 ①）禁止直连 DataAPI.TqSdkAPI。
+    _freq_sec_map = {}
+    try:
+        from DataAPI.TqSdkAPI import CTqSdkAPI
+        _freq_sec_map = dict(CTqSdkAPI.FREQ_SEC_MAP)
+    except Exception:
+        pass
     return {
         "status": "ok",
         "entry": "FrontAPI",
         "version": app.version,
         "symbol_code": m.SYMBOL_CODE,
         "config": app_config.as_dict(redact=True),
+        "freq_sec_map": _freq_sec_map,
     }
 
 
@@ -621,7 +652,7 @@ _frontend_dir = app_config.frontend_dir
 if os.path.isdir(_frontend_dir):
     app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
 else:
-    print(f"[警告] Frontend/ 目录不存在 ({_frontend_dir})，回退到 OUTPUT_DIR 静态挂载")
+    log.warning(f"[警告] Frontend/ 目录不存在 ({_frontend_dir})，回退到 OUTPUT_DIR 静态挂载")
     app.mount("/", StaticFiles(directory=m.OUTPUT_DIR, html=True), name="static")
 
 
@@ -642,22 +673,22 @@ if __name__ == "__main__":
         _probe.bind((HOST, PORT))
         _probe.close()
     except OSError:
-        print(f"[错误] 端口 {PORT} 已被占用！")
-        print(f"[错误] 可能原因：FrontAPI.py 或其他服务仍在运行。")
-        print(f"[解决] Windows 可执行: netstat -ano | findstr {PORT} 查看占用 PID，")
-        print(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
+        log.error(f"[错误] 端口 {PORT} 已被占用！")
+        log.error(f"[错误] 可能原因：FrontAPI.py 或其他服务仍在运行。")
+        log.info(f"[解决] Windows 可执行: netstat -ano | findstr {PORT} 查看占用 PID，")
+        log.info(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
         sys.exit(1)
 
     last_code, last_freq = orch.load_last_code_freq()  # 阶段 4：AppOrch 漏斗读 AppData
     if last_code:
-        print(f"[信息] 恢复上次: {last_code} (周期: {last_freq})")
+        log.info(f"[信息] 恢复上次: {last_code} (周期: {last_freq})")
     else:
-        print(f"[信息] 使用默认股票: {m.SYMBOL_CODE}")
+        log.info(f"[信息] 使用默认股票: {m.SYMBOL_CODE}")
 
-    print(f"[信息] FastAPI 服务器启动: http://{HOST}:{PORT}")
-    print(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
-    print(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
-    print(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    print(f"[信息] SSE:       /api/futures_stream（方案A 同步生成器，每连接一条常驻线程）")
+    log.info(f"[信息] FastAPI 服务器启动: http://{HOST}:{PORT}")
+    log.info(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
+    log.info(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
+    log.info(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
+    log.info(f"[信息] SSE:       /api/futures_stream（方案A 同步生成器，每连接一条常驻线程）")
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 

@@ -21,6 +21,9 @@ repo_root = os.path.dirname(script_dir)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
 from DataAPI.TdxAPI import set_tdx_config  # 数据源配置注入（板块文件原语仍在 DataAPI）
+from App.AppLog import get_logger
+log = get_logger(__name__)
+
 
 CONFIG_FILE = os.path.join(script_dir, ".sync_tdx_config")
 
@@ -88,7 +91,7 @@ def setup_tdx_config():
     vipdoc_dir = app_config.vipdoc_dir
     if vipdoc_dir and os.path.isdir(vipdoc_dir):
         set_tdx_config(vipdoc_dir=vipdoc_dir)
-        print(f"[配置] 从 AppConfig 读取: {vipdoc_dir}")
+        log.info(f"[配置] 从 AppConfig 读取: {vipdoc_dir}")
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(vipdoc_dir)
         return True
@@ -97,7 +100,7 @@ def setup_tdx_config():
     vipdoc_dir = os.environ.get("TDX_VIPDOC_DIR")
     if vipdoc_dir:
         set_tdx_config(vipdoc_dir=vipdoc_dir)
-        print(f"[配置] 从环境变量读取: {vipdoc_dir}")
+        log.info(f"[配置] 从环境变量读取: {vipdoc_dir}")
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             f.write(vipdoc_dir)
         return True
@@ -113,7 +116,7 @@ def setup_tdx_config():
         except Exception:
             pass
 
-    print("[警告] 未找到通达信 vipdoc 目录。请在仓库根 .env 设置 TDX_INSTALL_DIR，"
+    log.warning("[警告] 未找到通达信 vipdoc 目录。请在仓库根 .env 设置 TDX_INSTALL_DIR，"
           "或设置环境变量 TDX_VIPDOC_DIR / TDX_INSTALL_DIR（详见 .env.example）")
     return False
 
@@ -176,12 +179,26 @@ def _read_preserved_codes(blk_path):
 
 
 def find_tdx_zxg_path():
-    """自动查找通达信自选股文件路径"""
+    """自动查找通达信自选股文件路径
+
+    P2-8 硬编码配置化：优先读配置中心 app_config.tdx_install_dir
+    （Windows 默认 C:\\new_tdx_hd_test，可由 .env / 环境变量 TDX_INSTALL_DIR 覆盖），
+    不再把安装路径硬编码在候选列表首位；候选列表仅作兜底探测。
+    """
     candidates = []
 
-    # 常见通达信安装路径
+    # P2-8：配置中心单一事实源（Windows 默认 C:\new_tdx_hd_test）
+    try:
+        from App.AppConfig import app_config
+        cfg_root = app_config.tdx_install_dir
+        if cfg_root:
+            candidates.append(cfg_root)
+    except Exception:
+        pass
+
+    # 常见通达信安装路径（兜底探测，配置中心未命中时使用）
     tdx_roots = [
-        r"C:\new_tdx",
+        r"C:\new_tdx_hd_test",
         r"C:\tdx",
         r"D:\new_tdx",
         r"D:\tdx",
@@ -274,7 +291,7 @@ def write_tdx_zxg_direct_to_file(blk_path, codes_list):
     """
     lines = _convert_codes_to_tdx_lines(codes_list)
     if not lines:
-        print("[警告] 没有可写入的股票代码")
+        log.warning("[警告] 没有可写入的股票代码")
         return 0
 
     with open(blk_path, "w", encoding="gbk") as f:
@@ -297,7 +314,7 @@ def write_tdx_zxg_direct(zxg_dir, codes_list):
     """
     block_file = os.path.join(zxg_dir, "zxg.blk")
     if not os.path.isdir(zxg_dir):
-        print(f"[错误] 通达信自选股目录不存在: {zxg_dir}")
+        log.error(f"[错误] 通达信自选股目录不存在: {zxg_dir}")
         return 0
 
     return write_tdx_zxg_direct_to_file(block_file, codes_list)
@@ -317,28 +334,28 @@ def main():
     try:
         from App.ths_cloud_api import THSCloudAPI
     except ImportError:
-        print("[错误] 找不到 App/ths_cloud_api.py，请确保 App/ 目录完整（阶段 2 已迁入 App/）")
+        log.error("[错误] 找不到 App/ths_cloud_api.py，请确保 App/ 目录完整（阶段 2 已迁入 App/）")
         sys.exit(1)
 
     # 2. 连接同花顺
-    print("=" * 50)
-    print("  同花顺 -> 通达信 自选股同步")
-    print("=" * 50)
+    log.info("=" * 50)
+    log.info("  同花顺 -> 通达信 自选股同步")
+    log.info("=" * 50)
 
     # 初始化通达信配置（关键：必须设置 vipdoc_dir 才能写入）
     setup_tdx_config()
 
     api = THSCloudAPI(cookie_file=args.cookie_file)
     if not api.check_login():
-        print("[错误] 同花顺登录状态失效，请更新 Cookie")
+        log.error("[错误] 同花顺登录状态失效，请更新 Cookie")
         sys.exit(1)
-    print("[OK] 同花顺登录有效")
+    log.info("[OK] 同花顺登录有效")
 
     # 3. 获取同花顺自选股
     stocks = api.get_self_stocks()
 
     if not stocks:
-        print("同花顺自选股为空，无需同步")
+        log.info("同花顺自选股为空，无需同步")
         return
 
     # 检测通达信路径和写入方式（预览时就显示，方便用户确认）
@@ -356,10 +373,10 @@ def main():
     if zxg_blk_path:
         pass
     elif zxg_dir:
-        print(f"[检测] 通达信自选股目录: {zxg_dir}")
+        log.info(f"[检测] 通达信自选股目录: {zxg_dir}")
     else:
-        print(f"[检测] 未找到通达信自选股目录")
-        print(f"       如需指定路径: --tdx-path C:\\new_tdx\\T0002\\hq_block")
+        log.info(f"[检测] 未找到通达信自选股目录")
+        log.info(f"       如需指定路径: --tdx-path C:\\new_tdx_hd_test\\T0002\\hq_block")
 
     # 4. 按市场分类并转换代码格式
     # marketid -> (suffix, is_index, is_index_etf)
@@ -474,7 +491,7 @@ def main():
             parts.append(f"{mkt_name}：{stock_n}只")
         if idx_n:
             parts.append(f"{mkt_name}(指数等)：{idx_n}只")
-    print(f"[获取] 同花顺自选股: {len(stocks)} 只（{'   '.join(parts)}）")
+    log.info(f"[获取] 同花顺自选股: {len(stocks)} 只（{'   '.join(parts)}）")
 
     # 读取通达信侧保留代码（标准指数 + 88xxxx 私有指数）
     preserved = []
@@ -493,18 +510,18 @@ def main():
         unsupported_codes = [s.split("(")[0] for s in skipped]
         skip_parts.append(f"{len(unsupported_codes)}只（不支持：{', '.join(unsupported_codes)}）")
     if skip_parts:
-        print(f"[跳过] {' + '.join(skip_parts)}")
+        log.info(f"[跳过] {' + '.join(skip_parts)}")
 
     # 去重
     codes_tdx = list(dict.fromkeys(codes_tdx))
 
-    print(f"合计：可同步{len(codes_tdx)}只 到 通达信自选股{zxg_blk_path or os.path.join(zxg_dir, 'zxg.blk')}")
+    log.info(f"合计：可同步{len(codes_tdx)}只 到 通达信自选股{zxg_blk_path or os.path.join(zxg_dir, 'zxg.blk')}")
 
     if preserved:
-        print(f"[保留] 通达信保留{len(preserved)}只：标准指数 + 私有指数（88xxxx）")
+        log.info(f"[保留] 通达信保留{len(preserved)}只：标准指数 + 私有指数（88xxxx）")
 
     if args.preview:
-        print("[预览模式] 不写入文件")
+        log.info("[预览模式] 不写入文件")
         return
 
     # 5. 写入通达信（默认替换模式：清空后再写入，但保留标准指数和 88xxxx 私有指数）
@@ -521,8 +538,8 @@ def main():
             save_fn(codes_to_write)
     else:
         if not zxg_dir:
-            print("[错误] 未找到通达信自选股目录")
-            print("  请用 --tdx-path 指定")
+            log.error("[错误] 未找到通达信自选股目录")
+            log.info("  请用 --tdx-path 指定")
             sys.exit(1)
         if replace:
             block_file = os.path.join(zxg_dir, "zxg.blk")
