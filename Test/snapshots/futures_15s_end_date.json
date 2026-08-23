@@ -29629,6 +29629,11 @@
   }
  ],
  "meta": {
+  "_ema_state": {
+   "dea": -9.479468396,
+   "ema12": 3831.6173460908,
+   "ema26": 3841.3099298447
+  },
   "bi_count": 90,
   "bsp_count": 34,
   "chan_version": "chan.py",
@@ -29636,10 +29641,12 @@
   "forward_adjust": false,
   "freq": "15秒",
   "fx_count": 507,
-  "is_replay": true,
+  "is_realtime": true,
+  "is_replay": false,
   "kline_count": 2000,
   "market": "futures",
   "name": "螺纹钢主连",
+  "saved_selection_date": "",
   "seg_count": 10,
   "symbol": "KQ.m@SHFE.rb",
   "zs_count": 9
@@ -29746,10 +29753,7 @@
    "sdt": "2024/06/04 09:10:00"
   }
  ],
- "white_hline": {
-  "price": 3826.6,
-  "start_date": "2024/06/04 13:49:30"
- },
+ "white_hline": null,
  "zs": [
   {
    "confirm_edt": "2024/06/03 10:06:30",

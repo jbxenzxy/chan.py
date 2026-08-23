@@ -297,7 +297,7 @@
             return `${yy}/${mm}/${dd} ${hh}:${min}`;
         }
 
-        // 双窗口：上面周期 -> 下面周期映射
+        // 双窗口：上面周期 -> 下面周期映射（默认配对）
         function getDualSubFreq(mainFreq) {
             // 股票周期映射
             if (mainFreq === 'w') return 'd';
@@ -307,6 +307,21 @@
             if (mainFreq === '5m') return '1m';
             if (mainFreq === '1m') return '15s';
             return null; // 5m(股票)/15s(期货)无对应
+        }
+
+        // 股票双窗口配对空间（P2 配对放开：3对 → 6对，与后端 _STOCKS_DUAL_PAIRS 同口径）
+        // 上窗周期 → 可选下窗周期集合；getDualSubFreq 返回其中的默认配对
+        const STOCKS_DUAL_PAIRS_JS = {
+            'w':   ['d', '30m', '5m'],
+            'd':   ['30m', '5m'],
+            '30m': ['5m'],
+            // 5m 为股票最小周期，无下窗可选（与期货 15s 同语义）
+        };
+
+        // 校验股票双窗配对（P2：上窗须严格大于下窗且在配对空间内）
+        function isValidStockDualPair(mainFreq, subFreq) {
+            const subs = STOCKS_DUAL_PAIRS_JS[mainFreq];
+            return !!(subs && subFreq && subs.indexOf(subFreq) >= 0);
         }
 
         // 双窗口：获取上面窗口某根K线对应的灰框边界（子级别K线时间字符串）
@@ -622,9 +637,9 @@
                     showDualToast("复盘模式，不支持选点");
                     return;
                 }
-                // 双窗口模式下不支持双击选点
-                if (isDualWindow && clickedOnKline) {
-                    showDualToast("双窗口模式，不支持选点");
+                // 期货双窗口仍不支持双击选点（SSE 链路；D5=A 放开范围=股票双窗）
+                if (isDualWindow && clickedOnKline && chartData.meta.market === 'futures') {
+                    showDualToast("期货双窗口模式，不支持选点");
                     return;
                 }
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
@@ -634,9 +649,13 @@
                     const isFutures = chartData.meta.market === 'futures';
                     document.getElementById("loading").classList.remove("hidden");
                     document.querySelector(".loading-text").textContent = "正在手选进入段...";
+                    // P4（D5=A）股票双窗选点放开：上窗选点带双窗上下文，
+                    // 后端销毁双窗两键缓存并按双窗路径重建（响应含 data.sub）
+                    const dualQuery = (isDualWindow && !isFutures)
+                        ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
                     const apiPath = isFutures
                         ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx
-                : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx;
+                : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + dualQuery;
                     fetch(apiPath, { method: "POST" })
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
@@ -693,6 +712,17 @@
                             document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                             // 重置视图：选点后klines只含选点之后的K线，直接全部显示
                             adjustViewForSavedPoint();
+                            // P4 双窗：同步下窗数据与视图（重建半径扩展到下窗——
+                            // 后端已按上窗选点/下窗自身选点截断下窗K线）
+                            if (isDualWindow && data.sub) {
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
+                                }
+                                updateFreqButtonStates(false);
+                            }
                             // 更新DOM
                             document.getElementById("stock-name").textContent = chartData.meta.name;
                             document.getElementById("stock-code").textContent = chartData.meta.symbol;
@@ -2732,7 +2762,9 @@
                     return;
                 }
                 isDualWindow = true;
-                dualSubFreq = subFreq;
+                // P2 配对放开：上次下窗周期对当前上窗仍合法则保持，否则默认配对
+                dualSubFreq = (dualSubFreq && isValidStockDualPair(currentFreq, dualSubFreq))
+                    ? dualSubFreq : subFreq;
                 btn.classList.add("active");
                 // 创建双窗口布局
                 const container = document.getElementById("chart-container");
@@ -2795,6 +2827,7 @@
                     const subPixelOffset = (viewOffset - Math.floor(viewOffset)) * barStep;
                     // 检查是否落在K线上
                     let clickedOnKline = false;
+                    let clickedGlobalIdx = -1;
                     for (let i = 0; i < klines.length; i++) {
                         const k = klines[i];
                         const x = area.x + barStep * i + barStep / 2 - subPixelOffset;
@@ -2804,6 +2837,7 @@
                         if (clickX >= x - halfW && clickX <= x + halfW &&
                             clickY >= highY && clickY <= lowY) {
                             clickedOnKline = true;
+                            clickedGlobalIdx = Math.max(0, Math.floor(dualSubViewOffset)) + i;
                             break;
                         }
                     }
@@ -2811,8 +2845,81 @@
                     canvas = _savedCanvas; ctx = _savedCtx;
                     viewOffset = _savedViewOffset; viewCount = _savedViewCount;
                     chartData = _savedChartData; currentFreq = _savedFreq;
-                    // 双击K线上无效，双击空白处
-                    if (clickedOnKline) return;
+                    // P4（D5=A）下窗双击选点：双击分型K线 → 下窗手选进入段
+                    // （股票双窗放开；期货双窗走 SSE 链路不在此列）
+                    if (clickedOnKline) {
+                        if (_savedChartData && _savedChartData.meta && _savedChartData.meta.is_replay) {
+                            showDualToast("复盘模式，不支持选点");
+                            return;
+                        }
+                        if (_savedChartData && _savedChartData.meta && _savedChartData.meta.market === 'futures') {
+                            showDualToast("期货双窗口模式，不支持选点");
+                            return;
+                        }
+                        const subKline = dualSubData.klines[clickedGlobalIdx];
+                        let subBiIdx = -1;
+                        if (subKline) {
+                            const dateStr = subKline.date;
+                            for (let j = 0; j < dualSubData.bis.length - 1; j++) {
+                                if (dualSubData.bis[j].edt === dateStr && dualSubData.bis[j + 1].sdt === dateStr) {
+                                    subBiIdx = j + 1;
+                                    break;
+                                }
+                            }
+                        }
+                        if (subBiIdx >= 0) {
+                            const code = _savedChartData.meta.symbol;
+                            document.getElementById("loading").classList.remove("hidden");
+                            document.querySelector(".loading-text").textContent = "正在手选进入段(下窗)...";
+                            // freq=下窗周期（选点所在窗口），main_freq=上窗周期（重建用）
+                            const apiPath = "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + dualSubFreq
+                                + "&bi_idx=" + subBiIdx + "&dual=1&main_freq=" + _savedFreq + "&sub_freq=" + dualSubFreq;
+                            fetch(apiPath, { method: "POST" })
+                                .then(resp => {
+                                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
+                                    return resp.json();
+                                })
+                                .then(data => {
+                                    if (data.error) throw new Error(data.error);
+                                    if (!data.sub) throw new Error("服务端未返回子级别数据");
+                                    chartData = data;
+                                    dualSubData = data.sub;
+                                    // 上窗周期防御性同步（正常不变；漂移按响应修正）
+                                    const freqMap = {'5分钟':'5m','30分钟':'30m','周线':'w','日线':'d'};
+                                    const mapped = freqMap[data.meta.freq];
+                                    if (mapped && mapped !== currentFreq) currentFreq = mapped;
+                                    updateDateInputType();
+                                    updateFreqButtonStates(false);
+                                    adjustViewForSavedPoint();
+                                    dualSubViewCount = 377;
+                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                    if (dualSubData.klines.length < dualSubViewCount) {
+                                        dualSubViewOffset = 0;
+                                    }
+                                    document.getElementById("stock-name").textContent = data.meta.name;
+                                    document.getElementById("stock-code").textContent = data.meta.symbol;
+                                    document.title = "缠论分析 - " + data.meta.name;
+                                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                                    document.getElementById("goto-date-input").value = lastDate;
+                                    updateWeekday();
+                                    document.getElementById("loading").classList.add("hidden");
+                                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                                    updateRestartBtn();
+                                    updateDualBtn();
+                                    resizeCanvas();
+                                    render();
+                                    generateStats();
+                                    loadAnnotations();
+                                })
+                                .catch(err => {
+                                    document.getElementById("loading").classList.add("hidden");
+                                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                                    setTimeout(() => { alert(err.message); }, 50);
+                                });
+                        }
+                        // 双击K线：命中分型已发起选点，未命中分型同样无效
+                        return;
+                    }
                     // 状态A：让下面窗口平移到对应区间
                     if (dualOffscreenState && dualHighlightRange && dualSubData) {
                         const hr = dualHighlightRange;
@@ -2860,8 +2967,10 @@
                     // 期货双窗口：使用 connectRealtimeDual，自带完整的 init/update/error 处理与自动跟随逻辑
                     connectRealtimeDual(code, currentFreq, subFreq);
                 } else {
-                    // 股票双窗口：HTTP 请求
-                    fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + currentFreq + "&dual=1")
+                    // 股票双窗口：HTTP 请求（P2：显式透传下窗周期 dualSubFreq，
+                    // 保持开启时校验过的配对，不依赖后端缺省映射）
+                    fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + currentFreq
+                        + "&dual=1&sub_freq=" + dualSubFreq)
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                             return resp.json();
@@ -3123,8 +3232,8 @@
             fetch("/api/stocks/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                 .then(resp => resp.json())
                 .then(() => {
-                    // Step 2: 冷启动重新加载
-                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : ""));
+                    // Step 2: 冷启动重新加载（P2：股票双窗也显式透传 sub_freq）
+                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
@@ -3317,12 +3426,22 @@
             document.getElementById('btn-15s').disabled = !isFutures;
             // 共享周期：30m 始终启用
             document.getElementById('btn-30m').disabled = false;
-            // 5m: 股票双窗口→禁用(无下级)，期货双窗口→全部启用（上下窗解耦）
+            // 5m: 期货双窗口→全部启用（上下窗解耦）；股票双窗口→按焦点窗口（P2 配对放开）
             if (isDualWindow && isFutures) {
                 document.getElementById('btn-5m').disabled = false;
                 // 期货双窗口：上下窗独立切换，15s不再禁用
             } else if (isDualWindow && !isFutures) {
-                document.getElementById('btn-5m').disabled = true;
+                if (activeDualWindow === 'sub') {
+                    // 股票下窗焦点：仅启用当前上窗配对空间内的周期（w 不可作下窗）
+                    const subs = STOCKS_DUAL_PAIRS_JS[currentFreq] || [];
+                    document.getElementById('btn-w').disabled = true;
+                    document.getElementById('btn-d').disabled = subs.indexOf('d') < 0;
+                    document.getElementById('btn-30m').disabled = subs.indexOf('30m') < 0;
+                    document.getElementById('btn-5m').disabled = subs.indexOf('5m') < 0;
+                } else {
+                    // 股票上窗焦点：5m 为最小周期无下窗，禁用
+                    document.getElementById('btn-5m').disabled = true;
+                }
             } else {
                 document.getElementById('btn-5m').disabled = false;
             }
@@ -3361,12 +3480,76 @@
                 }
                 return;
             }
+            // 股票双窗口下窗焦点：独立切换下窗周期（P2 配对放开），不联动上窗
+            // （与期货同交互；重走 analyze 双窗接口，响应 data.sub 即新下窗数据）
+            if (isDualWindow && activeDualWindow === 'sub' && !isFutures) {
+                if (dualSubFreq === freq) return;
+                // 校验：新下窗周期须在当前上窗的配对空间内（P2：3对 → 6对）
+                if (!isValidStockDualPair(currentFreq, freq)) {
+                    const subs = (STOCKS_DUAL_PAIRS_JS[currentFreq] || []).map(freqLabel).join("、");
+                    alert("下窗周期配对无效: " + freqLabel(currentFreq) + "+" + freqLabel(freq)
+                        + (subs ? "（" + freqLabel(currentFreq) + " 可选 " + subs + "）" : "（当前上窗无下窗可选）"));
+                    return;
+                }
+                // 切换周期时取消区间选择
+                if (_rangeSelect.mode === 'SELECTED_A') {
+                    _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
+                }
+                dualSubFreq = freq;
+                updateDateInputType();
+                updateDualBtn();
+                updateFreqButtonStates(isFutures);
+                const code2 = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
+                if (code2) {
+                    document.getElementById("loading").classList.remove("hidden");
+                    fetch("/api/stocks/" + encodeURIComponent(code2) + "/analyze?freq=" + currentFreq
+                        + "&dual=1&sub_freq=" + dualSubFreq)
+                        .then(resp => {
+                            if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
+                            return resp.json();
+                        })
+                        .then(data => {
+                            chartData = data;
+                            updateRestartBtn();
+                            updateDualBtn();
+                            if (data.sub) {
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
+                                }
+                            }
+                            document.getElementById("loading").classList.add("hidden");
+                            render();
+                            generateStats();
+                            loadAnnotations();
+                            saveLastState();
+                        })
+                        .catch(err => {
+                            alert("切换下窗周期失败: " + err.message);
+                            document.getElementById("loading").classList.add("hidden");
+                        });
+                }
+                return;
+            }
             if (currentFreq === freq) return;
             // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
             if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
                 alert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
                     + "，无法切换到" + freqLabel(freq));
                 return;
+            }
+            // 股票双窗口（P2 配对放开）：新上窗周期无任何下窗可选 → 拒绝切换
+            // （5m 为股票最小周期）；当前下窗仍为合法配对则保持，否则回退默认配对
+            if (isDualWindow && !isFutures) {
+                if (!STOCKS_DUAL_PAIRS_JS[freq]) {
+                    alert("上窗周期必须大于下窗周期，" + freqLabel(freq) + "为股票最小周期，双窗口下不可选");
+                    return;
+                }
+                if (!isValidStockDualPair(freq, dualSubFreq)) {
+                    dualSubFreq = getDualSubFreq(freq);
+                }
             }
             // 切换周期时取消区间选择
             if (_rangeSelect.mode === 'SELECTED_A') {
@@ -3402,7 +3585,9 @@
                     }
                     return;
                 }
-                fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : ""))
+                fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
+                    + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                    + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""))
                     .then(resp => {
                         if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                         return resp.json();
@@ -3426,19 +3611,18 @@
                         updateWeekday();
                         // 双窗口模式：从 data.sub 获取子级别数据（方案B）
                         if (isDualWindow) {
-                            const newSubFreq = getDualSubFreq(freq);
-                            if (newSubFreq) {
-                                dualSubFreq = newSubFreq;
-                                if (data.sub) {
-                                    dualSubData = data.sub;
-                                    dualSubViewCount = 377;
-                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                    if (dualSubData.klines.length < dualSubViewCount) {
-                                        dualSubViewOffset = 0;
-                                    }
+                            // P2：下窗周期已在切换前校验/回退（保持合法配对不变），
+                            // 此处不再重置为默认配对；响应 data.sub 即该配对的下窗数据
+                            if (data.sub) {
+                                dualSubData = data.sub;
+                                dualSubViewCount = 377;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
                                 }
                             } else {
-                                // 新周期是5m，双窗口已关闭
+                                // 响应缺 sub（异常态）：保持旧下窗数据，仅提示
+                                console.warn("[switchFreq] 双窗口响应缺少 data.sub");
                             }
                         }
                         document.getElementById("loading").classList.add("hidden");
@@ -3529,7 +3713,8 @@
             const needEndDate = (!isToday || keyEnter);
             const url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
+                + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -4006,11 +4191,31 @@
             updateDateInputType();
             if (isFuturesCode) {
                 updateFreqButtonStates(true); // 期货：禁用 d/w，启用 1m/15s
-                connectRealtimeInit(code, fetchFreq);
+                if (isDualWindow) {
+                    // 双窗口换期货合约：走双窗 SSE，两窗同步重连
+                    // （wasFutures→isFuturesCode 路径保持周期不变，dualSubFreq 仍然有效；
+                    //   空/失效时按映射回退，期货周期全为日内，getDualSubFreq 必有解或回退 1m）
+                    const subFreq = dualSubFreq || getDualSubFreq(fetchFreq) || '1m';
+                    connectRealtimeDual(code, fetchFreq, subFreq);
+                } else {
+                    connectRealtimeInit(code, fetchFreq);
+                }
                 return;
             }
             updateFreqButtonStates(false); // 股票：禁用 1m/15s，启用 d/w
-            fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + fetchFreq + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : ""))
+            // P2：双窗换标的保持当前下窗配对（对新周期仍合法则不变，否则回退默认）
+            let reqSubFreq = '';
+            if (isDualWindow) {
+                if (dualSubFreq && isValidStockDualPair(fetchFreq, dualSubFreq)) {
+                    reqSubFreq = dualSubFreq;
+                } else {
+                    reqSubFreq = getDualSubFreq(fetchFreq) || '';
+                    dualSubFreq = reqSubFreq;
+                }
+            }
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + fetchFreq
+                + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : "")
+                + (isDualWindow && reqSubFreq ? "&sub_freq=" + reqSubFreq : ""))
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                     return resp.json();
@@ -4066,16 +4271,14 @@
                     resizeCanvas();
                     // 双窗口模式下同时加载下面窗口数据
                     if (isDualWindow) {
-                        const subFreq = getDualSubFreq(currentFreq);
-                        if (subFreq) {
-                            dualSubFreq = subFreq;
-                            if (data.sub) {
-                                dualSubData = data.sub;
-                                dualSubViewCount = 377;
-                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                if (dualSubData.klines.length < dualSubViewCount) {
-                                    dualSubViewOffset = 0;
-                                }
+                        // P2：dualSubFreq 已在请求前按新周期校验/回退，
+                        // 响应 data.sub 即该配对的下窗数据，不再重置为默认配对
+                        if (data.sub) {
+                            dualSubData = data.sub;
+                            dualSubViewCount = 377;
+                            dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                            if (dualSubData.klines.length < dualSubViewCount) {
+                                dualSubViewOffset = 0;
                             }
                         }
                     }

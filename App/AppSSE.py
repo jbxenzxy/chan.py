@@ -10,8 +10,8 @@ App/AppSSE.py —— SSE 实时流功能域
 本模块收纳（文件内按 5 区域划分，见各区域分隔头）：
   - 区域 1 · SSE 实时流（init_chan_symbol / _drain_chan / _get_saved_point /
     _sse_frame / sse_futures_stream_single/dual，供 FrontAPI.CSSESource 调用）
-  - 区域 2 · 期货分析（_build_futures_chan / _analyze_futures_internal /
-    _extract_chan_structure / _extract_realtime_snapshot /
+  - 区域 2 · 期货分析（_build_futures_chan / _extract_chan_structure /
+    _extract_realtime_snapshot /
     _calc_futures_white_hline / _apply_macd_full / _apply_macd_incremental /
     _incremental_klines 实时快照提取）
   - 区域 3 · 期货选点（futures_manual_select_point，临时 TqApi 拉全量 →
@@ -36,7 +36,7 @@ App/AppSSE.py —— SSE 实时流功能域
 import json
 import time
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # 引擎侧依赖（仅引擎私有实现：天勤数据源 / 期货名称）
 from App.AppEngine import (
@@ -47,7 +47,7 @@ from App.AppErrors import AppError, DataFetchError, AnalysisError, ConfigError
 # 引擎纯函数/常量公共工具（P0-1c：与 AppEngine 统一从 App/utils 导入）
 from App.utils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
-    ema, calculate_macd,
+    ema,
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
     _FUTURES_DUAL_FREQ_MAP, _SSE_DEBUG, _inherit_macd_for_preview_bar,
 )
@@ -55,7 +55,8 @@ from App.utils import (
 from App.AppData import app_data
 # 区间套辅助（红框/双窗口共用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList
-# chan.py 核心（与 AppEngine 同源；_analyze_futures_internal 直接使用）
+# chan.py 核心（与 AppEngine 同源；原 REST 静态路径 _analyze_futures_internal
+# 已按 D7 决策删除——生产期货链路统一走 SSE init_chan_symbol）
 from Chan import CChan
 from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
 # SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
@@ -149,7 +150,7 @@ def _sse_frame(event, payload) -> bytes:
 def _truncate_records_by_end(records, end_time, freq_sec, step=None, fmt_list=None):
     """按复盘终点截断 K 线序列（A 方案 · 复盘软断开的数据边界）。
 
-    语义与 _analyze_futures_internal 的 end_date 截断一致：找到 <= end_time
+    语义：找到 <= end_time
     的最后一个锚点切出前缀；支持箭头步进 step 做偏移。返回截断后的 records；
     不足 5 根返回空列表（由调用方判定）。
     """
@@ -1058,271 +1059,6 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
     return chan, kl_type
 
 
-def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existing_chan=None, existing_records=None, step=None, sub_freq=None):
-    """
-    使用天勤数据源 + chan.py 进行期货/期指缠论分析（HTTP 请求模式）
-    与股票分析输出格式一致，便于前端复用同一套图表渲染逻辑。
-
-    dual=True: 双窗口模式，返回 result 含 sub 字段（两个独立 CChan 对象）。
-    existing_chan: 双窗口模式下，复用已有的单窗口 CChan 对象（匹配周期则复用）。
-    existing_records: 对应 existing_chan 的 records。
-    step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期。
-    sub_freq: 双窗口下窗周期。None 时使用默认映射 _FUTURES_DUAL_FREQ_MAP。
-    """
-    import time
-    t_start = time.time()
-
-    if not TQ_AVAILABLE or CTqSdkAPI is None:
-        raise DataFetchError("天勤数据源未安装，请执行: pip install tqsdk")
-
-    # 确定周期秒数
-    freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 86400)
-
-    # 1. 拉取历史K线（每次冷启动重新拉取天勤数据）
-    t_fetch = time.time()
-    _display_key = f"{code}:{CTqSdkAPI.FREQ_LABEL_CN.get(freq, freq)}"
-    _src = None
-    full_records = []
-    try:
-        _src = CTqSdkSession()
-        _src.connect()
-        full_records = _src.fetch_kline(code, freq_sec=freq_sec, display_key=_display_key)
-    except Exception as _e:
-        log.error(f"[期货][错误] 天勤拉取K线失败: {type(_e).__name__}: {_e}")
-        raise DataFetchError(f"天勤拉取K线失败: {type(_e).__name__}: {_e}") from _e
-    finally:
-        if _src is not None:
-            try:
-                _src.close()
-                _src.close_api()
-            except Exception as _e:
-                log.warning(f"[警告] 关闭天勤连接异常: {type(_e).__name__}: {_e}")
-    log.info(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
-    if len(full_records) < 5:
-        raise DataFetchError(f"K线数据不足: 仅{len(full_records)}条")
-
-    # 2. 截断（end_date 复盘模式）
-    if end_date:
-        target_dt = None
-        for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
-            try:
-                target_dt = datetime.strptime(end_date, fmt)
-                break
-            except ValueError:
-                continue
-        if target_dt is None:
-            raise ConfigError(f"无法解析日期: {end_date}")
-        # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===
-        if step is not None:
-            step = int(step)
-            if step != 0:
-                anchor_idx = None
-                for i in range(len(full_records) - 1, -1, -1):
-                    if full_records[i]["dt"] <= target_dt:
-                        anchor_idx = i
-                        break
-                if anchor_idx is not None:
-                    new_idx = anchor_idx + step
-                    if 0 <= new_idx < len(full_records):
-                        target_dt = full_records[new_idx]["dt"]
-                        end_date = target_dt.strftime("%Y-%m-%d %H:%M:%S")
-                        log.info(f"[futures][箭头] step={step}: {full_records[anchor_idx]['dt']} → {target_dt} (idx {anchor_idx} → {new_idx})")
-                    else:
-                        log.info(f"[futures][箭头] step={step} 越界: idx {anchor_idx} → {new_idx}, 共{len(full_records)}条")
-
-        records = [r for r in full_records if r["dt"] <= target_dt]
-        if len(records) < 5:
-            raise DataFetchError(f"截断后K线数据不足: 仅{len(records)}条")
-    else:
-        records = full_records
-
-    # 3+5. 注入数据源 + 创建 CChan 并消费（P0-1 统一 _build_futures_chan）
-    t0 = time.time()
-
-    # 获取品种名称（结果提取使用）
-    stock_name = _get_futures_name(code)
-
-    # 每次请求重置复盘标记，避免残留前一次状态
-    CMyBSPointList.REPLAY_MODE = False
-
-    try:
-        if end_date:
-            CMyBSPointList.REPLAY_MODE = True
-        # P1-1 数据源抽象单轨化：数据注入经 _src.set_data（Session 协议），不落类级缓存
-        chan, kl_type = _build_futures_chan(records, symbol=code, freq_sec=freq_sec, code=code, src=_src)
-    except Exception as e:
-        import traceback
-        tb = traceback.format_exc()
-        records_info = ""
-        if records:
-            records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
-        log.error(f"[期货][错误] chan.py 分析失败: code={code} freq={freq}{records_info} 耗时={time.time()-t0:.3f}s")
-        log.error(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
-        log.error(f"[期货][错误] 完整堆栈:\n{tb}")
-        raise AnalysisError(f"chan.py 期货分析失败: {type(e).__name__}: {e}") from e
-    finally:
-        if end_date:
-            CMyBSPointList.REPLAY_MODE = False
-
-    kl_list = chan[kl_type]
-    log.info(f"[分析] ⑶ chan.py分析: {time.time()-t0:.3f}s, 合并K线={len(kl_list.lst)}, 笔={len(kl_list.bi_list)}, 中枢={len(kl_list.zs_list)}")
-
-    # 6. 提取结果（与股票一致的格式，用 records 而非 kl_list）
-
-    t_extract = time.time()
-    closes = [r["close"] for r in records]
-    macd_list = calculate_macd(closes)
-    date_fmt = _get_date_fmt(freq)
-
-    # K线数据（从 records 构建，与股票代码一致）
-    kline_data = []
-    for i, row in enumerate(records):
-        macd = macd_list[i] if i < len(macd_list) else {"dif": 0, "dea": 0, "macd": 0}
-        kline_data.append({
-            "date": row["dt"].strftime(date_fmt),
-            "timestamp": int(row["dt"].timestamp()) * 1000,
-            "open": row["open"], "high": row["high"],
-            "low": row["low"], "close": row["close"],
-            "vol": row["vol"], "amount": row["amount"],
-            "dif": round(macd["dif"], 4),
-            "dea": round(macd["dea"], 4),
-            "macd": round(macd["macd"], 4),
-        })
-
-    # 笔、线段、中枢、买卖点提取（P2-7 统一 _extract_chan_structure，与 SSE 共用）
-    bi_data, fx_data, seg_data, zs_data, zs_stars, bsp_data = _extract_chan_structure(kl_list, chan, date_fmt)
-
-    # 计算白色横虚线（最新笔分型上下沿，K线确认后才有意义）
-    white_hline = _calc_futures_white_hline(kl_list, freq, date_fmt)
-
-    # 7. 组装结果
-    log.info(f"[分析] ⑷ 提取结果(K线/笔/分型/线段/中枢/买卖点): {time.time()-t_extract:.3f}s")
-    date_range = f"{kline_data[0]['date']} ~ {kline_data[-1]['date']}" if kline_data else ""
-    result = {
-        "meta": {
-            "symbol": code,
-            "name": stock_name,
-            "freq": _get_freq_label(freq),
-            "chan_version": "chan.py",
-            "kline_count": len(kline_data),
-            "bi_count": len(bi_data),
-            "fx_count": len(fx_data),
-            "zs_count": len(zs_data),
-            "seg_count": len(seg_data),
-            "bsp_count": len(bsp_data),
-            "date_range": date_range,
-            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "is_replay": bool(end_date),
-            "forward_adjust": False,
-            "market": "futures",
-        },
-        "klines": kline_data,
-        "bis": bi_data,
-        "fxs": fx_data,
-        "zs": zs_data,
-        "zs_stars": zs_stars,
-        "segs": seg_data,
-        "bsps": bsp_data,
-        "white_hline": white_hline,
-    }
-
-    log.info(f"[信息] 期货查询 {code} 完成({_get_freq_label(freq)}): {len(kline_data)}K线, {len(bi_data)}笔, {len(fx_data)}分型, {len(zs_data)}中枢, {len(seg_data)}线段, {len(bsp_data)}买卖点")
-    log.info(f"[耗时] 总耗时: {time.time()-t_start:.3f}s")
-
-    # 双窗口模式：提取子级别数据（独立 CChan 对象）
-    if dual:
-        # 优先使用传入的 sub_freq（双窗口周期独立），否则用默认映射
-        if not sub_freq:
-            sub_freq = _FUTURES_DUAL_FREQ_MAP.get(freq)
-        if not sub_freq:
-            raise ConfigError(f"双窗口不支持当前周期: {freq}")
-        sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(sub_freq, 15)
-        log.info(f"[双窗口] 开始提取子级别({sub_freq})数据...")
-
-        # 检查 existing_chan 是否匹配 sub_freq，匹配则复用
-        if existing_chan is not None and existing_records is not None and freq == sub_freq:
-            # existing_chan 匹配的是主周期，子周期需要新建
-            pass
-        elif existing_chan is not None and existing_records is not None and freq != sub_freq:
-            # 如果 existing_chan 正好匹配 sub_freq，复用它
-            # 这个情况发生在上窗周期!=单窗口周期时（暂不涉及，保留接口）
-            pass
-
-        # 拉取子级别历史K线（与主级别一致：经 CTqSdkSession 数据源抽象建连，
-        # tqsdk 仅 DataAPI 可见；修复 V10 复审 P0-1：原直接构造 TqApi 的
-        # 悬空引用 NameError）
-        t_sub_fetch = time.time()
-        _sub_display_key = f"{code}:{CTqSdkAPI.FREQ_LABEL_CN.get(sub_freq, sub_freq)}"
-        _src_sub = None
-        sub_full_records = []
-        try:
-            _src_sub = CTqSdkSession()
-            _src_sub.connect()
-            sub_full_records = _src_sub.fetch_kline(code, freq_sec=sub_freq_sec, display_key=_sub_display_key)
-        except Exception as _e:
-            log.error(f"[双窗口][错误] 子级别天勤拉取K线失败: {type(_e).__name__}: {_e}")
-            return result
-        finally:
-            if _src_sub is not None:
-                try:
-                    _src_sub.close()
-                    _src_sub.close_api()
-                except Exception as _e:
-                    log.warning(f"[警告] 关闭天勤子级别连接异常: {type(_e).__name__}: {_e}")
-        log.info(f"[双窗口] 子级别({sub_freq})拉取K线: {time.time()-t_sub_fetch:.3f}s, {len(sub_full_records)}条")
-
-        if len(sub_full_records) < 5:
-            log.info(f"[双窗口] 子级别({sub_freq})数据不足，仅{len(sub_full_records)}条，跳过")
-            return result
-
-        # 截断到主级别时间范围（同步）
-        # 期货K线时间=开始时间（不同于股票=结束时间），用数学换算精确截断：
-        #   下窗右边界 = 上窗最后一根K线开始时间 + (上窗周期 - 下窗周期)
-        if len(sub_full_records) > 0 and records:
-            main_start = records[0]["dt"]
-            main_end = records[-1]["dt"]
-            offset_sec = freq_sec - sub_freq_sec
-            sub_end = main_end + timedelta(seconds=offset_sec)
-            sub_before = len(sub_full_records)
-            sub_full_records = [r for r in sub_full_records
-                                if main_start <= r["dt"] <= sub_end]
-            if sub_before != len(sub_full_records):
-                log.info(f"[双窗口] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_full_records)}条")
-
-        sub_records = sub_full_records
-
-        # 注入子级别数据源 + 创建子级别 CChan（P0-1 统一 _build_futures_chan）
-        # P1-1 数据源抽象单轨化：数据注入经 _src_sub.set_data（Session 协议），不落类级缓存
-        sub_code = f"{code}:{sub_freq_sec}"
-        t_sub_chan = time.time()
-        try:
-            sub_chan, sub_kl_type = _build_futures_chan(sub_records, symbol=code, freq_sec=sub_freq_sec, code=sub_code, src=_src_sub)
-        except Exception as e:
-            log.info(f"[双窗口] 子级别({sub_freq}) chan.py 分析失败: {e}")
-            return result
-
-        # P1-2：期货子窗缓存写入统一经语义化公共 API（key 规则内聚数据层）
-        app_data.set_futures_sub_chan(code, sub_freq, sub_chan)
-        sub_kl_list = sub_chan[sub_kl_type]
-        log.info(f"[双窗口] 子级别({sub_freq}) chan.py分析: {time.time()-t_sub_chan:.3f}s, "
-              f"合并K线={len(sub_kl_list.lst)}, 笔={len(sub_kl_list.bi_list)}, 中枢={len(sub_kl_list.zs_list)}")
-
-        # 提取子级别结果
-        sub_name = _get_futures_name(code)
-        sub_result = _extract_realtime_snapshot(
-            sub_chan, sub_kl_type, code, sub_name,
-            sub_freq, klines=None
-        )
-        result["sub"] = sub_result
-        # 将 fx_a_raw_dt/fx_b_raw_dt（天勤K线开始时间）换算为子级别时间
-        main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 60)
-        _futures_red_range(result, main_freq_sec, sub_freq_sec, sub_freq)
-        log.info(f"[双窗口] 子级别({sub_freq})提取完成: K线={sub_result['meta']['kline_count']}, "
-              f"笔={sub_result['meta']['bi_count']}, 中枢={sub_result['meta']['zs_count']}")
-
-    return result
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # 期货手动选点
 # ═══════════════════════════════════════════════════════════════════════
@@ -1332,7 +1068,7 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
     """统一缠论结构元素提取（P2-7）：bis / fxs / segs / zs / zs_stars / bsps。
 
     SSE 实时快照（_extract_realtime_snapshot）与期货分析
-    （_analyze_futures_internal）共用同一提取逻辑，消除两份几乎相同的
+    （原 REST 静态路径）共用同一提取逻辑，消除两份几乎相同的
     内联实现（约 200 行重复），避免字段漂移。肩部原始K线时间统一走
     _main_bi_range（与股票路径同源）。
 

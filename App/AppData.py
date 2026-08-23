@@ -133,6 +133,8 @@ def _read_zxg_blk_file(blk_path):
 # ════════════════════════════════════════════════════════════════
 # 股票分析缓存（_stocks_analysis_cache）改用结构化元组键：
 #   (kind, market, code, freq, date)
+# 双窗口键（dual_main/dual_sub）追加第 6 维 impl（independent/legacy，
+# 见 _dual_impl_tag），隔离 A/B 两种实现的缓存，防切换开关后串用。
 # 天然 hashable、可比较、无分隔符歧义（代码/周期/日期含 "_" / ":" 也不会碰撞）。
 # 期货子窗缓存（_futures_analysis_cache）保留字符串键，但统一经
 # make_futures_sub_key 规范化（symbol 大写入键），消除 AppSSE/AppChart/
@@ -144,19 +146,34 @@ def make_analysis_key(kind, market, code, freq, date):
     return (kind, str(market), str(code), str(freq), str(date))
 
 
+def _dual_impl_tag():
+    """股票双窗 A/B 实现标签（dual 缓存 key 的第 6 维）。
+
+    独立(independent)与联立(legacy)两种实现的红框边界语义不同
+    （独立=数学换算，联立=KLU.sub_kl_list 真实边界），dual 缓存若
+    不区分实现，切换 A/B 开关后会串用另一实现的缓存结果（快照全量
+    连跑已复现：legacy 先写缓存，independent 复跑直接命中返回联立
+    输出）。语义事实源为 AppEngine._stock_dual_impl（读
+    CHAN_STOCK_DUAL_IMPL，非法值回退 independent）；此处仅重复读同
+    一环境变量做 key 归一，不 import 引擎，避免循环依赖。
+    """
+    impl = os.environ.get("CHAN_STOCK_DUAL_IMPL", "independent").strip().lower()
+    return impl if impl in ("independent", "legacy") else "independent"
+
+
 def make_single_key(market, code, freq, date):
     """单窗口分析缓存键（date: 复盘日期 或 "live"）"""
     return make_analysis_key("single", market, code, freq, date)
 
 
 def make_dual_main_key(market, code, freq, date):
-    """双窗口主级别缓存键"""
-    return make_analysis_key("dual_main", market, code, freq, date)
+    """双窗口主级别缓存键（追加 A/B 实现维度，independent/legacy 隔离）"""
+    return make_analysis_key("dual_main", market, code, freq, date) + (_dual_impl_tag(),)
 
 
 def make_dual_sub_key(market, code, freq, date):
-    """双窗口子级别缓存键"""
-    return make_analysis_key("dual_sub", market, code, freq, date)
+    """双窗口子级别缓存键（追加 A/B 实现维度，independent/legacy 隔离）"""
+    return make_analysis_key("dual_sub", market, code, freq, date) + (_dual_impl_tag(),)
 
 
 def make_live_key(market, code, freq):
@@ -179,6 +196,8 @@ class AppData:
         self._cache_lock = threading.RLock()
         self._stocks_analysis_cache = collections.OrderedDict()
         self._futures_analysis_cache = {}
+        # 股票双窗独立化：下窗 CChan 运行时缓存（P1；键见 stocks_sub_cache_key）
+        self._stocks_sub_chan_cache = {}
 
         # ── 名称 / PE / 归属 / 流通市值（惰性加载标志 + 字典）──
         self._names = {}
@@ -372,6 +391,31 @@ class AppData:
     def pop_futures_sub_chan(self, symbol, sub_freq):
         """弹出并删除期货子窗口 CChan（SSE 连接关闭 / 子级别切换时释放）"""
         return self.futures_cache_pop(make_futures_sub_key(symbol, sub_freq), None)
+
+    # ── 股票双窗独立化（P1，D1=A 改造）────────────────────────
+    #    仿期货子窗缓存建「股票下窗 CChan 运行时缓存」：
+    #      · 写入方：_analyze_stock_internal 独立双窗路径（先建下窗再建上窗，
+    #        保证上窗 bsp 计算的区间套 check_nested_diver 能整读到完整下窗）；
+    #      · 读取方：check_nested_diver（区间套）与 compute_red_range_zs
+    #        （红框中枢，P3 起改读独立下窗；miss 抛错，D6=B 对齐期货语义）。
+    #    键不带复盘日期后缀（运行时态，随每次双窗重建覆盖），
+    #    与 dual_sub 结构化缓存（带 date_suffix，存 result/records）职责分离。
+    def stocks_sub_cache_key(self, chan_code, sub_freq):
+        """股票下窗运行时缓存键："{market}.{code}:{sub_freq}"（统一大写）"""
+        return f"{str(chan_code).upper()}:{sub_freq}"
+
+    def stocks_sub_cache_get(self, chan_code, sub_freq):
+        """读取股票下窗 CChan（无则返回 None；chan_code 大小写不敏感）"""
+        return self._stocks_sub_chan_cache.get(self.stocks_sub_cache_key(chan_code, sub_freq))
+
+    def stocks_sub_cache_put(self, chan_code, sub_freq, chan):
+        """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态）"""
+        self._stocks_sub_chan_cache[self.stocks_sub_cache_key(chan_code, sub_freq)] = chan
+
+    def stocks_sub_cache_pop(self, chan_code, sub_freq):
+        """弹出并删除股票下窗 CChan（切换标的/下窗周期时释放旧中间状态）"""
+        return self._stocks_sub_chan_cache.pop(self.stocks_sub_cache_key(chan_code, sub_freq), None)
+
 
     # ════════════════════════════════════════════════════════════════
     # 股票名称缓存

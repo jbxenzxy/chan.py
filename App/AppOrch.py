@@ -107,9 +107,11 @@ from App.AppRefresh import (
 LOCK_POLICY = {
     "call_analysis":                ("SERIAL", "REST 单标的分析：共享分析缓存 → _ENGINE_LOCK"),
     "run_analysis":                 ("SERIAL", "call_analysis 异步版：线程池执行 + _ENGINE_LOCK，不阻塞事件循环"),
-    "call_manual_select_point":     ("SERIAL", "股票手动选点：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK"),
+    "call_manual_select_point":     ("SERIAL", "股票手动选点：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
+                                      "P4 双窗选点（D5=A）含 dual_main/dual_sub/下窗运行时缓存读写，同锁覆盖"),
     "call_futures_manual_select_point": ("SERIAL", "期货手动选点：内部走期货分析链路（含期货缓存）→ _ENGINE_LOCK"),
-    "call_compute_red_range_zs":    ("SERIAL", "红框中枢计算：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK"),
+    "call_compute_red_range_zs":    ("SERIAL", "红框中枢计算：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
+                                      "P3 独立双窗分支读下窗运行时缓存/dual_sub 缓存，miss 抛 DataFetchError（D6=B）"),
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
                                       "串行调用方必须改走 call_analysis / run_analysis"),
     "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：同 analyze_stock，阶段 5 拆分时收敛"),

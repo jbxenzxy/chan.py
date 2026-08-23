@@ -155,27 +155,37 @@ def test_engine_boundaries(failures):
 
 
 def test_futures_boundaries(failures):
-    """期货引擎边界（离线注入冻结数据）：
-       3a. end_date 连字符格式 → 必须抛 ConfigError（契约：仅支持斜杠格式，
-           P2-3 起期货路径 error-dict → 领域异常，日期契约随之上抛）
-       3b. 有效斜杠格式 + 冻结数据 → 正常分析（顺带证明注入通道可用）"""
-    from Test.snapshot_runner import install_futures_data_source
-    from App.AppErrors import ConfigError
+    """期货 SSE 数据边界（D7 迁移：原 _analyze_futures_internal 已删除，
+    边界契约改由其生产等价物 _truncate_records_by_end 承担）：
+       3a. 无法解析的日期格式（连字符）→ 原样返回不截断（SSE 软断开语义：
+           end_time 解析失败视为实时，前端契约仍为 %Y/%m/%d 系斜杠格式）
+       3b. 有效斜杠格式 → 截断到 <= end_time 的前缀"""
+    from App import AppSSE
+    from Test.snapshot_runner import FIXTURE_DIR
+    from Test.gen_fixtures import load_records
+    import os as _os
 
-    # 3a 连字符契约（真实天勤路径中该格式同样被拒，口径需冻结）
-    restore = install_futures_data_source("futures_15s.json")
-    try:
-        from App import AppSSE
-        try:
-            AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
-                                             end_date="2024-01-31")
-            failures.append("期货日期格式契约: 连字符应抛 ConfigError，实际未抛")
-            print("[FAIL] ③ 期货日期契约: 连字符 end_date 未被拒绝")
-        except ConfigError as e:
-            print(f"[PASS] ③ 期货日期契约: 连字符被拒（ConfigError: {e}）——"
-                  f"契约：end_date 仅支持 %Y/%m/%d 系斜杠格式")
-    finally:
-        restore()
+    records = load_records(_os.path.join(FIXTURE_DIR, "futures_15s.json"))
+    assert len(records) > 10
+
+    # 3a 连字符：SSE 路径语义为「解析失败 → 不截断」（静默回退实时）
+    out = AppSSE._truncate_records_by_end(records, "2024-01-31", 15)
+    if out is not records and len(out) != len(records):
+        failures.append("期货日期契约: 连字符不应截断，实际被截断")
+        print("[FAIL] ③ 期货日期契约: 连字符 end_time 被意外解析")
+    else:
+        print("[PASS] ③ 期货日期契约: 连字符不截断（SSE 语义：视为实时）——"
+              "契约：end_time 仅支持 %Y/%m/%d 系斜杠格式")
+
+    # 3b 斜杠格式：截断到 <= anchor 前缀（锚点取第 400 根 → 前缀恰 400 根）
+    anchor = records[399]["dt"]
+    out = AppSSE._truncate_records_by_end(
+        records, anchor.strftime("%Y/%m/%d %H:%M:%S"), 15)
+    if len(out) != 400 or out[-1]["dt"] > anchor:
+        failures.append(f"期货截断契约: 期望 400 根且末根<=锚点，实际 {len(out)} 根")
+        print(f"[FAIL] ③ 期货截断契约: 实际 {len(out)} 根")
+    else:
+        print(f"[PASS] ③ 期货截断契约: {len(records)} → {len(out)} 根，末根 <= 锚点")
 
 
 # ═══════════════════════════════════════════════════════════════════

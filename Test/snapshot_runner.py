@@ -110,6 +110,10 @@ def install_futures_data_source(fixture):
             pass
         def close(self):
             pass
+        def get_kline_serial(self, symbol, freq_sec, *a, **kw):
+            # D7 迁移：init_chan_symbol 会取实时序列引用（静态快照用例
+            # 不消费 wait_update，返回占位 dict 即可）
+            return {"symbol": symbol, "freq_sec": freq_sec}
 
     fake_mod = types.ModuleType("tqsdk")
     fake_mod.TqApi = _FakeTqApi
@@ -235,6 +239,25 @@ def case(name):
     return deco
 
 
+def _force_dual_impl(value):
+    """强制股票双窗 A/B 开关（CHAN_STOCK_DUAL_IMPL），返回 restore_fn。
+
+    用途：multilevel_d_30m（legacy 基线，冻结不改）与
+    multilevel_d_30m_indep（独立实现新基线）分别锁定两种实现，
+    保证 A/B 两条路径的快照互不漂移、同时受回归守护。
+    """
+    key = "CHAN_STOCK_DUAL_IMPL"
+    orig = os.environ.get(key)
+    os.environ[key] = value
+
+    def restore():
+        if orig is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = orig
+    return restore
+
+
 @case("stock_d_full")
 def _c_stock_d_full():
     """日线全量分析：笔/段/中枢/买卖点基线（核心快照）"""
@@ -274,14 +297,39 @@ def _c_stock_d_step_m5():
 
 @case("multilevel_d_30m")
 def _c_multilevel():
-    """多级别联立：日线主级别 + 子级别（dual=True 时子级别由 _SUB_FREQ_MAP
-    自动映射，不走外部参数；子级别数据经 read_sub_level_records 通道注入）"""
+    """多级别联立（legacy 基线）：A/B 开关强制 legacy，走原联立路径
+    （dual=True 时子级别由 _SUB_FREQ_MAP 自动映射，子级别数据经
+    read_sub_level_records 通道注入，红框边界取左右肩主 KLU 联立
+    sub_kl_list 真实子级边界）。快照冻结于联立实现，不随独立改造漂移。"""
     from App import AppEngine as m
+    restore_env = _force_dual_impl("legacy")
     restore, _ = install_data_source("stock_day.json", sub_fixture="stock_60m.json")
     try:
         return m._analyze_stock_internal("600519", freq="d", cache_chan=False, dual=True)
     finally:
         restore()
+        restore_env()
+
+
+@case("multilevel_d_30m_indep")
+def _c_multilevel_indep():
+    """多级别双窗（independent 新基线 · P0-P3）：A/B 开关强制
+    independent，下窗独立拉取独立建 CChan（先下后上）：
+      · 下窗按「结束时间语义」精确截断（P0）；
+      · 灰框 sub_kl_times 后端时间分桶合成（P3 · D2=A）；
+      · 红框边界改数学换算 _stocks_red_range_algo（日期型主级别
+        d/w 取当日 00:00~23:59:59，语义=覆盖当日全部下窗K线，
+        与 legacy 联立真实首末根边界不同属预期差异）；
+      · 区间套 check_nested_diver 改读独立下窗缓存（P1）。
+    """
+    from App import AppEngine as m
+    restore_env = _force_dual_impl("independent")
+    restore, _ = install_data_source("stock_day.json", sub_fixture="stock_60m.json")
+    try:
+        return m._analyze_stock_internal("600519", freq="d", cache_chan=False, dual=True)
+    finally:
+        restore()
+        restore_env()
 
 
 @case("edge_gap")
@@ -306,31 +354,67 @@ def _c_edge_zero_vol():
         restore()
 
 
+def _run_futures_snapshot_case(freq="15s", freq_sec=15, end_time=None):
+    """期货静态快照公共链路（D7 迁移后统一走 SSE 生产路径）：
+    CTqSdkSession → init_chan_symbol（拉取+截断+建 chan）→
+    _extract_realtime_snapshot（与 SSE init 事件同构的快照格式）。
+    原 _analyze_futures_internal 已按 D7 决策删除（生产零调用方）。"""
+    from App import AppSSE
+    symbol = "KQ.m@SHFE.rb"
+    src = AppSSE.CTqSdkSession()
+    src.connect()
+    try:
+        r = AppSSE.init_chan_symbol(src, symbol, AppSSE._get_futures_name(symbol),
+                                    freq_sec, freq, end_time=end_time)
+        if r is None:
+            raise RuntimeError("init_chan_symbol 返回 None（数据不足或截断后为空）")
+        chan, _klines, kl_type, _records = r
+        result = AppSSE._extract_realtime_snapshot(
+            chan, kl_type, symbol, AppSSE._get_futures_name(symbol), freq)
+        # 契约桥接：SSE init 快照 meta 不含静态分析三键（chan_version /
+        # date_range / forward_adjust），测试侧补齐以满足统一契约
+        # （Test/contracts.py REQUIRED_META_KEYS，生产 SSE 载荷不受影响）
+        meta = result["meta"]
+        meta.setdefault("chan_version", "chan.py")
+        meta["forward_adjust"] = False
+        if result.get("klines"):
+            meta["date_range"] = f"{result['klines'][0]['date']} ~ {result['klines'][-1]['date']}"
+        else:
+            meta["date_range"] = ""
+        return result
+    finally:
+        try:
+            src.close()
+            src.close_api()
+        except Exception:
+            pass
+
+
 @case("futures_15s_full")
 def _c_futures_full():
-    """期货路径全量（螺纹钢 15s）：天勤拉取→截断→注入→CChan(market_type=futures)。
-    覆盖 _analyze_futures_internal 全链路（此前快照仅覆盖股票路径）。"""
+    """期货路径全量（螺纹钢 15s）：SSE 生产链路 init_chan_symbol →
+    _extract_realtime_snapshot。D7 迁移：原 _analyze_futures_internal
+    快照口径更换为 SSE init 同构格式，基线需 --update 重采集。"""
     restore = install_futures_data_source("futures_15s.json")
     try:
-        from App import AppSSE
-        return AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s")
+        return _run_futures_snapshot_case(freq="15s", freq_sec=15)
     finally:
         restore()
 
 
 @case("futures_15s_end_date")
 def _c_futures_end_date():
-    """期货复盘模式：end_date 锚定倒数第 400 根（REPLAY_MODE 生效）。
-    注意 end_date 仅支持斜杠格式（%Y/%m/%d 系），连字符契约见 test_phase2_guards。"""
+    """期货复盘模式：end_time 锚定倒数第 400 根（SSE 软断开数据边界）。
+    D7 迁移：截断由 _truncate_records_by_end 承担（仅支持 %Y/%m/%d 系
+    斜杠格式，连字符契约见 test_phase2_guards）。"""
     from Test.gen_fixtures import load_records
     rows = load_records(os.path.join(FIXTURE_DIR, "futures_15s.json"))
     anchor = rows[-401]["dt"]
     restore = install_futures_data_source("futures_15s.json")
     try:
-        from App import AppSSE
-        return AppSSE._analyze_futures_internal(
-            "KQ.m@SHFE.rb", freq="15s",
-            end_date=anchor.strftime("%Y/%m/%d %H:%M:%S"))
+        return _run_futures_snapshot_case(
+            freq="15s", freq_sec=15,
+            end_time=anchor.strftime("%Y/%m/%d %H:%M:%S"))
     finally:
         restore()
 

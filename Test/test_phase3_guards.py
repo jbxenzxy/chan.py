@@ -75,11 +75,10 @@ EXPECTED_ROUTES = {
 
 # REST 路由禁止直连的引擎原始入口（锁分类 SERIAL 对应的底层函数；
 # 调用必须经 AppOrch.call_* 漏斗，见 LOCK_POLICY）
+# D7：_analyze_futures_internal 已删除（生产零调用方），守护条目随之移除
 FORBIDDEN_ENGINE_CALLS = [
     "m.analyze_stock(",
     "_m.analyze_stock(",
-    "m._analyze_futures_internal(",
-    "_m._analyze_futures_internal(",
     "m.stock_manual_select_point(",
     "_m.stock_manual_select_point(",
     "m.futures_manual_select_point(",

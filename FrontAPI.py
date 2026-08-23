@@ -301,13 +301,22 @@ async def api_stocks_select_point(
     code: str = Path(...),
     freq: str = Query("d"),
     bi_idx: str = Query("-1"),
+    dual: bool = Query(False),
+    sub_freq: str = Query(None),
+    main_freq: str = Query(None),
 ):
-    """股票手动选点（orch.call_manual_select_point · SERIAL 持锁，阶段 3a 补锁）"""
+    """股票手动选点（orch.call_manual_select_point · SERIAL 持锁，阶段 3a 补锁）
+
+    P4（D5=A）双窗选点放开：dual=1 时 freq=双击所在窗口周期，
+    main_freq=上窗周期（下窗选点必传），sub_freq=下窗周期。
+    """
     if not code or bi_idx == "-1":
         raise HTTPException(status_code=400, detail="缺少必要参数 code 或 bi_idx")
     try:
         result = await run_in_threadpool(orch.call_manual_select_point, code,
-                                         freq=freq, bi_idx=bi_idx)
+                                         freq=freq, bi_idx=bi_idx,
+                                         dual=dual, sub_freq=sub_freq,
+                                         main_freq=main_freq)
     except AppError:
         raise
     except Exception as exc:

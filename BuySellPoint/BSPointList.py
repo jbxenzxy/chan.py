@@ -685,16 +685,37 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         sub_kl_type = _get_kl_type(sub_freq)
 
         if is_stocks:
-            # 股票：从同一 CChan 多级别联立中获取子级别数据
-            if parent.chan is None:
-                raise RuntimeError("[check_nested_diver] 严重Bug：CChan 指针未设置！")
-            chan = parent.chan
-            try:
-                sub_kl_list = chan[sub_kl_type]
-            except Exception:
-                self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
-                             sub_kl_type=sub_kl_type)
-                return True # 按子级别背驰处理
+            # ── 股票（P1 独立双窗改造后双路径）─────────────────────
+            # 独立双窗：上窗 CChan 携带显式下窗周期（chan._stocks_dual_sub_freq，
+            # AppEngine 建上窗前设置），区间套改读「下窗 CChan 运行时缓存」——
+            # 下窗先建整读（先下后上时序），主K线计算时下窗笔结构已完整。
+            _explicit_sub_freq = None
+            if parent.chan is not None:
+                _explicit_sub_freq = getattr(parent.chan, "_stocks_dual_sub_freq", None)
+            if _explicit_sub_freq:
+                sub_freq = _explicit_sub_freq       # P2 三套映射统一：显式传入优先
+                sub_kl_type = _get_kl_type(sub_freq)
+                from App.AppData import app_data
+                sub_chan = app_data.stocks_sub_cache_get(parent.code, sub_freq)
+                if sub_chan is None:
+                    # 先下后上时序下不应发生（下窗先建缓存再建上窗）；
+                    # 仅服务重启/缓存被清等异常态，语义=初始化竞态而非配置错误
+                    self._dbg_bs('check_nested_diver', '独立双窗-下窗运行时缓存缺失'
+                                 '（先下后上时序被破坏或缓存被清理）→ 按子级别背驰处理',
+                                 code=parent.code, sub_freq=sub_freq)
+                    return True  # 按子级别背驰处理
+                sub_kl_list = sub_chan[sub_kl_type]
+            else:
+                # 单窗口 / legacy 联立：原路径（联立取数，行为冻结）
+                if parent.chan is None:
+                    raise RuntimeError("[check_nested_diver] 严重Bug：CChan 指针未设置！")
+                chan = parent.chan
+                try:
+                    sub_kl_list = chan[sub_kl_type]
+                except Exception:
+                    self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
+                                 sub_kl_type=sub_kl_type)
+                    return True # 按子级别背驰处理
         else:
             # 期货：上下窗是独立的 CChan 对象，下窗缓存在 _futures_analysis_cache 中
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
@@ -726,7 +747,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 2. 确定子级别红框边界 [C,D]
         fx_a_sub_dt, fx_b_sub_dt = None, None
         if is_stocks:
-            fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, main_bi)
+            if _explicit_sub_freq:
+                # P3：独立双窗——上窗 KLU 无联立 sub_kl_list，改数学换算
+                # （结束时间语义，与期货公式镜像对称）
+                fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range_algo(
+                    fx_a_raw_dt, fx_b_raw_dt, main_freq, _explicit_sub_freq)
+            else:
+                # legacy 联立：从左右肩 KLU 的 sub_kl_list 取真实子级别边界
+                fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, main_bi)
         else:
             from DataAPI.TqSdkAPI import CTqSdkAPI
             main_freq_sec = CTqSdkAPI.FREQ_SEC_MAP[main_freq]
@@ -1796,6 +1824,82 @@ def _stocks_red_range(a_klu, b_klu, sub_freq, bi=None):
     except Exception as e:
         print(f"[stocks_red_range] 异常: {type(e).__name__}: {e}")
     return fx_a_sub_dt, fx_b_sub_dt
+
+
+# 主/子级别周期秒数（股票双窗独立化 P3 数学换算用；与 AppEngine._STOCKS_MAIN_PERIOD 同源口径）
+_STOCKS_FREQ_SEC = {
+    "w": 7 * 86400,
+    "d": 86400,
+    "30m": 1800,
+    "5m": 300,
+}
+
+# 日期解析格式（与 _futures_red_range 一致：优先 / 格式，兼容 - 格式）
+_STOCKS_RANGE_PARSE_FORMATS = [
+    "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+    "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M",
+    "%Y/%m/%d", "%Y-%m-%d",
+]
+
+
+def _stocks_red_range_algo(fx_a_raw_dt, fx_b_raw_dt, main_freq, sub_freq):
+    """（P3）股票红框边界数学换算 —— 独立双窗纯函数（无联立 sub_kl_list）。
+
+    股票 K 线 dt = 结束时间（与期货=开始时间相反），公式与
+    _futures_red_range 镜像对称（期货 offset 加在右端，股票减在左端）：
+      · 日内主级别（30m）：
+          C = A - (main_sec - sub_sec)   左肩主K线覆盖区间内第一根下窗K线
+          D = B                          右肩主K线覆盖区间内最后一根下窗K线
+          （例：30m 线 A=11:00 + 5m 子 → C=10:35，恰为 10:31~11:00 内首根 5m 线）
+      · 日期型主级别（w/d）：主K线 dt 为当日 00:00，覆盖全日/全周，
+        无法定位到日内时刻，按「当日边界」取整：
+          C = A 当日（w：所在周周一）00:00
+          D = B 当日 23:59:59
+        按下窗日期格式输出后，字符串比较语义仍正确覆盖当日全部下窗K线。
+    参数:
+        fx_a_raw_dt / fx_b_raw_dt: 主级别笔左右肩原始分型时间（_main_bi_range 产出）
+        main_freq / sub_freq:      主/子级别周期（如 "30m"/"5m"、"d"/"30m"）
+    返回:
+        (fx_a_sub_dt, fx_b_sub_dt)；解析失败返回 ("", "")。
+    """
+    main_sec = _STOCKS_FREQ_SEC.get(main_freq)
+    sub_sec = _STOCKS_FREQ_SEC.get(sub_freq)
+    if not fx_a_raw_dt or not fx_b_raw_dt or main_sec is None or sub_sec is None:
+        return "", ""
+
+    out_fmt = _get_date_fmt(sub_freq)
+
+    def _parse(s):
+        for fmt in _STOCKS_RANGE_PARSE_FORMATS:
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+        return None
+
+    dt_a = _parse(fx_a_raw_dt)
+    dt_b = _parse(fx_b_raw_dt)
+    if dt_a is None or dt_b is None:
+        return "", ""
+
+    try:
+        if main_freq in ("w", "d"):
+            # 日期型主K线覆盖全日（w=全周）：左界取覆盖期首日 00:00，
+            # 右界取右肩当日 23:59:59（字符串比较覆盖当日全部下窗K线）
+            if main_freq == "w":
+                c = (dt_a - timedelta(days=dt_a.weekday())).replace(
+                    hour=0, minute=0, second=0, microsecond=0)
+            else:
+                c = dt_a.replace(hour=0, minute=0, second=0, microsecond=0)
+            d = dt_b.replace(hour=23, minute=59, second=59, microsecond=0)
+        else:
+            # 日内主K线：dt=结束时刻，覆盖 (dt-main_sec, dt]
+            c = dt_a - timedelta(seconds=(main_sec - sub_sec))
+            d = dt_b
+        return c.strftime(out_fmt), d.strftime(out_fmt)
+    except Exception as e:
+        print(f"[stocks_red_range_algo] 异常: {type(e).__name__}: {e}")
+        return "", ""
 
 
 def _futures_red_range(snapshot, main_freq_sec, sub_freq_sec, sub_freq=None):
