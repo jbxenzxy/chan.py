@@ -20,7 +20,7 @@ CI / 迁移每阶段的验收门禁）。
                                                      SSE 双实现/分层方向
  10. 阶段 4 成果防护   test_phase4_guards.py        委托壳+目标存在/状态别名同一性/
                                                      配置别名清零/自选股收敛/语义子窗/
-                                                     分层方向/LRU 语义
+                                                     分层方向/LRU 语义/数据源 import 门禁(P1-1)
  11. .blk 解析与自选股  test_blk_parsing.py         黄金行为（对齐 DoubleOptimize）/
                                                      双解析器一致性/缺失文件/自选股链路/
                                                      扫描消费兼容/防 tdx_blk 回归/

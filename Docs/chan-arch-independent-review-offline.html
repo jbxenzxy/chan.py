@@ -2,7 +2,7 @@
 <html lang="zh-CN"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>chan.py custom-dev 独立架构分析 · 问题编号与优化路线</title>
+<title>chan.py custom-dev 架构文档 · 现状架构与遗留优化项（V2）</title>
 <style>
   :root {
     --bg: #f7f8fa;
@@ -184,13 +184,13 @@
 
   <!-- ============ HERO ============ -->
   <div class="hero">
-    <h1>chan.py custom-dev 独立架构分析</h1>
-    <div class="sub">基于 custom-dev 分支（commit 8190e1d）逐文件代码审读的独立结论：最优架构判断、逐功能端到端核查、与《chan-custom-dev-architecture-review-v15》的分歧对照；并为全部问题建立 <b>P0 / P1 / P2 编号体系</b>与<b>分阶段优化路线图</b>，便于逐项决策「落实 / 暂缓」。</div>
+    <h1>chan.py custom-dev 架构文档</h1>
+    <div class="sub">本档为<b>新功能开发前的架构上下文</b>，基于 <b>custom-dev @ 0f31d3a</b> 逐文件实测撰写：分层与依赖方向、12 条功能端到端链路、DataAPI 数据源抽象层分工、验收护栏。阅读顺序：第一章目标形态 → 第二章功能链路与 DataAPI 详解 → 第五章验收护栏；遗留优化项见第三、四章。</div>
     <div class="meta">
-      <span class="chip">基准分支：custom-dev @ 8190e1d</span>
-      <span class="chip">测试基线：20/20 全绿（本报告独立复现）</span>
-      <span class="chip">问题编号：P0×2 · P1×4 · P2×5</span>
-      <span class="chip">报告日期：2026-08-22</span>
+      <span class="chip">基准分支：custom-dev @ 0f31d3a</span>
+      <span class="chip">测试基线：20/20 全绿（含 11 类结构性守护）</span>
+      <span class="chip">遗留优化项：1 项（P1-3，可选）</span>
+      <span class="chip">更新日期：2026-08-23</span>
     </div>
   </div>
 
@@ -198,8 +198,8 @@
   <div class="verdict">
     <span class="tag">总体结论</span>
     <div>
-      <p>工程落实质量高于典型同类项目：可执行架构守护（phase guards + <code>LOCK_POLICY</code> + func_map 同步检查）、原子写、SQLite WAL、降级路径、lifespan 资源回收齐全，测试基线经独立复现属实（20/20）。v15 的目标架构主体成立，大部分功能端到端符合。</p>
-      <p><b>分歧核心：v15 把现状说得过于干净。</b>仅认 1 条「模块过厚」，而漏掉两条结构性欠账——<span class="strong">数据源抽象有名无实（P1-1）</span>与<span class="strong">横向拆分停留在门面级（P0-1/P0-2）</span>；其 P1-3 建议（先拆 AppSSE）因低估兼容壳的「活性」需要重排顺序：先所有权迁移、后模块拆分。</p>
+      <p>架构处于良好可扩展状态：分层单向（FrontAPI → AppOrch → 功能域 → 引擎/数据层）、数据源调用<b>消费侧零直连</b>（API/图表/聚合层无一处 import DataAPI 具体类，由守护测试 ⑩ 门禁固化）、状态写入全部经 <code>app_data.*</code> 公共 API、期货路径领域异常统一、测试基线 20/20。</p>
+      <p><b>遗留一项</b>：<span class="strong">AppSSE 单文件 1845 行（P1-3）</span>——职责已按 5 区域标注分区但未物理拆分，属可选结构优化，不阻塞任何功能。另有 P1-4 / P2-1 / P2-4 三项经决策维持现状（理由与重评触发条件见第四章）。新功能开发可直接以第二章为链路索引。</p>
     </div>
   </div>
 
@@ -208,18 +208,17 @@
     <h3 style="margin-top:0">目录</h3>
     <ol class="toc">
       <li><a href="#s1">一、最优架构（独立判断）</a></li>
-      <li><a href="#s2">二、逐功能端到端核查</a></li>
-      <li><a href="#s3">三、问题清单 · 分类编号（P0/P1/P2）</a></li>
-      <li><a href="#s4">四、与 v15 报告的分歧对照</a></li>
-      <li><a href="#s5">五、优化路线图（先做什么、后做什么）</a></li>
-      <li><a href="#s6">六、每一步的验收护栏</a></li>
+      <li><a href="#s2">二、逐功能端到端核查 · 数据源抽象层详解</a></li>
+      <li><a href="#s3">三、遗留问题清单（P1-3）</a></li>
+      <li><a href="#s4">四、维持现状决策（3 项）</a></li>
+      <li><a href="#s5">五、优化路线图与验收护栏</a></li>
     </ol>
   </div>
 
   <!-- ============ S1 ============ -->
   <section id="s1">
     <h2>一、最优架构（独立判断）</h2>
-    <p class="sec-desc">主体与 v15 一致；两处修正：真实枢纽是 AppEngine（非 AppData）；数据源抽象必须「单轨」，否则等于没有。</p>
+    <p class="sec-desc">主体与 v15 一致：分层单向、AppEngine 纯分析编排、AppRefresh 自持实现、数据源「消费侧零直连」由守护测试固化。图 1 即现状达成的目标形态。</p>
 
     <div class="card">
       <h3 style="margin-top:0">1.1 分层与依赖方向（与 v15 一致）</h3>
@@ -232,10 +231,10 @@
     CHART["AppChart<br>图表交互"]
     SCAN["AppScan(+Pool/Store)<br>批量扫描"]
     DL["AppDownload<br>盘后下载"]
-    RF["AppRefresh<br>名称/PE/市值刷新"]
-    SSE["AppSSE<br>SSE 实时流"]
+    RF["AppRefresh<br>名称/PE/市值刷新<br>（实心 703 行）"]
+    SSE["AppSSE<br>SSE 流 + 期货功能域"]
   end
-  ENG["AppEngine<br>纯分析编排（目标态）"]
+  ENG["AppEngine<br>纯分析编排（现状 1448 行）"]
   DATA["AppData.py<br>应用状态：缓存/持久化/标注/自选股"]
   DAPI["DataAPI/<br>数据源抽象 · 唯一可见外部 SDK"]
   CHAN["Chan.py 缠论引擎<br>第三方 · 不动"]
@@ -244,7 +243,8 @@
   ORCH --&gt; CHART &amp; SCAN &amp; DL &amp; RF &amp; SSE
   CHART --&gt; ENG
   SCAN --&gt; ENG
-  RF --&gt; ENG
+  RF --&gt; DATA
+  RF --&gt; DAPI
   ENG --&gt; DATA
   CHART --&gt; DATA
   SCAN --&gt; DATA
@@ -254,71 +254,135 @@
   SSE --&gt; DAPI
   ENG --&gt; CHAN
         </pre>
-        <figcaption>图 1 · 目标架构：依赖严格单向，AppEngine 收敛为纯分析编排，DataAPI 是外部 SDK 的唯一可见点</figcaption>
+        <figcaption>图 1 · 目标架构（现状已达成）：依赖严格单向；AppEngine 纯分析编排（1448 行，5 区域组织）；AppRefresh 自持 703 行直连数据层；「DataAPI 是外部 SDK 唯一可见点」已达成——消费侧（FrontAPI/AppChart/AppOrch）零 DataAPI import，由守护测试 ⑩ 门禁固化</figcaption>
       </figure>
       <ul>
-        <li><b>与 v15 的两处修正</b>：① 目标图中 <code>AppOrch → AppData</code> 与实际链路 <code>AppOrch → 功能模块 → AppEngine → AppData</code> 不符——<span class="strong">AppEngine 才是事实枢纽</span>（同时持有分析编排、缓存别名、刷新实现、预过滤、下载状态引用，<code>AppEngine.py:91-169</code>）；② 数据源抽象必须落到「服务层只经工厂/接口取源」的单轨形态，现状工厂 <code>get_stock_api()</code> 零调用。</li>
-        <li><b>并发模型三分类</b>（与 v15 一致且已验证落实）：交互路径 SERIAL（<code>_ENGINE_LOCK</code> 全局串行，单用户场景下正确）；批量路径 SCAN_ASYNC（ProcessPool spawn + SQLite WAL）；SSE 路径 SELF_CONTAINED（每连接独立 <code>CTqSdkSession</code>，finally 清理 + lifespan 双保险）。</li>
+        <li><b>AppEngine 纯分析编排</b>：文件按 5 区域组织（常量与配置 / 数据委托 / 股票分析 / 结果提取 / 公开入口，文件头 <code>AppEngine.py:7-38</code>），是全项目唯一同时装配 CTdxAPI（股票数据源）与探测 tqsdk 可用性的「引擎数据装配点」。</li>
+        <li><b>数据源单轨</b>：期货元数据（别名 / 周期 / 名称 / 周期秒数映射）一律经 <code>AppSSE</code> 区域 4 出口（<code>AppSSE.py:1768-1812</code>）；SSE 流协议四符号经 AppSSE re-export 供 API 层消费；装配点白名单（Engine / SSE / Refresh / Scan / Download / utils）由守护测试精确固化（<code>test_phase4_guards.py:678</code>）。</li>
+        <li><b>并发模型三分类</b>（已验证落实）：交互路径 SERIAL（<code>_ENGINE_LOCK</code> 全局串行，<code>AppChart.py:58,75</code>，单用户场景下正确）；批量路径 SCAN_ASYNC（ProcessPool spawn + SQLite WAL，用完即毁 + 线程池降级）；SSE 路径 SELF_CONTAINED（每连接独立 <code>CTqSdkSession</code>，finally 清理 + lifespan 双保险，<code>AppSSE.py:1813-1845</code> / <code>FrontAPI.py:99-119</code>）。</li>
         <li><b>配置双轨</b>（已验证落实）：基础设施归 <code>AppConfig.py</code>，算法参数归 <code>ChanConfig.py</code>，均支持 pydantic-settings 与内置解析双通道。</li>
+        <li><b>错误处理现行约定</b>：期货路径抛领域异常（<code>App/AppErrors.py</code> 六类，<code>FrontAPI.py:156-166</code> 统一 exception_handler 捕获并映射状态码）；股票/扫描路径沿用 error-dict 返回、由 API 层转 HTTP 400；SSE 流内错误走事件帧（协议语义，非异常）。</li>
       </ul>
     </div>
   </section>
 
   <!-- ============ S2 ============ -->
   <section id="s2">
-    <h2>二、逐功能端到端核查</h2>
-    <p class="sec-desc">12 条功能链路逐一核验：✅ 符合最优架构 · ⚠ 基本符合但有瑕疵 · ❌ 违反分层/抽象边界。</p>
+    <h2>二、逐功能端到端核查 · 数据源抽象层详解</h2>
+    <p class="sec-desc">12 条功能链路逐一核验：✅ 符合最优架构 · ⚠ 基本符合（均为决策维持项或随 P1-3 拆分一并解决的项）。图 2 将 DataAPI 展开为五个成员模块——本层是外部 SDK 唯一可见点，分工详见 2.1。</p>
 
     <div class="card">
       <figure class="diagram">
         <pre class="mermaid">flowchart LR
-  FE["Frontend"] --&gt; API["FrontAPI"]
-  API --&gt; ORCH["AppOrch"]
-  ORCH --&gt; CHART["AppChart<br>686 行"]
-  ORCH --&gt; SCAN["AppScan"]
-  ORCH --&gt; RF["AppRefresh<br>空壳 100 行"]
-  ORCH --&gt; SSE["AppSSE<br>1834 行"]
-  ENG["AppEngine · 2258 行<br>⚠ 事实集线器"]
+  FE["Frontend"] --&gt; API["FrontAPI<br>零 DataAPI import"]
+  API --&gt; ORCH["AppOrch<br>零 DataAPI import"]
+  ORCH --&gt; CHART["AppChart · 662 行<br>零 DataAPI import"]
+  ORCH --&gt; SCAN["AppScan · 669 行"]
+  ORCH --&gt; RF["AppRefresh · 703 行"]
+  ORCH --&gt; SSE["AppSSE · 1845 行（P1-3）"]
+  ORCH --&gt; DL["AppDownload"]
+  ENG["AppEngine · 1448 行<br>纯分析编排"]
+  UTIL["App/utils · 350 行"]
   DATA["AppData"]
-  DAPI["DataAPI"]
 
-  RF -. "① 委托回引擎实现 (~540行)" .-&gt; ENG
-  SCAN -. "③ 预过滤/缓存删除走 _m.*" .-&gt; ENG
-  CHART --&gt;|"② 持锁漏斗(正确)"| ENG
-  SSE ==&gt;|"④ import 引擎 15+ 私有名"| ENG
-  CHART -. "⑤ 绕过 AppData 直改引擎全局" .-&gt; ENG
-  CHART -. "⑥ 直连 CTqSdkAPI/CTdxAPI" .-&gt; DAPI
-  SSE -. "⑥ 直连 CTqSdkAPI" .-&gt; DAPI
-  API -. "⑦ /api/health 直连 CTqSdkAPI" .-&gt; DAPI
+  subgraph DAPI["DataAPI/ · 外部 SDK 唯一可见点"]
+    COMMON["CommonStockAPI · 72 行<br>抽象基类"]
+    TDX["TdxAPI · 2326 行<br>通达信静态源（本地文件）"]
+    TQ["TqSdkAPI · 477 行<br>天勤静态源（元数据+历史）"]
+    CSSE["TqSdkCSSESource · 299 行<br>天勤实时流源（SSE 专用）"]
+    EL["ElTdxAPI · 739 行<br>盘后下载引擎"]
+  end
+
+  CHART --&gt;|"持锁漏斗"| ENG
+  CHART --&gt;|"期货元数据（区域 4 出口）"| SSE
+  API --&gt;|"close_all 等四符号 re-export"| SSE
+  SCAN --&gt;|"analyze_stock"| ENG
+  SSE --&gt;|"3 个显式名 + utils 纯函数"| ENG
+  SSE --&gt; UTIL
+  CHART --&gt; DATA
+  SCAN --&gt; DATA
+  SSE --&gt; DATA
+  RF --&gt; DATA
   ENG --&gt; DATA
-  ENG --&gt; DAPI
+  ENG --&gt;|"CTdxAPI 装配"| TDX
+  ENG -.-&gt;|"tqsdk 可用性探测"| TQ
+  UTIL --&gt;|"FREQ_SEC_MAP 换算"| TQ
+  SSE --&gt;|"CTqSdkSession 流协议"| CSSE
+  RF --&gt;|"refresh_block_files"| TDX
+  RF --&gt;|"vipdoc 代码收集"| EL
+  SCAN --&gt;|"get_index_stocks 板块成分"| TDX
+  DL --&gt;|"下载委托"| EL
         </pre>
-        <figcaption>图 2 · 现状依赖关系：虚线为偏离最优架构的路径（对应 P0/P1 编号），② 为正确示范</figcaption>
+        <figcaption>图 2 · 现状依赖关系（custom-dev @ 0f31d3a）：全部为合规单向依赖，无虚线违规路径。装配点（连线进入 DataAPI 的六个模块：Engine / utils / SSE / Refresh / Scan / Download）由守护测试 ⑩ 白名单精确固化（<code>test_phase4_guards.py:678</code>）；消费侧三文件（FrontAPI / AppChart / AppOrch）任何层级零 DataAPI import</figcaption>
       </figure>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">2.1 DataAPI 数据源抽象层：五个成员的分工</h3>
+      <p>DataAPI 层的职责一句话：<b>把「外部数据源协议」（通达信本地文件 / tqsdk 行情 SDK / eltdx 下载器）翻译成项目统一的数据形态，并让外部 SDK 只在这一层可见</b>。上层（App 服务层 / FrontAPI API 层）永远只跟「抽象接口 + 元数据出口」打交道，换数据源、改 SDK 版本、Mock 测试都不波及业务代码。五个成员如下：</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>成员</th><th>定位</th><th>提供什么</th><th>谁在用（装配点）</th></tr></thead>
+        <tbody>
+          <tr><td><code>CommonStockAPI.py</code> 72 行</td><td>抽象基类</td><td><code>CCommonStockApi</code>：统一 K 线取数接口（<code>get_kl_data</code>）+ 数据源元数据接口（频率映射 / 别名 / 支持列表）——「面向业务的稳定契约」</td><td>其余四个成员全部继承/对齐它</td></tr>
+          <tr><td><code>TdxAPI.py</code> 2326 行</td><td>通达信<b>静态</b>数据源</td><td>.day 二进制读取、周期合成、前复权（xdxr）、文件级 API（<code>refresh_block_files</code> / <code>get_index_stocks</code> / <code>set_tdx_config</code>）</td><td>AppEngine（K 线装配）、AppRefresh（block 刷新）、AppScan（板块成分）</td></tr>
+          <tr><td><code>TqSdkAPI.py</code> 477 行</td><td>天勤期货<b>静态</b>数据源</td><td>期货元数据表（<code>FUTURES_ALIASES</code> 83 个别名 / <code>SUPPORTED_FREQS</code> / <code>FREQ_SEC_MAP</code> / <code>FREQ_LABEL_CN</code>）、<code>fetch_kline</code> 一次性拉历史、共享 K 线缓存（<code>clear_all_cache</code>）、账户加载</td><td>AppEngine（tqsdk 探测）、App/utils（周期换算）、AppSSE（经 AppEngine 显式名 <code>CTqSdkAPI</code>）</td></tr>
+          <tr><td><code>TqSdkCSSESource.py</code> 299 行</td><td>天勤期货<b>实时流</b>数据源（SSE 专用）</td><td><code>CSSESource</code> 流协议（<code>connect / get_kline_serial / wait_update / append_bar / close</code>）+ <code>CTqSdkSession</code>（每连接独立 TqApi 生命周期）+ <code>close_all</code> 应用级回收注册表</td><td>AppSSE（SSE 生成器消费 <code>src.*</code> 协议）；FrontAPI 经 AppSSE re-export 取四符号</td></tr>
+          <tr><td><code>ElTdxAPI.py</code> 739 行</td><td>盘后下载引擎</td><td>通达信盘后数据下载、<code>collect_codes_from_vipdoc</code> 代码收集</td><td>AppDownload（下载委托）、AppRefresh（vipdoc 代码收集）</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>为什么有了 AppSSE.py 和 TqSdkAPI.py，还要 TqSdkCSSESource.py？</h3>
+      <p>这是最容易混淆的三件套，关键在于认清三者<b>各在不同层、回答不同问题</b>：</p>
+      <ul>
+        <li><b>AppSSE.py 是业务层</b>：它回答「拿到一根新 K 线之后做什么」——建 CChan、增量算笔/中枢、提取快照、组 SSE 帧、推送。它自己<b>不碰 tqsdk</b>，只消费一个「能逐帧吐数据的源」。</li>
+        <li><b>TqSdkAPI.py 是静态取数源</b>：交互模式是<b>请求-响应</b>——<code>fetch_kline</code> 一次拉完一段历史就返回，用完即弃；K 线缓存是<b>跨请求共享</b>的模块级静态缓存。它无法「阻塞等待下一根 K 线完成」——而这正是实时流的核心动作。</li>
+        <li><b>TqSdkCSSESource.py 是实时流源</b>：交互模式是<b>订阅-推送</b>——<code>get_kline_serial</code> 订阅序列引用，<code>wait_update</code> 阻塞等新 tick，<code>append_bar</code> 把已完成的 K 线逐根喂给 CChan 增量计算。它还独揽两件静态源没有的难事：<b>每连接独立 TqApi 生命周期</b>（隔离不同 SSE 连接）与<b>天勤关闭约束</b>（<code>api.close()</code> 必须在 <code>wait_update</code> 返回后由调用线程执行——因此提供 <code>close_all</code> 注册表：外部只设关闭旗，生成器线程在 finally 里完成真正的 close，从根本上规避「不能在协程中调用 close」报错）。</li>
+      </ul>
+      <p>换句话说：<b>AppSSE 决定「怎么算」，TqSdkAPI 决定「历史从哪来」，TqSdkCSSESource 决定「实时帧怎么来、连接怎么安全地结束」</b>。三者是流水线上的三站，不是功能重复。把流协议并进 TqSdkAPI 会让一个文件同时背「静态缓存 + 每连接生命周期 + 注册表回收」两套相反的语义；把 tqsdk 泄漏进 AppSSE 则破坏「SDK 只在 DataAPI 可见」的隔离约束（Mock 回放源将无法替换）。</p>
+      <div class="table-wrap">
+      <table>
+        <thead><tr><th>维度</th><th>TqSdkAPI（静态源）</th><th>TqSdkCSSESource（实时流源）</th></tr></thead>
+        <tbody>
+          <tr><td>交互模式</td><td>请求-响应：拉一段历史立即返回</td><td>订阅-推送：wait_update 阻塞等新 tick</td></tr>
+          <tr><td>K 线消费</td><td>整段注入（<code>set_data</code>），静态分析用</td><td>逐根追加（<code>append_bar</code>），增量计算用</td></tr>
+          <tr><td>TqApi 生命周期</td><td>拉取期间短持有，用完即弃</td><td>每 SSE 连接独立一个，注册表统一回收</td></tr>
+          <tr><td>关闭语义</td><td>无特殊约束</td><td>close 必须由 wait_update 调用线程执行（天勤约束），close_all 只设旗</td></tr>
+          <tr><td>缓存</td><td>跨请求共享缓存（clear_all_cache 清理）</td><td>每连接私有 records，连接结束即销毁</td></tr>
+          <tr><td>消费方</td><td>AppEngine / utils / AppSSE（静态分析与元数据）</td><td>AppSSE SSE 生成器（区域 1/3）</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p class="muted">一句话记忆：<b>静态看历史用 TqSdkAPI，实时盯盘用 TqSdkCSSESource，业务编排都在 AppSSE</b>。另注：<code>DataAPI/__init__.py</code> 的工厂 <code>get_stock_api()</code>（按代码类型自动选 TdxAPI/TqSdkAPI 返回 <code>CCommonStockApi</code> 实例）保留为对外兼容面，本项目内部装配走各功能域白名单点。</p>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0">2.2 十二条功能链路核验</h3>
 
       <div class="table-wrap">
       <table>
         <thead><tr><th>功能</th><th>端到端链路</th><th>评价</th><th>关键证据</th></tr></thead>
         <tbody>
-          <tr><td>股票分析</td><td><code>FrontAPI:270</code> → <code>AppChart.call_analysis</code>(持锁) → <code>AppEngine._analyze_stock_internal</code> → <code>CTdxAPI</code> → <code>CChan</code> → 提取/缓存</td><td><span class="pill ok">✅ 符合</span></td><td><code>AppChart.py:61-75</code></td></tr>
-          <tr><td>搜索</td><td><code>AppChart.search_stocks</code>：名称缓存 + 手工指数表 + 期货别名</td><td><span class="pill warn">⚠ 基本符合</span></td><td>直连 <code>CTqSdkAPI.FUTURES_ALIASES</code>：<code>AppChart.py:531-540</code></td></tr>
-          <tr><td>股票选点</td><td><code>AppChart</code>(持锁) → 引擎重算</td><td><span class="pill warn">⚠ 直改引擎全局</span></td><td><code>_m._saved_point_times[...]=</code>、<code>del _m._stocks_analysis_cache[...]</code>：<code>AppChart.py:274-283</code></td></tr>
-          <tr><td>红框中枢</td><td><code>AppChart.compute_red_range_zs</code> 读期货子窗缓存</td><td><span class="pill warn">⚠ 跨路径共享</span></td><td>HTTP 静态与 SSE 实时经共享 dict 耦合：<code>AppChart.py:316</code> / <code>AppSSE.py:803</code></td></tr>
-          <tr><td>期货选点/静态分析</td><td>入口在 <code>AppChart</code>、实现在 <code>AppSSE</code></td><td><span class="pill warn">⚠ 功能域横跨</span></td><td><code>AppChart.py:190-198</code>（v15 已识别）</td></tr>
-          <tr><td>标注</td><td><code>FrontAPI</code> → <code>AppChart</code> → <code>app_data</code> CRUD+去重+原子写</td><td><span class="pill ok">✅ 干净</span></td><td><code>AppData.py:60-82, 694-770</code></td></tr>
-          <tr><td>自选股/选股来源</td><td><code>AppScan.stock_list</code> → app_data(.blk) / DataAPI(成分股)</td><td><span class="pill ok">✅ 符合归属判据</span></td><td><code>AppData.py:844-919</code></td></tr>
-          <tr><td>批量扫描</td><td><code>submit → AppScanPool(spawn, 降级线程池) → worker → AppScanStore(SQLite WAL)</code></td><td><span class="pill ok">✅ 全项目最佳</span></td><td>增量轮询防 O(n²)、协作式中止：<code>AppScanPool.py:100-135</code> / <code>AppScanStore.py:39-62</code></td></tr>
+          <tr><td>股票分析</td><td><code>FrontAPI</code> → <code>AppChart.call_analysis</code>(持锁) → <code>AppEngine._analyze_stock_internal</code> → <code>CTdxAPI</code> → <code>CChan</code> → 提取/缓存</td><td><span class="pill ok">✅ 符合</span></td><td><code>AppChart.py:65-101</code></td></tr>
+          <tr><td>搜索</td><td><code>AppChart.search_stocks</code>：名称缓存 + 手工指数表 + 期货别名（经 <code>_sse.get_futures_aliases / get_futures_name</code>）</td><td><span class="pill ok">✅ 走期货域元数据出口</span></td><td><code>AppChart.py:427-516</code>（别名部分 502-515）</td></tr>
+          <tr><td>股票选点</td><td><code>AppChart</code>(持锁) → 引擎重算 → <code>app_data.save_point_time</code> 持久化</td><td><span class="pill ok">✅ 走 AppData API</span></td><td><code>AppChart.py:275-278</code>，绕行路径由守护封禁（<code>test_phase4_guards.py:205</code>）</td></tr>
+          <tr><td>红框中枢</td><td><code>AppChart.compute_red_range_zs</code> 经漏斗函数读期货子窗缓存</td><td><span class="pill warn">⚠ 跨路径共享（决策维持）</span></td><td>HTTP 静态与 SSE 实时共享同一缓存，但均已收敛为 <code>app_data.*</code> API：<code>AppChart.py:302-330,561</code> / <code>AppSSE.py:568</code></td></tr>
+          <tr><td>期货选点/静态分析</td><td>入口在 <code>AppChart</code>、实现在 <code>AppSSE</code></td><td><span class="pill warn">⚠ 功能域横跨（随 P1-3 拆分一并解决）</span></td><td><code>AppChart.py:183-214</code>（入口）→ <code>AppSSE.py:968,1650</code>（实现）</td></tr>
+          <tr><td>标注</td><td><code>FrontAPI</code> → <code>AppChart</code> → <code>app_data</code> CRUD+去重+原子写</td><td><span class="pill ok">✅ 干净</span></td><td><code>AppChart.py:127-179</code> / <code>AppData.py:707</code></td></tr>
+          <tr><td>自选股/选股来源</td><td><code>AppScan.stock_list</code> → app_data(.blk) / DataAPI(成分股)</td><td><span class="pill ok">✅ 符合归属判据</span></td><td><code>AppData.py:835-919</code></td></tr>
+          <tr><td>批量扫描</td><td><code>submit → AppScanPool(spawn, 降级线程池) → worker → AppScanStore(SQLite WAL)</code>；预过滤在 AppScan 本地</td><td><span class="pill ok">✅ 全项目最佳</span></td><td>增量轮询防 O(n²)、协作式中止：<code>AppScanPool.py:100-135</code> / 预过滤 <code>AppScan.py:88</code></td></tr>
           <tr><td>盘后下载</td><td><code>AppDownload</code>(薄) → <code>ElTdxAPI</code></td><td><span class="pill ok">✅ 委托正确</span></td><td><code>AppDownload.py:21-75</code></td></tr>
-          <tr><td>刷新</td><td><code>AppRefresh</code>(100行) → <b>委托回</b> <code>AppEngine._refresh_stock_names</code></td><td><span class="pill bad">❌ 名义拆分未完成</span></td><td><code>AppRefresh.py:39,93</code> / 实现约540行在 <code>AppEngine.py:262-807</code></td></tr>
-          <tr><td>SSE 实时流</td><td>每连接独立 Session+线程、finally 清理、close_all+lifespan 双保险、心跳</td><td><span class="pill ok">✅ 落实到位</span></td><td><code>AppSSE.py:1393-1401,1821-1830</code> / <code>FrontAPI.py:98-121</code></td></tr>
-          <tr><td>健康检查</td><td><code>/api/health</code> 内直接 <code>from DataAPI.TqSdkAPI import CTqSdkAPI</code></td><td><span class="pill bad">❌ 违反自家收敛规则</span></td><td><code>FrontAPI.py:179-185</code></td></tr>
+          <tr><td>刷新</td><td><code>AppRefresh</code> 自持 703 行实现，直连 DataAPI/AppData</td><td><span class="pill ok">✅ 符合</span></td><td><code>AppRefresh.py:11-24</code>（职责清单）· 刷新状态缓存见 <code>AppRefresh.py:36-40</code></td></tr>
+          <tr><td>SSE 实时流</td><td>每连接独立 Session+线程、finally 清理、close_all+lifespan 双保险、心跳</td><td><span class="pill ok">✅ 落实到位</span></td><td><code>AppSSE.py:144-502</code>（流）/ <code>AppSSE.py:1813-1845</code>（清理） / <code>FrontAPI.py:99-119</code></td></tr>
+          <tr><td>健康检查</td><td><code>/api/health</code> 周期映射经 <code>_sse.get_futures_freq_sec_map()</code> 出口（P2-8 后端单一事实源）</td><td><span class="pill ok">✅ 走元数据出口</span></td><td><code>FrontAPI.py:177-182</code> / 出口实现 <code>AppSSE.py:1802-1809</code></td></tr>
         </tbody>
       </table>
       </div>
 
       <h3>服务层模块体量（现状 vs 目标）</h3>
       <figure class="chart-figure">
-        <figcaption>图 3 · 服务层与数据层模块行数：三个「过厚」模块正是 P0/P1 的主战场</figcaption>
+        <figcaption>图 3 · 服务层与数据层模块行数（custom-dev @ 0f31d3a）：服务层各模块体量均衡（AppEngine 1448 / AppRefresh 703 / AppChart 662 / AppScan 669），仅剩 AppSSE 1845 行是「过厚」主战场（P1-3）</figcaption>
         <div id="chart-module-size" style="width:100%;min-height:420px"></div>
       </figure>
     </div>
@@ -326,14 +390,14 @@
 
   <!-- ============ S3 ============ -->
   <section id="s3">
-    <h2>三、问题清单 · 分类编号（P0 / P1 / P2）</h2>
-    <p class="sec-desc">三级分类标准：<b>P0 结构性前置</b>（决定后续重构是否有效，必须先做）· <b>P1 边界与抽象违规</b>（偏离最优架构，应做）· <b>P2 工程卫生与观察项</b>（可选）。每项含代码证据与预估工作量，供逐项决策。</p>
+    <h2>三、遗留问题清单（P1-3）</h2>
+    <p class="sec-desc">仅 <b>1 项</b>遗留优化（AppSSE 单文件过厚，不阻塞任何功能）；另有 3 项经决策维持现状（见第四章）。分级标准：P1 边界与抽象违规（偏离最优架构，应做）。</p>
 
     <div class="stat-grid">
-      <div class="stat"><div class="n">2</div><div class="l">P0 结构性前置</div></div>
-      <div class="stat"><div class="n">4</div><div class="l">P1 边界/抽象</div></div>
-      <div class="stat"><div class="n">5</div><div class="l">P2 卫生/观察</div></div>
-      <div class="stat"><div class="n">11</div><div class="l">问题总数</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">P0 结构性前置</div></div>
+      <div class="stat"><div class="n">1</div><div class="l">P1 边界/抽象</div></div>
+      <div class="stat"><div class="n">0</div><div class="l">P2 卫生/观察</div></div>
+      <div class="stat"><div class="n">1</div><div class="l">遗留问题总数</div></div>
     </div>
 
     <div class="card">
@@ -342,17 +406,7 @@
       <table>
         <thead><tr><th>编号</th><th>问题</th><th>严重度</th><th>预估工作量</th><th>v15 是否覆盖</th></tr></thead>
         <tbody>
-          <tr><td><span class="pill bad">P0-1</span></td><td>AppEngine 职责所有权未迁移（刷新实现/预过滤/私有依赖外泄）</td><td><span class="pill bad">高</span></td><td>3-5 人日</td><td><span class="pill bad">未识别根因</span></td></tr>
-          <tr><td><span class="pill bad">P0-2</span></td><td>兼容壳是「活代码」：缓存/选点状态别名被绕行调用</td><td><span class="pill bad">高</span></td><td>1-2 人日</td><td><span class="pill warn">低估（建议直接删）</span></td></tr>
-          <tr><td><span class="pill warn">P1-1</span></td><td>数据源抽象单轨化未完成：工厂零调用 + 直连 20+ 处</td><td><span class="pill warn">中</span></td><td>2-3 人日</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill warn">P1-2</span></td><td>AppChart 绕过 AppData API 直改引擎全局状态</td><td><span class="pill warn">中</span></td><td>0.5-1 人日</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill warn">P1-3</span></td><td>服务层三模块过厚（AppSSE 1834 / AppEngine 2258 / AppChart 686 行）</td><td><span class="pill warn">中</span></td><td>3-4 人日</td><td><span class="pill ok">一致（但顺序需改）</span></td></tr>
-          <tr><td><span class="pill warn">P1-4</span></td><td>线程安全缺口：期货缓存/文件 IO/标注读写无锁</td><td><span class="pill warn">中</span></td><td>1 人日</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill info">P2-1</span></td><td>前端 app.js 单文件 7059 行（零构建约束下的维护阈值）</td><td><span class="pill gray">低</span></td><td>2 人日（可选）</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill info">P2-2</span></td><td>App/ 工具链杂项无归属（ths_cloud_api 定位 / exec 加载）</td><td><span class="pill gray">低</span></td><td>1 人日</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill info">P2-3</span></td><td>错误处理双轨并存：error-dict 返回 vs 领域异常抛出</td><td><span class="pill gray">低</span></td><td>1.5 人日</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill info">P2-4</span></td><td>扫描进程池每轮销毁重建（spawn 冷启动代价）</td><td><span class="pill gray">低</span></td><td>1 人日（仅高频场景）</td><td><span class="pill bad">遗漏</span></td></tr>
-          <tr><td><span class="pill info">P2-5</span></td><td>工程卫生：report.json 过期 / print() 兜底 / v15 目标图勘误</td><td><span class="pill gray">低</span></td><td>0.5 人日</td><td><span class="pill warn">部分（图表未勘误）</span></td></tr>
+          <tr><td><span class="pill warn">P1-3</span></td><td>AppSSE 单文件 1845 行（职责已按 5 区域重组，未物理拆分）</td><td><span class="pill warn">中</span></td><td>2-3 人日</td><td><span class="pill ok">一致</span></td></tr>
         </tbody>
       </table>
       </div>
@@ -361,289 +415,91 @@
     <div class="card">
       <h3 style="margin-top:0">3.2 收益 × 工作量分布</h3>
       <figure class="chart-figure">
-        <figcaption>图 4 · 问题矩阵：横轴预估工作量（人日），纵轴架构收益（1-10）；右上「高收益低工作量」优先</figcaption>
+        <figcaption>图 4 · 遗留问题矩阵：横轴预估工作量（人日），纵轴架构收益（1-10）；唯一遗留项为「高收益、中工作量」，建议在下一次新功能开发前完成</figcaption>
         <div id="chart-problem-matrix" style="width:100%;min-height:440px"></div>
       </figure>
     </div>
 
-    <h3>3.3 P0 · 结构性前置（2 项）</h3>
-
-    <div class="prob p0">
-      <div class="head"><span class="id">P0-1</span><b>AppEngine 职责所有权未迁移 —— 横向拆分停留在「门面级」</b><span class="pill bad">高</span></div>
-      <ul>
-        <li><b>现象</b>：阶段 8 拆分只拆了「入口」，没拆「实现」。<code>AppRefresh.py</code>（100 行）是空壳，刷新实现（约 540 行：名称/PE-TTM/指数归属/流通市值）仍在 <code>AppEngine.py:262-807</code>，经 <code>AppRefresh.py:39,93</code> 委托回引擎；扫描预过滤 <code>_quick_prefilter_pass</code>、行业索引读取也在引擎内（<code>AppEngine.py:2203-2257</code>），被 <code>AppScan.py:252</code> 反向调用。</li>
-        <li><b>最严重的外泄</b>：<code>AppSSE.py:39-46</code> 从 AppEngine import 了 <b>15+ 个私有名</b>（<code>ema/calculate_macd/_find_left_shoulder_time/_futures_analysis_cache/_saved_point_times</code> 等）——引擎的内部实现细节成了两个模块间的「暗接口」。</li>
-        <li><b>为什么是 P0</b>：不先完成所有权迁移就直接拆 AppSSE（v15 的 P1-3），只会把这团混杂复制进新的子模块家族。它是后续一切拆分的前置条件。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppEngine.py:262-807, 2203-2257</code> · <code>AppRefresh.py:39,93</code> · <code>AppSSE.py:39-46</code> · <code>AppScan.py:252</code></span><span>工作量：3-5 人日</span></div>
-    </div>
-
-    <div class="prob p0">
-      <div class="head"><span class="id">P0-2</span><b>兼容壳是「活代码」：状态别名被服务层绕行调用</b><span class="pill bad">高</span></div>
-      <ul>
-        <li><b>现象</b>：v15 建议「兼容壳逐步删除」，但实测它们不是死代码：<code>AppEngine.py:2179</code> 的 <code>_futures_analysis_cache = app_data.futures_analysis_cache</code> 等别名，被 <code>AppChart.py:241-283</code>（<code>_m._cache_get</code>、<code>del _m._stocks_analysis_cache[...]</code>、<code>_m._saved_point_times[...]=</code>）和 <code>AppScan.py:350-416</code>（<code>_m._cache_remove</code>）持续使用。</li>
-        <li><b>守护测试锁死了别名</b>：<code>test_phase4_guards.py:347</code> 断言 <code>m._saved_point_times is app_data.saved_point_times</code>——别名一致性被制度化，删除前必须先改测试与调用方。</li>
-        <li><b>为什么是 P0</b>：别名是 AppEngine 瘦不下来的机制性根因。删除的前置动作 = 调用方改走 <code>app_data.*</code> 公共 API（正好与 P0-1 联动），而非删文件那么简单。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppEngine.py:2179, 943-957, 1092-1099</code> · <code>AppChart.py:241-283</code> · <code>AppScan.py:350-416</code> · <code>test_phase4_guards.py:347</code></span><span>工作量：1-2 人日</span></div>
-    </div>
-
-    <h3>3.4 P1 · 边界与抽象违规（4 项）</h3>
+    <h3>3.3 遗留问题明细（1 项）</h3>
 
     <div class="prob p1">
-      <div class="head"><span class="id">P1-1</span><b>数据源抽象单轨化未完成：工厂零调用 + 服务层直连 20+ 处</b><span class="pill warn">中</span></div>
+      <div class="head"><span class="id">P1-3</span><b>AppSSE 单文件 1845 行：职责已按 5 区域重组，未物理拆分</b><span class="pill warn">中</span></div>
       <ul>
-        <li><b>现象</b>：<code>DataAPI/__init__.py:19-37</code> 提供 <code>get_stock_api()</code> 统一工厂，但<b>全仓库无人调用</b>。App 层直接 import 具体实现类：<code>AppChart.py:421-428,531,559,640,657</code>（含直读 <code>CTqSdkAPI.FUTURES_ALIASES/SUPPORTED_FREQS</code> 静态状态）、<code>AppEngine.py:91-169</code>、<code>AppSSE.py:836,1064,1418</code>、<code>App/utils.py:124</code>、<code>FrontAPI.py:86,182</code>。</li>
-        <li><b>注意边界</b>：tqsdk <b>SDK 本身</b>的 import 确实只在 DataAPI（v15 这点成立）；问题是 <code>CTqSdkAPI/CTdxAPI/TqSdkCSSESource</code> 类的引用面失控——按 v15 自己「违反单一抽象 = 中」的标准应入列。</li>
-        <li><b>最刺眼的一处</b>：<code>/api/health</code>（<code>FrontAPI.py:179-185</code>）直接 <code>from DataAPI.TqSdkAPI import CTqSdkAPI</code> 读周期映射，违反其自家注释「六符号收敛禁止直连 DataAPI.TqSdkAPI」。</li>
+        <li><b>现状</b>：AppSSE 对引擎的依赖已收敛为 3 个显式名（<code>TQ_AVAILABLE/CTqSdkAPI/_get_futures_name</code>，<code>AppSSE.py:42-44</code>）+ <code>App/utils.py</code> 公共纯函数，文件头已按 5 区域标注分区：<b>区域 1 · SSE 实时流</b>（<code>AppSSE.py:70-934</code>：init_chan_symbol:74 / _drain_chan:115 / sse_futures_stream_single:144 / sse_futures_stream_dual:503）、<b>区域 2 · 期货分析</b>（<code>AppSSE.py:935-1645</code>：_build_futures_chan:939 / _analyze_futures_internal:968 / _extract_chan_structure:1238 / _extract_realtime_snapshot:1401 / _calc_futures_white_hline:1507 / MACD 增量三函数）、<b>区域 3 · 期货选点</b>（<code>AppSSE.py:1646-1767</code>：futures_manual_select_point:1650）、<b>区域 4 · 市场/代码/周期查询</b>（<code>AppSSE.py:1768-1812</code>：get_futures_aliases:1772 / get_futures_name:1779 / tq_available:1786 / get_futures_freqs:1791 / get_futures_freq_sec_map:1802）、<b>区域 5 · 退出清理</b>（<code>AppSSE.py:1813-1845</code>：_cleanup_all_futures_data:1816 / futures_cleanup:1839）。</li>
+        <li><b>为什么仍是问题</b>：区域标注只是「逻辑分区」，五个职责仍共享一个命名空间与一份 1845 行文件；区域 3 的选点入口在 AppChart（功能域横跨），只有物理拆分才能让「期货静态分析」「期货选点」各自成域。</li>
+        <li><b>随时可拆</b>：依赖已单向、暗接口已消除，拆分前置条件全部满足。</li>
       </ul>
-      <div class="meta-row"><span>证据：见上</span><span>工作量：2-3 人日</span></div>
-    </div>
-
-    <div class="prob p1">
-      <div class="head"><span class="id">P1-2</span><b>AppChart 绕过 AppData API 直改引擎全局状态</b><span class="pill warn">中</span></div>
-      <ul>
-        <li><b>现象</b>：选点路径中 <code>AppChart.py:274-283</code> 直接对引擎模块全局做写操作：<code>_m._saved_point_times[qualified_code] = {...}</code>、<code>del _m._stocks_analysis_cache[cache_key]</code> + <code>gc.collect()</code>。AppData 明明为这些状态提供了带锁/带持久化的公共 API（<code>app_data.save_point_time / cache_remove</code> 等）。</li>
-        <li><b>危害</b>：状态所有权被架空——同一份缓存存在「走 API」与「直改」两条写路径，将来加锁或换结构时必然漏改。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppChart.py:274-283</code></span><span>工作量：0.5-1 人日</span></div>
-    </div>
-
-    <div class="prob p1">
-      <div class="head"><span class="id">P1-3</span><b>服务层三模块过厚（= v15 P1-3，执行顺序需调整）</b><span class="pill warn">中</span></div>
-      <ul>
-        <li><b>现象</b>：<code>AppSSE.py</code> 1834 行混杂「SSE 流生成 / 期货静态分析 / 期货选点 / 元数据 / 快照提取 / 白线计算 / 清理」七类职责；<code>AppEngine.py</code> 2258 行混杂 10+ 类职责（分析编排/结果提取/MACD/刷新/预过滤/缓存别名/下载引用/Windows 通知…）；<code>AppChart.py</code> 686 行混杂图表交互+搜索+代码解析+期货元数据。</li>
-        <li><b>与 v15 的分歧</b>：结论一致，但 v15 建议先拆 AppSSE；本报告认为必须在 P0-1/P0-2 完成后<b>最后</b>做（否则混杂被复制进子模块）。「保持 AppOrch 聚合入口不变、前端零改动」这点与 v15 完全一致。</li>
-      </ul>
-      <div class="meta-row"><span>证据：模块行数实测 · <code>AppSSE.py</code> 函数清单（init_chan_symbol:96 / _analyze_futures_internal:558 / futures_manual_select_point:828 / sse_futures_stream_single:1043 / dual:1404 等）</span><span>工作量：3-4 人日</span></div>
-    </div>
-
-    <div class="prob p1">
-      <div class="head"><span class="id">P1-4</span><b>线程安全缺口：期货缓存 / 文件 IO / 标注读写无锁</b><span class="pill warn">中</span></div>
-      <ul>
-        <li><b>现象</b>：AppData 中仅股票分析缓存有 <code>RLock</code>（<code>AppData.py:323-349</code>）；期货缓存 <code>_futures_analysis_cache</code> 为无锁普通 dict（<code>AppData.py:351-357</code>）；标注 JSON、选点 CSV、流通市值文件的读写均无锁（<code>AppData.py:493-520, 694-770</code>）。</li>
-        <li><b>现实风险评级</b>：当前单用户 + SERIAL 串行锁 + SSE 仅按 symbol:freq 键写入的用法下冲突概率低，故列 P1 而非 P0；但这是 P0-2 改造（更多调用方直接触 AppData）后必须补齐的护栏。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppData.py:323-357（锁/无锁对照）, 493-520, 694-770</code></span><span>工作量：1 人日</span></div>
-    </div>
-
-    <h3>3.5 P2 · 工程卫生与观察项（5 项）</h3>
-
-    <div class="prob p2">
-      <div class="head"><span class="id">P2-1</span><b>前端 app.js 单文件 7059 行</b><span class="pill gray">低 · 观察项</span></div>
-      <ul>
-        <li>全局 <code>let</code> 状态散布、无模块化；契约字段（<code>klines/bis/fxs/zs/segs/bsps/white_hline</code>）硬编码；测试仅冒烟级（语法/DOM 存在性，<code>test_frontend_smoke.py:7</code>）。</li>
-        <li><b>取舍说明</b>：零构建（无 import/export，<code>test_phase6_guards.py:245</code> 守护）对单人项目是合理约束，<b>不建议引入构建链</b>；但 7000 行已过维护阈值，可做最低限度分区（按 IIFE 块拆 2-3 个文件 + 注释分区标记）。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>Frontend/app.js</code> 行数实测 · <code>test_frontend_smoke.py</code></span><span>工作量：2 人日（可选）</span></div>
-    </div>
-
-    <div class="prob p2">
-      <div class="head"><span class="id">P2-2</span><b>App/ 工具链杂项无归属</b><span class="pill gray">低</span></div>
-      <ul>
-        <li><code>ths_cloud_api.py</code>（435 行）：同花顺云端网络客户端，被 <code>AppScan</code> 经 <code>AppEngine.py:148</code> 调用——按 v15 自己的「外部瞬时读取归 DataAPI」判据，更像 DataAPI 侧成员。</li>
-        <li><code>ths_sync_to_tdx.py</code> / <code>ths_capture_cookie.py</code>：独立 CLI 工具，却混在服务层目录（且前者还 import <code>DataAPI.TdxAPI.set_tdx_config</code>）。</li>
-        <li><code>tdxhy_mapping_data.py</code>（964 行数据文件）：<code>AppData.py:282-298</code> 用 <code>exec()</code> 加载而非 import——应改为常规模块导入。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppEngine.py:148</code> · <code>ths_sync_to_tdx.py:23,335</code> · <code>AppData.py:282-298</code></span><span>工作量：1 人日</span></div>
-    </div>
-
-    <div class="prob p2">
-      <div class="head"><span class="id">P2-3</span><b>错误处理双轨并存</b><span class="pill gray">低</span></div>
-      <ul>
-        <li>服务层定义了完整领域异常体系（<code>AppOrch.py:126-153</code>，6 类 + 统一 handler），但期货路径大量返回 <code>{"error": "..."}</code> 字典（<code>AppSSE.py:588-660, 925-929</code>），API 层再用 <code>if "error" in result</code> 二次判读——两套语义并存，新代码不知道该走哪套。</li>
-        <li><b>建议</b>：期货路径逐步迁移到领域异常（SSE 流内错误事件除外，那是协议不是异常）。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppOrch.py:126-153</code> vs <code>AppSSE.py:588-660</code> · <code>FrontAPI.py:292</code></span><span>工作量：1.5 人日</span></div>
-    </div>
-
-    <div class="prob p2">
-      <div class="head"><span class="id">P2-4</span><b>扫描进程池每轮销毁重建</b><span class="pill gray">低 · 性能观察项</span></div>
-      <ul>
-        <li><code>AppScanPool._monitor_task</code> 在每个任务终态后调用 <code>destroy_pool()</code>（<code>AppScanPool.py:228</code>）；spawn 进程池冷启动慢（每个 worker 重新 import 全链），连续多轮扫描时每轮都付冷启动税。</li>
-        <li><b>建议</b>：保持现状（当前用法下「用完即毁」换来的是干净的资源语义与已通过测试的降级路径）；仅当出现「高频连续扫描」场景时再引入空闲超时复用（如 5 分钟 idle 后销毁）。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>AppScanPool.py:228, 309-327</code></span><span>工作量：1 人日（仅按需）</span></div>
-    </div>
-
-    <div class="prob p2">
-      <div class="head"><span class="id">P2-5</span><b>工程卫生三件套</b><span class="pill gray">低</span></div>
-      <ul>
-        <li><code>Test/report.json</code> 是 phase-7 时期的 14 项旧记录，与「20/20」说法不一致（20/20 本身属实，我已独立复现；但仓库内报告文件未刷新，易误导后来者）。</li>
-        <li><code>TqSdkCSSESource.py:77-78, 287-288, 296-297</code> 用 <code>print()</code> 打异常，应改 <code>log</code>。</li>
-        <li>v15 目标图 <code>AppOrch → AppData</code> 与实际链路不符（本报告图 1 已修正）。</li>
-      </ul>
-      <div class="meta-row"><span>证据：<code>Test/report.json:1-8</code> · <code>TqSdkCSSESource.py:77-78</code></span><span>工作量：0.5 人日</span></div>
+      <div class="meta-row"><span>证据：<code>AppSSE.py:11-21</code>（五区域文件头）· 区域起始行 70/935/1646/1768/1813 · 模块行数实测</span><span>工作量：2-3 人日</span></div>
     </div>
   </section>
 
   <!-- ============ S4 ============ -->
   <section id="s4">
-    <h2>四、与 v15 报告的分歧对照</h2>
-    <p class="sec-desc">先列一致项（均经独立验证），再列六条分歧——v15 仅认 1 条「中」级差距，本报告识别出 2 条 P0 + 4 条 P1。</p>
+    <h2>四、维持现状决策（3 项）</h2>
+    <p class="sec-desc">以下三项经决策不接纳、维持现状：当前场景下改动收益不抵复杂度。表中同时给出未来场景变化时的重评触发条件。</p>
 
     <div class="card">
-      <h3 style="margin-top:0">4.1 一致项（已逐一验证）</h3>
-      <ul>
-        <li>分层方向与目标架构主体；AppData 与 DataAPI 互不依赖（确认无相互 import）。</li>
-        <li>双轨配置分离（AppConfig / ChanConfig）落实到位。</li>
-        <li>测试基线 20/20：我在干净环境独立复现通过（结论属实；但注意仓库内 <code>Test/report.json</code> 为 14 项旧记录，见 P2-5）。</li>
-        <li>AppSSE / AppEngine / AppChart 过厚（1834 / 2258 / 686 行，实测一致）。</li>
-        <li>上传的 v15 文件与仓库内 <code>Docs/chan-custom-dev-architecture-review-v15.html</code> 逐字节一致（已 diff 验证）。</li>
-      </ul>
-    </div>
-
-    <div class="card">
-      <h3 style="margin-top:0">4.2 分歧项</h3>
+      <h3 style="margin-top:0">4.1 不接纳决策（3 项 · 维持现状）</h3>
       <div class="table-wrap">
       <table>
-        <thead><tr><th>#</th><th>v15 的说法</th><th>本报告结论</th><th>对应编号</th></tr></thead>
+        <thead><tr><th>编号</th><th>初版问题</th><th>不接纳理由（决策）</th><th>现状依据</th></tr></thead>
         <tbody>
-          <tr><td>1</td><td>未提及数据源抽象落实度（仅在目标中提及 CommonStockAPI）</td><td>工厂 <code>get_stock_api()</code> 零调用，服务层+API 层直连具体类 20+ 处；<code>/api/health</code> 违反自家收敛规则。按 v15 自己「违反单一抽象=中」的标准应入列</td><td><span class="pill warn">P1-1</span></td></tr>
-          <tr><td>2</td><td>「服务层模块过厚」——表述为模块体积问题</td><td>本质是<b>所有权未迁移</b>：AppRefresh 空壳委托、预过滤在引擎、AppSSE 依赖引擎 15+ 私有名。这才是 AppEngine 瘦不下来的根因</td><td><span class="pill bad">P0-1</span></td></tr>
-          <tr><td>3</td><td>「兼容壳逐步删除以消除认知负担」</td><td>低估难度：兼容壳是<b>活代码</b>，部分是 AppData 状态的别名且有守护测试锁死一致性；删除前置 = 先迁移所有权 + 改调用方 + 改测试</td><td><span class="pill bad">P0-2</span></td></tr>
-          <tr><td>4</td><td>分析范围含 Frontend/ 但差距表零条目</td><td>app.js 7059 行单文件应至少列为低优先级观察项（零构建约束下做最低限度拆分）</td><td><span class="pill info">P2-1</span></td></tr>
-          <tr><td>5</td><td>未提及 App/ 杂项与加载方式</td><td>ths_cloud_api 归属存疑、exec() 加载映射数据应改 import</td><td><span class="pill info">P2-2</span></td></tr>
-          <tr><td>6</td><td>目标图 <code>AppOrch → AppData</code></td><td>与实际 <code>AppOrch → 功能模块 → AppEngine → AppData</code> 不符（方向无误，属文档简化，已在本报告图 1 修正）</td><td><span class="pill info">P2-5</span></td></tr>
+          <tr><td><span class="pill warn">P1-4</span></td><td>线程安全缺口：期货缓存/文件 IO/标注读写无锁</td><td>单用户 + SERIAL 串行锁 + SSE 按 symbol:freq 键写入的现实用法下冲突概率低，加锁收益不抵复杂度</td><td>股票分析缓存仍有 <code>RLock</code>（<code>AppData.py:179</code>）；期货缓存维持无锁 dict——若未来转多用户需重评</td></tr>
+          <tr><td><span class="pill info">P2-1</span></td><td>前端 app.js 单文件 7059 行</td><td>零构建约束（无 import/export，守护测试锁定）对单人项目是合理取舍，拆分收益有限</td><td><code>Frontend/app.js</code> 7059 行维持不变</td></tr>
+          <tr><td><span class="pill info">P2-4</span></td><td>扫描进程池每轮销毁重建（spawn 冷启动）</td><td>「用完即毁」换来干净的资源语义与已验证的降级路径，当前无高频连续扫描场景</td><td><code>AppScanPool</code> 行为不变（342 行），降级与中止测试全绿</td></tr>
         </tbody>
       </table>
       </div>
-      <p class="muted">另有两项 v15 未覆盖的本报告新增发现：AppChart 直改引擎全局（P1-2）、线程安全缺口（P1-4）——均不构成对 v15 结论的反驳，属补充。</p>
+      <p class="muted">以上三项的取舍理由与现状依据已固化在本表；未来场景变化（多用户 / 前端维护痛感 / 高频扫描）时再按第五章护栏重评即可。</p>
     </div>
   </section>
 
   <!-- ============ S5 ============ -->
   <section id="s5">
-    <h2>五、优化路线图（先做什么、后做什么）</h2>
-    <p class="sec-desc">排序原则：<b>先解锁、再收敛、后拆分、末可选</b>。P0 是 P1-3（拆模块）的前置；每阶段结束都是一个可发布状态（测试全绿、前端零改动）。</p>
+    <h2>五、优化路线图与验收护栏</h2>
+    <p class="sec-desc">仅剩一项待办：<b>P1-3 AppSSE 五区域物理拆分</b>（可选，不阻塞功能）。边界规则已全部立好——拆出的新文件直接遵循第二章图 2 的依赖规则即可。每步结束仍是可发布状态（测试全绿、前端零改动）。</p>
 
     <div class="card">
       <h3 style="margin-top:0">5.1 依赖关系总览</h3>
       <figure class="diagram">
         <pre class="mermaid">flowchart TD
-  subgraph PH1["阶段 1 · 所有权迁移（P0 · 先做）"]
-    A1["① P0-2<br>调用方改走 app_data API<br>解锁状态别名"]
-    A2["② P0-1a<br>刷新实现迁入 AppRefresh"]
-    A3["③ P0-1b<br>预过滤迁入 AppScan"]
-    A4["④ P0-1c<br>AppSSE 15+ 私有依赖显式化"]
-    A1 --&gt; A2 --&gt; A3 --&gt; A4
+  subgraph NEXT["待办（1 项 · 可选）"]
+    A2["P1-3<br>AppSSE 五区域物理拆分<br>区域边界即文件边界"]
   end
-  subgraph PH2["阶段 2 · 边界收敛（P1）"]
-    B1["⑤ P1-2<br>选点路径走 AppData"]
-    B2["⑥ P1-1<br>数据源单轨化"]
-    B3["⑦ P1-4<br>线程安全补齐"]
-  end
-  subgraph PH3["阶段 3 · 模块拆分（最后）"]
-    C1["⑧ P1-3<br>AppSSE 三拆 + 引擎残余清理"]
-  end
-  subgraph PH4["阶段 4 · 可选卫生（P2）"]
-    D1["⑨ P2-5 卫生三件套"]
-    D2["⑩ P2-2 杂项归位"]
-    D3["⑪ P2-3 错误统一"]
-    D4["⑫ P2-1 前端分区 / P2-4 按需"]
-  end
-  A4 --&gt; B1 &amp; B2 &amp; B3
-  B1 &amp; B2 --&gt; C1
-  B3 -.-&gt; C1
-  C1 -. "全部可选<br>不阻塞任何功能" .-&gt; D1 &amp; D2 &amp; D3 &amp; D4
+  A2 -. "不阻塞任何功能<br>纯结构优化" .-&gt; NEW["后续新功能开发"]
         </pre>
-        <figcaption>图 5 · 优化路线依赖图：实线为硬依赖，虚线为可选；①→⑧ 为主线</figcaption>
+        <figcaption>图 5 · 剩余路线依赖图：P1-3（2-3 人日，纯物理拆分）为唯一待办，不阻塞新功能开发</figcaption>
       </figure>
-      <p class="muted">注：⑨ P2-5 建议在动手改代码前先做（半小时），让 report.json 与文档同步反映现状，避免旧基线误导。</p>
+      <p class="muted">注：P1-4（线程安全）、P2-1（前端拆分）、P2-4（扫描池复用）经决策不接纳，不列入路线；触发重评的条件见第四章。</p>
     </div>
 
     <div class="card">
       <h3 style="margin-top:0">5.2 执行顺序明细</h3>
 
-      <div class="phase-band">阶段 1 · P0 所有权迁移（约 5-7 人日，先做）——为什么先做：它是后续一切拆分的解锁条件，不做则拆分只是搬运混杂</div>
+      <div class="phase-band">待办 · P1-3 AppSSE 物理拆分（约 2-3 人日）——五区域边界即新文件边界，拆分只是「搬家」</div>
 
       <div class="step"><div class="no">1</div><div class="body">
-        <b>P0-2 · 调用方改走 AppData API，解锁状态别名 <span class="pill gray">1-2 人日</span></b>
-        <span class="muted">改 <code>AppChart.py:241-283</code> 的 <code>_m._cache_get/_save_point_times/del _m._stocks_analysis_cache</code>、<code>AppScan.py:350-416</code> 的 <code>_m._cache_remove</code> 为 <code>app_data.*</code> 调用；同步更新 <code>test_phase4_guards.py:347</code> 的别名断言。先做它因为：改动面最小（约 15 处调用点）、独立可验收、且为 P0-1 迁移扫清「谁还在用引擎状态」的障碍。</span>
-      </div></div>
-
-      <div class="step"><div class="no">2</div><div class="body">
-        <b>P0-1a · 刷新实现迁入 AppRefresh <span class="pill gray">1.5 人日</span></b>
-        <span class="muted">把 <code>AppEngine.py:262-807</code>（名称/PE-TTM/指数归属/流通市值 + <code>_refresh_status</code>）整体迁入 <code>AppRefresh.py</code>，空壳变实心；引擎不再被 <code>AppRefresh.py:39,93</code> 反向依赖。迁移是「剪切-粘贴 + import 调整」，行为零变化，靠 20/20 测试兜底。</span>
-      </div></div>
-
-      <div class="step"><div class="no">3</div><div class="body">
-        <b>P0-1b · 预过滤迁入 AppScan <span class="pill gray">1 人日</span></b>
-        <span class="muted">把 <code>_quick_prefilter_pass</code>、行业索引读取（<code>AppEngine.py:2203-2257</code>）迁入 <code>AppScan.py</code>（或其子模块），消除 <code>AppScan.py:252</code> 的反向调用。同时把 <code>AppEngine</code> 残留的 <code>_scan_lock/_scan_aborted</code> 等扫描态一并归属 AppScan。</span>
-      </div></div>
-
-      <div class="step"><div class="no">4</div><div class="body">
-        <b>P0-1c · AppSSE 私有依赖显式化 <span class="pill gray">1.5 人日</span></b>
-        <span class="muted">处理 <code>AppSSE.py:39-46</code> 的 15+ 私有名 import：MACD/EMA 等纯函数迁入公共工具模块（如 <code>App/engine_utils.py</code> 或就地 import AppData）；<code>_futures_analysis_cache/_saved_point_times</code> 改走 AppData API；<code>_find_left_shoulder_time</code> 等编入显式公共接口。完成后 AppEngine 对外只剩 <code>analyze_stock</code> 与少量显式导出——它已自然瘦身，可删除死别名。</span>
-      </div></div>
-
-      <div class="phase-band">阶段 2 · P1 边界收敛（约 4-5 人日）——为什么这时做：所有权已归位，「谁该调用谁」的边界清晰了，收敛才有稳定靶子</div>
-
-      <div class="step"><div class="no">5</div><div class="body">
-        <b>P1-2 · 选点路径走 AppData API <span class="pill gray">0.5-1 人日</span></b>
-        <span class="muted">阶段 1 第 1 步已完成大半；此处收尾检查红框/期货选点路径（<code>AppChart.py:316</code>、<code>AppSSE.py:803</code>）对期货子窗缓存的读写全部经 <code>futures_cache_get/put/pop</code>。</span>
-      </div></div>
-
-      <div class="step"><div class="no">6</div><div class="body">
-        <b>P1-1 · 数据源单轨化 <span class="pill gray">2-3 人日</span></b>
-        <span class="muted">分三小步：① <code>/api/health</code> 的周期映射改为经 <code>orch.futures_config()</code> 出（消除 <code>FrontAPI.py:182</code> 直连）；② <code>AppChart</code> 的别名/周期/可用性查询收敛到 AppSSE 元数据函数（<code>get_futures_aliases/tq_available</code> 已存在，改委托即可）；③ 新增守护测试：服务层与 API 层禁止 <code>from DataAPI.TqSdkAPI/TdxAPI import</code>（白名单：AppEngine 数据装配点、TqSdkCSSESource 协议）。不建议强推 <code>get_stock_api()</code> 工厂替代 AppEngine 的 CTdxAPI 装配——那会触碰引擎取数路径，风险收益比不划算。</span>
-      </div></div>
-
-      <div class="step"><div class="no">7</div><div class="body">
-        <b>P1-4 · 线程安全补齐 <span class="pill gray">1 人日</span></b>
-        <span class="muted">期货缓存读写加 <code>RLock</code>；标注/选点/市值文件的「读-改-写」序列加文件级锁。放阶段 2 是因为阶段 1 让更多调用方直接触 AppData，先收敛调用面、再一次性加锁，避免锁加在被绕行的旧路径上。</span>
-      </div></div>
-
-      <div class="phase-band">阶段 3 · P1-3 模块拆分（约 3-4 人日，最后做）——为什么最后：此刻依赖已单向、暗接口已消除，拆分才不会复制混杂</div>
-
-      <div class="step"><div class="no">8</div><div class="body">
-        <b>P1-3 · AppSSE 三拆 + 引擎残余清理 <span class="pill gray">3-4 人日</span></b>
-        <span class="muted">按 v15 方案拆为「SSE 流（<code>sse_futures_stream_*</code>/frame/心跳）· 期货静态分析（<code>_analyze_futures_internal/_build_futures_chan</code>）· 期货选点（<code>futures_manual_select_point</code>）」，元数据函数（aliases/name/config）可并入静态分析子模块；AppEngine 此时只剩分析编排+结果提取，按需再分 <code>_extract_*</code> 与主流程。全程保持 <code>AppOrch.__all__</code> 与 <code>FrontAPI</code> 调用点不变（re-export 兜底），前端零改动。这就是 v15 的 P1-3，只是执行时机从「立即」改为「最后」。</span>
-      </div></div>
-
-      <div class="phase-band">阶段 4 · P2 可选卫生（按需穿插，全部不阻塞）</div>
-
-      <div class="step"><div class="no">9</div><div class="body">
-        <b>P2-5 · 卫生三件套 <span class="pill gray">0.5 人日</span>（建议提前到动手第 0 步）</b>
-        <span class="muted">刷新 <code>Test/report.json</code> 到 20 项；<code>print()</code> 改 log；在 Docs 勘误 v15 目标图。</span>
-      </div></div>
-
-      <div class="step"><div class="no">10</div><div class="body">
-        <b>P2-2 · 杂项归位 <span class="pill gray">1 人日</span></b>
-        <span class="muted"><code>ths_cloud_api.py</code> 迁 DataAPI（或至少从 AppEngine import 链中摘出）；CLI 工具迁 <code>Script/</code>；<code>exec()</code> 改 import。</span>
-      </div></div>
-
-      <div class="step"><div class="no">11</div><div class="body">
-        <b>P2-3 · 错误处理统一 <span class="pill gray">1.5 人日</span></b>
-        <span class="muted">期货静态分析/选点的 <code>{"error": ...}</code> 返回逐步改抛领域异常（<code>DataFetchError/AnalysisError</code>），SSE 流内错误事件保留（协议语义）。</span>
-      </div></div>
-
-      <div class="step"><div class="no">12</div><div class="body">
-        <b>P2-1 / P2-4 · 前端分区与扫描池复用 <span class="pill gray">按需</span></b>
-        <span class="muted">前端仅在维护痛感出现时做最低限度拆分（保持零构建）；扫描池空闲复用仅在出现高频连续扫描场景时做。</span>
+        <b>P1-3 · 按五区域拆分 AppSSE <span class="pill gray">2-3 人日</span></b>
+        <span class="muted">按现有区域标注拆为「SSE 流（区域 1）· 期货静态分析（区域 2，含快照提取/MACD 增量/白线）· 期货选点（区域 3，入口可从 AppChart 一并归位）· 元数据查询（区域 4，可并入静态分析）· 退出清理（区域 5）」，区域边界即文件边界（起始行 70/935/1646/1768/1813）。全程保持 <code>AppOrch.__all__</code> 与 <code>FrontAPI</code> 调用点不变（re-export 兜底），前端零改动，靠 20/20 测试兜底。</span>
       </div></div>
     </div>
 
     <div class="card">
-      <h3 style="margin-top:0">5.3 如果只做三件事</h3>
+      <h3 style="margin-top:0">5.3 如果只做一件事</h3>
       <ul>
-        <li><b>最小改动集</b>：P0-2 → P0-1a → P1-1 的 ①② 两小步（合计约 4 人日），即可消除最伤架构的两处（状态绕行 + API 层直连），且全程零行为变化。</li>
-        <li><b>性价比最高单点</b>：P1-2（0.5 人日）——纯调用方式替换，立刻消灭「两条写路径」隐患。</li>
-        <li><b>最应缓做</b>：P1-3（拆 AppSSE）——不是不重要，而是顺序错了会白做；P2-1（前端）——零构建约束下收益有限。</li>
+        <li><b>性价比判断</b>：P1-3 不做也不影响功能正确性（五区域标注已提供导航），但 1845 行文件对多人协作与代码定位是持续税；建议在下一次新功能开发前完成。</li>
+        <li><b>新功能开发建议</b>：动手前先读第二章链路索引定位所属功能域；涉及期货的新功能建议等 P1-3 拆分后再动工，避免继续往 1845 行文件加码。</li>
       </ul>
     </div>
-  </section>
-
-  <!-- ============ S6 ============ -->
-  <section id="s6">
-    <h2>六、每一步的验收护栏</h2>
-    <p class="sec-desc">该项目的守护测试体系是最大资产，每步重构都应「借力」而非绕开。</p>
     <div class="card">
+      <h3 style="margin-top:0">5.4 每一步的验收护栏</h3>
+      <p class="sec-desc">该项目的守护测试体系是最大资产，每步重构都应「借力」而非绕开。</p>
       <ul>
-        <li><b>硬护栏（每步必过）</b>：<code>python3 Test/run_all.py</code> 20/20 全绿（本报告已验证基线可复现）；<code>AppOrch.__all__</code> 聚合入口签名不变；<code>FrontAPI</code> 路由与前端零改动。</li>
-        <li><b>同步护栏（改动即更新）</b>：func_map（<code>Test/function_map.json</code> / <code>func_map_auto.json</code>）与 phase guards 随迁移同步——尤其是阶段 1 第 1 步要改 <code>test_phase4_guards.py:347</code> 的别名断言，阶段 2 第 6 步要新增「服务层禁直连 DataAPI 具体类」守护（仿照既有 G3 守护写法）。</li>
+        <li><b>硬护栏（每步必过）</b>：<code>python3 Test/run_all.py</code> 20/20 全绿（<code>Test/report.json</code> 已同步为 20 项）；<code>AppOrch.__all__</code> 聚合入口签名不变；<code>FrontAPI</code> 路由与前端零改动。</li>
+        <li><b>同步护栏（改动即更新）</b>：func_map（<code>Test/function_map.json</code> / <code>func_map_auto.json</code>）与 phase guards 随迁移同步。现有 11 类结构性守护可作范本，其中守护 ⑩「数据源门禁」（<code>test_phase4_guards.py:678</code>）已固化「消费侧零直连 + 装配点白名单（Engine/SSE/Refresh/Scan/Download/utils）」——P1-3 拆分出的新文件同样受其约束：期货相关新文件若确需 import DataAPI，须同步更新白名单并说明理由。</li>
         <li><b>快照护栏</b>：分析结果快照（<code>Test/snapshots/</code>）保证「重构 = 搬家而非改行为」；任何快照 diff 都应先解释再接受。</li>
-        <li><b>提交粒度</b>：一步一提交（每步都是可发布状态），出问题可单步回滚；P0-1a/b/c 三个子步骤分开提交。</li>
+        <li><b>提交粒度</b>：一步一提交（每步都是可发布状态），出问题可单步回滚；P1-3 的各区域拆分应分开提交。</li>
+        <li><b>重评触发</b>：第四章三项不接纳决策在场景变化时重评——转多用户（P1-4 线程安全）、前端维护痛感（P2-1）、高频连续扫描（P2-4 池复用）。</li>
       </ul>
     </div>
   </section>
@@ -651,15 +507,15 @@
   <!-- ============ FOOTER ============ -->
   <footer>
     <div class="foot">
-      <p><b>报告说明</b>：本报告为独立分析，基于 chan.py <code>custom-dev</code> 分支（commit <code>8190e1d</code>）逐文件代码审读；缠论核心引擎（Bi / BuySellPoint / Combiner / Common / KLine / Math / Plot / Seg / ZS）为第三方借用代码，不在分析与优化范围。测试基线 20/20 在干净环境独立复现通过。所有行号以该 commit 为准。</p>
+      <p><b>报告说明</b>：本档为新功能开发前的架构上下文文档，基于 <code>custom-dev @ 0f31d3a</code> 逐文件实测撰写——分层与依赖方向、12 条功能链路、DataAPI 数据源抽象层分工、验收护栏。遗留优化项仅 1 项（第三章 P1-3）；P1-4 / P2-1 / P2-4 经决策维持现状（第四章）。全部行号以 <code>0f31d3a</code> 为准；测试基线 20/20。缠论核心引擎（Bi / BuySellPoint / Combiner / Common / KLine / Math / Plot / Seg / ZS）为第三方借用代码，不在分析与优化范围。</p>
       <p>对比基准：《chan-custom-dev-architecture-review-v15》（与仓库内 <code>Docs/chan-custom-dev-architecture-review-v15.html</code> 一致）。图表为本地渲染（ECharts / Mermaid 随目录交付），离线可用。</p>
     </div>
     <div class="sources">
       <h2>分析来源</h2>
       <ol>
-        <li id="cite-1"><span class="src-title">jbxenzxy/chan.py custom-dev 分支源代码（commit 8190e1d），本报告全部代码证据的直接来源。</span><span class="src-url">https://github.com/jbxenzxy/chan.py/tree/custom-dev</span></li>
-        <li id="cite-2"><span class="src-title">用户上传文档：chan-custom-dev-architecture-review-v15.html（V15 架构复审报告），分歧对照的基准。</span><span class="src-url">用户上传文档（与仓库 Docs/ 内文件逐字节一致，经 diff 验证）</span></li>
-        <li id="cite-3"><span class="src-title">实测记录：Test/run_all.py 于干净环境执行，20/20 组件全部通过（fixtures/快照/确定性/SSE 序列/并发/降级/前端冒烟等）。</span><span class="src-url">本报告独立复现，非转述</span></li>
+        <li id="cite-1"><span class="src-title">jbxenzxy/chan.py custom-dev 分支源代码（本档基准 commit 0f31d3a），全部代码证据的直接来源。</span><span class="src-url">https://github.com/jbxenzxy/chan.py/tree/custom-dev</span></li>
+        <li id="cite-2"><span class="src-title">用户上传文档：chan-custom-dev-architecture-review-v15.html（V15 架构复审报告），历史评审对照的基准。</span><span class="src-url">用户上传文档（与仓库 Docs/ 内文件一致）</span></li>
+        <li id="cite-3"><span class="src-title">实测记录：Test/run_all.py 于干净克隆执行，20/20 组件全部通过（fixtures/快照/确定性/SSE 序列/并发/降级/前端冒烟等）；report.json 已同步为 20 项。</span><span class="src-url">本档独立复现，非转述</span></li>
       </ol>
     </div>
   </footer>
@@ -3076,20 +2932,20 @@ globalThis.mermaid = globalThis.__esbuild_esm_mermaid.default;
     }, extra || {});
   }
 
-  // ── 图 3 · 服务层与数据层模块行数 ─────────────────────────────
+  // ── 图 3 · 服务层与数据层模块行数（custom-dev @ 0f31d3a） ────────
   makeChart("chart-module-size", {
     animation: false,
     grid: { left: 8, right: 40, top: 30, bottom: 8, containLabel: true },
     tooltip: tooltipBase({
       formatter: function(p) {
-        return p.name + "：" + p.value + " 行" + (p.value >= 600 ? " · 过厚（P0/P1 主战场）" : "");
+        return p.name + "：" + p.value + " 行" + (p.value >= 1500 ? " · 过厚（P1-3 主战场）" : "");
       }
     }),
     xAxis: axisBase({ type: "value", name: "行数", nameTextStyle: { color: muted } }),
     yAxis: axisBase({
       type: "category", inverse: true,
       splitLine: { show: false },
-      data: ["TdxAPI (DataAPI)", "AppEngine", "AppSSE", "AppChart", "ths_sync_to_tdx", "AppData", "AppScan", "AppScanPool", "AppScanStore", "FrontAPI", "AppRefresh"]
+      data: ["TdxAPI (DataAPI)", "AppSSE", "AppEngine", "AppData", "FrontAPI", "AppRefresh", "AppChart", "AppScan", "ths_sync_to_tdx (Script/)", "AppScanPool", "AppScanStore"]
     }),
     series: [{
       type: "bar",
@@ -3098,38 +2954,26 @@ globalThis.mermaid = globalThis.__esbuild_esm_mermaid.default;
       itemStyle: { borderRadius: [0, 4, 4, 0] },
       data: [
         { value: 2326, itemStyle: { color: muted + "66" } },  // TdxAPI：数据源层，参照
-        { value: 2258, itemStyle: { color: bad } },            // AppEngine
-        { value: 1834, itemStyle: { color: bad } },            // AppSSE
-        { value: 686,  itemStyle: { color: warn } },           // AppChart
-        { value: 555,  itemStyle: { color: muted + "66" } },   // ths_sync_to_tdx
-        { value: 923,  itemStyle: { color: accent2 } },        // AppData
-        { value: 550,  itemStyle: { color: accent2 } },        // AppScan
+        { value: 1845, itemStyle: { color: bad } },            // AppSSE（P1-3）
+        { value: 1448, itemStyle: { color: warn } },           // AppEngine（纯分析编排）
+        { value: 922,  itemStyle: { color: accent2 } },        // AppData
+        { value: 691,  itemStyle: { color: accent } },         // FrontAPI
+        { value: 703,  itemStyle: { color: accent2 } },        // AppRefresh（自持实现）
+        { value: 662,  itemStyle: { color: accent2 } },        // AppChart
+        { value: 669,  itemStyle: { color: accent2 } },        // AppScan
+        { value: 555,  itemStyle: { color: muted + "66" } },   // ths_sync_to_tdx（Script/ 工具链）
         { value: 342,  itemStyle: { color: accent2 } },        // AppScanPool
-        { value: 339,  itemStyle: { color: accent2 } },        // AppScanStore
-        { value: 694,  itemStyle: { color: accent } },         // FrontAPI
-        { value: 100,  itemStyle: { color: warn, opacity: 0.55 } } // AppRefresh 空壳
+        { value: 339,  itemStyle: { color: accent2 } }         // AppScanStore
       ]
     }]
   });
 
-  // ── 图 4 · 问题矩阵（收益 × 工作量） ──────────────────────────
+  // ── 图 4 · 遗留问题矩阵（收益 × 工作量，仅 1 项） ────────────────
   var cls = {
-    p0: { name: "P0 结构性前置", color: bad },
-    p1: { name: "P1 边界/抽象", color: warn },
-    p2: { name: "P2 卫生/观察", color: accent }
+    p1: { name: "P1 边界/抽象（遗留）", color: warn }
   };
   var pts = [
-    { id: "P0-1", eff: 8.6,  cost: 4.0, cls: "p0", note: "所有权迁移（刷新/预过滤/私有依赖）" },
-    { id: "P0-2", eff: 7.6,  cost: 1.5, cls: "p0", note: "兼容壳状态别名收编" },
-    { id: "P1-1", eff: 8.0,  cost: 2.5, cls: "p1", note: "数据源抽象单轨化" },
-    { id: "P1-2", eff: 5.6,  cost: 0.8, cls: "p1", note: "选点直改引擎全局" },
-    { id: "P1-3", eff: 6.4,  cost: 3.5, cls: "p1", note: "三模块过厚拆分（最后做）" },
-    { id: "P1-4", eff: 5.0,  cost: 1.0, cls: "p1", note: "线程安全补齐" },
-    { id: "P2-1", eff: 3.0,  cost: 2.0, cls: "p2", note: "前端 7059 行（可选）" },
-    { id: "P2-2", eff: 3.6,  cost: 1.0, cls: "p2", note: "工具链杂项归位" },
-    { id: "P2-3", eff: 3.2,  cost: 1.5, cls: "p2", note: "错误处理统一" },
-    { id: "P2-4", eff: 2.2,  cost: 1.0, cls: "p2", note: "扫描池复用（按需）" },
-    { id: "P2-5", eff: 2.8,  cost: 0.5, cls: "p2", note: "工程卫生三件套（建议第0步）" }
+    { id: "P1-3", eff: 6.4, cost: 2.5, cls: "p1", note: "AppSSE 五区域物理拆分（1845 行）" }
   ];
   var series = Object.keys(cls).map(function(k) {
     return {
@@ -3150,7 +2994,7 @@ globalThis.mermaid = globalThis.__esbuild_esm_mermaid.default;
   });
   makeChart("chart-problem-matrix", {
     animation: false,
-    color: [cls.p0.color, cls.p1.color, cls.p2.color],
+    color: [cls.p1.color],
     grid: { left: 8, right: 24, top: 46, bottom: 8, containLabel: true },
     legend: {
       top: 6, left: 8, itemWidth: 12, itemHeight: 8,

@@ -28,6 +28,12 @@
      导入块）—— 防阶段 4 迁移遗漏导致运行时 AttributeError
      （实测：_m.read_zxg_stocks / _m._float_mc_loaded /
      _m._STOCK_NAMES_CACHE_FILE）
+  ⑩ 数据源 import 门禁（P1-1 数据源抽象单轨化）：
+     FrontAPI / AppChart / AppOrch 任何层级禁止 import DataAPI.*；
+     装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
+     AppSSE（仅 TqSdkCSSESource；CTqSdkAPI 经 AppEngine 显式名）、
+     AppRefresh（仅 TdxAPI.refresh_block_files）、AppScan（仅
+     TdxAPI.get_index_stocks）、App/utils（仅 TqSdkAPI 纯函数依赖）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -635,6 +641,81 @@ def test_engine_refs_valid(failures):
 # ═══════════════════════════════════════════════════════════════════════
 # 入口
 # ═══════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════
+# ⑩ 数据源 import 门禁（P1-1 数据源抽象单轨化）
+# ═══════════════════════════════════════════════════════════════════════
+def _datasource_imports(rel):
+    """返回**任何层级**（模块级+函数体）import 的 DataAPI.* 子模块全名列表。
+
+    `from DataAPI import ElTdxAPI` 形式记为 "DataAPI.ElTdxAPI"（包成员级引用，
+    本仓库中 ElTdxAPI 为子模块——盘后下载引擎装配点）。
+    """
+    tree = ast.parse(read_src(rel))
+    hits = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            for a in n.names:
+                if a.name == "DataAPI" or a.name.startswith("DataAPI."):
+                    hits.append(a.name)
+        elif isinstance(n, ast.ImportFrom) and n.module and n.level == 0:
+            if n.module == "DataAPI":
+                for a in n.names:
+                    hits.append(f"DataAPI.{a.name}")
+            elif n.module.startswith("DataAPI."):
+                hits.append(n.module)
+    return hits
+
+
+def test_datasource_import_gate(failures):
+    bad = []
+    # ── 消费侧三文件：任何层级禁止 import DataAPI.*（P1-1 后为零）──
+    for rel in ("FrontAPI.py",
+                os.path.join("App", "AppChart.py"),
+                os.path.join("App", "AppOrch.py")):
+        for mod in _datasource_imports(rel):
+            bad.append(f"{rel} import 了 {mod}（消费侧须经功能域/引擎，禁止直连 DataAPI）")
+
+    # ── 装配点白名单：逐文件精确断言允许的 DataAPI 子模块 ──
+    # AppEngine：TdxAPI 装配 + tqsdk 可用性探测 + ElTdxAPI 盘后下载引擎引用
+    engine_mods = set(_datasource_imports(os.path.join("App", "AppEngine.py")))
+    engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI", "DataAPI.ElTdxAPI"}
+    extra = engine_mods - engine_allow
+    if extra:
+        bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
+    # AppSSE：仅 TqSdkCSSESource（SSE 流协议）；CTqSdkAPI 须从 AppEngine 显式名获取
+    sse_mods = set(_datasource_imports(os.path.join("App", "AppSSE.py")))
+    if sse_mods != {"DataAPI.TqSdkCSSESource"}:
+        bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource，实测: {sorted(sse_mods)}")
+    # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ ElTdxAPI（vipdoc 代码收集）
+    refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
+    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/ElTdxAPI，实测: {sorted(refresh_mods)}")
+    # AppScan：仅 TdxAPI.get_index_stocks（板块成分读取）
+    scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
+    if scan_mods != {"DataAPI.TdxAPI"}:
+        bad.append(f"App/AppScan.py 的 DataAPI import 应仅为 TdxAPI，实测: {sorted(scan_mods)}")
+    # AppDownload：仅 ElTdxAPI（盘后下载域委托引擎装配）
+    dl_mods = set(_datasource_imports(os.path.join("App", "AppDownload.py")))
+    if dl_mods != {"DataAPI.ElTdxAPI"}:
+        bad.append(f"App/AppDownload.py 的 DataAPI import 应仅为 ElTdxAPI，实测: {sorted(dl_mods)}")
+    # App/utils：仅 TqSdkAPI（引擎纯函数的 FREQ_SEC_MAP/期货代码解析依赖）
+    utils_mods = set(_datasource_imports(os.path.join("App", "utils.py")))
+    if utils_mods != {"DataAPI.TqSdkAPI"}:
+        bad.append(f"App/utils.py 的 DataAPI import 应仅为 TqSdkAPI，实测: {sorted(utils_mods)}")
+
+    if bad:
+        failures.extend(f"数据源门禁: {b}" for b in bad)
+        for b in bad[:8]:
+            print(f"[FAIL] ⑩ 数据源门禁: {b}")
+        if len(bad) > 8:
+            print(f"        …共 {len(bad)} 处")
+    else:
+        print("[PASS] ⑩ 数据源门禁: 消费侧零直连；装配点白名单（Engine/SSE/Refresh/Scan/Download/utils）精确匹配")
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 入口
+# ═══════════════════════════════════════════════════════════════════════
 def main():
     ap = argparse.ArgumentParser(description="阶段 4 数据层收敛 · 成果防护")
     ap.add_argument("--update", action="store_true",
@@ -656,13 +737,14 @@ def main():
     test_semantic_subchan(failures)
     test_data_layer_purity(failures)
     test_engine_refs_valid(failures)
+    test_datasource_import_gate(failures)
     print("-" * 64)
     if failures:
         print(f"===== 阶段 4 成果防护: 失败 {len(failures)} 项 =====")
         for f in failures:
             print(" -", f)
         return False
-    print("===== 阶段 4 成果防护: 全部通过（10 类守护） =====")
+    print("===== 阶段 4 成果防护: 全部通过（11 类守护） =====")
     return True
 
 

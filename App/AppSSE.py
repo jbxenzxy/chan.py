@@ -58,8 +58,11 @@ from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPo
 # chan.py 核心（与 AppEngine 同源；_analyze_futures_internal 直接使用）
 from Chan import CChan
 from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
-# SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议）
-from DataAPI.TqSdkCSSESource import CTqSdkSession, CSSESourceClosed
+# SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
+# P1-1：close_all/CSSESource 一并 re-export，API 层经本模块消费，不再直连 DataAPI）
+from DataAPI.TqSdkCSSESource import (  # noqa: F401
+    CSSESource, CSSESourceClosed, CTqSdkSession, close_all,
+)
 from App.AppLog import get_logger, trace_id
 log = get_logger(__name__)
 
@@ -158,8 +161,6 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
     log.info("[%s] SSE 单窗口连接: symbol=%s freq=%s", _tid, symbol, freq)
 
     src = source if source is not None else CTqSdkSession()
-
-    from DataAPI.TqSdkAPI import CTqSdkAPI
 
     display_key = None
     freq_sec = None
@@ -513,7 +514,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 
     src = source if source is not None else CTqSdkSession()
 
-    from DataAPI.TqSdkAPI import CTqSdkAPI
     from datetime import datetime
 
     # 确定周期
@@ -987,7 +987,6 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
     # 1. 拉取历史K线（每次冷启动重新拉取天勤数据）
     t_fetch = time.time()
-    from DataAPI.TqSdkCSSESource import CTqSdkSession
     _display_key = f"{code}:{CTqSdkAPI.FREQ_LABEL_CN.get(freq, freq)}"
     _src = None
     full_records = []
@@ -1655,8 +1654,6 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     创建新 TqApi → 从T重新拉取 → 创建新CChan → 返回完整快照。
     """
     import time
-    from DataAPI.TqSdkCSSESource import CTqSdkSession
-    from DataAPI.TqSdkAPI import CTqSdkAPI
 
     # 别名解析
     symbol_upper = symbol.upper()
@@ -1800,6 +1797,16 @@ def get_futures_freqs():
                 "disabled_freqs": CTqSdkAPI.DISABLED_FREQS}
     except ImportError:
         return {"supported_freqs": [], "disabled_freqs": []}
+
+
+def get_futures_freq_sec_map():
+    """期货周期→秒数映射（P1-1：/api/health 的单一事实源出口，替代 API 层直连 CTqSdkAPI）"""
+    try:
+        if CTqSdkAPI is None:
+            return {}
+        return dict(CTqSdkAPI.FREQ_SEC_MAP)
+    except Exception:
+        return {}
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -18,7 +18,8 @@ App/AppChart.py —— 图表交互功能域
 本模块收纳：
   - 分析漏斗（call_analysis / run_analysis / analyze_stock 等，持 _ENGINE_LOCK）
   - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
-  - 数据拉取与注入（fetch_and_inject / _get_data_source）
+  - 数据拉取与注入（fetch_and_inject，薄委托引擎 analyze_stock；
+    直连数据源的 _get_data_source 已随 P1-1 删除——数据源装配归引擎）
   - 审核标注（get_annotations / handle_annotation_action / delete_by_date
     等，原 App/AppAnnotate.py，阶段随本版合入：图表右键标注属图表交互）
   - 搜索（search_stocks）
@@ -27,7 +28,8 @@ App/AppChart.py —— 图表交互功能域
     get_futures_freqs 等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
   - 代码解析（get_stock_market_code / get_market_code / get_stock_name）
 
-依赖方向：AppChart.py → AppEngine / AppSSE / AppData / DataAPI（单向）
+依赖方向：AppChart.py → AppEngine / AppSSE / AppData（单向；
+P1-1 后不再直连 DataAPI——期货元数据一律经 AppSSE 区域 4 出口）
 锁定义：_ENGINE_LOCK 为引擎调用全局串行锁，本模块 call_* 漏斗持锁；
 LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
 """
@@ -402,26 +404,6 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 # 获取侧：数据拉取与注入（阶段 5：统一走 DataAPI 抽象层）
 # ═══════════════════════════════════════════════════════════════════════
 
-def _get_data_source(code, source="tdx"):
-    """阶段 5：根据 code 类型和 source 参数选择数据源，返回 DataAPI 类引用。
-
-    数据源选择规则：
-      - tdx: 通达信本地数据（股票/指数/板块），使用 DataAPI.TdxAPI
-      - tqsdk: 天勤期货数据（期货/期指），使用 DataAPI.TqSdkAPI
-      - 自动检测: code 包含期货特征时自动选择 tqsdk
-
-    返回 (api_module, is_futures) 元组。
-    """
-    from DataAPI.TqSdkAPI import _get_futures_code
-
-    if source == "tqsdk" or _get_futures_code(code):
-        from DataAPI import TqSdkAPI
-        return TqSdkAPI, True
-
-    from DataAPI import TdxAPI
-    return TdxAPI, False
-
-
 def fetch_and_inject(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
     """
     阶段 5：判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
@@ -521,11 +503,11 @@ def search_stocks(q):
     results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
     results = results[:10]
 
-    # 期货/期指别名搜索（阶段 5：经 CTqSdkAPI 市场/代码/周期查询接口）
-    from DataAPI.TqSdkAPI import CTqSdkAPI
-    for alias, full_code in CTqSdkAPI.FUTURES_ALIASES.items():
+    # 期货/期指别名搜索（P1-1：经期货域元数据出口，图表层不直连 CTqSdkAPI）
+    _futures_aliases = _sse.get_futures_aliases()
+    for alias, full_code in _futures_aliases.items():
         if keyword_upper in alias.upper():
-            name = _m._get_futures_name(full_code) if _m._get_futures_name else alias
+            name = _sse.get_futures_name(full_code)
             if not any(r["code"] == full_code for r in results):
                 results.append({
                     "code": full_code, "name": name, "pinyin": alias,
@@ -549,10 +531,11 @@ def futures_clear_saved_point(symbol, freq="15s"):
     """期货清除选点（/api/futures_clear_saved_point）：别名解析 + 清 CSV"""
     from App.AppData import app_data
 
+    # P1-1：别名解析经期货域元数据出口（图表层不直连 CTqSdkAPI）
     symbol_upper = symbol.upper()
-    from DataAPI.TqSdkAPI import CTqSdkAPI
-    if symbol_upper in CTqSdkAPI.FUTURES_ALIASES:
-        symbol = CTqSdkAPI.FUTURES_ALIASES[symbol_upper]
+    _futures_aliases = _sse.get_futures_aliases()
+    if symbol_upper in _futures_aliases:
+        symbol = _futures_aliases[symbol_upper]
     app_data.clear_saved_point_time(symbol, freq)
     return {"ok": True}
 
@@ -647,6 +630,11 @@ def tq_available():
 def get_futures_freqs():
     """期货可用周期列表（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse.get_futures_freqs()
+
+
+def get_futures_freq_sec_map():
+    """期货周期→秒数映射（P1-1：/api/health 单一事实源出口，实现 App/AppSSE.py）"""
+    return _sse.get_futures_freq_sec_map()
 
 
 def get_stock_names_cache_file():

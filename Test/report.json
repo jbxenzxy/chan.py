@@ -1,7 +1,7 @@
 {
  "phase": "7",
  "mode": "verify",
- "ran_at": "2026-08-23 01:10:42",
+ "ran_at": "2026-08-23 03:02:29",
  "python": "3.10.12",
  "total": 20,
  "passed": 20,
@@ -30,7 +30,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 6.22,
+   "elapsed_s": 6.13,
    "output_tail": [
     "[BS][15s] check_nested_diver: 期货下窗暂无缓存 → 按子级别背驰处理 | cache_key=KQ.M@SHFE.RB:None | sub_freq=None",
     "[BS0][15s] cal_bs0point: 进入...... | bi_idx=89",
@@ -74,7 +74,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.31,
+   "elapsed_s": 1.61,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -82,7 +82,7 @@
     "[PASS] ② 领域异常链路: NotFoundError → 404 + 结构化 JSON（{\"error\":\"NotFoundError\",\"detail\":\"测试股票不存在\"}…）",
     "[PASS] ③ 无效代码: error 字典（无法识别股票代码: INVALID_CODE）",
     "[PASS] ③ 不支持周期: error 字典（K线数据不足: 仅0条）",
-    "[PASS] ③ 期货日期契约: 连字符被拒（无法解析日期: 2024-01-31）——契约：end_date 仅支持 %Y/%m/%d 系斜杠格式",
+    "[PASS] ③ 期货日期契约: 连字符被拒（ConfigError: 无法解析日期: 2024-01-31）——契约：end_date 仅支持 %Y/%m/%d 系斜杠格式",
     "",
     "===== 阶段 2 成果防护: 全部通过 ====="
    ]
@@ -93,7 +93,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.43,
+   "elapsed_s": 4.55,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -110,7 +110,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.85,
+   "elapsed_s": 1.0,
    "output_tail": [
     "[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py (40524 bytes)，DataAPI/ 无残留",
     "[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: x_to_881=470 881_to_x=470",
@@ -129,7 +129,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.31,
+   "elapsed_s": 1.48,
    "output_tail": [
     "[PASS] single 正常关闭: 生成器正常耗尽（6 帧, 心跳 3 帧）",
     "[PASS] single 收尾: close×1 + cleanup×1",
@@ -151,7 +151,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.52,
+   "elapsed_s": 0.53,
    "output_tail": [
     "[PASS] 映射校验: 29 函数 / 25 状态 / 2 类 / 36 路由 全部归属且与代码同步"
    ]
@@ -162,7 +162,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.37,
+   "elapsed_s": 1.38,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -183,9 +183,8 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.23,
+   "elapsed_s": 1.54,
    "output_tail": [
-    "[PASS] ② 状态别名: 6 组别名与 app_data 字段共享同一对象",
     "[PASS] ②b 状态别名零绕行: 3 个服务模块零绕行 AppEngine 状态别名（P0-2 已全部改走 app_data.*）",
     "[PASS] ②c 数据层直改零残留: 4 个服务模块零直改 app_data 缓存 dict（P1-2 已全部经公共 API）",
     "[PASS] ③ 别名清零: 13 个路径/容量别名保持清零（配置单源 = app_config 直读）",
@@ -195,8 +194,9 @@
     "[PASS] ⑦ 语义化子窗: set/get/pop 三件套齐备，key 规则内聚数据层，大小写不敏感，FrontAPI 零手工拼 key",
     "[PASS] ⑧ 数据层纯度: AppData 全层级零反向依赖（禁 5 类上层/引擎模块，防影子层双源）",
     "[PASS] ⑨ 引擎引用有效性: AppOrch 全部 0 个 _m.<attr> 引用在 AppEngine 中可解析",
+    "[PASS] ⑩ 数据源门禁: 消费侧零直连；装配点白名单（Engine/SSE/Refresh/Scan/Download/utils）精确匹配",
     "----------------------------------------------------------------",
-    "===== 阶段 4 成果防护: 全部通过（10 类守护） ====="
+    "===== 阶段 4 成果防护: 全部通过（11 类守护） ====="
    ]
   },
   {
@@ -205,7 +205,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.04,
+   "elapsed_s": 1.13,
    "output_tail": [
     "[PASS] ② 双解析器一致性: AppData 与 TdxAPI 输出一致（8 条）",
     "[PASS] ③ 缺失文件: 两解析器对空路径/不存在文件均返回 []",
@@ -227,11 +227,11 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.04,
+   "elapsed_s": 1.13,
    "output_tail": [
-    "01:10:30 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
-    "01:10:30 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChanPrev' object has no attribute 'get_latest_bsp'",
-    "01:10:30 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
+    "03:02:16 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
+    "03:02:16 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChanPrev' object has no attribute 'get_latest_bsp'",
+    "03:02:16 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
     "[PASS] ① 增量 klines: 新确认K线追加 + 预览bar剥离",
@@ -249,7 +249,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.13,
+   "elapsed_s": 1.29,
    "output_tail": [
     "[PASS] ③a 基类契约: 5 个元数据属性 + fetch_kline（get_kline 家族）声明于 CCommonStockApi",
     "[PASS] ③b 基类默认实现: fetch_kline 默认 NotImplementedError",
@@ -271,7 +271,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.71,
+   "elapsed_s": 0.73,
    "output_tail": [
     "===== 阶段 6 成果防护：前端组件化（设计 8.9） =====",
     "[PASS] ① 组件区块完备: 10 个区块全部在位非空，顶层函数零游离（377 处 function 定义落位）",
@@ -293,7 +293,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 3.38,
+   "elapsed_s": 3.68,
    "output_tail": [
     "[PASS] ⑤ 终止语义: 跨进程 is_aborted + aborted 落库 + queued 不取消，collector 跳过中止行 + error 终态 + 错误并入 _scan_skip_log",
     "[PASS] ⑥ 前端轮询契约: 提交 + 增量轮询（seq+1 推进）+ 三态终判 + 3 次熔断 + onData/onDone 回调；4 处调用点全异步，旧 scan_one 并发循环清零；index.html 缓存版本 v=10（击穿在位）",
@@ -315,7 +315,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.35,
+   "elapsed_s": 1.33,
    "output_tail": [
     "[PASS] single 收尾: close×1 + cleanup×1（['KQ.m@SHFE.rb:15']）",
     "[PASS] single 协议路径: K线完成×1 + tick×3 全触发",
@@ -337,7 +337,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.38,
+   "elapsed_s": 1.47,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -359,7 +359,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.32,
+   "elapsed_s": 1.35,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -375,9 +375,9 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.63,
+   "elapsed_s": 1.76,
    "output_tail": [
-    "01:10:40 INFO    [App.AppScanPool] [扫描池] ProcessPool 装配失败，降级线程池: RuntimeError: mock 受限环境无 /dev/shm",
+    "03:02:27 INFO    [App.AppScanPool] [扫描池] ProcessPool 装配失败，降级线程池: RuntimeError: mock 受限环境无 /dev/shm",
     "[PASS] ① ProcessPool 失败 → ThreadPool 降级（engine=thread_fallback）",
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -393,7 +393,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.7,
+   "elapsed_s": 0.83,
    "output_tail": [
     "[PASS] ① HTML 骨架: app.js/app.css 引用 + 10 个关键 DOM",
     "[PASS] ② JS 语法: node --check app.js 通过",

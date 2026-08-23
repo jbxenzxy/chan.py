@@ -82,8 +82,9 @@ log = get_logger(__name__)
 from App import AppEngine as m  # noqa: F401
 # SSE 实时流 / 期货功能域（阶段 8：CTqSdkSession 的 SSE 内部实现已迁 App/AppSSE.py）
 from App import AppSSE as _sse  # noqa: F401
-# SSE 数据源抽象（V10 CH5「差距重构」下沉 DataAPI；tqsdk 仅在 DataAPI 可见）
-from DataAPI.TqSdkCSSESource import (  # noqa: F401
+# SSE 数据源抽象（V10 CH5「差距重构」下沉 DataAPI；tqsdk 仅在 DataAPI 可见。
+# P1-1：API 层经 AppSSE re-export 消费，不再直连 DataAPI.TqSdkCSSESource）
+from App.AppSSE import (  # noqa: F401
     CSSESource,
     CSSESourceClosed,
     CTqSdkSession,
@@ -176,13 +177,9 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 async def api_health():
     """健康检查：入口标识 + 配置摘要（凭据打码，方案 7.3）+ 周期映射（P2-8 前端共享）"""
     # P2-8 周期映射统一：后端单一事实源（CTqSdkAPI.FREQ_SEC_MAP 接口属性），
-    # 前端经 /api/health 拉取；六符号收敛（阶段 5 ①）禁止直连 DataAPI.TqSdkAPI。
-    _freq_sec_map = {}
-    try:
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        _freq_sec_map = dict(CTqSdkAPI.FREQ_SEC_MAP)
-    except Exception:
-        pass
+    # 前端经 /api/health 拉取；P1-1：经期货域元数据出口取数，API 层不直连
+    # DataAPI.TqSdkAPI（六符号收敛 · 阶段 5 ①）。
+    _freq_sec_map = _sse.get_futures_freq_sec_map()
     return {
         "status": "ok",
         "entry": "FrontAPI",
@@ -510,9 +507,10 @@ async def api_futures_delete_point(symbol: str = Path(...), freq: str = Query("1
 async def api_futures_cleanup():
     """清理所有期货数据（期指切股票：先回收 TqApi 连接，再清空缓存）
 
-    顺序关键：先 close_all（DataAPI.TqSdkCSSESource）设置 _closed 旗并等待
-    各生成器线程完成 api.close()（天勤要求 close 在 wait_update 返回后由
-    生成器线程调用），再清空期货 K 线缓存/选点记录，避免残留连接继续写缓存。
+    顺序关键：先 close_all（经 AppSSE re-export，实现在 DataAPI.TqSdkCSSESource）
+    设置 _closed 旗并等待各生成器线程完成 api.close()（天勤要求 close 在
+    wait_update 返回后由生成器线程调用），再清空期货 K 线缓存/选点记录，
+    避免残留连接继续写缓存。
     run_in_threadpool 包裹：close_all 等待各生成器线程完成
     api.close()（最迟 0.1s），不能阻塞事件循环。
     """
