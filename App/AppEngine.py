@@ -7,11 +7,18 @@ App/AppEngine.py —— 分析引擎层（自 my_chan_main.py 迁入）
 由 App/AppOrch.py（业务编排层）和 FrontAPI.py（API 入口层）引用。
 
 阶段 8 拆分（按业务能力收敛后，本文件回归「纯分析编排」）：
-  - SSE 实时流 / 期货静态分析 / 期货选点 / 期货元数据 → 迁 App/AppSSE.py
+  - SSE 实时流 / 期货分析 / 期货选点 / 市场/代码/周期查询 → 迁 App/AppSSE.py
     （本文件仅保留同名兼容壳，供 FrontAPI.CSSESource 与 Test 守护引用）
   - 手动选点 / 红框中枢（stock_manual_select_point / compute_red_range_zs）
     → 迁 App/AppChart.py（图表交互功能域；本文件保留兼容壳）
   - 期货分流：analyze_stock 在期货路径延迟导入 AppSSE（避免模块级循环依赖）
+
+文件内按 5 区域划分（见各区域分隔头）：
+  - 区域 1 · 模块常量与配置（import + 配置别名 + 业务常量）
+  - 区域 2 · 数据委托层（对 AppData 数据访问的薄委托壳 + 选点 schema 常量）
+  - 区域 3 · 股票分析（_analyze_stock_internal 编排）
+  - 区域 4 · 结果提取（_extract_main_level_data / _extract_sub_level_data）
+  - 区域 5 · 公开入口（analyze_stock + _SUB_FREQ_MAP）
 
 依赖方向：AppEngine → App/AppConfig.py / App/AppData.py / DataAPI/（单向）
           App/AppOrch.py → AppEngine（单向）
@@ -24,6 +31,10 @@ App/AppEngine.py —— 分析引擎层（自 my_chan_main.py 迁入）
     from App import AppEngine as _m      # 服务层获取引擎
     from App import AppEngine as m       # API 层读取常量/纯函数
 """
+# ═══════════════════════════════════════════════════════════════════════
+# 区域 1 · 模块常量与配置
+# ═══════════════════════════════════════════════════════════════════════
+
 import sys, os, json, time, struct, threading, multiprocessing, gc
 from datetime import datetime, timedelta
 from chinese_calendar import is_holiday
@@ -157,7 +168,7 @@ except ImportError as e:
 # 同花顺自选股同步（云端 API）
 # ============================================================
 try:
-    from App.ths_cloud_api import save_scan_to_ths_cloud   # 阶段 2：同花顺工具链迁入 App/
+    from Script.ths_cloud_api import save_scan_to_ths_cloud   # P2-2：同花顺工具链迁入 Script/
     _THS_CLOUD_AVAILABLE = True
 except ImportError:
     save_scan_to_ths_cloud = None
@@ -200,6 +211,10 @@ DS_CODE_PREFIX = "62"  # 扩展市场指数在 ds/lday 下的文件名前缀
 # 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象，阶段 4）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
 # （惰性标志 _names_loaded/_pe_loaded/_belong_loaded 已随实现收敛 app_data，不再留别名）
+# ═══════════════════════════════════════════════════════════════════════
+# 区域 2 · 数据委托层
+# ═══════════════════════════════════════════════════════════════════════
+
 _stock_names_cache = app_data.names_cache
 
 def _load_stock_names_from_cache_file():
@@ -305,24 +320,6 @@ def _cache_remove(key):
     return app_data.cache_remove(key)
 
 
-def _send_windows_notification(title, message):
-    """发送 Windows 10/11 Toast 通知（右下角弹出）。
-    winotify 零依赖，仅需 PowerShell（Windows 内置），无需额外安装任何包。
-    只需在 venv 中执行一次: pip install winotify
-    在新线程中执行，不阻塞主流程。
-    """
-    def _notify():
-        try:
-            from winotify import Notification
-            toast = Notification(app_id="缠论扫描", title=title, msg=message, duration="short")
-            toast.show()
-        except ImportError:
-            log.info("[通知] 未安装 winotify，请在 venv 中执行: pip install winotify")
-        except Exception as e:
-            log.info(f"[通知] 发送失败: {type(e).__name__}: {e}")
-
-    t = threading.Thread(target=_notify, daemon=True)
-    t.start()
 
 
 # ============================================================
@@ -347,6 +344,10 @@ def _save_point_time(code, name, freq, sdt):
 # 启动加载已随 app_data 实例化完成，本文件多处直接读该字典保持零漂移）
 _saved_point_times = app_data.saved_point_times
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# 区域 3 · 股票分析
+# ═══════════════════════════════════════════════════════════════════════
 
 def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None):
     """
@@ -791,6 +792,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 
 
 # ============================================================
+# ═══════════════════════════════════════════════════════════════════════
+# 区域 4 · 结果提取
+# ═══════════════════════════════════════════════════════════════════════
+
 # 提取主级别和子级别数据
 # ============================================================
 def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_freq=None,
@@ -1409,6 +1414,10 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 
 
 # ============================================================
+# ═══════════════════════════════════════════════════════════════════════
+# 区域 5 · 公开入口
+# ═══════════════════════════════════════════════════════════════════════
+
 # 区间套背驰判断
 # ============================================================
 # 高级别→低级别周期映射（与双窗口 getDualSubFreq 一致）
@@ -1417,12 +1426,6 @@ _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
 # 期货双窗口周期映射（上窗周期 → 下窗周期）：P0-1c 已下沉
 # App/utils.py（顶部 re-import _FUTURES_DUAL_FREQ_MAP 兼容），
 # 此处不再重复定义，消除 AppEngine/AppSSE 双来源。
-
-# 期货分析缓存（供 /api/red_range_zs 等访问）
-# key: "symbol:freq"  (如 "KQ.m@CFFEX.IM:5m")，当前 value: CChan 对象
-# 后续可扩展为 {records, chan, result} 三元组，key可加前缀区分（single_/dual_main_/dual_sub_）
-# （阶段 4：实现与状态收敛 App/AppData.py；此处别名共享同一对象）
-_futures_analysis_cache = app_data.futures_analysis_cache
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):

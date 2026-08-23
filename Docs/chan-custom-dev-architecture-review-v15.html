@@ -226,7 +226,7 @@
         <tr><td><span class="pill ok">AppData.py</span></td><td>数据归应用持有 / 决定缓存+写盘 / 计算产物</td><td>缓存、持久化、标注、自选股、行业映射、计算产物缓存（LRU / CSV/JSON 持久化 / CRUD / 标注去重）</td><td>应用一方 · 长期持有 · 可靠写盘 · 原子操作</td></tr>
         <tr><td><span class="pill ok">DataAPI/</span></td><td>只从外部读取、用完即释放（不构成应用长期业务状态）</td><td>通达信文件、AKShare、深交所官网、TqSdk、取K线（网络/盘面适配、格式解析、行情获取）</td><td>外部源 · 瞬时拉取 · 用完释放（仅保留拉取侧优化缓存）</td></tr>
       </tbody></table>
-      <p class="muted">依赖方向：<code>FrontAPI → AppOrch → AppData → AppConfig</code>，<code>AppData</code> 与 <code>DataAPI</code> 互不依赖（设计 4.4）。四选股来源归属：自选股 / 板块指数2·3（应用自有映射文件）归 <code>AppData</code>；指数成分股（外部瞬时读取）归 <code>DataAPI</code>。</p>
+      <p class="muted">依赖方向：<code>FrontAPI → AppOrch → 功能模块 → AppEngine → AppData → AppConfig</code>，<code>AppData</code> 与 <code>DataAPI</code> 互不依赖（设计 4.4）。四选股来源归属：自选股 / 板块指数2·3（应用自有映射文件）归 <code>AppData</code>；指数成分股（外部瞬时读取）归 <code>DataAPI</code>。</p>
     </div>
   </section>
 

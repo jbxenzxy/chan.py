@@ -169,9 +169,10 @@ def test_shell_purity(failures):
 # ═══════════════════════════════════════════════════════════════════════
 ALIAS_PAIRS = [
     # (AppEngine 属性, app_data 内部字段属性)
+    # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有），
+    # 期货缓存仅经 app_data.futures_cache_* 公共 API 访问
     ("_stocks_analysis_cache", "stocks_analysis_cache"),
     ("_cache_lock",            "cache_lock"),
-    ("_futures_analysis_cache", "futures_analysis_cache"),
     ("_stock_names_cache",     "names_cache"),
     ("_pe_ttm_cache",          "pe_cache"),
     ("_index_belong_cache",    "belong_cache"),
@@ -341,11 +342,11 @@ def test_zxg_convergence(failures):
             bad.append(f"DataAPI/TdxAPI.py 仍定义 {gone}（应已迁出）")
 
     # ths_sync_to_tdx 改从 AppData 导入
-    ths_src = read_src(os.path.join("App", "ths_sync_to_tdx.py"))
+    ths_src = read_src(os.path.join("Script", "ths_sync_to_tdx.py"))
     if "from App.AppData import app_data" not in ths_src:
-        bad.append("App/ths_sync_to_tdx.py 未从 App.AppData 导入 app_data")
+        bad.append("Script/ths_sync_to_tdx.py 未从 App.AppData 导入 app_data")
     if "from DataAPI.TdxAPI import save_to_zxg_blk" in ths_src:
-        bad.append("App/ths_sync_to_tdx.py 仍从 TdxAPI 导入 save_to_zxg_blk")
+        bad.append("Script/ths_sync_to_tdx.py 仍从 TdxAPI 导入 save_to_zxg_blk")
 
     # AppEngine 不再从 TdxAPI 导入自选股入口
     m_src = read_src(os.path.join("App", "AppEngine.py"))

@@ -482,7 +482,8 @@ async def api_futures_select_point(
     freq: str = Query("15s"),
     bi_idx: str = Query("-1"),
 ):
-    """期货手动选点（orch.call_futures_manual_select_point · SERIAL 持锁，阶段 3a 补锁）"""
+    """期货手动选点（orch.call_futures_manual_select_point · SERIAL 持锁，阶段 3a 补锁）
+    P2-3：期货选点已统一走领域异常，error-dict 二次判读移除（AppError 由统一中间件捕获）"""
     if not symbol or bi_idx == "-1":
         return _json_response({"error": "缺少必要参数 symbol 或 bi_idx"}, 400)
     try:
@@ -493,8 +494,6 @@ async def api_futures_select_point(
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}")
-    if "error" in result:
-        return _json_response(result, 400)
     return _json_response(result)
 
 

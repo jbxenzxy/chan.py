@@ -93,8 +93,7 @@ TARGET_FUNCS = {
 
     # ── 扫描（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
 
-    # ── 公共工具 ──
-    "_send_windows_notification":   ("ORCH_C", "Windows 通知（ChartHandler 下载/扫描完成用）"),
+    # ── 公共工具（P1-3：_send_windows_notification 已迁 App/AppScan.py，不再属 AppEngine 映射）──
 
     # ── AppData：名称/PE/归属/市值 缓存族 ──
     "_load_stock_names_from_cache_file": ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
@@ -145,7 +144,7 @@ TARGET_STATES = {
     "_pe_ttm_cache":       ("DATA", "✓4 PE 缓存（= app_data._pe）"),
     "_index_belong_cache": ("DATA", "✓4 归属缓存（= app_data._belong）"),
     "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
-    "_futures_analysis_cache": ("DATA", "✓4 期货分析缓存（= app_data._futures_analysis_cache）"),
+    # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有，期货缓存仅经 app_data.futures_cache_*）
     "_cache_lock":         ("DATA", "✓4 缓存锁（= app_data._cache_lock）"),
     "_saved_point_times":  ("DATA", "✓4 选点表内存态（= app_data._saved_point_times）"),
 

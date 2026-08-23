@@ -7,19 +7,18 @@ App/AppSSE.py —— SSE 实时流功能域
 配套能力。当前期货是唯一 SSE 实时流消费者；未来若增加股票实时，同样
 收纳于此（命名取 SSE 而非 Futures 的原因）。
 
-本模块收纳（文件内按 6 区域划分，见各区域分隔头）：
+本模块收纳（文件内按 5 区域划分，见各区域分隔头）：
   - 区域 1 · SSE 实时流（init_chan_symbol / _drain_chan / _get_saved_point /
     _sse_frame / sse_futures_stream_single/dual，供 FrontAPI.CSSESource 调用）
   - 区域 2 · 期货分析（_build_futures_chan / _analyze_futures_internal /
     _extract_chan_structure / _extract_realtime_snapshot /
     _calc_futures_white_hline / _apply_macd_full / _apply_macd_incremental /
-    _incremental_klines）
+    _incremental_klines 实时快照提取）
   - 区域 3 · 期货选点（futures_manual_select_point，临时 TqApi 拉全量 →
     定位左肩 → 从 T 重拉 → 新 CChan → 快照）
   - 区域 4 · 市场/代码/周期查询（get_futures_aliases / get_futures_name /
     tq_available / get_futures_freqs）
   - 区域 5 · 期货退出清理（_cleanup_all_futures_data / futures_cleanup）
-  - 区域 6 · 实时快照公共包装（extract_realtime_snapshot，AppOrch re-export）
 
 依赖方向：AppSSE.py → AppEngine / utils / AppData / DataAPI（单向）
   - 引擎侧私有实现（TQ_AVAILABLE / CTqSdkAPI / _get_futures_name）经
@@ -43,6 +42,8 @@ from datetime import datetime, timedelta
 from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name,
 )
+# 领域异常（P2-3：期货路径 error-dict → 领域异常，定义独立 App/AppErrors.py）
+from App.AppErrors import AppError, DataFetchError, AnalysisError, ConfigError
 # 引擎纯函数/常量公共工具（P0-1c：与 AppEngine 统一从 App/utils 导入）
 from App.utils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
@@ -979,7 +980,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
     t_start = time.time()
 
     if not TQ_AVAILABLE or CTqSdkAPI is None:
-        return {"error": "天勤数据源未安装，请执行: pip install tqsdk"}
+        raise DataFetchError("天勤数据源未安装，请执行: pip install tqsdk")
 
     # 确定周期秒数
     freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 86400)
@@ -996,7 +997,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         full_records = _src.fetch_kline(code, freq_sec=freq_sec, display_key=_display_key)
     except Exception as _e:
         log.error(f"[期货][错误] 天勤拉取K线失败: {type(_e).__name__}: {_e}")
-        return {"error": f"天勤拉取K线失败: {type(_e).__name__}: {_e}"}
+        raise DataFetchError(f"天勤拉取K线失败: {type(_e).__name__}: {_e}") from _e
     finally:
         if _src is not None:
             try:
@@ -1006,7 +1007,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
                 log.warning(f"[警告] 关闭天勤连接异常: {type(_e).__name__}: {_e}")
     log.info(f"[拉取] ⑴ 天勤拉取K线: {time.time()-t_fetch:.3f}s, {len(full_records)}条")
     if len(full_records) < 5:
-        return {"error": f"K线数据不足: 仅{len(full_records)}条"}
+        raise DataFetchError(f"K线数据不足: 仅{len(full_records)}条")
 
     # 2. 截断（end_date 复盘模式）
     if end_date:
@@ -1018,7 +1019,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
             except ValueError:
                 continue
         if target_dt is None:
-            return {"error": f"无法解析日期: {end_date}"}
+            raise ConfigError(f"无法解析日期: {end_date}")
         # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===
         if step is not None:
             step = int(step)
@@ -1039,7 +1040,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
 
         records = [r for r in full_records if r["dt"] <= target_dt]
         if len(records) < 5:
-            return {"error": f"截断后K线数据不足: 仅{len(records)}条"}
+            raise DataFetchError(f"截断后K线数据不足: 仅{len(records)}条")
     else:
         records = full_records
 
@@ -1066,7 +1067,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         log.error(f"[期货][错误] chan.py 分析失败: code={code} freq={freq}{records_info} 耗时={time.time()-t0:.3f}s")
         log.error(f"[期货][错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
         log.error(f"[期货][错误] 完整堆栈:\n{tb}")
-        return {"error": f"chan.py 期货分析失败: {type(e).__name__}: {e}"}
+        raise AnalysisError(f"chan.py 期货分析失败: {type(e).__name__}: {e}") from e
     finally:
         if end_date:
             CMyBSPointList.REPLAY_MODE = False
@@ -1142,8 +1143,7 @@ def _analyze_futures_internal(code, freq="1m", end_date=None, dual=False, existi
         if not sub_freq:
             sub_freq = _FUTURES_DUAL_FREQ_MAP.get(freq)
         if not sub_freq:
-            result["error"] = f"双窗口不支持当前周期: {freq}"
-            return result
+            raise ConfigError(f"双窗口不支持当前周期: {freq}")
         sub_freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(sub_freq, 15)
         log.info(f"[双窗口] 开始提取子级别({sub_freq})数据...")
 
@@ -1679,7 +1679,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 
         records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key)
         if len(records) < 5:
-            return {"error": f"K线数据不足: 仅{len(records)}条"}
+            raise DataFetchError(f"K线数据不足: 仅{len(records)}条")
 
         # 注入数据源 + 创建 CChan（P0-1 统一 _build_futures_chan；config 供 chan2 复用）
         # P1-1 数据源抽象单轨化：数据注入经 src.set_data（Session 协议），不落类级缓存
@@ -1690,17 +1690,17 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         bi_list = kl_list.bi_list
 
         if target_bi_idx < 0 or target_bi_idx >= len(bi_list):
-            return {"error": f"笔索引 {bi_idx} 越界，笔总数 {len(bi_list)}"}
+            raise AnalysisError(f"笔索引 {bi_idx} 越界，笔总数 {len(bi_list)}")
 
         # 检查选点后至少需要4笔
         remaining_bis = len(bi_list) - target_bi_idx - 1
         if remaining_bis < 4:
-            return {"error": f"选点之后仅剩 {remaining_bis} 笔，至少需要4笔才能构建中枢，请重新选点"}
+            raise AnalysisError(f"选点之后仅剩 {remaining_bis} 笔，至少需要4笔才能构建中枢，请重新选点")
 
         # Step 2: 找到左肩时间T
         start_time = _find_left_shoulder_time(kl_list, bi_list, target_bi_idx, freq)
         if start_time is None:
-            return {"error": "无法定位左肩K线时间，请重试"}
+            raise AnalysisError("无法定位左肩K线时间，请重试")
 
         log.info(f"[{display_key}] 选点左肩时间: {start_time}")
 
@@ -1729,7 +1729,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         records2 = src2.fetch_kline(symbol, freq_sec=freq_sec,
                                     display_key=display_key, start_time=start_time)
         if len(records2) < 5:
-            return {"error": f"选点后K线数据不足: 仅{len(records2)}条"}
+            raise DataFetchError(f"选点后K线数据不足: 仅{len(records2)}条")
 
         # 注入数据源 + 创建新 CChan（P0-1 统一 _build_futures_chan，复用 config）
         # P1-1 数据源抽象单轨化：数据注入经 src2.set_data（Session 协议），不落类级缓存
@@ -1745,11 +1745,14 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         log.info(f"[{display_key}] 选点完成: {len(result['klines'])}K线, {result['meta']['bi_count']}笔, {result['meta']['zs_count']}中枢")
         return result
 
+    except AppError:
+        # 领域异常原样上抛（P2-3：API 层统一中间件捕获，不二次包装）
+        raise
     except Exception as e:
         import traceback
         log.info(f"[{display_key}] 选点异常: {e}")
         traceback.print_exc()
-        return {"error": f"选点失败: {str(e)}"}
+        raise AnalysisError(f"选点失败: {str(e)}") from e
     finally:
         if src is not None:
             try:
@@ -1763,11 +1766,6 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
                 src2.close_api()
             except Exception as e:
                 log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 期货退出清理
-# ═══════════════════════════════════════════════════════════════════════
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1805,11 +1803,6 @@ def get_futures_freqs():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 实时快照公共包装（AppOrch re-export 用）
-# ═══════════════════════════════════════════════════════════════════════
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # 区域 5 · 期货退出清理
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -1841,27 +1834,5 @@ def futures_cleanup():
     return _cleanup_all_futures_data()
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# 市场/代码/周期查询
-# ═══════════════════════════════════════════════════════════════════════
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 区域 6 · 实时快照公共包装
-# ═══════════════════════════════════════════════════════════════════════
-
-def extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
-    """从实时行情快照中提取分析所需字段（供 SSE 路径使用）"""
-    return _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                      saved_selection_date, lightweight, klines)
-
-# ═══════════════════════════════════════════════════════════════════════
-# SSE 同步生成器（方案A · V10 复审 P1-3：自 FrontAPI.py 下沉）
-# ═══════════════════════════════════════════════════════════════════════
-# 事件协议与遗留实现逐字一致：init（初始快照/失败载荷）→ update（tick 路径
-# 与 K 线完成路径）→ 心跳注释帧 ": heartbeat"。source 可注入（默认
-# CTqSdkSession）；Test/test_sse_gray.py 用 MockSource 驱动确定性比对。
-# 锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）：每连接独立 TqApi+CChan，
-# 不加引擎锁。选点/期货子窗缓存经 app_data 单例（与 AppEngine 同一对象）。
 
 

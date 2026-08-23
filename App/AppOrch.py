@@ -14,7 +14,9 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 标注归 AppChart（图表右键标注属图表交互域，原 AppAnnotate 已合并删除）。
 
 本文件保留：
-  - 领域异常层级（AppError 等 6 类，Test/test_phase2_guards.py 引用）
+  - 领域异常层级 re-export（AppError 等 6 类，定义已独立 App/AppErrors.py，
+    P2-3 为消除双轨并存并避免 AppSSE→AppOrch→AppChart→AppSSE 循环依赖；
+    Test/test_phase2_guards.py 引用）
   - LOCK_POLICY 锁分类登记表（Test/test_phase3_guards.py 守护）
   - 全部业务函数 re-export（FrontAPI 的 orch.xxx 调用零改动）
 
@@ -37,7 +39,6 @@ from App.AppChart import (
     call_manual_select_point, call_futures_manual_select_point,
     call_compute_red_range_zs,
     stock_manual_select_point, futures_manual_select_point, compute_red_range_zs,
-    extract_realtime_snapshot,
     _get_data_source, fetch_and_inject,
     search_stocks,
     get_annotations, handle_annotation_action,
@@ -119,38 +120,18 @@ LOCK_POLICY = {
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 领域异常层级（见设计文档 7.7 节）
+# 领域异常层级（定义独立 App/AppErrors.py，P2-3 起；见设计文档 7.7 节）
 # 服务层只抛领域异常，API 层通过统一中间件捕获。
 # ═══════════════════════════════════════════════════════════════════════
 
-class AppError(Exception):
-    """领域异常基类 · status_code 默认 500"""
-    status_code = 500
-
-
-class DataFetchError(AppError):
-    """数据源获取失败 · 502"""
-    status_code = 502
-
-
-class AnalysisError(AppError):
-    """缠论分析失败 · 500"""
-    status_code = 500
-
-
-class ConfigError(AppError):
-    """配置错误 · 500"""
-    status_code = 500
-
-
-class NotFoundError(AppError):
-    """股票 / 期货不存在 · 404"""
-    status_code = 404
-
-
-class PersistenceError(AppError):
-    """持久化失败 · 503"""
-    status_code = 503
+from App.AppErrors import (
+    AppError,
+    DataFetchError,
+    AnalysisError,
+    ConfigError,
+    NotFoundError,
+    PersistenceError,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -171,7 +152,7 @@ __all__ = [
     "call_manual_select_point", "call_futures_manual_select_point",
     "call_compute_red_range_zs",
     "stock_manual_select_point", "futures_manual_select_point",
-    "compute_red_range_zs", "extract_realtime_snapshot",
+    "compute_red_range_zs",
     "_get_data_source", "fetch_and_inject", "search_stocks",
     "clear_saved_point", "futures_clear_saved_point",
     "save_last_code_freq", "load_last_code_freq", "get_saved_point_times",

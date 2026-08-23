@@ -41,8 +41,10 @@ import traceback
 from App import AppEngine as _m
 # P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
 from App.AppData import app_data, make_single_key, make_dual_main_key, make_futures_sub_key
-# SSE 实时流 / 期货功能域（阶段 8：期货选点/清理/元数据实现已迁 AppSSE，此处仅漏斗）
+# SSE 实时流 / 期货功能域（阶段 8：期货选点/退出清理/市场代码周期查询实现已迁 AppSSE，此处仅漏斗）
 from App import AppSSE as _sse
+# 领域异常（P2-3：红框期货分支 error-dict → 领域异常，定义独立 App/AppErrors.py）
+from App.AppErrors import DataFetchError, AnalysisError
 # 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _red_range_bi_sequence, _red_range_amp
 from App.AppLog import get_logger
@@ -313,14 +315,14 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
         cached = app_data.futures_cache_get(cache_key)
         if cached is None:
-            return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
+            raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
         chan = cached
         kl_list = chan[_m._get_kl_type(sub_freq)]
         bi_list = kl_list.bi_list
         date_fmt = _m._get_date_fmt(sub_freq)
         start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
         if start_bi is None:
-            return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
+            raise AnalysisError(f"红框内无完整笔: [{left_date}, {right_date}]")
         sliced_bis = bi_list[start_bi:end_bi + 1]
         zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
@@ -394,12 +396,6 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     sliced_bis = bi_list[start_bi:end_bi + 1]
     zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
     return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
-
-
-def extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None):
-    """从实时行情快照中提取分析所需字段（供 SSE 路径使用；实现迁 AppSSE）"""
-    return _sse.extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                          saved_selection_date, lightweight, klines)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -525,7 +521,7 @@ def search_stocks(q):
     results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
     results = results[:10]
 
-    # 期货/期指别名搜索（阶段 5：经 CTqSdkAPI 元数据接口）
+    # 期货/期指别名搜索（阶段 5：经 CTqSdkAPI 市场/代码/周期查询接口）
     from DataAPI.TqSdkAPI import CTqSdkAPI
     for alias, full_code in CTqSdkAPI.FUTURES_ALIASES.items():
         if keyword_upper in alias.upper():

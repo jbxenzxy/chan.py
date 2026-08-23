@@ -13,6 +13,7 @@ App/AppScan.py —— 股票扫描功能域
       _quick_prefilter_pass / _debug_read_page_index_stocks /
       read_tdxhy_l2_indices / read_tdxhy_l3_indices /
       _scan_lock / _scan_aborted / _scan_start_time / _page_index_code / _scan_skip_log
+  - Windows 扫描完成通知（_send_windows_notification，P1-3 自 AppEngine 迁入）
 
 依赖方向：AppScan.py → AppEngine / AppData / AppRefresh / AppScanPool（单向）
 批量扫描异步化（阶段 7）：提交/状态/中止委托 AppScanPool（入口适配器），
@@ -62,6 +63,26 @@ _scan_start_time = None
 
 # 页面指数代码：当前页面正在查看的通达信板块指数代码（如 880491），用于"成分股"扫描来源
 _page_index_code = None
+
+
+def _send_windows_notification(title, message):
+    """发送 Windows 10/11 Toast 通知（右下角弹出，扫描完成提示）。
+    winotify 零依赖，仅需 PowerShell（Windows 内置），无需额外安装任何包。
+    只需在 venv 中执行一次: pip install winotify
+    在新线程中执行，不阻塞主流程。
+    """
+    def _notify():
+        try:
+            from winotify import Notification
+            toast = Notification(app_id="缠论扫描", title=title, msg=message, duration="short")
+            toast.show()
+        except ImportError:
+            log.info("[通知] 未安装 winotify，请在 venv 中执行: pip install winotify")
+        except Exception as e:
+            log.info(f"[通知] 发送失败: {type(e).__name__}: {e}")
+
+    t = threading.Thread(target=_notify, daemon=True)
+    t.start()
 
 
 def _quick_prefilter_pass(market, code):
@@ -181,7 +202,7 @@ def zxg_save(codes):
                     ths_msg = f"云端同步失败: {err_str}"
                 log.info(f"[保存] 同花顺: {ths_msg}")
         else:
-            ths_msg = "App/ths_cloud_api.py 未找到，请确保 App/ 目录完整（阶段 2 已迁入 App/）"
+            ths_msg = "Script/ths_cloud_api.py 未找到，请确保 Script/ 目录完整（P2-2 已迁入 Script/）"
             log.info(f"[保存] 同花顺: {ths_msg}")
 
         log.info(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
@@ -208,7 +229,7 @@ def ths_cloud_available():
 def save_scan_to_ths_cloud(codes):
     """保存扫描结果到同花顺云端自选股"""
     if not _m._THS_CLOUD_AVAILABLE or _m.save_scan_to_ths_cloud is None:
-        return {"error": "ths_cloud_api.py 未找到，请确保该文件在 App/ 目录"}
+        return {"error": "ths_cloud_api.py 未找到，请确保该文件在 Script/ 目录"}
     return _m.save_scan_to_ths_cloud(codes)
 
 
@@ -573,7 +594,7 @@ class Scanner:
             msg = f"耗时 {time_str}"
             if skip_count > 0:
                 msg += f"，跳过 {skip_count} 只"
-            _m._send_windows_notification("扫描完成", msg)
+            _send_windows_notification("扫描完成", msg)
             _scan_start_time = None
         return {"count": len(_scan_skip_log)}
 

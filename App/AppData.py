@@ -47,7 +47,7 @@ FREQ_TO_COL = {"y": "y", "q": "q", "m": "m", "w": "w", "d": "d",
                "1m": "1m", "15s": "15s"}
 
 # 自选股写盘用指数映射（阶段 4 自 DataAPI/TdxAPI.py 迁入；
-# 通达信内部代码格式，与 App/ths_sync_to_tdx.py 中的同名映射保持一致）
+# 通达信内部代码格式，与 Script/ths_sync_to_tdx.py 中的同名映射保持一致）
 ZXG_HK_INDEX_MAP = {
     "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
     "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
@@ -276,25 +276,24 @@ class AppData:
     #    tdxhy_mapping_data.py 已整体迁入 App/（独立数据文件，不并入本类）；
     #    原 DataAPI/TdxAPI.py 与 my_chan_main.py 两处硬编码寻址收敛为
     #    本方法一个加载点，DataAPI 侧经 set_tdx_hy_mapping 注入（互不依赖）。
-    _TDXHY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "tdxhy_mapping_data.py")
+    #    P2-2：加载方式由 exec(open(...).read()) 改为直接 import 数据模块
+    #    （数据文件自带统一加载函数 load_tdxhy_mapping，消除硬编码路径）。
 
     def load_tdxhy_mapping(self):
         """加载通达信研究行业映射，返回 (x_to_881, to_x) 二元组
 
-        单一加载点：文件缺失/损坏时硬失败（ValueError），不再静默降级空表
+        单一加载点：直接 import 数据模块（P2-2 由 exec() 改 import），
+        文件缺失/损坏时硬失败（ValueError），不再静默降级空表
         （设计 8.4 验收要求：迁移全过程中映射表不发生静默降级）。
         结果按 (x_to_881, to_x) 次序返回，可直接 set_tdx_hy_mapping(*result)。
         """
-        path = self._TDXHY_FILE
-        if not os.path.exists(path):
-            raise ValueError(f"行业映射数据文件缺失: {path}")
-        ns = {}
-        exec(open(path, encoding="utf-8").read(), ns)
-        x_to_881 = ns.get("_TDXHY_X_TO_881", {})
-        to_x = ns.get("_TDXHY_881_TO_X", {})
+        try:
+            from App.tdxhy_mapping_data import load_tdxhy_mapping as _load
+            x_to_881, to_x = _load()
+        except ImportError as e:
+            raise ValueError(f"行业映射数据文件缺失: {e}") from e
         if not x_to_881 or not to_x:
-            raise ValueError(f"行业映射数据为空（加载静默降级已禁止）: {path}")
+            raise ValueError("行业映射数据为空（加载静默降级已禁止）")
         return x_to_881, to_x
 
     def tdxhy_l2_indices(self):

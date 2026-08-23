@@ -34,8 +34,11 @@ App/AppSSE）经本模块与业务函数消费，不再直接 import tqsdk。
 锁分类：SELF_CONTAINED（每连接独立 TqApi + CChan，不加引擎锁）。
 """
 import threading
+import logging
 
 from DataAPI.CommonStockAPI import CCommonStockApi
+
+log = logging.getLogger(__name__)
 
 
 class CSSESourceClosed(Exception):
@@ -75,13 +78,13 @@ def close_all():
         try:
             src.close()
         except Exception as exc:  # noqa: BLE001 —— 单个源关闭失败不阻断其余
-            print(f"[DataAPI] 关闭 CTqSdkSession 异常: {type(exc).__name__}: {exc}")
+            log.warning("关闭 CTqSdkSession 异常: %s: %s", type(exc).__name__, exc)
     # 等待各生成器线程完成 api.close()（机制保证 0.1s 内完成）
     for src in sources:
         try:
             src._api_closed.wait()
         except Exception as exc:  # noqa: BLE001
-            print(f"[DataAPI] 等待 CTqSdkSession 关闭异常: {type(exc).__name__}: {exc}")
+            log.warning("等待 CTqSdkSession 关闭异常: %s: %s", type(exc).__name__, exc)
 
 
 class CSSESource(CCommonStockApi):
@@ -285,7 +288,7 @@ class CTqSdkSession(CSSESource):
                 with self._close_lock:
                     self.api.close()
         except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
+            log.warning("异常: %s: %s", type(e).__name__, e)
         finally:
             self._api_closed.set()
 
@@ -294,4 +297,4 @@ class CTqSdkSession(CSSESource):
             from DataAPI.TqSdkAPI import CTqSdkAPI
             CTqSdkAPI._records_by_symbol.pop(code_key, None)
         except Exception as e:
-            print(f"[警告] 异常: {type(e).__name__}: {e}")
+            log.warning("异常: %s: %s", type(e).__name__, e)

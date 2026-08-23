@@ -156,21 +156,23 @@ def test_engine_boundaries(failures):
 
 def test_futures_boundaries(failures):
     """期货引擎边界（离线注入冻结数据）：
-       3a. end_date 连字符格式 → 必须返回 error（契约：仅支持斜杠格式）
+       3a. end_date 连字符格式 → 必须抛 ConfigError（契约：仅支持斜杠格式，
+           P2-3 起期货路径 error-dict → 领域异常，日期契约随之上抛）
        3b. 有效斜杠格式 + 冻结数据 → 正常分析（顺带证明注入通道可用）"""
     from Test.snapshot_runner import install_futures_data_source
+    from App.AppErrors import ConfigError
 
     # 3a 连字符契约（真实天勤路径中该格式同样被拒，口径需冻结）
     restore = install_futures_data_source("futures_15s.json")
     try:
         from App import AppSSE
-        r = AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
+        try:
+            AppSSE._analyze_futures_internal("KQ.m@SHFE.rb", freq="15s",
                                              end_date="2024-01-31")
-        if not (isinstance(r, dict) and "error" in r):
-            failures.append(f"期货日期格式契约: 连字符应被拒，实际 {str(r)[:80]}")
+            failures.append("期货日期格式契约: 连字符应抛 ConfigError，实际未抛")
             print("[FAIL] ③ 期货日期契约: 连字符 end_date 未被拒绝")
-        else:
-            print(f"[PASS] ③ 期货日期契约: 连字符被拒（{r['error'][:40]}）——"
+        except ConfigError as e:
+            print(f"[PASS] ③ 期货日期契约: 连字符被拒（ConfigError: {e}）——"
                   f"契约：end_date 仅支持 %Y/%m/%d 系斜杠格式")
     finally:
         restore()
