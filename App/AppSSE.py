@@ -71,10 +71,12 @@ log = get_logger(__name__)
 # 区域 1 · SSE 实时流
 # ═══════════════════════════════════════════════════════════════════════
 
-def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None):
+def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
     start_time: 选点起始时间，有值时只拉取该时间之后的K线
+    end_time: 复盘终点（A 方案软断开）：有值时只截取该时间之前（含）的K线建 chan，
+              update 循环将停在此边界，不再被实时拉新。None 为实时流。
     V10 复审 P1-2：首参改为数据源对象 src（CTqSdkSession），服务层只消费
     src.fetch_kline / src.get_kline_serial 协议，不再触碰 src.api 原始对象。"""
     import time as _time
@@ -84,6 +86,9 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None):
 
     try:
         records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key, start_time=start_time)
+        # 复盘终点截断：先滤出 <= end_time 的历史，再扣除"最新未完成K线"首根保护
+        if end_time:
+            records = _truncate_records_by_end(records, end_time, freq_sec)
         if len(records) > 1:
             now = datetime.now()
             if (now - records[-1]["dt"]).total_seconds() < freq_sec:
@@ -141,7 +146,42 @@ def _sse_frame(event, payload) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, allow_nan=False)}\n\n".encode("utf-8")
 
 
-def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
+def _truncate_records_by_end(records, end_time, freq_sec, step=None, fmt_list=None):
+    """按复盘终点截断 K 线序列（A 方案 · 复盘软断开的数据边界）。
+
+    语义与 _analyze_futures_internal 的 end_date 截断一致：找到 <= end_time
+    的最后一个锚点切出前缀；支持箭头步进 step 做偏移。返回截断后的 records；
+    不足 5 根返回空列表（由调用方判定）。
+    """
+    if not records or not end_time:
+        return records
+    fmt_list = fmt_list or ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]
+    target_dt = None
+    for fmt in fmt_list:
+        try:
+            target_dt = datetime.strptime(end_time, fmt)
+            break
+        except ValueError:
+            continue
+    if target_dt is None:
+        return records
+    if step is not None:
+        step = int(step)
+        if step != 0:
+            anchor_idx = None
+            for i in range(len(records) - 1, -1, -1):
+                if records[i]["dt"] <= target_dt:
+                    anchor_idx = i
+                    break
+            if anchor_idx is not None:
+                new_idx = anchor_idx + step
+                if 0 <= new_idx < len(records):
+                    target_dt = records[new_idx]["dt"]
+    recs = [r for r in records if r["dt"] <= target_dt]
+    return recs
+
+
+def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None, source=None):
     """期货 SSE 单窗口 · 同步生成器（方案A）
 
     忠实移植 ChartHandler._handle_sse_stream_single 的事件协议：
@@ -194,10 +234,28 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
         t_total = time.time()
         name = _get_futures_name(symbol)  # 品种名称
 
+        # A 方案 · 复盘软断开边界（墙钟比较基准；选点/实时流无 end_time 恒为 None）
+        _end_dt = None
+        if end_time:
+            for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                try:
+                    _end_dt = datetime.strptime(end_time, _fmt)
+                    break
+                except ValueError:
+                    continue
+
         # === 1. 拉取历史 + chan 分析 ===
         # 彻底解耦业务：历史拉取/chan 分析在服务层 AppSSE.init_chan_symbol
         # V10 复审 P1-2：首参传数据源对象 src（不再触碰 src.api 原始对象）
-        result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time)
+        # A 方案：复盘(end_time)时由 init 截断建 chan；REPLAY_MODE 存原值 + finally 恢复，
+        # 避免跨连接污染（并发下仅影响调试日志，不影响分析结果）。
+        _replay_prev_s = CMyBSPointList.REPLAY_MODE
+        if end_time:
+            CMyBSPointList.REPLAY_MODE = True
+        try:
+            result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time, end_time)
+        finally:
+            CMyBSPointList.REPLAY_MODE = _replay_prev_s
         if result is None:
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
@@ -284,6 +342,11 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
 
             now = datetime.now()
             now_ts = now.timestamp()
+
+            # A 方案 · 复盘软断开：end_time 模式下，一但墙钟越过复盘边界所属周期，
+            # 即停止推进 K 线/chan/快照（update 不再把图"拉最新"），只保活连接。
+            if end_time and _end_dt is not None and now > _end_dt:
+                continue
 
             if len(klines) == 0:
                 continue
@@ -500,12 +563,14 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, source=None):
             src.cleanup_records(f"{symbol}:{freq_sec}")
 
 
-def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, source=None):
+def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
     """期货 SSE 双窗口 · 同步生成器（方案A）
 
     忠实移植 ChartHandler._handle_sse_stream_dual 的事件协议：
     两个独立 CChan 对象、一次连接推送两个周期（下窗先处理——区间套分析
     需先分析次级别）。source 可注入（默认 CTqSdkSession）。
+    end_time: 复盘终点（A 方案软断开），有值时双窗建 chan 均截断到该边界，
+              update 循环停在后不再推进，不再被实时拉新。
     锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
     _tid = trace_id()  # 每连接专属 trace-id（P0-3），连接生命周期内稳定
@@ -537,6 +602,16 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         main_freq_label = main_freq
         sub_freq_label = sub_freq
 
+        # A 方案 · 复盘软断开边界（墙钟比较基准；选点/实时流无 end_time 恒为 None）
+        _end_dt = None
+        if end_time:
+            for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                try:
+                    _end_dt = datetime.strptime(end_time, _fmt)
+                    break
+                except ValueError:
+                    continue
+
         # 1. 查询选点状态（阶段 4：经 AppOrch 漏斗读 AppData）
         saved_selection_date = ""
         main_start_time = start_time
@@ -561,7 +636,14 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 2. 拉取下窗历史 + chan分析（次级别优先：区间套分析需先分析次级别）
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 拉取下窗({sub_freq})历史K线...")
-        sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time)
+        # A 方案 · 复盘软断开：end_time 模式下建 chan 前启用买卖点调试，建后复原
+        _replay_prev = CMyBSPointList.REPLAY_MODE
+        if end_time:
+            CMyBSPointList.REPLAY_MODE = True
+        try:
+            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time)
+        finally:
+            CMyBSPointList.REPLAY_MODE = _replay_prev
         sub_chan, sub_records, sub_kl_type, _ = sub_result
         sub_kl_type = _get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
@@ -573,7 +655,13 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 3. 拉取上窗历史 + chan分析
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
-        main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time)
+        _replay_prev2 = CMyBSPointList.REPLAY_MODE
+        if end_time:
+            CMyBSPointList.REPLAY_MODE = True
+        try:
+            main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time)
+        finally:
+            CMyBSPointList.REPLAY_MODE = _replay_prev2
         main_chan, main_records, main_kl_type, _ = main_result
         main_kl_type = _get_kl_type(main_freq)
         if _SSE_DEBUG:
@@ -874,6 +962,11 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
             loop_count += 1
             now = datetime.now()
             now_ts = now.timestamp()
+
+            # A 方案 · 复盘软断开：end_time 模式下，一但墙钟越过复盘边界，
+            # 即停止推进双窗 K 线/chan/快照（不把图"拉最新"），只保活连接。
+            if end_time and _end_dt is not None and now > _end_dt:
+                continue
 
             # 处理下窗（次级别优先：区间套分析需先分析次级别）
             _t_sub0 = time.time()

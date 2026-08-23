@@ -44,12 +44,12 @@
         </div>
         <div class="header-right">
             <div class="goto-date">
-                <span class="date-arrow" id="date-arrow-left" onclick="dateStep(-1)" title="前一天">◀</span>
+                <span class="date-arrow" id="date-arrow-left" title="步进已停用">◀</span>
                 <span class="date-input-wrap">
                     <input type="date" id="goto-date-input" onchange="handleDateChange()" onkeydown="handleDateKeydown(event)" onblur="handleDateBlur()" oninput="handleDateInput(event)">
                     <span class="date-weekday" id="date-weekday"></span>
                 </span>
-                <span class="date-arrow" id="date-arrow-right" onclick="dateStep(1)" title="后一天">▶</span>
+                <span class="date-arrow" id="date-arrow-right" title="步进已停用">▶</span>
             </div>
             <button class="btn" id="btn-fx" onclick="toggleOverlay('fx')">分型</button>
                 <button class="btn active" id="btn-bi" onclick="toggleOverlay('bi')">笔</button>

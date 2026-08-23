@@ -541,6 +541,7 @@ def api_futures_read_stream(
     start_time: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
+    end_time: str = Query(None),
 ):
     """SSE 实时推送（期货单/双窗口）· 同步生成器（方案A）
 
@@ -549,6 +550,9 @@ def api_futures_read_stream(
     同步迭代器后自动在线程池中迭代（iterate_in_threadpool），阻塞调用
     （connect/wait_update/step_load 等）天然发生在线程内，不占事件循环。
     事件协议与灰度基线逐项一致（见 Test/test_sse_gray.py）。
+
+    end_time: 复盘终点（A 方案软断开）。传入时建 chan 截断到该边界，end_time
+    之后不再推进（复盘看历史不被实时拉最新）；不传为实时流/选点起点流。
     """
     if not symbol:
         raise HTTPException(status_code=400, detail="缺少symbol参数")
@@ -557,9 +561,9 @@ def api_futures_read_stream(
         raise HTTPException(status_code=503, detail="天勤数据源不可用")
 
     if dual:
-        gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time)
+        gen = sse_futures_stream_dual(symbol, freq, sub_freq, start_time, end_time)
     else:
-        gen = sse_futures_stream_single(symbol, freq, start_time)
+        gen = sse_futures_stream_single(symbol, freq, start_time, end_time)
 
     return StreamingResponse(
         gen,

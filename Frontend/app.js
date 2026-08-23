@@ -150,6 +150,8 @@
 
         let realtimeStartTime = null;     // 实时模式下选点起始时间
 
+        let realtimeEndTime = null;       // A 方案 · 复盘软断开边界（end_time）
+
         let realtimeEventSource = null;   // SSE EventSource 对象
 
         let realtimeConnected = false;    // SSE 是否已连接
@@ -189,7 +191,7 @@
 
         let _scanFreq = "d"; // 扫描周期，默认日K
 
-        let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false, _dateStepIgnore = false;
+        let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false;
 
         let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
 
@@ -199,8 +201,7 @@
 
         let _datePickerInputCount = 0;     // datetime-local picker 打开后真实交互次数
 
-        // 期货：记录实时进入复盘时的边界日期（最后一根K线日期），右箭头至此自动重连
-        let _futuresRealtimeBorderDate = null;
+        // (期货复盘边界 _futuresRealtimeBorderDate 已随左右箭头删除：复盘统一由 gotoDate/SSE 承载)
 
         const HISTORY_KEY = "chan_stock_history";
 
@@ -3193,7 +3194,7 @@
 
 // ══════════════════════════════════════════════════════════════════
         // [COMPONENT] NavToolbar —— 导航工具栏组件（频率切换 / 日期跳转 / 坐标系统）
-        // 对外接口（ChanApp.components.NavToolbar）: switchFreq, gotoDate, dateStep, fetchStep, handleDateChange, handleDateInput, onCoordSystemChange, initCoordSystemRadio, updateFreqButtonStates, updateWeekday, adjustViewForSavedPoint
+        // 对外接口（ChanApp.components.NavToolbar）: switchFreq, gotoDate, handleDateChange, handleDateInput, onCoordSystemChange, initCoordSystemRadio, updateFreqButtonStates, updateWeekday, adjustViewForSavedPoint
 // ══════════════════════════════════════════════════════════════════
 
         // 坐标系切换（设置抽屉内 radio 触发）
@@ -3286,7 +3287,8 @@
             } else {
                 input.onfocus = null;
             }
-            // 箭头提示
+
+            // 箭头提示（仅 title 文案，不触发任何跳转；左右箭头已停用点击无响应）
             var la = document.getElementById("date-arrow-left");
             var ra = document.getElementById("date-arrow-right");
             if (la) la.title = (currentFreq === "d") ? "前一天" : "前一根";
@@ -3508,14 +3510,26 @@
             }
             // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
             disconnectRealtime();
+            // ── 期货：复盘到过去 → 走 SSE 软断开（AppSSE end_time），不复用股票路由 ──
+            // A 阶段已用 end_time 软断开承载期货复盘：连接保持存活、K线冻结在边界。
+            // B 阶段收敛：复盘选日期/复盘至此统一由 gotoDate 并入 SSE，删股票路由期货分支。
+            if (isFutures) {
+                document.getElementById("goto-date-input").disabled = true;
+                document.getElementById("loading").classList.remove("hidden");
+                document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
+                if (isDualWindow && dualSubFreq) {
+                    connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq, apiDate);
+                } else {
+                    connectRealtimeInit(chartData.meta.symbol, freq, realtimeStartTime, apiDate);
+                }
+                return;
+            }
             // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
             // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
-            // 期货：wantLive已判断"回实时"，走到这里说明wantLive=false，始终传end_date
-            const needEndDate = isFutures ? true : (!isToday || keyEnter);
+            const needEndDate = (!isToday || keyEnter);
             const url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
-                + (isDualWindow && isFutures && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
+                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "");
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
@@ -3572,7 +3586,6 @@
         };
 
         window.handleDateChange = function() {
-            if (_dateStepIgnore) return;
             updateWeekday();
             // 键盘/手动输入 → 不触发（Enter 已在 handleDateKeydown 中处理）
             if (_dateKeyEnter) { _dateKeyEnter = false; return; }
@@ -3697,91 +3710,8 @@
             }
         };
 
-        window.dateStep = function(delta) {
-            if (!chartData || !chartData.klines || chartData.klines.length === 0) return;
-            var input = document.getElementById("goto-date-input");
-            var isFutures = chartData.meta && chartData.meta.market === 'futures';
-
-            // === 期货实时模式 ===
-            if (isFutures && isRealtimeMode) {
-                if (delta > 0) return; // 右箭头：已在最新，无需操作
-                // 左箭头：先记录进入复盘前的最后一根K线日期，再断开SSE进入复盘
-                if (chartData.klines.length > 0) {
-                    _futuresRealtimeBorderDate = chartData.klines[chartData.klines.length - 1].date;
-                    input.value = klineDateToInput(_futuresRealtimeBorderDate, currentFreq);
-                }
-                disconnectRealtime();
-                isRealtimeMode = false;
-            }
-
-            var currentEndDate = inputDateToApi(input.value.trim(), currentFreq);
-            if (!currentEndDate) return;
-
-            _dateStepIgnore = true;
-            fetchStep(currentEndDate, delta);
-            _dateStepIgnore = false;
-        };
-
-        // 发送 step 请求，后端在 full_records 中偏移定位，全自动处理节假日/调休/跨周
-        function fetchStep(endDate, delta) {
-            var code = chartData.meta.symbol;
-            var freq = currentFreq;
-            var url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
-                + "&end_date=" + encodeURIComponent(endDate) + "&step=" + delta
-                + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
-                + (isDualWindow && chartData.meta.market === 'futures' && dualSubFreq ? "&sub_freq=" + dualSubFreq : "");
-            document.getElementById("goto-date-input").disabled = true;
-            document.getElementById("loading").classList.remove("hidden");
-            document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
-            fetch(url)
-                .then(resp => {
-                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
-                    return resp.json();
-                })
-                .then(data => {
-                    chartData = data;
-                    updateRestartBtn();
-                    updateDualBtn();
-                    if (isDualWindow && data.sub) {
-                        dualSubData = data.sub;
-                        dualSubViewCount = 377;
-                        dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                        if (dualSubData.klines.length < dualSubViewCount) dualSubViewOffset = 0;
-                    }
-                    viewCount = 377;
-                    adjustViewForSavedPoint();
-                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
-                    if (chartData.klines.length < viewCount) viewOffset = 0;
-                    document.getElementById("stock-name").textContent = chartData.meta.name;
-                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
-                    document.title = "缠论分析 - " + chartData.meta.name;
-                    var lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                    document.getElementById("goto-date-input").value = lastDate;
-                    updateWeekday();
-                    resizeCanvas();
-                    render();
-                    loadAnnotations();
-                    // 期货复盘模式：右箭头返回的最后一根K线 > 进入复盘时的边界 → 重连实时
-                    var isFutures = chartData.meta && chartData.meta.market === 'futures';
-                    if (isFutures && delta > 0 && _futuresRealtimeBorderDate) {
-                        if (chartData.klines[chartData.klines.length - 1].date >= _futuresRealtimeBorderDate) {
-                            var savedDate = chartData.meta.saved_selection_date || null;
-                            if (isDualWindow && dualSubFreq) {
-                                // 双窗口模式：保持用户独立选择的下窗周期，重连双窗口SSE
-                                connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq);
-                            } else {
-                                connectRealtimeInit(chartData.meta.symbol, freq, savedDate);
-                            }
-                        }
-                    }
-                })
-                .catch(err => { alert("箭头跳转失败: " + err.message); })
-                .finally(() => {
-                    document.getElementById("loading").classList.add("hidden");
-                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    document.getElementById("goto-date-input").disabled = false;
-                });
-        }
+        // 左右箭头步进（dateStep / fetchStep）已按需求删除：
+        // 复盘由 gotoDate 的 SSE 软断开（end_time）统一承载，箭头逐根步进不再需要。
 
         window.updateWeekday = function() {
             var input = document.getElementById("goto-date-input");
@@ -3800,7 +3730,7 @@
 
         // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
         ChanApp.components.NavToolbar = {
-            switchFreq, gotoDate, dateStep, fetchStep, handleDateChange,
+            switchFreq, gotoDate, handleDateChange,
         handleDateInput, onCoordSystemChange, initCoordSystemRadio,
         updateFreqButtonStates, updateWeekday, adjustViewForSavedPoint
         };
@@ -5796,12 +5726,12 @@
         }
 
         // ========== SSE 初始化连接（初始快照 + 增量合一） ==========
-        function connectRealtimeInit(symbol, freq, startTime) {
+        function connectRealtimeInit(symbol, freq, startTime, endTime) {
             disconnectRealtime();
-            _futuresRealtimeBorderDate = null; // 清除期货复盘边界
             realtimeSymbol = symbol;
             realtimeFreq = freq;
             realtimeStartTime = startTime || null;
+            realtimeEndTime = endTime || null; // A 方案 · 复盘软断开边界
             isRealtimeMode = true;
             startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
@@ -5814,6 +5744,10 @@
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq || '1m');
                 if (startTime) {
                     sseUrl += '&start_time=' + encodeURIComponent(startTime);
+                }
+                if (endTime) {
+                    // A 方案 · 复盘软断开：把终点传入前端，后端把更新停在该边界，不拉最新
+                    sseUrl += '&end_time=' + encodeURIComponent(endTime);
                 }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
@@ -5900,11 +5834,12 @@
         }
 
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
-        function connectRealtimeDual(symbol, mainFreq, subFreq) {
+        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
             dualSubFreq = subFreq;
+            realtimeEndTime = endTime || null; // A 方案 · 复盘软断开边界
             isRealtimeMode = true;
             startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
@@ -5915,6 +5850,9 @@
             try {
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol)
                     + '&freq=' + mainFreq + '&dual=1&sub_freq=' + subFreq;
+                if (endTime) {
+                    sseUrl += '&end_time=' + encodeURIComponent(endTime);
+                }
                 realtimeEventSource = new EventSource(sseUrl);
                 realtimeConnected = true;
 

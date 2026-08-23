@@ -195,11 +195,11 @@
         }
         .goto-date button:hover { background: #0f3460; color: #e0e0e0; }
         .goto-date .date-arrow {
-            font-size: 10px; color: #8892b0; cursor: pointer;
+            font-size: 10px; color: #8892b0; cursor: default;
             padding: 2px 3px; user-select: none;
             transition: color 0.2s; line-height: 1;
         }
-        .goto-date .date-arrow:hover { color: #e94560; }
+        .goto-date .date-arrow:hover { color: #8892b0; }
         .goto-date .date-input-wrap {
             position: relative; display: inline-block;
         }

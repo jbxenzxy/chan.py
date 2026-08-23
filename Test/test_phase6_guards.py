@@ -66,7 +66,7 @@ WINDOW_BASELINE = {
     'annotationDialogCancel', 'annotationDialogConfirm', 'annotationDialogKeydown', 'annotationEditAnnotation',
     'annotationReplayToHere', 'bspFilterSelectAll', 'bspFilterSelectNone', 'cancelSelectedPoint',
     'clearHistory', 'clearInput', 'closeBspSettings', 'closeDownloadPanel',
-    'closeScanPanel', 'dateStep', 'doSearch', 'gotoDate',
+    'closeScanPanel', 'doSearch', 'gotoDate',
     'handleDateBlur', 'handleDateChange', 'handleDateInput', 'handleDateKeydown',
     'initCoordSystemRadio', 'loadScanResult', 'loadStock', 'maPeriodsSelectAll',
     'maPeriodsSelectNone', 'onBspFilterChange', 'onCoordSystemChange', 'onInputChange',

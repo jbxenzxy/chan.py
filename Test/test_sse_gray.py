@@ -206,7 +206,7 @@ def _patch_business(src):
     _sse_mod.white_calls = 0
     _sse_mod.drain_calls = 0
 
-    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None):
+    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None, end_time=None):
         _sse_mod.init_chan_calls += 1
         kl_list = MockKlList()
         chan = MockChan()

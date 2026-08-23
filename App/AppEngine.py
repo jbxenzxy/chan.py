@@ -1429,19 +1429,19 @@ _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
-    """公开分析入口：先识别市场，再分流到股票或期货的并列内部流程。
-    股票/指数：走通达信数据源，支持 cache_chan 和 dual 双窗口。
-    期货/期指：走天勤数据源（实现已迁 App/AppSSE.py，此处延迟导入避免
-    模块级循环依赖：AppSSE 模块级 import AppEngine，AppEngine 仅在
-    期货路径运行时才 import AppSSE）。
-    sub_freq: 双窗口下窗周期，仅期货路径使用（None 时用默认映射）。
+    """公开分析入口：仅处理股票/指数（通达信数据源），支持 cache_chan 和 dual 双窗口。
+
+    B 阶段收敛：期货不再复用股票路由。期货的一切拉流（实时/选点/复盘软断开）
+    已统一走 AppSSE 的 SSE 通道（sse_futures_stream_*），静态分析走
+    AppSSE._analyze_futures_internal，均不经本函数。此处对期货代码明确拒绝，
+    防止误传落到股票路径产生静默错误。
+    sub_freq: 双窗口下窗周期，仅股票路径需要（非复牌场景不使用）。
     """
     market, normalized_code = _get_market_code(code)
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
     if market == 'futures':
-        from App import AppSSE
-        return AppSSE._analyze_futures_internal(normalized_code, freq=freq, end_date=end_date, dual=dual, step=step, sub_freq=sub_freq)
+        return {"error": f"期货代码 {code} 请走期货分析接口（/api/futures/read/stream 或复盘/选点），不支持下挂股票路由"}
     stock_code = f"{normalized_code}.{market.upper()}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan, dual=dual, step=step)
 

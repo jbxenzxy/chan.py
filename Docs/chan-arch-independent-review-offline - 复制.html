@@ -258,8 +258,8 @@
       </figure>
       <ul>
         <li><b>AppEngine 纯分析编排</b>：文件按 5 区域组织（常量与配置 / 数据委托 / 股票分析 / 结果提取 / 公开入口，文件头 <code>AppEngine.py:7-38</code>），是全项目唯一同时装配 CTdxAPI（股票数据源）与探测 tqsdk 可用性的「引擎数据装配点」。</li>
-        <li><b>数据源单轨</b>：期货元数据（别名 / 周期 / 名称 / 周期秒数映射）一律经 <code>AppSSE</code> 区域 4 出口（<code>AppSSE.py:1863-1906</code>）；SSE 流协议四符号经 AppSSE re-export 供 API 层消费；装配点白名单（Engine / SSE / Refresh / Scan / Download / utils）由守护测试精确固化（<code>test_phase4_guards.py:678</code>）。</li>
-        <li><b>并发模型三分类</b>（已验证落实）：交互路径 SERIAL（<code>_ENGINE_LOCK</code> 全局串行，<code>AppChart.py:58,75</code>，单用户场景下正确）；批量路径 SCAN_ASYNC（ProcessPool spawn + SQLite WAL，用完即毁 + 线程池降级）；SSE 路径 SELF_CONTAINED（每连接独立 <code>CTqSdkSession</code>，finally 清理 + lifespan 双保险，<code>AppSSE.py:1907-1940</code> / <code>FrontAPI.py:99-119</code>）。</li>
+        <li><b>数据源单轨</b>：期货元数据（别名 / 周期 / 名称 / 周期秒数映射）一律经 <code>AppSSE</code> 区域 4 出口（<code>AppSSE.py:1768-1812</code>）；SSE 流协议四符号经 AppSSE re-export 供 API 层消费；装配点白名单（Engine / SSE / Refresh / Scan / Download / utils）由守护测试精确固化（<code>test_phase4_guards.py:678</code>）。</li>
+        <li><b>并发模型三分类</b>（已验证落实）：交互路径 SERIAL（<code>_ENGINE_LOCK</code> 全局串行，<code>AppChart.py:58,75</code>，单用户场景下正确）；批量路径 SCAN_ASYNC（ProcessPool spawn + SQLite WAL，用完即毁 + 线程池降级）；SSE 路径 SELF_CONTAINED（每连接独立 <code>CTqSdkSession</code>，finally 清理 + lifespan 双保险，<code>AppSSE.py:1813-1845</code> / <code>FrontAPI.py:99-119</code>）。</li>
         <li><b>配置双轨</b>（已验证落实）：基础设施归 <code>AppConfig.py</code>，算法参数归 <code>ChanConfig.py</code>，均支持 pydantic-settings 与内置解析双通道。</li>
         <li><b>错误处理现行约定</b>：期货路径抛领域异常（<code>App/AppErrors.py</code> 六类，<code>FrontAPI.py:156-166</code> 统一 exception_handler 捕获并映射状态码）；股票/扫描路径沿用 error-dict 返回、由 API 层转 HTTP 400；SSE 流内错误走事件帧（协议语义，非异常）。</li>
       </ul>
@@ -305,7 +305,7 @@
   RF --&gt; DATA
   ENG --&gt; DATA
   ENG --&gt;|"CTdxAPI 装配"| TDX
-  ENG -.->|"tqsdk 可用性探测"| TQ
+  ENG -.-&gt;|"tqsdk 可用性探测"| TQ
   UTIL --&gt;|"FREQ_SEC_MAP 换算"| TQ
   SSE --&gt;|"CTqSdkSession 流协议"| CSSE
   RF --&gt;|"refresh_block_files"| TDX
@@ -355,13 +355,6 @@
       </table>
       </div>
       <p class="muted">一句话记忆：<b>静态看历史用 TqSdkAPI，实时盯盘用 TqSdkCSSESource，业务编排都在 AppSSE</b>。另注：<code>DataAPI/__init__.py</code> 的工厂 <code>get_stock_api()</code>（按代码类型自动选 TdxAPI/TqSdkAPI 返回 <code>CCommonStockApi</code> 实例）保留为对外兼容面，本项目内部装配走各功能域白名单点。</p>
-
-      <div class="note">
-        <h4 style="margin:0 0 .4em 0">期货复盘/选点统一进「futures_stream」：end_time 软断开</h4>
-        <p>为把期货一切「拉流」操作归一进 AppSSE 的 SSE 通道（输入代码=实时流、选点=指定起点流、复盘=指定终点流），近期新增<b>复盘软断开</b>机制：<code>GET /api/futures/read/stream</code> 增加可选 <code>end_time</code> 参数（<code>FrontAPI.py:537-565</code>），单窗口 <code>sse_futures_stream_single</code>（<code>AppSSE.py:184</code>）与双窗口 <code>sse_futures_stream_dual</code>（<code>AppSSE.py:566</code>）均在 <code>init_chan_symbol</code>（<code>AppSSE.py:74</code>）内按 <code>end_time</code> 截断建 chan，且 update 主循环一旦墙钟越过边界即<b>停止推进 K 线/快照</b>——只发心跳保活、不再推 update（<code>AppSSE.py:346, 966</code>）。</p>
-        <p>由此实现「复盘看历史 <b>不被 update 拉到最新</b>」：连接保持存活（软断开，非物理断连），K 线冻结在边界，右箭头回到最新时以不带 <code>end_time</code> 的实时流重启即可恢复。数据层与流协议语义不变，<code>REPLAY_MODE</code>（买卖点调试开关）在建 chan 时按「存原值→设置→finally 恢复」自理，不再依赖全局串行锁（<code>AppSSE.py:252-258, 640-646, 658-664</code>）。</p>
-        <p class="muted" style="margin-bottom:0">范围说明：本次为分步落地（A2b）——<b>复盘/选点入口已能走 <code>futures_stream</code> 软断开</b>；复盘内逐根箭头暂保留静态 offset（走 AppSSE 内 <code>_analyze_futures_internal</code> 的 <code>step</code> 偏移，<code>AppSSE.py:1114-1130</code>）；股票路由（<code>analyze_stock</code>）的期货分支删除待验证后单独实施。</p>
-      </div>
     </div>
 
     <div class="card">
@@ -381,8 +374,8 @@
           <tr><td>批量扫描</td><td><code>submit → AppScanPool(spawn, 降级线程池) → worker → AppScanStore(SQLite WAL)</code>；预过滤在 AppScan 本地</td><td><span class="pill ok">✅ 全项目最佳</span></td><td>增量轮询防 O(n²)、协作式中止：<code>AppScanPool.py:100-135</code> / 预过滤 <code>AppScan.py:88</code></td></tr>
           <tr><td>盘后下载</td><td><code>AppDownload</code>(薄) → <code>ElTdxAPI</code></td><td><span class="pill ok">✅ 委托正确</span></td><td><code>AppDownload.py:21-75</code></td></tr>
           <tr><td>刷新</td><td><code>AppRefresh</code> 自持 703 行实现，直连 DataAPI/AppData</td><td><span class="pill ok">✅ 符合</span></td><td><code>AppRefresh.py:11-24</code>（职责清单）· 刷新状态缓存见 <code>AppRefresh.py:36-40</code></td></tr>
-          <tr><td>SSE 实时流</td><td>每连接独立 Session+线程、finally 清理、close_all+lifespan 双保险、心跳</td><td><span class="pill ok">✅ 落实到位</span></td><td><code>AppSSE.py:184-1029</code>（流）/ <code>AppSSE.py:1907-1940</code>（清理） / <code>FrontAPI.py:99-119</code></td></tr>
-          <tr><td>健康检查</td><td><code>/api/health</code> 周期映射经 <code>_sse.get_futures_freq_sec_map()</code> 出口（P2-8 后端单一事实源）</td><td><span class="pill ok">✅ 走元数据出口</span></td><td><code>FrontAPI.py:177-182</code> / 出口实现 <code>AppSSE.py:1895-1902</code></td></tr>
+          <tr><td>SSE 实时流</td><td>每连接独立 Session+线程、finally 清理、close_all+lifespan 双保险、心跳</td><td><span class="pill ok">✅ 落实到位</span></td><td><code>AppSSE.py:144-502</code>（流）/ <code>AppSSE.py:1813-1845</code>（清理） / <code>FrontAPI.py:99-119</code></td></tr>
+          <tr><td>健康检查</td><td><code>/api/health</code> 周期映射经 <code>_sse.get_futures_freq_sec_map()</code> 出口（P2-8 后端单一事实源）</td><td><span class="pill ok">✅ 走元数据出口</span></td><td><code>FrontAPI.py:177-182</code> / 出口实现 <code>AppSSE.py:1802-1809</code></td></tr>
         </tbody>
       </table>
       </div>
@@ -430,10 +423,10 @@
     <h3>3.3 遗留问题明细（1 项）</h3>
 
     <div class="prob p1">
-      <div class="head"><span class="id">P1-3</span><b>AppSSE 单文件 1940 行：职责已按 5 区域重组，未物理拆分</b><span class="pill warn">中</span></div>
+      <div class="head"><span class="id">P1-3</span><b>AppSSE 单文件 1845 行：职责已按 5 区域重组，未物理拆分</b><span class="pill warn">中</span></div>
       <ul>
-        <li><b>现状</b>：AppSSE 对引擎的依赖已收敛为 3 个显式名（<code>TQ_AVAILABLE/CTqSdkAPI/_get_futures_name</code>，<code>AppSSE.py:42-44</code>）+ <code>App/utils.py</code> 公共纯函数，文件头已按 5 区域标注分区：<b>区域 1 · SSE 实时流</b>（<code>AppSSE.py:69-1029</code>：init_chan_symbol:74 / _drain_chan:120 / sse_futures_stream_single:184 / sse_futures_stream_dual:566）、<b>区域 2 · 期货分析/复盘</b>（<code>AppSSE.py:1030-1740</code>：_build_futures_chan:1032 / _analyze_futures_internal:1061 / _extract_chan_structure:1331 / _extract_realtime_snapshot:1494 / _calc_futures_white_hline:1600 / MACD 增量三函数）、<b>区域 3 · 期货选点</b>（<code>AppSSE.py:1741-1862</code>：futures_manual_select_point:1743）、<b>区域 4 · 市场/代码/周期查询</b>（<code>AppSSE.py:1863-1906</code>：get_futures_aliases:1865 / get_futures_name:1872 / tq_available:1879 / get_futures_freqs:1886 / get_futures_freq_sec_map:1895）、<b>区域 5 · 退出清理</b>（<code>AppSSE.py:1907-1940</code>：_cleanup_all_futures_data:1909 / futures_cleanup:1932）。</li>
-        <li><b>为什么仍是问题</b>：区域标注只是「逻辑分区」，五个职责仍共享一个命名空间与一份 1940 行文件；区域 3 的选点入口在 AppChart（功能域横跨），只有物理拆分才能让「期货复盘」「期货选点」各自成域。</li>
+        <li><b>现状</b>：AppSSE 对引擎的依赖已收敛为 3 个显式名（<code>TQ_AVAILABLE/CTqSdkAPI/_get_futures_name</code>，<code>AppSSE.py:42-44</code>）+ <code>App/utils.py</code> 公共纯函数，文件头已按 5 区域标注分区：<b>区域 1 · SSE 实时流</b>（<code>AppSSE.py:70-934</code>：init_chan_symbol:74 / _drain_chan:115 / sse_futures_stream_single:144 / sse_futures_stream_dual:503）、<b>区域 2 · 期货分析</b>（<code>AppSSE.py:935-1645</code>：_build_futures_chan:939 / _analyze_futures_internal:968 / _extract_chan_structure:1238 / _extract_realtime_snapshot:1401 / _calc_futures_white_hline:1507 / MACD 增量三函数）、<b>区域 3 · 期货选点</b>（<code>AppSSE.py:1646-1767</code>：futures_manual_select_point:1650）、<b>区域 4 · 市场/代码/周期查询</b>（<code>AppSSE.py:1768-1812</code>：get_futures_aliases:1772 / get_futures_name:1779 / tq_available:1786 / get_futures_freqs:1791 / get_futures_freq_sec_map:1802）、<b>区域 5 · 退出清理</b>（<code>AppSSE.py:1813-1845</code>：_cleanup_all_futures_data:1816 / futures_cleanup:1839）。</li>
+        <li><b>为什么仍是问题</b>：区域标注只是「逻辑分区」，五个职责仍共享一个命名空间与一份 1845 行文件；区域 3 的选点入口在 AppChart（功能域横跨），只有物理拆分才能让「期货静态分析」「期货选点」各自成域。</li>
         <li><b>随时可拆</b>：依赖已单向、暗接口已消除，拆分前置条件全部满足。</li>
       </ul>
       <div class="meta-row"><span>证据：<code>AppSSE.py:11-21</code>（五区域文件头）· 区域起始行 70/935/1646/1768/1813 · 模块行数实测</span><span>工作量：2-3 人日</span></div>
