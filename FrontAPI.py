@@ -531,7 +531,7 @@ async def api_futures_read_status():
 @router.get("/api/futures/read/config")
 async def api_futures_read_config():
     """期货可用周期列表"""
-    result = await run_in_threadpool(orch.futures_config)
+    result = await run_in_threadpool(orch.get_futures_freqs)
     return _json_response(result)
 
 

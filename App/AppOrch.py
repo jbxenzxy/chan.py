@@ -48,7 +48,7 @@ from App.AppChart import (
     futures_set_sub_chan, futures_get_sub_chan, futures_pop_sub_chan,
     get_saved_point,
     futures_cleanup, get_futures_aliases, get_futures_name,
-    tq_available, futures_config, get_stock_names_cache_file,
+    tq_available, get_futures_freqs, get_stock_names_cache_file,
     get_stock_market_code, get_market_code, get_stock_name,
 )
 from App.AppScan import (
@@ -179,7 +179,7 @@ __all__ = [
     "futures_set_sub_chan", "futures_get_sub_chan", "futures_pop_sub_chan",
     "get_saved_point",
     "futures_cleanup", "get_futures_aliases", "get_futures_name",
-    "tq_available", "futures_config", "get_stock_names_cache_file",
+    "tq_available", "get_futures_freqs", "get_stock_names_cache_file",
     "get_stock_market_code", "get_market_code", "get_stock_name",
     # 扫描（AppScan）
     "Scanner", "ScannerService", "scanner",

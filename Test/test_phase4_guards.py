@@ -252,6 +252,54 @@ def test_no_state_bypass(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# ②c 数据层直改零残留（P1-2 守护：服务层不得直改 app_data 缓存 dict）
+# ═══════════════════════════════════════════════════════════════════════
+# P1-2 收尾：红框/期货选点路径对期货子窗缓存的读写全部经
+# futures_cache_get/put/pop（语义化 set/get/pop_futures_sub_chan）；
+# 股票分析缓存删除经 cache_remove（内部持锁）。本守护封禁服务层对
+# app_data.futures_analysis_cache / stocks_analysis_cache 的直改直读复活
+# （AppEngine 模块级别名与 AppData 自身实现不受限）。
+_DIRECT_CACHE_PATTERNS = [
+    "app_data.futures_analysis_cache[",
+    "app_data.futures_analysis_cache.get(",
+    "app_data.futures_analysis_cache.pop(",
+    "app_data.stocks_analysis_cache[",
+    "app_data.stocks_analysis_cache.get(",
+    "app_data.stocks_analysis_cache.pop(",
+    "app_data.cache_lock",  # 手工持锁直改 → 应经 cache_remove（内部持锁）
+]
+_DIRECT_CACHE_FILES = [
+    os.path.join("App", "AppChart.py"),
+    os.path.join("App", "AppSSE.py"),
+    os.path.join("App", "AppScan.py"),
+    os.path.join("BuySellPoint", "BSPointList.py"),
+]
+
+
+def test_no_direct_cache_access(failures):
+    """服务层不得直改 app_data 缓存 dict（P1-2 成果守护）"""
+    bad = []
+    for rel in _DIRECT_CACHE_FILES:
+        src = read_src(rel)
+        for i, line in enumerate(src.splitlines(), 1):
+            s = line.strip()
+            if s.startswith("#"):
+                continue
+            for pat in _DIRECT_CACHE_PATTERNS:
+                if pat in s:
+                    bad.append(f"{rel}:{i} 直改 {pat}（应经 futures_cache_*/cache_remove 公共 API）")
+    if bad:
+        failures.extend(f"数据层直改零残留: {b}" for b in bad)
+        for b in bad[:8]:
+            print(f"[FAIL] ②c 数据层直改零残留: {b}")
+        if len(bad) > 8:
+            print(f"        …共 {len(bad)} 处")
+    else:
+        print(f"[PASS] ②c 数据层直改零残留: {len(_DIRECT_CACHE_FILES)} 个服务模块零直改"
+              f" app_data 缓存 dict（P1-2 已全部经公共 API）")
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # ③ 配置别名清零（不得复活）
 # ═══════════════════════════════════════════════════════════════════════
 RETIRED_ALIASES = [
@@ -599,6 +647,7 @@ def main():
     test_shell_purity(failures)
     test_alias_identity(failures)
     test_no_state_bypass(failures)
+    test_no_direct_cache_access(failures)
     test_no_revived_aliases(failures)
     test_zxg_convergence(failures)
     test_layering_direction(failures)
@@ -612,7 +661,7 @@ def main():
         for f in failures:
             print(" -", f)
         return False
-    print("===== 阶段 4 成果防护: 全部通过（9 类守护） =====")
+    print("===== 阶段 4 成果防护: 全部通过（10 类守护） =====")
     return True
 
 

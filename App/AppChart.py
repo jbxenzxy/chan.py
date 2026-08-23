@@ -12,8 +12,8 @@ App/AppChart.py —— 图表交互功能域
   - 图表上框选红框中枢（compute_red_range_zs：红框内笔序列 → 中枢重算）
   - 搜索（search_stocks）、代码解析（get_stock_market_code 等）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
-  - 期货元数据漏斗（futures_cleanup / get_futures_aliases / futures_config
-    等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
+  - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases /
+    get_futures_freqs 等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
 
 本模块收纳：
   - 分析漏斗（call_analysis / run_analysis / analyze_stock 等，持 _ENGINE_LOCK）
@@ -23,8 +23,8 @@ App/AppChart.py —— 图表交互功能域
     等，原 App/AppAnnotate.py，阶段随本版合入：图表右键标注属图表交互）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
-  - 期货元数据漏斗（futures_cleanup / get_futures_aliases / futures_config 等，
-    实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
+  - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases /
+    get_futures_freqs 等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
   - 代码解析（get_stock_market_code / get_market_code / get_stock_name）
 
 依赖方向：AppChart.py → AppEngine / AppSSE / AppData / DataAPI（单向）
@@ -277,10 +277,8 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1):
     app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
-    if cache_key in app_data.stocks_analysis_cache:
-        with app_data.cache_lock:
-            if cache_key in app_data.stocks_analysis_cache:
-                del app_data.stocks_analysis_cache[cache_key]
+    # P1-2：缓存删除统一经 app_data.cache_remove（内部持锁，消除手工锁+直改双路径）
+    app_data.cache_remove(cache_key)
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
@@ -313,7 +311,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # ── 期货双窗口 ──
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
-        cached = app_data.futures_analysis_cache.get(cache_key)
+        cached = app_data.futures_cache_get(cache_key)
         if cached is None:
             return {"error": "双窗口下窗缓存已过期，请重新打开双窗口"}
         chan = cached
@@ -636,9 +634,8 @@ def futures_cleanup():
 
 
 def get_futures_aliases():
-    """期货别名映射（阶段 5：经 CTqSdkAPI 元数据接口）"""
-    from DataAPI.TqSdkAPI import CTqSdkAPI
-    return CTqSdkAPI.FUTURES_ALIASES
+    """期货别名映射（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    return _sse.get_futures_aliases()
 
 
 def get_futures_name(full_code):
@@ -651,14 +648,9 @@ def tq_available():
     return _sse.tq_available()
 
 
-def futures_config():
-    """期货可用周期列表（阶段 5：经 CTqSdkAPI 元数据接口）"""
-    try:
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        return {"supported_freqs": CTqSdkAPI.SUPPORTED_FREQS,
-                "disabled_freqs": CTqSdkAPI.DISABLED_FREQS}
-    except ImportError:
-        return {"supported_freqs": [], "disabled_freqs": []}
+def get_futures_freqs():
+    """期货可用周期列表（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    return _sse.get_futures_freqs()
 
 
 def get_stock_names_cache_file():
