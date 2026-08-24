@@ -496,6 +496,61 @@ class Scanner:
                         app_data.cache_remove(make_live_key(mkt, cd, freq))
                 return resp_data
 
+            # ── 放量扫描模式 ──
+            if mode == "fangliang":
+                # 逻辑（以日K为例）：最近 recent_days 根记为 N+1..N+N，
+                # 取其中成交额最大者 A；再从 N 起往前数 120 根作比较窗口
+                # （窗口根数可配：app_config.scan_fangliang_window_bars）。
+                # 若 A 大于该窗口内任意一天的成交额（即 A > 窗口内最大
+                # 成交额），则该标的放量命中。
+                #
+                # 边界处理：K线数据不足（不足 recent_days+窗口根数）或近期
+                # 最大成交额 A 为 0 时，视为无效标的，直接静默跳过（不打印日志）。
+                window_bars = int(app_config.scan_fangliang_window_bars or 120)
+                if window_bars < 1:
+                    window_bars = 120
+                need_bars = recent_days + window_bars
+                is_fangliang = False
+                amount_a = 0
+                peak_prev = 0
+                a_is_rise = False
+                if len(klines) >= need_bars:
+                    recent_kl = klines[-recent_days:]
+                    amount_a = max((k.get("amount", 0) for k in recent_kl), default=0)
+                    if amount_a > 0:
+                        prev_window = klines[-(need_bars):-recent_days]
+                        peak_prev = max((k.get("amount", 0) for k in prev_window), default=0)
+                        is_fangliang = amount_a > peak_prev
+                        # 找出 A 所在的那根K线，记录其涨跌（收阳/收阴），
+                        # 用以对齐扫描结果标签与K线图中该根"成交额柱"的颜色。
+                        a_kline = next(
+                            (k for k in recent_kl if (k.get("amount", 0) or 0) == amount_a),
+                            None)
+                        if a_kline is not None:
+                            a_is_rise = a_kline.get("close", 0) > a_kline.get("open", 0)
+
+                if not is_fangliang:
+                    # 数据不足 / A为0 / 未放量：统一静默返回未命中，不打印日志
+                    mkt, cd = _m._get_market_code(qualified_code)
+                    if mkt and cd:
+                        app_data.cache_remove(make_live_key(mkt, cd, freq))
+                    return {"code": code, "is_fangliang": False}
+
+                last_close = klines[-1]["close"] if klines else 0
+                t_filter = time.time() - t0
+                t_total = time.time() - t_scan_start
+                log.info(f"[耗时-扫描-放量] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) "
+                         f"A张={amount_a:g} 前窗峰值={peak_prev:g} 放量=是")
+                return {
+                    "code": code + "." + market.upper(), "name": stock_name,
+                    "is_fangliang": True,
+                    "last_close": last_close,
+                    "freq": freq,
+                    "amount_a": amount_a,
+                    "peak_prev": peak_prev,
+                    "a_is_rise": a_is_rise,
+                }
+
             # ── 买卖点扫描模式 ──
             recent_dates = set()
             for k in klines[-recent_days:]:

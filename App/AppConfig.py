@@ -93,6 +93,8 @@ _FIELD_DEFAULTS = {
     "TDX_INSTALL_DIR": _default_tdx_install_dir(),
     "SCAN_POOL_WORKERS": 0,      # 0=自动按 CPU 核数适配；>0 显式覆盖（对齐 .env.example）
     "SCAN_MIN_FLOAT_MC": 50.0,   # P2-8：扫描预过滤流通市值下限（亿），原硬编码 float_mc < 50
+    "SCAN_FANGLIANG_WINDOW_BARS": 120,  # 放量扫描：以 A 那根往前数 N 根K线作比较窗口（原硬编码 120），
+                                        # 即「A > 该窗口内任一天成交额」视为放量命中
     "TQ_ACCOUNT": "",
     "TQ_PASSWORD": "",
     "FORWARD_ADJUST_ENABLED": True,   # 前复权开关
@@ -110,7 +112,7 @@ _FIELD_DEFAULTS = {
     #             请保持与 days 一致，避免日志误导（如 days=180 却写 label="4个月"）。
     # 【合法性】days 填任意整数天数：0=不限制，正数=向前推 N 天。建议用易于理解的天数。
     # 生效前提：FULL_DATA_MODE=False（全量数据模式跳过截断）。
-    "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (180, "近6个月"), "5m": (90, "近3个月")},
+    "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (472, "近2年"), "30m": (180, "近6个月"), "5m": (90, "近3个月")},
     # "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (0, "不限制"), "5m": (0, "不限制")},
     # 前端视口默认显示的K线根数（所有周期相同，与后端加载根数解耦）：
     #   当后端加载的K线根数 > VIEW_COUNT，前端视口显示 VIEW_COUNT 根（右对齐）；
@@ -293,6 +295,7 @@ if _HAVE_PYDANTIC_SETTINGS:
         # ── 并发 ──
         scan_pool_workers: int = _FIELD_DEFAULTS["SCAN_POOL_WORKERS"]  # ProcessPool worker 数（0=按核数）
         scan_min_float_mc: float = _FIELD_DEFAULTS["SCAN_MIN_FLOAT_MC"]  # 扫描预过滤流通市值下限（亿）
+        scan_fangliang_window_bars: int = _FIELD_DEFAULTS["SCAN_FANGLIANG_WINDOW_BARS"]  # 放量扫描比较窗口K线根数（默认120）
 
         # ── 凭据（.env 或环境变量注入；7.3：不落缓存不写日志）──
         tq_account: str = _FIELD_DEFAULTS["TQ_ACCOUNT"]         # 天勤账号（空 = 回退 vipdoc/tq_account.json）

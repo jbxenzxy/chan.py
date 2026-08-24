@@ -238,7 +238,7 @@
 
         let _scanTaskId = null; // 阶段 7：当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
-        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
+        let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
 
         let _scanRecentDays = 1; // 最近N根K线，默认1
 
@@ -4675,7 +4675,7 @@
 
 // ══════════════════════════════════════════════════════════════════
         // [COMPONENT] ScanPanel —— 扫描面板组件（模式对话框 / 逐只扫描 / 结果渲染 / 保存自选）
-        // 对外接口（ChanApp.components.ScanPanel）: startScanZxg, doStartScan, scanModeDialogConfirm, scanModeDialogCancel, renderScanResults, renderFxDScanResults, renderMaScanResults, saveScanToZxg, closeScanPanel, toggleScanMinimize, loadScanResult, refreshStockNames, updateScanSaveBtn, scanSourceSelectAll, scanSourceSelectNone
+        // 对外接口（ChanApp.components.ScanPanel）: startScanZxg, doStartScan, scanModeDialogConfirm, scanModeDialogCancel, renderScanResults, renderFxDScanResults, renderMaScanResults, renderFangliangScanResults, saveScanToZxg, closeScanPanel, toggleScanMinimize, loadScanResult, refreshStockNames, updateScanSaveBtn, scanSourceSelectAll, scanSourceSelectNone
 // ══════════════════════════════════════════════════════════════════
 
         // 扫描模式切换时，控制"最近N根"输入框的灰化状态
@@ -4786,6 +4786,14 @@
             }
         }
 
+        // 放量标签HTML：颜色对齐K线图中 A 那根"成交额柱"的颜色
+        //   成交额柱：收阳(close>open) → 红柱 #FF4444；收阴 → 青绿柱 #54fcfc（见 drawVolume）
+        function buildFangliangTagHtml(data) {
+            var isRise = !!(data.a_is_rise);
+            var cls = isRise ? "fl-rise" : "fl-fall";
+            return '<span class="scan-bsp-tag ' + cls + '">放量</span>';
+        }
+
         // 扫描模式对话框：取消
         window.scanModeDialogCancel = function() {
             document.getElementById("scan-mode-dialog").classList.remove("show");
@@ -4838,6 +4846,8 @@
                 document.getElementById("scan-title").innerHTML = freqLabel + '<span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560">' + _scanRecentDays + '</b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span> 买/卖点';
             } else if (_scanMode === "ma") {
                 document.getElementById("scan-title").textContent = freqLabel + " 均线";
+            } else if (_scanMode === "fangliang") {
+                document.getElementById("scan-title").textContent = freqLabel + " 放量";
             } else if (_scanMode === "fx_d") {
                 document.getElementById("scan-title").textContent = freqLabel + " 底分型";
             } else {
@@ -4865,7 +4875,7 @@
             // 从 localStorage 恢复上次的选择
             try {
                 var savedMode = localStorage.getItem("scan_mode");
-                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d") {
+                if (savedMode === "bsp" || savedMode === "ann" || savedMode === "ma" || savedMode === "fx_d" || savedMode === "fangliang") {
                     _scanMode = savedMode;
                     var radio = document.querySelector('input[name="scan-mode"][value="' + savedMode + '"]');
                     if (radio) radio.checked = true;
@@ -5436,6 +5446,150 @@
                 return;
             }
 
+            // 放量扫描模式：找最近 N 根内成交额最大者为 A，且 A 大于其前 120 根的成交额峰值
+            if (_scanMode === "fangliang") {
+                var sourceLabel = _scanSourceLabel();
+                body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
+                var freq = _scanFreq;
+                Promise.all([
+                    fetch("/api/stocks/scan/start", { method: "POST" }),
+                    _fetchMergedStocks(_scanSources, freq)
+                ])
+                    .then(function(resps) {
+                        return resps[0].json().then(function(scanStartData) {
+                            if (scanStartData.need_refresh) {
+                                _scanRunning = false;
+                                btn.classList.remove("active");
+                                body.innerHTML = '<div class="scan-no-result" style="text-align:center;padding:20px;">' +
+                                    '<div style="font-size:14px;color:#e94560;margin-bottom:12px;">&#9888; ' + scanStartData.msg + '</div>' +
+                                    '<button class="btn" onclick="refreshStockNames();closeScanPanel();" style="margin-top:8px;">立即刷新</button>' +
+                                    '</div>';
+                                return null;
+                            }
+                            return resps[1];
+                        });
+                    })
+                    .then(function(data) {
+                        if (data === null) return;
+                        if (!data || !data.stocks || data.stocks.length === 0) {
+                            _scanRunning = false;
+                            btn.classList.remove("active");
+                            body.innerHTML = '<div class="scan-no-result">' + sourceLabel + '列表为空或文件不存在</div>';
+                            return;
+                        }
+                        var stocks = data.stocks;
+                        var total = stocks.length;
+                        var preSkipped = data.pre_skipped || 0;
+                        console.log("[放量扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
+                        var results = [];
+                        var skipped = 0;
+                        var currentIdx = 0;
+                        var completed = 0;
+                        var hasRenderedAny = false;
+
+                        body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 0/' + total + '，跳过 ' + preSkipped + ' 只，放量 0 只</div>';
+
+                        function finishScan(interrupted) {
+                            if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
+                            _pendingUpdate = false;
+                            fetch("/api/stocks/scan/end", { method: "POST" }).then(function() {
+                                renderFangliangScanResults(results, total + preSkipped, preSkipped + skipped, interrupted);
+                            });
+                        }
+
+                        var _updateTimer = null;
+                        var _pendingUpdate = false;
+                        function updatePanel() {
+                            if (_updateTimer) {
+                                _pendingUpdate = true;
+                                return;
+                            }
+                            _doUpdatePanel();
+                            _updateTimer = setInterval(function() {
+                                if (_pendingUpdate) {
+                                    _pendingUpdate = false;
+                                    _doUpdatePanel();
+                                } else {
+                                    clearInterval(_updateTimer);
+                                    _updateTimer = null;
+                                }
+                            }, 500);
+                        }
+                        function _doUpdatePanel() {
+                            var progress = completed + "/" + total;
+                            var totalSkipped = preSkipped + skipped;
+                            var html = '<div class="scan-loading"><div class="spinner"></div><br>正在扫描 ' + progress + '，跳过 ' + totalSkipped + ' 只，放量 ' + results.length + ' 只</div>';
+                            if (results.length > 0) {
+                                hasRenderedAny = true;
+                                var shCount = 0, szCount = 0, bjCount = 0, hkCount = 0;
+                                for (var i = 0; i < results.length; i++) {
+                                    var parts = results[i].code.split(".");
+                                    var mkt = parts.length > 1 ? parts[1] : "";
+                                    if (mkt === "SH") { shCount++; }
+                                    else if (mkt === "SZ") { szCount++; }
+                                    else if (mkt === "BJ") { bjCount++; }
+                                    else if (mkt === "HK") { hkCount++; }
+                                }
+                                var marketParts = [];
+                                if (shCount > 0) marketParts.push("上海 <b>" + shCount + "</b> 只");
+                                if (szCount > 0) marketParts.push("深圳 <b>" + szCount + "</b> 只");
+                                if (bjCount > 0) marketParts.push("北京 <b>" + bjCount + "</b> 只");
+                                if (hkCount > 0) marketParts.push("香港 <b>" + hkCount + "</b> 只");
+                                html += '<div class="scan-summary" style="margin-top:8px;">' + marketParts.join("，") + '</div>';
+                                // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
+                                results.sort(function(a, b) {
+                                    return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
+                                });
+                                for (var i = 0; i < results.length; i++) {
+                                    var r = results[i];
+                                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
+                                    html += chkBox(r.code, !!r.a_is_rise);
+                                    html += '<span class="scan-col-name">' + r.name + '</span>';
+                                    html += '<span class="scan-col-code">' + r.code + '</span>';
+                                    html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
+                                    html += '</div>';
+                                }
+                            }
+                            body.innerHTML = html;
+                            updateScanSaveBtn();
+                        }
+
+                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        btn.textContent = "中断扫描";
+                        _asyncScanAll(stocks, {freq: freq, mode: "fangliang", recent: _scanRecentDays, source: _scanSources.join(",")}, function(data) {
+                            completed++;
+                            if (data.skipped) { skipped++; }
+                            else if (data.error) { skipped++; }
+                            else if (data.is_fangliang) { results.push(data); }
+                            updatePanel();
+                        }, function(err, interrupted) {
+                            if (err) {
+                                console.error("[放量扫描] " + err);
+                                _scanRunning = false;
+                                _scanAborted = false;
+                                btn.classList.remove("active");
+                                btn.disabled = false;
+                                btn.textContent = "股票扫描";
+                                body.innerHTML = '<div class="scan-no-result">扫描失败: ' + err + '</div>';
+                                return;
+                            }
+                            _scanRunning = false;
+                            _scanAborted = false;
+                            btn.classList.remove("active");
+                            btn.disabled = false;
+                            btn.textContent = "股票扫描";
+                            finishScan(interrupted);
+                        });
+                    })
+                    .catch(function(err) {
+                        _scanRunning = false;
+                        btn.classList.remove("active");
+                        btn.textContent = "股票扫描";
+                        body.innerHTML = '<div class="scan-no-result">读取' + sourceLabel + '失败: ' + err.message + '</div>';
+                    });
+                return;
+            }
+
             // 买卖点扫描模式（原有逻辑）
             // 第一步：通知后端开始新扫描 + 合并多来源股票列表
             var sourceLabel = _scanSourceLabel();
@@ -5755,6 +5909,33 @@
                     html += '<span class="scan-col-name">' + r.name + '</span>';
                     html += '<span class="scan-col-code">' + r.code + '</span>';
                     html += '<span class="scan-col-tags"><span class="scan-bsp-tag ' + catClass + '">' + catLabel + '</span></span>';
+                    html += '</div>';
+                }
+            }
+            body.innerHTML = html;
+            updateScanSaveBtn();
+        }
+
+        // 放量扫描结果渲染
+        function renderFangliangScanResults(results, total, skipped, interrupted) {
+            var body = document.getElementById("scan-body");
+            var label = interrupted ? "（已中断）" : "";
+            var sourceLabel = _scanSourceLabel();
+            var html = '<div class="scan-summary">' + sourceLabel + ' <b>' + total + '</b> 只，跳过 <b>' + skipped + '</b> 只，扫描 <b>' + (total - skipped) + '</b> 只，放量 <b>' + results.length + '</b> 只' + label + '</div>';
+            if (results.length === 0) {
+                html += '<div class="scan-no-result">当前周期下未发现放量标的</div>';
+            } else {
+                // 动态排序：红色（A为阳线，a_is_rise=true）排前面，绿色排后面；仅红色勾选
+                results.sort(function(a, b) {
+                    return ((b.a_is_rise ? 1 : 0) - (a.a_is_rise ? 1 : 0));
+                });
+                for (var i = 0; i < results.length; i++) {
+                    var r = results[i];
+                    html += '<div class="scan-stock-row" onclick="loadScanResult(\'' + r.code + '\', \'' + _scanFreq + '\')" title="点击查看K线图">';
+                    html += chkBox(r.code, !!r.a_is_rise);
+                    html += '<span class="scan-col-name">' + r.name + '</span>';
+                    html += '<span class="scan-col-code">' + r.code + '</span>';
+                    html += '<span class="scan-col-tags">' + buildFangliangTagHtml(r) + '</span>';
                     html += '</div>';
                 }
             }

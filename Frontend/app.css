@@ -356,6 +356,8 @@
         .scan-bsp-tag.fx-weak { background: rgba(180, 180, 180, 0.2); color: #b0b0b0; }
         .scan-bsp-tag.fx-strong { background: rgba(255, 165, 0, 0.2); color: #ffa500; }
         .scan-bsp-tag.fx-strongest { background: rgba(255, 68, 68, 0.3); color: #ff4444; font-weight: 600; }
+        .scan-bsp-tag.fl-rise { background: rgba(255, 68, 68, 0.25); color: #FF4444; font-weight: 600; }
+        .scan-bsp-tag.fl-fall { background: rgba(84, 252, 252, 0.2); color: #54fcfc; font-weight: 600; }
         .scan-bsp-tag.scan-bsp-more { background: rgba(255,255,255,0.1); color: #8892b0; font-weight: 400; }
         /* 均线分类标签：类0(最强,红) → 类8(最弱,绿) */
         .scan-bsp-tag.ma-cat0 { background: rgba(244, 67, 54, 0.25); color: #F44336; font-weight: 600; }
