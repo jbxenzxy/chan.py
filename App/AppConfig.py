@@ -116,7 +116,43 @@ _FIELD_DEFAULTS = {
     #   当后端加载的K线根数 > VIEW_COUNT，前端视口显示 VIEW_COUNT 根（右对齐）；
     #   当后端加载的K线根数 < VIEW_COUNT，前端视口降为「后端加载多少显示多少」（填满宽度）。
     #   经 /api/health 下发命令前端 app.js（取代原硬编码 377）。
+    #   例外：双击选点（B操作）后端已按「选点→最新」过滤，前端全量显示，
+    #   不受 VIEW_COUNT 限制（单窗上窗、双窗上窗、双窗下窗同此规则）。
+    # 【与 DUAL_SUB_FALLBACK_MIN 的关系】两者相互独立，互不联动：
+    #   双窗下窗「降全量」只看 DUAL_SUB_FALLBACK_MIN（默认100），与本值无关——
+    #   它保护的是后端缠论分析所需最小K线数（下窗笔结构），不是视口填充数。
+    #   故本值【不建议】配置为小于 DUAL_SUB_FALLBACK_MIN 的值：如本值配 50，
+    #   下窗对齐后不足 100 仍会降全量（不会等到不足 50 才降），视口却只显示
+    #   50 根——功能可用（可滚动查看），但容易误解为「不足视口数才降全量」。
     "VIEW_COUNT": 377,
+    # ── 双窗口下窗「对齐不足降全量」阈值 DUAL_SUB_FALLBACK_MIN ─────
+    # 双窗下窗加载与上窗时间区间对齐（上窗区间=上窗后端实际加载的K线范围）。
+    # 当按对齐区间截断后下窗K线根数 < DUAL_SUB_FALLBACK_MIN 时（下窗数据源
+    # 覆盖不足，如上市较晚、分时文件只存近期），下窗降为全量加载，保证下窗
+    # 笔结构可支撑缠论分析（区间套/红框中枢依赖完整下窗笔）。
+    # 全量仍 < 5 根时按既有逻辑退化为单级别（双窗降级提示）。
+    # 建议值 >= 下窗缠论分析所需最小K线数（几笔结构），过小起不到兜底作用。
+    # 注意：本阈值与 VIEW_COUNT（前端视口显示根数）无关——即使 VIEW_COUNT
+    # 配置为 50，仍按本阈值（<100）降全量，不会随 VIEW_COUNT 缩小。
+    "DUAL_SUB_FALLBACK_MIN": 100,
+    # ── 双窗口缓存限额（与单窗口共用同一 LRU 池，但单独限额）──────
+    # 单窗口是常用操作，缓存条目（single 键）用满 LRU 池（MAX_CACHE_SIZE=50）；
+    # 双窗口非常用且条目更重（dual_main + dual_sub 两键，各含 CChan），
+    # 故在共享池内对 dual_* 键单独限额：超限时优先淘汰最旧的 dual 键，
+    # 不挤占常用单窗口缓存。MAX_DUAL_CACHE_KEYS 按「组」计（1组=2键）。
+    "MAX_DUAL_CACHE_KEYS": 10,   # 双窗结构化缓存键上限（10键 = 5组双窗）
+    # 双窗运行时下窗 CChan 缓存（stocks_sub_cache）：与上面的 dual_*
+    # 结构化缓存【不是同一个缓存】——是两个独立的 dict，各有各的键和消费方：
+    #   · dual_main/dual_sub（结构化缓存）：键=(kind,市场,代码,周期,日期,实现)，
+    #     消费方=API 层缓存命中（重复请求免重算），MAX_DUAL_CACHE_KEYS 管它；
+    #   · stocks_sub_cache（运行时缓存）：键=代码:下窗周期（无日期/实现维度），
+    #     消费方=区间套 check_nested_diver / 红框中枢重算 / 双窗选点重建——
+    #     这些消费方只知道「代码+下窗周期」，构不出结构化键，故必须有独立缓存。
+    # 两个 dict 各存各的引用（同一个下窗 CChan 会被两处同时引用）：
+    # 只限额 dual_* 键管不到本缓存，反之亦然——两个上限合起来才框住双窗内存。
+    # 本缓存历史上无上限：双窗模式切 N 只票就攒 N 个 CChan 永不释放（泄漏）。
+    # 现改为 LRU 限额，超限淘汰最旧；切回单窗不主动清（保留快速切回能力）。
+    "MAX_STOCKS_SUB_CHAN": 5,    # 运行时下窗 CChan 条目上限
     "DEBUG_COLD_START_START_DATE": None,  # 冷启动起始日期（None=不开启）
     "DEBUG_COLD_START_END_DATE": None,    # 冷启动结束日期（None=不开启）
     "SSE_DEBUG": False,                   # SSE 推送详细调试日志开关
@@ -267,6 +303,9 @@ if _HAVE_PYDANTIC_SETTINGS:
         full_data_mode: bool = _FIELD_DEFAULTS["FULL_DATA_MODE"]                   # 全量数据模式
         time_truncate_config: dict = _FIELD_DEFAULTS["TIME_TRUNCATE_CONFIG"]      # 时间截断配置
         view_count: int = _FIELD_DEFAULTS["VIEW_COUNT"]                           # 前端视口默认显示K线根数（所有周期相同）
+        dual_sub_fallback_min: int = _FIELD_DEFAULTS["DUAL_SUB_FALLBACK_MIN"]     # 双窗下窗对齐截断后不足此数→降全量
+        max_dual_cache_keys: int = _FIELD_DEFAULTS["MAX_DUAL_CACHE_KEYS"]         # 双窗结构化缓存键上限（共享池内单独限额）
+        max_stocks_sub_chan: int = _FIELD_DEFAULTS["MAX_STOCKS_SUB_CHAN"]         # 双窗运行时下窗 CChan 缓存上限
         debug_cold_start_start_date: str | None = _FIELD_DEFAULTS["DEBUG_COLD_START_START_DATE"]
         debug_cold_start_end_date: str | None = _FIELD_DEFAULTS["DEBUG_COLD_START_END_DATE"]
         sse_debug: bool = _FIELD_DEFAULTS["SSE_DEBUG"]          # SSE 推送详细调试日志开关

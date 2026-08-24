@@ -189,7 +189,14 @@ def make_futures_sub_key(symbol, sub_freq):
 class AppData:
     """业务数据层：缓存 / 持久化 / 标注 / 自选股（真实实现 · 阶段 4）"""
 
-    MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合
+    MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合（共享 LRU 池总上限）
+    # 双窗结构化缓存键（dual_main/dual_sub）在共享池内单独限额：
+    # 双窗条目更重（两键各含 CChan + records）且不常用，超限优先淘汰
+    # 最旧 dual 键，不挤占常用单窗口缓存（单一事实源 AppConfig）。
+    MAX_DUAL_CACHE_KEYS = app_config.max_dual_cache_keys
+    # 双窗运行时下窗 CChan 缓存上限（LRU）：历史上无上限，切换标的时
+    # 旧 CChan 残留泄漏；现超限淘汰最旧（切回单窗不主动清，保留快速切回）。
+    MAX_STOCKS_SUB_CHAN = app_config.max_stocks_sub_chan
 
     def __init__(self):
         # ── 分析结果缓存 ──
@@ -336,19 +343,44 @@ class AppData:
         return result
 
     # ════════════════════════════════════════════════════════════════
-    # 统一缓存（LRU 50 条；股票扫描与冷启动共用）
+    # 统一缓存（LRU 50 条；股票扫描与冷启动共用；双窗键单独限额）
     # ════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _is_dual_key(key):
+        """双窗结构化缓存键判定（第 1 维 kind ∈ {dual_main, dual_sub}）"""
+        return isinstance(key, tuple) and bool(key) and key[0] in ("dual_main", "dual_sub")
+
+    def _evict_dual_overflow_locked(self):
+        """（内部，须持 _cache_lock）双窗键单独限额淘汰。
+
+        写入新 dual 键前调用：池内现存 dual 键数已达 MAX_DUAL_CACHE_KEYS
+        时，按插入序（最旧优先）淘汰，直到腾出空位。dict 保序 + cache_get
+        命中移尾，序即 LRU 新旧序。单窗键不受影响。
+        """
+        dual_keys = [k for k in self._stocks_analysis_cache if self._is_dual_key(k)]
+        while len(dual_keys) >= self.MAX_DUAL_CACHE_KEYS:
+            oldest = dual_keys.pop(0)
+            self._stocks_analysis_cache.pop(oldest, None)
+            gc.collect()
+            log.info(f"[内存] 双窗缓存达上限({self.MAX_DUAL_CACHE_KEYS})，淘汰最旧双窗条目: {oldest}")
+
     def cache_put(self, key, value):
         """写入缓存，超出上限时淘汰最旧的条目（LRU语义）。
-        内存由 LRU 50 条上限 + 扫描时逐只释放非买点缓存共同控制。"""
+        内存由 LRU 50 条上限 + 双窗键单独限额 + 扫描时逐只释放非买点缓存
+        共同控制：dual_* 键超 MAX_DUAL_CACHE_KEYS 时优先淘汰最旧 dual 键
+        （双窗不常用且条目重，不挤占常用单窗口缓存）。"""
         with self._cache_lock:
             if key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[key]  # 移到末尾
-            elif len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:
-                oldest_key = next(iter(self._stocks_analysis_cache))
-                self._stocks_analysis_cache.pop(oldest_key)
-                gc.collect()
-                log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
+            else:
+                # 新键入池前的容量控制：dual 键先过单独限额，再过池总量限
+                if self._is_dual_key(key):
+                    self._evict_dual_overflow_locked()
+                if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:
+                    oldest_key = next(iter(self._stocks_analysis_cache))
+                    self._stocks_analysis_cache.pop(oldest_key)
+                    gc.collect()
+                    log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
             self._stocks_analysis_cache[key] = value
 
     def cache_get(self, key):
@@ -405,12 +437,27 @@ class AppData:
         return f"{str(chan_code).upper()}:{sub_freq}"
 
     def stocks_sub_cache_get(self, chan_code, sub_freq):
-        """读取股票下窗 CChan（无则返回 None；chan_code 大小写不敏感）"""
-        return self._stocks_sub_chan_cache.get(self.stocks_sub_cache_key(chan_code, sub_freq))
+        """读取股票下窗 CChan（无则返回 None；命中移到末尾=LRU 语义）"""
+        key = self.stocks_sub_cache_key(chan_code, sub_freq)
+        chan = self._stocks_sub_chan_cache.get(key)
+        if chan is not None:
+            # LRU：命中移到末尾（dict 保序，插入序即新旧序）
+            del self._stocks_sub_chan_cache[key]
+            self._stocks_sub_chan_cache[key] = chan
+        return chan
 
     def stocks_sub_cache_put(self, chan_code, sub_freq, chan):
-        """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态）"""
-        self._stocks_sub_chan_cache[self.stocks_sub_cache_key(chan_code, sub_freq)] = chan
+        """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态；
+        超 MAX_STOCKS_SUB_CHAN 淘汰最旧——切换标的残留的旧 CChan 不再泄漏）"""
+        key = self.stocks_sub_cache_key(chan_code, sub_freq)
+        if key in self._stocks_sub_chan_cache:
+            del self._stocks_sub_chan_cache[key]
+        elif len(self._stocks_sub_chan_cache) >= self.MAX_STOCKS_SUB_CHAN:
+            oldest = next(iter(self._stocks_sub_chan_cache))
+            self._stocks_sub_chan_cache.pop(oldest)
+            gc.collect()
+            log.info(f"[内存] 运行时下窗缓存达上限({self.MAX_STOCKS_SUB_CHAN})，淘汰: {oldest}")
+        self._stocks_sub_chan_cache[key] = chan
 
     def stocks_sub_cache_pop(self, chan_code, sub_freq):
         """弹出并删除股票下窗 CChan（切换标的/下窗周期时释放旧中间状态）"""

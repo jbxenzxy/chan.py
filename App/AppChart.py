@@ -340,14 +340,19 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
         return {"error": "无法定位左肩K线时间，请重试"}
 
     # Step 2: 保存选点到CSV（保存的是左肩第一根原始K线的时间T）
+    # 双窗例外（用户逻辑⑵⓶注1）：双窗口模式下双击选点【不保存】——
+    # CSV 只承载单窗口选点（单窗 A 操作重启加载），双窗选点为会话内
+    # 一次性视图（响应 meta.saved_selection_date 由引擎按显式
+    # start_time 回显，供前端全量显示），不落 CSV、不进内存选点表。
     if not stock_name:
         single_cached = app_data.cache_get(cache_key)
         stock_name = (single_cached or {}).get("result", {}).get("meta", {}).get("name", "")
-    app_data.save_point_time(qualified_code, stock_name, freq, start_time)
-    if qualified_code not in app_data.saved_point_times:
-        app_data.saved_point_times[qualified_code] = {}
-    app_data.saved_point_times[qualified_code]["name"] = stock_name
-    app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
+    if not dual:
+        app_data.save_point_time(qualified_code, stock_name, freq, start_time)
+        if qualified_code not in app_data.saved_point_times:
+            app_data.saved_point_times[qualified_code] = {}
+        app_data.saved_point_times[qualified_code]["name"] = stock_name
+        app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
     # P1-2：缓存删除统一经 app_data.cache_remove（内部持锁，消除手工锁+直改双路径）
@@ -362,8 +367,10 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
     # P4 双窗：重建走双窗路径（响应含 data.sub）——
-    #   上窗选点 start_time=T 作用于上窗；下窗选点 start_time=None，
-    #   上窗按自身 CSV 选点回放，下窗经 sub_saved_dt 从新选点起算
+    #   上窗选点 start_time=T 作用于上窗（freq==main_freq 时双击发生在上窗，
+    #   D5=A 前端已限制下窗选点，freq!=main_freq 分支为防御路径）；
+    #   下窗不再有选点概念（双窗选点不保存、不读 CSV），纯对齐上窗
+    #   [T, 最新] 区间加载（对齐不足时引擎降全量兜底）。
     rebuild_start_time = start_time if freq == main_freq else None
     result = _m._analyze_stock_internal(
         f"{normalized_code}.{market.upper()}",

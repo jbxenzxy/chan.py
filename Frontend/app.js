@@ -767,15 +767,15 @@
                             document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                             // 重置视图：选点后klines只含选点之后的K线，直接全部显示
                             adjustViewForSavedPoint();
-                            // P4 双窗：同步下窗数据与视图（重建半径扩展到下窗——
-                            // 后端已按上窗选点/下窗自身选点截断下窗K线）
+                            // P4 双窗（用户逻辑⑵⓶）：同步下窗数据与视图——
+                            // 下窗对齐上窗 [选点, 最新] 区间加载，视口无 377
+                            // 限制：下窗后端加载多少根，前端视口就显示多少根
+                            // （与上窗 adjustViewForSavedPoint 全量显示规则一致；
+                            //   A/C 操作的下窗仍走 VIEW_COUNT 377 视口，见别处）
                             if (isDualWindow && data.sub) {
                                 dualSubData = data.sub;
-                                dualSubViewCount = VIEW_COUNT;
-                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                if (dualSubData.klines.length < dualSubViewCount) {
-                                    dualSubViewOffset = 0;
-                                }
+                                dualSubViewCount = dualSubData.klines.length;
+                                dualSubViewOffset = 0;
                                 updateFreqButtonStates(false);
                             }
                             // 更新DOM
@@ -2914,69 +2914,6 @@
                         }
                         // 股票双窗（方案二）：下窗仅展示/对齐，不允许在下窗选点
                         showDualToast("双窗口模式下仅支持在上窗选点");
-                        return;
-                        const subKline = dualSubData.klines[clickedGlobalIdx];
-                        let subBiIdx = -1;
-                        if (subKline) {
-                            const dateStr = subKline.date;
-                            for (let j = 0; j < dualSubData.bis.length - 1; j++) {
-                                if (dualSubData.bis[j].edt === dateStr && dualSubData.bis[j + 1].sdt === dateStr) {
-                                    subBiIdx = j + 1;
-                                    break;
-                                }
-                            }
-                        }
-                        if (subBiIdx >= 0) {
-                            const code = _savedChartData.meta.symbol;
-                            document.getElementById("loading").classList.remove("hidden");
-                            document.querySelector(".loading-text").textContent = "正在手选进入段(下窗)...";
-                            // freq=下窗周期（选点所在窗口），main_freq=上窗周期（重建用）
-                            const apiPath = "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + dualSubFreq
-                                + "&bi_idx=" + subBiIdx + "&dual=1&main_freq=" + _savedFreq + "&sub_freq=" + dualSubFreq;
-                            fetch(apiPath, { method: "POST" })
-                                .then(resp => {
-                                    if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
-                                    return resp.json();
-                                })
-                                .then(data => {
-                                    if (data.error) throw new Error(data.error);
-                                    if (!data.sub) throw new Error("服务端未返回子级别数据");
-                                    chartData = data;
-                                    dualSubData = data.sub;
-                                    // 上窗周期防御性同步（正常不变；漂移按响应修正）
-                                    const freqMap = {'5分钟':'5m','30分钟':'30m','周线':'w','日线':'d'};
-                                    const mapped = freqMap[data.meta.freq];
-                                    if (mapped && mapped !== currentFreq) currentFreq = mapped;
-                                    updateDateInputType();
-                                    updateFreqButtonStates(false);
-                                    adjustViewForSavedPoint();
-                                    dualSubViewCount = VIEW_COUNT;
-                                    dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                                    if (dualSubData.klines.length < dualSubViewCount) {
-                                        dualSubViewOffset = 0;
-                                    }
-                                    document.getElementById("stock-name").textContent = data.meta.name;
-                                    document.getElementById("stock-code").textContent = data.meta.symbol;
-                                    document.title = "缠论分析 - " + data.meta.name;
-                                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
-                                    document.getElementById("goto-date-input").value = lastDate;
-                                    updateWeekday();
-                                    document.getElementById("loading").classList.add("hidden");
-                                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                                    updateRestartBtn();
-                                    updateDualBtn();
-                                    resizeCanvas();
-                                    render();
-                                    generateStats();
-                                    loadAnnotations();
-                                })
-                                .catch(err => {
-                                    document.getElementById("loading").classList.add("hidden");
-                                    document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                                    setTimeout(() => { alert(err.message); }, 50);
-                                });
-                        }
-                        // 双击K线：命中分型已发起选点，未命中分型同样无效
                         return;
                     }
                     // 状态A：让下面窗口平移到对应区间
