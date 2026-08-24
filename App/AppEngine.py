@@ -559,15 +559,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
 
-        # 读取CSV保存的选点，如果选点日期 ≤ 复盘日期，则左边界 = 选点
-        if start_time is None:
-            col = FREQ_TO_COL.get(freq, "")
-            if col and qualified_code in _saved_point_times:
-                _saved = _saved_point_times[qualified_code].get(col, "").strip() or None
-                if _saved:
-                    start_time = _saved
-
         from datetime import timedelta
+        # 复盘（C 操作）不加载双击选点：不读取 CSV 保存的选点。
+        # 左边界按 AppConfig 从「复盘结束时间」往前推——日K/周K 不限量，
+        # 30m/5m 按 TIME_TRUNCATE_CONFIG（仅当显式传入 start_time 才应用选点）。
         if start_time is not None:
             start_dt = None
             for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
@@ -581,15 +576,17 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 records = [r for r in records if r["dt"] >= start_dt]
                 log.info(f"[信息] 复盘选点: 从选点时间 {start_time} 开始，筛选后 {before_count}条 -> {len(records)}条")
         else:
-            # 无选点：与冷启动一致，对30分/5分做时间截断，日K/周K不截断
+            # 与冷启动一致，对30分/5分做时间截断，日K/周K不截断
             if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
                 trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
-                cutoff = target_dt - timedelta(days=trunc_days)
-                before_count = len(records)
-                records = [r for r in records if r["dt"] >= cutoff]
-                if before_count != len(records):
-                    log.info(f"[信息] 复盘截断(freq={freq}): 从{target_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
-                          f"{before_count}条 -> {len(records)}条")
+                # days<=0 表示不限制（如 w/d 显式配 (0,"不限制")），跳过截断
+                if trunc_days > 0:
+                    cutoff = target_dt - timedelta(days=trunc_days)
+                    before_count = len(records)
+                    records = [r for r in records if r["dt"] >= cutoff]
+                    if before_count != len(records):
+                        log.info(f"[信息] 复盘截断(freq={freq}): 从{target_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
+                              f"{before_count}条 -> {len(records)}条")
 
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
@@ -624,12 +621,14 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 from datetime import timedelta
                 latest_dt = records[-1]["dt"]
                 trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
-                cutoff = latest_dt - timedelta(days=trunc_days)
-                before_count = len(records)
-                records = [r for r in records if r["dt"] >= cutoff]
-                if before_count != len(records):
-                    log.info(f"[信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
-                          f"{before_count}条 -> {len(records)}条")
+                # days<=0 表示不限制（如 w/d 显式配 (0,"不限制")），跳过截断
+                if trunc_days > 0:
+                    cutoff = latest_dt - timedelta(days=trunc_days)
+                    before_count = len(records)
+                    records = [r for r in records if r["dt"] >= cutoff]
+                    if before_count != len(records):
+                        log.info(f"[信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
+                              f"{before_count}条 -> {len(records)}条")
 
     # 双窗口：子级别数据同步截断到主级别时间范围
     # 避免 chan.py 分析不必要的全量子级别数据（如 30m+5m 时 5m 有 25152 条）

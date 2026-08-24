@@ -47,7 +47,7 @@ REQUIRED_WINDOW_FUNCS = [
     "scanModeDialogConfirm", "scanModeDialogCancel",
     "annotationAdd", "annotationDialogConfirm", "annotationDialogCancel",
     "cancelSelectedPoint", "toggleMirrorMode", "annotationReplayToHere",
-    "dateStep", "handleDateChange", "handleDateKeydown", "handleDateInput",
+    "handleDateChange", "handleDateKeydown", "handleDateInput",
     "onInputKeydown", "onInputChange", "clearInput", "showHistory",
 ]
 

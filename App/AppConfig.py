@@ -97,7 +97,26 @@ _FIELD_DEFAULTS = {
     "TQ_PASSWORD": "",
     "FORWARD_ADJUST_ENABLED": True,   # 前复权开关
     "FULL_DATA_MODE": False,          # 全量数据模式
-    "TIME_TRUNCATE_CONFIG": {"30m": (180, "6个月"), "5m": (90, "3个月")},
+    # ── 后端加载K线「时间窗」配置 TIME_TRUNCATE_CONFIG ─────────────
+    # 【键】必须是程序内部周期键名，不是中文：
+    #     w=周K  d=日K  60m/30m/15m/5m/1m=分时  15s=15秒
+    #     若键缺失，则该周期「不限制」，全量加载（当前 w/d 即走此路径）。
+    # 【值】二元组 (days, label)：
+    #     days —— 真正生效的字段：向前推多少天（整数，单位=自然日）。
+    #             从「最新K线(A操作)」或「复盘结束时间(C操作)」往前推 days 天。
+    #             days=0 或 days<0 表示「不限制」（此例补入 w/d 即用 0）；
+    #             days>0 表示限制，如 30m 取近180天、5m 取近90天（改0即可放开）。
+    #     label——简体中文说明，仅用于日志显示，【不参与截断计算】。
+    #             请保持与 days 一致，避免日志误导（如 days=180 却写 label="4个月"）。
+    # 【合法性】days 填任意整数天数：0=不限制，正数=向前推 N 天。建议用易于理解的天数。
+    # 生效前提：FULL_DATA_MODE=False（全量数据模式跳过截断）。
+    "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (180, "近6个月"), "5m": (90, "近3个月")},
+    # "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (0, "不限制"), "5m": (0, "不限制")},
+    # 前端视口默认显示的K线根数（所有周期相同，与后端加载根数解耦）：
+    #   当后端加载的K线根数 > VIEW_COUNT，前端视口显示 VIEW_COUNT 根（右对齐）；
+    #   当后端加载的K线根数 < VIEW_COUNT，前端视口降为「后端加载多少显示多少」（填满宽度）。
+    #   经 /api/health 下发命令前端 app.js（取代原硬编码 377）。
+    "VIEW_COUNT": 377,
     "DEBUG_COLD_START_START_DATE": None,  # 冷启动起始日期（None=不开启）
     "DEBUG_COLD_START_END_DATE": None,    # 冷启动结束日期（None=不开启）
     "SSE_DEBUG": False,                   # SSE 推送详细调试日志开关
@@ -208,6 +227,8 @@ class _AppConfigBase:
             "tdx_install_dir": self.tdx_install_dir,
             "scan_pool_workers": self.scan_pool_workers,
             "scan_min_float_mc": self.scan_min_float_mc,
+            "full_data_mode": self.full_data_mode,
+            "view_count": self.view_count,
             "tq_account": (self.tq_account[:2] + "***") if (redact and self.tq_account) else self.tq_account,
             "tq_password": "***" if (redact and self.tq_password) else self.tq_password,
             "config_source": self._config_source,
@@ -245,6 +266,7 @@ if _HAVE_PYDANTIC_SETTINGS:
         forward_adjust_enabled: bool = _FIELD_DEFAULTS["FORWARD_ADJUST_ENABLED"]  # 前复权开关
         full_data_mode: bool = _FIELD_DEFAULTS["FULL_DATA_MODE"]                   # 全量数据模式
         time_truncate_config: dict = _FIELD_DEFAULTS["TIME_TRUNCATE_CONFIG"]      # 时间截断配置
+        view_count: int = _FIELD_DEFAULTS["VIEW_COUNT"]                           # 前端视口默认显示K线根数（所有周期相同）
         debug_cold_start_start_date: str | None = _FIELD_DEFAULTS["DEBUG_COLD_START_START_DATE"]
         debug_cold_start_end_date: str | None = _FIELD_DEFAULTS["DEBUG_COLD_START_END_DATE"]
         sse_debug: bool = _FIELD_DEFAULTS["SSE_DEBUG"]          # SSE 推送详细调试日志开关

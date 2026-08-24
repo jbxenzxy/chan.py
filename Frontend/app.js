@@ -42,13 +42,68 @@
         // 频率→秒数映射（P2-8：后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
         let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
 
+        // 前端视口默认显示的K线根数（所有周期相同）——后端经 /api/health 下发
+        // （config.view_count，见 App/AppConfig.py 的 VIEW_COUNT），此默认值仅作离线兜底。
+        let VIEW_COUNT = 377;
+
+        // 双窗（股票方案二）下窗视口对齐上窗视口「首末K线时间范围」：
+        //   - _parseViewDate：日期型(仅日期)按当日 00:00(左)/23:59:59(右) 归一，日内按原时刻；
+        //   - alignDualSubViewport：把下窗视口 [dualSubViewOffset, +dualSubViewCount]
+        //     重算为上窗当前视口时间范围内对应下窗K线；下窗数据不足则降为「全量加载与显示」；
+        //   - key 守卫：仅上窗视口(viewOffset/viewCount)或下窗数据变化时重算，
+        //     避免悬停/常规重绘把下窗独立缩放/平移打回。
+        let _alignedSubRef = null, _alignedSubTs = null, _lastAlignKey = '';
+        function _parseViewDate(ds, forEnd) {
+            const d = ds.length === 10
+                ? new Date(ds.replace(/\//g, "-") + (forEnd ? "T23:59:59.999" : "T00:00:00.000"))
+                : new Date(ds.replace(/\//g, "-").replace(" ", "T"));
+            return d.getTime();
+        }
+        function alignDualSubViewport() {
+            if (!isDualWindow || !dualSubData || !dualSubData.klines
+                || !chartData || !chartData.klines) return;
+            // 期货双窗维持原（方案一）行为，不参与对齐
+            if (chartData.meta && chartData.meta.market === 'futures') return;
+            const sK = dualSubData.klines, mK = chartData.klines;
+            if (!mK.length || !sK.length) return;
+            if (dualSubData !== _alignedSubRef) {
+                _alignedSubRef = dualSubData;
+                _alignedSubTs = sK.map(k => _parseViewDate(k.date, false));
+                _lastAlignKey = ''; // 新数据必须先重算一次
+            }
+            const key = viewOffset + ':' + viewCount;
+            if (key === _lastAlignKey) return;
+            _lastAlignKey = key;
+            let firstIdx = Math.max(0, Math.floor(viewOffset));
+            let lastIdx = firstIdx + Math.floor(viewCount) - 1;
+            if (lastIdx >= mK.length) lastIdx = mK.length - 1;
+            if (firstIdx > lastIdx) return;
+            const startD = _parseViewDate(mK[firstIdx].date, false);
+            const endD = _parseViewDate(mK[lastIdx].date, true);
+            const ts = _alignedSubTs;
+            let lo = 0, hi = ts.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < startD) lo = mid + 1; else hi = mid; }
+            const sFirst = (lo < ts.length) ? lo : -1;
+            lo = 0; hi = ts.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] <= endD) lo = mid + 1; else hi = mid; }
+            const sLast = lo - 1;
+            if (sFirst < 0 || sLast < 0 || sFirst > sLast) {
+                dualSubViewOffset = 0;
+                dualSubViewCount = sK.length; // 下窗无法对齐上窗范围 -> 降为全量
+                return;
+            }
+            dualSubViewOffset = sFirst;
+            dualSubViewCount = sLast - sFirst + 1;
+        }
+
+
         const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
 
         const VOL_RATIO = 0.2, GAP = 12;
 
         const MACD_TEXT_HEIGHT = 14;
 
-        let viewOffset = 0, viewCount = 377;
+        let viewOffset = 0, viewCount = VIEW_COUNT;
 
         let isDragging = false, dragStartX = 0, dragStartOffset = 0;
 
@@ -80,7 +135,7 @@
 
         let dualSubFreq = '';
 
-        let dualSubViewOffset = 0, dualSubViewCount = 377;
+        let dualSubViewOffset = 0, dualSubViewCount = VIEW_COUNT;
 
         let dualSubMouseX = -1, dualSubMouseY = -1;
 
@@ -716,7 +771,7 @@
                             // 后端已按上窗选点/下窗自身选点截断下窗K线）
                             if (isDualWindow && data.sub) {
                                 dualSubData = data.sub;
-                                dualSubViewCount = 377;
+                                dualSubViewCount = VIEW_COUNT;
                                 dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                                 if (dualSubData.klines.length < dualSubViewCount) {
                                     dualSubViewOffset = 0;
@@ -778,7 +833,7 @@
                     return;
                 }
                 // 7. 默认：恢复全视图
-                viewCount = 377;
+                viewCount = VIEW_COUNT;
                 viewOffset = Math.max(0, chartData.klines.length - viewCount);
                 const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
                 document.getElementById("goto-date-input").value = lastDate;
@@ -995,6 +1050,7 @@
         function render() {
             if (!chartData) return;
             if (isDualWindow) {
+                alignDualSubViewport(); // 双窗（方案二）：下窗视口对齐上窗当前视口时间范围
                 renderTop(); // renderTop内部会调用updateDualHighlight -> renderBottom
             } else {
                 renderSingle();
@@ -2845,8 +2901,8 @@
                     canvas = _savedCanvas; ctx = _savedCtx;
                     viewOffset = _savedViewOffset; viewCount = _savedViewCount;
                     chartData = _savedChartData; currentFreq = _savedFreq;
-                    // P4（D5=A）下窗双击选点：双击分型K线 → 下窗手选进入段
-                    // （股票双窗放开；期货双窗走 SSE 链路不在此列）
+                    // P4（D5=A）下窗双击选点：双窗采用「方案二（下窗对齐上窗）」后，
+                    // 仅允许在上窗双击选点，前端限制下窗选点操作（股票双窗）。
                     if (clickedOnKline) {
                         if (_savedChartData && _savedChartData.meta && _savedChartData.meta.is_replay) {
                             showDualToast("复盘模式，不支持选点");
@@ -2856,6 +2912,9 @@
                             showDualToast("期货双窗口模式，不支持选点");
                             return;
                         }
+                        // 股票双窗（方案二）：下窗仅展示/对齐，不允许在下窗选点
+                        showDualToast("双窗口模式下仅支持在上窗选点");
+                        return;
                         const subKline = dualSubData.klines[clickedGlobalIdx];
                         let subBiIdx = -1;
                         if (subKline) {
@@ -2891,7 +2950,7 @@
                                     updateDateInputType();
                                     updateFreqButtonStates(false);
                                     adjustViewForSavedPoint();
-                                    dualSubViewCount = 377;
+                                    dualSubViewCount = VIEW_COUNT;
                                     dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                                     if (dualSubData.klines.length < dualSubViewCount) {
                                         dualSubViewOffset = 0;
@@ -2941,7 +3000,7 @@
                         return;
                     }
                     // 默认：恢复下面窗口全视图
-                    dualSubViewCount = 377;
+                    dualSubViewCount = VIEW_COUNT;
                     dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                     if (dualSubData.klines.length < dualSubViewCount) {
                         dualSubViewOffset = 0;
@@ -2979,7 +3038,7 @@
                             if (data.sub) {
                                 chartData = data;
                                 dualSubData = data.sub;
-                                dualSubViewCount = 377;
+                                dualSubViewCount = VIEW_COUNT;
                                 dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                                 if (dualSubData.klines.length < dualSubViewCount) {
                                     dualSubViewOffset = 0;
@@ -3256,7 +3315,7 @@
                     document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
                     document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
                     document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
-                    viewCount = 377;
+                    viewCount = VIEW_COUNT;
                     viewOffset = Math.max(0, chartData.klines.length - viewCount);
                     if (chartData.klines.length < viewCount) {
                         viewOffset = 0;
@@ -3277,7 +3336,7 @@
                     // 双窗口模式：从 data.sub 恢复子级别数据
                     if (isDualWindow && data.sub) {
                         dualSubData = data.sub;
-                        dualSubViewCount = 377;
+                        dualSubViewCount = VIEW_COUNT;
                         dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                         if (dualSubData.klines.length < dualSubViewCount) {
                             dualSubViewOffset = 0;
@@ -3514,7 +3573,7 @@
                             updateDualBtn();
                             if (data.sub) {
                                 dualSubData = data.sub;
-                                dualSubViewCount = 377;
+                                dualSubViewCount = VIEW_COUNT;
                                 dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                                 if (dualSubData.klines.length < dualSubViewCount) {
                                     dualSubViewOffset = 0;
@@ -3596,7 +3655,7 @@
                         chartData = data;
                         updateRestartBtn();
                         updateDualBtn();
-                        viewCount = 377;
+                        viewCount = VIEW_COUNT;
                         adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
                         viewOffset = Math.max(0, chartData.klines.length - viewCount);
                         // K线不足一屏时右对齐
@@ -3615,7 +3674,7 @@
                             // 此处不再重置为默认配对；响应 data.sub 即该配对的下窗数据
                             if (data.sub) {
                                 dualSubData = data.sub;
-                                dualSubViewCount = 377;
+                                dualSubViewCount = VIEW_COUNT;
                                 dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                                 if (dualSubData.klines.length < dualSubViewCount) {
                                     dualSubViewOffset = 0;
@@ -3730,13 +3789,13 @@
                     // 双窗口模式：从 data.sub 恢复子级别数据
                     if (isDualWindow && data.sub) {
                         dualSubData = data.sub;
-                        dualSubViewCount = 377;
+                        dualSubViewCount = VIEW_COUNT;
                         dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                         if (dualSubData.klines.length < dualSubViewCount) {
                             dualSubViewOffset = 0;
                         }
                     }
-                    viewCount = 377;
+                    viewCount = VIEW_COUNT;
                     adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
                     viewOffset = Math.max(0, chartData.klines.length - viewCount);
                     // K线不足一屏时右对齐
@@ -4245,7 +4304,7 @@
                     lastStockFreq = currentFreq; // 更新股票周期记忆
                     updateDateInputType();
                     updateFreqButtonStates(false);
-                    viewCount = 377;
+                    viewCount = VIEW_COUNT;
                     adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
                     viewOffset = Math.max(0, chartData.klines.length - viewCount);
                     // K线不足一屏时右对齐
@@ -4275,7 +4334,7 @@
                         // 响应 data.sub 即该配对的下窗数据，不再重置为默认配对
                         if (data.sub) {
                             dualSubData = data.sub;
-                            dualSubViewCount = 377;
+                            dualSubViewCount = VIEW_COUNT;
                             dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                             if (dualSubData.klines.length < dualSubViewCount) {
                                 dualSubViewOffset = 0;
@@ -5981,7 +6040,7 @@
                         currentFreq = freqMap[data.meta.freq] || freq;
                         lastFuturesFreq = currentFreq; // 更新期货周期记忆
                         updateFreqButtonStates(true);
-                        viewCount = 377;
+                        viewCount = VIEW_COUNT;
                         adjustViewForSavedPoint(); // 有选点时动态调整，显示全部K线
                         viewOffset = Math.max(0, data.klines.length - viewCount);
                         if (data.klines.length < viewCount) viewOffset = 0;
@@ -6072,7 +6131,7 @@
                             const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d','周线':'w'};
                             currentFreq = freqMap[chartData.meta.freq] || currentFreq;
                             lastFuturesFreq = currentFreq;
-                            viewCount = 377;
+                            viewCount = VIEW_COUNT;
                             adjustViewForSavedPoint();
                             viewOffset = Math.max(0, chartData.klines.length - viewCount);
                             if (chartData.klines.length < viewCount) { viewOffset = 0; viewCount = chartData.klines.length; }
@@ -6087,7 +6146,7 @@
                         }
                         if (data.sub) {
                             dualSubData = data.sub;
-                            dualSubViewCount = 377;
+                            dualSubViewCount = VIEW_COUNT;
                             dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
                             if (dualSubData.klines.length < dualSubViewCount) {
                                 dualSubViewOffset = 0;
@@ -6284,7 +6343,7 @@
             if (data.sub) {
                 // 保存子窗口的缩放和位置
                 const oldSubCount = dualSubData && dualSubData.klines ? dualSubData.klines.length : 0;
-                const savedSubCount = dualSubViewCount || 377;
+                const savedSubCount = dualSubViewCount || VIEW_COUNT;
                 const savedSubOffset = dualSubViewOffset || 0;
                 const wasSubAtRightEdge = (savedSubOffset + savedSubCount >= oldSubCount);
 
@@ -6822,7 +6881,7 @@
                             lastStockFreq = currentFreq;
                             updateDateInputType();
                             updateFreqButtonStates(false);
-                            viewCount = 377;
+                            viewCount = VIEW_COUNT;
                             adjustViewForSavedPoint();
                             viewOffset = Math.max(0, chartData.klines.length - viewCount);
                             if (chartData.klines.length < viewCount) viewOffset = 0;
@@ -6889,7 +6948,7 @@
                 updateDateInputType();
                 lastStockFreq = currentFreq;
                 updateFreqButtonStates(false);
-                viewCount = 377;
+                viewCount = VIEW_COUNT;
                 adjustViewForSavedPoint();
                 applyOverlayButtonStates();
                 viewOffset = Math.max(0, chartData.klines.length - viewCount);
@@ -7187,6 +7246,11 @@
                 const data = await resp.json();
                 if (data && data.freq_sec_map && Object.keys(data.freq_sec_map).length > 0) {
                     FREQ_SEC_MAP_JS = data.freq_sec_map;
+                }
+                // 前端视口默认K线根数：优先用后端配置 VIEW_COUNT（校验为正整数，否则保留默认）
+                if (data && data.config && typeof data.config.view_count === 'number'
+                    && data.config.view_count > 0) {
+                    VIEW_COUNT = data.config.view_count;
                 }
             } catch (e) { /* 离线兜底：保留本地常量 */ }
         })();
