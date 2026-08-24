@@ -706,16 +706,17 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     return True  # 按子级别背驰处理
                 sub_kl_list = sub_chan[sub_kl_type]
             else:
-                # 单窗口 / legacy 联立：原路径（联立取数，行为冻结）
+                # 单窗口 / 独立双窗下窗 / legacy 联立：显式判 kl_datas 是否含次级别
+                # （替代原 try/KeyError 异常控制流，行为等价）：
+                #   单窗、独立双窗下窗 lv_list 仅本级 → None → 按子级别背驰处理；
+                #   legacy 联立上窗 lv_list 两级 → 取到联立子级别，走区间套。
                 if parent.chan is None:
                     raise RuntimeError("[check_nested_diver] 严重Bug：CChan 指针未设置！")
-                chan = parent.chan
-                try:
-                    sub_kl_list = chan[sub_kl_type]
-                except Exception:
+                sub_kl_list = parent.chan.kl_datas.get(sub_kl_type)
+                if sub_kl_list is None:
                     self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
                                  sub_kl_type=sub_kl_type)
-                    return True # 按子级别背驰处理
+                    return True  # 按子级别背驰处理
         else:
             # 期货：上下窗是独立的 CChan 对象，下窗缓存在 _futures_analysis_cache 中
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
