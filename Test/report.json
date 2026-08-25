@@ -1,7 +1,7 @@
 {
  "phase": "7",
  "mode": "verify",
- "ran_at": "2026-08-25 05:17:27",
+ "ran_at": "2026-08-25 05:27:58",
  "python": "3.10.12",
  "total": 20,
  "passed": 18,
@@ -13,7 +13,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.56,
+   "elapsed_s": 0.66,
    "output_tail": [
     "[gen] stock_day.json: 500 bars",
     "[gen] stock_60m.json: 2000 bars",
@@ -30,7 +30,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 7.92,
+   "elapsed_s": 7.76,
    "output_tail": [
     "[BS2][d] cal_bs2point: 跳过: 重叠条件不满足(B/C均不匹配) | stroke_n_idx=13 | matched_pattern=A",
     "[BS3][d] cal_bs3point: 进入...... | bi_idx=13",
@@ -52,7 +52,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.91,
+   "elapsed_s": 1.95,
    "output_tail": [
     "[BS0][d] cal_bs0point: 跳过: 重叠条件不满足 | stroke_high=14.83 | stroke_low=13.72 | zs_high=48.97 | zs_low=46.96",
     "[BS1][d] cal_bs1point: 进入...... | bi_idx=14",
@@ -74,7 +74,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.31,
+   "elapsed_s": 1.37,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -111,7 +111,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.84,
+   "elapsed_s": 0.85,
    "output_tail": [
     "[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py (40196 bytes)，DataAPI/ 无残留",
     "[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: x_to_881=470 881_to_x=470",
@@ -130,7 +130,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.3,
+   "elapsed_s": 1.33,
    "output_tail": [
     "[PASS] single 正常关闭: 生成器正常耗尽（6 帧, 心跳 3 帧）",
     "[PASS] single 收尾: close×1 + cleanup×1",
@@ -163,7 +163,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.36,
+   "elapsed_s": 1.38,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -184,7 +184,7 @@
    "ok": false,
    "exit_code": 1,
    "timed_out": false,
-   "elapsed_s": 1.23,
+   "elapsed_s": 1.24,
    "output_tail": [
     "[PASS] ②c 数据层直改零残留: 4 个服务模块零直改 app_data 缓存 dict（P1-2 已全部经公共 API）",
     "[PASS] ③ 别名清零: 13 个路径/容量别名保持清零（配置单源 = app_config 直读）",
@@ -206,7 +206,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.02,
+   "elapsed_s": 1.07,
    "output_tail": [
     "[PASS] ② 双解析器一致性: AppData 与 TdxAPI 输出一致（8 条）",
     "[PASS] ③ 缺失文件: 两解析器对空路径/不存在文件均返回 []",
@@ -228,11 +228,11 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.08,
+   "elapsed_s": 1.03,
    "output_tail": [
-    "05:17:15 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
-    "05:17:15 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChanPrev' object has no attribute 'get_latest_bsp'",
-    "05:17:15 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
+    "05:27:46 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
+    "05:27:46 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChanPrev' object has no attribute 'get_latest_bsp'",
+    "05:27:46 WARNING [App.AppSSE] [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
     "[PASS] ① 增量 klines: 新确认K线追加 + 预览bar剥离",
@@ -250,7 +250,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.16,
+   "elapsed_s": 1.33,
    "output_tail": [
     "[PASS] ③a 基类契约: 5 个元数据属性 + fetch_kline（get_kline 家族）声明于 CCommonStockApi",
     "[PASS] ③b 基类默认实现: fetch_kline 默认 NotImplementedError",
@@ -272,7 +272,7 @@
    "ok": false,
    "exit_code": 1,
    "timed_out": false,
-   "elapsed_s": 0.81,
+   "elapsed_s": 0.74,
    "output_tail": [
     "      - alignDualSubViewport",
     "[PASS] ② KLineChart 内容契约: 渲染管线 23 个关键函数物理位于区块内（阶段 8 整体迁移单元）",
@@ -316,7 +316,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.35,
+   "elapsed_s": 1.38,
    "output_tail": [
     "[PASS] single 收尾: close×1 + cleanup×1（['KQ.m@SHFE.rb:15']）",
     "[PASS] single 协议路径: K线完成×1 + tick×3 全触发",
@@ -338,7 +338,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.37,
+   "elapsed_s": 1.46,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -360,7 +360,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.25,
+   "elapsed_s": 1.26,
    "output_tail": [
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -376,9 +376,9 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.65,
+   "elapsed_s": 1.73,
    "output_tail": [
-    "05:17:25 INFO    [App.AppScanPool] [扫描池] ProcessPool 装配失败，降级线程池: RuntimeError: mock 受限环境无 /dev/shm",
+    "05:27:56 INFO    [App.AppScanPool] [扫描池] ProcessPool 装配失败，降级线程池: RuntimeError: mock 受限环境无 /dev/shm",
     "[PASS] ① ProcessPool 失败 → ThreadPool 降级（engine=thread_fallback）",
     "[TqSdkAPI] 账户文件不存在: /root/tdx/vipdoc/tq_account.json，使用默认空值",
     "[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx",
@@ -394,7 +394,7 @@
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.69,
+   "elapsed_s": 0.72,
    "output_tail": [
     "[PASS] ① HTML 骨架: app.js/app.css 引用 + 10 个关键 DOM",
     "[PASS] ② JS 语法: node --check app.js 通过",

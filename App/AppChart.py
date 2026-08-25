@@ -19,10 +19,8 @@ App/AppChart.py —— 图表交互功能域
 LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
 """
 import os
-import json
 import time
 import threading
-import traceback
 
 # 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m

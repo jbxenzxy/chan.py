@@ -8,12 +8,9 @@ DataAPI — 数据源抽象层
 导出的公共接口：
   - get_stock_api(code, k_type, begin_date, end_date, autype)
       根据代码类型自动选择数据源，返回 CCommonStockApi 子类实例
-  - CCommonStockApi
-      数据源抽象基类（重新导出，方便消费侧引用）
-  - _ELTDX_AVAILABLE
-      盘后下载引擎是否可用
+      （CCommonStockApi 基类本体位于 DataAPI.CommonStockAPI，
+       消费侧/子模块直接从该模块导入）
 """
-from DataAPI.CommonStockAPI import CCommonStockApi  # noqa: F401
 
 
 def get_stock_api(code, k_type="d", begin_date=None, end_date=None, autype=None):
