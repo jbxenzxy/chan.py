@@ -670,6 +670,6 @@ if __name__ == "__main__":
     log.info(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
     log.info(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     log.info(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    log.info(f"[信息] SSE:       /api/futures_stream（方案A 同步生成器，每连接一条常驻线程）")
+    log.info(f"[信息] SSE:       /api/futures_stream（同步生成器，每连接一条常驻线程）")
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 

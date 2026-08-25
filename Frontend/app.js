@@ -368,7 +368,7 @@
             return null; // 5m(股票)/15s(期货)无对应
         }
 
-        // 股票双窗口配对空间（P2 配对放开：3对 → 6对，与后端 _STOCKS_DUAL_PAIRS 同口径）
+        // 股票双窗口配对空间（配对放宽至 6 对，与后端 _STOCKS_DUAL_PAIRS 同口径）
         // 上窗周期 → 可选下窗周期集合；getDualSubFreq 返回其中的默认配对
         const STOCKS_DUAL_PAIRS_JS = {
             'w':   ['d', '30m', '5m'],
@@ -766,7 +766,7 @@
                             document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                             // 重置视图：选点后klines只含选点之后的K线，直接全部显示
                             adjustViewForSavedPoint();
-                            // P4 双窗（用户逻辑⑵⓶）：同步下窗数据与视图——
+                            // 双窗（用户逻辑⑵⓶）：同步下窗数据与视图——
                             // 下窗对齐上窗 [选点, 最新] 区间加载，视口无 377
                             // 限制：下窗后端加载多少根，前端视口就显示多少根
                             // （与上窗 adjustViewForSavedPoint 全量显示规则一致；
@@ -2774,7 +2774,7 @@
                     return;
                 }
                 isDualWindow = true;
-                // P2 配对放开：上次下窗周期对当前上窗仍合法则保持，否则默认配对
+                // 配对放宽：上次下窗周期对当前上窗仍合法则保持，否则默认配对
                 dualSubFreq = (dualSubFreq && isValidStockDualPair(currentFreq, dualSubFreq))
                     ? dualSubFreq : subFreq;
                 btn.classList.add("active");
@@ -3374,7 +3374,7 @@
             document.getElementById('btn-15s').disabled = !isFutures;
             // 共享周期：30m 始终启用
             document.getElementById('btn-30m').disabled = false;
-            // 5m: 期货双窗口→全部启用（上下窗解耦）；股票双窗口→按焦点窗口（P2 配对放开）
+            // 5m: 期货双窗口→全部启用（上下窗解耦）；股票双窗口→按焦点窗口（配对放宽）
             if (isDualWindow && isFutures) {
                 document.getElementById('btn-5m').disabled = false;
                 // 期货双窗口：上下窗独立切换，15s不再禁用
@@ -3428,7 +3428,7 @@
                 }
                 return;
             }
-            // 股票双窗口下窗焦点：独立切换下窗周期（P2 配对放开），不联动上窗
+            // 股票双窗口下窗焦点：独立切换下窗周期（配对放宽），不联动上窗
             // （与期货同交互；重走 analyze 双窗接口，响应 data.sub 即新下窗数据）
             if (isDualWindow && activeDualWindow === 'sub' && !isFutures) {
                 if (dualSubFreq === freq) return;
@@ -3488,7 +3488,7 @@
                     + "，无法切换到" + freqLabel(freq));
                 return;
             }
-            // 股票双窗口（P2 配对放开）：新上窗周期无任何下窗可选 → 拒绝切换
+            // 股票双窗口（配对放宽）：新上窗周期无任何下窗可选 → 拒绝切换
             // （5m 为股票最小周期）；当前下窗仍为合法配对则保持，否则回退默认配对
             if (isDualWindow && !isFutures) {
                 if (!STOCKS_DUAL_PAIRS_JS[freq]) {

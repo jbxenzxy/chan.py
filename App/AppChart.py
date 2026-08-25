@@ -529,7 +529,7 @@ def fetch_and_inject(code, freq="d", end_date=None, dual=False, step=None, sub_f
 # ═══════════════════════════════════════════════════════════════════════
 
 def search_stocks(q):
-    """股票代码 / 名称 / 拼音搜索（委托 my_chan_main 的缓存与别名）"""
+    """股票代码 / 名称 / 拼音搜索（委托 AppData/引擎缓存与别名）"""
     from App.AppData import app_data
     _m._load_stock_names_from_cache_file()
     if not os.path.exists(app_data.stock_names_cache_file):

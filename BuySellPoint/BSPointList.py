@@ -685,7 +685,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         sub_kl_type = _get_kl_type(sub_freq)
 
         if is_stocks:
-            # ── 股票（P1 独立双窗改造后双路径）─────────────────────
+            # ── 股票（双窗双路径）─────────────────────
             # 独立双窗：上窗 CChan 携带显式下窗周期（chan._stocks_dual_sub_freq，
             # AppEngine 建上窗前设置），区间套改读「下窗 CChan 运行时缓存」——
             # 下窗先建整读（先下后上时序），主K线计算时下窗笔结构已完整。
@@ -693,7 +693,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             if parent.chan is not None:
                 _explicit_sub_freq = getattr(parent.chan, "_stocks_dual_sub_freq", None)
             if _explicit_sub_freq:
-                sub_freq = _explicit_sub_freq       # P2 三套映射统一：显式传入优先
+                sub_freq = _explicit_sub_freq       # 三套映射统一：显式传入优先
                 sub_kl_type = _get_kl_type(sub_freq)
                 from App.AppData import app_data
                 sub_chan = app_data.stocks_sub_cache_get(parent.code, sub_freq)
@@ -1827,7 +1827,7 @@ def _stocks_red_range(a_klu, b_klu, sub_freq, bi=None):
     return fx_a_sub_dt, fx_b_sub_dt
 
 
-# 主/子级别周期秒数（股票双窗独立化 P3 数学换算用；与 AppEngine._STOCKS_MAIN_PERIOD 同源口径）
+# 主/子级别周期秒数（股票双窗独立化数学换算用；与 AppEngine._STOCKS_MAIN_PERIOD 同源口径）
 _STOCKS_FREQ_SEC = {
     "w": 7 * 86400,
     "d": 86400,

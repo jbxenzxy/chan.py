@@ -200,7 +200,7 @@ def zxg_save(codes):
                     ths_msg = f"云端同步失败: {err_str}"
                 log.info(f"[保存] 同花顺: {ths_msg}")
         else:
-            ths_msg = "Script/ths_cloud_api.py 未找到，请确保 Script/ 目录完整（P2-2 已迁入 Script/）"
+            ths_msg = "Script/ths_cloud_api.py 未找到，请确保 Script/ 目录完整"
             log.info(f"[保存] 同花顺: {ths_msg}")
 
         log.info(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
