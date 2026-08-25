@@ -304,9 +304,10 @@ def test_sse_dual_impl(failures):
 
     bad = []
 
-    # 原生生成器 + 数据源抽象就位
+    # 原生生成器 + 数据源抽象就位（CTqSdkSession/CSSESourceClosed 由
+    # AppSSE 与测试直连 DataAPI.TqSdkCSSESource，FrontAPI 不再转口）
     for name in ("sse_futures_stream_single", "sse_futures_stream_dual",
-                 "CSSESource", "CTqSdkSession"):
+                 "CSSESource"):
         if not hasattr(FrontAPI, name):
             bad.append(f"FrontAPI 缺少 {name}（native 实现/数据源抽象缺失）")
 
@@ -351,7 +352,7 @@ def test_sse_dual_impl(failures):
             print(f"[FAIL] ⑤ SSE native: {b}")
     else:
         print("[PASS] ⑤ SSE native: 仅保留 native 原生路径；"
-              "原生生成器 + CSSESource/CTqSdkSession 数据源抽象就位；"
+              "原生生成器 + CSSESource 数据源抽象就位；"
               "SELF_CONTAINED 登记一致；legacy 符号已清理")
 
 

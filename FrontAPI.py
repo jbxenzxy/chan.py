@@ -57,11 +57,9 @@ from App import AppEngine as m  # noqa: F401
 # SSE 实时流 / 期货功能域：SSE 内部实现位于 App/AppSSE.py
 from App import AppSSE as _sse  # noqa: F401
 # SSE 数据源抽象：tqsdk 仅在 DataAPI 层可见；API 层经 AppSSE re-export 消费，
-# 不直连 DataAPI.TqSdkCSSESource
+# 不直连 DataAPI.TqSdkCSSESource（CSSESource 供注入用例，close_all 供退出回收）
 from App.AppSSE import (  # noqa: F401
     CSSESource,
-    CSSESourceClosed,
-    CTqSdkSession,
     close_all,
 )
 
@@ -185,7 +183,8 @@ def _json_response(data, status_code: int = 200):
 # SSE · 数据源抽象
 # CSSESourceClosed / CSSESource / CTqSdkSession / 注册表的实现位于
 # DataAPI/TqSdkCSSESource.py（tqsdk 仅在 DataAPI 层可见）；
-# FrontAPI 仅以 from-import 引用，保持薄路由层。
+# FrontAPI 仅引用自身消费的符号（CSSESource 注入用例 / close_all 退出回收），
+# CSSESourceClosed 与 CTqSdkSession 由 AppSSE/测试直连原模块，不在此转口。
 # ═══════════════════════════════════════════════════════════════════════
 
 
