@@ -199,7 +199,7 @@ def _check_and_report_gaps(records):
     else:
         old_start = records[0]["dt"].strftime("%Y-%m-%d")
         old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        print(f"[信息] 检测到 0 处数据缺口")
+        print("[信息] 检测到 0 处数据缺口")
         print(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
 
 
@@ -291,7 +291,7 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     # 指数 .lc5 文件中成交量字段实际存的是"成交额/100"（非真实成交量），需要忽略，成交量设为0。
     is_index = len(reserved) > 0 and np.any(reserved != 0)
     if is_index:
-        print(f"[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
+        print("[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
 
     df = np.column_stack([years, months, days, hours, minutes, opens, highs, lows, closes, vols, amounts])
 
@@ -751,6 +751,8 @@ def _ensure_mootdx_client():
 
 def _get_xdxr_mootdx(market, code):
     """通过 mootdx Quotes 单例连接获取除权除息数据。在锁内调用。"""
+    # except 复位分支需写模块级单例旗标，必须声明 global（否则赋值落局部、复位失效）
+    global _mootdx_client, _mootdx_client_ready
     client = _ensure_mootdx_client()
     if client is None:
         return None
@@ -820,6 +822,8 @@ def _find_pytdx_server():
 
 def _get_xdxr_pytdx(market, code):
     """通过 pytdx 单例连接获取除权除息数据。在锁内调用。"""
+    # except 复位分支需写模块级单例旗标，必须声明 global（否则赋值落局部、复位失效）
+    global _pytdx_api, _pytdx_api_ready
     api = _ensure_pytdx_api()
     if api is None:
         return None
@@ -1630,7 +1634,7 @@ def _download_block_gn_from_network(progress_callback=None):
     if need_download:
         print(f"[板块成分股] 需从网络下载: {need_download}")
     else:
-        print(f"[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
+        print("[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
 
     for host, port in servers:
         if not need_download:
@@ -1679,11 +1683,11 @@ def _download_block_gn_from_network(progress_callback=None):
             if not need_download:
                 break
 
-        except TypeError as e:
+        except TypeError:
             import traceback
             traceback.print_exc()
             continue
-        except Exception as e:
+        except Exception:
             import traceback
             traceback.print_exc()
             continue
@@ -2081,7 +2085,7 @@ def _read_standard_index_stocks(sector_code):
     try:
         import akshare as ak
     except ImportError:
-        print(f"[板块成分股] AKShare 未安装，无法获取标准指数成分股")
+        print("[板块成分股] AKShare 未安装，无法获取标准指数成分股")
         return []
 
     # ── 上证指数（000001）：综合指数，无成分股 ──

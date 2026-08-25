@@ -24,9 +24,8 @@ App/AppOrch.py → AppEngine（单向）；FrontAPI.py 仅引用常量/纯函数
 # 区域 1 · 模块常量与配置
 # ═══════════════════════════════════════════════════════════════════════
 
-import sys, os, json, time, struct, threading, multiprocessing, gc
+import sys, os, time, threading, gc
 from datetime import datetime, timedelta
-from chinese_calendar import is_holiday
 
 # 区间套辅助函数（实现位于 BSPointList.py）：_main_bi_range（选点左肩定位，
 # _analyze_stock_internal/_extract_sub_level_data 使用）与 _stocks_red_range
@@ -56,15 +55,14 @@ from App.AppLog import get_logger
 log = get_logger(__name__)
 
 # 引擎纯函数/常量 + 证券代码解析公共工具（MACD/EMA、周期映射、日期格式、
-# 左肩定位、中枢确认、期货双窗口映射、SSE 调试旗、代码解析等，实现位于
-# App/utils.py；此处 re-import 保持对外接口不变，AppSSE 同样从 App.utils 导入）
+# 左肩定位、中枢确认、代码解析等，实现位于 App/utils.py；AppSSE/FrontAPI
+# 直接从 App.utils 导入；此处仅 import 引擎自身消费的符号）
 from App.utils import (
     _get_stock_name, _get_stock_market_code, _get_market_code,
-    _SSE_DEBUG, _FREQ_SEC_TO_KL, _get_kl_type_by_sec, _get_kl_type, _get_freq_label,
-    _make_chan_config, ema, calculate_macd, _inherit_macd_for_preview_bar,
-    INTRADAY_FREQS, SUBSECOND_FREQS, _get_date_fmt,
-    _bi_overlap_range, _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
-    _FUTURES_DUAL_FREQ_MAP,
+    _get_kl_type, _get_freq_label,
+    _make_chan_config, calculate_macd,
+    INTRADAY_FREQS, _get_date_fmt,
+    _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,
 )
 
 # ============================================================
@@ -86,7 +84,6 @@ if SCRIPT_DIR not in sys.path:
 # ============================================================
 try:
     from Chan import CChan
-    from ChanConfig import CChanConfig
     from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
 except ImportError as e:
     log.error(f"\n[错误] chan.py 导入失败: {e}")
@@ -97,8 +94,7 @@ except ImportError as e:
 # 包含：K线读取、前复权（自选股读写位于 App/AppData.py）
 # K线读取统一经 CTdxAPI（CCommonStockApi 实现）访问，引擎层不直连
 # 模块级 read_main_level_records / read_sub_level_records。
-from DataAPI.TdxAPI import CTdxAPI, \
-    get_index_stocks, refresh_block_files
+from DataAPI.TdxAPI import CTdxAPI
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 # 读取配置中心 AppConfig（单一事实源 app_config.forward_adjust_enabled，.env/环境变量可覆盖）；
@@ -262,7 +258,6 @@ def _collect_codes_from_vipdoc(vipdoc_dir):
 # ============================================================
 # 缠论分析（chan.py 版本）
 # ============================================================
-import collections
 
 
 # 统一缓存（实现与状态在 App/AppData.py；别名共享同一对象）
@@ -469,7 +464,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             log.info(f"[耗时] 双窗口-主级别({freq})数据: {time.time()-t0:.3f}s, {len(full_records)}条K线")
             sub_records = CTdxAPI.fetch_sub_level(market, code, freq, sub_freq, full_records, end_date=target_dt)
         if sub_records is None or len(sub_records) < 5:
-            log.warning(f"[警告] 子级别数据不足，退化为单级别模式")
+            log.warning("[警告] 子级别数据不足，退化为单级别模式")
             sub_freq = None
     else:
         # ────────────────────────────────────
@@ -587,7 +582,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 
         if start_time is not None:
             # 从选点时间开始过滤，不做数量限制
-            from datetime import timedelta
             start_dt = None
             for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
                 try:
@@ -616,7 +610,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # C 操作复盘结束时间往前推，主级别 records 已先按各操作规则截断）。
     # 下窗不读取 CSV 保存的选点卡界（单窗选点不与双窗混用，双窗选点不保存）。
     if dual and sub_freq and sub_records is not None and len(records) > 0:
-        from datetime import timedelta
         main_start = records[0]["dt"]
         main_end = records[-1]["dt"]
         sub_full_backup = list(sub_records)  # 对齐不足降全量的回退基准

@@ -17,7 +17,6 @@ App/AppScan.py —— 股票扫描功能域
 批量扫描提交/状态/中止委托 AppScanPool（入口适配器），共享结果经 SQLite
 AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
-import os
 import threading
 import time
 import traceback
@@ -633,7 +632,7 @@ class Scanner:
             # 用户点击中止后结束：不打印"全部扫描成功"误导日志
             log.info(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
         elif _scan_skip_log:
-            log.info(f"\n========== 扫描异常/失败股票明细 ==========")
+            log.info("\n========== 扫描异常/失败股票明细 ==========")
             log.info(f"共 {len(_scan_skip_log)} 只:")
             for i, item in enumerate(_scan_skip_log, 1):
                 log.info(f"  {i}. {item}")

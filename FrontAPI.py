@@ -21,9 +21,7 @@ CSSESource/CTqSdkSession 位于 DataAPI/TqSdkCSSESource.py，本文件仅 re-exp
 """
 import sys
 import os
-import json
 import time
-import threading
 import traceback
 from contextlib import asynccontextmanager
 
@@ -655,9 +653,9 @@ if __name__ == "__main__":
         _probe.close()
     except OSError:
         log.error(f"[错误] 端口 {PORT} 已被占用！")
-        log.error(f"[错误] 可能原因：FrontAPI.py 或其他服务仍在运行。")
+        log.error("[错误] 可能原因：FrontAPI.py 或其他服务仍在运行。")
         log.info(f"[解决] Windows 可执行: netstat -ano | findstr {PORT} 查看占用 PID，")
-        log.info(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
+        log.info("[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
         sys.exit(1)
 
     last_code, last_freq = orch.load_last_code_freq()  # AppOrch 漏斗读 AppData
@@ -670,6 +668,6 @@ if __name__ == "__main__":
     log.info(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
     log.info(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     log.info(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    log.info(f"[信息] SSE:       /api/futures_stream（同步生成器，每连接一条常驻线程）")
+    log.info("[信息] SSE:       /api/futures_stream（同步生成器，每连接一条常驻线程）")
     uvicorn.run(app, host=HOST, port=PORT, log_level="info")
 

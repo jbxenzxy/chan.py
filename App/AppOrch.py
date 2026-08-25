@@ -25,11 +25,6 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
     from App.AppOrch import analyze_stock, Scanner, call_analysis
     result = call_analysis("000001.SH", freq="d")
 """
-import threading
-
-# 分析引擎层（App/AppEngine.py）
-from App import AppEngine as _m
-
 # ── 各功能域 re-export ─────────────────────────────────────────────────
 from App.AppChart import (
     _ENGINE_LOCK,

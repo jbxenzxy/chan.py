@@ -411,8 +411,6 @@ def _refresh_stock_names():
     （名称缓存由 app_data 持有；本函数只做获取与合并，
      最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
     """
-    global _refresh_status
-
     if _refresh_status["running"]:
         return
     _refresh_status["running"] = True

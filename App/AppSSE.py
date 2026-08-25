@@ -25,7 +25,7 @@ from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name,
 )
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
-from App.AppErrors import AppError, DataFetchError, AnalysisError, ConfigError
+from App.AppErrors import AppError, DataFetchError, AnalysisError
 # 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/utils 导入）
 from App.utils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
@@ -36,10 +36,10 @@ from App.utils import (
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
 # 区间套辅助（红框/双窗口共用，与 AppEngine 同源）
-from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList
+from BuySellPoint.BSPointList import _futures_red_range, CMyBSPointList
 # chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
-from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
+from Common.CEnum import AUTYPE, FX_TYPE
 # SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
 # close_all/CSSESource 一并 re-export，API 层经本模块消费，不直连 DataAPI）
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
@@ -420,20 +420,6 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
             if dt_ns is None:
                 continue
 
-            # ★ 诊断：对比 tqsdk 实时 K 线和 chan 框架内部 K 线的时间差
-            if loop_count == 1 or (loop_count % 50 == 0):
-                chan_last_klu = None
-                try:
-                    chan_kl_list = chan[kl_type]
-                    if chan_kl_list.lst:
-                        last_klc = chan_kl_list.lst[-1]
-                        if last_klc.lst:
-                            chan_last_klu = last_klc.lst[-1]
-                except Exception as _e:
-                    log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
-                tqsdk_last_dt = datetime.fromtimestamp(dt_ns / 1e9).strftime('%H:%M:%S') if dt_ns else "None"
-                chan_last_dt = chan_last_klu.time.to_str()[:16] if chan_last_klu and hasattr(chan_last_klu, 'time') else "None"
-
             # 初始化
             if last_bar_dt_ns is None:
                 last_bar_dt_ns = dt_ns
@@ -482,7 +468,6 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
                 # klines 已推进 → 上一根K线（klines[-2]）已冻结，立即处理
                 completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
                 last_bar_dt_ns = dt_ns
-                bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
             else:
                 # klines 未推进 → 用壁钟判断当前K线周期是否已结束
                 bar_end_ts = (dt_ns / 1e9) + freq_sec + BAR_COMPLETION_BUFFER
@@ -524,7 +509,6 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
                     continue
                 # 壁钟到期，当前K线（klines[-1]）已冻结
                 completed_row = last_row
-                bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
 
             completed_dt_ns = completed_row.get("datetime")
             if completed_dt_ns is None:
@@ -928,7 +912,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
             if klines_pushed:
                 completed_row = klines.iloc[-2] if len(klines) >= 2 else last_row
                 last_bar_dt_ns = dt_ns
-                bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
             else:
                 bar_end_ts = (dt_ns / 1e9) + freq_sec + BAR_COMPLETION_BUFFER
                 if now_ts < bar_end_ts:
@@ -961,7 +944,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                     return False, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, True
                 # 壁钟到期
                 completed_row = last_row
-                bar_theoretical_end = (completed_row.get("datetime", 0) / 1e9) + freq_sec
 
             completed_dt_ns = completed_row.get("datetime")
             if completed_dt_ns is None:
@@ -1062,20 +1044,16 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 continue
 
             # 处理下窗（次级别优先：区间套分析需先分析次级别）
-            _t_sub0 = time.time()
             sub_updated, sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns, sub_need_tick = \
                 _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
                                           sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns,
                                           is_main=False, window_label="下窗")
-            _t_sub = time.time() - _t_sub0
 
             # 处理上窗
-            _t_main0 = time.time()
             main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
                 _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
                                           main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,
                                           is_main=True, window_label="上窗")
-            _t_main = time.time() - _t_main0
 
             # 推送：tick模式或K线完成模式
             if main_need_tick or sub_need_tick:
