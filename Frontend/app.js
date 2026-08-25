@@ -262,7 +262,8 @@
 
         const MAX_HISTORY = 20;
 
-        // 固定快捷入口：五大核心指数，常驻历史列表顶部，不参与保存/删除/清除
+        // 固定快捷入口：常驻历史列表顶部，不参与保存/删除/清除
+        // 前 7 项为五大核心指数+创业板+科创50；后 4 项为 CFFEX 四大期指主连（排序按用户要求）
         const FIXED_INDICES = [
             {code: "sh000001", name: "上证指数"},
             {code: "sz399001", name: "深证成指"},
@@ -271,6 +272,10 @@
             {code: "sh000852", name: "中证1000"},
             {code: "sz399006", name: "创业板指"},
             {code: "sh000688", name: "科创50"},
+            {code: "KQ.m@CFFEX.IF", name: "沪深300主连"},
+            {code: "KQ.m@CFFEX.IH", name: "上证50主连"},
+            {code: "KQ.m@CFFEX.IC", name: "中证500主连"},
+            {code: "KQ.m@CFFEX.IM", name: "中证1000主连"},
         ];
 
         const FIXED_CODES = new Set(FIXED_INDICES.map(x => normalizeCode(x.code)));
