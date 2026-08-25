@@ -176,7 +176,8 @@ def _patch_business(src, fail_init=False):
     _sse_mod.white_calls = 0
     _sse_mod.drain_calls = 0
 
-    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None, end_time=None):
+    def stub_init_chan_symbol(api, symbol, name, freq_sec, freq_label, start_time=None, end_time=None,
+                              num_bars=None):
         _sse_mod.init_chan_calls += 1
         if fail_init:
             return None
@@ -185,7 +186,7 @@ def _patch_business(src, fail_init=False):
 
     def stub_extract(chan, kl_type, symbol, name, freq_label,
                      saved_selection_date="", lightweight=False, klines=None,
-                     prev_klines=None, prev_ema_state=None):
+                     prev_klines=None, prev_ema_state=None, is_replay=False):
         _sse_mod.extract_calls += 1
         return _snapshot(f"snap{_sse_mod.extract_calls}")
 

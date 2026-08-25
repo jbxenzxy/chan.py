@@ -41,10 +41,20 @@ STEPS = [0, -1, -5, -20]    # 回放偏移序列（0=锚定当天）
 def _run(end_date=None, step=None):
     from App import AppEngine as m
     restore, records = install_data_source(FIXTURE)
+    # 隔离 STOCKS_LOOKBACK_CONFIG（K线回看窗口是 AppConfig 运行时配置，用户可
+    # 随时放大/缩小，属可变基础设施而非本测试的被测对象）：
+    # 本测试验证 trigger_step 回放算法的一致性，须在「不截断」口径下对比——
+    # 若窗口 bars 小于夹具长度（如 d=472 < 500 根夹具），全量基准会先丢掉最旧
+    # 的K线，而回放（≤锚点，仅 440 根）反而保留了它们，「回放⊆全量」的收敛
+    # 契约会因数据左边界错位而结构性失效（与回放算法本身无关）。
+    # 窗口截断行为已由 snapshot_regression 的冻结基线覆盖，无需在此重复校验。
+    saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+    m.STOCKS_LOOKBACK_CONFIG = {}
     try:
         return m._analyze_stock_internal(
             "600519", freq="d", end_date=end_date, cache_chan=False, step=step)
     finally:
+        m.STOCKS_LOOKBACK_CONFIG = saved_lookback
         restore()
 
 

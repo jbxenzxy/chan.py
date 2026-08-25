@@ -72,12 +72,79 @@ log = get_logger(__name__)
 # 区域 1 · SSE 实时流
 # ═══════════════════════════════════════════════════════════════════════
 
-def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None):
+# 期货窗口取数的公共参数（对齐股票 A/B/C 语义；见 _futures_window_fetch_bars）
+_TQ_MAX_BARS = 10000      # 天勤单序列上限（官方 docstring「每个序列最大支持请求 10000 个数据」）
+_BAR_ESTIMATE_MARGIN = 50 # 墙钟估算根数的固定余量（覆盖会话边界的不完整K线/估算误差）
+
+
+def _parse_flex_time(s):
+    """解析多格式时间字符串（%Y/%m/%d %H:%M:%S / %H:%M / %d），失败返回 None。"""
+    if not s:
+        return None
+    for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, _fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _estimate_bars_between(t_from, t_to, freq_sec):
+    """按墙钟估算 [t_from, t_to] 区间内 freq_sec 周期的K线根数上界。
+
+    墙钟含非交易时段（夜盘休市/周末/节假日），结果只会偏大不会偏小——
+    用于「至少拉多少根才能覆盖到 t_from」的取数上界（宁多勿少），
+    多拉的部分由调用方的时间过滤（start_time/end_time）截掉。
+    """
+    if t_from is None or t_to is None or freq_sec <= 0:
+        return 0
+    secs = (t_to - t_from).total_seconds()
+    if secs <= 0:
+        return 0
+    return int(secs // freq_sec) + 1 + _BAR_ESTIMATE_MARGIN
+
+
+def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_bars=None):
+    """计算一个期货窗口的取数根数（对齐股票 A/B/C 三种操作的左边界语义）。
+
+    A（默认，无 start/end）：取 base_bars（缺省=该周期配置的回看条数）。
+    B（start_time=T，选点）：[T, 最新] 全量 → 墙钟估算(T→now)+余量。
+        对齐股票「选点后从T加载到最新」：左边界=T，不受配置根数限制。
+    C（end_time，复盘）：[end-N, end] → N + 墙钟估算(end→now)。
+        对齐股票「从结束时间往前推N根」：fetch 多拉 end→now 流逝的部分，
+        拉回后先截到 ≤end 再取末 N 根（截断在 init_chan_symbol 内完成）。
+    全部封顶天勤上限 10000（=期货数据源的「全量」；所需根数超限时自然
+    降级为「最近 10000 根再过滤」，等价股票「对齐不足降全量」）。
+
+    base_bars: 显式基准根数（双窗下窗传「上窗区间折算根数」实现对齐；None=按配置）。
+    返回 (fetch_bars, base_bars_out)：fetch_bars 传给 fetch_kline 的 num_bars；
+    base_bars_out 为 C 模式截断到末 N 根的目标根数（A/B 模式不额外截断）。
+    """
+    from DataAPI.TqSdkAPI import resolve_lookback_bars
+    n = base_bars if base_bars and base_bars > 0 else resolve_lookback_bars(freq_sec)
+    now = datetime.now()
+    if end_time:
+        _end_dt = _parse_flex_time(end_time)
+        if _end_dt is not None:
+            fetch = n + _estimate_bars_between(_end_dt, now, freq_sec)
+            return (min(fetch, _TQ_MAX_BARS), n)
+    elif start_time:
+        _start_dt = _parse_flex_time(start_time)
+        if _start_dt is not None:
+            fetch = _estimate_bars_between(_start_dt, now, freq_sec)
+            return (min(fetch, _TQ_MAX_BARS), n)
+    return (n, n)
+
+
+def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
-    start_time: 选点起始时间，有值时只拉取该时间之后的K线
+    start_time: 选点起始时间，有值时只拉取该时间之后的K线（B 操作：左边界=T，全量到最新）
     end_time: 复盘终点（A 方案软断开）：有值时只截取该时间之前（含）的K线建 chan，
+              且取数为 N+复盘点到当前的流逝根数、建 chan 前截断到末 N 根
+              （C 操作：左边界=从 end 往前推 N 根，与股票复盘语义一致），
               update 循环将停在此边界，不再被实时拉新。None 为实时流。
+    num_bars: 显式取数根数（双窗下窗传「上窗区间折算根数」实现对齐；None=按窗口语义计算）。
     V10 复审 P1-2：首参改为数据源对象 src（CTqSdkSession），服务层只消费
     src.fetch_kline / src.get_kline_serial 协议，不再触碰 src.api 原始对象。"""
     import time as _time
@@ -86,10 +153,17 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
     display_key = f"{symbol}:{display_label}"
 
     try:
-        records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key, start_time=start_time)
-        # 复盘终点截断：先滤出 <= end_time 的历史，再扣除"最新未完成K线"首根保护
+        # 窗口取数根数：A=配置回看 / B=[T,最新]全量 / C=N+流逝根数（见 _futures_window_fetch_bars）
+        fetch_bars, base_bars = _futures_window_fetch_bars(
+            freq_sec, start_time=start_time, end_time=end_time, base_bars=num_bars)
+        records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key,
+                                  start_time=start_time, num_bars=fetch_bars)
+        # 复盘终点截断：先滤出 <= end_time 的历史，再取末 N 根（C 操作左边界=从 end 往前推 N 根），
+        # 再扣除"最新未完成K线"首根保护
         if end_time:
             records = _truncate_records_by_end(records, end_time, freq_sec)
+            if base_bars and len(records) > base_bars:
+                records = records[-base_bars:]
         if len(records) > 1:
             now = datetime.now()
             if (now - records[-1]["dt"]).total_seconds() < freq_sec:
@@ -218,7 +292,14 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
 
         # 如果没有传入 start_time，查询CSV中是否有保存的选点
         # （阶段 4：经 AppOrch 漏斗读 AppData，不再直连 my_chan_main 状态）
-        if start_time is None:
+        # C 复盘对齐股票语义「复盘不加载选点」：end_time 模式下跳过选点加载，
+        # 同时忽略传入的 start_time（复盘窗口固定为 [end-N, end]，与选点无关；
+        # 回到最新时前端不带 start_time 重连，此处再从 CSV 恢复选点）。
+        if end_time:
+            if start_time:
+                log.info(f"[{display_key}] 复盘模式：忽略选点 start_time={start_time}（复盘不加载选点）")
+            start_time = None
+        elif start_time is None:
             col = app_data.freq_to_col(freq) or ""
             if col:
                 _saved = _get_saved_point(symbol, freq) or None
@@ -266,7 +347,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
         t0 = time.time()
         try:
             init_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
-                                            saved_selection_date=saved_selection_date)
+                                            saved_selection_date=saved_selection_date,
+                                            is_replay=bool(end_time))
             # ★ 追加当前形成中的K线（klines[-1]），让前端立即看到新K线
             if klines is not None and len(klines) > 0:
                 _lr = klines.iloc[-1]; _dns = _lr.get('datetime')
@@ -521,7 +603,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
                 update_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                 saved_selection_date=saved_selection_date,
                                                 prev_klines=(cached_snapshot or {}).get("klines"),
-                                                prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"))
+                                                prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"),
+                                                is_replay=bool(end_time))
                 # ★ 用 completed_time + freq_sec 计算下一根K线时间（不用klines[-1]，因为壁钟触发时klines未推进）
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
@@ -614,25 +697,51 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                     continue
 
         # 1. 查询选点状态（阶段 4：经 AppOrch 漏斗读 AppData）
+        # 对齐股票双窗语义（方案二「下窗对齐上窗」+ C 复盘规则）：
+        #   · 双窗只认上窗选点：下窗不再读自己周期的选点，跟随上窗区间对齐取数；
+        #   · C 复盘不加载选点（对齐股票）：end_time 模式下忽略 start_time 与 CSV 选点，
+        #     复盘窗口固定 [end-N, end]；回到最新时不带 start_time 重连，此处再恢复。
         saved_selection_date = ""
         main_start_time = start_time
-        sub_start_time = start_time
-        try:
-            qualified_code = symbol
-            col_meta = app_data.freq_to_col(main_freq) or ""
-            if col_meta:
-                saved_selection_date = _get_saved_point(qualified_code, main_freq)
-                # 如果外部没传start_time，从CSV读取选点
-                if main_start_time is None and saved_selection_date:
-                    main_start_time = saved_selection_date
-            # 下窗也查询选点
-            sub_col_meta = app_data.freq_to_col(sub_freq) or ""
-            if sub_col_meta:
-                sub_saved = _get_saved_point(qualified_code, sub_freq)
-                if sub_start_time is None and sub_saved:
-                    sub_start_time = sub_saved
-        except Exception as _e:
-            log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
+        if end_time:
+            if main_start_time:
+                log.info(f"[{display_key}] 复盘模式：忽略选点 start_time={main_start_time}（复盘不加载选点）")
+            main_start_time = None
+        else:
+            try:
+                qualified_code = symbol
+                col_meta = app_data.freq_to_col(main_freq) or ""
+                if col_meta:
+                    saved_selection_date = _get_saved_point(qualified_code, main_freq)
+                    # 如果外部没传start_time，从CSV读取选点
+                    if main_start_time is None and saved_selection_date:
+                        main_start_time = saved_selection_date
+                        log.info(f"[{display_key}] 检测到保存选点: {saved_selection_date}")
+            except Exception as _e:
+                log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
+
+        # 下窗取数根数：对齐上窗实际加载区间（股票双窗「方案二」期货对齐实现）
+        #   · A（无选点/非复盘）：上窗配置 N_main 根 → 下窗 = N_main×(上窗周期/下窗周期)+余量
+        #     （K线根数按交易时长等比折算：N_main 根上窗K线的交易时长 = N_main×主周期 秒，
+        #       对应下窗 N_main×(主周期/次周期) 根；余量覆盖会话边界的不完整K线）
+        #   · B（上窗选点 T）：跟随上窗 [T, 最新]，按墙钟估算下窗根数（init_chan_symbol 内处理）
+        #   · C（复盘）：跟随上窗 [end-N_main, end]，下窗折算根数 + end→now 流逝根数
+        #   · 全部封顶天勤上限 10000；超限自然降级「对齐不足 → 全量（最近10000根）」
+        from DataAPI.TqSdkAPI import resolve_lookback_bars
+        _main_base_bars = resolve_lookback_bars(main_freq_sec)
+        _sub_align_ratio = main_freq_sec / sub_freq_sec if sub_freq_sec > 0 else 1.0
+        _sub_aligned_bars = min(int(_main_base_bars * _sub_align_ratio) + _BAR_ESTIMATE_MARGIN, _TQ_MAX_BARS)
+        if main_start_time:
+            # B 模式：下窗跟随上窗选点 T，按墙钟估算（fetch_kline 内再按 T 过滤）
+            sub_start_time = main_start_time
+            sub_num_bars = None
+        else:
+            # A/C 模式：下窗按上窗区间折算根数对齐（C 的流逝根数由 init_chan_symbol 补充）
+            sub_start_time = None
+            sub_num_bars = _sub_aligned_bars
+        if _SSE_DEBUG:
+            log.info(f"[{display_key}] 下窗对齐: 上窗基准={_main_base_bars}根, 折算比={_sub_align_ratio:.1f}, "
+                     f"下窗对齐={_sub_aligned_bars}根 (start={sub_start_time}, replay={bool(end_time)})")
 
         # 2. 拉取下窗历史 + chan分析（次级别优先：区间套分析需先分析次级别）
         if _SSE_DEBUG:
@@ -642,7 +751,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         if end_time:
             CMyBSPointList.REPLAY_MODE = True
         try:
-            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time)
+            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time,
+                                          num_bars=sub_num_bars)
         finally:
             CMyBSPointList.REPLAY_MODE = _replay_prev
         sub_chan, sub_records, sub_kl_type, _ = sub_result
@@ -672,9 +782,11 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 7. 提取初始快照
         t_snap = time.time()
         main_snapshot = _extract_realtime_snapshot(main_chan, main_kl_type, symbol, name, main_freq_label,
-                                                 saved_selection_date=saved_selection_date)
+                                                 saved_selection_date=saved_selection_date,
+                                                 is_replay=bool(end_time))
         sub_snapshot = _extract_realtime_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
-                                                       klines=None)
+                                                       klines=None,
+                                                       is_replay=bool(end_time))
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
         # （阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py）
@@ -921,7 +1033,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 snapshot = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                            saved_selection_date=saved_selection_date,
                                                            prev_klines=(cached_snapshot or {}).get("klines"),
-                                                           prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"))
+                                                           prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"),
+                                                           is_replay=bool(end_time))
                 if is_main:
                     # 阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py
                     _futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
@@ -1227,12 +1340,14 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
     return bis, fxs, segs, zs_list, zs_stars, bsps
 
 
-def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None, prev_klines=None, prev_ema_state=None):
+def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_selection_date="", lightweight=False, klines=None, prev_klines=None, prev_ema_state=None, is_replay=False):
     """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致。
     lightweight=True: 仅返回最后一根K线的OHLC变化（周期内tick更新用），不遍历全量结构。
     klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）。
     prev_klines/prev_ema_state: P2-4 增量快照 —— 复用缓存 klines 仅追加新确认K线，
     EMA 状态续算 MACD，避免每根K线全量 O(n) 重建；None 时走原始全量路径。
+    is_replay: 复盘模式（A 方案软断开 end_time）标记。修复：此前恒为 False，
+    导致前端「复盘禁选点/禁重置/注记不保存」守卫对期货复盘全部失效。
     """
     kl_list = chan[kl_type]
     _date_fmt = _get_date_fmt(freq_label)
@@ -1323,7 +1438,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             "fx_count": len(fxs), "zs_count": len(zs_list),
             "seg_count": len(segs), "bsp_count": len(bsps),
             "generated_at": datetime.now().strftime(_date_fmt),
-            "is_realtime": True, "is_replay": False, "market": "futures",
+            "is_realtime": True, "is_replay": bool(is_replay), "market": "futures",
             "saved_selection_date": saved_selection_date,
             # P2-4 增量快照：EMA 状态续算 MACD（内部使用，前端忽略）
             "_ema_state": ema_state,

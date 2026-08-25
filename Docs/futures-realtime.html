@@ -386,13 +386,13 @@
   <h3>3.4　数据源层与 tqsdk 库做什么（TqSdkAPI.py + tqsdk）</h3>
   <div class="steps">
     <div class="step"><div class="num">①</div><div class="body"><div class="t">connect：创建 TqApi（数据源层的入口）</div><p><code>FrontAPI.TqSdkSource.connect()</code> 从 <code>tqsdk</code> 导入 <code>TqApi, TqAuth</code> 与账户常量，执行 <code>TqApi(auth=TqAuth(账,密))</code>。这一步在 tqsdk 里建立到天勤服务器的 <strong>WebSocket</strong>，后台起事件循环线程，登录鉴权握手完成才返回。<br><strong>阻塞点</strong>：网络握手，可能耗时数秒。</p></div></div>
-    <div class="step"><div class="num">②</div><div class="body"><div class="t">fetch_kline：拉历史并转 records（数据源层）</div><p><code>CTqSdkAPI.fetch_kline</code>/模块级 <code>fetch_futures_kline</code>：以 <code>num_bars = HISTORY_LOOKBACK_BARS.get(freq_sec, 300)</code> 得到回看条数，调 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code> 向 tqsdk 申请序列；随后 <code>wait_update</code> 空转直到 <code>len(klines)</code> 达到 <code>min(50, num_bars//5)</code>（保证数据基本就绪）。再 <code>iterrows</code> 把每行转成 <code>{dt, open, high, low, close, vol, amount}</code>（amount 恒 0，天勤 K 线无成交额，前端显成交量）。<br><strong>关键保存</strong>：<code>set_data(records, f"{symbol}:{freq_sec}")</code> 写入类级缓存 <code>CTqSdkAPI._records_by_symbol</code>（带 <code>_lock</code>）。chan 引擎经 <code>get_kl_data</code> 从这里取 K 线。</p></div></div>
+    <div class="step"><div class="num">②</div><div class="body"><div class="t">fetch_kline：拉历史并转 records（数据源层）</div><p><code>CTqSdkAPI.fetch_kline</code>/模块级 <code>fetch_futures_kline</code>：以 <code>num_bars = FUTURES_LOOKBACK_CONFIG[周期].bars</code>（由 AppEngine 启动时注入，单一事实源在 <code>App/AppConfig.py</code>；周期缺失回退 300 根，bars&lt;=0 视为「不限制」统一落天勤上限 10000）得到回看条数，调 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code> 向 tqsdk 申请序列；随后 <code>wait_update</code> 空转直到 <code>len(klines)</code> 达到 <code>min(50, num_bars//5)</code>（保证数据基本就绪）。再 <code>iterrows</code> 把每行转成 <code>{dt, open, high, low, close, vol, amount}</code>（amount 恒 0，天勤 K 线无成交额，前端显成交量）。<br><strong>关键保存</strong>：<code>set_data(records, f"{symbol}:{freq_sec}")</code> 写入类级缓存 <code>CTqSdkAPI._records_by_symbol</code>（带 <code>_lock</code>）。chan 引擎经 <code>get_kl_data</code> 从这里取 K 线。</p></div></div>
     <div class="step"><div class="num">③</div><div class="body"><div class="t">tqsdk 库实际做了什么</div><p>天勤库维护 <code>get_kline_serial</code> 返回的<strong>滚动序列对象</strong>：服务器端持续推送、本地持续更新该 DataFrame，始终是最新 <code>num_bars</code> 根；库内部的 <code>wait_update</code> 驱动 WebSocket 消息收发的推进。用户代码不直接触及服务器端状态，只读那个 DataFrame（如 <code>klines.iloc[-1]</code>）以及调用 <code>wait_update</code> 推进。</p></div></div>
     <div class="step"><div class="num">④</div><div class="body"><div class="t">单窗口取数路径（注意：不走 _serials）</div><p>单窗口的滚动序列由 <code>AppSSE.init_chan_symbol</code> 在拉历史后再次 <code>api.get_kline_serial(symbol, freq_sec)</code> 取得（<code>AppSSE.py:99</code>），由天勤维护同一 DataFrame 引用，实时循环直接读 <code>klines.iloc[-1]</code>。<strong>它不经过 <code>TqSdkSource._serials</code> 缓存</strong>——<code>_serials</code> 只在双窗口路径（<code>src.get_kline_serial</code>，<code>FrontAPI.py:853/854/910/911</code>）被填充。若未来单窗口也改走 <code>src.get_kline_serial</code>，才需要清理/统一该缓存语义。</p></div></div>
   </div>
 
   <div class="callout">
-    <div class="t">各周期初始快照读取多少根 K 线？（HISTORY_LOOKBACK_BARS）</div>
+    <div class="t">各周期初始快照读取多少根 K 线？（FUTURES_LOOKBACK_CONFIG）</div>
     <div class="table-wrap" style="margin-top:0.75rem;">
       <table>
         <thead><tr><th>周期</th><th>freq_sec</th><th>回看条数 num_bars</th><th>覆盖时长（约）</th></tr></thead>
@@ -404,12 +404,12 @@
         </tbody>
       </table>
     </div>
-    <p>条数由 <code>HISTORY_LOOKBACK_BARS</code>（<code>TqSdkAPI.py</code>）决定，并作为 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code> 的第三个参数传给 tqsdk。天勤免费 API 可能返回超过 <code>num_bars</code> 的数据，<code>fetch_futures_kline</code> 末尾会<strong>强制截断到 <code>num_bars</code></strong>，以控制 <code>step_load</code> 的耗时在可控范围。</p>
+    <p>条数由 <code>App/AppConfig.py</code> 的 <code>FUTURES_LOOKBACK_CONFIG</code> 决定（单一事实源，AppEngine 启动时经 <code>set_futures_lookback_config()</code> 注入 <code>TqSdkAPI.py</code>；原本地常量 <code>HISTORY_LOOKBACK_BARS</code> 已删除），并作为 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code> 的第三个参数传给 tqsdk。天勤免费 API 可能返回超过 <code>num_bars</code> 的数据，<code>fetch_futures_kline</code> 末尾会<strong>强制截断到 <code>num_bars</code></strong>，以控制 <code>step_load</code> 的耗时在可控范围。</p>
   </div>
 
   <div class="callout warn">
     <div class="t">天勤有没有取数上限？能否由用户指定取多少根？</div>
-    <p><strong>有上限，且能指定</strong>。<code>get_kline_serial(symbol, duration_second, data_length)</code> 的第三个参数 <code>data_length</code>（默认 200）就是「让用户指定取多少根 K 线」的接口；tqsdk 文档注明每个序列最大支持 10000 个数据（tqsdk 3.x；早期版本为 8964）。本项目取值（2000/1000/500/300）全部远低于上限；数据源层 <code>fetch_futures_kline</code> 亦暴露 <code>num_bars</code> 参数可覆盖默认回看值。此外本项目的 15s/1m/5m/30m 四种周期均在 <code>HISTORY_LOOKBACK_BARS</code> 有显式取值，未显式列出的周期回退到 300。</p>
+    <p><strong>有上限，且能指定</strong>。<code>get_kline_serial(symbol, duration_second, data_length)</code> 的第三个参数 <code>data_length</code>（默认 200）就是「让用户指定取多少根 K 线」的接口；tqsdk 文档注明每个序列最大支持 10000 个数据（tqsdk 3.x；早期版本为 8964）。本项目默认取值（2000/1000/500/300）全部远低于上限；数据源层 <code>fetch_futures_kline</code> 亦暴露 <code>num_bars</code> 参数可覆盖默认回看值。此外本项目的 15s/1m/5m/30m 四种周期均在 <code>FUTURES_LOOKBACK_CONFIG</code> 有显式取值，未显式列出的周期回退到 300；各周期取值可随时在 <code>AppConfig.py</code> 中放大或缩小，bars 填 0 表示「不限制」（<code>fetch_futures_kline</code> 内统一落天勤上限 10000，不会把 0 传给天勤触发异常）。</p>
   </div>
 
   <h2 id="s4">第 4 章　阶段 ②：实时循环（update）</h2>

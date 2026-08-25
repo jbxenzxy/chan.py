@@ -692,11 +692,8 @@
                     showDualToast("复盘模式，不支持选点");
                     return;
                 }
-                // 期货双窗口仍不支持双击选点（SSE 链路；D5=A 放开范围=股票双窗）
-                if (isDualWindow && clickedOnKline && chartData.meta.market === 'futures') {
-                    showDualToast("期货双窗口模式，不支持选点");
-                    return;
-                }
+                // 期货双窗选点放开（对齐股票双窗 D5=A：仅上窗可选点，下窗只对齐展示）：
+                // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
                 if (clickedBiIdx >= 0) {
                     const code = chartData.meta.symbol;
@@ -723,6 +720,16 @@
                             }
                             // 期货：断开旧SSE，从选点时间重新连接
                             if (isFutures) {
+                                const savedDate = data.meta && data.meta.saved_selection_date;
+                                // 双窗模式：上窗选点已保存 → 重连双窗SSE带 start_time=T，
+                                // 下窗由后端自动对齐 [T, 最新]（股票双窗「方案二」语义），
+                                // 初始快照（含上下窗）由 SSE init 事件统一推送，
+                                // 不在此处用单窗响应覆盖 chartData/dualSubData
+                                if (isDualWindow && dualSubFreq) {
+                                    document.querySelector(".loading-text").textContent = "正在加载双窗口数据...";
+                                    connectRealtimeDual(code, freq, dualSubFreq, null, savedDate);
+                                    return;
+                                }
                                 chartData = data;
                                 adjustViewForSavedPoint();
                                 document.getElementById("stock-name").textContent = chartData.meta.name;
@@ -741,8 +748,7 @@
                                 render();
                                 generateStats();
                                 loadAnnotations();
-                                // 重连SSE，带上选点时间
-                                const savedDate = chartData.meta.saved_selection_date;
+                                // 重连SSE，带上选点时间（savedDate 已在上方取自 data.meta）
                                 connectRealtimeInit(code, freq, savedDate);
                                 return;
                             }
@@ -2908,11 +2914,7 @@
                             showDualToast("复盘模式，不支持选点");
                             return;
                         }
-                        if (_savedChartData && _savedChartData.meta && _savedChartData.meta.market === 'futures') {
-                            showDualToast("期货双窗口模式，不支持选点");
-                            return;
-                        }
-                        // 股票双窗（方案二）：下窗仅展示/对齐，不允许在下窗选点
+                        // 股票/期货双窗统一（方案二「下窗对齐上窗」）：仅上窗可选点，下窗只对齐展示
                         showDualToast("双窗口模式下仅支持在上窗选点");
                         return;
                     }
@@ -4271,10 +4273,18 @@
                         // 响应 data.sub 即该配对的下窗数据，不再重置为默认配对
                         if (data.sub) {
                             dualSubData = data.sub;
-                            dualSubViewCount = VIEW_COUNT;
-                            dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                            if (dualSubData.klines.length < dualSubViewCount) {
+                            // B 操作双窗选点（上窗有选点）：下窗对齐上窗 [选点, 最新] 区间加载，
+                            // 视口无 377 限制——下窗后端加载多少根，前端视口就显示多少根
+                            // （与股票双窗选点后下窗全显规则一致；A/C 操作仍走 VIEW_COUNT 视口）
+                            if (chartData && chartData.meta && chartData.meta.saved_selection_date) {
+                                dualSubViewCount = dualSubData.klines.length;
                                 dualSubViewOffset = 0;
+                            } else {
+                                dualSubViewCount = VIEW_COUNT;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
+                                }
                             }
                         }
                     }
@@ -6214,11 +6224,14 @@
         }
 
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
-        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime) {
+        // startTime: 上窗选点时间 T（B 操作双窗：上窗 [T, 最新]、下窗自动对齐同一区间）
+        // endTime: 复盘终点（A 方案软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
+        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
             dualSubFreq = subFreq;
+            realtimeStartTime = startTime || null;
             realtimeEndTime = endTime || null; // A 方案 · 复盘软断开边界
             isRealtimeMode = true;
             startCountdownTimer();
@@ -6230,6 +6243,10 @@
             try {
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol)
                     + '&freq=' + mainFreq + '&dual=1&sub_freq=' + subFreq;
+                if (startTime) {
+                    // B 操作双窗选点：上窗从 T 加载到最新，下窗由后端对齐同一区间
+                    sseUrl += '&start_time=' + encodeURIComponent(startTime);
+                }
                 if (endTime) {
                     sseUrl += '&end_time=' + encodeURIComponent(endTime);
                 }
@@ -6264,10 +6281,18 @@
                         }
                         if (data.sub) {
                             dualSubData = data.sub;
-                            dualSubViewCount = VIEW_COUNT;
-                            dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
-                            if (dualSubData.klines.length < dualSubViewCount) {
+                            // B 操作双窗选点（上窗有选点）：下窗由后端对齐上窗 [选点, 最新] 区间加载，
+                            // 视口无 377 限制——下窗后端加载多少根，前端视口就显示多少根
+                            // （与股票双窗选点后下窗全显规则一致；A/C 操作仍走 VIEW_COUNT 视口）
+                            if (chartData && chartData.meta && chartData.meta.saved_selection_date) {
+                                dualSubViewCount = dualSubData.klines.length;
                                 dualSubViewOffset = 0;
+                            } else {
+                                dualSubViewCount = VIEW_COUNT;
+                                dualSubViewOffset = Math.max(0, dualSubData.klines.length - dualSubViewCount);
+                                if (dualSubData.klines.length < dualSubViewCount) {
+                                    dualSubViewOffset = 0;
+                                }
                             }
                         }
                         document.getElementById("loading").classList.add("hidden");

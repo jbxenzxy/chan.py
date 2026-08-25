@@ -152,6 +152,9 @@ FREQ_LABEL_CN = {
 # DataAPI 层（设计 4.4：DataAPI 不反向依赖 App），配置由 AppEngine 启动时
 # 经 set_futures_lookback_config() 注入到模块级 _futures_lookback_config。
 # 不再维护本地 HISTORY_LOOKBACK_BARS 兜底常量：缺失周期一律回退默认 300 根。
+# bars 语义与股票 STOCKS_LOOKBACK_CONFIG 完全对齐：>0=保留最近 N 根；<=0=不限制
+# （「不限制」在 fetch_futures_kline 内统一落天勤上限 10000 根，绝不把 <=0 传给天勤——
+#   天勤 get_kline_serial 要求数据长度为正整数，<=0 会直接抛异常）。
 
 # 期货历史回看配置（标签键 → (bars, label)）；由 AppEngine 注入，默认空。
 _futures_lookback_config: dict = {}
@@ -304,9 +307,31 @@ def set_futures_lookback_config(config: dict):
     由 App/AppEngine.py 启动时调用，把 AppConfig.FUTURES_LOOKBACK_CONFIG
     注入到本模块（DataAPI 层不反向依赖 App，见设计 4.4）。
     传空 dict 可复位为空；缺失周期在 fetch_futures_kline 中回退默认 300 根。
+    值语义与股票 STOCKS_LOOKBACK_CONFIG 对齐：bars>0=保留最近 bars 根；
+    bars<=0=「不限制」——fetch_futures_kline 内统一落天勤上限 10000 根
+    （实际返回以账户权限为准），不会把 <=0 传给天勤。
     """
     global _futures_lookback_config
     _futures_lookback_config = dict(config) if config else {}
+
+
+def resolve_lookback_bars(freq_sec):
+    """解析期货某周期的回看条数（A 操作「最新K线」模式的取数根数）。
+
+    单一数据源：AppEngine 注入的 FUTURES_LOOKBACK_CONFIG（标签键 → (bars,label)）。
+    周期缺失或未注入时回退默认 300 根；bars<=0（不限制）统一返回天勤上限 10000。
+    返回恒为正整数，可直接作为 get_kline_serial 的 data_length。
+    供 AppSSE 计算窗口取数根数（对齐上窗区间/复盘回推）复用。
+    """
+    num_bars = 300
+    label = SEC_TO_LABEL.get(freq_sec)
+    if label is not None:
+        _cfg = _futures_lookback_config.get(label)
+        if _cfg is not None:
+            num_bars = _cfg[0]
+    if num_bars <= 0:
+        num_bars = 10000
+    return num_bars
 
 
 def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
@@ -314,17 +339,19 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
     从天勤拉取历史 K 线数据，转换为 records 格式。
     api: TqApi 实例（由调用方创建和传入）
     start_time: 选点起始时间字符串（如 "2026-01-09 10:00"），有值时只返回该时间之后的K线
+    num_bars: 显式回看条数；None 时按注入的 FUTURES_LOOKBACK_CONFIG 解析。
+              <=0 一律视为「不限制」（与股票 STOCKS_LOOKBACK_CONFIG 语义对齐，
+              不会传给天勤触发其「数据长度非法」异常）。
     """
     t_start = _time.time()
     if num_bars is None:
-        # 单一数据源：AppEngine 注入的 FUTURES_LOOKBACK_CONFIG（标签键 → (bars,label)）。
-        # 周期缺失或未注入时回退默认 300 根（不再有本地静态兜底常量）。
-        num_bars = 300
-        label = SEC_TO_LABEL.get(freq_sec)
-        if label is not None:
-            _cfg = _futures_lookback_config.get(label)
-            if _cfg is not None:
-                num_bars = _cfg[0]
+        num_bars = resolve_lookback_bars(freq_sec)
+    # 「不限制」统一兜底（配置值 bars<=0，或调用方显式传入 num_bars<=0）：
+    # 天勤 get_kline_serial 要求数据长度为正整数（<=0 直接抛异常），客户端上限
+    # 10000（官方 docstring「每个序列最大支持请求 10000 个数据」，超出自动截断）。
+    # 与股票「bars<=0=不限制」语义对齐：不限制 → 取天勤上限，实际返回以账户权限为准。
+    if num_bars <= 0:
+        num_bars = 10000
 
     klines = api.get_kline_serial(symbol, freq_sec, num_bars)
 

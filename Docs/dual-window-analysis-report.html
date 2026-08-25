@@ -565,7 +565,7 @@
       <tbody>
         <tr class="group-row"><td colspan="4">A · 数据加载与结构</td></tr>
         <tr><td>CChan 结构</td><td>单 CChan 多级别联立，lv_list=[主,子]（w→[W,D]、d→[D,30m]、30m→[30m,5m]）</td><td>两个独立单级别 CChan，各自 lv_list=[kl_type]</td><td><span class="badge badge-agree">共识</span></td></tr>
-        <tr><td>子级别数据来源</td><td>fetch_sub_level 由主级别/同源文件派生，时间天然对齐；30m+5m、w+d 共用同次文件读取与前复权（性能优化）；<strong>范围截断到上窗首末 K 线 ±1 天</strong>（AppEngine.py:630-652）</td><td>独立拉取（TqApi）。<strong>SSE 生产路径</strong>：固定回看条数 HISTORY_LOOKBACK_BARS（15s→2000 / 1m→1000 / 5m→500 / 30m→300），<strong>不按上窗范围截断</strong>——下窗只覆盖上窗范围的近期部分；<strong>REST 测试路径</strong>：按上窗首末 K 线数学换算截断（AppSSE.py:1278-1290）</td><td><span class="badge badge-agree">共识</span>+<span class="badge badge-new">本方补充</span></td></tr>
+        <tr><td>子级别数据来源</td><td>fetch_sub_level 由主级别/同源文件派生，时间天然对齐；30m+5m、w+d 共用同次文件读取与前复权（性能优化）；<strong>范围截断到上窗首末 K 线 ±1 天</strong>（AppEngine.py:630-652）</td><td>独立拉取（TqApi）。<strong>SSE 生产路径</strong>：固定回看条数 FUTURES_LOOKBACK_CONFIG（AppConfig 注入；当前默认 15s→2000 / 1m→1000 / 5m→500 / 30m→300，可配置），<strong>不按上窗范围截断</strong>——下窗只覆盖上窗范围的近期部分；<strong>REST 测试路径</strong>：按上窗首末 K 线数学换算截断（AppSSE.py:1278-1290）</td><td><span class="badge badge-agree">共识</span>+<span class="badge badge-new">本方补充</span></td></tr>
         <tr><td>K 线时间语义</td><td>通达信 K 线时间 = <strong>结束时间</strong></td><td>天勤 K 线时间 = <strong>开始时间</strong></td><td><span class="badge badge-agree">共识</span></td></tr>
         <tr><td>前复权</td><td>有（AUTYPE，联立同源保证一致）</td><td>无复权概念</td><td><span class="badge badge-agree">共识</span></td></tr>
         <tr class="group-row"><td colspan="4">B · 时序与区间套</td></tr>
@@ -990,7 +990,7 @@
 
   <div class="callout blue">
     <span class="ct">例外情形 · 期货 SSE 生产路径的下窗其实是「固定回看」</span>
-    期货 SSE 路径的下窗按<strong>固定回看条数</strong>拉取（HISTORY_LOOKBACK_BARS：15s→2000 / 1m→1000 / 5m→500 / 30m→300，TqSdkAPI.py:151-156），<strong>不按上窗范围截断</strong>（按上窗截断的是 REST 测试路径 AppSSE.py:1278-1290；若按 D7 删除该路径，此引证转为历史证据，其公式与 P0 设计同源）。这意味着期货下窗只覆盖上窗范围的近期部分——如上窗 30m×300 根 ≈ 37 个交易日，下窗 5m×500 根 ≈ 10 个交易日——上窗较早的笔做区间套时会走 fallback。这本身是「数据量 vs 覆盖完整性」的权衡。它反过来说明：只有在「下窗范围与上窗无关」的设计下，「改上窗只更新上窗」才理论上可行，但代价是覆盖不全 + 上下窗显示范围不对应。改造后股票采用 P0 精确截断（跟随上窗范围），因此<strong>必须双窗重建</strong>；这也提示期货 SSE 路径的固定回看可作为后续对齐项（见 §8 P2 备注）。
+    期货 SSE 路径的下窗按<strong>固定回看条数</strong>拉取（FUTURES_LOOKBACK_CONFIG：AppConfig 单一事实源、AppEngine 注入 TqSdkAPI；当前默认 15s→2000 / 1m→1000 / 5m→500 / 30m→300，各周期可配置），<strong>不按上窗范围截断</strong>（按上窗截断的是 REST 测试路径 AppSSE.py:1278-1290；若按 D7 删除该路径，此引证转为历史证据，其公式与 P0 设计同源）。这意味着期货下窗只覆盖上窗范围的近期部分——如上窗 30m×300 根 ≈ 37 个交易日，下窗 5m×500 根 ≈ 10 个交易日——上窗较早的笔做区间套时会走 fallback。这本身是「数据量 vs 覆盖完整性」的权衡。它反过来说明：只有在「下窗范围与上窗无关」的设计下，「改上窗只更新上窗」才理论上可行，但代价是覆盖不全 + 上下窗显示范围不对应。改造后股票采用 P0 精确截断（跟随上窗范围），因此<strong>必须双窗重建</strong>；这也提示期货 SSE 路径的固定回看可作为后续对齐项（见 §8 P2 备注）。
   </div>
 
   <h3>统一规则：任一窗改周期 ⇒ 双窗整体重建（下先上后）</h3>
@@ -1149,7 +1149,7 @@
       <tbody>
         <tr><td class="src">App/AppEngine.py</td><td>股票双窗口联立构建（lv_list 注入）、dual_main/dual_sub 缓存键与 LRU、复盘清缓存、±1 天 padding 截断、sub_kl_times 生成、step 箭头、_SUB_FREQ_MAP</td><td class="src">380-415, 530-547, 630-652, 676-704, 865-880, 1424</td></tr>
         <tr><td class="src">App/AppSSE.py</td><td>期货双窗 init（下窗先建缓存）/update（下窗先 drain）时序、SSE 下窗固定回看不按上窗截断（init_chan_symbol 全量委托 fetch_kline）、REST 下窗按上窗范围截断、futures 缓存生命周期（连接绑定）、_analyze_futures_internal 时序反例、futures_manual_select_point</td><td class="src">184, 636-668, 971-985, 1061-1140, 1278-1290, 1743</td></tr>
-        <tr><td class="src">DataAPI/TqSdkAPI.py</td><td>HISTORY_LOOKBACK_BARS 固定回看条数（15s→2000/1m→1000/5m→500/30m→300，SSE 下窗范围不随上窗）、FUTURES_DUAL_FREQ_MAP 缺省配对</td><td class="src">150-163, 300-308</td></tr>
+        <tr><td class="src">DataAPI/TqSdkAPI.py</td><td>FUTURES_LOOKBACK_CONFIG 固定回看条数（AppConfig 注入；当前默认 15s→2000/1m→1000/5m→500/30m→300，SSE 下窗范围不随上窗）、FUTURES_DUAL_FREQ_MAP 缺省配对</td><td class="src">150-163, 300-308</td></tr>
         <tr><td class="src">BuySellPoint/BSPointList.py</td><td>check_nested_diver（股票联立取数 / 期货缓存取数 + 竞态兜底）、_STOCKS/_FUTURES_SUB_FREQ_MAP、_stocks_red_range（右肩 fallback）、_futures_red_range（数学换算）</td><td class="src">488-489, 657-729, 1764-1798, 1801-1882</td></tr>
         <tr><td class="src">App/AppChart.py</td><td>compute_red_range_zs：期货读 futures_cache（miss 报错）、股票读 dual_main 多级别 chan / single 缓存（无 chan 自愈现算）</td><td class="src">302-384</td></tr>
         <tr><td class="src">App/AppOrch.py</td><td>LOCK_POLICY 锁分类登记表（SERIAL / SCAN / SELF_CONTAINED）与 _ENGINE_LOCK 漏斗</td><td class="src">83-120</td></tr>

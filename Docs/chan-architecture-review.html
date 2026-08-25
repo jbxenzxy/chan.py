@@ -253,9 +253,9 @@
   <h3>5.2 <span class="tag t-ok">已修复</span> 配置中心化未彻底接线 · P1-1</h3>
   <div class="card">
     <div class="title">原现象</div>
-    <p>AppConfig 定义 <code>forward_adjust_enabled</code> / <code>full_data_mode</code> / <code>time_truncate_config</code> / <code>debug_cold_start_start_date</code> / <code>debug_cold_start_end_date</code> 五个字段但全库零引用，引擎读取 AppEngine 内硬编码常量，.env / 环境变量不生效。</p>
+    <p>AppConfig 定义 <code>forward_adjust_enabled</code> / <code>full_data_mode</code> / <code>time_truncate_config</code>（现已演进为 <code>stocks_lookback_config</code> / <code>futures_lookback_config</code>）/ <code>debug_cold_start_start_date</code> / <code>debug_cold_start_end_date</code> 五个字段但全库零引用，引擎读取 AppEngine 内硬编码常量，.env / 环境变量不生效。</p>
     <div class="title">修复结果</div>
-    <p>AppEngine 的 <code>FORWARD_ADJUST_ENABLED</code> / <code>DEBUG_COLD_START_START_DATE</code> / <code>DEBUG_COLD_START_END_DATE</code> / <code>FULL_DATA_MODE</code> / <code>TIME_TRUNCATE_CONFIG</code> 全部改读 <code>app_config.*</code>（保持符号名以兼容消费侧），单一事实源成立。</p>
+    <p>AppEngine 的 <code>FORWARD_ADJUST_ENABLED</code> / <code>DEBUG_COLD_START_START_DATE</code> / <code>DEBUG_COLD_START_END_DATE</code> / <code>FULL_DATA_MODE</code> / <code>TIME_TRUNCATE_CONFIG</code>（现已演进为 <code>STOCKS_LOOKBACK_CONFIG</code>，按K线根数截断；期货另有 <code>FUTURES_LOOKBACK_CONFIG</code> 经注入生效）全部改读 <code>app_config.*</code>（保持符号名以兼容消费侧），单一事实源成立。</p>
   </div>
 
   <h3>5.3 <span class="tag t-ok">已修复</span> tqsdk 隔离只到 import 层 · P0-1 / P1-2</h3>

@@ -869,7 +869,7 @@
 
         <div class="callout">
           <div class="t">初始快照读取多少根 K 线？——各周期回看条数与天勤上限</div>
-          <p>期货连接后读取初始快照时，历史 K 线的拉取条数由 <code>DataAPI/TqSdkAPI.py</code> 的 <code>HISTORY_LOOKBACK_BARS</code>（L151-156）按周期配置，单窗口 / 双窗口的上窗、下窗各自按自己的周期取数：</p>
+          <p>期货连接后读取初始快照时，历史 K 线的拉取条数由 <code>App/AppConfig.py</code> 的 <code>FUTURES_LOOKBACK_CONFIG</code>（单一事实源，AppEngine 启动时注入 <code>DataAPI/TqSdkAPI.py</code>；原本地常量 <code>HISTORY_LOOKBACK_BARS</code> 已删除）按周期配置，单窗口 / 双窗口的上窗、下窗各自按自己的周期取数：</p>
           <div class="table-wrap">
             <table>
               <thead><tr><th>周期</th><th>秒数</th><th>回看条数</th><th>覆盖时长（约）</th><th>对应窗口角色</th></tr></thead>
@@ -881,8 +881,8 @@
               </tbody>
             </table>
           </div>
-          <p><strong>取数实现（L300-316）：</strong><code>fetch_futures_kline(api, symbol, freq_sec, num_bars=None, start_time=None)</code> 调用 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code>，其中 <code>num_bars</code> 缺省取 <code>HISTORY_LOOKBACK_BARS.get(freq_sec, 300)</code>；随后循环 <code>wait_update</code> 等待数据加载，直到至少 <code>min(50, num_bars//5)</code> 根到位或 30 次等待超时。若传入 <code>start_time</code>（手动选点场景），还会在拉取后按时间过滤，只保留该时间之后的 K 线。</p>
-          <p><strong>天勤有没有上限？有，但远大于本项目取值。</strong>天勤 <code>get_kline_serial</code> 的第三个参数 <code>data_length</code>（默认 200 根）就是「让用户指定获取多少根」的接口：返回从当前最新一根 K 线往回取 <code>data_length</code> 根。官方文档注明<strong>每个序列最大支持请求 10000 个数据</strong>（tqsdk 3.x；早期版本为 8964）。本项目的 2000 / 1000 / 500 / 300 全部远低于上限，无需担心超限；若未来需要更长历史，直接调大 <code>HISTORY_LOOKBACK_BARS</code> 对应值即可（仍受 10000 上限约束）。</p>
+          <p><strong>取数实现：</strong><code>fetch_futures_kline(api, symbol, freq_sec, num_bars=None, start_time=None)</code> 调用 <code>api.get_kline_serial(symbol, freq_sec, num_bars)</code>，其中 <code>num_bars</code> 缺省取注入的 <code>FUTURES_LOOKBACK_CONFIG</code> 对应周期的 bars（周期缺失回退 300 根；bars&lt;=0 视为「不限制」统一落天勤上限 10000）；随后循环 <code>wait_update</code> 等待数据加载，直到至少 <code>min(50, num_bars//5)</code> 根到位或 30 次等待超时。若传入 <code>start_time</code>（手动选点场景），还会在拉取后按时间过滤，只保留该时间之后的 K 线。</p>
+          <p><strong>天勤有没有上限？有，但远大于本项目取值。</strong>天勤 <code>get_kline_serial</code> 的第三个参数 <code>data_length</code>（默认 200 根）就是「让用户指定获取多少根」的接口：返回从当前最新一根 K 线往回取 <code>data_length</code> 根。官方文档注明<strong>每个序列最大支持请求 10000 个数据</strong>（tqsdk 3.x；早期版本为 8964）。本项目的 2000 / 1000 / 500 / 300 全部远低于上限，无需担心超限；若未来需要更长历史，直接调大 <code>AppConfig.FUTURES_LOOKBACK_CONFIG</code> 对应周期的 bars 即可（仍受 10000 上限约束，填 0 即「不限制」）。</p>
           <p><strong>双窗口的取数组合：</strong>30m 双窗口 = 上窗 300 根 + 下窗 500 根；5m 双窗口 = 上窗 500 根 + 下窗 1000 根；1m 双窗口 = 上窗 1000 根 + 下窗 2000 根。上窗与下窗各自独立拉取、独立做 chan 分析（下窗先、上窗后），互不共享 K 线条数。</p>
           <p><strong>实时循环不是「全量重取」：</strong>一个常见误解是「每次 update 都重新获取最新 2000 根再重算」。实际不是。<code>get_kline_serial</code> 创建的是一个<strong>实时滚动序列对象</strong>，创建后天勤在后台原地维护它（始终是最新 <code>data_length</code> 根）；实时循环只是反复读同一个 <code>klines.iloc[-1]</code>（<code>FrontAPI.py:555</code>）判断新 K 线，<strong>从不重新拉取</strong>。K 线完成时只做两件事：<code>append_bar</code> 追加一根新 bar 到 <code>CTqSdkAPI._records_by_symbol</code>（L700），然后 <code>step_load(chan)</code> 原地增量重算（L703）。所以「单窗口不写 <code>_futures_analysis_cache</code>」的<strong>真正原因不是数据全量</strong>，而是<strong>没有消费者</strong>——该缓存唯一用途是给红框中枢提供双窗口下窗 CChan，单窗口没有这个需求。</p>
         </div>
