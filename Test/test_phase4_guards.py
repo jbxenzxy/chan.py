@@ -495,7 +495,8 @@ def test_semantic_subchan(failures):
     bad = []
 
     # 接口齐备
-    for fn in ("set_futures_sub_chan", "get_futures_sub_chan", "pop_futures_sub_chan"):
+    for fn in ("set_futures_sub_chan", "get_futures_sub_chan", "pop_futures_sub_chan",
+               "futures_cache_clear"):
         if not hasattr(app_data, fn):
             bad.append(f"app_data.{fn} 缺失（语义化子窗接口不完整）")
     for fn in ("futures_set_sub_chan", "futures_get_sub_chan", "futures_pop_sub_chan"):
@@ -522,6 +523,11 @@ def test_semantic_subchan(failures):
             bad.append("pop_futures_sub_chan 未返回被释放对象")
         if probe.get_futures_sub_chan("KQ.m@SHFE.rb", "1m") is not None:
             bad.append("pop 后仍可读（子窗 chan 泄漏）")
+        # 整池清空：期货切股票时 _cleanup_all_futures_data 须能清掉全部残留
+        probe.set_futures_sub_chan("kq.m@shfe.rb", "1m", sentinel)
+        probe.futures_cache_clear()
+        if probe.get_futures_sub_chan("KQ.m@SHFE.rb", "1m") is not None:
+            bad.append("futures_cache_clear 后仍可读（期货切股票残留风险）")
     finally:
         restore()
 

@@ -403,6 +403,16 @@ class AppData:
         """期货分析缓存失效（子级别切换时释放旧中间状态）"""
         return self._futures_analysis_cache.pop(key, default)
 
+    def futures_cache_clear(self):
+        """清空全部期货分析缓存（持 _cache_lock，线程安全）
+
+        期货切股票时由 _cleanup_all_futures_data 调用：双窗下窗 chan
+        若残留，后续区间套 check_nested_diver / compute_red_range_zs
+        经 futures_cache_get 会读到过期中间状态，必须整池清空。
+        """
+        with self._cache_lock:
+            self._futures_analysis_cache.clear()
+
     # ── 语义化子窗接口（key 规则内聚于数据层，调用方不手工拼接  ──
     #    "{SYMBOL}:{sub_freq}"，大小写规则单一事实源）
     def set_futures_sub_chan(self, symbol, sub_freq, chan):

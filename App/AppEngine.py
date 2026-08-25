@@ -139,7 +139,8 @@ DUAL_SUB_FALLBACK_MIN = app_config.dual_sub_fallback_min
 # 频率映射/别名/支持列表/fetch_kline 一律经 CTqSdkAPI 元数据接口访问
 # （CommonStockAPI 抽象层），不直接 import。
 try:
-    from DataAPI.TqSdkAPI import CTqSdkAPI, _get_futures_name, load_tq_account, set_futures_lookback_config
+    from DataAPI.TqSdkAPI import (CTqSdkAPI, _get_futures_name, load_tq_account,
+                                  set_futures_lookback_config, resolve_lookback_bars)
     load_tq_account(app_config.vipdoc_dir)
     # 注入期货历史回看配置（AppConfig 单一事实源 → DataAPI 层，单向）
     set_futures_lookback_config(app_config.futures_lookback_config)
@@ -149,6 +150,7 @@ except ImportError as e:
     _get_futures_name = None
     load_tq_account = None
     set_futures_lookback_config = None
+    resolve_lookback_bars = None
     TQ_AVAILABLE = False
     log.warning(f"[警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
 

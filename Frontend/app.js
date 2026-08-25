@@ -45,57 +45,6 @@
         // （config.view_count，见 App/AppConfig.py 的 VIEW_COUNT），此默认值仅作离线兜底。
         let VIEW_COUNT = 377;
 
-        // 股票双窗：下窗视口对齐上窗视口「首末K线时间范围」：
-        //   - _parseViewDate：日期型(仅日期)按当日 00:00(左)/23:59:59(右) 归一，日内按原时刻；
-        //   - alignDualSubViewport：把下窗视口 [dualSubViewOffset, +dualSubViewCount]
-        //     重算为上窗当前视口时间范围内对应下窗K线；下窗数据不足则降为「全量加载与显示」；
-        //   - key 守卫：仅上窗视口(viewOffset/viewCount)或下窗数据变化时重算，
-        //     避免悬停/常规重绘把下窗独立缩放/平移打回。
-        let _alignedSubRef = null, _alignedSubTs = null, _lastAlignKey = '';
-        function _parseViewDate(ds, forEnd) {
-            const d = ds.length === 10
-                ? new Date(ds.replace(/\//g, "-") + (forEnd ? "T23:59:59.999" : "T00:00:00.000"))
-                : new Date(ds.replace(/\//g, "-").replace(" ", "T"));
-            return d.getTime();
-        }
-        function alignDualSubViewport() {
-            if (!isDualWindow || !dualSubData || !dualSubData.klines
-                || !chartData || !chartData.klines) return;
-            // 期货双窗不参与对齐（保持独立视口）
-            if (chartData.meta && chartData.meta.market === 'futures') return;
-            const sK = dualSubData.klines, mK = chartData.klines;
-            if (!mK.length || !sK.length) return;
-            if (dualSubData !== _alignedSubRef) {
-                _alignedSubRef = dualSubData;
-                _alignedSubTs = sK.map(k => _parseViewDate(k.date, false));
-                _lastAlignKey = ''; // 新数据必须先重算一次
-            }
-            const key = viewOffset + ':' + viewCount;
-            if (key === _lastAlignKey) return;
-            _lastAlignKey = key;
-            let firstIdx = Math.max(0, Math.floor(viewOffset));
-            let lastIdx = firstIdx + Math.floor(viewCount) - 1;
-            if (lastIdx >= mK.length) lastIdx = mK.length - 1;
-            if (firstIdx > lastIdx) return;
-            const startD = _parseViewDate(mK[firstIdx].date, false);
-            const endD = _parseViewDate(mK[lastIdx].date, true);
-            const ts = _alignedSubTs;
-            let lo = 0, hi = ts.length;
-            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < startD) lo = mid + 1; else hi = mid; }
-            const sFirst = (lo < ts.length) ? lo : -1;
-            lo = 0; hi = ts.length;
-            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] <= endD) lo = mid + 1; else hi = mid; }
-            const sLast = lo - 1;
-            if (sFirst < 0 || sLast < 0 || sFirst > sLast) {
-                dualSubViewOffset = 0;
-                dualSubViewCount = sK.length; // 下窗无法对齐上窗范围 -> 降为全量
-                return;
-            }
-            dualSubViewOffset = sFirst;
-            dualSubViewCount = sLast - sFirst + 1;
-        }
-
-
         const PADDING = { top: 20, right: 22, bottom: 36, left: 10 };
 
         const VOL_RATIO = 0.2, GAP = 12;
@@ -289,6 +238,56 @@
         // [COMPONENT] KLineChart —— K线图表组件（渲染引擎 / 坐标系 / 交互 / 倒计时）
         // 对外接口（ChanApp.components.KLineChart）: render, renderSingle, renderTop, renderBottom, resizeCanvas, priceToY, yToPrice, getChartArea, getVisibleKlines, getPriceRange, drawCandles, drawBiLines, drawZs, drawBspMarkers, drawMaLines, drawCrosshair, drawDateAxis, onWheel, toggleOverlay, toggleDualWindow, applyOverlayButtonStates, cancelSelectedPoint
 // ══════════════════════════════════════════════════════════════════
+
+        // 股票双窗：下窗视口对齐上窗视口「首末K线时间范围」：
+        //   - _parseViewDate：日期型(仅日期)按当日 00:00(左)/23:59:59(右) 归一，日内按原时刻；
+        //   - alignDualSubViewport：把下窗视口 [dualSubViewOffset, +dualSubViewCount]
+        //     重算为上窗当前视口时间范围内对应下窗K线；下窗数据不足则降为「全量加载与显示」；
+        //   - key 守卫：仅上窗视口(viewOffset/viewCount)或下窗数据变化时重算，
+        //     避免悬停/常规重绘把下窗独立缩放/平移打回。
+        let _alignedSubRef = null, _alignedSubTs = null, _lastAlignKey = '';
+        function _parseViewDate(ds, forEnd) {
+            const d = ds.length === 10
+                ? new Date(ds.replace(/\//g, "-") + (forEnd ? "T23:59:59.999" : "T00:00:00.000"))
+                : new Date(ds.replace(/\//g, "-").replace(" ", "T"));
+            return d.getTime();
+        }
+        function alignDualSubViewport() {
+            if (!isDualWindow || !dualSubData || !dualSubData.klines
+                || !chartData || !chartData.klines) return;
+            // 期货双窗不参与对齐（保持独立视口）
+            if (chartData.meta && chartData.meta.market === 'futures') return;
+            const sK = dualSubData.klines, mK = chartData.klines;
+            if (!mK.length || !sK.length) return;
+            if (dualSubData !== _alignedSubRef) {
+                _alignedSubRef = dualSubData;
+                _alignedSubTs = sK.map(k => _parseViewDate(k.date, false));
+                _lastAlignKey = ''; // 新数据必须先重算一次
+            }
+            const key = viewOffset + ':' + viewCount;
+            if (key === _lastAlignKey) return;
+            _lastAlignKey = key;
+            let firstIdx = Math.max(0, Math.floor(viewOffset));
+            let lastIdx = firstIdx + Math.floor(viewCount) - 1;
+            if (lastIdx >= mK.length) lastIdx = mK.length - 1;
+            if (firstIdx > lastIdx) return;
+            const startD = _parseViewDate(mK[firstIdx].date, false);
+            const endD = _parseViewDate(mK[lastIdx].date, true);
+            const ts = _alignedSubTs;
+            let lo = 0, hi = ts.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] < startD) lo = mid + 1; else hi = mid; }
+            const sFirst = (lo < ts.length) ? lo : -1;
+            lo = 0; hi = ts.length;
+            while (lo < hi) { const mid = (lo + hi) >> 1; if (ts[mid] <= endD) lo = mid + 1; else hi = mid; }
+            const sLast = lo - 1;
+            if (sFirst < 0 || sLast < 0 || sFirst > sLast) {
+                dualSubViewOffset = 0;
+                dualSubViewCount = sK.length; // 下窗无法对齐上窗范围 -> 降为全量
+                return;
+            }
+            dualSubViewOffset = sFirst;
+            dualSubViewCount = sLast - sFirst + 1;
+        }
 
         // 从 localStorage 恢复叠加层开关状态
         function loadOverlaySettings() {

@@ -20,9 +20,10 @@ import time
 import traceback
 from datetime import datetime
 
-# 引擎侧依赖（仅引擎私有实现：天勤数据源 / 期货名称）
+# 引擎侧依赖（仅引擎私有实现：天勤数据源 / 期货名称 / 回看根数折算；
+# resolve_lookback_bars 与 CTqSdkAPI 同路线经 AppEngine 显式名，不直连 DataAPI）
 from App.AppEngine import (
-    TQ_AVAILABLE, CTqSdkAPI, _get_futures_name,
+    TQ_AVAILABLE, CTqSdkAPI, _get_futures_name, resolve_lookback_bars,
 )
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError
@@ -101,7 +102,6 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
     返回 (fetch_bars, base_bars_out)：fetch_bars 传给 fetch_kline 的 num_bars；
     base_bars_out 为 C 模式截断到末 N 根的目标根数（A/B 模式不额外截断）。
     """
-    from DataAPI.TqSdkAPI import resolve_lookback_bars
     n = base_bars if base_bars and base_bars > 0 else resolve_lookback_bars(freq_sec)
     now = datetime.now()
     if end_time:
@@ -692,7 +692,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         #   · B（上窗选点 T）：跟随上窗 [T, 最新]，按墙钟估算下窗根数（init_chan_symbol 内处理）
         #   · C（复盘）：跟随上窗 [end-N_main, end]，下窗折算根数 + end→now 流逝根数
         #   · 全部封顶天勤上限 10000；超限自然降级「对齐不足 → 全量（最近10000根）」
-        from DataAPI.TqSdkAPI import resolve_lookback_bars
         _main_base_bars = resolve_lookback_bars(main_freq_sec)
         _sub_align_ratio = main_freq_sec / sub_freq_sec if sub_freq_sec > 0 else 1.0
         _sub_aligned_bars = min(int(_main_base_bars * _sub_align_ratio) + _BAR_ESTIMATE_MARGIN, _TQ_MAX_BARS)
@@ -1733,6 +1732,11 @@ def _cleanup_all_futures_data():
         del app_data.saved_point_times[k]
     if pts_to_del:
         log.info(f"[清理] 已清除 {len(pts_to_del)} 条期货选点记录")
+
+    # 3. 清空期货分析缓存（双窗下窗 chan 残留：不清空则切回后
+    #    check_nested_diver 经 futures_cache_get 读到过期中间状态）
+    app_data.futures_cache_clear()
+    log.info("[清理] 已清空期货分析缓存")
 
 
 def futures_cleanup():
