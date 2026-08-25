@@ -8,9 +8,8 @@
   python Script/ths_sync_to_tdx.py --append     # 追加模式：在现有基础上追加
 
 依赖：
-  - Script/ths_cloud_api.py（同目录，P2-2 随本工具一并迁入 Script/）
-  - App/AppData.py（自选股写入原语，阶段 4 自 DataAPI/TdxAPI.py 收敛至此）
-  - App/AppConfig.py（vipdoc 目录发现，阶段 2 起替代源码解析）
+  - DataAPI/ThsCloudZxgAPI.py（同花顺云端自选股 API，DataAPI 层，自仓库根以包形式导入）
+  - App/AppData.py（app_data 单一写入源：zxg_blk_path 路径推导 + sync_zxg_blk 全量同步）
 """
 import sys
 import os
@@ -20,12 +19,9 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 repo_root = os.path.dirname(script_dir)
 if repo_root not in sys.path:
     sys.path.insert(0, repo_root)
-from DataAPI.TdxAPI import set_tdx_config  # 数据源配置注入（板块文件原语仍在 DataAPI）
 from App.AppLog import get_logger
 log = get_logger(__name__)
-
-
-CONFIG_FILE = os.path.join(script_dir, ".sync_tdx_config")
+from App.AppData import app_data  # 自选股读写单一写入源（收敛：不再在本脚本内重复实现）
 
 # =========================================================
 # 同花顺板块编码规则（88xxxx 开头为同花顺私有指数，同步时跳过）
@@ -73,251 +69,22 @@ CONFIG_FILE = os.path.join(script_dir, ".sync_tdx_config")
 STANDARD_INDEX_CODES = {"000001", "000300", "000905", "000852", "000688", "399001", "399006"}
 
 
-def setup_tdx_config():
-    """发现 vipdoc_dir 并注入 TdxAPI 配置
-
-    阶段 2（V10 方案 8.3 ④）：vipdoc 发现统一读 App/AppConfig.py
-    （环境变量 / .env / 默认值），彻底移除对 my_chan_main.py 的正则源码解析
-    ——该机制随配置搬家/改写即静默失效，是本工具最脆弱的一环。
-
-    发现顺序：
-      1. AppConfig.vipdoc_dir（TDX_INSTALL_DIR 环境变量 / .env / 默认值推导）
-      2. 环境变量 TDX_VIPDOC_DIR（历史直配入口，保留兼容）
-      3. 本地缓存 .sync_tdx_config（旧版本工具遗留）
-    """
-    from App.AppConfig import app_config
-
-    # 1. AppConfig（单一配置源）
-    vipdoc_dir = app_config.vipdoc_dir
-    if vipdoc_dir and os.path.isdir(vipdoc_dir):
-        set_tdx_config(vipdoc_dir=vipdoc_dir)
-        log.info(f"[配置] 从 AppConfig 读取: {vipdoc_dir}")
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            f.write(vipdoc_dir)
-        return True
-
-    # 2. 环境变量 TDX_VIPDOC_DIR（历史直配入口）
-    vipdoc_dir = os.environ.get("TDX_VIPDOC_DIR")
-    if vipdoc_dir:
-        set_tdx_config(vipdoc_dir=vipdoc_dir)
-        log.info(f"[配置] 从环境变量读取: {vipdoc_dir}")
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            f.write(vipdoc_dir)
-        return True
-
-    # 3. 本地缓存（旧版本工具遗留的 .sync_tdx_config）
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                vipdoc_dir = f.read().strip()
-            if vipdoc_dir and os.path.isdir(vipdoc_dir):
-                set_tdx_config(vipdoc_dir=vipdoc_dir)
-                return True
-        except Exception:
-            pass
-
-    log.warning("[警告] 未找到通达信 vipdoc 目录。请在仓库根 .env 设置 TDX_INSTALL_DIR，"
-          "或设置环境变量 TDX_VIPDOC_DIR / TDX_INSTALL_DIR（详见 .env.example）")
-    return False
-
-
-# 标准指数在 TDX zxg.blk 中的格式（SH=1前缀, SZ=0前缀）
-TDX_STANDARD_INDICES = {"1000001", "0399001", "1000300", "1000905", "1000852", "0399006", "1000688"}
-
-# =============================================================================================
-# 通达信扩展市场 zxg.blk 格式说明
-# =============================================================================================
+# =============================================================================
+# 通达信自选股 zxg.blk 格式说明（写盘格式知识已在 App/AppData.py 收敛为单一源）
+# =============================================================================
 # 通达信自选股文件 zxg.blk 中，不同市场的代码格式：
 #   A 股：     {市场前缀}{6位代码}        如 1600519(沪)、0000001(深)、2830067(北)
 #   港股个股：  31#{5位代码}               如 31#00700
 #   港股指数：  27#HZ{4位数字}             如 27#HZ5489
-#   美股个股：  74#{代码}                  如 74#AAPL、74#XBI
+#   美股个股：  74#{代码}                  如 74#AAPL
 #   美股指数：  12#A_{代码}                如 12#A_NBI
 #
 # 市场编号参考：通达信量化平台常量枚举
 #   31=香港交易所  74=美国股票  27=港股指数  12=美股指数(桌面客户端)
-# =============================================================================================
-# 港股指数 同花顺代码 → 通达信内部代码映射
-# 注意：同花顺 API 返回的是 HS+数字 代码（如 HS2083），不是显示名（如 HSTECH）
-#       通达信港股指数使用 HZ+数字 的内部代码，两者完全不同，无法算法推导
-# 如需新增映射，请在通达信中手工加入该指数后导出 zxg.blk 查看实际代码
-HK_INDEX_MAP = {
-    "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
-    "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
-}
-
-# 美股指数（非个股） 同花顺代码 → 通达信内部代码映射
-# 通达信美股指数在 zxg.blk 中带 A_ 前缀
-US_INDEX_MAP = {
-    "NBI": "A_NBI",      # 纳斯达克生物科技指数
-}
-
-
-def _read_preserved_codes(blk_path):
-    """
-    读取通达信 zxg.blk 中已有的保留代码（标准指数 + 88xxxx 私有指数）
-    替换模式时保留，不被覆盖，并保持在文件开头
-    注意：通达信 zxg.blk 中 88xxxx 代码带 SH 前缀 1，格式为 188xxxx
-    :param blk_path: zxg.blk 完整路径
-    :return: [保留代码列表]
-    """
-    if not os.path.exists(blk_path):
-        return []
-    codes = []
-    try:
-        with open(blk_path, "r", encoding="gbk") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                # 匹配: 88xxxx（无前缀）或 188xxxx（SH前缀）或 标准指数（SH/SZ前缀）
-                if line.startswith("88") or line.startswith("188") or line in TDX_STANDARD_INDICES:
-                    codes.append(line)
-    except Exception:
-        pass
-    return codes
-
-
-def find_tdx_zxg_path():
-    """自动查找通达信自选股文件路径
-
-    P2-8 硬编码配置化：优先读配置中心 app_config.tdx_install_dir
-    （Windows 默认 C:\\new_tdx_hd_test，可由 .env / 环境变量 TDX_INSTALL_DIR 覆盖），
-    不再把安装路径硬编码在候选列表首位；候选列表仅作兜底探测。
-    """
-    candidates = []
-
-    # P2-8：配置中心单一事实源（Windows 默认 C:\new_tdx_hd_test）
-    try:
-        from App.AppConfig import app_config
-        cfg_root = app_config.tdx_install_dir
-        if cfg_root:
-            candidates.append(cfg_root)
-    except Exception:
-        pass
-
-    # 常见通达信安装路径（兜底探测，配置中心未命中时使用）
-    tdx_roots = [
-        r"C:\new_tdx_hd_test",
-        r"C:\new_tdx_hd",
-        r"D:\new_tdx_hd_test",
-        r"D:\new_tdx_hd",
-        r"C:\同花顺",
-        r"C:\同花顺软件",
-        r"D:\同花顺",
-        r"D:\同花顺软件",
-    ]
-
-    for root in tdx_roots:
-        if os.path.isdir(root):
-            candidates.append(root)
-
-    # 如果以上都不存在，尝试搜索注册表或常见位置
-    # 这里简单处理：返回第一个存在的路径
-    for root in candidates:
-        zxg_dir = os.path.join(root, r"T0002\hq_block")
-        if os.path.isdir(zxg_dir):
-            return zxg_dir
-
-    return None
-
-
-def find_save_to_zxg_blk():
-    """尝试导入 save_to_zxg_blk 函数（阶段 4 起实现收敛 App/AppData.py，
-    仓库根已在模块头注入 sys.path，App 包自仓库根导入）"""
-    try:
-        from App.AppData import app_data   # 业务数据层：自选股存哪里、怎么存
-        return app_data.save_to_zxg_blk
-    except ImportError:
-        return None
-
-
-def _convert_codes_to_tdx_lines(codes_list):
-    """
-    将标准格式代码列表转换为通达信 zxg.blk 行格式。
-
-    各市场输出格式：
-      A 股：     {前缀}{6位代码}    如 1600519
-      港股个股：  31#{5位代码}       如 31#00700
-      港股指数：  27#{HZ代码}       如 27#HZ5489  （需 HK_INDEX_MAP 映射）
-      美股个股：  74#{代码}         如 74#XBI
-      美股指数：  12#A_{代码}       如 12#A_NBI   （需 US_INDEX_MAP 映射）
-
-    :param codes_list: ["600519.SH", "000001.SZ", "00700.HK", "NBI.US", "1A0001", ...]
-    :return: [通达信格式行列表]
-    """
-    prefix_map = {"SH": "1", "SZ": "0", "BJ": "2"}
-    lines = []
-    for code_full in codes_list:
-        code_full = code_full.strip()
-        if not code_full:
-            continue
-        if "." not in code_full:
-            # 无后缀（如指数原始代码 1A0001、188xxxx 等），原样保留
-            lines.append(code_full)
-            continue
-        parts = code_full.rsplit(".", 1)
-        if len(parts) != 2:
-            continue
-        code, suffix = parts
-        suffix = suffix.upper()
-        code_upper = code.upper()
-        if suffix == "HK":
-            if code_upper in HK_INDEX_MAP:
-                # 港股指数：27# + 通达信内部代码（如 27#HZ5489）
-                lines.append("27#" + HK_INDEX_MAP[code_upper])
-            else:
-                # 港股个股：31# + 5位代码（如 31#00700）
-                lines.append("31#" + code.zfill(5))
-        elif suffix == "US":
-            if code_upper in US_INDEX_MAP:
-                # 美股指数：12# + 通达信内部代码（如 12#A_NBI）
-                lines.append("12#" + US_INDEX_MAP[code_upper])
-            else:
-                # 美股个股：74# + 原始代码（如 74#XBI）
-                lines.append("74#" + code)
-        elif suffix in prefix_map:
-            lines.append(f"{prefix_map[suffix]}{code}")
-    return lines
-
-
-def write_tdx_zxg_direct_to_file(blk_path, codes_list):
-    """
-    直接写入通达信自选股文件（全量覆盖，不依赖 DataAPI）
-
-    :param blk_path: zxg.blk 的完整路径
-    :param codes_list: 代码列表
-    :return: 写入数量
-    """
-    lines = _convert_codes_to_tdx_lines(codes_list)
-    if not lines:
-        log.warning("[警告] 没有可写入的股票代码")
-        return 0
-
-    with open(blk_path, "w", encoding="gbk") as f:
-        f.write("\n".join(lines) + "\n")
-
-    return len(lines)
-
-
-def write_tdx_zxg_direct(zxg_dir, codes_list):
-    """
-    直接写入通达信自选股文件（不依赖 DataAPI，旧版兼容）
-
-    :param zxg_dir: 通达信 block 文件目录
-    :param codes_list: 代码列表，支持格式：
-        - 600519.SH → 1600519
-        - 000001.SZ → 0000001
-        - 00700.HK → HK00700
-        - 1A0001（指数，无后缀）→ 1A0001
-    :return: 写入数量
-    """
-    block_file = os.path.join(zxg_dir, "zxg.blk")
-    if not os.path.isdir(zxg_dir):
-        log.error(f"[错误] 通达信自选股目录不存在: {zxg_dir}")
-        return 0
-
-    return write_tdx_zxg_direct_to_file(block_file, codes_list)
+#
+# 港股指数（HS→HZ）与美股指数（A_ 前缀）的同花顺→通达信映射、以及标准指数
+# 保留（TDX_STANDARD_INDICES），统一由 App/AppData.py 持有并用于写入。
+# =============================================================================
 
 
 def main():
@@ -330,11 +97,11 @@ def main():
     parser.add_argument("--cookie-file", type=str, default=None, help="同花顺Cookie文件路径")
     args = parser.parse_args()
 
-    # 1. 导入同花顺 API（P2-2：ths_cloud_api.py 与本脚本同在 Script/，自仓库根以包形式导入）
+    # 1. 导入同花顺 API（DataAPI/ThsCloudZxgAPI.py，自仓库根以包形式导入）
     try:
-        from Script.ths_cloud_api import THSCloudAPI
+        from DataAPI.ThsCloudZxgAPI import CThsCloudZxg
     except ImportError:
-        log.error("[错误] 找不到 Script/ths_cloud_api.py，请确保 Script/ 目录完整（P2-2 已迁入 Script/）")
+        log.error("[错误] 找不到 DataAPI/ThsCloudZxgAPI.py，请确保 DataAPI/ 目录完整")
         sys.exit(1)
 
     # 2. 连接同花顺
@@ -342,10 +109,7 @@ def main():
     log.info("  同花顺 -> 通达信 自选股同步")
     log.info("=" * 50)
 
-    # 初始化通达信配置（关键：必须设置 vipdoc_dir 才能写入）
-    setup_tdx_config()
-
-    api = THSCloudAPI(cookie_file=args.cookie_file)
+    api = CThsCloudZxg(cookie_file=args.cookie_file)
     if not api.check_login():
         log.error("[错误] 同花顺登录状态失效，请更新 Cookie")
         sys.exit(1)
@@ -358,25 +122,21 @@ def main():
         log.info("同花顺自选股为空，无需同步")
         return
 
-    # 检测通达信路径和写入方式（预览时就显示，方便用户确认）
-    save_fn = find_save_to_zxg_blk()
-    zxg_dir = args.tdx_path or find_tdx_zxg_path()
+    # 权威写入目标：非专业版通达信自选股固定位于 <安装目录>/T0002/blocknew/zxg.blk
+    # （普通版不存在 T0002/hq_block 目录；路径由 app_data.zxg_blk_path 单一事实源推导）
+    auto_blk = app_data.zxg_blk_path
 
-    # 如果用了 DataAPI，从数据层获取实际写入路径（用于清空操作；阶段 4 自含）
-    zxg_blk_path = None
-    if save_fn:
-        try:
-            zxg_blk_path = app_data.zxg_blk_path
-        except Exception:
-            pass
-
-    if zxg_blk_path:
-        pass
-    elif zxg_dir:
-        log.info(f"[检测] 通达信自选股目录: {zxg_dir}")
+    # --tdx-path 显式覆盖（两种传法均兼容：指向 zxg.blk 文件，或含它的目录）
+    if args.tdx_path:
+        p = args.tdx_path.rstrip("\\/")
+        blk_path = p if p.lower().endswith(".blk") else os.path.join(p, "zxg.blk")
     else:
-        log.info(f"[检测] 未找到通达信自选股目录")
-        log.info(f"       如需指定路径: --tdx-path C:\\new_tdx_hd_test\\T0002\\hq_block")
+        blk_path = auto_blk
+
+    if not blk_path:
+        log.error("[错误] 未找到通达信安装目录，无法推导自选股路径；请用 --tdx-path 指定 zxg.blk")
+        sys.exit(1)
+    log.info(f"[检测] 通达信自选股文件: {blk_path}")
 
     # 4. 按市场分类并转换代码格式
     # marketid -> (suffix, is_index, is_index_etf)
@@ -493,12 +253,8 @@ def main():
             parts.append(f"{mkt_name}(指数等)：{idx_n}只")
     log.info(f"[获取] 同花顺自选股: {len(stocks)} 只（{'   '.join(parts)}）")
 
-    # 读取通达信侧保留代码（标准指数 + 88xxxx 私有指数）
-    preserved = []
-    if zxg_blk_path:
-        preserved = _read_preserved_codes(zxg_blk_path)
-    elif zxg_dir:
-        preserved = _read_preserved_codes(os.path.join(zxg_dir, "zxg.blk"))
+    # 读取通达信侧保留代码（标准指数 + 88xxxx 私有指数），来自权威 blk 文件
+    preserved = app_data.read_preserved_zxg_lines(blk_path)
 
     # 构建跳过信息
     skip_parts = []
@@ -515,7 +271,7 @@ def main():
     # 去重
     codes_tdx = list(dict.fromkeys(codes_tdx))
 
-    log.info(f"合计：可同步{len(codes_tdx)}只 到 通达信自选股{zxg_blk_path or os.path.join(zxg_dir, 'zxg.blk')}")
+    log.info(f"合计：可同步{len(codes_tdx)}只 到 通达信自选股{blk_path}")
 
     if preserved:
         log.info(f"[保留] 通达信保留{len(preserved)}只：标准指数 + 私有指数（88xxxx）")
@@ -524,31 +280,13 @@ def main():
         log.info("[预览模式] 不写入文件")
         return
 
-    # 5. 写入通达信（默认替换模式：清空后再写入，但保留标准指数和 88xxxx 私有指数）
-    replace = not args.append  # 默认替换，--append 时不清空
+    # 5. 写入通达信（单一写入源 app_data.sync_zxg_blk）
+    #    replace（默认）：清空重写但保留标准指数/私有指数；--append 时在现有基础上追加
+    #    （去重 / 代码格式转换 / 指数保留均收敛于 AppData）
+    valid_suffix = ("SH", "SZ", "BJ", "HK", "US")
+    codes_to_write = [c for c in codes_tdx if "." not in c or c.rsplit(".", 1)[1] in valid_suffix]
 
-    if save_fn:
-        codes_to_write = [c for c in codes_tdx if "." not in c or c.rsplit(".", 1)[1] in ("SH", "SZ", "BJ", "HK", "US")]
-        if replace and zxg_blk_path:
-            all_codes = preserved + codes_to_write
-            all_codes = list(dict.fromkeys(all_codes))
-            os.makedirs(os.path.dirname(zxg_blk_path), exist_ok=True)
-            write_tdx_zxg_direct_to_file(zxg_blk_path, all_codes)
-        else:
-            save_fn(codes_to_write)
-    else:
-        if not zxg_dir:
-            log.error("[错误] 未找到通达信自选股目录")
-            log.info("  请用 --tdx-path 指定")
-            sys.exit(1)
-        if replace:
-            block_file = os.path.join(zxg_dir, "zxg.blk")
-            codes_to_write = [c for c in codes_tdx if "." not in c or c.rsplit(".", 1)[1] in ("SH", "SZ", "BJ", "HK", "US")]
-            all_codes = preserved + codes_to_write
-            all_codes = list(dict.fromkeys(all_codes))
-            write_tdx_zxg_direct_to_file(block_file, all_codes)
-        else:
-            write_tdx_zxg_direct(zxg_dir, codes_to_write)
+    app_data.sync_zxg_blk(codes_to_write, path=blk_path, append=args.append)
 
 
 if __name__ == "__main__":

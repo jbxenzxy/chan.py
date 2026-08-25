@@ -164,7 +164,7 @@ except ImportError as e:
 # 同花顺自选股同步（云端 API）
 # ============================================================
 try:
-    from Script.ths_cloud_api import save_scan_to_ths_cloud   # 同花顺云端扫描工具（Script/）
+    from DataAPI.ThsCloudZxgAPI import save_scan_to_ths_cloud  # 同花顺云端自选股 API（DataAPI/）
     _THS_CLOUD_AVAILABLE = True
 except ImportError:
     save_scan_to_ths_cloud = None

@@ -199,7 +199,7 @@ def zxg_save(codes):
                     ths_msg = f"云端同步失败: {err_str}"
                 log.info(f"[保存] 同花顺: {ths_msg}")
         else:
-            ths_msg = "Script/ths_cloud_api.py 未找到，请确保 Script/ 目录完整"
+            ths_msg = "DataAPI/ThsCloudZxgAPI.py 未找到，请确保 DataAPI/ 目录完整"
             log.info(f"[保存] 同花顺: {ths_msg}")
 
         log.info(f"[保存] 汇总: 通达信={tdx_added}, 同花顺={ths_added}, msg={ths_msg}")
@@ -226,7 +226,7 @@ def ths_cloud_available():
 def save_scan_to_ths_cloud(codes):
     """保存扫描结果到同花顺云端自选股"""
     if not _m._THS_CLOUD_AVAILABLE or _m.save_scan_to_ths_cloud is None:
-        return {"error": "ths_cloud_api.py 未找到，请确保该文件在 Script/ 目录"}
+        return {"error": "DataAPI/ThsCloudZxgAPI.py 未找到，请确保该文件在 DataAPI/ 目录"}
     return _m.save_scan_to_ths_cloud(codes)
 
 

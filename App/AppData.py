@@ -51,6 +51,10 @@ ZXG_US_INDEX_MAP = {
     "NBI": "A_NBI",
 }
 
+# 标准指数在 TDX zxg.blk 中的行格式（SH=1前缀, SZ=0前缀）
+# 全量同步时保留不覆盖（原 Script/ths_sync_to_tdx.py 中同义常量，随单一写入源上收）
+TDX_STANDARD_INDICES = {"1000001", "0399001", "1000300", "1000905", "1000852", "0399006", "1000688"}
+
 
 def safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
     """先写临时文件并校验 JSON 可读，再用 os.replace 覆盖正式文件；失败时保留旧文件。
@@ -121,6 +125,60 @@ def _read_zxg_blk_file(blk_path):
     except Exception as e:
         print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
     return stocks
+
+
+def _code_to_zxg_line(code_str):
+    """标准格式代码 → zxg.blk 行（自选股写盘格式知识，全量同步/追加写入共用）。
+
+    codes 形态：如 "600519.SH"、"000001.SZ"、"2830067.BJ"、"00700.HK"、
+    "HS2198.HK"、"NBI.US"、"12#A_NBI"（Index 指数）。
+    输出各市场格式：
+      A 股：     {前缀}{6位代码}    如 1600519
+      港股个股：  31#{5位代码}       如 31#00700
+      港股指数：  27#{HZ代码}       如 27#HZ5489   （ZXG_HK_INDEX_MAP 映射）
+      美股个股：  74#{代码}         如 74#NBI
+      美股指数：  12#A_{代码}       如 12#A_NBI    （ZXG_US_INDEX_MAP 映射）
+    无法识别返回 None（调用方跳过）。
+    """
+    c = code_str.strip().upper()
+    if not c:
+        return None
+    m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', c)
+    if m:
+        return {"SH": "1", "SZ": "0", "BJ": "2"}[m.group(2)] + m.group(1)
+    m2 = re.match(r'^(\w+)\.(HK|US)$', c)
+    if m2:
+        code, market = m2.group(1), m2.group(2)
+        if market == "HK":
+            if code in ZXG_HK_INDEX_MAP:
+                return "27#" + ZXG_HK_INDEX_MAP[code]
+            return "31#" + code.zfill(5)
+        if code in ZXG_US_INDEX_MAP:
+            return "12#" + ZXG_US_INDEX_MAP[code]
+        return "74#" + code
+    return None
+
+
+def _read_preserved_zxg_lines(path):
+    """读取 zxg.blk 中已有的保留代码（标准指数 + 通达信私有指数 88/188xxxx）。
+
+    全量同步（替换）时这些代码不被覆盖，并保持在自选股列表开头。
+    注意：通达信 zxg.blk 中 88xxxx 私有指数带 SH 前缀，格式为 188xxxx。
+    """
+    if not path or not os.path.exists(path):
+        return []
+    preserved = []
+    try:
+        with open(path, "r", encoding="gbk") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                if line in TDX_STANDARD_INDICES or line.startswith("88") or line.startswith("188"):
+                    preserved.append(line)
+    except Exception:
+        pass
+    return preserved
 
 
 # ════════════════════════════════════════════════════════════════
@@ -936,14 +994,8 @@ class AppData:
     def save_to_zxg_blk(self, codes):
         """将股票代码列表追加到通达信自选股文件 zxg.blk。
         codes: list of str，格式如 "000852.SH"、"600519.SH"、"00700.HK"、"NBI.US"
-        自动去重，已存在的不会重复添加。
-
-        各市场输出格式：
-          A 股：     {前缀}{6位代码}    如 1600519
-          港股个股：  31#{5位代码}       如 31#00700
-          港股指数：  27#{HZ代码}       如 27#HZ5489
-          美股个股：  74#{代码}         如 74#XBI
-          美股指数：  12#A_{代码}       如 12#A_NBI
+        自动去重，已存在的不会重复添加；无法识别的代码跳过。
+        格式转换单一源：本方法内部统一走 _code_to_zxg_line。
         """
         path = self.zxg_blk_path
         if not path:
@@ -965,50 +1017,64 @@ class AppData:
         added = 0
         with open(path, "a", encoding="gbk") as f:
             for code_str in codes:
-                code_str = code_str.strip().upper()
-                # A 股：纯数字 + SH/SZ/BJ 后缀
-                m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', code_str)
-                if m:
-                    code = m.group(1)
-                    market = m.group(2)
-                    if market == "SH":
-                        line = "1" + code
-                    elif market == "SZ":
-                        line = "0" + code
-                    else:  # BJ
-                        line = "2" + code
-                else:
-                    # 港股 / 美股：代码可能含字母（如 NBI.US、HSIDI.HK）
-                    m2 = re.match(r'^(\w+)\.(HK|US)$', code_str)
-                    if m2:
-                        code = m2.group(1)
-                        market = m2.group(2)
-                        if market == "HK":
-                            if code in ZXG_HK_INDEX_MAP:
-                                # 港股指数：27# + 通达信内部代码
-                                line = "27#" + ZXG_HK_INDEX_MAP[code]
-                            else:
-                                # 港股个股：31# + 5位代码
-                                line = "31#" + code.zfill(5)
-                        else:  # US
-                            if code in ZXG_US_INDEX_MAP:
-                                # 美股指数：12# + 通达信内部代码
-                                line = "12#" + ZXG_US_INDEX_MAP[code]
-                            else:
-                                # 美股个股：74# + 原始代码
-                                line = "74#" + code
-                    else:
-                        # 无法识别的格式，跳过
-                        log.info(f"[自选保存] 跳过无法识别的代码: {code_str}")
-                        continue
+                line = _code_to_zxg_line(code_str)
+                if line is None:
+                    log.info(f"[自选保存] 跳过无法识别的代码: {code_str.strip()}")
+                    continue
                 if line not in existing:
                     f.write(line + "\n")
                     existing.add(line)
                     added += 1
-                    log.info(f"[自选保存] 已添加到自选股: {code_str} -> {line}")
+                    log.info(f"[自选保存] 已添加到自选股: {code_str.strip()} -> {line}")
 
         log.info(f"[自选保存] 共添加 {added} 只股票到自选股")
         return added
+
+    def read_preserved_zxg_lines(self, path=None):
+        """读取 zxg.blk 中应保留的代码（标准指数 + 通达信私有指数 88/188xxxx）。
+
+        path 缺省取单一事实源 zxg_blk_path；'--tdx-path' 覆盖时传显式路径。
+        返回保留行列表（模块级 _read_preserved_zxg_lines 的实例化入口）。
+        """
+        return _read_preserved_zxg_lines(path if path else self.zxg_blk_path)
+
+    def sync_zxg_blk(self, codes, path=None, append=False):
+        """全量同步自选股到 zxg.blk（同花顺→通达信 单一写入源）。
+
+        replace（默认，append=False）：清空重写，仅保留标准指数与通达信私有指数
+          （88/188xxxx），不在目标列表的旧代码被移除——由 `codes` 全量决定。
+        append=True：在现有基础上追加（保留码依然保持开头，新增码去重）。
+
+        :param codes: 标准格式代码列表 ["600519.SH","00700.HK","NBI.US",...]
+        :param path: zxg.blk 路径，缺省取 self.zxg_blk_path；--tdx-path 覆盖时传入
+        :param append: True=追加模式，False=替换模式（默认）
+        :return: {"written": 实际写入行数, "preserved": 保留的行数}
+        """
+        blk_path = path if path else self.zxg_blk_path
+        if not blk_path:
+            return {"written": 0, "preserved": 0}
+        os.makedirs(os.path.dirname(blk_path), exist_ok=True)
+
+        preserved = _read_preserved_zxg_lines(blk_path)
+        new_lines = []
+        for c in codes:
+            line = _code_to_zxg_line(c)
+            if line is not None:
+                new_lines.append(line)
+
+        if append:
+            existing = []
+            if os.path.exists(blk_path):
+                with open(blk_path, "r", encoding="gbk") as f:
+                    existing = [ln.strip() for ln in f if ln.strip()]
+            final = list(dict.fromkeys(existing + preserved + new_lines))
+        else:
+            final = list(dict.fromkeys(preserved + new_lines))
+
+        with open(blk_path, "w", encoding="gbk") as f:
+            f.write("\n".join(final) + "\n")
+
+        return {"written": len(new_lines), "preserved": len(preserved)}
 
 
 # 全局单例（实例化即完成选点/标注启动加载）

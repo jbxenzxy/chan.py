@@ -5,8 +5,8 @@
 使用方法：
   1. 浏览器打开 https://t.10jqka.com.cn 并登录同花顺账号
   2. F12 → Network → 刷新页面 → 点击任意请求 → Request Headers → 复制 Cookie 值
-  3. 将 Cookie 写入 Script/ths_captured_cookie.txt 文件（P2-2 起随本模块位于 Script/，
-     运行 Script/ths_capture_cookie.py 自动生成），或通过环境变量 THS_COOKIE 设置
+  3. 将 Cookie 写入 Script/ths_captured_cookie.txt 文件（由 Script/ths_capture_cookie.py
+     自动生成），或通过环境变量 THS_COOKIE 设置
 """
 
 import requests
@@ -19,7 +19,7 @@ log = get_logger(__name__)
 
 
 
-class THSCloudAPI:
+class CThsCloudZxg:
     """同花顺云端自选股 API"""
 
     BASE_URL = "https://t.10jqka.com.cn"
@@ -45,7 +45,7 @@ class THSCloudAPI:
         初始化 API
         :param cookie: 同花顺登录后的完整 Cookie 字符串
         :param cookie_file: Cookie 文件路径，默认按以下顺序查找：
-                            ① Script/ths_captured_cookie.txt（随脚本自动跟随，P2-2 迁移后位置）
+                            ① Script/ths_captured_cookie.txt（ths_capture_cookie.py 生成位置）
                             ② 仓库根 ths_captured_cookie.txt（阶段 2 之前的历史位置，兼容回退）
                             ③ 环境变量 THS_COOKIE
         """
@@ -55,13 +55,14 @@ class THSCloudAPI:
             with open(cookie_file, 'r', encoding='utf-8') as f:
                 self.cookie = f.read().strip()
         else:
-            # 按优先级查找默认位置（⑤：路径随脚本目录自动跟随 + 历史位置兼容）
+            # 按优先级查找默认位置（路径随脚本目录自动跟随 + 历史位置兼容）
             _module_dir = os.path.dirname(os.path.abspath(__file__))
             _repo_root = os.path.dirname(_module_dir)
             self.cookie = ""
             for default_path in (
-                os.path.join(_module_dir, "ths_captured_cookie.txt"),   # Script/（现行位置）
-                os.path.join(_repo_root, "ths_captured_cookie.txt"),    # 仓库根（阶段 2 前位置）
+                os.path.join(_repo_root, "Script", "ths_captured_cookie.txt"),  # Script/（惯例位置）
+                os.path.join(_module_dir, "ths_captured_cookie.txt"),           # DataAPI/（本模块目录）
+                os.path.join(_repo_root, "ths_captured_cookie.txt"),            # 仓库根（阶段 2 前位置）
             ):
                 if os.path.exists(default_path):
                     with open(default_path, 'r', encoding='utf-8') as f:
@@ -75,7 +76,7 @@ class THSCloudAPI:
         if not self.cookie:
             raise ValueError(
                 "未找到同花顺 Cookie。请运行 Script/ths_capture_cookie.py 重新获取。\n"
-                "  手动方式：在 Script/ 目录创建 ths_captured_cookie.txt 文件并写入 Cookie\n"
+                "  手动方式：运行 Script/ths_capture_cookie.py，或手工创建 Script/ths_captured_cookie.txt 写入 Cookie\n"
                 "  或设置环境变量 THS_COOKIE"
             )
 
@@ -361,7 +362,7 @@ def save_scan_to_ths_cloud(
     :param replace: True=全量替换, False=增量添加
     :return: 操作结果
     """
-    api = THSCloudAPI(cookie=cookie, cookie_file=cookie_file)
+    api = CThsCloudZxg(cookie=cookie, cookie_file=cookie_file)
 
     if not api.check_login():
         return {"error": "登录状态失效，请更新 Cookie"}
@@ -404,7 +405,7 @@ if __name__ == "__main__":
     log.info("=" * 60)
 
     try:
-        api = THSCloudAPI()
+        api = CThsCloudZxg()
         if api.check_login():
             log.info("✅ 登录状态有效")
             stocks = api.get_self_stocks()
@@ -433,4 +434,4 @@ if __name__ == "__main__":
         log.info("  1. 浏览器打开 https://t.10jqka.com.cn 并登录")
         log.info("  2. F12 → Network → 刷新页面")
         log.info("  3. 点击任意请求 → Request Headers → 复制 Cookie 值")
-        log.info("  4. 将 Cookie 保存到 ths_captured_cookie.txt 文件中")
+        log.info("  4. 将 Cookie 保存到 Script/ths_captured_cookie.txt 文件中")
