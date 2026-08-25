@@ -163,7 +163,7 @@ TARGET_STATES = {
     "_SUB_FREQ_MAP":   ("ORCH_E", "子级别映射（2 读）"),
     # INTRADAY_FREQS / SUBSECOND_FREQS / _FREQ_SEC_TO_KL / _FUTURES_DUAL_FREQ_MAP
     # （P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
-    "TIME_TRUNCATE_CONFIG":   ("ORCH_E", "数据截断配置（→ ChanConfig/参数化）"),
+    "STOCKS_LOOKBACK_CONFIG": ("ORCH_E", "股票K线回看条数配置（→ ChanConfig/参数化）"),
     "FULL_DATA_MODE":  ("ORCH_E", "全量模式开关（→ ChanConfig）"),
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),
     "DEBUG_COLD_START_START_DATE": ("ORCH_E", "调试冷启动起（→ ChanConfig 调试参数）"),

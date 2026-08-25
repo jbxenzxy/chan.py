@@ -144,9 +144,10 @@ _set_tdx_hy_mapping(*app_data.load_tdxhy_mapping())
 # V10 复审 P1-1：改读配置中心 AppConfig，单一事实源在 app_config.full_data_mode。
 FULL_DATA_MODE = app_config.full_data_mode
 
-# 时间截断配置（仅 FULL_DATA_MODE=False 时生效）：{周期: (天数, 显示文本)}
-# V10 复审 P1-1：改读配置中心 AppConfig，单一事实源在 app_config.time_truncate_config。
-TIME_TRUNCATE_CONFIG = app_config.time_truncate_config
+# 股票K线回看配置（仅 FULL_DATA_MODE=False 时生效）：{周期: (K线根数, 显示文本)}
+# 语义与期货 FUTURES_LOOKBACK_CONFIG 一致：保留最近 N 根K线；N<=0 表示不限制。
+# V10 复审 P1-1：改读配置中心 AppConfig，单一事实源在 app_config.stocks_lookback_config。
+STOCKS_LOOKBACK_CONFIG = app_config.stocks_lookback_config
 
 # 双窗下窗「对齐不足降全量」阈值：下窗按上窗时间区间对齐截断后，
 # K线根数低于此值时降为全量（数据源覆盖不足的兜底，见 AppConfig 注释）。
@@ -157,14 +158,17 @@ DUAL_SUB_FALLBACK_MIN = app_config.dual_sub_fallback_min
 # 阶段 5（设计 8.8）：非标准导入收敛 —— 频率映射/别名/支持列表/fetch_kline
 # 一律经 CTqSdkAPI 元数据接口访问（CommonStockAPI 抽象层），不再直接 import。
 try:
-    from DataAPI.TqSdkAPI import CTqSdkAPI, _get_futures_code, _get_futures_name, load_tq_account
+    from DataAPI.TqSdkAPI import CTqSdkAPI, _get_futures_code, _get_futures_name, load_tq_account, set_futures_lookback_config
     load_tq_account(app_config.vipdoc_dir)
+    # 注入期货历史回看配置（AppConfig 单一事实源 → DataAPI 层，设计 4.4 单向）
+    set_futures_lookback_config(app_config.futures_lookback_config)
     TQ_AVAILABLE = True
 except ImportError as e:
     CTqSdkAPI = None
     _get_futures_code = None
     _get_futures_name = None
     load_tq_account = None
+    set_futures_lookback_config = None
     TQ_AVAILABLE = False
     log.warning(f"[警告] 天勤数据源未安装: {e}，期货功能不可用。pip install tqsdk")
 
@@ -564,10 +568,9 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
 
-        from datetime import timedelta
         # 复盘（C 操作）不加载双击选点：不读取 CSV 保存的选点。
-        # 左边界按 AppConfig 从「复盘结束时间」往前推——日K/周K 不限量，
-        # 30m/5m 按 TIME_TRUNCATE_CONFIG（仅当显式传入 start_time 才应用选点）。
+        # 左边界按 AppConfig 从「复盘结束时间」往前保留最近 N 根K线——日K/周K 不限量，
+        # 30m/5m 按 STOCKS_LOOKBACK_CONFIG（仅当显式传入 start_time 才应用选点）。
         if start_time is not None:
             start_dt = None
             for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
@@ -581,17 +584,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 records = [r for r in records if r["dt"] >= start_dt]
                 log.info(f"[信息] 复盘选点: 从选点时间 {start_time} 开始，筛选后 {before_count}条 -> {len(records)}条")
         else:
-            # 与冷启动一致，对30分/5分做时间截断，日K/周K不截断
-            if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
-                trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
-                # days<=0 表示不限制（如 w/d 显式配 (0,"不限制")），跳过截断
-                if trunc_days > 0:
-                    cutoff = target_dt - timedelta(days=trunc_days)
+            # 与冷启动一致，对30分/5分做根数截断，日K/周K不截断
+            if not FULL_DATA_MODE and len(records) > 0 and freq in STOCKS_LOOKBACK_CONFIG:
+                trunc_bars, trunc_text = STOCKS_LOOKBACK_CONFIG[freq]
+                # bars<=0 表示不限制（如 w 显式配 (0,"不限制")），跳过截断
+                if trunc_bars > 0 and len(records) > trunc_bars:
                     before_count = len(records)
-                    records = [r for r in records if r["dt"] >= cutoff]
-                    if before_count != len(records):
-                        log.info(f"[信息] 复盘截断(freq={freq}): 从{target_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
-                              f"{before_count}条 -> {len(records)}条")
+                    records = records[-trunc_bars:]
+                    log.info(f"[信息] 复盘截断(freq={freq}): 保留{trunc_text}, "
+                          f"{before_count}条 -> {len(records)}条")
 
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
@@ -624,19 +625,15 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 records = [r for r in records if r["dt"] >= start_dt]
                 log.info(f"[信息] 从选点时间 {start_time} 开始，筛选后 {len(records)} 条K线")
         else:
-            # 冷启动无选点：默认模式下对30分和5分做时间截断（全量模式跳过）
-            if not FULL_DATA_MODE and len(records) > 0 and freq in TIME_TRUNCATE_CONFIG:
-                from datetime import timedelta
-                latest_dt = records[-1]["dt"]
-                trunc_days, trunc_text = TIME_TRUNCATE_CONFIG[freq]
-                # days<=0 表示不限制（如 w/d 显式配 (0,"不限制")），跳过截断
-                if trunc_days > 0:
-                    cutoff = latest_dt - timedelta(days=trunc_days)
+            # 冷启动无选点：默认模式下对30分和5分做根数截断（全量模式跳过）
+            if not FULL_DATA_MODE and len(records) > 0 and freq in STOCKS_LOOKBACK_CONFIG:
+                trunc_bars, trunc_text = STOCKS_LOOKBACK_CONFIG[freq]
+                # bars<=0 表示不限制（如 w 显式配 (0,"不限制")），跳过截断
+                if trunc_bars > 0 and len(records) > trunc_bars:
                     before_count = len(records)
-                    records = [r for r in records if r["dt"] >= cutoff]
-                    if before_count != len(records):
-                        log.info(f"[信息] 按时间范围截取(freq={freq}): 从{latest_dt.strftime('%Y-%m-%d')}往前推{trunc_text}, "
-                              f"{before_count}条 -> {len(records)}条")
+                    records = records[-trunc_bars:]
+                    log.info(f"[信息] 按K线根数截取(freq={freq}): 保留{trunc_text}, "
+                          f"{before_count}条 -> {len(records)}条")
 
     # 双窗口：子级别数据同步截断到主级别时间范围
     # 避免 chan.py 分析不必要的全量子级别数据（如 30m+5m 时 5m 有 25152 条）

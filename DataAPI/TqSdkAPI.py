@@ -147,13 +147,14 @@ FREQ_LABEL_CN = {
     "15m": "15分", "30m": "30分", "60m": "60分", "d": "日线", "w": "周线", "M": "月线",
 }
 
-# 历史数据回看条数
-HISTORY_LOOKBACK_BARS = {
-    15: 2000,      # 15秒   2个交易日
-    60: 1000,      # 1分钟   4个交易日
-    300: 500,      # 5分钟   10个交易日
-    1800: 300,     # 30分钟  37个交易日
-}
+# 期货历史数据回看条数
+# 单一事实源在 App/AppConfig.py 的 FUTURES_LOOKBACK_CONFIG；因本文件属
+# DataAPI 层（设计 4.4：DataAPI 不反向依赖 App），配置由 AppEngine 启动时
+# 经 set_futures_lookback_config() 注入到模块级 _futures_lookback_config。
+# 不再维护本地 HISTORY_LOOKBACK_BARS 兜底常量：缺失周期一律回退默认 300 根。
+
+# 期货历史回看配置（标签键 → (bars, label)）；由 AppEngine 注入，默认空。
+_futures_lookback_config: dict = {}
 
 # 期货双窗口周期映射：上窗周期 → 下窗周期
 FUTURES_DUAL_FREQ_MAP = {
@@ -297,6 +298,17 @@ class CTqSdkAPI(CCommonStockApi):
 # ============================================================
 
 
+def set_futures_lookback_config(config: dict):
+    """注入期货历史回看配置（标签键 → (bars, label)）。
+
+    由 App/AppEngine.py 启动时调用，把 AppConfig.FUTURES_LOOKBACK_CONFIG
+    注入到本模块（DataAPI 层不反向依赖 App，见设计 4.4）。
+    传空 dict 可复位为空；缺失周期在 fetch_futures_kline 中回退默认 300 根。
+    """
+    global _futures_lookback_config
+    _futures_lookback_config = dict(config) if config else {}
+
+
 def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=None, start_time=None):
     """
     从天勤拉取历史 K 线数据，转换为 records 格式。
@@ -305,7 +317,14 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
     """
     t_start = _time.time()
     if num_bars is None:
-        num_bars = HISTORY_LOOKBACK_BARS.get(freq_sec, 300)
+        # 单一数据源：AppEngine 注入的 FUTURES_LOOKBACK_CONFIG（标签键 → (bars,label)）。
+        # 周期缺失或未注入时回退默认 300 根（不再有本地静态兜底常量）。
+        num_bars = 300
+        label = SEC_TO_LABEL.get(freq_sec)
+        if label is not None:
+            _cfg = _futures_lookback_config.get(label)
+            if _cfg is not None:
+                num_bars = _cfg[0]
 
     klines = api.get_kline_serial(symbol, freq_sec, num_bars)
 

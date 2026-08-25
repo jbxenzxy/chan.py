@@ -99,21 +99,35 @@ _FIELD_DEFAULTS = {
     "TQ_PASSWORD": "",
     "FORWARD_ADJUST_ENABLED": True,   # 前复权开关
     "FULL_DATA_MODE": False,          # 全量数据模式
-    # ── 后端加载K线「时间窗」配置 TIME_TRUNCATE_CONFIG ─────────────
+    # ── 各标的K线「回看条数」配置 ──────────────────────────────
+    # 键统一为 标的类型前缀 + LOOKBACK_CONFIG：STOCKS_ 股票 / FUTURES_ 期货。
+    # 值格式统一：(bars, label)，bars=保留最近 N 根K线（<=0 表示不限制）。
+    # ── 股票 STOCKS_LOOKBACK_CONFIG ─────────────────────────────
     # 【键】必须是程序内部周期键名，不是中文：
     #     w=周K  d=日K  60m/30m/15m/5m/1m=分时  15s=15秒
-    #     若键缺失，则该周期「不限制」，全量加载（当前 w/d 即走此路径）。
-    # 【值】二元组 (days, label)：
-    #     days —— 真正生效的字段：向前推多少天（整数，单位=自然日）。
-    #             从「最新K线(A操作)」或「复盘结束时间(C操作)」往前推 days 天。
-    #             days=0 或 days<0 表示「不限制」（此例补入 w/d 即用 0）；
-    #             days>0 表示限制，如 30m 取近180天、5m 取近90天（改0即可放开）。
+    #     股票实际仅 w/d/30m/5m 四个周期（前端禁用 1m/15s，数据源仅 .day/.lc5）。
+    #     若键缺失，则该周期「不限制」，全量加载（当前 w 即走此路径）。
+    # 【值】二元组 (bars, label)：
+    #     bars —— 真正生效的字段：保留最近多少根K线（整数，单位=根）。
+    #             从「最新K线(A操作)」或「复盘结束时间(C操作)」往前保留 bars 根。
+    #             bars=0 或 bars<0 表示「不限制」（此例补入 w 即用 0）；
+    #             bars>0 表示限制，如 30m 保留最近1000根、5m 保留最近3000根（改0即可放开）。
     #     label——简体中文说明，仅用于日志显示，【不参与截断计算】。
-    #             请保持与 days 一致，避免日志误导（如 days=180 却写 label="4个月"）。
-    # 【合法性】days 填任意整数天数：0=不限制，正数=向前推 N 天。建议用易于理解的天数。
+    #             请保持与 bars 一致，避免日志误导（如 bars=1000 却写 label="4个月"）。
+    # 【合法性】bars 填任意整数根数：0=不限制，正数=保留最近 N 根。建议用易于理解的根数。
     # 生效前提：FULL_DATA_MODE=False（全量数据模式跳过截断）。
-    "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (713, "近2年"), "30m": (180, "近6个月"), "5m": (90, "近3个月")},
-    # "TIME_TRUNCATE_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (0, "不限制"), "5m": (0, "不限制")},
+    "STOCKS_LOOKBACK_CONFIG": {"w": (0, "不限制"), "d": (472, "24年09月10日"), "30m": (500, "近3个月"), "5m": (1000, "近1个月")},
+    # ── 期货 FUTURES_LOOKBACK_CONFIG ──
+    # 与股票 STOCKS_LOOKBACK_CONFIG 值格式一致：(bars, label)；
+    # 但【键】不同：期货为 15s/1m/5m/30m（天勤主连不支持 d/w，已排除）。
+    #   bars —— 真正生效的字段：初始快照向天勤回看多少根K线（整数，单位=根）。
+    #           作为 api.get_kline_serial(..., num_bars) 的第三参传给 tqsdk，
+    #           fetch_futures_kline 末尾还会强制截断到 num_bars 以控制 step_load 耗时。
+    #           bars<=0 表示不限制（天勤当前仍会返回默认尾部；多数场景建议配正数）。
+    #   label——简体中文说明，仅用于日志显示，【不参与条数计算】。
+    # 单一事实源：经 AppEngine 启动注入 DataAPI/TqSdkAPI.py（原 HISTORY_LOOKBACK_BARS 已删除）。
+    "FUTURES_LOOKBACK_CONFIG": {"30m": (300, "近37个交易日"), "5m": (500, "近10个交易日"), "1m": (1000, "近4个交易日"), "15s": (2000, "近2个交易日")},
+    # "FUTURES_LOOKBACK_CONFIG": {"30m": (0, "不限制"), "5m": (0, "不限制"), "1m": (0, "不限制"), "15s": (0, "不限制")},
     # 前端视口默认显示的K线根数（所有周期相同，与后端加载根数解耦）：
     #   当后端加载的K线根数 > VIEW_COUNT，前端视口显示 VIEW_COUNT 根（右对齐）；
     #   当后端加载的K线根数 < VIEW_COUNT，前端视口降为「后端加载多少显示多少」（填满宽度）。
@@ -304,7 +318,8 @@ if _HAVE_PYDANTIC_SETTINGS:
         # ── 数据模式（引擎行为开关）────────────────────────────
         forward_adjust_enabled: bool = _FIELD_DEFAULTS["FORWARD_ADJUST_ENABLED"]  # 前复权开关
         full_data_mode: bool = _FIELD_DEFAULTS["FULL_DATA_MODE"]                   # 全量数据模式
-        time_truncate_config: dict = _FIELD_DEFAULTS["TIME_TRUNCATE_CONFIG"]      # 时间截断配置
+        stocks_lookback_config: dict = _FIELD_DEFAULTS["STOCKS_LOOKBACK_CONFIG"]  # 股票K线回看条数配置
+        futures_lookback_config: dict = _FIELD_DEFAULTS["FUTURES_LOOKBACK_CONFIG"]  # 期货K线回看条数配置
         view_count: int = _FIELD_DEFAULTS["VIEW_COUNT"]                           # 前端视口默认显示K线根数（所有周期相同）
         dual_sub_fallback_min: int = _FIELD_DEFAULTS["DUAL_SUB_FALLBACK_MIN"]     # 双窗下窗对齐截断后不足此数→降全量
         max_dual_cache_keys: int = _FIELD_DEFAULTS["MAX_DUAL_CACHE_KEYS"]         # 双窗结构化缓存键上限（共享池内单独限额）
