@@ -2,14 +2,14 @@
 """
 App/AppDownload.py —— 盘后下载功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：点击页面右上角「盘后下载」按钮后的操作。
+点击页面右上角「盘后下载」按钮后的操作。
 
 本模块收纳：
   - start_download_checked（带前置检查，GET/POST 共用）
   - start_download / stop_download / get_download_status
   - eltdx_available / download_dir
 
-阶段 5：职责内聚 DataAPI/ElTdxAPI.py，此处为薄封装（委托目标 ElTdxAPI）。
+下载职责内聚 DataAPI/ElTdxAPI.py，此处为薄封装（委托目标 ElTdxAPI）。
 """
 import json
 
@@ -25,7 +25,7 @@ def eltdx_available():
 
 
 def download_dir():
-    """盘后下载数据保存目录（阶段 4 配置中心化：app_config.download_dir）"""
+    """盘后下载数据保存目录（app_config.download_dir）"""
     from App.AppConfig import app_config
     return app_config.download_dir
 
@@ -34,8 +34,8 @@ def start_download_checked(categories, day_start=None, min_start=None):
     """盘后下载启动 · 带前置检查（/api/tdx_download_start GET/POST 共用）
 
     categories: GET 传 JSON 字符串，POST 传 list（两形态统一在此归一）。
-    返回 (result_dict, status_code)，语义与原路由一致（含 409 冲突码）。
-    阶段 5：委托 DataAPI/ElTdxAPI（下载目录经 app_config.download_dir）。
+    返回 (result_dict, status_code)（含 409 冲突码）。
+    委托 DataAPI/ElTdxAPI（下载目录经 app_config.download_dir）。
     """
     from DataAPI import ElTdxAPI as _eltdx
     from App.AppConfig import app_config

@@ -2,25 +2,23 @@
 """
 App/AppOrch.py —— 业务编排层（服务层）聚合入口
 =========================================================================
-阶段 8 重设计：按业务能力拆分后，本文件降级为聚合入口（re-export）。
-
-拆分后各功能文件（App + 动词命名，与 AppConfig/AppData/AppEngine 平铺）：
+本文件为聚合入口（re-export），各功能文件按业务能力拆分
+（App + 动词命名，与 AppConfig/AppData/AppEngine 平铺）：
   - AppChart.py      图表交互（左上角输入代码、切换周期、双窗口、复盘、手动选点、红框中枢）
   - AppSSE.py        SSE 实时流（期货实时行情推送 / 期货复盘 / 期货选点 / 期货元数据）
   - AppScan.py       股票扫描（右上角「股票扫描」按钮）
   - AppDownload.py   盘后下载（右上角「盘后下载」按钮）
   - AppRefresh.py    刷新（右上角「刷新」按钮：股票名/指数归属/PE-TTM/板块）
 
-标注归 AppChart（图表右键标注属图表交互域，原 AppAnnotate 已合并删除）。
+标注归 AppChart（图表右键标注属图表交互域）。
 
-本文件保留：
-  - 领域异常层级 re-export（AppError 等 6 类，定义已独立 App/AppErrors.py，
-    P2-3 为消除双轨并存并避免 AppSSE→AppOrch→AppChart→AppSSE 循环依赖；
+本文件持有：
+  - 领域异常层级 re-export（AppError 等 6 类，定义在 App/AppErrors.py；
     Test/test_phase2_guards.py 引用）
   - LOCK_POLICY 锁分类登记表（Test/test_phase3_guards.py 守护）
   - 全部业务函数 re-export（FrontAPI 的 orch.xxx 调用零改动）
 
-依赖方向（设计文档 6.2 节）：
+依赖方向：
   FrontAPI.py → App/AppOrch.py → 各功能文件 → AppEngine / AppData（单向）
 
 使用方式：
@@ -29,7 +27,7 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 """
 import threading
 
-# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
+# 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
 
 # ── 各功能域 re-export ─────────────────────────────────────────────────
@@ -72,13 +70,11 @@ from App.AppRefresh import (
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 引擎调用锁分类建档（阶段 3a）
+# 引擎调用锁分类建档
 # =====================================================================
-# 背景（阶段 2 遗留问题）：引擎全局缓存（_stocks_analysis_cache、
-# _futures_analysis_cache、名称/PE/市值缓存等）非线程安全，但阶段 2 仅
-# call_analysis / run_analysis 持锁，api_server 有 3 处直连引擎绕锁。
-#
-# 解法（非全面串行化）：给引擎调用按「是否触碰共享状态」分类建档——
+# 背景：引擎全局缓存（_stocks_analysis_cache、
+# _futures_analysis_cache、名称/PE/市值缓存等）非线程安全，
+# 引擎调用必须按「是否触碰共享状态」分类，防止绕锁并发写坏缓存。
 #
 #   SERIAL（串行分析）  REST 交互式分析路径（单标的分析 / 手动选点 /
 #                      红框中枢计算 / 期货选点）。共用 _ENGINE_LOCK：
@@ -89,8 +85,7 @@ from App.AppRefresh import (
 #                      票）：锁内串行化引擎调用 analyze_stock（保护非线程
 #                      安全的引擎缓存不被并发写），锁外的预处理/结果过滤
 #                      保留并发——即并发体现在非引擎阶段，引擎阶段全局
-#                      串行（阶段 2.6 基线继承语义，本阶段零改动，收敛
-#                      计划随阶段 5 数据层拆分一并处理）。
+#                      串行。
 #
 #   SELF_CONTAINED     SSE 期货实时流。每连接独立 TqApi + CChan 对象，
 #                      不触碰 _stocks_analysis_cache（_futures_analysis_
@@ -114,16 +109,16 @@ LOCK_POLICY = {
                                       "P3 独立双窗分支读下窗运行时缓存/dual_sub 缓存，miss 抛 DataFetchError（D6=B）"),
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
                                       "串行调用方必须改走 call_analysis / run_analysis"),
-    "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：同 analyze_stock，阶段 5 拆分时收敛"),
-    "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK；阶段 7 起前端批量扫描改走 SCAN_ASYNC，本径保留兼容"),
-    "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交（阶段 7）：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
+    "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：语义同 analyze_stock"),
+    "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
+    "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
     "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
 }
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 领域异常层级（定义独立 App/AppErrors.py，P2-3 起；见设计文档 7.7 节）
+# 领域异常层级（定义在 App/AppErrors.py）
 # 服务层只抛领域异常，API 层通过统一中间件捕获。
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -138,10 +133,10 @@ from App.AppErrors import (
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 兼容别名（阶段 8 拆分后，历史 import 路径仍可用）
+# 兼容别名：旧 import 路径仍可用
 # ═══════════════════════════════════════════════════════════════════════
 
-# ScannerService 旧名兼容（Test/test_phase3_guards.py 等历史引用）
+# ScannerService 旧名兼容（Test/test_phase3_guards.py 等引用）
 ScannerService = Scanner
 
 __all__ = [

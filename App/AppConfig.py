@@ -2,33 +2,25 @@
 """
 App/AppConfig.py —— 基础设施配置（配置中心 · 双文件之一）
 =========================================================================
-职责（V10 方案 7.1/7.2）：与运行环境相关的配置集中于此；
-算法参数在顶层 ChanConfig.py（双文件并行，职责分离）。
+职责：与运行环境相关的配置集中于此；算法参数在顶层 ChanConfig.py
+（双文件并行，职责分离，symbol_code 归 ChanConfig.py 管理）。
 
 加载优先级（高 → 低）：
   1. 环境变量（PORT / HOST / CHAN_PATH / TDX_INSTALL_DIR /
      SCAN_POOL_WORKERS / TQ_ACCOUNT / TQ_PASSWORD）
   2. 仓库根目录 .env 文件（格式见 .env.example，凭据永不进 git）
-  3. 本文件内的默认值（与历史硬编码行为完全一致，保证零配置可跑）
+  3. 本文件内的默认值（保证零配置可跑）
 
 实现：优先 pydantic-settings（类型安全、可校验）；未安装时降级为
-内置解析器（.env + 环境变量，标量类型），保证引擎链路不被配置层卡死。
-两套实现共享同名底座 _AppConfigBase（派生路径 + 方法），字段默认值
-收于 _FIELD_DEFAULTS 单一事实源 —— P2-1 消除「字段/派生路径/as_dict
-双份重复」，任何字段变更只需改一处。
+内置解析器（.env + 环境变量，标量类型）。两套实现共享同名底座
+_AppConfigBase（派生路径 + 方法），字段默认值收于 _FIELD_DEFAULTS
+单一事实源，任何字段变更只需改一处。
 
-凭据安全（方案 7.3）：TQ 账号/密码仅进程启动时读取、内存使用，
-不落缓存、不写日志、不随任务序列化；对外展示必须走 as_dict(redact=True)。
+凭据安全：TQ 账号/密码仅进程启动时读取、内存使用，不落缓存、不写日志、
+不随任务序列化；对外展示必须走 as_dict(redact=True)。
 
-跨平台（P2-2）：TDX_INSTALL_DIR 默认值平台适应 —— Windows 沿用
-历史默认 C:\\new_tdx_hd_test，其它平台用 ~/tdx；显式 .env / 环境变量
-仍覆盖默认值。
-
-合并说明（阶段 2 双版本合并）：
-  - 底座采用第三方版：绝对路径 .env（_REPO_ROOT/.env）+ pydantic-settings 降级
-  - 吸收本版补充：数据模式字段（forward_adjust / full_data_mode / sse 调试）
-    与派生路径（stock_names / pe_ttm / float_mc / saved_point / annotations）
-  - symbol_code 归 ChanConfig.py 管理（方案 7.2），本文件不持有
+跨平台：TDX_INSTALL_DIR 默认值平台适应 —— Windows 用 C:\\new_tdx_hd_test，
+其它平台用 ~/tdx；显式 .env / 环境变量仍可覆盖默认值。
 """
 import json
 import os
@@ -67,12 +59,12 @@ def _parse_env_file(path):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 跨平台默认安装目录（P2-2）
+# 跨平台默认安装目录
 # ═══════════════════════════════════════════════════════════════════
 def _default_tdx_install_dir() -> str:
     """平台适应的 TDX_INSTALL_DIR 默认值。
 
-    Windows：沿用历史默认 C:\\new_tdx_hd_test；
+    Windows：默认 C:\\new_tdx_hd_test；
     其它平台：~/tdx（避免 Windows 路径在 *nix 上必然不可用）。
     显式 .env / 环境变量仍可覆盖该默认值。
     """
@@ -82,7 +74,7 @@ def _default_tdx_install_dir() -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 字段默认值 · 单一事实源（P2-1）
+# 字段默认值 · 单一事实源
 # pydantic 版（类型标注）与降级版（env 解析）均从此取默认值，
 # 改字段只改这一处，杜绝两套实现各自维护导致的漂移。
 # ═══════════════════════════════════════════════════════════════════
@@ -92,8 +84,8 @@ _FIELD_DEFAULTS = {
     "CHAN_PATH": _REPO_ROOT,
     "TDX_INSTALL_DIR": _default_tdx_install_dir(),
     "SCAN_POOL_WORKERS": 0,      # 0=自动按 CPU 核数适配；>0 显式覆盖（对齐 .env.example）
-    "SCAN_MIN_FLOAT_MC": 50.0,   # P2-8：扫描预过滤流通市值下限（亿），原硬编码 float_mc < 50
-    "SCAN_FANGLIANG_WINDOW_BARS": 120,  # 放量扫描：以 A 那根往前数 N 根K线作比较窗口（原硬编码 120），
+    "SCAN_MIN_FLOAT_MC": 50.0,   # 扫描预过滤流通市值下限（亿）
+    "SCAN_FANGLIANG_WINDOW_BARS": 120,  # 放量扫描：以 A 那根往前数 N 根K线作比较窗口，
                                         # 即「A > 该窗口内任一天成交额」视为放量命中
     "TQ_ACCOUNT": "",
     "TQ_PASSWORD": "",
@@ -135,7 +127,7 @@ _FIELD_DEFAULTS = {
     #           直接抛异常），fetch_futures_kline 内已统一兜底为天勤上限 10000 根
     #           （实际返回以账户权限为准），故填 0 与股票习惯一致、亦安全。
     #   label——简体中文说明，仅用于日志显示，【不参与条数计算】（bars 变更请同步改）。
-    # 单一事实源：经 AppEngine 启动注入 DataAPI/TqSdkAPI.py（原 HISTORY_LOOKBACK_BARS 已删除）。
+    # 单一事实源：经 AppEngine 启动注入 DataAPI/TqSdkAPI.py。
     "FUTURES_LOOKBACK_CONFIG": {"30m": (300, "近37个交易日"), "5m": (500, "近10个交易日"), "1m": (1000, "近4个交易日"), "15s": (2000, "近2个交易日")},
     # 「不限制」写法示例（两类标的通用：bars 填 0 即不限制，按需复制取消注释）：
     # "STOCKS_LOOKBACK_CONFIG": {"w": (0, "不限制"), "d": (0, "不限制"), "30m": (0, "不限制"), "5m": (0, "不限制")},
@@ -143,7 +135,7 @@ _FIELD_DEFAULTS = {
     # 前端视口默认显示的K线根数（所有周期相同，与后端加载根数解耦）：
     #   当后端加载的K线根数 > VIEW_COUNT，前端视口显示 VIEW_COUNT 根（右对齐）；
     #   当后端加载的K线根数 < VIEW_COUNT，前端视口降为「后端加载多少显示多少」（填满宽度）。
-    #   经 /api/health 下发命令前端 app.js（取代原硬编码 377）。
+    #   经 /api/health 下发命令前端 app.js。
     #   例外：双击选点（B操作）后端已按「选点→最新」过滤，前端全量显示，
     #   不受 VIEW_COUNT 限制（单窗上窗、双窗上窗、双窗下窗同此规则）。
     # 【与 DUAL_SUB_FALLBACK_MIN 的关系】两者相互独立，互不联动：
@@ -178,8 +170,7 @@ _FIELD_DEFAULTS = {
     #     这些消费方只知道「代码+下窗周期」，构不出结构化键，故必须有独立缓存。
     # 两个 dict 各存各的引用（同一个下窗 CChan 会被两处同时引用）：
     # 只限额 dual_* 键管不到本缓存，反之亦然——两个上限合起来才框住双窗内存。
-    # 本缓存历史上无上限：双窗模式切 N 只票就攒 N 个 CChan 永不释放（泄漏）。
-    # 现改为 LRU 限额，超限淘汰最旧；切回单窗不主动清（保留快速切回能力）。
+    # 本缓存采用 LRU 限额，超限淘汰最旧；切回单窗不主动清（保留快速切回能力）。
     "MAX_STOCKS_SUB_CHAN": 5,    # 运行时下窗 CChan 条目上限
     "DEBUG_COLD_START_START_DATE": None,  # 冷启动起始日期（None=不开启）
     "DEBUG_COLD_START_END_DATE": None,    # 冷启动结束日期（None=不开启）
@@ -201,7 +192,7 @@ _FIELD_TYPES = {
 
 
 class _AppConfigBase:
-    """共享底座（P2-1）：派生路径 + 方法。
+    """共享底座：派生路径 + 方法。
 
     不含字段声明（由子类按各自机制声明，值均来自 _FIELD_DEFAULTS），
     只承载「由字段推导」的只读逻辑 —— 派生路径、凭据加载、展示摘要。
@@ -231,7 +222,7 @@ class _AppConfigBase:
 
     @property
     def output_dir(self) -> str:
-        return _REPO_ROOT                           # 输出目录（= 仓库根，与原 OUTPUT_DIR 语义一致）
+        return _REPO_ROOT                           # 输出目录（= 仓库根）
 
     @property
     def frontend_dir(self) -> str:
@@ -283,7 +274,7 @@ class _AppConfigBase:
             return {}
 
     def as_dict(self, redact: bool = True) -> dict:
-        """对外展示用摘要；redact=True 时凭据打码（7.3）。"""
+        """对外展示用摘要；redact=True 时凭据打码。"""
         return {
             "host": self.host,
             "port": self.port,
@@ -323,7 +314,7 @@ if _HAVE_PYDANTIC_SETTINGS:
         scan_min_float_mc: float = _FIELD_DEFAULTS["SCAN_MIN_FLOAT_MC"]  # 扫描预过滤流通市值下限（亿）
         scan_fangliang_window_bars: int = _FIELD_DEFAULTS["SCAN_FANGLIANG_WINDOW_BARS"]  # 放量扫描比较窗口K线根数（默认120）
 
-        # ── 凭据（.env 或环境变量注入；7.3：不落缓存不写日志）──
+        # ── 凭据（.env 或环境变量注入；不落缓存不写日志）──
         tq_account: str = _FIELD_DEFAULTS["TQ_ACCOUNT"]         # 天勤账号（空 = 回退 vipdoc/tq_account.json）
         tq_password: str = _FIELD_DEFAULTS["TQ_PASSWORD"]       # 天勤密码
 
@@ -349,8 +340,8 @@ else:
             # 先用 _FIELD_DEFAULTS 铺默认值（单一事实源），键大写、赋值小写属性名
             self.__dict__.update({k.lower(): v for k, v in _FIELD_DEFAULTS.items()})
             # 键统一大写（与 pydantic-settings 大小写不敏感行为对齐），
-            # 赋值目标为小写属性名 —— 修复点：此前 setattr 用大写键，
-            # 属性名不匹配导致降级模式下环境变量覆盖静默失效。
+            # 赋值目标为小写属性名（env 键大写 / 属性名小写，两者不可
+            # 混用，否则环境变量覆盖会静默失效）。
             merged = {k.upper(): v for k, v in _parse_env_file(_ENV_FILE).items()}
             merged.update({k.upper(): v for k, v in os.environ.items() if k.upper() in _FIELD_TYPES})
             for key, caster in _FIELD_TYPES.items():
@@ -363,5 +354,5 @@ else:
                     log.info(f"[AppConfig] 环境变量 {key}={raw!r} 类型非法，使用默认值")
 
 
-# 全局单例：一处定义、全局引用（方案 7.1）
+# 全局单例：一处定义、全局引用
 app_config = AppConfig()

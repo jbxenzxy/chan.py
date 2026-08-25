@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段 2.6 · 接口契约文档</title>
+<style>
+:root{
+  --bg:#f6f7f9; --bg2:#ffffff; --ink:#1a2233; --muted:#5b6472;
+  --rule:#e3e7ee; --accent:#2563eb; --accent2:#0ea5e9;
+  --frontapi:#7c3aed; --apporch:#2563eb; --appdata:#059669;
+  --dataapi:#d97706; --config:#64748b; --remove:#dc2626;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.65}
+code,kbd{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:#eef1f6;padding:1px 5px;border-radius:4px}
+pre{background:#0f172a;color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;line-height:1.6;margin:12px 0}
+pre code{background:none;color:inherit;padding:0}
+pre .c{color:#64748b}
+pre .k{color:#93c5fd}
+pre .s{color:#86efac}
+pre .n{color:#fbbf24}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+
+.hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 60%,#2563eb 100%);color:#fff;padding:52px 0 44px;border-radius:0 0 24px 24px}
+.hero .tag{display:inline-block;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);padding:3px 12px;border-radius:20px;font-size:13px;letter-spacing:.06em;margin-bottom:16px}
+.hero h1{font-size:32px;font-weight:800;letter-spacing:-.01em;margin-bottom:10px}
+.hero .sub{font-size:16px;opacity:.9;max-width:780px}
+.hero .meta{margin-top:20px;font-size:13px;opacity:.85;display:flex;gap:20px;flex-wrap:wrap}
+
+.layout{display:grid;grid-template-columns:230px 1fr;gap:32px;padding:32px 0 80px}
+nav.toc{position:sticky;top:20px;align-self:start;background:var(--bg2);border:1px solid var(--rule);border-radius:12px;padding:16px;font-size:13px;max-height:calc(100vh - 40px);overflow-y:auto}
+nav.toc h4{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+nav.toc a{display:block;padding:5px 8px;border-radius:6px;color:var(--ink)}
+nav.toc a:hover{background:#eef1f6;text-decoration:none}
+main{min-width:0}
+
+section{margin-bottom:44px}
+h2{font-size:21px;font-weight:800;margin:0 0 6px;padding-bottom:10px;border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2 .no{background:var(--accent);color:#fff;font-size:13px;width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+h3{font-size:16px;font-weight:700;margin:24px 0 10px;color:#111827}
+h4{font-size:14px;font-weight:700;margin:16px 0 8px}
+p{margin:8px 0}
+.lead{font-size:15px;color:#374151}
+.muted{color:var(--muted)}
+ul,ol{margin:8px 0 8px 22px}
+li{margin:4px 0}
+
+.badge{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
+.b-frontapi{background:var(--frontapi)} .b-apporch{background:var(--apporch)}
+.b-appdata{background:var(--appdata)} .b-dataapi{background:var(--dataapi)}
+.b-config{background:var(--config)}
+
+.table-wrap{overflow-x:auto;background:var(--bg2);border:1px solid var(--rule);border-radius:12px;margin:14px 0}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+th{background:#f1f5f9;text-align:left;padding:9px 12px;font-weight:700;color:#334155;border-bottom:2px solid var(--rule);white-space:nowrap}
+td{padding:8px 12px;border-bottom:1px solid #eef1f6;vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#f8fafc}
+td.fn{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;white-space:nowrap;font-weight:600}
+td code{background:none;padding:0;font-size:12px}
+
+.callout{background:#eff6ff;border-left:4px solid var(--accent);border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0}
+.callout.warn{background:#fffbeb;border-left-color:#d97706}
+.callout.green{background:#ecfdf5;border-left-color:#059669}
+.callout.red{background:#fef2f2;border-left-color:#dc2626}
+.callout .t{font-weight:700;margin-bottom:4px}
+
+.sig{background:var(--bg2);border:1px solid var(--rule);border-left:4px solid var(--accent);border-radius:8px;padding:12px 16px;margin:10px 0;font-family:"JetBrains Mono",ui-monospace,monospace;font-size:13px;overflow-x:auto}
+
+footer{border-top:1px solid var(--rule);padding:24px 0 40px;color:var(--muted);font-size:13px;text-align:center}
+
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  nav.toc{position:static;max-height:none}
+  .hero h1{font-size:26px}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="tag">chan.py 架构迁移 · V10 设计文档 · 阶段 2.6</span>
+    <h1>接口契约文档</h1>
+    <p class="sub">配合 6.2 接口优先原则，锁定各层之间的稳定接口：<code>analyze_stock</code>、<code>ScannerService.scan</code>、<code>fetch_and_inject</code>、<code>AppData</code> 缓存 / 持久化接口。接口是契约，先锁定签名与返回结构，各层即可并行开发、独立测试。</p>
+    <div class="meta">
+      <span>配套文档：函数级迁移映射文档</span>
+      <span>基线提交：<code>4da7f91 阶段 2.5</code></span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap layout">
+<nav class="toc">
+  <h4>目录</h4>
+  <a href="#s1">1. 契约总览</a>
+  <a href="#s2">2. analyze_stock</a>
+  <a href="#s3">3. ScannerService</a>
+  <a href="#s4">4. fetch_and_inject</a>
+  <a href="#s5">5. AppData 接口</a>
+  <a href="#s6">6. 错误处理约定</a>
+</nav>
+
+<main>
+
+<section id="s1">
+  <h2><span class="no">1</span>契约总览</h2>
+  <p class="lead">四个核心接口构成阶段 3 拆分的安全边界。接口一经锁定，实现可自由演进（薄封装 → 搬移 → 重构），调用方不受影响。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>接口</th><th>所在层</th><th>职责</th><th>调用方</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">analyze_stock</td><td><span class="badge b-apporch">AppOrch</span></td><td>统一缠论分析入口（无状态）</td><td>FrontAPI 路由 / ScannerService / 手动选点</td></tr>
+        <tr><td class="fn">ScannerService.scan</td><td><span class="badge b-apporch">AppOrch</span></td><td>批量扫描编排、进度追踪</td><td>FrontAPI 扫描路由</td></tr>
+        <tr><td class="fn">fetch_and_inject</td><td><span class="badge b-apporch">AppOrch</span></td><td>数据拉取与注入（阶段 5 后走 DataAPI 抽象层）</td><td>分析引擎 / 扫描</td></tr>
+        <tr><td class="fn">AppData</td><td><span class="badge b-appdata">AppData</span></td><td>缓存 / 持久化 / 标注 / 自选股</td><td>AppOrch / FrontAPI</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <div class="t">依赖方向（严格单向，禁止反向）</div>
+    <code>FrontAPI.py → App/AppOrch.py → App/AppData.py</code>。AppOrch 只依赖 AppData 的公开接口，AppData 不反向依赖 AppOrch。
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>analyze_stock 契约</h2>
+  <p class="lead">统一的缠论分析入口：输入代码 + 周期 + 参数，输出笔、线段、中枢、买卖点与选点标注。无状态，可在线程池与 ProcessPool worker 中安全复用。</p>
+
+  <h3>2.1 签名</h3>
+  <div class="sig">analyze_stock(code: str, freq: str = "d", end_date: str | None = None, cache_chan: bool = True, dual: bool = False, step: int | None = None, sub_freq: str | None = None) -&gt; dict</div>
+
+  <h3>2.2 参数</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>参数</th><th>类型</th><th>默认</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">code</td><td>str</td><td>必填</td><td>股票 / 指数 / 期货代码。支持 <code>SH000001</code>、<code>000001.SH</code>、<code>KQ.m@CFFEX.IM</code>（期货）等格式，内部经 <code>_get_market_code</code> 归一化</td></tr>
+        <tr><td class="fn">freq</td><td>str</td><td>"d"</td><td>周期：<code>y / q / m / w / d / 60m / 30m / 5m / 1m / 15s</code></td></tr>
+        <tr><td class="fn">end_date</td><td>str | None</td><td>None</td><td>复盘日期（如 <code>"2026/06/29"</code>，仅支持斜杠格式 <code>%Y/%m/%d</code>，连字符格式必须被拒）；None = 实时模式</td></tr>
+        <tr><td class="fn">cache_chan</td><td>bool</td><td>True</td><td>是否缓存 CChan 对象（扫描模式传 False 以省内存）</td></tr>
+        <tr><td class="fn">dual</td><td>bool</td><td>False</td><td>双窗口模式（主级别 + 子级别）</td></tr>
+        <tr><td class="fn">step</td><td>int | None</td><td>None</td><td>步进复盘：第 N 步（0 = 最新）</td></tr>
+        <tr><td class="fn">sub_freq</td><td>str | None</td><td>None</td><td>双窗口下窗周期；None 时用默认映射（股票 <code>w→d, d→30m, 30m→5m</code>；期货 <code>30m→5m, 5m→1m, 1m→15s</code>）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>2.3 返回结构（成功）</h3>
+  <pre><span class="c"># analyze_stock 返回 dict（顶层键）</span>
+{
+  <span class="k">"meta"</span>: {
+    <span class="k">"symbol"</span>: <span class="s">"000001.SH"</span>,          <span class="c"># 归一化代码</span>
+    <span class="k">"market"</span>: <span class="s">"sh"</span>,                  <span class="c"># sh / sz / bj / hk / ds / futures</span>
+    <span class="k">"name"</span>: <span class="s">"平安银行"</span>,              <span class="c"># 股票名称</span>
+    <span class="k">"freq"</span>: <span class="s">"日线"</span>,                  <span class="c"># _get_freq_label 中文标签</span>
+    <span class="k">"chan_version"</span>: <span class="s">"chan.py"</span>,
+    <span class="k">"kline_count"</span>: <span class="n">248</span>, <span class="k">"bi_count"</span>: <span class="n">42</span>, <span class="k">"fx_count"</span>: <span class="n">84</span>,
+    <span class="k">"zs_count"</span>: <span class="n">6</span>, <span class="k">"seg_count"</span>: <span class="n">3</span>, <span class="k">"bsp_count"</span>: <span class="n">5</span>,
+    <span class="k">"date_range"</span>: <span class="s">"2025-01-02 ~ 2026-08-15"</span>,
+    <span class="k">"generated_at"</span>: <span class="s">"2026-08-16 10:00:00"</span>,
+    <span class="k">"saved_selection_date"</span>: <span class="s">""</span>,   <span class="c"># 手选进入段时间</span>
+    <span class="k">"is_replay"</span>: <span class="n">False</span>,               <span class="c"># 是否复盘模式</span>
+    <span class="k">"forward_adjust"</span>: <span class="n">True</span>,          <span class="c"># 前复权是否生效</span>
+    <span class="k">"pe_ttm"</span>: <span class="n">6.8</span>,                    <span class="c"># PE-TTM（可能为 None）</span>
+    <span class="k">"index_belong"</span>: <span class="s">"沪深300"</span>        <span class="c"># 指数归属（可能为 None）</span>
+  },
+  <span class="k">"klines"</span>: [ {<span class="k">"date"</span>: <span class="s">"2026-08-15"</span>, <span class="k">"open"</span>: <span class="n">11.2</span>, <span class="k">"high"</span>: <span class="n">11.5</span>,
+                  <span class="k">"low"</span>: <span class="n">11.1</span>, <span class="k">"close"</span>: <span class="n">11.4</span>, <span class="k">"volume"</span>: <span class="n">12345</span>, ...} ],
+  <span class="k">"bis"</span>:     [ {<span class="k">"idx"</span>: <span class="n">0</span>, <span class="k">"direction"</span>: <span class="s">"up"</span>, <span class="k">"start"</span>: <span class="s">"..."</span>, <span class="k">"end"</span>: <span class="s">"..."</span>,
+                  <span class="k">"is_sure"</span>: <span class="n">True</span>, <span class="k">"fx_strength"</span>: <span class="n">0.0</span>, ...} ],
+  <span class="k">"fxs"</span>:     [ ... ],   <span class="c"># 分型</span>
+  <span class="k">"zs"</span>:      [ ... ],   <span class="c"># 中枢</span>
+  <span class="k">"zs_stars"</span>: [ {<span class="k">"date"</span>: <span class="s">"..."</span>, <span class="k">"price"</span>: <span class="n">0.0</span>, <span class="k">"mark"</span>: <span class="s">"D"</span>, <span class="k">"color"</span>: <span class="s">"red"</span>} ],
+  <span class="k">"segs"</span>:    [ ... ],   <span class="c"># 线段</span>
+  <span class="k">"bsps"</span>:    [ {<span class="k">"date"</span>: <span class="s">"..."</span>, <span class="k">"timestamp"</span>: <span class="n">0</span>, <span class="k">"type"</span>: <span class="s">"1buy"</span>,
+                  <span class="k">"is_buy"</span>: <span class="n">True</span>, <span class="k">"price"</span>: <span class="n">0.0</span>, <span class="k">"high"</span>: <span class="n">0.0</span>, <span class="k">"low"</span>: <span class="n">0.0</span>} ],
+  <span class="k">"white_hline"</span>: {<span class="k">"price"</span>: <span class="n">0.0</span>, <span class="k">"start_date"</span>: <span class="s">"..."</span>} | <span class="n">None</span>,
+  <span class="k">"sub"</span>: { ... }   <span class="c"># 仅 dual=True 时存在：子级别完整结果</span>
+}</pre>
+
+  <h3>2.4 返回结构（失败）</h3>
+  <pre>{ <span class="k">"error"</span>: <span class="s">"无法识别股票代码: xxx"</span> }   <span class="c"># 统一错误键</span></pre>
+
+  <h3>2.5 缓存键约定</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>模式</th><th>缓存键格式</th></tr></thead>
+      <tbody>
+        <tr><td>单窗口</td><td class="fn">single_{market}_{code}_{freq}_live</td></tr>
+        <tr><td>双窗口主级别</td><td class="fn">dual_main_{market}_{code}_{freq}_live</td></tr>
+        <tr><td>双窗口子级别</td><td class="fn">dual_sub_{market}_{code}_{sub_freq}_live</td></tr>
+        <tr><td>复盘 / 步进</td><td class="fn">single_{market}_{code}_{freq}_{end_date}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout green">
+    <div class="t">不变性</div>
+    同一 (code, freq, end_date, dual, sub_freq) 输入，返回结构稳定（键集合不变）。阶段 2.5 回归基线已对 <code>analyze_stock</code> 输出做快照校验。
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>ScannerService 契约</h2>
+  <p class="lead">批量扫描服务：遍历代码列表、逐票调用 <code>analyze_stock</code>、汇总结果、追踪进度。进度状态已收敛到类内部。</p>
+
+  <h3>3.1 类与生命周期</h3>
+  <div class="sig">scanner = ScannerService()  <span class="c"># 全局单例（AppOrch 模块级）</span></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">start</td><td>start() -&gt; dict</td><td>{"ok": True}</td><td>新一轮扫描开始：清终止标志、清 skip_log、记录开始时间</td></tr>
+        <tr><td class="fn">scan_one</td><td>scan_one(code, freq="d", prefix="", recent="1", source="zxg", mode="") -&gt; dict</td><td>见 3.2</td><td>扫描单只股票</td></tr>
+        <tr><td class="fn">end</td><td>end() -&gt; dict</td><td>{"count": n}</td><td>扫描结束：打印跳过明细、发送 Windows 通知</td></tr>
+        <tr><td class="fn">abort</td><td>abort() -&gt; dict</td><td>{"ok": True}</td><td>中断扫描：置终止标志</td></tr>
+        <tr><td class="fn">clear_cache</td><td>clear_cache() -&gt; dict</td><td>{"cleared": 0}</td><td>关闭扫描面板（缓存由 LRU 自然淘汰）</td></tr>
+        <tr><td class="fn">set_page_index_code</td><td>set_page_index_code(code) -&gt; dict</td><td>{"ok": True, "code": code}</td><td>设置当前板块指数代码（成分股扫描来源）</td></tr>
+        <tr><td class="fn">stock_list</td><td>stock_list(source="zxg") -&gt; dict</td><td>{"stocks": [...], "count": n, ...}</td><td>返回股票列表（支持逗号分隔多来源：zxg / page_index / tdxhy2 / tdxhy3）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3.2 scan_one 返回格式（按 mode）</h3>
+  <pre><span class="c"># mode=""（默认：买卖点扫描）—— 有买点</span>
+{ <span class="k">"code"</span>: <span class="s">"000001.SZ"</span>, <span class="k">"name"</span>: <span class="s">"平安银行"</span>,
+  <span class="k">"buy_points"</span>: [{<span class="k">"type"</span>: <span class="s">"1buy"</span>, <span class="k">"price"</span>: <span class="n">11.2</span>, <span class="k">"date"</span>: <span class="s">"..."</span>}],
+  <span class="k">"sell_points"</span>: [...],
+  <span class="k">"last_close"</span>: <span class="n">11.4</span>, <span class="k">"freq"</span>: <span class="s">"d"</span>,
+  <span class="k">"below_ma120"</span>: <span class="n">False</span>, <span class="k">"ma120_val"</span>: <span class="n">10.8</span> }
+
+<span class="c"># mode="" —— 无买点（不返回 name / last_close）</span>
+{ <span class="k">"code"</span>: <span class="s">"000001"</span>, <span class="k">"buy_points"</span>: [], <span class="k">"sell_points"</span>: [] }
+
+<span class="c"># mode="fx_d"（底分型扫描）—— 命中</span>
+{ <span class="k">"code"</span>: <span class="s">"000001.SZ"</span>, <span class="k">"name"</span>: <span class="s">"平安银行"</span>, <span class="k">"is_fx_d"</span>: <span class="n">True</span>,
+  <span class="k">"last_close"</span>: <span class="n">11.4</span>, <span class="k">"freq"</span>: <span class="s">"d"</span>, <span class="k">"fx_strength"</span>: <span class="n">0.0</span> }
+<span class="c"># mode="fx_d" —— 未命中</span>
+{ <span class="k">"code"</span>: <span class="s">"000001"</span>, <span class="k">"is_fx_d"</span>: <span class="n">False</span> }
+
+<span class="c"># mode="ma"（均线分类扫描）</span>
+{ <span class="k">"code"</span>: <span class="s">"000001.SZ"</span>, <span class="k">"name"</span>: <span class="s">"平安银行"</span>,
+  <span class="k">"ma_category"</span>: <span class="n">3</span>, <span class="k">"last_close"</span>: <span class="n">11.4</span>, <span class="k">"freq"</span>: <span class="s">"d"</span> }
+
+<span class="c"># 失败 / 终止</span>
+{ <span class="k">"error"</span>: <span class="s">"..."</span> }  |  { <span class="k">"error"</span>: <span class="s">"扫描已终止"</span>, <span class="k">"aborted"</span>: <span class="n">True</span> }</pre>
+
+  <h3>3.3 状态访问器（已收敛到类）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>属性</th><th>类型</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">aborted</td><td>bool</td><td>扫描终止标志（可读写）</td></tr>
+        <tr><td class="fn">skip_log</td><td>list</td><td>扫描异常 / 失败股票明细（只读）</td></tr>
+        <tr><td class="fn">start_time</td><td>float | None</td><td>扫描开始时间戳（可读写）</td></tr>
+        <tr><td class="fn">page_index_code</td><td>str | None</td><td>当前板块指数代码（可读写）</td></tr>
+        <tr><td class="fn">lock</td><td>threading.Lock</td><td>扫描串行锁（只读）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>3.4 ScannerService 现状方法面（阶段 3a 切路由时先用现状面）</h3>
+  <p class="lead">以下 7 方法为 AppOrch.py 中 ScannerService 现有签名与返回格式，阶段 3a 路由迁移时应以此为接口，不改变行为。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回示例</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">start</td><td>start() -&gt; dict</td><td><code>{"ok": True}</code></td><td>新一轮扫描开始：清中止标记、清 skip_log、记录开始时间</td></tr>
+        <tr><td class="fn">scan_one</td><td>scan_one(code, freq="d", prefix="", recent="1", source="zxg", mode="") -&gt; dict</td><td>见 3.2</td><td>扫描单只股票（mode 支持 ""/fx_d/ma）</td></tr>
+        <tr><td class="fn">end</td><td>end() -&gt; dict</td><td><code>{"count": n}</code></td><td>扫描结束：打印跳过明细、发 Windows 通知</td></tr>
+        <tr><td class="fn">abort</td><td>abort() -&gt; dict</td><td><code>{"ok": True}</code></td><td>中断扫描：置中止标志</td></tr>
+        <tr><td class="fn">clear_cache</td><td>clear_cache() -&gt; dict</td><td><code>{"cleared": 0}</code></td><td>关闭扫描面板（缓存由 LRU 自然淘汰）</td></tr>
+        <tr><td class="fn">set_page_index_code</td><td>set_page_index_code(code) -&gt; dict</td><td><code>{"ok": True, "code": code}</code></td><td>设置当前板块指数代码（成分股扫描来源）</td></tr>
+        <tr><td class="fn">stock_list</td><td>stock_list(source="zxg") -&gt; dict</td><td><code>{"stocks": [...], "count": n, ...}</code></td><td>返回股票列表（支持逗号分隔多来源：zxg/page_index/tdxhy2/tdxhy3）</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>fetch_and_inject 契约</h2>
+  <p class="lead">数据拉取与注入：判断股票 / 期货 → 拉取 K 线 → <code>set_data</code> 注入到 CChan。阶段 5 后统一走 DataAPI 抽象层（source 参数选择数据源）。</p>
+
+  <h3>4.1 签名</h3>
+  <div class="sig">fetch_and_inject(code: str, freq: str = "d", source: str = "tdx", end_date: str | None = None, dual: bool = False, step: int | None = None, sub_freq: str | None = None) -&gt; dict</div>
+
+  <h3>4.2 参数</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>参数</th><th>类型</th><th>默认</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">code</td><td>str</td><td>必填</td><td>股票 / 期货代码（同 analyze_stock）</td></tr>
+        <tr><td class="fn">freq</td><td>str</td><td>"d"</td><td>周期</td></tr>
+        <tr><td class="fn">source</td><td>str</td><td>"tdx"</td><td>数据源：<code>tdx</code>（通达信）/ <code>tqsdk</code>（天勤期货）。阶段 5 后扩展</td></tr>
+        <tr><td class="fn">end_date / dual / step / sub_freq</td><td>—</td><td>—</td><td>同 analyze_stock</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.3 数据注入协议</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>步骤</th><th>说明</th><th>实现位置</th></tr></thead>
+      <tbody>
+        <tr><td>1. 市场识别</td><td>经 <code>_get_market_code</code> 判断股票 / 期货，归一化代码</td><td>AppOrch 消费侧</td></tr>
+        <tr><td>2. 数据拉取</td><td>股票：通达信 <code>CTdxAPI</code> 读 K 线 + 前复权；期货：天勤 <code>CTqSdkAPI.fetch_futures_kline</code></td><td>DataAPI（TdxAPI / TqSdkAPI）</td></tr>
+        <tr><td>3. 注入</td><td><code>chan.set_data(...)</code> 注入到 CChan，再执行缠论计算</td><td>AppOrch 消费侧</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout warn">
+    <div class="t">第一版实现</div>
+    当前 <code>fetch_and_inject</code> 为薄封装，直接委托 <code>analyze_stock</code>（其内部完成拉取 + 分析）。阶段 5 后拆分为独立的数据拉取 + 注入流程，接口签名保持不变。
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>AppData 接口</h2>
+  <p class="lead">业务数据层：缓存 / 持久化 / 标注 / 自选股。第一版为薄封装，接口先锁定，实现委托 <code>my_chan_main</code> 既有函数，保证零行为漂移。</p>
+
+  <h3>5.1 缓存接口（LRU 语义）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">cache_put</td><td>cache_put(key: str, value) -&gt; None</td><td>—</td><td>写入缓存，超出 <code>_MAX_CACHE_SIZE</code>(50) 时淘汰最旧条目</td></tr>
+        <tr><td class="fn">cache_get</td><td>cache_get(key: str) -&gt; value | None</td><td>缓存值</td><td>读取缓存，命中时移到末尾（LRU 语义）</td></tr>
+        <tr><td class="fn">cache_remove</td><td>cache_remove(key: str) -&gt; None</td><td>—</td><td>从缓存中删除指定条目</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <div class="t">缓存键约定</div>
+    分析缓存键见 2.5 节（<code>single_/dual_main_/dual_sub_</code> 前缀）。缓存存储 <code>{records, chan, result}</code> 三元组（<code>chan</code> 仅在 <code>cache_chan=True</code> 时存在）。
+  </div>
+
+  <h3>5.2 上次查看代码 / 周期持久化</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">save_last_code_freq</td><td>save_last_code_freq(code: str, freq: str = "d") -&gt; None</td><td>—</td><td>持久化上次查看的代码和周期（股票和期货通用）</td></tr>
+        <tr><td class="fn">load_last_code_freq</td><td>load_last_code_freq() -&gt; tuple</td><td>(code, freq) | (None, None)</td><td>加载上次查看的代码和周期</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.3 手动选点持久化（CSV）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">load_saved_point_times</td><td>load_saved_point_times() -&gt; dict</td><td>{code: {col: value}}</td><td>从 CSV 加载所有选点记录</td></tr>
+        <tr><td class="fn">save_point_time</td><td>save_point_time(code, name, freq, sdt) -&gt; None</td><td>—</td><td>保存或更新某只股票某个周期的选点</td></tr>
+        <tr><td class="fn">clear_saved_point_time</td><td>clear_saved_point_time(code, freq) -&gt; None</td><td>—</td><td>清除某只股票某个周期在 CSV 中的选点</td></tr>
+        <tr><td class="fn">clear_saved_point</td><td>clear_saved_point(code, freq="d") -&gt; dict</td><td>{"ok": True}</td><td>清除选点并同步清理分析缓存（对应 /api/clear_saved_point）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.4 文字标注接口</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">get_annotations_for</td><td>get_annotations_for(code, freq) -&gt; list</td><td>[{date, text, y_offset}]</td><td>获取某股票某周期的所有标注</td></tr>
+        <tr><td class="fn">add_annotation</td><td>add_annotation(code, freq, date_str, text, y_offset=0) -&gt; bool</td><td>True 新增 / False 重复</td><td>添加标注（同日期同文字自动去重）</td></tr>
+        <tr><td class="fn">delete_annotation</td><td>delete_annotation(code, freq, date_str, text) -&gt; bool</td><td>True 删除成功</td><td>删除一条标注</td></tr>
+        <tr><td class="fn">delete_annotation_by_date</td><td>delete_annotation_by_date(code, freq, date_str) -&gt; bool</td><td>True 删除成功</td><td>删除某日期下所有标注</td></tr>
+        <tr><td class="fn">delete_all_annotations</td><td>delete_all_annotations(code, freq) -&gt; bool</td><td>True 删除成功</td><td>删除某股票某周期下全部标注</td></tr>
+        <tr><td class="fn">get_annotated_codes</td><td>get_annotated_codes(freq="") -&gt; list</td><td>[code, ...]</td><td>获取所有有标注的股票代码 + 周期列表（用于自选扫描）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.5 自选股接口</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>方法</th><th>签名</th><th>返回</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">read_zxg_stocks</td><td>read_zxg_stocks() -&gt; list</td><td>[{code, prefix, name, ...}]</td><td>读取自选股列表（委托 DataAPI.TdxAPI）</td></tr>
+        <tr><td class="fn">save_to_zxg_blk</td><td>save_to_zxg_blk(codes: list[str]) -&gt; dict</td><td>{"ok": True, ...}</td><td>保存股票代码列表到自选股板块（如 ["000852.SH", ...]）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>5.6 持久化文件清单</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>文件</th><th>路径（相对 VIPDOC_DIR）</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">SAVED_POINT_FILE</td><td>double_click_dt.csv</td><td>手动选点记录</td></tr>
+        <tr><td class="fn">ANNOTATIONS_FILE</td><td>text_annotation.json</td><td>文字标注</td></tr>
+        <tr><td class="fn">LAST_CODE_FREQ_FILE</td><td>（AppConfig 配置）</td><td>上次查看代码 / 周期</td></tr>
+        <tr><td class="fn">_STOCK_NAMES_CACHE_FILE</td><td>stock_names.json</td><td>股票名称缓存</td></tr>
+        <tr><td class="fn">_STOCK_PE_TTM_FILE</td><td>stock_pettm_index.json</td><td>PE-TTM + 指数归属缓存</td></tr>
+        <tr><td class="fn">_FLOAT_MC_CACHE_FILE</td><td>stock_float_mc.json</td><td>流通市值缓存</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>错误处理约定</h2>
+  <p class="lead">服务层只抛领域异常，API 层通过统一中间件捕获并映射 HTTP 状态码（设计文档 7.7 节）。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>异常</th><th>HTTP 状态码</th><th>触发场景</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">AppError</td><td>500</td><td>领域异常基类（含 AnalysisError / ConfigError）</td></tr>
+        <tr><td class="fn">DataFetchError</td><td>502</td><td>数据源获取失败</td></tr>
+        <tr><td class="fn">AnalysisError</td><td>500</td><td>缠论分析失败</td></tr>
+        <tr><td class="fn">ConfigError</td><td>500</td><td>配置缺失 / 不一致</td></tr>
+        <tr><td class="fn">NotFoundError</td><td>404</td><td>标的 / 资源不存在</td></tr>
+        <tr><td class="fn">PersistenceError</td><td>503</td><td>持久化失败（AppOrch.py 实现 503，HTTP 503 = Service Unavailable 语义更准确）</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="callout">
+    <div class="t">返回约定</div>
+    业务函数成功返回数据字典；失败返回 <code>{"error": "..."}</code>（REST 层转为 4xx/5xx）。SSE 路径通过 <code>error</code> 事件推送错误。
+  </div>
+</section>
+
+</main>
+</div>
+
+<footer>
+  阶段 2.6 接口契约文档 · 基于 chan-architecture-v10.html 6.2 / 7.7 节 · 基线 4da7f91（阶段 2.5）· 配套文档：函数级迁移映射文档
+</footer>
+
+
+
+
+
+
+
+
+
+
+
+</body></html>

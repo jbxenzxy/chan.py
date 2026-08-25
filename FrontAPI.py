@@ -1,39 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-FrontAPI.py —— FastAPI 统一入口 · 面向前端 · REST + SSE（阶段 3 落地）
+FrontAPI.py —— FastAPI 统一入口 · 面向前端 · REST + SSE
 =========================================================================
-V10 方案 8.6（3a REST 路由迁移 / 3b SSE 同步生成器·方案A）：
+单一路由源：全部 REST 路由与 SSE 流端点收敛于本文件，路由保持薄
+（参数校验 + run_in_threadpool(orch.*) + 响应组装），业务段在 App/AppOrch.py。
+引擎调用一律经 AppOrch 的 call_* 漏斗（锁分类见 AppOrch.LOCK_POLICY），
+本文件不直连引擎分析函数（Test/test_phase3_guards.py G3 守护）。
+SSE 实时流为同步生成器（每连接一条常驻线程，Starlette 在线程池中迭代，
+阻塞调用不占事件循环）；生成器实现位于 App/AppSSE.py，数据源抽象
+CSSESource/CTqSdkSession 位于 DataAPI/TqSdkCSSESource.py，本文件仅 re-export。
 
-  3a · REST 路由迁移：
-    - 30 条 REST 路由收敛到本文件（单一路由源），路由保持薄：
-      参数校验 + run_in_threadpool(orch.*) + 响应组装，业务段在 App/AppOrch.py；
-    - 引擎调用一律经 AppOrch 的 call_* 漏斗（锁分类见 AppOrch.LOCK_POLICY），
-      本文件不直连 m.analyze_stock / m.compute_red_range_zs /
-      m.stock_manual_select_point / m.futures_manual_select_point
-      （Test/test_phase3_guards.py G3 守护）；
-    - api_server.py 兼容壳已于 3b-2 后删除（原 uvicorn api_server:app
-      部署脚本改用 uvicorn FrontAPI:app）。
-
-  3b · SSE 同步生成器（方案A：每连接一条常驻线程）：
-    - ChartHandler._handle_sse_stream_dual/single（write() 式，约 1042 行）
-      忠实移植为同步生成器 sse_futures_stream_dual/single；
-    - 数据源抽象 CSSESource：生产 CTqSdkSession（每连接独立 TqApi+CChan，
-      SELF_CONTAINED 锁分类，不加引擎锁）/ 灰度测试注入 MockSource
-      （Test/test_sse_gray.py 驱动确定性比对）；
-    - 方案A：/api/futures_stream 返回同步生成器，Starlette 在线程池中
-      迭代（iterate_in_threadpool），阻塞调用天然发生在线程内，不占
-      事件循环；每连接 = 1 条常驻线程（与遗留实现「每连接一线程」
-      语义等价，且代码更简单——无 run_in_threadpool 语法纠缠）。
-
-  忠实移植口径（3b-1 与遗留实现的事件协议逐项一致）：
-    - 事件名/载荷构造/错误事件：init（含失败载荷）→ update（tick 路径与
-      K线完成路径）→ 心跳注释帧 ": heartbeat"，首事件类型与序列不变；
-    - 阻塞引擎调用（wait_update/init_chan_symbol/step_load/快照提取）
-      为同步阻塞调用，直接写在线程内，事件循环不被单连接独占；
-    - 客户端断开：同步生成器在迭代线程中自然退出（BrokenPipe 写失败
-      或生成器被 GC），finally 触发清理（关 TqApi、弹 records/期货缓存）。
-
-锁分类（AppOrch.LOCK_POLICY，阶段 2 遗留问题的解法）：
+锁分类（AppOrch.LOCK_POLICY）：
     SERIAL         串行分析（call_* 漏斗持 _ENGINE_LOCK）
     SCAN           并行扫描（Scanner.scan_one，_scan_lock 防同票重入）
     SELF_CONTAINED SSE 流（每连接独立会话，不加锁）
@@ -50,7 +27,7 @@ import threading
 import traceback
 from contextlib import asynccontextmanager
 
-# ── 仓库根目录引导（App/ 包、my_chan_main 均位于仓库根）────────────────
+# ── 仓库根目录引导（App/ 包位于仓库根）────────────────────────────────
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
@@ -72,18 +49,17 @@ from fastapi.concurrency import run_in_threadpool
 
 from App.AppConfig import app_config
 from App import AppOrch as orch
-from App.AppOrch import AppError  # 领域异常统一在服务层定义（方案 7.7）
+from App.AppOrch import AppError  # 领域异常统一在服务层定义
 
 from App.AppLog import get_logger, trace_id
 log = get_logger(__name__)
 
-# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
-# 仅读取常量/纯函数/SSE 调试旗，引擎入口一律走 orch.* 漏斗
+# 分析引擎层：引擎入口一律走 orch.* 漏斗，此处仅读取常量/纯函数/SSE 调试旗
 from App import AppEngine as m  # noqa: F401
-# SSE 实时流 / 期货功能域（阶段 8：CTqSdkSession 的 SSE 内部实现已迁 App/AppSSE.py）
+# SSE 实时流 / 期货功能域：SSE 内部实现位于 App/AppSSE.py
 from App import AppSSE as _sse  # noqa: F401
-# SSE 数据源抽象（V10 CH5「差距重构」下沉 DataAPI；tqsdk 仅在 DataAPI 可见。
-# P1-1：API 层经 AppSSE re-export 消费，不再直连 DataAPI.TqSdkCSSESource）
+# SSE 数据源抽象：tqsdk 仅在 DataAPI 层可见；API 层经 AppSSE re-export 消费，
+# 不直连 DataAPI.TqSdkCSSESource
 from App.AppSSE import (  # noqa: F401
     CSSESource,
     CSSESourceClosed,
@@ -98,12 +74,12 @@ from App.AppSSE import (  # noqa: F401
 
 @asynccontextmanager
 async def lifespan(app):
-    """应用生命周期：关闭时优雅回收 ProcessPool 与活跃 CTqSdkSession（阶段 7/10）。
+    """应用生命周期：关闭时优雅回收 ProcessPool 与活跃 CTqSdkSession。
 
     未回收时 Ctrl+C 会让 worker 进程在 call_queue.get() 阻塞处收到
     KeyboardInterrupt 并打印 traceback（实测 SpawnProcess-1）。
     CTqSdkSession 同理：服务器退出时事件循环即将关闭，必须在此显式
-    _close_all_sources() 关闭所有 TqApi（方案A 同步生成器 finally 虽可靠，
+    _close_all_sources() 关闭所有 TqApi（同步生成器 finally 虽可靠，
     但服务器退出时生成器可能仍在 wait_update 阻塞，主动回收更确定），
     否则进程退出时 TqApi 内部挂起任务被销毁，触发
     「Task was destroyed but it is pending!」级联。
@@ -136,7 +112,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def trace_id_middleware(request: Request, call_next):
-    """请求级 trace-id（P0-3）：入口生成一次，链路内任意位置经
+    """请求级 trace-id：入口生成一次，链路内任意位置经
     current_trace_id() 关联；anyio 线程池自动传播 contextvar，线程内
     的 orch.* 分析调用同样可见。请求起止各记一条，含耗时。"""
     tid = trace_id()
@@ -165,7 +141,7 @@ async def app_error_handler(request: Request, exc: AppError):
 
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception):
-    """未预期异常兜底：500 + 日志，不向客户端泄漏内部细节（7.7 规则）"""
+    """未预期异常兜底：500 + 日志，不向客户端泄漏内部细节"""
     traceback.print_exc()
     return JSONResponse(
         status_code=500,
@@ -175,10 +151,10 @@ async def unhandled_error_handler(request: Request, exc: Exception):
 
 @app.get("/api/health", tags=["meta"])
 async def api_health():
-    """健康检查：入口标识 + 配置摘要（凭据打码，方案 7.3）+ 周期映射（P2-8 前端共享）"""
-    # P2-8 周期映射统一：后端单一事实源（CTqSdkAPI.FREQ_SEC_MAP 接口属性），
-    # 前端经 /api/health 拉取；P1-1：经期货域元数据出口取数，API 层不直连
-    # DataAPI.TqSdkAPI（六符号收敛 · 阶段 5 ①）。
+    """健康检查：入口标识 + 配置摘要（凭据打码）+ 周期映射（前端共享）"""
+    # 周期映射以后端为单一事实源（CTqSdkAPI.FREQ_SEC_MAP 接口属性），
+    # 前端经 /api/health 拉取；取数经期货域元数据出口，API 层不直连
+    # DataAPI.TqSdkAPI。
     _freq_sec_map = _sse.get_futures_freq_sec_map()
     return {
         "status": "ok",
@@ -191,11 +167,11 @@ async def api_health():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 辅助：统一 JSON 响应（自 api_server 迁入，兼容壳再导出）
+# 辅助：统一 JSON 响应
 # ═══════════════════════════════════════════════════════════════════════
 
 def _json_response(data, status_code: int = 200):
-    """统一 JSON 返回（兼容原有 send_json_response 行为）"""
+    """统一 JSON 返回（带无缓存响应头）"""
     return JSONResponse(
         content=data,
         status_code=status_code,
@@ -208,20 +184,16 @@ def _json_response(data, status_code: int = 200):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SSE · 数据源抽象（3b-1 灰度注入点，设计 8.6-3b）
-# 3b-2 已拆除：Legacy 桥接层（_SSEMockWfile/_SSEMockHandler/_sse_generator）
-# 与 ChartHandler 旧 SSE 方法（_handle_sse_stream_dual/single）一并下线，
-# /api/futures_stream 仅保留方案A 同步生成器路径。
+# SSE · 数据源抽象
+# CSSESourceClosed / CSSESource / CTqSdkSession / 注册表的实现位于
+# DataAPI/TqSdkCSSESource.py（tqsdk 仅在 DataAPI 层可见）；
+# FrontAPI 仅以 from-import 引用，保持薄路由层。
 # ═══════════════════════════════════════════════════════════════════════
-
-# CSSESourceClosed / CSSESource / CTqSdkSession / 注册表已由 V10 CH5
-# 「差距重构」下沉至 DataAPI/TqSdkCSSESource.py（tqsdk 仅在 DataAPI 可见）。
-# FrontAPI 在此仅以 from-import 获取，保持「薄」（见本文件顶部 import）。
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# SSE · 同步生成器（方案A，忠实移植自 ChartHandler._handle_sse_stream_*）
-# V10 复审 P1-3：生成器实现已下沉 App/AppSSE.py，此处仅 re-export，
+# SSE · 同步生成器（每连接一条常驻线程）
+# 生成器实现位于 App/AppSSE.py，此处仅 re-export，
 # 保持 FrontAPI.sse_futures_stream_single/dual 对测试（test_sse_gray /
 # test_sse_sequence / test_phase3_guards）与路由可见，入口保持「薄」。
 # 数据源抽象（CSSESource/CTqSdkSession）在 DataAPI/TqSdkCSSESource.py；
@@ -237,7 +209,7 @@ from App.AppSSE import (  # noqa: F401
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# REST 路由（阶段 3a：自 api_server.py 迁入，单一路由源）
+# REST 路由（单一路由源）
 # 路由保持薄：参数校验 + run_in_threadpool(orch.*) + 响应组装。
 # 引擎调用全部走 AppOrch 漏斗（锁分类见 AppOrch.LOCK_POLICY）。
 # ═══════════════════════════════════════════════════════════════════════
@@ -305,9 +277,9 @@ async def api_stocks_select_point(
     sub_freq: str = Query(None),
     main_freq: str = Query(None),
 ):
-    """股票手动选点（orch.call_manual_select_point · SERIAL 持锁，阶段 3a 补锁）
+    """股票手动选点（orch.call_manual_select_point · SERIAL 持锁）
 
-    P4（D5=A）双窗选点放开：dual=1 时 freq=双击所在窗口周期，
+    双窗选点：dual=1 时 freq=双击所在窗口周期，
     main_freq=上窗周期（下窗选点必传），sub_freq=下窗周期。
     """
     if not code or bi_idx == "-1":
@@ -335,7 +307,7 @@ async def api_stocks_red_range(
     right_date: str = Query(...),
     end_date: str = Query(None),
 ):
-    """红框中枢计算（orch.call_compute_red_range_zs · SERIAL 持锁，阶段 3a 补锁）"""
+    """红框中枢计算（orch.call_compute_red_range_zs · SERIAL 持锁）"""
     if not code or not left_date or not right_date:
         raise HTTPException(status_code=400, detail="参数错误: code/left_date/right_date 不能为空")
     try:
@@ -402,14 +374,13 @@ async def api_stocks_scan_close():
     return _json_response(result)
 
 
-# ── 路由 — 阶段 7：批量扫描异步化（ProcessPool 先行）──────────────────
-# 双路径（设计 5.4/5.5）：交互单票原 /api/scan_one（旧版页面 chan_chart.html
-# 使用）已随旧版页面下线，批量扫描统一走 ProcessPool；任务提交返回 task_id，
-# 前端轮询 /api/stocks/scan/{task_id}/read/status 获取进度与结果（设计 5.10：
-# 扫描结果经 SQLite AppScanStore 跨进程共享）。
-# RESTful 分层路由（评审「优势 1」采纳）：/api/stocks/scan/submit ·
+# ── 路由 — 批量扫描异步化（ProcessPool）───────────────────────────────
+# 批量扫描统一走 ProcessPool：任务提交返回 task_id，前端轮询
+# /api/stocks/scan/{task_id}/read/status 获取进度与结果（扫描结果经
+# SQLite AppScanStore 跨进程共享）。
+# RESTful 分层路由：/api/stocks/scan/submit ·
 # /api/stocks/scan/{task_id}/read/status · /api/stocks/scan/{task_id}/cancel；
-# 请求体平铺字段（评审「优势 2」采纳）→ Swagger 自动生成字段 schema 与默认值。
+# 请求体平铺字段 → Swagger 自动生成字段 schema 与默认值。
 
 @router.post("/api/stocks/scan/submit")
 async def api_stocks_scan_submit(stocks: list = Body(...),
@@ -437,7 +408,7 @@ async def api_stocks_scan_read_status(task_id: str = Path(...),
     """批量扫描状态轮询（前端每 1-2s 调用，增量读取）
 
     since: 游标，返回 seq >= since 的结果行（含首行）；前端按
-    row.seq + 1 推进，避免全量回传 O(n²)（交叉评审 W1 修复）。
+    row.seq + 1 推进，避免全量回传 O(n²)。
     返回 {task_id, status, total, completed, results, error}；
     任务不存在返回 404。
     """
@@ -488,8 +459,8 @@ async def api_futures_select_point(
     freq: str = Query("15s"),
     bi_idx: str = Query("-1"),
 ):
-    """期货手动选点（orch.call_futures_manual_select_point · SERIAL 持锁，阶段 3a 补锁）
-    P2-3：期货选点已统一走领域异常，error-dict 二次判读移除（AppError 由统一中间件捕获）"""
+    """期货手动选点（orch.call_futures_manual_select_point · SERIAL 持锁）
+    期货选点统一走领域异常，AppError 由统一异常处理器捕获"""
     if not symbol or bi_idx == "-1":
         return _json_response({"error": "缺少必要参数 symbol 或 bi_idx"}, 400)
     try:
@@ -552,15 +523,15 @@ def api_futures_read_stream(
     sub_freq: str = Query(None),
     end_time: str = Query(None),
 ):
-    """SSE 实时推送（期货单/双窗口）· 同步生成器（方案A）
+    """SSE 实时推送（期货单/双窗口）· 同步生成器
 
-    方案A：每个 SSE 连接 = 1 条常驻线程（同步生成器 + StreamingResponse）。
+    每个 SSE 连接 = 1 条常驻线程（同步生成器 + StreamingResponse）。
     本端点返回同步生成器 sse_futures_stream_single/dual，Starlette 检测到
     同步迭代器后自动在线程池中迭代（iterate_in_threadpool），阻塞调用
     （connect/wait_update/step_load 等）天然发生在线程内，不占事件循环。
-    事件协议与灰度基线逐项一致（见 Test/test_sse_gray.py）。
+    事件协议基线见 Test/test_sse_gray.py。
 
-    end_time: 复盘终点（A 方案软断开）。传入时建 chan 截断到该边界，end_time
+    end_time: 复盘终点（软断开）。传入时建 chan 截断到该边界，end_time
     之后不再推进（复盘看历史不被实时拉最新）；不传为实时流/选点起点流。
     """
     if not symbol:
@@ -630,7 +601,7 @@ async def api_stocks_scan_annotation(freq: str = Query("")):
 
 @router.post("/api/stocks/download/start")
 async def api_stocks_download_start(body: dict = Body(...)):
-    """盘后下载启动（POST，Get+Post 双入口已合并；原 GET 入口下线）"""
+    """盘后下载启动（POST 入口）"""
     categories = body.get("categories") or []
     day_start = body.get("day_start") or ""
     min_start = body.get("min_start") or ""
@@ -653,11 +624,11 @@ async def api_stocks_download_cancel():
     return _json_response({"ok": ok, "message": msg})
 
 
-# ── 路由挂载（单一路由源；api_server 兼容壳 re-export 本 router）──────
+# ── 路由挂载（单一路由源）────────────────────────────────────────────
 app.include_router(router)
 
 
-# ── 静态资源：Frontend/（与 api_server 兼容入口同规则）────────────────
+# ── 静态资源：Frontend/ ──────────────────────────────────────────────
 _frontend_dir = app_config.frontend_dir
 if os.path.isdir(_frontend_dir):
     app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
@@ -677,7 +648,7 @@ if __name__ == "__main__":
     HOST = app_config.host
     PORT = app_config.port
 
-    # ── 端口占用检测（与 api_server 兼容入口同策略）────────────────────
+    # ── 端口占用检测 ──────────────────────────────────────────────────
     try:
         _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         _probe.bind((HOST, PORT))
@@ -689,7 +660,7 @@ if __name__ == "__main__":
         log.info(f"[解决] 然后执行: taskkill /PID <PID> /F 结束旧进程。")
         sys.exit(1)
 
-    last_code, last_freq = orch.load_last_code_freq()  # 阶段 4：AppOrch 漏斗读 AppData
+    last_code, last_freq = orch.load_last_code_freq()  # AppOrch 漏斗读 AppData
     if last_code:
         log.info(f"[信息] 恢复上次: {last_code} (周期: {last_freq})")
     else:

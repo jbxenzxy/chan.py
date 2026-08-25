@@ -2,34 +2,19 @@
 """
 App/AppChart.py —— 图表交互功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：本文件收纳「图表交互」触发的全部动作。
-所谓图表交互，指用户在页面上与图表发生的一切操作：
-
-  - 左上角输入股票/期货代码、切换周期、点击双窗口按钮、选择复盘日期
-    → 触发缠论引擎核心去工作（call_analysis / run_analysis / analyze_stock）
-  - 图表上手动选点（stock_manual_select_point：左肩定位 → 从 T 重拉 →
-    新 CChan → 完整 chartData）
-  - 图表上框选红框中枢（compute_red_range_zs：红框内笔序列 → 中枢重算）
-  - 搜索（search_stocks）、代码解析（get_stock_market_code 等）
-  - 选点 / 上次查看 / 期货子窗缓存漏斗
-  - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases /
-    get_futures_freqs 等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
-
-本模块收纳：
-  - 分析漏斗（call_analysis / run_analysis / analyze_stock 等，持 _ENGINE_LOCK）
+收纳用户在页面上与图表交互触发的全部动作：
+  - 分析漏斗（call_analysis / run_analysis / analyze_stock，持 _ENGINE_LOCK）
   - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
-  - 数据拉取与注入（fetch_and_inject，薄委托引擎 analyze_stock；
-    直连数据源的 _get_data_source 已随 P1-1 删除——数据源装配归引擎）
-  - 审核标注（get_annotations / handle_annotation_action / delete_by_date
-    等，原 App/AppAnnotate.py，阶段随本版合入：图表右键标注属图表交互）
+  - 数据拉取与注入（fetch_and_inject，薄委托引擎 analyze_stock）
+  - 审核标注（get_annotations / handle_annotation_action，图表右键标注）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
-  - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases /
-    get_futures_freqs 等，实现已迁 App/AppSSE.py，此处为图表交互入口的薄封装）
+  - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases 等，
+    实现在 App/AppSSE.py，此处为图表交互入口的薄封装）
   - 代码解析（get_stock_market_code / get_market_code / get_stock_name）
 
 依赖方向：AppChart.py → AppEngine / AppSSE / AppData（单向；
-P1-1 后不再直连 DataAPI——期货元数据一律经 AppSSE 区域 4 出口）
+期货元数据一律经 AppSSE 出口，不直连 DataAPI）
 锁定义：_ENGINE_LOCK 为引擎调用全局串行锁，本模块 call_* 漏斗持锁；
 LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
 """
@@ -39,15 +24,15 @@ import time
 import threading
 import traceback
 
-# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
+# 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
-# P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
-# P3：compute_red_range_zs 独立双窗分支新增 make_dual_sub_key（读 dual_sub 缓存的下窗 CChan）
+# 结构化缓存键工厂（消除字符串拼接歧义与漂移）
+# compute_red_range_zs 独立双窗分支用 make_dual_sub_key 读 dual_sub 缓存的下窗 CChan
 from App.AppData import (app_data, make_single_key, make_dual_main_key,
                          make_dual_sub_key, make_futures_sub_key)
-# SSE 实时流 / 期货功能域（阶段 8：期货选点/退出清理/市场代码周期查询实现已迁 AppSSE，此处仅漏斗）
+# SSE 实时流 / 期货功能域（期货选点/退出清理/市场代码周期查询实现在 AppSSE，此处仅漏斗）
 from App import AppSSE as _sse
-# 领域异常（P2-3：红框期货分支 error-dict → 领域异常，定义独立 App/AppErrors.py）
+# 领域异常（定义于 App/AppErrors.py）
 from App.AppErrors import DataFetchError, AnalysisError
 # 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _red_range_bi_sequence, _red_range_amp
@@ -69,7 +54,7 @@ def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq
 
     - 引擎全局缓存非线程安全 → 全局串行锁保护
     - 开始/完成即时打印：uvicorn 仅在请求完成后记日志，挂起时控制台零输出，
-      此日志是排障第一现场（阶段 1 Hotfix 教训）。
+      此日志是排障第一现场。
     """
     log.info(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
           f"end_date={end_date!r} dual={dual}")
@@ -82,7 +67,7 @@ def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq
 
 
 async def run_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
-    """单标的缠论分析（异步入口，阶段 3a SSE/REST 统一走此通道）
+    """单标的缠论分析（异步入口，SSE/REST 统一走此通道）
 
     线程池执行 + 串行锁：不阻塞事件循环（静态资源/健康检查保持可响应），
     同时保证同一时刻只有一个线程进入引擎。
@@ -109,7 +94,7 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
 
     ⚠ 本函数是引擎原始入口的薄封装，**并非无状态**：引擎内部维护模块级
     LRU 缓存（_stocks_analysis_cache）与名称/PE/市值等共享缓存，均非线程
-    安全。此前的「无状态，可在线程池 / ProcessPool 复用」表述有误导。
+    安全。
 
     调用约定（LOCK_POLICY，见 AppOrch.py 文件头）：
       - 串行分析路径（REST 交互式）→ 必须走 call_analysis / run_analysis
@@ -123,7 +108,7 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 图表标注（由原 App/AppAnnotate.py 合入：图表右键标注属图表交互域）
+# 图表标注（图表右键标注属图表交互域）
 # 依赖方向：本小节 → AppData（单向，app_data 单例）
 # 路由见 FrontAPI /api/annotations GET、/api/stocks/{code}/save|read/annotation
 # ═══════════════════════════════════════════════════════════════════════
@@ -135,10 +120,10 @@ def get_annotations(code, freq):
 
 
 def handle_annotation_action(body):
-    """标注增删改统一入口（/api/annotations POST，40 行校验逻辑下沉）
+    """标注增删改统一入口（/api/annotations POST）
 
     body: {action, code, freq, date, text, y_offset, old_text}
-    返回 (result_dict, status_code)，语义与原路由逐分支一致。
+    返回 (result_dict, status_code)。
     """
     from App.AppData import app_data
 
@@ -185,10 +170,8 @@ def handle_annotation_action(body):
 def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
     """股票手动选点 · SERIAL（持 _ENGINE_LOCK）
 
-    原路由直连 m.stock_manual_select_point 绕锁（阶段 2 遗留问题 L185），
-    阶段 3a 起统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
-    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
-    P4（D5=A）：透传双窗上下文（dual/sub_freq/main_freq），双窗选点放开。
+    统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
+    透传双窗上下文（dual/sub_freq/main_freq），支持双窗选点。
     """
     with _ENGINE_LOCK:
         return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
@@ -200,10 +183,8 @@ def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     """期货手动选点 · SERIAL（持 _ENGINE_LOCK）
 
     内部自建链路（CTqSdkSession + _build_futures_chan +
-    _extract_realtime_snapshot，不经 _analyze_futures_internal——该函数
-    已按 D7 决策删除，期货生产链路统一走 SSE），
+    _extract_realtime_snapshot，期货生产链路统一走 SSE），
     归入串行分类，与股票侧共用引擎锁。
-    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
     """
     with _ENGINE_LOCK:
         return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
@@ -212,9 +193,7 @@ def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
     """红框中枢计算 · SERIAL（持 _ENGINE_LOCK）
 
-    原路由直连 m.compute_red_range_zs 绕锁（阶段 2 遗留问题 L206），
-    阶段 3a 起统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
-    P0-2：直调本域本地实现（原经 AppEngine 兼容壳回跳，已删除）。
+    统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
     """
     with _ENGINE_LOCK:
         return compute_red_range_zs(code, sub_freq=sub_freq,
@@ -233,10 +212,10 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     CSV → 销毁旧CChan及_stocks_analysis_cache 中间状态 → 从T重新加载K线
     创建全新CChan，返回完整 chartData。
 
-    P4（D5=A）双窗选点放开：
+    双窗选点：
       · dual=True 时 freq 为「双击所在窗口」周期（上窗或下窗），
         main_freq 为上窗周期（下窗选点时必传），sub_freq 为下窗周期；
-      · CChan 取数改按窗口定位：上窗选点读 dual_main 缓存；下窗选点读
+      · CChan 取数按窗口定位：上窗选点读 dual_main 缓存；下窗选点读
         独立下窗运行时缓存/dual_sub 缓存（independent）或 dual_main
         多级别联立（legacy），miss 时回退单窗口缓存链；
       · 选点保存后同步销毁 dual_main+dual_sub 两键（双窗缓存命中不比对
@@ -260,7 +239,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     cache_key = make_single_key(market, normalized_code, freq, date_suffix)
     qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
 
-    # ── P4 双窗上下文：配对校验 + 按窗口定位 CChan ──────────────
+    # ── 双窗上下文：配对校验 + 按窗口定位 CChan ──────────────
     dual_main_cache_key = dual_sub_cache_key = None
     if dual:
         if not main_freq:
@@ -305,7 +284,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
                         return main_chan, name
                     except Exception as e:
                         log.warning(f"[选点] legacy 联立取下窗失败: {type(e).__name__}: {e}")
-        # 单窗口（或双窗缓存缺失回退）：原缓存链
+        # 单窗口（或双窗缓存缺失回退）：单窗缓存链
         cached = app_data.cache_get(cache_key)
         if cached is None:
             return None, ""
@@ -355,10 +334,10 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
         app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
-    # P1-2：缓存删除统一经 app_data.cache_remove（内部持锁，消除手工锁+直改双路径）
+    # 缓存删除统一经 app_data.cache_remove（内部持锁）
     app_data.cache_remove(cache_key)
     if dual:
-        # P4：双窗两键一并失效（双窗缓存命中不比对 saved_selection_date，
+        # 双窗两键一并失效（双窗缓存命中不比对 saved_selection_date，
         # 不删除会命中旧 result，选点重建失效）
         app_data.cache_remove(dual_main_cache_key)
         app_data.cache_remove(dual_sub_cache_key)
@@ -366,10 +345,10 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
-    # P4 双窗：重建走双窗路径（响应含 data.sub）——
+    # 双窗：重建走双窗路径（响应含 data.sub）——
     #   上窗选点 start_time=T 作用于上窗（freq==main_freq 时双击发生在上窗，
-    #   D5=A 前端已限制下窗选点，freq!=main_freq 分支为防御路径）；
-    #   下窗不再有选点概念（双窗选点不保存、不读 CSV），纯对齐上窗
+    #   前端限制下窗选点，freq!=main_freq 分支为防御路径）；
+    #   下窗无选点概念（双窗选点不保存、不读 CSV），纯对齐上窗
     #   [T, 最新] 区间加载（对齐不足时引擎降全量兜底）。
     rebuild_start_time = start_time if freq == main_freq else None
     result = _m._analyze_stock_internal(
@@ -385,7 +364,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     """期货手动选点 · RAW（无锁原始入口）
 
     ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
-    call_futures_manual_select_point（持锁漏斗）。实现已迁 App/AppSSE.py。
+    call_futures_manual_select_point（持锁漏斗）。实现在 App/AppSSE.py。
     """
     return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
@@ -400,10 +379,10 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再
     用 _red_range_amp 重新计算中枢，返回给前端绘制。
 
-    股票双窗实现（P3 · A/B 开关 CHAN_STOCK_DUAL_IMPL）：
-      · independent（默认）：改读独立下窗 CChan（运行时缓存 → dual_sub
-        结构化缓存），miss 抛 DataFetchError（D6=B，对齐期货语义）；
-      · legacy：原联立缓存回退链（single → dual_main → single 主级别，
+    股票双窗实现（A/B 开关 CHAN_STOCK_DUAL_IMPL）：
+      · independent（默认）：读独立下窗 CChan（运行时缓存 → dual_sub
+        结构化缓存），miss 抛 DataFetchError（对齐期货语义）；
+      · legacy：联立缓存回退链（single → dual_main → single 主级别，
         miss 时回退重算），行为冻结作 A/B 基线。
     """
     import re
@@ -442,10 +421,10 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
     date_suffix = end_date if end_date else "live"
 
-    # ── P3（D6=B）独立双窗实现：红框中枢改读「独立下窗 CChan」──
+    # ── 独立双窗实现：红框中枢读「独立下窗 CChan」──
     # 读取顺序：运行时缓存（stocks_sub_cache，双窗分析先下后上写入，最新鲜）
     #         → dual_sub 结构化缓存（独立实现随分析落 chan，复盘态亦可整读）。
-    # 两者皆 miss 抛领域异常（对齐期货语义 D6=B：红框依赖下窗笔结构，
+    # 两者皆 miss 抛领域异常（对齐期货语义：红框依赖下窗笔结构，
     # 服务重启/双窗重建间隙等异常态不静默回退，交前端提示重开双窗口）。
     if _m._stock_dual_impl() == "independent":
         chan_code = f"{market}.{normalized_code}"
@@ -469,11 +448,11 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
-    # ── legacy 联立实现（A/B 基线，行为冻结）：原缓存回退链 ──
+    # ── legacy 联立实现（A/B 基线，行为冻结）：缓存回退链 ──
     cache_key = make_single_key(market, normalized_code, sub_freq, date_suffix)
     cached = app_data.cache_get(cache_key)
 
-    # 双窗口新模式：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
+    # 双窗口：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
     # dual_sub 缓存只存 result/records，不存 chan；真正可用于重算中枢的 CChan 在 dual_main 缓存里。
     if (cached is None or "chan" not in cached) and sub_freq in _m._SUB_FREQ_MAP.values():
         for main_freq, _sub in _m._SUB_FREQ_MAP.items():
@@ -527,17 +506,16 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 获取侧：数据拉取与注入（阶段 5：统一走 DataAPI 抽象层）
+# 获取侧：数据拉取与注入（统一走 DataAPI 抽象层）
 # ═══════════════════════════════════════════════════════════════════════
 
 def fetch_and_inject(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
     """
-    阶段 5：判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
+    判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
 
-    fetch 统一走 DataAPI 抽象层（替换阶段 4 前的直连模式）：
+    fetch 统一走 DataAPI 抽象层：
       - 数据源选择由 analyze_stock 内部自动检测（股票走 TdxAPI / 期货走 TqSdkAPI）
       - 本函数为薄封装，直接委托 analyze_stock（其内部已通过 DataAPI 读取数据）
-      - source 死参数已清理（P0-2）：原参数解析后未生效，一律委托 analyze_stock
 
     锁分类 RAW（无锁）：委托 analyze_stock，共享引擎缓存，非线程安全。
     串行调用方须走 call_analysis / run_analysis。
@@ -629,7 +607,7 @@ def search_stocks(q):
     results = exact_results[:10] + exact_pinyin_results[:10] + prefix_results[:10] + other_results[:10]
     results = results[:10]
 
-    # 期货/期指别名搜索（P1-1：经期货域元数据出口，图表层不直连 CTqSdkAPI）
+    # 期货/期指别名搜索（经期货域元数据出口，图表层不直连 CTqSdkAPI）
     _futures_aliases = _sse.get_futures_aliases()
     for alias, full_code in _futures_aliases.items():
         if keyword_upper in alias.upper():
@@ -657,7 +635,7 @@ def futures_clear_saved_point(symbol, freq="15s"):
     """期货清除选点（/api/futures_clear_saved_point）：别名解析 + 清 CSV"""
     from App.AppData import app_data
 
-    # P1-1：别名解析经期货域元数据出口（图表层不直连 CTqSdkAPI）
+    # 别名解析经期货域元数据出口（图表层不直连 CTqSdkAPI）
     symbol_upper = symbol.upper()
     _futures_aliases = _sse.get_futures_aliases()
     if symbol_upper in _futures_aliases:
@@ -679,31 +657,31 @@ def load_last_code_freq():
 
 
 def get_saved_point_times():
-    """选点内存表（阶段 4：FrontAPI 经此只读访问，禁直连 my_chan_main 状态）"""
+    """选点内存表（FrontAPI 经此只读访问）"""
     from App.AppData import app_data
     return app_data.saved_point_times
 
 
 def futures_cache_get(key):
-    """期货分析缓存读（阶段 4 漏斗）"""
+    """期货分析缓存读"""
     from App.AppData import app_data
     return app_data.futures_cache_get(key)
 
 
 def futures_cache_put(key, value):
-    """期货分析缓存写（阶段 4 漏斗；SSE 双窗口下窗 chan 入缓存）"""
+    """期货分析缓存写（SSE 双窗口下窗 chan 入缓存）"""
     from App.AppData import app_data
     return app_data.futures_cache_put(key, value)
 
 
 def futures_cache_pop(key, default=None):
-    """期货分析缓存失效（阶段 4 漏斗；连接关闭时释放）"""
+    """期货分析缓存失效（连接关闭时释放）"""
     from App.AppData import app_data
     return app_data.futures_cache_pop(key, default)
 
 
 def futures_set_sub_chan(symbol, sub_freq, chan):
-    """写期货子窗 CChan（阶段 4 吸收评审：语义化漏斗，key 规则内聚数据层）"""
+    """写期货子窗 CChan（语义化漏斗，key 规则内聚数据层）"""
     from App.AppData import app_data
     return app_data.set_futures_sub_chan(symbol, sub_freq, chan)
 
@@ -721,7 +699,7 @@ def futures_pop_sub_chan(symbol, sub_freq):
 
 
 def get_saved_point(code, freq):
-    """查询单个选点：返回该 (code, freq) 已保存的选点时间或空串（阶段 4）"""
+    """查询单个选点：返回该 (code, freq) 已保存的选点时间或空串"""
     from App.AppData import app_data
     col = app_data.freq_to_col(freq)
     if not col:
@@ -734,32 +712,32 @@ def get_saved_point(code, freq):
 # ═══════════════════════════════════════════════════════════════════════
 
 def futures_cleanup():
-    """清理所有期货数据（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    """清理所有期货数据（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse._cleanup_all_futures_data()
 
 
 def get_futures_aliases():
-    """期货别名映射（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    """期货别名映射（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse.get_futures_aliases()
 
 
 def get_futures_name(full_code):
-    """期货名称（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    """期货名称（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse.get_futures_name(full_code)
 
 
 def tq_available():
-    """天勤数据源是否可用（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    """天勤数据源是否可用（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse.tq_available()
 
 
 def get_futures_freqs():
-    """期货可用周期列表（实现迁 App/AppSSE.py，此处为图表交互入口漏斗）"""
+    """期货可用周期列表（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
     return _sse.get_futures_freqs()
 
 
 def get_futures_freq_sec_map():
-    """期货周期→秒数映射（P1-1：/api/health 单一事实源出口，实现 App/AppSSE.py）"""
+    """期货周期→秒数映射（/api/health 单一事实源出口，实现 App/AppSSE.py）"""
     return _sse.get_futures_freq_sec_map()
 
 

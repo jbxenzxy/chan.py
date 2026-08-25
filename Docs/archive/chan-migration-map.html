@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>阶段 2.6 · 函数级迁移映射</title>
+<style>
+:root{
+  --bg:#f6f7f9; --bg2:#ffffff; --ink:#1a2233; --muted:#5b6472;
+  --rule:#e3e7ee; --accent:#2563eb; --accent2:#0ea5e9;
+  --frontapi:#7c3aed; --apporch:#2563eb; --appdata:#059669;
+  --dataapi:#d97706; --config:#64748b; --remove:#dc2626;
+  --p0:#059669; --p1:#2563eb; --p2:#7c3aed; --p3:#d97706; --p4:#dc2626; --p5:#64748b;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;font-size:15px;line-height:1.65}
+code,kbd{font-family:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:#eef1f6;padding:1px 5px;border-radius:4px}
+pre{background:#0f172a;color:#e2e8f0;padding:16px 18px;border-radius:10px;overflow-x:auto;font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13px;line-height:1.6;margin:12px 0}
+pre code{background:none;color:inherit;padding:0}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+.wrap{max-width:1180px;margin:0 auto;padding:0 20px}
+
+/* 封面 */
+.hero{background:linear-gradient(135deg,#1e3a8a 0%,#2563eb 55%,#0ea5e9 100%);color:#fff;padding:56px 0 48px;border-radius:0 0 24px 24px}
+.hero .tag{display:inline-block;background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.3);padding:3px 12px;border-radius:20px;font-size:13px;letter-spacing:.06em;margin-bottom:16px}
+.hero h1{font-size:34px;font-weight:800;letter-spacing:-.01em;margin-bottom:10px}
+.hero .sub{font-size:16px;opacity:.9;max-width:760px}
+.hero .meta{margin-top:20px;font-size:13px;opacity:.85;display:flex;gap:20px;flex-wrap:wrap}
+
+/* 布局 */
+.layout{display:grid;grid-template-columns:240px 1fr;gap:32px;padding:32px 0 80px}
+nav.toc{position:sticky;top:20px;align-self:start;background:var(--bg2);border:1px solid var(--rule);border-radius:12px;padding:16px;font-size:13px;max-height:calc(100vh - 40px);overflow-y:auto}
+nav.toc h4{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:10px}
+nav.toc a{display:block;padding:5px 8px;border-radius:6px;color:var(--ink)}
+nav.toc a:hover{background:#eef1f6;text-decoration:none}
+nav.toc a.lv2{padding-left:18px;color:var(--muted);font-size:12.5px}
+main{min-width:0}
+
+/* 章节 */
+section{margin-bottom:44px}
+h2{font-size:22px;font-weight:800;margin:0 0 6px;padding-bottom:10px;border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:10px}
+h2 .no{background:var(--accent);color:#fff;font-size:13px;width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+h3{font-size:17px;font-weight:700;margin:26px 0 10px;color:#111827}
+h4{font-size:15px;font-weight:700;margin:18px 0 8px}
+p{margin:8px 0}
+.lead{font-size:15.5px;color:#374151}
+.muted{color:var(--muted)}
+ul,ol{margin:8px 0 8px 22px}
+li{margin:4px 0}
+
+/* 统计卡 */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px;margin:18px 0}
+.stat{background:var(--bg2);border:1px solid var(--rule);border-radius:12px;padding:16px}
+.stat .num{font-size:30px;font-weight:800;color:var(--accent);line-height:1.1}
+.stat .lbl{font-size:12.5px;color:var(--muted);margin-top:4px}
+
+/* 徽章 */
+.badge{display:inline-block;padding:1px 9px;border-radius:20px;font-size:12px;font-weight:600;color:#fff;white-space:nowrap}
+.b-frontapi{background:var(--frontapi)} .b-apporch{background:var(--apporch)}
+.b-appdata{background:var(--appdata)} .b-dataapi{background:var(--dataapi)}
+.b-config{background:var(--config)} .b-remove{background:var(--remove)}
+.b-p0{background:var(--p0)} .b-p1{background:var(--p1)} .b-p2{background:var(--p2)}
+.b-p3{background:var(--p3)} .b-p4{background:var(--p4)} .b-p5{background:var(--p5)}
+.b-done{background:#94a3b8}
+
+/* 表格 */
+.table-wrap{overflow-x:auto;background:var(--bg2);border:1px solid var(--rule);border-radius:12px;margin:14px 0}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:720px}
+th{background:#f1f5f9;text-align:left;padding:9px 12px;font-weight:700;color:#334155;border-bottom:2px solid var(--rule);white-space:nowrap;position:sticky;top:0}
+td{padding:8px 12px;border-bottom:1px solid #eef1f6;vertical-align:top}
+tr:last-child td{border-bottom:none}
+tbody tr:hover{background:#f8fafc}
+td.fn{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:12.5px;white-space:nowrap;font-weight:600}
+td code{background:none;padding:0;font-size:12px}
+.dep{color:var(--muted);font-size:12px;line-height:1.5}
+.dep b{color:#334155}
+
+/* 调用图 */
+.callout{background:#eff6ff;border-left:4px solid var(--accent);border-radius:0 10px 10px 0;padding:14px 18px;margin:14px 0}
+.callout.warn{background:#fffbeb;border-left-color:#d97706}
+.callout.red{background:#fef2f2;border-left-color:#dc2626}
+.callout.green{background:#ecfdf5;border-left-color:#059669}
+.callout .t{font-weight:700;margin-bottom:4px}
+
+/* 图例 */
+.legend{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.legend .item{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+.legend .dot{width:10px;height:10px;border-radius:3px}
+
+/* 依赖热度条 */
+.hot{display:inline-flex;align-items:center;gap:6px}
+.hot .bar{width:52px;height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;display:inline-block}
+.hot .fill{height:100%;background:var(--accent);border-radius:3px}
+.hot .n{font-size:12px;color:var(--muted);font-weight:600}
+
+footer{border-top:1px solid var(--rule);padding:24px 0 40px;color:var(--muted);font-size:13px;text-align:center}
+
+@media(max-width:900px){
+  .layout{grid-template-columns:1fr}
+  nav.toc{position:static;max-height:none}
+  .hero h1{font-size:26px}
+}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="tag">chan.py 架构迁移 · V10 设计文档 · 阶段 2.6</span>
+    <h1>函数级迁移映射</h1>
+    <p class="sub">将 <code>my_chan_main.py</code> 全部顶层函数与模块级状态映射到目标层（FrontAPI / AppOrch / AppData / DataAPI / 配置），标注跨层依赖与状态读写，确定迁移优先级 —— 阶段 3 服务层拆分的执行依据。</p>
+    <div class="meta">
+      <span>分析对象：<code>my_chan_main.py</code>（297KB，74 个顶层函数，57 个模块级状态）</span>
+      <span>基线提交：<code>4da7f91 阶段 2.5</code></span>
+      <span>配套文档：接口契约文档</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap layout">
+<nav class="toc">
+  <h4>目录</h4>
+  <a href="#s1">1. 概述与方法</a>
+  <a href="#s2">2. 目标层定义</a>
+  <a href="#s3">3. 函数级映射总表</a>
+  <a href="#s3a" class="lv2">3.1 配置层</a>
+  <a href="#s3b" class="lv2">3.2 DataAPI / ElTdxAPI</a>
+  <a href="#s3c" class="lv2">3.3 App / AppData</a>
+  <a href="#s3d" class="lv2">3.4 App / AppOrch · 消费侧</a>
+  <a href="#s3e" class="lv2">3.5 App / AppOrch · 获取侧</a>
+  <a href="#s3f" class="lv2">3.6 App / AppOrch · 扫描</a>
+  <a href="#s3g" class="lv2">3.7 FrontAPI / 拆除</a>
+  <a href="#s4">4. 模块级状态收敛表</a>
+  <a href="#s4_8" class="lv2">4.8 持久化文件清单</a>
+  <a href="#s5">5. 迁移优先级与顺序</a>
+  <a href="#s5_tree" class="lv2">5.1 调用链树形图（Wave 叠加）</a>
+  <a href="#s6">6. 阶段 3 迁移批次建议</a>
+  <a href="#s7">7. api_server 附录</a>
+  <a href="#s7a" class="lv2">7.1 路由/桥接归属</a>
+  <a href="#s7b" class="lv2">7.2 跨模块直写</a>
+</nav>
+
+<main>
+
+<section id="s1">
+  <h2><span class="no">1</span>概述与方法</h2>
+  <p class="lead">阶段 2.6 是阶段 3 服务层拆分的<strong>前置条件</strong>。设计文档 4.5 节的粗粒度拆分映射表无法支撑实际执行——单个函数（如 <code>_analyze_stock_internal</code>）的调用链横跨多个目标层。本阶段产出<strong>函数级映射文档</strong>，使阶段 3 拆分有据可依、可逐函数验证。</p>
+  <div class="stats">
+    <div class="stat"><div class="num">74</div><div class="lbl">顶层函数</div></div>
+    <div class="stat"><div class="num">57</div><div class="lbl">模块级状态</div></div>
+    <div class="stat"><div class="num">5</div><div class="lbl">目标层</div></div>
+    <div class="stat"><div class="num">6</div><div class="lbl">优先级档位 P0–P5</div></div>
+    <div class="stat"><div class="num">34</div><div class="lbl">已薄封装（阶段 2）</div></div>
+  </div>
+  <h3>分析方法</h3>
+  <ul>
+    <li>用 <code>ast</code> 静态解析 <code>my_chan_main.py</code>，提取全部顶层函数（74 个）、模块级状态（57 个）、函数间调用关系、函数对模块级状态的读写。</li>
+    <li>对照设计文档 4.5 拆分映射表、6.1 职责分区、6.3 状态收敛原则，为每个函数与状态指定目标层归属。</li>
+    <li>按「被依赖最多的先迁、无外部依赖的纯函数先迁」确定迁移优先级（P0–P5）。</li>
+    <li>标注阶段 2 已薄封装覆盖的函数（AppOrch / AppData / FrontAPI 已有同名或对应接口）。</li>
+  </ul>
+  <div class="callout">
+    <div class="t">映射原则</div>
+    依赖方向严格单向：<code>FrontAPI.py → App/AppOrch.py → App/AppData.py</code>，禁止反向。状态归位到最贴近它的地方，AppOrch 本身保持无状态；可变状态收敛到类实例或数据层。
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="no">2</span>目标层定义</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>目标层</th><th>位置</th><th>职责</th><th>对应设计文档</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge b-frontapi">FrontAPI</span></td><td><code>FrontAPI.py</code>（顶层）</td><td>REST + SSE 入口，保持薄：只做路由与参数校验</td><td>4.6 / 6.2</td></tr>
+        <tr><td><span class="badge b-apporch">AppOrch</span></td><td><code>App/AppOrch.py</code></td><td>业务编排：消费侧（分析引擎）/ 获取侧（数据拉取）/ 扫描（ScannerService）</td><td>6.1</td></tr>
+        <tr><td><span class="badge b-appdata">AppData</span></td><td><code>App/AppData.py</code></td><td>业务数据层：缓存 / 持久化 / 标注 / 自选股</td><td>6.1 / 6.3</td></tr>
+        <tr><td><span class="badge b-dataapi">DataAPI</span></td><td><code>DataAPI/ElTdxAPI.py</code>（新增）</td><td>盘后下载引擎：TDX 日线 / 分钟线下载、下载任务与状态</td><td>4.5</td></tr>
+        <tr><td><span class="badge b-config">配置</span></td><td><code>App/AppConfig.py</code> + <code>ChanConfig.py</code></td><td>基础设施配置与算法参数分离；启动一致性校验</td><td>7.1 / 7.2</td></tr>
+        <tr><td><span class="badge b-remove">拆除</span></td><td>—</td><td>遗留服务器 ChartHandler / ThreadingHTTPServer / main 入口收敛</td><td>4.5</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="legend">
+    <span class="item"><span class="dot" style="background:var(--frontapi)"></span>FrontAPI</span>
+    <span class="item"><span class="dot" style="background:var(--apporch)"></span>AppOrch</span>
+    <span class="item"><span class="dot" style="background:var(--appdata)"></span>AppData</span>
+    <span class="item"><span class="dot" style="background:var(--dataapi)"></span>DataAPI</span>
+    <span class="item"><span class="dot" style="background:var(--config)"></span>配置</span>
+    <span class="item"><span class="dot" style="background:var(--remove)"></span>拆除</span>
+  </div>
+</section>
+
+<section id="s3">
+  <h2><span class="no">3</span>函数级映射总表</h2>
+  <p class="lead">74 个顶层函数按目标层分组。每行标注：行号、依赖的函数、读写的模块级状态、迁移优先级。<span class="badge b-done">已封装</span> 表示阶段 2 已在目标层建立薄封装接口。</p>
+  <div class="legend">
+    <span class="item"><span class="dot" style="background:var(--p0)"></span>P0 纯函数</span>
+    <span class="item"><span class="dot" style="background:var(--p1)"></span>P1 高被依赖工具/数据</span>
+    <span class="item"><span class="dot" style="background:var(--p2)"></span>P2 分析引擎核心</span>
+    <span class="item"><span class="dot" style="background:var(--p3)"></span>P3 获取侧</span>
+    <span class="item"><span class="dot" style="background:var(--p4)"></span>P4 盘后下载</span>
+    <span class="item"><span class="dot" style="background:var(--p5)"></span>P5 扫描</span>
+  </div>
+
+  <h3 id="s3a">3.1 配置层（AppConfig.py + ChanConfig.py）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_make_chan_config</td><td>1704</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>统一缠论配置 → <code>ChanConfig.CChanConfig</code>，已中心化</td></tr>
+        <tr><td class="fn">_verify_config_consistency</td><td>6532</td><td>—</td><td>TDX_INSTALL_DIR / VIPDOC_DIR / DOWNLOAD_DIR / TDX_HQ_CACHE / OUTPUT_DIR / CHAN_PATH / LAST_CODE_FREQ_FILE / SAVED_POINT_FILE / ANNOTATIONS_FILE / _STOCK_NAMES_CACHE_FILE / _STOCK_PE_TTM_FILE / _FLOAT_MC_CACHE_FILE</td><td><span class="badge b-p1">P1</span></td><td>启动配置一致性校验 → AppConfig 启动校验</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3b">3.2 DataAPI / ElTdxAPI.py（盘后下载）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_tdx_day_record</td><td>172</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数：日线记录打包</td></tr>
+        <tr><td class="fn">_tdx_min_record</td><td>211</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数：分钟线记录打包</td></tr>
+        <tr><td class="fn">_date_to_int</td><td>234</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数：日期→整数</td></tr>
+        <tr><td class="fn">_date_to_min_packed</td><td>239</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数：日期→分钟打包</td></tr>
+        <tr><td class="fn">_ensure_dir</td><td>247</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数：目录创建</td></tr>
+        <tr><td class="fn">_download_day_kline</td><td>252</td><td>_date_to_int / _ensure_dir / _tdx_day_record</td><td>—</td><td><span class="badge b-p4">P4</span></td><td>日线下载</td></tr>
+        <tr><td class="fn">_download_min_kline</td><td>388</td><td>_date_to_int / _date_to_min_packed / _ensure_dir / _tdx_min_record</td><td>—</td><td><span class="badge b-p4">P4</span></td><td>分钟线下载</td></tr>
+        <tr><td class="fn">_download_task</td><td>531</td><td>_download_day_kline / _download_min_kline</td><td>_download_state / _download_lock</td><td><span class="badge b-p4">P4</span></td><td>下载任务编排</td></tr>
+        <tr><td class="fn">_start_download</td><td>688</td><td>—</td><td>_download_state / _download_lock</td><td><span class="badge b-p4">P4</span></td><td>启动下载 <span class="badge b-done">已封装</span> start_download</td></tr>
+        <tr><td class="fn">_stop_download</td><td>704</td><td>—</td><td>_download_state / _download_lock</td><td><span class="badge b-p4">P4</span></td><td>停止下载 <span class="badge b-done">已封装</span> stop_download</td></tr>
+        <tr><td class="fn">_get_download_status</td><td>714</td><td>—</td><td>_download_state / _download_lock</td><td><span class="badge b-p4">P4</span></td><td>查询下载状态 <span class="badge b-done">已封装</span> get_download_status</td></tr>
+        <tr><td class="fn">_collect_codes_from_vipdoc</td><td>1127</td><td>—</td><td>VIPDOC_DIR</td><td><span class="badge b-p4">P4</span></td><td>从 vipdoc 收集代码列表</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3c">3.3 App / AppData.py（业务数据层）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>封装</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_safe_write_json_file</td><td>857</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>工具</td></tr>
+        <tr><td class="fn">_send_windows_notification</td><td>1859</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>工具</td></tr>
+        <tr><td class="fn">_cache_put</td><td>1827</td><td>—</td><td>_MAX_CACHE_SIZE / _cache_lock / _stocks_analysis_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> cache_put</td></tr>
+        <tr><td class="fn">_cache_get</td><td>1842</td><td>—</td><td>_cache_lock / _stocks_analysis_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> cache_get</td></tr>
+        <tr><td class="fn">_cache_remove</td><td>1852</td><td>—</td><td>_cache_lock / _stocks_analysis_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> cache_remove</td></tr>
+        <tr><td class="fn">_load_stock_names_from_cache_file</td><td>818</td><td>—</td><td>_STOCK_NAMES_CACHE_FILE / _stock_names_cache / _stock_names_loaded</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> load_stock_names_from_cache_file</td></tr>
+        <tr><td class="fn">_load_pe_ttm_cache</td><td>892</td><td>—</td><td>_STOCK_PE_TTM_FILE / _pe_ttm_cache / _pe_ttm_loaded / _index_belong_cache / _index_belong_loaded</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> load_pe_ttm_cache</td></tr>
+        <tr><td class="fn">_get_pe_ttm</td><td>929</td><td>_load_pe_ttm_cache</td><td>_pe_ttm_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_pe_ttm</td></tr>
+        <tr><td class="fn">_get_index_belong</td><td>935</td><td>_load_pe_ttm_cache</td><td>_index_belong_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_index_belong</td></tr>
+        <tr><td class="fn">_load_float_mc_cache</td><td>1729</td><td>—</td><td>_FLOAT_MC_CACHE_FILE / _float_mc_cache / _float_mc_loaded</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> load_float_mc_cache</td></tr>
+        <tr><td class="fn">_update_float_mc_cache</td><td>1791</td><td>—</td><td>_FLOAT_MC_CACHE_FILE / _float_mc_cache / _float_mc_loaded</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> update_float_mc_cache</td></tr>
+        <tr><td class="fn">_get_float_mc_from_cache</td><td>1804</td><td>—</td><td>_float_mc_cache</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">_load_saved_point_times</td><td>1991</td><td>—</td><td>SAVED_POINT_FILE</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> load_saved_point_times</td></tr>
+        <tr><td class="fn">_save_point_time</td><td>2008</td><td>—</td><td>FREQ_TO_COL / SAVED_POINT_COLUMNS / SAVED_POINT_FILE</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> save_point_time</td></tr>
+        <tr><td class="fn">_clear_saved_point_time</td><td>2054</td><td>—</td><td>FREQ_TO_COL / SAVED_POINT_FILE / _saved_point_times</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> clear_saved_point_time</td></tr>
+        <tr><td class="fn">_save_last_code_freq</td><td>2111</td><td>—</td><td>LAST_CODE_FREQ_FILE</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> save_last_code_freq</td></tr>
+        <tr><td class="fn">_load_last_code_freq</td><td>2121</td><td>—</td><td>LAST_CODE_FREQ_FILE</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> load_last_code_freq</td></tr>
+        <tr><td class="fn">_load_annotations</td><td>2145</td><td>—</td><td>ANNOTATIONS_FILE / _annotations_cache / _annotations_loaded</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">_save_annotations</td><td>2161</td><td>—</td><td>ANNOTATIONS_FILE / _annotations_cache</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">_get_annotation_key</td><td>2170</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_get_annotations_for</td><td>2175</td><td>_get_annotation_key / _load_annotations</td><td>_annotations_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_annotations_for</td></tr>
+        <tr><td class="fn">_add_annotation</td><td>2182</td><td>_get_annotation_key / _load_annotations / _save_annotations</td><td>_annotations_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> add_annotation</td></tr>
+        <tr><td class="fn">_delete_annotation</td><td>2201</td><td>_get_annotation_key / _load_annotations / _save_annotations</td><td>_annotations_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> delete_annotation</td></tr>
+        <tr><td class="fn">_delete_annotation_by_date</td><td>2220</td><td>_get_annotation_key / _load_annotations / _save_annotations</td><td>_annotations_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> delete_annotation_by_date</td></tr>
+        <tr><td class="fn">_delete_all_annotations</td><td>2239</td><td>_get_annotation_key / _load_annotations / _save_annotations</td><td>_annotations_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> delete_all_annotations</td></tr>
+        <tr><td class="fn">_get_annotated_codes</td><td>2250</td><td>_load_annotations / _load_stock_names_from_cache_file</td><td>_annotations_cache / _stock_names_cache</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_annotated_codes</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3d">3.4 App / AppOrch.py · 消费侧（分析引擎）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>封装</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_get_kl_type</td><td>1689</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_get_freq_label</td><td>1698</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_get_date_fmt</td><td>1893</td><td>—</td><td>INTRADAY_FREQS / SUBSECOND_FREQS</td><td><span class="badge b-p0">P0</span></td><td>纯函数（被依赖最多，7 处）</td></tr>
+        <tr><td class="fn">_bi_overlap_range</td><td>1963</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_calc_futures_white_hline</td><td>2304</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">ema</td><td>750</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_inherit_macd_for_preview_bar</td><td>772</td><td>—</td><td>—</td><td><span class="badge b-p0">P0</span></td><td>纯函数</td></tr>
+        <tr><td class="fn">_get_stock_market_code</td><td>1588</td><td>—</td><td>VIPDOC_DIR</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_stock_market_code</td></tr>
+        <tr><td class="fn">_get_market_code</td><td>1676</td><td>_get_stock_market_code</td><td>—</td><td><span class="badge b-p1">P1</span></td><td><span class="badge b-done">已封装</span> get_market_code</td></tr>
+        <tr><td class="fn">_find_left_shoulder_time</td><td>1907</td><td>_get_date_fmt</td><td>—</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">_calc_zs_confirm_edt_from_bis</td><td>1968</td><td>_bi_overlap_range</td><td>—</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">calculate_macd</td><td>762</td><td>ema</td><td>—</td><td><span class="badge b-p1">P1</span></td><td>—</td></tr>
+        <tr><td class="fn">analyze_stock</td><td>4535</td><td>_get_market_code / _analyze_futures_internal / _analyze_stock_internal</td><td>—</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> analyze_stock / call_analysis / run_analysis</td></tr>
+        <tr><td class="fn">_analyze_stock_internal</td><td>3131</td><td>_cache_get / _cache_put / _extract_main_level_data / _extract_sub_level_data / _get_kl_type / _get_stock_market_code / _make_chan_config</td><td>DEBUG_COLD_START_START_DATE / DEBUG_COLD_START_END_DATE / FULL_DATA_MODE / STOCKS_LOOKBACK_CONFIG / FREQ_TO_COL / INTRADAY_FREQS / _SUB_FREQ_MAP / _cache_lock / _saved_point_times / _stock_analysis_lock / _stocks_analysis_cache</td><td><span class="badge b-p2">P2</span></td><td>核心引擎</td></tr>
+        <tr><td class="fn">_analyze_futures_internal</td><td>2646</td><td>_calc_futures_white_hline / _calc_zs_confirm_edt_from_bis / _extract_realtime_snapshot / _get_date_fmt / _get_freq_label / _get_kl_type / _make_chan_config / calculate_macd</td><td>_FUTURES_DUAL_FREQ_MAP / _futures_analysis_cache</td><td><span class="badge b-p2">P2</span></td><td>核心引擎</td></tr>
+        <tr><td class="fn">_extract_main_level_data</td><td>3576</td><td>_calc_zs_confirm_edt_from_bis / _get_date_fmt / _get_freq_label / _get_index_belong / _get_kl_type / _get_pe_ttm / _get_stock_name / calculate_macd</td><td>FREQ_TO_COL / _saved_point_times</td><td><span class="badge b-p2">P2</span></td><td>结果提取</td></tr>
+        <tr><td class="fn">_extract_sub_level_data</td><td>3935</td><td>_calc_zs_confirm_edt_from_bis / _get_date_fmt / _get_freq_label / _get_kl_type / calculate_macd</td><td>—</td><td><span class="badge b-p2">P2</span></td><td>结果提取</td></tr>
+        <tr><td class="fn">_extract_realtime_snapshot</td><td>2405</td><td>_calc_zs_confirm_edt_from_bis / _get_date_fmt / _get_freq_label / ema</td><td>—</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> extract_realtime_snapshot</td></tr>
+        <tr><td class="fn">init_chan_symbol</td><td>2346</td><td>—</td><td>_SSE_DEBUG</td><td><span class="badge b-p2">P2</span></td><td>SSE 路径</td></tr>
+        <tr><td class="fn">compute_red_range_zs</td><td>4210</td><td>_cache_get / _get_date_fmt / _get_kl_type / analyze_stock</td><td>_SUB_FREQ_MAP / _futures_analysis_cache</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> compute_red_range_zs</td></tr>
+        <tr><td class="fn">stock_manual_select_point</td><td>4316</td><td>_analyze_stock_internal / _cache_get / _find_left_shoulder_time / _get_kl_type / _save_point_time / analyze_stock</td><td>FREQ_TO_COL / _cache_lock / _saved_point_times / _stocks_analysis_cache</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> stock_manual_select_point</td></tr>
+        <tr><td class="fn">futures_manual_select_point</td><td>4391</td><td>_calc_futures_white_hline / _extract_realtime_snapshot / _find_left_shoulder_time / _get_date_fmt / _make_chan_config / _save_point_time</td><td>FREQ_TO_COL / _saved_point_times</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> futures_manual_select_point</td></tr>
+        <tr><td class="fn">_cleanup_all_futures_data</td><td>2090</td><td>—</td><td>_saved_point_times</td><td><span class="badge b-p2">P2</span></td><td><span class="badge b-done">已封装</span> futures_cleanup</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3e">3.5 App / AppOrch.py · 获取侧（数据拉取）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>封装</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_get_stock_name</td><td>788</td><td>_load_stock_names_from_cache_file</td><td>_stock_names_cache</td><td><span class="badge b-p3">P3</span></td><td><span class="badge b-done">已封装</span> get_stock_name</td></tr>
+        <tr><td class="fn">_fetch_names_from_sina_once</td><td>1233</td><td>—</td><td>—</td><td><span class="badge b-p3">P3</span></td><td>名称刷新（新浪）</td></tr>
+        <tr><td class="fn">_fetch_index_belong_from_akshare</td><td>955</td><td>—</td><td>_AKSHARE_EXCHANGE_MAP / _AKSHARE_INDEX_MAP / _index_belong_cache / _refresh_status</td><td><span class="badge b-p3">P3</span></td><td>指数归属（AKShare）</td></tr>
+        <tr><td class="fn">_refresh_pe_ttm</td><td>1002</td><td>_fetch_index_belong_from_akshare / _load_pe_ttm_cache / _safe_write_json_file</td><td>_STOCK_NAMES_CACHE_FILE / _STOCK_PE_TTM_FILE / _index_belong_cache / _pe_ttm_cache / _refresh_status</td><td><span class="badge b-p3">P3</span></td><td>PE-TTM 刷新</td></tr>
+        <tr><td class="fn">_refresh_stock_names</td><td>1359</td><td>_collect_codes_from_vipdoc / _fetch_names_from_sina_once / _load_stock_names_from_cache_file / _refresh_pe_ttm / _safe_write_json_file</td><td>TDX_HQ_CACHE / _STOCK_NAMES_CACHE_FILE / _refresh_status / _stock_names_cache / _stock_names_loaded</td><td><span class="badge b-p3">P3</span></td><td><span class="badge b-done">已封装</span> refresh_stock_names / refresh_stock_names_async</td></tr>
+        <tr><td class="fn">_fetch_float_mc_from_tencent</td><td>1746</td><td>—</td><td>—</td><td><span class="badge b-p3">P3</span></td><td><span class="badge b-done">已封装</span> fetch_float_mc_from_tencent</td></tr>
+        <tr><td class="fn">_quick_prefilter_pass</td><td>4554</td><td>_get_float_mc_from_cache</td><td>_stock_names_cache</td><td><span class="badge b-p3">P3</span></td><td>扫描预过滤</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3f">3.6 App / AppOrch.py · 扫描（ScannerService）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>封装</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_debug_read_page_index_stocks</td><td>4590</td><td>—</td><td>—</td><td><span class="badge b-p5">P5</span></td><td>成分股来源</td></tr>
+        <tr><td class="fn">read_tdxhy_l2_indices</td><td>4597</td><td>—</td><td>—</td><td><span class="badge b-p5">P5</span></td><td>板块指数 2 级</td></tr>
+        <tr><td class="fn">read_tdxhy_l3_indices</td><td>4608</td><td>—</td><td>—</td><td><span class="badge b-p5">P5</span></td><td>板块指数 3 级</td></tr>
+        <tr><td class="fn">ScannerService</td><td>AppOrch 450</td><td>analyze_stock / _quick_prefilter_pass / _get_market_code / _cache_remove / _load_stock_names_from_cache_file / _load_float_mc_cache / _fetch_float_mc_from_tencent / _update_float_mc_cache / _send_windows_notification</td><td>_scan_aborted / _scan_skip_log / _scan_start_time / _page_index_code / _scan_lock</td><td><span class="badge b-p5">P5</span></td><td><span class="badge b-done">已封装</span> 收敛目标已建（薄封装壳），调用点切换待阶段 3</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s3g">3.7 FrontAPI.py / 拆除</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>行号</th><th>依赖函数</th><th>依赖状态</th><th>优先级</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">main</td><td>6487</td><td>_load_last_code_freq / analyze_stock</td><td>SYMBOL_CODE</td><td><span class="badge b-p5">P5</span></td><td>程序入口 → FrontAPI（uvicorn 启动）</td></tr>
+        <tr><td class="fn">ThreadingHTTPServer</td><td>14</td><td>—</td><td>—</td><td><span class="badge b-remove">拆除</span></td><td>遗留服务器类，由 FastAPI 替代</td></tr>
+        <tr><td class="fn">ChartHandler</td><td>4622</td><td>—</td><td>—</td><td><span class="badge b-remove">拆除</span></td><td>遗留 do_GET / SSE / 静态服务，约 1850 行，路由已由 FrontAPI 覆盖</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s4">
+  <h2><span class="no">4</span>模块级状态收敛表</h2>
+  <p class="lead">57 个模块级状态按收敛目标分组。收敛原则（6.3）：状态归位到最贴近它的地方，AppOrch 本身保持无状态。</p>
+
+  <h3>4.1 配置类（已中心化，保留兼容别名）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">TDX_INSTALL_DIR</td><td>29</td><td>_verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">VIPDOC_DIR</td><td>30</td><td>_collect_codes_from_vipdoc / _get_stock_market_code / _verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">DOWNLOAD_DIR</td><td>31</td><td>_verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">TDX_HQ_CACHE</td><td>32</td><td>_refresh_stock_names / _verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">OUTPUT_DIR</td><td>33</td><td>_verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">CHAN_PATH</td><td>34</td><td>_verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">LAST_CODE_FREQ_FILE</td><td>35</td><td>_save_last_code_freq / _load_last_code_freq / _verify_config_consistency</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">SYMBOL_CODE</td><td>38</td><td>main</td><td>—</td><td>ChanConfig</td></tr>
+        <tr><td class="fn">_SSE_DEBUG / _SSE_DIAG</td><td>45/46</td><td>init_chan_symbol</td><td>—</td><td>AppConfig</td></tr>
+        <tr><td class="fn">FORWARD_ADJUST_ENABLED</td><td>75</td><td>—</td><td>—</td><td>ChanConfig</td></tr>
+        <tr><td class="fn">DEBUG_COLD_START_START_DATE / END_DATE</td><td>78/81</td><td>_analyze_stock_internal</td><td>—</td><td>ChanConfig</td></tr>
+        <tr><td class="fn">FULL_DATA_MODE</td><td>91</td><td>_analyze_stock_internal</td><td>—</td><td>ChanConfig</td></tr>
+        <tr><td class="fn">STOCKS_LOOKBACK_CONFIG</td><td>94</td><td>_analyze_stock_internal</td><td>—</td><td>ChanConfig</td></tr>
+        <tr><td class="fn">TDX_MARKET_MAP / HK_CODE_PREFIX / DS_CODE_PREFIX</td><td>161/168/169</td><td>—</td><td>—</td><td>AppConfig / ElTdxAPI</td></tr>
+        <tr><td class="fn">SCRIPT_DIR</td><td>51</td><td>—</td><td>—</td><td>运行时路径</td></tr>
+        <tr><td class="fn">_AKSHARE_EXCHANGE_MAP / _AKSHARE_INDEX_MAP</td><td>942/947</td><td>_fetch_index_belong_from_akshare</td><td>—</td><td>AppOrch 获取侧常量</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.2 下载状态（→ DataAPI/ElTdxAPI.py 类实例）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_download_state</td><td>144</td><td>_download_task / _start_download / _stop_download / _get_download_status</td><td>同左</td><td>ElTdxAPI 类实例</td></tr>
+        <tr><td class="fn">_download_lock</td><td>158</td><td>_download_task / _start_download / _stop_download / _get_download_status</td><td>—</td><td>ElTdxAPI 类实例</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.3 名称 / PE / 市值缓存（→ AppData.py）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_stock_names_cache</td><td>808</td><td>_get_stock_name / _load_stock_names_from_cache_file / _refresh_stock_names / _quick_prefilter_pass / _get_annotated_codes</td><td>_refresh_stock_names</td><td>AppData</td></tr>
+        <tr><td class="fn">_stock_names_loaded</td><td>809</td><td>_load_stock_names_from_cache_file</td><td>_load_stock_names_from_cache_file / _refresh_stock_names</td><td>AppData</td></tr>
+        <tr><td class="fn">_STOCK_NAMES_CACHE_FILE</td><td>810</td><td>_load_stock_names_from_cache_file / _refresh_pe_ttm / _refresh_stock_names / _verify_config_consistency</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_pe_ttm_cache</td><td>883</td><td>_get_pe_ttm / _load_pe_ttm_cache / _refresh_pe_ttm</td><td>_load_pe_ttm_cache / _refresh_pe_ttm</td><td>AppData</td></tr>
+        <tr><td class="fn">_pe_ttm_loaded</td><td>884</td><td>_load_pe_ttm_cache</td><td>_load_pe_ttm_cache</td><td>AppData</td></tr>
+        <tr><td class="fn">_index_belong_cache</td><td>888</td><td>_get_index_belong / _load_pe_ttm_cache / _refresh_pe_ttm / _fetch_index_belong_from_akshare</td><td>_load_pe_ttm_cache / _fetch_index_belong_from_akshare</td><td>AppData</td></tr>
+        <tr><td class="fn">_index_belong_loaded</td><td>889</td><td>—</td><td>_load_pe_ttm_cache</td><td>AppData</td></tr>
+        <tr><td class="fn">_STOCK_PE_TTM_FILE</td><td>811</td><td>_load_pe_ttm_cache / _refresh_pe_ttm / _verify_config_consistency</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_float_mc_cache</td><td>1725</td><td>_get_float_mc_from_cache / _load_float_mc_cache / _update_float_mc_cache</td><td>_load_float_mc_cache / _update_float_mc_cache</td><td>AppData</td></tr>
+        <tr><td class="fn">_float_mc_loaded</td><td>1726</td><td>_load_float_mc_cache</td><td>_load_float_mc_cache / _update_float_mc_cache</td><td>AppData</td></tr>
+        <tr><td class="fn">_FLOAT_MC_CACHE_FILE</td><td>1727</td><td>_load_float_mc_cache / _update_float_mc_cache / _verify_config_consistency</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_refresh_status</td><td>814</td><td>_fetch_index_belong_from_akshare / _refresh_pe_ttm / _refresh_stock_names</td><td>_refresh_stock_names</td><td>AppOrch 获取侧</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.4 分析缓存（→ AppData.py）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_MAX_CACHE_SIZE</td><td>1716</td><td>_cache_put</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_stocks_analysis_cache</td><td>1717</td><td>_analyze_stock_internal / _cache_get / _cache_put / _cache_remove / stock_manual_select_point</td><td>—（经 _cache_* 原地改）</td><td>AppData</td></tr>
+        <tr><td class="fn">_cache_lock</td><td>1718</td><td>_analyze_stock_internal / _cache_get / _cache_put / _cache_remove / stock_manual_select_point</td><td>—</td><td>AppData</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.5 选点 / 上次查看 / 标注（→ AppData.py）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">SAVED_POINT_FILE</td><td>1882</td><td>_load_saved_point_times / _save_point_time / _clear_saved_point_time / _verify_config_consistency</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">SAVED_POINT_COLUMNS</td><td>1884</td><td>_save_point_time</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">FREQ_TO_COL</td><td>1886</td><td>_save_point_time / _clear_saved_point_time / _analyze_stock_internal / _extract_main_level_data / stock_manual_select_point / futures_manual_select_point</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">INTRADAY_FREQS / SUBSECOND_FREQS</td><td>1888/1890</td><td>_get_date_fmt / _analyze_stock_internal</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_saved_point_times</td><td>2108</td><td>_analyze_stock_internal / _extract_main_level_data / _clear_saved_point_time / _cleanup_all_futures_data / stock_manual_select_point / futures_manual_select_point</td><td>—（原地改）</td><td>AppData</td></tr>
+        <tr><td class="fn">ANNOTATIONS_FILE</td><td>2140</td><td>_load_annotations / _save_annotations / _verify_config_consistency</td><td>—</td><td>AppData</td></tr>
+        <tr><td class="fn">_annotations_cache</td><td>2141</td><td>_get_annotations_for / _add_annotation / _delete_annotation / _delete_annotation_by_date / _delete_all_annotations / _get_annotated_codes / _save_annotations</td><td>_load_annotations</td><td>AppData</td></tr>
+        <tr><td class="fn">_annotations_loaded</td><td>2142</td><td>_load_annotations</td><td>_load_annotations</td><td>AppData</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.6 扫描状态（→ ScannerService 类实例，收敛目标已建）</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读写方</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_scan_skip_log</td><td>1721</td><td>ScannerService（skip_log）</td><td>ScannerService 类实例</td></tr>
+        <tr><td class="fn">_scan_aborted</td><td>1815</td><td>ScannerService（aborted）</td><td>ScannerService 类实例</td></tr>
+        <tr><td class="fn">_scan_start_time</td><td>1818</td><td>ScannerService（start_time）</td><td>ScannerService 类实例</td></tr>
+        <tr><td class="fn">_page_index_code</td><td>1821</td><td>ScannerService（page_index_code）</td><td>ScannerService 类实例</td></tr>
+        <tr><td class="fn">_scan_lock</td><td>1812</td><td>ScannerService（lock）</td><td>ScannerService 类实例</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>4.7 引擎锁 / 期货缓存 / 模板</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>状态</th><th>行号</th><th>读函数</th><th>写函数</th><th>收敛目标</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_stock_analysis_lock</td><td>1824</td><td>_analyze_stock_internal</td><td>—</td><td>AppOrch _ENGINE_LOCK（已收敛）</td></tr>
+        <tr><td class="fn">_SUB_FREQ_MAP</td><td>4195</td><td>_analyze_stock_internal / compute_red_range_zs</td><td>—</td><td>AppOrch 常量</td></tr>
+        <tr><td class="fn">_FUTURES_DUAL_FREQ_MAP</td><td>4198</td><td>_analyze_futures_internal</td><td>—</td><td>AppOrch 常量</td></tr>
+        <tr><td class="fn">_futures_analysis_cache</td><td>4207</td><td>_analyze_futures_internal / compute_red_range_zs</td><td>—（原地改）</td><td>AppOrch 期货分析缓存</td></tr>
+        <tr><td class="fn">HTML_TEMPLATE</td><td>6480</td><td>—</td><td>—</td><td>Frontend/（已抽离）</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s4_8">4.8 持久化文件清单</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>文件常量</th><th>相对路径</th><th>用途</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">SAVED_POINT_FILE</td><td>double_click_dt.csv</td><td>手动选点记录</td></tr>
+        <tr><td class="fn">ANNOTATIONS_FILE</td><td>text_annotation.json</td><td>文字标注</td></tr>
+        <tr><td class="fn">LAST_CODE_FREQ_FILE</td><td>（AppConfig 配置）</td><td>上次查看代码 / 周期</td></tr>
+        <tr><td class="fn">_STOCK_NAMES_CACHE_FILE</td><td>stock_names.json</td><td>股票名称缓存</td></tr>
+        <tr><td class="fn">_STOCK_PE_TTM_FILE</td><td>stock_pettm_index.json</td><td>PE-TTM + 指数归属缓存</td></tr>
+        <tr><td class="fn">_FLOAT_MC_CACHE_FILE</td><td>stock_float_mc.json</td><td>流通市值缓存</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="no">5</span>迁移优先级与顺序</h2>
+  <p class="lead">排序原则：<strong>被依赖最多的先迁</strong>（解除下游阻塞）、<strong>无外部依赖的纯函数先迁</strong>（零风险）。下表为被依赖热度 Top 函数。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>函数</th><th>被依赖次数</th><th>依赖方</th><th>优先级</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">_get_date_fmt</td><td><span class="hot"><span class="bar"><span class="fill" style="width:88%"></span></span><span class="n">7</span></span></td><td class="dep">_find_left_shoulder_time / _extract_realtime_snapshot / _analyze_futures_internal / _analyze_stock_internal / _extract_main_level_data / _extract_sub_level_data / compute_red_range_zs / futures_manual_select_point</td><td><span class="badge b-p0">P0</span></td></tr>
+        <tr><td class="fn">_get_kl_type</td><td><span class="hot"><span class="bar"><span class="fill" style="width:75%"></span></span><span class="n">6</span></span></td><td class="dep">_analyze_futures_internal / _analyze_stock_internal / _extract_main_level_data / _extract_sub_level_data / compute_red_range_zs / stock_manual_select_point</td><td><span class="badge b-p0">P0</span></td></tr>
+        <tr><td class="fn">_load_annotations</td><td><span class="hot"><span class="bar"><span class="fill" style="width:75%"></span></span><span class="n">6</span></span></td><td class="dep">_get_annotations_for / _add_annotation / _delete_annotation / _delete_annotation_by_date / _delete_all_annotations / _get_annotated_codes</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">_get_annotation_key</td><td><span class="hot"><span class="bar"><span class="fill" style="width:63%"></span></span><span class="n">5</span></span></td><td class="dep">_get_annotations_for / _add_annotation / _delete_annotation / _delete_annotation_by_date / _delete_all_annotations</td><td><span class="badge b-p0">P0</span></td></tr>
+        <tr><td class="fn">_get_freq_label</td><td><span class="hot"><span class="bar"><span class="fill" style="width:50%"></span></span><span class="n">4</span></span></td><td class="dep">_extract_realtime_snapshot / _analyze_futures_internal / _extract_main_level_data / _extract_sub_level_data</td><td><span class="badge b-p0">P0</span></td></tr>
+        <tr><td class="fn">_calc_zs_confirm_edt_from_bis</td><td><span class="hot"><span class="bar"><span class="fill" style="width:50%"></span></span><span class="n">4</span></span></td><td class="dep">_extract_realtime_snapshot / _analyze_futures_internal / _extract_main_level_data / _extract_sub_level_data</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">_save_annotations</td><td><span class="hot"><span class="bar"><span class="fill" style="width:50%"></span></span><span class="n">4</span></span></td><td class="dep">_add_annotation / _delete_annotation / _delete_annotation_by_date / _delete_all_annotations</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">_make_chan_config</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">_analyze_futures_internal / _analyze_stock_internal / futures_manual_select_point</td><td><span class="badge b-p0">P0</span></td></tr>
+        <tr><td class="fn">_cache_get</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">_analyze_stock_internal / compute_red_range_zs / stock_manual_select_point</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">_load_stock_names_from_cache_file</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">_get_stock_name / _refresh_stock_names / _get_annotated_codes</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">_load_pe_ttm_cache</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">_get_pe_ttm / _get_index_belong / _refresh_pe_ttm</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">calculate_macd</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">_analyze_futures_internal / _extract_main_level_data / _extract_sub_level_data</td><td><span class="badge b-p1">P1</span></td></tr>
+        <tr><td class="fn">analyze_stock</td><td><span class="hot"><span class="bar"><span class="fill" style="width:38%"></span></span><span class="n">3</span></span></td><td class="dep">compute_red_range_zs / stock_manual_select_point / main</td><td><span class="badge b-p2">P2</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>迁移顺序总览</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>优先级</th><th>数量</th><th>原则</th><th>代表函数</th></tr></thead>
+      <tbody>
+        <tr><td><span class="badge b-p0">P0</span></td><td>10</td><td>无外部依赖的纯函数，零风险，立即迁</td><td>_get_kl_type / _get_freq_label / _bi_overlap_range / _calc_futures_white_hline / ema / _safe_write_json_file / _get_annotation_key / _make_chan_config / _send_windows_notification / _inherit_macd_for_preview_bar</td></tr>
+        <tr><td><span class="badge b-p1">P1</span></td><td>24</td><td>被依赖最多的工具 / 数据函数，先迁以解除阻塞</td><td>_get_date_fmt / _load_annotations / _calc_zs_confirm_edt_from_bis / _save_annotations / _cache_put / _cache_get / _cache_remove / _load_stock_names_from_cache_file / _load_pe_ttm_cache / _get_pe_ttm / _get_index_belong / _load_float_mc_cache / _update_float_mc_cache / _get_float_mc_from_cache / 选点 / 上次查看 / 标注持久化 / _get_stock_market_code / _get_market_code / _find_left_shoulder_time / calculate_macd / _verify_config_consistency</td></tr>
+        <tr><td><span class="badge b-p2">P2</span></td><td>13</td><td>分析引擎核心，依赖 P0/P1 就绪后迁</td><td>analyze_stock / _analyze_stock_internal / _analyze_futures_internal / _extract_main_level_data / _extract_sub_level_data / _extract_realtime_snapshot / init_chan_symbol / compute_red_range_zs / stock_manual_select_point / futures_manual_select_point / _cleanup_all_futures_data</td></tr>
+        <tr><td><span class="badge b-p3">P3</span></td><td>7</td><td>获取侧数据拉取 / 刷新</td><td>_get_stock_name / _refresh_stock_names / _fetch_names_from_sina_once / _refresh_pe_ttm / _fetch_index_belong_from_akshare / _fetch_float_mc_from_tencent / _quick_prefilter_pass</td></tr>
+        <tr><td><span class="badge b-p4">P4</span></td><td>12</td><td>盘后下载 → DataAPI/ElTdxAPI.py</td><td>_download_day_kline / _download_min_kline / _download_task / _start_download / _stop_download / _get_download_status / _collect_codes_from_vipdoc / _tdx_day_record / _tdx_min_record / _date_to_int / _date_to_min_packed / _ensure_dir</td></tr>
+        <tr><td><span class="badge b-p5">P5</span></td><td>4</td><td>扫描来源 / 入口 / 拆除</td><td>_debug_read_page_index_stocks / read_tdxhy_l2_indices / read_tdxhy_l3_indices / main</td></tr>
+        <tr><td><span class="badge b-remove">拆除</span></td><td>2</td><td>遗留服务器</td><td>ChartHandler / ThreadingHTTPServer</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="no">6</span>阶段 3 迁移批次建议</h2>
+  <p class="lead">按「先低风险高收益、后高工作量」排序，将函数级映射落到阶段 3 的执行批次。每批完成后跑阶段 2.5 回归基线验证。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>批次</th><th>对应阶段</th><th>内容</th><th>迁移函数</th><th>风险</th></tr></thead>
+      <tbody>
+        <tr><td><strong>批次 0</strong></td><td>3a 前置</td><td>纯函数迁入目标层（AppOrch 工具区 / AppData / ElTdxAPI）</td><td>P0 全部 10 个</td><td>极低</td></tr>
+        <tr><td><strong>批次 1</strong></td><td>3a</td><td>数据层函数实现搬入 AppData.py，AppOrch 改经 AppData 访问缓存 / 持久化</td><td>P1 数据层：_cache_* / 选点 / 上次查看 / 标注 / 名称 / PE / 市值缓存</td><td>低</td></tr>
+        <tr><td><strong>批次 2</strong></td><td>3a</td><td>分析引擎核心迁入 AppOrch 消费侧，REST 路由全部收敛到 FrontAPI</td><td>P2 分析引擎 13 个</td><td>中</td></tr>
+        <tr><td><strong>批次 3</strong></td><td>3b</td><td>获取侧迁入 AppOrch，SSE 生成器改写为原生异步生成器</td><td>P3 获取侧 7 个 + SSE 路径</td><td>中</td></tr>
+        <tr><td><strong>批次 4</strong></td><td>3b / 4</td><td>盘后下载迁入 DataAPI/ElTdxAPI.py</td><td>P4 下载 12 个</td><td>低</td></tr>
+        <tr><td><strong>批次 5</strong></td><td>4</td><td>扫描来源函数收敛到 ScannerService；遗留 ChartHandler / ThreadingHTTPServer 拆除；main 收敛到 FrontAPI</td><td>P5 + 拆除</td><td>中</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>迁移波次（Waves 1–6，依赖拓扑序）</h3>
+  <p>按「被依赖最多的先迁、无外部依赖的纯函数先迁」双原则分波次。每波次内函数可独立迁移、独立验证，无需等待同波次其他函数。</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>波次</th><th>函数数</th><th>特征</th><th>代表函数</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Wave 1</strong></td><td>45</td><td>叶子函数（零调用依赖），纯函数优先</td><td>_get_kl_type / _get_date_fmt / _cache_* / _load_* / _make_chan_config / ema / _safe_write_json_file / _download_*</td></tr>
+        <tr><td><strong>Wave 2</strong></td><td>16</td><td>仅依赖 Wave 1 的单层调用</td><td>_calc_zs_confirm_edt_from_bis / calculate_macd / _find_left_shoulder_time / _get_market_code / _get_pe_ttm / _get_stock_name / _add_annotation / _refresh_pe_ttm</td></tr>
+        <tr><td><strong>Wave 3</strong></td><td>5</td><td>依赖 Wave 1–2 的多层编排</td><td>_extract_realtime_snapshot / _extract_main_level_data / _extract_sub_level_data / _download_task / _refresh_stock_names</td></tr>
+        <tr><td><strong>Wave 4</strong></td><td>4</td><td>核心分析链：依赖 Wave 1–3</td><td>_analyze_stock_internal / _analyze_futures_internal / futures_manual_select_point</td></tr>
+        <tr><td><strong>Wave 5</strong></td><td>1</td><td>统一入口：analyze_stock</td><td>analyze_stock</td></tr>
+        <tr><td><strong>Wave 6</strong></td><td>3</td><td>顶层入口 / 壳函数</td><td>compute_red_range_zs / stock_manual_select_point / main</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s5_tree">调用链树形图（Wave + 目标层叠加）</h3>
+  <p class="lead">以下从 <code>analyze_stock</code> 入口出发，展示完整的调用链拓扑。每行标注 <strong>Wave 波次</strong>（拓扑排序深度）和 <strong>目标层</strong>（颜色方块），叶子节点（Wave 1）优先迁移，逐层向上。</p>
+  <div class="table-wrap" style="overflow-x:auto;padding:16px 18px">
+    <pre style="background:#0f172a;color:#e2e8f0;font-size:12.5px;line-height:1.7;margin:0;font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace">analyze_stock <span style="color:#94a3b8">··················································</span> <span style="display:inline-block;background:#2563eb;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W5</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+├── _get_market_code <span style="color:#475569">·········································</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+├── _analyze_futures_internal <span style="color:#475569">································</span> <span style="display:inline-block;background:#2563eb;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W4</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── _get_kl_type <span style="color:#475569">········································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── _make_chan_config <span style="color:#475569">···································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#64748b20;color:#64748b;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #64748b40">配置层</span>
+│   ├── _calc_futures_white_hline <span style="color:#475569">·························</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── calculate_macd <span style="color:#475569">·····································</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   │   └── ema <span style="color:#475569">·················································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── _calc_zs_confirm_edt_from_bis <span style="color:#475569">·················</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   │   └── _bi_overlap_range <span style="color:#475569">·······························</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── _get_date_fmt <span style="color:#475569">·······································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   ├── _get_freq_label <span style="color:#475569">····································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+│   └── _extract_realtime_snapshot <span style="color:#475569">························</span> <span style="display:inline-block;background:#d97706;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W3</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+└── _analyze_stock_internal <span style="color:#475569">·································</span> <span style="display:inline-block;background:#2563eb;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W4</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    ├── _get_stock_market_code <span style="color:#475569">······························</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    ├── _make_chan_config <span style="color:#475569">···································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#64748b20;color:#64748b;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #64748b40">配置层</span>
+    ├── _cache_get <span style="color:#475569">·············································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    ├── _cache_put <span style="color:#475569">·············································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    ├── _extract_main_level_data <span style="color:#475569">···························</span> <span style="display:inline-block;background:#d97706;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W3</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── _get_kl_type <span style="color:#475569">·····································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── _get_date_fmt <span style="color:#475569">····································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── _get_freq_label <span style="color:#475569">·································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── calculate_macd <span style="color:#475569">··································</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   │   └── ema <span style="color:#475569">··············································</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── _calc_zs_confirm_edt_from_bis <span style="color:#475569">··············</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   │   └── _bi_overlap_range <span style="color:#475569">····························</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span>
+    │   ├── _get_stock_name <span style="color:#475569">·································</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    │   │   └── _load_stock_names_from_cache_file <span style="color:#475569">·····</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    │   ├── _get_pe_ttm <span style="color:#475569">····································</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    │   │   └── _load_pe_ttm_cache <span style="color:#475569">························</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    │   └── _get_index_belong <span style="color:#475569">·······························</span> <span style="display:inline-block;background:#7c3aed;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W2</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    │       └── _load_pe_ttm_cache <span style="color:#475569">·······················</span> <span style="display:inline-block;background:#059669;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W1</span> <span style="display:inline-block;background:#05966920;color:#059669;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #05966940">AppData</span>
+    └── _extract_sub_level_data <span style="color:#475569">····························</span> <span style="display:inline-block;background:#d97706;color:#fff;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600">W3</span> <span style="display:inline-block;background:#2563eb20;color:#2563eb;padding:0 7px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid #2563eb40">AppOrch·消费侧</span></pre>
+  </div>
+  <div class="callout green">
+    <div class="t">解读方法</div>
+    <strong>自底向上迁</strong>：Wave 1（绿色）叶子节点最优先，它们不依赖任何同模块函数，可独立迁移到目标层。Wave 2（紫色）仅依赖 Wave 1，依次类推。每波次内的函数可并行迁移、独立验证。
+  </div>
+
+  <div class="callout green">
+    <div class="t">阶段 3 验收标准</div>
+    每批迁移后：<code>my_chan_main.py</code> 对应函数删除或改为转发；<code>Test/</code> 回归基线全绿；<code>FrontAPI.py</code> 保持薄；依赖方向单向（FrontAPI → AppOrch → AppData）。
+  </div>
+  <div class="callout red">
+    <div class="t">风险提示</div>
+    <code>_analyze_stock_internal</code>（3131 行）与 <code>_analyze_futures_internal</code>（2646 行）调用链横跨消费侧 / 数据层 / 配置，是阶段 3 工作量最大的两个函数，建议拆分为「数据加载 → 缠论计算 → 结果提取」三段再迁。
+  </div>
+</section>
+
+<section id="s7">
+  <h2><span class="no">7</span>api_server.py 附录：路由/桥接归属</h2>
+  <p class="lead">api_server.py 的 37 项迁移输入（31 REST 路由 + 4 SSE 桥接 + app/router），阶段 3a 首当其冲。红色标注 6 处跨模块直写模块级状态，是阶段 3 高危点。</p>
+
+  <h3 id="s7a">7.1 路由/桥接归属表</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>路由/标识</th><th>类型</th><th>目标层</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">app</td><td>FastAPI 实例</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI 单一 app</td></tr>
+        <tr><td class="fn">router</td><td>APIRouter</td><td><span class="badge b-frontapi">FE</span></td><td>→ 并入 FrontAPI</td></tr>
+        <tr><td class="fn">_sse_generator</td><td>SSE 桥接</td><td><span class="badge b-frontapi">FE</span></td><td>SSE 生成器（3b 改写为原生异步生成器）</td></tr>
+        <tr><td class="fn">_json_response</td><td>工具函数</td><td><span class="badge b-frontapi">FE</span></td><td>JSON 响应工具（随路由迁 FrontAPI）</td></tr>
+        <tr><td class="fn">_SSEMockWfile</td><td>SSE 桥接</td><td><span class="badge b-remove">拆除</span></td><td>SSE Mock 桥接层（3b-2 拆除）</td></tr>
+        <tr><td class="fn">_SSEMockHandler</td><td>SSE 桥接</td><td><span class="badge b-remove">拆除</span></td><td>SSE Mock 桥接层（同上）</td></tr>
+        <tr><td class="fn">api_stock</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>/api/stock → FrontAPI + AppOrch.call_analysis</td></tr>
+        <tr><td class="fn">api_stocks_manual_select_point</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch.stock_manual_select_point</td></tr>
+        <tr><td class="fn">api_red_range_zs</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch.compute_red_range_zs</td></tr>
+        <tr><td class="fn">api_search</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch.search_stocks</td></tr>
+        <tr><td class="fn">api_zxg_list</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData.read_zxg_stocks</td></tr>
+        <tr><td class="fn">api_scan_stock_list</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch 扫描（106 行）</td></tr>
+        <tr><td class="fn" style="color:var(--remove)">api_scan_one</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>⚠ 直写 m._scan_skip_log / m._scan_aborted（162 行）</td></tr>
+        <tr><td class="fn">api_scan_page_index_code</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch 扫描</td></tr>
+        <tr><td class="fn" style="color:var(--remove)">api_scan_start</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>⚠ 直写 m._scan_start_time</td></tr>
+        <tr><td class="fn">api_scan_end</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + ScannerService</td></tr>
+        <tr><td class="fn">api_scan_clear_cache</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData.cache_remove</td></tr>
+        <tr><td class="fn" style="color:var(--remove)">api_scan_abort</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>⚠ 直写 m._scan_aborted</td></tr>
+        <tr><td class="fn">api_zxg_save</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData.save_to_zxg_blk</td></tr>
+        <tr><td class="fn">api_clear_saved_point</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData.clear_saved_point</td></tr>
+        <tr><td class="fn">api_futures_manual_select_point</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch</td></tr>
+        <tr><td class="fn">api_futures_clear_saved_point</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData</td></tr>
+        <tr><td class="fn">api_futures_cleanup</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch._cleanup_all_futures_data</td></tr>
+        <tr><td class="fn">api_futures_status</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch 获取侧状态</td></tr>
+        <tr><td class="fn">api_futures_config</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch</td></tr>
+        <tr><td class="fn">api_futures_stream</td><td>SSE 端点</td><td><span class="badge b-frontapi">FE</span></td><td>SSE 端点（3b 改写）</td></tr>
+        <tr><td class="fn">api_refresh_stock_names</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch.refresh_stock_names_async</td></tr>
+        <tr><td class="fn">api_refresh_status</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppOrch.refresh_status</td></tr>
+        <tr><td class="fn">api_annotations_get</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData</td></tr>
+        <tr><td class="fn">api_annotations_post</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData（40 行校验逻辑）</td></tr>
+        <tr><td class="fn">api_annotations_scan</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + AppData</td></tr>
+        <tr><td class="fn">api_tdx_download_start_get</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + ElTdxAPI</td></tr>
+        <tr><td class="fn">api_tdx_download_start_post</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + ElTdxAPI</td></tr>
+        <tr><td class="fn">api_tdx_download_status</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + ElTdxAPI</td></tr>
+        <tr><td class="fn">api_tdx_download_stop</td><td>REST</td><td><span class="badge b-frontapi">FE</span></td><td>→ FrontAPI + ElTdxAPI</td></tr>
+        <tr><td class="fn">chan_chart_redirect</td><td>REST</td><td><span class="badge b-remove">拆除</span></td><td>旧页重定向（前端切 Frontend/ 后删）</td></tr>
+        <tr><td class="fn">app_error_handler</td><td>工具</td><td><span class="badge b-frontapi">FE</span></td><td>AppError 统一处理器 → FrontAPI</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="s7b">7.2 跨模块直写状态（6 处高危点）</h3>
+  <div class="callout red">
+    <div class="t">⚠ 阶段 3a 优先处理</div>
+    api_server.py 仍有 6 处运行时直写 <code>m._scan_*</code> 模块级状态，绕过了 ScannerService 封装。阶段 3a 切路由时须将这些直写改为调用 ScannerService 方法。
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>位置</th><th>代码</th><th>替换为</th></tr></thead>
+      <tbody>
+        <tr><td class="fn">api_scan_one (L~498)</td><td><code>m._scan_skip_log.append(...)</code></td><td><code>scanner.skip_log.append(...)</code></td></tr>
+        <tr><td class="fn">api_scan_one (多处)</td><td><code>m._scan_aborted</code> 读</td><td><code>scanner.aborted</code> 属性</td></tr>
+        <tr><td class="fn">api_scan_start</td><td><code>m._scan_start_time = time.time()</code></td><td><code>scanner.start_time = time.time()</code></td></tr>
+        <tr><td class="fn">api_scan_abort</td><td><code>m._scan_aborted = True</code></td><td><code>scanner.abort()</code></td></tr>
+        <tr><td class="fn">api_scan_stock_list</td><td><code>m._scan_lock</code> 直取</td><td><code>scanner.lock</code> 属性</td></tr>
+        <tr><td class="fn">main 启动</td><td><code>m.SYMBOL_CODE</code> 读</td><td><code>chan_config.default_code</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+</div>
+
+<footer>
+  阶段 2.6 函数级迁移映射 · 基于 chan-architecture-v10.html 8.5 节 · 分析基线 4da7f91（阶段 2.5）· 配套文档：接口契约文档
+</footer>
+
+
+
+
+
+
+
+
+
+
+
+</body></html>

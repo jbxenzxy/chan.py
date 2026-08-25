@@ -2,34 +2,16 @@
 """
 App/AppSSE.py —— SSE 实时流功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：期货实时行情通过 SSE 长连接持续推送到
-前端图表（/api/futures_stream），本文件收纳该链路的核心机制与期货侧
-配套能力。当前期货是唯一 SSE 实时流消费者；未来若增加股票实时，同样
-收纳于此（命名取 SSE 而非 Futures 的原因）。
+期货实时行情通过 SSE 长连接持续推送到前端图表（/api/futures_stream）。
+当前期货是唯一 SSE 实时流消费者；未来若增加股票实时，同样收纳于此
+（命名取 SSE 而非 Futures 的原因）。
 
-本模块收纳（文件内按 5 区域划分，见各区域分隔头）：
-  - 区域 1 · SSE 实时流（init_chan_symbol / _drain_chan / _get_saved_point /
-    _sse_frame / sse_futures_stream_single/dual，供 FrontAPI.CSSESource 调用）
-  - 区域 2 · 期货分析（_build_futures_chan / _extract_chan_structure /
-    _extract_realtime_snapshot /
-    _calc_futures_white_hline / _apply_macd_full / _apply_macd_incremental /
-    _incremental_klines 实时快照提取）
-  - 区域 3 · 期货选点（futures_manual_select_point，临时 TqApi 拉全量 →
-    定位左肩 → 从 T 重拉 → 新 CChan → 快照）
-  - 区域 4 · 市场/代码/周期查询（get_futures_aliases / get_futures_name /
-    tq_available / get_futures_freqs）
-  - 区域 5 · 期货退出清理（_cleanup_all_futures_data / futures_cleanup）
+文件内按 5 区域划分（见各区域分隔头）：SSE 实时流 / 期货分析 / 期货选点 /
+市场/代码/周期查询 / 期货退出清理。
 
-依赖方向：AppSSE.py → AppEngine / utils / AppData / DataAPI（单向）
-  - 引擎侧私有实现（TQ_AVAILABLE / CTqSdkAPI / _get_futures_name）经
-    AppEngine 导入；
-  - 纯函数/常量（_get_date_fmt / _make_chan_config / ema / 周期映射 /
-    中枢/左肩辅助 / _FUTURES_DUAL_FREQ_MAP / _SSE_DEBUG 等）自
-    App/utils.py 导入（与 AppEngine 统一来源，P0-1c 显式化）；
-  - 共享状态（saved_point_times / futures_analysis_cache / 选点保存）
-    一律经 app_data.* 公共 API（同一对象，零漂移）；
-  - 区间套辅助（_main_bi_range / _futures_red_range / CMyBSPointList）
-    来自 BuySellPoint.BSPointList（与 AppEngine 同源）。
+依赖方向：AppSSE → AppEngine / App/utils / AppData / DataAPI（单向）；
+纯函数/常量与 AppEngine 统一从 App/utils 导入；共享状态（选点/期货缓存）
+一律经 app_data.* 公共 API（同一对象，零漂移）。
 锁分类：SSE 路径 SELF_CONTAINED（每连接独立 TqApi+CChan，不加引擎锁）；
 期货选点/分析由 AppChart 的 call_* 漏斗持 _ENGINE_LOCK 串行调用。
 """
@@ -42,9 +24,9 @@ from datetime import datetime
 from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name,
 )
-# 领域异常（P2-3：期货路径 error-dict → 领域异常，定义独立 App/AppErrors.py）
+# 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError, ConfigError
-# 引擎纯函数/常量公共工具（P0-1c：与 AppEngine 统一从 App/utils 导入）
+# 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/utils 导入）
 from App.utils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
     ema,
@@ -55,12 +37,11 @@ from App.utils import (
 from App.AppData import app_data
 # 区间套辅助（红框/双窗口共用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList
-# chan.py 核心（与 AppEngine 同源；原 REST 静态路径 _analyze_futures_internal
-# 已按 D7 决策删除——生产期货链路统一走 SSE init_chan_symbol）
+# chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
 from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
 # SSE 数据源抽象（tqsdk 仅在 DataAPI 可见；生成器消费 src.* 协议；
-# P1-1：close_all/CSSESource 一并 re-export，API 层经本模块消费，不再直连 DataAPI）
+# close_all/CSSESource 一并 re-export，API 层经本模块消费，不直连 DataAPI）
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
     CSSESource, CSSESourceClosed, CTqSdkSession, close_all,
 )
@@ -143,10 +124,10 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
     end_time: 复盘终点（A 方案软断开）：有值时只截取该时间之前（含）的K线建 chan，
               且取数为 N+复盘点到当前的流逝根数、建 chan 前截断到末 N 根
               （C 操作：左边界=从 end 往前推 N 根，与股票复盘语义一致），
-              update 循环将停在此边界，不再被实时拉新。None 为实时流。
+              update 循环停在此边界，不被实时拉新。None 为实时流。
     num_bars: 显式取数根数（双窗下窗传「上窗区间折算根数」实现对齐；None=按窗口语义计算）。
-    V10 复审 P1-2：首参改为数据源对象 src（CTqSdkSession），服务层只消费
-    src.fetch_kline / src.get_kline_serial 协议，不再触碰 src.api 原始对象。"""
+    首参为数据源对象 src（CTqSdkSession），服务层只消费
+    src.fetch_kline / src.get_kline_serial 协议，不触碰 src.api 原始对象。"""
     import time as _time
 
     display_label = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
@@ -175,8 +156,8 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
 
         t_chan = _time.time()
 
-        # 统一构造（P0-1 取数唯一性收敛）：set_data + 周期映射 + 建 CChan + step_load
-        # P1-1 数据源抽象单轨化：数据注入经 src.set_data（Session 协议），不落类级缓存
+        # 统一构造：set_data + 周期映射 + 建 CChan + step_load（见 _build_futures_chan）
+        # 数据注入经 src.set_data（Session 协议），不落类级缓存
         chan, kl_type = _build_futures_chan(records, symbol, freq_sec, src=src)
 
         klines = src.get_kline_serial(symbol, freq_sec)
@@ -195,15 +176,15 @@ def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, 
 def _drain_chan(chan):
     """驱动 chan 增量计算（耗尽 step_load 生成器）。
 
-    原为数据源方法 CSSESource.step_load；彻底解耦业务后提升为服务层
-    纯业务函数，生成器经本函数消耗引擎，数据源不再关心缠论计算。
+    服务层纯业务函数：生成器经本函数消耗引擎，
+    数据源不关心缠论计算。
     """
     for _snapshot in chan.step_load():
         pass
 
 
 # ═══════════════════════════════════════════════════════════════════
-# P2-4 增量快照：每根 K 线完成不再全量 O(n) 重建 klines/MACD，
+# 增量快照：每根 K 线完成不全量 O(n) 重建 klines/MACD，
 # 复用缓存快照仅追加新确认K线 + EMA 状态续算，结构元素仍重建。
 # ═══════════════════════════════════════════════════════════════════
 
@@ -217,7 +198,7 @@ def _get_saved_point(code, freq):
 
 
 def _sse_frame(event, payload) -> bytes:
-    """构造一帧 SSE 事件（与遗留实现的字节格式逐字一致）"""
+    """构造一帧 SSE 事件（帧格式固定：event 行 + data 行 + 空行，字节级稳定）"""
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False, allow_nan=False)}\n\n".encode("utf-8")
 
 
@@ -259,7 +240,7 @@ def _truncate_records_by_end(records, end_time, freq_sec, step=None, fmt_list=No
 def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None, source=None):
     """期货 SSE 单窗口 · 同步生成器（方案A）
 
-    忠实移植 ChartHandler._handle_sse_stream_single 的事件协议：
+    事件协议（与 ChartHandler._handle_sse_stream_single 一致）：
     init（初始快照/失败载荷）→ 实时循环（heartbeat 注释帧 + update 事件：
     tick 路径更新末根 K 线 OHLC/MACD，K线完成路径全量快照）→ 收尾清理。
     source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
@@ -272,7 +253,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     for h in logging.root.handlers:
         h.setLevel(logging.WARNING)
 
-    _tid = trace_id()  # 每连接专属 trace-id（P0-3），连接生命周期内稳定
+    _tid = trace_id()  # 每连接专属 trace-id，连接生命周期内稳定
     log.info("[%s] SSE 单窗口连接: symbol=%s freq=%s", _tid, symbol, freq)
 
     src = source if source is not None else CTqSdkSession()
@@ -291,7 +272,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
         display_key = f"{symbol}:{freq_cn}"
 
         # 如果没有传入 start_time，查询CSV中是否有保存的选点
-        # （阶段 4：经 AppOrch 漏斗读 AppData，不再直连 my_chan_main 状态）
+        # （选点经 app_data 公共 API 读取，不直连引擎内部状态）
         # C 复盘对齐股票语义「复盘不加载选点」：end_time 模式下跳过选点加载，
         # 同时忽略传入的 start_time（复盘窗口固定为 [end-N, end]，与选点无关；
         # 回到最新时前端不带 start_time 重连，此处再从 CSV 恢复选点）。
@@ -327,8 +308,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
                     continue
 
         # === 1. 拉取历史 + chan 分析 ===
-        # 彻底解耦业务：历史拉取/chan 分析在服务层 AppSSE.init_chan_symbol
-        # V10 复审 P1-2：首参传数据源对象 src（不再触碰 src.api 原始对象）
+        # 历史拉取/chan 分析在服务层 AppSSE.init_chan_symbol 完成；
+        # 首参传数据源对象 src（只消费 src.* 协议，不触碰 src.api 原始对象）
         # A 方案：复盘(end_time)时由 init 截断建 chan；REPLAY_MODE 存原值 + finally 恢复，
         # 避免跨连接污染（并发下仅影响调试日志，不影响分析结果）。
         _replay_prev_s = CMyBSPointList.REPLAY_MODE
@@ -381,7 +362,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
             return
 
         # === 3. 实时循环：壁钟检测周期结束 → 处理N-1 → 推送N-1/N快照 ===
-        # 策略与遗留实现一致：壁钟（datetime.now()）判断K线周期结束，不等天勤
+        # 策略：壁钟（datetime.now()）判断K线周期结束，不等天勤
         # klines 推进信号；周期结束后 klines[-1] OHLC 已冻结可直接入缠论。
         BAR_COMPLETION_BUFFER = 1.0  # 周期结束后等 N 秒（等待最后一笔 tick 到达）
         if _SSE_DEBUG:
@@ -427,7 +408,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
             now_ts = now.timestamp()
 
             # A 方案 · 复盘软断开：end_time 模式下，一但墙钟越过复盘边界所属周期，
-            # 即停止推进 K 线/chan/快照（update 不再把图"拉最新"），只保活连接。
+            # 即停止推进 K 线/chan/快照（update 不把图"拉最新"），只保活连接。
             if end_time and _end_dt is not None and now > _end_dt:
                 continue
 
@@ -599,7 +580,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
             # 推送快照（此时 klines[-1] 已推进到 N 周期，快照中自然包含 N 的实时OHLC）
             t_snap_start = time.time()
             try:
-                # P2-4 增量快照：复用缓存 klines + EMA 状态续算 MACD，避免每根K线全量 O(n) 重建
+                # 增量快照：复用缓存 klines + EMA 状态续算 MACD，避免每根K线全量 O(n) 重建
                 update_data = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                 saved_selection_date=saved_selection_date,
                                                 prev_klines=(cached_snapshot or {}).get("klines"),
@@ -634,7 +615,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
                 log.info(f"[{display_key}] 推送异常: {_e}")
 
     except Exception as e:
-        # 与遗留实现一致：打印连接异常后静默结束（错误已在 init 事件载荷中表达）
+        # 打印连接异常后静默结束（错误已在 init 事件载荷中表达）
         log.info(f"[{display_key}] 连接异常: {e}")
     finally:
         # 生成器线程收尾：close() 设置关闭旗（幂等），close_api() 由生成器
@@ -650,14 +631,14 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
 def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
     """期货 SSE 双窗口 · 同步生成器（方案A）
 
-    忠实移植 ChartHandler._handle_sse_stream_dual 的事件协议：
+    事件协议（与 ChartHandler._handle_sse_stream_dual 一致）：
     两个独立 CChan 对象、一次连接推送两个周期（下窗先处理——区间套分析
     需先分析次级别）。source 可注入（默认 CTqSdkSession）。
     end_time: 复盘终点（A 方案软断开），有值时双窗建 chan 均截断到该边界，
-              update 循环停在后不再推进，不再被实时拉新。
+              update 循环停在后不推进，也不被实时拉新。
     锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
-    _tid = trace_id()  # 每连接专属 trace-id（P0-3），连接生命周期内稳定
+    _tid = trace_id()  # 每连接专属 trace-id，连接生命周期内稳定
     log.info("[%s] SSE 双窗口连接: symbol=%s main=%s sub=%s",
              _tid, symbol, main_freq, sub_freq)
 
@@ -696,9 +677,9 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 except ValueError:
                     continue
 
-        # 1. 查询选点状态（阶段 4：经 AppOrch 漏斗读 AppData）
-        # 对齐股票双窗语义（方案二「下窗对齐上窗」+ C 复盘规则）：
-        #   · 双窗只认上窗选点：下窗不再读自己周期的选点，跟随上窗区间对齐取数；
+        # 1. 查询选点状态（选点经 app_data 公共 API 读取）
+        # 对齐股票双窗语义（下窗对齐上窗 + C 复盘规则）：
+        #   · 双窗只认上窗选点：下窗不读自己周期的选点，跟随上窗区间对齐取数；
         #   · C 复盘不加载选点（对齐股票）：end_time 模式下忽略 start_time 与 CSV 选点，
         #     复盘窗口固定 [end-N, end]；回到最新时不带 start_time 重连，此处再恢复。
         saved_selection_date = ""
@@ -720,7 +701,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
             except Exception as _e:
                 log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
-        # 下窗取数根数：对齐上窗实际加载区间（股票双窗「方案二」期货对齐实现）
+        # 下窗取数根数：对齐上窗实际加载区间（股票双窗「下窗对齐上窗」的期货对齐实现）
         #   · A（无选点/非复盘）：上窗配置 N_main 根 → 下窗 = N_main×(上窗周期/下窗周期)+余量
         #     （K线根数按交易时长等比折算：N_main 根上窗K线的交易时长 = N_main×主周期 秒，
         #       对应下窗 N_main×(主周期/次周期) 根；余量覆盖会话边界的不完整K线）
@@ -789,7 +770,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                                                        is_replay=bool(end_time))
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
         # 需要换算成子级别K线时间，前端 calcRedRange 才能正确匹配
-        # （阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py）
         _futures_red_range(main_snapshot, main_freq_sec, sub_freq_sec, sub_freq)
 
         # ★ 追加上下窗当前形成中的K线（与单窗口一致），让前端立即看到，且 tick 更新正确的 K 线
@@ -1028,7 +1008,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                           f"[壁钟={now.strftime('%H:%M:%S')} 延迟={delay:+.1f}s "
                           f"wait_update={t_wait:.3f}s step_load={t_step:.3f}s]")
 
-            # 提取完整快照（P2-4 增量：复用缓存 klines + EMA 状态续算 MACD）
+            # 提取完整快照（增量：复用缓存 klines + EMA 状态续算 MACD）
             if updated:
                 snapshot = _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label,
                                                            saved_selection_date=saved_selection_date,
@@ -1036,7 +1016,6 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                                                            prev_ema_state=(cached_snapshot or {}).get("meta", {}).get("_ema_state"),
                                                            is_replay=bool(end_time))
                 if is_main:
-                    # 阶段 8：_futures_red_range 已随期货功能域迁 App/AppSSE.py
                     _futures_red_range(snapshot, freq_sec, sub_freq_sec, sub_freq)
                 _next_dt = datetime.fromtimestamp(completed_dt_ns / 1e9 + freq_sec)
                 _next_ds = _next_dt.strftime(_get_date_fmt(freq_label))
@@ -1120,7 +1099,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                           f"SSE写入={t_push_total:.3f}s")
 
     except Exception as e:
-        # 与遗留实现一致：打印连接异常后静默结束
+        # 打印连接异常后静默结束（错误已在 init 事件载荷中表达）
         log.info(f"[{display_key}] 连接异常: {e}")
         traceback.print_exc()
     finally:
@@ -1146,12 +1125,11 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
 def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=None):
     """统一期货 CChan 构造：注入数据源 → 周期映射 → 建链 → 全量消费。
 
-    取数唯一性收敛 P0-1（阶段 A/B）：收敛 AppSSE 内 5 处「set_data → 周期映射 →
-    建 CChan → step_load」重复序列为单一构造函数。唯一来源：
-      - 周期映射：AppEngine._get_kl_type_by_sec(freq_sec)（消除三份 _freq_to_kl）
-      - 配置：_make_chan_config()（消除 CChanConfig() 与 _make_chan_config() 双来源）
-    P1-1 数据源抽象单轨化：数据注入经 src.set_data（Session 协议）完成，
-    不再直连 CTqSdkAPI.set_data；src 缺省时回退类级缓存（兼容旧调用）。
+    期货各链路唯一的「数据 → CChan」构造入口。单一定义：
+      - 周期映射：_get_kl_type_by_sec(freq_sec)
+      - 配置：_make_chan_config()
+    数据注入经 src.set_data（Session 协议）完成；
+    src 缺省时回退类级缓存 CTqSdkAPI.set_data（兼容无源调用）。
     返回 (chan, kl_type)。缓存逻辑留在各调用方，本函数只负责「数据 → CChan」。
     """
     chan_code = code or f"{symbol}:{freq_sec}"
@@ -1178,11 +1156,10 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
 
 
 def _extract_chan_structure(kl_list, chan, date_fmt):
-    """统一缠论结构元素提取（P2-7）：bis / fxs / segs / zs / zs_stars / bsps。
+    """统一缠论结构元素提取：bis / fxs / segs / zs / zs_stars / bsps。
 
     SSE 实时快照（_extract_realtime_snapshot）与期货分析
-    （原 REST 静态路径）共用同一提取逻辑，消除两份几乎相同的
-    内联实现（约 200 行重复），避免字段漂移。肩部原始K线时间统一走
+    共用同一提取逻辑，保证两条路径字段一致。肩部原始K线时间统一走
     _main_bi_range（与股票路径同源）。
 
     返回 (bis, fxs, segs, zs_list, zs_stars, bsps)。
@@ -1344,10 +1321,10 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
     """从 CChan 对象中提取缠论结构快照，格式与 /api/stock 一致。
     lightweight=True: 仅返回最后一根K线的OHLC变化（周期内tick更新用），不遍历全量结构。
     klines: 天勤实时K线DataFrame（lightweight=True时优先使用，避免chan框架kl_list滞后）。
-    prev_klines/prev_ema_state: P2-4 增量快照 —— 复用缓存 klines 仅追加新确认K线，
+    prev_klines/prev_ema_state: 增量快照 —— 复用缓存 klines 仅追加新确认K线，
     EMA 状态续算 MACD，避免每根K线全量 O(n) 重建；None 时走原始全量路径。
-    is_replay: 复盘模式（A 方案软断开 end_time）标记。修复：此前恒为 False，
-    导致前端「复盘禁选点/禁重置/注记不保存」守卫对期货复盘全部失效。
+    is_replay: 复盘模式（A 方案软断开 end_time）标记，前端
+    「复盘禁选点/禁重置/注记不保存」守卫依赖此标记。
     """
     kl_list = chan[kl_type]
     _date_fmt = _get_date_fmt(freq_label)
@@ -1406,7 +1383,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             },
         }
 
-    # ── klines：增量（P2-4）或全量 ──
+    # ── klines：增量或全量 ──
     ema_state = None
     if prev_klines is not None:
         klines_out, _changed_idx = _incremental_klines(prev_klines, kl_list, _date_fmt)
@@ -1428,7 +1405,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
                 })
         ema_state = _apply_macd_full(klines_out)
 
-    # P2-7 统一结构元素提取（bis/fxs/segs/zs/zs_stars/bsps，与期货分析共用）
+    # 统一结构元素提取（bis/fxs/segs/zs/zs_stars/bsps，与期货分析共用）
     bis, fxs, segs, zs_list, zs_stars, bsps = _extract_chan_structure(kl_list, chan, _date_fmt)
 
     return {
@@ -1440,7 +1417,7 @@ def _extract_realtime_snapshot(chan, kl_type, symbol, name, freq_label, saved_se
             "generated_at": datetime.now().strftime(_date_fmt),
             "is_realtime": True, "is_replay": bool(is_replay), "market": "futures",
             "saved_selection_date": saved_selection_date,
-            # P2-4 增量快照：EMA 状态续算 MACD（内部使用，前端忽略）
+            # 增量快照：EMA 状态续算 MACD（内部使用，前端忽略）
             "_ema_state": ema_state,
         },
         "klines": klines_out, "bis": bis, "fxs": fxs, "segs": segs,
@@ -1622,8 +1599,8 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         if len(records) < 5:
             raise DataFetchError(f"K线数据不足: 仅{len(records)}条")
 
-        # 注入数据源 + 创建 CChan（P0-1 统一 _build_futures_chan；config 供 chan2 复用）
-        # P1-1 数据源抽象单轨化：数据注入经 src.set_data（Session 协议），不落类级缓存
+        # 注入数据源 + 创建 CChan（统一走 _build_futures_chan；config 供 chan2 复用）
+        # 数据注入经 src.set_data（Session 协议），不落类级缓存
         config = _make_chan_config()
         chan, kl_type = _build_futures_chan(records, symbol, freq_sec, config=config, src=src)
 
@@ -1672,8 +1649,8 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         if len(records2) < 5:
             raise DataFetchError(f"选点后K线数据不足: 仅{len(records2)}条")
 
-        # 注入数据源 + 创建新 CChan（P0-1 统一 _build_futures_chan，复用 config）
-        # P1-1 数据源抽象单轨化：数据注入经 src2.set_data（Session 协议），不落类级缓存
+        # 注入数据源 + 创建新 CChan（统一走 _build_futures_chan，复用 config）
+        # 数据注入经 src2.set_data（Session 协议），不落类级缓存
         chan2, _ = _build_futures_chan(records2, symbol, freq_sec, config=config, src=src2)
 
         # Step 5: 提取快照并返回
@@ -1687,7 +1664,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         return result
 
     except AppError:
-        # 领域异常原样上抛（P2-3：API 层统一中间件捕获，不二次包装）
+        # 领域异常原样上抛（API 层统一中间件捕获，不二次包装）
         raise
     except Exception as e:
         import traceback
@@ -1714,7 +1691,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 # ═══════════════════════════════════════════════════════════════════════
 
 def get_futures_aliases():
-    """期货别名映射（阶段 5：经 CTqSdkAPI 查询）"""
+    """期货别名映射（经 CTqSdkAPI 查询）"""
     if CTqSdkAPI is None:
         return {}
     return CTqSdkAPI.FUTURES_ALIASES
@@ -1733,7 +1710,7 @@ def tq_available():
 
 
 def get_futures_freqs():
-    """期货可用周期列表（阶段 5：经 CTqSdkAPI 查询）"""
+    """期货可用周期列表（经 CTqSdkAPI 查询）"""
     try:
         if CTqSdkAPI is None:
             return {"supported_freqs": [], "disabled_freqs": []}
@@ -1744,7 +1721,7 @@ def get_futures_freqs():
 
 
 def get_futures_freq_sec_map():
-    """期货周期→秒数映射（P1-1：/api/health 的单一事实源出口，替代 API 层直连 CTqSdkAPI）"""
+    """期货周期→秒数映射（/api/health 的单一事实源出口，不直连 CTqSdkAPI）"""
     try:
         if CTqSdkAPI is None:
             return {}

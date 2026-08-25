@@ -2,19 +2,17 @@
 """
 App/AppRefresh.py —— 刷新功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：点击页面右上角「刷新」按钮后的操作，
-刷新股票名、指数归属、PE-TTM、板块文件等。
+点击页面右上角「刷新」按钮后的操作，刷新股票名、指数归属、PE-TTM、
+板块文件等。
 
 本模块收纳：
   - 股票名称刷新（refresh_stock_names / refresh_stock_names_async / refresh_status）
   - 名称 / PE / 流通市值 / 指数归属 缓存读写（AppData 直连）
-  - 刷新实现（P0-1a 自 AppEngine 迁入，空壳变实心）：
-      _refresh_stock_names / _refresh_pe_ttm / _fetch_index_belong_from_akshare /
-      _collect_codes_from_vipdoc / _fetch_names_from_sina_once /
-      _fetch_float_mc_from_tencent / _refresh_status / _AKSHARE_*_MAP
+  - 刷新实现（_refresh_stock_names / _refresh_pe_ttm /
+      _fetch_index_belong_from_akshare / _collect_codes_from_vipdoc /
+      _fetch_names_from_sina_once / _fetch_float_mc_from_tencent 等）
 
-依赖方向：AppRefresh.py → AppEngine / AppData（单向）
-          （P0-1a 后 AppRefresh 不再反向依赖 AppEngine）
+依赖方向：AppRefresh.py → AppConfig / AppData / DataAPI（单向）
 """
 import json
 import os
@@ -31,7 +29,7 @@ from DataAPI.TdxAPI import refresh_block_files
 log = get_logger(__name__)
 
 
-# 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象，阶段 4）
+# 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
 _stock_names_cache = app_data.names_cache
 
@@ -64,37 +62,37 @@ _AKSHARE_INDEX_MAP = {
 # ═══════════════════════════════════════════════════════════════════════
 
 def load_stock_names_from_cache_file():
-    """加载股票名称缓存（AppData 直连，阶段 4）"""
+    """加载股票名称缓存（AppData 直连）"""
     return app_data.load_stock_names_from_cache_file()
 
 
 def load_float_mc_cache():
-    """加载流通市值缓存（AppData 直连，阶段 4）"""
+    """加载流通市值缓存（AppData 直连）"""
     return app_data.load_float_mc_cache()
 
 
 def update_float_mc_cache(mv_dict):
-    """更新流通市值缓存（AppData 直连，阶段 4）"""
+    """更新流通市值缓存（AppData 直连）"""
     return app_data.update_float_mc_cache(mv_dict)
 
 
 def load_pe_ttm_cache():
-    """加载 PE-TTM 缓存（AppData 直连，阶段 4）"""
+    """加载 PE-TTM 缓存（AppData 直连）"""
     return app_data.load_pe_ttm_cache()
 
 
 def get_pe_ttm(market, code):
-    """获取 PE-TTM（AppData 直连，阶段 4）"""
+    """获取 PE-TTM（AppData 直连）"""
     return app_data.get_pe_ttm(market, code)
 
 
 def get_index_belong(market, code):
-    """获取指数归属（AppData 直连，阶段 4）"""
+    """获取指数归属（AppData 直连）"""
     return app_data.get_index_belong(market, code)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 刷新实现（P0-1a 自 AppEngine 迁入；剪切-粘贴 + import 调整，行为零变化）
+# 刷新实现
 # ═══════════════════════════════════════════════════════════════════════
 
 def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
@@ -104,7 +102,7 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 
 
 def _collect_codes_from_vipdoc(vipdoc_dir):
-    """兼容壳（阶段 5）：委托 DataAPI/ElTdxAPI（vipdoc_dir 由调用方注入，设计 4.4）"""
+    """委托 DataAPI/ElTdxAPI（vipdoc_dir 由调用方注入）"""
     return _ElTdx.collect_codes_from_vipdoc(vipdoc_dir)
 
 
@@ -238,7 +236,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
     通过 AKShare index_stock_cons_csindex 接口在线获取沪深300/中证500/中证1000 最新成分股，
     构建 stock→指数归属 反向映射。返回 {market+code: "沪深300"|"中证500"|"中证1000"}。
     如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
-    （阶段 4：归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
+    （归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
     """
     try:
         import akshare as ak
@@ -410,7 +408,7 @@ def _refresh_stock_names():
     数据来源优先级：
       1. vipdoc/*.day 文件名（收集所有已下载过数据的股票代码）
       2. 新浪财经API（为无名称的代码批量查询名称）
-    （阶段 4：名称缓存由 app_data 持有；本函数只做获取与合并，
+    （名称缓存由 app_data 持有；本函数只做获取与合并，
      最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
     """
     global _refresh_status
@@ -508,7 +506,7 @@ def _refresh_stock_names():
         except Exception as e:
             log.info(f"[股名刷新]   读取tdxzs.cfg失败: {e}")
 
-    # 新版研究行业(881xxx)从 tdxhy_mapping_data 读取（阶段 5：单一加载函数 app_data.load_tdxhy_mapping，设计 8.8）
+    # 研究行业(881xxx)从 tdxhy_mapping_data 读取（单一加载函数 app_data.load_tdxhy_mapping）
     tdxhy_filled = 0
     try:
         _TDXHY_881_TO_X = app_data.load_tdxhy_mapping()[1]

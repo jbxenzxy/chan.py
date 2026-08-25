@@ -4,27 +4,19 @@ App/utils.py —— App 层公共工具（代码解析 + 引擎纯函数/常量�
 =========================================================================
 本模块收纳两类无业务状态的公共工具，供 AppEngine / AppSSE 等统一导入：
 
-  A. 证券代码解析（阶段 8 自 AppEngine 下沉）
+  A. 证券代码解析
      _get_stock_name / _get_stock_market_code / _get_market_code
      依赖配置/数据源（app_config / app_data / DataAPI）。为最小化模块
      加载耦合，这些函数保持函数内 import（惰性依赖）。
 
-  B. 引擎纯函数/常量（P0-1c 自 AppEngine 下沉，原 App/engine_utils.py 并入）
+  B. 引擎纯函数/常量
      MACD/EMA、周期映射、日期格式、左肩定位、中枢确认、期货双窗口映射、
-     SSE 调试旗等。无状态纯函数/常量，AppEngine 与 AppSSE 统一从本模块
-     导入（AppEngine 保持 re-export 兼容）。
+     SSE 调试旗等。无状态纯函数/常量，以本模块为唯一事实源，
+     AppEngine 与 AppSSE 统一从本模块导入（AppEngine 顶部 re-import 兼容）。
 
-整合记录（P0-1c 收尾）：engine_utils.py 与 utils.py 命名易混淆，且均为
-App 层公共工具，故合并为本文件。合并接受顶层 import 变化——引擎纯函数
-需要 app_config / KL_TYPE / CChanConfig / CTqSdkAPI 顶层导入（均已验证
-不反向 import App，无循环依赖）；代码解析函数仍保持函数内 import。
-
-历史清理记录：原随 my_chan_main.py 迁入的纯算法函数（ema / calculate_macd
-/ _inherit_macd_for_preview_bar / _get_date_fmt / _get_kl_type /
-_get_freq_label / _find_left_shoulder_time / _bi_overlap_range /
-_calc_zs_confirm_edt_from_bis 等）曾与 AppEngine.py 内同名实现重复且全库
-无人引用，被删除；P0-1c 使 AppSSE 显式引用后，这些函数以本模块为唯一
-事实源回归（AppEngine 内实现已删除，顶部 re-import 兼容）。
+顶层 import 说明：引擎纯函数需要 app_config / KL_TYPE / CChanConfig /
+CTqSdkAPI 顶层导入（均不反向 import App，无循环依赖）；代码解析函数
+保持函数内 import。
 """
 import os
 import re
@@ -49,7 +41,7 @@ _SSE_DEBUG = app_config.sse_debug
 
 
 # ═══════════════════════════════════════════════════════════════════
-# A. 证券代码解析（阶段 8 自 AppEngine 下沉）
+# A. 证券代码解析
 # ═══════════════════════════════════════════════════════════════════
 
 def _get_stock_name(market, code):
@@ -164,7 +156,7 @@ def _get_market_code(code):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# B. 引擎纯函数/常量（P0-1c 自 AppEngine 下沉，原 engine_utils.py 并入）
+# B. 引擎纯函数/常量
 # ═══════════════════════════════════════════════════════════════════
 # 依赖方向：本部分 → AppConfig / DataAPI / ChanConfig / Common（单向）
 #   - 纯函数/常量零业务状态，不触碰 app_data 实例字段；
@@ -206,7 +198,7 @@ def _inherit_macd_for_preview_bar(klines_list):
     klines_list[-1]['macd'] = prev.get('macd', 0)
 
 
-# ── 周期映射（秒数 → KL_TYPE；取数唯一性收敛 P0-1 唯一来源）──
+# ── 周期映射（秒数 → KL_TYPE；取数唯一来源）──
 _FREQ_SEC_TO_KL = {
     15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
     180: KL_TYPE.K_3M, 300: KL_TYPE.K_5M, 900: KL_TYPE.K_15M,
@@ -232,9 +224,9 @@ def _get_freq_label(freq):
     return labels.get(freq, '日线')
 
 
-# ── 缠论配置（统一构造；配置值已迁移到 ChanConfig.CChanConfig 默认值）──
+# ── 缠论配置（统一构造；配置值单源于 ChanConfig.CChanConfig 默认值）──
 def _make_chan_config():
-    """统一的缠论配置，股票和期货共用。配置值已迁移到 ChanConfig.CChanConfig 默认值"""
+    """统一的缠论配置，股票和期货共用。配置值单源于 ChanConfig.CChanConfig 默认值"""
     return CChanConfig()
 
 

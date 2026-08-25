@@ -2,11 +2,10 @@
         "use strict";
 
 // ══════════════════════════════════════════════════════════════════
-        // ChanApp 组件注册表（阶段 6 前端组件化，设计 8.9）
-        // 单文件内 10 个组件区块；注册表登记各组件对外接口（阶段 8 拆
-        // kline/、panels/ 子目录时按此契约迁移，跨组件调用走注册表或
-        // window.* 绑定，闭包内部实现不改）。控制台可经 ChanApp.components
-        // 调试各组件入口。
+        // ChanApp 组件注册表
+        // 单文件内 10 个组件区块；注册表登记各组件对外接口，
+        // 跨组件调用走注册表或 window.* 绑定，闭包内部实现不改。
+        // 控制台可经 ChanApp.components 调试各组件入口。
 // ══════════════════════════════════════════════════════════════════
         const ChanApp = {
             version: "6.0",
@@ -39,14 +38,14 @@
 
         let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
 
-        // 频率→秒数映射（P2-8：后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
+        // 频率→秒数映射（后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
         let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
 
         // 前端视口默认显示的K线根数（所有周期相同）——后端经 /api/health 下发
         // （config.view_count，见 App/AppConfig.py 的 VIEW_COUNT），此默认值仅作离线兜底。
         let VIEW_COUNT = 377;
 
-        // 双窗（股票方案二）下窗视口对齐上窗视口「首末K线时间范围」：
+        // 股票双窗：下窗视口对齐上窗视口「首末K线时间范围」：
         //   - _parseViewDate：日期型(仅日期)按当日 00:00(左)/23:59:59(右) 归一，日内按原时刻；
         //   - alignDualSubViewport：把下窗视口 [dualSubViewOffset, +dualSubViewCount]
         //     重算为上窗当前视口时间范围内对应下窗K线；下窗数据不足则降为「全量加载与显示」；
@@ -62,7 +61,7 @@
         function alignDualSubViewport() {
             if (!isDualWindow || !dualSubData || !dualSubData.klines
                 || !chartData || !chartData.klines) return;
-            // 期货双窗维持原（方案一）行为，不参与对齐
+            // 期货双窗不参与对齐（保持独立视口）
             if (chartData.meta && chartData.meta.market === 'futures') return;
             const sK = dualSubData.klines, mK = chartData.klines;
             if (!mK.length || !sK.length) return;
@@ -205,7 +204,7 @@
 
         let realtimeStartTime = null;     // 实时模式下选点起始时间
 
-        let realtimeEndTime = null;       // A 方案 · 复盘软断开边界（end_time）
+        let realtimeEndTime = null;       // 复盘软断开边界（end_time）
 
         let realtimeEventSource = null;   // SSE EventSource 对象
 
@@ -236,7 +235,7 @@
 
         let _scanAborted = false;
 
-        let _scanTaskId = null; // 阶段 7：当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
+        let _scanTaskId = null; // 当前批量扫描 task_id（中止时立即经 /api/stocks/scan/{task_id}/cancel 传播）
 
         let _scanMode = "ann"; // "ann" = 标注扫描, "ma" = 均线分类扫描, "fangliang" = 放量扫描, "fx_d" = 底分型扫描, "bsp" = 买卖点扫描
 
@@ -454,7 +453,7 @@
             const mainKline = klines[idx];
             const subKlines = dualSubData.klines;
             let startIdx = -1, endIdx = -1;
-            // 方案B：优先使用 sub_kl_times（后端多级别CChan返回的子级别K线时间列表）
+            // 优先使用 sub_kl_times（后端多级别CChan返回的子级别K线时间列表）
             if (mainKline.sub_kl_times && mainKline.sub_kl_times.length > 0) {
                 const subTimes = mainKline.sub_kl_times;
                 const firstTime = subTimes[0];
@@ -525,12 +524,7 @@
         // 双窗口红框：鼠标指向上面K线所属笔的外沿区间（分型左肩→右肩）
         // 注意：使用 chartData.bis（复数），JSON 字段名是 "bis"
         function calcRedRange(mainKline, subKlines, grayStart, grayEnd) {
-            console.log("[红框] === 进入 calcRedRange ===");
-            console.log("[红框] mainKline.date=" + mainKline.date + " grayStart=" + grayStart + " grayEnd=" + grayEnd);
-            console.log("[红框] chartData.bis=" + (chartData && chartData.bis ? "长度" + chartData.bis.length : "null"));
-            console.log("[红框] subKlines.length=" + subKlines.length);
             if (!chartData || !chartData.bis || !chartData.bis.length) {
-                console.log("[红框] ❌ chartData 或 chartData.bis 为空，返回null");
                 window._lastRedFrameStatus = { state: "SKIP", reason: "chartData或bis为空" };
                 updateRedFrameDebug();
                 return null;
@@ -540,25 +534,20 @@
             // 找到mainKline所属的笔（交界处归属右边）
             for (let i = 0; i < chartData.bis.length; i++) {
                 const b = chartData.bis[i];
-                if (d >= b.sdt && d < b.edt) { bi = b; console.log("[红框] 找到笔(主循环): idx=" + i + " sdt=" + b.sdt + " edt=" + b.edt + " dir=" + b.direction); break; }
+            if (d >= b.sdt && d < b.edt) { bi = b; break; }
             }
             if (!bi) {
                 for (let i = chartData.bis.length - 1; i >= 0; i--) {
-                    if (d === chartData.bis[i].edt) { bi = chartData.bis[i]; console.log("[红框] 找到笔(edt匹配): idx=" + i + " sdt=" + chartData.bis[i].sdt + " edt=" + chartData.bis[i].edt); break; }
+            if (d === chartData.bis[i].edt) { bi = chartData.bis[i]; break; }
                 }
             }
             if (!bi) {
-                console.log("[红框] ❌ 未找到所属笔，mainKline.date=" + d + " 不在任何笔的[sdt, edt)范围内");
                 window._lastRedFrameStatus = { state: "SKIP", reason: "未找到所属笔", topDate: d, biCount: chartData.bis.length };
                 updateRedFrameDebug();
                 return null;
             }
             const aDt = bi.fx_a_sub_dt || bi.fx_a_raw_dt, bDt = bi.fx_b_sub_dt || bi.fx_b_raw_dt;
-            console.log("[红框] 边界值: fx_a_sub_dt='" + (bi.fx_a_sub_dt || "(空)") + "' fx_b_sub_dt='" + (bi.fx_b_sub_dt || "(空)") + "' fx_a_raw_dt='" + (bi.fx_a_raw_dt || "(空)") + "' fx_b_raw_dt='" + (bi.fx_b_raw_dt || "(空)") + "'");
-            console.log("[红框] 最终使用: aDt='" + aDt + "' bDt='" + bDt + "'");
             if (!aDt || !bDt) {
-                console.log("[红框] ❌ aDt='" + (aDt || "") + "' bDt='" + (bDt || "") + "' 为空");
-                console.log("[红框]    bi.sdt=" + bi.sdt + " bi.edt=" + bi.edt + " bi.direction=" + bi.direction);
                 window._lastRedFrameStatus = { state: "SKIP", reason: "fx_a或fx_b为空", sdt: bi.sdt, edt: bi.edt };
                 updateRedFrameDebug();
                 return null;
@@ -613,7 +602,6 @@
                 aIdx: aIdx,            // 红框整体左边界（下方窗口全局索引）
                 bIdx: bIdx,            // 红框整体右边界（下方窗口全局索引）
             };
-            console.log("[红框] ✅ 返回红框范围: before=[" + beforeStart + "," + beforeEnd + "] hasBefore=" + result.hasBefore + " after=[" + afterStart + "," + afterEnd + "] hasAfter=" + result.hasAfter);
             window._lastRedFrameStatus = { state: "OK", reason: "calcRedRange成功", before: result.hasBefore, after: result.hasAfter, aIdx: aIdx, bIdx: bIdx, grayStart: grayStart, grayEnd: grayEnd, leftDate: result.leftDate, rightDate: result.rightDate };
             updateRedFrameDebug();
             return result;
@@ -697,7 +685,7 @@
                     showDualToast("复盘模式，不支持选点");
                     return;
                 }
-                // 期货双窗选点放开（对齐股票双窗 D5=A：仅上窗可选点，下窗只对齐展示）：
+                // 双窗选点规则（股票/期货一致）：仅上窗可选点，下窗只对齐展示。
                 // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
                 if (clickedBiIdx >= 0) {
@@ -706,7 +694,7 @@
                     const isFutures = chartData.meta.market === 'futures';
                     document.getElementById("loading").classList.remove("hidden");
                     document.querySelector(".loading-text").textContent = "正在手选进入段...";
-                    // P4（D5=A）股票双窗选点放开：上窗选点带双窗上下文，
+                    // 股票双窗选点：上窗选点带双窗上下文，
                     // 后端销毁双窗两键缓存并按双窗路径重建（响应含 data.sub）
                     const dualQuery = (isDualWindow && !isFutures)
                         ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
@@ -727,7 +715,7 @@
                             if (isFutures) {
                                 const savedDate = data.meta && data.meta.saved_selection_date;
                                 // 双窗模式：上窗选点已保存 → 重连双窗SSE带 start_time=T，
-                                // 下窗由后端自动对齐 [T, 最新]（股票双窗「方案二」语义），
+                                // 下窗由后端自动对齐 [T, 最新]（下窗对齐上窗语义），
                                 // 初始快照（含上下窗）由 SSE init 事件统一推送，
                                 // 不在此处用单窗响应覆盖 chartData/dualSubData
                                 if (isDualWindow && dualSubFreq) {
@@ -1061,7 +1049,7 @@
         function render() {
             if (!chartData) return;
             if (isDualWindow) {
-                alignDualSubViewport(); // 双窗（方案二）：下窗视口对齐上窗当前视口时间范围
+                alignDualSubViewport(); // 双窗：下窗视口对齐上窗当前视口时间范围
                 renderTop(); // renderTop内部会调用updateDualHighlight -> renderBottom
             } else {
                 renderSingle();
@@ -1825,34 +1813,6 @@
                 const zsHeight = zs.zg - zs.zd;
                 ctx.fillText(_fmtPrice(zsHeight), x1 - 2, (y1 + y2) / 2 + 3);
             });
-
-            // 进入段和离开段红绿五角星 - 已注释掉
-            // if (!chartData.zs_stars || !chartData.zs_stars.length) return;
-            // chartData.zs_stars.forEach(star => {
-            //     let idx = dateToGlobalIdx(star.date, map);
-            //     if (idx === undefined) return;
-            //     if (idx < globalStart || idx >= globalEnd) return;
-            //     const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
-            //     const y = priceToY(star.price, area, priceRange);
-            //     const isTop = star.mark === "G";
-            //     const starY = isTop ? y - 16 : y + 22;
-            //     drawStar(ctx, x, starY, 5, 6, 3, star.color);
-            // });
-        }
-
-        function drawStar(ctx, cx, cy, spikes, outerR, innerR, color) {
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            for (let i = 0; i < spikes * 2; i++) {
-                const r = i % 2 === 0 ? outerR : innerR;
-                const angle = (Math.PI / spikes) * i - Math.PI / 2;
-                const x = cx + r * Math.cos(angle);
-                const y = cy + r * Math.sin(angle);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            }
-            ctx.closePath();
-            ctx.fill();
         }
 
         // 画线段（与笔同粗细，区分方向颜色）
@@ -1919,11 +1879,9 @@
         // 双窗口新模式：绘制红框内笔计算的新中枢（替代原中枢/线段/买卖点）
         function drawDualNewZs(klines, area, priceRange, barStep, subPixelOffset) {
             if (!dualNewZsData || !dualNewZsData.zs || !dualNewZsData.zs.length) {
-                console.log("[drawDualNewZs] 跳过: dualNewZsData=", dualNewZsData);
                 return;
             }
             const map = buildGlobalDateMap();
-            console.log("[drawDualNewZs] ZS数量=" + dualNewZsData.zs.length + ", start_bi=" + dualNewZsData.start_bi + ", end_bi=" + dualNewZsData.end_bi);
             const globalStart = Math.max(0, Math.floor(viewOffset));
             const globalEnd = globalStart + viewCount;
             const rightBound = area.x + area.w;
@@ -1982,19 +1940,6 @@
                 const zsHeight = zs.zg - zs.zd;
                 ctx.fillText(_fmtPrice(zsHeight), x1 - 2, (y1 + y2) / 2 + 3);
             });
-
-            // 进入段和离开段红绿五角星 - 已注释掉
-            // if (!dualNewZsData.zs_stars || !dualNewZsData.zs_stars.length) return;
-            // dualNewZsData.zs_stars.forEach(star => {
-            //     let idx = dateToGlobalIdx(star.date, map);
-            //     if (idx === undefined) return;
-            //     if (idx < globalStart || idx >= globalEnd) return;
-            //     const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
-            //     const y = priceToY(star.price, area, priceRange);
-            //     const isTop = star.mark === "G";
-            //     const starY = isTop ? y - 16 : y + 22;
-            //     drawStar(ctx, x, starY, 5, 6, 3, star.color);
-            // });
         }
 
         function drawMaLines(klines, area, priceRange, barStep, subPixelOffset) {
@@ -2912,14 +2857,14 @@
                     canvas = _savedCanvas; ctx = _savedCtx;
                     viewOffset = _savedViewOffset; viewCount = _savedViewCount;
                     chartData = _savedChartData; currentFreq = _savedFreq;
-                    // P4（D5=A）下窗双击选点：双窗采用「方案二（下窗对齐上窗）」后，
-                    // 仅允许在上窗双击选点，前端限制下窗选点操作（股票双窗）。
+                    // 下窗双击选点限制：双窗采用「下窗对齐上窗」，
+                    // 仅允许在上窗双击选点，前端限制下窗选点操作。
                     if (clickedOnKline) {
                         if (_savedChartData && _savedChartData.meta && _savedChartData.meta.is_replay) {
                             showDualToast("复盘模式，不支持选点");
                             return;
                         }
-                        // 股票/期货双窗统一（方案二「下窗对齐上窗」）：仅上窗可选点，下窗只对齐展示
+                        // 股票/期货双窗统一：仅上窗可选点，下窗只对齐展示
                         showDualToast("双窗口模式下仅支持在上窗选点");
                         return;
                     }
@@ -3295,7 +3240,7 @@
         };
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.KLineChart = {
             render, renderSingle, renderTop, renderBottom, resizeCanvas,
         priceToY, yToPrice, getChartArea, getVisibleKlines, getPriceRange,
@@ -3612,9 +3557,9 @@
                         const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq);
                         document.getElementById("goto-date-input").value = lastDate;
                         updateWeekday();
-                        // 双窗口模式：从 data.sub 获取子级别数据（方案B）
+                        // 双窗口模式：从 data.sub 获取子级别数据
                         if (isDualWindow) {
-                            // P2：下窗周期已在切换前校验/回退（保持合法配对不变），
+                            // 下窗周期已在切换前校验/回退（保持合法配对不变），
                             // 此处不再重置为默认配对；响应 data.sub 即该配对的下窗数据
                             if (data.sub) {
                                 dualSubData = data.sub;
@@ -3698,8 +3643,8 @@
             // 复盘模式下断开实时连接（请求时间早于最新K线才走到这里）
             disconnectRealtime();
             // ── 期货：复盘到过去 → 走 SSE 软断开（AppSSE end_time），不复用股票路由 ──
-            // A 阶段已用 end_time 软断开承载期货复盘：连接保持存活、K线冻结在边界。
-            // B 阶段收敛：复盘选日期/复盘至此统一由 gotoDate 并入 SSE，删股票路由期货分支。
+            // end_time 软断开承载期货复盘：连接保持存活、K线冻结在边界。
+            // 复盘选日期/复盘至此统一由 gotoDate 并入 SSE，不走股票路由。
             if (isFutures) {
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
@@ -3916,7 +3861,7 @@
         };
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.NavToolbar = {
             switchFreq, gotoDate, handleDateChange,
         handleDateInput, onCoordSystemChange, initCoordSystemRadio,
@@ -4314,7 +4259,7 @@
         };
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.SymbolSearch = {
             loadStock, doSearch, showHistory, selectHistory, clearHistory,
         normalizeCode, isFuturesCode, getHistory, saveHistory, removeHistory
@@ -4417,7 +4362,7 @@
         }
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.StatsPanel = {
             toggleStats, generateStats, updateSlider, _onClickOutsideStats
         };
@@ -4483,7 +4428,6 @@
             document.getElementById("download-progress-wrap").style.display = "";
             document.getElementById("download-status").textContent = "正在连接服务器...";
 
-            console.log("[下载] 启动下载:", {categories: cats, day_start: dayStart, min_start: minStart});
             fetch("/api/stocks/download/start", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
@@ -4491,7 +4435,6 @@
             })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                console.log("[下载] 启动响应:", data);
                 if (data.ok) {
                     document.getElementById("download-status").textContent = data.message;
                     _startPolling();
@@ -4556,9 +4499,7 @@
                     var msg = "下载完成！共 " + (data.completed_stocks || 0) + " 只股票";
                     if (errorCount > 0) {
                         msg += "，" + errorCount + " 个错误";
-                        console.log("[下载] 错误明细:", data.errors);
                     }
-                    console.log("[下载] 完成:", msg, "latest_data_date:", data.latest_data_date_str, "data_is_latest:", data.data_is_latest);
                     document.getElementById("download-status").textContent = msg;
                     document.getElementById("download-progress-text").textContent = "100%";
                     document.getElementById("download-progress-fill").style.width = "100%";
@@ -4583,7 +4524,7 @@
         }
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.DownloadPanel = {
             toggleDownloadPanel, closeDownloadPanel, startDownload,
         stopDownload, _pollDownloadStatus, _buildCategories
@@ -4681,7 +4622,7 @@
         };
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.BspSettingsPanel = {
             openBspSettings, closeBspSettings, onBspFilterChange,
         onMaPeriodChange, onShowBiIdxChange, bspFilterSelectAll, bspFilterSelectNone,
@@ -4844,7 +4785,6 @@
                 localStorage.setItem("scan_sources", _scanSources.join(","));
                 localStorage.setItem("scan_freq", _scanFreq);
             } catch(e) {}
-            console.log("[扫描对话框] 用户选择来源: " + _scanSources.join(",") + " 模式: " + _scanMode + " 最近: " + _scanRecentDays + " 周期: " + _scanFreq);
             document.getElementById("scan-mode-dialog").classList.remove("show");
             // 如果勾选了"成分股"，通知后端当前页面指数代码
             if (_scanSources.indexOf("page_index") >= 0 && chartData && chartData.meta && chartData.meta.symbol) {
@@ -4969,14 +4909,13 @@
                 });
         }
 
-        // 阶段 7：批量扫描异步化（ProcessPool 先行）
+        // 批量扫描异步化（ProcessPool）
         // 提交全部股票到后端执行池（/api/stocks/scan/submit → task_id），轮询
         // /api/stocks/scan/{task_id}/read/status?since=N 增量获取结果；中止经 /api/stocks/scan/{task_id}/cancel。
-        // 契约（交叉评审 W15 修复）：保留旧回调形状 onData(单票结果) 逐票
-        // 增量喂入、onDone(err, interrupted) 终态——各模式渲染/过滤逻辑
-        // 零改动，phase6 前端守护直接复用。
-        // 增量游标（W1 修复）：since 按 row.seq + 1 推进（>= 语义含首行），
-        // 避免全量回传 O(n²)；轮询失败退避重试（W5 修复）：连续 3 次熔断，
+        // 回调契约：onData(单票结果) 逐票增量喂入、onDone(err, interrupted) 终态
+        // ——各模式渲染/过滤逻辑零改动，前端守护用例直接复用。
+        // 增量游标：since 按 row.seq + 1 推进（>= 语义含首行），
+        // 避免全量回传 O(n²)；轮询失败退避重试：连续 3 次熔断，
         // 不因单次网络抖动丢弃已扫描结果。
         function _asyncScanAll(stocks, opts, onData, onDone) {
             var freq = opts.freq || "d";
@@ -5014,8 +4953,6 @@
                 _scanTaskId = taskId;
                 var since = 0;  // 下次期望的 seq（后端按 seq >= since 增量返回）
                 var _seenSeq = {};   // 已收到的 seq 去重（防并发下重复 onData）
-                console.log("[批量扫描] 任务已提交: " + taskId + ", 共 " + sub.total +
-                            " 只, 引擎=" + sub.engine + ", 并发=" + sub.workers);
 
                 // 稳健游标推进：since 只在「连续已见」时可前进。
                 // 并发 worker 完成顺序随机，若用 since=max(seen)+1 快进，会把
@@ -5096,7 +5033,6 @@
                 fetch("/api/stocks/scan/annotation")
                 .then(function(resp) { return resp.json(); })
                 .then(function(annData) {
-                    console.log("[标注扫描] 完成，共 " + (annData.codes ? annData.codes.length : 0) + " 条记录");
                     _scanRunning = false;
                     btn.classList.remove("active");
                     btn.textContent = "股票扫描";
@@ -5187,7 +5123,6 @@
                         var stocks = data.stocks;
                         var total = stocks.length;
                         var preSkipped = data.pre_skipped || 0;
-                        console.log("[底分型扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                         var results = [];
                         var skipped = 0;
                         var completed = 0;
@@ -5274,7 +5209,7 @@
                             updateScanSaveBtn();
                         }
 
-                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        // 提交到后端执行池，轮询增量结果
                         // （单票响应同形，模式过滤/渲染逻辑零改动）
                         btn.textContent = "中断扫描";
                         _asyncScanAll(stocks, {freq: freq, mode: "fx_d", recent: _scanRecentDays, source: _scanSources.join(",")}, function(data) {
@@ -5345,7 +5280,6 @@
                         var stocks = data.stocks;
                         var total = stocks.length;
                         var preSkipped = data.pre_skipped || 0;
-                        console.log("[均线分类扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                         var results = [];
                         var skipped = 0;
                         var currentIdx = 0;
@@ -5417,7 +5351,7 @@
                             updateScanSaveBtn();
                         }
 
-                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        // 提交到后端执行池，轮询增量结果
                         // （单票响应同形，模式过滤/渲染逻辑零改动）
                         btn.textContent = "中断扫描";
                         _asyncScanAll(stocks, {freq: freq, mode: "ma", recent: "1", source: _scanSources.join(",")}, function(data) {
@@ -5495,7 +5429,6 @@
                         var stocks = data.stocks;
                         var total = stocks.length;
                         var preSkipped = data.pre_skipped || 0;
-                        console.log("[放量扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                         var results = [];
                         var skipped = 0;
                         var currentIdx = 0;
@@ -5569,7 +5502,7 @@
                             updateScanSaveBtn();
                         }
 
-                        // 阶段 7：提交到后端执行池，轮询增量结果
+                        // 提交到后端执行池，轮询增量结果
                         btn.textContent = "中断扫描";
                         _asyncScanAll(stocks, {freq: freq, mode: "fangliang", recent: _scanRecentDays, source: _scanSources.join(",")}, function(data) {
                             completed++;
@@ -5641,7 +5574,6 @@
                     var stocks = data.stocks;
                     var total = stocks.length;
                     var preSkipped = data.pre_skipped || 0;
-                    console.log("[买卖点扫描] 合并后股票总数: " + total + " 只, 来源: " + _scanSources.join(","));
                     var results = [];
                     var skipped = 0;
                     var currentIdx = 0;
@@ -5726,7 +5658,7 @@
                         updateScanSaveBtn();
                     }
 
-                    // 阶段 7：提交到后端执行池，轮询增量结果
+                    // 提交到后端执行池，轮询增量结果
                     // （单票响应同形，模式过滤/渲染逻辑零改动）
                     // mode=""（空）即买卖点扫描；recent 传最近 N 根过滤
                     btn.textContent = "中断扫描";
@@ -6022,7 +5954,6 @@
             fetch("/api/stocks/scan/save/zxg?codes=" + encodeURIComponent(codes.join(",")), { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                console.log("[THS] 保存响应:", data);
                 // 保存结果用与扫描面板汇总行一致的亮度：普通文字 #a8b2d1，高亮数字/状态 #e94560
                 btn.style.opacity = "1";
                 var parts = [];
@@ -6087,7 +6018,7 @@
         };
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.ScanPanel = {
             startScanZxg, doStartScan, scanModeDialogConfirm, scanModeDialogCancel,
         renderScanResults, renderFxDScanResults, renderMaScanResults,
@@ -6126,7 +6057,7 @@
             realtimeSymbol = symbol;
             realtimeFreq = freq;
             realtimeStartTime = startTime || null;
-            realtimeEndTime = endTime || null; // A 方案 · 复盘软断开边界
+            realtimeEndTime = endTime || null; // 复盘软断开边界
             isRealtimeMode = true;
             startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
@@ -6141,7 +6072,7 @@
                     sseUrl += '&start_time=' + encodeURIComponent(startTime);
                 }
                 if (endTime) {
-                    // A 方案 · 复盘软断开：把终点传入前端，后端把更新停在该边界，不拉最新
+                    // 复盘软断开：把终点传入前端，后端把更新停在该边界，不拉最新
                     sseUrl += '&end_time=' + encodeURIComponent(endTime);
                 }
                 realtimeEventSource = new EventSource(sseUrl);
@@ -6230,14 +6161,14 @@
 
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
         // startTime: 上窗选点时间 T（B 操作双窗：上窗 [T, 最新]、下窗自动对齐同一区间）
-        // endTime: 复盘终点（A 方案软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
+        // endTime: 复盘终点（软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
         function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
             dualSubFreq = subFreq;
             realtimeStartTime = startTime || null;
-            realtimeEndTime = endTime || null; // A 方案 · 复盘软断开边界
+            realtimeEndTime = endTime || null; // 复盘软断开边界
             isRealtimeMode = true;
             startCountdownTimer();
             const badge = document.getElementById('realtime-badge');
@@ -6511,7 +6442,7 @@
         }
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.RealtimeService = {
             startRealtimeIfFutures, connectRealtimeInit, connectRealtimeDual,
         connectRealtime, disconnectRealtime, handleRealtimeDataSingle,
@@ -6945,7 +6876,7 @@
         }
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.AnnotationPanel = {
             loadAnnotations, onContextMenu, annotationAdd,
         annotationDialogConfirm, annotationDialogCancel, annotationEditAnnotation,
@@ -7128,18 +7059,18 @@
         }
 
 
-        // 注册组件对外接口（阶段 8 拆分契约；引用上方闭包内实现）
+        // 注册组件对外接口（引用上方闭包内实现）
         ChanApp.components.Bootstrap = {
             init, initDefault, saveLastState, loadLastCodeFreq
         };
 
 
 // ══════════════════════════════════════════════════════════════════
-        // [MERGED] AppState 状态访问层 —— 合并自 A 方案交付件（阶段 6 双方案取长）
+        // [MERGED] AppState 状态访问层
         // 30 个共享状态变量的 getter/setter 访问器 + 8 个引导方法别名。
         // 闭包变量仍为唯一数据源（访问器同源读写，行为零漂移）；本层不进
         // components 注册表、不新增任何 window.* 绑定（window API 面冻结），
-        // 仅供控制台调试与阶段 8 状态迁移锚点（ChanApp.state.<变量>）。
+        // 仅供控制台调试（ChanApp.state.<变量>）。
 // ══════════════════════════════════════════════════════════════════
         ChanApp.state = (function() {
             const s = {};
@@ -7224,7 +7155,6 @@
             }
         });
 
-        console.log("[扫描模块] v2-多选版 已加载 OK");
 
         document.addEventListener("click", function(e) {
             if (!e.target.closest(".stock-input")) {
@@ -7386,7 +7316,7 @@
 
         init();
 
-        // P2-8 周期映射统一：启动时从后端 /api/health 拉取周期映射，覆盖本地兜底常量
+        // 周期映射以后端为单一事实源：启动时从 /api/health 拉取周期映射，覆盖本地兜底常量
         (async function loadFreqMapFromBackend() {
             try {
                 const resp = await fetch("/api/health", { cache: "no-store" });

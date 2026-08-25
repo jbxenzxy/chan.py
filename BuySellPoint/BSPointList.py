@@ -15,7 +15,7 @@ from .BSPointConfig import CBSPointConfig, CPointConfig
 LINE_TYPE = TypeVar('LINE_TYPE', CBi, CSeg[CBi])
 LINE_LIST_TYPE = TypeVar('LINE_LIST_TYPE', CBiList, CSegListComm[CBi])
 
-# 区间套背驰判断（由 my_chan_main 在双窗口模式下调用）
+# 区间套背驰判断（双窗口模式下由引擎层调用）
 
 
 class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
@@ -721,7 +721,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 期货：上下窗是独立的 CChan 对象，下窗缓存在 _futures_analysis_cache 中
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
             # 保证此处取到的下窗 sub_chan 是已更新到最新的笔结构。
-            # （P0-2：绕行 AppEngine 状态别名 → 改走 AppData 公共 API，行为零变化）
+            # （下窗缓存经 AppData 公共 API 读取）
             from App.AppData import app_data
             cache_key = f"{parent.code.upper()}:{sub_freq}"
             sub_chan = app_data.futures_cache_get(cache_key)
@@ -1731,9 +1731,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     '''
 
 # ═══════════════════════════════════════════════════════════
-# 区间套辅助函数（从 my_chan_main.py 搬迁至此）
+# 区间套辅助函数
 # 主要用于 check_nested_diver 计算背驰，
-# 红框功能（my_chan_main.py）通过 import 复用
+# 红框功能（App 引擎层）通过 import 复用
 # ═══════════════════════════════════════════════════════════
 
 INTRADAY_FREQS = {"30m", "5m", "1m"}

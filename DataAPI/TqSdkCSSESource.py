@@ -1,25 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-DataAPI/TqSdkCSSESource.py —— SSE 数据源抽象（V10「差距重构」CH5 落地）
+DataAPI/TqSdkCSSESource.py —— SSE 数据源抽象
 =====================================================================
-把原 FrontAPI.CSSESource / CTqSdkSession 整体下沉到数据源抽象层，令
-tqsdk 仅在 DataAPI 可见（对齐 V10 4.2「阶段 5 后统一走抽象层」）。
+SSE 流数据源层：tqsdk 仅在本模块（DataAPI 数据源抽象层）可见，
+下游（FrontAPI / App/AppSSE）经本模块消费，不直接 import tqsdk。
 
-【彻底解耦业务】本模块只保留「数据源面」方法：
+【职责边界】本模块只承载「数据源面」方法：
   connect / get_kline_serial / wait_update / last_records / append_bar /
   close / close_api / cleanup_records
-业务方法（init_chan / extract_snapshot / white_hline / step_load）已从
-数据源上剥离，下沉为服务层 App/AppSSE.py 的模块级纯业务函数：
+业务方法（init_chan / extract_snapshot / white_hline / step_load）由
+服务层 App/AppSSE.py 的模块级纯业务函数承担：
   _sse.init_chan_symbol / _sse._extract_realtime_snapshot /
   _sse._calc_futures_white_hline / _sse._drain_chan
-生成器与业务层按「src 协议 + 服务层业务函数」消费，不再触碰 tqsdk。
+生成器与业务层按「src 协议 + 服务层业务函数」消费，不触碰 tqsdk。
 
 CSSESource 继承 DataAPI 统一基类 CCommonStockApi，使「面向生成器的
-流协议」成为抽象层的合法扩展，而非另起炉灶。流数据源无传统 K 线
-初始化参数，故子类以类属性（FREQ_SEC_MAP 等）提供元数据，不用
+流协议」成为抽象层的合法扩展。流数据源无传统 K 线初始化参数，
+故子类以类属性（FREQ_SEC_MAP 等）提供元数据，不用
 CCommonStockApi 的 __init__ 既约。
 
-CTqSdkSession 生命周期（天勤根因修复，原样保留）：
+CTqSdkSession 生命周期（天勤约束，必须遵守）：
   - TqApi.close() 必须在 wait_update 返回后、由 wait_update 的调用线程
     调用（close() 检查 _loop.is_running()，运行中抛「不能在协程中调用
     close」）。因此 api.close() 永远只在生成器线程的 finally（close_api
@@ -93,13 +93,13 @@ class CSSESource(CCommonStockApi):
     生产实现 CTqSdkSession：真实天勤连接，每 SSE 连接独立 TqApi + CChan，
     不触碰共享分析缓存（_futures_analysis_cache 仅按下窗键存放供
     /api/dual_zs 读取，启动写入/收尾弹出，无跨连接竞争）。
-    灰度/测试注入 MockSource：脚本化 K 线序列驱动确定性事件流。
+    测试注入 MockSource：脚本化 K 线序列驱动确定性事件流（见 Test/test_sse_gray.py）。
 
     只承载数据源面协议（连接 / 行情序列 / wait_update / 生命周期）；
     业务（历史拉取 + chan 分析 / 快照提取 / 白线 / 引擎消耗）由服务层
     App/AppSSE.py 模块级业务函数承担（彻底解耦业务）。
 
-    全部方法为同步阻塞调用——方案A 下 SSE 生成器为同步生成器，由
+    全部方法为同步阻塞调用——SSE 生成器为同步生成器，由
     StreamingResponse 在线程池中迭代，阻塞调用天然发生在线程内，
     不占事件循环（每连接一条常驻线程）。
 
@@ -133,10 +133,10 @@ class CSSESource(CCommonStockApi):
         """向引擎注入一根已完成 K 线"""
         raise NotImplementedError
 
-    # ── 记录缓存操作（P1-1 数据源抽象单轨化）────────────────────
-    # 原由服务层直接调用 CTqSdkAPI.set_data / get_data / get_last_n /
-    # clear_all_cache（records↔K线转换轨）；收敛后统一经 Session 协议
-    # 访问，CTqSdkAPI 降级为 Session 内部实现细节。
+    # ── 记录缓存操作（统一经 Session 协议访问）──────────────────
+    # records↔K线转换统一经 Session 协议访问，CTqSdkAPI 为 Session
+    # 内部实现细节，服务层不直调其 set_data / get_data / get_last_n /
+    # clear_all_cache。
     def set_data(self, records, symbol=None):
         """注入整段K线记录到共享缓存（供 CChan 数据源读取）"""
         raise NotImplementedError
@@ -168,7 +168,7 @@ class CSSESource(CCommonStockApi):
         pass
 
     def cleanup_records(self, code_key):
-        """清理该连接的 K 线注入缓存（异常自吞并打印，遗留行为）"""
+        """清理该连接的 K 线注入缓存（异常自吞并打印）"""
         raise NotImplementedError
 
     # ── CCommonStockApi 抽象方法默认实现（流会话不需要传统 K 线形态）──
@@ -190,7 +190,7 @@ class CSSESource(CCommonStockApi):
 class CTqSdkSession(CSSESource):
     """生产数据源：天勤 TqApi 会话（唯一聚焦连接与行情 I/O）
 
-    TqApi 生命周期（应用级管理，根因修复，原样保留）：
+    TqApi 生命周期（应用级管理）：
       - 每 SSE 连接独立 TqApi；实例创建即注册进 _ACTIVE_SOURCES 注册表；
       - close() 只设置 _closed 旗（通知生成器退出），不直接 api.close()；
         api.close() 由生成器线程在 finally 中经 close_api() 调用——天勤
@@ -224,7 +224,7 @@ class CTqSdkSession(CSSESource):
     def fetch_kline(self, symbol, freq_sec=15, num_bars=None,
                     display_key=None, start_time=None):
         """拉取历史 K 线（委托 CTqSdkAPI.fetch_kline，封装底层 api 对象）。
-        V10 复审 P1-2：服务层只消费 src.* 协议，不再触碰 src.api 原始对象。"""
+        服务层只消费 src.* 协议，不触碰 src.api 原始对象。"""
         from DataAPI.TqSdkAPI import CTqSdkAPI
         return CTqSdkAPI.fetch_kline(self.api, symbol, freq_sec=freq_sec,
                                      num_bars=num_bars, display_key=display_key,
@@ -243,7 +243,7 @@ class CTqSdkSession(CSSESource):
         from DataAPI.TqSdkAPI import CTqSdkAPI
         CTqSdkAPI.append_bar(bar, symbol=code_key)
 
-    # ── 记录缓存操作（P1-1 单轨化：Session 统一承载 records↔K线转换）──
+    # ── 记录缓存操作（Session 统一承载 records↔K线转换）──────────
     def set_data(self, records, symbol=None):
         from DataAPI.TqSdkAPI import CTqSdkAPI
         CTqSdkAPI.set_data(records, symbol=symbol)

@@ -1,22 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-App/AppData.py — 业务数据层（阶段 4：数据层收敛）
+App/AppData.py — 业务数据层
 ================================================
-设计文档 6.1 / 8.7：缓存 / 持久化 / 标注 / 自选股全部收敛于此，
-产出「数据层职责单一」。
-
-本文件自阶段 4 起持有**真实实现与真实状态**（此前为薄委托壳）：
+缓存 / 持久化 / 标注 / 自选股全部收敛于此，持有真实实现与真实状态：
   · 分析结果 LRU 缓存（股票 + 期货）
   · 名称 / PE-TTM / 指数归属 / 流通市值 四类惰性缓存
   · 手动选点 CSV 持久化（double_click_dt.csv）
   · 上次查看代码/周期（last_code_freq.json）
   · 文字标注（text_annotation.json）
-  · 自选股（zxg.blk 读写；存储格式知识自含，设计 4.4 与 DataAPI 互不依赖）
+  · 自选股（zxg.blk 读写；存储格式知识自含，与 DataAPI 互不依赖）
 
-依赖方向（设计 6.2 / 4.4）：
+依赖方向：
   FrontAPI.py → App/AppOrch.py → App/AppData.py → App/AppConfig.py（单向）
-  my_chan_main.py 中的同名函数/状态自阶段 4 起降级为兼容壳/别名，
-  指向本模块单例 app_data，行为零漂移。
 
 使用方式：
     from App.AppData import app_data
@@ -38,7 +33,7 @@ log = get_logger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 选点表 schema（持久化格式定义，随数据层同迁；消费侧经别名共享）
+# 选点表 schema（持久化格式定义；消费侧经别名共享）
 # ═══════════════════════════════════════════════════════════════════
 SAVED_POINT_COLUMNS = ["code", "name", "y", "q", "m", "w", "d",
                        "60m", "30m", "15m", "5m", "1m", "15s"]
@@ -46,8 +41,8 @@ FREQ_TO_COL = {"y": "y", "q": "q", "m": "m", "w": "w", "d": "d",
                "60m": "60m", "30m": "30m", "15m": "15m", "5m": "5m",
                "1m": "1m", "15s": "15s"}
 
-# 自选股写盘用指数映射（阶段 4 自 DataAPI/TdxAPI.py 迁入；
-# 通达信内部代码格式，与 Script/ths_sync_to_tdx.py 中的同名映射保持一致）
+# 自选股写盘用指数映射（通达信内部代码格式，
+# 与 Script/ths_sync_to_tdx.py 中的同名映射保持一致）
 ZXG_HK_INDEX_MAP = {
     "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
     "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
@@ -93,8 +88,8 @@ def _read_zxg_blk_file(blk_path):
       A股 7 位纯数字（前缀 + 6 位代码）/ 港股 31# / 港股指数 27# /
       美股 74# / 美股指数 12#A_
     说明：DataAPI/TdxAPI.py 另持一份同名解析（服务其指数成分读取），
-    属设计 4.4「两者互不依赖」的边界代价（AppData-vs-DataAPI-职责边界.html §6
-    确认各自自含为正确边界，不引入顶层中立模块强并）。
+    属「两者互不依赖」的边界代价——各自自含为正确边界，
+    不引入顶层中立模块强并。
     """
     if not blk_path or not os.path.exists(blk_path):
         return []
@@ -129,18 +124,18 @@ def _read_zxg_blk_file(blk_path):
 
 
 # ════════════════════════════════════════════════════════════════
-# P1-5 缓存键规范化：结构化键（消除字符串拼接歧义与漂移）
+# 结构化缓存键（消除字符串拼接歧义与漂移）
 # ════════════════════════════════════════════════════════════════
-# 股票分析缓存（_stocks_analysis_cache）改用结构化元组键：
+# 股票分析缓存（_stocks_analysis_cache）使用结构化元组键：
 #   (kind, market, code, freq, date)
 # 双窗口键（dual_main/dual_sub）追加第 6 维 impl（independent/legacy，
 # 见 _dual_impl_tag），隔离 A/B 两种实现的缓存，防切换开关后串用。
 # 天然 hashable、可比较、无分隔符歧义（代码/周期/日期含 "_" / ":" 也不会碰撞）。
-# 期货子窗缓存（_futures_analysis_cache）保留字符串键，但统一经
+# 期货子窗缓存（_futures_analysis_cache）使用字符串键，统一经
 # make_futures_sub_key 规范化（symbol 大写入键），消除 AppSSE/AppChart/
 # 语义化接口三处拼接的大小写漂移；第三方引擎（BSPointList）按同一
 # 格式拼接，兼容不变。单一事实源：所有调用方经本组工厂函数生成键，
-# 不再手工拼接字符串。
+# 不手工拼接字符串。
 def make_analysis_key(kind, market, code, freq, date):
     """构造结构化分析缓存键（kind: single/dual_main/dual_sub/live）"""
     return (kind, str(market), str(code), str(freq), str(date))
@@ -151,9 +146,9 @@ def _dual_impl_tag():
 
     独立(independent)与联立(legacy)两种实现的红框边界语义不同
     （独立=数学换算，联立=KLU.sub_kl_list 真实边界），dual 缓存若
-    不区分实现，切换 A/B 开关后会串用另一实现的缓存结果（快照全量
-    连跑已复现：legacy 先写缓存，independent 复跑直接命中返回联立
-    输出）。语义事实源为 AppEngine._stock_dual_impl（读
+    不区分实现，切换 A/B 开关后会串用另一实现的缓存结果（例：
+    legacy 先写缓存，independent 复跑直接命中返回联立输出）。
+    语义事实源为 AppEngine._stock_dual_impl（读
     CHAN_STOCK_DUAL_IMPL，非法值回退 independent）；此处仅重复读同
     一环境变量做 key 归一，不 import 引擎，避免循环依赖。
     """
@@ -187,15 +182,15 @@ def make_futures_sub_key(symbol, sub_freq):
 
 
 class AppData:
-    """业务数据层：缓存 / 持久化 / 标注 / 自选股（真实实现 · 阶段 4）"""
+    """业务数据层：缓存 / 持久化 / 标注 / 自选股（真实实现）"""
 
     MAX_CACHE_SIZE = 50  # 最多缓存 50 个 (股票, 周期) 组合（共享 LRU 池总上限）
     # 双窗结构化缓存键（dual_main/dual_sub）在共享池内单独限额：
     # 双窗条目更重（两键各含 CChan + records）且不常用，超限优先淘汰
     # 最旧 dual 键，不挤占常用单窗口缓存（单一事实源 AppConfig）。
     MAX_DUAL_CACHE_KEYS = app_config.max_dual_cache_keys
-    # 双窗运行时下窗 CChan 缓存上限（LRU）：历史上无上限，切换标的时
-    # 旧 CChan 残留泄漏；现超限淘汰最旧（切回单窗不主动清，保留快速切回）。
+    # 双窗运行时下窗 CChan 缓存上限（LRU）：超限淘汰最旧
+    # （切回单窗不主动清，保留快速切回），防切换标的时旧 CChan 残留泄漏。
     MAX_STOCKS_SUB_CHAN = app_config.max_stocks_sub_chan
 
     def __init__(self):
@@ -203,7 +198,7 @@ class AppData:
         self._cache_lock = threading.RLock()
         self._stocks_analysis_cache = collections.OrderedDict()
         self._futures_analysis_cache = {}
-        # 股票双窗独立化：下窗 CChan 运行时缓存（P1；键见 stocks_sub_cache_key）
+        # 股票双窗独立化：下窗 CChan 运行时缓存（键见 stocks_sub_cache_key）
         self._stocks_sub_chan_cache = {}
 
         # ── 名称 / PE / 归属 / 流通市值（惰性加载标志 + 字典）──
@@ -220,7 +215,7 @@ class AppData:
         self._annotations = {}   # { "code_freq": [ {date,text,y_offset}, ... ] }
         self._annotations_loaded = False
 
-        # ── 启动时加载（与原 my_chan_main import 期行为一致）──
+        # ── 启动时加载（实例化即加载选点表与标注）──
         self._saved_point_times = self.load_saved_point_times()
         self.load_annotations()
 
@@ -252,7 +247,7 @@ class AppData:
         return app_config.float_mc_cache_file
 
     # ════════════════════════════════════════════════════════════════
-    # 状态只读出口（my_chan_main 兼容别名 / 获取侧刷新函数经此共享同一对象）
+    # 状态只读出口（获取侧刷新函数经此共享同一对象）
     # ════════════════════════════════════════════════════════════════
     @property
     def cache_lock(self):
@@ -298,19 +293,17 @@ class AppData:
         """周期 → CSV 列名（选点表；无映射返回 None）"""
         return FREQ_TO_COL.get(freq)
 
-    # ── 行业映射单一加载（阶段 5，设计 8.8/4.1）──────────────────
-    #    tdxhy_mapping_data.py 已整体迁入 App/（独立数据文件，不并入本类）；
-    #    原 DataAPI/TdxAPI.py 与 my_chan_main.py 两处硬编码寻址收敛为
-    #    本方法一个加载点，DataAPI 侧经 set_tdx_hy_mapping 注入（互不依赖）。
-    #    P2-2：加载方式由 exec(open(...).read()) 改为直接 import 数据模块
-    #    （数据文件自带统一加载函数 load_tdxhy_mapping，消除硬编码路径）。
+    # ── 行业映射单一加载 ──────────────────────────────────────
+    #    tdxhy_mapping_data.py 为独立数据文件（不并入本类）；本方法是
+    #    唯一加载点，DataAPI 侧经 set_tdx_hy_mapping 注入（互不依赖）。
+    #    加载方式为直接 import 数据模块（数据文件自带统一加载函数
+    #    load_tdxhy_mapping，消除硬编码路径）。
 
     def load_tdxhy_mapping(self):
         """加载通达信研究行业映射，返回 (x_to_881, to_x) 二元组
 
-        单一加载点：直接 import 数据模块（P2-2 由 exec() 改 import），
-        文件缺失/损坏时硬失败（ValueError），不再静默降级空表
-        （设计 8.4 验收要求：迁移全过程中映射表不发生静默降级）。
+        单一加载点：直接 import 数据模块，文件缺失/损坏时硬失败
+        （ValueError），不静默降级空表。
         结果按 (x_to_881, to_x) 次序返回，可直接 set_tdx_hy_mapping(*result)。
         """
         try:
@@ -410,8 +403,8 @@ class AppData:
         """期货分析缓存失效（子级别切换时释放旧中间状态）"""
         return self._futures_analysis_cache.pop(key, default)
 
-    # ── 语义化子窗接口（吸收外部评审：key 规则内聚于数据层，   ──
-    #    调用方不再手工拼接 "{SYMBOL}:{sub_freq}"，大小写规则单一事实源）
+    # ── 语义化子窗接口（key 规则内聚于数据层，调用方不手工拼接  ──
+    #    "{SYMBOL}:{sub_freq}"，大小写规则单一事实源）
     def set_futures_sub_chan(self, symbol, sub_freq, chan):
         """写入期货子窗口 CChan（symbol 统一大写入键，供 /api/red_range_zs 访问）"""
         return self.futures_cache_put(make_futures_sub_key(symbol, sub_freq), chan)
@@ -424,12 +417,12 @@ class AppData:
         """弹出并删除期货子窗口 CChan（SSE 连接关闭 / 子级别切换时释放）"""
         return self.futures_cache_pop(make_futures_sub_key(symbol, sub_freq), None)
 
-    # ── 股票双窗独立化（P1，D1=A 改造）────────────────────────
+    # ── 股票双窗独立化 ──────────────────────────────────────────
     #    仿期货子窗缓存建「股票下窗 CChan 运行时缓存」：
     #      · 写入方：_analyze_stock_internal 独立双窗路径（先建下窗再建上窗，
     #        保证上窗 bsp 计算的区间套 check_nested_diver 能整读到完整下窗）；
     #      · 读取方：check_nested_diver（区间套）与 compute_red_range_zs
-    #        （红框中枢，P3 起改读独立下窗；miss 抛错，D6=B 对齐期货语义）。
+    #        （红框中枢，读独立下窗；miss 抛错，对齐期货语义）。
     #    键不带复盘日期后缀（运行时态，随每次双窗重建覆盖），
     #    与 dual_sub 结构化缓存（带 date_suffix，存 result/records）职责分离。
     def stocks_sub_cache_key(self, chan_code, sub_freq):
@@ -448,7 +441,7 @@ class AppData:
 
     def stocks_sub_cache_put(self, chan_code, sub_freq, chan):
         """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态；
-        超 MAX_STOCKS_SUB_CHAN 淘汰最旧——切换标的残留的旧 CChan 不再泄漏）"""
+        超 MAX_STOCKS_SUB_CHAN 淘汰最旧，切换标的残留的旧 CChan 不泄漏）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
         if key in self._stocks_sub_chan_cache:
             del self._stocks_sub_chan_cache[key]
@@ -486,7 +479,7 @@ class AppData:
     def load_stock_names_from_cache_file(self):
         """从 stock_names.json 缓存文件加载股票名称到内存。
         返回加载的记录数，文件不存在则返回0。
-        版本迁移：自动将旧版纯数字键转换为 market+code 复合键。"""
+        自动将纯数字键（旧缓存格式）转换为 market+code 复合键。"""
         if self._names_loaded:
             return len(self._names)
         if not os.path.exists(self.stock_names_cache_file):
@@ -495,12 +488,12 @@ class AppData:
             with open(self.stock_names_cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
-                # 迁移：将旧版纯数字键（如 "000001"）转换为复合键（如 "sh000001"）
+                # 缓存文件兼容：将纯数字键（如 "000001"）转换为复合键（如 "sh000001"）
                 migrated = {}
                 for key, info in data.items():
                     if isinstance(info, dict) and "market" in info and info["market"]:
                         mkt = info["market"]
-                        # 纯数字键（旧格式）→ 复合键
+                        # 纯数字键（旧缓存格式）→ 复合键
                         if key.isdigit():
                             new_key = mkt + key
                         else:
@@ -517,8 +510,8 @@ class AppData:
         return 0
 
     def replace_names(self, all_names):
-        """整体替换名称缓存（获取侧刷新完成时调用；原实现为模块级重绑定，
-        此处改为同对象清空+灌入，保证所有共享别名同步可见）"""
+        """整体替换名称缓存（获取侧刷新完成时调用；
+        同对象清空+灌入，保证所有共享别名同步可见）"""
         self._names.clear()
         self._names.update(all_names)
         self._names_loaded = True
@@ -909,15 +902,14 @@ class AppData:
         return result
 
     # ════════════════════════════════════════════════════════════════
-    # 自选股（zxg.blk；阶段 4 自含存储格式知识，设计 4.4 与 DataAPI 互不依赖）
+    # 自选股（zxg.blk；自含存储格式知识，与 DataAPI 互不依赖）
     # ════════════════════════════════════════════════════════════════
     @property
     def zxg_blk_path(self):
         """自选股文件路径：<tdx_install_dir>/T0002/blocknew/zxg.blk。
 
-        与 DataAPI get_blk_path("zxg") 等价（其 vipdoc_dir 由
-        my_chan_main 从 app_config 注入，dirname(vipdoc) = tdx_install_dir），
-        但路径推导自含于数据层，不产生 App → DataAPI 依赖边。"""
+        与 DataAPI get_blk_path("zxg") 等价（dirname(vipdoc_dir) =
+        tdx_install_dir），但路径推导自含于数据层，不产生 App → DataAPI 依赖边。"""
         root = app_config.tdx_install_dir
         if not root:
             return ""
@@ -1009,5 +1001,5 @@ class AppData:
         return added
 
 
-# 全局单例（实例化即完成选点/标注启动加载，与原 import 期行为一致）
+# 全局单例（实例化即完成选点/标注启动加载）
 app_data = AppData()

@@ -89,6 +89,12 @@ TARGET_FUNCS = {
     "_extract_sub_level_data":    ("ORCH_E", "子级别结果提取（254 行）"),
     "analyze_stock":              ("ORCH_E", "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"),
 
+    # ── 消费侧：股票双窗口（独立下窗） ──
+    "_validate_stock_dual_pair":  ("ORCH_E", "双窗周期配对校验（非法返回错误串，调用方 4xx 拒绝）"),
+    "_stock_dual_impl":           ("ORCH_E", "双窗 A/B 实现开关（环境变量，默认 independent）"),
+    "_stocks_sub_dt_algo":        ("ORCH_E", "独立下窗截断边界（结束时间语义纯函数）"),
+    "_build_sub_kl_times":        ("ORCH_E", "灰框对照表合成（上窗K线→下窗K线时间分桶，双指针）"),
+
     # ── 获取侧（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）──
 
     # ── 扫描（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
@@ -171,6 +177,11 @@ TARGET_STATES = {
     "HK_CODE_PREFIX":  ("ORCH_E", "港股前缀（_get_stock_market_code 用）"),
     "DS_CODE_PREFIX":  ("ORCH_E", "科创板前缀（同上）"),
     "TDX_MARKET_MAP":  ("ORCH_E", "市场代码映射（ChartHandler 1 处；阶段 5 提升 DataAPI 元数据候选）"),
+    "DUAL_SUB_FALLBACK_MIN": ("ORCH_E", "双窗下窗对齐不足降全量阈值（= app_config.dual_sub_fallback_min）"),
+    "_STOCKS_DUAL_IMPL_ENV": ("ORCH_E", "双窗 A/B 实现开关环境变量名"),
+    "_STOCKS_DUAL_PAIRS":    ("ORCH_E", "股票双窗配对空间（上窗周期→可选下窗周期集合）"),
+    "_STOCKS_MAIN_PERIOD":   ("ORCH_E", "主级别单根K线覆盖时长映射"),
+    "_STOCKS_EOD":           ("ORCH_E", "日期型K线当日结束时刻补齐偏移"),
 
     # 锁与引擎
     "_stock_analysis_lock": ("RETIRE", "旧引擎锁（ChartHandler 2 处；AppOrch._ENGINE_LOCK 已接替 → 随 3b 下线）"),
@@ -186,10 +197,7 @@ TARGET_STATES = {
 # ③ 顶层类 → 处置
 # ═══════════════════════════════════════════════════════════════════
 TARGET_CLASSES = {
-    "ThreadingHTTPServer": ("RETIRE", "旧 HTTP 服务器别名（2 行；随 ChartHandler 3b 后删）"),
-    "ChartHandler": ("FE", "遗留服务器 · 阶段 3a 已墓碑化：do_GET/do_POST 删除（844 行）改回 410 Gone；"
-                          "_handle_sse_stream_dual/single 已于 3b-2 拆除（灰度通过后随 legacy 桥接下线）；"
-                          "send_json_response/log_message/handle_one_request 随类保留"),
+    # 旧 HTTP 服务器层（ChartHandler / ThreadingHTTPServer）已随迁移完成整体删除。
 }
 
 # ═══════════════════════════════════════════════════════════════════

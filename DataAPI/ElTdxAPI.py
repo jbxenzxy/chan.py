@@ -2,20 +2,17 @@
 """
 DataAPI/ElTdxAPI.py —— 盘后下载（日/分钟线下载、二进制解析）
 =====================================================================
-阶段 5（获取侧抽象完善，设计文档 8.8）：页面右上角「盘后下载」按钮
-实现的功能（批量把 TDX 的日 / 分钟线数据下载到本地 vipdoc 目录）
-从 my_chan_main.py 迁入本文件，职责内聚到数据源抽象层。
+实现页面右上角「盘后下载」按钮功能：批量把 TDX 的日 / 分钟线数据
+下载到本地 vipdoc 目录，职责内聚在数据源抽象层。
 
-收纳函数（设计 4.5 映射表 / 8.8 点名）：
+对外函数面：
   _tdx_day_record / _tdx_min_record / _date_to_int / _date_to_min_packed /
   _ensure_dir / _download_day_kline / _download_min_kline / _download_task /
   _start_download / _stop_download / _get_download_status /
   _collect_codes_from_vipdoc
 
-状态（func_map_check TARGET_STATES → ELTDX）：
-  _download_state / _download_lock 收敛为本模块状态（单一事实源）。
-
-my_chan_main.py 保留同名兼容壳（复制模式，阶段 9/10 统一下线旧文件）。
+下载状态：
+  _download_state / _download_lock 为本模块状态（单一事实源）。
 """
 import os
 import struct
@@ -25,7 +22,7 @@ from datetime import datetime, timedelta
 
 from chinese_calendar import is_holiday
 
-# 依赖方向（设计 4.4）：本模块属 DataAPI 数据源抽象层，不 import App 层——
+# 依赖方向：本模块属 DataAPI 数据源抽象层，不 import App 层——
 # 目录路径一律由调用方注入（vipdoc_dir 参数），配置读取留在 App 层。
 
 # ============================================================
@@ -39,7 +36,7 @@ except ImportError:
     TdxClient = None
     print("[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx")
 
-# 下载状态管理（单一事实源，my_chan_main 兼容壳共享同一对象）
+# 下载状态管理（单一事实源）
 _download_state = {
     "running": False,
     "aborted": False,

@@ -15,8 +15,6 @@ import re
 import math
 import socket
 import struct
-import logging
-import warnings
 import pandas as pd
 from datetime import datetime, timedelta
 from collections import OrderedDict
@@ -28,9 +26,7 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 from KLine.KLine_Unit import CKLine_Unit
 
 # 通达信研究行业 X代码↔881代码映射表（从官方PDF 3.6节提取）
-# ── 阶段 5（设计 8.8/4.1）：tdxhy_mapping_data.py 已整体迁入 App/ 目录 ──
-# 本模块不再按自身目录寻址加载（原 try-import App 反向依赖 + 失败静默降级
-# 空表，设计 4.4 依赖方向违反）；映射数据改由 App 层单一加载函数
+# 映射数据文件为 App/tdxhy_mapping_data.py，由 App 层单一加载函数
 # AppData.load_tdxhy_mapping() 加载后，经 set_tdx_hy_mapping 注入（与
 # set_tdx_config 同一注入模式，DataAPI 与 App 互不依赖）。
 _TDXHY_X_TO_881 = {}
@@ -38,14 +34,14 @@ _TDXHY_881_TO_X = {}
 
 
 def set_tdx_hy_mapping(x_to_881=None, to_x=None):
-    """由 my_chan_main.py 启动时调用，注入通达信研究行业映射表
+    """由 App 引擎层启动时调用，注入通达信研究行业映射表
 
     数据文件 App/tdxhy_mapping_data.py 由 AppData.load_tdxhy_mapping() 单一
-    加载（设计 8.8），本函数只收值不寻址；注入对象直存（同一 dict 身份），
+    加载，本函数只收值不寻址；注入对象直存（同一 dict 身份），
     注入前调用方为空表（跨层依赖方向保持 DataAPI → 不 import App）。
 
-    fail-fast 注入模式（设计 8.4 根除静默降级）：任一侧注入后若双表仍
-    存在空表，直接抛 ValueError，不再以空表继续运行。
+    fail-fast 注入模式：任一侧注入后若双表仍存在空表，直接抛 ValueError，
+    不以空表继续运行。
     """
     global _TDXHY_X_TO_881, _TDXHY_881_TO_X
     if x_to_881:
@@ -66,7 +62,7 @@ def get_tdx_hy_mapping():
 
 
 # ============================================================
-# 模块级配置（由 my_chan_main.py 调用 set_tdx_config() 设置）
+# 模块级配置（由 App 引擎层调用 set_tdx_config() 设置）
 # ============================================================
 _tdx_config = {
     "vipdoc_dir": None,
@@ -75,7 +71,7 @@ _tdx_config = {
 
 
 def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
-    """由 my_chan_main.py 调用，设置通达信数据源所需的全局配置"""
+    """设置通达信数据源所需的全局配置（由 App 引擎层启动时调用）"""
     if vipdoc_dir is not None:
         _tdx_config["vipdoc_dir"] = vipdoc_dir
     if forward_adjust_enabled is not None:
@@ -125,7 +121,6 @@ def read_tdx_day_file(filepath, max_records=None, market=None):
         data = f.read()
     record_size = 32
     total = len(data) // record_size
-    print(f"[调试] 文件: {filepath}, 大小: {len(data)}字节, record_size={record_size}, 总记录数: {total}, 市场={'扩展' if is_ext_market else '标准A股'}")
 
     if max_records and max_records < total:
         start = (total - max_records) * record_size
@@ -206,7 +201,6 @@ def _check_and_report_gaps(records):
         old_end = records[-1]["dt"].strftime("%Y-%m-%d")
         print(f"[信息] 检测到 0 处数据缺口")
         print(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
-    print(f"[调试] 共解析有效记录: {len(records)}条")
 
 
 def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
@@ -220,9 +214,6 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     aggregate_30m=True: 从5分钟线合成为30分钟线（默认，兼容旧行为）
     aggregate_30m=False: 直接返回5分钟线原始数据
     """
-    import time as _time
-    t0 = _time.time()
-
     record_size = 32
     with open(filepath, "rb") as f:
         raw = f.read()
@@ -337,7 +328,6 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
                 "vol": r["vol"],
                 "amount": round(r["amount"], 2),
             })
-        print(f"[耗时] 读取5分钟线: {_time.time()-t0:.3f}s")
         return result
 
     # 合成30分钟线
@@ -413,7 +403,6 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
             "amount": round(v["amount"], 2),
         })
 
-    print(f"[耗时] 读取并合成30分钟线: {_time.time()-t0:.3f}s")
     return result
 
 
@@ -422,12 +411,8 @@ def _resample_5m_to_30m(records, market="sh"):
     将5分钟K线合成为30分钟K线（从 read_tdx_min_file 中提取的独立函数）
     供外部在5分钟前复权后调用，避免对30分钟K线做二次复权
     """
-    import time as _time
-
     if not records:
         return []
-
-    t0 = _time.time()
 
     # A股交易时间: 9:30-11:30, 13:00-15:00
     # 港股交易时间: 9:30-12:00, 13:00-16:00
@@ -505,7 +490,6 @@ def _resample_5m_to_30m(records, market="sh"):
     for r in records:
         r.pop("bucket", None)
 
-    print(f"[耗时] 合成30分钟线: {_time.time()-t0:.3f}s")
     return result
 
 
@@ -1060,11 +1044,6 @@ def _forward_adjust(records, market, code, end_date=None):
         if not events:
             return records, False
 
-    import time as _time
-    t_start = _time.time()
-    anchor_desc = f"截止到 {end_date.strftime('%Y-%m-%d')}" if end_date is not None else "全部历史"
-    print(f"[复权] {code} 共{len(events)}个除权除息事件({anchor_desc})，开始前复权...")
-
     if len(records) > 1 and records[0]["dt"] > records[1]["dt"]:
         records.sort(key=lambda r: r["dt"])
 
@@ -1078,7 +1057,6 @@ def _forward_adjust(records, market, code, end_date=None):
                 r["close"] = r["close"] * a + b
                 adjusted_count += 1
 
-    print(f"[复权] {code} 前复权完成，耗时 {_time.time()-t_start:.3f}s")
     return records, True
 
 
@@ -1208,7 +1186,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
 class CTdxAPI(CCommonStockApi):
     """通达信本地文件数据源适配器"""
 
-    # 类变量，由 my_chan_main.py 外部设置
+    # 类变量，由 App 引擎层外部设置
     _tdx_data = None  # list of dict 或 dict of {KL_TYPE: list of dict}
 
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
@@ -1217,7 +1195,7 @@ class CTdxAPI(CCommonStockApi):
 
     @classmethod
     def set_data(cls, data):
-        """设置K线数据（由 my_chan_main.py 调用）
+        """设置K线数据（由 App 引擎层调用）
         data 可以是:
         - list of dict: 单级别模式，所有级别共用同一份数据
         - dict of {KL_TYPE: list of dict}: 多级别模式，按 k_type 区分
@@ -1232,8 +1210,8 @@ class CTdxAPI(CCommonStockApi):
     def do_close(cls):
         pass
 
-    # ── 股票数据获取（P1-1 数据源抽象单轨化）────────────────────
-    # 引擎层不再直连模块级 read_main_level_records / read_sub_level_records，
+    # ── 股票数据获取（统一经数据源适配器单轨）────────────────────
+    # 引擎层不直连模块级 read_main_level_records / read_sub_level_records，
     # 统一经本适配器（CCommonStockApi 实现）读取；模块级函数为内部实现细节。
     @classmethod
     def fetch_main_level(cls, market, code, freq, return_raw=False, end_date=None):
@@ -1366,9 +1344,8 @@ def read_blk_file(blk_path):
     美股个股：74#{代码}，如 74#XBI
     美股指数：12#A_{代码}，如 12#A_NBI
 
-    说明：App/AppData.py 另持一份同名解析（服务其自选股读取），属设计 4.4
-    「两者互不依赖」的边界代价（AppData-vs-DataAPI-职责边界.html §6 确认
-    各自自含为正确边界，不引入顶层中立模块强并）。
+    说明：App/AppData.py 另持一份同名解析（服务其自选股读取），两者
+    互不依赖、各自自含为既定职责边界（不引入顶层中立模块强并）。
     """
     if not blk_path or not os.path.exists(blk_path):
         return []
@@ -1411,12 +1388,12 @@ def read_blk_file(blk_path):
 
 
 # ============================================================
-# [阶段 4 墓碑] read_zxg_stocks / save_to_zxg_blk / _ZXG_HK_INDEX_MAP /
-# _ZXG_US_INDEX_MAP 已于阶段 4（数据层收敛）迁出至 App/AppData.py。
-# 自选股属业务数据层职责（存哪里、怎么存），含路径推导与 blk 解析
-# （AppData.zxg_blk_path / _read_zxg_blk_file 自含，与本模块互不依赖）；
-# 本模块的 get_blk_path / read_blk_file 仅服务自身指数成分读取。
-# 迁移入口：from App.AppData import app_data
+# 自选股读写（read_zxg_stocks / save_to_zxg_blk / _ZXG_HK_INDEX_MAP /
+# _ZXG_US_INDEX_MAP）属业务数据层职责，实现位于 App/AppData.py
+# （含路径推导与 blk 解析：AppData.zxg_blk_path / _read_zxg_blk_file，
+# 与本模块互不依赖）；本模块的 get_blk_path / read_blk_file 仅服务
+# 自身指数成分读取。
+# 调用方式：from App.AppData import app_data
 #           app_data.read_zxg_stocks() / app_data.save_to_zxg_blk(codes)
 # ============================================================
 
@@ -1803,7 +1780,6 @@ def _parse_raw_block_gn(data, block_file="block_gn.dat"):
       + 成分股列表(每只7字节，UTF-8编码，格式如 "0000001" = 市场前缀+6位代码)
     每条记录固定占 2800 字节（从成分股列表起始位置算起，包含股票代码数据 + 尾部填充）
     """
-    import struct
     result = {}
 
     if len(data) < 386:
@@ -2298,8 +2274,8 @@ def _read_tdxhy_sector_stocks(sector_code):
 
 
 # ============================================================
-# [阶段 4 墓碑] save_to_zxg_blk 与 _ZXG_HK_INDEX_MAP/_ZXG_US_INDEX_MAP
-# 已迁出至 App/AppData.py（业务数据层，阶段 4 数据层收敛）。
+# save_to_zxg_blk 与 _ZXG_HK_INDEX_MAP/_ZXG_US_INDEX_MAP 属业务数据层
+# 职责，实现位于 App/AppData.py。
 # 调用方式：from App.AppData import app_data
 #           app_data.save_to_zxg_blk(codes)
 # ============================================================

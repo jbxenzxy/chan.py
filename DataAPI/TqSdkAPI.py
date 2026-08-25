@@ -2,10 +2,9 @@
 TqSdkAPI - 天勤期货/期指行情数据源适配器
 仿照 CTdxAPI 模式，使用 set_data() / append_bar() 注入数据供 chan.py 调用
 
-v5: 每个 SSE 连接自包含——创建 TqApi → 拉历史 → chan分析 → 推送快照 → 实时循环。
+每个 SSE 连接自包含：创建 TqApi → 拉历史 → chan分析 → 推送快照 → 实时循环。
 d/w 周期因天勤主连合约返回垃圾数据，已排除并在前端禁用。
 """
-import sys
 import os
 import json
 import logging
@@ -149,7 +148,7 @@ FREQ_LABEL_CN = {
 
 # 期货历史数据回看条数
 # 单一事实源在 App/AppConfig.py 的 FUTURES_LOOKBACK_CONFIG；因本文件属
-# DataAPI 层（设计 4.4：DataAPI 不反向依赖 App），配置由 AppEngine 启动时
+# DataAPI 层（DataAPI 不反向依赖 App），配置由 AppEngine 启动时
 # 经 set_futures_lookback_config() 注入到模块级 _futures_lookback_config。
 # 不再维护本地 HISTORY_LOOKBACK_BARS 兜底常量：缺失周期一律回退默认 300 根。
 # bars 语义与股票 STOCKS_LOOKBACK_CONFIG 完全对齐：>0=保留最近 N 根；<=0=不限制
@@ -179,9 +178,9 @@ class CTqSdkAPI(CCommonStockApi):
     天勤数据源适配器，继承 CCommonStockApi 实现完整接口。
     缓存键为 "symbol:freq_sec" 格式，同品种不同周期各自独立。
 
-    阶段 5（设计 8.8）：实现 CommonStockAPI 元数据接口 ——
-    频率映射 / 别名 / 支持列表 提升为抽象层元数据属性（类属性访问），
-    fetch_kline 收归基类 get_kline 家族（委托模块级 fetch_futures_kline）。
+    实现 CommonStockAPI 元数据接口：
+    频率映射 / 别名 / 支持列表 为抽象层元数据属性（类属性访问），
+    fetch_kline 走基类 get_kline 家族（委托模块级 fetch_futures_kline）。
     """
     _records_by_symbol = {}
     _lock = threading.Lock()
@@ -305,7 +304,7 @@ def set_futures_lookback_config(config: dict):
     """注入期货历史回看配置（标签键 → (bars, label)）。
 
     由 App/AppEngine.py 启动时调用，把 AppConfig.FUTURES_LOOKBACK_CONFIG
-    注入到本模块（DataAPI 层不反向依赖 App，见设计 4.4）。
+    注入到本模块（DataAPI 层不反向依赖 App）。
     传空 dict 可复位为空；缺失周期在 fetch_futures_kline 中回退默认 300 根。
     值语义与股票 STOCKS_LOOKBACK_CONFIG 对齐：bars>0=保留最近 bars 根；
     bars<=0=「不限制」——fetch_futures_kline 内统一落天勤上限 10000 根

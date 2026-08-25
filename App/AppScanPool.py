@@ -1,42 +1,40 @@
 # -*- coding: utf-8 -*-
 """
-App/AppScanPool.py —— 批量扫描 ProcessPool 编排（阶段 7）
+App/AppScanPool.py —— 批量扫描 ProcessPool 编排
 =========================================================================
-设计文档 V10 方案 5.4 / 5.5 / 5.7 / 5.8 / 8.10：
-
   - 双路径：交互请求走线程池快速路径（API 进程内），批量扫描走
     ProcessPool 进程池路径（多进程 worker），两者共享同一套 service 层
     函数（统一函数，分离通道）。
   - 批量路径先用 ProcessPoolExecutor（Python 标准库，零额外依赖、
-    零运维成本）；升级到 Celery 需满足 5.7 决策条件（优先级队列 /
-    持久化 / 超时严重 / 分布式）。
-  - 共享缓存分层（5.10）：扫描结果（task_id → 结果）经 SQLite
+    零运维成本）；升级到 Celery 的条件：优先级队列 / 持久化 /
+    超时严重 / 分布式。
+  - 共享缓存分层：扫描结果（task_id → 结果）经 SQLite
     AppScanStore 跨进程共享（worker 写、API 读）；K 线等交互数据仍在
     API 进程内字典，不跨进程。
 
-模块定位（4.5）：
+模块定位：
   - 本文件是「入口适配器」：提交到进程池的函数负责参数序列化、调用
     service、返回结果，本身不含业务逻辑。
   - App/AppOrch.py 保持纯业务、零并发框架依赖（模块级不 import
     concurrent.futures），Scanner 的批量入口以薄封装委托本文件。
 
-进程模型（交叉评审 W3/W4 修复）：
+进程模型：
   - 显式 spawn 上下文（multiprocessing.get_context("spawn")）：避免
     POSIX 默认 fork 在多线程 API 进程内的锁继承风险（Python 官方文档
     明示）；入口（main/api_server/FrontAPI）均已带 __main__ 守卫。
   - 降级路径：spawn 池创建失败（受限容器无 /dev/shm、seccomp 限制等）
     时自动降级 ThreadPoolExecutor 执行同一 worker 函数——scan_one 内
-    _scan_lock 自动回归「引擎串行、锁外并发」旧语义；提交响应带
+    _scan_lock 自动回归「引擎串行、锁外并发」语义；提交响应带
     engine: process_pool | thread_fallback 供前端标示。
-  - worker 数钳制 [1, 16]（W10）：防 64 核机器拉起 64 个独立引擎进程
+  - worker 数钳制 [1, 16]：防 64 核机器拉起 64 个独立引擎进程
     内存线性放大 OOM。
   - worker 函数为模块级函数（可 pickle），内部惰性 import AppOrch /
     AppScanStore，避免 spawn 模式下导入期副作用。
   - 中止：task 级中止经 AppScanStore 状态传播（worker 每票前检查
     is_aborted），不依赖进程内 _scan_aborted 标志。
-  - 收割（W6 修复）：collector 把 worker 错误行合并进 API 进程
-    _m._scan_skip_log（/api/scan_end 汇总口径与旧路径一致；中止行不计入）。
-  - 生命周期（W7/W11 修复）：提交入口 best-effort 清理历史任务；
+  - 收割：collector 把 worker 错误行合并进 API 进程
+    _m._scan_skip_log（/api/scan_end 汇总口径一致；中止行不计入）。
+  - 生命周期：提交入口 best-effort 清理过期任务；
     atexit 注册显式关池（shutdown(wait=False, cancel_futures=True)）。
 """
 import atexit
@@ -54,9 +52,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# worker 数上限（W10 修复）：防误配/高核数机器打爆内存
+# worker 数上限：防误配/高核数机器打爆内存
 _SCAN_POOL_MAX_WORKERS = 16
-# 线程降级模式的并发上限（对齐旧前端并发量级，避免线程池内引擎锁竞争）
+# 线程降级模式的并发上限（控制线程池内引擎锁竞争）
 _SCAN_POOL_FALLBACK_WORKERS = 4
 
 _pool = None
@@ -84,11 +82,11 @@ def _get_pool():
     """惰性创建全局执行池（单例）：ProcessPool(spawn) 优先，失败降级 ThreadPool。
 
     返回 (executor, engine_tag)。降级模式下同一 worker 函数在 API 进程内
-    执行：scan_one 的 _scan_lock 自动恢复旧串行语义（W3 修复）。
+    执行：scan_one 的 _scan_lock 保持「引擎串行、锁外并发」语义。
 
-    即用即弃（本版新增）：扫描完成即销毁（destroy_pool），故此处每次
-    装配都是全新进程、空缓存；打印区分首次装配与重新装配，便于确认
-    每次扫描状态已恢复初始。
+    即用即弃：扫描完成即销毁（destroy_pool），故此处每次装配都是
+    全新进程、空缓存；打印区分首次装配与重新装配，便于确认每次扫描
+    状态已恢复初始。
     """
     global _pool, _pool_engine, _pool_created_count
     with _pool_lock:
@@ -120,14 +118,8 @@ def _get_pool():
 
 def _resolve_workers(app_config):
     """worker 数解析：scan_pool_workers > 0 用之；否则按 CPU 核数自动适配
-    （os.cpu_count()，至少 1）。钳制上限 [1, 16]（W10 修复：防高核数机器
-    内存线性放大 OOM）。
-
-    根因修复（阶段 8 后续）：此前回退链含 scan_concurrency（阶段 7 前
-    「前端并发提示」遗留字段，默认 1），被错误复用作 worker 数回退目标，
-    导致默认配置下 worker 恒为 1、CPU 自动适配永远走不到——进程池退化为
-    单核，与 v1.0 的 _scan_lock 全局串行等价。现移除该参与，默认即自动
-    适配当前机器核数，换电脑无需改配置。
+    （os.cpu_count()，至少 1）。钳制上限 [1, 16]（防高核数机器内存线性
+    放大 OOM）。默认即自动适配当前机器核数，换电脑无需改配置。
     """
     workers = getattr(app_config, "scan_pool_workers", 0) or 0
     if workers <= 0:
@@ -175,7 +167,7 @@ def _monitor_task(task_id, futures):
     - future 异常（worker 崩溃/序列化失败）时兜底写错误行，保证
       completed 收敛到 total（前端进度不悬挂）；
     - 错误明细合并进 API 进程 _m._scan_skip_log（/api/scan_end 的汇总
-      打印口径与旧路径一致；中止行不计入，对齐旧行为）（W6 修复）；
+      打印口径一致；中止行不计入）；
     - 终态：done / aborted / error（任一 future 以异常收场＝基础设施级
       故障，任务标 error 而非 done，前端可区分并向用户提示）。
     """
@@ -196,7 +188,7 @@ def _monitor_task(task_id, futures):
             except Exception:  # noqa: BLE001
                 pass
 
-    # 错误明细并入 _scan_skip_log（中止行不计入，对齐旧路径口径）
+    # 错误明细并入 _scan_skip_log（中止行不计入）
     try:
         from App.AppScan import _scan_skip_log
         for row in store.iter_error_rows(task_id):
@@ -242,14 +234,14 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
     if not valid:
         return {"error": "股票列表为空"}
 
-    # 提交入口 best-effort 清理历史任务（W7 修复：cleanup_old 不再为死代码）
+    # 提交入口 best-effort 清理过期任务
     try:
         store.cleanup_old(keep_seconds=7 * 86400)
     except Exception:  # noqa: BLE001 —— 清理失败不阻断主流程
         pass
 
-    # 时间戳前缀 task_id（W13 修复 + 评审「优势 5」采纳）：生成逻辑收敛到
-    # create_task 内部（缺省自生成，格式保持可读可排序），调用方零心智负担
+    # 时间戳前缀 task_id：生成逻辑收敛到 create_task 内部
+    # （缺省自生成，可读可排序），调用方零心智负担
     total = len(valid)
     task_id = store.create_task(total=total, params={
         "freq": freq, "mode": mode, "recent": recent,
@@ -293,7 +285,7 @@ def abort(task_id):
 
     不立即改 status——queued 票由 worker 快速落库 aborted 行，收割线程
     等全部 future 完成后才置 aborted 终态，保证中止后 completed 收敛
-    total（交叉评审「中止后 completed 收敛」语义）。
+    total（中止后 completed 收敛语义）。
     """
     from App.AppScanStore import get_scan_store
     store = get_scan_store()

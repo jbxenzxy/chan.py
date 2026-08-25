@@ -2,32 +2,30 @@
 """
 App/AppScan.py —— 股票扫描功能域
 =========================================================================
-按业务能力拆分（阶段 8 重设计）：点击页面右上角「股票扫描」按钮后的操作。
+点击页面右上角「股票扫描」按钮后的操作。
 
 本模块收纳：
-  - Scanner 类（原 ScannerService，批量扫描服务：遍历代码列表、逐票调用
-    analyze_stock、汇总结果、追踪进度）+ 全局单例 scanner
+  - Scanner 类（批量扫描服务：遍历代码列表、逐票调用 analyze_stock、
+    汇总结果、追踪进度）+ 全局单例 scanner
   - 自选股读写（read_zxg_stocks / zxg_save / get_annotated_codes）
   - 同花顺云端自选股（save_scan_to_ths_cloud / ths_cloud_available）
-  - 扫描预过滤 + 行业索引读取 + 扫描态（P0-1b 自 AppEngine 迁入）：
-      _quick_prefilter_pass / _debug_read_page_index_stocks /
-      read_tdxhy_l2_indices / read_tdxhy_l3_indices /
-      _scan_lock / _scan_aborted / _scan_start_time / _page_index_code / _scan_skip_log
-  - Windows 扫描完成通知（_send_windows_notification，P1-3 自 AppEngine 迁入）
+  - 扫描预过滤 + 行业索引读取 + 扫描态（_quick_prefilter_pass /
+      read_tdxhy_l2_indices / read_tdxhy_l3_indices / _scan_lock 等）
+  - Windows 扫描完成通知（_send_windows_notification）
 
 依赖方向：AppScan.py → AppEngine / AppData / AppRefresh / AppScanPool（单向）
-批量扫描异步化（阶段 7）：提交/状态/中止委托 AppScanPool（入口适配器），
-共享结果经 SQLite AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
+批量扫描提交/状态/中止委托 AppScanPool（入口适配器），共享结果经 SQLite
+AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
 import os
 import threading
 import time
 import traceback
 
-# 分析引擎层（阶段 10.1：my_chan_main.py 职责被各层完全吸收，引擎迁入 App/AppEngine.py）
+# 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
 
-# P1-5 缓存键规范化：结构化键工厂（消除字符串拼接歧义与漂移）
+# 结构化缓存键工厂（消除字符串拼接歧义与漂移）
 from App.AppData import app_data, make_live_key
 
 # 配置中心（扫描预过滤阈值等）
@@ -43,10 +41,10 @@ log = get_logger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 扫描态 + 预过滤 / 行业索引读取（P0-1b 自 AppEngine 迁入；剪切-粘贴，行为零变化）
+# 扫描态 + 预过滤 / 行业索引读取
 # ═══════════════════════════════════════════════════════════════════════
 
-# 股票名称缓存：别名 = app_data 实例字段（共享同一对象，阶段 4）
+# 股票名称缓存：别名 = app_data 实例字段（共享同一对象）
 _stock_names_cache = app_data.names_cache
 
 # 扫描跳过记录（收集后统一打印）
@@ -105,8 +103,8 @@ def _quick_prefilter_pass(market, code):
         except Exception:
             pass  # 名称查找失败不跳过
 
-        # 2. 流通市值过滤：从缓存获取（阶段一已确保缓存有数据）
-        # P2-8：阈值进配置中心 app_config.scan_min_float_mc（原硬编码 50 亿）
+        # 2. 流通市值过滤：从缓存获取（扫描前已确保缓存有数据）
+        # 阈值来自配置中心 app_config.scan_min_float_mc
         _min_float_mc = app_config.scan_min_float_mc
         float_mc = app_data.get_float_mc_from_cache(code)
         if float_mc is not None:
@@ -132,13 +130,13 @@ def _debug_read_page_index_stocks(sector_code):
 
 def read_tdxhy_l2_indices():
     """返回所有二级行业板块指数列表（X+4位代码对应的881yyy），共125个
-    （阶段 5 兼容壳 → app_data.tdxhy_l2_indices；映射读取随数据文件迁 App/，设计 8.8）"""
+    （委托 app_data.tdxhy_l2_indices）"""
     return app_data.tdxhy_l2_indices()
 
 
 def read_tdxhy_l3_indices():
     """返回所有三级行业板块指数列表（X+6位代码对应的881yyy），共315个
-    （阶段 5 兼容壳 → app_data.tdxhy_l3_indices；同上）"""
+    （委托 app_data.tdxhy_l3_indices）"""
     return app_data.tdxhy_l3_indices()
 
 
@@ -160,9 +158,9 @@ def read_zxg_stocks():
 
 
 def zxg_save(codes):
-    """保存勾选股票到通达信 + 同花顺自选股（/api/zxg_save，业务段下沉）
+    """保存勾选股票到通达信 + 同花顺自选股（/api/zxg_save）
 
-    codes: 逗号分隔字符串（与原路由入参一致）
+    codes: 逗号分隔字符串
     返回 (result_dict, status_code)。
     """
     from App.AppData import app_data
@@ -240,11 +238,10 @@ def save_scan_to_ths_cloud(codes):
 class Scanner:
     """批量扫描服务：遍历代码列表、逐票调用 analyze_stock、汇总结果、追踪进度。
 
-    第一版为薄封装：委托 my_chan_main 的扫描函数与全局状态，
     对外通过本类方法访问，避免路由层直接操作模块级状态。
     """
 
-    # ── 状态访问器（收敛到类内部，见设计文档 6.3 节）────────────────
+    # ── 状态访问器（收敛到类内部）────────────────
     @property
     def aborted(self):
         return _scan_aborted
@@ -393,11 +390,11 @@ class Scanner:
     def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode=""):
         """扫描单只股票 · 锁分类 SCAN
 
-        锁语义（阶段 2.6 基线继承，本阶段零改动）：引擎调用 analyze_stock
-        在全局 _scan_lock（单实例、非按票）内串行执行——保护非线程安全
-        的引擎缓存不被并发写；锁外的预处理/结果过滤保留并发，故同步旧径
-        扫描吞吐主要依赖非引擎阶段的并行。阶段 7 起前端批量扫描改走
-        ProcessPool（SCAN_ASYNC，worker 数自动适配 CPU），本径仅兼容。
+        锁语义：引擎调用 analyze_stock 在全局 _scan_lock（单实例、非按票）
+        内串行执行——保护非线程安全的引擎缓存不被并发写；锁外的预处理/
+        结果过滤保留并发，故同步路径扫描吞吐主要依赖非引擎阶段的并行。
+        前端批量扫描走 ProcessPool（SCAN_ASYNC，worker 数自动适配 CPU），
+        本径为兼容保留。
         """
         t_scan_start = time.time()
         try:
@@ -654,7 +651,7 @@ class Scanner:
         return {"count": len(_scan_skip_log)}
 
     def abort(self):
-        """中断扫描（旧接口，阶段 7 增强：同步中止所有进行中的批量任务）
+        """中断扫描（同步中止所有进行中的批量任务）
 
         ProcessPool worker 是独立进程，看不到主进程 _scan_aborted 标志；
         必须同步把 AppScanStore 中所有 pending/running 任务置为 aborted，
@@ -677,11 +674,11 @@ class Scanner:
         log.info("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
         return {"cleared": 0}
 
-    # ── 阶段 7：批量扫描异步化（ProcessPool 先行）────────────────────
+    # ── 批量扫描异步化（ProcessPool 先行）────────────────────
     # 薄封装：AppScan 保持纯业务、零并发框架依赖（模块级不 import
     # concurrent.futures），批量入口委托 App/AppScanPool（入口适配器）。
-    # 双路径（设计 5.4/5.5）：交互单票仍走 scan_one（线程池），批量走
-    # ProcessPool；共享结果经 SQLite AppScanStore 跨进程（设计 5.10）。
+    # 双路径：交互单票仍走 scan_one（线程池），批量走 ProcessPool；
+    # 共享结果经 SQLite AppScanStore 跨进程。
 
     def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg"):
         """提交批量扫描 → {task_id, total}（薄封装，委托 AppScanPool）
