@@ -257,21 +257,37 @@ class _AppConfigBase:
         """文本标注持久化文件"""
         return os.path.join(self.vipdoc_dir, "text_annotation.json")
 
-    # ── TQ 凭据（本地文件，不进缓存）────────────────────────────
+    # ── TQ 凭据（本地文件 / 环境变量，不进缓存）────────────────────
     def load_tq_account(self) -> dict:
         """
-        从 VIPDOC_DIR 下 tq_account.json 读取天勤账号凭据。
-        文件格式: {"account": "手机号或用户名", "password": "密码"}
+        返回天勤账号凭据：env/.env 注入字段优先，回退 {VIPDOC_DIR}/tq_account.json。
+
+        优先级：env/.env 注入的 tq_account/tq_password > {VIPDOC_DIR}/tq_account.json。
+        环境变量优先（win11 可用 `setx TQ_ACCOUNT ...` 无需本地文件）；
+        文件缺失/内容无效时才回退文件。文件格式: {"account": "...", "password": "..."}
         凭据仅服务进程启动时读取，不落缓存、不写日志、不随任务序列化。
         """
+        # ① 优先 env/.env 注入字段
+        env_account = (self.tq_account or "").strip()
+        env_password = (self.tq_password or "").strip()
+        if env_account and env_password:
+            return {"account": env_account, "password": env_password}
+
+        # ② 回退 {VIPDOC_DIR}/tq_account.json
         path = os.path.join(self.vipdoc_dir, "tq_account.json")
         if not os.path.exists(path):
             return {}
         try:
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+            if isinstance(data, dict):
+                a = str(data.get("account", "")).strip()
+                p = str(data.get("password", "")).strip()
+                if a and p:
+                    return {"account": a, "password": p}
         except Exception:
-            return {}
+            pass
+        return {}
 
     def as_dict(self, redact: bool = True) -> dict:
         """对外展示用摘要；redact=True 时凭据打码。"""

@@ -31,38 +31,58 @@ _SSE_DEBUG = False  # SSE 推送详细调试日志开关（设为 True 可恢复
 
 def load_tq_account(config_dir):
     """
-    从 {config_dir}/tq_account.json 文件读取天勤账户和密码。
-    文件格式: {"account": "手机号或用户名", "password": "密码"}
+    加载天勤账户和密码，写入模块级 TQ_ACCOUNT / TQ_PASSWORD。
 
-    读取成功则更新模块级 TQ_ACCOUNT / TQ_PASSWORD；
-    文件不存在或格式错误则保持默认空值，由调用方决定是否回退到硬编码。
+    优先级：环境变量 TQ_ACCOUNT / TQ_PASSWORD > tq_account.json 文件
+      ① 环境变量 TQ_ACCOUNT / TQ_PASSWORD（win11 可用 `setx` 写入，无需本地文件，
+         最优先；需成对非空才生效）；
+      ② {config_dir}/tq_account.json（文件格式 {"account": "...", "password": "..."}）。
+
+    启动时即调用以预先准备凭据（TqSdkCSSESource 建连直接读模块级变量）。
+    仅当两个来源都取不到有效凭据时才打印提示（避免启动噪音）。
+
+    :return: True=已成功加载有效凭据，False=未取到有效凭据
     """
     global TQ_ACCOUNT, TQ_PASSWORD
+
+    # ① 优先环境变量 TQ_ACCOUNT / TQ_PASSWORD
+    env_account = os.environ.get("TQ_ACCOUNT", "").strip()
+    env_password = os.environ.get("TQ_PASSWORD", "").strip()
+    if env_account and env_password:
+        TQ_ACCOUNT = env_account
+        TQ_PASSWORD = env_password
+        return True
+
+    # ② 回退 {config_dir}/tq_account.json 文件
+    file_failure = ""  # 记录文件侧的问题，仅在最终无凭据时一并提示
     account_file = os.path.join(config_dir, "tq_account.json")
-    if not os.path.exists(account_file):
-        print(f"[TqSdkAPI] 账户文件不存在: {account_file}，使用默认空值")
-        return False
-    try:
-        with open(account_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            TQ_ACCOUNT = str(data.get("account", "")).strip()
-            TQ_PASSWORD = str(data.get("password", "")).strip()
-            if TQ_ACCOUNT and TQ_PASSWORD:
-                # print(f"[TqSdkAPI] 已从文件加载天勤账户: {account_file}")
-                return True
+    if os.path.exists(account_file):
+        try:
+            with open(account_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                TQ_ACCOUNT = str(data.get("account", "")).strip()
+                TQ_PASSWORD = str(data.get("password", "")).strip()
+                if TQ_ACCOUNT and TQ_PASSWORD:
+                    return True
+                file_failure = f"账户文件内容不完整（account/password 字段）：{account_file}"
             else:
-                print(f"[TqSdkAPI] 账户文件内容不完整，请检查 account 和 password 字段: {account_file}")
-                return False
-        else:
-            print(f"[TqSdkAPI] 账户文件格式错误，应为 JSON 对象: {account_file}")
-            return False
-    except json.JSONDecodeError as e:
-        print(f"[TqSdkAPI] 账户文件 JSON 解析失败: {account_file}, 错误: {e}")
-        return False
-    except Exception as e:
-        print(f"[TqSdkAPI] 读取账户文件失败: {account_file}, 错误: {e}")
-        return False
+                file_failure = f"账户文件格式错误（应为 JSON 对象）：{account_file}"
+        except json.JSONDecodeError as e:
+            file_failure = f"账户文件 JSON 解析失败：{account_file}（{e}）"
+        except Exception as e:
+            file_failure = f"读取账户文件失败：{account_file}（{e}）"
+    else:
+        file_failure = f"账户文件不存在：{account_file}"
+
+    # ③ 两来源皆无 → 汇总打印（默认空值）
+    TQ_ACCOUNT = ""
+    TQ_PASSWORD = ""
+    reason = file_failure
+    if env_account or env_password:
+        reason += "；环境变量 TQ_ACCOUNT / TQ_PASSWORD 未成对设置"
+    print(f"[TqSdkAPI] 未取到有效凭据（{reason}），使用默认空值")
+    return False
 
 # 默认监控的期货品种（引擎启动时初始化 15s/1m/5m，30m 延迟按需初始化）
 # 注意：天勤主连合约不支持 d/w 周期（返回垃圾数据），已排除。
