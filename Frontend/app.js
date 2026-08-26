@@ -161,9 +161,9 @@
 
         const COLORS = {
             bg: "#1a1a2e", grid: "rgba(255,255,255,0.04)", text: "#8892b0", textLight: "#a8b2d1",
-            up: "#FF4444", down: "#00DD00", bi: "#FFD700",
+            up: "#FF3C3C", down: "#00F0F0", bi: "#FFD700",
             crosshair: "rgba(255,255,255,0.3)",
-            macdUp: "rgba(253,16,80,0.6)", macdDown: "rgba(12,244,155,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
+            macdUp: "rgba(255,60,60,0.6)", macdDown: "rgba(0,240,240,0.6)", // 原值: macdUp="rgba(255,68,68,0.6)", macdDown="rgba(0,221,0,0.6)"
             dif: "#FFFFFF", dea: "#F77F00", // 原值: dea="#FFD700"
         };
 
@@ -612,6 +612,12 @@
             container.appendChild(canvas); ctx = canvas.getContext("2d");
             mainCanvas = canvas; mainCtx = ctx;
             resizeCanvas();
+            // 立即用背景色填充 canvas，防止加载期间透出浏览器默认白底
+            const w = canvas.clientWidth, h = canvas.clientHeight;
+            const dpr = window.devicePixelRatio || 1;
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.fillStyle = COLORS.bg;
+            ctx.fillRect(0, 0, w, h);
             window.addEventListener("resize", () => { resizeCanvas(); render(); });
             // 上面窗口事件
             canvas.addEventListener("wheel", onWheel, { passive: false });
@@ -852,11 +858,13 @@
                     mainCanvas.width = w * dpr; mainCanvas.height = hTop * dpr;
                     mainCanvas.style.width = w + "px"; mainCanvas.style.height = hTop + "px";
                     mainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    mainCtx.fillStyle = COLORS.bg; mainCtx.fillRect(0, 0, w, hTop);
                 }
                 if (subCanvas) {
                     subCanvas.width = w * dpr; subCanvas.height = hBottom * dpr;
                     subCanvas.style.width = w + "px"; subCanvas.style.height = hBottom + "px";
                     subCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                    subCtx.fillStyle = COLORS.bg; subCtx.fillRect(0, 0, w, hBottom);
                 }
             } else {
                 // 单窗口模式
@@ -864,6 +872,7 @@
                 canvas.width = w * dpr; canvas.height = h * dpr;
                 canvas.style.width = w + "px"; canvas.style.height = h + "px";
                 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.fillStyle = COLORS.bg; ctx.fillRect(0, 0, w, h);
             }
         }
 
@@ -1118,7 +1127,7 @@
             const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
             const barWidth = Math.max(1, (area.w / effectiveCount) * 0.7);
             const barStep = area.w / effectiveCount;
-            const MACD_BAR_WIDTH = 2;  // MACD红绿柱固定宽度，不随K线缩放变化
+            const MACD_BAR_WIDTH = Math.max(3, barStep * 0.5);  // MACD红绿柱宽度随K线间距缩放（原固定2px）
             const subPixelOffset = (viewOffset - Math.floor(viewOffset)) * barStep;
             // 双窗口红框：笔外沿区间（分型左肩→右肩，跳过中间灰框部分）
             // 调试：记录到全局状态供侧边调试面板读取（保留 calcRedRange 之前设置的原因）
@@ -1569,18 +1578,18 @@
                     const drawAsRise = _isMirrorMode ? (k.close < k.open) : (k.close > k.open);
                     if (drawAsRise) {
                         // 阳线样式：空心红
-                        ctx.fillStyle = "#FF4444";
+                        ctx.fillStyle = "#FF3C3C";
                         if (visTop < bodyTop) {
                             ctx.fillRect(x - 0.5, visTop, 1, bodyTop - visTop);
                         }
                         if (bodyTop + bodyH < visBot) {
                             ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, visBot - bodyTop - bodyH);
                         }
-                        ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
+                        ctx.strokeStyle = "#FF3C3C"; ctx.lineWidth = 1;
                         ctx.strokeRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
                     } else {
                         // 阴线样式：实心青
-                        ctx.fillStyle = "#54fcfc";
+                        ctx.fillStyle = "#00F0F0";
                         ctx.fillRect(x - 0.5, visTop, 1, visBot - visTop);
                         ctx.fillRect(x - barWidth / 2, bodyTop, barWidth, bodyH);
                         ctx.fillRect(x - 0.5, bodyTop + bodyH, 1, visBot - bodyTop - bodyH);
@@ -1628,8 +1637,8 @@
 
         function drawVolume(klines, volArea, volRange, barStep, barWidth, subPixelOffset) {
             // 底部柱状图（股票=成交额，期货=成交量）：与K线风格一致
-            //   红柱（涨）= 空心，颜色 #FF4444，与阳K线一致
-            //   绿柱（跌）= 实心，颜色 #54fcfc，与阴K线一致
+            //   红柱（涨）= 空心，颜色 #FF3C3C，与阳K线一致
+            //   绿柱（跌）= 实心，颜色 #00F0F0，与阴K线一致
             klines.forEach((k, i) => {
                 const x = volArea.x + barStep * i + barStep / 2 - subPixelOffset;
                 // 翻转视图：颜色与空心/实心样式对调（与drawCandles一致）
@@ -1639,11 +1648,11 @@
                 const y = volArea.y + volArea.h - volH;
                 if (drawAsRise) {
                     // 红柱：空心，只画边框
-                    ctx.strokeStyle = "#FF4444"; ctx.lineWidth = 1;
+                    ctx.strokeStyle = "#FF3C3C"; ctx.lineWidth = 1;
                     ctx.strokeRect(x - barWidth / 2, y, barWidth, volH);
                 } else {
                     // 绿柱：实心
-                    ctx.fillStyle = "#54fcfc";
+                    ctx.fillStyle = "#00F0F0";
                     ctx.fillRect(x - barWidth / 2, y, barWidth, volH);
                 }
             });
@@ -1708,7 +1717,7 @@
                     // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
                     // 翻转视图：颜色对调，与翻转后的成交量柱一致
                     const volIsRise = _isMirrorMode ? (targetK.close < targetK.open) : (targetK.close > targetK.open);
-                    const volColor = volIsRise ? "#FF4444" : "#00DD00";
+                    const volColor = volIsRise ? "#FF3C3C" : "#00F0F0";
                     const vLabel = getVolLabel();
                     ctx.fillStyle = "#a8b2d1";
                     ctx.fillText(vLabel + ":", textArea.x + 4, lineY);
@@ -1734,7 +1743,7 @@
                         xPos += ctx.measureText("DEA:" + targetK.dea.toFixed(2) + " ").width;
                         // 翻转视图：BAR颜色对调，与翻转后的MACD柱一致
                         const barIsUp = _isMirrorMode ? (targetK.macd < 0) : (targetK.macd >= 0);
-                        ctx.fillStyle = barIsUp ? "#FF4444" : "#00DD00";
+                        ctx.fillStyle = barIsUp ? "#FF3C3C" : "#00F0F0";
                         ctx.fillText("BAR:" + targetK.macd.toFixed(2), xPos, lineY);
                     } else {
                         ctx.fillStyle = "#888";
@@ -4318,12 +4327,12 @@
             allBis.forEach(bi => { if (bi.direction === "up") allUp++; else allDown++; });
             document.getElementById("stats-content").innerHTML = `
                 <div class="stats-row"><span class="stats-label">可见笔数</span><span class="stats-value">${visBis.length} / ${allBis.length}</span></div>
-                <div class="stats-row"><span class="stats-label">向上笔</span><span class="stats-value" style="color:#FF4444">${visUp} / ${allUp}</span></div>
-                <div class="stats-row"><span class="stats-label">向下笔</span><span class="stats-value" style="color:#00DD00">${visDown} / ${allDown}</span></div>
+                <div class="stats-row"><span class="stats-label">向上笔</span><span class="stats-value" style="color:#FF3C3C">${visUp} / ${allUp}</span></div>
+                <div class="stats-row"><span class="stats-label">向下笔</span><span class="stats-value" style="color:#00F0F0">${visDown} / ${allDown}</span></div>
                 <div class="stats-row"><span class="stats-label">平均力度</span><span class="stats-value">${avgPower}</span></div>
                 <div class="stats-row"><span class="stats-label">最大力度</span><span class="stats-value" style="color:#FFD700">${maxPower.toFixed(2)}</span></div>
-                <div class="stats-row"><span class="stats-label">顶分型</span><span class="stats-value" style="color:#FF4444">${visFxs.filter(f=>f.mark==="G").length} / ${allFxs.filter(f=>f.mark==="G").length}</span></div>
-                <div class="stats-row"><span class="stats-label">底分型</span><span class="stats-value" style="color:#00DD00">${visFxs.filter(f=>f.mark==="D").length} / ${allFxs.filter(f=>f.mark==="D").length}</span></div>`;
+                <div class="stats-row"><span class="stats-label">顶分型</span><span class="stats-value" style="color:#FF3C3C">${visFxs.filter(f=>f.mark==="G").length} / ${allFxs.filter(f=>f.mark==="G").length}</span></div>
+                <div class="stats-row"><span class="stats-label">底分型</span><span class="stats-value" style="color:#00F0F0">${visFxs.filter(f=>f.mark==="D").length} / ${allFxs.filter(f=>f.mark==="D").length}</span></div>`;
         }
 
         function updateSlider() {
@@ -4752,7 +4761,7 @@
         }
 
         // 放量标签HTML：颜色对齐K线图中 A 那根"成交额柱"的颜色
-        //   成交额柱：收阳(close>open) → 红柱 #FF4444；收阴 → 青绿柱 #54fcfc（见 drawVolume）
+        //   成交额柱：收阳(close>open) → 红柱 #FF3C3C；收阴 → 青绿柱 #00F0F0（见 drawVolume）
         function buildFangliangTagHtml(data) {
             var isRise = !!(data.a_is_rise);
             var cls = isRise ? "fl-rise" : "fl-fall";
