@@ -114,10 +114,11 @@ _set_tdx_config(
     forward_adjust_enabled=FORWARD_ADJUST_ENABLED,
 )
 
-# 行业映射单源注入：tdxhy_mapping_data.py 为 App/ 下独立数据文件，
-# 由 AppData.load_tdxhy_mapping 单一函数加载；DataAPI 与 App 互不依赖，
-# TdxAPI 侧经 set_tdx_hy_mapping 注入（与 set_tdx_config 同一注入模式）。
-# 加载失败硬失败（ValueError），不静默降级空表。
+# 行业映射单源注入：映射表硬编码内嵌于 App/AppData.py（原独立数据文件
+# tdxhy_mapping_data.py 已合并入 AppData.py），由 AppData.load_tdxhy_mapping
+# 单一函数加载；DataAPI 与 App 互不依赖，TdxAPI 侧经 set_tdx_hy_mapping
+# 注入（与 set_tdx_config 同一注入模式）。加载失败硬失败（ValueError），
+# 不静默降级空表。
 from DataAPI.TdxAPI import set_tdx_hy_mapping as _set_tdx_hy_mapping
 _set_tdx_hy_mapping(*app_data.load_tdxhy_mapping())
 

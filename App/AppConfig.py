@@ -229,33 +229,48 @@ class _AppConfigBase:
         return os.path.join(_REPO_ROOT, "Frontend")
 
     @property
+    def app_data_dir(self) -> str:
+        """应用持久化数据目录（= App/ 包目录）。
+
+        应用自生成的缓存 / 状态类文件统一落此目录，不再散落到 vipdoc
+        数据目录：股票名、PE-TTM/指数归属、流通市值、手动选点、文本标注、
+        上次查看代码周期、扫描任务 DB。App/ 目录随仓库存取，天然随部署迁移。
+        """
+        return os.path.join(_REPO_ROOT, "App")
+
+    @property
     def last_code_freq_file(self) -> str:
-        return os.path.join(self.vipdoc_dir, "last_code_freq.json")
+        return os.path.join(self.app_data_dir, "last_code_freq.json")
 
     @property
     def stock_names_cache_file(self) -> str:
         """股票名称缓存文件"""
-        return os.path.join(self.vipdoc_dir, "stock_names.json")
+        return os.path.join(self.app_data_dir, "stock_names.json")
 
     @property
     def stock_pe_ttm_file(self) -> str:
         """PE-TTM / 指数归属缓存文件"""
-        return os.path.join(self.vipdoc_dir, "stock_pettm_index.json")
+        return os.path.join(self.app_data_dir, "stock_pettm_index.json")
 
     @property
     def float_mc_cache_file(self) -> str:
         """流通市值缓存文件"""
-        return os.path.join(self.vipdoc_dir, "stock_float_mc.json")
+        return os.path.join(self.app_data_dir, "stock_float_mc.json")
 
     @property
     def saved_point_file(self) -> str:
         """手动选点持久化文件"""
-        return os.path.join(self.vipdoc_dir, "double_click_dt.csv")
+        return os.path.join(self.app_data_dir, "double_click_dt.csv")
 
     @property
     def annotations_file(self) -> str:
         """文本标注持久化文件"""
-        return os.path.join(self.vipdoc_dir, "text_annotation.json")
+        return os.path.join(self.app_data_dir, "text_annotation.json")
+
+    @property
+    def scan_task_db_file(self) -> str:
+        """批量扫描任务 SQLite 数据库文件"""
+        return os.path.join(self.app_data_dir, "scan_tasks.db")
 
     # ── TQ 凭据（本地文件 / 环境变量，不进缓存）────────────────────
     def load_tq_account(self) -> dict:

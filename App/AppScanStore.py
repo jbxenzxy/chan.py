@@ -64,12 +64,12 @@ CREATE INDEX IF NOT EXISTS idx_scan_results_task ON scan_results(task_id, seq);
 
 def _default_db_path():
     """DB 路径解析：SCAN_TASK_DB 环境变量优先（测试隔离/多实例），
-    否则落在 vipdoc_dir 下。"""
+    否则落在 AppConfig.scan_task_db_file（App/scan_tasks.db）。"""
     env = os.environ.get("SCAN_TASK_DB")
     if env:
         return env
     from App.AppConfig import app_config
-    return os.path.join(app_config.vipdoc_dir, "scan_tasks.db")
+    return app_config.scan_task_db_file
 
 
 class ScanStore:

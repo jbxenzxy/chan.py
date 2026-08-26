@@ -26,9 +26,10 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 from KLine.KLine_Unit import CKLine_Unit
 
 # 通达信研究行业 X代码↔881代码映射表（从官方PDF 3.6节提取）
-# 映射数据文件为 App/tdxhy_mapping_data.py，由 App 层单一加载函数
-# AppData.load_tdxhy_mapping() 加载后，经 set_tdx_hy_mapping 注入（与
-# set_tdx_config 同一注入模式，DataAPI 与 App 互不依赖）。
+# 映射表硬编码内嵌于 App/AppData.py（原独立数据文件 tdxhy_mapping_data.py
+# 已合并入 AppData.py），由 App 层单一加载函数 AppData.load_tdxhy_mapping()
+# 加载后，经 set_tdx_hy_mapping 注入（与 set_tdx_config 同一注入模式，
+# DataAPI 与 App 互不依赖）。
 _TDXHY_X_TO_881 = {}
 _TDXHY_881_TO_X = {}
 
@@ -36,7 +37,7 @@ _TDXHY_881_TO_X = {}
 def set_tdx_hy_mapping(x_to_881=None, to_x=None):
     """由 App 引擎层启动时调用，注入通达信研究行业映射表
 
-    数据文件 App/tdxhy_mapping_data.py 由 AppData.load_tdxhy_mapping() 单一
+    数据文件 App/AppData.py 内嵌映射表由 AppData.load_tdxhy_mapping() 单一
     加载，本函数只收值不寻址；注入对象直存（同一 dict 身份），
     注入前调用方为空表（跨层依赖方向保持 DataAPI → 不 import App）。
 
@@ -191,16 +192,16 @@ def _check_and_report_gaps(records):
             gap_indices.append((i, gap_trading_days))
 
     if gap_indices:
-        print(f"[警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
+        log.warning(f"[警告] 检测到 {len(gap_indices)} 处数据缺口（请补全数据）:")
         for idx, (gi, gap_td) in enumerate(gap_indices):
             prev_dt = records[gi-1]["dt"].strftime("%Y-%m-%d")
             curr_dt = records[gi]["dt"].strftime("%Y-%m-%d")
-            print(f"[警告]   缺口{idx+1}: {prev_dt} -> {curr_dt} (间隔{gap_td}个交易日)")
+            log.warning(f"[警告]   缺口{idx+1}: {prev_dt} -> {curr_dt} (间隔{gap_td}个交易日)")
     else:
         old_start = records[0]["dt"].strftime("%Y-%m-%d")
         old_end = records[-1]["dt"].strftime("%Y-%m-%d")
-        print("[信息] 检测到 0 处数据缺口")
-        print(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
+        log.info("[信息] 检测到 0 处数据缺口")
+        log.info(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
 
 
 def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
@@ -291,7 +292,7 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     # 指数 .lc5 文件中成交量字段实际存的是"成交额/100"（非真实成交量），需要忽略，成交量设为0。
     is_index = len(reserved) > 0 and np.any(reserved != 0)
     if is_index:
-        print("[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
+        log.info("[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
 
     df = np.column_stack([years, months, days, hours, minutes, opens, highs, lows, closes, vols, amounts])
 
@@ -657,6 +658,9 @@ def _normalize_xdxr_df(df):
 # xdxr 网络连接管理（连接复用 + 线程锁，防止多线程并发冲突）
 # ============================================================
 import threading as _threading
+
+import logging
+log = logging.getLogger(__name__)
 _xdxr_lock = _threading.Lock()
 
 # ============================================================
@@ -1152,7 +1156,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         else:
             min_file = os.path.join(_tdx_config["vipdoc_dir"], market, "fzline", f"{market}{code}.lc5")
         if not os.path.exists(min_file):
-            print(f"[警告] 子级别数据文件不存在: {min_file}")
+            log.warning(f"[警告] 子级别数据文件不存在: {min_file}")
             return None
         sub_records = read_tdx_min_file(min_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
@@ -1162,7 +1166,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
     elif sub_freq == 'd':
         day_file = find_day_file(market, code)
         if not os.path.exists(day_file):
-            print(f"[警告] 子级别数据文件不存在: {day_file}")
+            log.warning(f"[警告] 子级别数据文件不存在: {day_file}")
             return None
         sub_records = read_tdx_day_file(day_file, market=market)
         if _tdx_config["forward_adjust_enabled"]:
@@ -1171,7 +1175,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         return None
 
     if len(sub_records) < 5:
-        print(f"[警告] 子级别数据不足({len(sub_records)}条)")
+        log.warning(f"[警告] 子级别数据不足({len(sub_records)}条)")
         return None
 
     # 过滤到与主级别相同的时间范围（略大一点，确保边界包含）
@@ -1180,7 +1184,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         main_end = records[-1]["dt"]
         sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
 
-    print(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条")
+    log.info(f"[信息] 子级别({sub_freq})数据加载: {len(sub_records)}条")
     return sub_records
 
 
@@ -1282,7 +1286,7 @@ class CTdxAPI_Sliced(CTdxAPI):
             start_dt: 开始日期时间（datetime对象）
         """
         cls._sliced_data = [r for r in records if r["dt"] >= start_dt]
-        print(f"[信息] 切片数据源: 从 {start_dt} 开始，共 {len(cls._sliced_data)} 条K线")
+        log.info(f"[信息] 切片数据源: 从 {start_dt} 开始，共 {len(cls._sliced_data)} 条K线")
 
     @classmethod
     def clear_sliced_data(cls):
@@ -1387,7 +1391,7 @@ def read_blk_file(blk_path):
                     if code:
                         stocks.append({"prefix": "us", "code": code})
     except Exception as e:
-        print(f"[错误] 读取板块文件失败 {blk_path}: {e}")
+        log.error(f"[错误] 读取板块文件失败 {blk_path}: {e}")
     return stocks
 
 
@@ -1409,7 +1413,7 @@ def read_zz1000_stocks():
     """
     path = get_blk_path("ZZ1000")
     if not os.path.exists(path):
-        print(f"[警告] 中证1000板块文件不存在: {path}")
+        log.warning(f"[警告] 中证1000板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1421,7 +1425,7 @@ def read_sz50_stocks():
     """
     path = get_blk_path("SZ50")
     if not os.path.exists(path):
-        print(f"[警告] 上证50板块文件不存在: {path}")
+        log.warning(f"[警告] 上证50板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1433,7 +1437,7 @@ def read_hs300_stocks():
     """
     path = get_blk_path("HS300")
     if not os.path.exists(path):
-        print(f"[警告] 沪深300板块文件不存在: {path}")
+        log.warning(f"[警告] 沪深300板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1445,7 +1449,7 @@ def read_zz500_stocks():
     """
     path = get_blk_path("ZZ500")
     if not os.path.exists(path):
-        print(f"[警告] 中证500板块文件不存在: {path}")
+        log.warning(f"[警告] 中证500板块文件不存在: {path}")
         return []
     return read_blk_file(path)
 
@@ -1537,24 +1541,24 @@ def _safe_refresh_one_block_file(api, host, port, file_name, block_cache_dir, pr
         meta = api.get_block_info_meta(file_name)
         total_size = int(meta.get("size", 0) or 0) if meta else 0
         if total_size <= 0:
-            print(f"[板块刷新] {file_name} 服务端 size 无效，保留旧文件")
+            log.warning(f"[板块刷新] {file_name} 服务端 size 无效，保留旧文件")
             return False
 
         raw = _download_block_file(api, host, port, file_name)
         if not raw or len(raw) != total_size:
-            print(f"[板块刷新] {file_name} 下载不完整，保留旧文件: {len(raw) if raw else 0}/{total_size}")
+            log.warning(f"[板块刷新] {file_name} 下载不完整，保留旧文件: {len(raw) if raw else 0}/{total_size}")
             return False
 
         if not _validate_downloaded_block_file(file_name, raw):
-            print(f"[板块刷新] {file_name} 格式校验失败，保留旧文件")
+            log.warning(f"[板块刷新] {file_name} 格式校验失败，保留旧文件")
             return False
 
         local_path = os.path.join(block_cache_dir, file_name)
         _safe_replace_file(local_path, raw)
-        print(f"[板块刷新] ✅ {file_name} 刷新成功: {total_size} 字节")
+        log.info(f"[板块刷新] ✅ {file_name} 刷新成功: {total_size} 字节")
         return True
     except Exception as e:
-        print(f"[板块刷新] {file_name} 刷新失败，保留旧文件: {e}")
+        log.warning(f"[板块刷新] {file_name} 刷新失败，保留旧文件: {e}")
         return False
 
 
@@ -1620,10 +1624,10 @@ def _download_block_gn_from_network(progress_callback=None):
                     raw = f.read()
                 parsed = _parse_raw_block_gn(raw, bf)
                 if parsed:
-                    print(f"[板块成分股] ✅ 从本地缓存读取 {bf}: {len(parsed)} 个板块")
+                    log.info(f"[板块成分股] ✅ 从本地缓存读取 {bf}: {len(parsed)} 个板块")
                     result.update(parsed)
             except Exception as e:
-                print(f"[板块成分股] ⚠️ 本地缓存 {bf} 读取失败，尝试从网络下载: {e}")
+                log.warning(f"[板块成分股] ⚠️ 本地缓存 {bf} 读取失败，尝试从网络下载: {e}")
                 need_download.append(bf)
     else:
         # 没有配置通达信目录，全部从网络下载
@@ -1632,9 +1636,9 @@ def _download_block_gn_from_network(progress_callback=None):
     servers = PYTDX_SERVERS[:]
 
     if need_download:
-        print(f"[板块成分股] 需从网络下载: {need_download}")
+        log.info(f"[板块成分股] 需从网络下载: {need_download}")
     else:
-        print("[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
+        log.info("[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
 
     for host, port in servers:
         if not need_download:
@@ -1661,23 +1665,23 @@ def _download_block_gn_from_network(progress_callback=None):
             for bf in existing_files:
                 if progress_callback:
                     progress_callback(f"下载成分股: {bf}...")
-                print(f"[板块成分股] 开始下载 {bf}...")
+                log.info(f"[板块成分股] 开始下载 {bf}...")
                 raw = _download_block_file(api, host, port, bf)
                 if raw and len(raw) > 386:
                     parsed = _parse_raw_block_gn(raw, bf)
                     if parsed:
                         result.update(parsed)
-                        print(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
+                        log.info(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
                         # 写入本地缓存文件：先写临时文件，校验成功后原子替换，避免下载失败破坏旧文件
                         if block_cache_dir and _validate_downloaded_block_file(bf, raw):
                             try:
                                 local_path = os.path.join(block_cache_dir, bf)
                                 _safe_replace_file(local_path, raw)
                             except Exception as e:
-                                print(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
+                                log.warning(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
                         need_download.remove(bf)
                 else:
-                    print(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
+                    log.warning(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
 
             api.disconnect()
             if not need_download:
@@ -1693,13 +1697,13 @@ def _download_block_gn_from_network(progress_callback=None):
             continue
 
     if not result:
-        print("[板块成分股] 所有服务器均下载失败，板块数据不可用")
+        log.warning("[板块成分股] 所有服务器均下载失败，板块数据不可用")
         _BLOCK_GN_CACHE_LOADED = True
         return {}
 
     _BLOCK_GN_CACHE = result
     _BLOCK_GN_CACHE_LOADED = True
-    print(f"[板块成分股] 解析完成，共 {len(result)} 个板块有成分股数据")
+    log.info(f"[板块成分股] 解析完成，共 {len(result)} 个板块有成分股数据")
     return result
 
 
@@ -1723,7 +1727,7 @@ def refresh_block_files(progress_callback=None):
         block_cache_dir = None
 
     if not block_cache_dir:
-        print("[板块刷新] 无法确定 hq_cache 目录，跳过板块文件下载")
+        log.warning("[板块刷新] 无法确定 hq_cache 目录，跳过板块文件下载")
         return
 
     os.makedirs(block_cache_dir, exist_ok=True)
@@ -1739,7 +1743,7 @@ def refresh_block_files(progress_callback=None):
     try:
         from pytdx.hq import TdxHq_API
     except ImportError:
-        print("[板块刷新] pytdx 未安装，无法刷新板块文件；保留旧文件")
+        log.warning("[板块刷新] pytdx 未安装，无法刷新板块文件；保留旧文件")
         return
 
     refreshed = 0
@@ -1748,14 +1752,14 @@ def refresh_block_files(progress_callback=None):
             api = TdxHq_API(multithread=True)
             if not api.connect(host, port):
                 continue
-            print(f"[板块刷新] 已连接服务器 {host}:{port}")
+            log.info(f"[板块刷新] 已连接服务器 {host}:{port}")
             for bf in block_files:
                 if _safe_refresh_one_block_file(api, host, port, bf, block_cache_dir, progress_callback=progress_callback):
                     refreshed += 1
             api.disconnect()
             break
         except Exception as e:
-            print(f"[板块刷新] 服务器 {host}:{port} 刷新失败: {e}")
+            log.warning(f"[板块刷新] 服务器 {host}:{port} 刷新失败: {e}")
             try:
                 api.disconnect()
             except Exception:
@@ -1763,9 +1767,9 @@ def refresh_block_files(progress_callback=None):
             continue
 
     if refreshed == 0:
-        print("[板块刷新] 所有文件均未刷新成功，继续使用旧文件")
+        log.warning("[板块刷新] 所有文件均未刷新成功，继续使用旧文件")
     else:
-        print(f"[板块刷新] 刷新完成: {refreshed}/{len(block_files)} 个文件成功")
+        log.info(f"[板块刷新] 刷新完成: {refreshed}/{len(block_files)} 个文件成功, 已保存到 {block_cache_dir}")
 
     _BLOCK_GN_CACHE = None
     _BLOCK_GN_CACHE_LOADED = False
@@ -1943,9 +1947,9 @@ def _read_infoharbor_blocks():
                     raw = f.read()
                 result = _parse_infoharbor_block(raw)
                 if result:
-                    print(f"[板块成分股] ✅ 从 infoharbor_block.dat 读取 {len(result)} 个带代码板块")
+                    log.info(f"[板块成分股] ✅ 从 infoharbor_block.dat 读取 {len(result)} 个带代码板块")
             except Exception as e:
-                print(f"[板块成分股] ⚠️ 读取 infoharbor_block.dat 失败: {e}")
+                log.warning(f"[板块成分股] ⚠️ 读取 infoharbor_block.dat 失败: {e}")
 
     _INFOHARBOR_BLOCK_CACHE = result
     _INFOHARBOR_BLOCK_CACHE_LOADED = True
@@ -1960,7 +1964,7 @@ def _read_infoharbor_sector_stocks(sector_code):
         return []
     stocks = item.get("stocks", [])
     if stocks:
-        print(f"[板块成分股] ✅ 从 infoharbor_block.dat 找到 '{item.get('name', sector_code)}' 共 {len(stocks)} 只成分股")
+        log.info(f"[板块成分股] ✅ 从 infoharbor_block.dat 找到 '{item.get('name', sector_code)}' 共 {len(stocks)} 只成分股")
     return stocks
 
 
@@ -1975,7 +1979,7 @@ def get_index_stocks(sector_code):
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
     """
-    print(f"[板块成分股] 查询 sector_code={sector_code}")
+    log.info(f"[板块成分股] 查询 sector_code={sector_code}")
 
     # Step 1: 881xxx（研究行业新版）→ 本地 tdxhy.cfg
     if sector_code.startswith("881"):
@@ -2012,15 +2016,15 @@ def get_index_stocks(sector_code):
                                 sector_name = name
                                 break
             except Exception as e:
-                print(f"[板块成分股] 读取tdxzs.cfg失败: {e}")
+                log.warning(f"[板块成分股] 读取tdxzs.cfg失败: {e}")
 
     if not sector_name:
-        print(f"[板块成分股] 未在tdxzs.cfg中找到板块代码 {sector_code}")
+        log.info(f"[板块成分股] 未在tdxzs.cfg中找到板块代码 {sector_code}")
         return []
 
     # 8803xx-8804xx（旧版行业）无成分股数据
     if sector_code.startswith("8803") or sector_code.startswith("8804"):
-        print(f"[板块成分股] 旧版行业代码 {sector_code}，无成分股数据。请使用 881 研究行业代码。")
+        log.warning(f"[板块成分股] 旧版行业代码 {sector_code}，无成分股数据。请使用 881 研究行业代码。")
         return []
 
     # 从 block_*.dat 缓存中查找
@@ -2029,11 +2033,11 @@ def get_index_stocks(sector_code):
 
     if stocks:
         if len(stocks) >= 400:
-            print(f"[板块成分股] ⚠️ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只，可能受 400 只上限影响")
+            log.warning(f"[板块成分股] ⚠️ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只，可能受 400 只上限影响")
         else:
-            print(f"[板块成分股] ✅ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
+            log.info(f"[板块成分股] ✅ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
     else:
-        print(f"[板块成分股] ❌ 旧 block_*.dat 缓存中未找到板块 '{sector_name}'")
+        log.error(f"[板块成分股] ❌ 旧 block_*.dat 缓存中未找到板块 '{sector_name}'")
 
     return stocks
 
@@ -2047,7 +2051,7 @@ def _parse_stocks_from_df(df, source_label):
             code_col = col
             break
     if code_col is None:
-        print(f"[板块成分股] {source_label} 返回未知列名: {list(df.columns)}")
+        log.info(f"[板块成分股] {source_label} 返回未知列名: {list(df.columns)}")
         return []
 
     seen_codes = set()
@@ -2085,7 +2089,7 @@ def _read_standard_index_stocks(sector_code):
     try:
         import akshare as ak
     except ImportError:
-        print("[板块成分股] AKShare 未安装，无法获取标准指数成分股")
+        log.warning("[板块成分股] AKShare 未安装，无法获取标准指数成分股")
         return []
 
     # ── 上证指数（000001）：综合指数，无成分股 ──
@@ -2098,13 +2102,13 @@ def _read_standard_index_stocks(sector_code):
         try:
             df = ak.index_stock_cons_csindex(symbol=sector_code)
             if df is None or df.empty:
-                print(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
+                log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
                 return []
             stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
-            print(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+            log.info(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
             return stocks
         except Exception as e:
-            print(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
+            log.warning(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -2128,13 +2132,13 @@ def _read_standard_index_stocks(sector_code):
                         continue
                     raise
             if df is None or df.empty:
-                print(f"[板块成分股] 深交所 返回空数据: {sector_code}")
+                log.info(f"[板块成分股] 深交所 返回空数据: {sector_code}")
                 return []
             stocks = _parse_stocks_from_df(df, f"深交所({sector_code})")
-            print(f"[板块成分股] ✅ 深交所 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+            log.info(f"[板块成分股] ✅ 深交所 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
             return stocks
         except Exception as e:
-            print(f"[板块成分股] 深交所 获取 {sector_code} 失败: {e}")
+            log.warning(f"[板块成分股] 深交所 获取 {sector_code} 失败: {e}")
             import traceback
             traceback.print_exc()
             return []
@@ -2143,13 +2147,13 @@ def _read_standard_index_stocks(sector_code):
     try:
         df = ak.index_stock_cons_csindex(symbol=sector_code)
         if df is None or df.empty:
-            print(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
+            log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
             return []
         stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
-        print(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+        log.info(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
         return stocks
     except Exception as e:
-        print(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
+        log.warning(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
         import traceback
         traceback.print_exc()
         return []
@@ -2180,13 +2184,13 @@ def _parse_tdxhy_cfg():
 
     hq_cache = _get_hq_cache_dir()
     if not hq_cache:
-        print("[板块成分股] hq_cache 目录不存在，无法读取 tdxhy.cfg")
+        log.warning("[板块成分股] hq_cache 目录不存在，无法读取 tdxhy.cfg")
         _TDXHY_CACHE = result
         return result
 
     tdxhy_path = os.path.join(hq_cache, "tdxhy.cfg")
     if not os.path.exists(tdxhy_path):
-        print(f"[板块成分股] tdxhy.cfg 不存在: {tdxhy_path}")
+        log.warning(f"[板块成分股] tdxhy.cfg 不存在: {tdxhy_path}")
         _TDXHY_CACHE = result
         return result
 
@@ -2194,7 +2198,7 @@ def _parse_tdxhy_cfg():
         with open(tdxhy_path, "r", encoding="gbk", errors="ignore") as f:
             lines = f.readlines()
     except Exception as e:
-        print(f"[板块成分股] 读取 tdxhy.cfg 失败: {e}")
+        log.warning(f"[板块成分股] 读取 tdxhy.cfg 失败: {e}")
         _TDXHY_CACHE = result
         return result
 
@@ -2220,7 +2224,7 @@ def _parse_tdxhy_cfg():
         result[x_code].append({"code": stock_code, "prefix": prefix, "name": stock_code})
 
     _TDXHY_CACHE = result
-    print(f"[板块成分股] 解析 tdxhy.cfg 完成: {len(lines)} 行, {len(result)} 个X代码, "
+    log.info(f"[板块成分股] 解析 tdxhy.cfg 完成: {len(lines)} 行, {len(result)} 个X代码, "
           f"共 {sum(len(v) for v in result.values())} 条股票映射")
     return result
 
@@ -2235,16 +2239,16 @@ def _read_tdxhy_sector_stocks(sector_code):
     返回：[{"code":"000001","prefix":"0","name":"000001"}, ...]
     """
     if sector_code not in _TDXHY_881_TO_X:
-        print(f"[板块成分股] 881代码 {sector_code} 不在映射表中")
+        log.info(f"[板块成分股] 881代码 {sector_code} 不在映射表中")
         return []
 
     x_code, sector_name = _TDXHY_881_TO_X[sector_code]
-    print(f"[板块成分股] 板块名称: '{sector_name}' (代码={sector_code}, X={x_code})")
+    log.info(f"[板块成分股] 板块名称: '{sector_name}' (代码={sector_code}, X={x_code})")
 
     # 解析 tdxhy.cfg
     x_to_stocks = _parse_tdxhy_cfg()
     if not x_to_stocks:
-        print("[板块成分股] tdxhy.cfg 缓存为空")
+        log.info("[板块成分股] tdxhy.cfg 缓存为空")
         return []
 
     # 找到所有属于该X代码的子级代码
@@ -2258,7 +2262,7 @@ def _read_tdxhy_sector_stocks(sector_code):
         level = "父级" if len(children) > 1 else "子级"
         child_codes = sorted(children)[:5]
         more = f" ...共{len(children)}个" if len(children) > 5 else ""
-        print(f"[板块成分股] {level}聚合: X={x_code} → 子级={child_codes}{more} → 共 {len(all_stocks)} 只成分股")
+        log.info(f"[板块成分股] {level}聚合: X={x_code} → 子级={child_codes}{more} → 共 {len(all_stocks)} 只成分股")
 
     # 去重
     seen = set()
@@ -2270,9 +2274,9 @@ def _read_tdxhy_sector_stocks(sector_code):
             stocks.append(s)
 
     if stocks:
-        print(f"[板块成分股] ✅ tdxhy.cfg 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
+        log.info(f"[板块成分股] ✅ tdxhy.cfg 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
     else:
-        print(f"[板块成分股] ❌ tdxhy.cfg 中未找到 '{sector_name}' 的成分股")
+        log.error(f"[板块成分股] ❌ tdxhy.cfg 中未找到 '{sector_name}' 的成分股")
 
     return stocks
 

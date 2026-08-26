@@ -4,19 +4,19 @@
 =====================================================================
 设计文档 8.4：「验证 tdxhy_mapping_data.py 在迁移全过程中映射表不发生
 静默降级（阶段 5 之前任何目录调整都可能触发两处硬编码加载失效）」。
-设计文档 8.8（阶段 5）：tdxhy_mapping_data.py 整体迁入 App/ 目录
-（独立数据文件，不并入 AppData.py）；原两处 exec 硬编码寻址收敛为
-单一加载函数 AppData.load_tdxhy_mapping()，DataAPI 侧经
+后续演进：tdxhy_mapping_data.py 已整体并入 App/AppData.py（映射表硬编码
+内嵌 + 单一加载函数 AppData.load_tdxhy_mapping()），DataAPI 侧经
 set_tdx_hy_mapping 注入（与 set_tdx_config 同一注入模式）。
 
 验证点：
-  ① 文件迁移完成：App/tdxhy_mapping_data.py 在位，DataAPI/ 下无残留双份
+  ① 文件合并完成：App/tdxhy_mapping_data.py 已删除（并入 AppData.py），
+     DataAPI/ 下无残留双份；AppData.py 内嵌映射表与加载函数
   ② 单一加载点：AppData.load_tdxhy_mapping() 非空（缺失/空表硬失败，
      不静默降级）；DataAPI/TdxAPI.py 源码不再有按自身目录的 exec 寻址
   ③ 注入链：set_tdx_hy_mapping 注入后 TdxAPI 侧内容一致且对象身份同一
   ④ 双向互逆一致性 + ④b 条目质量（沿用原用例）
   ⑤ 完整性快照：键数量 + sha256 与迁移前基线完全一致
-     （数据文件仅移动位置、内容零改动 → 哈希连续证明无静默降级）
+     （数据仅移动位置、内容零改动 → 哈希连续证明无静默降级）
 
 运行：python Test/test_industry_mapping.py [--update]
 """
@@ -51,18 +51,25 @@ def main():
     failures = []
     force_update = "--update" in sys.argv
 
-    # ① 文件迁移完成（阶段 5：DataAPI/ → App/，独立数据文件）
+    # ① 文件合并完成（tdxhy_mapping_data.py 已并入 AppData.py，双源清零）
     map_file = os.path.join(REPO_ROOT, "App", "tdxhy_mapping_data.py")
     legacy_file = os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py")
-    if not os.path.exists(map_file):
-        print("[FAIL] ① 数据文件缺失:", map_file)
-        failures.append("App/tdxhy_mapping_data.py 缺失（迁移未完成）")
+    appdata_src = open(os.path.join(REPO_ROOT, "App", "AppData.py"),
+                       encoding="utf-8").read()
+    merged_ok = ("_TDXHY_X_TO_881" in appdata_src and "_TDXHY_881_TO_X" in appdata_src
+                 and "def load_tdxhy_mapping" in appdata_src)
+    if os.path.exists(map_file):
+        print("[FAIL] ① 数据文件未删除:", map_file)
+        failures.append("App/tdxhy_mapping_data.py 未删除（应已并入 AppData.py）")
     elif os.path.exists(legacy_file):
         print(f"[FAIL] ① DataAPI/ 下残留旧文件（双份风险）: {legacy_file}")
         failures.append("DataAPI/tdxhy_mapping_data.py 未删除（双源风险）")
+    elif not merged_ok:
+        print("[FAIL] ① AppData.py 未内嵌映射表（合并未完成）")
+        failures.append("AppData.py 缺少 _TDXHY_X_TO_881/_TDXHY_881_TO_X/load_tdxhy_mapping")
     else:
-        print(f"[PASS] ① 文件迁移完成: App/tdxhy_mapping_data.py "
-              f"({os.path.getsize(map_file)} bytes)，DataAPI/ 无残留")
+        print("[PASS] ① 文件合并完成: tdxhy_mapping_data.py 已并入 AppData.py，"
+              "App/ 与 DataAPI/ 均无残留")
 
     # ② 单一加载点：AppData.load_tdxhy_mapping() 非空（防静默降级）
     from App.AppConfig import app_config  # noqa: F401  （加载次序对齐主程序）

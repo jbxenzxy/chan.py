@@ -21,8 +21,9 @@
   ④ 依赖方向（设计 4.4）：DataAPI/* 不得 import App 层 / AppEngine /
      FrontAPI（ElTdxAPI/CommonStockAPI/TdxAPI/TqSdkAPI 逐一 AST 校验）；
      App/AppData.py 不得 import DataAPI（防影子双源，沿用阶段 4 ⑧）。
-  ⑤ tdxhy 迁移与启动注入：App/tdxhy_mapping_data.py 在位且 DataAPI/
-     无残留；import AppEngine 即完成 set_tdx_hy_mapping 注入
+  ⑤ tdxhy 合并与启动注入：tdxhy_mapping_data.py 已并入 AppData.py
+     （App/ 与 DataAPI/ 均无独立文件，AppData 内嵌映射表）；
+     import AppEngine 即完成 set_tdx_hy_mapping 注入
      （bootstrap 注入链运行时验证，映射非空）。
   ⑥ fetch 打桩点同步：Test/snapshot_runner.py 打桩 CTqSdkAPI.fetch_kline
      （打桩点随 get_kline 家族迁移，防快照用例回退到已删除的
@@ -332,11 +333,18 @@ def test_dependency_direction(failures):
 def test_tdxhy_bootstrap(failures):
     in_app = os.path.exists(os.path.join(REPO_ROOT, "App", "tdxhy_mapping_data.py"))
     in_dapi = os.path.exists(os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py"))
-    if not in_app or in_dapi:
-        failures.append(f"⑤ tdxhy 文件位置异常: App/={in_app} DataAPI/={in_dapi}")
-        print(f"[FAIL] ⑤a 文件迁移: App/={in_app}, DataAPI/ 残留={in_dapi}")
+    appdata_src = open(os.path.join(REPO_ROOT, "App", "AppData.py"),
+                       encoding="utf-8").read()
+    merged_ok = ("_TDXHY_X_TO_881" in appdata_src and "_TDXHY_881_TO_X" in appdata_src
+                 and "def load_tdxhy_mapping" in appdata_src)
+    if in_app or in_dapi or not merged_ok:
+        failures.append(f"⑤ tdxhy 文件位置异常: App/独立文件={in_app} "
+                        f"DataAPI/残留={in_dapi} AppData内嵌={merged_ok}")
+        print(f"[FAIL] ⑤a 文件合并: App/独立文件={in_app}, DataAPI/ 残留={in_dapi}, "
+              f"AppData内嵌={merged_ok}")
     else:
-        print("[PASS] ⑤a 文件迁移: App/tdxhy_mapping_data.py 在位，DataAPI/ 无残留")
+        print("[PASS] ⑤a 文件合并: tdxhy_mapping_data.py 已并入 AppData.py，"
+              "App/ 与 DataAPI/ 均无残留")
 
     from App import AppEngine as m  # noqa: F401  （bootstrap 注入在 import 时完成）
     from DataAPI import TdxAPI

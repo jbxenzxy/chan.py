@@ -473,7 +473,7 @@ def _refresh_stock_names():
 
     # === 补充通达信板块指数名称（88xxxx系列，如880491半导体、881319半导体）===
     # 88xxxx代码不以标准A股格式开头，_is_a_stock_code() 会过滤掉，所以不在 raw_names 中。
-    # 来源: tdxzs.cfg（通达信配置文件）和 tdxhy_mapping_data.py（本地映射表）
+    # 来源: tdxzs.cfg（通达信配置文件）和 AppData 内嵌映射表（本地映射）
     tdxzs_filled = 0
     tdxzs_file = os.path.join(app_config.tdx_hq_cache, "tdxzs.cfg")
     if os.path.exists(tdxzs_file):
@@ -504,7 +504,7 @@ def _refresh_stock_names():
         except Exception as e:
             log.info(f"[股名刷新]   读取tdxzs.cfg失败: {e}")
 
-    # 研究行业(881xxx)从 tdxhy_mapping_data 读取（单一加载函数 app_data.load_tdxhy_mapping）
+    # 研究行业(881xxx)从 AppData 内嵌映射表读取（单一加载函数 app_data.load_tdxhy_mapping）
     tdxhy_filled = 0
     try:
         _TDXHY_881_TO_X = app_data.load_tdxhy_mapping()[1]
@@ -517,7 +517,7 @@ def _refresh_stock_names():
                 raw_names[compound_key]["name"] = name
                 tdxhy_filled += 1
     except Exception as e:
-        log.info(f"[股名刷新]   加载tdxhy_mapping_data失败: {e}")
+        log.info(f"[股名刷新]   加载行业映射失败: {e}")
 
     block_filled = tdxzs_filled + tdxhy_filled
     log.info(f"[股名刷新] 步骤4/5 补充板块: tdxzs.cfg +{tdxzs_filled}条, tdxhy +{tdxhy_filled}条, 共补全 {block_filled} 条板块")
@@ -588,9 +588,10 @@ def _refresh_stock_names():
             if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
             if filtered_delist: parts.append(f"退市 {filtered_delist}只")
             if filtered_empty: parts.append(f"无名 {filtered_empty}只")
-            log.info(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
+            log.info(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count})")
         else:
-            log.info(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count}) → {os.path.basename(app_config.stock_names_cache_file)}")
+            log.info(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count})")
+        log.info(f"[股名刷新] 刷新完成: 共 {len(all_names)} 只股票名称, 已保存到 {app_config.stock_names_cache_file}")
     else:
         log.info("[股名刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
 

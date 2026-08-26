@@ -14,8 +14,8 @@ import json
 import time
 import re
 import os
-from App.AppLog import get_logger
-log = get_logger(__name__)
+import logging
+log = logging.getLogger(__name__)
 
 
 

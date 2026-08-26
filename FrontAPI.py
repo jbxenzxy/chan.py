@@ -49,8 +49,9 @@ from App.AppConfig import app_config
 from App import AppOrch as orch
 from App.AppOrch import AppError  # 领域异常统一在服务层定义
 
-from App.AppLog import get_logger, trace_id
-log = get_logger(__name__)
+from App.AppLog import get_logger
+# 统一 logger 名（AppLog 格式已不含 [%(name)s]，name 不再显示于日志）
+log = get_logger("FrontAPI")
 
 # 分析引擎层：引擎入口一律走 orch.* 漏斗，此处仅读取常量/纯函数/SSE 调试旗
 from App import AppEngine as m  # noqa: F401
@@ -107,28 +108,19 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def trace_id_middleware(request: Request, call_next):
-    """请求级 trace-id：入口生成一次，链路内任意位置经
-    current_trace_id() 关联；anyio 线程池自动传播 contextvar，线程内
-    的 orch.* 分析调用同样可见。请求起止各记一条，含耗时。"""
-    tid = trace_id()
-    t0 = time.time()
-    log.info("[%s] → %s %s", tid, request.method, request.url.path)
+async def log_request(request: Request, call_next):
+    """仅记录请求异常；正常请求不再打印 → / ← 起止日志（避免刷屏）。"""
     try:
-        response = await call_next(request)
+        return await call_next(request)
     except Exception:
-        log.error("[%s] %s %s 异常", tid, request.method, request.url.path)
+        log.error("%s %s 异常", request.method, request.url.path)
         raise
-    log.info("[%s] ← %s %s %s 耗时=%.3fs",
-             tid, request.method, request.url.path, response.status_code,
-             time.time() - t0)
-    return response
 
 
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError):
     """领域异常 → 统一日志 + 统一 JSON（状态码读取异常自身）"""
-    log.info(f"[FrontAPI] 领域异常 {exc.__class__.__name__}: {exc} ({request.url.path})")
+    log.info(f"领域异常 {exc.__class__.__name__}: {exc} ({request.url.path})")
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.__class__.__name__, "detail": str(exc)},
@@ -668,5 +660,9 @@ if __name__ == "__main__":
     log.info(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     log.info(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
     log.info("[信息] SSE:       /api/futures_stream（同步生成器，每连接一条常驻线程）")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="info")
+    # Uvicorn 默认把日志写 stderr（终端标红）。传 log_config=None 让其
+    # 复用 AppLog.py 已配置的 root (stdout)，startup/error 日志改为 stdout，
+    # 与应用日志同色；access 日志已由 access_log=False 关闭。
+    uvicorn.run(app, host=HOST, port=PORT, log_config=None,
+                log_level="info", access_log=False)
 

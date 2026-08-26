@@ -6,7 +6,9 @@ App/AppLog.py —— 统一日志框架
 code/freq/耗时上下文。
 
 设计要点：
-  - 单一事实源：全项目统一格式（时间 / 级别 / 模块 / 消息），stderr 输出。
+  - 单一事实源：全项目统一格式（时间 / 级别 / 模块 / 消息），stdout 输出。
+    （统一走 stdout：控制台/IDE 默认只展示 stdout，保证所有 log 可见；
+    板块刷新等历史 print 已全部收敛为 log，不再出现 stdout/stderr 分流。）
   - 请求级 trace-id：contextvar 实现，线程 / 异步隔离；请求入口设置一次，
     链路内任意位置可读，用于跨函数 / 跨线程关联同一请求。
   - 零依赖：不 import 任何 App 业务模块，可被任意层（含 DataAPI）安全引用。
@@ -26,16 +28,19 @@ from contextvars import ContextVar
 
 _TRACE_ID: ContextVar = ContextVar("trace_id", default="-")
 
-_FORMAT = "%(asctime)s %(levelname)-7s [%(name)s] %(message)s"
+_FORMAT = "%(levelname)-5s %(message)s"
 _DATE_FORMAT = "%H:%M:%S"
+
+# 说明：格式为 级别 / 消息，不含 时间戳 与 [%(name)s]/trace-id 等标签——
+# 用户反馈时间与模块标签均属冗余噪音，统一去除。
 
 
 def _configure_root() -> None:
-    """幂等配置根 logger：统一格式 + stderr 输出（重复 import 不叠加 handler）。"""
+    """幂等配置根 logger：统一格式 + stdout 输出（重复 import 不叠加 handler）。"""
     root = logging.getLogger()
     if root.handlers:
         return
-    handler = logging.StreamHandler(sys.stderr)
+    handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(logging.Formatter(_FORMAT, datefmt=_DATE_FORMAT))
     root.addHandler(handler)
     root.setLevel(logging.INFO)

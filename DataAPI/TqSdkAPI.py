@@ -13,13 +13,16 @@ import time as _time
 from datetime import datetime
 
 # 抑制 tqsdk 内部 INFO 日志（如 WebSocket 连接通知）
-# tqsdk 在 import 时会配置自己的 handler，需同时抑制 root logger
-logging.root.setLevel(logging.WARNING)
+# 注意：只抑制 tqsdk 自身 logger，绝不设置 root 级别——
+# 若设置 root.setLevel(WARNING) 会覆盖 App/AppLog.py 的全局 INFO，
+# 导致股票名/PE-TTM/指数归属等 log.info 进度被静默抑制（历史根因）。
 logging.getLogger("tqsdk").setLevel(logging.WARNING)
 logging.getLogger("shinny").setLevel(logging.WARNING)
 logging.getLogger("tqsdk.tqapi").setLevel(logging.WARNING)
 
 from DataAPI.CommonStockAPI import CCommonStockApi
+
+log = logging.getLogger(__name__)
 
 # ============================================================
 # 天勤配置
@@ -81,7 +84,7 @@ def load_tq_account(config_dir):
     reason = file_failure
     if env_account or env_password:
         reason += "；环境变量 TQ_ACCOUNT / TQ_PASSWORD 未成对设置"
-    print(f"[TqSdkAPI] 未取到有效凭据（{reason}），使用默认空值")
+    log.warning(f"[TqSdkAPI] 未取到有效凭据（{reason}），使用默认空值")
     return False
 
 # 默认监控的期货品种（引擎启动时初始化 15s/1m/5m，30m 延迟按需初始化）
@@ -437,7 +440,7 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
             before_count = len(records)
             records = [r for r in records if r["dt"] >= start_dt]
             if before_count != len(records):
-                print(f"[{display_key or symbol}] 选点过滤: {start_time} -> {before_count}条 → {len(records)}条")
+                log.info(f"[{display_key or symbol}] 选点过滤: {start_time} -> {before_count}条 → {len(records)}条")
 
     # ★ 天勤免费API可能返回超过num_bars的数据，强制截断以控制step_load耗时
     if len(records) > num_bars:
@@ -448,12 +451,12 @@ def fetch_futures_kline(api, symbol, freq_sec=15, num_bars=None, display_key=Non
     elapsed = _time.time() - t_start
     if _SSE_DEBUG:
         if records:
-            print(f"[{prefix}] ⑴ 拉取历史: {len(records)}根, "
+            log.info(f"[{prefix}] ⑴ 拉取历史: {len(records)}根, "
                   f"{records[0]['dt'].strftime('%Y-%m-%d %H:%M:%S')} ~ "
                   f"{records[-1]['dt'].strftime('%Y-%m-%d %H:%M:%S')}, "
                   f"耗时 {elapsed:.1f}s")
         else:
-            print(f"[{prefix}] ⑴ 拉取历史: 0条 (无有效数据), 耗时 {elapsed:.1f}s")
+            log.warning(f"[{prefix}] ⑴ 拉取历史: 0条 (无有效数据), 耗时 {elapsed:.1f}s")
     return records
 
 

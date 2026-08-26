@@ -22,6 +22,9 @@ from datetime import datetime, timedelta
 
 from chinese_calendar import is_holiday
 
+import logging
+log = logging.getLogger(__name__)
+
 # 依赖方向：本模块属 DataAPI 数据源抽象层，不 import App 层——
 # 目录路径一律由调用方注入（vipdoc_dir 参数），配置读取留在 App 层。
 
@@ -34,7 +37,7 @@ try:
 except ImportError:
     _ELTDX_AVAILABLE = False
     TdxClient = None
-    print("[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx")
+    log.warning("[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx")
 
 # 下载状态管理（单一事实源）
 _download_state = {
@@ -184,7 +187,7 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
             try:
                 series = client.bars.all(full_code, period="day", max_pages=1)
             except Exception as _e:
-                print(f"[下载警告] {full_code} 日线拉取失败: {_e}")
+                log.warning(f"[下载警告] {full_code} 日线拉取失败: {_e}")
                 return 0, 0, None
 
             if not series or not series.bars:
@@ -223,7 +226,7 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
                 try:
                     page = client.bars.get(full_code, period="day", start=start, count=page_size)
                 except Exception as _e:
-                    print(f"[下载警告] {full_code} 日线分页拉取失败: {_e}")
+                    log.warning(f"[下载警告] {full_code} 日线分页拉取失败: {_e}")
                     break
                 if not hasattr(page, "bars") or not page.bars:
                     break
@@ -328,7 +331,7 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
             try:
                 series = client.bars.all(full_code, period=period, max_pages=1)
             except Exception as _e:
-                print(f"[下载警告] {full_code} {period} 拉取失败: {_e}")
+                log.warning(f"[下载警告] {full_code} {period} 拉取失败: {_e}")
                 return 0, 0, None
 
             if not series or not series.bars:
@@ -367,7 +370,7 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
                 try:
                     page = client.bars.get(full_code, period=period, start=start, count=page_size)
                 except Exception as _e:
-                    print(f"[下载警告] {full_code} {period} 分页拉取失败: {_e}")
+                    log.warning(f"[下载警告] {full_code} {period} 分页拉取失败: {_e}")
                     break
                 if not hasattr(page, "bars") or not page.bars:
                     break
@@ -442,21 +445,21 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
 
         # 收集所有需要下载的股票
         all_tasks = []
-        print(f"[下载] 开始收集代码列表, 共 {len(categories)} 个分类: {categories}")
-        print(f"[下载] DOWNLOAD_DIR={vipdoc_dir}, day_start={day_start_str}, min_start={min_start_str}")
+        log.info(f"[下载] 开始收集代码列表, 共 {len(categories)} 个分类: {categories}")
+        log.info(f"[下载] DOWNLOAD_DIR={vipdoc_dir}, day_start={day_start_str}, min_start={min_start_str}")
 
         # 构建 (market, type) 快速查找集合
         wanted_market_types = set()
         for cat in categories:
             mkt = cat["market"]
             if mkt in ("ds", "hk"):
-                print(f"[下载] {mkt}: eltdx 不支持港股市场，跳过")
+                log.warning(f"[下载] {mkt}: eltdx 不支持港股市场，跳过")
                 _download_state["errors"].append(f"港股/扩展市场({mkt})暂不支持，请使用其他方式获取港股数据")
                 continue
             wanted_market_types.add((mkt, cat["type"]))
 
         if not wanted_market_types:
-            print("[下载] 没有需要下载的分类")
+            log.info("[下载] 没有需要下载的分类")
             _download_state["running"] = False
             return
 
@@ -470,7 +473,7 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
 
             # 使用 eltdx 内置的 A 股过滤（基于服务端返回的 category 字段）
             a_share_codes = client.get_a_share_codes_all()
-            print(f"[下载] 从服务器获取到 {len(a_share_codes)} 只A股代码")
+            log.info(f"[下载] 从服务器获取到 {len(a_share_codes)} 只A股代码")
 
             # 按市场和类型分配到任务列表
             market_counts = {}
@@ -492,17 +495,17 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
                 # 每个市场的任务数 = A股数 × 该市场在wanted中的类型数
                 type_count = sum(1 for (mm, ct) in wanted_market_types if mm == mkt)
                 stock_count = cnt // type_count if type_count > 0 else cnt
-                print(f"[下载] {mkt}: {stock_count} 只A股 × {type_count} 种类型 = {cnt} 个任务")
+                log.info(f"[下载] {mkt}: {stock_count} 只A股 × {type_count} 种类型 = {cnt} 个任务")
 
             # 开始逐只下载
             total = len(all_tasks)
-            print(f"[下载] 代码收集完成, 共 {total} 只股票, {len(_download_state['errors'])} 个错误")
+            log.info(f"[下载] 代码收集完成, 共 {total} 只股票, {len(_download_state['errors'])} 个错误")
             with _download_lock:
                 _download_state["total_stocks"] = total
 
             completed = 0
 
-            print(f"[下载] 开始逐只下载...")
+            log.info(f"[下载] 开始逐只下载...")
             for i, task in enumerate(all_tasks):
                 with _download_lock:
                     if _download_state["aborted"]:
@@ -538,7 +541,7 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
                 except Exception as _e:
                     err_msg = f"{task['market']}{(task.get('code_prefix') or '')}{task['code']}: {str(_e)[:80]}"
                     if completed < 5:  # 只打印前5个错误详情
-                        print(f"[下载] 错误: {err_msg}")
+                        log.error(f"[下载] 错误: {err_msg}")
                     with _download_lock:
                         _download_state["errors"].append(err_msg)
                         _download_state["completed_stocks"] = completed + 1
@@ -553,25 +556,25 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
     except Exception as e:
         with _download_lock:
             _download_state["errors"].append(f"下载引擎异常: {e}")
-        print(f"[下载] 引擎异常: {e}")
+        log.info(f"[下载] 引擎异常: {e}")
     finally:
         with _download_lock:
             _download_state["running"] = False
             _download_state["progress"] = 100
             _download_state["end_time"] = time.time()
         latest = _download_state.get("latest_data_date")
-        print(f"[下载] 下载任务结束, 完成 {_download_state['completed_stocks']}/{_download_state['total_stocks']} 只, 错误 {len(_download_state['errors'])} 个, 最新数据日期 {latest}")
+        log.error(f"[下载] 下载任务结束, 完成 {_download_state['completed_stocks']}/{_download_state['total_stocks']} 只, 错误 {len(_download_state['errors'])} 个, 最新数据日期 {latest}")
         if _download_state["errors"]:
             for err in _download_state["errors"][:5]:
-                print(f"  [下载错误] {err}")
+                log.error(f"  [下载错误] {err}")
         # 检查最新数据日期，提示用户
         today_int = int(datetime.now().strftime("%Y%m%d"))
         if latest and latest < today_int:
             from chinese_calendar import is_workday
             if is_workday(datetime.now().date()):
-                print(f"[下载] 提示: 服务器最新数据日期为 {latest}，今日({today_int})数据尚未更新，请稍后再试")
+                log.info(f"[下载] 提示: 服务器最新数据日期为 {latest}，今日({today_int})数据尚未更新，请稍后再试")
             else:
-                print(f"[下载] 提示: 今日为非交易日，最新数据日期为 {latest}")
+                log.info(f"[下载] 提示: 今日为非交易日，最新数据日期为 {latest}")
 
 
 def _start_download(vipdoc_dir, categories, day_start=None, min_start=None):
