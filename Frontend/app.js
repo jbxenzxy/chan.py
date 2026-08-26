@@ -1364,6 +1364,12 @@
             updateSlider();
         }
 
+        // ============================================================
+        // 红框调试面板已暂时禁用（2026-08-26，按需注释而非删除）。
+        // 原实现保存在下方 /* ... */ 块内；恢复时解开注释并删除 no-op 占位即可。
+        // 注意：红框本身（Ctrl 选中 / 新中枢计算）不受影响，仅面板不显示。
+        // ============================================================
+        /*
         // 红框调试面板更新（不依赖console.log，即使F12过滤也能在页面上看到）
         function updateRedFrameDebug() {
             var dbg = document.getElementById("redframe-debug");
@@ -1392,11 +1398,10 @@
             } else if (st.state === "DRAW") {
                 stateEl.textContent = "已绘制";
                 stateEl.style.color = "#4caf50";
-                // 格式化日期：30分钟数据去掉秒和前面多余的
                 function fmtDate(d) {
                     if (!d) return "?";
-                    if (d.length >= 16) return d.slice(5, 16);  // "MM-DD HH:MM"
-                    return d.slice(5, 10);  // "MM-DD"
+                    if (d.length >= 16) return d.slice(5, 16);
+                    return d.slice(5, 10);
                 }
                 detailEl.textContent = "[" + fmtDate(st.leftDate) + ", " + fmtDate(st.rightDate) + "]";
             } else if (st.state === "OK") {
@@ -1409,6 +1414,9 @@
                 detailEl.textContent = "";
             }
         }
+        */
+        // no-op 占位：保留各处 updateRedFrameDebug() 调用不致报错，面板不再显示
+        function updateRedFrameDebug() {}
 
         // 上面窗口鼠标移动时更新下面窗口高亮并重绘下面窗口
         function updateDualHighlight() {
@@ -2743,9 +2751,9 @@
                 dualShowNewZs = false;
                 dualNewZsLeftDate = "";
                 dualNewZsRightDate = "";
-                // 隐藏红框调试面板
-                const dbg = document.getElementById("redframe-debug");
-                if (dbg) dbg.style.display = "none";
+                // 隐藏红框调试面板（该面板已暂时禁用，行内清理保留注释待恢复）
+                // const dbg = document.getElementById("redframe-debug");
+                // if (dbg) dbg.style.display = "none";
                 btn.classList.remove("active");
                 const isFuturesClose = chartData && chartData.meta && chartData.meta.market === 'futures';
                 updateFreqButtonStates(isFuturesClose);
@@ -4092,8 +4100,9 @@
                     dualNewZsLeftDate = "";
                     dualNewZsRightDate = "";
                     document.getElementById("btn-dual").classList.remove("active");
-                    const dbg = document.getElementById("redframe-debug");
-                    if (dbg) dbg.style.display = "none";
+                    // 红框调试面板已禁用（行内清理保留注释待恢复）
+                    // const dbg = document.getElementById("redframe-debug");
+                    // if (dbg) dbg.style.display = "none";
                     // 恢复单canvas布局
                     const container = document.getElementById("chart-container");
                     const mainDiv = document.getElementById("chart-main");
@@ -4121,8 +4130,9 @@
                     dualNewZsLeftDate = "";
                     dualNewZsRightDate = "";
                     document.getElementById("btn-dual").classList.remove("active");
-                    const dbg = document.getElementById("redframe-debug");
-                    if (dbg) dbg.style.display = "none";
+                    // 红框调试面板已禁用（行内清理保留注释待恢复）
+                    // const dbg = document.getElementById("redframe-debug");
+                    // if (dbg) dbg.style.display = "none";
                     // 恢复单canvas布局
                     const container = document.getElementById("chart-container");
                     const mainDiv = document.getElementById("chart-main");
