@@ -43,8 +43,8 @@
    "phase": "5"
   },
   "TDXHY": {
-   "home": "App/AppData.py",
-   "desc": "行业映射读取接口（映射表硬编码内嵌 AppData.py，单一加载函数）",
+   "home": "App/tdxhy_mapping_data.py",
+   "desc": "行业映射读取接口（阶段 5 随数据文件同迁 App/，设计 8.8）",
    "phase": "5"
   },
   "CFG": {
@@ -129,8 +129,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1591,
-   "line_end": 1614,
+   "line_start": 1593,
+   "line_end": 1616,
    "n_lines": 24,
    "note": "独立下窗截断边界（结束时间语义纯函数）"
   },
@@ -146,8 +146,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 303,
-   "line_end": 305,
+   "line_start": 304,
+   "line_end": 306,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data.cache_get"
   },
@@ -163,8 +163,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 296,
-   "line_end": 300,
+   "line_start": 297,
+   "line_end": 301,
    "n_lines": 5,
    "note": "✓4 兼容壳 → app_data.cache_put（LRU）"
   },
@@ -199,8 +199,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1258,
-   "line_end": 1511,
+   "line_start": 1260,
+   "line_end": 1513,
    "n_lines": 254,
    "note": "子级别结果提取（254 行）"
   },
@@ -216,8 +216,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 251,
-   "line_end": 253,
+   "line_start": 252,
+   "line_end": 254,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -233,8 +233,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 246,
-   "line_end": 248,
+   "line_start": 247,
+   "line_end": 249,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -252,8 +252,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1544,
-   "line_end": 1552,
+   "line_start": 1546,
+   "line_end": 1554,
    "n_lines": 9,
    "note": "双窗 A/B 实现开关（环境变量，默认 independent）"
   },
@@ -305,8 +305,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1564,
-   "line_end": 1576,
+   "line_start": 1566,
+   "line_end": 1578,
    "n_lines": 13,
    "note": "双窗周期配对校验（非法返回错误串，调用方 4xx 拒绝）"
   },
@@ -320,8 +320,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 308,
-   "line_end": 310,
+   "line_start": 309,
+   "line_end": 311,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data.cache_remove"
   },
@@ -335,8 +335,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 256,
-   "line_end": 258,
+   "line_start": 257,
+   "line_end": 259,
    "n_lines": 3,
    "note": "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"
   },
@@ -368,8 +368,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 285,
-   "line_end": 287,
+   "line_start": 286,
+   "line_end": 288,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data"
   },
@@ -383,8 +383,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 276,
-   "line_end": 278,
+   "line_start": 277,
+   "line_end": 279,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -398,8 +398,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 241,
-   "line_end": 243,
+   "line_start": 242,
+   "line_end": 244,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -413,8 +413,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 216,
-   "line_end": 218,
+   "line_start": 217,
+   "line_end": 219,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -428,8 +428,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 225,
-   "line_end": 228,
+   "line_start": 226,
+   "line_end": 229,
    "n_lines": 4,
    "note": "✓4 兼容壳 → App/AppData.safe_write_json_file"
   },
@@ -443,8 +443,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 325,
-   "line_end": 327,
+   "line_start": 326,
+   "line_end": 328,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（引擎内部手动选点仍调用）"
   },
@@ -494,8 +494,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 280,
-   "line_end": 283,
+   "line_start": 281,
+   "line_end": 284,
    "n_lines": 4,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -528,8 +528,8 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1617,
-   "line_end": 1645,
+   "line_start": 1619,
+   "line_end": 1647,
    "n_lines": 29,
    "note": "灰框对照表合成（上窗K线→下窗K线时间分桶，双指针）"
   },
@@ -600,9 +600,9 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 866,
-   "line_end": 1255,
-   "n_lines": 390,
+   "line_start": 867,
+   "line_end": 1257,
+   "n_lines": 391,
    "note": "主级别结果提取（357 行）"
   },
   {
@@ -660,8 +660,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 339,
-   "line_end": 856,
+   "line_start": 340,
+   "line_end": 857,
    "n_lines": 518,
    "note": "股票分析核心（440 行：拉取→注入→CChan→提取）"
   },
@@ -677,9 +677,9 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1648,
-   "line_end": 1664,
-   "n_lines": 17,
+   "line_start": 1650,
+   "line_end": 1668,
+   "n_lines": 19,
    "note": "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"
   }
  ],
@@ -710,7 +710,7 @@
    "writers": []
   },
   "SCRIPT_DIR": {
-   "line": 78,
+   "line": 79,
    "kind": "init",
    "value_hint": "os.path.dirname(os.path.abspath(__file__))",
    "target": "RETIRE",
@@ -719,7 +719,7 @@
    "writers": []
   },
   "FORWARD_ADJUST_ENABLED": {
-   "line": 102,
+   "line": 103,
    "kind": "init",
    "value_hint": "app_config.forward_adjust_enabled",
    "target": "ORCH_E",
@@ -728,7 +728,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_START_DATE": {
-   "line": 105,
+   "line": 106,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_start_date",
    "target": "ORCH_E",
@@ -739,7 +739,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_END_DATE": {
-   "line": 108,
+   "line": 109,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_end_date",
    "target": "ORCH_E",
@@ -750,7 +750,7 @@
    "writers": []
   },
   "FULL_DATA_MODE": {
-   "line": 127,
+   "line": 128,
    "kind": "init",
    "value_hint": "app_config.full_data_mode",
    "target": "ORCH_E",
@@ -761,7 +761,7 @@
    "writers": []
   },
   "STOCKS_LOOKBACK_CONFIG": {
-   "line": 132,
+   "line": 133,
    "kind": "init",
    "value_hint": "app_config.stocks_lookback_config",
    "target": "ORCH_E",
@@ -772,7 +772,7 @@
    "writers": []
   },
   "DUAL_SUB_FALLBACK_MIN": {
-   "line": 137,
+   "line": 138,
    "kind": "init",
    "value_hint": "app_config.dual_sub_fallback_min",
    "target": "ORCH_E",
@@ -783,7 +783,7 @@
    "writers": []
   },
   "_ELTDX_AVAILABLE": {
-   "line": 184,
+   "line": 185,
    "kind": "init",
    "value_hint": "_ElTdx._ELTDX_AVAILABLE",
    "target": "ELTDX",
@@ -792,7 +792,7 @@
    "writers": []
   },
   "TdxClient": {
-   "line": 185,
+   "line": 186,
    "kind": "init",
    "value_hint": "_ElTdx.TdxClient",
    "target": "ELTDX",
@@ -829,7 +829,7 @@
    "writers": []
   },
   "TDX_MARKET_MAP": {
-   "line": 192,
+   "line": 193,
    "kind": "init",
    "value_hint": "{'sh': 1, 'sz': 0, 'bj': 2}",
    "target": "ORCH_E",
@@ -838,7 +838,7 @@
    "writers": []
   },
   "HK_CODE_PREFIX": {
-   "line": 199,
+   "line": 200,
    "kind": "init",
    "value_hint": "'31'",
    "target": "ORCH_E",
@@ -847,7 +847,7 @@
    "writers": []
   },
   "DS_CODE_PREFIX": {
-   "line": 200,
+   "line": 201,
    "kind": "init",
    "value_hint": "'62'",
    "target": "ORCH_E",
@@ -856,7 +856,7 @@
    "writers": []
   },
   "_stock_names_cache": {
-   "line": 214,
+   "line": 215,
    "kind": "init",
    "value_hint": "app_data.names_cache",
    "target": "DATA",
@@ -865,7 +865,7 @@
    "writers": []
   },
   "_pe_ttm_cache": {
-   "line": 234,
+   "line": 235,
    "kind": "init",
    "value_hint": "app_data.pe_cache",
    "target": "DATA",
@@ -874,7 +874,7 @@
    "writers": []
   },
   "_index_belong_cache": {
-   "line": 238,
+   "line": 239,
    "kind": "init",
    "value_hint": "app_data.belong_cache",
    "target": "DATA",
@@ -883,7 +883,7 @@
    "writers": []
   },
   "_stocks_analysis_cache": {
-   "line": 272,
+   "line": 273,
    "kind": "init",
    "value_hint": "app_data.stocks_analysis_cache",
    "target": "DATA",
@@ -894,7 +894,7 @@
    "writers": []
   },
   "_cache_lock": {
-   "line": 273,
+   "line": 274,
    "kind": "init",
    "value_hint": "app_data.cache_lock",
    "target": "DATA",
@@ -905,7 +905,7 @@
    "writers": []
   },
   "_stock_analysis_lock": {
-   "line": 293,
+   "line": 294,
    "kind": "init",
    "value_hint": "threading.Lock()",
    "target": "RETIRE",
@@ -916,7 +916,7 @@
    "writers": []
   },
   "SAVED_POINT_COLUMNS": {
-   "line": 320,
+   "line": 321,
    "kind": "init",
    "value_hint": "AppData_SAVED_POINT_COLUMNS",
    "target": "CFG",
@@ -925,7 +925,7 @@
    "writers": []
   },
   "FREQ_TO_COL": {
-   "line": 322,
+   "line": 323,
    "kind": "init",
    "value_hint": "AppData_FREQ_TO_COL",
    "target": "ORCH_E",
@@ -937,7 +937,7 @@
    "writers": []
   },
   "_saved_point_times": {
-   "line": 332,
+   "line": 333,
    "kind": "init",
    "value_hint": "app_data.saved_point_times",
    "target": "DATA",
@@ -949,7 +949,7 @@
    "writers": []
   },
   "_SUB_FREQ_MAP": {
-   "line": 1523,
+   "line": 1525,
    "kind": "init",
    "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m'}",
    "target": "ORCH_E",
@@ -960,7 +960,7 @@
    "writers": []
   },
   "_STOCKS_DUAL_IMPL_ENV": {
-   "line": 1541,
+   "line": 1543,
    "kind": "init",
    "value_hint": "'CHAN_STOCK_DUAL_IMPL'",
    "target": "ORCH_E",
@@ -971,7 +971,7 @@
    "writers": []
   },
   "_STOCKS_DUAL_PAIRS": {
-   "line": 1556,
+   "line": 1558,
    "kind": "init",
    "value_hint": "{'w': {'d', '30m', '5m'}, 'd': {'30m', '5m'}, '30m': {'5m'}}",
    "target": "ORCH_E",
@@ -982,7 +982,7 @@
    "writers": []
   },
   "_STOCKS_MAIN_PERIOD": {
-   "line": 1581,
+   "line": 1583,
    "kind": "init",
    "value_hint": "{'w': timedelta(days=7), 'd': timedelta(days=1), '30m': time…",
    "target": "ORCH_E",
@@ -993,7 +993,7 @@
    "writers": []
   },
   "_STOCKS_EOD": {
-   "line": 1588,
+   "line": 1590,
    "kind": "init",
    "value_hint": "timedelta(hours=23, minutes=59, seconds=59, microseconds=999…",
    "target": "ORCH_E",

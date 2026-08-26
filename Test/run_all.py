@@ -40,9 +40,11 @@ CI / 迁移每阶段的验收门禁）。
                                                      双路径 API/前端三模式接入/依赖方向
  17. API 集成测试      test_api_integration.py       P2-2①：TestClient 起 app 打核心端点/
                                                      健康检查/搜索/扫描守卫/领域异常映射
- 18. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
- 19. ProcessPool 降级  test_scanpool_fallback.py     P2-2③：ProcessPool 失败→ThreadPool 降级
- 20. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
+ 18. 代码输入链路守护  test_code_resolution_guards.py 沪深重名消歧/大小写契约/搜索双市场候选/
+                                                     search 与引擎同源兜底
+ 19. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
+  20. ProcessPool 降级  test_scanpool_fallback.py     P2-2③：ProcessPool 失败→ThreadPool 降级
+  21. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -97,6 +99,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_sse_gray.py")]),
     ("api_integration",
      [sys.executable, os.path.join("Test", "test_api_integration.py")]),
+    ("code_resolution_guards",
+     [sys.executable, os.path.join("Test", "test_code_resolution_guards.py")]),
     ("sse_concurrent",
      [sys.executable, os.path.join("Test", "test_sse_concurrent.py")]),
     ("scanpool_fallback",

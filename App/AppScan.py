@@ -121,10 +121,12 @@ def _quick_prefilter_pass(market, code):
 
 
 def _debug_read_page_index_stocks(sector_code):
-    """获取当前页面指数的成分股"""
+    """获取当前页面指数的成分股（网络抓取限时 + 随扫描中断放弃）"""
     if not sector_code:
         return []
-    return get_index_stocks(sector_code)
+    # abort_check：用户在成分股抓取/网络阻塞期间点「中断扫描」即提前放弃，
+    # 避免 akshare 等原生阻塞调用让中断失效、扫描卡死。
+    return get_index_stocks(sector_code, abort_check=lambda: _scan_aborted)
 
 
 def read_tdxhy_l2_indices():
@@ -406,7 +408,7 @@ class Scanner:
 
         try:
             t0 = time.time()
-            _PREFIX_MAP = {"0": "SZ", "1": "SH", "2": "BJ", "hk": "HK"}
+            _PREFIX_MAP = {"0": "sz", "1": "sh", "2": "bj", "hk": "hk"}
             market_prefix = _PREFIX_MAP.get(prefix, "")
             qualified_code = (market_prefix + code) if market_prefix else code
             market = market_prefix.lower() if market_prefix else ""
@@ -449,7 +451,7 @@ class Scanner:
                     t_total = time.time() - t_scan_start
                     log.info(f"[耗时-扫描-底分型] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 是底分型")
                     return {
-                        "code": code + "." + market.upper(), "name": stock_name,
+                        "code": market + code, "name": stock_name,
                         "is_fx_d": True,
                         "last_close": klines[-1]["close"] if klines else 0,
                         "freq": freq,
@@ -480,7 +482,7 @@ class Scanner:
                 t_total = time.time() - t_scan_start
                 log.info(f"[耗时-扫描-均线] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 分类:{ma_category}")
                 resp_data = {
-                    "code": code + "." + market.upper(),
+                    "code": market + code,
                     "name": stock_name,
                     "ma_category": ma_category,
                     "last_close": round(last_close, 2),
@@ -538,7 +540,7 @@ class Scanner:
                 log.info(f"[耗时-扫描-放量] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) "
                          f"A张={amount_a:g} 前窗峰值={peak_prev:g} 放量=是")
                 return {
-                    "code": code + "." + market.upper(), "name": stock_name,
+                    "code": market + code, "name": stock_name,
                     "is_fangliang": True,
                     "last_close": last_close,
                     "freq": freq,
@@ -585,7 +587,7 @@ class Scanner:
                 t_total = time.time() - t_scan_start
                 log.info(f"[耗时-扫描] {code} 总{t_total:.3f}s(分析{t_analyze:.3f}s 过滤{t_filter:.3f}s) 有买卖点")
                 return {
-                    "code": code + "." + market.upper(), "name": stock_name,
+                    "code": market + code, "name": stock_name,
                     "buy_points": buy_points,
                     "sell_points": sell_points,
                     "last_close": klines[-1]["close"] if klines else 0,
@@ -630,7 +632,7 @@ class Scanner:
 
         if _scan_aborted:
             # 用户点击中止后结束：不打印"全部扫描成功"误导日志
-            log.info(f"\n[扫描明细] 扫描已中断（耗时 {time_str}）\n")
+            log.info(f"[扫描明细] 扫描已中断（耗时 {time_str}）")
         elif _scan_skip_log:
             log.info("\n========== 扫描异常/失败股票明细 ==========")
             log.info(f"共 {len(_scan_skip_log)} 只:")
@@ -638,7 +640,7 @@ class Scanner:
                 log.info(f"  {i}. {item}")
             log.info("============================================\n")
         else:
-            log.info(f"\n[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票\n")
+            log.info(f"[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票")
 
         if _scan_start_time is not None:
             skip_count = len(_scan_skip_log)
@@ -703,15 +705,22 @@ class Scanner:
         return _abort(task_id)
 
     def set_page_index_code(self, code):
-        """设置当前板块指数代码"""
+        """设置当前板块指数代码（前端传标准 market+code，归一为裸板块代码）
+
+        前端提交 chartData.meta.symbol（标准 market(小写)+code，如 sh880491 /
+        sz399001 / ds932000 / sh000300）。get_index_stocks 只认裸板块代码
+        （881xxx/880xxx/399xxx/000xxx），故先剥离 market 前缀归一，避免带前缀
+        代码失配 `.startswith("88"/"399")` 判定。
+        """
         global _page_index_code
+        from App import utils as _u
         code = code.strip()
         if code:
-            if "." in code:
-                code = code.split(".")[0]
-            _page_index_code = code
-            log.info(f"[成分股] 已设置板块指数代码: {code}")
-            return {"ok": True, "code": code}
+            mkt, bare = _u._get_stock_market_code(code)
+            normalized = bare if mkt else code
+            _page_index_code = normalized
+            log.info(f"[成分股] 已设置板块指数代码: {normalized}")
+            return {"ok": True, "code": normalized}
         else:
             return {"error": "缺少code参数"}
 

@@ -59,6 +59,7 @@ log = get_logger(__name__)
 # 直接从 App.utils 导入；此处仅 import 引擎自身消费的符号）
 from App.utils import (
     _get_stock_name, _get_stock_market_code, _get_market_code,
+    _infer_bare_code_market, is_index,
     _get_kl_type, _get_freq_label,
     _make_chan_config, calculate_macd,
     INTRADAY_FREQS, _get_date_fmt,
@@ -349,11 +350,11 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     import time
     t_start = time.time()
 
-    market, code = _get_stock_market_code(code.strip().upper())
+    market, code = _get_stock_market_code(code.strip())
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
 
-    qualified_code = f"{code}.{market.upper()}"  # 区分沪市深市同号股票
+    qualified_code = market + code  # 标准标识 market(小写)+code，无连接符（区分沪市深市同号股票）
 
     # 调试模式：冷启动注入截止日期（仅日K生效）
     if not end_date and DEBUG_COLD_START_END_DATE and freq == 'd':
@@ -663,7 +664,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 
     t0 = time.time()
     with _stock_analysis_lock:
-        chan_code = f"{market}.{code}"
+        chan_code = market + code  # 标准标识 market(小写)+code，无连接符
         config = _make_chan_config()
 
         # 每次请求重置复盘标记，避免残留前一次状态
@@ -803,7 +804,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         result["sub"] = sub_result
 
     mode_str = f" [复盘到 {end_date}]" if end_date else ""
-    log.info(f"[信息] 查询 {code}.{market.upper()} 完成{mode_str}: {result['meta']['kline_count']}条K线, {result['meta']['bi_count']}笔, {result['meta']['fx_count']}分型, {result['meta']['zs_count']}中枢, {result['meta']['seg_count']}线段, {result['meta']['bsp_count']}买卖点")
+    log.info(f"[信息] 查询 {market}{code} 完成{mode_str}: {result['meta']['kline_count']}条K线, {result['meta']['bi_count']}笔, {result['meta']['fx_count']}分型, {result['meta']['zs_count']}中枢, {result['meta']['seg_count']}线段, {result['meta']['bsp_count']}买卖点")
     log.info(f"[耗时] 总耗时: {time.time()-t_start:.3f}s")
 
     # 缓存策略（结构化键，见 AppData.make_*_key）：
@@ -1220,13 +1221,14 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
 
     stock_name = _get_stock_name(market, code)
     if not stock_name:
-        stock_name = f"{code}.{market.upper()}"
+        stock_name = market + code
 
     result = {
         "meta": {
-            "symbol": f"{code}.{market.upper()}",
+            "symbol": market + code,
             "market": market,
             "name": stock_name,
+            "is_index": is_index(market, code),
             "freq": _get_freq_label(freq),
             "chan_version": "chan.py",
             "kline_count": len(kline_data),
@@ -1484,7 +1486,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
     # 10. 组装结果
     sub_result = {
         "meta": {
-            "symbol": f"{code}.{market.upper()}",
+            "symbol": market + code,
             "market": market,
             "name": "",
             "freq": _get_freq_label(sub_freq),
@@ -1659,7 +1661,9 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
         return {"error": f"无法识别股票代码: {code}"}
     if market == 'futures':
         return {"error": f"期货代码 {code} 请走期货分析接口（/api/futures/read/stream 或复盘/选点），不支持下挂股票路由"}
-    stock_code = f"{normalized_code}.{market.upper()}"
+    # 标准写法契约：market(小写)+code，无连接符；内部 _analyze_stock_internal 会再按同一解析
+    # 器重建数据源标识符，此处绝不再拼点号/大写（旧格式会被严格解析拒掉）。
+    stock_code = f"{market}{normalized_code}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan,
                                    dual=dual, step=step, sub_freq=sub_freq)
 

@@ -291,7 +291,10 @@ def _imports_any(src):
         elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
             targets.add(node.module.split(".")[0])
             if node.module.split(".")[0] == "App":
-                targets.add("App." + node.module.split(".")[1])
+                # "from App import X"（单段）与 "from App.Sub import Y"（多段）均合法；
+                # 依赖方向只关心顶层包，多段时补记 App.子层 供上层过滤
+                if len(node.module.split(".")) >= 2:
+                    targets.add("App." + node.module.split(".")[1])
     return targets
 
 

@@ -9686,15 +9686,16 @@
   "forward_adjust": true,
   "freq": "日线",
   "fx_count": 117,
-  "index_belong": null,
+  "index_belong": "沪深300",
+  "is_index": false,
   "is_replay": false,
   "kline_count": 472,
   "market": "sh",
-  "name": "600519.SH",
-  "pe_ttm": null,
+  "name": "贵州茅台",
+  "pe_ttm": 19.99,
   "saved_selection_date": "",
   "seg_count": 3,
-  "symbol": "600519.SH",
+  "symbol": "sh600519",
   "zs_count": 3
  },
  "segs": [
@@ -38080,7 +38081,7 @@
    "market": "sh",
    "name": "",
    "seg_count": 11,
-   "symbol": "600519.SH",
+   "symbol": "sh600519",
    "zs_count": 14
   },
   "segs": [

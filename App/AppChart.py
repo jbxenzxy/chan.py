@@ -222,20 +222,11 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     """
     import re
     import gc
-    # 标准化代码
-    normalized_code = code.strip().upper()
-    market = None
-    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
-    if prefix_match:
-        market = prefix_match.group(1).lower()
-        normalized_code = prefix_match.group(2)
-    elif suffix_match:
-        normalized_code = suffix_match.group(1)
-        market = suffix_match.group(2).lower()
+    # 标准化代码（统一走唯一事实源 _get_stock_market_code，兼容前后缀/带点/大小写）
+    market, normalized_code = _m._get_stock_market_code(code)
     date_suffix = "live"
     cache_key = make_single_key(market, normalized_code, freq, date_suffix)
-    qualified_code = f"{normalized_code}.{market.upper()}"  # 区分沪市深市同号股票
+    qualified_code = market + normalized_code  # 标准标识 market(小写)+code，无连接符（区分沪市深市同号股票）
 
     # ── 双窗上下文：配对校验 + 按窗口定位 CChan ──────────────
     dual_main_cache_key = dual_sub_cache_key = None
@@ -265,7 +256,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
                 # 下窗选点：independent 读独立下窗（运行时缓存 → dual_sub），
                 # legacy 读 dual_main 多级别联立的子级别
                 if _m._stock_dual_impl() == "independent":
-                    chan_obj = app_data.stocks_sub_cache_get(f"{market}.{normalized_code}", freq)
+                    chan_obj = app_data.stocks_sub_cache_get(market + normalized_code, freq)
                     name = ""
                     if chan_obj is None:
                         dual_sub_cached = app_data.cache_get(dual_sub_cache_key)
@@ -339,7 +330,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
         # 不删除会命中旧 result，选点重建失效）
         app_data.cache_remove(dual_main_cache_key)
         app_data.cache_remove(dual_sub_cache_key)
-        app_data.stocks_sub_cache_pop(f"{market}.{normalized_code}", sub_freq)
+        app_data.stocks_sub_cache_pop(market + normalized_code, sub_freq)
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
@@ -350,7 +341,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     #   [T, 最新] 区间加载（对齐不足时引擎降全量兜底）。
     rebuild_start_time = start_time if freq == main_freq else None
     result = _m._analyze_stock_internal(
-        f"{normalized_code}.{market.upper()}",
+        f"{market}{normalized_code}",
         freq=(main_freq if dual else freq),
         start_time=rebuild_start_time,
         dual=dual,
@@ -404,15 +395,8 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
 
     # ── 股票双窗口 ──
-    market = None
-    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
-    if prefix_match:
-        market = prefix_match.group(1).lower()
-        normalized_code = prefix_match.group(2)
-    elif suffix_match:
-        normalized_code = suffix_match.group(1)
-        market = suffix_match.group(2).lower()
+    # 统一走唯一事实源 _get_stock_market_code，兼容所有 market+code 写法
+    market, normalized_code = _m._get_stock_market_code(code)
 
     if not market:
         return {"error": f"无法识别股票代码: {code}"}
@@ -425,7 +409,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # 两者皆 miss 抛领域异常（对齐期货语义：红框依赖下窗笔结构，
     # 服务重启/双窗重建间隙等异常态不静默回退，交前端提示重开双窗口）。
     if _m._stock_dual_impl() == "independent":
-        chan_code = f"{market}.{normalized_code}"
+        chan_code = market + normalized_code
         chan_obj = app_data.stocks_sub_cache_get(chan_code, sub_freq)
         if chan_obj is None:
             dual_sub_cached = app_data.cache_get(
@@ -482,7 +466,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
         return {"error": "请先在该周期下加载K线数据"}
     if "chan" not in cached:
         log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
-        analyze_stock(f"{normalized_code}.{market.upper()}", freq=sub_freq, cache_chan=True)
+        analyze_stock(f"{market}{normalized_code}", freq=sub_freq, cache_chan=True)
         cached = app_data.cache_get(cache_key)
         if cached is None or "chan" not in cached:
             return {"error": "缓存中无分析数据，请重新查询"}
@@ -542,6 +526,8 @@ def search_stocks(q):
     # 手工补充扩展市场指数
     manual_items = [
         {"code": "932000", "name": "中证2000", "pinyin": "ZZ2", "market": "ds", "type": "指数"},
+        {"code": "HSTECH", "name": "恒生科技指数", "pinyin": "HSKJ", "market": "hk", "type": "指数"},
+        {"code": "HSIDI", "name": "恒生创新药指数", "pinyin": "HSCXY", "market": "hk", "type": "指数"},
     ]
     for item in manual_items:
         bare_code = item["code"]
@@ -581,16 +567,9 @@ def search_stocks(q):
             continue
 
         if not market:
-            if len(bare_code) == 5 and bare_code.isdigit():
-                market = "hk"
-            elif bare_code.startswith("6") or bare_code.startswith("5") or bare_code.startswith("9"):
-                market = "sh"
-            elif bare_code.startswith("0") or bare_code.startswith("3") or bare_code.startswith("2"):
-                market = "sz"
-            elif bare_code.startswith("88") or bare_code.startswith("99"):
-                market = "sh"
-            else:
-                market = "sz"
+            # 市场兜底统一走单一事实源 _infer_bare_code_market（与引擎一致），
+            # 避免这里再维护一份首位规则导致与 utils._get_stock_market_code 私下演化
+            market = _m._infer_bare_code_market(bare_code) or "sz"
 
         item = {"code": bare_code, "name": name, "pinyin": pinyin, "market": market, "type": ""}
         if bare_code == keyword_upper:

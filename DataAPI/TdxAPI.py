@@ -70,6 +70,44 @@ _tdx_config = {
     "forward_adjust_enabled": False,
 }
 
+# 港股指数：应用层字母代码（HSTECH/HSIDI 等）→ 通达信 HZ 文件代码。
+# 通达信港股指数日线文件为 `27#HZ{代码}.day`（如 27#HZ5017.day），
+# 而非港股个股的 31# 前缀。读文件前须用此表把字母代码换算为 HZ 代码。
+# （注意：与 App/AppData.py 中仅供「同花顺→通达信自选股同步」脚本使用的
+#   ZXG_HK_INDEX_MAP 无关；此处是行情读取路径的本地映射。）
+_HK_INDEX_HZ_MAP = {
+    "HSTECH": "HZ5017",  # 恒生科技指数（Hang Seng TECH）
+    "HSIDI": "HZ5489",   # 恒生创新药指数（Hang Seng Innovative Drug）
+}
+
+# 港股指数：应用层字母代码 → 恒生指数公司官方 Factsheet PDF 关键字。
+# 这类港股指数由恒生指数公司发布，中证指数(000xxx)/深交所(399xxx)等中港A股
+# 权威渠道均不覆盖，故「成分股」扫描来源须走官方 Factsheet PDF（结构化表格，
+# 依 ISIN 列判别成分行）解析。
+_HK_INDEX_FACT_SHEET = {
+    "HSTECH": "hsteche",   # 恒生科技指数（30 只）
+    "HSIDI": "hsidie",     # 恒生创新药指数（40 只）
+}
+# 当前支持成分检索的港股指数集合（大小写不敏感）
+_HK_INDEX_CODES = set(_HK_INDEX_FACT_SHEET)
+
+# 成分抓取用 UA（经实际验证，中港数据站点对 UA/Referer 有反爬过滤）
+_HK_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+          "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+
+
+def _hk_index_hz_code(code):
+    """港股指数字母代码 → 通达信 HZ 文件代码；非指数原样返回。"""
+    return _HK_INDEX_HZ_MAP.get((code or "").upper(), code)
+
+
+def _hk_day_file(code):
+    """港股日线文件路径：指数走 27#HZ{...}.day，个股走 31#{code}.day。"""
+    hz = _hk_index_hz_code(code)
+    if hz != code:
+        return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"27#{hz}.day")
+    return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"31#{code}.day")
+
 
 def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
     """设置通达信数据源所需的全局配置（由 App 引擎层启动时调用）"""
@@ -1071,7 +1109,7 @@ def _forward_adjust(records, market, code, end_date=None):
 def find_day_file(market, code):
     """查找日线数据文件路径"""
     if market == 'hk':
-        return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"31#{code}.day")
+        return _hk_day_file(code)
     if market == 'ds':
         return os.path.join(_tdx_config["vipdoc_dir"], "ds", "lday", f"62#{code}.day")
     return os.path.join(_tdx_config["vipdoc_dir"], market, "lday", f"{market}{code}.day")
@@ -1095,7 +1133,9 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
     """
     if freq in ('30m', '5m'):
         if market == 'hk':
-            data_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"31#{code}.lc5")
+            hz = _hk_index_hz_code(code)
+            prefix = f"27#{hz}" if hz != code else f"31#{code}"
+            data_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"{prefix}.lc5")
         elif market == 'ds':
             data_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"62#{code}.lc5")
         else:
@@ -1150,7 +1190,9 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
     """
     if sub_freq in ('30m', '5m'):
         if market == 'hk':
-            min_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"31#{code}.lc5")
+            hz = _hk_index_hz_code(code)
+            prefix = f"27#{hz}" if hz != code else f"31#{code}"
+            min_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"{prefix}.lc5")
         elif market == 'ds':
             min_file = os.path.join(_tdx_config["vipdoc_dir"], "ds", "fzline", f"62#{code}.lc5")
         else:
@@ -1968,7 +2010,7 @@ def _read_infoharbor_sector_stocks(sector_code):
     return stocks
 
 
-def get_index_stocks(sector_code):
+def get_index_stocks(sector_code, abort_check=None):
     """
     根据通达信板块指数代码，获取其成分股列表。
 
@@ -1976,6 +2018,8 @@ def get_index_stocks(sector_code):
     - 881xxx: 研究行业(新版) → 本地 tdxhy.cfg
     - 880xxx: 概念/风格板块 → 优先 infoharbor_block.dat，失败再用 tdxzs.cfg + block_*.dat
     - 000xxx/399xxx: 标准指数 → AKShare (中证指数公司)
+
+    abort_check: 可选回调，返回 True 表示调用方（扫描）已中断，网络抓取提前放弃。
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
     """
@@ -1985,9 +2029,16 @@ def get_index_stocks(sector_code):
     if sector_code.startswith("881"):
         return _read_tdxhy_sector_stocks(sector_code)
 
-    # Step 2: 标准指数（000xxx / 399xxx 等）→ AKShare 统一获取
+    # Step 1.5: 港股指数（HSTECH/HSIDI 等）→ 恒指官方 Factsheet PDF。
+    # 必须放在「标准指数→AKShare 中证指数」之前：否则 HSTECH 之类字母代码会落入
+    # 中证指数接口（index_stock_cons_csindex），把恒指代码当 6 位中证代码请求，
+    # 返回非 Excel 内容抛 "Excel file format cannot be determined"。
+    if sector_code.upper() in _HK_INDEX_CODES:
+        return _read_hk_index_stocks(sector_code.upper(), abort_check=abort_check)
+
+    # Step 2: 标准指数（000xxx / 399xxx 等）→ 本地或 AKShare 统一获取
     if not sector_code.startswith("88"):
-        return _read_standard_index_stocks(sector_code)
+        return _read_standard_index_stocks(sector_code, abort_check=abort_check)
 
     # Step 3: 880xxx（概念/风格板块）→ 优先读取 infoharbor_block.dat
     stocks = _read_infoharbor_sector_stocks(sector_code)
@@ -2077,31 +2128,351 @@ def _parse_stocks_from_df(df, source_label):
     return stocks
 
 
-def _read_standard_index_stocks(sector_code):
+def _run_with_timeout(fn, timeout, abort_check=None):
+    """在守护线程中执行阻塞网络抓取，限时返回，且可被扫描中断。
+
+    背景：akshare/requests 等成分抓取可能因网络异常无限阻塞（无超时、原生调用
+    不可打断）。扫描「成分股」来源在 API 线程池线程里解析股票清单，若阻塞则
+    「中断扫描」也结束不了（见 App/app 单组来源 page_index 卡死历史）。本函数：
+      1. 守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None；
+      2. 每次轮询检查 abort_check()，扫描被中断即提前放弃，不干等网络。
+    返回 fn 结果；超时/被中断返回 None；fn 内部异常原样透出（调用方捕获）。
+    """
+    import threading
+    box = {}
+
+    def _run():
+        try:
+            box["r"] = fn()
+        except Exception as e:  # noqa: BLE001 —— 集中透出，调用方按需捕获
+            box["e"] = e
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    waited, step, checked = 0.0, 0.5, False
+    while waited < timeout:
+        t.join(timeout=step)
+        waited += step
+        if not t.is_alive():
+            break
+        if abort_check and abort_check():
+            checked = True
+            break
+    if t.is_alive():
+        if checked:
+            log.info("[板块成分股] 扫描已中断，放弃等待成分股网络抓取")
+        else:
+            log.warning(f"[板块成分股] 网络获取超时(>{timeout:.0f}s)，返回空（可重试）")
+        return None
+    if "e" in box:
+        raise box["e"]
+    return box.get("r")
+
+
+def _read_sh_index_stocks_exchange(abort_check=None):
+    """上证指数(000001)成分 = 沪市全部A股，上交所官网 query.sse.com.cn 直连。
+
+    与深证成指(399001)直连深交所官网一致：从上交所官方查询接口实时获取当前
+    「全部A股」清单（主板A股 STOCK_TYPE=1 + 科创板 STOCK_TYPE=8 两段合并去重），
+    而不走通达信本地 vipdoc/sh/lday 枚举（该目录会混入其它指数/基金/代码段，
+    market+code 整改后不可再当作指数成分来源）。
+    返回 [{"code","prefix","name"}, ...]；限时可被扫描中断（abort_check）。
+    """
+    import requests
+
+    url = "https://query.sse.com.cn/sseQuery/commonQuery.do"
+    headers = {
+        "Host": "query.sse.com.cn",
+        "Pragma": "no-cache",
+        "Referer": "https://www.sse.com.cn/assortment/stock/list/share/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    def _fetch():
+        stocks, seen = [], set()
+        for stock_type in ("1", "8"):  # 1=主板A股, 8=科创板
+            params = {
+                "STOCK_TYPE": stock_type,
+                "REG_PROVINCE": "",
+                "CSRC_CODE": "",
+                "STOCK_CODE": "",
+                "sqlId": "COMMON_SSE_CP_GPJCTPZ_GPLB_GP_L",
+                "COMPANY_STATUS": "2,4,5,7,8",
+                "type": "inParams",
+                "isPagination": "true",
+                "pageHelp.cacheSize": "1",
+                "pageHelp.beginPage": "1",
+                "pageHelp.pageSize": "10000",
+                "pageHelp.pageNo": "1",
+                "pageHelp.endPage": "1",
+            }
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            r.raise_for_status()
+            data = r.json()
+            for row in data.get("result") or []:
+                code = str(row.get("A_STOCK_CODE", "")).strip()
+                if "." in code:
+                    code = code.split(".")[0]
+                name = str(row.get("SEC_NAME_CN", "")).strip()
+                if len(code) != 6 or not code.isdigit():
+                    continue
+                if not code.startswith("6"):
+                    continue  # 仅A股（主板600/601/603 + 科创688/689）
+                if code in seen:
+                    continue
+                seen.add(code)
+                stocks.append({"code": code, "prefix": "1", "name": name or code})
+        return stocks
+
+    return _run_with_timeout(_fetch, timeout=25, abort_check=abort_check)
+
+
+def _normalize_hk_code(raw):
+    """把港股成分代码规整为 5 位零填充（00700 等）；非法返回 None。"""
+    if raw is None:
+        return None
+    m = re.search(r"(\d{1,5})", str(raw).strip())
+    if not m:
+        return None
+    return m.group(1).zfill(5)
+
+
+def _build_hk_stock_records(codes):
+    """codes: 港股代码列表 → [{code,prefix:'hk',name}]（去重保序）"""
+    seen, stocks = set(), []
+    for c in codes or []:
+        c = _normalize_hk_code(c)
+        if c is None or c in seen:
+            continue
+        seen.add(c)
+        stocks.append({"code": c, "prefix": "hk", "name": c})
+    return stocks
+
+
+def _extract_hk_codes_from_pdf_text(texts):
+    """从恒指 Factsheet 页文本提取成分代码（5 位零填充）。
+
+    因子 1（用作主解析）——**ISIN 锚点**，与 PDF 引擎排版无关：
+    港股/中概企业在港上市证券的 ISIN 一律以 KY / CN / HK 开头（12 位），
+    每一成分行必含 ISIN。因此只要某行出现这种 ISIN，就取紧贴在它**前方**
+    的 1~5 位数字作为股票代码。该法不依赖「代码在第几列」，
+    因此无论 pypdf 是按空格分列、粘连成 '0700KYG...'、还是换行位置不同，
+    都能命中；同时天然排除指数行/日期/权重等无 ISIN 的噪声。
+
+    因子 2（兜底）——旧「CONSTITUENTS 段 + 代码+ISIN 两 token」严格模式，
+    应对个别引擎把行内文本排成不同顺序的场景。
+    """
+
+    def _anchor(code_list):
+        """以通用 12 位 ISIN 为锚收集紧邻其前的短数字代码。
+
+        证券 ISIN 一律 12 位：2 位国家/地区码 + 9 位字母数字 + 1 位数字校验，
+        如 KYG875721634（开曼）/ BMG5984D0714（百慕大）/ HK0000072722（香港）。
+        不可只认 KY/CN/HK，否则会漏掉注册地在百慕大(BM)、泽西(JE)等地的
+        成分公司（如华润啤酒 03320 即 BM 开头）。逐行锚定 ISIN 后取紧邻前
+        方的短数字作为代码，与列序、粘连与否（'0700KYG...'）均无关。
+        """
+        for text in texts:
+            if not text:
+                continue
+            for line in text.splitlines():
+                for m in re.finditer(r"[A-Z]{2}[A-Z0-9]{9}[0-9]", line):
+                    pre = line[: m.start()].rstrip()
+                    cm = re.search(r"(\d{1,5})$", pre)
+                    if cm:
+                        code_list.append(cm.group(1).zfill(5))
+
+    def _strict(code_list):
+        """兜底：CONSTITUENTS 段之后『首列1-5位数字 + 第2列12位ISIN』。"""
+        for text in texts:
+            if not text:
+                continue
+            idx = text.find("CONSTITUENTS")
+            seg = text[idx:] if idx >= 0 else text
+            for line in seg.splitlines():
+                toks = line.split()
+                if len(toks) < 2:
+                    continue
+                if re.fullmatch(r"\d{1,5}", toks[0]) and re.fullmatch(r"[0-9A-Z]{6,15}", toks[1]):
+                    code_list.append(toks[0].zfill(5))
+
+    codes = []
+    _anchor(codes)
+    if len(codes) < 8:
+        codes = []
+        _strict(codes)
+    return codes
+
+
+def _parse_pdf_hk_codes(pdf_bytes):
+    """多引擎解析恒指 Factsheet PDF 成分表，返回 5 位代码列表。
+
+    依序尝试 pdfplumber / PyMuPDF / pypdf / pdfminer.six——任一引擎取到
+    >=8 个成分代码即采纳（过滤解析噪声），否则回退下一引擎；全失败返回 []。
+    各库均在使用时按需 import，缺哪个就跳过哪个，保证零硬依赖。
+    """
+    from io import BytesIO
+
+    # 1) pdfplumber（列对齐最好；x_tolerance=2 防止 iso 列被合并、丢失前导0）
+    try:
+        import pdfplumber
+        texts = []
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            for p in pdf.pages:
+                texts.append(p.extract_text(x_tolerance=2) or "")
+        codes = _extract_hk_codes_from_pdf_text(texts)
+        if len(codes) >= 8:
+            return codes
+    except Exception:
+        pass
+
+    # 2) PyMuPDF
+    try:
+        import fitz
+        texts = []
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            for pg in doc:
+                texts.append(pg.get_text() or "")
+        codes = _extract_hk_codes_from_pdf_text(texts)
+        if len(codes) >= 8:
+            return codes
+    except Exception:
+        pass
+
+    # 3) pypdf（务必优先普通 extract_text()：新版 pypdf(实测 6.16.2) 的
+    #    extraction_mode="layout" 会把代码列与 ISIN 列拆到不同行，破坏锚点解析；
+    #    普通模式返回 '3690 KYG596691041 MEITUAN' 式逐行文本，跨版本一致）。
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(BytesIO(pdf_bytes))
+        texts = []
+        for pg in reader.pages:
+            try:
+                texts.append(pg.extract_text() or "")
+            except TypeError:
+                # 极旧版 pypdf 无普通模式则回退 layout
+                texts.append(pg.extract_text(extraction_mode="layout") or "")
+        codes = _extract_hk_codes_from_pdf_text(texts)
+        if len(codes) >= 8:
+            return codes
+    except Exception:
+        pass
+
+    # 4) pdfminer.six
+    try:
+        from pdfminer.high_level import extract_text
+        text = extract_text(BytesIO(pdf_bytes))
+        codes = _extract_hk_codes_from_pdf_text([text])
+        if len(codes) >= 8:
+            return codes
+    except Exception:
+        pass
+
+    return []
+
+
+def _pdf_parse_diagnostics(pdf_bytes, sector_code):
+    """解析失败时输出 PDF 库版本 + 抽取文本片段，便于定位真实排版差异。"""
+    from io import BytesIO
+    texts, engine, ver = [], None, None
+    try:
+        import pypdf
+        from pypdf import PdfReader
+        engine, ver = "pypdf", getattr(pypdf, "__version__", "?")
+        try:
+            reader = PdfReader(BytesIO(pdf_bytes))
+            texts = [(p.extract_text() or "") for p in reader.pages]
+        except TypeError:
+            reader = PdfReader(BytesIO(pdf_bytes))
+            texts = [(p.extract_text(extraction_mode="layout") or "") for p in reader.pages]
+    except Exception:
+        engine = "pypdf(不可用)"
+    joined = "".join(texts)
+    idx = joined.find("CONSTITUENTS")
+    snippet = (joined[idx: idx + 300]) if idx >= 0 else joined[:300]
+    log.info(f"[板块成分股][诊断] {sector_code}: 解析引擎={engine} 版本={ver} 文本长度={len(joined)}")
+    log.info(f"[板块成分股][诊断] {sector_code}: 文本片段>>> {snippet!r}")
+
+
+def _read_hk_index_stocks(sector_code, abort_check=None):
+    """港股指数（HSTECH/HSIDI 等）成分股：恒生指数公司官方 Factsheet PDF。
+
+    返回 [{code, prefix:'hk', name}, ...]；下载与解析均走 _run_with_timeout
+    （限时 + 可被扫描 abort_check 中断）。sector_code 应为大写字母指数代码。
+    """
+    import requests
+
+    sheet_key = _HK_INDEX_FACT_SHEET.get(sector_code)
+
+    def _fetch_fact_sheet():
+        url = ("https://www.hsi.com.hk/static/uploads/contents/en/"
+               f"dl_centre/factsheets/{sheet_key}.pdf")
+        r = requests.get(url, headers={"User-Agent": _HK_UA}, timeout=25)
+        r.raise_for_status()
+        return r.content
+
+    # ── 第一优先级：恒生指数公司官方 Factsheet PDF（权威，覆盖全部支持指数）──
+    if sheet_key:
+        try:
+            pdf_bytes = _run_with_timeout(_fetch_fact_sheet, timeout=30, abort_check=abort_check)
+            if not pdf_bytes:
+                log.info(f"[板块成分股] 恒指官方 Factsheet 下载超时/中断: {sector_code}")
+            else:
+                codes = _parse_pdf_hk_codes(pdf_bytes)
+                stocks = _build_hk_stock_records(codes)
+                if stocks:
+                    log.info(f"[板块成分股] ✅ 恒生指数公司 Factsheet 获取 '{sector_code}' "
+                             f"共 {len(stocks)} 只港股成分股")
+                    return stocks
+                _pdf_parse_diagnostics(pdf_bytes, sector_code)
+                log.warning(f"[板块成分股] 恒指官方 Factsheet 解析无成分: {sector_code}"
+                            f"（未安装 pdfplumber/PyMuPDF/pypdf/pdfminer 任一 PDF 解析库？）")
+        except Exception as e:
+            log.warning(f"[板块成分股] 恒指官方 Factsheet 获取 {sector_code} 失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    log.warning(f"[板块成分股] 港股指数 {sector_code} 成分获取失败（官方 Factsheet 下载/解析异常）")
+    return []
+
+
+def _read_standard_index_stocks(sector_code, abort_check=None):
     """
     根据指数代码获取成分股。
 
     路由逻辑：
-    - 中证指数（000300/000905/000852/000688 等）：中证指数官网 OSS XLS（官方直连）
+    - 上证指数（000001）：综合指数 = 沪市全部A股（上交所官网直连，与 399xxx 风格一致）
+    - 中证指数（000300/000905/000852/000688 等）：中证指数官网（官方直连）
     - 深交所指数（399xxx）：深交所官网 ShowReport XLS（官方直连）
-    - 上证指数（000001）：综合指数，无成分股概念，返回空
+
+    所有网络抓取均限时（_run_with_timeout）且可中断（abort_check），避免扫描
+    因网络阻塞而卡死、中断失效。
     """
+    # ── 上证指数（000001）：综合指数 = 沪市全部A股（上交所官网直连）──
+    # 放最前：000001 与 399xxx 同风格从上交所官网取全部A股，不走通达信本地
+    # vipdoc/sh/lday 枚举（该目录还混有其它指数，不能作指数成分来源）。
+    if sector_code == "000001":
+        stocks = _read_sh_index_stocks_exchange(abort_check=abort_check)
+        log.info(f"[板块成分股] 📈 上证指数(000001) 上交所A股共 {len(stocks or [])} 只")
+        return stocks or []
+
     try:
         import akshare as ak
     except ImportError:
         log.warning("[板块成分股] AKShare 未安装，无法获取标准指数成分股")
         return []
 
-    # ── 上证指数（000001）：综合指数，无成分股 ──
-    if sector_code == "000001":
-        return []
-
     # ── 中证指数（000300/000905/000852/000688 等）→ csindex ──
     CSI_INDICES = {"000300", "000905", "000852", "000688"}
     if sector_code in CSI_INDICES:
         try:
-            df = ak.index_stock_cons_csindex(symbol=sector_code)
-            if df is None or df.empty:
+            df = _run_with_timeout(
+                lambda: ak.index_stock_cons_csindex(symbol=sector_code),
+                timeout=25, abort_check=abort_check)
+            if df is None:
+                return []
+            if df.empty:
                 log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
                 return []
             stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
@@ -2113,25 +2484,30 @@ def _read_standard_index_stocks(sector_code):
             traceback.print_exc()
             return []
 
-    # ── 深交所指数（399xxx）→ 深交所官网 XLS 直连 ──
+    # ── 深交所指数（399xxx）→ 深交所官网 XLS 直连（限时+可中断）──
     if sector_code.startswith("399"):
         try:
             import requests
             import pandas as _pd
             from io import BytesIO
+
             url = f"https://www.szse.cn/api/report/ShowReport?SHOWTYPE=xls&CATALOGID=1747_zs&ZSDM={sector_code}"
-            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
-            r.raise_for_status()
-            # 深交所返回 .xls，第一行是合并单元格标题"指数样本股"，pandas 读入时自动忽略
-            for engine in [None, "xlrd"]:
-                try:
-                    df = _pd.read_excel(BytesIO(r.content), dtype=str, engine=engine)
-                    break
-                except Exception:
-                    if engine is None:
-                        continue
-                    raise
-            if df is None or df.empty:
+
+            def _fetch():
+                r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                r.raise_for_status()
+                for engine in [None, "xlrd"]:
+                    try:
+                        return _pd.read_excel(BytesIO(r.content), dtype=str, engine=engine)
+                    except Exception:
+                        if engine is None:
+                            continue
+                        raise
+
+            df = _run_with_timeout(_fetch, timeout=25, abort_check=abort_check)
+            if df is None:
+                return []
+            if df.empty:
                 log.info(f"[板块成分股] 深交所 返回空数据: {sector_code}")
                 return []
             stocks = _parse_stocks_from_df(df, f"深交所({sector_code})")
@@ -2145,8 +2521,12 @@ def _read_standard_index_stocks(sector_code):
 
     # ── 其他指数（000xxx 非中证、932xxx 等）→ 尝试 csindex ──
     try:
-        df = ak.index_stock_cons_csindex(symbol=sector_code)
-        if df is None or df.empty:
+        df = _run_with_timeout(
+                lambda: ak.index_stock_cons_csindex(symbol=sector_code),
+                timeout=25, abort_check=abort_check)
+        if df is None:
+            return []
+        if df.empty:
             log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
             return []
         stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")

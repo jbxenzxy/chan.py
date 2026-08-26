@@ -23,7 +23,7 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 
 使用方式：
     from App.AppOrch import analyze_stock, Scanner, call_analysis
-    result = call_analysis("000001.SH", freq="d")
+    result = call_analysis("sh600519", freq="d")
 """
 # ── 各功能域 re-export ─────────────────────────────────────────────────
 from App.AppChart import (

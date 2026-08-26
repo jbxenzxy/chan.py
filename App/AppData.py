@@ -16,7 +16,7 @@ App/AppData.py — 业务数据层
 使用方式：
     from App.AppData import app_data
     app_data.cache_put("key", value)
-    app_data.get_annotations_for("000001.SH", "d")
+    app_data.get_annotations_for("sh000001", "d")
 """
 
 import collections
@@ -41,18 +41,16 @@ FREQ_TO_COL = {"y": "y", "q": "q", "m": "m", "w": "w", "d": "d",
                "60m": "60m", "30m": "30m", "15m": "15m", "5m": "5m",
                "1m": "1m", "15s": "15s"}
 
-# 自选股写盘用指数映射（通达信内部代码格式，
-# 与 Script/ths_sync_to_tdx.py 中的同名映射保持一致）
+# 指数映射，用于同花顺自选股 同步 通达信自选股
 ZXG_HK_INDEX_MAP = {
-    "HS2198": "HZ5489",  # 恒生港股通可投资指数（显示名 HSIDI）
-    "HS2083": "HZ5017",  # 恒生科技指数（显示名 HSTECH）
+    "HS2083": "HZ5017",  # HS2083 同花顺恒生科技指数  27#HZ5017 通达信恒生科技指数K线文件
+    "HS2198": "HZ5489",  # HS2198 同花顺恒生创新药指数 27#HZ5489 通达信恒生创新药K线文件
 }
 ZXG_US_INDEX_MAP = {
     "NBI": "A_NBI",
 }
-
+# 同步时，保留不覆盖
 # 标准指数在 TDX zxg.blk 中的行格式（SH=1前缀, SZ=0前缀）
-# 全量同步时保留不覆盖（原 Script/ths_sync_to_tdx.py 中同义常量，随单一写入源上收）
 TDX_STANDARD_INDICES = {"1000001", "0399001", "1000300", "1000905", "1000852", "0399006", "1000688"}
 
 
@@ -130,23 +128,40 @@ def _read_zxg_blk_file(blk_path):
 def _code_to_zxg_line(code_str):
     """标准格式代码 → zxg.blk 行（自选股写盘格式知识，全量同步/追加写入共用）。
 
-    codes 形态：如 "600519.SH"、"000001.SZ"、"2830067.BJ"、"00700.HK"、
-    "HS2198.HK"、"NBI.US"、"12#A_NBI"（Index 指数）。
-    输出各市场格式：
-      A 股：     {前缀}{6位代码}    如 1600519
+    兼容两个输入源（均为"读取"不同来源，不产生任何旧写法）：
+      · 应用层标准写法 market(小写)+code：如 sh600519 / sz000001 / hk00700 / bj430047
+      · 外部数据源点号写法：600519.SH / 000001.SZ / 00700.HK / NBI.US（同花顺云同步契约）
+
+    各市场输出（与通达信 zxg.blk 约定一致）：
+      A 股：     {前缀}{6位代码}    如 1600519（SH→1 / SZ→0 / BJ→2）
       港股个股：  31#{5位代码}       如 31#00700
       港股指数：  27#{HZ代码}       如 27#HZ5489   （ZXG_HK_INDEX_MAP 映射）
       美股个股：  74#{代码}         如 74#NBI
       美股指数：  12#A_{代码}       如 12#A_NBI    （ZXG_US_INDEX_MAP 映射）
     无法识别返回 None（调用方跳过）。
     """
-    c = code_str.strip().upper()
+    c = code_str.strip()
     if not c:
         return None
-    m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', c)
+    # ① 应用层标准/别名经唯一事实源解析（market(小写)+数字代码 / 字母速记）
+    try:
+        from App import utils as _u
+        mkt, bare = _u._get_stock_market_code(c)
+    except Exception:
+        mkt, bare = None, None
+    if mkt and bare and bare.isdigit():
+        if mkt in ("sh", "sz", "bj"):
+            return {"sh": "1", "sz": "0", "bj": "2"}[mkt] + bare
+        if mkt == "hk":
+            return "31#" + bare.zfill(5)
+        if mkt == "ds":
+            return None  # 大数据指数不入自选股
+    # ② 外部数据源点号写法（同花顺云同步契约，保留读取）
+    cU = c.upper()
+    m = re.match(r'^(\d+)\.(SH|SZ|BJ)$', cU)
     if m:
         return {"SH": "1", "SZ": "0", "BJ": "2"}[m.group(2)] + m.group(1)
-    m2 = re.match(r'^(\w+)\.(HK|US)$', c)
+    m2 = re.match(r'^(\w+)\.(HK|US)$', cU)
     if m2:
         code, market = m2.group(1), m2.group(2)
         if market == "HK":
@@ -1447,8 +1462,8 @@ class AppData:
     #    键不带复盘日期后缀（运行时态，随每次双窗重建覆盖），
     #    与 dual_sub 结构化缓存（带 date_suffix，存 result/records）职责分离。
     def stocks_sub_cache_key(self, chan_code, sub_freq):
-        """股票下窗运行时缓存键："{market}.{code}:{sub_freq}"（统一大写）"""
-        return f"{str(chan_code).upper()}:{sub_freq}"
+        """股票下窗运行时缓存键：标准 market(小写)+code，无连接符、不大写（运行时态，随双窗重建覆盖）"""
+        return f"{chan_code}:{sub_freq}"
 
     def stocks_sub_cache_get(self, chan_code, sub_freq):
         """读取股票下窗 CChan（无则返回 None；命中移到末尾=LRU 语义）"""
@@ -1486,6 +1501,8 @@ class AppData:
         港股5位代码（如00700）和A股6位代码（如000700）是不同证券，绝不互相回退。"""
         if market == "ds" and code == "932000":
             return "中证2000"
+        if market == "hk" and code.upper() in ("HSTECH", "HSIDI"):
+            return {"HSTECH": "恒生科技指数", "HSIDI": "恒生创新药指数"}[code.upper()]
         self.load_stock_names_from_cache_file()
         compound_key = market + code
         info = self._names.get(compound_key)
@@ -1729,18 +1746,13 @@ class AppData:
 
     def clear_saved_point(self, code, freq="d"):
         """清除选点并同步清理分析缓存（对应 /api/clear_saved_point）"""
-        normalized_code = code.strip().upper()
-        market = None
-        prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', normalized_code)
-        suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', normalized_code)
-        if prefix_match:
-            market = prefix_match.group(1).lower()
-            normalized_code = prefix_match.group(2)
-        elif suffix_match:
-            normalized_code = suffix_match.group(1)
-            market = suffix_match.group(2).lower()
-
-        qualified_code = f"{normalized_code}.{market.upper()}" if market else normalized_code
+        from App import utils as _u
+        market, normalized_code = _u._get_stock_market_code(code)
+        if not market:
+            # 统一解析拒掉旧写法/未知代码，不再在内部维护一套 SH/SZ 前后缀规则
+            return {"ok": False, "error": f"无法识别代码: {code}"}
+        # saved-point 内部标识与引擎一致：market(小写)+code 标准格式
+        qualified_code = market + normalized_code
         self.clear_saved_point_time(qualified_code, freq)
         cache_key = make_live_key(market, normalized_code, freq)
         with self._cache_lock:
@@ -1876,7 +1888,7 @@ class AppData:
     def get_annotated_codes(self, freq=""):
         """获取所有有标注的股票代码+周期列表，用于自选扫描
         返回 bare_code + market + name，方便前端与自选股列表交叉匹配。
-        例如 key "000001.SH_d" → {"code": "000001", "market": "SH", "name": "上证指数", "freq": "d", "count": N}
+        例如 key "sh000001_d" → {"code": "000001", "market": "sh", "name": "上证指数", "freq": "d", "count": N}
         期货 key "KQ.m@SHFE.rb_d" → {"code": "KQ.m@SHFE.rb", "market": "", "name": "", "freq": "d", "count": N}
         """
         self.load_annotations()
@@ -1892,15 +1904,15 @@ class AppData:
             if freq and key_freq != freq:
                 continue
 
-            # 解析市场后缀: 000001.SH → bare_code=000001, market=SH
-            # 期货代码（如 KQ.m@SHFE.rb）没有市场后缀，保持不变
-            market = ""
-            bare_code = code_with_suffix
-            for suffix in [".SH", ".SZ", ".HK", ".BJ", ".DS"]:
-                if code_with_suffix.upper().endswith(suffix):
-                    market = suffix[1:]  # 去掉点号
-                    bare_code = code_with_suffix[:-len(suffix)]
-                    break
+            # 解析代码：键内代码已是标准 market(小写)+code，或期货等非股票键原样
+            from App import utils as _u
+            mkt, bcode = _u._get_stock_market_code(code_with_suffix)
+            if mkt:
+                market = mkt
+                bare_code = bcode
+            else:
+                market = ""
+                bare_code = code_with_suffix  # 期货等非股票键原样保留（非点号旧写法）
 
             # 查询股票名称
             name = ""
@@ -1946,7 +1958,8 @@ class AppData:
 
     def save_to_zxg_blk(self, codes):
         """将股票代码列表追加到通达信自选股文件 zxg.blk。
-        codes: list of str，格式如 "000852.SH"、"600519.SH"、"00700.HK"、"NBI.US"
+        codes: list of str，内部标准格式 market(小写)+code：
+        如 "sh600519"、"sz000001"、"hk00700"（外部点号写法 600519.SH 仅作读取容忍）
         自动去重，已存在的不会重复添加；无法识别的代码跳过。
         格式转换单一源：本方法内部统一走 _code_to_zxg_line。
         """
@@ -1998,7 +2011,8 @@ class AppData:
           （88/188xxxx），不在目标列表的旧代码被移除——由 `codes` 全量决定。
         append=True：在现有基础上追加（保留码依然保持开头，新增码去重）。
 
-        :param codes: 标准格式代码列表 ["600519.SH","00700.HK","NBI.US",...]
+        :param codes: 内部标准格式代码列表 ["sh600519","sz000001","hk00700",...]
+                      （点号写法 600519.SH / 00700.HK 仅作外部同花顺源读取容忍）
         :param path: zxg.blk 路径，缺省取 self.zxg_blk_path；--tdx-path 覆盖时传入
         :param append: True=追加模式，False=替换模式（默认）
         :return: {"written": 实际写入行数, "preserved": 保留的行数}

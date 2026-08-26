@@ -3894,19 +3894,12 @@
             return code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code);
         }
 
-        // 归一化股票代码：将 880974.SH / SH880974 / sh880974 统一为 sh880974
+        // 归一化股票代码：标准写法唯一 = market(小写)+code(数字)，market 在前、无连接符。
+        // 不再归一化任何历史写法（大写/带点/code在前一律保持原样回传，交后端严格解析拒绝）。
+        // 全体调用方传至此处的都应是标准格式（search 结果 market+code / 固定入口 / 历史）。
         function normalizeCode(code) {
             if (!code) return "";
-            const c = code.trim();
-            // 期货/期指代码（含 KQ.m@、KQ.i@、大写.大写 格式）不做转换
-            if (c.includes('KQ.m@') || c.includes('KQ.i@') || c.includes('KQD.m@') || /^[A-Z]+\.[A-Z]+$/.test(c)) return c;
-            // 匹配 880974.SH 或 880974.sh 格式 → 转为 sh880974
-            const dotMatch = c.match(/^(\d+)\.(SH|SZ|HK|BJ|DS)$/i);
-            if (dotMatch) return dotMatch[2].toLowerCase() + dotMatch[1];
-            // 匹配 SH880974 / sz000001 格式 → 转为小写前缀
-            const prefixMatch = c.match(/^(SH|SZ|HK|BJ|DS)(\d+)$/i);
-            if (prefixMatch) return prefixMatch[1].toLowerCase() + prefixMatch[2];
-            return c;
+            return code.trim();
         }
 
         function isFixedCode(code) { return FIXED_CODES.has(normalizeCode(code)); }
@@ -3958,9 +3951,11 @@
                 document.getElementById("stock-history").classList.remove("show");
                 return;
             }
-            // 带市场前缀+完整代码（如 sh600519、sz000001、hk00700），不搜索
-            // 要求前缀后紧跟5~6位数字且为完整输入，避免 SZ5 这样的拼音缩写被误拦截
-            if (/^(sh|sz|bj|hk)\d{5,6}$/i.test(val)) {
+            // 带市场限定的完整代码（market 前或后、可带点、大小写不限）：一律不再走搜索，
+            // 直接交后端统一严格解析。标准 market(小写)+code 会被正确加载，
+            // 旧写法（带点/大写/code在前）会被严格解析拒绝并给出明确错误。
+            if (/^(sh|sz|bj|hk)[.]?\d+$/i.test(val)
+                || /^\d+[.]?(sh|sz|bj|hk)$/i.test(val)) {
                 document.getElementById("stock-history").classList.remove("show");
                 return;
             }
@@ -4890,13 +4885,9 @@
             var pageIndexLabel = document.getElementById("label-page-index");
             var pageIndexCb = document.querySelector('input[name="scan-source"][value="page_index"]');
             if (pageIndexLabel && pageIndexCb) {
-                var sym = chartData && chartData.meta && chartData.meta.symbol;
-                // 可获取成分股的指数：通达信板块(88xxxx)、深市指数(399xxx)、中证系列(932xxx)、
-                // 上海中证指数(000xxx)。注意排除深市主板股票(000xxx.SZ)的误判、上证指数(000001)。
-                var isSectorIndex = sym && (
-                    /^88\d{4}/.test(sym) || /^399\d{3}/.test(sym) || /^932\d{3}/.test(sym) ||
-                    (/^000\d{3}/.test(sym) && !/\.[Ss][Zz]$/.test(sym) && !/^000001($|[.])/.test(sym))
-                );
+                // 是否灰化只看「当前打开的是不是指数」：以后端 meta.is_index 权威字段
+                // 为准，唯一事实源。前端不做任何 code 正则推断——后端契约保证该字段必下发。
+                var isSectorIndex = !!(chartData && chartData.meta && chartData.meta.is_index);
                 if (isSectorIndex) {
                     pageIndexLabel.style.opacity = "1";
                     pageIndexLabel.style.pointerEvents = "";
@@ -7024,7 +7015,7 @@
         async function initDefault() {
             document.getElementById("loading").classList.remove("hidden");
             try {
-                const resp = await fetch("/api/stocks/" + encodeURIComponent("SH000001") + "/analyze?freq=d", { cache: "no-store" });
+                const resp = await fetch("/api/stocks/" + encodeURIComponent("sh000001") + "/analyze?freq=d", { cache: "no-store" });
                 if (!resp.ok) throw new Error("默认加载失败");
                 const data = await resp.json();
                 // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 chartData.meta.symbol 会崩溃）

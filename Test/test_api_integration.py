@@ -85,7 +85,7 @@ def test_api_futures_status_config(failures):
 
 
 def test_api_search(failures):
-    """③ 搜索：空关键词 400；有关键词 200（无缓存时 need_refresh 引导）"""
+    """③ 搜索：空关键词 400；有关键词 200（有缓存→results；无缓存→need_refresh 引导）"""
     r = client.get("/api/search", params={"q": ""})
     if r.status_code != 400:
         failures.append(f"③ 空关键词 {r.status_code} != 400")
@@ -97,11 +97,12 @@ def test_api_search(failures):
         print(f"[FAIL] ③ /api/search?q=600519 : {r2.status_code}")
         return
     data = r2.json()
-    if "need_refresh" not in data and "stocks" not in data:
-        failures.append(f"③ 响应缺少 need_refresh/stocks: {data}")
+    # search_stocks 返回两个合法形态之一：有缓存→{"results":[...]}，无缓存→{"need_refresh":...,"msg":...}
+    if "results" not in data and "need_refresh" not in data:
+        failures.append(f"③ 响应缺少 results/need_refresh: {data}")
         print(f"[FAIL] ③ /api/search?q=600519 : {data}")
         return
-    print("[PASS] ③ 搜索: 空词 400 / 有词 200（无缓存引导刷新）")
+    print("[PASS] ③ 搜索: 空词 400 / 有词 200（results 或 need_refresh 引导）")
 
 
 def test_api_scan_candidates(failures):

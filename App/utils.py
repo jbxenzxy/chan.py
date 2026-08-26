@@ -51,61 +51,54 @@ def _get_stock_name(market, code):
 
 
 def _get_stock_market_code(code):
-    """识别股票/指数代码，返回 (market, code)；无法识别返回 (None, code)。"""
-    # 通达信扩展市场指数别名：中证2000 本地K线在 ds 目录，文件名为 62#932000
+    """识别股票/指数代码，返回 (market, code)；无法识别返回 (None, code)。
+
+    写法统一契约（长痛不如短痛，数字代码只认一种标准）：
+      标准格式 = market(小写) + code(数字)，market 在前、无任何连接符。
+      例：sh600519 / sz000001 / hk00700 / ds932000 / bj430047。
+    其它一切历史写法（点号连接、code 在前、market 大写、后缀、.HK 等）一律
+      拒绝并返回 (None, 原样)——绝不静默兼容，杜绝新功能又照着旧做法写。
+    保留的非写法便利：
+      · 港股指数的「hk+指数名」：hkHSTECH → ('hk','HSTECH')
+      · 别名/简称关键词：HSI / HSTECH / 中证2000 / ZZ2000（大小写不敏感）
+      · 裸数字（无 market 限定）仍按首位自动推断默认市场
+    """
+    code = code.strip()
+
+    # ── 便捷别名与关键词（非 market+code 写法）──
     _DS_INDEX_ALIASES = {
-        "ZZ2": ("ds", "932000"),
-        "ZZ2000": ("ds", "932000"),
-        "中证2000": ("ds", "932000"),
-        "932000": ("ds", "932000"),
+        "ZZ2": ("ds", "932000"), "ZZ2000": ("ds", "932000"),
+        "中证2000": ("ds", "932000"), "932000": ("ds", "932000"),
     }
-    if code in _DS_INDEX_ALIASES:
-        return _DS_INDEX_ALIASES[code]
-
-    # 港股指数别名映射：将用户输入的指数简称映射到通达信港股数据文件实际代码
     _HK_INDEX_ALIASES = {
-        "HSTECH": ("hk", "HSTECH"),   # 恒生科技指数
-        "HSI": ("hk", "HSI"),         # 恒生指数
-        "HSCEI": ("hk", "HSCEI"),     # 恒生中国企业指数
-        "HSCCI": ("hk", "HSCCI"),     # 恒生香港中资企业指数
+        "HSTECH": ("hk", "HSTECH"), "HSI": ("hk", "HSI"),
+        "HSCEI": ("hk", "HSCEI"), "HSCCI": ("hk", "HSCCI"),
+        "HSIDI": ("hk", "HSIDI"),           # 恒生创新药指数
+        "HSKJ": ("hk", "HSTECH"),           # 恒生科技（拼音首字母）
+        "HSCXY": ("hk", "HSIDI"),           # 恒生创新药（拼音首字母）
     }
-    if code in _HK_INDEX_ALIASES:
-        return _HK_INDEX_ALIASES[code]
+    _up = code.upper()
+    if _up in _DS_INDEX_ALIASES:
+        return _DS_INDEX_ALIASES[_up]
+    if _up in _HK_INDEX_ALIASES:
+        return _HK_INDEX_ALIASES[_up]
+    # 港股指数的 hk+指数名 便捷写法
+    if code[:2].lower() == 'hk' and code[2:].isalpha():
+        return 'hk', code[2:].upper()
 
-    # 港股数字代码规范化：通达信文件统一使用5位（4位需补前导零，如 9926 -> 09926）
-    def _norm_hk(c):
-        if c.isdigit() and len(c) == 4:
-            return '0' + c
-        return c
+    # ── 唯一标准数字写法：market(小写) + code(4~6位数字)，无连接符 ──
+    m = re.match(r'^([a-z]{2})(\d{4,6})$', code)
+    if m and m.group(1) in ('sh', 'sz', 'hk', 'bj', 'ds'):
+        mkt, c = m.group(1), m.group(2)
+        if mkt == 'hk' and len(c) == 4:
+            return mkt, '0' + c   # 港股 4 位补零（通达信文件统一 5 位）
+        return mkt, c
 
-    prefix_match = re.match(r'^(SH|SZ|HK|DS)(\d+)$', code)
-    if prefix_match:
-        mkt = prefix_match.group(1).lower()
-        c = prefix_match.group(2)
-        if mkt == 'ds':
-            return mkt, c
-        return mkt, _norm_hk(c) if mkt == 'hk' else c
-    # HK前缀 + 非数字代码（如 HKHSTECH、HKHSI）
-    prefix_alpha_match = re.match(r'^HK([A-Z]+)$', code)
-    if prefix_alpha_match:
-        return 'hk', prefix_alpha_match.group(1)
-    suffix_match = re.match(r'^(\d+)\.(SH|SZ|HK|DS)$', code)
-    if suffix_match:
-        mkt = suffix_match.group(2).lower()
-        c = suffix_match.group(1)
-        if mkt == 'ds':
-            return mkt, c
-        return mkt, _norm_hk(c) if mkt == 'hk' else c
-    # .HK 后缀 + 非数字代码（如 HSTECH.HK）
-    suffix_alpha_match = re.match(r'^([A-Z]+)\.HK$', code)
-    if suffix_alpha_match:
-        return 'hk', suffix_alpha_match.group(1)
-    # 自动判断：5位纯数字优先识别为港股（如 00700）
+    # ── 裸数字默认市场推断（与写法正交：无 market 限定）──
     if len(code) == 5 and code.isdigit():
         return 'hk', code
     if len(code) == 4 and code.isdigit():
         return 'hk', '0' + code
-    # 6位代码：先检查是否是港股（在ds目录下有对应文件）
     if len(code) == 6 and code.isdigit():
         hk_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
         if os.path.exists(hk_file):
@@ -113,22 +106,13 @@ def _get_stock_market_code(code):
         ds_file = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"62#{code}.day")
         if os.path.exists(ds_file):
             return 'ds', code
-    # A股判断
-    if code.startswith('6'):
-        return 'sh', code
-    if code.startswith('5'):
-        return 'sh', code  # 5xxxxx: 沪市ETF(51/56/58/59/588)、基金(50)等
-    if code.startswith('88') or code.startswith('99'):
-        return 'sh', code  # 88xxxx: 通达信板块指数; 99xxxx: 指数
-    if code.startswith('0') or code.startswith('3'):
-        return 'sz', code
-    if code.startswith('1'):
-        return 'sz', code  # 1xxxxx: 深市ETF(15/16/18)、债券等
-    # 搜索
-    for m in ['sh', 'sz']:
-        f = os.path.join(app_config.vipdoc_dir, m, "lday", f"{m}{code}.day")
+    mkt = _infer_bare_code_market(code)
+    if mkt:
+        return mkt, code
+    for _m in ['sh', 'sz']:
+        f = os.path.join(app_config.vipdoc_dir, _m, "lday", f"{_m}{code}.day")
         if os.path.exists(f):
-            return m, code
+            return _m, code
     f = os.path.join(app_config.vipdoc_dir, "ds", "lday", f"31#{code}.day")
     if os.path.exists(f):
         return 'hk', code
@@ -136,6 +120,55 @@ def _get_stock_market_code(code):
     if os.path.exists(f):
         return 'ds', code
     return None, code
+
+
+def _infer_bare_code_market(bare_code):
+    """单一事实源：裸代码首位 → 市场（沪深同号消歧的地面规则）。
+
+    _get_stock_market_code 的 A 股判断段与 AppChart.search_stocks 的市场兜底
+    共用此函数，避免两份首位规则各自演化又互相打架（历史上「每次加功能就改坏
+    沪深重名」的根源之一）。规则覆盖 A 股与 B 股：
+
+      - hk: 4/5 位纯数字（历史港股写法，如 00700 / 9926）
+      - sh: 6xx(沪A) / 5xx(沪ETF) / 9xx(沪B) / 88xx(板块指数) / 99xx(指数)
+      - sz: 0xx(深A) / 3xx(创业板) / 1xx(深ETF) / 2xx(深B)
+    无法判定返回 None（交由上层文件探测/兜底决定）。
+    """
+    if not isinstance(bare_code, str) or not bare_code.isdigit():
+        return None
+    if len(bare_code) == 4 or len(bare_code) == 5:
+        return "hk"
+    if bare_code[:1] in ("6", "5", "9"):
+        return "sh"
+    if bare_code.startswith(("88", "99")):
+        return "sh"
+    if bare_code[:1] in ("0", "3", "1", "2"):
+        return "sz"
+    return None
+
+
+def is_index(market, code):
+    """是否为指数（单一事实源；注入 meta.is_index / 前端「成分股」置灰判定）。
+
+    与 _infer_bare_code_market / _get_stock_market_code 的指数分段保持一致：
+      - sh: 88xx 板块指数 / 99xx 指数 / 000xxx 上证·中证指数（如 sh000001 上证指数）
+      - sz: 399xxx 深市指数（sz000xxx 为深市股票，如 sz000001 平安银行，非指数）
+      - ds: 中证/扩展指数（932xxx 等）
+      - hk: hk+指数名（HSTECH/HSI/HSCEI/HSCCI 等字母代码；数字代码为个股）
+      - bj: 北交所股票，非指数
+    前端灰化「成分股」只认此结果，不再靠 code 正则自行推断。
+    """
+    if not market or not isinstance(code, str):
+        return False
+    if market == "sh":
+        return code.startswith(("88", "99")) or code.startswith("000")
+    if market == "sz":
+        return code.startswith("399")
+    if market == "ds":
+        return True
+    if market == "hk":
+        return not code.isdigit()  # hk 字母代码=指数名
+    return False
 
 
 def _get_market_code(code):
@@ -147,9 +180,9 @@ def _get_market_code(code):
         from DataAPI.TqSdkAPI import _get_futures_code
     except ImportError:
         _get_futures_code = None
-    code = code.strip().upper()
+    code = code.strip()
     if _get_futures_code:
-        futures_code = _get_futures_code(code)
+        futures_code = _get_futures_code(code.upper())
         if futures_code:
             return 'futures', futures_code
     return _get_stock_market_code(code)

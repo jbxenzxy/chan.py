@@ -102,7 +102,7 @@ if _HAVE_PYDANTIC_SETTINGS:
             extra="ignore",
         )
 
-        symbol_code: str = "SH000001"       # 默认分析代码（V10 7.2：归 ChanConfig 管）
+        symbol_code: str = "sh000001"       # 默认分析代码（V10 7.2：归 ChanConfig 管；标准格式 market(小写)+code）
         bi_algo: Optional[str] = None
         bi_strict: Optional[bool] = None
         bi_fx_check: Optional[str] = None
@@ -163,7 +163,7 @@ else:
                         setattr(self, conf_key, raw)
                 except (TypeError, ValueError):
                     print(f"[ChanConfig] 环境变量 {env_key}={raw!r} 解析失败，忽略")
-            self.symbol_code = merged.get("SYMBOL_CODE", "").strip() or "SH000001"
+            self.symbol_code = merged.get("SYMBOL_CODE", "").strip() or "sh000001"
 
 
 @lru_cache(maxsize=1)
