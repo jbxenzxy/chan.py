@@ -61,6 +61,7 @@ from App.AppRefresh import (
     load_pe_ttm_cache, get_pe_ttm, get_index_belong,
     refresh_status, refresh_stock_names_async,
 )
+from App.AppAMO import call_amo
 
 
 
@@ -109,6 +110,7 @@ LOCK_POLICY = {
     "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
     "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
+    "call_amo":                     ("SERIAL", "市场量能：读 TDX 本地指数日线成交额（sh000001+sz399106），不触引擎共享缓存；持 _ENGINE_LOCK 与引擎调用/下载写盘串行"),
 }
 
 
@@ -168,6 +170,8 @@ __all__ = [
     "load_float_mc_cache", "fetch_float_mc_from_tencent",
     "update_float_mc_cache", "load_pe_ttm_cache", "get_pe_ttm",
     "get_index_belong", "refresh_status", "refresh_stock_names_async",
+    # 市场量能（AppAMO）
+    "call_amo",
     # 标注（AppChart）
     "get_annotations", "handle_annotation_action",
 ]

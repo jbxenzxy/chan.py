@@ -56,8 +56,14 @@
                 <button class="btn" id="btn-seg" onclick="toggleOverlay('seg')">线段</button>
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
                 <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
+            <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能（仅上证指数日K可用）">市场量能</button>
+            <!--
+                盘后数据下载按钮：当前暂不可用（临时置灰）。
+                禁止删除本按钮或相关代码（toggleDownloadPanel / 下载面板 / eltdx 逻辑），
+                后续需要时仅需移除本行 disabled 属性即可恢复。功能本身保留完好。
+            -->
+            <button class="btn" id="btn-download" onclick="toggleDownloadPanel()" title="盘后数据下载（暂不可用）" disabled>盘后下载</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
-            <button class="btn" id="btn-download" onclick="toggleDownloadPanel()" title="盘后数据下载">盘后下载</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
             <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、PE-TTM和指数归属" onclick="refreshStockNames()">
                 <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4C7.58 4 4.01 7.58 4.01 12S7.58 20 12 20c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"></path></svg>
@@ -98,6 +104,22 @@
         </div>
         <div class="scan-body" id="scan-body">
             <div class="scan-empty">点击上方"股票扫描"按钮开始</div>
+        </div>
+    </div>
+    <!-- 市场量能面板 -->
+    <div class="amo-panel" id="amo-panel">
+        <div class="amo-header">
+            <span class="amo-title">市场量能（沪市+深市成交额）</span>
+            <span class="amo-close" onclick="closeAmoPanel()" title="关闭面板">×</span>
+        </div>
+        <div class="amo-body">
+            <canvas id="amo-chart" width="600" height="220"></canvas>
+            <div class="amo-stats" id="amo-stats">
+                <div class="amo-stat"><span class="amo-label">峰值成交额</span><span class="amo-value" id="amo-peak">--</span></div>
+                <div class="amo-stat"><span class="amo-label">当前成交额</span><span class="amo-value" id="amo-current">--</span></div>
+                <div class="amo-stat"><span class="amo-label" title="当前成交额缩至峰值的百分比（成交额/峰值，越低越接近地量）">缩至峰值</span><span class="amo-value" id="amo-shrink">--</span></div>
+            </div>
+            <div class="amo-empty" id="amo-empty" style="display:none;">当前视口区间无成交额数据</div>
         </div>
     </div>
     <!-- 盘后数据下载面板 -->

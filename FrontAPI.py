@@ -417,6 +417,32 @@ async def api_stocks_scan_cancel_task(task_id: str = Path(...)):
     return _json_response(result)
 
 
+# ── 路由 — 市场量能 ──────────────────────────────────────────────────
+
+@router.get("/api/amo/read")
+async def api_amo_read(
+    start_date: str = Query(...),
+    end_date: str = Query(...),
+):
+    """获取市场量能数据（orch.call_amo · SERIAL 持锁）
+
+    数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），
+    无任何兜底；start_date/end_date 为 K 线页面「视口」左右边界日期。
+    """
+    if not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="参数错误: start_date/end_date 不能为空")
+    try:
+        result = await run_in_threadpool(orch.call_amo, start_date, end_date)
+    except AppError:
+        raise  # 领域异常：交给统一异常处理器
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"服务器内部错误: {exc}")
+    if "error" in result:
+        return _json_response(result, 400)
+    return _json_response(result)
+
+
 # ── 路由 — 自选股保存 ─────────────────────────────────────────────────
 
 @router.post("/api/stocks/scan/save/zxg")

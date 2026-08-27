@@ -1,6 +1,7 @@
 [
  "DELETE /api/futures/{symbol}/delete/point",
  "DELETE /api/stocks/{code}/delete/point",
+ "GET /api/amo/read",
  "GET /api/futures/read/config",
  "GET /api/futures/read/status",
  "GET /api/futures/read/stream",

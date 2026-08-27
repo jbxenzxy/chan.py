@@ -3414,6 +3414,8 @@
             const highlightFreq = (isDualWindow && activeDualWindow === 'sub') ? dualSubFreq : currentFreq;
             const activeBtn = document.getElementById('btn-' + highlightFreq);
             if (activeBtn) activeBtn.classList.add('active');
+            // 市场量能按钮可用性（仅上证指数日K）
+            updateAmoButtonState();
         }
 
         window.switchFreq = function(freq) {
@@ -6033,6 +6035,236 @@
         renderScanResults, renderFxDScanResults, renderMaScanResults,
         saveScanToZxg, closeScanPanel, toggleScanMinimize, loadScanResult,
         refreshStockNames, updateScanSaveBtn, scanSourceSelectAll, scanSourceSelectNone
+        };
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] AmoPanel —— 市场量能面板（右上角「市场量能」按钮）
+        // 数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），无兜底
+        // 仅上证指数(sh000001)日K图可用，其它周期/标的按钮灰化
+// ══════════════════════════════════════════════════════════════════
+
+        function amoIsAvailable() {
+            return !!(chartData && chartData.meta
+                && chartData.meta.symbol === 'sh000001'
+                && currentFreq === 'd');
+        }
+
+        function updateAmoButtonState() {
+            var btn = document.getElementById("btn-amo");
+            if (!btn) return;
+            var available = amoIsAvailable();
+            btn.disabled = !available;
+            btn.title = available ? "市场量能" : "市场量能（仅上证指数日K可用）";
+            // 面板打开时若变为不可用（切股票/切周期）→ 关闭面板释放数据
+            if (!available) {
+                var panel = document.getElementById("amo-panel");
+                if (panel && panel.classList.contains("show")) {
+                    closeAmoPanel();
+                }
+            }
+        }
+
+        window.toggleAmoPanel = function() {
+            if (!amoIsAvailable()) return;
+            var panel = document.getElementById("amo-panel");
+            if (panel.classList.contains("show")) {
+                closeAmoPanel();
+            } else {
+                panel.classList.add("show");
+                loadAmoData();
+            }
+        };
+
+        window.closeAmoPanel = function() {
+            var panel = document.getElementById("amo-panel");
+            if (panel) panel.classList.remove("show");
+            // 关闭面板即释放数据（无持久化）
+        };
+
+        // 打开面板后点击面板之外区域 → 自动关闭面板并释放数据
+        document.addEventListener("mousedown", function(e) {
+            var panel = document.getElementById("amo-panel");
+            if (!panel || !panel.classList.contains("show")) return;
+            // 点击面板内部 或「市场量能」按钮本身（避免与按钮 toggle 抢）→ 不关闭
+            if (panel.contains(e.target)) return;
+            var btn = document.getElementById("btn-amo");
+            if (btn && btn.contains(e.target)) return;
+            closeAmoPanel();
+        });
+
+        function getViewportDateRange() {
+            // 与 K 线可见视口「严格对齐」的日期区间：取最左/最右「落在画布内」的 K 线日期。
+            // 不能直接用 getVisibleKlines() 的首/末元素——其末尾多取 viewCount+2 根
+            // overscan，会把「视口右缘之外、屏幕上看不到」的 K 线也算进来，导致面板
+            // 右边界比 K 线偏晚（如 K 线 1.13 而面板 1.15）。故右缘用 viewOffset+viewCount-1。
+            if (!chartData || !chartData.klines || !chartData.klines.length) return null;
+            var kl = chartData.klines;
+            var start = Math.max(0, Math.floor(viewOffset));
+            var end = Math.max(start, Math.min(kl.length - 1, Math.floor(viewOffset + viewCount) - 1));
+            if (end < start) return null;
+            return {
+                startDate: kl[start].date.slice(0, 10),
+                endDate: kl[end].date.slice(0, 10),
+            };
+        }
+
+        function loadAmoData() {
+            var range = getViewportDateRange();
+            if (!range) return;
+            // 视口左右边界日期（K线页面「视口」最左/最右可见 K 线）
+            var startDate = range.startDate;
+            var endDate = range.endDate;
+            fetch("/api/amo/read?start_date=" + encodeURIComponent(startDate)
+                + "&end_date=" + encodeURIComponent(endDate))
+                .then(function(resp) {
+                    if (!resp.ok) return resp.json().then(function(e) { throw new Error(e.detail || e.error || "查询失败"); });
+                    return resp.json();
+                })
+                .then(function(data) {
+                    renderAmoChart(data);
+                })
+                .catch(function(err) {
+                    var empty = document.getElementById("amo-empty");
+                    var canvas = document.getElementById("amo-chart");
+                    if (empty) { empty.style.display = "block"; empty.textContent = "加载失败: " + err.message; }
+                    if (canvas) { var ctx = canvas.getContext("2d"); ctx.clearRect(0, 0, canvas.width, canvas.height); }
+                });
+        }
+
+        function fmtAmt(amtYi) {
+            // 零售额/峰值金额友好显示：amtYi 单位为「亿元」。
+            // >=10000亿（即1万亿）按「万亿」显示，否则按「亿」显示。
+            if (amtYi == null) return "--";
+            var a = Number(amtYi);
+            if (Math.abs(a) >= 10000) return (a / 10000).toFixed(2) + " 万亿";
+            return a + " 亿";
+        }
+
+        function fmtAxisDate(d) {
+            // 全站日期契约 %Y/%m/%d；横轴仅展示 YY/MM/DD，标签更紧凑不至于裁切
+            return d && d.length >= 10 ? d.slice(2) : d;
+        }
+
+        function renderAmoChart(data) {
+            var canvas = document.getElementById("amo-chart");
+            var empty = document.getElementById("amo-empty");
+            if (!canvas) return;
+            var ctx = canvas.getContext("2d");
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            var dates = data.dates || [];
+            var amounts = data.amounts || [];
+            var stats = data.stats || {};
+
+            // 统计栏
+            document.getElementById("amo-current").textContent = fmtAmt(stats.current);
+            document.getElementById("amo-peak").textContent = fmtAmt(stats.peak);
+            var shrinkEl = document.getElementById("amo-shrink");
+            // 缩至峰值占比 = 当前成交额 / 峰值成交额 ×100，口径同市场量能文章
+            // （"成交额缩至峰值的百分之几"，例子 3.45万亿→0.97万亿=28%）。
+            // 越低越接近地量底部：按文章规律，"回落至约50%及以下"进入接近阈值区(高亮)。
+            if (stats.peak_ratio != null) {
+                shrinkEl.textContent = stats.peak_ratio + "%";
+                shrinkEl.classList.add("shrink");
+                shrinkEl.classList.toggle("warn", stats.peak_ratio <= 50);
+            } else {
+                shrinkEl.textContent = "--";
+                shrinkEl.classList.remove("shrink", "warn");
+            }
+
+            if (!dates.length) {
+                if (empty) { empty.style.display = "block"; empty.textContent = "当前视口区间无成交额数据"; }
+                return;
+            }
+            if (empty) empty.style.display = "none";
+
+            var W = canvas.width, H = canvas.height;
+            var padL = 8, padR = 8, padT = 12, padB = 24;
+            var plotW = W - padL - padR;
+            var plotH = H - padT - padB;
+            var maxA = Math.max.apply(null, amounts);
+            var minA = Math.min.apply(null, amounts);
+            if (maxA === minA) maxA = minA + 1;
+            var range = maxA - minA;
+            var padRange = range * 0.1;
+            var yMax = maxA + padRange;
+            var yMin = Math.max(0, minA - padRange);
+            var yRange = (yMax - yMin) || 1;
+
+            function x(i) { return padL + (dates.length === 1 ? plotW / 2 : (i / (dates.length - 1)) * plotW); }
+            function y(v) { return padT + (1 - (v - yMin) / yRange) * plotH; }
+
+            // 网格线
+            ctx.strokeStyle = "rgba(15,52,96,0.4)";
+            ctx.lineWidth = 1;
+            for (var g = 0; g <= 4; g++) {
+                var gy = padT + (g / 4) * plotH;
+                ctx.beginPath();
+                ctx.moveTo(padL, gy);
+                ctx.lineTo(W - padR, gy);
+                ctx.stroke();
+            }
+
+            // 面积填充
+            ctx.beginPath();
+            ctx.moveTo(x(0), y(amounts[0]));
+            for (var i = 1; i < amounts.length; i++) ctx.lineTo(x(i), y(amounts[i]));
+            ctx.lineTo(x(amounts.length - 1), padT + plotH);
+            ctx.lineTo(x(0), padT + plotH);
+            ctx.closePath();
+            var grad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+            grad.addColorStop(0, "rgba(233,69,96,0.35)");
+            grad.addColorStop(1, "rgba(233,69,96,0.02)");
+            ctx.fillStyle = grad;
+            ctx.fill();
+
+            // 曲线
+            ctx.beginPath();
+            ctx.moveTo(x(0), y(amounts[0]));
+            for (var j = 1; j < amounts.length; j++) ctx.lineTo(x(j), y(amounts[j]));
+            ctx.strokeStyle = "#e94560";
+            ctx.lineWidth = 1.6;
+            ctx.stroke();
+
+            // 峰值点标记（金色圆点 + 数值）
+            var peakIdx = 0;
+            for (var p = 1; p < amounts.length; p++) if (amounts[p] > amounts[peakIdx]) peakIdx = p;
+            ctx.beginPath();
+            ctx.arc(x(peakIdx), y(amounts[peakIdx]), 3.5, 0, Math.PI * 2);
+            ctx.fillStyle = "#ffd700";
+            ctx.fill();
+            ctx.strokeStyle = "#fff";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = "#ffd700";
+            // 与统计栏「峰值成交额」数值（.amo-value 13px）同字号
+            ctx.font = "12px sans-serif";
+            ctx.fillText("峰值 " + fmtAmt(amounts[peakIdx]), x(peakIdx) + 6, y(amounts[peakIdx]) - 6);
+
+            // 当前点标记（最右，青色圆点）
+            var lastIdx = amounts.length - 1;
+            ctx.beginPath();
+            ctx.arc(x(lastIdx), y(amounts[lastIdx]), 3, 0, Math.PI * 2);
+            ctx.fillStyle = "#64ffda";
+            ctx.fill();
+
+            // 日期轴（首/中/尾）：YY/MM/DD 紧凑格式；首左对齐、尾右对齐避免被画布裁掉
+            ctx.fillStyle = "#8892b0";
+            // 日期轴：比峰值文字再小一号 → 12px（原 10px 放大一号）
+            ctx.font = "12px sans-serif";
+            var midIdx = Math.floor((dates.length - 1) / 2);
+            ctx.textAlign = "left";
+            ctx.fillText(fmtAxisDate(dates[0]), padL, H - 8);
+            ctx.textAlign = "center";
+            ctx.fillText(fmtAxisDate(dates[midIdx]), x(midIdx), H - 8);
+            ctx.textAlign = "right";
+            ctx.fillText(fmtAxisDate(dates[lastIdx]), W - padR, H - 8);
+            ctx.textAlign = "left";
+        }
+
+        // 注册组件对外接口
+        ChanApp.components.AmoPanel = {
+            toggleAmoPanel, closeAmoPanel, updateAmoButtonState
         };
 
 // ══════════════════════════════════════════════════════════════════

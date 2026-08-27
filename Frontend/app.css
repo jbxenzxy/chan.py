@@ -378,6 +378,47 @@
         .scan-no-result {
             text-align: center; color: #555; padding: 30px 0; font-size: 12px;
         }
+        /* 市场量能面板 */
+        .amo-panel {
+            position: fixed; bottom: 40px; right: 10px;
+            width: 440px; max-height: calc(100vh - 120px);
+            background: rgba(22, 33, 62, 0.97);
+            border: 1px solid #0f3460; border-radius: 8px;
+            z-index: 200; display: none;
+            flex-direction: column; overflow: hidden;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+        }
+        .amo-panel.show { display: flex; }
+        .amo-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 14px; border-bottom: 1px solid #0f3460;
+            background: rgba(15, 52, 96, 0.3);
+        }
+        .amo-title { font-size: 13px; font-weight: 600; color: #e94560; }
+        .amo-close {
+            font-size: 18px; color: #8892b0; cursor: pointer;
+            padding: 0 4px; line-height: 1;
+        }
+        .amo-close:hover { color: #e94560; }
+        .amo-body {
+            flex: 1; overflow-y: auto; padding: 10px 14px;
+            font-size: 12px;
+        }
+        .amo-chart-wrap { position: relative; }
+        #amo-chart { width: 100%; height: 220px; display: block; }
+        .amo-stats {
+            display: flex; justify-content: space-between;
+            margin-top: 8px; padding-top: 8px;
+            border-top: 1px solid #0f3460;
+        }
+        .amo-stat { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+        .amo-label { color: #8892b0; font-size: 11px; }
+        .amo-value { color: #a8b2d1; font-weight: 600; font-size: 13px; }
+        .amo-value.shrink { color: #64ffda; }
+        .amo-value.shrink.warn { color: #e94560; }
+        .amo-empty {
+            text-align: center; color: #555; padding: 40px 0;
+        }
         /* 盘后数据下载面板 */
         .download-panel-overlay {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
@@ -386,7 +427,7 @@
         .download-panel-overlay.show { display: block; }
         .download-panel {
             position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            width: 440px; max-height: 80vh; background: #1a1a2e; border: 1px solid #0f3460;
+            width: 440px; max-height: 80vh; background: rgba(22, 33, 62, 0.97); border: 1px solid #0f3460;
             border-radius: 8px; z-index: 2001; display: none; flex-direction: column;
             box-shadow: 0 8px 32px rgba(0,0,0,0.6);
         }
