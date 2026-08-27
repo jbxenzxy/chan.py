@@ -2775,13 +2775,56 @@
                 canvas = mainCanvas; ctx = mainCtx;
                 container.appendChild(canvas);
                 resizeCanvas();
-                // 期货：关闭双窗口后重连单SSE
+                // 期货：关闭双窗口后重连单SSE（后端单窗流从CSV恢复保存的选点）
                 if (isFuturesClose) {
                     disconnectRealtime();
                     connectRealtimeInit(chartData.meta.symbol, currentFreq);
-                } else {
-                    render();
+                    return;
                 }
+                // 股票：重新加载单窗口数据。双窗口请求(dual=1)按设计不加载CSV保存的
+                // 选点，且双窗上窗选点时间会残留在 chartData.meta.saved_selection_date。
+                // 这里重新请求不带 dual 的单窗口冷启动数据，让后端从 CSV 恢复选点
+                // （AppEngine 585-590），并借 adjustViewForSavedPoint() 丢弃双窗残留、
+                // 按恢复的选点全量显示。
+                const code = chartData.meta.symbol;
+                const freq = currentFreq;
+                document.getElementById("loading").classList.remove("hidden");
+                document.querySelector(".loading-text").textContent = "正在恢复单窗口数据...";
+                fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq, { cache: "no-store" })
+                    .then(resp => {
+                        if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
+                        return resp.json();
+                    })
+                    .then(data => {
+                        if (!data || !data.meta) {
+                            throw new Error(data && data.error ? data.error : "API 返回数据缺少 meta 字段");
+                        }
+                        chartData = data;
+                        document.getElementById("stock-name").textContent = chartData.meta.name;
+                        document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                        document.title = "缠论分析 - " + chartData.meta.name;
+                        viewCount = VIEW_COUNT;
+                        adjustViewForSavedPoint();
+                        viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                        if (chartData.klines.length < viewCount) viewOffset = 0;
+                        const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                        document.getElementById("goto-date-input").value = lastDate;
+                        document.getElementById("loading").classList.add("hidden");
+                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                        updateFreqButtonStates(false);
+                        updateRestartBtn();
+                        updateDualBtn();
+                        render();
+                        generateStats();
+                        loadAnnotations();
+                        saveLastState();
+                    })
+                    .catch(err => {
+                        document.getElementById("loading").classList.add("hidden");
+                        document.querySelector(".loading-text").textContent = "正在加载K线数据...";
+                        console.error("恢复单窗口数据失败:", err);
+                        render();
+                    });
             } else {
                 // 开启双窗口
                 const subFreq = getDualSubFreq(currentFreq);
