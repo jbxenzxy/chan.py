@@ -121,8 +121,18 @@ class CAkshare(CCommonStockApi):
 
     @classmethod
     def do_init(cls):
-        """初始化 (akshare不需要登录)"""
-        pass
+        """初始化 (akshare 不需要登录)；同时校验所需接口，接口变更即报错（快速失败）。"""
+        _required = {
+            "stock_zh_a_hist": "A股历史行情",
+            "stock_zh_index_daily": "指数历史行情",
+        }
+        _missing = [f"ak.{k}（{v}）" for k, v in _required.items() if not hasattr(ak, k)]
+        if _missing:
+            raise RuntimeError(
+                "[akshare 接口不兼容] 缺少所需接口: " + ", ".join(_missing)
+                + "。当前 akshare 版本接口已变更，请锁定/升级适配版本："
+                + "pip install -U 'akshare'；若仍报错请反馈所装版本，或联系作者同步适配。"
+            )
 
     @classmethod
     def do_close(cls):

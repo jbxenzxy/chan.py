@@ -714,6 +714,27 @@ _xdxr_lock = _threading.Lock()
 #     连接失败时 eltdx 内部仍会按 hosts 顺序重连），从根上消除该警告。
 _eltdx_client = None
 _eltdx_client_ready = False
+# 检测到 eltdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
+_eltdx_api_mismatch = None
+
+
+def _check_eltdx_api_compat(client):
+    """校验当前 eltdx 是否具备 chan.py 所需的 corporate.capital_changes 接口。
+
+    若旧版 eltdx（缺少 capital_changes）仍在运行，直接抛 RuntimeError（附升级指引），
+    让用户及时得知接口失效，而不是静默回退到 mootdx / pytdx。
+    """
+    global _eltdx_api_mismatch
+    corporate = getattr(client, "corporate", None)
+    if corporate is None or not hasattr(corporate, "capital_changes"):
+        _eltdx_api_mismatch = (
+            "[eltdx 接口不兼容] 前复权所需的 client.corporate.capital_changes 不存在："
+            "当前 eltdx 版本过旧，请升级：pip install -U 'eltdx>=3.0.0'。"
+            "升级前除权除息数据已回退由 mootdx / pytdx 获取。"
+        )
+        raise RuntimeError(_eltdx_api_mismatch)
+    return client
+
 
 def _ensure_eltdx_client():
     """确保 eltdx TdxClient 单例已创建，返回 client 或 None。线程安全。"""
@@ -736,35 +757,38 @@ def _ensure_eltdx_client():
 def _get_xdxr_eltdx(market, code):
     """通过 eltdx 获取除权除息数据。在锁内调用。
     返回与 _normalize_xdxr_df 兼容的 DataFrame，失败返回 None。
-    eltdx 的 XdxrRecord 字段：code, date, category, fenhong, peigujia, songzhuangu, peigu
-    与 mootdx 返回的字段完全等价（同为 7709 协议 0x000f 命令）。
+    使用 client.corporate.capital_changes(code)，其中 0x000f 标签 1 即除权除息事件。字段映射：
+      CapitalChangeRecord.c1_value=分红(每10股) · c2_value=配股价 ·
+      c3_value=送转(每10股) · c4_value=配股数量(每10股)，与 mootdx 返回等价。
     """
     try:
         client = _ensure_eltdx_client()
         if client is None:
             return None
+        _check_eltdx_api_compat(client)   # 接口失效即抛错，避免静默降级
         market_code = f"{market.lower()}{code}"
         with client:
-            records = client.get_xdxr(market_code)
-        if not records:
-            return None
-        # 将 XdxrRecord 列表转为 DataFrame，再走统一的 _normalize_xdxr_df 标准化
+            block = client.corporate.capital_changes(market_code)
+        records = getattr(block, "records", ()) or ()
         rows = []
         for r in records:
-            # XdxrRecord.date 是 datetime.date 类型，需转为 datetime.datetime
-            d = r.date
+            # 仅保留除权除息（标签 1）事件
+            if int(getattr(r, "category_raw", 0)) != 1:
+                continue
+            d = getattr(r, "date", None)
             if d is not None and not isinstance(d, datetime):
                 d = datetime(d.year, d.month, d.day)
             rows.append({
-                'code': r.code,
+                'code': getattr(r, 'code', code),
                 'date': d,
-                'category': r.category,
-                'fenhong': float(r.fenhong),
-                'peigujia': float(r.peigujia),
-                'songzhuangu': float(r.songzhuangu),
-                'peigu': float(r.peigu),
+                'category': int(getattr(r, 'category_raw', 1)),
+                'fenhong': float(getattr(r, 'c1_value', 0) or 0),
+                'peigujia': float(getattr(r, 'c2_value', 0) or 0),
+                'songzhuangu': float(getattr(r, 'c3_value', 0) or 0),
+                'peigu': float(getattr(r, 'c4_value', 0) or 0),
             })
-        df = pd.DataFrame(rows)
+        df = pd.DataFrame(rows, columns=['code', 'date', 'category',
+                                         'fenhong', 'peigujia', 'songzhuangu', 'peigu'])
         if len(df) == 0:
             return None
         return _normalize_xdxr_df(df)
@@ -774,6 +798,26 @@ def _get_xdxr_eltdx(market, code):
 # mootdx Quotes 单例连接（建一次，所有股票复用）
 _mootdx_client = None
 _mootdx_client_ready = False
+# 检测到 mootdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
+_mootdx_api_mismatch = None
+
+
+def _check_mootdx_api_compat(client):
+    """校验当前 mootdx 是否具备 chan.py 所需的 xdxr 接口。
+
+    若 installed mootdx 的接口已变更（缺少 quotes.xdxr），直接抛 RuntimeError
+    （附升级指引），让用户及时得知接口失效，而不是静默回退到 pytdx。
+    """
+    global _mootdx_api_mismatch
+    if not hasattr(client, "xdxr"):
+        _mootdx_api_mismatch = (
+            "[mootdx 接口不兼容] 前复权所需的 Quotes.xdxr 接口不存在："
+            "当前 mootdx 版本接口已变更。请锁定/升级适配版本：pip install -U 'mootdx'，"
+            "若仍报错请反馈所装版本。升级前除权除息数据已回退由 pytdx 获取。"
+        )
+        raise RuntimeError(_mootdx_api_mismatch)
+    return client
+
 
 def _ensure_mootdx_client():
     """确保 mootdx Quotes 客户端已连接，返回 client 或 None。线程安全。"""
@@ -798,6 +842,7 @@ def _get_xdxr_mootdx(market, code):
     client = _ensure_mootdx_client()
     if client is None:
         return None
+    _check_mootdx_api_compat(client)   # 接口失效即抛错，避免静默降级
     try:
         df = client.xdxr(symbol=code)
         if df is not None and len(df) > 0:
@@ -811,6 +856,27 @@ def _get_xdxr_mootdx(market, code):
 # pytdx TdxHq_API 单例连接（建一次，所有股票复用）
 _pytdx_api = None
 _pytdx_api_ready = False
+# 检测到 pytdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
+_pytdx_api_mismatch = None
+
+
+def _check_pytdx_api_compat(api):
+    """校验当前 pytdx 是否具备 chan.py 所需的接口。
+
+    若 installed pytdx 的接口已变更（缺少 get_xdxr_info / connect），直接抛
+    RuntimeError（附升级指引），让用户及时得知接口失效，而不是静默返回空。
+    """
+    global _pytdx_api_mismatch
+    missing = [m for m in ("get_xdxr_info", "connect") if not hasattr(api, m)]
+    if missing:
+        _pytdx_api_mismatch = (
+            "[pytdx 接口不兼容] 前复权所需接口缺失: " + ", ".join(missing)
+            + "。当前 pytdx 版本接口已变更，请锁定/升级适配版本：pip install -U 'pytdx'，"
+            "若仍报错请反馈所装版本。升级前除权除息数据将无法从 pytdx 获取。"
+        )
+        raise RuntimeError(_pytdx_api_mismatch)
+    return api
+
 
 def _ensure_pytdx_api():
     """确保 pytdx TdxHq_API 已连接，返回 api 或 None。线程安全。"""
@@ -869,6 +935,7 @@ def _get_xdxr_pytdx(market, code):
     api = _ensure_pytdx_api()
     if api is None:
         return None
+    _check_pytdx_api_compat(api)   # 接口失效即抛错，避免静默降级
     mkt = 1 if market.lower() == 'sh' else 0
     try:
         data = api.get_xdxr_info(mkt, code)
@@ -929,6 +996,18 @@ def get_xdxr_data(market, code):
         ):
             try:
                 df = _src_fn(market, code)
+            except RuntimeError as _e:
+                # 任一数据源接口不兼容：显著上报一次，随后正常回退其余数据源
+                _mismatch = {
+                    "eltdx": _eltdx_api_mismatch,
+                    "mootdx": _mootdx_api_mismatch,
+                    "pytdx": _pytdx_api_mismatch,
+                }.get(_src_name)
+                if _mismatch:
+                    log.error("%s", _mismatch)
+                else:
+                    log.error("[xdxr] %s: %s", _src_name, _e)
+                df = None
             except Exception:
                 df = None
             if df is not None and len(df) > 0:

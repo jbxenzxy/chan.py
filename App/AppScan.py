@@ -340,8 +340,14 @@ class Scanner:
                         log.info(f"[流通市值] 腾讯接口 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
                 else:
                     log.info("[流通市值] 腾讯接口未返回数据，使用本地缓存")
+                    if app_data.float_mc_cache_stale():
+                        log.warning("[流通市值] 警告：腾讯接口未返回数据，且本地缓存已过期，"
+                                    "本次流通市值判定可能使用旧数据，建议稍后重新刷新。")
             except Exception as e:
                 log.info(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
+                if app_data.float_mc_cache_stale():
+                    log.warning("[流通市值] 警告：腾讯接口异常，且本地缓存已过期，"
+                                "本次流通市值判定可能使用旧数据，建议稍后重新刷新。")
 
         # 后端预过滤
         pre_filtered = merged

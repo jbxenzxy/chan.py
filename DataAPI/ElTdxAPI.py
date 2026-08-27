@@ -39,6 +39,29 @@ except ImportError:
     TdxClient = None
     log.warning("[警告] eltdx 未安装，盘后下载功能不可用。pip install eltdx")
 
+# 盘后下载所依赖的 eltdx 模块化接口版本下限
+_ELTDX_REQUIRED_PYPI = "eltdx>=3.0.0"
+
+
+def verify_eltdx_api(client):
+    """下载前校验当前 eltdx 是否具备所需的模块化接口。
+
+    缺失即抛 RuntimeError（附升级指引），让用户及时得知接口失效，而非静默降级。
+    client 需为 eltdx.TdxClient 实例。
+    """
+    missing = []
+    if not hasattr(client, "codes") or not hasattr(client.codes, "all_a_shares"):
+        missing.append("client.codes.all_a_shares()")
+    if not hasattr(client, "bars") or not hasattr(client.bars, "get"):
+        missing.append("client.bars.get()")
+    if not missing:
+        return
+    raise RuntimeError(
+        "[eltdx 接口不兼容] 盘后下载所需接口缺失: "
+        + ", ".join(missing)
+        + f"。当前为旧版 eltdx，请升级：pip install -U '{_ELTDX_REQUIRED_PYPI}'。"
+    )
+
 # 下载状态管理（单一事实源）
 _download_state = {
     "running": False,
@@ -185,7 +208,7 @@ def _download_day_kline(client, code, market, vipdoc_dir, code_prefix=None, star
                     pass
 
             try:
-                series = client.bars.all(full_code, period="day", max_pages=1)
+                series = client.bars.get(full_code, period="day", all_pages=True, max_pages=1)
             except Exception as _e:
                 log.warning(f"[下载警告] {full_code} 日线拉取失败: {_e}")
                 return 0, 0, None
@@ -329,7 +352,7 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
                     pass
 
             try:
-                series = client.bars.all(full_code, period=period, max_pages=1)
+                series = client.bars.get(full_code, period=period, all_pages=True, max_pages=1)
             except Exception as _e:
                 log.warning(f"[下载警告] {full_code} {period} 拉取失败: {_e}")
                 return 0, 0, None
@@ -468,11 +491,13 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
         # RuntimeWarning，与扫描侧 eltdx 单例修复同根因；连接失败时
         # eltdx 内部仍会按 hosts 顺序重连，非必需）
         with TdxClient(timeout=10, probe_hosts=False) as client:
+            # 接口失效即报错（旧版 eltdx），让用户及时升级而非静默失败
+            verify_eltdx_api(client)
             with _download_lock:
                 _download_state["current_category"] = "获取A股代码列表"
 
             # 使用 eltdx 内置的 A 股过滤（基于服务端返回的 category 字段）
-            a_share_codes = client.get_a_share_codes_all()
+            a_share_codes = client.codes.all_a_shares()
             log.info(f"[下载] 从服务器获取到 {len(a_share_codes)} 只A股代码")
 
             # 按市场和类型分配到任务列表

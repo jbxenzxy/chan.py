@@ -92,6 +92,19 @@ class CBaoStock(CCommonStockApi):
 
     @classmethod
     def do_init(cls):
+        # 先校验 baostock 必备接口，接口变更即报错（快速失败），再发起登录
+        _required = {
+            "login": "登录/初始化",
+            "query_history_k_data_plus": "历史行情",
+            "query_stock_basic": "股票基本信息",
+        }
+        _missing = [f"bs.{k}（{v}）" for k, v in _required.items() if not hasattr(bs, k)]
+        if _missing:
+            raise RuntimeError(
+                "[baostock 接口不兼容] 缺少所需接口: " + ", ".join(_missing)
+                + "。当前 baostock 版本接口已变更，请锁定/升级适配版本："
+                + "pip install -U 'baostock'；若仍报错请反馈所装版本，或联系作者同步适配。"
+            )
         if not cls.is_connect:
             cls.is_connect = bs.login()
 

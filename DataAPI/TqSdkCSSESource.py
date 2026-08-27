@@ -213,7 +213,23 @@ class CTqSdkSession(CSSESource):
     def connect(self):
         from tqsdk import TqApi, TqAuth
         from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD
+        # 接口契约校验：构造后确认 api 实例具备 chan.py 依赖的流式/取数接口，
+        # 缺失即抛错（附升级指引），让使用者及时得知接口失效，而非建流中途 AttributeError。
+        if not callable(TqApi) or not callable(TqAuth):
+            raise RuntimeError(
+                "[tqsdk 接口不兼容] tqsdk 未导出可调的 TqApi / TqAuth。"
+                "请锁定/升级适配版本：pip install -U 'tqsdk'；若仍报错请反馈所装版本，"
+                "或联系作者同步适配。"
+            )
         self.api = TqApi(auth=TqAuth(TQ_ACCOUNT, TQ_PASSWORD))
+        _missing = [m for m in ("wait_update", "get_kline_serial") if not hasattr(self.api, m)]
+        if _missing:
+            raise RuntimeError(
+                "[tqsdk 接口不兼容] 构造后的 TqApi 实例缺少所需接口: "
+                + ", ".join("api." + m for m in _missing)
+                + "。当前 tqsdk 版本接口已变更，请锁定/升级适配版本：pip install -U 'tqsdk'；"
+                "若仍报错请反馈所装版本，或联系作者同步适配。"
+            )
 
     def get_kline_serial(self, symbol, freq_sec):
         key = (symbol, freq_sec)

@@ -25,6 +25,7 @@ import json
 import os
 import re
 import threading
+import time
 
 from App.AppConfig import app_config
 from App.AppLog import get_logger
@@ -1241,6 +1242,7 @@ class AppData:
         self._belong_loaded = False
         self._float_mc = {}
         self._float_mc_loaded = False
+        self._float_mc_saved_at = None   # 本地缓存写入时刻（time.time()），用于"接口失败且缓存过期"告警
 
         # ── 标注 ──
         self._annotations = {}   # { "code_freq": [ {date,text,y_offset}, ... ] }
@@ -1611,6 +1613,11 @@ class AppData:
     # ════════════════════════════════════════════════════════════════
     # 流通市值缓存（腾讯接口成功时的内存态 + 本地 JSON 兜底）
     # ════════════════════════════════════════════════════════════════
+    # 流通市值本质上随价格每日变动；本地缓存作为腾讯接口失败时的兜底，
+    # 但若缓存太久未刷新且当天接口又失败，继续用旧数据会误导判断。该阈值
+    # 用于"接口失败且缓存过期"时的告警判定（秒）。
+    _FLOAT_MC_STALE_SECONDS = 2 * 24 * 3600   # 2 天
+
     def load_float_mc_cache(self):
         """从本地JSON加载流通市值缓存（无日期限制，作为腾讯接口失败时的兜底）。"""
         if self._float_mc_loaded:
@@ -1624,19 +1631,32 @@ class AppData:
                 self._float_mc.clear()
                 self._float_mc.update(data["data"])
                 self._float_mc_loaded = True
+                # 旧版缓存无 saved_at 字段时保持 None（视为"未知"，不过期、不误报）
+                self._float_mc_saved_at = data.get("saved_at")
                 log.info(f"[流通市值] 从本地缓存加载 {len(self._float_mc)} 只股票")
         except Exception as e:
             log.info(f"[流通市值] 读取缓存失败: {e}")
+
+    def float_mc_cache_stale(self, max_age_seconds=_FLOAT_MC_STALE_SECONDS):
+        """本地流通市值缓存是否已过期（用于接口失败回退时决定是否告警）。
+
+        max_age_seconds：过期阈值（秒）。缓存无时间戳（旧文件）时返回 False，
+        避免旧格式文件误报告警。"""
+        if self._float_mc_saved_at is None:
+            return False
+        return (time.time() - self._float_mc_saved_at) > max_age_seconds
 
     def update_float_mc_cache(self, mv_dict):
         """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。
         调用方应确保 load_float_mc_cache() 已先执行。"""
         self._float_mc.update(mv_dict)
         self._float_mc_loaded = True
-        # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底）
+        self._float_mc_saved_at = time.time()
+        # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底；记录写入时刻供过期判定）
         try:
             with open(self.float_mc_cache_file, "w", encoding="utf-8") as f:
-                json.dump({"data": self._float_mc}, f, ensure_ascii=False)
+                json.dump({"data": self._float_mc, "saved_at": self._float_mc_saved_at},
+                          f, ensure_ascii=False)
         except Exception as e:
             log.info(f"[流通市值] 保存缓存文件失败: {e}")
 
