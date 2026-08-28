@@ -176,56 +176,61 @@ def _monitor_task(task_id, futures):
     - 终态：done / aborted / error（任一 future 以异常收场＝基础设施级
       故障，任务标 error 而非 done，前端可区分并向用户提示）。
     """
-    from App.AppScanStore import get_scan_store
-    store = get_scan_store()
-    crashed = 0
-    crash_msgs = []
-    for fut, seq, code in futures:
-        try:
-            fut.result()
-        except Exception as exc:  # noqa: BLE001
-            crashed += 1
-            crash_msgs.append(f"{type(exc).__name__}: {exc}")
+    # —— 整个收割体包进外层 try/finally：无论 get_scan_store（首次访问会
+    # 建库/建表，可能抛异常）还是后续任一步 store 调用抛异常，都经 finally
+    # 归还池引用，杜绝「收割线程带未归还引用死亡 → 池永不销毁」。
+    try:
+        from App.AppScanStore import get_scan_store
+        store = get_scan_store()
+        crashed = 0
+        crash_msgs = []
+        for fut, seq, code in futures:
             try:
-                store.put_result(task_id, seq, code, "error",
-                                 {"code": code,
-                                  "error": f"{type(exc).__name__}: {exc}"})
-            except Exception:  # noqa: BLE001
-                pass
+                fut.result()
+            except Exception as exc:  # noqa: BLE001
+                crashed += 1
+                crash_msgs.append(f"{type(exc).__name__}: {exc}")
+                try:
+                    store.put_result(task_id, seq, code, "error",
+                                     {"code": code,
+                                      "error": f"{type(exc).__name__}: {exc}"})
+                except Exception:  # noqa: BLE001
+                    pass
 
-    # 错误明细并入 _scan_skip_log（中止行不计入）
-    try:
-        from App.AppScan import _scan_skip_log
-        for row in store.iter_error_rows(task_id):
-            data = row.get("data") or {}
-            if isinstance(data, dict) and data.get("aborted"):
-                continue
-            msg = str(data.get("error", "")) if isinstance(data, dict) else ""
-            _scan_skip_log.append(
-                f"{row.get('code', '')} - {msg or row.get('status', '')}")
-    except Exception:  # noqa: BLE001
-        pass
+        # 错误明细并入 _scan_skip_log（中止行不计入）
+        try:
+            from App.AppScan import _scan_skip_log
+            for row in store.iter_error_rows(task_id):
+                data = row.get("data") or {}
+                if isinstance(data, dict) and data.get("aborted"):
+                    continue
+                msg = str(data.get("error", "")) if isinstance(data, dict) else ""
+                _scan_skip_log.append(
+                    f"{row.get('code', '')} - {msg or row.get('status', '')}")
+        except Exception:  # noqa: BLE001
+            pass
 
-    try:
-        task = store.get_task(task_id)
-        if task is not None:
-            # 中止收敛：请求旗已置（或旧库残留 aborted 终态）→ 全部 future 完成后
-            # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
-            if task.get("abort_requested") or task["status"] == "aborted":
-                store.set_status(task_id, "aborted")
-            elif crashed:
-                store.set_status(task_id, "error", "; ".join(crash_msgs[:5]))
-            else:
-                store.set_status(task_id, "done")
-    except Exception:  # noqa: BLE001 —— 终态落库失败不阻断归还引用
-        pass
+        # 终态标记：task 缺失时跳过落库（不早退 return）
+        try:
+            task = store.get_task(task_id)
+            if task is not None:
+                # 中止收敛：请求旗已置（或旧库残留 aborted 终态）→ 全部 future 完成后
+                # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
+                if task.get("abort_requested") or task["status"] == "aborted":
+                    store.set_status(task_id, "aborted")
+                elif crashed:
+                    store.set_status(task_id, "error", "; ".join(crash_msgs[:5]))
+                else:
+                    store.set_status(task_id, "done")
+        except Exception:  # noqa: BLE001 —— 终态落库失败不阻断引用归还（外层 finally 兜底）
+            pass
     finally:
         # 无论如何都归还池引用（即用即弃）：本批 future 已全部结束。仅当全局
         # 无其它进行中批次（并发批量扫描）时才真正销毁进程池（worker 缓存
         # 释放、下次重 new spawn 全新进程、空缓存）；否则保留池供尚在运行的当批，
         # 以免先完成者 cancel_futures 取消后者队列中的票。
         # 修复：先前 task is None 走 return 早退、且无 try/finally，get_task/
-        # set_status 抛异常会让收割线程带未归还引用死亡 → 池永不销毁。now 无论
+        # set_status 抛异常会让收割线程带未归还引用死亡 → 池永不销毁。现无论
         # task 是否存在、是否异常，都经 finally 归还引用。
         _release_scan()
 

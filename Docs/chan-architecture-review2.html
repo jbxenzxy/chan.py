@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>chan.py · custom-dev 架构独立评审</title>
+<title>chan.py custom-dev · 第三次复审</title>
 <style>
   :root{
-    --bg:#f7f8fa; --card:#ffffff; --ink:#1f2430; --ink2:#4a5364; --ink3:#78829a;
+    --bg:#f7f8fa; --card:#fff; --ink:#1f2430; --ink2:#4a5364; --ink3:#78829a;
     --line:#e3e7ee; --accent:#2f6feb; --red:#d0342c; --amber:#b7791f; --green:#1f7a4d;
     --redbg:#fdf2f1; --amberbg:#fffaf0; --greenbg:#f1faf4; --bluebg:#f2f6ff;
   }
@@ -14,734 +14,295 @@
   body{margin:0;background:var(--bg);color:var(--ink);
        font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
   .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 96px}
-  header{border-bottom:3px solid var(--ink);padding-bottom:22px;margin-bottom:38px}
-  h1{font-size:29px;margin:0 0 8px;letter-spacing:-.3px}
+  header{border-bottom:3px solid var(--ink);padding-bottom:22px;margin-bottom:34px}
+  h1{font-size:28px;margin:0 0 8px;letter-spacing:-.3px}
   .sub{color:var(--ink3);font-size:13.5px}
-  h2{font-size:21px;margin:52px 0 16px;padding-bottom:9px;border-bottom:1px solid var(--line)}
-  h3{font-size:16.5px;margin:30px 0 10px;color:var(--ink)}
-  h4{font-size:14.5px;margin:20px 0 8px;color:var(--ink2)}
+  h2{font-size:20px;margin:46px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 9px}
   p{margin:10px 0}
   code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12.8px;
-       font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
-  pre{background:#f4f6fa;border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+       font-family:"SFMono-Regular",Consolas,monospace}
+  pre{background:#f4f6fa;border:1px solid var(--line);border-radius:8px;padding:13px 16px;
       overflow-x:auto;font-size:12.6px;line-height:1.65;
-      font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace}
-  pre code{background:none;padding:0}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
-        padding:22px 26px;margin:18px 0}
-  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px;background:var(--card)}
-  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
-  th{background:#eef1f7;font-weight:600;font-size:13px}
+      font-family:"SFMono-Regular",Consolas,monospace}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 24px;margin:16px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.3px;background:var(--card)}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#eef1f7;font-weight:600;font-size:12.8px}
   tbody tr:nth-child(even){background:#fbfcfe}
-  .tag{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11.5px;
-       font-weight:600;white-space:nowrap}
-  .t-p0{background:var(--redbg);color:var(--red);border:1px solid #f0c4c0}
-  .t-p1{background:var(--amberbg);color:var(--amber);border:1px solid #eddba8}
-  .t-p2{background:var(--bluebg);color:var(--accent);border:1px solid #c5d6f8}
+  .tag{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11.5px;font-weight:600;white-space:nowrap}
   .t-ok{background:var(--greenbg);color:var(--green);border:1px solid #b9e0c8}
+  .t-part{background:var(--amberbg);color:var(--amber);border:1px solid #eddba8}
   .t-no{background:var(--redbg);color:var(--red);border:1px solid #f0c4c0}
-  .box{border-left:4px solid var(--accent);background:var(--bluebg);
-       padding:12px 16px;margin:14px 0;border-radius:0 7px 7px 0;font-size:14px}
+  .t-info{background:var(--bluebg);color:var(--accent);border:1px solid #c5d6f8}
+  .box{border-left:4px solid var(--accent);background:var(--bluebg);padding:12px 16px;margin:14px 0;
+       border-radius:0 7px 7px 0;font-size:14px}
   .box.warn{border-color:var(--amber);background:var(--amberbg)}
   .box.bad{border-color:var(--red);background:var(--redbg)}
   .box.good{border-color:var(--green);background:var(--greenbg)}
-  ul,ol{margin:10px 0;padding-left:24px}
+  ul,ol{margin:10px 0;padding-left:23px}
   li{margin:5px 0}
-  .muted{color:var(--ink3);font-size:13px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin:18px 0}
-  .stat{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:15px 17px}
-  .stat b{display:block;font-size:23px;color:var(--accent);line-height:1.3}
-  .stat span{font-size:12.5px;color:var(--ink3)}
-  .ln{color:var(--ink3);font-size:12px;font-family:monospace}
-  hr{border:0;border-top:1px solid var(--line);margin:36px 0}
-  .toc{columns:2;font-size:13.5px}
-  .toc a{color:var(--accent);text-decoration:none}
-  .toc a:hover{text-decoration:underline}
+  .muted{color:var(--ink3);font-size:12.8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:18px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+  .stat b{display:block;font-size:22px;color:var(--accent);line-height:1.3}
+  .stat span{font-size:12.3px;color:var(--ink3)}
+  hr{border:0;border-top:1px solid var(--line);margin:34px 0}
 </style>
 </head>
 <body>
 <div class="wrap">
 
 <header>
-  <h1>chan.py · custom-dev 分支 —— 独立架构评审</h1>
+  <h1>chan.py · custom-dev 第三次复审</h1>
   <div class="sub">
-    仓库 <code>jbxenzxy/chan.py@custom-dev</code> · 212 文件 ·
-    评审范围 Frontend/ · FrontAPI.py · App/ · DataAPI/ · Test/ （约 3.5 万行）<br>
-    方法：以代码为准，注释与文档一律视为待验证声明 · 2026-08-28
+    复审基线：GitHub <code>custom-dev</code> 仍为 <code>d704fa7</code>（无新提交）+ 本地工作副本
+    <code>C:\my_chan_project</code> 的 6 个改动文件 · 对照《复审裁决报告》逐项核验 · 2026-08-28<br>
+    方法：改动以代码与运行结果为准；新增缺陷与回归均经<b>同目录 A/B 对照实验</b>验证
   </div>
 </header>
 
-<div class="card">
-  <b>导航</b>
-  <div class="toc" style="margin-top:10px">
-    <a href="#s1">1 · 总体判断</a><br>
-    <a href="#s2">2 · 现状架构（实际分层与依赖）</a><br>
-    <a href="#s3">3 · 我认为的最优架构</a><br>
-    <a href="#s4">4 · 逐功能端到端核查</a><br>
-    <a href="#s5">5 · 死代码与不可达分支</a><br>
-    <a href="#s6">6 · 注释 / 文档与事实不符</a><br>
-    <a href="#s7">7 · 正确性与并发风险</a><br>
-    <a href="#s8">8 · 测试体系评估</a><br>
-    <a href="#s9">9 · 改造优先级</a>
-  </div>
-</div>
-
-<!-- ═══════════ 1 ═══════════ -->
-<h2 id="s1">1 · 总体判断</h2>
-
-<p>这套代码处在一种很典型的「<b>重构中途态</b>」：分层命名、目录切分、锁策略登记表、迁移映射表、
-21 个回归组件，都做得很认真，甚至比多数同类项目认真。但<b>分层是被文档和管理脚本维持的，不是被代码结构维持的</b>。
-真正决定系统行为的三条暗线（全局 <code>set_data</code> 注入、核心引擎反向 import App、前端单闭包共享状态）
-把所有名义上的边界都穿透了。</p>
+<h2>1 · 结论摘要</h2>
 
 <div class="grid">
-  <div class="stat"><b>1</b><span>根因缺陷：全局可变状态传参（CTdxAPI.set_data）</span></div>
-  <div class="stat"><b>2</b><span>处依赖倒置：核心引擎 import 应用层</span></div>
-  <div class="stat"><b>39</b><span>处已核实死代码 / 不可达分支</span></div>
-  <div class="stat"><b>17</b><span>处注释与代码事实不符</span></div>
-  <div class="stat"><b>6</b><span>个并发 / 正确性风险</span></div>
-  <div class="stat"><b>7797</b><span>行单文件前端（1 个 IIFE）</span></div>
+  <div class="stat"><b>5 / 6</b><span>项接纳修复有效落地</span></div>
+  <div class="stat"><b>1 / 6</b><span>项落地但未生效（.gitignore）</span></div>
+  <div class="stat"><b>0</b><span>项新引入测试回归</span></div>
+  <div class="stat"><b>1</b><span>项新增小瑕疵（注释混排）</span></div>
+  <div class="stat"><b>0</b><span>处新增功能缺陷</span></div>
 </div>
 
-<div class="box bad">
-<b>一句话结论：</b>架构的「形」（目录、命名、锁登记表、映射表）已经做到位，
-但架构的「体」（数据流所有权、依赖方向、并发边界、前端封装）没有跟上。
-当前最该做的不是继续加守护用例，而是<b>把 K 线数据从全局变量改成显式传参</b>——
-这一个改动能同时解开全局锁、时序约定、核心引擎反向依赖三个死结。
-</div>
-
-<!-- ═══════════ 2 ═══════════ -->
-<h2 id="s2">2 · 现状架构（实际分层与依赖）</h2>
-
-<h3>2.1 名义分层</h3>
-<pre><code>FrontAPI.py          路由 + 异常映射（薄）
-   ↓
-App/AppOrch.py       聚合 re-export + LOCK_POLICY 登记表
-   ↓
-App/AppChart|AppSSE|AppScan|AppDownload|AppRefresh|AppAMO    功能域
-   ↓
-App/AppEngine.py     分析引擎层（委托壳 + 分析编排）
-   ↓
-App/AppData.py       缓存 / 持久化 / 标注 / 自选股
-   ↓
-DataAPI/*.py         数据源
-   ↓
-Bi/ BuySellPoint/ KLine/ ZS/ …    第三方缠论引擎</code></pre>
-
-<h3>2.2 实际依赖（穿透边界的三条暗线）</h3>
-
-<h4>暗线 ① —— 数据靠全局变量带外传递，抽象是假的</h4>
-<p><code>CChan</code> 的构造签名看起来是「给我一个数据源类」：</p>
-<pre><code># App/AppEngine.py
-CTdxAPI.set_data(records)                       # ← 写类级全局
-chan = CChan(code=..., data_src="custom:TdxAPI.CTdxAPI", lv_list=..., ...)
-for _snapshot in chan.step_load(): pass
-
-# Chan.py:102
-def get_load_stock_iter(self, stockapi_cls, lv):
-    stockapi_instance = stockapi_cls(code=self.code, k_type=lv, ...)   # ← 不传数据
-    return self.load_stock_data(stockapi_instance, lv)
-
-# DataAPI/TdxAPI.py:1364
-def _get_records(self):
-    return CTdxAPI._tdx_data          # ← 从类级全局读回来</code></pre>
-<p>也就是说：<b>K 线数据不是参数，是全局副作用。</b>"set_data → 构造 → step_load"这三步必须原子执行，
-于是全局锁就从"可选优化"变成了"正确性刚需"。这是整个系统并发能力的天花板，也是下面这一串连锁反应的源头：</p>
-<ul>
-  <li>必须存在 <code>_stock_analysis_lock</code>（AppEngine:294）与 <code>_ENGINE_LOCK</code>（AppChart:43）两把全局锁；</li>
-  <li>双窗下窗 CChan 无法作为参数传给上窗，只能塞进 <code>app_data.stocks_sub_cache</code>；</li>
-  <li>下窗周期还要靠猴补丁属性 <code>chan._stocks_dual_sub_freq</code>（AppEngine:723）告诉引擎去哪儿找；</li>
-  <li>于是产生「先下后上」这条<b>没有任何机制保证、只靠注释约定</b>的时序契约。</li>
-</ul>
-
-<h4>暗线 ② —— 核心引擎反向依赖应用层</h4>
-<pre><code># BuySellPoint/BSPointList.py:698   ← 这是"第三方缠论引擎"目录
-from App.AppData import app_data
-sub_chan = app_data.stocks_sub_cache_get(parent.code, sub_freq)
-
-# BuySellPoint/BSPointList.py:725
-from App.AppData import app_data
-sub_chan = app_data.futures_cache_get(cache_key)</code></pre>
-<div class="box warn">
-用户把 <code>BuySellPoint/</code> 归为"来自第三方、不优化"的目录，但这个文件<b>已经被改造成依赖 App 层单例</b>了。
-它不是一个可替换的第三方库，而是一个"半个应用层"——它知道缓存键格式、知道运行时缓存的存在、
-还在缓存 miss 时静默改变计算结果（<code>return True  # 按子级别背驰处理</code>）。
-这既破坏了依赖方向，也让"引擎可独立复用/可独立测试"这件事彻底不成立。
-</div>
-
-<h4>暗线 ③ —— 前端是单闭包，组件只是命名空间</h4>
-<pre><code>Frontend/app.js
-  (function(){ "use strict";
-      let chartData, viewOffset, isDualWindow, dualSubData, annotations,
-          _scanRunning, _scanTaskId, realtimeSymbol, ...     // ~150 个共享可变闭包变量
-      ChanApp.components.KLineChart    = { ... }   // 11 个"组件"
-      ChanApp.components.ScanPanel     = { ... }
-      ...
-  })();
-
-Frontend/index.html:  73 处 onxxx="全局函数名()"，引用 ~48 个全局函数</code></pre>
-<p>11 个组件对象注册在 <code>ChanApp.components</code> 上，但跨组件调用<b>只有 10 处</b>走注册表，
-而 <code>window.*</code> 全局函数绑定有 <b>80 处</b>、HTML 内联事件 <b>73 处</b>。
-所谓"组件化"没有带来任何封装：没有私有状态、没有独立可测性、没有依赖声明。</p>
-
-<!-- ═══════════ 3 ═══════════ -->
-<h2 id="s3">3 · 我认为的最优架构</h2>
-
-<p>先说立场：对<b>个人使用的本地分析工具</b>（单用户、单进程、本地数据），
-"最优"不是微服务、不是 DDD 六边形、不是前后端分离到极致。最优应该满足四条：</p>
-<ol>
-  <li><b>数据所有权显式</b>——任何计算的输入都是参数，不是全局变量；</li>
-  <li><b>临界区 = 不可再分的最小段</b>——I/O 绝不在锁内；</li>
-  <li><b>依赖方向由 import 图强制</b>——而不是由文档和守护脚本维持；</li>
-  <li><b>一个功能一条链路</b>——同一语义不要有 A/B 两条实现。</li>
-</ol>
-
-<h3>3.1 目标分层</h3>
-<pre><code>L0  引擎内核（Bi/ KLine/ ZS/ Seg/ Combiner/ Math/ BuySellPoint/ …）
-    · 纯计算：输入 K 线序列 → 输出笔/段/中枢/买卖点
-    · 硬约束：禁止 import App / DataAPI / FrontAPI，禁止读任何进程级缓存
-    · 下窗数据通过【注入式 SubLevelProvider 协议】获取，而不是直接 import app_data
-
-L1  数据源 DataAPI/
-    · 无状态 reader： (market, code, freq, 区间) → list[record]
-    · 不得持有"请求态"：CTdxAPI._tdx_data / CTqSdkAPI._records_by_symbol 必须消失
-    · 可选能力（tqsdk / akshare / eltdx / pytdx）统一成 capibility 探测 + 显式注入
-
-L2  领域服务 App/
-    · 每个用例一个类/闭包：Analysis / SelectPoint / RedRange / Realtime / Scan /
-      Refresh / Download / MarketAmount / Annotation
-    · 依赖经构造函数注入（cache、provider、config），不 import 单例
-    · 唯一允许持锁的地方，且锁只包"引擎构造"这一件事
-
-L3  API FrontAPI.py
-    · 路由 = 参数校验 + 调 use case + 响应组装，无业务逻辑
-    · 领域异常 → HTTP 状态码的统一映射
-
-L4  前端 Frontend/
-    · ES Module 真模块（浏览器原生 import，零构建，符合项目"零构建"约束）
-    · 单一状态容器 + 显式 render(state)，杜绝闭包隐式共享</code></pre>
-
-<h3>3.2 最关键的一个改造：把 set_data 换成显式传参</h3>
-<p>这是唯一必须动到引擎内核边界的改动，但改动面很小，且不需要改缠论算法：</p>
-<pre><code># 在 App 层加一层隔离适配器（不动 Chan.py 的算法，只改调用方式）
-# App/chan_runner.py
-@contextmanager
-def _critical():
-    """引擎构造临界区：只包 '注入→构造→drain'，不包任何 I/O"""
-    with _ENGINE_LOCK:
-        yield
-
-def build_chan(records, lv_list, market_type, code) -> CChan:
-    CTdxAPI.set_data(records)               # 全局写入仍在，但被关进最小临界区
-    try:
-        chan = CChan(code=code, data_src="custom:TdxAPI.CTdxAPI",
-                     lv_list=lv_list, config=_make_chan_config(),
-                     autype=AUTYPE.NONE, market_type=market_type)
-        for _ in chan.step_load():
-            pass
-        return chan
-    finally:
-        CTdxAPI.set_data(None)              # 立即释放，避免长生命周期引用</code></pre>
 <div class="box good">
-<b>收益：</b>① 临界区从「读盘 + 前复权（可能走网络取 xdxr）+ 分析」缩到「仅构造」，
-交互延迟与并发度立刻改善一个数量级；② 锁策略不再需要 <code>SERIAL/SCAN/RAW</code> 三分类的人工登记，
-因为"谁碰全局"这件事被收敛到一个函数里；③ 后续若引擎支持构造参数传数据，
-只需改这一个函数，上层零感知。
+<b>这一轮质量明显好于上一轮。</b>上一轮是「治好主症、留下新症」，这一轮六个点都改在了正确的位置上：
+A 把守卫与置位一起收进装饰器（而不是在 finally 里打补丁），
+B 把归还放进 finally 并顺带把状态落库包进 try（而不只是补一个 <code>return</code>），
+item5 把内存态与 CSV 合并进同一把锁、并让调用方不再直写。
+这三处的共同点是<b>改了结构而不是打补丁</b>，这是对的。
 </div>
 
-<h3>3.3 其余不变量</h3>
-<table>
-<thead><tr><th style="width:24%">不变量</th><th>落地手段</th></tr></thead>
-<tbody>
-<tr><td>依赖方向由 import 图保证</td><td>在 CI 里跑一个 <b>AST 导入图检查</b>（不是现在的"指定 3 个文件查 3 个 forbidden 词"），
-全量校验 L0 不 import L1/L2/L3。现有 <code>test_phase3_guards.test_layering_direction</code>
-只检查了 3 个文件，<b>完全没覆盖 BuySellPoint/ 这条真实违规</b>。</td></tr>
-<tr><td>A/B 双实现必须收敛</td><td><code>CHAN_STOCK_DUAL_IMPL=independent|legacy</code> 两套路径
-（AppEngine:685 / 726）目前都活着，legacy 仅作为"快照基线"。建议在灰度验证通过后删除 legacy，
-同时删掉 <code>_DUAL_LV_LIST</code>、<code>_stocks_red_range</code> 联立分支与 dual key 的第 6 维 impl tag。</td></tr>
-<tr><td>配置单一实现</td><td>删掉 <code>AppConfig</code> 的内置降级分支，直接依赖 pydantic-settings（已在 requirements 里）。
-两套实现不是"优雅降级"，是"行为分叉"（详见 §7.4）。</td></tr>
-<tr><td>一个语义一个入口</td><td><code>analyze_stock</code> / <code>fetch_and_inject</code> / <code>run_analysis</code> 三选一；
-<code>AppEngine._collect_codes_from_vipdoc</code> 与 <code>AppRefresh._collect_codes_from_vipdoc</code> 二选一；
-<code>utils._FUTURES_DUAL_FREQ_MAP</code> 与 <code>TqSdkAPI.FUTURES_DUAL_FREQ_MAP</code> 二选一。</td></tr>
-</tbody>
-</table>
-
-<!-- ═══════════ 4 ═══════════ -->
-<h2 id="s4">4 · 逐功能端到端核查</h2>
-<p class="muted">✅ 落实到位 ｜ ⚠️ 落实但有偏差 ｜ ❌ 未落实</p>
-
-<table>
-<thead>
-<tr><th style="width:11%">功能</th><th style="width:34%">端到端链路</th><th style="width:7%">结论</th><th>偏差说明</th></tr>
-</thead>
-<tbody>
-
-<tr>
-<td><b>① 单窗分析</b><br><span class="muted">A 操作</span></td>
-<td><code>app.js loadStock</code> → <code>GET /api/stocks/{code}/analyze</code>
-→ <code>orch.call_analysis</code>（持 <code>_ENGINE_LOCK</code>）
-→ <code>AppEngine.analyze_stock</code> → <code>_analyze_stock_internal</code>
-→ CTdxAPI 读盘 + 前复权 → <code>set_data</code>+CChan+<code>step_load</code>
-→ <code>_extract_main_level_data</code> → 写 LRU → 落 last_code_freq</td>
-<td>⚠️</td>
-<td>链路本身干净。问题在<b>锁的粒度</b>：<code>_ENGINE_LOCK</code> 覆盖了「读盘 + 前复权（可能经 pytdx/eltdx 走网络取除权数据）+ 分析」全过程。
-一个慢网络请求会<b>挂住所有其他 HTTP 分析请求</b>。见 §3.2。</td>
-</tr>
-
-<tr>
-<td><b>② 复盘 + 箭头步进</b><br><span class="muted">C 操作</span></td>
-<td><code>NavToolbar.gotoDate</code> → <code>/analyze?end_date=&step=</code>
-→ <code>_analyze_stock_internal</code> 解析 end_date → 全量读取 → 按 <code>target_dt</code> 截断 → 建 CChan</td>
-<td>❌</td>
-<td><b>存在不可达分支导致的真实缺陷。</b>
-<code>AppEngine.py:521</code> <code>if matched_fmt == "%Y-%m-%d" and freq in INTRADAY_FREQS:</code>
-——<code>matched_fmt</code> 取自 <code>["%Y/%m/%d %H:%M:%S","%Y/%m/%d %H:%M","%Y/%m/%d"]</code>，
-<b>永远不可能等于 <code>"%Y-%m-%d"</code></b>。后果：复盘到某日且周期为 30m/5m 时，
-<code>target_dt</code> 停在当日 00:00，<b>当日的分钟 K 线全部被截掉</b>。§5.2 有详细分析。</td>
-</tr>
-
-<tr>
-<td><b>③ 手动选点</b><br><span class="muted">B 操作</span></td>
-<td>双击 → <code>POST /select/point</code> → <code>call_manual_select_point</code>（持锁）
-→ <code>stock_manual_select_point</code>：从缓存取 CChan → 笔索引校验 → 找左肩时间 T
-→ 写 CSV → 删缓存 → 从 T 重建 → 返回全量</td>
-<td>⚠️</td>
-<td>流程正确。两处偏差：<br>
-① 第 302 行「选点后至少剩 4 笔」的判断在<b>重建前</b>用旧 CChan 做，重建后 K 线变少却不再校验，
-可能出现重建后不足 4 笔的静默降级；<br>
-② 选点写 CSV 与写 <code>app_data.saved_point_times</code> 这两步<b>无锁且非原子</b>
-（AppChart:319-323），并发下内存态与文件会漂移。</td>
-</tr>
-
-<tr>
-<td><b>④ 双窗分析</b></td>
-<td><code>/analyze?dual=1&sub_freq=</code> → 配对校验 → 主/子级别分别读盘 →
-下窗先建 CChan 入运行时缓存 → 上窗建 CChan（带 <code>_stocks_dual_sub_freq</code> 猴补丁）
-→ 区间套经 <code>app_data.stocks_sub_cache_get</code> 取回下窗</td>
-<td>❌</td>
-<td><b>架构上最不落实的一环。</b>上下窗本该是「两个独立计算结果 + 一个显式关联参数」，
-现在靠三样东西串起来：全局 LRU、运行时缓存单例、猴补丁属性，再加一条只写在注释里的
-「先下后上」时序契约。<code>BSPointList</code> 缓存 miss 时<b>静默改变计算结果</b>
-（<code>return True  # 按子级别背驰处理</code>）——同一个请求在不同缓存状态下结果不同。
-此外 A/B 两套实现并存，代码路径翻倍。</td>
-</tr>
-
-<tr>
-<td><b>⑤ 红框中枢</b></td>
-<td><code>GET /red-range</code> → <code>call_compute_red_range_zs</code>（持锁）
-→ 取下窗 CChan（运行时缓存 → dual_sub 缓存）→ <code>_red_range_bi_sequence</code> + <code>_red_range_amp</code></td>
-<td>⚠️</td>
-<td>independent 路径设计是对的（miss 抛 <code>DataFetchError</code> 而非静默回退，这点很好）。
-偏差：<code>call_compute_red_range_zs</code> 持 <code>_ENGINE_LOCK</code> 去读一个<b>纯内存缓存</b>——
-完全无 I/O，不该占引擎锁。legacy 分支的三级缓存回退链（AppChart:439-463）也明显过度复杂。</td>
-</tr>
-
-<tr>
-<td><b>⑥ 期货实时 SSE</b></td>
-<td><code>EventSource('/api/futures/read/stream')</code> → 同步生成器（每连接一线程）
-→ <code>CTqSdkSession</code> → init_chan → init 事件 → 壁钟驱动循环 → update 事件</td>
-<td>⚠️</td>
-<td>设计有亮点：数据源抽象（<code>CSSESource</code>）、TqApi 生命周期由生成器 finally 收口、
-增量 MACD 续算，都做对了。三处偏差：<br>
-① <b>双窗路径 <code>init_chan_symbol</code> 返回 None 时无保护</b>（AppSSE:722 直接解包），
-失败时客户端<b>收不到任何 init 错误帧</b>，只看到连接关闭；<br>
-② <code>_process_one_window</code> 是定义在 <code>try</code> 内、闭包捕获循环局部变量
-（<code>now/now_ts/t_wait</code>）的嵌套函数，可读性差且脆弱；<br>
-③ 上窗/下窗各 300+ 行的实时循环逻辑高度重复（单窗口版 388-600、双窗口版 839-1016），
-是本项目最大的一处复制粘贴。</td>
-</tr>
-
-<tr>
-<td><b>⑦ 批量扫描</b></td>
-<td><code>POST /scan/submit</code> → SQLite 建任务 → ProcessPool(spawn) →
-worker <code>scan_one</code> → 结果写 SQLite → 前端轮询 <code>/read/status?since=</code> → 收割线程销毁池</td>
-<td>⚠️</td>
-<td>ProcessPool + SQLite + 增量游标这套选型对本地工具是合适的。
-但有<b>一个真实并发 bug</b>：<code>_pool</code> 是单例，而收割线程在<b>任一</b>任务结束时调用
-<code>destroy_pool()</code>（<code>cancel_futures=True</code>）。两批扫描并存时，
-先完成的那批会<b>取消另一批尚未开始的 future</b>，被取消的票全部记为 error。详见 §7.1。</td>
-</tr>
-
-<tr>
-<td><b>⑧ 刷新</b><br><span class="muted">股名/PE/市值/板块</span></td>
-<td><code>POST /stocks/refresh</code> → 后台线程 <code>_refresh_stock_names</code>
-→ vipdoc 扫描 → 新浪/腾讯补全 → pypinyin → 过滤 ST → 落盘 → 刷板块文件 → 刷 PE-TTM</td>
-<td>❌</td>
-<td><code>_refresh_status["running"]</code> 只在函数末行置 False，<b>没有 try/finally</b>
-（AppRefresh:414-617）。中途任何异常逃逸，刷新将<b>永久卡在 running=True</b>，
-必须重启进程才能再刷新。另外 <code>_fetch_index_belong_from_akshare</code>
-在 akshare 缺失时返回 <code>app_data.belong_cache</code>、正常时返回新 dict，
-两种返回语义不一致。</td>
-</tr>
-
-<tr>
-<td><b>⑨ 盘后下载</b></td>
-<td><code>POST /download/start</code> → <code>start_download_checked</code> →
-<code>DataAPI/ElTdxAPI._start_download</code>（后台线程）→ 前端轮询进度</td>
-<td>✅</td>
-<td>职责内聚在 ElTdxAPI，App 层是薄封装，状态单一事实源在 ElTdxAPI。这条链路最干净。<br>
-<span class="muted">仅 <code>AppDownload.start_download</code>（无校验版）无人调用，属死代码。</span></td>
-</tr>
-
-<tr>
-<td><b>⑩ 市场量能</b></td>
-<td><code>GET /amo/read</code> → <code>call_amo</code>（持 <code>_ENGINE_LOCK</code>）
-→ 直读 sh000001.day + sz399106.day → 按视口日期过滤 → 峰值/当前/占比</td>
-<td>⚠️</td>
-<td>实现简洁正确。偏差：纯读两个本地文件却<b>持全局引擎锁</b>，注释给的理据是
-「与下载写盘天然互斥」——但下载路径根本不持这把锁，互斥不成立，纯粹是自缚。</td>
-</tr>
-
-<tr>
-<td><b>⑪ 标注</b></td>
-<td>右键 → <code>POST /save/annotation</code> → <code>handle_annotation_action</code>
-→ <code>app_data.add/delete/update_annotation</code> → 写 JSON</td>
-<td>⚠️</td>
-<td>REST 语义与参数校验都到位。偏差：<code>_annotations</code> 是裸 dict，
-<code>add/delete/update</code> 三步「读-改-写」没有锁（AppData:1844-1906），
-而路由跑在 threadpool 里，<b>并发编辑会丢更新</b>。
-另外 <code>update</code> 实现为「先 delete 再 add」，不是原子替换。</td>
-</tr>
-
-<tr>
-<td><b>⑫ 自选股保存</b></td>
-<td><code>POST /scan/save/zxg</code> → <code>zxg_save</code> →
-通达信 <code>save_to_zxg_blk</code> + 同花顺云 <code>save_scan_to_ths_cloud</code></td>
-<td>✅</td>
-<td>双写 + 单写失败不影响另一侧，错误处理到位。<br>
-<span class="muted">唯一瑕疵：<code>AppData.sync_zxg_blk</code>（全量同步）只被 <code>Script/ths_sync_to_tdx.py</code> 使用，
-与主链路并存两套写入语义。</span></td>
-</tr>
-
-</tbody>
-</table>
-
-<!-- ═══════════ 5 ═══════════ -->
-<h2 id="s5">5 · 死代码与不可达分支</h2>
-<p class="muted">全部经 AST 脚本 + 全仓库正则引用计数核实（排除仅被 Test/ 引用的情形）。</p>
-
-<h3>5.1 导出的漏斗函数无人调用 <span class="tag t-p1">11 项</span></h3>
-<p><code>App/AppChart.py</code> 定义、<code>AppOrch</code> re-export、<code>LOCK_POLICY</code> 登记、
-<code>__all__</code> 收录，但 <code>FrontAPI.py</code> 中 <code>orch.&lt;name&gt;</code> 引用数全部为 <b>0</b>：</p>
-<pre><code>run_analysis              fetch_and_inject          get_saved_point_times
-get_saved_point           futures_cache_get         futures_cache_put
-futures_cache_pop         futures_set_sub_chan      futures_get_sub_chan
-futures_pop_sub_chan</code></pre>
-<p>其中 <code>run_analysis</code> 是 <code>async</code> 函数，被 <code>LOCK_POLICY</code> 登记为 SERIAL，
-还被 <code>test_phase3_guards</code> 用 <code>inspect.getsource</code> 检查"是否含 <code>with _ENGINE_LOCK:</code>"——
-<b>一个从未在生产链路执行过的函数，却占着一条守护用例的断言</b>。这是"守护测试守护了空气"的典型。</p>
-
-<h3>5.2 不可达的条件分支（是真实缺陷，不只是冗余）<span class="tag t-p0">1 项</span></h3>
-<pre><code># App/AppEngine.py:513-522
-matched_fmt = None
-for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
-    try:
-        datetime.strptime(end_date, fmt); matched_fmt = fmt; break
-    except ValueError:
-        continue
-if matched_fmt == "%Y-%m-%d" and freq in INTRADAY_FREQS:     # ← 永假
-    target_dt = target_dt.replace(hour=23, minute=59, second=59)</code></pre>
-<div class="box bad">
-<code>matched_fmt</code> 的取值域只有那三个用<b>斜杠</b>的格式，<code>"%Y-%m-%d"</code>（连字符）不在其中，
-条件恒假 → 分支永不执行。<br><br>
-<b>后果不是"代码冗余"而是功能错误：</b>复盘到某日且周期是 30m/5m 时，
-<code>target_dt</code> 为当日 00:00，<code>records = [r for r in full_records if r["dt"] &lt;= target_dt]</code>
-会把<b>当天的所有分钟 K 线全部滤掉</b>。用户复盘到今天，看到的却是昨天收盘的样子。<br><br>
-正确的写法应是判断"传入的 end_date 是否只含日期不含时间"（如 <code>matched_fmt == "%Y/%m/%d"</code>），
-而不是拿一个根本不在候选列表里的格式去比较。
-</div>
-
-<h3>5.3 其余已核实死代码 <span class="tag t-p2">27 项</span></h3>
-<table>
-<thead><tr><th style="width:30%">位置</th><th style="width:30%">符号</th><th>说明</th></tr></thead>
-<tbody>
-<tr><td><code>App/AppSSE.py:1742</code></td><td><code>futures_cleanup</code></td><td>无人调用（AppChart 走的是 <code>_cleanup_all_futures_data</code>）</td></tr>
-<tr><td><code>App/AppSSE.py:1310</code></td><td><code>lightweight=True</code> 分支</td><td>约 50 行；生产零调用方，测试也只传 <code>False</code></td></tr>
-<tr><td><code>App/AppSSE.py:140/148/267/271</code></td><td><code>get_data</code> / <code>get_last_n</code></td><td>CSSESource 与 CTqSdkSession 各一份，AppSSE 实际只用 <code>last_records</code></td></tr>
-<tr><td><code>App/AppDownload.py:57</code></td><td><code>start_download</code></td><td>无校验版，被 <code>start_download_checked</code> 取代</td></tr>
-<tr><td><code>App/AppRefresh.py:676</code></td><td><code>refresh_stock_names</code></td><td>阻塞版，前端只用 async 版</td></tr>
-<tr><td><code>App/AppEngine.py:242-326</code></td><td>6 个委托壳</td><td><code>_load_pe_ttm_cache</code> / <code>_update_float_mc_cache</code> / <code>_get_float_mc_from_cache</code> / <code>_cache_remove</code> / <code>_save_point_time</code> / <code>_load_stock_names_from_cache_file</code>，仅测试引用</td></tr>
-<tr><td><code>App/AppEngine.py:257</code></td><td><code>_collect_codes_from_vipdoc</code></td><td>与 <code>AppRefresh</code> 同名函数重复，本份无人调用</td></tr>
-<tr><td><code>App/AppEngine.py:193-201</code></td><td><code>TDX_MARKET_MAP</code> / <code>HK_CODE_PREFIX</code> / <code>DS_CODE_PREFIX</code></td><td>三个常量零引用</td></tr>
-<tr><td><code>App/AppEngine.py:226</code></td><td><code>_safe_write_json_file</code></td><td>AppRefresh 有一份自己的</td></tr>
-<tr><td><code>DataAPI/TdxAPI.py:1393</code></td><td><code>CTdxAPI_Sliced</code>（整类）</td><td>含 <code>set_sliced_data</code>/<code>clear_sliced_data</code>，从未实例化</td></tr>
-<tr><td><code>DataAPI/TdxAPI.py:1530-1584</code></td><td><code>read_zz1000/sz50/hs300/zz500_stocks</code></td><td>4 个函数零引用</td></tr>
-<tr><td><code>DataAPI/TdxAPI.py:60</code></td><td><code>get_tdx_hy_mapping</code></td><td>注入侧 set 有对应，get 侧无人调用</td></tr>
-<tr><td><code>DataAPI/TqSdkAPI.py:185/192</code></td><td><code>FUTURES_DUAL_FREQ_MAP</code> / <code>FUTURES_DUAL_REVERSE_MAP</code></td><td><b>与 <code>App/utils._FUTURES_DUAL_FREQ_MAP</code> 构成双份真相</b>，只有 utils 那份在用</td></tr>
-<tr><td><code>ChanConfig.py:174</code></td><td><code>reload_chan_env</code></td><td>零引用</td></tr>
-<tr><td><code>App/AppLog.py:64</code></td><td><code>current_trace_id</code></td><td>导出但从未使用（见 §6.5）</td></tr>
-<tr><td><code>FrontAPI.py:517</code></td><td><code>/api/futures/read/status</code></td><td><b>硬编码返回 <code>{"ok":True,"architecture":"self-contained"}</code></b> 的桩路由，前端零调用</td></tr>
-<tr><td><code>FrontAPI.py:523</code></td><td><code>/api/futures/read/config</code></td><td>前端零调用（周期列表可由 <code>/api/health</code> 的 freq_sec_map 覆盖）</td></tr>
-</tbody>
-</table>
-
-<h3>5.4 复制粘贴块 <span class="tag t-p1">3 处</span></h3>
-<ul>
-<li><b>SSE 实时循环</b>：单窗口 <code>AppSSE.py:388-600</code> 与双窗口 <code>839-1016</code>，
-两套壁钟判定 / tick 更新 / EMA 续算 / 预览 bar 追加逻辑，约 <b>350 行</b>语义等价代码；</li>
-<li><b>结果提取</b>：<code>_extract_main_level_data</code>（AppEngine:867）与
-<code>_extract_sub_level_data</code>（1260）的 bi/fx/zs/zs_stars/seg 五段几乎逐行相同；
-<code>AppSSE._extract_chan_structure</code> 是<b>第三份</b>同构实现；</li>
-<li><b>白线计算</b>：<code>AppEngine:1188-1215</code> 与 <code>AppSSE._calc_futures_white_hline</code>(1405) 同逻辑两份。</li>
-</ul>
-
-<!-- ═══════════ 6 ═══════════ -->
-<h2 id="s6">6 · 注释 / 文档与事实不符</h2>
-<p class="muted">用户特别提示"注释可能不准确"——确实如此，以下 17 处均以代码为准核对过。</p>
-
-<table>
-<thead><tr><th style="width:26%">位置</th><th style="width:38%">注释 / 文档声称</th><th>代码事实</th></tr></thead>
-<tbody>
-<tr><td><code>AppOrch.py:109</code><br><code>AppScan.py:402</code></td>
-<td>「前端按 <code>SCAN_CONCURRENCY</code> 并发发起 <code>/api/scan_one</code>」</td>
-<td class="ln">两者都不存在。FrontAPI 无该路由，AppConfig 无该配置项。批量扫描实际走
-<code>/scan/submit</code> + ProcessPool。</td></tr>
-
-<tr><td><code>func_map_check.py:187</code></td>
-<td><code>_stock_analysis_lock</code> → <code>RETIRE</code>「AppOrch._ENGINE_LOCK 已接替 → 随 3b 下线」</td>
-<td>仍在使用：<code>AppEngine.py:294</code> 定义、<code>:666</code> 包住整个 CChan 构造。</td></tr>
-
-<tr><td><code>func_map_check.py:192-193</code></td>
-<td><code>SYMBOL_CODE</code> / <code>SCRIPT_DIR</code> → <code>RETIRE</code>「随 main 下线」</td>
-<td><code>SYMBOL_CODE</code> 仍被 <code>FrontAPI.py:151</code> 的 <code>/api/health</code> 返回；
-<code>SCRIPT_DIR</code> 仍在 <code>AppEngine.py:79-81</code> 使用。</td></tr>
-
-<tr><td><code>func_map_check.py:177-179</code></td>
-<td><code>HK_CODE_PREFIX</code>「<code>_get_stock_market_code</code> 用」、<code>DS_CODE_PREFIX</code>「同上」</td>
-<td><code>utils._get_stock_market_code</code> 硬编码了 <code>"31#"</code>/<code>"62#"</code> 字面量，
-<b>根本没引用这两个常量</b>；两常量全仓零引用。</td></tr>
-
-<tr><td><code>func_map_check.py:179</code></td>
-<td><code>TDX_MARKET_MAP</code>「ChartHandler 1 处」</td>
-<td>ChartHandler 早已整体删除，该常量零引用。</td></tr>
-
-<tr><td><code>FrontAPI.py:688</code></td>
-<td>启动日志 <code>SSE: /api/futures_stream</code></td>
-<td>实际路由是 <code>/api/futures/read/stream</code>。</td></tr>
-
-<tr><td><code>FrontAPI.py:12-17</code></td>
-<td>锁分类含 <code>SCAN</code>「<code>_scan_lock</code> 防同票重入」</td>
-<td><code>_scan_lock</code> 是<b>全局单实例锁，不是按票</b>（AppScan.py:53、:425 直接使用）。</td></tr>
-
-<tr><td><code>App/AppLog.py:8-9, 21</code></td>
-<td>「错误日志带 code/freq/耗时上下文」「请求入口设置一次 trace-id」</td>
-<td>格式串只有 <code>%(levelname)s %(message)s</code>；<b>没有任何请求入口调用 <code>trace_id()</code></b>
-——只有两个 SSE 生成器自己调（AppSSE:256/625），REST 全链路的 trace-id 恒为 <code>"-"</code>。</td></tr>
-
-<tr><td><code>App/AppSSE.py:722</code></td>
-<td><code>sub_chan, sub_records, sub_kl_type, _ = sub_result</code></td>
-<td><code>init_chan_symbol</code> 返回 <code>(chan, klines, kl_type, records)</code>：
-第 2 个是 pandas DataFrame 却命名为 <code>sub_records</code> 且从未使用；
-第 3 个 <code>sub_kl_type</code> 下一行立刻被覆盖。4 个解包目标里 2 个是废物。</td></tr>
-
-<tr><td><code>App/AppScan.py:679</code></td>
-<td><code>clear_cache</code>「关闭扫描面板」</td>
-<td>函数体只打一行日志并返回 <code>{"cleared": 0}</code>，<b>是空操作</b>。</td></tr>
-
-<tr><td><code>App/AppRefresh.py:245</code></td>
-<td><code>_fetch_index_belong_from_akshare</code> 返回「归属字典」</td>
-<td>akshare 缺失时返回 <code>app_data.belong_cache</code>（旧缓存），
-正常时返回新 dict，两种返回语义不一致，且前者已被 <code>replace_index_belong</code> 就地改过。</td></tr>
-
-<tr><td><code>requirements.txt</code></td>
-<td>注释提到 <code>api_server.py</code>、<code>App/ashare_bsp_scanner_gui.py</code>、<code>App/ths_*.py</code></td>
-<td>这些文件<b>在仓库中均不存在</b>（api_server 与 my_chan_main 已删除，ths 工具在 <code>Script/</code>）。</td></tr>
-
-<tr><td><code>requirements.txt</code></td>
-<td>声明了全部运行依赖</td>
-<td><b>缺 <code>pypinyin</code></b>（AppRefresh:527 使用）与 <b><code>winotify</code></b>（AppScan:73 使用）；
-两者都写了 except ImportError 静默降级，于是"没装"表现为"拼音全空 / 不弹通知"，难以定位。</td></tr>
-
-<tr><td><code>.env.example:57-59</code></td>
-<td>「<code>App/ths_captured_cookie.txt</code>、<code>App/ths_*.py</code>」</td>
-<td>实际路径在 <code>Script/</code> 下。</td></tr>
-
-<tr><td><code>App/AppScanPool.py:36-37</code></td>
-<td>「即用即弃：扫描完成即销毁（destroy_pool）」</td>
-<td>描述正确，但<b>未描述单例池被并发任务共享时的取消风险</b>（见 §7.1）。</td></tr>
-
-<tr><td><code>Frontend/app.js:6-8</code></td>
-<td>「跨组件调用走注册表或 window.* 绑定，闭包内部实现不改」</td>
-<td>注册表调用仅 10 处，<code>window.*</code> 80 处，HTML 内联事件 73 处；
-~150 个闭包共享变量被所有"组件"直接读写。<b>"组件"没有边界。</b></td></tr>
-
-<tr><td><code>main.py:16</code> vs 运行时</td>
-<td>库示例用 <code>trigger_step=False</code></td>
-<td>Web 路径 <code>_make_chan_config()</code> 用 <code>CChanConfig()</code> 默认
-<code>trigger_step=True</code>（ChanConfig.py:224）。<b>同一引擎在两种入口下步进语义不同</b>，
-结果可能不一致（尾部虚笔/未确认结构处理），且 Web 路径始终走较慢的逐根推进。</td></tr>
-</tbody>
-</table>
-
-<!-- ═══════════ 7 ═══════════ -->
-<h2 id="s7">7 · 正确性与并发风险</h2>
-
-<h3>7.1 <span class="tag t-p0">P0</span> 并发批量扫描会互相取消</h3>
-<pre><code># App/AppScanPool.py
-_pool = None                                   # 全局单例
-
-def _monitor_task(task_id, futures):
-    ...
-    destroy_pool()                             # ← 任一任务结束就销毁"全局"池
-
-def destroy_pool():
-    _pool.shutdown(wait=False, cancel_futures=True)   # ← 取消未开始的 future</code></pre>
-<p>任务 A、B 并存（两个浏览器标签 / 前端重提交）时，先完成的 A 会 shutdown 共享池，
-<code>cancel_futures=True</code> 把 B 尚未开始的票全部取消；B 的收割线程
-<code>fut.result()</code> 抛 <code>CancelledError</code>，被兜底写成 error 行——
-<b>用户看到 B 的任务"完成了"，但一多半是"基础设施故障"，且无从区分。</b>
-修复方向：改引用计数（有活跃任务才销毁），或按 task_id 建池。</p>
-
-<h3>7.2 <span class="tag t-p0">P0</span> <code>close_all()</code> 无超时等待</h3>
-<pre><code># DataAPI/TqSdkCSSESource.py:83-87
-for src in sources:
-    src._api_closed.wait()          # ← 无 timeout</code></pre>
-<p>若生成器尚在 <code>init_chan_symbol</code>（拉历史、建 CChan，可达数十秒）而没进入
-<code>wait_update</code> 循环，<code>_closed</code> 标志不会被检查，<code>_api_closed</code> 也不会置位。
-而 <code>POST /api/futures/cleanup</code> 直接 <code>await run_in_threadpool(close_all)</code> →
-<b>该 HTTP 请求会一直挂起到建链完成</b>。应加超时（如 3s）后降级返回。</p>
-
-<h3>7.3 <span class="tag t-p1">P1</span> 刷新状态可能永久卡死</h3>
-<pre><code># App/AppRefresh.py:414
-if _refresh_status["running"]: return
-_refresh_status["running"] = True
-...
-# 434-617 行：无 try/finally
-_refresh_status["running"] = False      # 618 行，唯一复位点</code></pre>
-<p>中途异常逃逸 → <code>running</code> 永久为 True → 后续所有刷新请求返回
-<code>{"status":"already_running"}</code>，<b>只能重启进程</b>。</p>
-
-<h3>7.4 <span class="tag t-p1">P1</span> 配置两套实现行为分叉</h3>
-<pre><code># App/AppConfig.py
-_FIELD_TYPES = {..., "SSE_DEBUG": bool, ...}      # 缺 FORWARD_ADJUST_ENABLED / FULL_DATA_MODE
-...
-setattr(self, key.lower(), caster(raw))           # bool("False") == True ！</code></pre>
 <div class="box warn">
-装了 pydantic-settings 与没装，是<b>两套不同的配置行为</b>：<br>
-· 降级路径下 <code>FORWARD_ADJUST_ENABLED</code>、<code>FULL_DATA_MODE</code>、<code>SCAN_FANGLIANG_WINDOW_BARS</code>
-以及两个 <code>*_LOOKBACK_CONFIG</code>（dict）都<b>无法被 env/.env 覆盖</b>；<br>
-· 降级路径下 <code>SSE_DEBUG="False"</code> 会被 <code>bool("False")</code> 解析成 <b>True</b>，
-与 pydantic 的语义相反。<br>
-建议删除降级分支，直接硬依赖 pydantic-settings（requirements 里已声明）。
+<b>但有一处「改了却没生效」：</b><code>.gitignore</code> 加了 <code>App/*.json</code>，
+可那 4 个缓存文件<b>早已被 git 跟踪</b>——gitignore 对已跟踪文件无效，它们照样产生 diff。
+必须补一条 <code>git rm --cached App/*.json</code>。这一点我做了实证（见 §3.1）。
 </div>
 
-<h3>7.5 <span class="tag t-p1">P1</span> 无锁的共享可变状态</h3>
+<h2>2 · 六项接纳修复逐项核验</h2>
+
 <table>
-<thead><tr><th style="width:26%">状态</th><th>风险</th></tr></thead>
+<thead><tr><th style="width:8%">项</th><th style="width:22%">内容</th><th style="width:9%">结论</th><th>核验依据</th></tr></thead>
 <tbody>
-<tr><td><code>app_data._saved_point_times</code></td><td>AppChart:320-323 直接写 dict，与 CSV 写入非原子；无锁</td></tr>
-<tr><td><code>app_data._annotations</code></td><td><code>add/delete/update_annotation</code> 读-改-写无锁，并发编辑丢更新</td></tr>
-<tr><td><code>CMyBSPointList.REPLAY_MODE</code></td><td>类级全局标志，靠"调用方记得复原"维持（AppEngine:671/772-774）。
-若 <code>_make_chan_config()</code> 在第 671 行前抛异常，<code>finally</code> 里的引用会触发 NameError 掩盖原始异常</td></tr>
-<tr><td><code>_scan_aborted</code> / <code>_page_index_code</code></td><td>模块级全局，多用户/多标签共享（本地工具可接受，但已在 LOCK_POLICY 里被当作"扫描态"登记，语义不清晰）</td></tr>
+
+<tr><td><b>A</b></td><td>AppRefresh 重入守卫</td>
+<td><span class="tag t-ok">✅ 有效</span></td>
+<td>装饰器改为「守卫只判不写 → 真正进入才置位 → finally 复位」，
+<code>_refresh_stock_names</code> 内的旧守卫已移除，无重复判断。
+<b>实证 2/2 通过</b>：撞守卫调用后 <code>running</code> 仍为 True；异常逃逸后复位为 False。</td></tr>
+
+<tr><td><b>B</b></td><td>AppScanPool 引用归还</td>
+<td><span class="tag t-ok">✅ 有效</span></td>
+<td><code>_monitor_task</code> 的状态落库段包进 try，归还放入 <code>finally</code>，
+<code>task is None</code> 不再早退。
+<b>实证 3/3 通过</b>：task 不存在 / <code>get_task</code> 抛异常 / <code>set_status</code> 抛异常，
+三条路径 <code>_active_scans</code> 均归 0。</td></tr>
+
+<tr><td><b>C</b></td><td>destroy_pool 计数同步</td>
+<td><span class="tag t-ok">✅ 有效</span></td>
+<td>选择「保留 + 归零计数 + 修正 docstring」而非删除——这个选择合理（留作外部/测试显式销毁兜底）。
+docstring 已改为如实描述「生产路径不再直接调用」。<b>实证通过</b>：<code>_active_scans=3</code> 时调用后归 0。</td></tr>
+
+<tr><td><b>item5</b></td><td>选点内存态纳入锁</td>
+<td><span class="tag t-ok">✅ 有效</span></td>
+<td><code>save_point_time</code> 现在在<b>同一把锁内</b>先更新内存态再落 CSV；
+调用方 <code>AppChart:321</code>、<code>AppSSE:1611</code> 已不再直写
+<code>saved_point_times</code>；期货清理的 <code>del</code> 也已移入 AppData 加锁执行。
+<b>全仓已搜不到 AppChart/AppSSE 对 <code>saved_point_times[</code> 的直写</b>。</td></tr>
+
+<tr><td><b>item6</b></td><td>降级侧补齐 7 键</td>
+<td><span class="tag t-ok">✅ 有效</span></td>
+<td><code>_FIELD_TYPES</code> 已含全部 7 个：<code>SCAN_FANGLIANG_WINDOW_BARS</code>、
+<code>VIEW_COUNT</code>、<code>DUAL_SUB_FALLBACK_MIN</code>、<code>MAX_DUAL_CACHE_KEYS</code>、
+<code>MAX_STOCKS_SUB_CHAN</code>、<code>DEBUG_COLD_START_{START,END}_DATE</code>。
+pydantic / 降级两套实现对这 7 键的行为已一致。</td></tr>
+
+<tr><td><b>item5.1</b></td><td><code>.gitignore</code> 忽略缓存</td>
+<td><span class="tag t-no">❌ 未生效</span></td>
+<td>规则已写入，但 4 个缓存文件<b>已被 git 跟踪</b>，gitignore 对已跟踪文件无效 → 实测仍产生 diff。
+<b>需补 <code>git rm --cached App/*.json</code></b>。详见 §3.1。</td></tr>
+
 </tbody>
 </table>
 
-<h3>7.6 <span class="tag t-p2">P2</span> <code>_get_kl_type</code> 静默兜底</h3>
-<pre><code># App/utils.py:250
-freq_sec = CTqSdkAPI.FREQ_SEC_MAP.get(freq, 86400) if CTqSdkAPI else 86400
-return _get_kl_type_by_sec(freq_sec)</code></pre>
-<p>未识别的周期（含 <code>CTqSdkAPI</code> 未安装时）<b>一律静默当成日线</b>。
-数据源缺失降级成"算错周期"，比直接报错更难排查。</p>
+<h2>3 · 本轮新引入的问题</h2>
 
-<!-- ═══════════ 8 ═══════════ -->
-<h2 id="s8">8 · 测试体系评估</h2>
+<h3>3.1 <span class="tag t-no">新引入</span> <code>.gitignore</code> 对已跟踪文件无效（item5.1 未真正落地）</h3>
+<pre><code>实证（在干净副本上真实操作）：
+  $ echo "App/*.json" &gt;&gt; .gitignore
+  $ 修改 App/stock_names.json
+  $ git status --short
+   M .gitignore
+   M App/stock_float_mc.json      ← 仍然被跟踪
+   M App/stock_names.json         ← 仍然被跟踪
 
-<p>21 个回归组件、覆盖 fixtures 完整性 / 快照回归 / 逐步回放 / 7 个阶段的"成果防护" /
-SSE 灰度比对 / 并发 / API 集成 / 前端冒烟。投入是实的，但<b>性质需要认清</b>。</p>
+原因：.gitignore 只对「未跟踪」文件生效。
+      App/last_code_freq.json、stock_float_mc.json、stock_names.json、
+      stock_pettm_index.json 这 4 个早已 git ls-files 在册。</code></pre>
+<div class="box warn">
+<b>补一步即可生效：</b>
+<pre style="margin:8px 0 0">git rm --cached App/*.json
+git commit -m "chore: 停止跟踪运行时缓存（配合 .gitignore 的 App/*.json）"</pre>
+执行后这 4 个文件会从索引移除、但保留在工作目录，刷新产生的数值漂移不再进 diff。
+否则上一轮出现过的「缓存文件混进修复提交」还会再发生。
+</div>
 
-<h3>8.1 主要问题：大量断言打在"源码文本"上，而不是"行为"上</h3>
-<pre><code># test_phase3_guards.py:135
-src = inspect.getsource(fn)
-holds = "with _ENGINE_LOCK:" in src          # ← 检查源码里有没有这串字符
+<h3>3.2 <span class="tag t-info">小瑕疵</span> 注释中英混排</h3>
+<pre><code># App/AppScanPool.py:227-228
+# 修复：先前 task is None 走 return 早退、且无 try/finally，get_task/
+# set_status 抛异常会让收割线程带未归还引用死亡 → 池永不销毁。now 无论
+#                                                            ^^^ 中英混排</code></pre>
+<p>纯文字问题，不影响运行。但这段是「修复说明」注释，将来别人读到这里会被绊一下，
+建议把 <code>now</code> 改成「现」。</p>
 
-# test_phase3_guards.py:164-167
-for pat in FORBIDDEN_ENGINE_CALLS:
-    for i, line in enumerate(src.splitlines(), 1):
-        if pat in line and not line.strip().startswith("#"):   # ← 逐行文本匹配
+<h3>3.3 <span class="tag t-part">残留</span> B 的 try/finally 未覆盖最外层获取</h3>
+<pre><code>def _monitor_task(task_id, futures):
+    from App.AppScanStore import get_scan_store
+    store = get_scan_store()        # ← 仍在 try 之外
+    ...
+    try:
+        task = store.get_task(task_id)
+        ...
+    finally:
+        _release_scan()</code></pre>
+<p>若 <code>get_scan_store()</code>（首次访问会建库、建表）抛异常，引用仍然泄漏。
+概率很低，但把 <code>try</code> 提到函数第一行即可彻底封死——建议顺手做了，一行的事。</p>
 
-# test_phase3_guards.py:245
-if current != baseline: ...                   # ← 路由集合快照全等</code></pre>
-<ul>
-<li>把 <code>with _ENGINE_LOCK:</code> 抽成 helper（<code>with engine_lock():</code>）→ 文本断言立刻失败，
-但行为完全正确；反过来，换个写法持锁而文本不含该串 → 断言通过但可能根本没锁。<b>两个方向都会误判。</b></li>
-<li><code>FORBIDDEN_ENGINE_CALLS</code> 只扫 <code>FrontAPI.py</code> 一个文件，
-<b>AppSSE / AppScan / AppRefresh 直连引擎不受约束</b>。</li>
-<li>路由集合全等快照意味着：<b>每加/删一个路由都要"重冻基线"</b>。它冻结的是结构，
-因此无法发现"路由存在但没人调用"（<code>/api/futures/read/config</code> 与 <code>/status</code> 就是这么活下来的）。</li>
-<li>分层方向检查只列了 <code>AppData / AppConfig / AppOrch</code> 三个文件，
-<b>恰好漏掉了唯一的真实违规 <code>BuySellPoint/BSPointList.py</code></b>。</li>
-</ul>
+<h2>4 · 回归验证：同目录 A/B 对照</h2>
 
-<h3>8.2 覆盖盲区</h3>
+<p>本轮改动只在本地工作副本，未推送。为判定「是否引入新回归」，我构造了严格对照：
+同一目录、同一份缓存数据，唯一变量是那 6 个 <code>.py</code> 文件。</p>
+
 <table>
-<thead><tr><th style="width:30%">盲区</th><th>说明</th></tr></thead>
+<thead><tr><th style="width:26%">组</th><th style="width:14%">状态</th><th>结果</th></tr></thead>
 <tbody>
-<tr><td>无"死代码"检测</td><td>全仓 39 处死代码/不可达分支，没有一个测试能发现</td></tr>
-<tr><td>无"注释-代码一致性"检测</td><td>§6 的 17 处事实性错误全部逃逸</td></tr>
-<tr><td>无行为级并发测试</td><td><code>test_sse_concurrent</code> 测 8 连接隔离，
-但没有一个测试覆盖"两批扫描并存"（§7.1 的 P0 bug）</td></tr>
-<tr><td>无异常路径测试</td><td>刷新卡死（§7.3）、SSE 双窗 init 无错误帧（§4⑥）均未被覆盖</td></tr>
-<tr><td><code>func_map_check</code> 只扫 AppEngine</td><td>AppSSE（1748 行）/ AppScan / AppChart 不在"无孤儿"检查范围内</td></tr>
+<tr><td><b>A 组（基线）</b></td><td>6 个文件 = <code>d704fa7</code> 原版</td>
+<td><b>16/21 通过</b>；失败：snapshot_regression、trigger_step_replay、determinism、func_map_sync、phase6_guards</td></tr>
+<tr><td><b>B 组（本轮）</b></td><td>6 个文件 = 工作副本新版</td>
+<td><b>16/21 通过</b>；失败项<b>与 A 组完全一致</b></td></tr>
 </tbody>
 </table>
+
+<div class="box good">
+<b>结论：本轮 6 项改动未引入任何新的测试失败。</b>16 项通过、5 项失败，失败集合与基线逐项相同。
+</div>
+
+<div class="box warn">
+<b>过程中的两次自我纠错（如实记录）：</b><br>
+① 我第一次跑 A/B 时误用了 <code>run_all.py</code> 里的<b>组件名</b>当文件名（<code>func_map_sync.py</code> 等），
+那 5 个「FAIL」其实是「文件不存在」，结论无效——发现后改用 <code>run_all.py</code> 重跑。<br>
+② 构造基线时 <code>App/AppChart.py</code> 被 curl 下成了 <b>0 字节</b>，导致 A 组一度只有 5/21；
+排查到是下载失败而非代码问题后重新下载（36464 字节）再跑，才得到可信的 16/21。<br>
+两次都是我的操作失误，差点给出错误结论，此处一并留痕。
+</div>
+
+<h2>5 · 5 项失败的根因（本轮已全部定位）</h2>
+
+<table>
+<thead><tr><th style="width:24%">组件</th><th style="width:10%">归属</th><th>根因与建议</th></tr></thead>
+<tbody>
+
+<tr><td>snapshot_regression<br>determinism</td>
+<td><span class="tag t-info">环境</span></td>
+<td>两者都在 <code>src.connect()</code> 处抛 <code>RuntimeError</code>。
+<b>但报错文案是误导的</b>：它说「构造后的 TqApi 实例缺少 <code>api.wait_update</code>（tqsdk 接口不兼容，请 pip install -U tqsdk）」。
+实测 tqsdk <b>3.10.2 已安装</b>，且 <code>TqApi.wait_update</code> 是类上的普通实例方法、
+<code>TqApi</code> 未定义 <code>__getattr__</code> —— 也就是说构造成功的话 <code>hasattr</code> 恒为 True。
+真实原因是 TqApi <b>会话本身建立不起来</b>（用dummy凭证实测得到
+<code>403 invalid_grant 用户权限认证失败</code>）。
+<b>建议</b>：把 <code>connect()</code> 的诊断改成「先区分构造失败 vs 接口缺失」，
+别把认证失败误报成版本不兼容——否则照提示升级 tqsdk 完全无助于排障。</td></tr>
+
+<tr><td>trigger_step_replay</td>
+<td><span class="tag t-part">测试基线</span></td>
+<td>4 项全为 <code>meta.pe_ttm: expected=19.99 actual=20.0</code>；核心断言（已确认笔 14/14、虚笔）通过。
+根因是<b>快照基线冻结了联网刷新的易变字段</b>，<code>normalize()</code> 未剔除 <code>meta.pe_ttm</code>。
+每刷新一次 PE 必然再挂。<b>建议</b>：normalize 剔除 <code>meta.pe_ttm</code>（顺带 <code>generated_at</code>）。</td></tr>
+
+<tr><td>func_map_sync</td>
+<td><span class="tag t-part">基线陈旧</span></td>
+<td>4 类问题：① 函数未归属 <code>verify_eltdx_api</code>；② 状态未归属 <code>_ELTDX_REQUIRED_PYPI</code>；
+③ 行号漂移 20 处（<code>AppEngine</code> +5 行、<code>ElTdxAPI</code> +23 行）；④ 函数数与 JSON 不一致。<br>
+有意思的是：<b>①②正是我第一轮点名的死代码</b>（<code>verify_eltdx_api</code> 全仓零引用），
+它们以「未归属孤儿」的形式把这个守护用例挂住了。<br>
+<b>注意</b>：本轮 6 个文件与 <code>func_map_check</code> 的扫描范围（<code>AppEngine.py</code> + <code>ElTdxAPI.py</code>）<b>无交集</b>，
+故此失败与本轮无关。<b>建议</b>：删除两个孤儿符号 + <code>--update</code> 重冻。</td></tr>
+
+<tr><td>phase6_guards</td>
+<td><span class="tag t-info">前端既有</span></td>
+<td><code>getLayoutParams</code> 游离、<code>closeAmoPanel</code>/<code>toggleAmoPanel</code> 未登记 window 面。
+本轮未触碰任何 JS，属既有问题。</td></tr>
+
+</tbody>
+</table>
+
+<h2>6 · 流程提醒</h2>
+
+<div class="box warn">
+<b>远端 <code>custom-dev</code> 仍是 <code>d704fa7</code>，本轮 6 项修复尚未推送。</b>
+我用 <code>git ls-remote</code> 与 GitHub API 双向确认：分支 HEAD 停在
+<code>d704fa7</code>（2026-08-28T12:00:21Z），无新提交。
+改动目前只存在于本地工作副本 <code>C:\my_chan_project</code>。<br><br>
+你这次让我「去 GitHub 获取最新代码」，但代码没推上去——所以我是<b>直接核验你的工作副本</b>完成的复审。
+下次改完记得 <code>git push</code>，否则外部视角看到的是旧版本。
+</div>
 
 <div class="box">
-<b>建议的补强方向（按性价比）：</b>① 把源码文本断言换成行为断言——
-<code>inspect.getsource</code> 改成"并发打两次 <code>call_analysis</code>，断言不会读到对方的 set_data"；
-② 加一个 <code>vulture</code>/自定义 AST 死代码门禁；
-③ 加一个"路由可达性"检查（每个路由至少被前端或脚本引用一次）；
-④ 把 §7.1 的并发扫描场景写成真实的集成测试。
+<b>另外两点工程建议：</b><br>
+① 推送前把 <code>App/*.json</code> 从索引移除（见 §3.1），否则这次提交又会带上缓存漂移；<br>
+② 提交时建议把「代码改动」与「<code>Docs/</code> 报告」分开提交，便于回溯。
 </div>
 
-<!-- ═══════════ 9 ═══════════ -->
-<h2 id="s9">9 · 改造优先级</h2>
+<h2>7 · 遗留项现状</h2>
 
 <table>
-<thead><tr><th style="width:7%">优先级</th><th style="width:30%">动作</th><th>预期收益</th></tr></thead>
+<thead><tr><th style="width:36%">项</th><th style="width:12%">现状</th><th>说明</th></tr></thead>
 <tbody>
-<tr><td><span class="tag t-p0">P0</span></td>
-<td>修 <code>AppEngine.py:521</code> 不可达分支</td>
-<td>修复复盘 + 日内周期的数据正确性 bug，改 1 行</td></tr>
-<tr><td><span class="tag t-p0">P0</span></td>
-<td>引入 <code>build_chan()</code> 隔离适配器，把临界区缩到"仅构造"</td>
-<td>解开全局锁 → 交互延迟与并发度同时改善；为去掉 SERIAL/SCAN/RAW 人工登记铺路</td></tr>
-<tr><td><span class="tag t-p0">P0</span></td>
-<td>AppScanPool 改引用计数 / 按 task 建池</td>
-<td>消除并发扫描互相取消</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td>
-<td><code>close_all()</code> 加超时；SSE 双窗 <code>init_chan_symbol</code> 返回 None 时补错误帧</td>
-<td>消除请求挂起与"静默断流"</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td>
-<td>核心引擎去 App 依赖：以 <code>SubLevelProvider</code> 注入替代 <code>app_data</code> 直取</td>
-<td>恢复依赖方向；消除"缓存 miss → 静默改变计算结果"</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td>
-<td><code>_refresh_stock_names</code> 加 try/finally；<code>_annotations</code> / <code>_saved_point_times</code> 加锁</td>
-<td>消除卡死与丢更新</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td>
-<td>删配置降级分支；requirements 补 pypinyin / winotify</td>
-<td>消除行为分叉与"静默劣化"</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td>
-<td>删 39 处死代码；合并 3 处复制粘贴块（SSE 循环约 350 行）</td>
-<td>可维护性的直接提升</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td>
-<td>收敛 A/B 双实现（删 legacy）；统一 <code>trigger_step</code> 语义</td>
-<td>代码路径减半；消除两种入口结果不一致</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td>
-<td>前端按 <code>ChanApp.components</code> 切真 ES Module（浏览器原生 import，保持零构建）</td>
-<td>唯一能救 7797 行单文件的路径；可分批按组件迁移</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td>
-<td>测试：文本断言 → 行为断言；加死代码门禁与路由可达性门禁</td>
-<td>让守护用例真正守护行为，而不是守护源码字符串</td></tr>
+<tr><td>P0 引擎 <code>set_data</code> 全局注入<br>（建议 <code>build_chan()</code> 隔离适配器）</td>
+<td><span class="tag t-info">本轮不处理</span></td><td>裁决已明确排除在本轮范围外，双方一致。<code>AppEngine.py:696/714/734</code> 仍在写类级全局。</td></tr>
+<tr><td>P1 <code>BSPointList</code> 反向依赖 App</td>
+<td><span class="tag t-info">本轮不处理</span></td><td><code>BuySellPoint/BSPointList.py:698/725</code> 仍在。</td></tr>
+<tr><td>死代码清理</td>
+<td><span class="tag t-part">有进展</span></td><td>本轮 goal 不是清理，但 <code>func_map_check</code> 已把
+<code>verify_eltdx_api</code>/<code>_ELTDX_REQUIRED_PYPI</code> 两个孤儿明确报出来了，可作为清理入口。</td></tr>
+<tr><td>注释与事实不符</td>
+<td><span class="tag t-ok">已收敛</span></td><td>第二轮的 REPLAY_MODE 过度声称已在裁决中承认并纠偏；本轮新注释（A/B/C 三处）我逐条核对过，
+与实现一致。仅 §3.2 一处中英混排。</td></tr>
+<tr><td>A/B 双实现、<code>trigger_step</code> 语义分叉</td>
+<td><span class="tag t-info">本轮不处理</span></td><td>维持现状。</td></tr>
+<tr><td>前端 7797 行单文件 + phase6 失败</td>
+<td><span class="tag t-info">本轮不处理</span></td><td>维持现状。</td></tr>
 </tbody>
 </table>
+
+<h2>8 · 建议的收尾动作（都很小）</h2>
+<ol>
+<li><code>git rm --cached App/*.json</code> 并推送 —— 让 item5.1 真正生效（否则等于没做）</li>
+<li><code>_monitor_task</code> 的 <code>try</code> 提到函数首行 —— 封死最后一处泄漏路径</li>
+<li><code>AppScanPool.py:228</code> 的 <code>now</code> → <code>现</code></li>
+<li><code>test_trigger_step_replay.normalize()</code> 剔除 <code>meta.pe_ttm</code> —— 让 4 项失败不再复发</li>
+<li>删掉 <code>verify_eltdx_api</code> / <code>_ELTDX_REQUIRED_PYPI</code> 两个孤儿 + <code>func_map_check.py --update</code> 重冻</li>
+<li><code>connect()</code> 的错误诊断区分「构造失败」与「接口缺失」—— 现在的文案会把人带沟里</li>
+<li><b>推送到 GitHub</b></li>
+</ol>
 
 <hr>
 <p class="muted">
-本报告全部结论均以仓库代码为准复核；涉及行号的引用均取自 <code>custom-dev</code> 分支当前快照。
-第三方缠论引擎目录（Bi/ BuySellPoint/ Combiner/ Common/ KLine/ Math/ Plot/ Seg/ ZS/）
-本次仅在与 App 层的<b>边界</b>处做评估（依赖倒置与全局状态注入），未对其算法实现做任何评价。
+本次复审对象：GitHub <code>custom-dev@d704fa7</code>（未变更）+ 本地工作副本 6 个改动文件
+（AppChart / AppConfig / AppData / AppRefresh / AppScanPool / AppSSE）。
+A/B 对照在独立构造的基线目录上完成，实证脚本 <code>verify_round3.py</code> 位于工作区根目录。
+<br><br>
+<b>环境说明：</b>复审期间我的一次 <code>git stash</code> 与沙箱的文件保护机制冲突，
+导致<b>我的临时克隆</b>（<code>chanpy/</code>）的 <code>.git/objects</code> 丢失。
+你的工作副本 <code>C:\my_chan_project</code> 不受影响（非 git 仓库，全程只读取，已复核文件完好）。
+该克隆仅用于跑测试，其中被覆盖的 6 个改动文件我已逐个校验内容完整。
 </p>
 
 </div>
