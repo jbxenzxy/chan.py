@@ -51,6 +51,19 @@
 
         const MACD_TEXT_HEIGHT = 14;
 
+        // 双窗口模式逐窗布局参数（fix#1+#2）：
+        // 双窗时每个 canvas 高度被砍半，若沿用单窗的 PADDING/GAP 绝对值与 0.2 占比，
+        // 固定开销占比放大、MACD 带被严重压扁，波峰波谷难以分辨。
+        // 因此双窗时：压缩冗余上下留白与间隔、并把指标区(MACD)占比从 0.2 提到 0.3。
+        // 单窗完整沿用原始 PADDING/GAP/VOL_RATIO，避免回归。
+        const DUAL_LAYOUT = { top: 10, bottom: 30, gap: 4, volRatio: 0.30 };
+
+        function getLayoutParams() {
+            return isDualWindow
+                ? DUAL_LAYOUT
+                : { top: PADDING.top, bottom: PADDING.bottom, gap: GAP, volRatio: VOL_RATIO };
+        }
+
         let viewOffset = 0, viewCount = VIEW_COUNT;
 
         let isDragging = false, dragStartX = 0, dragStartOffset = 0;
@@ -878,29 +891,35 @@
 
         function getChartArea() {
             const w = canvas.clientWidth, h = canvas.clientHeight;
-            const chartH = (h - PADDING.top - PADDING.bottom - GAP) * (1 - VOL_RATIO);
+            const L = getLayoutParams();
+            const netH = h - L.top - L.bottom - L.gap;
+            const chartH = netH * (1 - L.volRatio);
             const totalW = w - PADDING.left - PADDING.right;
             const rightGap = 55;
-            return { x: PADDING.left, y: PADDING.top, w: totalW - rightGap, h: chartH };
+            return { x: PADDING.left, y: L.top, w: totalW - rightGap, h: chartH };
         }
 
         function getVolArea() {
             const w = canvas.clientWidth, h = canvas.clientHeight;
-            const chartH = (h - PADDING.top - PADDING.bottom - GAP) * (1 - VOL_RATIO);
-            const totalMacdH = (h - PADDING.top - PADDING.bottom - GAP) * VOL_RATIO;
+            const L = getLayoutParams();
+            const netH = h - L.top - L.bottom - L.gap;
+            const chartH = netH * (1 - L.volRatio);
+            const totalMacdH = netH * L.volRatio;
             const macdChartH = totalMacdH - MACD_TEXT_HEIGHT;
             const totalW = w - PADDING.left - PADDING.right;
             const rightGap = 55;
-            return { x: PADDING.left, y: PADDING.top + chartH + MACD_TEXT_HEIGHT,
+            return { x: PADDING.left, y: L.top + chartH + MACD_TEXT_HEIGHT,
                      w: totalW - rightGap, h: macdChartH };
         }
 
         function getMacdTextArea() {
             const w = canvas.clientWidth, h = canvas.clientHeight;
-            const chartH = (h - PADDING.top - PADDING.bottom - GAP) * (1 - VOL_RATIO);
+            const L = getLayoutParams();
+            const netH = h - L.top - L.bottom - L.gap;
+            const chartH = netH * (1 - L.volRatio);
             const totalW = w - PADDING.left - PADDING.right;
             const rightGap = 55;
-            return { x: PADDING.left, y: PADDING.top + chartH,
+            return { x: PADDING.left, y: L.top + chartH,
                      w: totalW - rightGap, h: MACD_TEXT_HEIGHT };
         }
 
