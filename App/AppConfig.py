@@ -178,6 +178,17 @@ _FIELD_DEFAULTS = {
 }
 
 # 降级版 env 变量 → 类型转换表（仅覆盖可经 env/.env 注入的标量字段）
+def _env_bool(raw):
+    """严格字符串→布尔解析：仅 1/true/yes/on 视作 True，其余（含 "False"）为 False。
+
+    修复：原实现 caster=bool 直接 bool(raw)，非空字符串恒真，导致
+    env 写 "SSE_DEBUG=False" 反而变成 True（字符串布尔陷阱）。
+    """
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 _FIELD_TYPES = {
     "HOST": str,
     "PORT": int,
@@ -187,7 +198,9 @@ _FIELD_TYPES = {
     "SCAN_MIN_FLOAT_MC": float,
     "TQ_ACCOUNT": str,
     "TQ_PASSWORD": str,
-    "SSE_DEBUG": bool,
+    "SSE_DEBUG": _env_bool,
+    "FORWARD_ADJUST_ENABLED": _env_bool,
+    "FULL_DATA_MODE": _env_bool,
 }
 
 

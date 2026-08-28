@@ -69,8 +69,7 @@ def close_all():
     只设置 _closed 旗通知各生成器线程退出，然后等待各生成器线程在
     finally 中完成 api.close()（_api_closed 置位）。api.close() 由生成器
     线程调用——wait_update 已返回、_loop 已停止，从机制上保证不触发
-    「不能在协程中调用 close」。生成器最迟一个 wait_update deadline
-    （0.1s）内退出，等待是确定性的。
+    「不能在协程中调用 close」。
     """
     with _ACTIVE_SOURCES_LOCK:
         sources = list(_ACTIVE_SOURCES)
@@ -79,10 +78,13 @@ def close_all():
             src.close()
         except Exception as exc:  # noqa: BLE001 —— 单个源关闭失败不阻断其余
             log.warning("关闭 CTqSdkSession 异常: %s: %s", type(exc).__name__, exc)
-    # 等待各生成器线程完成 api.close()（机制保证 0.1s 内完成）
+    # 等待各生成器线程完成 api.close()。修复：不可无超时无限阻塞——
+    # 生成器在 init_chan_symbol（拉历史构建初窗）阶段不经过 wait_update，
+    # _closed 旗不会立刻被消费、_api_closed 未必在 0.1s 内置位；加超时兜底，
+    # 源仍由其生成器 finally 自行 close，杜绝 close_all 永久挂死主进程退出。
     for src in sources:
         try:
-            src._api_closed.wait()
+            src._api_closed.wait(timeout=3.0)
         except Exception as exc:  # noqa: BLE001
             log.warning("等待 CTqSdkSession 关闭异常: %s: %s", type(exc).__name__, exc)
 

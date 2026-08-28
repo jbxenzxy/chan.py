@@ -76,12 +76,12 @@ from App.AppAMO import call_amo
 #                      红框中枢计算 / 期货选点）。共用 _ENGINE_LOCK：
 #                      同一时刻只有一个线程进入引擎，交互延迟可接受。
 #
-#   SCAN（并行扫描）    批量扫描路径。前端按 SCAN_CONCURRENCY 并发发起
-#                      /api/scan_one。_scan_lock 为全局锁（单实例，非按
-#                      票）：锁内串行化引擎调用 analyze_stock（保护非线程
-#                      安全的引擎缓存不被并发写），锁外的预处理/结果过滤
-#                      保留并发——即并发体现在非引擎阶段，引擎阶段全局
-#                      串行。
+#   SCAN（并行扫描）    批量扫描路径。前端并发发起 /api/scan_one，任务派发
+#                      至执行池（SCAN_ASYNC，worker 数由 SCAN_POOL_WORKERS
+#                      决定）。_scan_lock 为全局锁（单实例，非按票）：锁内串行
+#                      化引擎调用 analyze_stock（保护非线程安全的引擎缓存不被
+#                      并发写），锁外的预处理/结果过滤保留并发——即并发体现在
+#                      非引擎阶段，引擎阶段全局串行。
 #
 #   SELF_CONTAINED     SSE 期货实时流。每连接独立 TqApi + CChan 对象，
 #                      不触碰 _stocks_analysis_cache（_futures_analysis_
@@ -106,7 +106,7 @@ LOCK_POLICY = {
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
                                       "串行调用方必须改走 call_analysis / run_analysis"),
     "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：语义同 analyze_stock"),
-    "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留 SCAN_CONCURRENCY 并发；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
+    "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留前端并发请求；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
     "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
     "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),

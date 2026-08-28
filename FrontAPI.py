@@ -12,7 +12,7 @@ CSSESource/CTqSdkSession 位于 DataAPI/TqSdkCSSESource.py，本文件仅 re-exp
 
 锁分类（AppOrch.LOCK_POLICY）：
     SERIAL         串行分析（call_* 漏斗持 _ENGINE_LOCK）
-    SCAN           并行扫描（Scanner.scan_one，_scan_lock 防同票重入）
+    SCAN           并行扫描（Scanner.scan_one，_scan_lock 全局单实例锁，串行化引擎调用）
     SELF_CONTAINED SSE 流（每连接独立会话，不加锁）
 
 启动：
@@ -685,7 +685,7 @@ if __name__ == "__main__":
     log.info(f"[信息] API 文档:   http://{HOST}:{PORT}/docs")
     log.info(f"[信息] K线图表页:  http://{HOST}:{PORT}/")
     log.info(f"[信息] 健康检查:   http://{HOST}:{PORT}/api/health")
-    log.info("[信息] SSE:       /api/futures_stream（同步生成器，每连接一条常驻线程）")
+    log.info("[信息] SSE:       /api/futures/read/stream（同步生成器，每连接一条常驻线程）")
     # Uvicorn 默认把日志写 stderr（终端标红）。传 log_config=None 让其
     # 复用 AppLog.py 已配置的 root (stdout)，startup/error 日志改为 stdout，
     # 与应用日志同色；access 日志已由 access_log=False 关闭。

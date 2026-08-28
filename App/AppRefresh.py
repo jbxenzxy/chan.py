@@ -402,6 +402,25 @@ def _refresh_pe_ttm():
         _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
 
 
+def _reset_refresh_running(fn):
+    """装饰器：确保刷新函数无论正常完成还是异常逃逸都复位 running 旗。
+
+    原实现 running=True（416）只在函数末尾（617）复位，一旦中途抛异常
+    逃逸，运行旗永久卡 True，后续所有刷新请求直接返回 already_running、
+    彻底不可用。包一层 try/finally 双保险（正常路径的复位幂等）。
+    """
+    import functools
+
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _refresh_status["running"] = False
+    return _wrapper
+
+
+@_reset_refresh_running
 def _refresh_stock_names():
     """
     从本地文件批量获取全市场股票名称，保存到 stock_names.json。

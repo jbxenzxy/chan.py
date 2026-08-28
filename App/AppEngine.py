@@ -518,7 +518,12 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 break
             except ValueError:
                 continue
-        if matched_fmt == "%Y-%m-%d" and freq in INTRADAY_FREQS:
+        # 修复：matched_fmt 只可能取三种斜杠格式之一，原判断写成了
+        # 连字符 "%Y-%m-%d"（恒为 False，不可达），导致纯日期复盘 +
+        # 日内周期（30m/5m）时 target_dt 停在当日 00:00、当日分钟K线全被
+        # 截掉（用户复盘到当天却看到昨收）。改为判断"仅日期、无时间端"
+        # 的斜杠格式，命中时把右边界推到当日 23:59:59，整日分钟K线完整。
+        if matched_fmt == "%Y/%m/%d" and freq in INTRADAY_FREQS:
             target_dt = target_dt.replace(hour=23, minute=59, second=59)
 
         # === 箭头步进：在 full_records 中从 end_date 位置偏移 step 根K线 ===

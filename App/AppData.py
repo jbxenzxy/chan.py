@@ -1247,8 +1247,10 @@ class AppData:
         # ── 标注 ──
         self._annotations = {}   # { "code_freq": [ {date,text,y_offset}, ... ] }
         self._annotations_loaded = False
+        self._annotations_lock = threading.RLock()   # 标注读-改-写串行（多请求并发安全）
 
         # ── 启动时加载（实例化即加载选点表与标注）──
+        self._saved_point_lock = threading.RLock()   # 选点表读-改-写串行（CSV 整表回写，防并发丢更新）
         self._saved_point_times = self.load_saved_point_times()
         self.load_annotations()
 
@@ -1686,13 +1688,64 @@ class AppData:
 
     def save_point_time(self, code, name, freq, sdt):
         """保存或更新某只股票某个周期的选点"""
-        import csv
-        col = FREQ_TO_COL.get(freq)
-        if not col:
-            return
-        # 读取现有数据
-        rows = []
-        if os.path.exists(self.saved_point_file):
+        with self._saved_point_lock:
+            import csv
+            col = FREQ_TO_COL.get(freq)
+            if not col:
+                return
+            # 读取现有数据
+            rows = []
+            if os.path.exists(self.saved_point_file):
+                try:
+                    with open(self.saved_point_file, "r", encoding="utf-8-sig") as f:
+                        reader = csv.DictReader(f)
+                        fieldnames = reader.fieldnames
+                        for row in reader:
+                            rows.append(row)
+                except Exception:
+                    fieldnames = SAVED_POINT_COLUMNS
+            else:
+                fieldnames = SAVED_POINT_COLUMNS
+
+            # 查找是否已有该代码的记录
+            found = False
+            for row in rows:
+                if row.get("code", "").strip() == code:
+                    row["name"] = name
+                    row[col] = sdt
+                    found = True
+                    break
+            if not found:
+                new_row = {"code": code, "name": name}
+                for c in SAVED_POINT_COLUMNS[2:]:
+                    new_row[c] = ""
+                new_row[col] = sdt
+                rows.append(new_row)
+
+            # 写回文件（内存态由调用方维护——分析路径保存后自行更新 _saved_point_times）
+            try:
+                with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                log.info(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
+            except Exception as e:
+                log.warning(f"[警告] 保存选点文件失败: {e}")
+
+    def clear_saved_point_time(self, code, freq):
+        """清除某只股票某个周期在CSV中的选点，同时更新内存缓存"""
+        with self._saved_point_lock:
+            import csv
+            col = FREQ_TO_COL.get(freq)
+            if not col:
+                return
+            # 先清除内存缓存（无论CSV是否存在都要执行）
+            if code in self._saved_point_times:
+                if col in self._saved_point_times[code]:
+                    self._saved_point_times[code][col] = ""
+            if not os.path.exists(self.saved_point_file):
+                return
+            rows = []
             try:
                 with open(self.saved_point_file, "r", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
@@ -1700,69 +1753,20 @@ class AppData:
                     for row in reader:
                         rows.append(row)
             except Exception:
-                fieldnames = SAVED_POINT_COLUMNS
-        else:
-            fieldnames = SAVED_POINT_COLUMNS
-
-        # 查找是否已有该代码的记录
-        found = False
-        for row in rows:
-            if row.get("code", "").strip() == code:
-                row["name"] = name
-                row[col] = sdt
-                found = True
-                break
-        if not found:
-            new_row = {"code": code, "name": name}
-            for c in SAVED_POINT_COLUMNS[2:]:
-                new_row[c] = ""
-            new_row[col] = sdt
-            rows.append(new_row)
-
-        # 写回文件（内存态由调用方维护——分析路径保存后自行更新 _saved_point_times）
-        try:
-            with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-            log.info(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
-        except Exception as e:
-            log.warning(f"[警告] 保存选点文件失败: {e}")
-
-    def clear_saved_point_time(self, code, freq):
-        """清除某只股票某个周期在CSV中的选点，同时更新内存缓存"""
-        import csv
-        col = FREQ_TO_COL.get(freq)
-        if not col:
-            return
-        # 先清除内存缓存（无论CSV是否存在都要执行）
-        if code in self._saved_point_times:
-            if col in self._saved_point_times[code]:
-                self._saved_point_times[code][col] = ""
-        if not os.path.exists(self.saved_point_file):
-            return
-        rows = []
-        try:
-            with open(self.saved_point_file, "r", encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                fieldnames = reader.fieldnames
-                for row in reader:
-                    rows.append(row)
-        except Exception:
-            return
-        # 清除该代码对应周期的选点
-        for row in rows:
-            if row.get("code", "").strip() == code:
-                row[col] = ""
-                break
-        try:
-            with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-            log.info(f"[信息] 清除选点成功: {code} {freq}")
-        except Exception as e:
-            log.warning(f"[警告] 清除选点失败: {e}")
+                return
+            # 清除该代码对应周期的选点
+            for row in rows:
+                if row.get("code", "").strip() == code:
+                    row[col] = ""
+                    break
+            try:
+                with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
+                    writer = csv.DictWriter(f, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                log.info(f"[信息] 清除选点成功: {code} {freq}")
+            except Exception as e:
+                log.warning(f"[警告] 清除选点失败: {e}")
 
     def clear_saved_point(self, code, freq="d"):
         """清除选点并同步清理分析缓存（对应 /api/clear_saved_point）"""
@@ -1837,73 +1841,78 @@ class AppData:
 
     def get_annotations_for(self, code, freq):
         """获取某股票某周期的所有标注"""
-        self.load_annotations()
-        key = get_annotation_key(code, freq)
-        return self._annotations.get(key, [])
+        with self._annotations_lock:
+            self.load_annotations()
+            key = get_annotation_key(code, freq)
+            return self._annotations.get(key, [])
 
     def add_annotation(self, code, freq, date_str, text, y_offset=0):
         """添加一条标注（自动去重：同日期同文字不重复添加）"""
-        self.load_annotations()
-        key = get_annotation_key(code, freq)
-        if key not in self._annotations:
-            self._annotations[key] = []
-        # 去重：同日期同文字已存在则不添加
-        for ann in self._annotations[key]:
-            if ann.get("date") == date_str and ann.get("text") == text:
-                return False
-        self._annotations[key].append({
-            "date": date_str,
-            "text": text,
-            "y_offset": y_offset,
-        })
-        self.save_annotations()
-        return True
+        with self._annotations_lock:
+            self.load_annotations()
+            key = get_annotation_key(code, freq)
+            if key not in self._annotations:
+                self._annotations[key] = []
+            # 去重：同日期同文字已存在则不添加
+            for ann in self._annotations[key]:
+                if ann.get("date") == date_str and ann.get("text") == text:
+                    return False
+            self._annotations[key].append({
+                "date": date_str,
+                "text": text,
+                "y_offset": y_offset,
+            })
+            self.save_annotations()
+            return True
 
     def delete_annotation(self, code, freq, date_str, text):
         """删除一条标注"""
-        self.load_annotations()
-        key = get_annotation_key(code, freq)
-        if key not in self._annotations:
+        with self._annotations_lock:
+            self.load_annotations()
+            key = get_annotation_key(code, freq)
+            if key not in self._annotations:
+                return False
+            before = len(self._annotations[key])
+            self._annotations[key] = [
+                ann for ann in self._annotations[key]
+                if not (ann.get("date") == date_str and ann.get("text") == text)
+            ]
+            if len(self._annotations[key]) < before:
+                if not self._annotations[key]:
+                    del self._annotations[key]  # 清理空列表
+                self.save_annotations()
+                return True
             return False
-        before = len(self._annotations[key])
-        self._annotations[key] = [
-            ann for ann in self._annotations[key]
-            if not (ann.get("date") == date_str and ann.get("text") == text)
-        ]
-        if len(self._annotations[key]) < before:
-            if not self._annotations[key]:
-                del self._annotations[key]  # 清理空列表
-            self.save_annotations()
-            return True
-        return False
 
     def delete_annotation_by_date(self, code, freq, date_str):
         """删除某日期下所有标注"""
-        self.load_annotations()
-        key = get_annotation_key(code, freq)
-        if key not in self._annotations:
+        with self._annotations_lock:
+            self.load_annotations()
+            key = get_annotation_key(code, freq)
+            if key not in self._annotations:
+                return False
+            before = len(self._annotations[key])
+            self._annotations[key] = [
+                ann for ann in self._annotations[key]
+                if ann.get("date") != date_str
+            ]
+            if len(self._annotations[key]) < before:
+                if not self._annotations[key]:
+                    del self._annotations[key]
+                self.save_annotations()
+                return True
             return False
-        before = len(self._annotations[key])
-        self._annotations[key] = [
-            ann for ann in self._annotations[key]
-            if ann.get("date") != date_str
-        ]
-        if len(self._annotations[key]) < before:
-            if not self._annotations[key]:
-                del self._annotations[key]
-            self.save_annotations()
-            return True
-        return False
 
     def delete_all_annotations(self, code, freq):
         """删除某股票某周期下全部标注"""
-        self.load_annotations()
-        key = get_annotation_key(code, freq)
-        if key not in self._annotations or not self._annotations[key]:
-            return False
-        del self._annotations[key]
-        self.save_annotations()
-        return True
+        with self._annotations_lock:
+            self.load_annotations()
+            key = get_annotation_key(code, freq)
+            if key not in self._annotations or not self._annotations[key]:
+                return False
+            del self._annotations[key]
+            self.save_annotations()
+            return True
 
     def get_annotated_codes(self, freq=""):
         """获取所有有标注的股票代码+周期列表，用于自选扫描

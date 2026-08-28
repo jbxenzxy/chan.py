@@ -2,7 +2,7 @@
 """
 App/AppSSE.py —— SSE 实时流功能域
 =========================================================================
-期货实时行情通过 SSE 长连接持续推送到前端图表（/api/futures_stream）。
+期货实时行情通过 SSE 长连接持续推送到前端图表（/api/futures/read/stream）。
 当前期货是唯一 SSE 实时流消费者；未来若增加股票实时，同样收纳于此
 （命名取 SSE 而非 Futures 的原因）。
 
@@ -719,6 +719,9 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                                           num_bars=sub_num_bars)
         finally:
             CMyBSPointList.REPLAY_MODE = _replay_prev
+        if sub_result is None:
+            yield _sse_frame("init", {"error": "下窗初始化失败（无数据或网络异常）", "symbol": symbol})
+            return
         sub_chan, sub_records, sub_kl_type, _ = sub_result
         sub_kl_type = _get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
@@ -737,6 +740,9 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
             main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time)
         finally:
             CMyBSPointList.REPLAY_MODE = _replay_prev2
+        if main_result is None:
+            yield _sse_frame("init", {"error": "上窗初始化失败（无数据或网络异常）", "symbol": symbol})
+            return
         main_chan, main_records, main_kl_type, _ = main_result
         main_kl_type = _get_kl_type(main_freq)
         if _SSE_DEBUG:

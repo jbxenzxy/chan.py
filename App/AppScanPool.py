@@ -61,6 +61,7 @@ _pool = None
 _pool_engine = None          # "process_pool" | "thread_fallback"
 _pool_lock = threading.Lock()
 _pool_created_count = 0      # 池装配次数（区分首次/重新装配，用于打印）
+_active_scans = 0            # 并发批次引用计数：>0 时禁止销毁池（防互毁）
 
 
 def _worker_init():
@@ -88,7 +89,7 @@ def _get_pool():
     全新进程、空缓存；打印区分首次装配与重新装配，便于确认每次扫描
     状态已恢复初始。
     """
-    global _pool, _pool_engine, _pool_created_count
+    global _pool, _pool_engine, _pool_created_count, _active_scans
     with _pool_lock:
         if _pool is None:
             from App.AppConfig import app_config
@@ -113,6 +114,10 @@ def _get_pool():
                     max_workers=min(workers, _SCAN_POOL_FALLBACK_WORKERS),
                     thread_name_prefix="scan-fallback")
                 _pool_engine = "thread_fallback"
+        # 在本锁内成立引用（与池装配原子）：保证拿到池的同时登记一个
+        # 进行中批次，后续其它批次也并发持有 → 任一批次都不该在还有人
+        # 用时销毁池（修复两批并发扫描时先完成者 cancel 掉后者队列）。
+        _active_scans += 1
         return _pool, _pool_engine
 
 
@@ -214,10 +219,11 @@ def _monitor_task(task_id, futures):
     else:
         store.set_status(task_id, "done")
 
-    # 扫描完成即销毁进程池（即用即弃）：所有 future 已结束，worker 进程
-    # 全部退出、各自缓存（含轻量 result）随之释放，内存归还；下次扫描
-    # 重新 spawn 全新进程、空缓存，恢复点击「股票扫描」前的初始状态。
-    destroy_pool()
+    # 扫描完成即归还池引用（即用即弃）：本批 future 已全部结束。仅当全局
+    # 无其它进行中批次（并发批量扫描）时才真正销毁进程池（worker 缓存
+    # 释放、下次重 new spawn 全新进程、空缓存）；否则保留池供尚在运行的当批，
+    # 以免先完成者 cancel_futures 取消后者队列中的票。
+    _release_scan()
 
 
 def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
@@ -296,6 +302,28 @@ def abort(task_id):
         return {"ok": True, "status": task["status"]}
     store.request_abort(task_id)
     return {"ok": True, "status": task["status"]}
+
+
+def _release_scan():
+    """任务收割后归还池引用；仅当无任何进行中批次时销毁池（幂等）。
+
+    修复前：每批扫描收割完直接 destroy_pool()。当两批扫描并发共享同一
+    单例池时，先完成的那批会 shutdown(cancel_futures=True)，把另一批
+    仍在队列的 future 取消，导致后者票被记 error（并发互毁）。改为
+    引用计数：池在用期间（_active_scans>0）一律不销毁，直到最后一批
+    完成才真正 shutdown。
+    """
+    global _pool, _pool_engine, _active_scans
+    with _pool_lock:
+        _active_scans = max(0, _active_scans - 1)
+        if _active_scans == 0 and _pool is not None:
+            try:
+                _pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001 —— 关池失败不阻断主流程
+                pass
+            _pool = None
+            _pool_engine = None
+            log.info("[扫描池] 任务完成，销毁进程池（worker 缓存已释放）")
 
 
 def destroy_pool():
