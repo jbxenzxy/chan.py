@@ -7218,8 +7218,160 @@
             } catch(e) { return null; }
         }
 
+        // ════════════════════════════════════════════════════════════════
+        // [会话级视图恢复 fix#1-4] 仅作用于"刷新当前页"；冷启动保持现状（股票单窗口）
+        // 用 sessionStorage（只在当前标签会话存活）保存"上次看到的状态"，
+        // 从而：同一标签刷新（含睡眠→唤醒后刷新）→ 精确恢复到 股票/期货、
+        // 单/双窗口、品种、周期、下窗周期；全新打开软件（新会话）→ sessionStorage
+        // 为空 → 走原逻辑（localStorage 股票 / initDefault 上证指数）。复盘不保存。
+        // ════════════════════════════════════════════════════════════════
+
+        function saveLastView() {
+            if (!chartData || !chartData.meta) return;
+            if (chartData.meta.is_replay) return; // 复盘模式不保存（跨刷新不恢复）
+            const view = {
+                market: chartData.meta.market === 'futures' ? 'futures' : 'stock',
+                symbol: chartData.meta.symbol,
+                name: chartData.meta.name || '',
+                freq: currentFreq,
+                dual: !!isDualWindow,
+                subFreq: dualSubFreq || ''
+            };
+            try { sessionStorage.setItem('chan_last_view', JSON.stringify(view)); } catch(e) {}
+        }
+
+        function loadLastView() {
+            try {
+                const raw = sessionStorage.getItem('chan_last_view');
+                if (!raw) return null;
+                const v = JSON.parse(raw);
+                if (!v || !v.market || !v.symbol || !v.freq) return null;
+                return v;
+            } catch(e) { return null; }
+        }
+
+        // 恢复失败/超时的统一兜底：回退到默认股票单窗口（initDefault）
+        function _resumeFallback() {
+            console.error("会话恢复失败，回退到默认加载（股票单窗口）");
+            try { disconnectRealtime(); } catch(e) {}
+            initDefault();
+        }
+
+        // 全局看门狗：恢复启动后若长时间拿不到 chartData（网络异常/代码失效），
+        // 兜底回退到默认，避免页面长期空白或停在"断开"。
+        const _resumeWatchdog = (function(){
+            let started = false;
+            return function() {
+                if (started) return;
+                started = true;
+                const deadline = Date.now() + 25000;
+                (function tick() {
+                    if (chartData) return;                    // 已成功，交给各自流程
+                    if (Date.now() > deadline) {              // 超时兜底
+                        started = false;
+                        _resumeFallback();
+                        return;
+                    }
+                    setTimeout(tick, 600);
+                })();
+            };
+        })();
+
+        // 双窗恢复：等单窗 chartData 就绪后，预置下窗周期，复用 toggleDualWindow 进入双窗
+        // （toggleDualWindow 内部完成双窗 DOM 创建、期货双窗 SSE / 股票双窗请求的全部既有逻辑）
+        function _scheduleResumeDual(view) {
+            const deadline = Date.now() + 15000;
+            (function poll() {
+                if (!chartData || !chartData.meta) {
+                    if (Date.now() > deadline) _resumeFallback();
+                    else setTimeout(poll, 250);
+                    return;
+                }
+                try {
+                    const wantSub = view.subFreq || getDualSubFreq(view.freq) || '';
+                    if (wantSub) dualSubFreq = wantSub;
+                    if (window.toggleDualWindow) window.toggleDualWindow();
+                } catch(e) {
+                    console.error("恢复双窗口失败:", e);
+                    _resumeFallback();
+                }
+            })();
+        }
+
+        // 股票单窗恢复加载（含渲染/历史/统计，与冷启动股票路径同参同语义）
+        function _loadStockForResume(view) {
+            const code = view.symbol, freq = view.freq;
+            document.getElementById("loading").classList.remove("hidden");
+            updateFreqButtonStates(false);
+            updateDateInputType();
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq, { cache: "no-store" })
+                .then(resp => { if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); }); return resp.json(); })
+                .then(data => {
+                    if (!data || !data.meta) throw new Error(data && data.error ? data.error : "API 返回数据缺少 meta 字段");
+                    chartData = data;
+                    document.getElementById("stock-code-input").value = chartData.meta.symbol;
+                    saveHistory(chartData.meta.symbol, chartData.meta.name);
+                    document.getElementById("stock-name").textContent = chartData.meta.name;
+                    document.getElementById("stock-code").textContent = chartData.meta.symbol;
+                    document.title = "缠论分析 - " + chartData.meta.name;
+                    let rf = "d";
+                    if (data.meta.freq === "5分钟") rf = "5m";
+                    else if (data.meta.freq === "30分钟") rf = "30m";
+                    else if (data.meta.freq === "周线") rf = "w";
+                    currentFreq = rf; lastStockFreq = rf;
+                    updateDateInputType(); updateFreqButtonStates(false);
+                    viewCount = VIEW_COUNT; adjustViewForSavedPoint();
+                    viewOffset = Math.max(0, chartData.klines.length - viewCount);
+                    if (chartData.klines.length < viewCount) viewOffset = 0;
+                    const lastDate = klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq);
+                    document.getElementById("goto-date-input").value = lastDate;
+                    updateWeekday(); initialized = true;
+                    applyOverlayButtonStates(); updateRestartBtn(); updateDualBtn();
+                    render();
+                    document.getElementById("loading").classList.add("hidden");
+                    document.getElementById("error").classList.add("hidden");
+                    generateStats(); loadAnnotations();
+                    disconnectRealtime();
+                    if (view.dual) _scheduleResumeDual(view);   // 数据就绪后进入双窗
+                    saveLastView();
+                })
+                .catch(err => {
+                    console.error("恢复上次状态失败，回退默认:", err);
+                    _resumeFallback();
+                });
+        }
+
+        // 会话视图入口：按 market + dual 分派到对应既有加载/连接流
+        function _restoreView(view) {
+            initCanvas(); // 建立图表 canvas 与事件（与冷启动一致，供后续 render 使用）
+            document.getElementById("stock-code-input").value = view.symbol;
+            document.getElementById("loading").classList.remove("hidden");
+            if (view.market === 'futures') {
+                // 期货：init 回调内置 chartData/周期/按钮/渲染全套；需双窗时单窗就绪后进入
+                lastFuturesFreq = view.freq;
+                currentFreq = view.freq;
+                updateFreqButtonStates(true);
+                updateDateInputType();
+                connectRealtimeInit(view.symbol, view.freq);
+                if (view.dual) _scheduleResumeDual(view);
+            } else {
+                // 股票：单窗加载（内部按 view.dual 决定是否进入双窗）
+                lastStockFreq = view.freq;
+                currentFreq = view.freq;
+                _loadStockForResume(view);
+            }
+            _resumeWatchdog(); // 全局兜底：长时间拿不到数据 → initDefault
+        }
+
         async function init() {
             try {
+                // 会话级恢复：仅"刷新当前页"生效（sessionStorage 只在当前标签会话存活）。
+                // 冷启动（全新会话）sessionStorage 为空 → 不进入此分支，保持原逻辑（股票单窗口）。
+                const sessView = loadLastView();
+                if (sessView) {
+                    _restoreView(sessView);
+                    return;
+                }
                 // 先尝试从 localStorage 恢复上次状态
                 const savedState = loadLastCodeFreq();
                 if (savedState) {
@@ -7637,7 +7789,7 @@
         })();
 
         // 关闭/刷新页面时保存状态（仅股票，期货不保存）
-        window.addEventListener('beforeunload', function() { saveLastState(); });
+        window.addEventListener('beforeunload', function() { saveLastState(); saveLastView(); });
 
 
         // 组件注册表暴露至全局（控制台调试入口；内部仍走闭包）
