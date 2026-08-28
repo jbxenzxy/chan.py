@@ -403,16 +403,22 @@ def _refresh_pe_ttm():
 
 
 def _reset_refresh_running(fn):
-    """装饰器：确保刷新函数无论正常完成还是异常逃逸都复位 running 旗。
+    """装饰器：统一管理 running 旗（守卫 + 置位 + try/finally 复位）。
 
-    原实现 running=True（416）只在函数末尾（617）复位，一旦中途抛异常
-    逃逸，运行旗永久卡 True，后续所有刷新请求直接返回 already_running、
-    彻底不可用。包一层 try/finally 双保险（正常路径的复位幂等）。
+    原实现 running=True 只在函数末尾（617）复位，中途异常会卡死运行旗，
+    后续所有刷新请求直接返回 already_running；后改为无条件 finally 复位，
+    又破坏了重入守卫——撞守卫的调用（running 为 True 时的早退）也会把旗标
+    误抹掉、允许第二个刷新并发进入。现收敛为：守卫只判不写（running 时
+    直接返回，不进 finally 复位）；真正进入才置位，无论正常完成还是异常
+    逃逸都复位。三种路径（守卫早退/正常/异常）互不串扰。
     """
     import functools
 
     @functools.wraps(fn)
     def _wrapper(*args, **kwargs):
+        if _refresh_status["running"]:
+            return                      # 撞守卫：直接返回，不触碰 flag
+        _refresh_status["running"] = True
         try:
             return fn(*args, **kwargs)
         finally:
@@ -430,9 +436,7 @@ def _refresh_stock_names():
     （名称缓存由 app_data 持有；本函数只做获取与合并，
      最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
     """
-    if _refresh_status["running"]:
-        return
-    _refresh_status["running"] = True
+    # running 守卫与置位由装饰器 _reset_refresh_running 统一管理，此处不再重复
     _refresh_status["step"] = "刷新股票名..."
     _refresh_status["error"] = None
     log.info("[股名刷新] ========== 开始刷新股票名称 ==========")

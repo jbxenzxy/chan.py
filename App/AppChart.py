@@ -316,11 +316,9 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
         single_cached = app_data.cache_get(cache_key)
         stock_name = (single_cached or {}).get("result", {}).get("meta", {}).get("name", "")
     if not dual:
+        # save_point_time 内部已在 _saved_point_lock 内同步更新内存态与落盘，
+        # 调用方不再锁外直写内存态（修复：CSV 与内存态锁内原子）
         app_data.save_point_time(qualified_code, stock_name, freq, start_time)
-        if qualified_code not in app_data.saved_point_times:
-            app_data.saved_point_times[qualified_code] = {}
-        app_data.saved_point_times[qualified_code]["name"] = stock_name
-        app_data.saved_point_times[qualified_code][app_data.freq_to_col(freq) or ""] = start_time
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
     # 缓存删除统一经 app_data.cache_remove（内部持锁）

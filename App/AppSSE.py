@@ -1605,13 +1605,10 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 
         log.info(f"[{display_key}] 选点左肩时间: {start_time}")
 
-        # Step 3: 保存选点到CSV
+        # Step 3: 保存选点到CSV（save_point_time 内部已在 _saved_point_lock 内
+        # 同步更新内存态与落盘，调用方不再锁外直写内存态）
         name = _get_futures_name(symbol)
         app_data.save_point_time(symbol, name, freq, start_time)
-        if symbol not in app_data.saved_point_times:
-            app_data.saved_point_times[symbol] = {}
-        app_data.saved_point_times[symbol]["name"] = name
-        app_data.saved_point_times[symbol][app_data.freq_to_col(freq) or ""] = start_time
 
         # Step 4: 关闭旧TqApi，创建新TqApi，从T重新拉取
         if src is not None:
@@ -1732,12 +1729,10 @@ def _cleanup_all_futures_data():
         CTqSdkAPI.clear_all_cache()
         log.info("[清理] 已清空期货K线缓存")
 
-    # 2. 清空选点记录中的期货条目（key以KQ.开头）
-    pts_to_del = [k for k in list(app_data.saved_point_times.keys()) if k.startswith("KQ.")]
-    for k in pts_to_del:
-        del app_data.saved_point_times[k]
-    if pts_to_del:
-        log.info(f"[清理] 已清除 {len(pts_to_del)} 条期货选点记录")
+    # 2. 清空选点记录中的期货条目（key以KQ.开头，经 app_data 加锁删除）
+    removed = app_data.clear_saved_points_by_prefix("KQ.")
+    if removed:
+        log.info(f"[清理] 已清除 {removed} 条期货选点记录")
 
     # 3. 清空期货分析缓存（双窗下窗 chan 残留：不清空则切回后
     #    check_nested_diver 经 futures_cache_get 读到过期中间状态）

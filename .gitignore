@@ -12,3 +12,6 @@ cos_config.yaml
 .env
 Script/ths_captured_cookie.txt
 Script/.sync_tdx_config
+# 运行时缓存（stock_names / stock_pettm_index / stock_float_mc / last_code_freq
+# 等联网刷新产生的易变 json，不入库，避免无意义 diff 与合并冲突）
+App/*.json

@@ -1687,12 +1687,18 @@ class AppData:
         return points
 
     def save_point_time(self, code, name, freq, sdt):
-        """保存或更新某只股票某个周期的选点"""
+        """保存或更新某只股票某个周期的选点（CSV 落盘 + 内存态，锁内原子）"""
         with self._saved_point_lock:
             import csv
             col = FREQ_TO_COL.get(freq)
             if not col:
                 return
+            # 内存态同步更新（与落盘同锁，杜绝 CSV 与内存态不一致——
+            # 修复前内存态由调用方在锁外直写，reader 可读到中间态）
+            if code not in self._saved_point_times:
+                self._saved_point_times[code] = {}
+            self._saved_point_times[code]["name"] = name
+            self._saved_point_times[code][col] = sdt
             # 读取现有数据
             rows = []
             if os.path.exists(self.saved_point_file):
@@ -1722,7 +1728,7 @@ class AppData:
                 new_row[col] = sdt
                 rows.append(new_row)
 
-            # 写回文件（内存态由调用方维护——分析路径保存后自行更新 _saved_point_times）
+            # 写回文件（内存态已在锁内置位，与落盘一致）
             try:
                 with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
                     writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -1767,6 +1773,19 @@ class AppData:
                 log.info(f"[信息] 清除选点成功: {code} {freq}")
             except Exception as e:
                 log.warning(f"[警告] 清除选点失败: {e}")
+
+    def clear_saved_points_by_prefix(self, prefix):
+        """加锁批量删除内存态中指定前缀的选点（如 KQ. 期货条目）。
+
+        修复：原 AppSSE 清理直接 del app_data.saved_point_times，绕开
+        _saved_point_lock；改为加锁删内存态，与其它选点读-改-写串行。
+        """
+        removed = 0
+        with self._saved_point_lock:
+            for k in [k for k in list(self._saved_point_times.keys()) if k.startswith(prefix)]:
+                del self._saved_point_times[k]
+                removed += 1
+        return removed
 
     def clear_saved_point(self, code, freq="d"):
         """清除选点并同步清理分析缓存（对应 /api/clear_saved_point）"""

@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chan.py custom-dev · 修改复审报告</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1f2430; --ink2:#4a5364; --ink3:#78829a;
+    --line:#e3e7ee; --accent:#2f6feb; --red:#d0342c; --amber:#b7791f; --green:#1f7a4d;
+    --redbg:#fdf2f1; --amberbg:#fffaf0; --greenbg:#f1faf4; --bluebg:#f2f6ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto;padding:48px 28px 96px}
+  header{border-bottom:3px solid var(--ink);padding-bottom:22px;margin-bottom:34px}
+  h1{font-size:28px;margin:0 0 8px;letter-spacing:-.3px}
+  .sub{color:var(--ink3);font-size:13.5px}
+  h2{font-size:20px;margin:48px 0 14px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+  h3{font-size:16px;margin:26px 0 9px}
+  p{margin:10px 0}
+  code{background:#eef1f6;padding:1px 5px;border-radius:4px;font-size:12.8px;
+       font-family:"SFMono-Regular",Consolas,monospace}
+  pre{background:#f4f6fa;border:1px solid var(--line);border-radius:8px;padding:13px 16px;
+      overflow-x:auto;font-size:12.6px;line-height:1.65;
+      font-family:"SFMono-Regular",Consolas,monospace}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:20px 24px;margin:16px 0}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.3px;background:var(--card)}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:#eef1f7;font-weight:600;font-size:12.8px}
+  tbody tr:nth-child(even){background:#fbfcfe}
+  .tag{display:inline-block;padding:1px 8px;border-radius:11px;font-size:11.5px;font-weight:600;white-space:nowrap}
+  .t-ok{background:var(--greenbg);color:var(--green);border:1px solid #b9e0c8}
+  .t-part{background:var(--amberbg);color:var(--amber);border:1px solid #eddba8}
+  .t-no{background:var(--redbg);color:var(--red);border:1px solid #f0c4c0}
+  .t-new{background:var(--redbg);color:var(--red);border:1px solid #f0c4c0}
+  .t-info{background:var(--bluebg);color:var(--accent);border:1px solid #c5d6f8}
+  .box{border-left:4px solid var(--accent);background:var(--bluebg);padding:12px 16px;margin:14px 0;
+       border-radius:0 7px 7px 0;font-size:14px}
+  .box.warn{border-color:var(--amber);background:var(--amberbg)}
+  .box.bad{border-color:var(--red);background:var(--redbg)}
+  .box.good{border-color:var(--green);background:var(--greenbg)}
+  ul,ol{margin:10px 0;padding-left:23px}
+  li{margin:5px 0}
+  .muted{color:var(--ink3);font-size:12.8px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:18px 0}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+  .stat b{display:block;font-size:22px;color:var(--accent);line-height:1.3}
+  .stat span{font-size:12.3px;color:var(--ink3)}
+  hr{border:0;border-top:1px solid var(--line);margin:34px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>chan.py · custom-dev 修改复审</h1>
+  <div class="sub">
+    复审对象：<code>282bcea → d704fa7</code>（9 个文件）·
+    对照《评审修改完成报告》逐项核验 · 2026-08-28<br>
+    方法：以代码与运行结果为准；报告结论一律视为待验证声明；新增缺陷均经脚本实证
+  </div>
+</header>
+
+<h2>1 · 结论摘要</h2>
+
+<div class="grid">
+  <div class="stat"><b>6 / 10</b><span>项修复完全落地</span></div>
+  <div class="stat"><b>4 / 10</b><span>项部分落地或描述与实现不符</span></div>
+  <div class="stat"><b>3</b><span>项新引入缺陷（已实证）</span></div>
+  <div class="stat"><b>2</b><span>项工程/流程问题</span></div>
+  <div class="stat"><b>0</b><span>项死代码被清理（且新增 1 处）</span></div>
+</div>
+
+<div class="box good">
+<b>好的一面：</b>三个 P0 里最要紧的「复盘日内数据被截掉」是真改对了，而且顺带把箭头步进的锚点也修正了
+（改前锚点落在前一日末根、改后落在当末根，步进语义更一致）。<code>close_all</code> 超时兜底、
+SSE 双窗 None 保护也都干净利落。注释类 3 项改动准确无误，<code>SCAN_CONCURRENCY</code>、
+「防同票重入」、<code>/api/futures_stream</code> 在全仓已无残留。
+</div>
+
+<div class="box bad">
+<b>需要回炉的一面：</b>两处修法「治好了主症、留下了新症」——<br>
+· <b>扫描池引用计数</b>修好了并发互取消，但 <code>_monitor_task</code> 存在不归还引用的早退路径，
+一旦触发，池<b>永不销毁</b>（比改前更差）；<br>
+· <b>刷新 try/finally</b> 修好了 running 卡死，但装饰器的无条件 finally <b>破坏了重入守卫</b>，
+并发调用可起两个刷新。<br>
+两处都是「加了保护却没考虑保护的边界」，性质上属于同类疏漏。
+</div>
+
+<h2>2 · 十项修复逐项核验</h2>
+
+<table>
+<thead><tr><th style="width:5%">#</th><th style="width:20%">项</th><th style="width:8%">结论</th><th>核验依据</th></tr></thead>
+<tbody>
+
+<tr><td>1</td><td>AppEngine 不可达分支<br><span class="muted">复盘日内截数据</span></td>
+<td><span class="tag t-ok">✅ 完全</span></td>
+<td><code>AppEngine.py:526</code> 已改为 <code>matched_fmt == "%Y/%m/%d"</code>。取值域为三个斜杠格式，
+条件可满足；<code>INTRADAY_FREQS = {"30m","5m","1m"}</code> 覆盖全部股票日内周期。
+<b>额外收益</b>：箭头步进的锚点从「前一日末根」修正为「当末根」，step 语义更一致。
+<b>已做对照实验</b>（见 §4）：回退该行前后 <code>test_trigger_step_replay</code> 失败数相同，确认未引入回归。</td></tr>
+
+<tr><td>2</td><td>AppScanPool 并发互取消</td>
+<td><span class="tag t-part">⚠️ 有新症</span></td>
+<td>主场景正确：<code>_get_pool()</code> 内 <code>_active_scans += 1</code> 与池装配在同一把锁内，
+<code>_release_scan()</code> 归零才 shutdown。两批并发时先完成者不再 cancel 后者。<br>
+<b>但</b> <code>_monitor_task</code> 的 <code>if task is None: return</code>（AppScanPool.py:211-212）
+<b>早退且不归还引用</b>，函数体也没有 try/finally。<span class="muted">→ 新缺陷 B</span></td></tr>
+
+<tr><td>3</td><td>close_all 无超时</td>
+<td><span class="tag t-ok">✅ 完全</span></td>
+<td><code>TqSdkCSSESource.py:87</code> 改为 <code>wait(timeout=3.0)</code>；同时删掉了原 docstring 中
+「生成器最迟一个 wait_update deadline（0.1s）内退出，等待是确定性的」这句<b>错误前提</b>——
+注释与代码一并修正，这点做得好。</td></tr>
+
+<tr><td>4</td><td>AppRefresh 无 try/finally</td>
+<td><span class="tag t-part">⚠️ 有新症</span></td>
+<td>卡死问题已解决。但 <code>_reset_refresh_running</code> 的 <code>finally</code> 无条件置
+<code>running=False</code>，而 <code>_refresh_stock_names</code> 开头是
+<code>if running: return</code> 的守卫早退——撞守卫的调用会把标志抹掉。
+<span class="muted">→ 新缺陷 A</span></td></tr>
+
+<tr><td>5</td><td>AppData 标注/选点加锁</td>
+<td><span class="tag t-part">⚠️ 只做一半</span></td>
+<td>新增 <code>_annotations_lock</code> / <code>_saved_point_lock</code>（RLock，无嵌套、无死锁，用法正确）。<br>
+<b>但只锁了 CSV 侧</b>：内存态 <code>_saved_point_times</code> 仍被<b>无锁直写</b>——
+<code>AppChart.py:321-323</code>、<code>AppSSE.py:1612-1614</code>（写）、<code>AppSSE.py:1738</code>（删）。
+原问题提的正是「CSV 与内存态非原子」，现仍非原子：文件已串行、内存未串行，
+读者（<code>AppEngine.py:419/593/1190</code>）仍可能读到与磁盘不一致的中间态。</td></tr>
+
+<tr><td>6</td><td>AppConfig bool 解析</td>
+<td><span class="tag t-part">⚠️ 只做一半</span></td>
+<td><code>_env_bool</code> 实现正确，<code>SSE_DEBUG="False"</code> 陷阱已消除，
+<code>FORWARD_ADJUST_ENABLED</code>/<code>FULL_DATA_MODE</code> 已补入 <code>_FIELD_TYPES</code>。<br>
+<b>但两套实现仍有分叉</b>：pydantic 侧有、降级侧缺失的标量键还有 <b>7 个</b>——
+<code>SCAN_FANGLIANG_WINDOW_BARS</code>、<code>VIEW_COUNT</code>、<code>DUAL_SUB_FALLBACK_MIN</code>、
+<code>MAX_DUAL_CACHE_KEYS</code>、<code>MAX_STOCKS_SUB_CHAN</code>、
+<code>DEBUG_COLD_START_START_DATE</code>、<code>DEBUG_COLD_START_END_DATE</code>。
+装没装 pydantic-settings，这 7 个键的可覆盖性不同。</td></tr>
+
+<tr><td>7</td><td>SSE None 保护 + REPLAY_MODE</td>
+<td><span class="tag t-part">⚠️ 一半属实</span></td>
+<td><b>None 保护 ✅</b>：下窗/上窗各加一处，产出 error 帧后 <code>return</code>，
+外层 finally 仍能执行 <code>src.close()/close_api()/pop_futures_sub_chan</code>，收尾路径完整。<br>
+<b>REPLAY_MODE 一项与事实不符</b>：报告称「置位改用 try/finally 保证复位」，但
+AppEngine 侧（<code>:675</code> 置位、<code>:773</code> 复位）<b>本次 diff 完全未触碰</b>，
+AppSSE 侧的 try/finally 在改动前就存在。即：本次没有为 REPLAY_MODE 增加任何保证。</td></tr>
+
+<tr><td>8</td><td><code>_scan_lock</code> 语义误述</td>
+<td><span class="tag t-ok">✅ 完全</span></td>
+<td>FrontAPI.py:15 与 AppOrch.py:109 均已改为「全局单实例锁，串行化引擎调用」。全仓「防同票重入」表述已清零。</td></tr>
+
+<tr><td>9</td><td>SSE 端点路径误述</td>
+<td><span class="tag t-ok">✅ 完全</span></td>
+<td>FrontAPI.py:687 启动日志、AppSSE.py:5 文档串均已改为 <code>/api/futures/read/stream</code>。
+剩余 <code>futures_stream</code> 命中均为函数名 <code>sse_futures_stream_*</code>，非路径误述。</td></tr>
+
+<tr><td>10</td><td><code>SCAN_CONCURRENCY</code> 假引用</td>
+<td><span class="tag t-ok">✅ 完全</span></td>
+<td>AppOrch.py 两处已改为如实描述执行池派发；全仓该标识符已清零。</td></tr>
+
+</tbody>
+</table>
+
+<h2>3 · 新引入的缺陷（均已脚本实证）</h2>
+
+<h3>缺陷 A · AppRefresh 装饰器破坏重入守卫 <span class="tag t-new">新引入</span> <span class="tag t-info">潜伏</span></h3>
+<pre><code># App/AppRefresh.py:405-425
+def _reset_refresh_running(fn):
+    @functools.wraps(fn)
+    def _wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _refresh_status["running"] = False     # ← 无条件复位
+    return _wrapper
+
+@_reset_refresh_running
+def _refresh_stock_names():
+    if _refresh_status["running"]:
+        return                                     # ← 守卫早退，本不该动标志
+    _refresh_status["running"] = True
+    ...</code></pre>
+<pre><code>实证输出（verify_newbugs.py）：
+  前置: running = True  (模拟另一线程刷新中)
+  B 调用后: running = False
+  [缺陷成立] B 只是撞到守卫返回，却把 running 清成 False</code></pre>
+<div class="box warn">
+<b>影响判断（说清楚严重度）：</b>HTTP 路径 <code>refresh_stock_names_async</code> 在起线程<b>前</b>先检查
+<code>running</code>，所以<b>经由 API 目前触发不到</b>，属潜伏缺陷，不是现网故障。<br>
+但它确实把守卫改坏了：<code>refresh_stock_names()</code>（阻塞版）已由 AppOrch 导出，
+将来一旦有人接上这个入口，两个刷新就会并发跑，同时写
+<code>stock_names.json</code> / <code>stock_pettm_index.json</code> 并各自 <code>replace_names</code>（整表替换，最后写者胜）。
+</div>
+<b>建议修法（把置位移进装饰器，守卫只判不写）：</b>
+<pre><code>def _reset_refresh_running(fn):
+    @functools.wraps(fn)
+    def _wrapper(*a, **kw):
+        if _refresh_status["running"]:
+            return                      # 撞守卫：直接返回，不进 finally 的复位
+        _refresh_status["running"] = True
+        try:
+            return fn(*a, **kw)
+        finally:
+            _refresh_status["running"] = False
+    return _wrapper</code></pre>
+
+<h3>缺陷 B · 扫描池引用计数泄漏 <span class="tag t-new">新引入</span></h3>
+<pre><code># App/AppScanPool.py:211-212  —— 早退，不归还引用
+    task = store.get_task(task_id)
+    if task is None:
+        return                          # ← _release_scan() 没被调用
+
+# 且 _monitor_task 函数体无 try/finally：
+#   store.get_task / store.set_status 任一步抛异常 → 线程直接死 → 引用永久泄漏</code></pre>
+<pre><code>实证输出（verify_newbugs.py）：
+  前置: _active_scans = 1 (模拟 1 批扫描在跑)
+  _monitor_task(不存在任务) 后: _active_scans = 1
+  [缺陷成立] 引用未归还 (泄漏 1 个)</code></pre>
+<div class="box bad">
+<b>为什么比改前更差：</b>改前每批结束<b>必定</b> <code>destroy_pool()</code>，最坏情况是并发互取消（可重试、可感知）。
+改后一旦泄漏，<code>_active_scans</code> 永不归零 → <code>_release_scan</code> 永远走不到销毁分支 →
+<b>worker 进程长驻到进程退出，内存不再归还</b>，且此后每次扫描都在累加一个回不来的计数。
+这与「即用即弃、内存归还」的设计目标正好相反。<br><br>
+<b>触发条件：</b><code>task is None</code> 需要任务行消失（概率低）；但更一般的形态是
+<b>函数体没有 try/finally</b>——<code>get_task</code>/<code>set_status</code> 遇到 SQLite 异常
+（锁超时、磁盘满）就会让线程带着未归还的引用死掉。
+</div>
+<b>建议修法（把归还放进 finally）：</b>
+<pre><code>def _monitor_task(task_id, futures):
+    try:
+        ...原逻辑...                    # task is None 的早退也改成 fall through
+    finally:
+        _release_scan()                 # 无论如何都归还</code></pre>
+
+<h3>缺陷 C · <code>destroy_pool()</code> 变死代码，且其注释现在说反了 <span class="tag t-new">新引入</span></h3>
+<pre><code># 生产代码中的 destroy_pool 调用点：0 处（仅定义 + 注释提及）
+# App/AppScanPool.py:332 的 docstring 仍写着：
+#   「destroy_pool 是每次扫描完成后主动调用」   ← 现在是 _release_scan()，此句已假
+#   「恢复点击「股票扫描」前的初始状态（即用即弃）」  ← 若引用泄漏则该行为不成立</code></pre>
+<p>顺带一提：<code>destroy_pool()</code> 内部<b>不碰</b> <code>_active_scans</code>。若将来有人调用它，
+计数与实际池状态会脱钩（置 <code>_pool=None</code> 但计数仍 &gt;0），后续扫描将永远无法销毁池。
+建议二选一：删除该函数，或让它同时把 <code>_active_scans</code> 归零。</p>
+
+<h2>4 · 回归验证（我独立复跑，非采信报告）</h2>
+
+<table>
+<thead><tr><th style="width:42%">用例</th><th style="width:12%">结果</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>test_phase2_guards</td><td><span class="tag t-ok">PASS</span></td><td>配置一致性/异常链/日期契约/截断</td></tr>
+<tr><td>test_phase3_guards</td><td><span class="tag t-ok">PASS</span></td><td>30 条路由与基线一致（含本次注释改动）</td></tr>
+<tr><td>test_phase4_guards</td><td><span class="tag t-ok">PASS</span></td><td>11 类守护，AppData 纯度仍成立</td></tr>
+<tr><td>test_phase7_guards</td><td><span class="tag t-ok">PASS</span></td><td>含 e2e：3 只虚拟票 completed 收敛、seq 0..2 连续</td></tr>
+<tr><td>test_scanpool_fallback</td><td><span class="tag t-ok">PASS</span></td><td>降级 + 还原均正常</td></tr>
+<tr><td>test_sse_sequence / concurrent / incremental / gray</td><td><span class="tag t-ok">PASS</span></td><td>4 个全通过，与报告一致</td></tr>
+<tr><td>test_code_resolution_guards</td><td><span class="tag t-ok">PASS</span></td><td>与报告一致</td></tr>
+<tr><td>test_phase6_guards</td><td><span class="tag t-no">FAIL</span></td>
+<td>与报告一致：<code>getLayoutParams</code> 游离、<code>closeAmoPanel</code>/<code>toggleAmoPanel</code> 未登记 window 面。
+<b>确属前端既有问题</b>（本次 diff 未碰 JS，我已核对）。</td></tr>
+<tr><td>test_trigger_step_replay</td><td><span class="tag t-no">FAIL</span></td>
+<td>4 项，全部为 <code>$.step_s*.meta.pe_ttm: expected=19.99 actual=20.0</code>；
+核心「已确认笔一致性 14/14」「虚笔」均 PASS。<b>与报告一致。</b></td></tr>
+</tbody>
+</table>
+
+<div class="box good">
+<b>关于 pe_ttm 漂移，我做了对照实验而非采信结论：</b>
+把 <code>AppEngine.py:526</code> 临时回退成修复前的 <code>"%Y-%m-%d"</code> 再跑，
+失败项<b>同样是 4 项、同样全是 pe_ttm</b>。故可确认该失败与本次修复无关，报告结论属实。
+（实验后已还原并核对 <code>git status</code> 干净。）
+</div>
+
+<div class="box warn">
+<b>但「既有残留」这个定性，我认为只对一半。</b>失败表象是浮点舍入，根因是<b>测试基线冻结了联网刷新的易变数据</b>：
+<code>meta.pe_ttm</code> 来自 <code>App/stock_pettm_index.json</code>（由「刷新」经腾讯接口更新），
+而 <code>normalize()</code> 并未剔除它。所以<b>每刷新一次 PE，这 4 项必然再挂一次</b>——
+它不是偶发噪声，是一个会反复复发的测试设计缺陷。<br>
+建议：在 <code>test_trigger_step_replay.normalize()</code> 中剔除 <code>meta.pe_ttm</code>（连带 <code>generated_at</code> 等时间戳字段），
+或为其设置百分比容差。
+</div>
+
+<h2>5 · 工程 / 流程问题</h2>
+
+<h3>5.1 运行时缓存文件混入了修复提交</h3>
+<pre><code>d704fa7 的改动文件（报告只列了 9 个，实际 diff 是 11 个）：
+  M App/stock_float_mc.json      ← 未提及（流通市值缓存，全表数值漂移）
+  A Docs/chan-architecture-review2.html</code></pre>
+<p><code>App/stock_float_mc.json</code> 是<b>联网刷新的运行时缓存</b>，却被版本控制跟踪。
+它随每次刷新产生大量无意义 diff，制造合并冲突，也让「这次提交改了什么」变得不清晰。
+连同 <code>last_code_freq.json</code>、<code>stock_names.json</code>、<code>stock_pettm_index.json</code>
+共 <b>4 个运行时缓存</b>都在 git 里（<code>.gitignore</code> 未覆盖）。</p>
+<div class="box">
+建议：<code>.gitignore</code> 增加 <code>App/*.json</code>（保留 <code>.env.example</code> 之类的模板），
+改为提供一份可生成的空模板 + README 说明「首次运行需点一次刷新」。
+这与 §4 的 pe_ttm 漂移是同一个根因的两面。
+</div>
+
+<h3>5.2 死代码：本轮 0 清理，净增 1 处</h3>
+<p>模块级函数零生产引用的数量与上一轮完全相同（<code>AppEngine</code> 6 个委托壳、
+<code>TdxAPI</code> 5 个 reader、<code>ChanConfig.reload_chan_env</code> 等），
+说明本轮未做任何清理；同时新增了 <code>destroy_pool</code> 这一处。</p>
+
+<h2>6 · 上一轮遗留项现状（全部未处理）</h2>
+<table>
+<thead><tr><th style="width:34%">上轮结论</th><th style="width:12%">现状</th><th>核验</th></tr></thead>
+<tbody>
+<tr><td><b>P0</b> 引擎取数靠全局 <code>CTdxAPI.set_data</code> 带外传递；建议 <code>build_chan()</code> 隔离适配器</td>
+<td><span class="tag t-no">未处理</span></td><td><code>AppEngine.py:696/714/734</code> 仍在写类级全局；<code>App/</code> 下无 runner/隔离层</td></tr>
+<tr><td><b>P1</b> 核心引擎反向依赖 App（<code>BSPointList</code> import <code>app_data</code>）</td>
+<td><span class="tag t-no">未处理</span></td><td><code>BuySellPoint/BSPointList.py:698/725</code> 两处仍在</td></tr>
+<tr><td><b>P2</b> 39 处死代码 / 不可达分支</td>
+<td><span class="tag t-no">未处理</span></td><td>数量持平；11 个无人调用的 <code>orch.*</code> 漏斗仍在（含被 LOCK_POLICY 登记、被守护用例断言的 <code>run_analysis</code>）</td></tr>
+<tr><td><b>P2</b> 17 处注释与事实不符</td>
+<td><span class="tag t-part">修 3 处</span></td><td>已修 8/9/10 三项；剩余 14 处仍在，含 <code>func_map_check.py:187/192/193</code> 把仍在使用的
+<code>_stock_analysis_lock</code>/<code>SYMBOL_CODE</code>/<code>SCRIPT_DIR</code> 标为 RETIRE</td></tr>
+<tr><td><b>P2</b> 前端 7797 行单 IIFE + test_phase6 失败</td>
+<td><span class="tag t-no">未处理</span></td><td><code>app.js</code> 仍 7797 行；<code>getLayoutParams</code>(4 处引用)、<code>closeAmoPanel</code>(5 处) 未登记</td></tr>
+<tr><td><b>P2</b> requirements 缺 <code>pypinyin</code> / <code>winotify</code></td>
+<td><span class="tag t-no">未处理</span></td><td>仍为 0 命中；两者都有 except ImportError 静默降级</td></tr>
+<tr><td><b>P2</b> A/B 双实现收敛、<code>trigger_step</code> 语义分叉</td>
+<td><span class="tag t-no">未处理</span></td><td><code>_stock_dual_impl()</code> 仍 2 处分支；<code>main.py</code> 用 <code>trigger_step=False</code>、
+Web 用默认 <code>True</code></td></tr>
+<tr><td>「先下后上」时序无机制保证</td>
+<td><span class="tag t-info">明确拒绝</span></td><td>报告已给出理由（同一请求内由程序顺序保证）。<b>这个理由我接受</b>——
+单请求串行执行确实构成保证；我上轮担心的其实是它<b>叠加</b>全局缓存后的可维护性，
+既然双窗编排不改，此处不再坚持。</td></tr>
+</tbody>
+</table>
+
+<h2>7 · 建议的补丁（按优先级）</h2>
+
+<table>
+<thead><tr><th style="width:6%">序</th><th style="width:26%">动作</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>1</td><td><code>_monitor_task</code> 包 try/finally 归还引用</td>
+<td>约 4 行。消除池永不销毁，比加别的东西都值</td></tr>
+<tr><td>2</td><td><code>_reset_refresh_running</code> 只在真正置位者路径复位</td>
+<td>约 5 行。恢复重入守卫语义</td></tr>
+<tr><td>3</td><td>选点内存态纳入 <code>_saved_point_lock</code></td>
+<td>把 <code>AppChart:321-323</code>、<code>AppSSE:1612-1614/1738</code> 的直写改成
+<code>app_data</code> 上的加锁方法，让 CSV 与内存态真正原子</td></tr>
+<tr><td>4</td><td>降级路径补齐 7 个标量键 / 或直接删降级分支</td>
+<td>我仍倾向删分支（requirements 已声明 pydantic-settings，降级是伪需求）</td></tr>
+<tr><td>5</td><td><code>destroy_pool</code> 删除或同步计数</td>
+<td>消除新死代码与其自相矛盾的 docstring</td></tr>
+<tr><td>6</td><td>测试基线剔除 <code>meta.pe_ttm</code>；<code>.gitignore</code> 忽略 <code>App/*.json</code></td>
+<td>让 pe_ttm 4 项失败不再复发；阻止缓存文件继续入库</td></tr>
+<tr><td>7</td><td>修正报告第 7 项对 REPLAY_MODE 的描述</td>
+<td>本轮未改动该处，避免后续误以为已加固</td></tr>
+</tbody>
+</table>
+
+<hr>
+<p class="muted">
+本次复审基于 <code>d704fa7</code>；已核对工作副本 <code>C:\my_chan_project</code> 与推送版本内容一致
+（仅 CRLF/LF 换行差异，<code>diff --strip-trailing-cr</code> 后 9 个文件全部相同）。
+所有新增缺陷均有可复现实证脚本 <code>verify_newbugs.py</code>（位于工作区根目录）。
+验证过程产生的临时文件已清理，被测仓库 <code>git status</code> 干净。
+</p>
+
+</div>
+</body>
+</html>

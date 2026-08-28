@@ -206,24 +206,28 @@ def _monitor_task(task_id, futures):
     except Exception:  # noqa: BLE001
         pass
 
-    task = store.get_task(task_id)
-    if task is None:
-        return
-
-    # 中止收敛：请求旗已置（或旧库残留 aborted 终态）→ 全部 future 完成后
-    # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
-    if task.get("abort_requested") or task["status"] == "aborted":
-        store.set_status(task_id, "aborted")
-    elif crashed:
-        store.set_status(task_id, "error", "; ".join(crash_msgs[:5]))
-    else:
-        store.set_status(task_id, "done")
-
-    # 扫描完成即归还池引用（即用即弃）：本批 future 已全部结束。仅当全局
-    # 无其它进行中批次（并发批量扫描）时才真正销毁进程池（worker 缓存
-    # 释放、下次重 new spawn 全新进程、空缓存）；否则保留池供尚在运行的当批，
-    # 以免先完成者 cancel_futures 取消后者队列中的票。
-    _release_scan()
+    try:
+        task = store.get_task(task_id)
+        if task is not None:
+            # 中止收敛：请求旗已置（或旧库残留 aborted 终态）→ 全部 future 完成后
+            # 才置 aborted 终态，保证中止后 completed 收敛 total（queued 不悬挂）
+            if task.get("abort_requested") or task["status"] == "aborted":
+                store.set_status(task_id, "aborted")
+            elif crashed:
+                store.set_status(task_id, "error", "; ".join(crash_msgs[:5]))
+            else:
+                store.set_status(task_id, "done")
+    except Exception:  # noqa: BLE001 —— 终态落库失败不阻断归还引用
+        pass
+    finally:
+        # 无论如何都归还池引用（即用即弃）：本批 future 已全部结束。仅当全局
+        # 无其它进行中批次（并发批量扫描）时才真正销毁进程池（worker 缓存
+        # 释放、下次重 new spawn 全新进程、空缓存）；否则保留池供尚在运行的当批，
+        # 以免先完成者 cancel_futures 取消后者队列中的票。
+        # 修复：先前 task is None 走 return 早退、且无 try/finally，get_task/
+        # set_status 抛异常会让收割线程带未归还引用死亡 → 池永不销毁。now 无论
+        # task 是否存在、是否异常，都经 finally 归还引用。
+        _release_scan()
 
 
 def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
@@ -327,15 +331,15 @@ def _release_scan():
 
 
 def destroy_pool():
-    """销毁执行池（扫描完成即调用，幂等）：释放 worker 进程与缓存。
+    """销毁执行池（幂等）：释放 worker 进程与缓存。
 
-    与 shutdown() 的区别：shutdown 是应用退出时 atexit 调用；destroy_pool
-    是每次扫描完成后主动调用，让 worker 进程结束、各自缓存（含轻量
-    result）随之释放、内存归还，下次扫描重新 spawn 全新进程（空缓存），
-    恢复点击「股票扫描」前的初始状态（即用即弃）。
+    当前生产路径不再直接调用（扫描归还经 _release_scan，引用计数为 0 时才
+    销毁），本函数保留供外部/测试显式销毁兜底。同步把 _active_scans 归零，
+    避免显式销毁后计数与实际池状态脱钩（否则后续再扫描将永远无法销毁池）。
     """
-    global _pool, _pool_engine
+    global _pool, _pool_engine, _active_scans
     with _pool_lock:
+        _active_scans = 0
         if _pool is not None:
             try:
                 _pool.shutdown(wait=False, cancel_futures=True)
