@@ -1,5 +1,7 @@
 # chan.py `custom-dev` 整改复查报告
 
+> ⚠️ **功能状态提示（2026-08 更新）**：本档复查的「盘后下载 / ElTdxAPI」相关项已随功能移除（`ElTdxAPI.py`、`AppDownload.py` 已删），文中相关结论为历史快照，仅作追溯。
+
 > 基线：`dd87140`（2026-08-28）→ 复查对象：`1a0aba5`（2026-08-29）
 > 方式：`git diff dd87140 HEAD` 逐文件核对 + AST 死代码复扫 + 可独立验证项写 harness 实测
 > 环境限制：本机无 pandas/numpy/fastapi/tqsdk，无法跑 `run_all` 全量；能跑的组件都跑了

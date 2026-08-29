@@ -16,7 +16,7 @@
      上下文创建（跨平台安全，防 fork 锁继承）；initializer 屏蔽 SIGINT；
      仅用进程池（不提供线程池降级，受限环境装配失败直接抛错由运维解决）；
      worker 数钳制 [1,16]；atexit 注册显式关池；入口 __main__ 守卫在位；
-    scan_pool_workers 配置面在位。
+     scan_pool_workers 配置面在位。
   ④ 跨进程存储契约（W1/W2/W8）：ScanStore 关键方法齐备；WAL +
      busy_timeout + locked 重试；completed 由结果行数 COUNT 派生（单一
      事实源，不落列）；put_result INSERT OR IGNORE（主键 (task_id, seq)，

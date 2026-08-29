@@ -45,7 +45,8 @@ CI / 迁移每阶段的验收门禁）。
  20. 代码输入链路守护  test_code_resolution_guards.py 沪深重名消歧/大小写契约/搜索双市场候选/
                                                      search 与引擎同源兜底
  21. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
- 22. ProcessPool 降级  test_scanpool_fallback.py     P2-2③：ProcessPool 失败→ThreadPool 降级
+ 22. 扫描池失败收敛  test_scanpool_fallback.py     P2-2③：装配/派发失败收敛为任务
+                                                     error + 坏池自愈（无线程降级）
  23. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 

@@ -1,5 +1,7 @@
 # chan.py `custom-dev` 架构评审 · 问题核查结论
 
+> ⚠️ **功能状态提示（2026-08 更新）**：本档核查的「盘后下载 / ElTdxAPI」相关项已随功能移除（`ElTdxAPI.py`、`AppDownload.py` 已删），文中结论为历史快照，仅作追溯。
+
 > 核查对象：`github.com/jbxenzxy/chan.py` 分支 `custom-dev`
 > 实际拉取 HEAD：`dd87140`（2026-08-28 22:30:11）
 > 评审报告：`C:/my_chan_project/Docs/chan_architecture_review.md`（报告自称基准 commit 同为 `dd87140`）

@@ -21,7 +21,7 @@
 | 5 | `_pool_lock` | AppScanPool.py:62（:93/:326/:346/:361） | 进程池单例 `_pool`/`_pool_engine` + 引用计数 `_active_scans` | 单例生命周期 | ✅ **保留**（与是否降级线程池无关） |
 | 6 | `_scan_lock` | AppScan.py:53（:408 临界区） | 同步扫描批次串行（防内存峰值） | 限流壳 | ⚠️ 仅同步模式有意义；进程池模式下对正确性冗余 → 降级/删除 |
 | 7 | `_ENGINE_LOCK` + `engine_section` | AppChart.py:45/:58（LOCK_POLICY 驱动） | 名义“引擎串行”，但真正串行在 #1 临界区 | 流控壳 | ❌ **删除**（净正确性贡献 = 0，与 #1 重复套娃） |
-| 8 | `_download_lock` | ElTdxAPI.py:80（AppEngine.py:191 别名） | 下载状态/任务 | 下载并发 | ❌ **删除**（盘后单线程，无竞争） |
+| 8 | `_download_lock` | ~~ElTdxAPI.py:80~~ | ~~下载状态/任务~~ | ~~下载并发~~ | ✅ **已随盘后下载功能移除**（ElTdxAPI.py / AppDownload.py 已删，锁随之消失） |
 | 9 | `REPLAY_MODE` 进锁 | 写于 AppEngine.py:638/644/740（在 #1 临界区内） | CMyBSPointList.REPLAY_MODE（类级调试标志） | 调试专用 | ❌ **移出锁**（仅调试用，非生产，无竞争） |
 | — | `_xdxr_lock` | TdxAPI.py:702 | 除权数据缓存 | DataAPI 内部 | ✅ 保留（正交） |
 | — | `_ACTIVE_SOURCES_LOCK` / 实例 `_lock`/`_close_lock` | TqSdkCSSESource.py:63/210/216 | TqSdk 数据源单例注册表 / 实例关闭 | DataAPI 内部 | ✅ 保留（正交） |
@@ -89,7 +89,7 @@
 
 非生产路径（单线程，无锁）:
   调试 REPLAY_MODE ─► 直接赋值（无锁）
-  盘后下载 ─► ElTdx 直接跑（无 _download_lock）
+  （盘后下载已移除，其 _download_lock 随之消失）
 ```
 
 ---
@@ -107,8 +107,7 @@
    - `AppAMO.call_amo` 移除 `engine_section("call_amo")`（AMO 不进引擎，只读 .day）。
    - 同步更新 `test_phase3_guards.py`、`func_map_check.py` 守护断言。
 
-3. **删除下载锁**
-   - 删除 `ElTdxAPI._download_lock` 及所有 `with _download_lock:`；删除 `AppEngine.py:191` 别名。
+3. **删除下载锁** ✅（已随盘后下载功能移除；`ElTdxAPI.py`、`AppDownload.py` 均已删除）
 
 4. **合并文件锁**
    - 新增 `file_lock = threading.RLock()`（置于 AppData，与 `_cache_lock` 同级）。

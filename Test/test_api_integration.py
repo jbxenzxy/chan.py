@@ -164,7 +164,7 @@ def test_api_scan_submit_mocked(failures):
     try:
         orch.scanner.submit_batch_scan = lambda *a, **k: {
             "task_id": "mock-task-1", "total": 2, "workers": 1,
-            "engine": "thread_fallback"}
+            "engine": "process_pool"}
         orch.scanner.get_batch_scan_status = lambda *a, **k: {
             "task_id": "mock-task-1", "status": "running", "total": 2,
             "completed": 1, "results": [], "error": None}

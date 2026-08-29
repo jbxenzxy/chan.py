@@ -1,5 +1,8 @@
 # chan.py `custom-dev` 分支 · 独立架构评审
 
+> ⚠️ **功能状态提示（2026-08 更新）**：本档评审的「盘后下载 / ElTdxAPI / AppDownload」链路已整体移除。
+> 文中相关缺陷与行号（§5-P0-3、`download/start`、`AppDownload.py` 等）均为**历史快照**，仅作追溯参考，不代表当前代码状态。
+
 > 评审对象：`https://github.com/jbxenzxy/chan.py/tree/custom-dev`（commit `dd87140`，2026-08-28）
 > 评审方式：源码逐文件通读 + AST 级死代码/依赖图扫描，**结论以代码为准，注释仅作对照**
 > 重点范围：`FrontAPI.py`、`App/`、`DataAPI/`、`Frontend/`、`Test/`

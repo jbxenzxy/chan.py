@@ -43,7 +43,7 @@ Scanner.scan_one (AppScan:408)
 **批量扫描（SCAN_ASYNC）**：`submit_batch_scan` 把任务派发到进程池，引擎调用在 worker 内走 `scan_one`。
 - 进程模式（spawn）：每个 worker 是独立进程，`_scan_lock`/`_stock_analysis_lock` 各进程一份，
   `app_data` 也是各进程独立拷贝 → 天然不共享，无需跨进程锁。
-- 线程降级模式（ThreadPool）：worker 与 API 同进程，此时与 REST 链**靠 ② 这把内层锁互斥**。
+  （注：扫描现仅用进程池，不再提供线程降级路径。）
 
 ## 2. 为什么叫"四把锁分散"——5 个具体证据
 
@@ -73,9 +73,9 @@ Scanner.scan_one (AppScan:408)
 
 **大概率是"没有活跃的数据竞争"，但安全是"撞巧的"，不是"被设计保证的"。**
 
-- 因为 `_stock_analysis_lock` 是 ② 真正的跨路径互斥锁，且两条链都经它，所以在**线程降级模式**下
+- 因为 `_stock_analysis_lock` 是 ② 真正的跨路径互斥锁，且两条链都经它，所以在曾经的**线程降级模式**下
   REST 与 SCAN 对引擎状态（`stocks_analysis_cache` / `REPLAY_MODE` / TdxAPI 内部 buffer）是互斥的；
-  进程模式下各 worker 状态隔离，也无共享问题。
+  进程模式下各 worker 状态隔离，也无共享问题。（注：现仅用进程池，线程降级已移除。）
 - 但 REPLAY_MODE 是全局类属性（P1-3 已单列，你暂缓），其在引擎构建块外是否被别处读取/改写，
   不在这把锁的覆盖范围内——那是另一个独立问题。
 

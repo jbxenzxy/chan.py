@@ -264,7 +264,7 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
         pool, engine = _get_pool()
     except Exception as exc:  # noqa: BLE001 —— 收敛为任务级错误
         msg = f"扫描进程池装配失败: {type(exc).__name__}: {exc}"
-        log.info(f"[扫描池] {msg}")
+        log.error(f"[扫描池] {msg}")
         store.set_status(task_id, "error", msg)
         return {"error": msg}
 
@@ -285,8 +285,11 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
         # 受限容器典型失败：队列创建失败 → 首次 submit 抛 BrokenProcessPool。
         # 必须销毁坏池（_active_scans 归零）+ 置任务 error，否则坏池被
         # 永久复用、_active_scans 泄漏，批量扫描再无自愈机会、任务永挂。
+        # 已知取舍（有意为之，勿当 bug）：若此刻另有批次共用同一坏池，
+        # 其 futures 也会被 destroy_pool() 一并取消并标 error——因池已损坏、
+        # 那批本就必然失败，强销毁换来下次扫描可重新装配自愈。
         msg = f"扫描任务派发失败: {type(exc).__name__}: {exc}"
-        log.info(f"[扫描池] {msg}")
+        log.error(f"[扫描池] {msg}")
         destroy_pool()
         store.set_status(task_id, "error", msg)
         return {"error": msg}
@@ -346,7 +349,7 @@ def _release_scan():
                 pass
             _pool = None
             _pool_engine = None
-            log.info("[扫描池] 任务完成，销毁进程池（worker 缓存已释放）")
+            log.info("[扫描池] 进程池已销毁（下次扫描将重新装配，worker 缓存已释放）")
 
 
 def destroy_pool():
