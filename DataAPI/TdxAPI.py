@@ -2113,15 +2113,15 @@ def _parse_stocks_from_df(df, source_label):
     return stocks
 
 
-def _run_with_timeout(fn, timeout, abort_check=None):
-    """在守护线程中执行阻塞网络抓取，限时返回，且可被调用方中断。
+def _run_with_timeout(fn, timeout):
+    """在守护线程中执行阻塞网络抓取，限时返回，避免扫描卡死。
 
     背景：akshare/requests 等成分抓取可能因网络异常无限阻塞（无超时、原生调用
     不可打断）。扫描「成分股」来源在 API 线程池线程里解析股票清单，若阻塞则
     「中断扫描」也结束不了（见 App/app 单组来源 page_index 卡死历史）。本函数：
-      1. 守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None；
-      2. 每次轮询检查 abort_check()，调用方需中断即提前放弃，不干等网络。
-    返回 fn 结果；超时/被中断返回 None；fn 内部异常原样透出（调用方捕获）。
+      守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None。
+    （P1-5 后 abort_check 中止链路已随任务级 cancel 语义下线，参数随之删除。）
+    返回 fn 结果；超时返回 None；fn 内部异常原样透出（调用方捕获）。
     """
     import threading
     box = {}
@@ -2134,20 +2134,14 @@ def _run_with_timeout(fn, timeout, abort_check=None):
 
     t = threading.Thread(target=_run, daemon=True)
     t.start()
-    waited, step, checked = 0.0, 0.5, False
+    waited, step = 0.0, 0.5
     while waited < timeout:
         t.join(timeout=step)
         waited += step
         if not t.is_alive():
             break
-        if abort_check and abort_check():
-            checked = True
-            break
     if t.is_alive():
-        if checked:
-            log.info("[板块成分股] 扫描已中断，放弃等待成分股网络抓取")
-        else:
-            log.warning(f"[板块成分股] 网络获取超时(>{timeout:.0f}s)，返回空（可重试）")
+        log.warning(f"[板块成分股] 网络获取超时(>{timeout:.0f}s)，返回空（可重试）")
         return None
     if "e" in box:
         raise box["e"]

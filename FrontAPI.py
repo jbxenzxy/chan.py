@@ -364,13 +364,6 @@ async def api_stocks_scan_close():
     return _json_response(result)
 
 
-@router.post("/api/stocks/cleanup")
-async def api_stocks_cleanup():
-    """手动失效股票分析缓存（P0-3 入口；下载完成回调亦自动失效）"""
-    cleared = await run_in_threadpool(orch.stocks_cache_clear)
-    return _json_response({"cleared": cleared})
-
-
 # ── 路由 — 批量扫描异步化（ProcessPool）───────────────────────────────
 # 批量扫描统一走 ProcessPool：任务提交返回 task_id，前端轮询
 # /api/stocks/scan/{task_id}/read/status 获取进度与结果（扫描结果经

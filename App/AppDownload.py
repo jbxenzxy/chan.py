@@ -57,10 +57,10 @@ def start_download_checked(categories, day_start=None, min_start=None):
 
 
 def stocks_cache_clear():
-    """失效股票分析缓存（P0-3 唯一失效漏斗）。
+    """失效股票分析缓存（下载完成回调 on_finish 触发）。
 
-    下载完成回调（on_finish）与手动入口（POST /api/stocks/cleanup，经
-    AppOrch 再导出）均汇聚至此；App 层持 AppData 依赖，DataAPI 层零依赖。
+    盘后下载写入新数据后，旧分析结果已过期，由本回调失效共享 LRU；
+    App 层持 AppData 依赖，DataAPI 层零依赖。
     """
     from App.AppData import app_data
     cleared = app_data.stocks_cache_clear()

@@ -617,7 +617,7 @@ class Scanner:
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
         if _scan_skip_log:
-            log.info("\n========== 扫描异常/失败股票明细 ==========")
+            log.info("========== 扫描异常/失败股票明细 ==========")
             log.info(f"共 {len(_scan_skip_log)} 只:")
             for i, item in enumerate(_scan_skip_log, 1):
                 log.info(f"  {i}. {item}")
@@ -638,9 +638,8 @@ class Scanner:
         """关闭扫描面板：不再清空共享股票分析缓存。
         P0-3 收敛：批量扫描与单票分析共享同一分析缓存（LRU 上限 50），
         关闭面板时清空会误伤用户正在查看的图表缓存；缓存失效改由
-        下载完成回调（AppDownload）与 POST /api/stocks/cleanup 承担。
+        下载完成回调（AppDownload）承担。
         返回 cleared=0 保持前端兼容（前端仅 POST 不读响应）。"""
-        log.info("[扫描缓存] 面板关闭（共享分析缓存保留，由下载完成/手动 cleanup 失效）")
         return {"cleared": 0}
 
     # ── 批量扫描异步化（ProcessPool 先行）────────────────────

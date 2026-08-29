@@ -1437,9 +1437,9 @@ class AppData:
     def stocks_cache_clear(self):
         """清空股票分析 LRU 缓存（持 _cache_lock，线程安全），返回清除条数
 
-        扫描面板关闭（/api/stocks/scan/close → Scanner.clear_cache）时调用：
-        批量扫描产生的引擎分析缓存条目在面板关闭后不再需要，整池清空避免
-        陈旧结果残留（下次分析经 LRU 重建）。与 futures_cache_clear 同模式。
+        P0-3 后调用方为：下载完成回调（AppDownload.stocks_cache_clear →
+        on_finish）；扫描面板关闭（Scanner.clear_cache）已不再清池
+        （返回 cleared=0，缓存由 LRU 自然淘汰）。与 futures_cache_clear 同模式。
         """
         with self._cache_lock:
             n = len(self._stocks_analysis_cache)

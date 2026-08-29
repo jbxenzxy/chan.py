@@ -44,6 +44,15 @@ _SSE_DEBUG = app_config.sse_debug
 # A. 证券代码解析
 # ═══════════════════════════════════════════════════════════════════
 
+# 港股指数 HZ 文件代码 → 字母代码（与 DataAPI/TdxAPI.py 的 _HK_INDEX_HZ_MAP
+# 互为镜像：数据层持正向表换算 27#HZxxxx 文件路径，应用层持反向表做代码归一。
+# App/utils 不 import 数据源（数据源门禁：仅 TqSdkAPI），故此处自含小表。）
+_HK_HZ_TO_LETTER = {
+    "HZ5017": "HSTECH",  # 恒生科技指数（Hang Seng TECH）
+    "HZ5489": "HSIDI",   # 恒生创新药指数（Hang Seng Innovative Drug）
+}
+
+
 def _get_stock_name(market, code):
     """获取股票名称（委托 app_data.get_stock_name）"""
     from App.AppData import app_data
@@ -60,6 +69,7 @@ def _get_stock_market_code(code):
       拒绝并返回 (None, 原样)——绝不静默兼容，杜绝新功能又照着旧做法写。
     保留的非写法便利：
       · 港股指数的「hk+指数名」：hkHSTECH → ('hk','HSTECH')
+      · 港股指数的「hk+HZ 文件代码」：hkHZ5489 → ('hk','HSIDI')（反向查表归一）
       · 别名/简称关键词：HSI / HSTECH / 中证2000 / ZZ2000（大小写不敏感）
       · 裸数字（无 market 限定）仍按首位自动推断默认市场
     """
@@ -83,8 +93,17 @@ def _get_stock_market_code(code):
     if _up in _HK_INDEX_ALIASES:
         return _HK_INDEX_ALIASES[_up]
     # 港股指数的 hk+指数名 便捷写法
-    if code[:2].lower() == 'hk' and code[2:].isalpha():
-        return 'hk', code[2:].upper()
+    if code[:2].lower() == 'hk':
+        suffix = code[2:].upper()
+        if suffix.isalpha():
+            return 'hk', suffix
+        # hk+HZ 通达信港股指数文件代码（如 hkHZ5489 恒生创新药 → HSIDI）：
+        # 反向查 _HK_HZ_TO_LETTER 归一为字母代码，使数据层 _hk_day_file
+        # 命中 27#HZxxxx.day（若直接透传 HZ 代码会走 31# 个股路径而失配）。
+        if re.match(r'^HZ\d+$', suffix):
+            letter = _HK_HZ_TO_LETTER.get(suffix)
+            if letter:
+                return 'hk', letter
 
     # ── 唯一标准数字写法：market(小写) + code(4~6位数字)，无连接符 ──
     m = re.match(r'^([a-z]{2})(\d{4,6})$', code)

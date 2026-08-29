@@ -44,6 +44,7 @@ ROUTES_SNAPSHOT = os.path.join(SNAPSHOTS, "phase3_routes.json")
 EXPECTED_ROUTES = {
     ("GET", "/api/health"),
     ("GET", "/api/search"),
+    ("GET", "/api/amo/read"),
     ("GET", "/api/stocks/{code}/analyze"),
     ("GET", "/api/stocks/{code}/red-range"),
     ("GET", "/api/stocks/{code}/read/annotation"),
@@ -57,7 +58,6 @@ EXPECTED_ROUTES = {
     ("POST", "/api/stocks/scan/start"),
     ("POST", "/api/stocks/scan/end"),
     ("POST", "/api/stocks/scan/close"),
-    ("POST", "/api/stocks/cleanup"),
     ("POST", "/api/stocks/scan/submit"),
     ("GET", "/api/stocks/scan/{task_id}/read/status"),
     ("POST", "/api/stocks/scan/{task_id}/cancel"),

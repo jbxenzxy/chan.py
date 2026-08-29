@@ -160,6 +160,10 @@ def test_resolve_aliases(TC):
     # hk+指数名 便捷写法（标准"hk 前缀+字母"，无点、无后缀）
     n += check("HKHSTECH", ("hk", "HSTECH"))
     n += check("HkHSTECH", ("hk", "HSTECH"))
+    # hk+HZ 通达信港股指数文件代码（反向查表归一为字母代码）
+    n += check("hkHZ5489", ("hk", "HSIDI"))   # 恒生创新药
+    n += check("hkHZ5017", ("hk", "HSTECH"))  # 恒生科技
+    n += check("HKHZ5489", ("hk", "HSIDI"))   # 前缀大小写不敏感
     # 带点/后缀的缩写：非标准，一律拒绝
     n += check("HSTECH.HK", (None, "HSTECH.HK"))
     n += check("HSTECHHK", (None, "HSTECHHK"))
@@ -540,7 +544,7 @@ def test_constituent_fetch_robustness(TC):
     不可打断 → 扫描卡死、「中断扫描」也结束不了；上证指数(000001) 曾走通达信
     本地 vipdoc/sh/lday 枚举（该目录混有其它指数，不能作指数成分来源），后被
     先引入「盲 return []」，再又"卡网络"。本用例守护四点：
-      ① _run_with_timeout：阻塞调用限时截断、abort_check 立即放弃、正常返回透出；
+      ① _run_with_timeout：阻塞调用限时截断、正常返回透出；
       ② 000001 走 _read_sh_index_stocks_exchange（上交所 query.sse.com.cn 直连），
          与 399xxx 深交所直连风格一致；不得走本地枚举、不得盲 return []；
       ③ 上交所/深交所/中证 网络源都被 _run_with_timeout 限时包裹；
@@ -555,10 +559,6 @@ def test_constituent_fetch_robustness(TC):
     r = _T._run_with_timeout(lambda: time.sleep(99), timeout=1)
     if r is not None or time.time() - t0 >= 3:
         problems.append(f"[⑫超时] 阻塞调用未限时截断: r={r} elapsed={time.time()-t0:.1f}")
-    t0 = time.time()
-    r = _T._run_with_timeout(lambda: time.sleep(99), timeout=99, abort_check=lambda: True)
-    if r is not None or time.time() - t0 >= 3:
-        problems.append(f"[⑫中断] abort_check 未立即生效: r={r} elapsed={time.time()-t0:.1f}")
     if _T._run_with_timeout(lambda: 42, timeout=2) != 42:
         problems.append("[⑫正常] 正常返回值未被透出")
 

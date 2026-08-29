@@ -988,10 +988,6 @@
    "FE",
    "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache（仅关面板，P0-3 后不再清缓存）"
   ],
-  "api_stocks_cleanup": [
-   "FE",
-   "✓REST POST /api/stocks/cleanup → FrontAPI + AppData.stocks_cache_clear（P0-3 手动失效入口）"
-  ],
   "api_stocks_scan_submit": [
    "FE",
    "✓REST POST /api/stocks/scan/submit → FrontAPI + ScannerService"

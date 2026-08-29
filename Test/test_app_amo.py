@@ -266,7 +266,7 @@ def test_slash_input(failures):
 
 
 def test_date_format_guard(failures):
-    """⑦ 日期契约守护：输出日期必须全为斜杠 %Y/%m/%d，非其它。
+    r"""⑦ 日期契约守护：输出日期必须全为斜杠 %Y/%m/%d，非其它。
 
     AppAMO 与全站 K 线日期契约（%Y/%m/%d）对齐；历史上多次因误用连字符
     （%Y-%m-%d）导致「区间比对失败 → 无数据显示」。本守护分两层：
