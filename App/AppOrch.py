@@ -48,7 +48,7 @@ from App.AppScan import (
 )
 from App.AppDownload import (
     start_download_checked, stop_download, get_download_status,
-    download_dir,
+    download_dir, stocks_cache_clear,
 )
 from App.AppRefresh import (
     load_stock_names_from_cache_file, refresh_stock_names,

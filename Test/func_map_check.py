@@ -107,7 +107,7 @@ TARGET_FUNCS = {
     "_safe_write_json_file":        ("DATA", "✓4 兼容壳 → App/AppData.safe_write_json_file"),
     "_get_pe_ttm":                  ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_get_index_belong":            ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
-    "_load_float_mc_cache":         ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
+    # P2：_load_float_mc_cache 兼容壳已随 AppRefresh 物理迁入删除，不再属 AppEngine 映射
 
     # ── AppData：统一缓存三件套 ──
     "_cache_put":                   ("DATA", "✓4 兼容壳 → app_data.cache_put（LRU）"),
@@ -222,7 +222,8 @@ TARGET_ROUTES = {
     "api_stocks_scan_set_index": ("FE", "✓REST PUT /api/stocks/scan/set/index → FrontAPI + AppOrch 扫描"),
     "api_stocks_scan_start": ("FE", "✓REST POST /api/stocks/scan/start → FrontAPI + ScannerService"),
     "api_stocks_scan_end": ("FE", "✓REST POST /api/stocks/scan/end → FrontAPI + ScannerService"),
-    "api_stocks_scan_close": ("FE", "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache → app_data.stocks_cache_clear()"),
+    "api_stocks_scan_close": ("FE", "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache（仅关面板，P0-3 后不再清缓存）"),
+    "api_stocks_cleanup": ("FE", "✓REST POST /api/stocks/cleanup → FrontAPI + AppData.stocks_cache_clear（P0-3 手动失效入口）"),
     "api_stocks_scan_submit": ("FE", "✓REST POST /api/stocks/scan/submit → FrontAPI + ScannerService"),
     "api_stocks_scan_read_status": ("FE", "✓REST GET /api/stocks/scan/{task_id}/read/status → FrontAPI + ScannerService"),
     "api_stocks_scan_cancel_task": ("FE", "✓REST POST /api/stocks/scan/{task_id}/cancel → FrontAPI + ScannerService"),

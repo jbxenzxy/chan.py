@@ -359,9 +359,16 @@ async def api_stocks_scan_end():
 
 @router.post("/api/stocks/scan/close")
 async def api_stocks_scan_close():
-    """关闭扫描面板"""
+    """关闭扫描面板（仅回收面板自身状态，不清空共享分析缓存）"""
     result = await run_in_threadpool(orch.scanner.clear_cache)
     return _json_response(result)
+
+
+@router.post("/api/stocks/cleanup")
+async def api_stocks_cleanup():
+    """手动失效股票分析缓存（P0-3 入口；下载完成回调亦自动失效）"""
+    cleared = await run_in_threadpool(orch.stocks_cache_clear)
+    return _json_response({"cleared": cleared})
 
 
 # ── 路由 — 批量扫描异步化（ProcessPool）───────────────────────────────

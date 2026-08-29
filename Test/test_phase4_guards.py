@@ -76,7 +76,6 @@ SHELL_FUNCS = [
     # 名称 / PE / 市值
     "_load_stock_names_from_cache_file", "_safe_write_json_file",
     "_get_pe_ttm", "_get_index_belong",
-    "_load_float_mc_cache",
     # 统一缓存三件套（引擎内部仍消费 _cache_put/_cache_get）
     "_cache_put", "_cache_get",
 ]

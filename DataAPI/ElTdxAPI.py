@@ -439,12 +439,14 @@ def _download_min_kline(client, code, market, period, vipdoc_dir, code_prefix=No
         raise
 
 
-def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=None, progress_callback=None):
+def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=None, progress_callback=None, on_finish=None):
     """
     后台下载任务主函数
     categories: list of dict, e.g. [{"type": "day", "market": "sh"}, ...]
     day_start_str: str 如 "2021-07-28"，日线起始日期；None 表示下载全部
     min_start_str: str 如 "2025-07-28"，分钟线起始日期；None 表示下载全部
+    on_finish: 下载结束回调（含异常路径），由 App 层注入以失效股票分析缓存
+              （P0-3：本模块保持零 App 依赖，失效动作由调用方回调承担）
     """
     global _download_state
 
@@ -601,9 +603,19 @@ def _download_task(vipdoc_dir, categories, day_start_str=None, min_start_str=Non
             else:
                 log.info(f"[下载] 提示: 今日为非交易日，最新数据日期为 {latest}")
 
+        # P0-3：下载结束（含异常/中止路径）→ 回调 App 层失效股票分析缓存。
+        # 回调由调用方（AppDownload）注入，本模块保持零 App 依赖；回调异常
+        # 不向上传播，避免影响下载线程收尾。
+        if on_finish:
+            try:
+                on_finish()
+            except Exception as _e:
+                log.error(f"[下载] 完成回调失败: {_e}")
 
-def _start_download(vipdoc_dir, categories, day_start=None, min_start=None):
-    """启动后台下载线程"""
+
+def _start_download(vipdoc_dir, categories, day_start=None, min_start=None, on_finish=None):
+    """启动后台下载线程
+    on_finish: 下载结束回调（透传 _download_task），App 层用于失效缓存。"""
     global _download_state
     with _download_lock:
         if _download_state["running"]:
@@ -611,7 +623,9 @@ def _start_download(vipdoc_dir, categories, day_start=None, min_start=None):
 
     thread = threading.Thread(
         target=_download_task,
-        args=(vipdoc_dir, categories, day_start, min_start),
+        kwargs={"vipdoc_dir": vipdoc_dir, "categories": categories,
+                "day_start_str": day_start, "min_start_str": min_start,
+                "on_finish": on_finish},
         daemon=True,
     )
     thread.start()

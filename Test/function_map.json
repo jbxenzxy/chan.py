@@ -59,13 +59,13 @@
   }
  },
  "summary": {
-  "n_funcs": 29,
+  "n_funcs": 28,
   "n_states": 28,
   "n_classes": 0,
   "by_layer": {
    "ELTDX": 14,
    "ORCH_E": 8,
-   "DATA": 7
+   "DATA": 6
   },
   "states_by_layer": {
    "ORCH_E": 13,
@@ -129,8 +129,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1563,
-   "line_end": 1586,
+   "line_start": 1559,
+   "line_end": 1582,
    "n_lines": 24,
    "note": "独立下窗截断边界（结束时间语义纯函数）"
   },
@@ -146,8 +146,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 279,
-   "line_end": 281,
+   "line_start": 275,
+   "line_end": 277,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data.cache_get"
   },
@@ -163,8 +163,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 272,
-   "line_end": 276,
+   "line_start": 268,
+   "line_end": 272,
    "n_lines": 5,
    "note": "✓4 兼容壳 → app_data.cache_put（LRU）"
   },
@@ -199,8 +199,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1230,
-   "line_end": 1483,
+   "line_start": 1226,
+   "line_end": 1479,
    "n_lines": 254,
    "note": "子级别结果提取（254 行）"
   },
@@ -216,8 +216,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 236,
-   "line_end": 238,
+   "line_start": 237,
+   "line_end": 239,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -233,8 +233,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 231,
-   "line_end": 233,
+   "line_start": 232,
+   "line_end": 234,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
@@ -252,8 +252,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1516,
-   "line_end": 1524,
+   "line_start": 1512,
+   "line_end": 1520,
    "n_lines": 9,
    "note": "双窗 A/B 实现开关（环境变量，默认 independent）"
   },
@@ -305,8 +305,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1536,
-   "line_end": 1548,
+   "line_start": 1532,
+   "line_end": 1544,
    "n_lines": 13,
    "note": "双窗周期配对校验（非法返回错误串，调用方 4xx 拒绝）"
   },
@@ -339,8 +339,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 241,
-   "line_end": 243,
+   "line_start": 242,
+   "line_end": 244,
    "n_lines": 3,
    "note": "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"
   },
@@ -357,28 +357,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 631,
-   "line_end": 658,
+   "line_start": 645,
+   "line_end": 672,
    "n_lines": 28,
    "note": "下载进度查询（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
   {
    "order": 17,
-   "name": "_load_float_mc_cache",
-   "wave": 1,
-   "target": "DATA",
-   "depended_by": [],
-   "calls": [],
-   "reads": [],
-   "writes": [],
-   "pure": true,
-   "line_start": 261,
-   "line_end": 263,
-   "n_lines": 3,
-   "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
-  },
-  {
-   "order": 18,
    "name": "_load_stock_names_from_cache_file",
    "wave": 1,
    "target": "DATA",
@@ -387,13 +372,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 206,
-   "line_end": 208,
+   "line_start": 207,
+   "line_end": 209,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 19,
+   "order": 18,
    "name": "_safe_write_json_file",
    "wave": 1,
    "target": "DATA",
@@ -402,13 +387,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 215,
-   "line_end": 218,
+   "line_start": 216,
+   "line_end": 219,
    "n_lines": 4,
    "note": "✓4 兼容壳 → App/AppData.safe_write_json_file"
   },
   {
-   "order": 20,
+   "order": 19,
    "name": "_start_download",
    "wave": 1,
    "target": "ELTDX",
@@ -420,13 +405,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 605,
-   "line_end": 618,
-   "n_lines": 14,
+   "line_start": 616,
+   "line_end": 632,
+   "n_lines": 17,
    "note": "启动下载线程（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
   {
-   "order": 21,
+   "order": 20,
    "name": "_stop_download",
    "wave": 1,
    "target": "ELTDX",
@@ -438,13 +423,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 621,
-   "line_end": 628,
+   "line_start": 635,
+   "line_end": 642,
    "n_lines": 8,
    "note": "中止下载（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"
   },
   {
-   "order": 22,
+   "order": 21,
    "name": "collect_codes_from_vipdoc",
    "wave": 1,
    "target": "ELTDX",
@@ -453,13 +438,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 661,
-   "line_end": 764,
+   "line_start": 675,
+   "line_end": 778,
    "n_lines": 104,
    "note": "从 vipdoc 收集代码（公开API，不含下划线前缀）"
   },
   {
-   "order": 23,
+   "order": 22,
    "name": "_build_sub_kl_times",
    "wave": 2,
    "target": "ORCH_E",
@@ -472,13 +457,13 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1589,
-   "line_end": 1617,
+   "line_start": 1585,
+   "line_end": 1613,
    "n_lines": 29,
    "note": "灰框对照表合成（上窗K线→下窗K线时间分桶，双指针）"
   },
   {
-   "order": 24,
+   "order": 23,
    "name": "_download_day_kline",
    "wave": 2,
    "target": "ELTDX",
@@ -501,7 +486,7 @@
    "note": "日线下载（纯，client 注入）"
   },
   {
-   "order": 25,
+   "order": 24,
    "name": "_download_min_kline",
    "wave": 2,
    "target": "ELTDX",
@@ -525,7 +510,7 @@
    "note": "分钟下载（纯，client 注入）"
   },
   {
-   "order": 26,
+   "order": 25,
    "name": "_extract_main_level_data",
    "wave": 3,
    "target": "ORCH_E",
@@ -544,13 +529,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 837,
-   "line_end": 1227,
+   "line_start": 833,
+   "line_end": 1223,
    "n_lines": 391,
    "note": "主级别结果提取（357 行）"
   },
   {
-   "order": 27,
+   "order": 26,
    "name": "_download_task",
    "wave": 3,
    "target": "ELTDX",
@@ -568,12 +553,12 @@
    "writes": [],
    "pure": false,
    "line_start": 442,
-   "line_end": 602,
-   "n_lines": 161,
+   "line_end": 613,
+   "n_lines": 172,
    "note": "下载任务体（读 _download_state/_download_lock）"
   },
   {
-   "order": 28,
+   "order": 27,
    "name": "_analyze_stock_internal",
    "wave": 4,
    "target": "ORCH_E",
@@ -605,13 +590,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 305,
-   "line_end": 827,
+   "line_start": 301,
+   "line_end": 823,
    "n_lines": 523,
    "note": "股票分析核心（440 行：拉取→注入→CChan→提取）"
   },
   {
-   "order": 29,
+   "order": 28,
    "name": "analyze_stock",
    "wave": 5,
    "target": "ORCH_E",
@@ -622,15 +607,15 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1620,
-   "line_end": 1638,
+   "line_start": 1616,
+   "line_end": 1634,
    "n_lines": 19,
    "note": "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"
   }
  ],
  "states": {
   "SYMBOL_CODE": {
-   "line": 52,
+   "line": 53,
    "kind": "init",
    "value_hint": "get_symbol_code()",
    "target": "ORCH_E",
@@ -655,7 +640,7 @@
    "writers": []
   },
   "SCRIPT_DIR": {
-   "line": 79,
+   "line": 80,
    "kind": "init",
    "value_hint": "os.path.dirname(os.path.abspath(__file__))",
    "target": "CFG",
@@ -664,7 +649,7 @@
    "writers": []
   },
   "FORWARD_ADJUST_ENABLED": {
-   "line": 103,
+   "line": 104,
    "kind": "init",
    "value_hint": "app_config.forward_adjust_enabled",
    "target": "ORCH_E",
@@ -673,7 +658,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_START_DATE": {
-   "line": 106,
+   "line": 107,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_start_date",
    "target": "ORCH_E",
@@ -684,7 +669,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_END_DATE": {
-   "line": 109,
+   "line": 110,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_end_date",
    "target": "ORCH_E",
@@ -695,7 +680,7 @@
    "writers": []
   },
   "FULL_DATA_MODE": {
-   "line": 128,
+   "line": 129,
    "kind": "init",
    "value_hint": "app_config.full_data_mode",
    "target": "ORCH_E",
@@ -706,7 +691,7 @@
    "writers": []
   },
   "STOCKS_LOOKBACK_CONFIG": {
-   "line": 133,
+   "line": 134,
    "kind": "init",
    "value_hint": "app_config.stocks_lookback_config",
    "target": "ORCH_E",
@@ -717,7 +702,7 @@
    "writers": []
   },
   "DUAL_SUB_FALLBACK_MIN": {
-   "line": 138,
+   "line": 139,
    "kind": "init",
    "value_hint": "app_config.dual_sub_fallback_min",
    "target": "ORCH_E",
@@ -728,7 +713,7 @@
    "writers": []
   },
   "_ELTDX_AVAILABLE": {
-   "line": 185,
+   "line": 186,
    "kind": "init",
    "value_hint": "_ElTdx._ELTDX_AVAILABLE",
    "target": "ELTDX",
@@ -737,7 +722,7 @@
    "writers": []
   },
   "TdxClient": {
-   "line": 186,
+   "line": 187,
    "kind": "init",
    "value_hint": "_ElTdx.TdxClient",
    "target": "ELTDX",
@@ -774,7 +759,7 @@
    "writers": []
   },
   "_stock_names_cache": {
-   "line": 204,
+   "line": 205,
    "kind": "init",
    "value_hint": "app_data.names_cache",
    "target": "DATA",
@@ -783,7 +768,7 @@
    "writers": []
   },
   "_pe_ttm_cache": {
-   "line": 224,
+   "line": 225,
    "kind": "init",
    "value_hint": "app_data.pe_cache",
    "target": "DATA",
@@ -792,7 +777,7 @@
    "writers": []
   },
   "_index_belong_cache": {
-   "line": 228,
+   "line": 229,
    "kind": "init",
    "value_hint": "app_data.belong_cache",
    "target": "DATA",
@@ -801,7 +786,7 @@
    "writers": []
   },
   "_stocks_analysis_cache": {
-   "line": 257,
+   "line": 258,
    "kind": "init",
    "value_hint": "app_data.stocks_analysis_cache",
    "target": "DATA",
@@ -812,7 +797,7 @@
    "writers": []
   },
   "_cache_lock": {
-   "line": 258,
+   "line": 259,
    "kind": "init",
    "value_hint": "app_data.cache_lock",
    "target": "DATA",
@@ -823,7 +808,7 @@
    "writers": []
   },
   "_stock_analysis_lock": {
-   "line": 269,
+   "line": 265,
    "kind": "init",
    "value_hint": "threading.Lock()",
    "target": "RETIRE",
@@ -834,7 +819,7 @@
    "writers": []
   },
   "SAVED_POINT_COLUMNS": {
-   "line": 291,
+   "line": 287,
    "kind": "init",
    "value_hint": "AppData_SAVED_POINT_COLUMNS",
    "target": "CFG",
@@ -843,7 +828,7 @@
    "writers": []
   },
   "FREQ_TO_COL": {
-   "line": 293,
+   "line": 289,
    "kind": "init",
    "value_hint": "AppData_FREQ_TO_COL",
    "target": "ORCH_E",
@@ -855,7 +840,7 @@
    "writers": []
   },
   "_saved_point_times": {
-   "line": 298,
+   "line": 294,
    "kind": "init",
    "value_hint": "app_data.saved_point_times",
    "target": "DATA",
@@ -867,7 +852,7 @@
    "writers": []
   },
   "_SUB_FREQ_MAP": {
-   "line": 1495,
+   "line": 1491,
    "kind": "init",
    "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m'}",
    "target": "ORCH_E",
@@ -878,7 +863,7 @@
    "writers": []
   },
   "_STOCKS_DUAL_IMPL_ENV": {
-   "line": 1513,
+   "line": 1509,
    "kind": "init",
    "value_hint": "'CHAN_STOCK_DUAL_IMPL'",
    "target": "ORCH_E",
@@ -889,7 +874,7 @@
    "writers": []
   },
   "_STOCKS_DUAL_PAIRS": {
-   "line": 1528,
+   "line": 1524,
    "kind": "init",
    "value_hint": "{'w': {'d', '30m', '5m'}, 'd': {'30m', '5m'}, '30m': {'5m'}}",
    "target": "ORCH_E",
@@ -900,7 +885,7 @@
    "writers": []
   },
   "_STOCKS_MAIN_PERIOD": {
-   "line": 1553,
+   "line": 1549,
    "kind": "init",
    "value_hint": "{'w': timedelta(days=7), 'd': timedelta(days=1), '30m': time…",
    "target": "ORCH_E",
@@ -911,7 +896,7 @@
    "writers": []
   },
   "_STOCKS_EOD": {
-   "line": 1560,
+   "line": 1556,
    "kind": "init",
    "value_hint": "timedelta(hours=23, minutes=59, seconds=59, microseconds=999…",
    "target": "ORCH_E",
@@ -1001,7 +986,11 @@
   ],
   "api_stocks_scan_close": [
    "FE",
-   "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache → app_data.stocks_cache_clear()"
+   "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache（仅关面板，P0-3 后不再清缓存）"
+  ],
+  "api_stocks_cleanup": [
+   "FE",
+   "✓REST POST /api/stocks/cleanup → FrontAPI + AppData.stocks_cache_clear（P0-3 手动失效入口）"
   ],
   "api_stocks_scan_submit": [
    "FE",

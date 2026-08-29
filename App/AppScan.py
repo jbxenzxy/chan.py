@@ -635,11 +635,13 @@ class Scanner:
         return {"count": len(_scan_skip_log)}
 
     def clear_cache(self):
-        """关闭扫描面板：真实清理扫描产生的股票分析缓存"""
-        from App.AppData import app_data
-        cleared = app_data.stocks_cache_clear()
-        log.info(f"[扫描缓存] 面板关闭，清理股票分析缓存 {cleared} 条")
-        return {"cleared": cleared}
+        """关闭扫描面板：不再清空共享股票分析缓存。
+        P0-3 收敛：批量扫描与单票分析共享同一分析缓存（LRU 上限 50），
+        关闭面板时清空会误伤用户正在查看的图表缓存；缓存失效改由
+        下载完成回调（AppDownload）与 POST /api/stocks/cleanup 承担。
+        返回 cleared=0 保持前端兼容（前端仅 POST 不读响应）。"""
+        log.info("[扫描缓存] 面板关闭（共享分析缓存保留，由下载完成/手动 cleanup 失效）")
+        return {"cleared": 0}
 
     # ── 批量扫描异步化（ProcessPool 先行）────────────────────
     # 薄封装：AppScan 保持纯业务、零并发框架依赖（模块级不 import

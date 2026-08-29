@@ -749,7 +749,9 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         if main_result is None:
             yield _sse_frame("init", {"error": "上窗初始化失败（无数据或网络异常）", "symbol": symbol})
             return
-        main_chan, main_records, main_kl_type, _ = main_result
+        # init_chan_symbol 返回 (chan, klines, kl_type, records)——第二项是
+        # get_kline_serial 的 klines DataFrame 而非 records（本分支未使用）
+        main_chan, _main_klines, main_kl_type, _ = main_result
         main_kl_type = _get_kl_type(main_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 上窗({main_freq}) chan.py: 合并K线={len(main_chan[main_kl_type].lst)}, "

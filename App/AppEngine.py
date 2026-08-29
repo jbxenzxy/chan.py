@@ -258,11 +258,6 @@ def _collect_codes_from_vipdoc(vipdoc_dir):
 _stocks_analysis_cache = app_data.stocks_analysis_cache   # 分析结果 LRU
 _cache_lock = app_data.cache_lock                        # 保护缓存的并发读写
 
-# 全市场流通市值缓存（通过腾讯接口获取，本地JSON兜底；实现位于 app_data）
-def _load_float_mc_cache():
-    """从本地JSON加载流通市值缓存（委托 app_data）"""
-    return app_data.load_float_mc_cache()
-
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
 

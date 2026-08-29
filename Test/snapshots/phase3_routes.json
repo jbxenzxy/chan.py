@@ -17,6 +17,7 @@
  "GET /api/stocks/{code}/red-range",
  "POST /api/futures/cleanup",
  "POST /api/futures/{symbol}/select/point",
+ "POST /api/stocks/cleanup",
  "POST /api/stocks/download/cancel",
  "POST /api/stocks/download/start",
  "POST /api/stocks/refresh",

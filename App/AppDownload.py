@@ -12,6 +12,9 @@ App/AppDownload.py —— 盘后下载功能域
 下载职责内聚 DataAPI/ElTdxAPI.py，此处为薄封装（委托目标 ElTdxAPI）。
 """
 import json
+import logging
+
+log = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -42,10 +45,27 @@ def start_download_checked(categories, day_start=None, min_start=None):
             return {"error": "categories 参数格式错误"}, 400
     if not categories:
         return {"error": "请选择要下载的数据类型"}, 400
+
+    # P0-3：下载完成 → 失效股票分析缓存（下载写入了新数据，旧的
+    # 分析结果已过期；共享 LRU 会在下次请求时按需重建）。回调由
+    # AppDownload（App 层）注入，ElTdxAPI 保持零 App 依赖。
     ok, msg = _eltdx._start_download(app_config.download_dir, categories,
                                      day_start=day_start or None,
-                                     min_start=min_start or None)
+                                     min_start=min_start or None,
+                                     on_finish=stocks_cache_clear)
     return {"ok": ok, "message": msg}, (200 if ok else 409)
+
+
+def stocks_cache_clear():
+    """失效股票分析缓存（P0-3 唯一失效漏斗）。
+
+    下载完成回调（on_finish）与手动入口（POST /api/stocks/cleanup，经
+    AppOrch 再导出）均汇聚至此；App 层持 AppData 依赖，DataAPI 层零依赖。
+    """
+    from App.AppData import app_data
+    cleared = app_data.stocks_cache_clear()
+    log.info(f"[缓存] 失效股票分析缓存 {cleared} 条")
+    return cleared
 
 
 def get_download_status():

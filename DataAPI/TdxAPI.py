@@ -1997,7 +1997,7 @@ def _read_infoharbor_sector_stocks(sector_code):
     return stocks
 
 
-def get_index_stocks(sector_code, abort_check=None):
+def get_index_stocks(sector_code):
     """
     根据通达信板块指数代码，获取其成分股列表。
 
@@ -2005,8 +2005,6 @@ def get_index_stocks(sector_code, abort_check=None):
     - 881xxx: 研究行业(新版) → 本地 tdxhy.cfg
     - 880xxx: 概念/风格板块 → 优先 infoharbor_block.dat，失败再用 tdxzs.cfg + block_*.dat
     - 000xxx/399xxx: 标准指数 → AKShare (中证指数公司)
-
-    abort_check: 可选回调，返回 True 表示调用方（扫描）已中断，网络抓取提前放弃。
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
     """
@@ -2021,11 +2019,11 @@ def get_index_stocks(sector_code, abort_check=None):
     # 中证指数接口（index_stock_cons_csindex），把恒指代码当 6 位中证代码请求，
     # 返回非 Excel 内容抛 "Excel file format cannot be determined"。
     if sector_code.upper() in _HK_INDEX_CODES:
-        return _read_hk_index_stocks(sector_code.upper(), abort_check=abort_check)
+        return _read_hk_index_stocks(sector_code.upper())
 
     # Step 2: 标准指数（000xxx / 399xxx 等）→ 本地或 AKShare 统一获取
     if not sector_code.startswith("88"):
-        return _read_standard_index_stocks(sector_code, abort_check=abort_check)
+        return _read_standard_index_stocks(sector_code)
 
     # Step 3: 880xxx（概念/风格板块）→ 优先读取 infoharbor_block.dat
     stocks = _read_infoharbor_sector_stocks(sector_code)
@@ -2116,13 +2114,13 @@ def _parse_stocks_from_df(df, source_label):
 
 
 def _run_with_timeout(fn, timeout, abort_check=None):
-    """在守护线程中执行阻塞网络抓取，限时返回，且可被扫描中断。
+    """在守护线程中执行阻塞网络抓取，限时返回，且可被调用方中断。
 
     背景：akshare/requests 等成分抓取可能因网络异常无限阻塞（无超时、原生调用
     不可打断）。扫描「成分股」来源在 API 线程池线程里解析股票清单，若阻塞则
     「中断扫描」也结束不了（见 App/app 单组来源 page_index 卡死历史）。本函数：
       1. 守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None；
-      2. 每次轮询检查 abort_check()，扫描被中断即提前放弃，不干等网络。
+      2. 每次轮询检查 abort_check()，调用方需中断即提前放弃，不干等网络。
     返回 fn 结果；超时/被中断返回 None；fn 内部异常原样透出（调用方捕获）。
     """
     import threading
@@ -2156,14 +2154,14 @@ def _run_with_timeout(fn, timeout, abort_check=None):
     return box.get("r")
 
 
-def _read_sh_index_stocks_exchange(abort_check=None):
+def _read_sh_index_stocks_exchange():
     """上证指数(000001)成分 = 沪市全部A股，上交所官网 query.sse.com.cn 直连。
 
     与深证成指(399001)直连深交所官网一致：从上交所官方查询接口实时获取当前
     「全部A股」清单（主板A股 STOCK_TYPE=1 + 科创板 STOCK_TYPE=8 两段合并去重），
     而不走通达信本地 vipdoc/sh/lday 枚举（该目录会混入其它指数/基金/代码段，
     market+code 整改后不可再当作指数成分来源）。
-    返回 [{"code","prefix","name"}, ...]；限时可被扫描中断（abort_check）。
+    返回 [{"code","prefix","name"}, ...]；网络抓取经 _run_with_timeout 限时。
     """
     import requests
 
@@ -2212,7 +2210,7 @@ def _read_sh_index_stocks_exchange(abort_check=None):
                 stocks.append({"code": code, "prefix": "1", "name": name or code})
         return stocks
 
-    return _run_with_timeout(_fetch, timeout=25, abort_check=abort_check)
+    return _run_with_timeout(_fetch, timeout=25)
 
 
 def _normalize_hk_code(raw):
@@ -2382,11 +2380,11 @@ def _pdf_parse_diagnostics(pdf_bytes, sector_code):
     log.info(f"[板块成分股][诊断] {sector_code}: 文本片段>>> {snippet!r}")
 
 
-def _read_hk_index_stocks(sector_code, abort_check=None):
+def _read_hk_index_stocks(sector_code):
     """港股指数（HSTECH/HSIDI 等）成分股：恒生指数公司官方 Factsheet PDF。
 
-    返回 [{code, prefix:'hk', name}, ...]；下载与解析均走 _run_with_timeout
-    （限时 + 可被扫描 abort_check 中断）。sector_code 应为大写字母指数代码。
+    返回 [{code, prefix:'hk', name}, ...]；下载与解析均走 _run_with_timeout 限时。
+    sector_code 应为大写字母指数代码。
     """
     import requests
 
@@ -2402,7 +2400,7 @@ def _read_hk_index_stocks(sector_code, abort_check=None):
     # ── 第一优先级：恒生指数公司官方 Factsheet PDF（权威，覆盖全部支持指数）──
     if sheet_key:
         try:
-            pdf_bytes = _run_with_timeout(_fetch_fact_sheet, timeout=30, abort_check=abort_check)
+            pdf_bytes = _run_with_timeout(_fetch_fact_sheet, timeout=30)
             if not pdf_bytes:
                 log.info(f"[板块成分股] 恒指官方 Factsheet 下载超时/中断: {sector_code}")
             else:
@@ -2424,7 +2422,7 @@ def _read_hk_index_stocks(sector_code, abort_check=None):
     return []
 
 
-def _read_standard_index_stocks(sector_code, abort_check=None):
+def _read_standard_index_stocks(sector_code):
     """
     根据指数代码获取成分股。
 
@@ -2433,14 +2431,13 @@ def _read_standard_index_stocks(sector_code, abort_check=None):
     - 中证指数（000300/000905/000852/000688 等）：中证指数官网（官方直连）
     - 深交所指数（399xxx）：深交所官网 ShowReport XLS（官方直连）
 
-    所有网络抓取均限时（_run_with_timeout）且可中断（abort_check），避免扫描
-    因网络阻塞而卡死、中断失效。
+    所有网络抓取均限时（_run_with_timeout），避免扫描因网络阻塞而卡死。
     """
     # ── 上证指数（000001）：综合指数 = 沪市全部A股（上交所官网直连）──
     # 放最前：000001 与 399xxx 同风格从上交所官网取全部A股，不走通达信本地
     # vipdoc/sh/lday 枚举（该目录还混有其它指数，不能作指数成分来源）。
     if sector_code == "000001":
-        stocks = _read_sh_index_stocks_exchange(abort_check=abort_check)
+        stocks = _read_sh_index_stocks_exchange()
         log.info(f"[板块成分股] 📈 上证指数(000001) 上交所A股共 {len(stocks or [])} 只")
         return stocks or []
 
@@ -2456,7 +2453,7 @@ def _read_standard_index_stocks(sector_code, abort_check=None):
         try:
             df = _run_with_timeout(
                 lambda: ak.index_stock_cons_csindex(symbol=sector_code),
-                timeout=25, abort_check=abort_check)
+                timeout=25)
             if df is None:
                 return []
             if df.empty:
@@ -2491,7 +2488,7 @@ def _read_standard_index_stocks(sector_code, abort_check=None):
                             continue
                         raise
 
-            df = _run_with_timeout(_fetch, timeout=25, abort_check=abort_check)
+            df = _run_with_timeout(_fetch, timeout=25)
             if df is None:
                 return []
             if df.empty:
@@ -2510,7 +2507,7 @@ def _read_standard_index_stocks(sector_code, abort_check=None):
     try:
         df = _run_with_timeout(
                 lambda: ak.index_stock_cons_csindex(symbol=sector_code),
-                timeout=25, abort_check=abort_check)
+                timeout=25)
         if df is None:
             return []
         if df.empty:
