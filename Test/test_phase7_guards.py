@@ -14,9 +14,9 @@
      （分层方向 FrontAPI → AppOrch → AppData/ScanStore 单向）。
   ③ 装配契约（W3/W4/W10/W11 + 合并项）：ProcessPoolExecutor 以 spawn
      上下文创建（跨平台安全，防 fork 锁继承）；initializer 屏蔽 SIGINT；
-     受限环境降级 ThreadPoolExecutor（同一 worker 函数）；worker 数钳制
-     [1,16]；atexit 注册显式关池；入口 __main__ 守卫在位；
-     scan_pool_workers 配置面在位。
+     仅用进程池（不提供线程池降级，受限环境装配失败直接抛错由运维解决）；
+     worker 数钳制 [1,16]；atexit 注册显式关池；入口 __main__ 守卫在位；
+    scan_pool_workers 配置面在位。
   ④ 跨进程存储契约（W1/W2/W8）：ScanStore 关键方法齐备；WAL +
      busy_timeout + locked 重试；completed 由结果行数 COUNT 派生（单一
      事实源，不落列）；put_result INSERT OR IGNORE（主键 (task_id, seq)，
@@ -40,8 +40,7 @@
      报错；SCAN_TASK_DB 环境变量隔离生效。
   ⑧ 端到端冒烟（真实 ProcessPool）：提交 N 只虚拟票（ZZxxxx 快速失败落库）
      → 轮询至终态 → completed == total、结果行 seq 连续 0..N-1、engine 标记
-     ∈ {process_pool, thread_fallback}（验证 spawn worker + 跨进程 SQLite
-     回流链路真实可用；受限环境降级线程池同判定）。
+     == process_pool（验证 spawn worker + 跨进程 SQLite 回流链路真实可用）。
 
 合并自对方阶段 7 交付并已由本守护锁定的成果：
   · worker SIGINT 屏蔽（③：Windows Ctrl+C 进程组传播实测问题）；
@@ -201,9 +200,6 @@ def test_pool_assembly(failures):
         bad.append("ProcessPoolExecutor 未用 initializer 屏蔽 SIGINT")
     if "signal.SIGINT, signal.SIG_IGN" not in src_pool:
         bad.append("_worker_init 缺少 SIGINT 屏蔽（Windows Ctrl+C 将打断 worker）")
-    # W3：线程池降级路径（受限环境 ThreadPoolExecutor 同一 worker 函数）
-    if "ThreadPoolExecutor(" not in src_pool:
-        bad.append("缺少线程池降级路径（受限环境将无兜底）")
     # W10：worker 数上限钳制（防 64 核机器打爆内存）
     if "min(_SCAN_POOL_MAX_WORKERS" not in src_pool:
         bad.append("worker 数未钳制上限 [1, 16]（W10 未修复）")
@@ -244,7 +240,7 @@ def test_pool_assembly(failures):
         for b in bad:
             print(f"[FAIL] ③ 装配契约: {b}")
     else:
-        print("[PASS] ③ 装配契约: spawn 上下文 + SIGINT 屏蔽 + 线程池降级 + "
+        print("[PASS] ③ 装配契约: spawn 上下文 + SIGINT 屏蔽 + "
               "worker 钳制 [1,16] + atexit 关池 + engine/workers + 时间戳 task_id "
               "+ 提交清理 + 3 入口 __main__ 守卫 + 冒烟工具全部在位")
 
@@ -524,7 +520,7 @@ def test_e2e_smoke(failures):
         print(f"[FAIL] ⑧ 端到端冒烟: 提交失败 {sub}")
         return
     task_id, total = sub["task_id"], sub["total"]
-    if sub.get("engine") not in ("process_pool", "thread_fallback"):
+    if sub.get("engine") != "process_pool":
         failures.append(f"端到端: engine 标记异常: {sub.get('engine')}")
         print(f"[FAIL] ⑧ 端到端冒烟: engine={sub.get('engine')}")
         return

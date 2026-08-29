@@ -93,11 +93,14 @@ def _get_pool():
         if _pool is None:
             from App.AppConfig import app_config
             workers = _resolve_workers(app_config)
-            _pool_created_count += 1
             ctx = multiprocessing.get_context("spawn")
-            _pool = ProcessPoolExecutor(max_workers=workers,
-                                        mp_context=ctx,
-                                        initializer=_worker_init)
+            pool = ProcessPoolExecutor(max_workers=workers,
+                                       mp_context=ctx,
+                                       initializer=_worker_init)
+            # 构造成功后才计数：装配失败（如受限容器无 /dev/shm）保持
+            # _pool=None 且不虚增计数，下次扫描可原样重试自愈。
+            _pool_created_count += 1
+            _pool = pool
             _pool_engine = "process_pool"
             if _pool_created_count == 1:
                 log.info(f"[扫描池] ProcessPool 已装配: workers={workers} "
@@ -254,19 +257,39 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
         "source": source, "count": total,
     })
 
-    pool, engine = _get_pool()
+    # 池装配：失败即置任务 error 并向调用方返回，绝不把异常带出去。
+    # （ProcessPoolExecutor 构造通常成功，受限容器典型失败发生在首次
+    #   submit 期抛 BrokenProcessPool；故装配与派发分两层各自收敛。）
+    try:
+        pool, engine = _get_pool()
+    except Exception as exc:  # noqa: BLE001 —— 收敛为任务级错误
+        msg = f"扫描进程池装配失败: {type(exc).__name__}: {exc}"
+        log.info(f"[扫描池] {msg}")
+        store.set_status(task_id, "error", msg)
+        return {"error": msg}
+
     workers = _resolve_workers(_get_config())
     # 启动扫描前打印实际执行核数（worker 数 = 并行执行的进程数；先显示 CPU 核数，执行核数基于它）
     log.info(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
           f"执行核数={workers} | 引擎={engine}")
     futures = []
-    for seq, stk in enumerate(valid):
-        code = stk.get("code", "")
-        prefix = stk.get("prefix", "")
-        src = stk.get("_source") or source
-        fut = pool.submit(_worker_scan_one, task_id, code, freq, prefix,
-                          recent, src, mode, seq)
-        futures.append((fut, seq, code))
+    try:
+        for seq, stk in enumerate(valid):
+            code = stk.get("code", "")
+            prefix = stk.get("prefix", "")
+            src = stk.get("_source") or source
+            fut = pool.submit(_worker_scan_one, task_id, code, freq, prefix,
+                              recent, src, mode, seq)
+            futures.append((fut, seq, code))
+    except Exception as exc:  # noqa: BLE001 —— 派发期失败需销毁坏池自愈
+        # 受限容器典型失败：队列创建失败 → 首次 submit 抛 BrokenProcessPool。
+        # 必须销毁坏池（_active_scans 归零）+ 置任务 error，否则坏池被
+        # 永久复用、_active_scans 泄漏，批量扫描再无自愈机会、任务永挂。
+        msg = f"扫描任务派发失败: {type(exc).__name__}: {exc}"
+        log.info(f"[扫描池] {msg}")
+        destroy_pool()
+        store.set_status(task_id, "error", msg)
+        return {"error": msg}
 
     store.set_status(task_id, "running")
     threading.Thread(target=_monitor_task, args=(task_id, futures),
