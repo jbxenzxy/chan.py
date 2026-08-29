@@ -21,30 +21,32 @@ CI / 迁移每阶段的验收门禁）。
  10. 阶段 4 成果防护   test_phase4_guards.py        委托壳+目标存在/状态别名同一性/
                                                      配置别名清零/自选股收敛/语义子窗/
                                                      分层方向/LRU 语义/数据源 import 门禁(P1-1)
- 11. .blk 解析与自选股  test_blk_parsing.py         黄金行为（对齐 DoubleOptimize）/
+ 11. 市场量能行为测试  test_app_amo.py               真行为测试（合成 .day 合成数据）
+ 12. 双窗公式纯函数    test_stocks_dual_algo.py      P0 4 向公式单测（方向×边界）
+ 13. .blk 解析与自选股  test_blk_parsing.py          黄金行为（对齐 DoubleOptimize）/
                                                      双解析器一致性/缺失文件/自选股链路/
                                                      扫描消费兼容/防 tdx_blk 回归/
                                                      成分股/板块指数2·3/多来源合并
- 12. SSE 增量快照      test_sse_incremental.py       P2-4：增量 klines/MACD ≡ 全量 /
+ 14. SSE 增量快照      test_sse_incremental.py       P2-4：增量 klines/MACD ≡ 全量 /
                                                      快照同构/状态缺失回退
- 13. SSE 灰度比对      test_sse_gray.py             3b-1：native vs 冻结基线
+ 15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
- 14. 阶段 5 成果防护   test_phase5_guards.py        获取侧抽象完善：tdxhy 迁 App/统一加载/
+ 16. 阶段 5 成果防护   test_phase5_guards.py         获取侧抽象完善：tdxhy 迁 App/统一加载/
                                                      盘后下载收敛 ElTdxAPI/元数据接口提升/
                                                      AppOrch 委托/fetch_kline 抽象
- 15. 阶段 6 成果防护   test_phase6_guards.py        前端组件化：组件区块/KLineChart 契约/
+ 17. 阶段 6 成果防护   test_phase6_guards.py         前端组件化：组件区块/KLineChart 契约/
                                                      window API 面冻结/事件引用/零构建/
                                                      注册表一致/缓存击穿/合并层完整
- 16. 阶段 7 成果防护   test_phase7_guards.py        批量扫描异步化：ScanStore 分层缓存/
+ 18. 阶段 7 成果防护   test_phase7_guards.py         批量扫描异步化：ScanStore 分层缓存/
                                                      ScanPool ProcessPool 编排/AppOrch 薄封装/
                                                      双路径 API/前端三模式接入/依赖方向
- 17. API 集成测试      test_api_integration.py       P2-2①：TestClient 起 app 打核心端点/
+ 19. API 集成测试      test_api_integration.py       P2-2①：TestClient 起 app 打核心端点/
                                                      健康检查/搜索/扫描守卫/领域异常映射
- 18. 代码输入链路守护  test_code_resolution_guards.py 沪深重名消歧/大小写契约/搜索双市场候选/
+ 20. 代码输入链路守护  test_code_resolution_guards.py 沪深重名消歧/大小写契约/搜索双市场候选/
                                                      search 与引擎同源兜底
- 19. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
-  20. ProcessPool 降级  test_scanpool_fallback.py     P2-2③：ProcessPool 失败→ThreadPool 降级
-  21. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
+ 21. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
+ 22. ProcessPool 降级  test_scanpool_fallback.py     P2-2③：ProcessPool 失败→ThreadPool 降级
+ 23. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -85,6 +87,10 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_phase3_guards.py")]),
     ("phase4_guards",
      [sys.executable, os.path.join("Test", "test_phase4_guards.py")]),
+    ("app_amo_behavior",
+     [sys.executable, os.path.join("Test", "test_app_amo.py")]),
+    ("stocks_dual_algo",
+     [sys.executable, os.path.join("Test", "test_stocks_dual_algo.py")]),
     ("blk_parsing",
      [sys.executable, os.path.join("Test", "test_blk_parsing.py")]),
     ("sse_incremental",

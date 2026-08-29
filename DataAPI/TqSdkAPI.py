@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import time as _time
+from contextlib import contextmanager
 from datetime import datetime
 
 # 抑制 tqsdk 内部 INFO 日志（如 WebSocket 连接通知）
@@ -23,6 +24,40 @@ logging.getLogger("tqsdk.tqapi").setLevel(logging.WARNING)
 from DataAPI.CommonStockAPI import CCommonStockApi
 
 log = logging.getLogger(__name__)
+
+# ── 当前线程会话（P0-1 修复：缓存实例化到各连接会话）────────────
+# CChan 内部经 data_src="custom:TqSdkAPI.CTqSdkAPI" 自行实例化数据源
+# （code/k_type 等构造参数由引擎传入），无法直接注入会话。SSE 生成器
+# 为同步单线程（StreamingResponse 线程池），故用线程局部保存「本线程当前
+# 会话」，CTqSdkAPI.__init__ 据此绑定该连接 CTqSdkSession 的记录缓存，
+# 实现「每连接自包含」；脱离会话直接实例化（如工具脚本）回退自有缓存。
+_CURRENT_SESSION = threading.local()
+
+
+@contextmanager
+def session_context(session):
+    """会话上下文：让本线程随后创建的 CTqSdkAPI 实例绑定 session 的记录缓存。
+
+    session 需具备 _records_by_symbol/_lock（CTqSdkSession 实例）；
+    MockSource 等无记录缓存的对象不绑定。线程局部离开后自动还原，
+    避免线程池复用串连其它连接缓存。
+    """
+    prev = getattr(_CURRENT_SESSION, "session", None)
+    _CURRENT_SESSION.session = session
+    try:
+        yield
+    finally:
+        _CURRENT_SESSION.session = prev
+
+
+def session_set(session):
+    """在生成器入口设置当前会话（覆盖整个生成器生命周期，供实时 step_load 重建数据源）。"""
+    _CURRENT_SESSION.session = session
+
+
+def session_clear():
+    """在生成器 finally 清除当前会话（线程池复用前必须清，防串连）。"""
+    _CURRENT_SESSION.session = None
 
 # ============================================================
 # 天勤配置
@@ -86,28 +121,6 @@ def load_tq_account(config_dir):
         reason += "；环境变量 TQ_ACCOUNT / TQ_PASSWORD 未成对设置"
     log.warning(f"[TqSdkAPI] 未取到有效凭据（{reason}），使用默认空值")
     return False
-
-# 默认监控的期货品种（引擎启动时初始化 15s/1m/5m，30m 延迟按需初始化）
-# 注意：天勤主连合约不支持 d/w 周期（返回垃圾数据），已排除。
-# 格式: (天勤合约代码, 显示名称, 周期秒数, 周期标签)
-DEFAULT_FUTURES_SYMBOLS = [
-    ("KQ.m@CFFEX.IM", "中证1000主连", 15, "15s"),
-    ("KQ.m@CFFEX.IM", "中证1000主连", 60, "1m"),
-    ("KQ.m@CFFEX.IM", "中证1000主连", 300, "5m"),
-    ("KQ.m@CFFEX.IF", "沪深300主连", 15, "15s"),
-    ("KQ.m@CFFEX.IF", "沪深300主连", 60, "1m"),
-    ("KQ.m@CFFEX.IF", "沪深300主连", 300, "5m"),
-    ("KQ.m@CFFEX.IH", "上证50主连", 15, "15s"),
-    ("KQ.m@CFFEX.IH", "上证50主连", 60, "1m"),
-    ("KQ.m@CFFEX.IH", "上证50主连", 300, "5m"),
-    ("KQ.m@CFFEX.IC", "中证500主连", 15, "15s"),
-    ("KQ.m@CFFEX.IC", "中证500主连", 60, "1m"),
-    ("KQ.m@CFFEX.IC", "中证500主连", 300, "5m"),
-    ("KQD.m@SGX.CN", "A50主连", 15, "15s"),
-    ("KQD.m@SGX.CN", "A50主连", 60, "1m"),
-    ("KQD.m@SGX.CN", "A50主连", 300, "5m"),
-    ("KQD.m@SGX.CN", "A50主连", 1800, "30m"),
-]
 
 # ===== 期货品种别名映射表 =====
 # 支持用户直接输入短名称（如 PTA、IF、rb、TA 等），自动映射到完整的主连代码
@@ -181,32 +194,21 @@ FREQ_LABEL_CN = {
 # 期货历史回看配置（标签键 → (bars, label)）；由 AppEngine 注入，默认空。
 _futures_lookback_config: dict = {}
 
-# 期货双窗口周期映射：上窗周期 → 下窗周期
-FUTURES_DUAL_FREQ_MAP = {
-    "30m": "5m",
-    "5m": "1m",
-    "1m": "15s",
-}
-
-# 期货双窗口反向映射：下窗周期 → 上窗周期
-FUTURES_DUAL_REVERSE_MAP = {
-    "5m": "30m",
-    "1m": "5m",
-    "15s": "1m",
-}
-
 
 class CTqSdkAPI(CCommonStockApi):
     """
     天勤数据源适配器，继承 CCommonStockApi 实现完整接口。
     缓存键为 "symbol:freq_sec" 格式，同品种不同周期各自独立。
 
+    P0-1 修复：K 线记录缓存由类级全局改为「每连接会话实例级」——
+    SSE 各连接持有独立 CTqSdkSession，其 _records_by_symbol 即本类
+    实例读取的缓存（经线程局部绑定，见 session_context / __init__）。
+    类级接口保留作兼容（fetch_kline 等元数据/取数方法不变）。
+
     实现 CommonStockAPI 元数据接口：
     频率映射 / 别名 / 支持列表 为抽象层元数据属性（类属性访问），
     fetch_kline 走基类 get_kline 家族（委托模块级 fetch_futures_kline）。
     """
-    _records_by_symbol = {}
-    _lock = threading.Lock()
 
     # ── 数据源元数据接口（覆盖 CommonStockAPI 默认空值）──────────
     # 普通类属性（全 Python 版本兼容；@classmethod @property 在 3.11+
@@ -235,35 +237,41 @@ class CTqSdkAPI(CCommonStockApi):
 
     @classmethod
     def clear_all_cache(cls):
-        """期货切股票时清空所有K线缓存"""
-        with cls._lock:
-            cls._records_by_symbol.clear()
+        """清空全部期货K线缓存（期货切股票时调用）。
 
-    @classmethod
-    def set_data(cls, records, symbol=None):
-        key = symbol or "__default__"
-        with cls._lock:
-            cls._records_by_symbol[key] = list(records)
+        P0-1 修复：缓存已实例化到各连接 CTqSdkSession，类级统一清空改为
+        遍历活跃会话注册表逐个清空；无活跃会话（纯工具场景）自动无操作。
+        """
+        from DataAPI.TqSdkCSSESource import _ACTIVE_SOURCES, _ACTIVE_SOURCES_LOCK
+        with _ACTIVE_SOURCES_LOCK:
+            sources = list(_ACTIVE_SOURCES)
+        for src in sources:
+            try:
+                src.clear_all_cache()
+            except Exception:
+                pass
 
-    @classmethod
-    def append_bar(cls, bar, symbol=None):
+    def set_data(self, records, symbol=None):
         key = symbol or "__default__"
-        with cls._lock:
-            if key not in cls._records_by_symbol:
-                cls._records_by_symbol[key] = []
-            cls._records_by_symbol[key].append(bar)
+        with self._lock:
+            self._records_by_symbol[key] = list(records)
 
-    @classmethod
-    def get_data(cls, symbol=None, **kwargs):
+    def append_bar(self, bar, symbol=None):
         key = symbol or "__default__"
-        with cls._lock:
-            return cls._records_by_symbol.get(key, []).copy()
+        with self._lock:
+            if key not in self._records_by_symbol:
+                self._records_by_symbol[key] = []
+            self._records_by_symbol[key].append(bar)
 
-    @classmethod
-    def get_last_n(cls, n=1, symbol=None):
+    def get_data(self, symbol=None, **kwargs):
         key = symbol or "__default__"
-        with cls._lock:
-            records = cls._records_by_symbol.get(key, [])
+        with self._lock:
+            return self._records_by_symbol.get(key, []).copy()
+
+    def get_last_n(self, n=1, symbol=None):
+        key = symbol or "__default__"
+        with self._lock:
+            records = self._records_by_symbol.get(key, [])
             return records[-n:] if len(records) >= n else records.copy()
 
     def __init__(self, code, k_type, begin_date, end_date, autype):
@@ -276,6 +284,16 @@ class CTqSdkAPI(CCommonStockApi):
         self.end_date = end_date
         self.end_time = None
         self.autype = autype
+        # P0-1 修复：缓存实例级。SSE 单线程生成器内经 session_context /
+        # session_set 绑定的会话缓存共享同一份记录；脱离会话（工具脚本/
+        # 测试直实例化）回退自有空缓存。
+        _session = getattr(_CURRENT_SESSION, "session", None)
+        if _session is not None and hasattr(_session, "_records_by_symbol"):
+            self._records_by_symbol = _session._records_by_symbol
+            self._lock = _session._lock
+        else:
+            self._records_by_symbol = {}
+            self._lock = threading.Lock()
 
     def SetBasciInfo(self):
         self.name = self.code

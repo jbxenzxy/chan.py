@@ -205,22 +205,6 @@ class ScanStore:
             "WHERE task_id=?",
             (time.time(), task_id))
 
-    def abort_all_running(self):
-        """中止所有 pending/running 任务（scan_abort 兜底调用）。
-
-        ProcessPool worker 是独立进程，看不到主进程 _scan_aborted 标志；
-        /api/scan_abort 无 task_id 参数，无法精确中止单个任务，
-        故兜底中止全部进行中的批量任务（实际使用中同时只有一个）。
-        只置 abort_requested 请求旗，终态由各任务收割线程收敛。
-        返回中止条数。
-        """
-        rows = self._query_all(
-            "SELECT task_id FROM scan_tasks "
-            "WHERE status IN ('pending','running')")
-        for (task_id,) in rows:
-            self.request_abort(task_id)
-        return len(rows)
-
     # ── 结果写入（worker 进程调用）───────────────────────────────────
     def put_result(self, task_id, seq, code, status, result):
         """写入单只结果（单事务，INSERT OR IGNORE 幂等）。

@@ -722,8 +722,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
             # 保证此处取到的下窗 sub_chan 是已更新到最新的笔结构。
             # （下窗缓存经 AppData 公共 API 读取）
-            from App.AppData import app_data
-            cache_key = f"{parent.code.upper()}:{sub_freq}"
+            from App.AppData import app_data, make_futures_sub_key_from_code
+            # P0-2 修复：parent.code 形如 "SYMBOL:freq_sec"（CChan.code 含周期后缀），
+            # 经 make_futures_sub_key_from_code 去掉 ":freq_sec" 还原纯 symbol 后
+            # 委托 make_futures_sub_key 工厂生成下窗缓存 key（大小写/分隔符单一
+            # 事实源）。此前直接以 parent.code 拼接 "SYMBOL:freq_sec:sub_freq"，
+            # 与写侧 set_futures_sub_chan 的 "SYMBOL:sub_freq" 永不相等，导致
+            # 期货区间套 100% 静默失效。
+            cache_key = make_futures_sub_key_from_code(parent.code, sub_freq)
             sub_chan = app_data.futures_cache_get(cache_key)
             if sub_chan is None:
                 self._dbg_bs('check_nested_diver', '期货下窗暂无缓存 → 按子级别背驰处理',

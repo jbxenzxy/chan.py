@@ -544,7 +544,8 @@ def test_constituent_fetch_robustness(TC):
       ② 000001 走 _read_sh_index_stocks_exchange（上交所 query.sse.com.cn 直连），
          与 399xxx 深交所直连风格一致；不得走本地枚举、不得盲 return []；
       ③ 上交所/深交所/中证 网络源都被 _run_with_timeout 限时包裹；
-      ④ AppScan 成分来源把扫描中断标志传进抓取（abort_check）。
+      ④ P1-5：AppScan 遗留中止链路（_scan_aborted / Scanner.abort）已删除，
+         TdxAPI 通用限时机制 _run_with_timeout 保留。
     """
     problems = []
     # ── ① _run_with_timeout 行为 ──
@@ -583,12 +584,24 @@ def test_constituent_fetch_robustness(TC):
         if pat in tsrc and n_to < 3:
             problems.append(f"[⑫超时] 网络源 {pat} 未被 _run_with_timeout 限时包裹(共{n_to}处)")
 
-    # ── ④ AppScan 传中断标志 ──
+    # ── ④ P1-5：遗留中止链路已删除，通用限时机制保留 ──
     scan_path = os.path.join(REPO_ROOT, "App", "AppScan.py")
     with open(scan_path, "r", encoding="utf-8") as f:
         ssrc = f.read()
-    if "_scan_aborted" not in ssrc or "abort_check=" not in ssrc:
-        problems.append("[⑫中断] AppScan 成分来源未把扫描中断标志传入抓取（中断应对成分卡死失效）")
+    # 仅匹配实际遗留代码（def abort(self) 无参中止 / 模块级 _scan_aborted 旗），
+    # 不误伤注释/文档说明与新的 abort_batch_scan(task_id) 任务级取消入口
+    legacy_abort = (
+        re.search(r"def\s+abort\s*\(\s*self\s*\)\s*:", ssrc)
+        or re.search(r"global\s+_scan_aborted", ssrc)
+        or re.search(r"_scan_aborted\s*=\s*(False|True)", ssrc)
+        or re.search(r"if\s+_scan_aborted\s*:", ssrc)
+    )
+    if legacy_abort:
+        problems.append("[⑫P1-5] AppScan 仍残留遗留中止链路（Scanner.abort / _scan_aborted，"
+                        "前端已有 task cancel 语义，应删除）")
+    # TdxAPI 通用限时机制（_run_with_timeout）必须保留（成分抓取防卡死兜底）
+    if "_run_with_timeout" not in tsrc:
+        problems.append("[⑫P1-5] TdxAPI 限时机制 _run_with_timeout 缺失（成分抓取无超时保护）")
 
     if problems:
         TC.failures.append("；".join(problems))

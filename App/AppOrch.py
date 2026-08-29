@@ -28,32 +28,27 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 # ── 各功能域 re-export ─────────────────────────────────────────────────
 from App.AppChart import (
     _ENGINE_LOCK,
-    call_analysis, run_analysis, analyze_stock,
+    engine_section,
+    call_analysis, analyze_stock,
     call_manual_select_point, call_futures_manual_select_point,
     call_compute_red_range_zs,
     stock_manual_select_point, futures_manual_select_point, compute_red_range_zs,
-    fetch_and_inject,
     search_stocks,
     get_annotations, handle_annotation_action,
     clear_saved_point, futures_clear_saved_point,
     save_last_code_freq, load_last_code_freq,
-    get_saved_point_times,
-    futures_cache_get, futures_cache_put, futures_cache_pop,
-    futures_set_sub_chan, futures_get_sub_chan, futures_pop_sub_chan,
-    get_saved_point,
     futures_cleanup, get_futures_aliases, get_futures_name,
     tq_available, get_futures_freqs, get_futures_freq_sec_map,
     get_stock_names_cache_file,
-    get_stock_market_code, get_market_code, get_stock_name,
 )
 from App.AppScan import (
     Scanner, scanner,
     get_annotated_codes, read_zxg_stocks, zxg_save,
-    save_scan_to_ths_cloud, ths_cloud_available,
+    save_scan_to_ths_cloud,
 )
 from App.AppDownload import (
-    start_download_checked, start_download, stop_download, get_download_status,
-    eltdx_available, download_dir,
+    start_download_checked, stop_download, get_download_status,
+    download_dir,
 )
 from App.AppRefresh import (
     load_stock_names_from_cache_file, refresh_stock_names,
@@ -91,21 +86,23 @@ from App.AppAMO import call_amo
 #
 # 约定：路由层（FrontAPI）禁止直连 m.analyze_stock 等引擎函数，
 # 一律经本层 call_* 漏斗（锁策略集中在 LOCK_POLICY 登记，
+# P1-2 起经 engine_section 可执行化：SERIAL 漏斗实现用
+# `with engine_section("<入口名>"):` 按登记分类实际取锁，
 # Test/test_phase3_guards.py 守护）。
 # ═══════════════════════════════════════════════════════════════════════
 
-# 锁策略登记表：入口 → (类别, 说明)。守护用例校验完备性与一致性。
+# 锁策略登记表：入口 → (类别, 说明)。P1-2 起该表不再只是文档，
+# engine_section 按类别实际取锁（SERIAL→_ENGINE_LOCK，其余不加锁），
+# 守护用例校验「登记即执行」。
 LOCK_POLICY = {
     "call_analysis":                ("SERIAL", "REST 单标的分析：共享分析缓存 → _ENGINE_LOCK"),
-    "run_analysis":                 ("SERIAL", "call_analysis 异步版：线程池执行 + _ENGINE_LOCK，不阻塞事件循环"),
     "call_manual_select_point":     ("SERIAL", "股票手动选点：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
                                       "双窗选点含 dual_main/dual_sub/下窗运行时缓存读写，同锁覆盖"),
     "call_futures_manual_select_point": ("SERIAL", "期货手动选点：内部走期货分析链路（含期货缓存）→ _ENGINE_LOCK"),
     "call_compute_red_range_zs":    ("SERIAL", "红框中枢计算：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
                                       "独立双窗分支读下窗运行时缓存/dual_sub 缓存，miss 抛 DataFetchError"),
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
-                                      "串行调用方必须改走 call_analysis / run_analysis"),
-    "fetch_and_inject":             ("RAW", "引擎原始入口薄封装（无锁）：语义同 analyze_stock"),
+                                      "串行调用方必须改走 call_analysis"),
     "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留前端并发请求；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
     "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
@@ -143,28 +140,24 @@ __all__ = [
     # 锁
     "_ENGINE_LOCK", "LOCK_POLICY",
     # 分析漏斗（AppChart）
-    "call_analysis", "run_analysis", "analyze_stock",
+    "call_analysis", "analyze_stock",
     "call_manual_select_point", "call_futures_manual_select_point",
     "call_compute_red_range_zs",
     "stock_manual_select_point", "futures_manual_select_point",
     "compute_red_range_zs",
-    "fetch_and_inject", "search_stocks",
+    "search_stocks",
     "clear_saved_point", "futures_clear_saved_point",
-    "save_last_code_freq", "load_last_code_freq", "get_saved_point_times",
-    "futures_cache_get", "futures_cache_put", "futures_cache_pop",
-    "futures_set_sub_chan", "futures_get_sub_chan", "futures_pop_sub_chan",
-    "get_saved_point",
+    "save_last_code_freq", "load_last_code_freq",
     "futures_cleanup", "get_futures_aliases", "get_futures_name",
     "tq_available", "get_futures_freqs", "get_futures_freq_sec_map",
     "get_stock_names_cache_file",
-    "get_stock_market_code", "get_market_code", "get_stock_name",
     # 扫描（AppScan）
     "Scanner", "ScannerService", "scanner",
     "get_annotated_codes", "read_zxg_stocks", "zxg_save",
-    "save_scan_to_ths_cloud", "ths_cloud_available",
+    "save_scan_to_ths_cloud",
     # 下载（AppDownload）
-    "start_download_checked", "start_download", "stop_download",
-    "get_download_status", "eltdx_available", "download_dir",
+    "start_download_checked", "stop_download",
+    "get_download_status", "download_dir",
     # 刷新（AppRefresh）
     "load_stock_names_from_cache_file", "refresh_stock_names",
     "load_float_mc_cache", "fetch_float_mc_from_tencent",

@@ -250,7 +250,8 @@ async def api_stocks_analyze(
     if "error" in result:
         return _json_response(result, 400)
 
-    # 持久化（与原有逻辑一致：非复盘、非双窗口下窗、非期货）
+    # 持久化最近代码/周期（仅非复盘路径持久化；本路由 analyze 到不了期货——
+    # analyze_stock 入口对期货代码已明确拒绝，market!="futures" 属历史防御）
     if not end_date and result.get("meta", {}).get("market") != "futures":
         await run_in_threadpool(orch.save_last_code_freq, code, freq)
 
@@ -644,12 +645,15 @@ app.include_router(router)
 
 
 # ── 静态资源：Frontend/ ──────────────────────────────────────────────
+# P0-4 修复：删除 OUTPUT_DIR 回退分支。AppEngine 无 OUTPUT_DIR（该符号
+# 仅存于历史注释与守护测试），Frontend/ 目录缺失时原回退分支必然抛
+# AttributeError；前端静态资源缺失即部署错误，改为显式 fail fast。
 _frontend_dir = app_config.frontend_dir
-if os.path.isdir(_frontend_dir):
-    app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
-else:
-    log.warning(f"[警告] Frontend/ 目录不存在 ({_frontend_dir})，回退到 OUTPUT_DIR 静态挂载")
-    app.mount("/", StaticFiles(directory=m.OUTPUT_DIR, html=True), name="static")
+if not os.path.isdir(_frontend_dir):
+    raise RuntimeError(
+        f"[错误] Frontend/ 目录不存在 ({_frontend_dir})：前端静态资源缺失，"
+        f"请检查部署（原回退分支引用不存在的 AppEngine.OUTPUT_DIR）")
+app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
 
 
 # ═══════════════════════════════════════════════════════════════════════

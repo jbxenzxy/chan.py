@@ -209,6 +209,11 @@ class CTqSdkSession(CSSESource):
         self._closed = False    # 关闭旗：wait_update 检测到后抛 CSSESourceClosed 让生成器干净退出
         self._close_lock = threading.Lock()   # 串行化 api.close()（多源并发关闭场景）
         self._api_closed = threading.Event()  # api.close() 完成（生成器线程置位）
+        # P0-1 修复：K 线记录缓存实例级（每连接自包含，不再共享类级全局）。
+        # CTqSdkAPI 实例经线程局部（session_context/session_set）绑定本缓存，
+        # CChan step_load 重建数据源时仍读写同一份记录。
+        self._records_by_symbol = {}
+        self._lock = threading.Lock()
         with _ACTIVE_SOURCES_LOCK:
             _ACTIVE_SOURCES.add(self)
 
@@ -254,29 +259,34 @@ class CTqSdkSession(CSSESource):
         return self.api.wait_update(deadline=deadline_ns)
 
     def last_records(self, code_key):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        return CTqSdkAPI.get_last_n(1, symbol=code_key)
+        return self.get_last_n(1, symbol=code_key)
 
     def append_bar(self, bar, code_key):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        CTqSdkAPI.append_bar(bar, symbol=code_key)
+        with self._lock:
+            if code_key not in self._records_by_symbol:
+                self._records_by_symbol[code_key] = []
+            self._records_by_symbol[code_key].append(bar)
 
     # ── 记录缓存操作（Session 统一承载 records↔K线转换）──────────
     def set_data(self, records, symbol=None):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        CTqSdkAPI.set_data(records, symbol=symbol)
+        key = symbol or "__default__"
+        with self._lock:
+            self._records_by_symbol[key] = list(records)
 
     def get_data(self, symbol=None, **kwargs):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        return CTqSdkAPI.get_data(symbol=symbol, **kwargs)
+        key = symbol or "__default__"
+        with self._lock:
+            return self._records_by_symbol.get(key, []).copy()
 
     def get_last_n(self, n=1, symbol=None):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        return CTqSdkAPI.get_last_n(n=n, symbol=symbol)
+        key = symbol or "__default__"
+        with self._lock:
+            records = self._records_by_symbol.get(key, [])
+            return records[-n:] if len(records) >= n else records.copy()
 
     def clear_all_cache(self):
-        from DataAPI.TqSdkAPI import CTqSdkAPI
-        CTqSdkAPI.clear_all_cache()
+        with self._lock:
+            self._records_by_symbol.clear()
 
     def close(self):
         """设置关闭旗，通知生成器线程退出（幂等）。
@@ -312,7 +322,7 @@ class CTqSdkSession(CSSESource):
 
     def cleanup_records(self, code_key):
         try:
-            from DataAPI.TqSdkAPI import CTqSdkAPI
-            CTqSdkAPI._records_by_symbol.pop(code_key, None)
+            with self._lock:
+                self._records_by_symbol.pop(code_key, None)
         except Exception as e:
             log.warning("异常: %s: %s", type(e).__name__, e)

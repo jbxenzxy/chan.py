@@ -12,8 +12,8 @@
 校验（默认模式）：
   ① 完备性：代码中每个顶层函数/状态都有归属（无孤儿）
   ② 无幽灵：每个归属项在代码中存在
-  ③ 行号漂移：JSON 中的行区间与当前代码一致（代码改了映射未更新→FAIL）
-  ④ 一致性：Test/function_map.json 与本文件+当前代码同步
+  （行号漂移与函数总数比对校验已下线：P2 清理后行号频繁变动，
+   Test/function_map.json 仅作归档快照，不再做行号级比对）
 
 用法：
   python Test/func_map_check.py            # 校验（run_all 注册组件）
@@ -76,6 +76,7 @@ TARGET_FUNCS = {
     "_get_download_status":   ("ELTDX", "下载进度查询（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
     "collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（公开API，不含下划线前缀）"),
     "_collect_codes_from_vipdoc": ("ELTDX", "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"),
+    "verify_eltdx_api":       ("ELTDX", "eltdx 版本探测（_download_task 下载前调用，保证新版 API）"),
 
     # ── 消费侧：指标计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
@@ -104,20 +105,15 @@ TARGET_FUNCS = {
     # ── AppData：名称/PE/归属/市值 缓存族 ──
     "_load_stock_names_from_cache_file": ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_safe_write_json_file":        ("DATA", "✓4 兼容壳 → App/AppData.safe_write_json_file"),
-    "_load_pe_ttm_cache":           ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_get_pe_ttm":                  ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_get_index_belong":            ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     "_load_float_mc_cache":         ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
-    "_update_float_mc_cache":       ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
-    "_get_float_mc_from_cache":     ("DATA", "✓4 兼容壳 → app_data"),
 
     # ── AppData：统一缓存三件套 ──
     "_cache_put":                   ("DATA", "✓4 兼容壳 → app_data.cache_put（LRU）"),
     "_cache_get":                   ("DATA", "✓4 兼容壳 → app_data.cache_get"),
-    "_cache_remove":                ("DATA", "✓4 兼容壳 → app_data.cache_remove"),
 
-    # ── AppData：选点持久化 ──
-    "_save_point_time":             ("DATA", "✓4 兼容壳 → app_data（引擎内部手动选点仍调用）"),
+    # ── AppData：选点持久化（P2：_save_point_time 兼容壳已删除，AppData 直连）──
 
     # ── AppData：上次代码/周期 + 标注族（阶段 8 瘦身：随功能域迁移删除）──
 
@@ -162,6 +158,7 @@ TARGET_STATES = {
     "_download_state": ("ELTDX", "下载状态 dict（4 函数共用）→ ElTdxAPI 类字段"),
     "_download_lock":  ("ELTDX", "下载锁 → ElTdxAPI 类字段"),
     "_ELTDX_AVAILABLE": ("ELTDX", "eltdx 可用旗（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
+    "_ELTDX_REQUIRED_PYPI": ("ELTDX", "eltdx 最低版本串（verify_eltdx_api 报错提示用）"),
     "TdxClient":        ("ELTDX", "eltdx 客户端类（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
 
     # 消费侧常量
@@ -174,9 +171,8 @@ TARGET_STATES = {
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),
     "DEBUG_COLD_START_START_DATE": ("ORCH_E", "调试冷启动起（→ ChanConfig 调试参数）"),
     "DEBUG_COLD_START_END_DATE":   ("ORCH_E", "调试冷启动止（→ ChanConfig 调试参数）"),
-    "HK_CODE_PREFIX":  ("ORCH_E", "港股前缀（_get_stock_market_code 用）"),
-    "DS_CODE_PREFIX":  ("ORCH_E", "科创板前缀（同上）"),
-    "TDX_MARKET_MAP":  ("ORCH_E", "市场代码映射（ChartHandler 1 处；阶段 5 提升 DataAPI 元数据候选）"),
+    # P2：HK_CODE_PREFIX / DS_CODE_PREFIX / TDX_MARKET_MAP 死状态已删除
+    #     （市场代码统一由 App/AppData.get_market_code 判定，不再属 AppEngine）
     "DUAL_SUB_FALLBACK_MIN": ("ORCH_E", "双窗下窗对齐不足降全量阈值（= app_config.dual_sub_fallback_min）"),
     "_STOCKS_DUAL_IMPL_ENV": ("ORCH_E", "双窗 A/B 实现开关环境变量名"),
     "_STOCKS_DUAL_PAIRS":    ("ORCH_E", "股票双窗配对空间（上窗周期→可选下窗周期集合）"),
@@ -188,9 +184,9 @@ TARGET_STATES = {
 
     # SSE 调试旗（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
 
-    # 下线（阶段 10.1：my_chan_main.py 已删除，RETIRE 项全部物理移除）
-    "SCRIPT_DIR":    ("RETIRE", "ChartHandler 静态服务用（随 do_GET 3a 删除）"),
-    "SYMBOL_CODE":   ("RETIRE", "main() 默认代码（随 main 下线；api_server:1074 启动引用先参数化）"),
+    # 启动基础设施（活状态，P2 由 RETIRE 更正为活登记）
+    "SCRIPT_DIR":    ("CFG", "引擎目录 sys.path 引导（AppEngine 顶部 import 前置），活状态"),
+    "SYMBOL_CODE":   ("ORCH_E", "默认股票代码（FrontAPI /api/health 与启动日志实际读取），活状态"),
 }
 
 # ═══════════════════════════════════════════════════════════════════
@@ -226,7 +222,7 @@ TARGET_ROUTES = {
     "api_stocks_scan_set_index": ("FE", "✓REST PUT /api/stocks/scan/set/index → FrontAPI + AppOrch 扫描"),
     "api_stocks_scan_start": ("FE", "✓REST POST /api/stocks/scan/start → FrontAPI + ScannerService"),
     "api_stocks_scan_end": ("FE", "✓REST POST /api/stocks/scan/end → FrontAPI + ScannerService"),
-    "api_stocks_scan_close": ("FE", "✓REST POST /api/stocks/scan/close → FrontAPI + AppData.cache_remove"),
+    "api_stocks_scan_close": ("FE", "✓REST POST /api/stocks/scan/close → FrontAPI + Scanner.clear_cache → app_data.stocks_cache_clear()"),
     "api_stocks_scan_submit": ("FE", "✓REST POST /api/stocks/scan/submit → FrontAPI + ScannerService"),
     "api_stocks_scan_read_status": ("FE", "✓REST GET /api/stocks/scan/{task_id}/read/status → FrontAPI + ScannerService"),
     "api_stocks_scan_cancel_task": ("FE", "✓REST POST /api/stocks/scan/{task_id}/cancel → FrontAPI + ScannerService"),
@@ -359,28 +355,13 @@ def check(update=False):
     if ghost_s:
         failures.append(f"状态归属项不存在({len(ghost_s)}): {ghost_s}")
 
-    # ③ 与冻结 JSON 同步（--update 时先重生成再校验）
+    # ③ 归档快照（--update 时重生成 Test/function_map.json；
+    #    行号漂移与函数总数比对校验已下线，见顶部 docstring）
     if update:
         os.makedirs(TEST_DIR, exist_ok=True)
         with open(MAP_JSON, "w", encoding="utf-8") as f:
             json.dump(build_map(), f, ensure_ascii=False, indent=1)
         print(f"[UPDATED] {MAP_JSON}（{len(funcs)} 函数 / {len(states)} 状态）")
-
-    if os.path.exists(MAP_JSON):
-        frozen = json.load(open(MAP_JSON, encoding="utf-8"))
-        drift = []
-        for item in frozen.get("migration_order", []):
-            f = funcs.get(item["name"])
-            if f and (f["line_start"] != item["line_start"]
-                      or f["line_end"] != item["line_end"]):
-                drift.append(f"{item['name']}: JSON {item['line_start']}-{item['line_end']}"
-                             f" vs 代码 {f['line_start']}-{f['line_end']}")
-        if drift:
-            failures.append(f"行号漂移({len(drift)}): {drift[:3]}… 请 --update 重新生成")
-        if len(frozen.get("migration_order", [])) != len(funcs):
-            failures.append("JSON 函数数与代码不一致（新增/删除函数未映射？）")
-    else:
-        failures.append(f"缺少 {MAP_JSON}（首次请 --update 生成）")
 
     # 输出
     if failures:

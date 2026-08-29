@@ -3,15 +3,16 @@
 App/AppChart.py —— 图表交互功能域
 =========================================================================
 收纳用户在页面上与图表交互触发的全部动作：
-  - 分析漏斗（call_analysis / run_analysis / analyze_stock，持 _ENGINE_LOCK）
+  - 分析漏斗（call_analysis / analyze_stock，持 _ENGINE_LOCK）
   - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
-  - 数据拉取与注入（fetch_and_inject，薄委托引擎 analyze_stock）
   - 审核标注（get_annotations / handle_annotation_action，图表右键标注）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
   - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases 等，
     实现在 App/AppSSE.py，此处为图表交互入口的薄封装）
-  - 代码解析（get_stock_market_code / get_market_code / get_stock_name）
+  - 股票代码解析（get_stock_names_cache_file；标准解析唯一事实源
+    在 App/utils.py 的 _get_stock_market_code / _get_market_code /
+    _get_stock_name，AppChart 不再持有漏斗壳）
 
 依赖方向：AppChart.py → AppEngine / AppSSE / AppData（单向；
 期货元数据一律经 AppSSE 出口，不直连 DataAPI）
@@ -21,6 +22,7 @@ LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
 import os
 import time
 import threading
+from contextlib import contextmanager
 
 # 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
@@ -44,6 +46,38 @@ _ENGINE_LOCK = threading.Lock()
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# 可执行锁策略（P1-2：LOCK_POLICY 从「登记」升级为「可执行」）
+# =====================================================================
+# 背景：锁分类表 LOCK_POLICY 原本只作登记 + 守护测试字符串匹配，不真正
+# 驱动锁行为（策略与实现分道扬镳）。engine_section 让登记即执行：
+# SERIAL 漏斗用 `with engine_section("<入口名>"):` 代替手写
+# `with _ENGINE_LOCK:`，锁映射集中定义于 LOCK_POLICY，改分类即改锁行为。
+# 惰性 import LOCK_POLICY 避免 AppOrch↔AppChart 模块级循环依赖。
+# ═══════════════════════════════════════════════════════════════════════
+@contextmanager
+def engine_section(entry):
+    """按 LOCK_POLICY 分类执行锁策略（P1-2 可执行化）。
+
+    用法：SERIAL 漏斗（call_analysis 等）以 `with engine_section("call_analysis"):`
+    代替手写 `with _ENGINE_LOCK:`；未登记入口立即 KeyError（fail fast，
+    策略必须覆盖每个受保护入口）。
+
+      SERIAL          → 持 _ENGINE_LOCK（REST 交互式分析全局串行）
+      SCAN            → 不加锁（Scanner 内部以 _scan_lock 串行引擎调用）
+      SCAN_ASYNC      → 不加锁（worker 内各自持锁，API 进程零持锁）
+      SELF_CONTAINED  → 不加锁（各连接独立 TqApi+CChan，天然隔离）
+      RAW             → 不加锁（原始入口，仅限分类路径内部调用）
+    """
+    from App.AppOrch import LOCK_POLICY  # 惰性导入：避免模块级循环依赖
+    cat, _note = LOCK_POLICY[entry]
+    if cat == "SERIAL":
+        with _ENGINE_LOCK:
+            yield
+    else:
+        yield
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # 消费侧：分析引擎
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -57,45 +91,25 @@ def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq
     log.info(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
           f"end_date={end_date!r} dual={dual}")
     t0 = time.time()
-    with _ENGINE_LOCK:
+    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
+    with engine_section("call_analysis"):
         result = _m.analyze_stock(code, freq=freq, end_date=end_date,
                                   dual=dual, step=step, sub_freq=sub_freq)
     log.info(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
     return result
 
 
-async def run_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
-    """单标的缠论分析（异步入口，SSE/REST 统一走此通道）
-
-    线程池执行 + 串行锁：不阻塞事件循环（静态资源/健康检查保持可响应），
-    同时保证同一时刻只有一个线程进入引擎。
-    """
-    import asyncio
-    loop = asyncio.get_event_loop()
-    log.info(f"[api] run_analysis 开始: code={code!r} freq={freq!r} "
-          f"end_date={end_date!r} dual={dual}")
-    t0 = time.time()
-
-    def _job():
-        with _ENGINE_LOCK:
-            return _m.analyze_stock(code, freq=freq, end_date=end_date,
-                                    dual=dual, step=step, sub_freq=sub_freq)
-
-    try:
-        return await loop.run_in_executor(None, _job)
-    finally:
-        log.info(f"[api] run_analysis 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
-
-
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
-    """统一的缠论分析入口 · 锁分类 RAW（无锁）
+    """股票/指数分析公开入口（引擎 analyze_stock 的薄封装）· 锁分类 RAW（无锁）
 
-    ⚠ 本函数是引擎原始入口的薄封装，**并非无状态**：引擎内部维护模块级
+    ⚠ 并非引擎的唯一入口：stock_manual_select_point（手动选点重建）直调
+    _m._analyze_stock_internal 走同一链路；本函数仅收敛普通 REST 分析路径。
+    与引擎 analyze_stock 同理**并非无状态**：引擎内部维护模块级
     LRU 缓存（_stocks_analysis_cache）与名称/PE/市值等共享缓存，均非线程
     安全。
 
     调用约定（LOCK_POLICY，见 AppOrch.py 文件头）：
-      - 串行分析路径（REST 交互式）→ 必须走 call_analysis / run_analysis
+      - 串行分析路径（REST 交互式）→ 必须走 call_analysis
         （持 _ENGINE_LOCK），不得直调本函数；
       - 扫描路径（SCAN）→ AppScan.Scanner.scan_one 内部调用（全局
         _scan_lock 内串行引擎调用，锁外保留并发）；
@@ -171,7 +185,8 @@ def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=Non
     统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
     透传双窗上下文（dual/sub_freq/main_freq），支持双窗选点。
     """
-    with _ENGINE_LOCK:
+    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
+    with engine_section("call_manual_select_point"):
         return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
                                          dual=dual, sub_freq=sub_freq,
                                          main_freq=main_freq)
@@ -184,7 +199,8 @@ def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     _extract_realtime_snapshot，期货生产链路统一走 SSE），
     归入串行分类，与股票侧共用引擎锁。
     """
-    with _ENGINE_LOCK:
+    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
+    with engine_section("call_futures_manual_select_point"):
         return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
 
@@ -193,7 +209,8 @@ def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", e
 
     统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
     """
-    with _ENGINE_LOCK:
+    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
+    with engine_section("call_compute_red_range_zs"):
         return compute_red_range_zs(code, sub_freq=sub_freq,
                                     left_date=left_date, right_date=right_date,
                                     end_date=end_date)
@@ -486,25 +503,6 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 获取侧：数据拉取与注入（统一走 DataAPI 抽象层）
-# ═══════════════════════════════════════════════════════════════════════
-
-def fetch_and_inject(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
-    """
-    判断股票 / 期货 → 拉取 K 线 → 注入分析引擎。
-
-    fetch 统一走 DataAPI 抽象层：
-      - 数据源选择由 analyze_stock 内部自动检测（股票走 TdxAPI / 期货走 TqSdkAPI）
-      - 本函数为薄封装，直接委托 analyze_stock（其内部已通过 DataAPI 读取数据）
-
-    锁分类 RAW（无锁）：委托 analyze_stock，共享引擎缓存，非线程安全。
-    串行调用方须走 call_analysis / run_analysis。
-    """
-    return _m.analyze_stock(code, freq=freq, end_date=end_date,
-                            dual=dual, step=step, sub_freq=sub_freq)
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # 搜索
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -631,57 +629,6 @@ def load_last_code_freq():
     return app_data.load_last_code_freq()
 
 
-def get_saved_point_times():
-    """选点内存表（FrontAPI 经此只读访问）"""
-    from App.AppData import app_data
-    return app_data.saved_point_times
-
-
-def futures_cache_get(key):
-    """期货分析缓存读"""
-    from App.AppData import app_data
-    return app_data.futures_cache_get(key)
-
-
-def futures_cache_put(key, value):
-    """期货分析缓存写（SSE 双窗口下窗 chan 入缓存）"""
-    from App.AppData import app_data
-    return app_data.futures_cache_put(key, value)
-
-
-def futures_cache_pop(key, default=None):
-    """期货分析缓存失效（连接关闭时释放）"""
-    from App.AppData import app_data
-    return app_data.futures_cache_pop(key, default)
-
-
-def futures_set_sub_chan(symbol, sub_freq, chan):
-    """写期货子窗 CChan（语义化漏斗，key 规则内聚数据层）"""
-    from App.AppData import app_data
-    return app_data.set_futures_sub_chan(symbol, sub_freq, chan)
-
-
-def futures_get_sub_chan(symbol, sub_freq):
-    """读期货子窗 CChan（语义化漏斗；symbol 大小写不敏感）"""
-    from App.AppData import app_data
-    return app_data.get_futures_sub_chan(symbol, sub_freq)
-
-
-def futures_pop_sub_chan(symbol, sub_freq):
-    """失效期货子窗 CChan（语义化漏斗；连接关闭时释放）"""
-    from App.AppData import app_data
-    return app_data.pop_futures_sub_chan(symbol, sub_freq)
-
-
-def get_saved_point(code, freq):
-    """查询单个选点：返回该 (code, freq) 已保存的选点时间或空串"""
-    from App.AppData import app_data
-    col = app_data.freq_to_col(freq)
-    if not col:
-        return ""
-    return app_data.saved_point_times.get(code, {}).get(col, "").strip()
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # 期货
 # ═══════════════════════════════════════════════════════════════════════
@@ -720,22 +667,3 @@ def get_stock_names_cache_file():
     """股票名称缓存文件路径"""
     from App.AppData import app_data
     return app_data.stock_names_cache_file
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 辅助：代码解析
-# ═══════════════════════════════════════════════════════════════════════
-
-def get_stock_market_code(code):
-    """解析股票代码 → (market, bare_code)"""
-    return _m._get_stock_market_code(code)
-
-
-def get_market_code(code):
-    """解析市场代码"""
-    return _m._get_market_code(code)
-
-
-def get_stock_name(market, code):
-    """获取股票名称"""
-    return _m._get_stock_name(market, code)

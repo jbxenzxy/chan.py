@@ -415,12 +415,13 @@ def test_orch_download_config(failures):
             print("      -", b)
         return
 
-    # AST 级：4 个下载入口 + available/dir 均委托 ElTdxAPI，
+    # AST 级：3 个下载入口 + available/dir 均委托 ElTdxAPI，
     # 启动类入口使用 app_config.download_dir
-    # （阶段 8 重组：下载域实现随 AppOrch 拆分迁至 App/AppDownload.py）
+    # （阶段 8 重组：下载域实现随 AppOrch 拆分迁至 App/AppDownload.py；
+    #  P2：非 checked 版 start_download 已删除，仅保留 start_download_checked）
     tree = ast.parse(dl_src)
     funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    for name in ("start_download", "start_download_checked",
+    for name in ("start_download_checked",
                  "get_download_status", "stop_download"):
         node = funcs.get(name)
         if node is None:
@@ -442,7 +443,7 @@ def test_orch_download_config(failures):
             failures.append("⑦ orch.download_dir() 与 app_config.download_dir 不同源")
             print("[FAIL] ⑦ 下载目录同源: orch.download_dir() ≠ app_config.download_dir")
         else:
-            print("[PASS] ⑦ 下载入口: 4 入口直连 ElTdxAPI + "
+            print("[PASS] ⑦ 下载入口: 3 入口直连 ElTdxAPI + "
                   "app_config.download_dir（零单体全局，运行时同源验证）")
 
 

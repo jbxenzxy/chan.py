@@ -1390,50 +1390,6 @@ class CTdxAPI(CCommonStockApi):
             yield CKLine_Unit(klu_dict)
 
 
-class CTdxAPI_Sliced(CTdxAPI):
-    """
-    切片数据源适配器：只返回从指定日期开始的K线数据。
-    用于双击选点后，基于 chan.py 内部算法重新计算中枢/线段/买卖点。
-    """
-    _sliced_data = []
-
-    @classmethod
-    def set_sliced_data(cls, records, start_dt):
-        """
-        设置切片数据：只保留从 start_dt 开始的记录（含等于）
-
-        Args:
-            records: 完整的K线记录列表
-            start_dt: 开始日期时间（datetime对象）
-        """
-        cls._sliced_data = [r for r in records if r["dt"] >= start_dt]
-        log.info(f"[信息] 切片数据源: 从 {start_dt} 开始，共 {len(cls._sliced_data)} 条K线")
-
-    @classmethod
-    def clear_sliced_data(cls):
-        """清空切片数据"""
-        cls._sliced_data = []
-
-    def get_kl_data(self):
-        """逐根 yield 返回切片后的 CKLine_Unit"""
-        if not CTdxAPI_Sliced._sliced_data:
-            return
-        from Common.CTime import CTime
-        for row in CTdxAPI_Sliced._sliced_data:
-            dt = row["dt"]
-            time = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
-            klu_dict = {
-                DATA_FIELD.FIELD_TIME: time,
-                DATA_FIELD.FIELD_OPEN: row["open"],
-                DATA_FIELD.FIELD_CLOSE: row["close"],
-                DATA_FIELD.FIELD_HIGH: row["high"],
-                DATA_FIELD.FIELD_LOW: row["low"],
-                DATA_FIELD.FIELD_VOLUME: row["vol"],
-                DATA_FIELD.FIELD_TURNOVER: row["amount"],
-            }
-            yield CKLine_Unit(klu_dict)
-
-
 # ============================================================
 # 板块文件（.blk）读写
 # ============================================================
@@ -1520,59 +1476,11 @@ def read_blk_file(blk_path):
 # 自选股读写（read_zxg_stocks / save_to_zxg_blk / _ZXG_HK_INDEX_MAP /
 # _ZXG_US_INDEX_MAP）属业务数据层职责，实现位于 App/AppData.py
 # （含路径推导与 blk 解析：AppData.zxg_blk_path / _read_zxg_blk_file，
-# 与本模块互不依赖）；本模块的 get_blk_path / read_blk_file 仅服务
-# 自身指数成分读取。
+# 与本模块互不依赖）；本模块的 get_blk_path / read_blk_file 保留为
+# 通用 .blk 解析工具（Test/test_blk_parsing.py 守护双解析器一致性）。
 # 调用方式：from App.AppData import app_data
 #           app_data.read_zxg_stocks() / app_data.save_to_zxg_blk(codes)
 # ============================================================
-
-
-def read_zz1000_stocks():
-    """
-    读取通达信中证1000板块文件，返回股票代码列表。
-    用户需先在通达信中创建/下载"中证1000"板块。
-    """
-    path = get_blk_path("ZZ1000")
-    if not os.path.exists(path):
-        log.warning(f"[警告] 中证1000板块文件不存在: {path}")
-        return []
-    return read_blk_file(path)
-
-
-def read_sz50_stocks():
-    """
-    读取通达信上证50板块文件，返回股票代码列表。
-    用户需先在通达信中创建/下载"上证50"板块。
-    """
-    path = get_blk_path("SZ50")
-    if not os.path.exists(path):
-        log.warning(f"[警告] 上证50板块文件不存在: {path}")
-        return []
-    return read_blk_file(path)
-
-
-def read_hs300_stocks():
-    """
-    读取通达信沪深300板块文件，返回股票代码列表。
-    用户需先在通达信中创建/下载"沪深300"板块。
-    """
-    path = get_blk_path("HS300")
-    if not os.path.exists(path):
-        log.warning(f"[警告] 沪深300板块文件不存在: {path}")
-        return []
-    return read_blk_file(path)
-
-
-def read_zz500_stocks():
-    """
-    读取通达信中证500板块文件，返回股票代码列表。
-    用户需先在通达信中创建/下载"中证500"板块。
-    """
-    path = get_blk_path("ZZ500")
-    if not os.path.exists(path):
-        log.warning(f"[警告] 中证500板块文件不存在: {path}")
-        return []
-    return read_blk_file(path)
 
 
 # ============================================================
@@ -2751,7 +2659,7 @@ def _read_tdxhy_sector_stocks(sector_code):
 if __name__ == "__main__":
     print("通达信本地文件数据源模块已加载。")
     print("可用功能：")
-    print("  - CTdxAPI / CTdxAPI_Sliced: 适配器类")
+    print("  - CTdxAPI: 适配器类（P2 已删 CTdxAPI_Sliced 切片适配器）")
     print("  - set_tdx_config(): 设置模块级配置（vipdoc_dir, forward_adjust_enabled）")
     print("  - read_tdx_day_file(): 读取日线 .day 文件")
     print("  - read_tdx_min_file(): 读取分钟线 .lc5 文件")

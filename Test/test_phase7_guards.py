@@ -32,7 +32,8 @@
      中止经 POST /api/stocks/scan/{task_id}/cancel；
      终态 done/aborted/error 三态停轮询；连续 3 次失败熔断（退避重试）；
      保留旧回调形状 onData(单票)/onDone(err, interrupted)（渲染零漂移）；
-     批量扫描三处调用点全部走异步径，旧 /api/scan_one 并发循环清零；
+     P1-7 四分支合一：runScan 单一漏斗单点调用 _asyncScanAll（四种模式全走异步径），
+     旧 /api/scan_one 并发循环清零；
      index.html 缓存版本 v>=8（阶段 7 前端改动的缓存击穿）。
   ⑦ 功能冒烟（存储层）：ScanStore CRUD + since 增量语义 + 同 seq 幂等 +
      completed 派生收敛 + 错误行汇总 + 历史清理；空清单报错；不存在任务
@@ -127,9 +128,12 @@ def test_lock_policy(failures):
     if "with _ENGINE_LOCK:" in read("App/AppScanPool.py"):
         bad.append("AppScanPool 持 _ENGINE_LOCK（应交由 scan_one 内部锁）")
 
-    # 交互路径 SERIAL 不动（阶段 3 守护①的回归锚点）
-    if "with _ENGINE_LOCK:" not in inspect.getsource(orch.call_analysis):
-        bad.append("call_analysis 丢失 _ENGINE_LOCK（交互路径被阶段 7 改动波及）")
+    # 交互路径 SERIAL 不动（P1-2：LOCK_POLICY 可执行化后 call_analysis 经
+    # engine_section("call_analysis") 持 _ENGINE_LOCK，SERIAL 语义不变）
+    src_call = inspect.getsource(orch.call_analysis)
+    if "engine_section(\"call_analysis\")" not in src_call:
+        bad.append("call_analysis 未走 engine_section（P1-2 锁策略可执行化缺失，"
+                   "交互路径 SERIAL 不受保护）")
 
     if bad:
         failures.extend(f"锁分类: {b}" for b in bad)
@@ -251,7 +255,6 @@ def test_pool_assembly(failures):
 REQUIRED_STORE_METHODS = {
     "create_task", "set_status", "put_result", "get_task", "get_results",
     "get_status", "iter_error_rows", "cleanup_old", "is_aborted",
-    "abort_all_running",
 }
 
 
@@ -329,10 +332,10 @@ def test_abort_semantics(failures):
     # W6：错误明细并入 _scan_skip_log（/api/stocks/scan/end 汇总口径与旧路径一致）
     if "_scan_skip_log" not in src_pool:
         bad.append("collector 未把错误行并入 _scan_skip_log（W6 未修复）")
-    # 旧接口 abort 增强：必须同步中止所有进行中的批量任务
-    # （阶段 8 重组：Scanner.abort 实现随扫描域迁至 App/AppScan.py）
-    if "abort_all_running" not in read("App/AppScan.py"):
-        bad.append("abort() 未调用 abort_all_running（旧接口中止对 worker 无效）")
+    # P1-5：旧全局 abort 链路（Scanner.abort / abort_all_running）已删除，
+    # 前端 task cancel 语义唯一入口为 AppScan.abort_batch_scan → Pool.abort(task_id)。
+    if "abort_batch_scan" not in read("App/AppScan.py"):
+        bad.append("abort_batch_scan 缺失（前端 task cancel 唯一入口）")
     if bad:
         failures.extend(f"终止语义: {b}" for b in bad)
         for b in bad:
@@ -369,10 +372,13 @@ def test_frontend_polling(failures):
     # W5：轮询失败熔断（3 次退避重试）
     if "failCount >= 3" not in src:
         bad.append("轮询连续失败熔断缺失（单次网络抖动即废弃整个扫描）")
-    # 三处调用点全部走异步径
-    n_calls = len(re.findall(r"_asyncScanAll\(stocks", src))
-    if n_calls < 3:
-        bad.append(f"批量扫描调用点仅 {n_calls} 处（应 3 处：买卖点/底分型/均线分类全部走异步径）")
+    # P1-7 四分支合一：runScan 为唯一批量扫描漏斗（内部单点调用 _asyncScanAll，
+    # 四种模式 fx_d/ma/fangliang/bsp 全部经此异步径，旧并发循环清零）
+    n_calls = len(re.findall(r"_asyncScanAll\(stocks, \{", src))
+    if "var runScan = function(spec)" not in src:
+        bad.append("runScan 统一漏斗缺失（P1-7 四分支合一未落实）")
+    if n_calls != 1:
+        bad.append(f"批量扫描 _asyncScanAll 调用点应为 1 处（runScan 单一漏斗），实际 {n_calls} 处")
     # 旧 /api/scan_one 客户端并发循环清零
     if 'fetch("/api/scan_one' in src:
         bad.append("旧 /api/scan_one 客户端并发循环残留（应清零）")

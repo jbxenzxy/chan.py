@@ -110,6 +110,10 @@ def install_futures_data_source(fixture):
             pass
         def close(self):
             pass
+        def wait_update(self, *a, **kw):
+            # connect() 接口守护要求 api 具备 wait_update（静态快照用例
+            # 不消费 wait_update，仅需通过 hasattr 检查）
+            return None
         def get_kline_serial(self, symbol, freq_sec, *a, **kw):
             # D7 迁移：init_chan_symbol 会取实时序列引用（静态快照用例
             # 不消费 wait_update，返回占位 dict 即可）

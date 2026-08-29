@@ -25,6 +25,8 @@ from datetime import datetime
 from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name, resolve_lookback_bars,
 )
+# P0-1 会话上下文：缓存实例化到连接会话，绑定 CChan 内部 CTqSdkAPI 实例
+from DataAPI.TqSdkAPI import session_context, session_set, session_clear
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError
 # 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/utils 导入）
@@ -46,7 +48,7 @@ from Common.CEnum import AUTYPE, FX_TYPE
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
     CSSESource, CSSESourceClosed, CTqSdkSession, close_all,
 )
-from App.AppLog import get_logger, trace_id
+from App.AppLog import get_logger
 log = get_logger(__name__)
 
 
@@ -246,17 +248,15 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
     驱动确定性比对。锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
-    import logging
-    from datetime import datetime
-    logging.getLogger("tqsdk").setLevel(logging.WARNING)
-    logging.getLogger("tqsdk.tqapi").setLevel(logging.WARNING)
-    for h in logging.root.handlers:
-        h.setLevel(logging.WARNING)
-
-    _tid = trace_id()  # 每连接专属 trace-id，连接生命周期内稳定
-    log.info("[%s] SSE 单窗口连接: symbol=%s freq=%s", _tid, symbol, freq)
+    # P0-5 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
+    # 设 WARNING，永不恢复，导致整个进程 log.info 消失）。tqsdk 抑制已在
+    # DataAPI/TqSdkAPI.py 顶层完成（只抑制自身 logger，绝不设 root）。
+    log.info("SSE 单窗口连接: symbol=%s freq=%s", symbol, freq)
 
     src = source if source is not None else CTqSdkSession()
+    # P0-1 修复：会话上下文覆盖整个生成器——实时循环每根K线 step_load
+    # 会重建 CChan 数据源（CTqSdkAPI 实例），须经线程局部绑定本连接缓存。
+    session_set(src)
 
     display_key = None
     freq_sec = None
@@ -610,6 +610,8 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
         # 清理该连接的K线缓存
         if symbol is not None and freq_sec is not None:
             src.cleanup_records(f"{symbol}:{freq_sec}")
+        # P0-1 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
+        session_clear()
 
 
 def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
@@ -622,11 +624,13 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
               update 循环停在后不推进，也不被实时拉新。
     锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
     """
-    _tid = trace_id()  # 每连接专属 trace-id，连接生命周期内稳定
-    log.info("[%s] SSE 双窗口连接: symbol=%s main=%s sub=%s",
-             _tid, symbol, main_freq, sub_freq)
+    log.info("SSE 双窗口连接: symbol=%s main=%s sub=%s",
+             symbol, main_freq, sub_freq)
 
     src = source if source is not None else CTqSdkSession()
+    # P0-1 修复：会话上下文覆盖整个双窗生成器（上下窗共用同一 src，
+    # 实时循环两窗 step_load 重建数据源均须绑定本连接缓存）。
+    session_set(src)
 
     from datetime import datetime
 
@@ -722,7 +726,9 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         if sub_result is None:
             yield _sse_frame("init", {"error": "下窗初始化失败（无数据或网络异常）", "symbol": symbol})
             return
-        sub_chan, sub_records, sub_kl_type, _ = sub_result
+        # init_chan_symbol 返回 (chan, klines, kl_type, records)——第二项是
+        # get_kline_serial 的 klines DataFrame 而非 records（本分支未使用）
+        sub_chan, _sub_klines, sub_kl_type, _ = sub_result
         sub_kl_type = _get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
         app_data.set_futures_sub_chan(symbol, sub_freq, sub_chan)
@@ -1099,6 +1105,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
             app_data.pop_futures_sub_chan(symbol, sub_freq)  # 语义化漏斗失效（key 规则内聚数据层）
         except Exception as e:
             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
+        # P0-1 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
+        session_clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1112,24 +1120,27 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
       - 周期映射：_get_kl_type_by_sec(freq_sec)
       - 配置：_make_chan_config()
     数据注入经 src.set_data（Session 协议）完成；
-    src 缺省时回退类级缓存 CTqSdkAPI.set_data（兼容无源调用）。
+    src 为必填（P0-1 修复：缓存实例化到连接会话，不再回退类级缓存）。
     返回 (chan, kl_type)。缓存逻辑留在各调用方，本函数只负责「数据 → CChan」。
     """
+    if src is None:
+        raise RuntimeError(
+            "[TqSdkAPI] _build_futures_chan 需要数据源 src（SSE 每连接自包含）")
     chan_code = code or f"{symbol}:{freq_sec}"
-    if src is not None:
-        src.set_data(records, symbol=chan_code)
-    else:
-        CTqSdkAPI.set_data(records, symbol=chan_code)
+    src.set_data(records, symbol=chan_code)
     kl_type = _get_kl_type_by_sec(freq_sec)
     config = config or _make_chan_config()
-    chan = CChan(
-        code=chan_code, begin_time=None, end_time=None,
-        data_src="custom:TqSdkAPI.CTqSdkAPI",
-        lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
-        market_type="futures",
-    )
-    for _snapshot in chan.step_load():
-        pass
+    # P0-1 修复：CChan 内部自行实例化 CTqSdkAPI（data_src="custom:..."），
+    # 经线程局部绑定本会话缓存，使 set_data 写入与 get_kl_data 读取同源。
+    with session_context(src):
+        chan = CChan(
+            code=chan_code, begin_time=None, end_time=None,
+            data_src="custom:TqSdkAPI.CTqSdkAPI",
+            lv_list=[kl_type], config=config, autype=AUTYPE.NONE,
+            market_type="futures",
+        )
+        for _snapshot in chan.step_load():
+            pass
     return chan, kl_type
 
 

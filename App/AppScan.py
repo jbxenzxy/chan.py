@@ -8,7 +8,7 @@ App/AppScan.py —— 股票扫描功能域
   - Scanner 类（批量扫描服务：遍历代码列表、逐票调用 analyze_stock、
     汇总结果、追踪进度）+ 全局单例 scanner
   - 自选股读写（read_zxg_stocks / zxg_save / get_annotated_codes）
-  - 同花顺云端自选股（save_scan_to_ths_cloud / ths_cloud_available）
+  - 同花顺云端自选股（save_scan_to_ths_cloud）
   - 扫描预过滤 + 行业索引读取 + 扫描态（_quick_prefilter_pass /
       read_tdxhy_l2_indices / read_tdxhy_l3_indices / _scan_lock 等）
   - Windows 扫描完成通知（_send_windows_notification）
@@ -51,9 +51,6 @@ _scan_skip_log = []
 
 # 扫描锁（防止并发扫描导致内存峰值翻倍）
 _scan_lock = threading.Lock()
-
-# 扫描终止标志：前端点击中断时设True，后端检查后跳过后续请求
-_scan_aborted = False
 
 # 扫描开始时间：用于计算扫描耗时，在通知中显示
 _scan_start_time = None
@@ -121,12 +118,15 @@ def _quick_prefilter_pass(market, code):
 
 
 def _debug_read_page_index_stocks(sector_code):
-    """获取当前页面指数的成分股（网络抓取限时 + 随扫描中断放弃）"""
+    """获取当前页面指数的成分股（网络抓取限时保护）
+
+    P1-5：删除扫描中断标志（abort_check）传递——遗留中止链路
+    （Scanner.abort / _scan_aborted）已随前端 task cancel 语义删除，
+    成分抓取限时由 TdxAPI._run_with_timeout 兜底。
+    """
     if not sector_code:
         return []
-    # abort_check：用户在成分股抓取/网络阻塞期间点「中断扫描」即提前放弃，
-    # 避免 akshare 等原生阻塞调用让中断失效、扫描卡死。
-    return get_index_stocks(sector_code, abort_check=lambda: _scan_aborted)
+    return get_index_stocks(sector_code)
 
 
 def read_tdxhy_l2_indices():
@@ -220,11 +220,6 @@ def zxg_save(codes):
 # 同花顺云端自选股
 # ═══════════════════════════════════════════════════════════════════════
 
-def ths_cloud_available():
-    """同花顺云端 API 是否可用"""
-    return _m._THS_CLOUD_AVAILABLE
-
-
 def save_scan_to_ths_cloud(codes):
     """保存扫描结果到同花顺云端自选股"""
     if not _m._THS_CLOUD_AVAILABLE or _m.save_scan_to_ths_cloud is None:
@@ -243,15 +238,6 @@ class Scanner:
     """
 
     # ── 状态访问器（收敛到类内部）────────────────
-    @property
-    def aborted(self):
-        return _scan_aborted
-
-    @aborted.setter
-    def aborted(self, value):
-        global _scan_aborted
-        _scan_aborted = value
-
     @property
     def skip_log(self):
         return _scan_skip_log
@@ -419,12 +405,7 @@ class Scanner:
             qualified_code = (market_prefix + code) if market_prefix else code
             market = market_prefix.lower() if market_prefix else ""
 
-            if _scan_aborted:
-                return {"error": "扫描已终止", "aborted": True}
-
             with _scan_lock:
-                if _scan_aborted:
-                    return {"error": "扫描已终止", "aborted": True}
                 # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
                 # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
                 # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
@@ -615,8 +596,7 @@ class Scanner:
     # ── 扫描生命周期 ─────────────────────────────────────────────────
     def start(self):
         """新一轮扫描开始"""
-        global _scan_aborted, _scan_start_time
-        _scan_aborted = False
+        global _scan_start_time
         _scan_skip_log.clear()
         _scan_start_time = time.time()
         try:
@@ -636,10 +616,7 @@ class Scanner:
         seconds = int(elapsed % 60)
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
-        if _scan_aborted:
-            # 用户点击中止后结束：不打印"全部扫描成功"误导日志
-            log.info(f"[扫描明细] 扫描已中断（耗时 {time_str}）")
-        elif _scan_skip_log:
+        if _scan_skip_log:
             log.info("\n========== 扫描异常/失败股票明细 ==========")
             log.info(f"共 {len(_scan_skip_log)} 只:")
             for i, item in enumerate(_scan_skip_log, 1):
@@ -657,29 +634,12 @@ class Scanner:
             _scan_start_time = None
         return {"count": len(_scan_skip_log)}
 
-    def abort(self):
-        """中断扫描（同步中止所有进行中的批量任务）
-
-        ProcessPool worker 是独立进程，看不到主进程 _scan_aborted 标志；
-        必须同步把 AppScanStore 中所有 pending/running 任务置为 aborted，
-        worker 每票前检查 is_aborted 才会真正停止。
-        """
-        global _scan_aborted
-        _scan_aborted = True
-        log.info("[扫描] 收到中断请求，设置终止标志")
-        try:
-            from App.AppScanStore import get_scan_store
-            aborted = get_scan_store().abort_all_running()
-            if aborted:
-                log.info(f"[扫描] 已中止 {aborted} 个进行中的批量任务")
-        except Exception as exc:  # noqa: BLE001 —— 兜底不阻断中止
-            log.info(f"[扫描] 中止批量任务异常: {type(exc).__name__}: {exc}")
-        return {"ok": True}
-
     def clear_cache(self):
-        """关闭扫描面板"""
-        log.info("[扫描缓存] 面板关闭，缓存由 LRU 自然淘汰")
-        return {"cleared": 0}
+        """关闭扫描面板：真实清理扫描产生的股票分析缓存"""
+        from App.AppData import app_data
+        cleared = app_data.stocks_cache_clear()
+        log.info(f"[扫描缓存] 面板关闭，清理股票分析缓存 {cleared} 条")
+        return {"cleared": cleared}
 
     # ── 批量扫描异步化（ProcessPool 先行）────────────────────
     # 薄封装：AppScan 保持纯业务、零并发框架依赖（模块级不 import

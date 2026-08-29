@@ -189,6 +189,26 @@ def _env_bool(raw):
     return str(raw).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _env_lookback_dict(raw):
+    """解析 *LOOKBACK_CONFIG 类 env 值（JSON，数组自动转 tuple）。
+
+    例：STOCKS_LOOKBACK_CONFIG='{"d": [472, "24年09月10日"], "30m": [500, "近3个月"]}'
+    返回：{"d": (472, "24年09月10日"), "30m": (500, "近3个月")}
+    P2 修复：此前这些 dict 型字段不在 _FIELD_TYPES，无 pydantic-settings
+    时（降级解析器）env/.env 根本无法配置，只能吃代码默认值。
+    """
+    if isinstance(raw, dict):
+        return raw
+    data = json.loads(str(raw))
+    out = {}
+    for k, v in data.items():
+        if isinstance(v, (list, tuple)):
+            out[str(k)] = (v[0], v[1] if len(v) > 1 else "")
+        else:
+            out[str(k)] = (v, "")
+    return out
+
+
 _FIELD_TYPES = {
     "HOST": str,
     "PORT": int,
@@ -208,6 +228,8 @@ _FIELD_TYPES = {
     "SSE_DEBUG": _env_bool,
     "FORWARD_ADJUST_ENABLED": _env_bool,
     "FULL_DATA_MODE": _env_bool,
+    "STOCKS_LOOKBACK_CONFIG": _env_lookback_dict,
+    "FUTURES_LOOKBACK_CONFIG": _env_lookback_dict,
 }
 
 

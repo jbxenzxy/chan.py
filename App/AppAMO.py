@@ -36,8 +36,9 @@ import os
 import struct
 import time
 
-# 引擎调用全局串行锁（定义在 App/AppChart.py，AppOrch 聚合 re-export）
-from App.AppChart import _ENGINE_LOCK
+# 可执行锁策略（P1-2：按 LOCK_POLICY 分类执行，SERIAL → _ENGINE_LOCK；
+# 定义在 App/AppChart.py，AppOrch 聚合 re-export）
+from App.AppChart import engine_section
 # 配置中心（vipdoc_dir 单一事实源）
 from App.AppConfig import app_config
 # 领域异常（数据源缺失 → DataFetchError）
@@ -136,7 +137,8 @@ def call_amo(start_date: str, end_date: str):
     # DEBUG 级：正常只读接口，避免刷屏；定位问题时可临时调 DEBUG 级看到
     log.debug(f"[api] /api/amo/read 开始: start_date={start_date!r} end_date={end_date!r}")
     t0 = time.time()
-    with _ENGINE_LOCK:
+    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
+    with engine_section("call_amo"):
         sh_path = _index_day_file(*_SH_INDEX)
         sz_path = _index_day_file(*_SZ_INDEX)
         sh_rows = _read_index_amounts(sh_path)

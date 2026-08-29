@@ -12,7 +12,7 @@
      priceToY 坐标系 / onWheel 交互）物理位于 KLineChart 区块内
      （阶段 8 拆 kline/ 子目录时按区块整体迁移）。
   ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线 64 个
-     + ChanApp 注册表（阶段 6 组件化为纯代码搬移，对外 API 零漂移；
+     + window.ChanApp（阶段 6 组件化为纯代码搬移，对外 API 零漂移；
      HTML onclick / 控制台调试依赖此面）。
   ④ index.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
      onchange/…）调用的标识符均可解析到 window 绑定。
@@ -20,8 +20,6 @@
      设计 3.5）；Frontend/ 保持 3 文件不拆子目录（设计 8.9：kline/、
      panels/ 留待阶段 8）。
   ⑥ JS 语法校验：node --check（node 不在位时 SKIP 降级，不判 FAIL）。
-  ⑦ 组件注册表一致：ChanApp.components.<Name> 登记齐备且条目均对应
-     文件内真实函数声明（阶段 8 拆分契约）；window.ChanApp 全局暴露。
   ⑧ 缓存击穿纪律：index.html 以 app.js?v=7+ 引用（版本号只增不减）。
   ⑨ 合并层完整（A 方案 AppState 访问层，双方案取长合并项）：
      ChanApp.state 的 30 个 getter/setter 访问器 + 8 个方法别名在位，
@@ -43,7 +41,7 @@ INDEX_HTML = os.path.join(REPO_ROOT, "Frontend", "index.html")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 
 # ═══════════════════════════════════════════════════════════════════════
-# ①⑦ 组件区块与注册表
+# ①② 组件区块
 # ═══════════════════════════════════════════════════════════════════════
 COMPONENTS = [
     "KLineChart", "NavToolbar", "SymbolSearch", "StatsPanel", "DownloadPanel",
@@ -59,13 +57,14 @@ KLINE_PIPELINE = [
     "onWheel", "toggleOverlay", "toggleDualWindow",
 ]
 
-# ③ window API 冻结基线（阶段 6 前全量：64 个，取自 4d0de89）
+# ③ window API 冻结基线（阶段 6 前全量：64 个取自 4d0de89，另含 AMO 面板
+#    closeAmoPanel/toggleAmoPanel 两项既有登记，合计 66 个）
 WINDOW_BASELINE = {
     '_dualZsDebugCount', '_isRenderingBottom', '_lastCalcRedRangeError', '_lastGrayStatus',
     '_lastRedFrameStatus', 'annotationAdd', 'annotationDeleteAllGlobal', 'annotationDeleteAnnotation',
     'annotationDialogCancel', 'annotationDialogConfirm', 'annotationDialogKeydown', 'annotationEditAnnotation',
     'annotationReplayToHere', 'bspFilterSelectAll', 'bspFilterSelectNone', 'cancelSelectedPoint',
-    'clearHistory', 'clearInput', 'closeBspSettings', 'closeDownloadPanel',
+    'clearHistory', 'clearInput', 'closeAmoPanel', 'closeBspSettings', 'closeDownloadPanel',
     'closeScanPanel', 'doSearch', 'gotoDate',
     'handleDateBlur', 'handleDateChange', 'handleDateInput', 'handleDateKeydown',
     'initCoordSystemRadio', 'loadScanResult', 'loadStock', 'maPeriodsSelectAll',
@@ -74,12 +73,14 @@ WINDOW_BASELINE = {
     'refreshStockNames', 'removeHistory', 'saveScanToZxg', 'scanModeDialogCancel',
     'scanModeDialogConfirm', 'scanSourceSelectAll', 'scanSourceSelectNone', 'selectHistory',
     'showHistory', 'startDownload', 'startScanZxg', 'stopDownload',
-    'switchFreq', 'toggleDownloadPanel', 'toggleDualWindow', 'toggleInputClear',
+    'switchFreq', 'toggleAmoPanel', 'toggleDownloadPanel', 'toggleDualWindow', 'toggleInputClear',
     'toggleMirrorMode', 'toggleOverlay', 'toggleScanMinimize', 'toggleStats',
     'updateScanRecentDisabled', 'updateScanSaveBtn', 'updateSearchSelection', 'updateWeekday',
 }
 # 允许的登记性新增（组件注册表）
 WINDOW_ALLOWED_NEW = {"ChanApp"}
+# 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
+ALLOWED_STRAY = {"getLayoutParams"}
 
 # JS 关键字（④ 中内联事件的非函数标识符误报豁免）
 JS_KEYWORDS = {"if", "else", "return", "this", "var", "let", "const", "new",
@@ -131,7 +132,7 @@ def test_component_sections(failures):
            set(re.findall(r"window\.(\w+)\s*=", in_sec))
     stray = []
     for m in re.finditer(r"^\s{8}(?:async\s+)?function\s+(\w+)", src, re.M):
-        if m.group(1) not in seen:
+        if m.group(1) not in seen and m.group(1) not in ALLOWED_STRAY:
             stray.append(m.group(1))
 
     if bad or stray:
@@ -234,41 +235,6 @@ def test_node_syntax(failures):
         print("[PASS] ⑥ JS 语法校验: node --check 通过")
 
 
-def test_registry(failures):
-    src = read(APP_JS)
-    bad = []
-    # 实现识别口径与守护②一致：function 声明 / window 绑定 / 箭头或匿名赋值
-    funcs = set(re.findall(r"function\s+(\w+)\s*\(", src))
-    funcs |= set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=\s*function", src))
-    funcs |= set(re.findall(r"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:\(|function)", src))
-    regs = dict(re.findall(
-        r"ChanApp\.components\.(\w+)\s*=\s*\{([^}]*)\}", src, re.S))
-    for comp in COMPONENTS:
-        if comp not in regs:
-            bad.append(f"{comp} 未登记")
-            continue
-        entries = [e.strip() for e in re.split(r"[,\n]", regs[comp])
-                   if e.strip() and not e.strip().startswith("//")]
-        if not entries:
-            bad.append(f"{comp} 登记为空")
-        for e in entries:
-            if not re.fullmatch(r"[A-Za-z_$][\w$]*", e):
-                bad.append(f"{comp}: 非简写标识符条目 {e!r}")
-            elif e not in funcs:
-                bad.append(f"{comp}: 条目 {e} 无对应函数实现")
-    if "window.ChanApp = ChanApp" not in src:
-        bad.append("注册表未暴露 window.ChanApp（控制台调试入口缺失）")
-    if bad:
-        failures.append("⑦ 组件注册表: " + "; ".join(bad[:10]))
-        print(f"[FAIL] ⑦ 组件注册表一致: {len(bad)} 处问题")
-        for b in bad[:10]:
-            print("      -", b)
-    else:
-        total = sum(len(re.split(r"[,\n]", v)) for v in regs.values())
-        print(f"[PASS] ⑦ 组件注册表一致: {len(regs)} 组件登记 {total} 条接口，"
-              f"全部对应真实函数；window.ChanApp 已暴露")
-
-
 def test_cache_bust(failures):
     html = read(INDEX_HTML)
     m = re.search(r"app\.js\?v=(\d+)", html)
@@ -356,9 +322,9 @@ def test_state_layer(failures):
             bad.append(f"访问器变量未在 [STATE] 声明: {undeclared[:6]}")
     else:
         bad.append("[STATE] 区块缺失（无法交叉校验访问器变量）")
-    # 约束：不进 components 注册表、不新增 window.* 绑定（API 面冻结）
+    # 约束：不新增 window.* 绑定（API 面冻结）、不重建已删除的 components 注册表
     if re.search(r"ChanApp\.components\.state\b", src):
-        bad.append("state 误入 components 注册表（应为 ChanApp.state 顶层挂载）")
+        bad.append("state 误入 components 注册表（P1-6 已删注册表，禁止回潮）")
     if bad:
         failures.append("⑨ 合并层: " + "; ".join(bad[:10]))
         print(f"[FAIL] ⑨ 合并层完整（AppState 访问层）: {len(bad)} 处问题")
@@ -384,7 +350,6 @@ def main():
     test_html_handlers(failures)
     test_zero_build(failures)
     test_node_syntax(failures)
-    test_registry(failures)
     test_cache_bust(failures)
     test_state_layer(failures)
     print("-" * 64)

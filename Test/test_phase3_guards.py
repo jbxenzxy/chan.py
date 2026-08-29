@@ -65,8 +65,6 @@ EXPECTED_ROUTES = {
     ("POST", "/api/stocks/download/start"),
     ("GET", "/api/stocks/download/read/status"),
     ("POST", "/api/stocks/download/cancel"),
-    ("GET", "/api/futures/read/status"),
-    ("GET", "/api/futures/read/config"),
     ("GET", "/api/futures/read/stream"),
     ("POST", "/api/futures/cleanup"),
     ("POST", "/api/futures/{symbol}/select/point"),
@@ -97,13 +95,14 @@ def read_src(rel):
 # ① 锁分类建档
 # ═══════════════════════════════════════════════════════════════════════
 def test_lock_policy(failures):
-    """LOCK_POLICY 登记完备：SERIAL 漏斗实现确实持 _ENGINE_LOCK，RAW 不持。"""
+    """LOCK_POLICY 登记完备 + engine_section 可执行化（P1-2）：
+    SERIAL 漏斗实现须经 engine_section("<入口>") 取锁，RAW 不取锁。"""
     from App import AppOrch as orch
 
     required_keys = {
-        "call_analysis", "run_analysis", "call_manual_select_point",
+        "call_analysis", "call_manual_select_point",
         "call_futures_manual_select_point", "call_compute_red_range_zs",
-        "analyze_stock", "fetch_and_inject", "Scanner.scan_one",
+        "analyze_stock", "Scanner.scan_one",
         "sse_futures_stream_single", "sse_futures_stream_dual",
     }
     missing = required_keys - set(orch.LOCK_POLICY)
@@ -119,28 +118,29 @@ def test_lock_policy(failures):
             failures.append(f"锁分类: {key} 类别 {cat!r} 不在登记域内")
             print(f"[FAIL] ① 锁分类: {key} 类别 {cat!r} 非法")
 
-    # SERIAL 入口（AppOrch 层函数）实现必须持锁；RAW 必须不持锁
+    # SERIAL 入口（AppOrch 层函数）实现必须经 engine_section 取锁；
+    # RAW 必须不取锁。P1-2：校验「登记即执行」，不再只是登记文本匹配。
     fn_map = {
         "call_analysis": orch.call_analysis,
         "call_manual_select_point": orch.call_manual_select_point,
         "call_futures_manual_select_point": orch.call_futures_manual_select_point,
         "call_compute_red_range_zs": orch.call_compute_red_range_zs,
+        "call_amo": orch.call_amo,
         "analyze_stock": orch.analyze_stock,
-        "fetch_and_inject": orch.fetch_and_inject,
     }
     bad = []
     for name, fn in fn_map.items():
         cat = orch.LOCK_POLICY[name][0]
         src = inspect.getsource(fn)
-        holds = "with _ENGINE_LOCK:" in src
-        if cat == "SERIAL" and not holds:
-            bad.append(f"{name} 登记 SERIAL 但实现未持 _ENGINE_LOCK")
-        if cat == "RAW" and holds:
-            bad.append(f"{name} 登记 RAW 但实现持 _ENGINE_LOCK（与登记矛盾）")
-    # run_analysis 是 async 函数，同样校验
-    src = inspect.getsource(orch.run_analysis)
-    if "with _ENGINE_LOCK:" not in src:
-        bad.append("run_analysis 登记 SERIAL 但实现未持 _ENGINE_LOCK")
+        uses_section = f'engine_section("{name}")' in src
+        holds_raw_lock = "with _ENGINE_LOCK:" in src
+        if cat == "SERIAL":
+            if not uses_section:
+                bad.append(f"{name} 登记 SERIAL 但实现未经 engine_section(\"{name}\") 取锁")
+            if holds_raw_lock:
+                bad.append(f"{name} 残留手写 with _ENGINE_LOCK:（应统一走 engine_section）")
+        if cat == "RAW" and (uses_section or holds_raw_lock):
+            bad.append(f"{name} 登记 RAW 但实现取锁（与登记矛盾）")
 
     if bad:
         failures.extend(f"锁分类: {b}" for b in bad)
@@ -148,8 +148,8 @@ def test_lock_policy(failures):
             print(f"[FAIL] ① 锁分类: {b}")
     else:
         n_serial = sum(1 for c, _ in orch.LOCK_POLICY.values() if c == "SERIAL")
-        print(f"[PASS] ① 锁分类: {len(orch.LOCK_POLICY)} 项登记完备，"
-              f"{n_serial} 个 SERIAL 漏斗实现均持锁，RAW 无一持锁")
+        print(f"[PASS] ① 锁分类: {len(orch.LOCK_POLICY)} 项登记，"
+              f"{n_serial} 个 SERIAL 漏斗均经 engine_section 取锁，RAW 无一取锁")
 
 
 # ═══════════════════════════════════════════════════════════════════════

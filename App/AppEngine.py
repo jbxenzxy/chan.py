@@ -14,7 +14,8 @@ App/AppEngine.py —— 分析引擎层
 
 依赖方向：AppEngine → App/AppConfig.py / App/AppData.py / DataAPI/（单向）；
 App/AppOrch.py → AppEngine（单向）；FrontAPI.py 仅引用常量/纯函数，引擎
-入口一律走 orch.* 漏斗。期货分流：analyze_stock 延迟导入 AppSSE（避免循环依赖）。
+入口一律走 orch.* 漏斗。期货不走本引擎：analyze_stock 入口对期货代码明确
+拒绝（见其函数注释），期货拉流/选点/复盘统一经 AppSSE 的 SSE 通道。
 
 使用方式：
     from App import AppEngine as _m      # 服务层获取引擎
@@ -189,17 +190,6 @@ TdxClient = _ElTdx.TdxClient
 _download_state = _ElTdx._download_state
 _download_lock = _ElTdx._download_lock
 
-# TDX 市场代码映射
-TDX_MARKET_MAP = {
-    "sh": 1,   # 上海
-    "sz": 0,   # 深圳
-    "bj": 2,   # 北京
-}
-
-# 扩展市场（港股）代码前缀
-HK_CODE_PREFIX = "31"  # 港股在 ds/lday 下的文件名前缀
-DS_CODE_PREFIX = "62"  # 扩展市场指数在 ds/lday 下的文件名前缀
-
 
 # ============================================================
 # 获取股票名称（实现位于 App/utils.py，顶部统一 re-import）
@@ -239,11 +229,6 @@ _pe_ttm_cache = app_data.pe_cache        # {market+code: float}  PE-TTM值（共
 _index_belong_cache = app_data.belong_cache
 
 
-def _load_pe_ttm_cache():
-    """从 stock_pettm_index.json 加载 PE-TTM 与指数归属（委托 app_data）"""
-    return app_data.load_pe_ttm_cache()
-
-
 def _get_pe_ttm(market, code):
     """获取单只股票的 PE-TTM 值（委托 app_data）"""
     return app_data.get_pe_ttm(market, code)
@@ -278,15 +263,6 @@ def _load_float_mc_cache():
     """从本地JSON加载流通市值缓存（委托 app_data）"""
     return app_data.load_float_mc_cache()
 
-def _update_float_mc_cache(mv_dict):
-    """将外部获取的流通市值字典合并到全局缓存并落盘（委托 app_data）。
-    调用方应确保 _load_float_mc_cache() 已先执行。"""
-    return app_data.update_float_mc_cache(mv_dict)
-
-def _get_float_mc_from_cache(code):
-    """从缓存获取流通市值（亿元），未命中返回None（委托 app_data）。"""
-    return app_data.get_float_mc_from_cache(code)
-
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
 
@@ -306,11 +282,6 @@ def _cache_get(key):
     return app_data.cache_get(key)
 
 
-def _cache_remove(key):
-    """从缓存中删除指定条目（不触发 GC，由调用方在适当时机统一回收；委托 app_data）"""
-    return app_data.cache_remove(key)
-
-
 
 
 # ============================================================
@@ -321,11 +292,6 @@ def _cache_remove(key):
 SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 # freq -> CSV列名 的映射
 FREQ_TO_COL = AppData_FREQ_TO_COL
-
-
-def _save_point_time(code, name, freq, sdt):
-    """保存或更新某只股票某个周期的选点（委托 app_data）"""
-    return app_data.save_point_time(code, name, freq, sdt)
 
 
 # 选点内存缓存：别名 = app_data 实例字段（共享同一对象；启动加载由

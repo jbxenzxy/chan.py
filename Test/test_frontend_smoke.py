@@ -11,9 +11,10 @@ P2-2 补测试缺口 ④ —— 前端 JS 冒烟测试
   ② JS 语法：node --check app.js 通过（零构建下语法错误会直接白屏）
   ③ 全局入口：window 级函数存在（switchFreq / toggleDualWindow /
      loadStock / startScanZxg / toggleDownloadPanel / toggleStats 等）
-  ④ 组件注册：ChanApp.components.KLineChart 契约面存在
-     （render / renderSingle / renderTop / renderBottom / resizeCanvas）
   ⑤ 事件引用：onclick 内联引用与 window 函数一一对应（防死引用）
+
+注：P1-6 已删除 ChanApp.components 组件注册表（纯写入死结构，仅被本用例
+用正则"确认字符串存在"，实际无任何消费方）及其守护项，④ 不再存在。
 
 运行：python Test/test_frontend_smoke.py [--update]
 """
@@ -51,16 +52,8 @@ REQUIRED_WINDOW_FUNCS = [
     "onInputKeydown", "onInputChange", "clearInput", "showHistory",
 ]
 
-# KLineChart 组件契约面（阶段 6 组件化对外接口）
-REQUIRED_COMPONENT_METHODS = [
-    "render", "renderSingle", "renderTop", "renderBottom",
-    "resizeCanvas", "priceToY", "yToPrice", "getChartArea",
-    "getVisibleKlines", "getPriceRange", "drawCandles", "drawBiLines",
-    "drawZs", "drawBspMarkers", "drawMaLines", "drawCrosshair",
-    "drawDateAxis", "onWheel", "toggleOverlay", "toggleDualWindow",
-    "applyOverlayButtonStates", "cancelSelectedPoint",
-]
-
+# KLineChart 组件契约方法（阶段 6 组件化对外接口；P1-6 注册表删除后
+# 由 window 绑定面 + ② 渲染管线守护接管，此处仅保留文档）
 
 def test_html_skeleton(failures):
     """① HTML 骨架：引用 app.js/app.css + 关键 DOM 元素"""
@@ -133,35 +126,6 @@ def test_window_api_surface(failures):
     print(f"[PASS] ③ 全局入口: {len(REQUIRED_WINDOW_FUNCS)} 个 window 函数均在")
 
 
-def test_component_registry(failures):
-    """④ 组件注册：ChanApp.components.KLineChart 契约面存在"""
-    if not os.path.exists(APP_JS):
-        failures.append("④ app.js 不存在")
-        print("[FAIL] ④ app.js 不存在")
-        return
-    with open(APP_JS, encoding="utf-8") as f:
-        js = f.read()
-    if "ChanApp.components.KLineChart" not in js:
-        failures.append("④ ChanApp.components.KLineChart 未注册")
-        print("[FAIL] ④ KLineChart 组件未注册")
-        return
-    # 提取 KLineChart 注册块（对象字面量，方法以裸标识符列出）
-    m = re.search(r"ChanApp\.components\.KLineChart\s*=\s*\{(.*?)\};",
-                  js, re.S)
-    if not m:
-        failures.append("④ 无法定位 KLineChart 注册块")
-        print("[FAIL] ④ 无法定位 KLineChart 注册块")
-        return
-    reg_block = m.group(1)
-    missing = [meth for meth in REQUIRED_COMPONENT_METHODS
-               if not re.search(rf"\b{re.escape(meth)}\b", reg_block)]
-    if missing:
-        failures.append(f"④ KLineChart 契约面缺失: {missing}")
-        print(f"[FAIL] ④ KLineChart 契约面缺失: {missing}")
-        return
-    print(f"[PASS] ④ 组件注册: KLineChart + {len(REQUIRED_COMPONENT_METHODS)} 个契约方法")
-
-
 def test_inline_event_refs(failures):
     """⑤ 事件引用：HTML onclick/onchange 内联引用与 window 函数一一对应"""
     if not os.path.exists(INDEX_HTML) or not os.path.exists(APP_JS):
@@ -203,7 +167,6 @@ def main():
     test_html_skeleton(failures)
     test_js_syntax(failures)
     test_window_api_surface(failures)
-    test_component_registry(failures)
     test_inline_event_refs(failures)
 
     print()

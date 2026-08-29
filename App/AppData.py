@@ -255,6 +255,19 @@ def make_futures_sub_key(symbol, sub_freq):
     return f"{symbol.upper()}:{sub_freq}"
 
 
+def make_futures_sub_key_from_code(chan_code, sub_freq):
+    """由 CChan.code（形如 "SYMBOL:freq_sec"，含周期后缀）生成期货下窗缓存键。
+
+    读侧（BSPointList 区间套）专用：CChan.code 带 ":freq_sec" 周期后缀，
+    先 rsplit 还原纯 symbol，再委托 make_futures_sub_key 工厂，与写侧
+    （AppSSE.set_futures_sub_chan）同源，避免手工拼接造成 key 漂移
+    （P0-2 根因：原先直接以 chan_code 拼接得 "SYMBOL:freq_sec:sub_freq"，
+    与写侧 "SYMBOL:sub_freq" 永不相等，区间套 100% 静默失效）。
+    """
+    symbol = chan_code.rsplit(":", 1)[0]
+    return make_futures_sub_key(symbol, sub_freq)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # 通达信研究行业 X代码 ↔ 881代码 双向映射表（硬编码数据）
 # 自通达信官方 PDF《板块指数和行业分类》3.6 节提取，低频静态数据，
@@ -1420,6 +1433,18 @@ class AppData:
         with self._cache_lock:
             if key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[key]
+
+    def stocks_cache_clear(self):
+        """清空股票分析 LRU 缓存（持 _cache_lock，线程安全），返回清除条数
+
+        扫描面板关闭（/api/stocks/scan/close → Scanner.clear_cache）时调用：
+        批量扫描产生的引擎分析缓存条目在面板关闭后不再需要，整池清空避免
+        陈旧结果残留（下次分析经 LRU 重建）。与 futures_cache_clear 同模式。
+        """
+        with self._cache_lock:
+            n = len(self._stocks_analysis_cache)
+            self._stocks_analysis_cache.clear()
+            return n
 
     def futures_cache_get(self, key):
         """期货分析缓存读（独立于股票 LRU，键形如 "KQ.m@SHFE.rb:1m"）"""

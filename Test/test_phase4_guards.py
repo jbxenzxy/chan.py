@@ -31,7 +31,8 @@
   ⑩ 数据源 import 门禁（P1-1 数据源抽象单轨化）：
      FrontAPI / AppChart / AppOrch 任何层级禁止 import DataAPI.*；
      装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
-     AppSSE（仅 TqSdkCSSESource；CTqSdkAPI 经 AppEngine 显式名）、
+     AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
+     CTqSdkAPI 主体经 AppEngine 显式名）、
      AppRefresh（仅 TdxAPI.refresh_block_files）、AppScan（仅
      TdxAPI.get_index_stocks）、App/utils（仅 TqSdkAPI 纯函数依赖）
 
@@ -68,17 +69,16 @@ def read_src(rel):
 # 12 个 DATA 族函数：AppEngine 同名实现必须退化为兼容壳。
 # 允许的函数体形态：docstring + （from App.AppData import ...）+ 单条 return
 # （阶段 8：_get_stock_name 已下沉 App/utils.py，不再属于 AppEngine 壳面；
-#  阶段 8 瘦身：选点/标注/上次代码等 13 个兼容壳已随功能域迁移删除，
-#  仅保留引擎内部仍消费的 _save_point_time）
+#  阶段 8 瘦身：选点/标注/上次代码等 13 个兼容壳已随功能域迁移删除；
+#  P2：_load_pe_ttm_cache/_update_float_mc_cache/_get_float_mc_from_cache/
+#  _cache_remove/_save_point_time 等已无人消费的引擎委托壳随 P2 删除）
 SHELL_FUNCS = [
     # 名称 / PE / 市值
     "_load_stock_names_from_cache_file", "_safe_write_json_file",
-    "_load_pe_ttm_cache", "_get_pe_ttm", "_get_index_belong",
-    "_load_float_mc_cache", "_update_float_mc_cache", "_get_float_mc_from_cache",
-    # 统一缓存三件套
-    "_cache_put", "_cache_get", "_cache_remove",
-    # 选点持久化（引擎内部手动选点仍调用）
-    "_save_point_time",
+    "_get_pe_ttm", "_get_index_belong",
+    "_load_float_mc_cache",
+    # 统一缓存三件套（引擎内部仍消费 _cache_put/_cache_get）
+    "_cache_put", "_cache_get",
 ]
 
 # 委托目标允许的受调者（app_data 属性 / AppData 模块级函数）
@@ -499,9 +499,6 @@ def test_semantic_subchan(failures):
                "futures_cache_clear"):
         if not hasattr(app_data, fn):
             bad.append(f"app_data.{fn} 缺失（语义化子窗接口不完整）")
-    for fn in ("futures_set_sub_chan", "futures_get_sub_chan", "futures_pop_sub_chan"):
-        if not hasattr(orch, fn):
-            bad.append(f"orch.{fn} 漏斗缺失")
     if bad:
         failures.extend(f"语义化子窗: {b}" for b in bad)
         for b in bad:
@@ -517,8 +514,6 @@ def test_semantic_subchan(failures):
         probe.set_futures_sub_chan("kq.m@shfe.rb", "1m", sentinel)      # 小写写入
         if probe.get_futures_sub_chan("KQ.m@SHFE.rb", "1m") is not sentinel:
             bad.append("大小写不敏感失效（小写写 → 大写读未命中）")
-        if probe.futures_cache_get("KQ.M@SHFE.RB:1m") is not sentinel:
-            bad.append("语义接口与泛型视图不同储（key 规则分叉）")
         if probe.pop_futures_sub_chan("kq.m@shfe.rb", "1m") is not sentinel:
             bad.append("pop_futures_sub_chan 未返回被释放对象")
         if probe.get_futures_sub_chan("KQ.m@SHFE.rb", "1m") is not None:
@@ -531,16 +526,15 @@ def test_semantic_subchan(failures):
     finally:
         restore()
 
-    # 源码级：FrontAPI 不再手工拼 "{SYMBOL}:{sub_freq}" key
+    # 源码级：FrontAPI 不再手工拼 "{SYMBOL}:{sub_freq}" key（P2 起语义化漏斗
+    # 内聚到 AppSSE → app_data.set/get/pop_futures_sub_chan，FrontAPI 不直触子窗缓存）
     fe_src = read_src("FrontAPI.py")
     for i, line in enumerate(fe_src.splitlines(), 1):
         s = line.strip()
         if s.startswith("#"):
             continue
         if ":{sub_freq}\"" in line and ("upper()" in line or ":" in line.split("f\"")[0]):
-            if "orch.futures_set_sub_chan" not in line and "orch.futures_pop_sub_chan" not in line \
-                    and "f\"" in line and "upper()" in line:
-                bad.append(f"FrontAPI.py:{i} 仍手工拼子窗 key（应由语义化漏斗内聚）")
+            bad.append(f"FrontAPI.py:{i} 仍手工拼子窗 key（应由 app_data.set/get/pop_futures_sub_chan 内聚）")
 
     if bad:
         failures.extend(f"语义化子窗: {b}" for b in bad)
@@ -690,10 +684,12 @@ def test_datasource_import_gate(failures):
     extra = engine_mods - engine_allow
     if extra:
         bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
-    # AppSSE：仅 TqSdkCSSESource（SSE 流协议）；CTqSdkAPI 须从 AppEngine 显式名获取
+    # AppSSE：TqSdkCSSESource（SSE 流协议）+ TqSdkAPI（P0-1 会话上下文
+    # session_context/session_set/session_clear 线程局部缓存绑定，未走引擎再导出）；
+    # CTqSdkAPI 主体仍经 AppEngine 显式名获取
     sse_mods = set(_datasource_imports(os.path.join("App", "AppSSE.py")))
-    if sse_mods != {"DataAPI.TqSdkCSSESource"}:
-        bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource，实测: {sorted(sse_mods)}")
+    if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
+        bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
     # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ ElTdxAPI（vipdoc 代码收集）
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
     if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
