@@ -4,8 +4,8 @@
 =====================================================================
 守护阶段 6 的结构性成果（设计文档 V10 方案 8.9）：
 
-  ① 组件区块完备：Frontend/app.js 单文件内 10 个 [COMPONENT] 区块
-     （KLineChart / NavToolbar / SymbolSearch / StatsPanel / DownloadPanel /
+  ① 组件区块完备：Frontend/app.js 单文件内 9 个 [COMPONENT] 区块
+     （KLineChart / NavToolbar / SymbolSearch / StatsPanel /
      BspSettingsPanel / ScanPanel / RealtimeService / AnnotationPanel /
      Bootstrap）全部在位且非空；区块外不允许游离的业务函数声明。
   ② KLineChart 内容契约：渲染管线关键函数（render 族 / draw* 族 /
@@ -44,7 +44,7 @@ FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 # ①② 组件区块
 # ═══════════════════════════════════════════════════════════════════════
 COMPONENTS = [
-    "KLineChart", "NavToolbar", "SymbolSearch", "StatsPanel", "DownloadPanel",
+    "KLineChart", "NavToolbar", "SymbolSearch", "StatsPanel",
     "BspSettingsPanel", "ScanPanel", "RealtimeService", "AnnotationPanel",
     "Bootstrap",
 ]
@@ -58,13 +58,15 @@ KLINE_PIPELINE = [
 ]
 
 # ③ window API 冻结基线（阶段 6 前全量：64 个取自 4d0de89，另含 AMO 面板
-#    closeAmoPanel/toggleAmoPanel 两项既有登记，合计 66 个）
+#    closeAmoPanel/toggleAmoPanel 两项既有登记，合计 66 个；随后「盘后下载」
+#    功能移除 4 个 window 函数（toggleDownloadPanel/closeDownloadPanel/
+#    startDownload/stopDownload），现回归为 62 个）
 WINDOW_BASELINE = {
     '_dualZsDebugCount', '_isRenderingBottom', '_lastCalcRedRangeError', '_lastGrayStatus',
     '_lastRedFrameStatus', 'annotationAdd', 'annotationDeleteAllGlobal', 'annotationDeleteAnnotation',
     'annotationDialogCancel', 'annotationDialogConfirm', 'annotationDialogKeydown', 'annotationEditAnnotation',
     'annotationReplayToHere', 'bspFilterSelectAll', 'bspFilterSelectNone', 'cancelSelectedPoint',
-    'clearHistory', 'clearInput', 'closeAmoPanel', 'closeBspSettings', 'closeDownloadPanel',
+    'clearHistory', 'clearInput', 'closeAmoPanel', 'closeBspSettings',
     'closeScanPanel', 'doSearch', 'gotoDate',
     'handleDateBlur', 'handleDateChange', 'handleDateInput', 'handleDateKeydown',
     'initCoordSystemRadio', 'loadScanResult', 'loadStock', 'maPeriodsSelectAll',
@@ -72,8 +74,8 @@ WINDOW_BASELINE = {
     'onInputKeydown', 'onMaPeriodChange', 'onShowBiIdxChange', 'openBspSettings',
     'refreshStockNames', 'removeHistory', 'saveScanToZxg', 'scanModeDialogCancel',
     'scanModeDialogConfirm', 'scanSourceSelectAll', 'scanSourceSelectNone', 'selectHistory',
-    'showHistory', 'startDownload', 'startScanZxg', 'stopDownload',
-    'switchFreq', 'toggleAmoPanel', 'toggleDownloadPanel', 'toggleDualWindow', 'toggleInputClear',
+    'showHistory', 'startScanZxg',
+    'switchFreq', 'toggleAmoPanel', 'toggleDualWindow', 'toggleInputClear',
     'toggleMirrorMode', 'toggleOverlay', 'toggleScanMinimize', 'toggleStats',
     'updateScanRecentDisabled', 'updateScanSaveBtn', 'updateSearchSelection', 'updateWeekday',
 }

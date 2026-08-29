@@ -7,7 +7,6 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
   - AppChart.py      图表交互（左上角输入代码、切换周期、双窗口、复盘、手动选点、红框中枢）
   - AppSSE.py        SSE 实时流（期货实时行情推送 / 期货复盘 / 期货选点 / 期货元数据）
   - AppScan.py       股票扫描（右上角「股票扫描」按钮）
-  - AppDownload.py   盘后下载（右上角「盘后下载」按钮）
   - AppRefresh.py    刷新（右上角「刷新」按钮：股票名/指数归属/PE-TTM/板块）
 
 标注归 AppChart（图表右键标注属图表交互域）。
@@ -45,10 +44,6 @@ from App.AppScan import (
     Scanner, scanner,
     get_annotated_codes, read_zxg_stocks, zxg_save,
     save_scan_to_ths_cloud,
-)
-from App.AppDownload import (
-    start_download_checked, stop_download, get_download_status,
-    download_dir,
 )
 from App.AppRefresh import (
     load_stock_names_from_cache_file, refresh_stock_names,
@@ -103,11 +98,11 @@ LOCK_POLICY = {
                                       "独立双窗分支读下窗运行时缓存/dual_sub 缓存，miss 抛 DataFetchError"),
     "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
                                       "串行调用方必须改走 call_analysis"),
-    "Scanner.scan_one":             ("SCAN", "扫描路径（同步旧径）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留前端并发请求；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
-    "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至执行池（ProcessPool spawn 优先，受限环境降级 ThreadPool），引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
+    "Scanner.scan_one":             ("SCAN", "扫描路径（单票查询）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留前端并发请求；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
+    "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至 ProcessPool（spawn）执行池，引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
     "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
     "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
-    "call_amo":                     ("SERIAL", "市场量能：读 TDX 本地指数日线成交额（sh000001+sz399106），不触引擎共享缓存；持 _ENGINE_LOCK 与引擎调用/下载写盘串行"),
+    "call_amo":                     ("SERIAL", "市场量能：读 TDX 本地指数日线成交额（sh000001+sz399106），不触引擎共享缓存；持 _ENGINE_LOCK 与引擎调用串行"),
 }
 
 
@@ -155,9 +150,6 @@ __all__ = [
     "Scanner", "ScannerService", "scanner",
     "get_annotated_codes", "read_zxg_stocks", "zxg_save",
     "save_scan_to_ths_cloud",
-    # 下载（AppDownload）
-    "start_download_checked", "stop_download",
-    "get_download_status", "download_dir",
     # 刷新（AppRefresh）
     "load_stock_names_from_cache_file", "refresh_stock_names",
     "load_float_mc_cache", "fetch_float_mc_from_tencent",

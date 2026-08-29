@@ -22,10 +22,10 @@ App/AppScanPool.py —— 批量扫描 ProcessPool 编排
   - 显式 spawn 上下文（multiprocessing.get_context("spawn")）：避免
     POSIX 默认 fork 在多线程 API 进程内的锁继承风险（Python 官方文档
     明示）；入口（main/api_server/FrontAPI）均已带 __main__ 守卫。
-  - 降级路径：spawn 池创建失败（受限容器无 /dev/shm、seccomp 限制等）
-    时自动降级 ThreadPoolExecutor 执行同一 worker 函数——scan_one 内
-    _scan_lock 自动回归「引擎串行、锁外并发」语义；提交响应带
-    engine: process_pool | thread_fallback 供前端标示。
+    仅用进程池：spawn 池装配是唯一路径，不提供线程降级——若受限容器
+    （无 /dev/shm、seccomp 限制）装配失败则直接抛错，由运维解决环境
+    问题而非静默降到同进程线程（后者会共享 _scan_lock，退化为进程内
+    引擎调用串行）。
   - worker 数钳制 [1, 16]：防 64 核机器拉起 64 个独立引擎进程
     内存线性放大 OOM。
   - worker 函数为模块级函数（可 pickle），内部惰性 import AppOrch /
@@ -42,7 +42,7 @@ import multiprocessing
 import os
 import sys
 import threading
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from App.AppLog import get_logger
 log = get_logger(__name__)
 
@@ -54,11 +54,9 @@ if _REPO_ROOT not in sys.path:
 
 # worker 数上限：防误配/高核数机器打爆内存
 _SCAN_POOL_MAX_WORKERS = 16
-# 线程降级模式的并发上限（控制线程池内引擎锁竞争）
-_SCAN_POOL_FALLBACK_WORKERS = 4
 
 _pool = None
-_pool_engine = None          # "process_pool" | "thread_fallback"
+_pool_engine = None          # "process_pool"
 _pool_lock = threading.Lock()
 _pool_created_count = 0      # 池装配次数（区分首次/重新装配，用于打印）
 _active_scans = 0            # 并发批次引用计数：>0 时禁止销毁池（防互毁）
@@ -80,10 +78,11 @@ def _worker_init():
 
 
 def _get_pool():
-    """惰性创建全局执行池（单例）：ProcessPool(spawn) 优先，失败降级 ThreadPool。
+    """惰性创建全局执行池（单例）：ProcessPool(spawn)。
 
-    返回 (executor, engine_tag)。降级模式下同一 worker 函数在 API 进程内
-    执行：scan_one 的 _scan_lock 保持「引擎串行、锁外并发」语义。
+    仅用进程池——spawn 池装配是唯一路径，失败即抛错（不降级线程池，
+    专注暴露并解决环境问题）。scan_one 在各 worker 进程内执行，每进程
+    独立 _scan_lock 与引擎缓存，互不共享。
 
     即用即弃：扫描完成即销毁（destroy_pool），故此处每次装配都是
     全新进程、空缓存；打印区分首次装配与重新装配，便于确认每次扫描
@@ -95,25 +94,17 @@ def _get_pool():
             from App.AppConfig import app_config
             workers = _resolve_workers(app_config)
             _pool_created_count += 1
-            try:
-                ctx = multiprocessing.get_context("spawn")
-                _pool = ProcessPoolExecutor(max_workers=workers,
-                                            mp_context=ctx,
-                                            initializer=_worker_init)
-                _pool_engine = "process_pool"
-                if _pool_created_count == 1:
-                    log.info(f"[扫描池] ProcessPool 已装配: workers={workers} "
-                          f"(spawn)")
-                else:
-                    log.info(f"[扫描池] 重新装配（上次已销毁）: workers={workers} "
-                          f"(spawn)")
-            except Exception as exc:  # noqa: BLE001 —— 受限环境降级线程池
-                log.info(f"[扫描池] ProcessPool 装配失败，降级线程池: "
-                      f"{type(exc).__name__}: {exc}")
-                _pool = ThreadPoolExecutor(
-                    max_workers=min(workers, _SCAN_POOL_FALLBACK_WORKERS),
-                    thread_name_prefix="scan-fallback")
-                _pool_engine = "thread_fallback"
+            ctx = multiprocessing.get_context("spawn")
+            _pool = ProcessPoolExecutor(max_workers=workers,
+                                        mp_context=ctx,
+                                        initializer=_worker_init)
+            _pool_engine = "process_pool"
+            if _pool_created_count == 1:
+                log.info(f"[扫描池] ProcessPool 已装配: workers={workers} "
+                      f"(spawn)")
+            else:
+                log.info(f"[扫描池] 重新装配（上次已销毁）: workers={workers} "
+                      f"(spawn)")
         # 在本锁内成立引用（与池装配原子）：保证拿到池的同时登记一个
         # 进行中批次，后续其它批次也并发持有 → 任一批次都不该在还有人
         # 用时销毁池（修复两批并发扫描时先完成者 cancel 掉后者队列）。

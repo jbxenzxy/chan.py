@@ -4,7 +4,7 @@
 =====================================================================
 对 App/AppEngine.py 做纯静态分析（不 import、零副作用）：
 （阶段 10.1：my_chan_main.py 已删除，引擎迁入 App/AppEngine.py，
-  分析目标随之下移；DataAPI/ElTdxAPI.py 由 func_map_check 合并扫描）
+  分析目标随之下移）
 
   ① 全部顶层函数：名称/行区间/参数/首行 docstring
   ② 全部模块级状态：模块级赋值目标（排除 import 与函数定义）

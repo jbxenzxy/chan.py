@@ -1,0 +1,119 @@
+<svg viewBox="0 0 680 880" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, PingFang SC, Microsoft YaHei, sans-serif">
+  <!-- ===== Header ===== -->
+  <rect x="0" y="0" width="680" height="56" fill="#1f2d3d"/>
+  <text x="340" y="26" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">chan.py 锁机制全景图：现状（乱） vs 重设计（净）</text>
+  <text x="340" y="46" text-anchor="middle" font-size="12" fill="#bcccdd">两条非生产约束 + 两处收敛：engine_lock 因类全局 _tdx_data 删除；标注/选点合一 file_lock</text>
+
+  <!-- ===== Section A: 现状 ===== -->
+  <text x="24" y="86" font-size="16" font-weight="700" fill="#1b5e20">① 现状全景 — 6 把应用级锁散落，含 3 处冗余/可删</text>
+
+  <rect x="24" y="104" width="200" height="290" rx="10" fill="#eaf6ec" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="124" y="126" text-anchor="middle" font-size="13" font-weight="700" fill="#2e7d32">真实必要（保留）</text>
+  <g font-size="11.5">
+    <rect x="38" y="138" width="172" height="56" rx="6" fill="#ffffff" stroke="#2e7d32"/>
+    <text x="48" y="158" font-weight="700" fill="#1b5e20">_stock_analysis_lock</text>
+    <text x="48" y="175" fill="#444">引擎真相锁：护类全局</text>
+    <text x="48" y="189" fill="#444">cls._tdx_data（根因）</text>
+
+    <rect x="38" y="204" width="172" height="40" rx="6" fill="#ffffff" stroke="#2e7d32"/>
+    <text x="48" y="224" font-weight="700" fill="#1b5e20">_cache_lock (RLock)</text>
+    <text x="48" y="238" fill="#444">分析缓存读写/淘汰</text>
+
+    <rect x="38" y="254" width="172" height="40" rx="6" fill="#ffffff" stroke="#2e7d32"/>
+    <text x="48" y="274" font-weight="700" fill="#1b5e20">_pool_lock</text>
+    <text x="48" y="288" fill="#444">进程池单例+引用计数</text>
+
+    <rect x="38" y="304" width="172" height="40" rx="6" fill="#ffffff" stroke="#2e7d32"/>
+    <text x="48" y="324" font-weight="700" fill="#1b5e20">_scan_lock</text>
+    <text x="48" y="338" fill="#444">仅同步模式限流(可删)</text>
+  </g>
+
+  <rect x="240" y="104" width="200" height="290" rx="10" fill="#e8f1fb" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="340" y="126" text-anchor="middle" font-size="13" font-weight="700" fill="#1565c0">用户共享数据（合并）</text>
+  <g font-size="11.5">
+    <rect x="254" y="138" width="172" height="46" rx="6" fill="#ffffff" stroke="#1565c0"/>
+    <text x="264" y="158" font-weight="700" fill="#0d47a1">_annotations_lock (RLock)</text>
+    <text x="264" y="175" fill="#444">标注 读-改-写串行</text>
+    <text x="264" y="189" fill="#444">(合并→file_lock)</text>
+
+    <rect x="254" y="194" width="172" height="46" rx="6" fill="#ffffff" stroke="#1565c0"/>
+    <text x="264" y="214" font-weight="700" fill="#0d47a1">_saved_point_lock (RLock)</text>
+    <text x="264" y="231" fill="#444">选点表整表 CSV 回写</text>
+    <text x="264" y="245" fill="#444">(合并→file_lock)</text>
+
+    <rect x="254" y="252" width="172" height="60" rx="6" fill="#f3f7fd" stroke="#90a4c8"/>
+    <text x="264" y="272" font-weight="700" fill="#37474f">DataAPI 内部（正交）</text>
+    <text x="264" y="289" fill="#555">_xdxr_lock ·</text>
+    <text x="264" y="303" fill="#555">_ACTIVE_SOURCES_LOCK</text>
+  </g>
+
+  <rect x="456" y="104" width="200" height="290" rx="10" fill="#fdeaea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="556" y="126" text-anchor="middle" font-size="13" font-weight="700" fill="#c62828">冗余 / 可删</text>
+  <g font-size="11.5">
+    <rect x="470" y="138" width="172" height="56" rx="6" fill="#ffffff" stroke="#c62828"/>
+    <text x="480" y="158" font-weight="700" fill="#b71c1c">_ENGINE_LOCK</text>
+    <text x="480" y="175" fill="#444">流控壳：与真相锁套娃</text>
+    <text x="480" y="189" fill="#444">净正确性贡献 = 0</text>
+
+    <rect x="470" y="204" width="172" height="56" rx="6" fill="#ffffff" stroke="#c62828"/>
+    <text x="480" y="224" font-weight="700" fill="#b71c1c">_download_lock</text>
+    <text x="480" y="241" fill="#444">盘后单线程(你⑵)</text>
+    <text x="480" y="255" fill="#444">无竞争 → 可删</text>
+
+    <rect x="470" y="270" width="172" height="56" rx="6" fill="#ffffff" stroke="#c62828"/>
+    <text x="480" y="290" font-weight="700" fill="#b71c1c">REPLAY_MODE 进锁</text>
+    <text x="480" y="307" fill="#444">调试专用(你⑴)</text>
+    <text x="480" y="321" fill="#444">非生产 → 移出锁</text>
+
+    <rect x="470" y="338" width="172" height="44" rx="6" fill="#fdf3f3" stroke="#e57373"/>
+    <text x="480" y="358" font-weight="700" fill="#8d2b2b">LOCK_POLICY/engine_section</text>
+    <text x="480" y="374" fill="#555">策略与实现分道扬镳</text>
+  </g>
+
+  <!-- ===== Section B: 重设计 ===== -->
+  <text x="24" y="436" font-size="16" font-weight="700" fill="#0d47a1">② 重设计全景 — 3 把应用级锁（engine_lock 已因根因消除而删除）</text>
+
+  <g font-size="11">
+    <rect x="24" y="454" width="196" height="92" rx="8" fill="#eaf6ec" stroke="#2e7d32" stroke-width="1.5"/>
+    <text x="122" y="476" text-anchor="middle" font-weight="700" fill="#1b5e20">cache_lock</text>
+    <text x="34" y="494" fill="#444">分析缓存</text>
+    <text x="34" y="508" fill="#444">读写/淘汰/失效</text>
+    <text x="34" y="524" fill="#2e7d32">RLock</text>
+    <text x="34" y="538" fill="#2e7d32">(内存, 高频并发)</text>
+
+    <rect x="236" y="454" width="196" height="92" rx="8" fill="#e8f1fb" stroke="#1565c0" stroke-width="1.5"/>
+    <text x="334" y="476" text-anchor="middle" font-weight="700" fill="#0d47a1">file_lock</text>
+    <text x="246" y="494" fill="#444">标注 + 选点 文件</text>
+    <text x="246" y="508" fill="#444">读-改-写串行</text>
+    <text x="246" y="524" fill="#1565c0">RLock（合并 2 把）</text>
+    <text x="246" y="538" fill="#1565c0">短耗时, 无跨锁死锁</text>
+
+    <rect x="448" y="454" width="196" height="92" rx="8" fill="#eaf6ec" stroke="#2e7d32" stroke-width="1.5"/>
+    <text x="546" y="476" text-anchor="middle" font-weight="700" fill="#1b5e20">pool_lock</text>
+    <text x="458" y="494" fill="#444">进程池单例</text>
+    <text x="458" y="508" fill="#444">+引用计数</text>
+    <text x="458" y="524" fill="#2e7d32">跨请求</text>
+    <text x="458" y="538" fill="#2e7d32">(与降级无关)</text>
+  </g>
+
+  <!-- engine_lock 删除 标注 -->
+  <rect x="24" y="560" width="620" height="40" rx="8" fill="#f3f3f3" stroke="#9e9e9e" stroke-width="1.5"/>
+  <text x="40" y="585" font-size="12" fill="#555">✂ <tspan font-weight="700" fill="#333">engine_lock 已删除</tspan>：股票路径照抄 SSE 的线程局部数据注入（per-request），类全局 <tspan font-family="monospace">cls._tdx_data</tspan> 不再存在 → CChan 构建天然线程安全</text>
+
+  <!-- 非生产无锁 -->
+  <rect x="24" y="612" width="620" height="56" rx="10" fill="#fff8e1" stroke="#f9a825" stroke-width="1.5"/>
+  <text x="40" y="634" font-size="13" font-weight="700" fill="#e65100">非生产路径：一律零锁</text>
+  <text x="40" y="654" font-size="11.5" fill="#5d4037">• 调试：REPLAY_MODE 直接赋值（单线程，无竞争）  • 盘后：下载 / AMO 直接跑（单线程；AMO 仅读 .day）</text>
+
+  <!-- 删除清单 -->
+  <rect x="24" y="684" width="620" height="150" rx="10" fill="#fdeaea" stroke="#c62828" stroke-width="1.5"/>
+  <text x="40" y="708" font-size="13" font-weight="700" fill="#c62828">删除 / 合并清单（现状 → 重设计）</text>
+  <text x="40" y="730" font-size="11.5" fill="#b71c1c">✂ _ENGINE_LOCK / engine_section / LOCK_POLICY 的 SERIAL 映射（流控壳，套娃）</text>
+  <text x="40" y="748" font-size="11.5" fill="#b71c1c">✂ _download_lock（盘后单线程，无竞争）</text>
+  <text x="40" y="766" font-size="11.5" fill="#b71c1c">✂ REPLAY_MODE 进锁（调试专用，移出临界区）</text>
+  <text x="40" y="784" font-size="11.5" fill="#b71c1c">✂ engine_lock（根因：类全局 _tdx_data → per-request 线程局部注入，照抄 SSE）</text>
+  <text x="40" y="802" font-size="11.5" fill="#b71c1c">⚠ _scan_lock：全量进程池→删；保留同步→改名 scan_batch_lock 仅同步生效</text>
+  <text x="40" y="820" font-size="11.5" fill="#b71c1c">＝ 标注/选点两把锁 → 合并为 file_lock（RLock，仅覆盖两类短耗时 RMW）</text>
+
+  <text x="340" y="862" text-anchor="middle" font-size="11" fill="#888">生产并发只靠 3 把锁（cache / file / pool）；engine_lock 因根因消除而删除；调试/盘后零锁。</text>
+</svg>

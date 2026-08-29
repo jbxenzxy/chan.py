@@ -34,6 +34,112 @@ _TDXHY_X_TO_881 = {}
 _TDXHY_881_TO_X = {}
 
 
+def collect_codes_from_vipdoc(vipdoc_dir):
+    """
+    从 vipdoc 目录下的 .day 文件名收集所有股票代码。
+    适用于没有 shm.tnf/szm.tnf 的通达信普通版。
+    返回 {code: {"name": "", "pinyin": "", "market": "sh/sz/hk"}} 字典。
+
+    包含范围：
+      A股: 主板(60xxxx/00xxxx)、创业板(30xxxx)、科创板(68xxxx)、北交所(8xxxxx/4xxxxx)
+           指数(000001上证/399001深成指/399006创业板指 等 399xxx/000xxx指数)
+           ETF(51xxxx沪市ETF/15xxxx深市ETF/159xxx)
+      港股: ds/lday 目录下的 31#XXXXX.day 文件
+
+    排除范围：
+      债券(11xxxx/12xxxx/13xxxx沪市债券, 10xxxx/11xxxx/12xxxx深市债券)
+      基金(50xxxx沪市封闭基金, 16xxxx/18xxxx深市基金)
+      其他(1xxxxx北交所债券, 20xxxx/90xxxx B股, 395xxx通达信内部板块)
+    """
+    result = {}
+
+    # === A股代码过滤规则 ===
+    # 上海市场(sh)：包含
+    sh_include_prefixes = ("60", "68")  # 主板60, 科创板68
+    # 上海市场(sh)：排除（债券、基金、ETF等）
+    sh_exclude_prefixes = ("11", "12", "13", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "588", "90", "91", "92", "93", "94", "95", "96", "97", "98", "10", "00", "09")
+    # 上海指数：000xxx 和 9xxxxx 是上证系列指数
+    sh_index_prefixes = ("000", "9")
+
+    # 深圳市场(sz)：包含
+    sz_include_prefixes = ("00", "30", "39")  # 主板00, 创业板30, 指数39
+    # 深圳市场(sz)：排除（债券、基金、ETF等）
+    sz_exclude_prefixes = ("10", "11", "12", "13", "14", "15", "16", "17", "18", "20", "395")
+
+    # 深圳指数：399xxx 是深市指数（如399001深成指、399006创业板指）
+    sz_index_prefixes = ("399",)
+
+    def _is_a_stock_code(code, mkt_dir):
+        """判断是否为需要包含的A股代码"""
+        if not code.isdigit() or len(code) != 6:
+            return False
+
+        if mkt_dir == "sh":
+            # 上海指数：000xxx（上证系列指数）、9xxxxx
+            if code.startswith(sh_index_prefixes):
+                return True
+            # 上海包含：主板60、科创板68、ETF 51/56/58/59/588
+            if code.startswith(sh_include_prefixes):
+                return True
+            # 上海排除：债券、基金等
+            if code.startswith(sh_exclude_prefixes):
+                return False
+            # 其他上海代码默认排除
+            return False
+
+        elif mkt_dir == "sz":
+            # 深圳指数：399xxx
+            if code.startswith(sz_index_prefixes):
+                return True
+            # 深圳包含：主板00、创业板30、ETF 15/16/18
+            if code.startswith(sz_include_prefixes):
+                return True
+            # 深圳排除：债券、基金、通达信内部板块等
+            if code.startswith(sz_exclude_prefixes):
+                return False
+            # 其他深圳代码默认排除
+            return False
+
+        return False
+
+    # === 收集A股代码 ===
+    sh_count = 0
+    sz_count = 0
+    for mkt_dir, prefix in [("sh", "sh"), ("sz", "sz")]:
+        lday_dir = os.path.join(vipdoc_dir, mkt_dir, "lday")
+        if not os.path.isdir(lday_dir):
+            continue
+        for fname in os.listdir(lday_dir):
+            if fname.startswith(prefix) and fname.endswith(".day"):
+                code = fname[len(prefix):-4]
+                if _is_a_stock_code(code, mkt_dir):
+                    compound_key = mkt_dir + code
+                    if compound_key not in result:
+                        result[compound_key] = {"name": "", "pinyin": "", "market": mkt_dir}
+                        if mkt_dir == "sh":
+                            sh_count += 1
+                        else:
+                            sz_count += 1
+
+    # === 收集港股代码（ds目录）===
+    hk_count = 0
+    ds_lday_dir = os.path.join(vipdoc_dir, "ds", "lday")
+    if os.path.isdir(ds_lday_dir):
+        for fname in os.listdir(ds_lday_dir):
+            if fname.startswith("31#") and fname.endswith(".day"):
+                # 港股格式：31#00700.day
+                code = fname[3:-4]  # 提取 00700
+                if code.isdigit():
+                    # 港股代码统一补前导零到5位
+                    hk_code = code.zfill(5)
+                    compound_key = "hk" + hk_code
+                    if compound_key not in result:
+                        result[compound_key] = {"name": "", "pinyin": "", "market": "hk"}
+                        hk_count += 1
+
+    return result
+
+
 def set_tdx_hy_mapping(x_to_881=None, to_x=None):
     """由 App 引擎层启动时调用，注入通达信研究行业映射表
 

@@ -613,33 +613,6 @@ async def api_stocks_scan_annotation(freq: str = Query("")):
     return _json_response({"codes": codes, "total": len(codes)})
 
 
-# ── 路由 — 盘后下载 ───────────────────────────────────────────────────
-
-@router.post("/api/stocks/download/start")
-async def api_stocks_download_start(body: dict = Body(...)):
-    """盘后下载启动（POST 入口）"""
-    categories = body.get("categories") or []
-    day_start = body.get("day_start") or ""
-    min_start = body.get("min_start") or ""
-    data, status = await run_in_threadpool(orch.start_download_checked,
-                                           categories, day_start, min_start)
-    return _json_response(data, status)
-
-
-@router.get("/api/stocks/download/read/status")
-async def api_stocks_download_read_status():
-    """盘后下载进度"""
-    status = await run_in_threadpool(orch.get_download_status)
-    return _json_response(status)
-
-
-@router.post("/api/stocks/download/cancel")
-async def api_stocks_download_cancel():
-    """盘后下载停止"""
-    ok, msg = await run_in_threadpool(orch.stop_download)
-    return _json_response({"ok": ok, "message": msg})
-
-
 # ── 路由挂载（单一路由源）────────────────────────────────────────────
 app.include_router(router)
 

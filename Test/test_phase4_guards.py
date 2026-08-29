@@ -646,8 +646,7 @@ def test_engine_refs_valid(failures):
 def _datasource_imports(rel):
     """返回**任何层级**（模块级+函数体）import 的 DataAPI.* 子模块全名列表。
 
-    `from DataAPI import ElTdxAPI` 形式记为 "DataAPI.ElTdxAPI"（包成员级引用，
-    本仓库中 ElTdxAPI 为子模块——盘后下载引擎装配点）。
+    `from DataAPI import XXX` 形式记为 "DataAPI.XXX"（包成员级引用）。
     """
     tree = ast.parse(read_src(rel))
     hits = []
@@ -675,10 +674,10 @@ def test_datasource_import_gate(failures):
             bad.append(f"{rel} import 了 {mod}（消费侧须经功能域/引擎，禁止直连 DataAPI）")
 
     # ── 装配点白名单：逐文件精确断言允许的 DataAPI 子模块 ──
-    # AppEngine：TdxAPI 装配 + tqsdk 可用性探测 + ElTdxAPI 盘后下载引擎引用
+    # AppEngine：TdxAPI 装配 + tqsdk 可用性探测
     #            + ThsCloudZxgAPI 同花顺云端自选股（扫描「保存到自选」装配点）
     engine_mods = set(_datasource_imports(os.path.join("App", "AppEngine.py")))
-    engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI", "DataAPI.ElTdxAPI",
+    engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI",
                     "DataAPI.ThsCloudZxgAPI"}
     extra = engine_mods - engine_allow
     if extra:
@@ -689,18 +688,14 @@ def test_datasource_import_gate(failures):
     sse_mods = set(_datasource_imports(os.path.join("App", "AppSSE.py")))
     if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
         bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
-    # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ ElTdxAPI（vipdoc 代码收集）
+    # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ collect_codes_from_vipdoc（vipdoc 代码收集）
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
-    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
-        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/ElTdxAPI，实测: {sorted(refresh_mods)}")
+    if refresh_mods != {"DataAPI.TdxAPI"}:
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI，实测: {sorted(refresh_mods)}")
     # AppScan：仅 TdxAPI.get_index_stocks（板块成分读取）
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
     if scan_mods != {"DataAPI.TdxAPI"}:
         bad.append(f"App/AppScan.py 的 DataAPI import 应仅为 TdxAPI，实测: {sorted(scan_mods)}")
-    # AppDownload：仅 ElTdxAPI（盘后下载域委托引擎装配）
-    dl_mods = set(_datasource_imports(os.path.join("App", "AppDownload.py")))
-    if dl_mods != {"DataAPI.ElTdxAPI"}:
-        bad.append(f"App/AppDownload.py 的 DataAPI import 应仅为 ElTdxAPI，实测: {sorted(dl_mods)}")
     # App/utils：仅 TqSdkAPI（引擎纯函数的 FREQ_SEC_MAP/期货代码解析依赖）
     utils_mods = set(_datasource_imports(os.path.join("App", "utils.py")))
     if utils_mods != {"DataAPI.TqSdkAPI"}:
@@ -713,7 +708,7 @@ def test_datasource_import_gate(failures):
         if len(bad) > 8:
             print(f"        …共 {len(bad)} 处")
     else:
-        print("[PASS] ⑩ 数据源门禁: 消费侧零直连；装配点白名单（Engine/SSE/Refresh/Scan/Download/utils）精确匹配")
+        print("[PASS] ⑩ 数据源门禁: 消费侧零直连；装配点白名单（Engine/SSE/Refresh/Scan/utils）精确匹配")
 
 
 # ═══════════════════════════════════════════════════════════════════════

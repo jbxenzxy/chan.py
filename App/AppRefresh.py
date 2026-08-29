@@ -23,8 +23,7 @@ import traceback
 from App.AppConfig import app_config
 from App.AppData import app_data
 from App.AppLog import get_logger
-from DataAPI import ElTdxAPI as _ElTdx
-from DataAPI.TdxAPI import refresh_block_files
+from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
 
 log = get_logger(__name__)
 
@@ -102,8 +101,8 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 
 
 def _collect_codes_from_vipdoc(vipdoc_dir):
-    """委托 DataAPI/ElTdxAPI（vipdoc_dir 由调用方注入）"""
-    return _ElTdx.collect_codes_from_vipdoc(vipdoc_dir)
+    """委托 DataAPI/TdxAPI（vipdoc_dir 由调用方注入）"""
+    return collect_codes_from_vipdoc(vipdoc_dir)
 
 
 def _fetch_names_from_sina_once(codes_dict):

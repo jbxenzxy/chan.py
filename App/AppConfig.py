@@ -255,10 +255,6 @@ class _AppConfigBase:
         return os.path.join(self.tdx_install_dir, "vipdoc")
 
     @property
-    def download_dir(self) -> str:
-        return os.path.join(self.vipdoc_dir, "eltdx")
-
-    @property
     def tdx_hq_cache(self) -> str:
         return os.path.join(self.tdx_install_dir, "T0002", "hq_cache")
 

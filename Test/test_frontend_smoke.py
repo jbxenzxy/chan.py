@@ -10,7 +10,7 @@ P2-2 补测试缺口 ④ —— 前端 JS 冒烟测试
      （stock-code-input / chart-container / freq-selector / scan-panel）
   ② JS 语法：node --check app.js 通过（零构建下语法错误会直接白屏）
   ③ 全局入口：window 级函数存在（switchFreq / toggleDualWindow /
-     loadStock / startScanZxg / toggleDownloadPanel / toggleStats 等）
+     loadStock / startScanZxg / toggleStats 等）
   ⑤ 事件引用：onclick 内联引用与 window 函数一一对应（防死引用）
 
 注：P1-6 已删除 ChanApp.components 组件注册表（纯写入死结构，仅被本用例
@@ -34,17 +34,16 @@ APP_CSS = os.path.join(FRONTEND_DIR, "app.css")
 # 关键 DOM 元素（阶段 6 组件化后仍须存在）
 REQUIRED_DOM_IDS = [
     "stock-code-input", "chart-container", "freq-selector",
-    "scan-panel", "scan-body", "download-panel", "stats-panel",
+    "scan-panel", "scan-body", "stats-panel",
     "bsp-filter-dialog", "annotation-menu", "annotation-dialog",
 ]
 
 # 全局 window 函数入口（HTML onclick / onchange 直接引用）
 REQUIRED_WINDOW_FUNCS = [
     "switchFreq", "toggleDualWindow", "loadStock", "startScanZxg",
-    "toggleDownloadPanel", "toggleStats", "toggleOverlay",
+    "toggleStats", "toggleOverlay",
     "refreshStockNames", "openBspSettings", "closeBspSettings",
     "saveScanToZxg", "closeScanPanel", "toggleScanMinimize",
-    "startDownload", "stopDownload", "closeDownloadPanel",
     "scanModeDialogConfirm", "scanModeDialogCancel",
     "annotationAdd", "annotationDialogConfirm", "annotationDialogCancel",
     "cancelSelectedPoint", "toggleMirrorMode", "annotationReplayToHere",

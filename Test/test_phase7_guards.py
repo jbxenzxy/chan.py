@@ -111,7 +111,7 @@ def test_lock_policy(failures):
     cat = orch.LOCK_POLICY.get("Scanner.submit_batch_scan", ("", ""))[0]
     if cat != "SCAN_ASYNC":
         bad.append(f"submit_batch_scan 类别应为 SCAN_ASYNC，实际 {cat!r}")
-    # scan_one 保持 SCAN（同步旧径，worker 内每 worker 独立 _scan_lock）
+    # scan_one 保持 SCAN（单票查询，worker 内每 worker 独立 _scan_lock）
     cat1 = orch.LOCK_POLICY.get("Scanner.scan_one", ("", ""))[0]
     if cat1 != "SCAN":
         bad.append(f"scan_one 类别应为 SCAN，实际 {cat1!r}")

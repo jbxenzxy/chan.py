@@ -42,7 +42,6 @@ LAYERS = {
     "ORCH_S":   ("App/AppOrch.py 扫描",     "ScannerService：批量扫描 / 预筛 / 进度"),
     "ORCH_C":   ("App/AppOrch.py 公共",     "跨分区公共工具"),
     "DATA":     ("App/AppData.py",          "业务数据层：缓存 / 持久化 / 标注 / 自选股"),
-    "ELTDX":    ("DataAPI/ElTdxAPI.py",     "盘后下载（设计 8.8 明确的函数族）"),
     "DAPI":     ("DataAPI/ 抽象层",         "数据源抽象 / 元数据（阶段 5 提升）"),
     "TDXHY":    ("App/tdxhy_mapping_data.py", "行业映射读取接口（阶段 5 随数据文件同迁 App/，设计 8.8）"),
     "CFG":      ("App/AppConfig + ChanConfig", "配置中心（路径常量 / 算法参数构造）"),
@@ -52,31 +51,19 @@ LAYERS = {
 # 处置阶段（迁移发生在哪个阶段）
 PHASE_OF = {
     "FE": "3a/3b", "ORCH_E": "3", "ORCH_F": "3/5", "ORCH_S": "3/7",
-    "ORCH_C": "3", "DATA": "4", "ELTDX": "5", "DAPI": "5", "TDXHY": "5",
+    "ORCH_C": "3", "DATA": "4", "DAPI": "5", "TDXHY": "5",
     "CFG": "2→4", "RETIRE": "9/10",
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# ① 函数 → 目标（61 项，须与代码一一对应）
+# ① 函数 → 目标（48 项，须与代码一一对应）
 #    值：(层代号, 说明)
 # ═══════════════════════════════════════════════════════════════════
 TARGET_FUNCS = {
-    # ── 盘后下载族 → DataAPI/ElTdxAPI.py（设计 8.8 点名 8 函数 + 下载专用工具，
-    #    阶段 5 已物理迁入 ElTdxAPI，check/build_map 扫描 ElTdxAPI.py 合并）──
-    "_tdx_day_record":        ("ELTDX", "日线 .day 记录构造（纯）"),
-    "_tdx_min_record":        ("ELTDX", "分钟 .lc1/.lc5 记录构造（纯）"),
-    "_date_to_int":           ("ELTDX", "日期→pytdx int（仅下载族调用）"),
-    "_date_to_min_packed":    ("ELTDX", "分钟打包 int（仅 _download_min_kline 调用）"),
-    "_ensure_dir":            ("ELTDX", "安全 mkdir（仅下载族调用）"),
-    "_download_day_kline":    ("ELTDX", "日线下载（纯，client 注入）"),
-    "_download_min_kline":    ("ELTDX", "分钟下载（纯，client 注入）"),
-    "_download_task":         ("ELTDX", "下载任务体（读 _download_state/_download_lock）"),
-    "_start_download":        ("ELTDX", "启动下载线程（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
-    "_stop_download":         ("ELTDX", "中止下载（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
-    "_get_download_status":   ("ELTDX", "下载进度查询（ElTdxAPI 实现；AppEngine 兼容壳已随阶段 8 瘦身删除）"),
-    "collect_codes_from_vipdoc": ("ELTDX", "从 vipdoc 收集代码（公开API，不含下划线前缀）"),
-    "_collect_codes_from_vipdoc": ("ELTDX", "✓5 兼容壳 → ElTdxAPI.collect_codes_from_vipdoc"),
-    "verify_eltdx_api":       ("ELTDX", "eltdx 版本探测（_download_task 下载前调用，保证新版 API）"),
+
+    # vipdoc 代码收集（「盘后下载」功能已移除，collect_codes_from_vipdoc 归位
+    # DataAPI/TdxAPI.py；AppEngine 兼容壳仍转发之）
+    "_collect_codes_from_vipdoc": ("DAPI", "✓5 兼容壳 → DataAPI/TdxAPI.collect_codes_from_vipdoc"),
 
     # ── 消费侧：指标计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
@@ -126,7 +113,7 @@ TARGET_FUNCS = {
 }
 
 # ═══════════════════════════════════════════════════════════════════
-# ② 状态 → 收敛目标（56 项）
+# ② 状态 → 收敛目标（51 项）
 # ═══════════════════════════════════════════════════════════════════
 TARGET_STATES = {
     # 阶段 2 已中心化的别名（常量=app_config 派生；保留只读直至下线，_verify_config_consistency 守护）
@@ -153,13 +140,6 @@ TARGET_STATES = {
     # 获取侧状态（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）
 
     # 扫描状态（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）
-
-    # 盘后下载状态 → ElTdxAPI 类字段
-    "_download_state": ("ELTDX", "下载状态 dict（4 函数共用）→ ElTdxAPI 类字段"),
-    "_download_lock":  ("ELTDX", "下载锁 → ElTdxAPI 类字段"),
-    "_ELTDX_AVAILABLE": ("ELTDX", "eltdx 可用旗（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
-    "_ELTDX_REQUIRED_PYPI": ("ELTDX", "eltdx 最低版本串（verify_eltdx_api 报错提示用）"),
-    "TdxClient":        ("ELTDX", "eltdx 客户端类（阶段 5 兼容壳别名 → ElTdxAPI 模块级）"),
 
     # 消费侧常量
     "FREQ_TO_COL":     ("ORCH_E", "freq→选点列（6 读）→ 消费侧常量"),
@@ -237,9 +217,6 @@ TARGET_ROUTES = {
     "api_stocks_read_annotation": ("FE", "✓REST GET /api/stocks/{code}/read/annotation → FrontAPI + AppOrch.get_annotations"),
     "api_stocks_save_annotation": ("FE", "✓REST POST /api/stocks/{code}/save/annotation → FrontAPI + AppOrch.handle_annotation_action"),
     "api_stocks_scan_annotation": ("FE", "✓REST GET /api/stocks/scan/annotation → FrontAPI + AppOrch.get_annotated_codes"),
-    "api_stocks_download_start": ("FE", "✓REST POST /api/stocks/download/start → FrontAPI + AppOrch.start_download_checked（GET+POST 双入口已合并）"),
-    "api_stocks_download_read_status": ("FE", "✓REST GET /api/stocks/download/read/status → FrontAPI + AppOrch.get_download_status"),
-    "api_stocks_download_cancel": ("FE", "✓REST POST /api/stocks/download/cancel → FrontAPI + AppOrch.stop_download"),
     "api_health": ("FE", "✓REST GET /api/health → FrontAPI 健康探活（meta 路由，v5 定稿补 api_ 前缀）"),
     "app_error_handler": ("FE", "✓3a AppError 统一处理器已迁 FrontAPI（兼容壳经别名共享）"),
 }
@@ -270,12 +247,6 @@ def build_map():
     auto = analyze()
     funcs, states = auto["funcs"], auto["states"]
 
-    # 阶段 5：同时扫描 DataAPI/ElTdxAPI.py，合并其函数与状态
-    eltdx_path = os.path.join(REPO_ROOT, "DataAPI", "ElTdxAPI.py")
-    if os.path.exists(eltdx_path):
-        auto_eltdx = analyze(eltdx_path)
-        funcs.update(auto_eltdx["funcs"])
-        states.update(auto_eltdx["states"])
     waves = compute_waves(funcs)
 
     # 波次内排序：被依赖多者优先
@@ -331,13 +302,6 @@ def check(update=False):
     failures = []
     auto = analyze()
     funcs, states = auto["funcs"], auto["states"]
-
-    # 阶段 5：同时扫描 DataAPI/ElTdxAPI.py，合并其函数与状态
-    eltdx_path = os.path.join(REPO_ROOT, "DataAPI", "ElTdxAPI.py")
-    if os.path.exists(eltdx_path):
-        auto_eltdx = analyze(eltdx_path)
-        funcs.update(auto_eltdx["funcs"])
-        states.update(auto_eltdx["states"])
 
     # ① 完备性：无孤儿
     orphan_f = sorted(set(funcs) - set(TARGET_FUNCS))

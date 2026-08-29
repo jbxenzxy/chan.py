@@ -32,7 +32,7 @@ CI / 迁移每阶段的验收门禁）。
  15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
  16. 阶段 5 成果防护   test_phase5_guards.py         获取侧抽象完善：tdxhy 迁 App/统一加载/
-                                                     盘后下载收敛 ElTdxAPI/元数据接口提升/
+                                                     元数据接口提升/
                                                      AppOrch 委托/fetch_kline 抽象
  17. 阶段 6 成果防护   test_phase6_guards.py         前端组件化：组件区块/KLineChart 契约/
                                                      window API 面冻结/事件引用/零构建/

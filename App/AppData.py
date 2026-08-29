@@ -1438,8 +1438,9 @@ class AppData:
         """清空股票分析 LRU 缓存（持 _cache_lock，线程安全），返回清除条数
 
         P0-3 后调用方为：下载完成回调（AppDownload.stocks_cache_clear →
-        on_finish）；扫描面板关闭（Scanner.clear_cache）已不再清池
-        （返回 cleared=0，缓存由 LRU 自然淘汰）。与 futures_cache_clear 同模式。
+        on_finish，该回调已随「盘后下载」功能移除）；扫描面板关闭
+        （Scanner.clear_cache）已不再清池（返回 cleared=0，缓存由 LRU
+        自然淘汰）。与 futures_cache_clear 同模式。
         """
         with self._cache_lock:
             n = len(self._stocks_analysis_cache)

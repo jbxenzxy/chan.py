@@ -179,16 +179,9 @@ except ImportError:
 # ============================================================
 
 # ============================================================
-# 盘后数据下载引擎（基于 eltdx）—— 实现位于 DataAPI/ElTdxAPI.py
-# 下载函数族与下载状态单一事实源在 ElTdxAPI，本模块共享其引用。
+# 通达信本地文件辅助（vipdoc 代码收集等；实现位于 DataAPI/TdxAPI.py）
 # ============================================================
-from DataAPI import ElTdxAPI as _ElTdx
-_ELTDX_AVAILABLE = _ElTdx._ELTDX_AVAILABLE
-TdxClient = _ElTdx.TdxClient
-
-# 下载状态管理（单一事实源：ElTdxAPI 模块级对象，本模块共享同一引用）
-_download_state = _ElTdx._download_state
-_download_lock = _ElTdx._download_lock
+from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 
 
 # ============================================================
@@ -240,8 +233,8 @@ def _get_index_belong(market, code):
 
 
 def _collect_codes_from_vipdoc(vipdoc_dir):
-    """委托 DataAPI/ElTdxAPI 收集 vipdoc 目录证券代码（vipdoc_dir 由调用方注入）"""
-    return _ElTdx.collect_codes_from_vipdoc(vipdoc_dir)
+    """委托 DataAPI/TdxAPI 收集 vipdoc 目录证券代码（vipdoc_dir 由调用方注入）"""
+    return _collect_from_vipdoc(vipdoc_dir)
 
 
 # ============================================================

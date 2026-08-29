@@ -57,12 +57,6 @@
                 <button class="btn active" id="btn-zs" onclick="toggleOverlay('zs')">中枢</button>
                 <button class="btn active" id="btn-bsp" onclick="toggleOverlay('bsp')">买卖点</button>
             <button class="btn" id="btn-amo" onclick="toggleAmoPanel()" title="市场量能（仅上证指数日K可用）">市场量能</button>
-            <!--
-                盘后数据下载按钮：当前暂不可用（临时置灰）。
-                禁止删除本按钮或相关代码（toggleDownloadPanel / 下载面板 / eltdx 逻辑），
-                后续需要时仅需移除本行 disabled 属性即可恢复。功能本身保留完好。
-            -->
-            <button class="btn" id="btn-download" onclick="toggleDownloadPanel()" title="盘后数据下载（暂不可用）" disabled>盘后下载</button>
             <button class="btn" id="btn-scan" onclick="startScanZxg()" title="扫描股票买卖点">股票扫描</button>
             <button class="btn" id="btn-stats" onclick="toggleStats()">统计</button>
             <button class="btn-icon" id="btn-refresh" title="刷新股票名称、板块文件、PE-TTM和指数归属" onclick="refreshStockNames()">
@@ -122,41 +116,6 @@
             <div class="amo-empty" id="amo-empty" style="display:none;">当前视口区间无成交额数据</div>
         </div>
     </div>
-    <!-- 盘后数据下载面板 -->
-    <div class="download-panel-overlay" id="download-panel-overlay" onclick="if(event.target===this)closeDownloadPanel()"></div>
-    <div class="download-panel" id="download-panel">
-        <div class="download-panel-header">
-            <span class="download-panel-title">盘后数据下载</span>
-            <span class="download-panel-close" onclick="closeDownloadPanel()">×</span>
-        </div>
-        <div class="download-panel-body">
-            <div class="download-section">
-                <div class="download-section-title">日线（默认5年前）</div>
-                <input type="date" class="download-date-input" id="dl-day-start">
-            </div>
-            <div class="download-section">
-                <div class="download-section-title">分钟线（默认6个月前）</div>
-                <input type="date" class="download-date-input" id="dl-min-start">
-            </div>
-            <div class="download-section">
-                <div class="download-section-title">沪深京市场</div>
-                <label class="download-check"><input type="checkbox" id="dl-hsj-day" checked=""> 日线 (.day)</label>
-                <label class="download-check"><input type="checkbox" id="dl-hsj-5m" checked=""> 5分钟 (.lc5)</label>
-            </div>
-            <div class="download-progress-wrap" id="download-progress-wrap" style="display:none;">
-                <div class="download-progress-bar">
-                    <div class="download-progress-fill" id="download-progress-fill"></div>
-                </div>
-                <div class="download-progress-text" id="download-progress-text">0%</div>
-            </div>
-            <div class="download-status" id="download-status"></div>
-            <div class="download-btns">
-                <button class="download-btn primary" id="dl-btn-start" onclick="startDownload()">开始下载</button>
-                <button class="download-btn" id="dl-btn-stop" onclick="stopDownload()" style="display:none;">停止下载</button>
-                <button class="download-btn" onclick="closeDownloadPanel()">关闭</button>
-            </div>
-        </div>
-    </div>
     <!-- 红框调试面板（已暂时注释禁用，2026-08-26；需要时解开本注释即可恢复显示） -->
     <!--
     <div class="redframe-debug" id="redframe-debug" style="position:fixed;bottom:10px;right:10px;background:#1a1a2e;color:#fff;border:1px solid #e94560;border-radius:4px;padding:6px 10px;font-size:11px;font-family:monospace;z-index:9999;display:none;max-width:320px;pointer-events:none;">
@@ -190,7 +149,7 @@
         </div>
     </div>
     <!-- 股票扫描模式选择对话框 -->
-    <!-- 点击弹窗之外的区域等价于点击"取消"（与盘后下载面板一致：遮罩本身触发取消） -->
+    <!-- 点击弹窗之外的区域等价于点击"取消"（遮罩本身触发取消） -->
     <div class="annotation-dialog" id="scan-mode-dialog" onclick="if(event.target===this)scanModeDialogCancel()">
         <div class="annotation-dialog-box">
             <div class="annotation-dialog-title">股票扫描</div>
