@@ -18,6 +18,7 @@ fetch_main_level 提供）；本模块是 TdxAPI 前复权流水线依赖的下�
 """
 import threading
 import logging
+import time
 
 import pandas as pd
 from datetime import datetime
@@ -28,6 +29,12 @@ _xdxr_lock = threading.Lock()
 
 # xdxr 独立缓存：key=(market, code)，同一股票跨周期不重复拉取
 _xdxr_cache = {}
+
+# 失败退避：key=(market, code) → 上次失败时刻(epoch)。
+# eltdx 接口失败时不写负缓存（保可重试），但用短 TTL 抑制高频重试与刷屏：
+# 同股票的失败在 XDXR_RETRY_TTL 秒内直接快速返回 None，逾期后再重试并重新报错。
+XDXR_RETRY_TTL = 60
+_xdxr_fail_ttl = {}
 
 
 # ============================================================
@@ -415,10 +422,15 @@ def get_xdxr_data(market, code):
     cache_key = (market, code)
     with _xdxr_lock:
         if cache_key in _xdxr_cache:
-            cached = _xdxr_cache[cache_key]
-            return cached
+            return _xdxr_cache[cache_key]
 
-        # 与 TdxAPI 解耦后：仅 eltdx 单一数据源。失败显著上报，不静默降级。
+        # 失败退避：eltdx 刚失败过（TTL 内）不再重试，快速返回 None，避免反复触发
+        # 10s 超时 + 重复报错；逾期后自然重试并重新显著报错。
+        _last_fail = _xdxr_fail_ttl.get(cache_key)
+        if _last_fail is not None and time.time() - _last_fail < XDXR_RETRY_TTL:
+            return None
+
+        _failed = False
         for _src_name, _src_fn in (
             ("eltdx", _get_xdxr_eltdx),
             # ("mootdx", _get_xdxr_mootdx),
@@ -428,17 +440,25 @@ def get_xdxr_data(market, code):
                 df = _src_fn(market, code)
             except Exception as _e:
                 # 网络 / 接口（含 _check_eltdx_api_compat 的 RuntimeError 升级指引）异常：显著上报
-                log.error("[xdxr] 仅 eltdx：%s 取数失败(market=%s, code=%s): %s",
+                _failed = True
+                log.error("[xdxr] %s 取数失败(market=%s, code=%s): %s",
                           _src_name, market, code, _e)
-                # 异常不写缓存：下次调用可重试，避免一次网络抖动在本进程内永久不复权
-                return None
+                # 回退链：continue 尝试下一数据源——取消对应注释即可恢复 mootdx/pytdx 三级回退
+                continue
             if df is not None and len(df) > 0:
+                _xdxr_fail_ttl.pop(cache_key, None)   # 取数成功：清除失败退避记录
                 _xdxr_cache[cache_key] = df
                 return df
-            # df is None = 该股票无除权除息记录（正常空结果），且已无更多回退数据源：
-            # 走 info，避免全市场扫描被「历史上无除权」的正常情况刷满 ERROR。
-            log.info("[xdxr] %s: %s 无除权除息记录（正常空结果；接口/网络异常会另行上报 error）",
-                     market, code)
-            # 空结果照常缓存，避免同一股票重复查询
-            _xdxr_cache[cache_key] = None
+            # df is None：该源无记录，继续尝试下一数据源
+            continue
+
+        if _failed:
+            # 至少一个源异常且无成功数据：记录失败时刻用于退避、不写负缓存（保留可重试）
+            _xdxr_fail_ttl[cache_key] = time.time()
             return None
+        # 所有数据源均空结果 = 该股历史上无除权除息（正常空结果）：走 info，避免全市场
+        # 扫描被「历史上无除权」刷满 ERROR；缓存 None 避免重复查询。
+        log.info("[xdxr] %s: %s 无除权除息记录（正常空结果；网络/接口异常会另行上报 error）",
+                 market, code)
+        _xdxr_cache[cache_key] = None
+        return None
