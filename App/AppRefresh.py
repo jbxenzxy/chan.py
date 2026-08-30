@@ -711,13 +711,15 @@ def refresh_stock_names():
 def refresh_stock_names_async():
     """异步启动股票名称刷新（不阻塞请求线程）
 
-    running 的「检查 + 置位」在同一把锁内完成（CAS）：否则两个并发 POST
-    /api/stocks/refresh 都能通过检查，各起一条刷新线程同时改同一批缓存。
+    仅做「快速预检查」：running 已为 True 时直接返回 already_running，避免再起一条
+    注定被守卫拦截的线程。真正的 CAS（检查 + 置位）由装饰器 _reset_refresh_running
+    包裹的 _refresh_stock_names 在子线程内完成，finally 中无条件复位，保证 running
+    不会卡死。注意：此处【不得】提前把 running 旗置为 True —— 否则子线程进入被装饰函数
+    时守卫已见 running=True 而早退，刷新正文永不执行且 running 永久卡死。
     """
     with _refresh_state_lock:
         if _refresh_status["running"]:
             return {"status": "already_running", **_refresh_status}
-        _refresh_status["running"] = True
 
     def _do_refresh():
         try:

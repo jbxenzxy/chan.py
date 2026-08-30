@@ -299,11 +299,51 @@ def test_removed_symbols():
           st is not r._refresh_status and isinstance(st, dict))
 
 
+def test_refresh_running_cas():
+    """防回潮：refresh_stock_names_async 不得提前置 running，正文须执行且复位。
+
+    回归背景：曾误在 async 包装器（线程启动前）写 _refresh_status["running"] = True，
+    导致子线程进入被 _reset_refresh_running 装饰的 _refresh_stock_names 时，CAS 守卫
+    见 running 已为 True 而早退（未进 try/finally），刷新正文永不执行且 running 永久
+    卡死，所有 /api/stocks/refresh 误报 already_running。修复后即"只检查、置位/复位
+    全交给装饰器在子线程内完成"。
+    """
+    import inspect
+    import App.AppRefresh as r  # noqa: E402
+
+    src = inspect.getsource(r.refresh_stock_names_async)
+    check("async 包装器内无过早置位 _refresh_status['running'] = True",
+          '_refresh_status["running"] = True' not in src)
+
+    entered = {"v": False}
+
+    def fake():
+        entered["v"] = True
+        time.sleep(0.15)
+        return "done"
+
+    saved = r._refresh_stock_names
+    r._refresh_stock_names = r._reset_refresh_running(fake)
+    try:
+        r._refresh_status["running"] = False
+        r._refresh_status["step"] = ""
+        res = r.refresh_stock_names_async()
+        check("refresh_stock_names_async 返回 started", res.get("status") == "started")
+        time.sleep(0.5)
+        st = r.refresh_status()
+        check("刷新正文确实执行（未被守卫早退拦截）", entered["v"] is True)
+        check("刷新结束后 running 复位为 False（无卡死）", st["running"] is False)
+    finally:
+        r._refresh_stock_names = saved
+        r._refresh_status["running"] = False
+
+
 if __name__ == "__main__":
     test_tdx_thread_local()
     test_replay_flag()
     test_appdata_locks()
     test_removed_symbols()
+    test_refresh_running_cas()
     failed = [n for n, ok, _ in results if not ok]
     print("\n" + "=" * 60)
     print(f"共 {len(results)} 项断言，失败 {len(failed)} 项")
