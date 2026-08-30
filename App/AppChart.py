@@ -365,14 +365,19 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     normalized_code = code.strip().upper()
 
     # ── 期货双窗口 ──
+    # 审计 P0-2（残留漏点）：缓存里存的是**活着的 CChan**。futures_cache_get
+    # 只在「取指针」这一瞬间持容器锁，随后 `kl_list.bi_list` 的遍历完全在锁外
+    # ——写侧（SSE 线程）每根K线 _drain_chan → step_load → do_init 把
+    # chan.kl_datas 整条替换成新的空 CKLine_List 再回填，读者可能正落在该空窗。
+    # 改为：持对象图锁 → 锁内 list(bi_list) 浅拷贝成快照 → 出锁遍历
+    # （do_init 整体替换，旧 CBi 不再被就地改写，浅拷贝即等价于不可变快照）。
     if normalized_code.startswith("KQ."):
         cache_key = make_futures_sub_key(normalized_code, sub_freq)
-        cached = app_data.futures_cache_get(cache_key)
-        if cached is None:
-            raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
-        chan = cached
-        kl_list = chan[_m._get_kl_type(sub_freq)]
-        bi_list = kl_list.bi_list
+        with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
+            if sub_chan is None:
+                raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
+            kl_list = sub_chan[_m._get_kl_type(sub_freq)]
+            bi_list = list(kl_list.bi_list)
         date_fmt = _m._get_date_fmt(sub_freq)
         start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
         if start_bi is None:
