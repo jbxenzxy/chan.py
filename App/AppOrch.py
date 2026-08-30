@@ -90,8 +90,10 @@ SHARED_RESOURCE_REGISTRY = {
         "stocks_sub_cache_*，每个入口各自持锁。"),
     "futures_analysis_cache": (
         "进程内", "AppData._futures_cache_lock (RLock)", "SSE 写 / REST 读、清",
-        "期货下窗 CChan。独立成锁：访问者是 SSE 常驻线程（高频写、生命周期"
-        "以分钟计），不应与 REST 的毫秒级缓存操作抢同一把锁。"),
+        "期货下窗 CChan。独立成锁：不应与 REST 的毫秒级缓存操作抢同一把锁。"
+        "【v6 更正】写者不是「SSE 常驻线程」——starlette 对同步生成器是**每帧"
+        "一次独立的 anyio.to_thread.run_sync**，SSE 帧就跑在普通线程池线程上，"
+        "与连接无绑定，不要据此推导任何免锁结论。"),
     "user_store_files": (
         "进程内 + 文件", "AppData._user_store_lock (RLock) + 原子落盘",
         "REST / worker（只读加载）",
@@ -108,8 +110,41 @@ SHARED_RESOURCE_REGISTRY = {
         "批量扫描结果。跨进程资源**不能**用 threading.Lock 保护，真正生效的"
         "是 SQLite 自身的 WAL 与写重试。"),
     "refresh_status": (
-        "进程内", "AppRefresh._refresh_state_lock", "REST / 刷新工作线程",
-        "刷新进度字典；running 的「检查 + 置位」必须在锁内完成（CAS）。"),
+        "进程内", "AppRefresh._refresh_state_lock（写经 _set_refresh_status）",
+        "REST / 刷新工作线程",
+        "刷新进度字典；running 的「检查 + 置位」必须在锁内完成（CAS）。"
+        "v6 修正：原先**只有读者**持锁、写者全裸写，属「看起来有锁」——"
+        "现已收敛到 _set_refresh_status，读快照与写真正互斥。"),
+    # ── v6 补登记（v5 漏项，见 Docs/chan_lock_audit_v6.md）────────────
+    "meta_caches（_names / _pe / _belong）": (
+        "进程内", "AppData._meta_cache_lock (RLock)", "REST / 刷新工作线程 / 扫描线程",
+        "股票名称 / PE-TTM / 指数归属三张惰性表。v5 **完全未登记**：写者是刷新"
+        "线程（replace_names / replace_index_belong 的 clear()+update()），读者"
+        "是全部 REST 与扫描线程。点查（.get）在 CPython 下原子，**遍历不安全**"
+        "——遍历一律经 names_snapshot() / pe_snapshot() / belong_snapshot()。"
+        "惰性加载改为「先填本地字典、整体提交后才置 loaded 旗」+ 双检锁，"
+        "杜绝并发读者拿到半成品（原实现先置位后填充，且 flag 一旦为真本轮不再重试）。"),
+    "scan_skip_log": (
+        "进程内", "AppScan._scan_skip_log_lock（经 append/clear/snapshot/count 访问器）",
+        "REST / 扫描收割线程",
+        "扫描跳过明细列表。v5 **整个漏登**：追加者是收割线程，清空/遍历/计数"
+        "者是 REST 线程。list.append 原子，但 clear 与「len + 遍历」的组合不原子，"
+        "清空插进遍历中途会让明细整批丢失或串批次——不抛异常，故长期无人发现。"),
+    "futures_sub_chan 对象图": (
+        "进程内", "AppData._futures_chan_locks（按 key 的 RLock）+ _futures_cache_lock",
+        "SSE（写） / REST（读）",
+        "期货下窗 CChan。容器由 _futures_cache_lock 保护，但**缓存里存的是活着的"
+        "对象图**：SSE 每根K线 step_load→do_init 就地清空重建 kl_datas，容器锁护"
+        "不住读取方拿到指针之后的遍历。故按 key 单列对象图锁，让「SSE 重建」与"
+        "「REST 遍历」互斥；读取方临界区压到最小（锁内只做 list(bi_list) 浅拷贝）。"),
+    "zxg.blk（跨进程）": (
+        "跨进程", "AppData._user_store_lock + file_lock（OS 级）+ 原子落盘",
+        "REST / 独立同步脚本进程",
+        "v6 修正：原登记表称「由 _user_store_lock + 原子落盘保护」，但生产路由"
+        "走的 save_to_zxg_blk 是**无锁非原子追加**；且另一写者 sync_zxg_blk 跑在"
+        "**独立脚本进程**里，threading.Lock 对它天然无效——正是 §1.2 点名的最危险"
+        "误用，只是它出现在文件层而没被识别。现已统一为读-改-写 + 原子落盘，"
+        "并叠加 OS 级文件锁覆盖跨进程场景。"),
     "xdxr_cache": (
         "进程内", "DataAPI.TdxAPI._xdxr_lock", "REST / worker（各进程独立）",
         "除权除息缓存，DataAPI 内部，与本层正交。"),
@@ -127,7 +162,11 @@ SHARED_RESOURCE_REGISTRY = {
     "CChan / TqApi / CTqSdkSession": (
         "每连接局部", "无需锁", "SSE",
         "SSE 每连接独立 TqApi + CChan + 记录缓存（session_context 绑定）。"
-        "注意这不代表 SSE 线程与 REST 线程隔离——app_data 仍然共享。"),
+        "注意这不代表 SSE 线程与 REST 线程隔离——app_data 仍然共享。"
+        "【v6 更正】绑定方式必须是**逐帧重绑定**（AppSSE._per_frame_session）："
+        "每帧一次独立线程派发，生成器入口 `session_set` 一次只能覆盖第一帧，"
+        "实测 6 连接×12 帧有 4/6 跨线程、28 帧读到别人会话。且**不可用 "
+        "contextvars 替代**（run_sync 在上下文副本里执行，帧内 set 不回传）。"),
     "app_config / vipdoc .day / FREQ_SEC_MAP": (
         "只读共享", "无需锁（无写者）", "全部",
         "启动后只读。判断标准是「有没有写者」，不是「是不是共享」。"),

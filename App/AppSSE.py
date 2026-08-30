@@ -240,8 +240,54 @@ def _truncate_records_by_end(records, end_time, freq_sec, step=None, fmt_list=No
     return recs
 
 
+def _per_frame_session(gen, src):
+    """SSE 生成器的「逐帧重绑定会话」包装（审计 P0-1，见
+    Docs/chan_lock_audit_v6.md 前提 A）。
+
+    为什么需要它：starlette 对**同步生成器**是「每帧一次独立的
+    `anyio.to_thread.run_sync`」（starlette/concurrency.py:57）——线程与
+    连接之间**没有任何绑定关系**。因此「生成器入口 `session_set(src)` 一次」
+    只能覆盖第一帧。实测 6 条并发连接 × 12 帧：4/6 发生跨线程迭代，
+    28 帧读到**别的连接**的线程局部会话。后果分两种：
+      · 落在没绑定过的线程 → CTqSdkAPI 回退到自己的空缓存 → 建链无数据；
+      · 落在别的连接刚跑过的线程 → 读到别人的记录缓存 → **串品种**。
+    实时循环每根K线的 `_drain_chan → step_load` 每次都会新建 CTqSdkAPI
+    并读线程局部，且它位于 heartbeat 帧 `yield` 之后，是命中率最高的位置。
+
+    本包装在**每一次 next() 派发**上重新绑定本连接会话，并用
+    `session_context` 在帧体结束后还原该线程的旧值——既不丢绑定，也不把
+    会话残留在线程池的公共线程上。
+
+    ⚠ 不可用 contextvars 替代 threading.local：`run_sync` 在调用方上下文
+    的**副本**中执行，帧内 `set()` 不会回传，同一条线程第 2 帧即丢值
+    （实测），会把「偶发失配」变成「必然失配」。
+    """
+    while True:
+        with session_context(src):
+            try:
+                item = next(gen)
+            except StopIteration:
+                return
+        # 帧体跑完、会话已还原后才把这一帧交给框架推送：
+        # 推送过程不需要会话，且避免在公共线程上留下会话残留。
+        yield item
+
+
 def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None, source=None):
-    """期货 SSE 单窗口 · 同步生成器
+    """期货 SSE 单窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
+
+    注意：本函数是**普通函数**（不是生成器）——会话必须在开始迭代之前就
+    建好，`_per_frame_session` 才能在每一帧上重新绑定它。`CTqSdkSession()`
+    构造只做实例级初始化（TqApi 在 `src.connect()` 内才创建，此处无网络
+    I/O），故提前创建没有副作用。
+    """
+    src = source if source is not None else CTqSdkSession()
+    return _per_frame_session(
+        _sse_single_gen(symbol, freq, start_time, end_time, src), src)
+
+
+def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=None):
+    """期货 SSE 单窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
     init（初始快照/失败载荷）→ 实时循环（heartbeat 注释帧 + update 事件：
@@ -255,8 +301,10 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     log.info("SSE 单窗口连接: symbol=%s freq=%s", symbol, freq)
 
     src = source if source is not None else CTqSdkSession()
-    # P0-1 修复：会话上下文覆盖整个生成器——实时循环每根K线 step_load
-    # 会重建 CChan 数据源（CTqSdkAPI 实例），须经线程局部绑定本连接缓存。
+    # 入口这次绑定保留：覆盖第一帧，以及「本生成器被直接调用、未经
+    # _per_frame_session 包装」的场景。**跨帧保障由 _per_frame_session
+    # 负责**——审计 P0-1：starlette 每帧独立线程派发，入口一次绑定覆盖
+    # 不到后续帧（实测 4/6 连接跨线程迭代）。
     session_set(src)
 
     display_key = None
@@ -615,7 +663,18 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
 
 
 def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
-    """期货 SSE 双窗口 · 同步生成器
+    """期货 SSE 双窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
+
+    与 sse_futures_stream_single 同构：普通函数（非生成器），会话提前建好
+    后交给 _per_frame_session 逐帧重绑定（审计 P0-1）。
+    """
+    src = source if source is not None else CTqSdkSession()
+    return _per_frame_session(
+        _sse_dual_gen(symbol, main_freq, sub_freq, start_time, end_time, src), src)
+
+
+def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
+    """期货 SSE 双窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
     两个独立 CChan 对象、一次连接推送两个周期（下窗先处理——区间套分析
@@ -629,8 +688,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
              symbol, main_freq, sub_freq)
 
     src = source if source is not None else CTqSdkSession()
-    # P0-1 修复：会话上下文覆盖整个双窗生成器（上下窗共用同一 src，
-    # 实时循环两窗 step_load 重建数据源均须绑定本连接缓存）。
+    # 入口这次绑定保留：覆盖第一帧与「直接调用本体」场景；跨帧保障由
+    # _per_frame_session 负责（审计 P0-1：starlette 每帧独立线程派发）。
     session_set(src)
 
     from datetime import datetime
@@ -731,6 +790,12 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         sub_kl_type = _get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
         app_data.set_futures_sub_chan(symbol, sub_freq, sub_chan)
+        # 下窗「对象图锁」（审计 P0-2）：缓存里存的是**活着的 CChan**，实时
+        # 循环每根K线 _drain_chan → step_load → do_init 会就地清空重建
+        # kl_datas，而 REST 侧读取方拿到指针后在锁外遍历 bi_list。容器锁只
+        # 护「取指针」护不住对象图，故取一把按 key 稳定的锁，让重建与遍历
+        # 互斥（读取方见 BSPointList.check_nested_diver）。
+        _sub_chan_lock = app_data.futures_sub_chan_lock(symbol, sub_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
                   f"笔={len(sub_chan[sub_kl_type].bi_list)}, 中枢={len(sub_chan[sub_kl_type].zs_list)}")
@@ -849,8 +914,17 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # ---- 定义单窗口K线处理函数（避免 continue 跳过另一个窗口） ----
         def _process_one_window(klines, chan, kl_type, freq_sec, freq_label,
                                       cached_snapshot, last_bar_dt_ns, last_processed_dt_ns,
-                                      is_main, window_label):
-            """处理单个窗口的K线检测，返回 (updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, need_tick)"""
+                                      is_main, window_label, chan_lock=None):
+            """处理单个窗口的K线检测，返回 (updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, need_tick)
+
+            chan_lock：该窗口 CChan **对象图**的锁（审计 P0-2）。
+            下窗 CChan 经 set_futures_sub_chan 发布进共享缓存供 REST 读取，
+            而 `_drain_chan → step_load → do_init` 会**就地清空重建**
+            kl_datas；缓存 dict 的锁（_futures_cache_lock）只护住「取指针」
+            这一瞬间，护不住读取方拿到指针之后的遍历——正好撞在 do_init
+            之后、回填之前就读到空 bi_list。故重建必须与读取方互斥。
+            上窗 CChan 不进共享缓存（连接私有），传 None 即可。
+            """
             nonlocal last_debug_print, last_perf_print, loop_count, tick_count, step_count
             nonlocal t_wait_total, t_tick_total, t_step_total, t_snapshot_total, t_push_total
             if len(klines) == 0:
@@ -987,7 +1061,12 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 src.append_bar(new_bar, code_key)
                 t_step_start = time.time()
                 try:
-                    _drain_chan(chan)
+                    if chan_lock is not None:
+                        # 与 REST 侧读取方的遍历互斥（审计 P0-2）
+                        with chan_lock:
+                            _drain_chan(chan)
+                    else:
+                        _drain_chan(chan)
                 except Exception as e:
                     log.info(f"[{display_key}] {window_label} step_load 异常: {e}")
                 t_step = time.time() - t_step_start
@@ -1054,12 +1133,14 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
                 continue
 
             # 处理下窗（次级别优先：区间套分析需先分析次级别）
+            # 传下窗对象图锁：该 CChan 已发布进共享缓存，重建须与 REST 读取互斥
             sub_updated, sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns, sub_need_tick = \
                 _process_one_window(sub_klines, sub_chan, sub_kl_type, sub_freq_sec, sub_freq_label,
                                           sub_cached_snapshot, sub_last_bar_dt_ns, sub_last_processed_dt_ns,
-                                          is_main=False, window_label="下窗")
+                                          is_main=False, window_label="下窗",
+                                          chan_lock=_sub_chan_lock)
 
-            # 处理上窗
+            # 处理上窗（连接私有，不进共享缓存，无需对象图锁）
             main_updated, main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns, main_need_tick = \
                 _process_one_window(main_klines, main_chan, main_kl_type, main_freq_sec, main_freq_label,
                                           main_cached_snapshot, main_last_bar_dt_ns, main_last_processed_dt_ns,

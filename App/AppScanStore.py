@@ -100,6 +100,14 @@ class ScanStore:
         注意：必须在 executescript(_SCHEMA) 之前探测旧 schema——旧表
         scan_results 无 seq 列，若先执行 _SCHEMA 的 CREATE INDEX 会抛
         "no such column: seq"。
+
+        ⚠ 已知边界（审计 P2，此处不改，仅记录）：下面的 `self._init_lock`
+        是 threading.Lock，只在**进程内**有效。真正兜住多进程并发的是
+        SQLite 的 WAL + busy_timeout + 幂等 DDL，不是这把锁。当前生产时序
+        是「父进程先建库、worker 后启动」，所以两个进程不会同时跑 DROP
+        TABLE 分支——**这是靠时序，不是靠锁**。若哪天改成 worker 自初始化，
+        必须改用 SQLite 事务（把探测 + DROP + CREATE 包进同一个
+        BEGIN IMMEDIATE 事务）或 OS 级文件锁（见 AppData.file_lock）。
         """
         parent = os.path.dirname(self.db_path)
         if parent:

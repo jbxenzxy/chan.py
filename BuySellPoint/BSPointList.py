@@ -717,15 +717,17 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 sub_freq = _explicit_sub_freq       # 三套映射统一：显式传入优先
                 sub_kl_type = _get_kl_type(sub_freq)
                 from App.AppData import app_data
-                sub_chan = app_data.stocks_sub_cache_get(parent.code, sub_freq)
-                if sub_chan is None:
-                    # 先下后上时序下不应发生（下窗先建缓存再建上窗）；
-                    # 仅服务重启/缓存被清等异常态，语义=初始化竞态而非配置错误
-                    self._dbg_bs('check_nested_diver', '独立双窗-下窗运行时缓存缺失'
-                                 '（先下后上时序被破坏或缓存被清理）→ 按子级别背驰处理',
-                                 code=parent.code, sub_freq=sub_freq)
-                    return True  # 按子级别背驰处理
-                sub_kl_list = sub_chan[sub_kl_type]
+                # 审计 P0-2：缓存里的 CChan 是**活对象**，取对象与读 kl_datas
+                # 必须在同一把锁内完成（写侧每次分析会整条替换缓存条目）。
+                with app_data.stocks_sub_chan_guarded(parent.code, sub_freq) as sub_chan:
+                    if sub_chan is None:
+                        # 先下后上时序下不应发生（下窗先建缓存再建上窗）；
+                        # 仅服务重启/缓存被清等异常态，语义=初始化竞态而非配置错误
+                        self._dbg_bs('check_nested_diver', '独立双窗-下窗运行时缓存缺失'
+                                     '（先下后上时序被破坏或缓存被清理）→ 按子级别背驰处理',
+                                     code=parent.code, sub_freq=sub_freq)
+                        return True  # 按子级别背驰处理
+                    sub_kl_list = sub_chan[sub_kl_type]
             else:
                 # 单窗口 / 独立双窗下窗 / legacy 联立：显式判 kl_datas 是否含次级别
                 # （替代原 try/KeyError 异常控制流，行为等价）：
@@ -751,14 +753,27 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 与写侧 set_futures_sub_chan 的 "SYMBOL:sub_freq" 永不相等，导致
             # 期货区间套 100% 静默失效。
             cache_key = make_futures_sub_key_from_code(parent.code, sub_freq)
-            sub_chan = app_data.futures_cache_get(cache_key)
-            if sub_chan is None:
-                self._dbg_bs('check_nested_diver', '期货下窗暂无缓存 → 按子级别背驰处理',
-                             cache_key=cache_key, sub_freq=sub_freq) # 上/下窗分开加载，必然有前有后，所以存在“上窗有，下窗无”的情况
-                return True # 按子级别背驰处理
-            sub_kl_list = sub_chan[sub_kl_type]
-
-        sub_bi_list = sub_kl_list.bi_list
+            # 审计 P0-2：缓存里存的是**活着的 CChan**，SSE 每根K线
+            # _drain_chan → step_load → do_init 会**就地清空重建** kl_datas
+            # （Chan.py do_init 把 self.kl_datas 整个换成新的空 CKLine_List）。
+            # 原先 `futures_cache_get` 只在**取指针**这一瞬间持容器锁，随后
+            # `sub_kl_list.bi_list` 的遍历完全在锁外——正好撞在 do_init 之后、
+            # 回填之前就会读到空列表。故取对象与遍历须在同一把对象图锁内。
+            with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
+                if sub_chan is None:
+                    self._dbg_bs('check_nested_diver', '期货下窗暂无缓存 → 按子级别背驰处理',
+                                 cache_key=cache_key, sub_freq=sub_freq) # 上/下窗分开加载，必然有前有后，所以存在“上窗有，下窗无”的情况
+                    return True # 按子级别背驰处理
+                sub_kl_list = sub_chan[sub_kl_type]
+                # 临界区压到最小：锁内只做浅拷贝，随即出锁。
+                # do_init 是**整体替换** kl_datas，旧的 CBi 对象不再被引擎
+                # 引用、不会被就地改写，故 list(...) 即等价于不可变快照。
+                sub_bi_list = list(sub_kl_list.bi_list)
+            # 以下对 sub_bi_list 的使用均在锁外（快照已与引擎内部状态解耦）
+        if is_stocks:
+            # 股票侧下窗 CChan 由分析线程**整条替换**缓存条目（非就地改写），
+            # 风险低于期货；同样浅拷贝成快照，与引擎内部列表解耦后再遍历。
+            sub_bi_list = list(sub_kl_list.bi_list)
         if len(sub_bi_list) == 0:
             # 上/下窗，历史K线不对齐(如：日K加载多于30分)
             self._dbg_bs('check_nested_diver', '双窗口-无子级别 → 按子级别背驰处理')

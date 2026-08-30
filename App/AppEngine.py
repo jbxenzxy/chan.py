@@ -276,6 +276,17 @@ def _cache_get(key):
     return app_data.cache_get(key)
 
 
+def _cache_update(key, **fields):
+    """在**同一把锁内**完成缓存条目的读-改-写（委托 app_data.cache_update）。
+
+    审计 P0-3：用来替代「_cache_get → 锁外改字段 → _cache_put」。后者每一步
+    单独看都持了锁，但**整段不是原子的**：两个并发请求各取到同一个条目
+    dict、各自补字段、先后 put 回去，后写的会整体覆盖先写的（实测最终只剩
+    `['records']`，另一线程写入的 `chan` 被静默吞掉）。
+    """
+    return app_data.cache_update(key, **fields)
+
+
 
 
 # ============================================================
@@ -350,8 +361,13 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         sub_cached = _cache_get(sub_cache_key)
         if not end_date and main_cached is not None and sub_cached is not None \
                 and "result" in main_cached and "result" in sub_cached:
-            result = main_cached["result"]
-            result["sub"] = sub_cached["result"]
+            # 审计 P0-3（读者写共享缓存）：main_cached["result"] 是**缓存里的
+            # 那个对象**，直接给它挂 "sub" 等于改缓存本体。两个并发请求
+            # （不同 sub_freq）会互相污染响应体；且 FastAPI 在事件循环上
+            # 序列化这个 dict 时，若另一线程正在改它，可直接抛 RuntimeError。
+            # 故先复制再挂，缓存本体保持只读。
+            result = dict(main_cached["result"])
+            result["sub"] = dict(sub_cached["result"])
             log.info(f"[耗时] 命中双窗口缓存(freq={freq}+{sub_freq})，总耗时: 0.001s")
             return result
 
@@ -375,15 +391,17 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if not end_date and cached_result is not None and "result" in cached_result:
             result = cached_result["result"]
             col = FREQ_TO_COL.get(freq, "")
-            if col and qualified_code in _saved_point_times:
-                saved_sdt = _saved_point_times[qualified_code].get(col, "").strip() or None
-                if saved_sdt:
-                    cached_saved = result.get("meta", {}).get("saved_selection_date", "")
-                    if cached_saved != saved_sdt:
-                        log.info(f"[信息] 缓存选点({cached_saved})与CSV({saved_sdt})不一致，跳过缓存")
-                    else:
-                        log.info(f"[耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
-                        return result
+            # 审计 P2：原为 `in` 判存在再下标的 check-then-act（无锁），改走
+            # app_data 加锁读取接口，与选点写者互斥。
+            if col:
+                # 审计 P2：加锁读取（原为无锁 check-then-act）
+                saved_sdt = app_data.get_saved_point_time(qualified_code, col) or None
+            else:
+                saved_sdt = None
+            if saved_sdt:
+                cached_saved = result.get("meta", {}).get("saved_selection_date", "")
+                if cached_saved != saved_sdt:
+                    log.info(f"[信息] 缓存选点({cached_saved})与CSV({saved_sdt})不一致，跳过缓存")
                 else:
                     log.info(f"[耗时] 命中缓存(freq={freq})，总耗时: 0.001s")
                     return result
@@ -549,8 +567,9 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 下窗对齐上窗区间；双窗选点本身不保存，见 AppChart）。
         if start_time is None and not dual:
             col = FREQ_TO_COL.get(freq, "")
-            if col and qualified_code in _saved_point_times:
-                _saved = _saved_point_times[qualified_code].get(col, "").strip() or None
+            if col:
+                # 审计 P2：加锁读取（原为无锁 check-then-act）
+                _saved = app_data.get_saved_point_time(qualified_code, col) or None
                 if _saved:
                     start_time = _saved
 
@@ -776,39 +795,31 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     if dual and sub_freq and sub_records is not None:
         # 双窗口：主级别缓存（不含 sub 字段，sub 独立存储）
         main_result = {k: v for k, v in result.items() if k != "sub"}
-        main_cached = _cache_get(main_cache_key)
-        if main_cached is None:
-            main_cached = {}
+        main_fields = {"result": main_result}
         if cache_chan:
-            main_cached["records"] = full_records
-            main_cached["chan"] = chan       # CChan 只存一份在主级别缓存
-        main_cached["result"] = main_result
-        _cache_put(main_cache_key, main_cached)
+            main_fields["records"] = full_records
+            main_fields["chan"] = chan       # CChan 只存一份在主级别缓存
+        # 审计 P0-3：整段读-改-写在**同一把锁内**完成
+        _cache_update(main_cache_key, **main_fields)
 
         # 双窗口：子级别缓存（独立存储，下次切回双窗口直接命中）
-        sub_cached = _cache_get(sub_cache_key)
-        if sub_cached is None:
-            sub_cached = {}
+        sub_fields = {"result": sub_result}
         if cache_chan:
-            sub_cached["records"] = sub_records
+            sub_fields["records"] = sub_records
             if dual_impl == "independent" and sub_chan is not None:
                 # 独立双窗下窗 CChan 一并落 dual_sub 缓存（供排查/离线整读）
-                sub_cached["chan"] = sub_chan
-        sub_cached["result"] = sub_result
-        _cache_put(sub_cache_key, sub_cached)
+                sub_fields["chan"] = sub_chan
+        _cache_update(sub_cache_key, **sub_fields)
     elif dual:
         # 双窗口降级为单级别（子级别数据不足）：不缓存，下次重试
         pass
     else:
         # 单窗口
-        cached = _cache_get(cache_key)
-        if cached is None:
-            cached = {}
+        fields = {"result": result}
         if cache_chan:
-            cached["records"] = full_records
-            cached["chan"] = chan
-        cached["result"] = result
-        _cache_put(cache_key, cached)
+            fields["records"] = full_records
+            fields["chan"] = chan
+        _cache_update(cache_key, **fields)
 
     # 复盘后触发GC，回收旧的CChan对象，避免内存累积导致下次分析变慢
     if end_date:
@@ -1143,8 +1154,9 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     if not end_date:
         if start_time:
             _saved_sdt_for_meta = start_time
-        elif not dual and _col_meta and qualified_code in _saved_point_times:
-            _saved_sdt_for_meta = _saved_point_times[qualified_code].get(_col_meta, "").strip() or ""
+        elif not dual and _col_meta:
+            # 审计 P2：加锁读取（原为无锁 check-then-act）
+            _saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _col_meta)
 
     # 7. 计算最新笔的白色横虚线数据
     white_hline = None

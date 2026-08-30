@@ -397,18 +397,23 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # 服务重启/双窗重建间隙等异常态不静默回退，交前端提示重开双窗口）。
     if _m._stock_dual_impl() == "independent":
         chan_code = market + normalized_code
-        chan_obj = app_data.stocks_sub_cache_get(chan_code, sub_freq)
-        if chan_obj is None:
-            dual_sub_cached = app_data.cache_get(
-                make_dual_sub_key(market, normalized_code, sub_freq, date_suffix))
-            if dual_sub_cached is not None:
-                chan_obj = dual_sub_cached.get("chan")
-        if chan_obj is None:
-            log.warning(f"[red_range_zs] 独立双窗下窗缓存缺失: {chan_code} {sub_freq} "
-                        f"(date_suffix={date_suffix})")
-            raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
-        kl_list = chan_obj[_m._get_kl_type(sub_freq)]
-        bi_list = kl_list.bi_list
+        # 审计 P0-2：缓存里存的是**活着的 CChan**。`stocks_sub_cache_get`
+        # 只在「取指针」这一瞬间持锁，随后 `kl_list.bi_list` 的遍历完全在
+        # 锁外——写侧（分析线程）整条替换缓存条目时，读者可能正遍历到一半。
+        # 改为锁内取对象 + 锁内浅拷贝成快照，出锁后再遍历（do_init/整条替换
+        # 都不会就地改写旧的 CBi，故浅拷贝即等价于不可变快照）。
+        with app_data.stocks_sub_chan_guarded(chan_code, sub_freq) as chan_obj:
+            if chan_obj is None:
+                dual_sub_cached = app_data.cache_get(
+                    make_dual_sub_key(market, normalized_code, sub_freq, date_suffix))
+                if dual_sub_cached is not None:
+                    chan_obj = dual_sub_cached.get("chan")
+            if chan_obj is None:
+                log.warning(f"[red_range_zs] 独立双窗下窗缓存缺失: {chan_code} {sub_freq} "
+                            f"(date_suffix={date_suffix})")
+                raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
+            kl_list = chan_obj[_m._get_kl_type(sub_freq)]
+            bi_list = list(kl_list.bi_list)
         date_fmt = _m._get_date_fmt(sub_freq)
         start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
         if start_bi is None:
@@ -512,7 +517,14 @@ def search_stocks(q):
         else:
             other_results.append(item)
 
-    for compound_key, info in _m._stock_names_cache.items():
+    # 审计 P1-2：原直接遍历共享别名 `_m._stock_names_cache`（= app_data._names
+    # 本体）。刷新线程的 replace_names 是 clear()+update()：
+    #   · 条数变化 → 抛「dictionary changed size during iteration」→ /api/search 500；
+    #   · 条数**恰好相同** → 绕过 CPython 的 ma_used 检查，不抛异常而
+    #     **静默串表**（旧表残条 + 新表新条），搜索结果无声错乱。
+    # 故遍历一律经 app_data.names_snapshot()（锁内浅拷贝）。点查仍是原子的，
+    # 不受影响。
+    for compound_key, info in app_data.names_snapshot().items():
         if isinstance(info, dict):
             name = info.get("name", "")
             pinyin = info.get("pinyin", "")

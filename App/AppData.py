@@ -20,13 +20,25 @@ App/AppData.py — 业务数据层
 """
 
 import collections
+import contextlib
 import gc
 import io
 import json
 import os
 import re
+import tempfile
 import threading
 import time
+
+# 跨进程文件锁：POSIX 用 fcntl.flock，Windows 用 msvcrt.locking（见 file_lock）
+try:
+    import fcntl
+except ImportError:                      # pragma: no cover - Windows
+    fcntl = None
+try:
+    import msvcrt
+except ImportError:                      # pragma: no cover - POSIX
+    msvcrt = None
 
 from App.AppConfig import app_config
 from App.AppLog import get_logger
@@ -83,13 +95,70 @@ def _atomic_replace(tmp_path, path):
     raise last_err
 
 
+@contextlib.contextmanager
+def file_lock(lock_path, *, timeout=10.0, poll=0.02):
+    """跨进程文件锁（审计 P1-4：threading.Lock 只在**进程内**有效）。
+
+    zxg.blk 有两个写者跑在**不同进程**——生产 API 进程与独立的同步脚本。
+    `_user_store_lock` 是 `threading.Lock`，对另一个进程毫无约束力，正是
+    v5 §1.2 自己点名的「最危险的误用」，只是它出现在文件层而没被识别。
+    故 .blk 这类跨进程共享文件的读-改-写，必须**额外**加 OS 级文件锁。
+
+    - POSIX：`fcntl.flock`（劝告锁，要求所有写者都遵守同一约定）
+    - Windows：`msvcrt.locking`（强制锁，LK_NBLCK 非阻塞 + 轮询退避）
+
+    锁文件与数据文件分离（`*.lock`），锁操作不影响数据文件内容。
+    拿不到锁时抛 TimeoutError，让调用方显式失败而非带着错觉继续写。
+    """
+    dir_name = os.path.dirname(lock_path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    fh = open(lock_path, "a+")
+    try:
+        deadline = time.time() + timeout
+        while True:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                elif msvcrt is not None:
+                    # LK_NBLCK 锁 1 字节；区间任意，约定所有写者锁同一位置
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                else:                     # pragma: no cover - 理论不可达
+                    raise RuntimeError("当前平台无可用文件锁实现")
+                break
+            except OSError:
+                if time.time() >= deadline:
+                    raise TimeoutError(
+                        f"[文件锁] 等待超时({timeout}s): {lock_path}")
+                time.sleep(poll)
+        try:
+            yield
+        finally:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                elif msvcrt is not None:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+    finally:
+        fh.close()
+
+
 def safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
     """先写临时文件并校验 JSON 可读，再用 os.replace 覆盖正式文件；失败时保留旧文件。
     （持久化底座：原子写，防断电/中断产生半截文件）"""
     dir_name = os.path.dirname(path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
-    tmp_path = path + ".tmp"
+    # 临时文件名唯一化（审计 P2）：原用 path + ".tmp" 固定名，同一目录下
+    # 一旦出现两个写者（如 worker 进程落盘），先完成的那个在 finally 里
+    # os.remove 会删掉别人刚建的临时文件，导致后者 os.replace 失败或
+    # 写出空文件。mkstemp 保证同目录唯一（同目录是 os.replace 原子的前提）。
+    _fd, tmp_path = tempfile.mkstemp(dir=dir_name or ".", prefix=".tmp_", suffix=".json")
+    os.close(_fd)
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=ensure_ascii, indent=indent)
@@ -116,7 +185,10 @@ def _atomic_write_text(path, text, *, encoding="utf-8", newline=None):
     dir_name = os.path.dirname(path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
-    tmp_path = path + ".tmp"
+    # 临时文件名唯一化（同上，审计 P2）：固定 ".tmp" 名在多写者场景下会被
+    # 彼此的 finally: os.remove 误删。
+    _fd, tmp_path = tempfile.mkstemp(dir=dir_name or ".", prefix=".tmp_", suffix=".wr")
+    os.close(_fd)
     try:
         with open(tmp_path, "w", encoding=encoding, newline=newline) as f:
             f.write(text)
@@ -1301,10 +1373,27 @@ class AppData:
         #                        标注 / 选点 / 上次查看 / 流通市值 / 自选股。
         #                        合并为一把的理由：都是毫秒级 RMW，且消除
         #                        「标注→缓存」与「缓存→选点」跨锁顺序死锁
+        #   _meta_cache_lock     护「名称 / PE-TTM / 指数归属」三张元数据表
+        #                        （v5 漏登记，审计 P1-1~P1-3）。写者只有刷新
+        #                        线程，读者是全部 REST / 扫描线程，故独立成
+        #                        锁而非并入 _user_store_lock（后者要护文件
+        #                        I/O，持有时间以毫秒计，不该被元数据拖住）。
         # 均为 RLock：读-改-写内部可能嵌套同类操作。
+        #
+        # ── 锁顺序（必须遵守，否则跨锁死锁）────────────────────────
+        #   _user_store_lock → _meta_cache_lock → _stocks_cache_lock
+        #                                       → _futures_cache_lock
+        # _meta_cache_lock 是叶子锁：持有它的代码一律不得再取 _user_store_lock。
         self._stocks_cache_lock = threading.RLock()
         self._futures_cache_lock = threading.RLock()
         self._user_store_lock = threading.RLock()
+        self._meta_cache_lock = threading.RLock()
+        # 期货下窗 CChan「对象图锁」登记表：key → RLock。
+        # 缓存 dict 由 _futures_cache_lock 保护，但 dict 里存的是**活着的
+        # CChan**，SSE 每根K线 step_load → do_init 会就地清空重建 kl_datas。
+        # 容器锁护不住对象图，故按 key 单列一把锁，让「SSE 重建」与
+        # 「读取方遍历」互斥（审计 P0-2）。由 _futures_cache_lock 护本表。
+        self._futures_chan_locks = {}
 
         # ── 分析结果缓存 ──
         self._stocks_analysis_cache = collections.OrderedDict()
@@ -1478,18 +1567,41 @@ class AppData:
         共同控制：dual_* 键超 MAX_DUAL_CACHE_KEYS 时优先淘汰最旧 dual 键
         （双窗不常用且条目重，不挤占常用单窗口缓存）。"""
         with self._stocks_cache_lock:
-            if key in self._stocks_analysis_cache:
-                del self._stocks_analysis_cache[key]  # 移到末尾
-            else:
-                # 新键入池前的容量控制：dual 键先过单独限额，再过池总量限
-                if self._is_dual_key(key):
-                    self._evict_dual_overflow_locked()
-                if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:
-                    oldest_key = next(iter(self._stocks_analysis_cache))
-                    self._stocks_analysis_cache.pop(oldest_key)
-                    gc.collect()
-                    log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
-            self._stocks_analysis_cache[key] = value
+            self._cache_put_locked(key, value)
+
+    def _cache_put_locked(self, key, value):
+        """（内部，须持 _stocks_cache_lock）写入并维护 LRU/容量"""
+        if key in self._stocks_analysis_cache:
+            del self._stocks_analysis_cache[key]  # 移到末尾
+        else:
+            # 新键入池前的容量控制：dual 键先过单独限额，再过池总量限
+            if self._is_dual_key(key):
+                self._evict_dual_overflow_locked()
+            if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:
+                oldest_key = next(iter(self._stocks_analysis_cache))
+                self._stocks_analysis_cache.pop(oldest_key)
+                gc.collect()
+                log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
+        self._stocks_analysis_cache[key] = value
+
+    def cache_update(self, key, **fields):
+        """在**同一把锁内**完成缓存条目的读-改-写（审计 P0-3）。
+
+        原先调用方是 `_cache_get → 锁外改字段 → _cache_put`：每一步单独看
+        都持了锁，但整段不是原子的。两个并发请求各取到同一个 dict、各自
+        补字段、先后 put 回去，后写的会整体覆盖先写的——实测最终缓存只剩
+        `['records']`，另一个线程写入的 `chan` 被静默吞掉。
+
+        典型用法（替代 get→改→put）：
+            app_data.cache_update(key, result=main_result, chan=chan)
+        """
+        with self._stocks_cache_lock:
+            entry = self._stocks_analysis_cache.get(key)
+            if entry is None:
+                entry = {}
+            entry.update(fields)
+            self._cache_put_locked(key, entry)
+            return entry
 
     def cache_get(self, key):
         """读取缓存，命中时移到末尾（LRU语义）"""
@@ -1566,6 +1678,73 @@ class AppData:
         """弹出并删除期货子窗口 CChan（SSE 连接关闭 / 子级别切换时释放）"""
         return self.futures_cache_pop(make_futures_sub_key(symbol, sub_freq), None)
 
+    # ── 期货下窗 CChan 的「对象图锁」（审计 P0-2）────────────────
+    #   v5 的三问在**容器**这一层是完备的，但缓存里存的不是容器，是**一张
+    #   活着的对象图**：SSE 线程每根K线 _drain_chan → step_load → do_init
+    #   会把 chan.kl_datas 整个替换成新的空 CKLine_List（Chan.py:90），
+    #   再逐根回填。_futures_cache_lock 只护住了「取指针」这一瞬间，护不住
+    #   读取方拿到指针后在锁外的遍历——正好撞在 do_init 之后、回填之前就
+    #   读到空 bi_list，表现为「红框内无完整笔」「下窗缓存已过期」。
+    #
+    #   修法二选一：① 发布不可变快照（改动大）；② 让「SSE 重建」与
+    #   「读取方遍历」互斥。这里取 ②，并把读取方的临界区压到最小——
+    #   只在锁内做 list(bi_list) 浅拷贝（do_init 是整体替换，旧的 CBi
+    #   对象不再被引用、不会被就地改写，故浅拷贝即等价于不可变快照）。
+    def _futures_chan_lock_for_key(self, cache_key):
+        """（内部）按缓存 key 取（或建）对象图锁；登记表由 _futures_cache_lock 护。
+
+        写侧（`futures_sub_chan_lock(symbol, sub_freq)`）与读侧
+        （`futures_sub_chan_guarded_by_key(cache_key)`）只要解析出**同一个
+        key**，拿到的就是同一把锁，两侧自然互斥。
+        """
+        with self._futures_cache_lock:
+            lk = self._futures_chan_locks.get(cache_key)
+            if lk is None:
+                lk = threading.RLock()
+                self._futures_chan_locks[cache_key] = lk
+            return lk
+
+    def futures_sub_chan_lock(self, symbol, sub_freq):
+        """取该下窗 key 对应的对象图锁（同一 key 恒定返回同一把 RLock）"""
+        return self._futures_chan_lock_for_key(make_futures_sub_key(symbol, sub_freq))
+
+    @contextlib.contextmanager
+    def futures_sub_chan_guarded_by_key(self, cache_key):
+        """按**缓存 key**取期货下窗 CChan，并在整个使用期内持对象图锁。
+
+        读取方手里往往只有 key（如 BSPointList 经
+        `make_futures_sub_key_from_code` 拼出），故单列此入口；它与
+        `futures_sub_chan_guarded(symbol, sub_freq)` 共用同一把按 key 分配
+        的锁，读写两侧自然互斥。
+        """
+        lk = self._futures_chan_lock_for_key(cache_key)
+        with lk:
+            with self._futures_cache_lock:
+                yield self._futures_analysis_cache.get(cache_key)
+
+    @contextlib.contextmanager
+    def futures_sub_chan_guarded(self, symbol, sub_freq):
+        """取出期货下窗 CChan，并在**整个使用期内**持有该对象图的锁。
+
+        用法（临界区只包住取对象与浅拷贝，别在锁内做重计算）：
+            with app_data.futures_sub_chan_guarded(sym, sub_freq) as sub_chan:
+                if sub_chan is None:
+                    ...
+                bi_list = list(sub_chan[sub_kl_type].bi_list)   # 快照后出锁
+        """
+        with self.futures_sub_chan_lock(symbol, sub_freq):
+            yield self.get_futures_sub_chan(symbol, sub_freq)
+
+    @contextlib.contextmanager
+    def stocks_sub_chan_guarded(self, chan_code, sub_freq):
+        """股票下窗 CChan 的同类守卫（与期货侧同一套语义）。
+
+        股票侧下窗发布后不再被持续改写（每次分析整条替换），风险低于期货，
+        但「整条替换」本身仍可能与读取方的遍历重叠，故一并纳入保护。
+        """
+        with self._stocks_cache_lock:
+            yield self.stocks_sub_cache_get(chan_code, sub_freq)
+
     # ── 股票双窗独立化 ──────────────────────────────────────────
     #    仿期货子窗缓存建「股票下窗 CChan 运行时缓存」：
     #      · 写入方：_analyze_stock_internal 独立双窗路径（先建下窗再建上窗，
@@ -1633,7 +1812,11 @@ class AppData:
     def load_stock_names_from_cache_file(self):
         """从 stock_names.json 缓存文件加载股票名称到内存。
         返回加载的记录数，文件不存在则返回0。
-        自动将纯数字键（旧缓存格式）转换为 market+code 复合键。"""
+        自动将纯数字键（旧缓存格式）转换为 market+code 复合键。
+
+        写入段持 _meta_cache_lock：并发首次调用只解析一次，且不与刷新
+        线程的 replace_names 交错（审计 P1-2）。
+        """
         if self._names_loaded:
             return len(self._names)
         if not os.path.exists(self.stock_names_cache_file):
@@ -1655,57 +1838,103 @@ class AppData:
                         migrated[new_key] = info
                     else:
                         migrated[key] = info
-                self._names.update(migrated)
-                self._names_loaded = True
+                with self._meta_cache_lock:
+                    if self._names_loaded:      # 双检锁：并发只解析一次
+                        return len(self._names)
+                    self._names.update(migrated)
+                    self._names_loaded = True
                 log.info(f"[信息] 从缓存文件加载股票名称: {len(self._names)}只")
                 return len(self._names)
         except Exception as e:
             log.warning(f"[警告] 读取股票名称缓存失败: {e}")
         return 0
 
+    def names_snapshot(self):
+        """返回名称表**快照**（审计 P1-2，遍历专用）。
+
+        点查（.get / `in`）在 CPython 下是原子的，用别名直接查没问题；
+        但**遍历**必须与写者互斥。刷新线程的 replace_names 是
+        clear()+update()：读者遍历到一半会抛「dictionary changed size
+        during iteration」；更隐蔽的是新表条数**恰好相同**时会绕过 CPython
+        的 ma_used 检查，不抛异常而**静默串表**（旧表残条 + 新表新条），
+        搜索结果无声错乱。故凡遍历一律经本快照。
+        """
+        with self._meta_cache_lock:
+            return dict(self._names)
+
+    def pe_snapshot(self):
+        """PE-TTM 表快照（同 names_snapshot：遍历专用）"""
+        with self._meta_cache_lock:
+            return dict(self._pe)
+
+    def belong_snapshot(self):
+        """指数归属表快照（同 names_snapshot：遍历专用）"""
+        with self._meta_cache_lock:
+            return dict(self._belong)
+
     def replace_names(self, all_names):
         """整体替换名称缓存（获取侧刷新完成时调用；
-        同对象清空+灌入，保证所有共享别名同步可见）"""
-        self._names.clear()
-        self._names.update(all_names)
-        self._names_loaded = True
+        同对象清空+灌入，保证所有共享别名同步可见）
+
+        整段 RMW 持 _meta_cache_lock：clear()+update() 期间与快照读者
+        及其它写者互斥，杜绝「遍历中途换表」（审计 P1-2）。
+        """
+        with self._meta_cache_lock:
+            self._names.clear()
+            self._names.update(all_names)
+            self._names_loaded = True
 
     # ════════════════════════════════════════════════════════════════
     # PE-TTM / 指数归属缓存（同文件 stock_pettm_index.json）
     # ════════════════════════════════════════════════════════════════
     def load_pe_ttm_cache(self):
         """从 stock_pettm_index.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
-        向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}"""
+        向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}
+
+        审计 P1-3，两处修复：
+        ① 原实现「先置 _pe_loaded=True，再逐条填充」——并发读者见 loaded
+           为真直接返回**半成品**（实测拿到 None，而文件里明明有 25.3），
+           且 flag 已置真后**这一轮再也不会重试**，扫描列表的 PE / 指数
+           归属列静默显空。现改为先填本地字典、整体提交后才置位：读者
+           要么看到「未加载」走完整路径，要么看到完整数据。
+        ② 双检锁：并发首次调用只解析一次文件。
+        """
         if self._pe_loaded:
             return self._pe
-        self._pe_loaded = True
-        self._belong_loaded = True
-        if not os.path.exists(self.stock_pe_ttm_file):
-            return self._pe
-        try:
-            with open(self.stock_pe_ttm_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            pe_count = 0
-            idx_count = 0
-            if isinstance(data, dict):
-                for k, v in data.items():
-                    if isinstance(v, dict):
-                        # 新格式：{"pe_ttm": float, "index": str}
-                        pe_val = v.get("pe_ttm")
-                        idx_val = v.get("index")
-                        if isinstance(pe_val, (int, float)) and pe_val != 0:
-                            self._pe[k] = pe_val
+        pe_local = {}
+        belong_local = {}
+        if os.path.exists(self.stock_pe_ttm_file):
+            try:
+                with open(self.stock_pe_ttm_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                pe_count = 0
+                idx_count = 0
+                if isinstance(data, dict):
+                    for k, v in data.items():
+                        if isinstance(v, dict):
+                            # 新格式：{"pe_ttm": float, "index": str}
+                            pe_val = v.get("pe_ttm")
+                            idx_val = v.get("index")
+                            if isinstance(pe_val, (int, float)) and pe_val != 0:
+                                pe_local[k] = pe_val
+                                pe_count += 1
+                            if isinstance(idx_val, str) and idx_val:
+                                belong_local[k] = idx_val
+                                idx_count += 1
+                        elif isinstance(v, (int, float)) and v != 0:
+                            # 旧格式：直接是数字
+                            pe_local[k] = v
                             pe_count += 1
-                        if isinstance(idx_val, str) and idx_val:
-                            self._belong[k] = idx_val
-                            idx_count += 1
-                    elif isinstance(v, (int, float)) and v != 0:
-                        # 旧格式：直接是数字
-                        self._pe[k] = v
-                        pe_count += 1
-            log.info(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
-        except Exception as e:
-            log.info(f"[PE-TTM] 加载缓存失败: {e}")
+                log.info(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
+            except Exception as e:
+                log.info(f"[PE-TTM] 加载缓存失败: {e}")
+        with self._meta_cache_lock:
+            if not self._pe_loaded:          # 双检锁：并发只提交一次
+                self._pe.update(pe_local)
+                self._belong.update(belong_local)
+                # ★ 填充完成后才置位
+                self._pe_loaded = True
+                self._belong_loaded = True
         return self._pe
 
     def get_pe_ttm(self, market, code):
@@ -1719,10 +1948,15 @@ class AppData:
         return self._belong.get(market + code)
 
     def replace_index_belong(self, result):
-        """整体替换指数归属缓存（获取侧 AKShare 刷新完成时调用）"""
-        self._belong.clear()
-        self._belong.update(result)
-        self._belong_loaded = True
+        """整体替换指数归属缓存（获取侧 AKShare 刷新完成时调用）
+
+        整段 RMW 持 _meta_cache_lock（审计 P1-2，与 replace_names 同形）：
+        clear()+update() 期间与快照读者互斥。
+        """
+        with self._meta_cache_lock:
+            self._belong.clear()
+            self._belong.update(result)
+            self._belong_loaded = True
 
     # ════════════════════════════════════════════════════════════════
     # 流通市值缓存（腾讯接口成功时的内存态 + 本地 JSON 兜底）
@@ -1742,11 +1976,17 @@ class AppData:
             with open(self.float_mc_cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "data" in data:
-                self._float_mc.clear()
-                self._float_mc.update(data["data"])
-                self._float_mc_loaded = True
-                # 旧版缓存无 saved_at 字段时保持 None（视为"未知"，不过期、不误报）
-                self._float_mc_saved_at = data.get("saved_at")
+                # 审计 P1-2/P1-3 同形修复：clear()+update() 的整段 RMW 持
+                # _user_store_lock，与扫描预过滤的读、update_float_mc_cache
+                # 的写互斥；并加双检锁避免并发重复解析。
+                with self._user_store_lock:
+                    if self._float_mc_loaded:
+                        return
+                    self._float_mc.clear()
+                    self._float_mc.update(data["data"])
+                    self._float_mc_loaded = True
+                    # 旧版缓存无 saved_at 字段时保持 None（视为"未知"，不过期、不误报）
+                    self._float_mc_saved_at = data.get("saved_at")
                 log.info(f"[流通市值] 从本地缓存加载 {len(self._float_mc)} 只股票")
         except Exception as e:
             log.info(f"[流通市值] 读取缓存失败: {e}")
@@ -1803,6 +2043,22 @@ class AppData:
         except Exception as e:
             log.warning(f"[警告] 读取选点文件失败: {e}")
         return points
+
+    def get_saved_point_time(self, code, col):
+        """加锁读取某代码某周期的选点时间（无则返回 ""）。
+
+        审计 P2：调用方原先是 `if code in _saved_point_times:` 再下标取值
+        的 **check-then-act**，两步之间写者可能删掉该键 → KeyError。写者
+        clear_saved_points_by_prefix 只删 `KQ.` 前缀，与股票代码不重叠，
+        所以目前**撞不上是靠数据巧合，不是靠设计**。收敛到本方法后即与
+        写者（save_point_time / clear_saved_point_time / clear_saved_
+        points_by_prefix，均持 _user_store_lock）互斥。
+        """
+        with self._user_store_lock:
+            entry = self._saved_point_times.get(code)
+            if not entry:
+                return ""
+            return (entry.get(col) or "").strip()
 
     def save_point_time(self, code, name, freq, sdt):
         """保存或更新某只股票某个周期的选点（CSV 落盘 + 内存态，锁内原子）"""
@@ -1962,20 +2218,30 @@ class AppData:
     # 文字标注持久化
     # ════════════════════════════════════════════════════════════════
     def load_annotations(self):
-        """从 text_annotation.json 加载标注数据到内存"""
+        """从 text_annotation.json 加载标注数据到内存
+
+        自己持 _user_store_lock（RLock，调用方已持锁时可重入，无害）。
+        原先依赖「所有调用方都已在外层持锁」——这个约定没有机器可验证的
+        保障，任一个新调用方忘了持锁就会静默退化成无锁 clear+update
+        （审计 P1-1 的根因之一）。收敛到方法内部后约定消失。
+        """
+        # 快速路径（无锁）：已加载直接返回，避免每次都进锁
         if self._annotations_loaded:
             return
-        if os.path.exists(self.annotations_file):
-            try:
-                with open(self.annotations_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
+        with self._user_store_lock:
+            if self._annotations_loaded:      # 双检锁
+                return
+            if os.path.exists(self.annotations_file):
+                try:
+                    with open(self.annotations_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self._annotations.clear()
+                        self._annotations.update(data)
+                except Exception as e:
+                    log.warning(f"[警告] 加载标注数据失败: {e}")
                     self._annotations.clear()
-                    self._annotations.update(data)
-            except Exception as e:
-                log.warning(f"[警告] 加载标注数据失败: {e}")
-                self._annotations.clear()
-        self._annotations_loaded = True
+            self._annotations_loaded = True
 
     def save_annotations(self):
         """保存标注数据到 text_annotation.json（原子落盘）
@@ -1983,8 +2249,12 @@ class AppData:
         调用方均已持 _user_store_lock；原子写额外防「写一半进程退出」留下
         截断 JSON —— 那会让下次 load_annotations 静默清空全部标注。
         """
+        # 自己持锁（RLock 可重入）：原先注释写「调用方均已持锁」，但该约定
+        # 无从校验；这里锁内取快照再落盘，保证写出的内容与某一时刻一致。
+        with self._user_store_lock:
+            _snapshot = dict(self._annotations)
         try:
-            safe_write_json_file(self.annotations_file, self._annotations,
+            safe_write_json_file(self.annotations_file, _snapshot,
                                  ensure_ascii=False, indent=2)
         except Exception as e:
             log.warning(f"[警告] 保存标注数据失败: {e}")
@@ -2070,10 +2340,21 @@ class AppData:
         例如 key "sh000001_d" → {"code": "000001", "market": "sh", "name": "上证指数", "freq": "d", "count": N}
         期货 key "KQ.m@SHFE.rb_d" → {"code": "KQ.m@SHFE.rb", "market": "", "name": "", "freq": "d", "count": N}
         """
-        self.load_annotations()
-        self.load_stock_names_from_cache_file()
+        # 审计 P1-1：原实现在**无锁**状态下直接遍历 self._annotations，
+        # 而写者 add_annotation 持 _user_store_lock 修改同一张表 → 并发
+        # 即抛「dictionary changed size during iteration」，路由 500。
+        # 改为「锁内取快照、锁外遍历」，遍历的是锁内构造的副本：
+        #   · dict 层：写者会 del / 新增键 → 须拷 dict；
+        #   · list 层：add_annotation 是 `self._annotations[key].append(...)`
+        #     的**就地追加** → 只拷 dict 不够，须逐键拷 list。
+        # 删除类操作是整体替换列表（`_annotations[key] = [...]`），不会
+        # 就地改写，故浅拷贝两层即等价于不可变快照。
+        with self._user_store_lock:
+            self.load_annotations()
+            self.load_stock_names_from_cache_file()
+            annotations_snapshot = {k: list(v) for k, v in self._annotations.items()}
         result = []
-        for key, anns in self._annotations.items():
+        for key, anns in annotations_snapshot.items():
             if not anns:
                 continue
             parts = key.rsplit("_", 1)
@@ -2142,35 +2423,46 @@ class AppData:
         自动去重，已存在的不会重复添加；无法识别的代码跳过。
         格式转换单一源：本方法内部统一走 _code_to_zxg_line。
         """
+        # 审计 P1-4：原实现是 `open(path, "a")` 的**无锁非原子追加**——
+        # ① 并发两次 POST 会让两批代码交错写入；② 写一半进程退出会留下
+        # 截断行。现与 sync_zxg_blk 统一为「读-改-写 + 原子落盘」，并同时
+        # 持进程内锁与**跨进程文件锁**（另一个写者跑在独立脚本进程里，
+        # threading.Lock 对它无效）。
         path = self.zxg_blk_path
         if not path:
             return 0
-        if not os.path.exists(path):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            existing = set()
-        else:
-            existing = set()
-            try:
-                with open(path, "r", encoding="gbk") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line:
-                            existing.add(line)
-            except Exception:
-                pass
+        with self._user_store_lock:
+            dir_name = os.path.dirname(path)
+            if dir_name:
+                os.makedirs(dir_name, exist_ok=True)
+            with file_lock(path + ".lock"):
+                existing = []
+                if os.path.exists(path):
+                    try:
+                        with open(path, "r", encoding="gbk") as f:
+                            existing = [ln.strip() for ln in f if ln.strip()]
+                    except Exception:
+                        existing = []
+                seen = set(existing)
 
-        added = 0
-        with open(path, "a", encoding="gbk") as f:
-            for code_str in codes:
-                line = _code_to_zxg_line(code_str)
-                if line is None:
-                    log.info(f"[自选保存] 跳过无法识别的代码: {code_str.strip()}")
-                    continue
-                if line not in existing:
-                    f.write(line + "\n")
-                    existing.add(line)
-                    added += 1
-                    log.info(f"[自选保存] 已添加到自选股: {code_str.strip()} -> {line}")
+                added = 0
+                new_lines = []
+                for code_str in codes:
+                    line = _code_to_zxg_line(code_str)
+                    if line is None:
+                        log.info(f"[自选保存] 跳过无法识别的代码: {code_str.strip()}")
+                        continue
+                    if line not in seen:
+                        new_lines.append(line)
+                        seen.add(line)
+                        added += 1
+                        log.info(f"[自选保存] 已添加到自选股: {code_str.strip()} -> {line}")
+
+                # 无新增则不落盘（避免把已存在的文件无谓重写一遍，
+                # 也不在文件本不存在时创建空文件）
+                if new_lines:
+                    _atomic_write_text(path, "\n".join(existing + new_lines) + "\n",
+                                       encoding="gbk")
 
         log.info(f"[自选保存] 共添加 {added} 只股票到自选股")
         return added
@@ -2202,25 +2494,30 @@ class AppData:
         # 整段读-改-写持 _user_store_lock + 原子落盘：.blk 是自选股用户数据，
         # 并发 POST /api/stocks/scan/save/zxg 会互相截断。
         with self._user_store_lock:
-            os.makedirs(os.path.dirname(blk_path), exist_ok=True)
+            _dir = os.path.dirname(blk_path)
+            if _dir:
+                os.makedirs(_dir, exist_ok=True)
+            # 跨进程文件锁（审计 P1-4）：本方法也被**独立脚本进程**调用，
+            # 它与 API 进程各自的 _user_store_lock 互不可见，必须靠 OS 级
+            # 文件锁才能真正串行化两进程的读-改-写。
+            with file_lock(blk_path + ".lock"):
+                preserved = _read_preserved_zxg_lines(blk_path)
+                new_lines = []
+                for c in codes:
+                    line = _code_to_zxg_line(c)
+                    if line is not None:
+                        new_lines.append(line)
 
-            preserved = _read_preserved_zxg_lines(blk_path)
-            new_lines = []
-            for c in codes:
-                line = _code_to_zxg_line(c)
-                if line is not None:
-                    new_lines.append(line)
+                if append:
+                    existing = []
+                    if os.path.exists(blk_path):
+                        with open(blk_path, "r", encoding="gbk") as f:
+                            existing = [ln.strip() for ln in f if ln.strip()]
+                    final = list(dict.fromkeys(existing + preserved + new_lines))
+                else:
+                    final = list(dict.fromkeys(preserved + new_lines))
 
-            if append:
-                existing = []
-                if os.path.exists(blk_path):
-                    with open(blk_path, "r", encoding="gbk") as f:
-                        existing = [ln.strip() for ln in f if ln.strip()]
-                final = list(dict.fromkeys(existing + preserved + new_lines))
-            else:
-                final = list(dict.fromkeys(preserved + new_lines))
-
-            _atomic_write_text(blk_path, "\n".join(final) + "\n", encoding="gbk")
+                _atomic_write_text(blk_path, "\n".join(final) + "\n", encoding="gbk")
 
         return {"written": len(new_lines), "preserved": len(preserved)}
 

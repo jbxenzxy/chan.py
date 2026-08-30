@@ -48,6 +48,29 @@ _index_belong_cache = app_data.belong_cache
 _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
 _refresh_state_lock = threading.Lock()
 
+
+# 「起线程排队门」：与 _refresh_status 共用 _refresh_state_lock。
+# 与 running 旗分离——running 由装饰器在子线程内 CAS，本旗只用于让
+# refresh_stock_names_async 如实回答「到底是不是我启动的」（审计 P2）。
+_refresh_starting = False
+
+
+def _set_refresh_status(**fields):
+    """加锁写入刷新状态（审计 P2）。
+
+    原实现只有**读者**（refresh_status）持 _refresh_state_lock，写者
+    （step / error / total / loaded / running）全部裸写。dict 的键集合固定
+    所以不会崩，但这是「看起来有锁」的典型：读快照与写之间没有真正的
+    互斥，并发下可能读到 step/error/loaded 互相错配的组合（例如 step 已是
+    新一轮的值、error 还是上一轮的）。CAS 那部分本来就是对的，其余是装饰。
+
+    ⚠ 本锁是**非重入**的 threading.Lock：已在 `with _refresh_state_lock:`
+    内部的直接赋值（_reset_refresh_running 的 running 检查-置位）不要改
+    用本函数，否则自死锁。
+    """
+    with _refresh_state_lock:
+        _refresh_status.update(fields)
+
 # AKShare 指数代码 → 市场前缀映射
 # ═══════════════════════════════════════════════════════════════════════
 # 名称 / PE / 指数归属 缓存
@@ -155,7 +178,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
     """
     def _fetch_one(_idx_code, _idx_name):
         try:
-            _refresh_status["step"] = f"刷新指数归属: {_idx_name}..."
+            _set_refresh_status(step=f"刷新指数归属: {_idx_name}...")
             log.info(f"[指数归属] 开始获取 {_idx_name}({_idx_code})...")
             items = fetch_index_cons(_idx_code)
             count = 0
@@ -191,13 +214,13 @@ def _refresh_pe_ttm():
     从 stock_names.json 中读取所有股票代码，经 TxAPI.fetch_pe_ttm（腾讯行情接口）
     批量获取，缓存写入留在这里（_pe_ttm_cache 与合并落盘）。
     """
-    _refresh_status["step"] = "刷新PE-TTM..."
+    _set_refresh_status(step="刷新PE-TTM...")
     load_pe_ttm_cache()  # 先加载已有缓存
 
     # 从 stock_names.json 收集所有纯数字股票代码（路径：AppConfig 派生属性）
     if not os.path.exists(app_config.stock_names_cache_file):
         log.info("[PE-TTM] stock_names.json 不存在，无法刷新")
-        _refresh_status["error"] = "stock_names.json 不存在，请先刷新股票名称"
+        _set_refresh_status(error="stock_names.json 不存在，请先刷新股票名称")
         return
 
     try:
@@ -205,11 +228,11 @@ def _refresh_pe_ttm():
             names_data = json.load(f)
     except Exception as e:
         log.info(f"[PE-TTM] 读取 stock_names.json 失败: {e}")
-        _refresh_status["error"] = f"读取 stock_names.json 失败: {e}"
+        _set_refresh_status(error=f"读取 stock_names.json 失败: {e}")
         return
 
     if not isinstance(names_data, dict):
-        _refresh_status["error"] = "stock_names.json 格式错误"
+        _set_refresh_status(error="stock_names.json 格式错误")
         return
 
     # 收集股票代码并构建腾讯代码列表
@@ -231,8 +254,8 @@ def _refresh_pe_ttm():
             codes.append((mkt, code))
 
     total = len(codes)
-    _refresh_status["total"] = total
-    _refresh_status["loaded"] = 0
+    _set_refresh_status(total=total)
+    _set_refresh_status(loaded=0)
     log.info(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
 
     # 经 TxAPI.fetch_pe_ttm 批量获取（腾讯行情接口，字段[39]=市盈率动态，内部分批）
@@ -244,7 +267,7 @@ def _refresh_pe_ttm():
         if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
             _pe_ttm_cache[cache_key] = pe_val
             new_count += 1
-    _refresh_status["loaded"] = total
+    _set_refresh_status(loaded=total)
     log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
 
     # 统计未获取到的股票
@@ -255,7 +278,7 @@ def _refresh_pe_ttm():
         log.info(f"[PE-TTM] 未获取到PE-TTM: {len(missed)} 只 (如: {', '.join(missed_list)}{'...' if len(missed) > 20 else ''})")
 
     # 刷新指数归属（AKShare在线获取，与PE-TTM一起保存）
-    _refresh_status["step"] = "刷新指数归属..."
+    _set_refresh_status(step="刷新指数归属...")
     log.info("[指数归属] ========== 开始刷新指数归属 ==========")
     _fetch_index_belong_from_akshare()
 
@@ -281,7 +304,7 @@ def _refresh_pe_ttm():
         log.info(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {app_config.stock_pe_ttm_file}")
     except Exception as e:
         log.info(f"[PE-TTM] 保存失败: {e}")
-        _refresh_status["error"] = f"保存 PE-TTM 失败: {e}"
+        _set_refresh_status(error=f"保存 PE-TTM 失败: {e}")
 
 
 def _reset_refresh_running(fn):
@@ -322,15 +345,19 @@ def _refresh_stock_names():
      最终经 replace_names 同对象替换，_stock_names_cache 别名全程可见）
     """
     # running 守卫与置位由装饰器 _reset_refresh_running 统一管理，此处不再重复
-    _refresh_status["step"] = "刷新股票名..."
-    _refresh_status["error"] = None
+    _set_refresh_status(step="刷新股票名...")
+    _set_refresh_status(error=None)
     log.info("[股名刷新] ========== 开始刷新股票名称 ==========")
 
     # === 先加载已有缓存，新数据合并进去，不覆盖 ===
     raw_names = {}
     load_stock_names_from_cache_file()
     if _stock_names_cache:
-        for code, info in _stock_names_cache.items():
+        # 审计 P1-2：遍历共享表须走快照。本线程虽是 names 的主要写者，但
+        # REST 线程的 load_stock_names_from_cache_file 也会 `self._names
+        # .update(...)`（惰性加载），与此处遍历可并发 → 同样会触发
+        # 「dictionary changed size during iteration」或静默串表。
+        for code, info in app_data.names_snapshot().items():
             if isinstance(info, dict):
                 raw_names[code] = info
             else:
@@ -505,10 +532,10 @@ def _refresh_stock_names():
 
     # 刷新板块文件（block_zs.dat / block_gn.dat / block_fg.dat / block.dat）
     log.info("[板块刷新] ========== 开始刷新板块文件 ==========")
-    _refresh_status["step"] = "刷新成分股..."
+    _set_refresh_status(step="刷新成分股...")
     try:
         def _set_step(msg):
-            _refresh_status["step"] = msg
+            _set_refresh_status(step=msg)
         refresh_block_files(progress_callback=_set_step)
     except Exception as e:
         log.info(f"[板块刷新] 板块文件刷新失败: {e}")
@@ -519,11 +546,11 @@ def _refresh_stock_names():
         _refresh_pe_ttm()
     except Exception as e:
         log.info(f"[PE-TTM] PE-TTM 刷新失败: {e}")
-        _refresh_status["error"] = f"PE-TTM 刷新失败: {e}"
+        _set_refresh_status(error=f"PE-TTM 刷新失败: {e}")
 
     # 全部刷新完成，标记状态
-    _refresh_status["running"] = False
-    _refresh_status["step"] = ""
+    _set_refresh_status(running=False)
+    _set_refresh_status(step="")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -550,18 +577,42 @@ def refresh_stock_names_async():
     不会卡死。注意：此处【不得】提前把 running 旗置为 True —— 否则子线程进入被装饰函数
     时守卫已见 running=True 而早退，刷新正文永不执行且 running 永久卡死。
     """
+    global _refresh_starting
     with _refresh_state_lock:
         if _refresh_status["running"]:
             return {"status": "already_running", **_refresh_status}
+        # 审计 P2：原实现「预检查 → 放锁 → 起线程」，两个并发 POST 会在
+        # 窗口期双双通过预检查、双双返回 "started"；但真正的 CAS 在装饰器
+        # 里，只有一条线程能进正文，另一条**静默退出**——调用方（前端）
+        # 却以为自己启动成功了。
+        # 这里在同一把锁内加一道「起线程排队门 _refresh_starting」：谁先
+        # 置位谁负责起线程，落后者如实返回 already_running。
+        # 注意：这只是**排队去重**，不代替装饰器里的 CAS——running 旗仍
+        # 由装饰器在子线程内检查-置位（本函数若提前置 running 会让正文
+        # 永不执行且 running 卡死，见上方注释）。
+        if _refresh_starting:
+            return {"status": "already_running", **_refresh_status}
+        _refresh_starting = True
 
     def _do_refresh():
+        global _refresh_starting
         try:
             _refresh_stock_names()
         except Exception as e:
             traceback.print_exc()
             log.error(f"[错误] refresh_stock_names异常: {e}")
+        finally:
+            with _refresh_state_lock:
+                _refresh_starting = False
 
-    t = threading.Thread(target=_do_refresh, daemon=True)
-    t.start()
+    try:
+        t = threading.Thread(target=_do_refresh, daemon=True)
+        t.start()
+    except Exception as e:
+        # 起线程失败必须归还排队门，否则后续刷新永远被判 already_running
+        with _refresh_state_lock:
+            _refresh_starting = False
+        log.error(f"[错误] 刷新线程启动失败: {e}")
+        return {"status": "error", "msg": f"刷新线程启动失败: {e}"}
     return {"status": "started", "msg": "股票名称刷新已启动"}
 

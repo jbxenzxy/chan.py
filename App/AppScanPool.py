@@ -192,13 +192,15 @@ def _monitor_task(task_id, futures):
 
         # 错误明细并入 _scan_skip_log（中止行不计入）
         try:
-            from App.AppScan import _scan_skip_log
+            # 审计 P1-5：经加锁访问器追加（本线程是收割线程，与 REST 线程的
+            # 清空 / 遍历并发；原实现直接 append 模块级 list，无锁无登记）
+            from App.AppScan import append_scan_skip
             for row in store.iter_error_rows(task_id):
                 data = row.get("data") or {}
                 if isinstance(data, dict) and data.get("aborted"):
                     continue
                 msg = str(data.get("error", "")) if isinstance(data, dict) else ""
-                _scan_skip_log.append(
+                append_scan_skip(
                     f"{row.get('code', '')} - {msg or row.get('status', '')}")
         except Exception:  # noqa: BLE001
             pass
@@ -267,35 +269,52 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
         store.set_status(task_id, "error", msg)
         return {"error": msg}
 
-    workers = _resolve_workers(_get_config())
-    # 启动扫描前打印实际执行核数（worker 数 = 并行执行的进程数；先显示 CPU 核数，执行核数基于它）
-    log.info(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
-          f"执行核数={workers} | 引擎={engine}")
-    futures = []
+    # 审计 P1-6：`_get_pool()` 已在锁内把 `_active_scans += 1`，而归还责任
+    # 交给收割线程 `_monitor_task`（其 finally 调 `_release_scan()`）。从
+    # 这里到「线程成功启动」之间的每一步都可能抛异常（_resolve_workers /
+    # log / set_status / Thread.start），任一一处抛出 → 计数只增不减 →
+    # `_active_scans` 永远 > 0 → **进程池永不销毁**，worker 进程与缓存常驻
+    # 内存，与「即用即弃」的设计意图相反。故整段包 try/except，异常路径
+    # 显式归还引用（与池装配的递增在同一语义层级闭合）。
     try:
-        for seq, stk in enumerate(valid):
-            code = stk.get("code", "")
-            prefix = stk.get("prefix", "")
-            src = stk.get("_source") or source
-            fut = pool.submit(_worker_scan_one, task_id, code, freq, prefix,
-                              recent, src, mode, seq)
-            futures.append((fut, seq, code))
-    except Exception as exc:  # noqa: BLE001 —— 派发期失败需销毁坏池自愈
-        # 受限容器典型失败：队列创建失败 → 首次 submit 抛 BrokenProcessPool。
-        # 必须销毁坏池（_active_scans 归零）+ 置任务 error，否则坏池被
-        # 永久复用、_active_scans 泄漏，批量扫描再无自愈机会、任务永挂。
-        # 已知取舍（有意为之，勿当 bug）：若此刻另有批次共用同一坏池，
-        # 其 futures 也会被 destroy_pool() 一并取消并标 error——因池已损坏、
-        # 那批本就必然失败，强销毁换来下次扫描可重新装配自愈。
-        msg = f"扫描任务派发失败: {type(exc).__name__}: {exc}"
-        log.error(f"[扫描池] {msg}")
-        destroy_pool()
-        store.set_status(task_id, "error", msg)
-        return {"error": msg}
+        workers = _resolve_workers(_get_config())
+        # 启动扫描前打印实际执行核数（worker 数 = 并行执行的进程数；先显示 CPU 核数，执行核数基于它）
+        log.info(f"[扫描] 启动批量扫描: 共{total}只 | CPU核数={os.cpu_count()} | "
+              f"执行核数={workers} | 引擎={engine}")
+        futures = []
+        try:
+            for seq, stk in enumerate(valid):
+                code = stk.get("code", "")
+                prefix = stk.get("prefix", "")
+                src = stk.get("_source") or source
+                fut = pool.submit(_worker_scan_one, task_id, code, freq, prefix,
+                                  recent, src, mode, seq)
+                futures.append((fut, seq, code))
+        except Exception as exc:  # noqa: BLE001 —— 派发期失败需销毁坏池自愈
+            # 受限容器典型失败：队列创建失败 → 首次 submit 抛 BrokenProcessPool。
+            # 必须销毁坏池（_active_scans 归零）+ 置任务 error，否则坏池被
+            # 永久复用、_active_scans 泄漏，批量扫描再无自愈机会、任务永挂。
+            # 已知取舍（有意为之，勿当 bug）：若此刻另有批次共用同一坏池，
+            # 其 futures 也会被 destroy_pool() 一并取消并标 error——因池已损坏、
+            # 那批本就必然失败，强销毁换来下次扫描可重新装配自愈。
+            msg = f"扫描任务派发失败: {type(exc).__name__}: {exc}"
+            log.error(f"[扫描池] {msg}")
+            destroy_pool()
+            store.set_status(task_id, "error", msg)
+            return {"error": msg}
 
-    store.set_status(task_id, "running")
-    threading.Thread(target=_monitor_task, args=(task_id, futures),
-                     daemon=True).start()
+        store.set_status(task_id, "running")
+        threading.Thread(target=_monitor_task, args=(task_id, futures),
+                         daemon=True).start()
+    except Exception as exc:  # noqa: BLE001 —— 启动失败须归还引用计数
+        _release_scan()
+        msg = f"扫描启动失败: {type(exc).__name__}: {exc}"
+        log.error(f"[扫描池] {msg}")
+        try:
+            store.set_status(task_id, "error", msg)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"error": msg}
     return {"task_id": task_id, "total": total, "workers": workers,
             "engine": engine}
 

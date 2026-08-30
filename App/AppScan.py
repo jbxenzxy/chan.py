@@ -50,7 +50,40 @@ log = get_logger(__name__)
 _stock_names_cache = app_data.names_cache
 
 # 扫描跳过记录（收集后统一打印）
+#
+# 审计 P1-5：本列表**整个逃出了 AppOrch.SHARED_RESOURCE_REGISTRY**，既没
+# 登记也没加锁。实际有两个执行体在碰它：
+#   · 追加者：扫描收割线程（AppScanPool._monitor_task 汇总 worker 错误明细）
+#   · 清空 / 遍历 / 计数者：REST 线程（本文件 start() / end() / skip_log 出口）
+# list.append 在 CPython 下是原子的，但 `.clear()` 与 `len()` / 遍历 **不是**
+# 原子的组合操作——清空发生在遍历中途会让汇总明细整批丢失或串批次。
+# 不抛异常，所以一直没人发现。这是「登记表漏项」的典型代价。
 _scan_skip_log = []
+_scan_skip_log_lock = threading.Lock()
+
+
+def append_scan_skip(msg):
+    """加锁追加一条跳过记录（扫描线程 / 收割线程调用）"""
+    with _scan_skip_log_lock:
+        _scan_skip_log.append(msg)
+
+
+def clear_scan_skip():
+    """加锁清空跳过记录（新一轮扫描开始时调用）"""
+    with _scan_skip_log_lock:
+        _scan_skip_log.clear()
+
+
+def scan_skip_snapshot():
+    """加锁取跳过记录的**快照**（遍历一律经此，勿直接碰列表本体）"""
+    with _scan_skip_log_lock:
+        return list(_scan_skip_log)
+
+
+def scan_skip_count():
+    """加锁取跳过记录条数"""
+    with _scan_skip_log_lock:
+        return len(_scan_skip_log)
 
 # 【已删除】_scan_lock
 # 它从未真正生效：① API 进程没有任何路由调用 scan_one（FrontAPI 只有
@@ -272,7 +305,8 @@ class Scanner:
     # ── 状态访问器（收敛到类内部）────────────────
     @property
     def skip_log(self):
-        return _scan_skip_log
+        # 审计 P1-5：返回快照而非本体——调用方常在锁外遍历它
+        return scan_skip_snapshot()
 
     @property
     def start_time(self):
@@ -439,7 +473,7 @@ class Scanner:
 
             t_analyze = time.time() - t0
             if "error" in result:
-                _scan_skip_log.append(f"{code} - {result['error']}")
+                append_scan_skip(f"{code} - {result['error']}")
                 log.info(f"[耗时-扫描] {code} 分析失败: {result['error']}, 耗时{t_analyze:.3f}s")
                 return {"error": result["error"]}
 
@@ -614,7 +648,7 @@ class Scanner:
                 return {"code": code, "buy_points": [], "sell_points": []}
 
         except Exception as exc:
-            _scan_skip_log.append(f"{code} - 异常: {exc}")
+            append_scan_skip(f"{code} - 异常: {exc}")
             t_total = time.time() - t_scan_start
             log.info(f"[耗时-扫描] {code} 异常: {exc}, 总耗时{t_total:.3f}s")
             return {"error": str(exc)}
@@ -623,7 +657,7 @@ class Scanner:
     def start(self):
         """新一轮扫描开始"""
         global _scan_start_time
-        _scan_skip_log.clear()
+        clear_scan_skip()
         _scan_start_time = time.time()
         try:
             _m._load_stock_names_from_cache_file()
@@ -642,23 +676,27 @@ class Scanner:
         seconds = int(elapsed % 60)
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
-        if _scan_skip_log:
+        # 审计 P1-5：整段基于**同一次快照**，避免「判空 → 遍历 → 计数」
+        # 三个动作之间被收割线程的追加 / REST 的清空插队（原实现三次
+        # 各自直接读列表，中途被 clear 会让明细整批丢且计数与打印不一致）。
+        _skip_snapshot = scan_skip_snapshot()
+        if _skip_snapshot:
             log.info("========== 扫描异常/失败股票明细 ==========")
-            log.info(f"共 {len(_scan_skip_log)} 只:")
-            for i, item in enumerate(_scan_skip_log, 1):
+            log.info(f"共 {len(_skip_snapshot)} 只:")
+            for i, item in enumerate(_skip_snapshot, 1):
                 log.info(f"  {i}. {item}")
             log.info("============================================\n")
         else:
             log.info(f"[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票")
 
         if _scan_start_time is not None:
-            skip_count = len(_scan_skip_log)
+            skip_count = len(_skip_snapshot)
             msg = f"耗时 {time_str}"
             if skip_count > 0:
                 msg += f"，跳过 {skip_count} 只"
             _send_windows_notification("扫描完成", msg)
             _scan_start_time = None
-        return {"count": len(_scan_skip_log)}
+        return {"count": len(_skip_snapshot)}
 
     def clear_cache(self):
         """关闭扫描面板：不再清空共享股票分析缓存。
