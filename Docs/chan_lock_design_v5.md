@@ -172,14 +172,14 @@ def tdx_data_context(data):
 
 | 锁 | 类型 | 护的资源 | 为什么这么切 |
 |----|------|---------|-------------|
-| `_cache_lock` | RLock | 股票分析结果 LRU + 股票下窗 CChan 缓存 | REST 线程，毫秒级访问 |
+| `_stocks_cache_lock` | RLock | 股票分析结果 LRU + 股票下窗 CChan 缓存 | REST 线程，毫秒级访问 |
 | `_futures_cache_lock` | RLock | 期货下窗 CChan 缓存 | **独立成锁**：访问者是 SSE 常驻线程（高频写、生命周期以分钟计），不该和 REST 的毫秒级缓存操作抢同一把锁 |
 | `_user_store_lock` | RLock | 标注 / 选点 / last_code_freq / float_mc / zxg.blk | 都是短耗时读-改-写，合并消除跨锁顺序死锁 |
 
 `AppRefresh._refresh_state_lock`：护 `_refresh_status`，`running` 的检查
 与置位必须在锁内完成（CAS）。
 
-`AppScanPool._pool_lock`：护进程池单例 + `_active_scans` 引用计数，保留。
+`AppScanPool._scan_pool_lock`：护进程池单例 + `_active_scans` 引用计数，保留。
 
 ### 3.3 删除清单
 
@@ -210,10 +210,10 @@ def tdx_data_context(data):
 
 | 资源 | 作用域 | 保护手段 | 访问者 |
 |------|--------|---------|--------|
-| 股票分析结果 + 股票下窗缓存 | 进程内 | `AppData._cache_lock` (RLock) | REST / SSE |
+| 股票分析结果 + 股票下窗缓存 | 进程内 | `AppData._stocks_cache_lock` (RLock) | REST / SSE |
 | 期货下窗 CChan 缓存 | 进程内 | `AppData._futures_cache_lock` (RLock) | SSE 写 / REST 读、清 |
 | 标注 / 选点 / last_code_freq / float_mc / zxg.blk | 进程内 + 文件 | `AppData._user_store_lock` + 原子写 | REST / worker（只读加载） |
-| 进程池单例 + 引用计数 | 进程内 | `AppScanPool._pool_lock` | REST |
+| 进程池单例 + 引用计数 | 进程内 | `AppScanPool._scan_pool_lock` | REST |
 | `scan_tasks.db` | **跨进程** | SQLite WAL + `busy_timeout`（OS 文件锁） | REST / worker |
 | `_refresh_status` | 进程内 | `AppRefresh._refresh_state_lock` | REST / 刷新线程 |
 | 除权缓存 / TqApi 注册表 | 进程内 | `DataAPI` 内部锁 | 正交，未动 |

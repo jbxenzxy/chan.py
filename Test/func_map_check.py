@@ -314,9 +314,12 @@ def check(update=False):
     if orphan_s:
         failures.append(f"状态未归属({len(orphan_s)}): {orphan_s}")
 
-    # ② 无幽灵
-    ghost_f = sorted(set(TARGET_FUNCS) - set(funcs))
-    ghost_s = sorted(set(TARGET_STATES) - set(states))
+    # ② 无幽灵（RETIRE 类＝有意下线的留痕登记，物理上必然不在代码，
+    #    豁免「不存在」检查；回潮由 phase3/4 与 lock_v5 守卫另管）
+    ghost_f = sorted(n for n in (set(TARGET_FUNCS) - set(funcs))
+                     if TARGET_FUNCS[n][0] != "RETIRE")
+    ghost_s = sorted(n for n in (set(TARGET_STATES) - set(states))
+                     if TARGET_STATES[n][0] != "RETIRE")
     if ghost_f:
         failures.append(f"归属项已不存在于代码({len(ghost_f)}): {ghost_f}")
     if ghost_s:

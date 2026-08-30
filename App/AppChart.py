@@ -52,7 +52,7 @@ log = get_logger(__name__)
 # 【已删除】_ENGINE_LOCK + engine_section
 # 二者是套在 AppEngine._stock_analysis_lock 外的第二层壳（两层护同一段代码）。
 # 根因锁随 CTdxAPI._tdx_data 改为每请求线程局部注入而删除后，外层壳净贡献
-# 归零，一并删除。共享资源的锁现由 AppData 按资源持有（cache_lock /
+# 归零，一并删除。共享资源的锁现由 AppData 按资源持有（stocks_cache_lock /
 # futures_cache_lock / user_store_lock），登记表见 AppOrch 的
 # SHARED_RESOURCE_REGISTRY —— 它按「资源」索引，而不是按「入口」索引。
 
