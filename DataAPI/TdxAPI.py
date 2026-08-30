@@ -17,6 +17,9 @@ import socket
 import struct
 import pandas as pd
 from datetime import datetime, timedelta
+import threading as _threading
+import logging
+log = logging.getLogger(__name__)
 from contextlib import contextmanager
 from collections import OrderedDict
 import numpy as np
@@ -224,8 +227,9 @@ def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
         _tdx_config["forward_adjust_enabled"] = forward_adjust_enabled
 
 
-# pytdx 行情服务器地址列表（用于前复权 xdxr 数据获取）
-PYTDX_SERVERS = [
+# 板块文件（block_*.dat）网络下载/刷新用的通达信行情服务器列表。
+# 走 pytdx 的 TdxHq_API 连接拉取板块文件；与除权除息无关（除权除息现走 eltdx）。
+TDX_BLOCK_SERVERS = [
     ('115.238.90.165', 7709),   # 最快的服务器，放在第一位
     ('119.147.212.81', 7709),
     ('120.76.152.2', 7709),
@@ -703,459 +707,12 @@ def _resample_day_to_week(day_records):
 #   前复权后价格 = (复权前价格 - 每股现金红利 + 配股比例 × 配股价)
 #                 / (1 + 送股比例 + 转增比例 + 配股比例)
 # 前复权递推方式：从最新日期向前，遇到除权除息日时，该日之前的所有OHLC都乘以 a 再加 b。
-# 数据获取策略（按优先级）：
-#   1. eltdx（优先，基于 7709 协议，字段与 mootdx 完全等价）
-#   2. mootdx Quotes 网络接口（备用）
-#   3. pytdx 网络接口（自动测速，最后备用）
+# XDXR 数据获取：由 DataAPI/ElTdxAPI.py 提供（当前仅 eltdx 数据源，
+#   mootdx/pytdx 回退已注释保留于 ElTdxAPI，取消注释即可恢复三级回退）。
 # ============================================================
 
-# mootdx / pytdx 返回的列名可能不同，统一标准化
-def _normalize_xdxr_df(df):
-    """
-    将 mootdx 或 pytdx 返回的 DataFrame 列名统一为标准列名。
-
-    mootdx 实际列名（本版本）:
-      year, month, day, category, name, fenhong, peigujia,
-      songzhuangu, peigu, suogu, panqianliutong, panhouliutong,
-      qianzongguben, houzongguben, fenshu, xingquanjia
-    其中 songzhuangu = 送股+转增 合计（每10股）
-    """
-    if df is None or len(df) == 0:
-        return df
-
-    # ── 处理拆分日期 (year, month, day → date) ──
-    if 'year' in df.columns and 'month' in df.columns and 'day' in df.columns:
-        def _make_date(row):
-            try:
-                y = int(row['year']); m = int(row['month']); d = int(row['day'])
-                return datetime(y, m, d)
-            except Exception:
-                return None
-        df['date'] = df.apply(_make_date, axis=1)
-        # 日期列已创建，不再需要 day->date 映射
-
-    # ── 列名映射 ──
-    col_map = {
-        # 日期列（仅在无 year/month/day 时生效）
-        'date': 'date', 'ex_date': 'date', 'datetime': 'date', 'time': 'date',
-        'td': 'date', '除权除息日': 'date', '除权日': 'date',
-        'ex_dividend_date': 'date', 'trade_date': 'date',
-        # 事件类别
-        'category': 'category', 'type': 'category', '类别': 'category',
-        'event_type': 'category', 'event': 'category',
-        # 分红（每10股）
-        'fenhong': 'fenhong', 'cash_div': 'fenhong', 'cash': 'fenhong',
-        '分红': 'fenhong', 'dividend': 'fenhong', 'div': 'fenhong',
-        # 送转股合计（每10股）— mootdx 本版本的关键字段
-        'songzhuangu': 'songzhuangu',
-        # 送股（每10股）
-        'songgu': 'songgu', 'bonus_share': 'songgu', '送股': 'songgu',
-        'bonus': 'songgu', 'stock_div': 'songgu', 'sg': 'songgu', 'song': 'songgu',
-        # 转增（每10股）
-        'zhuanzeng': 'zhuanzeng', 'transfer': 'zhuanzeng', '转增': 'zhuanzeng',
-        'zhuan': 'zhuanzeng', 'zz': 'zhuanzeng', 'trans': 'zhuanzeng',
-        # 配股（每10股）
-        'peigu': 'peigu', 'rights_issue': 'peigu', '配股': 'peigu',
-        'allotment': 'peigu', 'rights': 'peigu', 'pg': 'peigu',
-        # 配股价
-        'peigujia': 'peigujia', 'rights_price': 'peigujia', '配股价': 'peigujia',
-        'allotment_price': 'peigujia', 'pgj': 'peigujia',
-        # 股票代码
-        'code': 'code', 'symbol': 'code', '股票代码': 'code',
-    }
-
-    rename = {}
-    for col in df.columns:
-        col_lower = col.lower().strip().replace('_', '').replace(' ', '')
-        if col_lower in col_map:
-            rename[col] = col_map[col_lower]
-        elif col in col_map:
-            rename[col] = col_map[col]
-        else:
-            for key, target in col_map.items():
-                if len(key) >= 3 and key in col_lower:
-                    rename[col] = target
-                    break
-
-    if rename:
-        df = df.rename(columns=rename)
-        pass  # 列名映射完成
-
-    # ── 统一 songgu/zhuanzeng: songzhuangu 是送转合计，拆到 songgu ──
-    if 'songzhuangu' in df.columns:
-        # 将 songzhuangu 的值作为 songgu（送转合计），zhuanzeng 留 0
-        if 'songgu' not in df.columns:
-            df['songgu'] = df['songzhuangu'].fillna(0)
-        else:
-            df['songgu'] = df['songgu'].fillna(0) + df['songzhuangu'].fillna(0)
-        df.drop(columns=['songzhuangu'], inplace=True)
-
-    # 确保必要的列存在
-    required_cols = ['date', 'category', 'fenhong', 'songgu', 'zhuanzeng', 'peigu', 'peigujia']
-    for col in required_cols:
-        if col not in df.columns:
-            df[col] = 0
-
-    return df
-
-
-# ============================================================
-# xdxr 网络连接管理（连接复用 + 线程锁，防止多线程并发冲突）
-# ============================================================
-import threading as _threading
-
-import logging
-log = logging.getLogger(__name__)
-_xdxr_lock = _threading.Lock()
-
-# ============================================================
-# eltdx 除权除息（优先，基于 7709 协议 0x000f 命令）
-# ============================================================
-# eltdx TdxClient 单例复用（与 mootdx 单例对称）：每次新建 TdxClient 都会
-# 重新解析 hosts 并可能触发服务器探测（probe_hosts），探测后写排名缓存
-# （persist=True）在 Windows 下常因文件被占用抛 OSError → RuntimeWarning
-# （"unable to persist eltdx server ranking"）。扫描每票都走 xdxr，若每次
-# 新建会反复触发该警告。改为模块级单例 + probe_hosts=False：
-#   - 单例：连接复用，避免重复探测/重复解析 hosts；
-#   - probe_hosts=False：关闭启动探测（探测仅用于选最快服务器，非必需；
-#     连接失败时 eltdx 内部仍会按 hosts 顺序重连），从根上消除该警告。
-_eltdx_client = None
-_eltdx_client_ready = False
-# 检测到 eltdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-_eltdx_api_mismatch = None
-
-
-def _check_eltdx_api_compat(client):
-    """校验当前 eltdx 是否具备 chan.py 所需的 corporate.capital_changes 接口。
-
-    若旧版 eltdx（缺少 capital_changes）仍在运行，直接抛 RuntimeError（附升级指引），
-    让用户及时得知接口失效，而不是静默回退到 mootdx / pytdx。
-    """
-    global _eltdx_api_mismatch
-    corporate = getattr(client, "corporate", None)
-    if corporate is None or not hasattr(corporate, "capital_changes"):
-        _eltdx_api_mismatch = (
-            "[eltdx 接口不兼容] 前复权所需的 client.corporate.capital_changes 不存在："
-            "当前 eltdx 版本过旧，请升级：pip install -U 'eltdx>=3.0.0'。"
-            "升级前除权除息数据已回退由 mootdx / pytdx 获取。"
-        )
-        raise RuntimeError(_eltdx_api_mismatch)
-    return client
-
-
-def _ensure_eltdx_client():
-    """确保 eltdx TdxClient 单例已创建，返回 client 或 None。线程安全。"""
-    global _eltdx_client, _eltdx_client_ready
-    if _eltdx_client_ready and _eltdx_client is not None:
-        return _eltdx_client
-    try:
-        from eltdx import TdxClient
-        # probe_hosts=False：关闭启动服务器探测（探测会写排名缓存，
-        # Windows 下文件占用会抛 OSError → RuntimeWarning，且非必需）
-        _eltdx_client = TdxClient(timeout=10, probe_hosts=False)
-        _eltdx_client_ready = True
-        return _eltdx_client
-    except Exception:
-        _eltdx_client_ready = False
-        _eltdx_client = None
-        return None
-
-
-def _get_xdxr_eltdx(market, code):
-    """通过 eltdx 获取除权除息数据。在锁内调用。
-    返回与 _normalize_xdxr_df 兼容的 DataFrame，失败返回 None。
-    使用 client.corporate.capital_changes(code)，其中 0x000f 标签 1 即除权除息事件。字段映射：
-      CapitalChangeRecord.c1_value=分红(每10股) · c2_value=配股价 ·
-      c3_value=送转(每10股) · c4_value=配股数量(每10股)，与 mootdx 返回等价。
-    """
-    try:
-        client = _ensure_eltdx_client()
-        if client is None:
-            return None
-        _check_eltdx_api_compat(client)   # 接口失效即抛错，避免静默降级
-        market_code = f"{market.lower()}{code}"
-        with client:
-            block = client.corporate.capital_changes(market_code)
-        records = getattr(block, "records", ()) or ()
-        rows = []
-        for r in records:
-            # 仅保留除权除息（标签 1）事件
-            if int(getattr(r, "category_raw", 0)) != 1:
-                continue
-            d = getattr(r, "date", None)
-            if d is not None and not isinstance(d, datetime):
-                d = datetime(d.year, d.month, d.day)
-            rows.append({
-                'code': getattr(r, 'code', code),
-                'date': d,
-                'category': int(getattr(r, 'category_raw', 1)),
-                'fenhong': float(getattr(r, 'c1_value', 0) or 0),
-                'peigujia': float(getattr(r, 'c2_value', 0) or 0),
-                'songzhuangu': float(getattr(r, 'c3_value', 0) or 0),
-                'peigu': float(getattr(r, 'c4_value', 0) or 0),
-            })
-        df = pd.DataFrame(rows, columns=['code', 'date', 'category',
-                                         'fenhong', 'peigujia', 'songzhuangu', 'peigu'])
-        if len(df) == 0:
-            return None
-        return _normalize_xdxr_df(df)
-    except Exception:
-        return None
-
-# mootdx Quotes 单例连接（建一次，所有股票复用）
-_mootdx_client = None
-_mootdx_client_ready = False
-# 检测到 mootdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-_mootdx_api_mismatch = None
-
-
-def _check_mootdx_api_compat(client):
-    """校验当前 mootdx 是否具备 chan.py 所需的 xdxr 接口。
-
-    若 installed mootdx 的接口已变更（缺少 quotes.xdxr），直接抛 RuntimeError
-    （附升级指引），让用户及时得知接口失效，而不是静默回退到 pytdx。
-    """
-    global _mootdx_api_mismatch
-    if not hasattr(client, "xdxr"):
-        _mootdx_api_mismatch = (
-            "[mootdx 接口不兼容] 前复权所需的 Quotes.xdxr 接口不存在："
-            "当前 mootdx 版本接口已变更。请锁定/升级适配版本：pip install -U 'mootdx'，"
-            "若仍报错请反馈所装版本。升级前除权除息数据已回退由 pytdx 获取。"
-        )
-        raise RuntimeError(_mootdx_api_mismatch)
-    return client
-
-
-def _ensure_mootdx_client():
-    """确保 mootdx Quotes 客户端已连接，返回 client 或 None。线程安全。"""
-    global _mootdx_client, _mootdx_client_ready
-    if _mootdx_client_ready and _mootdx_client is not None:
-        return _mootdx_client
-    try:
-        from mootdx.quotes import Quotes
-        _mootdx_client = Quotes.factory(market='std', bestip=False, timeout=10)
-        _mootdx_client_ready = True
-        return _mootdx_client
-    except Exception:
-        _mootdx_client_ready = False
-        _mootdx_client = None
-        return None
-
-
-def _get_xdxr_mootdx(market, code):
-    """通过 mootdx Quotes 单例连接获取除权除息数据。在锁内调用。"""
-    # except 复位分支需写模块级单例旗标，必须声明 global（否则赋值落局部、复位失效）
-    global _mootdx_client, _mootdx_client_ready
-    client = _ensure_mootdx_client()
-    if client is None:
-        return None
-    _check_mootdx_api_compat(client)   # 接口失效即抛错，避免静默降级
-    try:
-        df = client.xdxr(symbol=code)
-        if df is not None and len(df) > 0:
-            return _normalize_xdxr_df(df)
-    except Exception:
-        _mootdx_client_ready = False
-        _mootdx_client = None
-    return None
-
-
-# pytdx TdxHq_API 单例连接（建一次，所有股票复用）
-_pytdx_api = None
-_pytdx_api_ready = False
-# 检测到 pytdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-_pytdx_api_mismatch = None
-
-
-def _check_pytdx_api_compat(api):
-    """校验当前 pytdx 是否具备 chan.py 所需的接口。
-
-    若 installed pytdx 的接口已变更（缺少 get_xdxr_info / connect），直接抛
-    RuntimeError（附升级指引），让用户及时得知接口失效，而不是静默返回空。
-    """
-    global _pytdx_api_mismatch
-    missing = [m for m in ("get_xdxr_info", "connect") if not hasattr(api, m)]
-    if missing:
-        _pytdx_api_mismatch = (
-            "[pytdx 接口不兼容] 前复权所需接口缺失: " + ", ".join(missing)
-            + "。当前 pytdx 版本接口已变更，请锁定/升级适配版本：pip install -U 'pytdx'，"
-            "若仍报错请反馈所装版本。升级前除权除息数据将无法从 pytdx 获取。"
-        )
-        raise RuntimeError(_pytdx_api_mismatch)
-    return api
-
-
-def _ensure_pytdx_api():
-    """确保 pytdx TdxHq_API 已连接，返回 api 或 None。线程安全。"""
-    global _pytdx_api, _pytdx_api_ready
-    if _pytdx_api_ready and _pytdx_api is not None:
-        return _pytdx_api
-    try:
-        from pytdx.hq import TdxHq_API
-        host, port = _find_pytdx_server()
-        if not host:
-            return None
-        _pytdx_api = TdxHq_API()
-        if not _pytdx_api.connect(host, port):
-            _pytdx_api = None
-            _pytdx_api_ready = False
-            return None
-        _pytdx_api_ready = True
-        return _pytdx_api
-    except Exception:
-        _pytdx_api = None
-        _pytdx_api_ready = False
-        return None
-
-
-def _find_pytdx_server():
-    """找到可用的 pytdx 服务器（内部用 daemon 线程做超时探测）"""
-    result = [None]
-    def _select():
-        try:
-            from pytdx.util.best_ip import select_best_ip
-            result[0] = select_best_ip()
-        except Exception:
-            pass
-    t = _threading.Thread(target=_select, daemon=True)
-    t.start()
-    t.join(timeout=10)
-    if result[0] and isinstance(result[0], dict) and 'ip' in result[0]:
-        return result[0]['ip'], result[0].get('port', 7709)
-    for host, port in PYTDX_SERVERS:
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(1.5)
-            _r = sock.connect_ex((host, port))
-            sock.close()
-            if _r == 0:
-                return host, port
-        except Exception:
-            continue
-    return None, None
-
-
-def _get_xdxr_pytdx(market, code):
-    """通过 pytdx 单例连接获取除权除息数据。在锁内调用。"""
-    # except 复位分支需写模块级单例旗标，必须声明 global（否则赋值落局部、复位失效）
-    global _pytdx_api, _pytdx_api_ready
-    api = _ensure_pytdx_api()
-    if api is None:
-        return None
-    _check_pytdx_api_compat(api)   # 接口失效即抛错，避免静默降级
-    mkt = 1 if market.lower() == 'sh' else 0
-    try:
-        data = api.get_xdxr_info(mkt, code)
-        if not data:
-            return None
-        rows = []
-        for item in data:
-            rows.append({
-                'code': item.get('code', code),
-                'date': item.get('date', 0),
-                'category': item.get('category', 0),
-                'fenhong': item.get('fenhong', 0) or 0,
-                'peigu': item.get('peigu', 0) or 0,
-                'peigujia': item.get('peigujia', 0) or 0,
-                'songgu': item.get('songgu', 0) or 0,
-                'zhuanzeng': item.get('zhuanzeng', 0) or 0,
-            })
-        df = pd.DataFrame(rows)
-        return _normalize_xdxr_df(df)
-    except Exception:
-        _pytdx_api_ready = False
-        _pytdx_api = None
-        return None
-
-
-# xdxr 独立缓存：key=(market, code)，同一股票跨周期不重复拉取
-_xdxr_cache = {}
-
-def get_xdxr_data(market, code):
-    """
-    获取指定股票的除权除息数据。
-    线程安全：多线程并发时，网络请求串行化，避免 pytdx socket 竞争。
-
-    优先级：
-      1. 缓存（内存命中，跳过网络请求）
-      2. eltdx（优先，基于 7709 协议，字段与 mootdx 完全等价）
-      3. mootdx Quotes（备用）
-      4. pytdx（自动测速，最后备用）
-
-    返回 pandas DataFrame，统一列名：
-      date, category, fenhong, peigu, peigujia, songgu, zhuanzeng
-    其中 fenhong/songgu/zhuanzeng/peigu 均为"每10股"单位。
-    返回 None 表示无除权除息数据或所有方法均失败。
-    """
-    if market.lower() not in ('sh', 'sz'):
-        return None
-
-    cache_key = (market, code)
-    with _xdxr_lock:
-        if cache_key in _xdxr_cache:
-            cached = _xdxr_cache[cache_key]
-            return cached
-
-        for _src_name, _src_fn in (
-            ("eltdx", _get_xdxr_eltdx),
-            ("mootdx", _get_xdxr_mootdx),
-            ("pytdx", _get_xdxr_pytdx),
-        ):
-            try:
-                df = _src_fn(market, code)
-            except RuntimeError as _e:
-                # 任一数据源接口不兼容：显著上报一次，随后正常回退其余数据源
-                _mismatch = {
-                    "eltdx": _eltdx_api_mismatch,
-                    "mootdx": _mootdx_api_mismatch,
-                    "pytdx": _pytdx_api_mismatch,
-                }.get(_src_name)
-                if _mismatch:
-                    log.error("%s", _mismatch)
-                else:
-                    log.error("[xdxr] %s: %s", _src_name, _e)
-                df = None
-            except Exception:
-                df = None
-            if df is not None and len(df) > 0:
-                _xdxr_cache[cache_key] = df
-                return df
-
-        _xdxr_cache[cache_key] = None
-        return None
-
-
-def get_float_shares_from_xdxr(market, code):
-    """
-    从 xdxr 数据中提取最新的流通股本（单位：股）。
-    返回 None 表示无数据。
-
-    与 gbbq 不同，这里直接复用已获取的 xdxr 数据（来自 get_xdxr_data 缓存），
-    无需额外的网络请求或本地文件解密。
-    xdxr 中每个事件都记录了 panhouliutong（盘后流通，单位：万股），
-    取最新一条记录即为当前流通股本。
-    """
-    xdxr_df = get_xdxr_data(market, code)
-    if xdxr_df is None or len(xdxr_df) == 0:
-        return None
-
-    # 按日期降序排列，取最新一条
-    df_sorted = xdxr_df.sort_values('date', ascending=False)
-    latest = df_sorted.iloc[0]
-
-    # panhouliutong: 盘后流通股本（万股）
-    shares_wan = latest.get('panhouliutong', 0)
-    if shares_wan is None:
-        shares_wan = 0
-    try:
-        shares_wan = float(shares_wan)
-    except (ValueError, TypeError):
-        return None
-
-    if math.isnan(shares_wan) or shares_wan <= 0:
-        return None
-
-    return shares_wan * 10000  # 万股 → 股
+from DataAPI.ElTdxAPI import get_xdxr_data
+from DataAPI.AkshareAPI import fetch_index_cons
 
 
 # 构建复权事件
@@ -1800,7 +1357,7 @@ def _download_block_gn_from_network(progress_callback=None):
         # 没有配置通达信目录，全部从网络下载
         need_download = candidate_files[:]
 
-    servers = PYTDX_SERVERS[:]
+    servers = TDX_BLOCK_SERVERS[:]
 
     if need_download:
         log.info(f"[板块成分股] 需从网络下载: {need_download}")
@@ -1914,7 +1471,7 @@ def refresh_block_files(progress_callback=None):
         return
 
     refreshed = 0
-    for host, port in PYTDX_SERVERS[:]:
+    for host, port in TDX_BLOCK_SERVERS[:]:
         try:
             api = TdxHq_API(multithread=True)
             if not api.connect(host, port):
@@ -2213,6 +1770,32 @@ def get_index_stocks(sector_code):
     else:
         log.error(f"[板块成分股] ❌ 旧 block_*.dat 缓存中未找到板块 '{sector_name}'")
 
+    return stocks
+
+
+def _index_cons_to_stocks(items):
+    """将 AkshareAPI.fetch_index_cons 的 {code, market} 结果转为板块成分结构。
+
+    前缀规则与 _parse_stocks_from_df 保持一致（首数字 6/8/9→1、0/3→0、2/4→2）。
+    items: list[dict]，每项 {"code", "market"}。
+    """
+    stocks = []
+    seen = set()
+    for it in items:
+        code = it.get("code", "")
+        if code in seen:
+            continue
+        seen.add(code)
+        first = code[0]
+        if first in "689":
+            prefix = "1"
+        elif first in "03":
+            prefix = "0"
+        elif first in "24":
+            prefix = "2"
+        else:
+            prefix = "1"
+        stocks.append({"code": code, "prefix": prefix, "name": code})
     return stocks
 
 
@@ -2554,6 +2137,30 @@ def _read_hk_index_stocks(sector_code):
     return []
 
 
+def _fetch_csi_index_stocks(sector_code):
+    """中证指数成分股统一取数（经 AkshareAPI.fetch_index_cons 收口）。
+
+    中证四大指数（000300/000905/000852/000688）与「其他指数（000xxx 非中证、
+    932xxx 等）」的 csindex 回退逻辑相同，提取归一复用。限时 25s。
+    返回 [{"code","prefix","name"}, ...]；空 / 失败返回 []。
+    """
+    try:
+        items = _run_with_timeout(
+            lambda: fetch_index_cons(sector_code),
+            timeout=25)
+        if not items:
+            log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
+            return []
+        stocks = _index_cons_to_stocks(items)
+        log.info(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
+        return stocks
+    except Exception as e:
+        log.warning(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
 def _read_standard_index_stocks(sector_code):
     """
     根据指数代码获取成分股。
@@ -2573,32 +2180,10 @@ def _read_standard_index_stocks(sector_code):
         log.info(f"[板块成分股] 📈 上证指数(000001) 上交所A股共 {len(stocks or [])} 只")
         return stocks or []
 
-    try:
-        import akshare as ak
-    except ImportError:
-        log.warning("[板块成分股] AKShare 未安装，无法获取标准指数成分股")
-        return []
-
-    # ── 中证指数（000300/000905/000852/000688 等）→ csindex ──
+    # ── 中证指数（000300/000905/000852/000688 等）→ csindex（经 AkshareAPI 收口）──
     CSI_INDICES = {"000300", "000905", "000852", "000688"}
     if sector_code in CSI_INDICES:
-        try:
-            df = _run_with_timeout(
-                lambda: ak.index_stock_cons_csindex(symbol=sector_code),
-                timeout=25)
-            if df is None:
-                return []
-            if df.empty:
-                log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
-                return []
-            stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
-            log.info(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
-            return stocks
-        except Exception as e:
-            log.warning(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
+        return _fetch_csi_index_stocks(sector_code)
 
     # ── 深交所指数（399xxx）→ 深交所官网 XLS 直连（限时+可中断）──
     if sector_code.startswith("399"):
@@ -2635,24 +2220,8 @@ def _read_standard_index_stocks(sector_code):
             traceback.print_exc()
             return []
 
-    # ── 其他指数（000xxx 非中证、932xxx 等）→ 尝试 csindex ──
-    try:
-        df = _run_with_timeout(
-                lambda: ak.index_stock_cons_csindex(symbol=sector_code),
-                timeout=25)
-        if df is None:
-            return []
-        if df.empty:
-            log.info(f"[板块成分股] 中证指数 返回空数据: {sector_code}")
-            return []
-        stocks = _parse_stocks_from_df(df, f"csindex({sector_code})")
-        log.info(f"[板块成分股] ✅ 中证指数 获取 '{sector_code}' 共 {len(stocks)} 只成分股")
-        return stocks
-    except Exception as e:
-        log.warning(f"[板块成分股] 中证指数 获取 {sector_code} 失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+    # ── 其他指数（000xxx 非中证、932xxx 等）→ 尝试 csindex（经 AkshareAPI 收口）──
+    return _fetch_csi_index_stocks(sector_code)
 
 
 # ============================================================
@@ -2799,7 +2368,7 @@ if __name__ == "__main__":
     print("")
     print("前复权功能：")
     print("  - _forward_adjust(): 对原始K线进行前复权处理")
-    print("  - get_xdxr_data(): 获取除权除息数据（eltdx -> mootdx -> pytdx）")
+    print("  - get_xdxr_data(): 获取除权除息数据（DataAPI/ElTdxAPI.py · 当前仅 eltdx）")
     print("  - get_float_shares_from_xdxr(): 从xdxr提取流通股本")
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")
     print("")

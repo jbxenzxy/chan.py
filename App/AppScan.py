@@ -35,6 +35,9 @@ from App.AppConfig import app_config
 # 板块成分读取（扫描来源 page_index）
 from DataAPI.TdxAPI import get_index_stocks
 
+# 流通市值批量获取（腾讯行情接口，经 TxAPI 收口）
+from DataAPI.TxAPI import fetch_float_mc
+
 from App.AppLog import get_logger
 log = get_logger(__name__)
 
@@ -123,49 +126,12 @@ def _quick_prefilter_pass(market, code):
 
 
 def _fetch_float_mc_from_tencent(stock_list):
-    """通过腾讯行情接口批量获取流通市值（毫秒级，极其稳定）。
+    """通过腾讯行情接口批量获取流通市值（经 TxAPI.fetch_float_mc 收口）。
+
     stock_list: [{"code": "600519", "prefix": "1"}, ...]
     返回: {code: float_mc(亿元)}，失败返回空字典。
     """
-    if not stock_list:
-        return {}
-    import requests as req
-    # 构造腾讯代码：prefix 0→sz, 1→sh, 2→bj
-    _PFX = {"0": "sz", "1": "sh", "2": "bj"}
-    codes = []
-    for stk in stock_list:
-        code = stk.get("code", "")
-        prefix = stk.get("prefix", "")
-        mkt = _PFX.get(prefix, "")
-        if mkt and code:
-            codes.append(mkt + code)
-    if not codes:
-        return {}
-    # 腾讯接口限制每次约200-300只，超过则分批
-    batch_size = 300
-    all_mv = {}
-    for i in range(0, len(codes), batch_size):
-        batch = codes[i:i + batch_size]
-        url = "https://qt.gtimg.cn/q=" + ",".join(batch)
-        try:
-            resp = req.get(url, timeout=5)
-            for line in resp.text.strip().split("\n"):
-                if "v_" not in line:
-                    continue
-                try:
-                    # 格式: v_sh600519="1~贵州茅台~600519~...~[44]流通市值~..."
-                    parts = line.split('="')[1].strip().strip('";')
-                    fields = parts.split("~")
-                    if len(fields) > 44:
-                        stock_code = fields[2]  # 纯数字代码
-                        nmc = fields[44]  # 流通市值(亿元，腾讯接口直接返回亿元)
-                        if stock_code and nmc:
-                            all_mv[stock_code] = float(nmc)  # 已经是亿元，无需转换
-                except (ValueError, TypeError, IndexError):
-                    pass
-        except Exception as e:
-            log.info(f"[流通市值] 腾讯接口第{i//batch_size+1}批失败: {type(e).__name__}: {e}")
-    return all_mv
+    return fetch_float_mc(stock_list)
 
 
 def fetch_float_mc_from_tencent(stock_list):

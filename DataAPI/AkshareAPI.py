@@ -1,4 +1,9 @@
-import akshare as ak
+try:
+    import akshare as ak
+except ImportError:
+    # 惰性容错：不 import 本模块即强制要求 akshare（TdxAPI 等仅用 fetch_index_cons，
+    # 该函数内部自带惰性 import）；CAkshare 作为 akshare 数据源时才真正需要 akshare。
+    ak = None
 import pandas as pd
 
 from Common.CEnum import AUTYPE, DATA_FIELD, KL_TYPE
@@ -7,6 +12,56 @@ from Common.func_util import str2float
 from KLine.KLine_Unit import CKLine_Unit
 
 from .CommonStockAPI import CCommonStockApi
+
+import logging
+log = logging.getLogger(__name__)
+
+# AKShare 交易所中文名 → 市场代码
+AKSHARE_EXCHANGE_MAP = {
+    "上海证券交易所": "sh",
+    "深圳证券交易所": "sz",
+}
+# AKShare 指数代码 → 归属名称（指数归属用）
+AKSHARE_INDEX_MAP = {
+    "000300": "沪深300",
+    "000905": "中证500",
+    "000852": "中证1000",
+    "000688": "科创50",
+}
+
+
+def fetch_index_cons(index_code):
+    """AKShare index_stock_cons_csindex：拉取中证指数成分股清单（akshare 直调统一收口）。
+
+    返回 list[dict]，每项 {"code": 6位股票代码, "market": "sh"/"sz"}。
+    接口 / 网络失败或空数据返回 []（是否决定由调用方掌握）。
+    不带内置超时：指数归属（AppRefresh，线程池限时）与板块成分（TdxAPI，_run_with_timeout）
+    各自持有超时策略，这里只做纯取数、不再 import akshare 于调用方。
+    """
+    try:
+        import akshare as ak
+    except ImportError:
+        log.info("[AKShare] 未安装，跳过在线获取（pip install akshare）")
+        return []
+    try:
+        df = ak.index_stock_cons_csindex(symbol=index_code)
+    except Exception as e:
+        log.warning(f"[AKShare] index_stock_cons_csindex({index_code}) 失败: {e}")
+        return []
+    if df is None or len(df) == 0:
+        return []
+    items = []
+    seen = set()
+    for _, row in df.iterrows():
+        code = str(row.get("成分券代码", "")).strip()
+        if "." in code:
+            code = code.split(".")[0]
+        if not (len(code) == 6 and code.isdigit() and code not in seen):
+            continue
+        seen.add(code)
+        market = AKSHARE_EXCHANGE_MAP.get(str(row.get("交易所", "")).strip(), "")
+        items.append({"code": code, "market": market})
+    return items
 
 
 def create_item_dict(row, autype):

@@ -24,6 +24,8 @@ from App.AppConfig import app_config
 from App.AppData import app_data
 from App.AppLog import get_logger
 from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
+from DataAPI.AkshareAPI import AKSHARE_EXCHANGE_MAP, AKSHARE_INDEX_MAP, fetch_index_cons
+from DataAPI.TxAPI import fetch_pe_ttm, fetch_hk_names
 
 log = get_logger(__name__)
 
@@ -47,22 +49,11 @@ _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "er
 _refresh_state_lock = threading.Lock()
 
 # AKShare 指数代码 → 市场前缀映射
-_AKSHARE_EXCHANGE_MAP = {
-    "上海证券交易所": "sh",
-    "深圳证券交易所": "sz",
-}
-# AKShare 指数代码 → 归属名称
-_AKSHARE_INDEX_MAP = {
-    "000300": "沪深300",
-    "000905": "中证500",
-    "000852": "中证1000",
-    "000688": "科创50",
-}
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # 名称 / PE / 指数归属 缓存
 # ═══════════════════════════════════════════════════════════════════════
+# AKShare 交易所映射 / 指数归属映射常量已在 DataAPI/AkshareAPI.py 统一收纳
+# （AKSHARE_EXCHANGE_MAP / AKSHARE_INDEX_MAP），此处经顶部 import 复用，不再本地重复定义。
 
 def load_stock_names_from_cache_file():
     """加载股票名称缓存（AppData 直连）"""
@@ -181,45 +172,16 @@ def _fetch_names_from_sina_once(codes_dict):
             if batch_num < total_batches:
                 time.sleep(0.5)
 
-    # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效） ===
+    # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效；经 TxAPI 收口）===
     if hk_codes:
-        total_batches = (len(hk_codes) - 1) // batch_size + 1
-        for i in range(0, len(hk_codes), batch_size):
-            batch = hk_codes[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            # 腾讯财经API：支持多只股票，用逗号分隔
-            codes_str = ",".join([f"hk{code}" for code in batch])
-            url = f"https://qt.gtimg.cn/q={codes_str}"
-            try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://finance.qq.com/"
-                })
-                resp = urllib.request.urlopen(req, timeout=15)
-                content = resp.read().decode("gbk", errors="ignore")
-                # 解析格式：v_hk00700="1~腾讯控股~00700~...";
-                for line in content.strip().split(";"):
-                    line = line.strip()
-                    if not line or "=" not in line:
-                        continue
-                    var_part, val_part = line.split("=", 1)
-                    val_part = val_part.strip().strip('"').strip(";")
-                    if not val_part:
-                        continue
-                    # 提取代码：v_hk00700 -> 00700
-                    var_name = var_part.strip().replace("v_", "").replace("hk", "")
-                    bare_code = var_name.strip()
-                    compound_key = "hk" + bare_code
-                    fields = val_part.split("~")
-                    if len(fields) >= 2:
-                        name = fields[1].strip()  # 股票名称在第2个字段
-                        if name and compound_key in codes_dict:
-                            codes_dict[compound_key]["name"] = name
-                            filled += 1
-            except Exception as e:
-                log.info(f"[股名刷新]   腾讯港股批次{batch_num}失败: {e}")
-            if batch_num < total_batches:
-                time.sleep(0.5)
+        name_map = fetch_hk_names(hk_codes)
+        for bare_code in hk_codes:
+            name = name_map.get("hk" + bare_code)
+            if name:
+                compound_key = compound_key_map.get(bare_code)
+                if compound_key in codes_dict:
+                    codes_dict[compound_key]["name"] = name
+                    filled += 1
 
     return filled
 
@@ -231,24 +193,16 @@ def _fetch_index_belong_from_akshare(timeout=30):
     如果 AKShare 不可用或网络异常，返回空字典。每个指数单独设置超时。
     （归属缓存由 app_data 持有，经 replace_index_belong 同对象替换）
     """
-    try:
-        import akshare as ak
-    except ImportError:
-        log.info("[指数归属] akshare 未安装，跳过在线获取（pip install akshare）")
-        return app_data.belong_cache
-
     def _fetch_one(_idx_code, _idx_name):
         try:
             _refresh_status["step"] = f"刷新指数归属: {_idx_name}..."
             log.info(f"[指数归属] 开始获取 {_idx_name}({_idx_code})...")
-            df = ak.index_stock_cons_csindex(symbol=_idx_code)
+            items = fetch_index_cons(_idx_code)
             count = 0
-            for _, row in df.iterrows():
-                stock_code = str(row["成分券代码"]).zfill(6)
-                exchange = str(row["交易所"])
-                mkt = _AKSHARE_EXCHANGE_MAP.get(exchange, "")
-                if mkt and stock_code.isdigit() and len(stock_code) == 6:
-                    result[mkt + stock_code] = _idx_name
+            for item in items:
+                mkt = item["market"]
+                if mkt:
+                    result[mkt + item["code"]] = _idx_name
                     count += 1
             log.info(f"[指数归属] {_idx_name}({_idx_code}): 已成功获取 {count}只 成分股")
         except Exception as e:
@@ -256,7 +210,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
 
     import concurrent.futures
     result = {}
-    for index_code, index_name in _AKSHARE_INDEX_MAP.items():
+    for index_code, index_name in AKSHARE_INDEX_MAP.items():
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
             future = executor.submit(_fetch_one, index_code, index_name)
@@ -273,10 +227,10 @@ def _fetch_index_belong_from_akshare(timeout=30):
 
 def _refresh_pe_ttm():
     """
-    通过腾讯行情接口批量获取 PE-TTM，增量更新 stock_pettm_index.json。
-    从 stock_names.json 中读取所有股票代码，分批请求腾讯接口。
+    刷新 PE-TTM，增量更新 stock_pettm_index.json。
+    从 stock_names.json 中读取所有股票代码，经 TxAPI.fetch_pe_ttm（腾讯行情接口）
+    批量获取，缓存写入留在这里（_pe_ttm_cache 与合并落盘）。
     """
-    import requests as req
     _refresh_status["step"] = "刷新PE-TTM..."
     load_pe_ttm_cache()  # 先加载已有缓存
 
@@ -321,42 +275,17 @@ def _refresh_pe_ttm():
     _refresh_status["loaded"] = 0
     log.info(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
 
-    batch_size = 300
+    # 经 TxAPI.fetch_pe_ttm 批量获取（腾讯行情接口，字段[39]=市盈率动态，内部分批）
     new_count = 0
     got_set = set()  # 本次成功获取到PE-TTM的代码
-    for i in range(0, total, batch_size):
-        batch = codes[i:i + batch_size]
-        q_codes = [f"{mkt}{code}" for mkt, code in batch]
-        url = "https://qt.gtimg.cn/q=" + ",".join(q_codes)
-        try:
-            resp = req.get(url, timeout=10)
-            for line in resp.text.strip().split("\n"):
-                if "v_" not in line:
-                    continue
-                try:
-                    # 腾讯接口格式: v_sh600519="1~贵州茅台~600519~...~[39]市盈率~..."
-                    parts = line.split('="')[1].strip().strip('";')
-                    fields = parts.split("~")
-                    # 从行前缀提取市场: v_sh... → sh, v_sz... → sz, v_hk... → hk
-                    line_mkt = line[2:4] if len(line) > 4 else ""
-                    if len(fields) > 39:
-                        stock_code = fields[2]
-                        pe_str = fields[39]  # 市盈率(动态)
-                        if stock_code and stock_code.isdigit() and pe_str and pe_str.replace(".", "").replace("-", "").isdigit():
-                            pe_val = float(pe_str)
-                            if pe_val != 0:
-                                cache_key = line_mkt + stock_code if line_mkt else stock_code
-                                got_set.add(cache_key)
-                                if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
-                                    _pe_ttm_cache[cache_key] = pe_val
-                                    new_count += 1
-                except (ValueError, TypeError, IndexError):
-                    pass
-        except Exception as e:
-            log.info(f"[PE-TTM] 第{i//batch_size+1}批失败: {e}")
-
-        _refresh_status["loaded"] = min(i + batch_size, total)
-        log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
+    mv_map = fetch_pe_ttm(codes)
+    for cache_key, pe_val in mv_map.items():
+        got_set.add(cache_key)
+        if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
+            _pe_ttm_cache[cache_key] = pe_val
+            new_count += 1
+    _refresh_status["loaded"] = total
+    log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
 
     # 统计未获取到的股票
     all_queried = {mkt + code for mkt, code in codes}
