@@ -325,6 +325,13 @@ def check(update=False):
     if ghost_s:
         failures.append(f"状态归属项不存在({len(ghost_s)}): {ghost_s}")
 
+    # ②-1 RETIRE 留痕完整性：RETIRE 类仍要求 note 非空，确保是「有意下线」
+    #    而非「忘了删/忘了登记」，封堵豁免对幽灵检查开的口子。
+    retire_bad = [n for n, v in TARGET_FUNCS.items() if v[0] == "RETIRE" and not v[1]]
+    retire_bad += [n for n, v in TARGET_STATES.items() if v[0] == "RETIRE" and not v[1]]
+    if retire_bad:
+        failures.append(f"RETIRE 留痕缺 note（须注明下线原因）: {sorted(retire_bad)}")
+
     # ③ 归档快照（--update 时重生成 Test/function_map.json；
     #    行号漂移与函数总数比对校验已下线，见顶部 docstring）
     if update:

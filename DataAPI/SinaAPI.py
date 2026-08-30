@@ -10,6 +10,7 @@ DataAPI/SinaAPI.py —— 新浪财经数据源适配器
 与 ElTdxAPI / AkshareAPI / TxAPI 同为 P1-1 数据源抽象单轨化的一个收口点。
 """
 import logging
+import time
 
 log = logging.getLogger(__name__)
 
@@ -17,11 +18,12 @@ log = logging.getLogger(__name__)
 _SINA_BASE = "http://hq.sinajs.cn/list="
 
 
-def fetch_a_names(mkt_code_pairs, batch_size=50, timeout=15):
+def fetch_a_names(mkt_code_pairs, batch_size=50, timeout=15, interval=0.3):
     """新浪财经行情接口批量获取 A股股票名称（字段 [0]）。
 
     mkt_code_pairs: list[(bare_code, market)]，market ∈ {sh, sz}；
     新浪仅 sh/sz 有 hq_str_ 记录，bj 无对应记录时自然跳过。
+    interval: 相邻批次间的间隔秒数（新浪对高频访问有限流，0 表示不节流）。
     返回 {(market+code): 名称}；网络 / 解析失败自动跳过该条，空数据返回 {}。
     返回为 GBK 编码，须显式解码。与 TxAPI.fetch_hk_names 的返回形态一致（market+code）。
     """
@@ -29,7 +31,8 @@ def fetch_a_names(mkt_code_pairs, batch_size=50, timeout=15):
         return {}
     import urllib.request
     result = {}
-    for i in range(0, len(mkt_code_pairs), batch_size):
+    total = len(mkt_code_pairs)
+    for i in range(0, total, batch_size):
         batch = mkt_code_pairs[i:i + batch_size]
         batch_num = i // batch_size + 1
         try:
@@ -63,4 +66,6 @@ def fetch_a_names(mkt_code_pairs, batch_size=50, timeout=15):
                         break
         except Exception as e:
             log.info(f"[股名刷新] 新浪A股批次{batch_num}失败: {e}")
+        if interval and i + batch_size < total:
+            time.sleep(interval)
     return result

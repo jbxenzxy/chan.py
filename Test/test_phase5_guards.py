@@ -25,9 +25,10 @@
      （打桩点随 get_kline 家族迁移，防快照用例回退到已删除的
      m.fetch_futures_kline 符号而真实联网）。
 
-注：原「盘后下载」功能已整体移除（AppDownload.py、DataAPI/ElTdxAPI.py
-   删除，collect_codes_from_vipdoc 归位 DataAPI/TdxAPI.py），对应守护
-   ②（下载职责内聚）与 ⑦（下载入口配置化）随之删除。
+注：原「盘后下载」功能已整体移除（AppDownload.py 删除、
+   DataAPI/ElTdxAPI.py 改作 eltdx XDXR 适配器，盘后下载族函数已删，
+   collect_codes_from_vipdoc 归位 DataAPI/TdxAPI.py），对应守护 ②（下载
+   职责内聚）与 ⑦（下载入口配置化）随之删除。
 
 运行：python Test/test_phase5_guards.py          # 校验（run_all 组件）
       python Test/test_phase5_guards.py --update  # 兼容参数（无冻结基线，等价校验）
@@ -178,7 +179,9 @@ def test_metadata_interface(failures):
 # ④ 依赖方向（设计 4.4：DataAPI 不依赖 App，App 数据层不反向依赖）
 # ═══════════════════════════════════════════════════════════════════════
 DATA_API_MODULES = ["DataAPI/CommonStockAPI.py", "DataAPI/TdxAPI.py",
-                    "DataAPI/TqSdkAPI.py"]
+                    "DataAPI/TqSdkAPI.py", "DataAPI/ElTdxAPI.py",
+                    "DataAPI/AkshareAPI.py", "DataAPI/TxAPI.py",
+                    "DataAPI/SinaAPI.py"]
 FORBIDDEN_UPPER = ("App", "AppEngine", "FrontAPI", "api_server")
 
 

@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 AKSHARE_EXCHANGE_MAP = {
     "上海证券交易所": "sh",
     "深圳证券交易所": "sz",
+    "北京证券交易所": "bj",
 }
 # AKShare 指数代码 → 归属名称（指数归属用）
 AKSHARE_INDEX_MAP = {
@@ -52,8 +53,14 @@ def fetch_index_cons(index_code):
         return []
     items = []
     seen = set()
+    # 候选成分代码列名（akshare 可能改名，探测以避免静默失效）
+    _code_cols = ["成分券代码", "证券代码", "品种代码", "代码", "con_code", "symbol", "stock_code"]
+    code_col = next((c for c in _code_cols if c in df.columns), None)
+    if code_col is None:
+        log.info(f"[AKShare] index_stock_cons_csindex({index_code}) 未知列名: {list(df.columns)}")
+        return []
     for _, row in df.iterrows():
-        code = str(row.get("成分券代码", "")).strip()
+        code = str(row.get(code_col, "")).strip()
         if "." in code:
             code = code.split(".")[0]
         if not (len(code) == 6 and code.isdigit() and code not in seen):

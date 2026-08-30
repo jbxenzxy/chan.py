@@ -13,7 +13,6 @@
 import os
 import re
 import math
-import socket
 import struct
 import pandas as pd
 from datetime import datetime, timedelta
@@ -1773,10 +1772,35 @@ def get_index_stocks(sector_code):
     return stocks
 
 
+# 权威市场 → 板块前缀（与通达信市场前缀约定一致：1=沪、0=深、2=北交所/新三板）
+_MARKET_PREFIX = {"sh": "1", "sz": "0", "bj": "2"}
+
+
+def _prefix_by_digit(code):
+    """无权威市场信息时，按代码首数字兜底推断板块前缀。
+
+    仅作 fallback：6xx→沪(1)、0x/3x→深(0)、8x/4x→京(2)、其余默认沪(1)。
+    注意：首数字无法区分 9xx（沪B 900 / 北交所 920），故此兜底不够权威，
+    凡能拿到 csindex「交易所」字段的上游必须优先用 _MARKET_PREFIX。
+    """
+    first = code[0]
+    if first in "68":
+        return "1"
+    elif first in "03":
+        return "0"
+    elif first in "84":
+        return "2"
+    else:
+        return "1"
+
+
 def _index_cons_to_stocks(items):
     """将 AkshareAPI.fetch_index_cons 的 {code, market} 结果转为板块成分结构。
 
-    前缀规则与 _parse_stocks_from_df 保持一致（首数字 6/8/9→1、0/3→0、2/4→2）。
+    优先采用 csindex「交易所」字段给出的权威市场（_MARKET_PREFIX），
+    只有拿不到才退回首数字兜底。此前旧规则 first in "689" 会把北交所
+    8xxxxx/920xxx 误判为沪市(prefix=1)——北交所从未被测试故一直潜伏，
+    现以权威 market 为准予以修复。
     items: list[dict]，每项 {"code", "market"}。
     """
     stocks = []
@@ -1786,15 +1810,7 @@ def _index_cons_to_stocks(items):
         if code in seen:
             continue
         seen.add(code)
-        first = code[0]
-        if first in "689":
-            prefix = "1"
-        elif first in "03":
-            prefix = "0"
-        elif first in "24":
-            prefix = "2"
-        else:
-            prefix = "1"
+        prefix = _MARKET_PREFIX.get(it.get("market")) or _prefix_by_digit(code)
         stocks.append({"code": code, "prefix": prefix, "name": code})
     return stocks
 
@@ -1820,16 +1836,7 @@ def _parse_stocks_from_df(df, source_label):
             if code in seen_codes:
                 continue
             seen_codes.add(code)
-            first = code[0]
-            if first in "689":
-                prefix = "1"
-            elif first in "03":
-                prefix = "0"
-            elif first in "24":
-                prefix = "2"
-            else:
-                prefix = "1"
-            stocks.append({"code": code, "prefix": prefix, "name": code})
+            stocks.append({"code": code, "prefix": _prefix_by_digit(code), "name": code})
 
     return stocks
 
@@ -2369,7 +2376,6 @@ if __name__ == "__main__":
     print("前复权功能：")
     print("  - _forward_adjust(): 对原始K线进行前复权处理")
     print("  - get_xdxr_data(): 获取除权除息数据（DataAPI/ElTdxAPI.py · 当前仅 eltdx）")
-    print("  - get_float_shares_from_xdxr(): 从xdxr提取流通股本")
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")
     print("")
     print("板块功能：")

@@ -18,7 +18,6 @@ fetch_main_level 提供）；本模块是 TdxAPI 前复权流水线依赖的下�
 """
 import threading
 import logging
-import math
 
 import pandas as pd
 from datetime import datetime
@@ -212,10 +211,13 @@ def _get_xdxr_eltdx(market, code):
         df = pd.DataFrame(rows, columns=['code', 'date', 'category',
                                          'fenhong', 'peigujia', 'songzhuangu', 'peigu'])
         if len(df) == 0:
+            # 该股票历史上无除权除息事件：属「正常空结果」，返回 None（区别于异常）
             return None
         return _normalize_xdxr_df(df)
     except Exception:
-        return None
+        # 网络 / 接口（含 _check_eltdx_api_compat 的 RuntimeError 升级指引）异常：
+        # 向上抛，由 get_xdxr_data 显著上报，不吞成「无数据」。
+        raise
 
 
 # ============================================================
@@ -432,50 +434,18 @@ def get_xdxr_data(market, code):
             try:
                 df = _src_fn(market, code)
             except Exception as _e:
-                # 接口不兼容（RuntimeError，含升级指引）或网络/其它异常：统一显著上报
+                # 网络 / 接口（含 _check_eltdx_api_compat 的 RuntimeError 升级指引）异常：显著上报
                 log.error("[xdxr] 仅 eltdx：%s 取数失败(market=%s, code=%s): %s",
                           _src_name, market, code, _e)
                 df = None
+                break
             if df is not None and len(df) > 0:
                 _xdxr_cache[cache_key] = df
                 return df
-            # 唯一数据源未能取到数据：同样显著上报，便于及时暴露 eltdx 稳定性问题
-            log.error("[xdxr] 仅保留 eltdx：%s 未返回除权除息(market=%s, code=%s)；"
-                      "若持续出现请检查 eltdx/网络/服务器（已禁用 mootdx/pytdx 回退）。",
-                      _src_name, market, code)
+            # df is None = 该股票无除权除息记录（正常空结果），且已无更多回退数据源：
+            # 走 info，避免全市场扫描被「历史上无除权」的正常情况刷满 ERROR。
+            log.info("[xdxr] %s: %s 无除权除息记录（正常空结果；接口/网络异常会另行上报 error）",
+                     market, code)
 
         _xdxr_cache[cache_key] = None
         return None
-
-
-def get_float_shares_from_xdxr(market, code):
-    """
-    从 xdxr 数据中提取最新的流通股本（单位：股）。
-    返回 None 表示无数据。
-
-    与 gbbq 不同，这里直接复用已获取的 xdxr 数据（来自 get_xdxr_data 缓存），
-    无需额外的网络请求或本地文件解密。
-    xdxr 中每个事件都记录了 panhouliutong（盘后流通，单位：万股），
-    取最新一条记录即为当前流通股本。
-    """
-    xdxr_df = get_xdxr_data(market, code)
-    if xdxr_df is None or len(xdxr_df) == 0:
-        return None
-
-    # 按日期降序排列，取最新一条
-    df_sorted = xdxr_df.sort_values('date', ascending=False)
-    latest = df_sorted.iloc[0]
-
-    # panhouliutong: 盘后流通股本（万股）
-    shares_wan = latest.get('panhouliutong', 0)
-    if shares_wan is None:
-        shares_wan = 0
-    try:
-        shares_wan = float(shares_wan)
-    except (ValueError, TypeError):
-        return None
-
-    if math.isnan(shares_wan) or shares_wan <= 0:
-        return None
-
-    return shares_wan * 10000  # 万股 → 股

@@ -11,6 +11,7 @@ DataAPI/TxAPI.py —— 腾讯财经（股票行情）数据源适配器
 与 ElTdxAPI / AkshareAPI 同为 P1-1 数据源抽象单轨化的一个收口点。
 """
 import logging
+import time
 
 log = logging.getLogger(__name__)
 
@@ -113,10 +114,11 @@ def fetch_float_mc(stock_list, batch_size=_BATCH, timeout=5):
     return result
 
 
-def fetch_hk_names(hk_codes, batch_size=50, timeout=15):
+def fetch_hk_names(hk_codes, batch_size=50, timeout=15, interval=0.3):
     """腾讯行情接口批量获取港股股票名称（字段 [1]，新浪港股接口已失效）。
 
     hk_codes: list[str] 纯港股代码（如 ["00700", "09988"]）。
+    interval: 相邻批次间的间隔秒数（腾讯对高频访问有限流，0 表示不节流）。
     返回 {("hk"+代码): 名称}；网络 / 解析失败自动跳过该条，空数据返回 {}。
     腾讯港股返回为 GBK 编码，须显式解码，不能复用 utf-8 的 _http_get。
     """
@@ -124,7 +126,8 @@ def fetch_hk_names(hk_codes, batch_size=50, timeout=15):
         return {}
     import requests as req
     result = {}
-    for i in range(0, len(hk_codes), batch_size):
+    total = len(hk_codes)
+    for i in range(0, total, batch_size):
         batch = hk_codes[i:i + batch_size]
         batch_num = i // batch_size + 1
         try:
@@ -151,4 +154,6 @@ def fetch_hk_names(hk_codes, batch_size=50, timeout=15):
                         result["hk" + bare_code] = name
         except Exception as e:
             log.info(f"[股名刷新] 腾讯港股批次{batch_num}失败: {e}")
+        if interval and i + batch_size < total:
+            time.sleep(interval)
     return result
