@@ -4,14 +4,14 @@
 
 ## 一、五类信息的数据源
 
-| 信息          | 收口模块                    | 取数函数                            | 底层真实数据源                                                             | 消费方                                                                     |
-| ----------- | ----------------------- | ------------------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py`   | `get_xdxr_data(market, code)`   | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）；`mootdx` / `pytdx` 回退已注释保留 | `TdxAPI.fetch_main_level` 前复权流水线；并由 `get_float_shares_from_xdxr` 派生流通股本 |
-| 流通市值        | `DataAPI/TxAPI.py`      | `fetch_float_mc(stock_list)`    | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[44]`（亿元）                           | `AppScan` 扫描预过滤                                                         |
-| 股票名字（A股）    | `DataAPI/SinaAPI.py`    | `fetch_a_names(mkt_code_pairs)` | **新浪财经** `hq.sinajs.cn/list=`，字段 `[0]`（GBK）                         | `AppRefresh._refresh_stock_names`                                       |
-| 股票名字（港股）    | `DataAPI/TxAPI.py`      | `fetch_hk_names(hk_codes)`      | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[1]`（GBK）                           | `AppRefresh._refresh_stock_names`（第二轮）                                  |
-| PE-TTM      | `DataAPI/TxAPI.py`      | `fetch_pe_ttm(mkt_codes)`       | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[39]`（市盈率-动态）                       | `AppRefresh._refresh_pe_ttm`                                            |
-| 指数归属        | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)`  | **AKShare** **`index_stock_cons_csindex`**（中证指数公司 csindex）          | `AppRefresh`（线程池限时）                                                     |
+| 信息          | 收口模块                    | 取数函数                            | 底层真实数据源                                                             | 消费方                                    |
+| ----------- | ----------------------- | ------------------------------- | ------------------------------------------------------------------- | -------------------------------------- |
+| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py`   | `get_xdxr_data(market, code)`   | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）；`mootdx` / `pytdx` 回退已注释保留 | `TdxAPI.fetch_main_level` 前复权流水线       |
+| 流通市值        | `DataAPI/TxAPI.py`      | `fetch_float_mc(stock_list)`    | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[44]`（亿元）                           | `AppScan` 扫描预过滤                        |
+| 股票名字（A股）    | `DataAPI/SinaAPI.py`    | `fetch_a_names(mkt_code_pairs)` | **新浪财经** `hq.sinajs.cn/list=`，字段 `[0]`（GBK）                         | `AppRefresh._refresh_stock_names`      |
+| 股票名字（港股）    | `DataAPI/TxAPI.py`      | `fetch_hk_names(hk_codes)`      | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[1]`（GBK）                           | `AppRefresh._refresh_stock_names`（第二轮） |
+| PE-TTM      | `DataAPI/TxAPI.py`      | `fetch_pe_ttm(mkt_codes)`       | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[39]`（市盈率-动态）                       | `AppRefresh._refresh_pe_ttm`           |
+| 指数归属        | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)`  | **AKShare** **`index_stock_cons_csindex`**（中证指数公司 csindex）          | `AppRefresh`（线程池限时）                    |
 
 说明：
 
@@ -38,7 +38,7 @@
 
 | 适配器             | 数据源                    | 提供能力                                     |
 | --------------- | ---------------------- | ---------------------------------------- |
-| `ElTdxAPI.py`   | eltdx（通达信网络行情）         | 除权除息（XDXR）、流通股本派生                        |
+| `ElTdxAPI.py`   | eltdx（通达信网络行情）         | 除权除息（XDXR）                               |
 | `AkshareAPI.py` | AKShare                | 指数成分股（csindex）、指数归属；并提供 `CAkshare` K 线适配 |
 | `TxAPI.py`      | 腾讯财经行情（`qt.gtimg.cn`）  | PE-TTM、流通市值、港股名称                         |
 | `SinaAPI.py`    | 新浪财经行情（`hq.sinajs.cn`） | A股名称                                     |

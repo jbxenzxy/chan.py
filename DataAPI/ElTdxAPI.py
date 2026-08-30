@@ -136,8 +136,6 @@ def _normalize_xdxr_df(df):
 #     连接失败时 eltdx 内部仍会按 hosts 顺序重连），从根上消除该警告。
 _eltdx_client = None
 _eltdx_client_ready = False
-# 检测到 eltdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-_eltdx_api_mismatch = None
 
 
 def _check_eltdx_api_compat(client):
@@ -146,14 +144,12 @@ def _check_eltdx_api_compat(client):
     若旧版 eltdx（缺少 capital_changes）仍在运行，直接抛 RuntimeError（附升级指引），
     让用户及时得知接口失效，而不是静默返回空。
     """
-    global _eltdx_api_mismatch
     corporate = getattr(client, "corporate", None)
     if corporate is None or not hasattr(corporate, "capital_changes"):
-        _eltdx_api_mismatch = (
+        raise RuntimeError(
             "[eltdx 接口不兼容] 前复权所需的 client.corporate.capital_changes 不存在："
             "当前 eltdx 版本过旧，请升级：pip install -U 'eltdx>=3.0.0'。"
         )
-        raise RuntimeError(_eltdx_api_mismatch)
     return client
 
 
@@ -182,42 +178,39 @@ def _get_xdxr_eltdx(market, code):
       CapitalChangeRecord.c1_value=分红(每10股) · c2_value=配股价 ·
       c3_value=送转(每10股) · c4_value=配股数量(每10股)，与 mootdx 返回等价。
     """
-    try:
-        client = _ensure_eltdx_client()
-        if client is None:
-            return None
-        _check_eltdx_api_compat(client)   # 接口失效即抛错，避免静默降级
-        market_code = f"{market.lower()}{code}"
-        with client:
-            block = client.corporate.capital_changes(market_code)
-        records = getattr(block, "records", ()) or ()
-        rows = []
-        for r in records:
-            # 仅保留除权除息（标签 1）事件
-            if int(getattr(r, "category_raw", 0)) != 1:
-                continue
-            d = getattr(r, "date", None)
-            if d is not None and not isinstance(d, datetime):
-                d = datetime(d.year, d.month, d.day)
-            rows.append({
-                'code': getattr(r, 'code', code),
-                'date': d,
-                'category': int(getattr(r, 'category_raw', 1)),
-                'fenhong': float(getattr(r, 'c1_value', 0) or 0),
-                'peigujia': float(getattr(r, 'c2_value', 0) or 0),
-                'songzhuangu': float(getattr(r, 'c3_value', 0) or 0),
-                'peigu': float(getattr(r, 'c4_value', 0) or 0),
-            })
-        df = pd.DataFrame(rows, columns=['code', 'date', 'category',
-                                         'fenhong', 'peigujia', 'songzhuangu', 'peigu'])
-        if len(df) == 0:
-            # 该股票历史上无除权除息事件：属「正常空结果」，返回 None（区别于异常）
-            return None
-        return _normalize_xdxr_df(df)
-    except Exception:
-        # 网络 / 接口（含 _check_eltdx_api_compat 的 RuntimeError 升级指引）异常：
-        # 向上抛，由 get_xdxr_data 显著上报，不吞成「无数据」。
-        raise
+    # 注意：此处不包 try/except——网络 / 接口（含 _check_eltdx_api_compat 的
+    # RuntimeError 升级指引）异常一律上抛，由 get_xdxr_data 显著上报，不吞成「无数据」。
+    client = _ensure_eltdx_client()
+    if client is None:
+        return None
+    _check_eltdx_api_compat(client)   # 接口失效即抛错，避免静默降级
+    market_code = f"{market.lower()}{code}"
+    with client:
+        block = client.corporate.capital_changes(market_code)
+    records = getattr(block, "records", ()) or ()
+    rows = []
+    for r in records:
+        # 仅保留除权除息（标签 1）事件
+        if int(getattr(r, "category_raw", 0)) != 1:
+            continue
+        d = getattr(r, "date", None)
+        if d is not None and not isinstance(d, datetime):
+            d = datetime(d.year, d.month, d.day)
+        rows.append({
+            'code': getattr(r, 'code', code),
+            'date': d,
+            'category': int(getattr(r, 'category_raw', 1)),
+            'fenhong': float(getattr(r, 'c1_value', 0) or 0),
+            'peigujia': float(getattr(r, 'c2_value', 0) or 0),
+            'songzhuangu': float(getattr(r, 'c3_value', 0) or 0),
+            'peigu': float(getattr(r, 'c4_value', 0) or 0),
+        })
+    df = pd.DataFrame(rows, columns=['code', 'date', 'category',
+                                     'fenhong', 'peigujia', 'songzhuangu', 'peigu'])
+    if len(df) == 0:
+        # 该股票历史上无除权除息事件：属「正常空结果」，返回 None（区别于异常）
+        return None
+    return _normalize_xdxr_df(df)
 
 
 # ============================================================
@@ -437,8 +430,8 @@ def get_xdxr_data(market, code):
                 # 网络 / 接口（含 _check_eltdx_api_compat 的 RuntimeError 升级指引）异常：显著上报
                 log.error("[xdxr] 仅 eltdx：%s 取数失败(market=%s, code=%s): %s",
                           _src_name, market, code, _e)
-                df = None
-                break
+                # 异常不写缓存：下次调用可重试，避免一次网络抖动在本进程内永久不复权
+                return None
             if df is not None and len(df) > 0:
                 _xdxr_cache[cache_key] = df
                 return df
@@ -446,6 +439,6 @@ def get_xdxr_data(market, code):
             # 走 info，避免全市场扫描被「历史上无除权」的正常情况刷满 ERROR。
             log.info("[xdxr] %s: %s 无除权除息记录（正常空结果；接口/网络异常会另行上报 error）",
                      market, code)
-
-        _xdxr_cache[cache_key] = None
-        return None
+            # 空结果照常缓存，避免同一股票重复查询
+            _xdxr_cache[cache_key] = None
+            return None

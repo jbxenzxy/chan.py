@@ -1779,19 +1779,20 @@ _MARKET_PREFIX = {"sh": "1", "sz": "0", "bj": "2"}
 def _prefix_by_digit(code):
     """无权威市场信息时，按代码首数字兜底推断板块前缀。
 
-    仅作 fallback：6xx→沪(1)、0x/3x→深(0)、8x/4x→京(2)、其余默认沪(1)。
-    注意：首数字无法区分 9xx（沪B 900 / 北交所 920），故此兜底不够权威，
-    凡能拿到 csindex「交易所」字段的上游必须优先用 _MARKET_PREFIX。
+    映射：6xx→沪(1)、0x/3x→深(0)、8x/4x→北交所(2)、2xx→深B(0)、其余默认沪(1)。
+    注意：9xx 无法区分（沪B 900 / 北交所 920），且兜底远不如 csindex「交易所」
+    字段权威——凡能拿到 market 的上游必须优先用 _MARKET_PREFIX。
     """
     first = code[0]
-    if first in "68":
-        return "1"
-    elif first in "03":
-        return "0"
-    elif first in "84":
-        return "2"
-    else:
-        return "1"
+    if first == "6":
+        return "1"          # 沪：60 主板 / 688 科创板
+    if first in "03":
+        return "0"          # 深：000 主板 / 300 创业板
+    if first in "84":
+        return "2"          # 北交所：8xxxxx / 旧 4xxxxx
+    if first == "2":
+        return "0"          # 深B 200xxx（归深市场）
+    return "1"              # 9xx 及其余：默认沪
 
 
 def _index_cons_to_stocks(items):
