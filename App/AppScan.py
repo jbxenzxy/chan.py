@@ -13,7 +13,7 @@ App/AppScan.py —— 股票扫描功能域
       read_tdxhy_l2_indices / read_tdxhy_l3_indices 等）
   - Windows 扫描完成通知（_send_windows_notification）
 
-依赖方向：AppScan.py → AppEngine / AppData / AppRefresh / AppScanPool（单向）
+依赖方向：AppScan.py → AppEngine / AppData / AppScanPool（单向）
 批量扫描提交/状态/中止委托 AppScanPool（入口适配器），共享结果经 SQLite
 AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
@@ -33,8 +33,6 @@ from App.AppConfig import app_config
 # 板块成分读取（扫描来源 page_index）
 from DataAPI.TdxAPI import get_index_stocks
 
-# 刷新功能域（Scanner.stock_list 批量获取流通市值复用其漏斗）
-from App.AppRefresh import load_float_mc_cache, fetch_float_mc_from_tencent, update_float_mc_cache
 from App.AppLog import get_logger
 log = get_logger(__name__)
 
@@ -120,6 +118,67 @@ def _quick_prefilter_pass(market, code):
         log.info(f"[预过滤] {code} 异常: {type(e).__name__}: {e}")
         _tb.print_exc()
         return (True, None, None)
+
+
+def _fetch_float_mc_from_tencent(stock_list):
+    """通过腾讯行情接口批量获取流通市值（毫秒级，极其稳定）。
+    stock_list: [{"code": "600519", "prefix": "1"}, ...]
+    返回: {code: float_mc(亿元)}，失败返回空字典。
+    """
+    if not stock_list:
+        return {}
+    import requests as req
+    # 构造腾讯代码：prefix 0→sz, 1→sh, 2→bj
+    _PFX = {"0": "sz", "1": "sh", "2": "bj"}
+    codes = []
+    for stk in stock_list:
+        code = stk.get("code", "")
+        prefix = stk.get("prefix", "")
+        mkt = _PFX.get(prefix, "")
+        if mkt and code:
+            codes.append(mkt + code)
+    if not codes:
+        return {}
+    # 腾讯接口限制每次约200-300只，超过则分批
+    batch_size = 300
+    all_mv = {}
+    for i in range(0, len(codes), batch_size):
+        batch = codes[i:i + batch_size]
+        url = "https://qt.gtimg.cn/q=" + ",".join(batch)
+        try:
+            resp = req.get(url, timeout=5)
+            for line in resp.text.strip().split("\n"):
+                if "v_" not in line:
+                    continue
+                try:
+                    # 格式: v_sh600519="1~贵州茅台~600519~...~[44]流通市值~..."
+                    parts = line.split('="')[1].strip().strip('";')
+                    fields = parts.split("~")
+                    if len(fields) > 44:
+                        stock_code = fields[2]  # 纯数字代码
+                        nmc = fields[44]  # 流通市值(亿元，腾讯接口直接返回亿元)
+                        if stock_code and nmc:
+                            all_mv[stock_code] = float(nmc)  # 已经是亿元，无需转换
+                except (ValueError, TypeError, IndexError):
+                    pass
+        except Exception as e:
+            log.info(f"[流通市值] 腾讯接口第{i//batch_size+1}批失败: {type(e).__name__}: {e}")
+    return all_mv
+
+
+def fetch_float_mc_from_tencent(stock_list):
+    """从腾讯接口获取流通市值（获取侧）"""
+    return _fetch_float_mc_from_tencent(stock_list)
+
+
+def load_float_mc_cache():
+    """加载流通市值缓存（转发 AppData，供 AppOrch 再导出 facade）"""
+    return app_data.load_float_mc_cache()
+
+
+def update_float_mc_cache(mv_dict):
+    """合并并落盘流通市值缓存（转发 AppData，供 AppOrch 再导出 facade）"""
+    return app_data.update_float_mc_cache(mv_dict)
 
 
 def _debug_read_page_index_stocks(sector_code):
@@ -309,8 +368,7 @@ class Scanner:
         # 批量获取流通市值
         _need_float_mc = any(s not in ("tdxhy2", "tdxhy3") for s in sources)
         if _need_float_mc:
-            from App.AppData import app_data
-            load_float_mc_cache()
+            app_data.load_float_mc_cache()
             if app_data.float_mc_loaded:
                 log.info(f"[流通市值] 本地缓存已加载 {len(app_data.float_mc_cache)} 只")
             try:
@@ -320,7 +378,7 @@ class Scanner:
                     total_stocks = len(merged)
                     got_count = len(mv_dict)
                     miss_count = total_stocks - got_count
-                    update_float_mc_cache(mv_dict)
+                    app_data.update_float_mc_cache(mv_dict)
                     if miss_count == 0:
                         log.info(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
                     else:

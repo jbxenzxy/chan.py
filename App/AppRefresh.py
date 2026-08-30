@@ -7,10 +7,10 @@ App/AppRefresh.py —— 刷新功能域
 
 本模块收纳：
   - 股票名称刷新（refresh_stock_names / refresh_stock_names_async / refresh_status）
-  - 名称 / PE / 流通市值 / 指数归属 缓存读写（AppData 直连）
+  - 名称 / PE / 指数归属 缓存读写（AppData 直连）
   - 刷新实现（_refresh_stock_names / _refresh_pe_ttm /
       _fetch_index_belong_from_akshare / _collect_codes_from_vipdoc /
-      _fetch_names_from_sina_once / _fetch_float_mc_from_tencent 等）
+      _fetch_names_from_sina_once 等）
 
 依赖方向：AppRefresh.py → AppConfig / AppData / DataAPI（单向）
 """
@@ -61,22 +61,12 @@ _AKSHARE_INDEX_MAP = {
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 名称 / PE / 流通市值 / 指数归属 缓存
+# 名称 / PE / 指数归属 缓存
 # ═══════════════════════════════════════════════════════════════════════
 
 def load_stock_names_from_cache_file():
     """加载股票名称缓存（AppData 直连）"""
     return app_data.load_stock_names_from_cache_file()
-
-
-def load_float_mc_cache():
-    """加载流通市值缓存（AppData 直连）"""
-    return app_data.load_float_mc_cache()
-
-
-def update_float_mc_cache(mv_dict):
-    """更新流通市值缓存（AppData 直连）"""
-    return app_data.update_float_mc_cache(mv_dict)
 
 
 def load_pe_ttm_cache():
@@ -647,52 +637,6 @@ def _refresh_stock_names():
     _refresh_status["step"] = ""
 
 
-def _fetch_float_mc_from_tencent(stock_list):
-    """通过腾讯行情接口批量获取流通市值（毫秒级，极其稳定）。
-    stock_list: [{"code": "600519", "prefix": "1"}, ...]
-    返回: {code: float_mc(亿元)}，失败返回空字典。
-    """
-    if not stock_list:
-        return {}
-    import requests as req
-    # 构造腾讯代码：prefix 0→sz, 1→sh, 2→bj
-    _PFX = {"0": "sz", "1": "sh", "2": "bj"}
-    codes = []
-    for stk in stock_list:
-        code = stk.get("code", "")
-        prefix = stk.get("prefix", "")
-        mkt = _PFX.get(prefix, "")
-        if mkt and code:
-            codes.append(mkt + code)
-    if not codes:
-        return {}
-    # 腾讯接口限制每次约200-300只，超过则分批
-    batch_size = 300
-    all_mv = {}
-    for i in range(0, len(codes), batch_size):
-        batch = codes[i:i + batch_size]
-        url = "https://qt.gtimg.cn/q=" + ",".join(batch)
-        try:
-            resp = req.get(url, timeout=5)
-            for line in resp.text.strip().split("\n"):
-                if "v_" not in line:
-                    continue
-                try:
-                    # 格式: v_sh600519="1~贵州茅台~600519~...~[44]流通市值~..."
-                    parts = line.split('="')[1].strip().strip('";')
-                    fields = parts.split("~")
-                    if len(fields) > 44:
-                        stock_code = fields[2]  # 纯数字代码
-                        nmc = fields[44]  # 流通市值(亿元，腾讯接口直接返回亿元)
-                        if stock_code and nmc:
-                            all_mv[stock_code] = float(nmc)  # 已经是亿元，无需转换
-                except (ValueError, TypeError, IndexError):
-                    pass
-        except Exception as e:
-            log.info(f"[流通市值] 腾讯接口第{i//batch_size+1}批失败: {type(e).__name__}: {e}")
-    return all_mv
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # 股票名称刷新（异步）
 # ═══════════════════════════════════════════════════════════════════════
@@ -732,7 +676,3 @@ def refresh_stock_names_async():
     t.start()
     return {"status": "started", "msg": "股票名称刷新已启动"}
 
-
-def fetch_float_mc_from_tencent(stock_list):
-    """从腾讯接口获取流通市值（获取侧）"""
-    return _fetch_float_mc_from_tencent(stock_list)
