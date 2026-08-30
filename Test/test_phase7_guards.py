@@ -5,7 +5,7 @@
 守护阶段 7 的结构性成果（设计文档 V10 方案 5.4 / 5.5 / 5.7 / 5.10 / 8.10），
 并锁定交叉评审 W1-W15 全部接纳项（防止后续改动回潮）：
 
-  ① 锁分类登记（W9）：LOCK_POLICY 新增 SCAN_ASYNC 类别且登记完备
+  ① 批量扫描进程隔离（W9）：派发 ProcessPool worker，路径零应用锁
      （ScannerService.submit_batch_scan / _worker_scan_one）；批量路径
      不持 _ENGINE_LOCK（进程隔离），交互路径 SERIAL 不受波及。
   ② 路由收敛与漏斗：FrontAPI 登记三条新路由（POST /api/stocks/scan/submit、
@@ -95,53 +95,59 @@ def fn_body(src, header):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ① 锁分类登记（W9：SCAN_ASYNC）
+# ① 批量扫描进程隔离（W9：SCAN_ASYNC）
 # ═══════════════════════════════════════════════════════════════════════
-def test_lock_policy(failures):
+def test_scan_process_isolation(failures):
+    """批量扫描走 ProcessPool，worker 内执行且跨进程零应用级锁。
+
+    2026-08 收敛：原 LOCK_POLICY 的 SCAN / SCAN_ASYNC 分类已并入
+    AppOrch.SHARED_RESOURCE_REGISTRY（按资源索引）。本用例改为守护
+    「批量路径确实跨进程、且不在 API 进程内持任何应用锁」这一实质。
+    """
     import inspect
     from App import AppOrch as orch
 
     bad = []
-    required = {"Scanner.submit_batch_scan", "Scanner.scan_one"}
-    missing = required - set(orch.LOCK_POLICY)
-    if missing:
-        bad.append(f"LOCK_POLICY 缺少阶段 7 登记: {sorted(missing)}")
-    # submit_batch_scan 必须为 SCAN_ASYNC（API 进程零持锁，引擎调用在 worker）
-    cat = orch.LOCK_POLICY.get("Scanner.submit_batch_scan", ("", ""))[0]
-    if cat != "SCAN_ASYNC":
-        bad.append(f"submit_batch_scan 类别应为 SCAN_ASYNC，实际 {cat!r}")
-    # scan_one 保持 SCAN（单票查询，worker 内每 worker 独立 _scan_lock）
-    cat1 = orch.LOCK_POLICY.get("Scanner.scan_one", ("", ""))[0]
-    if cat1 != "SCAN":
-        bad.append(f"scan_one 类别应为 SCAN，实际 {cat1!r}")
 
-    # 批量提交路径：派发 worker 且不持 _ENGINE_LOCK / _scan_lock（进程隔离）
+    # ① 批量提交确实派发到 worker
     src_pool = read("App/AppScanPool.py")
     if "pool.submit(_worker_scan_one" not in src_pool:
         bad.append("AppScanPool 未派发 _worker_scan_one")
-    if "with _ENGINE_LOCK:" in src_pool:
-        bad.append("AppScanPool 持 _ENGINE_LOCK（与 SCAN_ASYNC 进程隔离语义矛盾）")
 
-    # worker 入口：不持 _ENGINE_LOCK（引擎调用经 scan_one 内部 _scan_lock 自理）
-    src_worker = inspect.getsource(orch.scanner.__class__)  # 类级兜底
-    if "with _ENGINE_LOCK:" in read("App/AppScanPool.py"):
-        bad.append("AppScanPool 持 _ENGINE_LOCK（应交由 scan_one 内部锁）")
+    # ② 批量路径（提交 + worker）不得持任何已删除的应用锁
+    for sym in ("_ENGINE_LOCK", "_scan_lock", "_stock_analysis_lock"):
+        if f"with {sym}:" in src_pool:
+            bad.append(f"AppScanPool 持 {sym}（与进程隔离语义矛盾）")
 
-    # 交互路径 SERIAL 不动（P1-2：LOCK_POLICY 可执行化后 call_analysis 经
-    # engine_section("call_analysis") 持 _ENGINE_LOCK，SERIAL 语义不变）
+    # ③ scan_one 不得持应用锁（隔离靠进程边界 + 每请求数据注入）
+    #    只识别真实取锁形态，避免误伤「已删除 xxx」这类历史说明文字
+    src_scan_one = inspect.getsource(orch.scanner.__class__.scan_one)
+    for sym in ("_scan_lock", "_ENGINE_LOCK", "_stock_analysis_lock"):
+        if re.search(rf"(with\s+{re.escape(sym)}\s*:|{re.escape(sym)}\.acquire\()",
+                     src_scan_one):
+            bad.append(f"Scanner.scan_one 仍取 {sym}")
+
+    # ④ 交互路径同样免锁（CChan 构建已每请求注入）
     src_call = inspect.getsource(orch.call_analysis)
-    if "engine_section(\"call_analysis\")" not in src_call:
-        bad.append("call_analysis 未走 engine_section（P1-2 锁策略可执行化缺失，"
-                   "交互路径 SERIAL 不受保护）")
+    for sym in ("engine_section", "_ENGINE_LOCK"):
+        if sym in src_call:
+            bad.append(f"call_analysis 仍引用 {sym}（应已免锁）")
+
+    # ⑤ 登记表必须说明跨进程资源不能用 threading.Lock
+    reg = getattr(orch, "SHARED_RESOURCE_REGISTRY", {})
+    db_entry = reg.get("scan_tasks.db")
+    if not db_entry:
+        bad.append("资源登记表缺少 scan_tasks.db")
+    elif "WAL" not in db_entry[1]:
+        bad.append("scan_tasks.db 的保护手段应写明 WAL（跨进程不能用线程锁）")
 
     if bad:
-        failures.extend(f"锁分类: {b}" for b in bad)
+        failures.extend(f"进程隔离: {b}" for b in bad)
         for b in bad:
-            print(f"[FAIL] ① 锁分类: {b}")
+            print(f"[FAIL] ① 进程隔离: {b}")
     else:
-        n_async = sum(1 for c, _ in orch.LOCK_POLICY.values() if c == "SCAN_ASYNC")
-        print(f"[PASS] ① 锁分类登记: SCAN_ASYNC {n_async} 项在位，批量路径"
-              f"零引擎锁（进程隔离），交互路径 SERIAL 未受波及")
+        print("[PASS] ① 批量扫描进程隔离: 派发 worker、批量/交互路径零应用锁、"
+              "跨进程资源登记为 WAL")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -575,7 +581,7 @@ def main():
 
     print("===== 阶段 7 成果防护：批量扫描异步化（设计 5.4/5.5/5.7/5.10/8.10） =====")
     failures = []
-    test_lock_policy(failures)
+    test_scan_process_isolation(failures)
     test_routes_funnel(failures)
     test_pool_assembly(failures)
     test_store_contract(failures)

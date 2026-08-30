@@ -24,8 +24,7 @@ App/AppScanPool.py —— 批量扫描 ProcessPool 编排
     明示）；入口（main/api_server/FrontAPI）均已带 __main__ 守卫。
     仅用进程池：spawn 池装配是唯一路径，不提供线程降级——若受限容器
     （无 /dev/shm、seccomp 限制）装配失败则直接抛错，由运维解决环境
-    问题而非静默降到同进程线程（后者会共享 _scan_lock，退化为进程内
-    引擎调用串行）。
+    问题而非静默降到同进程线程（后者会退回同进程、共享缓存，语义不同）。
   - worker 数钳制 [1, 16]：防 64 核机器拉起 64 个独立引擎进程
     内存线性放大 OOM。
   - worker 函数为模块级函数（可 pickle），内部惰性 import AppOrch /
@@ -82,7 +81,7 @@ def _get_pool():
 
     仅用进程池——spawn 池装配是唯一路径，失败即抛错（不降级线程池，
     专注暴露并解决环境问题）。scan_one 在各 worker 进程内执行，每进程
-    独立 _scan_lock 与引擎缓存，互不共享。
+    独立的 app_data 与分析缓存，互不共享。
 
     即用即弃：扫描完成即销毁（destroy_pool），故此处每次装配都是
     全新进程、空缓存；打印区分首次装配与重新装配，便于确认每次扫描

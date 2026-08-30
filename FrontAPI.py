@@ -4,16 +4,21 @@ FrontAPI.py —— FastAPI 统一入口 · 面向前端 · REST + SSE
 =========================================================================
 单一路由源：全部 REST 路由与 SSE 流端点收敛于本文件，路由保持薄
 （参数校验 + run_in_threadpool(orch.*) + 响应组装），业务段在 App/AppOrch.py。
-引擎调用一律经 AppOrch 的 call_* 漏斗（锁分类见 AppOrch.LOCK_POLICY），
-本文件不直连引擎分析函数（Test/test_phase3_guards.py G3 守护）。
+引擎调用一律经 AppOrch 的 call_* 漏斗，本文件不直连引擎分析函数
+（Test/test_phase3_guards.py G3 守护）。
 SSE 实时流为同步生成器（每连接一条常驻线程，Starlette 在线程池中迭代，
 阻塞调用不占事件循环）；生成器实现位于 App/AppSSE.py，数据源抽象
 CSSESource/CTqSdkSession 位于 DataAPI/TqSdkCSSESource.py，本文件仅 re-export。
 
-锁分类（AppOrch.LOCK_POLICY）：
-    SERIAL         串行分析（call_* 漏斗持 _ENGINE_LOCK）
-    SCAN           并行扫描（Scanner.scan_one，_scan_lock 全局单实例锁，串行化引擎调用）
-    SELF_CONTAINED SSE 流（每连接独立会话，不加锁）
+执行体（决定了哪些资源是共享的）：
+    事件循环线程   async def 且内部无阻塞的路由（/api/health 等）
+    线程池        绝大多数 REST（run_in_threadpool，默认 40 线程）
+    进程池 worker  批量扫描（/scan/submit → spawn worker，内存隔离）
+    SSE 常驻线程   /api/futures/read/stream（同步生成器，每连接 1 条）
+
+锁：路由层不持锁。共享资源的锁由各持有者按资源持有，登记表见
+AppOrch.SHARED_RESOURCE_REGISTRY（按资源索引，不是按入口索引）。
+分析路径已免锁——CChan 构建经 tdx_data_context 每请求线程局部注入。
 
 启动：
     python FrontAPI.py                     # 推荐入口（端口/地址走 App/AppConfig.py）
@@ -200,7 +205,7 @@ from App.AppSSE import (  # noqa: F401
 # ═══════════════════════════════════════════════════════════════════════
 # REST 路由（单一路由源）
 # 路由保持薄：参数校验 + run_in_threadpool(orch.*) + 响应组装。
-# 引擎调用全部走 AppOrch 漏斗（锁分类见 AppOrch.LOCK_POLICY）。
+# 引擎调用全部走 AppOrch 漏斗（共享资源登记表见 AppOrch.SHARED_RESOURCE_REGISTRY）。
 # ═══════════════════════════════════════════════════════════════════════
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -234,7 +239,7 @@ async def api_stocks_analyze(
     dual: bool = Query(False),
     sub_freq: str = Query(None),
 ):
-    """获取股票缠论分析数据（orch.call_analysis · SERIAL 持锁）"""
+    """获取股票缠论分析数据（orch.call_analysis）"""
     if not code:
         raise HTTPException(status_code=400, detail="请输入股票代码")
     try:
@@ -267,7 +272,7 @@ async def api_stocks_select_point(
     sub_freq: str = Query(None),
     main_freq: str = Query(None),
 ):
-    """股票手动选点（orch.call_manual_select_point · SERIAL 持锁）
+    """股票手动选点（orch.call_manual_select_point）
 
     双窗选点：dual=1 时 freq=双击所在窗口周期，
     main_freq=上窗周期（下窗选点必传），sub_freq=下窗周期。
@@ -297,7 +302,7 @@ async def api_stocks_red_range(
     right_date: str = Query(...),
     end_date: str = Query(None),
 ):
-    """红框中枢计算（orch.call_compute_red_range_zs · SERIAL 持锁）"""
+    """红框中枢计算（orch.call_compute_red_range_zs）"""
     if not code or not left_date or not right_date:
         raise HTTPException(status_code=400, detail="参数错误: code/left_date/right_date 不能为空")
     try:
@@ -425,7 +430,7 @@ async def api_amo_read(
     start_date: str = Query(...),
     end_date: str = Query(...),
 ):
-    """获取市场量能数据（orch.call_amo · SERIAL 持锁）
+    """获取市场量能数据（orch.call_amo）
 
     数据源仅 TDX 本地指数日线（sh000001 + sz399106 成交额相加），
     无任何兜底；start_date/end_date 为 K 线页面「视口」左右边界日期。
@@ -475,7 +480,7 @@ async def api_futures_select_point(
     freq: str = Query("15s"),
     bi_idx: str = Query("-1"),
 ):
-    """期货手动选点（orch.call_futures_manual_select_point · SERIAL 持锁）
+    """期货手动选点（orch.call_futures_manual_select_point）
     期货选点统一走领域异常，AppError 由统一异常处理器捕获"""
     if not symbol or bi_idx == "-1":
         return _json_response({"error": "缺少必要参数 symbol 或 bi_idx"}, 400)

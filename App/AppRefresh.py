@@ -40,7 +40,11 @@ _pe_ttm_cache = app_data.pe_cache        # {market+code: float}  PE-TTM值
 _index_belong_cache = app_data.belong_cache
 
 # 刷新状态（股票名称刷新用；获取侧状态）
+# 访问者：刷新工作线程（写）+ /api/stocks/refresh/read|POST 的 REST 线程
+# （读）。running 的「检查后置位」必须原子，否则两个并发 POST 会同时通过
+# 检查起两条刷新线程 —— 故配 _refresh_state_lock 做 CAS。
 _refresh_status = {"running": False, "progress": 0, "total": 0, "loaded": 0, "error": None, "step": ""}
+_refresh_state_lock = threading.Lock()
 
 # AKShare 指数代码 → 市场前缀映射
 _AKSHARE_EXCHANGE_MAP = {
@@ -415,13 +419,16 @@ def _reset_refresh_running(fn):
 
     @functools.wraps(fn)
     def _wrapper(*args, **kwargs):
-        if _refresh_status["running"]:
-            return                      # 撞守卫：直接返回，不触碰 flag
-        _refresh_status["running"] = True
+        # 检查 + 置位在同一把锁内（CAS）：并发调用只有一个能进入
+        with _refresh_state_lock:
+            if _refresh_status["running"]:
+                return                  # 撞守卫：直接返回，不触碰 flag
+            _refresh_status["running"] = True
         try:
             return fn(*args, **kwargs)
         finally:
-            _refresh_status["running"] = False
+            with _refresh_state_lock:
+                _refresh_status["running"] = False
     return _wrapper
 
 
@@ -691,8 +698,9 @@ def _fetch_float_mc_from_tencent(stock_list):
 # ═══════════════════════════════════════════════════════════════════════
 
 def refresh_status():
-    """股票名称刷新状态"""
-    return _refresh_status
+    """股票名称刷新状态（快照副本，避免调用方拿到可变的内部字典）"""
+    with _refresh_state_lock:
+        return dict(_refresh_status)
 
 
 def refresh_stock_names():
@@ -701,9 +709,15 @@ def refresh_stock_names():
 
 
 def refresh_stock_names_async():
-    """异步启动股票名称刷新（不阻塞请求线程）"""
-    if _refresh_status["running"]:
-        return {"status": "already_running", **_refresh_status}
+    """异步启动股票名称刷新（不阻塞请求线程）
+
+    running 的「检查 + 置位」在同一把锁内完成（CAS）：否则两个并发 POST
+    /api/stocks/refresh 都能通过检查，各起一条刷新线程同时改同一批缓存。
+    """
+    with _refresh_state_lock:
+        if _refresh_status["running"]:
+            return {"status": "already_running", **_refresh_status}
+        _refresh_status["running"] = True
 
     def _do_refresh():
         try:

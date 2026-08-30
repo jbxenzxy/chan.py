@@ -29,16 +29,13 @@ start_date / end_date 传入，本模块按日期区间过滤日线成交额序�
 
 无持久化：面板关闭即释放数据，本模块不存任何状态。
 
-锁分类：call_amo 登记 SERIAL（AppOrch.LOCK_POLICY），持 _ENGINE_LOCK
-与其它引擎调用串行（读盘极快，锁开销可忽略；与下载写盘天然互斥）。
+锁：本模块**无锁**。call_amo 只读本地 .day 文件并算统计，不进 CChan 引擎、
+不写任何共享状态（原持 _ENGINE_LOCK 属误配——它根本不碰引擎共享缓存）。
 """
 import os
 import struct
 import time
 
-# 可执行锁策略（P1-2：按 LOCK_POLICY 分类执行，SERIAL → _ENGINE_LOCK；
-# 定义在 App/AppChart.py，AppOrch 聚合 re-export）
-from App.AppChart import engine_section
 # 配置中心（vipdoc_dir 单一事实源）
 from App.AppConfig import app_config
 # 领域异常（数据源缺失 → DataFetchError）
@@ -126,7 +123,7 @@ def call_amo(start_date: str, end_date: str):
     """市场量能数据（同步入口，REST 路由经 run_in_threadpool 调用）
 
     - 仅读 TDX 本地指数日线（sh000001 + sz399106），无任何兜底
-    - 持 _ENGINE_LOCK 串行（SERIAL 分类，见 AppOrch.LOCK_POLICY）
+    - 无锁：只读本地文件、不进引擎、不写共享状态（原持 _ENGINE_LOCK 属误配）
     - 入参前端日期为斜杠格式（%Y/%m/%d，全站 K 线契约）；内部转连字符比较，
       返回的 dates/peak_date/current_date 也统一为斜杠格式以便前端横轴对齐
     - 返回 {dates, amounts(亿元), stats:{peak, peak_date, current,
@@ -137,51 +134,49 @@ def call_amo(start_date: str, end_date: str):
     # DEBUG 级：正常只读接口，避免刷屏；定位问题时可临时调 DEBUG 级看到
     log.debug(f"[api] /api/amo/read 开始: start_date={start_date!r} end_date={end_date!r}")
     t0 = time.time()
-    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
-    with engine_section("call_amo"):
-        sh_path = _index_day_file(*_SH_INDEX)
-        sz_path = _index_day_file(*_SZ_INDEX)
-        sh_rows = _read_index_amounts(sh_path)
-        sz_rows = _read_index_amounts(sz_path)
-        merged = _merge_market_amounts(sh_rows, sz_rows)
+    sh_path = _index_day_file(*_SH_INDEX)
+    sz_path = _index_day_file(*_SZ_INDEX)
+    sh_rows = _read_index_amounts(sh_path)
+    sz_rows = _read_index_amounts(sz_path)
+    merged = _merge_market_amounts(sh_rows, sz_rows)
 
-        # 按视口日期区间过滤（含两端；区间外数据不参与指标计算）
-        # 内部比较统一用连字符格式；输出再转斜杠（全站横轴约定 %Y/%m/%d）
-        dates = sorted(d for d in merged if start_date <= d <= end_date)
-        amounts = [merged[d] for d in dates]
+    # 按视口日期区间过滤（含两端；区间外数据不参与指标计算）
+    # 内部比较统一用连字符格式；输出再转斜杠（全站横轴约定 %Y/%m/%d）
+    dates = sorted(d for d in merged if start_date <= d <= end_date)
+    amounts = [merged[d] for d in dates]
 
-        if not dates:
-            log.debug(f"[api] /api/amo/read 完成: 区间无数据 "
-                      f"({start_date}~{end_date}) 耗时 {time.time() - t0:.2f}s")
-            return {
-                "dates": [], "amounts": [],
-                "stats": {"peak": None, "peak_date": None,
-                          "current": None, "current_date": None,
-                          "peak_ratio": None},
-            }
-
-        # 指标：峰值 / 当前（最右）/ 缩至峰值占比
-        # peak_ratio = current/peak*100，口径同市场量能文章："成交额缩至峰值的百分之几"
-        # （例子：3.45万亿→0.97万亿 为 28%）。与"缩水幅度(1-占比)"互为 100- 互补。
-        peak_idx = max(range(len(amounts)), key=lambda i: amounts[i])
-        peak = amounts[peak_idx]
-        current = amounts[-1]
-        peak_ratio = round(current / peak * 100.0, 2) if peak > 0 else None
-
-        # 对外统一斜杠格式（%Y/%m/%d），与全站 K 线日期契约一致
-        out_dates = [d.replace("-", "/") for d in dates]
-
-        result = {
-            "dates": out_dates,
-            "amounts": [_fmt_yi(a) for a in amounts],
-            "stats": {
-                "peak": _fmt_yi(peak),
-                "peak_date": out_dates[peak_idx],
-                "current": _fmt_yi(current),
-                "current_date": out_dates[-1],
-                "peak_ratio": peak_ratio,
-            },
+    if not dates:
+        log.debug(f"[api] /api/amo/read 完成: 区间无数据 "
+                  f"({start_date}~{end_date}) 耗时 {time.time() - t0:.2f}s")
+        return {
+            "dates": [], "amounts": [],
+            "stats": {"peak": None, "peak_date": None,
+                      "current": None, "current_date": None,
+                      "peak_ratio": None},
         }
+
+    # 指标：峰值 / 当前（最右）/ 缩至峰值占比
+    # peak_ratio = current/peak*100，口径同市场量能文章："成交额缩至峰值的百分之几"
+    # （例子：3.45万亿→0.97万亿 为 28%）。与"缩水幅度(1-占比)"互为 100- 互补。
+    peak_idx = max(range(len(amounts)), key=lambda i: amounts[i])
+    peak = amounts[peak_idx]
+    current = amounts[-1]
+    peak_ratio = round(current / peak * 100.0, 2) if peak > 0 else None
+
+    # 对外统一斜杠格式（%Y/%m/%d），与全站 K 线日期契约一致
+    out_dates = [d.replace("-", "/") for d in dates]
+
+    result = {
+        "dates": out_dates,
+        "amounts": [_fmt_yi(a) for a in amounts],
+        "stats": {
+            "peak": _fmt_yi(peak),
+            "peak_date": out_dates[peak_idx],
+            "current": _fmt_yi(current),
+            "current_date": out_dates[-1],
+            "peak_ratio": peak_ratio,
+        },
+    }
     log.debug(f"[api] /api/amo/read 完成: {len(dates)} 天 "
               f"耗时 {time.time() - t0:.2f}s")
     return result

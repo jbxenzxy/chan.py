@@ -48,6 +48,13 @@ CI / 迁移每阶段的验收门禁）。
  22. 扫描池失败收敛  test_scanpool_fallback.py     P2-2③：装配/派发失败收敛为任务
                                                      error + 坏池自愈（无线程降级）
  23. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
+ 24. 锁 v5 守护        test_lock_v5_guards.py        2026-08 锁收敛：线程局部注入隔离 /
+                                                     复盘标志线程局部 / AppData 锁覆盖 /
+                                                     原子写 / 已删符号防回潮
+ 25. CChan 数据隔离    test_chan_data_isolation.py   8 线程×3 轮并发建链 ≡ 串行基线
+ 26. 数据隔离对照      test_chan_data_isolation_control.py
+                                                     确定性交错：证明类变量注入串数据、
+                                                     线程局部注入隔离（非空测试的自检）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -108,6 +115,12 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_api_integration.py")]),
     ("code_resolution_guards",
      [sys.executable, os.path.join("Test", "test_code_resolution_guards.py")]),
+    ("lock_v5_guards",
+     [sys.executable, os.path.join("Test", "test_lock_v5_guards.py")]),
+    ("chan_data_isolation",
+     [sys.executable, os.path.join("Test", "test_chan_data_isolation.py")]),
+    ("chan_data_isolation_control",
+     [sys.executable, os.path.join("Test", "test_chan_data_isolation_control.py")]),
     ("sse_concurrent",
      [sys.executable, os.path.join("Test", "test_sse_concurrent.py")]),
     ("futures_sub_key",

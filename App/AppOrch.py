@@ -14,11 +14,15 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 本文件持有：
   - 领域异常层级 re-export（AppError 等 6 类，定义在 App/AppErrors.py；
     Test/test_phase2_guards.py 引用）
-  - LOCK_POLICY 锁分类登记表（Test/test_phase3_guards.py 守护）
+  - SHARED_RESOURCE_REGISTRY 共享资源登记表（按资源索引，取代原
+    LOCK_POLICY；Test/test_phase3_guards.py 守护）
   - 全部业务函数 re-export（FrontAPI 的 orch.xxx 调用零改动）
 
 依赖方向：
   FrontAPI.py → App/AppOrch.py → 各功能文件 → AppEngine / AppData（单向）
+
+锁：本层不持有锁。共享资源的锁由各持有者（AppData / AppScanPool /
+AppRefresh / DataAPI）按资源持有，登记表见 SHARED_RESOURCE_REGISTRY。
 
 使用方式：
     from App.AppOrch import analyze_stock, Scanner, call_analysis
@@ -26,8 +30,6 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 """
 # ── 各功能域 re-export ─────────────────────────────────────────────────
 from App.AppChart import (
-    _ENGINE_LOCK,
-    engine_section,
     call_analysis, analyze_stock,
     call_manual_select_point, call_futures_manual_select_point,
     call_compute_red_range_zs,
@@ -56,53 +58,79 @@ from App.AppAMO import call_amo
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# 引擎调用锁分类建档
+# 共享资源登记表（按「资源」索引，不是按「入口」索引）
 # =====================================================================
-# 背景：引擎全局缓存（_stocks_analysis_cache、
-# _futures_analysis_cache、名称/PE/市值缓存等）非线程安全，
-# 引擎调用必须按「是否触碰共享状态」分类，防止绕锁并发写坏缓存。
+# 为什么改主键：原 LOCK_POLICY 以「入口函数名」为主键、以 SERIAL/SCAN/…
+# 为类别，表里没有一列写着「护哪个资源」。结果锁与资源对不上号——同一份
+# 缓存被两把不同的外层锁「恰好」覆盖，新增一条访问路径就会静默漏锁。
 #
-#   SERIAL（串行分析）  REST 交互式分析路径（单标的分析 / 手动选点 /
-#                      红框中枢计算 / 期货选点）。共用 _ENGINE_LOCK：
-#                      同一时刻只有一个线程进入引擎，交互延迟可接受。
+# 判断顺序（对每个数据问三句，再决定要不要锁）：
+#   ① 被哪种执行体承载？（事件循环 / 线程池 / 进程池 worker / SSE 常驻线程）
+#   ② 在哪个作用域共享？（进程内堆 / 跨进程文件 / 每请求局部 / 只读）
+#   ③ 存在跨执行体的**写-写**或**读-改-写**吗？（纯只读共享不需要锁）
 #
-#   SCAN（并行扫描）    批量扫描路径。前端并发发起 /api/scan_one，任务派发
-#                      至执行池（SCAN_ASYNC，worker 数由 SCAN_POOL_WORKERS
-#                      决定）。_scan_lock 为全局锁（单实例，非按票）：锁内串行
-#                      化引擎调用 analyze_stock（保护非线程安全的引擎缓存不被
-#                      并发写），锁外的预处理/结果过滤保留并发——即并发体现在
-#                      非引擎阶段，引擎阶段全局串行。
+# 锁的作用域必须与资源的作用域同级：
+#   进程内堆对象 → threading.Lock / RLock
+#   跨进程       → OS 层（SQLite WAL / fcntl / multiprocessing.Lock）
+#                  ⚠ threading.Lock 跨进程**无效但看起来有效**，是最大陷阱
+#   事件循环内   → asyncio.Lock，且临界区不得跨 await
 #
-#   SELF_CONTAINED     SSE 期货实时流。每连接独立 TqApi + CChan 对象，
-#                      不触碰 _stocks_analysis_cache（_futures_analysis_
-#                      cache 仅按 symbol:freq 键存放下窗 CChan 供
-#                      /api/dual_zs 读取，启动写入/收尾弹出，无跨连接
-#                      读改写竞争）。连接间天然隔离，不加锁。
-#
-# 约定：路由层（FrontAPI）禁止直连 m.analyze_stock 等引擎函数，
-# 一律经本层 call_* 漏斗（锁策略集中在 LOCK_POLICY 登记，
-# P1-2 起经 engine_section 可执行化：SERIAL 漏斗实现用
-# `with engine_section("<入口名>"):` 按登记分类实际取锁，
-# Test/test_phase3_guards.py 守护）。
+# 消除共享优先于加锁：CTdxAPI._tdx_data 原是类变量（进程级共享），改为
+# 每请求线程局部注入后，AppEngine._stock_analysis_lock 与 AppChart.
+# _ENGINE_LOCK 一并删除——两把锁护的是同一个根因。
+# 完整论述见 Docs/chan_lock_design_v5.md。
 # ═══════════════════════════════════════════════════════════════════════
 
-# 锁策略登记表：入口 → (类别, 说明)。P1-2 起该表不再只是文档，
-# engine_section 按类别实际取锁（SERIAL→_ENGINE_LOCK，其余不加锁），
-# 守护用例校验「登记即执行」。
-LOCK_POLICY = {
-    "call_analysis":                ("SERIAL", "REST 单标的分析：共享分析缓存 → _ENGINE_LOCK"),
-    "call_manual_select_point":     ("SERIAL", "股票手动选点：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
-                                      "双窗选点含 dual_main/dual_sub/下窗运行时缓存读写，同锁覆盖"),
-    "call_futures_manual_select_point": ("SERIAL", "期货手动选点：内部走期货分析链路（含期货缓存）→ _ENGINE_LOCK"),
-    "call_compute_red_range_zs":    ("SERIAL", "红框中枢计算：内部走 analyze_stock 引擎链路 → _ENGINE_LOCK；"
-                                      "独立双窗分支读下窗运行时缓存/dual_sub 缓存，miss 抛 DataFetchError"),
-    "analyze_stock":                ("RAW", "引擎原始入口（无锁）：仅供 SCAN/SELF_CONTAINED 分类路径内部使用；"
-                                      "串行调用方必须改走 call_analysis"),
-    "Scanner.scan_one":             ("SCAN", "扫描路径（单票查询）：引擎调用在全局 _scan_lock 内串行（基线继承，保护引擎缓存），锁外预处理/过滤保留前端并发请求；不加 _ENGINE_LOCK；前端批量扫描走 SCAN_ASYNC，本径保留兼容"),
-    "Scanner.submit_batch_scan":    ("SCAN_ASYNC", "批量扫描提交：股票清单派发至 ProcessPool（spawn）执行池，引擎调用在 worker 内走 scan_one（每 worker 独立 _scan_lock），API 进程零持锁；结果经 SQLite 扫描库回流供前端轮询"),
-    "sse_futures_stream_single":    ("SELF_CONTAINED", "SSE 单窗口（FrontAPI）：每连接独立 TqApi+CChan，不触共享分析缓存"),
-    "sse_futures_stream_dual":      ("SELF_CONTAINED", "SSE 双窗口（FrontAPI）：独立 TqApi+双 CChan，连接间隔离"),
-    "call_amo":                     ("SERIAL", "市场量能：读 TDX 本地指数日线成交额（sh000001+sz399106），不触引擎共享缓存；持 _ENGINE_LOCK 与引擎调用串行"),
+# 资源名 → (作用域, 保护手段, 访问者, 说明)
+SHARED_RESOURCE_REGISTRY = {
+    "stocks_analysis_cache": (
+        "进程内", "AppData._cache_lock (RLock)", "REST / SSE",
+        "股票分析结果 LRU（含 dual_main/dual_sub 结构化键）+ 股票下窗 CChan "
+        "运行时缓存。读写/淘汰/失效全部经 app_data.cache_* / "
+        "stocks_sub_cache_*，每个入口各自持锁。"),
+    "futures_analysis_cache": (
+        "进程内", "AppData._futures_cache_lock (RLock)", "SSE 写 / REST 读、清",
+        "期货下窗 CChan。独立成锁：访问者是 SSE 常驻线程（高频写、生命周期"
+        "以分钟计），不应与 REST 的毫秒级缓存操作抢同一把锁。"),
+    "user_store_files": (
+        "进程内 + 文件", "AppData._user_store_lock (RLock) + 原子落盘",
+        "REST / worker（只读加载）",
+        "标注 text_annotation.json、选点 saved_point.csv、last_code_freq.json、"
+        "float_mc_cache.json、zxg.blk。都是短耗时读-改-写，合并为一把锁消除"
+        "跨锁顺序死锁；统一走 safe_write_json_file / _atomic_write_text。"),
+    "scan_pool_singleton": (
+        "进程内", "AppScanPool._pool_lock", "REST",
+        "ProcessPool 单例 + _active_scans 引用计数。护的是「父进程的池对象」，"
+        "不是 worker 之间的共享——后者归 OS 管。"),
+    "scan_tasks.db": (
+        "跨进程", "SQLite WAL + busy_timeout（OS 文件锁）",
+        "REST / ProcessPool worker",
+        "批量扫描结果。跨进程资源**不能**用 threading.Lock 保护，真正生效的"
+        "是 SQLite 自身的 WAL 与写重试。"),
+    "refresh_status": (
+        "进程内", "AppRefresh._refresh_state_lock", "REST / 刷新工作线程",
+        "刷新进度字典；running 的「检查 + 置位」必须在锁内完成（CAS）。"),
+    "xdxr_cache": (
+        "进程内", "DataAPI.TdxAPI._xdxr_lock", "REST / worker（各进程独立）",
+        "除权除息缓存，DataAPI 内部，与本层正交。"),
+    "tq_session_registry": (
+        "进程内", "DataAPI.TqSdkCSSESource._ACTIVE_SOURCES_LOCK / 实例 _lock",
+        "SSE / REST（close_all）",
+        "TqApi 活跃源注册表与单源记录缓存，DataAPI 内部，与本层正交。"),
+    # ── 已消除的共享（无需锁；登记在此以防回潮）──────────────────
+    "CTdxAPI._tdx_data": (
+        "每请求局部", "无需锁（tdx_data_context 线程局部注入）",
+        "REST / worker",
+        "原为类变量、进程级共享，是 _stock_analysis_lock + _ENGINE_LOCK 的"
+        "唯一根因。改为每请求注入后数据全程是调用方局部变量，CChan 构建"
+        "天然线程安全。"),
+    "CChan / TqApi / CTqSdkSession": (
+        "每连接局部", "无需锁", "SSE",
+        "SSE 每连接独立 TqApi + CChan + 记录缓存（session_context 绑定）。"
+        "注意这不代表 SSE 线程与 REST 线程隔离——app_data 仍然共享。"),
+    "app_config / vipdoc .day / FREQ_SEC_MAP": (
+        "只读共享", "无需锁（无写者）", "全部",
+        "启动后只读。判断标准是「有没有写者」，不是「是不是共享」。"),
 }
 
 
@@ -132,8 +160,8 @@ __all__ = [
     # 异常
     "AppError", "DataFetchError", "AnalysisError", "ConfigError",
     "NotFoundError", "PersistenceError",
-    # 锁
-    "_ENGINE_LOCK", "LOCK_POLICY",
+    # 共享资源登记表（按资源索引）
+    "SHARED_RESOURCE_REGISTRY",
     # 分析漏斗（AppChart）
     "call_analysis", "analyze_stock",
     "call_manual_select_point", "call_futures_manual_select_point",

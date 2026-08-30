@@ -3,8 +3,8 @@
 App/AppChart.py —— 图表交互功能域
 =========================================================================
 收纳用户在页面上与图表交互触发的全部动作：
-  - 分析漏斗（call_analysis / analyze_stock，持 _ENGINE_LOCK）
-  - 手动选点 / 红框中枢（call_* 持锁漏斗 + RAW 原始实现）
+  - 分析漏斗（call_analysis / analyze_stock）
+  - 手动选点 / 红框中枢（call_* 漏斗 + RAW 原始实现）
   - 审核标注（get_annotations / handle_annotation_action，图表右键标注）
   - 搜索（search_stocks）
   - 选点 / 上次查看 / 期货子窗缓存漏斗
@@ -16,13 +16,19 @@ App/AppChart.py —— 图表交互功能域
 
 依赖方向：AppChart.py → AppEngine / AppSSE / AppData（单向；
 期货元数据一律经 AppSSE 出口，不直连 DataAPI）
-锁定义：_ENGINE_LOCK 为引擎调用全局串行锁，本模块 call_* 漏斗持锁；
-LOCK_POLICY 登记表在 AppOrch.py（聚合入口）统一维护。
+
+锁（2026-08 收敛后）：
+  本模块**不再持有任何锁**。原 _ENGINE_LOCK + engine_section 是套在
+  AppEngine._stock_analysis_lock 外的第二层壳，两层护同一段代码，外层净
+  贡献为 0；而 _stock_analysis_lock 的唯一根因（类变量 CTdxAPI._tdx_data）
+  已改为每请求线程局部注入（DataAPI/TdxAPI.tdx_data_context），根因消失、
+  两把锁一并删除。
+  call_* 漏斗保留：它的价值是「路由层禁止直连引擎」的单一入口约束，
+  不是加锁。共享资源的锁由 AppData 按资源持有（见 AppOrch 的
+  SHARED_RESOURCE_REGISTRY）。
 """
 import os
 import time
-import threading
-from contextlib import contextmanager
 
 # 分析引擎层（App/AppEngine.py）
 from App import AppEngine as _m
@@ -40,80 +46,48 @@ from App.AppLog import get_logger
 log = get_logger(__name__)
 
 
-
-# 引擎调用全局串行锁（锁分类 SERIAL 共用；LOCK_POLICY 登记见 AppOrch.py）
-_ENGINE_LOCK = threading.Lock()
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# 可执行锁策略（P1-2：LOCK_POLICY 从「登记」升级为「可执行」）
-# =====================================================================
-# 背景：锁分类表 LOCK_POLICY 原本只作登记 + 守护测试字符串匹配，不真正
-# 驱动锁行为（策略与实现分道扬镳）。engine_section 让登记即执行：
-# SERIAL 漏斗用 `with engine_section("<入口名>"):` 代替手写
-# `with _ENGINE_LOCK:`，锁映射集中定义于 LOCK_POLICY，改分类即改锁行为。
-# 惰性 import LOCK_POLICY 避免 AppOrch↔AppChart 模块级循环依赖。
-# ═══════════════════════════════════════════════════════════════════════
-@contextmanager
-def engine_section(entry):
-    """按 LOCK_POLICY 分类执行锁策略（P1-2 可执行化）。
-
-    用法：SERIAL 漏斗（call_analysis 等）以 `with engine_section("call_analysis"):`
-    代替手写 `with _ENGINE_LOCK:`；未登记入口立即 KeyError（fail fast，
-    策略必须覆盖每个受保护入口）。
-
-      SERIAL          → 持 _ENGINE_LOCK（REST 交互式分析全局串行）
-      SCAN            → 不加锁（Scanner 内部以 _scan_lock 串行引擎调用）
-      SCAN_ASYNC      → 不加锁（worker 内各自持锁，API 进程零持锁）
-      SELF_CONTAINED  → 不加锁（各连接独立 TqApi+CChan，天然隔离）
-      RAW             → 不加锁（原始入口，仅限分类路径内部调用）
-    """
-    from App.AppOrch import LOCK_POLICY  # 惰性导入：避免模块级循环依赖
-    cat, _note = LOCK_POLICY[entry]
-    if cat == "SERIAL":
-        with _ENGINE_LOCK:
-            yield
-    else:
-        yield
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # 消费侧：分析引擎
 # ═══════════════════════════════════════════════════════════════════════
+# 【已删除】_ENGINE_LOCK + engine_section
+# 二者是套在 AppEngine._stock_analysis_lock 外的第二层壳（两层护同一段代码）。
+# 根因锁随 CTdxAPI._tdx_data 改为每请求线程局部注入而删除后，外层壳净贡献
+# 归零，一并删除。共享资源的锁现由 AppData 按资源持有（cache_lock /
+# futures_cache_lock / user_store_lock），登记表见 AppOrch 的
+# SHARED_RESOURCE_REGISTRY —— 它按「资源」索引，而不是按「入口」索引。
 
 def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
-    """单标的缠论分析（同步入口，REST 路由当前直接调用）
+    """单标的缠论分析（同步入口，REST 路由唯一入口）
 
-    - 引擎全局缓存非线程安全 → 全局串行锁保护
-    - 开始/完成即时打印：uvicorn 仅在请求完成后记日志，挂起时控制台零输出，
-      此日志是排障第一现场。
+    CChan 构建已免锁（数据每请求线程局部注入），共享的分析/选点/标注缓存
+    由 AppData 内部按资源加锁，本漏斗不再持任何锁。
+    开始/完成即时打印：uvicorn 仅在请求完成后记日志，挂起时控制台零输出，
+    此日志是排障第一现场。
     """
     log.info(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
           f"end_date={end_date!r} dual={dual}")
     t0 = time.time()
-    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
-    with engine_section("call_analysis"):
-        result = _m.analyze_stock(code, freq=freq, end_date=end_date,
-                                  dual=dual, step=step, sub_freq=sub_freq)
+    result = _m.analyze_stock(code, freq=freq, end_date=end_date,
+                              dual=dual, step=step, sub_freq=sub_freq)
     log.info(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
     return result
 
 
 def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
-    """股票/指数分析公开入口（引擎 analyze_stock 的薄封装）· 锁分类 RAW（无锁）
+    """股票/指数分析公开入口（引擎 analyze_stock 的薄封装）· 原始入口（无锁）
 
     ⚠ 并非引擎的唯一入口：stock_manual_select_point（手动选点重建）直调
     _m._analyze_stock_internal 走同一链路；本函数仅收敛普通 REST 分析路径。
-    与引擎 analyze_stock 同理**并非无状态**：引擎内部维护模块级
-    LRU 缓存（_stocks_analysis_cache）与名称/PE/市值等共享缓存，均非线程
-    安全。
+    与引擎 analyze_stock 同理**并非无状态**：引擎内部维护 LRU 缓存
+    （_stocks_analysis_cache）与名称/PE/市值等共享缓存 —— 但这些缓存的
+    并发读写已由 AppData 内部锁覆盖，调用方无需（也不应）再自行串行。
 
-    调用约定（LOCK_POLICY，见 AppOrch.py 文件头）：
-      - 串行分析路径（REST 交互式）→ 必须走 call_analysis
-        （持 _ENGINE_LOCK），不得直调本函数；
-      - 扫描路径（SCAN）→ AppScan.Scanner.scan_one 内部调用（全局
-        _scan_lock 内串行引擎调用，锁外保留并发）；
-      - SSE 期货路径（SELF_CONTAINED）→ 独立 CChan 会话，不触共享缓存。
+    调用约定：
+      - REST 交互式路径 → 走 call_analysis（路由层禁止直连本函数，
+        该约束由 Test/test_phase3_guards.py 守护）；
+      - 扫描路径 → AppScan.Scanner.scan_one 内部调用（worker 进程内各自
+        独立缓存，跨进程隔离）；
+      - SSE 期货路径 → 独立 CChan 会话。
     """
     return _m.analyze_stock(code, freq=freq, end_date=end_date,
                             cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq)
@@ -180,48 +154,46 @@ def handle_annotation_action(body):
 
 
 def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
-    """股票手动选点 · SERIAL（持 _ENGINE_LOCK）
+    """股票手动选点（REST 唯一入口，无锁）
 
     统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
     透传双窗上下文（dual/sub_freq/main_freq），支持双窗选点。
+
+    并发安全由各共享资源自身的锁保证：CChan 构建免锁（每请求数据注入），
+    选点 CSV 走 user_store_lock，分析缓存/下窗缓存走 cache_lock。
     """
-    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
-    with engine_section("call_manual_select_point"):
-        return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
-                                         dual=dual, sub_freq=sub_freq,
-                                         main_freq=main_freq)
+    return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
+                                     dual=dual, sub_freq=sub_freq,
+                                     main_freq=main_freq)
 
 
 def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
-    """期货手动选点 · SERIAL（持 _ENGINE_LOCK）
+    """期货手动选点（REST 唯一入口，无锁）
 
     内部自建链路（CTqSdkSession + _build_futures_chan +
-    _extract_realtime_snapshot，期货生产链路统一走 SSE），
-    归入串行分类，与股票侧共用引擎锁。
+    _extract_realtime_snapshot，期货生产链路统一走 SSE）：每请求独立
+    TqApi 会话，选点落盘走 user_store_lock。
     """
-    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
-    with engine_section("call_futures_manual_select_point"):
-        return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+    return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
 
 def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):
-    """红框中枢计算 · SERIAL（持 _ENGINE_LOCK）
+    """红框中枢计算（REST 唯一入口，无锁）
 
     统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
+    下窗 CChan 读取走 AppData 的 cache_lock / futures_cache_lock。
     """
-    # P1-2：锁策略经 engine_section 按 LOCK_POLICY 执行（SERIAL → _ENGINE_LOCK）
-    with engine_section("call_compute_red_range_zs"):
-        return compute_red_range_zs(code, sub_freq=sub_freq,
-                                    left_date=left_date, right_date=right_date,
-                                    end_date=end_date)
+    return compute_red_range_zs(code, sub_freq=sub_freq,
+                                left_date=left_date, right_date=right_date,
+                                end_date=end_date)
 
 
 def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
-    """股票手动选点 · RAW（无锁原始入口）
+    """股票手动选点 · 原始入口（无锁，供内部路径复用）
 
     ⚠ 与 analyze_stock 同理并非无状态：内部走 analyze_stock 引擎链路与
-    共享缓存。REST 调用方必须走 call_manual_select_point（持锁漏斗）；
-    本签名保留供已按 SELF_CONTAINED 分类并自带会话隔离的路径使用。
+    共享缓存。REST 调用方必须走 call_manual_select_point（该约束由
+    Test/test_phase3_guards.py 守护）。
 
     流程：通过前端传来的笔索引找到分型左肩第一根原始K线时间T → 保存T到
     CSV → 销毁旧CChan及_stocks_analysis_cache 中间状态 → 从T重新加载K线
@@ -368,7 +340,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
     """期货手动选点 · RAW（无锁原始入口）
 
     ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
-    call_futures_manual_select_point（持锁漏斗）。实现在 App/AppSSE.py。
+    call_futures_manual_select_point。实现在 App/AppSSE.py。
     """
     return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
 
@@ -377,7 +349,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     """红框中枢计算 · RAW（无锁原始入口）
 
     ⚠ 内部复用 analyze_stock 引擎与共享缓存。REST 调用方必须走
-    call_compute_red_range_zs（持锁漏斗）。
+    call_compute_red_range_zs。
 
     双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
     后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再

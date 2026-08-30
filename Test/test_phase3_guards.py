@@ -4,7 +4,8 @@
 =====================================================================
 守护阶段 3 的六类结构性成果（设计文档 V10 方案 8.6）：
 
-  ① 锁分类建档（LOCK_POLICY 登记完备 + SERIAL 实现确实持锁 + RAW 不持锁）
+  ① 共享资源登记表（SHARED_RESOURCE_REGISTRY 按资源索引）
+     + 冗余锁防回潮（_stock_analysis_lock / _ENGINE_LOCK / _scan_lock）
   ② 直连引擎清零（FrontAPI/api_server 不再绕过 AppOrch 漏斗调引擎，
      阶段 2 遗留问题：原 api_server 3 处直连绕锁）
   ③ 路由收敛（api_server.py 已删除，31 条 REST/SSE 路由单源于 FrontAPI，
@@ -71,8 +72,8 @@ EXPECTED_ROUTES = {
     ("DELETE", "/api/futures/{symbol}/delete/point"),
 }
 
-# REST 路由禁止直连的引擎原始入口（锁分类 SERIAL 对应的底层函数；
-# 调用必须经 AppOrch.call_* 漏斗，见 LOCK_POLICY）
+# REST 路由禁止直连的引擎原始入口
+# 调用必须经 AppOrch.call_* 漏斗（共享资源登记表见 SHARED_RESOURCE_REGISTRY）
 # D7：_analyze_futures_internal 已删除（生产零调用方），守护条目随之移除
 FORBIDDEN_ENGINE_CALLS = [
     "m.analyze_stock(",
@@ -92,67 +93,93 @@ def read_src(rel):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ① 锁分类建档
+# ① 共享资源登记表 + 冗余锁防回潮
 # ═══════════════════════════════════════════════════════════════════════
-def test_lock_policy(failures):
-    """LOCK_POLICY 登记完备 + engine_section 可执行化（P1-2）：
-    SERIAL 漏斗实现须经 engine_section("<入口>") 取锁，RAW 不取锁。"""
+def test_shared_resource_registry(failures):
+    """SHARED_RESOURCE_REGISTRY 按「资源」索引且字段完整。
+
+    取代原 LOCK_POLICY：原表以「入口函数名」为主键、以 SERIAL/SCAN/… 为
+    类别，表里没有一列写着「护哪个资源」，导致锁与资源对不上号。新表的主键
+    是资源本身，每行必须给出 (作用域, 保护手段, 访问者, 说明)。
+    """
     from App import AppOrch as orch
 
-    required_keys = {
-        "call_analysis", "call_manual_select_point",
-        "call_futures_manual_select_point", "call_compute_red_range_zs",
-        "analyze_stock", "Scanner.scan_one",
-        "sse_futures_stream_single", "sse_futures_stream_dual",
-    }
-    missing = required_keys - set(orch.LOCK_POLICY)
-    if missing:
-        failures.append(f"锁分类: LOCK_POLICY 缺少登记 {sorted(missing)}")
-        print(f"[FAIL] ① 锁分类: 缺少 {sorted(missing)}")
+    if hasattr(orch, "LOCK_POLICY"):
+        failures.append("LOCK_POLICY 应已删除（改为 SHARED_RESOURCE_REGISTRY）")
+        print("[FAIL] ① 资源登记表: LOCK_POLICY 仍存在")
         return
 
-    # 每个类别必须出现的取值域（新增类别需同步更新守护）
-    # 阶段 7 新增 SCAN_ASYNC（批量扫描异步路径：API 进程零持锁）
-    for key, (cat, _desc) in orch.LOCK_POLICY.items():
-        if cat not in ("SERIAL", "SCAN", "SCAN_ASYNC", "SELF_CONTAINED", "RAW"):
-            failures.append(f"锁分类: {key} 类别 {cat!r} 不在登记域内")
-            print(f"[FAIL] ① 锁分类: {key} 类别 {cat!r} 非法")
+    reg = getattr(orch, "SHARED_RESOURCE_REGISTRY", None)
+    if not isinstance(reg, dict) or not reg:
+        failures.append("AppOrch.SHARED_RESOURCE_REGISTRY 缺失或为空")
+        print("[FAIL] ① 资源登记表: SHARED_RESOURCE_REGISTRY 缺失")
+        return
 
-    # SERIAL 入口（AppOrch 层函数）实现必须经 engine_section 取锁；
-    # RAW 必须不取锁。P1-2：校验「登记即执行」，不再只是登记文本匹配。
-    fn_map = {
-        "call_analysis": orch.call_analysis,
-        "call_manual_select_point": orch.call_manual_select_point,
-        "call_futures_manual_select_point": orch.call_futures_manual_select_point,
-        "call_compute_red_range_zs": orch.call_compute_red_range_zs,
-        "call_amo": orch.call_amo,
-        "analyze_stock": orch.analyze_stock,
-    }
     bad = []
-    for name, fn in fn_map.items():
-        cat = orch.LOCK_POLICY[name][0]
-        src = inspect.getsource(fn)
-        uses_section = f'engine_section("{name}")' in src
-        holds_raw_lock = "with _ENGINE_LOCK:" in src
-        if cat == "SERIAL":
-            if not uses_section:
-                bad.append(f"{name} 登记 SERIAL 但实现未经 engine_section(\"{name}\") 取锁")
-            if holds_raw_lock:
-                bad.append(f"{name} 残留手写 with _ENGINE_LOCK:（应统一走 engine_section）")
-        if cat == "RAW" and (uses_section or holds_raw_lock):
-            bad.append(f"{name} 登记 RAW 但实现取锁（与登记矛盾）")
+    for key, val in reg.items():
+        if not (isinstance(val, tuple) and len(val) == 4):
+            bad.append(f"{key} 字段数不是 4（作用域/保护手段/访问者/说明）")
+            continue
+        scope, guard, visitors, note = val
+        if scope not in ("进程内", "跨进程", "进程内 + 文件",
+                         "每请求局部", "每连接局部", "只读共享"):
+            bad.append(f"{key} 作用域 {scope!r} 不在登记域内")
+        if not guard:
+            bad.append(f"{key} 未写明保护手段")
+
+    required = {
+        "stocks_analysis_cache", "futures_analysis_cache", "user_store_files",
+        "scan_pool_singleton", "scan_tasks.db", "refresh_status",
+    }
+    missing = required - set(reg)
+    if missing:
+        bad.append(f"缺少登记 {sorted(missing)}")
 
     if bad:
-        failures.extend(f"锁分类: {b}" for b in bad)
+        failures.extend(f"资源登记表: {b}" for b in bad)
         for b in bad:
-            print(f"[FAIL] ① 锁分类: {b}")
+            print(f"[FAIL] ① 资源登记表: {b}")
     else:
-        n_serial = sum(1 for c, _ in orch.LOCK_POLICY.values() if c == "SERIAL")
-        print(f"[PASS] ① 锁分类: {len(orch.LOCK_POLICY)} 项登记，"
-              f"{n_serial} 个 SERIAL 漏斗均经 engine_section 取锁，RAW 无一取锁")
+        print(f"[PASS] ① 资源登记表: {len(reg)} 项，字段完整（按资源索引）")
 
 
-# ═══════════════════════════════════════════════════════════════════════
+def test_no_redundant_locks(failures):
+    """冗余 / 无效锁不得回潮。
+
+    三把已删的锁各有明确原因：
+      _stock_analysis_lock  唯一根因 CTdxAPI._tdx_data 已改为每请求注入
+      _ENGINE_LOCK          套在根因锁外的第二层壳，净贡献 0
+      _scan_lock            API 进程无调用；worker 内不竞争
+    """
+    import App.AppEngine as m
+    import App.AppChart as c
+    import App.AppScan as s
+
+    bad = []
+    if hasattr(m, "_stock_analysis_lock"):
+        bad.append("AppEngine._stock_analysis_lock 应已删除（根因已消除）")
+    if hasattr(c, "_ENGINE_LOCK"):
+        bad.append("AppChart._ENGINE_LOCK 应已删除（根因锁外的第二层壳）")
+    if hasattr(c, "engine_section"):
+        bad.append("AppChart.engine_section 应已删除")
+    if hasattr(s, "_scan_lock"):
+        bad.append("AppScan._scan_lock 应已删除（API 进程无调用，worker 不竞争）")
+
+    # 根因必须真的消除：CTdxAPI 不得再有类变量 _tdx_data / set_data
+    from DataAPI.TdxAPI import CTdxAPI
+    if hasattr(CTdxAPI, "_tdx_data"):
+        bad.append("CTdxAPI._tdx_data 类变量回潮（_stock_analysis_lock 的根因）")
+    if hasattr(CTdxAPI, "set_data"):
+        bad.append("CTdxAPI.set_data classmethod 回潮（写类变量）")
+
+    if bad:
+        failures.extend(f"冗余锁: {b}" for b in bad)
+        for b in bad:
+            print(f"[FAIL] ① 冗余锁: {b}")
+    else:
+        print("[PASS] ① 冗余锁: 3 把已删锁 + CTdxAPI 类变量均未回潮")
+
+
 # ② 直连引擎清零 + ③ 路由收敛
 # ═══════════════════════════════════════════════════════════════════════
 def test_no_direct_engine_calls(failures):
@@ -316,10 +343,14 @@ def test_sse_dual_impl(failures):
         if hasattr(FrontAPI, name):
             bad.append(f"FrontAPI 仍含 legacy 符号 {name}（3b-2 应已删除）")
 
-    # 锁分类登记为 SELF_CONTAINED
-    for key in ("sse_futures_stream_single", "sse_futures_stream_dual"):
-        if orch.LOCK_POLICY.get(key, ("?",))[0] != "SELF_CONTAINED":
-            bad.append(f"{key} 锁分类应为 SELF_CONTAINED")
+    # SSE 每连接独立会话：共享缓存必须经 AppData 按资源加锁
+    # （原「SELF_CONTAINED 分类」已并入 SHARED_RESOURCE_REGISTRY 的
+    #  「CChan / TqApi / CTqSdkSession」与「futures_analysis_cache」两项）
+    from App import AppOrch as _orch
+    _reg = getattr(_orch, "SHARED_RESOURCE_REGISTRY", {})
+    for key in ("CChan / TqApi / CTqSdkSession", "futures_analysis_cache"):
+        if key not in _reg:
+            bad.append(f"资源登记表缺少 SSE 相关项 {key!r}")
 
     # 路由签名：无 impl 参数（仅 native 路径）
     fn = getattr(FrontAPI, "api_futures_read_stream", None)
@@ -406,7 +437,8 @@ def main():
     args = ap.parse_args()
 
     failures = []
-    test_lock_policy(failures)
+    test_shared_resource_registry(failures)
+    test_no_redundant_locks(failures)
     test_no_direct_engine_calls(failures)
     test_rest_routes_use_funnels(failures)
     test_route_convergence(failures, update=args.update)

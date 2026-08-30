@@ -96,7 +96,9 @@ except ImportError as e:
 # 包含：K线读取、前复权（自选股读写位于 App/AppData.py）
 # K线读取统一经 CTdxAPI（CCommonStockApi 实现）访问，引擎层不直连
 # 模块级 read_main_level_records / read_sub_level_records。
-from DataAPI.TdxAPI import CTdxAPI
+from DataAPI.TdxAPI import CTdxAPI, tdx_data_context
+# 复盘调试标志（线程局部；取代原进程级类变量 CMyBSPointList.REPLAY_MODE）
+from BuySellPoint.BSPointList import set_replay_mode
 
 # 前复权开关：True=开启前复权（消除分红送股的跳空缺口），False=关闭（不复权，原样输出）
 # 读取配置中心 AppConfig（单一事实源 app_config.forward_adjust_enabled，.env/环境变量可覆盖）；
@@ -254,8 +256,12 @@ _cache_lock = app_data.cache_lock                        # 保护缓存的并发
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
 
-# 股票分析锁（防止并发请求时 CTdxAPI.set_data 被覆盖导致分析结果串数据）
-_stock_analysis_lock = threading.Lock()
+# 【已删除】_stock_analysis_lock（原 AppEngine.py:258）
+# 它唯一保护的是 CTdxAPI._tdx_data —— 一个由 set_data() classmethod 写入的
+# 进程级**类变量**。并发请求共用同一个类变量，必然互相覆盖，只能靠串行锁兜。
+# 现改为每请求线程局部注入（DataAPI/TdxAPI.py 的 tdx_data_context），
+# 数据全程是调用方局部变量，CChan 构建天然线程安全 → 根因消失，锁随之删除。
+# 与期货/SSE 路径的 session_context 是同一机制（该路径零锁运行已久）。
 
 
 def _cache_put(key, value):
@@ -622,32 +628,30 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         gc.collect()
 
     t0 = time.time()
-    with _stock_analysis_lock:
-        chan_code = market + code  # 标准标识 market(小写)+code，无连接符
-        config = _make_chan_config()
+    chan_code = market + code  # 标准标识 market(小写)+code，无连接符
+    config = _make_chan_config()
 
-        # 每次请求重置复盘标记，避免残留前一次状态
-        from BuySellPoint.BSPointList import CMyBSPointList
-        CMyBSPointList.REPLAY_MODE = False
+    # 复盘调试标志：线程局部（原为进程级类变量 CMyBSPointList.REPLAY_MODE，
+    # 随 _stock_analysis_lock 一并收敛；见 BuySellPoint/BSPointList.py）
+    _replay_prev = set_replay_mode(bool(end_date))
 
-        try:
-            # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析
-            if end_date:
-                from BuySellPoint.BSPointList import CMyBSPointList
-                CMyBSPointList.REPLAY_MODE = True
-            _DUAL_LV_LIST = {
-                'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
-                'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
-                '30m': [KL_TYPE.K_30M, KL_TYPE.K_5M],
-            }
-            sub_chan = None
-            if dual and sub_freq and dual_impl == "independent":
-                # ── 独立双窗：先下后上 ──────────────────────────
-                # ① 先建下窗独立 CChan 并整读入运行时缓存——上窗 bsp 计算的
-                #    区间套（check_nested_diver）从缓存读完整下窗笔结构，
-                #    消除联立模式下「主K线先到、子级别笔未跟上」的时序退化
-                #    （对齐期货 SSE 双窗时序约定）。
-                CTdxAPI.set_data(sub_records)
+    try:
+        # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析。
+        # 数据经 tdx_data_context 每请求线程局部注入，step_load 消费必须
+        # 在 with 内完成（数据源实例在 step_load 内部惰性创建）。
+        _DUAL_LV_LIST = {
+            'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
+            'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
+            '30m': [KL_TYPE.K_30M, KL_TYPE.K_5M],
+        }
+        sub_chan = None
+        if dual and sub_freq and dual_impl == "independent":
+            # ── 独立双窗：先下后上 ──────────────────────────
+            # ① 先建下窗独立 CChan 并整读入运行时缓存——上窗 bsp 计算的
+            #    区间套（check_nested_diver）从缓存读完整下窗笔结构，
+            #    消除联立模式下「主K线先到、子级别笔未跟上」的时序退化
+            #    （对齐期货 SSE 双窗时序约定）。
+            with tdx_data_context(sub_records):
                 sub_config = _make_chan_config()
                 sub_config.kl_data_check = False
                 sub_chan = CChan(
@@ -662,10 +666,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 )
                 for _snapshot in sub_chan.step_load():
                     pass
-                app_data.stocks_sub_cache_put(chan_code, sub_freq, sub_chan)
+            app_data.stocks_sub_cache_put(chan_code, sub_freq, sub_chan)
 
-                # ② 再建上窗（单级别注入），携带显式下窗周期供区间套取数
-                CTdxAPI.set_data(records)
+            # ② 再建上窗（单级别注入），携带显式下窗周期供区间套取数
+            with tdx_data_context(records):
                 lv_list = [_get_kl_type(freq)]
                 config.kl_data_check = False
                 chan = CChan(
@@ -682,13 +686,13 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 chan._stocks_dual_sub_freq = sub_freq
                 for _snapshot in chan.step_load():
                     pass
-            elif dual and sub_freq:
-                # legacy：多级别联立注入（基线路径，行为冻结）
-                lv_list = _DUAL_LV_LIST[freq]
-                CTdxAPI.set_data({
-                    _get_kl_type(freq): records,
-                    _get_kl_type(sub_freq): sub_records,
-                })
+        elif dual and sub_freq:
+            # legacy：多级别联立注入（基线路径，行为冻结）
+            lv_list = _DUAL_LV_LIST[freq]
+            with tdx_data_context({
+                _get_kl_type(freq): records,
+                _get_kl_type(sub_freq): sub_records,
+            }):
                 config.kl_data_check = False
                 chan = CChan(
                     code=chan_code,
@@ -702,10 +706,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 )
                 for _snapshot in chan.step_load():
                     pass
-            else:
-                # 单窗口（或双窗口降级）：只注入主级别数据
-                lv_list = [_get_kl_type(freq)]
-                CTdxAPI.set_data(records)
+        else:
+            # 单窗口（或双窗口降级）：只注入主级别数据
+            lv_list = [_get_kl_type(freq)]
+            with tdx_data_context(records):
                 chan = CChan(
                     code=chan_code,
                     begin_time=None,
@@ -718,19 +722,18 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 )
                 for _snapshot in chan.step_load():
                     pass
-        except Exception as e:
-            import traceback
-            tb = traceback.format_exc()
-            records_info = ""
-            if records:
-                records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
-            log.error(f"[错误] chan.py 分析失败: code={chan_code} freq={freq}{records_info} 耗时={time.time()-t0:.3f}s")
-            log.error(f"[错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
-            log.error(f"[错误] 完整堆栈:\n{tb}")
-            return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
-        finally:
-            if end_date:
-                CMyBSPointList.REPLAY_MODE = False
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        records_info = ""
+        if records:
+            records_info = f" records={len(records)}条 [{records[0]['dt']} ~ {records[-1]['dt']}]"
+        log.error(f"[错误] chan.py 分析失败: code={chan_code} freq={freq}{records_info} 耗时={time.time()-t0:.3f}s")
+        log.error(f"[错误] 异常类型: {type(e).__name__}, 异常信息: {e}")
+        log.error(f"[错误] 完整堆栈:\n{tb}")
+        return {"error": f"chan.py 分析失败: {type(e).__name__}: {e}"}
+    finally:
+        set_replay_mode(_replay_prev)
 
     log.info(f"[耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 

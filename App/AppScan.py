@@ -10,7 +10,7 @@ App/AppScan.py —— 股票扫描功能域
   - 自选股读写（read_zxg_stocks / zxg_save / get_annotated_codes）
   - 同花顺云端自选股（save_scan_to_ths_cloud）
   - 扫描预过滤 + 行业索引读取 + 扫描态（_quick_prefilter_pass /
-      read_tdxhy_l2_indices / read_tdxhy_l3_indices / _scan_lock 等）
+      read_tdxhy_l2_indices / read_tdxhy_l3_indices 等）
   - Windows 扫描完成通知（_send_windows_notification）
 
 依赖方向：AppScan.py → AppEngine / AppData / AppRefresh / AppScanPool（单向）
@@ -49,8 +49,13 @@ _stock_names_cache = app_data.names_cache
 # 扫描跳过记录（收集后统一打印）
 _scan_skip_log = []
 
-# 扫描锁（防止并发扫描导致内存峰值翻倍）
-_scan_lock = threading.Lock()
+# 【已删除】_scan_lock
+# 它从未真正生效：① API 进程没有任何路由调用 scan_one（FrontAPI 只有
+# submit / status / cancel 三个批量入口）；② 批量路径的 scan_one 跑在
+# ProcessPool worker 内，每个 worker 串行取任务、且每个进程各持一份
+# _scan_lock，永不竞争。保留它只会让人误以为「扫描靠这把锁保护引擎缓存」。
+# 真正的隔离来自进程边界（spawn，每 worker 独立缓存）+ CChan 构建的
+# 每请求数据注入。
 
 # 扫描开始时间：用于计算扫描耗时，在通知中显示
 _scan_start_time = None
@@ -260,10 +265,6 @@ class Scanner:
         global _page_index_code
         _page_index_code = value
 
-    @property
-    def lock(self):
-        return _scan_lock
-
     # ── 股票列表 ─────────────────────────────────────────────────────
     def stock_list(self, source="zxg"):
         """返回股票列表（支持逗号分隔多来源）"""
@@ -381,13 +382,13 @@ class Scanner:
 
     # ── 单只扫描 ─────────────────────────────────────────────────────
     def scan_one(self, code, freq="d", prefix="", recent="1", source="zxg", mode=""):
-        """扫描单只股票 · 锁分类 SCAN
+        """扫描单只股票（唯一调用方：AppScanPool._worker_scan_one，worker 进程内）
 
-        锁语义：引擎调用 analyze_stock 在全局 _scan_lock（单实例、非按票）
-        内串行执行——保护非线程安全的引擎缓存不被并发写；锁外的预处理/
-        结果过滤保留并发，故单票查询吞吐主要依赖非引擎阶段的并行。
-        前端批量扫描走 ProcessPool（SCAN_ASYNC，worker 数自动适配 CPU），
-        本径为兼容保留。
+        并发安全不依赖锁，而是三层隔离：
+          · 进程边界  —— spawn worker，每进程独立 app_data 与分析缓存；
+          · 数据注入  —— CChan 构建经 tdx_data_context 每请求线程局部注入；
+          · 缓存操作  —— app_data.cache_* 各自持 cache_lock。
+        （本模块顶部注释记录了为何不需要该锁）
         """
         t_scan_start = time.time()
         try:
@@ -405,11 +406,10 @@ class Scanner:
             qualified_code = (market_prefix + code) if market_prefix else code
             market = market_prefix.lower() if market_prefix else ""
 
-            with _scan_lock:
-                # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
-                # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
-                # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
-                result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False)
+            # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
+            # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
+            # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
+            result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False)
 
             t_analyze = time.time() - t0
             if "error" in result:

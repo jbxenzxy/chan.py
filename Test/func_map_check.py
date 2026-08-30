@@ -160,7 +160,10 @@ TARGET_STATES = {
     "_STOCKS_EOD":           ("ORCH_E", "日期型K线当日结束时刻补齐偏移"),
 
     # 锁与引擎
-    "_stock_analysis_lock": ("RETIRE", "旧引擎锁（ChartHandler 2 处；AppOrch._ENGINE_LOCK 已接替 → 随 3b 下线）"),
+    "_stock_analysis_lock": ("RETIRE", "✓2026-08 已删除：唯一根因 CTdxAPI._tdx_data 改为每请求线程局部注入"),
+    "_ENGINE_LOCK":         ("RETIRE", "✓2026-08 已删除：套在根因锁外的第二层壳，净贡献 0"),
+    "engine_section":       ("RETIRE", "✓2026-08 已删除：随 _ENGINE_LOCK 一并移除"),
+    "_scan_lock":           ("RETIRE", "✓2026-08 已删除：API 进程无调用，worker 内不竞争"),
 
     # SSE 调试旗（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
 
@@ -179,8 +182,8 @@ TARGET_CLASSES = {
 # ═══════════════════════════════════════════════════════════════════
 # ④ api_server.py → FrontAPI/AppOrch（阶段 3a 已完成 · 状态记录）
 # 31 条路由已迁入 FrontAPI.py（单一路由源）；api_server.py 已于 3b-2 后
-# 删除（原兼容壳退役）；历史绕锁 3 处（L185/L206/L472）改走持锁漏斗
-# （AppOrch.LOCK_POLICY · SERIAL）。
+# 删除（原兼容壳退役）；历史绕锁 3 处（L185/L206/L472）改走 AppOrch.call_*
+# 漏斗（共享资源登记表见 AppOrch.SHARED_RESOURCE_REGISTRY）。
 # ═══════════════════════════════════════════════════════════════════
 TARGET_ROUTES = {
     "_sse_generator":  ("RETIRE", "✓3a 已迁 FrontAPI，3b-2 已拆除（legacy 桥接下线）"),

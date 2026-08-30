@@ -1,3 +1,4 @@
+import threading
 from datetime import datetime, timedelta
 from typing import Dict, Generic, Iterable, List, Optional, Tuple, TypeVar
 
@@ -14,6 +15,25 @@ from .BSPointConfig import CBSPointConfig, CPointConfig
 
 LINE_TYPE = TypeVar('LINE_TYPE', CBi, CSeg[CBi])
 LINE_LIST_TYPE = TypeVar('LINE_LIST_TYPE', CBiList, CSegListComm[CBi])
+
+# ── 复盘调试标志（线程局部）──────────────────────────────────────────
+# 原 CMyBSPointList.REPLAY_MODE 是进程级类变量，被每条分析链路在入口改写、
+# 出口复原。它只用于 _dbg_bs* 的调试打印开关（不影响计算结果），但作为
+# 进程级可变全局，一旦分析路径不再被串行锁保护，并发请求会互相串改调试
+# 标志。改为线程局部后，调试打印按线程正确归属，且无需任何锁。
+_REPLAY_LOCAL = threading.local()
+
+
+def set_replay_mode(on: bool) -> bool:
+    """设置本线程复盘调试标志，返回设置前的原值（供 finally 恢复）。"""
+    prev = getattr(_REPLAY_LOCAL, "on", False)
+    _REPLAY_LOCAL.on = bool(on)
+    return prev
+
+
+def in_replay_mode() -> bool:
+    """本线程当前是否处于复盘调试模式。"""
+    return bool(getattr(_REPLAY_LOCAL, "on", False))
 
 # 区间套背驰判断（双窗口模式下由引擎层调用）
 
@@ -508,7 +528,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     DEBUG_BS2 = True               # 2类调试总开关
     DEBUG_BS3 = True               # 3类调试总开关
     DEBUG_BS = True                # 区间套背驰调试总开关
-    REPLAY_MODE = False            # 复盘模式标记（仅在复盘模式下输出调试信息），无需手动设置
+    # REPLAY_MODE 已移除：原为进程级类变量，现由模块级线程局部函数
+    # set_replay_mode() / in_replay_mode() 承担（见本文件顶部）。
     BS0_ZS_BREAK_RATIO = 0.8       # 离开笔有效突破中枢的比例阈值
     BS0_OUT_IN_RATIO = 0.8         # 离开笔振幅 >= 进入笔振幅的比例阈值
     NESTED_MACD_DIVER_RATIO = 0.8  # 次级别单笔或多笔，MACD背驰判断阈值
@@ -538,7 +559,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             msg: 调试信息
             **kwargs: 附加键值对，自动格式化
         """
-        if not self.DEBUG_BS0 or not self.REPLAY_MODE:
+        if not self.DEBUG_BS0 or not in_replay_mode():
             return
         extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
         freq = self._get_freq()
@@ -554,7 +575,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             msg: 调试信息
             **kwargs: 附加键值对，自动格式化
         """
-        if not self.DEBUG_BS1 or not self.REPLAY_MODE:
+        if not self.DEBUG_BS1 or not in_replay_mode():
             return
         extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
         freq = self._get_freq()
@@ -570,7 +591,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             msg: 调试信息
             **kwargs: 附加键值对，自动格式化
         """
-        if not self.DEBUG_BS2 or not self.REPLAY_MODE:
+        if not self.DEBUG_BS2 or not in_replay_mode():
             return
         extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
         freq = self._get_freq()
@@ -586,7 +607,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             msg: 调试信息
             **kwargs: 附加键值对，自动格式化
         """
-        if not self.DEBUG_BS3 or not self.REPLAY_MODE:
+        if not self.DEBUG_BS3 or not in_replay_mode():
             return
         extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
         freq = self._get_freq()
@@ -602,7 +623,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             msg: 调试信息
             **kwargs: 附加键值对，自动格式化
         """
-        if not self.DEBUG_BS or not self.REPLAY_MODE:
+        if not self.DEBUG_BS or not in_replay_mode():
             return
         extra = ' | '.join(f'{k}={v:.2f}' if isinstance(v, float) else f'{k}={v}' for k, v in kwargs.items()) if kwargs else ''
         freq = self._get_freq()

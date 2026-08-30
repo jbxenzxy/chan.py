@@ -12,8 +12,9 @@ App/AppSSE.py —— SSE 实时流功能域
 依赖方向：AppSSE → AppEngine / App/utils / AppData / DataAPI（单向）；
 纯函数/常量与 AppEngine 统一从 App/utils 导入；共享状态（选点/期货缓存）
 一律经 app_data.* 公共 API（同一对象，零漂移）。
-锁分类：SSE 路径 SELF_CONTAINED（每连接独立 TqApi+CChan，不加引擎锁）；
-期货选点/分析由 AppChart 的 call_* 漏斗持 _ENGINE_LOCK 串行调用。
+锁：SSE 路径每连接独立 TqApi + CChan + 记录缓存（session_context 绑定），
+CChan 构建免锁。但 SSE 线程与 REST 线程共享 app_data —— 期货下窗 CChan
+经 app_data.set_futures_sub_chan 写入，由 AppData._futures_cache_lock 保护。
 """
 import json
 import time
@@ -39,7 +40,7 @@ from App.utils import (
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
 # 区间套辅助（红框/双窗口共用，与 AppEngine 同源）
-from BuySellPoint.BSPointList import _futures_red_range, CMyBSPointList
+from BuySellPoint.BSPointList import _futures_red_range, CMyBSPointList, set_replay_mode
 # chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
 from Common.CEnum import AUTYPE, FX_TYPE
@@ -246,7 +247,7 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
     init（初始快照/失败载荷）→ 实时循环（heartbeat 注释帧 + update 事件：
     tick 路径更新末根 K 线 OHLC/MACD，K线完成路径全量快照）→ 收尾清理。
     source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
-    驱动确定性比对。锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
+    驱动确定性比对。锁：每连接独立会话，共享缓存经 AppData 按资源加锁。
     """
     # P0-5 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
     # 设 WARNING，永不恢复，导致整个进程 log.info 消失）。tqsdk 抑制已在
@@ -310,15 +311,14 @@ def sse_futures_stream_single(symbol, freq="15s", start_time=None, end_time=None
         # === 1. 拉取历史 + chan 分析 ===
         # 历史拉取/chan 分析在服务层 AppSSE.init_chan_symbol 完成；
         # 首参传数据源对象 src（只消费 src.* 协议，不触碰 src.api 原始对象）
-        # 复盘(end_time)时由 init 截断建 chan；REPLAY_MODE 存原值 + finally 恢复，
-        # 避免跨连接污染（并发下仅影响调试日志，不影响分析结果）。
-        _replay_prev_s = CMyBSPointList.REPLAY_MODE
-        if end_time:
-            CMyBSPointList.REPLAY_MODE = True
+        # 复盘(end_time)时由 init 截断建 chan；复盘调试标志为**线程局部**
+        # （set_replay_mode 存原值 + finally 恢复），SSE 每连接独占一条线程，
+        # 天然不跨连接污染（原为进程级类变量，并发下会互相串改调试日志）。
+        _replay_prev_s = set_replay_mode(bool(end_time))
         try:
             result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, start_time, end_time)
         finally:
-            CMyBSPointList.REPLAY_MODE = _replay_prev_s
+            set_replay_mode(_replay_prev_s)
         if result is None:
             yield _sse_frame("init", {"error": "初始化失败（无数据或网络异常）", "symbol": symbol})
             return
@@ -622,7 +622,8 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
     需先分析次级别）。source 可注入（默认 CTqSdkSession）。
     end_time: 复盘终点（软断开边界），有值时双窗建 chan 均截断到该边界，
               update 循环停在后不推进，也不被实时拉新。
-    锁分类 SELF_CONTAINED（见 AppOrch.LOCK_POLICY）。
+    锁：每连接独立会话；共享缓存经 AppData 按资源加锁
+    （见 AppOrch.SHARED_RESOURCE_REGISTRY）。
     """
     log.info("SSE 双窗口连接: symbol=%s main=%s sub=%s",
              symbol, main_freq, sub_freq)
@@ -715,14 +716,12 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 拉取下窗({sub_freq})历史K线...")
         # 复盘软断开：end_time 模式下建 chan 前启用买卖点调试，建后复原
-        _replay_prev = CMyBSPointList.REPLAY_MODE
-        if end_time:
-            CMyBSPointList.REPLAY_MODE = True
+        _replay_prev = set_replay_mode(bool(end_time))
         try:
             sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time,
                                           num_bars=sub_num_bars)
         finally:
-            CMyBSPointList.REPLAY_MODE = _replay_prev
+            set_replay_mode(_replay_prev)
         if sub_result is None:
             yield _sse_frame("init", {"error": "下窗初始化失败（无数据或网络异常）", "symbol": symbol})
             return
@@ -739,13 +738,11 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
         # 3. 拉取上窗历史 + chan分析
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 拉取上窗({main_freq})历史K线...")
-        _replay_prev2 = CMyBSPointList.REPLAY_MODE
-        if end_time:
-            CMyBSPointList.REPLAY_MODE = True
+        _replay_prev2 = set_replay_mode(bool(end_time))
         try:
             main_result = init_chan_symbol(src, symbol, name, main_freq_sec, main_freq_label, main_start_time, end_time)
         finally:
-            CMyBSPointList.REPLAY_MODE = _replay_prev2
+            set_replay_mode(_replay_prev2)
         if main_result is None:
             yield _sse_frame("init", {"error": "上窗初始化失败（无数据或网络异常）", "symbol": symbol})
             return

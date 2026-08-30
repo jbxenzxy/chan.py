@@ -17,6 +17,7 @@ import socket
 import struct
 import pandas as pd
 from datetime import datetime, timedelta
+from contextlib import contextmanager
 from collections import OrderedDict
 import numpy as np
 from chinese_calendar import is_holiday
@@ -1416,26 +1417,57 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
 
 
 # ============================================================
+# 每请求数据注入（线程局部）
+# ============================================================
+# 背景：原 CTdxAPI._tdx_data 是**类变量**，set_data() 作为 classmethod 写
+# 进程级全局，CChan 内部实例化的 CTdxAPI 再从类上读。数据流经一个进程级
+# 共享可变对象，并发请求必然互相覆盖 —— 这正是 AppEngine._stock_analysis_lock
+# 存在的唯一根因。
+#
+# 改为每请求线程局部注入后，数据全程是调用方的局部变量，CChan 构建天然
+# 线程安全，该锁随之删除（与期货/SSE 路径的 session_context 同一机制）。
+_CURRENT_TDX_DATA = _threading.local()
+
+
+@contextmanager
+def tdx_data_context(data):
+    """线程局部注入本请求的 K 线数据，供随后创建的 CTdxAPI 实例读取。
+
+    CChan 经 data_src="custom:TdxAPI.CTdxAPI" 自行实例化数据源（构造参数
+    只有 code/k_type，无法携带数据），故用线程局部传递本请求数据。
+    必须与 CChan 的 step_load 消费放在同一个 with 内 —— 数据源实例是在
+    step_load 内部惰性创建的（见 Chan.py get_load_stock_iter）。
+
+    data 形态（与历史类变量一致）：
+      - list[dict]            单级别模式，所有级别共用同一份数据
+      - dict{KL_TYPE: [...]}  多级别模式，按 k_type 取
+
+    离开 with 自动还原上一層值：线程池线程复用不会把数据串到别的请求。
+    """
+    prev = getattr(_CURRENT_TDX_DATA, "data", None)
+    _CURRENT_TDX_DATA.data = data
+    try:
+        yield
+    finally:
+        _CURRENT_TDX_DATA.data = prev
+
+
+# ============================================================
 # 适配器类
 # ============================================================
 class CTdxAPI(CCommonStockApi):
-    """通达信本地文件数据源适配器"""
+    """通达信本地文件数据源适配器
 
-    # 类变量，由 App 引擎层外部设置
-    _tdx_data = None  # list of dict 或 dict of {KL_TYPE: list of dict}
+    K 线数据经 tdx_data_context() 每请求线程局部注入，实例只在 __init__
+    时绑定一次快照引用（数据本身仍是调用方的局部对象，不跨请求共享）。
+    脱离上下文直接实例化（如 DataAPI.get_stock_api 工厂）时数据为空，
+    _get_records() 返回 [] —— 显式空结果优于静默读到别人的数据。
+    """
 
     def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         super().__init__(code, k_type, begin_date, end_date, autype)
         self.is_stock = True
-
-    @classmethod
-    def set_data(cls, data):
-        """设置K线数据（由 App 引擎层调用）
-        data 可以是:
-        - list of dict: 单级别模式，所有级别共用同一份数据
-        - dict of {KL_TYPE: list of dict}: 多级别模式，按 k_type 区分
-        """
-        cls._tdx_data = data
+        self._tdx_data = getattr(_CURRENT_TDX_DATA, "data", None)
 
     @classmethod
     def do_init(cls):
@@ -1468,15 +1500,15 @@ class CTdxAPI(CCommonStockApi):
         self.is_stock = True
 
     def _get_records(self):
-        """根据 self.k_type 从 _tdx_data 中取出对应级别的 records"""
-        if not CTdxAPI._tdx_data:
+        """根据 self.k_type 从本请求注入的 _tdx_data 中取出对应级别的 records"""
+        if not self._tdx_data:
             return []
-        if isinstance(CTdxAPI._tdx_data, dict):
+        if isinstance(self._tdx_data, dict):
             # 多级别模式：按 k_type 取对应级别的数据
-            return CTdxAPI._tdx_data.get(self.k_type, [])
+            return self._tdx_data.get(self.k_type, [])
         else:
             # 单级别模式：直接使用
-            return CTdxAPI._tdx_data
+            return self._tdx_data
 
     def get_kl_data(self):
         """逐根 yield 返回 CKLine_Unit"""

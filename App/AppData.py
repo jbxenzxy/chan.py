@@ -21,6 +21,7 @@ App/AppData.py — 业务数据层
 
 import collections
 import gc
+import io
 import json
 import os
 import re
@@ -55,6 +56,33 @@ ZXG_US_INDEX_MAP = {
 TDX_STANDARD_INDICES = {"1000001", "0399001", "1000300", "1000905", "1000852", "0399006", "1000688"}
 
 
+# 原子落盘的替换重试参数（见 _atomic_replace）
+_REPLACE_RETRY = 6
+_REPLACE_BACKOFF = 0.02   # 秒，逐次线性放大
+
+
+def _atomic_replace(tmp_path, path):
+    """用 os.replace 原子覆盖目标文件，Windows 冲突时退避重试。
+
+    Windows 特有问题：目标文件正被另一线程以 open() 持句柄读取时，
+    os.replace（MoveFileEx）会抛 PermissionError(WinError 5 拒绝访问)。
+    这在「刷新线程写 stock_names.json / float_mc_cache.json，同时扫描或
+    分析线程在读」的场景下真实发生——POSIX 上同名替换不受影响，故只在
+    Windows 暴露。退避重试让读线程有机会释放句柄，而不是直接失败。
+    """
+    last_err = None
+    for attempt in range(_REPLACE_RETRY):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError as exc:   # Windows：目标被持句柄
+            last_err = exc
+        except OSError as exc:           # 其余瞬时错误（杀软扫描等）
+            last_err = exc
+        time.sleep(_REPLACE_BACKOFF * (attempt + 1))
+    raise last_err
+
+
 def safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
     """先写临时文件并校验 JSON 可读，再用 os.replace 覆盖正式文件；失败时保留旧文件。
     （持久化底座：原子写，防断电/中断产生半截文件）"""
@@ -69,7 +97,30 @@ def safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
             loaded = json.load(f)
         if not isinstance(loaded, type(data)):
             raise ValueError("临时 JSON 文件类型校验失败")
-        os.replace(tmp_path, path)
+        _atomic_replace(tmp_path, path)
+        return True
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+def _atomic_write_text(path, text, *, encoding="utf-8", newline=None):
+    """原子写任意文本：先写同目录临时文件，再 os.replace 覆盖。
+
+    与 safe_write_json_file 同一底座，用于 JSON 之外的文本（CSV / .blk）。
+    防两类事故：① 写一半进程退出留下截断文件；② 并发读者读到半截内容。
+    """
+    dir_name = os.path.dirname(path)
+    if dir_name:
+        os.makedirs(dir_name, exist_ok=True)
+    tmp_path = path + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding=encoding, newline=newline) as f:
+            f.write(text)
+        _atomic_replace(tmp_path, path)
         return True
     finally:
         if os.path.exists(tmp_path):
@@ -1239,8 +1290,23 @@ class AppData:
     MAX_STOCKS_SUB_CHAN = app_config.max_stocks_sub_chan
 
     def __init__(self):
-        # ── 分析结果缓存 ──
+        # ══ 锁集合（一把锁 = 一个资源，锁名即资源名）══════════════════
+        # 设计依据见 Docs/chan_lock_design_v5.md。要点：
+        #   _cache_lock          护「股票分析结果 + 股票下窗」内存缓存
+        #                        （REST 线程，毫秒级访问）
+        #   _futures_cache_lock  护期货内存缓存。独立成锁：访问者是 SSE
+        #                        常驻线程（高频写、生命周期以分钟计），
+        #                        不应与 REST 缓存操作抢同一把锁
+        #   _user_store_lock     护全部「用户持久化数据」的读-改-写：
+        #                        标注 / 选点 / 上次查看 / 流通市值 / 自选股。
+        #                        合并为一把的理由：都是毫秒级 RMW，且消除
+        #                        「标注→缓存」与「缓存→选点」跨锁顺序死锁
+        # 均为 RLock：读-改-写内部可能嵌套同类操作。
         self._cache_lock = threading.RLock()
+        self._futures_cache_lock = threading.RLock()
+        self._user_store_lock = threading.RLock()
+
+        # ── 分析结果缓存 ──
         self._stocks_analysis_cache = collections.OrderedDict()
         self._futures_analysis_cache = {}
         # 股票双窗独立化：下窗 CChan 运行时缓存（键见 stocks_sub_cache_key）
@@ -1260,10 +1326,8 @@ class AppData:
         # ── 标注 ──
         self._annotations = {}   # { "code_freq": [ {date,text,y_offset}, ... ] }
         self._annotations_loaded = False
-        self._annotations_lock = threading.RLock()   # 标注读-改-写串行（多请求并发安全）
 
         # ── 启动时加载（实例化即加载选点表与标注）──
-        self._saved_point_lock = threading.RLock()   # 选点表读-改-写串行（CSV 整表回写，防并发丢更新）
         self._saved_point_times = self.load_saved_point_times()
         self.load_annotations()
 
@@ -1300,6 +1364,14 @@ class AppData:
     @property
     def cache_lock(self):
         return self._cache_lock
+
+    @property
+    def futures_cache_lock(self):
+        return self._futures_cache_lock
+
+    @property
+    def user_store_lock(self):
+        return self._user_store_lock
 
     @property
     def stocks_analysis_cache(self):
@@ -1447,26 +1519,37 @@ class AppData:
             self._stocks_analysis_cache.clear()
             return n
 
+    # ── 期货缓存（独立锁 _futures_cache_lock）──────────────────────
+    #   访问者是 SSE 常驻线程（写，生命周期以分钟计）与 REST 线程
+    #   （读 /api/red_range_zs、清 /api/futures/cleanup）。原先三个入口
+    #   三套规矩（写无锁 / 读靠外层 _ENGINE_LOCK / clear 用 _cache_lock），
+    #   现统一由本锁覆盖，且不与 REST 的 cache_lock 争抢。
     def futures_cache_get(self, key):
         """期货分析缓存读（独立于股票 LRU，键形如 "KQ.m@SHFE.rb:1m"）"""
-        return self._futures_analysis_cache.get(key)
+        with self._futures_cache_lock:
+            return self._futures_analysis_cache.get(key)
 
     def futures_cache_put(self, key, value):
         """期货分析缓存写（SSE 双窗口下窗 chan 供 /api/red_range_zs 访问）"""
-        self._futures_analysis_cache[key] = value
+        with self._futures_cache_lock:
+            self._futures_analysis_cache[key] = value
 
     def futures_cache_pop(self, key, default=None):
         """期货分析缓存失效（子级别切换时释放旧中间状态）"""
-        return self._futures_analysis_cache.pop(key, default)
+        with self._futures_cache_lock:
+            return self._futures_analysis_cache.pop(key, default)
 
     def futures_cache_clear(self):
-        """清空全部期货分析缓存（持 _cache_lock，线程安全）
+        """清空全部期货分析缓存（持 _futures_cache_lock，线程安全）
 
         期货切股票时由 _cleanup_all_futures_data 调用：双窗下窗 chan
         若残留，后续区间套 check_nested_diver / compute_red_range_zs
         经 futures_cache_get 会读到过期中间状态，必须整池清空。
+
+        注：清理只对「当前无 SSE 连接写入」成立；正在推送的连接在下一
+        帧重新 set_futures_sub_chan 会自行补回，不会读到半清状态。
         """
-        with self._cache_lock:
+        with self._futures_cache_lock:
             self._futures_analysis_cache.clear()
 
     # ── 语义化子窗接口（key 规则内聚于数据层，调用方不手工拼接  ──
@@ -1498,29 +1581,32 @@ class AppData:
     def stocks_sub_cache_get(self, chan_code, sub_freq):
         """读取股票下窗 CChan（无则返回 None；命中移到末尾=LRU 语义）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
-        chan = self._stocks_sub_chan_cache.get(key)
-        if chan is not None:
-            # LRU：命中移到末尾（dict 保序，插入序即新旧序）
-            del self._stocks_sub_chan_cache[key]
-            self._stocks_sub_chan_cache[key] = chan
+        with self._cache_lock:
+            chan = self._stocks_sub_chan_cache.get(key)
+            if chan is not None:
+                # LRU：命中移到末尾（dict 保序，插入序即新旧序）
+                del self._stocks_sub_chan_cache[key]
+                self._stocks_sub_chan_cache[key] = chan
         return chan
 
     def stocks_sub_cache_put(self, chan_code, sub_freq, chan):
         """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态；
         超 MAX_STOCKS_SUB_CHAN 淘汰最旧，切换标的残留的旧 CChan 不泄漏）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
-        if key in self._stocks_sub_chan_cache:
-            del self._stocks_sub_chan_cache[key]
-        elif len(self._stocks_sub_chan_cache) >= self.MAX_STOCKS_SUB_CHAN:
-            oldest = next(iter(self._stocks_sub_chan_cache))
-            self._stocks_sub_chan_cache.pop(oldest)
-            gc.collect()
-            log.info(f"[内存] 运行时下窗缓存达上限({self.MAX_STOCKS_SUB_CHAN})，淘汰: {oldest}")
-        self._stocks_sub_chan_cache[key] = chan
+        with self._cache_lock:
+            if key in self._stocks_sub_chan_cache:
+                del self._stocks_sub_chan_cache[key]
+            elif len(self._stocks_sub_chan_cache) >= self.MAX_STOCKS_SUB_CHAN:
+                oldest = next(iter(self._stocks_sub_chan_cache))
+                self._stocks_sub_chan_cache.pop(oldest)
+                gc.collect()
+                log.info(f"[内存] 运行时下窗缓存达上限({self.MAX_STOCKS_SUB_CHAN})，淘汰: {oldest}")
+            self._stocks_sub_chan_cache[key] = chan
 
     def stocks_sub_cache_pop(self, chan_code, sub_freq):
         """弹出并删除股票下窗 CChan（切换标的/下窗周期时释放旧中间状态）"""
-        return self._stocks_sub_chan_cache.pop(self.stocks_sub_cache_key(chan_code, sub_freq), None)
+        with self._cache_lock:
+            return self._stocks_sub_chan_cache.pop(self.stocks_sub_cache_key(chan_code, sub_freq), None)
 
 
     # ════════════════════════════════════════════════════════════════
@@ -1676,17 +1762,23 @@ class AppData:
 
     def update_float_mc_cache(self, mv_dict):
         """将外部获取的流通市值字典合并到全局缓存，并保存到本地JSON。
-        调用方应确保 load_float_mc_cache() 已先执行。"""
-        self._float_mc.update(mv_dict)
-        self._float_mc_loaded = True
-        self._float_mc_saved_at = time.time()
-        # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底；记录写入时刻供过期判定）
-        try:
-            with open(self.float_mc_cache_file, "w", encoding="utf-8") as f:
-                json.dump({"data": self._float_mc, "saved_at": self._float_mc_saved_at},
-                          f, ensure_ascii=False)
-        except Exception as e:
-            log.info(f"[流通市值] 保存缓存文件失败: {e}")
+        调用方应确保 load_float_mc_cache() 已先执行。
+
+        持 _user_store_lock + 原子写：写线程是刷新线程，读线程是扫描
+        预过滤，非原子写会让并发读者读到半截文件。
+        """
+        with self._user_store_lock:
+            self._float_mc.update(mv_dict)
+            self._float_mc_loaded = True
+            self._float_mc_saved_at = time.time()
+            # 保存到本地JSON（无日期限制，作为下次腾讯接口失败时的兜底；
+            # 记录写入时刻供过期判定）
+            try:
+                safe_write_json_file(
+                    self.float_mc_cache_file,
+                    {"data": self._float_mc, "saved_at": self._float_mc_saved_at})
+            except Exception as e:
+                log.info(f"[流通市值] 保存缓存文件失败: {e}")
 
     def get_float_mc_from_cache(self, code):
         """从缓存获取流通市值（亿元），未命中返回None。"""
@@ -1714,7 +1806,7 @@ class AppData:
 
     def save_point_time(self, code, name, freq, sdt):
         """保存或更新某只股票某个周期的选点（CSV 落盘 + 内存态，锁内原子）"""
-        with self._saved_point_lock:
+        with self._user_store_lock:
             import csv
             col = FREQ_TO_COL.get(freq)
             if not col:
@@ -1754,19 +1846,21 @@ class AppData:
                 new_row[col] = sdt
                 rows.append(new_row)
 
-            # 写回文件（内存态已在锁内置位，与落盘一致）
+            # 写回文件（内存态已在锁内置位，与落盘一致；原子落盘防半截 CSV）
             try:
-                with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows(rows)
+                _buf = io.StringIO()
+                writer = csv.DictWriter(_buf, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+                _atomic_write_text(self.saved_point_file, _buf.getvalue(),
+                                   encoding="utf-8-sig", newline="")
                 log.info(f"[信息] 保存选点成功: {code} {freq} {col}={sdt}")
             except Exception as e:
                 log.warning(f"[警告] 保存选点文件失败: {e}")
 
     def clear_saved_point_time(self, code, freq):
         """清除某只股票某个周期在CSV中的选点，同时更新内存缓存"""
-        with self._saved_point_lock:
+        with self._user_store_lock:
             import csv
             col = FREQ_TO_COL.get(freq)
             if not col:
@@ -1792,10 +1886,12 @@ class AppData:
                     row[col] = ""
                     break
             try:
-                with open(self.saved_point_file, "w", encoding="utf-8-sig", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows(rows)
+                _buf = io.StringIO()
+                writer = csv.DictWriter(_buf, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+                _atomic_write_text(self.saved_point_file, _buf.getvalue(),
+                                   encoding="utf-8-sig", newline="")
                 log.info(f"[信息] 清除选点成功: {code} {freq}")
             except Exception as e:
                 log.warning(f"[警告] 清除选点失败: {e}")
@@ -1807,7 +1903,7 @@ class AppData:
         _saved_point_lock；改为加锁删内存态，与其它选点读-改-写串行。
         """
         removed = 0
-        with self._saved_point_lock:
+        with self._user_store_lock:
             for k in [k for k in list(self._saved_point_times.keys()) if k.startswith(prefix)]:
                 del self._saved_point_times[k]
                 removed += 1
@@ -1834,13 +1930,18 @@ class AppData:
     # 上次查看代码/周期持久化
     # ════════════════════════════════════════════════════════════════
     def save_last_code_freq(self, code, freq="d"):
-        """持久化上次查看的代码和周期到JSON文件（股票和期货通用）"""
-        try:
-            data = {"code": code, "freq": freq}
-            with open(self.last_code_freq_file, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-        except Exception:
-            pass  # 静默失败，不影响主流程
+        """持久化上次查看的代码和周期到JSON文件（股票和期货通用）
+
+        持 _user_store_lock + 原子写：/api/stocks/{code}/analyze 每次成功
+        分析后都会落盘一次（FrontAPI 单独一次 run_in_threadpool，不在任何
+        分析锁内），并发请求同时 open(w) 会互相截断成半截 JSON。
+        """
+        with self._user_store_lock:
+            try:
+                safe_write_json_file(self.last_code_freq_file,
+                                     {"code": code, "freq": freq})
+            except Exception:
+                pass  # 静默失败，不影响主流程
 
     def load_last_code_freq(self):
         """从JSON文件加载上次查看的代码和周期，返回 (code, freq) 或 (None, None)"""
@@ -1877,23 +1978,27 @@ class AppData:
         self._annotations_loaded = True
 
     def save_annotations(self):
-        """保存标注数据到 text_annotation.json"""
+        """保存标注数据到 text_annotation.json（原子落盘）
+
+        调用方均已持 _user_store_lock；原子写额外防「写一半进程退出」留下
+        截断 JSON —— 那会让下次 load_annotations 静默清空全部标注。
+        """
         try:
-            with open(self.annotations_file, "w", encoding="utf-8") as f:
-                json.dump(self._annotations, f, ensure_ascii=False, indent=2)
+            safe_write_json_file(self.annotations_file, self._annotations,
+                                 ensure_ascii=False, indent=2)
         except Exception as e:
             log.warning(f"[警告] 保存标注数据失败: {e}")
 
     def get_annotations_for(self, code, freq):
         """获取某股票某周期的所有标注"""
-        with self._annotations_lock:
+        with self._user_store_lock:
             self.load_annotations()
             key = get_annotation_key(code, freq)
             return self._annotations.get(key, [])
 
     def add_annotation(self, code, freq, date_str, text, y_offset=0):
         """添加一条标注（自动去重：同日期同文字不重复添加）"""
-        with self._annotations_lock:
+        with self._user_store_lock:
             self.load_annotations()
             key = get_annotation_key(code, freq)
             if key not in self._annotations:
@@ -1912,7 +2017,7 @@ class AppData:
 
     def delete_annotation(self, code, freq, date_str, text):
         """删除一条标注"""
-        with self._annotations_lock:
+        with self._user_store_lock:
             self.load_annotations()
             key = get_annotation_key(code, freq)
             if key not in self._annotations:
@@ -1931,7 +2036,7 @@ class AppData:
 
     def delete_annotation_by_date(self, code, freq, date_str):
         """删除某日期下所有标注"""
-        with self._annotations_lock:
+        with self._user_store_lock:
             self.load_annotations()
             key = get_annotation_key(code, freq)
             if key not in self._annotations:
@@ -1950,7 +2055,7 @@ class AppData:
 
     def delete_all_annotations(self, code, freq):
         """删除某股票某周期下全部标注"""
-        with self._annotations_lock:
+        with self._user_store_lock:
             self.load_annotations()
             key = get_annotation_key(code, freq)
             if key not in self._annotations or not self._annotations[key]:
@@ -2094,26 +2199,28 @@ class AppData:
         blk_path = path if path else self.zxg_blk_path
         if not blk_path:
             return {"written": 0, "preserved": 0}
-        os.makedirs(os.path.dirname(blk_path), exist_ok=True)
+        # 整段读-改-写持 _user_store_lock + 原子落盘：.blk 是自选股用户数据，
+        # 并发 POST /api/stocks/scan/save/zxg 会互相截断。
+        with self._user_store_lock:
+            os.makedirs(os.path.dirname(blk_path), exist_ok=True)
 
-        preserved = _read_preserved_zxg_lines(blk_path)
-        new_lines = []
-        for c in codes:
-            line = _code_to_zxg_line(c)
-            if line is not None:
-                new_lines.append(line)
+            preserved = _read_preserved_zxg_lines(blk_path)
+            new_lines = []
+            for c in codes:
+                line = _code_to_zxg_line(c)
+                if line is not None:
+                    new_lines.append(line)
 
-        if append:
-            existing = []
-            if os.path.exists(blk_path):
-                with open(blk_path, "r", encoding="gbk") as f:
-                    existing = [ln.strip() for ln in f if ln.strip()]
-            final = list(dict.fromkeys(existing + preserved + new_lines))
-        else:
-            final = list(dict.fromkeys(preserved + new_lines))
+            if append:
+                existing = []
+                if os.path.exists(blk_path):
+                    with open(blk_path, "r", encoding="gbk") as f:
+                        existing = [ln.strip() for ln in f if ln.strip()]
+                final = list(dict.fromkeys(existing + preserved + new_lines))
+            else:
+                final = list(dict.fromkeys(preserved + new_lines))
 
-        with open(blk_path, "w", encoding="gbk") as f:
-            f.write("\n".join(final) + "\n")
+            _atomic_write_text(blk_path, "\n".join(final) + "\n", encoding="gbk")
 
         return {"written": len(new_lines), "preserved": len(preserved)}
 
