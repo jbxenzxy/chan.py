@@ -33,8 +33,9 @@
      装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
      AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
      CTqSdkAPI 主体经 AppEngine 显式名）、
-     AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属 + TxAPI PE-TTM）、
-     AppScan（TdxAPI.get_index_stocks + TxAPI 流通市值）、App/utils（仅 TqSdkAPI 纯函数依赖）
+     AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属 + TxAPI PE-TTM/港股名称
+      + SinaAPI A股名称）、
+      AppScan（TdxAPI.get_index_stocks + TxAPI 流通市值）、App/utils（仅 TqSdkAPI 纯函数依赖）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -689,10 +690,10 @@ def test_datasource_import_gate(failures):
     if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
         bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
     # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ collect_codes_from_vipdoc（vipdoc 代码收集）
-    #           + AkshareAPI 指数归属 + TxAPI PE-TTM（腾讯行情）
+    #           + AkshareAPI 指数归属 + TxAPI PE-TTM/港股名称 + SinaAPI A股名称
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
-    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.TxAPI"}:
-        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/TxAPI，实测: {sorted(refresh_mods)}")
+    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.TxAPI", "DataAPI.SinaAPI"}:
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
     # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ TxAPI 流通市值（腾讯行情）
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
     if scan_mods != {"DataAPI.TdxAPI", "DataAPI.TxAPI"}:

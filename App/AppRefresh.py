@@ -17,7 +17,6 @@ App/AppRefresh.py —— 刷新功能域
 import json
 import os
 import threading
-import time
 import traceback
 
 from App.AppConfig import app_config
@@ -26,6 +25,7 @@ from App.AppLog import get_logger
 from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
 from DataAPI.AkshareAPI import AKSHARE_EXCHANGE_MAP, AKSHARE_INDEX_MAP, fetch_index_cons
 from DataAPI.TxAPI import fetch_pe_ttm, fetch_hk_names
+from DataAPI.SinaAPI import fetch_a_names
 
 log = get_logger(__name__)
 
@@ -97,8 +97,6 @@ def _fetch_names_from_sina_once(codes_dict):
     返回补充了多少条名称。
     注意：新浪API不支持A股和港股混合请求，必须分开调用。
     """
-    import urllib.request
-
     # 只获取没有名称的代码
     codes_missing = [compound_key for compound_key, info in codes_dict.items() if not info.get("name")]
     if not codes_missing:
@@ -122,55 +120,17 @@ def _fetch_names_from_sina_once(codes_dict):
             a_stock_codes.append((bare_code, market))
 
     filled = 0
-    batch_size = 50
 
-    # === 第一轮：A股 ===
+    # === 第一轮：A股（新浪财经，经 SinaAPI 收口）===
     if a_stock_codes:
-        total_batches = (len(a_stock_codes) - 1) // batch_size + 1
-        for i in range(0, len(a_stock_codes), batch_size):
-            batch = a_stock_codes[i:i+batch_size]
-            batch_num = i // batch_size + 1
-            codes_str_parts = []
-            bare_to_compound = {}
-            for bare_code, market in batch:
-                codes_str_parts.append(f"{market}{bare_code}")
-                bare_to_compound[bare_code] = market + bare_code
-            codes_str = ",".join(codes_str_parts)
-            url = f"http://hq.sinajs.cn/list={codes_str}"
-            try:
-                req = urllib.request.Request(url, headers={
-                    "User-Agent": "Mozilla/5.0",
-                    "Referer": "https://finance.sina.com.cn/"
-                })
-                resp = urllib.request.urlopen(req, timeout=15)
-                content = resp.read().decode("gbk", errors="ignore")
-                for line in content.strip().split("\n"):
-                    line = line.strip()
-                    if not line or "=" not in line:
-                        continue
-                    var_part, val_part = line.split("=", 1)
-                    val_part = val_part.strip().strip('"').strip(";").strip('"')
-                    if not val_part:
-                        continue
-                    var_name = var_part.strip().replace("var ", "")
-                    for mkt_prefix in ("sh", "sz"):
-                        marker = f"hq_str_{mkt_prefix}"
-                        if var_name.startswith(marker):
-                            bare_code = var_name[len(marker):]
-                            compound_key = bare_to_compound.get(bare_code)
-                            if not compound_key:
-                                continue
-                            fields = val_part.split(",")
-                            if len(fields) >= 1:
-                                name = fields[0].strip()
-                                if name and compound_key in codes_dict:
-                                    codes_dict[compound_key]["name"] = name
-                                    filled += 1
-                            break
-            except Exception as e:
-                log.info(f"[股名刷新]   新浪A股批次{batch_num}失败: {e}")
-            if batch_num < total_batches:
-                time.sleep(0.5)
+        name_map = fetch_a_names(a_stock_codes)
+        for bare_code, _market in a_stock_codes:
+            name = name_map.get(_market + bare_code)
+            if name:
+                compound_key = compound_key_map.get(bare_code)
+                if compound_key in codes_dict:
+                    codes_dict[compound_key]["name"] = name
+                    filled += 1
 
     # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效；经 TxAPI 收口）===
     if hk_codes:
