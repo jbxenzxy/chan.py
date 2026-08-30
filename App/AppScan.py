@@ -11,6 +11,8 @@ App/AppScan.py —— 股票扫描功能域
   - 同花顺云端自选股（save_scan_to_ths_cloud）
   - 扫描预过滤 + 行业索引读取 + 扫描态（_quick_prefilter_pass /
       read_tdxhy_l2_indices / read_tdxhy_l3_indices 等）
+  - 流通市值批量获取 + 缓存壳（_fetch_float_mc_from_tencent /
+      fetch_float_mc_from_tencent / load_float_mc_cache / update_float_mc_cache）
   - Windows 扫描完成通知（_send_windows_notification）
 
 依赖方向：AppScan.py → AppEngine / AppData / AppScanPool（单向）
