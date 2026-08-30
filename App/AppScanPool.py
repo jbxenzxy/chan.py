@@ -56,7 +56,7 @@ _SCAN_POOL_MAX_WORKERS = 16
 
 _pool = None
 _pool_engine = None          # "process_pool"
-_pool_lock = threading.Lock()
+_scan_pool_lock = threading.Lock()
 _pool_created_count = 0      # 池装配次数（区分首次/重新装配，用于打印）
 _active_scans = 0            # 并发批次引用计数：>0 时禁止销毁池（防互毁）
 
@@ -88,7 +88,7 @@ def _get_pool():
     状态已恢复初始。
     """
     global _pool, _pool_engine, _pool_created_count, _active_scans
-    with _pool_lock:
+    with _scan_pool_lock:
         if _pool is None:
             from App.AppConfig import app_config
             workers = _resolve_workers(app_config)
@@ -339,7 +339,7 @@ def _release_scan():
     完成才真正 shutdown。
     """
     global _pool, _pool_engine, _active_scans
-    with _pool_lock:
+    with _scan_pool_lock:
         _active_scans = max(0, _active_scans - 1)
         if _active_scans == 0 and _pool is not None:
             try:
@@ -359,7 +359,7 @@ def destroy_pool():
     避免显式销毁后计数与实际池状态脱钩（否则后续再扫描将永远无法销毁池）。
     """
     global _pool, _pool_engine, _active_scans
-    with _pool_lock:
+    with _scan_pool_lock:
         _active_scans = 0
         if _pool is not None:
             try:
@@ -374,7 +374,7 @@ def destroy_pool():
 def shutdown():
     """优雅关闭执行池（应用退出时 atexit 调用，幂等）"""
     global _pool, _pool_engine
-    with _pool_lock:
+    with _scan_pool_lock:
         if _pool is not None:
             try:
                 _pool.shutdown(wait=False, cancel_futures=True)

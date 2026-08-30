@@ -160,7 +160,7 @@ def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=Non
     透传双窗上下文（dual/sub_freq/main_freq），支持双窗选点。
 
     并发安全由各共享资源自身的锁保证：CChan 构建免锁（每请求数据注入），
-    选点 CSV 走 user_store_lock，分析缓存/下窗缓存走 cache_lock。
+    选点 CSV 走 user_store_lock，分析缓存/下窗缓存走 stocks_cache_lock。
     """
     return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
                                      dual=dual, sub_freq=sub_freq,
@@ -181,7 +181,7 @@ def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", e
     """红框中枢计算（REST 唯一入口，无锁）
 
     统一走本漏斗：内部复用 analyze_stock 引擎与共享缓存。
-    下窗 CChan 读取走 AppData 的 cache_lock / futures_cache_lock。
+    下窗 CChan 读取走 AppData 的 stocks_cache_lock / futures_cache_lock。
     """
     return compute_red_range_zs(code, sub_freq=sub_freq,
                                 left_date=left_date, right_date=right_date,

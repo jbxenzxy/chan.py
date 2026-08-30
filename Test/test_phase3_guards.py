@@ -129,7 +129,7 @@ def test_shared_resource_registry(failures):
 
     required = {
         "stocks_analysis_cache", "futures_analysis_cache", "user_store_files",
-        "scan_pool_singleton", "scan_tasks.db", "refresh_status",
+        "scan_pool", "scan_tasks.db", "refresh_status",
     }
     missing = required - set(reg)
     if missing:

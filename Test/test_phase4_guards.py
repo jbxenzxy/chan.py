@@ -177,7 +177,7 @@ ALIAS_PAIRS = [
     # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有），
     # 期货缓存仅经 app_data.futures_cache_* 公共 API 访问
     ("_stocks_analysis_cache", "stocks_analysis_cache"),
-    ("_cache_lock",            "cache_lock"),
+    ("_stocks_cache_lock",            "stocks_cache_lock"),
     ("_stock_names_cache",     "names_cache"),
     ("_pe_ttm_cache",          "pe_cache"),
     ("_index_belong_cache",    "belong_cache"),
@@ -216,7 +216,7 @@ _BYPASS_PATTERNS = [
     "_m._cache_get", "_m._cache_put", "_m._cache_remove",
     "_m._save_point_time", "_m._saved_point_times",
     "_m._stocks_analysis_cache", "_m._futures_analysis_cache",
-    "_m._cache_lock", "_m.FREQ_TO_COL",
+    "_m._stocks_cache_lock", "_m.FREQ_TO_COL",
 ]
 _BYPASS_IMPORTS = [
     "from App.AppEngine import _cache_",
@@ -272,7 +272,7 @@ _DIRECT_CACHE_PATTERNS = [
     "app_data.stocks_analysis_cache[",
     "app_data.stocks_analysis_cache.get(",
     "app_data.stocks_analysis_cache.pop(",
-    "app_data.cache_lock",  # 手工持锁直改 → 应经 cache_remove（内部持锁）
+    "app_data.stocks_cache_lock",  # 手工持锁直改 → 应经 cache_remove（内部持锁）
 ]
 _DIRECT_CACHE_FILES = [
     os.path.join("App", "AppChart.py"),

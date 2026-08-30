@@ -178,7 +178,7 @@ def test_appdata_locks():
     print("\n③ AppData 锁覆盖")
     from App.AppData import app_data  # noqa: E402
 
-    for attr in ("_cache_lock", "_futures_cache_lock", "_user_store_lock"):
+    for attr in ("_stocks_cache_lock", "_futures_cache_lock", "_user_store_lock"):
         check(f"AppData 持有 {attr}", hasattr(app_data, attr))
     for attr in ("_annotations_lock", "_saved_point_lock"):
         check(f"AppData 已移除 {attr}", not hasattr(app_data, attr))
@@ -199,18 +199,18 @@ def test_appdata_locks():
         app_data._futures_cache_lock = real_f
     check("期货缓存读写正确", got == "v" and app_data.futures_cache_get("k") is None)
 
-    # 股票下窗缓存：三个入口都进入 _cache_lock
-    real_c = app_data._cache_lock
-    app_data._cache_lock = _CountingLock(real_c)
+    # 股票下窗缓存：三个入口都进入 _stocks_cache_lock
+    real_c = app_data._stocks_cache_lock
+    app_data._stocks_cache_lock = _CountingLock(real_c)
     try:
         app_data.stocks_sub_cache_put("sh600000", "30m", object())
         app_data.stocks_sub_cache_get("sh600000", "30m")
         app_data.stocks_sub_cache_pop("sh600000", "30m")
         check("股票下窗缓存 get/put/pop 全部持锁",
-              app_data._cache_lock.count == 3,
-              f"实际持锁 {app_data._cache_lock.count} 次")
+              app_data._stocks_cache_lock.count == 3,
+              f"实际持锁 {app_data._stocks_cache_lock.count} 次")
     finally:
-        app_data._cache_lock = real_c
+        app_data._stocks_cache_lock = real_c
 
     # 用户数据：标注 / 选点 / last_code_freq 都进入 _user_store_lock
     real_u = app_data._user_store_lock
@@ -282,7 +282,7 @@ def test_removed_symbols():
           all(isinstance(v, tuple) and len(v) == 4 for v in reg.values()),
           f"{len(reg)} 项")
     for key in ("stocks_analysis_cache", "futures_analysis_cache",
-                "user_store_files", "scan_pool_singleton", "scan_tasks.db",
+                "user_store_files", "scan_pool", "scan_tasks.db",
                 "refresh_status", "CTdxAPI._tdx_data"):
         check(f"登记表含 {key}", key in reg)
 

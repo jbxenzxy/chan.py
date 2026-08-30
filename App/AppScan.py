@@ -387,7 +387,7 @@ class Scanner:
         并发安全不依赖锁，而是三层隔离：
           · 进程边界  —— spawn worker，每进程独立 app_data 与分析缓存；
           · 数据注入  —— CChan 构建经 tdx_data_context 每请求线程局部注入；
-          · 缓存操作  —— app_data.cache_* 各自持 cache_lock。
+          · 缓存操作  —— app_data.cache_* 各自持 stocks_cache_lock。
         （本模块顶部注释记录了为何不需要该锁）
         """
         t_scan_start = time.time()

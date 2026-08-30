@@ -251,7 +251,7 @@ def _collect_codes_from_vipdoc(vipdoc_dir):
 
 # 统一缓存（实现与状态在 App/AppData.py；别名共享同一对象）
 _stocks_analysis_cache = app_data.stocks_analysis_cache   # 分析结果 LRU
-_cache_lock = app_data.cache_lock                        # 保护缓存的并发读写
+_stocks_cache_lock = app_data.stocks_cache_lock            # 保护缓存的并发读写（= app_data._stocks_cache_lock）
 
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
@@ -357,7 +357,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 
         # 复盘模式：清除旧的双窗口缓存，强制重新加载主级别和子级别
         if end_date:
-            with _cache_lock:
+            with _stocks_cache_lock:
                 if main_cache_key in _stocks_analysis_cache:
                     del _stocks_analysis_cache[main_cache_key]
                 if sub_cache_key in _stocks_analysis_cache:
@@ -622,7 +622,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     # 2. 使用 chan.py 进行缠论分析
     # 复盘时：清空缓存恢复原始状态，再重新加载（与选点逻辑一致）
     if end_date and cache_key in _stocks_analysis_cache:
-        with _cache_lock:
+        with _stocks_cache_lock:
             if cache_key in _stocks_analysis_cache:
                 del _stocks_analysis_cache[cache_key]
         gc.collect()

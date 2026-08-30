@@ -134,7 +134,7 @@ TARGET_STATES = {
     "_index_belong_cache": ("DATA", "✓4 归属缓存（= app_data._belong）"),
     "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
     # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有，期货缓存仅经 app_data.futures_cache_*）
-    "_cache_lock":         ("DATA", "✓4 缓存锁（= app_data._cache_lock）"),
+    "_stocks_cache_lock":  ("DATA", "✓4 缓存锁（= app_data._stocks_cache_lock）"),
     "_saved_point_times":  ("DATA", "✓4 选点表内存态（= app_data._saved_point_times）"),
 
     # 获取侧状态（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）

@@ -1292,7 +1292,7 @@ class AppData:
     def __init__(self):
         # ══ 锁集合（一把锁 = 一个资源，锁名即资源名）══════════════════
         # 设计依据见 Docs/chan_lock_design_v5.md。要点：
-        #   _cache_lock          护「股票分析结果 + 股票下窗」内存缓存
+        #   _stocks_cache_lock    护「股票分析结果 + 股票下窗」内存缓存
         #                        （REST 线程，毫秒级访问）
         #   _futures_cache_lock  护期货内存缓存。独立成锁：访问者是 SSE
         #                        常驻线程（高频写、生命周期以分钟计），
@@ -1302,7 +1302,7 @@ class AppData:
         #                        合并为一把的理由：都是毫秒级 RMW，且消除
         #                        「标注→缓存」与「缓存→选点」跨锁顺序死锁
         # 均为 RLock：读-改-写内部可能嵌套同类操作。
-        self._cache_lock = threading.RLock()
+        self._stocks_cache_lock = threading.RLock()
         self._futures_cache_lock = threading.RLock()
         self._user_store_lock = threading.RLock()
 
@@ -1362,8 +1362,8 @@ class AppData:
     # 状态只读出口（获取侧刷新函数经此共享同一对象）
     # ════════════════════════════════════════════════════════════════
     @property
-    def cache_lock(self):
-        return self._cache_lock
+    def stocks_cache_lock(self):
+        return self._stocks_cache_lock
 
     @property
     def futures_cache_lock(self):
@@ -1459,7 +1459,7 @@ class AppData:
         return isinstance(key, tuple) and bool(key) and key[0] in ("dual_main", "dual_sub")
 
     def _evict_dual_overflow_locked(self):
-        """（内部，须持 _cache_lock）双窗键单独限额淘汰。
+        """（内部，须持 _stocks_cache_lock）双窗键单独限额淘汰。
 
         写入新 dual 键前调用：池内现存 dual 键数已达 MAX_DUAL_CACHE_KEYS
         时，按插入序（最旧优先）淘汰，直到腾出空位。dict 保序 + cache_get
@@ -1477,7 +1477,7 @@ class AppData:
         内存由 LRU 50 条上限 + 双窗键单独限额 + 扫描时逐只释放非买点缓存
         共同控制：dual_* 键超 MAX_DUAL_CACHE_KEYS 时优先淘汰最旧 dual 键
         （双窗不常用且条目重，不挤占常用单窗口缓存）。"""
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             if key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[key]  # 移到末尾
             else:
@@ -1493,7 +1493,7 @@ class AppData:
 
     def cache_get(self, key):
         """读取缓存，命中时移到末尾（LRU语义）"""
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             if key not in self._stocks_analysis_cache:
                 return None
             value = self._stocks_analysis_cache.pop(key)
@@ -1502,19 +1502,19 @@ class AppData:
 
     def cache_remove(self, key):
         """从缓存中删除指定条目（不触发 GC，由调用方在适当时机统一回收）"""
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             if key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[key]
 
     def stocks_cache_clear(self):
-        """清空股票分析 LRU 缓存（持 _cache_lock，线程安全），返回清除条数
+        """清空股票分析 LRU 缓存（持 _stocks_cache_lock，线程安全），返回清除条数
 
         P0-3 后调用方为：下载完成回调（AppDownload.stocks_cache_clear →
         on_finish，该回调已随「盘后下载」功能移除）；扫描面板关闭
         （Scanner.clear_cache）已不再清池（返回 cleared=0，缓存由 LRU
         自然淘汰）。与 futures_cache_clear 同模式。
         """
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             n = len(self._stocks_analysis_cache)
             self._stocks_analysis_cache.clear()
             return n
@@ -1522,8 +1522,8 @@ class AppData:
     # ── 期货缓存（独立锁 _futures_cache_lock）──────────────────────
     #   访问者是 SSE 常驻线程（写，生命周期以分钟计）与 REST 线程
     #   （读 /api/red_range_zs、清 /api/futures/cleanup）。原先三个入口
-    #   三套规矩（写无锁 / 读靠外层 _ENGINE_LOCK / clear 用 _cache_lock），
-    #   现统一由本锁覆盖，且不与 REST 的 cache_lock 争抢。
+    #   三套规矩（写无锁 / 读靠外层 _ENGINE_LOCK / clear 用 _stocks_cache_lock），
+    #   现统一由本锁覆盖，且不与 REST 的 stocks_cache_lock 争抢。
     def futures_cache_get(self, key):
         """期货分析缓存读（独立于股票 LRU，键形如 "KQ.m@SHFE.rb:1m"）"""
         with self._futures_cache_lock:
@@ -1581,7 +1581,7 @@ class AppData:
     def stocks_sub_cache_get(self, chan_code, sub_freq):
         """读取股票下窗 CChan（无则返回 None；命中移到末尾=LRU 语义）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             chan = self._stocks_sub_chan_cache.get(key)
             if chan is not None:
                 # LRU：命中移到末尾（dict 保序，插入序即新旧序）
@@ -1593,7 +1593,7 @@ class AppData:
         """写入股票下窗 CChan（同名键覆盖 = 双窗重建即刷新运行时态；
         超 MAX_STOCKS_SUB_CHAN 淘汰最旧，切换标的残留的旧 CChan 不泄漏）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             if key in self._stocks_sub_chan_cache:
                 del self._stocks_sub_chan_cache[key]
             elif len(self._stocks_sub_chan_cache) >= self.MAX_STOCKS_SUB_CHAN:
@@ -1605,7 +1605,7 @@ class AppData:
 
     def stocks_sub_cache_pop(self, chan_code, sub_freq):
         """弹出并删除股票下窗 CChan（切换标的/下窗周期时释放旧中间状态）"""
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             return self._stocks_sub_chan_cache.pop(self.stocks_sub_cache_key(chan_code, sub_freq), None)
 
 
@@ -1920,7 +1920,7 @@ class AppData:
         qualified_code = market + normalized_code
         self.clear_saved_point_time(qualified_code, freq)
         cache_key = make_live_key(market, normalized_code, freq)
-        with self._cache_lock:
+        with self._stocks_cache_lock:
             if cache_key in self._stocks_analysis_cache:
                 del self._stocks_analysis_cache[cache_key]
         gc.collect()

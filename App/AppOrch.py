@@ -84,7 +84,7 @@ from App.AppAMO import call_amo
 # 资源名 → (作用域, 保护手段, 访问者, 说明)
 SHARED_RESOURCE_REGISTRY = {
     "stocks_analysis_cache": (
-        "进程内", "AppData._cache_lock (RLock)", "REST / SSE",
+        "进程内", "AppData._stocks_cache_lock (RLock)", "REST / SSE",
         "股票分析结果 LRU（含 dual_main/dual_sub 结构化键）+ 股票下窗 CChan "
         "运行时缓存。读写/淘汰/失效全部经 app_data.cache_* / "
         "stocks_sub_cache_*，每个入口各自持锁。"),
@@ -98,8 +98,8 @@ SHARED_RESOURCE_REGISTRY = {
         "标注 text_annotation.json、选点 saved_point.csv、last_code_freq.json、"
         "float_mc_cache.json、zxg.blk。都是短耗时读-改-写，合并为一把锁消除"
         "跨锁顺序死锁；统一走 safe_write_json_file / _atomic_write_text。"),
-    "scan_pool_singleton": (
-        "进程内", "AppScanPool._pool_lock", "REST",
+    "scan_pool": (
+        "进程内", "AppScanPool._scan_pool_lock", "REST",
         "ProcessPool 单例 + _active_scans 引用计数。护的是「父进程的池对象」，"
         "不是 worker 之间的共享——后者归 OS 管。"),
     "scan_tasks.db": (
