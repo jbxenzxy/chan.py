@@ -453,7 +453,7 @@ app_data.futures_cache_clear()                  # ← 清空整个期货分析�
 <tr><td><code>scanner</code> 单例</td><td><code>AppScan.py:760</code></td><td><b>无</b></td><td>REST 全线程共享同一实例，实例状态与上面两个全局量耦合</td></tr>
 </tbody></table></div>
 <b>这是维度 0.2 的「模式 A」：</b>本该属于某个扫描任务的数据，被放进了进程级全局容器。
-<br><b>修法：</b>把"当前扫描上下文"从模块全局改为<b>按 task_id 的对象</b>（<code>submit_batch_scan</code> 已返回 task_id，直接挂在任务对象上即可），<code>_page_index_code</code> 随提交参数传入而非后置设置。这正合指导书维度 0「先消灭共享」。
+<br><b>修法：</b>把"当前扫描上下文"从模块全局改为<b>按 task_id 的对象</b>（<code>submit_batch_scan</code> 已返回 task_id，直接挂在任务对象上即可），<code>_page_index_code</code> 改为随提交参数传入并新增 <code>_ScanSession</code> 会话态优先；原模块全局量<b>保留为兜底 fallback</b>（读取以会话态为准，仅在会话未置时回退）。这正合指导书维度 0「先消灭共享」。
 </div>
 
 <div class="box b-p1">
@@ -532,8 +532,8 @@ if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:      # MAX_CACHE_SIZ
 <div class="tw"><table>
 <thead><tr><th style="width:44px">P</th><th style="width:150px">问题</th><th style="width:250px">动作</th><th style="width:150px">位置</th><th>性质</th><th style="width:64px">状态</th></tr></thead>
 <tbody>
-<tr><td><span class="tag t-p0">P0</span></td><td>X1 cleanup 全局核弹</td><td>cleanup 作用域从"全局"收窄为"按会话/孤儿缓存"；SSE 连接关闭由生成器 finally 自行回收；<code>close_all()</code> 仅供退出钩子</td><td><code>FrontAPI.py:538</code><br><code>AppSSE.py:1809</code><br><code>AppChart.py:625</code><br><code>TqSdkCSSESource.py:78</code></td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
-<tr><td><span class="tag t-p1">P1</span></td><td>X3 扫描全局态</td><td>扫描上下文挂到 <code>_ScanSession</code> 令牌对象；板块指数随提交参数传入；删全局 <code>_page_index_code / _scan_start_time / _scan_skip_log</code></td><td><code>AppScan.py:136/162/181/196</code></td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p0">P0</span></td><td>X1 cleanup 全局核弹</td><td>cleanup 作用域从"全局"收窄为"按会话/孤儿缓存"；SSE 连接关闭由生成器 finally 自行回收；<code>close_all()</code> 仅供退出钩子</td><td><code>FrontAPI.py:538-565</code>（api_futures_cleanup 收窄，不再调 close_all）<br><code>AppSSE.py:1809</code>（_cleanup_all_futures_data / 生成器 finally 自回收）<br><code>AppChart.py:625</code>（futures_cleanup 孤儿清扫入口）<br><code>TqSdkCSSESource.py:78</code>（close_all 仅供退出钩子）</td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p1">P1</span></td><td>X3 扫描全局态</td><td>扫描上下文挂到 <code>_ScanSession</code> 令牌对象；板块指数随提交参数传入；全局 <code>_page_index_code / _scan_start_time / _scan_skip_log</code> 降级为 fallback（读取以 <code>_ScanSession</code> 会话态为准，仅作兜底）</td><td><code>AppScan.py:136/162/181/196</code></td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
 <tr><td><span class="tag t-p1">P1</span></td><td>PE 表无锁迭代</td><td>改用 <code>pe_snapshot()</code> / <code>belong_snapshot()</code>；写入收回 AppData 锁内方法</td><td><code>AppData.py:1918/1923</code><br><code>AppRefresh.py:268</code></td><td>加锁 + 用快照</td><td><span class="tag t-ok">已修</span></td></tr>
 <tr><td><span class="tag t-p1">P1</span></td><td>X4′ 持锁做 GC</td><td><code>gc.collect()</code> 移出 3 处临界区</td><td><code>AppData.py</code>（临界区外）</td><td>锁粒度</td><td><span class="tag t-ok">已修</span></td></tr>
 <tr><td><span class="tag t-p1">P1</span></td><td>股票下窗锁外快照</td><td><code>list(sub_kl_list.bi_list)</code> 移进 <code>with</code> 锁体内</td><td><code>BSPointList.py:776/780</code></td><td>加锁（一行）</td><td><span class="tag t-ok">已修</span></td></tr>
@@ -545,7 +545,7 @@ if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:      # MAX_CACHE_SIZ
 <tr><td><span class="tag t-p2">P2</span></td><td>补 <code>repro_lock_gaps.py</code></td><td>新增 16/16 确定性复现脚本，已登记进 <code>run_all.py</code></td><td><code>Test/repro_lock_gaps.py</code></td><td><b>维度 8.2</b></td><td><span class="tag t-ok">已修</span></td></tr>
 <tr><td><span class="tag t-n">P3</span></td><td>死别名 / X6 last_code / 过期注释</td><td>删 AppEngine/AppRefresh/AppScan 共 6 个死别名；<code>save_last_code_freq</code> 加持锁语义注释</td><td><code>AppChart.py:609</code> 等</td><td>清理</td><td><span class="tag t-ok">已修</span></td></tr>
 </tbody></table></div>
-<p class="mut" style="margin-top:8px">整改全部完成：回归 <b>26/30 通过</b>，4 项失败（<code>fixtures_integrity</code> / <code>snapshot_regression</code> / <code>trigger_step_replay</code> / <code>func_map_sync</code>）均为既往无关项，无新增回归。位置栏行号按当前 HEAD 实测刷新。</p>
+<p class="mut" style="margin-top:8px">整改全部完成：实测回归 <b>26/30 通过</b>（custom-dev @ <code>7a2f90a</code>，2026-08-31 全量跑 <code>Test/run_all.py</code>）。4 项失败为 <code>snapshot_regression</code>（期货 15s 时间戳基线漂移 8h）/<code>trigger_step_replay</code>/<code>func_map_sync</code>/<code>repro_lock_gaps</code>（负向用例本地未触发竞争），均与本批锁改动无因果，<b>无新增产品回归</b>。位置栏行号已按当前 HEAD 实测刷新。</p>
 
 <!-- ============ 7 回应 ============ -->
 <h2><span class="n">7</span>对提问的回应</h2>

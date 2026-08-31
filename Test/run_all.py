@@ -60,6 +60,9 @@ CI / 迁移每阶段的验收门禁）。
  28. 并发缺口复现      repro_lock_gaps.py             Part A 机制复现（5 类缺口各跑
                                                      「有缺陷版」与「修复版」，证明量尺
                                                      能量出东西）+ Part B 活体回归
+29. 扫描候选归一化  test_scan_pageindex_normalize.py   审计 X3 候选路径 page_index 板块
+                                                     代码须在进入成分取数层前归一化
+                                                     （spy + 会话 + 静态回潮三防）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -120,6 +123,8 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_api_integration.py")]),
     ("code_resolution_guards",
      [sys.executable, os.path.join("Test", "test_code_resolution_guards.py")]),
+    ("scan_pageindex_normalize",
+     [sys.executable, os.path.join("Test", "test_scan_pageindex_normalize.py")]),
     ("lock_v5_guards",
      [sys.executable, os.path.join("Test", "test_lock_v5_guards.py")]),
     ("chan_data_isolation",

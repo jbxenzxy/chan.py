@@ -471,6 +471,18 @@ class Scanner:
             _sess = get_scan_session(scan_token)
             _idx_code = (_sess.page_index_code if _sess is not None else None) or _page_index_code
 
+        # 归一化板块指数代码（与 set_page_index_code 共用 utils._get_stock_market_code
+        # 单一事实源）：前端按标准契约传 market+裸码（sh000852），而成分取数契约
+        # get_index_stocks 只认无前缀裸板块代码（881xxx/880xxx/399xxx/000xxx）。
+        # 若这一层漏归一化，带前缀代码会被透传下去，命中不了 CSI_INDICES 精确匹配，
+        # 落入中证 csindex 兜底拼出不存在的 "sh000852cons.xls"，返回非 Excel 内容，
+        # 抛 "Excel file format cannot be determined"，成分为空、扫描池为 0。
+        if _idx_code:
+            from App import utils as _u
+            _mkt, _bare = _u._get_stock_market_code(_idx_code)
+            if _mkt:
+                _idx_code = _bare
+
         _SOURCE_READERS = {
             "zxg": (read_zxg_stocks, "自选股"),
             "page_index": (lambda: _debug_read_page_index_stocks(_idx_code), "成分股"),
