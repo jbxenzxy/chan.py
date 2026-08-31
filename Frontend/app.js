@@ -13,6 +13,19 @@
 
         let chartData = null, canvas, ctx;
 
+        // ══════════════════════════════════════════════════════════════════
+        // [N1 修复] 图表请求序号守卫 —— 防"后到响应覆盖先到"的图表闪回
+        // （指导书 v1.3 附录 N1 / 维度 3.3：竞态在前端共享变量，后端加锁无效）
+        // 机制：每次用户发起会改图表的操作（查询/切代码/切周期/复盘跳转/
+        // 重置/开关双窗/恢复加载）序号 +1；请求发出前捕获序号，响应回来时
+        // 若序号已过期（期间用户又发了新操作）则丢弃该响应——不写 chartData、
+        // 不渲染、不更新 UI。对后端缓存命中路径同样生效：响应即时返回时
+        // 序号不会过期，只有确实被更新的操作抢先才丢弃。
+        // ══════════════════════════════════════════════════════════════════
+        let _chartActionSeq = 0;
+        function _bumpChartActionSeq() { _chartActionSeq += 1; return _chartActionSeq; }
+        function _isChartActionStale(seq) { return seq !== _chartActionSeq; }
+
         let showBi = true, showFx = false, showZs = true, showSeg = false, showBsp = true, showBiIdx = false;
 
         // BSP买卖点类型过滤：默认全部显示（0,1,2,3 对应 bs_type 配置）
@@ -708,12 +721,14 @@
                     const apiPath = isFutures
                         ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx
                 : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + dualQuery;
+                    const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch(apiPath, { method: "POST" })
                         .then(resp => {
                             if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
                             return resp.json();
                         })
                         .then(data => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                             // 检查后端返回的错误
                             if (data.error) {
                                 throw new Error(data.error);
@@ -801,6 +816,7 @@
                             loadAnnotations();
                         })
                         .catch(err => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                             document.getElementById("loading").classList.add("hidden");
                             document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                             setTimeout(() => {
@@ -2798,12 +2814,14 @@
                 const freq = currentFreq;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在恢复单窗口数据...";
+                const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                 fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq, { cache: "no-store" })
                     .then(resp => {
                         if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); });
                         return resp.json();
                     })
                     .then(data => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 已被更新的操作抢先，丢弃过期响应
                         if (!data || !data.meta) {
                             throw new Error(data && data.error ? data.error : "API 返回数据缺少 meta 字段");
                         }
@@ -2828,6 +2846,7 @@
                         saveLastState();
                     })
                     .catch(err => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得覆盖新状态
                         document.getElementById("loading").classList.add("hidden");
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                         console.error("恢复单窗口数据失败:", err);
@@ -2984,6 +3003,7 @@
                 } else {
                     // 股票双窗口：HTTP 请求（P2：显式透传下窗周期 dualSubFreq，
                     // 保持开启时校验过的配对，不依赖后端缺省映射）
+                    const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + currentFreq
                         + "&dual=1&sub_freq=" + dualSubFreq)
                         .then(resp => {
@@ -2991,6 +3011,7 @@
                             return resp.json();
                         })
                         .then(data => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                             if (data.sub) {
                                 chartData = data;
                                 dualSubData = data.sub;
@@ -3008,6 +3029,7 @@
                             }
                         })
                         .catch(err => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得回滚当前状态
                             alert("加载下面窗口数据失败: " + err.message);
                             isDualWindow = false;
                             activeDualWindow = 'main';
@@ -3225,16 +3247,19 @@
             document.querySelector(".loading-text").textContent = "正在重置...";
 
             // 期货：清除选点 + 冷启动重连SSE（无start_time）
+            const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号（期货/股票两分支共用）
             if (isFutures) {
                 fetch("/api/futures/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                     .then(resp => resp.json())
                     .then(() => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 过期重置不得重连SSE（会掐断新操作的实时流）
                         // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
                         // 如果提前隐藏loading，会导致SSE重连失败时没有任何加载反馈
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                         connectRealtimeInit(code, freq);  // 冷启动，不带start_time
                     })
                     .catch(err => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                         document.getElementById("loading").classList.add("hidden");
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                         alert("重置失败: " + err.message);
@@ -3244,6 +3269,7 @@
 
             // 股票：清除选点 + 冷启动HTTP
             // Step 1: 调用后端清除CSV中该周期选点
+            // （_seq 已在期货分支前声明，两分支共用）
             fetch("/api/stocks/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                 .then(resp => resp.json())
                 .then(() => {
@@ -3255,6 +3281,7 @@
                     return resp.json();
                 })
                 .then(data => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                     // 全文替换 chartData
                     chartData = data;
                     if (chartData.meta.freq === "5分钟") {
@@ -3300,6 +3327,7 @@
                     }
                 })
                 .catch(err => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                     document.getElementById("loading").classList.add("hidden");
                     document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                     alert("重置失败: " + err.message);
@@ -3512,6 +3540,7 @@
                 const code2 = document.getElementById("stock-code-input").value.trim() || chartData.meta.symbol;
                 if (code2) {
                     document.getElementById("loading").classList.remove("hidden");
+                    const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch("/api/stocks/" + encodeURIComponent(code2) + "/analyze?freq=" + currentFreq
                         + "&dual=1&sub_freq=" + dualSubFreq)
                         .then(resp => {
@@ -3519,6 +3548,7 @@
                             return resp.json();
                         })
                         .then(data => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                             chartData = data;
                             updateRestartBtn();
                             updateDualBtn();
@@ -3537,6 +3567,7 @@
                             saveLastState();
                         })
                         .catch(err => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                             alert("切换下窗周期失败: " + err.message);
                             document.getElementById("loading").classList.add("hidden");
                         });
@@ -3595,6 +3626,7 @@
                     }
                     return;
                 }
+                const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                 fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                     + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
                     + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""))
@@ -3603,6 +3635,7 @@
                         return resp.json();
                     })
                     .then(data => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                         chartData = data;
                         updateRestartBtn();
                         updateDualBtn();
@@ -3643,6 +3676,7 @@
                         startRealtimeIfFutures(data);
                     })
                     .catch(err => {
+                        if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                         alert("切换周期失败: " + err.message);
                         document.getElementById("loading").classList.add("hidden");
                     });
@@ -3728,12 +3762,14 @@
             document.getElementById("goto-date-input").disabled = true;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
+            const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
             fetch(url)
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "跳转失败"); });
                     return resp.json();
                 })
                 .then(data => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                     chartData = data;
                     updateRestartBtn();
                     updateDualBtn();
@@ -3765,6 +3801,7 @@
                     loadAnnotations();
                 })
                 .catch(err => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                     alert("跳转失败: " + err.message);
                 })
                 .finally(() => {
@@ -4215,6 +4252,7 @@
                     dualSubFreq = reqSubFreq;
                 }
             }
+            const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
             fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + fetchFreq
                 + (isDualWindow && getDualSubFreq(fetchFreq) ? "&dual=1" : "")
                 + (isDualWindow && reqSubFreq ? "&sub_freq=" + reqSubFreq : ""))
@@ -4223,6 +4261,7 @@
                     return resp.json();
                 })
                 .then(data => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                     // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 data.meta.name 会崩溃）
                     if (!data || !data.meta) {
                         const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
@@ -4301,6 +4340,7 @@
                     startRealtimeIfFutures(data);
                 })
                 .catch(err => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                     alert("查询失败: " + err.message);
                     document.getElementById("loading").classList.add("hidden");
                 });
@@ -6816,9 +6856,11 @@
             document.getElementById("loading").classList.remove("hidden");
             updateFreqButtonStates(false);
             updateDateInputType();
+            const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号（恢复加载与用户操作竞争时让位）
             fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq, { cache: "no-store" })
                 .then(resp => { if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "查询失败"); }); return resp.json(); })
                 .then(data => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                     if (!data || !data.meta) throw new Error(data && data.error ? data.error : "API 返回数据缺少 meta 字段");
                     chartData = data;
                     document.getElementById("stock-code-input").value = chartData.meta.symbol;
@@ -6848,6 +6890,7 @@
                     saveLastView();
                 })
                 .catch(err => {
+                    if (_isChartActionStale(_seq)) return; // [N1] 过期恢复请求不得触发回退
                     console.error("恢复上次状态失败，回退默认:", err);
                     _resumeFallback();
                 });
@@ -6902,12 +6945,14 @@
                     updateDualBtn();
                     // 异步加载保存的股票数据
                     document.getElementById("loading").classList.remove("hidden");
+                    const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号（恢复加载与用户操作竞争时让位）
                     fetch("/api/stocks/" + encodeURIComponent(savedState.code) + "/analyze?freq=" + savedState.freq, { cache: "no-store" })
                         .then(resp => {
                             if (!resp.ok) throw new Error("恢复失败");
                             return resp.json();
                         })
                         .then(data => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                             // 防御：检查 API 返回数据是否完整
                             if (!data || !data.meta) {
                                 const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";
@@ -6947,6 +6992,7 @@
                             disconnectRealtime();
                         })
                         .catch(err => {
+                            if (_isChartActionStale(_seq)) return; // [N1] 过期恢复请求不得触发回退
                             console.error("恢复上次状态失败，回退到默认:", err);
                             try {
                                 let errMsgEl2 = document.getElementById("error-msg");
@@ -6973,9 +7019,11 @@
         async function initDefault() {
             document.getElementById("loading").classList.remove("hidden");
             try {
+                const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号（默认加载与用户操作竞争时让位）
                 const resp = await fetch("/api/stocks/" + encodeURIComponent("sh000001") + "/analyze?freq=d", { cache: "no-store" });
                 if (!resp.ok) throw new Error("默认加载失败");
                 const data = await resp.json();
+                if (_isChartActionStale(_seq)) return; // [N1] 丢弃过期响应
                 // 防御：检查 API 返回数据是否完整（缺少 meta 时后续 chartData.meta.symbol 会崩溃）
                 if (!data || !data.meta) {
                     const errMsg = data && data.error ? data.error : "API 返回数据缺少 meta 字段";

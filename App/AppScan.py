@@ -20,6 +20,7 @@ App/AppScan.py —— 股票扫描功能域
 AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
 import itertools
+import os
 import threading
 import time
 import traceback
@@ -159,12 +160,56 @@ _legacy_scan_session = None
 _task_scan_token = {}
 
 
-def new_scan_session(page_index_code=None):
-    """建一次扫描的私有会话，返回 (scan_token, session)"""
+def _reap_stale_scan_sessions_locked():
+    """清扫超时弃扫会话（审计 N3）。**调用方必须已持 _scan_sessions_lock。**
+
+    TTL 可经环境变量 CHAN_SCAN_SESSION_TTL_SEC 覆盖（秒；非法值回落默认 24h）。
+    每次调用现场读取，不把 env 值持久化进全局（便于测试内动态切换）。
+    被清扫会话的 legacy 兜底引用一并置空；随后回收 _task_scan_token 中
+    指向已不存在会话的死键，避免该表无界增长。
+    """
     global _legacy_scan_session
-    token = f"sc{next(_scan_token_seq)}"
-    sess = _ScanSession(token, page_index_code)
+    ttl = _SCAN_SESSION_TTL
+    env_val = os.environ.get("CHAN_SCAN_SESSION_TTL_SEC")
+    if env_val:
+        try:
+            ttl = float(env_val)
+        except (TypeError, ValueError):
+            pass
+    now = time.time()
+    stale = [t for t, s in _scan_sessions.items()
+             if now - s.start_time > ttl]
+    for t in stale:
+        dropped = _scan_sessions.pop(t, None)
+        if dropped is not None and _legacy_scan_session is dropped:
+            _legacy_scan_session = None
+    # 死键清扫：无论本轮是否有 stale，只要表非空就顺手扫一遍
+    #（task_id 反查到已注销会话即为死键；表通常很小，扫描开销可忽略）
+    if _task_scan_token:
+        for tid, t in list(_task_scan_token.items()):
+            if t not in _scan_sessions:
+                _task_scan_token.pop(tid, None)
+
+
+# 会话最长驻留时间（秒）。正常路径 end() 会注销会话；页面扫描中途被关闭/
+# 刷新时 end() 永远不会被调（审计 N3），会话会驻留 _scan_sessions。
+# 不引入后台线程：new_scan_session 每次建新会话前惰性清扫超时旧会话。
+# 可用环境变量 CHAN_SCAN_SESSION_TTL_SEC 覆盖（测试/复现脚本用）；
+# 默认 24h 远超一次正常扫描时长，误伤在跑会话的概率可忽略。
+_SCAN_SESSION_TTL = 24 * 3600
+
+
+def new_scan_session(page_index_code=None):
+    """建一次扫描的私有会话，返回 (scan_token, session)
+
+    审计 N3：建会话前惰性清扫超时旧会话（弃扫残留），同时回收
+    _task_scan_token 中指向已不存在会话的死键（该表同样只增不减）。
+    """
+    global _legacy_scan_session
     with _scan_sessions_lock:
+        _reap_stale_scan_sessions_locked()
+        token = f"sc{next(_scan_token_seq)}"
+        sess = _ScanSession(token, page_index_code)
         _scan_sessions[token] = sess
         _legacy_scan_session = sess
     return token, sess
