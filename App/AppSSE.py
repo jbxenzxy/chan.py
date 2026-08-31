@@ -48,6 +48,7 @@ from Common.CEnum import AUTYPE, FX_TYPE
 # close_all/CSSESource 一并 re-export，API 层经本模块消费，不直连 DataAPI）
 from DataAPI.TqSdkCSSESource import (  # noqa: F401
     CSSESource, CSSESourceClosed, CTqSdkSession, close_all,
+    active_session_count,
 )
 from App.AppLog import get_logger
 log = get_logger(__name__)
@@ -1806,7 +1807,27 @@ def get_futures_freq_sec_map():
 # ═══════════════════════════════════════════════════════════════════════
 
 def _cleanup_all_futures_data():
-    """期货切到股票时彻底清理所有期货数据：K线缓存、分析缓存、选点记录
+    """期货切到股票时清理期货数据：K线缓存、分析缓存、选点记录
+
+    【审计 X1 · P0 修复】作用域纪律：本函数是**全局清扫**，只在
+    「没有任何页面正在看期货」时才成立。
+
+    原实现无条件清扫，导致一个页面切走期货时，其余期货页面的 SSE 会话
+    被 close_all() 掐断、K线记录缓存被清空、下窗 chan 与选点被抹掉——
+    这是**确定性**故障（每次必错），不是概率性竞争。
+
+    修复思路不是加锁（锁解决不了作用域错配，见指导书维度 0.2 模式 B），
+    而是**收窄作用域**：
+      · 会话自有的资源（TqApi 连接、本连接 K线记录、本连接下窗 chan）
+        由**该会话自己的生成器 finally** 回收——单窗 :660、双窗 :1181-1185
+        已具备，无需外部代劳；
+      · 本函数只负责**无人持有的孤儿状态**清扫，并以此处的
+        active_session_count() 为守卫。
+
+    因此守卫命中（仍有活跃会话）时**直接返回**是正确的：那些会话会在
+    各自 finally 中自我清理，全局清扫只会误伤它们。
+
+    返回：(是否执行了清扫, 活跃会话数)  —— 供 API 层观测与前端提示。
 
     注意：本函数**不得**调用 gc.collect()。SSE 期货流关闭时 TqApi 内部
     协程可能仍处于挂起态（tqsdk 在 Python 3.12+ 的已知问题，见官方
@@ -1815,12 +1836,21 @@ def _cleanup_all_futures_data():
     生命周期由 SSE 流 finally 块 src.close()→api.close() 负责，内存由
     Python 引用计数 + 自动 GC 回收即可。
     """
-    # 1. 清空 CTqSdkAPI 的K线缓存
+    active = active_session_count()
+    if active > 0:
+        # 仍有页面在看期货（含刚发起本请求、其 SSE 尚未走完 finally 的那一页）：
+        # 全局清扫会误伤它们，跳过。它们各自的 finally 会自行回收。
+        log.info(f"[清理] 跳过期货全局清扫：仍有 {active} 个活跃期货 SSE 会话，"
+                 f"其资源由各生成器 finally 自行回收")
+        return False, active
+
+    # 1. 清空 CTqSdkAPI 的K线缓存（已改为遍历活跃会话；此处无活跃会话，仅兜底）
     if CTqSdkAPI is not None:
         CTqSdkAPI.clear_all_cache()
         log.info("[清理] 已清空期货K线缓存")
 
     # 2. 清空选点记录中的期货条目（key以KQ.开头，经 app_data 加锁删除）
+    #    注：只清内存态缓存，CSV 持久化不受影响，下次访问自动重载
     removed = app_data.clear_saved_points_by_prefix("KQ.")
     if removed:
         log.info(f"[清理] 已清除 {removed} 条期货选点记录")
@@ -1829,11 +1859,18 @@ def _cleanup_all_futures_data():
     #    check_nested_diver 经 futures_cache_get 读到过期中间状态）
     app_data.futures_cache_clear()
     log.info("[清理] 已清空期货分析缓存")
+    return True, 0
 
 
 def futures_cleanup():
-    """清理所有期货数据"""
-    return _cleanup_all_futures_data()
+    """清理期货数据（孤儿清扫；有活跃会话时自动跳过）
+
+    返回 dict：{"swept": bool, "active_sessions": int}
+      swept=True  —— 已执行全局清扫（当时无活跃期货会话）
+      swept=False —— 跳过清扫（仍有页面在看期货，避免误伤，见 X1）
+    """
+    swept, active = _cleanup_all_futures_data()
+    return {"swept": swept, "active_sessions": active}
 
 
 

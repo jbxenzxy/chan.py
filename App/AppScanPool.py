@@ -31,8 +31,9 @@ App/AppScanPool.py —— 批量扫描 ProcessPool 编排
     AppScanStore，避免 spawn 模式下导入期副作用。
   - 中止：task 级中止经 AppScanStore 状态传播（worker 每票前检查
     is_aborted），不依赖进程内 _scan_aborted 标志。
-  - 收割：collector 把 worker 错误行合并进 API 进程
-    _m._scan_skip_log（/api/scan_end 汇总口径一致；中止行不计入）。
+  - 收割：collector 把 worker 错误行合并进**发起该任务的扫描会话**
+    （审计 X3：经 task_id → scan_token 反查，不再写全局 _scan_skip_log；
+    /api/scan_end 汇总口径一致，中止行不计入）。
   - 生命周期：提交入口 best-effort 清理过期任务；
     atexit 注册显式关池（shutdown(wait=False, cancel_futures=True)）。
 """
@@ -52,7 +53,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 # worker 数上限：防误配/高核数机器打爆内存
-_SCAN_POOL_MAX_WORKERS = 16
+_SCAN_POOL_MAX_WORKERS = 10
 
 _pool = None
 _pool_engine = None          # "process_pool"
@@ -115,13 +116,21 @@ def _get_pool():
 
 
 def _resolve_workers(app_config):
-    """worker 数解析：scan_pool_workers > 0 用之；否则按 CPU 核数自动适配
-    （os.cpu_count()，至少 1）。钳制上限 [1, 16]（防高核数机器内存线性
-    放大 OOM）。默认即自动适配当前机器核数，换电脑无需改配置。
+    """worker 数解析：scan_pool_workers > 0 用之；否则按 CPU 核数自动适配，
+    但**自动模式上限钳到 4**（不再吃满核数）。
+
+    为什么不再吃满核数：批量扫描每个 worker 是独立进程，会各加载一份
+    numpy/OpenBLAS + 缠论引擎 + pandas（内存昂贵）。在 16GB 内存、可用仅
+    ~1.5GB 的机器上，按 20 核拉起 16 个 worker 会瞬间打爆内存 → OpenBLAS
+    "Memory allocation still failed" + 系统换页卡死 IDE（实测）。故自动模式
+    保守钳到 4，既保留多进程并行又避免 OOM。如需更高并发，显式在 .env 设
+    SCAN_POOL_WORKERS（仍受 _SCAN_POOL_MAX_WORKERS 上限约束）。
+    钳制总上限 [1, 16] 保留，防 64 核机器内存线性放大 OOM。
     """
     workers = getattr(app_config, "scan_pool_workers", 0) or 0
     if workers <= 0:
-        workers = os.cpu_count() or 2
+        # 自动模式：保守上限 4（实测 16GB/低可用内存机器的安全值）
+        workers = max(1, min(os.cpu_count() or 2, _SCAN_POOL_MAX_WORKERS))
     return max(1, min(_SCAN_POOL_MAX_WORKERS, workers))
 
 
@@ -164,8 +173,8 @@ def _monitor_task(task_id, futures):
 
     - future 异常（worker 崩溃/序列化失败）时兜底写错误行，保证
       completed 收敛到 total（前端进度不悬挂）；
-    - 错误明细合并进 API 进程 _m._scan_skip_log（/api/scan_end 的汇总
-      打印口径一致；中止行不计入）；
+    - 错误明细合并进发起本次任务的**扫描会话**（按 scan_token 归属，
+      /api/scan_end 的汇总打印口径一致；中止行不计入）；
     - 终态：done / aborted / error（任一 future 以异常收场＝基础设施级
       故障，任务标 error 而非 done，前端可区分并向用户提示）。
     """
@@ -190,18 +199,24 @@ def _monitor_task(task_id, futures):
                 except Exception:  # noqa: BLE001
                     pass
 
-        # 错误明细并入 _scan_skip_log（中止行不计入）
+        # 错误明细并入**发起本次任务的那一次扫描**的跳过记录（中止行不计入）
         try:
             # 审计 P1-5：经加锁访问器追加（本线程是收割线程，与 REST 线程的
             # 清空 / 遍历并发；原实现直接 append 模块级 list，无锁无登记）
-            from App.AppScan import append_scan_skip
+            # 审计 X3：进一步按 scan_token 归属——收割线程只拿得到 task_id，
+            # 故由 submit_batch_scan 预先绑定 task_id → scan_token，此处
+            # 反查后写入那一次扫描自己的会话，不再混入全局（多页同时扫描
+            # 时，别页的明细不会串进本页的汇总打印）。
+            from App.AppScan import append_scan_skip, scan_token_for_task
+            _skip_token = scan_token_for_task(task_id)
             for row in store.iter_error_rows(task_id):
                 data = row.get("data") or {}
                 if isinstance(data, dict) and data.get("aborted"):
                     continue
                 msg = str(data.get("error", "")) if isinstance(data, dict) else ""
                 append_scan_skip(
-                    f"{row.get('code', '')} - {msg or row.get('status', '')}")
+                    f"{row.get('code', '')} - {msg or row.get('status', '')}",
+                    _skip_token)
         except Exception:  # noqa: BLE001
             pass
 
@@ -219,6 +234,14 @@ def _monitor_task(task_id, futures):
                     store.set_status(task_id, "done")
         except Exception:  # noqa: BLE001 —— 终态落库失败不阻断引用归还（外层 finally 兜底）
             pass
+        finally:
+            # 任务到终态即解绑 task_id → scan_token，避免映射表只增不减
+            # （审计 X3 生命周期：绑定的生命周期须与被绑对象一致）
+            try:
+                from App.AppScan import drop_task_scan_token
+                drop_task_scan_token(task_id)
+            except Exception:  # noqa: BLE001
+                pass
     finally:
         # 无论如何都归还池引用（即用即弃）：本批 future 已全部结束。仅当全局
         # 无其它进行中批次（并发批量扫描）时才真正销毁进程池（worker 缓存

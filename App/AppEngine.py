@@ -197,7 +197,11 @@ from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 # 区域 2 · 数据委托层
 # ═══════════════════════════════════════════════════════════════════════
 
-_stock_names_cache = app_data.names_cache
+# 【已删除】_stock_names_cache = app_data.names_cache
+# 审计 P3：死别名——本模块零引用。它不是"无害的一行赋值"：它把**共享可变
+# 容器**挂在模块级名字上，任何人照着写一句 `_stock_names_cache.keys()` 就
+# 绕过 app_data 的锁直接全表遍历（指导书 §8.3 形态②）。已改为按需调用
+# app_data.get_stock_name() / names_snapshot()，不留这个样板。
 
 def _load_stock_names_from_cache_file():
     """从 stock_names.json 加载股票名称到内存（委托 app_data）"""
@@ -215,13 +219,14 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 
 
 # ============================================================
-# PE-TTM 缓存（腾讯接口，增量刷新；实现位于 App/AppData.py）
+# PE-TTM / 指数归属缓存（实现位于 App/AppData.py）
 # ============================================================
-_pe_ttm_cache = app_data.pe_cache        # {market+code: float}  PE-TTM值（共享对象）
-
-# 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm_index.json）
-# key: market+code（如 "sh600519"）, value: "沪深300"|"中证500"|"中证1000"
-_index_belong_cache = app_data.belong_cache
+# 【已删除】_pe_ttm_cache = app_data.pe_cache
+#          _index_belong_cache = app_data.belong_cache
+# 审计 P3：两条都是死别名（本模块零引用）。删它们的理由同上面的
+# _stock_names_cache——不是清理无用代码，是**拆掉一个指向共享容器的公开
+# 入口**。读取一律走 app_data.get_pe_ttm() / get_index_belong() 点查，
+# 遍历一律走 pe_snapshot() / belong_snapshot()。
 
 
 def _get_pe_ttm(market, code):
@@ -299,9 +304,9 @@ SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 FREQ_TO_COL = AppData_FREQ_TO_COL
 
 
-# 选点内存缓存：别名 = app_data 实例字段（共享同一对象；启动加载由
-# app_data 实例化完成，本文件多处直接读该字典保持零漂移）
-_saved_point_times = app_data.saved_point_times
+# 【已删除】_saved_point_times = app_data.saved_point_times
+# 审计 P3：死别名（本模块零引用）。选点时间一律经
+# app_data.get_saved_point_time() 读取。
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -389,7 +394,12 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         cache_key = make_single_key(market, code, freq, date_suffix)
         cached_result = _cache_get(cache_key)
         if not end_date and cached_result is not None and "result" in cached_result:
-            result = cached_result["result"]
+            # 审计 P2（与双窗 :369-370 统一口径）：cached_result["result"] 是
+            # **缓存里的那个对象**，零拷贝直接发布出去，等于把共享对象交给
+            # 调用方。双窗路径早已浅拷贝，单窗路径漏了同一处。一旦下游挂载
+            # 字段（如双窗的 result["sub"]）或事件循环序列化期间另一线程改动
+            # 它，就会污染缓存本体 / 抛 RuntimeError。故统一先复制再用。
+            result = dict(cached_result["result"])
             col = FREQ_TO_COL.get(freq, "")
             # 审计 P2：原为 `in` 判存在再下标的 check-then-act（无锁），改走
             # app_data 加锁读取接口，与选点写者互斥。

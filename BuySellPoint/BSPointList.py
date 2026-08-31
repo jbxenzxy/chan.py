@@ -728,6 +728,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                                      code=parent.code, sub_freq=sub_freq)
                         return True  # 按子级别背驰处理
                     sub_kl_list = sub_chan[sub_kl_type]
+                    # 审计 U2（P1）：快照必须在**锁内**做。缓存条目会被分析
+                    # 线程整条替换，出锁后再 list(...) 就可能与替换交错——
+                    # 期货侧同款问题已修（见下方 else 分支 :771），股票侧漏了
+                    # 同一处。临界区压到最小：锁内只做浅拷贝，随即出锁遍历。
+                    sub_bi_list = list(sub_kl_list.bi_list)
             else:
                 # 单窗口 / 独立双窗下窗 / legacy 联立：显式判 kl_datas 是否含次级别
                 # （替代原 try/KeyError 异常控制流，行为等价）：
@@ -740,6 +745,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
                                  sub_kl_type=sub_kl_type)
                     return True  # 按子级别背驰处理
+                # parent.chan 为本次分析自有的 CChan（不跨连接共享，风险低于
+                # 缓存路径），仍统一在取到后立即快照，保持与双窗路径同一口径，
+                # 避免指针被带出作用域后再遍历。
+                sub_bi_list = list(sub_kl_list.bi_list)
         else:
             # 期货：上下窗是独立的 CChan 对象，下窗缓存在 _futures_analysis_cache 中
             # 时序约定（区间套）：实时循环先处理下窗(次级别)再处理上窗(主级别)，
@@ -770,10 +779,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 # 引用、不会被就地改写，故 list(...) 即等价于不可变快照。
                 sub_bi_list = list(sub_kl_list.bi_list)
             # 以下对 sub_bi_list 的使用均在锁外（快照已与引擎内部状态解耦）
-        if is_stocks:
-            # 股票侧下窗 CChan 由分析线程**整条替换**缓存条目（非就地改写），
-            # 风险低于期货；同样浅拷贝成快照，与引擎内部列表解耦后再遍历。
-            sub_bi_list = list(sub_kl_list.bi_list)
+        # 注：股票、期货两条路径均已在其**各自的临界区内**完成 sub_bi_list
+        # 快照（股票 :730-736 / :738-744，期货 :771），此处不再存在
+        # 「锁外取指针后遍历」的窗口（审计 U2 / P0-2 双侧闭合）。
         if len(sub_bi_list) == 0:
             # 上/下窗，历史K线不对齐(如：日K加载多于30分)
             self._dbg_bs('check_nested_diver', '双窗口-无子级别 → 按子级别背驰处理')

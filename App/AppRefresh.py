@@ -30,16 +30,17 @@ from DataAPI.SinaAPI import fetch_a_names
 log = get_logger(__name__)
 
 
-# 股票名称/PE/市值缓存状态：别名 = app_data 实例字段（共享同一对象）
+# 股票名称缓存别名 = app_data 实例字段（共享同一对象）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
+# 只用于**判空**（:360 的 `if _stock_names_cache:`）——真值测试在 CPython
+# 下是原子的；遍历一律走 app_data.names_snapshot()。
 _stock_names_cache = app_data.names_cache
 
-# PE-TTM 缓存（腾讯接口，增量刷新；共享对象）
-_pe_ttm_cache = app_data.pe_cache        # {market+code: float}  PE-TTM值
-
-# 指数归属缓存（AKShare在线获取，与PE-TTM一起保存到stock_pettm_index.json）
-# key: market+code（如 "sh600519"）, value: "沪深300"|"中证500"|"中证1000"
-_index_belong_cache = app_data.belong_cache
+# 【已删除】_pe_ttm_cache = app_data.pe_cache
+#          _index_belong_cache = app_data.belong_cache
+# 审计 P3：两条都是死别名（本模块零引用）。P1-2 把 PE/归属表的读写全部收进
+# app_data.update_pe_ttm() / pe_snapshot() / belong_snapshot() 之后，这两
+# 个别名就没用了。留着等于给"绕开锁直接全表遍历"留一个现成入口。
 
 # 刷新状态（股票名称刷新用；获取侧状态）
 # 访问者：刷新工作线程（写）+ /api/stocks/refresh/read|POST 的 REST 线程
@@ -259,14 +260,13 @@ def _refresh_pe_ttm():
     log.info(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
 
     # 经 TxAPI.fetch_pe_ttm 批量获取（腾讯行情接口，字段[39]=市盈率动态，内部分批）
-    new_count = 0
     got_set = set()  # 本次成功获取到PE-TTM的代码
     mv_map = fetch_pe_ttm(codes)
-    for cache_key, pe_val in mv_map.items():
-        got_set.add(cache_key)
-        if cache_key not in _pe_ttm_cache or _pe_ttm_cache[cache_key] != pe_val:
-            _pe_ttm_cache[cache_key] = pe_val
-            new_count += 1
+    got_set.update(mv_map.keys())
+    # 审计 P1：写入收回 AppData 锁内方法 —— 裸写共享 dict 会与整表遍历的
+    # 读者撞车（「dictionary changed size during iteration」，或条数不变时
+    # 静默串表）。update_pe_ttm 与 pe_snapshot() 共用 _meta_cache_lock。
+    new_count = app_data.update_pe_ttm(mv_map)
     _set_refresh_status(loaded=total)
     log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
 
@@ -286,14 +286,20 @@ def _refresh_pe_ttm():
     try:
         os.makedirs(os.path.dirname(app_config.stock_pe_ttm_file), exist_ok=True)
         # 找出所有有PE-TTM或指数归属的股票代码
-        all_keys = set(_pe_ttm_cache.keys()) | set(_index_belong_cache.keys())
+        # 审计 P1：整表遍历一律走**快照**（与写者互斥）。直接
+        # set(_pe_ttm_cache.keys()) 是无锁全表迭代，写者（本函数上方的
+        # update_pe_ttm、以及 replace_index_belong 的 clear()+update()）
+        # 一旦并发，就会撞「dictionary changed size during iteration」。
+        pe_snap = app_data.pe_snapshot()
+        belong_snap = app_data.belong_snapshot()
+        all_keys = set(pe_snap.keys()) | set(belong_snap.keys())
         combined = {}
         for k in all_keys:
             if k.isdigit() and len(k) == 6:
                 continue  # 过滤旧格式纯数字key
             entry = {}
-            pe_val = _pe_ttm_cache.get(k)
-            idx_val = _index_belong_cache.get(k)
+            pe_val = pe_snap.get(k)
+            idx_val = belong_snap.get(k)
             if isinstance(pe_val, (int, float)) and pe_val != 0:
                 entry["pe_ttm"] = pe_val
             if idx_val:

@@ -1547,19 +1547,41 @@ class AppData:
         """双窗结构化缓存键判定（第 1 维 kind ∈ {dual_main, dual_sub}）"""
         return isinstance(key, tuple) and bool(key) and key[0] in ("dual_main", "dual_sub")
 
+    def _gc_outside_lock(self):
+        """（内部）在**不持有任何锁**时执行全量 GC —— 维度 5.4「临界区过重」
+
+        被淘汰的是 CChan 这种**重量级对象图**（跨代引用、含大量 K 线单元），
+        因此淘汰路径需要一次 gc.collect() 才能真正回收。但 gc.collect()
+        是 stop-the-world：**在临界区内执行，等于让所有等待本锁的线程一起
+        多等一个 GC 周期**（阻塞放大）。淘汰越频繁，这个放大越明显。
+
+        故本类所有淘汰路径统一改为：锁内只置「需要 GC」标记，出锁后再调用
+        本方法。注意此时已不在临界区，可能已有别的线程再次淘汰——重复 GC
+        只是多花一点时间，不影响正确性。
+        """
+        try:
+            gc.collect()
+        except Exception as _exc:  # noqa: BLE001 —— GC 失败不得阻断业务路径
+            log.warning(f"[内存] GC 异常: {type(_exc).__name__}: {_exc}")
+
     def _evict_dual_overflow_locked(self):
         """（内部，须持 _stocks_cache_lock）双窗键单独限额淘汰。
 
         写入新 dual 键前调用：池内现存 dual 键数已达 MAX_DUAL_CACHE_KEYS
         时，按插入序（最旧优先）淘汰，直到腾出空位。dict 保序 + cache_get
         命中移尾，序即 LRU 新旧序。单窗键不受影响。
+
+        返回：是否发生了淘汰 —— 调用方据此在**出锁后**补一次 GC
+        （见 _gc_outside_lock 与审计 X4′）。
         """
+        evicted = False
         dual_keys = [k for k in self._stocks_analysis_cache if self._is_dual_key(k)]
         while len(dual_keys) >= self.MAX_DUAL_CACHE_KEYS:
             oldest = dual_keys.pop(0)
             self._stocks_analysis_cache.pop(oldest, None)
-            gc.collect()
+            evicted = True
             log.info(f"[内存] 双窗缓存达上限({self.MAX_DUAL_CACHE_KEYS})，淘汰最旧双窗条目: {oldest}")
+        return evicted
 
     def cache_put(self, key, value):
         """写入缓存，超出上限时淘汰最旧的条目（LRU语义）。
@@ -1567,22 +1589,31 @@ class AppData:
         共同控制：dual_* 键超 MAX_DUAL_CACHE_KEYS 时优先淘汰最旧 dual 键
         （双窗不常用且条目重，不挤占常用单窗口缓存）。"""
         with self._stocks_cache_lock:
-            self._cache_put_locked(key, value)
+            evicted = self._cache_put_locked(key, value)
+        if evicted:
+            # 维度 5.4：GC 必须出锁后做，避免 stop-the-world 阻塞放大
+            self._gc_outside_lock()
 
     def _cache_put_locked(self, key, value):
-        """（内部，须持 _stocks_cache_lock）写入并维护 LRU/容量"""
+        """（内部，须持 _stocks_cache_lock）写入并维护 LRU/容量
+
+        返回：是否发生了淘汰 —— 调用方据此在**出锁后**补一次 GC
+        （见 _gc_outside_lock 与审计 X4′：GC 不得在临界区内执行）。
+        """
+        evicted = False
         if key in self._stocks_analysis_cache:
             del self._stocks_analysis_cache[key]  # 移到末尾
         else:
             # 新键入池前的容量控制：dual 键先过单独限额，再过池总量限
             if self._is_dual_key(key):
-                self._evict_dual_overflow_locked()
+                evicted = self._evict_dual_overflow_locked()
             if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:
                 oldest_key = next(iter(self._stocks_analysis_cache))
                 self._stocks_analysis_cache.pop(oldest_key)
-                gc.collect()
+                evicted = True
                 log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")
         self._stocks_analysis_cache[key] = value
+        return evicted
 
     def cache_update(self, key, **fields):
         """在**同一把锁内**完成缓存条目的读-改-写（审计 P0-3）。
@@ -1600,8 +1631,10 @@ class AppData:
             if entry is None:
                 entry = {}
             entry.update(fields)
-            self._cache_put_locked(key, entry)
-            return entry
+            evicted = self._cache_put_locked(key, entry)
+        if evicted:
+            self._gc_outside_lock()
+        return entry
 
     def cache_get(self, key):
         """读取缓存，命中时移到末尾（LRU语义）"""
@@ -1647,9 +1680,18 @@ class AppData:
             self._futures_analysis_cache[key] = value
 
     def futures_cache_pop(self, key, default=None):
-        """期货分析缓存失效（子级别切换时释放旧中间状态）"""
+        """期货分析缓存失效（子级别切换时释放旧中间状态）
+
+        审计 P2（生命周期）：连带回收该 key 的**对象图锁**。_futures_chan_locks
+        原本只增不删——切换一次子级别就新建一把 RLock 留着，长跑下与「缓存
+        条目已释放」形成不对称增长（锁对象本身很轻，但登记表无界增长说明
+        生命周期没人管，且同名 key 复用时会拿到**新**锁而与旧持有者失去互斥）。
+        故逐条弹出时一并摘除，锁的生命周期与缓存条目对齐。
+        """
         with self._futures_cache_lock:
-            return self._futures_analysis_cache.pop(key, default)
+            value = self._futures_analysis_cache.pop(key, default)
+            self._futures_chan_locks.pop(key, None)
+            return value
 
     def futures_cache_clear(self):
         """清空全部期货分析缓存（持 _futures_cache_lock，线程安全）
@@ -1660,9 +1702,16 @@ class AppData:
 
         注：清理只对「当前无 SSE 连接写入」成立；正在推送的连接在下一
         帧重新 set_futures_sub_chan 会自行补回，不会读到半清状态。
+
+        审计 P2（生命周期）：整池清空时一并清空**对象图锁表**
+        _futures_chan_locks，与缓存条目生命周期对齐（理由见
+        futures_cache_pop）。注意此时若有并发读取方正持有某把锁，
+        `dict.clear()` 只是摘除登记表的引用，不会销毁仍在使用的锁对象——
+        持有者照常工作，重建时再取新锁，故不影响正确性。
         """
         with self._futures_cache_lock:
             self._futures_analysis_cache.clear()
+            self._futures_chan_locks.clear()
 
     # ── 语义化子窗接口（key 规则内聚于数据层，调用方不手工拼接  ──
     #    "{SYMBOL}:{sub_freq}"，大小写规则单一事实源）
@@ -1773,14 +1822,18 @@ class AppData:
         超 MAX_STOCKS_SUB_CHAN 淘汰最旧，切换标的残留的旧 CChan 不泄漏）"""
         key = self.stocks_sub_cache_key(chan_code, sub_freq)
         with self._stocks_cache_lock:
+            evicted = False
             if key in self._stocks_sub_chan_cache:
                 del self._stocks_sub_chan_cache[key]
             elif len(self._stocks_sub_chan_cache) >= self.MAX_STOCKS_SUB_CHAN:
                 oldest = next(iter(self._stocks_sub_chan_cache))
                 self._stocks_sub_chan_cache.pop(oldest)
-                gc.collect()
+                evicted = True
                 log.info(f"[内存] 运行时下窗缓存达上限({self.MAX_STOCKS_SUB_CHAN})，淘汰: {oldest}")
             self._stocks_sub_chan_cache[key] = chan
+        if evicted:
+            # 维度 5.4：同上，GC 出锁后再做
+            self._gc_outside_lock()
 
     def stocks_sub_cache_pop(self, chan_code, sub_freq):
         """弹出并删除股票下窗 CChan（切换标的/下窗周期时释放旧中间状态）"""
@@ -1871,6 +1924,26 @@ class AppData:
         """指数归属表快照（同 names_snapshot：遍历专用）"""
         with self._meta_cache_lock:
             return dict(self._belong)
+
+    def update_pe_ttm(self, mapping):
+        """批量写入 PE-TTM（审计 P1：写者收口到锁内，与遍历读者互斥）
+
+        原先刷新线程经模块级别名 `_pe_ttm_cache[k] = v` 裸写共享 dict：
+        写是「点查 + 下标赋值」两步，读者若在两次操作之间整表遍历
+        （set(d.keys()) / for k in d），CPython 会抛「dictionary changed
+        size during iteration」；条数恰好不变时更会**不抛异常而静默串表**。
+        整段 RMW 收进本方法后，与 pe_snapshot() 共用 _meta_cache_lock，
+        读者拿到的一定是自洽的表。
+
+        返回：新增/更新的条数（值未变化的键不计数）。
+        """
+        changed = 0
+        with self._meta_cache_lock:
+            for k, v in mapping.items():
+                if self._pe.get(k) != v:
+                    self._pe[k] = v
+                    changed += 1
+        return changed
 
     def replace_names(self, all_names):
         """整体替换名称缓存（获取侧刷新完成时调用；
@@ -2023,6 +2096,18 @@ class AppData:
     def get_float_mc_from_cache(self, code):
         """从缓存获取流通市值（亿元），未命中返回None。"""
         return self._float_mc.get(code)
+
+    def float_mc_count(self):
+        """缓存条数（持 _user_store_lock 读取）
+
+        给调用方一个**不需要碰共享容器本体**的取数口。原写法是
+        `len(app_data.float_mc_cache)`——直接对共享 dict 取长度。虽然
+        CPython 下 `len(dict)` 本身是原子的、不会抛异常，但它是「裸读共享
+        容器」的口子：一旦有人照着改成 `for k in app_data.float_mc_cache`
+        就会踩到真正的竞态。宁可多一个方法，也别留这个样板。
+        """
+        with self._user_store_lock:
+            return len(self._float_mc)
 
     # ════════════════════════════════════════════════════════════════
     # 手选进入段选点持久化（CSV）

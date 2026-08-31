@@ -623,8 +623,12 @@ def load_last_code_freq():
 # ═══════════════════════════════════════════════════════════════════════
 
 def futures_cleanup():
-    """清理所有期货数据（实现在 App/AppSSE.py，此处为图表交互入口漏斗）"""
-    return _sse._cleanup_all_futures_data()
+    """清理期货数据（孤儿清扫；有活跃会话时自动跳过，见审计 X1）
+
+    实现在 App/AppSSE.py，此处为图表交互入口漏斗。
+    返回 {"swept": bool, "active_sessions": int}。
+    """
+    return _sse.futures_cleanup()
 
 
 def get_futures_aliases():

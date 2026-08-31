@@ -123,13 +123,28 @@ SHARED_RESOURCE_REGISTRY = {
         "是全部 REST 与扫描线程。点查（.get）在 CPython 下原子，**遍历不安全**"
         "——遍历一律经 names_snapshot() / pe_snapshot() / belong_snapshot()。"
         "惰性加载改为「先填本地字典、整体提交后才置 loaded 旗」+ 双检锁，"
-        "杜绝并发读者拿到半成品（原实现先置位后填充，且 flag 一旦为真本轮不再重试）。"),
-    "scan_skip_log": (
-        "进程内", "AppScan._scan_skip_log_lock（经 append/clear/snapshot/count 访问器）",
+        "杜绝并发读者拿到半成品（原实现先置位后填充，且 flag 一旦为真本轮不再重试）。"
+        "注：本条目**不含** _float_mc（流通市值）——它不归 _meta_cache_lock 管，"
+        "见下一条。"),
+    "float_mc 缓存（_float_mc / _float_mc_loaded / _float_mc_saved_at）": (
+        "进程内", "AppData._user_store_lock (RLock)", "刷新工作线程（写） / 扫描预过滤（读）",
+        "流通市值缓存。v5/v6 均**漏登**：原 meta_caches 条目只写了 "
+        "_names / _pe / _belong，而 _float_mc 实际由 _user_store_lock 保护"
+        "（load_float_mc_cache / update_float_mc_cache 两条写路径同一把锁，"
+        "与用户态文件写共用）。属「登记表挂名不实」——条目在，覆盖面不对。"
+        "读侧 get_float_mc_from_cache / float_mc_cache_stale 为无锁点查，"
+        "按本项目既定标准（点查在 CPython 下原子）可接受；但**遍历**须先"
+        "取快照，勿直接碰 float_mc_cache 裸出口。"),
+    "scan_skip_log（已下沉为每次扫描私有）": (
+        "每任务局部", "AppScan._ScanSession.lock（经 append/clear/snapshot/count 访问器，按 scan_token 定位）",
         "REST / 扫描收割线程",
         "扫描跳过明细列表。v5 **整个漏登**：追加者是收割线程，清空/遍历/计数"
         "者是 REST 线程。list.append 原子，但 clear 与「len + 遍历」的组合不原子，"
-        "清空插进遍历中途会让明细整批丢失或串批次——不抛异常，故长期无人发现。"),
+        "清空插进遍历中途会让明细整批丢失或串批次——不抛异常，故长期无人发现。"
+        "v1.2 随 X3 再下沉：原为**进程级单例**，加锁只解决丢失，解决不了跨页"
+        "串批（A 页开始会清空 B 页的记录、B 页结束会打印 A 页的明细）。现每次"
+        "扫描一个 _ScanSession 按 scan_token 索引，收割线程经 task_id → "
+        "scan_token 反查写回发起它的那一次扫描。"),
     "futures_sub_chan 对象图": (
         "进程内", "AppData._futures_chan_locks（按 key 的 RLock）+ _futures_cache_lock",
         "SSE（写） / REST（读）",

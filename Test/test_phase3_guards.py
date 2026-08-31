@@ -121,8 +121,12 @@ def test_shared_resource_registry(failures):
             bad.append(f"{key} 字段数不是 4（作用域/保护手段/访问者/说明）")
             continue
         scope, guard, visitors, note = val
+        # 作用域词表 = 指导书维度 0.3 的「归属层级」。原表只有 进程内 /
+        # 跨进程 / 每请求 / 每连接 四档，**缺任务级**——扫描这类跨多个请求、
+        # 按 task_id 划分归属的状态无处安放，只能硬塞进「进程内」，而这正是
+        # X3（两页同时扫描串参数）的根因。审计 X3 后补入「每任务局部」。
         if scope not in ("进程内", "跨进程", "进程内 + 文件",
-                         "每请求局部", "每连接局部", "只读共享"):
+                         "每请求局部", "每连接局部", "每任务局部", "只读共享"):
             bad.append(f"{key} 作用域 {scope!r} 不在登记域内")
         if not guard:
             bad.append(f"{key} 未写明保护手段")

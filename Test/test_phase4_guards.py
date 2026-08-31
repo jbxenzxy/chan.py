@@ -179,10 +179,15 @@ ALIAS_PAIRS = [
     # 期货缓存仅经 app_data.futures_cache_* 公共 API 访问
     ("_stocks_analysis_cache", "stocks_analysis_cache"),
     ("_stocks_cache_lock",            "stocks_cache_lock"),
-    ("_stock_names_cache",     "names_cache"),
-    ("_pe_ttm_cache",          "pe_cache"),
-    ("_index_belong_cache",    "belong_cache"),
-    ("_saved_point_times",     "saved_point_times"),
+    # P3：以下四条死别名已从 AppEngine 删除（本模块零引用），故一并从本
+    # 清单移除。它们不是"无用赋值"，而是**指向共享可变容器的模块级入口**
+    # ——留着等于给"绕开锁直接全表遍历"留现成把手（指导书 §8.3 形态②）。
+    # 保留注释是为了防止有人照着旧条目把它们加回来。
+    #   _stock_names_cache   (names_cache)
+    #   _pe_ttm_cache        (pe_cache)
+    #   _index_belong_cache  (belong_cache)
+    #   _saved_point_times   (saved_point_times)
+    # AppRefresh._stock_names_cache 仍在用（仅判空），不受影响。
 ]
 
 
@@ -450,8 +455,8 @@ def test_startup_and_lru(failures):
         bad.append("saved_point_times 启动加载缺失（非 dict）")
     if not app_data._annotations_loaded:
         bad.append("annotations 启动加载缺失（_annotations_loaded=False）")
-    if m._saved_point_times is not app_data.saved_point_times:
-        bad.append("AppEngine._saved_point_times 与 app_data 漂移（② 的运行时复核）")
+    # P3：AppEngine._saved_point_times 死别名已删除，原「运行时复核」随之
+    # 取消——选点表现在只有 app_data 一个持有者，不存在漂移可能。
 
     # LRU 语义：超 50 淘汰最旧；get 命中移尾（隔离验证，不污染全局单例）
     from Test.snapshot_runner import isolate_side_effects

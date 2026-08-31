@@ -129,13 +129,13 @@ TARGET_STATES = {
     "log":                     ("ORCH_C", "统一日志 logger（P0-3 App/AppLog.py；get_logger(__name__)）"),
 
     # 业务缓存 → ✓4 已收敛：别名 = app_data 实例字段（共享同一对象，身份校验见 phase4 守护）
-    "_stock_names_cache":  ("DATA", "✓4 名称缓存（= app_data._names）"),
-    "_pe_ttm_cache":       ("DATA", "✓4 PE 缓存（= app_data._pe）"),
-    "_index_belong_cache": ("DATA", "✓4 归属缓存（= app_data._belong）"),
+    # P3：_pe_ttm_cache / _index_belong_cache / _saved_point_times /
+    # _stock_names_cache（AppEngine 侧）四条死别名已删除——它们指向**共享
+    # 可变容器**却零引用，留着就是「绕开锁直接全表遍历」的现成入口
+    # （指导书 §8.3 形态②）。注释保留，防止有人照旧条目加回。
     "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
     # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有，期货缓存仅经 app_data.futures_cache_*）
     "_stocks_cache_lock":  ("DATA", "✓4 缓存锁（= app_data._stocks_cache_lock）"),
-    "_saved_point_times":  ("DATA", "✓4 选点表内存态（= app_data._saved_point_times）"),
 
     # 获取侧状态（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）
 

@@ -4665,10 +4665,11 @@
                 localStorage.setItem("scan_freq", _scanFreq);
             } catch(e) {}
             document.getElementById("scan-mode-dialog").classList.remove("show");
-            // 如果勾选了"成分股"，通知后端当前页面指数代码
-            if (_scanSources.indexOf("page_index") >= 0 && chartData && chartData.meta && chartData.meta.symbol) {
-                fetch("/api/stocks/scan/set/index?code=" + encodeURIComponent(chartData.meta.symbol), { method: "PUT" }).catch(function(){});
-            }
+            // 注：原先勾选"成分股"时会先 PUT /scan/set/index 把指数代码写进
+            // 后端**全局**，后端读全局来决定扫哪些成分股。多网页下后设置的
+            // 页面会覆盖先设置的，两页会按同一指数扫（审计 X3）。
+            // 现改为在 read/candidates 与 scan/start 上随请求传
+            // page_index_code（见 runScan），故不再需要这次写全局的调用。
             // 执行实际扫描
             doStartScan();
         };
@@ -4771,9 +4772,14 @@
         };
 
         // 多来源合并：后端统一合并去重，前端只需传逗号分隔的来源列表
-        function _fetchMergedStocks(sources, freq) {
+        // 审计 X3：成分股来源的板块指数代码**随本请求传入**（page_index_code），
+        // 不再依赖「先 PUT /scan/set/index 写全局、后端再读全局」——多网页下
+        // 后设置的页面会覆盖先设置的，导致两页都按同一指数扫错一整批成分股。
+        function _fetchMergedStocks(sources, freq, pageIndexCode, scanToken) {
             var url = "/api/stocks/scan/read/candidates?source=" + sources.join(",");
             if (freq) url += "&freq=" + freq;
+            if (pageIndexCode) url += "&page_index_code=" + encodeURIComponent(pageIndexCode);
+            if (scanToken) url += "&scan_token=" + encodeURIComponent(scanToken);
             return fetch(url)
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -4815,7 +4821,8 @@
                 headers: {"Content-Type": "application/json"},
                 body: JSON.stringify({
                     stocks: stocks, freq: freq, mode: mode,
-                    recent: recent, source: source
+                    recent: recent, source: source,
+                    scan_token: opts.scan_token || ""
                 })
             })
             .then(function(r) { return r.json(); })
@@ -4989,9 +4996,21 @@
             var runScan = function(spec) {
                 var sourceLabel = _scanSourceLabel();
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
+                // 审计 X3：① 板块指数代码**随请求传入**（page_index_code），
+                // 不再「先 PUT /scan/set/index 写后端全局、后端再读全局」——
+                // 多网页下后设置的页面会覆盖先设置的，两页会按同一指数扫，
+                // 静默扫错一整批成分股；② start() 返回本次扫描私有的
+                // scan_token，后端按它隔离开始时间与跳过记录，本页的扫描
+                // 不会被另一页覆盖。
+                var pageIndexCode = (_scanSources.indexOf("page_index") >= 0
+                        && chartData && chartData.meta && chartData.meta.symbol)
+                        ? chartData.meta.symbol : "";
+                var scanToken = "";
+                var startUrl = "/api/stocks/scan/start";
+                if (pageIndexCode) startUrl += "?page_index_code=" + encodeURIComponent(pageIndexCode);
                 Promise.all([
-                    fetch("/api/stocks/scan/start", { method: "POST" }),
-                    _fetchMergedStocks(_scanSources, freq)
+                    fetch(startUrl, { method: "POST" }),
+                    _fetchMergedStocks(_scanSources, freq, pageIndexCode)
                 ])
                     .then(function(resps) {
                         return resps[0].json().then(function(scanStartData) {
@@ -5004,6 +5023,8 @@
                                     '</div>';
                                 return null;
                             }
+                            // 记住本次扫描的会话标识，供 submit / end 携带
+                            scanToken = scanStartData.scan_token || "";
                             return resps[1];
                         });
                     })
@@ -5029,7 +5050,10 @@
                             // 把"正在扫描"写回 body，覆盖 render* 的结果（spinner 残留）
                             if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                             _pendingUpdate = false;
-                            fetch("/api/stocks/scan/end", { method: "POST" }).then(function() {
+                            // 带 scan_token：结算本页这一次扫描（审计 X3）
+                            var endUrl = "/api/stocks/scan/end"
+                                + (scanToken ? "?scan_token=" + encodeURIComponent(scanToken) : "");
+                            fetch(endUrl, { method: "POST" }).then(function() {
                                 spec.renderFinal(results, total + preSkipped, preSkipped + skipped, interrupted);
                             });
                         }
@@ -5064,7 +5088,7 @@
                         // 提交到后端执行池，轮询增量结果
                         // （单票响应同形，模式过滤/渲染逻辑零改动）
                         btn.textContent = "中断扫描";
-                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(",")}, function(data) {
+                        _asyncScanAll(stocks, {freq: freq, mode: spec.mode, recent: spec.recent, source: _scanSources.join(","), scan_token: scanToken}, function(data) {
                             completed++;
                             if (data.skipped) { skipped++; }
                             else if (data.error) { skipped++; }

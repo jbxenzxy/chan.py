@@ -19,6 +19,7 @@ App/AppScan.py —— 股票扫描功能域
 批量扫描提交/状态/中止委托 AppScanPool（入口适配器），共享结果经 SQLite
 AppScanStore 跨进程；本模块保持纯业务、零并发框架依赖。
 """
+import itertools
 import threading
 import time
 import traceback
@@ -51,39 +52,58 @@ _stock_names_cache = app_data.names_cache
 
 # 扫描跳过记录（收集后统一打印）
 #
-# 审计 P1-5：本列表**整个逃出了 AppOrch.SHARED_RESOURCE_REGISTRY**，既没
-# 登记也没加锁。实际有两个执行体在碰它：
-#   · 追加者：扫描收割线程（AppScanPool._monitor_task 汇总 worker 错误明细）
-#   · 清空 / 遍历 / 计数者：REST 线程（本文件 start() / end() / skip_log 出口）
-# list.append 在 CPython 下是原子的，但 `.clear()` 与 `len()` / 遍历 **不是**
-# 原子的组合操作——清空发生在遍历中途会让汇总明细整批丢失或串批次。
-# 不抛异常，所以一直没人发现。这是「登记表漏项」的典型代价。
-_scan_skip_log = []
-_scan_skip_log_lock = threading.Lock()
+# 演进说明（P1-5 → X3）：
+#   P1-5 阶段：列表是**模块级全局**，且整个逃出 AppOrch.SHARED_RESOURCE_
+#   REGISTRY，既没登记也没加锁。两个执行体在碰它（收割线程追加、REST 线程
+#   清空/遍历/计数），`.clear()` 与 `len()`/遍历不是原子的组合操作，清空
+#   发生在遍历中途会让汇总明细整批丢失或串批次——不抛异常，一直没人发现。
+#   当时的修法是加 _scan_skip_log_lock 并收敛出四个加锁访问器。
+#   X3 阶段：加锁解决了崩溃与丢失，但没解决**跨页串批**——它仍是进程级
+#   单例，两个页面同时扫描时，A 页的开始会清空 B 页的记录，B 页结束时会
+#   打印 A 页的明细。故本列表进一步下沉为**每次扫描私有**
+#   （_ScanSession.skip_log，见下方会话区），此处不再保留全局副本。
+# 访问器 append_scan_skip / clear_scan_skip / scan_skip_snapshot /
+# scan_skip_count 保留（签名新增可选 scan_token），按 token 定位会话。
 
 
-def append_scan_skip(msg):
-    """加锁追加一条跳过记录（扫描线程 / 收割线程调用）"""
-    with _scan_skip_log_lock:
-        _scan_skip_log.append(msg)
+def append_scan_skip(msg, scan_token=None):
+    """加锁追加一条跳过记录（扫描线程 / 收割线程调用）
+
+    审计 X3：按 scan_token 归属到**发起它的那一次扫描**，不同页面的扫描
+    各写各的，不会互相串批。未提供 token（旧调用方）时回退到最近一次会话。
+    """
+    sess = get_scan_session(scan_token)
+    if sess is None:
+        return
+    with sess.lock:
+        sess.skip_log.append(msg)
 
 
-def clear_scan_skip():
+def clear_scan_skip(scan_token=None):
     """加锁清空跳过记录（新一轮扫描开始时调用）"""
-    with _scan_skip_log_lock:
-        _scan_skip_log.clear()
+    sess = get_scan_session(scan_token)
+    if sess is None:
+        return
+    with sess.lock:
+        sess.skip_log.clear()
 
 
-def scan_skip_snapshot():
+def scan_skip_snapshot(scan_token=None):
     """加锁取跳过记录的**快照**（遍历一律经此，勿直接碰列表本体）"""
-    with _scan_skip_log_lock:
-        return list(_scan_skip_log)
+    sess = get_scan_session(scan_token)
+    if sess is None:
+        return []
+    with sess.lock:
+        return list(sess.skip_log)
 
 
-def scan_skip_count():
+def scan_skip_count(scan_token=None):
     """加锁取跳过记录条数"""
-    with _scan_skip_log_lock:
-        return len(_scan_skip_log)
+    sess = get_scan_session(scan_token)
+    if sess is None:
+        return 0
+    with sess.lock:
+        return len(sess.skip_log)
 
 # 【已删除】_scan_lock
 # 它从未真正生效：① API 进程没有任何路由调用 scan_one（FrontAPI 只有
@@ -93,10 +113,114 @@ def scan_skip_count():
 # 真正的隔离来自进程边界（spawn，每 worker 独立缓存）+ CChan 构建的
 # 每请求数据注入。
 
-# 扫描开始时间：用于计算扫描耗时，在通知中显示
-_scan_start_time = None
+# ═══════════════════════════════════════════════════════════════════════
+# 扫描会话上下文（审计 X3：任务级状态不得放在进程级）
+# ═══════════════════════════════════════════════════════════════════════
+# 原实现用模块级全局承载「当前这一次扫描」的上下文：
+#     _scan_start_time（开始时间）、_page_index_code（板块指数代码）
+# 它们是**任务级**状态（属于某一次扫描），却放在**进程级**、无锁、无分片键。
+#
+# 多网页下后发起的扫描会覆盖先发起的参数（维度 0.2「模式 A」）。最危险的
+# 是 _page_index_code：A 页选沪深300成分股、B 页选中证500 → 两页都按最后
+# 设置的那个扫，**静默扫错一整批股票**，且没有任何报错。
+#
+# 注意：**给它补一把锁并不能解决问题**——加锁只是让两页「串行地互相覆盖」，
+# 锁的类型选对了、层级错了，结果仍然错（指导书维度 0.3）。真正的修法是
+# 让它不再共享：每次扫描一个私有会话对象，按 scan_token 索引。
+#
+# 会话内承载：开始时间（耗时统计）、板块指数代码、跳过记录。
+# start() 建会话并返回 token；end() / append_scan_skip() / stock_list()
+# 一律按 token 定位自己那一份，不同页面互不干扰。
 
-# 页面指数代码：当前页面正在查看的通达信板块指数代码（如 880491），用于"成分股"扫描来源
+
+class _ScanSession:
+    """一次扫描的私有上下文（每页一份，进程内按 token 隔离）"""
+
+    __slots__ = ("token", "start_time", "page_index_code", "skip_log", "lock")
+
+    def __init__(self, token, page_index_code=None):
+        self.token = token
+        self.start_time = time.time()
+        self.page_index_code = page_index_code
+        self.skip_log = []                    # 本会话的跳过记录
+        self.lock = threading.Lock()          # 只护本会话的 skip_log
+
+    def elapsed(self):
+        return time.time() - self.start_time
+
+
+_scan_sessions = {}                    # scan_token -> _ScanSession
+_scan_sessions_lock = threading.Lock()  # 只护注册表本身（dict 级别）
+_scan_token_seq = itertools.count(1)
+# 旧客户端（不传 scan_token）回退到最近一次会话，保持向后兼容
+_legacy_scan_session = None
+# task_id -> scan_token：让 ProcessPool 收割线程能把跳过记录写回**发起它的
+# 那一次扫描**（收割线程只拿得到 task_id，见 AppScanPool._monitor_task）
+_task_scan_token = {}
+
+
+def new_scan_session(page_index_code=None):
+    """建一次扫描的私有会话，返回 (scan_token, session)"""
+    global _legacy_scan_session
+    token = f"sc{next(_scan_token_seq)}"
+    sess = _ScanSession(token, page_index_code)
+    with _scan_sessions_lock:
+        _scan_sessions[token] = sess
+        _legacy_scan_session = sess
+    return token, sess
+
+
+def get_scan_session(scan_token=None):
+    """取会话；无 token 时回退到最近一次会话（旧客户端兼容）"""
+    if scan_token:
+        with _scan_sessions_lock:
+            return _scan_sessions.get(scan_token)
+    return _legacy_scan_session
+
+
+def drop_scan_session(scan_token=None):
+    """结算并注销会话（注销后同名 token 再取返回 None，end() 幂等）"""
+    global _legacy_scan_session
+    sess = None
+    with _scan_sessions_lock:
+        if scan_token:
+            sess = _scan_sessions.pop(scan_token, None)
+        elif _legacy_scan_session is not None:
+            sess = _legacy_scan_session
+            _scan_sessions.pop(sess.token, None)
+        if _legacy_scan_session is sess:
+            _legacy_scan_session = None
+    return sess
+
+
+def bind_task_scan_token(task_id, scan_token):
+    """把批量任务 task_id 绑定到发起它的扫描会话（供收割线程回写）"""
+    if not task_id or not scan_token:
+        return
+    with _scan_sessions_lock:
+        _task_scan_token[task_id] = scan_token
+
+
+def scan_token_for_task(task_id):
+    """按 task_id 反查扫描会话 token（收割线程用）"""
+    if not task_id:
+        return None
+    with _scan_sessions_lock:
+        return _task_scan_token.get(task_id)
+
+
+def drop_task_scan_token(task_id):
+    """任务终态后解绑，避免 _task_scan_token 只增不减"""
+    if not task_id:
+        return
+    with _scan_sessions_lock:
+        _task_scan_token.pop(task_id, None)
+
+
+# 页面指数代码【已废弃·仅供兼容】
+# 新路径：由前端在 /api/stocks/scan/read/candidates 上以 page_index_code
+# 参数显式传入，随请求走，不落全局（见 Scanner.stock_list）。
+# 保留本全局只为兼容仍在调用 PUT /scan/set/index 的旧客户端。
 _page_index_code = None
 
 
@@ -305,20 +429,21 @@ class Scanner:
     # ── 状态访问器（收敛到类内部）────────────────
     @property
     def skip_log(self):
-        # 审计 P1-5：返回快照而非本体——调用方常在锁外遍历它
+        """跳过记录**快照**（调用方常在锁外遍历它，故返回副本）
+
+        无 scan_token 时回退到最近一次会话（旧客户端兼容）。
+        """
         return scan_skip_snapshot()
 
     @property
     def start_time(self):
-        return _scan_start_time
-
-    @start_time.setter
-    def start_time(self, value):
-        global _scan_start_time
-        _scan_start_time = value
+        """最近一次扫描的开始时间（旧接口；多页场景请按 scan_token 取会话）"""
+        sess = get_scan_session()
+        return sess.start_time if sess is not None else None
 
     @property
     def page_index_code(self):
+        """【已废弃·仅兼容】全局兜底值——新路径由请求参数传入，见 stock_list"""
         return _page_index_code
 
     @page_index_code.setter
@@ -327,13 +452,28 @@ class Scanner:
         _page_index_code = value
 
     # ── 股票列表 ─────────────────────────────────────────────────────
-    def stock_list(self, source="zxg"):
-        """返回股票列表（支持逗号分隔多来源）"""
+    def stock_list(self, source="zxg", page_index_code=None, scan_token=None):
+        """返回股票列表（支持逗号分隔多来源）
+
+        审计 X3：page_index 来源的板块指数代码**由请求参数传入**，不再读
+        进程级全局。原实现读全局 _page_index_code，多网页下 A 页选沪深300、
+        B 页选中证500 时，两页都会按最后设置的那个扫——静默扫错一整批
+        成分股，且不报错。
+
+        取值优先级：显式参数 > 本扫描会话 > 全局兜底（旧客户端）。
+        """
         sources = [s.strip() for s in source.split(",") if s.strip()]
+
+        # 解析本次要用的板块指数代码（每页一份，不落全局）
+        if page_index_code:
+            _idx_code = page_index_code
+        else:
+            _sess = get_scan_session(scan_token)
+            _idx_code = (_sess.page_index_code if _sess is not None else None) or _page_index_code
 
         _SOURCE_READERS = {
             "zxg": (read_zxg_stocks, "自选股"),
-            "page_index": (lambda: _debug_read_page_index_stocks(_page_index_code), "成分股"),
+            "page_index": (lambda: _debug_read_page_index_stocks(_idx_code), "成分股"),
             "tdxhy2": (read_tdxhy_l2_indices, "板块指数2"),
             "tdxhy3": (read_tdxhy_l3_indices, "板块指数3"),
         }
@@ -372,7 +512,10 @@ class Scanner:
         if _need_float_mc:
             app_data.load_float_mc_cache()
             if app_data.float_mc_loaded:
-                log.info(f"[流通市值] 本地缓存已加载 {len(app_data.float_mc_cache)} 只")
+                # 审计 P2：原为 `len(app_data.float_mc_cache)` —— 裸读共享容器。
+                # 改走 app_data 加锁取数口，与写者（update_float_mc_cache）
+                # 共用 _user_store_lock，也给后来人留一个正确的样板。
+                log.info(f"[流通市值] 本地缓存已加载 {app_data.float_mc_count()} 只")
             try:
                 t_mc = time.time()
                 mv_dict = fetch_float_mc_from_tencent(merged)
@@ -654,32 +797,40 @@ class Scanner:
             return {"error": str(exc)}
 
     # ── 扫描生命周期 ─────────────────────────────────────────────────
-    def start(self):
-        """新一轮扫描开始"""
-        global _scan_start_time
-        clear_scan_skip()
-        _scan_start_time = time.time()
+    def start(self, page_index_code=None):
+        """新一轮扫描开始 → {"ok": True, "scan_token": ...}
+
+        审计 X3：为本次扫描建一个**私有会话**，返回 scan_token。后续
+        end(scan_token) / 扫描期间的跳过记录都归属到这个 token，
+        两个页面同时扫描各用各的上下文，不会互相覆盖。
+        """
+        token, _sess = new_scan_session(page_index_code=page_index_code)
         try:
             _m._load_stock_names_from_cache_file()
         except Exception as e:
             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
-        return {"ok": True}
+        return {"ok": True, "scan_token": token}
 
-    def end(self):
-        """扫描结束"""
-        global _scan_start_time
-        # 耗时统一计算：控制台明细 + 右下角弹窗共用同一口径
-        elapsed = 0.0
-        if _scan_start_time is not None:
-            elapsed = time.time() - _scan_start_time
+    def end(self, scan_token=None):
+        """扫描结束（按 scan_token 结算那一次扫描；无 token 回退最近一次）
+
+        幂等：会话注销后重复 end() 不会重复弹通知（原实现靠把
+        _scan_start_time 置 None 来防重，现由会话生命周期承担）。
+        """
+        # 先取会话**快照**，再注销——注销后 scan_skip_snapshot() 就取不到了
+        sess = get_scan_session(scan_token)
+        if sess is None:
+            # 已结算过（重复 end）/ token 失效 —— 幂等返回，不再弹通知
+            return {"count": 0, "already_ended": True}
+        token = sess.token
+        elapsed = sess.elapsed()
         minutes = int(elapsed // 60)
         seconds = int(elapsed % 60)
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
-        # 审计 P1-5：整段基于**同一次快照**，避免「判空 → 遍历 → 计数」
-        # 三个动作之间被收割线程的追加 / REST 的清空插队（原实现三次
-        # 各自直接读列表，中途被 clear 会让明细整批丢且计数与打印不一致）。
-        _skip_snapshot = scan_skip_snapshot()
+        # 审计 P1-5 + X3：整段基于**同一次快照**（且只取本会话的），
+        # 避免「判空 → 遍历 → 计数」之间被收割线程的追加 / 别页的清空插队。
+        _skip_snapshot = scan_skip_snapshot(token)
         if _skip_snapshot:
             log.info("========== 扫描异常/失败股票明细 ==========")
             log.info(f"共 {len(_skip_snapshot)} 只:")
@@ -689,14 +840,14 @@ class Scanner:
         else:
             log.info(f"[扫描明细] 全部扫描成功（耗时 {time_str}），无异常股票")
 
-        if _scan_start_time is not None:
-            skip_count = len(_skip_snapshot)
-            msg = f"耗时 {time_str}"
-            if skip_count > 0:
-                msg += f"，跳过 {skip_count} 只"
-            _send_windows_notification("扫描完成", msg)
-            _scan_start_time = None
-        return {"count": len(_skip_snapshot)}
+        skip_count = len(_skip_snapshot)
+        msg = f"耗时 {time_str}"
+        if skip_count > 0:
+            msg += f"，跳过 {skip_count} 只"
+        _send_windows_notification("扫描完成", msg)
+
+        drop_scan_session(token)
+        return {"count": skip_count}
 
     def clear_cache(self):
         """关闭扫描面板：不再清空共享股票分析缓存。
@@ -712,14 +863,25 @@ class Scanner:
     # 双路径：交互单票仍走 scan_one（线程池），批量走 ProcessPool；
     # 共享结果经 SQLite AppScanStore 跨进程。
 
-    def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg"):
+    def submit_batch_scan(self, stocks, freq="d", mode="", recent="1", source="zxg",
+                          scan_token=None):
         """提交批量扫描 → {task_id, total}（薄封装，委托 AppScanPool）
 
         stocks: [{code, prefix, _source}, ...]（scan_stock_list 合并列表）。
         任务在 ProcessPool 异步执行，进度经 get_batch_scan_status 轮询。
+
+        scan_token：本次扫描的会话标识（由 start() 返回）。池的收割线程
+        只拿得到 task_id，故在此绑定 task_id → scan_token，让它能把跳过
+        记录写回**发起它的那一次扫描**而非全局（审计 X3）。
         """
         from App.AppScanPool import submit_batch_scan as _submit
-        return _submit(stocks, freq=freq, mode=mode, recent=recent, source=source)
+        result = _submit(stocks, freq=freq, mode=mode, recent=recent, source=source)
+        task_id = result.get("task_id") if isinstance(result, dict) else None
+        if task_id and scan_token:
+            # 未传 token 的旧客户端无需绑定：append_scan_skip 会回退到
+            # _legacy_scan_session，行为与改动前一致。
+            bind_task_scan_token(task_id, scan_token)
+        return result
 
     def get_batch_scan_status(self, task_id, since=0):
         """批量扫描状态轮询视图（薄封装，委托 AppScanStore，增量读取）

@@ -55,6 +55,11 @@ CI / 迁移每阶段的验收门禁）。
  26. 数据隔离对照      test_chan_data_isolation_control.py
                                                      确定性交错：证明类变量注入串数据、
                                                      线程局部注入隔离（非空测试的自检）
+ 27. 锁覆盖完整性      test_lock_completeness.py      三形态静态扫描：实例字段 / 模块级
+                                                     别名 / 跨模块守卫方法 + 扫描器自证
+ 28. 并发缺口复现      repro_lock_gaps.py             Part A 机制复现（5 类缺口各跑
+                                                     「有缺陷版」与「修复版」，证明量尺
+                                                     能量出东西）+ Part B 活体回归
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -131,6 +136,12 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_scanpool_fallback.py")]),
     ("frontend_smoke",
      [sys.executable, os.path.join("Test", "test_frontend_smoke.py")]),
+    # 2026-08-31 补注册：此前 lock_completeness **从未进入过回归套件**——
+    # 它扫得出问题，但没人跑它，等于没有（审计发现的覆盖面盲区之一）。
+    ("lock_completeness",
+     [sys.executable, os.path.join("Test", "test_lock_completeness.py")]),
+    ("repro_lock_gaps",
+     [sys.executable, os.path.join("Test", "repro_lock_gaps.py")]),
 ]
 
 # 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI

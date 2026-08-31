@@ -257,6 +257,17 @@ async def api_stocks_analyze(
 
     # 持久化最近代码/周期（仅非复盘路径持久化；本路由 analyze 到不了期货——
     # analyze_stock 入口对期货代码已明确拒绝，market!="futures" 属历史防御）
+    #
+    # 审计 X6（多页语义，非并发缺陷）：这是**进程级单例**，多页浏览不同标
+    # 的时互相覆盖，最终只记住最后 analyze 的那一个。
+    #   · 并发安全性：已达标。save_last_code_freq 持 _user_store_lock +
+    #     原子落盘，多页同时写不会写坏文件——**不需要再加锁**。
+    #   · 语义：名称是「上次查看」，多页下"最后看的那个"胜出**符合**该语义，
+    #     故不改行为。用户若感知为"服务端记住了我看的股票"，那是对单页时代
+    #     的习惯推断，不是本功能的承诺。
+    #   · 若要改成"每个标签页各记各的"，正确位置是**前端 localStorage**
+    #     （它本来就是标签页级状态），而不是在后端加任何锁或分片——把会话级
+    #     状态放在进程级才是 X6 与 X1/X3 共同的根因（指导书 §0.2 模式 A）。
     if not end_date and result.get("meta", {}).get("market") != "futures":
         await run_in_threadpool(orch.save_last_code_freq, code, freq)
 
@@ -333,15 +344,28 @@ async def api_search(q: str = Query(...)):
 # ── 路由 — 扫描 ───────────────────────────────────────────────────────
 
 @router.get("/api/stocks/scan/read/candidates")
-async def api_stocks_scan_read_candidates(source: str = Query("zxg")):
-    """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）"""
-    result = await run_in_threadpool(orch.scanner.stock_list, source)
+async def api_stocks_scan_read_candidates(source: str = Query("zxg"),
+                                          page_index_code: str = Query(""),
+                                          scan_token: str = Query("")):
+    """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）
+
+    page_index_code：**本次请求**要用的板块指数代码（成分股来源）。
+    审计 X3：必须随请求传入，不能让后端去读进程级全局——多网页下
+    A 页选沪深300、B 页选中证500 时，读全局会让两页都按最后设置的
+    那个扫，静默扫错一整批成分股。
+    """
+    result = await run_in_threadpool(orch.scanner.stock_list, source,
+                                     page_index_code or None, scan_token or None)
     return _json_response(result)
 
 
 @router.put("/api/stocks/scan/set/index")
 async def api_stocks_scan_set_index(code: str = Query("")):
-    """设置当前板块指数代码"""
+    """【已废弃】设置板块指数代码（全局兜底，仅供旧客户端兼容）
+
+    新路径：把代码作为 page_index_code 参数传给
+    GET /api/stocks/scan/read/candidates，随请求走、不落全局（审计 X3）。
+    """
     result = await run_in_threadpool(orch.scanner.set_page_index_code, code)
     if "error" in result:
         return _json_response(result, 400)
@@ -349,16 +373,20 @@ async def api_stocks_scan_set_index(code: str = Query("")):
 
 
 @router.post("/api/stocks/scan/start")
-async def api_stocks_scan_start():
-    """新一轮扫描开始"""
-    result = await run_in_threadpool(orch.scanner.start)
+async def api_stocks_scan_start(page_index_code: str = Query("")):
+    """新一轮扫描开始 → {ok, scan_token}
+
+    scan_token 是本次扫描的私有上下文标识，后续 end / submit 需带上它，
+    两个页面同时扫描才不会互相覆盖（审计 X3）。
+    """
+    result = await run_in_threadpool(orch.scanner.start, page_index_code or None)
     return _json_response(result)
 
 
 @router.post("/api/stocks/scan/end")
-async def api_stocks_scan_end():
-    """扫描结束"""
-    result = await run_in_threadpool(orch.scanner.end)
+async def api_stocks_scan_end(scan_token: str = Query("")):
+    """扫描结束（按 scan_token 结算那一次扫描）"""
+    result = await run_in_threadpool(orch.scanner.end, scan_token or None)
     return _json_response(result)
 
 
@@ -382,16 +410,19 @@ async def api_stocks_scan_submit(stocks: list = Body(...),
                                freq: str = Body("d"),
                                mode: str = Body(""),
                                recent: str = Body("1"),
-                               source: str = Body("zxg")):
+                               source: str = Body("zxg"),
+                               scan_token: str = Body("")):
     """提交批量扫描 → {task_id, total}（ProcessPool 异步执行）
 
-    body: {stocks: [{code, prefix, _source}], freq, mode, recent, source}
+    body: {stocks: [{code, prefix, _source}], freq, mode, recent, source, scan_token}
     返回 task_id；进度经 /api/stocks/scan/{task_id}/read/status 轮询。
+    scan_token 用于把收割线程的跳过记录写回发起它的那次扫描（审计 X3）。
     """
     if not stocks:
         return _json_response({"error": "股票列表为空"}, 400)
     result = await run_in_threadpool(
-        orch.scanner.submit_batch_scan, stocks, freq, mode, recent, source)
+        orch.scanner.submit_batch_scan, stocks, freq, mode, recent, source,
+        scan_token or None)
     if "error" in result:
         return _json_response(result, 400)
     return _json_response(result)
@@ -506,18 +537,32 @@ async def api_futures_delete_point(symbol: str = Path(...), freq: str = Query("1
 
 @router.post("/api/futures/cleanup")
 async def api_futures_cleanup():
-    """清理所有期货数据（期指切股票：先回收 TqApi 连接，再清空缓存）
+    """清理期货残留数据（期指切股票时由前端 fire-and-forget 调用）
 
-    顺序关键：先 close_all（经 AppSSE re-export，实现在 DataAPI.TqSdkCSSESource）
-    设置 _closed 旗并等待各生成器线程完成 api.close()（天勤要求 close 在
-    wait_update 返回后由生成器线程调用），再清空期货 K 线缓存/选点记录，
-    避免残留连接继续写缓存。
-    run_in_threadpool 包裹：close_all 等待各生成器线程完成
-    api.close()（最迟 0.1s），不能阻塞事件循环。
+    【审计 X1 · P0 修复】**不再**调用 close_all()。
+
+    原实现先 close_all() 关闭**所有**活跃 CTqSdkSession——那是主机级操作，
+    一个页面切走期货会把其余所有期货页面的 SSE 流一并掐断，并清空它们的
+    K线缓存、下窗 chan 与选点。多网页下这是**每次必错**的确定性故障。
+
+    修复后的职责划分（作用域纪律，指导书维度 0.2 模式 B）：
+      · **本页面的会话**（TqApi 连接、本连接 K线记录、本连接下窗 chan）
+        → 由本页面 SSE 生成器的 finally 自行回收（单窗 :660 / 双窗 :1181-1185）。
+        前端在调用本端点前已 disconnectRealtime()，生成器随即走 finally。
+      · **本端点**只做孤儿清扫：若此刻已无任何活跃期货会话，清掉残留缓存；
+        若仍有会话（别的页面在看，或本页 SSE 尚未走完 finally），**跳过**
+        以免误伤——那些会话会自行清理。
+
+    close_all() 现仅供 lifespan 服务器退出钩子使用。
+    run_in_threadpool 包裹：清扫涉及文件/锁等待，不能阻塞事件循环。
     """
-    await run_in_threadpool(close_all)
-    await run_in_threadpool(orch.futures_cleanup)
-    return _json_response({"ok": True})
+    result = await run_in_threadpool(orch.futures_cleanup)
+    return _json_response({
+        "ok": True,
+        # swept=False 表示"有页面仍在看期货，已跳过清扫"——属正常，非错误
+        "swept": result.get("swept", False),
+        "active_sessions": result.get("active_sessions", 0),
+    })
 
 
 @router.get("/api/futures/read/status")

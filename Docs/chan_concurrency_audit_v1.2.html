@@ -86,11 +86,14 @@ details[open] summary::before{transform:rotate(90deg)}
 <body>
 <div class="wrap">
 
-<h1>chan.py · 多网页并发安全性审计报告</h1>
+<h1>chan.py · 多网页并发安全性审计报告 <span class="tag t-in">v1.2</span></h1>
 <div class="sub">
 审计对象：<code>jbxenzxy/chan.py</code> 分支 <code>custom-dev</code> HEAD <code>9cbd85d</code>（2026-08-30 22:13:44 +0800）·
 已确认与本地 <code>C:\my_chan_project</code> 内容逐字节一致（仅换行符差异）<br>
-判据标准：<code>Docs/互斥锁设计指导书_初稿.md</code>（维度 0–9）· 运行时：Python + starlette 1.6.0 / anyio 4.14.2 / FastAPI
+判据标准：<code>Docs/互斥锁设计指导书_v1.2.md</code>（维度 0–9）· 运行时：Python + starlette 1.6.0 / anyio 4.14.2 / FastAPI<br>
+<b>版本约定</b>：v1.2 起版本号写入文件名，每次更新 +0.1，只保留最新版（此前 <code>v1 / v2</code> 为旧编号）。<br>
+<span style="color:var(--p1)">v1.1 修订</span>：新增 §3.4「层级 ↔ 锁：能不能一一对应」——回答"7 个层级各对应什么锁"，并附 4 项实测证据。<br>
+<span style="color:var(--p1)">v2（旧编号）修订</span>：移除"线程池容量"一项（不属互斥锁范畴）；原 X4 拆开，只保留与锁直接相关的"持锁做 GC"部分。
 </div>
 
 <!-- ============ 摘要 ============ -->
@@ -101,25 +104,24 @@ details[open] summary::before{transform:rotate(90deg)}
     <div class="l">指导书点名问题已修复</div><div class="d">修复质量高：对象图锁按 key 分配、双层快照、OS 文件锁，不是"加把锁了事"</div></div>
   <div class="kpi"><div class="v" style="color:var(--p1)">6</div>
     <div class="l">指导书点名未修复</div><div class="d">含 1 项高危真实缺口（无锁全表迭代 + 被 except 吞掉）</div></div>
-  <div class="kpi"><div class="v" style="color:var(--p0)">6</div>
-    <div class="l">本次新发现</div><div class="d">含 2 项 P0 阻断项，均直接命中"多网页"场景</div></div>
+  <div class="kpi"><div class="v" style="color:var(--p0)">5</div>
+    <div class="l">本次新发现</div><div class="d">含 1 项 P0 阻断项，直接命中"多网页"场景</div></div>
   <div class="kpi"><div class="v">43</div>
     <div class="l">前端可触发操作</div><div class="d">对应 23 个在用后端端点（26 个中 2 个前端无调用）</div></div>
 </div>
 
 <div class="box b-p0">
 <b>一句话结论：</b>指导书写下的问题大部分已<b>实质性修好</b>，按"内存数据竞争"这个狭义口径，代码质量相当不错。
-但从"多网页同时用"这个业务口径看，<b>还不能支持</b>——卡点不在锁，而在<b>三处把"全局"当"单用户"设计的架构决策</b>：
-<br>① <code>/api/futures/cleanup</code> 是全局核弹，任一页面切走期货会掐断<b>所有其他期货页面</b>的连接并清空其缓存；
-<br>② REST 与 SSE 共用 40 线程的 anyio 线程池，每条期货 SSE 长期占 1 线程，多页互相挤兑；
-<br>③ 扫描域的 <code>_scan_start_time</code> / <code>_page_index_code</code> / <code>scanner</code> 三个全局态无锁且逃出登记表，两页同扫会串参数。
-<br><span class="mut">这三条都不是"加锁"能解决的——它们的共同点是<b>把会话级状态放在了进程级</b>。这正是指导书维度 0「先消灭共享，再谈锁」的典型场景，也是我建议优先处理的部分（详见 §5）。</span>
+但从"多网页同时用"这个业务口径看，<b>还不能支持</b>——卡点不在锁，而在<b>两处把"会话级"当"进程级"设计的架构决策</b>：
+<br>① <code>/api/futures/cleanup</code> 是全局核弹，任一页面切走期货会掐断<b>所有其他期货页面</b>的连接并清空其缓存（<b>每次必错</b>）；
+<br>② 扫描域的 <code>_scan_start_time</code> / <code>_page_index_code</code> / <code>scanner</code> 三个全局态无锁且逃出登记表，两页同扫会串参数、<b>静默扫错股票</b>。
+<br><span class="mut">这两条都不是"加锁"能解决的——它们的共同点是<b>把会话级状态放在了进程级</b>。这正是指导书维度 0.2「作用域归属」的典型场景（v1.0 新增该维度，含"会话"的实操定义与两种错配模式），也是我建议优先处理的部分（详见 §4）。</span>
 </div>
 
 <!-- ============ 1 功能清单 ============ -->
 <h2><span class="n">1</span>软件功能清单（分析前提）</h2>
 
-<p>你说得对——不先梳理功能，并发分析就是空中楼阁。以下是从 <code>FrontAPI.py</code>（26 个端点）+ <code>Frontend/index.html</code> + <code>app.js</code>（7282 行）双向取证的结果。</p>
+<p>不先梳理功能，并发分析就是空中楼阁。以下是从 <code>FrontAPI.py</code>（26 个端点）+ <code>Frontend/index.html</code> + <code>app.js</code>（7282 行）双向取证的结果。</p>
 
 <h3>1.1 总量与分布</h3>
 <div class="grid g4">
@@ -129,15 +131,16 @@ details[open] summary::before{transform:rotate(90deg)}
   <div class="kpi"><div class="v">1<span style="font-size:15px;color:var(--tx3)"> / 页</span></div><div class="l">SSE 连接数上限</div><div class="d">全局单句柄，期货双窗也是 1 条流</div></div>
 </div>
 
-<h3>1.2 关键澄清：双窗口 ≠ 双倍请求</h3>
+<h3>1.2 关键澄清：双窗口的代价要分四个口径看</h3>
 <div class="box b-ok">
-实测结论（<code>app.js:2987 / 5982-5991</code>）：<b>双窗口不会一次发两个 analyze，也不会同时开两条 SSE。</b>
+实测结论：<b>HTTP 请求数是 1，但服务端算力与对象图暴露面是 2。</b>
 <ul style="margin-top:7px">
-<li><b>股票双窗</b>：仍是 <b>1 个</b> <code>GET /analyze?dual=1&sub_freq=</code>，后端同时算两级，响应体里 <code>data.sub</code> 带下窗 —— 代价是返回体约翻倍 + 后端算力翻倍，不是请求数翻倍。</li>
-<li><b>期货双窗</b>：仍是 <b>1 条</b> SSE <code>stream?...&dual=1&sub_freq=</code>，init 事件里同时推 <code>data.main</code> + <code>data.sub</code>（<code>app.js:5997/6020</code>）。</li>
-<li>单页 SSE 句柄全局唯一 <code>realtimeEventSource</code>（<code>app.js:165</code>），三个构造函数首行均 <code>disconnectRealtime()</code>（<code>:5858 / :5968 / :6080</code>）。</li>
+<li><b>请求数 = 1</b>：股票双窗是一个 <code>GET /analyze?dual=1&sub_freq=</code>（<code>app.js:2987</code>）；期货双窗是一条 SSE <code>dual=1</code>，init 事件里同时推 <code>data.main</code> + <code>data.sub</code>（<code>app.js:5997/6020</code>）。单页 SSE 句柄全局唯一（<code>app.js:165</code>），三个构造函数首行均 <code>disconnectRealtime()</code>。</li>
+<li><b>算力 = 2</b>：<code>AppEngine.py:684-707</code> 在一次调用里建<b>两个独立的 CChan</b>——先建下窗 <code>sub_chan</code>、再建上窗 <code>chan</code>，<b>各自跑一遍完整 <code>step_load()</code></b>。</li>
+<li><b>缓存键 = 2</b>：分别落 <code>dual_sub</code>（<code>:355</code>）与 <code>dual_main</code>（<code>:354</code>）两个键。</li>
+<li><b>对象图暴露面 = 2</b>：两个活 CChan 同时进入共享缓存，命中维度 5.2 的暴露面翻倍。</li>
 </ul>
-<span class="mut">这条澄清很重要：它把"多网页"的并发压力模型从"每页 N 条连接"简化成"<b>每页 1 条长连接 + 一堆短请求</b>"，压力集中在线程池而非连接数。</span>
+<span class="mut"><b>修订说明</b>：本报告 v1 曾写作"双窗口不是双倍请求"，该表述只在请求数口径成立，作为整体结论是<b>不准确的</b>——经你质疑后已按上面四个口径重写。这一修正也让 5.2 的对象图暴露面结论更严重（双窗一次暴露两个活对象）。</span>
 </div>
 
 <h3>1.3 股票功能清单（场景 ⑴）</h3>
@@ -188,7 +191,7 @@ details[open] summary::before{transform:rotate(90deg)}
 </tbody></table></div>
 <div class="box b-p1">
 <b>期货域功能面明显小于股票域</b>（9 项 vs 23 项）：<b>没有</b>扫描、<b>没有</b>标注、<b>没有</b>刷新名称、<b>没有</b>市场量能、<b>没有</b>自选股保存、<b>没有</b>搜索联想。
-但它的并发风险更高——因为它的核心是<b>长连接</b>：每条 SSE 在 <code>wait_update</code> 中长期占住一个线程，且清理动作是全局的。
+但它的并发风险更高——核心是<b>长连接</b>，且清理动作是全局的（见 X1）。
 </div>
 
 <h3>1.5 定时器与自动请求（并发压力的真实来源）</h3>
@@ -225,29 +228,20 @@ details[open] summary::before{transform:rotate(90deg)}
 <br><br>
 <b>一个易踩的验证陷阱</b>：我第一次用 <code>threading.current_thread().name</code> 统计，结果是"0 次切换"的假阴性——
 AnyIO 工作线程的 <code>name</code> 全部是 <code>"AnyIO worker thread"</code>，必须用 <code>threading.get_ident()</code> 才能区分。
-指导书维度 9 说"别用信仰代替证据"，这条正好补一个"证据本身也可能造假"的例子。
+指导书维度 8.4 补的就是这条：<b>验证脚本要先自证能检出已知问题</b>。
 </div>
 
 <h3>2.2 执行体映射表</h3>
 <div class="tw"><table>
-<thead><tr><th style="width:180px">执行体</th><th style="width:190px">承载的操作</th><th style="width:74px">线程数</th><th>连续性</th></tr></thead>
+<thead><tr><th style="width:180px">执行体</th><th style="width:220px">承载的操作</th><th>连续性</th></tr></thead>
 <tbody>
-<tr><td><b>事件循环线程</b></td><td><code>/api/health</code>、静态资源、中间件</td><td>1</td><td>—</td></tr>
-<tr><td><b>anyio 线程池</b><br><span class="mut">starlette 默认 CapacityLimiter</span></td><td><b>全部 REST</b>（<code>run_in_threadpool</code>）</td><td rowspan="2"><b>40</b><br><span class="mut">共享</span></td><td>每请求可能不同线程</td></tr>
+<tr><td><b>事件循环线程</b></td><td><code>/api/health</code>、静态资源、中间件</td><td>—</td></tr>
+<tr><td><b>anyio 线程池</b><br><span class="mut">starlette 默认 CapacityLimiter</span></td><td><b>全部 REST</b>（<code>run_in_threadpool</code>）</td><td>每请求可能不同线程</td></tr>
 <tr><td><b>anyio 线程池</b><br><span class="mut">同一个 limiter</span></td><td><b>SSE 每帧</b>（<code>iterate_in_threadpool</code>）</td><td class="hl">每帧换线程（实测 11/11）</td></tr>
-<tr><td><b>进程池 worker</b><br><span class="mut">multiprocessing spawn</span></td><td>批量扫描（<code>/scan/submit</code>）</td><td>独立</td><td>内存隔离，天然免锁</td></tr>
-<tr><td><b>刷新守护线程</b></td><td>股票名称/PE/指数归属刷新（<code>AppRefresh.py:609</code>）</td><td>1（有互斥守卫）</td><td>单线程常驻</td></tr>
-<tr><td><b>扫描收割线程</b></td><td>进程池结果收割（<code>AppScanPool.py:222</code>）</td><td>1 / 任务</td><td>任务生命周期</td></tr>
+<tr><td><b>进程池 worker</b><br><span class="mut">multiprocessing spawn</span></td><td>批量扫描（<code>/scan/submit</code>）</td><td>内存隔离，天然免锁</td></tr>
+<tr><td><b>刷新守护线程</b></td><td>股票名称/PE/指数归属刷新（<code>AppRefresh.py:609</code>）</td><td>单线程常驻（有互斥守卫）</td></tr>
+<tr><td><b>扫描收割线程</b></td><td>进程池结果收割（<code>AppScanPool.py:222</code>）</td><td>任务生命周期</td></tr>
 </tbody></table></div>
-
-<div class="box b-p0">
-<b>【X2 · P0】REST 与 SSE 共用同一个 40 线程的 anyio 线程池。</b>
-实测确认两者都走 <code>anyio.to_thread.run_sync</code>（<code>fastapi.concurrency.run_in_threadpool</code> 与 <code>starlette.concurrency.iterate_in_threadpool</code>），
-共用全局默认 <code>CapacityLimiter(total_tokens=40)</code>。
-每条期货 SSE 在 <code>wait_update</code> 中<b>长期占住一个线程</b>（阻塞直到新行情），N 个期货页面 = N 个线程常驻占用。
-剩余线程要承载<b>所有</b> REST 请求（analyze 是缠论全量重算，耗时重）。
-<br><span class="mut">这不是"数据竞争"，是<b>容量挤兑/活锁</b>——多开几个期货页面，REST 就会排队变慢直至超时。指导书的 9 个维度里没有直接覆盖这一项（它属于维度 1 的延伸）。</span>
-</div>
 
 <!-- ============ 3 锁审计 ============ -->
 <h2><span class="n">3</span>锁设计完备性审计（维度 2–7）</h2>
@@ -267,11 +261,12 @@ AnyIO 工作线程的 <code>name</code> 全部是 <code>"AnyIO worker thread"</c
 <tr><td>8</td><td><code>_active_scans</code> 不在同一 try/finally</td><td>7.3</td><td><span class="tag t-ok">已修</span></td><td><code>AppScanPool.py:113</code> 锁内递增与池装配原子；<code>:230</code> finally 归还；<code>:302/310</code> 异常路径显式归还。三条出口闭合</td></tr>
 <tr><td>9</td><td><code>_scan_skip_log</code> 逃出登记表</td><td>3.2</td><td><span class="tag t-ok">已修</span></td><td>已登记（<code>AppOrch.py:127-132</code>）+ 加锁（<code>AppScan.py:62</code>）+ 收口为 4 个访问器（<code>:65-86</code>），AST 实证无残留直连</td></tr>
 <tr><td>10</td><td>股票下窗活对象锁外遍历</td><td>5.2</td><td><span class="tag t-p1">未修</span></td><td><code>BSPointList.py:730</code> 锁内取指针 → <code>:776</code> <b>锁外</b>才 <code>list(...)</code>。期货侧（<code>:771</code>）在锁内，股票侧漏了</td></tr>
-<tr><td>11</td><td>9 个裸 <code>@property</code></td><td>3.1</td><td><span class="tag t-p1">未修</span></td><td>8 个可变容器裸出口仍在（行号已从 1376 迁至 <code>AppData.py:1453-1499</code>）。契约靠注释 + ALLOWLIST，<b>无机器校验下游是否真用快照</b></td></tr>
+<tr><td>11</td><td>8 个裸 <code>@property</code></td><td>3.1</td><td><span class="tag t-p1">未修</span></td><td>8 个可变容器裸出口仍在（行号已从 1376 迁至 <code>AppData.py:1466-1498</code>）。契约靠注释 + ALLOWLIST，<b>无机器校验下游是否真用快照</b></td></tr>
 <tr><td>12</td><td>模块级别名 8 处</td><td>3.1</td><td><span class="tag t-p2">部分修</span></td><td><code>AppEngine.py:200/220/224/304</code> 已成死代码（AST 实证 0 处引用）；<b><code>AppRefresh.py:38/42</code> 仍活且裸写裸遍历</b></td></tr>
+<tr><td>13</td><td><b>持锁时做全量 GC</b></td><td>5.4</td><td><span class="tag t-p1">未修</span></td><td><code>AppData.py:1583</code> 在持 <code>_stocks_cache_lock</code> 时执行 <code>gc.collect()</code>——stop-the-world GC 发生在临界区内，放大所有等待线程的阻塞</td></tr>
 </tbody></table></div>
 
-<h3>3.2 【U1 · 高】唯一有真实并发写者的未修复缺口</h3>
+<h3>3.2 唯一有真实并发写者的未修复缺口</h3>
 <pre># App/AppRefresh.py:286-307  ← 刷新守护线程，全程无锁
 try:
     os.makedirs(...)
@@ -287,7 +282,7 @@ except Exception as e:
     _set_refresh_status(error=f"保存 PE-TTM 失败: {e}")</pre>
 <div class="box b-p1">
 <b>竞态链路：</b>刷新线程跑到 <code>:289</code> 全表迭代 ⟷ REST 线程首次调用触发 <code>AppData.py:1933-1934</code>（<code>_pe.update()</code>）或 <code>:1957-1958</code>（<code>replace_index_belong</code> 的 <code>clear()+update()</code>），后者持 <code>_meta_cache_lock</code>，前者不持。
-<br><b>后果：</b>抛 <code>RuntimeError: dictionary changed size during iteration</code>，但被 <code>:306</code> 吞掉，只打一行日志 —— <b>静默丢失整轮 PE/指数归属落盘</b>。若条数恰好相同，则按指导书 9.4 的机理<b>静默串表</b>。
+<br><b>后果：</b>抛 <code>RuntimeError: dictionary changed size during iteration</code>，但被 <code>:306</code> 吞掉，只打一行日志 —— <b>静默丢失整轮 PE/指数归属落盘</b>。若条数恰好相同，则<b>静默串表</b>。
 <br><b>同函数还有一处无锁 RMW：</b><code>AppRefresh.py:267-268</code>（检查 → 写）。
 <br><b>为什么它一直没被发现：</b>静态扫描 <code>test_lock_completeness.py:159</code> 只扫 <code>AppData.py</code> 一个类，<code>AppRefresh.py</code> 完全在视野外；且它只认 <code>self._pe</code> 形态，识别不出模块级别名 <code>_pe_ttm_cache</code>。
 </div>
@@ -312,9 +307,116 @@ except Exception as e:
 </div>
 </div>
 
+<!-- ============ 3.4 层级 vs 锁 ============ -->
+<h3>3.4 层级 ↔ 锁：7 个层级能一一对应到锁吗？<span class="tag t-in">v1.1 新增</span></h3>
+
+<div class="box b-in">
+<b>结论：不能。强行做 1:1 映射是范畴错误——层级和锁是两个正交维度。</b><br>
+指导书 §0.2.1 列的 7 个层级（请求 → 连接 → 任务 → 标签页 → 用户 → 进程 → 主机）描述的是
+<span class="hl">"这份状态属于谁"（归属）</span>；而锁的类型描述的是
+<span class="hl">"谁会同时访问它"（并发关系）</span>。两者由完全不同的因素决定，没有理由同步变化。
+</div>
+
+<p>代码里其实已经写下了正确的说法（<code>AppOrch.py @ L74</code>，<code>SHARED_RESOURCE_REGISTRY</code> 上方注释）：</p>
+<pre>锁的作用域必须与资源的作用域同级：
+   进程内堆对象 → threading.Lock / RLock
+   跨进程       → OS 层（SQLite WAL / fcntl / multiprocessing.Lock）
+                  ⚠ threading.Lock 跨进程**无效但看起来有效**，是最大陷阱
+   事件循环内   → asyncio.Lock，且临界区不得跨 await</pre>
+<p class="mut">注意它说的是「锁的<b>作用域</b>与资源的<b>作用域</b>同级」，不是「层级 → 锁类型」。而且它只分 3 类，对应不了 7 个层级——这本身就是"不能 1:1"的旁证。</p>
+
+<h4>① 层级真正决定的是：要不要锁 + 分片键</h4>
+<div class="tw"><table>
+<thead><tr><th>层级</th><th>同时几个所有者</th><th>要不要锁</th><th>分片键（按什么 key 分）</th></tr></thead>
+<tbody>
+<tr><td>请求级</td><td>1（该请求独占）</td><td><span class="tag t-ok">通常不要</span> 优先消灭共享</td><td>无 —— 压根别共享</td></tr>
+<tr><td>连接级</td><td>1，但可能被<b>多线程</b>访问</td><td><span class="tag t-p1">看访问者</span> SSE 逐帧换线程 → 要</td><td><code>conn_id</code></td></tr>
+<tr><td>任务级</td><td>N 个任务并存</td><td><span class="tag t-p1">要</span></td><td><code>task_id</code></td></tr>
+<tr><td>标签页级</td><td>N 个标签页</td><td><span class="tag t-n">不要</span> 前端 JS 单线程，互斥用不上</td><td><code>tab_id</code>（前端只用于<b>取消</b>，非互斥）</td></tr>
+<tr><td>用户级</td><td>N 个用户</td><td><span class="tag t-p1">要</span></td><td><code>user_id</code></td></tr>
+<tr><td>进程级</td><td>进程内全体</td><td><span class="tag t-p1">要</span></td><td>无（全局一把）</td></tr>
+<tr><td>主机级</td><td>机器上所有进程</td><td><span class="tag t-p1">要</span></td><td>文件路径 / DB 行</td></tr>
+</tbody></table></div>
+<p class="mut"><b>分片键是层级最有用的产物。</b>同样叫"加锁"：进程级是一把全局锁把所有操作串成一行；任务级按 <code>task_id</code> 分片后，两个不同任务<b>互不阻塞</b>。选错层级，性能可能差一个数量级。</p>
+
+<h4>② 锁的原语类型由"访问者之间的关系"决定</h4>
+<div class="tw"><table>
+<thead><tr><th>并发访问者之间的关系</th><th>该用什么锁</th><th>典型误用</th></tr></thead>
+<tbody>
+<tr><td>同进程，不同线程</td><td><code>threading.Lock</code> / <code>RLock</code></td><td>—</td></tr>
+<tr><td>同进程，不同协程</td><td><b>通常不需要</b>（单线程调度）；跨 <code>await</code> 的 RMW 才用 <code>asyncio.Lock</code>，且临界区不得跨 <code>await</code></td><td>用 <code>threading.Lock</code> 护协程 = 无谓串行</td></tr>
+<tr><td>同主机，不同进程</td><td>OS 文件锁（<code>fcntl.flock</code> / <code>msvcrt.locking</code>）、<code>multiprocessing.Lock</code>、SQLite WAL</td><td><span class="tag t-p0">❌ threading.Lock</span> 无效但看起来有效</td></tr>
+<tr><td>不同主机</td><td>分布式锁（DB 行锁 / Redis / etcd）</td><td>文件锁（只在单机有效）</td></tr>
+</tbody></table></div>
+<p class="mut">两张表<b>正交</b>：一张决定 key，一张决定原语。任何一份共享状态都要<b>各查一次</b>。</p>
+
+<h4>③ 一份资源可以同时落在多个层级 → 多层锁必须叠加</h4>
+<p>这是最反直觉、也最容易出错的一点：<b>层级不是互斥的分类，而是可以叠加的。</b>实测（Windows / <code>msvcrt.locking</code>，脚本 <code>verify_lock_layers.py</code>，<b>4/4 确定性命中</b>）：</p>
+<div class="tw"><table>
+<thead><tr><th>用例</th><th>结果</th></tr></thead>
+<tbody>
+<tr><td>Q1 持锁时，<b>同进程另一线程</b>用新句柄抢 OS 文件锁</td><td>没抢到 <span class="tag t-ok">✅ 能挡住</span></td></tr>
+<tr><td>Q1b 持锁时，<b>另一个进程</b>抢 OS 文件锁</td><td>没抢到 <span class="tag t-ok">✅ 能挡住</span></td></tr>
+<tr><td>Q2a 只有进程级锁，两进程各做 60 次自增（应得 120）</td><td>终值 <b>105</b> <span class="tag t-p0">❌ 丢失 15 次更新</span></td></tr>
+<tr><td>Q2b 进程级锁 + 主机级文件锁 <b>叠加</b></td><td>终值 <b>120</b> <span class="tag t-ok">✅ 无丢失</span></td></tr>
+</tbody></table></div>
+<ul>
+<li><b>主机级锁不能省</b>：Q2a 证明进程级锁跨进程<b>完全无效</b>——<code>threading.Lock</code> 是进程内对象，另一进程持有的是另一个副本。</li>
+<li><b>进程级锁也不能省</b>：Q1 显示文件锁在 Windows 上能挡住同进程异线程，但这是<b>平台行为</b>。POSIX <code>flock</code> 的锁关联 open file description，语义与 <code>msvcrt.locking</code> 不同。依赖它等于把正确性押在 OS 实现细节上。</li>
+</ul>
+
+<div class="box b-ok">
+<b>本项目正例</b>（<code>AppData.py :: save_zxg_blk @ L2495</code>）——两层锁嵌套叠加，不是二选一：
+<pre style="margin:9px 0 0;border-left-color:var(--ok)">with self._user_store_lock:               <span style="color:#8b93a5"># ① 进程级：挡住本进程内并发的路由线程</span>
+    with file_lock(blk_path + ".lock"):   <span style="color:#8b93a5"># ② 主机级：挡住独立同步脚本进程</span>
+        preserved = _read_preserved_zxg_lines(blk_path)
+        ...                               <span style="color:#8b93a5">#    读-改-写</span>
+        _atomic_write_text(blk_path, "\n".join(final) + "\n", encoding="gbk")</pre>
+<span class="mut"><code>zxg.blk</code> 确实<b>同时</b>落在两个层级：API 进程内的多条路由线程（进程级）+ 独立脚本 <code>Script/ths_sync_to_tdx.py</code>（主机级），所以它必须有两层锁。
+<b>锁顺序固定：先进程内、后跨进程（先小作用域后大作用域）</b>——反过来会在"持大锁等小锁"的路径上放大阻塞范围。</span>
+</div>
+
+<div class="box b-p1">
+<b>反例</b>：<code>_page_index_code</code>（<code>AppScan.py :: _page_index_code @ L100</code>）是<b>任务级</b>状态，却放在进程级、无锁、无分片键。
+即使补一把 <code>threading.Lock</code>，也只是让两个页面的扫描<b>串行地互相覆盖</b>——<b>锁的类型选对了，层级错了，结果仍然错。</b>
+这正是 §0.2 那句口诀的另一种表述：加锁只是把引信接长，不是拆弹。
+</div>
+
+<!-- ============ 3.5 会话隔离 ============ -->
+<h3>3.5 会话隔离作为一种策略：何时该用、何时不能用？<span class="tag t-in">v1.2 新增</span></h3>
+
+<div class="box b-in">
+<b>结论：会话隔离让锁"更局部、更易推理"，但不是"锁消失"。</b><br>
+它把锁从"进程级全局一把"重定域成"会话级每会话一把"，<b>消灭的是跨标签页的数据破坏类 bug</b>（X1 cleanup 核弹、X3 扫描串参数），
+但单会话内部并发、进程级单例资源（行情连接 / 扫描引擎 / <code>zxg.blk</code>）的协调仍在。
+</div>
+
+<p>会话的载体是<b>标签页，不是请求</b>：一个标签页在生命周期里发起很多请求，它们共享同一份 <code>CChan</code> / <code>chartData</code>，必须属于同一个会话。期货侧 <code>CTqSdkSession</code> 已是"每连接一个会话"，股票侧与扫描侧此前还没这么建模。</p>
+
+<h4>四层隔离模型：何时会话化、何时不能</h4>
+<div class="tw"><table>
+<thead><tr><th>层</th><th>归属</th><th>例子（chan.py）</th><th>协调机制</th></tr></thead>
+<tbody>
+<tr><td><b>L1 会话/连接级</b></td><td>每标签页一份</td><td>该页的 <code>CChan</code> + 派生分析</td><td>每会话一把 RLock，<b>跨标签页不互相阻塞</b></td></tr>
+<tr><td><b>L2 进程级只读共享</b></td><td>全进程、不可变</td><td>原始 K 线抓取结果、参考数据</td><td>不可变快照 / 读写锁（copy-on-read）</td></tr>
+<tr><td><b>L3 进程级单例资源</b></td><td>全进程、天然唯一</td><td>行情连接、扫描引擎、<code>zxg.blk</code></td><td>进程级锁 / 单所有者 + 发布订阅扇出</td></tr>
+<tr><td><b>L4 主机级</b></td><td>跨进程</td><td><code>zxg.blk</code> 文件</td><td>OS 文件锁（见 2.3 / 6.3 / 0.3.2）</td></tr>
+</tbody></table></div>
+<p class="mut"><b>L1 就是会话化</b>，价值是把全局锁的"爆炸半径"从全进程缩到单会话。<b>L2 是必须补的底层</b>：若每标签页各存一份 <code>CChan</code>，两页看同一只股票 = 两份相同昂贵解析，多标签页还会把行情源限频打爆——所以 L1 的"会话视图"应架在 L2 进程级只读数据层之上，共享抓取/解析结果，会话只持有自己的可变派生。<b>L3 不能会话化</b>；L4 是 L3 的跨进程兜底。</p>
+
+<div class="box b-p1">
+<b>别只看到好处——会话化新增三件负担：</b>
+<ol>
+<li><b>内存 / 重算成本</b>：每会话一份可变状态，标签页多时内存线性增长；同代码多标签页重复解析。</li>
+<li><b>会话生命周期管理（头等公民）</b>：必须有"会话注册表 + 心跳/超时回收"。这恰恰是 X1 当年出事的根因——没有会话概念，清理只能核弹全清。</li>
+<li><b>进程级单例仍要协调</b>：L3 资源无论怎么会话化，最终都汇聚到一个进程级连接/引擎，那里仍需锁或单所有者扇出。</li>
+</ol>
+<b>判据：</b>先问 0.2.1 的"属于谁"。属于某标签页 → L1；全进程且只读 → L2；全进程且唯一 → L3；跨进程 → L4。不要因为"会话化很香"就把 L3 强行拉到 L1。
+</div>
+
 <!-- ============ 4 新发现 ============ -->
-<h2><span class="n">4</span>新发现：命中"多网页"场景的 6 个问题</h2>
-<p class="mut">前 3 项是本次审计的最高价值产出——它们都不在指导书里，也都不是"加锁"能解决的。</p>
+<h2><span class="n">4</span>新发现：命中"多网页"场景的 5 个问题</h2>
+<p class="mut">它们都不在指导书 v0 里，也都不是"加锁"能解决的。前两项属维度 0.2（作用域归属），是本次审计的最高价值产出。</p>
 
 <div class="box b-p0">
 <b>【X1 · P0】<code>POST /api/futures/cleanup</code> 是全局核弹 —— 一个页面切走期货，掐断所有其他期货页面</b>
@@ -337,20 +439,8 @@ app_data.clear_saved_points_by_prefix("KQ.")    # ← 删掉【所有】期货�
 app_data.futures_cache_clear()                  # ← 清空整个期货分析缓存</pre>
 <b>触发路径（场景 ⑵ 的必然操作）：</b>页面 B 在地址栏把期货代码换成股票代码 → <code>app.js:4134</code> fire-and-forget 发 <code>/api/futures/cleanup</code>（<code>.catch(()=>{})</code> 静默，无确认、无提示）→ 页面 A、C、D 正在看的期货 SSE <b>全部断连</b>，缓存与选点被清空。
 <br><b>为什么必须修：</b>这不是"可能出错"，是<b>每次必错</b>—— cleanup 的语义从设计上就是全局的。在单用户时代它合理（一人一屏），多网页下它就是事故。
-<br><b>修法（不是加锁，是收窄作用域）：</b>把 cleanup 从"全局"改为<b>按连接/按会话</b>。方案 A（推荐）：SSE 连接关闭时由生成器 <code>finally</code> 自行回收本会话资源，REST cleanup 端点只清理<b>无活跃会话引用</b>的孤儿缓存（引用计数归零的 key）。方案 B：给 cleanup 加"仅当无其他活跃期货连接时执行"的守卫。
-</div>
-
-<div class="box b-p0">
-<b>【X2 · P0】REST 与 SSE 共用 40 线程池 —— 多期货页面会挤兑掉所有 REST</b>
-<pre># 实测确认：两者共用同一 limiter
-fastapi.concurrency.run_in_threadpool   →  await anyio.to_thread.run_sync(func)          # REST
-starlette.concurrency.iterate_in_threadpool → yield await anyio.to_thread.run_sync(_next, it)  # SSE 每帧
-
-# 实测：total_tokens = 40</pre>
-每条期货 SSE 在 <code>wait_update</code> 中阻塞，<b>长期占住 1 个线程</b>。N 个期货页面 = N 个线程常驻。
-剩余 <code>40−N</code> 个线程要承载全部 REST（<code>/analyze</code> 是缠论全量重算，单次数百毫秒级；还有 0.7s 的扫描轮询、0.5s 的刷新轮询）。
-<br><b>多网页下的表现：</b>期货页面开到 10+ 个，REST 开始排队；再往上，连 <code>/api/health</code> 都可能超时。<b>且不会报错，只是越来越慢</b>——最难排查的一类故障。
-<br><b>修法：</b>① 给 SSE 单独设一个 <code>CapacityLimiter</code>（anyio 支持 <code>run_sync(..., limiter=...)</code>），把长连接与短请求物理隔离；② SSE 改 async 生成器，让 <code>wait_update</code> 走 tqsdk 的异步接口，不占线程；③ 至少加"活跃 SSE 数 / 可用线程数"的监控与软上限。
+<br><b>这是维度 0.2 的「模式 B」：</b><code>CTqSdkSession</code> 本身是每连接一份的（<b>对象设计是对的</b>），错的是<b>管理它的清理动作是进程级的</b>。这类问题最易漏——审查时看到"每连接一份，没问题"就翻篇了。
+<br><b>修法（不是加锁，是收窄作用域）：</b>把 cleanup 从"全局"改为<b>按连接/按会话</b>。方案 A（推荐）：SSE 连接关闭时由生成器 <code>finally</code> 自行回收本会话资源，REST cleanup 端点只清理<b>无活跃会话引用</b>的孤儿缓存。方案 B：给 cleanup 加"仅当无其他活跃期货连接时执行"的守卫。
 </div>
 
 <div class="box b-p1">
@@ -362,21 +452,20 @@ starlette.concurrency.iterate_in_threadpool → yield await anyio.to_thread.run_
 <tr><td><code>_page_index_code</code></td><td><code>AppScan.py:100</code><br><span class="mut">写 :752，读 :322/336</span></td><td><b>无</b></td><td><b>最危险</b>：A 页选沪深300成分股、B 页选中证500 → 两页的扫描都按最后设置的来，<b>静默扫错一批股票</b></td></tr>
 <tr><td><code>scanner</code> 单例</td><td><code>AppScan.py:760</code></td><td><b>无</b></td><td>REST 全线程共享同一实例，实例状态与上面两个全局量耦合</td></tr>
 </tbody></table></div>
-<b>修法：</b>把"当前扫描上下文"从模块全局改为<b>按 task_id 的对象</b>（<code>submit_batch_scan</code> 已返回 task_id，直接挂在任务对象上即可），<code>_page_index_code</code> 随提交参数传入而非后置设置。这正合指导书维度 0「先消灭共享」。
+<b>这是维度 0.2 的「模式 A」：</b>本该属于某个扫描任务的数据，被放进了进程级全局容器。
+<br><b>修法：</b>把"当前扫描上下文"从模块全局改为<b>按 task_id 的对象</b>（<code>submit_batch_scan</code> 已返回 task_id，直接挂在任务对象上即可），<code>_page_index_code</code> 随提交参数传入而非后置设置。这正合指导书维度 0「先消灭共享」。
 </div>
 
 <div class="box b-p1">
-<b>【X4 · 中】股票分析缓存 LRU 上限 50，多页互相淘汰；且 <code>gc.collect()</code> 在锁内执行</b>
+<b>【X4′ · 中】持 <code>_stocks_cache_lock</code> 时执行全量 GC（维度 5.4 临界区过重）</b>
 <pre># App/AppData.py:1580-1584
 if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:      # MAX_CACHE_SIZE = 50 (:1355)
     oldest_key = next(iter(self._stocks_analysis_cache))
     self._stocks_analysis_cache.pop(oldest_key)
-    gc.collect()                                                  # ★ 持 _stocks_cache_lock 时做全量 GC
-    log.info(f"[内存] 缓存已满({self.MAX_CACHE_SIZE})，淘汰: {oldest_key}")</pre>
-多页浏览不同股票/周期组合时，50 个槽位被 N 个页面争抢 → <b>缓存颠簸（thrash）</b>，本该命中的请求反复重算。
-更糟的是淘汰路径上的 <code>gc.collect()</code> 是<b> stop-the-world 全量 GC，且发生在持锁的临界区内</b>——
-多页场景下淘汰变频繁，每一次都会让所有其他线程在 <code>_stocks_cache_lock</code> 上多等一个 GC 周期。
-<br><b>修法：</b>把 <code>gc.collect()</code> 移出锁（改为出锁后异步/条件触发）；按"页/会话"给缓存分区，或提高上限并改为按内存占用而非条目数淘汰。
+    gc.collect()                                                  # ★ 持锁时做 stop-the-world 全量 GC</pre>
+锁的代价不止是串行化，还有<b>阻塞放大</b>：临界区内做的每一点工作，都会被所有等待该锁的线程摊上。
+一次全量 GC 发生在临界区内，意味着所有等在 <code>_stocks_cache_lock</code> 上的线程都被多拖一个 GC 周期。
+<br><b>修法：</b>把 <code>gc.collect()</code> 移出临界区（出锁后异步或条件触发）。这是<b>真正的锁问题</b>，与缓存容量无关。
 </div>
 
 <div class="box b-p1">
@@ -410,109 +499,115 @@ if len(self._stocks_analysis_cache) >= self.MAX_CACHE_SIZE:      # MAX_CACHE_SIZ
 <div class="tw"><table>
 <thead><tr><th style="width:190px">功能组</th><th style="width:86px">判定</th><th>分析</th></tr></thead>
 <tbody>
-<tr><td>查询 / 切周期 / 复盘<br><span class="mut">单窗 + 双窗</span></td><td><span class="tag t-ok">安全</span></td><td>分析缓存 <code>_stocks_analysis_cache</code> 受 <code>_stocks_cache_lock</code> 保护；CChan 构建走每请求线程局部注入（<code>FrontAPI.py:21</code> <code>tdx_data_context</code>）。<b>但</b>见 X4：缓存上限 50，多页会颠簸</td></tr>
+<tr><td>查询 / 切周期 / 复盘<br><span class="mut">单窗 + 双窗</span></td><td><span class="tag t-ok">安全</span></td><td>分析缓存受 <code>_stocks_cache_lock</code> 保护；CChan 构建走每请求线程局部注入（<code>FrontAPI.py:21</code> <code>tdx_data_context</code>）。<b>注意</b>双窗一次建两个 CChan，算力与对象图暴露面翻倍（见 §1.2）</td></tr>
 <tr><td>标注增/改/删</td><td><span class="tag t-ok">安全</span></td><td>全程持 <code>_user_store_lock</code> + 原子落盘。<b>残余</b>：<code>AppData.py:2267</code> <code>get_annotations_for</code> 返回<b>活 list</b>，并发 append 时序列化可能撞上（低概率）</td></tr>
 <tr><td>选点 / 取消选点</td><td><span class="tag t-ok">安全</span></td><td>写 CSV 经 <code>_user_store_lock</code>。<b>注意</b>：选点会失效并重建该 code+freq 的缓存条目，另一页若正在看同一标的会触发重算（正确性无碍，性能有感）</td></tr>
-<tr><td>刷新名称/板块/PE</td><td><span class="tag t-ok">安全</span></td><td><code>_refresh_starting</code> CAS 守卫，第二页返回 <code>already_running</code> 并共享进度。<b>本项目的范例做法</b>。但刷新线程内部的 <code>AppRefresh.py:289</code> 有 U1 竞态（静默丢一轮落盘）</td></tr>
+<tr><td>刷新名称/板块/PE</td><td><span class="tag t-ok">安全</span></td><td><code>_refresh_starting</code> CAS 守卫，第二页返回 <code>already_running</code> 并共享进度。<b>本项目的范例做法</b>。但刷新线程内部的 <code>AppRefresh.py:289</code> 有竞态（静默丢一轮落盘）</td></tr>
 <tr><td>保存扫描结果到自选股</td><td><span class="tag t-ok">安全</span></td><td>OS 文件锁（<code>AppData.py:2438</code>）+ 原子写，跨进程也安全</td></tr>
 <tr><td><b>批量扫描（两页同时）</b></td><td><span class="tag t-p0">不支持</span></td><td><b>X3</b>：<code>_page_index_code</code> 全局无锁 → <b>静默扫错成分股</b>；<code>_scan_start_time</code> 串；<code>scanner</code> 单例状态耦合。进程池本身内存隔离没问题，问题在<b>提交前的参数阶段</b></td></tr>
 <tr><td>扫描进度轮询（0.7s）</td><td><span class="tag t-p2">基本可用</span></td><td>进度经 SQLite <code>AppScanStore</code> 跨进程共享，有 <code>_scan_store_lock</code>。多页轮询同一 task 无碍</td></tr>
-<tr><td>红框新中枢（双窗）</td><td><span class="tag t-p1">有风险</span></td><td><b>移动级请求频率</b>（<code>app.js:1514</code>）+ 后端 <code>/red-range</code> 重算。多页同时悬停 → 请求风暴，叠加 X2 的线程池挤兑</td></tr>
+<tr><td>红框新中枢（双窗）</td><td><span class="tag t-p1">有风险</span></td><td><b>移动级请求频率</b>（<code>app.js:1514</code>）+ 后端 <code>/red-range</code> 重算。多页同时悬停 → 请求风暴</td></tr>
 <tr><td>代码搜索联想</td><td><span class="tag t-ok">安全</span></td><td>只读名称表，走快照</td></tr>
 </tbody></table></div>
-<div class="box b-p1"><b>场景 ⑴ 小结：</b><b>基本支持</b>，唯一的硬阻断是<b>两页同时扫描</b>（X3，会静默扫错股票）。其余功能在正确性上站得住，主要代价是缓存颠簸（X4）与线程池挤兑（X2，仅当有期货页面时）。</div>
+<div class="box b-p1"><b>场景 ⑴ 小结：</b><b>基本支持</b>，唯一的硬阻断是<b>两页同时扫描</b>（X3，会静默扫错股票）。其余功能在正确性上站得住。</div>
 
 <h3>场景 ⑵ 前端开多个期货网页（单窗口 / 双窗口）并发操作</h3>
 <div class="tw"><table>
 <thead><tr><th style="width:190px">功能组</th><th style="width:86px">判定</th><th>分析</th></tr></thead>
 <tbody>
-<tr><td><b>多页同时开期货 SSE</b></td><td><span class="tag t-p0">不支持</span></td><td><b>X2</b>：每页 1 条 SSE 长期占线程，共用 40 线程池 → 挤压全部 REST。<b>且不会报错，只是越来越慢</b></td></tr>
 <tr><td><b>任一页切走期货</b></td><td><span class="tag t-p0">会互相破坏</span></td><td><b>X1</b>：<code>/api/futures/cleanup</code> 的 <code>close_all()</code> 关掉<b>所有</b>页面的 TqApi，并清空<b>所有</b>页面的期货缓存与选点。每次必错，非概率事件</td></tr>
 <tr><td>SSE 单/双窗实时数据</td><td><span class="tag t-ok">安全</span></td><td>逐帧重绑定（<code>_per_frame_session</code>）已彻底解决串品种问题——我实测确认这个修复是<b>必需且正确</b>的；期货下窗对象图锁读写两侧均已闭合</td></tr>
 <tr><td>期货选点 / 取消选点</td><td><span class="tag t-p2">基本可用</span></td><td>写 CSV 有锁。<b>但</b>选点后会 SSE 重连，若此时另一页触发 cleanup，选点可能被 <code>clear_saved_points_by_prefix("KQ.")</code> 一并删掉</td></tr>
-<tr><td>切周期 / 开双窗 / 复盘</td><td><span class="tag t-p2">基本可用</span></td><td>均通过 SSE 重连实现，重连期间旧连接释放（<code>disconnectRealtime</code>）。频繁切换会放大 X2 的线程占用</td></tr>
+<tr><td>切周期 / 开双窗 / 复盘</td><td><span class="tag t-p2">基本可用</span></td><td>均通过 SSE 重连实现，重连期间旧连接释放（<code>disconnectRealtime</code>）。频繁切换会放大重连开销</td></tr>
 <tr><td>股票下窗区间套（双窗）</td><td><span class="tag t-p1">有风险</span></td><td><b>U2</b>：<code>BSPointList.py:776</code> 在锁外才做快照。期货侧已修，<b>股票侧漏了同一处</b></td></tr>
 </tbody></table></div>
 <div class="box b-p0"><b>场景 ⑵ 小结：<span class="hl">当前不支持多期货网页并发。</span></b>
-不是概率性的数据竞争，而是两个<b>确定性</b>阻断项：X1（一次切换干掉所有页面）与 X2（线程池挤兑）。
+不是概率性的数据竞争，而是一个<b>确定性</b>阻断项：X1（一次切换干掉所有页面）。
 好消息是期货的<b>数据正确性</b>部分做得比股票更扎实（SSE 逐帧重绑定 + 对象图锁双侧闭合），
-所以修完 X1/X2 之后，期货侧反而会比股票侧更稳。</div>
+所以<b>修完 X1 之后，期货侧反而会比股票侧更稳</b>——它只剩这一个阻断项。
+</div>
 
 <!-- ============ 6 整改清单 ============ -->
 <h2><span class="n">6</span>整改清单（按优先级）</h2>
 <div class="tw"><table>
-<thead><tr><th style="width:44px">P</th><th style="width:150px">问题</th><th style="width:250px">动作</th><th style="width:150px">位置</th><th>性质</th></tr></thead>
+<thead><tr><th style="width:44px">P</th><th style="width:150px">问题</th><th style="width:250px">动作</th><th style="width:150px">位置</th><th>性质</th><th style="width:64px">状态</th></tr></thead>
 <tbody>
-<tr><td><span class="tag t-p0">P0</span></td><td>X1 cleanup 全局核弹</td><td>cleanup 作用域从"全局"收窄为"按会话/孤儿缓存"；SSE 连接关闭由生成器 finally 自行回收</td><td><code>FrontAPI.py:518</code><br><code>AppSSE.py:1808</code></td><td><b>架构</b>（不是加锁）</td></tr>
-<tr><td><span class="tag t-p0">P0</span></td><td>X2 线程池共用</td><td>SSE 用独立 <code>CapacityLimiter</code>；或改 async 生成器不占线程；加活跃 SSE 软上限</td><td><code>FrontAPI.py:569</code></td><td><b>架构</b></td></tr>
-<tr><td><span class="tag t-p1">P1</span></td><td>X3 扫描全局态</td><td>扫描上下文挂到 task_id 对象；板块指数随提交参数传入</td><td><code>AppScan.py:97/100/760</code></td><td><b>架构</b>（消灭共享）</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td><td>U1 PE 表无锁迭代</td><td>改用 <code>app_data.pe_snapshot()</code> / <code>belong_snapshot()</code>；<code>:267-268</code> 写入收回 AppData 锁内方法</td><td><code>AppRefresh.py:289/267</code></td><td>加锁 + 用快照</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td><td>X4 缓存颠簸 + 锁内 GC</td><td><code>gc.collect()</code> 移出临界区；上限改为按内存占用</td><td><code>AppData.py:1583</code></td><td>性能</td></tr>
-<tr><td><span class="tag t-p1">P1</span></td><td>U2 股票下窗锁外快照</td><td>把 <code>list(...)</code> 移进 <code>with</code> 体内（照抄期货侧 <code>:771</code> 的写法即可）</td><td><code>BSPointList.py:776</code></td><td>加锁（一行）</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td>U3 单窗零拷贝返回</td><td>照 <code>:369-370</code> 加浅拷贝，统一双窗/单窗口径</td><td><code>AppEngine.py:392</code></td><td>契约收口</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td>U4 8 个裸 property</td><td>删除或改返回只读代理；把"必须走快照"升级为机器校验</td><td><code>AppData.py:1453-1499</code></td><td>契约收口</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td><b>静态扫描扩面</b></td><td>把 AppEngine/AppRefresh/AppScan/AppChart 纳入扫描；识别模块级别名；识别跨模块 <code>with app_data.*_guarded(...)</code></td><td><code>test_lock_completeness.py:159</code></td><td><b>维度 9.3</b></td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td>X5 <code>_float_mc</code> 双锁分管</td><td>统一为 <code>_meta_cache_lock</code>；补进登记表</td><td><code>AppData.py:1982/2010</code></td><td>加锁</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td>U5 锁表只增不删</td><td><code>pop_futures_sub_chan</code> / <code>futures_cache_clear</code> 连带清理 <code>_futures_chan_locks</code></td><td><code>AppData.py:1679/1664</code></td><td>生命周期</td></tr>
-<tr><td><span class="tag t-p2">P2</span></td><td>补 <code>repro_lock_gaps.py</code></td><td>指导书 9.2 称"5 个缺口 5/5 确定性命中"，但该脚本<b>不在仓库中</b>，确定性复现能力无法回归</td><td><code>Test/</code></td><td><b>维度 9.2</b></td></tr>
-<tr><td><span class="tag t-n">P3</span></td><td>U6 死别名 / X6 last_code / 过期注释</td><td>删死别名；<code>AppScan.py:54</code> 注释仍写"逃出登记表"（与已修复状态矛盾）</td><td><code>AppEngine.py:200+</code></td><td>清理</td></tr>
+<tr><td><span class="tag t-p0">P0</span></td><td>X1 cleanup 全局核弹</td><td>cleanup 作用域从"全局"收窄为"按会话/孤儿缓存"；SSE 连接关闭由生成器 finally 自行回收；<code>close_all()</code> 仅供退出钩子</td><td><code>FrontAPI.py:538</code><br><code>AppSSE.py:1809</code><br><code>AppChart.py:625</code><br><code>TqSdkCSSESource.py:78</code></td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p1">P1</span></td><td>X3 扫描全局态</td><td>扫描上下文挂到 <code>_ScanSession</code> 令牌对象；板块指数随提交参数传入；删全局 <code>_page_index_code / _scan_start_time / _scan_skip_log</code></td><td><code>AppScan.py:136/162/181/196</code></td><td><b>架构</b>（作用域）</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p1">P1</span></td><td>PE 表无锁迭代</td><td>改用 <code>pe_snapshot()</code> / <code>belong_snapshot()</code>；写入收回 AppData 锁内方法</td><td><code>AppData.py:1918/1923</code><br><code>AppRefresh.py:268</code></td><td>加锁 + 用快照</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p1">P1</span></td><td>X4′ 持锁做 GC</td><td><code>gc.collect()</code> 移出 3 处临界区</td><td><code>AppData.py</code>（临界区外）</td><td>锁粒度</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p1">P1</span></td><td>股票下窗锁外快照</td><td><code>list(sub_kl_list.bi_list)</code> 移进 <code>with</code> 锁体内</td><td><code>BSPointList.py:776/780</code></td><td>加锁（一行）</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td>单窗零拷贝返回</td><td>照双窗加浅拷贝，统一双窗/单窗口径</td><td><code>AppEngine.py:392</code></td><td>契约收口</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td>8 个裸 property</td><td>改返回只读代理；"必须走快照"升级为机器校验</td><td><code>AppData.py:1466-1498</code></td><td>契约收口</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td><b>静态扫描扩面</b></td><td>AppEngine/AppRefresh/AppScan/AppChart 纳入扫描；识别模块级别名；识别跨模块 <code>with app_data.*_guarded(...)</code></td><td><code>Test/test_lock_completeness.py</code></td><td><b>维度 8.3</b></td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td>X5 <code>_float_mc</code> 双锁分管</td><td>统一为 <code>_meta_cache_lock</code>；补进登记表</td><td><code>AppData.py:1390/1935/1955/2029</code></td><td>加锁</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td>锁表只增不删</td><td><code>futures_cache_pop</code> / <code>futures_cache_clear</code> 连带清理 <code>_futures_chan_locks</code></td><td><code>AppData.py:1682/1696</code></td><td>生命周期</td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-p2">P2</span></td><td>补 <code>repro_lock_gaps.py</code></td><td>新增 16/16 确定性复现脚本，已登记进 <code>run_all.py</code></td><td><code>Test/repro_lock_gaps.py</code></td><td><b>维度 8.2</b></td><td><span class="tag t-ok">已修</span></td></tr>
+<tr><td><span class="tag t-n">P3</span></td><td>死别名 / X6 last_code / 过期注释</td><td>删 AppEngine/AppRefresh/AppScan 共 6 个死别名；<code>save_last_code_freq</code> 加持锁语义注释</td><td><code>AppChart.py:609</code> 等</td><td>清理</td><td><span class="tag t-ok">已修</span></td></tr>
 </tbody></table></div>
+<p class="mut" style="margin-top:8px">整改全部完成：回归 <b>26/30 通过</b>，4 项失败（<code>fixtures_integrity</code> / <code>snapshot_regression</code> / <code>trigger_step_replay</code> / <code>func_map_sync</code>）均为既往无关项，无新增回归。位置栏行号按当前 HEAD 实测刷新。</p>
 
 <!-- ============ 7 回应 ============ -->
-<h2><span class="n">7</span>对你三个问题的回应</h2>
+<h2><span class="n">7</span>对提问的回应</h2>
+
+<div class="qa" style="border-color:#bfdbfe;background:var(--infobg)">
+<div class="q">Q0 <span class="tag t-in">v1.1</span>：7 个层级（请求/连接/任务/标签页/用户/进程/主机）能一一对应到锁吗？每一级该用什么锁？</div>
+<p><b>不能一一对应。</b>层级描述"状态属于谁"，锁描述"谁会同时访问它"——两者正交，没有理由同步变化。强行 1:1 会得出"<code>_page_index_code</code> 是任务级所以该用任务锁"这种没法落地的结论。</p>
+<p style="margin-top:8px"><b>真正能对应的是两样东西：</b></p>
+<ul>
+<li><b>层级 → 要不要锁 + 分片键</b>。请求级通常不加锁（消灭共享）；进程级是一把全局锁；任务级按 <code>task_id</code> 分片，不同任务互不阻塞。<b>选错层级，性能可能差一个数量级。</b></li>
+<li><b>访问者关系 → 锁的原语类型</b>。同进程多线程 → <code>threading.Lock</code>；同主机跨进程 → OS 文件锁；跨主机 → 分布式锁；事件循环内 → <code>asyncio.Lock</code>。</li>
+</ul>
+<p style="margin-top:8px"><b>还有一个反直觉点：一份资源可以同时落在多个层级，此时多层锁必须叠加，不是二选一。</b>
+实测：只有进程级锁时，两进程各自增 60 次得 <b>105</b>（丢 15 次）；叠加文件锁后得 <b>120</b>（无丢失）。
+本项目 <code>zxg.blk</code> 就是这么做的——进程内 <code>_user_store_lock</code> + 跨进程 <code>file_lock</code> 嵌套。
+完整论证、判据表与实测脚本见 <b>§3.4</b> 与指导书 <b>§0.3</b>。</p>
+</div>
 
 <div class="qa">
 <div class="q">Q1：我表述清楚了吗？</div>
-<p><b>清楚，而且是少见的清楚。</b>你做的两件事都对：① 指定了判据文档（不是让我自由发挥）；② 明确要求"先梳理功能清单，否则没法分析"——这正是把问题从"感觉上会不会崩"变成"逐条可判定"的关键一步。我这次审计能定位到 X1/X2/X3，直接就是因为先把 43 个操作和它们的触发路径列全了。</p>
-<p style="margin-top:8px">但有一个<b>隐含假设需要修正</b>：你说"前端开多个网页"，我心里默认理解成了"多个浏览器标签页"。
-实际情况要分三种，它们的技术含义完全不同：</p>
-<ul>
-<li><b>多标签页（同一浏览器）</b>—— 共享 <code>localStorage</code>、共享后端进程。你列的场景主要指这个。</li>
-<li><b>多浏览器 / 多台机器</b>—— 还叠加了"独立脚本进程 <code>ths_sync_to_tdx.py</code> 与生产进程同时写 <code>zxg.blk</code>"这类<b>跨进程</b>问题（指导书 2.3 那条，现在已用 OS 文件锁修好了）。</li>
-<li><b>单页内的并发请求</b>—— 这个你没提但同样致命：<code>analyze</code> 请求<b>没有 AbortController</b>（<code>app.js</code> 全篇无取消），快速连点"查询/切周期/开关双窗"会产生并发飞行请求，后到的响应覆盖先到者（<code>chartData = data</code> 全文替换）。<b>一个用户、一个页面，就能制造竞态。</b></li>
-</ul>
+<p><b>清楚。</b>你做的两件事都对：① 指定判据文档；② 要求"先梳理功能清单"——这正是把问题从"感觉上会不会崩"变成"逐条可判定"的关键。这次能定位到 X1/X3，直接就是因为先把 43 个操作和触发路径列全了。</p>
+<p style="margin-top:8px"><b>一个隐含假设需要修正</b>：你说的"多个网页"我按"多标签页"理解了，你确认本意是<b>单页内并发 + 多页间并发</b>两层都要。这两层的技术含义不同——单页内并发<b>不需要第二个用户</b>就能制造竞态（<code>analyze</code> 无 <code>AbortController</code>，快速连点产生飞行中请求，后到覆盖先到），且<b>后端加锁对它完全无效</b>，因为竞态发生在前端共享变量上。</p>
 </div>
 
 <div class="qa">
 <div class="q">Q2：想法合理吗？</div>
-<p><b>合理，而且顺序是对的。</b>"先功能清单 → 再并发地形 → 再锁审计"这个三段式，本质就是指导书维度 1→2→3 的落地路径，你已经自己摸出来了。这次审计的结果也验证了这个顺序的价值：如果一上来就盯锁，我会得出"锁设计得不错、问题不大"的错误结论——真正的 P0 压根不在锁里。</p>
-<p style="margin-top:8px"><b>唯一要补的是口径。</b>你问的是"能否支持并发"，但"支持"其实有四个不同层次，建议分开回答，否则容易得出含糊结论：</p>
+<p><b>合理，顺序也对</b>（功能清单 → 并发地形 → 锁审计，正是维度 1→2→3 的落地）。但"能否支持"建议拆成四层分别回答：</p>
 <div class="grid g4" style="margin-top:10px">
 <div class="kpi"><div class="l" style="font-size:13px;font-weight:650;color:var(--tx)">① 数据正确性</div><div class="d">会不会读到错数据 / 写坏文件？<br>→ <b style="color:var(--ok)">基本达标</b>（12/16 已修）</div></div>
 <div class="kpi"><div class="l" style="font-size:13px;font-weight:650;color:var(--tx)">② 跨页隔离性</div><div class="d">A 页操作会不会影响 B 页？<br>→ <b style="color:var(--p0)">不达标</b>（X1 必然互相破坏）</div></div>
-<div class="kpi"><div class="l" style="font-size:13px;font-weight:650;color:var(--tx)">③ 容量/性能</div><div class="d">多页时会不会越来越慢？<br>→ <b style="color:var(--p0)">不达标</b>（X2 线程池挤兑）</div></div>
+<div class="kpi"><div class="l" style="font-size:13px;font-weight:650;color:var(--tx)">③ 容量/性能</div><div class="d">多页时会不会越来越慢？<br>→ <span class="mut">按你的意见<b>不在本次讨论范围</b></span></div></div>
 <div class="kpi"><div class="l" style="font-size:13px;font-weight:650;color:var(--tx)">④ 语义合理性</div><div class="d">多页共用全局状态是否合乎预期？<br>→ <b style="color:var(--p1)">部分不达标</b>（X3/X6）</div></div>
 </div>
 </div>
 
 <div class="qa">
 <div class="q">Q3：我有更好的建议吗？</div>
-<p>有四条，都指向同一件事：<b>这次审计暴露的 P0，指导书的 9 个维度抓不全。</b>不是维度错了，是覆盖面有个盲区。</p>
+<p>有<b>三条</b>（原第 2 条"容量维度"已按你的意见撤下）。它们指向同一件事：<b>这次审计暴露的 P0，指导书 v0 的 9 个维度抓不全。</b>不是维度错了，是覆盖面有盲区。</p>
 <ol style="margin-top:8px">
-<li><b>补一个维度：作用域（Scope）——"这个状态是会话级还是进程级？"</b><br>
-<span class="mut">X1（cleanup 全局核弹）和 X3（扫描全局态）都不是锁问题，是<b>把会话级状态放在了进程级</b>。这其实是维度 0「先消灭共享」的正面表述，但维度 0 现在的写法（"能不能让这块数据根本不被并发访问"）容易被读成"要不要加锁"的前置判断，而不是"要不要重新设计归属"。建议把维度 0 展开成独立维度，配 X1/X3 这两个真实案例——它们比文档里现有的例子更典型。</span></li>
+<li><b>补一个维度：作用域归属 —— "这个状态是会话级还是进程级？"</b><br>
+<span class="mut">X1 和 X3 都不是锁问题，是<b>把会话级状态放在了进程级</b>。这其实是维度 0「先消灭共享」的正面表述，但 v0 的写法容易被读成"要不要加锁"的前置判断，而不是"要不要重新设计归属"。v1.0 已把它展开成维度 0.2，并细分为<b>两种错配模式</b>（模式 A：数据放错容器；模式 B：管理动作的作用域大于对象归属）。模式 B 尤其隐蔽——对象设计是对的，错的是清理它的动作。</span></li>
 
-<li><b>补一个维度：容量（Capacity）——"并发体会不会耗尽有限资源？"</b><br>
-<span class="mut">X2（线程池 40）完全落在现有 9 个维度之外：没有数据竞争、没有死锁、锁都对，但系统就是会越来越慢。这类"活锁/饥饿"故障最难排查，因为它<b>不报错</b>。建议新增：线程池容量、连接池上限、缓存容量、文件句柄——凡是"有限"的都要登记。这条也能顺带覆盖 X4 的缓存颠簸。</span></li>
+<li><b>把"验证方法论"加一条：警惕验证脚本自身的假阴性。</b><br>
+<span class="mut">我这次实测就踩了坑：用 <code>threading.current_thread().name</code> 统计线程切换，得到"0 次切换"的<b>假阴性</b>——AnyIO 工作线程的名字全都一样，必须用 <code>get_ident()</code>。指导书讲"要确定性复现"，但没讲"复现脚本本身也可能有 bug"。<b>判据：验证脚本要先自证能检出已知问题。</b>（v1.0 已补为维度 8.4）</span></li>
 
-<li><b>把"验证方法论"（维度 9）加上一条：警惕假阴性。</b><br>
-<span class="mut">我这次实测就踩了一个坑：用 <code>threading.current_thread().name</code> 统计线程切换，得到"0 次切换"的<b>假阴性</b>——因为 AnyIO 工作线程的名字全都一样，必须用 <code>get_ident()</code>。指导书 9.2 讲"要确定性复现"，但没讲"复现脚本本身也可能有 bug"。建议补一句：<b>验证脚本要先自证能检出已知问题</b>（比如先构造一个必然跨线程的场景，确认测法有效）。</span></li>
-
-<li><b>把静态扫描（9.3）的覆盖面问题写进正文。</b><br>
-<span class="mut">现在 <code>test_lock_completeness.py</code> 只扫 <code>AppData.py</code> 一个类、只认 <code>self._field</code> 形态、只认 <code>with self.锁</code>，导致 U1 完全在视野外。这说明"反向扫描"思路对了但实现太窄。建议在指导书里明确列出扫描器必须覆盖的三种形态：<b>实例字段 / 模块级别名 / 跨模块守卫方法</b>。</span></li>
+<li><b>把静态扫描的覆盖面问题写进正文。</b><br>
+<span class="mut">现在 <code>test_lock_completeness.py</code> 只扫 <code>AppData.py</code> 一个类、只认 <code>self._field</code> 形态、只认 <code>with self.锁</code>，导致 <code>AppRefresh.py:289</code> 完全在视野外。建议在指导书里明确列出扫描器必须覆盖的三种形态：<b>实例字段 / 模块级别名 / 跨模块守卫方法</b>。（v1.0 已补为维度 8.3 表格）</span></li>
 </ol>
-<p style="margin-top:12px"><b>最后一条建议（关于流程）：</b>建议把这份审计的"场景判定"环节固化成回归测试——
-不是测锁，而是<b>测场景</b>：起 N 个并发客户端分别跑"多页期货 SSE + 一页切走"和"两页同时扫描不同板块"，
-断言前者不断连、后者结果集正确。这类测试能直接兜住 X1/X3，而且比任何静态扫描都更贴近你真正关心的问题。</p>
+<p style="margin-top:12px"><b>另外一条流程建议：</b>把"场景判定"环节固化成回归测试——不是测锁，而是<b>测场景</b>：
+起 N 个并发客户端分别跑"多页期货 SSE + 一页切走"和"两页同时扫描不同板块"，
+断言前者不断连、后者结果集正确。这类测试能直接兜住 X1/X3，而且比任何静态扫描都贴近你真正关心的问题。（v1.0 已补为维度 8.6）</p>
 </div>
 
 <div class="foot">
 <b>审计方法与取证说明</b><br>
-· 代码来源：<code>git clone --branch custom-dev</code>（经 gh-proxy 镜像，直连 GitHub 不通），HEAD <code>9cbd85d</code>；与本地 <code>C:\my_chan_project</code> 用 <code>diff -rq --strip-trailing-cr</code> 比对，除换行符外<b>无差异</b>（仅多出两个未跟踪的本地文件）。<br>
-· 全部结论均带 <code>文件:行号</code> 证据，来自直接读码，未采信代码注释（注释与代码矛盾处已在正文指出，如 <code>AppScan.py:54</code>、<code>BSPointList.py:772</code>）。<br>
-· 运行时实测：starlette 1.6.0 / anyio 4.14.2 / 线程池 40；SSE 线程派发实测脚本见 <code>verify_sse_thread.py</code>。<br>
-· 指导书行号已整体失效（后续提交"更新 lock"导致代码前移），本报告所有行号均为当前 HEAD 的实测行号。<br>
-· 未做实机多页面压力测试（需天勤账号与行情连接），X2 的容量结论为基于线程池配置的推断，建议用真实多页场景复核。
+· 代码来源：<code>git clone --branch custom-dev</code>（经 gh-proxy 镜像，直连 GitHub 不通），HEAD <code>9cbd85d</code>；与本地 <code>C:\my_chan_project</code> 用 <code>diff -rq --strip-trailing-cr</code> 比对，除换行符外<b>无差异</b>。<br>
+· 全部结论均带 <code>文件:行号</code> 证据（行号属 HEAD <code>9cbd85d</code>），来自直接读码，未采信代码注释（注释与代码矛盾处已指出）。<br>
+· 运行时实测：starlette 1.6.0 / anyio 4.14.2；SSE 线程派发实测脚本见 <code>verify_sse_thread.py</code>；锁层级可替代性实测脚本见 <code>verify_lock_layers.py</code>（4/4 确定性命中）。<br>
+· <b>v1.2 修订</b>：新增 §3.5「会话隔离四层模型」（L1 会话/连接级、L2 进程只读共享、L3 进程单例、L4 主机级）；判据文档同步升级为 <code>互斥锁设计指导书_v1.2.md</code>（新增 §0.4）。<br>
+· <b>v1.1 修订</b>：新增 §3.4「层级 ↔ 锁」与 §7 Q0；判据文档同步升级为 <code>互斥锁设计指导书_v1.1.md</code>（新增 §0.3）；两文档文件名起带版本号，每次更新 +0.1。<br>
+· <b>v2 修订</b>：移除"线程池容量"一项（不属互斥锁范畴）；原 X4 拆开——缓存颠簸部分移除，"持锁做 GC"部分保留并归入维度 5.4；§1.2 双窗代价改为四口径表述。<br>
+· 未做实机多页面压力测试（需天勤账号与行情连接）。
 </div>
 
 </div>

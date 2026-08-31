@@ -63,10 +63,29 @@ _ACTIVE_SOURCES = set()
 _ACTIVE_SOURCES_LOCK = threading.Lock()
 
 
-def close_all():
-    """关闭所有活跃 CTqSdkSession（幂等；供 futures_cleanup 与 lifespan 关闭钩子调用）
+def active_session_count():
+    """当前活跃 CTqSdkSession 数（每 SSE 连接一个，进程级共享）
 
-    只设置 _closed 旗通知各生成器线程退出，然后等待各生成器线程在
+    用途：让「期货退出清理」能判断**是否还有别的页面正在看期货**——
+    这是审计 X1 的关键判据。清理动作的作用域不得大于被清理对象的
+    生命周期归属：会话自有的资源由各生成器 finally 自行回收，全局
+    清扫只在**无人持有**时才成立。
+    """
+    with _ACTIVE_SOURCES_LOCK:
+        return len(_ACTIVE_SOURCES)
+
+
+def close_all():
+    """关闭所有活跃 CTqSdkSession（幂等）——**仅供 lifespan 服务器退出钩子调用**
+
+    ⚠️【审计 X1 · 作用域纪律】本函数会关闭**所有页面**的会话，属于
+    主机级/进程级操作，**绝不可**由页面级 REST 端点（/api/futures/cleanup）
+    调用：一个页面切走期货会连带掐断其余所有期货页面的 SSE 流。
+    页面的会话回收由该页 SSE 生成器 finally 自行完成（src.close() →
+    src.close_api()），无需、也不能由外部代劳。
+    需要判断"还有没有页面在看期货"时，用 active_session_count()。
+
+    实现：只设置 _closed 旗通知各生成器线程退出，然后等待各生成器线程在
     finally 中完成 api.close()（_api_closed 置位）。api.close() 由生成器
     线程调用——wait_update 已返回、_loop 已停止，从机制上保证不触发
     「不能在协程中调用 close」。

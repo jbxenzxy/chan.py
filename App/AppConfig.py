@@ -83,8 +83,8 @@ _FIELD_DEFAULTS = {
     "PORT": 18081,
     "CHAN_PATH": _REPO_ROOT,
     "TDX_INSTALL_DIR": _default_tdx_install_dir(),
-    "SCAN_POOL_WORKERS": 0,      # 0=自动按 CPU 核数适配；>0 显式覆盖（对齐 .env.example）
-    "SCAN_MIN_FLOAT_MC": 50.0,   # 扫描预过滤流通市值下限（亿）
+    "SCAN_POOL_WORKERS": 10,            # 0=自动按 CPU 核数适配；>0 显式覆盖（对齐 .env.example）
+    "SCAN_MIN_FLOAT_MC": 50.0,          # 扫描预过滤流通市值下限（亿）
     "SCAN_FANGLIANG_WINDOW_BARS": 120,  # 放量扫描：以 A 那根往前数 N 根K线作比较窗口，
                                         # 即「A > 该窗口内任一天成交额」视为放量命中
     "TQ_ACCOUNT": "",
