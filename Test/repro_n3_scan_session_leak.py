@@ -28,6 +28,10 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # 取用 Test/ 同目录模块
+
+import _stub_env                                          # noqa: E402
+_stub_env.install()          # 缺三方依赖时兜底；有真库则零介入
 
 from App import AppScan  # noqa: E402
 

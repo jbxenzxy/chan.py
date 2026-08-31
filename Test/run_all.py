@@ -147,6 +147,70 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_lock_completeness.py")]),
     ("repro_lock_gaps",
      [sys.executable, os.path.join("Test", "repro_lock_gaps.py")]),
+    # ── 2026-09-01 补注册（审计 v1.3 §四 守护覆盖面补齐）──────────────
+    # 这三个用例此前**写完却没进门禁**——与 lock_completeness 同款盲区：
+    # 扫得出问题，但没人跑它，等于没有。三者当前均为「通过」态，可直接
+    # 接入 CI；语义与门禁一致（失败非 0 退出）。
+    ("scan_session_isolation",
+     [sys.executable, os.path.join("Test", "test_scan_session_isolation.py")]),
+    ("user_store_rmw",
+     [sys.executable, os.path.join("Test", "test_user_store_rmw.py")]),
+    ("repro_n3_scan_leak",
+     [sys.executable, os.path.join("Test", "repro_n3_scan_session_leak.py")]),
+    # ── 2026-09-01 补注册 · P1 优先级三条守护（审计 v1.3 §四 缺口）────
+    # 这三条都经「变异测试」验证过有效性：把各自防范的缺陷人为塞回去后
+    # 均会变红（G11 摘守卫→5 红、G5 丢文件锁→红、G1 去 LRU 上限→2 红），
+    # 不是「跑得绿但拦不住」的摆设用例。
+    #   G11 期货清理作用域 —— X1（P0 历史缺陷）此前**零回归拦截**，
+    #       守卫一旦被删，一页期转股掐断所有期货页而 CI 全绿。
+    #   G5  zxg.blk 并发写盘 —— 登记表写的「进程锁 + OS 文件锁叠加」
+    #       从未被验证过；其中**跨进程**维度更是零测试。
+    #   G1  股票分析缓存并发 —— 矩阵上那个 ✅ 是推导出来的，
+    #       同页快速连点的 miss/hit 混合编排此前无任何用例覆盖。
+    ("futures_cleanup_scope",
+     [sys.executable, os.path.join("Test", "test_futures_cleanup_scope.py")]),
+    ("zxg_write_concurrency",
+     [sys.executable, os.path.join("Test", "test_zxg_write_concurrency.py")]),
+    ("analyze_cache_concurrency",
+     [sys.executable, os.path.join("Test", "test_analyze_cache_concurrency.py")]),
+    # ── P2 守护（审计矩阵 G4 / G7 / G9）──────────────────────────────
+    ("futures_selectpoint_concurrency",
+     [sys.executable, os.path.join("Test", "test_futures_selectpoint_concurrency.py")]),
+    ("scan_session_intra_concurrency",
+     [sys.executable, os.path.join("Test", "test_scan_session_intra_concurrency.py")]),
+    ("refresh_interleave_concurrency",
+     [sys.executable, os.path.join("Test", "test_refresh_interleave_concurrency.py")]),
+    # ── 2026-09-01 P3 守护（审计矩阵 G2 / G3 / G6 / G8 / G10）──────────
+    # 五个此前**零用例覆盖**的并发缺口，均经「变异测试」验证有效性：把各自
+    # 防范的缺陷人为塞回后均会变红（g2-nocap / g2-rmw / g10-noguard /
+    # g10-nopoplock / g6-nosnap / g8-isolate / g3-notomic / g3-filelock
+    # 八种回归形态全部被对应守卫抓回，无假绿）。
+    #   G2  股票双窗口缓存并发（双窗键限额 + cache_update 原子 RMW + 混合并发）
+    #   G10 期货双窗口 SSE 子缠论对象图锁（撕裂读 + 登记表随 pop 回收）
+    #   G6  搜索×刷新流交织（names_snapshot 拷贝隔离，防静默串表）
+    #   G8  旧客户端扫描会话参数跨号污染（token 隔离 + 回退 legacy）
+    #   G3  标注跨进程文件锁（进程内合并无丢失 + 读者永不读撕裂 JSON +
+    #       跨进程 OS 文件锁真正串行化 RMW）
+    ("dual_cache_concurrency",
+     [sys.executable, os.path.join("Test", "test_dual_cache_concurrency.py")]),
+    ("futures_subchan_concurrency",
+     [sys.executable, os.path.join("Test", "test_futures_subchan_concurrency.py")]),
+    ("search_refresh_interleave",
+     [sys.executable, os.path.join("Test", "test_search_refresh_interleave.py")]),
+    ("legacy_scan_session",
+     [sys.executable, os.path.join("Test", "test_legacy_scan_session.py")]),
+    ("annotation_filelock",
+     [sys.executable, os.path.join("Test", "test_annotation_filelock.py")]),
+    # P3 变异门禁：把「守卫能抓回退」这一性质本身纳入 CI——每次回归先验证
+    # 上述守卫不是「跑得绿但拦不住」的假绿（八种回归形态须全部使守卫变红）。
+    ("p3_mutation_gate",
+     [sys.executable, os.path.join("Test", "_mutate_p3.py")]),
+    # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
+    #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
+    #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，
+    #                             无门禁能力，属纯诊断脚本）
+    # 二者修复后：n2 退出码自动转 0，需补注册；n4 须先改为「命中即非 0」
+    # 再注册，否则门禁形同虚设。
 ]
 
 # 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI
