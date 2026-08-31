@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>chan.py 并发安全审计报告 v1.3</title>
+<style>
+:root { --ink:#1a1a2e; --muted:#5a6472; --line:#e3e7ee; --bg:#f7f8fa; --card:#ffffff;
+  --ok:#2e7d32; --okbg:#e8f5e9; --bad:#c62828; --badbg:#fdecea; --warn:#b26a00; --warnbg:#fff8e1; --accent:#1a56db; }
+* { box-sizing: border-box; }
+body { font-family:"Microsoft YaHei","PingFang SC",sans-serif; background:var(--bg); color:var(--ink); margin:0; padding:32px 20px; }
+.wrap { max-width:1080px; margin:0 auto; }
+h1 { font-size:24px; margin:0 0 6px; }
+h2 { font-size:18px; margin:34px 0 12px; border-left:4px solid var(--accent); padding-left:10px; }
+h3 { font-size:15px; margin:20px 0 8px; }
+.meta { color:var(--muted); font-size:13px; line-height:1.8; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:18px 20px; margin:12px 0; }
+table { border-collapse:collapse; width:100%; font-size:13px; background:#fff; }
+th,td { border:1px solid var(--line); padding:7px 10px; text-align:left; vertical-align:top; line-height:1.6; }
+th { background:#eef2f8; font-weight:600; white-space:nowrap; }
+code { background:#eef1f5; padding:1px 5px; border-radius:4px; font-size:12px; font-family:Consolas,monospace; }
+.pill { display:inline-block; padding:1px 9px; border-radius:10px; font-size:12px; font-weight:600; white-space:nowrap; }
+.p-ok { background:var(--okbg); color:var(--ok); }
+.p-bad { background:var(--badbg); color:var(--bad); }
+.p-warn { background:var(--warnbg); color:var(--warn); }
+.big { font-size:15px; }
+.toc { columns:2; font-size:13px; color:var(--accent); }
+.toc li { margin:3px 0; }
+.note { color:var(--muted); font-size:12.5px; }
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>chan.py 并发安全审计报告（v1.3）</h1>
+<div class="meta">
+仓库 <code>jbxenzxy/chan.py</code> · 分支 <code>custom-dev</code> · 基线 HEAD <code>a334284</code>（2026-08-31 14:28 +0800）<br>
+上一版基线 <code>9cbd85d</code>（指导书 v1.2）→ 其后 3 个提交（<code>9fc2583</code> / <code>7a2f90a</code> / <code>a334284</code>）<br>
+配套文档：《互斥锁设计指导书_v1.3.md》 · 复现脚本：<code>Test/repro_n1~n4_*.py/.html</code>
+</div>
+
+<h2>一、总结论</h2>
+<div class="card big">
+<p><b>问题：按指导书的互斥锁设计原则，当前代码的互斥锁设计是否完备？能否支持——<br>
+⑴ 多个股票网页标签页（单窗口/双窗口）并发执行全部股票功能；<br>
+⑵ 多个期货网页标签页（单窗口/双窗口）并发执行全部期货功能？</b></p>
+<p>✅ <b>多标签页并发：当前 HEAD 已可支持全部功能并发执行。</b>软件功能面共 28 条 REST 端点 + 1 条期货 SSE 流，
+逐域核验后端均满足"会话隔离（L1）或锁内收口（L3/L4）"，不同标签页互不阻塞、互不污染。
+v1.2 记录的两颗"跨页地雷"（X1 cleanup 核弹、X3 扫描串参）已在基线后的 3 个提交内修复。</p>
+<p>⚠ <b>单页内并发：功能可用，但存在一个用户可感知的缺口（N1）。</b>前端对 <code>analyze</code> 类请求
+无 <code>AbortController</code>/序号守卫，快速连点时旧响应覆盖新状态（图表"闪回"）。竞态在前端共享变量
+<code>chartData</code> 上，不损坏后端数据。</p>
+<p>📊 v1.2 记录的 14 项缺口：<b>12 项已修、2 项遗留（N1/N2）、新增 3 项低危（N3/N4/N5）</b>。</p>
+</div>
+
+<h2>二、已修复项（12 项，v1.2 ❌ → v1.3 ✅）</h2>
+<table>
+<tr><th style="width:36px">维度</th><th>问题</th><th style="width:90px">状态</th><th>修复位置（a334284）</th></tr>
+<tr><td>0.2 模式B</td><td><b>X1</b> <code>/api/futures/cleanup</code> 全局核弹：一页切走期货掐断所有期货页 SSE</td><td><span class="pill p-ok">✅ 已修</span></td><td>端点不再调 <code>close_all()</code>；<code>AppSSE :: _cleanup_all_futures_data</code> 以 <code>active_session_count()==0</code> 为守卫做孤儿清扫；<code>close_all</code> 收敛为仅 lifespan 钩子；会话由生成器 finally 自回收</td></tr>
+<tr><td>0.2 模式A</td><td><b>X3</b> 扫描三全局态（<code>_page_index_code</code>/<code>_scan_start_time</code>/skip_log）：两页同扫静默串参串批</td><td><span class="pill p-ok">✅ 已修</span></td><td>每次扫描一个 <code>_ScanSession</code>（<code>AppScan.py @ L136</code>）按 <code>scan_token</code> 索引；板块指数随请求参数传入；收割线程经 task_id 反查回写</td></tr>
+<tr><td>4.2</td><td>AppRefresh 无锁全表迭代 PE/归属表，异常被静默吞掉 → 丢整轮落盘/静默串表</td><td><span class="pill p-ok">✅ 已修</span></td><td>遍历走 <code>pe_snapshot()/belong_snapshot()</code>（<code>@ L293</code>）；写入收口 <code>AppData :: update_pe_ttm @ L1928</code>（锁内提交）</td></tr>
+<tr><td>4.5</td><td>股票单窗命中缓存零拷贝返回本体（与双窗口径不一致）</td><td><span class="pill p-ok">✅ 已修</span></td><td><code>AppEngine :: _analyze_stock_internal @ L402</code> 统一 <code>dict()</code> 浅拷贝</td></tr>
+<tr><td>5.2</td><td>股票下窗取指针后锁外才快照 bi_list（读到过期笔结构）</td><td><span class="pill p-ok">✅ 已修</span></td><td><code>BSPointList.py @ L735/L751</code> 快照移入锁内，与期货侧（<code>@ L780</code>）口径一致</td></tr>
+<tr><td>5.4</td><td>持 <code>_stocks_cache_lock</code> 执行 <code>gc.collect()</code>（stop-the-world 阻塞放大）</td><td><span class="pill p-ok">✅ 已修</span></td><td>锁内置 evicted 标记，出锁后 <code>_gc_outside_lock</code>（<code>AppData.py @ L1550</code>）</td></tr>
+<tr><td>7.3</td><td><code>_futures_chan_locks</code> 只增不删（锁表无界增长）</td><td><span class="pill p-ok">✅ 已修</span></td><td>缓存 pop/clear 同步摘除（<code>AppData.py @ L1693/L1714</code>），锁生命周期与条目对齐</td></tr>
+<tr><td>3.1</td><td>AppEngine/AppRefresh 模块级别名绕开锁直写共享容器</td><td><span class="pill p-ok">✅ 已修</span></td><td>死别名删除；读取走点查、遍历走快照；AppRefresh 仅留判空别名（注释约束）</td></tr>
+<tr><td>3.2</td><td><code>_float_mc</code> 双锁分管 + 登记表挂名不实</td><td><span class="pill p-ok">✅ 已修</span></td><td>登记表单列「float_mc 缓存」条目（归 <code>_user_store_lock</code>）；读侧点查无锁记为可接受边界</td></tr>
+<tr><td>3.2</td><td><code>_refresh_starting</code> 漏登</td><td><span class="pill p-ok">✅ 已收口</span></td><td><code>_refresh_state_lock</code> 内排队门（<code>AppRefresh.py @ L594-601</code>），归 refresh_status 条目</td></tr>
+<tr><td>8.3</td><td>静态扫描只扫 AppData.py、只认一种形态</td><td><span class="pill p-ok">✅ 已修</span></td><td><code>test_lock_completeness.py @ L123-130</code>：7 文件 × 3 形态（实例字段/模块级别名/跨模块守卫方法）</td></tr>
+<tr><td>8.2</td><td><code>repro_lock_gaps.py</code> 不在仓库（勘误①）</td><td><span class="pill p-ok">✅ 已重建</span></td><td><code>Test/repro_lock_gaps.py</code>（544 行）；v1.3 另补 4 个自证式复现脚本</td></tr>
+</table>
+
+<h2>三、遗留 + 新增缺口（5 项）</h2>
+<table>
+<tr><th style="width:44px">编号</th><th style="width:88px">严重度</th><th>问题与影响</th><th>修复建议</th></tr>
+<tr><td><b>N1</b></td><td><span class="pill p-bad">高（用户可感知）</span></td>
+<td><b>前端单页内并发：无请求取消/序号守卫。</b><code>Frontend/app.js</code> 全篇 0 处 <code>AbortController</code>；
+<code>chartData = data</code> 全文替换（L733/757/1118）。快速连点"查询/切周期/开关双窗"时旧响应后到覆盖新状态——
+图表"闪了一下又变回去"，依赖网络时序、难复现。竞态在前端共享变量，后端加锁无效（指导书 §3.3）。<br>
+复现：<code>Test/repro_n1_frontend_race.html</code>（确定性重放时序）</td>
+<td>① 发新请求前 <code>abort()</code> 旧请求（AbortController 存模块级变量）；
+② 响应带序号，<code>seq &lt; latestSeq</code> 丢弃（对缓存命中路径也生效，更稳）；
+③ SSE 重连前先 close 旧 <code>realtimeEventSource</code>，避免双流写同一份 chartData</td></tr>
+<tr><td><b>N2</b></td><td><span class="pill p-warn">中（契约性）</span></td>
+<td><b>8 个裸 <code>@property</code> 仍暴露共享容器本体</b>（<code>AppData.py @ L1465-1500</code>）：
+names/pe/belong/float_mc/annotations 等。"必须走 snapshot"的契约无机器校验，任何下游照直觉写
+<code>for k in d</code> 即踩竞态（3.4 曾是实证）。<br>
+复现：<code>Test/repro_n2_bare_property.py</code>（裸出口遍历撞 clear+update 必抛 RuntimeError；走 snapshot 无恙）</td>
+<td>a) property 改返回快照/不可变视图（需核对下游无就地写）；或
+b) 本体出口改名 <code>xxx_raw_unsafe</code> + AST 扫描禁止下游引用（纳入 test_lock_completeness）</td></tr>
+<tr><td><b>N3</b></td><td><span class="pill p-warn">低（资源泄漏）</span></td>
+<td><b>_ScanSession 无超时回收。</b>会话注销只有一条路（前端调 /scan/end）；页面扫描中途关闭/刷新
+→ 会话永久驻留 <code>_scan_sessions</code>（含 skip_log），且 <code>_legacy_scan_session</code> 兜底可指向弃置会话，
+旧客户端无 token 写入会落到过期会话上。<br>
+复现：<code>Test/repro_n3_scan_session_leak.py</code></td>
+<td>会话记 <code>created_at</code>，<code>new_scan_session</code> 时惰性清扫超时旧会话（无需后台线程）；
+或增加 <code>/scan/abort</code> 端点 + 前端 <code>beforeunload</code> beacon 调用</td></tr>
+<tr><td><b>N4</b></td><td><span class="pill p-warn">低（自愈）</span></td>
+<td><b>/api/futures/cleanup 双页同切"互相跳过"窗口。</b>两页同时期货切股票，各自 SSE 尚在 finally 撕分时
+两页的 cleanup 都看到对方会话在册 → 都跳过清扫 → 期货缓存孤儿残留。残留为内存缓存，下次访问自动重载，<br>
+复现：<code>Test/repro_n4_cleanup_race.py</code>（两次 cleanup 均 swept=False）</td>
+<td>cleanup 改为"等待在册会话归零（带 ~0.2s 超时）后再清扫"；或更彻底：缓存条目挂 owner 会话 id，
+只清 owner 已销毁的条目（全局清扫收窄为孤儿回收，与 §0.4 一致）</td></tr>
+<tr><td><b>N5</b></td><td><span class="pill p-warn">低（兼容）</span></td>
+<td><b>旧客户端兼容兜底仍走进程级全局</b>：<code>_page_index_code</code>（<code>AppScan.py @ L224</code>）与
+<code>_legacy_scan_session</code>。本仓库前端已全部改为随请求传参（X3 正路），仅当存在<b>旧缓存页面</b>
+（未强刷的 app.js）与新页面混跑时才会串。</td>
+<td>观察期后删除兼容兜底；或给 <code>/scan/set/index</code> 标记 Deprecated 响应头，监控旧路径调用量归零后移除</td></tr>
+</table>
+
+<h2>四、功能 × 并发安全矩阵（a334284）</h2>
+<p class="note">功能面 = <code>FrontAPI.py</code> 28 条 REST 端点 + 1 条期货 SSE 流，归六域。判定口径：
+① 单页内并发（同页多飞行中请求）② 多标签页并发（互不阻塞、互不污染）③ 双窗与单窗口径一致性。</p>
+<table>
+<tr><th>功能域</th><th>端点/入口</th><th style="width:52px">多标签页</th><th style="width:70px">单页内并发</th><th>机制与备注</th></tr>
+<tr><td>股票查询分析</td><td><code>GET /api/stocks/{code}/analyze</code></td><td>✅</td><td>⚠ N1</td><td>每请求 tdx 注入 + 缓存锁；单窗命中缓存已改 dict() 拷贝；前端 chartData 后到覆盖</td></tr>
+<tr><td>选点/删点/标注</td><td><code>select/point</code>、<code>delete/point</code>、<code>save/annotation</code>、<code>read/annotation</code>、<code>scan/annotation</code></td><td>✅</td><td>✅</td><td><code>_user_store_lock</code> + 原子落盘；标注两层快照；与独立脚本跨进程由 OS 文件锁兜底</td></tr>
+<tr><td>自选股写盘</td><td><code>POST /api/stocks/scan/save/zxg</code></td><td>✅</td><td>✅</td><td>进程锁 + OS 文件锁叠加（指导书 §0.3.2 正例）</td></tr>
+<tr><td>搜索 / 量能</td><td><code>GET /api/search</code>、<code>GET /api/amo/read</code></td><td>✅</td><td>✅</td><td>search 走 <code>names_snapshot()</code> 快照遍历；AMO 只读本地 vipdoc</td></tr>
+<tr><td>批量扫描</td><td><code>scan/candidates</code>、<code>start</code>、<code>submit</code>、<code>end</code>、<code>{task_id}/status</code>、<code>{task_id}/cancel</code>、<code>close</code>、<code>set/index</code></td><td>✅</td><td>✅</td><td>X3：按 scan_token 会话化，两页同扫互不串参串批；收割按 task_id 反查回写；⚠ N3/N5 残余</td></tr>
+<tr><td>数据刷新</td><td><code>POST /api/stocks/refresh</code>、<code>refresh/read/status</code></td><td>✅</td><td>✅</td><td>全局单飞（<code>_refresh_state_lock</code> CAS）；PE/名称写锁内提交；语义即全进程一份</td></tr>
+<tr><td>期货实时 SSE</td><td><code>GET /api/futures/read/stream</code>（单窗/双窗）</td><td>✅</td><td>✅</td><td>每连接 CTqSdkSession + 逐帧重绑定 + 按 key 对象图锁（写 drain 包锁 / 读锁内快照）；双窗已包装</td></tr>
+<tr><td>期货选点/删点</td><td><code>futures/{symbol}/select|delete/point</code></td><td>✅</td><td>✅</td><td>同用户态文件锁路径</td></tr>
+<tr><td>期货清理</td><td><code>POST /api/futures/cleanup</code></td><td>✅</td><td>✅</td><td>X1 守卫式孤儿清扫；⚠ N4 双页同切跳过窗口（低危自愈）</td></tr>
+<tr><td>期货只读</td><td><code>futures/read/status</code>、<code>read/config</code></td><td>✅</td><td>✅</td><td>只读</td></tr>
+</table>
+<p class="note">跨浏览器（Edge vs Chrome）天然隔离（独立用户数据目录），无需处理；同浏览器多标签的隔离由
+<code>scan_token</code> / 每连接会话承担。前端 <code>tab_id</code> 全局会话化（指导书 §0.4.5 形态 B）属长期演进方向，
+当前会话化已按端点局部落地，不阻塞上述结论。</p>
+
+<h2>五、复现脚本与运行方式</h2>
+<div class="card">
+<p class="big">4 个脚本，全部<b>自证式</b>（先证明能检出已知问题，再用于回归——指导书维度 8.4）。放入仓库 <code>Test/</code> 后在仓库根目录运行：</p>
+<table>
+<tr><th>脚本</th><th>目标</th><th>实测结果（本沙盒验证）</th></tr>
+<tr><td><code>repro_n1_frontend_race.html</code></td><td>N1 前端后到覆盖</td><td>浏览器打开，"重放竞态"必现图表闪回；"对照"按钮演示序号守卫生效</td></tr>
+<tr><td><code>repro_n2_bare_property.py</code></td><td>N2 裸出口遍历竞态</td><td>RuntimeError: dictionary changed size during iteration ✅；snapshot 对照无恙 ✅</td></tr>
+<tr><td><code>repro_n3_scan_session_leak.py</code></td><td>N3 弃扫会话泄漏</td><td>3 次弃扫残留 3 会话 ✅；无 token 写入落到最近会话 ✅</td></tr>
+<tr><td><code>repro_n4_cleanup_race.py</code></td><td>N4 cleanup 互相跳过</td><td>双会话在册时两次 cleanup 均 swept=False ✅；归零后第三次才清扫 ✅</td></tr>
+</table>
+<p class="note">修复后回归：N2/N3/N4 脚本应转为"未命中"输出；N1 页面守卫版应恒显示最新选择。</p>
+</div>
+
+<h2>六、建议的整改优先级</h2>
+<div class="card">
+<ol class="big" style="line-height:2">
+<li><b>P1 · N1</b>：给 analyze/切周期/双窗切换加请求序号守卫或 AbortController（前端小改，收益立现——这是唯一用户可感知的缺口）。</li>
+<li><b>P2 · N2</b>：8 个裸 property 出口收口（方案 a 或 b），并把校验并入 test_lock_completeness 防回潮。</li>
+<li><b>P3 · N3/N4/N5</b>：会话惰性超时回收（~10 行）；cleanup 等待归零或按 owner 清扫；观察期后删除兼容兜底。</li>
+<li><b>回归</b>：修复后重跑 4 个复现脚本 + <code>test_lock_completeness.py</code>；建议按指导书 8.6 补一条场景级回归
+（两页同扫不同板块 + 一页期转股，断言他页 SSE 不断、结果集正确）。</li>
+</ol>
+</div>
+
+<p class="note" style="margin-top:26px">本报告由《互斥锁设计指导书》方法论（v1.3）驱动产出 · 沙盒分析，未改动项目目录 · 版本约定：只保留最新版本</p>
+</div></body>
+</html>
