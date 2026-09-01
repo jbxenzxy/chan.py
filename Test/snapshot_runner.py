@@ -194,6 +194,48 @@ def isolate_side_effects():
 
 
 # ─────────────────────────────────────────────────────────────
+# 2b. 参考数据源注入（与 test_trigger_step_replay 同源）
+# ─────────────────────────────────────────────────────────────
+# 股票名称 / PE-TTM / 指数归属 由 app_data 从 *gitignored* 的本地缓存文件
+# （App/stock_names.json、App/stock_pettm_index.json）加载；干净检出下这些文件
+# 不存在，get_stock_name 退化为 market+code、get_pe_ttm 退化为 None、get_index_belong
+# 退化为 None，导致冻结基线（期望 贵州茅台 / 20.0 / 沪深300）对比失败。
+# 为使快照在任意干净检出下可复现，这里注入与冻结基线一致的确定性参考表
+# （属元数据，非笔/段/中枢/买卖点算法被测对象）。期货用例不消费该表，注入无副作用。
+_REF_MARKET = "sh"
+_REF_CODE = "600519"
+_REF_COMPOUND = f"{_REF_MARKET}{_REF_CODE}"
+
+
+def _seed_reference():
+    """注入确定性 name / pe_ttm / index_belong 参考表，返回 restore_fn（隔离全局副作用）。"""
+    from App.AppData import app_data
+    saved = {
+        "_names": app_data._names,
+        "_pe": app_data._pe,
+        "_belong": app_data._belong,
+        "_names_loaded": app_data._names_loaded,
+        "_pe_loaded": app_data._pe_loaded,
+        "_belong_loaded": app_data._belong_loaded,
+    }
+    app_data._names = {_REF_COMPOUND: {"name": "贵州茅台", "market": _REF_MARKET}}
+    app_data._pe = {_REF_COMPOUND: 20.0}
+    app_data._belong = {_REF_COMPOUND: "沪深300"}
+    app_data._names_loaded = True
+    app_data._pe_loaded = True
+    app_data._belong_loaded = True
+
+    def restore():
+        app_data._names = saved["_names"]
+        app_data._pe = saved["_pe"]
+        app_data._belong = saved["_belong"]
+        app_data._names_loaded = saved["_names_loaded"]
+        app_data._pe_loaded = saved["_pe_loaded"]
+        app_data._belong_loaded = saved["_belong_loaded"]
+    return restore
+
+
+# ─────────────────────────────────────────────────────────────
 # 3. 输出规范化
 # ─────────────────────────────────────────────────────────────
 # 需剥离的环境相关/不稳定字段（耗时统计、进程路径、实时快照值）
@@ -436,9 +478,11 @@ def acquire(name, update=False):
     from Test.contracts import validate_result_structure, format_diffs
 
     restore_iso = isolate_side_effects()
+    restore_ref = _seed_reference()   # 注入确定性参考表（见 _seed_reference）
     try:
         raw = CASES[name]()
     finally:
+        restore_ref()
         restore_iso()
     norm = normalize(raw)
 

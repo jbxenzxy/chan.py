@@ -37,6 +37,43 @@ FIXTURE = "stock_day.json"
 ANCHOR_OFFSET = 60          # 锚点：倒数第 60 根
 STEPS = [0, -1, -5, -20]    # 回放偏移序列（0=锚定当天）
 
+# 参考数据源（股票名称 / PE-TTM）由 app_data 从 *gitignored* 的本地缓存文件
+# （App/stock_names.json、App/stock_pettm_index.json）加载；干净检出下这些文件
+# 不存在，get_stock_name 退化为 market+code、get_pe_ttm 退化为 None，导致冻结
+# 基线（期望 贵州茅台 / 20.0）对比失败。为使快照在任意干净检出下可复现，这里
+# 注入与冻结基线一致的确定性参考表（属元数据，非 trigger_step 回放算法被测对象）。
+_REF_MARKET = "sh"
+_REF_CODE = "600519"
+_REF_COMPOUND = f"{_REF_MARKET}{_REF_CODE}"
+
+
+def _seed_reference():
+    """注入确定性 name / pe_ttm / index_belong 参考表，返回 restore_fn（隔离全局副作用）。"""
+    from App.AppData import app_data
+    saved = {
+        "_names": app_data._names,
+        "_pe": app_data._pe,
+        "_belong": app_data._belong,
+        "_names_loaded": app_data._names_loaded,
+        "_pe_loaded": app_data._pe_loaded,
+        "_belong_loaded": app_data._belong_loaded,
+    }
+    app_data._names = {_REF_COMPOUND: {"name": "贵州茅台", "market": _REF_MARKET}}
+    app_data._pe = {_REF_COMPOUND: 20.0}
+    app_data._belong = {_REF_COMPOUND: "沪深300"}
+    app_data._names_loaded = True
+    app_data._pe_loaded = True
+    app_data._belong_loaded = True
+
+    def restore():
+        app_data._names = saved["_names"]
+        app_data._pe = saved["_pe"]
+        app_data._belong = saved["_belong"]
+        app_data._names_loaded = saved["_names_loaded"]
+        app_data._pe_loaded = saved["_pe_loaded"]
+        app_data._belong_loaded = saved["_belong_loaded"]
+    return restore
+
 
 def _run(end_date=None, step=None):
     from App import AppEngine as m
@@ -50,10 +87,12 @@ def _run(end_date=None, step=None):
     # 窗口截断行为已由 snapshot_regression 的冻结基线覆盖，无需在此重复校验。
     saved_lookback = m.STOCKS_LOOKBACK_CONFIG
     m.STOCKS_LOOKBACK_CONFIG = {}
+    restore_ref = _seed_reference()   # 注入确定性参考表（详见 _seed_reference）
     try:
         return m._analyze_stock_internal(
             "600519", freq="d", end_date=end_date, cache_chan=False, step=step)
     finally:
+        restore_ref()
         m.STOCKS_LOOKBACK_CONFIG = saved_lookback
         restore()
 
