@@ -11,7 +11,7 @@ import logging
 import threading
 import time as _time
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # 抑制 tqsdk 内部 INFO 日志（如 WebSocket 连接通知）
 # 注意：只抑制 tqsdk 自身 logger，绝不设置 root 级别——
@@ -32,6 +32,26 @@ log = logging.getLogger(__name__)
 # 会话」，CTqSdkAPI.__init__ 据此绑定该连接 CTqSdkSession 的记录缓存，
 # 实现「每连接自包含」；脱离会话直接实例化（如工具脚本）回退自有缓存。
 _CURRENT_SESSION = threading.local()
+
+# 期货 K 线时间为北京时间，但记录中的 dt 通常不带时区标注（naive）。
+# CTime.set_timestamp() 对 naive datetime 按「机器本地时区」解释，导致 .ts
+# 在非 UTC+8 的机器上差 8h，使冻结快照在非中国 CI 上漂移。
+# 此处统一按中国时区(UTC+8)解释期货时间，使 .ts 与机器时区解耦、可复现。
+_CN_TZ = timezone(timedelta(hours=8))
+
+
+def _futures_dt_to_epoch_sec(dt):
+    """期货 naive/aware datetime → POSIX 秒（统一按中国时区 UTC+8 解释）。
+
+    dt 可能来自：① 测试夹具（naive，北京时间墙钟）；② 天勤实盘
+    ts.to_pydatetime()（已为北京时区的 aware datetime）。两者统一收敛为
+    「中国时区解释」的 POSIX 秒，使所有机器产出一致的 .ts。"""
+    if dt.tzinfo is None:
+        cn = dt.replace(tzinfo=_CN_TZ)
+    else:
+        cn = dt.astimezone(_CN_TZ)
+    return cn.timestamp()
+
 
 
 @contextmanager
@@ -318,6 +338,9 @@ class CTqSdkAPI(CCommonStockApi):
                 # SGX A50 等外盘品种有凌晨 00:00 的分钟K线，auto=True 会导致
                 # 00:00 的 ts 被改为 23:59，使后续 00:05 的 K线时间非单调递增
                 ct = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second, auto=False)
+                # 显式按中国时区(UTC+8)解释期货时间，覆盖 CTime.set_timestamp
+                # 的机器本地时区解释，使 .ts 可跨机器复现（见 _CN_TZ 注释）。
+                ct.ts = _futures_dt_to_epoch_sec(dt)
             except OSError:
                 continue
 

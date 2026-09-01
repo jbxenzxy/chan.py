@@ -82,7 +82,12 @@ WINDOW_BASELINE = {
 # 允许的登记性新增（组件注册表）
 WINDOW_ALLOWED_NEW = {"ChanApp"}
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
-ALLOWED_STRAY = {"getLayoutParams"}
+ALLOWED_STRAY = {"getLayoutParams",
+                 # N1 图表请求序号守卫（指导书 v1.3 附录 N1 / 维度 3.3）：
+                 # 跨组件并发工具，被 RealtimeService / Bootstrap / 股票·期货
+                 # 加载器等 40+ 处共享，用于丢弃过期异步响应，不属于任一
+                 # 业务组件的私有逻辑，故作为区块外辅助函数放行。
+                 "_bumpChartActionSeq", "_isChartActionStale"}
 
 # JS 关键字（④ 中内联事件的非函数标识符误报豁免）
 JS_KEYWORDS = {"if", "else", "return", "this", "var", "let", "const", "new",

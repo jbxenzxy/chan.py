@@ -205,15 +205,46 @@ _CHILD_RMW = '''
 import contextlib
 import os
 import sys
-repo, lock_path, counter_path, iters = sys.argv[1:5]
+import time
+repo, lock_path, counter_path, iters, n_procs = sys.argv[1:6]
 sys.path.insert(0, repo); sys.path.insert(0, repo + "/Test")
 import _stub_env; _stub_env.install()
 from App.AppData import file_lock
 # 变异注入点（仅 _mutate_p3.py 设 G3_FILELOCK_MUTATE=1 时生效；正常运行为空操作）
 if os.environ.get("G3_FILELOCK_MUTATE"):
+    # 去锁：跨进程 OS 文件锁置空 → RMW 不再串行化
     @contextlib.contextmanager
     def file_lock(*a, **k):
         yield
+    # 放大无锁临界区窗口：无锁时多进程并发 sleep，使 RMW 临界区被大幅拉长。
+    # 配合下方「跨进程启动屏障」：所有子进程在屏障释放后同一瞬间各自 read 同一
+    # 旧值，然后同时 sleep，期间彼此的 write 互相覆盖 → 首轮即必然丢失更新
+    # （确定红），彻底消除「偶发未交错 → 守卫假绿」的非确定性。
+    # 正常（持锁）路径下 _mut_sleep=0，且不进入屏障，锁内串行终值恒 == N。
+    _mut_sleep = 0.03
+else:
+    _mut_sleep = 0
+
+# 跨进程启动屏障（仅变异路径使用）：强制所有子进程「同时」进入 RMW 循环。
+# 屏障释放后各进程立刻 read（临界区最前），随后才 sleep/writ——故首轮所有
+# 进程读到同一旧值、再彼此覆盖 write，丢失更新确定发生，与机器负载无关。
+_barrier_dir = None
+if _mut_sleep:
+    _barrier_dir = os.path.join(os.path.dirname(lock_path), ".g3barrier")
+    try:
+        os.makedirs(_barrier_dir, exist_ok=True)
+        with open(os.path.join(_barrier_dir, "ready_%d" % os.getpid()), "w") as _bf:
+            _bf.write("1")
+        _deadline = time.time() + 30
+        while time.time() < _deadline:
+            _ready = len([1 for _n in os.listdir(_barrier_dir)
+                          if _n.startswith("ready_")])
+            if _ready >= int(n_procs):
+                break
+            time.sleep(0.005)
+    except Exception:   # noqa: BLE001
+        pass
+
 iters = int(iters)
 for _ in range(iters):
     with file_lock(lock_path):
@@ -222,6 +253,8 @@ for _ in range(iters):
             with open(counter_path, "r") as f:
                 try: v = int(f.read().strip() or "0")
                 except ValueError: v = 0
+        if _mut_sleep:
+            time.sleep(_mut_sleep)
         v += 1
         with open(counter_path, "w") as f:
             f.write(str(v))
@@ -243,7 +276,7 @@ def test_cross_process_file_lock_serializes():
     for _ in range(n_procs):
         p = subprocess.Popen(
             [sys.executable, "-c", _CHILD_RMW, _REPO_ROOT, lock_path,
-             counter_path, str(iters)],
+             counter_path, str(iters), str(n_procs)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(p)
     rc = [p.wait(timeout=120) for p in children]

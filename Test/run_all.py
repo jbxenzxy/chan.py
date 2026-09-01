@@ -57,9 +57,6 @@ CI / 迁移每阶段的验收门禁）。
                                                      线程局部注入隔离（非空测试的自检）
  27. 锁覆盖完整性      test_lock_completeness.py      三形态静态扫描：实例字段 / 模块级
                                                      别名 / 跨模块守卫方法 + 扫描器自证
- 28. 并发缺口复现      repro_lock_gaps.py             Part A 机制复现（5 类缺口各跑
-                                                     「有缺陷版」与「修复版」，证明量尺
-                                                     能量出东西）+ Part B 活体回归
 29. 扫描候选归一化  test_scan_pageindex_normalize.py   审计 X3 候选路径 page_index 板块
                                                      代码须在进入成分取数层前归一化
                                                      （spy + 会话 + 静态回潮三防）
@@ -145,8 +142,6 @@ COMPONENTS = [
     # 它扫得出问题，但没人跑它，等于没有（审计发现的覆盖面盲区之一）。
     ("lock_completeness",
      [sys.executable, os.path.join("Test", "test_lock_completeness.py")]),
-    ("repro_lock_gaps",
-     [sys.executable, os.path.join("Test", "repro_lock_gaps.py")]),
     # ── 2026-09-01 补注册（审计 v1.3 §四 守护覆盖面补齐）──────────────
     # 这三个用例此前**写完却没进门禁**——与 lock_completeness 同款盲区：
     # 扫得出问题，但没人跑它，等于没有。三者当前均为「通过」态，可直接

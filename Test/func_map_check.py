@@ -99,6 +99,7 @@ TARGET_FUNCS = {
     # ── AppData：统一缓存三件套 ──
     "_cache_put":                   ("DATA", "✓4 兼容壳 → app_data.cache_put（LRU）"),
     "_cache_get":                   ("DATA", "✓4 兼容壳 → app_data.cache_get"),
+    "_cache_update":                ("DATA", "✓4 兼容壳 → app_data.cache_update（原子读改写，替代锁外逐字段改，审计 P0-3）"),
 
     # ── AppData：选点持久化（P2：_save_point_time 兼容壳已删除，AppData 直连）──
 
