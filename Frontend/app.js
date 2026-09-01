@@ -930,8 +930,14 @@
 
         function getVisibleKlines() {
             if (!chartData) return [];
-            const start = Math.max(0, Math.floor(viewOffset));
-            const end = Math.min(chartData.klines.length, start + viewCount + 2);
+            const total = chartData.klines.length;
+            let start = Math.max(0, Math.floor(viewOffset));
+            // 安全网：视口偏移越界（数据少于偏移，常见于多窗共享全局 viewOffset 后切到较短序列）
+            // 会令切片为空 → 整图上窗/下窗静默空白。越界时回退到末尾，保证切片非空。
+            if (total > 0 && start >= total) {
+                start = Math.max(0, total - viewCount);
+            }
+            const end = Math.min(total, start + viewCount + 2);
             const result = chartData.klines.slice(start, end);
             // 周K：返回全部K线，确保铺满整个画布
             if (currentFreq === 'w' && result.length < viewCount) {
@@ -6284,6 +6290,13 @@
                 } else {
                     viewOffset = savedViewOffset;
                 }
+                // 修复上窗空白：多窗共享全局 viewOffset，旧序列比新序列长时会令偏移越界，
+                // 越界使 getVisibleKlines 切出空切片 → 上窗静默空白。按新 main 长度夹紧。
+                if (newMainCount > 0) {
+                    viewOffset = (newMainCount < viewCount)
+                        ? 0
+                        : Math.max(0, Math.min(newMainCount - viewCount, viewOffset));
+                }
             }
             if (data.sub) {
                 // 保存子窗口的缩放和位置
@@ -6301,6 +6314,12 @@
                     dualSubViewOffset = Math.max(0, savedSubOffset + subDelta);
                 } else {
                     dualSubViewOffset = savedSubOffset;
+                }
+                // 修复下窗空白：同主窗，按新 sub 长度夹紧视口偏移
+                if (newSubCount > 0) {
+                    dualSubViewOffset = (newSubCount < dualSubViewCount)
+                        ? 0
+                        : Math.max(0, Math.min(newSubCount - dualSubViewCount, dualSubViewOffset));
                 }
             }
             updateSlider();
