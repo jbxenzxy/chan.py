@@ -239,6 +239,20 @@ class CTqSdkSession(CSSESource):
     def connect(self):
         from tqsdk import TqApi, TqAuth
         from DataAPI.TqSdkAPI import TQ_ACCOUNT, TQ_PASSWORD
+        # 一次性改写 TqApi._print：去掉其自带的「日期 时间」时间戳前缀，
+        # 仅保留「级别 - 消息」。背景：tqsdk 的 _notify_watcher 会把
+        # 「与 xxx 的网络连接已建立」等通知经 TqApi._print 用裸 print 输出
+        # （含 _cst_now().strftime('%Y-%m-%d %H:%M:%S') 时间戳，非 backtest 时），
+        # 不经过 logging，故 App/AppLog.py 的 formatter 与 logger 级别抑制
+        # 均无法管控。此处就地改写以去除时间戳，使通知与全局日志风格一致。
+        if not getattr(TqApi, "_print_patched_no_ts", False):
+            def _tqsdk_print_no_ts(self, msg="", level="INFO"):
+                if getattr(self, "disable_print", False):
+                    return
+                level = level if isinstance(level, str) else logging.getLevelName(level)
+                print(f"{level} - {msg}")
+            TqApi._print = _tqsdk_print_no_ts
+            TqApi._print_patched_no_ts = True
         # 接口契约校验：构造后确认 api 实例具备 chan.py 依赖的流式/取数接口，
         # 缺失即抛错（附升级指引），让使用者及时得知接口失效，而非建流中途 AttributeError。
         if not callable(TqApi) or not callable(TqAuth):
