@@ -2906,6 +2906,7 @@
                     canvas = subCanvas; ctx = subCtx;
                     viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
                     chartData = dualSubData; currentFreq = dualSubFreq;
+                    try {
                     const area = getChartArea();
                     const volArea = getVolArea();
                     const macdTextArea = getMacdTextArea();
@@ -2916,14 +2917,11 @@
                         clickY >= bottomTop && clickY <= bottomBottom) {
                         _subShowVolume = !_subShowVolume;
                         saveOverlaySettings();
-                        canvas = _savedCanvas; ctx = _savedCtx;
-                        viewOffset = _savedViewOffset; viewCount = _savedViewCount;
-                        chartData = _savedChartData; currentFreq = _savedFreq;
                         renderBottom();
                         return;
                     }
                     const klines = getVisibleKlines();
-                    if (!klines.length) { canvas = _savedCanvas; ctx = _savedCtx; viewOffset = _savedViewOffset; viewCount = _savedViewCount; chartData = _savedChartData; currentFreq = _savedFreq; return; }
+                    if (!klines.length) { return; }
                     const priceRange = getPriceRange(klines);
                     const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
                     const barStep = area.w / effectiveCount;
@@ -2945,10 +2943,6 @@
                             break;
                         }
                     }
-                    // 恢复全局变量
-                    canvas = _savedCanvas; ctx = _savedCtx;
-                    viewOffset = _savedViewOffset; viewCount = _savedViewCount;
-                    chartData = _savedChartData; currentFreq = _savedFreq;
                     // 下窗双击选点限制：双窗采用「下窗对齐上窗」，
                     // 仅允许在上窗双击选点，前端限制下窗选点操作。
                     if (clickedOnKline) {
@@ -2959,6 +2953,13 @@
                         // 股票/期货双窗统一：仅上窗可选点，下窗只对齐展示
                         showDualToast("双窗口模式下仅支持在上窗选点");
                         return;
+                    }
+                    } finally {
+                        // 无论正常结束还是提前 return / 异常，全局视口状态必定还原，
+                        // 杜绝"漏写 restore 导致上窗 viewOffset/viewCount 被下窗值污染"的脆弱点
+                        canvas = _savedCanvas; ctx = _savedCtx;
+                        viewOffset = _savedViewOffset; viewCount = _savedViewCount;
+                        chartData = _savedChartData; currentFreq = _savedFreq;
                     }
                     // 状态A：让下面窗口平移到对应区间
                     if (dualOffscreenState && dualHighlightRange && dualSubData) {
@@ -3075,8 +3076,9 @@
             const savedCanvas = canvas; const savedCtx = ctx;
             const savedViewOffset = viewOffset; const savedViewCount = viewCount;
             canvas = subCanvas; ctx = subCtx;
-            viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
-            const rect = subCanvas.getBoundingClientRect();
+                viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+                try {
+                const rect = subCanvas.getBoundingClientRect();
             const bMouseX = e.clientX - rect.left;
             const area = getChartArea();
             const klines = dualSubData.klines;
@@ -3087,7 +3089,7 @@
             const newViewCount = e.deltaY > 0
                 ? Math.min(klines.length, Math.ceil(viewCount * zoomFactor))
                 : Math.max(3, Math.round(viewCount / zoomFactor));
-            if (newViewCount === viewCount) { canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount; return; }
+            if (newViewCount === viewCount) { return; }
             const maxOffset = klines.length - newViewCount;
             if (mouseKIdx >= viewCount - 1) {
                 const rightGlobalIdx = viewOffset + viewCount - 1;
@@ -3101,7 +3103,9 @@
                 dualSubViewCount = newViewCount;
                 dualSubViewOffset = newViewOffset;
             }
-            canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
+            } finally {
+                canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
+            }
             renderBottom();
         }
 
@@ -3127,9 +3131,12 @@
                 const savedViewOffset = viewOffset; const savedViewCount = viewCount;
                 canvas = subCanvas; ctx = subCtx;
                 viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+                try {
                 dualSubViewOffset = dualSubDragStartOffset - (e.clientX - dualSubDragStartX) / (getChartArea().w / viewCount);
                 dualSubViewOffset = Math.max(0, Math.min(dualSubData.klines.length - dualSubViewCount, dualSubViewOffset));
-                canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
+                } finally {
+                    canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
+                }
             }
             renderBottom();
         }
