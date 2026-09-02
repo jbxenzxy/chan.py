@@ -40,7 +40,7 @@ from App.utils import (
 # 业务数据层（选点/期货子窗缓存；与 AppEngine 同一 app_data 单例）
 from App.AppData import app_data
 # 区间套辅助（红框/双窗口共用，与 AppEngine 同源）
-from BuySellPoint.BSPointList import _futures_red_range, CMyBSPointList, set_replay_mode
+from BuySellPoint.BSPointList import _main_bi_range, _futures_red_range, CMyBSPointList, set_replay_mode
 # chan.py 核心（与 AppEngine 同源；期货分析链路统一走 SSE init_chan_symbol）
 from Chan import CChan
 from Common.CEnum import AUTYPE, FX_TYPE
@@ -1257,20 +1257,28 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
                     if klc is bi.end_klc:
                         end_fx_idx = idx
                         break
-            # 左肩/右肩原始K线时间（双窗口红框定位；与 _main_bi_range 同源，
-            # 但独立计算保留单侧结果——_main_bi_range 任一侧为空即整体返回
-            # None，会丢失另一侧已有的肩部时间，期货分析路径依赖此行为）
+            # 左/右边界原始K线时间（双窗口红框定位）
+            # 2026-09-02 归一化：与股票/区间套统一走 _main_bi_range（取分型自身
+            # 极值（峰/谷）原始K线，allow_partial=True 保留单侧结果——期货分析
+            # 路径依赖此行为）。旧内联逻辑（分型左肩/右肩外沿）已注释保留，
+            # 如需恢复取消注释即可。
             fx_a_raw_dt = ""
             fx_b_raw_dt = ""
             try:
-                begin_klc = getattr(bi, 'begin_klc', None)
-                end_klc = getattr(bi, 'end_klc', None)
-                left_shoulder_klc = begin_klc.pre if begin_klc else None
-                if left_shoulder_klc and left_shoulder_klc.lst:
-                    fx_a_raw_dt = left_shoulder_klc.lst[0].time.toFmtStr(date_fmt)
-                right_shoulder_klc = end_klc.next if end_klc else None
-                if right_shoulder_klc and right_shoulder_klc.lst:
-                    fx_b_raw_dt = right_shoulder_klc.lst[-1].time.toFmtStr(date_fmt)
+                shoulder_times = _main_bi_range(bi, date_fmt, allow_partial=True)
+                if shoulder_times:
+                    fx_a_raw_dt, fx_b_raw_dt, _, _ = shoulder_times
+                # ── 旧逻辑（2026-09-02 注释保留，如需恢复取消注释即可）──
+                # 左边界 = 起始分型左肩分型的第一根原始K线
+                # 右边界 = 结束分型右肩分型的最后一根原始K线
+                # begin_klc = getattr(bi, 'begin_klc', None)
+                # end_klc = getattr(bi, 'end_klc', None)
+                # left_shoulder_klc = begin_klc.pre if begin_klc else None
+                # if left_shoulder_klc and left_shoulder_klc.lst:
+                #     fx_a_raw_dt = left_shoulder_klc.lst[0].time.toFmtStr(date_fmt)
+                # right_shoulder_klc = end_klc.next if end_klc else None
+                # if right_shoulder_klc and right_shoulder_klc.lst:
+                #     fx_b_raw_dt = right_shoulder_klc.lst[-1].time.toFmtStr(date_fmt)
             except Exception as _e:
                 log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
             bis.append({

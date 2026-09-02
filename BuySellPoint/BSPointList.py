@@ -1803,7 +1803,7 @@ def _get_date_fmt(freq):
     return "%Y/%m/%d"
 
 
-def _main_bi_range(bi, date_fmt):
+def _main_bi_range(bi, date_fmt, allow_partial=False):
     """获取主笔两端原始K线时间及KLU对象
 
     股票和期货统一走此函数，通过 date_fmt 指定格式：
@@ -1812,8 +1812,19 @@ def _main_bi_range(bi, date_fmt):
     - date_fmt = "%Y/%m/%d"（仅日期，长度10）
 
     返回: (fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu) 或 None
-      a_klu / b_klu 为左右肩 KLU 对象，供 _stocks_red_range 直接消费，
+      a_klu / b_klu 为左右边界 KLU 对象，供 _stocks_red_range 直接消费，
       避免重复从 bi 提取 KLU。
+
+    边界取值说明（2026-09-02 由「分型肩部外沿」改为「分型自身极值（峰/谷）」）：
+      - 新逻辑：左边界 = 起始分型的极值原始K线（向上笔=谷底，向下笔=峰顶），
+        即 bi.get_begin_klu()；右边界 = 结束分型的极值原始K线（向上笔=峰顶，
+        向下笔=谷底），即 bi.get_end_klu()。红框边界与笔的 sdt/edt 端点一致
+        （sdt/edt 即用这两个函数生成）。
+      - 旧逻辑（已注释保留）：左边界 = 起始分型左肩分型的第一根原始K线，
+        右边界 = 结束分型右肩分型的最后一根原始K线（外沿区间，区间更宽）。
+
+    allow_partial: 是否允许返回单侧结果。默认 False（任一侧为空即整体返回 None，
+      保持历史行为）；True 时保留已有单侧结果（期货分析路径依赖此行为）。
     """
     fx_a_raw_dt = ""
     fx_b_raw_dt = ""
@@ -1821,22 +1832,39 @@ def _main_bi_range(bi, date_fmt):
     b_klu = None
 
     try:
-        begin_klc = bi.begin_klc
-        end_klc = bi.end_klc
-        left_shoulder_klc = begin_klc.pre if begin_klc else None
-        if left_shoulder_klc and left_shoulder_klc.lst:
-            a_klu = left_shoulder_klc.lst[0]
+        # ── 新逻辑（2026-09-02）：取分型自身极值（峰/谷）所在原始K线 ──
+        # 左边界 = 起始分型极值K线（向上笔=谷底，向下笔=峰顶）
+        a_klu = bi.get_begin_klu()
+        if a_klu:
             fx_a_raw_dt = a_klu.time.toFmtStr(date_fmt)
-
-        right_shoulder_klc = end_klc.next if end_klc else None
-        if right_shoulder_klc and right_shoulder_klc.lst:
-            b_klu = right_shoulder_klc.lst[-1]
+        # 右边界 = 结束分型极值K线（向上笔=峰顶，向下笔=谷底）
+        b_klu = bi.get_end_klu()
+        if b_klu:
             fx_b_raw_dt = b_klu.time.toFmtStr(date_fmt)
+
+        # ── 旧逻辑（2026-09-02 注释保留，如需恢复取消注释即可）──
+        # 左边界 = 起始分型左肩分型的第一根原始K线
+        # 右边界 = 结束分型右肩分型的最后一根原始K线
+        # begin_klc = bi.begin_klc
+        # end_klc = bi.end_klc
+        # left_shoulder_klc = begin_klc.pre if begin_klc else None
+        # if left_shoulder_klc and left_shoulder_klc.lst:
+        #     a_klu = left_shoulder_klc.lst[0]
+        #     fx_a_raw_dt = a_klu.time.toFmtStr(date_fmt)
+        # right_shoulder_klc = end_klc.next if end_klc else None
+        # if right_shoulder_klc and right_shoulder_klc.lst:
+        #     b_klu = right_shoulder_klc.lst[-1]
+        #     fx_b_raw_dt = b_klu.time.toFmtStr(date_fmt)
     except Exception as e:
         print(f"[警告] 异常: {type(e).__name__}: {e}")
 
-    if not fx_a_raw_dt or not fx_b_raw_dt:
-        return None
+    if allow_partial:
+        # 保留单侧结果（期货分析路径依赖：任一侧为空不整体丢弃）
+        if not fx_a_raw_dt and not fx_b_raw_dt:
+            return None
+    else:
+        if not fx_a_raw_dt or not fx_b_raw_dt:
+            return None
     return fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu
 
 
