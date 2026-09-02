@@ -823,9 +823,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 3. 在子级别笔列表中找被红框完全覆盖的笔
         start_bi_idx, end_bi_idx = _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq)
         if start_bi_idx is None or end_bi_idx is None:
+            # 2026-09-02 一致性决策：红框内无完整覆盖笔时，与盘后红框中枢显示
+            # （compute_red_range_zs 报"红框内无完整笔"）保持一致——不判背驰、
+            # 不放行买卖点（原 return True 默认判背驰=放行，属评审 P1 假阳性）。
             self._dbg_bs('check_nested_diver', '找不到被红框[C,D]完全覆盖的笔',
                          fx_a=fx_a_sub_dt, fx_b=fx_b_sub_dt)
-            return True  # 按子级别背驰处理
+            return False  # 不背驰（无完整笔即无买卖点，与盘后中枢显示一致）
 
         sub_bi_sliced = list(sub_bi_list[start_bi_idx:end_bi_idx + 1])
         bi_count = len(sub_bi_sliced)
@@ -2068,16 +2071,18 @@ def _futures_red_range(snapshot, main_freq_sec, sub_freq_sec, sub_freq=None):
 
 
 def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
-    """在子级别笔列表中找与红框 [fx_a_sub_dt, fx_b_sub_dt] 有交叠的笔。
+    """在子级别笔列表中找被红框 [fx_a_sub_dt, fx_b_sub_dt] 完全覆盖的笔。
 
-    2026-09-02 由「完全覆盖」改为「有交叠即纳入」（评审 P1 修复）：
-      · 旧语义：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt（完全框住）。
-        首/末子笔端点由子级别分型决定，天然不与主笔端点对齐，导致「零覆盖」
-        频繁触发 check_nested_diver 的 return True 兜底（默认判背驰=放行买卖点），
-        红框收窄后该问题从偶发变常态。
-      · 新语义：bi 的 edt >= fx_a_sub_dt 且 bi 的 sdt <= fx_b_sub_dt（区间有交叠）。
-        跨界子笔也纳入比较，零覆盖基本消失，判定更连续。
-    取第一个和最后一个与红框有交叠的笔索引。
+    2026-09-02 由「有交叠即纳入」回退为「完全覆盖」（一致性决策）：
+      · 完全覆盖：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt（完全框住）。
+        实时区间套买卖点判断（check_nested_diver）与盘后红框中枢显示
+        （compute_red_range_zs / 前端 updateDualNewZs）共用本函数，必须保持
+        同一选笔语义，否则两者结果不一致。前端 updateDualNewZs 调后端
+        /red-range 接口、无独立选笔逻辑，故只需后端统一。
+      · 交叠语义（2026-09-02 曾短暂启用，评审 P1 修复）：bi 的 edt >=
+        fx_a_sub_dt 且 bi 的 sdt <= fx_b_sub_dt（区间有交叠）。跨界子笔也纳入，
+        零覆盖基本消失，但会与盘后中枢显示不一致，故回退。旧实现注释保留。
+    取第一个和最后一个被红框完全覆盖的笔索引。
 
     参数:
         fx_a_sub_dt: 红框左边界时间字符串（来自 _stocks_red_range 的 fx_a_sub_dt）
@@ -2105,15 +2110,15 @@ def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
         except (AttributeError, ValueError, TypeError):
             continue
 
-        # ── 新逻辑（2026-09-02）：与红框有交叠即纳入 ──
-        if e_dt >= fx_a_sub_dt and s_dt <= fx_b_sub_dt:
+        # ── 新逻辑（2026-09-02 回退）：完全覆盖 ──
+        if s_dt >= fx_a_sub_dt and e_dt <= fx_b_sub_dt:
             if start_bi_idx is None:
                 start_bi_idx = i
             end_bi_idx = i
 
-        # ── 旧逻辑（2026-09-02 注释保留，如需恢复取消注释即可）──
-        # 完全覆盖：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt
-        # if s_dt >= fx_a_sub_dt and e_dt <= fx_b_sub_dt:
+        # ── 交叠语义（2026-09-02 曾短暂启用，注释保留，如需恢复取消注释即可）──
+        # 有交叠：bi 的 edt >= fx_a_sub_dt 且 bi 的 sdt <= fx_b_sub_dt
+        # if e_dt >= fx_a_sub_dt and s_dt <= fx_b_sub_dt:
         #     if start_bi_idx is None:
         #         start_bi_idx = i
         #     end_bi_idx = i

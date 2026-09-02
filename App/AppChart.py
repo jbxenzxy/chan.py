@@ -352,7 +352,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     call_compute_red_range_zs。
 
     双窗口红框中枢计算：前端传来红框的左右边界时间 [left_date, right_date]，
-    后端内部调用 _red_range_bi_sequence 找到与红框有交叠的子级别笔，再
+    后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再
     用 _red_range_amp 重新计算中枢，返回给前端绘制。
 
     股票双窗实现（A/B 开关 CHAN_STOCK_DUAL_IMPL）：
