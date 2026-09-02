@@ -3076,33 +3076,33 @@
             const savedCanvas = canvas; const savedCtx = ctx;
             const savedViewOffset = viewOffset; const savedViewCount = viewCount;
             canvas = subCanvas; ctx = subCtx;
-                viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
-                try {
+            viewOffset = dualSubViewOffset; viewCount = dualSubViewCount;
+            try {
                 const rect = subCanvas.getBoundingClientRect();
-            const bMouseX = e.clientX - rect.left;
-            const area = getChartArea();
-            const klines = dualSubData.klines;
-            const barStep = area.w / viewCount;
-            const ratio = Math.max(0, Math.min(1, (bMouseX - area.x) / area.w));
-            const mouseKIdx = ratio * viewCount;
-            const zoomFactor = 1.15;
-            const newViewCount = e.deltaY > 0
-                ? Math.min(klines.length, Math.ceil(viewCount * zoomFactor))
-                : Math.max(3, Math.round(viewCount / zoomFactor));
-            if (newViewCount === viewCount) { return; }
-            const maxOffset = klines.length - newViewCount;
-            if (mouseKIdx >= viewCount - 1) {
-                const rightGlobalIdx = viewOffset + viewCount - 1;
-                dualSubViewCount = newViewCount;
-                dualSubViewOffset = Math.max(0, Math.min(maxOffset, rightGlobalIdx - newViewCount + 1));
-            } else {
-                const anchorGlobalIdx = viewOffset + mouseKIdx;
-                let newViewOffset = anchorGlobalIdx - ratio * newViewCount;
-                newViewOffset = Math.max(0, newViewOffset);
-                if (newViewOffset > maxOffset) newViewOffset = maxOffset;
-                dualSubViewCount = newViewCount;
-                dualSubViewOffset = newViewOffset;
-            }
+                const bMouseX = e.clientX - rect.left;
+                const area = getChartArea();
+                const klines = dualSubData.klines;
+                const barStep = area.w / viewCount;
+                const ratio = Math.max(0, Math.min(1, (bMouseX - area.x) / area.w));
+                const mouseKIdx = ratio * viewCount;
+                const zoomFactor = 1.15;
+                const newViewCount = e.deltaY > 0
+                    ? Math.min(klines.length, Math.ceil(viewCount * zoomFactor))
+                    : Math.max(3, Math.round(viewCount / zoomFactor));
+                if (newViewCount === viewCount) { return; }
+                const maxOffset = klines.length - newViewCount;
+                if (mouseKIdx >= viewCount - 1) {
+                    const rightGlobalIdx = viewOffset + viewCount - 1;
+                    dualSubViewCount = newViewCount;
+                    dualSubViewOffset = Math.max(0, Math.min(maxOffset, rightGlobalIdx - newViewCount + 1));
+                } else {
+                    const anchorGlobalIdx = viewOffset + mouseKIdx;
+                    let newViewOffset = anchorGlobalIdx - ratio * newViewCount;
+                    newViewOffset = Math.max(0, newViewOffset);
+                    if (newViewOffset > maxOffset) newViewOffset = maxOffset;
+                    dualSubViewCount = newViewCount;
+                    dualSubViewOffset = newViewOffset;
+                }
             } finally {
                 canvas = savedCanvas; ctx = savedCtx; viewOffset = savedViewOffset; viewCount = savedViewCount;
             }
