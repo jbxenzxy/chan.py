@@ -358,7 +358,16 @@
    "sdt_ts": 0
   }
  ],
- "bsps": [],
+ "bsps": [
+  {
+   "date": "2024/02/01",
+   "high": 49.02,
+   "is_buy": true,
+   "low": 48.09,
+   "price": 48.73,
+   "type": "3"
+  }
+ ],
  "fxs": [
   {
    "date": "2023/03/01",
@@ -9680,7 +9689,7 @@
  ],
  "meta": {
   "bi_count": 17,
-  "bsp_count": 0,
+  "bsp_count": 1,
   "chan_version": "chan.py",
   "date_range": "2023/02/10 ~ 2024/12/02",
   "forward_adjust": true,

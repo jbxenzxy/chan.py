@@ -345,7 +345,7 @@ def _c_stock_d_step_m5():
 def _c_multilevel():
     """多级别联立（legacy 基线）：A/B 开关强制 legacy，走原联立路径
     （dual=True 时子级别由 _SUB_FREQ_MAP 自动映射，子级别数据经
-    read_sub_level_records 通道注入，红框边界取左右肩主 KLU 联立
+    read_sub_level_records 通道注入，红框边界取主笔边界（峰/谷）KLU 联立
     sub_kl_list 真实子级边界）。快照冻结于联立实现，不随独立改造漂移。"""
     from App import AppEngine as m
     restore_env = _force_dual_impl("legacy")

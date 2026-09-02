@@ -1234,7 +1234,7 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
     """统一缠论结构元素提取：bis / fxs / segs / zs / zs_stars / bsps。
 
     SSE 实时快照（_extract_realtime_snapshot）与期货分析
-    共用同一提取逻辑，保证两条路径字段一致。肩部原始K线时间统一走
+    共用同一提取逻辑，保证两条路径字段一致。边界（峰/谷）原始K线时间统一走
     _main_bi_range（与股票路径同源）。
 
     返回 (bis, fxs, segs, zs_list, zs_stars, bsps)。

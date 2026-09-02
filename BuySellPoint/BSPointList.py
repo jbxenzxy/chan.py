@@ -804,7 +804,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range_algo(
                     fx_a_raw_dt, fx_b_raw_dt, main_freq, _explicit_sub_freq)
             else:
-                # legacy 联立：从左右肩 KLU 的 sub_kl_list 取真实子级别边界
+                # legacy 联立：从边界 KLU（峰/谷）的 sub_kl_list 取真实子级别边界
                 fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, main_bi)
         else:
             from DataAPI.TqSdkAPI import CTqSdkAPI
@@ -1869,24 +1869,24 @@ def _main_bi_range(bi, date_fmt, allow_partial=False):
 
 
 def _stocks_red_range(a_klu, b_klu, sub_freq, bi=None):
-    """股票双窗口：从主级别一笔的左右肩 KLU 中提取子级别边界时间 [C,D]。
+    """股票双窗口：从主级别一笔的边界 KLU（峰/谷）中提取子级别边界时间 [C,D]。
 
     a_klu / b_klu 由 _main_bi_range 返回，避免重复提取。
     多级别CChan联立模式下，KLU 带有 sub_kl_list（真实子级别K线序列），
-    直接取左肩第一根 / 右肩最后一根子级别K线的时间。
+    直接取左边界第一根 / 右边界最后一根子级别K线的时间。
 
-    实时场景下，最新 K 线（右肩）的 sub_kl_list 可能尚未建立，此时自动
+    实时场景下，最新 K 线（右边界）的 sub_kl_list 可能尚未建立，此时自动
     回退到笔的结束 K 线（end_klc.lst[-1]），该 K 线在上一轮已处理完毕。
 
     参数:
-        a_klu:    左肩 KLU 对象（来自 _main_bi_range）
-        b_klu:    右肩 KLU 对象（来自 _main_bi_range）
+        a_klu:    左边界 KLU 对象（来自 _main_bi_range）
+        b_klu:    右边界 KLU 对象（来自 _main_bi_range）
         sub_freq: 子级别周期（如 "30m", "5m"）
         bi:       主级别一笔（CBi 对象），仅在 b_klu sub_kl_list 为空时用于 fallback
 
     与期货 _futures_red_range 不同：股票有真实子级别数据，无需数学换算。
     """
-    # ── 右边界 fallback：若右肩 sub_kl_list 为空，回退到笔结束K线 ──
+    # ── 右边界 fallback：若右边界 sub_kl_list 为空，回退到笔结束K线 ──
     if b_klu is None or not hasattr(b_klu, 'sub_kl_list') or not b_klu.sub_kl_list:
         if bi is not None and bi.end_klc and bi.end_klc.lst:
             b_klu = bi.end_klc.lst[-1]
@@ -1927,8 +1927,8 @@ def _stocks_red_range_algo(fx_a_raw_dt, fx_b_raw_dt, main_freq, sub_freq):
     股票 K 线 dt = 结束时间（与期货=开始时间相反），公式与
     _futures_red_range 镜像对称（期货 offset 加在右端，股票减在左端）：
       · 日内主级别（30m）：
-          C = A - (main_sec - sub_sec)   左肩主K线覆盖区间内第一根下窗K线
-          D = B                          右肩主K线覆盖区间内最后一根下窗K线
+          C = A - (main_sec - sub_sec)   左边界主K线覆盖区间内第一根下窗K线
+          D = B                          右边界主K线覆盖区间内最后一根下窗K线
           （例：30m 线 A=11:00 + 5m 子 → C=10:35，恰为 10:31~11:00 内首根 5m 线）
       · 日期型主级别（w/d）：主K线 dt 为当日 00:00，覆盖全日/全周，
         无法定位到日内时刻，按「当日边界」取整：
@@ -1936,7 +1936,7 @@ def _stocks_red_range_algo(fx_a_raw_dt, fx_b_raw_dt, main_freq, sub_freq):
           D = B 当日 23:59:59
         按下窗日期格式输出后，字符串比较语义仍正确覆盖当日全部下窗K线。
     参数:
-        fx_a_raw_dt / fx_b_raw_dt: 主级别笔左右肩原始分型时间（_main_bi_range 产出）
+        fx_a_raw_dt / fx_b_raw_dt: 主级别笔边界（峰/谷）原始分型时间（_main_bi_range 产出）
         main_freq / sub_freq:      主/子级别周期（如 "30m"/"5m"、"d"/"30m"）
     返回:
         (fx_a_sub_dt, fx_b_sub_dt)；解析失败返回 ("", "")。
@@ -2068,11 +2068,16 @@ def _futures_red_range(snapshot, main_freq_sec, sub_freq_sec, sub_freq=None):
 
 
 def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
-    """在子级别笔列表中找被红框 [fx_a_sub_dt, fx_b_sub_dt] 完全覆盖的笔。
+    """在子级别笔列表中找与红框 [fx_a_sub_dt, fx_b_sub_dt] 有交叠的笔。
 
-    逻辑与前端 updateDualNewZs() 完全一致：
-      bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt → 该笔被红框完全覆盖。
-    取第一个和最后一个被覆盖的笔索引。
+    2026-09-02 由「完全覆盖」改为「有交叠即纳入」（评审 P1 修复）：
+      · 旧语义：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt（完全框住）。
+        首/末子笔端点由子级别分型决定，天然不与主笔端点对齐，导致「零覆盖」
+        频繁触发 check_nested_diver 的 return True 兜底（默认判背驰=放行买卖点），
+        红框收窄后该问题从偶发变常态。
+      · 新语义：bi 的 edt >= fx_a_sub_dt 且 bi 的 sdt <= fx_b_sub_dt（区间有交叠）。
+        跨界子笔也纳入比较，零覆盖基本消失，判定更连续。
+    取第一个和最后一个与红框有交叠的笔索引。
 
     参数:
         fx_a_sub_dt: 红框左边界时间字符串（来自 _stocks_red_range 的 fx_a_sub_dt）
@@ -2100,10 +2105,18 @@ def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
         except (AttributeError, ValueError, TypeError):
             continue
 
-        if s_dt >= fx_a_sub_dt and e_dt <= fx_b_sub_dt:
+        # ── 新逻辑（2026-09-02）：与红框有交叠即纳入 ──
+        if e_dt >= fx_a_sub_dt and s_dt <= fx_b_sub_dt:
             if start_bi_idx is None:
                 start_bi_idx = i
             end_bi_idx = i
+
+        # ── 旧逻辑（2026-09-02 注释保留，如需恢复取消注释即可）──
+        # 完全覆盖：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt
+        # if s_dt >= fx_a_sub_dt and e_dt <= fx_b_sub_dt:
+        #     if start_bi_idx is None:
+        #         start_bi_idx = i
+        #     end_bi_idx = i
 
     return start_bi_idx, end_bi_idx
 

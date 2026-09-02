@@ -360,12 +360,28 @@
  ],
  "bsps": [
   {
+   "date": "2024/11/20",
+   "high": 18.32,
+   "is_buy": true,
+   "low": 18.09,
+   "price": 18.23,
+   "type": "2"
+  },
+  {
    "date": "2024/07/29",
    "high": 17.86,
    "is_buy": true,
    "low": 17.63,
    "price": 17.84,
    "type": "1"
+  },
+  {
+   "date": "2024/02/01",
+   "high": 49.02,
+   "is_buy": true,
+   "low": 48.09,
+   "price": 48.73,
+   "type": "3"
   }
  ],
  "fxs": [
@@ -9689,7 +9705,7 @@
  ],
  "meta": {
   "bi_count": 17,
-  "bsp_count": 1,
+  "bsp_count": 3,
   "chan_version": "chan.py",
   "date_range": "2023/02/10 ~ 2024/12/02",
   "forward_adjust": true,

@@ -993,7 +993,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             _fx_empty_count += 1
 
         # 红框边界（双窗口）：独立双窗用数学换算（主KLU 无联立 sub_kl_list，
-        # 以 sub_records 非空为独立实现标志）；legacy 联立路径从左右肩 KLU 的
+        # 以 sub_records 非空为独立实现标志）；legacy 联立路径从边界 KLU（峰/谷）的
         # sub_kl_list 取真实子级别边界
         if dual and sub_freq:
             if sub_records is not None:
@@ -1317,7 +1317,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             edt_str = edt
             edt_ts = 0
 
-        # 子级别的 fx_a_raw_dt/fx_b_raw_dt（分型肩部时间，用于红框定位）
+        # 子级别的 fx_a_raw_dt/fx_b_raw_dt（分型极值（峰/谷）时间，用于红框定位）
         # 和主级别共用同一个函数，逻辑完全一致
         begin_fx_idx = getattr(bi, 'begin_fx_idx', -1)
         end_fx_idx = getattr(bi, 'end_fx_idx', -1)
