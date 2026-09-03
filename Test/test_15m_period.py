@@ -18,10 +18,15 @@ Test/test_15m_period.py —— 15m 周期 + 30m 分桶回归测试（零第三�
 import ast
 import os
 import re
+import sys
 from collections import OrderedDict, Counter
 from datetime import datetime, timedelta
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from Common.CEnum import FREQ_TABLE, INTRADAY_FREQS, SUBSECOND_FREQS
 
 
 # ═══════════ 通用：AST 提取某文件中指定顶层定义并在隔离命名空间执行 ═══════════
@@ -128,18 +133,29 @@ def test_get_date_fmt_15m(fu):
     print("[PASS] _get_date_fmt('15m')=%Y/%m/%d %H:%M（红框时分不截断）")
 
 
-def test_freq_single_source(fu):
-    """INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt 收敛为 Common.func_util 单一事实源。"""
-    assert "15m" in fu["INTRADAY_FREQS"], "Common.func_util.INTRADAY_FREQS 缺 15m"
-    # 两个高层不再复制双副本，仅从 Common.func_util 导入
+def test_freq_single_source():
+    """周期分类收敛为 Common.CEnum.FREQ_TABLE 单一事实源；func_util/高层仅再导出，不内联副本。"""
+    assert "15m" in INTRADAY_FREQS, "Common.CEnum.INTRADAY_FREQS 缺 15m"
+    assert "15m" in FREQ_TABLE, "Common.CEnum.FREQ_TABLE 缺 15m 定义"
+    # func_util：不再内联集合，改为从 CEnum 导入再导出
+    with open(os.path.join(ROOT, "Common/func_util.py"), encoding="utf-8") as f:
+        fu_src = f.read()
+    assert "INTRADAY_FREQS = {" not in fu_src, "func_util 仍内联 INTRADAY_FREQS"
+    assert "SUBSECOND_FREQS = {" not in fu_src, "func_util 仍内联 SUBSECOND_FREQS"
+    assert "from .CEnum import" in fu_src and "INTRADAY_FREQS" in fu_src, \
+        "func_util 未从 CEnum 导入周期分类"
+    # 高层：不复制周期分类，仅从 Common 导入（App/utils 的 _get_date_fmt 来自 func_util 再导出）
     for rel in ("BuySellPoint/BSPointList.py", "App/utils.py"):
         with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
             src = f.read()
         assert "INTRADAY_FREQS = {" not in src, f"{rel} 仍存在 INTRADAY_FREQS 内联副本"
         assert "SUBSECOND_FREQS = {" not in src, f"{rel} 仍存在 SUBSECOND_FREQS 内联副本"
         assert "def _get_date_fmt(" not in src, f"{rel} 仍存在 _get_date_fmt 内联定义"
-        assert "from Common.func_util import" in src, f"{rel} 未从 Common.func_util 导入周期分类"
-    print(f"[PASS] 周期分类单一事实源 Common.func_util（含15m），高层不再复制双副本")
+        assert "from Common.CEnum import" in src or "from Common.func_util import" in src, \
+            f"{rel} 未从 Common 导入周期分类"
+    # BSPointList 不再内联 KL↔freq 双向映射
+    assert "KL_TYPE.K_15S: '15s'" not in src, "BSPointList 仍内联 KL↔freq 映射（应改从 CEnum 派生）"
+    print(f"[PASS] 周期分类单一事实源 Common.CEnum.FREQ_TABLE（含15m），func_util/高层不再复制副本")
 
 
 def test_30m_single_source():
@@ -192,10 +208,11 @@ def main():
     test_30m_single_source()
     test_30m_p2_2_optim_branch()
 
-    fu = extract_from_file("Common/func_util.py",
-                           ["INTRADAY_FREQS", "SUBSECOND_FREQS", "_get_date_fmt"])
-    test_get_date_fmt_15m(fu)
-    test_freq_single_source(fu)
+    # INTRADAY_FREQS / SUBSECOND_FREQS 现由 Common.CEnum.FREQ_TABLE 派生、
+    # func_util 再导出（不再内联定义），AST 无法提取，改直接 import。
+    from Common.func_util import _get_date_fmt
+    test_get_date_fmt_15m({"_get_date_fmt": _get_date_fmt})
+    test_freq_single_source()
 
     test_dual_consistency()
     print("ALL 15m/30m TESTS PASS")

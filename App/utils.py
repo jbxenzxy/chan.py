@@ -24,7 +24,8 @@ import re
 # ── 顶层依赖（引擎纯函数需要；均不反向 import App，无循环依赖）──
 from App.AppConfig import app_config
 # chan.py 核心（KL_TYPE 枚举）
-from Common.CEnum import KL_TYPE
+from Common.CEnum import FREQ_SEC_TO_KL as _FREQ_SEC_TO_KL
+from Common.CEnum import FREQ_TABLE, KL_TYPE
 # 周期分类单一事实源（INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt）
 from Common.func_util import INTRADAY_FREQS, SUBSECOND_FREQS, _get_date_fmt
 # 缠论配置（_make_chan_config）
@@ -253,12 +254,8 @@ def _inherit_macd_for_preview_bar(klines_list):
 
 
 # ── 周期映射（秒数 → KL_TYPE；取数唯一来源）──
-_FREQ_SEC_TO_KL = {
-    15: KL_TYPE.K_15S, 30: KL_TYPE.K_30S, 60: KL_TYPE.K_1M,
-    180: KL_TYPE.K_3M, 300: KL_TYPE.K_5M, 900: KL_TYPE.K_15M,
-    1800: KL_TYPE.K_30M, 3600: KL_TYPE.K_60M, 86400: KL_TYPE.K_DAY,
-    604800: KL_TYPE.K_WEEK, 2592000: KL_TYPE.K_MON,
-}
+# _FREQ_SEC_TO_KL 已从 Common/CEnum.py 的 FREQ_TABLE 派生视图导入（顶部 import）。
+# 新增频率只需改 CEnum.FREQ_TABLE。
 
 
 def _get_kl_type_by_sec(freq_sec):
@@ -273,9 +270,9 @@ def _get_kl_type(freq):
 
 
 def _get_freq_label(freq):
-    """根据频率字符串返回中文标签"""
-    labels = {'15s': '15秒', '1m': '1分钟', '5m': '5分钟', '15m': '15分钟', '30m': '30分钟', '60m': '60分钟', 'd': '日线', 'w': '周线'}
-    return labels.get(freq, '日线')
+    """根据频率字符串返回中文标签（来源 Common/CEnum.py 的 FREQ_TABLE；无标签回退'日线'）"""
+    row = FREQ_TABLE.get(freq)
+    return row[2] if row and row[2] else "日线"
 
 
 # ── 缠论配置（统一构造；配置值单源于 ChanConfig.CChanConfig 默认值）──

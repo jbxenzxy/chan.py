@@ -22,6 +22,7 @@ logging.getLogger("shinny").setLevel(logging.WARNING)
 logging.getLogger("tqsdk.tqapi").setLevel(logging.WARNING)
 
 from DataAPI.CommonStockAPI import CCommonStockApi
+from Common.CEnum import FREQ_SEC_MAP
 
 log = logging.getLogger(__name__)
 
@@ -188,11 +189,8 @@ SUPPORTED_FREQS = ["15s", "1m", "5m", "30m"]
 DISABLED_FREQS = ["d", "w"]
 
 # 天勤K线周期映射：标签 -> 秒数
-FREQ_SEC_MAP = {
-    "15s": 15, "30s": 30, "1m": 60, "3m": 180, "5m": 300,
-    "15m": 900, "30m": 1800, "60m": 3600, "d": 86400,
-    "w": 604800, "M": 2592000,
-}
+# 单一事实源 = Common/CEnum.py 的 FREQ_TABLE，此处为顶部导入的派生视图 FREQ_SEC_MAP。
+# （期货日志专用短标签 FREQ_LABEL_CN 语义不同，单独保留；新增频率仍需在此同步短标签）
 
 SEC_TO_LABEL = {v: k for k, v in FREQ_SEC_MAP.items()}
 

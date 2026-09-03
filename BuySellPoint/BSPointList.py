@@ -4,7 +4,13 @@ from typing import Dict, Generic, Iterable, List, Optional, Tuple, TypeVar
 
 from Bi.Bi import CBi
 from Bi.BiList import CBiList
-from Common.CEnum import BSP_TYPE, KL_TYPE, MACD_ALGO
+from Common.CEnum import (
+    BSP_TYPE,
+    FREQ_TO_KL_TYPE as _FREQ_TO_KL_TYPE,
+    KL_TYPE,
+    KL_TYPE_TO_FREQ as _KL_TYPE_TO_FREQ,
+    MACD_ALGO,
+)
 from Common.func_util import (
     INTRADAY_FREQS,
     SUBSECOND_FREQS,
@@ -491,19 +497,8 @@ def cal_bsp33_bi_end_idx(seg: Optional[CSeg[LINE_TYPE]]):
 # sub_freq 由 freq 自动推导（双窗口配对固定）。
 # ═══════════════════════════════════════════════════════════
 
-# KL_TYPE → freq 字符串映射
-_KL_TYPE_TO_FREQ = {
-    KL_TYPE.K_15S: '15s', KL_TYPE.K_1M: '1m', KL_TYPE.K_5M: '5m',
-    KL_TYPE.K_15M: '15m', KL_TYPE.K_30M: '30m', KL_TYPE.K_60M: '60m',
-    KL_TYPE.K_DAY: 'd', KL_TYPE.K_WEEK: 'w',
-}
-
-# freq 字符串 → KL_TYPE 枚举反向映射
-_FREQ_TO_KL_TYPE = {
-    '15s': KL_TYPE.K_15S, '1m': KL_TYPE.K_1M, '5m': KL_TYPE.K_5M,
-    '15m': KL_TYPE.K_15M, '30m': KL_TYPE.K_30M, '60m': KL_TYPE.K_60M,
-    'd': KL_TYPE.K_DAY, 'w': KL_TYPE.K_WEEK,
-}
+# KL_TYPE ↔ freq 双向映射：来源为 Common/CEnum.py 的 FREQ_TABLE 派生视图
+# （顶部 import 以 _KL_TYPE_TO_FREQ / _FREQ_TO_KL_TYPE 别名引入），见其单一事实源说明。
 
 def _get_kl_type(freq):
     """根据频率字符串返回对应的 KL_TYPE 枚举值"""

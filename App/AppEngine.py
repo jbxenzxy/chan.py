@@ -86,7 +86,7 @@ if SCRIPT_DIR not in sys.path:
 # ============================================================
 try:
     from Chan import CChan
-    from Common.CEnum import AUTYPE, KL_TYPE, FX_TYPE
+    from Common.CEnum import AUTYPE, FREQ_SEC_MAP, KL_TYPE, FX_TYPE
 except ImportError as e:
     log.error(f"\n[错误] chan.py 导入失败: {e}")
     log.info(f"[提示] 请确保 CHAN_PATH = r'{app_config.chan_path}' 指向正确的 chan.py 仓库目录")
@@ -1572,11 +1572,10 @@ def _validate_stock_dual_pair(freq, sub_freq):
 
 # 主级别单根 K 线的覆盖时长（结束时间语义：K 线 dt=结束时刻，
 # 覆盖区间 (dt-period, dt]）
+# 值取自 单一事实源 Common/CEnum.py FREQ_SEC_MAP（freq→秒）换算，
+# 仅取股票主级别 4 个周期（w/d/30m/15m）。
 _STOCKS_MAIN_PERIOD = {
-    "w": timedelta(days=7),
-    "d": timedelta(days=1),
-    "30m": timedelta(minutes=30),
-    "15m": timedelta(minutes=15),
+    f: timedelta(seconds=FREQ_SEC_MAP[f]) for f in ("w", "d", "30m", "15m")
 }
 
 # 日期型 K 线（w/d）dt 为当日 00:00，语义补齐到「当日结束时刻」

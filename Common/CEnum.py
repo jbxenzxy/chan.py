@@ -31,6 +31,40 @@ class KL_TYPE(Enum):
     K_YEAR = 19
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 频率注册表（单一事实源）：集中管理各频率的不变属性，新增周期只需在此
+# 加一行，以下派生映射自动同步，杜绝多副本漏改。
+# 行格式：(KL_TYPE, 秒数, 长中文标签, 是否日内分钟级, 是否秒级)
+#   长标签为 None 时 _get_freq_label 回退默认 '日线'。
+# 消费方（均在顶部 import 本文件派生视图）：
+#   - Common/func_util   INTRADAY_FREQS / SUBSECOND_FREQS（_get_date_fmt 用）
+#   - BuySellPoint/BSPointList  KL_TYPE_TO_FREQ / FREQ_TO_KL_TYPE
+#   - App/utils          FREQ_SEC_TO_KL / FREQ_TABLE（标签）
+#   - DataAPI/TqSdkAPI   FREQ_SEC_MAP
+#   - App/AppEngine      _STOCKS_MAIN_PERIOD
+# ═══════════════════════════════════════════════════════════════════
+FREQ_TABLE = {
+    "15s": (KL_TYPE.K_15S, 15,      "15秒",  False, True),
+    "30s": (KL_TYPE.K_30S, 30,      None,    False, False),
+    "1m":  (KL_TYPE.K_1M,  60,      "1分钟", True,  False),
+    "3m":  (KL_TYPE.K_3M,  180,     None,    False, False),
+    "5m":  (KL_TYPE.K_5M,  300,     "5分钟", True,  False),
+    "15m": (KL_TYPE.K_15M, 900,     "15分钟", True,  False),
+    "30m": (KL_TYPE.K_30M, 1800,    "30分钟", True,  False),
+    "60m": (KL_TYPE.K_60M, 3600,    "60分钟", False, False),
+    "d":   (KL_TYPE.K_DAY, 86400,   "日线",   False, False),
+    "w":   (KL_TYPE.K_WEEK, 604800, "周线",   False, False),
+    "M":   (KL_TYPE.K_MON, 2592000, None,     False, False),
+}
+
+FREQ_SEC_MAP      = {f: r[1] for f, r in FREQ_TABLE.items()}       # freq → 秒数
+KL_TYPE_TO_FREQ   = {r[0]: f for f, r in FREQ_TABLE.items()}       # KL → freq
+FREQ_TO_KL_TYPE   = {f: r[0] for f, r in FREQ_TABLE.items()}       # freq → KL
+FREQ_SEC_TO_KL    = {r[1]: r[0] for f, r in FREQ_TABLE.items()}    # 秒数 → KL
+INTRADAY_FREQS    = {f for f, r in FREQ_TABLE.items() if r[3]}     # 日内分钟级
+SUBSECOND_FREQS   = {f for f, r in FREQ_TABLE.items() if r[4]}     # 秒级
+
+
 class KLINE_DIR(Enum):
     UP = auto()
     DOWN = auto()

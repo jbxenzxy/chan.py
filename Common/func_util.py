@@ -1,4 +1,4 @@
-from .CEnum import BI_DIR, KL_TYPE
+from .CEnum import BI_DIR, INTRADAY_FREQS, KL_TYPE, SUBSECOND_FREQS
 
 
 def kltype_lt_day(_type: KL_TYPE):
@@ -41,16 +41,11 @@ def _parse_inf(v):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# 周期分类（单一事实源）：供 App/utils 与 BuySellPoint/BSPointList 等多层
-# 共同消费，避免在高层复制成双副本（任一层的 _get_date_fmt / 红框时机
-# 判断都依赖这三项，若分散会导致新增周期时漏改）。
-#   App/utils.py / BSPointList.py 均改为 from Common.func_util import ...
-#   单向依赖方向：App → Common、BuySellPoint → Common（不产生反向边）。
+# 周期分类：INTRADAY_FREQS / SUBSECOND_FREQS 的单一事实源是 Common.CEnum
+# 的 FREQ_TABLE（见 CEnum.py，顶部 import），此处仅是再导出，供
+# _get_date_fmt 与本仓既有消费方（App/utils、BSPointList、AppEngine）沿用，
+# 不再内联复制。
 # ═══════════════════════════════════════════════════════════════════
-# 日内分钟级周期集合（红框/买卖点日期格式按此判定）
-INTRADAY_FREQS = {"30m", "15m", "5m", "1m"}
-# 秒级周期（K线时间含秒）
-SUBSECOND_FREQS = {"15s"}
 
 
 def _get_date_fmt(freq):
