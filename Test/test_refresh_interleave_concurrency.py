@@ -139,7 +139,18 @@ def test_update_pe_ttm_concurrent():
     def reader():
         while not stop.is_set():
             try:
-                snap = dict(app_data._pe)
+                # 读者必须走 pe_snapshot()（持锁快照，遍历专用接口）。
+                # 裸 dict(app_data._pe) 是违反项目纪律的：update_pe_ttm 在
+                # _meta_cache_lock 内逐个 setitem 合并写入，持锁整轮覆盖所有
+                # key 后 _pe 必等于「某写者全量之一」（本用例每个 writer_values
+                # 都覆盖全部 N 个 key）。因此持锁快照满足判据（snap==某写者全量
+                # 或空）；但**锁外裸读**可能在覆盖循环进行到一半时读到
+                # 「前一写者的键 + 后一写者的键」并存——长度恰为 N 却值混合，
+                # 判据必然误报（本次偶发 FAIL errs=167753、samples='torn pe
+                # len=40' 即源于此）。改走 pe_snapshot 才是对「写收口锁内 +
+                # 读走快照」防护链的真实校验：若 update_pe_ttm 丢了锁，持锁
+                # 快照仍会读到半写撕裂，从而被捕获。
+                snap = app_data.pe_snapshot()
                 # 读取时刻必须是某写者全量之一（RMW 原子），或空(初始)
                 ok_snap = (len(snap) == 0) or any(
                     snap == v for v in writer_values)

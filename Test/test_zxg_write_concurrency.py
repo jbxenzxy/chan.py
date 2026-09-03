@@ -374,8 +374,8 @@ def test_cross_process_file_lock_serializes():
             t.join(300)
 
         rec("④", "独立子进程写盘成功退出", proc.returncode == 0,
-            f"returncode={proc.returncode}，stdout={proc.stdout.strip()[:80]}"
-            + (f"，stderr={proc.stderr.strip()[-300:]}" if proc.returncode else ""))
+            f"returncode={proc.returncode}，stdout={(proc.stdout or '').strip()[:80]}"
+            + (f"，stderr={(proc.stderr or '').strip()[-300:]}" if proc.returncode else ""))
         rec("④", "父进程并发写无异常（含文件锁未超时）", not errors,
             f"错误={errors[:3] if errors else '无'}")
 

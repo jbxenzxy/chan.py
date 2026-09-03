@@ -1,19 +1,19 @@
 {
  "phase": "7",
  "mode": "verify",
- "ran_at": "2026-09-02 13:51:55",
- "python": "3.10.12",
- "total": 45,
+ "ran_at": "2026-09-03 21:13:41",
+ "python": "3.14.7",
+ "total": 46,
  "passed": 45,
- "failed": 0,
+ "failed": 1,
  "components": [
   {
    "name": "fixtures_integrity",
-   "cmd": "../../usr/bin/python Test/gen_fixtures.py --check",
+   "cmd": ".venv\\Scripts\\python.exe Test\\gen_fixtures.py --check",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.64,
+   "elapsed_s": 0.58,
    "output_tail": [
     "[gen] stock_day.json: 500 bars",
     "[gen] stock_60m.json: 2000 bars",
@@ -26,57 +26,56 @@
   },
   {
    "name": "snapshot_regression",
-   "cmd": "../../usr/bin/python Test/snapshot_runner.py",
-   "ok": true,
-   "exit_code": 0,
+   "cmd": ".venv\\Scripts\\python.exe Test\\snapshot_runner.py",
+   "ok": false,
+   "exit_code": 1,
    "timed_out": false,
-   "elapsed_s": 7.39,
+   "elapsed_s": 4.49,
    "output_tail": [
-    "INFO  [耗时] 子级别(30m)提取: 0.034s (K线=1888 笔=95 分型=473 中枢=14 线段=11 买卖点=58)",
-    "INFO  [信息] 查询 sh600519 完成: 472条K线, 17笔, 117分型, 3中枢, 3线段, 0买卖点",
-    "INFO  [耗时] 总耗时: 1.621s",
-    "[PASS] multilevel_d_30m_indep",
-    "INFO  [耗时] 命中缓存(freq=d)，总耗时: 0.001s",
-    "[PASS] edge_gap",
-    "INFO  [耗时] 命中缓存(freq=d)，总耗时: 0.001s",
-    "[PASS] edge_zero_vol",
+    "$.edge_zero_vol.bis[0].fx_a_price: 数值超容差 expected=17.98 actual=14.84",
+    "$.edge_zero_vol.bis[0].fx_a_raw_dt: 时间不等 expected='2023/03/03' actual='2023/02/07'",
+    "$.edge_zero_vol.bis[0].low: 数值超容差 expected=17.98 actual=14.84",
+    "$.edge_zero_vol.bis[0].power: 数值超容差 expected=54.37 actual=57.51",
+    "$.edge_zero_vol.bis[0].sdt: 时间不等 expected='2023/03/03' actual='2023/02/07'",
+    "$.edge_zero_vol.bis[1].begin_fx_idx: 数值超容差 expected=99 actual=121",
+    "... 另有 24 处差异未展示",
     "[PASS] futures_15s_full",
     "[PASS] futures_15s_end_date",
     "",
-    "===== 快照回归: 9/9 通过 ====="
+    "===== 快照回归: 6/9 通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "trigger_step_replay",
-   "cmd": "../../usr/bin/python Test/test_trigger_step_replay.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_trigger_step_replay.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.98,
+   "elapsed_s": 1.44,
    "output_tail": [
-    "INFO  [耗时]   复盘后GC回收: 0.021s",
     "INFO  [耗时] 读取数据文件: 0.000s, 500条K线",
-    "INFO  [耗时] chan.py 缠论分析: 0.106s",
-    "INFO  [耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.006s",
-    "INFO  [耗时] 主级别提取结果: 0.006s (K线=500 笔=17 中枢=3 线段=3 买卖点=3)",
+    "INFO  [耗时] chan.py 缠论分析: 0.051s",
+    "INFO  [耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.003s",
+    "INFO  [耗时] 主级别提取结果: 0.003s (K线=500 笔=17 中枢=3 线段=3 买卖点=3)",
     "INFO  [信息] 查询 sh600519 完成: 500条K线, 17笔, 119分型, 3中枢, 3线段, 3买卖点",
-    "INFO  [耗时] 总耗时: 0.112s",
+    "INFO  [耗时] 总耗时: 0.055s",
     "[PASS] ① 已确认笔一致性: 14/14 三元组精确匹配（全量锚点前 14 根）",
     "[PASS] ② 虚笔: 1 根（up 2024/08/20→2024/09/09），起点锚定全量笔端点",
     "       [info] 回放 bi=15 seg=3 zs=2 | 全量 bi=17 seg=3 zs=3",
     "",
-    "===== trigger_step 回放验证: 全部通过 ====="
+    "===== trigger_step 回放验证: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "phase2_guards",
-   "cmd": "../../usr/bin/python Test/test_phase2_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase2_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.35,
+   "elapsed_s": 1.15,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "[PASS] ① 配置一致性: 别名 12 个清零 + AppData 6 对路径全部一致（单一事实源 = AppConfig）",
     "INFO  领域异常 NotFoundError: 测试股票不存在 (/api/stock)",
     "[PASS] ② 领域异常链路: NotFoundError → 404 + 结构化 JSON（{\"error\":\"NotFoundError\",\"detail\":\"测试股票不存在\"}…）",
@@ -85,38 +84,39 @@
     "[PASS] ③ 期货日期契约: 连字符不截断（SSE 语义：视为实时）——契约：end_time 仅支持 %Y/%m/%d 系斜杠格式",
     "[PASS] ③ 期货截断契约: 2400 → 400 根，末根 <= 锚点",
     "",
-    "===== 阶段 2 成果防护: 全部通过 ====="
+    "===== 阶段 2 成果防护: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "determinism",
-   "cmd": "../../usr/bin/python Test/test_determinism.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_determinism.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.48,
+   "elapsed_s": 2.83,
    "output_tail": [
-    "INFO  [信息] 按K线根数截取(freq=d): 保留24年09月10日, 500条 -> 472条",
     "INFO  [信息] 子级别(30m)同步截断: 2000条 -> 1892条",
-    "INFO  [耗时] chan.py 缠论分析: 1.567s",
-    "INFO  [耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.014s",
-    "INFO  [耗时] 主级别提取结果: 0.014s (K线=472 笔=17 中枢=3 线段=3 买卖点=1)",
+    "INFO  [耗时] chan.py 缠论分析: 0.775s",
+    "INFO  [耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.008s",
+    "INFO  [耗时] 主级别提取结果: 0.008s (K线=472 笔=17 中枢=3 线段=3 买卖点=1)",
     "INFO  [调试] 双窗口模式: dual=True, sub_freq=30m, impl=legacy, chan类型=CChan",
-    "INFO  [耗时] 子级别(30m)提取: 0.034s (K线=1892 笔=95 分型=475 中枢=14 线段=11 买卖点=58)",
+    "INFO  [耗时] 子级别(30m)提取: 0.022s (K线=1892 笔=95 分型=475 中枢=14 线段=11 买卖点=58)",
     "INFO  [信息] 查询 sh600519 完成: 472条K线, 17笔, 117分型, 3中枢, 3线段, 1买卖点",
-    "INFO  [耗时] 总耗时: 1.618s",
+    "INFO  [耗时] 总耗时: 0.807s",
     "[PASS] ③ 双窗口语义: 契约/子级口径(日线+30分钟)/数量(472≤1892)/时间对齐(472 个交易日全覆盖)",
     "",
-    "===== 确定性测试: 全部通过 ====="
+    "===== 确定性测试: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "industry_mapping",
-   "cmd": "../../usr/bin/python Test/test_industry_mapping.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_industry_mapping.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.06,
+   "elapsed_s": 0.88,
    "output_tail": [
     "[PASS] ① 文件合并完成: tdxhy_mapping_data.py 已并入 AppData.py，App/ 与 DataAPI/ 均无残留",
     "[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: x_to_881=470 881_to_x=470",
@@ -126,18 +126,18 @@
     "[PASS] ④b 条目质量: 470 条全部合法（键/名称非空，881代码 6 位纯数字且无重复）",
     "[PASS] ⑤ 完整性快照: n=470 sha256=ceb5b82fc917… 与迁移前基线一致（零内容漂移）",
     "",
-    "===== 行业映射完整性: 全部通过 ====="
+    "===== 行业映射完整性: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "sse_sequence",
-   "cmd": "../../usr/bin/python Test/test_sse_sequence.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_sse_sequence.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.28,
+   "elapsed_s": 1.08,
    "output_tail": [
-    "[PASS] dual 首事件类型: init",
     "[PASS] dual 正常关闭: 生成器正常耗尽（6 帧, 心跳 3 帧）",
     "[PASS] dual 收尾: close×1 + cleanup×2",
     "INFO  SSE 单窗口连接: symbol=KQ.m@SHFE.rb freq=15s",
@@ -148,29 +148,29 @@
     "[PASS] error 收尾: close×1 + cleanup×1",
     "[PASS] SSE 事件序列快照: 类型序列/首事件/事件总数 一致",
     "",
-    "===== SSE 事件序列: 全部通过（native 生成器） ====="
+    "===== SSE 事件序列: 全部通过（native 生成器） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "func_map_sync",
-   "cmd": "../../usr/bin/python Test/func_map_check.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\func_map_check.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.5,
+   "elapsed_s": 0.52,
    "output_tail": [
     "[PASS] 映射校验: 16 函数 / 18 状态 / 0 类 / 33 路由 全部归属且与代码同步"
    ]
   },
   {
    "name": "phase3_guards",
-   "cmd": "../../usr/bin/python Test/test_phase3_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase3_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.42,
+   "elapsed_s": 1.1,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "[PASS] ① 资源登记表: 16 项，字段完整（按资源索引）",
     "[PASS] ① 冗余锁: 3 把已删锁 + CTdxAPI 类变量均未回潮",
     "[PASS] ② 直连清零: FrontAPI 0 处直连引擎（4 类原始入口全部经 AppOrch.call_* 漏斗）",
@@ -180,18 +180,18 @@
     "[PASS] ⑤ SSE native: 仅保留 native 原生路径；原生生成器 + CSSESource 数据源抽象就位；SELF_CONTAINED 登记一致；legacy 符号已清理",
     "[PASS] ⑥ 分层方向: AppData/AppConfig 无上层导入；AppOrch 不导入 FrontAPI/api_server（单向依赖成立）",
     "",
-    "===== 阶段 3 成果防护: 全部通过 ====="
+    "===== 阶段 3 成果防护: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "phase4_guards",
-   "cmd": "../../usr/bin/python Test/test_phase4_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase4_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.39,
+   "elapsed_s": 1.29,
    "output_tail": [
-    "INFO  [内存] 缓存已满(50)，淘汰: __p4_probe_1",
     "INFO  [内存] 缓存已满(50)，淘汰: __p4_probe_2",
     "INFO  [内存] 缓存已满(50)，淘汰: __p4_probe_3",
     "INFO  [内存] 缓存已满(50)，淘汰: __p4_probe_4",
@@ -202,16 +202,17 @@
     "[PASS] ⑨ 引擎引用有效性: AppOrch 全部 0 个 _m.<attr> 引用在 AppEngine 中可解析",
     "[PASS] ⑩ 数据源门禁: 消费侧零直连；装配点白名单（Engine/SSE/Refresh/Scan/utils）精确匹配",
     "----------------------------------------------------------------",
-    "===== 阶段 4 成果防护: 全部通过（11 类守护） ====="
+    "===== 阶段 4 成果防护: 全部通过（11 类守护） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "app_amo_behavior",
-   "cmd": "../../usr/bin/python Test/test_app_amo.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_app_amo.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.64,
+   "elapsed_s": 0.63,
    "output_tail": [
     "[PASS] ① 全量区间: 日期/成交额/峰值/当前/缩至峰值占比 均正确",
     "[PASS] ② 视口区间过滤: 只含区间内日期，指标按区间内数据计算",
@@ -226,13 +227,12 @@
   },
   {
    "name": "stocks_dual_algo",
-   "cmd": "../../usr/bin/python Test/test_stocks_dual_algo.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_stocks_dual_algo.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.2,
+   "elapsed_s": 0.91,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "[PASS] 日内截断(30m+5m): left=2024-01-02 11:00:00 right=2024-01-02 14:30:00",
     "[PASS] 日线截断(d+30m): left=2024-01-01 23:59:59.999999 right=2024-01-05 23:59:59.999999",
     "[PASS] 未知周期: 返回 (None, None) 退化不过滤",
@@ -243,40 +243,40 @@
     "[PASS] 非法日期红框: 返回 ('', '')",
     "[PASS] 方向守卫: 股票公式保持「左界减 offset、右界不动」",
     "",
-    "===== P0 纯函数 4 向单测: 全部通过 ====="
+    "===== P0 纯函数 4 向单测: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "blk_parsing",
-   "cmd": "../../usr/bin/python Test/test_blk_parsing.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_blk_parsing.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.19,
+   "elapsed_s": 0.98,
    "output_tail": [
-    "[PASS] ⑥ 防回归: 无 tdx_blk 引用，两解析器函数体自含",
-    "INFO  [流通市值] 腾讯接口未返回数据，使用本地缓存",
     "INFO  [预过滤] 批量预过滤完成: 全部通过 3 只 (耗时 0.0s)",
     "[PASS] ⑦ 成分股: stock_list(source=page_index) 3 条，经预过滤+来源标注",
     "INFO  [预过滤] 批量预过滤完成: 全部通过 125 只 (耗时 0.0s)",
     "INFO  [预过滤] 批量预过滤完成: 全部通过 315 只 (耗时 0.0s)",
     "[PASS] ⑧ 板块指数2/3: tdxhy2=125 tdxhy3=315，无流通市值请求",
+    "INFO  [流通市值] 本地缓存已加载 3218 只",
     "INFO  [流通市值] 腾讯接口未返回数据，使用本地缓存",
     "INFO  [预过滤] 批量预过滤完成: 全部通过 3 只 (耗时 0.0s)",
     "[PASS] ⑨ 多来源合并: zxg+page_index 去重后 3 条，来源覆盖语义正确",
     "----------------------------------------------------------------",
-    "===== 阶段 4.1 成果防护: 全部通过（9 类守护） ====="
+    "===== 阶段 4.1 成果防护: 全部通过（9 类守护） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "sse_incremental",
-   "cmd": "../../usr/bin/python Test/test_sse_incremental.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_sse_incremental.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.07,
+   "elapsed_s": 0.93,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "[PASS] ① 增量 klines: 新确认K线追加 + 预览bar剥离",
     "[PASS] ① 增量 klines: 合并场景尾部 OHLC 修正",
     "[PASS] ② 增量 MACD ≡ 全量 MACD（120 根逐位一致）",
@@ -286,16 +286,17 @@
     "WARNING [警告] 异常: AttributeError: 'MockChan' object has no attribute 'get_latest_bsp'",
     "[PASS] ③ 快照同构: 增量路径与全量路径 klines/MACD/kline_count 逐位一致",
     "",
-    "===== P2-4 增量快照: 全部通过 ====="
+    "===== P2-4 增量快照: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "phase5_guards",
-   "cmd": "../../usr/bin/python Test/test_phase5_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase5_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.25,
+   "elapsed_s": 0.99,
    "output_tail": [
     "[PASS] ③a 基类契约: 5 个元数据属性 + fetch_kline（get_kline 家族）声明于 CCommonStockApi",
     "[PASS] ③b 基类默认实现: fetch_kline 默认 NotImplementedError",
@@ -304,20 +305,20 @@
     "[PASS] ④a DataAPI 反向依赖: 7 个模块零 import App/AppEngine/FrontAPI",
     "[PASS] ④b AppData 纯度: 不 import DataAPI/AppEngine/FrontAPI/AppOrch（AppConfig 为允许终点）",
     "[PASS] ⑤a 文件合并: tdxhy_mapping_data.py 已并入 AppData.py，App/ 与 DataAPI/ 均无残留",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "[PASS] ⑤b 启动注入: import AppEngine 即完成注入，TdxAPI 侧 470 条（基线 470）",
     "[PASS] ⑥ 打桩点: snapshot_runner 打桩 CTqSdkAPI.fetch_kline（阶段 5 抽象层类方法）",
     "----------------------------------------------------------------",
-    "===== 阶段 5 成果防护: 全部通过（5 类守护） ====="
+    "===== 阶段 5 成果防护: 全部通过（5 类守护） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "phase6_guards",
-   "cmd": "../../usr/bin/python Test/test_phase6_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase6_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.73,
+   "elapsed_s": 0.61,
    "output_tail": [
     "===== 阶段 6 成果防护：前端组件化（设计 8.9） =====",
     "[PASS] ① 组件区块完备: 10 个区块全部在位非空，顶层函数零游离（391 处 function 定义落位）",
@@ -334,35 +335,34 @@
   },
   {
    "name": "phase7_guards",
-   "cmd": "../../usr/bin/python Test/test_phase7_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_phase7_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 3.46,
+   "elapsed_s": 2.19,
    "output_tail": [
+    "[PASS] ⑥ 前端轮询契约: 提交 + 增量轮询（seq+1 推进）+ 三态终判 + 3 次熔断 + onData/onDone 回调；1 处调用点全异步，旧 scan_one 并发循环清零；index.html 缓存版本 v=12（击穿在位）",
+    "[PASS] ⑦ 功能冒烟: CRUD/增量语义/幂等/completed 收敛/错误汇总/WAL/历史清理/入口校验全部通过",
     "INFO  [扫描池] ProcessPool 已装配: workers=10 (spawn)",
-    "INFO  [扫描] 启动批量扫描: 共3只 | CPU核数=3 | 执行核数=10 | 引擎=process_pool",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
-    "INFO  [耗时-扫描] ZZ0000 分析失败: 无法识别股票代码: shZZ0000, 耗时0.000s",
+    "INFO  [扫描] 启动批量扫描: 共3只 | CPU核数=20 | 执行核数=10 | 引擎=process_pool",
     "INFO  [耗时-扫描] ZZ0001 分析失败: 无法识别股票代码: shZZ0001, 耗时0.000s",
+    "INFO  [耗时-扫描] ZZ0000 分析失败: 无法识别股票代码: shZZ0000, 耗时0.000s",
     "INFO  [耗时-扫描] ZZ0002 分析失败: 无法识别股票代码: shZZ0002, 耗时0.000s",
     "INFO  [扫描池] 进程池已销毁（下次扫描将重新装配，worker 缓存已释放）",
-    "[PASS] ⑧ 端到端冒烟: engine=process_pool，3 只虚拟票 completed 收敛 3，seq 0..2 连续回流，跨进程 SQLite 链路真实可用",
+    "\u001b[0m\u001b[0m\u001b[0m[PASS] ⑧ 端到端冒烟: engine=process_pool，3 只虚拟票 completed 收敛 3，seq 0..2 连续回流，跨进程 SQLite 链路真实可用",
     "----------------------------------------------------------------",
-    "===== 阶段 7 成果防护: 全部通过（8 类守护） ====="
+    "===== 阶段 7 成果防护: 全部通过（8 类守护） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "sse_gray",
-   "cmd": "../../usr/bin/python Test/test_sse_gray.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_sse_gray.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.34,
+   "elapsed_s": 1.13,
    "output_tail": [
-    "[PASS] single 协议路径: K线完成×1 + tick×3 全触发",
     "INFO  SSE 双窗口连接: symbol=KQ.m@SHFE.rb main=1m sub=15s",
     "[PASS] dual 首事件: init（共 8 帧，心跳 4 帧）",
     "[PASS] dual init 结构: main+sub 双窗口",
@@ -373,18 +373,18 @@
     "[PASS] single ①③ 基线: 序列/总数一致（4 事件 + 4 心跳）",
     "[PASS] single ② 结构: init 载荷剥离时间戳/实时价后一致",
     "",
-    "===== SSE 灰度比对: 全部通过（native 协议与基线一致 + legacy 帧形态等价）====="
+    "===== SSE 灰度比对: 全部通过（native 协议与基线一致 + legacy 帧形态等价）=====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "api_integration",
-   "cmd": "../../usr/bin/python Test/test_api_integration.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_api_integration.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.51,
+   "elapsed_s": 2.28,
    "output_tail": [
-    "[PASS] ⑤ 分析守卫: 空code 404 / 无数据 400 优雅降级",
     "INFO  HTTP Request: POST http://testserver/api/stocks/scan/submit \"HTTP/1.1 400 Bad Request\"",
     "INFO  HTTP Request: GET http://testserver/api/stocks/scan/nonexistent-task/read/status \"HTTP/1.1 404 Not Found\"",
     "[PASS] ⑥ 批量扫描守卫: 空stocks 400 / 不存在任务 404",
@@ -395,18 +395,18 @@
     "INFO  HTTP Request: GET http://testserver/api/stocks/600519/analyze?freq=d \"HTTP/1.1 400 Bad Request\"",
     "[PASS] ⑦ 领域异常映射: AppError → 400 + {error, detail}",
     "",
-    "===== P2-2 ① API 集成测试: 全部通过 ====="
+    "===== P2-2 ① API 集成测试: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "code_resolution_guards",
-   "cmd": "../../usr/bin/python Test/test_code_resolution_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_code_resolution_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.14,
+   "elapsed_s": 1.98,
    "output_tail": [
-    "INFO  [成分股] 已设置板块指数代码: 880491",
     "INFO  [成分股] 已设置板块指数代码: 881001",
     "INFO  [成分股] 已设置板块指数代码: 399001",
     "INFO  [成分股] 已设置板块指数代码: 932000",
@@ -417,40 +417,40 @@
     "WARNING [板块成分股] 网络获取超时(>1s)，返回空（可重试）",
     "[PASS] ⑫成分健壮: 网络抓取限时可中断；000001=上交所官网直连（同399xxx）",
     "",
-    "===== 代码输入链路守护: 全部通过 ====="
+    "===== 代码输入链路守护: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "scan_pageindex_normalize",
-   "cmd": "../../usr/bin/python Test/test_scan_pageindex_normalize.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_scan_pageindex_normalize.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.06,
+   "elapsed_s": 1.14,
    "output_tail": [
     "INFO  [预过滤] 批量预过滤完成: 全部通过 0 只 (耗时 0.0s)",
-    "INFO  [流通市值] 腾讯接口未返回数据，使用本地缓存",
-    "INFO  [预过滤] 批量预过滤完成: 全部通过 0 只 (耗时 0.0s)",
     "[PASS] ① 显式归一化: 8 组全部归一为裸码（sh000852→000852 等）",
+    "INFO  [信息] 从缓存文件加载股票名称: 8677只",
+    "INFO  [流通市值] 本地缓存已加载 3218 只",
     "INFO  [流通市值] 腾讯接口未返回数据，使用本地缓存",
     "INFO  [预过滤] 批量预过滤完成: 全部通过 0 只 (耗时 0.0s)",
     "[PASS] ② 会话归一化: start(sh000852) -> 成分层收到 ['000852']",
     "INFO  [扫描明细] 全部扫描成功（耗时 0秒），无异常股票",
-    "INFO  [通知] 未安装 winotify，请在 venv 中执行: pip install winotify",
     "[PASS] ③ 静态回潮: stock_list 内归一化早于 page_index 读取器定义",
     "----------------------------------------------------------------",
-    "===== 扫描候选归一化守护: 全部通过（3 类守护） ====="
+    "===== 扫描候选归一化守护: 全部通过（3 类守护） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "lock_v5_guards",
-   "cmd": "../../usr/bin/python Test/test_lock_v5_guards.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_lock_v5_guards.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.68,
+   "elapsed_s": 2.47,
    "output_tail": [
-    "  [PASS] AppOrch 仍导出 call_manual_select_point",
     "  [PASS] AppOrch 仍导出 call_futures_manual_select_point",
     "  [PASS] AppOrch 仍导出 call_compute_red_range_zs",
     "  [PASS] AppRefresh 有 _refresh_state_lock",
@@ -461,32 +461,34 @@
     "  [PASS] 刷新结束后 running 复位为 False（无卡死）",
     "",
     "============================================================",
-    "共 45 项断言，失败 0 项"
+    "共 45 项断言，失败 0 项",
+    "\u001b[0m"
    ]
   },
   {
    "name": "chan_data_isolation",
-   "cmd": "../../usr/bin/python Test/test_chan_data_isolation.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_chan_data_isolation.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.33,
+   "elapsed_s": 1.07,
    "output_tail": [
     "① 串行基线：8 个标的各建链一次",
     "   基线: (103, 100.0, 1, 0, 100.5) … (103, 107.0, 1, 0, 107.5)",
     "  [PASS] 8 个标的指纹互不相同（合成数据有效）",
     "",
     "② 并发复现：8 线程 × 3 轮",
-    "  [PASS] 24 次并发建链全部与串行基线一致，零串数据"
+    "  [PASS] 24 次并发建链全部与串行基线一致，零串数据",
+    "\u001b[0m"
    ]
   },
   {
    "name": "chan_data_isolation_control",
-   "cmd": "../../usr/bin/python Test/test_chan_data_isolation_control.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_chan_data_isolation_control.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.05,
+   "elapsed_s": 0.9,
    "output_tail": [
     "确定性交错对照（A 注入 → B 覆盖 → A 建链）",
     "A 数据末收=106（价格带 100~107），B 数据末收=206（价格带 200~207）",
@@ -495,18 +497,18 @@
     "  [串数据 ❌] 改造前（类变量注入）: A 读到末收 206.0（读到了 B 的数据）",
     "",
     "结论：对照成立 —— 类变量注入确实串数据，线程局部注入确实隔离。",
-    "      verify_chan_concurrency.py 的判据对这个差异敏感（非空测试）。"
+    "      verify_chan_concurrency.py 的判据对这个差异敏感（非空测试）。",
+    "\u001b[0m"
    ]
   },
   {
    "name": "sse_concurrent",
-   "cmd": "../../usr/bin/python Test/test_sse_concurrent.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_sse_concurrent.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.35,
+   "elapsed_s": 1.07,
    "output_tail": [
-    "INFO  [KQ.m@SHFE.rb:15秒] ⓪ 连接天勤: 耗时 0.0s",
     "INFO  SSE 单窗口连接: symbol=KQ.m@SHFE.rb freq=15s",
     "INFO  [KQ.m@SHFE.rb:15秒] ⓪ 连接天勤: 耗时 0.0s",
     "INFO  SSE 单窗口连接: symbol=KQ.m@SHFE.rb freq=15s",
@@ -517,16 +519,17 @@
     "INFO  [KQ.m@SHFE.rb:15秒] ⓪ 连接天勤: 耗时 0.0s",
     "[PASS] ② 事件序列一致: 每连接首事件 init，无跨连接串扰",
     "",
-    "===== P2-2 ② SSE 并发测试: 全部通过（8 连接） ====="
+    "===== P2-2 ② SSE 并发测试: 全部通过（8 连接） =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "futures_sub_key",
-   "cmd": "../../usr/bin/python Test/test_futures_sub_key.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_futures_sub_key.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.63,
+   "elapsed_s": 0.64,
    "output_tail": [
     "[OK] 写/读 key 一致: KQ.M@SHFE.RB:5m",
     "[OK] 写/读 key 一致: KQ.M@SHFE.RB:1m",
@@ -541,11 +544,11 @@
   },
   {
    "name": "futures_session_binding",
-   "cmd": "../../usr/bin/python Test/test_futures_session_binding.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_futures_session_binding.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.5,
+   "elapsed_s": 0.51,
    "output_tail": [
     "[PASS] test_concurrent_writes_share_lock",
     "[PASS] test_context_restore_and_fallback",
@@ -560,33 +563,33 @@
   },
   {
    "name": "scanpool_fallback",
-   "cmd": "../../usr/bin/python Test/test_scanpool_fallback.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_scanpool_fallback.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.67,
+   "elapsed_s": 2.91,
    "output_tail": [
-    "INFO  [扫描池] ProcessPool 已装配: workers=10 (spawn)",
-    "INFO  [扫描] 启动批量扫描: 共2只 | CPU核数=3 | 执行核数=10 | 引擎=process_pool",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
-    "INFO  [调试-K线不足] code=000001, market=sz, freq=d, target_dt=None, records=0",
-    "INFO  [耗时-扫描] 000001 分析失败: K线数据不足: 仅0条, 耗时0.000s",
-    "INFO  [调试-K线不足] code=600519, market=sh, freq=d, target_dt=None, records=0",
-    "INFO  [耗时-扫描] 600519 分析失败: K线数据不足: 仅0条, 耗时0.000s",
+    "INFO  [耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: 0.018s",
+    "INFO  [耗时] 主级别提取结果: 0.018s (K线=1375 笔=116 中枢=12 线段=17 买卖点=24)",
+    "INFO  [信息] 从缓存文件加载股票名称: 8677只",
+    "INFO  [信息] 从缓存文件加载PE-TTM：7735只；加载指数归属：1804只",
+    "INFO  [信息] 查询 sh600519 完成: 1375条K线, 116笔, 488分型, 12中枢, 17线段, 24买卖点",
+    "INFO  [耗时] 总耗时: 0.723s",
+    "INFO  [耗时-扫描] 600519 总0.723s(分析0.723s 过滤0.000s) 无买卖点",
     "INFO  [扫描池] 进程池已销毁（下次扫描将重新装配，worker 缓存已释放）",
-    "[PASS] ③ 恢复正常装配 + 2/2 收敛 done + 池状态归零",
+    "\u001b[0m\u001b[0m[PASS] ③ 恢复正常装配 + 2/2 收敛 done + 池状态归零",
     "",
-    "===== P2-2 ③ 扫描进程池失败收敛测试: 全部通过 ====="
+    "===== P2-2 ③ 扫描进程池失败收敛测试: 全部通过 =====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "frontend_smoke",
-   "cmd": "../../usr/bin/python Test/test_frontend_smoke.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_frontend_smoke.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.7,
+   "elapsed_s": 0.66,
    "output_tail": [
     "[PASS] ① HTML 骨架: app.js/app.css 引用 + 9 个关键 DOM",
     "[PASS] ② JS 语法: node --check app.js 通过",
@@ -600,11 +603,11 @@
   },
   {
    "name": "lock_completeness",
-   "cmd": "../../usr/bin/python Test/test_lock_completeness.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_lock_completeness.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 0.73,
+   "elapsed_s": 0.75,
    "output_tail": [
     "[PASS] 形态① 实例字段：AppData 受保护字段均持对应锁（或已白名单）",
     "[PASS] 形态②③ 模块别名 + 跨模块守卫：3 个模块、9 个共享出口，无非原子裸用",
@@ -621,13 +624,12 @@
   },
   {
    "name": "scan_session_isolation",
-   "cmd": "../../usr/bin/python Test/test_scan_session_isolation.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_scan_session_isolation.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.18,
+   "elapsed_s": 0.92,
    "output_tail": [
-    "[PASS] ② 两会话 page_index_code 互不覆盖",
     "        s1=sh.881101 / s2=sz.880325，各自持有",
     "[PASS] ③ drop 一方不影响另一方",
     "        关页 B 后页 A 的会话与跳过记录完整保留",
@@ -638,16 +640,17 @@
     "[PASS] ⑥ 并发建会话无丢失/无重复",
     "        8 线程 × 25 次 → 200 个 token，唯一 200，注册表 200",
     "",
-    "===== 扫描会话隔离守护: 全部通过（6 项）====="
+    "===== 扫描会话隔离守护: 全部通过（6 项）=====",
+    "\u001b[0m"
    ]
   },
   {
    "name": "user_store_rmw",
-   "cmd": "../../usr/bin/python Test/test_user_store_rmw.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_user_store_rmw.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 3.53,
+   "elapsed_s": 6.72,
    "output_tail": [
     "user_store 并发 RMW 守护（审计 v1.3 §四 选点/删点/标注行）",
     "============================================================",
@@ -665,13 +668,12 @@
   },
   {
    "name": "repro_n3_scan_leak",
-   "cmd": "../../usr/bin/python Test/repro_n3_scan_session_leak.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\repro_n3_scan_session_leak.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.1,
+   "elapsed_s": 0.96,
    "output_tail": [
-    "  → ✅ 未命中：惰性清扫已回收",
     "",
     "[场景1b] task 反查死键：deadtask 残留=False，livetask 保留=True",
     "  → ✅ 未命中：死键已回收且活键保留",
@@ -682,18 +684,18 @@
     "[场景3] B 结算后：_scan_sessions 中残留 0 个会话（期望 0）",
     "  → ✅ 未命中：注册表干净",
     "",
-    "结论：N3 已修复（惰性超时回收生效），全部场景未命中。"
+    "结论：N3 已修复（惰性超时回收生效），全部场景未命中。",
+    "\u001b[0m"
    ]
   },
   {
    "name": "futures_cleanup_scope",
-   "cmd": "../../usr/bin/python Test/test_futures_cleanup_scope.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_futures_cleanup_scope.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.22,
+   "elapsed_s": 0.92,
    "output_tail": [
-    "── test_source_guard_present ──",
     "  [PASS] ⑤ _cleanup_all_futures_data 保有活跃会话守卫",
     "         源码中调用了 active_session_count()",
     "  [PASS] ⑤ 清理调用链不含 close_all（页面级不调进程级回收）",
@@ -704,16 +706,17 @@
     "==================================================================",
     "合计 11 项，通过 11 项，失败 0 项",
     "全部通过：X1 作用域纪律未回潮",
-    "=================================================================="
+    "==================================================================",
+    "\u001b[0m"
    ]
   },
   {
    "name": "zxg_write_concurrency",
-   "cmd": "../../usr/bin/python Test/test_zxg_write_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_zxg_write_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.26,
+   "elapsed_s": 1.65,
    "output_tail": [
     "         错误=无",
     "  [PASS] ④ 跨进程写盘：子进程整批代码未丢失",
@@ -731,15 +734,15 @@
   },
   {
    "name": "analyze_cache_concurrency",
-   "cmd": "../../usr/bin/python Test/test_analyze_cache_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_analyze_cache_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 5.62,
+   "elapsed_s": 13.47,
    "output_tail": [
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sh', '600018', 'd', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sh', '600046', 'd', 'live', 'independent')",
     "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sh', '600038', 'd', 'live', 'independent')",
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sh', '600057', 'd', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sh', '600054', 'd', 'live', 'independent')",
     "  [PASS] ④ 双窗键数不超过 MAX_DUAL_CACHE_KEYS(10)",
     "         双窗键=10，池内总数=10（期望双窗 ≤ 10）",
     "  [PASS] ④ 双窗键未挤占单窗缓存（池总量仍受限）",
@@ -753,13 +756,12 @@
   },
   {
    "name": "futures_selectpoint_concurrency",
-   "cmd": "../../usr/bin/python Test/test_futures_selectpoint_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_futures_selectpoint_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 6.48,
+   "elapsed_s": 7.08,
    "output_tail": [
-    "INFO  [信息] 保存选点成功: KQ.c9999 15s 15s=2026-06-06 08:08:08",
     "INFO  [信息] 保存选点成功: KQ.c9999 15s 15s=2026-06-06 08:08:08",
     "INFO  [信息] 保存选点成功: KQ.c9999 15s 15s=2026-06-06 08:08:08",
     "INFO  [信息] 保存选点成功: KQ.c9999 15s 15s=2026-06-06 08:08:08",
@@ -770,18 +772,18 @@
     "  ✅ PASS  ④  锁内读 get_saved_point_time 并发下自洽，终态收敛",
     "           └─ read_errs=0 final='2026-06-06 08:08:08' expect='2026-06-06 08:08:08'",
     "--------------------------------------------------------------------",
-    "合计 4 项，全部通过"
+    "合计 4 项，全部通过",
+    "\u001b[0m"
    ]
   },
   {
    "name": "scan_session_intra_concurrency",
-   "cmd": "../../usr/bin/python Test/test_scan_session_intra_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_scan_session_intra_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.0,
+   "elapsed_s": 4.26,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "====================================================================",
     "G7 · 批量扫描单会话内并发守护",
     "====================================================================",
@@ -790,16 +792,17 @@
     "  ✅ PASS  ③  bind×new_scan_session 并发：无迭代崩溃且绑定不丢",
     "  ✅ PASS  ④  bind+收割+drop 三方并发：不崩；注销后映射仍在、append 空转",
     "--------------------------------------------------------------------",
-    "合计 4 项，全部通过"
+    "合计 4 项，全部通过",
+    "\u001b[0m"
    ]
   },
   {
    "name": "refresh_interleave_concurrency",
-   "cmd": "../../usr/bin/python Test/test_refresh_interleave_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_refresh_interleave_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 3.24,
+   "elapsed_s": 3.76,
    "output_tail": [
     "====================================================================",
     "G9 · 数据刷新中交错 并发守护",
@@ -809,26 +812,27 @@
     "  ✅ PASS  ②  replace_names 并发换表：读者永不读到半截/混合表",
     "  ✅ PASS  ③  update_pe_ttm 并发写：读者不读到撕裂态，终态自洽",
     "--------------------------------------------------------------------",
-    "合计 3 项，全部通过"
+    "合计 3 项，全部通过",
+    "\u001b[0m"
    ]
   },
   {
    "name": "dual_cache_concurrency",
-   "cmd": "../../usr/bin/python Test/test_dual_cache_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_dual_cache_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.88,
+   "elapsed_s": 4.5,
    "output_tail": [
-    "INFO  [内存] 缓存已满(50)，淘汰: ('single', 'sz', 'sz7', '1m', 'live')",
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz38', '1m', 'live', 'independent')",
-    "INFO  [内存] 缓存已满(50)，淘汰: ('single', 'sz', 'sz8', '1m', 'live')",
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz39', '1m', 'live', 'independent')",
-    "INFO  [内存] 缓存已满(50)，淘汰: ('single', 'sz', 'sz9', '1m', 'live')",
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz40', '1m', 'live', 'independent')",
-    "INFO  [内存] 缓存已满(50)，淘汰: ('single', 'sz', 'sz10', '1m', 'live')",
-    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz41', '1m', 'live', 'independent')",
-    "INFO  [内存] 缓存已满(50)，淘汰: ('single', 'sz', 'sz11', '1m', 'live')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz12', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz13', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz14', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz15', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz16', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz17', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz18', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz19', '1m', 'live', 'independent')",
+    "INFO  [内存] 双窗缓存达上限(10)，淘汰最旧双窗条目: ('dual_main', 'sz', 'sz20', '1m', 'live', 'independent')",
     "  ✅ PASS  ③  双窗+单窗混合并发：双窗限额≤10、读者无撕裂、无异常",
     "--------------------------------------------------------------------",
     "合计 3 项，全部通过"
@@ -836,11 +840,11 @@
   },
   {
    "name": "futures_subchan_concurrency",
-   "cmd": "../../usr/bin/python Test/test_futures_subchan_concurrency.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_futures_subchan_concurrency.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 2.2,
+   "elapsed_s": 1.84,
    "output_tail": [
     "====================================================================",
     "G10 · 期货双窗口 SSE 子缠论 并发守护",
@@ -854,13 +858,12 @@
   },
   {
    "name": "search_refresh_interleave",
-   "cmd": "../../usr/bin/python Test/test_search_refresh_interleave.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_search_refresh_interleave.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 7.27,
+   "elapsed_s": 3.94,
    "output_tail": [
-    "WARNING [TqSdkAPI] 未取到有效凭据（账户文件不存在：/root/tdx/vipdoc/tq_account.json），使用默认空值",
     "====================================================================",
     "G6 · 搜索 × 刷新流 并发守护",
     "====================================================================",
@@ -869,18 +872,18 @@
     "           └─ iso_ok=True",
     "  ✅ PASS  ③  并发换表期间快照无静默串表（恒等于某写者全量或空）",
     "--------------------------------------------------------------------",
-    "合计 3 项，全部通过"
+    "合计 3 项，全部通过",
+    "\u001b[0m"
    ]
   },
   {
    "name": "legacy_scan_session",
-   "cmd": "../../usr/bin/python Test/test_legacy_scan_session.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_legacy_scan_session.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 1.15,
+   "elapsed_s": 0.9,
    "output_tail": [
-    "G8 · 旧客户端参数交叉污染 并发守护",
     "====================================================================",
     "  ✅ PASS  ①  8 页并发 new：各凭 token 取自身会话、legacy=最新、不串页",
     "  ✅ PASS  ②  drop 旧 token 后 legacy 仍指向最新会话、旧会话已注销",
@@ -891,23 +894,25 @@
     "  ✅ PASS  ④b  清扫 legacy 会话 B 后，legacy 正确置空",
     "           └─ legacy_none=True",
     "--------------------------------------------------------------------",
-    "合计 5 项，全部通过"
+    "合计 5 项，全部通过",
+    "\u001b[0m"
    ]
   },
   {
    "name": "annotation_filelock",
-   "cmd": "../../usr/bin/python Test/test_annotation_filelock.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_annotation_filelock.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 4.95,
+   "elapsed_s": 3.98,
    "output_tail": [
     "====================================================================",
     "G3 · 标注跨进程文件锁 并发守护",
     "====================================================================",
     "  ✅ PASS  ①  进程内并发标注 4×10：合并无丢失、落盘 JSON 合法",
+    "WARNING [警告] 保存标注数据失败: [WinError 5] 拒绝访问。: 'C:\\\\Users\\\\river\\\\AppData\\\\Local\\\\Temp\\\\g3_anno_k0cxi6ad\\\\.tmp_px3wxon_.json' -> 'C:\\\\Users\\\\river\\\\AppData\\\\Local\\\\Temp\\\\g3_anno_k0cxi6ad\\\\text_annotation.json'",
     "  ✅ PASS  ②  并发保存期间读者从未读到半截/截断 JSON",
-    "           └─ 损坏(JSON撕裂) 0 次（期望 0）；瞬时 OSError 0 次（Windows 文件语义，不计失败）",
+    "           └─ 损坏(JSON撕裂) 0 次（期望 0）；瞬时 OSError 30 次（Windows 文件语义，不计失败）",
     "  ✅ PASS  ③  跨进程文件锁串行化：8 进程 × 25 次 RMW，终值 200==200",
     "           └─ procs_rc=[0, 0, 0, 0, 0, 0, 0, 0] final=200 expected=200",
     "--------------------------------------------------------------------",
@@ -916,13 +921,12 @@
   },
   {
    "name": "p3_mutation_gate",
-   "cmd": "../../usr/bin/python Test/_mutate_p3.py",
+   "cmd": ".venv\\Scripts\\python.exe Test\\_mutate_p3.py",
    "ok": true,
    "exit_code": 0,
    "timed_out": false,
-   "elapsed_s": 36.21,
+   "elapsed_s": 28.43,
    "output_tail": [
-    "P3 变异门禁：注入回归形态，验证守卫能抓回退",
     "================================================================",
     "  ✅ 抓到回退  g2-nocap       (测试=test_dual_cache_concurrency, 退出码=1)",
     "  ✅ 抓到回退  g2-rmw         (测试=test_dual_cache_concurrency, 退出码=1)",
@@ -933,7 +937,27 @@
     "  ✅ 抓到回退  g3-notomic     (测试=test_annotation_filelock, 退出码=1)",
     "  ✅ 抓到回退  g3-filelock    (测试=test_annotation_filelock, 退出码=1)",
     "----------------------------------------------------------------",
-    "变异 8 项，成功使守卫变红 8 项，全部有效"
+    "变异 8 项，成功使守卫变红 8 项，全部有效",
+    "\u001b[0m"
+   ]
+  },
+  {
+   "name": "15m_period",
+   "cmd": ".venv\\Scripts\\python.exe Test\\test_15m_period.py",
+   "ok": true,
+   "exit_code": 0,
+   "timed_out": false,
+   "elapsed_s": 0.61,
+   "output_tail": [
+    "[PASS] 15m 合成: A股 16桶 / 港股 22桶，桶内3根、逐字段与锚点一致",
+    "[PASS] 30m 合成: A股 8桶 10:00..15:00（零回归）/ 港股 11桶含12:00、16:00，每桶6根",
+    "[PASS] 15m/30m 统一 _resample_5m 合成 + 双包装委托 + 5m→30m 入口委托统一合成",
+    "[PASS] 15m+5m 纳入双窗 5m 文件复用优化分支（P2-2）",
+    "[PASS] _get_date_fmt('15m')=%Y/%m/%d %H:%M（红框时分不截断）",
+    "[PASS] 周期分类单一事实源 Common.CEnum.FREQ_TABLE（含15m），func_util/高层不再复制副本",
+    "[PASS] 市场周期支持集单一事实源 STOCKS_FREQS/FUTURES_FREQS，回看/主周期/前端镜像一致",
+    "[PASS] 单窗15m/5m 灰化入口 + 双窗内15m可作上窗，两端一致",
+    "ALL 15m/30m TESTS PASS"
    ]
   }
  ]
