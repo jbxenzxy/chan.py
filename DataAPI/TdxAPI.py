@@ -352,16 +352,14 @@ def _check_and_report_gaps(records):
         log.info(f"[信息]   数据范围: {old_start} ~ {old_end} ({len(records)}条)")
 
 
-def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
+def _parse_tdx_min_binary(filepath, market):
     """
-    解析通达信5分钟线二进制文件(.lc5) -- numpy批量读取优化版
-    通达信 .lc5 文件格式（每条记录 32 字节，小端序）：
+    解析通达信分钟线二进制文件(.lc5/.lc1) -- numpy批量读取优化版。
+    通达信分钟线文件格式（每条记录 32 字节，小端序）：
       H(日期) + H(时间) + f(开) + f(高) + f(低) + f(收) + f(成交额) + I(成交量) + I(保留)
       日期编码: year = num // 2048 + 2004, month = (num % 2048) // 100, day = (num % 2048) % 100
       时间: 从0点开始的分钟数 (HH*60+MM)
-      价格字段是 float 类型，直接使用
-    aggregate_30m=True: 从5分钟线合成为30分钟线（默认，兼容旧行为）
-    aggregate_30m=False: 直接返回5分钟线原始数据
+    返回原始分钟线记录列表（未做周期合成）；read_tdx_5min_file / read_tdx_1min_file 共用，避免重复副本。
     """
     record_size = 32
     with open(filepath, "rb") as f:
@@ -435,9 +433,9 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
     vols = arr["vol"][valid]
     reserved = arr["reserved"][valid]
 
-    # 检测是否为指数文件（指数 .lc5 的保留字段存的是涨跌家数，非零；个股 .lc5 保留字段为 0）
+    # 检测是否为指数文件（指数分钟线的保留字段存的是涨跌家数，非零；个股保留字段为 0）
     # 经通达信官方确认：指数的分钟线数据只有成交额，没有成交量。
-    # 指数 .lc5 文件中成交量字段实际存的是"成交额/100"（非真实成交量），需要忽略，成交量设为0。
+    # 指数分钟线文件中成交量字段实际存的是"成交额/100"（非真实成交量），需要忽略，成交量设为0。
     is_index = len(reserved) > 0 and np.any(reserved != 0)
     if is_index:
         log.info("[信息] 检测到指数文件，成交量字段不可靠（通达信确认指数分钟线仅有成交额，无成交量），将设为0")
@@ -460,54 +458,95 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
             "high": float(h),
             "low": float(l),
             "close": float(c),
-            "vol": int(v) // 100,  # 通达信 .lc5 成交量单位是"股"，除以100转为"手"（柱状图已改用成交额绘制，此字段仅作参考）
+            "vol": int(v) // 100,  # 通达信分钟线成交量单位是"股"，除以100转为"手"（柱状图已改用成交额绘制，此字段仅作参考）
             "amount": float(a),
         })
+    return records
+
+
+def read_tdx_5min_file(filepath, market="sh", aggregate_30m=True):
+    """
+    解析通达信5分钟线二进制文件(.lc5) -- numpy批量读取优化版。
+    aggregate_30m=True: 从5分钟线合成为30分钟线（默认，兼容旧行为）。
+    aggregate_30m=False: 直接返回5分钟线原始数据。
+    底层二进制解析共用 _parse_tdx_min_binary（与 read_tdx_1min_file 共享，避免重复副本）。
+    """
+    records = _parse_tdx_min_binary(filepath, market)
+    if len(records) == 0:
+        return []
 
     # 如果不需要合成30分钟线，直接返回5分钟线原始数据
     if not aggregate_30m:
-        result = []
-        for r in records:
-            result.append({
-                "dt": r["dt"],
-                "open": round(r["open"], 3),
-                "high": round(r["high"], 3),
-                "low": round(r["low"], 3),
-                "close": round(r["close"], 3),
-                "vol": r["vol"],
-                "amount": round(r["amount"], 2),
-            })
-        return result
+        return [{
+            "dt": r["dt"],
+            "open": round(r["open"], 3),
+            "high": round(r["high"], 3),
+            "low": round(r["low"], 3),
+            "close": round(r["close"], 3),
+            "vol": r["vol"],
+            "amount": round(r["amount"], 2),
+        } for r in records]
 
-    # 合成30分钟线：统一委托 _resample_5m_to_30m（单一事实源，A股/港股分桶同口径）
-    return _resample_5m_to_30m(records, market=market)
+    # 合成 30 分钟线：复用模块级 _resample_5m_to_30m（单一事实源）。
+    # 旧实现曾在此处内联 _bucket_30min，属重复实现——已改为委托（锚点法，A股/港股均正确）。
+    return _resample_5m_to_30m(records, market)
+
+
+def read_tdx_1min_file(filepath, market="sh"):
+    """
+    解析通达信1分钟线二进制文件(.lc1) -- numpy批量读取优化版。
+    与 read_tdx_5min_file 共用底层二进制解析 _parse_tdx_min_binary，
+    仅数据源扩展为 .lc1，返回原始1分钟线（1分已是最小粒度，无周期合成）。
+    """
+    records = _parse_tdx_min_binary(filepath, market)
+    if len(records) == 0:
+        return []
+    return [{
+        "dt": r["dt"],
+        "open": round(r["open"], 3),
+        "high": round(r["high"], 3),
+        "low": round(r["low"], 3),
+        "close": round(r["close"], 3),
+        "vol": r["vol"],
+        "amount": round(r["amount"], 2),
+    } for r in records]
 
 
 def _resample_5m(records, period_min):
     """
-    将5分钟K线合成为 period_min 分钟K线（15m/30m 共用的唯一合成实现，单一事实源）。
-    供外部在5分钟前复权后调用，避免对合成后的 K 线做二次复权。
+    5m → period_min 分钟 K 线的【唯一】合成实现（15m / 30m 共用）。
 
-    09:30 锚点法（A股/港股一致）：
-      以每个交易日 09:30 为锚点，把每根 5m（dt=结束时刻）向上取整到对齐会话起点
-      (09:30/13:00) 的 period_min 分钟边界桶。
-      修复港股历史 bug：旧手写 h==11/15 分支把 11:35–11:55、15:35–15:55
-      错分到 11:30/15:30 桶（错桶漂移），使港股每交易日 K 线 OHLC/量/额失真。
-      A股 桶例（30m）：10:00,...,11:30, 13:30,...,15:00；港股 12:00/16:00 桶正确。
+    分桶规则（09:30 锚点法）：
+      每根 5m 的 dt 是**结束时刻**；以其所在交易日的 09:30 为锚点，
+      把 dt 向上取整（ceil）到对齐该锚点的 period_min 分钟网格边界。
+        boundary = ceil((dt - 09:30) / period_min) * period_min
+
+      A股交易时间: 9:30-11:30, 13:00-15:00  → 15m 得 16 桶 / 30m 得 8 桶
+      港股交易时间: 9:30-12:00, 13:00-16:00 → 15m 得 22 桶 / 30m 得 11 桶
+      两市场均自 09:30 起算且桶边界落在同一网格上，故算法**与 market 无关**
+      （已逐桶验证：每桶恰含 period_min/5 根 5m）。
+
+    历史背景：本函数原为 _resample_5m_to_15m / _resample_5m_to_30m 两份
+    逐行相同的拷贝（仅 ceil 常数与临时键名不同），且 30m 的分桶逻辑还曾
+    在 read_tdx_5min_file 内联了第三份。重复副本正是港股 30m 分桶 bug 长期
+    未被修掉的原因（修一处另一处仍错）。此处合并为单一事实源。
+
+    由调用方在 5m 前复权后调用，避免对合成后的 K 线做二次复权。
     """
     if not records:
         return []
 
+    _KEY = "_resample_bucket"
     for r in records:
         dt = r["dt"]
         ref = dt.replace(hour=9, minute=30, second=0, microsecond=0)
         minutes_since = int((dt - ref).total_seconds()) // 60
-        boundary_min = ((minutes_since + period_min - 1) // period_min) * period_min  # ceil 到 period_min 边界
-        r["_bucket"] = ref + timedelta(minutes=boundary_min)
+        boundary_min = ((minutes_since + period_min - 1) // period_min) * period_min
+        r[_KEY] = ref + timedelta(minutes=boundary_min)
 
     buckets = OrderedDict()
     for r in records:
-        b = r["_bucket"]
+        b = r[_KEY]
         if b not in buckets:
             buckets[b] = {
                 "open": r["open"], "high": r["high"], "low": r["low"],
@@ -535,22 +574,31 @@ def _resample_5m(records, period_min):
             "amount": round(v["amount"], 2),
         })
 
-    # 清理临时 bucket 属性
+    # 清理临时分桶属性
     for r in records:
-        r.pop("_bucket", None)
+        r.pop(_KEY, None)
 
     return result
 
 
 def _resample_5m_to_30m(records, market="sh"):
-    """将5分钟K线合成为30分钟K线（委托 _resample_5m 唯一实现）。"""
-    _ = market  # market 参数保留以兼容调用方，锚点法与市场无关
+    """
+    将5分钟K线合成为30分钟K线。薄封装 → _resample_5m(records, 30)。
+    read_tdx_5min_file 的 30m 合成也委托到此。
+    market 参数保留仅为兼容既有调用方；锚点法对 A股/港股一致，不按市场分支。
+    修掉的既有 bug（v4.0 即存在，非 15m 引入）：旧手写分支把港股 11:35~11:55
+    错并进 11:30 桶、15:35~15:55 错并进 15:30 桶，致港股每日 4 根 30m 失真。
+    回归测试见 Test/test_15m_period.py::test_resample_30m_hk_bucket_fix。
+    """
     return _resample_5m(records, 30)
 
 
 def _resample_5m_to_15m(records, market="sh"):
-    """将5分钟K线合成为15分钟K线（委托 _resample_5m 唯一实现）。"""
-    _ = market  # market 参数保留以兼容调用方，锚点法与市场无关
+    """
+    将5分钟K线合成为15分钟K线。薄封装 → _resample_5m(records, 15)。
+    桶例：A股 9:45,10:00,...,11:30, 13:15,...,15:00；港股延伸至 12:00 / 16:00。
+    market 参数保留仅为兼容既有调用方（锚点法与市场无关）。
+    """
     return _resample_5m(records, 15)
 
 
@@ -802,7 +850,7 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
             return ([], [], False) if return_raw else ([], False)
 
     if freq == '30m':
-        raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        raw_5m = read_tdx_5min_file(data_file, market=market, aggregate_30m=False)
         did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
             raw_5m, did_adjust = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
@@ -811,7 +859,7 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
             return records_30m, raw_5m, did_adjust
         return records_30m, did_adjust
     elif freq == '15m':
-        raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        raw_5m = read_tdx_5min_file(data_file, market=market, aggregate_30m=False)
         did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
             raw_5m, did_adjust = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
@@ -820,7 +868,7 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
             return records_15m, raw_5m, did_adjust
         return records_15m, did_adjust
     elif freq == '5m':
-        records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        records = read_tdx_5min_file(data_file, market=market, aggregate_30m=False)
         did_adjust = False
         if _tdx_config["forward_adjust_enabled"]:
             records, did_adjust = _forward_adjust(records, market=market, code=code, end_date=end_date)
@@ -863,7 +911,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
         if not os.path.exists(min_file):
             log.warning(f"[警告] 子级别数据文件不存在: {min_file}")
             return None
-        sub_records = read_tdx_min_file(min_file, market=market, aggregate_30m=False)
+        sub_records = read_tdx_5min_file(min_file, market=market, aggregate_30m=False)
         if _tdx_config["forward_adjust_enabled"]:
             sub_records, _ = _forward_adjust(sub_records, market=market, code=code, end_date=end_date)
         if sub_freq == '30m':
@@ -2291,11 +2339,13 @@ if __name__ == "__main__":
     print("  - CTdxAPI: 适配器类（P2 已删 CTdxAPI_Sliced 切片适配器）")
     print("  - set_tdx_config(): 设置模块级配置（vipdoc_dir, forward_adjust_enabled）")
     print("  - read_tdx_day_file(): 读取日线 .day 文件")
-    print("  - read_tdx_min_file(): 读取分钟线 .lc5 文件")
+    print("  - read_tdx_5min_file(): 读取5分钟线 .lc5 文件")
+    print("  - read_tdx_1min_file(): 读取1分钟线 .lc1 文件")
     print("  - read_main_level_records(): 主级别数据加载管道")
     print("  - read_sub_level_records(): 子级别数据加载管道")
     print("  - _resample_day_to_week(): 日线->周线合成")
     print("  - _resample_5m_to_30m(): 5m->30m 合成")
+    print("  - _resample_5m_to_15m(): 5m->15m 合成")
     print("")
     print("前复权功能：")
     print("  - _forward_adjust(): 对原始K线进行前复权处理")
