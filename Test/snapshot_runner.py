@@ -189,6 +189,7 @@ def install_futures_data_source(fixture):
 def isolate_side_effects():
     """隔离引擎进程内缓存与写文件副作用，保证快照可重复采集"""
     from App import AppEngine as m
+    from App.AppData import app_data
     saved = {}
     # CChan 对象缓存：清空，测试统一用 cache_chan=False 亦不依赖该缓存
     for attr in ("_STOCK_CACHE", "_stock_cache", "_CHAN_CACHE"):
@@ -198,9 +199,17 @@ def isolate_side_effects():
     # 上次代码/周期持久化：已随阶段 8 瘦身迁移删除（AppChart 委托 app_data），
     # 快照路径不再写该文件，无需打桩
 
+    # 选点持久化隔离：live 路径（end_date=None）会读 App/double_click_dt.csv
+    # 中保存的手动选点，并按选点时间过滤 K 线窗口（AppEngine:_analyze_stock_internal）。
+    # 历史运行 / 其它测试组件残留的选点会污染同代码的股票用例，造成快照漂移
+    # （笔起点整体后移）。快照采集必须跑在「无选点」的干净状态上。
+    saved_saved_points = app_data._saved_point_times
+    app_data._saved_point_times = {}
+
     def restore():
         for k, v in saved.items():
             setattr(m, k, v)
+        app_data._saved_point_times = saved_saved_points
     return restore
 
 
