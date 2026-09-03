@@ -45,7 +45,7 @@
         let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
 
         // 频率→秒数映射（后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
-        let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '5m': 300, '1m': 60, '15s': 15 };
+        let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '15m': 900, '5m': 300, '1m': 60, '15s': 15 };
 
         // 前端视口默认显示的K线根数（所有周期相同）——后端经 /api/health 下发
         // （config.view_count，见 App/AppConfig.py 的 VIEW_COUNT），此默认值仅作离线兜底。
@@ -162,7 +162,7 @@
         let _annotationDialogMode = "add"; // "add" 或 "edit"
 
         // ===== 日期输入框：按周期切换 date / datetime-local =====
-        const INTRADAY_FREQS_JS = ["30m", "5m", "1m", "15s"];
+        const INTRADAY_FREQS_JS = ["30m", "15m", "5m", "1m", "15s"];
 
         // 实时模式（期货/期指 SSE 推送）
         let isRealtimeMode = false;       // 是否处于实时模式
@@ -376,18 +376,20 @@
             if (mainFreq === 'w') return 'd';
             if (mainFreq === 'd') return '30m';
             if (mainFreq === '30m') return '5m';
+            if (mainFreq === '15m') return '5m';
             // 期货周期映射（股票5m无对应，期货5m→1m）
             if (mainFreq === '5m') return '1m';
             if (mainFreq === '1m') return '15s';
             return null; // 5m(股票)/15s(期货)无对应
         }
 
-        // 股票双窗口配对空间（配对放宽至 6 对，与后端 _STOCKS_DUAL_PAIRS 同口径）
+        // 股票双窗口配对空间（配对放宽至 9 对，与后端 _STOCKS_DUAL_PAIRS 同口径）
         // 上窗周期 → 可选下窗周期集合；getDualSubFreq 返回其中的默认配对
         const STOCKS_DUAL_PAIRS_JS = {
-            'w':   ['d', '30m', '5m'],
-            'd':   ['30m', '5m'],
-            '30m': ['5m'],
+            'w':   ['d', '30m', '15m', '5m'],
+            'd':   ['30m', '15m', '5m'],
+            '30m': ['15m', '5m'],
+            '15m': ['5m'],
             // 5m 为股票最小周期，无下窗可选（与期货 15s 同语义）
         };
 
@@ -775,6 +777,8 @@
                                 currentFreq = "5m";
                             } else if (chartData.meta.freq === "30分钟") {
                                 currentFreq = "30m";
+                            } else if (chartData.meta.freq === "15分钟") {
+                                currentFreq = "15m";
                             } else if (chartData.meta.freq === "周线") {
                                 currentFreq = "w";
                             } else {
@@ -785,6 +789,7 @@
                             document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
                             document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
                             document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
+                            document.getElementById("btn-15m").classList.toggle("active", currentFreq === "15m");
                             document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                             // 重置视图：选点后klines只含选点之后的K线，直接全部显示
                             adjustViewForSavedPoint();
@@ -1327,7 +1332,7 @@
                     let shortDate;
                     if (freq === '15s') {
                         shortDate = getKlineEndTime(highlightCenterDate, true);
-                    } else if (freq === '1m' || freq === '30m' || freq === '5m') {
+                    } else if (freq === '1m' || freq === '30m' || freq === '15m' || freq === '5m') {
                         shortDate = getKlineEndTime(highlightCenterDate);
                     } else if (freq === 'w') {
                         const dateParts = highlightCenterDate.split(/[-\/]/);
@@ -2193,7 +2198,7 @@
                 let shortDate;
                 if (currentFreq === '15s') {
                     shortDate = getKlineEndTime(k.date, true);  // 含秒
-                } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m') {
+                } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '15m' || currentFreq === '5m') {
                     shortDate = getKlineEndTime(k.date);
                 } else if (currentFreq === 'w') {
                     const dateParts = k.date.split(/[-\/]/);
@@ -2393,7 +2398,7 @@
             let sampleDate;
             if (currentFreq === '15s') {
                 sampleDate = getKlineEndTime(klines[0].date, true);
-            } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m') {
+            } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '15m' || currentFreq === '5m') {
                 sampleDate = getKlineEndTime(klines[0].date);
             } else {
                 const dateParts = klines[0].date.split(/[-\/]/);
@@ -2446,7 +2451,7 @@
                 let shortDate;
                 if (currentFreq === '15s') {
                     shortDate = getKlineEndTime(klines[i].date, true);
-                } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '5m') {
+                } else if (currentFreq === '1m' || currentFreq === '30m' || currentFreq === '15m' || currentFreq === '5m') {
                     shortDate = getKlineEndTime(klines[i].date);
                 } else if (currentFreq === 'w') {
                     const dateParts = klines[i].date.split(/[-\/]/);
@@ -3239,8 +3244,8 @@
                 // 期货：30m/5m/1m 可双窗口，15s 不可
                 document.getElementById("btn-dual").disabled = (currentFreq === '15s');
             } else {
-                // 股票：w/d/30m 可双窗口，5m 不可
-                document.getElementById("btn-dual").disabled = (currentFreq === '5m');
+                // 股票：w/d/30m 可双窗口；15m/5m 不可（15m/5m 不单独作为主窗切双窗）
+                document.getElementById("btn-dual").disabled = (currentFreq === '15m' || currentFreq === '5m');
             }
         }
 
@@ -3301,6 +3306,8 @@
                         currentFreq = "5m";
                     } else if (chartData.meta.freq === "30分钟") {
                         currentFreq = "30m";
+                    } else if (chartData.meta.freq === "15分钟") {
+                        currentFreq = "15m";
                     } else if (chartData.meta.freq === "周线") {
                         currentFreq = "w";
                     } else {
@@ -3310,6 +3317,7 @@
                     document.getElementById("btn-d").classList.toggle("active", currentFreq === "d");
                     document.getElementById("btn-w").classList.toggle("active", currentFreq === "w");
                     document.getElementById("btn-30m").classList.toggle("active", currentFreq === "30m");
+                    document.getElementById("btn-15m").classList.toggle("active", currentFreq === "15m");
                     document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                     viewCount = VIEW_COUNT;
                     viewOffset = Math.max(0, chartData.klines.length - viewCount);
@@ -3453,16 +3461,16 @@
             if (ra) ra.title = (currentFreq === "d") ? "后一天" : "后一根";
         }
 
-        // 周期级别：数值越大级别越高（w=6 > d=5 > 30m=4 > 5m=3 > 1m=2 > 15s=1）
+        // 周期级别：数值越大级别越高（w=7 > d=6 > 30m=5 > 15m=4 > 5m=3 > 1m=2 > 15s=1）
         // 用于双窗口校验：下窗周期级别必须严格小于上窗周期级别
         function freqLevel(freq) {
-            const levels = {'w': 6, 'd': 5, '30m': 4, '5m': 3, '1m': 2, '15s': 1};
+            const levels = {'w': 7, 'd': 6, '30m': 5, '15m': 4, '5m': 3, '1m': 2, '15s': 1};
             return levels[freq] || 0;
         }
 
         // 周期中文标签（用于弹窗提示）
         function freqLabel(freq) {
-            const labels = {'w': '周线', 'd': '日线', '30m': '30分钟', '5m': '5分钟', '1m': '1分钟', '15s': '15秒'};
+            const labels = {'w': '周线', 'd': '日线', '30m': '30分钟', '15m': '15分钟', '5m': '5分钟', '1m': '1分钟', '15s': '15秒'};
             return labels[freq] || freq;
         }
 
@@ -3475,9 +3483,12 @@
             document.getElementById('btn-15s').disabled = !isFutures;
             // 共享周期：30m 始终启用
             document.getElementById('btn-30m').disabled = false;
+            // 15m：股票周期（股票单窗/双窗可用；期货无 15m，禁用）
+            document.getElementById('btn-15m').disabled = isFutures;
             // 5m: 期货双窗口→全部启用（上下窗解耦）；股票双窗口→按焦点窗口（配对放宽）
             if (isDualWindow && isFutures) {
                 document.getElementById('btn-5m').disabled = false;
+                document.getElementById('btn-15m').disabled = true;
                 // 期货双窗口：上下窗独立切换，15s不再禁用
             } else if (isDualWindow && !isFutures) {
                 if (activeDualWindow === 'sub') {
@@ -3486,6 +3497,7 @@
                     document.getElementById('btn-w').disabled = true;
                     document.getElementById('btn-d').disabled = subs.indexOf('d') < 0;
                     document.getElementById('btn-30m').disabled = subs.indexOf('30m') < 0;
+                    document.getElementById('btn-15m').disabled = subs.indexOf('15m') < 0;
                     document.getElementById('btn-5m').disabled = subs.indexOf('5m') < 0;
                 } else {
                     // 股票上窗焦点：5m 为最小周期无下窗，禁用
@@ -4290,6 +4302,8 @@
                         returnedFreq = "5m";
                     } else if (data.meta.freq === "30分钟") {
                         returnedFreq = "30m";
+                    } else if (data.meta.freq === "15分钟") {
+                        returnedFreq = "15m";
                     } else if (data.meta.freq === "周线") {
                         returnedFreq = "w";
                     } else {
@@ -4728,7 +4742,7 @@
         };
 
         function updateScanTitle() {
-            var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分"};
+            var freqLabels = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分"};
             var freqLabel = freqLabels[_scanFreq] || _scanFreq;
             if (_scanMode === "bsp") {
                 document.getElementById("scan-title").innerHTML = freqLabel + '<span style="font-size:11px;font-weight:400;color:#a8b2d1">[最近</span><b style="font-size:11px;color:#e94560">' + _scanRecentDays + '</b><span style="font-size:11px;font-weight:400;color:#a8b2d1">根]</span> 买/卖点';
@@ -4795,7 +4809,7 @@
                     }
                 }
                 var savedFreq = localStorage.getItem("scan_freq");
-                if (savedFreq && ["w", "d", "30m", "5m"].indexOf(savedFreq) >= 0) {
+                if (savedFreq && ["w", "d", "30m", "15m", "5m"].indexOf(savedFreq) >= 0) {
                     _scanFreq = savedFreq;
                     var radio = document.querySelector('input[name="scan-freq"][value="' + savedFreq + '"]');
                     if (radio) radio.checked = true;
@@ -4997,7 +5011,7 @@
                     if (codes.length === 0) {
                         html += '<div class="scan-no-result">未发现标注股票</div>';
                     } else {
-                        var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
+                        var freqLabelMap = {"d": "日K", "w": "周K", "30m": "30分", "15m": "15分", "5m": "5分", "60m": "60分", "1m": "1分", "15s": "15秒"};
                         codes.forEach(function(c) {
                             var rCode = c.code + "." + c.market;
                             var rFreqLabel = freqLabelMap[c.freq] || c.freq;
@@ -5917,7 +5931,7 @@
             const badge = document.getElementById('realtime-badge');
 
             if (isFutures) {
-                const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d','周线':'w'};
+                const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d','周线':'w'};
                 if (data.meta.freq) {
                     currentFreq = freqMap[data.meta.freq] || currentFreq;
                 }
@@ -5979,7 +5993,7 @@
                         updateRestartBtn();
                         updateDualBtn();
                         // 同步周期
-                        const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d','周线':'w'};
+                        const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d','周线':'w'};
                         currentFreq = freqMap[data.meta.freq] || freq;
                         lastFuturesFreq = currentFreq; // 更新期货周期记忆
                         updateFreqButtonStates(true);
@@ -6078,7 +6092,7 @@
                             realtimeSymbol = resolvedSymbol;
                             updateRestartBtn();
                             updateDualBtn();
-                            const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d','周线':'w'};
+                            const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d','周线':'w'};
                             currentFreq = freqMap[chartData.meta.freq] || currentFreq;
                             lastFuturesFreq = currentFreq;
                             viewCount = VIEW_COUNT;
@@ -6238,7 +6252,7 @@
             document.getElementById('stock-code').textContent = data.meta.symbol;
             document.title = "缠论分析 - " + data.meta.name;
             if (data.meta.freq) {
-                const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d'};
+                const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d'};
                 currentFreq = freqMap[data.meta.freq] || currentFreq;
             }
 
@@ -6283,7 +6297,7 @@
                     document.getElementById('stock-name').textContent = data.main.meta.name || '';
                     document.getElementById('stock-code').textContent = data.main.meta.symbol || '';
                     if (data.main.meta.freq) {
-                        const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','日线':'d'};
+                        const freqMap = {'15秒':'15s','1分钟':'1m','5分钟':'5m','30分钟':'30m','15分钟':'15m','日线':'d'};
                         currentFreq = freqMap[data.main.meta.freq] || currentFreq;
                     }
                 }
@@ -6897,6 +6911,7 @@
                     let rf = "d";
                     if (data.meta.freq === "5分钟") rf = "5m";
                     else if (data.meta.freq === "30分钟") rf = "30m";
+                    else if (data.meta.freq === "15分钟") rf = "15m";
                     else if (data.meta.freq === "周线") rf = "w";
                     currentFreq = rf; lastStockFreq = rf;
                     updateDateInputType(); updateFreqButtonStates(false);
@@ -6992,6 +7007,7 @@
                             let returnedFreq;
                             if (data.meta.freq === "5分钟") returnedFreq = "5m";
                             else if (data.meta.freq === "30分钟") returnedFreq = "30m";
+                            else if (data.meta.freq === "15分钟") returnedFreq = "15m";
                             else if (data.meta.freq === "周线") returnedFreq = "w";
                             else returnedFreq = "d";
                             currentFreq = returnedFreq;
@@ -7063,6 +7079,7 @@
                 updateSlider();
                 if (chartData.meta.freq === "5分钟") currentFreq = "5m";
                 else if (chartData.meta.freq === "30分钟") currentFreq = "30m";
+                else if (chartData.meta.freq === "15分钟") currentFreq = "15m";
                 else if (chartData.meta.freq === "周线") currentFreq = "w";
                 else currentFreq = "d";
                 updateDateInputType();

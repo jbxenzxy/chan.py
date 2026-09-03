@@ -672,6 +672,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
             'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
             'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
             '30m': [KL_TYPE.K_30M, KL_TYPE.K_5M],
+            '15m': [KL_TYPE.K_15M, KL_TYPE.K_5M],
         }
         sub_chan = None
         if dual and sub_freq and dual_impl == "independent":
@@ -908,6 +909,9 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         elif main_freq == '30m':
             end = main_dt
             start = main_dt - timedelta(minutes=30) + timedelta(microseconds=1)
+        elif main_freq == '15m':
+            end = main_dt
+            start = main_dt - timedelta(minutes=15) + timedelta(microseconds=1)
         else:
             return list(main_klu.sub_kl_list)
 
@@ -1506,7 +1510,10 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 # ============================================================
 # 高级别→低级别周期映射（缺省配对；独立双窗显式配对共 6 对，
 # 未显式传 sub_freq 时按此缺省回退，保证不传参调用行为不变）
-_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
+# 缺省下窗兜底表（前端未显式传 sub_freq 时按此补默认下窗）：
+# w→d、d→30m、30m→5m 为既有默认配对；15m→5m 供 legacy 红框子级别笔优先判定
+# （AppChart.py 依据本表 values 回退取 dual_main 子级别笔）与同口径兜底使用。
+_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
 
 
 
@@ -1538,11 +1545,12 @@ def _stock_dual_impl():
     return v if v in ("independent", "legacy") else "independent"
 
 
-# 股票周期种类（w/d/30m/5m），双窗配对空间 6 对
+# 股票周期种类（w/d/30m/15m/5m），双窗配对空间（上窗须严格大于下窗）
 _STOCKS_DUAL_PAIRS = {
-    "w": {"d", "30m", "5m"},
-    "d": {"30m", "5m"},
-    "30m": {"5m"},
+    "w": {"d", "30m", "15m", "5m"},
+    "d": {"30m", "15m", "5m"},
+    "30m": {"15m", "5m"},
+    "15m": {"5m"},
     # 5m 为股票最小周期，无下窗可选（与期货 15s 同语义）
 }
 
@@ -1554,7 +1562,7 @@ def _validate_stock_dual_pair(freq, sub_freq):
     """
     subs = _STOCKS_DUAL_PAIRS.get(freq)
     if subs is None:
-        return f"双窗口不支持当前上窗周期: {freq}（可选 w/d/30m）"
+        return f"双窗口不支持当前上窗周期: {freq}（可选 w/d/30m/15m）"
     if not sub_freq:
         return f"双窗口缺少下窗周期 sub_freq（{freq} 可选 {sorted(subs)}）"
     if sub_freq not in subs:
@@ -1568,6 +1576,7 @@ _STOCKS_MAIN_PERIOD = {
     "w": timedelta(days=7),
     "d": timedelta(days=1),
     "30m": timedelta(minutes=30),
+    "15m": timedelta(minutes=15),
 }
 
 # 日期型 K 线（w/d）dt 为当日 00:00，语义补齐到「当日结束时刻」

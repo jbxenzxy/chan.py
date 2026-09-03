@@ -489,15 +489,15 @@ def cal_bsp33_bi_end_idx(seg: Optional[CSeg[LINE_TYPE]]):
 # KL_TYPE → freq 字符串映射
 _KL_TYPE_TO_FREQ = {
     KL_TYPE.K_15S: '15s', KL_TYPE.K_1M: '1m', KL_TYPE.K_5M: '5m',
-    KL_TYPE.K_30M: '30m', KL_TYPE.K_60M: '60m', KL_TYPE.K_DAY: 'd',
-    KL_TYPE.K_WEEK: 'w',
+    KL_TYPE.K_15M: '15m', KL_TYPE.K_30M: '30m', KL_TYPE.K_60M: '60m',
+    KL_TYPE.K_DAY: 'd', KL_TYPE.K_WEEK: 'w',
 }
 
 # freq 字符串 → KL_TYPE 枚举反向映射
 _FREQ_TO_KL_TYPE = {
     '15s': KL_TYPE.K_15S, '1m': KL_TYPE.K_1M, '5m': KL_TYPE.K_5M,
-    '30m': KL_TYPE.K_30M, '60m': KL_TYPE.K_60M, 'd': KL_TYPE.K_DAY,
-    'w': KL_TYPE.K_WEEK,
+    '15m': KL_TYPE.K_15M, '30m': KL_TYPE.K_30M, '60m': KL_TYPE.K_60M,
+    'd': KL_TYPE.K_DAY, 'w': KL_TYPE.K_WEEK,
 }
 
 def _get_kl_type(freq):
@@ -505,7 +505,7 @@ def _get_kl_type(freq):
     return _FREQ_TO_KL_TYPE.get(freq, KL_TYPE.K_DAY)
 
 # 双窗口 freq 配对（上窗→下窗）
-_STOCKS_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m'}
+_STOCKS_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
 _FUTURES_SUB_FREQ_MAP = {'30m': '5m', '5m': '1m', '1m': '15s'}
 
 
@@ -1913,6 +1913,7 @@ _STOCKS_FREQ_SEC = {
     "w": 7 * 86400,
     "d": 86400,
     "30m": 1800,
+    "15m": 900,
     "5m": 300,
 }
 

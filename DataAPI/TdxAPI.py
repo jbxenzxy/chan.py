@@ -642,6 +642,61 @@ def _resample_5m_to_30m(records, market="sh"):
     return result
 
 
+def _resample_5m_to_15m(records, market="sh"):
+    """
+    将5分钟K线合成为15分钟K线（与 _resample_5m_to_30m 同口径）。
+    以每个交易日内 09:30 为锚点，把每根 5m（dt=结束时刻）向上取整到对齐
+    会话起点(09:30/13:00 派生)的 15 分钟边界桶：
+      A股 桶例 9:45,10:00,...,11:30, 13:15,...,15:00；
+      该 09:30 锚点对港股同样成立（12:00 午市段也落在 15m 网格内）。
+    由 5m 前复权后调用，避免对合成后的 15m 二次复权。
+    """
+    if not records:
+        return []
+
+    for r in records:
+        dt = r["dt"]
+        ref = dt.replace(hour=9, minute=30, second=0, microsecond=0)
+        minutes_since = int((dt - ref).total_seconds()) // 60
+        boundary_min = ((minutes_since + 14) // 15) * 15  # ceil 到 15 分钟边界
+        r["_bucket"] = ref + timedelta(minutes=boundary_min)
+
+    buckets = OrderedDict()
+    for r in records:
+        b = r["_bucket"]
+        if b not in buckets:
+            buckets[b] = {
+                "open": r["open"], "high": r["high"], "low": r["low"],
+                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
+            }
+        else:
+            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
+            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
+            buckets[b]["close"] = r["close"]
+            buckets[b]["vol"] += r["vol"]
+            buckets[b]["amount"] += r["amount"]
+
+    result = []
+    for b, v in buckets.items():
+        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
+        h2 = max(h2, o2, c2)
+        l2 = min(l2, o2, c2)
+        result.append({
+            "dt": b,
+            "open": round(o2, 3),
+            "high": round(h2, 3),
+            "low": round(l2, 3),
+            "close": round(c2, 3),
+            "vol": v["vol"],
+            "amount": round(v["amount"], 2),
+        })
+
+    for r in records:
+        r.pop("_bucket", None)
+
+    return result
+
+
 def _resample_day_to_week(day_records):
     """
     将日线数据合成为周线数据
@@ -873,7 +928,7 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
     end_date: datetime 或 None, 复盘截止日期。传入后前复权只以 end_date
               为最新锚点递推，A 之后的除权事件不参与复权。
     """
-    if freq in ('30m', '5m'):
+    if freq in ('30m', '15m', '5m'):
         if market == 'hk':
             hz = _hk_index_hz_code(code)
             prefix = f"27#{hz}" if hz != code else f"31#{code}"
@@ -898,6 +953,15 @@ def read_main_level_records(market, code, freq, return_raw=False, end_date=None)
         if return_raw:
             return records_30m, raw_5m, did_adjust
         return records_30m, did_adjust
+    elif freq == '15m':
+        raw_5m = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
+        did_adjust = False
+        if _tdx_config["forward_adjust_enabled"]:
+            raw_5m, did_adjust = _forward_adjust(raw_5m, market=market, code=code, end_date=end_date)
+        records_15m = _resample_5m_to_15m(list(raw_5m), market=market)
+        if return_raw:
+            return records_15m, raw_5m, did_adjust
+        return records_15m, did_adjust
     elif freq == '5m':
         records = read_tdx_min_file(data_file, market=market, aggregate_30m=False)
         did_adjust = False
@@ -930,7 +994,7 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
     end_date: datetime 或 None, 复盘截止日期。传入后前复权只以 end_date
               为最新锚点递推。
     """
-    if sub_freq in ('30m', '5m'):
+    if sub_freq in ('30m', '15m', '5m'):
         if market == 'hk':
             hz = _hk_index_hz_code(code)
             prefix = f"27#{hz}" if hz != code else f"31#{code}"
@@ -947,6 +1011,8 @@ def read_sub_level_records(market, code, freq, sub_freq, records, end_date=None)
             sub_records, _ = _forward_adjust(sub_records, market=market, code=code, end_date=end_date)
         if sub_freq == '30m':
             sub_records = _resample_5m_to_30m(sub_records, market=market)
+        elif sub_freq == '15m':
+            sub_records = _resample_5m_to_15m(sub_records, market=market)
     elif sub_freq == 'd':
         day_file = find_day_file(market, code)
         if not os.path.exists(day_file):
