@@ -479,177 +479,21 @@ def read_tdx_min_file(filepath, market="sh", aggregate_30m=True):
             })
         return result
 
-    # 合成30分钟线
-    # A股交易时间: 9:30-11:30, 13:00-15:00
-    # 港股交易时间: 9:30-12:00, 13:00-16:00
-    if market == 'hk':
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 12:
-                return dt_obj.replace(minute=0)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0, hour=15) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 16:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-    else:
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-
-    for r in records:
-        r["bucket"] = _bucket_30min(r["dt"])
-
-    buckets = OrderedDict()
-    for r in records:
-        b = r["bucket"]
-        if b not in buckets:
-            buckets[b] = {
-                "open": r["open"], "high": r["high"], "low": r["low"],
-                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
-            }
-        else:
-            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
-            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
-            buckets[b]["close"] = r["close"]
-            buckets[b]["vol"] += r["vol"]
-            buckets[b]["amount"] += r["amount"]
-
-    result = []
-    for b, v in buckets.items():
-        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
-        h2 = max(h2, o2, c2)
-        l2 = min(l2, o2, c2)
-        result.append({
-            "dt": b,
-            "open": round(o2, 3),
-            "high": round(h2, 3),
-            "low": round(l2, 3),
-            "close": round(c2, 3),
-            "vol": v["vol"],
-            "amount": round(v["amount"], 2),
-        })
-
-    return result
+    # 合成30分钟线：统一委托 _resample_5m_to_30m（单一事实源，A股/港股分桶同口径）
+    return _resample_5m_to_30m(records, market=market)
 
 
-def _resample_5m_to_30m(records, market="sh"):
+def _resample_5m(records, period_min):
     """
-    将5分钟K线合成为30分钟K线（从 read_tdx_min_file 中提取的独立函数）
-    供外部在5分钟前复权后调用，避免对30分钟K线做二次复权
-    """
-    if not records:
-        return []
+    将5分钟K线合成为 period_min 分钟K线（15m/30m 共用的唯一合成实现，单一事实源）。
+    供外部在5分钟前复权后调用，避免对合成后的 K 线做二次复权。
 
-    # A股交易时间: 9:30-11:30, 13:00-15:00
-    # 港股交易时间: 9:30-12:00, 13:00-16:00
-    if market == 'hk':
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 12:
-                return dt_obj.replace(minute=0)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0, hour=15) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 16:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-    else:
-        def _bucket_30min(dt_obj):
-            h, m = dt_obj.hour, dt_obj.minute
-            if h == 9:
-                return dt_obj.replace(minute=0, hour=10)
-            elif h == 10:
-                return dt_obj.replace(minute=0, hour=10) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=11)
-            elif h == 11:
-                return dt_obj.replace(minute=0, hour=11) if m == 0 else dt_obj.replace(minute=30)
-            elif h == 13:
-                return dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=14)
-            elif h == 14:
-                return dt_obj.replace(minute=0, hour=14) if m == 0 else dt_obj.replace(minute=30) if m < 35 else dt_obj.replace(minute=0, hour=15)
-            elif h == 15:
-                return dt_obj.replace(minute=0)
-            return dt_obj
-
-    for r in records:
-        r["bucket"] = _bucket_30min(r["dt"])
-
-    buckets = OrderedDict()
-    for r in records:
-        b = r["bucket"]
-        if b not in buckets:
-            buckets[b] = {
-                "open": r["open"], "high": r["high"], "low": r["low"],
-                "close": r["close"], "vol": r["vol"], "amount": r["amount"],
-            }
-        else:
-            buckets[b]["high"] = max(buckets[b]["high"], r["high"])
-            buckets[b]["low"] = min(buckets[b]["low"], r["low"])
-            buckets[b]["close"] = r["close"]
-            buckets[b]["vol"] += r["vol"]
-            buckets[b]["amount"] += r["amount"]
-
-    result = []
-    for b, v in buckets.items():
-        o2, h2, l2, c2 = v["open"], v["high"], v["low"], v["close"]
-        h2 = max(h2, o2, c2)
-        l2 = min(l2, o2, c2)
-        result.append({
-            "dt": b,
-            "open": round(o2, 3),
-            "high": round(h2, 3),
-            "low": round(l2, 3),
-            "close": round(c2, 3),
-            "vol": v["vol"],
-            "amount": round(v["amount"], 2),
-        })
-
-    # 清理临时 bucket 属性
-    for r in records:
-        r.pop("bucket", None)
-
-    return result
-
-
-def _resample_5m_to_15m(records, market="sh"):
-    """
-    将5分钟K线合成为15分钟K线（与 _resample_5m_to_30m 同口径）。
-    以每个交易日内 09:30 为锚点，把每根 5m（dt=结束时刻）向上取整到对齐
-    会话起点(09:30/13:00 派生)的 15 分钟边界桶：
-      A股 桶例 9:45,10:00,...,11:30, 13:15,...,15:00；
-      该 09:30 锚点对港股同样成立（12:00 午市段也落在 15m 网格内）。
-    由 5m 前复权后调用，避免对合成后的 15m 二次复权。
+    09:30 锚点法（A股/港股一致）：
+      以每个交易日 09:30 为锚点，把每根 5m（dt=结束时刻）向上取整到对齐会话起点
+      (09:30/13:00) 的 period_min 分钟边界桶。
+      修复港股历史 bug：旧手写 h==11/15 分支把 11:35–11:55、15:35–15:55
+      错分到 11:30/15:30 桶（错桶漂移），使港股每交易日 K 线 OHLC/量/额失真。
+      A股 桶例（30m）：10:00,...,11:30, 13:30,...,15:00；港股 12:00/16:00 桶正确。
     """
     if not records:
         return []
@@ -658,7 +502,7 @@ def _resample_5m_to_15m(records, market="sh"):
         dt = r["dt"]
         ref = dt.replace(hour=9, minute=30, second=0, microsecond=0)
         minutes_since = int((dt - ref).total_seconds()) // 60
-        boundary_min = ((minutes_since + 14) // 15) * 15  # ceil 到 15 分钟边界
+        boundary_min = ((minutes_since + period_min - 1) // period_min) * period_min  # ceil 到 period_min 边界
         r["_bucket"] = ref + timedelta(minutes=boundary_min)
 
     buckets = OrderedDict()
@@ -691,10 +535,23 @@ def _resample_5m_to_15m(records, market="sh"):
             "amount": round(v["amount"], 2),
         })
 
+    # 清理临时 bucket 属性
     for r in records:
         r.pop("_bucket", None)
 
     return result
+
+
+def _resample_5m_to_30m(records, market="sh"):
+    """将5分钟K线合成为30分钟K线（委托 _resample_5m 唯一实现）。"""
+    _ = market  # market 参数保留以兼容调用方，锚点法与市场无关
+    return _resample_5m(records, 30)
+
+
+def _resample_5m_to_15m(records, market="sh"):
+    """将5分钟K线合成为15分钟K线（委托 _resample_5m 唯一实现）。"""
+    _ = market  # market 参数保留以兼容调用方，锚点法与市场无关
+    return _resample_5m(records, 15)
 
 
 def _resample_day_to_week(day_records):

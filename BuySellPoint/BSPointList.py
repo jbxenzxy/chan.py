@@ -1789,14 +1789,16 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 # 红框功能（App 引擎层）通过 import 复用
 # ═══════════════════════════════════════════════════════════
 
-INTRADAY_FREQS = {"30m", "5m", "1m"}
+# 注意：此集合与 App/utils.py 的 INTRADAY_FREQS 是双副本，必须保持一致（历史遗留）。
+# 新增日内周期频率时务必两处同步，否则 _get_date_fmt 会把该频率错判为日线（时分被截断）。
+INTRADAY_FREQS = {"30m", "15m", "5m", "1m"}
 SUBSECOND_FREQS = {"15s"}
 
 
 def _get_date_fmt(freq):
     """根据频率返回统一的日期格式字符串（/ 分隔符）
     - 15s           → %Y/%m/%d %H:%M:%S
-    - 30m, 5m, 1m   → %Y/%m/%d %H:%M
+    - 30m, 15m, 5m, 1m → %Y/%m/%d %H:%M
     - d, w, m, q, y → %Y/%m/%d
     """
     if freq in SUBSECOND_FREQS:

@@ -440,8 +440,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 双窗口分支：独立加载主级别和子级别数据
         # ────────────────────────────────────
         t0 = time.time()
-        if freq == '30m' and sub_freq == '5m':
-            # 优化：30m+5m 共用同一次5m文件读取和前复权，避免重复读取和二次复权
+        if freq in ('30m', '15m') and sub_freq == '5m':
+            # 优化：30m+5m、15m+5m 共用同一次5m文件读取和前复权，避免重复读取和二次复权
             full_records, sub_records, forward_adjust_done = CTdxAPI.fetch_main_level(market, code, freq, return_raw=True, end_date=target_dt)
             if len(full_records) < 5:
                 return {"error": f"主级别K线数据不足: 仅{len(full_records)}条"}
@@ -508,7 +508,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                 continue
         # 修复：matched_fmt 只可能取三种斜杠格式之一，原判断写成了
         # 连字符 "%Y-%m-%d"（恒为 False，不可达），导致纯日期复盘 +
-        # 日内周期（30m/5m）时 target_dt 停在当日 00:00、当日分钟K线全被
+        # 日内周期（30m/15m/5m）时 target_dt 停在当日 00:00、当日分钟K线全被
         # 截掉（用户复盘到当天却看到昨收）。改为判断"仅日期、无时间端"
         # 的斜杠格式，命中时把右边界推到当日 23:59:59，整日分钟K线完整。
         if matched_fmt == "%Y/%m/%d" and freq in INTRADAY_FREQS:
