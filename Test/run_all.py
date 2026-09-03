@@ -200,6 +200,10 @@ COMPONENTS = [
     # 上述守卫不是「跑得绿但拦不住」的假绿（八种回归形态须全部使守卫变红）。
     ("p3_mutation_gate",
      [sys.executable, os.path.join("Test", "_mutate_p3.py")]),
+    # 15m 周期 + 30m 分桶回归：覆盖 15m 合成、港股30m 锚点分桶、单事实源、
+    # 双窗口一致性等。原先漏登记，等于没有该回归（详见 15m 对比评审）。
+    ("15m_period",
+     [sys.executable, os.path.join("Test", "test_15m_period.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

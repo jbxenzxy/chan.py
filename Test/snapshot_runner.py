@@ -73,6 +73,13 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
     CTdxAPI.fetch_main_level = classmethod(fake_main)
     CTdxAPI.fetch_sub_level = classmethod(fake_sub)
 
+    # 夹具隔离（修复根因）：清空单窗口/主级别分析数据缓存，避免不同用例共用同一
+    # (market, code, freq, "live") 缓存键而复用首个用例的夹具数据。否则在同一进程
+    # 内连续运行多个 daily 用例时，后者命中缓存、永不加载自身 fixture，快照基线会
+    # 变成首用例的副本——既让边缘用例失去覆盖意义，也会让刷新后的基线在套件中再次失真。
+    with m._stocks_cache_lock:
+        m._stocks_analysis_cache.clear()
+
     def restore():
         if orig_main is not None:
             CTdxAPI.fetch_main_level = orig_main
@@ -82,6 +89,10 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
             CTdxAPI.fetch_sub_level = orig_sub
         elif "fetch_sub_level" in CTdxAPI.__dict__:
             del CTdxAPI.fetch_sub_level
+        # 用毕清缓存：避免注入的 fixture 数据泄露到后续套件组件，也避免下次用例
+        # 直接命中已污染缓存。
+        with m._stocks_cache_lock:
+            m._stocks_analysis_cache.clear()
 
     return restore, main_records
 
