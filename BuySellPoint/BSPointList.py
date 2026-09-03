@@ -5,7 +5,12 @@ from typing import Dict, Generic, Iterable, List, Optional, Tuple, TypeVar
 from Bi.Bi import CBi
 from Bi.BiList import CBiList
 from Common.CEnum import BSP_TYPE, KL_TYPE, MACD_ALGO
-from Common.func_util import has_overlap
+from Common.func_util import (
+    INTRADAY_FREQS,
+    SUBSECOND_FREQS,
+    _get_date_fmt,
+    has_overlap,
+)
 from Seg.Seg import CSeg
 from Seg.SegListComm import CSegListComm
 from ZS.ZS import CZS
@@ -1789,23 +1794,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 # 红框功能（App 引擎层）通过 import 复用
 # ═══════════════════════════════════════════════════════════
 
-# 注意：此集合与 App/utils.py 的 INTRADAY_FREQS 是双副本，必须保持一致（历史遗留）。
-# 新增日内周期频率时务必两处同步，否则 _get_date_fmt 会把该频率错判为日线（时分被截断）。
-INTRADAY_FREQS = {"30m", "15m", "5m", "1m"}
-SUBSECOND_FREQS = {"15s"}
-
-
-def _get_date_fmt(freq):
-    """根据频率返回统一的日期格式字符串（/ 分隔符）
-    - 15s           → %Y/%m/%d %H:%M:%S
-    - 30m, 15m, 5m, 1m → %Y/%m/%d %H:%M
-    - d, w, m, q, y → %Y/%m/%d
-    """
-    if freq in SUBSECOND_FREQS:
-        return "%Y/%m/%d %H:%M:%S"
-    if freq in INTRADAY_FREQS:
-        return "%Y/%m/%d %H:%M"
-    return "%Y/%m/%d"
+# INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt 为周期分类单一事实源，
+# 统一从 Common.func_util 导入（见文件顶部 import），不再在此复制双副本。
 
 
 def _main_bi_range(bi, date_fmt, allow_partial=False):

@@ -25,6 +25,8 @@ import re
 from App.AppConfig import app_config
 # chan.py 核心（KL_TYPE 枚举）
 from Common.CEnum import KL_TYPE
+# 周期分类单一事实源（INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt）
+from Common.func_util import INTRADAY_FREQS, SUBSECOND_FREQS, _get_date_fmt
 # 缠论配置（_make_chan_config）
 from ChanConfig import CChanConfig
 # 天勤数据源（_get_kl_type 经 FREQ_SEC_MAP 换算；缺失时降级）
@@ -284,24 +286,8 @@ def _make_chan_config():
 
 # ── 日期格式（freq → 统一日期格式，与 CChan 输出格式一致）──
 # CSV列：股票代码,股票名,年K选点,季K选点,月K选点,周K选点,日K选点,30分选点,15分选点,5分选点,1分选点
-# 日内周期集合：分钟级
-INTRADAY_FREQS = {"30m", "15m", "5m", "1m"}
-# 秒级周期：K线时间含秒
-SUBSECOND_FREQS = {"15s"}
-
-
-def _get_date_fmt(freq):
-    """根据周期返回统一日期格式（使用斜杠 / 分隔符，与 CChan 输出格式一致）。
-
-    - 秒级（15s）→ "%Y/%m/%d %H:%M:%S"
-    - 分钟级（30m, 5m, 1m）→ "%Y/%m/%d %H:%M"
-    - 日线及以上 → "%Y/%m/%d"
-    """
-    if freq in SUBSECOND_FREQS:
-        return "%Y/%m/%d %H:%M:%S"
-    if freq in INTRADAY_FREQS:
-        return "%Y/%m/%d %H:%M"
-    return "%Y/%m/%d"
+# INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt 已于顶部从 Common.func_util
+# 导入（周期分类单一事实源），不再在此复制双副本。
 
 
 # ── 中枢/左肩辅助（纯函数）──

@@ -121,19 +121,25 @@ def test_30m_synth(loader30):
     print("[PASS] 30m 合成: A股 8桶 10:00..15:00（零回归）/ 港股 11桶含12:00、16:00，每桶6根")
 
 
-def test_get_date_fmt_15m(bs_funcs):
-    fmt = bs_funcs["_get_date_fmt"]("15m")
+def test_get_date_fmt_15m(fu):
+    fmt = fu["_get_date_fmt"]("15m")
     assert fmt == "%Y/%m/%d %H:%M", f"_get_date_fmt('15m')={fmt!r}，应为带时分（否则红框时分被截断）"
-    assert bs_funcs["_get_date_fmt"]("d") == "%Y/%m/%d"
+    assert fu["_get_date_fmt"]("d") == "%Y/%m/%d"
     print("[PASS] _get_date_fmt('15m')=%Y/%m/%d %H:%M（红框时分不截断）")
 
 
-def test_intraday_freqs_dual_copy(bs_funcs, utils_funcs):
-    lhs = bs_funcs["INTRADAY_FREQS"]
-    rhs = utils_funcs["INTRADAY_FREQS"]
-    assert lhs == rhs, f"INTRADAY_FREQS 双副本不一致: BSPointList={lhs}, utils={rhs}"
-    assert "15m" in lhs, "INTRADAY_FREQS 缺 15m"
-    print(f"[PASS] INTRADAY_FREQS 双副本一致且含15m: {sorted(lhs)}")
+def test_freq_single_source(fu):
+    """INTRADAY_FREQS / SUBSECOND_FREQS / _get_date_fmt 收敛为 Common.func_util 单一事实源。"""
+    assert "15m" in fu["INTRADAY_FREQS"], "Common.func_util.INTRADAY_FREQS 缺 15m"
+    # 两个高层不再复制双副本，仅从 Common.func_util 导入
+    for rel in ("BuySellPoint/BSPointList.py", "App/utils.py"):
+        with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
+            src = f.read()
+        assert "INTRADAY_FREQS = {" not in src, f"{rel} 仍存在 INTRADAY_FREQS 内联副本"
+        assert "SUBSECOND_FREQS = {" not in src, f"{rel} 仍存在 SUBSECOND_FREQS 内联副本"
+        assert "def _get_date_fmt(" not in src, f"{rel} 仍存在 _get_date_fmt 内联定义"
+        assert "from Common.func_util import" in src, f"{rel} 未从 Common.func_util 导入周期分类"
+    print(f"[PASS] 周期分类单一事实源 Common.func_util（含15m），高层不再复制双副本")
 
 
 def test_30m_single_source():
@@ -186,11 +192,10 @@ def main():
     test_30m_single_source()
     test_30m_p2_2_optim_branch()
 
-    bs = extract_from_file("BuySellPoint/BSPointList.py",
+    fu = extract_from_file("Common/func_util.py",
                            ["INTRADAY_FREQS", "SUBSECOND_FREQS", "_get_date_fmt"])
-    utils = extract_from_file("App/utils.py", ["INTRADAY_FREQS"])
-    test_get_date_fmt_15m(bs)
-    test_intraday_freqs_dual_copy(bs, utils)
+    test_get_date_fmt_15m(fu)
+    test_freq_single_source(fu)
 
     test_dual_consistency()
     print("ALL 15m/30m TESTS PASS")
