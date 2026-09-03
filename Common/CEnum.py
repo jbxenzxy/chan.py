@@ -65,6 +65,32 @@ INTRADAY_FREQS    = {f for f, r in FREQ_TABLE.items() if r[3]}     # 日内分�
 SUBSECOND_FREQS   = {f for f, r in FREQ_TABLE.items() if r[4]}     # 秒级
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 市场周期支持集（单一事实源）——按市场界定「开放哪些周期」，股票/期货的周期
+# 差异（股票 w/d/30m/15m/5m，期货 30m/5m/1m/15s）在此一次划分清楚，各自的变更
+# 互不牵连（如股票新增 60m 只动 STOCKS_FREQS，不影响期货；反之亦然）。
+# ── 为什么拆开 ──────────────────────────────────────────────
+#   股票与期货的周期表本质不同（股票含 w/d 周月，期货含 15s 秒级），若共用一份
+#   「支持周期」常量，那么任一方新增/删除周期都会连带波及另一方，长期维护时极易
+#   误改对方。拆成两份后，市场支持的周期在各自集内独立演进。
+# ── 为什么客观属性不拆（仍共享） ─────────────────────────────
+#   周期「客观属性」（FREQ_TABLE 及派生映射：秒数、KL_TYPE、中文标签、是否日内
+#   分钟级等）是周期本身的固有属性——一根 5m K 无论股票期货都是同一周期，客观
+#   属性没有「市场」维度，按其定义不应随市场复制。所以这里只界定「该市场开放
+#   哪些周期」，属性仍统一查 FREQ_TABLE；若把属性表也按市场复制一份，反而
+#   重新制造「多副本漏改」的隐患（正是 FREQ_TABLE 设计要消灭的问题）。
+# ── 消费方 ────────────────────────────────────────────────
+#   · DataAPI/TqSdkAPI   SUPPORTED_FREQS（期货）
+#   · App/AppConfig      回看配置 keys 守卫（STOCKS/FUTURES_LOOKBACK_CONFIG）
+#   · Test/test_15m_period 前端 levels/FREQ_SEC_MAP_JS 跨语言镜像守卫
+#   · _ORDERED 列表按 FREQ_TABLE 顺序稳定展开，供需要稳定序的场景（如前端按钮序）。
+# ═══════════════════════════════════════════════════════════════════
+STOCKS_FREQS          = frozenset({"w", "d", "30m", "15m", "5m"})
+FUTURES_FREQS         = frozenset({"30m", "5m", "1m", "15s"})
+STOCKS_FREQS_ORDERED   = [f for f in FREQ_TABLE if f in STOCKS_FREQS]
+FUTURES_FREQS_ORDERED  = [f for f in FREQ_TABLE if f in FUTURES_FREQS]
+
+
 class KLINE_DIR(Enum):
     UP = auto()
     DOWN = auto()

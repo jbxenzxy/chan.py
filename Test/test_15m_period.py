@@ -201,6 +201,52 @@ def test_dual_consistency():
     print("[PASS] 单窗15m/5m 灰化入口 + 双窗内15m可作上窗，两端一致")
 
 
+def test_market_freq_partition():
+    """市场周期支持集单一事实源：股票/期货周期按市场隔离，消费方与其一致，前端镜像守卫。"""
+    from Common.CEnum import (STOCKS_FREQS, FUTURES_FREQS, STOCKS_FREQS_ORDERED,
+                              FUTURES_FREQS_ORDERED, FREQ_SEC_MAP)
+    assert STOCKS_FREQS == frozenset({"w", "d", "30m", "15m", "5m"}), "STOCKS_FREQS 不符合股票周期"
+    assert FUTURES_FREQS == frozenset({"30m", "5m", "1m", "15s"}), "FUTURES_FREQS 不符合期货周期"
+    # 客观属性仍共享，未按市场复制 FREQ_TABLE（两市场并集须落在客观周期表内）
+    assert set(STOCKS_FREQS) | set(FUTURES_FREQS) <= set(FREQ_TABLE), "市场周期并集越出 FREQ_TABLE"
+    # 期货 SUPPORTED_FREQS 派生自 FUTURES_FREQS，且顺序 = FREQ_TABLE 序
+    tq = extract_from_file("DataAPI/TqSdkAPI.py", ["SUPPORTED_FREQS"],
+                           extras={"FUTURES_FREQS_ORDERED": FUTURES_FREQS_ORDERED})
+    assert set(tq["SUPPORTED_FREQS"]) == FUTURES_FREQS, "期货 SUPPORTED_FREQS 与 FUTURES_FREQS 失配"
+    assert tq["SUPPORTED_FREQS"] == FUTURES_FREQS_ORDERED, "SUPPORTED_FREQS 顺序未按 FREQ_TABLE 序"
+    # 回看配置 keys ⊆ 各自市场支持集（纯 AST 语法遍历，避免 exec 触发运行时默认值）
+    with open(os.path.join(ROOT, "App/AppConfig.py"), encoding="utf-8") as f:
+        appcfg_tree = ast.parse(f.read())
+
+    def _lookback_keys(key):
+        for node in appcfg_tree.body:
+            if isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if isinstance(t, ast.Name) and t.id == "_FIELD_DEFAULTS" and isinstance(node.value, ast.Dict):
+                        for k, val in zip(node.value.keys, node.value.values):
+                            if isinstance(k, ast.Constant) and k.value == key and isinstance(val, ast.Dict):
+                                return {kk.value for kk in val.keys if isinstance(kk, ast.Constant)}
+        raise AssertionError(f"AppConfig 找不到 {key}")
+
+    stk_keys = _lookback_keys("STOCKS_LOOKBACK_CONFIG")
+    fut_keys = _lookback_keys("FUTURES_LOOKBACK_CONFIG")
+    assert stk_keys <= STOCKS_FREQS, f"STOCKS_LOOKBACK_CONFIG keys {stk_keys} 超出 STOCKS_FREQS"
+    assert fut_keys <= FUTURES_FREQS, f"FUTURES_LOOKBACK_CONFIG keys {fut_keys} 超出 FUTURES_FREQS"
+    # 股票主周期时长 keys ⊆ STOCKS_FREQS
+    appeng = extract_from_file("App/AppEngine.py", ["_STOCKS_MAIN_PERIOD"],
+                               extras={"FREQ_SEC_MAP": FREQ_SEC_MAP})
+    assert set(appeng["_STOCKS_MAIN_PERIOD"]) <= STOCKS_FREQS, "主周期时长含非股票周期"
+    # 前端镜像守卫：levels 全周期表 == 股票 ∪ 期货（跨语言镜像，无法 import，故用守卫测试）
+    with open(os.path.join(ROOT, "Frontend/app.js"), encoding="utf-8") as f:
+        js = f.read()
+    m = re.search(r"const levels = \{(.*?)\};", js, re.S)
+    assert m, "前端 levels 未找到"
+    js_levels = set(re.findall(r"'(w|d|30m|15m|5m|1m|15s)'", m.group(1)))
+    assert js_levels == set(STOCKS_FREQS) | set(FUTURES_FREQS), \
+        f"前端 levels 与股票/期货并集失配: {js_levels}"
+    print("[PASS] 市场周期支持集单一事实源 STOCKS_FREQS/FUTURES_FREQS，回看/主周期/前端镜像一致")
+
+
 def main():
     td = extract_from_file("DataAPI/TdxAPI.py", ["_resample_5m"])
     test_15m_synth(td["_resample_5m"])
@@ -213,6 +259,7 @@ def main():
     from Common.func_util import _get_date_fmt
     test_get_date_fmt_15m({"_get_date_fmt": _get_date_fmt})
     test_freq_single_source()
+    test_market_freq_partition()
 
     test_dual_consistency()
     print("ALL 15m/30m TESTS PASS")

@@ -1513,6 +1513,14 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 # 缺省下窗兜底表（前端未显式传 sub_freq 时按此补默认下窗）：
 # w→d、d→30m、30m→5m 为既有默认配对；15m→5m 供 legacy 红框子级别笔优先判定
 # （AppChart.py 依据本表 values 回退取 dual_main 子级别笔）与同口径兜底使用。
+#
+# ── 为什么只针对股票、不在此拆「期货版」──────────────────────────
+# 本表是「股票」双窗口/区间套的缺省配对（股票上窗只能取 w/d/30m/15m，见
+# _STOCKS_DUAL_PAIRS）。期货双窗不走 AppEngine 的 analyze_stock 路径——
+# analyze_stock 对期货代码直接返回 error（见下方），期货双窗在独立的
+# futures 流路由中处理，其上下窗配对单独定义于
+# BuySellPoint/BSPointList.py 的 _FUTURES_SUB_FREQ_MAP。两市场的双窗配对
+# 本就不共用本文件，故这里无需也不应新增一份「期货配对」副本。
 _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
 
 
@@ -1546,6 +1554,12 @@ def _stock_dual_impl():
 
 
 # 股票周期种类（w/d/30m/15m/5m），双窗配对空间（上窗须严格大于下窗）
+# ── 为什么只针对股票、不在此拆「期货版」──────────────────────────
+# 本文件即「股票双窗口独立实现」，全部双窗逻辑只服务股票；期货双窗在独立的
+# futures 流路由（/api/futures/read/stream 等），其上下窗配对单独在
+# BuySellPoint/BSPointList.py 的 _FUTURES_SUB_FREQ_MAP 中定义，完全不经过本
+# 配对表。故此处只维护股票配对空间，无需（也不应）额外维护一份期货配对副本——
+# 两市场配对本就隔离，各自变更互不影响。
 _STOCKS_DUAL_PAIRS = {
     "w": {"d", "30m", "15m", "5m"},
     "d": {"30m", "15m", "5m"},

@@ -505,6 +505,18 @@ def _get_kl_type(freq):
     return _FREQ_TO_KL_TYPE.get(freq, KL_TYPE.K_DAY)
 
 # 双窗口 freq 配对（上窗→下窗）
+# ── 为什么拆成两份 ──────────────────────────────────────────────
+# 股票与期货的双窗口配对周期不同（股票：w→d→30m→5m，15m→5m；
+# 期货：30m→5m→1m→15s）。若合为一份，则任一方新增/删除配对都会波及
+# 对方——例如期货未来可能新增 1s 至 15s 的下一级，就不得不在同一张表里
+# 混入股票不用的周期，可读性差且易误改。拆成两份后，每个市场的配对独立
+# 演进，变更互不牵连。
+# ── 为什么定义在 BSPointList 而非 AppEngine 或 CEnum ──────────
+# 本表在「区间套/红框」路径（check_nested_diver / _stocks_red_range 等）
+# 中使用，与 AppEngine 的 _STOCKS_DUAL_PAIRS（前端双窗配对空间校验）和
+# _SUB_FREQ_MAP（缺省兜底）语义不同——_STOCKS_DUAL_PAIRS 是「上窗可选的
+# 下窗集合」（多对多），本表是「区间套时取子级别的一对一映射」。
+# 两者既不同名也不同义，分开维护更清晰。
 _STOCKS_SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
 _FUTURES_SUB_FREQ_MAP = {'30m': '5m', '5m': '1m', '1m': '15s'}
 
