@@ -54,7 +54,7 @@ FREQ_TABLE = {
     "60m": (KL_TYPE.K_60M, 3600,    "60分钟", False, False),
     "d":   (KL_TYPE.K_DAY, 86400,   "日线",   False, False),
     "w":   (KL_TYPE.K_WEEK, 604800, "周线",   False, False),
-    "M":   (KL_TYPE.K_MON, 2592000, None,     False, False),
+    "M":   (KL_TYPE.K_MON, 2592000, "月线",   False, False),
 }
 
 FREQ_SEC_MAP      = {f: r[1] for f, r in FREQ_TABLE.items()}       # freq → 秒数
