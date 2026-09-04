@@ -1,0 +1,53 @@
+{
+  "instrument": {
+    "signal_symbol": "KQ.m@CFFEX.IF",
+    "trade_symbol": "CFFEX.IF2609",
+    "price_tick": 0.2,
+    "multiplier": 300.0,
+    "open_fee_rate": 2.3e-05,
+    "close_today_fee_rate": 0.000345,
+    "close_fee_rate": 2.3e-05,
+    "slippage_ticks": 1.0,
+    "close_today_first": true,
+    "sessions": [
+      "09:30-11:30",
+      "13:00-15:00"
+    ]
+  },
+  "risk": {
+    "max_volume": 1,
+    "max_trades_per_day": 20,
+    "max_daily_loss_points": 60.0,
+    "enforce_session": true,
+    "no_open_after": "14:50",
+    "close_before_session_end": true,
+    "block_on_daily_loss": true
+  },
+  "entry_policy": {
+    "name": "DefaultEntryPolicy",
+    "params": {
+      "reverse_on_opposite_signal": false,
+      "max_signal_range_points": 0.0,
+      "min_stop_distance_points": 0.0
+    }
+  },
+  "exit_policy": {
+    "name": "TrailingExitPolicy",
+    "params": {
+      "take_profit_points": 12.0,
+      "stop_points": 5.0,
+      "trail_start_points": 6.0,
+      "trail_distance_points": 4.0
+    }
+  },
+  "source": {
+    "type": "replay",
+    "replay_dir": "./replay_data",
+    "sse_base": "http://127.0.0.1:18081",
+    "symbol": "KQ.m@CFFEX.IF",
+    "freq": "5m"
+  },
+  "broker": "dry_run",
+  "broker_params": {},
+  "state_dir": "./state"
+}

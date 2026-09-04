@@ -1,0 +1,215 @@
+{"at": "2026-09-04T10:02:33+08:00", "kind": "start", "source": "replay", "broker": "dry_run", "entry": "DefaultEntryPolicy({'reverse_on_opposite_signal': False, 'max_signal_range_points': 0.0, 'min_stop_distance_points': 0.0})", "exit": "DefaultExitPolicy({'take_profit_points': 10.0, 'stop_at_signal_extreme': True, 'stop_buffer_ticks': 0.0, 'max_hold_bars': 0})", "instrument": {"signal": "KQ.m@CFFEX.IF", "trade": "CFFEX.IF2609", "tick": 0.2, "multiplier": 300.0}}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "day_roll", "day": "2026-09-01", "stats": {"day": "2026-09-01", "trades": 0, "net_points": 0.0, "wins": 0, "losses": 0}}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:30", "close": 3999.44, "high": 4000.56, "low": 3999.19, "seq": 1}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:35", "close": 3998.74, "high": 4000.64, "low": 3997.93, "seq": 2}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:40", "close": 3998.95, "high": 3999.4, "low": 3998.03, "seq": 3}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:45", "close": 3999.75, "high": 4001.58, "low": 3998.01, "seq": 4}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:50", "close": 4002.69, "high": 4003.19, "low": 3999.41, "seq": 5}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 09:55", "close": 4002.3, "high": 4005.09, "low": 4000.48, "seq": 6}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:00", "close": 4001.2, "high": 4002.5, "low": 4000.0, "seq": 7}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:05", "close": 4002.53, "high": 4003.26, "low": 3999.31, "seq": 8}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:10", "close": 4004.81, "high": 4005.68, "low": 4002.34, "seq": 9}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:15", "close": 4005.73, "high": 4007.14, "low": 4004.21, "seq": 10}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:20", "close": 4004.75, "high": 4006.79, "low": 4004.18, "seq": 11}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-01 10:20|2|B", "date": "2026-09-01 10:20", "type": "2", "is_buy": true, "price": 4004.75, "high": 4006.79, "low": 4004.18}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000001", "action": "open", "side": "多", "volume": 1, "price": 4005.0, "req_price": 4004.75, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4005.0, "stop": 4004.2, "tp": 4015.0, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-01 10:20|2|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:25", "close": 4007.44, "high": 4007.97, "low": 4004.12, "seq": 12}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000002", "action": "close", "side": "多", "volume": 1, "price": 4004.0, "req_price": 4004.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4005.0, "exit": 4004.0, "gross": -1.0, "cost": 1.4735, "net": -2.4735, "cash": -742.05, "bars_held": 1, "trade_id": "T00001", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:30", "close": 4006.92, "high": 4008.22, "low": 4005.72, "seq": 13}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:35", "close": 4005.71, "high": 4007.03, "low": 4004.81, "seq": 14}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:40", "close": 4007.4, "high": 4008.17, "low": 4005.68, "seq": 15}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:45", "close": 4006.13, "high": 4009.88, "low": 4004.8, "seq": 16}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:50", "close": 4006.4, "high": 4007.83, "low": 4005.46, "seq": 17}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 10:55", "close": 4005.05, "high": 4007.6, "low": 4004.24, "seq": 18}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:00", "close": 4005.94, "high": 4006.14, "low": 4004.84, "seq": 19}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:05", "close": 4009.31, "high": 4010.9, "low": 4005.3, "seq": 20}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:10", "close": 4013.39, "high": 4013.48, "low": 4009.07, "seq": 21}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-01 11:10|1|B", "date": "2026-09-01 11:10", "type": "1", "is_buy": true, "price": 4013.39, "high": 4013.48, "low": 4009.07}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000003", "action": "open", "side": "多", "volume": 1, "price": 4013.6, "req_price": 4013.39, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4013.6, "stop": 4009.2, "tp": 4023.6, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-01 11:10|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:15", "close": 4015.51, "high": 4016.73, "low": 4013.22, "seq": 22}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:20", "close": 4013.55, "high": 4016.34, "low": 4013.37, "seq": 23}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 11:25", "close": 4015.32, "high": 4017.29, "low": 4012.08, "seq": 24}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:00", "close": 4017.42, "high": 4018.0, "low": 4013.15, "seq": 25}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:05", "close": 4016.03, "high": 4018.0, "low": 4015.36, "seq": 26}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:10", "close": 4019.35, "high": 4019.49, "low": 4015.45, "seq": 27}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:15", "close": 4020.44, "high": 4020.79, "low": 4018.63, "seq": 28}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:20", "close": 4024.57, "high": 4024.73, "low": 4020.07, "seq": 29}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000004", "action": "close", "side": "多", "volume": 1, "price": 4023.4, "req_price": 4023.6, "status": "filled", "broker": "dry_run", "reason": "tp"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "tp", "entry": 4013.6, "exit": 4023.4, "gross": 9.8, "cost": 1.4804, "net": 8.3196, "cash": 2495.88, "bars_held": 8, "trade_id": "T00002", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:25", "close": 4026.2, "high": 4027.13, "low": 4024.06, "seq": 30}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:30", "close": 4025.73, "high": 4026.72, "low": 4024.02, "seq": 31}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-01 13:30|1|B", "date": "2026-09-01 13:30", "type": "1", "is_buy": true, "price": 4025.73, "high": 4026.72, "low": 4024.02}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000005", "action": "open", "side": "多", "volume": 1, "price": 4026.0, "req_price": 4025.73, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4026.0, "stop": 4024.2, "tp": 4036.0, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-01 13:30|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:35", "close": 4021.56, "high": 4027.87, "low": 4020.96, "seq": 32}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000006", "action": "close", "side": "多", "volume": 1, "price": 4024.0, "req_price": 4024.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4026.0, "exit": 4024.0, "gross": -2.0, "cost": 1.4809, "net": -3.4809, "cash": -1044.26, "bars_held": 1, "trade_id": "T00003", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:40", "close": 4019.83, "high": 4022.25, "low": 4018.59, "seq": 33}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:45", "close": 4021.72, "high": 4022.88, "low": 4016.87, "seq": 34}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:50", "close": 4022.77, "high": 4023.62, "low": 4021.7, "seq": 35}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 13:55", "close": 4022.78, "high": 4025.4, "low": 4022.16, "seq": 36}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:00", "close": 4024.14, "high": 4024.46, "low": 4021.67, "seq": 37}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:05", "close": 4026.33, "high": 4027.33, "low": 4023.39, "seq": 38}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:10", "close": 4030.37, "high": 4033.19, "low": 4025.09, "seq": 39}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:15", "close": 4030.91, "high": 4032.04, "low": 4028.93, "seq": 40}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:20", "close": 4027.56, "high": 4031.14, "low": 4026.82, "seq": 41}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-01 14:20|2|B", "date": "2026-09-01 14:20", "type": "2", "is_buy": true, "price": 4027.56, "high": 4031.14, "low": 4026.82}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000007", "action": "open", "side": "多", "volume": 1, "price": 4027.8, "req_price": 4027.56, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4027.8, "stop": 4027.0, "tp": 4037.8, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-01 14:20|2|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:25", "close": 4027.41, "high": 4028.65, "low": 4026.13, "seq": 42}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000008", "action": "close", "side": "多", "volume": 1, "price": 4026.8, "req_price": 4027.0, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4027.8, "exit": 4026.8, "gross": -1.0, "cost": 1.4819, "net": -2.4819, "cash": -744.57, "bars_held": 1, "trade_id": "T00004", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:30", "close": 4027.51, "high": 4028.43, "low": 4027.11, "seq": 43}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:35", "close": 4026.75, "high": 4029.89, "low": 4026.48, "seq": 44}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:40", "close": 4027.13, "high": 4028.47, "low": 4026.57, "seq": 45}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:45", "close": 4025.19, "high": 4028.59, "low": 4023.93, "seq": 46}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:50", "close": 4026.59, "high": 4028.5, "low": 4025.14, "seq": 47}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-01 14:55", "close": 4025.02, "high": 4028.37, "low": 4024.94, "seq": 48}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "day_roll", "day": "2026-09-02", "stats": {"day": "2026-09-02", "trades": 0, "net_points": 0.0, "wins": 0, "losses": 0}}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:30", "close": 4025.64, "high": 4026.84, "low": 4024.5, "seq": 49}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:35", "close": 4028.45, "high": 4030.9, "low": 4024.8, "seq": 50}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:40", "close": 4030.46, "high": 4030.76, "low": 4028.31, "seq": 51}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-02 09:40|1|B", "date": "2026-09-02 09:40", "type": "1", "is_buy": true, "price": 4030.46, "high": 4030.76, "low": 4028.31}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000009", "action": "open", "side": "多", "volume": 1, "price": 4030.8, "req_price": 4030.46, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4030.8, "stop": 4028.4, "tp": 4040.8, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-02 09:40|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:45", "close": 4032.02, "high": 4032.68, "low": 4029.39, "seq": 52}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:50", "close": 4033.37, "high": 4034.43, "low": 4030.89, "seq": 53}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 09:55", "close": 4030.13, "high": 4033.65, "low": 4029.66, "seq": 54}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:00", "close": 4030.87, "high": 4032.67, "low": 4029.45, "seq": 55}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:05", "close": 4031.06, "high": 4033.34, "low": 4029.49, "seq": 56}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:10", "close": 4027.53, "high": 4031.48, "low": 4026.97, "seq": 57}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000010", "action": "close", "side": "多", "volume": 1, "price": 4028.2, "req_price": 4028.4, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4030.8, "exit": 4028.2, "gross": -2.6, "cost": 1.4824, "net": -4.0824, "cash": -1224.73, "bars_held": 6, "trade_id": "T00005", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:15", "close": 4028.19, "high": 4029.64, "low": 4027.28, "seq": 58}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:20", "close": 4028.62, "high": 4029.2, "low": 4026.76, "seq": 59}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:25", "close": 4023.15, "high": 4029.39, "low": 4022.0, "seq": 60}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:30", "close": 4028.98, "high": 4029.24, "low": 4022.36, "seq": 61}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-02 10:30|1|S", "date": "2026-09-02 10:30", "type": "1", "is_buy": false, "price": 4028.98, "high": 4029.24, "low": 4022.36}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000011", "action": "open", "side": "空", "volume": 1, "price": 4028.6, "req_price": 4028.98, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "空", "volume": 1, "entry_price": 4028.6, "stop": 4029.2, "tp": 4018.6, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-02 10:30|1|S"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:35", "close": 4026.81, "high": 4031.02, "low": 4025.91, "seq": 62}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000012", "action": "close", "side": "空", "volume": 1, "price": 4029.4, "req_price": 4029.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "空", "reason": "sl", "entry": 4028.6, "exit": 4029.4, "gross": -0.8, "cost": 1.4828, "net": -2.2828, "cash": -684.84, "bars_held": 1, "trade_id": "T00006", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:40", "close": 4028.3, "high": 4028.44, "low": 4024.94, "seq": 63}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:45", "close": 4028.28, "high": 4028.37, "low": 4027.13, "seq": 64}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:50", "close": 4031.63, "high": 4032.3, "low": 4026.98, "seq": 65}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 10:55", "close": 4029.68, "high": 4033.79, "low": 4028.51, "seq": 66}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:00", "close": 4030.54, "high": 4031.01, "low": 4027.45, "seq": 67}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:05", "close": 4030.25, "high": 4032.02, "low": 4029.05, "seq": 68}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:10", "close": 4031.42, "high": 4032.52, "low": 4030.03, "seq": 69}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:15", "close": 4028.64, "high": 4031.97, "low": 4027.41, "seq": 70}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:20", "close": 4028.87, "high": 4029.38, "low": 4027.87, "seq": 71}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-02 11:20|2|S", "date": "2026-09-02 11:20", "type": "2", "is_buy": false, "price": 4028.87, "high": 4029.38, "low": 4027.87}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000013", "action": "open", "side": "空", "volume": 1, "price": 4028.6, "req_price": 4028.87, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "空", "volume": 1, "entry_price": 4028.6, "stop": 4029.2, "tp": 4018.6, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-02 11:20|2|S"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 11:25", "close": 4028.25, "high": 4029.35, "low": 4028.12, "seq": 72}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000014", "action": "close", "side": "空", "volume": 1, "price": 4029.4, "req_price": 4029.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "空", "reason": "sl", "entry": 4028.6, "exit": 4029.4, "gross": -0.8, "cost": 1.4828, "net": -2.2828, "cash": -684.84, "bars_held": 1, "trade_id": "T00007", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:00", "close": 4024.81, "high": 4028.95, "low": 4023.8, "seq": 73}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:05", "close": 4023.57, "high": 4025.39, "low": 4023.11, "seq": 74}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:10", "close": 4020.97, "high": 4023.97, "low": 4018.38, "seq": 75}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:15", "close": 4021.69, "high": 4023.57, "low": 4019.13, "seq": 76}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:20", "close": 4025.81, "high": 4026.89, "low": 4021.34, "seq": 77}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:25", "close": 4028.1, "high": 4028.95, "low": 4024.98, "seq": 78}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:30", "close": 4026.99, "high": 4029.12, "low": 4026.77, "seq": 79}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:35", "close": 4028.81, "high": 4029.32, "low": 4026.61, "seq": 80}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:40", "close": 4031.65, "high": 4033.43, "low": 4028.05, "seq": 81}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-02 13:40|1|B", "date": "2026-09-02 13:40", "type": "1", "is_buy": true, "price": 4031.65, "high": 4033.43, "low": 4028.05}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000015", "action": "open", "side": "多", "volume": 1, "price": 4032.0, "req_price": 4031.65, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4032.0, "stop": 4028.2, "tp": 4042.0, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-02 13:40|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:45", "close": 4031.33, "high": 4032.67, "low": 4030.57, "seq": 82}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:50", "close": 4032.57, "high": 4033.56, "low": 4030.34, "seq": 83}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 13:55", "close": 4032.37, "high": 4032.87, "low": 4031.99, "seq": 84}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:00", "close": 4035.15, "high": 4035.32, "low": 4032.17, "seq": 85}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:05", "close": 4035.3, "high": 4036.21, "low": 4035.04, "seq": 86}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:10", "close": 4039.04, "high": 4040.64, "low": 4035.0, "seq": 87}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:15", "close": 4043.5, "high": 4043.53, "low": 4038.73, "seq": 88}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000016", "action": "close", "side": "多", "volume": 1, "price": 4041.8, "req_price": 4042.0, "status": "filled", "broker": "dry_run", "reason": "tp"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "tp", "entry": 4032.0, "exit": 4041.8, "gross": 9.8, "cost": 1.4872, "net": 8.3128, "cash": 2493.85, "bars_held": 7, "trade_id": "T00008", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:20", "close": 4043.35, "high": 4044.07, "low": 4041.21, "seq": 89}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:25", "close": 4045.62, "high": 4046.75, "low": 4042.59, "seq": 90}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:30", "close": 4042.54, "high": 4046.35, "low": 4042.22, "seq": 91}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-02 14:30|1|B", "date": "2026-09-02 14:30", "type": "1", "is_buy": true, "price": 4042.54, "high": 4046.35, "low": 4042.22}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000017", "action": "open", "side": "多", "volume": 1, "price": 4042.8, "req_price": 4042.54, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4042.8, "stop": 4042.4, "tp": 4052.8, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-02 14:30|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:35", "close": 4042.94, "high": 4043.32, "low": 4042.34, "seq": 92}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000018", "action": "close", "side": "多", "volume": 1, "price": 4042.2, "req_price": 4042.4, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4042.8, "exit": 4042.2, "gross": -0.6, "cost": 1.4875, "net": -2.0875, "cash": -626.26, "bars_held": 1, "trade_id": "T00009", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:40", "close": 4040.31, "high": 4044.42, "low": 4038.44, "seq": 93}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:45", "close": 4042.49, "high": 4042.54, "low": 4039.75, "seq": 94}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:50", "close": 4041.0, "high": 4043.67, "low": 4040.23, "seq": 95}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-02 14:55", "close": 4040.23, "high": 4042.67, "low": 4039.77, "seq": 96}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "day_roll", "day": "2026-09-03", "stats": {"day": "2026-09-03", "trades": 0, "net_points": 0.0, "wins": 0, "losses": 0}}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:30", "close": 4041.91, "high": 4042.08, "low": 4039.16, "seq": 97}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:35", "close": 4046.55, "high": 4047.28, "low": 4041.77, "seq": 98}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:40", "close": 4045.17, "high": 4046.55, "low": 4045.05, "seq": 99}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:45", "close": 4045.52, "high": 4045.72, "low": 4045.12, "seq": 100}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:50", "close": 4044.16, "high": 4045.74, "low": 4041.63, "seq": 101}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-03 09:50|2|B", "date": "2026-09-03 09:50", "type": "2", "is_buy": true, "price": 4044.16, "high": 4045.74, "low": 4041.63}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000019", "action": "open", "side": "多", "volume": 1, "price": 4044.4, "req_price": 4044.16, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4044.4, "stop": 4041.8, "tp": 4054.4, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-03 09:50|2|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 09:55", "close": 4044.98, "high": 4045.84, "low": 4042.83, "seq": 102}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:00", "close": 4040.56, "high": 4045.63, "low": 4039.63, "seq": 103}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000020", "action": "close", "side": "多", "volume": 1, "price": 4041.6, "req_price": 4041.8, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4044.4, "exit": 4041.6, "gross": -2.8, "cost": 1.4874, "net": -4.2874, "cash": -1286.21, "bars_held": 2, "trade_id": "T00010", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:05", "close": 4040.21, "high": 4041.56, "low": 4040.09, "seq": 104}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:10", "close": 4038.53, "high": 4040.78, "low": 4037.98, "seq": 105}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:15", "close": 4038.92, "high": 4040.51, "low": 4036.92, "seq": 106}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:20", "close": 4039.39, "high": 4039.79, "low": 4037.71, "seq": 107}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:25", "close": 4035.66, "high": 4040.77, "low": 4034.67, "seq": 108}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:30", "close": 4034.41, "high": 4035.82, "low": 4033.6, "seq": 109}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:35", "close": 4034.99, "high": 4036.35, "low": 4034.17, "seq": 110}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:40", "close": 4039.43, "high": 4039.92, "low": 4034.84, "seq": 111}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-03 10:40|1|B", "date": "2026-09-03 10:40", "type": "1", "is_buy": true, "price": 4039.43, "high": 4039.92, "low": 4034.84}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000021", "action": "open", "side": "多", "volume": 1, "price": 4039.8, "req_price": 4039.43, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4039.8, "stop": 4035.0, "tp": 4049.8, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-03 10:40|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:45", "close": 4040.8, "high": 4041.72, "low": 4038.59, "seq": 112}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:50", "close": 4039.88, "high": 4041.49, "low": 4039.8, "seq": 113}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 10:55", "close": 4038.93, "high": 4040.78, "low": 4037.78, "seq": 114}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:00", "close": 4040.78, "high": 4040.92, "low": 4038.77, "seq": 115}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:05", "close": 4043.69, "high": 4044.07, "low": 4040.27, "seq": 116}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:10", "close": 4042.18, "high": 4044.31, "low": 4041.56, "seq": 117}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:15", "close": 4042.06, "high": 4044.2, "low": 4041.5, "seq": 118}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:20", "close": 4039.57, "high": 4043.35, "low": 4039.34, "seq": 119}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 11:25", "close": 4038.46, "high": 4039.6, "low": 4037.03, "seq": 120}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:00", "close": 4039.8, "high": 4041.09, "low": 4037.15, "seq": 121}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-03 13:00|1|S", "date": "2026-09-03 13:00", "type": "1", "is_buy": false, "price": 4039.8, "high": 4041.09, "low": 4037.15}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000022", "action": "close", "side": "多", "volume": 1, "price": 4039.6, "req_price": 4039.8, "status": "filled", "broker": "dry_run", "reason": "signal_reverse"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "signal_reverse", "entry": 4039.8, "exit": 4039.6, "gross": -0.2, "cost": 1.4866, "net": -1.6866, "cash": -505.97, "bars_held": 10, "trade_id": "T00011", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:05", "close": 4037.72, "high": 4040.08, "low": 4037.56, "seq": 122}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:10", "close": 4039.79, "high": 4040.06, "low": 4037.38, "seq": 123}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:15", "close": 4040.01, "high": 4041.17, "low": 4038.61, "seq": 124}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:20", "close": 4039.8, "high": 4041.22, "low": 4037.49, "seq": 125}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:25", "close": 4041.97, "high": 4043.1, "low": 4039.06, "seq": 126}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:30", "close": 4041.96, "high": 4042.41, "low": 4041.79, "seq": 127}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:35", "close": 4045.5, "high": 4045.69, "low": 4040.38, "seq": 128}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:40", "close": 4043.34, "high": 4045.54, "low": 4041.69, "seq": 129}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:45", "close": 4043.78, "high": 4044.95, "low": 4042.29, "seq": 130}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:50", "close": 4042.18, "high": 4044.36, "low": 4041.2, "seq": 131}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-03 13:50|2|B", "date": "2026-09-03 13:50", "type": "2", "is_buy": true, "price": 4042.18, "high": 4044.36, "low": 4041.2}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000023", "action": "open", "side": "多", "volume": 1, "price": 4042.4, "req_price": 4042.18, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4042.4, "stop": 4041.2, "tp": 4052.4, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-03 13:50|2|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 13:55", "close": 4039.43, "high": 4043.03, "low": 4038.49, "seq": 132}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000024", "action": "close", "side": "多", "volume": 1, "price": 4041.0, "req_price": 4041.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4042.4, "exit": 4041.0, "gross": -1.4, "cost": 1.4871, "net": -2.8871, "cash": -866.14, "bars_held": 1, "trade_id": "T00012", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:00", "close": 4039.04, "high": 4041.06, "low": 4038.46, "seq": 133}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:05", "close": 4035.96, "high": 4039.27, "low": 4035.08, "seq": 134}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:10", "close": 4034.88, "high": 4036.07, "low": 4034.3, "seq": 135}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:15", "close": 4033.97, "high": 4035.07, "low": 4033.89, "seq": 136}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:20", "close": 4036.29, "high": 4036.89, "low": 4030.45, "seq": 137}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:25", "close": 4036.05, "high": 4036.95, "low": 4033.48, "seq": 138}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:30", "close": 4036.9, "high": 4037.12, "low": 4036.03, "seq": 139}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:35", "close": 4035.19, "high": 4038.27, "low": 4033.68, "seq": 140}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:40", "close": 4034.99, "high": 4035.72, "low": 4034.13, "seq": 141}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "signal", "key": "2026-09-03 14:40|1|B", "date": "2026-09-03 14:40", "type": "1", "is_buy": true, "price": 4034.99, "high": 4035.72, "low": 4034.13}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000025", "action": "open", "side": "多", "volume": 1, "price": 4035.2, "req_price": 4034.99, "status": "filled", "broker": "dry_run"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "open", "symbol": "CFFEX.IF2609", "side": "多", "volume": 1, "entry_price": 4035.2, "stop": 4034.2, "tp": 4045.2, "exit_policy": "DefaultExitPolicy", "exit_params": {"take_profit_points": 10.0, "stop_at_signal_extreme": true, "stop_buffer_ticks": 0.0, "max_hold_bars": 0}, "signal_key": "2026-09-03 14:40|1|B"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:45", "close": 4036.92, "high": 4037.43, "low": 4034.59, "seq": 142}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:50", "close": 4035.99, "high": 4037.94, "low": 4035.83, "seq": 143}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "bar", "date": "2026-09-03 14:55", "close": 4033.73, "high": 4036.84, "low": 4031.8, "seq": 144}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "order", "order_id": "dry_run-000026", "action": "close", "side": "多", "volume": 1, "price": 4034.0, "req_price": 4034.2, "status": "filled", "broker": "dry_run", "reason": "sl"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "close", "symbol": "CFFEX.IF2609", "side": "多", "reason": "sl", "entry": 4035.2, "exit": 4034.0, "gross": -1.2, "cost": 1.4845, "net": -2.6845, "cash": -805.36, "bars_held": 3, "trade_id": "T00013", "exit_policy": "DefaultExitPolicy"}
+{"at": "2026-09-04T10:02:33+08:00", "kind": "stop", "bars": 144, "elapsed": 0.01, "trades": 13, "net_points": -14.085}
