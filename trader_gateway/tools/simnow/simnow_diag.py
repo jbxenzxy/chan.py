@@ -19,7 +19,7 @@ SimNow 持仓诊断脚本
     不论哪种，先看下账户实情再说。
 
 用法
-    cd C:\\my_chan_project\\m2b_diag
+    cd C:\\my_chan_project\\trader_gateway\\tools\\simnow
     python.exe simnow_diag.py                    # 只查询，不动手
     python.exe simnow_diag.py --close-all        # 查完市价平掉所有非零持仓（强平）
     python.exe simnow_diag.py --symbol CFFEX.IF2609   # 指定只看一个品种
