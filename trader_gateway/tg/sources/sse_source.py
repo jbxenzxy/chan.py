@@ -15,9 +15,17 @@ K 线闭合判定（bar_mode）
 信号的重发语义
     只有"上一帧没有、这一帧出现"的 key 才发。信号消失后再次出现会重新发一次，
     引擎侧的 store 会判定为重复并记录 signal_dup 事件——这正是重绘率的观测点。
+
+信号新鲜度过滤（P1 修复）
+    chan.py 的 SSE 是「累计推」语义：每次新连接都会把当前已存在的所有 bsp 一起推过来。
+    网关首次启动会收到一大批历史信号（几天前的），这些其实早就该被处理过。
+    用 `signal_max_age_minutes`（默认 60 分钟）按 first_seen_at 过滤：
+        收到信号的当下 - first_seen_at > max_age → 跳过（视为历史残留）
+    显式传 0 表示不过滤。
 """
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import time
 import urllib.request
@@ -62,6 +70,8 @@ class SseSource(Source):
         self.symbol = str(self.params.get("symbol") or "KQ.m@CFFEX.IF")
         self.freq = str(self.params.get("freq") or "5m")
         self.bar_mode = str(self.params.get("bar_mode") or "confirmed")
+        # P1: 信号新鲜度过滤，单位分钟。0=不过滤。
+        self.signal_max_age_min = float(self.params.get("signal_max_age_minutes", 60) or 0)
         self.reconnect = float(self.params.get("reconnect", 5) or 5)
         self.reconnect_max = float(self.params.get("reconnect_max", 60) or 60)
         self.max_retry = int(self.params.get("max_retry", 0) or 0)   # 0=无限
@@ -69,12 +79,36 @@ class SseSource(Source):
         self._prev_bar: Optional[Bar] = None
         self._last_ts: Optional[int] = None
         self._frame_keys: Set[str] = set()
+        # first_seen_at 的解析格式
+        self._ts_formats = (
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f",
+            "%Y/%m/%d %H:%M:%S",
+            "%Y/%m/%d %H:%M:%S.%f",
+        )
 
     def url(self) -> str:
         return "{}/api/futures/read/stream?symbol={}&freq={}".format(
             self.base,
             urllib.request.quote(self.symbol, safe="@."),
             urllib.request.quote(self.freq))
+
+    def _parse_ts(self, s: str) -> Optional[float]:
+        """把 first_seen_at 这种字符串解析为 unix 时间戳（秒）。失败返回 None。"""
+        if not s:
+            return None
+        s = s.strip()
+        # 尝试多种格式
+        for fmt in self._ts_formats:
+            try:
+                return _dt.datetime.strptime(s, fmt).timestamp()
+            except ValueError:
+                continue
+        # 最后试一下 ISO 8601（"2026-09-01T10:20:00"）
+        try:
+            return _dt.datetime.fromisoformat(s).timestamp()
+        except ValueError:
+            return None
 
     def stop(self) -> None:
         self._running = False
@@ -98,8 +132,18 @@ class SseSource(Source):
                     self._prev_bar = bar      # 未闭合期间持续更新为最新快照
 
         cur: Set[str] = set()
+        now = time.time()
         for b in payload.get("bsps") or []:
             s = Signal.from_bsp(b, self.symbol, self.freq)
+            # P1: 信号新鲜度过滤。chan.py SSE 首次连接会 replay 一批历史信号
+            # （first_seen_at 几天前），按"信号首次出现时间距今 > max_age"判定为陈旧。
+            if self.signal_max_age_min > 0:
+                first_seen = (s.extra or {}).get("first_seen_at")
+                if first_seen:
+                    ts = self._parse_ts(str(first_seen))
+                    if ts and (now - ts) > self.signal_max_age_min * 60.0:
+                        cur.add(s.key)  # 仍在 _frame_keys 集合里，避免后续又重新发
+                        continue
             cur.add(s.key)
             if s.key not in self._frame_keys:
                 yield ("signal", s)

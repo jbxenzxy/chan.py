@@ -125,6 +125,30 @@ class Store:
         rows = self.conn.execute("SELECT * FROM trades ORDER BY exit_at").fetchall()
         return [dict(r) for r in rows]
 
+    # ---------- 状态重置（回放重跑用） ----------
+    def wipe_runtime_state(self) -> Dict[str, int]:
+        """清空"可重建的派生状态"，让回放可以干净重跑。
+
+        清三样（保留 orders 表作为审计底稿，不动）：
+          - processed_signals：信号幂等键。不清的话，上一轮回放标记过的 signal_key
+            会被 `try_mark_signal` 判为重复 → 全部 signal_dup → 本轮 0 笔成交。
+            这正是 v6 跑出 trades=0 的直接原因。
+          - trades：成交记录。
+          - kv 里的 position / day_stats / bars_seen。
+
+        返回各表被删的行数，便于打印确认。
+        """
+        counts = {}
+        with self.conn:
+            for tbl in ("processed_signals", "trades"):
+                row = self.conn.execute(
+                    "SELECT COUNT(*) AS n FROM {}".format(tbl)).fetchone()
+                counts[tbl] = int(row["n"]) if row else 0
+                self.conn.execute("DELETE FROM {}".format(tbl))
+            for k in ("position", "day_stats", "bars_seen"):
+                self.conn.execute("DELETE FROM kv WHERE k=?", (k,))
+        return counts
+
     # ---------- kv（持仓 / 当日统计） ----------
     def set_json(self, key: str, value: Any) -> None:
         with self.conn:

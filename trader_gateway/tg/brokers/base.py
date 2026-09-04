@@ -50,5 +50,12 @@ class Broker(ABC):
         """
         raise NotImplementedError
 
+    def pulse(self) -> None:
+        """心跳（可选实现）。引擎每处理一根 K 线调一次。
+
+        真实 CTP 通道（如 SimNow）需要在长连接空闲期定期收发数据，否则会被
+        判为"用户不活跃"而断连。离线通道（dry_run）无需实现。
+        """
+
     def close(self) -> None:
         pass

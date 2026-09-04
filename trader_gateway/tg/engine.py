@@ -48,6 +48,14 @@ class GatewayEngine:
         self.last_bar: Optional[Bar] = None
         self.bars_seen: int = 0
         self._trade_seq = 0
+        # P3 配套：close 失败 cooldown 状态。
+        # 用途：上一笔 close 被拒后，连续 _close_retry_bars 根 K 线内不再尝试平仓，
+        # 避免"每根 bar 都触发一次平仓"导致的死循环；到 _close_max_streak 后
+        # 认定持仓为幻影（broker 端不存在），强制从引擎清掉。
+        self._last_close_failed_bar_ts: int = 0
+        self._close_fail_streak: int = 0
+        self._close_retry_bars: int = 5      # 失败后冷却多少根 bar 再试
+        self._close_max_streak: int = 20     # 连续失败这么多根后清掉幻影持仓
         self._restore()
 
     # ---------------- 状态恢复 ----------------
@@ -84,6 +92,13 @@ class GatewayEngine:
 
         self.ev.write("bar", date=bar.date, close=bar.close,
                       high=bar.high, low=bar.low, seq=self.bars_seen)
+
+        # 心跳：真实 CTP 通道需要定期收发数据，否则被判"用户不活跃"断连。
+        # dry_run 通道的 pulse() 是空实现，零开销。
+        try:
+            self.broker.pulse()
+        except Exception:
+            pass
 
         if self.position:
             self._settle_position(bar)
@@ -206,6 +221,13 @@ class GatewayEngine:
         if pos is None:
             return
 
+        # P3 配套：连续 close 失败就停手，避免反向信号/SL/TP 在每根 bar 上死循环重试。
+        # 触发条件：上一笔 close 被拒（broker 没拿到成交），且 retry cooldown 未过期。
+        now_ts = self.last_bar.timestamp if self.last_bar else 0
+        if (self._last_close_failed_bar_ts
+                and now_ts - self._last_close_failed_bar_ts <= self._close_retry_bars):
+            return
+
         o = self.broker.submit("close", pos.side, pos.volume, trigger_price,
                                signal_key or pos.signal_key, note=reason)
         self.store.save_order(o)
@@ -219,7 +241,24 @@ class GatewayEngine:
             why = o.meta.get("reject_reason") or o.status
             self.ev.write("order_rejected", key=pos.signal_key, order_id=o.order_id,
                           action="close", reason=reason, reject=why)
+            # 记 cooldown：在最近 _close_retry_bars 根 K 线内不再尝试 close，
+            # 给 tqsdk/上游同步留时间窗，避免每根 bar 都触发平仓
+            self._last_close_failed_bar_ts = now_ts
+            # 如果 retry cooldown 内一直失败且持仓实际不在 CTP（phantom），
+            # 到上限后强制清掉，避免引擎永久卡死。
+            self._close_fail_streak += 1
+            if self._close_fail_streak >= self._close_max_streak:
+                self.ev.write("position_drop", reason="close_repeatedly_rejected",
+                              streak=self._close_fail_streak,
+                              pos_signal_key=pos.signal_key,
+                              pos_entry=pos.entry_price)
+                self.position = None
+                self._persist()
             return
+
+        # 成功平仓：清掉失败计数
+        self._last_close_failed_bar_ts = 0
+        self._close_fail_streak = 0
 
         exit_price = o.filled_price
         gross = pos.pnl_points(exit_price)

@@ -43,6 +43,7 @@ class DefaultExitPolicy(ExitPolicy):
     def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
         buf = self.stop_buffer_ticks * spec.price_tick
         is_long = signal.side is Side.LONG
+        min_gap = spec.price_tick  # 至少 1 个 tick 间距（防止 stop==entry 立即触发）
 
         # 止损基准：默认信号K线极值（结构止损）；关掉则改固定点数，方便 A/B 对比
         if self.stop_at_signal_extreme:
@@ -61,6 +62,19 @@ class DefaultExitPolicy(ExitPolicy):
             raw_tp = entry_price - self.take_profit_points
             stop = spec.round_price(raw_stop, "down")
             tp = spec.round_price(raw_tp, "up")
+
+        # P2 修复：保证 stop 严格在 entry 的"不利侧"且至少 1 tick 间距。
+        # 历史场景：信号较老（chan.py SSE 推陈旧信号），行情已下跌，
+        # 限价让价后 entry < signal.low。如果还把 stop 设在 signal.low 上方，
+        # 就成了"开仓即触发止盈"的反向单——逻辑完全错乱。
+        # 修正策略：buy 止损必须在 entry 下方；short 止损必须在 entry 上方。
+        if is_long:
+            if stop is not None and stop >= entry_price - min_gap:
+                # 信号极值已不可信（< entry），改用 entry 下方固定距离止损
+                stop = spec.round_price(entry_price - max(self.stop_points, min_gap), "down")
+        else:
+            if stop is not None and stop <= entry_price + min_gap:
+                stop = spec.round_price(entry_price + max(self.stop_points, min_gap), "up")
 
         return ExitPlan(name=self.name, stop_price=stop, tp_price=tp,
                         params=dict(self.params))

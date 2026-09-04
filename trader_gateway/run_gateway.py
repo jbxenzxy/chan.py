@@ -76,7 +76,26 @@ def build_runtime(args):
     exitp = strategy.build_exit_policy(
         cfg.exit_policy.get("name", "DefaultExitPolicy"),
         cfg.exit_policy.get("params") or {})
-    store = Store(os.path.join(out, "state.db"))
+    store_path = os.path.join(out, "state.db")
+    store = Store(store_path)
+
+    # ===== --fresh：回放重跑前清空派生状态 =====
+    # 历史 bug（v6 实测 0 笔成交）：上一轮回放把 7 个 signal_key 标成了
+    # opened/rejected 写进 processed_signals，下一轮回放读同一份 state.db 时
+    # try_mark_signal 全部返回 False → 7 笔信号全被判 signal_dup → trades=0。
+    # 回放是"重跑同一份数据"，默认就该从干净状态开始；用 --no-fresh 显式保留。
+    if getattr(args, "fresh", None) is None:
+        fresh = (src.get("type") == "replay")     # 回放默认清，实盘默认留
+    else:
+        fresh = bool(args.fresh)
+    if fresh:
+        removed = store.wipe_runtime_state()
+        if not getattr(args, "quiet", False):
+            print("[fresh] 已清空派生状态: processed_signals={}  trades={}  "
+                  "(events.jsonl 与 orders 表保留作审计)"
+                  .format(removed.get("processed_signals", 0),
+                          removed.get("trades", 0)))
+
     ev = EventLog(os.path.join(out, "events.jsonl"), echo=not args.quiet,
                   echo_kinds=None if args.echo_all else ECHO_DEFAULT)
     engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
@@ -217,6 +236,11 @@ def main() -> None:
     ap.add_argument("--only-alive", action="store_true",
                     help="回放时跳过最终消失的信号（会高估策略，仅供对比）")
     ap.add_argument("--out", help="输出目录（state.db / events.jsonl）")
+    ap.add_argument("--fresh", dest="fresh", action="store_true", default=None,
+                    help="启动前清空派生状态（信号幂等键/成交/持仓），"
+                         "回放模式默认开启")
+    ap.add_argument("--no-fresh", dest="fresh", action="store_false",
+                    help="保留上轮状态继续跑（实盘模式默认，SSE 重连用）")
     ap.add_argument("--summary-json", help="把运行摘要写成 JSON")
     ap.add_argument("--max-bars", type=int, help="最多处理多少根 K 线后停止")
     ap.add_argument("--quiet", action="store_true", help="不打印事件流水")
