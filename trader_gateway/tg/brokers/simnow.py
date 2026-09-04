@@ -168,20 +168,21 @@ class SimNowBroker(Broker):
     def _wait_finished(self, order, timeout_s: float) -> None:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
-            self._api.wait_update()
+            # wait_update 必须带 deadline，否则订单无回报时会无限阻塞
+            self._api.wait_update(deadline=deadline)
             if getattr(order, "status", "") == "FINISHED":
                 return
         # 超时撤单
         try:
             self._api.cancel_order(order.order_id)
-            self._api.wait_update()
+            self._api.wait_update(deadline=time.time() + 5)
         except Exception:
             pass
 
     def _wait(self, predicate, timeout_s: float = 30.0) -> bool:
         deadline = time.time() + timeout_s
         while time.time() < deadline:
-            self._api.wait_update()
+            self._api.wait_update(deadline=deadline)
             if predicate():
                 return True
             time.sleep(0.2)
