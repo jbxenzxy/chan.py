@@ -28,6 +28,7 @@ class InstrumentSpec:
     close_today_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
     close_fee_rate: float = 0.000023          # 平昨 0.0023%
     slippage_ticks: float = 1.0               # 单边滑点（tick 数）
+    overprice_points: float = 0.6             # 超价点数：下单价 = 实时对手价 ± overprice_points（朝成交方向取整到 tick）；IF tick=0.2 时 0.6 恰好 3 tick
     close_today_first: bool = True            # 平仓优先平今
     sessions: List[str] = field(default_factory=lambda: ["09:30-11:30", "13:00-15:00"])
 

@@ -85,6 +85,14 @@ class GatewayEngine:
         self.bars_seen += 1
         self.last_bar = bar
 
+        # 每根 K 线（无论是否持仓）都喂给出场策略，供其维护 ATR 等历史缓冲。
+        # LayeredExitPolicy 等需要历史的策略借此在开仓瞬间就有足够样本。
+        # 默认 no-op，不影响其它策略。
+        try:
+            self.exit_policy.on_bar(bar, self.spec)
+        except Exception:
+            pass
+
         day = (bar.date or "")[:10]
         if day and self.risk.roll_day(day):
             self.ev.write("day_roll", day=day, stats=dict(self.risk.day_stats))
@@ -99,6 +107,12 @@ class GatewayEngine:
             self.broker.pulse()
         except Exception:
             pass
+
+        # 持仓对账（增强 B）：与券商真实持仓比对。若发现持仓已被外部平掉
+        # （如用户在快期3手工平仓）或属幽灵持仓，立即修正引擎账目，
+        # 避免继续傻等平仓 / 误判新信号。dry_run 等无真实账户的通道返回 None，跳过。
+        if self.position is not None:
+            self._reconcile_position()
 
         if self.position:
             self._settle_position(bar)
@@ -132,6 +146,44 @@ class GatewayEngine:
 
         self._close_position(check.reason, check.price, bar,
                              signal_key=pos.signal_key)
+
+    # ---------------- 持仓对账（增强 B） ----------------
+    def _reconcile_position(self) -> None:
+        """与券商真实持仓对账，修正引擎账目。
+
+        触发场景：用户在快期3等外部终端手工平仓 / 幽灵持仓 / 账户被别的程序改动。
+        若真实持仓已为 0（而引擎仍记着持仓），立即清掉引擎账目并落盘，避免：
+          · 反复尝试平仓刷「等待持仓更新超时」；
+          · 同向新买点被当成「已持仓」而漏单 / 误判。
+        若真实手数与引擎不一致（且非 0），仅告警，不自动接管未知持仓。
+        """
+        pos = self.position
+        if pos is None:
+            return
+        # 入场当根 K 线跳过：开仓后 tqsdk 持仓同步需要时间，避免误判刚开仓为「已平」
+        if (self.bars_seen - pos.entry_bar_seq) < 1:
+            return
+        fn = getattr(self.broker, "real_position", None)
+        if fn is None:
+            return
+        try:
+            real_vol = fn(pos.side)
+        except Exception:
+            return
+        if real_vol is None:
+            return
+        if real_vol <= 0:
+            self.ev.write("position_externally_closed",
+                          reason="reconcile_real_zero",
+                          side=str(pos.side), symbol=pos.symbol,
+                          signal_key=pos.signal_key)
+            self.position = None
+            self._last_close_failed_bar_ts = 0
+            self._close_fail_streak = 0
+            self._persist()
+        elif real_vol != pos.volume:
+            self.ev.write("position_mismatch", engine_vol=pos.volume,
+                          real_vol=real_vol, side=str(pos.side))
 
     def _after_close(self, bar: Bar) -> bool:
         """是否已过当日收盘（用于收盘前强平）。中午休市不算。"""

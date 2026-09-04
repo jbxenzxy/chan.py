@@ -14,7 +14,10 @@ SimNow 仿真 broker（M2b）
     - 主连自动映射：signal_symbol 若为 "KQ.m@..." 主连，用
       quote.underlying_symbol 动态解析主力合约，替代手工写死 trade_symbol。
       解析失败才回退到 config 里的 trade_symbol。
-    - 限价单追价：SimNow 不支持市价单，用 ref_price 往成交方向让价后下单。
+    - 限价单超价（M4）：SimNow 不支持市价单，下单瞬间取实时对手价（买=ask/卖=bid）
+      ± overprice_points（默认 0.6 点 = 3 tick，朝成交方向取整到 tick）主动跨价差成交；
+      取不到行情则回退到基于信号价的 align_*。平仓卡单时每轮重新按最新对手价超价
+      （价格归一，超价自带追价属性），最多 close_max_chase 轮。
     - offset：open→OPEN；close→CLOSE（交易所自动平今/平昨）。
       中金所平今手续费差异只体现在成本模型（dry_run 的 cost_points），
       下单 offset 的精细平今（CLOSETODAY）留到实盘阶段再按持仓当日判定。
@@ -385,6 +388,18 @@ class SimNowBroker(Broker):
             )
 
     # ---------------- 下单 ----------------
+    # 下单价策略（M4 改）：不再用"信号K线收盘价朝不利方向取整"的保守挂单，
+    # 改为「超价」——下单瞬间取实时对手价（买→ask / 卖→bid），再 ± overprice_points
+    # （默认 0.6 点 = 3 tick，向上/向下取整到 tick 以保证不低于该超价），主动跨过价差确保成交。
+    #   · 开多 / 平空（买方向）：对手价 = ask，超价 = ask + overprice（向上取整）
+    #   · 开空 / 平多（卖方向）：对手价 = bid，超价 = bid - overprice（向下取整）
+    # 取不到实时行情时回退到旧的 align_entry/align_exit（基于信号价）。
+    #
+    # 平仓卡单（最大风险点，M4 处理）：SimNow 不支持市价单，故用「限价追价」——
+    # 每一轮都重新取最新对手价 ± overprice 定价（价格归一：超价自带追价属性，
+    # 盘口怎么走，下一轮挂价就怎么跟，只要盘口有报价必然立即成交），
+    # 最多 close_max_chase 轮；close_chase_ticks 仅在行情临时取不到时作兜底步长。
+    # 仍不成交（如涨跌停锁死）才放弃（rejected），由引擎对账机制（增强 B）兜底。
     def submit(self, action: str, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "") -> Order:
         if self._conn_error:
@@ -394,133 +409,211 @@ class SimNowBroker(Broker):
             return self._rejected(signal_key, side, action, volume, ref_price,
                                   note, "未连接")
 
-        spec = self.spec
-        # 限价追价：开仓/平仓都往成交方向让价（与 dry_run 的对齐语义一致）
-        aligned = spec.align_entry(ref_price, side.sign) if action == "open" \
-            else spec.align_exit(ref_price, side.sign)
+        if action == "close":
+            return self._submit_close(side, volume, ref_price, signal_key, note)
+        return self._submit_open(side, volume, ref_price, signal_key, note)
 
-        direction = _DIRECTION[side]
-        offset = _OFFSET.get(action, "OPEN")
+    @staticmethod
+    def _is_buy(action: str, side: Side) -> bool:
+        """该笔委托是不是买方向（决定用 ask 还是 bid 作对手价）。"""
+        if action == "open":
+            return side is Side.LONG
+        # close：平空=买回，平多=卖出
+        return side is Side.SHORT
 
-        # ===== P4 修复：下单前先快照持仓 =====
-        # 下单后，tqsdk 的 position 端可能延迟反映；用 insert_order 之前的快照作为基线，
-        # 等成交完成后验证 position 是否按预期增减，否则视为幽灵成交。
-        #
-        # P5 强化：取 baseline 前先 wait_update 2 次（让 CTP 任何"延迟到达的重发回报"
-        # 在这里就同步完毕），避免 baseline 不准导致 P4 校验被绕过。
-        side_key = "LONG" if side is Side.LONG else "SHORT"
+    def _overprice_limit(self, action: str, side: Side,
+                         overprice_points: float) -> Optional[float]:
+        """超价限价：实时对手价 ± overprice_points，并取整到 tick。
+
+        取不到行情（未连接 / 无 tick 数据 / NaN）返回 None，由调用方回退。
+        注意：tqsdk 在行情首帧未到 / 集合竞价 / 单边市缺一边报价时，
+        ask_price1 / bid_price1 是 float('nan') 而非 None —— NaN 是真值，
+        `not (ask and bid)` 拦不住，必须显式 isnan 判断，否则限价会算出 NaN。
+        """
+        if self._api is None:
+            return None
+        try:
+            q = self._api.get_quote(self._trade_symbol)
+        except Exception:
+            return None
+        ask = getattr(q, "ask_price1", None)
+        bid = getattr(q, "bid_price1", None)
+        for v in (ask, bid):
+            if not isinstance(v, (int, float)) or math.isnan(v):
+                return None
+        if self._is_buy(action, side):
+            # 买方向：对手价=ask，超价=ask+overprice，向上取整（保证 ≥ overprice）
+            return self.spec.round_price(float(ask) + overprice_points, "up")
+        # 卖方向：对手价=bid，超价=bid-overprice，向下取整（保证 ≥ overprice）
+        return self.spec.round_price(float(bid) - overprice_points, "down")
+
+    def _build_limit_price(self, action: str, side: Side, ref_price: float) -> float:
+        opp = float(self.params.get("overprice_points", self.spec.overprice_points))
+        limit = self._overprice_limit(action, side, opp)
+        if limit is None:
+            spec = self.spec
+            limit = spec.align_entry(ref_price, side.sign) if action == "open" \
+                else spec.align_exit(ref_price, side.sign)
+        return limit
+
+    def _take_baseline(self, side_key: str) -> int:
+        """P4/P5 下单前持仓快照（等待 CTP 延迟回报同步完毕）。"""
         try:
             self._api.wait_update(deadline=time.time() + 0.5)
             self._api.wait_update(deadline=time.time() + 0.5)
-            _before_snapshot = _position_total(self._api, self._trade_symbol, side_key)
+            return _position_total(self._api, self._trade_symbol, side_key)
         except Exception:
-            _before_snapshot = 0
-        expected_delta = int(volume) if action == "open" else -int(volume)
+            return 0
 
-        # P0 修复：close 委托前等 tqsdk 持仓字段更新到 ≥ volume。
-        # 原因：上一笔 open 成交后，tqsdk 端 position 对象需要 wait_update 若干帧才同步，
-        # 引擎在收到下一个反向信号时立刻调 close，CTP 会因"平仓量超过持仓量"拒单（错误码）。
-        # 兜底：等待 10s 还同步不上 → 拒单并保留持仓，不发空单。
-        if action == "close":
-            if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
-                return self._rejected(signal_key, side, action, volume, ref_price,
-                                      note, "等待持仓更新超时（>10s），可能上游未同步")
-
+    def _submit_open(self, side: Side, volume: int, ref_price: float,
+                     signal_key: str, note: str) -> Order:
+        direction = _DIRECTION[side]
+        offset = "OPEN"
+        side_key = "LONG" if side is Side.LONG else "SHORT"
+        # 超价下单：实时对手价 + overprice_points
+        limit = self._build_limit_price("open", side, ref_price)
+        baseline = self._take_baseline(side_key)
+        expected_delta = int(volume)
         try:
             order = self._api.insert_order(symbol=self._trade_symbol,
                                            direction=direction, offset=offset,
-                                           volume=int(volume), limit_price=aligned)
+                                           volume=int(volume), limit_price=limit)
         except Exception as e:
-            return self._rejected(signal_key, side, action, volume, ref_price,
-                                  note, "下单失败: {}: {}".format(type(e).__name__, e))
+            return self._rejected(signal_key, side, "open", volume, ref_price, note,
+                                  "下单失败: {}: {}".format(type(e).__name__, e))
+        # 开仓卡单：超时（默认 10s，可调 fill_timeout_open）自动撤单，不成交即 rejected，
+        # 引擎不产生幻影持仓，等下一信号再触发。
+        timeout = float(self.params.get("fill_timeout_open", 10.0))
+        self._wait_finished(order, timeout_s=timeout)
+        return self._finalize(order, "open", side, volume, ref_price, signal_key,
+                             note, baseline, expected_delta, limit)
 
-        self._wait_finished(order, timeout_s=float(self.params.get("fill_timeout", 30.0)))
+    def _close_fallback_limit(self, side: Side, ref_price: float,
+                              prev_limit: Optional[float],
+                              chase_sign: int, chase_ticks: float) -> float:
+        """行情取不到时的平仓限价兜底。
 
-        # ===== P3 关键修复：必须 status == "FINISHED" 且 volume_left == 0 才是真成交 =====
-        # 历史 bug：tqsdk 在撤单/超时/部分成交时也可能写入 trade_price，
-        # 仅靠 trade_price 是否非 None 判断成交，会把"假成交"当真，引擎据此开
-        # 出幻影持仓 → 每个反向/止盈/止损信号都触发"平仓量超过持仓量"死循环。
+        首笔（无上一笔限价可参考）→ 回退 align_exit(信号价)；
+        后续轮次 → 在上一笔限价基础上朝成交方向推 chase_ticks 跳，
+        保证即便行情断了，价格也单边朝能成交的方向推进。
+        """
+        if prev_limit is None:
+            return self.spec.align_exit(ref_price, side.sign)
+        tick = self.spec.price_tick
+        return self.spec.round_price(
+            prev_limit + chase_sign * chase_ticks * tick,
+            "up" if chase_sign > 0 else "down")
+
+    def _submit_close(self, side: Side, volume: int, ref_price: float,
+                      signal_key: str, note: str) -> Order:
+        # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
+        if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
+            return self._rejected(signal_key, side, "close", volume, ref_price, note,
+                                  "等待持仓更新超时（>10s），可能上游未同步")
+        side_key = "LONG" if side is Side.LONG else "SHORT"
+        direction = _DIRECTION[side]
+        is_buy = self._is_buy("close", side)
+        chase_sign = 1 if is_buy else -1          # 买→加价 / 卖→降价，朝成交方向追
+        opp = float(self.params.get("overprice_points", self.spec.overprice_points))
+        max_attempts = int(self.params.get("close_max_chase", 20))
+        per_wait = float(self.params.get("fill_timeout_close", 5.0))
+        chase_ticks = float(self.params.get("close_chase_ticks", 2))
+
+        last: Optional[Order] = None
+        prev_limit: Optional[float] = None
+        for attempt in range(1, max_attempts + 1):
+            # M4.2 追价策略（价格归一）：每轮都取「最新对手价 ± overprice」重新定价。
+            # 超价本身自带追价属性——行情朝不利方向走了，下一轮的超价自动跟着盘口走，
+            # 挂单价永远比当前对手价多让 overprice 一截，只要盘口有报价必然立即成交。
+            # 不再在旧价上累加 chase_ticks。chase_ticks 只在行情临时取不到时作兜底步长。
+            limit = self._overprice_limit("close", side, opp)
+            if limit is None:
+                limit = self._close_fallback_limit(side, ref_price, prev_limit,
+                                                   chase_sign, chase_ticks)
+            prev_limit = limit
+            baseline = self._take_baseline(side_key)
+            expected_delta = -int(volume)
+            try:
+                order = self._api.insert_order(symbol=self._trade_symbol,
+                                               direction=direction, offset="CLOSE",
+                                               volume=int(volume), limit_price=limit)
+            except Exception as e:
+                return self._rejected(signal_key, side, "close", volume, ref_price, note,
+                                      "下单失败: {}: {}".format(type(e).__name__, e))
+            self._wait_finished(order, timeout_s=per_wait)
+            o = self._finalize(order, "close", side, volume, ref_price, signal_key,
+                              note, baseline, expected_delta, limit,
+                              attempt=attempt, max_attempts=max_attempts)
+            last = o
+            if o.status == "filled":
+                return o
+            # 未成交：_wait_finished 已撤单，进入下一轮重新超价
+        return last if last is not None else self._rejected(
+            signal_key, side, "close", volume, ref_price, note, "平仓追价用尽仍未成交")
+
+    def _finalize(self, order, action: str, side: Side, volume: int, ref_price: float,
+                  signal_key: str, note: str, baseline: int, expected_delta: int,
+                  limit: float, attempt: int = 1, max_attempts: int = 1) -> Order:
+        # ===== P3：必须 status=="FINISHED" 且 volume_left==0 才是真成交 =====
         is_fully_filled = (getattr(order, "status", "") == "FINISHED"
                            and getattr(order, "volume_left", None) == 0)
         filled = self._trade_price(order) if is_fully_filled else None
 
-        # ===== P4 修复：在 P3 基础上加 position 端二次校验 =====
-        # 历史 bug：simnow-000001 看似成交（status=FINISHED + volume_left=0 + trade_price=4544.8
-        # + CTP 通知"成交"），但 get_position 始终返回 0 多，CTP 后续 20+ 笔 close 全被
-        # 拒为"平仓量超过持仓量"。P3 只看 order 字段，挡不住 tqsdk position 滞后或缓存
-        # 污染导致的"幽灵成交"。P4 做法：tqsdk 报 filled 后，再去看 position 是否从下单前
-        # 快照（_before_snapshot）按预期变化；若 5s 内未到位 → 视为幽灵 → 拒收。
-        # ===== P6 权威层：用 CTP 真实成交明细判定是否真成交 =====
-        # 历史 bug（P4/P5 都挡不住）：tqsdk 在 insert_order 后会**乐观**把 position 缓存
-        # +1/-1，即使 CTP 后续拒单也不回滚。P4/P5 拿 position 缓存做对照，等于拿"被
-        # 自己骗过的账本"对账——v5 跑出 4 笔 OPEN "filled"，但 1.5 分钟后查 SimNow
-        # 真实账户是 0 持仓，就是这么来的。
-        #
-        # P6 改用 order.trade_records：CTP 真正确认的成交回报明细，只有交易所撮合
-        # 成功才会写入，不受本地缓存乐观更新影响。真成交必须三层同时成立：
-        #   ① order.status == "FINISHED"           （P3）
-        #   ② order.volume_left == 0               （P3）
-        #   ③ sum(trade_records[*].volume) >= volume （P6 新增·权威）
-        # 三层都过再走 P4/P5 的 position 端辅助校验（保留作交叉印证，但不再是唯一依据）。
+        # ===== P6 权威层：用 CTP 真实成交明细判定 =====
+        # 真成交必须三层同时成立：① status==FINISHED ② volume_left==0
+        # ③ sum(trade_records[*].volume) >= volume。P4/P5 仅作辅助诊断。
         traded_volume = _traded_volume_from_records(order)
         traded_price = _traded_price_from_records(order)
+        reject_reason: Optional[str] = None
         if is_fully_filled and traded_volume < int(volume):
             last_msg = getattr(order, "last_msg", "")
-            self._note_reject(
-                signal_key, note, order,
+            reject_reason = (
                 "P6: CTP 成交明细只有 {} 手，不足委托 {} 手 (status=FINISHED, "
                 "volume_left=0, trade_price={}, last_msg={})，判定为未成交".format(
                     traded_volume, int(volume),
                     getattr(order, "trade_price", None), last_msg))
+            self._note_reject(signal_key, note, order, reject_reason)
             is_fully_filled = False
             filled = None
-
-        # P6 权威成交价：优先取 CTP 成交明细的加权均价（比 order.trade_price 更可信，
-        # 后者在部分成交/撤单场景下可能被写成首笔成交价而非均价）
+        # P6 权威成交价：优先取 CTP 成交明细的加权均价
         if is_fully_filled and traded_price:
             filled = traded_price
 
         # ===== P4/P5 降级为辅助层：只记录诊断，不再据此 reject =====
-        # 历史 bug（v5 实测）：P4/P5 用 position 缓存做"必过"校验，会同时产生
-        # 两种误判——
-        #   · 误拒：CTP 真成交了但 position 缓存滞后 5s 才同步 → P4 超时 → 判幽灵
-        #     → v5 那 21 笔 close 死循环就是这么来的（真持仓平不掉，反复重试）。
-        #   · 误放：CTP 拒了但 position 缓存被乐观更新 +1 → P4 通过 → 判成交
-        #     → v5 那 4 笔幻象 "filled" 就是这么来的（真实账户其实 0 持仓）。
-        # position 缓存两头都不可靠，所以 P6 之后它只当**交叉印证/诊断信号**，
-        # 不再有 reject 权。真成交的权威判定交给 P6 的 trade_records。
+        side_key = "LONG" if side is Side.LONG else "SHORT"
         verified = False
         if is_fully_filled:
-            verified = _verify_position_delta(self._api, self._trade_symbol,
-                                              side_key, baseline=_before_snapshot,
-                                              expected_delta=expected_delta,
-                                              timeout_s=5.0)
+            verified = _verify_position_delta(self._api, self._trade_symbol, side_key,
+                                             baseline=baseline,
+                                             expected_delta=expected_delta, timeout_s=5.0)
             if not verified:
-                # 只告警，不推翻 P6 的判定
                 self._note_position_lag(signal_key, action, side_key,
-                                        _before_snapshot, expected_delta)
+                                        baseline, expected_delta)
 
         status = "filled" if is_fully_filled else "rejected"
-        if status == "rejected" and not getattr(order, "status", "") == "FINISHED":
+        if status == "rejected" and getattr(order, "status", "") != "FINISHED":
             last_msg = getattr(order, "last_msg", "")
-            self._note_reject(signal_key, note, order,
-                              "未真正成交: status={}, volume_left={}, trade_price={}, last_msg={}".format(
-                                  getattr(order, "status", ""),
-                                  getattr(order, "volume_left", None),
-                                  getattr(order, "trade_price", None),
-                                  last_msg))
+            reject_reason = (
+                "未真正成交: status={}, volume_left={}, trade_price={}, last_msg={}".format(
+                    getattr(order, "status", ""),
+                    getattr(order, "volume_left", None),
+                    getattr(order, "trade_price", None),
+                    last_msg))
+            self._note_reject(signal_key, note, order, reject_reason)
 
         o = Order(
             order_id="{}-{:06d}".format(self.name, next(self._seq)),
             signal_key=signal_key, symbol=self._trade_symbol, side=side,
-            action=action, volume=int(volume), price=aligned,
+            action=action, volume=int(volume), price=limit,
             req_price=float(ref_price), filled_price=filled,
             status=status, created_at=now_cn(), broker=self.name, note=note,
             meta={"raw_order_id": str(getattr(order, "order_id", "")),
-                  "direction": direction, "offset": offset,
+                  "direction": _DIRECTION[side], "offset": action,
                   "trade_price": filled,
                   "volume_left": getattr(order, "volume_left", None),
-                  "last_msg": getattr(order, "last_msg", "")},
+                  "last_msg": getattr(order, "last_msg", ""),
+                  "reject_reason": reject_reason,
+                  "attempt": attempt, "max_attempts": max_attempts},
         )
         self.orders.append(o)
         return o
@@ -592,7 +685,16 @@ class SimNowBroker(Broker):
         return False
 
     def _note_reject(self, signal_key: str, note: str, order, last_msg: str) -> None:
-        pass
+        """记录拒单/追价失败原因（审计用）。
+
+        只写日志，不改变判定结果。原因同时持久化到 Order.meta.reject_reason
+        （见 _finalize），保证 events.jsonl 里可追溯「平仓追价为什么没成」。
+        """
+        import logging
+        logging.getLogger("tg.brokers.simnow").warning(
+            "委托被拒: signal=%s note=%s 原因=%s raw_order_id=%s",
+            signal_key or "-", note or "-", last_msg or "-",
+            str(getattr(order, "order_id", "-")))
 
     def _note_position_lag(self, signal_key: str, action: str, side_key: str,
                            baseline: int, expected_delta: int) -> None:
@@ -624,6 +726,20 @@ class SimNowBroker(Broker):
         )
         self.orders.append(o)
         return o
+
+    def real_position(self, side: Side) -> Optional[int]:
+        """查询 SimNow 真实持仓（引擎对账用）。未连接返回 None。
+
+        返回该方向当前净持仓手数；供 engine 的持仓对账（增强 B）检测
+        「用户在快期3手工平仓 / 幽灵持仓」并修正引擎账目。
+        """
+        if self._api is None:
+            return None
+        try:
+            return _position_total(self._api, self._trade_symbol,
+                                  "LONG" if side is Side.LONG else "SHORT")
+        except Exception:
+            return None
 
     def close(self) -> None:
         if self._api is not None:

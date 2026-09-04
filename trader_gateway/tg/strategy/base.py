@@ -84,6 +84,15 @@ class ExitPolicy(ABC):
         """每根 K 线闭合后判定是否出场。返回 None = 继续持有。"""
         raise NotImplementedError
 
+    def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
+        """可选钩子：引擎每根 K 线（无论是否持仓）都会调用一次。
+
+        默认空实现。需要历史行情（如 ATR、跟踪极值）的策略可在此维护自己的
+        缓冲——这样即使当前空仓，策略也能持续积累 bar，开仓瞬间就有足够历史。
+        不属于出场判定的强制接口，子类按需重写。
+        """
+        return None
+
 
 class EntryPolicy(ABC):
     """入场策略接口。"""

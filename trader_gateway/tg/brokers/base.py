@@ -57,5 +57,13 @@ class Broker(ABC):
         判为"用户不活跃"而断连。离线通道（dry_run）无需实现。
         """
 
+    def real_position(self, side: "Side") -> Optional[int]:
+        """真实持仓查询（可选实现）。引擎持仓对账（增强 B）用。
+
+        返回该方向当前真实持仓手数；不支持/未知返回 None（引擎跳过对账）。
+        默认实现返回 None（如 dry_run 离线通道，没有真实账户可查）。
+        """
+        return None
+
     def close(self) -> None:
         pass

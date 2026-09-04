@@ -1,0 +1,88 @@
+<svg viewBox="0 0 680 420" width="100%" role="img">
+  <title>R 倍数定基线原理</title>
+  <desc>1R 的定义、亏损上限、与不同盈亏比在不同胜率下的期望值</desc>
+
+  <text x="40" y="32" font-size="15" font-weight="500" fill="#1f2937">L1 · R 倍数定基线</text>
+  <text x="40" y="50" font-size="12" fill="#5F5E5A">把「亏多少」当成 1R，所有 TP / SL / 加减仓都按 R 的倍数表达</text>
+
+  <text x="40" y="86" font-size="13" font-weight="500" fill="#0C447C">① 1R 的定义（做多示意）</text>
+
+  <line x1="60" y1="100" x2="320" y2="100" stroke="#D3D1C7" stroke-width="0.5"/>
+  <line x1="60" y1="320" x2="60" y2="100" stroke="#D3D1C7" stroke-width="0.5"/>
+
+  <line x1="60" y1="220" x2="320" y2="220" stroke="#185FA5" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="68" y="216" font-size="10" fill="#185FA5">Entry E</text>
+
+  <line x1="60" y1="300" x2="320" y2="300" stroke="#A32D2D" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="68" y="296" font-size="10" fill="#A32D2D">Initial SL = E − 1R</text>
+
+  <line x1="60" y1="140" x2="320" y2="140" stroke="#3B6D11" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="68" y="136" font-size="10" fill="#3B6D11">TP1 = E + 2R</text>
+
+  <line x1="60" y1="100" x2="320" y2="100" stroke="#3B6D11" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="68" y="96" font-size="10" fill="#3B6D11">TP2 = E + 3R</text>
+
+  <rect x="60" y="220" width="260" height="80" fill="#A32D2D" fill-opacity="0.08"/>
+  <text x="190" y="262" text-anchor="middle" font-size="11" fill="#791F1F">1R 区间（亏损上限 = 1R）</text>
+
+  <rect x="60" y="140" width="260" height="80" fill="#3B6D11" fill-opacity="0.06"/>
+  <text x="190" y="178" text-anchor="middle" font-size="11" fill="#27500A">2R~3R 区间（盈利区间）</text>
+
+  <polyline points="60,220 80,232 100,210 120,250 140,200 160,290 180,160 200,140 220,180 240,210 260,170 280,250 300,300 320,160" fill="none" stroke="#185FA5" stroke-width="1.5"/>
+
+  <circle cx="180" cy="160" r="4" fill="#3B6D11"/>
+  <circle cx="200" cy="140" r="4" fill="#3B6D11"/>
+  <circle cx="300" cy="300" r="4" fill="#A32D2D"/>
+
+  <text x="160" y="368" font-size="10" fill="#5F5E5A">· 1R 在「点」上是多少</text>
+  <text x="160" y="382" font-size="10" fill="#5F5E5A">· 取决于初始止损设在哪（L2 来答）</text>
+
+  <text x="360" y="86" font-size="13" font-weight="500" fill="#0C447C">② 不同盈亏比的期望值</text>
+
+  <text x="360" y="104" font-size="11" fill="#5F5E5A">E = 胜率 × 盈利 − (1−胜率) × 1R</text>
+
+  <line x1="360" y1="116" x2="640" y2="116" stroke="#D3D1C7" stroke-width="0.5"/>
+  <text x="360" y="132" font-size="11" fill="#5F5E5A">盈亏比 \ 胜率</text>
+  <text x="450" y="132" text-anchor="middle" font-size="11" fill="#5F5E5A">30%</text>
+  <text x="500" y="132" text-anchor="middle" font-size="11" fill="#5F5E5A">40%</text>
+  <text x="550" y="132" text-anchor="middle" font-size="11" fill="#5F5E5A">50%</text>
+  <text x="600" y="132" text-anchor="middle" font-size="11" fill="#5F5E5A">60%</text>
+  <text x="640" y="132" text-anchor="middle" font-size="11" fill="#5F5E5A">70%</text>
+
+  <line x1="360" y1="138" x2="640" y2="138" stroke="#D3D1C7" stroke-width="0.5"/>
+
+  <text x="360" y="158" font-size="11" font-weight="500" fill="#1f2937">1:1</text>
+  <text x="450" y="158" text-anchor="middle" font-size="11" fill="#A32D2D">−0.4R</text>
+  <text x="500" y="158" text-anchor="middle" font-size="11" fill="#A32D2D">−0.2R</text>
+  <text x="550" y="158" text-anchor="middle" font-size="11" fill="#5F5E5A">±0R</text>
+  <text x="600" y="158" text-anchor="middle" font-size="11" fill="#3B6D11">+0.2R</text>
+  <text x="640" y="158" text-anchor="middle" font-size="11" fill="#3B6D11">+0.4R</text>
+
+  <text x="360" y="180" font-size="11" font-weight="500" fill="#1f2937">1:2</text>
+  <text x="450" y="180" text-anchor="middle" font-size="11" fill="#A32D2D">−0.1R</text>
+  <text x="500" y="180" text-anchor="middle" font-size="11" fill="#3B6D11">+0.2R</text>
+  <text x="550" y="180" text-anchor="middle" font-size="11" fill="#3B6D11">+0.5R</text>
+  <text x="600" y="180" text-anchor="middle" font-size="11" fill="#3B6D11">+0.8R</text>
+  <text x="640" y="180" text-anchor="middle" font-size="11" fill="#3B6D11">+1.1R</text>
+
+  <text x="360" y="202" font-size="11" font-weight="500" fill="#1f2937">1:3</text>
+  <text x="450" y="202" text-anchor="middle" font-size="11" fill="#3B6D11">+0.2R</text>
+  <text x="500" y="202" text-anchor="middle" font-size="11" fill="#3B6D11">+0.6R</text>
+  <text x="550" y="202" text-anchor="middle" font-size="11" fill="#3B6D11">+1.0R</text>
+  <text x="600" y="202" text-anchor="middle" font-size="11" fill="#3B6D11">+1.4R</text>
+  <text x="640" y="202" text-anchor="middle" font-size="11" fill="#3B6D11">+1.8R</text>
+
+  <line x1="360" y1="218" x2="640" y2="218" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="3 3"/>
+  <text x="360" y="246" font-size="11" fill="#5F5E5A">盈亏平衡点（E = 0）：</text>
+  <text x="360" y="262" font-size="11" fill="#5F5E5A">· 1:1 → 胜率必须 ≥ 50%</text>
+  <text x="360" y="278" font-size="11" fill="#5F5E5A">· 1:2 → 胜率仅需 ≥ 33.3%</text>
+  <text x="360" y="294" font-size="11" fill="#5F5E5A">· 1:3 → 胜率仅需 ≥ 25%</text>
+
+  <text x="360" y="324" font-size="11" fill="#5F5E5A">含义：</text>
+  <text x="360" y="340" font-size="11" fill="#5F5E5A">· 盈亏比越高，胜率门槛越低</text>
+  <text x="360" y="356" font-size="11" fill="#5F5E5A">· 把所有规则翻译到同一把尺上，才</text>
+  <text x="360" y="370" font-size="11" fill="#5F5E5A">  能比较、组合、回测、调参</text>
+
+  <line x1="40" y1="396" x2="640" y2="396" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="3 3"/>
+  <text x="340" y="412" text-anchor="middle" font-size="11" fill="#5F5E5A">R 是「相对单位」：仓位、止损、止盈、加减仓，所有风险动作都在这一个度量衡下表达</text>
+</svg>

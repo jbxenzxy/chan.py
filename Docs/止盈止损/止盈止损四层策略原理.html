@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="93WcSyGRt2yOgXzjXp9Ezw">
+<head data-page-node-id="CfrSQpEihpv8EQ4Mub90Ju">
+<meta charset="UTF-8" data-page-node-id="QXnvkatYQ7By03B1zHnRGo">
+<meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="DVyxH6Dj7jXjmiv3HkgFAS">
+<title>止盈止损四层策略原理</title>
+<style>
+*,*::before,*::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+               "Microsoft YaHei", "Hiragino Sans GB", sans-serif;
+  background: #FAF9F5;
+  color: #000000;
+  line-height: 1.6;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  padding: 24px 16px 64px;
+}
+.wrap { max-width: 760px; margin: 0 auto; }
+h1 { font-size: 18px; font-weight: 500; margin: 0 0 6px; letter-spacing: 0.2px; }
+h2 { font-size: 14px; font-weight: 500; margin: 28px 0 12px; padding: 0 0 6px; border-bottom: 1px solid rgba(0,0,0,0.15); }
+h3 { font-size: 13px; font-weight: 500; margin: 16px 0 6px; }
+p { margin: 6px 0 10px; color: #444441; }
+p strong { color: #000; font-weight: 500; }
+.hero {
+  margin: 0 0 20px;
+  padding: 20px 24px;
+  background: #FFFFFF;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.15);
+}
+.hero p.sub { margin: 4px 0 0; font-size: 12px; color: #5F5E5A; }
+.tag {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 2px 8px;
+  font-size: 11px;
+  background: #FAEEDA;
+  color: #854F0B;
+  border-radius: 4px;
+}
+.card {
+  background: #FFFFFF;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin: 8px 0 16px;
+}
+.svg-wrap {
+  background: #FFFFFF;
+  border: 1px solid rgba(0,0,0,0.15);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin: 12px 0 6px;
+  overflow-x: auto;
+}
+.fig-cap {
+  font-size: 11px;
+  color: #5F5E5A;
+  text-align: center;
+  margin: 0 0 16px;
+}
+.callout {
+  padding: 10px 14px;
+  border-left: 3px solid #185FA5;
+  background: #E6F1FB;
+  border-radius: 0 6px 6px 0;
+  margin: 8px 0 16px;
+  color: #0C447C;
+  font-size: 12px;
+}
+.callout-amber { border-left-color: #854F0B; background: #FAEEDA; color: #633806; }
+.callout-green { border-left-color: #3B6D11; background: #EAF3DE; color: #27500A; }
+.callout-red   { border-left-color: #A32D2D; background: #FCEBEB; color: #791F1F; }
+table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+th, td { padding: 6px 10px; border-bottom: 1px solid rgba(0,0,0,0.15); text-align: left; }
+th { background: #F1EFE8; font-weight: 500; color: #444441; }
+code { font-family: "SF Mono", Consolas, Monaco, monospace; font-size: 12px; background: #F1EFE8; padding: 1px 4px; border-radius: 3px; color: #534AB7; }
+ul, ol { margin: 6px 0 10px 20px; padding: 0; }
+li { margin: 3px 0; font-size: 12px; color: #444441; }
+hr.div { margin: 24px 0; border: none; border-top: 1px dashed rgba(0,0,0,0.15); }
+footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; }
+</style>
+</head>
+<body data-page-node-id="BdTqjUmrQpwE4XUU1lOcDd">
+<div class="wrap" data-page-node-id="dJ1tlPG67bae9FzNyagLLw">
+<header class="hero" data-page-node-id="tZX2TxYufrDdMtX0D37csM">
+  <h1 data-page-node-id="IhxD1Hy7PjKPyZTGjwwDK4">止盈止损 · 四层策略原理</h1>
+  <p class="sub" data-page-node-id="8J43TrLOQN7DSqhw3Y0OFy">R 倍数定基线 → 波动率定宽窄 → 移动保本锁利 → 时间收盘兜底</p>
+  <span class="tag" data-page-node-id="BpAw8heWTaDiluCWjgxGqQ">自包含文档 · 双击 HTML 即可离线浏览</span>
+</header>
+<section data-page-node-id="4pzjwWNud5aMJ7teT0W9sU">
+  <p data-page-node-id="cw7usoi9JO4dPF8mfe8MCR">对任何主动型量化策略来说, <strong data-page-node-id="XX4FP4Ivrlzklzzt0NEILD">止盈 / 止损 (TP/SL) 的设计</strong>直接决定了长期收益曲线是稳定爬升还是巨幅震荡。</p>
+  <p data-page-node-id="zpT4BWzB6GpAjaFsKssCFG">chan.py 项目当前实现的 <code data-page-node-id="59zpZf3V4dUXhsLcm3WnHT">DefaultExitPolicy</code> 是固定点数 TP + 信号 K 线极值 SL 的最小可用版本 — 能跑通闭环, 但缺了自适应 / 趋势跟随 / 利润固化三层关键能力。</p>
+  <p data-page-node-id="xjG8bOdDrIxCRIzsMdFUuR">业界主流做法不是选某一个止盈止损规则, 而是把四层规则分层组合, 从基准到细节逐步收敛风险。本文把每一层的原理、可视化结构、关键参数、组合方式讲清楚。</p>
+</section>
+<h2 data-page-node-id="uoTyoiozXd7IEGU6bSAj31">1 · 四层骨架 (鸟瞰)</h2>
+<div class="card" data-page-node-id="FArUILTp00KreEgBUzNc8l"><p data-page-node-id="S5PLDMCxUlJfkJ7KFpKLPY">先建立整体地图。四层<strong data-page-node-id="RV6DHz9AZe5F66ytMDNz0n">不是并列四选一</strong>, 而是<strong data-page-node-id="u9FOFmVR8PntJwNf0fWjHo">纵向叠加</strong> — 上一层给下一层提供工作基础。</p></div>
+<div class="svg-wrap" data-page-node-id="OGaeKgMSImDjOFQU3UI7h1"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 240" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="qamZDaUbaDUslUNt4F52MG">
+<title id="t1">TP/SL 四层骨架</title>
+<desc id="d1" data-page-node-id="e7DqWXIIdDP22aWGr2aHBL">L1 R 倍数定基线, L2 波动率定宽窄, L3 移动保本锁利润, L4 时间收盘兜底</desc>
+<defs data-page-node-id="eHCgWR3XduuCWUI3vOorNw">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="fDTS7JZP3wVDntVAAcxs3D">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VeKfaL5lA3rtZ7E47utQlS"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="nciDjVyv8k43d4FDns1qGr">四层策略 · 纵向叠加</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="BalqRYlGuuYhHndhIPgr1e">每一层解决一类特定风险, 上一层给下一层提供工作基础</text>
+<g transform="translate(34,64)" data-page-node-id="erAtGuqhhTTelo2S8PzZlm">
+  <rect width="144" height="120" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="wTxFoCZfllAhiEOeaiEXCZ"/>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#185FA5" data-page-node-id="abhtbkFbe6YtzGWCgswWeA"/>
+  <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="NX8c3mHOh1F92V6xVlagNC">L1</text>
+  <text x="72" y="26" font-size="13" font-weight="500" fill="#0C447C" data-page-node-id="SojbQdLZSvQRYLLa6Tnzzr">R 倍数</text>
+  <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="oxGvWKtIgKJsPmJFfnvnmt">定基线</text>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="jl3bn0ftXXv5Oo1noMvZNG"/>
+  <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="tpOCXFEVgaEyEPIOF9EWzM">初始止损 = 1R</text>
+  <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="eRBXpmJAom3bXCkAr9ftbh">盈亏比驱动期望值</text>
+</g>
+<g transform="translate(190,64)" data-page-node-id="eLAd6GQ0ve9NGwriI9kaBx">
+  <rect width="144" height="120" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="BpwDNP4afxVbrXnnSbwp3c"/>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#3B6D11" data-page-node-id="7ygJXAztIO5FfsNqNzsyNC"/>
+  <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="LGKWAxkMQWcGLLCHWRAjNn">L2</text>
+  <text x="72" y="26" font-size="13" font-weight="500" fill="#27500A" data-page-node-id="dTbyRP9gUu1YnNCjD03XeM">波动率</text>
+  <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="UXovyBDcV37F8Rk3B2zNwx">定宽窄</text>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#97C459" stroke-width="0.5" data-page-node-id="wkiG128l1zEToMrxYlCHcB"/>
+  <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="Z5VprDnn6qtlbJgAs4nLlC">止损宽度 = k×ATR</text>
+  <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="7CbsactGOEMzYJDEYycZZ2">宽窄自动适配</text>
+</g>
+<g transform="translate(346,64)" data-page-node-id="n3ORtAkLJvlc4lwoH9oX5l">
+  <rect width="144" height="120" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="Iz9iaXV5bldUElC1XKDsCf"/>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#854F0B" data-page-node-id="0KYgJKWJsrL31RQdnnIv0I"/>
+  <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="IYtZTzHUNy19NaAXraJrrp">L3</text>
+  <text x="72" y="26" font-size="13" font-weight="500" fill="#633806" data-page-node-id="NVEL7J4eiRrbEaFPqRh9h8">移动保本</text>
+  <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="juFguSDuZTSvG21k1fT2tj">锁利润</text>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="j9Z3D5JItkeDoEOks7BDu6"/>
+  <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="q2qJ1xDcmzjGzwCLgkXbAe">顺势抬 SL</text>
+  <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="UgvIBBu4B5opvlg7lrJHpD">浮盈转落袋</text>
+</g>
+<g transform="translate(502,64)" data-page-node-id="U2sYOekjsYDdLsgP7j8Ygk">
+  <rect width="144" height="120" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="xWnHqndZXovDEcGWJMVVaR"/>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#A32D2D" data-page-node-id="GuasyonCLLtLheepr8Pguv"/>
+  <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="kShFXh3Hy60Wr5FQ7h8aaY">L4</text>
+  <text x="72" y="26" font-size="13" font-weight="500" fill="#791F1F" data-page-node-id="6IDB6X6b9JOYA6VoPLzqsS">时间收盘</text>
+  <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="AcxgQK9fUW7r8u5ODsnv6X">兜底</text>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#F09595" stroke-width="0.5" data-page-node-id="sYmIHdODEoyCRHLs8E4KC2"/>
+  <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="kl2yDNV7aBgTojc5kAYEe5">时间止损 + EOD</text>
+  <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="V4GK8sVikSfwRmJ49ofzsf">避免隔夜跳空</text>
+</g>
+<path d="M 178 124 L 188 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="Dlvk1TfIODItiWqiR0HaNW"/>
+<path d="M 334 124 L 344 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="IKQNyPhTrqXJLFErhybXSg"/>
+<path d="M 490 124 L 500 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="rObWcrJSdLBrONBacNHcvx"/>
+<text x="340" y="208" font-size="12" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="jlQDuyXiXsjovpIQBLpt3l">L1 给尺 → L2 定宽 → L3 锁利 → L4 兜底</text>
+<text x="340" y="226" font-size="11" text-anchor="middle" fill="#5F5E5A" data-page-node-id="Pxds2R9BZr1JX86GhvLxpy">缺 L1 不知止损该多远 · 缺 L2 止损宽窄与行情不匹配 · 缺 L3 浮盈回吐 · 缺 L4 隔夜跳空闷棍</text>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="kCayutABacjy0CQ5rHuvnd">图 1 · 四层骨架与对应风险域</p>
+<div class="callout" data-page-node-id="NeR2aVNsryuOhuqZDNtwDX">如果你卡在某层出不来, 先确认缺失了哪一层: 没有 L1 你不知道止损该多远合理; 没有 L2 止损宽窄和行情不匹配; 没有 L3 浮盈会被回吐; 没有 L4 会被信号失效 / 隔夜跳空打闷棍。</div>
+<h2 data-page-node-id="XMAKYcEuIlFjx2SP48jdem">2 · L1 R 倍数定基线 (一切的尺度)</h2>
+<div class="card" data-page-node-id="dgKBHBeOCoJQKMchwKKqQa">
+  <p data-page-node-id="s5gHDBCBaYjo9CmysDOcDd"><strong data-page-node-id="TkawqyCQHlHXnYfQxPCX7l">R 倍数</strong>是量化交易最基础的语言。它的核心思想不是取悦审美, 而是<strong data-page-node-id="7AtFC5CHoCeE7RADDVAfHC">统一度量</strong>: 把所有盈亏换算成 1R 的多少倍。这把尺子让跨品种、跨周期、跨价格的策略之间可以直接比较。</p>
+  <h3 data-page-node-id="PgGhAGjAkdbR9sFmgwFv4E">1R 怎么定义</h3>
+  <ul data-page-node-id="4J7hfP6dskfhxKaqo45r9s">
+    <li data-page-node-id="yJ6vRgP8EX3omK0DnV1yj5">入场后立刻设一个<strong data-page-node-id="j1eQgV7HRjjnd8IVfWUvQw">初始止损</strong> (基于结构 / 波动率, 详见 L2)</li>
+    <li data-page-node-id="Z0gPNoj1XQK5oVOAtKcAni"><code data-page-node-id="tVbuLAw7gdtwLsZJg0FkdI">1R = |入场价 − 初始止损|</code> (做空方向反过来取绝对值)</li>
+    <li data-page-node-id="eULkE9HEFuLZcvX3Q3JqRW">这就是你<strong data-page-node-id="OVjesT229QCmKG7haDPGMH">单笔愿意承担的最大风险</strong> — 所有其他规则都用它当尺子</li>
+  </ul>
+  <h3 data-page-node-id="flQGI6IeuqWVseahmPr6sj">盈亏比 vs 胜率 → 期望值</h3>
+  <p data-page-node-id="ButoPjdOrsUWy5Gwzh3yDI">止盈位 = 入场 ± <code data-page-node-id="ErrC1Rv9mUBBBlT4chCsFj">N × 1R</code>, 盈亏比就是 <code data-page-node-id="LsMPH9wGpYCncZzDuNXFTD">N</code>。期望值公式: <code data-page-node-id="7vdW5G1AFN6pQFtOvoxKcy">E = p × WinR − (1 − p) × 1R</code></p>
+  <p data-page-node-id="P4mFwdNN4s1pTSbezgnsE4">当 <strong data-page-node-id="AlRi2GnuyUoE4iQD8GZVK2">盈亏比 = 2</strong> 时, 仅需胜率 <code data-page-node-id="eSMp71DVfXeIsRFMUbQIwX">&gt; 33.3%</code> 长期就正期望; 当 <strong data-page-node-id="gFc0wctomNyPyY2CQyYVig">盈亏比 = 3</strong> 时, 胜率门槛低到 <code data-page-node-id="66qLGqHZcKq6ofd8eqj9fI">25%</code>。这就是为什么专业策略都追求 1:2 以上的盈亏比。</p>
+</div>
+<div class="svg-wrap" data-page-node-id="B6ZOxTvdPMM7Fz7ykcnOlu"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 260" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="o8WTr2ZwBNUxmpbcOefzHC">
+<title id="t1">R 倍数定基线</title>
+<desc id="d1" data-page-node-id="udG9LCnyt0xCyIejZJI4vD">1R 等于入场价 - 初始止损, 期望值由盈亏比和胜率共同决定</desc>
+<defs data-page-node-id="DIfymwJaF7oMpzDL8IkPrT">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="SJ2ms84KSBiOu89dxNVGjN">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VwblRbMBUQqQOCIc8sBLIX"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="bpM4HsUqowO6o7r9U0lgaO">R 倍数 · 一切止盈止损的尺度</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="qBggcLIsuKFF3ap8Xnpy4j">把所有盈亏换算成 1R 的多少倍, 跨品种跨周期可直接比较</text>
+<g transform="translate(40,68)" data-page-node-id="MqLUHEY5eF3LXhxQZXL81R">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="iOXPSpiZ9HTUvuV7NtFv5t">1R 标尺（做多示意）</text>
+  <line x1="40" y1="80" x2="280" y2="80" stroke="#888780" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="JgQQcXTbzS8Grt1Y1SBtln"/>
+  <line x1="40" y1="130" x2="280" y2="130" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="3V9j5XYCvDaGxO1XYJDgc6"/>
+  <line x1="40" y1="20" x2="280" y2="20" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="jXWcHOrBCdPdrpXQ0xYSpk"/>
+  <text x="36" y="84" font-size="11" text-anchor="end" fill="#5F5E5A" data-page-node-id="VaYhiU69wxhC9M7DlCB7eK">入场</text>
+  <text x="36" y="134" font-size="11" text-anchor="end" fill="#A32D2D" data-page-node-id="q8kEWbh3fAJr90GyF4naAs">−1R</text>
+  <text x="36" y="24" font-size="11" text-anchor="end" fill="#3B6D11" data-page-node-id="TGweOC1YZWYcAd6sNEaGe8">+2R</text>
+  <rect x="120" y="130" width="40" height="-50" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="Uo1CkdmOI7jTeDMZRE2vp5"/>
+  <text x="140" y="109" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="SlRpu6qoFo04otuT3iQuiC">1R</text>
+  <rect x="200" y="20" width="40" height="60" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="LZVE1CpvPvRWYDwDOSV1tO"/>
+  <text x="220" y="54" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="DtcgXhDFTT0UxBsUCDzsSX">2R</text>
+  <text x="0" y="160" font-size="11" fill="#5F5E5A" data-page-node-id="MVVNPKO0DNDegKOqPLkD82">1R = |入场价 − 初始止损|</text>
+  <text x="0" y="178" font-size="11" fill="#5F5E5A" data-page-node-id="LTfrdLr1811YWaoIBYCVAZ">盈亏比 = 止盈距离 ÷ 1R</text>
+</g>
+<g transform="translate(380,68)" data-page-node-id="EcBRuaAFR3jtvXLEjbwEz9">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="q2eC0vDIIchdnUH5CLaZkt">期望值与门槛胜率</text>
+  <text x="0" y="22" font-size="11" fill="#5F5E5A" data-page-node-id="rYSlyE86Dwz9ECoi0UCGxU">E = p × 盈亏比 − (1 − p)</text>
+  <text x="0" y="38" font-size="11" fill="#888780" data-page-node-id="KUoZaFtPx8udSsWbCNqWc4">当 E &gt; 0 时, 长期正期望</text>
+  <g transform="translate(0,52)" data-page-node-id="Dwt0Uhsw4SC15FGHdzmIiU">
+    <rect x="0" y="0" width="260" height="22" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="PPzz9pdccdykL0VieEK78i"/>
+    <text x="8" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="vCYzZMD0VBIXE3NJbN09ea">盈亏比</text>
+    <text x="86" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="Brdza9RSoiI9trQfyOzFdb">门槛胜率</text>
+    <text x="166" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="QEdyHLISjyk1LSZqBopwky">性质</text>
+    <rect x="0" y="22" width="260" height="22" fill="#FFFFFF" stroke="#D3D1C7" stroke-width="0.5" data-page-node-id="ksY8nMndJ7ITI4zTHFnUrQ"/>
+    <text x="8" y="36" font-size="11" fill="#000000" data-page-node-id="tS489C3NnxHc0CmBc1ymz4">1:1</text>
+    <text x="86" y="36" font-size="11" fill="#000000" data-page-node-id="KzCHYpsDDJwCyvRMRrOTqH">50.0%</text>
+    <text x="166" y="36" font-size="11" fill="#444441" data-page-node-id="KKZ0ij9bAg4ri05l0UXLdC">盈亏平衡</text>
+    <rect x="0" y="44" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="BF69IBOmDWpEKkGYo2vr88"/>
+    <text x="8" y="58" font-size="11" fill="#000000" data-page-node-id="5QfMlqFezLFpeGo6RZSjFf">1:2</text>
+    <text x="86" y="58" font-size="11" fill="#000000" data-page-node-id="EbH2oCdVS1zL91DjS6BkAQ">33.3%</text>
+    <text x="166" y="58" font-size="11" fill="#27500A" data-page-node-id="NhHR1X8wdu5ThD9J9b3Wxj">正期望起点</text>
+    <rect x="0" y="66" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="j79jTC0SBv2RLbONJ1FEKw"/>
+    <text x="8" y="80" font-size="11" fill="#000000" data-page-node-id="i4ieaOtvV4teapHZgKOQWR">1:3</text>
+    <text x="86" y="80" font-size="11" fill="#000000" data-page-node-id="zvhLLCFAjNESxvxvZA6Zqx">25.0%</text>
+    <text x="166" y="80" font-size="11" fill="#27500A" data-page-node-id="eXW4xqMUUSCGzHcCuXv4fc">高容错</text>
+    <rect x="0" y="88" width="260" height="22" fill="#FFFFFF" stroke="#9FE1CB" stroke-width="0.5" data-page-node-id="sGi7DZIbyb5ApJP1OCF9Ei"/>
+    <text x="8" y="102" font-size="11" fill="#000000" data-page-node-id="s2ey8qIakwF2iCcyNvDn3J">1:4</text>
+    <text x="86" y="102" font-size="11" fill="#000000" data-page-node-id="k4KWltURI9spWQXq0wT7LJ">20.0%</text>
+    <text x="166" y="102" font-size="11" fill="#085041" data-page-node-id="KeTE2Mt77tAwCTSNmCeBKJ">顶级策略</text>
+  </g>
+</g>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="Sa8MD02RSi75Fdq0NxDK6b">图 2 · 1R 标尺与盈亏比门槛表</p>
+<h2 data-page-node-id="S3HIcUDKpTton9E8QrZHEm">3 · L2 波动率定宽窄 (让 1R 自动适配行情)</h2>
+<div class="card" data-page-node-id="vfh5YWKY1dOyThzPhtsdlB">
+  <p data-page-node-id="IoxB589nuq6s10UMw6IMBd">固定点数的止损有个根本问题: <strong data-page-node-id="xDV5wiFy6q6krZ1huaFLlj">行情本身的宽窄在变</strong>。平静期 8 个点的止损在剧烈期会被秒触发; 剧烈期设 50 个点的止损在平静期又太松。</p>
+  <h3 data-page-node-id="ncw3V1nj4jjHo9GEjA1tNA">ATR · 平均真实波幅</h3>
+  <p data-page-node-id="JbefM0DWoVzxLDa1Fq4po7">ATR (Average True Range) 是 Wilder 1978 年提出的<strong data-page-node-id="cLlbLGz8In2f9Pd2CqOT2N">行情呼吸节奏</strong>度量, 取最近 N 根 K 线真实波幅 TR 的滑动平均:</p>
+  <p data-page-node-id="ZlgxtQ0qrIO7w3iKn4xQ5L"><code data-page-node-id="Stnw6dBfiRgTNBGBrcCsYe">TR = max(high − low, |high − prev_close|, |low − prev_close|)</code></p>
+  <p data-page-node-id="eQhrUdR1298ISApk4nkjcn"><code data-page-node-id="DDJbk4pEjjcwPbCABMZEhX">ATR(N) = (1/N) × Σ TRᵢ</code> (简单平均) 或 EMA 平滑</p>
+  <h3 data-page-node-id="DCWC7lTJjsF8uDUvRx5HhH">怎么用</h3>
+  <ul data-page-node-id="q1pvgLnrNw7zDPBiwOBkzr">
+    <li data-page-node-id="ajvFhrat2TYD6BP1UvO6u0"><strong data-page-node-id="pC4nZVXt1TuXyCqdsKWacu">止损宽度</strong> = k_sl × ATR — 例如 <code data-page-node-id="BflE3ECHMmaDR4rgw0sqN6">k_sl = 2.0</code> 表示给行情留 2 个 ATR 的呼吸空间</li>
+    <li data-page-node-id="tIvhGWhGp2nf6D8TzcpdUR"><strong data-page-node-id="wUlJt49zKjpufO4qhWbgam">止盈宽度</strong> = k_tp × ATR — 盈亏比 = k_tp / k_sl (常取 1:2 即 k_tp = 2 × k_sl)</li>
+    <li data-page-node-id="BpX5YYNekXaVZ2XhDZZVMb"><strong data-page-node-id="HcHVECwF8O3IkqrJduoJ0c">跟踪步长</strong> = k_trail × ATR — 详见 L3</li>
+  </ul>
+  <div class="callout-amber callout" data-page-node-id="wDpHocaj6dTQCFRljjCAsE">参数选择: N=14 是工业默认。k_sl 不要小于 1.5 (太紧, 容易被噪音打掉), 不要大于 4.0 (太松, 1R 失去意义)。</div>
+</div>
+<div class="svg-wrap" data-page-node-id="kKpZtpHpsYeSYyXL02VslG"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 240" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="A4BFMGpI2TObiiQEE35x7u">
+<title id="t1">ATR 波动率定宽窄</title>
+<desc id="d1" data-page-node-id="iQr9EkmFHHXJsTWkHqorXw">止损宽度等于 k 倍 ATR, ATR 随行情宽窄自适应</desc>
+<defs data-page-node-id="0Ppif2IT49fcqKmzpELxY2">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="iufo3V1xRT8j0JGqZG7I3S">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="4Mm16Z2scajwl4lEXG2cWs"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="3o3mPzI8acDE3s1tD21AcE">ATR · 让 1R 自动适配当下行情</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="WgEaVKMoAkOH6OECuNuLFY">平静期止损收紧, 剧烈期止损放宽, 都不需要人工调参</text>
+<g transform="translate(40,72)" data-page-node-id="NtIN2FlcaAsYI841YMvCfq">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="LNfncH4fhh4rVlbjfBhZTe">单根 K 线的真实波幅 (TR)</text>
+  <line x1="90" y1="40" x2="90" y2="140" stroke="#000000" stroke-width="0.5" data-page-node-id="poWn6ev35Dh5kPIUddVlKq"/>
+  <rect x="78" y="60" width="24" height="60" fill="#3B6D11" stroke="#27500A" stroke-width="0.5" data-page-node-id="TPQ6XJjzDA55eDt9ig6kbV"/>
+  <text x="112" y="44" font-size="10" fill="#5F5E5A" data-page-node-id="uGKwrMl82HWeHaK6qoJ88A">high</text>
+  <text x="112" y="74" font-size="10" fill="#27500A" data-page-node-id="y8MDgUkBmVtvqkMBceHIuO">open</text>
+  <text x="112" y="124" font-size="10" fill="#791F1F" data-page-node-id="LNCSnJAuEFD1E2Lzzq4Fh7">close</text>
+  <text x="112" y="146" font-size="10" fill="#5F5E5A" data-page-node-id="kbIKdAnd0EvWATvTwXQkL8">low</text>
+  <line x1="60" y1="40" x2="60" y2="140" stroke="#854F0B" stroke-width="2" stroke-dasharray="2 2" data-page-node-id="g5waBlNr13kuWJFQWZA18x"/>
+  <text x="56" y="92" font-size="10" text-anchor="end" font-weight="500" fill="#633806" data-page-node-id="4axuxVEHMZEytKHE9GaMWv">TR</text>
+</g>
+<g transform="translate(280,72)" data-page-node-id="UjdXMagEyiUxepGC0RJm6y">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="l1BVvAGZpBpMQ2hwhkm5Ln">14 根 K 线 TR 均值 = ATR(14)</text>
+  <rect x="0" y="76" width="16" height="24" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="yTh8ZqVKmg1SU1EMYcGmZ3"/>
+  <rect x="20" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="YJMGKBrrbG93jUqHlfp7WG"/>
+  <rect x="40" y="70" width="16" height="30" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="kvnQgR3ELRDWqf44srtI0l"/>
+  <rect x="60" y="58" width="16" height="42" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="5SkUyrkXoBBi3jG6kf4JUp"/>
+  <rect x="80" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="bEbriAq9fEe9ZdSRimMLlP"/>
+  <rect x="100" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="xSztqOSUwUKJrsrF3FOciN"/>
+  <rect x="120" y="52" width="16" height="48" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="JNJZSIPauuyq5u6MjTWkfp"/>
+  <rect x="140" y="34" width="16" height="66" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="0LPHZCmZFQTmd7GdBs3cCp"/>
+  <rect x="160" y="16" width="16" height="84" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="iRMSd1FqDonCjVLT22ky4A"/>
+  <rect x="180" y="28" width="16" height="72" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="1cr7dHiAFsgxmB0U7uHneU"/>
+  <rect x="200" y="46" width="16" height="54" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="BOrWnOH7SdiMMCR8OkCJpA"/>
+  <rect x="220" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="uk4BELSyDWnRWDQPKMg5Dp"/>
+  <rect x="240" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="VzyjLtMb90sYnzyqEsZ5U0"/>
+  <rect x="260" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="ETw6aD3bZeFFW6JCUWFNKf"/>
+  <line x1="0" y1="100" x2="280" y2="100" stroke="#888780" stroke-width="0.5" data-page-node-id="jiievxCYAEhFh5ij15ZosJ"/>
+  <text x="148" y="62" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="LWri1KI0bAFoPxPZ4FnHlB">波动扩张</text>
+  <text x="48" y="110" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="Nf9bsg8yBrM9daZSbYAbEX">平静期</text>
+</g>
+<g transform="translate(40,196)" data-page-node-id="20gtd9gDUXf9gW2JkGmVvc">
+  <rect x="0" y="0" width="600" height="28" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="Ou5VMRh8R4JUkskCmbOujb"/>
+  <text x="12" y="18" font-size="12" fill="#000000" data-page-node-id="Fl17xyIhiI0FvNb4MGmA7s">止损宽度 = k × ATR(14)</text>
+  <text x="220" y="18" font-size="11" fill="#5F5E5A" data-page-node-id="J2ky3HTBn5n6eBaK0zspUH">IF 5min 推荐 k_sl = 2.0, k_tp = 4.0（即 1:2 盈亏比）</text>
+</g>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="8UWk3Amq1AgKR5uUaV7D4B">图 3 · TR / ATR 示意与自适应宽度</p>
+<h2 data-page-node-id="ivb32deaQ65jyA0QjH9QBO">4 · L3 移动止损 + 保本锁利 (把浮盈固化下来)</h2>
+<div class="card" data-page-node-id="vM8nxTwLNdC0FYhNhnAmeA">
+  <p data-page-node-id="goqjPCeaeFxrW0XrkuB2ZX">L1/L2 给了一个<strong data-page-node-id="6WyPm4o4TDLGJ5vPQ1kJM4">静态</strong>的初始止损, 但浮盈出现后你希望 SL 跟着走, 把纸面利润变成真金白银。这是 L3 的任务。</p>
+  <h3 data-page-node-id="KhlV8Tz1Nq6GbSoEz1lFyi">三个阶段</h3>
+  <ol data-page-node-id="iSgzcfyiaPsFwdtHxJynE7">
+    <li data-page-node-id="rSfG5BeFBCB0Zax40aWvdM"><strong data-page-node-id="bNQTNZ5uvwEg9TzrfOVH2G">阶段 1 (初始保护)</strong>: 开仓后 SL 固定在 <code data-page-node-id="6T5psvft64Io4QK07tf2Zp">−1R</code>, 不动</li>
+    <li data-page-node-id="PEEtMpbdurd72zYZRpCss7"><strong data-page-node-id="RKMXuDf6YsuBBGw4jva9y0">阶段 2 (保本锁利)</strong>: 浮盈 ≥ 1R 时, SL 抬到入场价 (保本, 不亏钱)</li>
+    <li data-page-node-id="5tezchnMrUGd5yFBRDDMUm"><strong data-page-node-id="Oh81mJsmsThFJY2OsADUI5">阶段 3 (顺势跟踪)</strong>: 浮盈 ≥ 2R 时, SL 用 <code data-page-node-id="L9BgTwKfQtlkdzwYZoJLiu">k_trail × ATR</code> 步长跟着价格创新高而抬升</li>
+  </ol>
+  <h3 data-page-node-id="Uq2FOIpYCiOzLqboR1eB30">关键参数</h3>
+  <ul data-page-node-id="hcWbzFhfGB4SxIUtYyOMtp">
+    <li data-page-node-id="PhXDyNIaIrWDB1sSqS2zp4"><code data-page-node-id="UCkSaQYK5ZV5lECt7tTSSt">breakeven_trigger_r</code>: 触发保本的浮盈门槛 (默认 1.0, 即 1R)</li>
+    <li data-page-node-id="9E6pCWbdba00uYleKBaNLk"><code data-page-node-id="L7Vx4qkXEpAQIileoDp1x2">trailing_trigger_r</code>: 启动 ATR 跟踪的浮盈门槛 (默认 2.0, 即 2R)</li>
+    <li data-page-node-id="Tl3NSAfhRl9Gu64N9caOzU"><code data-page-node-id="mWGVH7DoVrN1nz670ewCga">trailing_atr_multiple</code>: 跟踪步长 (默认 1.5 × ATR, 留点缓冲避免被洗出)</li>
+    <li data-page-node-id="RvE37E3WbtCJn6sC6IIwTk"><code data-page-node-id="pZhzcMV9b7c24NZ7pAQWJ9">trailing_step_mode</code>: "high_water" (创新高才抬) vs "every_bar" (每根都抬), 默认前者</li>
+  </ul>
+  <div class="callout-green callout" data-page-node-id="F2JhxoropucRgHO1AUok0j">为什么保本是 1R 而不是 0? 因为行情有手续费和滑点, 必须给点 buffer 让交易商先赚到钱再走。1R 对应 1:2 盈亏比, 是合理的入场回报起点。</div>
+</div>
+<div class="svg-wrap" data-page-node-id="3bBlgw1tkzHWwnBDtPLYbu"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 280" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="0zq1nzhVuhhCVrRBB7FUUm">
+<title id="t1">移动止损与保本锁利</title>
+<desc id="d1" data-page-node-id="0C0N6tYKLfXDAXGdKS3hSv">价格创新高时顺势抬 SL, 触发 1R 后把 SL 抬到入场价保本, 触发 2R 后用 k×ATR 跟踪</desc>
+<defs data-page-node-id="yFhwXdAKu8WMh0CI0AilE3">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="eDaAbfFhMMCcuWO3ktOQvl">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="ayEQJDst5FINLvdassEIaV"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="f3e8YmYAm4jvCfugIo85IS">移动止损 · 把纸面利润固化下来</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="tUbzRegFBE1jiCyp1pHXMK">三个阶段: 初始保护 → 触发 1R 保本 → 触发 2R 用 ATR 跟踪</text>
+<polyline points="80,180 160,150 240,165 320,130 400,100 480,120 560,80" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="MyAfwCbrookNvcOo4JE3gZ"/>
+<circle cx="80" cy="180" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="XH8s6ZYHV5DA1nKLL3AGH5"/>
+<circle cx="160" cy="150" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="VXiSmgpgvFSxQpj1gA4gej"/>
+<circle cx="240" cy="165" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="Y70vHHAF9kmegBmKUOswPI"/>
+<circle cx="320" cy="130" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="69s9yLtjxjGgMFvdsySS19"/>
+<circle cx="400" cy="100" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="sOC40P9GdfAF7GD3eLsLEc"/>
+<circle cx="480" cy="120" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="mEVbYYi7UWxPeUfC2kW22P"/>
+<circle cx="560" cy="80" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="s9BaBzAWzGuJnQAmpWPwbJ"/>
+<line x1="40" y1="165" x2="640" y2="165" stroke="#888780" stroke-width="0.5" stroke-dasharray="3 3" data-page-node-id="HCWvB0nSNJSWFhuAril6jy"/>
+<text x="46" y="177" font-size="10" fill="#5F5E5A" data-page-node-id="twu3db7Rss3WpZFNwdNe7w">入场</text>
+<line x1="40" y1="195" x2="240" y2="195" stroke="#A32D2D" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="XjlLCPCDMd4ApNxJ9rdHAt"/>
+<text x="46" y="207" font-size="10" fill="#791F1F" data-page-node-id="0s9SvopkWu08apgmjuU4C8">SL₁ −1R</text>
+<line x1="240" y1="165" x2="400" y2="165" stroke="#854F0B" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="EVrUpEqA1utCT5fl7SQsoa"/>
+<text x="246" y="177" font-size="10" fill="#633806" data-page-node-id="RryuerXSfS6XKCNcsvrqxc">SL₂ 保本</text>
+<polyline points="400,155 480,130 560,100" fill="none" stroke="#3B6D11" stroke-width="1" stroke-dasharray="3 2" data-page-node-id="FRxvGTgQxm409nX0710vcb"/>
+<circle cx="400" cy="155" r="2.5" fill="#3B6D11" data-page-node-id="R6YtFKWtow6clk3iL3iaRH"/>
+<circle cx="480" cy="130" r="2.5" fill="#3B6D11" data-page-node-id="H27VV8m6okiJYF6JprbXTS"/>
+<circle cx="560" cy="100" r="2.5" fill="#3B6D11" data-page-node-id="dDkEPx3uh652dXtswvQGOe"/>
+<text x="566" y="100" font-size="10" fill="#27500A" data-page-node-id="C4DTtMdcUNMVtLezRgygVY">SL₃ ATR 跟踪</text>
+<line x1="240" y1="70" x2="240" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="scZQZyVn9G5ddbI8vubHKr"/>
+<line x1="400" y1="70" x2="400" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="CsmoAwdD5QPZsca9RFeLdB"/>
+<text x="140" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#791F1F" data-page-node-id="sgPKkLeW9NSJOH7unJew3x">阶段 1 · 初始保护</text>
+<text x="320" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#633806" data-page-node-id="TvRgKxqDC8Wnio7KJPurKY">阶段 2 · 保本锁利</text>
+<text x="520" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#27500A" data-page-node-id="cftVhjkpE5gpszPW6nbvrP">阶段 3 · 顺势跟踪</text>
+<g transform="translate(40,240)" data-page-node-id="GuzsZA7bwpNzkhmHFBL9sa">
+  <rect x="0" y="0" width="600" height="28" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="5DdzLb58IHvI6DC3qrHqOT"/>
+  <text x="12" y="18" font-size="11" fill="#000000" data-page-node-id="rDxkc6mhMZc9IlEqOa4JPj">保本触发 = 浮盈 ≥ 1R</text>
+  <text x="200" y="18" font-size="11" fill="#000000" data-page-node-id="oQrJAhAVW7rJgE5jSJNCT4">跟踪触发 = 浮盈 ≥ 2R</text>
+  <text x="380" y="18" font-size="11" fill="#000000" data-page-node-id="ahVtR6Z67S5JZ6C5ejIhsF">跟踪步长 = 1.5 × ATR</text>
+</g>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="lAsJeqMsSHVA9UkjqKjEoc">图 4 · 三阶段移动止损演化</p>
+<h2 data-page-node-id="dvABlHVClB627GGkNVMCVx">5 · L4 时间止损 + 收盘强平 (兜底)</h2>
+<div class="card" data-page-node-id="mCXyFFR96RBo2SmFM8NqAC">
+  <p data-page-node-id="GeAUIrHlYyL4TsTe4eXDn4">当 L1/L2/L3 都因为行情没发展而<strong data-page-node-id="ax1Ppn0I5IsomLXDiokPRi">长期不触发</strong>, 你需要时间维度兜底。否则一笔交易可能挂几十根 bar, 占用保证金却没有贡献。</p>
+  <h3 data-page-node-id="g6DJTzbfSFNrN7JO4WwkCy">时间止损 (Time Stop)</h3>
+  <p data-page-node-id="KMC58t5yz74I7qxAV8tirx">开仓后如果持有超过 <code data-page-node-id="GQRuOGETHBf0QH8oyFPrAv">max_hold_bars</code> (默认 30) 还没按预期发展, 强制平仓退出。</p>
+  <p data-page-node-id="GFW9OlBgG1b1guU6hfCxht"><strong data-page-node-id="t4UTWOD8sFK2AdJ6IaH1uz">作用</strong>: 防止"假信号 + 慢行情"占用资金; 让策略周转率稳定, 便于参数寻优。</p>
+  <h3 data-page-node-id="7vWTGBo3vXySVNTMMCT7vM">收盘强平 (Session End / EOD Force Close)</h3>
+  <p data-page-node-id="Rj2NeCYNjaJqDJFbCnTePU">每日 14:55 (收盘前 5 分钟) 强制清掉所有持仓 — 这是国内期货的<strong data-page-node-id="gKEz0IoRv22tLJRYCkyDgH">制度约束</strong>:</p>
+  <ul data-page-node-id="0q88OtN5vZk6EFz6Cy291x">
+    <li data-page-node-id="Q5cbSn3tpO50HzyjwEyTrc">期货保证金按<strong data-page-node-id="aXQ23ao7Xs0CSu46CwuiRl">当日结算价</strong>计, 留仓有隔夜风险</li>
+    <li data-page-node-id="lWm3PtwhClGvwDhTxFccZh">次日跳空可能直接击穿止损价, 让你"该止损没止损"</li>
+    <li data-page-node-id="SBcx3ACVFwyPb8M7RHvRkT">对日内策略来说, EOD 平仓是 <strong data-page-node-id="wCJ1ibdw4rGhfoAQxm6jAK">默认开, 不是开关</strong></li>
+  </ul>
+  <div class="callout-red callout" data-page-node-id="dx6Ng7zl38mDmS7Nqb08aO">EOD 触发时间要留 5 分钟缓冲: 14:55 发单而不是 15:00, 给追价/撤单/重试留足窗口。</div>
+</div>
+<div class="svg-wrap" data-page-node-id="XzgXJKlzJuJTqvv7ylsEYw"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 260" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="3u2Y5bQ7TTqpCYJW0fsWxb">
+<title id="t1">时间止损与收盘强平</title>
+<desc id="d1" data-page-node-id="e4G7Fh4u1daNmP3pl7FL67">持仓超过 N 根 bar 仍未按预期发展则强制出场, 收盘前清仓避免隔夜跳空</desc>
+<defs data-page-node-id="pTDAReTugcYDbOMeIheoDi">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="msyyhLcPVD7dMVouN6zY99">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="yBlE4wew9ourV62X3fIrgT"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="FWivROp8FSjIGncUP0iAPi">时间止损 + 收盘强平</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="3Sn8f6oBVJctF3HN1egrtU">当其他规则都失效时, 用时间与制度边界兜底</text>
+<g transform="translate(40,70)" data-page-node-id="1YuB7fSXaPmU0iLH5Scau2">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="OrNB6OdDhPeoFHVNtwxEBA">时间止损决策</text>
+  <g transform="translate(0,16)" data-page-node-id="j1y4vlAISgrHb7975DvODD">
+    <rect x="0" y="0" width="100" height="32" rx="6" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="b8ctyOsjAIejBu4WNlADAB"/>
+    <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#0C447C" data-page-node-id="FhvNKfpGWkMcQ3xXCtpefV">开仓</text>
+  </g>
+  <g transform="translate(0,72)" data-page-node-id="1oOUAK1L6AGCML3bReskoG">
+    <rect x="0" y="0" width="100" height="48" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="7eOKc1QLGwl3IguE9Kb8eW"/>
+    <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#633806" data-page-node-id="BOaiR82nuJWxLabM6g9aWi">持有 ≥ N bar?</text>
+    <text x="50" y="36" font-size="10" text-anchor="middle" fill="#5F5E5A" data-page-node-id="wwbgE0NNDBayHok0vvM8On">默认 N=30</text>
+  </g>
+  <g transform="translate(140,72)" data-page-node-id="6avdYbdCqV9sNBfhkQjhGS">
+    <rect x="0" y="0" width="80" height="32" rx="6" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="FGEh0QsqBCCU8C5Gp2NJJi"/>
+    <text x="40" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#27500A" data-page-node-id="OPMEN8PnxDoMdyRfpLhweV">继续持有</text>
+  </g>
+  <g transform="translate(0,144)" data-page-node-id="83e3jS0sr5Ab1VVNO1mgve">
+    <rect x="0" y="0" width="100" height="32" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="ALI4IxiU8lPRmEQ7OqGk6Z"/>
+    <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#791F1F" data-page-node-id="KigMWylXDfUI5QsTan4vPI">时间止损平仓</text>
+  </g>
+  <line x1="50" y1="48" x2="50" y2="72" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="Kz0MiCRgdiPFl26F2ARzUq"/>
+  <line x1="100" y1="96" x2="140" y2="96" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="G31ylHUXhBZjZm39nl3Fes"/>
+  <line x1="50" y1="120" x2="50" y2="144" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="4ZHuQP0pYHODvHntecSo0U"/>
+  <text x="120" y="92" font-size="10" fill="#27500A" data-page-node-id="hffFBg3724zWRg7AUmLjVz">否</text>
+  <text x="58" y="136" font-size="10" fill="#791F1F" data-page-node-id="ga6Azwdr4zd2WHc4XXFYtm">是</text>
+</g>
+<g transform="translate(340,70)" data-page-node-id="ocCcwUqXWm9N5tLEk1EMdh">
+  <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="rTWp0t3rSQEA92H4at0sy3">收盘强平 (EOD)</text>
+  <text x="0" y="18" font-size="11" fill="#5F5E5A" data-page-node-id="uMbhRSSfoUgUdrMxkLUcKH">每日 14:55 触发, 所有持仓以市价/对手价清仓</text>
+  <g transform="translate(0,38)" data-page-node-id="F4HrMJKx2uc0NDMlpzDWkZ">
+    <line x1="0" y1="40" x2="280" y2="40" stroke="#888780" stroke-width="1" data-page-node-id="eiCi5Mr3VBjfZoYBd3lun9"/>
+    <line x1="0" y1="36" x2="0" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="CDyYPNLH40GihGO1iXfrFT"/>
+    <text x="0" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="3L21n0i1X1IJUcCcGDgGgl">09:30</text>
+    <line x1="50" y1="36" x2="50" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="DF5KqSMlaD6NeOkauDEtN3"/>
+    <text x="50" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="oN3698WByhodGL4DuZSiKX">10:30</text>
+    <line x1="100" y1="36" x2="100" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="t0uyxBMt2OCXGE6AvZr73f"/>
+    <text x="100" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="ntjTRcDCWNNTsEiY9F2PgE">11:30</text>
+    <line x1="150" y1="36" x2="150" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="iEd7dzYeiTHhFoJfxMDP6j"/>
+    <text x="150" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="29HTcrlX8z0ykaRJgHigGb">13:30</text>
+    <line x1="200" y1="36" x2="200" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="wGtiAlPuQUSwkyBCvhDwvp"/>
+    <text x="200" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="43mhVUwbpkavw4ln1VveJn">14:30</text>
+    <line x1="240" y1="36" x2="240" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="cJgA4t0nzYlAgyyEdS7p2j"/>
+    <text x="240" y="58" font-size="10" text-anchor="middle" fill="#A32D2D" data-page-node-id="PqTr8DL1BCD08iv8AiTnCA">14:55</text>
+    <line x1="280" y1="36" x2="280" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="BHFUiNpNZ5z4TyIsHN2P5x"/>
+    <text x="280" y="58" font-size="10" text-anchor="middle" fill="#A32D2D" data-page-node-id="f1BgZIUCano3GFcxzjwN6c">15:00</text>
+    <line x1="240" y1="20" x2="240" y2="60" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="a76UNZniJxZQu2YDTgFHZk"/>
+    <text x="240" y="14" font-size="10" text-anchor="middle" fill="#791F1F" font-weight="500" data-page-node-id="TBXU1ziXqaTrWY28VXcdiZ">强平触发</text>
+  </g>
+  <text x="0" y="120" font-size="11" fill="#5F5E5A" data-page-node-id="0eyG4CihZEijmiDuTMcPBE">原因: 期货保证金按结算价计, 隔夜跳空风险不可控</text>
+  <text x="0" y="138" font-size="11" fill="#888780" data-page-node-id="6SOqdDPuRU2eU7rTvnZQQk">建议: 提前 5 分钟发单 (14:55), 留足成交时间</text>
+</g>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="7wu1OruK2CWpjSBlhvOMNn">图 5 · 时间止损与收盘强平</p>
+<h2 data-page-node-id="qtTGPKVnfaBNWhAdVAMR4H">6 · 四层叠加 · 一笔交易的完整生命周期</h2>
+<div class="card" data-page-node-id="4KYeizsY6nkIUdJYcKK9BX">
+  <p data-page-node-id="O8o5I72yRhiB85EN6MiNzd">把四层规则放在同一时间线上, 看它们如何按价位和持仓时间依次发挥作用:</p>
+  <ul data-page-node-id="8ufNYISTHLJHrKkXhGhV7w">
+    <li data-page-node-id="gA4ip1jlIScTW1AklfPanL"><strong data-page-node-id="REk3X29cpPiGD93dUndHm9">阶段 1</strong>: 价格贴着 SL₁ (−1R) 走, L1 主导</li>
+    <li data-page-node-id="AM9HoBTOjwzeFEEDh3srZz"><strong data-page-node-id="LQKeKholYHYHBC8q9D5B8R">阶段 2</strong>: 浮盈达到 1R, SL 抬到入场价, L3 启动</li>
+    <li data-page-node-id="gds07B78ytg9F8UTisMOJt"><strong data-page-node-id="L613UDyPQcfJqW8vcyBqJD">阶段 3</strong>: 浮盈达到 2R, SL 用 ATR 跟踪, L3 持续主导直到出场</li>
+    <li data-page-node-id="Wl2FnjtQnGvk1rE6kxUQRb"><strong data-page-node-id="GbC5o7DpJ0iopDEgjdmxfr">兜底</strong>: 如果价格始终不发展, L4 在 30 bar 或 14:55 强制出场</li>
+  </ul>
+  <p data-page-node-id="gGWFFyoKYwIPedgjUZdUYX">四层规则在<strong data-page-node-id="0lOZnCBKk4iyhGPYsgcUXE">不同价位区间</strong>发挥作用: SL 在下方控制风险, 浮盈在右上方, 时间在横轴方向。任何一层都不可省略。</p>
+</div>
+<div class="svg-wrap" data-page-node-id="oYKaOpeURHr6Ku7r19ikus"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 300" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="m4U8EmZmZYXEJTNxDFUvsZ">
+<title id="t1">一笔交易的完整生命周期</title>
+<desc id="d1" data-page-node-id="95EvewHGAvQmv81jMqnzbY">同一笔交易上四层规则如何按时间顺序作用: 入场 → 初始止损 → 1R 保本 → 2R 跟踪 → 时间/收盘兜底</desc>
+<defs data-page-node-id="c6X6SAd17TQCjpzpxj9kZi">
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="gq3AY4XSOEFvwLJcUeLPde">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="lkgLHvsQtWqchWudInu9zD"/>
+  </marker>
+</defs>
+<text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="dFwSGavB0fWrqeiUT4AscO">一笔交易 · 四层规则时间线</text>
+<text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="jLEdoya4imXD24ts0Mc6fC">从开仓到平仓, 看四层规则如何按价位和持仓时间依次发挥作用</text>
+<g transform="translate(40,72)" data-page-node-id="wGOznBZ3ErG87VxpojAWtF">
+  <rect x="0" y="0" width="600" height="130" fill="#FFFFFF" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" rx="4" data-page-node-id="JSl2Tqpwkq5ftJBXnWW2Jd"/>
+    <line x1="0.0" y1="124" x2="0.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="sEfaeiqKpNvb63HS7DwInG"/>
+    <line x1="20.0" y1="124" x2="20.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="aTMSqC647USpJIlV73yr61"/>
+    <line x1="40.0" y1="124" x2="40.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QlHwH4Vfvq6oF1Bw85Z9AS"/>
+    <line x1="60.0" y1="124" x2="60.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5GomyUDL0unBp3ZPkC3HRz"/>
+    <line x1="80.0" y1="124" x2="80.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="4cguVRwFCKPEln5NsDkOKP"/>
+    <line x1="100.0" y1="124" x2="100.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="8KN334G9T3WIkrgXZLTJEi"/>
+    <line x1="120.0" y1="124" x2="120.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XWOWkSCrn8ypPSBeoLHOmv"/>
+    <line x1="140.0" y1="124" x2="140.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="wVTmRlKctoSctqdHerHPQB"/>
+    <line x1="160.0" y1="124" x2="160.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="oA5GHB6bK2Y0OYyBCQmPbG"/>
+    <line x1="180.0" y1="124" x2="180.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="fHOz2nYma3QAaAuW1uFYAz"/>
+    <line x1="200.0" y1="124" x2="200.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="tbh7GJeANZAG2OUftLdBEz"/>
+    <line x1="220.0" y1="124" x2="220.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="cKBWXxTjXg467wNBVEkDeK"/>
+    <line x1="240.0" y1="124" x2="240.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="ZvUjJwXEBId99LmzPwnpTj"/>
+    <line x1="260.0" y1="124" x2="260.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MoebCKnbznUHqSI5nnQqvb"/>
+    <line x1="280.0" y1="124" x2="280.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5Gca4EN8n6b87Ais3GSK7O"/>
+    <line x1="300.0" y1="124" x2="300.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MvFaNCrNZniOsjgCBXjNMT"/>
+    <line x1="320.0" y1="124" x2="320.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="L6NqEiFwMuRQiXiNdQthUP"/>
+    <line x1="340.0" y1="124" x2="340.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OEMPzb7BCoMOfOijKeSaBj"/>
+    <line x1="360.0" y1="124" x2="360.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="plVJ3iqWqIpahfC2ykAYIr"/>
+    <line x1="380.0" y1="124" x2="380.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="7AfJHecA8Hig26nuHsEaPE"/>
+    <line x1="400.0" y1="124" x2="400.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="9AnMIiN6sVqelbqQEexqNa"/>
+    <line x1="420.0" y1="124" x2="420.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XGkTBCH1jEUB6sVBwux2E6"/>
+    <line x1="440.0" y1="124" x2="440.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="0678lmTDKGMnNhac0Xht28"/>
+    <line x1="460.0" y1="124" x2="460.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OLiYQcuJ7MNLeAbCSb1B99"/>
+    <line x1="480.0" y1="124" x2="480.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QCZTWHT4wZHfdG39lrJiT7"/>
+    <line x1="500.0" y1="124" x2="500.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="COWpcNPkiffyiXTEjQzJcI"/>
+    <line x1="520.0" y1="124" x2="520.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="kTrgSKKpxI3Q4jLBv7Agm1"/>
+    <line x1="540.0" y1="124" x2="540.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="D2s9J0tddeYaoTWDYmsnJz"/>
+    <line x1="560.0" y1="124" x2="560.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="enDgFEXATW72qhBJCB1ayA"/>
+    <line x1="580.0" y1="124" x2="580.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="S1sru6WDFEvNSX2PNKmLLr"/>
+    <line x1="600.0" y1="124" x2="600.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="SVe5xTza2QyJATA45QlW2f"/>
+    <text x="0.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="nNCw1bpr1oC1iMBnuWvwtw">1</text>
+    <text x="200.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="qCQCVaDfEkcmElkXMUk2Au">10</text>
+    <text x="400.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="dye9bGJGkJGmV0yK9drgzN">20</text>
+    <text x="600.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="POYpmKsknR5ZM2nyTJOui8">30</text>
+    <text x="600" y="146" font-size="10" text-anchor="end" fill="#888780" data-page-node-id="vWFAbSNnjF5caYB5gSTwUz">bar #</text>
+  <polyline points="10.0,33.6 30.0,32.3 50.0,30.9 70.0,28.9 90.0,27.5 110.0,26.2 130.0,25.4 150.0,24.7 170.0,24.0 190.0,23.0 210.0,21.9 230.0,20.6 250.0,19.7 270.0,19.7 290.0,19.7 310.0,19.7 330.0,19.7 350.0,19.7 370.0,19.7 390.0,19.7 410.0,19.7 430.0,19.7 450.0,19.7 470.0,19.7 490.0,19.7 510.0,19.7 530.0,19.7 550.0,19.7 570.0,19.7 590.0,19.7" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="P1URYXrDMS4wy5b0rPCnfw"/>
+  <circle cx="50.0" cy="30.920000000000016" r="3.5" fill="#185FA5" data-page-node-id="owaKTPaECb1NF8kcF76OUm"/>
+  <text x="50.0" y="22.920000000000016" font-size="10" text-anchor="middle" fill="#0C447C" data-page-node-id="5wFiKivnOWivsC33enJ3De">开仓</text>
+  <polyline points="10.0,56.9 30.0,56.9 50.0,56.9 70.0,56.9 90.0,56.9 110.0,56.9 130.0,56.9 150.0,56.9 170.0,56.9 190.0,56.9 210.0,56.9 230.0,56.9 250.0,56.9 270.0,56.9 290.0,56.9 310.0,56.9 330.0,-21.1 350.0,-19.3 370.0,-17.5 390.0,-15.7 410.0,-13.9 430.0,-12.1 450.0,-10.3 470.0,-8.5 490.0,-6.7 510.0,-4.9 530.0,-3.1 550.0,-1.3 570.0,0.5 590.0,2.3" fill="none" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="l1uGFH1wXwvZa6Uv8Q4mwE"/>
+  <circle cx="130.0" cy="56.920000000000016" r="3" fill="#854F0B" data-page-node-id="89o1qFhqMtC4J7F5yvySFW"/>
+  <text x="130.0" y="70.92000000000002" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="5FDq4aSvLNYn2nivJc9UR1">保本触发</text>
+  <circle cx="330.0" cy="-21.079999999999984" r="3" fill="#3B6D11" data-page-node-id="h2iW5l25e9Tetzxfinf0Zb"/>
+  <text x="330.0" y="-7.079999999999984" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="eDVlO5vaazLz3HjB5Sy62e">跟踪触发</text>
+  <circle cx="470.0" cy="19.700000000000003" r="3.5" fill="#A32D2D" data-page-node-id="NS1MK8FMussnJlG5AnUiaa"/>
+  <text x="470.0" y="11.700000000000003" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="eS1OXeeICTrJuyPlTcSpxw">止盈平仓</text>
+  <rect x="0" y="100" width="120.0" height="24" fill="#FCEBEB" opacity="0.5" data-page-node-id="rkuWPE20hmfLPTec5eTfyb"/>
+  <rect x="120.0" y="100" width="200.0" height="24" fill="#FAEEDA" opacity="0.5" data-page-node-id="wzJbuwsJv8LdrCsq23qUTu"/>
+  <rect x="320.0" y="100" width="280.0" height="24" fill="#EAF3DE" opacity="0.5" data-page-node-id="CTQKEkffWkG7AEa3o23unD"/>
+  <text x="60.0" y="116" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="nN4BpSEsC8vy63eoV9QNwP">阶段 1</text>
+  <text x="220.0" y="116" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="YECro4DRprvDjlufg4VhI1">阶段 2</text>
+  <text x="460.0" y="116" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="6lQ6WNIn2dLriwDJQEId0j">阶段 3</text>
+</g>
+<g transform="translate(40,238)" data-page-node-id="SpC30fvlAk4NRcpGDpUPWA">
+  <rect x="0" y="0" width="140" height="48" rx="6" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="8GXJgqELfZpqtQAznjBkRU"/>
+  <rect x="0" y="0" width="4" height="48" rx="2" fill="#A32D2D" data-page-node-id="CXrywTa2eJJogJjhmYOArR"/>
+  <text x="12" y="18" font-size="11" font-weight="500" fill="#791F1F" data-page-node-id="gskeYHxkXXfO2VlyCvR8sG">L1 R 倍数</text>
+  <text x="12" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="OSE9WAF7FRrakAybGwH9T0">初始止损 = 1R, 盈亏比目标 1:2</text>
+  <rect x="150" y="0" width="140" height="48" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="4O2wVe3jfaqCMfJcKTJLbj"/>
+  <rect x="150" y="0" width="4" height="48" rx="2" fill="#854F0B" data-page-node-id="114UUcdF6Rr7SvX7pzDR6w"/>
+  <text x="162" y="18" font-size="11" font-weight="500" fill="#633806" data-page-node-id="Aje5gleidtOjiOmgD56mso">L2 波动率</text>
+  <text x="162" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="arKCTJpyltDj92Q502vymZ">宽度 = 2×ATR, 自适应行情宽窄</text>
+  <rect x="300" y="0" width="140" height="48" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="UUmRxnytgx51bZyn7bA9tl"/>
+  <rect x="300" y="0" width="4" height="48" rx="2" fill="#3B6D11" data-page-node-id="2xEVMp8MxRht0bcJeIIGoo"/>
+  <text x="312" y="18" font-size="11" font-weight="500" fill="#27500A" data-page-node-id="t861s8JgfgBHZtQwJpyS3f">L3 移动保本</text>
+  <text x="312" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="JjI4onyOpLoiTcIVlAtT93">浮盈 ≥1R 抬至保本; ≥2R ATR 跟踪</text>
+  <rect x="450" y="0" width="140" height="48" rx="6" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="0.5" data-page-node-id="HCe7kdIgcV3dNwwq8Ey8y0"/>
+  <rect x="450" y="0" width="4" height="48" rx="2" fill="#0F6E56" data-page-node-id="qaqJEltmXe5fupjgSUfZkD"/>
+  <text x="462" y="18" font-size="11" font-weight="500" fill="#085041" data-page-node-id="6qxljD0PABZyYV1HRiQiMd">L4 时间收盘</text>
+  <text x="462" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="skfZ4VKwCzk43hpGGKsogg">持仓 ≥30 bar 或 14:55 强制出场</text>
+</g>
+</svg>
+</div>
+<p class="fig-cap" data-page-node-id="0qx2AcTKqfprqgLhWOGLFO">图 6 · 一笔交易的完整生命周期</p>
+<h2 data-page-node-id="pLPGEHSb5GjeXZemYgW1OW">7 · 核心收敛表 · 每层是什么 / 不是什么</h2>
+<div class="card" data-page-node-id="8rRlFYP6ppKX4IgiK1NVnI">
+<table data-page-node-id="YUEpRqMNWG1kVO6yp41K1K">
+  <thead data-page-node-id="H4K9GG9n3oLkoAScdEUMZd"><tr data-page-node-id="5W3VPnGyiuHamAmdIAOdGs"><th data-page-node-id="kmabJGPaTidZrAZfHcLH6C">层级</th><th data-page-node-id="JT1OciM5RuvI9FiOpXdtbc">是什么</th><th data-page-node-id="tR5aB2HiF6Epe81OmbZBMV">不是什么</th><th data-page-node-id="TiS2JU1RP7ZuMo7Durv8oS">默认参数 (IF 5min)</th></tr></thead>
+  <tbody data-page-node-id="mOo25htlTBrDvPemw6hWE1">
+    <tr data-page-node-id="aYcZ3BeBDVnpYGhxAc9VM0"><td data-page-node-id="eSdmmGj9kDCYJAYLjPslFf"><strong data-page-node-id="NQg8k1b9I386jAp0Lmj5GS">L1 R 倍数</strong></td><td data-page-node-id="ab6XKaHmOf7m2UGu2YFqU4">盈亏比的尺度, 期望值的计算单位</td><td data-page-node-id="OalbhkWqs6en4CosreZGkr">不是止损位本身</td><td data-page-node-id="jQ8zaiMzo8b7M4FOBIs8dH"><code data-page-node-id="D2p8BhOOtJW5UX6M2EBidW">盈亏比 1:2</code></td></tr>
+    <tr data-page-node-id="i0lXl7RyqneMHmwopPQpTK"><td data-page-node-id="ml46L0Ud1gHja6jElqdvQf"><strong data-page-node-id="uIzOy2rZx30EOR1QByjFFW">L2 波动率</strong></td><td data-page-node-id="4p4OAg5VkBHF0wiYAj8lPd">止损宽度的自适应度量</td><td data-page-node-id="LPy5DuXHMFKmDaBlz6QFQm">不是择时信号</td><td data-page-node-id="2gChnslWNDJyUDxUGAS2Ua"><code data-page-node-id="GNtGy1LRTSJHmID7BN5fTy">ATR(14), k=2.0</code></td></tr>
+    <tr data-page-node-id="fVqaj1y2HzEqW28yMlyn09"><td data-page-node-id="HzXUgz1DMEMKP7HkjTXWF1"><strong data-page-node-id="aKe1mKOqxdtgFH2HmdJHPS">L3 移动保本</strong></td><td data-page-node-id="co6TfglAfpEwr8icRBhLK4">顺势抬 SL, 把浮盈锁住</td><td data-page-node-id="12FWvd0shl8oNI28jGNA8f">不是加仓 / 减仓信号</td><td data-page-node-id="pZAkxFoQgv01gX3rcV0idy"><code data-page-node-id="szZt4CoKldt9LSSgvE5HMJ">1R 触发保本, 2R ATR 跟踪</code></td></tr>
+    <tr data-page-node-id="KlAy19N2vAcfxfgeX82g9h"><td data-page-node-id="IhuEwYzsBWlXsTMBbdF5BU"><strong data-page-node-id="9B3CxJMn57kSX0X33DBCiV">L4 时间收盘</strong></td><td data-page-node-id="sHnuNAzaG7zlQ8a2REZVNu">所有规则失效时的兜底</td><td data-page-node-id="NwxApFDFy8BeLRruhg4lkV">不是预测 / 替代止损</td><td data-page-node-id="tTQmTVrFJLxGxe8CriB0as"><code data-page-node-id="l3DI9Y5A9Jc73S5hXDg88O">30 bar 或 14:55</code></td></tr>
+  </tbody>
+</table>
+</div>
+<h2 data-page-node-id="gg0dIfBlUQaAvzBXq7h07W">8 · 实施建议 · IF 5min 数值参考</h2>
+<div class="card" data-page-node-id="ZhUYsQxjGtlBxFqurkgqVK">
+  <p data-page-node-id="zvdpO6sCZcQUYscQyVrH70">基于 chan.py 现有引擎 (DefaultExitPolicy 的钩子位置) 和 IF 5min 的典型波动 (单 ATR ≈ 6~10 点), 推荐初始参数:</p>
+  <table data-page-node-id="IZiCHhPLClLu0erhSJy4T6">
+    <thead data-page-node-id="0eYEJNFjohuqbpJNYUVkjy"><tr data-page-node-id="mDBTVOCFgowwbUMb5KnWPe"><th data-page-node-id="qRTmvRB2pvj3Z57wc9aOCJ">参数</th><th data-page-node-id="DCkEJmg8F4KWGPTGHcrQ2b">含义</th><th data-page-node-id="04ICa8nX3v2gqmrxmq6vnu">推荐值</th><th data-page-node-id="sA9YXCD0eTBDuJMD1VVTaX">触达条件</th></tr></thead>
+    <tbody data-page-node-id="6nV1pzJCez1o6jByFPH9OE">
+      <tr data-page-node-id="herwsmzQNzloZYANlBBBjV"><td data-page-node-id="C0dWtkaNTbug9DH1ilXrlY"><code data-page-node-id="kEoYO3zFW2EkHCYjK0fiOi">atr_period</code></td><td data-page-node-id="kH12MGC2XxCa5zXvATJ2wi">ATR 计算窗口</td><td data-page-node-id="RlPyDRHdFvc69eJp21k4Nw"><strong data-page-node-id="eC9pkDDT6EANo589Og0M4E">14</strong></td><td data-page-node-id="IBR603F42G4waBdDF3gyB1">固定</td></tr>
+      <tr data-page-node-id="SmMcJ3dDo4oUiDcAmB3LPW"><td data-page-node-id="yYy4XFLLiEqCngnRIuZrwC"><code data-page-node-id="hBX1w3eVIfcntgj9RiK8ht">atr_sl_multiple</code></td><td data-page-node-id="yE2qlMWxQmDZghRn9Wn8Gp">止损 = k×ATR</td><td data-page-node-id="E02TJAsyWTdeGEBS0yTJqE"><strong data-page-node-id="3cEewCbZhsiB3sb88xsarQ">2.0</strong></td><td data-page-node-id="dQ2KvMHYOMy84Ii8PaX0CS">固定</td></tr>
+      <tr data-page-node-id="t9IJK0UCqNAymXvORfBioN"><td data-page-node-id="j0EEfWnHRWe6SJBsujBVkh"><code data-page-node-id="PGuDTG6PTFC7g3Pa1aehsj">atr_tp_multiple</code></td><td data-page-node-id="AXoflSoD7w7xc9rz1zFD4B">止盈 = k×ATR</td><td data-page-node-id="vFmAjX4gkfnA9IDOG3Fd3s"><strong data-page-node-id="EDgBUdtxVDqk80kdsYenHM">4.0</strong></td><td data-page-node-id="FV6MnpHyi8RHHMY0SpdjsJ">盈亏比 1:2</td></tr>
+      <tr data-page-node-id="ecZC8vkAs9BKvVB6YnOU4q"><td data-page-node-id="BCp5HUz2RLrwWZir0TA6Lg"><code data-page-node-id="BrCx1yOeRIKIFbvDioXxgN">breakeven_trigger_r</code></td><td data-page-node-id="QqIkvwJkV46Susw6EJuAVn">保本触发</td><td data-page-node-id="L8yv4DkwFkHqrtO1B0BgPo"><strong data-page-node-id="6a0ylFZtMLE4jZtKJSmF6Q">1.0</strong></td><td data-page-node-id="3OYgzGxuTME9EV59co3wC8">浮盈 ≥ 1R</td></tr>
+      <tr data-page-node-id="13tHISO1UEuO0UFsl4VxcF"><td data-page-node-id="KlnHPkaGnYRBxITAgmTvbu"><code data-page-node-id="QcUv2734oxDJTJ9iuW6MNq">trailing_trigger_r</code></td><td data-page-node-id="7WWv6OrwP1ydTfubwfm8Oz">跟踪触发</td><td data-page-node-id="laOCEFukoq2E210sijXEUg"><strong data-page-node-id="bHGEjH8TdmAH9D7M4nBf70">2.0</strong></td><td data-page-node-id="t1U0NZW6RZuIpuQq7kuhxq">浮盈 ≥ 2R</td></tr>
+      <tr data-page-node-id="Pa621N3OmMYSSkLKJMaRfK"><td data-page-node-id="cQKc7lQ7ESNanS2m034EL8"><code data-page-node-id="GguZwXzMvkCz5pcpAf9tCQ">trailing_atr_multiple</code></td><td data-page-node-id="Pim3IEhcx8hOwpxelSemSD">跟踪步长</td><td data-page-node-id="EOH4VGog08WdKbWKg3jGgK"><strong data-page-node-id="E5ZnuOdVJiAAfsSDw3OQk6">1.5</strong></td><td data-page-node-id="l5tMul1SDl89Y0XoVktmKG">SL 抬升步长</td></tr>
+      <tr data-page-node-id="ySzkbxTuNhj5WBFOygY2LX"><td data-page-node-id="GS7eUXMCEOvLxjdNbKxxY4"><code data-page-node-id="06Q6JxuFTUjMv9FO260vpR">max_hold_bars</code></td><td data-page-node-id="QfOWVcWUAtpK0GyNks9gbO">时间止损</td><td data-page-node-id="WOCeNU8ZUhh27Yqq7gKzgy"><strong data-page-node-id="GknAvuqLmGlloZE41J3aum">30</strong></td><td data-page-node-id="dJdngC7fvkD4s7lUvx01hk">持仓 bar 上限</td></tr>
+      <tr data-page-node-id="cGnFr46fq7PGHr2jV8EOqs"><td data-page-node-id="ZHLXcFZKbPYEkKtpdSOjTM"><code data-page-node-id="k9wLjoAJsdOTKjNNhbcd2B">eod_force_close_time</code></td><td data-page-node-id="W9AlvLsL1h4aD63soO6Fzc">EOD 强平</td><td data-page-node-id="ai0woqFD55p3UrmI3z4emF"><strong data-page-node-id="FCKl2a5kd5LXw2mKPROvTj">14:55</strong></td><td data-page-node-id="qwpNvWnUNJt9elt0wYb4S3">日内清仓</td></tr>
+    </tbody>
+  </table>
+  <div class="callout-amber callout" data-page-node-id="bN0PvgMrbJetP7XRa4NLgN">回测验证后再上线: 先用 Tier1 (R 倍数 + ATR 宽度) 跑回测, 看盈亏比 / 夏普 / 最大回撤改善; 再叠加 Tier2 (移动保本 + 时间止损); 最后加 EOD 强平。</div>
+</div>
+<h2 data-page-node-id="J14U6ZCfEA4ceeDkphCqEu">9 · 总结</h2>
+<div class="card" data-page-node-id="mAIaSWgVmL5Y3tcs9kDKM9">
+  <p data-page-node-id="BYVnP8o8iU1gipOrZalKtI"><strong data-page-node-id="2p6O5U4KJ1gCIpYfcg2OEn">止盈止损不是选某一个规则, 而是叠四层规则</strong>。每一层解决一类特定风险, 上一层给下一层提供基础:</p>
+  <ol data-page-node-id="ZJ9Rt11qET9QmW6tOBlOq1">
+    <li data-page-node-id="Zb58VBY5DV9Z8E0cHtxRAL"><strong data-page-node-id="2QsEjGClGw3pr8XDeUnEaM">L1 R 倍数</strong>: 给出盈亏比尺子, 让所有策略可比较</li>
+    <li data-page-node-id="kR065WudtTewa3zylvoE3D"><strong data-page-node-id="3nSBVdapi01xOYbx10dxDK">L2 波动率</strong>: 让尺子自动适配行情宽窄</li>
+    <li data-page-node-id="WOg17n2YlHwu5Ut6djvjJx"><strong data-page-node-id="zluZnH4BzFYYBmcsE0LYKy">L3 移动保本</strong>: 把浮盈变成落袋利润</li>
+    <li data-page-node-id="Xzh9k0t2rRjhPeODHQkZOS"><strong data-page-node-id="FYGk2AQo3dXuMRedvO8H8s">L4 时间收盘</strong>: 兜底, 避免信号失效 / 隔夜跳空</li>
+  </ol>
+  <p data-page-node-id="pXPsoQTrlx9TrujiGDrEv2">实际落地时, 建议按 Tier1 → Tier2 顺序渐进实现, 每加一层跑回测验证改善, 不要一口气铺满。</p>
+</div>
+</div>
+<footer data-page-node-id="e601DejPOSMWZtkcGpCriY">止盈止损四层策略原理 · 自包含文档 · 双击 HTML 离线可看</footer>
+</body>
+</html>
