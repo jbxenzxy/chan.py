@@ -11,8 +11,8 @@ chan.py 负责「看盘 + 算信号」，我交付的三个工具负责「执行
 
 | 工具 | 干什么 | 是否下单 | 依赖 |
 |---|---|---|---|
-| **M0 信号录制器** `m0_signal_recorder` | 只录信号不下单，量化信号重绘率/振幅/期望 | ❌ 绝不下单 | 仅标准库 |
-| **M2a 探针** `m2a_simnow_probe` | 一次性验证 SimNow 通道通不通 | 可选下一笔测试单 | tqsdk |
+| **M0 信号录制器** `trader_gateway/tools/m0_recorder` | 只录信号不下单，量化信号重绘率/振幅/期望 | ❌ 绝不下单 | 仅标准库 |
+| **M2a 探针** `trader_gateway/tools/simnow` | 一次性验证 SimNow 通道通不通 | 可选下一笔测试单 | tqsdk |
 | **交易网关** `trader_gateway` | 信号→策略→风控→下单 的完整引擎 | ✅ 可 dry_run / simnow | 标准库 + (simnow 时) tqsdk |
 
 > 关键认知：这三个工具**没有修改 chan.py 任何源码**，它们是放在 chan.py 目录旁、独立运行的程序。它们只通过 HTTP 订阅 chan.py 已有的 SSE 接口。
@@ -24,18 +24,18 @@ chan.py 负责「看盘 + 算信号」，我交付的三个工具负责「执行
 ```
 C:\my_chan_project\
 ├── (你的 chan.py 源码，原样未动)
-├── m0_signal_recorder\          ← 工具①，共 2 个 .py（signal_recorder.py / analyze.py）
-├── m2a_simnow_probe\            ← 工具②，共 1 个 .py（simnow_probe.py）
+├── trader_gateway/tools/m0_recorder\          ← 工具①，共 2 个 .py（signal_recorder.py / analyze.py）
+├── trader_gateway/tools/simnow\            ← 工具②，共 1 个 .py（simnow_probe.py）
 └── trader_gateway\              ← 工具③，共 27 个源文件（tg/ 包 + run_gateway.py + 配置 + demo 数据）
 ```
 
 三个工具各自的内容（文件级）：
 
-**① m0_signal_recorder/**（2 文件）
+**① trader_gateway/tools/m0_recorder/**（2 文件）
 - `signal_recorder.py` —— 订阅 SSE 录制信号
 - `analyze.py` —— 分析重绘率 / 振幅分布 / 参数期望
 
-**② m2a_simnow_probe/**（1 文件）
+**② trader_gateway/tools/simnow/**（1 文件）
 - `simnow_probe.py` —— 验证 SimNow 通道
 
 **③ trader_gateway/**（27 文件）
@@ -68,7 +68,7 @@ C:\my_chan_project\
 
 ## 3. 工具①：M0 信号录制器（先做，推荐）
 
-**放哪**：`C:\my_chan_project\m0_signal_recorder\`（独立目录，不进 chan.py 源码）
+**放哪**：`C:\my_chan_project\trader_gateway\tools\m0_recorder\`（独立目录，不进 chan.py 源码）
 
 **怎么跑**（用项目自带 `.venv` 的 python，无需装任何东西）：
 
@@ -78,7 +78,7 @@ cd C:\my_chan_project
 .venv\Scripts\python.exe FrontAPI.py
 
 :: ② 再开一个终端，长期挂着录制 IF 5 分钟信号
-cd C:\my_chan_project\m0_signal_recorder
+cd C:\my_chan_project\trader_gateway\tools\m0_recorder
 ..\.venv\Scripts\python.exe signal_recorder.py --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./out_if5m
 ```
 
@@ -87,7 +87,7 @@ cd C:\my_chan_project\m0_signal_recorder
 **③ 攒够 ≥5 个交易日 / ≥50 条信号后分析**：
 
 ```bat
-cd C:\my_chan_project\m0_signal_recorder
+cd C:\my_chan_project\trader_gateway\tools\m0_recorder
 ..\.venv\Scripts\python.exe analyze.py --out ./out_if5m --take-profit 10 --scan
 ```
 
@@ -97,7 +97,7 @@ cd C:\my_chan_project\m0_signal_recorder
 
 ## 4. 工具②：M2a SimNow 探针（接实盘前做）
 
-**放哪**：`C:\my_chan_project\m2a_simnow_probe\`（独立目录）
+**放哪**：`C:\my_chan_project\trader_gateway\tools\simnow\`（独立目录）
 
 **凭据**：你已用图形界面设好系统环境变量（`SN_ACCOUNT` / `SN_PASSWORD` / `TQ_ACCOUNT` / `TQ_PASSWORD`），所以**不需要**再打 `set` 命令。
 
@@ -106,7 +106,7 @@ cd C:\my_chan_project\m0_signal_recorder
 **怎么跑**：
 
 ```bat
-cd C:\my_chan_project\m2a_simnow_probe
+cd C:\my_chan_project\trader_gateway\tools\simnow
 ..\.venv\Scripts\python.exe simnow_probe.py --symbol "KQ.m@CFFEX.IF"
 ```
 
@@ -170,8 +170,8 @@ cd C:\my_chan_project\trader_gateway
 
 **你真正遗漏的（本地项目里没有、GitHub 上也没有）：**
 
-1. ❌ `m0_signal_recorder\` —— 工具①
-2. ❌ `m2a_simnow_probe\` —— 工具②
+1. ❌ `trader_gateway/tools/m0_recorder\` —— 工具①
+2. ❌ `trader_gateway/tools/simnow\` —— 工具②
 
 这两个就在本交付包里，解压后放到 `C:\my_chan_project\` 下即可补齐。
 

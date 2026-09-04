@@ -365,7 +365,7 @@ sandbox/chanpy_custom_dev/
 
 ## 13. M0 交付物（已随本文档交付）
 
-`sandbox/m0_signal_recorder/`：
+`trader_gateway/tools/m0_recorder/`：
 
 | 文件 | 说明 |
 |---|---|
@@ -380,7 +380,7 @@ sandbox/chanpy_custom_dev/
 **建议动作**：
 
 ```bash
-cd m0_signal_recorder
+cd trader_gateway/tools/m0_recorder
 python signal_recorder.py --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./out_if5m
 # 攒 ≥5 个交易日、≥50 条信号后
 python analyze.py --out ./out_if5m --take-profit 10 --scan
