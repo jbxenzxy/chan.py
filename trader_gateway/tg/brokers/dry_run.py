@@ -11,15 +11,25 @@ dry-run 撮合
     - 平仓成交价 = 触发价 往不利方向推 slippage_ticks 个 tick，再对齐 price_tick
     - 不做成交量/排队假设：一律视为立即全部成交
     （真实 CTP 会有部分成交与排队，M3 接实盘时这里要换成真实回执）
+
+Phase C（2026-09-05）
+---------------------
+submit() 接受 OrderIntent，按 intent 决定报文与撮合语义：
+  - OPEN     同旧 "open"
+  - UNLOCK   "unlock" = 平昨 → 与 CLOSE 同路径；偏移方向=平旧仓方向，cost 计算用平昨费率
+  - CLOSE    同旧 "close"
+  - LOCK     "lock"   = 开反向同手数 → side 已由引擎填为 pos.side 的反向，
+            撮合方向按"开仓"算（往不利方向让 slippage_ticks tick）
+记录 offset_meta 字段（OPEN/CLOSEYESTERDAY/CLOSE）供日志审计。
 """
 from __future__ import annotations
 
 import itertools
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from ..symbols import InstrumentSpec
-from ..types import Order, Side, now_cn
-from .base import Broker, register_broker
+from ..types import Order, OrderIntent, Side, now_cn
+from .base import INTENT_TO_OFFSET, Broker, register_broker
 
 
 @register_broker
@@ -31,26 +41,40 @@ class DryRunBroker(Broker):
         self._seq = itertools.count(1)
         self.orders: List[Order] = []
 
-    def submit(self, action: str, side: Side, volume: int, ref_price: float,
+    def submit(self, intent, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "") -> Order:
+        intent = self._resolve_intent(intent, side)
         spec = self.spec
         sign = side.sign
 
+        # LOCK 是"开反向同手数"——和 OPEN 一样按开仓语义撮合（往不利方向让滑点）
+        is_open_like = intent in (OrderIntent.OPEN, OrderIntent.LOCK)
         slip = spec.slippage_ticks * spec.price_tick
-        if action == "open":
+        if is_open_like:
             slipped = ref_price + sign * slip
         else:
+            # CLOSE / UNLOCK：平仓语义，往不利方向让价
             slipped = ref_price - sign * slip
-        aligned = spec.align_entry(slipped, sign) if action == "open" \
+        aligned = spec.align_entry(slipped, sign) if is_open_like \
             else spec.align_exit(slipped, sign)
+
+        offset_str = INTENT_TO_OFFSET[intent]
+        action_str = "open" if is_open_like else "close"
 
         o = Order(
             order_id="{}-{:06d}".format(self.name, next(self._seq)),
             signal_key=signal_key, symbol=spec.trade_symbol, side=side,
-            action=action, volume=int(volume), price=aligned,
+            action=action_str, volume=int(volume), price=aligned,
             req_price=float(ref_price), filled_price=aligned,
             status="filled", created_at=now_cn(), broker=self.name, note=note,
-            meta={"dry_run": True, "slippage_ticks": spec.slippage_ticks},
+            meta={
+                "dry_run": True,
+                "slippage_ticks": spec.slippage_ticks,
+                "intent": intent.value,            # Phase C：记账 intent
+                "offset": offset_str,              # Phase C：记账 CTP 报文类型
+                "offset_close_yesterday_first": bool(
+                    spec.close_today_first),       # 成本计算时按此选平今/平昨费率
+            },
         )
         self.orders.append(o)
         return o

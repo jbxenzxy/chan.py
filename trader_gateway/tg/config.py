@@ -18,6 +18,11 @@ from .symbols import InstrumentSpec
 @dataclass
 class RiskConfig:
     max_volume: int = 1                      # 单笔手数上限（也用于开仓手数）
+    max_open_positions: int = 1              # Phase E3（2026-09-05）：同时持仓数上限；N≥1 同 K 线连开场景下 >1
+                                             #   1 = 单仓（v1 行为，向后兼容）
+                                             #   N = 一次入场可连开 N 单（broker 收 N 笔独立报单）
+                                             # 注意：实际单笔手数仍由 max_volume 限制 —— max_open_positions 决定"几笔"，
+                                             # max_volume 决定"每笔几手"。两者独立，可分别 cfg 化。
     max_trades_per_day: int = 20             # 每日最大往返笔数
     max_daily_loss_points: float = 60.0      # 每日最大净亏（点数），触达后停止开仓
     enforce_session: bool = True             # 只在交易时段内开仓

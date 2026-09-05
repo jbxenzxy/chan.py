@@ -57,11 +57,10 @@ import time
 from typing import Any, Dict, List, Optional
 
 from ..symbols import InstrumentSpec
-from ..types import Order, Side, now_cn
-from .base import Broker, register_broker
+from ..types import Order, OrderIntent, Side, now_cn
+from .base import INTENT_TO_OFFSET, Broker, register_broker
 
 _DIRECTION = {Side.LONG: "BUY", Side.SHORT: "SELL"}
-_OFFSET = {"open": "OPEN", "close": "CLOSE"}
 
 
 def _position_total(api, trade_symbol: str, side: str) -> int:
@@ -400,22 +399,33 @@ class SimNowBroker(Broker):
     # 盘口怎么走，下一轮挂价就怎么跟，只要盘口有报价必然立即成交），
     # 最多 close_max_chase 轮；close_chase_ticks 仅在行情临时取不到时作兜底步长。
     # 仍不成交（如涨跌停锁死）才放弃（rejected），由引擎对账机制（增强 B）兜底。
-    def submit(self, action: str, side: Side, volume: int, ref_price: float,
+    #
+    # Phase C（2026-09-05）：按 intent 区分报文
+    #   - OPEN   offset=Open
+    #   - LOCK   offset=Open（方向由调用方填反，即"开反向同手数"），与 OPEN 报文相同但语义不同
+    #   - CLOSE  offset=CloseToday（spec.close_today_first=True 时）或 CloseAny（False）
+    #   - UNLOCK offset=CloseYesterday（避开平今）
+    def submit(self, intent, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "") -> Order:
+        intent = self._resolve_intent(intent, side)
         if self._conn_error:
-            return self._rejected(signal_key, side, action, volume, ref_price,
+            return self._rejected(signal_key, side, intent.value, volume, ref_price,
                                   note, self._conn_error)
         if self._api is None:
-            return self._rejected(signal_key, side, action, volume, ref_price,
+            return self._rejected(signal_key, side, intent.value, volume, ref_price,
                                   note, "未连接")
 
-        if action == "close":
-            return self._submit_close(side, volume, ref_price, signal_key, note)
-        return self._submit_open(side, volume, ref_price, signal_key, note)
+        # LOCK 也是"开反向"——走 _submit_open 路径，方向由调用方填好（已反向）
+        if intent in (OrderIntent.OPEN, OrderIntent.LOCK):
+            return self._submit_open(intent, side, volume, ref_price, signal_key, note)
+        return self._submit_close(intent, side, volume, ref_price, signal_key, note)
 
     @staticmethod
     def _is_buy(action: str, side: Side) -> bool:
-        """该笔委托是不是买方向（决定用 ask 还是 bid 作对手价）。"""
+        """该笔委托是不是买方向（决定用 ask 还是 bid 作对手价）。
+
+        LOCK 的方向已在引擎填为 pos.side 的反向，所以这里只看 side。
+        """
         if action == "open":
             return side is Side.LONG
         # close：平空=买回，平多=卖出
@@ -465,10 +475,11 @@ class SimNowBroker(Broker):
         except Exception:
             return 0
 
-    def _submit_open(self, side: Side, volume: int, ref_price: float,
+    def _submit_open(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                      signal_key: str, note: str) -> Order:
         direction = _DIRECTION[side]
-        offset = "OPEN"
+        # OPEN / LOCK 都是 Open 报文——LOCK 是反向开仓（引擎已填反向 side）
+        offset = INTENT_TO_OFFSET[intent]
         side_key = "LONG" if side is Side.LONG else "SHORT"
         # 超价下单：实时对手价 + overprice_points
         limit = self._build_limit_price("open", side, ref_price)
@@ -479,13 +490,13 @@ class SimNowBroker(Broker):
                                            direction=direction, offset=offset,
                                            volume=int(volume), limit_price=limit)
         except Exception as e:
-            return self._rejected(signal_key, side, "open", volume, ref_price, note,
+            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "下单失败: {}: {}".format(type(e).__name__, e))
         # 开仓卡单：超时（默认 10s，可调 fill_timeout_open）自动撤单，不成交即 rejected，
         # 引擎不产生幻影持仓，等下一信号再触发。
         timeout = float(self.params.get("fill_timeout_open", 10.0))
         self._wait_finished(order, timeout_s=timeout)
-        return self._finalize(order, "open", side, volume, ref_price, signal_key,
+        return self._finalize(order, intent.value, "open", side, volume, ref_price, signal_key,
                              note, baseline, expected_delta, limit)
 
     def _close_fallback_limit(self, side: Side, ref_price: float,
@@ -504,11 +515,17 @@ class SimNowBroker(Broker):
             prev_limit + chase_sign * chase_ticks * tick,
             "up" if chase_sign > 0 else "down")
 
-    def _submit_close(self, side: Side, volume: int, ref_price: float,
+    def _submit_close(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                       signal_key: str, note: str) -> Order:
+        # Phase C：UNLOCK = CloseYesterday 报文；CLOSE 按 spec.close_today_first 选 CloseToday / CloseAny
+        # （spec.close_today_first=True 时优先 CloseToday；False 时用 CloseAny 让交易所自动判定）
+        if intent is OrderIntent.UNLOCK:
+            offset = "CLOSEYESTERDAY"
+        else:
+            offset = "CLOSETODAY" if bool(self.spec.close_today_first) else "CLOSEANY"
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
         if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
-            return self._rejected(signal_key, side, "close", volume, ref_price, note,
+            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "等待持仓更新超时（>10s），可能上游未同步")
         side_key = "LONG" if side is Side.LONG else "SHORT"
         direction = _DIRECTION[side]
@@ -535,13 +552,13 @@ class SimNowBroker(Broker):
             expected_delta = -int(volume)
             try:
                 order = self._api.insert_order(symbol=self._trade_symbol,
-                                               direction=direction, offset="CLOSE",
+                                               direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit)
             except Exception as e:
-                return self._rejected(signal_key, side, "close", volume, ref_price, note,
+                return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))
             self._wait_finished(order, timeout_s=per_wait)
-            o = self._finalize(order, "close", side, volume, ref_price, signal_key,
+            o = self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
                               note, baseline, expected_delta, limit,
                               attempt=attempt, max_attempts=max_attempts)
             last = o
@@ -549,9 +566,9 @@ class SimNowBroker(Broker):
                 return o
             # 未成交：_wait_finished 已撤单，进入下一轮重新超价
         return last if last is not None else self._rejected(
-            signal_key, side, "close", volume, ref_price, note, "平仓追价用尽仍未成交")
+            signal_key, side, intent.value, volume, ref_price, note, "平仓追价用尽仍未成交")
 
-    def _finalize(self, order, action: str, side: Side, volume: int, ref_price: float,
+    def _finalize(self, order, intent_str: str, action: str, side: Side, volume: int, ref_price: float,
                   signal_key: str, note: str, baseline: int, expected_delta: int,
                   limit: float, attempt: int = 1, max_attempts: int = 1) -> Order:
         # ===== P3：必须 status=="FINISHED" 且 volume_left==0 才是真成交 =====
@@ -609,6 +626,9 @@ class SimNowBroker(Broker):
             status=status, created_at=now_cn(), broker=self.name, note=note,
             meta={"raw_order_id": str(getattr(order, "order_id", "")),
                   "direction": _DIRECTION[side], "offset": action,
+                  # Phase C：intent 与 order.action 双向记录
+                  # action 仍是 "open"/"close"（兼容旧调用方），intent 表达真实语义
+                  "intent": intent_str,
                   "trade_price": filled,
                   "volume_left": getattr(order, "volume_left", None),
                   "last_msg": getattr(order, "last_msg", ""),
@@ -714,15 +734,16 @@ class SimNowBroker(Broker):
             action, side_key, baseline, expected_delta,
             baseline + expected_delta, cur, signal_key or "-")
 
-    def _rejected(self, signal_key: str, side: Side, action: str, volume: int,
+    def _rejected(self, signal_key: str, side: Side, action_str: str, volume: int,
                   ref_price: float, note: str, why: str) -> Order:
+        # Phase C：action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
         o = Order(
             order_id="{}-{:06d}".format(self.name, next(self._seq)),
             signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
-            action=action, volume=int(volume), price=float(ref_price),
+            action=action_str, volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",
             created_at=now_cn(), broker=self.name, note=note,
-            meta={"reject_reason": why},
+            meta={"reject_reason": why, "intent": action_str},
         )
         self.orders.append(o)
         return o

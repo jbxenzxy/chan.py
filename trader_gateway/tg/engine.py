@@ -22,13 +22,15 @@ from typing import Any, Dict, Optional, Tuple
 from .brokers.base import Broker
 from .config import GatewayConfig
 from .events import EventLog
+from .position_book import PositionBook, PositionBookError
 from .risk import RiskGate
 from .sizing import PositionSizer
 from .store import Store
 from .strategy.base import EntryPolicy, ExitCheck, ExitPolicy
 from .symbols import InstrumentSpec
 from .types import (
-    Bar, DecisionType, EntryMode, EngineState, ExitPlan, Position, Signal, Trade, now_cn,
+    Bar, DecisionType, EntryMode, EngineState, ExitMode, ExitPlan, OrderIntent, Position,
+    Side, Signal, Trade, now_cn,
 )
 
 
@@ -48,7 +50,13 @@ class GatewayEngine:
         # 与加这个模块之前的行为完全一致，不查账户、不联网。
         self.sizer = PositionSizer(cfg.sizing, self.spec, cfg.risk.max_volume)
 
-        self.position: Optional[Position] = None
+        # Phase E1（2026-09-05）：引入 PositionBook 容器，为 E2 (UNLOCK_FIRST) / E3 (N≥1)
+        # 多仓场景预留扩展点。E1 阶段 max=1，语义与单一 self.position 完全等价。
+        # 旧代码继续走 self.position（property 兼容层转发到 book.legacy_single()）。
+        # Phase E3.1（2026-09-05）：max 改为 cfg.risk.max_open_positions 配置化，默认仍=1
+        # —— 所有现存测试（P5..P13）零行为变化。
+        self.positions: PositionBook = PositionBook(
+            max_positions=cfg.risk.max_open_positions)
         # Phase A：4 态引擎状态机
         #   IDLE     无持仓，等待入场信号
         #   OPENING  正在开仓（瞬态：下单到成交之间）
@@ -70,24 +78,74 @@ class GatewayEngine:
         self._close_max_streak: int = 20     # 连续失败这么多根后清掉幻影持仓
         self._restore()
 
+    # ---------------- 兼容层：engine.position property ----------------
+    # Phase E1：旧版代码（含 P5..P11 测试）读写 engine.position 都是按"单 Position 或 None"
+    # 设计的。通过这两个 property，把读写都转发到 self.positions 这个容器，
+    # 让现有调用点不需要改任何一行 —— E2/E3 接入多仓语义时，再逐步把
+    # `engine.position.x` 替换成 `engine.positions.legacy_single()?.x` 或 .positions[*].x。
+    @property
+    def position(self) -> Optional[Position]:
+        return self.positions.legacy_single()
+
+    @position.setter
+    def position(self, value: Optional[Position]) -> None:
+        self.positions.set_legacy(value)
+
     # ---------------- 状态恢复 ----------------
     def _restore(self) -> None:
-        pd = self.store.get_json("position")
-        if isinstance(pd, dict) and pd.get("symbol"):
-            try:
-                self.position = Position.from_dict(pd)
-                self.ev.write("start", restored_position=self.position.to_dict())
-            except Exception as e:
-                self.ev.write("error", where="restore_position", err=str(e))
+        # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
+        # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
+        # Phase E3.1：用 cfg.risk.max_open_positions 作为恢复时的容量上限（保持 E1 兼容，
+        # 默认=1 行为完全不变）。
+        # 设计：绕过 setter（setter 只接 Position 而非整簿），用 replace_with 内部交换；
+        # replace_with 在 persisted 数据超出 cfg max 时做"取前 max + 截断丢弃"语义
+        # —— cfg 上限变化或历史数据来自更宽容版本时仍能启动，仅丢多余的仓并打 warning。
+        restore_max = self.cfg.risk.max_open_positions
+        pd_list = self.store.get_json("positions")
+        if isinstance(pd_list, list):
+            new_book = PositionBook.from_dict(pd_list, max_positions=restore_max)
+            self.positions.replace_with(new_book)
+        else:
+            pd = self.store.get_json("position")
+            if isinstance(pd, dict) and pd.get("symbol"):
+                new_book = PositionBook(max_positions=restore_max)
+                new_book.set_legacy(Position.from_dict(pd))
+                self.positions.replace_with(new_book)
+
+        # E3.1：截断 warning —— persisted 多仓数据超出 cfg max 时丢了一些仓。
+        truncated = self.positions.truncated_on_restore
+        if truncated:
+            self.ev.write(
+                "positions_truncated_on_restore",
+                reason="cfg_max_smaller_than_persisted",
+                cfg_max=restore_max,
+                persisted_n=(len(truncated) + restore_max),
+                kept_n=restore_max,
+                dropped_keys=[p.signal_key for p in truncated],
+            )
+        # E1：写"start"事件只记簿大小/首个位置摘要，不调 legacy_single（多仓会抛）。
+        # 这是观察日志，不是引擎逻辑，规避守护报错即可。
+        if not self.positions.is_empty():
+            p0 = self.positions.positions[0]
+            self.ev.write("start", restored_position=p0.to_dict(),
+                          positions_n=len(self.positions))
         # Phase A：根据持仓推断初始 state。持仓在 → IN_TRADE；无持仓 → IDLE。
-        self._state = EngineState.IN_TRADE if self.position is not None else EngineState.IDLE
+        self._state = EngineState.IN_TRADE if not self.positions.is_empty() else EngineState.IDLE
         self.risk.restore(self.store.get_json("day_stats"))
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
 
     def _persist(self) -> None:
-        if self.position:
-            self.store.set_json("position", self.position.to_dict())
+        # Phase E1：双写兼容 —— 新键 "positions"（list）保留扩展空间，
+        # 旧键 "position"（单字段）继续写以做审计 / 旧流程回归。
+        # 多仓时旧键取 positions[0] —— 是为了保留"看一眼持仓是哪个合约"的旧 API，
+        # 不是引擎主入口（主入口走 self.positions）。legacy_single() 在多仓会抛错
+        # 是有意的早期守护 E3，这里规避它。
+        if not self.positions.is_empty():
+            self.store.set_json("positions", self.positions.to_dict())
+            p0 = self.positions.positions[0]
+            self.store.set_json("position", p0.to_dict())
         else:
+            self.store.delete_key("positions")
             self.store.delete_key("position")
         self.store.set_json("day_stats", self.risk.snapshot())
         self.store.set_json("bars_seen", self.bars_seen)
@@ -266,6 +324,32 @@ class GatewayEngine:
                 return
 
         # ── state == IDLE：进入正常开仓决策 ──
+
+        # ════════════════════════════════════════════════════════════════
+        # Phase E2：UNLOCK_FIRST 入场路径
+        #   触发条件 —— IDLE 时 portfolio 非空 + has_opposite(sig.side)：
+        #     · IDLE 表示当前没有今仓
+        #     · portfolio 非空意味着昨日 LOCK 后留下的反向对冲仓（只可能是 1 笔，max=1 限制）
+        #     · 信号方向与 portfolio 那笔相反 → 这是一次"解锁昨仓"信号，不是开新仓
+        #   行为 —— broker.submit(UNLOCK, target.side, vol, sig.price, ...)：
+        #     · 报 CloseYesterdayOffset（注意：side 是 target.side = portfolio 那笔的方向，
+        #       不是 sig.side —— 因为平的是昨仓，方向就是昨仓的方向）
+        #     · 成功后 portfolio 清这笔记 Trade（reason=unlock_against_signal），
+        #       不开新今仓（"解锁"动作严格只清昨；今仓由后续信号决定）
+        #     · 失败（拒单/超时）→ signal_rejected，portfolio 不动
+        #   状态机 —— UNLOCK 走 EXITING（语义是清空旧持仓，与"平仓"对位）
+        #   不影响 IN_TRADE 分支：那个分支处理的是"今仓反手"，与"昨仓解锁"语义正交
+        # ════════════════════════════════════════════════════════════════
+        if (self._state == EngineState.IDLE
+                and not self.positions.is_empty()
+                and self.positions.has_opposite(sig.side)):
+            # signal_action 由 _unlock_position 内部根据成交/拒单写
+            # （这里不写"unlock"，否则 UNLOCK 拒单时它的"rejected"覆盖会被 on_signal
+            # 的"unlock"反过来覆盖，丢失失败原因）
+            self._unlock_position(sig, sig.side)
+            self.ev.write("signal_unlock", key=sig.key, reason="reverse_yesterday_position")
+            return
+
         decision = self.entry_policy.decide(sig, self.position, self.spec)
         if not decision:
             self.store.update_signal_action(sig.key, "skip", decision.reason)
@@ -340,10 +424,11 @@ class GatewayEngine:
         # 但状态机严格遵守 IDLE→OPENING→IN_TRADE/IDLE 的语义，便于将来接异步 CTP）。
         self._state = EngineState.OPENING
 
-        o = self.broker.submit("open", side, volume, sig.price, sig.key,
+        o = self.broker.submit(OrderIntent.OPEN, side, volume, sig.price, sig.key,
                                note="缠论{}点信号开仓".format("买" if sig.is_buy else "卖"))
         self.store.save_order(o)
         self.ev.write("order", order_id=o.order_id, action=o.action,
+                      intent=o.meta.get("intent", o.action),   # Phase C：把 intent 写入事件流
                       side=str(o.side), volume=o.volume, price=o.price,
                       req_price=o.req_price, status=o.status, broker=o.broker)
 
@@ -387,9 +472,12 @@ class GatewayEngine:
             return
 
         # Phase A：进入瞬态 EXITING。
-        # 注：当前 _close_position 内部按 *单个* pos 操作，不接 intent/ExitMode；
-        # Phase C/D 会在 _submit_close(intent, ...) 扩展 OPEN/UNLOCK/CLOSE/LOCK
-        # 四种报文映射，离场方式由 pos.entry_mode 联动决定。
+        # Phase D（2026-09-05）：按 pos.entry_mode 联动决定离场方式（硬规则，不留开关）。
+        #   OPEN_FIRST   → LOCK_SOFT  → OrderIntent.LOCK  + 反向 side（开反向同手数）
+        #   UNLOCK_FIRST → CLOSE_HARD → OrderIntent.CLOSE + pos.side（平昨无费率问题）
+        # 没有 entry_mode 字段的旧持仓（默认 OPEN_FIRST）走 LOCK_SOFT，
+        # 与"今天开仓 → 离场用锁仓"的硬规则一致。
+        intent, side = self._exit_intent(pos)
         self._state = EngineState.EXITING
 
         # P3 配套：连续 close 失败就停手，避免反向信号/SL/TP 在每根 bar 上死循环重试。
@@ -400,19 +488,21 @@ class GatewayEngine:
             # cooldown 中：保持 EXITING 状态，下一根 bar 再试
             return
 
-        o = self.broker.submit("close", pos.side, pos.volume, trigger_price,
+        # Phase C+D：传 OrderIntent（CTP OpenCloseType 由 broker 端按表映射）
+        o = self.broker.submit(intent, side, pos.volume, trigger_price,
                                signal_key or pos.signal_key, note=reason)
         self.store.save_order(o)
         self.ev.write("order", order_id=o.order_id, action=o.action,
+                      intent=o.meta.get("intent", intent.value),   # Phase C：把 intent 写入事件流
                       side=str(o.side), volume=o.volume, price=o.price,
                       req_price=o.req_price, status=o.status, broker=o.broker,
-                      reason=reason)
+                      reason=reason, exit_mode=intent.value)
 
         # 平仓被拒/超时：保留持仓，等下一根 K 线再试，不凭空平掉
         if o.status != "filled" or o.filled_price is None:
             why = o.meta.get("reject_reason") or o.status
             self.ev.write("order_rejected", key=pos.signal_key, order_id=o.order_id,
-                          action="close", reason=reason, reject=why)
+                          action=intent.value, reason=reason, reject=why)
             # 记 cooldown：在最近 _close_retry_bars 根 K 线内不再尝试 close，
             # 给 tqsdk/上游同步留时间窗，避免每根 bar 都触发平仓
             self._last_close_failed_bar_ts = now_ts
@@ -463,9 +553,132 @@ class GatewayEngine:
                       gross=t.gross_points, cost=t.cost_points,
                       net=t.net_points, cash=t.net_cash, bars_held=bars_held,
                       trade_id=t.trade_id, exit_policy=t.exit_plan_name,
-                      entry_mode=pos.entry_mode.value)
+                      entry_mode=pos.entry_mode.value,
+                      exit_mode=intent.value)            # Phase D：离场方式（open→lock, unlock→close）
         # 平仓成交：回 IDLE 等待下一信号
         self._state = EngineState.IDLE
+
+    # ---------------- 解锁入场（Phase E2 UNLOCK_FIRST 路径） ----------------
+    def _unlock_position(self, sig: Signal, side: Side) -> None:
+        """Phase E2：触发 UNLOCK_FIRST 入场。
+
+        语义边界
+          · "解锁" = CloseYesterdayOffset —— 把 portfolio 里那笔反向昨仓平掉
+          · 不开新今仓。今仓由"今晚"或"明早"下一个信号决定
+          · 与 LOCK（开反向同手数）形成对偶：LOCK 是今仓反开，UNLOCK 是昨仓关清
+
+        报单要点
+          · side 用 portfolio 里那笔的方向（target.side），不是 sig.side
+            —— CloseYesterdayOffset 的语义就是"按方向平昨仓"
+          · 成交价采用 sig.price（信号 K 线收盘价的对称使用，与 v1 LOCK 一致）
+
+        状态机
+          · 进入 EXITING（与平仓同位："清空旧持仓"）
+          · broker 拒单 / 超时 → signal_rejected，回 IDLE
+          · 成交 → portfolio 删这笔记 Trade，state 回 IDLE
+
+        Trade 记帐
+          · reason="unlock_against_signal" —— 不同于 tp/sl/eod/manual 的离场口径
+          · cost 用 close_today=False（CloseYesterday 费率，zce/gfex 等无平今惩罚的交易所口径）
+        """
+        opp_list = self.positions.opposite_positions(side)
+        if not opp_list:
+            # 理论不可能走到这里（on_signal 已 has_opposite 判定）。防御性记录。
+            self.ev.write("unlock_skipped", key=sig.key,
+                          reason="no_opposite_in_portfolio")
+            return
+        # E2 阶段 max=1，opposite_positions 必然 ≤ 1。取首。
+        target = opp_list[0]
+
+        # 进入 EXITING（清空旧持仓，对位 _close_position 的状态语义）
+        self._state = EngineState.EXITING
+
+        o = self.broker.submit(OrderIntent.UNLOCK, target.side, target.volume,
+                               sig.price, sig.key,
+                               note="信号解锁昨仓（UNLOCK_FIRST）")
+        self.store.save_order(o)
+        self.ev.write("order", order_id=o.order_id, action=o.action,
+                      intent=o.meta.get("intent", o.action),
+                      side=str(o.side), volume=o.volume, price=o.price,
+                      req_price=o.req_price, status=o.status, broker=o.broker,
+                      reason="unlock_yesterday")
+
+        if o.status != "filled" or o.filled_price is None:
+            why = o.meta.get("reject_reason") or o.status
+            self.store.update_signal_action(sig.key, "rejected", why)
+            self.ev.write("order_rejected", key=sig.key, order_id=o.order_id,
+                          action="unlock", reason=why)
+            self._state = EngineState.IDLE
+            return
+
+        # 成交：算 Trade + 从 portfolio 删除
+        gross = target.pnl_points(o.filled_price)
+        cost = self.spec.cost_points(target.entry_price, o.filled_price,
+                                     close_today=False)  # CloseYesterday 费率
+        net = gross - cost
+        cash = self.spec.points_to_cash(net, target.volume)
+        bars_held = max(0, self.bars_seen - target.entry_bar_seq)
+
+        self._trade_seq += 1
+        t = Trade(
+            trade_id="T{:05d}".format(self._trade_seq),
+            symbol=target.symbol, side=target.side, volume=target.volume,
+            entry_price=target.entry_price, exit_price=o.filled_price,
+            entry_at=target.entry_at, exit_at=now_cn(),
+            reason="unlock_against_signal",
+            gross_points=round(gross, 4),
+            cost_points=round(cost, 4),
+            net_points=round(net, 4),
+            net_cash=round(cash, 2),
+            bars_held=bars_held,
+            signal_key=target.signal_key,
+            exit_plan_name=target.exit_plan.name,
+            exit_plan_params=target.exit_plan.params,
+        )
+        self.store.save_trade(t)
+        self.risk.on_trade_closed(net, target.volume)
+
+        self.positions.remove(target)
+        # E2 阶段 portfolio 退化为单仓，删后必然空；E3 多仓后这里要不要保留 state
+        # 由 settle/close loop 决定 —— 当前防御性更稳是 IDLE
+        self._state = EngineState.IDLE
+        self._persist()
+
+        # signal_action 由 _unlock_position 自己统一管理：
+        #   成功 → "unlock"   失败（前面）→ "rejected"
+        # 这样 on_signal 入口再写"unlock"也不会矛盾
+        self.store.update_signal_action(
+            sig.key, "unlock",
+            "successfully_unlocked_yesterday_position")
+
+        self.ev.write("unlock", symbol=t.symbol, side=str(t.side),
+                      entry=t.entry_price, unlock=o.filled_price,
+                      gross=t.gross_points, cost=t.cost_points,
+                      net=t.net_points, cash=t.net_cash, bars_held=bars_held,
+                      trade_id=t.trade_id, unlock_signal_key=sig.key,
+                      unlock_order_id=o.order_id,
+                      entry_mode=target.entry_mode.value)
+
+    # ---------------- 离场方式（Phase D 硬规则） ----------------
+    @staticmethod
+    def _exit_intent(pos: Position) -> "Tuple[OrderIntent, Side]":
+        """按 pos.entry_mode 联动决定离场方式（不留配置开关）。
+
+        OPEN_FIRST   → LOCK_SOFT  → OrderIntent.LOCK  + 反向 side
+                                          （开反向同手数；CTP OpenCloseType=Open）
+        UNLOCK_FIRST → CLOSE_HARD → OrderIntent.CLOSE + pos.side
+                                          （平昨无费率问题；CTP OpenCloseType=CloseToday / CloseAny）
+
+        LOCK 在引擎视角是"软离场"——调用 broker.submit(OPEN, opposite, ...) 让 broker 真的
+        去开反向仓；引擎把当前 Position 视为已了结（pos=None），Trade 仍按 trigger_price
+        结算（cost 用 close_today_first 路径 = LOCK 替代平今的成本等价）。broker 端真实多出来的
+        反向仓由第二天通过 UNLOCK 平掉（在 v2 PositionBook 接入前由用户在快期3手工处理）。
+        """
+        if pos.entry_mode is EntryMode.UNLOCK_FIRST:
+            return OrderIntent.CLOSE, pos.side
+        # OPEN_FIRST 或 默认 → LOCK_SOFT
+        opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
+        return OrderIntent.LOCK, opposite
 
     # ---------------- 统计 ----------------
     def summary(self) -> Dict[str, Any]:
