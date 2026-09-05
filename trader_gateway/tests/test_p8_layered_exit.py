@@ -3,7 +3,8 @@
 P8 标准分层组合出场策略（LayeredExitPolicy）单元测试
 ====================================================
 验证四层行为：L1 R 倍数基线、L2 ATR 宽窄、L3 保本+跟踪、L4 时间/收盘兜底。
-以及二者交互：同根 K 线 SL 优先于 TP、P2 防护、_trail_best 落盘。
+以及二者交互：同根 K 线 SL 优先于 TP、P2 防护、_trail_best 落盘；
+[12] 钉住 L3 best 极值口径（解耦参数 + 盘中冲高回落，旧收盘口径应红）。
 
 不需要真实 tqsdk / 网络，全部用本地构造的 Bar/Signal/Position。
 跑法：python test_p8_layered_exit.py
@@ -208,6 +209,41 @@ def main():
     check("session_end_hhmm 默认 = config 14:55", pol12.session_end_hhmm, "14:55")
     check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
+
+    print("\n[12] L3 口径统一（best 极值）：解耦参数 + 盘中冲高回落也抬损（钉住 P8-A 场景）")
+    # 解耦配置：tp=3R（130）、trailing 提前到 1.5R 启动、保本层用 trigger=99 屏蔽隔离
+    pol13 = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+                               "stop_at_signal_extreme": False, "r_multiple_tp": 3.0,
+                               "use_trailing": True, "breakeven_trigger_r": 99.0,
+                               "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 1.5,
+                               "trailing_atr_multiple": 0.0, "trailing_distance_points": 1.0,
+                               "max_hold_bars": 0, "session_end_hhmm": ""})
+    # A 场景（R=10）：盘中冲 2R（high=120，未到 3R 止盈 130）、收盘回落 1.2R（112）
+    #   旧口径（fav 看收盘 1.2R=12 点 < 1.5R=15 点）漏检；
+    #   新口径（best=120，20 点 ≥ 15 点）抬损 = best-1 = 119
+    pos13 = make_position(Side.LONG, 100.0, 90.0, 130.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk13 = pol13.check(pos13, make_bar(2600, 110.0, 120.0, 105.0, 112.0), spec, 5)
+    check("A 冲高回落触发跟踪 only_update", chk13.only_update if chk13 else None, True)
+    check("A 新止损 = best-1 = 119", chk13.plan.stop_price if chk13 else None, 119.0)
+    check("A 极值 _trail_best = 120 落盘",
+          chk13.plan.params.get("_trail_best") if chk13 else None, 120.0)
+    # A' 对照：未达阈值（1.4R=14 点 < 15 点）不得误触发
+    pos13b = make_position(Side.LONG, 100.0, 90.0, 130.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk13b = pol13.check(pos13b, make_bar(2601, 108.0, 114.0, 106.0, 113.0), spec, 5)
+    check("A' 1.4R 未达阈值不触发", chk13b is None, True)
+    # A'' 跨 bar 极值记忆：用 A 返回的计划续喂新高 bar（low=119.5>新止损 避开硬 SL），跟踪续抬
+    if chk13 is not None:
+        pos13.exit_plan = chk13.plan
+    chk13c = pol13.check(pos13, make_bar(2602, 122.0, 125.0, 119.5, 122.0), spec, 6)
+    check("A'' 跨 bar 极值续抬损 = 125-1 = 124",
+          chk13c.plan.stop_price if chk13c else None, 124.0)
+    check("A'' 极值续记 _trail_best = 125",
+          chk13c.plan.params.get("_trail_best") if chk13c else None, 125.0)
+    # 空单镜像：盘中下探 2R（low=80，2R=20 点 ≥ 15 点）、收盘收回 1.2R（88）
+    pos14 = make_position(Side.SHORT, 100.0, 110.0, 70.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk14 = pol13.check(pos14, make_bar(2600, 90.0, 95.0, 80.0, 88.0), spec, 5)
+    check("空单镜像 only_update", chk14.only_update if chk14 else None, True)
+    check("空单镜像新止损 = best+1 = 81", chk14.plan.stop_price if chk14 else None, 81.0)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
