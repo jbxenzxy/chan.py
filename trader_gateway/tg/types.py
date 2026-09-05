@@ -47,6 +47,40 @@ class DecisionType(Enum):
     SKIP = "skip"                    # 忽略
 
 
+# ─────────────────────────────────────────────
+# Phase A 命名固化（2026-09-05）
+# ─────────────────────────────────────────────
+# 4 种订单意图、2 种入场模式、2 种离场方式、4 态引擎状态机 —— 全部用枚举固化。
+# 引入后默认行为零变化（Position.entry_mode 默认 OPEN_FIRST，与旧持仓记录兼容）；
+# 真正的报文区分（Phase C）和入场方式决定离场方式（Phase D）后续 phase 落地。
+class OrderIntent(str, Enum):
+    """订单意图（CTP OpenCloseType 映射的源头）。"""
+    OPEN = "open"        # 首次开仓        → CTP OpenCloseType=Open
+    UNLOCK = "unlock"    # 解锁（只平昨）  → CTP OpenCloseType=CloseYesterday
+    CLOSE = "close"      # 平仓           → 按 spec.close_today_first 决定 CloseToday/Auto
+    LOCK = "lock"        # 锁仓（开反向）  → CTP OpenCloseType=Open（与 OPEN 报文相同但语义不同）
+
+
+class EntryMode(str, Enum):
+    """入场模式（决定了离场方式）。"""
+    OPEN_FIRST = "open_first"          # 今日新开 → 离场用 LOCK_SOFT（避免平今 15× 费率）
+    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓 → 离场用 CLOSE_HARD（平昨无费率问题）
+
+
+class ExitMode(str, Enum):
+    """离场方式（Phase D 由 entry_mode 自动决定，不留配置开关）。"""
+    CLOSE_HARD = "close_hard"          # 平仓硬离场
+    LOCK_SOFT = "lock_soft"            # 锁仓软离场（开反向同手数）
+
+
+class EngineState(str, Enum):
+    """引擎状态机（4 态，Phase A）。"""
+    IDLE = "idle"              # 0. 无持仓，等待入场信号
+    OPENING = "opening"        # 1. 正在开仓（瞬态：下单到成交之间）
+    IN_TRADE = "in_trade"      # 2. 已持仓，等待离场条件
+    EXITING = "exiting"        # 3. 正在离场（瞬态：下单到成交之间）
+
+
 @dataclass
 class Signal:
     """缠论买卖点信号。字段与 chan.py SSE 快照中的 bsps[] 一一对应。"""
@@ -188,6 +222,10 @@ class Position:
     open_order_id: str
     exit_plan: ExitPlan
     entry_bar_seq: int = 0        # 入场时的 bar 序号（计算持有根数、跳过入场K线）
+    # Phase A：入场模式，默认 OPEN_FIRST —— 旧持仓记录无此字段也能正常反序列化
+    # Phase D 由 entry_mode 自动决定 exit_mode（OPEN_FIRST→LOCK_SOFT / UNLOCK_FIRST→CLOSE_HARD）
+    # str Enum 单例不可变，可直接做 dataclass default（不像 list/dict 需要 default_factory）
+    entry_mode: EntryMode = EntryMode.OPEN_FIRST
 
     def pnl_points(self, price: float) -> float:
         """未扣成本的毛盈亏（点数）。"""
@@ -202,17 +240,25 @@ class Position:
             "signal_key": self.signal_key,
             "open_order_id": self.open_order_id,
             "exit_plan": self.exit_plan.to_dict(),
+            "entry_mode": self.entry_mode.value,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Position":
+        em_raw = d.get("entry_mode", EntryMode.OPEN_FIRST.value)
+        # EntryMode 接受同模块字符串值；缺/坏值回退到 OPEN_FIRST（向后兼容旧持仓记录）
+        try:
+            entry_mode = EntryMode(em_raw) if isinstance(em_raw, str) else EntryMode.OPEN_FIRST
+        except ValueError:
+            entry_mode = EntryMode.OPEN_FIRST
         return cls(symbol=d["symbol"], side=Side[d["side"]], volume=int(d["volume"]),
                    entry_price=float(d["entry_price"]), entry_at=d.get("entry_at", ""),
                    entry_bar_ts=int(d.get("entry_bar_ts") or 0),
                    entry_bar_seq=int(d.get("entry_bar_seq") or 0),
                    signal_key=d.get("signal_key", ""),
                    open_order_id=d.get("open_order_id", ""),
-                   exit_plan=ExitPlan.from_dict(d.get("exit_plan") or {}))
+                   exit_plan=ExitPlan.from_dict(d.get("exit_plan") or {}),
+                   entry_mode=entry_mode)
 
 
 @dataclass

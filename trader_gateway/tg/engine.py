@@ -28,7 +28,7 @@ from .store import Store
 from .strategy.base import EntryPolicy, ExitCheck, ExitPolicy
 from .symbols import InstrumentSpec
 from .types import (
-    Bar, DecisionType, ExitPlan, Position, Signal, Trade, now_cn,
+    Bar, DecisionType, EntryMode, EngineState, ExitPlan, Position, Signal, Trade, now_cn,
 )
 
 
@@ -49,6 +49,14 @@ class GatewayEngine:
         self.sizer = PositionSizer(cfg.sizing, self.spec, cfg.risk.max_volume)
 
         self.position: Optional[Position] = None
+        # Phase A：4 态引擎状态机
+        #   IDLE     无持仓，等待入场信号
+        #   OPENING  正在开仓（瞬态：下单到成交之间）
+        #   IN_TRADE 已持仓，等待离场条件
+        #   EXITING  正在离场（瞬态：下单到成交之间）
+        # 状态转移由 _open_position / _close_position / _reconcile_position 主导。
+        # Phase B 信号门按此状态决定是否接收新信号、是否触发离场。
+        self._state: EngineState = EngineState.IDLE
         self.last_bar: Optional[Bar] = None
         self.bars_seen: int = 0
         self._trade_seq = 0
@@ -71,6 +79,8 @@ class GatewayEngine:
                 self.ev.write("start", restored_position=self.position.to_dict())
             except Exception as e:
                 self.ev.write("error", where="restore_position", err=str(e))
+        # Phase A：根据持仓推断初始 state。持仓在 → IN_TRADE；无持仓 → IDLE。
+        self._state = EngineState.IN_TRADE if self.position is not None else EngineState.IDLE
         self.risk.restore(self.store.get_json("day_stats"))
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
 
@@ -185,6 +195,8 @@ class GatewayEngine:
             self._last_close_failed_bar_ts = 0
             self._close_fail_streak = 0
             self._persist()
+            # Phase A：外部已平，回 IDLE
+            self._state = EngineState.IDLE
         elif real_vol != pos.volume:
             self.ev.write("position_mismatch", engine_vol=pos.volume,
                           real_vol=real_vol, side=str(pos.side))
@@ -209,6 +221,51 @@ class GatewayEngine:
         self.ev.write("signal", key=sig.key, date=sig.date, type=sig.bsp_type,
                       is_buy=sig.is_buy, price=sig.price, high=sig.high, low=sig.low)
 
+        # ════════════════════════════════════════════════════════════════
+        # Phase B：信号门按引擎状态重组
+        #   OPENING/EXITING → 正在下单中（瞬态），本次信号忽略但保留幂等键
+        #   IN_TRADE        → 持仓中：
+        #                       反向信号 → 仅触发离场（不再反向开新仓）
+        #                       同向信号 → 忽略
+        #   IDLE            → 正常开仓流程
+        # 设计动机：移除"反向信号立刻反手开仓"的能力——一次入场 N 单
+        # （N=1 时等同当前）全部离场后才允许下次交易，避免在持仓中并发开仓
+        # 导致 N 单循环放大。
+        # ════════════════════════════════════════════════════════════════
+        if self._state in (EngineState.OPENING, EngineState.EXITING):
+            self.store.update_signal_action(
+                sig.key, "in_flight", "state={}".format(self._state.value))
+            self.ev.write("signal_in_flight", key=sig.key,
+                          state=self._state.value,
+                          reason="engine_busy_opening_or_exiting")
+            return
+
+        if self._state == EngineState.IN_TRADE and self.position is not None:
+            pos_side_long = (self.position.side.value > 0)
+            is_opposite = (sig.is_buy != pos_side_long)
+            if is_opposite:
+                # 反向信号：只触发离场（按 entry_mode 决定的 exit_mode 由 Phase D 接入），
+                # 离场后回到 IDLE，下次信号才会被正常开仓处理。
+                # 先快照 position.signal_key，再调 _close_position——后者会把
+                # self.position 置 None，导致事件里读不到原仓 key。
+                pos_sig_key = self.position.signal_key
+                price = self.last_bar.close if self.last_bar else sig.price
+                self._close_position("signal_reverse", price, self.last_bar,
+                                     signal_key=sig.key)
+                self.store.update_signal_action(
+                    sig.key, "close_only", "reverse_signal_in_trade")
+                self.ev.write("signal_exit_only", key=sig.key,
+                              reason="reverse_signal_in_trade",
+                              position_signal_key=pos_sig_key)
+                return
+            else:
+                self.store.update_signal_action(
+                    sig.key, "skip", "in_trade_same_direction")
+                self.ev.write("signal_skip", key=sig.key,
+                              reason="in_trade_same_direction")
+                return
+
+        # ── state == IDLE：进入正常开仓决策 ──
         decision = self.entry_policy.decide(sig, self.position, self.spec)
         if not decision:
             self.store.update_signal_action(sig.key, "skip", decision.reason)
@@ -216,15 +273,6 @@ class GatewayEngine:
             return
 
         bar_date = self.last_bar.date if self.last_bar else sig.date
-
-        if decision.type in (DecisionType.CLOSE_AND_HOLD, DecisionType.CLOSE_AND_REVERSE):
-            if self.position is not None:
-                price = self.last_bar.close if self.last_bar else sig.price
-                self._close_position("signal_reverse", price, self.last_bar,
-                                     signal_key=sig.key)
-            if decision.type is DecisionType.CLOSE_AND_HOLD:
-                self.store.update_signal_action(sig.key, "close_only", decision.reason)
-                return
 
         volume, why_vol = self._size_position(sig)
         if volume <= 0:
@@ -288,6 +336,10 @@ class GatewayEngine:
 
     # ---------------- 开 / 平 ----------------
     def _open_position(self, sig: Signal, side, volume: int) -> None:
+        # Phase A：进入瞬态 OPENING（v1 同步 broker：下单完成时已能立刻知道成交与否，
+        # 但状态机严格遵守 IDLE→OPENING→IN_TRADE/IDLE 的语义，便于将来接异步 CTP）。
+        self._state = EngineState.OPENING
+
         o = self.broker.submit("open", side, volume, sig.price, sig.key,
                                note="缠论{}点信号开仓".format("买" if sig.is_buy else "卖"))
         self.store.save_order(o)
@@ -301,17 +353,21 @@ class GatewayEngine:
             self.store.update_signal_action(sig.key, "rejected", why)
             self.ev.write("order_rejected", key=sig.key, order_id=o.order_id,
                           reason=why)
+            # 开仓被拒：回 IDLE 等下一次信号
+            self._state = EngineState.IDLE
             return
 
         entry_price = o.filled_price
         plan: ExitPlan = self.exit_policy.plan(sig, entry_price, self.spec)
 
+        # Phase A：Position.entry_mode 显式标记 OPEN_FIRST（默认但写明便于将来 UNLOCK_FIRST 接入）
         self.position = Position(
             symbol=self.spec.trade_symbol, side=side, volume=o.volume,
             entry_price=entry_price, entry_at=now_cn(),
             entry_bar_ts=self.last_bar.timestamp if self.last_bar else 0,
             entry_bar_seq=self.bars_seen,
-            signal_key=sig.key, open_order_id=o.order_id, exit_plan=plan)
+            signal_key=sig.key, open_order_id=o.order_id, exit_plan=plan,
+            entry_mode=EntryMode.OPEN_FIRST)
         self._persist()
 
         self.store.update_signal_action(sig.key, "opened", o.order_id)
@@ -319,7 +375,10 @@ class GatewayEngine:
                       volume=o.volume, entry_price=entry_price,
                       stop=plan.stop_price, tp=plan.tp_price,
                       exit_policy=plan.name, exit_params=plan.params,
-                      signal_key=sig.key)
+                      signal_key=sig.key,
+                      entry_mode=self.position.entry_mode.value)
+        # 开仓成交：进入 IN_TRADE 等待离场
+        self._state = EngineState.IN_TRADE
 
     def _close_position(self, reason: str, trigger_price: float,
                         bar: Optional[Bar], signal_key: str = "") -> None:
@@ -327,11 +386,18 @@ class GatewayEngine:
         if pos is None:
             return
 
+        # Phase A：进入瞬态 EXITING。
+        # 注：当前 _close_position 内部按 *单个* pos 操作，不接 intent/ExitMode；
+        # Phase C/D 会在 _submit_close(intent, ...) 扩展 OPEN/UNLOCK/CLOSE/LOCK
+        # 四种报文映射，离场方式由 pos.entry_mode 联动决定。
+        self._state = EngineState.EXITING
+
         # P3 配套：连续 close 失败就停手，避免反向信号/SL/TP 在每根 bar 上死循环重试。
         # 触发条件：上一笔 close 被拒（broker 没拿到成交），且 retry cooldown 未过期。
         now_ts = self.last_bar.timestamp if self.last_bar else 0
         if (self._last_close_failed_bar_ts
                 and now_ts - self._last_close_failed_bar_ts <= self._close_retry_bars):
+            # cooldown 中：保持 EXITING 状态，下一根 bar 再试
             return
 
         o = self.broker.submit("close", pos.side, pos.volume, trigger_price,
@@ -360,6 +426,8 @@ class GatewayEngine:
                               pos_entry=pos.entry_price)
                 self.position = None
                 self._persist()
+                # phantom 清掉：回 IDLE
+                self._state = EngineState.IDLE
             return
 
         # 成功平仓：清掉失败计数
@@ -394,7 +462,10 @@ class GatewayEngine:
                       entry=t.entry_price, exit=t.exit_price,
                       gross=t.gross_points, cost=t.cost_points,
                       net=t.net_points, cash=t.net_cash, bars_held=bars_held,
-                      trade_id=t.trade_id, exit_policy=t.exit_plan_name)
+                      trade_id=t.trade_id, exit_policy=t.exit_plan_name,
+                      entry_mode=pos.entry_mode.value)
+        # 平仓成交：回 IDLE 等待下一信号
+        self._state = EngineState.IDLE
 
     # ---------------- 统计 ----------------
     def summary(self) -> Dict[str, Any]:
