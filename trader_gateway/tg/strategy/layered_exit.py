@@ -205,7 +205,12 @@ class LayeredExitPolicy(ExitPolicy):
         if self.use_trailing:
             best = float(plan.params.get("_trail_best", entry))
             best = max(best, bar.high) if is_long else min(best, bar.low)
-            fav_profit = position.pnl_points(bar.close)  # (close-entry)·sign
+            # fav_profit 用"根内有利极值 best"而非收盘价衡量：
+            #   允许 r_multiple_tp 与 trailing_trigger_r 解耦 —— 盘中冲高
+            #   （如到 2R）即便收盘回落（如 1.2R），只要有意义浮盈达标仍会
+            #   触发保本/跟踪，避免"盘中到过 2R 却因只看收盘而漏检"。
+            #   注意 tp 极值判定（①）仍是硬离场，与 L3 不冲突。
+            fav_profit = position.pnl_points(best)  # (best-entry)·sign
             new_stop = stop
 
             # 保本：浮盈 ≥ breakeven_trigger_r·R → 止损抬至保本
