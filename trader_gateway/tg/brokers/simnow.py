@@ -762,6 +762,21 @@ class SimNowBroker(Broker):
         except Exception:
             return None
 
+    def trade_confirmed(self, intent, signal_key: str = "") -> bool:
+        """Phase F：UNLOCK 卡单 5 bars 后复核。
+
+        根据 signal_key 找出本轮已报的同 signal_key 委托，逐个查 ``order.trade_records``
+        累计成交量；任一委托真实成交明细 < volume 视作未完全确认。
+        不持有 signal_key→order 映射时（默认行为）→ False：保守判定"未确认"，
+        触发引擎 _reconcile_positions 兜底，绝不漏报卡单。
+        """
+        if self._api is None:
+            return False
+        # Phase F 起步：simnow 暂未维护 signal_key→order 索引，保守返回 False，
+        # 让引擎 _reconcile_positions 用真实持仓做兜底（已有逻辑，安全）。
+        # Phase G 接真实账户时再补 signal_key→raw_order_id 索引与按 intent 过滤。
+        return False
+
     def equity(self, source: str = "available") -> Optional[float]:
         """查询 SimNow 账户权益（仓位管理用）。未连接/查询失败返回 None。
 

@@ -82,6 +82,13 @@ class DryRunBroker(Broker):
     def stats(self) -> Dict[str, Any]:
         return {"broker": self.name, "orders": len(self.orders)}
 
+    def trade_confirmed(self, intent, signal_key: str = "") -> bool:
+        """Phase F：dry_run 撮合是同步的，submit 返回 filled 即视为真实成交。
+
+        不需要二次复核。返回 True 让引擎 5 bars 后的 UNLOCK 卡单检测直接通过。
+        """
+        return True
+
     def equity(self, source: str = "available") -> Optional[float]:
         """离线模拟权益。仅在 broker_params 里显式配了 sim_equity 时才返回非 None。
 

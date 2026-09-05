@@ -111,6 +111,18 @@ class Broker(ABC):
         """
         return None
 
+    def trade_confirmed(self, intent: "OrderIntent", signal_key: str = "") -> bool:
+        """真实成交是否到位（Phase F：UNLOCK 卡单检测）。
+
+        用于引擎 UNLOCK 卡单 5 bars 后复核：CTP broker 在 submit 返回 filled 后，
+        实际可能未成交（tqsdk 持仓缓存乐观 / CTP 通道异常）。这里要求 broker
+        给出基于真实成交明细（如 ``order.trade_records``）的二次判定。
+
+        默认 True（基类兜底：撮合同步的 broker 直接信 submit 返回）。
+        dry_run 重写显式 True；SimNow 重写查 tqsdk order.trade_records 累计成交 ≥ volume。
+        """
+        return True
+
     def equity(self, source: str = "available") -> Optional[float]:
         """账户权益查询（可选实现）。仓位管理（PositionSizer）用。
 

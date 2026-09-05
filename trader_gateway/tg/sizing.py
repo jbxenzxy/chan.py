@@ -74,6 +74,19 @@ class PositionSizer:
         src = str(p.get("equity_source", "available") or "available").strip().lower()
         self.equity_source = src if src in _VALID_EQUITY_SRC else "available"
 
+        # ── Phase E3.2（2026-09-05）：每信号批次内开几笔 ──
+        #   含义：缠论同 K 线上可能同时给 N 个入仓信号，本参数决定这 N 个信号每个
+        #   自己内部再拆出几笔独立 Position（每笔独立 sub_key、独立 exit_plan）。
+        #   默认 1 ⇒ 与 E2 完全等价（每信号只开 1 笔），零行为变化。
+        #   ≥ 2 ⇒ 实现"加仓金字塔"语义：同根 K 线的同一信号也能分散到 N 个 Position 上，
+        #   出场时按 FIFO / 优先最新仓位等规则处理（具体 FIFO 由 E3.3 接入）。
+        cfg_batch_raw = p.get("batch_open", 1)
+        try:
+            cfg_batch = int(cfg_batch_raw)
+        except (TypeError, ValueError):
+            cfg_batch = 1
+        self.batch_open = max(1, cfg_batch)
+
     # ---------------- 对外主入口 ----------------
     def size(self, *, equity: Optional[float] = None,
              price: float = 0.0,
@@ -118,6 +131,31 @@ class PositionSizer:
             return 0, why + "+below_min(no_open)"
 
         return vol, why
+
+    # ---------------- E3.2 批次拆分 ----------------
+    def size_batch(self, *, equity: Optional[float] = None,
+                   price: float = 0.0,
+                   stop_distance_points: Optional[float] = None,
+                   atr_points: Optional[float] = None) -> Tuple[int, int, str]:
+        """E3.2：把单笔"开几手"扩展为"每笔几手 × 开几笔"。
+
+        返回 (per_batch, batch_count, reason)
+          per_batch    每笔的手数（与 size() 同源）
+          batch_count  批次内开几笔（来自 self.batch_open 配置）
+          reason       决策原因（带 +batch=N 后缀便于审计）
+
+        调用方拿到 per_batch + batch_count 后：
+          · 校验 per_batch > 0 且 batch_count > 0
+          · 校验总手数 per_batch * batch_count 是否过 risk / sizer 上限
+          · 校验现存同向仓数 + batch_count 是否过 cfg.max_open_positions（截断由引擎）
+          · 然后在循环里逐笔调 broker.submit(...) 建独立 Position
+
+        batch_count=1（默认）⇒ 与 size() 完全等价，零行为变化
+        """
+        per, why = self.size(equity=equity, price=price,
+                             stop_distance_points=stop_distance_points,
+                             atr_points=atr_points)
+        return per, self.batch_open, why + "+batch={}".format(self.batch_open)
 
     # ---------------- 各模式计算 ----------------
     def _by_capital(self, equity: float, price: float) -> Tuple[float, str]:
@@ -186,4 +224,5 @@ class PositionSizer:
             "max_volume": self.max_volume,
             "fallback_volume": self.fallback_volume,
             "equity_source": self.equity_source,
+            "batch_open": self.batch_open,                    # Phase E3.2
         }

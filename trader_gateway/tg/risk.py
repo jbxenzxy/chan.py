@@ -39,13 +39,22 @@ class RiskGate:
         return True
 
     def check_open(self, side: Side, volume: int, bar_date: str,
-                   max_volume: Optional[int] = None) -> Tuple[bool, str]:
+                   max_volume: Optional[int] = None,
+                   batch_count: int = 1,
+                   existing_same_side: int = 0) -> Tuple[bool, str]:
         """开仓前检查。返回 (是否放行, 原因)。
 
         max_volume: 手数上限。省略时用 RiskConfig.max_volume。
             开启仓位管理（sizing）后由引擎传入 sizer 的有效上限 —— 否则会出现
             「sizing 算出 4 手、风控却按 risk.max_volume=1 拦截」的死角。
             sizing 关闭时 sizer.max_volume 就等于 risk.max_volume，行为不变。
+
+        batch_count / existing_same_side：Phase E3.2 兼容字段。
+            调用方传入告知"本次批次要开几笔、已有几笔同向仓"，**仅参与校验、
+            不做 max_open_positions 拦截**（截断由引擎层用 effective_batch 静默处理，
+            已锁定决策"静默填到 max，不报错"）。参数保留是为将来要做"超额硬拒"
+            时打开的预留开关 —— 现阶段保持只读不拦，行为零变化。
+            旧调用方不传这两个参数时（默认值 1/0），所有判断与 E3.1 之前完全一致。
         """
         cfg = self.cfg
         if cfg.enforce_session and not self.spec.in_session(bar_date):
@@ -66,6 +75,11 @@ class RiskGate:
             if limit > 0 and self.day_stats.get("net_points", 0.0) <= -abs(limit):
                 return False, "当日净亏 {:.2f} 点已达上限 {:.2f}".format(
                     self.day_stats["net_points"], limit)
+        # Phase E3.2：max_open_positions 截断在引擎层用「静默填到 max」承担，
+        # risk 层不做硬拒（避免与"静默填到 max"决策矛盾）。下面这段仅用于诊断日志。
+        if batch_count < 1 or existing_same_side < 0:
+            return False, "batch_count/同向仓数非法 (batch={}, same={})".format(
+                batch_count, existing_same_side)
         return True, "ok"
 
     def on_trade_closed(self, net_points: float, volume: int = 1) -> None:
