@@ -57,3 +57,20 @@ class DryRunBroker(Broker):
 
     def stats(self) -> Dict[str, Any]:
         return {"broker": self.name, "orders": len(self.orders)}
+
+    def equity(self, source: str = "available") -> Optional[float]:
+        """离线模拟权益。仅在 broker_params 里显式配了 sim_equity 时才返回非 None。
+
+        用途：不开真户也能在 dry_run 下验证仓位管理（sizing）算得对不对。
+        例：broker_params={"sim_equity": 1000000} 表示按 100 万本金定手数。
+        未配置则返回 None —— 此时 PositionSizer 按 fallback_volume 保守回退，
+        dry_run 的默认行为（固定 1 手）不受影响。
+        """
+        v = self.params.get("sim_equity")
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        if f <= 0:
+            return None
+        return f

@@ -78,6 +78,14 @@ class LayeredExitPolicy(ExitPolicy):
             return None
         return sum(trs[-self.atr_period:]) / self.atr_period
 
+    def current_atr(self) -> Optional[float]:
+        """对外暴露当前 ATR（点数）。仓位管理 atr_risk 模式用作止损距离兜底。
+
+        样本不足（on_bar 缓冲未攒够 atr_period+1 根）时返回 None，
+        调用方（PositionSizer）会自行回退，不会因此崩。
+        """
+        return self._atr()
+
     # ---------- 时间解析：从 "2026-09-01 14:55" 取 "14:55" ----------
     @staticmethod
     def _bar_time(bar: Bar) -> str:

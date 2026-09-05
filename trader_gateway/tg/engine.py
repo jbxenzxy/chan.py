@@ -17,12 +17,13 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .brokers.base import Broker
 from .config import GatewayConfig
 from .events import EventLog
 from .risk import RiskGate
+from .sizing import PositionSizer
 from .store import Store
 from .strategy.base import EntryPolicy, ExitCheck, ExitPolicy
 from .symbols import InstrumentSpec
@@ -43,6 +44,9 @@ class GatewayEngine:
         self.store = store
         self.ev = ev
         self.risk = RiskGate(cfg.risk, self.spec)
+        # 仓位管理（手数定档）。默认 enabled=False —— 直接返回固定手数，
+        # 与加这个模块之前的行为完全一致，不查账户、不联网。
+        self.sizer = PositionSizer(cfg.sizing, self.spec, cfg.risk.max_volume)
 
         self.position: Optional[Position] = None
         self.last_bar: Optional[Bar] = None
@@ -222,8 +226,17 @@ class GatewayEngine:
                 self.store.update_signal_action(sig.key, "close_only", decision.reason)
                 return
 
-        volume = int(self.cfg.risk.max_volume)
-        ok, why = self.risk.check_open(decision.side or sig.side, volume, bar_date)
+        volume, why_vol = self._size_position(sig)
+        if volume <= 0:
+            self.store.update_signal_action(sig.key, "risk_block", why_vol)
+            self.ev.write("risk_block", key=sig.key, side=str(decision.side or sig.side),
+                          reason=why_vol, bar_date=bar_date)
+            return
+
+        # 手数上限以 sizer 的有效上限为准（sizing 关闭时它 == risk.max_volume，行为不变）。
+        # 否则会出现「sizing 算 4 手、风控按 risk.max_volume=1 拦」的死角。
+        ok, why = self.risk.check_open(decision.side or sig.side, volume, bar_date,
+                                       max_volume=self.sizer.max_volume)
         if not ok:
             self.store.update_signal_action(sig.key, "risk_block", why)
             self.ev.write("risk_block", key=sig.key, side=str(decision.side or sig.side),
@@ -231,6 +244,47 @@ class GatewayEngine:
             return
 
         self._open_position(sig, decision.side or sig.side, volume)
+
+    # ---------------- 手数定档 ----------------
+    def _size_position(self, sig: "Signal") -> "Tuple[int, str]":
+        """问仓位管理"这笔开几手"。默认关闭仓位管理时就是固定手数。
+
+        喂给 PositionSizer 的三个输入都做了降级：
+          · 权益   —— broker.equity()；离线/未登录返回 None → sizer 回退 fallback_volume
+          · 止损距 —— 信号 K 线极值距离（与 LayeredExitPolicy 的 R 同源）
+          · ATR    —— exit_policy.current_atr()；策略不支持或样本不足 → None
+        返回 (手数, 原因)；手数 ≤ 0 表示不开仓。
+        """
+        equity = None
+        fn = getattr(self.broker, "equity", None)
+        if callable(fn):
+            try:
+                equity = fn(self.sizer.equity_source)
+            except Exception:
+                equity = None
+
+        price = float(sig.price or 0.0)
+        if price <= 0 and self.last_bar is not None:
+            price = float(self.last_bar.close or 0.0)
+
+        # 止损距离：多单看信号 K 线最低价，空单看最高价（与 LayeredExitPolicy 的 R 同源）
+        stop_dist = None
+        try:
+            stop_dist = abs(float(sig.price) - float(sig.low)) if sig.is_buy \
+                else abs(float(sig.high) - float(sig.price))
+        except (TypeError, ValueError):
+            stop_dist = None
+
+        atr = None
+        atr_fn = getattr(self.exit_policy, "current_atr", None)
+        if callable(atr_fn):
+            try:
+                atr = atr_fn()
+            except Exception:
+                atr = None
+
+        return self.sizer.size(equity=equity, price=price,
+                               stop_distance_points=stop_dist, atr_points=atr)
 
     # ---------------- 开 / 平 ----------------
     def _open_position(self, sig: Signal, side, volume: int) -> None:

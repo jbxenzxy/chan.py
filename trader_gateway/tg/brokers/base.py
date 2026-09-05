@@ -65,5 +65,15 @@ class Broker(ABC):
         """
         return None
 
+    def equity(self, source: str = "available") -> Optional[float]:
+        """账户权益查询（可选实现）。仓位管理（PositionSizer）用。
+
+        source: "available"=可用资金（已扣保证金占用与挂单冻结）
+                "balance"  =总资产权益（含浮盈、未扣占用）
+        返回 None 表示取不到（离线通道 / 未登录 / 查询失败），
+        此时 PositionSizer 会按 fallback_volume 保守回退，不会乱开仓。
+        """
+        return None
+
     def close(self) -> None:
         pass

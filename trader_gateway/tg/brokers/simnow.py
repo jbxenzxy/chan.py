@@ -741,6 +741,38 @@ class SimNowBroker(Broker):
         except Exception:
             return None
 
+    def equity(self, source: str = "available") -> Optional[float]:
+        """查询 SimNow 账户权益（仓位管理用）。未连接/查询失败返回 None。
+
+        source="available" → 可用资金（已扣保证金占用与挂单冻结），偏保守；
+        source="balance"   → 总资产权益（含浮盈、未扣占用）。
+        取不到时 PositionSizer 会按 fallback_volume 保守回退，不会乱开仓。
+        """
+        if self._api is None:
+            return None
+        try:
+            acc = self._api.get_account()
+            self._api.wait_update(deadline=time.time() + 1.0)
+        except Exception as e:
+            import logging
+            logging.getLogger("tg.brokers.simnow").warning(
+                "equity() 查账户失败: %s: %s（仓位管理将回退 fallback_volume）",
+                type(e).__name__, e)
+            return None
+
+        primary, backup = ("available", "balance") \
+            if str(source).strip().lower() != "balance" else ("balance", "available")
+        for field in (primary, backup):
+            v = getattr(acc, field, None)
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if math.isnan(f) or math.isinf(f) or f <= 0:
+                continue
+            return f
+        return None
+
     def close(self) -> None:
         if self._api is not None:
             try:

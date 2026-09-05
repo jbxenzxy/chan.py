@@ -40,6 +40,7 @@ class GatewayConfig:
     source: Dict[str, Any] = field(default_factory=dict)                # 行情源：replay 回放 / sse 实时
     broker: str = "dry_run"                                             # 执行通道：dry_run / simnow
     broker_params: Dict[str, Any] = field(default_factory=dict)         # broker 专属参数（超价/超时/追价等，见 DEFAULT_CONFIG）
+    sizing: Dict[str, Any] = field(default_factory=dict)                # 仓位管理参数（手数定档，默认关闭=固定手数，见 tg/sizing.py）
     state_dir: str = "./state"                                          # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
 
     @classmethod
@@ -53,6 +54,7 @@ class GatewayConfig:
             source=d.get("source") or {},
             broker=d.get("broker") or "dry_run",
             broker_params=d.get("broker_params") or {},
+            sizing=d.get("sizing") or {},
             state_dir=d.get("state_dir") or "./state",
         )
 
@@ -81,6 +83,21 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "fill_timeout_close": 5.0,    # 平仓委托每轮等待成交秒数，超时撤单 → 进入下一轮追价
         "close_max_chase": 20,        # 平仓追价最大轮数：每轮都按"最新对手价 ± overprice"重新定价，直到成交或用尽轮数
         "close_chase_ticks": 2,       # 平仓追价兜底步长：仅在行情临时取不到时，在上一笔限价基础上朝成交方向推几跳
+    },
+    # 仓位管理（手数定档）。默认 enabled=False —— 开几手完全沿用 risk.max_volume，
+    # 与加这个模块之前的行为逐字节一致；不查账户、不联网，零风险引入。
+    # 想"全仓开满"或"按风险预算定手数"时再把 enabled 打开，详见 tg/sizing.py。
+    "sizing": {
+        "enabled": False,                # 总开关：False=关闭仓位管理（固定手数）；True=按下面的 mode 定手数
+        "mode": "fixed",                 # 手数定档模式：fixed 固定手数 | capital_pct 按保证金占比 | atr_risk 按风险敞口
+        "fixed_volume": 0,               # fixed 模式的手数；0=沿用 risk.max_volume（默认 1 手）
+        "capital_pct": 0.50,             # capital_pct 模式：这笔仓位最多占用权益的比例（0.50=50%）
+        "risk_per_trade_pct": 0.01,      # atr_risk 模式：这笔最多亏掉权益的比例（0.01=1%，固定分数法）
+        "margin_rate": 0.15,             # 保证金率，用于 capital_pct 折算每手占用（IF 一般 12%-15%）
+        "max_volume": 0,                 # 手数硬上限；0=沿用 risk.max_volume（开 atr_risk 时建议显式设大，否则永远 1 手）
+        "min_volume": 1,                 # 手数下限：算出来不足时提升到该值（1=信号来了就至少开 1 手；设 0 则真的不开）
+        "fallback_volume": 1,            # 权益/ATR 取不到时的回退手数（保守值，避免因查询失败而乱开仓）
+        "equity_source": "available",    # 权益口径：available=可用资金（已扣保证金占用）| balance=总资产权益
     },
     # 运行时状态目录：state.db（信号去重/持仓/日统计）、events.jsonl、orders.jsonl 都落在这里
     "state_dir": "./state",

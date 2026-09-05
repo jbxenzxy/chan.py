@@ -38,8 +38,15 @@ class RiskGate:
         self.day_stats["day"] = day
         return True
 
-    def check_open(self, side: Side, volume: int, bar_date: str) -> Tuple[bool, str]:
-        """开仓前检查。返回 (是否放行, 原因)。"""
+    def check_open(self, side: Side, volume: int, bar_date: str,
+                   max_volume: Optional[int] = None) -> Tuple[bool, str]:
+        """开仓前检查。返回 (是否放行, 原因)。
+
+        max_volume: 手数上限。省略时用 RiskConfig.max_volume。
+            开启仓位管理（sizing）后由引擎传入 sizer 的有效上限 —— 否则会出现
+            「sizing 算出 4 手、风控却按 risk.max_volume=1 拦截」的死角。
+            sizing 关闭时 sizer.max_volume 就等于 risk.max_volume，行为不变。
+        """
         cfg = self.cfg
         if cfg.enforce_session and not self.spec.in_session(bar_date):
             return False, "非交易时段"
@@ -49,8 +56,9 @@ class RiskGate:
                 return False, "已过尾盘开仓截止时间 {}".format(cfg.no_open_after)
         if volume <= 0:
             return False, "手数非法"
-        if volume > cfg.max_volume:
-            return False, "单笔手数 {} 超过上限 {}".format(volume, cfg.max_volume)
+        limit = int(cfg.max_volume if max_volume is None else max_volume)
+        if volume > limit:
+            return False, "单笔手数 {} 超过上限 {}".format(volume, limit)
         if self.day_stats.get("trades", 0) >= cfg.max_trades_per_day:
             return False, "当日成交笔数已达上限 {}".format(cfg.max_trades_per_day)
         if cfg.block_on_daily_loss:
