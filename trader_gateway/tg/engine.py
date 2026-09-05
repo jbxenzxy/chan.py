@@ -17,7 +17,8 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from .brokers.base import Broker
 from .config import GatewayConfig
@@ -29,8 +30,8 @@ from .store import Store
 from .strategy.base import EntryPolicy, ExitCheck, ExitPolicy
 from .symbols import InstrumentSpec
 from .types import (
-    Bar, DecisionType, EntryMode, EngineState, ExitMode, ExitPlan, OrderIntent, Position,
-    Side, Signal, Trade, now_cn,
+    Bar, DecisionType, EntryMode, EngineState, ExitMode, ExitPlan, Order, OrderIntent,
+    Position, Side, Signal, Trade, now_cn,
 )
 
 
@@ -91,6 +92,21 @@ class GatewayEngine:
         # dict = {"signal_key": str, "target_signal_key": str,
         #         "submit_bar_ts": int, "submit_bar_seq": int}
         self._unlock_stuck_bars: int = 5     # 报单后多少 bar 触发复核（与 _close_retry_bars 对齐）
+        # ════════════════════════════════════════════════════════════════
+        # Phase H2（2026-09-05）：批次解锁入场 in-flight
+        #   解锁 N 单看成一个整体批次：串行提交 → 批次截止（最后一张提交 + 5s 墙钟）
+        #   → 逐一复核（撤单 → trade_records 复核防竞速）→ 三分支结算：
+        #     k=0        整批放弃（卡单目标全部快照重建回簿，回 IDLE）
+        #     0<k<N      N-k 新开补齐（受簿容量 headroom 截断 + risk 门禁）
+        #     k=N        纯解锁（new_open = N - unlock_count，可能为 0）
+        #   与 F1 单笔 _unlock_in_flight 互斥：batch_count==1 走原 E2 单笔路径，
+        #   永远不设本字段；batch_count≥2 才进批次路径。
+        # ════════════════════════════════════════════════════════════════
+        self._unlock_batch_in_flight: Optional[Dict[str, Any]] = None
+        # dict = {"signal_key", "sig", "side", "orders":[...],
+        #         "unlock_count", "batch_count", "per_batch",
+        #         "deadline_ts", "submit_bar_seq"}
+        self._unlock_batch_window: float = 5.0   # 批次截止窗口（秒，墙钟）
         self._restore()
 
     # ---------------- 兼容层：engine.position property ----------------
@@ -162,6 +178,19 @@ class GatewayEngine:
         fl = self.store.get_json("_unlock_in_flight")
         if isinstance(fl, dict):
             self._unlock_in_flight = fl
+        # Phase H2：恢复批次解锁 in-flight —— 有它说明崩前正处于"批次提交完、
+        #   5s 截止未复核"窗口。state 必须回到 EXITING（批次续跑语义），
+        #   且 F2 首拉对账要跳过（复核前簿内锁仓与真实持仓的瞬时差异是预期的）。
+        br = self.store.get_json("_unlock_batch_in_flight")
+        if isinstance(br, dict):
+            self._unlock_batch_in_flight = br
+            self._state = EngineState.EXITING
+            self.ev.write("unlock_batch_restored_in_flight",
+                          signal_key=br.get("signal_key", ""),
+                          pending_n=sum(1 for r in br.get("orders", [])
+                                        if r.get("status") == "filled"
+                                        and not r.get("confirmed")),
+                          note="重启恢复批次解锁复核上下文，等待批次截止后复核")
 
         # ════════════════════════════════════════════════════════════════
         # Phase F2（2026-09-05）：_restore 末尾首拉真实持仓
@@ -177,7 +206,8 @@ class GatewayEngine:
         #     · source="restore"：跳过"入场当根 K 线"判定（bars_seen 可能为 0）
         #     · source="on_bar"：保留"入场当根 K 线"判定（避免误判刚开仓为已平）
         # ════════════════════════════════════════════════════════════════
-        if not self.positions.is_empty():
+        if (self._unlock_batch_in_flight is None
+                and not self.positions.is_empty()):
             fn = getattr(self.broker, "real_position", None)
             if callable(fn):
                 try:
@@ -210,6 +240,14 @@ class GatewayEngine:
             self.store.set_json("_unlock_in_flight", self._unlock_in_flight)
         else:
             self.store.delete_key("_unlock_in_flight")
+        # Phase H2：批次解锁 in-flight 持久化 —— 引擎崩/重启后 _restore 恢复，
+        #   让 _check_unlock_batch 在批次截止后继续复核，否则重启即丢整批状态
+        #   （已乐观落账的解锁无法复核卡单、新开补齐也不会执行）。
+        if self._unlock_batch_in_flight is not None:
+            self.store.set_json("_unlock_batch_in_flight",
+                                self._unlock_batch_in_flight)
+        else:
+            self.store.delete_key("_unlock_batch_in_flight")
 
     # ---------------- bar 事件 ----------------
     def on_bar(self, bar: Bar) -> None:
@@ -242,6 +280,13 @@ class GatewayEngine:
             pass
 
         # ════════════════════════════════════════════════════════════════
+        # Phase H2：批次解锁复核（5s 墙钟批次窗口）
+        #   必须先于 F1 单笔复核（二者互斥：批次路径不设 _unlock_in_flight）；
+        #   批次窗口未到时本函数直接 return，不打扰后续流程。
+        # ════════════════════════════════════════════════════════════════
+        self._check_unlock_batch(bar)
+
+        # ════════════════════════════════════════════════════════════════
         # Phase F1：UNLOCK 卡单监控
         #   UNLOCK 报单 5 bars 后未确认 → 调 _reconcile_positions 兜底
         #   必须在 _reconcile_position 之前调用，否则 reconcile 清掉残留持仓后
@@ -249,14 +294,20 @@ class GatewayEngine:
         # ════════════════════════════════════════════════════════════════
         self._check_unlock_stuck(bar)
 
+        # Phase H2：批次复核窗口内（state=EXITING、解锁未最终确认）——
+        #   对账与 settle 全部挂起。此时簿内锁仓是"待复核"状态：
+        #   reconcile 会把乐观落账造成的簿/真实瞬时差异误判为外部干预，
+        #   settle 也无需跑（LOCKED 锁仓本就跳过出场判定）。
+        batch_busy = self._unlock_batch_in_flight is not None
+
         # 持仓对账（增强 B）：与券商真实持仓比对。若发现持仓已被外部平掉
         # （如用户在快期3手工平仓）或属幽灵持仓，立即修正引擎账目，
         # 避免继续傻等平仓 / 误判新信号。dry_run 等无真实账户的通道返回 None，跳过。
         # E3.3：多仓版判空用 not positions.is_empty()，避免 self.position property 在多仓时报错
-        if not self.positions.is_empty():
+        if not batch_busy and not self.positions.is_empty():
             self._reconcile_position()
 
-        if not self.positions.is_empty():
+        if not batch_busy and not self.positions.is_empty():
             self._settle_position(bar)
 
     def _settle_position(self, bar: Bar) -> None:
@@ -761,36 +812,31 @@ class GatewayEngine:
         # ── state == IDLE：进入正常开仓决策 ──
 
         # ════════════════════════════════════════════════════════════════
-        # Phase E2：UNLOCK_FIRST 入场路径
+        # Phase E2 → Phase H2：UNLOCK_FIRST 解锁入场路径
         #   触发条件 —— IDLE 时 portfolio 非空 + has_opposite(sig.side)：
-        #     · IDLE 表示当前没有今仓
-        #     · portfolio 非空意味着昨日 LOCK 后留下的反向对冲仓（只可能是 1 笔，max=1 限制）
-        #     · 信号方向与 portfolio 那笔相反 → 这是一次"解锁昨仓"信号，不是开新仓
-        #   行为 —— broker.submit(UNLOCK, target.side, vol, sig.price, ...)：
-        #     · 报 CloseYesterdayOffset（注意：side 是 target.side = portfolio 那笔的方向，
-        #       不是 sig.side —— 因为平的是昨仓，方向就是昨仓的方向）
-        #     · 成功后 portfolio 清这笔记 Trade（reason=unlock_against_signal），
-        #       不开新今仓（"解锁"动作严格只清昨；今仓由后续信号决定）
-        #     · 失败（拒单/超时）→ signal_rejected，portfolio 不动
-        #   状态机 —— UNLOCK 走 EXITING（语义是清空旧持仓，与"平仓"对位）
-        #   不影响 IN_TRADE 分支：那个分支处理的是"今仓反手"，与"昨仓解锁"语义正交
+        #     · IDLE 表示当前没有今仓；portfolio 非空意味着昨日 LOCK 后
+        #       落簿的反向锁仓（H1 落簿，entry_mode=LOCKED，可能不止 1 笔）
+        #     · 信号方向与锁仓相反 → 这是一次"解锁昨仓 + 入场"信号
+        #   行为（H2 批次语义）：
+        #     · unlock_count = min(opp_count, N)，串行 UNLOCK（CloseYesterdayOffset）
+        #     · 批次截止（最后一张提交 + 5s）复核卡单 → k=0 放弃 / 0<k<N-k 新开补齐
+        #     · batch_count==1 走原 E2 单笔路径（零行为变化）
+        #   状态机 —— 批次走 EXITING（复核期间挂起对账/settle）
         # ════════════════════════════════════════════════════════════════
         if (self._state == EngineState.IDLE
                 and not self.positions.is_empty()
                 and self.positions.has_opposite(sig.side)):
-            # Phase E3.2：多反向仓防御 —— E2 假设 max=1（反向仓最多 1 笔）。
-            # max_open_positions ≥ 2 + IDLE + 多反向仓 是异常配置组合，
-            # 暂记 warning，由用户/运维修正 cfg（E3.3 才接多笔解锁）。
-            if len(self.positions.opposite_positions(sig.side)) > 1:
-                self.ev.write(
-                    "unlock_partial_warning",
-                    key=sig.key,
-                    reason="multi_opposite_in_portfolio_e33_scope",
-                    opp_n=len(self.positions.opposite_positions(sig.side)))
-            # signal_action 由 _unlock_position 内部根据成交/拒单写
-            # （这里不写"unlock"，否则 UNLOCK 拒单时它的"rejected"覆盖会被 on_signal
-            # 的"unlock"反过来覆盖，丢失失败原因）
-            self._unlock_position(sig, sig.side)
+            # ════════════════════════════════════════════════════════════════
+            # Phase H2：批次解锁入场（解锁优先）
+            #   unlock_count = min(opp_count, N)，new_open = N - unlock_count；
+            #   解锁 N 单看成一个整体批次（串行提交、批次截止 +5s 复核、
+            #   k>0 时按 N-k 新开补齐）。
+            #   batch_count==1（默认/旧配置）⇒ 走原 E2 单笔路径，零行为变化
+            #   （P13/P16/P18 的 F1 in-flight / signal_action 语义全部保留）。
+            #   signal_action 由批次路径内部统一管理（这里不写"unlock"，
+            #   避免覆盖失败原因 —— 与 E2 单笔同约定）。
+            # ════════════════════════════════════════════════════════════════
+            self._unlock_batch_entry(sig, sig.side)
             self.ev.write("signal_unlock", key=sig.key, reason="reverse_yesterday_position")
             return
 
@@ -1287,36 +1333,10 @@ class GatewayEngine:
             self._state = EngineState.IDLE
             return
 
-        # 成交：算 Trade + 从 portfolio 删除
-        gross = target.pnl_points(o.filled_price)
-        cost = self.spec.cost_points(target.entry_price, o.filled_price,
-                                     close_today=False)  # CloseYesterday 费率
-        net = gross - cost
-        cash = self.spec.points_to_cash(net, target.volume)
-        bars_held = max(0, self.bars_seen - target.entry_bar_seq)
+        # 成交：算 Trade + 从 portfolio 删除 + 写 unlock 事件
+        # （Phase H2：记帐逻辑抽到 _book_unlock_trade，与批次解锁共享同一实现）
+        self._book_unlock_trade(sig, target, o)
 
-        self._trade_seq += 1
-        t = Trade(
-            trade_id="T{:05d}".format(self._trade_seq),
-            symbol=target.symbol, side=target.side, volume=target.volume,
-            entry_price=target.entry_price, exit_price=o.filled_price,
-            entry_at=target.entry_at, exit_at=now_cn(),
-            reason="unlock_against_signal",
-            gross_points=round(gross, 4),
-            cost_points=round(cost, 4),
-            net_points=round(net, 4),
-            net_cash=round(cash, 2),
-            bars_held=bars_held,
-            signal_key=target.signal_key,
-            exit_plan_name=target.exit_plan.name,
-            exit_plan_params=target.exit_plan.params,
-        )
-        self.store.save_trade(t)
-        self.risk.on_trade_closed(net, target.volume)
-
-        self.positions.remove(target)
-        # E2 阶段 portfolio 退化为单仓，删后必然空；E3 多仓后这里要不要保留 state
-        # 由 settle/close loop 决定 —— 当前防御性更稳是 IDLE
         # ════════════════════════════════════════════════════════════════
         # Phase F1：UNLOCK 卡单监控 —— 报单成功后设 in-flight
         #   5 bars 后 _check_unlock_stuck 会调 broker.trade_confirmed 复核。
@@ -1345,6 +1365,45 @@ class GatewayEngine:
         self.store.update_signal_action(
             sig.key, "unlock",
             "successfully_unlocked_yesterday_position")
+        # （unlock 事件由 _book_unlock_trade 统一写出，此处不再重复）
+
+    # ════════════════════════════════════════════════════════════════════
+    # Phase H2（2026-09-05）：批次解锁入场（解锁优先）
+    # ════════════════════════════════════════════════════════════════════
+    def _book_unlock_trade(self, sig: Signal, target: Position, o: Order,
+                           batch_idx: int = 0, batch_size: int = 1) -> Trade:
+        """H2：UNLOCK 成交记帐（Trade 落盘 + risk 登记 + 从簿删除 + unlock 事件）。
+
+        从 E2 单笔 _unlock_position 抽取，供单笔/批次两条解锁路径共享。
+        乐观语义：submit 返回 filled 即记帐 —— 真实未成交（卡单）由
+        F1 单笔复核 / H2 批次复核兜底（快照重建回簿；Trade 记录保留作审计）。
+        """
+        gross = target.pnl_points(o.filled_price)
+        cost = self.spec.cost_points(target.entry_price, o.filled_price,
+                                     close_today=False)  # CloseYesterday 费率
+        net = gross - cost
+        cash = self.spec.points_to_cash(net, target.volume)
+        bars_held = max(0, self.bars_seen - target.entry_bar_seq)
+
+        self._trade_seq += 1
+        t = Trade(
+            trade_id="T{:05d}".format(self._trade_seq),
+            symbol=target.symbol, side=target.side, volume=target.volume,
+            entry_price=target.entry_price, exit_price=o.filled_price,
+            entry_at=target.entry_at, exit_at=now_cn(),
+            reason="unlock_against_signal",
+            gross_points=round(gross, 4),
+            cost_points=round(cost, 4),
+            net_points=round(net, 4),
+            net_cash=round(cash, 2),
+            bars_held=bars_held,
+            signal_key=target.signal_key,
+            exit_plan_name=target.exit_plan.name,
+            exit_plan_params=target.exit_plan.params,
+        )
+        self.store.save_trade(t)
+        self.risk.on_trade_closed(net, target.volume)
+        self.positions.remove(target)
 
         self.ev.write("unlock", symbol=t.symbol, side=str(t.side),
                       entry=t.entry_price, unlock=o.filled_price,
@@ -1352,7 +1411,328 @@ class GatewayEngine:
                       net=t.net_points, cash=t.net_cash, bars_held=bars_held,
                       trade_id=t.trade_id, unlock_signal_key=sig.key,
                       unlock_order_id=o.order_id,
-                      entry_mode=target.entry_mode.value)
+                      entry_mode=target.entry_mode.value,
+                      batch_idx=batch_idx, batch_size=batch_size)
+        return t
+
+    @staticmethod
+    def _reconstruct_signal(d: Dict[str, Any]) -> Signal:
+        """H2：从持久化的批次 in-flight 里重建 Signal（供补齐新开复用）。"""
+        return Signal(
+            key=d.get("key", ""), symbol=d.get("symbol", ""),
+            freq=d.get("freq", ""), date=d.get("date", ""),
+            timestamp=int(d.get("timestamp", 0) or 0),
+            bsp_type=d.get("bsp_type", "0"),
+            is_buy=bool(d.get("is_buy", True)),
+            price=float(d.get("price", 0.0) or 0.0),
+            high=float(d.get("high", 0.0) or 0.0),
+            low=float(d.get("low", 0.0) or 0.0),
+        )
+
+    def _unlock_batch_entry(self, sig: Signal, opp_side: Side) -> None:
+        """Phase H2：批次解锁入场主入口（on_signal E2 门调用）。
+
+        决策
+          · N = batch_count（sizing.batch_open，与正常入场同源）
+          · N == 1 → 原 E2 单笔路径 _unlock_position（零行为变化：
+            sub_key 无后缀、F1 in-flight、signal_action=unlock/rejected）
+          · N ≥ 2 → 批次路径：
+              unlock_count = min(opp_count, N)，串行逐笔 UNLOCK
+              （sub_key = "<sig.key>#u<idx>"，供 trade_confirmed/cancel_pending
+              按单复核/撤单）；乐观成交立即记帐（_book_unlock_trade）。
+              提交后即时 trade_confirmed 探测：
+                · 全部确认（dry_run 同步撮合恒真）→ 直接结算，无需等待
+                · 有未确认 → unlock_batch_in_flight（持久化）+ state=EXITING，
+                  批次截止（最后一张提交 + 5s 墙钟）后由 _check_unlock_batch 复核
+
+        sizing 异常 → 整体退回 E2 单笔解锁（解锁不依赖 sizing 健康度）；
+        per_batch≤0（N≥2 时）→ 解锁照常执行，仅跳过新开补齐
+        （结算分支按 per_batch==0 处理并写 sizing_zero_volume 告警）。
+        """
+        try:
+            per_batch, batch_count, why_vol = self._size_batch(sig)
+        except Exception:
+            # sizing 通道异常（sizer 损坏 / 缺 size_batch 等）→ 退回 E2 单笔解锁。
+            # 解锁是减风险动作，绝不允许依赖 sizing 的健康度
+            # （P13 [6] 防御性守卫：UNLOCK 路径不调 entry_policy / sizer / risk）。
+            per_batch, batch_count, why_vol = 0, 1, "sizing_error_fallback_single_unlock"
+
+        if batch_count <= 1:
+            # N=1：E2 单笔兼容路径（P13/P16/P18 语义）
+            self._unlock_position(sig, opp_side)
+            return
+
+        opp_list = sorted(self.positions.opposite_positions(opp_side),
+                          key=lambda p: p.entry_bar_seq)
+        if not opp_list:
+            # 理论不可达（on_signal 已 has_opposite 判定）。防御性记录。
+            self.ev.write("unlock_skipped", key=sig.key,
+                          reason="no_opposite_in_portfolio")
+            return
+
+        unlock_count = min(len(opp_list), batch_count)
+        planned_new = max(0, batch_count - unlock_count)
+        self.ev.write("unlock_batch", key=sig.key,
+                      opp_n=len(opp_list), n=batch_count,
+                      unlock_count=unlock_count, planned_new=planned_new,
+                      per_batch=per_batch, why=why_vol,
+                      note="批次解锁入场：先解锁后新开（串行）")
+
+        self._state = EngineState.EXITING
+
+        targets = opp_list[:unlock_count]
+        orders: List[Dict[str, Any]] = []
+        for idx, target in enumerate(targets):
+            sub_key = "{}#u{}".format(sig.key, idx)
+            o = self.broker.submit(OrderIntent.UNLOCK, target.side,
+                                   target.volume, sig.price, sub_key,
+                                   note="H2 批次解锁昨仓 {}/{}".format(
+                                       idx + 1, unlock_count))
+            self.store.save_order(o)
+            self.ev.write("order", order_id=o.order_id, action=o.action,
+                          intent=o.meta.get("intent", o.action),
+                          side=str(o.side), volume=o.volume, price=o.price,
+                          req_price=o.req_price, status=o.status, broker=o.broker,
+                          batch_idx=idx, batch_size=unlock_count,
+                          reason="unlock_batch_yesterday")
+
+            if o.status != "filled" or o.filled_price is None:
+                why = o.meta.get("reject_reason") or o.status
+                self.ev.write("order_rejected", key=sig.key, order_id=o.order_id,
+                              action="unlock", reason=why,
+                              batch_idx=idx, batch_size=unlock_count)
+                orders.append({
+                    "sub_key": sub_key, "order_id": o.order_id,
+                    "status": "rejected", "confirmed": False, "booked": False,
+                    "target_signal_key": target.signal_key,
+                    "target_side": target.side.name,
+                    "target_snapshot": target.to_dict(),
+                })
+                continue
+
+            # 乐观成交：立即记 Trade + remove（与 E2 单笔一致）
+            self._book_unlock_trade(sig, target, o,
+                                    batch_idx=idx, batch_size=unlock_count)
+            orders.append({
+                "sub_key": sub_key, "order_id": o.order_id,
+                "status": "filled", "confirmed": None, "booked": True,
+                "target_signal_key": target.signal_key,
+                "target_side": target.side.name,
+                "target_snapshot": target.to_dict(),
+            })
+
+        # 提交后即时 trade_confirmed 探测（dry_run 恒真 → 直接结算）
+        fn_tc = getattr(self.broker, "trade_confirmed", None)
+        for r in orders:
+            if r["status"] != "filled":
+                continue
+            if callable(fn_tc):
+                try:
+                    r["confirmed"] = bool(fn_tc(OrderIntent.UNLOCK, r["sub_key"]))
+                except Exception:
+                    r["confirmed"] = False
+            else:
+                r["confirmed"] = True
+
+        k_now = sum(1 for r in orders if r["confirmed"])
+        if k_now == unlock_count:
+            # 全部即时确认 → 直接结算（含新开补齐），无需批次窗口
+            self._unlock_batch_settle(sig, opp_side, orders, k_now,
+                                      unlock_count, batch_count, per_batch,
+                                      deferred=False)
+            return
+
+        # 有未确认 → 挂起批次，等批次截止后复核（持久化，崩溃可续）
+        self._unlock_batch_in_flight = {
+            "signal_key": sig.key,
+            "sig": {
+                "key": sig.key, "symbol": sig.symbol, "freq": sig.freq,
+                "date": sig.date, "timestamp": sig.timestamp,
+                "bsp_type": sig.bsp_type, "is_buy": sig.is_buy,
+                "price": sig.price, "high": sig.high, "low": sig.low,
+            },
+            "orders": orders,
+            "unlock_count": unlock_count,
+            "batch_count": batch_count,
+            "per_batch": per_batch,
+            "deadline_ts": time.time() + self._unlock_batch_window,
+            "submit_bar_seq": self.bars_seen,
+        }
+        self._persist()
+        self.ev.write("unlock_batch_pending", key=sig.key,
+                      k_now=k_now, unlock_count=unlock_count,
+                      batch_count=batch_count,
+                      pending_n=unlock_count - k_now,
+                      deadline_ts=self._unlock_batch_in_flight["deadline_ts"],
+                      window_s=self._unlock_batch_window,
+                      note="批次截止（最后一张提交+{}s）后逐一复核，"
+                           "到期只撤卡单、已成交按成功".format(
+                               self._unlock_batch_window))
+        # state 保持 EXITING：复核未完，入场决策未定
+
+    def _check_unlock_batch(self, bar: Bar) -> None:
+        """Phase H2：批次解锁复核（on_bar 调用，批次截止后触发一次）。
+
+        对每张未确认的已提交 UNLOCK：
+          ① 直接 trade_confirmed 复核（可能只是上次探测时回报未到）
+          ② 仍未确认 → cancel_pending 撤卡单（防后续成交双重平仓）
+          ③ 撤单后再次 trade_confirmed 复核（撤单请求与成交回报竞速，
+             fill 优先 —— "只把卡单的撤单，没卡单的按成功处理"）
+        全部终态后交 _unlock_batch_settle 三分支结算，清批次 in-flight。
+        """
+        rec = self._unlock_batch_in_flight
+        if rec is None:
+            return
+        # 批次截止闸门：墙钟 5s（测试可回拨 deadline_ts 触发）
+        if time.time() < float(rec.get("deadline_ts", 0) or 0):
+            return
+
+        sig = self._reconstruct_signal(rec.get("sig") or {})
+        opp_side = Side.from_is_buy(sig.is_buy)
+        orders = rec.get("orders") or []
+        fn_tc = getattr(self.broker, "trade_confirmed", None)
+        fn_cp = getattr(self.broker, "cancel_pending", None)
+
+        for r in orders:
+            if r.get("status") != "filled" or r.get("confirmed"):
+                continue
+            try:
+                r["confirmed"] = (bool(fn_tc(OrderIntent.UNLOCK, r["sub_key"]))
+                                  if callable(fn_tc) else True)
+            except Exception:
+                r["confirmed"] = False
+            if r["confirmed"]:
+                continue
+            # 撤卡单
+            try:
+                n = int(fn_cp(r["sub_key"])) if callable(fn_cp) else 0
+                if n > 0:
+                    self.ev.write("unlock_batch_pending_cancelled",
+                                  signal_key=rec.get("signal_key", ""),
+                                  sub_key=r["sub_key"], cancelled=n)
+            except Exception:
+                pass  # 撤单异常不阻断复核
+            # 撤单后 trade_records 复核防竞速
+            try:
+                r["confirmed"] = (bool(fn_tc(OrderIntent.UNLOCK, r["sub_key"]))
+                                  if callable(fn_tc) else True)
+            except Exception:
+                r["confirmed"] = False
+            if r["confirmed"]:
+                self.ev.write("unlock_batch_confirmed_after_cancel",
+                              signal_key=rec.get("signal_key", ""),
+                              sub_key=r["sub_key"],
+                              note="撤单窗口内成交回报到达，按成功处理")
+
+        k = sum(1 for r in orders if r.get("confirmed"))
+        self._unlock_batch_settle(sig, opp_side, orders, k,
+                                  int(rec.get("unlock_count", 0)),
+                                  int(rec.get("batch_count", 0)),
+                                  int(rec.get("per_batch", 0)),
+                                  deferred=True)
+        self._unlock_batch_in_flight = None
+
+    def _unlock_batch_settle(self, sig: Signal, opp_side: Side,
+                             orders: List[Dict[str, Any]], k: int,
+                             unlock_count: int, batch_count: int,
+                             per_batch: int, deferred: bool) -> None:
+        """Phase H2：批次解锁三分支结算（即时确认与到期复核共用出口）。
+
+        k     最终确认成交的解锁笔数（booked 且 confirmed）
+        分支
+          · k == 0        整批放弃：卡单目标快照重建回簿，回 IDLE，不开新仓
+          · 0 < k < N     新开补齐：新开 batch_count-k 笔
+                          （= planned_new + 失败补齐；受簿容量 headroom
+                          与 risk 门禁约束，任一拦截只砍新开部分，
+                          已完成的解锁不回滚）
+          · k == unlock_count 且 new_open==0 → 纯解锁，回 IDLE
+        卡单恢复的 Trade 记录保留（与 F1 单笔卡单恢复同审计口径）。
+        """
+        # 卡单恢复：乐观 booked 但最终未确认 → 快照重建回簿
+        restored = 0
+        for r in orders:
+            if (r.get("status") == "filled" and not r.get("confirmed")
+                    and r.get("booked")):
+                snap = r.get("target_snapshot")
+                if snap is not None:
+                    try:
+                        self.positions.add(Position.from_dict(snap))
+                        restored += 1
+                        self.ev.write("unlock_batch_restored",
+                                      signal_key=sig.key,
+                                      sub_key=r["sub_key"],
+                                      target_signal_key=r.get(
+                                          "target_signal_key", ""),
+                                      reason="unlock_not_confirmed_after_window")
+                    except PositionBookError:
+                        self.ev.write("unlock_batch_restore_failed",
+                                      signal_key=sig.key,
+                                      sub_key=r["sub_key"],
+                                      reason="portfolio_full_cannot_restore")
+
+        new_total = max(0, batch_count - k)
+        if per_batch <= 0 and new_total > 0:
+            self.ev.write("sizing_zero_volume",
+                          key=sig.key, per_batch=per_batch,
+                          note="手数定档为 0 —— 解锁已生效，新开补齐部分跳过")
+            new_total = 0
+
+        # 容量守卫：簿容量按"总仓位数"计（含留簿锁仓），超出部分截断
+        headroom = max(0, self.positions.max_positions - len(self.positions))
+        if new_total > headroom:
+            self.ev.write("max_open_cap", key=sig.key,
+                          requested=new_total, effective=headroom,
+                          book_n=len(self.positions),
+                          book_max=self.positions.max_positions,
+                          note="H2 批次解锁后新开被簿容量截断（留簿锁仓占位）")
+            new_total = headroom
+
+        if k == 0:
+            action = "abandon"
+        elif new_total == 0:
+            action = "pure_unlock"
+        else:
+            action = "with_new_opens"
+        self.ev.write("unlock_batch_result", key=sig.key,
+                      k=k, unlock_count=unlock_count, batch_count=batch_count,
+                      restored=restored, new_open=new_total,
+                      per_batch=per_batch, action=action, deferred=deferred)
+
+        if k == 0:
+            # 整批放弃：簿已复原（restore 完成），回 IDLE 等下次信号
+            self._state = EngineState.IDLE
+            self.store.update_signal_action(
+                sig.key, "rejected", "unlock_batch_abandoned_k0")
+            self._persist()
+            return
+
+        if new_total > 0:
+            # 新开部分过 risk 门禁（解锁本身不设门 —— 减风险动作）
+            bar_date = self.last_bar.date if self.last_bar else sig.date
+            ok, why = self.risk.check_open(
+                opp_side, per_batch, bar_date,
+                max_volume=self.sizer.max_volume,
+                batch_count=new_total, existing_same_side=0)
+            if not ok:
+                self.ev.write("risk_block", key=sig.key, side=str(opp_side),
+                              reason=why, bar_date=bar_date,
+                              note="H2 解锁已完成 k={}，新开补齐部分被风控拦截".format(k))
+                new_total = 0
+
+        if new_total > 0:
+            # 串行语义的最后一步：解锁完成后新开（state 由 _open_positions 推进）
+            self._open_positions(sig, opp_side, per_batch=per_batch,
+                                 batch_count=new_total)
+        else:
+            # 纯解锁 / 新开被拦 → 无同向今仓；簿内只剩锁仓（或空）→ IDLE
+            self._state = EngineState.IDLE
+
+        # 最终 signal_action 汇总（覆盖 _open_positions 写的 opened/partial 等）
+        self.store.update_signal_action(
+            sig.key, "unlock_batch",
+            "k={}/unlock_count={}/batch={}/new_open={}/action={}".format(
+                k, unlock_count, batch_count, new_total, action))
+        self._persist()
 
     # ---------------- 离场方式（Phase D 硬规则） ----------------
     @staticmethod

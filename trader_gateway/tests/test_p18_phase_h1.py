@@ -353,8 +353,12 @@ with tmp_dir() as tmp:
           engine.positions.positions[0].entry_mode, EntryMode.LOCKED)
     ev.flush()
     kinds2 = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[6i] 多反向仓 warning 已写",
-          "unlock_partial_warning" in kinds2, True)
+    # Phase H2：多反向仓在 N=1 时走 E2 单笔解锁是合法边界（不再是异常告警），
+    # 批量解锁由 H2 批次路径（batch_open≥2）承接 —— 旧 unlock_partial_warning 已移除
+    check("[6i] 多反向仓不再告警（H2 批次路径承接）",
+          "unlock_partial_warning" in kinds2, False)
+    check("[6j] 单笔解锁事件已写",
+          "unlock" in kinds2, True)
 
 
 # ════════════════════════════════════════════════════════════════
