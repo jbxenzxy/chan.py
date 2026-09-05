@@ -237,7 +237,8 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([pos], "manual", 4555.0, eng.last_bar, signal_key="P15B-1-1")
-    check("单笔：簿 0 仓", len(eng.positions), 0)
+    check("单笔：簿 1 仓（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
+    check("单笔：锁仓 entry_mode=LOCKED", eng.positions.positions[0].entry_mode, EntryMode.LOCKED)
     check("单笔：state IDLE", eng._state, EngineState.IDLE)
     check("单笔：broker 1 单", len(eng.broker.orders), 1)
     trades = eng.store.trades()
@@ -257,7 +258,9 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p2, p0, p1], "manual", 4555.0, eng.last_bar)
-    check("FIFO：簿 0 仓", len(eng.positions), 0)
+    check("FIFO：簿 3 仓（3 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 3)
+    check("FIFO：全部 entry_mode=LOCKED",
+          all(p.entry_mode is EntryMode.LOCKED for p in eng.positions.positions), True)
     check("FIFO：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
     check("FIFO：3 条 Trade", len(trades), 3)
@@ -370,7 +373,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p0, p1], "manual", 4555.0, eng.last_bar)
-    check("第2笔拒单：簿 1 仓（剩 p1）", len(eng.positions), 1)
+    check("第2笔拒单：簿 2 仓（剩 p1 + p0 锁仓，H1 落簿）", len(eng.positions), 2)
     check("第2笔拒单：broker 2 单", len(broker.orders), 2)
     check("第2笔拒单：state EXITING（仍有仓位）", eng._state, EngineState.EXITING)
     trades = eng.store.trades()
@@ -419,7 +422,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # 触发 TP
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("3仓TP：簿 0", len(eng.positions), 0)
+    check("3仓TP：簿 3（3 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 3)
     check("3仓TP：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
     check("3仓TP：3 条 Trade", len(trades), 3)
@@ -438,7 +441,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("1仓触发：簿 1 仓（剩 p1）", len(eng.positions), 1)
+    check("1仓触发：簿 2 仓（剩 p1 + p0 锁仓，H1 落簿）", len(eng.positions), 2)
     check("1仓触发：broker 1 单", len(eng.broker.orders), 1)
     check("1仓触发：剩 p1.signal_key", eng.positions.positions[0].signal_key,
           "P15B-2-2-B")
@@ -473,7 +476,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4538.0)  # 触发 SL
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("2仓SL：簿 0", len(eng.positions), 0)
+    check("2仓SL：簿 2（2 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 2)
     check("2仓SL：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
     check("2仓SL：2 条 Trade", len(trades), 2)
@@ -627,7 +630,7 @@ with tmp_dir() as td:
     eng.positions.add(p1)
     bar = make_bar(close=4558.0)  # 触发 TP
     eng.on_bar(bar)
-    check("on_bar TP：簿 0 仓", len(eng.positions), 0)
+    check("on_bar TP：簿 2 仓（2 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 2)
     check("on_bar TP：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
     check("on_bar TP：2 条 Trade", len(trades), 2)
@@ -650,7 +653,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_position("manual", 4555.0, eng.last_bar, signal_key="P15B-5-1")
-    check("兼容_close：簿 0 仓", len(eng.positions), 0)
+    check("兼容_close：簿 1 仓（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
     check("兼容_close：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
     check("兼容_close：1 条 Trade", len(trades), 1)
@@ -665,7 +668,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # TP 触发
     eng.bars_seen = 10
     eng._settle_position(eng.last_bar)
-    check("兼容_settle：簿 0", len(eng.positions), 0)
+    check("兼容_settle：簿 1（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
     check("兼容_settle：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
     check("兼容_settle：1 条 Trade", len(trades), 1)

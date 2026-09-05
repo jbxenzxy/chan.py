@@ -144,8 +144,16 @@ class GatewayEngine:
             p0 = self.positions.positions[0]
             self.ev.write("start", restored_position=p0.to_dict(),
                           positions_n=len(self.positions))
-        # Phase A：根据持仓推断初始 state。持仓在 → IN_TRADE；无持仓 → IDLE。
-        self._state = EngineState.IN_TRADE if not self.positions.is_empty() else EngineState.IDLE
+        # Phase A：根据持仓推断初始 state。在持今仓 → IN_TRADE；无持仓 → IDLE。
+        # Phase H1：簿内只剩 LOCKED 锁仓（昨日 LOCK 遗留、等对向信号解锁）→ IDLE，
+        #   让下个信号走 on_signal 的 E2 UNLOCK 门（unlock_against_signal 记帐 +
+        #   CloseYesterday 费率），而不是 IN_TRADE 的 signal_reverse 平仓路径。
+        if (self.positions.is_empty()
+                or all(p.entry_mode is EntryMode.LOCKED
+                       for p in self.positions.positions)):
+            self._state = EngineState.IDLE
+        else:
+            self._state = EngineState.IN_TRADE
         self.risk.restore(self.store.get_json("day_stats"))
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
         # Phase F：恢复 _unlock_in_flight —— 接续上次崩前的卡单标记，
@@ -276,6 +284,12 @@ class GatewayEngine:
         batch_reason: Optional[str] = None
 
         for pos in ordered:
+            # Phase H1：锁仓（LOCK 软离场落簿的反向仓）不参与 TP/SL/EOD 出场判定。
+            # 它的唯一合法离场 = 次日对向信号触发 UNLOCK（on_signal has_opposite 门）。
+            # 若在此放行，EOD/止盈会把锁仓当日平掉（CloseYesterday 被 CTP 拒），
+            # 或次日被 EOD 以平仓路径误杀（费率劣化），故显式跳过。
+            if pos.entry_mode is EntryMode.LOCKED:
+                continue
             # 入场那根 K 线不参与出场判定（沿用 E3.1 语义）
             if bar.timestamp <= pos.entry_bar_ts:
                 continue
@@ -1163,6 +1177,43 @@ class GatewayEngine:
             self.positions.remove(pos)
             n_closed += 1
 
+            # ═══ Phase H1：LOCK 软离场 → 反向锁仓落簿 ═══
+            # LOCK 成交后，broker 端真实存在一笔反向仓（offset=OPEN 开出）。
+            # 此前它只在 broker 侧、引擎簿不可见 → 次日 has_opposite 恒 False，
+            # "解锁入场"在纯自动流程中不可达（评审议题 S1）。
+            # 现在把这笔反向仓作为 Position 落簿（entry_mode=LOCKED）：
+            #   · 持久化 / 重启恢复 / 对账接管 全部走既有管线（零新增机制）
+            #   · settle（TP/SL/EOD）跳过 LOCKED —— 锁仓唯一离场 = 次日对向信号 UNLOCK
+            #   · 容量天然自洽：remove 1 + add 1，簿内总数不变
+            if intent is OrderIntent.LOCK:
+                lock_pos = Position(
+                    symbol=pos.symbol, side=side, volume=pos.volume,
+                    entry_price=o.filled_price, entry_at=now_cn(),
+                    entry_bar_ts=(self.last_bar.timestamp if self.last_bar else 0),
+                    signal_key=pos.signal_key + "#lock",
+                    open_order_id=o.order_id,
+                    exit_plan=ExitPlan(name="locked_await_unlock",
+                                       stop_price=0.0),
+                    entry_bar_seq=self.bars_seen,
+                    entry_mode=EntryMode.LOCKED,
+                )
+                try:
+                    self.positions.add(lock_pos)
+                    self.ev.write(
+                        "lock_booked", symbol=lock_pos.symbol,
+                        side=str(lock_pos.side), volume=lock_pos.volume,
+                        entry=lock_pos.entry_price, order_id=o.order_id,
+                        lock_of=pos.signal_key,
+                        position_signal_key=lock_pos.signal_key,
+                        fifo_index=idx, batch_size=len(ordered))
+                except PositionBookError as e:
+                    # 防御：remove+add 1:1 下不该发生（cfg max 被外部改小等）。
+                    # 落簿失败 → 反向仓留在 broker 端由对账/人工处理，不阻塞批次。
+                    self.ev.write(
+                        "lock_book_failed", symbol=pos.symbol, side=str(side),
+                        volume=pos.volume, error=str(e),
+                        order_id=o.order_id, lock_of=pos.signal_key)
+
             self.ev.write("close", symbol=t.symbol, side=str(t.side), reason=reason,
                           entry=t.entry_price, exit=t.exit_price,
                           gross=t.gross_points, cost=t.cost_points,
@@ -1175,10 +1226,13 @@ class GatewayEngine:
 
         # 全部处理完毕（全部成交 / 部分成交 + 后续拒单 / 全部拒单后整批停早 return）
         self._persist()
-        if self.positions.is_empty():
-            # 所有仓位都平了 → IDLE
+        # Phase H1：簿空 或 簿内只剩 LOCKED 锁仓（等待次日对向信号解锁）→ IDLE。
+        # 锁仓不属于"平仓未完成"，不应让引擎卡在 EXITING。
+        remaining = self.positions.positions
+        if (self.positions.is_empty()
+                or all(p.entry_mode is EntryMode.LOCKED for p in remaining)):
             self._state = EngineState.IDLE
-        # else: 仍有仓位（部分成交或 cooldown 中）→ 保持 EXITING
+        # else: 仍有在持今仓（部分成交或 cooldown 中）→ 保持 EXITING
 
     # ---------------- 解锁入场（Phase E2 UNLOCK_FIRST 路径） ----------------
     def _unlock_position(self, sig: Signal, side: Side) -> None:
@@ -1309,12 +1363,22 @@ class GatewayEngine:
                                           （开反向同手数；CTP OpenCloseType=Open）
         UNLOCK_FIRST → CLOSE_HARD → OrderIntent.CLOSE + pos.side
                                           （平昨无费率问题；CTP OpenCloseType=CloseToday / CloseAny）
+        LOCKED（Phase H1） → OrderIntent.UNLOCK + pos.side
+                                          （锁仓的唯一合法离场 = 解锁，CloseYesterday。
+                                           settle 已跳过 LOCKED，本分支纯防御；
+                                           若同日被触发，CTP 会拒"平昨"——预期行为，
+                                           防止锁仓当日走平今逃费路径。）
 
         LOCK 在引擎视角是"软离场"——调用 broker.submit(OPEN, opposite, ...) 让 broker 真的
         去开反向仓；引擎把当前 Position 视为已了结（pos=None），Trade 仍按 trigger_price
-        结算（cost 用 close_today_first 路径 = LOCK 替代平今的成本等价）。broker 端真实多出来的
-        反向仓由第二天通过 UNLOCK 平掉（在 v2 PositionBook 接入前由用户在快期3手工处理）。
+        结算（cost 用 close_today_first 路径 = LOCK 替代平今的成本等价）。
+        Phase H1 起，LOCK 成交后 broker 端真实存在的反向仓由引擎落簿
+        （entry_mode=LOCKED，见 _close_positions 内 lock_booked 事件），
+        次日对向信号经 on_signal 的 has_opposite 门自动触发 UNLOCK。
         """
+        if pos.entry_mode is EntryMode.LOCKED:
+            # Phase H1：锁仓只能解锁（CloseYesterday）。防御分支，正常路径不可达。
+            return OrderIntent.UNLOCK, pos.side
         if pos.entry_mode is EntryMode.UNLOCK_FIRST:
             return OrderIntent.CLOSE, pos.side
         # OPEN_FIRST 或 默认 → LOCK_SOFT

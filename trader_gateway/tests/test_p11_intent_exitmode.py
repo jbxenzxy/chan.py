@@ -252,7 +252,7 @@ with tmp_dir() as tmp:
     bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
     check("SL 触发后 state=IDLE (已离场)", engine._state.name, "IDLE")
-    check("SL 触发后 position=None", engine.position, None)
+    check("SL 触发后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
     # 检查 broker 是否收到 LOCK 报
     lock_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "lock"]
@@ -342,7 +342,7 @@ with tmp_dir() as tmp:
                            date="2026-09-01 09:45", bsp_type="2")
     engine.on_signal(sig_sell)
     check("反向信号触发后 state=IDLE", engine._state.name, "IDLE")
-    check("反向信号触发后 position=None", engine.position, None)
+    check("反向信号触发后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
     # broker 应该收 1 笔 LOCK 报（OPEN_FIRST 持仓 → LOCK 离场）
     lock_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "lock"]

@@ -436,7 +436,8 @@ with tmp_dir() as tmp:
     engine.on_bar(bar2)
     engine.on_signal(sig2)
 
-    check("反向信号后 positions 清空", engine.positions.is_empty(), True)
+    check("反向信号后 positions 全为 LOCKED 锁仓（H1 落簿）",
+          all(p.entry_mode.value == "locked" for p in engine.positions.positions), True)
     check("反向信号后 _state 回 IDLE",
           engine._state.value, "idle")
     check("反向信号后 _trade_seq == 1",

@@ -133,8 +133,8 @@ def build_engine(tmpdir):
 print("\n[1] 4 个枚举命名正确")
 check("OrderIntent 4 个值", [e.value for e in OrderIntent],
       ["open", "unlock", "close", "lock"])
-check("EntryMode 2 个值", [e.value for e in EntryMode],
-      ["open_first", "unlock_first"])
+check("EntryMode 3 个值（H1 增 locked）", [e.value for e in EntryMode],
+      ["open_first", "unlock_first", "locked"])
 check("ExitMode 2 个值", [e.value for e in ExitMode],
       ["close_hard", "lock_soft"])
 check("EngineState 4 个值", [e.value for e in EngineState],
@@ -271,7 +271,7 @@ with tmp_dir() as tmp:
     # 直接调 _close_position（用 sig.price 作为 trigger_price）
     engine._close_position("manual_test", 4560.0, engine.last_bar, signal_key="x")
     check("平仓成功后 _state 回 IDLE", engine._state, EngineState.IDLE)
-    check("平仓成功后 position is None", engine.position, None)
+    check("平仓成功后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
     # 验证 trades 表有 1 条
     check("trades 表记录 1 条", len(store.trades()), 1)
 
@@ -337,7 +337,7 @@ with tmp_dir() as tmp:
     engine.on_signal(sig2)
     check("IN_TRADE+反向 → 不调 entry_policy.decide", called["n"], 0)
     check("IN_TRADE+反向 → _state 回 IDLE", engine._state, EngineState.IDLE)
-    check("IN_TRADE+反向 → position 清空", engine.position, None)
+    check("IN_TRADE+反向 → position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
     check("IN_TRADE+反向 → trades 增 1", len(store.trades()), 1)
     check("IN_TRADE+反向 → trade.reason=signal_reverse",
           store.trades()[0]["reason"], "signal_reverse")
@@ -368,7 +368,7 @@ with tmp_dir() as tmp:
     check("IDLE→IN_TRADE 后反向 → 只 close 不 open，trades 增 1",
           len(store.trades()), 1)
     check("平仓后 _state=IDLE", engine._state, EngineState.IDLE)
-    check("平仓后 position=None（没自动开反向多）", engine.position, None)
+    check("平仓后 position=LOCKED 锁仓（H1 落簿，没自动开反向多）", engine.position.entry_mode, EntryMode.LOCKED)
 
 # ════════════════════════════════════════════════════════════════
 # [10] 信号门：OPENING 瞬态时新信号被忽略（不调 entry_policy）

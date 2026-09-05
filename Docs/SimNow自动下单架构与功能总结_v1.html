@@ -77,6 +77,7 @@
 <path d="M140 586 L70 586 L70 144 L138 144" fill="none" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#arrow)" data-page-node-id="xW1uqP9PyEwcWe7B2EYQWY"/>
 <text x="60" y="360" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A" transform="rotate(-90 60 360)" data-page-node-id="0yehqzhc6WKcmY9oguYhBu">回放：换策略不用等行情</text>
 </svg>
+
 <p>与上图（原设计架构图，即《SimNow自动下单，交易网关分层架构.png》）的差异：上图 6 层不变；落地后<strong>执行层</strong>长出了三块上图未画的子结构——①4 态状态机 + 信号门（<code>tg/engine.py</code>），②多仓 PositionBook（N 单批量，<code>tg/position_book.py</code>），③对账/卡单复核闭环（Phase E/F/G）。<strong>Broker 接口</strong>也从单一 <code>submit</code> 扩展为 5 个方法（详见 §三.5）。各层对应的代码文件见 §二 模块清单。</p>
 <hr />
 <h2 id="layer-file">二、模块清单（layer → file → 职责）</h2>
@@ -216,13 +217,14 @@
 <ul>
 <li><code>sizing.batch_open</code>：仓位管理关闭时默认 1；开启时配置为 N≥1，同根 K 线同一信号一次连开 N 笔（<code>_open_positions</code> 循环，受 <code>risk.max_open_positions</code> 上限截断并写 warning）。</li>
 <li>每笔是独立 Position（<code>tg/position_book.py</code>），离场按 FIFO（entry_bar_seq 升序）逐笔处理，支持部分平仓。</li>
+<li><strong>解锁侧当前仅支持单笔</strong>：<code>_unlock_position</code> 只取反向仓第一笔（<code>opp_list[0]</code>），多反向仓仅写 <code>unlock_partial_warning</code>。正常流程 LOCK 产生的反向仓为单笔，N 单解锁列入 Phase H（解锁优先批量入场）一并设计。</li>
 </ul>
 <h3 id="4">4. 入场方式决定离场方式（硬规则，无配置开关）</h3>
 <pre><code class="language-python"># engine._exit_intent —— 数学约束（手续费最优），不是策略选择
 OPEN_FIRST   → LOCK_SOFT   → OrderIntent.LOCK   # 开反向同手数（平今太贵 → 锁仓替代平今）
 UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今费 → 直接平仓
 </code></pre>
-<p>离场<strong>条件</strong>有三种（止盈 / 止损 / 时间 EOD）+ 第四种（反向买卖点信号）；离场<strong>方式</strong>一律由入场方式联动推导，外部不可覆写。</p>
+<p>离场<strong>条件</strong>有三种（止盈 / 止损 / 时间 EOD）+ 第四种（反向买卖点信号）；离场<strong>方式</strong>一律由入场方式联动推导，外部不可覆写。<strong>该联动为代码硬编码（<code>_exit_intent</code>），当前不提供配置开关</strong>——属有意设计（数学约束），后续如需切换须先论证费率前提。</p>
 <h3 id="5-broker-5">5. Broker 接口（5 方法，可替换）</h3>
 <table>
 <thead>
@@ -300,8 +302,8 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <tr>
 <td>2</td>
 <td>有前日锁仓单 → 解锁入场</td>
-<td>✅</td>
-<td>E2：IDLE + has_opposite → <code>_unlock_position</code>（CloseYesterday）</td>
+<td>✅（Phase H1 已补链）</td>
+<td>LOCK 软离场成交后，反向锁仓仓作为 Position 落簿（<code>EntryMode.LOCKED</code>，<code>lock_booked</code> 事件），持久化/重启恢复/对账接管全走既有管线；settle（TP/SL/EOD）跳过 LOCKED，锁仓唯一离场 = 对向信号触发 UNLOCK（CloseYesterday）。自动化闭环：LOCK → 次日对向信号 → 自动解锁，无需人工桥接。批量解锁入场（解锁优先 + N-k 新开补齐）列入 Phase H2</td>
 </tr>
 <tr>
 <td>3</td>
@@ -366,7 +368,7 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <tr>
 <td>P5–P8</td>
 <td>报价归一 / 权威成交判定 / 对手价定价 / 分层出场</td>
-<td>69</td>
+<td>76</td>
 </tr>
 <tr>
 <td>P9</td>
@@ -386,12 +388,12 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <tr>
 <td>P12–P14a</td>
 <td>PositionBook 多仓 + 配置化上限</td>
-<td>206</td>
+<td>202</td>
 </tr>
 <tr>
 <td>P15a/b</td>
-<td>N 单批量开 + FIFO 多仓平/对账</td>
-<td>195</td>
+<td>N 单批量开 + FIFO 多仓平/对账（含 H1 锁仓落簿语义）</td>
+<td>197</td>
 </tr>
 <tr>
 <td>P16</td>
@@ -404,12 +406,21 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <td>42</td>
 </tr>
 <tr>
+<td>P18</td>
+<td>Phase H1：LOCK 反向仓落簿（LOCKED 语义 + 恢复 + 对账接管）</td>
+<td>51</td>
+</tr>
+<tr>
 <td><strong>合计</strong></td>
 <td><strong>全套回归（dry_run 基线，可重复）</strong></td>
-<td><strong>753 全绿</strong></td>
+<td><strong>813 全绿</strong></td>
 </tr>
 </tbody>
 </table>
+<blockquote>
+<p>2026-09-05 评审整改：P8 新增 7 例（T3 EOD 以 bar 结束时刻判定 + T4 默认值单一事实源），P12–P14a 行数勘误 206→202。</p>
+<p>2026-09-05 Phase H1：P18 新增 51 例（LOCK 反向仓落簿），P10/P11/P14a/P15a/b 旧语义断言同步更新为"LOCK 后簿内为 LOCKED 锁仓"。</p>
+</blockquote>
 <p>另附 <code>tests/smoke_simnow_phase_g.py</code>：SimNow 交易时段只读冒烟（连接/真实持仓/成交复核/撤单接口），<code>--trade</code> 才做 1 手真开平。</p>
 <h2 id="_6">七、已知风险与边界</h2>
 <ol>

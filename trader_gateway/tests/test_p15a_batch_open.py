@@ -676,7 +676,8 @@ with tmp_dir() as td:
     check("E2E D step1:簿 1 仓（多）", len(eng.positions), 1)
     sig_rev = make_sig(key="P15A-5-4-rev", is_buy=False)
     eng.on_signal(sig_rev)
-    check("E2E D step2:簿空（平仓完成）", len(eng.positions), 0)
+    check("E2E D step2:簿 1 LOCKED 锁仓（平仓完成，H1 落簿）",
+          [p.entry_mode.value for p in eng.positions.positions], ["locked"])
     check("E2E D step2:signal_action 'close_only'",
           eng.store.signal_action(sig_rev.key), "close_only")
     check("E2E D step2:state IDLE", eng._state, EngineState.IDLE)

@@ -65,6 +65,10 @@ class EntryMode(str, Enum):
     """入场模式（决定了离场方式）。"""
     OPEN_FIRST = "open_first"          # 今日新开 → 离场用 LOCK_SOFT（避免平今 15× 费率）
     UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓 → 离场用 CLOSE_HARD（平昨无费率问题）
+    # Phase H1：LOCK 软离场成交后，broker 端真实存在的反向锁仓落簿为本模式。
+    # 唯一合法离场 = 对向信号触发 UNLOCK（CloseYesterday，次日语义）；
+    # settle（TP/SL/EOD）跳过本模式 —— 锁仓不等止盈止损，等解锁。
+    LOCKED = "locked"
 
 
 class ExitMode(str, Enum):
