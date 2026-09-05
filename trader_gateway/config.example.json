@@ -32,12 +32,24 @@
     }
   },
   "exit_policy": {
-    "name": "DefaultExitPolicy",
+    "name": "LayeredExitPolicy",
     "params": {
-      "take_profit_points": 10.0,
+      "initial_risk_points": 10.0,
       "stop_at_signal_extreme": true,
       "stop_buffer_ticks": 0.0,
-      "max_hold_bars": 0
+      "r_multiple_tp": 2.0,
+      "min_r_points": 2.0,
+      "use_atr": true,
+      "atr_period": 14,
+      "atr_sl_multiple": 2.0,
+      "use_trailing": true,
+      "breakeven_trigger_r": 1.0,
+      "breakeven_buffer_ticks": 0.0,
+      "trailing_trigger_r": 2.0,
+      "trailing_atr_multiple": 1.5,
+      "trailing_distance_points": 0.0,
+      "max_hold_bars": 30,
+      "session_end_hhmm": "14:55"
     }
   },
   "source": {

@@ -186,6 +186,29 @@ def main():
     chk10 = pol10.check(pos10, make_bar(2500, 100, 105, 95, 100), spec, 100)
     check("仅硬出场、无触发返回 None", chk10 is None, True)
 
+    print("\n[10] T3: EOD 以 bar 结束时刻判定（14:50 起点那根在 14:55 到达即触发）")
+    pol11 = LayeredExitPolicy({"session_end_hhmm": "14:55"})
+    # 喂两根间隔 300s 的闭合 bar，让策略推断出 bar 周期
+    pol11.on_bar(make_bar(1000, 100, 101, 99, 100, "2026-09-01 14:40"), spec)
+    pol11.on_bar(make_bar(1300, 100, 101, 99, 100, "2026-09-01 14:45"), spec)
+    pos11 = make_position(Side.LONG, 100.0, 90.0, 120.0)
+    # 14:50 起点的 bar 覆盖 14:50-14:55、14:55 推送 → 结束时刻 14:55 ≥ 阈值 → 触发（留足缓冲）
+    chk11 = pol11.check(pos11, make_bar(1600, 100, 105, 95, 100, "2026-09-01 14:50"), spec, 5)
+    check("14:50 起点 bar（结束 14:55）触发 eod_time", chk11.reason if chk11 else None, "eod_time")
+    # 14:45 起点的 bar 结束时刻 14:50 < 14:55 → 不触发
+    chk11b = pol11.check(pos11, make_bar(1300, 100, 105, 95, 100, "2026-09-01 14:45"), spec, 5)
+    check("14:45 起点 bar（结束 14:50）不触发", chk11b is None, True)
+    # 14:55 起点的 bar（结束 15:00，若上一根 EOD 单失败）→ 仍触发作重试兜底
+    chk11c = pol11.check(pos11, make_bar(1900, 100, 105, 95, 100, "2026-09-01 14:55"), spec, 6)
+    check("14:55 起点 bar（结束 15:00）仍触发", chk11c.reason if chk11c else None, "eod_time")
+
+    print("\n[11] T4: 裸构造默认值 = config.py 单一事实源")
+    pol12 = LayeredExitPolicy()
+    check("max_hold_bars 默认 = config 30", pol12.max_hold_bars, 30)
+    check("session_end_hhmm 默认 = config 14:55", pol12.session_end_hhmm, "14:55")
+    check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
+    check("atr_period 默认 = config 14", pol12.atr_period, 14)
+
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("=" * 60)

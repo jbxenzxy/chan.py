@@ -25,9 +25,14 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
+from ..config import DEFAULT_CONFIG
 from ..symbols import InstrumentSpec
 from ..types import Bar, ExitPlan, Position, Signal, Side
 from .base import ExitCheck, ExitPolicy, register_exit
+
+# T4（2026-09-05）：参数默认值单一事实源 —— 无参构造的默认值一律回落
+# config.py DEFAULT_CONFIG["exit_policy"]["params"]，不在策略里再养一套数字。
+_DEF_EXIT_PARAMS: dict = dict(DEFAULT_CONFIG["exit_policy"]["params"])
 
 
 @register_exit
@@ -38,32 +43,43 @@ class LayeredExitPolicy(ExitPolicy):
     def __init__(self, params=None):
         super().__init__(params)
         # L1 R 倍数定基线
-        self.initial_risk_points = float(self.params.get("initial_risk_points", 10.0))
-        self.stop_at_signal_extreme = bool(self.params.get("stop_at_signal_extreme", True))
-        self.stop_buffer_ticks = float(self.params.get("stop_buffer_ticks", 0.0) or 0.0)
-        self.r_multiple_tp = float(self.params.get("r_multiple_tp", 2.0))
-        self.min_r_points = float(self.params.get("min_r_points", 2.0))
+        self.initial_risk_points = float(self.params.get("initial_risk_points", _DEF_EXIT_PARAMS["initial_risk_points"]))
+        self.stop_at_signal_extreme = bool(self.params.get("stop_at_signal_extreme", _DEF_EXIT_PARAMS["stop_at_signal_extreme"]))
+        self.stop_buffer_ticks = float(self.params.get("stop_buffer_ticks", _DEF_EXIT_PARAMS["stop_buffer_ticks"]) or 0.0)
+        self.r_multiple_tp = float(self.params.get("r_multiple_tp", _DEF_EXIT_PARAMS["r_multiple_tp"]))
+        self.min_r_points = float(self.params.get("min_r_points", _DEF_EXIT_PARAMS["min_r_points"]))
         # L2 波动率(ATR)定宽窄
-        self.use_atr = bool(self.params.get("use_atr", True))
-        self.atr_period = int(self.params.get("atr_period", 14))
-        self.atr_sl_multiple = float(self.params.get("atr_sl_multiple", 2.0))
+        self.use_atr = bool(self.params.get("use_atr", _DEF_EXIT_PARAMS["use_atr"]))
+        self.atr_period = int(self.params.get("atr_period", _DEF_EXIT_PARAMS["atr_period"]))
+        self.atr_sl_multiple = float(self.params.get("atr_sl_multiple", _DEF_EXIT_PARAMS["atr_sl_multiple"]))
         # L3 移动/保本锁利
-        self.use_trailing = bool(self.params.get("use_trailing", True))
-        self.breakeven_trigger_r = float(self.params.get("breakeven_trigger_r", 1.0))
-        self.breakeven_buffer_ticks = float(self.params.get("breakeven_buffer_ticks", 0.0) or 0.0)
-        self.trailing_trigger_r = float(self.params.get("trailing_trigger_r", 2.0))
-        self.trailing_atr_multiple = float(self.params.get("trailing_atr_multiple", 1.5))
-        self.trailing_distance_points = float(self.params.get("trailing_distance_points", 0.0) or 0.0)
+        self.use_trailing = bool(self.params.get("use_trailing", _DEF_EXIT_PARAMS["use_trailing"]))
+        self.breakeven_trigger_r = float(self.params.get("breakeven_trigger_r", _DEF_EXIT_PARAMS["breakeven_trigger_r"]))
+        self.breakeven_buffer_ticks = float(self.params.get("breakeven_buffer_ticks", _DEF_EXIT_PARAMS["breakeven_buffer_ticks"]) or 0.0)
+        self.trailing_trigger_r = float(self.params.get("trailing_trigger_r", _DEF_EXIT_PARAMS["trailing_trigger_r"]))
+        self.trailing_atr_multiple = float(self.params.get("trailing_atr_multiple", _DEF_EXIT_PARAMS["trailing_atr_multiple"]))
+        self.trailing_distance_points = float(self.params.get("trailing_distance_points", _DEF_EXIT_PARAMS["trailing_distance_points"]) or 0.0)
         # L4 时间/收盘兜底
-        self.max_hold_bars = int(self.params.get("max_hold_bars", 0) or 0)
-        self.session_end_hhmm = str(self.params.get("session_end_hhmm", "14:55") or "")
+        self.max_hold_bars = int(self.params.get("max_hold_bars", _DEF_EXIT_PARAMS["max_hold_bars"]) or 0)
+        self.session_end_hhmm = str(self.params.get("session_end_hhmm", _DEF_EXIT_PARAMS["session_end_hhmm"]) or "")
+        # T3（2026-09-05）：EOD 按"bar 结束时刻"判定所需的 bar 间隔（秒），
+        # 由 on_bar 用相邻两根闭合 K 线推断；未知时退回旧口径（起点判定）保底。
+        self._bar_secs: Optional[int] = None
 
         # ATR 历史缓冲（on_bar 维护，平着也收）
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
+        prev_ts = self._bars[-1].timestamp if self._bars else 0
         self._bars.append(bar)
+        # T3：由相邻两根闭合 K 线推断 bar 间隔（1 分钟 ~ 4 小时视为有效），
+        # 供 EOD "bar 结束时刻" 判定使用；跳变（隔夜/休市）不影响——
+        # EOD 判定只发生在尾盘连续段，此时相邻间隔就是标准 bar 周期。
+        if prev_ts and bar.timestamp > prev_ts:
+            secs = int(bar.timestamp - prev_ts)
+            if 60 <= secs <= 14400:
+                self._bar_secs = secs
 
     # ---------- ATR ----------
     def _atr(self) -> Optional[float]:
@@ -169,8 +185,21 @@ class LayeredExitPolicy(ExitPolicy):
         # ④ L4 时间/收盘兜底（硬上限，优先于跟踪）
         if self.max_hold_bars > 0 and bars_held >= self.max_hold_bars:
             return ExitCheck("time", bar.close)
-        if self.session_end_hhmm and self._bar_time(bar) >= self.session_end_hhmm:
-            return ExitCheck("eod_time", bar.close)
+        if self.session_end_hhmm:
+            # T3（2026-09-05）：以 bar 结束时刻 ≥ 阈值判定。bar 闭合即推送，
+            # 5m 下 14:50 起点的 bar 在 14:55 到达触发 = 14:55 发单，留足 5 分钟缓冲；
+            # 旧口径（bar 起点判定）会让 14:55-15:00 那根在收盘后才触发，发单零缓冲。
+            # _bar_secs 未知（仅首根/异常流）时退回起点判定保底，不丢兜底。
+            thr = int(self.session_end_hhmm[:2]) * 60 + int(self.session_end_hhmm[3:5])
+            s = self._bar_time(bar)
+            start_min = int(s[:2]) * 60 + int(s[3:5])
+            if self._bar_secs:
+                end_min = start_min + max(1, int(round(self._bar_secs / 60)))
+                hit = end_min >= thr
+            else:
+                hit = s >= self.session_end_hhmm
+            if hit:
+                return ExitCheck("eod_time", bar.close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         if self.use_trailing:
