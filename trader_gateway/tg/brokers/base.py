@@ -123,6 +123,16 @@ class Broker(ABC):
         """
         return True
 
+    def cancel_pending(self, signal_key: str = "") -> int:
+        """撤掉该 signal_key 的在途委托，返回撤单请求数（Phase G2）。
+
+        引擎在 UNLOCK 卡单复核未确认时调用：先撤在途单再按真实持仓修正，
+        防止「重建 portfolio 后挂单又成交」的双重平仓。
+        默认 0（基类兜底：dry_run 同步撮合无在途单，继承即可）。
+        SimNow 重写按 signal_key → raw_order_id 索引逐笔撤单。
+        """
+        return 0
+
     def equity(self, source: str = "available") -> Optional[float]:
         """账户权益查询（可选实现）。仓位管理（PositionSizer）用。
 

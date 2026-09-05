@@ -207,6 +207,10 @@ class SimNowBroker(Broker):
         self._trade_symbol = spec.trade_symbol
         self._seq = itertools.count(1)
         self.orders: List[Order] = []
+        # Phase G1：signal_key → [raw_order_id] 索引（trade_confirmed / cancel_pending
+        # 复查用）。必须在凭据检查**之前**初始化 —— 缺凭据 early-return 时也要保证
+        # 字段存在，否则单测实例化（无凭据）后访问会 AttributeError。
+        self._sig_orders: Dict[str, List[str]] = {}
         self._conn_error: Optional[str] = None
 
         # 凭据：params 优先，环境变量兜底
@@ -636,6 +640,13 @@ class SimNowBroker(Broker):
                   "attempt": attempt, "max_attempts": max_attempts},
         )
         self.orders.append(o)
+        # Phase G1：登记 signal_key → raw_order_id（trade_confirmed / cancel_pending
+        # 复查用）。同一 signal_key 的追价重试会登记多条 raw 单，各自的
+        # trade_records 互不重复，复查时累加安全。_rejected 路径没有真实
+        # raw 单，不在此登记。
+        raw_id = str(getattr(order, "order_id", "") or "")
+        if raw_id and signal_key:
+            self._sig_orders.setdefault(signal_key, []).append(raw_id)
         return o
 
     # ---------------- 内部工具 ----------------
@@ -763,19 +774,94 @@ class SimNowBroker(Broker):
             return None
 
     def trade_confirmed(self, intent, signal_key: str = "") -> bool:
-        """Phase F：UNLOCK 卡单 5 bars 后复核。
+        """Phase G1：UNLOCK 卡单 5 bars 后复核 —— 查 CTP 真实成交明细。
 
-        根据 signal_key 找出本轮已报的同 signal_key 委托，逐个查 ``order.trade_records``
-        累计成交量；任一委托真实成交明细 < volume 视作未完全确认。
-        不持有 signal_key→order 映射时（默认行为）→ False：保守判定"未确认"，
-        触发引擎 _reconcile_positions 兜底，绝不漏报卡单。
+        复查策略：**不信任** submit 时 ``_finalize`` 的判定（F1 防的正是提交
+        时刻的状态漂移——CTP 通道异常会让 tqsdk 端状态与交易所实际不符），而是
+        按 signal_key → raw_order_id 索引，用 ``api.get_order(raw_id)`` 重新拉取
+        **当前**订单，累计 ``order.trade_records`` 真实成交量再判定。
+
+        判定口径：sum(各 raw 单 trade_records[*].volume) >= 该 signal_key 的
+        委托量 → True。追价重试产生的多条 raw 单，trade_records 互不重复，
+        累加安全（partial + 重试全成的场景也能正确确认）。
+
+        查不到索引 / api 不可用 / 单笔 get_order 失败（跳过该单）/ 任何异常
+        → False（保守），交由引擎 _reconcile_positions 按真实持仓兜底。
         """
-        if self._api is None:
+        if self._api is None or not signal_key:
             return False
-        # Phase F 起步：simnow 暂未维护 signal_key→order 索引，保守返回 False，
-        # 让引擎 _reconcile_positions 用真实持仓做兜底（已有逻辑，安全）。
-        # Phase G 接真实账户时再补 signal_key→raw_order_id 索引与按 intent 过滤。
-        return False
+        raw_ids = list(self._sig_orders.get(signal_key) or [])
+        if not raw_ids:
+            return False
+
+        # 期望成交量：取该 signal_key 下非 rejected 委托的最大 volume
+        # （追价重试各 attempt 的 volume 相同，取 max 防御异常数据）
+        expected = 0
+        for o in self.orders:
+            if getattr(o, "signal_key", "") != signal_key:
+                continue
+            if getattr(o, "status", "") == "rejected":
+                continue
+            try:
+                expected = max(expected, int(o.volume))
+            except (TypeError, ValueError):
+                continue
+        if expected <= 0:
+            return False
+
+        # 先给一次同步窗口，让 tqsdk 把该单最新回报推过来（wait_update 必须
+        # 由持有 api 的线程驱动——引擎 on_bar 与 broker 同线程，满足）
+        try:
+            self._api.wait_update(deadline=time.time() + 1.0)
+        except Exception:
+            pass
+
+        total_traded = 0
+        try:
+            for raw_id in raw_ids:
+                try:
+                    raw = self._api.get_order(raw_id)
+                except Exception:
+                    continue  # 查不到（如会话重建后丢单）→ 该单不计入，保守
+                if raw is None:
+                    continue
+                total_traded += _traded_volume_from_records(raw)
+        except Exception:
+            return False
+        return total_traded >= expected
+
+    def cancel_pending(self, signal_key: str = "") -> int:
+        """Phase G2：撤掉该 signal_key 下所有未终态的在途委托，返回撤单请求数。
+
+        引擎在 5-bar 卡单复核 trade_confirmed=False 时调用：先撤在途单，
+        再按真实持仓修正 —— 防止「重建 portfolio 后挂单又成交」的双重平仓。
+        已 FINISHED 的单跳过；api 不可用 / 无索引 / 全部已终态 → 0。
+        """
+        if self._api is None or not signal_key:
+            return 0
+        raw_ids = list(self._sig_orders.get(signal_key) or [])
+        n = 0
+        for raw_id in raw_ids:
+            try:
+                raw = self._api.get_order(raw_id)
+            except Exception:
+                continue
+            if raw is None:
+                continue
+            if getattr(raw, "status", "") == "FINISHED":
+                continue  # 已终态，撤无可撤
+            try:
+                self._api.cancel_order(raw_id)
+                n += 1
+            except Exception:
+                continue
+        if n > 0:
+            # 给 CTP 撤单回报留同步窗口（撤单确认回 local 缓存需要 wait_update）
+            try:
+                self._api.wait_update(deadline=time.time() + 2.0)
+            except Exception:
+                pass
+        return n
 
     def equity(self, source: str = "available") -> Optional[float]:
         """查询 SimNow 账户权益（仓位管理用）。未连接/查询失败返回 None。

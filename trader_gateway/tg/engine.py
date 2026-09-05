@@ -551,7 +551,23 @@ class GatewayEngine:
             self._unlock_in_flight = None
             return
 
-        # 未确认：查 broker.real_position(target.side) 判定卡单 vs 恢复
+        # 未确认：Phase G2 —— 先撤掉该 signal_key 的在途 UNLOCK 委托。
+        # 若不撤，重建 portfolio 后挂单仍可能成交 → 双重平仓。
+        # base/dry_run 的 cancel_pending 返回 0（无在途单），零行为影响。
+        fn_cp = getattr(self.broker, "cancel_pending", None)
+        if callable(fn_cp):
+            try:
+                n_cancelled = int(fn_cp(rec["signal_key"]))
+                if n_cancelled > 0:
+                    self.ev.write("unlock_pending_cancelled",
+                                  signal_key=rec["signal_key"],
+                                  target_signal_key=rec.get("target_signal_key", ""),
+                                  cancelled=n_cancelled,
+                                  bars_elapsed=bars_elapsed)
+            except Exception:
+                pass  # 撤单异常不阻断后续 real_position 对账
+
+        # 查 broker.real_position(target.side) 判定卡单 vs 恢复
         target_side_str = rec.get("target_side", "")
         fn_rp = getattr(self.broker, "real_position", None)
         real_vol: Optional[int] = None
