@@ -450,6 +450,81 @@ check("5.1 dry_run.cancel_pending 继承 base → 0", dr.cancel_pending("k1"), 0
 check("5.2 dry_run.trade_confirmed 仍为 True（Phase F 不变）",
       dr.trade_confirmed(OrderIntent.UNLOCK, "k1"), True)
 
+
+# ════════════════════════════════════════════════════════════════
+# [6] UNLOCK 与 OPEN 归一（2026-09-05 规格拍板：解锁≈开仓，入场不追价）
+# ════════════════════════════════════════════════════════════════
+print("── [6] UNLOCK 归一 OPEN：单次超价 + 超时撤单不追价 ──")
+
+
+class FakeLiveOrder:
+    """模拟 tqsdk Order：_wait_finished / _finalize 需要的最小字段面。"""
+
+    def __init__(self, oid, volume, fill):
+        self.order_id = oid
+        self.status = "FINISHED" if fill else "ALIVE"
+        self.volume_left = 0 if fill else volume
+        self.trade_records = ({"t1": {"volume": volume, "price": 4547.0}}
+                              if fill else {})
+        self.trade_price = 4547.0
+        self.last_msg = "Submitted"
+
+
+class FakeInsertApi(FakeApi):
+    """在 FakeApi 之上加 insert_order；成交场景在 insert 瞬间同步扣减持仓。"""
+
+    def __init__(self, long_pos=0, fill=True):
+        super().__init__(long_pos=long_pos)
+        self.fill = fill
+        self.inserted = []
+
+    def get_position(self, sym):
+        # 不缓存：每次返回当前最新持仓（模拟 wait_update 推送后的视图）
+        return FakePosition(self._long_pos, self._short_pos)
+
+    def insert_order(self, symbol, direction, offset, volume, limit_price):
+        self.inserted.append({"direction": direction, "offset": offset,
+                              "volume": volume, "limit_price": limit_price})
+        if self.fill:
+            # UNLOCK 平多（SELL）→ 多头持仓同步减少
+            if direction == "SELL":
+                self._long_pos -= volume
+            else:
+                self._long_pos += volume
+        o = FakeLiveOrder("raw-{}".format(len(self.inserted)), volume, self.fill)
+        self._orders[o.order_id] = o  # get_order 可查（trade_confirmed 复核路径用）
+        return o
+
+
+bu = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.3,
+                                            "overprice_points": 0.6})
+bu._conn_error = None  # 无凭据实例化会置连接错误，测试注入 api 前先清掉
+
+# 6.1 未成交：单次报单 + 超时撤单 + rejected，不追价
+api1 = FakeInsertApi(long_pos=2, fill=False)
+bu._api = api1
+o = bu.submit(OrderIntent.UNLOCK, Side.LONG, 2, 4550.0, "u-key-timeout")
+check("6.1a 超时未成交 → rejected", o.status, "rejected")
+check("6.1b 只报了 1 次单（不追价）", len(api1.inserted), 1)
+check("6.1c 报文是 CLOSEYESTERDAY（平昨不变）",
+      api1.inserted[0]["offset"], "CLOSEYESTERDAY")
+check("6.1d 方向 SELL（平多单）", api1.inserted[0]["direction"], "SELL")
+check("6.1e 超时后撤单被调用", len(api1.cancelled), 1)
+
+# 6.2 立即成交：单次成交、不撤单、成交价来自 trade_records
+api2 = FakeInsertApi(long_pos=2, fill=True)
+bu._api = api2
+o = bu.submit(OrderIntent.UNLOCK, Side.LONG, 2, 4550.0, "u-key-fill")
+check("6.2a 立即成交 → filled", o.status, "filled")
+check("6.2b 只报了 1 次单", len(api2.inserted), 1)
+check("6.2c 未撤单", len(api2.cancelled), 0)
+check("6.2d 成交价取 CTP 明细加权", o.filled_price, 4547.0)
+
+# 6.3 单次路径也登记 signal_key→raw_order_id 索引（trade_confirmed 可复核）
+check("6.3a 索引已登记", bu._sig_orders.get("u-key-fill"), ["raw-1"])
+check("6.3b trade_confirmed 对单次路径成交 → True",
+      bu.trade_confirmed(OrderIntent.UNLOCK, "u-key-fill"), True)
+
 # ════════════════════════════════════════════════════════════════
 print("")
 print("P17 Phase G：{} 通过 / {} 失败".format(_PASS, _FAIL))

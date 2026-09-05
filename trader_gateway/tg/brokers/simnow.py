@@ -56,11 +56,22 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from ..config import DEFAULT_CONFIG
 from ..symbols import InstrumentSpec
 from ..types import Order, OrderIntent, Side, now_cn
 from .base import INTENT_TO_OFFSET, Broker, register_broker
 
+# broker 参数默认值的**单一事实源**：tg/config.py DEFAULT_CONFIG["broker_params"]。
+# 本文件不再自带任何兜底数值 —— params（用户 config.json）缺键时一律回到这里取，
+# 避免"config.py 一份、simnow.py 一份"双处维护导致默认值漂移
+# （2026-09-05 修复：旧代码 fill_timeout_open 兜底 10.0，与 config.py 的 5.0 矛盾）。
+_BROKER_PARAMS_DEFAULT = DEFAULT_CONFIG["broker_params"]
+
 _DIRECTION = {Side.LONG: "BUY", Side.SHORT: "SELL"}
+# close 类报文（CLOSE/UNLOCK）的方向：平多=SELL、平空=BUY（与 _DIRECTION 相反）。
+# 2026-09-05 修复：旧 _submit_close 直接用 _DIRECTION[side]，平多发 BUY —— CTP 会拒单
+# 或平错方向；此前 dry_run 撮合不校验 direction 字符串，故回归未暴露。
+_CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 
 
 def _position_total(api, trade_symbol: str, side: str) -> int:
@@ -245,6 +256,23 @@ class SimNowBroker(Broker):
         v = (self.params.get(param_key) or os.environ.get(env_key) or "").strip()
         return v
 
+    def _param(self, key: str) -> Any:
+        """读 broker 参数：params（用户 config.json 的 broker_params）优先，
+        缺键回落到 tg/config.py DEFAULT_CONFIG["broker_params"]（单一事实源）。
+
+        两层都没有 → 直接抛 KeyError（fail-fast）：参数漏定义应该在配置阶段
+        暴露，而不是带着错误默认值悄悄跑。
+        """
+        v = self.params.get(key)
+        if v is not None:
+            return v
+        try:
+            return _BROKER_PARAMS_DEFAULT[key]
+        except KeyError:
+            raise KeyError(
+                "broker 参数 '{}' 未在 config.json broker_params 配置，"
+                "且 tg/config.py DEFAULT_CONFIG.broker_params 也无默认值".format(key))
+
     # ---------------- 连接与合约映射 ----------------
     def _connect(self) -> None:
         """登录 SimNow，带重试。
@@ -255,8 +283,8 @@ class SimNowBroker(Broker):
         """
         from tqsdk import TqApi, TqAuth, TqAccount
 
-        max_attempts = int(self.params.get("connect_retries", 3) or 3)
-        backoff = float(self.params.get("connect_backoff", 5.0) or 5.0)
+        max_attempts = int(self._param("connect_retries"))
+        backoff = float(self._param("connect_backoff"))
         last_err: Optional[str] = None
 
         for attempt in range(1, max_attempts + 1):
@@ -422,6 +450,12 @@ class SimNowBroker(Broker):
         # LOCK 也是"开反向"——走 _submit_open 路径，方向由调用方填好（已反向）
         if intent in (OrderIntent.OPEN, OrderIntent.LOCK):
             return self._submit_open(intent, side, volume, ref_price, signal_key, note)
+        if intent is OrderIntent.UNLOCK:
+            # 2026-09-05 规格归一：解锁≈开仓（入场语义）——单次超价 + fill_timeout_open
+            # 超时撤单、不追价（"入场没成功，最多不赚钱，但不会亏钱"）。
+            # 报文仍是 CloseYesterday（平反向昨仓，避开平今费率）；
+            # 通道级异常兜底交给引擎 Phase F1（5 bar 后 trade_confirmed 复核 + cancel_pending）。
+            return self._submit_unlock(intent, side, volume, ref_price, signal_key, note)
         return self._submit_close(intent, side, volume, ref_price, signal_key, note)
 
     @staticmethod
@@ -462,7 +496,7 @@ class SimNowBroker(Broker):
         return self.spec.round_price(float(bid) - overprice_points, "down")
 
     def _build_limit_price(self, action: str, side: Side, ref_price: float) -> float:
-        opp = float(self.params.get("overprice_points", self.spec.overprice_points))
+        opp = float(self._param("overprice_points"))
         limit = self._overprice_limit(action, side, opp)
         if limit is None:
             spec = self.spec
@@ -496,12 +530,56 @@ class SimNowBroker(Broker):
         except Exception as e:
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "下单失败: {}: {}".format(type(e).__name__, e))
-        # 开仓卡单：超时（默认 10s，可调 fill_timeout_open）自动撤单，不成交即 rejected，
-        # 引擎不产生幻影持仓，等下一信号再触发。
-        timeout = float(self.params.get("fill_timeout_open", 10.0))
+        # 开仓卡单：超时（config broker_params.fill_timeout_open，默认 5s）自动撤单，
+        # 不成交即 rejected，引擎不产生幻影持仓，等下一信号再触发。
+        timeout = float(self._param("fill_timeout_open"))
         self._wait_finished(order, timeout_s=timeout)
         return self._finalize(order, intent.value, "open", side, volume, ref_price, signal_key,
                              note, baseline, expected_delta, limit)
+
+    def _submit_unlock(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
+                       signal_key: str, note: str) -> Order:
+        """UNLOCK（解锁入场）：与 OPEN 归一——单次超价限价 + 超时撤单，不追价。
+
+        规格（2026-09-05 用户拍板）：解锁约等价于开仓（入场语义），卡单处理必须与
+        OPEN 一致：等 fill_timeout_open 秒 → 撤单 → 本笔作废，等下一个新信号。
+        "入场没成功，最多不赚钱，但不会亏钱。"
+
+        与 _submit_open 的两点差异：
+          · offset=CLOSEYESTERDAY（平反向昨仓，避开平今高费率）——报文语义不变
+          · 保留 close 路径的 _wait_position_ok 前置守卫（close 类报文要求 CTP 侧
+            确有持仓，挡"平仓量超过持仓量"拒单；这是提交前检查，不是追价）
+
+        通道级异常兜底（撤单失败 / 回报漂移 / 判定后状态漂移）由引擎 Phase F1 接管：
+        _unlock_in_flight 持久化 + 5 bar 后 trade_confirmed 复核 + cancel_pending。
+        """
+        # P0 守卫：等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
+        if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
+            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
+                                  "等待持仓更新超时（>10s），可能上游未同步")
+        direction = _CLOSE_DIRECTION[side]  # 平多=SELL / 平空=BUY（2026-09-05 方向修复）
+        offset = "CLOSEYESTERDAY"
+        # 超价下单：与 OPEN 同源（实时对手价 ± overprice_points，主动跨价差确保成交）
+        opp = float(self._param("overprice_points"))
+        limit = self._overprice_limit("close", side, opp)
+        if limit is None:
+            limit = self.spec.align_exit(ref_price, side.sign)
+        side_key = "LONG" if side is Side.LONG else "SHORT"
+        baseline = self._take_baseline(side_key)
+        expected_delta = -int(volume)
+        try:
+            order = self._api.insert_order(symbol=self._trade_symbol,
+                                           direction=direction, offset=offset,
+                                           volume=int(volume), limit_price=limit)
+        except Exception as e:
+            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
+                                  "下单失败: {}: {}".format(type(e).__name__, e))
+        # 与 OPEN 完全归一：同一超时参数（config broker_params.fill_timeout_open，默认 5s），
+        # 超时 _wait_finished 自动撤单 → rejected，单次报单不追价
+        timeout = float(self._param("fill_timeout_open"))
+        self._wait_finished(order, timeout_s=timeout)
+        return self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
+                              note, baseline, expected_delta, limit)
 
     def _close_fallback_limit(self, side: Side, ref_price: float,
                               prev_limit: Optional[float],
@@ -532,13 +610,13 @@ class SimNowBroker(Broker):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "等待持仓更新超时（>10s），可能上游未同步")
         side_key = "LONG" if side is Side.LONG else "SHORT"
-        direction = _DIRECTION[side]
+        direction = _CLOSE_DIRECTION[side]  # 平多=SELL / 平空=BUY（2026-09-05 方向修复）
         is_buy = self._is_buy("close", side)
         chase_sign = 1 if is_buy else -1          # 买→加价 / 卖→降价，朝成交方向追
-        opp = float(self.params.get("overprice_points", self.spec.overprice_points))
-        max_attempts = int(self.params.get("close_max_chase", 20))
-        per_wait = float(self.params.get("fill_timeout_close", 5.0))
-        chase_ticks = float(self.params.get("close_chase_ticks", 2))
+        opp = float(self._param("overprice_points"))
+        max_attempts = int(self._param("close_max_chase"))
+        per_wait = float(self._param("fill_timeout_close"))
+        chase_ticks = float(self._param("close_chase_ticks"))
 
         last: Optional[Order] = None
         prev_limit: Optional[float] = None

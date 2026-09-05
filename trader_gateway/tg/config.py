@@ -88,6 +88,9 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "fill_timeout_close": 5.0,    # 平仓委托每轮等待成交秒数，超时撤单 → 进入下一轮追价
         "close_max_chase": 20,        # 平仓追价最大轮数：每轮都按"最新对手价 ± overprice"重新定价，直到成交或用尽轮数
         "close_chase_ticks": 2,       # 平仓追价兜底步长：仅在行情临时取不到时，在上一笔限价基础上朝成交方向推几跳
+        "connect_retries": 3,         # SimNow 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
+        "connect_backoff": 5.0,       # 登录失败后的首轮退避秒数（每轮 ×1.5：5s → 7.5s → 11.25s）
+        # ↑ 单一事实源：broker 参数默认值只在本表维护，tg/brokers/simnow.py 不再自带兜底
     },
     # 仓位管理（手数定档）。默认 enabled=False —— 开几手完全沿用 risk.max_volume，
     # 与加这个模块之前的行为逐字节一致；不查账户、不联网，零风险引入。
@@ -116,7 +119,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "close_today_fee_rate": 0.000345,   # 平今手续费率（中金所期指很贵，是开仓的 15 倍）
         "close_fee_rate": 0.000023,         # 平昨手续费率
         "slippage_ticks": 1.0,              # 单边滑点（tick 数）：仅 dry_run 模拟成交与成本展示用，不参与实盘定价
-        "overprice_points": 0.6,            # 超价点数默认值（broker_params 未配置时的兜底，建议与 broker_params 保持一致）
+        "overprice_points": 0.6,            # （已废弃，仅为向后兼容保留）超价默认值统一在 broker_params.overprice_points，simnow 不再读本字段
         "close_today_first": True,          # 平仓优先平今仓（True=先平当日仓，受平今费率影响时关注）
         "sessions": ["09:30-11:30", "13:00-15:00"],  # 交易时段（风控 enforce_session 与收盘强平都按此判断）
     },
