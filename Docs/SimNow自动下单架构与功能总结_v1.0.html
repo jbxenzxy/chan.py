@@ -26,7 +26,7 @@
 <body>
 <h1 id="simnow">SimNow 自动下单 · 交易网关分层架构与功能总结</h1>
 <blockquote>
-<p>版本：v1.0（2026-09-05） · 基于 custom-dev 分支（Phase G 已合入）
+<p>版本：v1.0（2026-09-05） · 基于 custom-dev 分支（Phase G / H1 / H2 已合入）
 用途：专家评审材料。对照《SimNow自动下单，交易网关分层架构.png》绘制时的设计，逐层落地情况 + 交易语义全量说明。
 代码位置：<code>chan.py/trader_gateway/</code>（GitHub: jbxenzxy/chan.py, branch <code>custom-dev</code>）</p>
 </blockquote>
@@ -217,7 +217,7 @@
 <ul>
 <li><code>sizing.batch_open</code>：仓位管理关闭时默认 1；开启时配置为 N≥1，同根 K 线同一信号一次连开 N 笔（<code>_open_positions</code> 循环，受 <code>risk.max_open_positions</code> 上限截断并写 warning）。</li>
 <li>每笔是独立 Position（<code>tg/position_book.py</code>），离场按 FIFO（entry_bar_seq 升序）逐笔处理，支持部分平仓。</li>
-<li><strong>解锁侧当前仅支持单笔</strong>：<code>_unlock_position</code> 只取反向仓第一笔（<code>opp_list[0]</code>），多反向仓仅写 <code>unlock_partial_warning</code>。正常流程 LOCK 产生的反向仓为单笔，N 单解锁列入 Phase H（解锁优先批量入场）一并设计。</li>
+<li><strong>解锁侧支持批量（Phase H2 已交付，解锁优先）</strong>：<code>_unlock_batch_entry</code> 按 <code>unlock_count = min(反向仓数, N)</code> 分派——<code>batch_count==1</code> 走原 E2 单笔路径（零行为变化）；N≥2 串行提交 UNLOCK 批次（sub_key <code>#u{idx}</code>）。批次级 5s 失败语义：批截止 = 最后一张提交 + 5s，到期只撤卡单、已成交按成功（probe → cancel → 再 probe 防撤单竞速，事件 <code>unlock_batch_pending_cancelled</code> / <code>unlock_batch_confirmed_after_cancel</code>）。结算三分支：k=0 整批放弃（快照恢复回簿、回 IDLE）/ 0&lt;k&lt;N 用 N−k 笔新开补齐（headroom 截断 + risk 门禁，被拦只砍新开不回滚解锁）/ 纯解锁；<code>unlock_batch_result</code> 事件 + <code>unlock_batch_in_flight</code> 持久化（崩溃后重启续跑复核）。</li>
 </ul>
 <h3 id="4">4. 入场方式决定离场方式（硬规则，无配置开关）</h3>
 <pre><code class="language-python"># engine._exit_intent —— 数学约束（手续费最优），不是策略选择
@@ -302,8 +302,8 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <tr>
 <td>2</td>
 <td>有前日锁仓单 → 解锁入场</td>
-<td>✅（Phase H1 已补链）</td>
-<td>LOCK 软离场成交后，反向锁仓仓作为 Position 落簿（<code>EntryMode.LOCKED</code>，<code>lock_booked</code> 事件），持久化/重启恢复/对账接管全走既有管线；settle（TP/SL/EOD）跳过 LOCKED，锁仓唯一离场 = 对向信号触发 UNLOCK（CloseYesterday）。自动化闭环：LOCK → 次日对向信号 → 自动解锁，无需人工桥接。批量解锁入场（解锁优先 + N-k 新开补齐）列入 Phase H2</td>
+<td>✅（Phase H1 补链 + H2 批量化）</td>
+<td>LOCK 软离场成交后，反向锁仓仓作为 Position 落簿（<code>EntryMode.LOCKED</code>，<code>lock_booked</code> 事件），持久化/重启恢复/对账接管全走既有管线；settle（TP/SL/EOD）跳过 LOCKED，锁仓唯一离场 = 对向信号触发 UNLOCK（CloseYesterday）。自动化闭环：LOCK → 次日对向信号 → 自动解锁，无需人工桥接。批量解锁入场（解锁优先 + N-k 新开补齐）已交付（Phase H2）</td>
 </tr>
 <tr>
 <td>3</td>
@@ -410,16 +410,17 @@ UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今�
 <td>Phase H1：LOCK 反向仓落簿（LOCKED 语义 + 恢复 + 对账接管）</td>
 <td>51</td>
 </tr>
+<tr> <td>P19</td> <td>Phase H2：批次解锁入场（解锁优先 + 批次级 5s 失败语义 + 三分支结算）</td> <td>83</td> </tr>
 <tr>
 <td><strong>合计</strong></td>
 <td><strong>全套回归（dry_run 基线，可重复）</strong></td>
-<td><strong>813 全绿</strong></td>
+<td><strong>897 全绿</strong></td>
 </tr>
 </tbody>
 </table>
 <blockquote>
 <p>2026-09-05 评审整改：P8 新增 7 例（T3 EOD 以 bar 结束时刻判定 + T4 默认值单一事实源），P12–P14a 行数勘误 206→202。</p>
-<p>2026-09-05 Phase H1：P18 新增 51 例（LOCK 反向仓落簿），P10/P11/P14a/P15a/b 旧语义断言同步更新为"LOCK 后簿内为 LOCKED 锁仓"。</p>
+<p>2026-09-05 Phase H1：P18 新增 51 例（LOCK 反向仓落簿），P10/P11/P14a/P15a/b 旧语义断言同步更新为"LOCK 后簿内为 LOCKED 锁仓"。</p> <p>2026-09-05 Phase H2：P19 新增 83 例（批次解锁入场），全套 P5..P19 = 897 全绿；<code>unlock_partial_warning</code>（多反向仓告警）随批次路径移除（N=1 走 E2 单笔、N≥2 走批次）。</p>
 </blockquote>
 <p>另附 <code>tests/smoke_simnow_phase_g.py</code>：SimNow 交易时段只读冒烟（连接/真实持仓/成交复核/撤单接口），<code>--trade</code> 才做 1 手真开平。</p>
 <h2 id="_6">七、已知风险与边界</h2>
