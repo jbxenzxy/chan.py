@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SimNow 自动下单 · 交易网关分层架构与功能总结</title>
+<style>
+  body { font-family: system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+         max-width: 960px; margin: 24px auto; padding: 0 20px 60px;
+         color: #2b2a27; line-height: 1.7; }
+  h1 { font-size: 1.6em; border-bottom: 2px solid #185FA5; padding-bottom: 8px; color: #0C447C; }
+  h2 { font-size: 1.3em; color: #0C447C; border-bottom: 1px solid #d8d6cf; padding-bottom: 5px; margin-top: 2em; }
+  h3 { font-size: 1.1em; color: #412402; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 0.92em; }
+  th, td { border: 1px solid #cfcdc5; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: #E6F1FB; color: #0C447C; }
+  tr:nth-child(even) td { background: #faf9f6; }
+  code { background: #f1efe8; padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+  pre { background: #f6f5f1; border: 1px solid #e2e0d8; border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 4px solid #BA7517; margin: 12px 0; padding: 6px 16px; background: #FAEEDA; color: #5a4a2f; }
+  hr { border: none; border-top: 1px solid #d8d6cf; margin: 2em 0; }
+  .fig-caption { text-align: center; font-size: 0.88em; color: #5F5E5A; margin: 4px 0 8px; }
+</style>
+</head>
+<body>
+<h1 id="simnow">SimNow 自动下单 · 交易网关分层架构与功能总结</h1>
+<blockquote>
+<p>版本：v1.0（2026-09-05） · 基于 custom-dev 分支（Phase G 已合入）
+用途：专家评审材料。对照《SimNow自动下单，交易网关分层架构.png》绘制时的设计，逐层落地情况 + 交易语义全量说明。
+代码位置：<code>chan.py/trader_gateway/</code>（GitHub: jbxenzxy/chan.py, branch <code>custom-dev</code>）</p>
+</blockquote>
+<hr />
+<h2 id="_1">一、分层架构总览</h2>
+<svg viewBox="0 0 680 632" width="100%" max-width="760px" role="img" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif" style="display:block;margin:0 auto;" data-page-node-id="V6NKu7TomdVXSK6wqA8mEB">
+<title>M1 交易网关分层架构</title>
+<desc data-page-node-id="I9QiTV0A7Nyg9Rd1jIOLey">信号源经适配、策略、风控、执行到券商的纵向管道，策略层与券商层可替换，事件日志支持离线回放。</desc>
+<defs data-page-node-id="uqrQ8CiVkHAJ146FL3LywI">
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="gwbkel3c6avLGSHOBIRc1S">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="zMAHX6RvlYALxqQxBYSfMy"/>
+</marker>
+</defs>
+<rect x="190" y="40" width="300" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="ONSw4CO4EBcby2sdZcQiEJ"/>
+<text x="340" y="60" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#0C447C" data-page-node-id="TXEJCrQQQCHDUHAqmqLnFm">chan.py · SSE 信号源</text>
+<text x="340" y="80" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" data-page-node-id="OZDBh3UAcqLPcIAb7sAJ3x">每根 5m K 线闭合推一次快照</text>
+<path d="M340 96 L340 114" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)" data-page-node-id="VL8nawSl2EG33mGLG2tBOW"/>
+<rect x="140" y="116" width="400" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="eefBstk6z9Urkjq32NRC3G"/>
+<text x="340" y="136" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#0C447C" data-page-node-id="4KZg7hRKeeI412OJqKka8E">信号适配层</text>
+<text x="340" y="156" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" data-page-node-id="rCPyBHftfxRJa1o99um6hC">解析 bsp · 冻结 · 幂等去重</text>
+<path d="M340 172 L340 190" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)" data-page-node-id="BoqefrLnLGTM9dh0BfJdav"/>
+<rect x="140" y="192" width="400" height="112" rx="12" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5" stroke-dasharray="5 4" data-page-node-id="J8LyDKi878n3kS7pbBER95"/>
+<text x="160" y="208" dominant-baseline="central" font-size="12" fill="#854F0B" data-page-node-id="aYoZAeKpBIwzr8lCARwtNC">策略层 · 可插拔</text>
+<rect x="160" y="224" width="170" height="48" rx="8" fill="#FAC775" stroke="#BA7517" stroke-width="0.5" data-page-node-id="2dwb3m5WUpvtXAxwCS8XaA"/>
+<text x="245" y="242" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#412402" data-page-node-id="76j6Dbtqh9P8m6XAVKCduX">入场过滤</text>
+<text x="245" y="260" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B" data-page-node-id="PAyy6KsDqHMwSmZxW6i0AG">买点开多 / 卖点开空</text>
+<rect x="350" y="224" width="170" height="48" rx="8" fill="#FFFFFF" stroke="#BA7517" stroke-width="1" stroke-dasharray="4 3" data-page-node-id="D9cegWtqDbXYUN5E5hJKPw"/>
+<text x="435" y="242" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#412402" data-page-node-id="dSiuByqSyFmrIafotUw4Gt">出场策略</text>
+<text x="435" y="260" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B" data-page-node-id="9Y5p3M6hPgnbgtjyBGvtCJ">先给默认实现 · 随时换</text>
+<text x="340" y="288" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B" data-page-node-id="WNPP59t8kyaazj89qHhIJb">止盈止损只是这里的一个实现，改动不外溢</text>
+<path d="M340 304 L340 322" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)" data-page-node-id="YjoKZZ9YdZZwP217rZFyT1"/>
+<rect x="140" y="324" width="400" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="8vI9f96e2pJRJHsUK2wcRC"/>
+<text x="340" y="344" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#0C447C" data-page-node-id="D2TOyGu3OFp9tS5y2T9TAu">风控闸门</text>
+<text x="340" y="364" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" data-page-node-id="n3KBJdZMTwFDkkrJwtn7nD">时段 · 手数 · 日亏 · 配置驱动</text>
+<path d="M340 380 L340 398" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)" data-page-node-id="VkI2vU3ry5J9SsMJjryHj6"/>
+<rect x="140" y="400" width="400" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="njbyBcrv0CJClAlHmFg8mP"/>
+<text x="340" y="420" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#0C447C" data-page-node-id="Ri53usqJ7iZ8odDp6M8m5g">执行层</text>
+<text x="340" y="440" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5" data-page-node-id="rPvO8Iy19t2eWGKpvndfF3">主连映射月份合约 · 委托与回执</text>
+<path d="M340 456 L340 474" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)" data-page-node-id="OhNN0wtThBRx4uatB51ko9"/>
+<rect x="140" y="476" width="400" height="56" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5" stroke-dasharray="5 4" data-page-node-id="s7XE61Rip4zz5z1fwSC0NK"/>
+<text x="340" y="496" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#412402" data-page-node-id="rRoFZKyUvm3XD5rcTf4NwI">Broker 适配器 · 可替换</text>
+<text x="340" y="516" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B" data-page-node-id="wGPDMVVROgKcAuWplCqxY9">dry-run / SimNow / 创元实盘 同一接口</text>
+<path d="M340 532 L340 556" fill="none" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="5 4" data-page-node-id="naKtnqFJ9BKZwiGR4OkPAY"/>
+<text x="352" y="544" dominant-baseline="central" font-size="12" fill="#5F5E5A" data-page-node-id="0H9bPgnO5qiRBoA7Zml8Vf">事件落盘</text>
+<rect x="140" y="560" width="400" height="52" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5" data-page-node-id="ppUgrSN6fu8yXP9UxurPuq"/>
+<text x="340" y="578" text-anchor="middle" dominant-baseline="central" font-size="14" font-weight="500" fill="#444441" data-page-node-id="EnjneTGRhVLFVTi0gtD8Qt">事件日志 + 状态持久化</text>
+<text x="340" y="598" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A" data-page-node-id="qynApSdmtjdTc3fqNKDNbQ">jsonl 全量事件 · sqlite 持仓与幂等键</text>
+<path d="M140 586 L70 586 L70 144 L138 144" fill="none" stroke="#B4B2A9" stroke-width="1" stroke-dasharray="5 4" marker-end="url(#arrow)" data-page-node-id="xW1uqP9PyEwcWe7B2EYQWY"/>
+<text x="60" y="360" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A" transform="rotate(-90 60 360)" data-page-node-id="0yehqzhc6WKcmY9oguYhBu">回放：换策略不用等行情</text>
+</svg>
+<p>与上图（原设计架构图，即《SimNow自动下单，交易网关分层架构.png》）的差异：上图 6 层不变；落地后<strong>执行层</strong>长出了三块上图未画的子结构——①4 态状态机 + 信号门（<code>tg/engine.py</code>），②多仓 PositionBook（N 单批量，<code>tg/position_book.py</code>），③对账/卡单复核闭环（Phase E/F/G）。<strong>Broker 接口</strong>也从单一 <code>submit</code> 扩展为 5 个方法（详见 §三.5）。各层对应的代码文件见 §二 模块清单。</p>
+<hr />
+<h2 id="layer-file">二、模块清单（layer → file → 职责）</h2>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>文件</th>
+<th>职责</th>
+<th>关键入口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>信号源</td>
+<td><code>tg/sources/sse_source.py</code></td>
+<td>订阅 chan.py SSE，每根 K 线闭合推快照</td>
+<td><code>push_bar</code> → engine.on_bar</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/sources/replay_source.py</code></td>
+<td>历史回放（测试/复现用）</td>
+<td>—</td>
+</tr>
+<tr>
+<td>策略层</td>
+<td><code>tg/strategy/default_policy.py</code></td>
+<td>买点开多/卖点开空的入场过滤</td>
+<td>可插拔，替换不动引擎</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/strategy/layered_exit.py</code></td>
+<td>分层出场（止盈/止损/时间），先给默认实现</td>
+<td><code>exit_plan</code> 挂在 Position 上</td>
+</tr>
+<tr>
+<td>风控</td>
+<td><code>tg/risk.py</code></td>
+<td>时段/手数/日亏闸门，<code>check_open</code></td>
+<td><code>risk.max_open_positions</code>（默认 1）</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/sizing.py</code></td>
+<td>单笔手数 + 批量手数</td>
+<td><code>sizing.batch_open</code>（默认 1）</td>
+</tr>
+<tr>
+<td>执行</td>
+<td><code>tg/engine.py</code></td>
+<td>4 态状态机、信号门、N 单开/平、对账、卡单复核</td>
+<td><code>on_bar</code> / <code>on_signal</code></td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/position_book.py</code></td>
+<td>多仓容器（同向多笔、FIFO、持久化双写）</td>
+<td><code>same_side_positions</code> / <code>has_opposite</code></td>
+</tr>
+<tr>
+<td>Broker</td>
+<td><code>tg/brokers/base.py</code></td>
+<td>抽象接口 + OrderIntent/Offset 映射</td>
+<td><code>submit</code> 等 5 方法</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/brokers/dry_run.py</code></td>
+<td>同步撮合（回归测试基线）</td>
+<td>—</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/brokers/simnow.py</code></td>
+<td>TqSdk/SimNow：超价限价、平仓追价、成交判定</td>
+<td><code>_submit_open</code> / <code>_submit_close</code></td>
+</tr>
+<tr>
+<td>基础设施</td>
+<td><code>tg/events.py</code></td>
+<td>jsonl 全量事件（审计/复盘唯一真相）</td>
+<td><code>ev.write(kind, **kv)</code></td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/store.py</code></td>
+<td>sqlite：持仓快照、signal_action 幂等键、day_stats</td>
+<td>双写新旧格式，零迁移</td>
+</tr>
+<tr>
+<td></td>
+<td><code>tg/config.py</code></td>
+<td>全部配置项（含默认值）</td>
+<td><code>GatewayConfig</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_2">三、关键设计</h2>
+<h3 id="1">1. 四态状态机与信号门（交易串行化）</h3>
+<pre><code>IDLE ──开仓/解锁──▶ IN_TRADE ──全部离场──▶ IDLE
+  │                    │
+  └── OPENING（开仓中）  └── EXITING（离场中）
+</code></pre>
+<ul>
+<li><strong>一次只跑一笔"交易"</strong>：<code>IN_TRADE</code> 期间所有新信号被信号门拦截——同向信号直接 skip（事件 <code>signal_skip / in_trade_multi_same_side</code>），<strong>反向信号仅触发离场、绝不反向入场</strong>（单仓 <code>close_only</code>；多仓含反向走 FIFO 全平）。"N 单全部离场后 state 才回 IDLE"，此时才允许下一次交易。</li>
+<li>这一条保证了用户规格里的"已有运行中的单子再开新单会混乱"在结构上不可能发生——不是靠策略判断，而是状态机硬约束。</li>
+</ul>
+<h3 id="2">2. 入场两种方式（由账户状态自动决定）</h3>
+<table>
+<thead>
+<tr>
+<th>条件</th>
+<th>入场方式</th>
+<th>报文</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>账户无仓</td>
+<td><strong>开仓 OPEN</strong></td>
+<td>offset=Open</td>
+<td>常规入场</td>
+</tr>
+<tr>
+<td>账户有前一日的反向锁仓单</td>
+<td><strong>解锁 UNLOCK</strong></td>
+<td>offset=CloseYesterday</td>
+<td>平掉反向昨仓（避开平今高费率）。E2 设计决策：<strong>解锁只平昨仓、不开新今仓</strong>，今仓方向由下一个信号决定</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-n-n1">3. 一次入场 N 单（N≥1）</h3>
+<ul>
+<li><code>sizing.batch_open</code>：仓位管理关闭时默认 1；开启时配置为 N≥1，同根 K 线同一信号一次连开 N 笔（<code>_open_positions</code> 循环，受 <code>risk.max_open_positions</code> 上限截断并写 warning）。</li>
+<li>每笔是独立 Position（<code>tg/position_book.py</code>），离场按 FIFO（entry_bar_seq 升序）逐笔处理，支持部分平仓。</li>
+</ul>
+<h3 id="4">4. 入场方式决定离场方式（硬规则，无配置开关）</h3>
+<pre><code class="language-python"># engine._exit_intent —— 数学约束（手续费最优），不是策略选择
+OPEN_FIRST   → LOCK_SOFT   → OrderIntent.LOCK   # 开反向同手数（平今太贵 → 锁仓替代平今）
+UNLOCK_FIRST → CLOSE_HARD  → OrderIntent.CLOSE  # 平昨，无高昂平今费 → 直接平仓
+</code></pre>
+<p>离场<strong>条件</strong>有三种（止盈 / 止损 / 时间 EOD）+ 第四种（反向买卖点信号）；离场<strong>方式</strong>一律由入场方式联动推导，外部不可覆写。</p>
+<h3 id="5-broker-5">5. Broker 接口（5 方法，可替换）</h3>
+<table>
+<thead>
+<tr>
+<th>方法</th>
+<th>语义</th>
+<th>dry_run</th>
+<th>simnow</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>submit(intent, side, vol, price, signal_key)</code></td>
+<td>报单（同步返回最终态 Order）</td>
+<td>同步撮合</td>
+<td>超价限价；开仓单次、平仓追价循环</td>
+</tr>
+<tr>
+<td><code>pulse()</code></td>
+<td>心跳/连接保活</td>
+<td>no-op</td>
+<td>wait_update 驱动（主线程独占）</td>
+</tr>
+<tr>
+<td><code>real_position(side)</code></td>
+<td>查真实持仓（对账依据）</td>
+<td>None</td>
+<td>get_position</td>
+</tr>
+<tr>
+<td><code>trade_confirmed(intent, signal_key)</code></td>
+<td><strong>权威成交复核</strong>：按 signal_key→raw_order_id 索引重新 <code>get_order</code>，累计 <code>order.trade_records[*].volume ≥ 委托量</code></td>
+<td>True（同步撮合即确认）</td>
+<td>查 CTP 成交回报明细（唯一可信依据）</td>
+</tr>
+<tr>
+<td><code>cancel_pending(signal_key)</code></td>
+<td>撤掉该信号全部在途单</td>
+<td>0（无挂单）</td>
+<td>cancel_order + wait_update 同步回报</td>
+</tr>
+</tbody>
+</table>
+<h3 id="6">6. 报单与卡单处理（当前实现精确语义）</h3>
+<p><strong>入场（OPEN）</strong>：单次超价限价（对手价 ± overprice_points，主动跨价差确保成交）→ <code>fill_timeout_open</code>（config 默认 <strong>5 秒</strong>）内未成交<strong>自动撤单</strong> → 记 rejected，<strong>不追单</strong>，引擎无幻影持仓，等下一个信号。语义 = "入场没成功，最多不赚钱，但不会亏钱"。</p>
+<p><strong>解锁（UNLOCK）</strong>：2026-09-05 规格拍板后<strong>与 OPEN 完全归一</strong>——解锁≈开仓（入场语义），单次超价 + <code>fill_timeout_open</code>（5s）超时撤单、<strong>不追价</strong>；报文仍是 CloseYesterday（平反向昨仓，避开平今费率）。保留 close 类的 <code>_wait_position_ok</code> 前置守卫（提交前检查，非追价）。通道级异常兜底由 Phase F1 接管（见下）。</p>
+<p><strong>离场（CLOSE/LOCK）</strong>：<code>_submit_close</code> 追价循环——每轮取最新对手价 ± overprice 重定价（盘口怎么走挂价就跟到哪），每轮 5s 未成交<strong>先撤单再追</strong>，最多 20 轮；追价用尽（如涨跌停锁死）才放弃，交引擎对账兜底。拒单后引擎进入 <code>_close_retry_bars</code>=5 根 K 线冷却，之后<strong>自动重试平仓</strong>。语义 = "离场不及时浮盈变亏损，所以撤单 + 追单"。</p>
+<p><strong>卡单复核闭环（Phase F/G，防通道级异常）</strong>：
+- F1：UNLOCK 报单后记 <code>_unlock_in_flight</code>（<strong>持久化到 sqlite，引擎重启不丢</strong>）；5 根 bar 后 <code>broker.trade_confirmed</code> 用 CTP 成交回报复核——确认成 → 清标记；未确认 → 先 <code>cancel_pending</code> 撤在途单（G2，防"重建持仓后挂单又成交"的双重平仓），再查 <code>real_position</code>：真实仍有仓 → 用快照重建 portfolio；真实已平 → 写恢复事件。
+- F2：引擎重启 <code>_restore</code> 末尾首拉 <code>real_position</code> 对账（防"本地有仓、真实已平"的幽灵持仓），告警不接管、不阻断启动。
+- 周期对账：每根 bar 引擎拿本地 portfolio 与 <code>real_position</code> 比对，差异按 FIFO 部分平/清侧/告警（不主动改状态机）。</p>
+<hr />
+<h2 id="_3">四、持久化与事件审计</h2>
+<ul>
+<li><strong>sqlite（store.py）</strong>：positions（多仓新格式 + 单仓旧格式<strong>双写</strong>，老库零迁移）、<code>signal_action</code>（信号幂等键，防重复触发）、<code>_unlock_in_flight</code>、day_stats、bars_seen。重启 <code>_restore</code> 全量恢复，真实持仓多/少时由对账链修正。</li>
+<li><strong>jsonl（events.py）</strong>：每个决策点全量落事件——order / order_rejected / trade / signal_skip / position_mismatch / unlock_stuck_* / restore_reconcile_failed 等，任何一笔"为什么没成"都可追溯。</li>
+</ul>
+<h2 id="_4">五、功能规格对照表（逐条核对结论）</h2>
+<table>
+<thead>
+<tr>
+<th>#</th>
+<th>规格要求</th>
+<th>状态</th>
+<th>实现位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>无仓 → 开仓入场</td>
+<td>✅</td>
+<td>engine.on_signal IDLE 分支</td>
+</tr>
+<tr>
+<td>2</td>
+<td>有前日锁仓单 → 解锁入场</td>
+<td>✅</td>
+<td>E2：IDLE + has_opposite → <code>_unlock_position</code>（CloseYesterday）</td>
+</tr>
+<tr>
+<td>3</td>
+<td>一次入场 N 单，N 全离场后才下一次交易；仓位管理关 N=1 / 开 N≥1</td>
+<td>✅</td>
+<td>sizing.batch_open（默认 1）+ 4 态状态机（IN_TRADE 持续到 portfolio 空）</td>
+</tr>
+<tr>
+<td>4</td>
+<td>运行中忽略新信号</td>
+<td>✅</td>
+<td>信号门：IN_TRADE 同向 skip</td>
+</tr>
+<tr>
+<td>5</td>
+<td>反向信号仅触发离场、不反向入场</td>
+<td>✅</td>
+<td>IN_TRADE 反向 → close_only / FIFO 全平，无反手</td>
+</tr>
+<tr>
+<td>6</td>
+<td>入场方式决定离场方式（开→锁 / 解锁→平）</td>
+<td>✅</td>
+<td>Phase D <code>_exit_intent</code> 硬规则，无配置开关</td>
+</tr>
+<tr>
+<td>7</td>
+<td>离场条件：止盈/止损/时间 或 反向信号</td>
+<td>✅</td>
+<td>layered_exit（exit_plan）+ on_signal 反向分支</td>
+</tr>
+<tr>
+<td>8</td>
+<td>入场卡单：等 5s → 撤单 → <strong>不追单</strong>，等新信号</td>
+<td>✅（OPEN 与 UNLOCK 已归一）</td>
+<td>两者共用 <code>fill_timeout_open</code>（config 默认 5s）超时撤单即放弃</td>
+</tr>
+<tr>
+<td>9</td>
+<td>离场卡单：等 5s → 撤单 + <strong>追单</strong></td>
+<td>✅</td>
+<td><code>_submit_close</code> 20 轮 × 5s 撤单重报追价 + 引擎 5-bar 冷却重试</td>
+</tr>
+<tr>
+<td>10</td>
+<td>卡单复核防通道异常（真实成交以 CTP 回报为准）</td>
+<td>✅</td>
+<td>Phase F/G：trade_confirmed + in_flight 持久化 + cancel_pending + 首拉对账</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_5">六、测试矩阵</h2>
+<table>
+<thead>
+<tr>
+<th>套件</th>
+<th>覆盖</th>
+<th>例数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P5–P8</td>
+<td>报价归一 / 权威成交判定 / 对手价定价 / 分层出场</td>
+<td>69</td>
+</tr>
+<tr>
+<td>P9</td>
+<td>sizing（单笔+批量）</td>
+<td>62</td>
+</tr>
+<tr>
+<td>P10</td>
+<td>四态状态机 + 信号门硬约束</td>
+<td>59</td>
+</tr>
+<tr>
+<td>P11</td>
+<td>OrderIntent → CTP Offset 报文映射</td>
+<td>59</td>
+</tr>
+<tr>
+<td>P12–P14a</td>
+<td>PositionBook 多仓 + 配置化上限</td>
+<td>206</td>
+</tr>
+<tr>
+<td>P15a/b</td>
+<td>N 单批量开 + FIFO 多仓平/对账</td>
+<td>195</td>
+</tr>
+<tr>
+<td>P16</td>
+<td>Phase F：卡单复核 + in_flight 持久化 + 首拉对账</td>
+<td>65</td>
+</tr>
+<tr>
+<td>P17</td>
+<td>Phase G：真实成交复核 + 撤在途单 + UNLOCK 归一 OPEN + 平仓方向修复</td>
+<td>42</td>
+</tr>
+<tr>
+<td><strong>合计</strong></td>
+<td><strong>全套回归（dry_run 基线，可重复）</strong></td>
+<td><strong>753 全绿</strong></td>
+</tr>
+</tbody>
+</table>
+<p>另附 <code>tests/smoke_simnow_phase_g.py</code>：SimNow 交易时段只读冒烟（连接/真实持仓/成交复核/撤单接口），<code>--trade</code> 才做 1 手真开平。</p>
+<h2 id="_6">七、已知风险与边界</h2>
+<ol>
+<li>SimNow 不支持市价单 → 全限价 + 超价/追价模拟市价行为；涨跌停锁死时追价 20 轮用尽后放弃，靠对账链兜底。</li>
+<li><code>wait_update</code> 非线程安全 → SimNow broker 所有 api 调用约束在主线程，成交判定只信 <code>order.trade_records</code>（持仓缓存仅作诊断信号）。</li>
+<li>LOCK（软离场）在引擎视角记为离场结算；broker 端真实多出的反向锁仓由后续 UNLOCK 或人工处理——这是"锁仓替代平今"方案的固有边界，评审时值得重点讨论。</li>
+<li>UNLOCK 复核窗口（5 bars）内若行情剧烈波动，重建 portfolio 用的是提交时快照价格，浮盈计算有偏差（不影响仓位正确性）。</li>
+</ol>
+</body>
+</html>
