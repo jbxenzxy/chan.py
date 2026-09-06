@@ -7,21 +7,21 @@ trader_gateway/run_gateway.py 子进程（--source sse 实时接入本服务的
 SSE 行情流）。
 
 为什么用子进程而不是线程/协程：
-  · 交易引擎持有自己的 tqsdk 长连接（CTP），与主服务（FastAPI + SSE
+  · 交易自动下单子进程持有自己的 tqsdk 长连接（CTP），与主服务（FastAPI + SSE
     行情源）的 TqApi 各自独立，互不掐断；
-  · 引擎崩溃 / 卡单 / 死循环不影响行情页面；
-  · 引擎内部全部是同步阻塞代码（wait_update 循环），塞进线程池会
+  · 自动下单子进程崩溃 / 卡单 / 死循环不影响行情页面；
+  · 自动下单子进程内部全部是同步阻塞代码（wait_update 循环），塞进线程池会
     与 REST/SSE 抢线程，且无法优雅终止。
 
 开关语义（用户拍板）：
-  · 开启（on）→ 拉起子进程，引擎正常接收买卖点信号并交易；
+  · 开启（on）→ 拉起子进程，自动下单子进程正常接收买卖点信号并交易；
   · 关闭（off）→ SIGTERM 子进程 → run_gateway._stop 回调
     engine.shutdown_and_lock_all()：
       ① auto_order_enabled=False（停止接收买卖点信号）
       ② 簿内所有「未锁定」持仓全部 LOCK（锁仓，落簿 LOCKED 反向仓，
          次日对向信号自动走解锁入场管线）
     → 子进程优雅退出。auto_order_enabled 持久化在 state.db，
-    重启服务/引擎仍保持关闭语义（防悄悄重新开跑）。
+    重启服务/自动下单子进程仍保持关闭语义（防悄悄重新开跑）。
 
 实盘安全闸门：启动前预检 config.json —— broker=live 或
 broker_params.tq_market≠simnow 时必须显式
@@ -128,7 +128,7 @@ def _write_state_file(data: Dict[str, Any]) -> None:
 
 
 def _engine_store(out_dir: str):
-    """按 out_dir 打开引擎 state.db 的 Store（只读场景为主）。"""
+    """按 out_dir 打开自动下单子进程 state.db 的 Store（只读场景为主）。"""
     from tg.store import Store
     return Store(os.path.join(out_dir, "state.db"))
 
@@ -139,6 +139,15 @@ class AppTrader:
     def __init__(self):
         self._lock = threading.Lock()
         self._handle: Optional[_TraderProc] = None
+        # 已上报过「自动下单子进程退出」的 pid 集合：status() 前台轮询频繁，必须只
+        # 上报一次，否则每次轮询都把日志尾部再写回 gateway.log，造成
+        # 雪崩式无限自嵌套、日志指数级膨胀（掩盖真实退出原因）。
+        self._exit_logged: set = set()
+        # pid -> 子进程 stdin 输出读取线程：用 PIPE 接管子进程 stdout
+        # （Windows 下把 text-mode 文件对象直接塞给 Popen 作 stdout 是已知
+        # 脆弱点，句柄继承不牢，导入期崩溃的 traceback 会整段丢失 → 零输出
+        # + 同秒静默退出）。改用 PIPE + 读取线程 tee 落盘，任何阶段输出不丢。
+        self._readers: Dict[int, threading.Thread] = {}
         self._restore_from_file()
 
     # ---------------- 内部 ----------------
@@ -149,8 +158,8 @@ class AppTrader:
         if pid <= 0:
             return
         if not _pid_alive(pid):
-            # 上次进程已不在（服务重启/引擎退出）：清掉残留状态文件
-            log.info("[AppTrader] 上次引擎进程已退出，清理状态（pid=%s）", pid)
+            # 上次进程已不在（服务重启/自动下单子进程退出）：清掉残留状态文件
+            log.info("[AppTrader] 上次自动下单子进程已退出，清理状态（pid=%s）", pid)
             _write_state_file({})
             return
         # pid 活着但这不是我们 spawn 的句柄 —— 只能记录参数，stop 时按 pid 发信号
@@ -171,16 +180,16 @@ class AppTrader:
               symbol: Optional[str] = None,
               freq: Optional[str] = None,
               sse_base: Optional[str] = None) -> Dict[str, Any]:
-        """启动自动下单引擎子进程（SSE 实时源，订阅 chan.py 行情流）。
+        """启动自动下单自动下单子进程（SSE 实时源，订阅 chan.py 行情流）。
 
         cfg_path：trader_gateway config.json（缺省 trader_gateway/config.json）；
-        out_dir： 引擎状态目录（缺省 cfg.state_dir 或 trader_gateway/state）；
+        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 trader_gateway/state）；
         symbol / freq：订阅的合约与周期（前端开关传当前页面品种；缺省读
             cfg.source，再缺省 KQ.m@CFFEX.IF / 5m）；
         sse_base：行情流地址（前端传 location.origin；缺省读 cfg.source，
             再缺省 http://127.0.0.1:18081）。
         启动前预检：config 存在 + 实盘安全闸门（live 必须 confirm_live_trading）。
-        引擎 stdout/stderr 落盘 {out_dir}/gateway.log（异常可查，不再吞掉）。
+        自动下单子进程 stdout/stderr 落盘 {out_dir}/gateway.log（异常可查，不再吞掉）。
         """
         with self._lock:
             if self._handle is not None and self._handle.running:
@@ -210,10 +219,10 @@ class AppTrader:
                 os.makedirs(out_dir, exist_ok=True)
             except OSError as e:
                 raise AppError(
-                    "无法创建引擎状态目录 {}: {}: {}".format(
+                    "无法创建自动下单子进程状态目录 {}: {}: {}".format(
                         out_dir, type(e).__name__, e))
             log_file = os.path.join(out_dir, "gateway.log")
-            # 后端（本模块）日志也 tee 进 gateway.log，与引擎日志同一文件
+            # 后端（本模块）日志也 tee 进 gateway.log，与自动下单子进程日志同一文件
             self._set_engine_log_handler(log_file)
             self._engine_log(
                 log_file,
@@ -262,7 +271,7 @@ class AppTrader:
             log.info("[AppTrader] 信号源: source=sse symbol=%s freq=%s "
                      "sse_base=%s broker=%s out=%s",
                      use_symbol, use_freq, use_base, broker, out_dir)
-            log.info("[AppTrader] 引擎日志: %s", log_file)
+            log.info("[AppTrader] 自动下单子进程日志: %s", log_file)
             self._engine_log(
                 log_file,
                 "启动子进程: source=sse symbol={} freq={} sse_base={} "
@@ -270,31 +279,51 @@ class AppTrader:
                     use_symbol, use_freq, use_base, broker, " ".join(cmd)))
             try:
                 env = dict(os.environ)
-                env["PYTHONUNBUFFERED"] = "1"   # 引擎 stdout 逐行落盘，异常/退出可即查
-                with open(log_file, "a", encoding="utf-8") as lf:
-                    proc = subprocess.Popen(
-                        cmd, cwd=_TG_ROOT,
-                        stdout=lf, stderr=subprocess.STDOUT, env=env)
+                env["PYTHONUNBUFFERED"] = "1"   # 自动下单子进程 stdout 逐行落盘，异常/退出可即查
+                # 用 PIPE + 读取线程接管子进程 stdout，而不用把 text-mode 文件
+                # 对象塞给 Popen（Windows 句柄继承脆弱，导入期 traceback 会丢）。
+                # run_gateway.py 内部随后会把 sys.stdout/stderr 重定向到
+                # gateway.log，本 PIPE 主要兜住「重定向前」的启动/导入期输出。
+                #
+                # Windows 关键修复：本 start() 被 FastAPI worker 线程调用，
+                # 从非主线程 Popen 一个控制台子进程 + 继承父进程控制台 stdin，
+                # 会造成子进程 DllMain 初始化失败 → 退出码 0xC0000142
+                # (STATUS_DLL_INIT_FAILED)，Python 还没执行就静默退出、零输出。
+                # 对策：stdin 用 DEVNULL（不继承控制台输入句柄）+ 子进程不附加
+                # 控制台 (CREATE_NO_WINDOW)，彻底绕开控制台句柄继承链路。
+                creationflags = 0
+                if os.name == "nt":
+                    creationflags = int(
+                        getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                proc = subprocess.Popen(
+                    cmd, cwd=_TG_ROOT,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    env=env, creationflags=creationflags)
             except OSError as e:
                 self._engine_log(log_file, "启动子进程失败: {}: {}".format(
                     type(e).__name__, e))
                 raise AppError(
-                    "启动交易引擎子进程失败: {}: {}".format(type(e).__name__, e))
+                    "启动交易自动下单子进程失败: {}: {}".format(type(e).__name__, e))
+
+            self._spawn_reader(proc, log_file)
 
             handle = _TraderProc(proc, cfg_path, out_dir,
                                  time.strftime("%Y-%m-%d %H:%M:%S"), broker,
                                  symbol=use_symbol, freq=use_freq,
                                  sse_base=use_base)
             self._handle = handle
+            # 新一轮自动下单子进程：清零退出上报集合（避免历史 pid 干扰本次退出上报）
+            self._exit_logged.discard(handle.pid)
             _write_state_file(handle.to_dict())
-            log.info("[AppTrader] 引擎子进程已启动 pid=%s", handle.pid)
+            log.info("[AppTrader] 自动下单子进程已启动 pid=%s", handle.pid)
             self._engine_log(log_file, "子进程已启动 pid={}".format(handle.pid))
             return handle.to_dict()
 
     def stop(self, timeout: float = _STOP_TIMEOUT) -> Dict[str, Any]:
         """关闭自动下单：SIGTERM → 子进程 shutdown_and_lock_all → 退出。
 
-        超时未退则 SIGKILL（兜底；引擎锁仓是同步阻塞，正常都能在宽限内收尾）。
+        超时未退则 SIGKILL（兜底；自动下单子进程锁仓是同步阻塞，正常都能在宽限内收尾）。
         """
         with self._lock:
             handle = self._handle
@@ -335,7 +364,7 @@ class AppTrader:
                 time.sleep(0.3)
 
             if not exited:
-                log.warning("[AppTrader] 引擎 pid=%s 未在 %.0fs 内退出，SIGKILL 兜底",
+                log.warning("[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，SIGKILL 兜底",
                             pid, timeout)
                 try:
                     handle.proc.kill()
@@ -349,7 +378,7 @@ class AppTrader:
                 except Exception:
                     pass
 
-            # 拿退出码（定位"自动退出"问题：非 0 说明引擎主循环抛异常）
+            # 拿退出码（定位"自动退出"问题：非 0 说明自动下单子进程主循环抛异常）
             rc = None
             try:
                 rc = handle.proc.wait(timeout=0)
@@ -366,7 +395,7 @@ class AppTrader:
             return {"running": False, "pid": pid, "graceful": exited, "rc": rc}
 
     def status(self) -> Dict[str, Any]:
-        """自动下单状态（进程 + 引擎开关 + 持仓快照）。"""
+        """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""
         with self._lock:
             handle = self._handle
             running = bool(handle is not None and handle.running)
@@ -401,18 +430,40 @@ class AppTrader:
             log_file = base.get("log_file")
             if log_file:
                 self._set_engine_log_handler(str(log_file))
-            # 进程曾启动但已退出：附带 gateway.log 尾部，直接回答"为什么关掉了"
+            # 进程曾启动但已退出：附带 gateway.log 尾部，直接回答"为什么关掉了"。
+            # 退出只上报一次（_exit_logged 记 pid），且不把尾部 Echo 回
+            # gateway.log —— 否则前台每次轮询 status() 都把上一轮写入的尾部
+            # 再写一遍，日志自嵌套无限膨胀（雪崩），掩盖真实退出原因。
             if handle is not None and not running and log_file:
                 tail = self._read_log_tail(str(log_file))
-                if tail:
-                    base["log_tail"] = tail
+                base["log_tail"] = tail or None
+                # 取子进程退出码（判别"零输出同秒退出"的机器级原因）：
+                #   0           干净返回（我们的 run() 总会 print_summary，不可能静默 0）
+                #   0xC0000005  访问违例（硬崩溃，Traceback 都没机会写）
+                #   0xC0000135  DLL 加载失败（Python/依赖启动即挂）
+                rc = None
+                try:
+                    proc = handle.proc
+                    if proc is not None:
+                        rc = getattr(proc, "returncode", None)
+                        if rc is None:
+                            try:
+                                rc = proc.poll()
+                            except Exception:
+                                rc = None
+                except Exception:
+                    rc = None
+                base["exit_rc"] = rc
+                if handle.pid not in self._exit_logged:
+                    self._exit_logged.add(handle.pid)
                     log.warning(
-                        "[AppTrader] 引擎 pid=%s 已退出，日志尾部: %s",
-                        handle.pid, tail.replace("\n", " | "))
+                        "[AppTrader] 自动下单子进程 pid=%s 已退出（rc=%s，一次性上报，"
+                        "原因见 %s 尾部）", handle.pid, rc, log_file)
                     self._engine_log(
                         str(log_file),
-                        "检测到引擎 pid={} 已退出".format(handle.pid))
-            # 引擎内部状态：尽力读 state.db（引擎写 WAL，并发只读安全）
+                        "检测到自动下单子进程 pid={} 已退出 rc={}（详情见日志上文）".format(
+                            handle.pid, rc))
+            # 自动下单子进程内部状态：尽力读 state.db（自动下单子进程写 WAL，并发只读安全）
             base["auto_order"] = self._read_engine_switch(handle)
             return base
 
@@ -422,7 +473,7 @@ class AppTrader:
         """把后端（AppTrader logger）的输出 tee 进 gateway.log（路径随启停更新）。
 
         根 logger 仍按 AppLog 配置打后端终端；本 handler 只让 trader 相关的
-        后端日志同时落盘 gateway.log，与引擎日志同一文件定位。
+        后端日志同时落盘 gateway.log，与自动下单子进程日志同一文件定位。
         """
         global _log_file_handler
         try:
@@ -444,9 +495,9 @@ class AppTrader:
 
     @staticmethod
     def _engine_log(log_file: str, line: str) -> None:
-        """追加写引擎日志文件（与引擎子进程 stdout 同一文件，定位一体化）。
+        """追加写自动下单子进程日志文件（与自动下单子进程 stdout 同一文件，定位一体化）。
 
-        带 [AppTrader] 前缀以示来自进程托管层；引擎自身的输出为裸行。
+        带 [AppTrader] 前缀以示来自进程托管层；自动下单子进程自身的输出为裸行。
         文件不存在（如目录被删）静默跳过，不影响主流程。
         """
         try:
@@ -458,13 +509,67 @@ class AppTrader:
 
     @staticmethod
     def _read_log_tail(log_file: str, n: int = 12) -> str:
-        """读引擎日志尾部若干行（进程意外退出时带回前端，帮助定位）。"""
+        """读自动下单子进程日志尾部若干行（进程意外退出时带回前端，帮助定位）。
+
+        从文件末尾反向读，避免日志较大时每次 status() 轮询都整读一遍。
+        """
         try:
-            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-                lines = f.read().splitlines()
-            return "\n".join(lines[-n:])
+            with open(log_file, "rb") as f:
+                size = os.path.getsize(log_file)
+                f.seek(0, os.SEEK_END)
+                chunk = b""
+                # 每次回退 8KB，最多拼满 ~256KB；尾行以 \n 界定取最后 n 行
+                pos = f.tell()
+                while pos > 0 and len(chunk) < 256 * 1024:
+                    pos = max(0, pos - 8192)
+                    f.seek(pos)
+                    chunk = f.read() + chunk
+                    if pos == 0:
+                        break
+                text = chunk.decode("utf-8", errors="replace")
+                lines = text.splitlines()
+                return "\n".join(lines[-n:])
         except OSError:
             return ""
+
+    def _spawn_reader(self, proc: subprocess.Popen, log_file: str) -> None:
+        """后台线程流式把子进程 stdout (PIPE) tee 进 gateway.log。
+
+        跨平台最稳的子进程输出接管方式（Windows 下把 text-mode 文件对象
+        塞给 Popen 作 stdout，句柄继承不牢，导入期 traceback 会整段丢失）。
+        子进程自己随后把 sys.stdout 重定向到同一文件时，本线程只会读到
+        「重定向前」的启动/导入期输出，与子进程落盘内容不重复。
+        """
+        pid = proc.pid
+        stdout = getattr(proc, "stdout", None)
+        if stdout is None:
+            # 无 stdout 句柄（如测试桩/恢复态）：无可 tee，直接返回
+            return
+
+        def _drain():
+            try:
+                while True:
+                    line = proc.stdout.readline()
+                    if not line:
+                        break
+                    try:
+                        text = line.decode("utf-8", errors="replace")
+                    except Exception:
+                        text = "<undecodable>"
+                    self._engine_log(log_file, "engine> " + text.rstrip("\r\n"))
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            finally:
+                self._readers.pop(pid, None)
+
+        t = threading.Thread(target=_drain, name="apptrader-engine-tee",
+                             daemon=True)
+        self._readers[pid] = t
+        t.start()
 
     @staticmethod
     def _load_cfg(cfg_path: str) -> Dict[str, Any]:
@@ -481,7 +586,7 @@ class AppTrader:
         """实盘安全闸门预检（与 tg/brokers/simnow.py 内部判定同口径）。
 
         broker=live 或 broker_params.tq_market≠simnow → 实盘意图，
-        必须显式 confirm_live_trading=true 才允许拉起引擎。
+        必须显式 confirm_live_trading=true 才允许拉起自动下单子进程。
         """
         bp = cfg_data.get("broker_params") or {}
         market = str(bp.get("tq_market") or "simnow").strip().lower()
@@ -500,9 +605,9 @@ class AppTrader:
 
     @staticmethod
     def _reset_engine_switch(out_dir: str) -> None:
-        """开启自动下单：把引擎 state.db 的 auto_order_enabled 置 True。
+        """开启自动下单：把自动下单子进程 state.db 的 auto_order_enabled 置 True。
 
-        上次关闭把 False 持久化了，直接重启引擎会保持关闭语义 ——
+        上次关闭把 False 持久化了，直接重启自动下单子进程会保持关闭语义 ——
         这里在拉起前显式恢复为开启，子进程 _restore 读到 True 才正常收信号。
         """
         try:
@@ -510,7 +615,7 @@ class AppTrader:
             s.set_json("auto_order_enabled", True)
             s.close()
         except Exception as e:
-            log.info("[AppTrader] 重置引擎开关失败（新状态目录可忽略）: %s: %s",
+            log.info("[AppTrader] 重置自动下单子进程开关失败（新状态目录可忽略）: %s: %s",
                      type(e).__name__, e)
 
     @staticmethod

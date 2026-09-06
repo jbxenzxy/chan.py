@@ -7505,6 +7505,13 @@
             }
         }
 
+        // 关键修复：开关控件用内联 onchange="onAutoOrderToggle(this)"，
+        // 内联事件在全局作用域执行。而本函数在 IIFE 闭包内，原本不可见，
+        // 导致每次点开关都抛 ReferenceError、从不发请求
+        // （症状：开关视觉上开了又自动关、后端无任何日志/state 目录）。
+        // 挂到全局后内联 onchange 才能触达。
+        window.onAutoOrderToggle = onAutoOrderToggle;
+
         // 轮询：实时模式下每 5s 刷新一次状态
         (function startAutoOrderPolling() {
             autoOrderPollTimer = setInterval(function() {

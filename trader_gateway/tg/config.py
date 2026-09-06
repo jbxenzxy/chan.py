@@ -43,7 +43,7 @@ class GatewayConfig:
     entry_policy: Dict[str, Any] = field(default_factory=dict)          # 开仓策略参数（原样传给 Policy 类）
     exit_policy: Dict[str, Any] = field(default_factory=dict)           # 出场策略参数（止盈/止损/最长持仓）
     source: Dict[str, Any] = field(default_factory=dict)                # 行情源：replay 回放 / sse 实时
-    broker: str = "dry_run"                                             # 执行通道：dry_run(离线模拟) / simnow(在线仿真) / live(实盘CTP)
+    broker: str = "dry_run"                                             # 执行通道：dry_run(离线模拟) / simnow(仿真) / live(实盘CTP)
     broker_params: Dict[str, Any] = field(default_factory=dict)         # broker 专属参数（超价/超时/追价等，见 DEFAULT_CONFIG）
     sizing: Dict[str, Any] = field(default_factory=dict)                # 仓位管理参数（手数定档，默认关闭=固定手数，见 tg/sizing.py）
     state_dir: str = "./state"                                          # 运行时状态目录（state.db / events.jsonl / orders.jsonl）

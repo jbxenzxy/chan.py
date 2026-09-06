@@ -563,6 +563,20 @@ with tmp_dir() as tmp:
               "RuntimeError: boom" in (st.get("log_tail") or ""), True)
         check("[10d] 日志尾部含启动摘要",
               "source=sse" in (st.get("log_tail") or ""), True)
+        check("[10g] exit_rc 带回退出码", st.get("exit_rc"), 1)
+        # 日志雪崩回归：退出上报只写一次，多次轮询 status() 不得把日志
+        # 尾部反复 Echo 回 gateway.log（曾导致指数级自嵌套膨胀）。
+        size_after_first = 0
+        with open(log_path, "r", encoding="utf-8") as f:
+            size_after_first = len(f.read())
+        for _ in range(5):
+            st2 = t.status()
+            check("[10e] 退出上报一次后仍带回 log_tail",
+                  "RuntimeError: boom" in (st2.get("log_tail") or ""), True)
+        with open(log_path, "r", encoding="utf-8") as f:
+            size_after_polls = len(f.read())
+        check("[10f] 多次轮询日志不再增长（无雪崩）",
+              size_after_polls == size_after_first, True)
     finally:
         AT._STATE_FILE = orig_state_file
 
