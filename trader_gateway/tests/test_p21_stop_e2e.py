@@ -27,11 +27,16 @@ Popen 拉 run_gateway 子进程，再真实触发停止，断言落盘结果。
     直接 CLI 拉起）一启动就会被残留 flag 看护线程立刻关停（实测存活约 1s 即退）。
     本测试第二轮用「相同 out_dir、纯 CLI 直启」复现该场景，断言：
         [6] 第二轮成功落盘 start 事件（未被残留 flag 误杀）
-        [7] 第二轮子进程存活 ≥10s（P1-3 在 CLI 路径闭环）
+        [7] 第二轮子进程存活 ≥10s（P1-3 在 CLI 路径闭环，探针侧 wallclock）
         [8] 第二轮可被正常 flag 停止（退出码 0）
         [9] events.jsonl 含第二条 auto_order_off（shutdown 再次执行）
         [10] 第二轮关闭态仍持久化为 false
+        [11] 两轮 auto_order_off `at` 间隔 ≥5s（事件日志侧审计，与 [7] 互证）
     配合 run_gateway.py 启动时自清 .stop_request（P1-3 防御），第二轮应稳定存活。
+
+[9]/[10]/[11] 在误杀场景下"shutdown 路径仍真实执行过"，所以它们的"通过"
+不能区分"误杀"与"正常"。真正拦截 P1-3 回归的核心是 [7]（探针侧 wallclock）
+与 [11]（事件日志侧时戳审计）两条从不同维度互证。
 
 跑法：python tests/test_p21_stop_e2e.py
 """
@@ -44,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -96,6 +102,23 @@ def _event_kinds(events_path):
     except OSError:
         pass
     return kinds
+
+
+def _event_ats(events_path, kind):
+    """返回所有 kind 事件的 at 字段（解析为 datetime）。"""
+    ats = []
+    try:
+        with open(events_path, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                    if rec.get("kind") == kind:
+                        ats.append(datetime.fromisoformat(rec.get("at")))
+                except (ValueError, OSError):
+                    continue
+    except OSError:
+        pass
+    return ats
 
 
 def _wait_for(pred, timeout=10.0, interval=0.1) -> bool:
@@ -247,6 +270,21 @@ def main() -> int:
             enabled2 = bool(store2.get_json("auto_order_enabled", True))
             store2.close()
             check("[e2e-10] 第二轮关闭态仍持久化为 false", enabled2, False)
+
+            # [e2e-11] 事件日志侧审计：两轮 auto_order_off `at` 间隔 ≥5s
+            # 目的：与 [e2e-7]（探针侧 wallclock 实时感知）从不同维度互证
+            # "第二轮确实活过了观察窗口"。误杀场景下两 off 间隔约 1~2s，
+            # 正常场景下 ≥10s，5s 阈值给两边都留缓冲。
+            off_ats = _event_ats(events_path, "auto_order_off")
+            if len(off_ats) >= 2:
+                gap = (off_ats[1] - off_ats[0]).total_seconds()
+                check("[e2e-11] 两轮 auto_order_off `at` 间隔 ≥5s（事件日志侧审计）",
+                      gap >= 5.0, True)
+                if gap < 5.0:
+                    print("  → 实测间隔=%.1fs（误杀场景下通常 <2s）" % gap)
+            else:
+                check("[e2e-11] 两轮 auto_order_off `at` 间隔 ≥5s（事件日志侧审计）",
+                      False, True)
         finally:
             _force_kill(proc2)
     finally:
