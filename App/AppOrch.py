@@ -54,6 +54,29 @@ from App.AppRefresh import (
     refresh_status, refresh_stock_names_async,
 )
 from App.AppAMO import call_amo
+# 自动下单（AppTrader）：进程托管单例 + 三个 call_* 漏斗（API 层只认 orch.*）
+from App.AppTrader import AppTrader, trader  # noqa: E402
+
+
+def call_trader_start(cfg_path=None, out_dir=None, symbol=None, freq=None,
+                      sse_base=None):
+    """启动自动下单引擎子进程（实盘安全闸门在 AppTrader.start 内预检）。
+
+    symbol/freq/sse_base：前端开关传当前页面品种/周期/服务地址，
+    引擎以 --source sse 订阅 chan.py 行情流（缺省走 cfg.source / 内置默认）。
+    """
+    return trader.start(cfg_path=cfg_path, out_dir=out_dir,
+                        symbol=symbol, freq=freq, sse_base=sse_base)
+
+
+def call_trader_stop():
+    """关闭自动下单：SIGTERM → 引擎锁全部未锁定持仓 → 优雅退出。"""
+    return trader.stop()
+
+
+def call_trader_status():
+    """自动下单状态快照（进程 + 引擎开关 + 持仓）。"""
+    return trader.status()
 
 
 
@@ -242,4 +265,7 @@ __all__ = [
     "call_amo",
     # 标注（AppChart）
     "get_annotations", "handle_annotation_action",
+    # 自动下单（AppTrader）
+    "AppTrader", "trader",
+    "call_trader_start", "call_trader_stop", "call_trader_status",
 ]

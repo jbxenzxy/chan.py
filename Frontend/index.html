@@ -42,6 +42,14 @@
                 <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
             </span>
             <span class="realtime-badge" id="realtime-badge" title="实时推送中">● 实时</span>
+            <span class="auto-order-wrap" id="auto-order-wrap" title="自动下单引擎">
+                <span class="auto-order-dot off" id="auto-order-dot"></span>
+                <span class="auto-order-label" id="auto-order-label">自动下单</span>
+                <label class="auto-order-switch" title="开关自动下单：关闭时停止接收买卖点信号，并把全部未锁定持仓锁仓">
+                    <input type="checkbox" id="auto-order-checkbox" onchange="onAutoOrderToggle(this)">
+                    <span class="auto-order-slider"></span>
+                </label>
+            </span>
         </div>
         <div class="header-right">
             <div class="goto-date">

@@ -224,18 +224,59 @@ class SimNowBroker(Broker):
         self._sig_orders: Dict[str, List[str]] = {}
         self._conn_error: Optional[str] = None
 
+        # ════════════════════════════════════════════════════════════════
+        # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
+        #   账户路由（优先级：params > 环境变量）：
+        #     仿真：sn_account/sn_password（SN_ACCOUNT/SN_PASSWORD）
+        #     实盘：live_account/live_password（LIVE_ACCOUNT/LIVE_PASSWORD）
+        #   天勤账号 tq_account/tq_password（TQ_ACCOUNT/TQ_PASSWORD）两种模式共用。
+        #   market 判定：broker=live（LiveCTPBroker）或 tq_market≠"simnow" → 实盘。
+        #   安全闸门：实盘必须显式 confirm_live_trading=true，否则拒绝启动
+        #   （broker=live 但 tq_market 仍为 simnow 属于配置矛盾，同样拒绝）。
+        # ════════════════════════════════════════════════════════════════
+        self.tq_market = self._cred("tq_market", "TQ_MARKET") or "simnow"
+        self.confirm_live = bool(self._param("confirm_live_trading"))
+        self.live_account = self._cred("live_account", "LIVE_ACCOUNT")
+        self.live_password = self._cred("live_password", "LIVE_PASSWORD")
+        self.is_live = (self.name == "live"
+                        or str(self.tq_market).strip().lower() != "simnow")
+
+        if self.is_live:
+            if str(self.tq_market).strip().lower() == "simnow":
+                # broker=live 但 tq_market 仍是默认 simnow —— 配置矛盾，fail-fast
+                self._conn_error = (
+                    "实盘安全闸门：broker='{}' 但 broker_params.tq_market 仍为 "
+                    "'simnow'，实盘请填期货公司名（如 '创元期货'）".format(self.name))
+                return
+            if not self.confirm_live:
+                self._conn_error = (
+                    "实盘安全闸门未开启：tq_market='{}' 非仿真市场，必须显式设置 "
+                    "broker_params.confirm_live_trading=true 才能启动实盘".format(
+                        self.tq_market))
+                return
+
         # 凭据：params 优先，环境变量兜底
         self.sn_account = self._cred("sn_account", "SN_ACCOUNT")
         self.sn_password = self._cred("sn_password", "SN_PASSWORD")
         self.tq_account = self._cred("tq_account", "TQ_ACCOUNT")
         self.tq_password = self._cred("tq_password", "TQ_PASSWORD")
 
-        missing = [k for k, v in
-                   (("SN_ACCOUNT", self.sn_account), ("SN_PASSWORD", self.sn_password),
-                    ("TQ_ACCOUNT", self.tq_account), ("TQ_PASSWORD", self.tq_password))
-                   if not v]
+        if self.is_live:
+            missing = [k for k, v in
+                       (("LIVE_ACCOUNT", self.live_account),
+                        ("LIVE_PASSWORD", self.live_password),
+                        ("TQ_ACCOUNT", self.tq_account),
+                        ("TQ_PASSWORD", self.tq_password))
+                       if not v]
+            missing_label = "实盘/天勤"
+        else:
+            missing = [k for k, v in
+                       (("SN_ACCOUNT", self.sn_account), ("SN_PASSWORD", self.sn_password),
+                        ("TQ_ACCOUNT", self.tq_account), ("TQ_PASSWORD", self.tq_password))
+                       if not v]
+            missing_label = "SimNow/天勤"
         if missing:
-            self._conn_error = "缺少 SimNow/天勤凭据: {}".format(", ".join(missing))
+            self._conn_error = "缺少 {} 凭据: {}".format(missing_label, ", ".join(missing))
             return
 
         # ===== P5 修复：启动账户基线 =====
@@ -275,13 +316,27 @@ class SimNowBroker(Broker):
 
     # ---------------- 连接与合约映射 ----------------
     def _connect(self) -> None:
-        """登录 SimNow，带重试。
+        """登录 CTP（SimNow 仿真 / 实盘期货公司），带重试。
+
+        Phase I1：账户路由按 self.is_live 选择
+          · 仿真 → TqAccount("simnow", sn_account, sn_password)
+          · 实盘 → TqAccount(tq_market, live_account, live_password)
+            （tq_market = 期货公司名，如 "创元期货"）
 
         SimNow 对短连接很敏感：上一轮 gateway 跑完立即退出，CTP 侧会把会话标成
         "用户不活跃"（实测 14:59:50 重连时直接报 `CTP:用户不活跃` + TqTimeoutError）。
         所以登录失败时不能立刻放弃，退避重试几次通常就能连上。
         """
         from tqsdk import TqApi, TqAuth, TqAccount
+
+        if self.is_live:
+            market = str(self.tq_market).strip()
+            account = self.live_account
+            password = self.live_password
+        else:
+            market = "simnow"
+            account = self.sn_account
+            password = self.sn_password
 
         max_attempts = int(self._param("connect_retries"))
         backoff = float(self._param("connect_backoff"))
@@ -290,23 +345,24 @@ class SimNowBroker(Broker):
         for attempt in range(1, max_attempts + 1):
             try:
                 self._api = TqApi(
-                    TqAccount("simnow", self.sn_account, self.sn_password),
+                    TqAccount(market, account, password),
                     auth=TqAuth(self.tq_account, self.tq_password))
             except Exception as e:
-                last_err = "SimNow 登录失败: {}: {}".format(type(e).__name__, e)
+                last_err = "CTP 登录失败({}): {}: {}".format(
+                    market, type(e).__name__, e)
                 self._api = None
                 if attempt < max_attempts:
                     import logging
                     logging.getLogger("tg.brokers.simnow").warning(
-                        "SimNow 第 %d/%d 次登录失败（%.1fs 后重试）: %s",
-                        attempt, max_attempts, backoff, last_err)
+                        "CTP({}) 第 %d/%d 次登录失败（%.1fs 后重试）: %s",
+                        market, attempt, max_attempts, backoff, last_err)
                     time.sleep(backoff)
                     backoff *= 1.5          # 5s → 7.5s → 11.25s
                 continue
 
             # 登录成功，做一次探活：确认连接真的能收数据（挡"用户不活跃"的僵尸连接）
             if not self._probe_alive():
-                last_err = "SimNow 连接探活失败（疑似 CTP:用户不活跃）"
+                last_err = "CTP 连接探活失败（疑似 CTP:用户不活跃）"
                 try:
                     self._api.close()
                 except Exception:
@@ -315,8 +371,8 @@ class SimNowBroker(Broker):
                 if attempt < max_attempts:
                     import logging
                     logging.getLogger("tg.brokers.simnow").warning(
-                        "SimNow 第 %d/%d 次探活失败（%.1fs 后重试）",
-                        attempt, max_attempts, backoff)
+                        "CTP({}) 第 %d/%d 次探活失败（%.1fs 后重试）",
+                        market, attempt, max_attempts, backoff)
                     time.sleep(backoff)
                     backoff *= 1.5
                 continue
@@ -324,7 +380,7 @@ class SimNowBroker(Broker):
             self._resolve_trade_symbol()
             return
 
-        self._conn_error = last_err or "SimNow 登录失败（未知原因）"
+        self._conn_error = last_err or "CTP 登录失败（未知原因）"
         self._api = None
 
     def pulse(self) -> None:
@@ -986,4 +1042,21 @@ class SimNowBroker(Broker):
                 "trade_symbol": self._trade_symbol,
                 "conn_error": self._conn_error,
                 # P5：把启动时账户基线暴露到 stats，便于日志/诊断能看到"幽灵仓从哪来"
-                "initial_account_state": dict(self._initial_account_state)}
+                "initial_account_state": dict(self._initial_account_state),
+                # Phase I1：暴露账户路由信息（审计用）
+                "market": (str(self.tq_market).strip()
+                           if self.is_live else "simnow"),
+                "is_live": self.is_live,
+                "confirm_live_trading": self.confirm_live}
+
+
+@register_broker
+class LiveCTPBroker(SimNowBroker):
+    """实盘 CTP broker（Phase I1）。
+
+    config.json 里 ``"broker": "live"`` 时使用。与 SimNowBroker 共享全部
+    逻辑（超价/追价/P0..P6 保障），仅 name 不同 → 账户路由走实盘分支：
+    TqAccount(tq_market=期货公司名, live_account, live_password)，
+    且必须显式开启 broker_params.confirm_live_trading=true 才允许启动。
+    """
+    name = "live"

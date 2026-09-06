@@ -107,6 +107,17 @@ class GatewayEngine:
         #         "unlock_count", "batch_count", "per_batch",
         #         "deadline_ts", "submit_bar_seq"}
         self._unlock_batch_window: float = 5.0   # 批次截止窗口（秒，墙钟）
+        # ════════════════════════════════════════════════════════════════
+        # Phase I1（2026-09-06）：自动下单开关
+        #   True = 正常接收买卖点信号并交易（默认）
+        #   False = 关闭语义（用户拍板）：
+        #       ① 不再接收买卖点信号（on_signal 顶部门，见 auto_order_off skip）
+        #       ② 把簿内所有「未锁定」持仓锁仓（_lock_remaining_positions；
+        #          LOCK 软离场落簿反向 LOCKED 仓，次日对向信号解锁）
+        #   由前端开关经后端进程托管触发（App/AppTrader.py → run_gateway 的
+        #   shutdown_and_lock_all），_restore/_persist 持久化，重启不漂移。
+        # ════════════════════════════════════════════════════════════════
+        self.auto_order_enabled: bool = True
         self._restore()
 
     # ---------------- 兼容层：engine.position property ----------------
@@ -192,6 +203,11 @@ class GatewayEngine:
                                         and not r.get("confirmed")),
                           note="重启恢复批次解锁复核上下文，等待批次截止后复核")
 
+        # Phase I1：恢复自动下单开关。关闭语义要跨重启保持
+        # （前端关闭 → 子进程退出 → 再启动服务/引擎必须仍是关闭态，
+        # 不能悄悄重新开始接收信号）。AppTrader.start 显式置 True 再拉起。
+        self.auto_order_enabled = bool(self.store.get_json("auto_order_enabled", True))
+
         # ════════════════════════════════════════════════════════════════
         # Phase F2（2026-09-05）：_restore 末尾首拉真实持仓
         #   场景：上轮 SSE 实时成交留下持仓 → 进程重启 → _restore 从 store 读出持仓
@@ -248,6 +264,8 @@ class GatewayEngine:
                                 self._unlock_batch_in_flight)
         else:
             self.store.delete_key("_unlock_batch_in_flight")
+        # Phase I1：持久化自动下单开关（跨重启保持关闭语义）
+        self.store.set_json("auto_order_enabled", self.auto_order_enabled)
 
     # ---------------- bar 事件 ----------------
     def on_bar(self, bar: Bar) -> None:
@@ -307,8 +325,15 @@ class GatewayEngine:
         if not batch_busy and not self.positions.is_empty():
             self._reconcile_position()
 
+        # Phase I1：自动下单关闭态 —— 不再判止盈止损/时间离场（引擎已决定
+        # "全部锁仓"），残留的未锁定持仓（如上次锁仓被拒）继续补锁，直到
+        # 簿内只剩 LOCKED。开启态维持原行为（settle 止盈止损/收盘强平）。
         if not batch_busy and not self.positions.is_empty():
-            self._settle_position(bar)
+            if self.auto_order_enabled:
+                self._settle_position(bar)
+            else:
+                self._lock_remaining_positions(bar,
+                                               reason="auto_order_off_retry")
 
     def _settle_position(self, bar: Bar) -> None:
         """【E3.3 兼容壳】单仓 settle。E3.3 起实际逻辑在 _settle_positions。
@@ -717,6 +742,16 @@ class GatewayEngine:
                       is_buy=sig.is_buy, price=sig.price, high=sig.high, low=sig.low)
 
         # ════════════════════════════════════════════════════════════════
+        # Phase I1：自动下单关闭门（用户拍板关闭语义 ①）
+        #   关闭后不再接收任何买卖点信号：信号幂等键照常消费（防重放），
+        #   但 action 记为 skip/auto_order_off，不进入任何交易决策。
+        # ════════════════════════════════════════════════════════════════
+        if not self.auto_order_enabled:
+            self.store.update_signal_action(sig.key, "skip", "auto_order_off")
+            self.ev.write("signal_skip", key=sig.key, reason="auto_order_off")
+            return
+
+        # ════════════════════════════════════════════════════════════════
         # Phase B：信号门按引擎状态重组
         #   OPENING/EXITING → 正在下单中（瞬态），本次信号忽略但保留幂等键
         #   IN_TRADE        → 持仓中：
@@ -1112,7 +1147,7 @@ class GatewayEngine:
 
     def _close_positions(self, positions: List[Position], reason: str,
                          trigger_price: float, bar: Optional[Bar],
-                         signal_key: str = "") -> None:
+                         signal_key: str = "", force_lock: bool = False) -> None:
         """【E3.3】多仓平仓——按 FIFO（entry_bar_seq ASC）逐笔平仓。
 
         语义约定（与 E3.1 单仓 _close_position 等价 + 多仓扩展）：
@@ -1122,6 +1157,10 @@ class GatewayEngine:
           · phantom 兜底：retry streak 超限 → 清掉所有目标仓位（与 E3.1 一致）
           · 部分成交：剩余仓位保留在 book + state EXITING
           · 全部成交：state IDLE
+
+        force_lock（Phase I1）：True 时无视 entry_mode，目标持仓**全部 LOCK**
+        （开反向同手数锁仓）。用于自动下单关闭语义 ② —— 无论 OPEN_FIRST
+        还是 UNLOCK_FIRST 入场，关闭时一律锁仓（用户拍板：不区分入场方式）。
 
         调用方传入的 positions 列表会自动按 entry_bar_seq 排序（防御性）。
         """
@@ -1147,8 +1186,13 @@ class GatewayEngine:
         first_rejected = False
 
         for idx, pos in enumerate(ordered):
-            # Phase D：按 pos.entry_mode 决定离场方式（硬规则，不留开关）
-            intent, side = self._exit_intent(pos)
+            # Phase D：按 pos.entry_mode 决定离场方式（硬规则，不留开关）。
+            # force_lock（Phase I1）→ 全部 LOCK（自动下单关闭语义 ②）。
+            if force_lock and pos.entry_mode is not EntryMode.LOCKED:
+                opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
+                intent, side = OrderIntent.LOCK, opposite
+            else:
+                intent, side = self._exit_intent(pos)
 
             o = self.broker.submit(intent, side, pos.volume, trigger_price,
                                    signal_key or pos.signal_key,
@@ -1764,6 +1808,62 @@ class GatewayEngine:
         # OPEN_FIRST 或 默认 → LOCK_SOFT
         opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
         return OrderIntent.LOCK, opposite
+
+    # ════════════════════════════════════════════════════════════════
+    # Phase I1（2026-09-06）：自动下单关闭（前端开关 → 进程托管触发）
+    #   关闭语义（用户拍板）：
+    #     ① auto_order_enabled=False → on_signal 顶部拒收所有买卖点信号
+    #     ② _lock_remaining_positions → 簿内所有「未锁定」持仓全部 LOCK
+    #        （无论 OPEN_FIRST 还是 UNLOCK_FIRST 入场，关闭一律锁仓；
+    #         LOCK 成交后由 _close_positions 落簿反向 LOCKED 仓，次日对向
+    #         信号经 has_opposite 门自动 UNLOCK —— 与正常 LOCK 完全同管线）
+    #   幂等性：重复关闭只对仍未锁定的持仓补锁；簿内只剩 LOCKED 时无操作。
+    #   状态：auto_order_enabled 持久化（_persist），重启保持关闭语义。
+    # ════════════════════════════════════════════════════════════════
+    def _lock_remaining_positions(self, bar: Optional[Bar] = None,
+                                  reason: str = "auto_order_off") -> None:
+        """把簿内所有未锁定持仓锁仓（关闭语义 ② 的执行体）。
+
+        on_bar 关闭态下每根 K 线调用一次：上次锁仓被拒（cooldown 期）的
+        残留持仓会在 cooldown 结束后自动补锁，直到簿内只剩 LOCKED。
+        """
+        remaining = [p for p in self.positions.positions
+                     if p.entry_mode is not EntryMode.LOCKED]
+        if not remaining:
+            return
+        ref_price = 0.0
+        if bar is not None and bar.close:
+            ref_price = bar.close
+        elif self.last_bar is not None and self.last_bar.close:
+            ref_price = self.last_bar.close
+        self._close_positions(remaining, reason, ref_price, bar,
+                              signal_key="auto_order_off", force_lock=True)
+
+    def shutdown_and_lock_all(self, reason: str = "auto_order_off") -> None:
+        """自动下单关闭入口（run_gateway 收到退出信号时调用）。
+
+        ① 停信号门（后续 SSE 推来的买卖点信号一律 skip）→
+        ② 锁全部未锁定持仓 → ③ 持久化。幂等：重复调用安全。
+        """
+        self.auto_order_enabled = False
+        self._lock_remaining_positions(reason=reason)
+        self._persist()
+        self.ev.write("auto_order_off",
+                      reason=reason,
+                      locked_n=sum(1 for p in self.positions.positions
+                                   if p.entry_mode is EntryMode.LOCKED),
+                      remaining_unlocked=sum(
+                          1 for p in self.positions.positions
+                          if p.entry_mode is not EntryMode.LOCKED),
+                      note="停止接收信号 + 未锁定持仓已锁仓")
+
+    def auto_order_status(self) -> Dict[str, Any]:
+        """自动下单状态快照（供后端进程托管 / API / 前端轮询）。"""
+        return {
+            "enabled": self.auto_order_enabled,
+            "state": self._state.value,
+            "positions": [p.to_dict() for p in self.positions.positions],
+        }
 
     # ---------------- 统计 ----------------
     def summary(self) -> Dict[str, Any]:

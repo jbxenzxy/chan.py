@@ -108,6 +108,33 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
         }
+        /* ── 自动下单开关（期货实时徽标右侧，2026-09-06）── */
+        .auto-order-wrap {
+            display: none; align-items: center; gap: 6px; margin-left: 10px;
+            font-size: 11px; color: #a8b2d1; user-select: none;
+        }
+        .auto-order-wrap.visible { display: flex; }
+        .auto-order-switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+        .auto-order-switch input { opacity: 0; width: 0; height: 0; }
+        .auto-order-slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: #3a3f5c; border-radius: 20px; transition: 0.25s;
+        }
+        .auto-order-slider::before {
+            content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px;
+            background: #a8b2d1; border-radius: 50%; transition: 0.25s;
+        }
+        .auto-order-switch input:checked + .auto-order-slider { background: #e94560; }
+        .auto-order-switch input:checked + .auto-order-slider::before {
+            transform: translateX(20px); background: #fff;
+        }
+        .auto-order-switch input:disabled + .auto-order-slider { opacity: 0.4; cursor: not-allowed; }
+        .auto-order-dot {
+            width: 8px; height: 8px; border-radius: 50%; background: #7f8c8d;
+            display: inline-block; margin-right: 2px;
+        }
+        .auto-order-dot.on { background: #27ae60; }
+        .auto-order-dot.off { background: #e74c3c; }
         #chart-container {
             width: 100%; height: calc(100vh - 80px);
             position: relative; cursor: crosshair;

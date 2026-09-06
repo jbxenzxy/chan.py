@@ -3476,6 +3476,15 @@
 
         // 根据市场类型更新频率按钮的启用/禁用状态
         function updateFreqButtonStates(isFutures) {
+            // 按市场折叠按钮（腾出顶部空间，用户要求）：
+            //   股票: 周K/日K/30分/15分/5分；期货: 30分/5分/1分/15秒
+            const SHOW = {'w': !isFutures, 'd': !isFutures, '30m': true,
+                          '15m': !isFutures, '5m': true, '1m': isFutures,
+                          '15s': isFutures};
+            for (const f in SHOW) {
+                const el = document.getElementById('btn-' + f);
+                if (el) el.style.display = SHOW[f] ? '' : 'none';
+            }
             // 股票禁用 1m/15s，期货禁用 d/w
             document.getElementById('btn-d').disabled = isFutures;
             document.getElementById('btn-w').disabled = isFutures;
@@ -5958,6 +5967,7 @@
             badge.classList.remove('stopped');
             badge.textContent = '● 实时';
             // loading 由调用方（loadStock/switchFreq）已设置
+            syncAutoOrderWrap();
 
             try {
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq || '1m');
@@ -6178,6 +6188,7 @@
             badge.classList.add('visible');
             badge.classList.remove('stopped');
             badge.textContent = '● 实时';
+            syncAutoOrderWrap();
 
             try {
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol) + '&freq=' + encodeURIComponent(freq);
@@ -6230,6 +6241,7 @@
             realtimeConnected = false;
             const badge = document.getElementById('realtime-badge');
             badge.classList.remove('visible', 'stopped');
+            syncAutoOrderWrap();
         }
 
         function handleRealtimeDataSingle(data) {
@@ -7368,6 +7380,140 @@
                 menu.classList.remove("show");
             }
         });
+
+        // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] AutoOrderService —— 自动下单开关（期货实时页顶部）
+        // 状态源：GET  /api/trader/auto-order/status（轮询 5s）
+        //   开：POST  /api/trader/auto-order/on   → 拉起引擎子进程
+        //   关：POST  /api/trader/auto-order/off  → 停信号 + 锁全部未锁定持仓
+        // 仅在期货实时模式下显示（与"实时"徽标同步显隐）。
+        // ══════════════════════════════════════════════════════════════
+        let autoOrderBusy = false;        // 请求进行中（防连点）
+        let autoOrderPollTimer = null;
+        let autoOrderPrevRunning = null;  // 上次轮询的进程状态（用于探测异常退出）
+        let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
+        let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
+
+        // 开关随"实时"徽标显隐：仅期货实时模式展示
+        function syncAutoOrderWrap() {
+            const wrap = document.getElementById('auto-order-wrap');
+            if (!wrap) return;
+            const show = !!(isRealtimeMode && realtimeSymbol);
+            wrap.classList.toggle('visible', show);
+            if (show) pollAutoOrderStatus();
+        }
+
+        async function pollAutoOrderStatus() {
+            const checkbox = document.getElementById('auto-order-checkbox');
+            if (!checkbox) return;
+            try {
+                const resp = await fetch('/api/trader/auto-order/status', { cache: 'no-store' });
+                if (!resp.ok) {
+                    console.warn('[auto-order] status HTTP ' + resp.status);
+                    return;
+                }
+                const data = await resp.json();
+                const running = !!data.running;
+                const enabled = !!(data.auto_order && data.auto_order.enabled);
+                const on = running && enabled;
+                // 状态变化 → 控制台输出完整信息（定位"自动关闭"问题）
+                if (on !== autoOrderLastOn) {
+                    console.info('[auto-order] 状态: ' + (on ? '开' : '关')
+                        + '  running=' + running + '  enabled=' + enabled
+                        + '  pid=' + data.pid + '  broker=' + data.broker
+                        + '  symbol=' + data.symbol + '/' + data.freq
+                        + '  sse_base=' + data.sse_base
+                        + '  log=' + data.log_file);
+                    autoOrderLastOn = on;
+                }
+                const dot = document.getElementById('auto-order-dot');
+                if (dot) { dot.classList.toggle('on', on); dot.classList.toggle('off', !on); }
+                if (!autoOrderBusy) checkbox.checked = on;
+                const posN = (data.auto_order && typeof data.auto_order.positions_n === 'number')
+                    ? data.auto_order.positions_n : 0;
+                const lockedN = (data.auto_order && Array.isArray(data.auto_order.positions))
+                    ? data.auto_order.positions.filter(function(p) { return p.entry_mode === 'locked'; }).length : 0;
+                const wrap = document.getElementById('auto-order-wrap');
+                if (wrap) {
+                    let tip = '自动下单引擎：' + (running ? '运行中' : '已停止');
+                    if (data.symbol) tip += '，' + data.symbol + '/' + (data.freq || '5m');
+                    if (posN) tip += '，持仓 ' + posN + ' 手（已锁仓 ' + lockedN + '）';
+                    if (data.broker) tip += '，broker=' + data.broker;
+                    if (data.log_file) tip += '，日志=' + data.log_file;
+                    tip += '；关闭时停止接收买卖点信号并锁定全部未锁定持仓';
+                    wrap.title = tip;
+                }
+                // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
+                if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
+                    const tail = data.log_tail || '';
+                    console.warn('[auto-order] 引擎已退出，日志尾部:\n' + tail);
+                    alert('自动下单引擎已退出！\n\n引擎日志尾部（前 12 行）：\n'
+                        + (tail || '（日志文件不存在或为空）')
+                        + '\n\n完整日志：' + (data.log_file || '（未知）'));
+                }
+                if (running) autoOrderLastLog = data.log_file || null;
+                autoOrderPrevRunning = running;
+            } catch (e) {
+                console.warn('[auto-order] 轮询失败: ' + e.message);
+            }
+        }
+
+        async function onAutoOrderToggle(checkbox) {
+            const on = checkbox.checked;
+            if (autoOrderBusy) { checkbox.checked = !on; return; } // 防连点
+            autoOrderBusy = true;
+            checkbox.disabled = true;
+            const label = document.getElementById('auto-order-label');
+            if (label) label.textContent = on ? '启动中…' : '关闭中…';
+            try {
+                const opts = { method: 'POST', cache: 'no-store' };
+                if (on) {
+                    // 把当前页面品种/周期/服务地址带给引擎（--source sse 订阅该行情流）
+                    opts.headers = { 'Content-Type': 'application/json' };
+                    opts.body = JSON.stringify({
+                        symbol: realtimeSymbol || null,
+                        freq: currentFreq || null,
+                        sse_base: location.origin
+                    });
+                }
+                console.info('[auto-order] ' + (on ? '开启' : '关闭') + ' 请求: '
+                    + (opts.body || '(无 body)') + '  url=/api/trader/auto-order/'
+                    + (on ? 'on' : 'off'));
+                const resp = await fetch(on ? '/api/trader/auto-order/on' : '/api/trader/auto-order/off', opts);
+                let detail = null;
+                try {
+                    const j = await resp.json();
+                    detail = (j && j.detail) || null;
+                } catch (e) { /* 非 JSON 响应 */ }
+                console.info('[auto-order] 响应: HTTP ' + resp.status
+                    + (detail ? '  detail=' + detail : ''));
+                if (!resp.ok) {
+                    throw new Error(detail || ('HTTP ' + resp.status));
+                }
+                if (on) autoOrderPrevRunning = null; // 重新探测：首次轮询即运行中
+                await pollAutoOrderStatus();
+            } catch (err) {
+                // 失败回弹 + 提示（实盘安全闸门 / 配置缺失等 AppError → detail）
+                checkbox.checked = !on;
+                console.error('[auto-order] ' + (on ? '开启' : '关闭') + '失败: '
+                    + (err && err.message ? err.message : err));
+                alert('自动下单' + (on ? '开启' : '关闭') + '失败：' + (err && err.message ? err.message : err));
+            } finally {
+                autoOrderBusy = false;
+                checkbox.disabled = false;
+                if (label) label.textContent = '自动下单';
+            }
+        }
+
+        // 轮询：实时模式下每 5s 刷新一次状态
+        (function startAutoOrderPolling() {
+            autoOrderPollTimer = setInterval(function() {
+                const wrap = document.getElementById('auto-order-wrap');
+                if (wrap && wrap.classList.contains('visible')) {
+                    pollAutoOrderStatus();
+                }
+            }, 5000);
+        })();
 
         init();
 

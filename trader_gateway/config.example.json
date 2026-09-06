@@ -53,13 +53,27 @@
     }
   },
   "source": {
-    "type": "replay",
-    "replay_dir": "./replay_data",
+    "type": "sse",
     "sse_base": "http://127.0.0.1:18081",
     "symbol": "KQ.m@CFFEX.IF",
-    "freq": "5m"
+    "freq": "5m",
+    "bar_mode": "confirmed",
+    "signal_max_age_minutes": 60,
+    "reconnect": 5
   },
   "broker": "dry_run",
-  "broker_params": {},
+  "broker_params": {
+    "overprice_points": 0.6,
+    "fill_timeout_open": 5.0,
+    "fill_timeout_close": 5.0,
+    "close_max_chase": 20,
+    "close_chase_ticks": 2,
+    "connect_retries": 3,
+    "connect_backoff": 5.0,
+    "tq_market": "simnow",
+    "confirm_live_trading": false,
+    "live_account": "",
+    "live_password": ""
+  },
   "state_dir": "./state"
 }

@@ -43,7 +43,7 @@ class GatewayConfig:
     entry_policy: Dict[str, Any] = field(default_factory=dict)          # 开仓策略参数（原样传给 Policy 类）
     exit_policy: Dict[str, Any] = field(default_factory=dict)           # 出场策略参数（止盈/止损/最长持仓）
     source: Dict[str, Any] = field(default_factory=dict)                # 行情源：replay 回放 / sse 实时
-    broker: str = "dry_run"                                             # 执行通道：dry_run / simnow
+    broker: str = "dry_run"                                             # 执行通道：dry_run(离线模拟) / simnow(在线仿真) / live(实盘CTP)
     broker_params: Dict[str, Any] = field(default_factory=dict)         # broker 专属参数（超价/超时/追价等，见 DEFAULT_CONFIG）
     sizing: Dict[str, Any] = field(default_factory=dict)                # 仓位管理参数（手数定档，默认关闭=固定手数，见 tg/sizing.py）
     state_dir: str = "./state"                                          # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
@@ -79,18 +79,27 @@ class GatewayConfig:
 
 
 DEFAULT_CONFIG: Dict[str, Any] = {
-    # 执行通道："dry_run"=本地模拟撮合（离线可跑，不连 CTP）；"simnow"=SimNow 仿真真实下单
+    # 执行通道："dry_run"=本地模拟撮合（离线可跑，不连 CTP）；"simnow"=SimNow 仿真真实下单；
+    #           "live"=实盘 CTP（如创元期货，需 broker_params.tq_market=期货公司名 +
+    #           confirm_live_trading=true 双确认）
     "broker": "dry_run",
-    # broker 专属参数（仅 simnow 生效；dry_run 忽略）
+    # broker 专属参数（仅 simnow/live 生效；dry_run 忽略）
     "broker_params": {
         "overprice_points": 0.6,      # 超价点数：下单价 = 实时对手价(买=ask/卖=bid) ± 此值，朝成交方向取整到 tick。0.6 = IF 3 个 tick
         "fill_timeout_open": 5.0,     # 开仓委托等待成交秒数，超时撤单 → 本笔作废，等下一信号（卡单保护）
         "fill_timeout_close": 5.0,    # 平仓委托每轮等待成交秒数，超时撤单 → 进入下一轮追价
         "close_max_chase": 20,        # 平仓追价最大轮数：每轮都按"最新对手价 ± overprice"重新定价，直到成交或用尽轮数
         "close_chase_ticks": 2,       # 平仓追价兜底步长：仅在行情临时取不到时，在上一笔限价基础上朝成交方向推几跳
-        "connect_retries": 3,         # SimNow 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
+        "connect_retries": 3,         # 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
         "connect_backoff": 5.0,       # 登录失败后的首轮退避秒数（每轮 ×1.5：5s → 7.5s → 11.25s）
         # ↑ 单一事实源：broker 参数默认值只在本表维护，tg/brokers/simnow.py 不再自带兜底
+        # ── 账户选择（2026-09-05）：SimNow 仿真 ↔ 实盘 CTP ──
+        "tq_market": "simnow",        # 天勤 TqAccount 接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
+        "confirm_live_trading": False,# 实盘安全闸门：broker="live" 或 tq_market≠simnow 时必须显式 true，否则拒绝启动
+        "live_account": "",           # 实盘资金账号（也可环境变量 LIVE_ACCOUNT）
+        "live_password": "",          # 实盘资金密码（也可环境变量 LIVE_PASSWORD；建议仅用环境变量，不落盘）
+        # 仿真账号沿用 sn_account/sn_password（环境变量 SN_ACCOUNT/SN_PASSWORD），
+        # 天勤账号 tq_account/tq_password（环境变量 TQ_ACCOUNT/TQ_PASSWORD）两种模式共用。
     },
     # 仓位管理（手数定档）。默认 enabled=False —— 开几手完全沿用 risk.max_volume，
     # 与加这个模块之前的行为逐字节一致；不查账户、不联网，零风险引入。

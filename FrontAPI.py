@@ -665,6 +665,60 @@ async def api_stocks_scan_annotation(freq: str = Query("")):
     return _json_response({"codes": codes, "total": len(codes)})
 
 
+# ── 路由 — 自动下单开关（期货 K 线页顶部开关 → 进程托管）────────────
+# 开启 = 拉起 trader_gateway/run_gateway.py 子进程（--source sse 实时接入）；
+# 关闭 = SIGTERM → 引擎 shutdown_and_lock_all（停信号 + 锁全部未锁定持仓）
+#        → 优雅退出。实盘安全闸门在 AppTrader.start 预检（AppError → 400）。
+# 执行体：run_in_threadpool（Popen / 等待退出是阻塞调用，不能占事件循环）。
+
+
+@router.post("/api/trader/auto-order/on", tags=["trader"])
+async def api_trader_auto_order_on(body: dict = Body(default={})):
+    """开启自动下单（启动交易引擎子进程，SSE 订阅当前页面品种）。
+
+    body（可选）：{"symbol": "KQ.m@CFFEX.IF", "freq": "5m",
+                   "sse_base": "http://127.0.0.1:18081"}
+    不传时走 config.json 的 source 段，再缺省 KQ.m@CFFEX.IF / 5m。
+    """
+    try:
+        result = await run_in_threadpool(
+            orch.call_trader_start,
+            symbol=body.get("symbol"), freq=body.get("freq"),
+            sse_base=body.get("sse_base"))
+    except AppError:
+        raise  # 领域异常：交给统一异常处理器（安全闸门/配置缺失 → 4xx）
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"启动自动下单失败: {exc}")
+    return _json_response(result)
+
+
+@router.post("/api/trader/auto-order/off", tags=["trader"])
+async def api_trader_auto_order_off():
+    """关闭自动下单（停止接收信号 + 锁全部未锁定持仓后退出引擎）"""
+    try:
+        result = await run_in_threadpool(orch.call_trader_stop)
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"关闭自动下单失败: {exc}")
+    return _json_response(result)
+
+
+@router.get("/api/trader/auto-order/status", tags=["trader"])
+async def api_trader_auto_order_status():
+    """自动下单状态（进程运行 + 引擎开关 + 持仓快照）"""
+    try:
+        result = await run_in_threadpool(orch.call_trader_status)
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"查询自动下单状态失败: {exc}")
+    return _json_response(result)
+
+
 # ── 路由挂载（单一路由源）────────────────────────────────────────────
 app.include_router(router)
 

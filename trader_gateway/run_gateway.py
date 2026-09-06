@@ -66,7 +66,22 @@ def build_runtime(args):
         src["bar_mode"] = args.bar_mode
 
     out = args.out or cfg.state_dir
+    if not os.path.isabs(out):
+        # 相对路径（默认 "./state"）以 run_gateway.py 所在目录
+        # （trader_gateway/）为基准，避免 CLI 直跑把 state 建到 CWD 下、
+        # 找不到 trader_gateway/state。
+        out = os.path.join(os.path.dirname(os.path.abspath(__file__)), out)
+    out = os.path.abspath(out)
     os.makedirs(out, exist_ok=True)
+    # 引擎全部 stdout/stderr 统一落盘 {out}/gateway.log：
+    #   · CLI 直跑（python run_gateway.py ...）也会产生 gateway.log；
+    #   · AppTrader 子进程模式（stdout 已是该文件）重新赋值无害——后续
+    #     print/事件回声只走新句柄，不会重复写。
+    # buffering=1（行缓冲）：每行实时落盘，进程崩溃/退出后日志可即查。
+    _log_fh = open(os.path.join(out, "gateway.log"), "a",
+                   encoding="utf-8", buffering=1)
+    sys.stdout = _log_fh
+    sys.stderr = _log_fh
     spec = cfg.instrument
 
     broker = brokers.build_broker(args.broker or cfg.broker, spec, cfg.broker_params)
@@ -162,6 +177,14 @@ def run(args) -> int:
             print("[source] 加载失败: {}".format(e))
             return 2
 
+    # 启动摘要：第一屏就给出完整上下文（AppTrader 子进程模式下写入 gateway.log，
+    # 进程意外退出时后端 status 会把这段日志尾部带回前端定位）
+    print("[gw] 启动 pid={}  source={}  symbol={}  freq={}  sse_base={}  "
+          "broker={}  out={}  state_dir={}".format(
+              os.getpid(), src.get("type"), src.get("symbol"),
+              src.get("freq"), src.get("sse_base", ""), engine.broker.name,
+              os.path.abspath(out), cfg.state_dir))
+
     ev.write("start", source=src.get("type"), broker=engine.broker.name,
              entry=engine.entry_policy.describe(), exit=engine.exit_policy.describe(),
              instrument={"signal": cfg.instrument.signal_symbol,
@@ -175,6 +198,14 @@ def run(args) -> int:
 
     def _stop(signum, frame):
         print("\n[gw] 收到退出信号，收尾中...")
+        # Phase I1：自动下单关闭语义 —— 先停信号门 + 锁全部未锁定持仓，
+        # 再停行情源让主循环退出（前端开关关闭 → SIGTERM 即走此路径）。
+        # 不锁直接退出会留下裸持仓，次日无法走"解锁入场"管线。
+        try:
+            engine.shutdown_and_lock_all()
+        except Exception as e:
+            ev.write("error", where="shutdown_lock_all",
+                     err="{}: {}".format(type(e).__name__, e))
         if hasattr(source, "stop"):
             source.stop()
 
