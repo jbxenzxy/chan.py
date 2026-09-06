@@ -62,6 +62,7 @@
     "reconnect": 5
   },
   "broker": "dry_run",
+  "_comment_broker": "实盘账号/密码不落盘：用环境变量 LIVE_ACCOUNT / LIVE_PASSWORD（simnow 同理 SN_* / TQ_*）",
   "broker_params": {
     "overprice_points": 0.6,
     "fill_timeout_open": 5.0,
@@ -71,10 +72,7 @@
     "connect_retries": 3,
     "connect_backoff": 5.0,
     "tq_market": "simnow",
-    "confirm_live_trading": false,
-    "@live_credential": "实盘账号/密码不走配置文件，用环境变量 LIVE_ACCOUNT / LIVE_PASSWORD（避免密码落盘）",
-    "live_account": "",
-    "live_password": ""
+    "confirm_live_trading": false
   },
   "state_dir": "./state"
 }

@@ -501,6 +501,34 @@ with tmp_dir() as tmp:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
 
+# [9i] P1-3：start() 必须清除上次遗留 .stop_request，否则第二次开启秒退
+#（残留 flag 会让新看护线程一眼就叫停并锁仓退出）。
+with tmp_dir() as tmp:
+    cfg_path = os.path.join(tmp, "config.json")
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        json.dump({"broker": "dry_run", "state_dir": os.path.join(tmp, "state")},
+                  f)
+    out_dir = os.path.join(tmp, "state")
+    os.makedirs(out_dir, exist_ok=True)
+    # 预置"上次 stop 残留"的 flag
+    leftover = os.path.join(out_dir, ".stop_request")
+    with open(leftover, "w", encoding="utf-8") as f:
+        f.write("leftover from previous round\n")
+    orig_popen = AT.subprocess.Popen
+    orig_state_file = AT._STATE_FILE
+    try:
+        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT.subprocess.Popen = (lambda cmd, **kw: _FakeProc(cmd))
+        t = AT.AppTrader()
+        res = t.start(cfg_path=cfg_path, out_dir=out_dir)   # 不应抛错、不应秒退
+        check("[9i] start() 清除了上一轮遗留的 .stop_request（P1-3）",
+              not os.path.exists(leftover), True)
+        check("[9i] 清除后子进程仍正常启动（running=True）", res.get("running"), True)
+        t.stop()   # 收尾清理，避免污染本目录
+    finally:
+        AT.subprocess.Popen = orig_popen
+        AT._STATE_FILE = orig_state_file
+
 # [9h] 未传 symbol/freq → 回落到 cfg.source / 内置默认（不再落到 replay）
 with tmp_dir() as tmp:
     cfg_path = os.path.join(tmp, "config.json")

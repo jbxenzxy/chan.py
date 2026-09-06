@@ -104,8 +104,10 @@ async def lifespan(app):
     #   服务退出后 SSE 源即消失，若不管子进程会无限重连空转成孤儿。
     #   此处 SIGTERM 子进程 → shutdown_and_lock_all（停信号 + 锁全部未锁定
     #   持仓）→ 优雅退出，不在服务退出后留下无人托管的交易进程。
+    #   P2-6：关服务用短超时（30s），别等满默认 150s（撞 uvicorn
+    #   graceful-shutdown 阈值会被整服务强杀、连子进程收尾机会都没有）。
     try:
-        await run_in_threadpool(orch.call_trader_stop)
+        await run_in_threadpool(orch.call_trader_stop, 30)
     except Exception as exc:  # noqa: BLE001 —— 关闭兜底不阻断退出
         log.info(f"[FrontAPI] 关闭自动下单子进程异常: {type(exc).__name__}: {exc}")
 

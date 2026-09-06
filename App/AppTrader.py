@@ -158,31 +158,34 @@ def _engine_store(out_dir: str):
     return Store(os.path.join(out_dir, "state.db"))
 
 
-def _events_have_off(out_dir: str) -> bool:
-    """events.jsonl 出现过 auto_order_off 事件（shutdown_and_lock_all 成功收尾）。
+def _count_off_events(out_dir: str) -> int:
+    """统计 events.jsonl 里 auto_order_off 事件的总条数。
 
-    这是判定"优雅关闭"的最强证据：shutdown_and_lock_all 单点在锁仓并持久化后
-    写此事件，且只在真正执行时才写。比起"进程退出来就当作优雅"要可靠得多
-    （修复 P1-1 的谎报成功：Windows TerminateProcess 下进程也退了，但无此事件）。
+    P2-5：events.jsonl 是追加日志，跨轮次持续累积。扫全文件不区分轮次的话，
+    上一轮的 auto_order_off 会让"本轮超时强杀（压根没锁仓）"也被判成优雅
+    收尾——谎报成功换个入口还在。故需按轮次取增量：start 前记一次基线，
+    stop 后比较是否新增。
     """
+    count = 0
     try:
         with open(os.path.join(out_dir, "events.jsonl"),
                   "r", encoding="utf-8") as f:
             for line in f:
                 if '"kind": "auto_order_off"' in line:
-                    return True
+                    count += 1
     except OSError:
         pass
-    return False
+    return count
 
 
-def _graceful_by_result(out_dir: str) -> bool:
-    """按结果判定优雅关闭：子进程确实执行了收尾（锁仓 + 落盘关闭态）。
+def _graceful_by_result(out_dir: str, off_before: int) -> bool:
+    """按结果判定优雅关闭：本轮确实执行了收尾（锁仓 + 落盘关闭态）。
 
-    主要看 auto_order_off 事件；个别情况下事件文件未刷盘（无回写）时，
-    回援 state.db 的 auto_order_enabled==False（shutdown 持久化过）。
+    只认关闭期间**新增**的 auto_order_off 事件（off_before 为 stop() 起点的
+    基线条数），避免历史事件谎报（P2-5）。个别情况下事件文件未刷盘（无回写）
+    时，回援 state.db 的 auto_order_enabled==False（shutdown 持久化过）。
     """
-    if _events_have_off(out_dir):
+    if _count_off_events(out_dir) > off_before:
         return True
     try:
         s = _engine_store(out_dir)
@@ -289,6 +292,19 @@ class AppTrader:
                 "收到开启请求: cfg={} out={} symbol={} freq={} sse_base={}".format(
                     cfg_path, out_dir, symbol, freq, sse_base))
 
+            # P1-3：清除上一轮遗留的 .stop_request flag。看护线程在子进程
+            # 启动后立刻轮询，flag 不清会触发"第二次开机关不掉也开不起来——
+            # 秒退"。持锁内、Popen 前删，无启动竞态。
+            stop_flag = os.path.join(out_dir, _STOP_REQUEST)
+            try:
+                if os.path.exists(stop_flag):
+                    os.remove(stop_flag)
+                    self._engine_log(log_file, "已清除上一轮遗留停止 flag: {}"
+                                     .format(_STOP_REQUEST))
+            except OSError as e:
+                self._engine_log(log_file, "清除停止 flag 失败: {}: {}".format(
+                    type(e).__name__, e))
+
             if not os.path.isfile(cfg_path):
                 msg = ("交易网关配置文件不存在: {}。请先用 "
                        "python trader_gateway/run_gateway.py --init-config <路径> "
@@ -380,8 +396,12 @@ class AppTrader:
             self._engine_log(log_file, "子进程已启动 pid={}".format(handle.pid))
             return handle.to_dict()
 
-    def stop(self, timeout: float = _STOP_TIMEOUT) -> Dict[str, Any]:
+    def stop(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """关闭自动下单：跨平台 flag 文件停止协议 → 子进程收尾锁仓 → 退出。
+
+        timeout：None 用默认宽限 _STOP_TIMEOUT（150s，覆盖最坏锁仓 ~100s）；
+        传入短超时（如服务退出 lifespan 场景 30s，P2-6）则按传入值等待，到期
+        强杀兜底——避免关服务等满 150s 或撞 uvicorn graceful-shutdown 阈值。
 
         ① 写 {out_dir}/.stop_request —— 子进程 run_gateway 主循环/看护线程观测到
            即 shutdown_and_lock_all 并退出（跨平台，不依赖 pid 与信号语义）；
@@ -417,6 +437,14 @@ class AppTrader:
             self._set_engine_log_handler(log_file)
             self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
 
+            # P2-5：记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
+            # 历史锁仓事件让本轮超时强杀被误判为优雅收尾（谎报成功）。
+            off_before = _count_off_events(out_dir)
+
+            # timeout=None → 用户主动点关闭，用默认宽限（覆盖最坏锁仓）；
+            # 传入短超时（lifespan 服务退出）按传入值等待（P2-6）。
+            wait_secs = _STOP_TIMEOUT if timeout is None else timeout
+
             # ① 写停止 flag —— 子进程唯一的跨平台停止触发
             stop_flag = os.path.join(out_dir, _STOP_REQUEST)
             try:
@@ -432,7 +460,7 @@ class AppTrader:
                 _send_signal_best_effort(handle, signal.SIGTERM)
 
             # ③ 等退出
-            deadline = time.time() + timeout
+            deadline = time.time() + wait_secs
             exited = False
             while time.time() < deadline:
                 if not handle.running:
@@ -444,7 +472,7 @@ class AppTrader:
             if not exited:
                 log.warning(
                     "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，强杀兜底",
-                    pid, timeout)
+                    pid, wait_secs)
                 _send_signal_best_effort(handle, signal.SIGKILL)
                 try:
                     handle.proc.wait(timeout=5)
@@ -460,8 +488,9 @@ class AppTrader:
             except Exception:
                 pass
 
-            # ④ graceful 按结果校验（P1-1：不再信任"退出来即优雅"）
-            graceful = exited and _graceful_by_result(out_dir)
+            # ④ graceful 按结果校验（P1-1：不再信任"退出来即优雅"；
+            #   P2-5：只认关闭期间新增的 auto_order_off，防历史事件谎报）
+            graceful = exited and _graceful_by_result(out_dir, off_before)
             if graceful:
                 log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓并持久化关闭态）",
                          pid)
