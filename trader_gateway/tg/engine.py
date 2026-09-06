@@ -1174,7 +1174,10 @@ class GatewayEngine:
         self._state = EngineState.EXITING
 
         # P3 配套：连续 close 失败 cooldown（沿用 _close_position 旧 cooldown 字段）
-        now_ts = self.last_bar.timestamp if self.last_bar else 0
+        # P2-2：last_bar 为 None（引擎启动后从未收到 K 线）时按当前时间兜底——
+        # 否则 0 - 上次失败时间戳 为负数 ≤ _close_retry_bars，cooldown 误把
+        # 锁仓一笔不锁（尤其 shutdown 收尾路径），且无任何错误上报。
+        now_ts = self.last_bar.timestamp if self.last_bar else time.time()
         if (self._last_close_failed_bar_ts
                 and now_ts - self._last_close_failed_bar_ts <= self._close_retry_bars):
             return  # cooldown 中：保持 EXITING，下一根 bar 再试

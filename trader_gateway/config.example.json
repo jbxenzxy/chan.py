@@ -72,6 +72,7 @@
     "connect_backoff": 5.0,
     "tq_market": "simnow",
     "confirm_live_trading": false,
+    "@live_credential": "实盘账号/密码不走配置文件，用环境变量 LIVE_ACCOUNT / LIVE_PASSWORD（避免密码落盘）",
     "live_account": "",
     "live_password": ""
   },

@@ -23,6 +23,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from typing import Any, Dict, Optional
 
@@ -37,6 +38,12 @@ from tg.types import now_cn                          # noqa: E402
 
 ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
                 "risk_block", "error", "day_roll", "stop"}
+
+# 跨平台停止协议：父进程（AppTrader.stop）在 out_dir 写该文件 → 本模块
+# 看护线程观测到 → 请求优雅收尾（lock_all + 持久化 + 退出 0）。
+# 绕开 Windows SIGTERM=TerminateProcess（signal handler 不执行）与
+# venv shim pid 两处平台陷阱（P1-1 / P1-2）。与 App/AppTrader._STOP_REQUEST 保持一致。
+_STOP_REQUEST = ".stop_request"
 
 
 def build_runtime(args):
@@ -196,18 +203,28 @@ def run(args) -> int:
     t0 = time.time()
     counted = 0
 
-    def _stop(signum, frame):
-        print("\n[gw] 收到退出信号，收尾中...")
-        # Phase I1：自动下单关闭语义 —— 先停信号门 + 锁全部未锁定持仓，
-        # 再停行情源让主循环退出（前端开关关闭 → SIGTERM 即走此路径）。
-        # 不锁直接退出会留下裸持仓，次日无法走"解锁入场"管线。
-        try:
-            engine.shutdown_and_lock_all()
-        except Exception as e:
-            ev.write("error", where="shutdown_lock_all",
-                     err="{}: {}".format(type(e).__name__, e))
+    # ── 停止请求（跨平台 flag / 信号 / Ctrl-C）· P1-1/P1-2/P2-4 ──
+    # 任一触发源命中 → stop_event 置位。真正的收尾（shutdown_and_lock_all，
+    # 内含阻塞式 CTP 下单）不放在 signal handler 里做（P2-4：handler 内阻塞
+    # 下单有重入风险，且锁仓最坏 ~100s > _STOP_TIMEOUT 会被 SIGKILL 半途而废），
+    # 而是放回主循环：handler / 看护线程只负责"请求停止 + 让主循环退出"，
+    # 主循环退出前统一执行收尾。
+    stop_event = threading.Event()
+
+    def _request_stop(reason: str) -> None:
+        """置停止标志 + 停行情源让主循环退出（不做阻塞收尾）。幂等。"""
+        if stop_event.is_set():
+            return
+        print("[gw] 收到停止请求（{}），收尾中...".format(reason))
+        stop_event.set()
         if hasattr(source, "stop"):
-            source.stop()
+            try:
+                source.stop()
+            except Exception:
+                pass
+
+    def _stop(signum, frame):
+        _request_stop("signal {}".format(signum))
 
     signal.signal(signal.SIGINT, _stop)
     try:
@@ -215,8 +232,27 @@ def run(args) -> int:
     except Exception:
         pass
 
+    # 看护线程：监控 AppTrader 写的 .stop_request 文件（Windows 上 SIGTERM
+    # 是 TerminateProcess，handler 不执行——flag 文件是唯一可靠跨平台触发）。
+    stop_flag = os.path.join(out, _STOP_REQUEST)
+
+    def _monitor_stop_flag() -> None:
+        while not stop_event.is_set():
+            try:
+                if os.path.exists(stop_flag):
+                    _request_stop("flag " + _STOP_REQUEST)
+                    return
+            except OSError:
+                pass
+            time.sleep(0.2)
+
+    threading.Thread(target=_monitor_stop_flag, name="gw-stop-monitor",
+                     daemon=True).start()
+
     try:
         for kind, obj in source.events():
+            if stop_event.is_set():
+                break
             if kind == "bar":
                 engine.on_bar(obj)
                 counted += 1
@@ -228,11 +264,20 @@ def run(args) -> int:
             if not getattr(source, "_running", True):
                 break
     except KeyboardInterrupt:
-        pass
+        _request_stop("ctrl-c")
     except Exception as e:
         ev.write("error", where="main_loop", err="{}: {}".format(type(e).__name__, e))
         raise
     finally:
+        # 主循环已退出 → 若确有停止请求，执行真正的收尾（停信号门 + 锁仓 +
+        # 持久化）。仅在停止请求时锁仓；正常数据流跑完（max_bars / 源自然
+        # 结束）不锁。收尾放 finally 而非 signal handler（P2-4）。
+        if stop_event.is_set():
+            try:
+                engine.shutdown_and_lock_all()
+            except Exception as e:
+                ev.write("error", where="shutdown_lock_all",
+                         err="{}: {}".format(type(e).__name__, e))
         elapsed = time.time() - t0
         engine._persist()
         summary = print_summary(engine, out, src, cfg, elapsed)

@@ -15,13 +15,20 @@ SSE 行情流）。
 
 开关语义（用户拍板）：
   · 开启（on）→ 拉起子进程，自动下单子进程正常接收买卖点信号并交易；
-  · 关闭（off）→ SIGTERM 子进程 → run_gateway._stop 回调
-    engine.shutdown_and_lock_all()：
-      ① auto_order_enabled=False（停止接收买卖点信号）
-      ② 簿内所有「未锁定」持仓全部 LOCK（锁仓，落簿 LOCKED 反向仓，
-         次日对向信号自动走解锁入场管线）
-    → 子进程优雅退出。auto_order_enabled 持久化在 state.db，
-    重启服务/自动下单子进程仍保持关闭语义（防悄悄重新开跑）。
+  · 关闭（off）→ 跨平台「flag 文件」停止协议：
+      stop() 写 {out_dir}/.stop_request → 子进程 run_gateway 主循环/看护线程
+      观测到该文件 → engine.shutdown_and_lock_all()：
+        ① auto_order_enabled=False（停止接收买卖点信号）
+        ② 簿内所有「未锁定」持仓全部 LOCK（锁仓，落簿 LOCKED 反向仓，
+           次日对向信号自动走解锁入场管线）
+      → 子进程退出 0。Windows/venv 无需 SIGTERM（那在 Windows 上是
+      TerminateProcess，signal handler 不执行，会静默跳过锁仓），也无需
+      依赖 pid 去 kill（venv 下 pid 是 shim 不是真进程）——flag 文件协议
+      完全绕开 pid 与信号语义的平台差异。
+    graceful 按结果校验：子进程退出的同时，events.jsonl 出现 auto_order_off
+    （或 state.db auto_order_enabled==False）才算真正收尾，而不是"退出来即优雅"。
+    auto_order_enabled 持久化在 state.db，重启服务/自动下单子进程仍保持
+    关闭语义（防悄悄重新开跑）。
 
 实盘安全闸门：启动前预检 config.json —— broker=live 或
 broker_params.tq_market≠simnow 时必须显式
@@ -49,9 +56,11 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _TG_ROOT = os.path.join(_REPO_ROOT, "trader_gateway")
 _RUN_GATEWAY = os.path.join(_TG_ROOT, "run_gateway.py")
 
-# 让 AppTrader 能直接读 state.db（Store 是纯 sqlite，只读安全）
+# 让 AppTrader 能直接读 state.db（Store 是纯 sqlite，只读安全）。
+# P3-6：用 append 而非 insert(0)，避免把 trader_gateway 顶到 sys.path 前面、
+# 造成顶层命名污染（不以 trader_gateway 下的同名 package 遮蔽项目其它路径）。
 if _TG_ROOT not in sys.path:
-    sys.path.insert(0, _TG_ROOT)
+    sys.path.append(_TG_ROOT)
 
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "auto_trader_state.json")
@@ -59,12 +68,19 @@ _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 _DEFAULT_CFG = os.path.join(_TG_ROOT, "config.json")
 _DEFAULT_OUT = os.path.join(_TG_ROOT, "state")
 
+# 跨平台停止协议用的 flag 文件名（写在 {out_dir} 下）。子进程 run_gateway 主循环
+# /看护线程观测到该文件 → engine.shutdown_and_lock_all() → 退出 0。绕开 Windows
+# SIGTERM=TerminateProcess（handler 不跑）与 venv pid 是 shim 两类平台陷阱。
+_STOP_REQUEST = ".stop_request"
+
 # 后端（AppTrader）日志 tee 进 gateway.log 的 handler，路径随每次启停更新
 _log_file_handler: Optional[logging.Handler] = None
 
-# 关闭时给子进程的优雅退出宽限（秒）：SIGTERM → shutdown_and_lock_all
-# （锁仓每笔 submit 是同步阻塞的，多仓时给足时间）→ 超时再 SIGKILL。
-_STOP_TIMEOUT = 20.0
+# 关闭时给子进程的优雅退出宽限（秒）。
+# P2-4：锁仓每笔 submit 是同步阻塞的（平仓每轮 5s × 最多 20 轮追价 → 单笔最坏
+# ~100s），stop() 需等子进程主循环完成收尾，故宽限必须覆盖最坏锁仓耗时，
+# 超时再强杀兜底。20s 会被 SIGKILL 锁仓半途而废。
+_STOP_TIMEOUT = 150.0
 
 
 class _TraderProc:
@@ -120,17 +136,61 @@ def _read_state_file() -> Dict[str, Any]:
 
 
 def _write_state_file(data: Dict[str, Any]) -> None:
+    # 原子写（P3-1）：先写临时文件再 os.replace，避免中途崩溃留下半截 JSON，
+    # 下次 _read_state_file 解析失败 → 静默 {} → 进程在跑但托管失联。
+    tmp = _STATE_FILE + ".tmp"
     try:
-        with open(_STATE_FILE, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, _STATE_FILE)
     except OSError as e:
         log.info("[AppTrader] 写状态文件失败: %s: %s", type(e).__name__, e)
+        try:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _engine_store(out_dir: str):
     """按 out_dir 打开自动下单子进程 state.db 的 Store（只读场景为主）。"""
     from tg.store import Store
     return Store(os.path.join(out_dir, "state.db"))
+
+
+def _events_have_off(out_dir: str) -> bool:
+    """events.jsonl 出现过 auto_order_off 事件（shutdown_and_lock_all 成功收尾）。
+
+    这是判定"优雅关闭"的最强证据：shutdown_and_lock_all 单点在锁仓并持久化后
+    写此事件，且只在真正执行时才写。比起"进程退出来就当作优雅"要可靠得多
+    （修复 P1-1 的谎报成功：Windows TerminateProcess 下进程也退了，但无此事件）。
+    """
+    try:
+        with open(os.path.join(out_dir, "events.jsonl"),
+                  "r", encoding="utf-8") as f:
+            for line in f:
+                if '"kind": "auto_order_off"' in line:
+                    return True
+    except OSError:
+        pass
+    return False
+
+
+def _graceful_by_result(out_dir: str) -> bool:
+    """按结果判定优雅关闭：子进程确实执行了收尾（锁仓 + 落盘关闭态）。
+
+    主要看 auto_order_off 事件；个别情况下事件文件未刷盘（无回写）时，
+    回援 state.db 的 auto_order_enabled==False（shutdown 持久化过）。
+    """
+    if _events_have_off(out_dir):
+        return True
+    try:
+        s = _engine_store(out_dir)
+        enabled = bool(s.get_json("auto_order_enabled", True))
+        s.close()
+        return enabled is False
+    except Exception:
+        return False
 
 
 class AppTrader:
@@ -321,9 +381,17 @@ class AppTrader:
             return handle.to_dict()
 
     def stop(self, timeout: float = _STOP_TIMEOUT) -> Dict[str, Any]:
-        """关闭自动下单：SIGTERM → 子进程 shutdown_and_lock_all → 退出。
+        """关闭自动下单：跨平台 flag 文件停止协议 → 子进程收尾锁仓 → 退出。
 
-        超时未退则 SIGKILL（兜底；自动下单子进程锁仓是同步阻塞，正常都能在宽限内收尾）。
+        ① 写 {out_dir}/.stop_request —— 子进程 run_gateway 主循环/看护线程观测到
+           即 shutdown_and_lock_all 并退出（跨平台，不依赖 pid 与信号语义）；
+        ② 非 Windows 再补发 SIGTERM 促活（Linux/macOS handler 会转置停止事件），
+           Windows **不发** —— SIGTERM 在 Windows 上是 TerminateProcess，会抢在
+           flag 被消费前强杀，反而破坏优雅；
+        ③ 等子进程退出，超时再强杀兜底（Windows 追加 taskkill /T 防 venv shim
+           pid 留下真进程孤儿，P1-2）；
+        ④ graceful 按**结果**判定：EXIT 且出现 auto_order_off 事件（或 state.db
+           auto_order_enabled==False），而不是"退出来即优雅"（修 P1-1 谎报成功）。
         """
         with self._lock:
             handle = self._handle
@@ -344,17 +412,26 @@ class AppTrader:
                 return {"running": False, "pid": None, "note": "未在运行"}
 
             pid = handle.pid
-            log_file = os.path.join(handle.out_dir, "gateway.log")
+            out_dir = handle.out_dir
+            log_file = os.path.join(out_dir, "gateway.log")
             self._set_engine_log_handler(log_file)
             self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
-            try:
-                handle.proc.send_signal(signal.SIGTERM)
-            except Exception:
-                try:
-                    os.kill(pid, signal.SIGTERM)
-                except OSError:
-                    pass
 
+            # ① 写停止 flag —— 子进程唯一的跨平台停止触发
+            stop_flag = os.path.join(out_dir, _STOP_REQUEST)
+            try:
+                with open(stop_flag, "w", encoding="utf-8") as f:
+                    f.write("requested_by=apptrader ts={}\n".format(
+                        time.strftime("%Y-%m-%d %H:%M:%S")))
+            except OSError as e:
+                self._engine_log(log_file, "写停止flag失败: {}: {}".format(
+                    type(e).__name__, e))
+
+            # ② 非 Windows 补发 SIGTERM 促活；Windows 不发（见 docstring）
+            if os.name != "nt":
+                _send_signal_best_effort(handle, signal.SIGTERM)
+
+            # ③ 等退出
             deadline = time.time() + timeout
             exited = False
             while time.time() < deadline:
@@ -363,20 +440,18 @@ class AppTrader:
                     break
                 time.sleep(0.3)
 
+            # 兜底强杀
             if not exited:
-                log.warning("[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，SIGKILL 兜底",
-                            pid, timeout)
-                try:
-                    handle.proc.kill()
-                except Exception:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except OSError:
-                        pass
+                log.warning(
+                    "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，强杀兜底",
+                    pid, timeout)
+                _send_signal_best_effort(handle, signal.SIGKILL)
                 try:
                     handle.proc.wait(timeout=5)
                 except Exception:
                     pass
+                if os.name == "nt":
+                    _taskkill(pid)
 
             # 拿退出码（定位"自动退出"问题：非 0 说明自动下单子进程主循环抛异常）
             rc = None
@@ -385,14 +460,24 @@ class AppTrader:
             except Exception:
                 pass
 
+            # ④ graceful 按结果校验（P1-1：不再信任"退出来即优雅"）
+            graceful = exited and _graceful_by_result(out_dir)
+            if graceful:
+                log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓并持久化关闭态）",
+                         pid)
+            else:
+                log.warning(
+                    "[AppTrader] 自动下单 pid=%s 已退出但未检测到收尾结果"
+                    "(graceful=False, rc=%s) —— 需核查是否真的锁仓", pid, rc)
+
             self._handle = None
             _write_state_file({})
             log.info("[AppTrader] 自动下单已关闭（pid=%s，graceful=%s，rc=%s）",
-                     pid, exited, rc)
+                     pid, graceful, rc)
             self._engine_log(
                 log_file,
-                "已关闭 pid={} graceful={} rc={}".format(pid, exited, rc))
-            return {"running": False, "pid": pid, "graceful": exited, "rc": rc}
+                "已关闭 pid={} graceful={} rc={}".format(pid, graceful, rc))
+            return {"running": False, "pid": pid, "graceful": graceful, "rc": rc}
 
     def status(self) -> Dict[str, Any]:
         """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""
@@ -515,7 +600,6 @@ class AppTrader:
         """
         try:
             with open(log_file, "rb") as f:
-                size = os.path.getsize(log_file)
                 f.seek(0, os.SEEK_END)
                 chunk = b""
                 # 每次回退 8KB，最多拼满 ~256KB；尾行以 \n 界定取最后 n 行
@@ -587,7 +671,12 @@ class AppTrader:
 
         broker=live 或 broker_params.tq_market≠simnow → 实盘意图，
         必须显式 confirm_live_trading=true 才允许拉起自动下单子进程。
+        非 simnow/live（如 dry_run 离线模拟）不经任何实盘路由，直接放行
+        ——此前无此短路，用户设 broker=dry_run 但 tq_market 填了期货公司名时
+        dry_run 会被实盘闸门误拦（P2-1）。
         """
+        if broker not in ("simnow", "live"):
+            return
         bp = cfg_data.get("broker_params") or {}
         market = str(bp.get("tq_market") or "simnow").strip().lower()
         is_live = broker == "live" or market != "simnow"
@@ -642,6 +731,40 @@ def _pid_alive(pid: int) -> bool:
         return True
     except OSError:
         return False
+
+
+def _send_signal_best_effort(handle, sig) -> bool:
+    """对子进程发信号，尽力而为（Popen.send_signal 优先，失败退回 os.kill）。"""
+    proc = getattr(handle, "proc", None)
+    if proc is not None:
+        try:
+            proc.send_signal(sig)
+            return True
+        except Exception:
+            pass
+    pid = getattr(handle, "pid", 0)
+    if pid > 0:
+        try:
+            os.kill(pid, sig)
+            return True
+        except OSError:
+            return False
+    return False
+
+
+def _taskkill(pid: int) -> None:
+    """Windows 兜底：taskkill /F /T 保进程树必死。
+
+    venv 下 Popen.pid 是 shim（python.exe 壳）而非真解释器进程（P1-2）；
+    仅 kill shim 可能留下背后真进程成为孤儿（继续连行情/下单）。用 /T 连根杀。
+    仅作强杀兜底，正常优雅路径（flag 文件）不走这里。
+    """
+    try:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True, creationflags=0)
+    except OSError:
+        pass
 
 
 # 全局单例：一处定义、全局引用（FrontAPI → orch.trader 调用）
