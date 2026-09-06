@@ -39,7 +39,7 @@ SimNow 仿真 broker（M2b）
         所以 P6 之后：真成交 = P3 两层 + trade_records 成交量 ≥ 委托量；
         P4/P5 降级为纯诊断（只告警、不 reject）。
 
-凭据（优先级：config.broker_params > 环境变量）
+凭据（优先级：环境变量 > config.broker_params，env 为空才回落 config）
     sn_account / sn_password    SimNow 仿真账号
     tq_account / tq_password    天勤账号
     环境变量名：SN_ACCOUNT / SN_PASSWORD / TQ_ACCOUNT / TQ_PASSWORD
@@ -226,7 +226,7 @@ class SimNowBroker(Broker):
 
         # ════════════════════════════════════════════════════════════════
         # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
-        #   账户路由（优先级：params > 环境变量）：
+        #   账户路由（优先级：环境变量 > 配置文件，env 为空才回落 config）：
         #     仿真：sn_account/sn_password（SN_ACCOUNT/SN_PASSWORD）
         #     实盘：live_account/live_password（LIVE_ACCOUNT/LIVE_PASSWORD）
         #   天勤账号 tq_account/tq_password（TQ_ACCOUNT/TQ_PASSWORD）两种模式共用。
@@ -255,7 +255,7 @@ class SimNowBroker(Broker):
                         self.tq_market))
                 return
 
-        # 凭据：params 优先，环境变量兜底
+        # 凭据：环境变量优先，env 为空才回落 config（防明文反客为主）
         self.sn_account = self._cred("sn_account", "SN_ACCOUNT")
         self.sn_password = self._cred("sn_password", "SN_PASSWORD")
         self.tq_account = self._cred("tq_account", "TQ_ACCOUNT")

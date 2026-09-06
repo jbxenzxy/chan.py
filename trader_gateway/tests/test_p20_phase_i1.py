@@ -433,8 +433,9 @@ from App import AppTrader as AT  # noqa: E402
 
 
 class _FakeProc:
-    def __init__(self, cmd):
+    def __init__(self, cmd, **kw):
         self.cmd = cmd
+        self.args = cmd          # subprocess.run 读 process.args 组装返回
         self.pid = os.getpid()   # 存活 pid，让 running 属性为 True
 
     def poll(self):
@@ -447,6 +448,33 @@ class _FakeProc:
         pass
 
     def wait(self, timeout=None):
+        return 0
+
+    # 第四轮 P0 回归修复：AT.subprocess 就是真实 subprocess 模块，测试把
+    # Popen 换成 _FakeProc 后，stop() 强杀分支的 _taskkill 内部
+    # subprocess.run(...) 也会命中 _FakeProc，而 run 会 `with process:`
+    # 复用返回值的 context manager 协议。若不实现 __enter__/__exit__，
+    # Windows 上 p20 在 [9i] 强杀路径抛
+    # "'_FakeProc' object does not support the context manager protocol"，
+    # 导致 p20 在用户 Windows 环境整段 abort、[9i]/[9j] 全不执行。
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # subprocess.Popen.__exit__ 等价于 wait()。subprocess.run 在 `with
+        # process:` 块内还会调 communicate() 采集 stdout/stderr，并由
+        # process.returncode 判定返回码——故还需补 communicate/returncode。
+        self.wait()
+        return False  # 不吞异常
+
+    def communicate(self, input=None, timeout=None):
+        # 模拟"命令执行成功但无输出"：返回 (stdout=b"", stderr=b"")。
+        # subprocess.run(capture_output=True) 依赖它为 Popen 填充输出，
+        # 缺失会在 Windows 上抛 AttributeError。
+        return b"", b""
+
+    @property
+    def returncode(self):
         return 0
 
 
