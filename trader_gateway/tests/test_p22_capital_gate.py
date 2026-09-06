@@ -2,21 +2,20 @@
 """
 P22 资金闸门（capital gate）单元测试 · 审计 P2-8 / P2-9
 ======================================================
-背景（2026-09-06）
-    开仓前用"账户可用资金"判门槛：
+背景（2026-09-06 全 FOK + 删除分仓改造后）
+    一笔信号 = 一笔报单（≤20 手），资金闸门不再除以持仓笔数：
       K = 一手保证金 + 一手名义价值 × risk_unit_pct      （开 1 手的最低门槛）
       X = floor(可用资金 / K)                            （资金允许的最多手数上限）
-      cap_per_batch = floor(X / batch_count)；可为 0。
+    语义（比旧版更简单，P2-8 的"批次总手数超上限"问题随分仓删除自然消失）：
+      · equity < K        → blocked=True，拒开本笔（risk_block）
+      · sizer 手数 > X    → 截断为 X（capital_capped），这笔报单总手数 ≤ X
+      · equity 未知/≤0    → 不拦（(False, None)），由其他风控兜底
+      · dry_run 无权益    → 回退 risk.initial_cash 虚拟资金
 
-    审计 P2-8 发现：旧实现 `cap = max(1, X//bc)` 在
-      equity=3K（X=3）+ batch_count=5 时 → cap=1 → 5 批各开 1 手 = 共 5 手 > 3 手，
-    批次总手数超资金上限。本测试锁死修复后的 floor 语义：
-      · cap 可为 0（X < batch_count）→ 调用方拒开本批，绝不超资金上限
-      · 每笔超 cap → 截断（capital_capped）
-    P2-9：资金闸门是实盘资金安全功能，须补上专门测试。
+    P2-9：资金闸门是实盘资金安全功能，须有专门测试。
 
 本测试不连 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。
-    A 段 —— 直连 `engine._capital_gate`，验证边界语义（含 P2-8 场景）。
+    A 段 —— 直连 `engine._capital_gate`，验证边界语义。
     B 段 —— 走 `on_signal` 集成，验证"拒开 / 截断 / dry_run 虚拟资金"落地。
 跑法：python tests/test_p22_capital_gate.py
 """
@@ -131,7 +130,7 @@ class EqBroker:
 
 
 class StubSizer:
-    """可控每手保证金 / 批次 / 上限的 sizer stub。"""
+    """可控每手保证金 / 手数 / 上限的 sizer stub（单笔模型：只有 size，无分仓）。"""
     def __init__(self, margin=150_000.0, risk_unit=0.01, max_vol=10,
                  src="available"):
         self._margin = float(margin)
@@ -139,7 +138,6 @@ class StubSizer:
         self.max_volume = int(max_vol)
         self.equity_source = src
         self._per = 1
-        self._bc = 1
 
     def per_lot_margin(self, price):
         return self._margin
@@ -147,12 +145,9 @@ class StubSizer:
     def size(self, **kw):
         return self._per, "stub"
 
-    def size_batch(self, **kw):
-        return self._per, self._bc, "stub+batch={}".format(self._bc)
-
 
 # ════════════════════════════════════════════════════════════════
-# A 段 —— `engine._capital_gate` 边界语义（直连）
+# A 段 —— `engine._capital_gate` 边界语义（直连，单笔模型）
 # ════════════════════════════════════════════════════════════════
 print("\n[A] _capital_gate 边界语义")
 # K = margin + notional*risk_unit，equity=X*K → X 取整。全用 spec 自洽推导。
@@ -170,44 +165,33 @@ with tmp_dir() as tmp:
     gb = EqBroker(k * 0.5)
     gs = StubSizer(margin=margin, risk_unit=risk_unit)
     engine.broker, engine.sizer = gb, gs
-    blocked, cap = engine._capital_gate(sig, 1)
-    check("A1 equity<K -> blocked=True", blocked, True)
+    blocked, cap = engine._capital_gate(sig)
+    check("A1 equity<K -> (True, None)", (blocked, cap), (True, None))
 
-    # A2：equity = 3K，batch_count=5 → cap = floor(3/5) = 0（P2-8 核心）
+    # A2：equity = 3K → cap = X = 3（单笔模型：不除以持仓笔数）
     gb = EqBroker(k * 3)
     engine.broker = gb
-    blocked, cap = engine._capital_gate(sig, 5)
-    check("A2 X=3,bc=5 -> blocked=False (拒开由调用方)",
-          (blocked, cap), (False, 0))
+    blocked, cap = engine._capital_gate(sig)
+    check("A2 equity=3K -> (False, 3)", (blocked, cap), (False, 3))
 
-    # A3：equity = 3K，batch_count=1 → cap = X = 3（默认路径不破坏）
-    blocked, cap = engine._capital_gate(sig, 1)
-    check("A3 X=3,bc=1 -> cap == 3", cap, 3)
-
-    # A4：equity = 7K，batch_count=3 → cap = floor(7/3) = 2
-    gb = EqBroker(k * 7)
+    # A3：equity = 7.5K → cap = floor(7.5) = 7
+    gb = EqBroker(k * 7.5)
     engine.broker = gb
-    blocked, cap = engine._capital_gate(sig, 3)
-    check("A4 X=7,bc=3 -> cap == 2", cap, 2)
+    blocked, cap = engine._capital_gate(sig)
+    check("A3 equity=7.5K -> cap == 7", (blocked, cap), (False, 7))
 
-    # A5：equity <= 0 → 不拦（(False,None)），由其他风控兜底
+    # A4：equity <= 0 → 不拦（(False,None)），由其他风控兜底
     gb = EqBroker(0)
     engine.broker = gb
-    blocked, cap = engine._capital_gate(sig, 1)
-    check("A5 equity<=0 -> 不拦 (False,None)", (blocked, cap), (False, None))
+    blocked, cap = engine._capital_gate(sig)
+    check("A4 equity<=0 -> 不拦 (False,None)", (blocked, cap), (False, None))
 
-    # A6：equity 未知（None，非 dry_run）→ 不拦（保守放行）
+    # A5：equity 未知（None，非 dry_run）→ 不拦（保守放行）
     gb = EqBroker(None)
     engine.broker = gb
-    blocked, cap = engine._capital_gate(sig, 1)
-    check("A6 equity=None(非dry_run) -> 不拦 (False,None)",
+    blocked, cap = engine._capital_gate(sig)
+    check("A5 equity=None(非dry_run) -> 不拦 (False,None)",
           (blocked, cap), (False, None))
-
-    # A7：batch_count≤0 防御 → 等价 batch=1
-    gb = EqBroker(k * 5)
-    engine.broker = gb
-    blocked, cap = engine._capital_gate(sig, 0)
-    check("A7 bc=0 -> 走 bc=1 (cap==X==5)", cap, 5)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -215,41 +199,40 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[B] on_signal 集成")
 
-# B1：X < batch_count（cap=0）→ 拒开本批，事件 batch_unaffordable，无下单
+# B1：equity < K → 拒开本笔，事件 risk_block(capital_insufficient)，无下单
 with tmp_dir() as tmp:
     engine, store, broker0 = build_engine(tmp)
     spec = engine.spec
     margin = 150_000.0
     price = 4500.0
     k = margin + spec.points_to_cash(price, 1) * 0.01
-    gb = EqBroker(k * 3)          # X=3
+    gb = EqBroker(k * 0.5)          # 连 1 手都不够
     gs = StubSizer(margin=margin, max_vol=10)
-    gs._per, gs._bc = 1, 5        # per=1, batch=5
     engine.broker, engine.sizer = gb, gs
     sig = make_signal(price=price)
     engine.on_signal(sig)
-    check("B1 cap=0 -> signal_action=risk_block",
+    check("B1 equity<K -> signal_action=risk_block",
           store.signal_action(sig.key), "risk_block")
-    check("B1 cap=0 -> broker 零下单",
+    check("B1 equity<K -> broker 零下单",
           sum(1 for o in gb.orders), 0)
-    check("B1 cap=0 -> state=IDLE（未入场）",
+    check("B1 equity<K -> state=IDLE（未入场）",
           engine._state.name, "IDLE")
 
-# B2：per_batch > cap → 截断为 cap，事件 capital_capped，下单手数=cap
+# B2：sizer 手数 > cap → 截断为 cap，事件 capital_capped，下单手数=cap
 with tmp_dir() as tmp:
     engine, store, broker0 = build_engine(tmp)
     spec = engine.spec
     margin = 150_000.0
     price = 4500.0
     k = margin + spec.points_to_cash(price, 1) * 0.01
-    gb = EqBroker(k * 3, delegate=broker0)   # X=3 → cap=3（bc=1）
+    gb = EqBroker(k * 3, delegate=broker0)   # cap = 3
     gs = StubSizer(margin=margin, max_vol=10)
-    gs._per, gs._bc = 9, 1        # per=9 超 cap=3
+    gs._per = 9                    # sizer 算 9 手，超 cap=3
     engine.broker, engine.sizer = gb, gs
     sig = make_signal(price=price)
     engine.on_signal(sig)
     vols = [o.volume for o in gb.orders]
-    check("B2 per=9>cap=3 -> 下单手数=3（截断）", vols, [3])
+    check("B2 per=9>cap=3 -> 单笔下单手数=3（截断）", vols, [3])
     check("B2 截断后 signal_action=opened",
           store.signal_action(sig.key), "opened")
     check("B2 截断后 state=IN_TRADE", engine._state.name, "IN_TRADE")
@@ -261,7 +244,7 @@ with tmp_dir() as tmp:
     gs = StubSizer(margin=150_000.0, max_vol=1000)
     engine.sizer = gs
     sig = make_signal(price=4500.0)
-    blocked, cap = engine._capital_gate(sig, 1)
+    blocked, cap = engine._capital_gate(sig)
     check("B3 dry_run无权益 -> 回退 initial_cash(不拒开)", blocked, False)
     check("B3 回退虚拟资金后 cap>0", cap is not None and cap > 0, True)
 

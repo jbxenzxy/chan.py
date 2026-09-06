@@ -343,55 +343,64 @@ with tmp_dir() as tmp:
 
 # ════════════════════════════════════════════════════════════════
 # [7] 实盘安全闸门（AppTrader._check_live_gate 三分支）
+#     依赖仓库根 App/ 包——trader_gateway/ 单独解压运行（无 App/）时整节跳过；
+#     完整仓库内（App/ 存在）照常执行全部断言。
 # ════════════════════════════════════════════════════════════════
 print("\n[7] 实盘安全闸门（AppTrader._check_live_gate）")
-from App.AppTrader import AppTrader  # noqa: E402
-from App.AppErrors import AppError  # noqa: E402
+try:
+    from App.AppTrader import AppTrader  # noqa: E402
+    from App.AppErrors import AppError  # noqa: E402
+    _HAS_APP = True
+except ImportError:
+    _HAS_APP = False
+    print("  - SKIP：当前目录无 App/ 包（trader_gateway 独立运行），"
+          "本节在完整仓库内执行")
+
+if _HAS_APP:
+
+    def cfg_with(broker, bp):
+        d = copy.deepcopy(DEFAULT_CONFIG)
+        d["broker"] = broker
+        d["broker_params"].update(bp)
+        return d
 
 
-def cfg_with(broker, bp):
-    d = copy.deepcopy(DEFAULT_CONFIG)
-    d["broker"] = broker
-    d["broker_params"].update(bp)
-    return d
+    def raises_apperror(fn, name):
+        try:
+            fn()
+        except AppError:
+            check(name, True, True)
+            return
+        check(name, True, False)
 
 
-def raises_apperror(fn, name):
+    # [7a] broker=live 但 tq_market 仍 simnow → 配置矛盾拒绝
+    raises_apperror(
+        lambda: AppTrader._check_live_gate(cfg_with("live", {}), "live"),
+        "[7a] broker=live + tq_market=simnow → 拒绝")
+
+    # [7b] tq_market≠simnow 但未开 confirm_live_trading → 拒绝
+    raises_apperror(
+        lambda: AppTrader._check_live_gate(
+            cfg_with("simnow", {"tq_market": "创元期货"}), "simnow"),
+        "[7b] tq_market=创元期货 未确认实盘 → 拒绝")
+
+    # [7c] tq_market≠simnow + confirm_live_trading=true → 放行
     try:
-        fn()
-    except AppError:
-        check(name, True, True)
-        return
-    check(name, True, False)
+        AppTrader._check_live_gate(
+            cfg_with("simnow", {"tq_market": "创元期货",
+                                "confirm_live_trading": True}), "simnow")
+        check("[7c] 实盘双确认 → 放行", True, True)
+    except AppError as e:
+        check("[7c] 实盘双确认 → 放行", str(e), "NO_ERROR")
 
-
-# [7a] broker=live 但 tq_market 仍 simnow → 配置矛盾拒绝
-raises_apperror(
-    lambda: AppTrader._check_live_gate(cfg_with("live", {}), "live"),
-    "[7a] broker=live + tq_market=simnow → 拒绝")
-
-# [7b] tq_market≠simnow 但未开 confirm_live_trading → 拒绝
-raises_apperror(
-    lambda: AppTrader._check_live_gate(
-        cfg_with("simnow", {"tq_market": "创元期货"}), "simnow"),
-    "[7b] tq_market=创元期货 未确认实盘 → 拒绝")
-
-# [7c] tq_market≠simnow + confirm_live_trading=true → 放行
-try:
-    AppTrader._check_live_gate(
-        cfg_with("simnow", {"tq_market": "创元期货",
-                            "confirm_live_trading": True}), "simnow")
-    check("[7c] 实盘双确认 → 放行", True, True)
-except AppError as e:
-    check("[7c] 实盘双确认 → 放行", str(e), "NO_ERROR")
-
-# [7d] dry_run / simnow 仿真 → 放行
-try:
-    AppTrader._check_live_gate(cfg_with("dry_run", {}), "dry_run")
-    AppTrader._check_live_gate(cfg_with("simnow", {}), "simnow")
-    check("[7d] dry_run / simnow 仿真 → 放行", True, True)
-except AppError as e:
-    check("[7d] dry_run / simnow 仿真 → 放行", str(e), "NO_ERROR")
+    # [7d] dry_run / simnow 仿真 → 放行
+    try:
+        AppTrader._check_live_gate(cfg_with("dry_run", {}), "dry_run")
+        AppTrader._check_live_gate(cfg_with("simnow", {}), "simnow")
+        check("[7d] dry_run / simnow 仿真 → 放行", True, True)
+    except AppError as e:
+        check("[7d] dry_run / simnow 仿真 → 放行", str(e), "NO_ERROR")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -421,6 +430,17 @@ check("[8f] build_broker('live') 返回 LiveCTPBroker",
       isinstance(b_live2, LiveCTPBroker), True)
 check("[8g] LiveCTPBroker.is_live=True", b_live2.is_live, True)
 check("[8h] live 别名未覆盖 simnow 注册", "simnow" in BROKERS, True)
+
+
+# [9]-[12] 全部依赖仓库根 App/ 包（AppTrader 子进程/状态/CWD 行为）。
+# trader_gateway/ 单独解压运行（无 App/）时整段跳过并正常退出；
+# 完整仓库内（App/ 存在）照常执行全部断言。
+if not _HAS_APP:
+    print("\n  - SKIP [9]-[12]：当前目录无 App/ 包（trader_gateway 独立运行）")
+    print("\n" + "=" * 60)
+    print("P20 Phase I1 结果: {} 通过 / {} 失败（[9]-[12] 已跳过）".format(_PASS, _FAIL))
+    print("=" * 60)
+    sys.exit(0 if _FAIL == 0 else 1)
 
 
 # ════════════════════════════════════════════════════════════════

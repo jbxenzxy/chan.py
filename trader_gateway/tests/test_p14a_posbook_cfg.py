@@ -12,7 +12,7 @@ E3.1 的范围（本次提交）
   ⑦ engine 构造时 cfg.risk.max_open_positions 传到 PositionBook
   ⑧ _restore 用 cfg 上限 + 写 positions_truncated_on_restore warning（若有截断）
 
-E3.2 / E3.3 在 E3.1 容器基础上扩展（sizer batch + settle/close loop）
+E3.2 / E3.3 在 E3.1 容器基础上扩展（sizer 分仓 + settle/close loop）
 
 硬性要求
   · 默认 max_open_positions=1 → 所有现存测试（P5..P13）零行为变化

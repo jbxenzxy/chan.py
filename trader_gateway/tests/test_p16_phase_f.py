@@ -198,10 +198,10 @@ class RejectDryBroker(DryRunBroker):
         return o
 
 
-def make_engine(tmpdir, *, max_open_positions=1, batch_open=1,
+def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
                 cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
-    """构造引擎：默认 batch=1 + sizing 关闭（fixed_volume=1）。"""
+    """构造引擎：默认分仓=1 + sizing 关闭（fixed_volume=1）。"""
     cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
@@ -210,7 +210,7 @@ def make_engine(tmpdir, *, max_open_positions=1, batch_open=1,
     cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
     cfg.sizing["enabled"] = False
     cfg.sizing["fixed_volume"] = 1
-    cfg.sizing["batch_open"] = batch_open
+    cfg.sizing["split_positions"] = split_positions
 
     spec = InstrumentSpec()
     if broker is None:
@@ -523,7 +523,7 @@ with tmp_dir() as td:
     cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
     cfg.sizing["enabled"] = False
     cfg.sizing["fixed_volume"] = 1
-    cfg.sizing["batch_open"] = 1
+    cfg.sizing["split_positions"] = 1
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
     exitp = DefaultExitPolicy({"take_profit_points": 5.0, "stop_loss_points": 10.0})
     store = Store(os.path.join(td, "state.db"))

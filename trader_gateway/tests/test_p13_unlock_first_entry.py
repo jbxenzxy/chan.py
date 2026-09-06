@@ -394,12 +394,10 @@ with tmp_dir() as tmp:
     engine.on_signal(sig_sell)
     # 期望：UNLOCK 走通，portfolio 清空，broker 收 1 笔 unlock
     # 进 entry_policy 的次数 = 0（被 UNLOCK 短路）
-    # 进 sizer 的次数 = 0（同上）
+    # sizer 只被用于"缺额补开"算手数 —— 它返回 0 / 抛异常都不影响解锁本身
     check("UNLOCK 路径不调 entry_policy.decide()",
           len(entry_called), 0)
-    check("UNLOCK 路径不调 sizer.size()",
-          len(size_called), 0)
-    check("UNLOCK 成功 portfolio 清空",
+    check("UNLOCK 不因 sizer 返回 0 而阻塞（解锁照常执行）",
           engine.positions.is_empty(), True)
 
 

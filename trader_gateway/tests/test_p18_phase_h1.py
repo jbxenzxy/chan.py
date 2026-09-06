@@ -330,7 +330,7 @@ with tmp_dir() as tmp:
     engine._persist()
     engine._state = EngineState.IN_TRADE
 
-    engine._close_positions([p1, p2], "batch_lock_test", 4550.0, None,
+    engine._close_positions([p1, p2], "lock_test", 4550.0, None,
                             signal_key="P18-BATCH")
     check("[6a] 2 笔反向锁仓落簿", len(engine.positions), 2)
     check("[6b] 全部 entry_mode=LOCKED",
@@ -354,7 +354,7 @@ with tmp_dir() as tmp:
     ev.flush()
     kinds2 = event_kinds(os.path.join(tmp, "events.jsonl"))
     # Phase H2：多反向仓在 N=1 时走 E2 单笔解锁是合法边界（不再是异常告警），
-    # 批量解锁由 H2 批次路径（batch_open≥2）承接 —— 旧 unlock_partial_warning 已移除
+    # 批量解锁由 H2 批次路径（split_positions≥2）承接 —— 旧 unlock_partial_warning 已移除
     check("[6i] 多反向仓不再告警（H2 批次路径承接）",
           "unlock_partial_warning" in kinds2, False)
     check("[6j] 单笔解锁事件已写",

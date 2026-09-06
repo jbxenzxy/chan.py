@@ -143,10 +143,10 @@ class RealPositionBroker(DryRunBroker):
         return None
 
 
-def make_engine(tmpdir, *, max_open_positions=3, batch_open=1,
+def make_engine(tmpdir, *, max_open_positions=3, split_positions=1,
                 cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
-    """构造引擎：默认 batch=1 + sizing 关闭（fixed_volume=1）。"""
+    """构造引擎：默认分仓=1 + sizing 关闭（fixed_volume=1）。"""
     cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
@@ -155,7 +155,7 @@ def make_engine(tmpdir, *, max_open_positions=3, batch_open=1,
     cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
     cfg.sizing["enabled"] = False
     cfg.sizing["fixed_volume"] = 1
-    cfg.sizing["batch_open"] = batch_open
+    cfg.sizing["split_positions"] = split_positions
 
     spec = InstrumentSpec()
     if broker is None:
@@ -282,9 +282,9 @@ with tmp_dir() as td:
     eng._close_positions([p0, p1], "manual", 4555.0, eng.last_bar)
     order_evs = read_events(eng, kinds={"order"})
     fifo_idx = [e.get("fifo_index") for e in order_evs]
-    batch_sz = [e.get("batch_size") for e in order_evs]
+    pos_counts = [e.get("pos_count") for e in order_evs]
     check("order ev：fifo_index=[0,1]", fifo_idx, [0, 1])
-    check("order ev：batch_size=[2,2]", batch_sz, [2, 2])
+    check("order ev：pos_count=[2,2]", pos_counts, [2, 2])
     close_evs = read_events(eng, kinds={"close"})
     close_idx = [e.get("fifo_index") for e in close_evs]
     check("close ev：fifo_index=[0,1]", close_idx, [0, 1])

@@ -482,9 +482,12 @@ class FakeInsertApi(FakeApi):
         # 不缓存：每次返回当前最新持仓（模拟 wait_update 推送后的视图）
         return FakePosition(self._long_pos, self._short_pos)
 
-    def insert_order(self, symbol, direction, offset, volume, limit_price):
+    def insert_order(self, symbol, direction, offset, volume, limit_price, advanced=None):
+        # 2026-09-06 FOK 改造：open_advanced 默认 "FOK"，UNLOCK 属入场语义也会带
+        # advanced="FOK" —— fake 签名同步升级并记录，供报文断言使用
         self.inserted.append({"direction": direction, "offset": offset,
-                              "volume": volume, "limit_price": limit_price})
+                              "volume": volume, "limit_price": limit_price,
+                              "advanced": advanced})
         if self.fill:
             # UNLOCK 平多（SELL）→ 多头持仓同步减少
             if direction == "SELL":
@@ -510,6 +513,8 @@ check("6.1c 报文是 CLOSEYESTERDAY（平昨不变）",
       api1.inserted[0]["offset"], "CLOSEYESTERDAY")
 check("6.1d 方向 SELL（平多单）", api1.inserted[0]["direction"], "SELL")
 check("6.1e 超时后撤单被调用", len(api1.cancelled), 1)
+check("6.1f FOK 改造：UNLOCK 报文带 advanced=FOK",
+      api1.inserted[0]["advanced"], "FOK")
 
 # 6.2 立即成交：单次成交、不撤单、成交价来自 trade_records
 api2 = FakeInsertApi(long_pos=2, fill=True)

@@ -21,7 +21,7 @@ E3 计划（本次 E3.1 子步：cfg 化容器容量）
   E3.1（本次）：`cfg.risk.max_open_positions` 配置化 + `book.set_max(N)` 动态调整 +
                 PositionBook 真支持多仓（add 不再 throw，只要总数 ≤ max）；legacy_single
                 在多仓时**仍抛守护错**（真正的多仓 API 由 E3.3 接入）
-  E3.2：PositionSizer 加 batch 拆分（total/batch），`_open_position` → `_open_positions` 循环
+  E3.2：PositionSizer 加分仓拆分（每仓手数×分仓数=总手数），`_open_position` → `_open_positions` 循环
   E3.3：settle_position / _close_position 改 for-each + FIFO 出场 + _reconcile_position 多仓
 
 设计纪律
