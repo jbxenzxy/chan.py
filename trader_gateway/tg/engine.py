@@ -915,7 +915,9 @@ class GatewayEngine:
         #   开仓前看"账户可用资金"够不够开 1 手门槛 K = 一手保证金 + 名义价值×risk_unit_pct。
         #     · 不够 → 拒绝入场（入场不成功，不影响解锁/离场）
         #     · 够   → 用资金允许的最大手数 X = floor(可用/K) 兜底，每笔手数上限
-        #              cap = floor(X/batch_count)；sizer 算出的 per_batch 超 cap 则截断。
+        #              cap = floor(X/batch_count)；sizer 算出的每笔超 cap 则截断。
+        #              cap==0（X < batch_count）= 本批资金不足以支撑 → 拒开本批，
+        #              保证批次总手数 ≤ X，绝不超资金上限。默认 batch_count=1 时 cap==X，原样保留。
         #   无仓管固定手数模式同样受 K 门槛约束：连 1 手的钱都不够则不入场。
         #   解锁路径（_unlock_batch_entry）先于此处返回，天然不受本闸门限制。
         blocked, cap = self._capital_gate(sig, batch_count)
@@ -924,6 +926,13 @@ class GatewayEngine:
             self.ev.write("capital_block", key=sig.key, side=str(decision.side or sig.side),
                           reason="insufficient_equity", bar_date=bar_date,
                           want_volume=per_batch, batch_count=batch_count)
+            return
+        if cap is not None and cap < 1:
+            # P2-8：X < batch_count，本批资金不足以按 bc 笔各开 ≥1 手 → 拒开，超出资金上限
+            self.store.update_signal_action(sig.key, "risk_block", "capital_insufficient")
+            self.ev.write("capital_block", key=sig.key, side=str(decision.side or sig.side),
+                          reason="batch_unaffordable", want_volume=per_batch,
+                          batch_count=batch_count, capital_cap=cap, bar_date=bar_date)
             return
         if cap is not None and per_batch > cap:
             self.ev.write("capital_capped", key=sig.key, side=str(decision.side or sig.side),
@@ -1036,7 +1045,10 @@ class GatewayEngine:
 
         返回 (blocked, cap_per_batch)
           blocked        True = 可用资金连 1 手门槛都不够 → 拒绝入场
-          cap_per_batch  资金允许的每笔手数上限 floor(X/batch_count)；None = 资金未知，不拦
+          cap_per_batch  资金允许的每笔手数上限 = floor(X/batch_count)，可为 0；
+                         None = 资金未知，不拦。cap_per_batch==0 表示 X < batch_count，
+                         本批（bc 笔各至少 1 手）资金不足以支撑 → 由调用方拒开，保证
+                         批次总手数 = per_batch×effective_batch ≤ X，绝不超资金上限。
         """
         equity = None
         fn = getattr(self.broker, "equity", None)
@@ -1069,7 +1081,9 @@ class GatewayEngine:
             return True, None                                     # 连 1 手门槛都不够 → 拒开
         x = int(equity // k)                                      # 资金允许最多 X 手
         bc = int(batch_count or 1)
-        cap = max(1, x // bc if bc > 0 else x)                    # 每笔手数上限
+        # floor 语义、允许 0：X < batch_count 时返回 0，由调用方拒开本批，
+        # 保证批次总手数 per_batch×effective_batch ≤ X，绝不超资金上限（P2-8）。
+        cap = x // bc if bc > 0 else x                            # 每笔手数上限（可为 0）
         return False, cap
 
     # ---------------- 开 / 平 ----------------
