@@ -19,6 +19,20 @@ Popen 拉 run_gateway 子进程，再真实触发停止，断言落盘结果。
         [4] gateway.log 含「收到停止请求」（flag 协议确实被观测到）
 
 这 4 条在 Windows 上均会失败（SIGTERM=TerminateProcess），是 P1-1 的回归防线。
+
+第二轮（P1-3 CLI 路径守护）：
+    第一轮停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删，由
+    AppTrader.start 在下次启动时删）。若 run_gateway.py 自身不自清该 flag，则
+    任何"不走 AppTrader.start 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、
+    直接 CLI 拉起）一启动就会被残留 flag 看护线程立刻关停（实测存活约 1s 即退）。
+    本测试第二轮用「相同 out_dir、纯 CLI 直启」复现该场景，断言：
+        [6] 第二轮成功落盘 start 事件（未被残留 flag 误杀）
+        [7] 第二轮子进程存活 ≥10s（P1-3 在 CLI 路径闭环）
+        [8] 第二轮可被正常 flag 停止（退出码 0）
+        [9] events.jsonl 含第二条 auto_order_off（shutdown 再次执行）
+        [10] 第二轮关闭态仍持久化为 false
+    配合 run_gateway.py 启动时自清 .stop_request（P1-3 防御），第二轮应稳定存活。
+
 跑法：python tests/test_p21_stop_e2e.py
 """
 from __future__ import annotations
@@ -99,90 +113,142 @@ def _gen_demo_replay(out_dir: str) -> None:
     gen_demo(out_dir, days=3, seed=7)
 
 
+def _launch_gateway(replay_dir: str, out_dir: str, speed: str = "0.05") -> subprocess.Popen:
+    """真实子进程：broker=dry_run（离线、无 CTP），replay + speed 让主循环
+    持续活着直到 flag 到达。--no-fresh 保留关闭前状态（与真实 AppTrader 一致）。
+
+    speed 控制回放速率：replay 源每个 bar 休眠 speed 秒、播完即自然退出且不锁仓。
+    第二轮用更慢的 speed（如 0.2），让播放时长(≈144*0.2≈29s) 远大于存活断言窗口，
+    从而把『残留 flag 误杀』与『replay 自然播完』两种退出区分开。"""
+    cmd = [sys.executable, os.path.join(_TG_ROOT, "run_gateway.py"),
+           "--source", "replay",
+           "--replay-dir", replay_dir,
+           "--speed", speed,
+           "--broker", "dry_run",
+           "--out", out_dir,
+           "--no-fresh",
+           "--quiet"]
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    return subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL, env=env)
+
+
+def _stop_via_flag(proc: subprocess.Popen, out_dir: str, timeout: float = 20.0):
+    """写 .stop_request（AppTrader.stop 的真实协议），等优雅退出。返回退出码。"""
+    stop_flag = os.path.join(out_dir, ".stop_request")
+    with open(stop_flag, "w", encoding="utf-8") as f:
+        f.write("e2e-test ts={}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return None
+
+
+def _await_start(events_path: str, timeout: float = 15.0) -> bool:
+    return _wait_for(
+        lambda: any(k == "start" for k in _event_kinds(events_path)),
+        timeout=timeout)
+
+
+def _force_kill(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
 def main() -> int:
     tmp = tempfile.mkdtemp(prefix="tg_p21_")
+    proc = None
+    proc2 = None
     try:
         replay_dir = os.path.join(tmp, "replay")
         out_dir = os.path.join(tmp, "state")
         os.makedirs(out_dir, exist_ok=True)
         _gen_demo_replay(replay_dir)
-
-        run_gw = os.path.join(_TG_ROOT, "run_gateway.py")
-        # 真实子进程：broker=dry_run（离线、无 CTP），replay + speed 让主循环
-        # 持续活着直到 flag 到达。--no-fresh 保留关闭前状态（与真实 AppTrader 一致）。
-        cmd = [sys.executable, run_gw,
-               "--source", "replay",
-               "--replay-dir", replay_dir,
-               "--speed", "0.05",
-               "--broker", "dry_run",
-               "--out", out_dir,
-               "--no-fresh",
-               "--quiet"]
-        env = dict(os.environ)
-        env["PYTHONUNBUFFERED"] = "1"
-        proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, env=env)
         events_path = os.path.join(out_dir, "events.jsonl")
 
+        # ───────── 第一轮：启动 → 真实 flag 停止 → 断言关闭链路 ─────────
+        proc = _launch_gateway(replay_dir, out_dir)
         try:
-            # 等子进程真正跑起来（events.jsonl 出现 start 事件）
-            started = _wait_for(
-                lambda: any(k == "start" for k in _event_kinds(events_path)),
-                timeout=15.0)
+            started = _await_start(events_path)
             check("[e2e-1] 子进程启动并落盘 start 事件", started, True)
+            if not started:
+                print("  （子进程未启动，跳过后续断言）")
+                return 1
 
-            if started:
-                # ── 真实停止触发：写 .stop_request（AppTrader.stop 的唯一跨平台协议）──
-                stop_flag = os.path.join(out_dir, ".stop_request")
-                with open(stop_flag, "w", encoding="utf-8") as f:
-                    f.write("e2e-test ts={}\n".format(time.strftime("%Y-%m-%d %H:%M:%S")))
+            rc = _stop_via_flag(proc, out_dir)
+            check("[e2e-2] 子进程因 flag 退出（退出码 0）", rc, 0)
 
-                # 等子进程因 flag 优雅退出（退出码 0）
-                try:
-                    rc = proc.wait(timeout=20.0)
-                except subprocess.TimeoutExpired:
-                    rc = None
-                    proc.kill()
-                check("[e2e-2] 子进程因 flag 退出（退出码 0）", rc, 0)
+            store = Store(os.path.join(out_dir, "state.db"))
+            enabled = bool(store.get_json("auto_order_enabled", True))
+            store.close()
+            check("[e2e-3] state.db auto_order_enabled 已持久化为 false", enabled, False)
 
-                # ── 结果断言：关闭态确实落盘 / 事件确实写出 ──
-                store = Store(os.path.join(out_dir, "state.db"))
-                enabled = bool(store.get_json("auto_order_enabled", True))
-                store.close()
-                check("[e2e-3] state.db auto_order_enabled 已持久化为 false",
-                      enabled, False)
+            kinds = _event_kinds(events_path)
+            check("[e2e-4] events.jsonl 含 auto_order_off（shutdown 真实执行）",
+                  "auto_order_off" in kinds, True)
 
-                kinds = _event_kinds(events_path)
-                check("[e2e-4] events.jsonl 含 auto_order_off（shutdown 真实执行）",
-                      "auto_order_off" in kinds, True)
-
-                log_text = ""
-                try:
-                    with open(os.path.join(out_dir, "gateway.log"),
-                              "r", encoding="utf-8") as f:
-                        log_text = f.read()
-                except OSError:
-                    pass
-                check("[e2e-5] gateway.log 含「收到停止请求（flag）」",
-                      "收到停止请求" in log_text, True)
-            else:
-                # 启动失败：不再继续断言停止链路，直接收尾
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
-                print("  （子进程未启动，跳过停止链路断言）")
+            log_text = ""
+            try:
+                with open(os.path.join(out_dir, "gateway.log"),
+                          "r", encoding="utf-8") as f:
+                    log_text = f.read()
+            except OSError:
+                pass
+            check("[e2e-5] gateway.log 含「收到停止请求（flag）」",
+                  "收到停止请求" in log_text, True)
         finally:
-            if proc.poll() is None:
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
-                try:
-                    proc.wait(timeout=5)
-                except Exception:
-                    pass
+            _force_kill(proc)
+
+        # ───────── 第二轮（P1-3 CLI 路径守护）─────────
+        # 第一轮停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删）。
+        # 若 run_gateway.py 不自清，第二轮一启动即被看护线程误杀。此处断言：
+        # 第二轮成功启动且存活 ≥10s（未被残留 flag 误杀），随后可被正常 flag 停止。
+        proc2 = _launch_gateway(replay_dir, out_dir, speed="0.2")
+        try:
+            started2 = _await_start(events_path)
+            check("[e2e-6] 第二轮直启成功落盘 start 事件（未被残留 flag 误杀）",
+                  started2, True)
+            if not started2:
+                print("  （第二轮未启动：残留 flag 触发误杀，P1-3 CLI 路径未闭环）")
+                return 1
+
+            # 存活观察：连续 10s 内子进程不应退出
+            survive_start = time.time()
+            killed_early = False
+            while time.time() - survive_start < 10.0:
+                if proc2.poll() is not None:
+                    killed_early = True
+                    break
+                time.sleep(0.3)
+            check("[e2e-7] 第二轮子进程存活 ≥10s（未被残留 .stop_request 误杀）",
+                  not killed_early, True)
+
+            rc2 = _stop_via_flag(proc2, out_dir)
+            check("[e2e-8] 第二轮可被正常 flag 停止（退出码 0）", rc2, 0)
+
+            kinds2 = _event_kinds(events_path)
+            check("[e2e-9] 第二轮 events.jsonl 含第二条 auto_order_off（shutdown 再次执行）",
+                  kinds2.count("auto_order_off") >= 2, True)
+
+            store2 = Store(os.path.join(out_dir, "state.db"))
+            enabled2 = bool(store2.get_json("auto_order_enabled", True))
+            store2.close()
+            check("[e2e-10] 第二轮关闭态仍持久化为 false", enabled2, False)
+        finally:
+            _force_kill(proc2)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

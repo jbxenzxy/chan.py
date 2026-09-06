@@ -177,6 +177,17 @@ def run(args) -> int:
 
     cfg, engine, source, store, ev, out, src = build_runtime(args)
 
+    # P1-3 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
+    # AppTrader.start() 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、直接
+    # CLI 拉起）一启动就会被残留 flag 看护线程立刻关停。AppTrader.start() 也会
+    # 清，这里双保险，让 CLI 直启同样健壮。幂等：文件不存在即跳过。
+    _leftover_flag = os.path.join(out, _STOP_REQUEST)
+    if os.path.exists(_leftover_flag):
+        try:
+            os.remove(_leftover_flag)
+        except OSError:
+            pass
+
     if hasattr(source, "info"):
         try:
             print("[source] {}".format(source.info()))
