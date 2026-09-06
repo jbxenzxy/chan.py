@@ -18,7 +18,6 @@ App/*.json
 
 # ===== trader_gateway 运行产物与本地配置 =====
 # 回放/实盘的输出目录（events.jsonl、summary 等）与 sqlite 状态目录
-trader_gateway/run*/
 trader_gateway/state/
 # 本地个性化配置（由 config.example.json 复制而来，不入库）
 trader_gateway/config.json
