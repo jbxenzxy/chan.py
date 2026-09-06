@@ -182,11 +182,18 @@ def _graceful_by_result(out_dir: str, off_before: int) -> bool:
     """按结果判定优雅关闭：本轮确实执行了收尾（锁仓 + 落盘关闭态）。
 
     只认关闭期间**新增**的 auto_order_off 事件（off_before 为 stop() 起点的
-    基线条数），避免历史事件谎报（P2-5）。个别情况下事件文件未刷盘（无回写）
-    时，回援 state.db 的 auto_order_enabled==False（shutdown 持久化过）。
+    基线条数），避免历史事件谎报（P2-5）。回援 state.db 仅在 events 历史上
+    从无 auto_order_off（即引擎从未走通过收尾、事件可能因故未刷盘）时才兜底；
+    若 events 已出现过 off 而本轮无新增，说明收尾事件确凿地没发生 → 不判优雅。
     """
-    if _count_off_events(out_dir) > off_before:
+    now_off = _count_off_events(out_dir)
+    if now_off > off_before:
         return True
+    # 回援条件收紧（P2-5 第二轮修正）：只有当 events 里一条 off 记录都没有
+    #（history_off == 0，events 既然从未记录收尾，可信度打折）才用 state.db。
+    history_off = max(now_off, off_before)
+    if history_off > 0:
+        return False
     try:
         s = _engine_store(out_dir)
         enabled = bool(s.get_json("auto_order_enabled", True))
@@ -257,6 +264,19 @@ class AppTrader:
         with self._lock:
             if self._handle is not None and self._handle.running:
                 return self._handle.to_dict()
+
+            # P3-2 防御：本地无 handle 但状态文件里记录了"仍存活"的旧 pid →
+            # 疑似多 worker/多实例同时托管自动下单（单个例失效）。不主动去杀
+            # （避免误伤他 worker 的进程），只记录告警，让部署问题第一时间暴露，
+            # 而不是两个 worker 各拉起一条自动下单子进程静默双开。
+            prev = _read_state_file()
+            prev_pid = int(prev.get("pid") or 0)
+            if prev_pid > 0 and _pid_alive(prev_pid):
+                log.warning(
+                    "[AppTrader] 状态文件记录 pid=%s 仍在运行，而本实例 handle"
+                    "为空 —— 疑似多个 worker/实例同时托管自动下单"
+                    "（AppTrader 单实例失效，P3-2）。请确保只用一个 worker 调度"
+                    "自动下单", prev_pid)
 
             cfg_path = os.path.abspath(cfg_path or _DEFAULT_CFG)
 
@@ -473,7 +493,14 @@ class AppTrader:
                 log.warning(
                     "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，强杀兜底",
                     pid, wait_secs)
-                _send_signal_best_effort(handle, signal.SIGKILL)
+                # P0：signal.SIGKILL 在 Windows 不存在——若直接写
+                # _send_signal_best_effort(handle, signal.SIGKILL)，参数求值
+                # 阶段就抛 AttributeError，try/except 不生效，后面的
+                # _taskkill(pid) 变死代码、真进程成孤儿。必须先择出平台安全信号。
+                kill_sig = getattr(
+                    signal, "SIGKILL", getattr(signal, "SIGTERM", None))
+                if kill_sig is not None:
+                    _send_signal_best_effort(handle, kill_sig)
                 try:
                     handle.proc.wait(timeout=5)
                 except Exception:

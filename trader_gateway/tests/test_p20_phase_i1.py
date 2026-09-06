@@ -524,10 +524,44 @@ with tmp_dir() as tmp:
         check("[9i] start() 清除了上一轮遗留的 .stop_request（P1-3）",
               not os.path.exists(leftover), True)
         check("[9i] 清除后子进程仍正常启动（running=True）", res.get("running"), True)
-        t.stop()   # 收尾清理，避免污染本目录
+        # 清理用极短 timeout：_FakeProc 永不退出，默认 timeout=150s 会空等满
+        # 并走强杀分支（在 Windows 上旧代码还会因 SIGKILL 崩溃，P0）；短
+        # timeout 让强杀分支立即执行，兼作 P0 回归（不应抛 AttributeError）。
+        t.stop(timeout=0.1)   # 收尾清理，避免污染本目录
     finally:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
+
+# [9j] P2-5 回援分支修正：只认本轮新增事件，历史 off + 上轮残留 state=false
+# 不得判优雅（否则"本轮超时强杀没锁仓"仍被谎报 graceful=True）。
+with tmp_dir() as tmp:
+    out_dir = tmp
+    evt = os.path.join(out_dir, "events.jsonl")
+    # 历史已有 2 条 off（模拟往常有两次成功收尾）+ off_before=2（本轮无新增）
+    with open(evt, "w", encoding="utf-8") as f:
+        for _ in range(2):
+            json.dump({"kind": "auto_order_off"}, f)
+            f.write("\n")
+    from tg.store import Store  # noqa: E402
+    s = Store(os.path.join(out_dir, "state.db"))
+    s.set_json("auto_order_enabled", False)   # 恰好是上一轮遗留的 false
+    s.close()
+    check("[9j] 历史off且state=false 不下回援（拒绝谎报 graceful）",
+          AT._graceful_by_result(out_dir, 2), False)
+    # 本轮确实新增 1 条 -> 判优雅
+    with open(evt, "a", encoding="utf-8") as f:
+        json.dump({"kind": "auto_order_off"}, f)
+        f.write("\n")
+    check("[9j] 本轮新增 auto_order_off 判优雅",
+          AT._graceful_by_result(out_dir, 2), True)
+    # 全新目录 events 从未有 off、state=false -> 唯一合法回援场景
+    fresh = os.path.join(tmp, "fresh")
+    os.makedirs(fresh, exist_ok=True)
+    s2 = Store(os.path.join(fresh, "state.db"))
+    s2.set_json("auto_order_enabled", False)
+    s2.close()
+    check("[9j] 空events+state=false 才回援判优雅",
+          AT._graceful_by_result(fresh, 0), True)
 
 # [9h] 未传 symbol/freq → 回落到 cfg.source / 内置默认（不再落到 replay）
 with tmp_dir() as tmp:

@@ -294,7 +294,11 @@ class SimNowBroker(Broker):
             self._capture_initial_account_state()
 
     def _cred(self, param_key: str, env_key: str) -> str:
-        v = (self.params.get(param_key) or os.environ.get(env_key) or "").strip()
+        # P3-7（第三轮修正）：环境变量优先于 config.json。否则一旦配置文件里
+        # 残留明文密码，会反客为主覆盖开发者想用 LIVE_PASSWORD 等环境变量注入
+        # 的凭据（与"密码不落盘"的意图相反）。env 有值用 env；env 为空才回落
+        # config（向后兼容：只配 config.json、不设 env 的场景仍可用）。
+        v = (os.environ.get(env_key) or self.params.get(param_key) or "").strip()
         return v
 
     def _param(self, key: str) -> Any:
