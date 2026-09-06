@@ -23,6 +23,7 @@ class RiskConfig:
                                              #   N = 一次入场可连开 N 单（broker 收 N 笔独立报单）
                                              # 注意：实际单笔手数仍由 max_volume 限制 —— max_open_positions 决定"几笔"，
                                              # max_volume 决定"每笔几手"。两者独立，可分别 cfg 化。
+    initial_cash: float = 10000000.0         # 虚拟初始资金（dry_run 无真实账户时用），资金闸门定 X=floor(available/K) 用
     max_trades_per_day: int = 20             # 每日最大往返笔数
     max_daily_loss_points: float = 60.0      # 每日最大净亏（点数），触达后停止开仓
     enforce_session: bool = True             # 只在交易时段内开仓
@@ -111,10 +112,20 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "capital_pct": 0.50,             # capital_pct 模式：这笔仓位最多占用权益的比例（0.50=50%）
         "risk_per_trade_pct": 0.01,      # atr_risk 模式：这笔最多亏掉权益的比例（0.01=1%，固定分数法）
         "margin_rate": 0.15,             # 保证金率，用于 capital_pct 折算每手占用（IF 一般 12%-15%）
+        "risk_unit_pct": 0.01,           # 资金门槛缓冲：每手名义价值预留的波动比例。
+                                         #   开 1 手最低门槛 K = 一手保证金 + 名义价值×risk_unit_pct；
+                                         #   X = floor(可用资金/K) 为资金闸门定的最多可开手数（见 engine._capital_gate）
         "max_volume": 0,                 # 手数硬上限；0=沿用 risk.max_volume（开 atr_risk 时建议显式设大，否则永远 1 手）
         "min_volume": 1,                 # 手数下限：算出来不足时提升到该值（1=信号来了就至少开 1 手；设 0 则真的不开）
         "fallback_volume": 1,            # 权益/ATR 取不到时的回退手数（保守值，避免因查询失败而乱开仓）
         "equity_source": "available",    # 权益口径：available=可用资金（已扣保证金占用）| balance=总资产权益
+        "batch_open": 1,                 # 每信号批次内拆几笔独立仓位（默认 1=每信号只开 1 笔，零行为变化）
+        "batch_unlock": 0,               # 解锁专用批次笔数；0=跟随 batch_open。
+                                 # 想"开仓单笔、解锁一次处理多个锁仓单"时设 batch_open=1 + batch_unlock=N，
+                                 # 把开仓与解锁的拆仓数解耦（见 tg/sizing.py）
+        "unlock_no_new_open": False,     # 解锁后是否绝不新开今仓（True=有锁仓单时只处理锁仓单，
+                                         # 解锁 min(锁仓数, batch_open) 个昨仓；N>锁仓数也不补开今仓，
+                                         # 规避金融期货"平今"高手续费坑，见 tg/sizing.py 与 engine 解锁批次）
     },
     # 运行时状态目录：state.db（信号去重/持仓/日统计）、events.jsonl、orders.jsonl 都落在这里
     "state_dir": "./state",

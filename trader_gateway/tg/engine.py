@@ -910,6 +910,27 @@ class GatewayEngine:
                           reason=why_vol, bar_date=bar_date)
             return
 
+        # ════════════════════════════════════════════════════════════════
+        # 资金闸门（2026-09-06 用户拍板）：
+        #   开仓前看"账户可用资金"够不够开 1 手门槛 K = 一手保证金 + 名义价值×risk_unit_pct。
+        #     · 不够 → 拒绝入场（入场不成功，不影响解锁/离场）
+        #     · 够   → 用资金允许的最大手数 X = floor(可用/K) 兜底，每笔手数上限
+        #              cap = floor(X/batch_count)；sizer 算出的 per_batch 超 cap 则截断。
+        #   无仓管固定手数模式同样受 K 门槛约束：连 1 手的钱都不够则不入场。
+        #   解锁路径（_unlock_batch_entry）先于此处返回，天然不受本闸门限制。
+        blocked, cap = self._capital_gate(sig, batch_count)
+        if blocked:
+            self.store.update_signal_action(sig.key, "risk_block", "capital_insufficient")
+            self.ev.write("capital_block", key=sig.key, side=str(decision.side or sig.side),
+                          reason="insufficient_equity", bar_date=bar_date,
+                          want_volume=per_batch, batch_count=batch_count)
+            return
+        if cap is not None and per_batch > cap:
+            self.ev.write("capital_capped", key=sig.key, side=str(decision.side or sig.side),
+                          reason="equity_cap", want=per_batch, cap=cap,
+                          batch_count=batch_count, bar_date=bar_date)
+            per_batch = cap
+
         # 手数上限以 sizer 的有效上限为准（sizing 关闭时它 == risk.max_volume，行为不变）。
         # 否则会出现「sizing 算 4 手、风控按 risk.max_volume=1 拦」的死角。
         # Phase E3.2：传 batch_count + existing_same_side 给 risk，risk 仅做诊断不拦截。
@@ -1004,6 +1025,52 @@ class GatewayEngine:
 
         return self.sizer.size_batch(equity=equity, price=price,
                                      stop_distance_points=stop_dist, atr_points=atr)
+
+    # ---------------- 资金闸门 ----------------
+    def _capital_gate(self, sig: "Signal", batch_count: int = 1):
+        """资金闸门（2026-09-06 用户拍板）：
+        开仓前判断"账户可用资金"够不够开 1 手；够的话，资金允许开几手 X，并给每笔手数上限。
+
+        K = 一手保证金 + 一手名义价值 × risk_unit_pct   （开 1 手的最低门槛）
+        X = floor(可用资金 / K)                        （资金允许的最多手数上限）
+
+        返回 (blocked, cap_per_batch)
+          blocked        True = 可用资金连 1 手门槛都不够 → 拒绝入场
+          cap_per_batch  资金允许的每笔手数上限 floor(X/batch_count)；None = 资金未知，不拦
+        """
+        equity = None
+        fn = getattr(self.broker, "equity", None)
+        if callable(fn):
+            try:
+                equity = fn(self.sizer.equity_source)
+            except Exception:
+                equity = None
+        # dry_run 无真实账户：用 risk.initial_cash 作为虚拟资金（默认 1000 万）
+        if equity is None and getattr(self.broker, "name", "") == "dry_run":
+            equity = float(self.risk.cfg.initial_cash or 0.0)
+
+        if equity is None or equity <= 0:
+            return False, None
+
+        price = float(sig.price or 0.0)
+        if price <= 0 and self.last_bar is not None:
+            price = float(self.last_bar.close or 0.0)
+        if price <= 0:
+            return False, None
+
+        per_lot = self.sizer.per_lot_margin(price)              # 一手保证金
+        notional = self.spec.points_to_cash(price, 1)           # 一手名义价值
+        risk_unit = float(getattr(self.sizer, "risk_unit_pct", 0.01) or 0.01)
+        k = per_lot + notional * risk_unit
+        if k <= 0:
+            return False, None
+
+        if equity < k:
+            return True, None                                     # 连 1 手门槛都不够 → 拒开
+        x = int(equity // k)                                      # 资金允许最多 X 手
+        bc = int(batch_count or 1)
+        cap = max(1, x // bc if bc > 0 else x)                    # 每笔手数上限
+        return False, cap
 
     # ---------------- 开 / 平 ----------------
     def _open_position(self, sig: Signal, side, volume: int) -> None:
@@ -1497,7 +1564,10 @@ class GatewayEngine:
         （结算分支按 per_batch==0 处理并写 sizing_zero_volume 告警）。
         """
         try:
-            per_batch, batch_count, why_vol = self._size_batch(sig)
+            per_batch, _, why_vol = self._size_batch(sig)
+            # 解锁批次笔数用独立的 batch_unlock 旋钮（默认跟随 batch_open，向后兼容），
+            # 与开仓 batch_open 解耦 —— 支持"开仓单笔、解锁一次解多个锁仓单"。
+            batch_count = self.sizer.batch_unlock
         except Exception:
             # sizing 通道异常（sizer 损坏 / 缺 size_batch 等）→ 退回 E2 单笔解锁。
             # 解锁是减风险动作，绝不允许依赖 sizing 的健康度
@@ -1519,9 +1589,12 @@ class GatewayEngine:
 
         unlock_count = min(len(opp_list), batch_count)
         planned_new = max(0, batch_count - unlock_count)
+        if self.sizer.unlock_no_new_open:
+            planned_new = 0  # 开关：缺口不新开今仓（由结算分支强制归零）
         self.ev.write("unlock_batch", key=sig.key,
                       opp_n=len(opp_list), n=batch_count,
                       unlock_count=unlock_count, planned_new=planned_new,
+                      no_new_open=bool(self.sizer.unlock_no_new_open),
                       per_batch=per_batch, why=why_vol,
                       note="批次解锁入场：先解锁后新开（串行）")
 
@@ -1718,6 +1791,14 @@ class GatewayEngine:
                                       reason="portfolio_full_cannot_restore")
 
         new_total = max(0, batch_count - k)
+        if self.sizer.unlock_no_new_open and new_total > 0:
+            # 开关：解锁后绝不新开今仓（金融期货平今高手续费规避）
+            # 只把"解不了锁"的差额头寸砍掉，真正解锁照常执行。
+            self.ev.write("unlock_no_new_open",
+                          key=sig.key, k=k, batch_count=batch_count,
+                          note="unlock_no_new_open=true：跳过新开补齐，"
+                               "仅解锁 min(锁仓数, batch_open) 个昨仓，不开今仓")
+            new_total = 0
         if per_batch <= 0 and new_total > 0:
             self.ev.write("sizing_zero_volume",
                           key=sig.key, per_batch=per_batch,

@@ -146,16 +146,31 @@ b_p = make_broker(api=MockApi(MockQuote(ask=4565.0, bid=4560.0)))
 b_p.params = {"overprice_points": 1.0}
 check("params overprice=1.0 -> 开多 ask+1.0", b_p._build_limit_price("open", Side.LONG, 9999.0), 4566.0)
 
-print("\n[6] 平仓兜底限价 _close_fallback_limit（仅行情取不到时使用）")
+print("\n[6] 平仓兜底限价 _chase_fallback_limit(action=close)（仅行情取不到时使用）")
 b_fb2 = make_broker(api=None)
-# 首笔（prev_limit=None）-> 回退 align_exit(信号价)：平多=卖，向下取整
-check("首笔无 prev -> align_exit(4565.1)", b_fb2._close_fallback_limit(Side.LONG, 4565.1, None, -1, 2), 4565.0)
+# 首笔（prev_limit=None）-> action=close 回退 align_exit(信号价)：平多=卖，向下取整
+check("首笔无 prev -> align_exit(4565.1)", b_fb2._chase_fallback_limit("close", Side.LONG, 4565.1, None, -1, 2), 4565.0)
 # 后续轮次：上一笔 4559.4（卖方向），朝成交方向（降价）推 2 跳 = -0.4 -> 4559.0
-check("卖方向 prev=4559.4 推 2 跳", b_fb2._close_fallback_limit(Side.LONG, 4565.1, 4559.4, -1, 2), 4559.0)
+check("卖方向 prev=4559.4 推 2 跳", b_fb2._chase_fallback_limit("close", Side.LONG, 4565.1, 4559.4, -1, 2), 4559.0)
 # 买方向（平空）：上一笔 4565.6，加价推 2 跳 = +0.4 -> 4566.0
-check("买方向 prev=4565.6 推 2 跳", b_fb2._close_fallback_limit(Side.SHORT, 4565.1, 4565.6, 1, 2), 4566.0)
+check("买方向 prev=4565.6 推 2 跳", b_fb2._chase_fallback_limit("close", Side.SHORT, 4565.1, 4565.6, 1, 2), 4566.0)
 # 非整 tick 中间值：prev=4559.3 卖方向 -0.4=4558.9 -> 向下取整 4558.8
-check("卖方向非整 tick 向下取整", b_fb2._close_fallback_limit(Side.LONG, 4565.1, 4559.3, -1, 2), 4558.8)
+check("卖方向非整 tick 向下取整", b_fb2._chase_fallback_limit("close", Side.LONG, 4565.1, 4559.3, -1, 2), 4558.8)
+
+print("\n[7] submit 派发：LOCK 必须走追价(_submit_lock)，不走不追价(_submit_open)")
+from tg.types import OrderIntent  # noqa
+_rec = {}
+b7 = make_broker(api=object())
+b7._conn_error = ""
+for _n in ("_submit_lock", "_submit_open", "_submit_close", "_submit_unlock"):
+    _rec[_n] = []
+    setattr(b7, _n, (lambda n: lambda *a, **k: _rec[n].append(a))(_n))
+b7.submit(OrderIntent.LOCK, Side.SHORT, 1, 4560.0)
+check("LOCK -> _submit_lock(追价)", bool(_rec["_submit_lock"]) and not _rec["_submit_open"], True)
+for _r in _rec.values():
+    _r.clear()
+b7.submit(OrderIntent.OPEN, Side.LONG, 1, 4560.0)
+check("OPEN -> _submit_open(不追价)", bool(_rec["_submit_open"]) and not _rec["_submit_lock"], True)
 
 print("\n" + "=" * 60)
 print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

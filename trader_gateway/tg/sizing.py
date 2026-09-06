@@ -62,6 +62,9 @@ class PositionSizer:
         self.capital_pct = float(p.get("capital_pct", 0.0) or 0.0)
         self.risk_per_trade_pct = float(p.get("risk_per_trade_pct", 0.0) or 0.0)
         self.margin_rate = float(p.get("margin_rate", 0.0) or 0.0)
+        # 资金门槛缓冲（2026-09-06）：K = 一手保证金 + 名义价值×risk_unit_pct，
+        # 由 engine._capital_gate 用于资金闸门（能不能开 / X 上限），这里只透传。
+        self.risk_unit_pct = float(p.get("risk_unit_pct", 0.01) or 0.01)
 
         # 硬上限：0=沿用 risk.max_volume；显式配置则用配置值
         cfg_max = int(p.get("max_volume", 0) or 0)
@@ -86,6 +89,27 @@ class PositionSizer:
         except (TypeError, ValueError):
             cfg_batch = 1
         self.batch_open = max(1, cfg_batch)
+
+        # ── 解锁专用批次（2026-09-06）：与开仓 batch_open 解耦 ──
+        #   batch_unlock>0 时，解锁用 batch_unlock 作为"一次处理几个锁仓单"的 N；
+        #   batch_unlock<=0/缺省时跟随 batch_open（保持既有解锁行为，向后兼容）。
+        #   用途：想"开仓拆 1 笔、解锁一次解多个锁仓单"时，设 batch_open=1 + batch_unlock=N。
+        self.batch_unlock = self.batch_open
+        cfg_unlock = p.get("batch_unlock", 0)
+        try:
+            bu = int(cfg_unlock)
+        except (TypeError, ValueError):
+            bu = 0
+        if bu > 0:
+            self.batch_unlock = max(1, bu)
+
+        # ── Phase（2026-09-06）：解锁后是否绝不新开今仓 ──
+        #   有锁仓单时只处理锁仓单：解锁 min(锁仓数, batch_open) 个昨仓，
+        #   即使 batch_open > 锁仓数也不补开今仓（排除差额头寸），
+        #   规避金融期货"平今高手续费"坑。默认 False ⇒ 保持 H1/H2 原行为
+        #   （解锁不够 batch_open 用差额 NewOpen 补齐）。
+        #   该字段只影响 _unlock_batch_settle 的新开补齐，真正解锁照常执行。
+        self.unlock_no_new_open = bool(p.get("unlock_no_new_open", False))
 
     # ---------------- 对外主入口 ----------------
     def size(self, *, equity: Optional[float] = None,
@@ -220,6 +244,7 @@ class PositionSizer:
             "capital_pct": self.capital_pct,
             "risk_per_trade_pct": self.risk_per_trade_pct,
             "margin_rate": self.margin_rate,
+            "risk_unit_pct": self.risk_unit_pct,
             "min_volume": self.min_volume,
             "max_volume": self.max_volume,
             "fallback_volume": self.fallback_volume,

@@ -16,6 +16,8 @@
   },
   "risk": {
     "max_volume": 1,
+    "initial_cash": 10000000.0,
+    "_comment_initial_cash": "虚拟初始资金：仅 dry_run 无真实账户时用作资金闸门定 X=floor(可用资金/K)。实盘/simnow 从账户取可用资金，本字段被忽略。",
     "max_trades_per_day": 20,
     "max_daily_loss_points": 60.0,
     "enforce_session": true,
@@ -74,5 +76,25 @@
     "tq_market": "simnow",
     "confirm_live_trading": false
   },
-  "state_dir": "./state"
+  "state_dir": "./state",
+  "sizing": {
+    "_comment": "仓位管理。不启用就删掉本节点（默认不计算、固定开 1 手）。要按资金/风险定手数时把 enabled 设为 true。",
+    "enabled": false,
+    "mode": "fixed",
+    "fixed_volume": 0,
+    "capital_pct": 0.5,
+    "risk_per_trade_pct": 0.01,
+    "margin_rate": 0.15,
+    "risk_unit_pct": 0.01,
+    "_comment_risk_unit": "资金门槛缓冲：开 1 手最低门槛 K = 一手保证金 + 名义价值×risk_unit_pct，X=floor(可用资金/K)。账户连 K 都不够则当日该方向无法入场（解锁不受限）。",
+    "max_volume": 0,
+    "min_volume": 1,
+    "fallback_volume": 1,
+    "equity_source": "available",
+    "batch_open": 1,
+    "_comment_unlock": "解锁专用批次：0=跟随 batch_open；想开仓单笔、解锁一次解多个锁仓单时设 batch_open=1 且 batch_unlock=N。",
+    "batch_unlock": 0,
+    "_comment_unlock2": "衔接今仓：有锁仓单时只解锁、绝不补开今仓，规避金融期货平今高手续费。默认 false=解锁不足 batch_open 会用差额新开今仓；设 true=宁缺勿开，缺口直接砍掉。",
+    "unlock_no_new_open": true
+  }
 }

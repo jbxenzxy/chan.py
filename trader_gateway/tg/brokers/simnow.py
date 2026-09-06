@@ -507,9 +507,12 @@ class SimNowBroker(Broker):
             return self._rejected(signal_key, side, intent.value, volume, ref_price,
                                   note, "未连接")
 
-        # LOCK 也是"开反向"——走 _submit_open 路径，方向由调用方填好（已反向）
-        if intent in (OrderIntent.OPEN, OrderIntent.LOCK):
+        if intent is OrderIntent.OPEN:
+            # 开仓=入场语义：单次超价 + 超时撤单、不追价（"最多不赚钱，但不会亏钱"）
             return self._submit_open(intent, side, volume, ref_price, signal_key, note)
+        if intent is OrderIntent.LOCK:
+            # 锁仓=软离场，卡单必须追价（同平仓），否则浮亏扩大/浮盈变浮亏
+            return self._submit_lock(intent, side, volume, ref_price, signal_key, note)
         if intent is OrderIntent.UNLOCK:
             # 2026-09-05 规格归一：解锁≈开仓（入场语义）——单次超价 + fill_timeout_open
             # 超时撤单、不追价（"入场没成功，最多不赚钱，但不会亏钱"）。
@@ -641,16 +644,18 @@ class SimNowBroker(Broker):
         return self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
                               note, baseline, expected_delta, limit)
 
-    def _close_fallback_limit(self, side: Side, ref_price: float,
+    def _chase_fallback_limit(self, action: str, side: Side, ref_price: float,
                               prev_limit: Optional[float],
                               chase_sign: int, chase_ticks: float) -> float:
-        """行情取不到时的平仓限价兜底。
+        """行情取不到时的追价限价兜底。
 
-        首笔（无上一笔限价可参考）→ 回退 align_exit(信号价)；
+        首笔（无上一笔限价可参考）→ 开仓用 align_entry / 平仓用 align_exit；
         后续轮次 → 在上一笔限价基础上朝成交方向推 chase_ticks 跳，
         保证即便行情断了，价格也单边朝能成交的方向推进。
         """
         if prev_limit is None:
+            if action == "open":
+                return self.spec.align_entry(ref_price, side.sign)
             return self.spec.align_exit(ref_price, side.sign)
         tick = self.spec.price_tick
         return self.spec.round_price(
@@ -687,7 +692,7 @@ class SimNowBroker(Broker):
             # 不再在旧价上累加 chase_ticks。chase_ticks 只在行情临时取不到时作兜底步长。
             limit = self._overprice_limit("close", side, opp)
             if limit is None:
-                limit = self._close_fallback_limit(side, ref_price, prev_limit,
+                limit = self._chase_fallback_limit("close", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
             baseline = self._take_baseline(side_key)
@@ -709,6 +714,53 @@ class SimNowBroker(Broker):
             # 未成交：_wait_finished 已撤单，进入下一轮重新超价
         return last if last is not None else self._rejected(
             signal_key, side, intent.value, volume, ref_price, note, "平仓追价用尽仍未成交")
+
+    def _submit_lock(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
+                     signal_key: str, note: str) -> Order:
+        """锁仓（软离场）追价：与平仓同一追价循环，但报文=Open（反向开仓）。
+
+        锁仓本质也是离场（软离场），卡单必须追价，否则浮亏扩大、浮盈变浮亏。
+        追价语义与 _submit_close 完全一致：每轮取最新对手价 ± overprice 重新定价，
+        close_max_chase 轮、fill_timeout_close 超时撤单、朝成交方向推进。
+        方向已由引擎填为 pos.side 的反向；offset=OPEN（Open 报文，可反向加仓）。
+        """
+        offset = INTENT_TO_OFFSET[intent]              # LOCK -> OPEN
+        direction = _DIRECTION[side]                    # 开反向：方向=开仓方向
+        side_key = "LONG" if side is Side.LONG else "SHORT"
+        is_buy = self._is_buy("open", side)             # 开仓：买=side LONG
+        chase_sign = 1 if is_buy else -1                # 买→加价 / 卖→降价，朝成交方向追
+        opp = float(self._param("overprice_points"))
+        max_attempts = int(self._param("close_max_chase"))
+        per_wait = float(self._param("fill_timeout_close"))
+        chase_ticks = float(self._param("close_chase_ticks"))
+
+        last: Optional[Order] = None
+        prev_limit: Optional[float] = None
+        for attempt in range(1, max_attempts + 1):
+            limit = self._overprice_limit("open", side, opp)
+            if limit is None:
+                limit = self._chase_fallback_limit("open", side, ref_price, prev_limit,
+                                                   chase_sign, chase_ticks)
+            prev_limit = limit
+            baseline = self._take_baseline(side_key)
+            expected_delta = int(volume)                # 反向开仓：side_key 方向 +volume
+            try:
+                order = self._api.insert_order(symbol=self._trade_symbol,
+                                               direction=direction, offset=offset,
+                                               volume=int(volume), limit_price=limit)
+            except Exception as e:
+                return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
+                                      "下单失败: {}: {}".format(type(e).__name__, e))
+            self._wait_finished(order, timeout_s=per_wait)
+            o = self._finalize(order, intent.value, "open", side, volume, ref_price, signal_key,
+                              note, baseline, expected_delta, limit,
+                              attempt=attempt, max_attempts=max_attempts)
+            last = o
+            if o.status == "filled":
+                return o
+        # 未成交：_wait_finished 已撤单，进入下一轮重新超价
+        return last if last is not None else self._rejected(
+            signal_key, side, intent.value, volume, ref_price, note, "锁仓追价用尽仍未成交")
 
     def _finalize(self, order, intent_str: str, action: str, side: Side, volume: int, ref_price: float,
                   signal_key: str, note: str, baseline: int, expected_delta: int,
