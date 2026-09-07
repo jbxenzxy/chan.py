@@ -137,11 +137,11 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "min_volume": 1,                 # 手数下限：算出来不足时提升到该值（1=信号来了就至少开 1 手；设 0 则真的不开）
         "fallback_volume": 1,            # 权益/ATR 取不到时的回退手数（保守值，避免因查询失败而乱开仓）
         "equity_source": "available",    # 权益口径：available=可用资金（已扣保证金占用）| balance=总资产权益
-        "unlock_no_new_open": False,     # 解锁昨仓后是否补开今仓的缺额。
-                                         #   False=补开（默认）：昨日锁 3 手、今日信号算 5 手
+        "unlock_no_new_open": True,      # 解锁昨仓后是否补开今仓的缺额。
+                                         #   True =绝不补开（默认）：只解锁昨仓、缺口放弃，
+                                         #        规避金融期货"平今"高手续费坑
+                                         #   False=补开：昨日锁 3 手、今日信号算 5 手
                                          #        → 解锁 3 手后再开 2 手，净敞口到 5 手
-                                         #   True =绝不补开：只解锁 3 手，缺的 2 手放弃
-                                         #        （规避金融期货"平今"高手续费坑）
                                          #   两种情况下解锁本身照常执行（解锁是减风险动作）
     },
     # 运行时状态目录：state.db（信号去重/持仓/日统计）、events.jsonl、orders.jsonl 都落在这里

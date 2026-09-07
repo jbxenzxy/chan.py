@@ -78,11 +78,11 @@ class PositionSizer:
         self.equity_source = src if src in _VALID_EQUITY_SRC else "available"
 
         # ── 解锁后是否补开今仓（2026-09-06）──
-        #   True  = 解锁昨仓后绝不新开今仓（规避金融期货"平今高手续费"）。
+        #   True  = 解锁昨仓后绝不新开今仓（默认，规避金融期货"平今高手续费"）。
         #           例：昨日锁 3 手、今日信号算 5 手 → 只解锁 3 手，缺的 2 手不补开。
-        #   False = 解锁后按缺口补开（N - 已解锁手数），把净敞口补到目标手数。
+        #   False = 解锁后按缺口补开（N - 已解锁手数），把净敞口补到目标手数（需显式关闭）。
         #   无论开关如何，解锁本身照常执行（解锁是减风险动作）。
-        self.unlock_no_new_open = bool(p.get("unlock_no_new_open", False))
+        self.unlock_no_new_open = bool(p.get("unlock_no_new_open", True))
 
     # ---------------- 对外主入口 ----------------
     def size(self, *, equity: Optional[float] = None,

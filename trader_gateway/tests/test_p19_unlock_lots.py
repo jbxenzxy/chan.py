@@ -14,8 +14,8 @@ P19 解锁入场：一笔 FOK 整笔解锁 + 缺口补开（2026-09-06 全 FOK �
 硬性要求（本测试锁死）
     [1] 单笔解锁：1 笔锁仓 3 手 → 1 笔 UNLOCK 3 手 → 簿清空、signal_action=unlock
     [2] 多笔锁仓：只解最老一笔（entry_bar_seq 最小），其余留簿
-    [3] 缺口补开：锁 3 手 + N=5 → 解锁 3 + 开 2 手 → IN_TRADE
-    [4] unlock_no_new_open=True：锁 3 手 + N=5 → 只解锁 3 手、零补开 → IDLE
+    [3] 缺口补开（显式 unlock_no_new_open=False）：锁 3 手 + N=5 → 解锁 3 + 开 2 手 → IN_TRADE
+    [4] 默认不补开（unlock_no_new_open 缺省=True）：锁 3 手 + N=5 → 只解锁 3 手、零补开 → IDLE
     [5] N ≤ V：锁 3 手 + N=2 → 纯解锁，零补开
     [6] 解锁拒单 → rejected、回 IDLE、锁仓保留在簿
     [7] sizing 异常 → 解锁照常（减风险动作不依赖 sizing），只是不补开
@@ -245,11 +245,11 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [3] 缺口补开：锁 3 手 + 今日 N=5 → 补开 2 手
+# [3] 缺口补开（显式 unlock_no_new_open=False）：锁 3 手 + 今日 N=5 → 补开 2 手
 # ════════════════════════════════════════════════════════════════
-print("\n[3] 缺口补开：N=5、已解锁 3 手 → 补开 2 手")
+print("\n[3] 缺口补开：N=5、已解锁 3 手 → 补开 2 手（显式 unlock_no_new_open=False）")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 5}))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 5, "unlock_no_new_open": False}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-3L", entry_bar_seq=1))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-3|2|S")
@@ -272,11 +272,11 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] unlock_no_new_open=True：缺口不补开
+# [4] 默认不补开（unlock_no_new_open 缺省=True）：缺口不补开
 # ════════════════════════════════════════════════════════════════
-print("\n[4] unlock_no_new_open=True：只解锁，不补开")
+print("\n[4] 默认不补开：只解锁，不补开")
 with tmp_dir() as tmp:
-    cfg = make_cfg(sizing_overrides={"fixed_volume": 5, "unlock_no_new_open": True})
+    cfg = make_cfg(sizing_overrides={"fixed_volume": 5})
     engine, store, broker, ev = build_engine(tmp, cfg=cfg)
     engine.positions.add(make_pos(vol=3, signal_key="P19-4L", entry_bar_seq=1))
     engine.on_bar(make_bar())
@@ -358,7 +358,7 @@ with tmp_dir() as tmp:
 print("\n[8] 补开受风控手数上限约束")
 with tmp_dir() as tmp:
     # risk.max_volume=1：想补 2 手（N=5 − V=3）超过单笔手数上限 → 补开被拦
-    cfg = make_cfg(max_pos=3, sizing_overrides={"fixed_volume": 5})
+    cfg = make_cfg(max_pos=3, sizing_overrides={"fixed_volume": 5, "unlock_no_new_open": False})
     cfg.risk.max_volume = 1
     engine, store, broker, ev = build_engine(tmp, cfg=cfg)
     engine.positions.add(make_pos(vol=3, signal_key="P19-8LOCK", entry_bar_seq=1,

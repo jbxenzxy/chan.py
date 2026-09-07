@@ -1257,17 +1257,18 @@ class GatewayEngine:
 
     # ---------------- 解锁入场（Phase E2 UNLOCK_FIRST 路径） ----------------
     def _unlock_position(self, sig: Signal, side: Side) -> None:
-        """解锁入场：一笔 FOK 报单整笔解锁最老的一笔锁仓持仓，缺口按手数补开。
+        """解锁入场：一笔 FOK 报单整笔解锁最老的一笔锁仓持仓，缺口补开默认关闭。
 
         语义（2026-09-06 全 FOK 重构后）
           · 一次反向信号只解一笔：取最老的一笔反向锁仓持仓（entry_bar_seq 升序），
             对它的全部手数发一笔 FOK 解锁报单。全成或全撤，无部分成交。
           · 不成交 → 整笔作废，回 IDLE，等下一个信号（入场不追价）。
-          · 成交 → 记 Trade + 从簿删除 + 设解锁复核 in-flight，然后按缺口补开：
+          · 成交 → 记 Trade + 从簿删除 + 设解锁复核 in-flight。
+          · 缺口补开（默认关闭，见 unlock_no_new_open）：
                 new_lots = 今日信号想开手数 N - 已解锁手数 V
-            N > V 时补开 N-V 手（锁仓平掉后该方向已有 V 手净敞口）；
-            N <= V 纯解锁不补开。
-          · unlock_no_new_open=True → 缺口一律不补开（规避平今高手续费）。
+            unlock_no_new_open=True（默认）→ 缺口一律不补开（规避平今高手续费），
+                只解锁昨仓、回 IDLE，今仓方向留给下一个信号；
+            unlock_no_new_open=False → N > V 时补开 N-V 手、N <= V 纯解锁不补开。
 
         为什么"解锁 V 手后只补开 N-V 手"
             锁仓 = 反向开同手数把昨仓锁住。解锁平掉昨仓后，反向那 V 手变成
