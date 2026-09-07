@@ -626,7 +626,7 @@ with tmp_dir() as tmp:
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start(cfg_path=cfg_path, out_dir=os.path.join(tmp, "state"))
+        res = t.start(cfg_path=cfg_path, out_dir=os.path.join(tmp, "State"))
         cmd = captured.get("cmd") or []
         check("[9h] 缺省品种走 cfg.source.symbol",
               cmd[cmd.index("--symbol") + 1], "KQ.m@CFFEX.RB")
@@ -703,7 +703,7 @@ with tmp_dir() as tmp:
         t = AT.AppTrader()
         try:
             t.start(cfg_path=os.path.join(tmp, "no_such_config.json"),
-                    out_dir=os.path.join(tmp, "state"))
+                    out_dir=os.path.join(tmp, "State"))
             check("[11a] 应抛 AppError", "no_raise", "AppError")
         except AppError as e:
             check("[11a] 应抛 AppError", "AppError", "AppError")
@@ -711,7 +711,7 @@ with tmp_dir() as tmp:
                   os.path.join(tmp, "no_such_config.json") in str(e), True)
         log_path = os.path.join(tmp, "state", "gateway.log")
         check("[11c] state 目录已创建", os.path.isdir(
-            os.path.join(tmp, "state")), True)
+            os.path.join(tmp, "State")), True)
         check("[11d] gateway.log 已创建", os.path.isfile(log_path), True)
         content = ""
         try:
@@ -746,9 +746,9 @@ with tmp_dir() as tmp:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
         res = t.start(cfg_path=cfg_path)   # 不传 out_dir：走 state_dir 解析
-        expected = os.path.join(cfg_dir, "state")
+        expected = os.path.join(cfg_dir, "State")
         cmd = captured.get("cmd") or []
-        check("[12a] --out 解析到配置目录/state",
+        check("[12a] --out 解析到配置目录/State",
               "--out" in cmd and cmd[cmd.index("--out") + 1] == expected, True)
         check("[12b] state 目录在配置目录下", os.path.isdir(expected), True)
         check("[12c] gateway.log 在配置目录下",
@@ -770,12 +770,12 @@ with tmp_dir() as tmp:
         cmd2 = captured2.get("cmd") or []
         check("[12d] --out 落到 Trading/State",
               "--out" in cmd2
-              and cmd2[cmd2.index("--out") + 1] == os.path.join(cfg2, "state"),
+              and cmd2[cmd2.index("--out") + 1] == os.path.join(cfg2, "State"),
               True)
-        check("[12e] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "state")),
+        check("[12e] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "State")),
               False)
         check("[12f] 落到 Trading/State",
-              os.path.isdir(os.path.join(cfg2, "state")), True)
+              os.path.isdir(os.path.join(cfg2, "State")), True)
         check("[12g] gateway.log 已创建",
               os.path.isfile(os.path.join(cfg2, "state", "gateway.log")), True)
     finally:
