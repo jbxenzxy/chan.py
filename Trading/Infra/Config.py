@@ -187,8 +187,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "name": "LayeredExitPolicy",
         "params": {
             # ---- L1 R 倍数定基线 ----
-            "initial_risk_points": 10.0,       # 固定初始风险（点数）；ATR 不可用时作为兜底基线
-            "stop_at_signal_extreme": True,    # True=用信号 K 线极值作结构止损（多=信号K最低价）；False=用上面固定点数
+            "stop_at_signal_extreme": True,    # True=用信号 K 线极值作结构止损（多=信号K最低价）；False=用 min_r_points 保底
             "stop_buffer_ticks": 0.0,          # 止损位额外让出的 tick 缓冲，0=严格按基线
             "r_multiple_tp": 2.0,              # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2 盈亏比）
             "min_r_points": 2.0,               # R 下限（点数），防止极端行情下止损过窄

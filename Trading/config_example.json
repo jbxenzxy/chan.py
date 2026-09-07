@@ -36,7 +36,6 @@
   "exit_policy": {
     "name": "LayeredExitPolicy",
     "params": {
-      "initial_risk_points": 10.0,
       "stop_at_signal_extreme": true,
       "stop_buffer_ticks": 0.0,
       "r_multiple_tp": 2.0,

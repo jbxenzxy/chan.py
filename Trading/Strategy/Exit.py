@@ -6,7 +6,6 @@
 
     DefaultExitPolicy    默认止盈/止损/时间（用户当前规则）
     LayeredExitPolicy    标准分层组合出场 L1-L4
-    TrailingExitPolicy   移动止损示例（演示"换策略"三步，见类 docstring）
 
 三个刻意保留的保守设定（Default 沿用）
     ① 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
@@ -112,7 +111,6 @@ class LayeredExitPolicy(ExitPolicy):
     def __init__(self, params=None):
         super().__init__(params)
         # L1 R 倍数定基线
-        self.initial_risk_points = float(self.params.get("initial_risk_points", _DEF_EXIT_PARAMS["initial_risk_points"]))
         self.stop_at_signal_extreme = bool(self.params.get("stop_at_signal_extreme", _DEF_EXIT_PARAMS["stop_at_signal_extreme"]))
         self.stop_buffer_ticks = float(self.params.get("stop_buffer_ticks", _DEF_EXIT_PARAMS["stop_buffer_ticks"]) or 0.0)
         self.r_multiple_tp = float(self.params.get("r_multiple_tp", _DEF_EXIT_PARAMS["r_multiple_tp"]))
@@ -186,13 +184,13 @@ class LayeredExitPolicy(ExitPolicy):
             atr = self._atr()
             if atr:
                 return max(self.atr_sl_multiple * atr, self.min_r_points)
-        # L1 回退：结构止损（信号极值）或固定点数
+        # L1 回退：结构止损（信号极值）；显式关闭极值止损时用 min_r_points 保底
         is_long = signal.side is Side.LONG
         if self.stop_at_signal_extreme:
             ext = signal.low if is_long else signal.high
             base = abs(entry_price - ext)
         else:
-            base = self.initial_risk_points
+            base = self.min_r_points
         return max(base, self.min_r_points)
 
     # ---------- 开仓时生成出场计划 ----------
@@ -236,7 +234,9 @@ class LayeredExitPolicy(ExitPolicy):
         tp = plan.tp_price
         is_long = position.side is Side.LONG
         entry = position.entry_price
-        R = float(plan.params.get("R", self.initial_risk_points))
+        # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
+        #   R 未知时激进触发反而危险；硬止损/止盈/时间兜底均不依赖 R，不受影响
+        R = plan.params.get("R")
         atr = self._atr()
 
         # ① 硬出场：同根 K 线同时触止盈止损 → 按止损计（悲观）
@@ -271,7 +271,7 @@ class LayeredExitPolicy(ExitPolicy):
                 return ExitCheck("eod_time", bar.close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
-        if self.use_trailing:
+        if self.use_trailing and R:
             best = float(plan.params.get("_trail_best", entry))
             best = max(best, bar.high) if is_long else min(best, bar.low)
             # fav_profit 用"根内有利极值 best"而非收盘价衡量：
@@ -308,60 +308,3 @@ class LayeredExitPolicy(ExitPolicy):
         return None
 
 
-@register_exit
-class TrailingExitPolicy(ExitPolicy):
-    name = "TrailingExitPolicy"
-
-    def __init__(self, params=None):
-        super().__init__(params)
-        self.take_profit_points = float(self.params.get("take_profit_points", 12.0))
-        self.stop_points = float(self.params.get("stop_points", 5.0))
-        self.trail_start = float(self.params.get("trail_start_points", 6.0))
-        self.trail_dist = float(self.params.get("trail_distance_points", 4.0))
-
-    def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
-        is_long = signal.side is Side.LONG
-        stop = entry_price - self.stop_points if is_long else entry_price + self.stop_points
-        tp = entry_price + self.take_profit_points if is_long \
-            else entry_price - self.take_profit_points
-        stop = spec.round_price(stop, "up" if is_long else "down")
-        tp = spec.round_price(tp, "down" if is_long else "up")
-        return ExitPlan(name=self.name, stop_price=stop, tp_price=tp,
-                        params=dict(self.params))
-
-    def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0) -> Optional[ExitCheck]:
-        stop = position.exit_plan.stop_price
-        tp = position.exit_plan.tp_price
-        is_long = position.side is Side.LONG
-
-        # 先判出场：同根 K 线同时触及止盈止损时按止损计（悲观假设）
-        if is_long:
-            if stop and bar.low <= stop:
-                return ExitCheck("sl", stop)
-            if tp is not None and bar.high >= tp:
-                return ExitCheck("tp", tp)
-        else:
-            if stop and bar.high >= stop:
-                return ExitCheck("sl", stop)
-            if tp is not None and bar.low <= tp:
-                return ExitCheck("tp", tp)
-
-        # 未出场 → 考虑移动止损（只更新计划，不登场）
-        if is_long:
-            fav = bar.close - position.entry_price
-            if fav >= self.trail_start:
-                new_stop = spec.round_price(bar.close - self.trail_dist, "up")
-                if new_stop > stop:
-                    return ExitCheck("trailing", 0.0, only_update=True,
-                                    plan=ExitPlan(self.name, new_stop, tp,
-                                                  dict(self.params)))
-        else:
-            fav = position.entry_price - bar.close
-            if fav >= self.trail_start:
-                new_stop = spec.round_price(bar.close + self.trail_dist, "down")
-                if new_stop < stop:
-                    return ExitCheck("trailing", 0.0, only_update=True,
-                                    plan=ExitPlan(self.name, new_stop, tp,
-                                                  dict(self.params)))
-        return None

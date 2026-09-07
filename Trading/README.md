@@ -12,7 +12,6 @@
 Trading/                        # 自动下单网关（Python 包）
 ├── main.py              # CLI 入口
 ├── config_example.json         # 配置模板（--init-config 生成）
-├── config_trailing.json        # 移动止损策略示例配置
 ├── replay_data/                # demo 回放数据（与 M0 录制器格式一致）
 ├── Source/                     # ① 信号源（实时 / 回放产出相同事件流）
 │   ├── SSE.py                  # 实时订阅 chan.py 的 SSE
@@ -82,7 +81,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)          (闸门)       (dry_run/…)
 ```
 
-**换策略 = 丢一个 py 文件进 `Strategy/` + 改 config.json 里的类名**，engine/broker/source 一行不动。参考 `Strategy/Exit.py` 里 TrailingExitPolicy 的三步注释。
+**换策略 = 丢一个 py 文件进 `Strategy/` + 改 config.json 里的类名**，engine/broker/source 一行不动。自定义出场策略 = 继承 `Strategy/Base.py` 的 `ExitPolicy`（实现 `plan()`+`check()`）+ `@register_exit` 注册 + 改 config 类名。
 
 三个刻意保留的保守设定（`default_policy.py`）：
 

@@ -91,24 +91,24 @@ def main():
     spec = make_spec()
 
     print("\n[1] L1 R 倍数基线（use_atr=False）：多/空方向与 1:2 比例 + P2 防护")
-    # 多单：R=10，止损=入场-10，止盈=入场+20
-    pol = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+    # 多单：R=min_r_points=2，止损=入场-2，止盈=入场+4
+    pol = LayeredExitPolicy({"use_atr": False,
                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
                              "min_r_points": 2.0})
     plan = pol.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, spec)
-    check("多单 止损 = 90（向上取整）", plan.stop_price, 90.0)
-    check("多单 止盈 = 120（向下取整）", plan.tp_price, 120.0)
+    check("多单 止损 = 98（向上取整）", plan.stop_price, 98.0)
+    check("多单 止盈 = 104（向下取整）", plan.tp_price, 104.0)
     check("多单 1:2（止盈距=2×止损距）",
           approx((plan.tp_price - 100.0), 2 * (100.0 - plan.stop_price)), True)
     # 空单镜像
-    pol2 = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+    pol2 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False, "r_multiple_tp": 2.0})
     plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0), 100.0, spec)
-    check("空单 止损 = 110（向下取整）", plan2.stop_price, 110.0)
-    check("空单 止盈 = 80（向上取整）", plan2.tp_price, 80.0)
+    check("空单 止损 = 102（向下取整）", plan2.stop_price, 102.0)
+    check("空单 止盈 = 96（向上取整）", plan2.tp_price, 96.0)
     # P2 防护：陈旧信号，极值已越过入场价 → 止损必须仍在 entry 不利侧
     pol3 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
-                              "initial_risk_points": 10.0, "min_r_points": 2.0})
+                              "min_r_points": 2.0})
     # 信号最低价 102 > 入场 100（行情已涨），极端情况止损本应=102 在 entry 上方 → 必须被压回
     plan3 = pol3.plan(make_signal(Side.LONG, 100.0, 105.0, 102.0), 100.0, spec)
     check("P2 多单止损严格在 entry 下方", plan3.stop_price < 100.0, True)
@@ -123,12 +123,12 @@ def main():
     check("ATR 路径 止盈 = 108（2R=8）", plan4.tp_price, 108.0)
     check("ATR 路径 R 落盘", approx(plan4.params.get("R", 0), 4.0), True)
 
-    print("\n[3] ATR 不可用（首根未喂）回退 L1 固定基线")
-    pol5 = LayeredExitPolicy({"use_atr": True, "initial_risk_points": 10.0,
+    print("\n[3] ATR 不可用（首根未喂）回退 L1（min_r_points 保底）")
+    pol5 = LayeredExitPolicy({"use_atr": True,
                               "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
                               "min_r_points": 2.0})
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, spec)
-    check("无 ATR 回退 止损 = 90", plan5.stop_price, 90.0)
+    check("无 ATR 回退 止损 = 98", plan5.stop_price, 98.0)
 
     print("\n[4] 同根 K 线同时触止盈止损 → 按止损计（悲观）")
     pos = make_position(Side.LONG, 100.0, 90.0, 110.0)
@@ -137,7 +137,7 @@ def main():
     check("同根 K 线优先 sl", chk.reason if chk else None, "sl")
 
     print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
-    pol6 = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+    pol6 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 99.0,
@@ -149,7 +149,7 @@ def main():
     check("保本新止损 = 100", chk6.plan.stop_price if chk6 else None, 100.0)
 
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
-    pol7 = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+    pol7 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 2.0,
@@ -180,7 +180,7 @@ def main():
 
     print("\n[9] 全部关闭时（use_atr/use_trailing 均 False，无 time）只判硬出场")
     pol10 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
-                               "initial_risk_points": 10.0, "use_trailing": False,
+                               "use_trailing": False,
                                "max_hold_bars": 0, "session_end_hhmm": ""})
     pos10 = make_position(Side.LONG, 100.0, 90.0, 120.0)
     chk10 = pol10.check(pos10, make_bar(2500, 100, 105, 95, 100), spec, 100)
@@ -211,7 +211,7 @@ def main():
 
     print("\n[12] L3 口径统一（best 极值）：解耦参数 + 盘中冲高回落也抬损（钉住 P8-A 场景）")
     # 解耦配置：tp=3R（130）、trailing 提前到 1.5R 启动、保本层用 trigger=99 屏蔽隔离
-    pol13 = LayeredExitPolicy({"use_atr": False, "initial_risk_points": 10.0,
+    pol13 = LayeredExitPolicy({"use_atr": False,
                                "stop_at_signal_extreme": False, "r_multiple_tp": 3.0,
                                "use_trailing": True, "breakeven_trigger_r": 99.0,
                                "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 1.5,

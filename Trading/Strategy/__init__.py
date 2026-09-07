@@ -3,7 +3,7 @@
 
 即插即用：本目录（含子目录）下的 .py 文件会在包导入时自动 import，
 所以"新增一个策略"= 往这个目录丢一个 py 文件，不需要改任何注册代码。
-参考 Exit.py 里的 TrailingExitPolicy 示例。
+参考 Exit.py 里 LayeredExitPolicy 的完整实现（L1-L4 各层注释）。
 """
 import importlib
 import os
