@@ -133,7 +133,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "risk_unit_pct": 0.01,           # 资金门槛缓冲：每手名义价值预留的波动比例。
                                          #   开 1 手最低门槛 K = 一手保证金 + 名义价值×risk_unit_pct；
                                          #   X = floor(可用资金/K) 为资金闸门定的最多可开手数（见 engine._capital_gate）
-        "max_volume": 0,                 # 手数硬上限；0=沿用 risk.max_volume（开 atr_risk 时建议显式设大，否则永远 2 手）
+        "max_volume": 0,                 # 仓位管理算法结果的截断上限；0=默认中金所单笔上限 20（无需显式设）
         "min_volume": 1,                 # 手数下限：算出来不足时提升到该值（1=信号来了就至少开 1 手；设 0 则真的不开）
         "fallback_volume": 1,            # 权益/ATR 取不到时的回退手数（保守值，避免因查询失败而乱开仓）
         "equity_source": "available",    # 权益口径：available=可用资金（已扣保证金占用）| balance=总资产权益

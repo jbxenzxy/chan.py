@@ -140,7 +140,8 @@ class RejectDryBroker(DryRunBroker):
 
 
 def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
-                cfg_risk_max_volume=20, unlock_no_new_open=False):
+                cfg_risk_max_volume=20, unlock_no_new_open=False,
+                sizing_max_volume=0):
     cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
@@ -149,6 +150,8 @@ def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
     cfg.sizing["enabled"] = False
     cfg.sizing["fixed_volume"] = fixed_volume
     cfg.sizing["unlock_no_new_open"] = unlock_no_new_open
+    if sizing_max_volume:
+        cfg.sizing["max_volume"] = sizing_max_volume
 
     spec = InstrumentSpec()
     if broker is None:
@@ -343,15 +346,28 @@ with tmp_dir() as td:
     check("fixed_volume=8：簿 1 笔 8 手", eng.positions.positions[0].volume, 8)
 
 with tmp_dir() as td:
-    # cfg 手数上限 30 但 fixed_volume=25 → sizer 给 25 手 → 引擎按 20 手上限拒单
+    # 场景 1：fixed_volume=25 > 中金所 20 手上限，sizer.max_volume 默认 20 → 风控单笔上限拦截
     eng = make_engine(td, max_open_positions=3, fixed_volume=25, cfg_risk_max_volume=30)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-4-25", is_buy=True)
     eng.on_signal(sig)
     check("fixed_volume=25（>20）：零报单", len(eng.broker.orders), 0)
-    check("fixed_volume=25（>20）：signal_action=rejected",
-          eng.store.signal_action(sig.key), "rejected")
+    check("fixed_volume=25（>20）：signal_action=risk_block（单笔上限 20 拦）",
+          eng.store.signal_action(sig.key), "risk_block")
     check("fixed_volume=25（>20）：簿空", eng.positions.is_empty(), True)
+
+with tmp_dir() as td:
+    # 场景 2：sizing.max_volume 显式设 30（>20）→ 风控放行 → 引擎按交易所硬上限 20 拒单
+    #         （over_exchange_limit 防御兜底，防止把截断上限设超交易所规则）
+    eng = make_engine(td, max_open_positions=3, fixed_volume=25, cfg_risk_max_volume=30,
+                      sizing_max_volume=30)
+    eng.on_bar(make_bar())
+    sig = make_sig(key="P15A-4-25b", is_buy=True)
+    eng.on_signal(sig)
+    check("sizing.max_volume=30：fixed_volume=25 仍超交易所 20 手 → rejected",
+          eng.store.signal_action(sig.key), "rejected")
+    check("sizing.max_volume=30：零报单", len(eng.broker.orders), 0)
+    check("sizing.max_volume=30：簿空", eng.positions.is_empty(), True)
 
 
 # ════════════════════════════════════════════════════════════════

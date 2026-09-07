@@ -872,8 +872,8 @@ class GatewayEngine:
                           reason="equity_cap", want=lots, cap=cap, bar_date=bar_date)
             lots = cap
 
-        # 手数上限以 sizer 的有效上限为准（sizing 关闭时它 == risk.max_volume，行为不变）。
-        # 否则会出现「sizing 算 4 手、风控按 risk.max_volume=1 拦」的死角。
+        # 手数上限以 sizer 的截断上限为准（仓位管理算法结果的截断上限，默认中金所 20 手）。
+        # 非仓位管理下实际手数已由 sizer 固定为 risk.max_volume，这里上限放宽到 20 不影响行为。
         ok, why = self.risk.check_open(decision.side or sig.side, lots, bar_date,
                                        max_volume=self.sizer.max_volume)
         if not ok:

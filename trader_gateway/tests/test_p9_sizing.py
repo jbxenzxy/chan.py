@@ -90,8 +90,8 @@ PRICE = 4550.0
 
 
 def make_sizer(**over) -> PositionSizer:
-    """构造 PositionSizer；未覆盖的字段走默认（enabled=False, min_volume=1,
-    fallback_volume=1, max_volume 沿用 risk.max_volume=1）。"""
+    """构造 PositionSizer；未覆盖的字段走默认（enabled=True, mode=fixed,
+    min_volume=1, fallback_volume=1, max_volume=0 表示默认中金所单笔上限 20）。"""
     base = {"enabled": True, "mode": "fixed", "fixed_volume": 0,
             "capital_pct": 0.0, "risk_per_trade_pct": 0.0, "margin_rate": 0.15,
             "max_volume": 0, "min_volume": 1, "fallback_volume": 1,
@@ -209,15 +209,17 @@ print("\n[5] 上下限截断")
 # max_volume 硬上限（即便 risk.max_volume 更大，sizing.max_volume 说了算）
 _s_cap2 = make_sizer(mode="capital_pct", capital_pct=1.0, max_volume=2)
 check("算 4 手但 max_volume=2 -> 2 手", _s_cap2.size(equity=1_000_000.0, price=PRICE)[0], 2)
-# max_volume=0 表示沿用 risk.max_volume
+# max_volume=0 表示默认中金所单笔上限 20（不再沿用 risk.max_volume）
 _s_inherit = PositionSizer({"enabled": True, "mode": "capital_pct",
                             "capital_pct": 1.0, "max_volume": 0},
                            SPEC, risk_max_volume=3)
-check("max_volume=0 -> 沿用 risk.max_volume=3",
-      _s_inherit.size(equity=1_000_000.0, price=PRICE)[0], 3)
+check("max_volume=0 -> 默认 20（与 risk.max_volume 解耦）",
+      _s_inherit.max_volume, 20)
+check("算 4 手但 max_volume=0(默认20) -> 4 手不截",
+      _s_inherit.size(equity=1_000_000.0, price=PRICE)[0], 4)
 # min_volume 提升不能超过 max_volume
-_s_bad = make_sizer(mode="capital_pct", capital_pct=0.01, max_volume=0, min_volume=5)
-check("min_volume(5) > max_volume(0→risk 1) -> 不提升，返回 0",
+_s_bad = make_sizer(mode="capital_pct", capital_pct=0.01, max_volume=3, min_volume=5)
+check("min_volume(5) > max_volume(3) -> 不提升，返回 0",
       _s_bad.size(equity=1_000_000.0, price=PRICE)[0], 0)
 
 
@@ -297,10 +299,12 @@ check(" 超过 20 手才拦",
 # 不传时行为与改动前完全一致（向后兼容）
 check("省略 max_volume -> 仍用 RiskConfig.max_volume=1",
       _gate.check_open(Side.LONG, 1, "2026-09-01 09:35")[0], True)
-# sizing 关闭时 sizer.max_volume 应等于 risk.max_volume —— 保证透传不改变默认行为
+# 非仓位管理下固定手数沿用 risk.max_volume，截断上限独立为 20 —— 两者解耦
 _s_off = PositionSizer(_cfg.sizing, _cfg.instrument, _cfg.risk.max_volume)
-check("sizing 关闭时 sizer.max_volume == risk.max_volume",
-      _s_off.max_volume, _cfg.risk.max_volume)
+check("sizing 关闭时 sizer.max_volume == 中金所单笔上限 20",
+      _s_off.max_volume, 20)
+check("sizing 关闭时固定手数沿用 risk.max_volume=2",
+      _s_off.size(equity=None, price=PRICE)[0], 2)
 
 
 # =========================================================

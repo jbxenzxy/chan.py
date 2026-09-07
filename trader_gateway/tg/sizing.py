@@ -40,6 +40,10 @@ from .symbols import InstrumentSpec
 _VALID_MODES = ("fixed", "capital_pct", "atr_risk")
 _VALID_EQUITY_SRC = ("available", "balance")
 
+# 中金所限价单每次最大下单手数（IF/IH/IC/IM 同，交易所交易细则）。
+# 仓位管理开启、sizing.max_volume 未显式配置（0）时的默认截断上限。
+_CFFEX_SINGLE_ORDER_MAX = 20
+
 
 class PositionSizer:
     """按配置把"要不要开"翻译成"开几手"。
@@ -66,9 +70,15 @@ class PositionSizer:
         # 由 engine._capital_gate 用于资金闸门（能不能开 / X 上限），这里只透传。
         self.risk_unit_pct = float(p.get("risk_unit_pct", 0.01) or 0.01)
 
-        # 硬上限：0=沿用 risk.max_volume；显式配置则用配置值
+        # 固定手数（非仓位管理 / fixed 模式的回落值）：
+        # fixed_volume 显式 >0 用它，否则回落 risk.max_volume（默认 2）。
+        self._fixed_volume = self.fixed_volume if self.fixed_volume > 0 \
+            else max(0, int(risk_max_volume or 0))
+
+        # 硬上限（仓位管理算法结果的截断上限）：
+        # 未显式配置（0）时默认中金所单笔上限 20；显式配置则用配置值。
         cfg_max = int(p.get("max_volume", 0) or 0)
-        self.max_volume = cfg_max if cfg_max > 0 else max(0, int(risk_max_volume or 0))
+        self.max_volume = cfg_max if cfg_max > 0 else _CFFEX_SINGLE_ORDER_MAX
         # 下限：算出来小于它时提升到它（默认 1，保证"信号来了就交易"的历史行为）
         self.min_volume = int(p.get("min_volume", 1) or 0)
         # 权益/参数取不到时的回退手数
@@ -98,7 +108,7 @@ class PositionSizer:
         """
         # ① 模块关闭：固定手数，不查账户、不多做任何计算
         if not self.enabled:
-            vol = self.fixed_volume if self.fixed_volume > 0 else self.max_volume
+            vol = self._fixed_volume
             return max(0, int(vol)), "sizing:disabled(fixed)"
 
         # ② 权益缺失：保守回退，并告知调用方（调用方负责写事件）
@@ -112,7 +122,7 @@ class PositionSizer:
         elif self.mode == "atr_risk":
             raw, why = self._by_risk(eq, stop_distance_points, atr_points)
         else:
-            raw = float(self.fixed_volume if self.fixed_volume > 0 else self.max_volume)
+            raw = float(self._fixed_volume)
             why = "sizing:fixed"
 
         # ④ 硬上限截断

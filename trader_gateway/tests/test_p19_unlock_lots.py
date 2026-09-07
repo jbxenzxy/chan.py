@@ -357,9 +357,10 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[8] 补开受风控手数上限约束")
 with tmp_dir() as tmp:
-    # risk.max_volume=1：想补 2 手（N=5 − V=3）超过单笔手数上限 → 补开被拦
-    cfg = make_cfg(max_pos=3, sizing_overrides={"fixed_volume": 5, "unlock_no_new_open": False})
-    cfg.risk.max_volume = 1
+    # sizing.max_volume=1：想补 2 手（N=5 − V=3）超过单笔手数上限 → 补开被拦
+    cfg = make_cfg(max_pos=3, sizing_overrides={"fixed_volume": 5,
+                                                "unlock_no_new_open": False,
+                                                "max_volume": 1})
     engine, store, broker, ev = build_engine(tmp, cfg=cfg)
     engine.positions.add(make_pos(vol=3, signal_key="P19-8LOCK", entry_bar_seq=1,
                                   side=Side.LONG))
@@ -370,7 +371,7 @@ with tmp_dir() as tmp:
     check("[8a] 解锁照常（1 笔 3 手）",
           (len(unlock_orders(broker)),
            unlock_orders(broker)[0].volume if unlock_orders(broker) else 0), (1, 3))
-    check("[8b] 补开 2 手超 risk.max_volume=1 → 零补开", len(open_orders(broker)), 0)
+    check("[8b] 补开 2 手超 sizing.max_volume=1 → 零补开", len(open_orders(broker)), 0)
     check("[8c] 解锁已生效（簿空）", engine.positions.is_empty(), True)
     check("[8d] signal_action 仍为 unlock", store.signal_action(sig.key), "unlock")
     ev.flush()
