@@ -66,11 +66,12 @@
   "broker": "dry_run",
   "_comment_broker": "实盘账号/密码不落盘：用环境变量 LIVE_ACCOUNT / LIVE_PASSWORD（simnow 同理 SN_* / TQ_*）",
   "broker_params": {
-    "overprice_points": 0.6,
+    "overprice_points": 1.0,
     "fill_timeout_open": 5.0,
     "fill_timeout_close": 5.0,
     "close_max_chase": 20,
     "close_chase_ticks": 2,
+    "chase_interval": 1.0,
     "connect_retries": 3,
     "connect_backoff": 5.0,
     "tq_market": "simnow",
@@ -78,7 +79,7 @@
   },
   "state_dir": "./state",
   "sizing": {
-    "_comment": "仓位管理。不启用就删掉本节点（默认不计算、固定开 1 手）。要按资金/风险定手数时把 enabled 设为 true。",
+    "_comment": "仓位管理。不启用就删掉本节点（默认不计算、开仓手数沿用 risk.max_volume）。要按资金/风险定手数时把 enabled 设为 true。⚠ 一笔报单最多 20 手（中金所限价单上限），超了代码会以 over_exchange_limit 拒单。",
     "enabled": false,
     "mode": "fixed",
     "fixed_volume": 0,
@@ -91,10 +92,7 @@
     "min_volume": 1,
     "fallback_volume": 1,
     "equity_source": "available",
-    "batch_open": 1,
-    "_comment_unlock": "解锁专用批次：0=跟随 batch_open；想开仓单笔、解锁一次解多个锁仓单时设 batch_open=1 且 batch_unlock=N。",
-    "batch_unlock": 0,
-    "_comment_unlock2": "衔接今仓：有锁仓单时只解锁、绝不补开今仓，规避金融期货平今高手续费。默认 false=解锁不足 batch_open 会用差额新开今仓；设 true=宁缺勿开，缺口直接砍掉。",
+    "_comment_unlock": "解锁语义：解锁昨仓后是否补开今仓缺额。true=绝不补开（默认，规避金融期货平今高手续费）；false=解锁后再按缺额新开今仓。解锁本身照常执行（减风险动作）。",
     "unlock_no_new_open": true
   }
 }

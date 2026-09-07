@@ -132,7 +132,7 @@ def main() -> int:
         ias = st.get("initial_account_state") or {}
         check("stats() 可读", True,
               "启动基线: {}".format(ias if ias else "0（无历史遗留仓，干净）"))
-        if ias:
+        if any(v and (v[0] or v[1]) for v in ias.values()):
             print("⚠ 启动基线非 0：CTP 重发了上一轮未确认回报，存在历史遗留仓，"
                   "引擎 _restore 首拉对账（F2）会处理")
     except Exception as e:
@@ -141,7 +141,8 @@ def main() -> int:
     if args.trade:
         print("── ⑥【--trade】1 手真实开平 + trade_confirmed 真单判定 ──")
         try:
-            from Trading.Broker.Base import OrderIntent
+            # OrderIntent 已在模块顶层 import；此处不再局部 import（否则会在全函数内
+            # 把 OrderIntent 遮蔽成局部名，导致非 --trade 路径先使用时 UnboundLocalError）
             # 记录 baseline，随后真开 1 手
             bl_l = b.real_position(Side.LONG) or 0
             bl_s = b.real_position(Side.SHORT) or 0
