@@ -3,7 +3,7 @@
 App/AppTrader.py —— 自动下单进程托管（交易网关子进程生命周期管理）
 =========================================================================
 前端期货 K 线页「自动下单」开关 → 本模块启动/停止
-trader_gateway/run_gateway.py 子进程（--source sse 实时接入本服务的
+Trading/main.py 子进程（--source sse 实时接入本服务的
 SSE 行情流）。
 
 为什么用子进程而不是线程/协程：
@@ -16,7 +16,7 @@ SSE 行情流）。
 开关语义（用户拍板）：
   · 开启（on）→ 拉起子进程，自动下单子进程正常接收买卖点信号并交易；
   · 关闭（off）→ 跨平台「flag 文件」停止协议：
-      stop() 写 {out_dir}/.stop_request → 子进程 run_gateway 主循环/看护线程
+      stop() 写 {out_dir}/.stop_request → 子进程 main.py 主循环/看护线程
       观测到该文件 → engine.shutdown_and_lock_all()：
         ① auto_order_enabled=False（停止接收买卖点信号）
         ② 簿内所有「未锁定」持仓全部 LOCK（锁仓，落簿 LOCKED 反向仓，
@@ -53,12 +53,12 @@ from App.AppLog import get_logger
 log = get_logger("AppTrader")
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_TG_ROOT = os.path.join(_REPO_ROOT, "trader_gateway")
-_RUN_GATEWAY = os.path.join(_TG_ROOT, "run_gateway.py")
+_TG_ROOT = os.path.join(_REPO_ROOT, "Trading")
+_RUN_GATEWAY = os.path.join(_TG_ROOT, "main.py")
 
 # 让 AppTrader 能直接读 state.db（Store 是纯 sqlite，只读安全）。
-# P3-6：用 append 而非 insert(0)，避免把 trader_gateway 顶到 sys.path 前面、
-# 造成顶层命名污染（不以 trader_gateway 下的同名 package 遮蔽项目其它路径）。
+# P3-6：用 append 而非 insert(0)，避免把 Trading 顶到 sys.path 前面、
+# 造成顶层命名污染（不以 Trading 下的同名 package 遮蔽项目其它路径）。
 if _TG_ROOT not in sys.path:
     sys.path.append(_TG_ROOT)
 
@@ -68,7 +68,7 @@ _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 _DEFAULT_CFG = os.path.join(_TG_ROOT, "config.json")
 _DEFAULT_OUT = os.path.join(_TG_ROOT, "state")
 
-# 跨平台停止协议用的 flag 文件名（写在 {out_dir} 下）。子进程 run_gateway 主循环
+# 跨平台停止协议用的 flag 文件名（写在 {out_dir} 下）。子进程 main.py 主循环
 # /看护线程观测到该文件 → engine.shutdown_and_lock_all() → 退出 0。绕开 Windows
 # SIGTERM=TerminateProcess（handler 不跑）与 venv pid 是 shim 两类平台陷阱。
 _STOP_REQUEST = ".stop_request"
@@ -154,7 +154,7 @@ def _write_state_file(data: Dict[str, Any]) -> None:
 
 def _engine_store(out_dir: str):
     """按 out_dir 打开自动下单子进程 state.db 的 Store（只读场景为主）。"""
-    from tg.store import Store
+    from Trading.Infra.Store import Store
     return Store(os.path.join(out_dir, "state.db"))
 
 
@@ -252,8 +252,8 @@ class AppTrader:
               sse_base: Optional[str] = None) -> Dict[str, Any]:
         """启动自动下单自动下单子进程（SSE 实时源，订阅 chan.py 行情流）。
 
-        cfg_path：trader_gateway config.json（缺省 trader_gateway/config.json）；
-        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 trader_gateway/state）；
+        cfg_path：Trading config.json（缺省 Trading/config.json）；
+        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 Trading/state）；
         symbol / freq：订阅的合约与周期（前端开关传当前页面品种；缺省读
             cfg.source，再缺省 KQ.m@CFFEX.IF / 5m）；
         sse_base：行情流地址（前端传 location.origin；缺省读 cfg.source，
@@ -294,8 +294,8 @@ class AppTrader:
             else:
                 raw = str(pre_cfg.get("state_dir") or "") or _DEFAULT_OUT
                 # 相对 state_dir（默认 "./state"）以配置文件所在目录
-                # （trader_gateway/）为基准，避免落到后端进程 CWD 下，
-                # 造成"找不到 trader_gateway/state"。
+                # （Trading/）为基准，避免落到后端进程 CWD 下，
+                # 造成"找不到 Trading/state"。
                 out_dir = os.path.abspath(
                     os.path.join(os.path.dirname(cfg_path), raw))
             try:
@@ -327,7 +327,7 @@ class AppTrader:
 
             if not os.path.isfile(cfg_path):
                 msg = ("交易网关配置文件不存在: {}。请先用 "
-                       "python trader_gateway/run_gateway.py --init-config <路径> "
+                       "python Trading/main.py --init-config <路径> "
                        "生成并配置（含 broker/账户选择）。".format(cfg_path))
                 self._engine_log(log_file, "启动失败: " + msg)
                 raise AppError(msg)
@@ -378,7 +378,7 @@ class AppTrader:
                 env["PYTHONUNBUFFERED"] = "1"   # 自动下单子进程 stdout 逐行落盘，异常/退出可即查
                 # 用 PIPE + 读取线程接管子进程 stdout，而不用把 text-mode 文件
                 # 对象塞给 Popen（Windows 句柄继承脆弱，导入期 traceback 会丢）。
-                # run_gateway.py 内部随后会把 sys.stdout/stderr 重定向到
+                # main.py 内部随后会把 sys.stdout/stderr 重定向到
                 # gateway.log，本 PIPE 主要兜住「重定向前」的启动/导入期输出。
                 #
                 # Windows 关键修复：本 start() 被 FastAPI worker 线程调用，
@@ -423,7 +423,7 @@ class AppTrader:
         传入短超时（如服务退出 lifespan 场景 30s，P2-6）则按传入值等待，到期
         强杀兜底——避免关服务等满 150s 或撞 uvicorn graceful-shutdown 阈值。
 
-        ① 写 {out_dir}/.stop_request —— 子进程 run_gateway 主循环/看护线程观测到
+        ① 写 {out_dir}/.stop_request —— 子进程 main.py 主循环/看护线程观测到
            即 shutdown_and_lock_all 并退出（跨平台，不依赖 pid 与信号语义）；
         ② 非 Windows 再补发 SIGTERM 促活（Linux/macOS handler 会转置停止事件），
            Windows **不发** —— SIGTERM 在 Windows 上是 TerminateProcess，会抢在

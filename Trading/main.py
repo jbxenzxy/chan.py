@@ -1,0 +1,340 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+M1 交易网关 · CLI 入口
+======================
+    # 用 M0 录制数据离线回放（推荐先跑这个，几秒出结果）
+    python main.py --source replay --replay-dir ./replay_data --out ./run1
+
+    # 实时接入 chan.py 的 SSE
+    python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
+
+    # 生成一份可编辑的配置
+    python main.py --init-config ./config.json
+    python main.py --config ./config.json
+
+换止盈止损：改 config.json 的 exit_policy.params，或换一个策略类名。
+    引擎 / 信号源 / broker 都不需要动。
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import signal
+import sys
+import threading
+import time
+from typing import Any, Dict, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根（import Trading）
+
+from Trading import Broker, Source, Strategy      # noqa: E402  导入触发注册
+from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Engine.Engine import GatewayEngine                  # noqa: E402
+from Trading.Infra.EventLog import EventLog                       # noqa: E402
+from Trading.Infra.Store import Store                           # noqa: E402
+from Trading.Infra.Types import now_cn                          # noqa: E402
+
+ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
+                "risk_block", "error", "day_roll", "stop"}
+
+# 跨平台停止协议：父进程（AppTrader.stop）在 out_dir 写该文件 → 本模块
+# 看护线程观测到 → 请求优雅收尾（lock_all + 持久化 + 退出 0）。
+# 绕开 Windows SIGTERM=TerminateProcess（signal handler 不执行）与
+# venv shim pid 两处平台陷阱（P1-1 / P1-2）。与 App/AppTrader._STOP_REQUEST 保持一致。
+_STOP_REQUEST = ".stop_request"
+
+
+def build_runtime(args):
+    if args.config and os.path.isfile(args.config):
+        cfg = GatewayConfig.load(args.config)
+    else:
+        cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+        if args.config:
+            print("[cfg] 配置文件不存在，使用内置默认: {}".format(args.config))
+
+    src = dict(cfg.source)
+    if args.source:
+        src["type"] = args.source
+    if args.replay_dir:
+        src["replay_dir"] = args.replay_dir
+    if args.symbol:
+        src["symbol"] = args.symbol
+    if args.freq:
+        src["freq"] = args.freq
+    if args.sse_base:
+        src["sse_base"] = args.sse_base
+    if args.speed is not None:
+        src["speed"] = args.speed
+    if args.only_alive:
+        src["only_alive"] = True
+    if args.bar_mode:
+        src["bar_mode"] = args.bar_mode
+
+    out = args.out or cfg.state_dir
+    if not os.path.isabs(out):
+        # 相对路径（默认 "./state"）以 main.py 所在目录
+        # （Trading/）为基准，避免 CLI 直跑把 state 建到 CWD 下、
+        # 找不到 Trading/state。
+        out = os.path.join(os.path.dirname(os.path.abspath(__file__)), out)
+    out = os.path.abspath(out)
+    os.makedirs(out, exist_ok=True)
+    # 引擎全部 stdout/stderr 统一落盘 {out}/gateway.log：
+    #   · CLI 直跑（python main.py ...）也会产生 gateway.log；
+    #   · AppTrader 子进程模式（stdout 已是该文件）重新赋值无害——后续
+    #     print/事件回声只走新句柄，不会重复写。
+    # buffering=1（行缓冲）：每行实时落盘，进程崩溃/退出后日志可即查。
+    _log_fh = open(os.path.join(out, "gateway.log"), "a",
+                   encoding="utf-8", buffering=1)
+    sys.stdout = _log_fh
+    sys.stderr = _log_fh
+    spec = cfg.instrument
+
+    broker = Broker.build_broker(args.broker or cfg.broker, spec, cfg.broker_params)
+    entry = Strategy.build_entry_policy(
+        cfg.entry_policy.get("name", "DefaultEntryPolicy"),
+        cfg.entry_policy.get("params") or {})
+    exitp = Strategy.build_exit_policy(
+        cfg.exit_policy.get("name", "DefaultExitPolicy"),
+        cfg.exit_policy.get("params") or {})
+    store_path = os.path.join(out, "state.db")
+    store = Store(store_path)
+
+    # ===== --fresh：回放重跑前清空派生状态 =====
+    # 历史 bug（v6 实测 0 笔成交）：上一轮回放把 7 个 signal_key 标成了
+    # opened/rejected 写进 processed_signals，下一轮回放读同一份 state.db 时
+    # try_mark_signal 全部返回 False → 7 笔信号全被判 signal_dup → trades=0。
+    # 回放是"重跑同一份数据"，默认就该从干净状态开始；用 --no-fresh 显式保留。
+    if getattr(args, "fresh", None) is None:
+        fresh = (src.get("type") == "replay")     # 回放默认清，实盘默认留
+    else:
+        fresh = bool(args.fresh)
+    if fresh:
+        removed = store.wipe_runtime_state()
+        if not getattr(args, "quiet", False):
+            print("[fresh] 已清空派生状态: processed_signals={}  trades={}  "
+                  "(events.jsonl 与 orders 表保留作审计)"
+                  .format(removed.get("processed_signals", 0),
+                          removed.get("trades", 0)))
+
+    ev = EventLog(os.path.join(out, "events.jsonl"), echo=not args.quiet,
+                  echo_kinds=None if args.echo_all else ECHO_DEFAULT)
+    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    source = Source.build_source(src.get("type", "replay"), src, spec)
+    return cfg, engine, source, store, ev, out, src
+
+
+def print_summary(engine: GatewayEngine, out: str, src: Dict[str, Any],
+                  cfg: GatewayConfig, elapsed: float) -> Dict[str, Any]:
+    s = engine.summary()
+    spec = cfg.instrument
+    line = "-" * 60
+    print("\n" + "=" * 60)
+    print("运行摘要  {}".format(now_cn()))
+    print("=" * 60)
+    print("信号源    : {}   {}".format(src.get("type"),
+                                       src.get("replay_dir") or src.get("sse_base", "")))
+    print("Broker    : {}".format(engine.broker.name))
+    print("合约      : {} -> {}  (tick={}, 乘数={})".format(
+        spec.signal_symbol, spec.trade_symbol, spec.price_tick, spec.multiplier))
+    print("入场策略  : {}".format(s["entry_policy"]))
+    print("出场策略  : {}".format(s["exit_policy"]))
+    print(line)
+    if s["trades"] == 0:
+        print("本轮没有产生成交。检查：回放目录是否有 signals.json、")
+        print("风控时段/尾盘限制是否把开仓全拦了（见 events.jsonl 的 risk_block）。")
+    else:
+        print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
+            s["trades"], s["wins"], s["losses"], s["win_rate"]))
+        print("平均盈利  : {:+.2f} 点    平均亏损: {:+.2f} 点".format(
+            s["avg_win"], s["avg_loss"]))
+        print("净盈亏    : {:+.2f} 点   ({:+.2f} 元)".format(
+            s["net_points"], s["net_cash"]))
+        print("单笔期望  : {:+.3f} 点".format(s["expectancy_points"]))
+        if s["by_reason"]:
+            seg = "  ".join("{}: n={} net={:+.2f}".format(k, v["n"], v["net"])
+                            for k, v in s["by_reason"].items())
+            print("按出场    : {}".format(seg))
+    print("当前持仓  : {}".format(
+        "无" if not s["open_position"] else
+        "{side} {volume}手 @{price}".format(
+            side=s["open_position"]["side"], volume=s["open_position"]["volume"],
+            price=s["open_position"]["entry_price"])))
+    print(line)
+    print("耗时 {:.2f}s   状态目录: {}".format(elapsed, os.path.abspath(out)))
+    print("事件日志: {}".format(os.path.join(os.path.abspath(out), "events.jsonl")))
+    print("=" * 60 + "\n")
+    return s
+
+
+def run(args) -> int:
+    if args.init_config:
+        GatewayConfig.from_dict(DEFAULT_CONFIG).save_example(args.init_config)
+        print("[cfg] 已生成配置模板: {}".format(os.path.abspath(args.init_config)))
+        print("      改完用 python main.py --config <路径> 启动")
+        return 0
+
+    cfg, engine, source, store, ev, out, src = build_runtime(args)
+
+    # P1-3 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
+    # AppTrader.start() 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、直接
+    # CLI 拉起）一启动就会被残留 flag 看护线程立刻关停。AppTrader.start() 也会
+    # 清，这里双保险，让 CLI 直启同样健壮。幂等：文件不存在即跳过。
+    _leftover_flag = os.path.join(out, _STOP_REQUEST)
+    if os.path.exists(_leftover_flag):
+        try:
+            os.remove(_leftover_flag)
+        except OSError:
+            pass
+
+    if hasattr(source, "info"):
+        try:
+            print("[source] {}".format(source.info()))
+        except Exception as e:
+            print("[source] 加载失败: {}".format(e))
+            return 2
+
+    # 启动摘要：第一屏就给出完整上下文（AppTrader 子进程模式下写入 gateway.log，
+    # 进程意外退出时后端 status 会把这段日志尾部带回前端定位）
+    print("[gw] 启动 pid={}  source={}  symbol={}  freq={}  sse_base={}  "
+          "broker={}  out={}  state_dir={}".format(
+              os.getpid(), src.get("type"), src.get("symbol"),
+              src.get("freq"), src.get("sse_base", ""), engine.broker.name,
+              os.path.abspath(out), cfg.state_dir))
+
+    ev.write("start", source=src.get("type"), broker=engine.broker.name,
+             entry=engine.entry_policy.describe(), exit=engine.exit_policy.describe(),
+             instrument={"signal": cfg.instrument.signal_symbol,
+                         "trade": cfg.instrument.trade_symbol,
+                         "tick": cfg.instrument.price_tick,
+                         "multiplier": cfg.instrument.multiplier})
+
+    engine.risk.roll_day("")     # 初始化当日统计
+    t0 = time.time()
+    counted = 0
+
+    # ── 停止请求（跨平台 flag / 信号 / Ctrl-C）· P1-1/P1-2/P2-4 ──
+    # 任一触发源命中 → stop_event 置位。真正的收尾（shutdown_and_lock_all，
+    # 内含阻塞式 CTP 下单）不放在 signal handler 里做（P2-4：handler 内阻塞
+    # 下单有重入风险，且锁仓最坏 ~100s > _STOP_TIMEOUT 会被 SIGKILL 半途而废），
+    # 而是放回主循环：handler / 看护线程只负责"请求停止 + 让主循环退出"，
+    # 主循环退出前统一执行收尾。
+    stop_event = threading.Event()
+
+    def _request_stop(reason: str) -> None:
+        """置停止标志 + 停行情源让主循环退出（不做阻塞收尾）。幂等。"""
+        if stop_event.is_set():
+            return
+        print("[gw] 收到停止请求（{}），收尾中...".format(reason))
+        stop_event.set()
+        if hasattr(source, "stop"):
+            try:
+                source.stop()
+            except Exception:
+                pass
+
+    def _stop(signum, frame):
+        _request_stop("signal {}".format(signum))
+
+    signal.signal(signal.SIGINT, _stop)
+    try:
+        signal.signal(signal.SIGTERM, _stop)
+    except Exception:
+        pass
+
+    # 看护线程：监控 AppTrader 写的 .stop_request 文件（Windows 上 SIGTERM
+    # 是 TerminateProcess，handler 不执行——flag 文件是唯一可靠跨平台触发）。
+    stop_flag = os.path.join(out, _STOP_REQUEST)
+
+    def _monitor_stop_flag() -> None:
+        while not stop_event.is_set():
+            try:
+                if os.path.exists(stop_flag):
+                    _request_stop("flag " + _STOP_REQUEST)
+                    return
+            except OSError:
+                pass
+            time.sleep(0.2)
+
+    threading.Thread(target=_monitor_stop_flag, name="gw-stop-monitor",
+                     daemon=True).start()
+
+    try:
+        for kind, obj in source.events():
+            if stop_event.is_set():
+                break
+            if kind == "bar":
+                engine.on_bar(obj)
+                counted += 1
+            elif kind == "signal":
+                engine.on_signal(obj)
+            if args.max_bars and counted >= args.max_bars:
+                print("[gw] 已达 --max-bars {}，提前停止".format(args.max_bars))
+                break
+            if not getattr(source, "_running", True):
+                break
+    except KeyboardInterrupt:
+        _request_stop("ctrl-c")
+    except Exception as e:
+        ev.write("error", where="main_loop", err="{}: {}".format(type(e).__name__, e))
+        raise
+    finally:
+        # 主循环已退出 → 若确有停止请求，执行真正的收尾（停信号门 + 锁仓 +
+        # 持久化）。仅在停止请求时锁仓；正常数据流跑完（max_bars / 源自然
+        # 结束）不锁。收尾放 finally 而非 signal handler（P2-4）。
+        if stop_event.is_set():
+            try:
+                engine.shutdown_and_lock_all()
+            except Exception as e:
+                ev.write("error", where="shutdown_lock_all",
+                         err="{}: {}".format(type(e).__name__, e))
+        elapsed = time.time() - t0
+        engine._persist()
+        summary = print_summary(engine, out, src, cfg, elapsed)
+        if args.summary_json:
+            with open(args.summary_json, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+        ev.write("stop", bars=counted, elapsed=round(elapsed, 2),
+                 trades=summary["trades"], net_points=summary["net_points"])
+        engine.broker.close()
+        source.close()
+        store.close()
+        ev.close()
+    return 0
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="缠论信号 → 交易执行网关（M1 dry-run 骨架）",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--config", help="配置文件路径（JSON）")
+    ap.add_argument("--init-config", metavar="PATH",
+                    help="生成一份默认配置模板并退出")
+    ap.add_argument("--source", choices=["replay", "sse"], help="信号源类型")
+    ap.add_argument("--broker", choices=sorted(Broker.BROKERS), help="执行通道")
+    ap.add_argument("--replay-dir", help="回放目录（含 signals.json / klines.json）")
+    ap.add_argument("--sse-base", help="chan.py API 地址，默认 http://127.0.0.1:18081")
+    ap.add_argument("--symbol", help="合约代码，如 KQ.m@CFFEX.IF")
+    ap.add_argument("--freq", help="周期，如 5m")
+    ap.add_argument("--bar-mode", choices=["confirmed", "last"],
+                    help="SSE 源的 K 线闭合判定方式，默认 confirmed")
+    ap.add_argument("--speed", type=float, help="回放每根 K 线间隔秒（默认 0）")
+    ap.add_argument("--only-alive", action="store_true",
+                    help="回放时跳过最终消失的信号（会高估策略，仅供对比）")
+    ap.add_argument("--out", help="输出目录（state.db / events.jsonl）")
+    ap.add_argument("--fresh", dest="fresh", action="store_true", default=None,
+                    help="启动前清空派生状态（信号幂等键/成交/持仓），"
+                         "回放模式默认开启")
+    ap.add_argument("--no-fresh", dest="fresh", action="store_false",
+                    help="保留上轮状态继续跑（实盘模式默认，SSE 重连用）")
+    ap.add_argument("--summary-json", help="把运行摘要写成 JSON")
+    ap.add_argument("--max-bars", type=int, help="最多处理多少根 K 线后停止")
+    ap.add_argument("--quiet", action="store_true", help="不打印事件流水")
+    ap.add_argument("--echo-all", action="store_true", help="连同 bar/order 一起打印")
+    args = ap.parse_args()
+    sys.exit(run(args))
+
+
+if __name__ == "__main__":
+    main()

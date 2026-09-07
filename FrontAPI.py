@@ -676,7 +676,7 @@ async def api_stocks_scan_annotation(freq: str = Query("")):
 
 
 # ── 路由 — 自动下单开关（期货 K 线页顶部开关 → 进程托管）────────────
-# 开启 = 拉起 trader_gateway/run_gateway.py 子进程（--source sse 实时接入）；
+# 开启 = 拉起 Trading/main.py 子进程（--source sse 实时接入）；
 # 关闭 = SIGTERM → 引擎 shutdown_and_lock_all（停信号 + 锁全部未锁定持仓）
 #        → 优雅退出。实盘安全闸门在 AppTrader.start 预检（AppError → 400）。
 # 执行体：run_in_threadpool（Popen / 等待退出是阻塞调用，不能占事件循环）。
