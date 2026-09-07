@@ -228,7 +228,7 @@ with tmp_dir() as tmp:
     check("新开仓 position.entry_mode == OPEN_FIRST",
           engine.position.entry_mode, EntryMode.OPEN_FIRST)
     check("新开仓 position.side == LONG", engine.position.side, Side.LONG)
-    check("新开仓 position.volume == 1", engine.position.volume, 1)
+    check("新开仓 position.volume == 2（默认 max_volume=2）", engine.position.volume, 2)
 
 # ════════════════════════════════════════════════════════════════
 # [5] 状态转移：开仓被拒

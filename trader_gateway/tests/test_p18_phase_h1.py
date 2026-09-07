@@ -195,7 +195,7 @@ with tmp_dir() as tmp:
     lock = engine.positions.positions[0]
     check("[1d] 落簿仓 side=SHORT", lock.side, Side.SHORT)
     check("[1e] 落簿仓 entry_mode=LOCKED", lock.entry_mode, EntryMode.LOCKED)
-    check("[1f] 落簿仓 volume 与原仓一致", lock.volume, 1)
+    check("[1f] 落簿仓 volume 与原仓一致（默认 2 手）", lock.volume, 2)
     lock_order = [o for o in broker.orders
                   if o.meta.get("intent") == "lock"][-1]
     check("[1g] 落簿仓 entry_price=LOCK 报单成交价",
@@ -388,8 +388,8 @@ with tmp_dir() as tmp:
                                  date="2026-09-02 10:00", bsp_type="2"))
     check("[8a] 锁仓已落簿", len(engine.positions), 1)
 
-    # bar1：真实持仓与簿一致（SHORT=1）→ 对账无动作
-    rb._real[Side.SHORT] = 1
+    # bar1：真实持仓与簿一致（SHORT=2，默认手数）→ 对账无动作
+    rb._real[Side.SHORT] = 2
     engine.on_bar(make_bar(5000, 4550, 4560, 4540, 4555))
     check("[8b] 一致时簿不变", len(engine.positions), 1)
 

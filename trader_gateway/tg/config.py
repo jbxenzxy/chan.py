@@ -17,7 +17,7 @@ from .symbols import InstrumentSpec
 
 @dataclass
 class RiskConfig:
-    max_volume: int = 1                      # 单笔手数上限（也用于开仓手数）
+    max_volume: int = 2                      # 单笔手数上限（也用于开仓手数；非仓位管理下=每次入场固定手数）
     max_open_positions: int = 1              # Phase E3（2026-09-05）：同时持仓数上限；N≥1 同 K 线连开场景下 >1
                                              #   1 = 单仓（v1 行为，向后兼容）
                                              #   N = 一次入场可连开 N 单（broker 收 N 笔独立报单）
@@ -126,14 +126,14 @@ DEFAULT_CONFIG: Dict[str, Any] = {
         "enabled": False,                # 总开关：False=关闭仓位管理（固定手数）；True=按下面的 mode 定手数
         "mode": "fixed",                 # 手数定档模式：fixed 固定手数 | capital_pct 按保证金占比 | atr_risk 按风险敞口
         "fixed_volume": 0,               # 【一笔挂多少手】fixed 模式下一个信号一次报单的手数。
-                                         #   0=沿用 risk.max_volume（默认 1 手）。⚠ 不能超过 20（见上方说明）
+                                         #   0=沿用 risk.max_volume（默认 2 手）。⚠ 不能超过 20（见上方说明）
         "capital_pct": 0.50,             # capital_pct 模式：这笔仓位最多占用权益的比例（0.50=50%）
         "risk_per_trade_pct": 0.01,      # atr_risk 模式：这笔最多亏掉权益的比例（0.01=1%，固定分数法）
         "margin_rate": 0.15,             # 保证金率，用于 capital_pct 折算每手占用（IF 一般 12%-15%）
         "risk_unit_pct": 0.01,           # 资金门槛缓冲：每手名义价值预留的波动比例。
                                          #   开 1 手最低门槛 K = 一手保证金 + 名义价值×risk_unit_pct；
                                          #   X = floor(可用资金/K) 为资金闸门定的最多可开手数（见 engine._capital_gate）
-        "max_volume": 0,                 # 手数硬上限；0=沿用 risk.max_volume（开 atr_risk 时建议显式设大，否则永远 1 手）
+        "max_volume": 0,                 # 手数硬上限；0=沿用 risk.max_volume（开 atr_risk 时建议显式设大，否则永远 2 手）
         "min_volume": 1,                 # 手数下限：算出来不足时提升到该值（1=信号来了就至少开 1 手；设 0 则真的不开）
         "fallback_volume": 1,            # 权益/ATR 取不到时的回退手数（保守值，避免因查询失败而乱开仓）
         "equity_source": "available",    # 权益口径：available=可用资金（已扣保证金占用）| balance=总资产权益
@@ -162,7 +162,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
     },
     # 风控参数
     "risk": {
-        "max_volume": 1,                    # 单笔委托手数上限（也是开仓手数）
+        "max_volume": 2,                    # 单笔委托手数上限（也是开仓手数；非仓位管理下=每次入场固定手数）
         "max_trades_per_day": 20,           # 每日最大往返笔数，超过后当日不再开新仓
         "max_daily_loss_points": 60.0,      # 每日最大净亏（点数），触达后当日停止开仓（平仓不受限）
         "enforce_session": True,            # 只在 instrument.sessions 时段内开仓（按 K 线时间判断，非墙钟）

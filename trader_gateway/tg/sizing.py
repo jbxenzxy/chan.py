@@ -49,7 +49,7 @@ class PositionSizer:
 
     def __init__(self, params: Optional[Dict[str, Any]] = None,
                  spec: Optional[InstrumentSpec] = None,
-                 risk_max_volume: int = 1):
+                 risk_max_volume: int = 2):
         p = params or {}
         self.spec = spec or InstrumentSpec()
         self.enabled = bool(p.get("enabled", False))

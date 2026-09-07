@@ -3,8 +3,8 @@
 P9 仓位管理（手数定档）单元测试
 ================================
 背景
-    加这个模块之前，开仓手数是硬编码的 `int(cfg.risk.max_volume)`（默认 1 手），
-    跟账户里有多少钱完全无关 —— 100 万也只开 1 手。
+    加这个模块之前，开仓手数是硬编码的 `int(cfg.risk.max_volume)`（默认 2 手），
+    跟账户里有多少钱完全无关 —— 100 万也只开 2 手。
     P9 新增 PositionSizer 回答"这笔开几手"，三种模式：
       fixed        固定手数
       capital_pct  按保证金占比：手数 = 权益 × pct / (现价 × 乘数 × 保证金率)
@@ -111,11 +111,12 @@ check(" GatewayConfig.sizing.enabled == False", _cfg.sizing.get("enabled"), Fals
 
 _s_default = PositionSizer(_cfg.sizing, _cfg.instrument, _cfg.risk.max_volume)
 check("默认 sizer.enabled == False", _s_default.enabled, False)
-check("默认：不传权益 -> 1 手", _s_default.size(equity=None, price=PRICE)[0], 1)
-check("默认：100 万权益 -> 仍然 1 手",
-      _s_default.size(equity=1_000_000.0, price=PRICE)[0], 1)
-check("默认：1 亿权益 -> 仍然 1 手",
-      _s_default.size(equity=100_000_000.0, price=PRICE)[0], 1)
+check("默认 risk.max_volume == 2", _cfg.risk.max_volume, 2)
+check("默认：不传权益 -> 2 手", _s_default.size(equity=None, price=PRICE)[0], 2)
+check("默认：100 万权益 -> 仍然 2 手",
+      _s_default.size(equity=1_000_000.0, price=PRICE)[0], 2)
+check("默认：1 亿权益 -> 仍然 2 手",
+      _s_default.size(equity=100_000_000.0, price=PRICE)[0], 2)
 check("默认：原因串标记 disabled",
       _s_default.size(equity=1_000_000.0, price=PRICE)[1], "sizing:disabled(fixed)")
 
@@ -300,6 +301,26 @@ check("省略 max_volume -> 仍用 RiskConfig.max_volume=1",
 _s_off = PositionSizer(_cfg.sizing, _cfg.instrument, _cfg.risk.max_volume)
 check("sizing 关闭时 sizer.max_volume == risk.max_volume",
       _s_off.max_volume, _cfg.risk.max_volume)
+
+
+# =========================================================
+print("\n[10] unlock_no_new_open 默认值（2026-09-07：锁死\"不补开\"默认）")
+# 修复背景：全 FOK 重构时把默认值误设成 False（补开），与用户设计
+# 「解锁只平昨仓、绝不新开今仓（规避平今高手续费）」相反。本组断言锁死默认方向。
+check("不显式配置 -> unlock_no_new_open == True",
+      PositionSizer({}, SPEC, risk_max_volume=1).unlock_no_new_open, True)
+check("make_sizer() 未传 -> 默认 True",
+      make_sizer().unlock_no_new_open, True)
+check("DEFAULT_CONFIG.sizing.unlock_no_new_open == True",
+      DEFAULT_CONFIG.get("sizing", {}).get("unlock_no_new_open"), True)
+check("显式 True -> 不补开",
+      PositionSizer({"unlock_no_new_open": True}, SPEC,
+                    risk_max_volume=1).unlock_no_new_open, True)
+check("显式 False -> 补开（可选能力，需主动关闭）",
+      PositionSizer({"unlock_no_new_open": False}, SPEC,
+                    risk_max_volume=1).unlock_no_new_open, False)
+check("describe() 含 unlock_no_new_open 且为 True",
+      make_sizer().describe()["unlock_no_new_open"], True)
 
 print("\n" + "=" * 60)
 print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

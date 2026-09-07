@@ -15,7 +15,7 @@
     ]
   },
   "risk": {
-    "max_volume": 1,
+    "max_volume": 2,
     "initial_cash": 10000000.0,
     "_comment_initial_cash": "虚拟初始资金：仅 dry_run 无真实账户时用作资金闸门定 X=floor(可用资金/K)。实盘/simnow 从账户取可用资金，本字段被忽略。",
     "max_trades_per_day": 20,

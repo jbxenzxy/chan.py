@@ -1,0 +1,71 @@
+<svg viewBox="0 0 680 604" width="100%" role="img" xmlns="http://www.w3.org/2000/svg" font-family="system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+<title>自动下单 6 层架构改动总览</title>
+<desc>信号源、信号适配、策略三层未动；风控简化；执行层改动最大；Broker 层报单升级为 FOK；基础设施只动配置。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<g>
+<rect x="40" y="50" width="600" height="66" rx="12" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="64" y="74" font-size="14" font-weight="500" fill="#173404">1 信号源</text>
+<text x="64" y="96" font-size="12" fill="#27500A">chan.py 每根 5m K 线推快照（外部，未改动）</text>
+<circle cx="470" cy="83" r="5" fill="#3B6D11"/>
+<text x="484" y="87" font-size="12" fill="#27500A">没动</text>
+</g>
+<path d="M340 116 L340 128" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="128" width="600" height="66" rx="12" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="64" y="152" font-size="14" font-weight="500" fill="#173404">2 信号适配层</text>
+<text x="64" y="174" font-size="12" fill="#27500A">解析买卖点 · 冻结快照 · 幂等去重</text>
+<circle cx="470" cy="161" r="5" fill="#3B6D11"/>
+<text x="484" y="165" font-size="12" fill="#27500A">没动</text>
+</g>
+<path d="M340 194 L340 206" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="206" width="600" height="66" rx="12" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+<text x="64" y="230" font-size="14" font-weight="500" fill="#173404">3 策略层（可插拔）</text>
+<text x="64" y="252" font-size="12" fill="#27500A">入场过滤 + 出场策略（止盈止损）</text>
+<circle cx="470" cy="239" r="5" fill="#3B6D11"/>
+<text x="484" y="243" font-size="12" fill="#27500A">没动</text>
+</g>
+<path d="M340 272 L340 284" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="284" width="600" height="66" rx="12" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="64" y="308" font-size="14" font-weight="500" fill="#412402">4 风控闸门</text>
+<text x="64" y="330" font-size="12" fill="#633806">时段/手数/日亏 + 仓位管理（只删分仓）</text>
+<circle cx="470" cy="317" r="5" fill="#854F0B"/>
+<text x="484" y="321" font-size="12" fill="#633806">简化</text>
+</g>
+<path d="M340 350 L340 362" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="362" width="600" height="66" rx="12" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="64" y="386" font-size="14" font-weight="500" fill="#501313">5 执行层</text>
+<text x="64" y="408" font-size="12" fill="#791F1F">状态机 + 开/平/锁/解锁 + 对账（删分仓+批次）</text>
+<circle cx="470" cy="395" r="5" fill="#A32D2D"/>
+<text x="484" y="399" font-size="12" fill="#791F1F">改动最大</text>
+</g>
+<path d="M340 428 L340 440" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="440" width="600" height="66" rx="12" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="64" y="464" font-size="14" font-weight="500" fill="#042C53">6 Broker 适配器（可替换）</text>
+<text x="64" y="486" font-size="12" fill="#0C447C">下单/成交复核/撤单（报单升级 FOK）</text>
+<circle cx="470" cy="473" r="5" fill="#185FA5"/>
+<text x="484" y="477" font-size="12" fill="#0C447C">升级 FOK</text>
+</g>
+<path d="M340 506 L340 518" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+<g>
+<rect x="40" y="518" width="600" height="66" rx="12" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="64" y="542" font-size="14" font-weight="500" fill="#412402">横切 · 基础设施</text>
+<text x="64" y="564" font-size="12" fill="#633806">事件日志 + sqlite 持久化 + 配置（只动配置项）</text>
+<circle cx="470" cy="551" r="5" fill="#854F0B"/>
+<text x="484" y="555" font-size="12" fill="#633806">只动配置</text>
+</g>
+</svg>
