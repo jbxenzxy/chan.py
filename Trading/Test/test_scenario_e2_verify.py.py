@@ -215,7 +215,9 @@ def scenario_b_replay_smoke() -> bool:
     exitp = DefaultExitPolicy()
     engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
 
-    src_params = {"replay_dir": os.path.join(ROOT, "replay_data"), "speed": 0.0}
+    # 回放 demo 数据随包放在 Trading/replay_data（见 Trading/README.md），
+    # 由测试文件自身位置（THIS=.../Trading/Test）推导，不依赖仓库根深度。
+    src_params = {"replay_dir": os.path.join(os.path.dirname(THIS), "replay_data"), "speed": 0.0}
     src = ReplaySource(src_params, spec)
     src.load()
     n_bars = len(src.klines)
