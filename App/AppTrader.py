@@ -30,12 +30,16 @@ SSE 行情流）。
     auto_order_enabled 持久化在 state.db，重启服务/自动下单子进程仍保持
     关闭语义（防悄悄重新开跑）。
 
-实盘安全闸门：启动前预检 config.json —— broker=live 或
-broker_params.tq_market≠simnow 时必须显式
+实盘安全闸门：启动前预检配置（Trading/Config.py —— 自动下单配置的唯一
+入口）broker=live 或 broker_params.tq_market≠simnow 时必须显式
 confirm_live_trading=true，否则抛 AppError（前端提示，不拉起进程）。
 
+配置来源（2026-09-07 归一）：不再有 config.json。本模块通过 _load_cfg()
+取一份 GatewayConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
+改参数去 .env 或 Trading/Config.py，改运行时参数用本 start() 的入参。
+
 状态持久化：App/auto_trader_state.json 记录最后一次启动参数
-（pid/out_dir/cfg_path/started_at/broker），服务重启后可查可停。
+（pid/out_dir/started_at/broker），服务重启后可查可停。
 """
 import json
 import logging
@@ -61,11 +65,14 @@ _RUN_GATEWAY = os.path.join(_TG_ROOT, "main.py")
 # 造成顶层命名污染（不以 Trading 下的同名 package 遮蔽项目其它路径）。
 if _TG_ROOT not in sys.path:
     sys.path.append(_TG_ROOT)
+# 仓库根进 sys.path：自动下单配置唯一入口 Trading/Config.py（延迟 import，
+# 见 _load_cfg —— 配置非法不能拖垮整个后端服务，只在点开启自动下单时报错）。
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
 
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "auto_trader_state.json")
 
-_DEFAULT_CFG = os.path.join(_TG_ROOT, "config.json")
 _DEFAULT_OUT = os.path.join(_TG_ROOT, "State")
 
 # 跨平台停止协议用的 flag 文件名（写在 {out_dir} 下）。子进程 main.py 主循环
@@ -86,15 +93,14 @@ _STOP_TIMEOUT = 150.0
 class _TraderProc:
     """子进程 + 启动参数的内存态（AppTrader 单例持有）。"""
 
-    __slots__ = ("proc", "pid", "cfg_path", "out_dir", "started_at", "broker",
+    __slots__ = ("proc", "pid", "out_dir", "started_at", "broker",
                  "symbol", "freq", "sse_base")
 
-    def __init__(self, proc: subprocess.Popen, cfg_path: str, out_dir: str,
+    def __init__(self, proc: subprocess.Popen, out_dir: str,
                  started_at: str, broker: str, symbol: Optional[str] = None,
                  freq: Optional[str] = None, sse_base: Optional[str] = None):
         self.proc = proc
         self.pid = proc.pid if proc is not None else 0
-        self.cfg_path = cfg_path
         self.out_dir = out_dir
         self.started_at = started_at
         self.broker = broker
@@ -116,7 +122,6 @@ class _TraderProc:
         return {
             "pid": self.pid,
             "running": self.running,
-            "cfg_path": self.cfg_path,
             "out_dir": self.out_dir,
             "started_at": self.started_at,
             "broker": self.broker,
@@ -234,7 +239,7 @@ class AppTrader:
             return
         # pid 活着但这不是我们 spawn 的句柄 —— 只能记录参数，stop 时按 pid 发信号
         self._handle = _TraderProc(
-            proc=None, cfg_path=str(data.get("cfg_path") or ""),
+            proc=None,
             out_dir=str(data.get("out_dir") or ""),
             started_at=str(data.get("started_at") or ""),
             broker=str(data.get("broker") or ""),
@@ -245,20 +250,22 @@ class AppTrader:
         self._handle.pid = pid
 
     # ---------------- 对外操作 ----------------
-    def start(self, cfg_path: Optional[str] = None,
-              out_dir: Optional[str] = None,
+    def start(self, out_dir: Optional[str] = None,
               symbol: Optional[str] = None,
               freq: Optional[str] = None,
               sse_base: Optional[str] = None) -> Dict[str, Any]:
         """启动自动下单自动下单子进程（SSE 实时源，订阅 chan.py 行情流）。
 
-        cfg_path：Trading config.json（缺省 Trading/config.json）；
-        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 Trading/State）；
+        配置来源：Trading/Config.py（唯一总入口 = 模型默认值 ← 环境变量/仓库根
+        .env），已无 config.json 这条路。要改持久化参数去 .env；本方法的入参
+        只是运行时参数（当前页面品种/周期/服务地址），通过命令行传给子进程。
+        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir；相对路径以
+            Trading/ 为基准，不受后端进程 CWD 影响）；
         symbol / freq：订阅的合约与周期（前端开关传当前页面品种；缺省读
             cfg.source，再缺省 KQ.m@CFFEX.IF / 5m）；
         sse_base：行情流地址（前端传 location.origin；缺省读 cfg.source，
             再缺省 http://127.0.0.1:18081）。
-        启动前预检：config 存在 + 实盘安全闸门（live 必须 confirm_live_trading）。
+        启动前预检：配置可加载 + 实盘安全闸门（live 必须 confirm_live_trading）。
         自动下单子进程 stdout/stderr 落盘 {out_dir}/gateway.log（异常可查，不再吞掉）。
         """
         with self._lock:
@@ -278,26 +285,23 @@ class AppTrader:
                     "（AppTrader 单实例失效，P3-2）。请确保只用一个 worker 调度"
                     "自动下单", prev_pid)
 
-            cfg_path = os.path.abspath(cfg_path or _DEFAULT_CFG)
-
             # ── 先定状态目录并创建日志文件：无论后续校验是否通过，都留下
             #    可查的 gateway.log（曾有"执行后什么都没有"——根因是校验
             #    失败在 makedirs 之前就 raise，目录/日志从未创建）。
-            pre_cfg: Dict[str, Any] = {}
-            if os.path.isfile(cfg_path):
-                try:
-                    pre_cfg = self._load_cfg(cfg_path)
-                except AppError:
-                    pre_cfg = {}
             if out_dir:
                 out_dir = os.path.abspath(out_dir)
             else:
-                raw = str(pre_cfg.get("state_dir") or "") or _DEFAULT_OUT
-                # 相对 state_dir（默认 "./State"）以配置文件所在目录
-                # （Trading/）为基准，避免落到后端进程 CWD 下，
-                # 造成"找不到 Trading/State"。
-                out_dir = os.path.abspath(
-                    os.path.join(os.path.dirname(cfg_path), raw))
+                pre_cfg = None
+                try:
+                    pre_cfg = self._load_cfg()
+                except AppError:
+                    pre_cfg = None      # 配置读不出来也要先落盘日志再报错
+                raw = (str(pre_cfg.state_dir or "") if pre_cfg else ""
+                       ) or _DEFAULT_OUT
+                # 相对 state_dir（默认 "./State"）以 Trading/ 为基准，避免落到
+                # 后端进程 CWD 下造成"找不到 Trading/State"（原按配置文件所在
+                # 目录解析；config.json 取消后基准固定为 _TG_ROOT，语义等价）。
+                out_dir = os.path.abspath(os.path.join(_TG_ROOT, raw))
             try:
                 os.makedirs(out_dir, exist_ok=True)
             except OSError as e:
@@ -309,8 +313,8 @@ class AppTrader:
             self._set_engine_log_handler(log_file)
             self._engine_log(
                 log_file,
-                "收到开启请求: cfg={} out={} symbol={} freq={} sse_base={}".format(
-                    cfg_path, out_dir, symbol, freq, sse_base))
+                "收到开启请求: out={} symbol={} freq={} sse_base={}".format(
+                    out_dir, symbol, freq, sse_base))
 
             # P1-3：清除上一轮遗留的 .stop_request flag。看护线程在子进程
             # 启动后立刻轮询，flag 不清会触发"第二次开机关不掉也开不起来——
@@ -325,21 +329,14 @@ class AppTrader:
                 self._engine_log(log_file, "清除停止 flag 失败: {}: {}".format(
                     type(e).__name__, e))
 
-            if not os.path.isfile(cfg_path):
-                msg = ("交易网关配置文件不存在: {}。请先用 "
-                       "python Trading/main.py --init-config <路径> "
-                       "生成并配置（含 broker/账户选择）。".format(cfg_path))
-                self._engine_log(log_file, "启动失败: " + msg)
-                raise AppError(msg)
-
             try:
-                cfg_data = self._load_cfg(cfg_path)
+                cfg = self._load_cfg()
             except AppError as e:
                 self._engine_log(log_file, "读取配置失败: {}".format(e))
                 raise
-            broker = str(cfg_data.get("broker") or "dry_run")
+            broker = str(cfg.broker or "dry_run")
             try:
-                self._check_live_gate(cfg_data, broker)
+                self._check_live_gate(cfg, broker)
             except AppError as e:
                 self._engine_log(log_file, "实盘安全闸门拦截: {}".format(e))
                 raise
@@ -347,15 +344,14 @@ class AppTrader:
             # 开启 = 显式恢复自动下单开关（上次关闭已把 False 持久化）
             self._reset_engine_switch(out_dir)
 
-            # 信号源参数：前端开关优先（当前页面品种/周期），其次 cfg.source，最后内置默认
-            src_cfg = cfg_data.get("source") or {}
-            use_symbol = symbol or str(src_cfg.get("symbol") or "KQ.m@CFFEX.IF")
-            use_freq = freq or str(src_cfg.get("freq") or "5m")
-            use_base = sse_base or str(src_cfg.get("sse_base")
-                                       or "http://127.0.0.1:18081")
+            # 信号源参数：前端开关优先（当前页面品种/周期），其次 cfg.source
+            # （默认值只在 SourceConfig 里定义一份，这里不再写第二套兜底）。
+            src_cfg = cfg.source
+            use_symbol = symbol or src_cfg.symbol
+            use_freq = freq or src_cfg.freq
+            use_base = sse_base or src_cfg.sse_base
 
             cmd = [sys.executable, _RUN_GATEWAY,
-                   "--config", cfg_path,
                    "--out", out_dir,
                    "--no-fresh",     # 保留持仓/信号幂等键，不 wipe
                    "--quiet",        # 不打印事件流水（日志在 out/events.jsonl）
@@ -404,7 +400,7 @@ class AppTrader:
 
             self._spawn_reader(proc, log_file)
 
-            handle = _TraderProc(proc, cfg_path, out_dir,
+            handle = _TraderProc(proc, out_dir,
                                  time.strftime("%Y-%m-%d %H:%M:%S"), broker,
                                  symbol=use_symbol, freq=use_freq,
                                  sse_base=use_base)
@@ -544,7 +540,6 @@ class AppTrader:
                 "running": running,
                 "pid": handle.pid if handle else None,
                 "started_at": handle.started_at if handle else None,
-                "cfg_path": handle.cfg_path if handle else None,
                 "out_dir": handle.out_dir if handle else None,
                 "broker": handle.broker if handle else None,
                 "symbol": handle.symbol if handle else None,
@@ -558,7 +553,6 @@ class AppTrader:
                 data = _read_state_file()
                 if data.get("pid"):
                     base["pid"] = int(data["pid"])
-                    base["cfg_path"] = data.get("cfg_path")
                     base["out_dir"] = data.get("out_dir")
                     base["started_at"] = data.get("started_at")
                     base["broker"] = data.get("broker")
@@ -712,17 +706,29 @@ class AppTrader:
         t.start()
 
     @staticmethod
-    def _load_cfg(cfg_path: str) -> Dict[str, Any]:
+    def _load_cfg() -> Any:
+        """取一份自动下单配置（唯一来源 Trading/Config.py，无 config.json）。
+
+        优先级：模型默认值 ← 环境变量/仓库根 .env（CLI 参数由子进程 main.py
+        自己吃）。配置非法（未知键 / 类型错）时 pydantic 直接抛错，这里统一
+        转成 AppError —— 严格模式：不兜底、不静默回退。
+
+        刻意延迟 import：Trading/Config.py 在导入期就构造默认配置快照
+        (DEFAULT_CONFIG)，配置写错时 import 直接抛。若放在本模块顶层
+        import，一个 .env 笔误会让整个后端服务起不来（行情页一起挂）。
+        放在这里 → 只有点「开启自动下单」才失败，且是 AppError（前端 4xx
+        提示 + gateway.log 留痕），故障面收敛到自动下单功能本身。
+        子进程侧 Trading/main.py 仍是启动期 fail-fast（它必须读配置）。
+        """
         try:
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError) as e:
-            raise AppError("读取交易网关配置失败 {}: {}".format(
-                cfg_path, e))
+            from Trading.Config import default_config
+            return default_config()
+        except Exception as e:
+            raise AppError("读取交易网关配置失败（Trading/Config.py）: {}: {}"
+                           .format(type(e).__name__, e))
 
     @staticmethod
-    def _check_live_gate(cfg_data: Dict[str, Any], broker: str) -> None:
+    def _check_live_gate(cfg: Any, broker: str) -> None:
         """实盘安全闸门预检（与 tg/brokers/simnow.py 内部判定同口径）。
 
         broker=live 或 broker_params.tq_market≠simnow → 实盘意图，
@@ -733,8 +739,8 @@ class AppTrader:
         """
         if broker not in ("simnow", "live"):
             return
-        bp = cfg_data.get("broker_params") or {}
-        market = str(bp.get("tq_market") or "simnow").strip().lower()
+        bp = cfg.broker_params
+        market = str(bp.tq_market or "simnow").strip().lower()
         is_live = broker == "live" or market != "simnow"
         if not is_live:
             return
@@ -742,11 +748,11 @@ class AppTrader:
             raise AppError(
                 "实盘安全闸门：broker='{}' 但 broker_params.tq_market 仍为 "
                 "'simnow'，实盘请填期货公司名（如 '创元期货'）".format(broker))
-        if not bool(bp.get("confirm_live_trading")):
+        if not bool(bp.confirm_live_trading):
             raise AppError(
                 "实盘安全闸门未开启：tq_market='{}' 非仿真市场，必须显式设置 "
                 "broker_params.confirm_live_trading=true 才能启动实盘自动下单。"
-                .format(bp.get("tq_market")))
+                .format(bp.tq_market))
 
     @staticmethod
     def _reset_engine_switch(out_dir: str) -> None:

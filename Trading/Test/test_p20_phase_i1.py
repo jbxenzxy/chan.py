@@ -9,8 +9,8 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
          LOCK，落簿反向 LOCKED 仓，次日对向信号走解锁入场管线）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
-Phase I1 配置（账户选择）
-    config.json：broker = dry_run / simnow / live
+Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
+    broker = dry_run / simnow / live
     broker_params.tq_market：simnow=仿真；实盘填期货公司名（如"创元期货"）
     实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式
       confirm_live_trading=true，否则拒绝启动（AppTrader.start 预检）。
@@ -362,7 +362,7 @@ if _HAS_APP:
         d = copy.deepcopy(DEFAULT_CONFIG)
         d["broker"] = broker
         d["broker_params"].update(bp)
-        return d
+        return GatewayConfig(**d)      # 配置是模型，不再是裸 dict
 
 
     def raises_apperror(fn, name):
@@ -508,22 +508,22 @@ def _read_json(path):
 
 
 with tmp_dir() as tmp:
-    cfg_path = os.path.join(tmp, "config.json")
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump({"broker": "dry_run", "state_dir": os.path.join(tmp, "state")},
-                  f)
     out_dir = os.path.join(tmp, "state")
     state_file = os.path.join(tmp, "auto_trader_state.json")
 
     captured = {}
     orig_popen = AT.subprocess.Popen
     orig_state_file = AT._STATE_FILE
+    orig_load_cfg = AT.AppTrader._load_cfg
     try:
         AT._STATE_FILE = state_file
+        # 配置不再来自 config.json：直接注入一份 GatewayConfig（dry_run）
+        AT.AppTrader._load_cfg = staticmethod(
+            lambda: GatewayConfig(broker="dry_run", state_dir=out_dir))
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start(cfg_path=cfg_path, out_dir=out_dir,
+        res = t.start(out_dir=out_dir,
                       symbol="KQ.m@CFFEX.SH", freq="5m",
                       sse_base="http://127.0.0.1:18081")
         cmd = captured.get("cmd") or []
@@ -546,17 +546,16 @@ with tmp_dir() as tmp:
               ("KQ.m@CFFEX.SH", "5m", "http://127.0.0.1:18081"))
         check("[9g] 状态文件含来源参数",
               _read_json(state_file).get("symbol"), "KQ.m@CFFEX.SH")
+        check("[9h0] 子进程命令不再带 --config（配置归一：无 config.json）",
+              "--config" in cmd, False)
     finally:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
+        AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
 # [9i] P1-3：start() 必须清除上次遗留 .stop_request，否则第二次开启秒退
 #（残留 flag 会让新看护线程一眼就叫停并锁仓退出）。
 with tmp_dir() as tmp:
-    cfg_path = os.path.join(tmp, "config.json")
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump({"broker": "dry_run", "state_dir": os.path.join(tmp, "state")},
-                  f)
     out_dir = os.path.join(tmp, "state")
     os.makedirs(out_dir, exist_ok=True)
     # 预置"上次 stop 残留"的 flag
@@ -565,11 +564,14 @@ with tmp_dir() as tmp:
         f.write("leftover from previous round\n")
     orig_popen = AT.subprocess.Popen
     orig_state_file = AT._STATE_FILE
+    orig_load_cfg = AT.AppTrader._load_cfg
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT.AppTrader._load_cfg = staticmethod(
+            lambda: GatewayConfig(broker="dry_run", state_dir=out_dir))
         AT.subprocess.Popen = (lambda cmd, **kw: _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start(cfg_path=cfg_path, out_dir=out_dir)   # 不应抛错、不应秒退
+        res = t.start(out_dir=out_dir)   # 不应抛错、不应秒退
         check("[9i] start() 清除了上一轮遗留的 .stop_request（P1-3）",
               not os.path.exists(leftover), True)
         check("[9i] 清除后子进程仍正常启动（running=True）", res.get("running"), True)
@@ -580,6 +582,7 @@ with tmp_dir() as tmp:
     finally:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
+        AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
 # [9j] P2-5 回援分支修正：只认本轮新增事件，历史 off + 上轮残留 state=false
 # 不得判优雅（否则"本轮超时强杀没锁仓"仍被谎报 graceful=True）。
@@ -614,20 +617,19 @@ with tmp_dir() as tmp:
 
 # [9h] 未传 symbol/freq → 回落到 cfg.source / 内置默认（不再落到 replay）
 with tmp_dir() as tmp:
-    cfg_path = os.path.join(tmp, "config.json")
-    with open(cfg_path, "w", encoding="utf-8") as f:
-        json.dump({"broker": "dry_run",
-                   "source": {"symbol": "KQ.m@CFFEX.RB", "freq": "15m"},
-                   "state_dir": os.path.join(tmp, "state")}, f)
     captured = {}
     orig_popen = AT.subprocess.Popen
     orig_state_file = AT._STATE_FILE
+    orig_load_cfg = AT.AppTrader._load_cfg
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT.AppTrader._load_cfg = staticmethod(lambda: GatewayConfig(
+            broker="dry_run", state_dir=os.path.join(tmp, "State"),
+            source={"symbol": "KQ.m@CFFEX.RB", "freq": "15m"}))
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start(cfg_path=cfg_path, out_dir=os.path.join(tmp, "State"))
+        res = t.start(out_dir=os.path.join(tmp, "State"))
         cmd = captured.get("cmd") or []
         check("[9h] 缺省品种走 cfg.source.symbol",
               cmd[cmd.index("--symbol") + 1], "KQ.m@CFFEX.RB")
@@ -636,6 +638,7 @@ with tmp_dir() as tmp:
     finally:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
+        AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -663,8 +666,7 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         t = AT.AppTrader()
         t._handle = AT._TraderProc(
-            _ExitedProc(), cfg_path=os.path.join(tmp, "config.json"),
-            out_dir=out_dir, started_at="2026-09-06 10:00:00",
+            _ExitedProc(), out_dir=out_dir, started_at="2026-09-06 10:00:00",
             broker="dry_run", symbol="KQ.m@CFFEX.IF", freq="5m",
             sse_base="http://127.0.0.1:18081")
         st = t.status()
@@ -693,26 +695,28 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [11] 无 config.json：目录与 gateway.log 也必须创建，并记录失败原因
+# [11] 配置加载失败：目录与 gateway.log 也必须创建，并记录失败原因
 #      回归：曾经校验失败在 makedirs 之前 raise → 什么都没有，无法定位
 # ════════════════════════════════════════════════════════════════
-print("\n[11] 配置缺失：仍落盘 gateway.log 记录失败原因")
+print("\n[11] 配置加载失败：仍落盘 gateway.log 记录失败原因")
 with tmp_dir() as tmp:
+    out_dir = os.path.join(tmp, "State")
     orig_state_file = AT._STATE_FILE
+    _env_bak = os.environ.get("TRADING_RISK__MAX_VOLUME")
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        # 真实失败路径：.env / 环境变量写错 → Trading/Config.py 严格校验抛错。
+        # 不再有"配置文件不存在"这种失败 —— 配置本来就不是文件了。
+        os.environ["TRADING_RISK__MAX_VOLUME"] = "abc"
         t = AT.AppTrader()
         try:
-            t.start(cfg_path=os.path.join(tmp, "no_such_config.json"),
-                    out_dir=os.path.join(tmp, "State"))
+            t.start(out_dir=out_dir)
             check("[11a] 应抛 AppError", "no_raise", "AppError")
         except AppError as e:
             check("[11a] 应抛 AppError", "AppError", "AppError")
-            check("[11b] 报错含配置路径",
-                  os.path.join(tmp, "no_such_config.json") in str(e), True)
-        log_path = os.path.join(tmp, "state", "gateway.log")
-        check("[11c] state 目录已创建", os.path.isdir(
-            os.path.join(tmp, "State")), True)
+            check("[11b] 报错含配置来源", "Trading/Config.py" in str(e), True)
+        log_path = os.path.join(out_dir, "gateway.log")
+        check("[11c] state 目录已创建", os.path.isdir(out_dir), True)
         check("[11d] gateway.log 已创建", os.path.isfile(log_path), True)
         content = ""
         try:
@@ -721,8 +725,12 @@ with tmp_dir() as tmp:
         except OSError:
             pass
         check("[11e] 日志含开启请求", "收到开启请求" in content, True)
-        check("[11f] 日志含失败原因", "配置文件不存在" in content, True)
+        check("[11f] 日志含失败原因", "读取配置失败" in content, True)
     finally:
+        if _env_bak is None:
+            os.environ.pop("TRADING_RISK__MAX_VOLUME", None)
+        else:
+            os.environ["TRADING_RISK__MAX_VOLUME"] = _env_bak
         AT._STATE_FILE = orig_state_file
 
 
@@ -731,57 +739,44 @@ with tmp_dir() as tmp:
 #      回归：曾经 os.path.abspath("./State") 落到后端进程 CWD，
 #      用户按 Trading/State 找不到目录/日志
 # ════════════════════════════════════════════════════════════════
-print("\n[12] 相对 state_dir 解析到配置文件所在目录（Trading/State）")
+print("\n[12] 相对 state_dir 以 Trading/ 为基准（不受后端进程 CWD 影响）")
+_cwd0 = os.getcwd()
 with tmp_dir() as tmp:
     orig_state_file = AT._STATE_FILE
     orig_popen = AT.subprocess.Popen
+    orig_root = AT._TG_ROOT
+    orig_load_cfg = AT.AppTrader._load_cfg
     try:
-        cfg_dir = os.path.join(tmp, "tg_home")
-        os.makedirs(cfg_dir, exist_ok=True)
-        cfg_path = os.path.join(cfg_dir, "config.json")
-        with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump({"broker": "dry_run", "state_dir": "./State"}, f)
+        # 把"Trading 目录"临时指向 tmp 下的假家，避免测试污染真实仓库
+        AT._TG_ROOT = os.path.join(tmp, "Trading")
+        os.makedirs(AT._TG_ROOT, exist_ok=True)
+        AT.AppTrader._load_cfg = staticmethod(
+            lambda: GatewayConfig(broker="dry_run", state_dir="./State"))
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         captured = {}
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start(cfg_path=cfg_path)   # 不传 out_dir：走 state_dir 解析
-        expected = os.path.join(cfg_dir, "State")
+        res = t.start()   # 不传 out_dir：走 state_dir 解析
+        expected = os.path.join(AT._TG_ROOT, "State")
         cmd = captured.get("cmd") or []
-        check("[12a] --out 解析到配置目录/State",
+        check("[12a] --out 解析到 Trading/State",
               "--out" in cmd and cmd[cmd.index("--out") + 1] == expected, True)
-        check("[12b] state 目录在配置目录下", os.path.isdir(expected), True)
-        check("[12c] gateway.log 在配置目录下",
+        check("[12b] state 目录在 Trading 下", os.path.isdir(expected), True)
+        check("[12c] gateway.log 在 Trading/State 下",
               os.path.isfile(os.path.join(expected, "gateway.log")), True)
-        # 模拟用户后端从仓库根启动：config 在 Trading/ 时
-        # 必须落到 Trading/State，而不是 CWD/state
+        # 模拟用户后端从仓库根启动：CWD=tmp 时也不得落到 tmp/State
         os.chdir(tmp)
-        cfg2 = os.path.join(tmp, "Trading")
-        os.makedirs(cfg2, exist_ok=True)
-        cfg_path2 = os.path.join(cfg2, "config.json")
-        with open(cfg_path2, "w", encoding="utf-8") as f:
-            json.dump({"broker": "dry_run", "state_dir": "./State"}, f)
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state_2.json")  # 新文件，避免误恢复
-        captured2 = {}
-        AT.subprocess.Popen = (lambda cmd, **kw:
-                               captured2.update(cmd=cmd) or _FakeProc(cmd))
-        t2 = AT.AppTrader()
-        t2.start(cfg_path=cfg_path2)
-        cmd2 = captured2.get("cmd") or []
-        check("[12d] --out 落到 Trading/State",
-              "--out" in cmd2
-              and cmd2[cmd2.index("--out") + 1] == os.path.join(cfg2, "State"),
-              True)
-        check("[12e] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "State")),
+        check("[12d] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "State")),
               False)
-        check("[12f] 落到 Trading/State",
-              os.path.isdir(os.path.join(cfg2, "State")), True)
-        check("[12g] gateway.log 已创建",
-              os.path.isfile(os.path.join(cfg2, "state", "gateway.log")), True)
+        check("[12e] 落到 Trading/State", os.path.isdir(expected), True)
+        check("[12f] 状态文件记录 out_dir", res.get("out_dir"), expected)
     finally:
+        os.chdir(_cwd0)
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
+        AT._TG_ROOT = orig_root
+        AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
 
 print("\n" + "=" * 60)

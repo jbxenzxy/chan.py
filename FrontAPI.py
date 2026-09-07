@@ -688,7 +688,7 @@ async def api_trader_auto_order_on(body: dict = Body(default={})):
 
     body（可选）：{"symbol": "KQ.m@CFFEX.IF", "freq": "5m",
                    "sse_base": "http://127.0.0.1:18081"}
-    不传时走 config.json 的 source 段，再缺省 KQ.m@CFFEX.IF / 5m。
+    不传时走 Trading/Config.py 的 source 段，再缺省 KQ.m@CFFEX.IF / 5m。
     """
     try:
         result = await run_in_threadpool(
