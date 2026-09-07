@@ -46,6 +46,9 @@ if not _TG_ROOT:
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
+from Trading.Config import BrokerParamsConfig  # noqa: E402
+
+
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -80,7 +83,7 @@ def make_broker(api=None, spec=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
     b.spec = spec or InstrumentSpec()
-    b.params = {}
+    b.params = BrokerParamsConfig().model_dump()   # 严格模式：params 必须完整
     b._api = api
     b._trade_symbol = b.spec.trade_symbol
     b._seq = itertools.count(1)

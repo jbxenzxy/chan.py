@@ -86,7 +86,7 @@ def tmp_dir():
 from Trading.Broker.Base import OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
@@ -170,7 +170,9 @@ def _rec(vol, price=4547.0):
 
 def make_simnow_broker():
     """无凭据实例化 SimNowBroker（early return，_api=None，不碰网络）。"""
-    return SimNowBroker(InstrumentSpec(), params={})
+    # 严格模式：broker_params 必须完整（这里用配置模型的默认值全量传入）
+    return SimNowBroker(InstrumentSpec(),
+                        params=dict(DEFAULT_CONFIG["broker_params"]))
 
 
 # ════════════════════════════════════════════════════════════════
@@ -315,14 +317,12 @@ def make_engine(tmpdir, *, broker=None):
     cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 10
     cfg.risk.enforce_session = False
-    cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
-    cfg.sizing["enabled"] = False
-    cfg.sizing["fixed_volume"] = 1
+    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
     spec = InstrumentSpec()
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": 5.0, "stop_loss_points": 10.0})
+    exitp = DefaultExitPolicy({"take_profit_points": 5.0})
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
     return GatewayEngine(cfg, broker, entry, exitp, store, ev)

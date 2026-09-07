@@ -91,7 +91,7 @@ def tmp_dir():
 
 from Trading.Broker.Base import Broker, OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
@@ -207,17 +207,17 @@ def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
     cfg.risk.max_volume = cfg_risk_max_volume
     cfg.risk.enforce_session = False
     cfg.risk.close_before_session_end = close_before_session_end
-    cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
-    cfg.sizing["enabled"] = False
-    cfg.sizing["fixed_volume"] = 1
-    cfg.sizing["split_positions"] = split_positions
+    # split_positions 已随分仓机制删除（严格模式下该键会被 SizingConfig 拒绝），
+    # 这里只保留参数以兼容调用方，不再写进配置。
+    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
 
     spec = InstrumentSpec()
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": tp_points,
-                               "stop_loss_points": stop_points})
+    # 注：旧代码传的 stop_loss_points 是错键（策略实际读 stop_points），
+    #    此前被静默忽略；严格模式下会被拒绝，故移除以保持行为不变。
+    exitp = DefaultExitPolicy({"take_profit_points": tp_points})
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
     eng = GatewayEngine(cfg, broker, entry, exitp, store, ev)
@@ -520,12 +520,9 @@ with tmp_dir() as td:
     cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 10
-    cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
-    cfg.sizing["enabled"] = False
-    cfg.sizing["fixed_volume"] = 1
-    cfg.sizing["split_positions"] = 1
+    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": 5.0, "stop_loss_points": 10.0})
+    exitp = DefaultExitPolicy({"take_profit_points": 5.0})
     store = Store(os.path.join(td, "state.db"))
     # 写入持仓
     pos_dict = make_position(Side.LONG, 1, 4545.0, 1, signal_key="restore-test").to_dict()

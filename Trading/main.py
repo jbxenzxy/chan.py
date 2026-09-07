@@ -9,11 +9,13 @@ M1 交易网关 · CLI 入口
     # 实时接入 chan.py 的 SSE
     python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
-    # 生成一份可编辑的配置
-    python main.py --init-config ./config.json
-    python main.py --config ./config.json
+配置（2026-09-07 归一）：**只有一处** —— Trading/Config.py
+    · 改默认值        → 改 Trading/Config.py 里对应模型字段
+    · 临时改（不入库）→ 环境变量或仓库根 .env（TRADING_ 前缀，如 TRADING_SOURCE__FREQ=15s）
+    · 单次覆盖        → 命令行 --symbol / --freq / --broker / --source ...
+    · 账户密码        → 只走环境变量（SN_ACCOUNT / LIVE_ACCOUNT / TQ_ACCOUNT ...），不落盘
 
-换止盈止损：改 config.json 的 exit_policy.params，或换一个策略类名。
+换止盈止损：改 Trading/Config.py 的 ExitParamsConfig（或换一个策略类名），
     引擎 / 信号源 / broker 都不需要动。
 """
 from __future__ import annotations
@@ -30,7 +32,7 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根（import Trading）
 
 from Trading import Broker, Source, Strategy      # noqa: E402  导入触发注册
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import GatewayConfig                         # noqa: E402
 from Trading.Engine.Engine import GatewayEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
 from Trading.Infra.Store import Store                           # noqa: E402
@@ -47,30 +49,33 @@ _STOP_REQUEST = ".stop_request"
 
 
 def build_runtime(args):
-    if args.config and os.path.isfile(args.config):
-        cfg = GatewayConfig.load(args.config)
-    else:
-        cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
-        if args.config:
-            print("[cfg] 配置文件不存在，使用内置默认: {}".format(args.config))
+    # 配置来源（2026-09-07 归一）：Trading/Config.py 模型默认值
+    #   ← 环境变量/仓库根 .env（TRADING_ 前缀，pydantic-settings 自动读取）
+    #   ← 命令行参数（最高优先级，下面逐个套用）
+    cfg = GatewayConfig()
 
-    src = dict(cfg.source)
+    # 命令行覆盖：只覆盖显式传了的项（None 表示没传）
     if args.source:
-        src["type"] = args.source
+        cfg.source.type = args.source
     if args.replay_dir:
-        src["replay_dir"] = args.replay_dir
+        cfg.source.replay_dir = args.replay_dir
     if args.symbol:
-        src["symbol"] = args.symbol
+        cfg.source.symbol = args.symbol
     if args.freq:
-        src["freq"] = args.freq
+        cfg.source.freq = args.freq
     if args.sse_base:
-        src["sse_base"] = args.sse_base
+        cfg.source.sse_base = args.sse_base
     if args.speed is not None:
-        src["speed"] = args.speed
+        cfg.source.speed = args.speed
     if args.only_alive:
-        src["only_alive"] = True
+        cfg.source.only_alive = True
     if args.bar_mode:
-        src["bar_mode"] = args.bar_mode
+        cfg.source.bar_mode = args.bar_mode
+    if args.broker:
+        cfg.broker = args.broker
+
+    # 下游（Source.build_source）仍按 dict 消费
+    src: Dict[str, Any] = cfg.source.model_dump()
 
     out = args.out or cfg.state_dir
     if not os.path.isabs(out):
@@ -91,13 +96,12 @@ def build_runtime(args):
     sys.stderr = _log_fh
     spec = cfg.instrument
 
-    broker = Broker.build_broker(args.broker or cfg.broker, spec, cfg.broker_params)
+    broker = Broker.build_broker(args.broker or cfg.broker, spec,
+                                 cfg.broker_params.model_dump())
     entry = Strategy.build_entry_policy(
-        cfg.entry_policy.get("name", "DefaultEntryPolicy"),
-        cfg.entry_policy.get("params") or {})
+        cfg.entry_policy.name, cfg.entry_policy.params.model_dump())
     exitp = Strategy.build_exit_policy(
-        cfg.exit_policy.get("name", "DefaultExitPolicy"),
-        cfg.exit_policy.get("params") or {})
+        cfg.exit_policy.name, cfg.exit_policy.params)
     store_path = os.path.join(out, "state.db")
     store = Store(store_path)
 
@@ -169,12 +173,6 @@ def print_summary(engine: GatewayEngine, out: str, src: Dict[str, Any],
 
 
 def run(args) -> int:
-    if args.init_config:
-        GatewayConfig.from_dict(DEFAULT_CONFIG).save_example(args.init_config)
-        print("[cfg] 已生成配置模板: {}".format(os.path.abspath(args.init_config)))
-        print("      改完用 python main.py --config <路径> 启动")
-        return 0
-
     cfg, engine, source, store, ev, out, src = build_runtime(args)
 
     # P1-3 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
@@ -308,9 +306,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description="缠论信号 → 交易执行网关（M1 dry-run 骨架）",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", help="配置文件路径（JSON）")
-    ap.add_argument("--init-config", metavar="PATH",
-                    help="生成一份默认配置模板并退出")
+    # 配置只在 Trading/Config.py（+ 环境变量/根 .env 覆盖），不再有 --config JSON。
     ap.add_argument("--source", choices=["replay", "sse"], help="信号源类型")
     ap.add_argument("--broker", choices=sorted(Broker.BROKERS), help="执行通道")
     ap.add_argument("--replay-dir", help="回放目录（含 signals.json / klines.json）")

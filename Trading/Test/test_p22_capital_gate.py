@@ -64,7 +64,7 @@ def tmp_dir():
 
 from Trading import Broker  # noqa: E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
@@ -138,6 +138,7 @@ class StubSizer:
         self.max_volume = int(max_vol)
         self.equity_source = src
         self._per = 1
+        self.unlock_no_new_open = True   # 严格模式：引擎直接读该属性
 
     def per_lot_margin(self, price):
         return self._margin

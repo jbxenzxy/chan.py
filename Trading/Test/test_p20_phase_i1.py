@@ -82,7 +82,7 @@ from Trading import Broker  # noqa: E402  注册 dry_run/simnow/live
 from Trading.Broker.Base import BROKERS, build_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import LiveCTPBroker, SimNowBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
@@ -409,11 +409,12 @@ if _HAS_APP:
 print("\n[8] broker 路由（SimNowBroker.is_live / LiveCTPBroker 注册）")
 spec = InstrumentSpec()
 
-b_sim = SimNowBroker(spec, {"tq_market": "simnow"})
+_BP = dict(DEFAULT_CONFIG["broker_params"])   # 严格模式：params 必须完整
+b_sim = SimNowBroker(spec, dict(_BP, tq_market="simnow"))
 check("[8a] tq_market=simnow → is_live=False", b_sim.is_live, False)
 
-b_live = SimNowBroker(spec, {"tq_market": "创元期货",
-                             "confirm_live_trading": True})
+b_live = SimNowBroker(spec, dict(_BP, tq_market="创元期货",
+                                  confirm_live_trading=True))
 check("[8b] tq_market=创元期货 → is_live=True", b_live.is_live, True)
 check("[8c] 无凭据 → _conn_error 指向实盘/天勤",
       b_live._conn_error is not None

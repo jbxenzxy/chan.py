@@ -19,8 +19,7 @@ App/*.json
 # ===== Trading 运行产物与本地配置 =====
 # 回放/实盘的输出目录（events.jsonl、summary 等）与 sqlite 状态目录
 Trading/State/
-# 本地个性化配置（由 config.example.json 复制而来，不入库）
-Trading/config.json
+# 本地个性化配置已改为：Trading/Config.py（入库默认值）+ 环境变量/仓库根 .env（不入库）
 # SQLite WAL/SHM 附加文件（与上方 *.db 配套；*.db 已 ignore 但 WAL/SHM 需单独忽略）
 *.db-wal
 *.db-shm

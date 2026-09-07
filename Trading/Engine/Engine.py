@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..Broker.Base import Broker
-from ..Infra.Config import GatewayConfig
+from ..Config import GatewayConfig
 from ..Infra.EventLog import EventLog
 from .PositionBook import PositionBook, PositionBookError
 from ..Risk.RiskGate import RiskGate
@@ -977,7 +977,9 @@ class GatewayEngine(ReconcileMixin):
             want, why_vol = 0, "sizing_error_fallback_no_new_open"
 
         new_lots = max(0, int(want) - v)
-        if new_lots > 0 and getattr(self.sizer, "unlock_no_new_open", False):
+        # 严格模式（2026-09-07）：sizer 一定有该字段（来自 SizingConfig），
+        # 不再用 getattr(..., False) 兜底 —— 配置缺失应在启动期暴露。
+        if new_lots > 0 and self.sizer.unlock_no_new_open:
             # 开关：解锁后绝不新开今仓（金融期货平今高手续费规避）
             self.ev.write("unlock_no_new_open",
                           key=sig.key, unlocked=v, want=want, skipped=new_lots,

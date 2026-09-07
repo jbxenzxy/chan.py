@@ -66,7 +66,7 @@ def tmp_dir():
 
 
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig, RiskConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig, RiskConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: E402
@@ -131,16 +131,27 @@ risk2 = RiskConfig(max_open_positions=3)
 check("RiskConfig(max_open_positions=3) 显式赋值 ok",
       risk2.max_open_positions, 3)
 
+def _raises(fn) -> bool:
+    """严格模式断言用：fn() 必须抛异常。"""
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 risk3 = RiskConfig(max_open_positions=5)
 check("RiskConfig(max_open_positions=5) 显式赋值 ok",
       risk3.max_open_positions, 5)
 
-# 字段在 known fields 内（from_dict 不会丢）
-risk4 = RiskConfig.from_dict({"max_open_positions": 7, "max_volume": 2})
-check("RiskConfig.from_dict({max_open_positions:7, max_volume:2}) → 7",
+# 字段都是模型字段（未知键会报错，缺字段用默认值）
+risk4 = RiskConfig(**{"max_open_positions": 7, "max_volume": 2})
+check("RiskConfig(**{max_open_positions:7, max_volume:2}) → 7",
       risk4.max_open_positions, 7)
-check("RiskConfig.from_dict 不影响 max_volume",
+check("RiskConfig(**{}) 不影响 max_volume",
       risk4.max_volume, 2)
+check("严格模式：RiskConfig 未知键报错",
+      _raises(lambda: RiskConfig(bogus_key=1)), True)
 
 # DEFAULT_CONFIG 中也要有 max_open_positions（默认=1）
 cfg0 = GatewayConfig.from_dict(DEFAULT_CONFIG)

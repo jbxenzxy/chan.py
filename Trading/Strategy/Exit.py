@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
-from ..Infra.Config import DEFAULT_CONFIG
+from ..Config import DefaultExitParamsConfig, ExitParamsConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from .Base import ExitCheck, ExitPolicy, register_exit
@@ -30,11 +30,13 @@ class DefaultExitPolicy(ExitPolicy):
 
     def __init__(self, params=None):
         super().__init__(params)
-        self.take_profit_points = float(self.params.get("take_profit_points", 10.0))
-        self.stop_at_signal_extreme = bool(self.params.get("stop_at_signal_extreme", True))
-        self.stop_points = float(self.params.get("stop_points", 5.0) or 0.0)
-        self.stop_buffer_ticks = float(self.params.get("stop_buffer_ticks", 0.0) or 0.0)
-        self.max_hold_bars = int(self.params.get("max_hold_bars", 0) or 0)
+        p = DefaultExitParamsConfig(**(self.params or {}))
+        self.p = p
+        self.take_profit_points = float(p.take_profit_points)
+        self.stop_at_signal_extreme = p.stop_at_signal_extreme
+        self.stop_points = float(p.stop_points or 0.0)
+        self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
+        self.max_hold_bars = int(p.max_hold_bars or 0)
 
     def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
         buf = self.stop_buffer_ticks * spec.price_tick
@@ -98,9 +100,9 @@ class DefaultExitPolicy(ExitPolicy):
         return None
 
 
-# T4（2026-09-05）：参数默认值单一事实源 —— 无参构造的默认值一律回落
-# config.py DEFAULT_CONFIG["exit_policy"]["params"]，不在策略里再养一套数字。
-_DEF_EXIT_PARAMS: dict = dict(DEFAULT_CONFIG["exit_policy"]["params"])
+# 参数默认值单一事实源（2026-09-07 严格模式）：
+#   不再从 DEFAULT_CONFIG 抄一份 `_DEF_EXIT_PARAMS` 兜底，直接由 Trading/Config.py
+#   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
 
 
 @register_exit
@@ -110,25 +112,27 @@ class LayeredExitPolicy(ExitPolicy):
     # ---------- 参数 ----------
     def __init__(self, params=None):
         super().__init__(params)
+        p = ExitParamsConfig(**(self.params or {}))
+        self.p = p
         # L1 R 倍数定基线
-        self.stop_at_signal_extreme = bool(self.params.get("stop_at_signal_extreme", _DEF_EXIT_PARAMS["stop_at_signal_extreme"]))
-        self.stop_buffer_ticks = float(self.params.get("stop_buffer_ticks", _DEF_EXIT_PARAMS["stop_buffer_ticks"]) or 0.0)
-        self.r_multiple_tp = float(self.params.get("r_multiple_tp", _DEF_EXIT_PARAMS["r_multiple_tp"]))
-        self.min_r_points = float(self.params.get("min_r_points", _DEF_EXIT_PARAMS["min_r_points"]))
+        self.stop_at_signal_extreme = p.stop_at_signal_extreme
+        self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
+        self.r_multiple_tp = float(p.r_multiple_tp)
+        self.min_r_points = float(p.min_r_points)
         # L2 波动率(ATR)定宽窄
-        self.use_atr = bool(self.params.get("use_atr", _DEF_EXIT_PARAMS["use_atr"]))
-        self.atr_period = int(self.params.get("atr_period", _DEF_EXIT_PARAMS["atr_period"]))
-        self.atr_sl_multiple = float(self.params.get("atr_sl_multiple", _DEF_EXIT_PARAMS["atr_sl_multiple"]))
+        self.use_atr = p.use_atr
+        self.atr_period = int(p.atr_period)
+        self.atr_sl_multiple = float(p.atr_sl_multiple)
         # L3 移动/保本锁利
-        self.use_trailing = bool(self.params.get("use_trailing", _DEF_EXIT_PARAMS["use_trailing"]))
-        self.breakeven_trigger_r = float(self.params.get("breakeven_trigger_r", _DEF_EXIT_PARAMS["breakeven_trigger_r"]))
-        self.breakeven_buffer_ticks = float(self.params.get("breakeven_buffer_ticks", _DEF_EXIT_PARAMS["breakeven_buffer_ticks"]) or 0.0)
-        self.trailing_trigger_r = float(self.params.get("trailing_trigger_r", _DEF_EXIT_PARAMS["trailing_trigger_r"]))
-        self.trailing_atr_multiple = float(self.params.get("trailing_atr_multiple", _DEF_EXIT_PARAMS["trailing_atr_multiple"]))
-        self.trailing_distance_points = float(self.params.get("trailing_distance_points", _DEF_EXIT_PARAMS["trailing_distance_points"]) or 0.0)
+        self.use_trailing = p.use_trailing
+        self.breakeven_trigger_r = float(p.breakeven_trigger_r)
+        self.breakeven_buffer_ticks = float(p.breakeven_buffer_ticks or 0.0)
+        self.trailing_trigger_r = float(p.trailing_trigger_r)
+        self.trailing_atr_multiple = float(p.trailing_atr_multiple)
+        self.trailing_distance_points = float(p.trailing_distance_points or 0.0)
         # L4 时间/收盘兜底
-        self.max_hold_bars = int(self.params.get("max_hold_bars", _DEF_EXIT_PARAMS["max_hold_bars"]) or 0)
-        self.session_end_hhmm = str(self.params.get("session_end_hhmm", _DEF_EXIT_PARAMS["session_end_hhmm"]) or "")
+        self.max_hold_bars = int(p.max_hold_bars or 0)
+        self.session_end_hhmm = str(p.session_end_hhmm or "")
         # T3（2026-09-05）：EOD 按"bar 结束时刻"判定所需的 bar 间隔（秒），
         # 由 on_bar 用相邻两根闭合 K 线推断；未知时退回旧口径（起点判定）保底。
         self._bar_secs: Optional[int] = None

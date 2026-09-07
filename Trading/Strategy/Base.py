@@ -7,7 +7,7 @@
 
 换策略的正确姿势
     新建一个 py 文件 → 继承 ExitPolicy / EntryPolicy → 用 @register 装饰
-    → config.json 里把 name 改成你的类名。其余代码一行不动。
+    → 在 Trading/Config.py 里把 name 改成你的类名。其余代码一行不动。
 
 出场判定返回 ExitCheck；若策略想顺带更新止盈止损（跟踪止损、移动止盈），
 在 ExitCheck.plan 里带上新的 ExitPlan，引擎会持久化。

@@ -15,10 +15,10 @@ cancel_pending(假 key) → stats()。**不发任何委托**。
 
 用法（请在交易时段运行，SimNow 非交易时段可能连接失败/行情停推）：
     cd Trading
-    python tests/smoke_simnow_phase_g.py --config config.json
+    python tests/smoke_simnow_phase_g.py
 
 可选真单验证（自担风险，1 手开平一轮，验证 trade_confirmed 对真单的判定）：
-    python tests/smoke_simnow_phase_g.py --config config.json --trade
+    python tests/smoke_simnow_phase_g.py --trade
 """
 from __future__ import annotations
 
@@ -49,6 +49,7 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Broker.Base import OrderIntent, build_broker  # noqa: E402
+from Trading.Config import GatewayConfig  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import Side  # noqa: E402
 
@@ -67,28 +68,18 @@ def check(name, ok, detail=""):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase G SimNow 真连冒烟（默认只读）")
-    ap.add_argument("--config", default=os.path.join(_TG_ROOT, "config.json"),
-                    help="config.json 路径（默认 Trading/config.json）")
     ap.add_argument("--trade", action="store_true",
                     help="【有风险】追加 1 手真实开平，验证 trade_confirmed 对真单判定")
     args = ap.parse_args()
 
-    if not os.path.exists(args.config):
-        print("✗ 找不到配置文件: {}（SimNow 凭据在 broker_params 或环境变量）".format(args.config))
-        return 2
-    with open(args.config, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-
-    inst = cfg.get("instrument") or {}
-    spec = InstrumentSpec(
-        signal_symbol=inst.get("signal_symbol", "KQ.m@CFFEX.IF"),
-        trade_symbol=inst.get("trade_symbol", ""),
-        price_tick=float(inst.get("price_tick", 0.2)),
-    )
-    params = cfg.get("broker_params") or {}
-    if str(cfg.get("broker", "")) != "simnow":
-        print("⚠ config.broker={}，本脚本用于 simnow 通道；继续尝试（凭据可能来自环境变量）"
-              .format(cfg.get("broker")))
+    # 配置来自 Trading/Config.py（+ 环境变量/仓库根 .env 覆盖），不再读 config.json。
+    # 凭据一律走环境变量：SN_ACCOUNT / SN_PASSWORD / TQ_ACCOUNT / TQ_PASSWORD
+    cfg = GatewayConfig()
+    spec = cfg.instrument
+    params = cfg.broker_params.model_dump()
+    if cfg.broker != "simnow":
+        print("⚠ 配置 broker={}（可用 TRADING_BROKER=simnow 覆盖），本脚本用于 "
+              "simnow 通道；继续尝试（凭据来自环境变量）".format(cfg.broker))
 
     print("── ① 连接 SimNow ──")
     b = build_broker("simnow", spec, params)

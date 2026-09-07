@@ -3,7 +3,7 @@
 Broker 接口（可插拔点 ③）
 =========================
 引擎只认这个接口，不认 SimNow / 创元 / dry-run。
-接真实账户时新建一个类实现 `submit()`，在 config.json 里换 name 即可，
+接真实账户时新建一个类实现 `submit()`，在 Trading/Config.py 里换 name 即可，
 引擎与策略层一行都不用改。
 
 submit() 被设计成**同步返回 Order**，是为了让 dry-run 与真实 CTP 语义统一：

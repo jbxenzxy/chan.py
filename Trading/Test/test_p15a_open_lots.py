@@ -75,7 +75,7 @@ from Trading import Broker  # noqa: E402  注册 dry_run
 import json  # noqa: E402
 from Trading.Broker.Base import OrderIntent  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Risk.RiskGate import RiskGate  # noqa: E402
@@ -146,12 +146,13 @@ def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
     cfg.risk.enforce_session = False
-    cfg.sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
-    cfg.sizing["enabled"] = False
-    cfg.sizing["fixed_volume"] = fixed_volume
-    cfg.sizing["unlock_no_new_open"] = unlock_no_new_open
+    # 严格模式：sizing 是配置模型，覆盖走 SizingConfig（未知键会报错）
+    sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
+    sizing.update({"enabled": False, "fixed_volume": fixed_volume,
+                   "unlock_no_new_open": unlock_no_new_open})
     if sizing_max_volume:
-        cfg.sizing["max_volume"] = sizing_max_volume
+        sizing["max_volume"] = sizing_max_volume
+    cfg.sizing = SizingConfig(**sizing)
 
     spec = InstrumentSpec()
     if broker is None:
@@ -196,7 +197,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0):
 # [1] 术语纪律：分仓机制已彻底删除
 # ════════════════════════════════════════════════════════════════
 print("\n[1] 术语纪律：分仓（split）机制已删除")
-sz = PositionSizer({})
+sz = PositionSizer(SizingConfig())
 check("sizer 无 split_positions 字段", hasattr(sz, "split_positions"), False)
 check("sizer 无 split_unlock 字段", hasattr(sz, "split_unlock"), False)
 check("sizer 无 size_positions 方法", hasattr(sz, "size_positions"), False)

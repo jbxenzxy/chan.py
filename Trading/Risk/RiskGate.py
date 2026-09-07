@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Tuple
 
-from ..Infra.Config import RiskConfig
+from ..Config import RiskConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Side
 

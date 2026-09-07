@@ -72,16 +72,16 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from ..Infra.Config import DEFAULT_CONFIG
+from ..Config import BrokerParamsConfig
+from ..Config import BrokerParamsConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import INTENT_TO_OFFSET, Broker, register_broker
 
-# broker 参数默认值的**单一事实源**：tg/config.py DEFAULT_CONFIG["broker_params"]。
-# 本文件不再自带任何兜底数值 —— params（用户 config.json）缺键时一律回到这里取，
-# 避免"config.py 一份、simnow.py 一份"双处维护导致默认值漂移
-# （2026-09-05 修复：旧代码 fill_timeout_open 兜底 10.0，与 config.py 的 5.0 矛盾）。
-_BROKER_PARAMS_DEFAULT = DEFAULT_CONFIG["broker_params"]
+# broker 参数默认值的**单一事实源**：Trading/Config.py 的 BrokerParamsConfig 模型。
+# 本文件不再自带任何兜底数值（2026-09-07 严格模式）—— params 由配置模型构造，
+# 键必然齐全；取不到说明配置模型漏了字段，属于代码 bug，直接 fail-fast 抛异常。
+# （2026-09-05 曾修：旧代码 fill_timeout_open 兜底 10.0，与配置表的 5.0 矛盾。）
 
 _DIRECTION = {Side.LONG: "BUY", Side.SHORT: "SELL"}
 # close 类报文（CLOSE/UNLOCK）的方向：平多=SELL、平空=BUY（与 _DIRECTION 相反）。
@@ -238,6 +238,10 @@ class SimNowBroker(Broker):
 
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         super().__init__(spec, params)
+        # 严格模式（2026-09-07）：broker_params 以 Trading/Config.py 的
+        # BrokerParamsConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
+        # 传了模型里没有的键（拼错 / 残留旧键）直接报错，不再静默忽略。
+        self.params = BrokerParamsConfig(**(params or {})).model_dump()
         self._api = None
         # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
         self._quote = None
@@ -320,29 +324,26 @@ class SimNowBroker(Broker):
             self._capture_initial_account_state()
 
     def _cred(self, param_key: str, env_key: str) -> str:
-        # P3-7（第三轮修正）：环境变量优先于 config.json。否则一旦配置文件里
+        # P3-7：凭据只走环境变量。2026-09-07 起配置里不再有账号密码字段（若将来
         # 残留明文密码，会反客为主覆盖开发者想用 LIVE_PASSWORD 等环境变量注入
         # 的凭据（与"密码不落盘"的意图相反）。env 有值用 env；env 为空才回落
-        # config（向后兼容：只配 config.json、不设 env 的场景仍可用）。
+        # 又在配置里加回明文密码，会反客为主覆盖环境变量，与"密码不落盘"相悖）。
         v = (os.environ.get(env_key) or self.params.get(param_key) or "").strip()
         return v
 
     def _param(self, key: str) -> Any:
-        """读 broker 参数：params（用户 config.json 的 broker_params）优先，
-        缺键回落到 tg/config.py DEFAULT_CONFIG["broker_params"]（单一事实源）。
+        """读 broker 参数：只从配置模型给全的 params 里取（严格模式，无兜底）。
 
-        两层都没有 → 直接抛 KeyError（fail-fast）：参数漏定义应该在配置阶段
-        暴露，而不是带着错误默认值悄悄跑。
+        params 由 Trading/Config.py 的 BrokerParamsConfig 构造，键必然齐全；
+        取不到说明配置模型漏了字段 —— 属于代码 bug，直接抛异常暴露，
+        绝不带着"看起来合理"的默认值悄悄跑。
         """
         v = self.params.get(key)
         if v is not None:
             return v
-        try:
-            return _BROKER_PARAMS_DEFAULT[key]
-        except KeyError:
-            raise KeyError(
-                "broker 参数 '{}' 未在 config.json broker_params 配置，"
-                "且 tg/config.py DEFAULT_CONFIG.broker_params 也无默认值".format(key))
+        raise KeyError(
+            "broker 参数 '{}' 未在 BrokerParamsConfig（Trading/Config.py）定义，"
+            "或构造 broker 时传入的 broker_params 不完整".format(key))
 
     # ---------------- 连接与合约映射 ----------------
     def _connect(self) -> None:
@@ -1232,7 +1233,7 @@ class SimNowBroker(Broker):
 class LiveCTPBroker(SimNowBroker):
     """实盘 CTP broker（Phase I1）。
 
-    config.json 里 ``"broker": "live"`` 时使用。与 SimNowBroker 共享全部
+    Trading/Config.py 里 ``broker = "live"`` 时使用。与 SimNowBroker 共享全部
     逻辑（超价/追价/P0..P6 保障），仅 name 不同 → 账户路由走实盘分支：
     TqAccount(tq_market=期货公司名, live_account, live_password)，
     且必须显式开启 broker_params.confirm_live_trading=true 才允许启动。

@@ -53,7 +53,7 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-    from Trading.Infra.Config import DEFAULT_CONFIG  # noqa: E402
+    from Trading.Config import DEFAULT_CONFIG  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
     from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 except Exception as e:  # pragma: no cover
@@ -164,7 +164,8 @@ def make_broker(api=None, params=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
     b.spec = InstrumentSpec()
-    b.params = dict(params or {})
+    # 严格模式：以配置模型默认值为底，测试只覆盖自己关心的键
+    b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
     b._trade_symbol = b.spec.trade_symbol
     b._seq = itertools.count(1)
@@ -177,7 +178,7 @@ def make_broker(api=None, params=None):
 _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
          "close_max_chase": 2, "chase_interval": 0.01}
 
-print("\n[1] 配置默认值（单一事实源 tg/config.py）")
+print("\n[1] 配置默认值（单一事实源 Trading/Config.py）")
 bp = DEFAULT_CONFIG["broker_params"]
 check("overprice_points 合并为 1.0（四类报单共用）", bp["overprice_points"], 1.0)
 check("open_advanced 已删除（恒定 FOK，无 GFD 回退）", "open_advanced" in bp, False)

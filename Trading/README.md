@@ -11,7 +11,7 @@
 ```
 Trading/                        # 自动下单网关（Python 包）
 ├── main.py              # CLI 入口
-├── config_example.json         # 配置模板（--init-config 生成）
+├── Config.py                   # ★ 配置总入口（唯一；模型默认值 + 环境变量/CLI 覆盖）
 ├── replay_data/                # demo 回放数据（与 M0 录制器格式一致）
 ├── Source/                     # ① 信号源（实时 / 回放产出相同事件流）
 │   ├── SSE.py                  # 实时订阅 chan.py 的 SSE
@@ -40,7 +40,7 @@ Trading/                        # 自动下单网关（Python 包）
 │   └── InstrumentSpec.py       # 合约映射、price_tick 对齐、手续费/滑点成本模型
 ├── Test/                       # 回归测试（独立脚本，按退出码判定）
 │   ├── test_p5 ~ test_p23      # 20 个历史迭代回归测试（文件名保持）
-│   └── smoke_simnow_phase_g.py # SimNow 冒烟（需真实凭据 config.json）
+│   └── smoke_simnow_phase_g.py # SimNow 冒烟（需真实凭据：环境变量）
 └── Tool/                       # 辅助工具
     ├── SimNow/                 # SimNow 诊断/冒烟/强平等自检工具
     ├── Recorder/               # M0 信号录制器（SSE→jsonl 零侵入）+ 离线分析
@@ -59,9 +59,9 @@ cd Trading
 python main.py --source replay --replay-dir ./replay_data --out ./run1
 
 # ② 生成一份可编辑的配置
-python main.py --init-config ./config.json
-#    改完 config.json 后用 --config 启动
-python main.py --config ./config.json
+# 改参数：编辑 Trading/Config.py（唯一入口）
+# 临时改（不入库）：环境变量或仓库根 .env，如 TRADING_SOURCE__FREQ=15s
+python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m
 
 # ③ 实时接入 chan.py（先启动 chan.py，SSE 默认 http://127.0.0.1:18081）
 python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
@@ -81,7 +81,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)          (闸门)       (dry_run/…)
 ```
 
-**换策略 = 丢一个 py 文件进 `Strategy/` + 改 config.json 里的类名**，engine/broker/source 一行不动。自定义出场策略 = 继承 `Strategy/Base.py` 的 `ExitPolicy`（实现 `plan()`+`check()`）+ `@register_exit` 注册 + 改 config 类名。
+**换策略 = 丢一个 py 文件进 `Strategy/` + 改 Trading/Config.py 里的类名**，engine/broker/source 一行不动。自定义出场策略 = 继承 `Strategy/Base.py` 的 `ExitPolicy`（实现 `plan()`+`check()`）+ `@register_exit` 注册 + 改 config 类名。
 
 三个刻意保留的保守设定（`default_policy.py`）：
 
@@ -96,7 +96,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
 ---
 
-## 四、当前策略与参数（config.json）
+## 四、当前策略与参数（Trading/Config.py）
 
 ```jsonc
 {
@@ -185,7 +185,7 @@ demo 数据是**合成随机行情**，结果必然负期望，只用于验证�
 # 前提：装 tqsdk（仅 simnow 模式需要，dry_run 仍零依赖）
 pip install tqsdk
 
-# Windows CMD 设凭据（优先级：环境变量 > config 的 broker_params）
+# Windows CMD 设凭据（凭据只走环境变量，不落盘、不进 Config.py）
 set SN_ACCOUNT=你的simnow账号&& set SN_PASSWORD=你的simnow密码&& ^
 set TQ_ACCOUNT=你的天勤账号&& set TQ_PASSWORD=你的天勤密码&& ^
 python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m ^
@@ -195,7 +195,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m ^
 simnow broker 与 dry_run 的两点差异：
 
 1. **真实撮合**：成交价 = SimNow 仿真撮合价（`order.trade_price`），不做 dry_run 的滑点让价。
-2. **主连自动映射**：`signal_symbol` 若是 `KQ.m@...` 主连，连接后自动用 `underlying_symbol` 解析主力合约，**不用再手工改 `trade_symbol`**；解析失败才回退到 config。
+2. **主连自动映射**：`signal_symbol` 若是 `KQ.m@...` 主连，连接后自动用 `underlying_symbol` 解析主力合约，**不用再手工改 `trade_symbol`**；解析失败才回退到配置里的 trade_symbol。
 
 下单失败（被拒/超时）时引擎**不会产生幽灵持仓**：开仓被拒 → 不开仓并落盘 `order_rejected`；平仓被拒 → 保留持仓等下一根 K 线再试。
 

@@ -2,7 +2,7 @@
 """
 合约规格 / 价格对齐 / 成本模型
 ==============================
-v1 的合约映射用**配置表**（`config.json` 的 instrument.trade_symbol）。
+v1 的合约映射用**配置表**（Trading/Config.py 的 instrument.trade_symbol）。
 M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变——
 这是刻意留的替换点，不要把这层的调用散到引擎里。
 
@@ -14,12 +14,19 @@ M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变—�
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+from pydantic import BaseModel, ConfigDict, Field
 
-@dataclass
-class InstrumentSpec:
+
+class InstrumentSpec(BaseModel):
+    """合约规格（2026-09-07：改为 pydantic 模型，接入 Trading/Config.py 严格模式）。
+
+    未知键（拼错字段）直接报错，缺字段用下面的默认值 —— 合约规格的默认值
+    只在本模型维护。
+    """
+    model_config = ConfigDict(extra="forbid")
+
     signal_symbol: str = "KQ.m@CFFEX.IF"      # 缠论分析用的主连
     trade_symbol: str = "CFFEX.IF2609"        # 实际下单的月份合约
     price_tick: float = 0.2                   # IF 最小变动价位
@@ -28,9 +35,11 @@ class InstrumentSpec:
     close_today_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
     close_fee_rate: float = 0.000023          # 平昨 0.0023%
     slippage_ticks: float = 1.0               # 单边滑点（tick 数）
-    overprice_points: float = 0.6             # 超价点数：下单价 = 实时对手价 ± overprice_points（朝成交方向取整到 tick）；IF tick=0.2 时 0.6 恰好 3 tick
+    overprice_points: float = 0.6             # 超价点数（已废弃，仅为向后兼容保留；
+                                              #   实际超价统一用 broker_params.overprice_points）
     close_today_first: bool = True            # 平仓优先平今
-    sessions: List[str] = field(default_factory=lambda: ["09:30-11:30", "13:00-15:00"])
+    sessions: List[str] = Field(
+        default_factory=lambda: ["09:30-11:30", "13:00-15:00"])
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:
@@ -90,5 +99,8 @@ class InstrumentSpec:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "InstrumentSpec":
-        known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in (d or {}).items() if k in known})
+        """从配置 dict 构造（未知键报错，缺键用模型默认值）。"""
+        return cls(**(d or {}))
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.model_dump()

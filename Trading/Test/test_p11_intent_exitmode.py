@@ -72,7 +72,7 @@ def tmp_dir():
 from Trading import Broker  # noqa: E402  注册 dry_run / simnow
 from Trading.Broker.Base import INTENT_TO_OFFSET, Broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
@@ -116,9 +116,11 @@ def build_engine(tmpdir, exit_plan_stop=4540.0):
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    # 默认出场策略：固定 10 点止损（无 ATR），便于触发 SL
-    exitp = DefaultExitPolicy({"stop_distance_points": 10.0,
-                               "tp_distance_points": 0.0})
+    # 默认出场策略参数（TP=10 / SL=5，走 DefaultExitParamsConfig 默认值）。
+    # 注：旧代码传的 stop_distance_points / tp_distance_points 是错键，
+    #    DefaultExitPolicy 实际读 stop_points / take_profit_points，此前被静默忽略；
+    #    严格模式下未知键会报错，故去掉，行为与改动前一致。
+    exitp = DefaultExitPolicy({})
     store_path = os.path.join(tmpdir, "state.db")
     store = Store(store_path)
     event_path = os.path.join(tmpdir, "events.jsonl")

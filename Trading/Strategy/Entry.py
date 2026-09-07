@@ -17,6 +17,7 @@ from typing import Optional
 
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, Decision, DecisionType, ExitPlan, Position, Side, Signal
+from ..Config import EntryParamsConfig
 from .Base import EntryPolicy, ExitCheck, ExitPolicy, register_entry, register_exit
 
 
@@ -26,10 +27,14 @@ class DefaultEntryPolicy(EntryPolicy):
 
     def __init__(self, params=None):
         super().__init__(params)
-        self.reverse = bool(self.params.get("reverse_on_opposite_signal", False))
-        self.max_range = float(self.params.get("max_signal_range_points", 0.0) or 0.0)
-        self.min_stop_dist = float(self.params.get("min_stop_distance_points", 0.0) or 0.0)
-        self.max_stop_dist = float(self.params.get("max_stop_distance_points", 0.0) or 0.0)
+        # 严格模式（2026-09-07）：参数由 EntryParamsConfig 校验，缺省键用模型
+        # 默认值（唯一来源在 Trading/Config.py），拼错的键立即报错。
+        p = EntryParamsConfig(**(self.params or {}))
+        self.p = p
+        self.reverse = p.reverse_on_opposite_signal
+        self.max_range = float(p.max_signal_range_points or 0.0)
+        self.min_stop_dist = float(p.min_stop_distance_points or 0.0)
+        self.max_stop_dist = float(p.max_stop_distance_points or 0.0)
 
     def decide(self, signal: Signal, position: Optional[Position],
                spec: InstrumentSpec) -> Decision:

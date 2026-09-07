@@ -41,7 +41,7 @@ sys.path.insert(0, ROOT)
 from Trading import Broker, Source  # noqa: E402  触发注册
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
 from Trading.Engine.Engine import GatewayEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
@@ -88,7 +88,7 @@ def _build_engine(tmp_dir: str, broker=None, entry=None, exitp=None):
     store = Store(os.path.join(tmp_dir, "state.db"))
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp_dir, "events.jsonl"), echo=False, echo_kinds=set())
-    broker_obj = broker if broker is not None else DryRunBroker(spec, cfg.broker_params or {})
+    broker_obj = broker if broker is not None else DryRunBroker(spec, cfg.broker_params.model_dump())
     entry_obj = entry if entry is not None else DefaultEntryPolicy()
     exitp_obj = exitp if exitp is not None else DefaultExitPolicy()
     engine = GatewayEngine(cfg, broker_obj, entry_obj, exitp_obj, store, ev)
@@ -210,7 +210,7 @@ def scenario_b_replay_smoke() -> bool:
     store = Store(os.path.join(tmp, "state.db"))
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=set())
-    broker = DryRunBroker(spec, cfg.broker_params or {})
+    broker = DryRunBroker(spec, cfg.broker_params.model_dump())
     entry = DefaultEntryPolicy()
     exitp = DefaultExitPolicy()
     engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
@@ -268,7 +268,7 @@ def scenario_b_replay_smoke() -> bool:
     # 持久化检查：重启引擎也能复现
     ev.flush()
     new_store = Store(os.path.join(tmp, "state.db"))
-    new_broker = DryRunBroker(spec, cfg.broker_params or {})
+    new_broker = DryRunBroker(spec, cfg.broker_params.model_dump())
     new_ev = EventLog(os.path.join(tmp, "events2.jsonl"), echo=False, echo_kinds=set())
     engine2 = GatewayEngine(cfg, new_broker, entry, exitp, new_store, new_ev)
     _must(new_store is not None, "重启引擎构造成功")
@@ -318,9 +318,9 @@ def scenario_c_simnow_unlock_intent() -> bool:
         sys.modules["tqsdk"] = fake
     cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
     spec = cfg.instrument
-    params = {"sn_account": "fake_test", "sn_password": "fake_test",
-              "tq_account": "fake_test", "tq_password": "fake_test",
-              "connect_retries": 0}      # 关键：立即失败（不真连）
+    # 严格模式：broker_params 只传要覆盖的键，其余由 BrokerParamsConfig 补齐。
+    # 账号密码已不在配置里（只走环境变量 SN_ACCOUNT / TQ_ACCOUNT ...）。
+    params = {"connect_retries": 0}      # 关键：立即失败（不真连）
     os.environ.pop("SN_ACCOUNT", None)
     os.environ.pop("SN_PASSWORD", None)
     os.environ.pop("TQ_ACCOUNT", None)

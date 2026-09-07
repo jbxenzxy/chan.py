@@ -49,7 +49,7 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 try:
-    from Trading.Infra.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
+    from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
     from Trading.Risk.PositionSizing import PositionSizer  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 except Exception as e:  # pragma: no cover
@@ -88,6 +88,15 @@ SPEC = make_spec()
 PRICE = 4550.0
 
 
+def _raises(fn) -> bool:
+    """严格模式断言用：fn() 必须抛异常。"""
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 def make_sizer(**over) -> PositionSizer:
     """构造 PositionSizer；未覆盖的字段走默认（enabled=True, mode=fixed,
     min_volume=1, fallback_volume=1, max_volume=0 表示默认中金所单笔上限 20）。"""
@@ -96,7 +105,7 @@ def make_sizer(**over) -> PositionSizer:
             "max_volume": 0, "min_volume": 1, "fallback_volume": 1,
             "equity_source": "available"}
     base.update(over)
-    return PositionSizer(base, SPEC, risk_max_volume=1)
+    return PositionSizer(SizingConfig(**base), SPEC, risk_max_volume=1)
 
 
 # =========================================================
@@ -105,8 +114,9 @@ print("\n[1] 默认关闭：固定手数，完全不看权益（引入模块零�
 check("DEFAULT_CONFIG.sizing.enabled == False",
       DEFAULT_CONFIG.get("sizing", {}).get("enabled"), False)
 _cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
-check("GatewayConfig 能解析出 sizing 段", isinstance(_cfg.sizing, dict), True)
-check(" GatewayConfig.sizing.enabled == False", _cfg.sizing.get("enabled"), False)
+check("GatewayConfig 能解析出 sizing 段", isinstance(_cfg.sizing, SizingConfig), True)
+check(" GatewayConfig.sizing.enabled == False", _cfg.sizing.enabled, False)
+check("严格模式：sizing 未知键报错", _raises(lambda: SizingConfig(bogus_key=1)), True)
 
 _s_default = PositionSizer(_cfg.sizing, _cfg.instrument, _cfg.risk.max_volume)
 check("默认 sizer.enabled == False", _s_default.enabled, False)
@@ -124,7 +134,8 @@ _s_fix3 = make_sizer(enabled=False, fixed_volume=3)
 check("关闭 + fixed_volume=3 -> 3 手", _s_fix3.size(equity=1_000_000.0, price=PRICE)[0], 3)
 
 # ---- 1c. 关闭时 fixed_volume=0 -> 沿用 risk.max_volume ----
-_s_fix0 = PositionSizer({"enabled": False, "fixed_volume": 0}, SPEC, risk_max_volume=4)
+_s_fix0 = PositionSizer(SizingConfig(enabled=False, fixed_volume=0), SPEC,
+                         risk_max_volume=4)
 check("关闭 + fixed_volume=0 -> 沿用 risk.max_volume=4",
       _s_fix0.size(equity=1_000_000.0, price=PRICE)[0], 4)
 
@@ -209,9 +220,9 @@ print("\n[5] 上下限截断")
 _s_cap2 = make_sizer(mode="capital_pct", capital_pct=1.0, max_volume=2)
 check("算 4 手但 max_volume=2 -> 2 手", _s_cap2.size(equity=1_000_000.0, price=PRICE)[0], 2)
 # max_volume=0 表示默认中金所单笔上限 20（不再沿用 risk.max_volume）
-_s_inherit = PositionSizer({"enabled": True, "mode": "capital_pct",
-                            "capital_pct": 1.0, "max_volume": 0},
-                           SPEC, risk_max_volume=3)
+_s_inherit = PositionSizer(SizingConfig(enabled=True, mode="capital_pct",
+                                          capital_pct=1.0, max_volume=0),
+                            SPEC, risk_max_volume=3)
 check("max_volume=0 -> 默认 20（与 risk.max_volume 解耦）",
       _s_inherit.max_volume, 20)
 check("算 4 手但 max_volume=0(默认20) -> 4 手不截",
@@ -233,10 +244,10 @@ check("price=0（per_lot_margin=0）-> fallback",
           equity=1_000_000.0, price=0.0)[0], 1)
 check("price=NaN -> fallback", make_sizer(mode="capital_pct", capital_pct=1.0).size(
     equity=1_000_000.0, price=float("nan"))[0], 1)
-# 非法 mode 当作 fixed
-_s_badmode = make_sizer(mode="no_such_mode", fixed_volume=2, max_volume=10)
-check("非法 mode -> 退化 fixed", _s_badmode.mode, "fixed")
-check("非法 mode 取 fixed_volume=2", _s_badmode.size(equity=1_000_000.0, price=PRICE)[0], 2)
+# 严格模式：非法 mode 不再静默退化成 fixed，构造期直接报错（fail-fast）
+check("非法 mode -> 构造期报错（严格模式）",
+      _raises(lambda: make_sizer(mode="no_such_mode", fixed_volume=2,
+                                 max_volume=10)), True)
 # margin_rate=0 时按默认 15% 兜底
 check("margin_rate=0 -> 内部兜底 15%",
       make_sizer(mode="capital_pct", margin_rate=0.0).per_lot_margin(PRICE), 204750.0)
@@ -247,8 +258,8 @@ print("\n[7] equity_source 与 describe()")
 check("默认 equity_source=available",
       make_sizer().equity_source, "available")
 check("显式 balance", make_sizer(equity_source="balance").equity_source, "balance")
-check("非法 equity_source -> available",
-      make_sizer(equity_source="xxx").equity_source, "available")
+check("非法 equity_source -> 构造期报错（严格模式）",
+      _raises(lambda: make_sizer(equity_source="xxx")), True)
 _d = make_sizer(mode="atr_risk", risk_per_trade_pct=0.01, max_volume=5).describe()
 check("describe() 含 mode", _d["mode"], "atr_risk")
 check("describe() 含 max_volume", _d["max_volume"], 5)
@@ -282,7 +293,7 @@ print("\n[9] 与 RiskGate 的集成：手数上限不能互相打架")
 # 结果启用仓位管理后一笔都开不出来。修复办法是引擎把 sizer 的有效上限
 # 透传给 check_open 的 max_volume 参数。
 from Trading.Risk.RiskGate import RiskGate  # noqa: E402
-from Trading.Infra.Config import RiskConfig  # noqa: E402
+from Trading.Config import RiskConfig  # noqa: E402
 from Trading.Infra.Types import Side  # noqa: E402
 
 _gate = RiskGate(RiskConfig(max_volume=1), SPEC)
@@ -311,16 +322,17 @@ print("\n[10] unlock_no_new_open 默认值（2026-09-07：锁死\"不补开\"默
 # 修复背景：全 FOK 重构时把默认值误设成 False（补开），与用户设计
 # 「解锁只平昨仓、绝不新开今仓（规避平今高手续费）」相反。本组断言锁死默认方向。
 check("不显式配置 -> unlock_no_new_open == True",
-      PositionSizer({}, SPEC, risk_max_volume=1).unlock_no_new_open, True)
+      PositionSizer(SizingConfig(), SPEC,
+                    risk_max_volume=1).unlock_no_new_open, True)
 check("make_sizer() 未传 -> 默认 True",
       make_sizer().unlock_no_new_open, True)
 check("DEFAULT_CONFIG.sizing.unlock_no_new_open == True",
       DEFAULT_CONFIG.get("sizing", {}).get("unlock_no_new_open"), True)
 check("显式 True -> 不补开",
-      PositionSizer({"unlock_no_new_open": True}, SPEC,
+      PositionSizer(SizingConfig(unlock_no_new_open=True), SPEC,
                     risk_max_volume=1).unlock_no_new_open, True)
 check("显式 False -> 补开（可选能力，需主动关闭）",
-      PositionSizer({"unlock_no_new_open": False}, SPEC,
+      PositionSizer(SizingConfig(unlock_no_new_open=False), SPEC,
                     risk_max_volume=1).unlock_no_new_open, False)
 check("describe() 含 unlock_no_new_open 且为 True",
       make_sizer().describe()["unlock_no_new_open"], True)
