@@ -76,7 +76,7 @@
     "tq_market": "simnow",
     "confirm_live_trading": false
   },
-  "state_dir": "./state",
+  "state_dir": "./State",
   "sizing": {
     "_comment": "仓位管理。不启用就删掉本节点（默认不计算、开仓手数沿用 risk.max_volume）。要按资金/风险定手数时把 enabled 设为 true。⚠ 一笔报单最多 20 手（中金所限价单上限），超了代码会以 over_exchange_limit 拒单。",
     "enabled": false,

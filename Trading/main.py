@@ -74,9 +74,9 @@ def build_runtime(args):
 
     out = args.out or cfg.state_dir
     if not os.path.isabs(out):
-        # 相对路径（默认 "./state"）以 main.py 所在目录
+        # 相对路径（默认 "./State"）以 main.py 所在目录
         # （Trading/）为基准，避免 CLI 直跑把 state 建到 CWD 下、
-        # 找不到 Trading/state。
+        # 找不到 Trading/State。
         out = os.path.join(os.path.dirname(os.path.abspath(__file__)), out)
     out = os.path.abspath(out)
     os.makedirs(out, exist_ok=True)

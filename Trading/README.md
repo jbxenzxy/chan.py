@@ -101,7 +101,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 ```jsonc
 {
   "broker": "dry_run",
-  "state_dir": "./state",
+  "state_dir": "./State",
   "instrument": {
     "signal_symbol": "KQ.m@CFFEX.IF",   // 行情主连（不能直接下单）
     "trade_symbol": "CFFEX.IF2609",      // 实际下单合约（需手工换月）

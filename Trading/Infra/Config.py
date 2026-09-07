@@ -47,7 +47,7 @@ class GatewayConfig:
     broker: str = "dry_run"                                             # 执行通道：dry_run(离线模拟) / simnow(仿真) / live(实盘CTP)
     broker_params: Dict[str, Any] = field(default_factory=dict)         # broker 专属参数（超价/超时/追价等，见 DEFAULT_CONFIG）
     sizing: Dict[str, Any] = field(default_factory=dict)                # 仓位管理参数（手数定档，默认关闭=固定手数，见 tg/sizing.py）
-    state_dir: str = "./state"                                          # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
+    state_dir: str = "./State"                                          # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "GatewayConfig":
@@ -61,7 +61,7 @@ class GatewayConfig:
             broker=d.get("broker") or "dry_run",
             broker_params=d.get("broker_params") or {},
             sizing=d.get("sizing") or {},
-            state_dir=d.get("state_dir") or "./state",
+            state_dir=d.get("state_dir") or "./State",
         )
 
     @classmethod
@@ -145,7 +145,7 @@ DEFAULT_CONFIG: Dict[str, Any] = {
                                          #   两种情况下解锁本身照常执行（解锁是减风险动作）
     },
     # 运行时状态目录：state.db（信号去重/持仓/日统计）、events.jsonl、orders.jsonl 都落在这里
-    "state_dir": "./state",
+    "state_dir": "./State",
     # 合约规格
     "instrument": {
         "signal_symbol": "KQ.m@CFFEX.IF",   # 缠论分析用的主连合约（KQ.m@ 自动映射主力）

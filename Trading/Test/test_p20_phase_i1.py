@@ -726,11 +726,11 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [12] 相对 state_dir（默认 "./state"）以配置文件所在目录为基准
-#      回归：曾经 os.path.abspath("./state") 落到后端进程 CWD，
-#      用户按 Trading/state 找不到目录/日志
+# [12] 相对 state_dir（默认 "./State"）以配置文件所在目录为基准
+#      回归：曾经 os.path.abspath("./State") 落到后端进程 CWD，
+#      用户按 Trading/State 找不到目录/日志
 # ════════════════════════════════════════════════════════════════
-print("\n[12] 相对 state_dir 解析到配置文件所在目录（Trading/state）")
+print("\n[12] 相对 state_dir 解析到配置文件所在目录（Trading/State）")
 with tmp_dir() as tmp:
     orig_state_file = AT._STATE_FILE
     orig_popen = AT.subprocess.Popen
@@ -739,7 +739,7 @@ with tmp_dir() as tmp:
         os.makedirs(cfg_dir, exist_ok=True)
         cfg_path = os.path.join(cfg_dir, "config.json")
         with open(cfg_path, "w", encoding="utf-8") as f:
-            json.dump({"broker": "dry_run", "state_dir": "./state"}, f)
+            json.dump({"broker": "dry_run", "state_dir": "./State"}, f)
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         captured = {}
         AT.subprocess.Popen = (lambda cmd, **kw:
@@ -754,13 +754,13 @@ with tmp_dir() as tmp:
         check("[12c] gateway.log 在配置目录下",
               os.path.isfile(os.path.join(expected, "gateway.log")), True)
         # 模拟用户后端从仓库根启动：config 在 Trading/ 时
-        # 必须落到 Trading/state，而不是 CWD/state
+        # 必须落到 Trading/State，而不是 CWD/state
         os.chdir(tmp)
         cfg2 = os.path.join(tmp, "Trading")
         os.makedirs(cfg2, exist_ok=True)
         cfg_path2 = os.path.join(cfg2, "config.json")
         with open(cfg_path2, "w", encoding="utf-8") as f:
-            json.dump({"broker": "dry_run", "state_dir": "./state"}, f)
+            json.dump({"broker": "dry_run", "state_dir": "./State"}, f)
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state_2.json")  # 新文件，避免误恢复
         captured2 = {}
         AT.subprocess.Popen = (lambda cmd, **kw:
@@ -768,13 +768,13 @@ with tmp_dir() as tmp:
         t2 = AT.AppTrader()
         t2.start(cfg_path=cfg_path2)
         cmd2 = captured2.get("cmd") or []
-        check("[12d] --out 落到 Trading/state",
+        check("[12d] --out 落到 Trading/State",
               "--out" in cmd2
               and cmd2[cmd2.index("--out") + 1] == os.path.join(cfg2, "state"),
               True)
         check("[12e] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "state")),
               False)
-        check("[12f] 落到 Trading/state",
+        check("[12f] 落到 Trading/State",
               os.path.isdir(os.path.join(cfg2, "state")), True)
         check("[12g] gateway.log 已创建",
               os.path.isfile(os.path.join(cfg2, "state", "gateway.log")), True)

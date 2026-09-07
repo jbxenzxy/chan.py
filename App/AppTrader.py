@@ -66,7 +66,7 @@ _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "auto_trader_state.json")
 
 _DEFAULT_CFG = os.path.join(_TG_ROOT, "config.json")
-_DEFAULT_OUT = os.path.join(_TG_ROOT, "state")
+_DEFAULT_OUT = os.path.join(_TG_ROOT, "State")
 
 # 跨平台停止协议用的 flag 文件名（写在 {out_dir} 下）。子进程 main.py 主循环
 # /看护线程观测到该文件 → engine.shutdown_and_lock_all() → 退出 0。绕开 Windows
@@ -253,7 +253,7 @@ class AppTrader:
         """启动自动下单自动下单子进程（SSE 实时源，订阅 chan.py 行情流）。
 
         cfg_path：Trading config.json（缺省 Trading/config.json）；
-        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 Trading/state）；
+        out_dir： 自动下单子进程状态目录（缺省 cfg.state_dir 或 Trading/State）；
         symbol / freq：订阅的合约与周期（前端开关传当前页面品种；缺省读
             cfg.source，再缺省 KQ.m@CFFEX.IF / 5m）；
         sse_base：行情流地址（前端传 location.origin；缺省读 cfg.source，
@@ -293,9 +293,9 @@ class AppTrader:
                 out_dir = os.path.abspath(out_dir)
             else:
                 raw = str(pre_cfg.get("state_dir") or "") or _DEFAULT_OUT
-                # 相对 state_dir（默认 "./state"）以配置文件所在目录
+                # 相对 state_dir（默认 "./State"）以配置文件所在目录
                 # （Trading/）为基准，避免落到后端进程 CWD 下，
-                # 造成"找不到 Trading/state"。
+                # 造成"找不到 Trading/State"。
                 out_dir = os.path.abspath(
                     os.path.join(os.path.dirname(cfg_path), raw))
             try:

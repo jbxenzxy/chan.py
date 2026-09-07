@@ -93,6 +93,15 @@ _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 # IF 交易时段每 0.5s 一个 tick，30s 足够宽容；断连/重连中/TCP 假死时行情停滞，
 # 此时 get_position 缓存必然不可信。刻意不走 _param（config 单一事实源）——
 # 这是通道级安全阈值而非策略参数，避免用户 config 漏键导致 fail-fast 起不来。
+#
+# ⚠️ 夜盘/非交易时段限制（将来跑夜盘品种时必改）：
+#   非交易时段行情停滞是正常现象，本判据会把"数据陈旧"误判为常态 →
+#   real_position 恒返回 None。日盘 IF 无碍（引擎对账只由 bar 事件驱动，
+#   交易时段外没有 bar，对账根本不触发）；但夜盘品种（如 au/ag 21:00-02:30、
+#   螺纹 21:00-23:00）盘中存在"合约无 tick 的静默段"，且 21:00-次日 02:30
+#   跨越本地日期变更，quote.datetime 的交易日语义也会变化。届时需把本判据
+#   从"绝对时钟差"改为"按合约交易时段表判断是否处于应报价区间"（参考
+#   Infra/InstrumentSpec.py 扩展交易时段元数据），否则夜盘对账会被恒跳过。
 _QUOTE_STALE_SECONDS = 30.0
 
 
