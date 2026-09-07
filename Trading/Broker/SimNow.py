@@ -17,6 +17,13 @@ SimNow 仿真 broker（M2b）
     - 限价单超价（M4）：SimNow 不支持市价单，下单瞬间取实时对手价（买=ask/卖=bid）
       ± overprice_points（默认 1.0 点 = IF 5 tick，朝成交方向取整到 tick）主动跨价差成交；
       取不到行情则回退到基于信号价的 align_*。
+    - 行情新鲜度守卫（2026-09-07 对账加固）：tqsdk 3.10.2 **没有**公开连接状态接口
+      （is_connecting 不存在；内部重连 handler 是 _init_connection 局部变量不可达），
+      断连→自动重连窗口内 wait_update 正常返回不抛异常，get_position 缓存陈旧——
+      曾致换日对账把真实存在的 2 手多单误清（reconcile_real_zero）。故 real_position
+      读仓前先校验行情快照新鲜度：IF 交易时段每 0.5s 一个 tick，quote.datetime 停滞
+      超过 _QUOTE_STALE_SECONDS（30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
+      覆盖"断连重连中"与"TCP 假死"两类场景，且不依赖 tqsdk 版本。
     - 全 FOK 报单（2026-09-06 全量化改造）：四类报单（OPEN 开仓 / UNLOCK 解锁 /
       LOCK 锁仓 / CLOSE 平仓）全部附加 CTP 报单属性 advanced="FOK"——限价立即
       全部成交否则全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留。
@@ -82,6 +89,12 @@ _DIRECTION = {Side.LONG: "BUY", Side.SHORT: "SELL"}
 # 或平错方向；此前 dry_run 撮合不校验 direction 字符串，故回归未暴露。
 _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 
+# 行情新鲜度阈值（秒）：quote.datetime 停滞超过该值判数据陈旧（2026-09-07 对账加固）。
+# IF 交易时段每 0.5s 一个 tick，30s 足够宽容；断连/重连中/TCP 假死时行情停滞，
+# 此时 get_position 缓存必然不可信。刻意不走 _param（config 单一事实源）——
+# 这是通道级安全阈值而非策略参数，避免用户 config 漏键导致 fail-fast 起不来。
+_QUOTE_STALE_SECONDS = 30.0
+
 
 def _position_total(api, trade_symbol: str, side: str) -> int:
     """读 tqsdk 当前持仓总数（今+昨），失败返回 -1。
@@ -95,18 +108,11 @@ def _position_total(api, trade_symbol: str, side: str) -> int:
         return -1
     item = None
     if isinstance(pos, dict):
-        # 优先按 trade_symbol 精确匹配
-        if trade_symbol in pos:
-            item = pos[trade_symbol]
-        else:
-            # 兜底：找第一条多/空非零的（处理 dict key 与 trade_symbol 不一致的情况）
-            for v in pos.values():
-                if ((getattr(v, "pos_long_today", 0) or 0)
-                        + (getattr(v, "pos_long_his", 0) or 0)
-                        + (getattr(v, "pos_short_today", 0) or 0)
-                        + (getattr(v, "pos_short_his", 0) or 0)) > 0:
-                    item = v
-                    break
+        # 只认 trade_symbol 精确匹配；找不到 = 该合约当前无持仓（返回 0）。
+        # 2026-09-07 收窄：删除旧的"取第一条多/空非零持仓"兜底——账户同时持有
+        # 其他品种时会把别的合约误当本合约读（跨品种误判，污染 P4/P5 校验）。
+        # 陈旧缓存 dict 缺键的场景由 real_position 的新鲜度守卫前置拦截。
+        item = pos.get(trade_symbol)
     else:
         item = pos
     if item is None:
@@ -224,6 +230,8 @@ class SimNowBroker(Broker):
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         super().__init__(spec, params)
         self._api = None
+        # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
+        self._quote = None
         self._trade_symbol = spec.trade_symbol
         self._seq = itertools.count(1)
         self.orders: List[Order] = []
@@ -391,6 +399,13 @@ class SimNowBroker(Broker):
                 continue
 
             self._resolve_trade_symbol()
+            # 预订阅 trade_symbol 行情：行情新鲜度守卫（_quote_stale）依赖该订阅。
+            # get_quote 非阻塞（仅发起订阅，数据随 wait_update 推送）；首帧未到前
+            # datetime 为空 → _quote_stale 判陈旧，real_position 保守返回 None。
+            try:
+                self._quote = self._api.get_quote(self._trade_symbol)
+            except Exception:
+                self._quote = None
             return
 
         self._conn_error = last_err or "CTP 登录失败（未知原因）"
@@ -988,13 +1003,69 @@ class SimNowBroker(Broker):
         self.orders.append(o)
         return o
 
+    def _quote_stale(self) -> bool:
+        """行情快照是否陈旧（True = 不可信，读仓应降级 None）。
+
+        判据：quote.datetime（交易所本地时间 = 本机北京时间）距 now 超过
+        _QUOTE_STALE_SECONDS。datetime 为空（订阅后首帧未到 / 格式异常）→ 判陈旧。
+        """
+        q = self._quote
+        if q is None:
+            # 惰性订阅（_connect 未走到或旧实例迁移场景）：get_quote 非阻塞，仅发起订阅
+            try:
+                q = self._quote = self._api.get_quote(self._trade_symbol)
+            except Exception:
+                return True
+        dt = getattr(q, "datetime", "") or ""
+        if not dt:
+            return True
+        try:
+            ts = time.mktime(time.strptime(dt.split(".")[0], "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            return True
+        return (time.time() - ts) > _QUOTE_STALE_SECONDS
+
+    def _channel_unstable(self) -> bool:
+        """通道不稳定 / 数据不可信 → True，读仓应跳过（real_position 返回 None）。
+
+        背景：断连→重连窗口内 `get_position()` 可能返回陈旧或空数据，被
+        `real_position` 读成 0 会误导引擎 `_reconcile_positions` 误清真实存在的
+        持仓（实测：SimNow OTG 掉线重连期间对账读到 real=0，把一笔 2 手多单在
+        引擎内存整笔冲销，而账户实际持仓未动）。故在**读仓前**统一把关。
+
+        2026-09-07 加固：tqsdk 3.10.2 **没有**公开连接状态接口——TqApi.is_connecting
+        不存在（hasattr=False，全包 grep 0 命中）；内部重连标志
+        （TqReconnect._un_processed）挂在 _init_connection 局部变量上，外部不可达。
+        因此采用**行情新鲜度判据**（不依赖 tqsdk 版本）：
+
+          · wait_update 抛异常（断连）→ 不稳定；
+          · 行情快照 quote.datetime 停滞 > _QUOTE_STALE_SECONDS（断连重连中 /
+            TCP 假死 / 首帧未到）→ 数据不可信。IF 交易时段每 0.5s 一个 tick，
+            30s 阈值足够宽容。
+
+        注意：tqsdk 的 wait_update 须由持有 api 的主线程驱动，引擎 on_bar 与
+        broker 同线程满足；本方法在调用方非 wait_update 进行中时调用，嵌套安全。
+        """
+        if self._api is None:
+            return True
+        try:
+            self._api.wait_update(deadline=time.time() + 0.3)
+        except Exception:
+            # wait_update 异常（断连）→ 保守判不稳定
+            return True
+        return self._quote_stale()
+
     def real_position(self, side: Side) -> Optional[int]:
-        """查询 SimNow 真实持仓（引擎对账用）。未连接返回 None。
+        """查询 SimNow 真实持仓（引擎对账用）。未连接 / 通道不稳定 / 行情陈旧
+        返回 None，引擎对账对应跳过该侧，避免用不可靠读数误清真实持仓。
+
+        2026-09-07 加固：新增行情新鲜度守卫（见 _channel_unstable docstring）——
+        断连/重连/假死窗口内行情停滞，读数不可信，宁可让对账跳过也不冒误清风险。
 
         返回该方向当前净持仓手数；供 engine 的持仓对账（增强 B）检测
         「用户在快期3手工平仓 / 幽灵持仓」并修正引擎账目。
         """
-        if self._api is None:
+        if self._api is None or self._channel_unstable():
             return None
         try:
             return _position_total(self._api, self._trade_symbol,
@@ -1131,6 +1202,7 @@ class SimNowBroker(Broker):
             except Exception:
                 pass
             self._api = None
+        self._quote = None
 
     def stats(self) -> Dict[str, Any]:
         return {"broker": self.name, "orders": len(self.orders),
@@ -1142,7 +1214,9 @@ class SimNowBroker(Broker):
                 "market": (str(self.tq_market).strip()
                            if self.is_live else "simnow"),
                 "is_live": self.is_live,
-                "confirm_live_trading": self.confirm_live}
+                "confirm_live_trading": self.confirm_live,
+                # 2026-09-07 加固：行情新鲜度诊断（True=陈旧，real_position 会降级 None）
+                "quote_stale": (self._quote_stale() if self._api is not None else None)}
 
 
 @register_broker
