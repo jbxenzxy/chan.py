@@ -4,7 +4,7 @@
 > 拿到本文档就能**按部就班续推**——知道在做什么、为什么、做到哪一步、下一步怎么走、有哪些坑。
 >
 > **生成日期**：2026-09-08（工作日）
-> **状态**：Step 2.0 / 2.0.3b / 2.1 / 2.2 / 2.3 / 2.4 / 2.5 已完成；2.1 已合入 real project，**2.2–2.5 待用户合并**；**下一步是 2.6（测试 + 启动校验收官，2.6 完成即结构归一阶段收官）**
+> **状态**：**Step 2.0–2.6 全部完成（结构归一阶段收官 ✅，2026-09-08）**；2.1 已合入 real project，**2.2–2.6 待用户合并**（直接用 `step2_6_Trading.zip` 整包覆盖）；**下一步是 2.7+（调值阶段，被数据缺口阻塞：真实行情数据 + 5m 基线确认）**
 > **维护约定**：本文档是**进度 SSOT**。每次续推前先读 §4（当前精确状态）与 §5（下一步）；每次做完一段回来更新 §4 状态表。
 
 ---
@@ -95,6 +95,7 @@
 | **2.3** | **Broker/Channel 超时集中**：SimNow.py 散落的 10 处超时/等待/退避因子收口到 `ChannelTimingConfig`（挂 `BrokerConfig.channel`，拍板 A1+B1+C1）；SimNow 新增 `_timing()` 严格读取；`_QUOTE_STALE_SECONDS` 模块常量删除；微轮询 sleep 换命名常量 `_POLL_INTERVAL_FAST/SLOW` | `step2_3_Trading.zip`（66 文件/308832B）、`Step2_3_交付说明_BrokerChannel超时集中.md`、`Step2_3_可行性分析_BrokerChannel超时集中.md` | ✅ 待用户合并 |
 | **2.4** | **重复常量合并**：两个语义相同的 `20` → SSOT 常量 `CFFEX_LIMIT_MAX`（PositionSizing 定义 + Engine 导入，`is` 同对象实证）；删 `per_lot_margin` 的 `else 0.15` 第二默认源（margin_rate=0 → 诚实走 bad_param fallback，唯一非纯重命名改动）；`test_p9` 断言语义同步 | `step2_4_Trading.zip`（67 文件/311573B）、`Step2_4_交付说明_重复常量合并.md`、`Test/test_const_merge.py`（14 断言） | ✅ 待用户合并 |
 | **2.5** | **Source/Recorder 重连参数收口**：`SourceConfig` 新增 `reconnect_wait/reconnect_wait_max/reconnect_max_retry`（默认=原硬编码 5/60/0）；修复 SSE 三参数"死旋钮"缺陷（extra=forbid 下旧键传不进来）+ 删双默认源写法 + 构造期 fail-fast 守卫；`SignalRecorder` argparse 默认值同源化（`_build_parser()` + sys.path 引导导入） | `step2_5_Trading.zip`（68 文件/314693B）、`Step2_5_交付说明_Source重连参数收口.md`、`Test/test_source_reconnect.py`（20 断言） | ✅ 待用户合并 |
+| **2.6** | **测试补齐 + 四周期启动冒烟（结构归一收官）**：审计发现 2.0 系列无专属测试 → 新增 `Test/test_step2_config_ssot.py`（43 断言：六层配置模型 / 选择器删除 / 类名改名 / 每模型单一定义）+ `Test/test_step2_smoke_freq.py`（65 断言：30m/5m/1m/15s 四周期 `build_runtime` 启动链路冒烟 + `--freq 15m` fail-fast 反向用例）；**零生产代码改动**；全量 31/31 全绿 | `step2_6_Trading.zip`（70 文件/319644B）、`Step2_6_交付说明_测试补齐与四周期冒烟.md` | ✅ 待用户合并 |
 
 ### 3.1 Step 2.0.3b 删除策略选择器的最终代码形态（2.1 继承此基础）
 
@@ -133,14 +134,15 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `Config.py` 中 `period_profile` 命中 | 4 处 → **2.1 已合入** |
 | `Config.py` 中 `entry_policy`（旧选择器名）残留 | 0 → **2.0.3 删除干净** |
 
-### 4.2 沙盒与交付物（2026-09-08 12:10 状态）
+### 4.2 沙盒与交付物（2026-09-08 14:20 状态，2.6 收官后）
 
 | 项 | 值 |
 |---|---|
-| 活跃编码沙盒 | `sandbox/Trading/`（含 2.5 全部改动 + 29 个 test_） |
-| 最新交付包 | `output/step2_5_Trading.zip`（68 文件 / 314693 字节） |
-| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1/2.2/2.3**——需用户推送） |
+| 活跃编码沙盒 | `sandbox/Trading/`（含 2.6 全部改动 + **31 个 test_**） |
+| 最新交付包 | `output/step2_6_Trading.zip`（70 文件 / 319644 字节；= 2.5 包 + 2 个新测试，零生产代码改动） |
+| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1–2.6**——需用户推送） |
 | `sandbox/chan.py` git clone | **已过时**，停在 `5478def`（仅作合并校验，勿当工作副本） |
+| 测试基线 | 31/31 test_ 全绿（按退出码判定；zip 解压复验 30/31，唯一差异是 `B_replay_smoke` 依赖被排除的 `replay_data/`，环境数据依赖非回归） |
 
 ### 4.3 已知阻塞项（调值的真正瓶颈）
 
@@ -173,16 +175,18 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | **2.3** | Broker/Channel 超时集中：~18 处 wait_update/重试秒数 → 新 `ChannelTimingConfig` 附在 `BrokerConfig` 内 | ~150 行 | ✅ **已完成（2026-09-08，实际收口 10 项 + 2 命名常量）** |
 | **2.4** | **重复常量合并**：两个语义相同的 `20`（PositionSizing 的 sizing.max_volume 默认截断 + Engine._open_position 交易所限单检查）→ SSOT 常量 `CFFEX_LIMIT_MAX`（定义在 Risk/PositionSizing.py，Engine 导入）；删 `per_lot_margin` 的 `else 0.15` 第二默认源（margin_rate=0 现诚实走 bad_param fallback） | `step2_4_Trading.zip`（67 文件/311573B）、`Step2_4_交付说明_重复常量合并.md`、`Test/test_const_merge.py`（14 断言） | ✅ 待用户合并 |
 | **2.5** | **Source/Recorder 重连参数收口**：`SourceConfig` 新增 `reconnect_wait/reconnect_wait_max/reconnect_max_retry`（默认=原硬编码 5/60/0）；修复 SSE 三参数"死旋钮"缺陷（extra=forbid 下旧键传不进来）+ 删双默认源写法 + 构造期 fail-fast 守卫；`SignalRecorder` argparse 默认值同源化 | `step2_5_Trading.zip`（68 文件/314693B）、`Step2_5_交付说明_Source重连参数收口.md`、`Test/test_source_reconnect.py`（20 断言） | ✅ 待用户合并 |
-| **2.6** | 测试 + 启动校验：每 phase 加测试；6 段全完跑 `--freq {30m,5m,1m,15s}` 启动冒烟全通 | ~150 行 | **⏳ 下一步（结构归一收官）** |
-| **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证 | 数据到位才开 |
+| **2.6** | 测试 + 启动校验：每 phase 加测试；6 段全完跑 `--freq {30m,5m,1m,15s}` 启动冒烟全通 | ✅ **已完成（2026-09-08，实际补 2.0 系列测试 43 断言 + 冒烟 65 断言，零生产代码改动）** |
+| **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证 | ⏳ **下一步（被数据缺口阻塞，见 §4.3）** |
 
-### 5.2 开 2.2 的 SOP（照抄）
+### 5.2 续推 SOP（2.7+ 调值阶段，照抄）
+
+> 结构归一（2.0–2.6）已收官。2.7+ 是**调值阶段**，前置条件：真实历史行情数据（15s/1m/30m 目前为 0）+ 5m 基线参数确认（§4.3）。
 
 1. **读本档 §4.2/§4.3** 确认沙盒与交付物状态、阻塞项。
-2. **同步最新到沙盒**：real project 已合 2.1，若 sandbox 落后，`cp -ru <real project>/Trading/. <sandbox>/Trading/`（但注意：`cp -ru` 指向 real project **仅用于"读入沙盒"**，不反向写）。
-3. 先做 **2.2 可行性分析文档**（沿用"先分析再编码"节奏），把设计决策（哪些常量归总、命名、默认值 SSOT 放哪）摆出来给用户拍板，尤其**新默认值必须落在唯一 SSOT 文件**、禁跨文件 fallback。
-4. 用户拍板后在 **`sandbox/Trading/`** 实现 → 每 phase 完 `py_compile + pytest/grep` 确认落盘。
-5. 全量 `25 个 test_*` PASS 全绿 → 打包 `step2_2_Trading.zip`（Python zipfile）→ **从 zip 内读回**校验 → 更新交付说明 + 本档 §4 状态表。
+2. **数据补录**：解决真实行情数据缺口（chan.py SSE 录制或其它来源），归档到可复用目录。
+3. **确认 5m 基线**：谁是 5m 基线缺明确锚点；同时处理 2.1 的 F1 遗留（3 项根数参数候选迁入 PeriodProfile）与「==schema 默认」判定局限（§4.4）。
+4. 差异化 `PERIOD_PROFILES`（不再全 BASELINE 占位）→ 回放回测 → 网格搜索 → SimNow 验证。
+5. 每 phase 在 **`sandbox/Trading/`** 实现 → `py_compile + 全量 test_` 确认落盘 → 打包 zip（Python zipfile，只打 `Trading/` 子树）→ **zip 解压到干净目录复验** → 更新交付说明 + 本档 §3/§4 状态表。
 6. 交付给用户合并进 real project 并推送。
 
 ### 5.3 未决/需用户拍板项
@@ -214,6 +218,7 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `交接文档_chanpy_Trading自动下单调参归一化.md/.html` | **本文档（总入口）** |
 | `Step2_路线图_调参项归一.md/.html` | Phase 全览（进度以本文档 §4 为准） |
 | `Step2_0_交付说明_配置分层与周期敏感归总.md` | 2.0–2.0.3b 全史 + 删除选择器实证 |
+| `Step2_6_交付说明_测试补齐与四周期冒烟.md` | 2.6 交付说明（含结构归一收官清单） |
 | `Step2_5_交付说明_Source重连参数收口.md` | 2.5 交付说明（含 SSE 死旋钮缺陷说明） |
 | `Step2_4_交付说明_重复常量合并.md` | 2.4 交付说明（含 margin_rate=0 语义变化说明） |
 | `Step2_3_交付说明_BrokerChannel超时集中.md` | 2.3 交付说明 |
@@ -226,7 +231,8 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `Step1_四周期逻辑正确性审计.md/.html` | Step 1A |
 | `Step1B_交付说明_四周期逻辑正确性修复.md` | Step 1B |
 | `IF_15秒周期迁移分析.md/.html` | 专项分析 |
-| `step2_5_Trading.zip`（最新） | **当前最新交付包（待用户合并；含 2.0.3b→2.5 全部累积改动，直接整包覆盖即可）** |
+| `step2_6_Trading.zip`（最新） | **当前最新交付包（待用户合并；含 2.0.3b→2.6 全部累积改动，直接整包覆盖即可；= 2.5 包 + 2 个新测试）** |
+| `step2_5_Trading.zip` | 2.5 交付包（待用户合并） |
 | `step2_2_Trading.zip` | 2.2 交付包（待用户合并） |
 | `step2_1_Trading.zip` | 2.1 交付包（已合 real project） |
 | `step2_0_Trading.zip` | 2.0.3b 交付包 |
