@@ -23,6 +23,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..Broker.Base import Broker
 from ..Config import GatewayConfig
 from ..Infra.EventLog import EventLog
+from ..Infra.PeriodProfile import (
+    bar_sec_of_day, bar_secs_for, eod_triggered, parse_hhmmss, ts_scale,
+)
 from .PositionBook import PositionBook, PositionBookError
 from ..Risk.RiskGate import RiskGate
 from ..Risk.PositionSizing import capital_gate
@@ -76,6 +79,11 @@ class GatewayEngine(ReconcileMixin):
         # 避免"每根 bar 都触发一次平仓"导致的死循环；到 _close_max_streak 后
         # 认定持仓为幻影（broker 端不存在），强制从引擎清掉。
         self._last_close_failed_bar_ts: int = 0
+        # Step 1 修复（2026-09-08）：cooldown 改用**根数**口径。
+        #   旧代码拿"毫秒时间戳差值"去和"根数 5"比 → 实际是 5 毫秒，
+        #   冷却从来没生效过（namespace 级的单位混用 bug）。
+        #   真正的根数 = bars_seen 序号差，与周期、与时间戳单位都无关。
+        self._last_close_failed_bar_seq: int = 0
         self._close_fail_streak: int = 0
         self._close_retry_bars: int = 5      # 失败后冷却多少根 bar 再试
         self._close_max_streak: int = 20     # 连续失败这么多根后清掉幻影持仓
@@ -108,6 +116,44 @@ class GatewayEngine(ReconcileMixin):
         #   由前端开关经后端进程托管触发（App/AppTrader.py → main.py 的
         #   shutdown_and_lock_all），_restore/_persist 持久化，重启不漂移。
         # ════════════════════════════════════════════════════════════════
+        # ════════════════════════════════════════════════════════════════
+        # Step 1（2026-09-08）：周期语义注入
+        #   引擎是唯一知道 source.freq 的组件，由它把"一根 bar 多少秒"注入
+        #   出场策略。旧设计让策略在 on_bar 里靠相邻 timestamp 差推断周期，
+        #   而 timestamp 单位不统一（SSE 毫秒 / 回放秒），推断把毫秒当秒 →
+        #   30m/5m/1m/15s 四个周期全部推断失败并静默降级（BUG-1）。
+        #   周期是启动期就已知的确定信息，不该靠运行时猜。
+        # ════════════════════════════════════════════════════════════════
+        self.bar_secs: Optional[int] = bar_secs_for(cfg.source.freq, default=None)
+        if self.bar_secs:
+            setter = getattr(self.exit_policy, "set_bar_secs", None)
+            if callable(setter):
+                setter(self.bar_secs)
+        else:
+            self.ev.write(
+                "freq_unknown", freq=cfg.source.freq,
+                note="未知的 K 线周期：出场策略的时间/EOD 兜底将退化为运行时推断，"
+                     "请核对 Infra/PeriodProfile.FREQ_SEC")
+        # 收盘强平提前量（根）：与 ExitParamsConfig.eod_lead_bars 同一语义，
+        # 引擎侧兜底判定（_after_close）也用它，两处行为保持一致。
+        self._eod_lead_bars: int = int(
+            (cfg.exit_policy.params or {}).get("eod_lead_bars", 1) or 1)
+        # 离场追价窗口（close_max_chase × chase_interval）若长于一根 bar，
+        # 15s 下会出现"上一轮还没追完、下一根 bar 又发起新一轮"的叠加。
+        # 不阻断（引擎本来就跨 bar 重试），但必须可见——历史上这类问题
+        # 全靠"静默降级"被藏起来。
+        _bp = cfg.broker_params
+        chase_window = float(_bp.close_max_chase) * float(_bp.chase_interval)
+        if self.bar_secs and chase_window > self.bar_secs:
+            self.ev.write(
+                "chase_window_exceeds_bar", freq=cfg.source.freq,
+                bar_secs=self.bar_secs, chase_window_sec=round(chase_window, 2),
+                note="离场追价窗口长于一根 bar；短周期（15s）请把 "
+                     "close_max_chase × chase_interval 调到 bar_secs 以内")
+        # 时间戳单位系数（毫秒=1000 / 秒=1）：收到第一根 bar 时按绝对量级确定，
+        # 之后所有"持仓多久"的计算都用它归一到秒。
+        self._ts_scale: Optional[float] = None
+
         self.auto_order_enabled: bool = True
         self._restore()
 
@@ -244,6 +290,9 @@ class GatewayEngine(ReconcileMixin):
             return                      # 重复或回退的 K 线，丢弃
         self.bars_seen += 1
         self.last_bar = bar
+        # 时间戳单位（毫秒 / 秒）只需定一次：按绝对量级判定，全局稳定。
+        if self._ts_scale is None and bar.timestamp:
+            self._ts_scale = ts_scale(bar.timestamp)
 
         # 每根 K 线（无论是否持仓）都喂给出场策略，供其维护 ATR 等历史缓冲。
         # LayeredExitPolicy 等需要历史的策略借此在开仓瞬间就有足够样本。
@@ -329,8 +378,9 @@ class GatewayEngine(ReconcileMixin):
                 continue
 
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
-            check: Optional[ExitCheck] = self.exit_policy.check(
-                pos, bar, self.spec, bars_held)
+            check: Optional[ExitCheck] = self.exit_policy.check_with(
+                pos, bar, self.spec, bars_held=bars_held,
+                held_secs=self._held_secs(pos, bar))
 
             if check is None:
                 if self.cfg.risk.close_before_session_end and self._after_close(bar):
@@ -365,13 +415,37 @@ class GatewayEngine(ReconcileMixin):
                                   bar, signal_key=to_close[0].signal_key)
 
     def _after_close(self, bar: Bar) -> bool:
-        """是否已过当日收盘（用于收盘前强平）。中午休市不算。"""
+        """是否已临近 / 过了当日收盘（用于收盘前强平）。中午休市不算。
+
+        Step 1 修复（2026-09-08）：旧版拿 bar 起点 "HH:MM" 与收盘时刻比大小。
+          · 30m 的 bar 起点只有 :00 / :30，最后一根是 14:30-15:00，
+            它闭合推送时已经是 15:00 —— 判定成立的那一刻已经收盘，
+            强平对 30m **从来不可能生效**（死代码）。
+          · 15s 的 date 带秒，"[:5]" 截掉 ":45" 后最多偏 59 秒 = 4 根 bar。
+        改走 PeriodProfile.eod_triggered：提前 eod_lead_bars 根 bar 判定，
+        四个周期都能在收盘前平掉。
+        """
         parts = (bar.date or "").split()
         if len(parts) < 2 or not self.spec.sessions:
             return False
-        hm = parts[1][:5]
-        last_end = self.spec.sessions[-1].split("-")[-1]
-        return hm >= last_end
+        thr = parse_hhmmss(self.spec.sessions[-1].split("-")[-1])
+        start = parse_hhmmss(parts[1])
+        if thr is None or start is None:
+            return False
+        return eod_triggered(start, self.bar_secs, thr,
+                             lead_bars=self._eod_lead_bars)
+
+    def _held_secs(self, pos: "Position", bar: Bar) -> Optional[float]:
+        """持仓已持续**秒数**（跨周期可比，时间类兜底的唯一正确口径）。
+
+        旧代码只有 bars_held（根数）：30 根在 30m 下 15 小时、15s 下 7.5 分钟。
+        时间戳单位由 _ts_scale（首根 bar 按绝对量级判定）统一归一。
+        """
+        if not pos.entry_bar_ts or not bar.timestamp:
+            return None
+        scale = self._ts_scale or ts_scale(bar.timestamp)
+        d = (float(bar.timestamp) - float(pos.entry_bar_ts)) / scale
+        return d if d > 0 else 0.0
 
     # ---------------- signal 事件 ----------------
     def on_signal(self, sig: Signal) -> None:
@@ -754,9 +828,12 @@ class GatewayEngine(ReconcileMixin):
         # P2-2：last_bar 为 None（引擎启动后从未收到 K 线）时按当前时间兜底——
         # 否则 0 - 上次失败时间戳 为负数 ≤ _close_retry_bars，cooldown 误把
         # 锁仓一笔不锁（尤其 shutdown 收尾路径），且无任何错误上报。
+        # cooldown 判定用**根数**口径（bars_seen 序号差），与周期、时间戳单位
+        # 都无关。旧代码拿毫秒时间戳差值去和"5 根"比 → 等价 5 毫秒，冷却恒不生效。
         now_ts = self.last_bar.timestamp if self.last_bar else time.time()
-        if (self._last_close_failed_bar_ts
-                and now_ts - self._last_close_failed_bar_ts <= self._close_retry_bars):
+        if (self._last_close_failed_bar_seq
+                and (self.bars_seen - self._last_close_failed_bar_seq)
+                < self._close_retry_bars):
             return  # cooldown 中：保持 EXITING，下一根 bar 再试
 
         # 清掉 E3.1 单仓版的 streak 字段（_close_position 旧逻辑），改用 FIFO 批次内失败计数
@@ -793,6 +870,7 @@ class GatewayEngine(ReconcileMixin):
                               action=intent.value, reason=reason, reject=why,
                               fifo_index=idx, pos_count=len(ordered))
                 self._last_close_failed_bar_ts = now_ts
+                self._last_close_failed_bar_seq = self.bars_seen
                 n_rejected += 1
 
                 if not first_rejected and n_closed == 0:
@@ -815,6 +893,7 @@ class GatewayEngine(ReconcileMixin):
 
             # 成功平仓：清掉失败计数
             self._last_close_failed_bar_ts = 0
+            self._last_close_failed_bar_seq = 0
             if first_rejected is False:
                 # 仅在全部成交时重置 streak（部分成交场景保留 streak 给后续 bar 处理）
                 pass

@@ -137,6 +137,10 @@ class SourceConfig(BaseModel):
     speed: float = 0.0                        # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
+    # 信号新鲜度过滤（分钟）：chan.py SSE 首连会 replay 一批历史 bsp，
+    # "首次出现距今 > 本值"视为陈旧残留丢弃。15s 周期下 60 分钟 = 240 根 bar，
+    # 建议按周期收紧（Step 2 调参项）。0=不过滤。
+    signal_max_age_minutes: float = 60.0
 
 
 class EntryParamsConfig(BaseModel):
@@ -174,8 +178,28 @@ class ExitParamsConfig(BaseModel):
     trailing_atr_multiple: float = 1.5   # 跟踪止损距离 = trailing_atr_multiple × ATR
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
     # ---- L4 时间/收盘兜底 ----
-    max_hold_bars: int = 30              # 最长持仓 K 线数，超时强平，0=不限时长
-    session_end_hhmm: str = "14:55"      # 该时刻及之后强制平仓（""=不启用）
+    # max_hold_bars：最长持仓 **K 线根数**，超时强平，0=不限。
+    #   语义以《Docs/止盈止损/TP_SL_L4》为准 —— "N 根 K 线无进展 → 走"，
+    #   计量单位是 **bar 不是时间**，因此 30 在任何周期下都是 30 根，与时间无关。
+    #   （2026-09-08 更正：此前曾把它判为"跨周期语义漂移 120 倍"并改成秒，
+    #    那是把 Step 2 的标定问题误当成 Step 1 的正确性缺陷，已撤回。）
+    #   注意：默认 30 是按 5m 标定的（≈2.5 小时）。换周期后这数字是否仍合适，
+    #   属 Step 2 调参 —— 尤其是 30m（一天仅 8 根，30 根跨 3.75 个交易日，
+    #   实际永远轮不到它、由收盘强平接管）。
+    max_hold_bars: int = 30
+    # max_hold_seconds：可选的**墙钟**上限（秒），0=不启用。
+    #   与 max_hold_bars 是"或"的关系，谁先到谁生效；默认 0 → 行为与基线完全一致。
+    #   用途：想在粗周期上加一道"绝不过夜/绝不超时"的硬顶时再开。
+    max_hold_seconds: float = 0.0
+    session_end_hhmm: str = "14:55"  # 收盘前强平阈值时刻（""=不启用）
+    # eod_lead_bars：提前几根 bar 的时长判定"该平了"。
+    #   1（默认）= 下一根 bar 会跨过收盘 → 本根闭合即平（30m 也能平掉）；
+    #   0 = 旧口径"bar 结束时刻 ≥ 阈值"，30m 下最后一根结束后已收盘，失效。
+    #   语义见 Infra/PeriodProfile.eod_triggered。
+    eod_lead_bars: int = 1
+    # bar_secs：本周期一根 bar 的秒数。0=引擎按 source.freq 自动推导并注入；
+    #   显式给非 0 值可覆盖（单测 / 非标周期用）。
+    bar_secs: int = 0
 
 
 class DefaultExitParamsConfig(BaseModel):
@@ -186,7 +210,10 @@ class DefaultExitParamsConfig(BaseModel):
     stop_at_signal_extreme: bool = True
     stop_points: float = 5.0
     stop_buffer_ticks: float = 0.0
-    max_hold_bars: int = 0
+    max_hold_bars: int = 0               # 0=不限（K 线根数，语义同 ExitParamsConfig）
+    max_hold_seconds: float = 0.0        # 0=不启用（可选墙钟上限，秒）
+    eod_lead_bars: int = 1
+    bar_secs: int = 0                    # 0=由 source.freq 自动推导
 
 
 class EntryPolicyConfig(BaseModel):

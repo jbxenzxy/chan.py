@@ -20,6 +20,8 @@ from typing import Optional
 
 from ..Config import DefaultExitParamsConfig, ExitParamsConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.PeriodProfile import (bar_sec_of_day, eod_triggered,
+                                   norm_delta_sec, parse_hhmmss, ts_scale)
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from .Base import ExitCheck, ExitPolicy, register_exit
 
@@ -36,7 +38,9 @@ class DefaultExitPolicy(ExitPolicy):
         self.stop_at_signal_extreme = p.stop_at_signal_extreme
         self.stop_points = float(p.stop_points or 0.0)
         self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
+        # 根数为主（bar 语义），秒为可选附加顶（默认 0=不启用）
         self.max_hold_bars = int(p.max_hold_bars or 0)
+        self.max_hold_seconds = float(p.max_hold_seconds or 0.0)
 
     def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
         buf = self.stop_buffer_ticks * spec.price_tick
@@ -78,7 +82,8 @@ class DefaultExitPolicy(ExitPolicy):
                         params=dict(self.params))
 
     def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0) -> Optional[ExitCheck]:
+              bars_held: int = 0,
+              held_secs: Optional[float] = None) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price
         tp = plan.tp_price
@@ -96,6 +101,10 @@ class DefaultExitPolicy(ExitPolicy):
                 return ExitCheck("tp", tp)
 
         if self.max_hold_bars > 0 and bars_held >= self.max_hold_bars:
+            return ExitCheck("time", bar.close)
+        # 可选墙钟上限（默认 0=不启用）：与根数是"或"关系，谁先到谁生效
+        if self.max_hold_seconds > 0 and held_secs is not None \
+                and held_secs >= self.max_hold_seconds:
             return ExitCheck("time", bar.close)
         return None
 
@@ -131,26 +140,60 @@ class LayeredExitPolicy(ExitPolicy):
         self.trailing_atr_multiple = float(p.trailing_atr_multiple)
         self.trailing_distance_points = float(p.trailing_distance_points or 0.0)
         # L4 时间/收盘兜底
+        # 主口径 = max_hold_bars（**K 线根数**，与周期无关，遵 L4 设计文档
+        #          "N 根 K 线无进展 → 走"）；
+        # 附加顶 = max_hold_seconds（墙钟秒，默认 0=不启用），二者取"或"。
         self.max_hold_bars = int(p.max_hold_bars or 0)
+        self.max_hold_seconds = float(p.max_hold_seconds or 0.0)
         self.session_end_hhmm = str(p.session_end_hhmm or "")
-        # T3（2026-09-05）：EOD 按"bar 结束时刻"判定所需的 bar 间隔（秒），
-        # 由 on_bar 用相邻两根闭合 K 线推断；未知时退回旧口径（起点判定）保底。
-        self._bar_secs: Optional[int] = None
+        self.eod_lead_bars = int(p.eod_lead_bars or 0)
+        # bar_secs 的三级来源（优先级从高到低）：
+        #   ① 策略参数显式给（非 0）           —— 单测 / 非标周期
+        #   ② 引擎 set_bar_secs 注入（source.freq 推导）—— 生产路径
+        #   ③ on_bar 用相邻 bar 推断（单位嗅探）—— 兜底
+        # 旧代码只有 ③，且推断时把毫秒当秒 → 四个周期全部推断失败且静默。
+        self.bar_secs: Optional[int] = int(p.bar_secs or 0) or None
+        self._inferred_bar_secs: Optional[int] = None
+        # 跨日清空 ATR 缓冲用
+        self._last_day: str = ""
 
         # ATR 历史缓冲（on_bar 维护，平着也收）
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
 
+    # ---------- 有效 bar 秒数（三级来源归并） ----------
+    @property
+    def effective_bar_secs(self) -> Optional[int]:
+        """当前生效的 bar 秒数；三级来源都拿不到时返回 None。"""
+        if self.bar_secs:
+            return self.bar_secs
+        injected = int(getattr(self, "_injected_bar_secs", 0) or 0)
+        if injected:
+            return injected
+        return self._inferred_bar_secs
+
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
+        # 跨日清空 ATR 缓冲：昨收 → 今开的隔夜跳空会造出一个巨大 TR。
+        # 30m 下一天只有 8 根 bar、缓冲要 atr_period+1=15 根，
+        # 一个跳空能把近两天的 ATR 都顶高 → 止损/跟踪距离被系统性放大。
+        day = (bar.date or "")[:10]
+        if self._last_day and day and day != self._last_day:
+            self._bars.clear()
+        if day:
+            self._last_day = day
+
         prev_ts = self._bars[-1].timestamp if self._bars else 0
         self._bars.append(bar)
-        # T3：由相邻两根闭合 K 线推断 bar 间隔（1 分钟 ~ 4 小时视为有效），
-        # 供 EOD "bar 结束时刻" 判定使用；跳变（隔夜/休市）不影响——
-        # EOD 判定只发生在尾盘连续段，此时相邻间隔就是标准 bar 周期。
+        # 兜底推断：只在没拿到配置/注入值时才用。
+        # norm_delta_sec 会嗅探毫秒/秒（阈值 1e5），不再像旧代码那样
+        # 把毫秒差值直接当秒去比 60~14400 —— 那会让 4 个周期全部推断失败。
         if prev_ts and bar.timestamp > prev_ts:
-            secs = int(bar.timestamp - prev_ts)
-            if 60 <= secs <= 14400:
-                self._bar_secs = secs
+            # 用**绝对值**判定单位（毫秒 ~1.7e12 / 秒 ~1.7e9），不用差值阈值：
+            # 差值口径在"毫秒源 + 15s 周期"（15000）与"秒源 + 30m 周期"（1800）
+            # 之间无法取到一个同时正确的分界。
+            secs = (bar.timestamp - prev_ts) / ts_scale(bar.timestamp)
+            if 1 <= secs <= 14400:
+                self._inferred_bar_secs = int(round(secs))
 
     # ---------- ATR ----------
     def _atr(self) -> Optional[float]:
@@ -176,6 +219,8 @@ class LayeredExitPolicy(ExitPolicy):
     # ---------- 时间解析：从 "2026-09-01 14:55" 取 "14:55" ----------
     @staticmethod
     def _bar_time(bar: Bar) -> str:
+        """【遗留】只取 HH:MM。15s 周期的 date 带秒，这里会丢秒 —— 新代码
+        一律改走 `bar_sec_of_day()`（返回当日秒数，秒级精度）。"""
         s = bar.date
         if " " in s:
             s = s.split(" ", 1)[1]
@@ -232,7 +277,8 @@ class LayeredExitPolicy(ExitPolicy):
 
     # ---------- 每根 bar 闭合后判定 ----------
     def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0) -> Optional[ExitCheck]:
+              bars_held: int = 0,
+              held_secs: Optional[float] = None) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price
         tp = plan.tp_price
@@ -255,24 +301,35 @@ class LayeredExitPolicy(ExitPolicy):
             if tp is not None and bar.low <= tp:
                 return ExitCheck("tp", tp)
 
-        # ④ L4 时间/收盘兜底（硬上限，优先于跟踪）
+        # ④ L4 时间兜底（主口径）：max_hold_bars = **K 线根数**，与周期无关。
+        #    判断依据是"多少根 bar 没走出来"，不是墙钟时间 —— 计量单位是
+        #    结构信息量（一根 bar = 一份证据），所以 30 在任何周期下都是 30 根。
+        #    （2026-09-08 更正：此前改成秒制是把 Step 2 标定问题误判成 Step 1
+        #     缺陷，会在 15s/1m/30m 上静默改变策略行为，已撤回。）
         if self.max_hold_bars > 0 and bars_held >= self.max_hold_bars:
             return ExitCheck("time", bar.close)
+        #    附加顶（可选）：max_hold_seconds 墙钟上限，默认 0=不启用。
+        #    用途：粗周期上加一道"绝不过夜/绝不超时"硬顶。
+        if self.max_hold_seconds > 0:
+            hs = held_secs
+            if hs is None:
+                bs = self.effective_bar_secs
+                hs = float(bars_held * bs) if (bs and bars_held) else None
+            if hs is not None and hs >= self.max_hold_seconds:
+                return ExitCheck("time", bar.close)
+
+        # ⑤ L4 收盘兜底：统一走 eod_triggered（bar 结束 + lead×bar_secs ≥ 阈值）。
+        #    旧逻辑有双重缺陷：
+        #      a) 用 `_bar_time()` 取 HH:MM → 15s 的 date 带秒被截掉，最多偏 59 秒；
+        #      b) bar 结束时判定 → 30m 最后一根 14:30-15:00 闭合时已收盘，永远平不掉。
+        #    新逻辑提前 eod_lead_bars（默认 1）根 bar 判定，四个周期都能平掉。
         if self.session_end_hhmm:
-            # T3（2026-09-05）：以 bar 结束时刻 ≥ 阈值判定。bar 闭合即推送，
-            # 5m 下 14:50 起点的 bar 在 14:55 到达触发 = 14:55 发单，留足 5 分钟缓冲；
-            # 旧口径（bar 起点判定）会让 14:55-15:00 那根在收盘后才触发，发单零缓冲。
-            # _bar_secs 未知（仅首根/异常流）时退回起点判定保底，不丢兜底。
-            thr = int(self.session_end_hhmm[:2]) * 60 + int(self.session_end_hhmm[3:5])
-            s = self._bar_time(bar)
-            start_min = int(s[:2]) * 60 + int(s[3:5])
-            if self._bar_secs:
-                end_min = start_min + max(1, int(round(self._bar_secs / 60)))
-                hit = end_min >= thr
-            else:
-                hit = s >= self.session_end_hhmm
-            if hit:
-                return ExitCheck("eod_time", bar.close)
+            thr = parse_hhmmss(self.session_end_hhmm)
+            start = bar_sec_of_day(bar)
+            if thr is not None and start is not None:
+                if eod_triggered(start, self.effective_bar_secs, thr,
+                                 self.eod_lead_bars):
+                    return ExitCheck("eod_time", bar.close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         if self.use_trailing and R:

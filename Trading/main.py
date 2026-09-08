@@ -35,6 +35,8 @@ from Trading import Broker, Source, Strategy      # noqa: E402  导入触发注�
 from Trading.Config import GatewayConfig                         # noqa: E402
 from Trading.Engine.Engine import GatewayEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
+from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS,          # noqa: E402
+                                        bar_secs_for)
 from Trading.Infra.Store import Store                           # noqa: E402
 from Trading.Infra.Types import now_cn                          # noqa: E402
 
@@ -73,6 +75,20 @@ def build_runtime(args):
         cfg.source.bar_mode = args.bar_mode
     if args.broker:
         cfg.broker = args.broker
+
+    # Step 1（2026-09-08）：启动期周期校验 —— fail-fast。
+    #   周期是所有时间语义（时间止损 / 收盘强平 / 追价窗口）的地基。旧设计里
+    #   周期错了不会报错，只会让策略在运行时"推断失败 → 静默降级"，实盘上表现
+    #   为"兜底逻辑从没生效过但没人知道"。这里直接拦下，比事后查日志便宜得多。
+    _bs = bar_secs_for(cfg.source.freq, default=None)
+    if _bs is None:
+        raise SystemExit(
+            "[gw] 不支持的 K 线周期: {!r}（当前支持: {}）。"
+            "新增周期请同步 Trading/Infra/PeriodProfile.py 的 FREQ_SEC "
+            "并补 test_period_consistency 对账。".format(
+                cfg.source.freq, ", ".join(SUPPORTED_FREQS)))
+    print("[gw] 周期档案 freq={} bar_secs={}s（约 {:.1f} 根/交易日）".format(
+        cfg.source.freq, _bs, (4.5 * 3600) / _bs))
 
     # 下游（Source.build_source）仍按 dict 消费
     src: Dict[str, Any] = cfg.source.model_dump()

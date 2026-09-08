@@ -31,6 +31,7 @@ import time
 import urllib.request
 from typing import Any, Dict, Iterator, Optional, Set
 
+from ..Config import SourceConfig
 from ..Infra.Types import Bar, Signal
 from .Base import Event, Source, register_source
 
@@ -71,7 +72,10 @@ class SseSource(Source):
         self.freq = str(self.params.get("freq") or "5m")
         self.bar_mode = str(self.params.get("bar_mode") or "confirmed")
         # P1: 信号新鲜度过滤，单位分钟。0=不过滤。
-        self.signal_max_age_min = float(self.params.get("signal_max_age_minutes", 60) or 0)
+        # 默认值单一事实源 = Config.SourceConfig（不在本文件写第二套 60）。
+        self.signal_max_age_min = float(
+            self.params.get("signal_max_age_minutes",
+                            SourceConfig().signal_max_age_minutes) or 0)
         self.reconnect = float(self.params.get("reconnect", 5) or 5)
         self.reconnect_max = float(self.params.get("reconnect_max", 60) or 60)
         self.max_retry = int(self.params.get("max_retry", 0) or 0)   # 0=无限

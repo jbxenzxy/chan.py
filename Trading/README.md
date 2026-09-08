@@ -137,7 +137,9 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
       "take_profit_points": 10.0,        // 止盈 10 点
       "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
       "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
-      "max_hold_bars": 0                 // 0=不限；>0 持有 N 根 K 线后强制离场
+      "max_hold_seconds": 0.0            // 0=不限；>0 持有 N **秒**后强制离场
+                                         //   （原 max_hold_bars 已废弃：根数跨周期
+                                         //    语义漂移 120 倍，见下「多周期支持」）
     }
   },
   "source": { "type": "replay", "replay_dir": "./replay_data",
@@ -145,6 +147,25 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
               "symbol": "KQ.m@CFFEX.IF", "freq": "5m" }
 }
 ```
+
+### 多周期支持（30m / 5m / 1m / 15s）
+
+`source.freq` 目前支持 `30m` / `5m` / `1m` / `15s` 四种，**改这一个字段即可切换**。
+不支持的周期会在启动时直接报错退出（fail-fast），不会静默降级。
+
+周期相关的全部时间语义集中在 `Infra/PeriodProfile.py`（唯一事实源）：
+
+| 参数 | 含义 | 周期相关性 |
+|---|---|---|
+| `bar_secs` | 一根 bar 多少秒 | 由 `freq` 自动推导注入，一般不用手填 |
+| `max_hold_seconds` | 最长持仓**秒数**（取代原 `max_hold_bars`） | 跨周期可比，改周期不需重调 |
+| `session_end_hhmm` | 收盘前强平阈值时刻 | 与周期无关 |
+| `eod_lead_bars` | 提前几根 bar 判定"该平了"（默认 1） | 保证 30m 也能在收盘前平掉 |
+| `signal_max_age_minutes` | 信号新鲜度过滤（分钟） | **强相关**：15s 下 60 分钟 = 240 根 bar，建议收紧 |
+
+新增周期的正确姿势：改 `Infra/PeriodProfile.py` 的 `FREQ_SEC` → 跑
+`Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）
+→ 跑 `Test/test_period_matrix.py`（四周期 × 毫秒/秒源回归矩阵）。
 
 > 把 `stop_at_signal_extreme` 置 false 会改用固定点数止损（`stop_points`），可与信号极值止损做 A/B 对比。`max_signal_range_points` 配合 M0 的「信号振幅分布」结果，能直接过滤掉止损过宽的信号。
 

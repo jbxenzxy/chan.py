@@ -162,12 +162,24 @@ def main():
     check("跟踪新止损 = 126", chk7.plan.stop_price if chk7 else None, 126.0)
     check("跟踪极值 _trail_best 落盘", chk7.plan.params.get("_trail_best"), 131.0)
 
-    print("\n[7] L4 时间止损：bars_held ≥ max_hold_bars")
+    print("\n[7] L4 时间止损：bars_held ≥ max_hold_bars（根数口径，与周期无关）")
     pol8 = LayeredExitPolicy({"max_hold_bars": 3})
     pos8 = make_position(Side.LONG, 100.0, 90.0, 120.0)
     # 第 3 根（bars_held=3）且未触 SL/TP（bar 在 95~105 之间）
-    chk8 = pol8.check(pos8, make_bar(2300, 100, 105, 95, 100), spec, 3)
+    chk8 = pol8.check(pos8, make_bar(2300, 100, 105, 95, 100), spec,
+                      bars_held=3, held_secs=900.0)
     check("时间止损 reason=time", chk8.reason if chk8 else None, "time")
+    # 只持 2 根 → 不触发。注意：哪怕墙钟已很久（900 秒）也不触发 ——
+    # 时间止损的计量单位是**根数**不是墙钟（遵 L4 设计文档"N 根无进展 → 走"）。
+    chk8b = pol8.check(pos8, make_bar(2301, 100, 105, 95, 100), spec,
+                       bars_held=2, held_secs=900.0)
+    check("只持 2 根不触发（哪怕墙钟已 900 秒）", chk8b is None, True)
+    # 可选的墙钟附加顶：与根数取"或"，谁先到谁生效
+    pol8s = LayeredExitPolicy({"max_hold_bars": 30, "max_hold_seconds": 600.0})
+    chk8c = pol8s.check(pos8, make_bar(2302, 100, 105, 95, 100), spec,
+                        bars_held=2, held_secs=900.0)
+    check("根数未到但墙钟 ≥ max_hold_seconds → 也触发",
+          chk8c.reason if chk8c else None, "time")
 
     print("\n[8] L4 收盘兜底：到点(session_end_hhmm)强平")
     pol9 = LayeredExitPolicy({"session_end_hhmm": "14:55"})
@@ -181,30 +193,39 @@ def main():
     print("\n[9] 全部关闭时（use_atr/use_trailing 均 False，无 time）只判硬出场")
     pol10 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
                                "use_trailing": False,
-                               "max_hold_bars": 0, "session_end_hhmm": ""})
+                               "max_hold_bars": 0, "max_hold_seconds": 0.0,
+                               "session_end_hhmm": ""})
     pos10 = make_position(Side.LONG, 100.0, 90.0, 120.0)
     chk10 = pol10.check(pos10, make_bar(2500, 100, 105, 95, 100), spec, 100)
     check("仅硬出场、无触发返回 None", chk10 is None, True)
 
-    print("\n[10] T3: EOD 以 bar 结束时刻判定（14:50 起点那根在 14:55 到达即触发）")
+    print("\n[10] EOD 提前 eod_lead_bars(1) 根判定：14:45 起点那根在 14:50 到达即触发")
     pol11 = LayeredExitPolicy({"session_end_hhmm": "14:55"})
-    # 喂两根间隔 300s 的闭合 bar，让策略推断出 bar 周期
+    # 喂两根间隔 300s 的闭合 bar，让策略推断出 bar 周期（兜底路径，单位嗅探）
     pol11.on_bar(make_bar(1000, 100, 101, 99, 100, "2026-09-01 14:40"), spec)
     pol11.on_bar(make_bar(1300, 100, 101, 99, 100, "2026-09-01 14:45"), spec)
+    check("推断出 bar_secs=300（秒单位）", pol11.effective_bar_secs, 300)
     pos11 = make_position(Side.LONG, 100.0, 90.0, 120.0)
-    # 14:50 起点的 bar 覆盖 14:50-14:55、14:55 推送 → 结束时刻 14:55 ≥ 阈值 → 触发（留足缓冲）
-    chk11 = pol11.check(pos11, make_bar(1600, 100, 105, 95, 100, "2026-09-01 14:50"), spec, 5)
-    check("14:50 起点 bar（结束 14:55）触发 eod_time", chk11.reason if chk11 else None, "eod_time")
-    # 14:45 起点的 bar 结束时刻 14:50 < 14:55 → 不触发
+    # 14:45 起点的 bar 覆盖 14:45-14:50；再持一根到 14:55 = 阈值 → 本根闭合即平，
+    # 14:50 发单留 10 分钟（旧口径要等到 14:55 那根，只留 5 分钟）
     chk11b = pol11.check(pos11, make_bar(1300, 100, 105, 95, 100, "2026-09-01 14:45"), spec, 5)
-    check("14:45 起点 bar（结束 14:50）不触发", chk11b is None, True)
-    # 14:55 起点的 bar（结束 15:00，若上一根 EOD 单失败）→ 仍触发作重试兜底
+    check("14:45 起点 bar（下一根即跨阈值）触发 eod_time",
+          chk11b.reason if chk11b else None, "eod_time")
+    # 14:40 起点的 bar 结束 14:45，再持一根到 14:50 < 14:55 → 不触发
+    chk11d = pol11.check(pos11, make_bar(1000, 100, 105, 95, 100, "2026-09-01 14:40"), spec, 5)
+    check("14:40 起点 bar（结束 14:45）不触发", chk11d is None, True)
+    # 14:50 / 14:55 起点（若上一根 EOD 单失败）→ 仍触发作重试兜底
+    chk11 = pol11.check(pos11, make_bar(1600, 100, 105, 95, 100, "2026-09-01 14:50"), spec, 5)
+    check("14:50 起点 bar 仍触发（重试兜底）", chk11.reason if chk11 else None, "eod_time")
     chk11c = pol11.check(pos11, make_bar(1900, 100, 105, 95, 100, "2026-09-01 14:55"), spec, 6)
     check("14:55 起点 bar（结束 15:00）仍触发", chk11c.reason if chk11c else None, "eod_time")
 
     print("\n[11] T4: 裸构造默认值 = config.py 单一事实源")
     pol12 = LayeredExitPolicy()
-    check("max_hold_bars 默认 = config 30", pol12.max_hold_bars, 30)
+    check("max_hold_bars 默认 = config 30（根数口径）", pol12.max_hold_bars, 30)
+    check("max_hold_seconds 默认 = config 0.0（墙钟顶默认关闭）",
+          pol12.max_hold_seconds, 0.0)
+    check("eod_lead_bars 默认 = config 1", pol12.eod_lead_bars, 1)
     check("session_end_hhmm 默认 = config 14:55", pol12.session_end_hhmm, "14:55")
     check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
@@ -216,7 +237,7 @@ def main():
                                "use_trailing": True, "breakeven_trigger_r": 99.0,
                                "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 1.5,
                                "trailing_atr_multiple": 0.0, "trailing_distance_points": 1.0,
-                               "max_hold_bars": 0, "session_end_hhmm": ""})
+                               "max_hold_seconds": 0.0, "session_end_hhmm": ""})
     # A 场景（R=10）：盘中冲 2R（high=120，未到 3R 止盈 130）、收盘回落 1.2R（112）
     #   旧口径（fav 看收盘 1.2R=12 点 < 1.5R=15 点）漏检；
     #   新口径（best=120，20 点 ≥ 15 点）抬损 = best-1 = 119

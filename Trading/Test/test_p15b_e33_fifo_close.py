@@ -395,8 +395,9 @@ with tmp_dir() as td:
     eng.positions.add(p0)
     eng.last_bar = make_bar(close=4555.0, ts=5000)
     eng.bars_seen = 10
-    # 差值 = 5000 - 4996 = 4 <= _close_retry_bars(5) → cooldown 中
-    eng._last_close_failed_bar_ts = 4996
+    # cooldown 按**根数**判定（Step 1 修复）：10 - 7 = 3 < _close_retry_bars(5) → 冷却中
+    #   旧口径拿毫秒时间戳差（5000-4996=4）比"5 根" → 等价 5 毫秒，冷却从未生效。
+    eng._last_close_failed_bar_seq = 7
     eng._close_positions([p0], "manual", 4555.0, eng.last_bar)
     check("cooldown：簿 1 仓（未平）", len(eng.positions), 1)
     check("cooldown：broker 0 单", len(eng.broker.orders), 0)

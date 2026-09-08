@@ -306,8 +306,12 @@ with tmp_dir() as tmp:
           [p.entry_mode for p in engine.positions.positions],
           [EntryMode.OPEN_FIRST])
 
-    # 下一根 bar（冷却期外）→ 关闭态自动补锁
-    engine.on_bar(make_bar(2000))
+    # 冷却期外 → 关闭态自动补锁。
+    # Step 1 修复（2026-09-08）：cooldown 现在真的按"根数"生效
+    # （旧口径是拿毫秒时间戳差值比 5，等价 5 毫秒，恒不生效 → 测试只需 1 根 bar），
+    # 所以这里要推进 _close_retry_bars(5) 根 bar 才会重试补锁。
+    for i in range(engine._close_retry_bars):
+        engine.on_bar(make_bar(2000 + i))
     check("[5c] 补锁后簿内 LOCKED",
           [p.entry_mode for p in engine.positions.positions],
           [EntryMode.LOCKED])

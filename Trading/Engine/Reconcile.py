@@ -103,6 +103,8 @@ class ReconcileMixin:
             all_cleared = False
         if all_cleared:
             self._last_close_failed_bar_ts = 0
+            # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
+            self._last_close_failed_bar_seq = 0
             self._persist()
             self._state = EngineState.IDLE
 
