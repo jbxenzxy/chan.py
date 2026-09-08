@@ -1,13 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-出场策略合集（Exit.py）
-=======================
-集中全部出场策略实现，可插拔（经 Base.py 注册表按 name 构造）：
+出场策略（Exit.py）
+====================
+2026-09-08 精简：出场只有一个策略 `LayeredExitPolicy`（L1-L4 分层出场），
+原可选的 `DefaultExitPolicy`（简单固定点数出场）已删除——生产只用 L1-L4，
+不再保留无用的第二套选择。
 
-    DefaultExitPolicy    默认止盈/止损/时间（用户当前规则）
-    LayeredExitPolicy    标准分层组合出场 L1-L4
-
-三个刻意保留的保守设定（Default 沿用）
+三个刻意保留的保守设定（LayeredExitPolicy）
     ① 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
     ② 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
     ③ 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
@@ -18,95 +17,12 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
-from ..Config import DefaultExitParamsConfig, ExitParamsConfig
+from ..Config import ExitConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.PeriodProfile import (bar_sec_of_day, eod_triggered,
                                    norm_delta_sec, parse_hhmmss, ts_scale)
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
-from .Base import ExitCheck, ExitPolicy, register_exit
-
-
-@register_exit
-class DefaultExitPolicy(ExitPolicy):
-    name = "DefaultExitPolicy"
-
-    def __init__(self, params=None):
-        super().__init__(params)
-        p = DefaultExitParamsConfig(**(self.params or {}))
-        self.p = p
-        self.take_profit_points = float(p.take_profit_points)
-        self.stop_at_signal_extreme = p.stop_at_signal_extreme
-        self.stop_points = float(p.stop_points or 0.0)
-        self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
-        # 根数为主（bar 语义），秒为可选附加顶（默认 0=不启用）
-        self.max_hold_bars = int(p.max_hold_bars or 0)
-        self.max_hold_seconds = float(p.max_hold_seconds or 0.0)
-
-    def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
-        buf = self.stop_buffer_ticks * spec.price_tick
-        is_long = signal.side is Side.LONG
-        min_gap = spec.price_tick  # 至少 1 个 tick 间距（防止 stop==entry 立即触发）
-
-        # 止损基准：默认信号K线极值（结构止损）；关掉则改固定点数，方便 A/B 对比
-        if self.stop_at_signal_extreme:
-            base_stop = signal.low if is_long else signal.high
-        else:
-            base_stop = entry_price - self.stop_points if is_long \
-                else entry_price + self.stop_points
-
-        if is_long:
-            raw_stop = base_stop - buf
-            raw_tp = entry_price + self.take_profit_points
-            stop = spec.round_price(raw_stop, "up")     # 止损往上靠 → 更容易触发（保守）
-            tp = spec.round_price(raw_tp, "down")       # 止盈往下靠 → 更晚更少（保守）
-        else:
-            raw_stop = base_stop + buf
-            raw_tp = entry_price - self.take_profit_points
-            stop = spec.round_price(raw_stop, "down")
-            tp = spec.round_price(raw_tp, "up")
-
-        # P2 修复：保证 stop 严格在 entry 的"不利侧"且至少 1 tick 间距。
-        # 历史场景：信号较老（chan.py SSE 推陈旧信号），行情已下跌，
-        # 限价让价后 entry < signal.low。如果还把 stop 设在 signal.low 上方，
-        # 就成了"开仓即触发止盈"的反向单——逻辑完全错乱。
-        # 修正策略：buy 止损必须在 entry 下方；short 止损必须在 entry 上方。
-        if is_long:
-            if stop is not None and stop >= entry_price - min_gap:
-                # 信号极值已不可信（< entry），改用 entry 下方固定距离止损
-                stop = spec.round_price(entry_price - max(self.stop_points, min_gap), "down")
-        else:
-            if stop is not None and stop <= entry_price + min_gap:
-                stop = spec.round_price(entry_price + max(self.stop_points, min_gap), "up")
-
-        return ExitPlan(name=self.name, stop_price=stop, tp_price=tp,
-                        params=dict(self.params))
-
-    def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0,
-              held_secs: Optional[float] = None) -> Optional[ExitCheck]:
-        plan = position.exit_plan
-        stop = plan.stop_price
-        tp = plan.tp_price
-        is_long = position.side is Side.LONG
-
-        if is_long:
-            if stop and bar.low <= stop:
-                return ExitCheck("sl", stop)
-            if tp is not None and bar.high >= tp:
-                return ExitCheck("tp", tp)
-        else:
-            if stop and bar.high >= stop:
-                return ExitCheck("sl", stop)
-            if tp is not None and bar.low <= tp:
-                return ExitCheck("tp", tp)
-
-        if self.max_hold_bars > 0 and bars_held >= self.max_hold_bars:
-            return ExitCheck("time", bar.close)
-        # 可选墙钟上限（默认 0=不启用）：与根数是"或"关系，谁先到谁生效
-        if self.max_hold_seconds > 0 and held_secs is not None \
-                and held_secs >= self.max_hold_seconds:
-            return ExitCheck("time", bar.close)
-        return None
+from .Base import ExitCheck, ExitPolicy
 
 
 # 参数默认值单一事实源（2026-09-07 严格模式）：
@@ -114,14 +30,13 @@ class DefaultExitPolicy(ExitPolicy):
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
 
 
-@register_exit
 class LayeredExitPolicy(ExitPolicy):
     name = "LayeredExitPolicy"
 
     # ---------- 参数 ----------
     def __init__(self, params=None):
         super().__init__(params)
-        p = ExitParamsConfig(**(self.params or {}))
+        p = ExitConfig(**(self.params or {}))
         self.p = p
         # L1 R 倍数定基线
         self.stop_at_signal_extreme = p.stop_at_signal_extreme

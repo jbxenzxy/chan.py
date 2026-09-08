@@ -73,13 +73,13 @@ def tmp_dir():
 
 from Trading import Broker  # noqa: E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Base import ExitCheck, ExitPolicy  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, EntryMode, EngineState, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -151,15 +151,15 @@ def make_pos(symbol="CFFEX.IF", side=Side.LONG, vol=1, entry_price=4500.0,
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
                  store=None, ev=None):
-    cfg = cfg or GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = cfg or TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = exit_policy or DefaultExitPolicy({})
+    exitp = exit_policy or LayeredExitPolicy()
     store = store or Store(os.path.join(tmpdir, "state.db"))
     ev = ev or EventLog(os.path.join(tmpdir, "events.jsonl"),
                         echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker, ev
 
 
@@ -320,7 +320,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[6] 批量 LOCK 落簿（max=2）+ 次日单笔解锁边界")
 with tmp_dir() as tmp:
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 2
     engine, store, broker, ev = build_engine(tmp, cfg=cfg)
     p1 = make_pos(signal_key="P18-BA", entry_bar_seq=1)

@@ -72,12 +72,12 @@ def tmp_dir():
 from Trading import Broker  # noqa: E402  注册 dry_run / simnow
 from Trading.Broker.Base import INTENT_TO_OFFSET, Broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, EntryMode, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -111,21 +111,21 @@ def make_bar(ts, o, h, l, c, date="2026-09-01 09:40"):
 
 
 def build_engine(tmpdir, exit_plan_stop=4540.0):
-    """构造最小可跑 GatewayEngine：dry_run broker + 默认策略 + 临时 sqlite"""
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    """构造最小可跑 TradingEngine：dry_run broker + 默认策略 + 临时 sqlite"""
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    # 默认出场策略参数（TP=10 / SL=5，走 DefaultExitParamsConfig 默认值）。
+    # 默认出场策略参数（TP=10 / SL=5，走 ExitConfig 默认值；原 DefaultExitParamsConfig 已并入）。
     # 注：旧代码传的 stop_distance_points / tp_distance_points 是错键，
     #    DefaultExitPolicy 实际读 stop_points / take_profit_points，此前被静默忽略；
     #    严格模式下未知键会报错，故去掉，行为与改动前一致。
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store_path = os.path.join(tmpdir, "state.db")
     store = Store(store_path)
     event_path = os.path.join(tmpdir, "events.jsonl")
     ev = EventLog(event_path, echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker, ev
 
 
@@ -213,7 +213,7 @@ p_open = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                   exit_plan=ExitPlan(name="x", stop_price=99.0),
                   entry_mode=EntryMode.OPEN_FIRST)
-intent, side = GatewayEngine._exit_intent(p_open)
+intent, side = TradingEngine._exit_intent(p_open)
 check("OPEN_FIRST → OrderIntent.LOCK", intent, OrderIntent.LOCK)
 check("OPEN_FIRST → 反向 side (LONG→SHORT)", side, Side.SHORT)
 
@@ -221,7 +221,7 @@ p_unlock = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                     entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                     exit_plan=ExitPlan(name="x", stop_price=99.0),
                     entry_mode=EntryMode.UNLOCK_FIRST)
-intent2, side2 = GatewayEngine._exit_intent(p_unlock)
+intent2, side2 = TradingEngine._exit_intent(p_unlock)
 check("UNLOCK_FIRST → OrderIntent.CLOSE", intent2, OrderIntent.CLOSE)
 check("UNLOCK_FIRST → pos.side (LONG)", side2, Side.LONG)
 
@@ -231,7 +231,7 @@ p_default = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                      exit_plan=ExitPlan(name="x", stop_price=99.0))
 # entry_mode 默认 OPEN_FIRST
 check("默认 entry_mode==OPEN_FIRST", p_default.entry_mode, EntryMode.OPEN_FIRST)
-intent3, side3 = GatewayEngine._exit_intent(p_default)
+intent3, side3 = TradingEngine._exit_intent(p_default)
 check("默认 → OrderIntent.LOCK", intent3, OrderIntent.LOCK)
 check("默认 + SHORT 持仓 → 反向 side (LONG)", side3, Side.LONG)
 

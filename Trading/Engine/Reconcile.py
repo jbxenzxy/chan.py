@@ -2,7 +2,7 @@
 """
 对账与卡单监控（ReconcileMixin）
 ================================
-从 Engine.py 拆出的运维职能，以 Mixin 形式挂回 GatewayEngine（方法仍通过 self 调用）：
+从 Engine.py 拆出的运维职能，以 Mixin 形式挂回 TradingEngine（方法仍通过 self 调用）：
 
     _reconcile_position / _reconcile_positions / _reconcile_side
         持仓对账（增强 B）：账本 vs 真实持仓逐边比对，发现漂移时落事件并修正。

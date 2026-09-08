@@ -49,7 +49,7 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 try:
-    from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
+    from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
     from Trading.Risk.PositionSizing import PositionSizer  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 except Exception as e:  # pragma: no cover
@@ -113,9 +113,9 @@ print("\n[1] 默认关闭：固定手数，完全不看权益（引入模块零�
 # ---- 1a. DEFAULT_CONFIG 必须是关闭的（这条是"默认不变更"的契约）----
 check("DEFAULT_CONFIG.sizing.enabled == False",
       DEFAULT_CONFIG.get("sizing", {}).get("enabled"), False)
-_cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
-check("GatewayConfig 能解析出 sizing 段", isinstance(_cfg.sizing, SizingConfig), True)
-check(" GatewayConfig.sizing.enabled == False", _cfg.sizing.enabled, False)
+_cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+check("TradingConfig 能解析出 sizing 段", isinstance(_cfg.sizing, SizingConfig), True)
+check(" TradingConfig.sizing.enabled == False", _cfg.sizing.enabled, False)
 check("严格模式：sizing 未知键报错", _raises(lambda: SizingConfig(bogus_key=1)), True)
 
 _s_default = PositionSizer(_cfg.sizing, _cfg.instrument, _cfg.risk.max_volume)

@@ -86,12 +86,12 @@ def tmp_dir():
 from Trading.Broker.Base import OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import Bar, Position, Side  # noqa: E402
 
@@ -313,7 +313,7 @@ class GMockBroker(DryRunBroker):
 
 
 def make_engine(tmpdir, *, broker=None):
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 10
     cfg.risk.enforce_session = False
@@ -322,10 +322,10 @@ def make_engine(tmpdir, *, broker=None):
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": 5.0})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    return GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 
 def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):

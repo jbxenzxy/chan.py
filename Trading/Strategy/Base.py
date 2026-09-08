@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-策略层协议（可插拔点 ①②）
-==========================
-这里是**唯一**需要为了"换策略"而改代码的地方。管道（engine/broker/source）不感知
-任何具体止盈止损逻辑，只调用这两个接口。
+策略层协议（出场 ExitPolicy / 入场 EntryPolicy 两个接口）
+=========================================================
+管道（engine/broker/source）不感知任何具体止盈止损逻辑，只调用这两个接口。
 
-换策略的正确姿势
-    新建一个 py 文件 → 继承 ExitPolicy / EntryPolicy → 用 @register 装饰
-    → 在 Trading/Config.py 里把 name 改成你的类名。其余代码一行不动。
+2026-09-08 精简：取消「策略选择器」抽象。
+    生产环境入场只有一个策略 DefaultEntryPolicy、出场只有一个策略
+    LayeredExitPolicy（L1-L4 分层），用户明确不会增加第二种，因此不再有
+    注册表 / @register / build_*_policy 这类路由机制。main.py 与测试直接
+    实例化这两个类即可。
 
 出场判定返回 ExitCheck；若策略想顺带更新止盈止损（跟踪止损、移动止盈），
 在 ExitCheck.plan 里带上新的 ExitPlan，引擎会持久化。
@@ -22,9 +23,6 @@ from typing import Any, Dict, Optional, Type
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, Decision, Position, Side, Signal, ExitPlan
 
-EXIT_POLICIES: Dict[str, Type["ExitPolicy"]] = {}
-ENTRY_POLICIES: Dict[str, Type["EntryPolicy"]] = {}
-
 
 def _accepts_held_secs(fn: Any) -> bool:
     """策略的 check() 是否接受 held_secs 关键字（新签名）。"""
@@ -32,30 +30,6 @@ def _accepts_held_secs(fn: Any) -> bool:
         return "held_secs" in inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return False
-
-
-def register_exit(cls: Type["ExitPolicy"]) -> Type["ExitPolicy"]:
-    EXIT_POLICIES[cls.name] = cls
-    return cls
-
-
-def register_entry(cls: Type["EntryPolicy"]) -> Type["EntryPolicy"]:
-    ENTRY_POLICIES[cls.name] = cls
-    return cls
-
-
-def build_exit_policy(name: str, params: Optional[Dict[str, Any]] = None) -> "ExitPolicy":
-    if name not in EXIT_POLICIES:
-        raise KeyError(
-            "未注册的出场策略: {}（已注册: {}）".format(name, list(EXIT_POLICIES)))
-    return EXIT_POLICIES[name](params or {})
-
-
-def build_entry_policy(name: str, params: Optional[Dict[str, Any]] = None) -> "EntryPolicy":
-    if name not in ENTRY_POLICIES:
-        raise KeyError(
-            "未注册的入场策略: {}（已注册: {}）".format(name, list(ENTRY_POLICIES)))
-    return ENTRY_POLICIES[name](params or {})
 
 
 @dataclass

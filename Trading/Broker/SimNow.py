@@ -72,13 +72,13 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from ..Config import BrokerParamsConfig
-from ..Config import BrokerParamsConfig
+from ..Config import BrokerConfig
+from ..Config import BrokerConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import INTENT_TO_OFFSET, Broker, register_broker
 
-# broker 参数默认值的**单一事实源**：Trading/Config.py 的 BrokerParamsConfig 模型。
+# broker 参数默认值的**单一事实源**：Trading/Config.py 的 BrokerConfig 模型。
 # 本文件不再自带任何兜底数值（2026-09-07 严格模式）—— params 由配置模型构造，
 # 键必然齐全；取不到说明配置模型漏了字段，属于代码 bug，直接 fail-fast 抛异常。
 # （2026-09-05 曾修：旧代码 fill_timeout_open 兜底 10.0，与配置表的 5.0 矛盾。）
@@ -239,9 +239,9 @@ class SimNowBroker(Broker):
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         super().__init__(spec, params)
         # 严格模式（2026-09-07）：broker_params 以 Trading/Config.py 的
-        # BrokerParamsConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
+        # BrokerConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
         # 传了模型里没有的键（拼错 / 残留旧键）直接报错，不再静默忽略。
-        self.params = BrokerParamsConfig(**(params or {})).model_dump()
+        self.params = BrokerConfig(**(params or {})).model_dump()
         self._api = None
         # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
         self._quote = None
@@ -334,7 +334,7 @@ class SimNowBroker(Broker):
     def _param(self, key: str) -> Any:
         """读 broker 参数：只从配置模型给全的 params 里取（严格模式，无兜底）。
 
-        params 由 Trading/Config.py 的 BrokerParamsConfig 构造，键必然齐全；
+        params 由 Trading/Config.py 的 BrokerConfig 构造，键必然齐全；
         取不到说明配置模型漏了字段 —— 属于代码 bug，直接抛异常暴露，
         绝不带着"看起来合理"的默认值悄悄跑。
         """
@@ -342,7 +342,7 @@ class SimNowBroker(Broker):
         if v is not None:
             return v
         raise KeyError(
-            "broker 参数 '{}' 未在 BrokerParamsConfig（Trading/Config.py）定义，"
+            "broker 参数 '{}' 未在 BrokerConfig（Trading/Config.py）定义，"
             "或构造 broker 时传入的 broker_params 不完整".format(key))
 
     # ---------------- 连接与合约映射 ----------------

@@ -41,14 +41,14 @@ sys.path.insert(0, ROOT)
 from Trading import Broker, Source  # noqa: E402  触发注册
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
 from Trading.Source.Replay import ReplaySource  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, EngineState, EntryMode, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -79,9 +79,9 @@ def _section(title: str) -> None:
 def _build_engine(tmp_dir: str, broker=None, entry=None, exitp=None):
     """构造一个最小可跑引擎（dry-run broker）便于场景 A / B 复用。
 
-    用 GatewayConfig.from_dict(DEFAULT_CONFIG) 起步；broker / 策略可注入。
+    用 TradingConfig.from_dict(DEFAULT_CONFIG) 起步；broker / 策略可注入。
     """
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.state_dir = tmp_dir
     cfg.broker = "dry_run" if broker is None else broker.name
     spec = cfg.instrument
@@ -90,8 +90,8 @@ def _build_engine(tmp_dir: str, broker=None, entry=None, exitp=None):
     ev = EventLog(os.path.join(tmp_dir, "events.jsonl"), echo=False, echo_kinds=set())
     broker_obj = broker if broker is not None else DryRunBroker(spec, cfg.broker_params.model_dump())
     entry_obj = entry if entry is not None else DefaultEntryPolicy()
-    exitp_obj = exitp if exitp is not None else DefaultExitPolicy()
-    engine = GatewayEngine(cfg, broker_obj, entry_obj, exitp_obj, store, ev)
+    exitp_obj = exitp if exitp is not None else LayeredExitPolicy()
+    engine = TradingEngine(cfg, broker_obj, entry_obj, exitp_obj, store, ev)
     return engine, store, ev
 
 
@@ -203,8 +203,8 @@ def scenario_b_replay_smoke() -> bool:
         import shutil; shutil.rmtree(tmp)
     os.makedirs(tmp)
 
-    # 直接走 GatewayEngine.replay()（如果有），不然手动 source.events() → on_bar/on_signal
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    # 直接走 TradingEngine.replay()（如果有），不然手动 source.events() → on_bar/on_signal
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.state_dir = tmp
     spec = cfg.instrument
     store = Store(os.path.join(tmp, "state.db"))
@@ -212,8 +212,8 @@ def scenario_b_replay_smoke() -> bool:
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=set())
     broker = DryRunBroker(spec, cfg.broker_params.model_dump())
     entry = DefaultEntryPolicy()
-    exitp = DefaultExitPolicy()
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    exitp = LayeredExitPolicy()
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
 
     # 回放 demo 数据随包放在 Trading/replay_data（见 Trading/README.md），
     # 由测试文件自身位置（THIS=.../Trading/Test）推导，不依赖仓库根深度。
@@ -272,7 +272,7 @@ def scenario_b_replay_smoke() -> bool:
     new_store = Store(os.path.join(tmp, "state.db"))
     new_broker = DryRunBroker(spec, cfg.broker_params.model_dump())
     new_ev = EventLog(os.path.join(tmp, "events2.jsonl"), echo=False, echo_kinds=set())
-    engine2 = GatewayEngine(cfg, new_broker, entry, exitp, new_store, new_ev)
+    engine2 = TradingEngine(cfg, new_broker, entry, exitp, new_store, new_ev)
     _must(new_store is not None, "重启引擎构造成功")
     _must(engine2._state in (EngineState.IDLE, EngineState.IN_TRADE),
           "重启后引擎状态 ∈ {IDLE, IN_TRADE}",
@@ -318,9 +318,9 @@ def scenario_c_simnow_unlock_intent() -> bool:
         fake.TqAuth = _Auth
         fake.TqAccount = _Account
         sys.modules["tqsdk"] = fake
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = cfg.instrument
-    # 严格模式：broker_params 只传要覆盖的键，其余由 BrokerParamsConfig 补齐。
+    # 严格模式：broker_params 只传要覆盖的键，其余由 BrokerConfig 补齐。
     # 账号密码已不在配置里（只走环境变量 SN_ACCOUNT / TQ_ACCOUNT ...）。
     params = {"connect_retries": 0}      # 关键：立即失败（不真连）
     os.environ.pop("SN_ACCOUNT", None)

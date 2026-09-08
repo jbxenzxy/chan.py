@@ -94,7 +94,7 @@ def pol_for(bar_secs, **kw):
 
 
 def _run_engine_smoke():
-    """引擎级：用真实 GatewayEngine + DryRunBroker 跑四个周期。
+    """引擎级：用真实 TradingEngine + DryRunBroker 跑四个周期。
 
     不依赖 tqsdk / 网络 / 数据库外部服务（Store 用 tempfile sqlite）。
     """
@@ -104,8 +104,8 @@ def _run_engine_smoke():
 
     from Trading import Broker  # noqa: F401  触发 dry_run 注册
     from Trading.Broker.DryRun import DryRunBroker
-    from Trading.Config import DEFAULT_CONFIG, GatewayConfig
-    from Trading.Engine.Engine import GatewayEngine
+    from Trading.Config import DEFAULT_CONFIG, TradingConfig
+    from Trading.Engine.Engine import TradingEngine
     from Trading.Infra.EventLog import EventLog
     from Trading.Infra.Store import Store
     from Trading.Strategy.Entry import DefaultEntryPolicy
@@ -114,7 +114,7 @@ def _run_engine_smoke():
     for freq, secs, trigger_start, _early in FREQ_CASES:
         tmp = tempfile.mkdtemp(prefix="tg_period_")
         try:
-            cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+            cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
             cfg.source.freq = freq
             # 用 Layered 策略 + 尾盘阈值，检查引擎是否把 bar_secs 正确注入
             exitp = LayeredExitPolicy({"session_end_hhmm": SESSION_END,
@@ -122,7 +122,7 @@ def _run_engine_smoke():
             spec = InstrumentSpec()
             broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
             ev = EventLog(os.path.join(tmp, "ev.jsonl"), echo=False)
-            eng = GatewayEngine(cfg, broker, DefaultEntryPolicy({}), exitp,
+            eng = TradingEngine(cfg, broker, DefaultEntryPolicy({}), exitp,
                                 Store(os.path.join(tmp, "state.db")), ev)
             # ① 引擎解析出周期
             check("{} 引擎 bar_secs = {}".format(freq, secs),

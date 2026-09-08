@@ -21,7 +21,7 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..Broker.Base import Broker
-from ..Config import GatewayConfig
+from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.PeriodProfile import (
     bar_sec_of_day, bar_secs_for, eod_triggered, parse_hhmmss, ts_scale,
@@ -40,8 +40,8 @@ from ..Infra.Types import (
 )
 
 
-class GatewayEngine(ReconcileMixin):
-    def __init__(self, cfg: GatewayConfig, broker: Broker,
+class TradingEngine(ReconcileMixin):
+    def __init__(self, cfg: TradingConfig, broker: Broker,
                  entry_policy: EntryPolicy, exit_policy: ExitPolicy,
                  store: Store, ev: EventLog):
         self.cfg = cfg
@@ -134,10 +134,9 @@ class GatewayEngine(ReconcileMixin):
                 "freq_unknown", freq=cfg.source.freq,
                 note="未知的 K 线周期：出场策略的时间/EOD 兜底将退化为运行时推断，"
                      "请核对 Infra/PeriodProfile.FREQ_SEC")
-        # 收盘强平提前量（根）：与 ExitParamsConfig.eod_lead_bars 同一语义，
+        # 收盘强平提前量（根）：与 ExitConfig.eod_lead_bars 同一语义，
         # 引擎侧兜底判定（_after_close）也用它，两处行为保持一致。
-        self._eod_lead_bars: int = int(
-            (cfg.exit_policy.params or {}).get("eod_lead_bars", 1) or 1)
+        self._eod_lead_bars: int = int(cfg.exit_params.eod_lead_bars or 1)
         # 离场追价窗口（close_max_chase × chase_interval）若长于一根 bar，
         # 15s 下会出现"上一轮还没追完、下一根 bar 又发起新一轮"的叠加。
         # 不阻断（引擎本来就跨 bar 重试），但必须可见——历史上这类问题

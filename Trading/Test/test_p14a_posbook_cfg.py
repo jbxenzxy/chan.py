@@ -66,13 +66,13 @@ def tmp_dir():
 
 
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig, RiskConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, RiskConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     EntryMode, ExitPlan, Position, Side,
@@ -154,7 +154,7 @@ check("严格模式：RiskConfig 未知键报错",
       _raises(lambda: RiskConfig(bogus_key=1)), True)
 
 # DEFAULT_CONFIG 中也要有 max_open_positions（默认=1）
-cfg0 = GatewayConfig.from_dict(DEFAULT_CONFIG)
+cfg0 = TradingConfig.from_dict(DEFAULT_CONFIG)
 check("DEFAULT_CONFIG.risk.max_open_positions == 1",
       cfg0.risk.max_open_positions, 1)
 
@@ -324,15 +324,15 @@ print("\n[7] engine 构造时 cfg 化传递")
 
 with tmp_dir() as tmp:
     # 默认 cfg: max=1
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = cfg.instrument
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmp, "state.db"))
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     check("默认 cfg.max=1 → engine.positions.max_positions == 1",
           engine.positions.max_positions, 1)
 
@@ -341,7 +341,7 @@ with tmp_dir() as tmp:
     store2 = Store(os.path.join(tmp, "state2.db"))
     store2.wipe_runtime_state()
     ev2 = EventLog(os.path.join(tmp, "events2.jsonl"), echo=False, echo_kinds=None)
-    engine2 = GatewayEngine(cfg, broker, entry, exitp, store2, ev2)
+    engine2 = TradingEngine(cfg, broker, entry, exitp, store2, ev2)
     check("cfg.max=3 → engine.positions.max_positions == 3",
           engine2.positions.max_positions, 3)
 
@@ -375,15 +375,15 @@ with tmp_dir() as tmp:
     ])
     store.close()
 
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     check("默认 cfg.max=1", cfg.risk.max_open_positions, 1)
     spec = cfg.instrument
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store2 = Store(os.path.join(tmp, "state.db"))
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store2, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store2, ev)
 
     check("persisted=3 但 cfg.max=1 → engine.positions.__len__ == 1",
           len(engine.positions), 1)
@@ -409,15 +409,15 @@ with tmp_dir() as tmp:
 print("\n[9] 默认 cfg 不变：端到端冒烟（一开一平）")
 
 with tmp_dir() as tmp:
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = cfg.instrument
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmp, "state.db"))
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
 
     # 制造一个 bar + 信号
     from Trading.Infra.Types import Bar, Signal, now_cn
@@ -461,16 +461,16 @@ with tmp_dir() as tmp:
 print("\n[10] cfg.max=3 端到端：多仓 throw 守护")
 
 with tmp_dir() as tmp:
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 3
     spec = cfg.instrument
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmp, "state.db"))
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     check("cfg.max=3 → engine.positions.max_positions == 3",
           engine.positions.max_positions, 3)
 

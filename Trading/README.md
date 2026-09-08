@@ -81,9 +81,9 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)          (闸门)       (dry_run/…)
 ```
 
-**换策略 = 丢一个 py 文件进 `Strategy/` + 改 Trading/Config.py 里的类名**，engine/broker/source 一行不动。自定义出场策略 = 继承 `Strategy/Base.py` 的 `ExitPolicy`（实现 `plan()`+`check()`）+ `@register_exit` 注册 + 改 config 类名。
+**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `DefaultEntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L4 分层），不再有「注册表 / @register / 换类名」这类策略选择抽象。
 
-三个刻意保留的保守设定（`default_policy.py`）：
+三个刻意保留的保守设定（`Strategy/Exit.py` 的 LayeredExitPolicy）：
 
 1. 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
 2. 价格对齐一律往「对自己不利」方向取整（止损更易触发、止盈更晚更少）
@@ -123,24 +123,28 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "close_before_session_end": true,    // 收盘前强平
     "block_on_daily_loss": true
   },
-  "entry_policy": {
-    "name": "DefaultEntryPolicy",
-    "params": {
-      "reverse_on_opposite_signal": false,  // 反向信号只平今不反手
-      "max_signal_range_points": 0.0,       // 0=不限；>0 过滤振幅过大的信号
-      "min_stop_distance_points": 0.0
-    }
+  "entry_params": {
+    "reverse_on_opposite_signal": false,  // 反向信号只平今不反手
+    "max_signal_range_points": 0.0,       // 0=不限；>0 过滤振幅过大的信号
+    "min_stop_distance_points": 0.0,
+    "max_stop_distance_points": 0.0
   },
-  "exit_policy": {
-    "name": "DefaultExitPolicy",
-    "params": {
-      "take_profit_points": 10.0,        // 止盈 10 点
-      "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
-      "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
-      "max_hold_seconds": 0.0            // 0=不限；>0 持有 N **秒**后强制离场
-                                         //   （原 max_hold_bars 已废弃：根数跨周期
-                                         //    语义漂移 120 倍，见下「多周期支持」）
-    }
+  "exit_params": {
+    "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
+    "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
+    "r_multiple_tp": 2.0,              // 止盈 = 入场 ± 2R
+    "min_r_points": 2.0,               // R 下限（点数）
+    "use_atr": true,                   // ATR 自适应止损/止盈宽度
+    "atr_sl_multiple": 2.0,
+    "use_trailing": true,              // 保本 + 跟踪止损（L3）
+    "breakeven_trigger_r": 1.0,
+    "trailing_trigger_r": 2.0,
+    "trailing_atr_multiple": 1.5,
+    "max_hold_bars": 30,               // 最长持仓 K 线根数（主口径，与周期无关）
+    "max_hold_seconds": 0.0,           // 0=不启用；>0 加一道墙钟硬顶
+    "eod_lead_bars": 1,                // 提前 N 根 bar 判定收盘强平
+    "bar_secs": 0,                     // 0=引擎按 freq 自动推导注入
+    "session_end_hhmm": "14:55"
   },
   "source": { "type": "replay", "replay_dir": "./replay_data",
               "sse_base": "http://127.0.0.1:18081",
@@ -158,7 +162,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | 参数 | 含义 | 周期相关性 |
 |---|---|---|
 | `bar_secs` | 一根 bar 多少秒 | 由 `freq` 自动推导注入，一般不用手填 |
-| `max_hold_seconds` | 最长持仓**秒数**（取代原 `max_hold_bars`） | 跨周期可比，改周期不需重调 |
+| `max_hold_seconds` | 最长持仓**秒数**（可选附加顶，与 `max_hold_bars` 取「或」） | 跨周期可比，改周期不需重调 |
 | `session_end_hhmm` | 收盘前强平阈值时刻 | 与周期无关 |
 | `eod_lead_bars` | 提前几根 bar 判定"该平了"（默认 1） | 保证 30m 也能在收盘前平掉 |
 | `signal_max_age_minutes` | 信号新鲜度过滤（分钟） | **强相关**：15s 下 60 分钟 = 240 根 bar，建议收紧 |
@@ -167,7 +171,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 `Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）
 → 跑 `Test/test_period_matrix.py`（四周期 × 毫秒/秒源回归矩阵）。
 
-> 把 `stop_at_signal_extreme` 置 false 会改用固定点数止损（`stop_points`），可与信号极值止损做 A/B 对比。`max_signal_range_points` 配合 M0 的「信号振幅分布」结果，能直接过滤掉止损过宽的信号。
+> `max_signal_range_points` / `min_stop_distance_points` / `max_stop_distance_points` 配合 M0 的「信号振幅分布」结果，能直接过滤掉止损过宽或信号振幅过大的信号。
 
 ---
 

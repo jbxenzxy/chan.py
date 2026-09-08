@@ -1,32 +1,17 @@
 # -*- coding: utf-8 -*-
-"""策略层。新增策略请继承 Base.py 里的接口并用 @register 装饰。
+"""策略层（2026-09-08 精简：取消策略选择器抽象）。
 
-即插即用：本目录（含子目录）下的 .py 文件会在包导入时自动 import，
-所以"新增一个策略"= 往这个目录丢一个 py 文件，不需要改任何注册代码。
+生产环境入场只有一个策略 DefaultEntryPolicy、出场只有一个策略
+LayeredExitPolicy（L1-L4 分层），不再有「注册表 / @register / build_*_policy」
+这类选择器机制。main.py 与测试直接实例化这两个类即可。
+
 参考 Exit.py 里 LayeredExitPolicy 的完整实现（L1-L4 各层注释）。
 """
-import importlib
-import os
-import pkgutil
-
-from .Base import (
-    ENTRY_POLICIES, EXIT_POLICIES, EntryPolicy, ExitCheck, ExitPolicy,
-    build_entry_policy, build_exit_policy, register_entry, register_exit,
-)
-
-_EXCLUDE = {"Base", "__init__"}
-_pkg_dir = os.path.dirname(os.path.abspath(__file__))
-for _m in pkgutil.iter_modules([_pkg_dir]):
-    if _m.name in _EXCLUDE:
-        continue
-    try:
-        importlib.import_module("." + _m.name, __name__)
-    except Exception as _e:      # 单个策略文件写错不应拖垮整个网关
-        print("[strategy] 跳过 {}: {}".format(_m.name, _e))
+from .Base import ExitCheck, ExitPolicy, EntryPolicy
+from .Entry import DefaultEntryPolicy
+from .Exit import LayeredExitPolicy
 
 __all__ = [
     "EntryPolicy", "ExitPolicy", "ExitCheck",
-    "build_entry_policy", "build_exit_policy",
-    "register_entry", "register_exit",
-    "ENTRY_POLICIES", "EXIT_POLICIES",
+    "DefaultEntryPolicy", "LayeredExitPolicy",
 ]

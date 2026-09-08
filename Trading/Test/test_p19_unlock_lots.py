@@ -72,8 +72,8 @@ def tmp_dir():
 
 from Trading import Broker  # noqa: E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -137,7 +137,7 @@ def make_cfg(max_pos=3, sizing_overrides=None):
     if sizing_overrides:
         d["sizing"].update(sizing_overrides)
     d["sizing"]["enabled"] = False      # 关闭仓位管理 → fixed_volume 直接定手数
-    return GatewayConfig.from_dict(d)
+    return TradingConfig.from_dict(d)
 
 
 def make_signal(is_buy, price=4500.0, high=4552.0, low=4548.0,
@@ -171,12 +171,12 @@ def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None):
     spec = InstrumentSpec()
     broker = broker or DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     from Trading.Strategy.Entry import DefaultEntryPolicy
-    from Trading.Strategy.Exit import DefaultExitPolicy
+    from Trading.Strategy.Exit import LayeredExitPolicy
     entry = DefaultEntryPolicy({})
-    exitp = exit_policy or DefaultExitPolicy({})
+    exitp = exit_policy or LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker, ev
 
 

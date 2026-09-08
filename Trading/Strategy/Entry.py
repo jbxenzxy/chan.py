@@ -17,19 +17,18 @@ from typing import Optional
 
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, Decision, DecisionType, ExitPlan, Position, Side, Signal
-from ..Config import EntryParamsConfig
-from .Base import EntryPolicy, ExitCheck, ExitPolicy, register_entry, register_exit
+from ..Config import EntryConfig
+from .Base import EntryPolicy, ExitCheck, ExitPolicy
 
 
-@register_entry
 class DefaultEntryPolicy(EntryPolicy):
     name = "DefaultEntryPolicy"
 
     def __init__(self, params=None):
         super().__init__(params)
-        # 严格模式（2026-09-07）：参数由 EntryParamsConfig 校验，缺省键用模型
+        # 严格模式（2026-09-07）：参数由 EntryConfig 校验，缺省键用模型
         # 默认值（唯一来源在 Trading/Config.py），拼错的键立即报错。
-        p = EntryParamsConfig(**(self.params or {}))
+        p = EntryConfig(**(self.params or {}))
         self.p = p
         self.reverse = p.reverse_on_opposite_signal
         self.max_range = float(p.max_signal_range_points or 0.0)

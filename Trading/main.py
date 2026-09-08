@@ -15,8 +15,8 @@ M1 交易网关 · CLI 入口
     · 单次覆盖        → 命令行 --symbol / --freq / --broker / --source ...
     · 账户密码        → 只走环境变量（SN_ACCOUNT / LIVE_ACCOUNT / TQ_ACCOUNT ...），不落盘
 
-换止盈止损：改 Trading/Config.py 的 ExitParamsConfig（或换一个策略类名），
-    引擎 / 信号源 / broker 都不需要动。
+换止盈止损：改 Trading/Config.py 的 ExitConfig（L1-L4 分层出场的唯一参数模型），
+    引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 """
 from __future__ import annotations
 
@@ -31,9 +31,11 @@ from typing import Any, Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根（import Trading）
 
-from Trading import Broker, Source, Strategy      # noqa: E402  导入触发注册
-from Trading.Config import GatewayConfig                         # noqa: E402
-from Trading.Engine.Engine import GatewayEngine                  # noqa: E402
+from Trading import Broker, Source                        # noqa: E402  导入触发注册
+from Trading.Strategy import (DefaultEntryPolicy,          # noqa: E402
+                              LayeredExitPolicy)
+from Trading.Config import TradingConfig                         # noqa: E402
+from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
 from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS,          # noqa: E402
                                         bar_secs_for)
@@ -54,7 +56,7 @@ def build_runtime(args):
     # 配置来源（2026-09-07 归一）：Trading/Config.py 模型默认值
     #   ← 环境变量/仓库根 .env（TRADING_ 前缀，pydantic-settings 自动读取）
     #   ← 命令行参数（最高优先级，下面逐个套用）
-    cfg = GatewayConfig()
+    cfg = TradingConfig()
 
     # 命令行覆盖：只覆盖显式传了的项（None 表示没传）
     if args.source:
@@ -114,10 +116,8 @@ def build_runtime(args):
 
     broker = Broker.build_broker(args.broker or cfg.broker, spec,
                                  cfg.broker_params.model_dump())
-    entry = Strategy.build_entry_policy(
-        cfg.entry_policy.name, cfg.entry_policy.params.model_dump())
-    exitp = Strategy.build_exit_policy(
-        cfg.exit_policy.name, cfg.exit_policy.params)
+    entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
+    exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
     store_path = os.path.join(out, "state.db")
     store = Store(store_path)
 
@@ -140,13 +140,13 @@ def build_runtime(args):
 
     ev = EventLog(os.path.join(out, "events.jsonl"), echo=not args.quiet,
                   echo_kinds=None if args.echo_all else ECHO_DEFAULT)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     source = Source.build_source(src.get("type", "replay"), src, spec)
     return cfg, engine, source, store, ev, out, src
 
 
-def print_summary(engine: GatewayEngine, out: str, src: Dict[str, Any],
-                  cfg: GatewayConfig, elapsed: float) -> Dict[str, Any]:
+def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
+                  cfg: TradingConfig, elapsed: float) -> Dict[str, Any]:
     s = engine.summary()
     spec = cfg.instrument
     line = "-" * 60

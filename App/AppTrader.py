@@ -35,7 +35,7 @@ SSE 行情流）。
 confirm_live_trading=true，否则抛 AppError（前端提示，不拉起进程）。
 
 配置来源（2026-09-07 归一）：不再有 config.json。本模块通过 _load_cfg()
-取一份 GatewayConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
+取一份 TradingConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
 改参数去 .env 或 Trading/Config.py，改运行时参数用本 start() 的入参。
 
 状态持久化：App/auto_trader_state.json 记录最后一次启动参数

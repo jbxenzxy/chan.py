@@ -75,14 +75,14 @@ from Trading import Broker  # noqa: E402  注册 dry_run
 import json  # noqa: E402
 from Trading.Broker.Base import OrderIntent  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Risk.RiskGate import RiskGate  # noqa: E402
 from Trading.Risk.PositionSizing import PositionSizer  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, EngineState, Side, Signal,
@@ -142,7 +142,7 @@ class RejectDryBroker(DryRunBroker):
 def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
                 cfg_risk_max_volume=20, unlock_no_new_open=False,
                 sizing_max_volume=0):
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
     cfg.risk.enforce_session = False
@@ -158,10 +158,10 @@ def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": 10.0})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    return GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 
 def read_event_kinds(eng, tail_n=200):
@@ -377,20 +377,20 @@ with tmp_dir() as td:
 print("\n[5] 无分仓残留")
 import Trading.Engine.Engine as _engine_mod  # noqa: E402
 _src = open(os.path.join(_TG_ROOT, "Engine", "Engine.py"), encoding="utf-8").read()
-check("engine 无 _open_positions（复数）方法", hasattr(_engine_mod.GatewayEngine,
+check("engine 无 _open_positions（复数）方法", hasattr(_engine_mod.TradingEngine,
                                                   "_open_positions"), False)
-check("engine 无 _book_positions 方法", hasattr(_engine_mod.GatewayEngine,
+check("engine 无 _book_positions 方法", hasattr(_engine_mod.TradingEngine,
                                               "_book_positions"), False)
-check("engine 无 _unlock_round_entry 方法", hasattr(_engine_mod.GatewayEngine,
+check("engine 无 _unlock_round_entry 方法", hasattr(_engine_mod.TradingEngine,
                                                  "_unlock_round_entry"), False)
-check("engine 无 _check_unlock_round 方法", hasattr(_engine_mod.GatewayEngine,
+check("engine 无 _check_unlock_round 方法", hasattr(_engine_mod.TradingEngine,
                                                   "_check_unlock_round"), False)
-check("engine 无 _unlock_round_settle 方法", hasattr(_engine_mod.GatewayEngine,
+check("engine 无 _unlock_round_settle 方法", hasattr(_engine_mod.TradingEngine,
                                                    "_unlock_round_settle"), False)
 check("engine 源码无 H2 轮次残留", "unlock_round" in _src, False)
-check("engine 有 _open_position（单笔）", hasattr(_engine_mod.GatewayEngine,
+check("engine 有 _open_position（单笔）", hasattr(_engine_mod.TradingEngine,
                                               "_open_position"), True)
-check("engine 有 _unlock_position（单笔解锁）", hasattr(_engine_mod.GatewayEngine,
+check("engine 有 _unlock_position（单笔解锁）", hasattr(_engine_mod.TradingEngine,
                                                    "_unlock_position"), True)
 
 

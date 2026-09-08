@@ -82,8 +82,8 @@ from Trading import Broker  # noqa: E402  注册 dry_run/simnow/live
 from Trading.Broker.Base import BROKERS, build_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import LiveCTPBroker, SimNowBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -109,7 +109,7 @@ def check(name, got, expected):
 def make_cfg(max_pos=2):
     d = copy.deepcopy(DEFAULT_CONFIG)
     d["risk"]["max_open_positions"] = max_pos
-    return GatewayConfig.from_dict(d)
+    return TradingConfig.from_dict(d)
 
 
 def make_signal(is_buy, price=4500.0, high=4552.0, low=4548.0,
@@ -169,13 +169,13 @@ def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
     spec = InstrumentSpec()
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     from Trading.Strategy.Entry import DefaultEntryPolicy
-    from Trading.Strategy.Exit import DefaultExitPolicy
+    from Trading.Strategy.Exit import LayeredExitPolicy
     entry = DefaultEntryPolicy({})
-    exitp = exit_policy or DefaultExitPolicy({})
+    exitp = exit_policy or LayeredExitPolicy()
     store = store or Store(os.path.join(tmpdir, "state.db"))
     ev = ev or EventLog(os.path.join(tmpdir, "events.jsonl"),
                         echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker, ev
 
 
@@ -366,7 +366,7 @@ if _HAS_APP:
         d = copy.deepcopy(DEFAULT_CONFIG)
         d["broker"] = broker
         d["broker_params"].update(bp)
-        return GatewayConfig(**d)      # 配置是模型，不再是裸 dict
+        return TradingConfig(**d)      # 配置是模型，不再是裸 dict
 
 
     def raises_apperror(fn, name):
@@ -521,9 +521,9 @@ with tmp_dir() as tmp:
     orig_load_cfg = AT.AppTrader._load_cfg
     try:
         AT._STATE_FILE = state_file
-        # 配置不再来自 config.json：直接注入一份 GatewayConfig（dry_run）
+        # 配置不再来自 config.json：直接注入一份 TradingConfig（dry_run）
         AT.AppTrader._load_cfg = staticmethod(
-            lambda: GatewayConfig(broker="dry_run", state_dir=out_dir))
+            lambda: TradingConfig(broker="dry_run", state_dir=out_dir))
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
@@ -572,7 +572,7 @@ with tmp_dir() as tmp:
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         AT.AppTrader._load_cfg = staticmethod(
-            lambda: GatewayConfig(broker="dry_run", state_dir=out_dir))
+            lambda: TradingConfig(broker="dry_run", state_dir=out_dir))
         AT.subprocess.Popen = (lambda cmd, **kw: _FakeProc(cmd))
         t = AT.AppTrader()
         res = t.start(out_dir=out_dir)   # 不应抛错、不应秒退
@@ -627,7 +627,7 @@ with tmp_dir() as tmp:
     orig_load_cfg = AT.AppTrader._load_cfg
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
-        AT.AppTrader._load_cfg = staticmethod(lambda: GatewayConfig(
+        AT.AppTrader._load_cfg = staticmethod(lambda: TradingConfig(
             broker="dry_run", state_dir=os.path.join(tmp, "State"),
             source={"symbol": "KQ.m@CFFEX.RB", "freq": "15m"}))
         AT.subprocess.Popen = (lambda cmd, **kw:
@@ -755,7 +755,7 @@ with tmp_dir() as tmp:
         AT._TG_ROOT = os.path.join(tmp, "Trading")
         os.makedirs(AT._TG_ROOT, exist_ok=True)
         AT.AppTrader._load_cfg = staticmethod(
-            lambda: GatewayConfig(broker="dry_run", state_dir="./State"))
+            lambda: TradingConfig(broker="dry_run", state_dir="./State"))
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         captured = {}
         AT.subprocess.Popen = (lambda cmd, **kw:

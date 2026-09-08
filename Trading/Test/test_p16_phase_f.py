@@ -91,13 +91,13 @@ def tmp_dir():
 
 from Trading.Broker.Base import Broker, OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig, SizingConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, EngineState, EntryMode, ExitPlan, Position, Side,
@@ -202,7 +202,7 @@ def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
                 cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
     """构造引擎：默认分仓=1 + sizing 关闭（fixed_volume=1）。"""
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
     cfg.risk.enforce_session = False
@@ -217,10 +217,10 @@ def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
     # 注：旧代码传的 stop_loss_points 是错键（策略实际读 stop_points），
     #    此前被静默忽略；严格模式下会被拒绝，故移除以保持行为不变。
-    exitp = DefaultExitPolicy({"take_profit_points": tp_points})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    eng = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    eng = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return eng
 
 
@@ -517,19 +517,19 @@ with tmp_dir() as td:
     spec = InstrumentSpec()
     dry_b = DryRunBroker(spec)  # 默认 real_position=None
     # 手动构造 engine 前先把 store 写入持仓
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 10
     cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
-    exitp = DefaultExitPolicy({"take_profit_points": 5.0})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(td, "state.db"))
     # 写入持仓
     pos_dict = make_position(Side.LONG, 1, 4545.0, 1, signal_key="restore-test").to_dict()
     store.set_json("positions", [pos_dict])
     store.set_json("bars_seen", 5)
     ev = EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None)
-    eng = GatewayEngine(cfg, dry_b, entry, exitp, store, ev)
+    eng = TradingEngine(cfg, dry_b, entry, exitp, store, ev)
     # broker 无 real_position → skip reconcile → portfolio 保留
     check("3.2 broker 无 real_position → portfolio 保留", len(eng.positions), 1)
 

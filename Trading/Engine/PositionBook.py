@@ -26,7 +26,7 @@ E3 计划（本次 E3.1 子步：cfg 化容器容量）
 
 设计纪律
   · max_open_positions 默认 = 1 → 所有现存测试（P5..P13）零行为变化
-  · 测试显式构造 `cfg = GatewayConfig(risk=RiskConfig(max_open_positions=N))` 才能进入多仓路径
+  · 测试显式构造 `cfg = TradingConfig(risk=RiskConfig(max_open_positions=N))` 才能进入多仓路径
   · legacy_single 在多仓抛错是有意的早期守护：E3.3 之前不允许"单仓 API 操作多仓"
   · add 抛错改为按 cfg max 限制（max=1 仍等同 E1）；add 多仓时仍按 FIFO 顺序追加
 """

@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="NbvCwTIA86h0dKMKPMr8BD">
+<head data-page-node-id="0vJIMZVD5pXXZDHRod8Uya">
+<meta charset="UTF-8" data-page-node-id="FntdN006jnLOzMohZnXnQQ">
+<title>Step 2 路线图 — 调参项归一化（SSOT 进度跟踪）</title>
+<style>
+body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 1180px; margin: 32px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.75; }
+h1 { border-bottom: 4px solid #d32f2f; padding-bottom: 8px; }
+h2 { color: #d32f2f; border-left: 5px solid #d32f2f; padding-left: 12px; margin-top: 36px; }
+h3 { color: #1976d2; margin-top: 24px; }
+code, pre { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: "Consolas", "Menlo", monospace; font-size: 0.92em; }
+pre { padding: 14px 18px; overflow-x: auto; line-height: 1.5; font-size: 0.88em; }
+table { border-collapse: collapse; width: 100%; margin: 14px 0; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; font-size: 0.94em; }
+th { background: #f5f5f5; font-weight: 600; }
+tr:nth-child(even) td { background: #fafafa; }
+.红色 { color: #d32f2f; font-weight: 600; }
+.绿色 { color: #2e7d32; font-weight: 600; }
+.灰色 { background: #f0f0f0; }
+.metabox { background: #f3e5f5; border-left: 4px solid #7b1fa2; padding: 12px 20px; margin: 14px 0; }
+.关键 { background: #fff8e1; border-left: 4px solid #ffa000; padding: 12px 20px; margin: 14px 0; }
+.设计 { background: #e3f2fd; border-left: 4px solid #1976d2; padding: 14px 22px; margin: 16px 0; }
+.已完成 { background: #c8e6c9; color: #1b5e20; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.下一步 { background: #fff59d; color: #f57f17; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.等待 { background: #f5f5f5; color: #757575; padding: 2px 8px; border-radius: 3px; }
+.阻塞 { background: #ffcdd2; color: #b71c1c; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
+.ssot { width: 100%; }
+.ssot th { text-align: center; }
+.ssot td:nth-child(1) { width: 60%; font-family: monospace; }
+.ssot td:nth-child(3) { text-align: center; font-weight: 600; }
+</style>
+</head>
+<body data-page-node-id="FzpIVsgoXQJL0L6Uc0Cg3s">
+
+<h1 data-page-node-id="QtRj00VQn2drQlREYzj3CD">Step 2 路线图：调参项架构归一化（SSOT 进度跟踪）</h1>
+
+<div class="metabox" data-page-node-id="DMEi3ENzoDx2rm5f73jsZT">
+<b data-page-node-id="rjU5U6wt6Mj8zUewUBdVhN">基线</b>：<code data-page-node-id="hu8BqF7W5JNy3xpz1A3AXb">custom-dev @ 5478def</code> + Step 1B v2 修复（已合并到 real project ✅）<br data-page-node-id="6CE4U8HMJrHt1vO7Yxqpd5">
+<b data-page-node-id="CVjaJ7PFTyASu6UsYseD51">沙盒</b>：<code data-page-node-id="K9S6z59RJuqnh6acjep38q">C:/Users/river/WorkBuddy/2026-09-08-06-43-04/sandbox/chan.py</code>（不复用远端 <code data-page-node-id="MRbPMTnXHPw8EYl3lF2tQd">14d2cb0</code>，与本地工作基线一致）<br data-page-node-id="C0Tr33zB6ARdyHCExHFMlj">
+<b data-page-node-id="9dm24vGvxg7P3hbX4Znh39">日期</b>：2026-09-08<br data-page-node-id="plwMORHPlxSRIst24RMFX9">
+<b data-page-node-id="F6uJdzQ3g8yvlU3bwGwd4f">本文档定位</b>：Step 2 路径上<b data-page-node-id="FFB5Kfl52FCQ6lM8BWBNc9">所有 phase 的总览 + 当前进度</b>，下次开工从进度表的「下一步」接续
+</div>
+
+<div class="关键" data-page-node-id="IGXZfkxtYW5QQLYGhPTJSw">
+<h3 data-page-node-id="ze3k4cWlCH0k54AyHfHRDo">用户核心需求（原文）</h3>
+<p data-page-node-id="3m1ST5xM8LOCSawljWhM6m"><b data-page-node-id="gyFuIHX8fbMkEEWWYKR2Aj">①</b>「调参我觉得不是最重要的，最重要的是先在代码架构上把各周期可能涉及的调参项归一到 <code data-page-node-id="Ev1dAvlO3pHgGobJCx9qcP">Trading/Config.py</code> 中，方便后续在这一个地方调整，而不是散落在代码各处」</p>
+<p style="margin-left: 16px;" data-page-node-id="pOmXSU6oav05ShivOgRU7R">关键词：<b data-page-node-id="ELYZdec8qTMdpCPpWOOjUD">归一</b>（不是调值）、<b data-page-node-id="gjR0UsD4KEaUrhBTHOTnBQ">一个地方</b>（不在散落）、<b data-page-node-id="yrcGfHqXa79kEGZmG2cKVr">先架构后数值</b>。</p>
+<p data-page-node-id="LjPrKZDZLmqKbcXLbjoSGX"><b data-page-node-id="rW5JnvIUPFDjylJw4I0hto">②</b>「因为无法一次性做完，所以以上这些都需要纳入文档管理，下次再接着做的时候，知道做到哪里了，可以延续推进下去」</p>
+<p style="margin-left: 16px;" data-page-node-id="oQJewoKjBTIF5bmsF5BSfL">关键词：<b data-page-node-id="odNDZVEkkkAltapxNOaLaa">断点续</b>、<b data-page-node-id="SownjdzNZuxGzBYbPTLQL8">进度状态</b>、<b data-page-node-id="awMZMU7MHOsYYkmBwKQ5dz">SSOT 进度源</b>。</p>
+</div>
+
+<h2 data-page-node-id="GiD9vgURKx6KEI27xGPCwl">1. 设计决策</h2>
+
+<h3 data-page-node-id="L01uHFPWZqPM2sSRapgiOJ">1.1 SSOT 三层结构</h3>
+
+<div class="设计" data-page-node-id="W4ppyPsu1TPsIc9OKWKDGE">
+<pre data-page-node-id="XJdo7eiCkg5Ayefz5awQRP">
+┌─────────────────────────────────────────────────────────────────────┐
+│ Trading/Config.py          ← 用户改调的**唯一入口**                   │
+│   ├── ExitParamsConfig / EntryParamsConfig  ← 跨周期不变的字段        │
+│   ├── RiskConfig / SizingConfig             ← 跨周期不变的字段         │
+│   ├── BrokerParamsConfig                   ← 跨周期不变的字段 + 周期  │
+│   ├── SourceConfig                         ← 跨周期不变的字段 + 周期  │
+│   └── PeriodProfile  (BaseModel)            ← **周期敏感字段的 SSOT**   │
+│         └── PERIOD_PROFILES: dict          ← freq → profile 实例        │
+└─────────────────────────────────────────────────────────────────────┘
+                                  │
+                                  │  启动期 main.py 按 cfg.source.freq
+                                  │  把 PERIOD_PROFILES[freq] 字段值写回
+                                  │  cfg.exit_policy.params / broker / ...
+                                  ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Strategy/Exit.py / Entry.py 等          ← 不变，字段名不动             │
+│   通过 cfg.exit_policy.params['atr_period'] 这种现有方式读取            │
+└─────────────────────────────────────────────────────────────────────┘
+</pre>
+
+<p data-page-node-id="AM1pcfnV6f41hBgbgy7xa2"><b data-page-node-id="o97PcKrcMp41CckQL8QTRo">设计要点</b>：</p>
+<ol data-page-node-id="lYbgodsBgxiQf1Yx0HxU3k">
+<li data-page-node-id="IdXMBWAJzRfuvzq3hdnHok"><b data-page-node-id="J69ijBCtmRYixF6OZN0N71">所有"调参面板"集中在 <code data-page-node-id="pExqLlHqrf7kleZPeDlixf">Config.py</code> 一个文件</b>（含子模块 PeriodProfile），用户改这一处即可</li>
+<li data-page-node-id="ZhzgprkmKMKv31sBhYgJvs"><b data-page-node-id="n9eD1o7bnv9eoaWVFw9teZ">PeriodProfile 是 Config.py 内的 BaseModel 子类</b>，不放独立文件（与"Config.py 一个地方"原话一致）</li>
+<li data-page-node-id="8dNNsdLV1cgVdIeTjRcvIT"><b data-page-node-id="zGah4KBAWFmop0rDcLiuI6">下游策略代码不变字段名</b>，Profile 字段值在<b data-page-node-id="x2ZMTeAoeajKQNMrneNYml">启动期</b>由 main.py 工厂写回 cfg.* 字段 —— 下游 0 改动</li>
+<li data-page-node-id="tAK41mRecYIXEmWRyBzLw9"><b data-page-node-id="TigsPqp1HsSM3ZurNsCkIC">PERIOD_PROFILES 是</b>模块级 dict，键=freq，值=PeriodProfile 实例，<b data-page-node-id="tyDZIXnb9aVJXA85qrsPng">字段值在这里且仅在这里声明一次</b></li>
+<li data-page-node-id="SCHj4F53o1p77B35DsjvXc"><b data-page-node-id="0oT9quA4H471ak22LO63oX">ExitParamsConfig 等保留原字段</b>（兼容已有 fixture），但<b data-page-node-id="AWW1ayGB8oJ1YupyiCTeFH">默认值用 PeriodProfile 默认值反推</b>——避免双默认源</li>
+</ol>
+</div>
+
+<h3 data-page-node-id="PTyMI2rLd9ptlJA8eAbDLz">1.2 为什么 PeriodProfile 不取代 ExitParamsConfig</h3>
+<ul data-page-node-id="cxRJDdCV1HQ0ln7jkg0ozD">
+<li data-page-node-id="OjABzVGjjiNOXBnNvrbNIH">ExitParamsConfig 现已被 5 个 pydantic 模型、3 个测试 fixture、1 份 README 引用</li>
+<li data-page-node-id="qBL2eyi7DyxXShImt2WCRq">直接删除字段会引发连锁改动</li>
+<li data-page-node-id="6z29ggbwq3b29UD8utdgc1">用"Profile 覆盖写回"的注入方式，下游 0 改动、fixture 不破</li>
+</ul>
+
+<h3 data-page-node-id="K5LHr9sh5FznJbzoyHLMYy">1.3 跨周期不变 vs 周期敏感字段的判定标准</h3>
+<table data-page-node-id="MKrO1pseRBGIH0CBibDxHk">
+<tr data-page-node-id="6kIHN1Fq0Ae0BtWvtGWDAz"><th data-page-node-id="ZyZ8MG465Nc7r732k9HoHO">判定</th><th data-page-node-id="FlU2j9ywNkZCf5NIp2bks8">含义</th></tr>
+<tr data-page-node-id="dHk55ls11HFIvpHGy5cnCh"><td data-page-node-id="YwdXarpEwAY9ogDX1ViOzF"><b data-page-node-id="ejKKoI17qI3mZGxNd9MOX8">跨周期不变</b></td><td data-page-node-id="1BNUKRbAoAYoCTjNwO5YUn">点数 / 百分比 / 时间戳格式 / 字符串键（如 <code data-page-node-id="A4xD2WjwBDIdmUEHAilSqa">session_end_hhmm="14:55"</code>）—— 留在 ExitParamsConfig 等</td></tr>
+<tr data-page-node-id="6Ft1Ecbrq6sYtvYJZLatNy"><td data-page-node-id="Bb8QhkXdjrNJL3Du9B0iDU"><b data-page-node-id="z3qibloenCkPA9sflT57bK">周期敏感</b></td><td data-page-node-id="5fmok6UDRqcoSQnA7hWXXy">数值因周期而变 —— 任何"墙钟等效"/"信号密度"/"成本占比"含义的倍数、周期、根数 —— 进 PeriodProfile</td></tr>
+</table>
+
+<h2 data-page-node-id="AOBB2zyEVGWMZo5Mv126KC">2. 104 项调参点全景（来自 Explore 扫描）</h2>
+
+<table data-page-node-id="ehWGg0tf4uAspnbYiqDIS3">
+<tr data-page-node-id="EhKw1uOIUHi93wwHHZZBWE"><th data-page-node-id="mA0bXJTCsa7vMHgexvtNIU">类</th><th data-page-node-id="KMk95ZL1aM2thnM3vvGDLP">已显式</th><th data-page-node-id="Rtl4Y8Et3T85SwInV8HnVw">散落</th><th data-page-node-id="4BPlyX8a1NpDxQSEjkCiEF">周期敏感</th><th data-page-node-id="EsXB1QwzsTzpBMonzXmqgb">重点候选</th></tr>
+<tr data-page-node-id="O5uCKKwdkyG7cBiqaotT2k"><td data-page-node-id="74qNOYAS1NAYELBXE3W2Ea"><b data-page-node-id="kbwSDu6imYmF0zZ6VjTyH6">A · 策略</b>（Entry/Exit/Base）</td><td data-page-node-id="MwYXMo73hRGdblLzPHr6O9">17</td><td data-page-node-id="fRmF6PHYp0yUrvTWxPD8OS">3</td><td data-page-node-id="AkvbmMvOW3DK5CJjbC0Oi6">11</td><td data-page-node-id="zCURiGTwIzGnYMaczidqvq"><code data-page-node-id="c3ZbmuQQX20awOH1X9p5FS">atr_period</code> / <code data-page-node-id="lMMu0xu1kUUSNIuj8neLio">atr_sl_multiple</code> / <code data-page-node-id="Wdr0pKivJn8Znm1RA6myyX">breakeven_trigger_r</code> / <code data-page-node-id="ZkPqfIEFQ18DwVqkD6k4jT">trailing_trigger_r</code> / <code data-page-node-id="jf55AYHte5JNUfodW04EUW">trailing_atr_multiple</code> / <code data-page-node-id="tyaaPjCQrYBYSt4XLCJyN2">max_hold_seconds</code> / <code data-page-node-id="7augyqnYnlcsMG80sMNwwu">bar_secs</code></td></tr>
+<tr data-page-node-id="HIhLDEb6ICUywNGOWdrg22"><td data-page-node-id="9RLhCTCcG1nqibHVSOg78c"><b data-page-node-id="dScUF4ZOGC21OXnn5z4t2B">B · 风控</b>（RiskGate/PositionSizing）</td><td data-page-node-id="GtF7Q7MGDGjpZG8b9BNlob">17</td><td data-page-node-id="1rewKVYm9pttBrP98gRA7f">3</td><td data-page-node-id="6N16a7G5fWoPmiJoa3PXfF">0</td><td data-page-node-id="sqE6cw2YTRnW0Af71ZmXdA"><code data-page-node-id="FFQcAB2xRCpBczJObhzVpL">_CFFEX_SINGLE_ORDER_MAX=20</code> / <code data-page-node-id="AyLyQpBB14ALUQb3kmmxTc">margin_rate</code> 兜底重复</td></tr>
+<tr data-page-node-id="qCiWfLwdSb8sf014IFO2y2"><td data-page-node-id="22l33DW5Y1TFIY0o5BnNUI"><b data-page-node-id="qQ0odmPgZteFUaC0QXnk0G">C · Broker</b>（SimNow）</td><td data-page-node-id="HHuzlBGKHHiHM1iJA0lF9e">10</td><td data-page-node-id="TbnpSykEgjAKMD9CyaBfGs">18</td><td data-page-node-id="eO1OwkVx8hwX0AW0yyRjtf">5</td><td data-page-node-id="1bOgWhKxCzNoonJgaDjt82"><code data-page-node-id="ADDAkcVPNuu5Uq5wMRUPcq">_QUOTE_STALE_SECONDS=30</code>、<code data-page-node-id="woknek8r1DLk9vFv7mHDUa">wait_update</code> 超时簇、退避倍增、追价步长</td></tr>
+<tr data-page-node-id="aXutPSZcAN39AWLtduuxBC"><td data-page-node-id="FBCINHSeqVzFDdP2CppKfp"><b data-page-node-id="UyIQvVBfq0y8QebXfiKLL7">D · 引擎</b>（Engine/Reconcile）</td><td data-page-node-id="i4445zi5NkPriEAHe1NfZf">1</td><td data-page-node-id="ZirCltGulvnaBntYBEvQuJ">6</td><td data-page-node-id="p5SneglBj4POPrak4sXjd6">1</td><td data-page-node-id="F8WSFEP7udttMXgXpeJVlg"><code data-page-node-id="U2FmaYjHTrWC9XnYXEAuBt">_close_retry_bars=5</code> / <code data-page-node-id="PttsynfGmNNq8tJHDKvjSp">_close_max_streak=20</code> / <code data-page-node-id="3scnNcg1pN8eSldVZqVDlv">_unlock_stuck_bars=5</code> / <code data-page-node-id="eeoikyaEsiNrHEbAu2yEiJ">4.5h</code> 交易日</td></tr>
+<tr data-page-node-id="Z0lkUk6S8nB5hK1zJyJHyS"><td data-page-node-id="USOIYfnobYfI5oA9mLGcD6"><b data-page-node-id="bGV8bCdof8vE4GHCKZipQm">E · 行情源</b>（SSE/Replay）</td><td data-page-node-id="GUoKfUL20BnWbCz0RNOK5i">9</td><td data-page-node-id="ZhXLkfbZAyh9z4QdMOZrYX">6</td><td data-page-node-id="1GFeeMBsbGhcusaG2TFCzA">1</td><td data-page-node-id="Rtur2TQg7eOJdn3L1iNHWe">重连基 5、最大 60、重试 0=无限</td></tr>
+<tr data-page-node-id="nxGvK2xs57wvjg5E1wi21e"><td data-page-node-id="f5LEmF6onPiWLIXjr9Crsn"><b data-page-node-id="IDW4rZzDqFOWRboVFxyXSC">F · CLI/Recorder</b></td><td data-page-node-id="mmNR15TJv50SXpuqekX0Me">0</td><td data-page-node-id="mP2P6AYIbuVAy8SUUjrhPx">7</td><td data-page-node-id="zoBd9xqhMQZB1znAbUDapV">0</td><td data-page-node-id="S5zLdGBHlJedT6quQ1RshX">recorder 重连、最大重连、flush 间隔</td></tr>
+<tr data-page-node-id="Df71DhAkMWA7xF4sQqy73v"><td data-page-node-id="PmswnZEcQ7I95CEXAQVk5O"><b data-page-node-id="70w6ZmVYU25tABB28Gx96o">合计</b></td><td data-page-node-id="lEDKXSS2Fc3galOga4zAxi"><b data-page-node-id="VslhtfF8GDPE1qXv3rRbIu">54</b></td><td data-page-node-id="r9YANHlWDgAyGobuBavKWu"><b data-page-node-id="aRmSUa0IwNgr53h7oHRHcS">43</b></td><td data-page-node-id="U0EoHWzcAipGIeFffnDMlk"><b data-page-node-id="Ax6EESjUwcXklrhczlHc5h">18</b></td><td data-page-node-id="EouBGOQkgtAxcoqkAKU8cJ"></td></tr>
+</table>
+
+<p data-page-node-id="zuG2SviACQRFHALkzran0N">全表见配套 <code data-page-node-id="XnV1lQwFvLgutZkRaIHBEH">Step2_调参点全表.md</code>（未列入正文，下方 Phase 按需引用）。</p>
+
+<h2 data-page-node-id="5810VazdvzBb6MX4ginyc9">3. Phase 总览（6 段，本文是 SSOT 进度源）</h2>
+
+<table class="ssot" data-page-node-id="xnNsfu7aNwvGglmlEjiPB5">
+<tr data-page-node-id="Ltu6hbXQzXsBdgjsqoqZhb"><th data-page-node-id="919hvESHtLRi8iEUViwaRm">Phase</th><th data-page-node-id="7yms8UqD0WGKtuWbV6C4gr">主题</th><th data-page-node-id="qQDxrAIcZW6nsnXCnvX4Sy">状态</th><th data-page-node-id="Cf0hjVsBPdAU5i8jhOOuAK">估算 diff</th><th data-page-node-id="ZwDuB39FKnjqhcJ7XnNCsH">阻断前置</th></tr>
+<tr data-page-node-id="JQNLVh1CgMOOrVFC1IzGoF">
+<td data-page-node-id="WMTEYj4479AHGGLVjZ7Cki"><b data-page-node-id="sl9VGFlu7ndQMTbEBnNont">2.0 路线图</b></td>
+<td data-page-node-id="OzFJ6iMCv6n6ctylG0vXaB">本文件</td>
+<td data-page-node-id="SWohlp5GkJRlw0hLLzMLFG"><span class="已完成" data-page-node-id="WqEN3pi2Vlbe1y5S5A1Az6">✅ 已完成</span></td>
+<td data-page-node-id="bmiD60tL6DIbKSCib5plnQ">0</td>
+<td data-page-node-id="qM30GtfjxILFq1kDwxw8OD">无</td>
+</tr>
+<tr data-page-node-id="N7zxWx8e1ENFV9iGATb5Aw">
+<td data-page-node-id="xQdnQP34DavuSz6W6xS7u7"><b data-page-node-id="7YtVcHXSGIn4lkP74I6py5">2.1 周期敏感参数入 PeriodProfile</b></td>
+<td data-page-node-id="tBp4YoMdjGFwC2FDj5UWJU">把 A 档 11 项 + C-1 overprice + E signal_max_age + D-7 4.5h 搬到 PeriodProfile；PERIOD_PROFILES 填 4 周期粗估值；启动期覆盖写回</td>
+<td data-page-node-id="pVyTjQS2MVHza88z03qXNq"><span class="下一步" data-page-node-id="bybjmD6HMy3bDi8iMldBUY">⏳ 下一步</span></td>
+<td data-page-node-id="BCb24GpgG5ZQq7Wd62XXOg">~250 行</td>
+<td data-page-node-id="Pr1fedmgGMLYqjUEZkACMd">用户拍板 1.1 设计</td>
+</tr>
+<tr data-page-node-id="C534wuuw3YTkDtR1OYWbQE">
+<td data-page-node-id="aAW2nc2FmzUkSnvfUpAHkW"><b data-page-node-id="1IIDTHobC6jzvOZrAr2BsQ">2.2 引擎常量 EngineConfig 化</b></td>
+<td data-page-node-id="iJmIksYfWlaIwwUZX7q4b8">D-1/2/3（close/MAX/stuck 三常量） + D-6 PositionBook 默认容量显式化</td>
+<td data-page-node-id="pt16dBNgls3C7KPjU0hIyy"><span class="等待" data-page-node-id="NZzDZOeWDy6zLpWuBgXBAG">⏸ 待启动</span></td>
+<td data-page-node-id="N4OPxGeeuw4T6Kp5qf5rz5">~80 行</td>
+<td data-page-node-id="hWsItuY07Rv7wWxydeTwEV">2.1</td>
+</tr>
+<tr data-page-node-id="XZPFNvfgfkPBCol3b5xvxl">
+<td data-page-node-id="GV5jt8tGk83RTZDUyKLZVT"><b data-page-node-id="9x4rjbv5W5lLAY2sA4o73P">2.3 Broker/Channel 超时集中</b></td>
+<td data-page-node-id="6FlwxemVbmTNEsSx4aGz0T">C-2~C-7（~18 处 wait_update/重试秒数）合并到新 <code data-page-node-id="vEsKBN8tm0YLGiHFxfCGbz">ChannelTimingConfig</code></td>
+<td data-page-node-id="KWutnEyvKSieHkipvkAl80"><span class="等待" data-page-node-id="fQSlIHN763wF6a0zwR8Zvg">⏸ 待启动</span></td>
+<td data-page-node-id="2a6FLA4mseiXCIB5yNn1Ct">~150 行</td>
+<td data-page-node-id="AsCAp1cYBNoWkfT2b79s2C">2.1</td>
+</tr>
+<tr data-page-node-id="8e3JZcdlD3GC2EJf8kzOE6">
+<td data-page-node-id="bidn6YQ7hfgjmKi5mcMYi9"><b data-page-node-id="7x1yNfXMzEwhEbqOWgLBlw">2.4 重复常量合并</b></td>
+<td data-page-node-id="0PXIWUCE8P3SfbtfNt3UoB">B-9 <code data-page-node-id="eVznDgSpTPuHpnPpmx88Dp">20</code> + D-4 <code data-page-node-id="wyGydK1AZFyKsWbE07r9oe">20</code> 合并 <code data-page-node-id="KAW9wSA3Ty3hVRGjnRblW7">_CFFEX_LIMIT_MAX</code>；B-10 删除 <code data-page-node-id="yhvyoBmXSi32m9r7RETVi7">0.15</code> 重复兜底</td>
+<td data-page-node-id="EDyx4xdXjCrpAHGSJlkeUb"><span class="等待" data-page-node-id="iUv1zs7isudHbf8wSwOg8E">⏸ 待启动</span></td>
+<td data-page-node-id="YuAO91cVLttWRLPYdQtJ0f">~30 行</td>
+<td data-page-node-id="clmWBjDvLbaqOEapK7itSb">无（独立）</td>
+</tr>
+<tr data-page-node-id="MWlPmUwiKjYoyKcBqqfdvD">
+<td data-page-node-id="GnHBoVRKp7C2GYebq192l0"><b data-page-node-id="EBgWSmGnBOtovVc3wrS8r7">2.5 Source/Recorder 重连参数化</b></td>
+<td data-page-node-id="bCmFbb18ILJeVyH990LEAM">E-2/3/4 + F-5/6/7 进 <code data-page-node-id="CObHR3iLvfzDXtB8pjrv7c">SourceConfig.reconnect_*</code>、Recorder 自带 argparse</td>
+<td data-page-node-id="8H2GaH2sDkfJI9WnAA56dT"><span class="等待" data-page-node-id="6b0YeTING9gAkGdkAeUwpH">⏸ 待启动</span></td>
+<td data-page-node-id="hWZNYfWvINdbu0c3KW9EIH">~50 行</td>
+<td data-page-node-id="SyfdEtRG92LEGOayVuacHb">无</td>
+</tr>
+<tr data-page-node-id="bWloDHbTvXc5lq4zJTf1GW">
+<td data-page-node-id="JUHXbGOm4bv22QzoL3oAzR"><b data-page-node-id="W1AtqZvTuKM9ogcQBeVlpO">2.6 测试 + 启动校验</b></td>
+<td data-page-node-id="pQdkPDDTmDWDRNeugqYzog">每个 Phase 加测试；6 段全完后跑 <code data-page-node-id="0tAEJJrTmtm1rXrgkeeV5S">--freq {30m,5m,1m,15s}</code> 启动冒烟；干净副本复验</td>
+<td data-page-node-id="uFvxLRB79UC1qolsHGEom3"><span class="等待" data-page-node-id="fbQnVNPTiMK29WDBZlBB3i">⏸ 待启动</span></td>
+<td data-page-node-id="FymA4rDABovBtQSCVEYVVv">~150 行</td>
+<td data-page-node-id="nVOrwFW2tK467xrKkkZ1zd">全部 Phase</td>
+</tr>
+</table>
+
+<p data-page-node-id="vQ7fJ67Zp99FWmSvLpJt5O"><b data-page-node-id="sysHJMhEBJC8kbKkYFQhNk">总 diff 估算</b>：~700 行（不含 phase 2.7 调值阶段，那是数据依赖的事）</p>
+
+<h2 data-page-node-id="GhLyfxbU0U7fR9Afs0yOgG">4. Phase 2.1 详细执行清单（下次开工直接照做）</h2>
+
+<h3 data-page-node-id="vlFQ5b4z5cMSMh4JbozAY7">4.1 目标</h3>
+<p data-page-node-id="NfWEMGwceHj2Ob17IprVdj">"归一到 Config.py 一个地方" 这一步落到位。所有 11 个真正"周期敏感"的策略参数 + 3 个 broker/source 周期耦合项 + 1 个时间常量，全部进 <code data-page-node-id="gl6CyqHZYc3N9rfwv5xtCy">PeriodProfile</code>，按 freq 列写粗估值。</p>
+
+<h3 data-page-node-id="2NC9Jhl6yOu9ReF3At5hxa">4.2 涉及文件</h3>
+
+<table data-page-node-id="kDQP3vwbDzAbNDMYxvvTj3">
+<tr data-page-node-id="MAjsIAZhncv673nYS9mPXn"><th data-page-node-id="qE9QzrS4H4JLQPHVMnJmSe">文件</th><th data-page-node-id="93xwQzuViFNBgSHzYGBWPt">改动</th></tr>
+<tr data-page-node-id="Y7vaHry7QSd7bPxg1rIiVw"><td data-page-node-id="WNiIq8ukh89ovF9HEnQDfU"><code data-page-node-id="DrmEtAJ52YD2bhlw5lzd9N">Trading/Config.py</code></td><td data-page-node-id="SmesrZev8ucIMxDcHzjeRn">新增 <code data-page-node-id="PR2XvqASjcNv42fKVGqIDS">PeriodProfile</code>（BaseModel）+ <code data-page-node-id="ZyvOoh2l29ajVU6USCEuUT">PERIOD_PROFILES</code> dict + <code data-page-node-id="1s87B7It17llxfMmwf0gPQ">resolve_period_profile(cfg)</code> 工厂</td></tr>
+<tr data-page-node-id="AyjsJl4vcogQLTFFCEaPZx"><td data-page-node-id="fDwaqKRcfZQ4jJHhOUFMxx"><code data-page-node-id="clIWwqVgVrakp6ZXekYuC2">Trading/main.py</code></td><td data-page-node-id="4GV5VAJfLr5zDDvzVawkWt">启动期 cfg 校验后调用 <code data-page-node-id="DJdsBr4II7VcNfYNk12HUb">resolve_period_profile(cfg)</code></td></tr>
+<tr data-page-node-id="NL3RHMwnRMgZ9lOCIqwUQX"><td data-page-node-id="H7HIY0BiKLOeaNtf3burAF"><code data-page-node-id="wq7v3D5Xmp6GDDpuIWjrmx">Trading/Strategy/Exit.py</code></td><td data-page-node-id="IuVHMWIT41PQAWXC2kiA25"><b data-page-node-id="F5VFmiJC5qcGELOJD4b4xM">不改</b>（字段名不变，靠 cfg 覆盖）</td></tr>
+<tr data-page-node-id="hBB4yy2BaFf41VgVQW49M9"><td data-page-node-id="Vc8qt0SjG22eq1lYIUCp6b"><code data-page-node-id="jNc9HFaECNQDAKDZqAs3N1">Trading/Strategy/Entry.py</code></td><td data-page-node-id="g9MDMUKJymdiNrflxF5OdN"><b data-page-node-id="PRv1Ji0vpkFfakDr70Csz2">不改</b></td></tr>
+<tr data-page-node-id="DGmSkDosB96PKceJV8z69y"><td data-page-node-id="Ef9NvziHbkuifPsHMNnvFp"><code data-page-node-id="DxKf2jo7kbY4kIkWFAta2z">Trading/Broker/SimNow.py</code></td><td data-page-node-id="xLdPAQAKbdyfGDuYYB41Oi"><b data-page-node-id="Qza96Mki0fTlxJ1hZlJre1">不改</b></td></tr>
+<tr data-page-node-id="XyIeE5tLFhooI5HOiB0ytO"><td data-page-node-id="iyvn8zVRCc18jqZ0f96uNC"><code data-page-node-id="q3szppbzGcsFSe5Tpki8Ms">Trading/Source/SSE.py</code></td><td data-page-node-id="rNL08v0JFpgNEfguHDqPVe"><b data-page-node-id="zVny8NJrL4gMApyfiOM1xQ">不改</b></td></tr>
+<tr data-page-node-id="CcrUVraDmSMSAQgFt2hN9c"><td data-page-node-id="kbAEd0yE2zhWDJCvX6iKun"><code data-page-node-id="uODWYrYLyOHDSXHQeathHh">Trading/Test/test_period_consistency.py</code></td><td data-page-node-id="EVgwd0wUfRCF7tObfANe1J">加断言：周期敏感字段 PeriodProfile 与 Config 字段<b data-page-node-id="vI9AzaT1OKFxl82AW2Mksn">同源</b></td></tr>
+<tr data-page-node-id="TO7VWMxHVeyentnjotnFLJ"><td data-page-node-id="RRxf0zPJ4UhoVAicRXWwAM"><code data-page-node-id="FspzBqfYe9ati5Oed0Qloo">Trading/Test/test_period_matrix.py</code></td><td data-page-node-id="aYlTLL0wOJLY2wUGZ65LxI">加段：4 周期各自能从 PERIOD_PROFILES 取预期值</td></tr>
+<tr data-page-node-id="yAbf2uZ297WmYhdGwMdawa"><td data-page-node-id="cc53FMIMaM2JBJLwFd3a9t"><code data-page-node-id="8JSchBzyJUEqp7AKGPbeue">Trading/README.md</code></td><td data-page-node-id="IfFqeH83Nzi1x3wyFlAeSY">加段："调参面板在哪"</td></tr>
+</table>
+
+<h3 data-page-node-id="J8c6VSFHQnyseJhWECJU0D">4.3 PeriodProfile 字段清单</h3>
+
+<table class="ssot" data-page-node-id="3U6UUreP8VQLQeRAD37gpX">
+<tr data-page-node-id="u6zSQXWS7qThV1Rm1fxReN"><th data-page-node-id="hHUFYrGjc4lYQfN7dc12vC">字段</th><th data-page-node-id="XiZZl9IxrwBv1X7TZQDEc4">源（Config.py 现字段）</th><th data-page-node-id="e4MzjN9oXser23NAiuqChp">15s</th><th data-page-node-id="d7rUZJgyCKMtS7aFrSUBoD">1m</th><th data-page-node-id="a2zNAmqn1syATNb2PDdyre">5m（基线）</th><th data-page-node-id="aHufVNlhbEwjWLQk8MTrAZ">30m</th></tr>
+<tr data-page-node-id="enEmnuvtiznhsilt5OwkXO"><td data-page-node-id="mhDCqAIuEKFCA84dtDzITa"><code data-page-node-id="Qd4MO5EgNsuc5WSdKbXPWH">atr_period</code></td><td data-page-node-id="JSBLxuQg7ZE4omoxwl5fos"><code data-page-node-id="yvABgoiPEFaFnbJXOkSPh5">ExitParamsConfig.atr_period</code></td><td data-page-node-id="zL3IHRbsLsW6Hcn4gGbmtA">240</td><td data-page-node-id="yxuF1l3OlHMPyfbgsnuVyW">60</td><td data-page-node-id="06FfPZ2kOHaarQ7AcxZVhD">14</td><td data-page-node-id="fBYL9YpAQVy2S8uyhKREtU">96</td></tr>
+<tr data-page-node-id="yMQNovMvvMoUE0YNgfsw1X"><td data-page-node-id="cG7nPTHln0dLHkDesd9InJ"><code data-page-node-id="JiGxJzEM5JvB8oZjI4QWtC">atr_sl_multiple</code></td><td data-page-node-id="8RVAFOtQnYJiE6FB4OXNwA"><code data-page-node-id="PK7wBXFyZim5w4rbq9isMO">ExitParamsConfig.atr_sl_multiple</code></td><td data-page-node-id="AD1cLkwEuI2cn3u1SyRF5E">1.0</td><td data-page-node-id="oaYXOfwyiRyRHJKwbdmECk">1.5</td><td data-page-node-id="onm2KWbBNLIAiSadavCLsN">2.0</td><td data-page-node-id="5A38Qe2TaN9IXdcjgewX0x">3.0</td></tr>
+<tr data-page-node-id="RN56hQr5Wz3V9rHPoyziCI"><td data-page-node-id="8H2AcgKlJgLJrG0PxEN81B"><code data-page-node-id="YYBXHS75qqwD8TqBbmwHUX">trailing_atr_multiple</code></td><td data-page-node-id="OX5MVLArPfpBIjTedKnG2Q"><code data-page-node-id="aXCMu0LVvzv0WMkxooD7oN">ExitParamsConfig.trailing_atr_multiple</code></td><td data-page-node-id="hNSezlDWSJcItsQAPSpNe9">0.5</td><td data-page-node-id="70YvsWx3GhtdBrnImtMnFJ">1.0</td><td data-page-node-id="lTcpcc1cUENaqWh46E0LqW">1.5</td><td data-page-node-id="9rHwYbkb5hr4x8oCLmXMQn">2.5</td></tr>
+<tr data-page-node-id="OGOEFnYLYEnLVAfduHPgTK"><td data-page-node-id="DApWx0oZBY3KIM271McMCc"><code data-page-node-id="4TubqnPetJ3VunM4SCerxy">r_multiple_tp</code></td><td data-page-node-id="Ab72x73wKY2g6RrBMjPrTp"><code data-page-node-id="4TjlweBntX2mmHcbJCEXzS">ExitParamsConfig.r_multiple_tp</code></td><td data-page-node-id="D2uD1aNM9gw6SYBQoJQPr3">1.0</td><td data-page-node-id="7LNfBeo9GwIWxbe01RKosu">1.5</td><td data-page-node-id="BeKDdhErD6jvhzVM1q6TDM">2.0</td><td data-page-node-id="GQHoq0I3RQRirkATBegIr8">3.0</td></tr>
+<tr data-page-node-id="nCcI3D0RmSdlAp9WBMXKWj"><td data-page-node-id="ZCZLVALhjC7f0ThONgHvfq"><code data-page-node-id="4CPBsFBmsTjkGpQ5WrQ3oZ">min_r_points</code></td><td data-page-node-id="pjdcqMyyqQIYg7eh1kkedz"><code data-page-node-id="oMJqAlZRHG4kttqh4solQi">ExitParamsConfig.min_r_points</code></td><td data-page-node-id="QBGehpDiUyeBmmc1sohv5Y">0.4</td><td data-page-node-id="kuBoC8PlGfEOggLy2WXhsi">1.0</td><td data-page-node-id="BcyLiyOKKACkjvGVmjrb3M">2.0</td><td data-page-node-id="ZX3SdYDse7g6PgJFlxoqPc">6.0</td></tr>
+<tr data-page-node-id="xjL7jRfDLLCDqpmtIgjxsl"><td data-page-node-id="2rC5aIhVU6o7Hymmm22aot"><code data-page-node-id="XntpQKDg4aPz4xbTHK0CcA">breakeven_trigger_r</code></td><td data-page-node-id="hvjWM6leNmhE3FwQEiaHqx"><code data-page-node-id="AEh3xi7wqk7NnjcsDiVHwB">ExitParamsConfig.breakeven_trigger_r</code></td><td data-page-node-id="4Rpvfe6NI7LE9IAj8B8dYj">0.5</td><td data-page-node-id="iGTnyGhmN4pqXRBjEUJmMH">1.0</td><td data-page-node-id="gM6vKRIrOGdDTl3WDwvBfa">1.0</td><td data-page-node-id="9Eaou4CDmKRaeiJsNY0FT3">1.0</td></tr>
+<tr data-page-node-id="c4hLneG4DkLay5TnXVuLWO"><td data-page-node-id="Vf13sU0JB2sz8EHTiUCToI"><code data-page-node-id="DWGlQULYwMBMlUrKZl6OKf">trailing_trigger_r</code></td><td data-page-node-id="MtqUTt3PC2DdnwMao9HQ5O"><code data-page-node-id="ocokohCRjFZ4hI1JEr8kJM">ExitParamsConfig.trailing_trigger_r</code></td><td data-page-node-id="JHk4ZPrZJDMAA7vHXEz5GQ">1.0</td><td data-page-node-id="hbF9Lsn9UPC6cljHqyjqNp">1.5</td><td data-page-node-id="EF3jIbtHsNqkhImCrrHKX5">2.0</td><td data-page-node-id="y2W1HezDUDUvTWNanOX3ay">2.0</td></tr>
+<tr data-page-node-id="GU0E0ffwvWO6sPt746PTZ7"><td data-page-node-id="IHXF5hBPxgh7L7uXit9Bx9"><code data-page-node-id="F9memDeer6KCzZOcJO0bED">max_hold_seconds</code></td><td data-page-node-id="c2nWU63izjeuhvnNHJBLRE"><code data-page-node-id="XMcAkI6Q6Ynv1oeN0KmnDx">ExitParamsConfig.max_hold_seconds</code></td><td data-page-node-id="yIg6sRHSCsmQMAXQgYedSD">1800.0</td><td data-page-node-id="Wpf1Sir5o8S4RiuPRTAKGd">3600.0</td><td data-page-node-id="osFfLo01VCIKAxI3wUqH7X">0.0</td><td data-page-node-id="x9bzW0osPeRTLusSKuDFtG">0.0</td></tr>
+<tr data-page-node-id="MCzy3fczq8liQBmR0GJ4K6"><td data-page-node-id="5WvAlCtfkeNG7uHEFnzG3h"><code data-page-node-id="Kh5nAgBgPlPSCn3tCEcPLl">bar_secs</code></td><td data-page-node-id="WSzz9fwkSLjda53PzwpgE8"><code data-page-node-id="XuneFNJHPeM6pajxcHCvHs">ExitParamsConfig.bar_secs</code></td><td data-page-node-id="CdjNK43O38jVJKxC0r25gV">15</td><td data-page-node-id="EpxqJAeKPI2x5qYizeKokk">60</td><td data-page-node-id="qeW8HAz2JGDudbgmxOLGqC">300</td><td data-page-node-id="abkUx052I2jBTNqkjEYFEB">1800</td></tr>
+<tr data-page-node-id="4JCCWsAMuB2e8kCIEhZGBZ"><td data-page-node-id="AoDovK5ZvQEn1gdKOVmPoe"><code data-page-node-id="bcSjXgKRqJNNrpG5EmppS5">signal_max_age_minutes</code></td><td data-page-node-id="2GBEKTErkTQawQXzyk7tzy"><code data-page-node-id="DrNkIR1htKk5FAVGpp5QQu">SourceConfig.signal_max_age_minutes</code></td><td data-page-node-id="ivMgODfurS3zx2i4LP8rR8">5.0</td><td data-page-node-id="jEWsdJWNj4ar7l2s6BVluk">30.0</td><td data-page-node-id="L4j27jVXMWSAStJFHZmGZx">60.0</td><td data-page-node-id="yzl7yOZrlwqy3PHec9xB7y">60.0</td></tr>
+<tr data-page-node-id="s9HZ2TJfWI0Y6v8N5v9dt7"><td data-page-node-id="0Yljw04xil4kNEncUHrKDc"><code data-page-node-id="aZQaqNajrtAdkVSwxwVT3z">overprice_points</code></td><td data-page-node-id="HzRKDhgGntOCuHBJnKIxWH"><code data-page-node-id="H53b4t4YVqFuAoYkTTNY3B">BrokerParamsConfig.overprice_points</code></td><td data-page-node-id="egjrRZpXs47UK7g9utnr5p">0.2</td><td data-page-node-id="BkQ6sJ0TSUjObjYaiKttjp">0.4</td><td data-page-node-id="j75e4CsMkWtWeadQcDqA5a">1.0</td><td data-page-node-id="Yb7AZ8wOhKwcN82Ec1ws5L">1.5</td></tr>
+<tr data-page-node-id="hzyNJpMvIvYPEaaTNmSY4L"><td data-page-node-id="ywHqv1Lk1tbLFcQB4j30KJ"><code data-page-node-id="WiHfaBFHjGMdKWLZ2XxiaL">session_seconds</code>（新）</td><td data-page-node-id="umSfEvzqXc6LypxMOSUE0O">不在 Config 加，从 PeriodProfile 推出</td><td data-page-node-id="h0doZy2h6ttHtXVbgHBQSn">14400</td><td data-page-node-id="15CaTskHJEPU64Xa1qV1wy">14400</td><td data-page-node-id="GfsxccaFxwzpga23ta4DlV">14400</td><td data-page-node-id="4IcE94Bdma6aD0TocYvD4G">14400</td></tr>
+</table>
+
+<p style="color: #666;" data-page-node-id="pAZcynrgonz86AnPqEvuA1"><b data-page-node-id="0i3Nyp5bNTAtlmwnVe2fIK">注</b>：<code data-page-node-id="FBsH9CrlQ7Se55ksjKJk1J">session_seconds</code> 替换 <code data-page-node-id="oixdwj0O3bz5QNo1UxaF5d">main.py:91</code> 那行 <code data-page-node-id="b6u0007k6YBLReZVz3GDaQ">(4.5*3600)/_bs</code> 关键计算，让"一天墙钟秒数"也走 Profile（虽跨周期不变，但用户原话要"集中调参"，加进去便于后续差异化）。</p>
+
+<h3 data-page-node-id="NZPr65WrsOu09EK4sGjS0y">4.4 PERIOD_PROFILES dict 与 resolve_period_profile 工厂</h3>
+
+<pre data-page-node-id="VNDyLLsfy6DrXO5FLkiHve">
+PERIOD_PROFILES: Dict[str, PeriodProfile] = {
+    "15s": PeriodProfile(
+        freq="15s",
+        atr_period=240, atr_sl_multiple=1.0, trailing_atr_multiple=0.5,
+        r_multiple_tp=1.0, min_r_points=0.4,
+        breakeven_trigger_r=0.5, trailing_trigger_r=1.0,
+        max_hold_seconds=1800.0, bar_secs=15,
+        signal_max_age_minutes=5.0, overprice_points=0.2,
+        session_seconds=14400,
+    ),
+    "1m":  PeriodProfile(freq="1m", ...),
+    "5m":  PeriodProfile(freq="5m", atr_period=14, atr_sl_multiple=2.0, ...,
+                          max_hold_seconds=0.0, overprice_points=1.0, ...),   # 基线
+    "30m": PeriodProfile(freq="30m", atr_period=96, atr_sl_multiple=3.0, ...,
+                          max_hold_seconds=0.0, overprice_points=1.5, ...),
+}
+
+
+def resolve_period_profile(cfg: GatewayConfig) -> GatewayConfig:
+    """启动期：按 cfg.source.freq 把 PeriodProfile 字段覆盖到 cfg。
+    cfg.source.freq 不在白名单 → raise（fail-fast）。
+    """
+    freq = cfg.source.freq
+    if freq not in PERIOD_PROFILES:
+        raise ValueError(f"freq={freq!r} 不在 PERIOD_PROFILES 白名单")
+    p = PERIOD_PROFILES[freq]
+    cfg.exit_policy.params['atr_period'] = p.atr_period
+    cfg.exit_policy.params['atr_sl_multiple'] = p.atr_sl_multiple
+    cfg.exit_policy.params['trailing_atr_multiple'] = p.trailing_atr_multiple
+    cfg.exit_policy.params['r_multiple_tp'] = p.r_multiple_tp
+    cfg.exit_policy.params['min_r_points'] = p.min_r_points
+    cfg.exit_policy.params['breakeven_trigger_r'] = p.breakeven_trigger_r
+    cfg.exit_policy.params['trailing_trigger_r'] = p.trailing_trigger_r
+    cfg.exit_policy.params['max_hold_seconds'] = p.max_hold_seconds
+    cfg.exit_policy.params['bar_secs'] = p.bar_secs
+    cfg.source.signal_max_age_minutes = p.signal_max_age_minutes
+    cfg.broker.overprice_points = p.overprice_points
+    return cfg
+</pre>
+
+<h3 data-page-node-id="YQnQHmudbGsOknEC0faFs3">4.5 验收标准（Phase 2.1 完成定义）</h3>
+
+<table class="ssot" data-page-node-id="BCDB2EdUTJzqPKXFCgOnSS">
+<tr data-page-node-id="FzgLKoQ8hCEFmrn9gOXg9F"><th data-page-node-id="P1B60E6IW3sVI7AQbGADjy">#</th><th data-page-node-id="LZ1EYdxvtsoY6BRzukmGnS">验收项</th><th data-page-node-id="L8syDtoYQ7Oqfkn85A6GmN">测法</th></tr>
+<tr data-page-node-id="GkwGd2fuIWBXfY7JBTXkqJ"><td data-page-node-id="EHOVujV0GbuXUN3Z0BnlKg">1</td><td data-page-node-id="QwfyWy3u2csreCFTYRyojY"><code data-page-node-id="NmPeHMYMWDH9n9dOpZWj2d">PeriodProfile</code> 在 <code data-page-node-id="WzYibfT9lomMFbbTZVMATu">Config.py</code> 内声明；<code data-page-node-id="af6mipE3oLTpJJw6sAi4nJ">PERIOD_PROFILES</code> 注册 4 freq 全</td><td data-page-node-id="WAv5ExtomRtQ7xQRTfptsZ"><code data-page-node-id="OZehiQwQs5jT2HlAX5Ra8Z">test_period_consistency.py</code> 新断言</td></tr>
+<tr data-page-node-id="X6NdEcjkGgBX6CyPQMSxsf"><td data-page-node-id="UPVlrENGTLBinWqOuwgTCD">2</td><td data-page-node-id="d9FwPIcO7HjRY2uJl9L9kr"><code data-page-node-id="A7HMQloagYTJrUFbofOEM7">resolve_period_profile()</code> 启动期调用，对 cfg 字段值有对应改动，且<b data-page-node-id="6yBqlGK1MElInoQdLpLjCL">不破坏</b>原字段</td><td data-page-node-id="ZGEEh11kjc9Rr4uoy845hP">全量现有测试通过</td></tr>
+<tr data-page-node-id="sn8WznGxIoiCqPWK4ZPPKG"><td data-page-node-id="z0bfjjfkKYBQlJMjtpGDcv">3</td><td data-page-node-id="a6tQnjpEZrqZFXEiCQ78n0"><code data-page-node-id="DuDynxQQehEe4NZT92P72G">--freq 99m</code> 等非法周期在两处 fail-fast（period 白名单 + PeriodProfile）</td><td data-page-node-id="HjeUkXGtjMdT44UTHwQMiL">CLI 冒烟</td></tr>
+<tr data-page-node-id="FmEqHIsEVPRWAJ5h35jxee"><td data-page-node-id="EB3rGHv05Pxi7CJDEgbRnT">4</td><td data-page-node-id="IWZGHlD5hacUf1UvIC2McE">4 周期 <code data-page-node-id="y0Nez5F8XygaoGFYI9yeLS">--freq {15s,1m,5m,30m}</code> 都成功起 + 全套测试不红</td><td data-page-node-id="S2HvkeGRuKBNDM83XNx2Mo">全量回测</td></tr>
+<tr data-page-node-id="p7AhwjJiV65cLGGGSEktAA"><td data-page-node-id="FGj9MUlyFPqri4kYxqlpxJ">5</td><td data-page-node-id="N8D4D3NF32GTrZTLbEqnQw">README 更新："调参先看 Config.py PERIOD_PROFILES"</td><td data-page-node-id="eCm09ybiOucHlAZafXZHTe">文档</td></tr>
+<tr data-page-node-id="LgGMQ9yNRTxyfFw5FGVX6W"><td data-page-node-id="Bihkm5VVh92ZXvzCS4A18u">6</td><td data-page-node-id="FchVtJq7V5uscK7rQD6gc8">干净副本复验（custom-dev@5478def + Step 1B v2 + Phase 2.1 patch）→ 全套测试通过</td><td data-page-node-id="TFaYFYmHHaMNpi1ziJXgru">复验</td></tr>
+</table>
+
+<h3 data-page-node-id="ukJuUujcHuuuUMdoEih7pH">4.6 不在 Phase 2.1 范围</h3>
+<ul data-page-node-id="tFXkOIwjiD2kkDqxThsGE9">
+<li data-page-node-id="AMRnqvRPlRvvdWBCTMxwku">❌ 不动 <b data-page-node-id="dtBFxwip3rXXlrTRgWbnc6">数值</b>（只搬位置 + 默认值，<b data-page-node-id="wCC1oXq8PcCR9HECqvEG45">不调</b>）</li>
+<li data-page-node-id="J5rXsVHf4Wq4LbRBkTae67">❌ 不动已有 <b data-page-node-id="6uftub5lE6YDMeeCvnrvIn">fixture</b>（p8/p20/p15b 测试里直接写字段值的，让 Profile 默认值反推兼容）</li>
+<li data-page-node-id="kCW7iAO6LSVGTRhunlWB3x">❌ 不开始 <b data-page-node-id="vz70ZkM72p0EIm2NSgITiw">回测 / 调值</b>（要数据依赖）</li>
+</ul>
+
+<h2 data-page-node-id="fFbppRaiuXR38mIOEFCUfa">5. 进度状态（本节是 SSOT，下次开工先看这里）</h2>
+
+<table class="ssot" data-page-node-id="VYyj5EW9Y5F3RccQhPbQUR">
+<tr data-page-node-id="pAWJWHrxLrx0ArNUNgaq9D"><th data-page-node-id="Q6ojqHKsGhNl60QKPUzqbh">Phase</th><th data-page-node-id="C40YwLFty82SxSSgWaiOBW">起始</th><th data-page-node-id="gD5usjIkFHtVfTofHwyAlb">终点</th><th data-page-node-id="uZBydUC8IV0t7IOVMom94S">状态</th><th data-page-node-id="cOhbDC4X5nLGw34y2kmM29">备注</th></tr>
+<tr data-page-node-id="O60lcuIuKWep8aFQTOJnPB"><td data-page-node-id="y9PI9GvqSi7176cfn6fdeA">2.0 路线图</td><td data-page-node-id="wyZIH1cHtuJxpIzbJyGwA3">2026-09-08</td><td data-page-node-id="IMpveSCIo12Iy9E4toYE6s">2026-09-08</td><td data-page-node-id="Avp9iuy6PEfMSSppJTTZvk"><span class="已完成" data-page-node-id="QVnW1dCLSWhgHWxEa5SLbm">✅ 已完成</span></td><td data-page-node-id="yzbN7YFMBMNh0CJVno291S">本文件</td></tr>
+<tr data-page-node-id="4HYSA3S3WOExUeEkWDHIlB"><td data-page-node-id="UqEFmJUHVrnSHxHJCh8nsI">2.1 周期敏感参数入 PeriodProfile</td><td data-page-node-id="UrVICDzqyokQiLjQ16tosg">—</td><td data-page-node-id="NH5jHMdcp5GF5kbVPG3mD1">—</td><td data-page-node-id="6jJrLqfTWHNaXvFaztz3Y6"><span class="下一步" data-page-node-id="7iOCEDSLbavxQJwK1utjIm">⏳ 下一步</span></td><td data-page-node-id="DWjIu42kJ80A078VQZSGx6">等用户拍板设计决策（1.1 三层结构）</td></tr>
+<tr data-page-node-id="PXtxDBF46q08CLg0Dqlhtz"><td data-page-node-id="OvSx0tWp2szprSHWrkLOUW">2.2 引擎常量 EngineConfig 化</td><td data-page-node-id="77WqGM8uQJiQxVeBEEMFWE">—</td><td data-page-node-id="jK7BNrTfHMDpA6zf6JAIME">—</td><td data-page-node-id="GAh7Dgww3QPltzTUYpCJVk"><span class="等待" data-page-node-id="i5Oa473K2lfdGqiM9vCAMV">⏸</span></td><td data-page-node-id="T0H1gDfnQ1FIICAUkFyHUI">—</td></tr>
+<tr data-page-node-id="OdDfufHj67In2kooC7ByAQ"><td data-page-node-id="BY1di9qAKKic7Ni5273enz">2.3 Broker/Channel 超时集中</td><td data-page-node-id="gl3r9HKt8HUKgKB7WxxDLd">—</td><td data-page-node-id="4iaiXcUr7JM7Ew8h9OxhXU">—</td><td data-page-node-id="LAazH2hARUokqRI8CsdaHf"><span class="等待" data-page-node-id="7jhkWc8LjnCFUJu24QEMMz">⏸</span></td><td data-page-node-id="cL5PyeCpr3tOtKJm7nK737">—</td></tr>
+<tr data-page-node-id="74sqFo8wkPJCAmehk0bhPG"><td data-page-node-id="WzDMERTPT3kxbXtc6NIRFk">2.4 重复常量合并</td><td data-page-node-id="1EfPU8sNyMvhYRd2d2Nehh">—</td><td data-page-node-id="Mb4Wp9SCnGjSkUKN6bTjcw">—</td><td data-page-node-id="ybVPjNsMp8eOI8DNgXE6VK"><span class="等待" data-page-node-id="7JA0dfF6F9DzQz1mhjUGg8">⏸</span></td><td data-page-node-id="N1BoK5Vg2eWMimys7TAObc">—</td></tr>
+<tr data-page-node-id="QYfoZO7AIYP8twFujbAkcP"><td data-page-node-id="6x6ER7tkZw1eXBvQvSQdaD">2.5 Source/Recorder 重连参数化</td><td data-page-node-id="eckRmskHygq6LxVcUbMqku">—</td><td data-page-node-id="XYQQ2vORrNSWcqx9tPw17O">—</td><td data-page-node-id="4HMFeVZqmErahHbvtGZ3UT"><span class="等待" data-page-node-id="FJLxcEX77aCroTQJvEsPJW">⏸</span></td><td data-page-node-id="tvfgPrdHApcjPBOM7iCA80">无（独立）</td></tr>
+<tr data-page-node-id="7USkZ9XBIjBijFZCkphrtj"><td data-page-node-id="igOEeA2goDsaSUjDfzdUTU">2.6 测试 + 启动校验</td><td data-page-node-id="dPpRS0gGCbJyPjQ5hTxMil">—</td><td data-page-node-id="LfKaP68LV3QtdI4ks7yllM">—</td><td data-page-node-id="Y6AvKOw5YT1xcyhSmUwhet"><span class="等待" data-page-node-id="wM2LCymTCRGE5UCuve3alr">⏸</span></td><td data-page-node-id="GoOFGYtMhyT7x5V3gYh3F0">全部 Phase</td></tr>
+</table>
+
+<h3 data-page-node-id="MVtfB8Sj5id5SCChhRN8Qe">已知阻塞项</h3>
+<ul data-page-node-id="O4bQ3iXFZhJlAI5UWy2JWj">
+<li data-page-node-id="ho3VjIoYCTBX92iOU5AisD"><span class="阻塞" data-page-node-id="b53ltBNUSxVesCSq1m2E37">🔴 真实数据缺失</span>：5m 有 144 根 demo，15s/1m/30m 无；调值必须等补录（不在 Phase 2 范围内）</li>
+<li data-page-node-id="f2v6fUbb4NEHslvjKgq8n2"><span class="阻塞" data-page-node-id="vj0oU8eF8HLG3adEimi8Z5">🟡 远端未推送</span>：real project 合并了 Step 1B v2 但没推 GitHub；下次沙盒初始化时核对基线</li>
+</ul>
+
+<h3 data-page-node-id="cKFZnZXvffheYrfY1vtwNI">用户拍板清单</h3>
+<ul data-page-node-id="jayt0Bm8JynmKlkiZUooZF">
+<li data-page-node-id="flGGyz1IwAcBG3eovQYULb">[ ] <b data-page-node-id="2rwPC0FR6h7VH2huqAC3lT">设计 1.1 三层结构</b>：Config.py 内嵌 PeriodProfile、Profile 字段值覆盖 cfg 字段、下游 0 改 —— 接受 / 反对 / 微调</li>
+<li data-page-node-id="fOIoh7mBxRWZDP9xH6Ial2">[ ] <b data-page-node-id="CzP4V7EaXCsVqvrBhDP1Mi">Phase 2.1 起跑时点</b>：现在 / 等其他事 / 周末</li>
+<li data-page-node-id="TOh52c1B6gTmJEfYToeacw">[ ] <b data-page-node-id="EqCvZpnqaFDCq7RotNKSKG">Phase 2.1 字段范围</b>：本文件 12 项（含 session_seconds）/ 仅策略 9 项 / 还要加点什么</li>
+</ul>
+
+<h2 data-page-node-id="UuyvJYqVDTCxx7dW96CwRV">6. 调值阶段（Phase 2.7+，数据依赖，本文不展开占位）</h2>
+
+<p data-page-node-id="89UgiNEUJ6uIeiwOZzSWEL">待 Step 2.6 完成后，且真实数据补录到位（≥ 5 个交易日）后再开：</p>
+<ul data-page-node-id="imt1iEg0jpZMbiGfFOwFHZ">
+<li data-page-node-id="EY3LcpCCnN9PMQHMWXpnlJ"><b data-page-node-id="zPspDH97XsUBDXhI7uvrNo">2.7 数据补录</b>：录制器跑 4 周期 × 5 日</li>
+<li data-page-node-id="BgLCzvRPo248oeQ6ySEe0P"><b data-page-node-id="PsvrASTBH51Bx5VYeKWSPw">2.8 实证回测</b>：<code data-page-node-id="8wl0e5ur8KfZwIkRndiLt2">analyze_backtest.py</code> 出每周期胜率/期望/最大回撤</li>
+<li data-page-node-id="7gmN268Apw3F60X05wsldo"><b data-page-node-id="Fp4joapdI4uNPXvkJIV4GV">2.9 网格搜索</b>：每参数 ±50% 网格找稳态带</li>
+<li data-page-node-id="zhYlqAV4clGyUndMFruzxc"><b data-page-node-id="rgPjnMRf4aYmE5dCC2rukH">2.10 SimNow 实盘验证</b>：挑最稳周期跑 2 周比对</li>
+</ul>
+
+<p style="color: #666;" data-page-node-id="ivaUIa7nE34wFBs68uz69X">这部分<b data-page-node-id="hryJiowjKJaMutR0dnnDHH">与本路线图独立</b>，不在 SSOT 结构改动范围内；开始时另起"Step 2 调值路线图"。</p>
+
+<h2 data-page-node-id="7aQogCW3QkMruKQARnIc5B">7. 与 Step 1 的关系</h2>
+
+<table class="ssot" data-page-node-id="EaLJGvTCFrB9UYt0D4QmiJ">
+<tr data-page-node-id="exkJITCZxTGboK4TE4LTVy"><th data-page-node-id="tK6JLGxmSJj3ZBybUwKDgV"></th><th data-page-node-id="E9o9FXWj7kjtZBIZqHfV5c">Step 1A（审计）</th><th data-page-node-id="ENDRIRhmkKlI4VyFRjurcR">Step 1B（修复）</th><th data-page-node-id="FSBJ13n8X609uaz4SJUcYO">Step 2.1（归一）</th></tr>
+<tr data-page-node-id="YpRZPBWmx6C1jV2zhCpLSY"><td data-page-node-id="h71uG018KPikDE5dgA0jFX"><b data-page-node-id="GAYuJRaDv8VMAIfvJDiZO8">目标</b></td><td data-page-node-id="gxJvAImiSKM9mszLcmiz7G">找出 bug</td><td data-page-node-id="ljtrBcdXHxURYJnPMRnmCx">修 bug</td><td data-page-node-id="MzZJvvPEIFgoHsYZkP7WF0">把调参面板集中</td></tr>
+<tr data-page-node-id="Y09HvH6o7KMM0S4rpQ3WNN"><td data-page-node-id="IxdFsCZO03EfU6pptrPeMD"><b data-page-node-id="W6OJp7o8ZEcuBWIq0Jlppp">动作</b></td><td data-page-node-id="wXeZgdAjAMZQ6y70ZaohZI">文档 + 不改代码</td><td data-page-node-id="6vjY9qMn6rY6gLcdHMeHHL">改代码 + 测试</td><td data-page-node-id="XWQ9NZgVG8ezy869uAWyhq">改代码 + 测试</td></tr>
+<tr data-page-node-id="93sioBXfcKEInFXS6qGzTd"><td data-page-node-id="ByytwXSDavA3RPKIhWChEt"><b data-page-node-id="7zryL4sGUQS6OjyRu5937V">diff</b></td><td data-page-node-id="lB6gO2enyYpQRENldYthhw">0</td><td data-page-node-id="mwayrZH7PDHunlI6TwVuwm">~700 行（含 v2 撤回）</td><td data-page-node-id="mzpkxyGykHIENW6DXPCJfG">~250 行</td></tr>
+<tr data-page-node-id="usHO0uJgZnEnhHrHC3ZYvq"><td data-page-node-id="i4VAhnyaC1ni0BAgGuh2yd"><b data-page-node-id="9kLKos9XD5GiWP4z3DUH1w">依赖</b></td><td data-page-node-id="lfsCNqGESCbeCO1fJrQOan">无</td><td data-page-node-id="bvD64vCwuMTpeotziALW5R">Step 1A</td><td data-page-node-id="izPbuuJ3pwvkpgt391whA4">Step 1B（已合并 ✅）</td></tr>
+<tr data-page-node-id="idIz7010ahRQeusBFVxc5H"><td data-page-node-id="CIlYCCkWoFbT7sYk342dAC"><b data-page-node-id="tkO8p4vq8kHwu0SO6plINq">数据依赖</b></td><td data-page-node-id="fGxJ7UQjuM5FKR9MjQmoJL">无</td><td data-page-node-id="RaFYMLQno7JEgoW95pnkjF">无</td><td data-page-node-id="ueRDE52xX8Waj4QEifA3dc">无</td></tr>
+</table>
+
+</body>
+</html>

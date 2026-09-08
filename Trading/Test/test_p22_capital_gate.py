@@ -64,12 +64,12 @@ def tmp_dir():
 
 from Trading import Broker  # noqa: E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 
 
@@ -96,14 +96,14 @@ def make_signal(is_buy=True, price=4500.0, sig_key="P22-OPEN"):
 
 
 def build_engine(tmpdir, sim_equity=1_000_000.0):
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": sim_equity})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker
 
 

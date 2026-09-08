@@ -74,12 +74,12 @@ def tmp_dir():
 
 from Trading import Broker  # noqa: E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, GatewayConfig  # noqa: E402
-from Trading.Engine.Engine import GatewayEngine  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import DefaultExitPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, DecisionType, EntryMode, EngineState, ExitMode, ExitPlan, OrderIntent,
@@ -113,17 +113,17 @@ def make_bar(ts, o, h, l, c, date="2026-09-01 09:40"):
 
 
 def build_engine(tmpdir):
-    """构造最小可跑的 GatewayEngine：dry_run broker + DefaultEntry/Exit + 临时 sqlite"""
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    """构造最小可跑的 TradingEngine：dry_run broker + DefaultEntry/Exit + 临时 sqlite"""
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = DefaultEntryPolicy({})
-    exitp = DefaultExitPolicy({})
+    exitp = LayeredExitPolicy()
     store_path = os.path.join(tmpdir, "state.db")
     store = Store(store_path)
     event_path = os.path.join(tmpdir, "events.jsonl")
     ev = EventLog(event_path, echo=False, echo_kinds=None)
-    engine = GatewayEngine(cfg, broker, entry, exitp, store, ev)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
     return engine, store, broker
 
 
@@ -195,14 +195,14 @@ with tmp_dir() as tmp:
                    entry_mode=EntryMode.OPEN_FIRST)
     store.set_json("position", pos.to_dict())
     # 重建 engine
-    cfg = GatewayConfig.from_dict(DEFAULT_CONFIG)
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker2 = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry2 = DefaultEntryPolicy({})
-    exitp2 = DefaultExitPolicy({})
+    exitp2 = LayeredExitPolicy()
     store2 = Store(os.path.join(tmp, "state.db"))
     ev2 = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine2 = GatewayEngine(cfg, broker2, entry2, exitp2, store2, ev2)
+    engine2 = TradingEngine(cfg, broker2, entry2, exitp2, store2, ev2)
     check("恢复持仓后 _state == IN_TRADE", engine2._state, EngineState.IN_TRADE)
     check("恢复持仓后 position.signal_key == restored",
           engine2.position.signal_key, "restored")

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="y2jnvDHAeBmW9rUPt72vqX">
+<head data-page-node-id="c0HObusiKuIJsqvxt5FByX">
+<meta charset="UTF-8" data-page-node-id="eYfrvzDvkH4HkhgZCxnJDM">
+<title>Step 2 可行性分析 — 四周期盈利参数定型</title>
+<style>
+body { font-family: -apple-system, "Microsoft YaHei", sans-serif; max-width: 1100px; margin: 32px auto; padding: 0 24px; color: #1a1a1a; line-height: 1.7; }
+h1 { border-bottom: 3px solid #d32f2f; padding-bottom: 8px; }
+h2 { color: #d32f2f; border-left: 4px solid #d32f2f; padding-left: 10px; margin-top: 32px; }
+h3 { color: #1976d2; margin-top: 24px; }
+code, pre { background: #f5f5f5; padding: 2px 6px; border-radius: 3px; font-family: "Consolas", "Menlo", monospace; }
+pre { padding: 12px; overflow-x: auto; line-height: 1.45; }
+table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+th { background: #f5f5f5; font-weight: 600; }
+tr:nth-child(even) td { background: #fafafa; }
+.a档 td:nth-child(7), .b档 td:nth-child(7) { font-weight: 600; }
+.红色 { color: #d32f2f; font-weight: 600; }
+.绿色 { color: #2e7d32; font-weight: 600; }
+.灰色 { background: #f0f0f0; }
+.拍板 { background: #fff8e1; border-left: 4px solid #ffa000; padding: 12px 20px; margin: 12px 0; }
+.metabox { background: #f3e5f5; border-left: 4px solid #7b1fa2; padding: 12px 20px; margin: 12px 0; }
+</style>
+</head>
+<body data-page-node-id="gco8sg9qOj2Uw2wBo4Xy8V">
+
+<h1 data-page-node-id="6ivskWmniHmkaGFPuY1kaj">Step 2 可行性分析：四周期（30m / 5m / 1m / 15s）盈利参数定型</h1>
+
+<div class="metabox" data-page-node-id="I9cb1CvtWuTW0Cl0eDOVZZ">
+<b data-page-node-id="WawbKwoICoIgBTV2mOFsno">基线</b>：<code data-page-node-id="uxZ9qbIRCaB8tYjmX5YzRJ">custom-dev @ 5478def</code> + Step 1B v2 修复（根数口径主轴）<br data-page-node-id="LPrPERuzTxXW0zEfFFjrDG">
+<b data-page-node-id="V4wEzEWysHRlDo0nlH8jDG">代码状态</b>：Step 1B 修复 zip 仍在沙盒 <code data-page-node-id="cTG8rk4UJyCDwyGxwmryi9">step1b_四周期修复_Trading.zip</code>，等你在 real project 合并<br data-page-node-id="g6fLJ20trckHyOGa1I14El">
+<b data-page-node-id="zvDRZXG7HEMCEQnefQTFDo">日期</b>：2026-09-08<br data-page-node-id="wDGNnbZ0QtsmW2QJIEFyXa">
+<b data-page-node-id="w1w40YAktVQY8AGHbshGsh">本文件目标</b>：列出 Step 2 要碰的周期敏感参数、各周期粗估取值、依赖关系、需要你拍板的点。<b data-page-node-id="fPNNMznZTE4nSOaidsFfmo">不改任何代码。</b>
+</div>
+
+<h2 data-page-node-id="SukPRql3V58nHBDO1ndgTv">1. 进入 Step 2 的前提是否具备</h2>
+
+<table data-page-node-id="U5fWikt1LKBKsHpkL6CWb7">
+<tr data-page-node-id="4rq3MlQpcL8IZSV0oXdE1w"><th data-page-node-id="egUIUk6KqCYHKwGmcM9cS4">项</th><th data-page-node-id="cldmPTF3Voun8v6uL6pfj9">状态</th><th data-page-node-id="dEBE4aBoGpOjicFtzOZkrr">说明</th></tr>
+<tr data-page-node-id="rWnYD6xH1fbswp3SZN5JAl"><td data-page-node-id="DDN9nzF3aVow0c9C7WdPgg"><code data-page-node-id="ZVyUwb6VkLjBDxrVKmhHIK">PeriodProfile</code> 骨架</td><td class="绿色" data-page-node-id="aLMBrcJS3TB0OPEgNPkije">✅ 已搭</td><td data-page-node-id="xItAKnU56AbqrpAaBN4VcR"><code data-page-node-id="Ba8IuyixhSX2PMCUaWHjhK">Trading/Infra/PeriodProfile.py:188</code>，只装了 <code data-page-node-id="mnZkax3AfOQHYCtjFHk48G">freq</code> + <code data-page-node-id="6A4GaHMRWGohuESPRgXyl7">bar_secs</code></td></tr>
+<tr data-page-node-id="zUUaY9KP7xngAQdJY0zbJC"><td data-page-node-id="Sr7fjcl9TgD0ufOXXKB6ZD">4 周期代码正确性</td><td class="绿色" data-page-node-id="xhu63vBCqnIpJw41FeVZmH">✅ Step 1B 已修</td><td data-page-node-id="6NZmdLHfxKOIABVQfanxyK">4 周期都能跑通（1130+ 测试绿）</td></tr>
+<tr data-page-node-id="XVyB5ahp7JKRwZFkuVxxgG"><td data-page-node-id="nwDxUjkDnvGgRkSjUsay7U">启动期 freq 校验</td><td class="绿色" data-page-node-id="X8s1s1r7U0aAYeulJWgnC6">✅ 已加</td><td data-page-node-id="Gq8QlSlFHjeTbB8NJ9w5fD"><code data-page-node-id="dsIGMQWo2PBJKl7HpqmZmJ">--freq 99m</code> 直接 fail-fast</td></tr>
+<tr data-page-node-id="zZx0hGZpCYnvZNG7VirHcy"><td data-page-node-id="qQEtAHx82FkFdmACP3FBJM">回测/仿真数据</td><td class="红色" data-page-node-id="mF9LJirio9HlGI0dZYiIov">🔴 不可用</td><td data-page-node-id="9ueiKHhFuRpu7TrGkY6a7r"><code data-page-node-id="NLd2aOgSq4ilPr7FRMkz4l">replay_data/klines.json</code> 只有 144 根 5m K 线，<b data-page-node-id="4TWJ7tu2JiNO6IndNi7BX8">vol 恒等 2500、价位线性递增</b>——合成数据</td></tr>
+<tr data-page-node-id="X9Y4LOuguh47i8C5ISgte4"><td data-page-node-id="pNPT1oQzYdRNaVh4BFxjCl">真实数据来源</td><td data-page-node-id="RNyMLkJ1nYoqR0nnr3S9Gs">🟡 已有录制器</td><td data-page-node-id="1vj0KLjnfk54z3VSkONzyh"><code data-page-node-id="GxBizUsr7xrv2RsghHFdmy">Tool/Recorder/SignalRecorder.py</code>，依赖 chan.py 主程序 SSE 端点在线</td></tr>
+<tr data-page-node-id="pSHfM5XAqFIHRrHdKKNow2"><td data-page-node-id="YUqSkszdBnRXJOeQ0GPtX5">5m 实盘基线</td><td data-page-node-id="kBFjkmORn9VtlwDGQVzyGU">❓ 不明</td><td data-page-node-id="sivd0bPPKGNGlnqoIwU0wz">回测目标值无参照</td></tr>
+</table>
+
+<p data-page-node-id="W93REJ7y0d7vQVIeJaUNsz"><b data-page-node-id="EsZhxEdezE1bF2UW67EMr2">核心瓶颈：没真实数据。</b>任何"调参"在没有真实数据的前提下都是演示。</p>
+
+<h2 data-page-node-id="0kNtl0GAlFk9wgYuaMSBkL">2. 周期敏感参数盘点</h2>
+
+<p data-page-node-id="AEdPOOoTYGIUbqZ4sXca15">13 个参数按"是否与周期高度耦合"分三档。</p>
+
+<h3 data-page-node-id="f4DIFiZWlwBqPyy92P8ac0">A 档：明显周期耦合（必按周期分型）</h3>
+
+<table class="a档" data-page-node-id="Vs21ByA7ANd9Goc7C4XLbz">
+<tr data-page-node-id="LcHdu4pRBxpu6GBW8VFrip"><th data-page-node-id="yCZWa8S04VS2wXHUNmoIrt">参数</th><th data-page-node-id="pp6DAF5Tte0GjB3nRdF0Fv">现位置</th><th data-page-node-id="hEtzBJXrSdqsakwN8i7uNx">默认值</th><th data-page-node-id="ouVnR2e94pDGPhKt2w4Jmo">30m</th><th data-page-node-id="cQpP3gAfA8buWoIJ2mSAOM">5m（基线）</th><th data-page-node-id="jDLvQgRcpiW1jyoc7uvVXA">1m</th><th data-page-node-id="gXRYTBgSHPPUxJt0fKQpPQ">15s</th><th data-page-node-id="UDxDKxZAZubpZXxSA6wsXz">耦合原理</th></tr>
+<tr data-page-node-id="4EGgCJk0kY0U1tAYuJP09s"><td data-page-node-id="IWfkznjnleMfNoJGHeE7z0"><code data-page-node-id="pR7RJCw49Cd2SqGr6rKVFt">atr_period</code></td><td data-page-node-id="4rgEgJXUyXPDj2pdUcu9lm"><code data-page-node-id="1Jxm2iGWGzhAFJVbZW0Gba">Config.py:171</code></td><td data-page-node-id="PAozqDFd9y4B0wMKLMZAvs"><code data-page-node-id="HaRFBOyjVCToEShntyo8mA">14</code></td><td data-page-node-id="ThUxOrVeUCGgdnYT13mH29">96（≈2天）</td><td data-page-node-id="01ass69iZPguS0YjmXU4pP">14</td><td data-page-node-id="ryR9fjEwuqqTjKLW1CwtCF">60（1h）</td><td data-page-node-id="G9c9Cv6HOcj5FespyYjv6W">240（1h）</td><td data-page-node-id="zUB0z6ToJXEa7sjiNUE5Od">"墙钟 1 小时等效"推导不唯一</td></tr>
+<tr data-page-node-id="l3wbAKbDO4zzEmJCz6REGl"><td data-page-node-id="Oq2oGodchdlixURzmH20GE"><code data-page-node-id="yYFtFRu0aCCrGzQQodfWNG">atr_sl_multiple</code></td><td data-page-node-id="BfKU3fRGtQdgLA3wN2XI4f"><code data-page-node-id="DYy81BTV4tpCM4oikKeezh">Config.py:172</code></td><td data-page-node-id="x37Z9ZsXHxUeoGXyzOTFwY"><code data-page-node-id="KeIVmGmSwvYEvLSARBjltJ">2.0</code></td><td data-page-node-id="qIj0h4fI1uoS9QG6dVMqie">3.0</td><td data-page-node-id="86biW9wdwwynBEvrrDDf5x">2.0</td><td data-page-node-id="swKFXqnTkgtPN5OWszcMQC">1.5</td><td data-page-node-id="QwUQT3MallfCpIfd1Y3dor">1.0</td><td data-page-node-id="kEAdoh8hC8ZFBnr8RzuDth">粗周期 noise 大，倍数放大避免被噪声洗</td></tr>
+<tr data-page-node-id="u6L7FBXNyhqt1a1t2spk7m"><td data-page-node-id="2UjeOZcJ2yGN5A74HfoSVA"><code data-page-node-id="haTUJDBY7zUkL74e6v3rPM">trailing_atr_multiple</code></td><td data-page-node-id="EZKeeN1NL4HCE1oKb74DQf"><code data-page-node-id="WNuRKpqdzwBdxE0ODxxx0c">Config.py:178</code></td><td data-page-node-id="1VJZkEuAuzMh58xG6PTBzd"><code data-page-node-id="7A9AndEImWiuHq2UTQJlpR">1.5</code></td><td data-page-node-id="HTnjuIVE0MiFvBDujQlELW">2.5</td><td data-page-node-id="9b9cOCbkHvmvvpujm8j7rQ">1.5</td><td data-page-node-id="BTDC3AE2m697JFPLboGtv8">1.0</td><td data-page-node-id="0IfLeXvG9QF7YoTGOy8HJ0">0.5</td><td data-page-node-id="Vl2KQjRgzQTUcFW8uRp33r">同上</td></tr>
+<tr data-page-node-id="IGS1XbPHJzvg0jsv6oiu3H"><td data-page-node-id="zDBgPYgR7aemn9mQ0mCQ3X"><code data-page-node-id="HOc9CxlX1Ojck85nLyrWAa">r_multiple_tp</code></td><td data-page-node-id="2eF8Bb9ljLBbUbNGAMwh6J"><code data-page-node-id="sZjIvbIdAkvDnvolwGZJU4">Config.py:167</code></td><td data-page-node-id="HwD6ZrjQCn1JiP4h4bFQsN"><code data-page-node-id="hyhWeGYXFbnwCD8hjQeXTz">2.0</code></td><td data-page-node-id="7WO4YJTCeblWXiVUFzMjq9">3.0</td><td data-page-node-id="zqSGJLcASBNPASbU6T9Iuh">2.0</td><td data-page-node-id="LzIHbfVIlRx58oSpoaOxzV">1.5</td><td data-page-node-id="632gET2kDf3VaobupL2wrN">1.0</td><td data-page-node-id="Oq4x51kFekUOGs0Y7aFJnV">粗周期单根 R 大，倍数匹配走势</td></tr>
+<tr data-page-node-id="8VQmKrVxW1XKKDxD7VkXee"><td data-page-node-id="SOOLAOFIss1Pvt3UMrGAlt"><code data-page-node-id="cqZcrWsdlGsakJVCQ4MUz4">min_r_points</code></td><td data-page-node-id="218HZFrGb3nCtaJ3I9DFDZ"><code data-page-node-id="1n4DigsRJuEsdRNIW8Bsfj">Config.py:168</code></td><td data-page-node-id="JvFSPxBKui701PEC8BZNfz"><code data-page-node-id="WF5nXqMCQRL0g2xp1XvIsv">2.0</code></td><td data-page-node-id="Ng5DqxiCZZGKLGznQEGu9z">6.0</td><td data-page-node-id="wzBewTJwR3HL8MqooFSnXz">2.0</td><td data-page-node-id="OGqeTKE7uw12vf4WeOZdU3">1.0</td><td data-page-node-id="Beb2tFuhhaUDK2y4dIBXBj">0.4</td><td data-page-node-id="NF61C4elFBAT0wIhx8JfDP">细周期 R 太小易成本击穿</td></tr>
+<tr data-page-node-id="OCYjLjHgWX9xAxsVECK6cC"><td data-page-node-id="ghZYDRovbC4JT7hEJ10m6T"><code data-page-node-id="bITNMtFfYNpl0DqeFLeHgl">breakeven_trigger_r</code></td><td data-page-node-id="dxcFI6q5HK0URVYqCPslfK"><code data-page-node-id="8DlEivwnnCkC73sbtybVp3">Config.py:175</code></td><td data-page-node-id="i2jo9bmBnyG6a9wBM44zhQ"><code data-page-node-id="SiUWVmeEEJTuPfYfESC2ds">1.0</code></td><td data-page-node-id="pzqODLztqmwA1vc4Mp25lt">1.0</td><td data-page-node-id="r7X6YppOxYVkUJCydPtTQo">1.0</td><td data-page-node-id="hYZAzajMYCJaw8vGmFCtwp">1.0</td><td data-page-node-id="TBblebwEsSDHnCiqjdtaeW">0.5</td><td data-page-node-id="mhwOM41EI2H8GivM0aNixH">细周期下单根 R 太小</td></tr>
+<tr data-page-node-id="pZaV2AT2b4M2tuLissMHYb"><td data-page-node-id="b2ymDBpmaAYLfiCuZzbH0M"><code data-page-node-id="1FPbLtOfhyfZDP5Ffgj2Eh">trailing_trigger_r</code></td><td data-page-node-id="hqhwY7SpZEB28gkKIh7C2R"><code data-page-node-id="EB5wJqH92jS4FvP2SG734b">Config.py:177</code></td><td data-page-node-id="7xACEulMaEzUOAdgfNMxiH"><code data-page-node-id="NQxnEcj3r75sGEooqvcMHq">2.0</code></td><td data-page-node-id="1fxQGLf3MF9WGsDM4BIOZC">2.0</td><td data-page-node-id="oEyi7PPy4Kn88dawAVVGjH">2.0</td><td data-page-node-id="2rZEtRme2w4rLTLMgzwK53">1.5</td><td data-page-node-id="xlvooSAfWBFpuPrjdG47Ry">1.0</td><td data-page-node-id="7C9qu9SDWi68Ybo8ovnwly">同上</td></tr>
+<tr data-page-node-id="Y14bCo8TjIlWnipzCLyrh7"><td data-page-node-id="IJ2LzwK2X3r9wwplQpAiEx"><code data-page-node-id="ntYjNzRVTYHd24Yevzss9v">max_hold_bars</code></td><td data-page-node-id="TBCAkaKLspkeYJvLhigcjG"><code data-page-node-id="m5NdFKjIWf0W9jjmCvCJhO">Config.py:189</code></td><td data-page-node-id="f2WfSZqxkdUChUCASJheQP"><code data-page-node-id="Mhwy0GhNRTgWwZwrxEip2S">30</code></td><td data-page-node-id="ZDthHqhMvYh1eJLyJJhIWt">6（3h）</td><td data-page-node-id="8n3nVPQQh5sDhMecrYS4Is">30（2.5h）</td><td data-page-node-id="fqSVTEv6Nj2sVBiHJ2YwEW">60（1h）</td><td data-page-node-id="SDy70vnccjNr82c2BvqFc2">120（30min）</td><td data-page-node-id="Vvr2ndAGYKMoCE3tscy3ZJ">30 根在 30m 跨多日无意义</td></tr>
+<tr data-page-node-id="ElNyXXsZ42wF9HvFlbSLps"><td data-page-node-id="zCmGYovovoNbSZw1o2sOkl"><code data-page-node-id="bIG2UwZdT4AFrE1bBvKd8C">signal_max_age_minutes</code></td><td data-page-node-id="Vd5ifjlGtT1N7ZjysRmnAg"><code data-page-node-id="TsTfsVWARyDFZCXe2xZ5jI">Config.py</code></td><td data-page-node-id="aMeJoCpIqsipMnfC2Dk46O"><code data-page-node-id="A6sQ8IwOYHainzQFewCrgz">60</code></td><td data-page-node-id="K5ula2QEAV36KJYrLxDQU1">60</td><td data-page-node-id="ncRlFMCbao816z1mPF1Tge">60</td><td data-page-node-id="cNxGDCB1DePyzpQcNn4JC5">30</td><td data-page-node-id="o1TBdoYyvZvassvCyEuM2G">5</td><td data-page-node-id="BJe7yOoSF5qJouWOm0byLD">细周期信号密度高，老信号易被新结构盖</td></tr>
+</table>
+
+<h3 data-page-node-id="GCJA02a4bSGhjZ4Qlhxjy2">B 档：与周期中度耦合（broker 侧）</h3>
+
+<table class="b档" data-page-node-id="CZK5AkzIR4nDAuXoLhgBt0">
+<tr data-page-node-id="cHY9RomX7Iclc35uDALpl8"><th data-page-node-id="oceLCeuuzwew05NRdwg0B1">参数</th><th data-page-node-id="cDxynjdVRETrrAvEGq6WDJ">现位置</th><th data-page-node-id="GUUR6Na3K3BEQwNGfbR3IH">默认值</th><th data-page-node-id="JedgK6lnRoiH0vRiCGJ3b9">耦合原理</th><th data-page-node-id="tNBHOqdHAqiFXig2R3i6b6">建议值</th></tr>
+<tr data-page-node-id="pocwuexrD7LAXFIaoI8PFq"><td data-page-node-id="OXIsMOeEvAjsJseVVA9BL3"><code data-page-node-id="PD7KyPm4g4ZD5TIP0cVxyf">overprice_points</code></td><td data-page-node-id="4AYBofCcSLtC306qzicrvO"><code data-page-node-id="QQx0e96nq5cmWYFUzUN9PC">Config.py:BConfig</code></td><td data-page-node-id="SM2CW188J1SeGLgURCPbB9"><code data-page-node-id="4KY3EFffgJxYpdBF74F10y">1.0</code></td><td data-page-node-id="LIviuStFuaAtiy9r6zbKbG">5m 漂移~1点/5s；15s 漂移~0.03点/15s</td><td data-page-node-id="uALV9ti6oFQURegKko9Xfo">30m=1.5, 5m=1.0, 1m=0.4, 15s=0.2</td></tr>
+<tr data-page-node-id="Ks5Lwt4MB7HFoMK3AwtYDS"><td data-page-node-id="uowIaLGF6RiURdxHAFXzEk"><code data-page-node-id="q8mzL2J9YzZFjXyJXq3Iou">fill_timeout_close</code></td><td data-page-node-id="qwAyEJWrW8hlTtzNaUlWrh"><code data-page-node-id="Guq8TklOYRVosv9TJ1GE7A">Config.py:BConfig</code></td><td data-page-node-id="Wx7tvGe5kbPSQfduWQrPfF"><code data-page-node-id="wApbXoOVR94IM7HAFwWMrF">5.0s</code></td><td data-page-node-id="74oPmyx3yh2fLMfAfNPHz0">15s 下 5s=33% bar</td><td data-page-node-id="yZnTUT8xHZ1DVzngr237b7">30m=10, 5m=5, 1m=3, 15s=1.5</td></tr>
+<tr data-page-node-id="xbjcVAmQTDn8PVBRoYrKYd"><td data-page-node-id="mGxU5cJ506K4EX8wEYVXua"><code data-page-node-id="EHjCACTigdxuHCaYU8Rd4O">chase_interval</code></td><td data-page-node-id="ansXt6273HRkQLuNIB9S8K"><code data-page-node-id="t9RvME2ac0D0ckwYfHnawz">Config.py:BConfig</code></td><td data-page-node-id="NJWbm4tum5B4l1aQ2wsclr"><code data-page-node-id="z4Fk4zSn0Bpk7BzoNq8Q9d">1.0s</code></td><td data-page-node-id="mgbeYGN459XvbAIHHfW6ax">CTP 报撤频监控硬限</td><td data-page-node-id="NxbZMUSJdThUWJFCSW0ord">全周期保留 1.0</td></tr>
+<tr data-page-node-id="V7AECNjzb4KB6SMKErBV6R"><td data-page-node-id="KbOj7EnBzoBl24VkmfyI8v"><code data-page-node-id="eswTrVVxeLhGoMkF7EoyIS">close_max_chase</code></td><td data-page-node-id="fIxNMMXy2Yd6cE3nzTbYiV"><code data-page-node-id="xdYAVwtWnupjEOBf1oqgNY">Config.py:BConfig</code></td><td data-page-node-id="25k0OnSeNgT9RJjJezrE30"><code data-page-node-id="EybhdGQLGDp3BgLcsnaMj4">20</code></td><td data-page-node-id="sxA4umF85uBG8LuquFJtUW">最长追价时间应 &lt; bar</td><td data-page-node-id="WSfHiMuzvxaNH3pmGfTGBh">30m=10, 5m=20, 1m=15, 15s=8</td></tr>
+</table>
+
+<h3 data-page-node-id="lEMobBx6iDXAAFxeoLpxco">C 档：跨周期不变（不动）</h3>
+
+<ul data-page-node-id="i2jPUPCPOYFoczbzjO8BaG">
+<li data-page-node-id="FvqhvFq7icwi1tFVTB1aEK">风控：<code data-page-node-id="HwdIJIpcHJ8llwEOvvi51O">max_volume</code>、<code data-page-node-id="lnfry5veyZuYrmClRjKMo8">max_open_positions</code>、<code data-page-node-id="sSHkWynJByfB2j97JjMB28">max_daily_loss_points</code>、<code data-page-node-id="HHoOOAnfEPuEmSanR0VXsS">initial_cash</code></li>
+<li data-page-node-id="Dp1FABIiSpBN0d4nEVY3VF">入场：<code data-page-node-id="1WIrQiMz4zpcZTCVb6WxpD">max_signal_range_points</code>、<code data-page-node-id="lsoSghChFvox6B8wZ0Hql8">min_stop_distance_points</code>、<code data-page-node-id="mMlkAGSKrtrvCUbRyEusg6">max_stop_distance_points</code>、<code data-page-node-id="IGh0TZnFUeKQuH7tg8OjRq">reverse_on_opposite_signal</code></li>
+<li data-page-node-id="JXmDdPTQLnCGo4CkI5MPlj">行情：<code data-page-node-id="BDwFHbCRrBsDxwO4cvsVS2">bar_mode</code>（语义不变，<b data-page-node-id="pR2tVspWg4ktt9CpkjLdcR">15s 必须 confirmed</b>）</li>
+<li data-page-node-id="PUzLEa41Lb8ls2OzUCr6Ti">时段：<code data-page-node-id="3KoHCoGqkoc7OhFuyk1dLH">no_open_after="14:50"</code>、<code data-page-node-id="xnGFKTczbeJWByKfHUsV7H">session_end_hhmm="14:55"</code>（HH:MM 跨周期对齐）</li>
+</ul>
+
+<h2 data-page-node-id="xPVT1NITOZpFcJnQ8UnlJo">3. 数据依赖与录制计划</h2>
+
+<p data-page-node-id="NOydckNiOVhSkWU9P4AW6Y"><b data-page-node-id="kpSj668y4Q6AYrDC6plTTd">关键事实</b>：<code data-page-node-id="1EuYhecPpJyogSbz2Dm5HY">replay_data/klines.json</code> 的 144 根 K 线 vol 全部 = 2500、价位线性递增 48.5 点——<b data-page-node-id="32H6czmKezwuAPfyWorfV8">合成数据</b>，不能调参。</p>
+
+<table data-page-node-id="5P6HCcOGRoF4HRzJLxxPUD">
+<tr data-page-node-id="LWtgqaHVQSdoRuUGXjlY36"><th data-page-node-id="gb8MS4J9CX5ATWzu1nsWqn">方案</th><th data-page-node-id="ZeTsQiAcUTRV0qbSZXhuyP">依赖</th><th data-page-node-id="vAlxehsTZgTnInx4hN6yYN">量级</th><th data-page-node-id="fqnmODIm9m4e0RbkmjNpWR">是否推荐</th></tr>
+<tr data-page-node-id="0BdA2Le1McJR4278zTiV2q"><td data-page-node-id="v5qqCHopzaQviBqS7XBeJD">A. 录制器跑盘后数据</td><td data-page-node-id="IVUQ6y8sSdjzeoWOMUy5FG">chan.py 主程序 + FrontAPI.py 在线</td><td data-page-node-id="2EbsfmCNXsPkdkF9bPDwty">每周期 ≥ 5 个交易日</td><td class="绿色" data-page-node-id="SdnRVUWJAApMGRvl9BAxfC">✅</td></tr>
+<tr data-page-node-id="DSbBOs3EVHDpfN3xMiwlzz"><td data-page-node-id="GkNfzZnA28nmkPhsZC7wA4">B. tqsdk 拉历史</td><td data-page-node-id="dllgFAA4YmpZrL2fjOCifW">tqsdk 历史接口权限（多数档位需付费）</td><td data-page-node-id="2DyJvHin6hwLbbEm9fQSFk">同上</td><td data-page-node-id="5ESDqbGPbufmIgeTkQxORL">⚠️</td></tr>
+<tr data-page-node-id="lwahInxGOzVA3x0aIXjPHe"><td data-page-node-id="BighveJtnxFUxJYz9pI7kG">C. 仓上已有真实 K 线</td><td data-page-node-id="0px0f1kSziyC6tS9iYySQd">用户已有</td><td data-page-node-id="BD35rccB2rkj4UWzLs5UJJ">看实际</td><td class="绿色" data-page-node-id="hCnh3l9DKmJ3G5D4C4wivT">⭐ 最快</td></tr>
+</table>
+
+<p data-page-node-id="CkcMvMUVCsxFhuqqovVK1T">录制器默认 <code data-page-node-id="cfI1C8uLsF4nxeLEbF3Acl">freq=5m</code>（<code data-page-node-id="iTasRb4gdAhL0fz4oN8L9U">SignalRecorder.py:300</code>），改 <code data-page-node-id="eXfVNcy5gNEub0RSKivztK">--freq 15s</code> 即可。它<b data-page-node-id="qXVfF1D5HfbhQu9oIDMUSX">不导入 chan.py，只通过 SSE 取数</b>，与本次架构一致。</p>
+
+<h2 data-page-node-id="YCbe7tNU175WWCFEuo8H5o">4. Step 2 的工作单元划分</h2>
+
+<table data-page-node-id="yd3icW2RcuDI4f0sP3hDPc">
+<tr data-page-node-id="tHgcVX7WRQFEdbuGkxYOtn"><th data-page-node-id="ywFzW5KMLq0hgCxtiXDruJ">单元</th><th data-page-node-id="oEASCPjksgelDxsqGPhlw3">内容</th><th data-page-node-id="KclKTJBWUOJXsPMcoOILRB">依赖</th></tr>
+<tr data-page-node-id="LiOI1516NvfkhqTT7rHKzH"><td data-page-node-id="samAE66vOrYzlEbrrekfGy"><b data-page-node-id="gcMytJW5ZJB1JCnD5PxWeK">2A · SSOT 化参数</b></td><td data-page-node-id="dv47AVucC5Q0VYOs75eFgT">把 A 档 9 + B 档 4 共 13 个参数抽到 <code data-page-node-id="ArI98fSfxcKFJth7f3bmgR">PeriodProfile</code>，各周期填粗估</td><td data-page-node-id="JWrRM7rA9rfJBHcihgIEtD">无</td></tr>
+<tr data-page-node-id="CT48JqviBo6fgC2ig8YgwJ"><td data-page-node-id="3Inarer5mnvft8vYsyme2D"><b data-page-node-id="tpwwjGsEIPB6zsW64BlClJ">2B · 数据补录</b></td><td data-page-node-id="COqp6vjKVPzDFd2nZckTtw">用录制器补 4 周期真实 K 线（≥ 5 个交易日）</td><td data-page-node-id="GMGWXctSCe0yPeo5gHamvi">用户开前端</td></tr>
+<tr data-page-node-id="Jxb8L1KkzyHL1mjg9XOPrv"><td data-page-node-id="SIAB3eL4oRBhqIQtuzqEdC"><b data-page-node-id="Cq3n42jzwOUJvY6IraGByS">2C · 实证回测</b></td><td data-page-node-id="KliI0zgIQQjLGYy1knpMBp">写 <code data-page-node-id="HyEEimKefy1wqE6RTBziTK">analyze_backtest.py</code>，跑出每周期的胜率/期望/最大回撤</td><td data-page-node-id="Nf0MQQuBSMtuIPCACMVBjG">2A + 2B</td></tr>
+<tr data-page-node-id="eqG0pcDJzWCcdPQ3O6RzFM"><td data-page-node-id="vmchR8U0DrzL0lLYeEwgNA"><b data-page-node-id="b0i8B8qDpEKhAgoBR36XZf">2D · 网格搜索</b></td><td data-page-node-id="FbXmMSGmVHBdgapLUf8FRm">每参数 ±50% 网格，回测找"稳态参数带"</td><td data-page-node-id="bmrpA2xuUWL9fnA5f4yvjK">2C</td></tr>
+<tr data-page-node-id="EyWvDUICivJv3ngEoEXY97"><td data-page-node-id="DZSnxRZzdWPcE0Q8sCFfcS"><b data-page-node-id="hMFVxmG2eAbi29U7F1JByt">2E · SimNow 实盘验证</b></td><td data-page-node-id="ec7ZP9AHnVeL5OH2H9SNTg">挑最稳周期跑 2 周</td><td data-page-node-id="y40Seq2jkXPvEGr804M6cq">2D</td></tr>
+</table>
+
+<p data-page-node-id="4UdWUeSj5SqVVatc53nyGA"><b data-page-node-id="wruoiEdXzJB3D12yDwBiOr">建议路线：先 2A（落骨架）→ 并行 2B（录数据）→ 再 2C</b>。2D / 2E 等数据齐了再说。</p>
+
+<h2 data-page-node-id="9kMq0pIVnESCNDo8QXrBZX">5. 必须先拍板的事</h2>
+
+<div class="拍板" data-page-node-id="wAhHYZxm4OHF5bjxRguWxU">
+<h3 data-page-node-id="2v5HysFQOeKn79VNVw3Na6">5.1 范围（最关键）</h3>
+<p data-page-node-id="HVIsQCJMWZsNgQhtk9X2AN">进 Step 2 时，是只跑 2A（搬参数 + 粗估），还是 2A+2B+2C+2D+2E 全套？</p>
+<ul data-page-node-id="xAmVHM9Axh373CWuq2LOIq">
+<li data-page-node-id="ieHWHnbmOFGEJQBoG6QX8y">2A 单独看：~200 行 diff，1 批回归就够，风险极低</li>
+<li data-page-node-id="qPHHFirDwICfhNNEXWiecP">2A+2B+2C：能产出每周期"粗估回测报告"，但参数都是粗估值，结论可信度有限</li>
+<li data-page-node-id="wllOL8kMXLXDN36ZPCrCni">全套：3~5 周（含数据补录 + 实盘验证），结论可信</li>
+</ul>
+</div>
+
+<div class="拍板" data-page-node-id="FaJ9XTc66vObazdDW0THtF">
+<h3 data-page-node-id="rkv44V5jkxME4M6F1eEzZ1">5.2 数据来源</h3>
+<p data-page-node-id="noW4OH2WgrKzUY9OOisxG1">录制器还是 tqsdk 历史？仓上是否已有实盘录好的 4 周期 K 线？</p>
+<ul data-page-node-id="FA9Jk3owDJ4zOMKE2DyX9e">
+<li data-page-node-id="XH0BCOMi7DjPBwMcrTG0xx">有的话 → 直接用，省 1 周</li>
+<li data-page-node-id="gsAp4IrjurWen3FguGM3hE">没有 → 必须先录到 ≥ 5 个交易日数据再谈调参</li>
+</ul>
+</div>
+
+<div class="拍板" data-page-node-id="jl1FMgCaSdVSMA0XXhhopD">
+<h3 data-page-node-id="1pUU66JSlLbJHEjE2kxxEf">5.3 5m 基线值（参照系）</h3>
+<p data-page-node-id="EuMoqdSSKlDAcSAHE1zPk5">Step 2 调的"对不对"，需要一个对照基线。<b data-page-node-id="uPWtINCutpB4fXvCoP4Hqi">现在线上跑的 5m 用的是 <code data-page-node-id="0Ng5IGBD32Y6WHMINB7VBm">Config.py</code> 那套默认值吗？还是已经手工调过？跑过回测吗？胜率/期望是多少？</b></p>
+<p data-page-node-id="EBT4tWLnGeHurpEo7DSnqa">这组数字不是给我改代码用的——是判断"调参有没有让事情变差"的最低参照。</p>
+</div>
+
+<div class="拍板" data-page-node-id="O93wY5ToxNd2z3mkqQQYk6">
+<h3 data-page-node-id="NJvP8x9oja0l1UkalKeo8L">5.4 4 周期的目标角色</h3>
+<p data-page-node-id="727sgkNnjyn1YIy8VJCXhK">不是 4 周期都跑一遍就完事。对每个周期，你的预期角色是什么？</p>
+
+<table data-page-node-id="AE1ckAJ00g7SBK2QrCVLZV">
+<tr data-page-node-id="ZV6irLwkXcREoFJTdRJh6v"><th data-page-node-id="zlDBsnSy4gCJON2Wj6qFQy">选项</th><th data-page-node-id="f5YKO5pUNxX4SxFRONHb6r">含义</th><th data-page-node-id="CMoZvKke6sggXlq9arQzC2">风险</th></tr>
+<tr data-page-node-id="NBVEG9F9PIjQmoGxPMPj7g"><td data-page-node-id="bfSvuMugOAlFeA4chxdNJr">(a) 全都上实盘</td><td data-page-node-id="4qNFrleSv6wt4P7figXzK5">4 周期都上 SimNow，跑完比胜率</td><td data-page-node-id="zbZISmPBbHZTDegdIbtg61">工作量 ×4；信号重叠</td></tr>
+<tr data-page-node-id="yiJVhGoAEDwsPgZyX3OBnk"><td data-page-node-id="cEIjRpMkJPHRW8kGaFYdgN">(b) 只跑最稳的</td><td data-page-node-id="FmXXGeIbBHDTsSPhgVfhiL">2D 选赢家</td><td data-page-node-id="tDgSmjGWEpcGlXQKdkhmHN">失去周期对照价值</td></tr>
+<tr data-page-node-id="g5TxxTGMdvgiASBGsGm4VC"><td data-page-node-id="U8sNYDoE0p7qhGcb6Gbk0Q">(c) 状态机自动切换</td><td data-page-node-id="rQPFhalnggaMKU9Vy8I6A9">波动率高低 → 自动选粗细周期</td><td data-page-node-id="Y8Sa23Afu6vmoBD9vpP6bU">最难；要波动率识别器</td></tr>
+</table>
+
+<p data-page-node-id="gSIa8FxqKmUEBANFNazePG">建议先都跑通（2A 搞定）+ 各周期回测出基线参数（2C），再选 a/b/c。</p>
+</div>
+
+<h2 data-page-node-id="xs2w7cH1THdArvGfu9BYCb">6. 风险与未解问题</h2>
+
+<ol data-page-node-id="7ddTu6K4F02U4zFMAgN372">
+<li data-page-node-id="w9Gd4qBNY4ofeqSiCDpQq9"><b data-page-node-id="EwudT5lgPlTipgJBWjsvLY">回测 vs 实盘差异</b>：回放源无 <code data-page-node-id="RfuJw9atWYuQ6gzNUwdovW">confirmed</code> 滞后，回测结果系统性优于实盘。<b data-page-node-id="x69WDvaGrsktAKogTlZE8l">回测只能做相对比较，不能外推绝对胜率。</b></li>
+<li data-page-node-id="S2Ft9v9G8M4O1KOdBjyCBK"><b data-page-node-id="z5DbBmgdw6ILzPGgD2XgtQ">15s 大级别结构缺失</b>：已拍板保持 960 根（≈1 交易日）。15s 的买卖点信号<b data-page-node-id="WJ6Ex1DMUhiQekAgHwwBaF">只能基于当日微结构</b>，缺上一交易日的高低点 → 笔/段/中枢全部在当日闭合。<b data-page-node-id="htK6YiVHwTKIczkdQd3Gs4">这意味着 15s 胜率上限可能本来就低。</b></li>
+<li data-page-node-id="qpU9jSNH4kgmC56y7kZFdQ"><b data-page-node-id="LDmRJqppPkvjGMoRaAcHrg">Step 1B 状态</b>：你那边的 real project 是否已合并上一步的 zip？<b data-page-node-id="Ry8KqsM77d5LU0AnxKFSG0">没合并就开始 Step 2 会引入"在旧代码上改"的复利难度</b>。</li>
+<li data-page-node-id="13h4938YQ1FAd1TsVtVFiG"><b data-page-node-id="bfLrI3SZI1ABg2qvNApwdN"><code data-page-node-id="2tUe6Rqgn4oH6nQ8pT1NKd">reverse_on_opposite_signal</code></b>：15s 下反手频率会高到爆仓——建议 Step 2 默认 False 或加更长冷却。</li>
+<li data-page-node-id="EVFdo8UocpddxAdCmnveNI"><b data-page-node-id="aWuPwHojZyCcwQiH1cYl1b">PE 缺失</b>：5m 的 L1-L4 策略大概率在 15s 下失败——这个预言<b data-page-node-id="XqLbUG02FYNQ6nKqsQx01g">只能靠 2C 回测验证</b>。</li>
+</ol>
+
+<h2 data-page-node-id="iyQZS3Ez62dMZvllNMHYab">7. 下一步（等你答复）</h2>
+
+<p data-page-node-id="kdrH0dfxiYMLsVwIFe1woA">若你回复"进 <b data-page-node-id="oHkBzuyPimDUsQ4Gfp9H8P">2A</b>" + "数据来源选 <b data-page-node-id="3i2pEdshidMarMPpQJsqX4">X</b>"，我就开干：</p>
+<ol data-page-node-id="dtfB0HMNm6Amc0n3bVpujX">
+<li data-page-node-id="9TTifBuARtBRTqBe08LCC5">把 A 档 9 个参数 + B 档 4 个 broker 参数从 <code data-page-node-id="XVvWZQXckasEdqRiBQZGvR">Config.py</code> 抽到 <code data-page-node-id="0TFS5EBh5NFdZLUkBdpOeY">PeriodProfile</code></li>
+<li data-page-node-id="9ke1w72AZFeLL5slB128FU">给 4 周期填粗估值（值见上表）</li>
+<li data-page-node-id="Ep86KGkUaTaYRGvKJtkACj">落 <code data-page-node-id="FHgVs3Fm2GK5dJM1tGGurP">PERIOD_PROFILES</code> SSOT</li>
+<li data-page-node-id="QlupDDD3UVbXuWaunAcT5g">启动期按 <code data-page-node-id="2FLpLQ9vlKjYThbMxCGUsp">cfg.source.freq</code> 自动选 profile</li>
+<li data-page-node-id="vGPbfA0EQjq1vNAIHIATlt">加测试：参数对账 + 周期隔离</li>
+<li data-page-node-id="gyu7tBBDi9M8Rg5CqzLeIB">干净副本复验</li>
+</ol>
+
+<p data-page-node-id="vLCOHQlprbf5hIVIflaY5h"><code data-page-node-id="iEEGaPTF9uFAwcSK2Q7vig">Step 2A</code> 完成后，<b data-page-node-id="Q2Nmj5qtN1TTS9VkDSlI7b">2B 数据录到位</b>就能开 <code data-page-node-id="QlQyL4qQU25TJCVDc5tnGD">2C</code>。</p>
+
+</body>
+</html>
