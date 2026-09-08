@@ -49,7 +49,7 @@ from Trading.Config import (  # noqa: E402
 from Trading.Infra.PeriodProfile import (  # noqa: E402
     FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
 )
-from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
 
 _PASS = 0
 _FAIL = 0

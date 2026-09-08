@@ -81,7 +81,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
 from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS
-from .Infra.Product import PRODUCT_PROFILES, ProductProfile, parse_product
+from .Infra.ProductProfile import PRODUCT_PROFILES, ProductProfile, parse_product
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根

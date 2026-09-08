@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-品种档案（Trading/Infra/Product.py）
+品种档案（Trading/Infra/ProductProfile.py）
 =====================================
 本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM）"参数差异**的唯一事实源。
 
