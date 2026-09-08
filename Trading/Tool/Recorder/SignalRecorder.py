@@ -39,6 +39,15 @@ import signal as _signal
 import urllib.request
 from datetime import datetime, timezone, timedelta
 
+# Step 2.5：重连默认值唯一事实源 = Trading.Config.SourceConfig（reconnect_* 字段）。
+# 本工具设计为零 chan.py 依赖、可直接脚本运行——故做 sys.path 引导后绝对导入。
+try:
+    from Trading.Config import SourceConfig
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))))
+    from Trading.Config import SourceConfig
+
 try:
     sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
@@ -292,17 +301,25 @@ def run(args):
     print("[recorder] 下一步: python analyze.py --out {}".format(args.out))
 
 
-def main():
+def _build_parser():
+    """CLI 参数（Step 2.5：reconnect 默认值取 SourceConfig，不再写字面量）。"""
+    _sc = SourceConfig()
     ap = argparse.ArgumentParser(description="M0 缠论买卖点信号录制器（零侵入）")
     ap.add_argument("--base", default="http://127.0.0.1:18081",
                     help="chan.py API 服务地址（默认 http://127.0.0.1:18081）")
     ap.add_argument("--symbol", default="KQ.m@CFFEX.IF", help="合约代码")
     ap.add_argument("--freq", default="5m", help="周期")
     ap.add_argument("--out", default="./out", help="输出目录")
-    ap.add_argument("--reconnect", type=int, default=5, help="重连基础间隔秒")
-    ap.add_argument("--reconnect-max", type=int, default=60, help="重连最大间隔秒")
+    ap.add_argument("--reconnect", type=float, default=_sc.reconnect_wait,
+                    help="重连基础间隔秒（默认= SourceConfig.reconnect_wait）")
+    ap.add_argument("--reconnect-max", type=float, default=_sc.reconnect_wait_max,
+                    help="重连最大间隔秒（默认= SourceConfig.reconnect_wait_max）")
     ap.add_argument("--flush-every", type=int, default=10, help="每 N 帧落盘")
-    run(ap.parse_args())
+    return ap
+
+
+def main():
+    run(_build_parser().parse_args())
 
 
 if __name__ == "__main__":

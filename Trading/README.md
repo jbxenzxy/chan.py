@@ -167,7 +167,12 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
   },
   "source": { "type": "replay", "replay_dir": "./replay_data",
               "sse_base": "http://127.0.0.1:18081",
-              "symbol": "KQ.m@CFFEX.IF", "freq": "5m" }
+              "symbol": "KQ.m@CFFEX.IF", "freq": "5m",
+              // SSE 重连三参数（Step 2.5 收口，默认值唯一事实源 = SourceConfig）：
+              // 等待 = min(reconnect_wait × 连续失败次数, reconnect_wait_max)
+              "reconnect_wait": 5.0,           // 重连基础间隔秒
+              "reconnect_wait_max": 60.0,      // 重连单次等待上限秒
+              "reconnect_max_retry": 0 }       // 最大重连次数，0=无限
 }
 ```
 

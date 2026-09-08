@@ -76,9 +76,27 @@ class SseSource(Source):
         self.signal_max_age_min = float(
             self.params.get("signal_max_age_minutes",
                             SourceConfig().signal_max_age_minutes) or 0)
-        self.reconnect = float(self.params.get("reconnect", 5) or 5)
-        self.reconnect_max = float(self.params.get("reconnect_max", 60) or 60)
-        self.max_retry = int(self.params.get("max_retry", 0) or 0)   # 0=无限
+        # Step 2.5：重连三参数默认值唯一事实源 = Config.SourceConfig（reconnect_* 三字段）。
+        # 删除旧 `params.get(key, d) or d` 双默认源写法（且 SourceConfig extra=forbid
+        # 下旧键名根本传不进来，是死旋钮）。非法值（<=0 的等待 / 负数重试）构造期 fail-fast。
+        _sc = SourceConfig()
+        self.reconnect = float(
+            self.params.get("reconnect_wait", _sc.reconnect_wait) or 0)
+        self.reconnect_max = float(
+            self.params.get("reconnect_wait_max", _sc.reconnect_wait_max) or 0)
+        self.max_retry = int(
+            self.params.get("reconnect_max_retry", _sc.reconnect_max_retry) or 0)   # 0=无限
+        if self.reconnect <= 0:
+            raise ValueError(
+                "source.reconnect_wait 必须 > 0（当前={}），否则中断后会 0 间隔打爆服务"
+                .format(self.reconnect))
+        if self.reconnect_max <= 0:
+            raise ValueError(
+                "source.reconnect_wait_max 必须 > 0（当前={}）".format(self.reconnect_max))
+        if self.max_retry < 0:
+            raise ValueError(
+                "source.reconnect_max_retry 不能为负（当前={}，0=无限）"
+                .format(self.max_retry))
         self._running = True
         self._prev_bar: Optional[Bar] = None
         self._last_ts: Optional[int] = None

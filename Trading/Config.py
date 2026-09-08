@@ -216,6 +216,12 @@ class SourceConfig(BaseModel):
     # "首次出现距今 > 本值"视为陈旧残留丢弃。15s 周期下 60 分钟 = 240 根 bar，
     # 建议按周期收紧（Step 2 调参项）。0=不过滤。
     signal_max_age_minutes: float = 60.0
+    # SSE 重连三参数（Step 2.5 收口，唯一事实源）：
+    #   等待 = min(reconnect_wait × 连续失败次数, reconnect_wait_max) 线性退避。
+    #   max_retry=0 表示无限重连；>0 时超过次数抛异常退出（由上层决定重启策略）。
+    reconnect_wait: float = 5.0               # 重连基础间隔秒（×失败次数退避）
+    reconnect_wait_max: float = 60.0          # 重连单次等待上限秒
+    reconnect_max_retry: int = 0              # 最大重连次数，0=无限
 
 
 # ════════════════════════════════════════════════════════════════════
