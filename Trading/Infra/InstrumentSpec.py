@@ -38,8 +38,6 @@ class InstrumentSpec(BaseModel):
     overprice_points: float = 0.6             # 超价点数（已废弃，仅为向后兼容保留；
                                               #   实际超价统一用 broker_params.overprice_points）
     close_today_first: bool = True            # 平仓优先平今
-    sessions: List[str] = Field(
-        default_factory=lambda: ["09:30-11:30", "13:00-15:00"])
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:
@@ -79,21 +77,7 @@ class InstrumentSpec(BaseModel):
     def points_to_cash(self, points: float, volume: int = 1) -> float:
         return points * self.multiplier * volume
 
-    # ---------- 交易时段 ----------
-    def in_session(self, date_str: str) -> bool:
-        """date_str 形如 "2026-09-01 09:35"，只取时间部分判断。"""
-        parts = (date_str or "").split()
-        if len(parts) < 2:
-            return True
-        hm = parts[1][:5]
-        for seg in self.sessions:
-            if "-" not in seg:
-                continue
-            a, b = seg.split("-", 1)
-            if a <= hm <= b:
-                return True
-        return False
-
+    # ---------- 换日 ----------
     def is_new_day(self, prev_date: str, cur_date: str) -> bool:
         return (prev_date or "")[:10] != (cur_date or "")[:10]
 

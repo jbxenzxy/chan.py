@@ -7,7 +7,8 @@
 因此：
   - processed_signals.signal_key 用 PRIMARY KEY 做**数据库级幂等**
     （不用先 SELECT 再 INSERT，那是典型的 TOCTOU 竞态）
-  - 持仓与当日统计放 kv 表，进程重启后可恢复
+  - 持仓状态放 kv 表，进程重启后可恢复
+    （kv 里另存的 day_stats / bars_seen 为**历史键**，仅清理旧库时删，不再写入）
 """
 from __future__ import annotations
 
@@ -135,6 +136,7 @@ class Store:
             这正是 v6 跑出 trades=0 的直接原因。
           - trades：成交记录。
           - kv 里的 position / day_stats / bars_seen。
+            （position 为当前持仓；day_stats / bars_seen 为历史键，一并清掉防旧库残留。）
 
         返回各表被删的行数，便于打印确认。
         """
@@ -149,7 +151,7 @@ class Store:
                 self.conn.execute("DELETE FROM kv WHERE k=?", (k,))
         return counts
 
-    # ---------- kv（持仓 / 当日统计） ----------
+    # ---------- kv（持仓状态） ----------
     def set_json(self, key: str, value: Any) -> None:
         with self.conn:
             self.conn.execute("INSERT OR REPLACE INTO kv VALUES (?,?)",

@@ -927,12 +927,8 @@ class TradingEngine(ReconcileMixin):
                           note="解锁后补开被簿容量截断（簿已满，无法再开一笔）")
             new_lots = 0
 
-        if new_lots > 0:
-            # （2026-09-08：原 RiskGate.check_open 补开风控检查已随五道硬闸门删除；
-            #   原 PositionSizing 仓位计算已随固定手数精简删除；补开手数 = N - 已解锁 V，
-            #   由"手数直接取 max_volume"决定，仅余簿容量守卫约束。）
-            pass
-
+        # （2026-09-08 注：补开手数 = N - 已解锁 V，由"手数直接取 risk.max_volume"
+        #   决定，无风控/仓位再检查，仅余簿容量守卫；据此记录解锁/补开结果。）
         self.ev.write("unlock_result", key=sig.key, unlocked=v, want=want,
                       new_open=new_lots,
                       action=("with_new_open" if new_lots > 0 else "pure_unlock"))

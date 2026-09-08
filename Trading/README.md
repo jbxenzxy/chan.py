@@ -68,8 +68,8 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
 运行结束后会打印摘要（成交笔数 / 胜率 / 平均盈亏 / 净盈亏 / 单笔期望 / 按出场原因拆分），并落盘两份产物：
 
-- `events.jsonl` —— 全量事件流水（signal / order / open / close / risk_block / …），可复现、可审计
-- `state.db` —— sqlite 状态（信号幂等键、持仓、当日统计），**重放同一目录不会重复成交**
+- `events.jsonl` —— 全量事件流水（signal / order / open / close / order_rejected / …），可复现、可审计
+- `state.db` —— sqlite 状态（信号幂等键、持仓），**重放同一目录不会重复成交**
 
 ---
 
@@ -77,7 +77,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
 ```
 信号源 source ──bar/signal──▶ 引擎 engine ──决策──▶ 策略 policy ──▶ 风控 risk ──▶ broker
-   (sse/replay)                 (状态机)          (可插拔)          (闸门)       (dry_run/…)
+   (sse/replay)                 (状态机)          (可插拔)       (手数/持仓上限)  (dry_run/…)
 ```
 
 **出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `DefaultEntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
@@ -110,17 +110,13 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "close_today_fee_rate": 0.000345,    // 平今（贵！）
     "close_fee_rate": 0.000023,
     "slippage_ticks": 1.0,
-    "close_today_first": true,           // 上期所/中金所平今优先
-    "sessions": ["09:30-11:30", "13:00-15:00"]
+    "close_today_first": true            // 上期所/中金所平今优先
   },
   "risk": {
-    "max_volume": 1,
-    "max_trades_per_day": 20,
-    "max_daily_loss_points": 60.0,       // 日亏 60 点后停止开仓
-    "enforce_session": true,
-    "no_open_after": "14:50",            // 尾盘不再开新仓
-    "close_before_session_end": true,    // 收盘前强平
-    "block_on_daily_loss": true
+    "max_volume": 2,                     // 每个买卖点开一手、挂 N 手（=单笔手数上限，
+                                         //   默认 2；校验范围 1..20，越界启动即报错）
+    "max_open_positions": 1,             // 同时持仓笔数上限
+    "unlock_no_new_open": true           // 解锁昨仓后是否补开今仓（true=只解锁不补开）
   },
   "entry_params": {
     "reverse_on_opposite_signal": false,  // 反向信号只平今不反手
@@ -138,12 +134,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "use_trailing": true,              // 保本 + 跟踪止损（L3）
     "breakeven_trigger_r": 1.0,
     "trailing_trigger_r": 2.0,
-    "trailing_atr_multiple": 1.5,
-    "max_hold_bars": 30,               // 最长持仓 K 线根数（主口径，与周期无关）
-    "max_hold_seconds": 0.0,           // 0=不启用；>0 加一道墙钟硬顶
-    "eod_lead_bars": 1,                // 提前 N 根 bar 判定收盘强平
-    "bar_secs": 0,                     // 0=引擎按 freq 自动推导注入
-    "session_end_hhmm": "14:55"
+    "trailing_atr_multiple": 1.5
   },
   "engine": {
     "close_retry_bars": 5,             // close 被拒后冷却多少根 bar 再试（防重复平仓死循环）
@@ -185,9 +176,6 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | 参数 | 含义 | 周期相关性 |
 |---|---|---|
 | `bar_secs` | 一根 bar 多少秒 | 由 `freq` 自动推导注入，一般不用手填 |
-| `max_hold_seconds` | 最长持仓**秒数**（可选附加顶，与 `max_hold_bars` 取「或」） | 跨周期可比，改周期不需重调 |
-| `session_end_hhmm` | 收盘前强平阈值时刻 | 与周期无关 |
-| `eod_lead_bars` | 提前几根 bar 判定"该平了"（默认 1） | 保证 30m 也能在收盘前平掉 |
 | `signal_max_age_minutes` | 信号新鲜度过滤（分钟） | **强相关**：15s 下 60 分钟 = 240 根 bar，建议收紧 |
 
 新增周期的正确姿势：改 `Infra/PeriodProfile.py` 的 `FREQ_SEC` → 跑

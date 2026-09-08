@@ -76,7 +76,7 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
@@ -293,7 +293,24 @@ class RiskConfig(BaseModel):
                                      #         规避金融期货"平今"高手续费坑
                                      #   False = 补开：昨锁 3 手、今信号 5 手
                                      #           → 解锁 3 后再开 2，净敞口到 5
-                                     #   两种情况下解锁本身照常执行（解锁是减风险动作）
+                                     #
+                                     #   两种情况（True/False）下解锁本身照常执行
+                                     #   （解锁 = 减风险动作，永不因补开开关而放弃）。
+
+    @field_validator("max_volume")
+    @classmethod
+    def _check_max_volume(cls, v: int) -> int:
+        """P1-1 启动期校验（2026-09-08）：越界 fail-fast。
+
+        引擎不再做运行期单笔 20 手上限拦截（over_exchange_limit 已随
+        PositionSizing 删除），合法性完全靠这里在配置构造时兜底，杜绝
+        dry_run 无告警"照常成交超限手数"、实盘才被 CTP 拒单的行为分歧。
+        """
+        if not 1 <= v <= 20:
+            raise ValueError(
+                "risk.max_volume 必须落在 1..20（中金所限价单单笔上限 20 手），"
+                "实际={}".format(v))
+        return v
 
 
 # ════════════════════════════════════════════════════════════════════

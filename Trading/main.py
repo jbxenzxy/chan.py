@@ -43,7 +43,7 @@ from Trading.Infra.Store import Store                           # noqa: E402
 from Trading.Infra.Types import now_cn                          # noqa: E402
 
 ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
-                "risk_block", "error", "day_roll", "stop"}
+                "error", "stop"}
 
 # 跨平台停止协议：父进程（AppTrader.stop）在 out_dir 写该文件 → 本模块
 # 看护线程观测到 → 请求优雅收尾（lock_all + 持久化 + 退出 0）。
@@ -170,7 +170,8 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
     print(line)
     if s["trades"] == 0:
         print("本轮没有产生成交。检查：回放目录是否有 signals.json、")
-        print("风控时段/尾盘限制是否把开仓全拦了（见 events.jsonl 的 risk_block）。")
+        print("仓位笔数上限是否把开仓静默填满了，或开仓报单是否被拒"
+              "（见 events.jsonl 的 open_silenced / order_rejected）。")
     else:
         print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
             s["trades"], s["wins"], s["losses"], s["win_rate"]))

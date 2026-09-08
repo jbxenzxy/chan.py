@@ -21,9 +21,9 @@ from .Types import now_cn
 _KIND_LABEL = {
     "start": "启动", "stop": "停止", "bar": "K线", "signal": "信号",
     "signal_dup": "重复信号", "signal_skip": "信号跳过", "order": "委托",
-    "fill": "成交", "open": "开仓", "close": "平仓", "risk_block": "风控拦截",
+    "fill": "成交", "open": "开仓", "close": "平仓",
     "order_rejected": "委托被拒", "exit_plan_update": "更新出场计划",
-    "error": "错误", "day_roll": "换日",
+    "error": "错误",
 }
 
 
