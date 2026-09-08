@@ -2,7 +2,7 @@
 
 > 配套代码：`step2_0_Trading.zip`（整包覆盖 `Trading/`，单可替换单元）
 > 配套权威文档：本说明 + `Trading/Config.py` 模块 docstring（已同步刷新）
-> 状态：**2.0 + 2.0.1 + 2.0.2 + 2.0.3 修订已完成并通过全套测试验证，等你确认后再开 2.1**
+> 状态：**2.0 + 2.0.1 + 2.0.2 + 2.0.3 + 2.0.3b 修订已完成并通过全套测试验证，等你确认后再开 2.1**
 
 ---
 
@@ -11,8 +11,8 @@
 | # | 你的反馈 | 处理 |
 |---|---|---|
 | ⑴ | `BrokerParamsConfig` 改名 `BrokerConfig` 是否更好 | ✅ 已改。与 ① 层 `SourceConfig` / ④ 层 `RiskConfig`「每层一个 *Config」的约定对齐；字段名 `broker_params` 不变。覆盖 `Config.py` / `Broker/SimNow.py` / `Test/test_p7_pricing.py` / `Test/test_scenario_e2_verify.py.py`。 |
-| ⑵ | `DefaultExitParamsConfig` 没用到就删掉 | 2.0.2 先把它并入 `ExitParamsConfig`；**2.0.3 随 `DefaultExitPolicy` 一并删除**（见 0.2）。现在 `ExitParamsConfig` 是出场唯一参数模型，`take_profit_points`/`stop_points` 死字段已移除。 |
-| ⑶ | `Entry/ExitParamsConfig` 与 `Entry/ExitPolicyConfig` 区别 | ✅ 见第 2 节。2.0.3 起 `*PolicyConfig` 选择器类已删除，仅保留 `*ParamsConfig` 参数模型。 |
+| ⑵ | `DefaultExitParamsConfig` 没用到就删掉 | 2.0.2 先把它并入 `ExitConfig`；**2.0.3 随 `DefaultExitPolicy` 一并删除**（见 0.2）。现在 `ExitConfig` 是出场唯一参数模型，`take_profit_points`/`stop_points` 死字段已移除。 |
+| ⑶ | `Entry/ExitConfig` 与 `Entry/ExitPolicyConfig` 区别 | ✅ 见第 2 节。2.0.3 起 `*PolicyConfig` 选择器类已删除，仅保留 `*ParamsConfig` 参数模型。 |
 | ⑷ | `TradingConfig` 是根配置，应放 `SourceConfig` 前面 | ✅ 已改。`TradingConfig` 置文件最前；嵌套字段用 `lambda` 延迟 `default_factory` + 文件末尾 `TradingConfig.model_rebuild()` 解析前向引用（pydantic v2 必需）。 |
 | ⑸ | 合并时顺手修 `App/AppTrader.py:38` 的 `GatewayConfig` 陈旧注释 | ✅ 已改并单独交付修正文件 `AppTrader.py`（line 38：`GatewayConfig =` → `TradingConfig =`）。其余 `gateway.log` 是日志文件名、与类名无关，未动。 |
 
@@ -22,8 +22,8 @@
 
 | # | 你的反馈 | 处理 |
 |---|---|---|
-| ⑴ | 退出只用 L1-L4，为啥还有 `DefaultExitParamsConfig`？ | **先澄清（2.0.2）**：当时把它并入 `ExitParamsConfig` 以统一参数模型。**2.0.3 你拍板删除 `DefaultExitPolicy` 后，这个"第二套出场"彻底消失**，详见 0.2。 |
-| ⑵ | 调整为 `EntryPolicyConfig → EntryParamsConfig → ExitPolicyConfig → ExitParamsConfig` 顺序 | ✅ 当时已按此序排列。**2.0.3 删除了 `EntryPolicyConfig`/`ExitPolicyConfig` 两个选择器类**，顺序变为 `EntryParamsConfig → ExitParamsConfig`。 |
+| ⑴ | 退出只用 L1-L4，为啥还有 `DefaultExitParamsConfig`？ | **先澄清（2.0.2）**：当时把它并入 `ExitConfig` 以统一参数模型。**2.0.3 你拍板删除 `DefaultExitPolicy` 后，这个"第二套出场"彻底消失**，详见 0.2。 |
+| ⑵ | 调整为 `EntryPolicyConfig → EntryConfig → ExitPolicyConfig → ExitConfig` 顺序 | ✅ 当时已按此序排列。**2.0.3 删除了 `EntryPolicyConfig`/`ExitPolicyConfig` 两个选择器类**，顺序变为 `EntryConfig → ExitConfig`。 |
 | ⑶ | `EntryPolicyConfig.params` 强类型、`ExitPolicyConfig.params` 自由 Dict——按统一整理 | ✅ 当时已统一为强类型。**2.0.3 直接删除了 PolicyConfig 选择器层**（见 0.2）。 |
 
 ---
@@ -38,7 +38,7 @@
 
 **变更清单（2.0.3）**：
 
-- `Config.py`：`TradingConfig.entry_policy/exit_policy` → `entry_params: EntryParamsConfig` / `exit_params: ExitParamsConfig`；删除 `EntryPolicyConfig`/`ExitPolicyConfig` 类；`ExitParamsConfig` 去掉 `take_profit_points`/`stop_points` 死字段（仅旧 `DefaultExitPolicy` 使用，已删）。
+- `Config.py`：`TradingConfig.entry_policy/exit_policy` → `entry_params: EntryConfig` / `exit_params: ExitConfig`；删除 `EntryPolicyConfig`/`ExitPolicyConfig` 类；`ExitConfig` 去掉 `take_profit_points`/`stop_points` 死字段（仅旧 `DefaultExitPolicy` 使用，已删）。
 - `Strategy/Exit.py`：删除 `class DefaultExitPolicy`，去掉 `LayeredExitPolicy` 的 `@register_exit`。
 - `Strategy/Base.py`：删除 `EXIT_POLICIES`/`ENTRY_POLICIES`/`register_*`/`build_*`，保留 `ExitPolicy`/`EntryPolicy` ABC 与 `check_with`/`set_bar_secs`/`on_bar` 钩子。
 - `Strategy/Entry.py`：去掉 `DefaultEntryPolicy` 的 `@register_entry`。
@@ -46,7 +46,24 @@
 - `main.py`：`entry = DefaultEntryPolicy(cfg.entry_params.model_dump())` / `exitp = LayeredExitPolicy(cfg.exit_params.model_dump())`。
 - `Engine/Engine.py:140`：`getattr(cfg.exit_policy.params,"eod_lead_bars",1)` → `cfg.exit_params.eod_lead_bars or 1`（强类型属性访问，保留 `or 1` 兜底语义）。
 - `README.md`：同步删除"换策略=丢 py 文件+改类名/@register_exit"等过时描述，配置样例改 `entry_params`/`exit_params`。
-- 14 个测试：`DefaultExitPolicy(...)` → `LayeredExitPolicy()`（去掉 `take_profit_points` 字典参数，因 `ExitParamsConfig` 已无该字段且 `extra="forbid"`）。
+- 14 个测试：`DefaultExitPolicy(...)` → `LayeredExitPolicy()`（去掉 `take_profit_points` 字典参数，因 `ExitConfig` 已无该字段且 `extra="forbid"`）。
+
+---
+
+## 0.3 2.0.3b 修订（策略层配置类改名：去掉 "Params" 后缀）
+
+| # | 你的反馈 | 处理 |
+|---|---|---|
+| ⑴ | 既然策略无需选择，那 `EntryParamsConfig` 改名为 `EntryConfig`？`ExitParamsConfig` 改名为 `ExitConfig`？ | ✅ **已重命名**。理由：策略层已无选择器（2.0.3 删除 `*PolicyConfig`），`Params` 后缀原本用来与"策略选择路由类"区分，现在不再有这个区分，简化命名。 |
+| ⑵ | 类名 `TradingConfig`/`BrokerConfig` 保持目前即可 | ✅ **已确认沿用**。不再保留 "如无反对即沿用" 的开放口。 |
+
+**变更（2.0.3b）**：
+- `Config.py`：`EntryParamsConfig` → **`EntryConfig`**；`ExitParamsConfig` → **`ExitConfig`**（仅类名；字段名 `entry_params` / `exit_params` 不变）。
+- 同步：`Strategy/Entry.py` / `Strategy/Exit.py` 的 `from ..Config import ...`、`default_factory`、`__all__`、所有 docstring。
+- 同步：`Engine/Engine.py` 注释、`main.py` 文档、`README.md`、测试脚本注释。
+- 保护：`DefaultExitParamsConfig`（已删除类的历史说明）字样原样保留；rename 用负向环视 `(?<!Default)` 精确只改独立 token。
+
+**验证**：compileall 全绿 + 全套 24 个 `test_*.py` PASS=24 / FAIL=0；新交付包 63 文件 / 296256 字节。zip 内读回：`EntryConfig`/`ExitConfig` 19 处命中、独立 `EntryParamsConfig`/`ExitParamsConfig` **0 处**、`DefaultExitParamsConfig` 2 处完整保留。
 
 ---
 
@@ -59,9 +76,9 @@
 |---|---|---|
 | ① | 信号源层 | `SourceConfig` |
 | ② | 信号适配层 | （无独立配置模型，仅解析/去重行为） |
-| ③ | 策略层 | `EntryParamsConfig` / `ExitParamsConfig`（**单一参数模型，无选择器**；`DefaultEntryPolicy` + `LayeredExitPolicy` 各直接持有） |
+| ③ | 策略层 | `EntryConfig` / `ExitConfig`（**单一参数模型，无选择器**；`DefaultEntryPolicy` + `LayeredExitPolicy` 各直接持有） |
 | ④ | 风控层 | `RiskConfig` / `SizingConfig` |
-| ⑤ | 执行层（引擎） | （无独立配置模型；状态机/对账行为；其消费的时序参数在 `ExitParamsConfig` 的 L4 段） |
+| ⑤ | 执行层（引擎） | （无独立配置模型；状态机/对账行为；其消费的时序参数在 `ExitConfig` 的 L4 段） |
 | ⑥ | Broker 适配器层 | `BrokerConfig` |
 | 横切 | 基础设施 | 顶层 `TradingConfig`（broker / state_dir / instrument + 以上各层嵌套） |
 
@@ -79,10 +96,7 @@
 - `Trading/main.py`、`Trading/Engine/Engine.py`、`Trading/Engine/Reconcile.py`（注释）、`Trading/Engine/PositionBook.py`（注释）
 - `Trading/Test/*.py`（所有 import 与 `hasattr(..., "GatewayEngine")` 字符串断言均已同步）
 
-> ⚠️ 命名说明：你原话建议 `BaseConfig`，我**没有**用 `BaseConfig` 而用了 `TradingConfig`。
-> 理由：`BaseConfig` 容易被误读成"基类/父类"（而且 pydantic 自己就有 `BaseSettings`/`BaseModel`），
-> 它其实是整个 Trading 模块的**根配置（唯一真源）**而非被继承的基类；项目主线已有 `App/AppConfig.py`，
-> 用 `TradingConfig` 与之一致、语义最准。**若你坚持要 `BaseConfig`，回我一声，我全局 sed 一遍即可。**
+> ✅ 命名已确认（2.0.3b 关闭此口）：沿用 `TradingConfig`（不采纳 `BaseConfig`）。理由：`BaseConfig` 易被误读成"基类/父类"（pydantic 已有 `BaseSettings`/`BaseModel`），它其实是整个 Trading 模块的**根配置（唯一真源）**；项目主线已有 `App/AppConfig.py`，用 `TradingConfig` 与之一致、语义最准。
 
 ### ⑶ SSOT 是什么
 **SSOT = Single Source Of Truth（单一事实来源 / 唯一真源）**。
@@ -102,20 +116,20 @@
 ```
 # ── 横切·基础设施（顶层根，置最前）── TradingConfig（字段按下层序：source→entry_params→exit_params→risk→sizing→broker_params→broker/state_dir/instrument）
 # ── ① 信号源层 ─────────────── SourceConfig
-# ── ③ 策略层（单一参数模型，无选择器）── EntryParamsConfig / ExitParamsConfig
+# ── ③ 策略层（单一参数模型，无选择器）── EntryConfig / ExitConfig
 # ── ④ 风控层 ───────────────── RiskConfig / SizingConfig
 # ── ⑥ Broker 适配器层 ──────── BrokerConfig
 # ── 周期敏感归总（只读索引）── PERIOD_SENSITIVE_FIELDS / period_sensitive_fields()
 # （文件末尾：TradingConfig.model_rebuild() → default_config() → DEFAULT_CONFIG）
 ```
 
-### 2.1 `EntryParamsConfig` / `ExitParamsConfig`（2.0.3 已精简选择器）
+### 2.1 `EntryConfig` / `ExitConfig`（2.0.3 已精简选择器）
 
 2.0.3 起策略层**不再有"策略选择"这一层**。生产入场只有 `DefaultEntryPolicy`、出场只有 `LayeredExitPolicy`（L1-L4），用户明确不会增加第二种，因此：
 
 - 配置直接持有参数模型（不再有 `name` / 注册表 / `build_*_policy` 路由）：
-  - `entry_params: EntryParamsConfig` —— `DefaultEntryPolicy` 的可调数值
-  - `exit_params: ExitParamsConfig`   —— `LayeredExitPolicy`（L1-L4）的可调数值
+  - `entry_params: EntryConfig` —— `DefaultEntryPolicy` 的可调数值
+  - `exit_params: ExitConfig`   —— `LayeredExitPolicy`（L1-L4）的可调数值
 - `main.py` 直接实例化，无选择器：
   ```python
   entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
@@ -123,7 +137,7 @@
   ```
 - 原 `DefaultExitPolicy`（简单固定点数出场）已删除——它是可选的"第二种"出场策略，生产从不选用，保留只会增加无用的选择分支。
 
-`extra="forbid"` 严格校验照常生效：组件只接受经 `ExitParamsConfig`/`EntryParamsConfig` 校验的参数。
+`extra="forbid"` 严格校验照常生效：组件只接受经 `ExitConfig`/`EntryConfig` 校验的参数。
 
 ---
 
@@ -156,7 +170,7 @@
   - `test_p12_position_book.py`：**95 通过 / 0 失败**
   - `test_period_consistency.py`：**15 通过 / 0 失败 / 1 跳过**（跳过项是与主程序 `Common.CEnum` 的对账，沙盒只有 `Trading/` 故跳过，真实项目跑过）
   - `test_period_matrix.py`（引擎级四周期冒烟）：**83 通过 / 0 失败**
-- **14 个原依赖 `DefaultExitPolicy` 的测试全部迁移到 `LayeredExitPolicy()` 并全绿**——证实"删除选择器后行为等价"。补充论证：旧 `DefaultExitPolicy({})` 在**当前** `ExitParamsConfig`（已无 `take_profit_points`/`stop_points`）下构造即抛 `AttributeError`，即旧 zip 本就处于异常态；迁移到 `LayeredExitPolicy` 后行为等价且去除了无用选择分支。
+- **14 个原依赖 `DefaultExitPolicy` 的测试全部迁移到 `LayeredExitPolicy()` 并全绿**——证实"删除选择器后行为等价"。补充论证：旧 `DefaultExitPolicy({})` 在**当前** `ExitConfig`（已无 `take_profit_points`/`stop_points`）下构造即抛 `AttributeError`，即旧 zip 本就处于异常态；迁移到 `LayeredExitPolicy` 后行为等价且去除了无用选择分支。
 
 ### 4.1 删除/改名已落地的硬性证据（从交付 zip 内读回）
 `package_and_verify.py` 在打包后**从 `step2_0_Trading.zip` 内部读回**关键文件逐条校验（非仅看本地沙盒）：
@@ -180,7 +194,7 @@
 ---
 
 ## 5. 待你确认 / 后续（不直接动真实项目，交你合并）
-1. **类名命名**：`TradingConfig` / `BrokerConfig` 已按反馈定稿，如无反对即沿用 → 影响 2.1 起手。
+1. **类名命名**：`TradingConfig` / `BrokerConfig` 已确认沿用（2.0.3b 关闭此口）；策略层 `EntryConfig` / `ExitConfig` 也已落地。
 2. **陈旧引用处理进度**：
    - ✅ `C:\my_chan_project\App\AppTrader.py:38` 注释 `GatewayConfig` → 已修，本次单独交付修正文件 `AppTrader.py`（仅注释，不影响运行）。
    - ⏳ `C:\my_chan_project\Docs\*.md`（`SimNow自动下单架构与功能总结_v1.0.html`、`自动下单功能对比_*.md` 等）仍含 `GatewayConfig` 旧名——属历史文档，建议合并时一并刷新（不在本次代码交付包内）。

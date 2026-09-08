@@ -188,13 +188,21 @@ def bars_per_day(bar_secs: Optional[int], session_secs: float) -> Optional[int]:
 class PeriodProfile:
     """一个 K 线周期的全部周期相关设定。
 
-    Step 1（本次）只装**时间语义**字段 —— 目标是"任何周期都能正确跑通"。
-    Step 2 再往里加盈利相关字段（atr_period / r_multiple_tp /
-    overprice_points / max_hold_seconds ...），届时两层字段在同一个地方，
-    改周期 = 换一行档案，不用满代码库找魔数。
+    Step 1（2026-09-08）只装时间语义（freq / bar_secs）——目标是"任何周期能正确跑通"。
+    Step 2.1（2026-09-08）加入 6 项周期敏感参数 + note：信号新鲜度 / 持仓根数 /
+      墙钟硬顶 / 收盘提前量 / 收盘时刻 / 日笔数。这 6 项的默认值 = BASELINE
+      （当前 5m 默认值），4 个周期先统一占位；Step 2.7+ 拿到真实数据后再按周期
+      差异化重标（届时只改对应 profile 的值 + 改 note）。
     """
     freq: str
     bar_secs: int
+    note: str = ""                          # 调参记录 / 数据来源 / 标定状态
+    signal_max_age_minutes: float = 60.0    # 信号新鲜度过滤（分钟），0=不过滤
+    max_hold_bars: int = 30                 # 最长持仓 K 线根数（量纲=bar，与周期无关）
+    max_hold_seconds: float = 0.0           # 可选墙钟硬顶（秒），0=不启用
+    eod_lead_bars: int = 1                  # 提前 N 根 bar 判定收盘强平
+    session_end_hhmm: str = "14:55"         # 收盘前强平阈值时刻（""=不启用）
+    max_trades_per_day: int = 20            # 每日最大往返笔数
 
     def __post_init__(self) -> None:
         if self.freq not in FREQ_SEC:
@@ -211,8 +219,22 @@ class PeriodProfile:
         return self.freq
 
 
+# 4 个周期的档案。bar_secs 显式给真值；6 项周期敏感参数默认 = BASELINE（dataclass 默认）。
+# note 显式标「占位」，Step 2.7+ 拿到真实数据后改成「已标定 + 数据来源 + 日期」。
 PERIOD_PROFILES: Dict[str, PeriodProfile] = {
-    f: PeriodProfile(freq=f, bar_secs=s) for f, s in FREQ_SEC.items()}
+    "15s": PeriodProfile(
+        freq="15s", bar_secs=15,
+        note="占位=BASELINE；待 2.7+ 真实 15s 数据重标（信号新鲜度/持仓根数/日笔数均需重标）"),
+    "1m": PeriodProfile(
+        freq="1m", bar_secs=60,
+        note="占位=BASELINE；待 2.7+ 真实 1m 数据重标"),
+    "5m": PeriodProfile(
+        freq="5m", bar_secs=300,
+        note="占位=BASELINE（5m 基线尚未经真实数据标定，当前=2.0 默认值）"),
+    "30m": PeriodProfile(
+        freq="30m", bar_secs=1800,
+        note="占位=BASELINE；待 2.7+ 真实 30m 数据重标（30 根≈3.75 交易日，实由收盘强平接管）"),
+}
 
 
 def profile_for(freq: Any) -> Optional[PeriodProfile]:

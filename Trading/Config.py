@@ -73,12 +73,13 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
+from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
@@ -90,6 +91,7 @@ __all__ = [
     "BrokerConfig",
     # 周期敏感配置归总（Step 2 调参单一入口）
     "PERIOD_SENSITIVE_FIELDS", "period_sensitive_fields",
+    "period_sensitive_summary",
 ]
 
 # 仓库根（Trading/ 的上一级）—— 与 App/AppConfig.py 同一份 .env
@@ -144,6 +146,48 @@ class TradingConfig(BaseSettings):
         调用方不必改代码。
         """
         return self.model_dump()
+
+    # ── 周期档案注入（Step 2.1：周期敏感参数入 PeriodProfile）──
+    # 按 source.freq 选档案，把 6 项周期敏感参数「影子覆盖」进 flat 字段：
+    #   · 仅当 flat 字段仍是模型默认值时填入（用户显式 JSON/环境变量覆盖的字段不动）；
+    #   · 未知 freq 直接跳过——TradingConfig 也用于 AppTrader 等非引擎场景，那里
+    #     freq 可能只是透传（如 test_p20 的 "15m"）；真正的 fail-fast 在 main.py。
+    # bar_secs 不在此 reconcile —— 它走引擎 bar_secs_for(freq) 自动推导
+    # （PeriodProfile.bar_secs 已是推导源），flat 的 bar_secs=0 保留「手动覆盖」语义。
+    @model_validator(mode="after")
+    def _reconcile_period_profile(self) -> "TradingConfig":
+        self._apply_profile_values()
+        return self
+
+    def _apply_profile_values(self) -> None:
+        profile = PERIOD_PROFILES.get(self.source.freq)
+        if profile is None:
+            return
+        d = SourceConfig.model_fields["signal_max_age_minutes"].default
+        if self.source.signal_max_age_minutes == d:
+            self.source.signal_max_age_minutes = profile.signal_max_age_minutes
+        for name in ("max_hold_bars", "max_hold_seconds",
+                     "eod_lead_bars", "session_end_hhmm"):
+            d = ExitConfig.model_fields[name].default
+            if getattr(self.exit_params, name) == d:
+                setattr(self.exit_params, name, getattr(profile, name))
+        d = RiskConfig.model_fields["max_trades_per_day"].default
+        if self.risk.max_trades_per_day == d:
+            self.risk.max_trades_per_day = profile.max_trades_per_day
+
+    def apply_period_profile(self) -> "TradingConfig":
+        """CLI 覆盖 source.freq 后重新对齐周期档案（main.py 在 --freq 之后调用）。
+
+        构造期由 _reconcile_period_profile 自动对齐；此后若手动改了 source.freq
+        （CLI --freq），再调本方法让 flat 字段跟随新周期。基线值下是幂等 no-op。
+        """
+        self._apply_profile_values()
+        return self
+
+    @property
+    def period_profile(self) -> Optional["PeriodProfile"]:
+        """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
+        return PERIOD_PROFILES.get(self.source.freq)
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -317,14 +361,16 @@ class BrokerConfig(BaseModel):
 # ════════════════════════════════════════════════════════════════════
 # 周期敏感配置归总（Step 2 调参单一入口 / SSOT 索引）
 # ------------------------------------------------------------------
-# 这些字段**物理上仍住在上面各层的 section 模型里**（每层默认值唯一），
-# 此处只做"按周期归总"的只读索引，方便 Step 2 一眼看到所有需按 15s/1m/5m/30m
-# 重新标定的项，避免遗漏。
+# 2026-09-08 Step 2.1 起：这 8 项的**值**已收口到 Infra/PeriodProfile.py 的
+#   PERIOD_PROFILES（每周期一份，含 note 标定记录），TradingConfig 构造期按
+#   source.freq 把 6 项「影子覆盖」进 flat 字段（bar_secs 走引擎自动推导、freq 是
+#   选择器）。本表仍保留作静态说明（path/layer/kind/step2 的「是什么/为什么」）；
+#   运行时每周期的实际值见 `period_sensitive_summary()` 派生视图。
 #
 # 字段说明：
 #   path   : 字段在配置树中的点分路径（与 DEFAULT_CONFIG 对应）
 #   layer  : 所属六层架构层级
-#   default: 当前默认值
+#   default: BASELINE 默认值（= PeriodProfile 各周期占位值）
 #   kind   : 量纲 / 含义
 #   step2  : Step 2 调参关注点
 # ════════════════════════════════════════════════════════════════════
@@ -393,6 +439,29 @@ PERIOD_SENSITIVE_FIELDS: List[Dict[str, Any]] = [
 def period_sensitive_fields() -> List[Dict[str, Any]]:
     """返回周期敏感配置归总的副本（防止调用方改到模块级常量）。"""
     return [dict(f) for f in PERIOD_SENSITIVE_FIELDS]
+
+
+def period_sensitive_summary() -> List[Dict[str, Any]]:
+    """4 周期 × 周期敏感参数的**派生视图**（值来自 PeriodProfile，Step 2.7+ 调参一眼对比）。
+
+    这是 `PERIOD_SENSITIVE_FIELDS`（静态说明：path/layer/kind/step2）的运行时补充：
+    前者说「哪 8 项是周期敏感的、为什么」，本函数给出「这 8 项在每个周期下的实际值」。
+    """
+    rows: List[Dict[str, Any]] = []
+    for freq in SUPPORTED_FREQS:
+        p = PERIOD_PROFILES[freq]
+        rows.append({
+            "freq": freq,
+            "bar_secs": p.bar_secs,
+            "signal_max_age_minutes": p.signal_max_age_minutes,
+            "max_hold_bars": p.max_hold_bars,
+            "max_hold_seconds": p.max_hold_seconds,
+            "eod_lead_bars": p.eod_lead_bars,
+            "session_end_hhmm": p.session_end_hhmm,
+            "max_trades_per_day": p.max_trades_per_day,
+            "note": p.note,
+        })
+    return rows
 
 
 # ════════════════════════════════════════════════════════════════════
