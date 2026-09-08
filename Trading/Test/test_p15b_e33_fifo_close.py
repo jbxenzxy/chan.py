@@ -150,8 +150,6 @@ def make_engine(tmpdir, *, max_open_positions=3, split_positions=1,
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
-    cfg.risk.enforce_session = False
-    cfg.risk.close_before_session_end = close_before_session_end
     # split_positions 已随分仓机制删除（严格模式下该键会被 SizingConfig 拒绝）
     cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
 

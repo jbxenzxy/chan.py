@@ -230,8 +230,8 @@ def run(args) -> int:
                          "trade": cfg.instrument.trade_symbol,
                          "tick": cfg.instrument.price_tick,
                          "multiplier": cfg.instrument.multiplier})
+    # （2026-09-08：原 engine.risk.roll_day("") 当日统计初始化已随 RiskGate 删除。）
 
-    engine.risk.roll_day("")     # 初始化当日统计
     t0 = time.time()
     counted = 0
 

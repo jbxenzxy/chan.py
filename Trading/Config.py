@@ -8,11 +8,12 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ① 信号源层     → SourceConfig
         ② 信号适配层   → （无独立配置模型，仅解析/去重行为）
         ③ 策略层       → Entry/Exit 参数（单一策略，无选择器）
-        ④ 风控层       → RiskConfig / SizingConfig
-        ⑤ 执行层       → （无独立配置模型，状态机/对账行为；其消费的时序参数见 ExitConfig 的 L4 段）
+        ④ 风控层       → RiskConfig（手数/持仓上限，精简后） / SizingConfig（固定手数）
+        ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
-    · 周期敏感配置（freq / max_hold_bars / eod_lead_bars / bar_secs / signal_max_age_minutes /
-      max_trades_per_day ...）统一收口到文末 `PERIOD_SENSITIVE_FIELDS` 归总，作为 Step 2 调参单一入口。
+    · 周期敏感配置（freq / signal_max_age_minutes ...）统一收口到文末
+      `PERIOD_SENSITIVE_FIELDS` 归总，作为 Step 2 调参单一入口。（2026-09-08：
+      L4 时间兜底与风控五道硬闸门删除后，周期敏感项已大幅精简。）
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -29,12 +30,12 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 策略层（2026-09-08 精简：取消策略选择器抽象）
 ------------------------------------------------------------------
     ③ 策略层**没有「策略选择」这一层**。生产环境入场只有一个策略 `DefaultEntryPolicy`、
-    出场只有一个策略 `LayeredExitPolicy`（L1-L4 分层），用户明确不会增加第二种，
-    因此不再需要 `name` 字段、注册表、或 build_*_policy 路由。
+    出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场，2026-09-08 已删 L4），
+    用户明确不会增加第二种，因此不再需要 `name` 字段、注册表、或 build_*_policy 路由。
 
     配置直接持有参数模型：
       · `entry_params: EntryConfig`   —— DefaultEntryPolicy 的可调数值（默认值唯一来源）
-      · `exit_params: ExitConfig`     —— LayeredExitPolicy（L1-L4）的可调数值
+      · `exit_params: ExitConfig`     —— LayeredExitPolicy（L1-L3）的可调数值
 
     main.py 直接实例化，不再经选择器：
         entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
@@ -170,14 +171,9 @@ class TradingConfig(BaseSettings):
         d = SourceConfig.model_fields["signal_max_age_minutes"].default
         if self.source.signal_max_age_minutes == d:
             self.source.signal_max_age_minutes = profile.signal_max_age_minutes
-        for name in ("max_hold_bars", "max_hold_seconds",
-                     "eod_lead_bars", "session_end_hhmm"):
-            d = ExitConfig.model_fields[name].default
-            if getattr(self.exit_params, name) == d:
-                setattr(self.exit_params, name, getattr(profile, name))
-        d = RiskConfig.model_fields["max_trades_per_day"].default
-        if self.risk.max_trades_per_day == d:
-            self.risk.max_trades_per_day = profile.max_trades_per_day
+        # （2026-09-08：原对 exit_params 的 max_hold_bars / max_hold_seconds /
+        #   eod_lead_bars / session_end_hhmm 以及 risk.max_trades_per_day 的
+        #   周期敏感影子覆盖随 L4 收盘兜底 / 风控五道硬闸门一并删除。）
 
     def apply_period_profile(self) -> "TradingConfig":
         """CLI 覆盖 source.freq 后重新对齐周期档案（main.py 在 --freq 之后调用）。
@@ -240,14 +236,14 @@ class EntryConfig(BaseModel):
 
 
 class ExitConfig(BaseModel):
-    """出场参数（单一模型，LayeredExitPolicy 即 L1-L4 分层出场，2026-09-08 已删除 DefaultExitPolicy）。
+    """出场参数（单一模型，LayeredExitPolicy 即 L1-L3 分层出场，2026-09-08 精简）。
 
-    LayeredExitPolicy（L1-L4 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
-    L3 保本/跟踪锁利 → L4 时间/收盘兜底。R 的产生与回退链见 Strategy/Exit.py：
-    ATR×atr_sl_multiple → 信号极值 → min_r_points 地板。
+    LayeredExitPolicy（L1-L3 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
+    L3 保本/跟踪锁利。原 L4 时间/收盘兜底已删除（含引擎侧收盘前强平）。
+    R 的产生与回退链见 Strategy/Exit.py：ATR×atr_sl_multiple → 信号极值 → min_r_points 地板。
 
     （2026-09-08：原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
-     可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L4，不再保留无用选择分支。）
+     可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -267,52 +263,29 @@ class ExitConfig(BaseModel):
     trailing_trigger_r: float = 2.0      # 浮盈 ≥ 此倍数×R 时启动 ATR 跟踪止损
     trailing_atr_multiple: float = 1.5   # 跟踪止损距离 = trailing_atr_multiple × ATR
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
-    # ---- L4 时间/收盘兜底（以下 5 项均为周期敏感，见文末 PERIOD_SENSITIVE_FIELDS）----
-    # max_hold_bars：最长持仓 **K 线根数**，超时强平，0=不限。
-    #   语义以《Docs/止盈止损/TP_SL_L4》为准 —— "N 根 K 线无进展 → 走"，
-    #   计量单位是 **bar 不是时间**，因此 30 在任何周期下都是 30 根，与时间无关。
-    #   （2026-09-08 更正：此前曾把它判为"跨周期语义漂移 120 倍"并改成秒，
-    #    那是把 Step 2 的标定问题误当成 Step 1 的正确性缺陷，已撤回。）
-    #   注意：默认 30 是按 5m 标定的（≈2.5 小时）。换周期后这数字是否仍合适，
-    #   属 Step 2 调参 —— 尤其是 30m（一天仅 8 根，30 根跨 3.75 个交易日，
-    #   实际永远轮不到它、由收盘强平接管）。
-    max_hold_bars: int = 30
-    # max_hold_seconds：可选的**墙钟**上限（秒），0=不启用。
-    #   与 max_hold_bars 是"或"的关系，谁先到谁生效；默认 0 → 行为与基线完全一致。
-    #   用途：想在粗周期上加一道"绝不过夜/绝不超时"的硬顶时再开。
-    max_hold_seconds: float = 0.0
-    session_end_hhmm: str = "14:55"  # 收盘前强平阈值时刻（""=不启用）
-    # eod_lead_bars：提前几根 bar 的时长判定"该平了"。
-    #   1（默认）= 下一根 bar 会跨过收盘 → 本根闭合即平（30m 也能平掉）；
-    #   0 = 旧口径"bar 结束时刻 ≥ 阈值"，30m 下最后一根结束后已收盘，失效。
-    #   语义见 Infra/PeriodProfile.eod_triggered。
-    eod_lead_bars: int = 1
-    # bar_secs：本周期一根 bar 的秒数。0=引擎按 source.freq 自动推导并注入；
-    #   显式给非 0 值可覆盖（单测 / 非标周期用）。
-    bar_secs: int = 0
 
 
 # ════════════════════════════════════════════════════════════════════
 # ④ 风控层（Risk Gate）配置
-#    时段/手数/日亏 + 仓位管理（只删分仓）。
+#    2026-09-08 精简：
+#      · 删除原五道硬闸门（enforce_session / no_open_after / max_trades_per_day /
+#        max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
+#      · 删除资金闸门（initial_cash）；删除仓位管理动态计算字段。
+#    保留：hand/volume（max_volume 固定手数）、max_open_positions（多仓引擎容量上限）。
 # ════════════════════════════════════════════════════════════════════
 class RiskConfig(BaseModel):
-    """风控参数：手数 / 日笔数 / 日亏上限 / 时段限制。"""
+    """风控参数（精简后）：只保留手数 / 同时持仓笔数上限。"""
     model_config = ConfigDict(extra="forbid")
 
     max_volume: int = 2                      # 单笔手数上限（非仓位管理下 = 每次入场固定手数）
     max_open_positions: int = 1              # 同时持仓笔数上限（1=单仓；N=一次可连开 N 笔）
-    initial_cash: float = 10000000.0         # 虚拟初始资金（dry_run 无真实账户时资金闸门用）
-    max_trades_per_day: int = 20             # 每日最大往返笔数
-    max_daily_loss_points: float = 60.0      # 每日最大净亏（点数），触达后停止开仓
-    enforce_session: bool = True             # 只在交易时段内开仓
-    no_open_after: str = "14:50"             # 尾盘不再开新仓（空串=不限制）
-    close_before_session_end: bool = True    # 收盘前强平（引擎在时段外收到 bar 时处理）
-    block_on_daily_loss: bool = True         # 日亏触达后是否真的拦截开仓
 
 
 class SizingConfig(BaseModel):
-    """仓位管理（手数定档）。默认 enabled=False —— 开几手完全沿用 risk.max_volume。
+    """仓位管理（手数定档）。2026-09-08 精简：只保留**固定手数**功能。
+
+    动态模式（capital_pct 按保证金占比 / atr_risk 按风险敞口）及资金闸门缓冲
+    （risk_unit_pct）已全部删除。开几手由 `fixed_volume`（0=沿用 risk.max_volume）决定。
 
     ⚠ 一笔报单最多 20 手（中金所限价单硬性上限，IF/IH/IC/IM 同）：超过交易所直接拒单
       （代码也会在开仓前拦一道：signal_action=rejected / reason=over_exchange_limit）。
@@ -320,16 +293,10 @@ class SizingConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     enabled: bool = False            # 总开关：False=关闭仓位管理（固定手数）
-    mode: str = "fixed"              # fixed 固定手数 | capital_pct 按保证金占比 | atr_risk 按风险敞口
-    fixed_volume: int = 0            # fixed 模式下一个信号一次报单的手数；0=沿用 risk.max_volume
-    capital_pct: float = 0.50        # capital_pct 模式：这笔仓位最多占用权益的比例
-    risk_per_trade_pct: float = 0.01 # atr_risk 模式：这笔最多亏掉权益的比例（固定分数法）
-    margin_rate: float = 0.15        # 保证金率，capital_pct 折算每手占用（IF 一般 12%-15%）
-    risk_unit_pct: float = 0.01      # 资金门槛缓冲：每手名义价值预留的波动比例
-    max_volume: int = 0              # 算法结果的截断上限；0=默认中金所单笔上限 20
+    fixed_volume: int = 0            # 固定手数：一个信号一次报单的手数；0=沿用 risk.max_volume
+    max_volume: int = 0              # 固定手数的截断上限；0=默认中金所单笔上限 20
     min_volume: int = 1              # 手数下限：算出来不足时提升到该值（设 0 则真的不开）
     fallback_volume: int = 1         # 权益/ATR 取不到时的回退手数
-    equity_source: str = "available" # 权益口径：available 可用资金 | balance 总资产权益
     unlock_no_new_open: bool = True  # 解锁昨仓后是否补开今仓缺额。
                                      #   True = 绝不补开（默认）：只解锁昨仓、缺口放弃，
                                      #         规避金融期货"平今"高手续费坑
@@ -417,10 +384,10 @@ class EngineConfig(BaseModel):
 # ════════════════════════════════════════════════════════════════════
 # 周期敏感配置归总（Step 2 调参单一入口 / SSOT 索引）
 # ------------------------------------------------------------------
-# 2026-09-08 Step 2.1 起：这 8 项的**值**已收口到 Infra/PeriodProfile.py 的
+# 2026-09-08 Step 2.1 起：这些项的**值**已收口到 Infra/PeriodProfile.py 的
 #   PERIOD_PROFILES（每周期一份，含 note 标定记录），TradingConfig 构造期按
-#   source.freq 把 6 项「影子覆盖」进 flat 字段（bar_secs 走引擎自动推导、freq 是
-#   选择器）。本表仍保留作静态说明（path/layer/kind/step2 的「是什么/为什么」）；
+#   source.freq 把周期敏感值「影子覆盖」进 flat 字段。
+#   本表仍保留作静态说明（path/layer/kind/step2 的「是什么/为什么」）；
 #   运行时每周期的实际值见 `period_sensitive_summary()` 派生视图。
 #
 # 字段说明：
@@ -446,49 +413,9 @@ PERIOD_SENSITIVE_FIELDS: List[Dict[str, Any]] = [
         "kind": "信号新鲜度过滤（分钟）",
         "step2": "15s 下 60min=240 根，必须按周期收紧；否则陈旧信号被误判为新鲜",
     },
-    {
-        "path": "exit_params.max_hold_bars",
-        "layer": "③ 策略层 · L4",
-        "default": 30,
-        "kind": "最长持仓 K 线根数（量纲=bar，与周期无关）",
-        "step2": "默认按 5m 标定(≈2.5h)；30m 下 30 根≈3.75 交易日、由收盘强平接管；"
-                 "15s/1m 须重标",
-    },
-    {
-        "path": "exit_params.max_hold_seconds",
-        "layer": "③ 策略层 · L4",
-        "default": 0.0,
-        "kind": "可选墙钟硬顶（秒），0=不启用",
-        "step2": "启用即周期敏感；用于粗周期加一道'绝不过夜/绝不超时'硬顶",
-    },
-    {
-        "path": "exit_params.eod_lead_bars",
-        "layer": "③ 策略层 · L4",
-        "default": 1,
-        "kind": "提前 N 根 bar 判定收盘",
-        "step2": "1=下一根将跨收盘即平（30m 也能平）；0=旧口径失效",
-    },
-    {
-        "path": "exit_params.bar_secs",
-        "layer": "③ 策略层 · L4",
-        "default": 0,
-        "kind": "本周期一根 bar 秒数（0=引擎按 source.freq 自动推导注入）",
-        "step2": "单测/非标周期显式覆盖；自动推导依赖 PeriodProfile.bar_secs_for 与主程序对账",
-    },
-    {
-        "path": "exit_params.session_end_hhmm",
-        "layer": "③ 策略层 · L4",
-        "default": "14:55",
-        "kind": "收盘前强平阈值时刻",
-        "step2": "效应随 bar_secs 变化（与 eod_lead_bars 协同）",
-    },
-    {
-        "path": "risk.max_trades_per_day",
-        "layer": "④ 风控层",
-        "default": 20,
-        "kind": "每日最大往返笔数",
-        "step2": "15s 一天 480×N 信号，20 笔极易耗尽；须按周期放大",
-    },
+    # （2026-09-08：原 exit_params.max_hold_bars / max_hold_seconds /
+    #   eod_lead_bars / bar_secs / session_end_hhmm（L4 时间/收盘兜底）与
+    #   risk.max_trades_per_day（风控五道硬闸门）的周期敏感条目已随功能删除。）
 ]
 
 
@@ -501,7 +428,7 @@ def period_sensitive_summary() -> List[Dict[str, Any]]:
     """4 周期 × 周期敏感参数的**派生视图**（值来自 PeriodProfile，Step 2.7+ 调参一眼对比）。
 
     这是 `PERIOD_SENSITIVE_FIELDS`（静态说明：path/layer/kind/step2）的运行时补充：
-    前者说「哪 8 项是周期敏感的、为什么」，本函数给出「这 8 项在每个周期下的实际值」。
+    前者说「哪几项是周期敏感的、为什么」，本函数给出「这些项在每个周期下的实际值」。
     """
     rows: List[Dict[str, Any]] = []
     for freq in SUPPORTED_FREQS:
@@ -510,11 +437,6 @@ def period_sensitive_summary() -> List[Dict[str, Any]]:
             "freq": freq,
             "bar_secs": p.bar_secs,
             "signal_max_age_minutes": p.signal_max_age_minutes,
-            "max_hold_bars": p.max_hold_bars,
-            "max_hold_seconds": p.max_hold_seconds,
-            "eod_lead_bars": p.eod_lead_bars,
-            "session_end_hhmm": p.session_end_hhmm,
-            "max_trades_per_day": p.max_trades_per_day,
             "note": p.note,
         })
     return rows

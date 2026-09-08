@@ -2,9 +2,8 @@
 """
 出场策略（Exit.py）
 ====================
-2026-09-08 精简：出场只有一个策略 `LayeredExitPolicy`（L1-L4 分层出场），
-原可选的 `DefaultExitPolicy`（简单固定点数出场）已删除——生产只用 L1-L4，
-不再保留无用的第二套选择。
+2026-09-08 精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场），
+原可选的 `DefaultExitPolicy`（简单固定点数出场）与 L4 时间/收盘兜底均已删除。
 
 三个刻意保留的保守设定（LayeredExitPolicy）
     ① 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
@@ -19,8 +18,6 @@ from typing import Optional
 
 from ..Config import ExitConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
-from ..Infra.PeriodProfile import (bar_sec_of_day, eod_triggered,
-                                   norm_delta_sec, parse_hhmmss, ts_scale)
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from .Base import ExitCheck, ExitPolicy
 
@@ -54,37 +51,11 @@ class LayeredExitPolicy(ExitPolicy):
         self.trailing_trigger_r = float(p.trailing_trigger_r)
         self.trailing_atr_multiple = float(p.trailing_atr_multiple)
         self.trailing_distance_points = float(p.trailing_distance_points or 0.0)
-        # L4 时间/收盘兜底
-        # 主口径 = max_hold_bars（**K 线根数**，与周期无关，遵 L4 设计文档
-        #          "N 根 K 线无进展 → 走"）；
-        # 附加顶 = max_hold_seconds（墙钟秒，默认 0=不启用），二者取"或"。
-        self.max_hold_bars = int(p.max_hold_bars or 0)
-        self.max_hold_seconds = float(p.max_hold_seconds or 0.0)
-        self.session_end_hhmm = str(p.session_end_hhmm or "")
-        self.eod_lead_bars = int(p.eod_lead_bars or 0)
-        # bar_secs 的三级来源（优先级从高到低）：
-        #   ① 策略参数显式给（非 0）           —— 单测 / 非标周期
-        #   ② 引擎 set_bar_secs 注入（source.freq 推导）—— 生产路径
-        #   ③ on_bar 用相邻 bar 推断（单位嗅探）—— 兜底
-        # 旧代码只有 ③，且推断时把毫秒当秒 → 四个周期全部推断失败且静默。
-        self.bar_secs: Optional[int] = int(p.bar_secs or 0) or None
-        self._inferred_bar_secs: Optional[int] = None
         # 跨日清空 ATR 缓冲用
         self._last_day: str = ""
 
         # ATR 历史缓冲（on_bar 维护，平着也收）
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
-
-    # ---------- 有效 bar 秒数（三级来源归并） ----------
-    @property
-    def effective_bar_secs(self) -> Optional[int]:
-        """当前生效的 bar 秒数；三级来源都拿不到时返回 None。"""
-        if self.bar_secs:
-            return self.bar_secs
-        injected = int(getattr(self, "_injected_bar_secs", 0) or 0)
-        if injected:
-            return injected
-        return self._inferred_bar_secs
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
@@ -97,18 +68,7 @@ class LayeredExitPolicy(ExitPolicy):
         if day:
             self._last_day = day
 
-        prev_ts = self._bars[-1].timestamp if self._bars else 0
         self._bars.append(bar)
-        # 兜底推断：只在没拿到配置/注入值时才用。
-        # norm_delta_sec 会嗅探毫秒/秒（阈值 1e5），不再像旧代码那样
-        # 把毫秒差值直接当秒去比 60~14400 —— 那会让 4 个周期全部推断失败。
-        if prev_ts and bar.timestamp > prev_ts:
-            # 用**绝对值**判定单位（毫秒 ~1.7e12 / 秒 ~1.7e9），不用差值阈值：
-            # 差值口径在"毫秒源 + 15s 周期"（15000）与"秒源 + 30m 周期"（1800）
-            # 之间无法取到一个同时正确的分界。
-            secs = (bar.timestamp - prev_ts) / ts_scale(bar.timestamp)
-            if 1 <= secs <= 14400:
-                self._inferred_bar_secs = int(round(secs))
 
     # ---------- ATR ----------
     def _atr(self) -> Optional[float]:
@@ -124,22 +84,12 @@ class LayeredExitPolicy(ExitPolicy):
         return sum(trs[-self.atr_period:]) / self.atr_period
 
     def current_atr(self) -> Optional[float]:
-        """对外暴露当前 ATR（点数）。仓位管理 atr_risk 模式用作止损距离兜底。
+        """对外暴露当前 ATR（点数）。供外部观测/日志使用。
 
-        样本不足（on_bar 缓冲未攒够 atr_period+1 根）时返回 None，
-        调用方（PositionSizer）会自行回退，不会因此崩。
+        （2026-09-08：原 atr_risk 仓位模式随动态定仓删除，ATR 仅保留观测用途。）
+        样本不足（on_bar 缓冲未攒够 atr_period+1 根）时返回 None。
         """
         return self._atr()
-
-    # ---------- 时间解析：从 "2026-09-01 14:55" 取 "14:55" ----------
-    @staticmethod
-    def _bar_time(bar: Bar) -> str:
-        """【遗留】只取 HH:MM。15s 周期的 date 带秒，这里会丢秒 —— 新代码
-        一律改走 `bar_sec_of_day()`（返回当日秒数，秒级精度）。"""
-        s = bar.date
-        if " " in s:
-            s = s.split(" ", 1)[1]
-        return s[:5]
 
     # ---------- R 计算（L1 + L2） ----------
     def _initial_r(self, signal, entry_price: float, spec: InstrumentSpec) -> float:
@@ -192,8 +142,7 @@ class LayeredExitPolicy(ExitPolicy):
 
     # ---------- 每根 bar 闭合后判定 ----------
     def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0,
-              held_secs: Optional[float] = None) -> Optional[ExitCheck]:
+              bars_held: int = 0) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price
         tp = plan.tp_price
@@ -215,36 +164,6 @@ class LayeredExitPolicy(ExitPolicy):
                 return ExitCheck("sl", stop)
             if tp is not None and bar.low <= tp:
                 return ExitCheck("tp", tp)
-
-        # ④ L4 时间兜底（主口径）：max_hold_bars = **K 线根数**，与周期无关。
-        #    判断依据是"多少根 bar 没走出来"，不是墙钟时间 —— 计量单位是
-        #    结构信息量（一根 bar = 一份证据），所以 30 在任何周期下都是 30 根。
-        #    （2026-09-08 更正：此前改成秒制是把 Step 2 标定问题误判成 Step 1
-        #     缺陷，会在 15s/1m/30m 上静默改变策略行为，已撤回。）
-        if self.max_hold_bars > 0 and bars_held >= self.max_hold_bars:
-            return ExitCheck("time", bar.close)
-        #    附加顶（可选）：max_hold_seconds 墙钟上限，默认 0=不启用。
-        #    用途：粗周期上加一道"绝不过夜/绝不超时"硬顶。
-        if self.max_hold_seconds > 0:
-            hs = held_secs
-            if hs is None:
-                bs = self.effective_bar_secs
-                hs = float(bars_held * bs) if (bs and bars_held) else None
-            if hs is not None and hs >= self.max_hold_seconds:
-                return ExitCheck("time", bar.close)
-
-        # ⑤ L4 收盘兜底：统一走 eod_triggered（bar 结束 + lead×bar_secs ≥ 阈值）。
-        #    旧逻辑有双重缺陷：
-        #      a) 用 `_bar_time()` 取 HH:MM → 15s 的 date 带秒被截掉，最多偏 59 秒；
-        #      b) bar 结束时判定 → 30m 最后一根 14:30-15:00 闭合时已收盘，永远平不掉。
-        #    新逻辑提前 eod_lead_bars（默认 1）根 bar 判定，四个周期都能平掉。
-        if self.session_end_hhmm:
-            thr = parse_hhmmss(self.session_end_hhmm)
-            start = bar_sec_of_day(bar)
-            if thr is not None and start is not None:
-                if eod_triggered(start, self.effective_bar_secs, thr,
-                                 self.eod_lead_bars):
-                    return ExitCheck("eod_time", bar.close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         if self.use_trailing and R:

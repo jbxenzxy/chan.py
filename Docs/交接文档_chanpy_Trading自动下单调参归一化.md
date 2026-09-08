@@ -140,11 +140,13 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 |---|---|
 | 活跃编码沙盒 | `sandbox/Trading/`（含 2.6 全部改动 + **31 个 test_**） |
 | 最新交付包 | `output/step2_6_Trading.zip`（70 文件 / 319644 字节；= 2.5 包 + 2 个新测试，零生产代码改动） |
-| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1–2.6**——需用户推送） |
-| `sandbox/chan.py` git clone | **已过时**，停在 `5478def`（仅作合并校验，勿当工作副本） |
+| 远端 custom-dev HEAD | **`96d9b04`（2026-09-08 14:14「更新」）——2.1–2.6 已全部合入推送（去 CRLF 全树 0 差异复验 ✅）** |
+| `sandbox/chanpy_customdev/` | 2026-09-08 15:20 新建浅克隆（只读复验用；后续核对以它为准） |
 | 测试基线 | 31/31 test_ 全绿（按退出码判定；zip 解压复验 30/31，唯一差异是 `B_replay_smoke` 依赖被排除的 `replay_data/`，环境数据依赖非回归） |
 
 ### 4.3 已知阻塞项（调值的真正瓶颈）
+
+> **2026-09-08 14:30 更新**：数据缺口已完成可行性分析，见 **`Step2_7前置_数据补录可行性分析.md`**（结论：SSE 实时录制为主 + akshare 历史分钟线预标定为辅；4 项决策点 D1–D4 待拍板）。
 
 | 阻塞 | 说明 | 影响 |
 |---|---|---|
@@ -176,7 +178,7 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | **2.4** | **重复常量合并**：两个语义相同的 `20`（PositionSizing 的 sizing.max_volume 默认截断 + Engine._open_position 交易所限单检查）→ SSOT 常量 `CFFEX_LIMIT_MAX`（定义在 Risk/PositionSizing.py，Engine 导入）；删 `per_lot_margin` 的 `else 0.15` 第二默认源（margin_rate=0 现诚实走 bad_param fallback） | `step2_4_Trading.zip`（67 文件/311573B）、`Step2_4_交付说明_重复常量合并.md`、`Test/test_const_merge.py`（14 断言） | ✅ 待用户合并 |
 | **2.5** | **Source/Recorder 重连参数收口**：`SourceConfig` 新增 `reconnect_wait/reconnect_wait_max/reconnect_max_retry`（默认=原硬编码 5/60/0）；修复 SSE 三参数"死旋钮"缺陷（extra=forbid 下旧键传不进来）+ 删双默认源写法 + 构造期 fail-fast 守卫；`SignalRecorder` argparse 默认值同源化 | `step2_5_Trading.zip`（68 文件/314693B）、`Step2_5_交付说明_Source重连参数收口.md`、`Test/test_source_reconnect.py`（20 断言） | ✅ 待用户合并 |
 | **2.6** | 测试 + 启动校验：每 phase 加测试；6 段全完跑 `--freq {30m,5m,1m,15s}` 启动冒烟全通 | ✅ **已完成（2026-09-08，实际补 2.0 系列测试 43 断言 + 冒烟 65 断言，零生产代码改动）** |
-| **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证 | ⏳ **下一步（被数据缺口阻塞，见 §4.3）** |
+| **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证。**开工时必须一并处理 2.1/2.2 遗留（详见 §5.3 遗留清单）**：① 三项根数口径参数（`engine.close_retry_bars` / `engine.close_max_streak` / `engine.unlock_stuck_bars`）候选迁入 `PeriodProfile`（2.2 拍板 F1：先 flat、2.7+ 候选）；② `_apply_profile_values`「== schema 默认」判定局限升级（§4.4） | ⏳ **下一步（被数据缺口阻塞，见 §4.3）** |
 
 ### 5.2 续推 SOP（2.7+ 调值阶段，照抄）
 
@@ -184,15 +186,22 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 
 1. **读本档 §4.2/§4.3** 确认沙盒与交付物状态、阻塞项。
 2. **数据补录**：解决真实行情数据缺口（chan.py SSE 录制或其它来源），归档到可复用目录。
-3. **确认 5m 基线**：谁是 5m 基线缺明确锚点；同时处理 2.1 的 F1 遗留（3 项根数参数候选迁入 PeriodProfile）与「==schema 默认」判定局限（§4.4）。
+3. **确认 5m 基线**：谁是 5m 基线缺明确锚点；同时处理遗留清单 §5.3（L-1 三项根数参数候选迁入 PeriodProfile + L-2「==schema 默认」判定局限升级）。
 4. 差异化 `PERIOD_PROFILES`（不再全 BASELINE 占位）→ 回放回测 → 网格搜索 → SimNow 验证。
 5. 每 phase 在 **`sandbox/Trading/`** 实现 → `py_compile + 全量 test_` 确认落盘 → 打包 zip（Python zipfile，只打 `Trading/` 子树）→ **zip 解压到干净目录复验** → 更新交付说明 + 本档 §3/§4 状态表。
 6. 交付给用户合并进 real project 并推送。
 
-### 5.3 未决/需用户拍板项
+### 5.3 ⚠️ 2.7+ 开工时的遗留清单（必办，勿漏）
 
-- 2.1 的 `_apply_profile_values`「== schema 默认」判定在 2.7+ 差异化后需升级（见 §4.4 局限）——2.2 规划时可顺带评估是否提前显式追踪。
-- Docs/ 目录旧 `GatewayConfig` 名称引用（历史文档）——合并刷新不在代码包内，2.2 收尾可问是否一并刷。
+| # | 遗留项 | 详情 | 出处 |
+|---|---|---|---|
+| L-1 | **三项根数口径参数候选迁入 `PeriodProfile`** | `engine.close_retry_bars(=5)` / `engine.close_max_streak(=20)` / `engine.unlock_stuck_bars(=5)`——语义上周期敏感（15s 的 5 根=75 秒 vs 30m 的 5 根=2.5 小时），2.2 拍板 F1「先放 `EngineConfig`（跨周期不变取值），2.7+ 差异化标定时候选迁入 profile」 | 2.2 可行性分析 §决策F + 2.2 交付说明 §4 |
+| L-2 | **「== schema 默认」判定局限升级** | `_apply_profile_values` 用「flat 字段 == schema 默认」判定是否被 profile 覆盖；2.7+ 各周期值偏离 schema 默认后，若 `--freq` 构造后二次切换需显式追踪「profile 已填字段」再重对齐（当前 BASELINE 全等值下无此问题，一旦差异化就会暴露） | 2.1 交付说明 §4 + 本档 §4.4 |
+| L-3 | **5m 基线锚点确认** | 谁是「5m 基线」缺明确确认，影响 G1 BASELINE 占位的合理性（§4.3） | §4.3 |
+| L-4 | Docs/ 目录旧 `GatewayConfig` 名称引用 | 历史文档引用，不在代码包内，合并刷新时顺带处理（低优先级） | §5.3 原记载 |
+
+> L-1/L-2 是**代码结构改动**（不受数据缺口阻塞，若想提前清障可单独做一小 phase）；
+> L-3/L-4 依赖数据/文档合并。做完 L-1 时须同步扩 `PERIOD_SENSITIVE_FIELDS` 索引与 `test_period_profile` / `test_engine_config` 断言。
 
 ---
 
@@ -219,6 +228,8 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `Step2_路线图_调参项归一.md/.html` | Phase 全览（进度以本文档 §4 为准） |
 | `Step2_0_交付说明_配置分层与周期敏感归总.md` | 2.0–2.0.3b 全史 + 删除选择器实证 |
 | `Step2_6_交付说明_测试补齐与四周期冒烟.md` | 2.6 交付说明（含结构归一收官清单） |
+| `Step2_7前置_数据补录可行性分析.md` | 2.7 前置：数据缺口可行性（录制主路线 + D1–D4 决策点） |
+| `Step2续_周期敏感清单核对与策略风控全表_96d9b04.md` | Q1–Q5 核对结论 + 策略/风控层功能全表 + 删减评估（T-1~T-7 待拍板） |
 | `Step2_5_交付说明_Source重连参数收口.md` | 2.5 交付说明（含 SSE 死旋钮缺陷说明） |
 | `Step2_4_交付说明_重复常量合并.md` | 2.4 交付说明（含 margin_rate=0 语义变化说明） |
 | `Step2_3_交付说明_BrokerChannel超时集中.md` | 2.3 交付说明 |

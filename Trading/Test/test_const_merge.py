@@ -4,8 +4,9 @@
 背景（Step 2 路线图 2.4，~30 行最小 phase）：
   · 语义相同的两个 `20`：Risk/PositionSizing.py 的 sizing.max_volume 默认截断上限
     与 Engine/Engine.py 开仓前的交易所限单检查上限 → 收口为单一常量 CFFEX_LIMIT_MAX。
-  · per_lot_margin 的 `else 0.15` 与 SizingConfig.margin_rate=0.15（SSOT）重复 → 删除；
-    margin_rate=0 现在诚实表示"不做保证金折算"（capital_pct 走 bad_param fallback）。
+  · 仓位管理精简（2026-09-08）：仅固定手数，动态模式与保证金/资金闸门相关字段
+    （mode / capital_pct / margin_rate / risk_per_trade_pct / equity_source）已从
+    SizingConfig 删除，per_lot_margin 亦移除。
 
 独立脚本风格（与全套 test_*.py 一致）：check() + 末尾统计 + sys.exit(1)。
 """
@@ -40,7 +41,7 @@ def _raises(fn):
 
 
 print("=" * 60)
-print("Step 2.4 测试：CFFEX_LIMIT_MAX 合并 + 0.15 兜底删除")
+print("Step 2.4 测试：CFFEX_LIMIT_MAX 合并 + sizing 精简")
 print("=" * 60)
 
 # ═══ [1] 常量唯一源 ═══
@@ -80,46 +81,15 @@ from Trading.Config import SizingConfig
 from Trading.Infra.InstrumentSpec import InstrumentSpec
 spec = InstrumentSpec()  # 默认 IF 规格
 sz = PS.PositionSizer(
-    SizingConfig(enabled=True, mode="fixed", fixed_volume=0,
-                 capital_pct=0.0, risk_per_trade_pct=0.0, margin_rate=0.15,
-                 max_volume=0, min_volume=1, fallback_volume=1,
-                 equity_source="available"),
-    spec, risk_max_volume=1)
+        SizingConfig(enabled=True, fixed_volume=0,
+                     max_volume=0, min_volume=1, fallback_volume=1),
+        spec, risk_max_volume=1)
 check("max_volume 默认 == CFFEX_LIMIT_MAX", sz.max_volume, PS.CFFEX_LIMIT_MAX)
 check("显式 max_volume=5 不受影响",
       PS.PositionSizer(
-          SizingConfig(enabled=True, mode="fixed", fixed_volume=0,
-                       capital_pct=0.0, risk_per_trade_pct=0.0,
-                       margin_rate=0.15, max_volume=5, min_volume=1,
-                       fallback_volume=1, equity_source="available"),
+          SizingConfig(enabled=True, fixed_volume=0,
+                       max_volume=5, min_volume=1, fallback_volume=1),
           spec, risk_max_volume=1).max_volume, 5)
-
-# ═══ [4] 0.15 第二默认源已删：margin_rate=0 诚实暴露 ═══
-print("\n[4] per_lot_margin 不再有 else 0.15 兜底")
-PRICE = 4550.0
-check("默认 margin_rate=0.15 -> per_lot_margin(4550)=204750",
-      sz.per_lot_margin(PRICE), 204750.0)
-sz0 = PS.PositionSizer(
-    SizingConfig(enabled=True, mode="capital_pct", fixed_volume=0,
-                 capital_pct=1.0, risk_per_trade_pct=0.0, margin_rate=0.0,
-                 max_volume=0, min_volume=0, fallback_volume=1,
-                 equity_source="available"),
-    spec, risk_max_volume=1)
-check("margin_rate=0 -> per_lot_margin=0.0（诚实暴露）",
-      sz0.per_lot_margin(PRICE), 0.0)
-vol, why = sz0.size(equity=1_000_000.0, price=PRICE)
-check("margin_rate=0 且 capital_pct -> size 走 bad_param fallback",
-      (vol, why), (1, "sizing:capital_pct:bad_param"))
-# 静态：per_lot_margin 无旧兜底代码行（`if ... else 0.15`；
-# docstring 里的解释性提及不算，用 AST 取纯代码体检查）
-import ast as _ast
-import textwrap as _tw
-_tree = _ast.parse(_tw.dedent(inspect.getsource(PS.PositionSizer.per_lot_margin)))
-_code_has_fallback = any(
-    isinstance(n, _ast.IfExp) and "0.15" in _ast.unparse(n)
-    for n in _ast.walk(_tree))
-check("per_lot_margin 无 '…else 0.15' 兜底代码（AST 级检查）",
-      _code_has_fallback, False)
 
 # ═══ 汇总 ═══
 print("\n" + "=" * 60)

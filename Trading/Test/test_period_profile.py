@@ -67,11 +67,6 @@ def check(name, got, expected):
 # BASELINE（当前 5m 默认值；Step 2.7+ 才按周期差异化）
 _BASE = {
     "signal_max_age_minutes": 60.0,
-    "max_hold_bars": 30,
-    "max_hold_seconds": 0.0,
-    "eod_lead_bars": 1,
-    "session_end_hhmm": "14:55",
-    "max_trades_per_day": 20,
 }
 
 
@@ -89,24 +84,15 @@ def main():
     c = TradingConfig()
     check("默认 freq=5m", c.source.freq, "5m")
     check("默认 period_profile.freq=5m", c.period_profile.freq, "5m")
-    check("5m max_hold_bars 灌入 flat", c.exit_params.max_hold_bars, 30)
     check("5m signal_max_age 灌入 flat", c.source.signal_max_age_minutes, 60.0)
-    check("5m max_trades_per_day 灌入 flat", c.risk.max_trades_per_day, 20)
 
     c15 = TradingConfig(source={"freq": "15s"})
     check("15s period_profile.freq", c15.period_profile.freq, "15s")
     check("15s profile.bar_secs=15", c15.period_profile.bar_secs, 15)
-    check("15s max_hold_bars 仍 BASELINE 30", c15.exit_params.max_hold_bars, 30)
 
     print("\n[3] 用户显式覆盖优先（不被 profile 覆盖）")
-    cov = TradingConfig(exit_params={"max_hold_bars": 50})
-    check("用户 max_hold_bars=50 保留", cov.exit_params.max_hold_bars, 50)
     cov2 = TradingConfig(source={"signal_max_age_minutes": 30.0})
     check("用户 signal_max_age=30 保留", cov2.source.signal_max_age_minutes, 30.0)
-    cov3 = TradingConfig(risk={"max_trades_per_day": 99})
-    check("用户 max_trades_per_day=99 保留", cov3.risk.max_trades_per_day, 99)
-    cov4 = TradingConfig(exit_params={"session_end_hhmm": "15:00"})
-    check("用户 session_end_hhmm=15:00 保留", cov4.exit_params.session_end_hhmm, "15:00")
 
     print("\n[4] 未知 freq 容错（fail-fast 在 main.py）")
     try:
@@ -122,8 +108,8 @@ def main():
     c2.apply_period_profile()
     check("改 freq=30m 后 period_profile=30m", c2.period_profile.freq, "30m")
     check("30m profile.bar_secs=1800", c2.period_profile.bar_secs, 1800)
-    # baseline 值下 flat 字段不变（30m 也占位 30）
-    check("30m max_hold_bars 仍 BASELINE", c2.exit_params.max_hold_bars, 30)
+    # baseline 值下 flat 信号新鲜度字段不变（30m 也占位 60）
+    check("30m signal_max_age 仍 BASELINE", c2.source.signal_max_age_minutes, 60.0)
 
     print("\n[6] period_sensitive_summary 派生视图")
     rows = period_sensitive_summary()
@@ -132,7 +118,7 @@ def main():
           ["15s", "1m", "30m", "5m"])
     r5 = next(r for r in rows if r["freq"] == "5m")
     check("summary 5m bar_secs=300", r5["bar_secs"], 300)
-    check("summary 5m max_hold_bars=30", r5["max_hold_bars"], 30)
+    check("summary 5m signal_max_age=60", r5["signal_max_age_minutes"], 60.0)
     check("summary 行含 note", bool(r5["note"].strip()), True)
 
     print("\n" + "=" * 60)

@@ -20,10 +20,9 @@ Trading/                        # 自动下单网关（Python 包）
 ├── Strategy/                   # ③ 可插拔策略（新增文件即注册）
 │   ├── Base.py                 # EntryPolicy / ExitPolicy 接口 + @register 装饰器
 │   ├── Entry.py                # 默认入场策略（用户当前规则）
-│   └── Exit.py                 # 出场策略合集：默认止盈止损 / 分层离场 L1-L4 / 移动止损示例
-├── Risk/                       # ④ 风控闸门
-│   ├── RiskGate.py             # 时段/手数/日亏/日次数五道硬闸门
-│   └── PositionSizing.py       # 仓位管理三模式 + 资金闸门 capital_gate
+│   └── Exit.py                 # 出场策略合集：默认止盈止损 / 分层离场 L1-L3 / 移动止损示例
+├── Risk/                       # ④ 风控层（精简后）
+│   └── PositionSizing.py       # 仓位管理：固定手数定档
 ├── Engine/                     # ⑤ 执行层
 │   ├── Engine.py               # 事件驱动状态机（bar 结算 → signal 开仓）
 │   ├── Reconcile.py            # 持仓对账 + F1 解锁卡单监控（Mixin）
@@ -81,7 +80,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)          (闸门)       (dry_run/…)
 ```
 
-**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `DefaultEntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L4 分层），不再有「注册表 / @register / 换类名」这类策略选择抽象。
+**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `DefaultEntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
 
 三个刻意保留的保守设定（`Strategy/Exit.py` 的 LayeredExitPolicy）：
 

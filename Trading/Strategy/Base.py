@@ -15,21 +15,12 @@
 """
 from __future__ import annotations
 
-import inspect
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Type
 
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, Decision, Position, Side, Signal, ExitPlan
-
-
-def _accepts_held_secs(fn: Any) -> bool:
-    """策略的 check() 是否接受 held_secs 关键字（新签名）。"""
-    try:
-        return "held_secs" in inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
 
 
 @dataclass
@@ -63,46 +54,18 @@ class ExitPolicy(ABC):
 
     @abstractmethod
     def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
-              bars_held: int = 0,
-              held_secs: Optional[float] = None) -> Optional[ExitCheck]:
+              bars_held: int = 0) -> Optional[ExitCheck]:
         """每根 K 线闭合后判定是否出场。返回 None = 继续持有。
 
-        bars_held   已持有 K 线**根数** —— 跨周期不可比（30 根在 30m 下是
-                    15 小时、在 15s 下是 7.5 分钟），只可用于计数/诊断，
-                    **禁止**用于任何时间类兜底判定。
-        held_secs   已持有**秒数** —— 跨周期可比，时间止损等一律用这个。
+        bars_held   已持有 K 线**根数** —— 只用于计数/诊断。
         """
         raise NotImplementedError
 
     # ---------- 引擎唯一调用入口（兼容旧签名策略） ----------
     def check_with(self, position: Position, bar: Bar, spec: InstrumentSpec,
-                   bars_held: int = 0,
-                   held_secs: Optional[float] = None) -> Optional["ExitCheck"]:
-        """引擎应始终走这里，而不是直接调 check()。
-
-        尚未升级的第三方/测试策略可能还是旧签名 `check(pos, bar, spec, bars_held)`，
-        直接传 held_secs 会 TypeError。这里按签名自适应：
-        支持 held_secs 就传（拿到跨周期可比的时间口径），不支持就退回只传根数
-        ——宁可让老策略拿不到新能力，也不能让它直接崩在实盘路径上。
-        """
-        if _accepts_held_secs(type(self).check):
-            return self.check(position, bar, spec, bars_held=bars_held,
-                              held_secs=held_secs)
-        return self.check(position, bar, spec, bars_held)
-
-    # ---------- 可选钩子：周期注入 ----------
-    def set_bar_secs(self, bar_secs: int) -> None:
-        """引擎启动时把"当前周期一根 bar 多少秒"注入策略。
-
-        默认实现只把值存下来；不依赖周期语义的策略无需重写。
-
-        为什么要有这个钩子
-            历史 bug：策略在 on_bar 里靠相邻 bar 的 timestamp 差**推断**
-            bar 间隔，而 timestamp 单位不统一（SSE 毫秒 / 回放秒），
-            推断代码把毫秒当秒比较 → 4 个周期全部推断失败、静默降级。
-            周期是启动期就已知的确定信息，不该靠运行时推断。
-        """
-        self._injected_bar_secs = int(bar_secs or 0)
+                   bars_held: int = 0) -> Optional["ExitCheck"]:
+        """引擎应始终走这里，而不是直接调 check()。"""
+        return self.check(position, bar, spec, bars_held=bars_held)
 
     def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
         """可选钩子：引擎每根 K 线（无论是否持仓）都会调用一次。

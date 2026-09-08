@@ -375,8 +375,19 @@ with tmp_dir() as tmp:
     check("[8c] 解锁已生效（簿空）", engine.positions.is_empty(), True)
     check("[8d] signal_action 仍为 unlock", store.signal_action(sig.key), "unlock")
     ev.flush()
-    kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[8e] 写 risk_block 事件", "risk_block" in kinds, True)
+    recs = []
+    with open(os.path.join(tmp, "events.jsonl"), encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                recs.append(json.loads(line))
+    ures = [r for r in recs if r.get("kind") == "unlock_result"]
+    # （2026-09-08：风控五道硬闸门已删，补开不再产生 risk_block；
+    #   此场景 sizing.max_volume=1 把 want 截到 1（≤ 已解锁 3）→ 纯解锁不补开）
+    check("[8e] 补开被截断：want=1 ≤ 已解锁3 -> 纯解锁不补开",
+          ures[0].get("action") if ures else None, "pure_unlock")
+    check("[8e2] 不再产生 risk_block 事件",
+          any(r.get("kind") == "risk_block" for r in recs), False)
 
 
 # ════════════════════════════════════════════════════════════════

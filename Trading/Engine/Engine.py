@@ -24,11 +24,10 @@ from ..Broker.Base import Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.PeriodProfile import (
-    bar_sec_of_day, bar_secs_for, eod_triggered, parse_hhmmss, ts_scale,
+    bar_secs_for,
 )
 from .PositionBook import PositionBook, PositionBookError
-from ..Risk.RiskGate import RiskGate
-from ..Risk.PositionSizing import capital_gate, CFFEX_LIMIT_MAX
+from ..Risk.PositionSizing import CFFEX_LIMIT_MAX
 from .Reconcile import ReconcileMixin
 from ..Risk.PositionSizing import PositionSizer
 from ..Infra.Store import Store
@@ -51,7 +50,6 @@ class TradingEngine(ReconcileMixin):
         self.exit_policy = exit_policy
         self.store = store
         self.ev = ev
-        self.risk = RiskGate(cfg.risk, self.spec)
         # 仓位管理（手数定档）。默认 enabled=False —— 直接返回固定手数，
         # 与加这个模块之前的行为完全一致，不查账户、不联网。
         self.sizer = PositionSizer(cfg.sizing, self.spec, cfg.risk.max_volume)
@@ -119,26 +117,9 @@ class TradingEngine(ReconcileMixin):
         #   shutdown_and_lock_all），_restore/_persist 持久化，重启不漂移。
         # ════════════════════════════════════════════════════════════════
         # ════════════════════════════════════════════════════════════════
-        # Step 1（2026-09-08）：周期语义注入
-        #   引擎是唯一知道 source.freq 的组件，由它把"一根 bar 多少秒"注入
-        #   出场策略。旧设计让策略在 on_bar 里靠相邻 timestamp 差推断周期，
-        #   而 timestamp 单位不统一（SSE 毫秒 / 回放秒），推断把毫秒当秒 →
-        #   30m/5m/1m/15s 四个周期全部推断失败并静默降级（BUG-1）。
-        #   周期是启动期就已知的确定信息，不该靠运行时猜。
-        # ════════════════════════════════════════════════════════════════
+        # Step 1（2026-09-08）：周期 bar 秒数 —— 引擎按 source.freq 推导（用于追价窗口检查）。
+        #   （2026-09-08 精简：原 L4 时间/收盘兜底的 set_bar_secs 注入已随功能删除。）
         self.bar_secs: Optional[int] = bar_secs_for(cfg.source.freq, default=None)
-        if self.bar_secs:
-            setter = getattr(self.exit_policy, "set_bar_secs", None)
-            if callable(setter):
-                setter(self.bar_secs)
-        else:
-            self.ev.write(
-                "freq_unknown", freq=cfg.source.freq,
-                note="未知的 K 线周期：出场策略的时间/EOD 兜底将退化为运行时推断，"
-                     "请核对 Infra/PeriodProfile.FREQ_SEC")
-        # 收盘强平提前量（根）：与 ExitConfig.eod_lead_bars 同一语义，
-        # 引擎侧兜底判定（_after_close）也用它，两处行为保持一致。
-        self._eod_lead_bars: int = int(cfg.exit_params.eod_lead_bars or 1)
         # 离场追价窗口（close_max_chase × chase_interval）若长于一根 bar，
         # 15s 下会出现"上一轮还没追完、下一根 bar 又发起新一轮"的叠加。
         # 不阻断（引擎本来就跨 bar 重试），但必须可见——历史上这类问题
@@ -151,9 +132,6 @@ class TradingEngine(ReconcileMixin):
                 bar_secs=self.bar_secs, chase_window_sec=round(chase_window, 2),
                 note="离场追价窗口长于一根 bar；短周期（15s）请把 "
                      "close_max_chase × chase_interval 调到 bar_secs 以内")
-        # 时间戳单位系数（毫秒=1000 / 秒=1）：收到第一根 bar 时按绝对量级确定，
-        # 之后所有"持仓多久"的计算都用它归一到秒。
-        self._ts_scale: Optional[float] = None
 
         self.auto_order_enabled: bool = True
         self._restore()
@@ -219,7 +197,6 @@ class TradingEngine(ReconcileMixin):
             self._state = EngineState.IDLE
         else:
             self._state = EngineState.IN_TRADE
-        self.risk.restore(self.store.get_json("day_stats"))
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
         # Phase F：恢复 _unlock_in_flight —— 接续上次崩前的卡单标记，
         #   让 _check_unlock_stuck 在余下 bar 进度下继续推进到 5-bar 复核。
@@ -272,7 +249,6 @@ class TradingEngine(ReconcileMixin):
         else:
             self.store.delete_key("positions")
             self.store.delete_key("position")
-        self.store.set_json("day_stats", self.risk.snapshot())
         self.store.set_json("bars_seen", self.bars_seen)
         # Phase F：持久化 _unlock_in_flight —— 引擎崩 / 重启后 _restore 才能
         #   恢复卡单标记，让 _check_unlock_stuck 继续在 bars_seen>=submit+5 时
@@ -291,9 +267,6 @@ class TradingEngine(ReconcileMixin):
             return                      # 重复或回退的 K 线，丢弃
         self.bars_seen += 1
         self.last_bar = bar
-        # 时间戳单位（毫秒 / 秒）只需定一次：按绝对量级判定，全局稳定。
-        if self._ts_scale is None and bar.timestamp:
-            self._ts_scale = ts_scale(bar.timestamp)
 
         # 每根 K 线（无论是否持仓）都喂给出场策略，供其维护 ATR 等历史缓冲。
         # LayeredExitPolicy 等需要历史的策略借此在开仓瞬间就有足够样本。
@@ -303,10 +276,7 @@ class TradingEngine(ReconcileMixin):
         except Exception:
             pass
 
-        day = (bar.date or "")[:10]
-        if day and self.risk.roll_day(day):
-            self.ev.write("day_roll", day=day, stats=dict(self.risk.day_stats))
-            self._persist()
+        # （2026-09-08：原 on_bar 里的 RiskGate.roll_day 换日统计随风控五道硬闸门整体删除。）
 
         self.ev.write("bar", date=bar.date, close=bar.close,
                       high=bar.high, low=bar.low, seq=self.bars_seen)
@@ -380,12 +350,11 @@ class TradingEngine(ReconcileMixin):
 
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
             check: Optional[ExitCheck] = self.exit_policy.check_with(
-                pos, bar, self.spec, bars_held=bars_held,
-                held_secs=self._held_secs(pos, bar))
+                pos, bar, self.spec, bars_held=bars_held)
 
-            if check is None:
-                if self.cfg.risk.close_before_session_end and self._after_close(bar):
-                    check = ExitCheck("eod", bar.close)
+            # （2026-09-08：原引擎侧收盘前强平 _after_close / close_before_session_end
+            #   随 L4 时间兜底一并删除，出场只剩策略层的 L1-L3。）
+
             if check is None:
                 continue
 
@@ -415,38 +384,8 @@ class TradingEngine(ReconcileMixin):
                                   exit_trigger_price or bar.close,
                                   bar, signal_key=to_close[0].signal_key)
 
-    def _after_close(self, bar: Bar) -> bool:
-        """是否已临近 / 过了当日收盘（用于收盘前强平）。中午休市不算。
-
-        Step 1 修复（2026-09-08）：旧版拿 bar 起点 "HH:MM" 与收盘时刻比大小。
-          · 30m 的 bar 起点只有 :00 / :30，最后一根是 14:30-15:00，
-            它闭合推送时已经是 15:00 —— 判定成立的那一刻已经收盘，
-            强平对 30m **从来不可能生效**（死代码）。
-          · 15s 的 date 带秒，"[:5]" 截掉 ":45" 后最多偏 59 秒 = 4 根 bar。
-        改走 PeriodProfile.eod_triggered：提前 eod_lead_bars 根 bar 判定，
-        四个周期都能在收盘前平掉。
-        """
-        parts = (bar.date or "").split()
-        if len(parts) < 2 or not self.spec.sessions:
-            return False
-        thr = parse_hhmmss(self.spec.sessions[-1].split("-")[-1])
-        start = parse_hhmmss(parts[1])
-        if thr is None or start is None:
-            return False
-        return eod_triggered(start, self.bar_secs, thr,
-                             lead_bars=self._eod_lead_bars)
-
-    def _held_secs(self, pos: "Position", bar: Bar) -> Optional[float]:
-        """持仓已持续**秒数**（跨周期可比，时间类兜底的唯一正确口径）。
-
-        旧代码只有 bars_held（根数）：30 根在 30m 下 15 小时、15s 下 7.5 分钟。
-        时间戳单位由 _ts_scale（首根 bar 按绝对量级判定）统一归一。
-        """
-        if not pos.entry_bar_ts or not bar.timestamp:
-            return None
-        scale = self._ts_scale or ts_scale(bar.timestamp)
-        d = (float(bar.timestamp) - float(pos.entry_bar_ts)) / scale
-        return d if d > 0 else 0.0
+    # （2026-09-08：原引擎侧 `_after_close`（收盘前强平）与 `_held_secs`（持仓秒数）
+    #   随 L4 时间/收盘兜底一并删除，出场判定只依赖策略层 L1-L3。）
 
     # ---------------- signal 事件 ----------------
     def on_signal(self, sig: Signal) -> None:
@@ -606,7 +545,7 @@ class TradingEngine(ReconcileMixin):
 
         bar_date = self.last_bar.date if self.last_bar else sig.date
 
-        # 手数定档：问仓位管理"这笔开几手"（sizing 关闭时 = 固定手数）
+        # 手数定档：问仓位管理"这笔开几手"（默认关闭时 = 固定手数）
         lots, why_vol = self._size_position(sig)
         if lots <= 0:
             self.store.update_signal_action(sig.key, "risk_block", why_vol)
@@ -614,35 +553,8 @@ class TradingEngine(ReconcileMixin):
                           reason=why_vol, bar_date=bar_date)
             return
 
-        # ════════════════════════════════════════════════════════════════
-        # 资金闸门（2026-09-06 用户拍板）：
-        #   开仓前看"账户可用资金"够不够开 1 手门槛 K = 一手保证金 + 名义价值×risk_unit_pct。
-        #     · 不够 → 拒绝入场（入场不成功，不影响解锁/离场）
-        #     · 够   → 用资金允许的最大手数 X = floor(可用/K) 兜底，sizer 算出的
-        #              手数超 X 则截断，保证这笔报单总手数 ≤ X，绝不超资金上限。
-        #   无仓管固定手数模式同样受 K 门槛约束：连 1 手的钱都不够则不入场。
-        # ════════════════════════════════════════════════════════════════
-        blocked, cap = self._capital_gate(sig)
-        if blocked:
-            self.store.update_signal_action(sig.key, "risk_block", "capital_insufficient")
-            self.ev.write("capital_block", key=sig.key, side=str(decision.side or sig.side),
-                          reason="insufficient_equity", bar_date=bar_date,
-                          want_volume=lots)
-            return
-        if cap is not None and lots > cap:
-            self.ev.write("capital_capped", key=sig.key, side=str(decision.side or sig.side),
-                          reason="equity_cap", want=lots, cap=cap, bar_date=bar_date)
-            lots = cap
-
-        # 手数上限以 sizer 的截断上限为准（仓位管理算法结果的截断上限，默认中金所 20 手）。
-        # 非仓位管理下实际手数已由 sizer 固定为 risk.max_volume，这里上限放宽到 20 不影响行为。
-        ok, why = self.risk.check_open(decision.side or sig.side, lots, bar_date,
-                                       max_volume=self.sizer.max_volume)
-        if not ok:
-            self.store.update_signal_action(sig.key, "risk_block", why)
-            self.ev.write("risk_block", key=sig.key, side=str(decision.side or sig.side),
-                          reason=why, bar_date=bar_date)
-            return
+        # （2026-09-08：原资金闸门 capital_gate 与风控五道硬闸门 risk.check_open
+        #   整体删除 —— 开仓只受"手数定档 + 交易所单笔上限/持仓笔数上限"约束。）
 
         self._open_position(sig, decision.side or sig.side, lots)
 
@@ -650,49 +562,12 @@ class TradingEngine(ReconcileMixin):
     def _size_position(self, sig: "Signal") -> "Tuple[int, str]":
         """问仓位管理"这笔开几手"。默认关闭仓位管理时就是固定手数。
 
-        喂给 PositionSizer 的三个输入都做了降级：
-          · 权益   —— broker.equity()；离线/未登录返回 None → sizer 回退 fallback_volume
-          · 止损距 —— 信号 K 线极值距离（与 LayeredExitPolicy 的 R 同源）
-          · ATR    —— exit_policy.current_atr()；策略不支持或样本不足 → None
+        2026-09-08 精简：只保留固定手数，不再喂 equity/止损距/ATR。
         返回 (手数, 原因)；手数 ≤ 0 表示不开仓。
         """
-        equity = None
-        fn = getattr(self.broker, "equity", None)
-        if callable(fn):
-            try:
-                equity = fn(self.sizer.equity_source)
-            except Exception:
-                equity = None
+        return self.sizer.size()
 
-        price = float(sig.price or 0.0)
-        if price <= 0 and self.last_bar is not None:
-            price = float(self.last_bar.close or 0.0)
-
-        # 止损距离：多单看信号 K 线最低价，空单看最高价（与 LayeredExitPolicy 的 R 同源）
-        stop_dist = None
-        try:
-            stop_dist = abs(float(sig.price) - float(sig.low)) if sig.is_buy \
-                else abs(float(sig.high) - float(sig.price))
-        except (TypeError, ValueError):
-            stop_dist = None
-
-        atr = None
-        atr_fn = getattr(self.exit_policy, "current_atr", None)
-        if callable(atr_fn):
-            try:
-                atr = atr_fn()
-            except Exception:
-                atr = None
-
-        return self.sizer.size(equity=equity, price=price,
-                               stop_distance_points=stop_dist, atr_points=atr)
-
-    # ---------------- 资金闸门 ----------------
-    def _capital_gate(self, sig: "Signal"):
-        """资金闸门薄委托：算法实现在 Risk/PositionSizing.py 的 capital_gate()。"""
-        return capital_gate(sig, broker=self.broker, sizer=self.sizer,
-                            spec=self.spec, initial_cash=self.risk.cfg.initial_cash,
-                            last_bar=self.last_bar)
+    # （2026-09-08：原 `_capital_gate` 资金闸门薄委托已随资金闸门功能整体删除。）
 
     # ---------------- 开 / 平 ----------------
     def _open_position(self, sig: Signal, side, volume: int) -> None:
@@ -922,7 +797,7 @@ class TradingEngine(ReconcileMixin):
                 signal_key=pos.signal_key, exit_plan_name=pos.exit_plan.name,
                 exit_plan_params=pos.exit_plan.params)
             self.store.save_trade(t)
-            self.risk.on_trade_closed(net, pos.volume)
+            # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
 
             # E3.3 关键：从 book 移除（多仓版必须 remove 单仓版无需）
             self.positions.remove(pos)
@@ -1078,14 +953,9 @@ class TradingEngine(ReconcileMixin):
             new_lots = 0
 
         if new_lots > 0:
-            bar_date = self.last_bar.date if self.last_bar else sig.date
-            ok, why = self.risk.check_open(side, new_lots, bar_date,
-                                           max_volume=self.sizer.max_volume)
-            if not ok:
-                self.ev.write("risk_block", key=sig.key, side=str(side),
-                              reason=why, bar_date=bar_date,
-                              note="解锁已完成 {} 手，补开部分被风控拦截".format(v))
-                new_lots = 0
+            # （2026-09-08：原 RiskGate.check_open 补开风控检查已随五道硬闸门删除；
+            #   补开仍受簿容量守卫（上方）+ _open_position 内交易所单笔上限约束。）
+            pass
 
         self.ev.write("unlock_result", key=sig.key, unlocked=v, want=want,
                       new_open=new_lots, why=why_vol,
@@ -1133,7 +1003,7 @@ class TradingEngine(ReconcileMixin):
             exit_plan_params=target.exit_plan.params,
         )
         self.store.save_trade(t)
-        self.risk.on_trade_closed(net, target.volume)
+        # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
         self.positions.remove(target)
 
         self.ev.write("unlock", symbol=t.symbol, side=str(t.side),

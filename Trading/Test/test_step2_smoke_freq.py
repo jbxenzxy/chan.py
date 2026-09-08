@@ -79,19 +79,9 @@ for freq in ("30m", "5m", "1m", "15s"):
 
         prof = cfg.period_profile
         check("period_profile 选到档案", getattr(prof, "freq", None), freq)
-        # 6 项影子覆盖落点（BASELINE 下 profile 值 == schema 默认 → 幂等）
+        # 周期敏感影子覆盖落点（BASELINE 下 profile 值 == schema 默认 → 幂等）
         check("source.signal_max_age_minutes == profile",
               cfg.source.signal_max_age_minutes, prof.signal_max_age_minutes)
-        check("exit_params.max_hold_bars == profile",
-              cfg.exit_params.max_hold_bars, prof.max_hold_bars)
-        check("exit_params.max_hold_seconds == profile",
-              cfg.exit_params.max_hold_seconds, prof.max_hold_seconds)
-        check("exit_params.eod_lead_bars == profile",
-              cfg.exit_params.eod_lead_bars, prof.eod_lead_bars)
-        check("exit_params.session_end_hhmm == profile",
-              cfg.exit_params.session_end_hhmm, prof.session_end_hhmm)
-        check("risk.max_trades_per_day == profile",
-              cfg.risk.max_trades_per_day, prof.max_trades_per_day)
 
         check("引擎构造 TradingEngine", type(engine), TradingEngine)
         check("入场策略 DefaultEntryPolicy", type(engine.entry_policy),

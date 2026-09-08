@@ -78,7 +78,6 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Risk.RiskGate import RiskGate  # noqa: E402
 from Trading.Risk.PositionSizing import PositionSizer  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
@@ -145,7 +144,6 @@ def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
-    cfg.risk.enforce_session = False
     # 严格模式：sizing 是配置模型，覆盖走 SizingConfig（未知键会报错）
     sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
     sizing.update({"enabled": False, "fixed_volume": fixed_volume,
@@ -212,13 +210,6 @@ check("config.broker_params 无 overprice_points_fok 键",
 check("超价合并为单参数 overprice_points=1.0",
       (DEFAULT_CONFIG.get("broker_params") or {}).get("overprice_points"), 1.0)
 check("sizer 保留 unlock_no_new_open", hasattr(sz, "unlock_no_new_open"), True)
-
-import inspect  # noqa: E402
-_sig = inspect.signature(RiskGate.check_open)
-check("RiskGate.check_open 无 position_count 参数",
-      "position_count" in _sig.parameters, False)
-check("RiskGate.check_open 无 existing_same_side 参数",
-      "existing_same_side" in _sig.parameters, False)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -347,15 +338,17 @@ with tmp_dir() as td:
     check("fixed_volume=8：簿 1 笔 8 手", eng.positions.positions[0].volume, 8)
 
 with tmp_dir() as td:
-    # 场景 1：fixed_volume=25 > 中金所 20 手上限，sizer.max_volume 默认 20 → 风控单笔上限拦截
+    # 场景 1：fixed_volume=25 > sizer.max_volume 默认 20 → 按 sizer 上限截断到 20 手开
+    #   （原"风控单笔上限 → risk_block"已随硬闸门删除；现在由 sizer.max_volume 截断）
     eng = make_engine(td, max_open_positions=3, fixed_volume=25, cfg_risk_max_volume=30)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-4-25", is_buy=True)
     eng.on_signal(sig)
-    check("fixed_volume=25（>20）：零报单", len(eng.broker.orders), 0)
-    check("fixed_volume=25（>20）：signal_action=risk_block（单笔上限 20 拦）",
-          eng.store.signal_action(sig.key), "risk_block")
-    check("fixed_volume=25（>20）：簿空", eng.positions.is_empty(), True)
+    check("fixed_volume=25（>20）：截断到 sizer.max_volume=20 → 1 单 20 手",
+          len(eng.broker.orders), 1)
+    check("fixed_volume=25（>20）：该单 20 手", eng.broker.orders[0].volume, 20)
+    check("fixed_volume=25（>20）：signal_action=opened",
+          eng.store.signal_action(sig.key), "opened")
 
 with tmp_dir() as td:
     # 场景 2：sizing.max_volume 显式设 30（>20）→ 风控放行 → 引擎按交易所硬上限 20 拒单

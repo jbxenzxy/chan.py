@@ -177,7 +177,7 @@ class ReconcileMixin:
                 signal_key=pos.signal_key, exit_plan_name=pos.exit_plan.name,
                 exit_plan_params=pos.exit_plan.params)
             self.store.save_trade(t)
-            self.risk.on_trade_closed(net, pos.volume)
+            # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
 
             self.positions.remove(pos)
             self.ev.write("position_externally_closed",

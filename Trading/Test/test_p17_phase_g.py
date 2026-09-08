@@ -316,7 +316,6 @@ def make_engine(tmpdir, *, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 10
-    cfg.risk.enforce_session = False
     cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
     spec = InstrumentSpec()
     if broker is None:
