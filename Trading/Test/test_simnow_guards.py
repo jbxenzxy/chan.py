@@ -41,6 +41,7 @@ if _REPO:
     sys.path.insert(0, _REPO)
 
 import Trading.Broker.Base as _base_mod          # noqa: E402  (触发包初始化)
+from Trading.Config import BrokerConfig           # noqa: E402  Step 2.3: _make 注入 params
 from Trading.Infra.Types import Side              # noqa: E402
 
 # ---- 以 Trading.Broker 的包上下文 exec 加载同仓库的加固版 SimNow.py ----
@@ -118,6 +119,9 @@ def _make(api: FakeApi, quote) -> SimNowBroker:
     b._api = api
     b._quote = quote
     b._trade_symbol = "CFFEX.IF2509"
+    # Step 2.3：_timing() 严格读取 channel 时序参数（如 quote_stale_seconds），
+    # __new__ 跳过 __init__ 后 params 缺失 → 注入完整 BrokerConfig 快照。
+    b.params = BrokerConfig().model_dump()
     return b
 
 

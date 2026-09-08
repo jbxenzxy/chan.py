@@ -4,7 +4,7 @@
 > 拿到本文档就能**按部就班续推**——知道在做什么、为什么、做到哪一步、下一步怎么走、有哪些坑。
 >
 > **生成日期**：2026-09-08（工作日）
-> **状态**：Step 2.0 / 2.0.3b / 2.1 / 2.2 已完成；2.1 已合入 real project，**2.2 待用户合并**；**下一步是 2.3（Broker/Channel 超时集中）**
+> **状态**：Step 2.0 / 2.0.3b / 2.1 / 2.2 / 2.3 已完成；2.1 已合入 real project，**2.2 / 2.3 待用户合并**；**下一步是 2.4（重复常量合并，最小 phase）**
 > **维护约定**：本文档是**进度 SSOT**。每次续推前先读 §4（当前精确状态）与 §5（下一步）；每次做完一段回来更新 §4 状态表。
 
 ---
@@ -92,6 +92,7 @@
 | **合并校验** | 拉 GitHub `custom-dev` 最新，验证 2.0.3b 合入完整（HEAD=`fc461277...`，2026-09-08 11:34）| — | ✅ |
 | **2.1** | **周期敏感参数入 `PeriodProfile`**：8 项收口到 `PERIOD_PROFILES`（每周期一份），`TradingConfig` 构造期影子覆盖进 flat 字段 | `step2_1_Trading.zip`、`Step2_1_交付说明_周期参数入Profile.md`、`Step2_1_可行性分析_周期参数入Profile.md/.html` | ✅ **已合 real project** |
 | **2.2** | **引擎常量 EngineConfig 化**：`_close_retry_bars=5`/`_close_max_streak=20`/`_unlock_stuck_bars=5` 三项硬编码收口到 `TradingConfig.engine`（拍板 E1+F1+G2）；`PositionBook.DEFAULT_MAX` 注释语义收窄（G2）；`main.py` 4.5h 收口到 `PeriodProfile.SESSION_SECS` | `step2_2_Trading.zip`（65 文件/304290B）、`Step2_2_交付说明_引擎常量EngineConfig化.md`、`Step2_2_可行性分析_引擎常量EngineConfig化.md` | ✅ 待用户合并 |
+| **2.3** | **Broker/Channel 超时集中**：SimNow.py 散落的 10 处超时/等待/退避因子收口到 `ChannelTimingConfig`（挂 `BrokerConfig.channel`，拍板 A1+B1+C1）；SimNow 新增 `_timing()` 严格读取；`_QUOTE_STALE_SECONDS` 模块常量删除；微轮询 sleep 换命名常量 `_POLL_INTERVAL_FAST/SLOW` | `step2_3_Trading.zip`（66 文件/308832B）、`Step2_3_交付说明_BrokerChannel超时集中.md`、`Step2_3_可行性分析_BrokerChannel超时集中.md` | ✅ 待用户合并 |
 
 ### 3.1 Step 2.0.3b 删除策略选择器的最终代码形态（2.1 继承此基础）
 
@@ -134,9 +135,9 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 
 | 项 | 值 |
 |---|---|
-| 活跃编码沙盒 | `sandbox/Trading/`（含 2.2 全部改动 + 26 个 test_） |
-| 最新交付包 | `output/step2_2_Trading.zip`（65 文件 / 304290 字节） |
-| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1/2.2**——需用户推送） |
+| 活跃编码沙盒 | `sandbox/Trading/`（含 2.3 全部改动 + 27 个 test_） |
+| 最新交付包 | `output/step2_3_Trading.zip`（66 文件 / 308832 字节） |
+| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1/2.2/2.3**——需用户推送） |
 | `sandbox/chan.py` git clone | **已过时**，停在 `5478def`（仅作合并校验，勿当工作副本） |
 
 ### 4.3 已知阻塞项（调值的真正瓶颈）
@@ -167,8 +168,8 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | Phase | 主题 | 涉及 | 估算 | 前置 |
 |---|---|---|---|---|
 | **2.2** | **引擎常量 EngineConfig 化**：D-1/2/3（close 重试/MAX 连续/卡死解锁三常量）+ D-6 PositionBook 默认容量显式化 | ~80 行 | ✅ **已完成（2026-09-08）** |
-| **2.3** | Broker/Channel 超时集中：~18 处 wait_update/重试秒数 → 新 `ChannelTimingConfig` 附在 `BrokerConfig` 内 | ~150 行 | **⏳ 下一步** |
-| **2.4** | 重复常量合并：`20`(B-9)+`20`(D-4) → `_CFFEX_LIMIT_MAX`；删 `0.15` 重复兜底 | ~30 行 | 无（独立） |
+| **2.3** | Broker/Channel 超时集中：~18 处 wait_update/重试秒数 → 新 `ChannelTimingConfig` 附在 `BrokerConfig` 内 | ~150 行 | ✅ **已完成（2026-09-08，实际收口 10 项 + 2 命名常量）** |
+| **2.4** | 重复常量合并：`20`(B-9)+`20`(D-4) → `_CFFEX_LIMIT_MAX`；删 `0.15` 重复兜底 | ~30 行 | **⏳ 下一步（最小 phase，无前置）** |
 | **2.5** | Source/Recorder 重连参数化：重连基/最大/重试 → `SourceConfig.reconnect_*` | ~50 行 | 无 |
 | **2.6** | 测试 + 启动校验：每 phase 加测试；6 段全完跑 `--freq {30m,5m,1m,15s}` 启动冒烟全通 | ~150 行 | 全部 |
 | **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证 | 数据到位才开 |
@@ -211,6 +212,8 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `交接文档_chanpy_Trading自动下单调参归一化.md/.html` | **本文档（总入口）** |
 | `Step2_路线图_调参项归一.md/.html` | Phase 全览（进度以本文档 §4 为准） |
 | `Step2_0_交付说明_配置分层与周期敏感归总.md` | 2.0–2.0.3b 全史 + 删除选择器实证 |
+| `Step2_3_交付说明_BrokerChannel超时集中.md` | 2.3 交付说明 |
+| `Step2_3_可行性分析_BrokerChannel超时集中.md` | 2.3 设计决策（A1/B1/C1） |
 | `Step2_2_交付说明_引擎常量EngineConfig化.md` | 2.2 交付说明 |
 | `Step2_2_可行性分析_引擎常量EngineConfig化.md` | 2.2 设计决策（E1/F1/G2） |
 | `Step2_1_交付说明_周期参数入Profile.md` | 2.1 交付说明 |
@@ -219,7 +222,8 @@ exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
 | `Step1_四周期逻辑正确性审计.md/.html` | Step 1A |
 | `Step1B_交付说明_四周期逻辑正确性修复.md` | Step 1B |
 | `IF_15秒周期迁移分析.md/.html` | 专项分析 |
-| `step2_2_Trading.zip`（最新） | **当前最新交付包（待用户合并）** |
+| `step2_3_Trading.zip`（最新） | **当前最新交付包（待用户合并）** |
+| `step2_2_Trading.zip` | 2.2 交付包（待用户合并） |
 | `step2_1_Trading.zip` | 2.1 交付包（已合 real project） |
 | `step2_0_Trading.zip` | 2.0.3b 交付包 |
 | `step1b_四周期修复_Trading.zip` / `step1b_changes.patch` | Step 1B |

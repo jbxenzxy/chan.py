@@ -151,6 +151,20 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "close_max_streak": 20,            // 连续失败这么多根后认定幻影持仓，强制清除
     "unlock_stuck_bars": 5             // UNLOCK 报单后多少根 bar 触发二次确认复核
   },
+  "broker_params": {
+    "channel": {
+      "quote_stale_seconds": 30.0,     // 行情快照陈旧阈值（超过判陈旧→对账跳过该侧）
+      "connect_backoff_factor": 1.5,   // 登录失败退避增长因子（每轮 backoff ×此值）
+      "probe_alive_timeout": 8.0,      // CTP"用户不活跃"探活窗口秒数
+      "keepalive_wait": 0.2,           // poll_market 心跳 wait_update 窗口秒数
+      "baseline_settle_wait": 0.5,     // 下单前持仓快照 settle 秒数
+      "recover_settle_wait": 5.0,      // 恢复路径：等 CTP 推完未确认回报秒数
+      "position_ok_timeout": 10.0,     // 平仓前等持仓回报可见秒数
+      "verify_delta_timeout": 5.0,     // 持仓增量精确校验窗口秒数
+      "underlying_map_timeout": 20.0,  // 主连→主力合约映射等待秒数
+      "cancel_settle_wait": 5.0        // 超时撤单后等最后一笔回报秒数
+    }
+  },
   "source": { "type": "replay", "replay_dir": "./replay_data",
               "sse_base": "http://127.0.0.1:18081",
               "symbol": "KQ.m@CFFEX.IF", "freq": "5m" }

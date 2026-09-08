@@ -89,6 +89,7 @@ __all__ = [
     "EntryConfig", "ExitConfig",
     "RiskConfig", "SizingConfig",
     "BrokerConfig",
+    "ChannelTimingConfig",
     "EngineConfig",
     # 周期敏感配置归总（Step 2 调参单一入口）
     "PERIOD_SENSITIVE_FIELDS", "period_sensitive_fields",
@@ -332,6 +333,33 @@ class SizingConfig(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
+# ⑥a 通道时序配置（Step 2.3 归一：原 Broker/SimNow.py 散落的超时/等待/退避因子）
+#    仅 simnow/live 生效（dry_run 无 tqsdk 通道，不消费本组）。
+#    全部默认值 == 原硬编码值（行为等价）。
+# ════════════════════════════════════════════════════════════════════
+class ChannelTimingConfig(BaseModel):
+    """通道时序参数（Step 2.3：原 SimNow.py 散落的 10 处超时/等待收口）。
+
+    语义分组：与 BrokerConfig 的**报单参数**（overprice/追价/fill_timeout）区分——
+    本组是「通道层」的等待与重试节奏，报单语义的参数留在 BrokerConfig 平级字段。
+
+    单一事实源：默认值只在本模型维护，SimNow.py 经 _timing() 严格读取（无兜底）。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    quote_stale_seconds: float = 30.0   # 行情快照陈旧阈值（超过判陈旧→对账跳过该侧；原 _QUOTE_STALE_SECONDS）
+    connect_backoff_factor: float = 1.5  # 登录失败退避增长因子（每轮 backoff ×此值；原硬编码 1.5）
+    probe_alive_timeout: float = 8.0     # CTP"用户不活跃"探活窗口秒数（原 _probe_alive 默认）
+    keepalive_wait: float = 0.2          # poll_market 心跳 wait_update 窗口秒数（引擎每 bar 调一次）
+    baseline_settle_wait: float = 0.5    # 下单前持仓快照 settle：等 CTP 延迟回报同步（连调两次）
+    recover_settle_wait: float = 5.0     # 恢复路径：给 CTP 推完未确认回报的窗口秒数（连调两次）
+    position_ok_timeout: float = 10.0    # 平仓前等持仓回报可见秒数（CTP 看不到持仓会拒单）
+    verify_delta_timeout: float = 5.0    # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
+    underlying_map_timeout: float = 20.0  # 主连→主力合约映射等待秒数（get_quote.underlying_symbol）
+    cancel_settle_wait: float = 5.0      # 超时撤单后等最后一笔回报的窗口秒数
+
+
+# ════════════════════════════════════════════════════════════════════
 # ⑥ Broker 适配器层（Broker，可替换）配置
 #    下单/成交复核/撤单（报单升级 FOK）。账号/密码不在此处。
 #    （类名 2026-09-08 由 BrokerConfig 改为 BrokerConfig，与「每层一个 *Config」约定对齐；
@@ -359,6 +387,8 @@ class BrokerConfig(BaseModel):
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"        # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False  # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
+    # —— 通道时序（Step 2.3 归一，见 ChannelTimingConfig docstring）——
+    channel: ChannelTimingConfig = Field(default_factory=lambda: ChannelTimingConfig())
 
 
 class EngineConfig(BaseModel):

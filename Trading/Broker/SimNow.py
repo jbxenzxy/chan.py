@@ -22,7 +22,7 @@ SimNow 仿真 broker（M2b）
       断连→自动重连窗口内 wait_update 正常返回不抛异常，get_position 缓存陈旧——
       曾致换日对账把真实存在的 2 手多单误清（reconcile_real_zero）。故 real_position
       读仓前先校验行情快照新鲜度：IF 交易时段每 0.5s 一个 tick，quote.datetime 停滞
-      超过 _QUOTE_STALE_SECONDS（30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
+      超过 BrokerConfig.channel.quote_stale_seconds（默认 30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
       覆盖"断连重连中"与"TCP 假死"两类场景，且不依赖 tqsdk 版本。
     - 全 FOK 报单（2026-09-06 全量化改造）：四类报单（OPEN 开仓 / UNLOCK 解锁 /
       LOCK 锁仓 / CLOSE 平仓）全部附加 CTP 报单属性 advanced="FOK"——限价立即
@@ -102,7 +102,11 @@ _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 #   跨越本地日期变更，quote.datetime 的交易日语义也会变化。届时需把本判据
 #   从"绝对时钟差"改为"按合约交易时段表判断是否处于应报价区间"（参考
 #   Infra/InstrumentSpec.py 扩展交易时段元数据），否则夜盘对账会被恒跳过。
-_QUOTE_STALE_SECONDS = 30.0
+# ── 微轮询节奏（Step 2.3，拍板 C1：文件级命名常量，不进配置面板）────────
+#   行情陈旧阈值已收口到 BrokerConfig.channel.quote_stale_seconds（_timing 读取）；
+#   0.1/0.2 的纯轮询节奏无实际调参价值，只消灭字面量、收口为命名常量。
+_POLL_INTERVAL_FAST = 0.1   # _verify_position_delta / _wait_position_ok 轮询
+_POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
 
 
 def _position_total(api, trade_symbol: str, side: str) -> int:
@@ -160,7 +164,7 @@ def _verify_position_delta(api, trade_symbol: str, side: str,
         # 精确容差匹配：cur 应在 [target-1, target+1] 区间内
         if abs(cur - target) <= 1:
             return True
-        time.sleep(0.1)
+        time.sleep(_POLL_INTERVAL_FAST)
     return False
 
 
@@ -345,6 +349,19 @@ class SimNowBroker(Broker):
             "broker 参数 '{}' 未在 BrokerConfig（Trading/Config.py）定义，"
             "或构造 broker 时传入的 broker_params 不完整".format(key))
 
+    def _timing(self, key: str) -> Any:
+        """读通道时序参数（Step 2.3 归一）：只从 BrokerConfig.channel 里取（严格模式，无兜底）。
+
+        与 _param 同一纪律：params["channel"] 由 ChannelTimingConfig 构造，键必然齐全；
+        取不到说明配置模型漏了字段 —— 属于代码 bug，直接抛异常暴露。
+        """
+        v = self.params.get("channel", {}).get(key)
+        if v is not None:
+            return v
+        raise KeyError(
+            "通道时序参数 '{}' 未在 ChannelTimingConfig（Trading/Config.py）定义，"
+            "或构造 broker 时传入的 broker_params.channel 不完整".format(key))
+
     # ---------------- 连接与合约映射 ----------------
     def _connect(self) -> None:
         """登录 CTP（SimNow 仿真 / 实盘期货公司），带重试。
@@ -388,7 +405,7 @@ class SimNowBroker(Broker):
                         "CTP({}) 第 %d/%d 次登录失败（%.1fs 后重试）: %s",
                         market, attempt, max_attempts, backoff, last_err)
                     time.sleep(backoff)
-                    backoff *= 1.5          # 5s → 7.5s → 11.25s
+                    backoff *= self._timing("connect_backoff_factor")  # 默认 1.5：5s → 7.5s → 11.25s
                 continue
 
             # 登录成功，做一次探活：确认连接真的能收数据（挡"用户不活跃"的僵尸连接）
@@ -405,7 +422,7 @@ class SimNowBroker(Broker):
                         "CTP({}) 第 %d/%d 次探活失败（%.1fs 后重试）",
                         market, attempt, max_attempts, backoff)
                     time.sleep(backoff)
-                    backoff *= 1.5
+                    backoff *= self._timing("connect_backoff_factor")
                 continue
 
             self._resolve_trade_symbol()
@@ -434,17 +451,21 @@ class SimNowBroker(Broker):
         if self._api is None:
             return
         try:
-            self._api.wait_update(deadline=time.time() + 0.2)
+            self._api.wait_update(deadline=time.time() + self._timing("keepalive_wait"))
         except Exception:
             # 心跳失败不抛——下一根 bar 会再试，真断连了 submit 会自己报错
             pass
 
-    def _probe_alive(self, timeout_s: float = 8.0) -> bool:
+    def _probe_alive(self, timeout_s: Optional[float] = None) -> bool:
         """探活：拿一次行情/账户数据，确认连接不是"用户不活跃"的僵尸连接。
 
         CTP 的"用户不活跃"不会抛异常，TqApi 构造也不报错，只有真正 wait_update
         收数据时才暴露（表现为超时或连接被断）。所以登录后必须探一次。
+        Step 2.3：timeout_s 缺省时走 BrokerConfig.channel.probe_alive_timeout
+        （原硬编码 8.0 收口）；显式传入优先。
         """
+        if timeout_s is None:
+            timeout_s = self._timing("probe_alive_timeout")
         try:
             self._api.wait_update(deadline=time.time() + timeout_s)
             # 拿账户对象，触发一次真实数据请求
@@ -464,7 +485,7 @@ class SimNowBroker(Broker):
         try:
             q = self._api.get_quote(sig)
             hit = self._wait(lambda: bool(getattr(q, "underlying_symbol", None)),
-                             timeout_s=20.0)
+                             timeout_s=self._timing("underlying_map_timeout"))
             if hit and q.underlying_symbol:
                 self._trade_symbol = q.underlying_symbol
                 self.spec.trade_symbol = q.underlying_symbol
@@ -480,8 +501,8 @@ class SimNowBroker(Broker):
         """
         try:
             # 给 CTP 5 秒推完所有未确认回报
-            self._api.wait_update(deadline=time.time() + 5.0)
-            self._api.wait_update(deadline=time.time() + 5.0)
+            self._api.wait_update(deadline=time.time() + self._timing("recover_settle_wait"))
+            self._api.wait_update(deadline=time.time() + self._timing("recover_settle_wait"))
             pos = self._api.get_position()
             items = pos.values() if isinstance(pos, dict) else [pos]
             for v in items:
@@ -613,8 +634,8 @@ class SimNowBroker(Broker):
     def _take_baseline(self, side_key: str) -> int:
         """P4/P5 下单前持仓快照（等待 CTP 延迟回报同步完毕）。"""
         try:
-            self._api.wait_update(deadline=time.time() + 0.5)
-            self._api.wait_update(deadline=time.time() + 0.5)
+            self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
+            self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
             return _position_total(self._api, self._trade_symbol, side_key)
         except Exception:
             return 0
@@ -661,7 +682,7 @@ class SimNowBroker(Broker):
         5 bar 后 trade_confirmed 复核。
         """
         # P0 守卫：等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
-        if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
+        if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "等待持仓更新超时（>10s），可能上游未同步")
         direction = _CLOSE_DIRECTION[side]  # 平多=SELL / 平空=BUY（2026-09-05 方向修复）
@@ -715,7 +736,7 @@ class SimNowBroker(Broker):
         else:
             offset = "CLOSETODAY" if bool(self.spec.close_today_first) else "CLOSEANY"
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
-        if not self._wait_position_ok(side, int(volume), timeout_s=10.0):
+        if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                   "等待持仓更新超时（>10s），可能上游未同步")
         side_key = "LONG" if side is Side.LONG else "SHORT"
@@ -852,7 +873,8 @@ class SimNowBroker(Broker):
         if is_fully_filled:
             verified = _verify_position_delta(self._api, self._trade_symbol, side_key,
                                              baseline=baseline,
-                                             expected_delta=expected_delta, timeout_s=5.0)
+                                             expected_delta=expected_delta,
+                                             timeout_s=self._timing("verify_delta_timeout"))
             if not verified:
                 self._note_position_lag(signal_key, action, side_key,
                                         baseline, expected_delta)
@@ -926,7 +948,7 @@ class SimNowBroker(Broker):
         # 超时撤单
         try:
             self._api.cancel_order(order.order_id)
-            self._api.wait_update(deadline=time.time() + 5)
+            self._api.wait_update(deadline=time.time() + self._timing("cancel_settle_wait"))
         except Exception:
             pass
 
@@ -936,16 +958,20 @@ class SimNowBroker(Broker):
             self._api.wait_update(deadline=deadline)
             if predicate():
                 return True
-            time.sleep(0.2)
+            time.sleep(_POLL_INTERVAL_SLOW)
         return False
 
     def _wait_position_ok(self, side: Side, volume: int,
-                          timeout_s: float = 10.0) -> bool:
+                          timeout_s: Optional[float] = None) -> bool:
         """等 tqsdk position 字段更新到 ≥ volume（防 CTP "平仓量超过持仓量"）。
 
         上一笔 open 成交后，tqsdk 端 position.pos_long_today 等字段不会立刻同步，
         需要若干次 wait_update 推过来。如果直接发 close，CTP 端"看不到"对应持仓会拒。
+        Step 2.3：timeout_s 缺省时走 BrokerConfig.channel.position_ok_timeout
+        （原硬编码 10.0 收口）；生产调用点均显式传入。
         """
+        if timeout_s is None:
+            timeout_s = self._timing("position_ok_timeout")
         try:
             pos = self._api.get_position(self._trade_symbol)
         except Exception:
@@ -966,7 +992,7 @@ class SimNowBroker(Broker):
                     return True
             except Exception:
                 pass
-            time.sleep(0.1)
+            time.sleep(_POLL_INTERVAL_FAST)
         return False
 
     def _note_reject(self, signal_key: str, note: str, order, last_msg: str) -> None:
@@ -1017,7 +1043,7 @@ class SimNowBroker(Broker):
         """行情快照是否陈旧（True = 不可信，读仓应降级 None）。
 
         判据：quote.datetime（交易所本地时间 = 本机北京时间）距 now 超过
-        _QUOTE_STALE_SECONDS。datetime 为空（订阅后首帧未到 / 格式异常）→ 判陈旧。
+        BrokerConfig.channel.quote_stale_seconds。datetime 为空（订阅后首帧未到 / 格式异常）→ 判陈旧。
         """
         q = self._quote
         if q is None:
@@ -1033,7 +1059,7 @@ class SimNowBroker(Broker):
             ts = time.mktime(time.strptime(dt.split(".")[0], "%Y-%m-%d %H:%M:%S"))
         except Exception:
             return True
-        return (time.time() - ts) > _QUOTE_STALE_SECONDS
+        return (time.time() - ts) > self._timing("quote_stale_seconds")
 
     def _channel_unstable(self) -> bool:
         """通道不稳定 / 数据不可信 → True，读仓应跳过（real_position 返回 None）。
@@ -1049,7 +1075,7 @@ class SimNowBroker(Broker):
         因此采用**行情新鲜度判据**（不依赖 tqsdk 版本）：
 
           · wait_update 抛异常（断连）→ 不稳定；
-          · 行情快照 quote.datetime 停滞 > _QUOTE_STALE_SECONDS（断连重连中 /
+          · 行情快照 quote.datetime 停滞 > channel.quote_stale_seconds（断连重连中 /
             TCP 假死 / 首帧未到）→ 数据不可信。IF 交易时段每 0.5s 一个 tick，
             30s 阈值足够宽容。
 
