@@ -248,9 +248,13 @@ check("price=NaN -> fallback", make_sizer(mode="capital_pct", capital_pct=1.0).s
 check("非法 mode -> 构造期报错（严格模式）",
       _raises(lambda: make_sizer(mode="no_such_mode", fixed_volume=2,
                                  max_volume=10)), True)
-# margin_rate=0 时按默认 15% 兜底
-check("margin_rate=0 -> 内部兜底 15%",
-      make_sizer(mode="capital_pct", margin_rate=0.0).per_lot_margin(PRICE), 204750.0)
+# Step 2.4：删除 PositionSizing 内部 0.15 第二默认源后，
+# margin_rate=0 = 显式"不做保证金折算"（唯一默认源在 SizingConfig.margin_rate=0.15）
+check("margin_rate=0 -> per_lot_margin=0（不再静默兜 15%）",
+      make_sizer(mode="capital_pct", margin_rate=0.0).per_lot_margin(PRICE), 0.0)
+check("margin_rate=0 且 capital_pct 模式 -> size 走 bad_param fallback",
+      make_sizer(mode="capital_pct", capital_pct=1.0, margin_rate=0.0).size(
+          equity=1_000_000.0, price=PRICE)[0], 1)
 
 
 # =========================================================

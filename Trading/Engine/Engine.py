@@ -28,7 +28,7 @@ from ..Infra.PeriodProfile import (
 )
 from .PositionBook import PositionBook, PositionBookError
 from ..Risk.RiskGate import RiskGate
-from ..Risk.PositionSizing import capital_gate
+from ..Risk.PositionSizing import capital_gate, CFFEX_LIMIT_MAX
 from .Reconcile import ReconcileMixin
 from ..Risk.PositionSizing import PositionSizer
 from ..Infra.Store import Store
@@ -714,14 +714,15 @@ class TradingEngine(ReconcileMixin):
                           reason="zero_volume", volume=volume)
             return
 
-        # 中金所限价单每次最大下单 20 手（股指期货，交易所交易细则）
-        _CFFEX_LIMIT_MAX = 20
-        if volume > _CFFEX_LIMIT_MAX:
+        # 中金所限价单每次最大下单 20 手（股指期货，交易所交易细则）。
+        # Step 2.4：与 sizing.max_volume 的默认截断上限共用 SSOT 常量
+        # CFFEX_LIMIT_MAX（定义在 Risk/PositionSizing.py）。
+        if volume > CFFEX_LIMIT_MAX:
             self.store.update_signal_action(
                 sig.key, "rejected", "over_exchange_limit")
             self.ev.write("order_rejected", key=sig.key,
                           reason="over_exchange_limit", volume=volume,
-                          limit=_CFFEX_LIMIT_MAX,
+                          limit=CFFEX_LIMIT_MAX,
                           note="一笔报单手数超过中金所限价单笔上限（20 手），直接拒单")
             return
 

@@ -42,8 +42,9 @@ _VALID_MODES = ("fixed", "capital_pct", "atr_risk")
 _VALID_EQUITY_SRC = ("available", "balance")
 
 # 中金所限价单每次最大下单手数（IF/IH/IC/IM 同，交易所交易细则）。
-# 仓位管理开启、sizing.max_volume 未显式配置（0）时的默认截断上限。
-_CFFEX_SINGLE_ORDER_MAX = 20
+# SSOT（Step 2.4 合并）： sizing.max_volume 未显式配置（0）时的默认截断上限，
+# 也是引擎开仓前的交易所限单检查（Engine._do_open）的上限——两处共用本常量。
+CFFEX_LIMIT_MAX = 20
 
 
 class PositionSizer:
@@ -92,7 +93,7 @@ class PositionSizer:
         # 硬上限（仓位管理算法结果的截断上限）：
         # 未显式配置（0）时默认中金所单笔上限 20；显式配置则用配置值。
         cfg_max = int(p.max_volume or 0)
-        self.max_volume = cfg_max if cfg_max > 0 else _CFFEX_SINGLE_ORDER_MAX
+        self.max_volume = cfg_max if cfg_max > 0 else CFFEX_LIMIT_MAX
         # 下限：算出来小于它时提升到它（默认 1，保证"信号来了就交易"的历史行为）
         self.min_volume = int(p.min_volume or 0)
         # 权益/参数取不到时的回退手数
@@ -177,8 +178,14 @@ class PositionSizer:
 
     # ---------------- 单手换算 ----------------
     def per_lot_margin(self, price: float) -> float:
-        """每手占用保证金（元）= 价格 × 乘数 × 保证金率。"""
-        rate = self.margin_rate if self.margin_rate > 0 else 0.15
+        """每手占用保证金（元）= 价格 × 乘数 × 保证金率。
+
+        margin_rate 唯一默认源是 SizingConfig.margin_rate（0.15，见 Config.py）。
+        Step 2.4 删除了此处的 `else 0.15` 第二默认源：用户显式配 0 表示
+        "不做保证金折算"——capital_pct 模式下 per_lot_margin=0 会走
+        bad_param fallback（fallback_volume），诚实暴露配置意图而非静默按 15% 算。
+        """
+        rate = self.margin_rate
         px = self._clean_float(price) or 0.0
         if px <= 0:
             return 0.0
