@@ -27,9 +27,7 @@ from ..Infra.PeriodProfile import (
     bar_secs_for,
 )
 from .PositionBook import PositionBook, PositionBookError
-from ..Risk.PositionSizing import CFFEX_LIMIT_MAX
 from .Reconcile import ReconcileMixin
-from ..Risk.PositionSizing import PositionSizer
 from ..Infra.Store import Store
 from ..Strategy.Base import EntryPolicy, ExitCheck, ExitPolicy
 from ..Infra.InstrumentSpec import InstrumentSpec
@@ -50,9 +48,12 @@ class TradingEngine(ReconcileMixin):
         self.exit_policy = exit_policy
         self.store = store
         self.ev = ev
-        # 仓位管理（手数定档）。默认 enabled=False —— 直接返回固定手数，
-        # 与加这个模块之前的行为完全一致，不查账户、不联网。
-        self.sizer = PositionSizer(cfg.sizing, self.spec, cfg.risk.max_volume)
+        # 开仓手数（@2026-09-08 二次精简）：每个买卖点只开一笔，一笔挂 N 手，
+        # N = 风控层 `risk.max_volume`。原"仓位管理 PositionSizer/SizingConfig"
+        # 整条通道已删除，开仓手数不再经任何计算，直接取风险层配置。
+        self.lots_per_signal: int = int(cfg.risk.max_volume)
+        # 解锁昨仓后是否补开今仓缺额（原生于 SizingConfig，迁至 Wind RiskConfig）
+        self.unlock_no_new_open: bool = bool(cfg.risk.unlock_no_new_open)
 
         # Phase E1（2026-09-05）：引入 PositionBook 容器，为 E2 (UNLOCK_FIRST) / E3 (N≥1)
         # 多仓场景预留扩展点。E1 阶段 max=1，语义与单一 self.position 完全等价。
@@ -545,29 +546,20 @@ class TradingEngine(ReconcileMixin):
 
         bar_date = self.last_bar.date if self.last_bar else sig.date
 
-        # 手数定档：问仓位管理"这笔开几手"（默认关闭时 = 固定手数）
-        lots, why_vol = self._size_position(sig)
-        if lots <= 0:
-            self.store.update_signal_action(sig.key, "risk_block", why_vol)
-            self.ev.write("risk_block", key=sig.key, side=str(decision.side or sig.side),
-                          reason=why_vol, bar_date=bar_date)
-            return
+        # 开仓手数 @2026-09-08：每个买卖点只开一笔，一笔挂 self.lots_per_signal 手
+        # （= 风控层 risk.max_volume，默认 2）。原 PositionSizer/SizingConfig 手数定档
+        #   通道已删除；不再有"手数 ≤ 0 被风控拦下"的分支。
+        lots = self.lots_per_signal
 
-        # （2026-09-08：原资金闸门 capital_gate 与风控五道硬闸门 risk.check_open
-        #   整体删除 —— 开仓只受"手数定档 + 交易所单笔上限/持仓笔数上限"约束。）
+        # （2026-09-08：资金闸门 capital_gate 与风控五道硬闸门 risk.check_open
+        #   以及仓位管理 PositionSizer 均整体删除 —— 开仓手数只由风控层
+        #   risk.max_volume 决定，另受 max_open_positions 笔数上限约束。）
 
         self._open_position(sig, decision.side or sig.side, lots)
 
-    # ---------------- 手数定档 ----------------
-    def _size_position(self, sig: "Signal") -> "Tuple[int, str]":
-        """问仓位管理"这笔开几手"。默认关闭仓位管理时就是固定手数。
-
-        2026-09-08 精简：只保留固定手数，不再喂 equity/止损距/ATR。
-        返回 (手数, 原因)；手数 ≤ 0 表示不开仓。
-        """
-        return self.sizer.size()
-
-    # （2026-09-08：原 `_capital_gate` 资金闸门薄委托已随资金闸门功能整体删除。）
+    # （2026-09-08：原 `_size_position`（问仓位管理"这笔开几手"）、`_capital_gate`
+    #   资金闸门薄委托均随"仓位管理 PositionSizing/SizingConfig 整条删除 + 资金闸门
+    #   删除"一并移除；开仓手数直接取 self.lots_per_signal。）
 
     # ---------------- 开 / 平 ----------------
     def _open_position(self, sig: Signal, side, volume: int) -> None:
@@ -576,8 +568,9 @@ class TradingEngine(ReconcileMixin):
         设计要点
           · 全 FOK：全成或全撤由交易所保证，成交归属永远无歧义——
             这笔报单要么整笔成交（簿面 1 笔 volume 手），要么整笔作废。
-          · 中金所限价单每次最大下单 20 手：volume > 20 → 直接拒单
-            over_exchange_limit（防御兜底；正常被资金闸门和 sizer 上限钳住）。
+          · 中金所限价单每次最大下单 20 手：约定配置不超过它（见 RiskConfig.max_volume
+            注释"中金所限价单单笔上限 20 手，配置不应超过"），故不再另设交易所 20 手拦截
+            （2026-09-08 二次精简：原 over_exchange_limit 拒单随 PositionSizing 一并删除）。
           · 同向持仓笔数已达 cfg.risk.max_open_positions → 静默跳过（open_silenced，
             沿用"静默填到 max，不报错"决策）。
           · 拒单 → signal_action=rejected + 回 IDLE，等下一信号；不追价。
@@ -587,18 +580,6 @@ class TradingEngine(ReconcileMixin):
                 sig.key, "rejected", "zero_volume")
             self.ev.write("order_rejected", key=sig.key,
                           reason="zero_volume", volume=volume)
-            return
-
-        # 中金所限价单每次最大下单 20 手（股指期货，交易所交易细则）。
-        # Step 2.4：与 sizing.max_volume 的默认截断上限共用 SSOT 常量
-        # CFFEX_LIMIT_MAX（定义在 Risk/PositionSizing.py）。
-        if volume > CFFEX_LIMIT_MAX:
-            self.store.update_signal_action(
-                sig.key, "rejected", "over_exchange_limit")
-            self.ev.write("order_rejected", key=sig.key,
-                          reason="over_exchange_limit", volume=volume,
-                          limit=CFFEX_LIMIT_MAX,
-                          note="一笔报单手数超过中金所限价单笔上限（20 手），直接拒单")
             return
 
         cfg_max = self.cfg.risk.max_open_positions
@@ -926,16 +907,10 @@ class TradingEngine(ReconcileMixin):
 
         # ── 缺口补开：今日信号想开 N 手，已解锁 V 手 → 补开 N-V 手 ──
         v = int(target.volume)
-        try:
-            want, why_vol = self._size_position(sig)
-        except Exception:
-            # sizing 通道异常 → 不补开（解锁是减风险动作，绝不依赖 sizing 健康度）
-            want, why_vol = 0, "sizing_error_fallback_no_new_open"
+        want = self.lots_per_signal     # 每个买卖点想开 N 手（= 风控层 max_volume）
 
         new_lots = max(0, int(want) - v)
-        # 严格模式（2026-09-07）：sizer 一定有该字段（来自 SizingConfig），
-        # 不再用 getattr(..., False) 兜底 —— 配置缺失应在启动期暴露。
-        if new_lots > 0 and self.sizer.unlock_no_new_open:
+        if new_lots > 0 and self.unlock_no_new_open:
             # 开关：解锁后绝不新开今仓（金融期货平今高手续费规避）
             self.ev.write("unlock_no_new_open",
                           key=sig.key, unlocked=v, want=want, skipped=new_lots,
@@ -954,11 +929,12 @@ class TradingEngine(ReconcileMixin):
 
         if new_lots > 0:
             # （2026-09-08：原 RiskGate.check_open 补开风控检查已随五道硬闸门删除；
-            #   补开仍受簿容量守卫（上方）+ _open_position 内交易所单笔上限约束。）
+            #   原 PositionSizing 仓位计算已随固定手数精简删除；补开手数 = N - 已解锁 V，
+            #   由"手数直接取 max_volume"决定，仅余簿容量守卫约束。）
             pass
 
         self.ev.write("unlock_result", key=sig.key, unlocked=v, want=want,
-                      new_open=new_lots, why=why_vol,
+                      new_open=new_lots,
                       action=("with_new_open" if new_lots > 0 else "pure_unlock"))
 
         if new_lots > 0:

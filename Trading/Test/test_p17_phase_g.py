@@ -86,7 +86,7 @@ def tmp_dir():
 from Trading.Broker.Base import OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
@@ -315,8 +315,7 @@ class GMockBroker(DryRunBroker):
 def make_engine(tmpdir, *, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
-    cfg.risk.max_volume = 10
-    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
+    cfg.risk.max_volume = 1
     spec = InstrumentSpec()
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})

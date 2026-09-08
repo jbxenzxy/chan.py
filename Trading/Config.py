@@ -8,7 +8,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ① 信号源层     → SourceConfig
         ② 信号适配层   → （无独立配置模型，仅解析/去重行为）
         ③ 策略层       → Entry/Exit 参数（单一策略，无选择器）
-        ④ 风控层       → RiskConfig（手数/持仓上限，精简后） / SizingConfig（固定手数）
+        ④ 风控层       → RiskConfig（开仓手数/持仓上限/补开开关）
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
     · 周期敏感配置（freq / signal_max_age_minutes ...）统一收口到文末
@@ -59,7 +59,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     · 每个 section 都是 `extra="forbid"` 的 pydantic 模型：
       传入未知键、缺字段，一律立即抛异常（启动期 fail-fast），
       不再有组件内 `p.get(key, 兜底值)` 那种"第二套默认值"。
-    · 组件（PositionSizer / ExitPolicy / EntryPolicy / SimNow）只接受配置模型
+    · 组件（ExitPolicy / EntryPolicy / SimNow / Broker）只接受配置模型
       或经模型校验的 dict，传错直接报错 —— 缺键/拼错在配置阶段就暴露，
       绝不带错误默认值悄悄跑。
 
@@ -88,7 +88,7 @@ __all__ = [
     # 各层 section 模型（按下层顺序声明，见文件内 banner）
     "SourceConfig",
     "EntryConfig", "ExitConfig",
-    "RiskConfig", "SizingConfig",
+    "RiskConfig",
     "BrokerConfig",
     "ChannelTimingConfig",
     "EngineConfig",
@@ -126,7 +126,6 @@ class TradingConfig(BaseSettings):
     exit_params: ExitConfig = Field(default_factory=lambda: ExitConfig())
     # —— ④ 风控层 ——
     risk: RiskConfig = Field(default_factory=lambda: RiskConfig())
-    sizing: SizingConfig = Field(default_factory=lambda: SizingConfig())
     # —— ⑥ Broker 适配器层 ——
     broker_params: BrokerConfig = Field(default_factory=lambda: BrokerConfig())
     # —— ⑦ 引擎时序参数（Step 2.2 归一：原 Engine.__init__ 硬编码常量收口到此）——
@@ -267,40 +266,32 @@ class ExitConfig(BaseModel):
 
 # ════════════════════════════════════════════════════════════════════
 # ④ 风控层（Risk Gate）配置
-#    2026-09-08 精简：
-#      · 删除原五道硬闸门（enforce_session / no_open_after / max_trades_per_day /
-#        max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
-#      · 删除资金闸门（initial_cash）；删除仓位管理动态计算字段。
-#    保留：hand/volume（max_volume 固定手数）、max_open_positions（多仓引擎容量上限）。
+#    2026-09-08 二次精简：删除整条"仓位管理（手数定档）"通道（PositionSizing /
+#      SizingConfig）。开仓手数直接由本层 max_volume 决定。
+#    已删除：原五道硬闸门（enforce_session / no_open_after / max_trades_per_day /
+#      max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
+#      资金闸门（initial_cash）；仓位管理动态计算字段（capital_pct / atr_risk /
+#      risk_unit_pct / equity_source / fixed_volume / fallback_volume …）。
+#    保留：max_volume（每个买卖点一笔挂 N 手）、max_open_positions（同时持仓笔数上限）、
+#      unlock_no_new_open（解锁昨仓后是否补开今仓）。
 # ════════════════════════════════════════════════════════════════════
 class RiskConfig(BaseModel):
-    """风控参数（精简后）：只保留手数 / 同时持仓笔数上限。"""
-    model_config = ConfigDict(extra="forbid")
+    """风控参数（2026-09-08 二次精简）：只保留开仓手数与持仓笔数上限。
 
-    max_volume: int = 2                      # 单笔手数上限（非仓位管理下 = 每次入场固定手数）
-    max_open_positions: int = 1              # 同时持仓笔数上限（1=单仓；N=一次可连开 N 笔）
-
-
-class SizingConfig(BaseModel):
-    """仓位管理（手数定档）。2026-09-08 精简：只保留**固定手数**功能。
-
-    动态模式（capital_pct 按保证金占比 / atr_risk 按风险敞口）及资金闸门缓冲
-    （risk_unit_pct）已全部删除。开几手由 `fixed_volume`（0=沿用 risk.max_volume）决定。
-
-    ⚠ 一笔报单最多 20 手（中金所限价单硬性上限，IF/IH/IC/IM 同）：超过交易所直接拒单
-      （代码也会在开仓前拦一道：signal_action=rejected / reason=over_exchange_limit）。
+    手数语义（与"每个买卖点只开一笔"绑定）：
+      · 每个买卖点信号触发时**只开一笔**，一笔挂 N 手，N = `max_volume`。
+      · `max_volume` 即单笔手数上限，默认 2。默认不会配置超过中金所限价单
+        单笔上限 20 手，故引擎不再另设交易所 20 手拦截。
     """
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = False            # 总开关：False=关闭仓位管理（固定手数）
-    fixed_volume: int = 0            # 固定手数：一个信号一次报单的手数；0=沿用 risk.max_volume
-    max_volume: int = 0              # 固定手数的截断上限；0=默认中金所单笔上限 20
-    min_volume: int = 1              # 手数下限：算出来不足时提升到该值（设 0 则真的不开）
-    fallback_volume: int = 1         # 权益/ATR 取不到时的回退手数
+    max_volume: int = 2              # 每个买卖点一笔挂 N 手（= 单笔手数上限，默认 2）。
+                                     #   中金所限价单单笔上限 20 手，配置不应超过。
+    max_open_positions: int = 1      # 同时持仓笔数上限（1=单仓；N=一次可连开 N 笔）
     unlock_no_new_open: bool = True  # 解锁昨仓后是否补开今仓缺额。
                                      #   True = 绝不补开（默认）：只解锁昨仓、缺口放弃，
                                      #         规避金融期货"平今"高手续费坑
-                                     #   False = 补开：昨锁 3 手、今信号算 5 手
+                                     #   False = 补开：昨锁 3 手、今信号 5 手
                                      #           → 解锁 3 后再开 2，净敞口到 5
                                      #   两种情况下解锁本身照常执行（解锁是减风险动作）
 

@@ -1,29 +1,32 @@
 # -*- coding: utf-8 -*-
 """
-P15a 一笔报单开仓测试（2026-09-06 全 FOK 重构后）
+P15a 一笔报单开仓测试（2026-09-08 仓位管理整体删除后）
 ===================================================
 背景
     重构后开仓模型彻底归一：
       · 一个信号 = 一笔报单 = 一笔持仓（Position）
-      · 无论非仓位管理模式（fixed_volume=N）还是仓位管理模式（sizer 算出 N），
-        都是一笔挂 N 手（FOK，全成或全撤），成交后簿面记 1 笔 N 手的持仓
-      · 中金所限价单每次最大下单 20 手：N > 20 → 直接拒单 over_exchange_limit
-        （不再有"逐笔回退"这类兜底路径）
+      · 每个买卖点只开一笔，一笔挂 N 手（FOK，全成或全撤），
+        N = 风控层 cfg.risk.max_volume。仓位管理 PositionSizing/SizingConfig
+        已整体删除，不再有 fixed_volume / sizer 定档。
+      · 开仓手数不再有 20 手上限截断，也没有 over_exchange_limit 拒单；
+        配 max_volume=25 就真开 25 手。
       · 同向持仓笔数已达 cfg.risk.max_open_positions → 静默跳过 open_silenced
-      · 旧术语 split_positions / size_positions / #idx 分仓机制已全部删除
+      · 旧术语 split_positions / size_positions / #idx 分仓机制已全部删除；
+        unlock_no_new_open 已从 SizingConfig 迁入 RiskConfig（cfg.risk.unlock_no_new_open）
 
 硬性要求（本测试锁死）
-    ① 术语纪律：config 无 split_positions/split_unlock；sizer 无 split 字段
-    ② RiskGate.check_open 签名不再有 position_count/existing_same_side
-    ③ _open_position 直接调：
+    ① 术语纪律：config 无 sizing/split 键；RiskConfig 仅保留
+       max_volume(默认2) / max_open_positions(默认1) / unlock_no_new_open(默认True)
+    ② _open_position 直接调：
         · volume=1 → broker 1 单、簿 1 笔持仓、signal_key 无后缀
         · volume=5 → broker 1 单 5 手、簿 1 笔 5 手（一笔挂 N 手）
         · volume=0 → zero_volume 拒单
-        · volume=21 → over_exchange_limit 拒单、零报单、簿空
+        · volume=21 → 一笔挂 21 手（无 20 手上限拒单）、signal_action=opened
         · 拒单 → rejected、state IDLE
         · 成交 → opened、state IN_TRADE、exit_plan 独立
-    ④ max_open_positions 静默语义：已满 → open_silenced，不开不报错
-    ⑤ 无分仓残留：簿内不会出现 #idx 后缀 signal_key
+    ③ max_open_positions 静默语义：已满 → open_silenced，不开不报错
+    ④ 无分仓残留：簿内不会出现 #idx 后缀 signal_key
+    ⑤ on_signal 集成：cfg.risk.max_volume=N → 一笔挂 N 手；N=25 真开 25 手
 
 不需要真实 tqsdk / 网络；纯单测 + RejectDryBroker mock 测拒单路径。
 跑法：python tests/test_p15a_open_lots.py
@@ -75,10 +78,9 @@ from Trading import Broker  # noqa: E402  注册 dry_run
 import json  # noqa: E402
 from Trading.Broker.Base import OrderIntent  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Risk.PositionSizing import PositionSizer  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
@@ -138,19 +140,13 @@ class RejectDryBroker(DryRunBroker):
         return super().submit(intent, side, volume, ref_price, signal_key, note)
 
 
-def make_engine(tmpdir, *, max_open_positions=1, fixed_volume=1, broker=None,
-                cfg_risk_max_volume=20, unlock_no_new_open=False,
-                sizing_max_volume=0):
+def make_engine(tmpdir, *, max_open_positions=1, max_volume=1, broker=None,
+                unlock_no_new_open=False):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
-    cfg.risk.max_volume = cfg_risk_max_volume
-    # 严格模式：sizing 是配置模型，覆盖走 SizingConfig（未知键会报错）
-    sizing = dict(DEFAULT_CONFIG.get("sizing") or {})
-    sizing.update({"enabled": False, "fixed_volume": fixed_volume,
-                   "unlock_no_new_open": unlock_no_new_open})
-    if sizing_max_volume:
-        sizing["max_volume"] = sizing_max_volume
-    cfg.sizing = SizingConfig(**sizing)
+    cfg.risk.max_volume = max_volume
+    # unlock_no_new_open：自 SizingConfig 迁入 RiskConfig，现读 cfg.risk
+    cfg.risk.unlock_no_new_open = unlock_no_new_open
 
     spec = InstrumentSpec()
     if broker is None:
@@ -192,24 +188,18 @@ def make_bar(date="2026-09-01 09:30", close=4550.0):
 
 
 # ════════════════════════════════════════════════════════════════
-# [1] 术语纪律：分仓机制已彻底删除
+# [1] 术语纪律：仓位管理（PositionSizing/split）已彻底删除
 # ════════════════════════════════════════════════════════════════
-print("\n[1] 术语纪律：分仓（split）机制已删除")
-sz = PositionSizer(SizingConfig())
-check("sizer 无 split_positions 字段", hasattr(sz, "split_positions"), False)
-check("sizer 无 split_unlock 字段", hasattr(sz, "split_unlock"), False)
-check("sizer 无 size_positions 方法", hasattr(sz, "size_positions"), False)
-check("config.sizing 无 split_positions 键",
-      "split_positions" in (DEFAULT_CONFIG.get("sizing") or {}), False)
-check("config.sizing 无 split_unlock 键",
-      "split_unlock" in (DEFAULT_CONFIG.get("sizing") or {}), False)
+print("\n[1] 术语纪律：仓位管理（PositionSizing/split）已删除")
+check("config 无 sizing 键（PositionSizing 整体删除）", "sizing" in DEFAULT_CONFIG, False)
+check("risk 保留 unlock_no_new_open（自 SizingConfig 迁入）",
+      (DEFAULT_CONFIG.get("risk") or {}).get("unlock_no_new_open"), True)
 check("config.broker_params 无 open_advanced 键",
       "open_advanced" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
 check("config.broker_params 无 overprice_points_fok 键",
       "overprice_points_fok" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
 check("超价合并为单参数 overprice_points=1.0",
       (DEFAULT_CONFIG.get("broker_params") or {}).get("overprice_points"), 1.0)
-check("sizer 保留 unlock_no_new_open", hasattr(sz, "unlock_no_new_open"), True)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -256,26 +246,26 @@ with tmp_dir() as td:
     kinds = read_event_kinds(eng)
     check("volume=0：写 order_rejected", "order_rejected" in kinds, True)
 
-# 4) volume=21 → over_exchange_limit 拒单（中金所 20 手上限）
+# 4) volume=21 → 无 20 手上限拒单（over_exchange_limit 已随 PositionSizing 删除）
 with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, cfg_risk_max_volume=50)
+    eng = make_engine(td, max_open_positions=3, max_volume=50)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-2-21")
     eng.store.try_mark_signal(sig.key, "processing")
     eng._open_position(sig, Side.LONG, 21)
-    check("volume=21：零报单（超交易所上限直接拒）", len(eng.broker.orders), 0)
-    check("volume=21：簿空", eng.positions.is_empty(), True)
-    check("volume=21：signal_action=rejected", eng.store.signal_action(sig.key), "rejected")
-    check("volume=21：state=IDLE", eng._state, EngineState.IDLE)
+    check("volume=21：一笔报单（无 20 手上限拒单）", len(eng.broker.orders), 1)
+    check("volume=21：该单 21 手", eng.broker.orders[0].volume, 21)
+    check("volume=21：signal_action=opened", eng.store.signal_action(sig.key), "opened")
+    check("volume=21：state=IN_TRADE", eng._state, EngineState.IN_TRADE)
 
-# 5) volume=20 边界：恰好 20 手放行
+# 5) volume=20 边界：正常一笔 20 手成交
 with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, cfg_risk_max_volume=50)
+    eng = make_engine(td, max_open_positions=3, max_volume=50)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-2-20")
     eng.store.try_mark_signal(sig.key, "processing")
     eng._open_position(sig, Side.LONG, 20)
-    check("volume=20：放行（=上限）", len(eng.broker.orders), 1)
+    check("volume=20：一笔报单", len(eng.broker.orders), 1)
     check("volume=20：该单 20 手", eng.broker.orders[0].volume, 20)
     check("volume=20：簿 1 笔 20 手", eng.positions.positions[0].volume, 20)
 
@@ -325,43 +315,30 @@ with tmp_dir() as td:
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] on_signal 集成：非仓位管理 / 仓位管理同一条报单路径
+# [4] on_signal 集成：cfg.risk.max_volume=N → 一笔挂 N 手
 # ════════════════════════════════════════════════════════════════
-print("\n[4] on_signal 集成（fixed_volume=N → 一笔挂 N 手）")
+print("\n[4] on_signal 集成（cfg.risk.max_volume=N → 一笔挂 N 手）")
 with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, fixed_volume=8)
+    eng = make_engine(td, max_open_positions=3, max_volume=8)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-4-8", is_buy=True)
     eng.on_signal(sig)
-    check("fixed_volume=8：broker 1 单", len(eng.broker.orders), 1)
-    check("fixed_volume=8：该单 8 手", eng.broker.orders[0].volume, 8)
-    check("fixed_volume=8：簿 1 笔 8 手", eng.positions.positions[0].volume, 8)
+    check("max_volume=8：broker 1 单", len(eng.broker.orders), 1)
+    check("max_volume=8：该单 8 手", eng.broker.orders[0].volume, 8)
+    check("max_volume=8：簿 1 笔 8 手", eng.positions.positions[0].volume, 8)
+    check("max_volume=8：signal_action=opened", eng.store.signal_action(sig.key), "opened")
 
 with tmp_dir() as td:
-    # 场景 1：fixed_volume=25 > sizer.max_volume 默认 20 → 按 sizer 上限截断到 20 手开
-    #   （原"风控单笔上限 → risk_block"已随硬闸门删除；现在由 sizer.max_volume 截断）
-    eng = make_engine(td, max_open_positions=3, fixed_volume=25, cfg_risk_max_volume=30)
+    # max_volume=25：一笔挂 25 手，不再被 sizer.max_volume 20 手上限截断、
+    #   也不再走 over_exchange_limit 拒单 —— 配多大就真开多少手。
+    eng = make_engine(td, max_open_positions=3, max_volume=25)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-4-25", is_buy=True)
     eng.on_signal(sig)
-    check("fixed_volume=25（>20）：截断到 sizer.max_volume=20 → 1 单 20 手",
-          len(eng.broker.orders), 1)
-    check("fixed_volume=25（>20）：该单 20 手", eng.broker.orders[0].volume, 20)
-    check("fixed_volume=25（>20）：signal_action=opened",
-          eng.store.signal_action(sig.key), "opened")
-
-with tmp_dir() as td:
-    # 场景 2：sizing.max_volume 显式设 30（>20）→ 风控放行 → 引擎按交易所硬上限 20 拒单
-    #         （over_exchange_limit 防御兜底，防止把截断上限设超交易所规则）
-    eng = make_engine(td, max_open_positions=3, fixed_volume=25, cfg_risk_max_volume=30,
-                      sizing_max_volume=30)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-4-25b", is_buy=True)
-    eng.on_signal(sig)
-    check("sizing.max_volume=30：fixed_volume=25 仍超交易所 20 手 → rejected",
-          eng.store.signal_action(sig.key), "rejected")
-    check("sizing.max_volume=30：零报单", len(eng.broker.orders), 0)
-    check("sizing.max_volume=30：簿空", eng.positions.is_empty(), True)
+    check("max_volume=25：一笔挂 25 手（无 20 手上限截断/拒单）", len(eng.broker.orders), 1)
+    check("max_volume=25：该单 25 手", eng.broker.orders[0].volume, 25)
+    check("max_volume=25：簿 1 笔 25 手", eng.positions.positions[0].volume, 25)
+    check("max_volume=25：signal_action=opened", eng.store.signal_action(sig.key), "opened")
 
 
 # ════════════════════════════════════════════════════════════════

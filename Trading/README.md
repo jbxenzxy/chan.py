@@ -21,8 +21,8 @@ Trading/                        # 自动下单网关（Python 包）
 │   ├── Base.py                 # EntryPolicy / ExitPolicy 接口 + @register 装饰器
 │   ├── Entry.py                # 默认入场策略（用户当前规则）
 │   └── Exit.py                 # 出场策略合集：默认止盈止损 / 分层离场 L1-L3 / 移动止损示例
-├── Risk/                       # ④ 风控层（精简后）
-│   └── PositionSizing.py       # 仓位管理：固定手数定档
+├── Risk/                       # ④ 风控层（精简后：手数/持仓上限全收敛在 RiskConfig）
+│                               #    （PositionSizing 固定手数仓位管理已于 2026-09-08 删除）
 ├── Engine/                     # ⑤ 执行层
 │   ├── Engine.py               # 事件驱动状态机（bar 结算 → signal 开仓）
 │   ├── Reconcile.py            # 持仓对账 + F1 解锁卡单监控（Mixin）

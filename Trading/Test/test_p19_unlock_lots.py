@@ -18,9 +18,10 @@ P19 解锁入场：一笔 FOK 整笔解锁 + 缺口补开（2026-09-06 全 FOK �
     [4] 默认不补开（unlock_no_new_open 缺省=True）：锁 3 手 + N=5 → 只解锁 3 手、零补开 → IDLE
     [5] N ≤ V：锁 3 手 + N=2 → 纯解锁，零补开
     [6] 解锁拒单 → rejected、回 IDLE、锁仓保留在簿
-    [7] sizing 异常 → 解锁照常（减风险动作不依赖 sizing），只是不补开
-    [8] 簿容量 headroom 截断补开
-    [9] H2 轮次机制已无残留（无 unlock_round* 事件、无批次 in-flight 字段）
+    [7] 手数由 risk.max_volume 决定（仓位管理通道已整体删除，无 sizing/sizer）：
+        解锁后 N ≤ V 且 unlock_no_new_open=False → 纯解锁不补开，
+        且不再有 risk_block 事件（风控五道硬闸门已删）
+    [8] H2 轮次机制已无残留（无 unlock_round* 事件、无批次 in-flight 字段）
 
 不需要真实 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。
 跑法：python tests/test_p19_unlock_lots.py
@@ -113,30 +114,12 @@ class RejectUnlockBroker(DryRunBroker):
         return super().submit(intent, side, volume, ref_price, signal_key, note)
 
 
-class BrokenSizer:
-    """size() 抛异常的坏 sizer（模拟 sizing 通道异常）。"""
-    def size(self, **kw):
-        raise RuntimeError("sizing broken")
-
-    @property
-    def max_volume(self):
-        return 1
-
-    @property
-    def unlock_no_new_open(self):
-        return False
-
-    def describe(self):
-        return {"name": "broken"}
-
-
-def make_cfg(max_pos=3, sizing_overrides=None):
+def make_cfg(max_pos=3, risk_overrides=None):
     d = copy.deepcopy(DEFAULT_CONFIG)
     d["risk"]["max_open_positions"] = max_pos
-    d["risk"]["max_volume"] = 20
-    if sizing_overrides:
-        d["sizing"].update(sizing_overrides)
-    d["sizing"]["enabled"] = False      # 关闭仓位管理 → fixed_volume 直接定手数
+    d["risk"]["max_volume"] = 20      # 默认每笔 N 手；场景用 risk_overrides 覆盖
+    if risk_overrides:
+        d["risk"].update(risk_overrides)
     return TradingConfig.from_dict(d)
 
 
@@ -206,7 +189,7 @@ def open_orders(broker):
 # ════════════════════════════════════════════════════════════════
 print("\n[1] 单笔解锁：一笔 FOK 挂全部手数")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 3}))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(risk_overrides={"max_volume": 3}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-1L", entry_bar_seq=1))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-1|2|S")
@@ -228,7 +211,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[2] 多笔锁仓：只解最老一笔，其余留簿")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 1}))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(risk_overrides={"max_volume": 1}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-2OLD", entry_bar_seq=1))
     engine.positions.add(make_pos(vol=2, signal_key="P19-2NEW", entry_bar_seq=5))
     engine.on_bar(make_bar())
@@ -249,7 +232,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[3] 缺口补开：N=5、已解锁 3 手 → 补开 2 手（显式 unlock_no_new_open=False）")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 5, "unlock_no_new_open": False}))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(risk_overrides={"max_volume": 5, "unlock_no_new_open": False}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-3L", entry_bar_seq=1))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-3|2|S")
@@ -276,7 +259,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[4] 默认不补开：只解锁，不补开")
 with tmp_dir() as tmp:
-    cfg = make_cfg(sizing_overrides={"fixed_volume": 5})
+    cfg = make_cfg(risk_overrides={"max_volume": 5})
     engine, store, broker, ev = build_engine(tmp, cfg=cfg)
     engine.positions.add(make_pos(vol=3, signal_key="P19-4L", entry_bar_seq=1))
     engine.on_bar(make_bar())
@@ -299,7 +282,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[5] N ≤ V：纯解锁不补开")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 2}))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(risk_overrides={"max_volume": 2}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-5L", entry_bar_seq=1))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-5|2|S")
@@ -318,7 +301,7 @@ print("\n[6] 解锁拒单：整笔作废、锁仓留簿")
 with tmp_dir() as tmp:
     bk = RejectUnlockBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0})
     engine, store, broker, ev = build_engine(tmp, broker=bk,
-                                             cfg=make_cfg(sizing_overrides={"fixed_volume": 5}))
+                                             cfg=make_cfg(risk_overrides={"max_volume": 5}))
     engine.positions.add(make_pos(vol=3, signal_key="P19-6L", entry_bar_seq=1))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-6|2|S")
@@ -333,47 +316,27 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [7] sizing 异常：解锁照常，只是不补开
+# [7] N ≤ V（缺额 ≤0）：纯解锁不补开，且无 risk_block 事件
+#     手数由 risk.max_volume 决定（仓位管理通道已删除）：
+#     N=1 ≤ 已解锁 3 → want 不过 V，new_lots=0 → 纯解锁；五道硬闸门已删，无 risk_block
 # ════════════════════════════════════════════════════════════════
-print("\n[7] sizing 异常：解锁不依赖 sizing 健康度")
+print("\n[7] N=1 ≤ 已解锁 3：纯解锁不补开（无 risk_block 残留事件）")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 5}))
-    engine.positions.add(make_pos(vol=3, signal_key="P19-7L", entry_bar_seq=1))
-    engine.sizer = BrokenSizer()
+    cfg = make_cfg(max_pos=3, risk_overrides={"max_volume": 1,
+                                              "unlock_no_new_open": False})
+    engine, store, broker, ev = build_engine(tmp, cfg=cfg)
+    engine.positions.add(make_pos(vol=3, signal_key="P19-7LOCK", entry_bar_seq=1,
+                                  side=Side.LONG))
     engine.on_bar(make_bar())
     sig = make_signal(is_buy=False, sig_key="P19-7|2|S")
     engine.on_signal(sig)
 
-    check("[7a] 解锁照常成功（1 笔 3 手）",
+    check("[7a] 解锁照常（1 笔 3 手）",
           (len(unlock_orders(broker)),
            unlock_orders(broker)[0].volume if unlock_orders(broker) else 0), (1, 3))
-    check("[7b] 簿清空", engine.positions.is_empty(), True)
-    check("[7c] sizing 挂了 → 不补开", len(open_orders(broker)), 0)
+    check("[7b] N=1 ≤ V=3 → 零补开", len(open_orders(broker)), 0)
+    check("[7c] 解锁已生效（簿空）", engine.positions.is_empty(), True)
     check("[7d] signal_action 仍为 unlock", store.signal_action(sig.key), "unlock")
-
-
-# ════════════════════════════════════════════════════════════════
-# [8] 簿容量 headroom 截断补开
-# ════════════════════════════════════════════════════════════════
-print("\n[8] 补开受风控手数上限约束")
-with tmp_dir() as tmp:
-    # sizing.max_volume=1：想补 2 手（N=5 − V=3）超过单笔手数上限 → 补开被拦
-    cfg = make_cfg(max_pos=3, sizing_overrides={"fixed_volume": 5,
-                                                "unlock_no_new_open": False,
-                                                "max_volume": 1})
-    engine, store, broker, ev = build_engine(tmp, cfg=cfg)
-    engine.positions.add(make_pos(vol=3, signal_key="P19-8LOCK", entry_bar_seq=1,
-                                  side=Side.LONG))
-    engine.on_bar(make_bar())
-    sig = make_signal(is_buy=False, sig_key="P19-8|2|S")
-    engine.on_signal(sig)
-
-    check("[8a] 解锁照常（1 笔 3 手）",
-          (len(unlock_orders(broker)),
-           unlock_orders(broker)[0].volume if unlock_orders(broker) else 0), (1, 3))
-    check("[8b] 补开 2 手超 sizing.max_volume=1 → 零补开", len(open_orders(broker)), 0)
-    check("[8c] 解锁已生效（簿空）", engine.positions.is_empty(), True)
-    check("[8d] signal_action 仍为 unlock", store.signal_action(sig.key), "unlock")
     ev.flush()
     recs = []
     with open(os.path.join(tmp, "events.jsonl"), encoding="utf-8") as f:
@@ -382,39 +345,37 @@ with tmp_dir() as tmp:
             if line:
                 recs.append(json.loads(line))
     ures = [r for r in recs if r.get("kind") == "unlock_result"]
-    # （2026-09-08：风控五道硬闸门已删，补开不再产生 risk_block；
-    #   此场景 sizing.max_volume=1 把 want 截到 1（≤ 已解锁 3）→ 纯解锁不补开）
-    check("[8e] 补开被截断：want=1 ≤ 已解锁3 -> 纯解锁不补开",
+    check("[7e] new_lots=0（不足缺口）→ pure_unlock",
           ures[0].get("action") if ures else None, "pure_unlock")
-    check("[8e2] 不再产生 risk_block 事件",
+    check("[7f] 不再产生 risk_block 事件",
           any(r.get("kind") == "risk_block" for r in recs), False)
 
 
 # ════════════════════════════════════════════════════════════════
-# [9] H2 轮次机制无残留
+# [8] H2 轮次机制无残留
 # ════════════════════════════════════════════════════════════════
-print("\n[9] H2 轮次机制已无残留")
+print("\n[8] H2 轮次机制已无残留")
 with tmp_dir() as tmp:
-    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(sizing_overrides={"fixed_volume": 2}))
-    engine.positions.add(make_pos(vol=2, signal_key="P19-9L", entry_bar_seq=1))
+    engine, store, broker, ev = build_engine(tmp, cfg=make_cfg(risk_overrides={"max_volume": 2}))
+    engine.positions.add(make_pos(vol=2, signal_key="P19-8L", entry_bar_seq=1))
     engine.on_bar(make_bar())
-    sig = make_signal(is_buy=False, sig_key="P19-9|2|S")
+    sig = make_signal(is_buy=False, sig_key="P19-8|2|S")
     engine.on_signal(sig)
     ev.flush()
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[9a] 无 unlock_round 事件",
+    check("[8a] 无 unlock_round 事件",
           any(k.startswith("unlock_round") for k in kinds), False)
-    check("[9b] 无 unlock_round_pending 事件", "unlock_round_pending" in kinds, False)
-    check("[9c] 无 unlock_round_result 事件", "unlock_round_result" in kinds, False)
-    check("[9d] 无 _unlock_round_in_flight 属性",
+    check("[8b] 无 unlock_round_pending 事件", "unlock_round_pending" in kinds, False)
+    check("[8c] 无 unlock_round_result 事件", "unlock_round_result" in kinds, False)
+    check("[8d] 无 _unlock_round_in_flight 属性",
           hasattr(engine, "_unlock_round_in_flight"), False)
-    check("[9e] 无 _unlock_round_window 属性",
+    check("[8e] 无 _unlock_round_window 属性",
           hasattr(engine, "_unlock_round_window"), False)
-    check("[9f] 无 _check_unlock_round 方法",
+    check("[8f] 无 _check_unlock_round 方法",
           hasattr(engine, "_check_unlock_round"), False)
-    check("[9g] 无 _unlock_round_settle 方法",
+    check("[8g] 无 _unlock_round_settle 方法",
           hasattr(engine, "_unlock_round_settle"), False)
-    check("[9h] 解锁事件正常写出", "unlock" in kinds, True)
+    check("[8h] 解锁事件正常写出", "unlock" in kinds, True)
 
 
 print("\n" + "=" * 60)

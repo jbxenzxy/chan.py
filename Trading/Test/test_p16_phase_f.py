@@ -91,7 +91,7 @@ def tmp_dir():
 
 from Trading.Broker.Base import Broker, OrderIntent, register_broker  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig, SizingConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
@@ -201,13 +201,12 @@ class RejectDryBroker(DryRunBroker):
 def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
                 cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
-    """构造引擎：默认分仓=1 + sizing 关闭（fixed_volume=1）。"""
+    """构造引擎：每笔手数 = 1（cfg.risk.max_volume）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = cfg_risk_max_volume
-    # split_positions 已随分仓机制删除（严格模式下该键会被 SizingConfig 拒绝），
-    # 这里只保留参数以兼容调用方，不再写进配置。
-    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
+    # 每笔手数由 cfg.risk.max_volume 决定（PositionSizing 已整体删除）
+    cfg.risk.max_volume = 1
 
     spec = InstrumentSpec()
     if broker is None:
@@ -517,8 +516,7 @@ with tmp_dir() as td:
     # 手动构造 engine 前先把 store 写入持仓
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 1
-    cfg.risk.max_volume = 10
-    cfg.sizing = SizingConfig(enabled=False, fixed_volume=1)
+    cfg.risk.max_volume = 1
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(td, "state.db"))
