@@ -79,9 +79,9 @@ for freq in ("30m", "5m", "1m", "15s"):
 
         prof = cfg.period_profile
         check("period_profile 选到档案", getattr(prof, "freq", None), freq)
-        # 周期敏感影子覆盖落点（BASELINE 下 profile 值 == schema 默认 → 幂等）
-        check("source.signal_max_age_minutes == profile",
-              cfg.source.signal_max_age_minutes, prof.signal_max_age_minutes)
+        # 信号新鲜度容差是非周期敏感项：任意 freq 下都取配置值，不与 profile 联动
+        check("source.signal_k_tol_bars == 1（非周期敏感）",
+              cfg.source.signal_k_tol_bars, 1)
 
         check("引擎构造 TradingEngine", type(engine), TradingEngine)
         check("入场策略 DefaultEntryPolicy", type(engine.entry_policy),

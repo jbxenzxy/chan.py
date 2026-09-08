@@ -16,22 +16,23 @@ K 线闭合判定（bar_mode）
     只有"上一帧没有、这一帧出现"的 key 才发。信号消失后再次出现会重新发一次，
     引擎侧的 store 会判定为重复并记录 signal_dup 事件——这正是重绘率的观测点。
 
-信号新鲜度过滤（P1 修复）
+信号新鲜度过滤（2026-09-08 改为 K 线位置口径，取代原 signal_max_age_minutes）
     chan.py 的 SSE 是「累计推」语义：每次新连接都会把当前已存在的所有 bsp 一起推过来。
-    网关首次启动会收到一大批历史信号（几天前的），这些其实早就该被处理过。
-    用 `signal_max_age_minutes`（默认 60 分钟）按 first_seen_at 过滤：
-        收到信号的当下 - first_seen_at > max_age → 跳过（视为历史残留）
-    显式传 0 表示不过滤。
+    网关首次启动会收到一大批历史信号（几天前的）。每个买卖点信号的 timestamp = 它
+    所在分型右肩 K 的时间戳；快照最后一根 K 即「当前最新 K」。这里按
+    「信号归属K 距最新K 的根数」判新旧：距最新 K > N 根（signal_k_tol_bars，默认 1）
+    → 视为历史残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感）。
+    0 = 必须正好是最右一根 K 才处理。首连重放的历史 bsp 归属K远，天然被滤。
 """
 from __future__ import annotations
 
-import datetime as _dt
 import json
 import time
 import urllib.request
 from typing import Any, Dict, Iterator, Optional, Set
 
 from ..Config import SourceConfig
+from ..Infra.PeriodProfile import bar_secs_for
 from ..Infra.Types import Bar, Signal
 from .Base import Event, Source, register_source
 
@@ -71,11 +72,14 @@ class SseSource(Source):
         self.symbol = str(self.params.get("symbol") or "KQ.m@CFFEX.IF")
         self.freq = str(self.params.get("freq") or "5m")
         self.bar_mode = str(self.params.get("bar_mode") or "confirmed")
-        # P1: 信号新鲜度过滤，单位分钟。0=不过滤。
-        # 默认值单一事实源 = Config.SourceConfig（不在本文件写第二套 60）。
-        self.signal_max_age_min = float(
-            self.params.get("signal_max_age_minutes",
-                            SourceConfig().signal_max_age_minutes) or 0)
+        # 信号新鲜度过滤：按「信号归属K 距最新K 的根数」判新旧（K 线位置口径，非周期敏感）。
+        # 默认值单一事实源 = Config.SourceConfig（不在本文件写第二套值）。
+        self.signal_k_tol_bars = int(
+            self.params.get("signal_k_tol_bars", SourceConfig().signal_k_tol_bars))
+        # 一根K的毫秒数（周期换算）：未知周期（无档案）为 None → 退化为不过滤，
+        # 仅靠引擎幂等去重兜底，避免非标周期把 SSE 源直接打崩。
+        _bar_secs = bar_secs_for(self.freq, default=None)
+        self._bar_ms = (_bar_secs * 1000) if _bar_secs else None
         # Step 2.5：重连三参数默认值唯一事实源 = Config.SourceConfig（reconnect_* 三字段）。
         # 删除旧 `params.get(key, d) or d` 双默认源写法（且 SourceConfig extra=forbid
         # 下旧键名根本传不进来，是死旋钮）。非法值（<=0 的等待 / 负数重试）构造期 fail-fast。
@@ -101,36 +105,12 @@ class SseSource(Source):
         self._prev_bar: Optional[Bar] = None
         self._last_ts: Optional[int] = None
         self._frame_keys: Set[str] = set()
-        # first_seen_at 的解析格式
-        self._ts_formats = (
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%d %H:%M:%S.%f",
-            "%Y/%m/%d %H:%M:%S",
-            "%Y/%m/%d %H:%M:%S.%f",
-        )
 
     def url(self) -> str:
         return "{}/api/futures/read/stream?symbol={}&freq={}".format(
             self.base,
             urllib.request.quote(self.symbol, safe="@."),
             urllib.request.quote(self.freq))
-
-    def _parse_ts(self, s: str) -> Optional[float]:
-        """把 first_seen_at 这种字符串解析为 unix 时间戳（秒）。失败返回 None。"""
-        if not s:
-            return None
-        s = s.strip()
-        # 尝试多种格式
-        for fmt in self._ts_formats:
-            try:
-                return _dt.datetime.strptime(s, fmt).timestamp()
-            except ValueError:
-                continue
-        # 最后试一下 ISO 8601（"2026-09-01T10:20:00"）
-        try:
-            return _dt.datetime.fromisoformat(s).timestamp()
-        except ValueError:
-            return None
 
     def stop(self) -> None:
         self._running = False
@@ -154,18 +134,18 @@ class SseSource(Source):
                     self._prev_bar = bar      # 未闭合期间持续更新为最新快照
 
         cur: Set[str] = set()
-        now = time.time()
+        kl = payload.get("klines") or []
+        latest_bar_ts = int(kl[-1].get("timestamp") or 0) if kl else 0  # 快照最新K(ms)
         for b in payload.get("bsps") or []:
             s = Signal.from_bsp(b, self.symbol, self.freq)
-            # P1: 信号新鲜度过滤。chan.py SSE 首次连接会 replay 一批历史信号
-            # （first_seen_at 几天前），按"信号首次出现时间距今 > max_age"判定为陈旧。
-            if self.signal_max_age_min > 0:
-                first_seen = (s.extra or {}).get("first_seen_at")
-                if first_seen:
-                    ts = self._parse_ts(str(first_seen))
-                    if ts and (now - ts) > self.signal_max_age_min * 60.0:
-                        cur.add(s.key)  # 仍在 _frame_keys 集合里，避免后续又重新发
-                        continue
+            # 新鲜度过滤：信号归属K 距最新K > N（signal_k_tol_bars）根 → 历史残留丢弃。
+            #   周期无关（N 是相对根数）；首连 init 重放的历史 bsp 归属K远，天然被滤。
+            #   无 klines / 未知周期（_bar_ms 为空）→ 跳过本过滤，由引擎幂等兜底。
+            if self._bar_ms and latest_bar_ts:
+                dist_bars = (latest_bar_ts - s.timestamp) / self._bar_ms
+                if dist_bars > self.signal_k_tol_bars:
+                    cur.add(s.key)  # 并入集合，避免后续重发
+                    continue
             cur.add(s.key)
             if s.key not in self._frame_keys:
                 yield ("signal", s)

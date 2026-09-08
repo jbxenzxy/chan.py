@@ -155,15 +155,14 @@ class PeriodProfile:
     """一个 K 线周期的全部周期相关设定。
 
     Step 1（2026-09-08）只装时间语义（freq / bar_secs）——目标是"任何周期能正确跑通"。
-    Step 2.1（2026-09-08）加入信号新鲜度参数 + note。
     2026-09-08 精简：原 L4 时间/收盘兜底（max_hold_bars / max_hold_seconds /
-      eod_lead_bars / session_end_hhmm）与风控五道硬闸门（max_trades_per_day）
-      随功能一并删除。
+      eod_lead_bars / session_end_hhmm）、风控五道硬闸门（max_trades_per_day）
+      以及 signal_max_age_minutes（改为 K 线相对容差 signal_k_tol_bars，非周期敏感、
+      不再放本档案）随功能一并删除。
     """
     freq: str
     bar_secs: int
     note: str = ""                          # 调参记录 / 数据来源 / 标定状态
-    signal_max_age_minutes: float = 60.0    # 信号新鲜度过滤（分钟），0=不过滤
 
     def __post_init__(self) -> None:
         if self.freq not in FREQ_SEC:
@@ -180,12 +179,12 @@ class PeriodProfile:
         return self.freq
 
 
-# 4 个周期的档案。bar_secs 显式给真值；信号新鲜度参数默认 = BASELINE（dataclass 默认）。
-# note 显式标「占位」，Step 2.7+ 拿到真实数据后改成「已标定 + 数据来源 + 日期」。
+# 4 个周期的档案。bar_secs 显式给真值；note 显式标「占位」，Step 2.7+ 标定后改。
+# 信号新鲜度容忍不做周期差分（signal_k_tol_bars 为 K 线相对根数，非周期敏感）。
 PERIOD_PROFILES: Dict[str, PeriodProfile] = {
     "15s": PeriodProfile(
         freq="15s", bar_secs=15,
-        note="占位=BASELINE；待 2.7+ 真实 15s 数据重标（信号新鲜度需重标）"),
+        note="占位=BASELINE；待 2.7+ 真实 15s 数据重标"),
     "1m": PeriodProfile(
         freq="1m", bar_secs=60,
         note="占位=BASELINE；待 2.7+ 真实 1m 数据重标"),

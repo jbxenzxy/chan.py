@@ -176,7 +176,10 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | 参数 | 含义 | 周期相关性 |
 |---|---|---|
 | `bar_secs` | 一根 bar 多少秒 | 由 `freq` 自动推导注入，一般不用手填 |
-| `signal_max_age_minutes` | 信号新鲜度过滤（分钟） | **强相关**：15s 下 60 分钟 = 240 根 bar，建议收紧 |
+
+信号新鲜度过滤 `source.signal_k_tol_bars`（每信号距最新 K 的容差根数，默认 1；
+0=必须最右一根 K）是**按 K 线相对根数**计，**不随周期改变**（非周期敏感项），
+故不入本表，也不进 `PERIOD_SENSITIVE_FIELDS` 归总。
 
 新增周期的正确姿势：改 `Infra/PeriodProfile.py` 的 `FREQ_SEC` → 跑
 `Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）

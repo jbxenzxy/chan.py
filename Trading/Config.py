@@ -11,9 +11,9 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ④ 风控层       → RiskConfig（开仓手数/持仓上限/补开开关）
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
-    · 周期敏感配置（freq / signal_max_age_minutes ...）统一收口到文末
-      `PERIOD_SENSITIVE_FIELDS` 归总，作为 Step 2 调参单一入口。（2026-09-08：
-      L4 时间兜底与风控五道硬闸门删除后，周期敏感项已大幅精简。）
+    · 周期敏感配置（freq ...）统一收口到文末 `PERIOD_SENSITIVE_FIELDS` 归总，
+      作为 Step 2 调参单一入口。（2026-09-08：L4 时间兜底与风控五道硬闸门删除、
+      signal_max_age_minutes 改为 K 线相对容差后，周期敏感项已只剩 freq。）
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -164,15 +164,11 @@ class TradingConfig(BaseSettings):
         return self
 
     def _apply_profile_values(self) -> None:
-        profile = PERIOD_PROFILES.get(self.source.freq)
-        if profile is None:
-            return
-        d = SourceConfig.model_fields["signal_max_age_minutes"].default
-        if self.source.signal_max_age_minutes == d:
-            self.source.signal_max_age_minutes = profile.signal_max_age_minutes
-        # （2026-09-08：原对 exit_params 的 max_hold_bars / max_hold_seconds /
-        #   eod_lead_bars / session_end_hhmm 以及 risk.max_trades_per_day 的
-        #   周期敏感影子覆盖随 L4 收盘兜底 / 风控五道硬闸门一并删除。）
+        # 2026-09-08：原对 source.signal_max_age_minutes 的周期敏感影子覆盖，随该字段
+        #   退役（改为 signal_k_tol_bars 的「按 K 线相对根数容差」，非周期敏感项）后已
+        #   无目标字段。保留本方法仅为兼容 main.py 的 apply_period_profile 调用约定，
+        #   视为幂等 no-op（freq/bar_secs 本就透传自 Profile，不需落到 flat 字段）。
+        return
 
     def apply_period_profile(self) -> "TradingConfig":
         """CLI 覆盖 source.freq 后重新对齐周期档案（main.py 在 --freq 之后调用）。
@@ -192,8 +188,9 @@ class TradingConfig(BaseSettings):
 # ════════════════════════════════════════════════════════════════════
 # ① 信号源层（Signal Source）配置
 #    行情来源 / 周期 / 信号新鲜度过滤。全部字段与「周期选择」相关，
-#    但语义上属于「信号源」这一层；其中 freq / signal_max_age_minutes
-#    是周期敏感项，见文末 PERIOD_SENSITIVE_FIELDS 归总。
+#    但语义上属于「信号源」这一层；其中 freq 是周期敏感项（见文末
+#    PERIOD_SENSITIVE_FIELDS 归总）；signal_k_tol_bars 是「按 K 线相对根数」
+#    的容差、**不随周期改变**，属非周期敏感项，不入归总。
 # ════════════════════════════════════════════════════════════════════
 class SourceConfig(BaseModel):
     """行情源：replay 回放本地 K 线 / sse 实时订阅。"""
@@ -207,10 +204,23 @@ class SourceConfig(BaseModel):
     speed: float = 0.0                        # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
-    # 信号新鲜度过滤（分钟）：chan.py SSE 首连会 replay 一批历史 bsp，
-    # "首次出现距今 > 本值"视为陈旧残留丢弃。15s 周期下 60 分钟 = 240 根 bar，
-    # 建议按周期收紧（Step 2 调参项）。0=不过滤。
-    signal_max_age_minutes: float = 60.0
+    # 信号新鲜度过滤 —— K 线位置口径（2026-09-08 取代原 signal_max_age_minutes）：
+    #   chan.py SSE 首连会 replay 一批历史 bsp。每个买卖点信号的 timestamp =
+    #   它所在分型右肩 K 的时间戳；快照最后一根 K 即「当前最新 K」。
+    #   这里按「信号归属K 距最新K 的根数」判新旧：距最新 K > N 根 → 视为历史
+    #   残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感项，
+    #   故不入文末 PERIOD_SENSITIVE_FIELDS）。0 = 必须正好是最右一根 K 才处理。
+    signal_k_tol_bars: int = 1
+
+    @field_validator("signal_k_tol_bars")
+    @classmethod
+    def _check_signal_k_tol(cls, v: int) -> int:
+        """容差根数必须 >= 0（0=严格只认最新一根 K），负值无意义，构造期 fail-fast。"""
+        if v < 0:
+            raise ValueError(
+                "source.signal_k_tol_bars 不能为负（当前={}）；0=必须最右一根 K".format(v))
+        return v
+
     # SSE 重连三参数（Step 2.5 收口，唯一事实源）：
     #   等待 = min(reconnect_wait × 连续失败次数, reconnect_wait_max) 线性退避。
     #   max_retry=0 表示无限重连；>0 时超过次数抛异常退出（由上层决定重启策略）。
@@ -414,13 +424,9 @@ PERIOD_SENSITIVE_FIELDS: List[Dict[str, Any]] = [
         "step2": "Step 2 在 15s/1m/5m/30m 间切换；非标周期须先确认主程序 FREQ_TABLE/"
                  "FREQ_SEC_MAP 已注册（Infra/PeriodProfile 已对账）",
     },
-    {
-        "path": "source.signal_max_age_minutes",
-        "layer": "① 信号源层",
-        "default": 60.0,
-        "kind": "信号新鲜度过滤（分钟）",
-        "step2": "15s 下 60min=240 根，必须按周期收紧；否则陈旧信号被误判为新鲜",
-    },
+    # （2026-09-08：原 source.signal_max_age_minutes 周期敏感条目已退役，改为
+    #   signal_k_tol_bars（按 K 线相对根数的容差）——该新字段**非周期敏感**，
+    #   不随周期改变，故不入本归总表。）
     # （2026-09-08：原 exit_params.max_hold_bars / max_hold_seconds /
     #   eod_lead_bars / bar_secs / session_end_hhmm（L4 时间/收盘兜底）与
     #   risk.max_trades_per_day（风控五道硬闸门）的周期敏感条目已随功能删除。）
@@ -444,7 +450,6 @@ def period_sensitive_summary() -> List[Dict[str, Any]]:
         rows.append({
             "freq": freq,
             "bar_secs": p.bar_secs,
-            "signal_max_age_minutes": p.signal_max_age_minutes,
             "note": p.note,
         })
     return rows
