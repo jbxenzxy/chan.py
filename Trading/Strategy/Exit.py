@@ -91,21 +91,32 @@ class LayeredExitPolicy(ExitPolicy):
         """
         return self._atr()
 
-    # ---------- R 计算（L1 + L2） ----------
+    # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
     def _initial_r(self, signal, entry_price: float, spec: InstrumentSpec) -> float:
-        """初始风险距离 R。use_atr 且有 ATR 时用 ATR 自适应宽度，否则回退 L1 基线。"""
+        """初始风险距离 R = max(A, B, min_r_points)。
+
+        A = 结构止损（分型极值距离）：
+              做多 A = entry_price − 底分型最低点(fractal_low)；
+              做空 A = 顶分型最高点(fractal_high) − entry_price。
+            A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B / min_r_points 兜底。
+        B = 波动率止损 = atr_sl_multiple × ATR（use_atr 且 ATR 样本足够时）。
+        min_r_points = R 下限地板，防极端横盘+极窄分型。
+        """
+        is_long = signal.side is Side.LONG
+        # A：结构止损（分型极值）
+        A = 0.0
+        if self.stop_at_signal_extreme:
+            if is_long:
+                A = max(entry_price - signal.fractal_low, 0.0)
+            else:
+                A = max(signal.fractal_high - entry_price, 0.0)
+        # B：波动率止损（2×ATR）
+        B = 0.0
         if self.use_atr:
             atr = self._atr()
             if atr:
-                return max(self.atr_sl_multiple * atr, self.min_r_points)
-        # L1 回退：结构止损（信号极值）；显式关闭极值止损时用 min_r_points 保底
-        is_long = signal.side is Side.LONG
-        if self.stop_at_signal_extreme:
-            ext = signal.low if is_long else signal.high
-            base = abs(entry_price - ext)
-        else:
-            base = self.min_r_points
-        return max(base, self.min_r_points)
+                B = self.atr_sl_multiple * atr
+        return max(A, B, self.min_r_points)
 
     # ---------- 开仓时生成出场计划 ----------
     def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:

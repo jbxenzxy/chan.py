@@ -81,6 +81,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
 from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS
+from .Infra.Product import PRODUCT_PROFILES, ProductProfile, parse_product
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
@@ -184,6 +185,30 @@ class TradingConfig(BaseSettings):
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
+    # ── 品种档案注入（2026-09-09：随品种可变参数入 ProductProfile）──
+    # 按 instrument.signal_symbol 选品种，把 min_r_points / r_multiple_tp /
+    # multiplier 三个「随品种可变」的 flat 字段强制覆盖（品种档案是真值来源）：
+    #   · 未知品种（signal_symbol 不含 '.' 或不在 4 个品种表内）时跳过，保留 flat 默认。
+    # 与周期档案「仅当仍是模型默认值才覆盖」的语义不同——品种三字段没有跨越 IF 基线的
+    #   「通用默认值」，flat 默认本身就是 IF 基线，故这里整体覆盖、语义更直白。
+    @model_validator(mode="after")
+    def _reconcile_product_profile(self) -> "TradingConfig":
+        self._apply_product_profile_values()
+        return self
+
+    def _apply_product_profile_values(self) -> None:
+        product = parse_product(self.instrument.signal_symbol)
+        profile = PRODUCT_PROFILES.get(product)
+        if profile:
+            self.exit_params.min_r_points = profile.min_r_points
+            self.exit_params.r_multiple_tp = profile.r_multiple_tp
+            self.instrument.multiplier = profile.multiplier
+
+    @property
+    def product_profile(self) -> Optional["ProductProfile"]:
+        """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。"""
+        return PRODUCT_PROFILES.get(parse_product(self.instrument.signal_symbol))
+
 
 # ════════════════════════════════════════════════════════════════════
 # ① 信号源层（Signal Source）配置
@@ -250,7 +275,8 @@ class ExitConfig(BaseModel):
 
     LayeredExitPolicy（L1-L3 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
     L3 保本/跟踪锁利。原 L4 时间/收盘兜底已删除（含引擎侧收盘前强平）。
-    R 的产生与回退链见 Strategy/Exit.py：ATR×atr_sl_multiple → 信号极值 → min_r_points 地板。
+    R 的产生见 Strategy/Exit.py：R = max(A, 2×ATR, min_r_points)，其中
+      A = 结构止损（分型极值距离），2×ATR = 波动率止损，min_r_points = R 下限地板。
 
     （2026-09-08：原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
@@ -258,10 +284,10 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True  # True=用信号 K 线极值作结构止损；False=用 min_r_points 保底
+    stop_at_signal_extreme: bool = True  # True=用分型极值作结构止损（A）；False=只靠 2×ATR 与 min_r_points
     stop_buffer_ticks: float = 0.0       # 止损位额外让出的 tick 缓冲
-    r_multiple_tp: float = 2.0           # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2）
-    min_r_points: float = 2.0            # R 下限（点数），防极端行情止损过窄
+    r_multiple_tp: float = 2.0           # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
+    min_r_points: float = 3.0            # R 下限（点数），防极端横盘+极窄分型（品种档案可覆盖）
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                 # 用 ATR 自适应止损/止盈宽度
     atr_period: int = 14                 # ATR 计算周期

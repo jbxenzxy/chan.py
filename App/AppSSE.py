@@ -1386,6 +1386,10 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
                     bsp_ts = int(datetime.strptime(klu.time.toFmtStr(date_fmt), date_fmt).timestamp()) * 1000
                 except Exception:
                     bsp_ts = 0
+            # 分型极值（结构止损参考）：bsp.bi 是终结该买卖点的那一笔，
+            # get_end_klu() 返回该笔终点分型的极值 K 线：
+            #   底分型（买点）→ 该 K 线.low 为分型最低点；顶分型（卖点）→ .high 为分型最高点。
+            f_klu = bsp.bi.get_end_klu()
             bsps.append({
                 "date": klu.time.toFmtStr(date_fmt),
                 "timestamp": bsp_ts,
@@ -1393,6 +1397,8 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
                 "price": round(klu.close, 3),
                 "high": round(klu.high, 3),
                 "low": round(klu.low, 3),
+                "fractal_low": round(f_klu.low, 3),
+                "fractal_high": round(f_klu.high, 3),
             })
     except Exception as e:
         log.warning(f"[警告] 异常: {type(e).__name__}: {e}")

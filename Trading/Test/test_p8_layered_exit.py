@@ -61,11 +61,13 @@ def make_spec():
     return InstrumentSpec()  # price_tick 默认 0.2
 
 
-def make_signal(side, price, high, low, date="2026-09-01 09:35"):
+def make_signal(side, price, high, low, date="2026-09-01 09:35",
+                fractal_low=0.0, fractal_high=0.0):
     is_buy = side is Side.LONG
     return Signal(key="k|1|" + ("B" if is_buy else "S"), symbol="CFFEX.IF",
                   freq="5m", date=date, timestamp=0, bsp_type="1", is_buy=is_buy,
-                  price=price, high=high, low=low)
+                  price=price, high=high, low=low,
+                  fractal_low=fractal_low, fractal_high=fractal_high)
 
 
 def make_bar(ts, o, h, l, c, date="2026-09-01 09:35"):
@@ -102,7 +104,8 @@ def main():
           approx((plan.tp_price - 100.0), 2 * (100.0 - plan.stop_price)), True)
     # 空单镜像
     pol2 = LayeredExitPolicy({"use_atr": False,
-                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0})
+                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
+                              "min_r_points": 2.0})
     plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0), 100.0, spec)
     check("空单 止损 = 102（向下取整）", plan2.stop_price, 102.0)
     check("空单 止盈 = 96（向上取整）", plan2.tp_price, 96.0)
@@ -207,6 +210,32 @@ def main():
     chk14 = pol13.check(pos14, make_bar(2600, 90.0, 95.0, 80.0, 88.0), spec, 5)
     check("空单镜像 only_update", chk14.only_update if chk14 else None, True)
     check("空单镜像新止损 = best+1 = 81", chk14.plan.stop_price if chk14 else None, 81.0)
+
+    print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR, min_r_points)")
+    # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3
+    pol20 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
+                               "r_multiple_tp": 2.0, "min_r_points": 2.0})
+    plan20 = pol20.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                                    fractal_low=97.0), 100.0, spec)
+    check("做多 A=entry−fractal_low=3 → 止损=97", plan20.stop_price, 97.0)
+    check("做多 止盈 = entry+2R = 106", plan20.tp_price, 106.0)
+    # 做空：fractal_high=103（顶分型最高点），entry=100 → A=3
+    plan21 = pol20.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0,
+                                    fractal_high=103.0), 100.0, spec)
+    check("做空 A=fractal_high−entry=3 → 止损=103", plan21.stop_price, 103.0)
+    check("做空 止盈 = entry−2R = 94", plan21.tp_price, 94.0)
+    # max(A, 2×ATR)：A=3、2×ATR=4 → R=4（2×ATR 更大）
+    pol22 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
+                               "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
+                               "min_r_points": 2.0, "stop_at_signal_extreme": True})
+    feed(pol22, 15)  # TR=2 → ATR≈2 → 2×ATR=4
+    plan22 = pol22.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                                    fractal_low=97.0), 100.0, spec)
+    check("max(A=3, 2×ATR=4)=4 → 止损=96", plan22.stop_price, 96.0)
+    # A ≤ 0（行情已穿越分型）→ 交给 min_r_points 兜底
+    plan23 = pol20.plan(make_signal(Side.LONG, 100.0, 99.0, 98.0,
+                                    fractal_low=102.0), 100.0, spec)
+    check("A≤0 → R=max(0,0,min_r)=2 → 止损=98", plan23.stop_price, 98.0)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

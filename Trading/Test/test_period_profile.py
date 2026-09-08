@@ -49,6 +49,7 @@ from Trading.Config import (  # noqa: E402
 from Trading.Infra.PeriodProfile import (  # noqa: E402
     FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
 )
+from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
@@ -115,6 +116,30 @@ def main():
     check("summary 行不含退役的 signal_max_age_minutes",
           "signal_max_age_minutes" not in r5, True)
     check("summary 行含 note", bool(r5["note"].strip()), True)
+
+    print("\n[7] ProductProfile 品种档案：随品种参数影子覆盖（2026-09-09）")
+    check("PRODUCT_PROFILES 仍是 4 品种", len(PRODUCT_PROFILES), 4)
+    check("parse KQ.m@CFFEX.IF → IF", parse_product("KQ.m@CFFEX.IF"), "IF")
+    check("parse KQ.m@CFFEX.IC → IC", parse_product("KQ.m@CFFEX.IC"), "IC")
+    check("parse 无点串 → ''", parse_product("IF2609"), "")
+    check("parse 月合约 CFFEX.IF2609 → IF2609（非品种代码用 parse 前先取品种）",
+          parse_product("CFFEX.IF2609"), "IF2609")
+
+    c_if = TradingConfig()
+    check("IF min_r_points=3.0", c_if.exit_params.min_r_points, 3.0)
+    check("IF r_multiple_tp=2.0", c_if.exit_params.r_multiple_tp, 2.0)
+    check("IF multiplier=300.0", c_if.instrument.multiplier, 300.0)
+    check("IF 生效的品种档案 product=IF", c_if.product_profile.product, "IF")
+
+    c_ic = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC"})
+    check("IC min_r_points=5.0", c_ic.exit_params.min_r_points, 5.0)
+    check("IC r_multiple_tp=3.0", c_ic.exit_params.r_multiple_tp, 3.0)
+    check("IC multiplier=200.0", c_ic.instrument.multiplier, 200.0)
+
+    # 未知品种：不套任何品种档案，保留 flat 默认（= IF 基线）
+    c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
+    check("未知品种 product_profile=None", c_unk.product_profile, None)
+    check("未知品种 min_r_points 保默认 3.0", c_unk.exit_params.min_r_points, 3.0)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

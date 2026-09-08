@@ -188,9 +188,13 @@ class Recorder:
                     "seen_frames": 1, "disappear_count": 0,
                     "status": "alive",
                     "revisions": [{"at": at, "price": b.get("price"),
-                                   "high": b.get("high"), "low": b.get("low")}],
+                                   "high": b.get("high"), "low": b.get("low"),
+                                   "fractal_low": b.get("fractal_low"),
+                                   "fractal_high": b.get("fractal_high")}],
                     "final": {"price": b.get("price"), "high": b.get("high"),
-                              "low": b.get("low")},
+                              "low": b.get("low"),
+                              "fractal_low": b.get("fractal_low"),
+                              "fractal_high": b.get("fractal_high")},
                 }
                 new_keys.append(key)
             else:
@@ -202,9 +206,13 @@ class Recorder:
                 rec["seen_frames"] = rec.get("seen_frames", 0) + 1
                 if bsp_fingerprint(rec["final"]) != fp:
                     rec["revisions"].append({"at": at, "price": b.get("price"),
-                                             "high": b.get("high"), "low": b.get("low")})
+                                             "high": b.get("high"), "low": b.get("low"),
+                                             "fractal_low": b.get("fractal_low"),
+                                             "fractal_high": b.get("fractal_high")})
                     rec["final"] = {"price": b.get("price"), "high": b.get("high"),
-                                    "low": b.get("low")}
+                                    "low": b.get("low"),
+                                    "fractal_low": b.get("fractal_low"),
+                                    "fractal_high": b.get("fractal_high")}
                     changed_keys.append(key)
 
         for key in (self.prev_keys - cur_keys):

@@ -96,8 +96,10 @@ class Signal:
     bsp_type: str        # 买卖点类型 "1" "2" "3" "0"
     is_buy: bool
     price: float         # 信号 K 线收盘价（= 入场价）
-    high: float          # 信号 K 线最高价（空头止损位）
-    low: float           # 信号 K 线最低价（多头止损位）
+    high: float          # 信号 K 线最高价（右肩 K 线）
+    low: float           # 信号 K 线最低价（右肩 K 线）
+    fractal_low: float = 0.0   # 底分型最低点 K 线最低价（做多结构止损参考 A）
+    fractal_high: float = 0.0  # 顶分型最高点 K 线最高价（做空结构止损参考 A）
     extra: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -122,8 +124,11 @@ class Signal:
             price=float(b.get("price") or 0.0),
             high=float(b.get("high") or 0.0),
             low=float(b.get("low") or 0.0),
+            fractal_low=float(b.get("fractal_low") or 0.0),
+            fractal_high=float(b.get("fractal_high") or 0.0),
             extra={k: v for k, v in b.items()
-                   if k not in ("date", "type", "is_buy", "price", "high", "low", "timestamp")},
+                   if k not in ("date", "type", "is_buy", "price", "high", "low",
+                                "timestamp", "fractal_low", "fractal_high")},
         )
 
     @classmethod
@@ -137,6 +142,8 @@ class Signal:
             price=float(final.get("price") or 0.0),
             high=float(final.get("high") or 0.0),
             low=float(final.get("low") or 0.0),
+            fractal_low=float(final.get("fractal_low") or 0.0),
+            fractal_high=float(final.get("fractal_high") or 0.0),
             extra={"disappear_count": rec.get("disappear_count", 0),
                    "revisions": len(rec.get("revisions") or [])},
         )
