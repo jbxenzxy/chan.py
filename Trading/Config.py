@@ -210,7 +210,8 @@ class SourceConfig(BaseModel):
     #   这里按「信号归属K 距最新K 的根数」判新旧：距最新 K > N 根 → 视为历史
     #   残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感项，
     #   故不入文末 PERIOD_SENSITIVE_FIELDS）。0 = 必须正好是最右一根 K 才处理。
-    signal_k_tol_bars: int = 1
+    #   字段名说明：tol = tolerance 的缩写（容差 / 容错范围）。
+    signal_k_tol_bars: int = 1          # N：信号归属K 距最新K 的容差根数（tol=tolerance 容差）
 
     @field_validator("signal_k_tol_bars")
     @classmethod
