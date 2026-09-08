@@ -1,0 +1,225 @@
+# 交接文档 · chan.py Trading 自动下单「调参归一化」专项
+
+> **本文档的目的**：让你（接手的人 / 未来某次新会话）不需要从头考古对话记录，
+> 拿到本文档就能**按部就班续推**——知道在做什么、为什么、做到哪一步、下一步怎么走、有哪些坑。
+>
+> **生成日期**：2026-09-08（工作日）
+> **状态**：Step 2.0 / 2.0.3b / 2.1 / 2.2 已完成；2.1 已合入 real project，**2.2 待用户合并**；**下一步是 2.3（Broker/Channel 超时集中）**
+> **维护约定**：本文档是**进度 SSOT**。每次续推前先读 §4（当前精确状态）与 §5（下一步）；每次做完一段回来更新 §4 状态表。
+
+---
+
+## 0. 一句话定位
+
+在 **chan.py 量化交易框架**（fork 自 `github.com/jbxenzxy/chan.py`）的 **`Trading/` 自动下单模块**上，
+把「各周期（30m/5m/1m/15s）可能涉及的**调参项**」**从散落代码各处归一到 `Trading/Config.py` 一个地方**，
+**先立架构、后调数值**，用缠论买卖点信号做期货（CFFEX 股指）自动开仓的 L1–L4 分层出场策略。
+
+**关键词**：归一（不是调值）、一个地方、先架构后数值、SSOT、断点续传。
+
+---
+
+## 1. 项目背景（为什么会有这件事）
+
+### 1.1 三层目标链条
+
+| 层 | 目标 | 状态 |
+|---|---|---|
+| **业务层** | 基于缠论买卖点信号**自动开仓**（买点开多、卖点开空），走 SimNow 仿真 | 已能在 Kuaiqi3（快期3）用 CTP 登录 SimNow；`trader_gateway`(tg) 单项目已跑通 |
+| **架构层**（本专项 Step 2） | 把跨周期调参项**归一到 `Trading/Config.py`**，改周期只改一处 | **进行中（2.0–2.1 已完成，2.2+ 待续）** |
+| **数值层**（Step 2.7+） | 逐周期差异化标定参数值 | **被数据缺口卡住**（见 §4.3） |
+
+### 1.2 用户核心需求（原话，根本锚点）
+
+> 「调参我觉得不是最重要的，最重要的是先在**代码架构**上把各周期可能涉及的调参项**归一到 Trading/Config.py 中**，
+> 方便后续在这一个地方调整，而不是散落在代码各处」
+
+> 「因为无法一次性做完，所以以上这些都需要**纳入文档管理**，下次再接着做的时候，知道做到哪里了，可以延续推进下去」
+
+> 「我不会选它（策略选择器），我只用 **L1-L4 策略**。也就是说，**入场就一个策略，出场也是一个策略，无需第二个选择**！」
+
+> 「调参不是最重要的……先架构后数值」
+
+### 1.3 技术要点（接手前必读）
+
+- **`Trading/` 是独立网关**：HTTP SSE 取数，对 chan.py 主程序零侵入（自成一包，可独立 `python Trading/main.py`）。
+- **4 周期**：`30m / 5m / 1m / 15s`，`SUPPORTED_FREQS` 白名单。
+- **出场策略（生产唯一）**：`LayeredExitPolicy`（L1–L4 分层）。入场（生产唯一）：`DefaultEntryPolicy`。
+- **SSOT 原则**：每个默认值**只在一处声明**，禁止跨文件 fallback 重复。pydantic v2 `extra="forbid"` 严格模式。
+- **六层配置模型**（在 `Trading/Config.py`）：`BrokerConfig / SourceConfig / RiskConfig / SizingConfig / EntryConfig / ExitConfig`，根配置 `TradingConfig`。
+- **测试**：`Trading/Test/*.py` 是**独立脚本**（非 pytest），`check(name, got, expected)` 辅助 + 末尾打印「结果: X 通过 / Y 失败」+ `sys.exit(1)` 失败即退。当前 **25 个 test_** 脚本。
+
+---
+
+## 2. 目录与仓库拓扑（极重要，先认路）
+
+本次工作横跨 4 类目录，**不要搞混**，尤其注意**沙盒纪律**。
+
+| 目录 | 是什么 | 能不能改 | 备注 |
+|---|---|---|---|
+| **`C:\my_chan_project\`** | **用户的真实项目**（**非 git 仓库**，是合并后的工作副本） | 🔴 **绝对不碰**（写盘违规） | 已含 Step 2.0.3b + **2.1** 的合并结果 |
+| **`C:\Users\river\WorkBuddy\2026-09-08-06-43-04\sandbox\Trading\`** | **活跃编码沙盒**（独立 Trading 包）——所有代码改动**只发生在这里** | 🟢 **改这里** | 交付物 = 把这里打成 zip |
+| `...\sandbox\chan.py\` | **git 克隆**（完整 repo），用于**验证远端合并**是否完整 | 🟡 只读复验 | **已过时**（停在 `5478def`，早于用户合 fc46127）；仅合并校验用 |
+| `...\output\` | **交付物目录**：zip 包 + md/html 文档 | 🟢 产出放这 | 每次交付在此留档 |
+| `github.com/jbxenzxy/chan.py` **branch `custom-dev`** | 远端主干，用户会把自己的合并**推送**到这里 | 🔴 只由用户推 | 验证合并完整性时 `git clone` 到这对比 |
+
+### 2.1 铁律（沙盒纪律，违反即事故）
+
+1. **代码改动只发生在 `sandbox/Trading/`**。交付 = 打包成 zip，**合并动作永远由用户自己做**（用户合并进 `C:\my_chan_project` 后自行推送）。
+2. `cp/rsync/git checkout` 指向 `C:\my_chan_project` 属于**违规操作**，即使"方便复验"也不行；复验一律**解压 zip 到独立临时目录**跑。
+3. **本机打包/解压一律用 Python `zipfile`**（PowerShell `Compress-Archive`/`Expand-Archive` 在本机多次静默失败）。排除 `__pycache__`/`State`/`replay_data`/`.git`。
+4. **会话内 Write/Edit 落盘可能不可靠**（曾出现改动"以为写了其实没落盘"）。写完**必须** grep/Read 校验；交付前从 **zip 包内读回**再校验一遍（双保险）。
+5. **绝不一条消息对同一文件发两个 Edit**（同文件并行 Edit 会竞态丢改）；一批后 grep 校验。
+6. 编辑后清 `__pycache__`（`find . -type d -name __pycache__ -exec rm -rf {} +`），否则陈旧字节码导致 `hasattr` 仍报旧名。
+7. **正则 rename 防子串误伤**：如 `ExitParamsConfig` 是 `DefaultExitParamsConfig` 的子串，裸 `replace_all` 会误改；用 `(?<!Default)` 负向环视只改独立 token。
+
+---
+
+## 3. 已完成步骤全史（含每步交付物）
+
+按时间线，方便追溯"某行代码为何长这样"。
+
+| 阶段 | 做了什么 | 交付物（在 `output/`） | 状态 |
+|---|---|---|---|
+| **Step 1A** | 四周期（30m/5m/1m/15s）逻辑正确性**审计**（找出 bug，不改代码） | `Step1_四周期逻辑正确性审计.md/.html` | ✅ |
+| **Step 1B** | 四周期逻辑正确性**修复**（改代码 + 测试，含 v2 撤回） | `Step1B_交付说明_四周期逻辑正确性修复.md`、`step1b_四周期修复_Trading.zip`、`step1b_changes.patch` | ✅ 已合 real project |
+| **IF 15秒迁移分析** | 股指 IF 15s 周期迁移的专项分析 | `IF_15秒周期迁移分析.md/.html` | ✅ 参考 |
+| **Step 2 路线图** | 调参项归一的全 phase 总览（2.0–2.6 + 2.7+ 调值）| `Step2_路线图_调参项归一.md/.html` | ✅ 本文档前身，进度以本文档为准 |
+| **Step 2 可行性** | 周期参数定型可行性分析 | `Step2_可行性分析_周期参数定型.md/.html` | ✅ 参考 |
+| **2.0 + 2.0.1 + 2.0.2** | 六层配置模型拆解、类名调整、`EntryParamsConfig`/`ExitParamsConfig` | `Step2_0_交付说明_配置分层与周期敏感归总.md` | ✅ |
+| **2.0.3** | **彻底删除策略选择器抽象**：删 `DefaultExitPolicy`、`EntryPolicyConfig`/`ExitPolicyConfig`、注册表（`EXIT_POLICIES`/`register_*`/`build_*`）；14 测试迁移到 `LayeredExitPolicy()` | `step2_0_Trading.zip` | ✅ |
+| **2.0.3b** | `EntryParamsConfig → EntryConfig`、`ExitParamsConfig → ExitConfig`（保护 `DefaultExitParamsConfig` 历史说明不被误改）；命名 `TradingConfig`/`BrokerConfig` 定稿 | `step2_0_Trading.zip`（重打包） | ✅ |
+| **合并校验** | 拉 GitHub `custom-dev` 最新，验证 2.0.3b 合入完整（HEAD=`fc461277...`，2026-09-08 11:34）| — | ✅ |
+| **2.1** | **周期敏感参数入 `PeriodProfile`**：8 项收口到 `PERIOD_PROFILES`（每周期一份），`TradingConfig` 构造期影子覆盖进 flat 字段 | `step2_1_Trading.zip`、`Step2_1_交付说明_周期参数入Profile.md`、`Step2_1_可行性分析_周期参数入Profile.md/.html` | ✅ **已合 real project** |
+| **2.2** | **引擎常量 EngineConfig 化**：`_close_retry_bars=5`/`_close_max_streak=20`/`_unlock_stuck_bars=5` 三项硬编码收口到 `TradingConfig.engine`（拍板 E1+F1+G2）；`PositionBook.DEFAULT_MAX` 注释语义收窄（G2）；`main.py` 4.5h 收口到 `PeriodProfile.SESSION_SECS` | `step2_2_Trading.zip`（65 文件/304290B）、`Step2_2_交付说明_引擎常量EngineConfig化.md`、`Step2_2_可行性分析_引擎常量EngineConfig化.md` | ✅ 待用户合并 |
+
+### 3.1 Step 2.0.3b 删除策略选择器的最终代码形态（2.1 继承此基础）
+
+`TradingConfig` 字段：
+```python
+entry_params: EntryConfig        # = 唯一入场策略 DefaultEntryPolicy 的参数
+exit_params:  ExitConfig         # = 唯一出场策略 LayeredExitPolicy 的参数
+```
+`Strategy/__init__.py` 只导出：
+```python
+from .Base import ExitCheck, ExitPolicy, EntryPolicy
+from .Entry import DefaultEntryPolicy
+from .Exit import LayeredExitPolicy
+```
+`main.py` 直接构造：
+```python
+entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
+exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
+```
+引擎实例属性 `self.entry_policy` / `self.exit_policy` 是引擎字段，与 `cfg.*_policy` 配置路由无关，保留。
+
+---
+
+## 4. 当前精确状态（**接手先读这里**）
+
+> 以下为 2026-09-08 实测（直接对 real project `C:\my_chan_project` 的 Trading 目录 grep）。
+
+### 4.1 real project 合并状态（已核）
+
+| 校验项 | 结果 |
+|---|---|
+| 是否 git 仓库 | ❌ **非 git 仓库**（合并工作副本，用户手动合并 + 推送） |
+| `Trading/Infra/PeriodProfile.py` 存在 | ✅（11629 字节） |
+| `Trading/Config.py:82` 导入 `PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS` | ✅ |
+| `Trading/Config.py:178` `apply_period_profile` | ✅ |
+| `Config.py` 中 `period_profile` 命中 | 4 处 → **2.1 已合入** |
+| `Config.py` 中 `entry_policy`（旧选择器名）残留 | 0 → **2.0.3 删除干净** |
+
+### 4.2 沙盒与交付物（2026-09-08 12:10 状态）
+
+| 项 | 值 |
+|---|---|
+| 活跃编码沙盒 | `sandbox/Trading/`（含 2.2 全部改动 + 26 个 test_） |
+| 最新交付包 | `output/step2_2_Trading.zip`（65 文件 / 304290 字节） |
+| 远端 custom-dev HEAD | `fc46127`（含 2.0.3b；**尚未含 2.1/2.2**——需用户推送） |
+| `sandbox/chan.py` git clone | **已过时**，停在 `5478def`（仅作合并校验，勿当工作副本） |
+
+### 4.3 已知阻塞项（调值的真正瓶颈）
+
+| 阻塞 | 说明 | 影响 |
+|---|---|---|
+| 🔴 **真实历史行情缺失** | 仅 5m 有少量 demo（历史摘要：2 根合成/144 根不等），15s/1m/30m 无标定数据 | **2.7+ 差异化调值做不了** |
+| 🟡 **5m 基线参数未确认** | 谁是"5m 基线"缺明确锚点 | 影响 G1 BASELINE 占位的合理性 |
+| 🟡 **远端未含 2.1** | real project 已合 2.1，但 `custom-dev` 远端还停在 fc46127（2.0.3b） | 下次沙盒初始化要核对基线 |
+
+### 4.4 2.1 的架构落点（理解后续 2.2 的前提）
+
+- **8 项周期敏感参数**已收口到 `Infra/PeriodProfile.py` 的 `PERIOD_PROFILES`（每周期一份档案）。
+- `TradingConfig` 构造期按 `source.freq` 选档案，`@model_validator(mode="after")` 做「**影子覆盖**」进 flat 字段——**仅当 flat 字段仍是模型默认值**才填（用户显式覆盖优先）。
+- `bar_secs` **不 reconcile**：仍走引擎 `bar_secs_for(freq)` 自动推导（`PeriodProfile.bar_secs` 已是推导源），flat `bar_secs=0` 是手动覆盖旋钮。→ 2.1 实际 reconcile **6 项**：`signal_max_age_minutes / max_hold_bars / max_hold_seconds / eod_lead_bars / session_end_hhmm / max_trades_per_day`。
+- **未知 freq 容错**（不 fail-fast）：`test_p20` 用 `freq="15m"` 构造 `TradingConfig` 测 CLI 透传（非引擎场景）→ 校验器跳过；真 fail-fast 在 `main.py` 的 `bar_secs_for`（已有）。
+- **取值策略 G1 统一 BASELINE 占位**：4 周期全用 5m 当前默认值，`note` 显式标「占位=BASELINE；待 2.7+ 重标」。G1 下 profile 值 == schema 默认 → 影子覆盖幂等 no-op，5m 行为与 2.0.3b 完全一致。
+- **已知局限**（已注释在代码）：`_apply_profile_values` 用「== schema 默认」判定是否覆盖；若 2.7+ 让某 profile 值偏离 schema 默认、且 `--freq` 构造后二次切换，需显式追踪「profile 已填字段」再重对齐。当前 BASELINE 下无此问题。
+
+---
+
+## 5. 下一步怎么走（按部就班，直接照做）
+
+> 用户指示原文：「之后是 **2.2（EngineConfig 时序参数归总）**，还是要先解决数据/基线缺口再推进调参，你定」——中途插入做本文档。**本文档产出后，2.2 是默认续推方向**（结构归一不受数据缺口阻塞），数据缺口只阻塞 2.7+ 调值，不阻塞 2.2。
+
+### 5.1 Step 2 剩余 phase 一览
+
+| Phase | 主题 | 涉及 | 估算 | 前置 |
+|---|---|---|---|---|
+| **2.2** | **引擎常量 EngineConfig 化**：D-1/2/3（close 重试/MAX 连续/卡死解锁三常量）+ D-6 PositionBook 默认容量显式化 | ~80 行 | ✅ **已完成（2026-09-08）** |
+| **2.3** | Broker/Channel 超时集中：~18 处 wait_update/重试秒数 → 新 `ChannelTimingConfig` 附在 `BrokerConfig` 内 | ~150 行 | **⏳ 下一步** |
+| **2.4** | 重复常量合并：`20`(B-9)+`20`(D-4) → `_CFFEX_LIMIT_MAX`；删 `0.15` 重复兜底 | ~30 行 | 无（独立） |
+| **2.5** | Source/Recorder 重连参数化：重连基/最大/重试 → `SourceConfig.reconnect_*` | ~50 行 | 无 |
+| **2.6** | 测试 + 启动校验：每 phase 加测试；6 段全完跑 `--freq {30m,5m,1m,15s}` 启动冒烟全通 | ~150 行 | 全部 |
+| **2.7+** | **调值阶段**（数据依赖）：2.7 数据补录 → 2.8 回测 → 2.9 网格搜索 → 2.10 SimNow 实盘验证 | 数据到位才开 |
+
+### 5.2 开 2.2 的 SOP（照抄）
+
+1. **读本档 §4.2/§4.3** 确认沙盒与交付物状态、阻塞项。
+2. **同步最新到沙盒**：real project 已合 2.1，若 sandbox 落后，`cp -ru <real project>/Trading/. <sandbox>/Trading/`（但注意：`cp -ru` 指向 real project **仅用于"读入沙盒"**，不反向写）。
+3. 先做 **2.2 可行性分析文档**（沿用"先分析再编码"节奏），把设计决策（哪些常量归总、命名、默认值 SSOT 放哪）摆出来给用户拍板，尤其**新默认值必须落在唯一 SSOT 文件**、禁跨文件 fallback。
+4. 用户拍板后在 **`sandbox/Trading/`** 实现 → 每 phase 完 `py_compile + pytest/grep` 确认落盘。
+5. 全量 `25 个 test_*` PASS 全绿 → 打包 `step2_2_Trading.zip`（Python zipfile）→ **从 zip 内读回**校验 → 更新交付说明 + 本档 §4 状态表。
+6. 交付给用户合并进 real project 并推送。
+
+### 5.3 未决/需用户拍板项
+
+- 2.1 的 `_apply_profile_values`「== schema 默认」判定在 2.7+ 差异化后需升级（见 §4.4 局限）——2.2 规划时可顺带评估是否提前显式追踪。
+- Docs/ 目录旧 `GatewayConfig` 名称引用（历史文档）——合并刷新不在代码包内，2.2 收尾可问是否一并刷。
+
+---
+
+## 6. 踩坑与纪律清单（含代码级教训）
+
+1. **会话写盘不可靠**：改动必须 grep/Read 校验，交付从 zip 包内读回双保险。
+2. **同文件同消息两个 Edit 会丢改** → 顺序单发。
+3. **陈旧 `__pycache__`** → 编辑后清空。
+4. **rename 防子串误伤** → 负向环视正则（`(?<!Default)ExitParamsConfig`）。
+5. **打包解压用 Python zipfile**，别用 PowerShell Compress-Archive/Expand-Archive（静默失败）。
+6. **测试是独立脚本**，用 `sys.exit(1)`，跑全量用临时 runner（cwd 设 `sandbox/`，不是 `sandbox/Trading/`，否则 `import Trading` 路径错位）。
+7. **编译/运行用** `C:\my_chan_project\.venv\Scripts\python.exe`（含依赖）；纯校验可用 `C:\Users\river\.workbuddy\binaries\python\versions\3.13.12\python.exe`。
+8. **don't 把"标定差异"当"代码缺陷"修**（如 `max_hold_bars` 曾被误当 bug、`总腿数` 曾误判）——先问清楚是不是设计使然。
+9. **单可替换单元**：交付优先整包 zip 覆盖 `Trading/`，避免全仓库 refactor；文档改动单独打包解耦。
+10. **严格不碰 real project**：所有改动只发生在沙盒，合并永远由用户做。
+
+---
+
+## 7. 交付物索引（output/）
+
+| 文件 | 说明 |
+|---|---|
+| `交接文档_chanpy_Trading自动下单调参归一化.md/.html` | **本文档（总入口）** |
+| `Step2_路线图_调参项归一.md/.html` | Phase 全览（进度以本文档 §4 为准） |
+| `Step2_0_交付说明_配置分层与周期敏感归总.md` | 2.0–2.0.3b 全史 + 删除选择器实证 |
+| `Step2_2_交付说明_引擎常量EngineConfig化.md` | 2.2 交付说明 |
+| `Step2_2_可行性分析_引擎常量EngineConfig化.md` | 2.2 设计决策（E1/F1/G2） |
+| `Step2_1_交付说明_周期参数入Profile.md` | 2.1 交付说明 |
+| `Step2_1_可行性分析_周期参数入Profile.md/.html` | 2.1 设计决策 |
+| `Step2_可行性分析_周期参数定型.md/.html` | Step 2 可行性 |
+| `Step1_四周期逻辑正确性审计.md/.html` | Step 1A |
+| `Step1B_交付说明_四周期逻辑正确性修复.md` | Step 1B |
+| `IF_15秒周期迁移分析.md/.html` | 专项分析 |
+| `step2_2_Trading.zip`（最新） | **当前最新交付包（待用户合并）** |
+| `step2_1_Trading.zip` | 2.1 交付包（已合 real project） |
+| `step2_0_Trading.zip` | 2.0.3b 交付包 |
+| `step1b_四周期修复_Trading.zip` / `step1b_changes.patch` | Step 1B |

@@ -50,6 +50,12 @@ FREQ_SEC_MAP = FREQ_SEC
 SUPPORTED_FREQS: Tuple[str, ...] = tuple(
     sorted(FREQ_SEC, key=lambda f: FREQ_SEC[f]))
 
+# ── 交易日墙钟近似（Step 2.2 归一，原 main.py 硬编码 4.5）────────────
+# 仅用于"根/交易日"这类**展示/粗算**（main.py 启动日志）；不是精确的交易时段
+# （中金所 9:30–11:30 + 13:00–15:00 = 4h，14:55 强平阈值另见 profile.session_end_hhmm）。
+# 收口到这里是为了 SSOT：要改近似值只改这一处。
+SESSION_SECS: float = 4.5 * 3600
+
 # ── 时间戳单位判定 ────────────────────────────────────────────────
 # 毫秒时间戳 ~1.7e12，秒时间戳 ~1.7e9，中间空 3 个数量级，1e11 可完美分离。
 _TS_MS_THRESHOLD = 1e11

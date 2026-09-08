@@ -57,6 +57,10 @@ class PositionBook:
         E3.3 之前不允许用单仓 API 操作多仓 —— 引擎 settle/close 必须显式 for-each
         `engine.positions.positions`，否则视为状态不自洽。
     """
+    # Step 2.2（2026-09-08）语义收窄：本常量**仅作测试直接构造 PositionBook() 的兜底**。
+    #   生产路径必须经 cfg.risk.max_open_positions 显式传入——Engine 构造（max_positions=
+    #   cfg.risk.max_open_positions）与 from_dict 恢复（max_positions=restore_max）均已如此。
+    #   不要在这里新增第二个"生产默认值"——它与 RiskConfig.max_open_positions 是双源，会漂移。
     DEFAULT_MAX = 1   # E1 默认：单实例最多 1 仓；E3 由 cfg.risk.max_open_positions 覆盖
 
     def __init__(self, max_positions: int = DEFAULT_MAX):

@@ -89,6 +89,7 @@ __all__ = [
     "EntryConfig", "ExitConfig",
     "RiskConfig", "SizingConfig",
     "BrokerConfig",
+    "EngineConfig",
     # 周期敏感配置归总（Step 2 调参单一入口）
     "PERIOD_SENSITIVE_FIELDS", "period_sensitive_fields",
     "period_sensitive_summary",
@@ -126,6 +127,8 @@ class TradingConfig(BaseSettings):
     sizing: SizingConfig = Field(default_factory=lambda: SizingConfig())
     # —— ⑥ Broker 适配器层 ——
     broker_params: BrokerConfig = Field(default_factory=lambda: BrokerConfig())
+    # —— ⑦ 引擎时序参数（Step 2.2 归一：原 Engine.__init__ 硬编码常量收口到此）——
+    engine: EngineConfig = Field(default_factory=lambda: EngineConfig())
     # —— 横切·基础设施三件套 ——
     broker: str = "dry_run"              # dry_run 离线模拟 / simnow 仿真 / live 实盘 CTP
     state_dir: str = "./State"           # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
@@ -356,6 +359,23 @@ class BrokerConfig(BaseModel):
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"        # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False  # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
+
+
+class EngineConfig(BaseModel):
+    """引擎时序参数（Step 2.2：原 Engine.__init__ 硬编码常量归一）。
+
+    三项都是「根数」口径（单位 = K 线根数，与墙钟时间无关）：
+      语义上周期敏感（15s 的 5 根 = 75 秒；30m 的 5 根 = 2.5 小时），
+      当前按跨周期不变值放本模型（用户拍板 F1）；2.7+ 若差异化标定，
+      候选迁入 PeriodProfile（见 PERIOD_SENSITIVE_FIELDS 索引表注记）。
+
+    单一事实源：默认值只在本模型维护，Engine/Reconcile 不再自带兜底数字。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    close_retry_bars: int = 5    # close 被拒后冷却多少根 bar 再试（防每根 bar 重复平仓死循环）
+    close_max_streak: int = 20   # 连续失败这么多根后认定幻影持仓，强制清除
+    unlock_stuck_bars: int = 5   # UNLOCK 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
 
 
 # ════════════════════════════════════════════════════════════════════

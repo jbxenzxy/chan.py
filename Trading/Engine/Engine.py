@@ -85,8 +85,10 @@ class TradingEngine(ReconcileMixin):
         #   真正的根数 = bars_seen 序号差，与周期、与时间戳单位都无关。
         self._last_close_failed_bar_seq: int = 0
         self._close_fail_streak: int = 0
-        self._close_retry_bars: int = 5      # 失败后冷却多少根 bar 再试
-        self._close_max_streak: int = 20     # 连续失败这么多根后清掉幻影持仓
+        # Step 2.2（2026-09-08）：三项时序常量归一到 cfg.engine（原硬编码 5/20/5 收口），
+        #   属性名不变，下游消费点（cooldown 判定 / 幻影清除 / Reconcile 卡单复核）零改动。
+        self._close_retry_bars: int = cfg.engine.close_retry_bars    # 失败后冷却多少根 bar 再试
+        self._close_max_streak: int = cfg.engine.close_max_streak    # 连续失败这么多根后清掉幻影持仓
         # ════════════════════════════════════════════════════════════════
         # Phase F1（2026-09-05）：UNLOCK 卡单检测
         #   问题：UNLOCK 报单后 broker 返回 filled，但 CTP 通道异常时真实未成交；
@@ -101,7 +103,7 @@ class TradingEngine(ReconcileMixin):
         self._unlock_in_flight: Optional[Dict[str, Any]] = None
         # dict = {"signal_key": str, "target_signal_key": str,
         #         "submit_bar_ts": int, "submit_bar_seq": int}
-        self._unlock_stuck_bars: int = 5     # 报单后多少 bar 触发复核（与 _close_retry_bars 对齐）
+        self._unlock_stuck_bars: int = cfg.engine.unlock_stuck_bars   # 报单后多少 bar 触发复核（与 close_retry_bars 对齐）
         # ════════════════════════════════════════════════════════════════
         # 解锁复核 in-flight（单笔）：UNLOCK 报单成功后挂起，5 bars 后
         # _check_unlock_stuck 调 broker.trade_confirmed 复核真实持仓。

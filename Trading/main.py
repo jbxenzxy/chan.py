@@ -37,8 +37,8 @@ from Trading.Strategy import (DefaultEntryPolicy,          # noqa: E402
 from Trading.Config import TradingConfig                         # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
-from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS,          # noqa: E402
-                                        bar_secs_for)
+from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS, SESSION_SECS,  # noqa: E402
+                                        bar_secs_for, bars_per_day)
 from Trading.Infra.Store import Store                           # noqa: E402
 from Trading.Infra.Types import now_cn                          # noqa: E402
 
@@ -89,8 +89,11 @@ def build_runtime(args):
             "新增周期请同步 Trading/Infra/PeriodProfile.py 的 FREQ_SEC "
             "并补 test_period_consistency 对账。".format(
                 cfg.source.freq, ", ".join(SUPPORTED_FREQS)))
-    print("[gw] 周期档案 freq={} bar_secs={}s（约 {:.1f} 根/交易日）".format(
-        cfg.source.freq, _bs, (4.5 * 3600) / _bs))
+    # Step 2.2：4.5h 交易日近似收口到 PeriodProfile.SESSION_SECS（原硬编码在此处）
+    _bpd = bars_per_day(_bs, SESSION_SECS)
+    print("[gw] 周期档案 freq={} bar_secs={}s（约 {} 根/交易日，按 {}h 近似）".format(
+        cfg.source.freq, _bs,
+        _bpd if _bpd is not None else "?", SESSION_SECS / 3600))
 
     # Step 2.1：CLI --freq 已在构造后改了 source.freq，这里把 6 项周期敏感参数
     # 按新 freq 的档案重新对齐（基线值下幂等 no-op；2.7+ 差异化后这里才是关键）。
