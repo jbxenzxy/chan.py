@@ -239,7 +239,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         tp = entry_price - tp_offset
         stop = entry_price + sl_offset
     return Position(
-        symbol="KQ.m@CFFEX.IF", side=side, volume=vol,
+        symbol="CFFEX.IF2609", side=side, volume=vol,
         entry_price=entry_price, entry_at=now_cn(),
         entry_bar_ts=4000 + entry_bar_seq * 100,
         entry_bar_seq=entry_bar_seq,
@@ -253,7 +253,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
 def make_signal(key, side, price=4550.0, date="2026-09-01 09:35", bsp_type="buy"):
     """构造手动 Signal（不走 chan.py 上游）。"""
     from Trading.Infra.Types import Signal
-    return Signal(key=key, symbol="KQ.m@CFFEX.IF", freq="5m",
+    return Signal(key=key, symbol="CFFEX.IF2609", freq="5m",
                   timestamp=5000, date=date, bsp_type=bsp_type,
                   is_buy=(side is Side.LONG), price=price,
                   high=price + 5.0, low=price - 5.0)

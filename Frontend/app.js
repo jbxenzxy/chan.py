@@ -3526,6 +3526,12 @@
 
         window.switchFreq = function(freq) {
             if (!chartData) return;
+            // 自动下单引擎运行中禁止切换周期：运行中的引擎绑定旧周期的 SSE 流，
+            // 直接切换会与引擎状态错配，须先关闭自动下单。
+            if (autoOrderRunning) {
+                alert('自动下单引擎运行中，请先关闭自动下单，再切换周期。');
+                return;
+            }
             const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
             // 期货双窗口下窗焦点：独立切换下窗周期，不联动上窗
             if (isDualWindow && activeDualWindow === 'sub' && isFutures) {
@@ -4181,6 +4187,12 @@
         window.loadStock = function() {
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
+            // 自动下单引擎运行中禁止切换合约：运行中的引擎绑定旧合约的持仓/SSE 流，
+            // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
+            if (autoOrderRunning) {
+                alert('自动下单引擎运行中，请先关闭自动下单，再切换合约。');
+                return;
+            }
             // 切换股票时取消区间选择
             if (_rangeSelect.mode === 'SELECTED_A') {
                 _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
@@ -7393,6 +7405,7 @@
         let autoOrderPrevRunning = null;  // 上次轮询的进程状态（用于探测异常退出）
         let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
         let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
+        let autoOrderRunning = false;     // 引擎进程是否运行中（切换合约/周期的 guard 依据）
 
         // 开关随"实时"徽标显隐：仅期货实时模式展示
         function syncAutoOrderWrap() {
@@ -7416,6 +7429,7 @@
                 const running = !!data.running;
                 const enabled = !!(data.auto_order && data.auto_order.enabled);
                 const on = running && enabled;
+                autoOrderRunning = running;   // 同步进程运行态给切换 guard 用
                 // 状态变化 → 控制台输出完整信息（定位"自动关闭"问题）
                 if (on !== autoOrderLastOn) {
                     console.info('[auto-order] 状态: ' + (on ? '开' : '关')

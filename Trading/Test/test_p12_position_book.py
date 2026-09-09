@@ -114,7 +114,7 @@ def check_raises(name, fn, exc_type):
     _FAIL += 1
 
 
-def make_pos(symbol="CFFEX.IF", side=Side.LONG, vol=1, entry_price=4550.0,
+def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4550.0,
              entry_mode=EntryMode.OPEN_FIRST):
     """构造一个最小化的 Position（绕开真实开仓流程，专测 PositionBook）。"""
     return Position(
@@ -257,7 +257,7 @@ data = b4.to_dict()
 check("单仓 to_dict() 是 list", isinstance(data, list), True)
 check("单仓 to_dict() 长度 == 1", len(data), 1)
 check("to_dict()[0] 是 dict 且含 symbol", isinstance(data[0], dict)
-      and data[0].get("symbol") == "CFFEX.IF", True)
+      and data[0].get("symbol") == "CFFEX.IF2609", True)
 # roundtrip
 b4_rt = PositionBook.from_dict(data)
 check("from_dict(list) 簿长度 == 1", len(b4_rt), 1)
@@ -286,7 +286,7 @@ check("双边 roundtrip 后 entry_mode 集合保留",
 # ════════════════════════════════════════════════════════════════
 print("\n[5] from_dict 兼容旧版单字段 dict")
 legacy_dict = {
-    "symbol": "CFFEX.IF", "side": "LONG", "volume": 3,
+    "symbol": "CFFEX.IF2609", "side": "LONG", "volume": 3,
     "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
     "entry_bar_ts": 4000, "entry_bar_seq": 10,
     "signal_key": "OLD", "open_order_id": "old-o1",
@@ -362,7 +362,7 @@ with tmp_dir() as tmp:
     check("单仓 persist → 新键 'positions' 是 list 且 len==1",
           isinstance(new_k, list) and len(new_k) == 1, True)
     check("单仓 persist → 旧键 'position' 是 dict 含 symbol",
-          isinstance(legacy_k, dict) and legacy_k.get("symbol") == "CFFEX.IF",
+          isinstance(legacy_k, dict) and legacy_k.get("symbol") == "CFFEX.IF2609",
           True)
     check("两个键的 symbol 一致（新旧视图统一）",
           new_k[0].get("symbol"), legacy_k.get("symbol"))
@@ -396,7 +396,7 @@ with tmp_dir() as tmp:
     # ① 自己造一个老数据库布局：只写 "position"，不写 "positions"
     store = Store(os.path.join(tmp, "state.db"))
     legacy_dict = {
-        "symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        "symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
         "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
         "entry_bar_ts": 4000, "entry_bar_seq": 10,
         "signal_key": "LEGACY", "open_order_id": "l-o1",
@@ -439,14 +439,14 @@ print("\n[9] _restore 从新版 'positions' list 恢复（cfg.max=2）")
 with tmp_dir() as tmp:
     store = Store(os.path.join(tmp, "state.db"))
     store.set_json("positions", [
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "K1", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
                        "params": {}},
          "entry_mode": "open_first"},
-        {"symbol": "CFFEX.IF", "side": "SHORT", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "SHORT", "volume": 1,
          "entry_price": 4555.0, "entry_at": "2026-09-01 09:05",
          "entry_bar_ts": 4200, "entry_bar_seq": 12,
          "signal_key": "K2", "open_order_id": "o2",
@@ -496,19 +496,19 @@ print("\n[9b] E3.1 cfg 截断：persisted=3 但 cfg.max=1")
 with tmp_dir() as tmp:
     store = Store(os.path.join(tmp, "state.db"))
     store.set_json("positions", [
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "P1", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
                        "params": {}}, "entry_mode": "open_first"},
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4505.0, "entry_at": "2026-09-01 09:01",
          "entry_bar_ts": 4020, "entry_bar_seq": 11,
          "signal_key": "P2", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None,
                        "params": {}}, "entry_mode": "open_first"},
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4510.0, "entry_at": "2026-09-01 09:02",
          "entry_bar_ts": 4040, "entry_bar_seq": 12,
          "signal_key": "P3", "open_order_id": "o3",
@@ -555,7 +555,7 @@ print("\n[10] UNLOCK_FIRST 持仓端到端 roundtrip 保留 entry_mode")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     pos_u = Position(
-        symbol="CFFEX.IF", side=Side.LONG, volume=2,
+        symbol="CFFEX.IF2609", side=Side.LONG, volume=2,
         entry_price=4500.0, entry_at="2026-09-01 09:00",
         entry_bar_ts=4000, signal_key="U1",
         open_order_id="u-o1",
@@ -591,6 +591,58 @@ with tmp_dir() as tmp:
 print("\n[11] 改完后没有破坏 P10/P11 的「零行为变化」假设：见全回归报告")
 # 本文件已包含 9 + 21 + 19 + 20 + 62 + 59 + 59 = 249 例；
 # E1 提交后这些数字必须保持。本 section 仅占位说明，不重复跑全套（避免拖慢 CI）。
+
+
+# ════════════════════════════════════════════════════════════════
+# [12] v1.4 切合约隔离：restore 只加载当前 trade_symbol，persist 保留它合约持仓
+# ════════════════════════════════════════════════════════════════
+print("\n[12] 切合约隔离：restore 按 trade_symbol 过滤 + persist 分片合并")
+with tmp_dir() as tmp:
+    store = Store(os.path.join(tmp, "state.db"))
+    # 库里同时有 IF（当前合约）与 IM（其它合约）持仓，模拟「IF 交易后切到 IM 又切回」的残留
+    store.set_json("positions", [
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
+         "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
+         "entry_bar_ts": 4000, "entry_bar_seq": 10,
+         "signal_key": "IF-L", "open_order_id": "o1",
+         "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
+                       "params": {}}, "entry_mode": "open_first"},
+        {"symbol": "CFFEX.IM2609", "side": "SHORT", "volume": 1,
+         "entry_price": 6000.0, "entry_at": "2026-09-01 09:05",
+         "entry_bar_ts": 4200, "entry_bar_seq": 12,
+         "signal_key": "IM-S", "open_order_id": "o2",
+         "exit_plan": {"name": "x", "stop_price": 6010.0, "tp_price": None,
+                       "params": {}}, "entry_mode": "open_first"},
+    ])
+    store.close()
+
+    # IF 引擎（instrument.trade_symbol = CFFEX.IF2609）
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    spec = InstrumentSpec()
+    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
+    entry = DefaultEntryPolicy({})
+    exitp = LayeredExitPolicy()
+    store2 = Store(os.path.join(tmp, "state.db"))
+    ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
+    engine = TradingEngine(cfg, broker, entry, exitp, store2, ev)
+
+    # restore 只加载 IF，IM 持仓被过滤掉（不误进簿、不误对账）
+    check("restore 只加载 IF 持仓（IM 被过滤）", len(engine.positions), 1)
+    check("加载的持仓 symbol == trade_symbol",
+          engine.positions.positions[0].symbol, "CFFEX.IF2609")
+    check("加载的是 IF 仓（signal_key=IF-L）",
+          engine.positions.positions[0].signal_key, "IF-L")
+
+    # persist 分片合并：IF 全平（簿空）后，IM 持仓仍保留在库里
+    engine.positions.clear()
+    engine._persist()
+    after = store2.get_json("positions")
+    check("IF 全平 persist 后 IM 持仓仍保留",
+          isinstance(after, list) and len(after) == 1, True)
+    check("保留的是 IM 仓", after[0].get("symbol"), "CFFEX.IM2609")
+    legacy = store2.get_json("position")
+    check("旧键 'position' 退回它合约首仓（IM）",
+          legacy.get("symbol") if legacy else None, "CFFEX.IM2609")
 
 
 print("\n" + "=" * 60)

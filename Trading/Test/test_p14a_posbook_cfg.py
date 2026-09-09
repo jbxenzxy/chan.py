@@ -355,19 +355,19 @@ print("\n[8] _restore 截断时 ev 写 warning")
 with tmp_dir() as tmp:
     store = Store(os.path.join(tmp, "state.db"))
     store.set_json("positions", [
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "PA", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
                        "params": {}}, "entry_mode": "open_first"},
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4505.0, "entry_at": "2026-09-01 09:01",
          "entry_bar_ts": 4020, "entry_bar_seq": 11,
          "signal_key": "PB", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None,
                        "params": {}}, "entry_mode": "open_first"},
-        {"symbol": "CFFEX.IF", "side": "LONG", "volume": 1,
+        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4510.0, "entry_at": "2026-09-01 09:02",
          "entry_bar_ts": 4040, "entry_bar_seq": 12,
          "signal_key": "PC", "open_order_id": "o3",

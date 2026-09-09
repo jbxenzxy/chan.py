@@ -228,7 +228,7 @@ class SourceConfig(BaseModel):
     sse_base: str = "http://127.0.0.1:18081"  # sse 模式的行情服务地址
     symbol: str = "KQ.m@CFFEX.IF"             # 订阅合约（与 instrument.signal_symbol 一致）
     freq: str = "5m"                          # K 线周期（周期只做字符串透传，不参与分钟换算）
-    speed: float = 0.0                        # replay 每根 K 线间隔秒数（0=尽快）
+    speed: float = 0.0                   # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
     # 信号新鲜度过滤 —— K 线位置口径（2026-09-08 取代原 signal_max_age_minutes）：

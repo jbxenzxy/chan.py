@@ -103,7 +103,7 @@ def check(name, got, expected):
 def make_signal(is_buy, price=4550.0, high=4552.0, low=4548.0, date="2026-09-01 09:35",
                 bsp_type="1", sig_key=None):
     sig_key = sig_key or Signal.make_key(date, bsp_type, is_buy)
-    return Signal(key=sig_key, symbol="CFFEX.IF", freq="5m", date=date,
+    return Signal(key=sig_key, symbol="CFFEX.IF2609", freq="5m", date=date,
                   timestamp=0, bsp_type=bsp_type, is_buy=is_buy,
                   price=price, high=high, low=low)
 
@@ -189,7 +189,7 @@ with tmp_dir() as tmp:
 with tmp_dir() as tmp:
     engine, store, broker = build_engine(tmp)
     # 手动写入一个持仓到 store，重启 engine，验证 _restore 推断 IN_TRADE
-    pos = Position(symbol="CFFEX.IF", side=Side.LONG, volume=1, entry_price=4550.0,
+    pos = Position(symbol="CFFEX.IF2609", side=Side.LONG, volume=1, entry_price=4550.0,
                    entry_at="2026-09-01 09:30", entry_bar_ts=0, signal_key="restored",
                    open_order_id="restored_o", exit_plan=ExitPlan(name="x", stop_price=4540.0),
                    entry_mode=EntryMode.OPEN_FIRST)

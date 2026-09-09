@@ -159,13 +159,20 @@ class TradingEngine(ReconcileMixin):
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
         # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢仓（解 D3）。
         restore_max = None
+        # v1.4（切合约隔离）：只恢复当前 trade_symbol 的持仓。切换合约（如 IF→IM）后
+        # 旧合约持仓留在 state.db 不加载进簿，避免 _restore 末尾的 _reconcile_positions
+        # 把旧合约持仓当成「外部平仓」误清（PnL 还会按新合约 spec 算，全错）。
+        # 旧合约持仓由 _persist 的分片合并继续保留在库里，切回原合约时可恢复。
+        my_symbol = self.spec.trade_symbol
         pd_list = self.store.get_json("positions")
         if isinstance(pd_list, list):
-            new_book = PositionBook.from_dict(pd_list, max_positions=restore_max)
+            own = [d for d in pd_list
+                   if isinstance(d, dict) and d.get("symbol") == my_symbol]
+            new_book = PositionBook.from_dict(own, max_positions=restore_max)
             self.positions.replace_with(new_book)
         else:
             pd = self.store.get_json("position")
-            if isinstance(pd, dict) and pd.get("symbol"):
+            if isinstance(pd, dict) and pd.get("symbol") == my_symbol:
                 new_book = PositionBook(max_positions=restore_max)
                 new_book.set_legacy(Position.from_dict(pd))
                 self.positions.replace_with(new_book)
@@ -244,10 +251,20 @@ class TradingEngine(ReconcileMixin):
         # 多仓时旧键取 positions[0] —— 是为了保留"看一眼持仓是哪个合约"的旧 API，
         # 不是引擎主入口（主入口走 self.positions）。legacy_single() 在多仓会抛错
         # 是有意的早期守护 E3，这里规避它。
-        if not self.positions.is_empty():
-            self.store.set_json("positions", self.positions.to_dict())
-            p0 = self.positions.positions[0]
-            self.store.set_json("position", p0.to_dict())
+        # v1.4（切合约隔离）：positions 按 trade_symbol 分片写回 —— 只覆盖当前合约的
+        # 持仓，保留库里其它合约的持仓，切走再切回时能恢复管理。旧键 "position" 优先
+        # 写当前合约首仓，否则退回其它合约首仓（仅供审计「看一眼是哪个合约」）。
+        my_symbol = self.spec.trade_symbol
+        existing = self.store.get_json("positions")
+        existing_list = existing if isinstance(existing, list) else []
+        others = [d for d in existing_list
+                  if isinstance(d, dict) and d.get("symbol")
+                  and d.get("symbol") != my_symbol]
+        mine = self.positions.to_dict() if not self.positions.is_empty() else []
+        merged = others + mine
+        if merged:
+            self.store.set_json("positions", merged)
+            self.store.set_json("position", mine[0] if mine else others[0])
         else:
             self.store.delete_key("positions")
             self.store.delete_key("position")
