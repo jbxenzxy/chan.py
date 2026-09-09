@@ -127,7 +127,7 @@ class RealPosBroker(DryRunBroker):
 def make_signal(is_buy, price=4500.0, high=4552.0, low=4548.0,
                 date="2026-09-02 09:35", bsp_type="1", sig_key=None):
     sig_key = sig_key or ("{}|{}|{}".format(date, bsp_type, "B" if is_buy else "S"))
-    return Signal(key=sig_key, symbol="CFFEX.IF", freq="5m", date=date,
+    return Signal(key=sig_key, symbol="CFFEX.IF2609", freq="5m", date=date,
                   timestamp=0, bsp_type=bsp_type, is_buy=is_buy,
                   price=price, high=high, low=low)
 
@@ -136,7 +136,7 @@ def make_bar(ts, o, h, l, c, date="2026-09-02 09:40"):
     return Bar(timestamp=ts, date=date, open=o, high=h, low=l, close=c, vol=1)
 
 
-def make_pos(symbol="CFFEX.IF", side=Side.LONG, vol=1, entry_price=4500.0,
+def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
              entry_mode=EntryMode.OPEN_FIRST, signal_key="P18-LEGACY",
              entry_bar_seq=0):
     return Position(

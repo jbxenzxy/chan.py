@@ -95,7 +95,7 @@ def check(name, got, expected):
         _FAIL += 1
 
 
-def make_pos(symbol="CFFEX.IF", side=Side.LONG, vol=1, entry_price=4500.0,
+def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
              entry_mode=EntryMode.LOCKED, signal_key="P13-LEGACY",
              entry_date="2026-09-01"):
     # v1.3（S1）：本测试注入的持仓代表"LOCK 留下的反向对冲仓"，故默认
@@ -115,7 +115,7 @@ def make_signal(is_buy, price=4550.0, high=4552.0, low=4548.0,
     sig_key = sig_key or ("{}|{}|{}".format(date, bsp_type, "B" if is_buy else "S"))
     # 导入 Signal（同 phase p10 风格）
     from Trading.Infra.Types import Signal
-    return Signal(key=sig_key, symbol="CFFEX.IF", freq="5m", date=date,
+    return Signal(key=sig_key, symbol="CFFEX.IF2609", freq="5m", date=date,
                   timestamp=0, bsp_type=bsp_type, is_buy=is_buy,
                   price=price, high=high, low=low)
 
