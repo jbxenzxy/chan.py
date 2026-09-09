@@ -137,8 +137,11 @@ check("OPEN → OPEN", INTENT_TO_OFFSET[OrderIntent.OPEN], "OPEN")
 check("LOCK → OPEN (报文同 OPEN 但语义不同)",
       INTENT_TO_OFFSET[OrderIntent.LOCK], "OPEN")
 check("CLOSE → CLOSE", INTENT_TO_OFFSET[OrderIntent.CLOSE], "CLOSE")
-check("UNLOCK → CLOSEYESTERDAY (避开平今)",
-      INTENT_TO_OFFSET[OrderIntent.UNLOCK], "CLOSEYESTERDAY")
+# 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单（api.py:1353 只接受
+# OPEN/CLOSE/CLOSETODAY）→ 实盘 insert_order 本地 raise，跨日解锁 100% 失败。
+# 平昨语义不变，报文改为 tqsdk 合法的 "CLOSE"（中金所/上期所平昨均用 CLOSE）。
+check("UNLOCK → CLOSE (平昨语义，CLOSEYESTERDAY 不被 tqsdk 接受)",
+      INTENT_TO_OFFSET[OrderIntent.UNLOCK], "CLOSE")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -193,11 +196,11 @@ check("CLOSE 报 meta.intent='close'", o_close.meta.get("intent"), "close")
 check("CLOSE 报 meta.offset='CLOSE'", o_close.meta.get("offset"), "CLOSE")
 
 o_unlock = broker.submit(OrderIntent.UNLOCK, side_l, 1, 4550.0, "k4", "unlock1")
-check("UNLOCK 报 action='close' (Unlock 走 CloseYesterday 报文)",
+check("UNLOCK 报 action='close' (Unlock 走平昨报文)",
       o_unlock.action, "close")
 check("UNLOCK 报 meta.intent='unlock'", o_unlock.meta.get("intent"), "unlock")
-check("UNLOCK 报 meta.offset='CLOSEYESTERDAY'",
-      o_unlock.meta.get("offset"), "CLOSEYESTERDAY")
+check("UNLOCK 报 meta.offset='CLOSE' (2026-09-10: CLOSEYESTERDAY 非法)",
+      o_unlock.meta.get("offset"), "CLOSE")
 
 # 字符串 action 兼容
 o_legacy = broker.submit("close", side_l, 1, 4550.0, "k5", "legacy")

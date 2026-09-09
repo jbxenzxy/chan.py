@@ -13,7 +13,8 @@ P13 UNLOCK_FIRST 入场路径单元测试（Phase E2）
 
 硬性要求（本测试锁死）
     ① 入口分流决策：IDLE + has_opposite(side) 走 UNLOCK；其它走原路径
-    ② broker 收到 1 笔 UNLOCK intent 报（offset=CLOSEYESTERDAY）
+    ② broker 收到 1 笔 UNLOCK intent 报（offset=CLOSE，平昨语义；
+       2026-09-10 前为 CLOSEYESTERDAY，因不在 tqsdk 白名单已修正）
     ③ side = portfolio 里那笔的方向（不是 sig.direction）
     ④ 成功后 portfolio 清空 + Trade 落盘 + state 回 IDLE
     ⑤ 拒单后 portfolio 不动 + signal_rejected + state 回 IDLE
@@ -248,8 +249,10 @@ with tmp_dir() as tmp:
         check("UNLOCK 报 side = portfolio.side (SHORT)（不是 sig.is_buy=true→LONG）",
               uo.side, Side.SHORT)
         check("UNLOCK 报 volume = portfolio.volume (3)", uo.volume, 3)
-        check("UNLOCK 报 offset = CLOSEYESTERDAY",
-              uo.meta.get("offset"), "CLOSEYESTERDAY")
+        # 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单（api.py:1353 只接受
+        # OPEN/CLOSE/CLOSETODAY）→ 实盘本地 raise，跨日解锁 100% 失败。平昨语义不变。
+        check("UNLOCK 报 offset = CLOSE（平昨，2026-09-10 由 CLOSEYESTERDAY 修正）",
+              uo.meta.get("offset"), "CLOSE")
         check("UNLOCK 报 action = close（dry_run is_open_like=False 视角）",
               uo.action, "close")
         # dry_run 在 UNLOCK/CLOSE 上让价 slippage_ticks tick：

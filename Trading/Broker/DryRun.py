@@ -42,7 +42,8 @@ class DryRunBroker(Broker):
         self.orders: List[Order] = []
 
     def submit(self, intent, side: Side, volume: int, ref_price: float,
-               signal_key: str = "", note: str = "") -> Order:
+               signal_key: str = "", note: str = "",
+               entry_date: str = "") -> Order:
         intent = self._resolve_intent(intent, side)
         spec = self.spec
         sign = side.sign
@@ -74,6 +75,7 @@ class DryRunBroker(Broker):
                 "offset": offset_str,              # Phase C：记账 CTP 报文类型
                 "offset_close_yesterday_first": bool(
                     spec.close_today_first),       # 成本计算时按此选平今/平昨费率
+                "entry_date": entry_date,          # 2026-09-10：被平腿建仓日（今/昨仓审计用）
             },
         )
         self.orders.append(o)

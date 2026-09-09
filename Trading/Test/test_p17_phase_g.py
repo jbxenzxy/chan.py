@@ -507,8 +507,9 @@ bu._api = api1
 o = bu.submit(OrderIntent.UNLOCK, Side.LONG, 2, 4550.0, "u-key-timeout")
 check("6.1a 超时未成交 → rejected", o.status, "rejected")
 check("6.1b 只报了 1 次单（不追价）", len(api1.inserted), 1)
-check("6.1c 报文是 CLOSEYESTERDAY（平昨不变）",
-      api1.inserted[0]["offset"], "CLOSEYESTERDAY")
+# 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
+check("6.1c 报文是 CLOSE（平昨；原 CLOSEYESTERDAY 不被 tqsdk 接受）",
+      api1.inserted[0]["offset"], "CLOSE")
 check("6.1d 方向 SELL（平多单）", api1.inserted[0]["direction"], "SELL")
 check("6.1e 超时后撤单被调用", len(api1.cancelled), 1)
 check("6.1f FOK 改造：UNLOCK 报文带 advanced=FOK",

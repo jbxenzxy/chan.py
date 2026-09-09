@@ -43,8 +43,14 @@ def build_broker(name: str, spec: InstrumentSpec,
 # 真实下单（simnow）按这张表映射；dry_run 同样遵守，便于回放日志审计。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
     OrderIntent.OPEN: "OPEN",              # 首次开仓
-    OrderIntent.UNLOCK: "CLOSEYESTERDAY",  # 解锁：只平昨仓（自动避开平今）
-    OrderIntent.CLOSE: "CLOSE",            # 平仓：按 spec.close_today_first 决定 CloseToday / CloseAny
+    # 2026-09-10 修正（P0）：原值 "CLOSEYESTERDAY" 不在 tqsdk 白名单内
+    #   （tqsdk api.py:1353 / lib/utils.py:39 / scenario/tqscenario.py:445 三处硬校验
+    #    offset ∈ ("OPEN", "CLOSE", "CLOSETODAY")，其它值直接 raise），
+    #   实盘下 insert_order 本地抛异常 → 被 except 吞成 rejected → 跨日解锁 100% 失败。
+    #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
+    #   故解锁（只平昨）在中金所与上期所都应用 "CLOSE"。
+    OrderIntent.UNLOCK: "CLOSE",           # 解锁：只平昨仓（中金所/上期所平昨报文均为 CLOSE）
+    OrderIntent.CLOSE: "CLOSE",            # 平仓：实际报文由 SimNow._close_offset 按今/昨仓决定
     OrderIntent.LOCK: "OPEN",              # 锁仓：与 OPEN 报文相同，但方向相反（净额对冲）
 }
 
@@ -58,7 +64,8 @@ class Broker(ABC):
 
     @abstractmethod
     def submit(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
-               signal_key: str = "", note: str = "") -> Order:
+               signal_key: str = "", note: str = "",
+               entry_date: str = "") -> Order:
         """提交委托并等待终态。
 
         intent: 订单意图（OrderIntent）
@@ -67,6 +74,10 @@ class Broker(ABC):
           - CLOSE    平仓
           - LOCK     锁仓（开反向同手数）
         ref_price: 策略参考价（开仓=信号K线收盘价；平仓=触发价；锁仓/解锁同 CLOSE）
+        entry_date: 被平持仓腿的建仓日期（YYYY-MM-DD，2026-09-10 新增）。
+          仅 CLOSE 使用：broker 据此判今仓/昨仓选 offset（昨仓→CLOSE，今仓→CLOSETODAY）。
+          留空时保守按昨仓处理（与引擎 on_signal 的 "" < today 口径一致）。
+          新增在参数表末尾且带默认值，既有位置参数调用不受影响。
         """
         raise NotImplementedError
 

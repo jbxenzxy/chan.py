@@ -646,9 +646,12 @@ class TradingEngine(ReconcileMixin):
             else:
                 intent, side = self._exit_intent(pos)
 
+            # 2026-09-10：把被平腿的建仓日传给 broker，让它按今仓/昨仓选 offset
+            # （昨仓→CLOSE；今仓且 close_today_first→CLOSETODAY）。传参前 CLOSE 一律
+            # 发 CLOSETODAY，导致 UNLOCK_FIRST 腿（必为昨仓）被发成平今 → CTP 拒单。
             o = self.broker.submit(intent, side, pos.volume, trigger_price,
                                    signal_key or pos.signal_key,
-                                   note=reason)
+                                   note=reason, entry_date=pos.entry_date or "")
             self.store.save_order(o)
             self.ev.write("order", order_id=o.order_id, action=o.action,
                           intent=o.meta.get("intent", intent.value),

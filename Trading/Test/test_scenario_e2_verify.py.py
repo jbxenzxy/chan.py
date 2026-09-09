@@ -172,8 +172,9 @@ def scenario_a_unlock_endtoend() -> bool:
           {"order": new_order.to_dict()})
     _must(new_order.meta.get("intent") == "unlock", "Order.meta.intent == 'unlock'",
           {"meta": new_order.meta})
-    _must(new_order.meta.get("offset") == "CLOSEYESTERDAY",
-          "Order.meta.offset == 'CLOSEYESTERDAY' (UNLOCK 报单特征)",
+    # 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
+    _must(new_order.meta.get("offset") == "CLOSE",
+          "Order.meta.offset == 'CLOSE' (UNLOCK 平昨报单特征；tqsdk 白名单内)",
           {"meta": new_order.meta})
     _must(new_order.side is Side.SHORT, "UNLOCK 报单 side = SHORT (平昨仓方向)",
           {"side": str(new_order.side)})
@@ -358,10 +359,13 @@ def scenario_c_simnow_unlock_intent() -> bool:
     _must(resolved3 is OrderIntent.LOCK, "直接传 OrderIntent.LOCK → 原样返回",
           {"resolved": str(resolved3)})
 
-    # 验证：base.INTENT_TO_OFFSET 表仍是权威 —— UNLOCK 必映射 CLOSEYESTERDAY
+    # 验证：base.INTENT_TO_OFFSET 表仍是权威 —— UNLOCK 必映射平昨报文，
+    # 且必须在 tqsdk 白名单内（2026-09-10：CLOSEYESTERDAY 不在白名单，已改 CLOSE）
     from Trading.Broker.Base import INTENT_TO_OFFSET as _ITO
-    _must(_ITO[OrderIntent.UNLOCK] == "CLOSEYESTERDAY",
-          "INTENT_TO_OFFSET[UNLOCK] == CLOSEYESTERDAY（防回退）")
+    _must(_ITO[OrderIntent.UNLOCK] == "CLOSE",
+          "INTENT_TO_OFFSET[UNLOCK] == CLOSE（平昨，防回退）")
+    _must(_ITO[OrderIntent.UNLOCK] in ("OPEN", "CLOSE", "CLOSETODAY"),
+          "INTENT_TO_OFFSET[UNLOCK] 必须在 tqsdk offset 白名单内（防回退到 CLOSEYESTERDAY）")
     _must(_ITO[OrderIntent.LOCK] == "OPEN",
           "INTENT_TO_OFFSET[LOCK] == OPEN（防回退）")
 

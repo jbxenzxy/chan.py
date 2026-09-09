@@ -301,7 +301,8 @@ with tmp_dir() as td:
             self.reject_first_n = reject_first_n
             self._calls = 0
 
-        def submit(self, intent, side, volume, ref_price, signal_key="", note=""):
+        def submit(self, intent, side, volume, ref_price, signal_key="", note="",
+                   entry_date=""):
             self._calls += 1
             if self._calls <= self.reject_first_n:
                 from Trading.Infra.Types import Order
@@ -316,7 +317,8 @@ with tmp_dir() as td:
                           "reject_reason": "test_reject"})
                 self.orders.append(o)
                 return o
-            return super().submit(intent, side, volume, ref_price, signal_key, note)
+            return super().submit(intent, side, volume, ref_price, signal_key, note,
+                                  entry_date)
 
     broker = RejectDryBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
                               reject_first_n=1)
@@ -349,7 +351,8 @@ with tmp_dir() as td:
             super().__init__(spec, params)
             self._calls = 0
 
-        def submit(self, intent, side, volume, ref_price, signal_key="", note=""):
+        def submit(self, intent, side, volume, ref_price, signal_key="", note="",
+                   entry_date=""):
             self._calls += 1
             if self._calls == 2:
                 from Trading.Infra.Types import Order
@@ -364,7 +367,8 @@ with tmp_dir() as td:
                           "reject_reason": "test_skip_second"})
                 self.orders.append(o)
                 return o
-            return super().submit(intent, side, volume, ref_price, signal_key, note)
+            return super().submit(intent, side, volume, ref_price, signal_key, note,
+                                  entry_date)
 
     broker = SkipSecondBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0})
     eng = make_engine(td, max_open_positions=3, broker=broker)

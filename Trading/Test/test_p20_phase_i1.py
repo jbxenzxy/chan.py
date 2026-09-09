@@ -146,7 +146,8 @@ class LockRejectBroker(DryRunBroker):
         super().__init__(spec, params)
         self._reject_left = reject_n
 
-    def submit(self, intent, side, volume, ref_price, signal_key="", note=""):
+    def submit(self, intent, side, volume, ref_price, signal_key="", note="",
+               entry_date=""):
         intent = self._resolve_intent(intent, side)
         if intent is OrderIntent.LOCK and self._reject_left > 0:
             self._reject_left -= 1
@@ -161,7 +162,7 @@ class LockRejectBroker(DryRunBroker):
             self.orders.append(o)
             return o
         return super().submit(intent, side, volume, ref_price, signal_key,
-                              note=note)
+                              note=note, entry_date=entry_date)
 
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,

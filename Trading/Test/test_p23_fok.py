@@ -218,7 +218,9 @@ o = b.submit(OrderIntent.UNLOCK, Side.LONG, 1, 4550.0, "k-unlock")
 check("报单次数 = 1（入场语义不追价）", len(api.inserted), 1)
 msg = api.inserted[0]
 check("advanced == FOK", msg["advanced"], "FOK")
-check("offset CLOSEYESTERDAY（平昨报文不变）", msg["offset"], "CLOSEYESTERDAY")
+# 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
+check("offset CLOSE（平昨，2026-09-10 由 CLOSEYESTERDAY 修正）",
+      msg["offset"], "CLOSE")
 check("direction SELL（平多）", msg["direction"], "SELL")
 check("限价 = bid - 1.0 = 4559.0（卖方向向下取整）", msg["limit_price"], 4559.0)
 
@@ -240,8 +242,12 @@ b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close")
 check("CLOSE 追价报单次数 = close_max_chase", len(api.inserted), 2)
 check("所有 CLOSE 报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
-check("CLOSE 报文 CLOSEANY/CLOSETODAY（非 CLOSEYESTERDAY）",
-      api.inserted[0]["offset"] in ("CLOSEANY", "CLOSETODAY"), True)
+# 2026-09-10 修正：CLOSEANY 同样不在 tqsdk 白名单 → 白名单只剩 CLOSE / CLOSETODAY。
+# 本用例未传 entry_date → 保守按昨仓 → CLOSE。
+check("CLOSE 报文 CLOSE/CLOSETODAY（且必须在 tqsdk 白名单内）",
+      api.inserted[0]["offset"] in ("CLOSE", "CLOSETODAY"), True)
+check("CLOSE（无 entry_date，保守按昨仓）→ offset=CLOSE",
+      api.inserted[0]["offset"], "CLOSE")
 check("CLOSE 追价限价 = bid - 1.0 = 4559.0（平多=卖方向）",
       api.inserted[0]["limit_price"], 4559.0)
 
