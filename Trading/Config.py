@@ -286,19 +286,19 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损（A）；False=只靠 2×ATR 与 min_r_points
+    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR 与 min_r_points
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
-    r_multiple_tp: float = 2.0             # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
+    r_multiple_tp: float = 2.0             # 盈亏比。止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
     min_r_points: float = 3.0              # R 下限（点数），防极端横盘+极窄分型（品种档案可覆盖）
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
     atr_period: int = 14                        # ATR 计算周期
-    atr_sl_multiple: float = 2.0           # 初始止损距离 = atr_sl_multiple × ATR
+    atr_sl_multiple: float = 2.0           # 初始止损距离 1R = atr_sl_multiple × ATR
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
-    breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时止损抬至保本
+    breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，止损抬至保本
     breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick（覆盖往返手续费+滑点；品种档案 IF/IH=2、IC/IM=3）
-    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时启动 ATR 跟踪止损
+    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
 
