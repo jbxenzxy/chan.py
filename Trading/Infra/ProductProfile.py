@@ -51,7 +51,7 @@ class ProductProfile:
     r_multiple_tp: float
     multiplier: float
     breakeven_buffer_ticks: float = 2.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
-    note: str = ""                          # 调参记录 / 数据来源 / 标定状态
+    note: str = ""                              # 调参记录 / 数据来源 / 标定状态
 
     @property
     def label(self) -> str:
