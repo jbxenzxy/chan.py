@@ -127,21 +127,30 @@ class LayeredExitPolicy(ExitPolicy):
         return max(A, B, self.min_r_points)
 
     # ---------- 开仓时生成出场计划 ----------
-    def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec) -> ExitPlan:
+    def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec,
+             anchor: Optional[float] = None) -> ExitPlan:
+        """生成出场计划。
+
+        anchor = 风控锚（解锁重算时传解锁成交价 P₂）；None 时用 entry_price（正常开仓）。
+        会计锚 entry_price 与风控锚 anchor 分离：解锁后剩腿的 entry_price 保持 P₀（对账不动），
+        但止盈/止损/保本/跟踪全部以 anchor（P₂）为基准重算，避免用陈旧的 P₀ 导致
+        "开仓即触发"或"止损远在天边"。
+        """
+        base = anchor if anchor is not None else entry_price
         is_long = signal.side is Side.LONG
         min_gap = spec.price_tick
-        R = self._initial_r(signal, entry_price, spec)
+        R = self._initial_r(signal, base, spec)
         stop_dist = R
         tp_dist = self.r_multiple_tp * R
 
         if is_long:
-            raw_stop = entry_price - stop_dist - self.stop_buffer_ticks * spec.price_tick
-            raw_tp = entry_price + tp_dist
+            raw_stop = base - stop_dist - self.stop_buffer_ticks * spec.price_tick
+            raw_tp = base + tp_dist
             stop = spec.round_price(raw_stop, "up")        # 易触发（保守）
             nominal_tp = spec.round_price(raw_tp, "down")  # 难触发（保守）
         else:
-            raw_stop = entry_price + stop_dist + self.stop_buffer_ticks * spec.price_tick
-            raw_tp = entry_price - tp_dist
+            raw_stop = base + stop_dist + self.stop_buffer_ticks * spec.price_tick
+            raw_tp = base - tp_dist
             stop = spec.round_price(raw_stop, "down")
             nominal_tp = spec.round_price(raw_tp, "up")
 
@@ -151,19 +160,21 @@ class LayeredExitPolicy(ExitPolicy):
         #   （阶段 3 形同虚设）。名义止盈价仍写入 params，供事后对照分析。
         tp = None if self.use_trailing else nominal_tp
 
-        # P2 防护：止损必须严格在 entry 的"不利侧"且至少 1 tick 间距，
+        # P2 防护：止损必须严格在风控锚的"不利侧"且至少 1 tick 间距，
         # 否则遇到陈旧信号（行情已走远）会变成"开仓即触发止盈"的反向单。
         if is_long:
-            if stop is not None and stop >= entry_price - min_gap:
-                stop = spec.round_price(entry_price - max(stop_dist, min_gap), "down")
+            if stop is not None and stop >= base - min_gap:
+                stop = spec.round_price(base - max(stop_dist, min_gap), "down")
         else:
-            if stop is not None and stop <= entry_price + min_gap:
-                stop = spec.round_price(entry_price + max(stop_dist, min_gap), "up")
+            if stop is not None and stop <= base + min_gap:
+                stop = spec.round_price(base + max(stop_dist, min_gap), "up")
 
         params = dict(self.params)
         params["R"] = R
         params["_tp_nominal"] = nominal_tp  # 名义止盈价（B 方案不落单，仅供事后对照）
-        params["_trail_best"] = entry_price      # 跟踪极值初值 = 入场价
+        params["_trail_best"] = base              # 跟踪极值初值 = 风控锚（或入场价）
+        if anchor is not None:
+            params["risk_anchor"] = anchor        # 风控锚（解锁重算时 = P₂）
         return ExitPlan(name=self.name, stop_price=stop, tp_price=tp, params=params)
 
     # ---------- 每根 bar 闭合后判定 ----------
@@ -173,7 +184,10 @@ class LayeredExitPolicy(ExitPolicy):
         stop = plan.stop_price
         tp = plan.tp_price
         is_long = position.side is Side.LONG
-        entry = position.entry_price
+        # 风控基准：解锁重算的持仓用 risk_anchor（P₂），否则用会计锚 entry_price（P₀）。
+        #   会计锚 entry_price 只用于 pnl_points 对账；风控（保本/跟踪/止损比较）一律用本基准。
+        ra = plan.params.get("risk_anchor")
+        entry = ra if ra else position.entry_price
         # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
         #   R 未知时激进触发反而危险；硬止损/止盈均不依赖 R，不受影响
         R = plan.params.get("R")
@@ -203,7 +217,7 @@ class LayeredExitPolicy(ExitPolicy):
             #   （如到 2R）即便收盘回落（如 1.2R），只要有意义浮盈达标仍会
             #   触发保本/跟踪，避免"盘中到过 2R 却因只看收盘而漏检"。
             best = max(best, bar.high) if is_long else min(best, bar.low)
-            fav_profit = position.pnl_points(best)  # (best-entry)·sign
+            fav_profit = (best - entry) * position.side.sign  # (best−风控锚)·sign
             # 跟踪是否已启动（best 单调，故启动后恒为 True，不随回落下线）
             tracking_started = (self.trailing_trigger_r > 0
                                 and fav_profit >= self.trailing_trigger_r * R)

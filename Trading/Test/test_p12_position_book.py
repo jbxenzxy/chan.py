@@ -477,13 +477,13 @@ with tmp_dir() as tmp:
           modes, ["open_first", "unlock_first"])
     check("有仓 → engine._state = IN_TRADE",
           engine._state.name, "IN_TRADE")
-    # 顺手比对 cfg.max 真的传到了 book（验证 cfg 化生效）
-    check("cfg.max_open_positions=2 → engine.positions.max_positions == 2",
-          engine.positions.max_positions, 2)
-    # 顺手比对 legacy_single 在多仓时必须抛错（即使 max=2 也抛 —— E3.3 之前不允许多仓用单仓 API）
+    # v1.3（Q5 拍板）：容器不限容量 —— max_positions 恒 None（不再受 cfg.risk.max_open_positions 约束）
+    check("v1.3 不限容量：engine.positions.max_positions is None",
+          engine.positions.max_positions, None)
+    # 顺手比对 legacy_single 在多仓时必须抛错（E3.3 拆 G1 之前不允许多仓用单仓 API）
     check_raises("engine.position 多仓时抛错 PositionBookError",
                  lambda: engine.position, PositionBookError)
-    # truncated 应为空（没有截断）
+    # v1.3：不限容量 → 恢复不截断，truncated 恒空
     check("无截断：truncated_on_restore 为空",
           len(engine.positions.truncated_on_restore), 0)
 
@@ -529,14 +529,12 @@ with tmp_dir() as tmp:
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
     engine = TradingEngine(cfg, broker, entry, exitp, store2, ev)
 
-    check("persisted=3 但 cfg.max=1 → engine.positions.__len__ == 1",
-          len(engine.positions), 1)
-    check("truncated_on_restore 含 2 个被丢弃",
-          len(engine.positions.truncated_on_restore), 2)
-    dropped_keys = sorted([p.signal_key for p in engine.positions.truncated_on_restore])
-    check("truncated 丢的是后两个（FIFO 截断保留前 max 个）",
-          dropped_keys, ["P2", "P3"])
-    # 验证 ev 写入了 warning
+    check("persisted=3 且不限容量 → engine.positions.__len__ == 3（不截断）",
+          len(engine.positions), 3)
+    # v1.3（Q5 拍板）：不限容量 → 恢复不截断、不丢仓（解 D3）
+    check("truncated_on_restore 为空（不限容量不截断）",
+          len(engine.positions.truncated_on_restore), 0)
+    # 验证 ev 未写入截断 warning
     ev.flush()
     events_log = os.path.join(tmp, "events.jsonl")
     has_warning = False
@@ -546,8 +544,8 @@ with tmp_dir() as tmp:
                 if "positions_truncated_on_restore" in line:
                     has_warning = True
                     break
-    check("ev 写了 positions_truncated_on_restore warning",
-          has_warning, True)
+    check("不限容量下不写 positions_truncated_on_restore warning",
+          has_warning, False)
 
 
 # ════════════════════════════════════════════════════════════════

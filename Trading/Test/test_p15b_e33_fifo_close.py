@@ -234,13 +234,16 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([pos], "manual", 4555.0, eng.last_bar, signal_key="P15B-1-1")
-    check("单笔：簿 1 仓（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
-    check("单笔：锁仓 entry_mode=LOCKED", eng.positions.positions[0].entry_mode, EntryMode.LOCKED)
+    # v1.3（S3/S4）：OPEN_FIRST 软离场（锁仓）留双腿 = 原仓 LOCKED + 反向腿 LOCKED，
+    # 不兑现 PnL（0 条 Trade）。
+    check("单笔：留双腿 2 仓（原仓 LOCKED + 反向腿 LOCKED）", len(eng.positions), 2)
+    check("单笔：两腿 entry_mode=LOCKED",
+          sorted(p.entry_mode.value for p in eng.positions.positions),
+          ["locked", "locked"])
     check("单笔：state IDLE", eng._state, EngineState.IDLE)
     check("单笔：broker 1 单", len(eng.broker.orders), 1)
     trades = eng.store.trades()
-    check("单笔：1 条 Trade", len(trades), 1)
-    check("单笔：Trade.signal_key 对应", trades[0]["signal_key"], "P15B-1-1")
+    check("单笔：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
 
 # 1.2 多笔同向 FIFO：按 entry_bar_seq ASC 平仓
 with tmp_dir() as td:
@@ -255,16 +258,17 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p2, p0, p1], "manual", 4555.0, eng.last_bar)
-    check("FIFO：簿 3 仓（3 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 3)
+    # v1.3（S3/S4）：留双腿 = 3 原仓 + 3 反向腿 = 6 LOCKED，0 条 Trade。
+    check("FIFO：留双腿 6 仓（3 原仓 + 3 反向腿）", len(eng.positions), 6)
     check("FIFO：全部 entry_mode=LOCKED",
           all(p.entry_mode is EntryMode.LOCKED for p in eng.positions.positions), True)
     check("FIFO：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
-    check("FIFO：3 条 Trade", len(trades), 3)
-    # trade signal_key 顺序：建仓顺序（A → M → B）
-    keys_in_order = [t["signal_key"] for t in trades]
-    check("FIFO：trade 按建仓顺序 A→M→B",
-          keys_in_order,
+    check("FIFO：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
+    # 报单顺序：建仓顺序（A → M → B）
+    order_keys = [o.signal_key for o in eng.broker.orders]
+    check("FIFO：broker 报单按建仓顺序 A→M→B",
+          order_keys,
           ["P15B-1-2-A", "P15B-1-2-M", "P15B-1-2-B"])
 
 # 1.3 ev.write(order fifo_index) + ev.write(close fifo_index) 字段
@@ -282,9 +286,10 @@ with tmp_dir() as td:
     pos_counts = [e.get("pos_count") for e in order_evs]
     check("order ev：fifo_index=[0,1]", fifo_idx, [0, 1])
     check("order ev：pos_count=[2,2]", pos_counts, [2, 2])
-    close_evs = read_events(eng, kinds={"close"})
-    close_idx = [e.get("fifo_index") for e in close_evs]
-    check("close ev：fifo_index=[0,1]", close_idx, [0, 1])
+    # v1.3（S3/S4）：软离场（锁仓）不再写 close 事件，改写 lock_booked（带 fifo_index）。
+    lock_evs = read_events(eng, kinds={"lock_booked"})
+    lock_idx = [e.get("fifo_index") for e in lock_evs]
+    check("lock_booked ev：fifo_index=[0,1]", lock_idx, [0, 1])
 
 # 1.4 第一笔拒单整批停
 with tmp_dir() as td:
@@ -370,12 +375,14 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p0, p1], "manual", 4555.0, eng.last_bar)
-    check("第2笔拒单：簿 2 仓（剩 p1 + p0 锁仓，H1 落簿）", len(eng.positions), 2)
+    check("第2笔拒单：簿 3 仓（p0 留 2 腿 + p1 未锁）", len(eng.positions), 3)
     check("第2笔拒单：broker 2 单", len(broker.orders), 2)
-    check("第2笔拒单：state EXITING（仍有仓位）", eng._state, EngineState.EXITING)
+    check("第2笔拒单：state EXITING（仍有未锁 p1）", eng._state, EngineState.EXITING)
     trades = eng.store.trades()
-    check("第2笔拒单：1 条 Trade（p0 成交）", len(trades), 1)
-    check("第2笔拒单：Trade.signal_key == A", trades[0]["signal_key"], "P15B-1-5-A")
+    check("第2笔拒单：0 条 Trade（锁仓不兑现 PnL）", len(trades), 0)
+    modes = sorted(p.entry_mode.value for p in eng.positions.positions)
+    check("第2笔拒单：腿态 = 2 LOCKED + 1 OPEN_FIRST", modes,
+          ["locked", "locked", "open_first"])
 
 # 1.6 空列表快速返回
 with tmp_dir() as td:
@@ -420,12 +427,13 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # 触发 TP
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("3仓TP：簿 3（3 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 3)
+    check("3仓TP：留双腿 6 仓（3 原仓 + 3 反向腿）", len(eng.positions), 6)
     check("3仓TP：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
-    check("3仓TP：3 条 Trade", len(trades), 3)
-    keys = [t["signal_key"] for t in trades]
-    check("3仓TP：FIFO 顺序 A→B→C", keys,
+    check("3仓TP：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
+    # settle 批次共用 to_close[0].signal_key 作报单键，故 FIFO 顺序看 lock_booked 的 lock_of。
+    lock_of = [e.get("lock_of") for e in read_events(eng, kinds={"lock_booked"})]
+    check("3仓TP：FIFO 顺序 A→B→C", lock_of,
           ["P15B-2-1-A", "P15B-2-1-B", "P15B-2-1-C"])
     check("3仓TP：state IDLE", eng._state, EngineState.IDLE)
 
@@ -439,13 +447,15 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("1仓触发：簿 2 仓（剩 p1 + p0 锁仓，H1 落簿）", len(eng.positions), 2)
+    check("1仓触发：簿 3 仓（p0 留 2 腿 + p1 未触发）", len(eng.positions), 3)
     check("1仓触发：broker 1 单", len(eng.broker.orders), 1)
-    check("1仓触发：剩 p1.signal_key", eng.positions.positions[0].signal_key,
-          "P15B-2-2-B")
+    check("1仓触发：未触发 p1 仍在簿",
+          any(p.signal_key == "P15B-2-2-B" for p in eng.positions.positions), True)
+    modes = sorted(p.entry_mode.value for p in eng.positions.positions)
+    check("1仓触发：腿态 = 2 LOCKED + 1 OPEN_FIRST", modes,
+          ["locked", "locked", "open_first"])
     trades = eng.store.trades()
-    check("1仓触发：1 条 Trade", len(trades), 1)
-    check("1仓触发：Trade.signal_key == A", trades[0]["signal_key"], "P15B-2-2-A")
+    check("1仓触发：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
 
 # 2.3 入场 K 线跳过（bar.timestamp <= entry_bar_ts 不判 exit）
 with tmp_dir() as td:
@@ -474,12 +484,12 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4538.0)  # 触发 SL
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("2仓SL：簿 2（2 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 2)
+    check("2仓SL：留双腿 4 仓（2 原仓 + 2 反向腿）", len(eng.positions), 4)
     check("2仓SL：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
-    check("2仓SL：2 条 Trade", len(trades), 2)
-    keys = [t["signal_key"] for t in trades]
-    check("2仓SL：FIFO 顺序 A→B", keys,
+    check("2仓SL：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
+    lock_of = [e.get("lock_of") for e in read_events(eng, kinds={"lock_booked"})]
+    check("2仓SL：FIFO 顺序 A→B", lock_of,
           ["P15B-2-4-A", "P15B-2-4-B"])
 
 # 2.5 空簿 settle 无事发生
@@ -628,12 +638,12 @@ with tmp_dir() as td:
     eng.positions.add(p1)
     bar = make_bar(close=4558.0)  # 触发 TP
     eng.on_bar(bar)
-    check("on_bar TP：簿 2 仓（2 笔 LOCKED 锁仓，H1 落簿）", len(eng.positions), 2)
+    check("on_bar TP：留双腿 4 仓（2 原仓 + 2 反向腿）", len(eng.positions), 4)
     check("on_bar TP：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
-    check("on_bar TP：2 条 Trade", len(trades), 2)
-    keys = [t["signal_key"] for t in trades]
-    check("on_bar TP：FIFO 顺序 A→B", keys,
+    check("on_bar TP：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
+    lock_of = [e.get("lock_of") for e in read_events(eng, kinds={"lock_booked"})]
+    check("on_bar TP：FIFO 顺序 A→B", lock_of,
           ["P15B-4-1-A", "P15B-4-1-B"])
     check("on_bar TP：state IDLE", eng._state, EngineState.IDLE)
 
@@ -651,12 +661,10 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_position("manual", 4555.0, eng.last_bar, signal_key="P15B-5-1")
-    check("兼容_close：簿 1 仓（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
+    check("兼容_close：留双腿 2 仓（原仓 + 反向腿）", len(eng.positions), 2)
     check("兼容_close：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
-    check("兼容_close：1 条 Trade", len(trades), 1)
-    check("兼容_close：Trade.signal_key 对应",
-          trades[0]["signal_key"], "P15B-5-1")
+    check("兼容_close：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
 
 # 5.2 _settle_position 单仓兼容壳（forward 到 _settle_positions）
 with tmp_dir() as td:
@@ -666,10 +674,10 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # TP 触发
     eng.bars_seen = 10
     eng._settle_position(eng.last_bar)
-    check("兼容_settle：簿 1（LOCKED 锁仓，H1 落簿）", len(eng.positions), 1)
+    check("兼容_settle：留双腿 2 仓（原仓 + 反向腿）", len(eng.positions), 2)
     check("兼容_settle：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
-    check("兼容_settle：1 条 Trade", len(trades), 1)
+    check("兼容_settle：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
 
 # 5.3 _reconcile_position 单仓兼容壳
 with tmp_dir() as td:

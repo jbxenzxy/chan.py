@@ -333,17 +333,18 @@ with tmp_dir() as tmp:
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
     engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
-    check("默认 cfg.max=1 → engine.positions.max_positions == 1",
-          engine.positions.max_positions, 1)
+    # v1.3（Q5 拍板）：容器不限容量，max_positions 恒 None（不再受 cfg.risk.max_open_positions 约束）
+    check("v1.3 不限容量：engine.positions.max_positions is None",
+          engine.positions.max_positions, None)
 
-    # cfg.max=3
+    # cfg.max=3（字段仍可配置，但不再作为容器容量）
     cfg.risk.max_open_positions = 3
     store2 = Store(os.path.join(tmp, "state2.db"))
     store2.wipe_runtime_state()
     ev2 = EventLog(os.path.join(tmp, "events2.jsonl"), echo=False, echo_kinds=None)
     engine2 = TradingEngine(cfg, broker, entry, exitp, store2, ev2)
-    check("cfg.max=3 → engine.positions.max_positions == 3",
-          engine2.positions.max_positions, 3)
+    check("cfg.max=3 时容器仍不限（max_positions is None）",
+          engine2.positions.max_positions, None)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -385,10 +386,10 @@ with tmp_dir() as tmp:
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
     engine = TradingEngine(cfg, broker, entry, exitp, store2, ev)
 
-    check("persisted=3 但 cfg.max=1 → engine.positions.__len__ == 1",
-          len(engine.positions), 1)
-    check("truncated_on_restore 含 2 个被丢弃",
-          len(engine.positions.truncated_on_restore), 2)
+    check("persisted=3 且不限容量 → engine.positions.__len__ == 3（不截断）",
+          len(engine.positions), 3)
+    check("v1.3 不限容量：truncated_on_restore 为空（不丢仓）",
+          len(engine.positions.truncated_on_restore), 0)
 
     ev.flush()
     events_log = os.path.join(tmp, "events.jsonl")
@@ -399,8 +400,8 @@ with tmp_dir() as tmp:
                 if "positions_truncated_on_restore" in line:
                     has_warning = True
                     break
-    check("ev 写了 positions_truncated_on_restore warning",
-          has_warning, True)
+    check("v1.3 不限容量：不写 positions_truncated_on_restore warning",
+          has_warning, False)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -432,12 +433,13 @@ with tmp_dir() as tmp:
     engine.on_signal(sig)
 
     check("开仓后 positions.__len__ == 1", len(engine.positions), 1)
-    check("开仓后 max_positions 仍 == 1（默认 cfg）",
-          engine.positions.max_positions, 1)
+    # v1.3：不限容量，max_positions 恒 None
+    check("开仓后 max_positions 仍 None（不限容量）",
+          engine.positions.max_positions, None)
     check("开仓后 _state == IN_TRADE",
           engine._state.value, "in_trade")
 
-    # 反向信号触发平仓
+    # 反向信号：v1.3（Q1=B）运行态一律忽略（出场只由 on_bar 的 L1-L3 负责）
     sig2 = Signal(key="K_close", date="2026-09-02 09:35",
                   timestamp=4300, bsp_type="2", is_buy=False,
                   price=4510, high=4512, low=4508,
@@ -447,12 +449,12 @@ with tmp_dir() as tmp:
     engine.on_bar(bar2)
     engine.on_signal(sig2)
 
-    check("反向信号后 positions 全为 LOCKED 锁仓（H1 落簿）",
-          all(p.entry_mode.value == "locked" for p in engine.positions.positions), True)
-    check("反向信号后 _state 回 IDLE",
-          engine._state.value, "idle")
-    check("反向信号后 _trade_seq == 1",
-          engine._trade_seq, 1)
+    check("反向信号被忽略：positions 仍 OPEN_FIRST（不锁仓）",
+          all(p.entry_mode.value == "open_first" for p in engine.positions.positions), True)
+    check("反向信号被忽略：_state 仍 IN_TRADE",
+          engine._state.value, "in_trade")
+    check("反向信号被忽略：_trade_seq == 0（无离场成交）",
+          engine._trade_seq, 0)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -471,8 +473,8 @@ with tmp_dir() as tmp:
     store.wipe_runtime_state()
     ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
     engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
-    check("cfg.max=3 → engine.positions.max_positions == 3",
-          engine.positions.max_positions, 3)
+    check("v1.3 不限容量：cfg.max=3 时 max_positions 仍 None",
+          engine.positions.max_positions, None)
 
     # 通过 property（兼容层）写入两笔——但 set_legacy 单仓语义会让第二笔覆盖第一笔
     p_a = make_pos(Side.LONG, signal_key="A")

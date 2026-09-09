@@ -6,7 +6,7 @@ Phase E2 三场景端到端验证（2026-09-05）
 
 覆盖三种现存场景：
   场景 A：dry-run 完整 UNLOCK 端到端剧本
-    —— 构造持仓 (SHORT 3手, 昨锁仓, entry_mode=OPEN_FIRST 隐含 → LOCK_SOFT 路径)，
+    —— 构造持仓 (SHORT 3手, 昨锁仓, entry_mode=OPEN_FIRST 隐含 → SOFT_EXIT 路径)，
        注入今日正向买入信号 → 验证 `_unlock_position` 把昨仓平掉，trade 按 CloseYesterday 费率入账。
 
   场景 B：ReplaySource + DryRunBroker 烟雾回放
@@ -117,10 +117,9 @@ def scenario_a_unlock_endtoend() -> bool:
     engine.on_bar(bar)
 
     # 手工塞一个"昨锁仓后留下的 SHORT 对冲仓"到 PositionBook。
-    # entry_mode=OPEN_FIRST：因为它是经 _close_position 走 LOCK_SOFT 路径产生的：
-    #   OPEN_FIRST 持仓 → 离场走 LOCK_SOFT → 开反向 SHORT 同手数（这就是"昨锁仓的"立场）。
-    #
-    # 注意：Phase E1 阶段 PositionBook.max=1，所以只能塞这一笔（同 K 线全离场前不容纳第二笔）。
+    # entry_mode=LOCKED：v1.3（S1）后 LOCK 软离场成交的反向对冲仓以 LOCKED 落簿
+    #   （见 _close_positions 的 lock_booked 分支），不再以 OPEN_FIRST 表示。
+    # entry_date="2026-09-01"（昨日，< 信号日 2026-09-02）→ 信号门走"平昨仓"（UNLOCK）。
     pos = Position(
         symbol="CFFEX.IF2609", side=Side.SHORT, volume=3,
         entry_price=4520.0,
@@ -129,14 +128,15 @@ def scenario_a_unlock_endtoend() -> bool:
         signal_key="2026-09-01 13:30|1|S",
         open_order_id="dry_run-000001",
         exit_plan=ExitPlan(name="layered_v1", stop_price=4530.0, tp_price=4500.0),
-        entry_mode=EntryMode.OPEN_FIRST,
+        entry_mode=EntryMode.LOCKED,
+        entry_date="2026-09-01",
     )
     engine.positions.set_legacy(pos)
-    engine._state = EngineState.IDLE                # 强制 IDLE（持仓已 LOCK_SOFT 抵销，今仓为 0）
+    engine._state = EngineState.IDLE                # 强制 IDLE（持仓已 SOFT_EXIT 抵销，今仓为 0）
 
     _must(not engine.positions.is_empty(), "Portfolio 非空（昨锁仓后留下的反向仓）",
           {"positions": engine.positions.to_dict()})
-    _must(engine._state == EngineState.IDLE, "状态机在 IDLE（昨 LOCK_SOFT 后今仓为 0）",
+    _must(engine._state == EngineState.IDLE, "状态机在 IDLE（昨 SOFT_EXIT 后今仓为 0）",
           {"state": engine._state.value})
 
     # 注入今日正向买入信号 → 预期触发 _unlock_position
@@ -242,12 +242,12 @@ def scenario_b_replay_smoke() -> bool:
           {"sig_count": sig_count, "n_sigs": n_sigs})
 
     # 报单统计
-    # ——每个 signal 至多触发"1 开 + 1 锁"对（即 LOCK_SOFT 闭环），
+    # ——每个 signal 至多触发"1 开 + 1 锁"对（即 SOFT_EXIT 闭环），
     #   再加 LayeredExitPolicy 每根 bar 都可能触发平仓追价，但 settle 路径里 broker
     #   不会重复报同向单。**真实死循环的信号是 N_orders ≫ 3 × N_signals**（每信号触发多笔）。
     n_orders = len(broker.orders)
     _must(n_orders <= 3 * n_sigs,
-          "broker 报单数 ≤ 3×signal 数（死循环上限；K 线 settle 触发的 LOCK_SOFT 闭环对不超过 1 开 + 1 锁）",
+          "broker 报单数 ≤ 3×signal 数（死循环上限；K 线 settle 触发的 SOFT_EXIT 闭环对不超过 1 开 + 1 锁）",
           {"n_orders": n_orders, "n_sigs": n_sigs})
 
     # 报单按 open/lock 配对 —— 每笔 open 必须有后续一笔 lock 才能"收摊"

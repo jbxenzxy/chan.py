@@ -88,7 +88,7 @@ class Broker(ABC):
         s = str(intent).strip().lower()
         if s == "open":
             return OrderIntent.OPEN
-        if s in ("close", "close_hard"):
+        if s in ("close", "close_hard", "hard_exit"):
             return OrderIntent.CLOSE
         if s == "unlock":
             return OrderIntent.UNLOCK

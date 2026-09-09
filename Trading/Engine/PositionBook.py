@@ -63,19 +63,29 @@ class PositionBook:
     #   不要在这里新增第二个"生产默认值"——它与 RiskConfig.max_open_positions 是双源，会漂移。
     DEFAULT_MAX = 1   # E1 默认：单实例最多 1 仓；E3 由 cfg.risk.max_open_positions 覆盖
 
-    def __init__(self, max_positions: int = DEFAULT_MAX):
-        if max_positions < 1:
-            raise PositionBookError(
-                "max_positions must be >= 1 (got {})".format(max_positions))
-        self._max = int(max_positions)
+    def __init__(self, max_positions: Optional[int] = DEFAULT_MAX):
+        # v1.3（Q5 拍板）：max_positions=None 表示"不限容量"。
+        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢腿 /
+        #   恢复截断）随"不限"一并消失。资金是唯一闸门（钱不够自然开不成功）。
+        if max_positions is None:
+            self._max: Optional[int] = None
+        else:
+            if int(max_positions) < 1:
+                raise PositionBookError(
+                    "max_positions must be >= 1 (got {})".format(max_positions))
+            self._max = int(max_positions)
         self._positions: List[Position] = []
         self._truncated: List[Position] = []   # replace_with 截断时丢弃的仓，供调用方记录
 
     # ─── 容量管理（E3.1 新增）───────────────────────
-    def set_max(self, n: int) -> None:
+    def set_max(self, n: Optional[int]) -> None:
         """动态调整容量上限（cfg 化场景：引擎重启 / 改 cfg 后调用）。
         只能"放大"或"等量"，**不能缩小到现存数以下**（不允许隐式丢弃持仓）。
+        n=None 表示不限容量。
         """
+        if n is None:
+            self._max = None
+            return
         n = int(n)
         if n < 1:
             raise PositionBookError(
@@ -92,8 +102,9 @@ class PositionBook:
         """添加一个 Position（FIFO 追加）。
         超过 max 立即报错 —— 不允许隐式合并/覆盖。
         E1: max=1 即触发；E3.1: max=N 时第 N+1 个报错。
+        v1.3: max=None（不限）时不校验。
         """
-        if len(self._positions) >= self._max:
+        if self._max is not None and len(self._positions) >= self._max:
             raise PositionBookError(
                 "PositionBook full (max={}, present={})".format(
                     self._max, len(self._positions)))
@@ -121,10 +132,11 @@ class PositionBook:
             raise PositionBookError(
                 "replace_with requires PositionBook, got {}".format(type(other).__name__))
         n_other = len(other._positions)
-        if n_other > self._max:
+        if self._max is not None and n_other > self._max:
             # E3.1 兼容：cfg.max 后续缩小时，已持久化的多仓不应让引擎启动失败。
             # 取前 max 个 FIFO 截断（与离场优先级一致），并返回被丢弃的 Positions
             # 让调用方可以写 warning。
+            # v1.3：max=None（不限）时不截断，永不丢仓。
             self._positions = list(other._positions[:self._max])
             self._truncated = other._positions[self._max:]
         else:

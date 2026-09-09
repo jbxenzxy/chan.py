@@ -63,8 +63,8 @@ class OrderIntent(str, Enum):
 
 class EntryMode(str, Enum):
     """入场模式（决定了离场方式）。"""
-    OPEN_FIRST = "open_first"          # 今日新开 → 离场用 LOCK_SOFT（避免平今 15× 费率）
-    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓 → 离场用 CLOSE_HARD（平昨无费率问题）
+    OPEN_FIRST = "open_first"          # 今日新开 → 离场用 SOFT_EXIT 软离场（锁仓，避免平今 15× 费率）
+    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓 → 离场用 HARD_EXIT 硬离场（平昨，无费率问题）
     # Phase H1：LOCK 软离场成交后，broker 端真实存在的反向锁仓落簿为本模式。
     # 唯一合法离场 = 对向信号触发 UNLOCK（CloseYesterday，次日语义）；
     # settle（TP/SL/EOD）跳过本模式 —— 锁仓不等止盈止损，等解锁。
@@ -73,8 +73,8 @@ class EntryMode(str, Enum):
 
 class ExitMode(str, Enum):
     """离场方式（Phase D 由 entry_mode 自动决定，不留配置开关）。"""
-    CLOSE_HARD = "close_hard"          # 平仓硬离场
-    LOCK_SOFT = "lock_soft"            # 锁仓软离场（开反向同手数）
+    HARD_EXIT = "hard_exit"            # 硬离场（平仓：真正了结，PnL 兑现）
+    SOFT_EXIT = "soft_exit"            # 软离场（锁仓：开反向同手数，正反互锁等效离场，PnL 不兑现）
 
 
 class EngineState(str, Enum):
@@ -234,9 +234,17 @@ class Position:
     exit_plan: ExitPlan
     entry_bar_seq: int = 0        # 入场时的 bar 序号（计算持有根数、跳过入场K线）
     # Phase A：入场模式，默认 OPEN_FIRST —— 旧持仓记录无此字段也能正常反序列化
-    # Phase D 由 entry_mode 自动决定 exit_mode（OPEN_FIRST→LOCK_SOFT / UNLOCK_FIRST→CLOSE_HARD）
+    # Phase D 由 entry_mode 自动决定 exit_mode（OPEN_FIRST→SOFT_EXIT 软离场 / UNLOCK_FIRST→HARD_EXIT 硬离场）
     # str Enum 单例不可变，可直接做 dataclass default（不像 list/dict 需要 default_factory）
     entry_mode: EntryMode = EntryMode.OPEN_FIRST
+    # v1.3（S1）：入场交易日（YYYY-MM-DD，取 bar.date[:10]，绝不能用 now_cn()）。
+    #   用途：规则 ⑸ 区分"当日锁 → 开新仓" vs "昨仓锁 → 平旧仓"；以及 Q2 的"今仓锁/昨仓平"。
+    #   默认空串：旧持仓记录反序列化时为空 → 在日期比较里 "" < today 恒 True → 保守按"昨仓"处理。
+    entry_date: str = ""
+    # v1.3（S4）：锁仓配对 ID。留双腿（1 锁 = 原仓腿 + 反向腿）时两条腿共享同一 ID，
+    #   解锁时据此找到"同锁的另一条腿"进行升级（LOCKED → UNLOCK_FIRST + 重算风控锚）。
+    #   空串 = 未配对（正常单边仓 / 旧持仓记录反序列化）。
+    lock_pair_id: str = ""
 
     def pnl_points(self, price: float) -> float:
         """未扣成本的毛盈亏（点数）。"""
@@ -252,6 +260,8 @@ class Position:
             "open_order_id": self.open_order_id,
             "exit_plan": self.exit_plan.to_dict(),
             "entry_mode": self.entry_mode.value,
+            "entry_date": self.entry_date,
+            "lock_pair_id": self.lock_pair_id,
         }
 
     @classmethod
@@ -269,7 +279,9 @@ class Position:
                    signal_key=d.get("signal_key", ""),
                    open_order_id=d.get("open_order_id", ""),
                    exit_plan=ExitPlan.from_dict(d.get("exit_plan") or {}),
-                   entry_mode=entry_mode)
+                   entry_mode=entry_mode,
+                   entry_date=d.get("entry_date", ""),
+                   lock_pair_id=d.get("lock_pair_id", ""))
 
 
 @dataclass

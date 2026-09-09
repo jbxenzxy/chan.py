@@ -228,7 +228,8 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
-                  tp_offset=5.0, sl_offset=10.0):
+                  tp_offset=5.0, sl_offset=10.0,
+                  entry_mode=EntryMode.OPEN_FIRST, entry_date=""):
     """构造手动 Position（不走 _open_positions），用于直接构造 portfolio 状态。"""
     from Trading.Infra.Types import now_cn
     if side is Side.LONG:
@@ -246,7 +247,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                             params={"take_profit_points": tp_offset,
                                     "stop_loss_points": sl_offset}),
-        entry_mode=EntryMode.OPEN_FIRST)
+        entry_mode=entry_mode, entry_date=entry_date)
 
 
 def make_signal(key, side, price=4550.0, date="2026-09-01 09:35", bsp_type="buy"):
@@ -484,7 +485,9 @@ with tmp_dir() as td:
     eng.last_bar = make_bar()
     eng.bars_seen = 5
     # 设 portfolio 有一个反向仓（UNLOCK 触发条件）
-    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-pos")
+    # v1.3：UNLOCK 触发条件 = 锁仓态（LOCKED）+ 反向信号 + 昨仓（entry_date < 信号日）
+    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-pos",
+                        entry_mode=EntryMode.LOCKED, entry_date="2026-08-31")
     eng.positions.add(pos)
     sig = make_signal("unlock-sig", Side.SHORT)
     eng.on_signal(sig)
@@ -638,7 +641,8 @@ print("\n[4] F1+F2 集成")
 # 4.1 兼容回归：dry_run broker 默认 trade_confirmed=True → 现有 P13 UNLOCK 行为不变
 with tmp_dir() as td:
     eng = make_engine(td)  # 默认 DryRunBroker → trade_confirmed=True
-    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-4-1")
+    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-4-1",
+                        entry_mode=EntryMode.LOCKED, entry_date="2026-08-31")
     eng.positions.add(pos)
     eng.last_bar = make_bar()
     eng.bars_seen = 5
@@ -692,8 +696,9 @@ with tmp_dir() as td:
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=0, real_shorts=0,
                                            trade_confirmed_value=False)
     eng = make_engine(td, broker=ctl_b)
-    # 预置一个 LONG 仓（模拟"昨仓"），UNLOCK 把它清掉
-    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-4-3")
+    # 预置一个 LONG 仓（模拟"昨仓锁"），UNLOCK 把它清掉
+    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-4-3",
+                        entry_mode=EntryMode.LOCKED, entry_date="2026-08-31")
     eng.positions.add(pos)
     eng.last_bar = make_bar()
     eng.bars_seen = 5

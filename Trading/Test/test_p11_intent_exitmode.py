@@ -6,9 +6,9 @@ P11 broker intent + exit_mode 联动单测（Phase C + D 合并）
     Phase C 把 broker.submit() 改用 OrderIntent 显式表达意图（OPEN/UNLOCK/CLOSE/LOCK），
     intent → CTP OpenCloseType 由 INTENT_TO_OFFSET 权威表映射。dry_run 同样遵守便于审计。
     Phase D 按 pos.entry_mode 硬规则决定离场方式：
-        OPEN_FIRST   → LOCK_SOFT  → OrderIntent.LOCK  + 反向 side
-        UNLOCK_FIRST → CLOSE_HARD → OrderIntent.CLOSE + pos.side
-    没有 entry_mode 字段的旧持仓（默认 OPEN_FIRST）也走 LOCK_SOFT。
+        OPEN_FIRST   → SOFT_EXIT  → OrderIntent.LOCK  + 反向 side
+        UNLOCK_FIRST → HARD_EXIT → OrderIntent.CLOSE + pos.side
+    没有 entry_mode 字段的旧持仓（默认 OPEN_FIRST）也走 SOFT_EXIT。
 
 硬性要求（本测试锁死）
     ① INTENT_TO_OFFSET 表 4 个键值对正确。
@@ -225,7 +225,7 @@ intent2, side2 = TradingEngine._exit_intent(p_unlock)
 check("UNLOCK_FIRST → OrderIntent.CLOSE", intent2, OrderIntent.CLOSE)
 check("UNLOCK_FIRST → pos.side (LONG)", side2, Side.LONG)
 
-# 默认 entry_mode（OPEN_FIRST）走 LOCK_SOFT
+# 默认 entry_mode（OPEN_FIRST）走 SOFT_EXIT
 p_default = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                      entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                      exit_plan=ExitPlan(name="x", stop_price=99.0))
@@ -326,9 +326,10 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [7] 反向信号触发"只离场"时，离场方式也按 entry_mode 走
+# [7] 反向信号在运行态 → 一律忽略（v1.3 Q1=B）
+#   离场只由 on_bar 的 L1-L3（SL/TP/trailing）负责，不再由信号触发。
 # ════════════════════════════════════════════════════════════════
-print("\n[7] 反向信号触发只离场：按 entry_mode 决定离场方式")
+print("\n[7] 运行态反向信号 → 忽略（Q1=B）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     # 开多仓（OPEN_FIRST）
@@ -339,19 +340,18 @@ with tmp_dir() as tmp:
     # 推一根 bar（不要触发 SL，让持仓还在）
     bar = make_bar(5000, 4551.0, 4552.0, 4549.0, 4551.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
-    # 反向（卖出）信号：只离场
+    # 反向（卖出）信号：运行态净敞口非零 → 忽略
     sig_sell = make_signal(is_buy=False, price=4551.0, high=4553.0, low=4550.0,
                            date="2026-09-01 09:45", bsp_type="2")
     engine.on_signal(sig_sell)
-    check("反向信号触发后 state=IDLE", engine._state.name, "IDLE")
-    check("反向信号触发后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
-    # broker 应该收 1 笔 LOCK 报（OPEN_FIRST 持仓 → LOCK 离场）
+    check("反向信号后 state 仍 IN_TRADE（不因信号离场）", engine._state.name, "IN_TRADE")
+    check("反向信号后 position 仍 OPEN_FIRST（不锁仓）",
+          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    # broker 不应收到 LOCK 报（信号不触发离场）
     lock_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "lock"]
-    check("反向信号触发 LOCK 离场（OPEN_FIRST → LOCK）", len(lock_orders), 1)
-    if lock_orders:
-        check("LOCK 报 side=SHORT (反向)", lock_orders[0].side, Side.SHORT)
-    # 反向信号不应触发新开仓
+    check("反向信号不触发 LOCK 离场", len(lock_orders), 0)
+    # 反向信号不应触发新开仓（运行态忽略）
     open_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "open"]
     check("反向信号没有再触发 OPEN 开仓", len(open_orders), 1)  # 只有最初那笔

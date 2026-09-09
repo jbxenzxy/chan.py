@@ -6,7 +6,8 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
       ② 簿内所有「未锁定」持仓全部锁仓（OPEN_FIRST / UNLOCK_FIRST 一律
-         LOCK，落簿反向 LOCKED 仓，次日对向信号走解锁入场管线）
+         LOCK，留双腿：原仓 → LOCKED + 反向腿 LOCKED，共享 lock_pair_id，
+         次日对向信号走解锁入场管线）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
 Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
@@ -227,20 +228,20 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
     modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("[2b] 簿内全是 LOCKED（2 笔反向锁仓）", modes,
-          ["locked", "locked"])
-    check("[2c] 锁仓信号键 = 原键#lock",
+    check("[2b] 簿内全是 LOCKED（留双腿：2 原仓 + 2 反向 = 4 腿）", modes,
+          ["locked", "locked", "locked", "locked"])
+    check("[2c] 信号键 = 原键 + 原键#lock（原仓腿保留原键）",
           sorted(p.signal_key for p in engine.positions.positions),
-          ["P20-2A#lock", "P20-2B#lock"])
+          ["P20-2A", "P20-2A#lock", "P20-2B", "P20-2B#lock"])
     check("[2d] 全部 LOCKED → state=IDLE", engine._state.name, "IDLE")
     check("[2e] 2 笔 LOCK 报单", len(lock_orders(broker)), 2)
-    check("[2f] 2 笔锁仓 Trade 落盘（reason=auto_order_off）",
-          sum(1 for t in store.trades() if t["reason"] == "auto_order_off"), 2)
+    check("[2f] 锁仓不兑现 PnL → 0 笔 Trade（软离场不记 Trade）",
+          sum(1 for t in store.trades() if t["reason"] == "auto_order_off"), 0)
     check("[2g] enabled=False 已持久化",
           store.get_json("auto_order_enabled", True), False)
     ev.flush()
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[2h] auto_order_off 事件 locked_n=2/remaining_unlocked=0",
+    check("[2h] auto_order_off 事件 locked_n=4/remaining_unlocked=0",
           kinds.count("auto_order_off"), 1)
     check("[2i] lock_booked ×2", kinds.count("lock_booked"), 2)
 
@@ -260,9 +261,9 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()          # 第二次关闭：全部已 LOCKED → no-op
     check("[3a] 无新增报单", len(broker.orders), n_orders)
     check("[3b] 无新增 trade", len(store.trades()), n_trades)
-    check("[3c] 簿仍 1 笔 LOCKED",
+    check("[3c] 簿仍 1 锁 2 腿（原仓 + 反向均 LOCKED）",
           [p.entry_mode for p in engine.positions.positions],
-          [EntryMode.LOCKED])
+          [EntryMode.LOCKED, EntryMode.LOCKED])
     check("[3d] enabled 仍 False", engine.auto_order_enabled, False)
 
 
@@ -278,9 +279,9 @@ with tmp_dir() as tmp:
 
     engine2, store2, broker2, ev2 = build_engine(tmp)
     check("[4a] 重启后 enabled=False", engine2.auto_order_enabled, False)
-    check("[4b] 簿内 LOCKED 已恢复",
+    check("[4b] 簿内 LOCKED 已恢复（1 锁 2 腿）",
           [p.entry_mode for p in engine2.positions.positions],
-          [EntryMode.LOCKED])
+          [EntryMode.LOCKED, EntryMode.LOCKED])
     sig = make_signal(is_buy=True, sig_key="P20-4|2|B")
     engine2.on_signal(sig)
     check("[4c] 重启后信号仍拒收（skip）",
@@ -312,15 +313,15 @@ with tmp_dir() as tmp:
     # 所以这里要推进 _close_retry_bars(5) 根 bar 才会重试补锁。
     for i in range(engine._close_retry_bars):
         engine.on_bar(make_bar(2000 + i))
-    check("[5c] 补锁后簿内 LOCKED",
+    check("[5c] 补锁后簿内 LOCKED（1 锁 2 腿）",
           [p.entry_mode for p in engine.positions.positions],
-          [EntryMode.LOCKED])
+          [EntryMode.LOCKED, EntryMode.LOCKED])
     check("[5d] 补锁后 state=IDLE", engine._state.name, "IDLE")
     ev.flush()
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[5e] 补锁 trade reason=auto_order_off_retry",
+    check("[5e] 补锁不兑现 PnL → 0 笔 trade（软离场不记 Trade）",
           sum(1 for t in store.trades()
-              if t["reason"] == "auto_order_off_retry"), 1)
+              if t["reason"] == "auto_order_off_retry"), 0)
 
 
 # ════════════════════════════════════════════════════════════════

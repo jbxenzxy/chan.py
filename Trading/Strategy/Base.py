@@ -48,8 +48,10 @@ class ExitPolicy(ABC):
 
     @abstractmethod
     def plan(self, signal: Signal, entry_price: float,
-             spec: InstrumentSpec) -> ExitPlan:
-        """开仓时生成出场计划（止损价 / 止盈价）。"""
+             spec: InstrumentSpec, anchor: Optional[float] = None) -> ExitPlan:
+        """开仓时生成出场计划（止损价 / 止盈价）。
+        anchor = 风控锚（解锁重算时传解锁成交价 P₂）；None 用 entry_price。
+        """
         raise NotImplementedError
 
     @abstractmethod

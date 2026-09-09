@@ -136,7 +136,7 @@ check("OrderIntent 4 个值", [e.value for e in OrderIntent],
 check("EntryMode 3 个值（H1 增 locked）", [e.value for e in EntryMode],
       ["open_first", "unlock_first", "locked"])
 check("ExitMode 2 个值", [e.value for e in ExitMode],
-      ["close_hard", "lock_soft"])
+      ["hard_exit", "soft_exit"])
 check("EngineState 4 个值", [e.value for e in EngineState],
       ["idle", "opening", "in_trade", "exiting"])
 
@@ -271,9 +271,12 @@ with tmp_dir() as tmp:
     # 直接调 _close_position（用 sig.price 作为 trigger_price）
     engine._close_position("manual_test", 4560.0, engine.last_bar, signal_key="x")
     check("平仓成功后 _state 回 IDLE", engine._state, EngineState.IDLE)
-    check("平仓成功后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
-    # 验证 trades 表有 1 条
-    check("trades 表记录 1 条", len(store.trades()), 1)
+    # v1.3（S3/S4）：软离场（锁仓）留双腿 = 原仓 LOCKED + 反向腿 LOCKED，
+    # 净敞口归零、PnL 不兑现（0 笔 Trade）。
+    modes = sorted(p.entry_mode.value for p in engine.positions.positions)
+    check("平仓后留双腿：簿内 2 笔均 LOCKED", modes, ["locked", "locked"])
+    # 验证 trades 表 0 条（锁仓不记 Trade）
+    check("trades 表记录 0 条（软离场不兑现 PnL）", len(store.trades()), 0)
 
 # ════════════════════════════════════════════════════════════════
 # [7] 信号门：IN_TRADE + 同向信号 → skip
@@ -308,9 +311,10 @@ with tmp_dir() as tmp:
           store.signal_action(sig2.key), "skip")
 
 # ════════════════════════════════════════════════════════════════
-# [8] 信号门：IN_TRADE + 反向信号 → 仅触发 _close_position
+# [8] 信号门：IN_TRADE + 反向信号 → 一律忽略（v1.3 Q1=B）
+#   运行态净敞口非零，信号不再触发离场，离场只由 on_bar 的 L1-L3 负责。
 # ════════════════════════════════════════════════════════════════
-print("\n[8] 信号门：IN_TRADE + 反向信号 → 仅离场")
+print("\n[8] 信号门：IN_TRADE + 反向信号 → 忽略（Q1=B）")
 
 with tmp_dir() as tmp:
     engine, store, broker = build_engine(tmp)
@@ -326,7 +330,7 @@ with tmp_dir() as tmp:
     sig2 = make_signal(is_buy=False, date="2026-09-01 09:40",
                        sig_key=Signal.make_key("2026-09-01 09:40", "1", False))
 
-    # 检测不应再调 entry_policy（IN_TRADE 已被门控短路）
+    # 检测不应再调 entry_policy（运行态已被净敞口门短路）
     called = {"n": 0}
     orig = engine.entry_policy.decide
     def spy(*a, **kw):
@@ -336,13 +340,13 @@ with tmp_dir() as tmp:
 
     engine.on_signal(sig2)
     check("IN_TRADE+反向 → 不调 entry_policy.decide", called["n"], 0)
-    check("IN_TRADE+反向 → _state 回 IDLE", engine._state, EngineState.IDLE)
-    check("IN_TRADE+反向 → position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
-    check("IN_TRADE+反向 → trades 增 1", len(store.trades()), 1)
-    check("IN_TRADE+反向 → trade.reason=signal_reverse",
-          store.trades()[0]["reason"], "signal_reverse")
-    check("IN_TRADE+反向 → signal_action=close_only",
-          store.signal_action(sig2.key), "close_only")
+    check("IN_TRADE+反向 → _state 仍是 IN_TRADE（不因信号离场）",
+          engine._state, EngineState.IN_TRADE)
+    check("IN_TRADE+反向 → position 仍是原来那笔（不锁仓）",
+          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("IN_TRADE+反向 → trades 增 0（不触发离场）", len(store.trades()), 0)
+    check("IN_TRADE+反向 → signal_action 标 skip（running_ignore_signal）",
+          store.signal_action(sig2.key), "skip")
 
 # ════════════════════════════════════════════════════════════════
 # [9] 信号门：IDLE + 信号 → 正常开仓（反向也不再自动反手开仓）
@@ -360,15 +364,14 @@ with tmp_dir() as tmp:
     check("IDLE+反向信号 → 正常开仓", engine.position.side, Side.SHORT)
     check("IDLE+反向信号 → _state=IN_TRADE", engine._state, EngineState.IN_TRADE)
 
-    # 关键不变量：旧逻辑下 reverse=True 时会把"平+反手"做成连续两步（先 close 再 open）；
-    # 现在 IN_TRADE 状态下收到反向信号只 close 不 open，trades 应只增 1 而不是 2。
+    # v1.3（Q1=B）：运行态收到反向信号 → 一律忽略，离场只由 L1-L3 负责。
     sig2 = make_signal(is_buy=True, date="2026-09-01 09:40",
                        sig_key=Signal.make_key("2026-09-01 09:40", "1", True))
     engine.on_signal(sig2)
-    check("IDLE→IN_TRADE 后反向 → 只 close 不 open，trades 增 1",
-          len(store.trades()), 1)
-    check("平仓后 _state=IDLE", engine._state, EngineState.IDLE)
-    check("平仓后 position=LOCKED 锁仓（H1 落簿，没自动开反向多）", engine.position.entry_mode, EntryMode.LOCKED)
+    check("IDLE→IN_TRADE 后反向 → 忽略，trades 增 0",
+          len(store.trades()), 0)
+    check("反向信号后 _state 仍 IN_TRADE", engine._state, EngineState.IN_TRADE)
+    check("反向信号后 position 仍是空仓（未锁仓）", engine.position.entry_mode, EntryMode.OPEN_FIRST)
 
 # ════════════════════════════════════════════════════════════════
 # [10] 信号门：OPENING 瞬态时新信号被忽略（不调 entry_policy）

@@ -96,14 +96,18 @@ def check(name, got, expected):
 
 
 def make_pos(symbol="CFFEX.IF", side=Side.LONG, vol=1, entry_price=4500.0,
-             entry_mode=EntryMode.OPEN_FIRST, signal_key="P13-LEGACY"):
+             entry_mode=EntryMode.LOCKED, signal_key="P13-LEGACY",
+             entry_date="2026-09-01"):
+    # v1.3（S1）：本测试注入的持仓代表"LOCK 留下的反向对冲仓"，故默认
+    # entry_mode=LOCKED；entry_date 默认昨日（2026-09-01 < 信号日 2026-09-02），
+    # 使信号门走"平昨仓"（UNLOCK）分支。要模拟"当日锁"则传 entry_date=信号日。
     return Position(
         symbol=symbol, side=side, volume=vol,
         entry_price=entry_price, entry_at="2026-09-01 09:00",
         entry_bar_ts=4000, signal_key=signal_key,
         open_order_id="p13-legacy-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
-        entry_mode=entry_mode)
+        entry_mode=entry_mode, entry_date=entry_date)
 
 
 def make_signal(is_buy, price=4550.0, high=4552.0, low=4548.0,
@@ -187,20 +191,42 @@ with tmp_dir() as tmp:
     check("[C] state 回 IDLE", engine._state.name, "IDLE")
 
 
-# Case D: IN_TRADE + 反向 → 走 _close_position 而非 UNLOCK（正交边界）
+# Case D: 运行态（IN_TRADE，真实净敞口非零）+ 反向信号 → 一律忽略（Q1=B）
+# v1.3：出场只由 on_bar 的 L1-L3 负责；信号在运行态不再触发 LOCK/CLOSE/UNLOCK。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
-    # 模拟"今仓"流程：开仓后 engine 进入 IN_TRADE，但 portfolio 里只有 1 笔
+    # 模拟"今仓"流程：开仓后 engine 进入 IN_TRADE，簿内 1 笔 OPEN_FIRST（非 LOCKED）
     sig_buy = make_signal(is_buy=True, price=4500.0)
     engine.on_signal(sig_buy)
     check("[D-pre] 开仓后 state=IN_TRADE", engine._state.name, "IN_TRADE")
-    # 反向 SELL 信号：与 E1/P10 一致 → 走 close_only（_close_position）
+    lock_before = sum(1 for o in broker.orders if o.meta.get("intent") == "lock")
+    unlock_before = sum(1 for o in broker.orders if o.meta.get("intent") == "unlock")
+    open_before = sum(1 for o in broker.orders if o.meta.get("intent") == "open")
+    # 反向 SELL 信号：运行态 → 忽略（不锁仓、不解锁、不开新仓）
     sig_sell = make_signal(is_buy=False, price=4505.0, high=4507.0, low=4504.0,
                            date="2026-09-02 09:45", bsp_type="3")
     engine.on_signal(sig_sell)
-    check("[D] IN_TRADE+反向 → broker 收 LOCK 报（Phase D 离场联动）",
-          any(o.meta.get("intent") == "lock" for o in broker.orders), True)
+    check("[D] IN_TRADE+反向 → 忽略，state 仍 IN_TRADE", engine._state.name, "IN_TRADE")
+    check("[D] IN_TRADE+反向 → broker 没收 LOCK 报（Q1=B 信号不离场）",
+          sum(1 for o in broker.orders if o.meta.get("intent") == "lock"), lock_before)
     check("[D] IN_TRADE+反向 → broker 没收 UNLOCK 报（不入 UNLOCK 路径）",
+          sum(1 for o in broker.orders if o.meta.get("intent") == "unlock"), unlock_before)
+    check("[D] IN_TRADE+反向 → broker 没收新 OPEN 报（运行态忽略）",
+          sum(1 for o in broker.orders if o.meta.get("intent") == "open"), open_before)
+
+
+# Case E: 锁仓·当日锁（entry_date == 信号日）+ 反向信号 → 开新仓（规则 ⑸-①）
+# v1.3：被锁的单子日期是今天 → 再入场开新仓，不动锁仓腿。
+with tmp_dir() as tmp:
+    engine, store, broker, ev = build_engine(tmp)
+    seed_portfolio(engine, store,
+                   make_pos(side=Side.LONG, vol=1, entry_price=4500.0,
+                            entry_date="2026-09-02"))  # 当日锁
+    sig_sell = make_signal(is_buy=False, date="2026-09-02 09:35", bsp_type="2")
+    engine.on_signal(sig_sell)
+    check("[E] 当日锁+SELL → broker 收 OPEN 报（开新仓）",
+          any(o.meta.get("intent") == "open" for o in broker.orders), True)
+    check("[E] 当日锁+SELL → broker 没收 UNLOCK 报（不提前平锁仓腿）",
           any(o.meta.get("intent") == "unlock" for o in broker.orders), False)
 
 
@@ -483,32 +509,24 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [10] 边界：portfolio 非空但信号方向与 portfolio 同向（防御性）
+# [10] 边界：簿非空但信号方向与锁仓腿同向（has_opposite=False）→ 不走 UNLOCK
 # ════════════════════════════════════════════════════════════════
 print("\n[10] 边界：同向有仓（has_opposite=False）→ 不走 UNLOCK")
-# 这种边界在 v1+max=1 下不会自然出现（LOCK 才会留下反向）；但作为防御性，
-# UNLOCK 早判断里的 `has_opposite(sig.side)` 必须严格卡死。
-# 测试方法：position.entry_mode = UNLOCK_FIRST 时，sig 与持仓同向 → 不触发 UNLOCK。
-# 这时 entry_policy.decide 被调用。
+# v1.3：锁仓腿（LOCKED）与信号同向时，opposite_positions(side) 为空，
+# 信号门跳过 UNLOCK 分支 → 直接走 OPEN 开新仓（规则 ⑸-① 的同向版本）。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     seed_portfolio(engine, store,
                    make_pos(side=Side.LONG, vol=1, entry_price=4500.0,
-                            entry_mode=EntryMode.UNLOCK_FIRST))
-    # 同向 BUY 信号：has_opposite(BUY)=False → 走 IDLE 开仓流程
+                            entry_date="2026-09-02"))  # 当日锁，LONG 腿
+    # 同向 BUY 信号：has_opposite(BUY=LONG)=False → 不走 UNLOCK，走 OPEN
     sig_buy = make_signal(is_buy=True, price=4505.0,
                           date="2026-09-02 09:35", bsp_type="2")
     engine.on_signal(sig_buy)
-    # UNLOCK 不应该被触发（has_opposite=False）
-    # 但 IDLE+有仓 + entry_mode=UNLOCK_FIRST 这种状态实际上不应再开仓
-    # → 默认 entry_policy 会怎么处理？看现状：在 IDLE + portfolio 非空 时
-    # 进入"标准 OPEN"路径，entry_policy.decide(sig, position, spec) 决定动作。
-    # 这里关心的是 broker 是否收到 unlock 报 —— 不应收到。
     check("[同向] broker 没收到 UNLOCK 报",
           any(o.meta.get("intent") == "unlock" for o in broker.orders), False)
-    check("[同向] broker 可能收到 OPEN 报（看 entry_policy 决策）",
-          # DefaultEntryPolicy 在有持仓时通常 skip；这里只验证"没收到 UNLOCK"
-          True, True)
+    check("[同向] broker 收到 OPEN 报（同向 → 开新仓，不提前平锁仓腿）",
+          any(o.meta.get("intent") == "open" for o in broker.orders), True)
 
 
 print("\n" + "=" * 60)
