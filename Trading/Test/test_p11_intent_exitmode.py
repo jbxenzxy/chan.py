@@ -257,13 +257,13 @@ with tmp_dir() as tmp:
     bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
     check("SL 触发后 state=IDLE (已离场)", engine._state.name, "IDLE")
-    # 留双腿（软离场）：原仓 → LOCKED + 反向腿 LOCKED，共享 lock_pair_id，不记 Trade
+    # 留双仓（软离场）：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，不记 Trade
     book_positions = engine.positions.positions
-    check("SL 软离场留双腿：簿内 2 条腿", len(book_positions), 2)
-    check("SL 软离场：两腿均 LOCKED",
+    check("SL 软离场留双仓：簿内 2 笔", len(book_positions), 2)
+    check("SL 软离场：两笔均 LOCKED",
           sorted(p.entry_mode.value for p in book_positions),
           ["locked", "locked"])
-    check("SL 软离场：两腿 side 相反（LONG+SHORT）",
+    check("SL 软离场：两笔 side 相反（LONG+SHORT）",
           {p.side for p in book_positions}, {Side.LONG, Side.SHORT})
     check("SL 软离场：共享同一 lock_pair_id",
           len({p.lock_pair_id for p in book_positions}), 1)
@@ -279,7 +279,7 @@ with tmp_dir() as tmp:
         check("LOCK 报 offset='OPEN'", lo.meta.get("offset"), "OPEN")
         check("LOCK 报 status=filled (dry_run 撮合成功)",
               lo.status, "filled")
-    # 软离场（锁仓）不兑现 PnL → 不记 Trade（留双腿，净敞口归零继续浮动）
+    # 软离场（锁仓）不兑现 PnL → 不记 Trade（留双仓，净敞口归零继续浮动）
     trades = store.trades()
     check("软离场不记 Trade（PnL 不兑现）", len(trades), 0)
     # events.jsonl 验证 close 事件带 exit_mode=lock
@@ -288,7 +288,7 @@ with tmp_dir() as tmp:
     with open(ev_path, "r", encoding="utf-8") as f:
         lines = [json.loads(l) for l in f if l.strip()]
     lock_events = [e for e in lines if e.get("kind") == "lock_booked"]
-    check("events.jsonl 至少 1 条 lock_booked 事件（软离场留双腿）",
+    check("events.jsonl 至少 1 条 lock_booked 事件（软离场留双仓）",
           len(lock_events) >= 1, True)
     if lock_events:
         check("lock_booked 事件 lock_pair_id 非空",

@@ -744,11 +744,11 @@ class SimNowBroker(Broker):
 
         旧实现：CLOSETODAY（close_today_first=True）/ CLOSEANY（False），两者都有问题：
           · CLOSEANY 不在 tqsdk 白名单 → insert_order 本地 raise → 平仓必失败；
-          · CLOSETODAY 无条件用于所有平仓 → UNLOCK_FIRST 腿（必然是昨仓）被发成"平今"：
+          · CLOSETODAY 无条件用于所有平仓 → UNLOCK_FIRST 持仓（必然是昨仓）被发成"平今"：
             中金所无今仓 → CTP 拒单 → 引擎连续失败触发 phantom 清仓（账实不符）；
-            若账户恰有同向今仓 → 平错腿；即便成交也按 0.0345% 平今费率计费。
+            若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
 
-        新实现（按被平持仓腿的建仓日期判定，语义即"平昨/平今"）：
+        新实现（按被平持仓的建仓日期判定，语义即"平昨/平今"）：
           · 昨仓（entry_date < 今日）→ "CLOSE"（中金所/上期所平昨均用 CLOSE）
           · 今仓（entry_date >= 今日）→ "CLOSETODAY"（仅当 spec.close_today_first，
             用于上期所等区分今昨的交易所）；close_today_first=False → "CLOSE"（原 CLOSEANY 非法）
@@ -764,7 +764,7 @@ class SimNowBroker(Broker):
     def _submit_close(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                       signal_key: str, note: str, entry_date: str = "") -> Order:
         # Phase C：UNLOCK = 平昨报文（CLOSE，2026-09-10 由 CLOSEYESTERDAY 修正）；
-        # CLOSE 按被平腿的 entry_date 选平今/平昨（见 _close_offset）。
+        # CLOSE 按被平持仓的 entry_date 选平今/平昨（见 _close_offset）。
         if intent is OrderIntent.UNLOCK:
             offset = "CLOSE"
         else:

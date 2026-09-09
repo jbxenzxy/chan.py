@@ -65,7 +65,7 @@ class PositionBook:
 
     def __init__(self, max_positions: Optional[int] = DEFAULT_MAX):
         # v1.3（Q5 拍板）：max_positions=None 表示"不限容量"。
-        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢腿 /
+        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢仓 /
         #   恢复截断）随"不限"一并消失。资金是唯一闸门（钱不够自然开不成功）。
         if max_positions is None:
             self._max: Optional[int] = None

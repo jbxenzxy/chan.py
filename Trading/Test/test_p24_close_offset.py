@@ -17,11 +17,11 @@ P24 平仓 offset 今/昨仓判定 + tqsdk 白名单 单元测试（2026-09-10 �
          **其他交易所（含中金所）直接用 CLOSE**）。
 
     2. CLOSE 无条件发 "CLOSETODAY"（spec.close_today_first=True）
-       → UNLOCK_FIRST 腿必然是昨仓（它只在跨日解锁时由 _upgrade_lock_pair 产生），
+       → UNLOCK_FIRST 持仓必然是昨仓（它只在跨日解锁时由 _upgrade_lock_pair 产生），
          昨仓发平今：中金所无今仓 → CTP 拒单 → 引擎连续失败达 close_max_streak
          触发 phantom 清仓（真实持仓还在却从引擎簿消失 → 账实不符）；
-         若账户恰有同向今仓 → 平错腿；即便成交也按 0.0345% 平今费率计费。
-       修正：按被平腿 entry_date 判定（昨仓→CLOSE，今仓→CLOSETODAY）。
+         若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
+       修正：按被平持仓 entry_date 判定（昨仓→CLOSE，今仓→CLOSETODAY）。
 
     3. 附带：close_today_first=False 时的 "CLOSEANY" 同样不在白名单 → 改 "CLOSE"。
 
@@ -209,9 +209,9 @@ check("INTENT_TO_OFFSET 全表 ∈ 白名单",
 check("UNLOCK 映射不再是 CLOSEYESTERDAY",
       INTENT_TO_OFFSET[OrderIntent.UNLOCK] != "CLOSEYESTERDAY", True)
 
-print("\n[6] 场景 Y 关键回归：UNLOCK_FIRST 腿（昨仓）离场不得发平今")
-# UNLOCK_FIRST 腿只在跨日解锁后产生 → entry_date 必然 < 今日
-check("UNLOCK_FIRST 腿（entry_date=昨）离场 = CLOSE ≠ CLOSETODAY",
+print("\n[6] 场景 Y 关键回归：UNLOCK_FIRST 持仓（昨仓）离场不得发平今")
+# UNLOCK_FIRST 持仓只在跨日解锁后产生 → entry_date 必然 < 今日
+check("UNLOCK_FIRST 持仓（entry_date=昨）离场 = CLOSE ≠ CLOSETODAY",
       _first_close_offset(_YESTERDAY) != "CLOSETODAY", True)
 
 print("\n" + "=" * 60)

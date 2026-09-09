@@ -6,7 +6,7 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
       ② 簿内所有「未锁定」持仓全部锁仓（OPEN_FIRST / UNLOCK_FIRST 一律
-         LOCK，留双腿：原仓 → LOCKED + 反向腿 LOCKED，共享 lock_pair_id，
+         LOCK，留双仓：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，
          次日对向信号走解锁入场管线）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
@@ -229,9 +229,9 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
     modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("[2b] 簿内全是 LOCKED（留双腿：2 原仓 + 2 反向 = 4 腿）", modes,
+    check("[2b] 簿内全是 LOCKED（留双仓：2 原仓 + 2 反向 = 4 笔）", modes,
           ["locked", "locked", "locked", "locked"])
-    check("[2c] 信号键 = 原键 + 原键#lock（原仓腿保留原键）",
+    check("[2c] 信号键 = 原键 + 原键#lock（原仓保留原键）",
           sorted(p.signal_key for p in engine.positions.positions),
           ["P20-2A", "P20-2A#lock", "P20-2B", "P20-2B#lock"])
     check("[2d] 全部 LOCKED → state=IDLE", engine._state.name, "IDLE")
@@ -262,7 +262,7 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()          # 第二次关闭：全部已 LOCKED → no-op
     check("[3a] 无新增报单", len(broker.orders), n_orders)
     check("[3b] 无新增 trade", len(store.trades()), n_trades)
-    check("[3c] 簿仍 1 锁 2 腿（原仓 + 反向均 LOCKED）",
+    check("[3c] 簿仍 1 锁 2 笔（原仓 + 反向均 LOCKED）",
           [p.entry_mode for p in engine.positions.positions],
           [EntryMode.LOCKED, EntryMode.LOCKED])
     check("[3d] enabled 仍 False", engine.auto_order_enabled, False)
@@ -280,7 +280,7 @@ with tmp_dir() as tmp:
 
     engine2, store2, broker2, ev2 = build_engine(tmp)
     check("[4a] 重启后 enabled=False", engine2.auto_order_enabled, False)
-    check("[4b] 簿内 LOCKED 已恢复（1 锁 2 腿）",
+    check("[4b] 簿内 LOCKED 已恢复（1 锁 2 笔）",
           [p.entry_mode for p in engine2.positions.positions],
           [EntryMode.LOCKED, EntryMode.LOCKED])
     sig = make_signal(is_buy=True, sig_key="P20-4|2|B")
@@ -314,7 +314,7 @@ with tmp_dir() as tmp:
     # 所以这里要推进 _close_retry_bars(5) 根 bar 才会重试补锁。
     for i in range(engine._close_retry_bars):
         engine.on_bar(make_bar(2000 + i))
-    check("[5c] 补锁后簿内 LOCKED（1 锁 2 腿）",
+    check("[5c] 补锁后簿内 LOCKED（1 锁 2 笔）",
           [p.entry_mode for p in engine.positions.positions],
           [EntryMode.LOCKED, EntryMode.LOCKED])
     check("[5d] 补锁后 state=IDLE", engine._state.name, "IDLE")

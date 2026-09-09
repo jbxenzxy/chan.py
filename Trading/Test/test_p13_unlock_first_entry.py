@@ -217,7 +217,7 @@ with tmp_dir() as tmp:
 
 
 # Case E: 锁仓·当日锁（entry_date == 信号日）+ 反向信号 → 开新仓（规则 ⑸-①）
-# v1.3：被锁的单子日期是今天 → 再入场开新仓，不动锁仓腿。
+# v1.3：被锁的单子日期是今天 → 再入场开新仓，不动锁仓持仓。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     seed_portfolio(engine, store,
@@ -227,7 +227,7 @@ with tmp_dir() as tmp:
     engine.on_signal(sig_sell)
     check("[E] 当日锁+SELL → broker 收 OPEN 报（开新仓）",
           any(o.meta.get("intent") == "open" for o in broker.orders), True)
-    check("[E] 当日锁+SELL → broker 没收 UNLOCK 报（不提前平锁仓腿）",
+    check("[E] 当日锁+SELL → broker 没收 UNLOCK 报（不提前平锁仓持仓）",
           any(o.meta.get("intent") == "unlock" for o in broker.orders), False)
 
 
@@ -512,23 +512,23 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [10] 边界：簿非空但信号方向与锁仓腿同向（has_opposite=False）→ 不走 UNLOCK
+# [10] 边界：簿非空但信号方向与锁仓持仓同向（has_opposite=False）→ 不走 UNLOCK
 # ════════════════════════════════════════════════════════════════
 print("\n[10] 边界：同向有仓（has_opposite=False）→ 不走 UNLOCK")
-# v1.3：锁仓腿（LOCKED）与信号同向时，opposite_positions(side) 为空，
+# v1.3：锁仓持仓（LOCKED）与信号同向时，opposite_positions(side) 为空，
 # 信号门跳过 UNLOCK 分支 → 直接走 OPEN 开新仓（规则 ⑸-① 的同向版本）。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     seed_portfolio(engine, store,
                    make_pos(side=Side.LONG, vol=1, entry_price=4500.0,
-                            entry_date="2026-09-02"))  # 当日锁，LONG 腿
+                            entry_date="2026-09-02"))  # 当日锁，LONG 持仓
     # 同向 BUY 信号：has_opposite(BUY=LONG)=False → 不走 UNLOCK，走 OPEN
     sig_buy = make_signal(is_buy=True, price=4505.0,
                           date="2026-09-02 09:35", bsp_type="2")
     engine.on_signal(sig_buy)
     check("[同向] broker 没收到 UNLOCK 报",
           any(o.meta.get("intent") == "unlock" for o in broker.orders), False)
-    check("[同向] broker 收到 OPEN 报（同向 → 开新仓，不提前平锁仓腿）",
+    check("[同向] broker 收到 OPEN 报（同向 → 开新仓，不提前平锁仓持仓）",
           any(o.meta.get("intent") == "open" for o in broker.orders), True)
 
 

@@ -180,7 +180,7 @@ def n_orders(broker):
 # ════════════════════════════════════════════════════════════════
 # [1] E2E：开多 → 反向信号 → SOFT_EXIT 成交 → 反向仓落簿
 # ════════════════════════════════════════════════════════════════
-print("\n[1] E2E：BUY 开仓 → LOCK → 留双腿（原仓+反向 LOCKED，不兑现 PnL）")
+print("\n[1] E2E：BUY 开仓 → LOCK → 留双仓（原仓+反向 LOCKED，不兑现 PnL）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_signal(make_signal(is_buy=True, price=4500.0))
@@ -191,23 +191,23 @@ with tmp_dir() as tmp:
 
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
-    # 模拟出场层触发，验证留双腿落簿链路。
+    # 模拟出场层触发，验证留双仓落簿链路。
     engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
-    check("[1c] LOCK 后留双腿（原仓 + 反向）", len(engine.positions), 2)
+    check("[1c] LOCK 后留双仓（原仓 + 反向）", len(engine.positions), 2)
     legs = engine.positions.positions
     orig = next(p for p in legs if p.side is Side.LONG)
     lock = next(p for p in legs if p.side is Side.SHORT)
-    check("[1d] 原仓腿 side=LONG 保留", orig.side, Side.LONG)
-    check("[1e] 原仓腿 entry_mode=LOCKED", orig.entry_mode, EntryMode.LOCKED)
-    check("[1f] 原仓腿 entry_price=P₀ 不变（会计锚）", orig.entry_price, open_price)
+    check("[1d] 原仓 side=LONG 保留", orig.side, Side.LONG)
+    check("[1e] 原仓 entry_mode=LOCKED", orig.entry_mode, EntryMode.LOCKED)
+    check("[1f] 原仓 entry_price=P₀ 不变（会计锚）", orig.entry_price, open_price)
     lock_order = [o for o in broker.orders
                   if o.meta.get("intent") == "lock"][-1]
-    check("[1g] 反向腿 entry_price=LOCK 报单成交价",
+    check("[1g] 反向仓 entry_price=LOCK 报单成交价",
           lock.entry_price, lock_order.filled_price)
-    check("[1h] 反向腿 signal_key 以 #lock 结尾", lock.signal_key.endswith("#lock"), True)
-    check("[1i] 反向腿 entry_mode=LOCKED", lock.entry_mode, EntryMode.LOCKED)
-    check("[1j] 两腿 volume 与原仓一致（2 手）", orig.volume == lock.volume == 2, True)
-    check("[1k] 两腿共享 lock_pair_id 且非空",
+    check("[1h] 反向仓 signal_key 以 #lock 结尾", lock.signal_key.endswith("#lock"), True)
+    check("[1i] 反向仓 entry_mode=LOCKED", lock.entry_mode, EntryMode.LOCKED)
+    check("[1j] 两笔 volume 与原仓一致（2 手）", orig.volume == lock.volume == 2, True)
+    check("[1k] 两笔共享 lock_pair_id 且非空",
           bool(orig.lock_pair_id) and orig.lock_pair_id == lock.lock_pair_id, True)
     check("[1l] state 回 IDLE", engine._state.name, "IDLE")
     check("[1m] broker 多出 1 笔 LOCK 报", n_orders(broker) - n_before, 1)
@@ -215,7 +215,7 @@ with tmp_dir() as tmp:
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
     check("[1n] 事件流含 lock_booked", "lock_booked" in kinds, True)
     check("[1o] 原仓 PnL 不兑现（trade 不落盘）", len(store.trades()), 0)
-    check("[1p] 双腿已持久化（2 条 locked）",
+    check("[1p] 双仓已持久化（2 条 locked）",
           [p["entry_mode"] for p in (store.get_json("positions") or [])],
           ["locked", "locked"])
 
@@ -230,16 +230,16 @@ with tmp_dir() as tmp:
     engine.positions.add(make_pos(signal_key="P18-CTL", entry_price=4500.0))
     engine._state = EngineState.IN_TRADE
     engine.on_bar(make_bar(5000, 4500, 4510, 4490, 4505))
-    check("[2a] 对照组 OPEN_FIRST 被 settle 平掉（留双腿全 LOCKED）",
+    check("[2a] 对照组 OPEN_FIRST 被 settle 平掉（留双仓全 LOCKED）",
           [p.entry_mode for p in engine.positions.positions],
           [EntryMode.LOCKED, EntryMode.LOCKED])
     n_mid = n_orders(broker)
 
-    # 实验组：簿内只剩 LOCKED（双腿），任何 bar 都不应触发出场
+    # 实验组：簿内只剩 LOCKED（双仓），任何 bar 都不应触发出场
     engine.on_bar(make_bar(5300, 4505, 4590, 4500, 4585))   # 对 SHORT 极不利
     engine.on_bar(make_bar(5600, 4585, 4595, 4580, 4590,
                            date="2026-09-02 15:00"))         # 收盘根（EOD）
-    check("[2b] 锁仓双腿仍在簿", len(engine.positions), 2)
+    check("[2b] 锁仓双仓仍在簿", len(engine.positions), 2)
     check("[2c] 锁仓 entry_mode 仍=LOCKED",
           all(p.entry_mode is EntryMode.LOCKED for p in engine.positions.positions), True)
     check("[2d] bar 期间零报单（settle 被跳过）", n_orders(broker), n_mid)
@@ -249,23 +249,23 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [3] 次日对向信号 → E2 UNLOCK 路径解锁
 # ════════════════════════════════════════════════════════════════
-print("\n[3] LOCK 落簿后，对向信号触发 UNLOCK（平反向腿 + 升级原仓）")
+print("\n[3] LOCK 落簿后，对向信号触发 UNLOCK（平反向仓 + 升级原仓）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_signal(make_signal(is_buy=True, price=4500.0))
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
-    # 模拟出场层触发，验证留双腿落簿链路。
+    # 模拟出场层触发，验证留双仓落簿链路。
     engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
-    check("[3a] 锁仓双腿已落簿", len(engine.positions), 2)
+    check("[3a] 锁仓双仓已落簿", len(engine.positions), 2)
     n_before = n_orders(broker)
 
     engine.on_signal(make_signal(is_buy=True, price=4520.0,
                                  date="2026-09-03 09:35", bsp_type="1"))
-    check("[3b] 解锁后剩 1 腿（升级的原仓，非清空）", len(engine.positions), 1)
-    check("[3c] 剩腿 entry_mode=UNLOCK_FIRST",
+    check("[3b] 解锁后剩 1 笔（升级的原仓，非清空）", len(engine.positions), 1)
+    check("[3c] 剩余持仓 entry_mode=UNLOCK_FIRST",
           engine.positions.positions[0].entry_mode, EntryMode.UNLOCK_FIRST)
-    check("[3d] 剩腿 side=LONG（原仓方向）",
+    check("[3d] 剩余持仓 side=LONG（原仓方向）",
           engine.positions.positions[0].side, Side.LONG)
     check("[3e] broker 收到 UNLOCK 报",
           any(o.meta.get("intent") == "unlock" for o in broker.orders), True)
@@ -294,8 +294,8 @@ with tmp_dir() as tmp:
     store2 = Store(os.path.join(tmp, "state.db"))
     engine2, _, broker2, _ = build_engine(tmp, store=store2, ev=ev2)
     # 直接断言恢复结果：
-    check("[4a] 重启后簿内 2 腿", len(engine2.positions), 2)
-    check("[4b] 双腿 entry_mode=LOCKED",
+    check("[4a] 重启后簿内 2 笔", len(engine2.positions), 2)
+    check("[4b] 双仓 entry_mode=LOCKED",
           all(p.entry_mode is EntryMode.LOCKED for p in engine2.positions.positions), True)
     check("[4c] 重启后 state=IDLE（不再推 IN_TRADE）",
           engine2._state.name, "IDLE")
@@ -307,7 +307,7 @@ with tmp_dir() as tmp:
                                   date="2026-09-03 09:35", bsp_type="1"))
     check("[4d] 重启后对向信号走 UNLOCK 解锁",
           any(o.meta.get("intent") == "unlock" for o in broker2.orders), True)
-    check("[4e] 解锁后剩 1 腿 UNLOCK_FIRST（非空）",
+    check("[4e] 解锁后剩 1 笔 UNLOCK_FIRST（非空）",
           len(engine2.positions) == 1
           and engine2.positions.positions[0].entry_mode is EntryMode.UNLOCK_FIRST, True)
 
@@ -315,7 +315,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [5] 同向信号：IDLE + 簿内锁仓 → skip，簿不变
 # ════════════════════════════════════════════════════════════════
-print("\n[5] 同向信号（锁仓腿同向）→ 开新仓，不动锁仓腿")
+print("\n[5] 同向信号（锁仓持仓同向）→ 开新仓，不动锁仓持仓")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_signal(make_signal(is_buy=True, price=4500.0))
@@ -324,10 +324,10 @@ with tmp_dir() as tmp:
     # 模拟出场层触发，验证 lock_booked 落簿链路。
     engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
     n_before = n_orders(broker)
-    # SELL 信号与锁仓腿（SHORT）同向 → v1.3：开新仓，不提前平锁仓腿（规则 ⑸-① 同向版）
+    # SELL 信号与锁仓持仓（SHORT）同向 → v1.3：开新仓，不提前平锁仓持仓（规则 ⑸-① 同向版）
     engine.on_signal(make_signal(is_buy=False, price=4540.0,
                                  date="2026-09-02 10:05", bsp_type="2"))
-    check("[5a] 锁仓双腿仍在（2 笔 LOCKED）",
+    check("[5a] 锁仓双仓仍在（2 笔 LOCKED）",
           sum(1 for p in engine.positions.positions
               if p.entry_mode is EntryMode.LOCKED), 2)
     check("[5b] 新开一笔 SHORT（簿内共 3 笔）", len(engine.positions), 3)
@@ -339,7 +339,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [6] 批量 LOCK：2 笔多单 FIFO 全 LOCK → 2 笔锁仓落簿 + 多反向 warning
 # ════════════════════════════════════════════════════════════════
-print("\n[6] 批量 LOCK 落簿（留双腿）+ 次日单笔解锁边界")
+print("\n[6] 批量 LOCK 落簿（留双仓）+ 次日单笔解锁边界")
 with tmp_dir() as tmp:
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_open_positions = 2
@@ -353,7 +353,7 @@ with tmp_dir() as tmp:
 
     engine._close_positions([p1, p2], "lock_test", 4550.0, None,
                             signal_key="P18-BATCH")
-    check("[6a] 2 笔多单留双腿（共 4 腿）", len(engine.positions), 4)
+    check("[6a] 2 笔多单留双仓（共 4 笔）", len(engine.positions), 4)
     check("[6b] 全部 entry_mode=LOCKED",
           all(p.entry_mode is EntryMode.LOCKED
               for p in engine.positions.positions), True)
@@ -368,14 +368,14 @@ with tmp_dir() as tmp:
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
     check("[6f] lock_booked ×2", kinds.count("lock_booked"), 2)
 
-    # 次日对向信号：单笔解锁（平 1 反向腿 + 升级 1 原仓腿）
+    # 次日对向信号：单笔解锁（平 1 反向仓 + 升级 1 原仓）
     engine.on_signal(make_signal(is_buy=True, price=4520.0,
                                  date="2026-09-03 09:35", bsp_type="1"))
-    check("[6g] 本轮解锁 1 锁对（剩 3 腿）", len(engine.positions), 3)
-    check("[6h] 升级 1 腿为 UNLOCK_FIRST",
+    check("[6g] 本轮解锁 1 锁对（剩 3 笔）", len(engine.positions), 3)
+    check("[6h] 升级 1 笔为 UNLOCK_FIRST",
           sum(1 for p in engine.positions.positions
               if p.entry_mode is EntryMode.UNLOCK_FIRST), 1)
-    check("[6h2] 剩余 2 腿仍 LOCKED",
+    check("[6h2] 剩余 2 笔仍 LOCKED",
           sum(1 for p in engine.positions.positions
               if p.entry_mode is EntryMode.LOCKED), 2)
     ev.flush()
@@ -417,7 +417,7 @@ with tmp_dir() as tmp:
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证 lock_booked 落簿链路。
     engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
-    check("[8a] 锁仓双腿已落簿", len(engine.positions), 2)
+    check("[8a] 锁仓双仓已落簿", len(engine.positions), 2)
 
     # bar1：真实持仓与簿一致（LONG=2 + SHORT=2 双边锁仓）→ 对账无动作
     rb._real[Side.LONG] = 2

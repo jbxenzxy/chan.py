@@ -74,7 +74,7 @@ class Broker(ABC):
           - CLOSE    平仓
           - LOCK     锁仓（开反向同手数）
         ref_price: 策略参考价（开仓=信号K线收盘价；平仓=触发价；锁仓/解锁同 CLOSE）
-        entry_date: 被平持仓腿的建仓日期（YYYY-MM-DD，2026-09-10 新增）。
+        entry_date: 被平持仓的建仓日期（YYYY-MM-DD，2026-09-10 新增）。
           仅 CLOSE 使用：broker 据此判今仓/昨仓选 offset（昨仓→CLOSE，今仓→CLOSETODAY）。
           留空时保守按昨仓处理（与引擎 on_signal 的 "" < today 口径一致）。
           新增在参数表末尾且带默认值，既有位置参数调用不受影响。

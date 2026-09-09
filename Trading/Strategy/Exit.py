@@ -137,7 +137,7 @@ class LayeredExitPolicy(ExitPolicy):
         """生成出场计划。
 
         anchor = 风控锚（解锁重算时传解锁成交价 P₂）；None 时用 entry_price（正常开仓）。
-        会计锚 entry_price 与风控锚 anchor 分离：解锁后剩腿的 entry_price 保持 P₀（对账不动），
+        会计锚 entry_price 与风控锚 anchor 分离：解锁后剩余持仓的 entry_price 保持 P₀（对账不动），
         但止盈/止损/保本/跟踪全部以 anchor（P₂）为基准重算，避免用陈旧的 P₀ 导致
         "开仓即触发"或"止损远在天边"。
         """

@@ -59,9 +59,9 @@ class TradingEngine(ReconcileMixin):
         # 多仓场景预留扩展点。E1 阶段 max=1，语义与单一 self.position 完全等价。
         # Phase E3.1（2026-09-05）：max 改为 cfg.risk.max_open_positions 配置化，默认仍=1
         # —— 所有现存测试（P5..P13）零行为变化。
-        # v1.3（Q5 拍板）：max_positions=None —— 不限容量。锁层/腿数不做任何上限，
+        # v1.3（Q5 拍板）：max_positions=None —— 不限容量。锁层/笔数不做任何上限，
         #   资金是唯一闸门（钱不够自然开不成功）。这同时消掉了 D2a（add 抛错崩网关）/
-        #   D2b（LOCK 落簿静默丢腿）/ D3（恢复截断丢仓）。
+        #   D2b（LOCK 落簿静默丢仓）/ D3（恢复截断丢仓）。
         self.positions: PositionBook = PositionBook(max_positions=None)
         # Phase A：4 态引擎状态机
         #   IDLE     无持仓，等待入场信号
@@ -433,9 +433,9 @@ class TradingEngine(ReconcileMixin):
         #   净敞口 != 0（运行态）→ 一律忽略（Q1=B，出场只由 on_bar 的 L1-L3 负责）
         #   净敞口 == 0：
         #       簿空（空仓）→ 开新仓（decide → OPEN）
-        #       簿非空（锁仓态）→ 看"与信号反向的最老一腿"的 entry_date：
+        #       簿非空（锁仓态）→ 看"与信号反向的最早一笔持仓"的 entry_date：
         #           entry_date < today → 平旧仓（UNLOCK，规则 ⑸-②）
-        #           否则（当日锁 / entry_date 缺失）→ 开新仓（OPEN，不动锁仓腿，规则 ⑸-①）
+        #           否则（当日锁 / entry_date 缺失）→ 开新仓（OPEN，不动锁仓持仓，规则 ⑸-①）
         # 净敞口 = Σ(side.sign × volume)，锁仓对（多+空）自然抵消为 0。
         # 不再区分"单仓/多仓"两套语义 —— 旧 E3.2 的 G2 多仓守卫随本重写一并移除。
         # ════════════════════════════════════════════════════════════════
@@ -447,8 +447,8 @@ class TradingEngine(ReconcileMixin):
                           reason="engine_busy_opening_or_exiting")
             return
 
-        # 运行态 = 簿内存在"非 LOCKED"腿（真实净敞口）。锁仓态/空仓 = 簿内全 LOCKED 或空。
-        #   注意：H1 锁仓落簿 = 1 条反向 LOCKED 腿（原仓被 Trade 了结），锁仓腿 net = ±vol ≠ 0，
+        # 运行态 = 簿内存在"非 LOCKED"持仓（真实净敞口）。锁仓态/空仓 = 簿内全 LOCKED 或空。
+        #   注意：H1 锁仓落簿 = 1 笔反向 LOCKED 持仓（原仓被 Trade 了结），锁仓持仓 net = ±vol ≠ 0，
         #   故不能用 net 判"锁仓 vs 运行"，必须按 entry_mode 区分。
         #   这与 _restore 的 state 推断（is_empty or all LOCKED → IDLE）口径一致。
         if any(p.entry_mode is not EntryMode.LOCKED
@@ -460,13 +460,13 @@ class TradingEngine(ReconcileMixin):
                           reason="running_ignore_signal")
             return
 
-        # 净敞口 == 0：空仓 或 锁仓态。挑"与信号方向相反、且最早"的一腿看日期。
+        # 净敞口 == 0：空仓 或 锁仓态。挑"与信号方向相反、且最早"的一笔看日期。
         today = sig.date[:10] if sig.date else ""
         opp = sorted(self.positions.opposite_positions(sig.side),
                      key=lambda p: p.entry_bar_seq)
         if opp and opp[0].entry_date < today:
-            # 锁仓·昨仓锁：平旧仓（与信号反向的最老一腿），规则 ⑸-②。
-            # entry_date 缺失（旧记录 LOCKED 腿）时 "" < today 恒 True → 保守按平昨处理。
+            # 锁仓·昨仓锁：平旧仓（与信号反向的最早一笔持仓），规则 ⑸-②。
+            # entry_date 缺失（旧记录 LOCKED 持仓）时 "" < today 恒 True → 保守按平昨处理。
             self._unlock_position(sig, sig.side)
             self.ev.write("signal_unlock", key=sig.key,
                           reason="unlock_yesterday_position")
@@ -511,8 +511,8 @@ class TradingEngine(ReconcileMixin):
             return
 
         cfg_max = self.cfg.risk.max_open_positions
-        # v1.3（G3）：同向守卫只统计"非 LOCKED"的腿（真实净敞口笔数）。
-        #   锁仓腿（LOCKED）是已对冲的，不应占用 max_open_positions 名额，
+        # v1.3（G3）：同向守卫只统计"非 LOCKED"持仓（真实净敞口笔数）。
+        #   锁仓持仓（LOCKED）是已对冲的，不应占用 max_open_positions 名额，
         #   否则"锁仓后再开新仓"（规则 ⑸-①）会被 open_silenced 挡住。
         same_side_n = len([p for p in self.positions.same_side_positions(side)
                            if p.entry_mode is not EntryMode.LOCKED])
@@ -522,7 +522,7 @@ class TradingEngine(ReconcileMixin):
                 "open_silenced", key=sig.key,
                 reason="same_side_already_max", cfg_max=cfg_max,
                 same_side_n=same_side_n,
-                note="引擎静默填到 max_open_positions（仅非 LOCKED 腿）；本信号不开仓")
+                note="引擎静默填到 max_open_positions（仅非 LOCKED 持仓）；本信号不开仓")
             self.store.update_signal_action(
                 sig.key, "open_silenced",
                 "same_side_full_n={}".format(same_side_n))
@@ -646,9 +646,9 @@ class TradingEngine(ReconcileMixin):
             else:
                 intent, side = self._exit_intent(pos)
 
-            # 2026-09-10：把被平腿的建仓日传给 broker，让它按今仓/昨仓选 offset
+            # 2026-09-10：把被平持仓的建仓日传给 broker，让它按今仓/昨仓选 offset
             # （昨仓→CLOSE；今仓且 close_today_first→CLOSETODAY）。传参前 CLOSE 一律
-            # 发 CLOSETODAY，导致 UNLOCK_FIRST 腿（必为昨仓）被发成平今 → CTP 拒单。
+            # 发 CLOSETODAY，导致 UNLOCK_FIRST 持仓（必为昨仓）被发成平今 → CTP 拒单。
             o = self.broker.submit(intent, side, pos.volume, trigger_price,
                                    signal_key or pos.signal_key,
                                    note=reason, entry_date=pos.entry_date or "")
@@ -702,19 +702,19 @@ class TradingEngine(ReconcileMixin):
             exit_price = o.filled_price
 
             if intent is OrderIntent.LOCK:
-                # ═══ 软离场（锁仓）= 留双腿：原仓 → LOCKED + 反向腿 LOCKED，不兑现 PnL ═══
-                # 锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓腿保留
-                # （entry_price=P₀ 会计锚不动），反向腿作为新 LOCKED 腿落簿，两腿共享
+                # ═══ 软离场（锁仓）= 留双仓：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL ═══
+                # 锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
+                # （entry_price=P₀ 会计锚不动），反向仓作为新 LOCKED 持仓落簿，两笔共享
                 # lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
                 self._book_lock_pair(pos, side, exit_price, o, reason, idx, len(ordered))
             else:
                 # ═══ 硬离场（平仓）= 记 Trade + remove 原仓 ═══
                 gross = pos.pnl_points(exit_price)
                 # 2026-09-10：成本口径必须与 broker 实际发出的报文一致。
-                #   报文侧（SimNow._close_offset）已按被平腿的 entry_date 判今/昨仓：
+                #   报文侧（SimNow._close_offset）已按被平持仓的 entry_date 判今/昨仓：
                 #   昨仓发 CLOSE（平昨费率）、今仓且 close_today_first 才发 CLOSETODAY（平今费率）。
                 #   这里若仍沿用 spec.close_today_first 全局开关，会出现"实际付平昨费、
-                #   账面记平今费（0.0345%，约为平昨 15 倍）"的账实不符 —— 尤其 UNLOCK_FIRST 腿
+                #   账面记平今费（0.0345%，约为平昨 15 倍）"的账实不符 —— 尤其 UNLOCK_FIRST 持仓
                 #   （必为昨仓）会系统性多记成本，净利润被低估。
                 _today = (bar.date[:10] if (bar is not None and bar.date)
                           else now_cn()[:10])
@@ -764,15 +764,15 @@ class TradingEngine(ReconcileMixin):
             self._state = EngineState.IDLE
         # else: 仍有在持今仓（部分成交或 cooldown 中）→ 保持 EXITING
 
-    # ---------------- 软离场（锁仓）留双腿落簿（Phase S4） ----------------
+    # ---------------- 软离场（锁仓）留双仓落簿（Phase S4） ----------------
     def _book_lock_pair(self, pos: Position, side: Side, exit_price: float,
                         o: Order, reason: str, idx: int, pos_count: int) -> None:
-        """软离场（锁仓）留双腿落簿：原仓 → LOCKED + 反向腿 LOCKED，不兑现 PnL。
+        """软离场（锁仓）留双仓落簿：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL。
 
-        锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓腿保留
-        （entry_price=P₀ 会计锚不动、entry_date 不动），反向腿作为新 LOCKED 腿落簿，
-        两腿共享 lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
-        次日对向信号经 on_signal 门触发 UNLOCK（平反向腿 + 升级同向腿）。
+        锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
+        （entry_price=P₀ 会计锚不动、entry_date 不动），反向仓作为新 LOCKED 持仓落簿，
+        两笔共享 lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
+        次日对向信号经 on_signal 门触发 UNLOCK（平反向仓 + 升级同向持仓）。
         """
         self._lock_pair_seq += 1
         pair_id = "lock_{:05d}".format(self._lock_pair_seq)
@@ -781,7 +781,7 @@ class TradingEngine(ReconcileMixin):
         pos.entry_mode = EntryMode.LOCKED
         pos.lock_pair_id = pair_id
 
-        # 反向腿 LOCKED 落簿（entry_price = 锁仓成交价 P₁）
+        # 反向仓 LOCKED 落簿（entry_price = 锁仓成交价 P₁）
         lock_entry_date = (self.last_bar.date[:10] if self.last_bar else "")
         lock_pos = Position(
             symbol=pos.symbol, side=side, volume=pos.volume,
@@ -915,8 +915,8 @@ class TradingEngine(ReconcileMixin):
             # 补开：state 由 _open_position 推进（成交→IN_TRADE / 拒单→IDLE）
             self._open_position(sig, side, new_lots)
         else:
-            # v1.3（S3/S4）：留双腿解锁后，升级的配对腿（UNLOCK_FIRST）是单边敞口
-            #   → IN_TRADE；若簿内无任何非 LOCKED 腿（纯解锁回空仓 / 旧数据 1 锁 1 腿）→ IDLE。
+            # v1.3（S3/S4）：留双仓解锁后，升级的配对持仓（UNLOCK_FIRST）是单边敞口
+            #   → IN_TRADE；若簿内无任何非 LOCKED 持仓（纯解锁回空仓 / 旧数据 1 锁 1 笔）→ IDLE。
             if any(p.entry_mode is not EntryMode.LOCKED
                    for p in self.positions.positions):
                 self._state = EngineState.IN_TRADE
@@ -961,7 +961,7 @@ class TradingEngine(ReconcileMixin):
         self.store.save_trade(t)
         # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
         self.positions.remove(target)
-        # v1.3（S3/S4）：留双腿下，解锁平掉反向腿后，升级配对同向腿
+        # v1.3（S3/S4）：留双仓下，解锁平掉反向仓后，升级配对同向持仓
         #   LOCKED → UNLOCK_FIRST + 重算风控锚（= 解锁成交价 P₂）。
         self._upgrade_lock_pair(target, o.filled_price, sig)
 
@@ -974,18 +974,18 @@ class TradingEngine(ReconcileMixin):
                       entry_mode=target.entry_mode.value)
         return t
 
-    # ---------------- 解锁后升级配对腿（Phase S3/S4） ----------------
+    # ---------------- 解锁后升级配对持仓（Phase S3/S4） ----------------
     def _upgrade_lock_pair(self, locked_leg: Position, unlock_price: float,
                            sig: Signal) -> None:
-        """解锁后升级配对同向腿：LOCKED → UNLOCK_FIRST + 重算风控锚（P₂）。
+        """解锁后升级配对同向持仓：LOCKED → UNLOCK_FIRST + 重算风控锚（P₂）。
 
-        留双腿下，锁仓 = 原仓腿 + 反向腿（共享 lock_pair_id）。解锁平掉反向腿后，
-        同向腿恢复单边敞口，必须从 LOCKED 升级为 UNLOCK_FIRST（接入 L1-L3 止盈止损，
+        留双仓下，锁仓 = 原仓 + 反向仓（共享 lock_pair_id）。解锁平掉反向仓后，
+        同向持仓恢复单边敞口，必须从 LOCKED 升级为 UNLOCK_FIRST（接入 L1-L3 止盈止损，
         离场走硬离场平昨），并以解锁成交价 P₂ 为风控锚重算出场计划。
         会计锚 entry_price（P₀）保持不动，风控锚 risk_anchor（P₂）写入 ExitPlan.params。
         """
         if not locked_leg.lock_pair_id:
-            # 旧数据 / 无配对（1 锁 1 腿旧口径）→ 无配对腿可升级，仅防御记录
+            # 旧数据 / 无配对（1 锁 1 笔旧口径）→ 无配对持仓可升级，仅防御记录
             return
         pair = None
         for p in self.positions.positions:
@@ -993,7 +993,7 @@ class TradingEngine(ReconcileMixin):
                 pair = p
                 break
         if pair is None:
-            # 配对腿已不在簿（异常）→ 防御记录
+            # 配对持仓已不在簿（异常）→ 防御记录
             self.ev.write("unlock_pair_missing",
                           lock_pair_id=locked_leg.lock_pair_id,
                           signal_key=sig.key)
