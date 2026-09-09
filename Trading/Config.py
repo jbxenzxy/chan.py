@@ -297,8 +297,8 @@ class ExitConfig(BaseModel):
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，止损抬至保本
-    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick（覆盖往返手续费+滑点；品种档案 IF/IH=2、IC/IM=3）
-    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈
+    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick(覆盖往返手续费+滑点；品种档案 IF/IH=2、IC/IM=3)
+    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈 (IF/IH/IC/IM共用，不随品种档案覆盖)
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
                                                 #   注：B 方案（use_trailing=True）下 r_multiple_tp 仅作"名义盈亏比"
