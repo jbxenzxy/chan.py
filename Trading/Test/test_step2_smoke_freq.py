@@ -4,10 +4,9 @@
 范围（交接文档 §5.1 的 2.6 定义）：
   对四个支持周期各完整走一遍 main.build_runtime() 启动链路（不联网）：
     TradingConfig() → CLI --freq 覆盖 → bar_secs_for 校验（fail-fast 在这）
-    → bars_per_day → apply_period_profile()（6 项影子覆盖）
-    → build_broker(dry_run) → DefaultEntryPolicy / LayeredExitPolicy
+    → bars_per_day → build_broker(dry_run) → DefaultEntryPolicy / LayeredExitPolicy
     → Store / EventLog / TradingEngine → build_source("sse")
-  断言：bar_secs、根数/日、profile 应用到 flat 字段（source/exit_params/risk）、
+  断言：bar_secs、根数/日、period_profile 选到对应档案、
   引擎与策略与信号源对象构造齐全。
 
 说明：build_runtime 会把 stdout/stderr 重定向到 {out}/gateway.log，

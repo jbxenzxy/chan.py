@@ -2,7 +2,7 @@
 """
 Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Single Source Of Truth）
 =================================================================================
-2026-09-08 配置层按「六层架构」重排 + 周期敏感配置归总：
+2026-09-08 配置层按「六层架构」重排：
     · 顶层根配置 `TradingConfig` 置于文件最前（它是整个模块的根，其余各层 section
       模型都是它的嵌套字段）；其各层字段按下层顺序组织：
         ① 信号源层     → SourceConfig
@@ -11,9 +11,9 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ④ 风控层       → RiskConfig（开仓手数/持仓上限/补开开关）
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
-    · 周期敏感配置（freq ...）统一收口到文末 `PERIOD_SENSITIVE_FIELDS` 归总，
-      作为 Step 2 调参单一入口。（2026-09-08：L4 时间兜底与风控五道硬闸门删除、
-      signal_max_age_minutes 改为 K 线相对容差后，周期敏感项已只剩 freq。）
+    · 周期只作时间语义（freq → bar_secs），收口在 Infra/PeriodProfile.py 的
+      FREQ_SEC / PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在
+      Infra/ProductProfile.py。
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -74,13 +74,13 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
-from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS
+from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile
 from .Infra.ProductProfile import PRODUCT_PROFILES, ProductProfile, parse_product
 
 __all__ = [
@@ -93,9 +93,6 @@ __all__ = [
     "BrokerConfig",
     "ChannelTimingConfig",
     "EngineConfig",
-    # 周期敏感配置归总（Step 2 调参单一入口）
-    "PERIOD_SENSITIVE_FIELDS", "period_sensitive_fields",
-    "period_sensitive_summary",
 ]
 
 # 仓库根（Trading/ 的上一级）—— 与 App/AppConfig.py 同一份 .env
@@ -152,34 +149,6 @@ class TradingConfig(BaseSettings):
         """
         return self.model_dump()
 
-    # ── 周期档案注入（Step 2.1：周期敏感参数入 PeriodProfile）──
-    # 按 source.freq 选档案，把 6 项周期敏感参数「影子覆盖」进 flat 字段：
-    #   · 仅当 flat 字段仍是模型默认值时填入（用户显式 JSON/环境变量覆盖的字段不动）；
-    #   · 未知 freq 直接跳过——TradingConfig 也用于 AppTrader 等非引擎场景，那里
-    #     freq 可能只是透传（如 test_p20 的 "15m"）；真正的 fail-fast 在 main.py。
-    # bar_secs 不在此 reconcile —— 它走引擎 bar_secs_for(freq) 自动推导
-    # （PeriodProfile.bar_secs 已是推导源），flat 的 bar_secs=0 保留「手动覆盖」语义。
-    @model_validator(mode="after")
-    def _reconcile_period_profile(self) -> "TradingConfig":
-        self._apply_profile_values()
-        return self
-
-    def _apply_profile_values(self) -> None:
-        # 2026-09-08：原对 source.signal_max_age_minutes 的周期敏感影子覆盖，随该字段
-        #   退役（改为 signal_k_tol_bars 的「按 K 线相对根数容差」，非周期敏感项）后已
-        #   无目标字段。保留本方法仅为兼容 main.py 的 apply_period_profile 调用约定，
-        #   视为幂等 no-op（freq/bar_secs 本就透传自 Profile，不需落到 flat 字段）。
-        return
-
-    def apply_period_profile(self) -> "TradingConfig":
-        """CLI 覆盖 source.freq 后重新对齐周期档案（main.py 在 --freq 之后调用）。
-
-        构造期由 _reconcile_period_profile 自动对齐；此后若手动改了 source.freq
-        （CLI --freq），再调本方法让 flat 字段跟随新周期。基线值下是幂等 no-op。
-        """
-        self._apply_profile_values()
-        return self
-
     @property
     def period_profile(self) -> Optional["PeriodProfile"]:
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
@@ -215,9 +184,9 @@ class TradingConfig(BaseSettings):
 # ════════════════════════════════════════════════════════════════════
 # ① 信号源层（Signal Source）配置
 #    行情来源 / 周期 / 信号新鲜度过滤。全部字段与「周期选择」相关，
-#    但语义上属于「信号源」这一层；其中 freq 是周期敏感项（见文末
-#    PERIOD_SENSITIVE_FIELDS 归总）；signal_k_tol_bars 是「按 K 线相对根数」
-#    的容差、**不随周期改变**，属非周期敏感项，不入归总。
+#    但语义上属于「信号源」这一层；其中 freq 是周期选择项（bar_secs 见
+#    Infra/PeriodProfile.py）；signal_k_tol_bars 是「按 K 线相对根数」
+#    的容差、**不随周期改变**，属非周期敏感项。
 # ════════════════════════════════════════════════════════════════════
 class SourceConfig(BaseModel):
     """行情源：replay 回放本地 K 线 / sse 实时订阅。"""
@@ -228,15 +197,15 @@ class SourceConfig(BaseModel):
     sse_base: str = "http://127.0.0.1:18081"  # sse 模式的行情服务地址
     symbol: str = "KQ.m@CFFEX.IF"             # 订阅合约（与 instrument.signal_symbol 一致）
     freq: str = "5m"                          # K 线周期（周期只做字符串透传，不参与分钟换算）
-    speed: float = 0.0                   # replay 每根 K 线间隔秒数（0=尽快）
+    speed: float = 0.0                        # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
     # 信号新鲜度过滤 —— K 线位置口径（2026-09-08 取代原 signal_max_age_minutes）：
     #   chan.py SSE 首连会 replay 一批历史 bsp。每个买卖点信号的 timestamp =
     #   它所在分型右肩 K 的时间戳；快照最后一根 K 即「当前最新 K」。
     #   这里按「信号归属K 距最新K 的根数」判新旧：距最新 K > N 根 → 视为历史
-    #   残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感项，
-    #   故不入文末 PERIOD_SENSITIVE_FIELDS）。0 = 必须正好是最右一根 K 才处理。
+    #   残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感项）。
+    #   0 = 必须正好是最右一根 K 才处理。
     #   字段名说明：tol = tolerance 的缩写（容差 / 容错范围）。
     signal_k_tol_bars: int = 1                # N：信号归属K 距最新K 的容差根数（tol=tolerance 容差）
 
@@ -418,8 +387,7 @@ class EngineConfig(BaseModel):
 
     三项都是「根数」口径（单位 = K 线根数，与墙钟时间无关）：
       语义上周期敏感（15s 的 5 根 = 75 秒；30m 的 5 根 = 2.5 小时），
-      当前按跨周期不变值放本模型（用户拍板 F1）；2.7+ 若差异化标定，
-      候选迁入 PeriodProfile（见 PERIOD_SENSITIVE_FIELDS 索引表注记）。
+      当前按跨周期不变值放本模型（用户拍板 F1）。
 
     单一事实源：默认值只在本模型维护，Engine/Reconcile 不再自带兜底数字。
     """
@@ -428,62 +396,6 @@ class EngineConfig(BaseModel):
     close_retry_bars: int = 5    # close 被拒后冷却多少根 bar 再试（防每根 bar 重复平仓死循环）
     close_max_streak: int = 20   # 连续失败这么多根后认定幻影持仓，强制清除
     unlock_stuck_bars: int = 5   # UNLOCK 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
-
-
-# ════════════════════════════════════════════════════════════════════
-# 周期敏感配置归总（Step 2 调参单一入口 / SSOT 索引）
-# ------------------------------------------------------------------
-# 2026-09-08 Step 2.1 起：这些项的**值**已收口到 Infra/PeriodProfile.py 的
-#   PERIOD_PROFILES（每周期一份，含 note 标定记录），TradingConfig 构造期按
-#   source.freq 把周期敏感值「影子覆盖」进 flat 字段。
-#   本表仍保留作静态说明（path/layer/kind/step2 的「是什么/为什么」）；
-#   运行时每周期的实际值见 `period_sensitive_summary()` 派生视图。
-#
-# 字段说明：
-#   path   : 字段在配置树中的点分路径（与 DEFAULT_CONFIG 对应）
-#   layer  : 所属六层架构层级
-#   default: BASELINE 默认值（= PeriodProfile 各周期占位值）
-#   kind   : 量纲 / 含义
-#   step2  : Step 2 调参关注点
-# ════════════════════════════════════════════════════════════════════
-PERIOD_SENSITIVE_FIELDS: List[Dict[str, Any]] = [
-    {
-        "path": "source.freq",
-        "layer": "① 信号源层",
-        "default": "5m",
-        "kind": "周期本身（字符串透传，不参与分钟换算）",
-        "step2": "Step 2 在 15s/1m/5m/30m 间切换；非标周期须先确认主程序 FREQ_TABLE/"
-                 "FREQ_SEC_MAP 已注册（Infra/PeriodProfile 已对账）",
-    },
-    # （2026-09-08：原 source.signal_max_age_minutes 周期敏感条目已退役，改为
-    #   signal_k_tol_bars（按 K 线相对根数的容差）——该新字段**非周期敏感**，
-    #   不随周期改变，故不入本归总表。）
-    # （2026-09-08：原 exit_params.max_hold_bars / max_hold_seconds /
-    #   eod_lead_bars / bar_secs / session_end_hhmm（L4 时间/收盘兜底）与
-    #   risk.max_trades_per_day（风控五道硬闸门）的周期敏感条目已随功能删除。）
-]
-
-
-def period_sensitive_fields() -> List[Dict[str, Any]]:
-    """返回周期敏感配置归总的副本（防止调用方改到模块级常量）。"""
-    return [dict(f) for f in PERIOD_SENSITIVE_FIELDS]
-
-
-def period_sensitive_summary() -> List[Dict[str, Any]]:
-    """4 周期 × 周期敏感参数的**派生视图**（值来自 PeriodProfile，Step 2.7+ 调参一眼对比）。
-
-    这是 `PERIOD_SENSITIVE_FIELDS`（静态说明：path/layer/kind/step2）的运行时补充：
-    前者说「哪几项是周期敏感的、为什么」，本函数给出「这些项在每个周期下的实际值」。
-    """
-    rows: List[Dict[str, Any]] = []
-    for freq in SUPPORTED_FREQS:
-        p = PERIOD_PROFILES[freq]
-        rows.append({
-            "freq": freq,
-            "bar_secs": p.bar_secs,
-            "note": p.note,
-        })
-    return rows
 
 
 # ════════════════════════════════════════════════════════════════════

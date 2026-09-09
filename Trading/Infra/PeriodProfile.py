@@ -148,21 +148,22 @@ def bars_per_day(bar_secs: Optional[int], session_secs: float) -> Optional[int]:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 周期档案（Step 1 只填时间语义；Step 2 再补盈利相关参数）
+# 周期档案（时间语义 SSOT：freq / bar_secs）
 # ══════════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
 class PeriodProfile:
-    """一个 K 线周期的全部周期相关设定。
+    """一个 K 线周期的时间语义设定（freq / bar_secs）。
 
-    Step 1（2026-09-08）只装时间语义（freq / bar_secs）——目标是"任何周期能正确跑通"。
+    Step 1（2026-09-08）只装时间语义——目标是"任何周期能正确跑通"。
     2026-09-08 精简：原 L4 时间/收盘兜底（max_hold_bars / max_hold_seconds /
       eod_lead_bars / session_end_hhmm）、风控五道硬闸门（max_trades_per_day）
       以及 signal_max_age_minutes（改为 K 线相对容差 signal_k_tol_bars，非周期敏感、
       不再放本档案）随功能一并删除。
+    止盈止损等盈利参数（R 地板 / 盈亏比）**不随周期变、随品种变**，归口在
+      Infra/ProductProfile.py，不在此档案。
     """
     freq: str
     bar_secs: int
-    note: str = ""                          # 调参记录 / 数据来源 / 标定状态
 
     def __post_init__(self) -> None:
         if self.freq not in FREQ_SEC:
@@ -179,21 +180,13 @@ class PeriodProfile:
         return self.freq
 
 
-# 4 个周期的档案。bar_secs 显式给真值；note 显式标「占位」，Step 2.7+ 标定后改。
-# 信号新鲜度容忍不做周期差分（signal_k_tol_bars 为 K 线相对根数，非周期敏感）。
+# 4 个周期的档案：仅时间语义（freq / bar_secs），与 FREQ_SEC 一一对应。
+# 盈利参数（R 地板 / 盈亏比）随品种变，见 Infra/ProductProfile.py。
 PERIOD_PROFILES: Dict[str, PeriodProfile] = {
-    "15s": PeriodProfile(
-        freq="15s", bar_secs=15,
-        note="占位=BASELINE；待 2.7+ 真实 15s 数据重标"),
-    "1m": PeriodProfile(
-        freq="1m", bar_secs=60,
-        note="占位=BASELINE；待 2.7+ 真实 1m 数据重标"),
-    "5m": PeriodProfile(
-        freq="5m", bar_secs=300,
-        note="占位=BASELINE（5m 基线尚未经真实数据标定，当前=2.0 默认值）"),
-    "30m": PeriodProfile(
-        freq="30m", bar_secs=1800,
-        note="占位=BASELINE；待 2.7+ 真实 30m 数据重标"),
+    "15s": PeriodProfile(freq="15s", bar_secs=15),
+    "1m": PeriodProfile(freq="1m", bar_secs=60),
+    "5m": PeriodProfile(freq="5m", bar_secs=300),
+    "30m": PeriodProfile(freq="30m", bar_secs=1800),
 }
 
 

@@ -178,8 +178,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | `bar_secs` | 一根 bar 多少秒 | 由 `freq` 自动推导注入，一般不用手填 |
 
 信号新鲜度过滤 `source.signal_k_tol_bars`（每信号距最新 K 的容差根数，默认 1；
-0=必须最右一根 K）是**按 K 线相对根数**计，**不随周期改变**（非周期敏感项），
-故不入本表，也不进 `PERIOD_SENSITIVE_FIELDS` 归总。
+0=必须最右一根 K）是**按 K 线相对根数**计，**不随周期改变**（非周期敏感项）。
 
 新增周期的正确姿势：改 `Infra/PeriodProfile.py` 的 `FREQ_SEC` → 跑
 `Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）
@@ -192,7 +191,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 `close_retry_bars`（close 拒单冷却根数）/ `close_max_streak`（连续失败清幻影阈值）/
 `unlock_stuck_bars`（UNLOCK 卡单复核窗口）三项原来是 `Engine.__init__` 里的硬编码常量，
 Step 2.2 起统一收口到 `Config.py` 的 `EngineConfig`——调参只改配置，不动引擎代码。
-三项都是「根数」口径、语义上周期敏感，当前取跨周期不变值；2.7+ 差异化标定时候选迁入 `PeriodProfile`。
+三项都是「根数」口径、语义上周期敏感，当前取跨周期不变值。
 
 ---
 

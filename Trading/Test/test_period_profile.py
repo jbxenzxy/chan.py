@@ -1,18 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-Step 2.1 周期档案测试：周期敏感参数入 PeriodProfile + 影子覆盖 reconcile
-=========================================================================
-2.1 把 8 项周期敏感参数从「散落各层 + PERIOD_SENSITIVE_FIELDS 索引」收口到
-Infra/PeriodProfile.py 的 PERIOD_PROFILES（每周期一份，含 note 标定记录），
-TradingConfig 构造期按 source.freq 把 6 项「影子覆盖」进 flat 字段。
+Step 2.1 周期档案测试：周期时间语义 + 品种档案
+================================================
+周期只承载时间语义（freq / bar_secs），收口在 Infra/PeriodProfile.py 的
+PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/ProductProfile.py。
 
 本测试验证：
-    ① PeriodProfile 有 6 项周期敏感字段 + note，默认 = BASELINE（5m 默认值）
-    ② TradingConfig 影子覆盖：freq → profile → flat 字段（默认时填入）
-    ③ 用户显式覆盖优先（不 profile 覆盖）
+    ① PeriodProfile 只有 freq / bar_secs（无 note / 无周期敏感副字段）
+    ② TradingConfig 默认 flat 字段（信号新鲜度容差非周期敏感，不随周期变）
+    ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
-    ⑤ period_sensitive_summary 派生视图（4 周期 × 周期敏感值）
-    ⑥ apply_period_profile：改 freq 后重对齐
+    ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
+    ⑥ ProductProfile 品种档案：随品种参数覆盖（min_r_points / r_multiple_tp / multiplier）
 
 跑法：python test_period_profile.py
 """
@@ -43,9 +42,7 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Config import (  # noqa: E402
-    TradingConfig, period_sensitive_summary,
-)
+from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Infra.PeriodProfile import (  # noqa: E402
     FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
 )
@@ -66,12 +63,12 @@ def check(name, got, expected):
 
 
 def main():
-    print("\n[1] PeriodProfile 周期字段 + note（freq / bar_secs，无周期敏感副字段）")
+    print("\n[1] PeriodProfile 周期档案（仅 freq / bar_secs 时间语义）")
     check("PERIOD_PROFILES 仍是 4 周期", len(PERIOD_PROFILES), 4)
     for f in SUPPORTED_FREQS:
         p = PERIOD_PROFILES[f]
         check("{} bar_secs 与 FREQ_SEC 一致".format(f), p.bar_secs, FREQ_SEC[f])
-        check("{} note 非空（有标定记录）".format(f), bool(p.note.strip()), True)
+        check("{} 档案无 note 字段".format(f), hasattr(p, "note"), False)
 
     print("\n[2] TradingConfig 默认 flat 字段（信号新鲜度容差非周期敏感，不随 profile 变）")
     c = TradingConfig()
@@ -99,25 +96,13 @@ def main():
     except Exception as e:
         check("未知 freq 不抛异常（却抛了 {}）".format(type(e).__name__), False, True)
 
-    print("\n[5] apply_period_profile：改 freq 后重对齐")
+    print("\n[5] period_profile 随 freq 动态跟随（只读视图，无影子覆盖）")
     c2 = TradingConfig()
     c2.source.freq = "30m"
-    c2.apply_period_profile()
     check("改 freq=30m 后 period_profile=30m", c2.period_profile.freq, "30m")
     check("30m profile.bar_secs=1800", c2.period_profile.bar_secs, 1800)
 
-    print("\n[6] period_sensitive_summary 派生视图")
-    rows = period_sensitive_summary()
-    check("summary 4 行", len(rows), 4)
-    check("summary 覆盖全部周期", sorted(r["freq"] for r in rows),
-          ["15s", "1m", "30m", "5m"])
-    r5 = next(r for r in rows if r["freq"] == "5m")
-    check("summary 5m bar_secs=300", r5["bar_secs"], 300)
-    check("summary 行不含退役的 signal_max_age_minutes",
-          "signal_max_age_minutes" not in r5, True)
-    check("summary 行含 note", bool(r5["note"].strip()), True)
-
-    print("\n[7] ProductProfile 品种档案：随品种参数影子覆盖（2026-09-09）")
+    print("\n[6] ProductProfile 品种档案：随品种参数影子覆盖（2026-09-09）")
     check("PRODUCT_PROFILES 仍是 4 品种", len(PRODUCT_PROFILES), 4)
     check("parse KQ.m@CFFEX.IF → IF", parse_product("KQ.m@CFFEX.IF"), "IF")
     check("parse KQ.m@CFFEX.IC → IC", parse_product("KQ.m@CFFEX.IC"), "IC")

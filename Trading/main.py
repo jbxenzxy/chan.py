@@ -95,10 +95,6 @@ def build_runtime(args):
         cfg.source.freq, _bs,
         _bpd if _bpd is not None else "?", SESSION_SECS / 3600))
 
-    # Step 2.1：CLI --freq 已在构造后改了 source.freq，这里把 6 项周期敏感参数
-    # 按新 freq 的档案重新对齐（基线值下幂等 no-op；2.7+ 差异化后这里才是关键）。
-    cfg.apply_period_profile()
-
     # 下游（Source.build_source）仍按 dict 消费
     src: Dict[str, Any] = cfg.source.model_dump()
 
