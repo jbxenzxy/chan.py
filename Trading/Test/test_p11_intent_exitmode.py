@@ -254,7 +254,16 @@ with tmp_dir() as tmp:
     bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
     check("SL 触发后 state=IDLE (已离场)", engine._state.name, "IDLE")
-    check("SL 触发后 position=LOCKED 锁仓（H1 落簿）", engine.position.entry_mode, EntryMode.LOCKED)
+    # 留双腿（软离场）：原仓 → LOCKED + 反向腿 LOCKED，共享 lock_pair_id，不记 Trade
+    book_positions = engine.positions.positions
+    check("SL 软离场留双腿：簿内 2 条腿", len(book_positions), 2)
+    check("SL 软离场：两腿均 LOCKED",
+          sorted(p.entry_mode.value for p in book_positions),
+          ["locked", "locked"])
+    check("SL 软离场：两腿 side 相反（LONG+SHORT）",
+          {p.side for p in book_positions}, {Side.LONG, Side.SHORT})
+    check("SL 软离场：共享同一 lock_pair_id",
+          len({p.lock_pair_id for p in book_positions}), 1)
     # 检查 broker 是否收到 LOCK 报
     lock_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "lock"]
@@ -267,21 +276,20 @@ with tmp_dir() as tmp:
         check("LOCK 报 offset='OPEN'", lo.meta.get("offset"), "OPEN")
         check("LOCK 报 status=filled (dry_run 撮合成功)",
               lo.status, "filled")
-    # Trade.net_points 应该按 trigger_price 结算
+    # 软离场（锁仓）不兑现 PnL → 不记 Trade（留双腿，净敞口归零继续浮动）
     trades = store.trades()
-    check("store 落了 1 笔 Trade", len(trades), 1)
+    check("软离场不记 Trade（PnL 不兑现）", len(trades), 0)
     # events.jsonl 验证 close 事件带 exit_mode=lock
     ev.flush()  # 强制刷盘，否则 EventLog 的 1s 缓冲未到点
     ev_path = os.path.join(tmp, "events.jsonl")
     with open(ev_path, "r", encoding="utf-8") as f:
         lines = [json.loads(l) for l in f if l.strip()]
-    close_events = [e for e in lines if e.get("kind") == "close"]
-    check("events.jsonl 至少 1 条 close 事件", len(close_events) >= 1, True)
-    if close_events:
-        check("close 事件 exit_mode=lock",
-              close_events[0].get("exit_mode"), "lock")
-        check("close 事件 entry_mode=open_first",
-              close_events[0].get("entry_mode"), "open_first")
+    lock_events = [e for e in lines if e.get("kind") == "lock_booked"]
+    check("events.jsonl 至少 1 条 lock_booked 事件（软离场留双腿）",
+          len(lock_events) >= 1, True)
+    if lock_events:
+        check("lock_booked 事件 lock_pair_id 非空",
+              bool(lock_events[0].get("lock_pair_id")), True)
 
 
 # ════════════════════════════════════════════════════════════════

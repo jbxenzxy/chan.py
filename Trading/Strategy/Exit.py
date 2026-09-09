@@ -112,12 +112,17 @@ class LayeredExitPolicy(ExitPolicy):
         """
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
+        # fractal_low/fractal_high ≤ 0 表示信号未携带有效分型（哨兵值，价格为 0 不可能），
+        # 此时视为「无结构止损信息」，A 钳 0 交给 B（2×ATR）/ min_r_points 兜底；
+        # 否则会被误读成「分型最低点 = 0」→ A = entry_price → 止损打飞到 ~0，SL 永不触发。
         A = 0.0
         if self.stop_at_signal_extreme:
             if is_long:
-                A = max(entry_price - signal.fractal_low, 0.0)
+                if signal.fractal_low > 0:
+                    A = max(entry_price - signal.fractal_low, 0.0)
             else:
-                A = max(signal.fractal_high - entry_price, 0.0)
+                if signal.fractal_high > 0:
+                    A = max(signal.fractal_high - entry_price, 0.0)
         # B：波动率止损（2×ATR）
         B = 0.0
         if self.use_atr:
