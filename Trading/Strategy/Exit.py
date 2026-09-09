@@ -9,6 +9,14 @@
     ① 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
     ② 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
     ③ 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
+
+B 方案：止盈交给跟踪，不落硬止盈单（2026-09-09）
+    `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
+    的 ATR 跟踪止损兑现；`r_multiple_tp` 退化为"名义盈亏比"（期望值口径），名义止盈价
+    仍写入 params["_tp_nominal"] 供事后对照。
+    这么改的原因：IF/IH 的 r_multiple_tp 与 trailing_trigger_r 同为 2.0，若保留硬止盈，
+    check() 里它会先于 L3 命中并 return，跟踪永远抢不到，阶段 3 形同虚设。
+    `use_trailing=False` 即回到 A 方案（有硬止盈、无保本、无跟踪）。
 """
 
 from __future__ import annotations
@@ -129,13 +137,19 @@ class LayeredExitPolicy(ExitPolicy):
         if is_long:
             raw_stop = entry_price - stop_dist - self.stop_buffer_ticks * spec.price_tick
             raw_tp = entry_price + tp_dist
-            stop = spec.round_price(raw_stop, "up")      # 易触发（保守）
-            tp = spec.round_price(raw_tp, "down")        # 难触发（保守）
+            stop = spec.round_price(raw_stop, "up")        # 易触发（保守）
+            nominal_tp = spec.round_price(raw_tp, "down")  # 难触发（保守）
         else:
             raw_stop = entry_price + stop_dist + self.stop_buffer_ticks * spec.price_tick
             raw_tp = entry_price - tp_dist
             stop = spec.round_price(raw_stop, "down")
-            tp = spec.round_price(raw_tp, "up")
+            nominal_tp = spec.round_price(raw_tp, "up")
+
+        # B 方案：启用保本/跟踪（use_trailing=True）时**不落硬止盈单**，止盈交给 L3 的
+        #   ATR 跟踪兑现。原因：IF/IH 的 r_multiple_tp 与 trailing_trigger_r 同为 2.0，
+        #   若保留硬止盈，check() 里它会先于 L3 命中并 return，跟踪永远抢不到
+        #   （阶段 3 形同虚设）。名义止盈价仍写入 params，供事后对照分析。
+        tp = None if self.use_trailing else nominal_tp
 
         # P2 防护：止损必须严格在 entry 的"不利侧"且至少 1 tick 间距，
         # 否则遇到陈旧信号（行情已走远）会变成"开仓即触发止盈"的反向单。
@@ -148,7 +162,8 @@ class LayeredExitPolicy(ExitPolicy):
 
         params = dict(self.params)
         params["R"] = R
-        params["_trail_best"] = entry_price  # 跟踪极值初值 = 入场价
+        params["_tp_nominal"] = nominal_tp  # 名义止盈价（B 方案不落单，仅供事后对照）
+        params["_trail_best"] = entry_price      # 跟踪极值初值 = 入场价
         return ExitPlan(name=self.name, stop_price=stop, tp_price=tp, params=params)
 
     # ---------- 每根 bar 闭合后判定 ----------
@@ -160,11 +175,14 @@ class LayeredExitPolicy(ExitPolicy):
         is_long = position.side is Side.LONG
         entry = position.entry_price
         # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
-        #   R 未知时激进触发反而危险；硬止损/止盈/时间兜底均不依赖 R，不受影响
+        #   R 未知时激进触发反而危险；硬止损/止盈均不依赖 R，不受影响
         R = plan.params.get("R")
         atr = self._atr()
 
-        # ① 硬出场：同根 K 线同时触止盈止损 → 按止损计（悲观）
+        # ① 硬出场：同根 K 线同时触及止盈与止损 → 按止损计（悲观）
+        #   B 方案（use_trailing=True）下 plan 不生成止盈单（tp is None），
+        #   故此处的止盈分支只对 A 方案（use_trailing=False）与旧 state.db
+        #   恢复的存量持仓生效；硬止损任何情况下都保留。
         if is_long:
             if stop and bar.low <= stop:
                 return ExitCheck("sl", stop)
@@ -179,13 +197,16 @@ class LayeredExitPolicy(ExitPolicy):
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         if self.use_trailing and R:
             best = float(plan.params.get("_trail_best", entry))
-            best = max(best, bar.high) if is_long else min(best, bar.low)
+            prev_best = best
             # fav_profit 用"根内有利极值 best"而非收盘价衡量：
             #   允许 r_multiple_tp 与 trailing_trigger_r 解耦 —— 盘中冲高
             #   （如到 2R）即便收盘回落（如 1.2R），只要有意义浮盈达标仍会
             #   触发保本/跟踪，避免"盘中到过 2R 却因只看收盘而漏检"。
-            #   注意 tp 极值判定（①）仍是硬离场，与 L3 不冲突。
+            best = max(best, bar.high) if is_long else min(best, bar.low)
             fav_profit = position.pnl_points(best)  # (best-entry)·sign
+            # 跟踪是否已启动（best 单调，故启动后恒为 True，不随回落下线）
+            tracking_started = (self.trailing_trigger_r > 0
+                                and fav_profit >= self.trailing_trigger_r * R)
             new_stop = stop
 
             # 保本：浮盈 ≥ breakeven_trigger_r·R → 止损抬至保本
@@ -206,7 +227,12 @@ class LayeredExitPolicy(ExitPolicy):
                     if (is_long and tgt > new_stop) or (not is_long and tgt < new_stop):
                         new_stop = tgt
 
-            if new_stop != stop:
+            # 回写条件（二选一，避免每根 bar 都刷事件日志）：
+            #   a) 止损真的动了；
+            #   b) 跟踪已启动且极值创新高 —— 补旧实现的缺口：原实现只在 new_stop 变化时
+            #      回写 _trail_best，"极值新高但止损未变"（如 ATR 同步放大）时极值被丢弃，
+            #      后续跟踪距离偏松。保本阶段（跟踪未启动）不回写，避免日志刷屏。
+            if new_stop != stop or (tracking_started and best != prev_best):
                 params = dict(plan.params)
                 params["_trail_best"] = best
                 return ExitCheck("trailing", 0.0, only_update=True,
