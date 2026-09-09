@@ -187,9 +187,10 @@ class TradingConfig(BaseSettings):
 
     # ── 品种档案注入（2026-09-09：随品种可变参数入 ProductProfile）──
     # 按 instrument.signal_symbol 选品种，把 min_r_points / r_multiple_tp /
-    # multiplier 三个「随品种可变」的 flat 字段强制覆盖（品种档案是真值来源）：
+    # multiplier / breakeven_buffer_ticks 四个「随品种可变」的 flat 字段强制覆盖
+    # （品种档案是真值来源）：
     #   · 未知品种（signal_symbol 不含 '.' 或不在 4 个品种表内）时跳过，保留 flat 默认。
-    # 与周期档案「仅当仍是模型默认值才覆盖」的语义不同——品种三字段没有跨越 IF 基线的
+    # 与周期档案「仅当仍是模型默认值才覆盖」的语义不同——品种字段没有跨越 IF 基线的
     #   「通用默认值」，flat 默认本身就是 IF 基线，故这里整体覆盖、语义更直白。
     @model_validator(mode="after")
     def _reconcile_product_profile(self) -> "TradingConfig":
@@ -202,6 +203,7 @@ class TradingConfig(BaseSettings):
         if profile:
             self.exit_params.min_r_points = profile.min_r_points
             self.exit_params.r_multiple_tp = profile.r_multiple_tp
+            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
             self.instrument.multiplier = profile.multiplier
 
     @property
@@ -236,7 +238,7 @@ class SourceConfig(BaseModel):
     #   残留丢弃。N 是「距最终K的相对根数」，**不随周期改变**（非周期敏感项，
     #   故不入文末 PERIOD_SENSITIVE_FIELDS）。0 = 必须正好是最右一根 K 才处理。
     #   字段名说明：tol = tolerance 的缩写（容差 / 容错范围）。
-    signal_k_tol_bars: int = 1          # N：信号归属K 距最新K 的容差根数（tol=tolerance 容差）
+    signal_k_tol_bars: int = 1                # N：信号归属K 距最新K 的容差根数（tol=tolerance 容差）
 
     @field_validator("signal_k_tol_bars")
     @classmethod
@@ -250,8 +252,8 @@ class SourceConfig(BaseModel):
     # SSE 重连三参数（Step 2.5 收口，唯一事实源）：
     #   等待 = min(reconnect_wait × 连续失败次数, reconnect_wait_max) 线性退避。
     #   max_retry=0 表示无限重连；>0 时超过次数抛异常退出（由上层决定重启策略）。
-    reconnect_wait: float = 5.0               # 重连基础间隔秒（×失败次数退避）
-    reconnect_wait_max: float = 60.0          # 重连单次等待上限秒
+    reconnect_wait: float = 5.0          # 重连基础间隔秒（×失败次数退避）
+    reconnect_wait_max: float = 60.0     # 重连单次等待上限秒
     reconnect_max_retry: int = 0              # 最大重连次数，0=无限
 
 
@@ -284,20 +286,20 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True  # True=用分型极值作结构止损（A）；False=只靠 2×ATR 与 min_r_points
-    stop_buffer_ticks: float = 0.0       # 止损位额外让出的 tick 缓冲
-    r_multiple_tp: float = 2.0           # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
-    min_r_points: float = 3.0            # R 下限（点数），防极端横盘+极窄分型（品种档案可覆盖）
+    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损（A）；False=只靠 2×ATR 与 min_r_points
+    stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
+    r_multiple_tp: float = 2.0             # 止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
+    min_r_points: float = 3.0              # R 下限（点数），防极端横盘+极窄分型（品种档案可覆盖）
     # ---- L2 波动率(ATR)定宽窄 ----
-    use_atr: bool = True                 # 用 ATR 自适应止损/止盈宽度
-    atr_period: int = 14                 # ATR 计算周期
-    atr_sl_multiple: float = 2.0         # 初始止损距离 = atr_sl_multiple × ATR
+    use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
+    atr_period: int = 14                        # ATR 计算周期
+    atr_sl_multiple: float = 2.0           # 初始止损距离 = atr_sl_multiple × ATR
     # ---- L3 移动/保本锁利 ----
-    use_trailing: bool = True            # 启用保本 + 跟踪止损
-    breakeven_trigger_r: float = 1.0     # 浮盈 ≥ 此倍数×R 时止损抬至保本
-    breakeven_buffer_ticks: float = 0.0  # 保本位缓冲 tick
-    trailing_trigger_r: float = 2.0      # 浮盈 ≥ 此倍数×R 时启动 ATR 跟踪止损
-    trailing_atr_multiple: float = 1.5   # 跟踪止损距离 = trailing_atr_multiple × ATR
+    use_trailing: bool = True                   # 启用保本 + 跟踪止损
+    breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时止损抬至保本
+    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick（覆盖往返手续费+滑点；品种档案 IF/IH=2、IC/IM=3）
+    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时启动 ATR 跟踪止损
+    trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
 
 
@@ -365,16 +367,16 @@ class ChannelTimingConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    quote_stale_seconds: float = 30.0   # 行情快照陈旧阈值（超过判陈旧→对账跳过该侧；原 _QUOTE_STALE_SECONDS）
-    connect_backoff_factor: float = 1.5  # 登录失败退避增长因子（每轮 backoff ×此值；原硬编码 1.5）
-    probe_alive_timeout: float = 8.0     # CTP"用户不活跃"探活窗口秒数（原 _probe_alive 默认）
-    keepalive_wait: float = 0.2          # poll_market 心跳 wait_update 窗口秒数（引擎每 bar 调一次）
-    baseline_settle_wait: float = 0.5    # 下单前持仓快照 settle：等 CTP 延迟回报同步（连调两次）
-    recover_settle_wait: float = 5.0     # 恢复路径：给 CTP 推完未确认回报的窗口秒数（连调两次）
-    position_ok_timeout: float = 10.0    # 平仓前等持仓回报可见秒数（CTP 看不到持仓会拒单）
-    verify_delta_timeout: float = 5.0    # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
+    quote_stale_seconds: float = 30.0     # 行情快照陈旧阈值（超过判陈旧→对账跳过该侧；原 _QUOTE_STALE_SECONDS）
+    connect_backoff_factor: float = 1.5   # 登录失败退避增长因子（每轮 backoff ×此值；原硬编码 1.5）
+    probe_alive_timeout: float = 8.0      # CTP"用户不活跃"探活窗口秒数（原 _probe_alive 默认）
+    keepalive_wait: float = 0.2           # poll_market 心跳 wait_update 窗口秒数（引擎每 bar 调一次）
+    baseline_settle_wait: float = 0.5     # 下单前持仓快照 settle：等 CTP 延迟回报同步（连调两次）
+    recover_settle_wait: float = 5.0      # 恢复路径：给 CTP 推完未确认回报的窗口秒数（连调两次）
+    position_ok_timeout: float = 10.0     # 平仓前等持仓回报可见秒数（CTP 看不到持仓会拒单）
+    verify_delta_timeout: float = 5.0     # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
     underlying_map_timeout: float = 20.0  # 主连→主力合约映射等待秒数（get_quote.underlying_symbol）
-    cancel_settle_wait: float = 5.0      # 超时撤单后等最后一笔回报的窗口秒数
+    cancel_settle_wait: float = 5.0       # 超时撤单后等最后一笔回报的窗口秒数
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -398,13 +400,13 @@ class BrokerConfig(BaseModel):
     overprice_points: float = 1.0    # 超价点数：下单价 = 对手价 ± 此值并取整到 tick（IF tick=0.2 → 5 tick）
     fill_timeout_open: float = 5.0   # 入场报单等待终态秒数（FOK 下退化为通道异常 watchdog）
     fill_timeout_close: float = 5.0  # 离场报单每轮等待终态秒数；未成交则立即重报追价
-    close_max_chase: int = 20        # 离场追价最大轮数（引擎还会跨 K 线继续重试，实际=直到成交）
-    close_chase_ticks: int = 2       # 离场追价兜底步长（仅在行情临时取不到时，在上一笔限价基础上推几跳）
+    close_max_chase: int = 20             # 离场追价最大轮数（引擎还会跨 K 线继续重试，实际=直到成交）
+    close_chase_ticks: int = 2            # 离场追价兜底步长（仅在行情临时取不到时，在上一笔限价基础上推几跳）
     chase_interval: float = 1.0      # 离场追价重报间隔秒数（防 CTP 高频报撤监控）
-    connect_retries: int = 3         # 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
+    connect_retries: int = 3              # 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
-    tq_market: str = "simnow"        # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
-    confirm_live_trading: bool = False  # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
+    tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
+    confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
     # —— 通道时序（Step 2.3 归一，见 ChannelTimingConfig docstring）——
     channel: ChannelTimingConfig = Field(default_factory=lambda: ChannelTimingConfig())
 

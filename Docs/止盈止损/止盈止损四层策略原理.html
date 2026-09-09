@@ -1,6 +1,4 @@
-<!DOCTYPE html>
-<html lang="zh-CN" data-page-node-id="93WcSyGRt2yOgXzjXp9Ezw">
-<head data-page-node-id="CfrSQpEihpv8EQ4Mub90Ju">
+<html lang="zh-CN" data-page-node-id="93WcSyGRt2yOgXzjXp9Ezw" data-trae-theme="light"><head data-page-node-id="CfrSQpEihpv8EQ4Mub90Ju">
 <meta charset="UTF-8" data-page-node-id="QXnvkatYQ7By03B1zHnRGo">
 <meta name="viewport" content="width=device-width, initial-scale=1.0" data-page-node-id="DVyxH6Dj7jXjmiv3HkgFAS">
 <title>止盈止损四层策略原理</title>
@@ -83,7 +81,882 @@ li { margin: 3px 0; font-size: 12px; color: #444441; }
 hr.div { margin: 24px 0; border: none; border-top: 1px dashed rgba(0,0,0,0.15); }
 footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; }
 </style>
-</head>
+<style data-trae-edit-ui="true" id="trae-previewer-tools-styles">:root {
+  --trae-layer-image-download: 89990;
+  --trae-layer-browser-inspect-overlay: 90000;
+  --trae-layer-browser-inspect-highlight: 90010;
+  --trae-layer-browser-inspect-action: 90020;
+  --trae-layer-text-selection-action: 90030;
+  --trae-layer-edit-tooltip: 100095;
+}
+:root,
+[data-trae-theme='dark'] {
+  --trae-bg-base-default: #171717;
+  --trae-bg-menu: #222427;
+  --trae-bg-overlay-l1: rgba(255, 255, 255, 0.04);
+  --trae-bg-overlay-l2: rgba(255, 255, 255, 0.08);
+  --trae-bg-overlay-l3: rgba(255, 255, 255, 0.12);
+  --trae-bg-overlay-l4: rgba(255, 255, 255, 0.16);
+  --trae-bg-invert: #f5f9fe;
+  --trae-bg-invert-hover: #e8ecf0;
+  --trae-bg-invert-active: #dce0e4;
+  --trae-bg-invert-disabled: rgba(224, 226, 242, 0.12);
+  --bg-bg-brand-disabled: rgba(75, 63, 227, 0.35);
+  --bg-bg-brand-popup: rgba(106, 111, 255, 0.15);
+  --trae-border-l1: #e0e2f217;
+  --trae-border-l2: rgba(255, 255, 255, 0.12);
+  --trae-border-l3: rgba(255, 255, 255, 0.08);
+  --trae-border-neutral-l3: rgba(229, 229, 229, 0.20);
+  --trae-border-brand: #6a6fff;
+  --trae-text-default: #f5f9fe;
+  --trae-text-default-hover: #f5f9fe;
+  --trae-text-default-active: #f5f9fe;
+  --trae-text-secondary: rgba(245, 249, 254, 0.5);
+  --trae-text-tertiary: rgba(245, 249, 254, 0.4);
+  --trae-text-disabled: #666b75;
+  --trae-text-onaccent: #222427;
+  --trae-icon-default: #f5f9fe;
+  --trae-icon-secondary: rgba(245, 249, 254, 0.5);
+  --trae-icon-brand: #6a6fff;
+  --icon-icon-brand: var(--trae-icon-brand);
+  --trae-icon-onaccent: #222427;
+  --trae-status-success: #22c55e;
+  --trae-status-primary: #3b82f6;
+  --trae-status-primary-default: #387bff;
+  --trae-status-primary-surface-l1: rgba(53, 121, 255, 0.18);
+  --trae-status-success-default: #33c192;
+  --trae-status-success-surface-l1: rgba(0, 165, 110, 0.18);
+  --trae-status-error-default: #f65a5a;
+  --trae-status-error-surface-l1: rgba(246, 70, 70, 0.18);
+  --trae-annotation-marker-bg: #4b3fe3;
+  --trae-annotation-marker-text: #ffffff;
+  --trae-annotation-region-border: var(--trae-status-primary-default);
+  --trae-region-outside-mask-bg: rgba(0, 0, 0, 0.32);
+  --trae-panel-shadow: 0px 6px 24px -1px rgba(0, 0, 0, 0.16);
+  --trae-floating-shadow: 0px 2px 8px 0px rgba(0, 0, 0, 0.2);
+  --trae-shadow-elevation-50: 0 1px 2px -1px rgba(0, 0, 0, 0.45);
+  --text-text-default: var(--trae-text-default);
+  --text-text-onaccent: var(--trae-text-onaccent);
+  --bg-bg-menu: var(--trae-bg-menu);
+  --bg-bg-white: var(--trae-bg-menu);
+  --bg-bg-invert: var(--trae-bg-invert);
+  --bg-bg-invert-disabled: var(--trae-bg-invert-disabled);
+  --bg-bg-overlay-l1: var(--trae-bg-overlay-l1);
+  --bg-bg-overlay-l2: var(--trae-bg-overlay-l2);
+  --bg-bg-overlay-l3: var(--trae-bg-overlay-l3);
+  --border-border-neutral-l1: var(--trae-border-l1);
+  --border-border-brand: var(--trae-border-brand);
+  --border-border-brand-half: rgba(106, 111, 255, 0.4);
+  --status-error-default: var(--trae-status-error-default);
+  --status-error-surface-l1: var(--trae-status-error-surface-l1);
+  --radius-radius-md-12: 12px;
+  --spacers-spacer-0: 0;
+  --spacers-spacer-6: 6px;
+}
+
+[data-trae-theme='light'] {
+  --trae-bg-base-default: #fafafa;
+  --trae-bg-menu: #ffffff;
+  --trae-bg-overlay-l1: rgba(0, 0, 0, 0.04);
+  --trae-bg-overlay-l2: rgba(0, 0, 0, 0.06);
+  --trae-bg-overlay-l3: rgba(0, 0, 0, 0.08);
+  --trae-bg-overlay-l4: rgba(0, 0, 0, 0.12);
+  --trae-bg-invert: #1f2328;
+  --trae-bg-invert-hover: #32383f;
+  --trae-bg-invert-active: #444d56;
+  --trae-bg-invert-disabled: rgba(115, 115, 115, 0.20);
+  --bg-bg-brand-disabled: rgba(75, 63, 227, 0.22);
+  --bg-bg-brand-popup: rgba(170, 183, 255, 0.36);
+  --trae-border-l1: rgba(0, 0, 0, 0.1);
+  --trae-border-l2: rgba(0, 0, 0, 0.12);
+  --trae-border-l3: rgba(0, 0, 0, 0.08);
+  --trae-border-neutral-l3: rgba(115, 115, 115, 0.36);
+  --trae-border-brand: #4b3fe3;
+  --trae-text-default: #1f2328;
+  --trae-text-default-hover: #111214;
+  --trae-text-default-active: #111214;
+  --trae-text-secondary: rgba(31, 35, 40, 0.5);
+  --trae-text-tertiary: rgba(31, 35, 40, 0.4);
+  --trae-text-disabled: #a1a1a1;
+  --trae-text-onaccent: #ffffff;
+  --trae-icon-default: #1f2328;
+  --trae-icon-secondary: rgba(31, 35, 40, 0.5);
+  --trae-icon-brand: #4b3fe3;
+  --icon-icon-brand: var(--trae-icon-brand);
+  --trae-icon-onaccent: #ffffff;
+  --trae-status-success: #22c55e;
+  --trae-status-primary: #3b82f6;
+  --trae-status-primary-default: #2f74ff;
+  --trae-status-primary-surface-l1: rgba(47, 116, 255, 0.12);
+  --trae-status-success-default: #15a877;
+  --trae-status-success-surface-l1: rgba(64, 176, 139, 0.12);
+  --trae-status-error-default: #e8463a;
+  --trae-status-error-surface-l1: rgba(232, 70, 58, 0.12);
+  --trae-annotation-marker-bg: #4b3fe3;
+  --trae-annotation-marker-text: #ffffff;
+  --trae-annotation-region-border: var(--trae-status-primary-default);
+  --trae-region-outside-mask-bg: rgba(0, 0, 0, 0.18);
+  --trae-panel-shadow: 0px 6px 24px -1px rgba(24, 24, 24, 0.06);
+  --trae-floating-shadow: 0px 2px 8px 0px rgba(24, 24, 24, 0.2);
+  --trae-shadow-elevation-50: 0 1px 2px -1px rgba(24, 24, 24, 0.08);
+  --text-text-default: var(--trae-text-default);
+  --text-text-onaccent: var(--trae-text-onaccent);
+  --bg-bg-menu: var(--trae-bg-menu);
+  --bg-bg-white: var(--trae-bg-menu);
+  --bg-bg-invert: var(--trae-bg-invert);
+  --bg-bg-invert-disabled: var(--trae-bg-invert-disabled);
+  --bg-bg-overlay-l1: var(--trae-bg-overlay-l1);
+  --bg-bg-overlay-l2: var(--trae-bg-overlay-l2);
+  --bg-bg-overlay-l3: var(--trae-bg-overlay-l3);
+  --border-border-neutral-l1: var(--trae-border-l1);
+  --border-border-brand: var(--trae-border-brand);
+  --border-border-brand-half: rgba(75, 63, 227, 0.4);
+  --status-error-default: var(--trae-status-error-default);
+  --status-error-surface-l1: var(--trae-status-error-surface-l1);
+  --radius-radius-md-12: 12px;
+  --spacers-spacer-0: 0;
+  --spacers-spacer-6: 6px;
+}
+
+@keyframes trae-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes trae-edit-bar-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes trae-edit-bar-leave {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes trae-edit-panel-leave {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.trae-edit-mode-active:not(.trae-edit-mode-dragging) body *:not([data-trae-edit-ui]):not([data-trae-edit-ui] *) {
+  transition: none !important;
+  animation-play-state: paused !important;
+}
+
+.trae-edit-mode-reorder-hit-test [data-trae-edit-ui]:not(.trae-edit-pointer-shield):not(.trae-edit-panel),
+.trae-edit-mode-reorder-hit-test [data-trae-edit-ui]:not(.trae-edit-pointer-shield):not(.trae-edit-panel) * {
+  pointer-events: none !important;
+}
+
+.trae-browser-inspect-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: var(--trae-layer-browser-inspect-overlay);
+  pointer-events: auto;
+  background: transparent;
+}
+
+.trae-browser-inspect-highlight-box {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: var(--trae-layer-browser-inspect-highlight);
+  display: none;
+}
+
+.trae-browser-inspect-highlight-tag {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  height: 18px;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  background-color: var(--trae-status-success-default);
+  color: var(--trae-text-onaccent);
+  font-size: 12px;
+  font-weight: 400;
+  display: none;
+  align-items: center;
+  z-index: var(--trae-layer-browser-inspect-action);
+}
+
+.trae-browser-inspect-highlight-box-show {
+  display: flex;
+}
+
+.trae-browser-inspect-highlight-tag.trae-browser-inspect-highlight-box-show {
+  display: none;
+}
+
+.trae-browser-inspect-select-button.trae-browser-inspect-highlight-box-show {
+  display: block !important;
+}
+
+.trae-browser-inspect-select-button {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: none;
+  z-index: var(--trae-layer-browser-inspect-action);
+}
+
+.trae-browser-inspect-select-highlight-box {
+  background: transparent !important;
+}
+
+.trae-browser-inspect-select-highlight-box .trae-browser-inspect-highlight-tag {
+  background-color: var(--trae-status-success-default);
+}
+
+.trae-add-to-chat-card {
+  display: block;
+  overflow: hidden;
+  background: var(--trae-bg-menu);
+  border: 1px solid var(--trae-border-l1);
+  border-radius: 8px;
+  box-shadow: var(--trae-floating-shadow);
+  transition:
+    width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.trae-add-to-chat-content {
+  position: relative;
+  width: max-content;
+}
+
+.trae-fade-exit {
+  opacity: 0;
+  transition: opacity 0.15s ease-out;
+}
+
+.trae-fade-enter {
+  opacity: 1;
+  transition: opacity 0.2s ease-in;
+}
+
+.trae-buttons-view {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  background: transparent;
+}
+
+.trae-action-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transform: none !important;
+  transition: none !important;
+  animation: none !important;
+}
+
+.trae-action-button:hover {
+  background: var(--trae-bg-overlay-l2);
+}
+
+.trae-action-button:active {
+  background: var(--trae-bg-overlay-l3);
+}
+
+.trae-action-button:focus-visible {
+  outline: 2px solid var(--trae-status-primary);
+  outline-offset: 1px;
+}
+
+.trae-action-button-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--trae-icon-default);
+  flex-shrink: 0;
+}
+
+.trae-action-button-title {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--trae-text-default);
+  white-space: nowrap;
+}
+
+.trae-edit-toolbar-button-active {
+  background: var(--bg-bg-brand-disabled, rgba(75, 63, 227, 0.22)) !important;
+  color: var(--icon-icon-brand, #4b3fe3) !important;
+  font-weight: bold !important;
+}
+
+.trae-edit-toolbar-button-active:hover {
+  background: var(--bg-bg-brand-popup, rgba(170, 183, 255, 0.36)) !important;
+}
+
+.trae-edit-toolbar button[data-action='alignment-dropdown']:hover,
+.trae-edit-toolbar button[data-action='text-align-dropdown']:hover,
+.trae-edit-toolbar button[data-action='font-decrease']:hover,
+.trae-edit-toolbar button[data-action='font-increase']:hover,
+.trae-edit-toolbar button[data-action^='align-']:hover {
+  border-radius: 8px;
+  background: var(--bg-bg-overlay-l1, rgba(115, 115, 115, 0.08)) !important;
+}
+
+.trae-edit-toolbar button[data-action='alignment-dropdown']:active,
+.trae-edit-toolbar button[data-action='text-align-dropdown']:active,
+.trae-edit-toolbar button[data-action='font-decrease']:active,
+.trae-edit-toolbar button[data-action='font-increase']:active,
+.trae-edit-toolbar button[data-action^='align-']:active {
+  border-radius: 8px;
+  background: var(--bg-bg-overlay-l2, rgba(115, 115, 115, 0.12)) !important;
+}
+
+.trae-comment-input {
+  background: transparent;
+  color: var(--trae-text-default);
+  caret-color: var(--trae-text-default);
+}
+
+.trae-comment-input::placeholder {
+  color: var(--trae-text-tertiary);
+}
+
+.trae-point-edit-bar,
+.trae-point-comment-input-bar,
+.trae-comment-only-panel {
+  transform-origin: top center;
+  will-change: opacity, transform;
+}
+
+.trae-edit-panel:not(.trae-edit-panel-leave) {
+  pointer-events: auto !important;
+}
+
+.trae-edit-bar-enter {
+  animation: trae-edit-bar-enter var(--transition-normal, 0.18s cubic-bezier(0.2, 0, 0, 1)) both;
+}
+
+.trae-edit-bar-leave {
+  pointer-events: none;
+  animation: trae-edit-bar-leave var(--transition-fast, 0.14s ease) both;
+}
+
+.trae-edit-panel-leave {
+  pointer-events: none;
+  animation: trae-edit-panel-leave var(--transition-fast, 0.14s ease) both;
+}
+
+.trae-edit-panel [data-trae-tooltip] {
+  position: relative;
+}
+
+.trae-edit-panel [data-trae-tooltip]::after {
+  content: attr(data-trae-tooltip);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  z-index: var(--trae-layer-edit-tooltip);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--trae-bg-invert, var(--bg-bg-invert));
+  color: var(--trae-text-onaccent, var(--text-text-onaccent));
+  box-shadow: var(--trae-floating-shadow);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  letter-spacing: 0.039px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-sizing: border-box;
+  opacity: 0;
+  transform: translateX(-50%);
+  visibility: hidden;
+}
+
+.trae-edit-panel [data-trae-tooltip]::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 5px);
+  z-index: var(--trae-layer-edit-tooltip);
+  width: 8px;
+  height: 4px;
+  background: var(--trae-bg-invert, var(--bg-bg-invert));
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+  transform: translateX(-50%);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+}
+
+.trae-edit-panel [data-trae-tooltip]:hover::after,
+.trae-edit-panel [data-trae-tooltip]:focus-visible::after,
+.trae-edit-panel [data-trae-tooltip]:hover::before,
+.trae-edit-panel [data-trae-tooltip]:focus-visible::before {
+  opacity: 1;
+  visibility: visible;
+}
+
+.trae-comment-btn {
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.trae-comment-btn:disabled {
+  cursor: not-allowed;
+}
+
+.trae-comment-btn:focus-visible {
+  outline: 2px solid var(--trae-status-primary);
+  outline-offset: 1px;
+}
+
+.trae-comment-btn-primary {
+  background: var(--trae-bg-invert);
+  color: var(--trae-text-onaccent);
+}
+
+.trae-comment-btn-primary:hover:not(:disabled) {
+  background: var(--trae-bg-invert-hover);
+}
+
+.trae-comment-btn-primary:active:not(:disabled) {
+  background: var(--trae-bg-invert-active);
+}
+
+.trae-comment-btn-primary:disabled {
+  background: var(--trae-bg-invert-disabled);
+  color: var(--trae-text-disabled);
+}
+
+.trae-comment-btn-secondary {
+  background: var(--trae-bg-overlay-l2);
+  color: var(--trae-text-default);
+}
+
+.trae-comment-btn-secondary:hover:not(:disabled) {
+  background: var(--trae-bg-overlay-l3);
+}
+
+.trae-comment-btn-secondary:active:not(:disabled) {
+  background: var(--trae-bg-overlay-l4);
+}
+
+.trae-comment-btn-secondary:disabled {
+  background: var(--trae-bg-overlay-l2);
+  color: var(--trae-text-disabled);
+}
+
+.trae-comment-btn-text {
+  background: transparent;
+  color: var(--trae-text-default);
+}
+
+.trae-comment-btn-text:hover:not(:disabled) {
+  border-radius: 8px;
+  background: var(--bg-bg-overlay-l1, var(--trae-bg-overlay-l1));
+  color: var(--trae-text-default-hover);
+}
+
+.trae-comment-btn-text:active:not(:disabled) {
+  border-radius: 8px;
+  background: var(--trae-bg-overlay-l2);
+  color: var(--trae-text-default-active);
+}
+
+.trae-comment-btn-text:disabled {
+  background: transparent;
+  color: var(--trae-text-disabled);
+}
+
+.trae-marking-btn {
+  justify-content: center;
+}
+
+.trae-marking-btn:hover:not(:disabled) {
+  background: var(--trae-bg-overlay-l1) !important;
+}
+
+.trae-marking-btn-active {
+  background: var(--bg-bg-brand-disabled, rgba(75, 63, 227, 0.22)) !important;
+  color: var(--icon-icon-brand, var(--trae-icon-brand)) !important;
+}
+
+.trae-marking-btn-active:hover {
+  background: var(--bg-bg-brand-popup, rgba(170, 183, 255, 0.36)) !important;
+  color: var(--icon-icon-brand, var(--trae-icon-brand)) !important;
+}
+
+.trae-marking-btn:active:not(:disabled) {
+  background: var(--trae-bg-overlay-l2) !important;
+}
+
+.trae-marking-btn:disabled {
+  color: var(--trae-text-disabled) !important;
+  cursor: not-allowed !important;
+}
+
+.trae-action-button-shortcut {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--trae-icon-secondary);
+  flex-shrink: 0;
+}
+
+.trae-shortcut-container {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.trae-shortcut-key {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 12px;
+  color: var(--trae-icon-secondary);
+}
+
+.trae-add-to-chat-divider {
+  width: 2px;
+  height: 12px;
+  padding: 0 6px;
+  box-sizing: content-box;
+  background-clip: content-box;
+  background-color: var(--trae-border-l2);
+  flex-shrink: 0;
+}
+
+.trae-editor-view {
+  display: flex;
+  flex-direction: column;
+  width: 320px;
+  padding: 8px;
+  background: transparent;
+}
+
+.trae-editor-text-container {
+  display: flex;
+  align-items: center;
+  padding: 8px;
+  background: var(--trae-bg-overlay-l1);
+  border: 1px solid var(--trae-border-l3);
+  border-radius: 4px;
+  gap: 8px;
+}
+
+.trae-editor-textarea {
+  flex: 1;
+  padding: 0 2px;
+  border: none;
+  background: transparent;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  color: var(--trae-text-default);
+  resize: none;
+  outline: none;
+  overflow-y: auto;
+  max-height: 140px;
+}
+
+.trae-editor-textarea::placeholder {
+  color: var(--trae-text-tertiary);
+}
+
+.trae-editor-action-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-height 0.2s ease-out,
+    opacity 0.2s ease-out,
+    margin-top 0.2s ease-out;
+}
+
+.trae-editor-action-bar-visible {
+  max-height: 32px;
+  opacity: 1;
+  margin-top: 8px;
+}
+
+.trae-editor-cancel-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 4px;
+  background: var(--trae-bg-overlay-l2);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.trae-editor-cancel-button:hover {
+  background: var(--trae-bg-overlay-l3);
+}
+
+.trae-editor-cancel-button:active {
+  background: var(--trae-bg-overlay-l3);
+}
+
+.trae-editor-cancel-button:focus-visible {
+  outline: 2px solid var(--trae-status-primary);
+  outline-offset: 1px;
+}
+
+.trae-editor-cancel-text {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--trae-text-default);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.trae-editor-submit-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 8px;
+  background: var(--trae-bg-invert);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.trae-editor-submit-button:hover {
+  background: var(--trae-bg-invert-hover);
+}
+
+.trae-editor-submit-button:active {
+  background: var(--trae-bg-invert-active);
+}
+
+.trae-editor-submit-button:focus-visible {
+  outline: 2px solid var(--trae-status-primary);
+  outline-offset: 1px;
+}
+
+.trae-editor-submit-text {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  color: var(--trae-text-onaccent);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+
+.trae-editor-submit-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  color: var(--trae-icon-onaccent);
+  flex-shrink: 0;
+}
+
+.trae-success-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 32px;
+  white-space: nowrap;
+}
+
+.trae-success-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--trae-status-success);
+  flex-shrink: 0;
+}
+
+.trae-success-text {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  color: var(--trae-text-default);
+  user-select: none;
+}
+</style><style data-trae-pptx-captured-css="true">*, ::before, ::after { box-sizing: border-box; }
+html { text-size-adjust: 100%; }
+body { margin: 0px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", sans-serif; background: rgb(250, 249, 245); color: rgb(0, 0, 0); line-height: 1.6; font-size: 13px; -webkit-font-smoothing: antialiased; padding: 24px 16px 64px; }
+.wrap { max-width: 760px; margin: 0px auto; }
+h1 { font-size: 18px; font-weight: 500; margin: 0px 0px 6px; letter-spacing: 0.2px; }
+h2 { font-size: 14px; font-weight: 500; margin: 28px 0px 12px; padding: 0px 0px 6px; border-bottom: 1px solid rgba(0, 0, 0, 0.15); }
+h3 { font-size: 13px; font-weight: 500; margin: 16px 0px 6px; }
+p { margin: 6px 0px 10px; color: rgb(68, 68, 65); }
+p strong { color: rgb(0, 0, 0); font-weight: 500; }
+.hero { margin: 0px 0px 20px; padding: 20px 24px; background: rgb(255, 255, 255); border-radius: 12px; border: 1px solid rgba(0, 0, 0, 0.15); }
+.hero p.sub { margin: 4px 0px 0px; font-size: 12px; color: rgb(95, 94, 90); }
+.tag { display: inline-block; margin-top: 8px; padding: 2px 8px; font-size: 11px; background: rgb(250, 238, 218); color: rgb(133, 79, 11); border-radius: 4px; }
+.card { background: rgb(255, 255, 255); border: 1px solid rgba(0, 0, 0, 0.15); border-radius: 12px; padding: 16px 20px; margin: 8px 0px 16px; }
+.svg-wrap { background: rgb(255, 255, 255); border: 1px solid rgba(0, 0, 0, 0.15); border-radius: 12px; padding: 16px 20px; margin: 12px 0px 6px; overflow-x: auto; }
+.fig-cap { font-size: 11px; color: rgb(95, 94, 90); text-align: center; margin: 0px 0px 16px; }
+.callout { padding: 10px 14px; border-left: 3px solid rgb(24, 95, 165); background: rgb(230, 241, 251); border-radius: 0px 6px 6px 0px; margin: 8px 0px 16px; color: rgb(12, 68, 124); font-size: 12px; }
+.callout-amber { border-left-color: rgb(133, 79, 11); background: rgb(250, 238, 218); color: rgb(99, 56, 6); }
+.callout-green { border-left-color: rgb(59, 109, 17); background: rgb(234, 243, 222); color: rgb(39, 80, 10); }
+.callout-red { border-left-color: rgb(163, 45, 45); background: rgb(252, 235, 235); color: rgb(121, 31, 31); }
+table { width: 100%; border-collapse: collapse; margin: 8px 0px; font-size: 12px; }
+th, td { padding: 6px 10px; border-bottom: 1px solid rgba(0, 0, 0, 0.15); text-align: left; }
+th { background: rgb(241, 239, 232); font-weight: 500; color: rgb(68, 68, 65); }
+code { font-family: "SF Mono", Consolas, Monaco, monospace; font-size: 12px; background: rgb(241, 239, 232); padding: 1px 4px; border-radius: 3px; color: rgb(83, 74, 183); }
+ul, ol { margin: 6px 0px 10px 20px; padding: 0px; }
+li { margin: 3px 0px; font-size: 12px; color: rgb(68, 68, 65); }
+hr.div { margin: 24px 0px; border-right: none; border-bottom: none; border-left: none; border-image: initial; border-top: 1px dashed rgba(0, 0, 0, 0.15); }
+footer { margin-top: 32px; text-align: center; color: rgb(136, 135, 128); font-size: 11px; }
+:root { --trae-layer-image-download: 89990; --trae-layer-browser-inspect-overlay: 90000; --trae-layer-browser-inspect-highlight: 90010; --trae-layer-browser-inspect-action: 90020; --trae-layer-text-selection-action: 90030; --trae-layer-edit-tooltip: 100095; }
+:root, [data-trae-theme="dark"] { --trae-bg-base-default: #171717; --trae-bg-menu: #222427; --trae-bg-overlay-l1: rgba(255, 255, 255, 0.04); --trae-bg-overlay-l2: rgba(255, 255, 255, 0.08); --trae-bg-overlay-l3: rgba(255, 255, 255, 0.12); --trae-bg-overlay-l4: rgba(255, 255, 255, 0.16); --trae-bg-invert: #f5f9fe; --trae-bg-invert-hover: #e8ecf0; --trae-bg-invert-active: #dce0e4; --trae-bg-invert-disabled: rgba(224, 226, 242, 0.12); --bg-bg-brand-disabled: rgba(75, 63, 227, 0.35); --bg-bg-brand-popup: rgba(106, 111, 255, 0.15); --trae-border-l1: #e0e2f217; --trae-border-l2: rgba(255, 255, 255, 0.12); --trae-border-l3: rgba(255, 255, 255, 0.08); --trae-border-neutral-l3: rgba(229, 229, 229, 0.20); --trae-border-brand: #6a6fff; --trae-text-default: #f5f9fe; --trae-text-default-hover: #f5f9fe; --trae-text-default-active: #f5f9fe; --trae-text-secondary: rgba(245, 249, 254, 0.5); --trae-text-tertiary: rgba(245, 249, 254, 0.4); --trae-text-disabled: #666b75; --trae-text-onaccent: #222427; --trae-icon-default: #f5f9fe; --trae-icon-secondary: rgba(245, 249, 254, 0.5); --trae-icon-brand: #6a6fff; --icon-icon-brand: var(--trae-icon-brand); --trae-icon-onaccent: #222427; --trae-status-success: #22c55e; --trae-status-primary: #3b82f6; --trae-status-primary-default: #387bff; --trae-status-primary-surface-l1: rgba(53, 121, 255, 0.18); --trae-status-success-default: #33c192; --trae-status-success-surface-l1: rgba(0, 165, 110, 0.18); --trae-status-error-default: #f65a5a; --trae-status-error-surface-l1: rgba(246, 70, 70, 0.18); --trae-annotation-marker-bg: #4b3fe3; --trae-annotation-marker-text: #ffffff; --trae-annotation-region-border: var(--trae-status-primary-default); --trae-region-outside-mask-bg: rgba(0, 0, 0, 0.32); --trae-panel-shadow: 0px 6px 24px -1px rgba(0, 0, 0, 0.16); --trae-floating-shadow: 0px 2px 8px 0px rgba(0, 0, 0, 0.2); --trae-shadow-elevation-50: 0 1px 2px -1px rgba(0, 0, 0, 0.45); --text-text-default: var(--trae-text-default); --text-text-onaccent: var(--trae-text-onaccent); --bg-bg-menu: var(--trae-bg-menu); --bg-bg-white: var(--trae-bg-menu); --bg-bg-invert: var(--trae-bg-invert); --bg-bg-invert-disabled: var(--trae-bg-invert-disabled); --bg-bg-overlay-l1: var(--trae-bg-overlay-l1); --bg-bg-overlay-l2: var(--trae-bg-overlay-l2); --bg-bg-overlay-l3: var(--trae-bg-overlay-l3); --border-border-neutral-l1: var(--trae-border-l1); --border-border-brand: var(--trae-border-brand); --border-border-brand-half: rgba(106, 111, 255, 0.4); --status-error-default: var(--trae-status-error-default); --status-error-surface-l1: var(--trae-status-error-surface-l1); --radius-radius-md-12: 12px; --spacers-spacer-0: 0; --spacers-spacer-6: 6px; }
+[data-trae-theme="light"] { --trae-bg-base-default: #fafafa; --trae-bg-menu: #ffffff; --trae-bg-overlay-l1: rgba(0, 0, 0, 0.04); --trae-bg-overlay-l2: rgba(0, 0, 0, 0.06); --trae-bg-overlay-l3: rgba(0, 0, 0, 0.08); --trae-bg-overlay-l4: rgba(0, 0, 0, 0.12); --trae-bg-invert: #1f2328; --trae-bg-invert-hover: #32383f; --trae-bg-invert-active: #444d56; --trae-bg-invert-disabled: rgba(115, 115, 115, 0.20); --bg-bg-brand-disabled: rgba(75, 63, 227, 0.22); --bg-bg-brand-popup: rgba(170, 183, 255, 0.36); --trae-border-l1: rgba(0, 0, 0, 0.1); --trae-border-l2: rgba(0, 0, 0, 0.12); --trae-border-l3: rgba(0, 0, 0, 0.08); --trae-border-neutral-l3: rgba(115, 115, 115, 0.36); --trae-border-brand: #4b3fe3; --trae-text-default: #1f2328; --trae-text-default-hover: #111214; --trae-text-default-active: #111214; --trae-text-secondary: rgba(31, 35, 40, 0.5); --trae-text-tertiary: rgba(31, 35, 40, 0.4); --trae-text-disabled: #a1a1a1; --trae-text-onaccent: #ffffff; --trae-icon-default: #1f2328; --trae-icon-secondary: rgba(31, 35, 40, 0.5); --trae-icon-brand: #4b3fe3; --icon-icon-brand: var(--trae-icon-brand); --trae-icon-onaccent: #ffffff; --trae-status-success: #22c55e; --trae-status-primary: #3b82f6; --trae-status-primary-default: #2f74ff; --trae-status-primary-surface-l1: rgba(47, 116, 255, 0.12); --trae-status-success-default: #15a877; --trae-status-success-surface-l1: rgba(64, 176, 139, 0.12); --trae-status-error-default: #e8463a; --trae-status-error-surface-l1: rgba(232, 70, 58, 0.12); --trae-annotation-marker-bg: #4b3fe3; --trae-annotation-marker-text: #ffffff; --trae-annotation-region-border: var(--trae-status-primary-default); --trae-region-outside-mask-bg: rgba(0, 0, 0, 0.18); --trae-panel-shadow: 0px 6px 24px -1px rgba(24, 24, 24, 0.06); --trae-floating-shadow: 0px 2px 8px 0px rgba(24, 24, 24, 0.2); --trae-shadow-elevation-50: 0 1px 2px -1px rgba(24, 24, 24, 0.08); --text-text-default: var(--trae-text-default); --text-text-onaccent: var(--trae-text-onaccent); --bg-bg-menu: var(--trae-bg-menu); --bg-bg-white: var(--trae-bg-menu); --bg-bg-invert: var(--trae-bg-invert); --bg-bg-invert-disabled: var(--trae-bg-invert-disabled); --bg-bg-overlay-l1: var(--trae-bg-overlay-l1); --bg-bg-overlay-l2: var(--trae-bg-overlay-l2); --bg-bg-overlay-l3: var(--trae-bg-overlay-l3); --border-border-neutral-l1: var(--trae-border-l1); --border-border-brand: var(--trae-border-brand); --border-border-brand-half: rgba(75, 63, 227, 0.4); --status-error-default: var(--trae-status-error-default); --status-error-surface-l1: var(--trae-status-error-surface-l1); --radius-radius-md-12: 12px; --spacers-spacer-0: 0; --spacers-spacer-6: 6px; }
+@keyframes trae-spin { 
+  100% { transform: rotate(360deg); }
+}
+@keyframes trae-edit-bar-enter { 
+  0% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  100% { opacity: 1; transform: translateY(0px) scale(1); }
+}
+@keyframes trae-edit-bar-leave { 
+  0% { opacity: 1; transform: translateY(0px) scale(1); }
+  100% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+@keyframes trae-edit-panel-leave { 
+  0% { opacity: 1; transform: translateY(0px) scale(1); }
+  100% { opacity: 0; transform: translateY(-4px) scale(0.98); }
+}
+.trae-edit-mode-active:not(.trae-edit-mode-dragging) body :not([data-trae-edit-ui]):not([data-trae-edit-ui] *) { transition: none !important; animation-play-state: paused !important; }
+.trae-edit-mode-reorder-hit-test [data-trae-edit-ui]:not(.trae-edit-pointer-shield):not(.trae-edit-panel), .trae-edit-mode-reorder-hit-test [data-trae-edit-ui]:not(.trae-edit-pointer-shield):not(.trae-edit-panel) * { pointer-events: none !important; }
+.trae-browser-inspect-overlay { position: fixed; top: 0px; left: 0px; width: 100%; height: 100%; z-index: var(--trae-layer-browser-inspect-overlay); pointer-events: auto; background: transparent; }
+.trae-browser-inspect-highlight-box { position: absolute; top: 0px; left: 0px; z-index: var(--trae-layer-browser-inspect-highlight); display: none; }
+.trae-browser-inspect-highlight-tag { position: absolute; left: 0px; top: 0px; height: 18px; padding: 0px 6px; box-sizing: border-box; border-radius: 4px; background-color: var(--trae-status-success-default); color: var(--trae-text-onaccent); font-size: 12px; font-weight: 400; display: none; align-items: center; z-index: var(--trae-layer-browser-inspect-action); }
+.trae-browser-inspect-highlight-box-show { display: flex; }
+.trae-browser-inspect-highlight-tag.trae-browser-inspect-highlight-box-show { display: none; }
+.trae-browser-inspect-select-button.trae-browser-inspect-highlight-box-show { display: block !important; }
+.trae-browser-inspect-select-button { position: absolute; top: 0px; left: 0px; display: none; z-index: var(--trae-layer-browser-inspect-action); }
+.trae-browser-inspect-select-highlight-box { background: transparent !important; }
+.trae-browser-inspect-select-highlight-box .trae-browser-inspect-highlight-tag { background-color: var(--trae-status-success-default); }
+.trae-add-to-chat-card { display: block; overflow: hidden; background: var(--trae-bg-menu); border: 1px solid var(--trae-border-l1); border-radius: 8px; box-shadow: var(--trae-floating-shadow); transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1), height 0.25s cubic-bezier(0.4, 0, 0.2, 1); }
+.trae-add-to-chat-content { position: relative; width: max-content; }
+.trae-fade-exit { opacity: 0; transition: opacity 0.15s ease-out; }
+.trae-fade-enter { opacity: 1; transition: opacity 0.2s ease-in; }
+.trae-buttons-view { display: flex; align-items: center; gap: 6px; padding: 4px; background: transparent; }
+.trae-action-button { display: inline-flex; align-items: center; gap: 4px; padding: 4px 8px; background: transparent; border: none; border-radius: 4px; cursor: pointer; transform: none !important; transition: none !important; animation: auto ease 0s 1 normal none running none !important; }
+.trae-action-button:hover { background: var(--trae-bg-overlay-l2); }
+.trae-action-button:active { background: var(--trae-bg-overlay-l3); }
+.trae-action-button:focus-visible { outline: 2px solid var(--trae-status-primary); outline-offset: 1px; }
+.trae-action-button-icon { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--trae-icon-default); flex-shrink: 0; }
+.trae-action-button-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 500; line-height: 16px; color: var(--trae-text-default); white-space: nowrap; }
+.trae-edit-toolbar-button-active { background: var(--bg-bg-brand-disabled, rgba(75, 63, 227, 0.22)) !important; color: var(--icon-icon-brand, #4b3fe3) !important; font-weight: bold !important; }
+.trae-edit-toolbar-button-active:hover { background: var(--bg-bg-brand-popup, rgba(170, 183, 255, 0.36)) !important; }
+.trae-edit-toolbar button[data-action="alignment-dropdown"]:hover, .trae-edit-toolbar button[data-action="text-align-dropdown"]:hover, .trae-edit-toolbar button[data-action="font-decrease"]:hover, .trae-edit-toolbar button[data-action="font-increase"]:hover, .trae-edit-toolbar button[data-action^="align-"]:hover { border-radius: 8px; background: var(--bg-bg-overlay-l1, rgba(115, 115, 115, 0.08)) !important; }
+.trae-edit-toolbar button[data-action="alignment-dropdown"]:active, .trae-edit-toolbar button[data-action="text-align-dropdown"]:active, .trae-edit-toolbar button[data-action="font-decrease"]:active, .trae-edit-toolbar button[data-action="font-increase"]:active, .trae-edit-toolbar button[data-action^="align-"]:active { border-radius: 8px; background: var(--bg-bg-overlay-l2, rgba(115, 115, 115, 0.12)) !important; }
+.trae-comment-input { background: transparent; color: var(--trae-text-default); caret-color: var(--trae-text-default); }
+.trae-comment-input::placeholder { color: var(--trae-text-tertiary); }
+.trae-point-edit-bar, .trae-point-comment-input-bar, .trae-comment-only-panel { transform-origin: center top; will-change: opacity, transform; }
+.trae-edit-panel:not(.trae-edit-panel-leave) { pointer-events: auto !important; }
+.trae-edit-bar-enter { animation: trae-edit-bar-enter var(--transition-normal, 0.18s cubic-bezier(0.2, 0, 0, 1)) both; }
+.trae-edit-bar-leave { pointer-events: none; animation: trae-edit-bar-leave var(--transition-fast, 0.14s ease) both; }
+.trae-edit-panel-leave { pointer-events: none; animation: trae-edit-panel-leave var(--transition-fast, 0.14s ease) both; }
+.trae-edit-panel [data-trae-tooltip] { position: relative; }
+.trae-edit-panel [data-trae-tooltip]::after { content: attr(data-trae-tooltip); position: absolute; left: 50%; bottom: calc(100% + 8px); z-index: var(--trae-layer-edit-tooltip); padding: 6px 10px; border-radius: 6px; background: var(--trae-bg-invert, var(--bg-bg-invert)); color: var(--trae-text-onaccent, var(--text-text-onaccent)); box-shadow: var(--trae-floating-shadow); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif; font-size: 11px; font-weight: 500; line-height: 16px; letter-spacing: 0.039px; white-space: nowrap; pointer-events: none; box-sizing: border-box; opacity: 0; transform: translateX(-50%); visibility: hidden; }
+.trae-edit-panel [data-trae-tooltip]::before { content: ""; position: absolute; left: 50%; bottom: calc(100% + 5px); z-index: var(--trae-layer-edit-tooltip); width: 8px; height: 4px; background: var(--trae-bg-invert, var(--bg-bg-invert)); clip-path: polygon(0px 0px, 100% 0px, 50% 100%); transform: translateX(-50%); pointer-events: none; opacity: 0; visibility: hidden; }
+.trae-edit-panel [data-trae-tooltip]:hover::after, .trae-edit-panel [data-trae-tooltip]:focus-visible::after, .trae-edit-panel [data-trae-tooltip]:hover::before, .trae-edit-panel [data-trae-tooltip]:focus-visible::before { opacity: 1; visibility: visible; }
+.trae-comment-btn { justify-content: center; cursor: pointer; transition: background-color 0.15s; }
+.trae-comment-btn:disabled { cursor: not-allowed; }
+.trae-comment-btn:focus-visible { outline: 2px solid var(--trae-status-primary); outline-offset: 1px; }
+.trae-comment-btn-primary { background: var(--trae-bg-invert); color: var(--trae-text-onaccent); }
+.trae-comment-btn-primary:hover:not(:disabled) { background: var(--trae-bg-invert-hover); }
+.trae-comment-btn-primary:active:not(:disabled) { background: var(--trae-bg-invert-active); }
+.trae-comment-btn-primary:disabled { background: var(--trae-bg-invert-disabled); color: var(--trae-text-disabled); }
+.trae-comment-btn-secondary { background: var(--trae-bg-overlay-l2); color: var(--trae-text-default); }
+.trae-comment-btn-secondary:hover:not(:disabled) { background: var(--trae-bg-overlay-l3); }
+.trae-comment-btn-secondary:active:not(:disabled) { background: var(--trae-bg-overlay-l4); }
+.trae-comment-btn-secondary:disabled { background: var(--trae-bg-overlay-l2); color: var(--trae-text-disabled); }
+.trae-comment-btn-text { background: transparent; color: var(--trae-text-default); }
+.trae-comment-btn-text:hover:not(:disabled) { border-radius: 8px; background: var(--bg-bg-overlay-l1, var(--trae-bg-overlay-l1)); color: var(--trae-text-default-hover); }
+.trae-comment-btn-text:active:not(:disabled) { border-radius: 8px; background: var(--trae-bg-overlay-l2); color: var(--trae-text-default-active); }
+.trae-comment-btn-text:disabled { background: transparent; color: var(--trae-text-disabled); }
+.trae-marking-btn { justify-content: center; }
+.trae-marking-btn:hover:not(:disabled) { background: var(--trae-bg-overlay-l1) !important; }
+.trae-marking-btn-active { background: var(--bg-bg-brand-disabled, rgba(75, 63, 227, 0.22)) !important; color: var(--icon-icon-brand, var(--trae-icon-brand)) !important; }
+.trae-marking-btn-active:hover { background: var(--bg-bg-brand-popup, rgba(170, 183, 255, 0.36)) !important; color: var(--icon-icon-brand, var(--trae-icon-brand)) !important; }
+.trae-marking-btn:active:not(:disabled) { background: var(--trae-bg-overlay-l2) !important; }
+.trae-marking-btn:disabled { color: var(--trae-text-disabled) !important; cursor: not-allowed !important; }
+.trae-action-button-shortcut { display: flex; align-items: center; gap: 2px; color: var(--trae-icon-secondary); flex-shrink: 0; }
+.trae-shortcut-container { display: flex; align-items: center; gap: 2px; }
+.trae-shortcut-key { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 500; line-height: 12px; color: var(--trae-icon-secondary); }
+.trae-add-to-chat-divider { width: 2px; height: 12px; padding: 0px 6px; box-sizing: content-box; background-clip: content-box; background-color: var(--trae-border-l2); flex-shrink: 0; }
+.trae-editor-view { display: flex; flex-direction: column; width: 320px; padding: 8px; background: transparent; }
+.trae-editor-text-container { display: flex; align-items: center; padding: 8px; background: var(--trae-bg-overlay-l1); border: 1px solid var(--trae-border-l3); border-radius: 4px; gap: 8px; }
+.trae-editor-textarea { flex: 1 1 0%; padding: 0px 2px; border: none; background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 400; line-height: 20px; color: var(--trae-text-default); resize: none; outline: none; overflow-y: auto; max-height: 140px; }
+.trae-editor-textarea::placeholder { color: var(--trae-text-tertiary); }
+.trae-editor-action-bar { display: flex; align-items: center; justify-content: flex-end; gap: 4px; max-height: 0px; opacity: 0; overflow: hidden; transition: max-height 0.2s ease-out, opacity 0.2s ease-out, margin-top 0.2s ease-out; }
+.trae-editor-action-bar-visible { max-height: 32px; opacity: 1; margin-top: 8px; }
+.trae-editor-cancel-button { display: flex; align-items: center; justify-content: center; height: 24px; padding: 0px 4px; background: var(--trae-bg-overlay-l2); border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.15s; }
+.trae-editor-cancel-button:hover { background: var(--trae-bg-overlay-l3); }
+.trae-editor-cancel-button:active { background: var(--trae-bg-overlay-l3); }
+.trae-editor-cancel-button:focus-visible { outline: 2px solid var(--trae-status-primary); outline-offset: 1px; }
+.trae-editor-cancel-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 500; line-height: 16px; color: var(--trae-text-default); white-space: nowrap; padding: 0px 4px; }
+.trae-editor-submit-button { display: flex; align-items: center; justify-content: center; height: 24px; padding: 0px 8px; background: var(--trae-bg-invert); border: none; border-radius: 4px; cursor: pointer; transition: background-color 0.15s; }
+.trae-editor-submit-button:hover { background: var(--trae-bg-invert-hover); }
+.trae-editor-submit-button:active { background: var(--trae-bg-invert-active); }
+.trae-editor-submit-button:focus-visible { outline: 2px solid var(--trae-status-primary); outline-offset: 1px; }
+.trae-editor-submit-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 500; line-height: 16px; color: var(--trae-text-onaccent); white-space: nowrap; padding: 0px 4px; }
+.trae-editor-submit-icon { display: flex; align-items: center; justify-content: center; width: 12px; height: 12px; color: var(--trae-icon-onaccent); flex-shrink: 0; }
+.trae-success-view { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 0px 12px; height: 32px; white-space: nowrap; }
+.trae-success-icon { display: flex; align-items: center; justify-content: center; width: 16px; height: 16px; color: var(--trae-status-success); flex-shrink: 0; }
+.trae-success-text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; font-weight: 400; line-height: 18px; color: var(--trae-text-default); user-select: none; }</style></head>
 <body data-page-node-id="BdTqjUmrQpwE4XUU1lOcDd">
 <div class="wrap" data-page-node-id="dJ1tlPG67bae9FzNyagLLw">
 <header class="hero" data-page-node-id="tZX2TxYufrDdMtX0D37csM">
@@ -103,54 +976,54 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <desc id="d1" data-page-node-id="e7DqWXIIdDP22aWGr2aHBL">L1 R 倍数定基线, L2 波动率定宽窄, L3 移动保本锁利润, L4 时间收盘兜底</desc>
 <defs data-page-node-id="eHCgWR3XduuCWUI3vOorNw">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="fDTS7JZP3wVDntVAAcxs3D">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VeKfaL5lA3rtZ7E47utQlS"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VeKfaL5lA3rtZ7E47utQlS"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="nciDjVyv8k43d4FDns1qGr">四层策略 · 纵向叠加</text>
 <text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="BalqRYlGuuYhHndhIPgr1e">每一层解决一类特定风险, 上一层给下一层提供工作基础</text>
 <g transform="translate(34,64)" data-page-node-id="erAtGuqhhTTelo2S8PzZlm">
-  <rect width="144" height="120" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="wTxFoCZfllAhiEOeaiEXCZ"/>
-  <rect x="12" y="12" width="28" height="20" rx="4" fill="#185FA5" data-page-node-id="abhtbkFbe6YtzGWCgswWeA"/>
+  <rect width="144" height="120" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="wTxFoCZfllAhiEOeaiEXCZ"></rect>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#185FA5" data-page-node-id="abhtbkFbe6YtzGWCgswWeA"></rect>
   <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="NX8c3mHOh1F92V6xVlagNC">L1</text>
   <text x="72" y="26" font-size="13" font-weight="500" fill="#0C447C" data-page-node-id="SojbQdLZSvQRYLLa6Tnzzr">R 倍数</text>
   <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="oxGvWKtIgKJsPmJFfnvnmt">定基线</text>
-  <line x1="12" y1="68" x2="132" y2="68" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="jl3bn0ftXXv5Oo1noMvZNG"/>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="jl3bn0ftXXv5Oo1noMvZNG"></line>
   <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="tpOCXFEVgaEyEPIOF9EWzM">初始止损 = 1R</text>
   <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="eRBXpmJAom3bXCkAr9ftbh">盈亏比驱动期望值</text>
 </g>
 <g transform="translate(190,64)" data-page-node-id="eLAd6GQ0ve9NGwriI9kaBx">
-  <rect width="144" height="120" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="BpwDNP4afxVbrXnnSbwp3c"/>
-  <rect x="12" y="12" width="28" height="20" rx="4" fill="#3B6D11" data-page-node-id="7ygJXAztIO5FfsNqNzsyNC"/>
+  <rect width="144" height="120" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="BpwDNP4afxVbrXnnSbwp3c"></rect>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#3B6D11" data-page-node-id="7ygJXAztIO5FfsNqNzsyNC"></rect>
   <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="LGKWAxkMQWcGLLCHWRAjNn">L2</text>
   <text x="72" y="26" font-size="13" font-weight="500" fill="#27500A" data-page-node-id="dTbyRP9gUu1YnNCjD03XeM">波动率</text>
   <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="UXovyBDcV37F8Rk3B2zNwx">定宽窄</text>
-  <line x1="12" y1="68" x2="132" y2="68" stroke="#97C459" stroke-width="0.5" data-page-node-id="wkiG128l1zEToMrxYlCHcB"/>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#97C459" stroke-width="0.5" data-page-node-id="wkiG128l1zEToMrxYlCHcB"></line>
   <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="Z5VprDnn6qtlbJgAs4nLlC">止损宽度 = k×ATR</text>
   <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="7CbsactGOEMzYJDEYycZZ2">宽窄自动适配</text>
 </g>
 <g transform="translate(346,64)" data-page-node-id="n3ORtAkLJvlc4lwoH9oX5l">
-  <rect width="144" height="120" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="Iz9iaXV5bldUElC1XKDsCf"/>
-  <rect x="12" y="12" width="28" height="20" rx="4" fill="#854F0B" data-page-node-id="0KYgJKWJsrL31RQdnnIv0I"/>
+  <rect width="144" height="120" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="Iz9iaXV5bldUElC1XKDsCf"></rect>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#854F0B" data-page-node-id="0KYgJKWJsrL31RQdnnIv0I"></rect>
   <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="IYtZTzHUNy19NaAXraJrrp">L3</text>
   <text x="72" y="26" font-size="13" font-weight="500" fill="#633806" data-page-node-id="NVEL7J4eiRrbEaFPqRh9h8">移动保本</text>
   <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="juFguSDuZTSvG21k1fT2tj">锁利润</text>
-  <line x1="12" y1="68" x2="132" y2="68" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="j9Z3D5JItkeDoEOks7BDu6"/>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="j9Z3D5JItkeDoEOks7BDu6"></line>
   <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="q2qJ1xDcmzjGzwCLgkXbAe">顺势抬 SL</text>
   <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="UgvIBBu4B5opvlg7lrJHpD">浮盈转落袋</text>
 </g>
 <g transform="translate(502,64)" data-page-node-id="U2sYOekjsYDdLsgP7j8Ygk">
-  <rect width="144" height="120" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="xWnHqndZXovDEcGWJMVVaR"/>
-  <rect x="12" y="12" width="28" height="20" rx="4" fill="#A32D2D" data-page-node-id="GuasyonCLLtLheepr8Pguv"/>
+  <rect width="144" height="120" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="xWnHqndZXovDEcGWJMVVaR"></rect>
+  <rect x="12" y="12" width="28" height="20" rx="4" fill="#A32D2D" data-page-node-id="GuasyonCLLtLheepr8Pguv"></rect>
   <text x="26" y="26" font-size="11" font-weight="500" text-anchor="middle" fill="#FFFFFF" data-page-node-id="kShFXh3Hy60Wr5FQ7h8aaY">L4</text>
   <text x="72" y="26" font-size="13" font-weight="500" fill="#791F1F" data-page-node-id="6IDB6X6b9JOYA6VoPLzqsS">时间收盘</text>
   <text x="12" y="56" font-size="12" fill="#5F5E5A" data-page-node-id="AcxgQK9fUW7r8u5ODsnv6X">兜底</text>
-  <line x1="12" y1="68" x2="132" y2="68" stroke="#F09595" stroke-width="0.5" data-page-node-id="sYmIHdODEoyCRHLs8E4KC2"/>
+  <line x1="12" y1="68" x2="132" y2="68" stroke="#F09595" stroke-width="0.5" data-page-node-id="sYmIHdODEoyCRHLs8E4KC2"></line>
   <text x="12" y="86" font-size="11" fill="#5F5E5A" data-page-node-id="kl2yDNV7aBgTojc5kAYEe5">时间止损 + EOD</text>
   <text x="12" y="100" font-size="11" fill="#5F5E5A" data-page-node-id="V4GK8sVikSfwRmJ49ofzsf">避免隔夜跳空</text>
 </g>
-<path d="M 178 124 L 188 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="Dlvk1TfIODItiWqiR0HaNW"/>
-<path d="M 334 124 L 344 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="IKQNyPhTrqXJLFErhybXSg"/>
-<path d="M 490 124 L 500 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="rObWcrJSdLBrONBacNHcvx"/>
+<path d="M 178 124 L 188 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="Dlvk1TfIODItiWqiR0HaNW"></path>
+<path d="M 334 124 L 344 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="IKQNyPhTrqXJLFErhybXSg"></path>
+<path d="M 490 124 L 500 124" stroke="#888780" stroke-width="1" fill="none" marker-end="url(#arr)" data-page-node-id="rObWcrJSdLBrONBacNHcvx"></path>
 <text x="340" y="208" font-size="12" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="jlQDuyXiXsjovpIQBLpt3l">L1 给尺 → L2 定宽 → L3 锁利 → L4 兜底</text>
 <text x="340" y="226" font-size="11" text-anchor="middle" fill="#5F5E5A" data-page-node-id="Pxds2R9BZr1JX86GhvLxpy">缺 L1 不知止损该多远 · 缺 L2 止损宽窄与行情不匹配 · 缺 L3 浮盈回吐 · 缺 L4 隔夜跳空闷棍</text>
 </svg>
@@ -175,22 +1048,22 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <desc id="d1" data-page-node-id="udG9LCnyt0xCyIejZJI4vD">1R 等于入场价 - 初始止损, 期望值由盈亏比和胜率共同决定</desc>
 <defs data-page-node-id="DIfymwJaF7oMpzDL8IkPrT">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="SJ2ms84KSBiOu89dxNVGjN">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VwblRbMBUQqQOCIc8sBLIX"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="VwblRbMBUQqQOCIc8sBLIX"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="bpM4HsUqowO6o7r9U0lgaO">R 倍数 · 一切止盈止损的尺度</text>
 <text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="qBggcLIsuKFF3ap8Xnpy4j">把所有盈亏换算成 1R 的多少倍, 跨品种跨周期可直接比较</text>
 <g transform="translate(40,68)" data-page-node-id="MqLUHEY5eF3LXhxQZXL81R">
   <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="iOXPSpiZ9HTUvuV7NtFv5t">1R 标尺（做多示意）</text>
-  <line x1="40" y1="80" x2="280" y2="80" stroke="#888780" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="JgQQcXTbzS8Grt1Y1SBtln"/>
-  <line x1="40" y1="130" x2="280" y2="130" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="3V9j5XYCvDaGxO1XYJDgc6"/>
-  <line x1="40" y1="20" x2="280" y2="20" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="jXWcHOrBCdPdrpXQ0xYSpk"/>
+  <line x1="40" y1="80" x2="280" y2="80" stroke="#888780" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="JgQQcXTbzS8Grt1Y1SBtln"></line>
+  <line x1="40" y1="130" x2="280" y2="130" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="3V9j5XYCvDaGxO1XYJDgc6"></line>
+  <line x1="40" y1="20" x2="280" y2="20" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="jXWcHOrBCdPdrpXQ0xYSpk"></line>
   <text x="36" y="84" font-size="11" text-anchor="end" fill="#5F5E5A" data-page-node-id="VaYhiU69wxhC9M7DlCB7eK">入场</text>
   <text x="36" y="134" font-size="11" text-anchor="end" fill="#A32D2D" data-page-node-id="q8kEWbh3fAJr90GyF4naAs">−1R</text>
   <text x="36" y="24" font-size="11" text-anchor="end" fill="#3B6D11" data-page-node-id="TGweOC1YZWYcAd6sNEaGe8">+2R</text>
-  <rect x="120" y="130" width="40" height="-50" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="Uo1CkdmOI7jTeDMZRE2vp5"/>
+  <rect x="120" y="130" width="40" height="-50" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="Uo1CkdmOI7jTeDMZRE2vp5"></rect>
   <text x="140" y="109" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="SlRpu6qoFo04otuT3iQuiC">1R</text>
-  <rect x="200" y="20" width="40" height="60" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="LZVE1CpvPvRWYDwDOSV1tO"/>
+  <rect x="200" y="20" width="40" height="60" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="LZVE1CpvPvRWYDwDOSV1tO"></rect>
   <text x="220" y="54" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="DtcgXhDFTT0UxBsUCDzsSX">2R</text>
   <text x="0" y="160" font-size="11" fill="#5F5E5A" data-page-node-id="MVVNPKO0DNDegKOqPLkD82">1R = |入场价 − 初始止损|</text>
   <text x="0" y="178" font-size="11" fill="#5F5E5A" data-page-node-id="LTfrdLr1811YWaoIBYCVAZ">盈亏比 = 止盈距离 ÷ 1R</text>
@@ -200,23 +1073,23 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
   <text x="0" y="22" font-size="11" fill="#5F5E5A" data-page-node-id="rYSlyE86Dwz9ECoi0UCGxU">E = p × 盈亏比 − (1 − p)</text>
   <text x="0" y="38" font-size="11" fill="#888780" data-page-node-id="KUoZaFtPx8udSsWbCNqWc4">当 E &gt; 0 时, 长期正期望</text>
   <g transform="translate(0,52)" data-page-node-id="Dwt0Uhsw4SC15FGHdzmIiU">
-    <rect x="0" y="0" width="260" height="22" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="PPzz9pdccdykL0VieEK78i"/>
+    <rect x="0" y="0" width="260" height="22" fill="#E6F1FB" stroke="#85B7EB" stroke-width="0.5" data-page-node-id="PPzz9pdccdykL0VieEK78i"></rect>
     <text x="8" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="vCYzZMD0VBIXE3NJbN09ea">盈亏比</text>
     <text x="86" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="Brdza9RSoiI9trQfyOzFdb">门槛胜率</text>
     <text x="166" y="14" font-size="11" font-weight="500" fill="#0C447C" data-page-node-id="QEdyHLISjyk1LSZqBopwky">性质</text>
-    <rect x="0" y="22" width="260" height="22" fill="#FFFFFF" stroke="#D3D1C7" stroke-width="0.5" data-page-node-id="ksY8nMndJ7ITI4zTHFnUrQ"/>
+    <rect x="0" y="22" width="260" height="22" fill="#FFFFFF" stroke="#D3D1C7" stroke-width="0.5" data-page-node-id="ksY8nMndJ7ITI4zTHFnUrQ"></rect>
     <text x="8" y="36" font-size="11" fill="#000000" data-page-node-id="tS489C3NnxHc0CmBc1ymz4">1:1</text>
     <text x="86" y="36" font-size="11" fill="#000000" data-page-node-id="KzCHYpsDDJwCyvRMRrOTqH">50.0%</text>
     <text x="166" y="36" font-size="11" fill="#444441" data-page-node-id="KKZ0ij9bAg4ri05l0UXLdC">盈亏平衡</text>
-    <rect x="0" y="44" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="BF69IBOmDWpEKkGYo2vr88"/>
+    <rect x="0" y="44" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="BF69IBOmDWpEKkGYo2vr88"></rect>
     <text x="8" y="58" font-size="11" fill="#000000" data-page-node-id="5QfMlqFezLFpeGo6RZSjFf">1:2</text>
     <text x="86" y="58" font-size="11" fill="#000000" data-page-node-id="EbH2oCdVS1zL91DjS6BkAQ">33.3%</text>
     <text x="166" y="58" font-size="11" fill="#27500A" data-page-node-id="NhHR1X8wdu5ThD9J9b3Wxj">正期望起点</text>
-    <rect x="0" y="66" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="j79jTC0SBv2RLbONJ1FEKw"/>
+    <rect x="0" y="66" width="260" height="22" fill="#FFFFFF" stroke="#C0DD97" stroke-width="0.5" data-page-node-id="j79jTC0SBv2RLbONJ1FEKw"></rect>
     <text x="8" y="80" font-size="11" fill="#000000" data-page-node-id="i4ieaOtvV4teapHZgKOQWR">1:3</text>
     <text x="86" y="80" font-size="11" fill="#000000" data-page-node-id="zvhLLCFAjNESxvxvZA6Zqx">25.0%</text>
     <text x="166" y="80" font-size="11" fill="#27500A" data-page-node-id="eXW4xqMUUSCGzHcCuXv4fc">高容错</text>
-    <rect x="0" y="88" width="260" height="22" fill="#FFFFFF" stroke="#9FE1CB" stroke-width="0.5" data-page-node-id="sGi7DZIbyb5ApJP1OCF9Ei"/>
+    <rect x="0" y="88" width="260" height="22" fill="#FFFFFF" stroke="#9FE1CB" stroke-width="0.5" data-page-node-id="sGi7DZIbyb5ApJP1OCF9Ei"></rect>
     <text x="8" y="102" font-size="11" fill="#000000" data-page-node-id="s2ey8qIakwF2iCcyNvDn3J">1:4</text>
     <text x="86" y="102" font-size="11" fill="#000000" data-page-node-id="k4KWltURI9spWQXq0wT7LJ">20.0%</text>
     <text x="166" y="102" font-size="11" fill="#085041" data-page-node-id="KeTE2Mt77tAwCTSNmCeBKJ">顶级策略</text>
@@ -245,44 +1118,44 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <desc id="d1" data-page-node-id="iQr9EkmFHHXJsTWkHqorXw">止损宽度等于 k 倍 ATR, ATR 随行情宽窄自适应</desc>
 <defs data-page-node-id="0Ppif2IT49fcqKmzpELxY2">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="iufo3V1xRT8j0JGqZG7I3S">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="4Mm16Z2scajwl4lEXG2cWs"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="4Mm16Z2scajwl4lEXG2cWs"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="3o3mPzI8acDE3s1tD21AcE">ATR · 让 1R 自动适配当下行情</text>
 <text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="WgEaVKMoAkOH6OECuNuLFY">平静期止损收紧, 剧烈期止损放宽, 都不需要人工调参</text>
 <g transform="translate(40,72)" data-page-node-id="NtIN2FlcaAsYI841YMvCfq">
   <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="LNfncH4fhh4rVlbjfBhZTe">单根 K 线的真实波幅 (TR)</text>
-  <line x1="90" y1="40" x2="90" y2="140" stroke="#000000" stroke-width="0.5" data-page-node-id="poWn6ev35Dh5kPIUddVlKq"/>
-  <rect x="78" y="60" width="24" height="60" fill="#3B6D11" stroke="#27500A" stroke-width="0.5" data-page-node-id="TPQ6XJjzDA55eDt9ig6kbV"/>
+  <line x1="90" y1="40" x2="90" y2="140" stroke="#000000" stroke-width="0.5" data-page-node-id="poWn6ev35Dh5kPIUddVlKq"></line>
+  <rect x="78" y="60" width="24" height="60" fill="#3B6D11" stroke="#27500A" stroke-width="0.5" data-page-node-id="TPQ6XJjzDA55eDt9ig6kbV"></rect>
   <text x="112" y="44" font-size="10" fill="#5F5E5A" data-page-node-id="uGKwrMl82HWeHaK6qoJ88A">high</text>
   <text x="112" y="74" font-size="10" fill="#27500A" data-page-node-id="y8MDgUkBmVtvqkMBceHIuO">open</text>
   <text x="112" y="124" font-size="10" fill="#791F1F" data-page-node-id="LNCSnJAuEFD1E2Lzzq4Fh7">close</text>
   <text x="112" y="146" font-size="10" fill="#5F5E5A" data-page-node-id="kbIKdAnd0EvWATvTwXQkL8">low</text>
-  <line x1="60" y1="40" x2="60" y2="140" stroke="#854F0B" stroke-width="2" stroke-dasharray="2 2" data-page-node-id="g5waBlNr13kuWJFQWZA18x"/>
+  <line x1="60" y1="40" x2="60" y2="140" stroke="#854F0B" stroke-width="2" stroke-dasharray="2 2" data-page-node-id="g5waBlNr13kuWJFQWZA18x"></line>
   <text x="56" y="92" font-size="10" text-anchor="end" font-weight="500" fill="#633806" data-page-node-id="4axuxVEHMZEytKHE9GaMWv">TR</text>
 </g>
 <g transform="translate(280,72)" data-page-node-id="UjdXMagEyiUxepGC0RJm6y">
   <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="l1BVvAGZpBpMQ2hwhkm5Ln">14 根 K 线 TR 均值 = ATR(14)</text>
-  <rect x="0" y="76" width="16" height="24" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="yTh8ZqVKmg1SU1EMYcGmZ3"/>
-  <rect x="20" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="YJMGKBrrbG93jUqHlfp7WG"/>
-  <rect x="40" y="70" width="16" height="30" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="kvnQgR3ELRDWqf44srtI0l"/>
-  <rect x="60" y="58" width="16" height="42" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="5SkUyrkXoBBi3jG6kf4JUp"/>
-  <rect x="80" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="bEbriAq9fEe9ZdSRimMLlP"/>
-  <rect x="100" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="xSztqOSUwUKJrsrF3FOciN"/>
-  <rect x="120" y="52" width="16" height="48" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="JNJZSIPauuyq5u6MjTWkfp"/>
-  <rect x="140" y="34" width="16" height="66" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="0LPHZCmZFQTmd7GdBs3cCp"/>
-  <rect x="160" y="16" width="16" height="84" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="iRMSd1FqDonCjVLT22ky4A"/>
-  <rect x="180" y="28" width="16" height="72" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="1cr7dHiAFsgxmB0U7uHneU"/>
-  <rect x="200" y="46" width="16" height="54" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="BOrWnOH7SdiMMCR8OkCJpA"/>
-  <rect x="220" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="uk4BELSyDWnRWDQPKMg5Dp"/>
-  <rect x="240" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="VzyjLtMb90sYnzyqEsZ5U0"/>
-  <rect x="260" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="ETw6aD3bZeFFW6JCUWFNKf"/>
-  <line x1="0" y1="100" x2="280" y2="100" stroke="#888780" stroke-width="0.5" data-page-node-id="jiievxCYAEhFh5ij15ZosJ"/>
+  <rect x="0" y="76" width="16" height="24" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="yTh8ZqVKmg1SU1EMYcGmZ3"></rect>
+  <rect x="20" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="YJMGKBrrbG93jUqHlfp7WG"></rect>
+  <rect x="40" y="70" width="16" height="30" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="kvnQgR3ELRDWqf44srtI0l"></rect>
+  <rect x="60" y="58" width="16" height="42" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="5SkUyrkXoBBi3jG6kf4JUp"></rect>
+  <rect x="80" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="bEbriAq9fEe9ZdSRimMLlP"></rect>
+  <rect x="100" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="xSztqOSUwUKJrsrF3FOciN"></rect>
+  <rect x="120" y="52" width="16" height="48" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="JNJZSIPauuyq5u6MjTWkfp"></rect>
+  <rect x="140" y="34" width="16" height="66" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="0LPHZCmZFQTmd7GdBs3cCp"></rect>
+  <rect x="160" y="16" width="16" height="84" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="iRMSd1FqDonCjVLT22ky4A"></rect>
+  <rect x="180" y="28" width="16" height="72" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="1cr7dHiAFsgxmB0U7uHneU"></rect>
+  <rect x="200" y="46" width="16" height="54" fill="#F09595" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="BOrWnOH7SdiMMCR8OkCJpA"></rect>
+  <rect x="220" y="64" width="16" height="36" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="uk4BELSyDWnRWDQPKMg5Dp"></rect>
+  <rect x="240" y="73" width="16" height="27" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="VzyjLtMb90sYnzyqEsZ5U0"></rect>
+  <rect x="260" y="67" width="16" height="33" fill="#EF9F27" stroke="#854F0B" stroke-width="0.5" data-page-node-id="ETw6aD3bZeFFW6JCUWFNKf"></rect>
+  <line x1="0" y1="100" x2="280" y2="100" stroke="#888780" stroke-width="0.5" data-page-node-id="jiievxCYAEhFh5ij15ZosJ"></line>
   <text x="148" y="62" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="LWri1KI0bAFoPxPZ4FnHlB">波动扩张</text>
   <text x="48" y="110" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="Nf9bsg8yBrM9daZSbYAbEX">平静期</text>
 </g>
 <g transform="translate(40,196)" data-page-node-id="20gtd9gDUXf9gW2JkGmVvc">
-  <rect x="0" y="0" width="600" height="28" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="Ou5VMRh8R4JUkskCmbOujb"/>
+  <rect x="0" y="0" width="600" height="28" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="Ou5VMRh8R4JUkskCmbOujb"></rect>
   <text x="12" y="18" font-size="12" fill="#000000" data-page-node-id="Fl17xyIhiI0FvNb4MGmA7s">止损宽度 = k × ATR(14)</text>
   <text x="220" y="18" font-size="11" fill="#5F5E5A" data-page-node-id="J2ky3HTBn5n6eBaK0zspUH">IF 5min 推荐 k_sl = 2.0, k_tp = 4.0（即 1:2 盈亏比）</text>
 </g>
@@ -295,57 +1168,58 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
   <h3 data-page-node-id="KhlV8Tz1Nq6GbSoEz1lFyi">三个阶段</h3>
   <ol data-page-node-id="iSgzcfyiaPsFwdtHxJynE7">
     <li data-page-node-id="rSfG5BeFBCB0Zax40aWvdM"><strong data-page-node-id="bNQTNZ5uvwEg9TzrfOVH2G">阶段 1 (初始保护)</strong>: 开仓后 SL 固定在 <code data-page-node-id="6T5psvft64Io4QK07tf2Zp">−1R</code>, 不动</li>
-    <li data-page-node-id="PEEtMpbdurd72zYZRpCss7"><strong data-page-node-id="RKMXuDf6YsuBBGw4jva9y0">阶段 2 (保本锁利)</strong>: 浮盈 ≥ 1R 时, SL 抬到入场价 (保本, 不亏钱)</li>
-    <li data-page-node-id="5tezchnMrUGd5yFBRDDMUm"><strong data-page-node-id="Oh81mJsmsThFJY2OsADUI5">阶段 3 (顺势跟踪)</strong>: 浮盈 ≥ 2R 时, SL 用 <code data-page-node-id="L9BgTwKfQtlkdzwYZoJLiu">k_trail × ATR</code> 步长跟着价格创新高而抬升</li>
+    <li data-page-node-id="PEEtMpbdurd72zYZRpCss7"><strong data-page-node-id="RKMXuDf6YsuBBGw4jva9y0">阶段 2 (保本锁利)</strong>: 浮盈 ≥ 1R 时, SL 抬到「入场价 + <code data-page-node-id="beBufL3a">breakeven_buffer_ticks</code> tick」保本位 (覆盖往返手续费+滑点, 真正不亏钱)</li>
+    <li data-page-node-id="5tezchnMrUGd5yFBRDDMUm"><strong data-page-node-id="Oh81mJsmsThFJY2OsADUI5">阶段 3 (顺势跟踪)</strong>: 浮盈 ≥ 2R 时<strong>不触发硬止盈</strong>（B 方案），SL 改用 <code data-page-node-id="L9BgTwKfQtlkdzwYZoJLiu">trailing_atr_multiple × ATR</code> 缓冲跟着价格创新高而抬升，形成向上倾斜的止盈线</li>
   </ol>
   <h3 data-page-node-id="Uq2FOIpYCiOzLqboR1eB30">关键参数</h3>
   <ul data-page-node-id="hcWbzFhfGB4SxIUtYyOMtp">
     <li data-page-node-id="PhXDyNIaIrWDB1sSqS2zp4"><code data-page-node-id="UCkSaQYK5ZV5lECt7tTSSt">breakeven_trigger_r</code>: 触发保本的浮盈门槛 (默认 1.0, 即 1R)</li>
-    <li data-page-node-id="9E6pCWbdba00uYleKBaNLk"><code data-page-node-id="L7Vx4qkXEpAQIileoDp1x2">trailing_trigger_r</code>: 启动 ATR 跟踪的浮盈门槛 (默认 2.0, 即 2R)</li>
-    <li data-page-node-id="Tl3NSAfhRl9Gu64N9caOzU"><code data-page-node-id="mWGVH7DoVrN1nz670ewCga">trailing_atr_multiple</code>: 跟踪步长 (默认 1.5 × ATR, 留点缓冲避免被洗出)</li>
-    <li data-page-node-id="RvE37E3WbtCJn6sC6IIwTk"><code data-page-node-id="pZhzcMV9b7c24NZ7pAQWJ9">trailing_step_mode</code>: "high_water" (创新高才抬) vs "every_bar" (每根都抬), 默认前者</li>
+    <li data-page-node-id="beBufTicksL3"><code data-page-node-id="beBufTicksL3c">breakeven_buffer_ticks</code>: 保本位缓冲 tick 数 (覆盖往返手续费+滑点; 品种差异化 IF/IH=2、IC/IM=3)</li>
+    <li data-page-node-id="9E6pCWbdba00uYleKBaNLk"><code data-page-node-id="L7Vx4qkXEpAQIileoDp1x2">trailing_trigger_r</code>: 启动 ATR 跟踪的浮盈门槛 (默认 2.0, 即 2R; B 方案下代替硬止盈)</li>
+    <li data-page-node-id="Tl3NSAfhRl9Gu64N9caOzU"><code data-page-node-id="mWGVH7DoVrN1nz670ewCga">trailing_atr_multiple</code>: 跟踪缓冲 (默认 1.0 × ATR)。初始 R ≥ 2×ATR，故最坏回吐 = 1.0/2 × R = 0.5R，2R 利润最多回吐 25%</li>
+    <li data-page-node-id="RvE37E3WbtCJn6sC6IIwTk"><code data-page-node-id="pZhzcMV9b7c24NZ7pAQWJ9">跟踪方向</code>: 只朝有利方向抬 (high-water 极值 <code data-page-node-id="trailBestL3">_trail_best</code>), 不随回落下调; 无 every_bar 模式</li>
   </ul>
-  <div class="callout-green callout" data-page-node-id="F2JhxoropucRgHO1AUok0j">为什么保本是 1R 而不是 0? 因为行情有手续费和滑点, 必须给点 buffer 让交易商先赚到钱再走。1R 对应 1:2 盈亏比, 是合理的入场回报起点。</div>
+  <div class="callout-green callout" data-page-node-id="F2JhxoropucRgHO1AUok0j">为什么保本要留 buffer? 回撤到入场价才出场, 往返手续费+滑点会让你实际净亏。所以保本位 = 入场价 + <code>breakeven_buffer_ticks</code> tick (品种差异化: IF/IH=2、IC/IM=3), 先把成本垫出来, 真正做到"不亏钱"。</div>
 </div>
 <div class="svg-wrap" data-page-node-id="3bBlgw1tkzHWwnBDtPLYbu"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 280" width="100%" role="img" aria-labelledby="t1 d1" data-page-node-id="0zq1nzhVuhhCVrRBB7FUUm">
 <title id="t1">移动止损与保本锁利</title>
 <desc id="d1" data-page-node-id="0C0N6tYKLfXDAXGdKS3hSv">价格创新高时顺势抬 SL, 触发 1R 后把 SL 抬到入场价保本, 触发 2R 后用 k×ATR 跟踪</desc>
 <defs data-page-node-id="yFhwXdAKu8WMh0CI0AilE3">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="eDaAbfFhMMCcuWO3ktOQvl">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="ayEQJDst5FINLvdassEIaV"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="ayEQJDst5FINLvdassEIaV"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="f3e8YmYAm4jvCfugIo85IS">移动止损 · 把纸面利润固化下来</text>
 <text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="tUbzRegFBE1jiCyp1pHXMK">三个阶段: 初始保护 → 触发 1R 保本 → 触发 2R 用 ATR 跟踪</text>
-<polyline points="80,180 160,150 240,165 320,130 400,100 480,120 560,80" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="MyAfwCbrookNvcOo4JE3gZ"/>
-<circle cx="80" cy="180" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="XH8s6ZYHV5DA1nKLL3AGH5"/>
-<circle cx="160" cy="150" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="VXiSmgpgvFSxQpj1gA4gej"/>
-<circle cx="240" cy="165" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="Y70vHHAF9kmegBmKUOswPI"/>
-<circle cx="320" cy="130" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="69s9yLtjxjGgMFvdsySS19"/>
-<circle cx="400" cy="100" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="sOC40P9GdfAF7GD3eLsLEc"/>
-<circle cx="480" cy="120" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="mEVbYYi7UWxPeUfC2kW22P"/>
-<circle cx="560" cy="80" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="s9BaBzAWzGuJnQAmpWPwbJ"/>
-<line x1="40" y1="165" x2="640" y2="165" stroke="#888780" stroke-width="0.5" stroke-dasharray="3 3" data-page-node-id="HCWvB0nSNJSWFhuAril6jy"/>
+<polyline points="80,180 160,150 240,165 320,130 400,100 480,120 560,80" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="MyAfwCbrookNvcOo4JE3gZ"></polyline>
+<circle cx="80" cy="180" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="XH8s6ZYHV5DA1nKLL3AGH5"></circle>
+<circle cx="160" cy="150" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="VXiSmgpgvFSxQpj1gA4gej"></circle>
+<circle cx="240" cy="165" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="Y70vHHAF9kmegBmKUOswPI"></circle>
+<circle cx="320" cy="130" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="69s9yLtjxjGgMFvdsySS19"></circle>
+<circle cx="400" cy="100" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="sOC40P9GdfAF7GD3eLsLEc"></circle>
+<circle cx="480" cy="120" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="mEVbYYi7UWxPeUfC2kW22P"></circle>
+<circle cx="560" cy="80" r="3" fill="#FFFFFF" stroke="#185FA5" stroke-width="1" data-page-node-id="s9BaBzAWzGuJnQAmpWPwbJ"></circle>
+<line x1="40" y1="165" x2="640" y2="165" stroke="#888780" stroke-width="0.5" stroke-dasharray="3 3" data-page-node-id="HCWvB0nSNJSWFhuAril6jy"></line>
 <text x="46" y="177" font-size="10" fill="#5F5E5A" data-page-node-id="twu3db7Rss3WpZFNwdNe7w">入场</text>
-<line x1="40" y1="195" x2="240" y2="195" stroke="#A32D2D" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="XjlLCPCDMd4ApNxJ9rdHAt"/>
+<line x1="40" y1="195" x2="240" y2="195" stroke="#A32D2D" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="XjlLCPCDMd4ApNxJ9rdHAt"></line>
 <text x="46" y="207" font-size="10" fill="#791F1F" data-page-node-id="0s9SvopkWu08apgmjuU4C8">SL₁ −1R</text>
-<line x1="240" y1="165" x2="400" y2="165" stroke="#854F0B" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="EVrUpEqA1utCT5fl7SQsoa"/>
+<line x1="240" y1="165" x2="400" y2="165" stroke="#854F0B" stroke-width="0.5" stroke-dasharray="2 2" data-page-node-id="EVrUpEqA1utCT5fl7SQsoa"></line>
 <text x="246" y="177" font-size="10" fill="#633806" data-page-node-id="RryuerXSfS6XKCNcsvrqxc">SL₂ 保本</text>
-<polyline points="400,155 480,130 560,100" fill="none" stroke="#3B6D11" stroke-width="1" stroke-dasharray="3 2" data-page-node-id="FRxvGTgQxm409nX0710vcb"/>
-<circle cx="400" cy="155" r="2.5" fill="#3B6D11" data-page-node-id="R6YtFKWtow6clk3iL3iaRH"/>
-<circle cx="480" cy="130" r="2.5" fill="#3B6D11" data-page-node-id="H27VV8m6okiJYF6JprbXTS"/>
-<circle cx="560" cy="100" r="2.5" fill="#3B6D11" data-page-node-id="dDkEPx3uh652dXtswvQGOe"/>
+<polyline points="400,155 480,130 560,100" fill="none" stroke="#3B6D11" stroke-width="1" stroke-dasharray="3 2" data-page-node-id="FRxvGTgQxm409nX0710vcb"></polyline>
+<circle cx="400" cy="155" r="2.5" fill="#3B6D11" data-page-node-id="R6YtFKWtow6clk3iL3iaRH"></circle>
+<circle cx="480" cy="130" r="2.5" fill="#3B6D11" data-page-node-id="H27VV8m6okiJYF6JprbXTS"></circle>
+<circle cx="560" cy="100" r="2.5" fill="#3B6D11" data-page-node-id="dDkEPx3uh652dXtswvQGOe"></circle>
 <text x="566" y="100" font-size="10" fill="#27500A" data-page-node-id="C4DTtMdcUNMVtLezRgygVY">SL₃ ATR 跟踪</text>
-<line x1="240" y1="70" x2="240" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="scZQZyVn9G5ddbI8vubHKr"/>
-<line x1="400" y1="70" x2="400" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="CsmoAwdD5QPZsca9RFeLdB"/>
+<line x1="240" y1="70" x2="240" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="scZQZyVn9G5ddbI8vubHKr"></line>
+<line x1="400" y1="70" x2="400" y2="220" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="CsmoAwdD5QPZsca9RFeLdB"></line>
 <text x="140" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#791F1F" data-page-node-id="sgPKkLeW9NSJOH7unJew3x">阶段 1 · 初始保护</text>
 <text x="320" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#633806" data-page-node-id="TvRgKxqDC8Wnio7KJPurKY">阶段 2 · 保本锁利</text>
 <text x="520" y="60" font-size="11" font-weight="500" text-anchor="middle" fill="#27500A" data-page-node-id="cftVhjkpE5gpszPW6nbvrP">阶段 3 · 顺势跟踪</text>
 <g transform="translate(40,240)" data-page-node-id="GuzsZA7bwpNzkhmHFBL9sa">
-  <rect x="0" y="0" width="600" height="28" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="5DdzLb58IHvI6DC3qrHqOT"/>
+  <rect x="0" y="0" width="600" height="28" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="5DdzLb58IHvI6DC3qrHqOT"></rect>
   <text x="12" y="18" font-size="11" fill="#000000" data-page-node-id="rDxkc6mhMZc9IlEqOa4JPj">保本触发 = 浮盈 ≥ 1R</text>
   <text x="200" y="18" font-size="11" fill="#000000" data-page-node-id="oQrJAhAVW7rJgE5jSJNCT4">跟踪触发 = 浮盈 ≥ 2R</text>
-  <text x="380" y="18" font-size="11" fill="#000000" data-page-node-id="ahVtR6Z67S5JZ6C5ejIhsF">跟踪步长 = 1.5 × ATR</text>
+  <text x="380" y="18" font-size="11" fill="#000000" data-page-node-id="ahVtR6Z67S5JZ6C5ejIhsF">跟踪缓冲 = 1.0 × ATR</text>
 </g>
 </svg>
 </div>
@@ -370,7 +1244,7 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <desc id="d1" data-page-node-id="e4G7Fh4u1daNmP3pl7FL67">持仓超过 N 根 bar 仍未按预期发展则强制出场, 收盘前清仓避免隔夜跳空</desc>
 <defs data-page-node-id="pTDAReTugcYDbOMeIheoDi">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="msyyhLcPVD7dMVouN6zY99">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="yBlE4wew9ourV62X3fIrgT"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="yBlE4wew9ourV62X3fIrgT"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="FWivROp8FSjIGncUP0iAPi">时间止损 + 收盘强平</text>
@@ -378,25 +1252,25 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <g transform="translate(40,70)" data-page-node-id="1YuB7fSXaPmU0iLH5Scau2">
   <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="OrNB6OdDhPeoFHVNtwxEBA">时间止损决策</text>
   <g transform="translate(0,16)" data-page-node-id="j1y4vlAISgrHb7975DvODD">
-    <rect x="0" y="0" width="100" height="32" rx="6" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="b8ctyOsjAIejBu4WNlADAB"/>
+    <rect x="0" y="0" width="100" height="32" rx="6" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5" data-page-node-id="b8ctyOsjAIejBu4WNlADAB"></rect>
     <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#0C447C" data-page-node-id="FhvNKfpGWkMcQ3xXCtpefV">开仓</text>
   </g>
   <g transform="translate(0,72)" data-page-node-id="1oOUAK1L6AGCML3bReskoG">
-    <rect x="0" y="0" width="100" height="48" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="7eOKc1QLGwl3IguE9Kb8eW"/>
+    <rect x="0" y="0" width="100" height="48" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5" data-page-node-id="7eOKc1QLGwl3IguE9Kb8eW"></rect>
     <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#633806" data-page-node-id="BOaiR82nuJWxLabM6g9aWi">持有 ≥ N bar?</text>
     <text x="50" y="36" font-size="10" text-anchor="middle" fill="#5F5E5A" data-page-node-id="wwbgE0NNDBayHok0vvM8On">默认 N=30</text>
   </g>
   <g transform="translate(140,72)" data-page-node-id="6avdYbdCqV9sNBfhkQjhGS">
-    <rect x="0" y="0" width="80" height="32" rx="6" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="FGEh0QsqBCCU8C5Gp2NJJi"/>
+    <rect x="0" y="0" width="80" height="32" rx="6" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5" data-page-node-id="FGEh0QsqBCCU8C5Gp2NJJi"></rect>
     <text x="40" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#27500A" data-page-node-id="OPMEN8PnxDoMdyRfpLhweV">继续持有</text>
   </g>
   <g transform="translate(0,144)" data-page-node-id="83e3jS0sr5Ab1VVNO1mgve">
-    <rect x="0" y="0" width="100" height="32" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="ALI4IxiU8lPRmEQ7OqGk6Z"/>
+    <rect x="0" y="0" width="100" height="32" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5" data-page-node-id="ALI4IxiU8lPRmEQ7OqGk6Z"></rect>
     <text x="50" y="20" font-size="11" font-weight="500" text-anchor="middle" fill="#791F1F" data-page-node-id="KigMWylXDfUI5QsTan4vPI">时间止损平仓</text>
   </g>
-  <line x1="50" y1="48" x2="50" y2="72" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="Kz0MiCRgdiPFl26F2ARzUq"/>
-  <line x1="100" y1="96" x2="140" y2="96" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="G31ylHUXhBZjZm39nl3Fes"/>
-  <line x1="50" y1="120" x2="50" y2="144" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="4ZHuQP0pYHODvHntecSo0U"/>
+  <line x1="50" y1="48" x2="50" y2="72" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="Kz0MiCRgdiPFl26F2ARzUq"></line>
+  <line x1="100" y1="96" x2="140" y2="96" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="G31ylHUXhBZjZm39nl3Fes"></line>
+  <line x1="50" y1="120" x2="50" y2="144" stroke="#888780" stroke-width="1" marker-end="url(#arr)" data-page-node-id="4ZHuQP0pYHODvHntecSo0U"></line>
   <text x="120" y="92" font-size="10" fill="#27500A" data-page-node-id="hffFBg3724zWRg7AUmLjVz">否</text>
   <text x="58" y="136" font-size="10" fill="#791F1F" data-page-node-id="ga6Azwdr4zd2WHc4XXFYtm">是</text>
 </g>
@@ -404,22 +1278,22 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
   <text x="0" y="0" font-size="12" font-weight="500" fill="#000000" data-page-node-id="rTWp0t3rSQEA92H4at0sy3">收盘强平 (EOD)</text>
   <text x="0" y="18" font-size="11" fill="#5F5E5A" data-page-node-id="uMbhRSSfoUgUdrMxkLUcKH">每日 14:55 触发, 所有持仓以市价/对手价清仓</text>
   <g transform="translate(0,38)" data-page-node-id="F4HrMJKx2uc0NDMlpzDWkZ">
-    <line x1="0" y1="40" x2="280" y2="40" stroke="#888780" stroke-width="1" data-page-node-id="eiCi5Mr3VBjfZoYBd3lun9"/>
-    <line x1="0" y1="36" x2="0" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="CDyYPNLH40GihGO1iXfrFT"/>
+    <line x1="0" y1="40" x2="280" y2="40" stroke="#888780" stroke-width="1" data-page-node-id="eiCi5Mr3VBjfZoYBd3lun9"></line>
+    <line x1="0" y1="36" x2="0" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="CDyYPNLH40GihGO1iXfrFT"></line>
     <text x="0" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="3L21n0i1X1IJUcCcGDgGgl">09:30</text>
-    <line x1="50" y1="36" x2="50" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="DF5KqSMlaD6NeOkauDEtN3"/>
+    <line x1="50" y1="36" x2="50" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="DF5KqSMlaD6NeOkauDEtN3"></line>
     <text x="50" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="oN3698WByhodGL4DuZSiKX">10:30</text>
-    <line x1="100" y1="36" x2="100" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="t0uyxBMt2OCXGE6AvZr73f"/>
+    <line x1="100" y1="36" x2="100" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="t0uyxBMt2OCXGE6AvZr73f"></line>
     <text x="100" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="ntjTRcDCWNNTsEiY9F2PgE">11:30</text>
-    <line x1="150" y1="36" x2="150" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="iEd7dzYeiTHhFoJfxMDP6j"/>
+    <line x1="150" y1="36" x2="150" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="iEd7dzYeiTHhFoJfxMDP6j"></line>
     <text x="150" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="29HTcrlX8z0ykaRJgHigGb">13:30</text>
-    <line x1="200" y1="36" x2="200" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="wGtiAlPuQUSwkyBCvhDwvp"/>
+    <line x1="200" y1="36" x2="200" y2="44" stroke="#888780" stroke-width="1" data-page-node-id="wGtiAlPuQUSwkyBCvhDwvp"></line>
     <text x="200" y="58" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="43mhVUwbpkavw4ln1VveJn">14:30</text>
-    <line x1="240" y1="36" x2="240" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="cJgA4t0nzYlAgyyEdS7p2j"/>
+    <line x1="240" y1="36" x2="240" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="cJgA4t0nzYlAgyyEdS7p2j"></line>
     <text x="240" y="58" font-size="10" text-anchor="middle" fill="#A32D2D" data-page-node-id="PqTr8DL1BCD08iv8AiTnCA">14:55</text>
-    <line x1="280" y1="36" x2="280" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="BHFUiNpNZ5z4TyIsHN2P5x"/>
+    <line x1="280" y1="36" x2="280" y2="44" stroke="#A32D2D" stroke-width="1" data-page-node-id="BHFUiNpNZ5z4TyIsHN2P5x"></line>
     <text x="280" y="58" font-size="10" text-anchor="middle" fill="#A32D2D" data-page-node-id="f1BgZIUCano3GFcxzjwN6c">15:00</text>
-    <line x1="240" y1="20" x2="240" y2="60" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="a76UNZniJxZQu2YDTgFHZk"/>
+    <line x1="240" y1="20" x2="240" y2="60" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="a76UNZniJxZQu2YDTgFHZk"></line>
     <text x="240" y="14" font-size="10" text-anchor="middle" fill="#791F1F" font-weight="500" data-page-node-id="TBXU1ziXqaTrWY28VXcdiZ">强平触发</text>
   </g>
   <text x="0" y="120" font-size="11" fill="#5F5E5A" data-page-node-id="0eyG4CihZEijmiDuTMcPBE">原因: 期货保证金按结算价计, 隔夜跳空风险不可控</text>
@@ -444,81 +1318,81 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 <desc id="d1" data-page-node-id="95EvewHGAvQmv81jMqnzbY">同一笔交易上四层规则如何按时间顺序作用: 入场 → 初始止损 → 1R 保本 → 2R 跟踪 → 时间/收盘兜底</desc>
 <defs data-page-node-id="c6X6SAd17TQCjpzpxj9kZi">
   <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse" data-page-node-id="gq3AY4XSOEFvwLJcUeLPde">
-    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="lkgLHvsQtWqchWudInu9zD"/>
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" data-page-node-id="lkgLHvsQtWqchWudInu9zD"></path>
   </marker>
 </defs>
 <text x="340" y="22" font-size="14" font-weight="500" text-anchor="middle" fill="#000000" data-page-node-id="dFwSGavB0fWrqeiUT4AscO">一笔交易 · 四层规则时间线</text>
 <text x="340" y="40" font-size="12" fill="#5F5E5A" text-anchor="middle" data-page-node-id="jLEdoya4imXD24ts0Mc6fC">从开仓到平仓, 看四层规则如何按价位和持仓时间依次发挥作用</text>
 <g transform="translate(40,72)" data-page-node-id="wGOznBZ3ErG87VxpojAWtF">
-  <rect x="0" y="0" width="600" height="130" fill="#FFFFFF" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" rx="4" data-page-node-id="JSl2Tqpwkq5ftJBXnWW2Jd"/>
-    <line x1="0.0" y1="124" x2="0.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="sEfaeiqKpNvb63HS7DwInG"/>
-    <line x1="20.0" y1="124" x2="20.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="aTMSqC647USpJIlV73yr61"/>
-    <line x1="40.0" y1="124" x2="40.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QlHwH4Vfvq6oF1Bw85Z9AS"/>
-    <line x1="60.0" y1="124" x2="60.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5GomyUDL0unBp3ZPkC3HRz"/>
-    <line x1="80.0" y1="124" x2="80.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="4cguVRwFCKPEln5NsDkOKP"/>
-    <line x1="100.0" y1="124" x2="100.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="8KN334G9T3WIkrgXZLTJEi"/>
-    <line x1="120.0" y1="124" x2="120.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XWOWkSCrn8ypPSBeoLHOmv"/>
-    <line x1="140.0" y1="124" x2="140.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="wVTmRlKctoSctqdHerHPQB"/>
-    <line x1="160.0" y1="124" x2="160.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="oA5GHB6bK2Y0OYyBCQmPbG"/>
-    <line x1="180.0" y1="124" x2="180.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="fHOz2nYma3QAaAuW1uFYAz"/>
-    <line x1="200.0" y1="124" x2="200.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="tbh7GJeANZAG2OUftLdBEz"/>
-    <line x1="220.0" y1="124" x2="220.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="cKBWXxTjXg467wNBVEkDeK"/>
-    <line x1="240.0" y1="124" x2="240.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="ZvUjJwXEBId99LmzPwnpTj"/>
-    <line x1="260.0" y1="124" x2="260.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MoebCKnbznUHqSI5nnQqvb"/>
-    <line x1="280.0" y1="124" x2="280.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5Gca4EN8n6b87Ais3GSK7O"/>
-    <line x1="300.0" y1="124" x2="300.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MvFaNCrNZniOsjgCBXjNMT"/>
-    <line x1="320.0" y1="124" x2="320.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="L6NqEiFwMuRQiXiNdQthUP"/>
-    <line x1="340.0" y1="124" x2="340.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OEMPzb7BCoMOfOijKeSaBj"/>
-    <line x1="360.0" y1="124" x2="360.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="plVJ3iqWqIpahfC2ykAYIr"/>
-    <line x1="380.0" y1="124" x2="380.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="7AfJHecA8Hig26nuHsEaPE"/>
-    <line x1="400.0" y1="124" x2="400.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="9AnMIiN6sVqelbqQEexqNa"/>
-    <line x1="420.0" y1="124" x2="420.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XGkTBCH1jEUB6sVBwux2E6"/>
-    <line x1="440.0" y1="124" x2="440.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="0678lmTDKGMnNhac0Xht28"/>
-    <line x1="460.0" y1="124" x2="460.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OLiYQcuJ7MNLeAbCSb1B99"/>
-    <line x1="480.0" y1="124" x2="480.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QCZTWHT4wZHfdG39lrJiT7"/>
-    <line x1="500.0" y1="124" x2="500.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="COWpcNPkiffyiXTEjQzJcI"/>
-    <line x1="520.0" y1="124" x2="520.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="kTrgSKKpxI3Q4jLBv7Agm1"/>
-    <line x1="540.0" y1="124" x2="540.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="D2s9J0tddeYaoTWDYmsnJz"/>
-    <line x1="560.0" y1="124" x2="560.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="enDgFEXATW72qhBJCB1ayA"/>
-    <line x1="580.0" y1="124" x2="580.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="S1sru6WDFEvNSX2PNKmLLr"/>
-    <line x1="600.0" y1="124" x2="600.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="SVe5xTza2QyJATA45QlW2f"/>
+  <rect x="0" y="0" width="600" height="130" fill="#FFFFFF" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" rx="4" data-page-node-id="JSl2Tqpwkq5ftJBXnWW2Jd"></rect>
+    <line x1="0.0" y1="124" x2="0.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="sEfaeiqKpNvb63HS7DwInG"></line>
+    <line x1="20.0" y1="124" x2="20.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="aTMSqC647USpJIlV73yr61"></line>
+    <line x1="40.0" y1="124" x2="40.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QlHwH4Vfvq6oF1Bw85Z9AS"></line>
+    <line x1="60.0" y1="124" x2="60.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5GomyUDL0unBp3ZPkC3HRz"></line>
+    <line x1="80.0" y1="124" x2="80.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="4cguVRwFCKPEln5NsDkOKP"></line>
+    <line x1="100.0" y1="124" x2="100.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="8KN334G9T3WIkrgXZLTJEi"></line>
+    <line x1="120.0" y1="124" x2="120.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XWOWkSCrn8ypPSBeoLHOmv"></line>
+    <line x1="140.0" y1="124" x2="140.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="wVTmRlKctoSctqdHerHPQB"></line>
+    <line x1="160.0" y1="124" x2="160.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="oA5GHB6bK2Y0OYyBCQmPbG"></line>
+    <line x1="180.0" y1="124" x2="180.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="fHOz2nYma3QAaAuW1uFYAz"></line>
+    <line x1="200.0" y1="124" x2="200.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="tbh7GJeANZAG2OUftLdBEz"></line>
+    <line x1="220.0" y1="124" x2="220.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="cKBWXxTjXg467wNBVEkDeK"></line>
+    <line x1="240.0" y1="124" x2="240.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="ZvUjJwXEBId99LmzPwnpTj"></line>
+    <line x1="260.0" y1="124" x2="260.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MoebCKnbznUHqSI5nnQqvb"></line>
+    <line x1="280.0" y1="124" x2="280.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="5Gca4EN8n6b87Ais3GSK7O"></line>
+    <line x1="300.0" y1="124" x2="300.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="MvFaNCrNZniOsjgCBXjNMT"></line>
+    <line x1="320.0" y1="124" x2="320.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="L6NqEiFwMuRQiXiNdQthUP"></line>
+    <line x1="340.0" y1="124" x2="340.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OEMPzb7BCoMOfOijKeSaBj"></line>
+    <line x1="360.0" y1="124" x2="360.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="plVJ3iqWqIpahfC2ykAYIr"></line>
+    <line x1="380.0" y1="124" x2="380.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="7AfJHecA8Hig26nuHsEaPE"></line>
+    <line x1="400.0" y1="124" x2="400.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="9AnMIiN6sVqelbqQEexqNa"></line>
+    <line x1="420.0" y1="124" x2="420.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="XGkTBCH1jEUB6sVBwux2E6"></line>
+    <line x1="440.0" y1="124" x2="440.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="0678lmTDKGMnNhac0Xht28"></line>
+    <line x1="460.0" y1="124" x2="460.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="OLiYQcuJ7MNLeAbCSb1B99"></line>
+    <line x1="480.0" y1="124" x2="480.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="QCZTWHT4wZHfdG39lrJiT7"></line>
+    <line x1="500.0" y1="124" x2="500.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="COWpcNPkiffyiXTEjQzJcI"></line>
+    <line x1="520.0" y1="124" x2="520.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="kTrgSKKpxI3Q4jLBv7Agm1"></line>
+    <line x1="540.0" y1="124" x2="540.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="D2s9J0tddeYaoTWDYmsnJz"></line>
+    <line x1="560.0" y1="124" x2="560.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="enDgFEXATW72qhBJCB1ayA"></line>
+    <line x1="580.0" y1="124" x2="580.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="S1sru6WDFEvNSX2PNKmLLr"></line>
+    <line x1="600.0" y1="124" x2="600.0" y2="130" stroke="rgba(0,0,0,0.15)" stroke-width="0.5" data-page-node-id="SVe5xTza2QyJATA45QlW2f"></line>
     <text x="0.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="nNCw1bpr1oC1iMBnuWvwtw">1</text>
     <text x="200.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="qCQCVaDfEkcmElkXMUk2Au">10</text>
     <text x="400.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="dye9bGJGkJGmV0yK9drgzN">20</text>
     <text x="600.0" y="146" font-size="10" text-anchor="middle" fill="#888780" data-page-node-id="POYpmKsknR5ZM2nyTJOui8">30</text>
     <text x="600" y="146" font-size="10" text-anchor="end" fill="#888780" data-page-node-id="vWFAbSNnjF5caYB5gSTwUz">bar #</text>
-  <polyline points="10.0,33.6 30.0,32.3 50.0,30.9 70.0,28.9 90.0,27.5 110.0,26.2 130.0,25.4 150.0,24.7 170.0,24.0 190.0,23.0 210.0,21.9 230.0,20.6 250.0,19.7 270.0,19.7 290.0,19.7 310.0,19.7 330.0,19.7 350.0,19.7 370.0,19.7 390.0,19.7 410.0,19.7 430.0,19.7 450.0,19.7 470.0,19.7 490.0,19.7 510.0,19.7 530.0,19.7 550.0,19.7 570.0,19.7 590.0,19.7" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="P1URYXrDMS4wy5b0rPCnfw"/>
-  <circle cx="50.0" cy="30.920000000000016" r="3.5" fill="#185FA5" data-page-node-id="owaKTPaECb1NF8kcF76OUm"/>
+  <polyline points="10.0,33.6 30.0,32.3 50.0,30.9 70.0,28.9 90.0,27.5 110.0,26.2 130.0,25.4 150.0,24.7 170.0,24.0 190.0,23.0 210.0,21.9 230.0,20.6 250.0,19.7 270.0,19.7 290.0,19.7 310.0,19.7 330.0,19.7 350.0,19.7 370.0,19.7 390.0,19.7 410.0,19.7 430.0,19.7 450.0,19.7 470.0,19.7 490.0,19.7 510.0,19.7 530.0,19.7 550.0,19.7 570.0,19.7 590.0,19.7" fill="none" stroke="#185FA5" stroke-width="1.5" data-page-node-id="P1URYXrDMS4wy5b0rPCnfw"></polyline>
+  <circle cx="50.0" cy="30.920000000000016" r="3.5" fill="#185FA5" data-page-node-id="owaKTPaECb1NF8kcF76OUm"></circle>
   <text x="50.0" y="22.920000000000016" font-size="10" text-anchor="middle" fill="#0C447C" data-page-node-id="5wFiKivnOWivsC33enJ3De">开仓</text>
-  <polyline points="10.0,56.9 30.0,56.9 50.0,56.9 70.0,56.9 90.0,56.9 110.0,56.9 130.0,56.9 150.0,56.9 170.0,56.9 190.0,56.9 210.0,56.9 230.0,56.9 250.0,56.9 270.0,56.9 290.0,56.9 310.0,56.9 330.0,-21.1 350.0,-19.3 370.0,-17.5 390.0,-15.7 410.0,-13.9 430.0,-12.1 450.0,-10.3 470.0,-8.5 490.0,-6.7 510.0,-4.9 530.0,-3.1 550.0,-1.3 570.0,0.5 590.0,2.3" fill="none" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="l1uGFH1wXwvZa6Uv8Q4mwE"/>
-  <circle cx="130.0" cy="56.920000000000016" r="3" fill="#854F0B" data-page-node-id="89o1qFhqMtC4J7F5yvySFW"/>
+  <polyline points="10.0,56.9 30.0,56.9 50.0,56.9 70.0,56.9 90.0,56.9 110.0,56.9 130.0,56.9 150.0,56.9 170.0,56.9 190.0,56.9 210.0,56.9 230.0,56.9 250.0,56.9 270.0,56.9 290.0,56.9 310.0,56.9 330.0,-21.1 350.0,-19.3 370.0,-17.5 390.0,-15.7 410.0,-13.9 430.0,-12.1 450.0,-10.3 470.0,-8.5 490.0,-6.7 510.0,-4.9 530.0,-3.1 550.0,-1.3 570.0,0.5 590.0,2.3" fill="none" stroke="#A32D2D" stroke-width="1" stroke-dasharray="2 2" data-page-node-id="l1uGFH1wXwvZa6Uv8Q4mwE"></polyline>
+  <circle cx="130.0" cy="56.920000000000016" r="3" fill="#854F0B" data-page-node-id="89o1qFhqMtC4J7F5yvySFW"></circle>
   <text x="130.0" y="70.92000000000002" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="5FDq4aSvLNYn2nivJc9UR1">保本触发</text>
-  <circle cx="330.0" cy="-21.079999999999984" r="3" fill="#3B6D11" data-page-node-id="h2iW5l25e9Tetzxfinf0Zb"/>
+  <circle cx="330.0" cy="-21.079999999999984" r="3" fill="#3B6D11" data-page-node-id="h2iW5l25e9Tetzxfinf0Zb"></circle>
   <text x="330.0" y="-7.079999999999984" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="eDVlO5vaazLz3HjB5Sy62e">跟踪触发</text>
-  <circle cx="470.0" cy="19.700000000000003" r="3.5" fill="#A32D2D" data-page-node-id="NS1MK8FMussnJlG5AnUiaa"/>
+  <circle cx="470.0" cy="19.700000000000003" r="3.5" fill="#A32D2D" data-page-node-id="NS1MK8FMussnJlG5AnUiaa"></circle>
   <text x="470.0" y="11.700000000000003" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="eS1OXeeICTrJuyPlTcSpxw">止盈平仓</text>
-  <rect x="0" y="100" width="120.0" height="24" fill="#FCEBEB" opacity="0.5" data-page-node-id="rkuWPE20hmfLPTec5eTfyb"/>
-  <rect x="120.0" y="100" width="200.0" height="24" fill="#FAEEDA" opacity="0.5" data-page-node-id="wzJbuwsJv8LdrCsq23qUTu"/>
-  <rect x="320.0" y="100" width="280.0" height="24" fill="#EAF3DE" opacity="0.5" data-page-node-id="CTQKEkffWkG7AEa3o23unD"/>
+  <rect x="0" y="100" width="120.0" height="24" fill="#FCEBEB" opacity="0.5" data-page-node-id="rkuWPE20hmfLPTec5eTfyb"></rect>
+  <rect x="120.0" y="100" width="200.0" height="24" fill="#FAEEDA" opacity="0.5" data-page-node-id="wzJbuwsJv8LdrCsq23qUTu"></rect>
+  <rect x="320.0" y="100" width="280.0" height="24" fill="#EAF3DE" opacity="0.5" data-page-node-id="CTQKEkffWkG7AEa3o23unD"></rect>
   <text x="60.0" y="116" font-size="10" text-anchor="middle" fill="#791F1F" data-page-node-id="nN4BpSEsC8vy63eoV9QNwP">阶段 1</text>
   <text x="220.0" y="116" font-size="10" text-anchor="middle" fill="#633806" data-page-node-id="YECro4DRprvDjlufg4VhI1">阶段 2</text>
   <text x="460.0" y="116" font-size="10" text-anchor="middle" fill="#27500A" data-page-node-id="6lQ6WNIn2dLriwDJQEId0j">阶段 3</text>
 </g>
 <g transform="translate(40,238)" data-page-node-id="SpC30fvlAk4NRcpGDpUPWA">
-  <rect x="0" y="0" width="140" height="48" rx="6" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="8GXJgqELfZpqtQAznjBkRU"/>
-  <rect x="0" y="0" width="4" height="48" rx="2" fill="#A32D2D" data-page-node-id="CXrywTa2eJJogJjhmYOArR"/>
+  <rect x="0" y="0" width="140" height="48" rx="6" fill="#FCEBEB" stroke="#F09595" stroke-width="0.5" data-page-node-id="8GXJgqELfZpqtQAznjBkRU"></rect>
+  <rect x="0" y="0" width="4" height="48" rx="2" fill="#A32D2D" data-page-node-id="CXrywTa2eJJogJjhmYOArR"></rect>
   <text x="12" y="18" font-size="11" font-weight="500" fill="#791F1F" data-page-node-id="gskeYHxkXXfO2VlyCvR8sG">L1 R 倍数</text>
   <text x="12" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="OSE9WAF7FRrakAybGwH9T0">初始止损 = 1R, 盈亏比目标 1:2</text>
-  <rect x="150" y="0" width="140" height="48" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="4O2wVe3jfaqCMfJcKTJLbj"/>
-  <rect x="150" y="0" width="4" height="48" rx="2" fill="#854F0B" data-page-node-id="114UUcdF6Rr7SvX7pzDR6w"/>
+  <rect x="150" y="0" width="140" height="48" rx="6" fill="#FAEEDA" stroke="#EF9F27" stroke-width="0.5" data-page-node-id="4O2wVe3jfaqCMfJcKTJLbj"></rect>
+  <rect x="150" y="0" width="4" height="48" rx="2" fill="#854F0B" data-page-node-id="114UUcdF6Rr7SvX7pzDR6w"></rect>
   <text x="162" y="18" font-size="11" font-weight="500" fill="#633806" data-page-node-id="Aje5gleidtOjiOmgD56mso">L2 波动率</text>
   <text x="162" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="arKCTJpyltDj92Q502vymZ">宽度 = 2×ATR, 自适应行情宽窄</text>
-  <rect x="300" y="0" width="140" height="48" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="UUmRxnytgx51bZyn7bA9tl"/>
-  <rect x="300" y="0" width="4" height="48" rx="2" fill="#3B6D11" data-page-node-id="2xEVMp8MxRht0bcJeIIGoo"/>
+  <rect x="300" y="0" width="140" height="48" rx="6" fill="#EAF3DE" stroke="#97C459" stroke-width="0.5" data-page-node-id="UUmRxnytgx51bZyn7bA9tl"></rect>
+  <rect x="300" y="0" width="4" height="48" rx="2" fill="#3B6D11" data-page-node-id="2xEVMp8MxRht0bcJeIIGoo"></rect>
   <text x="312" y="18" font-size="11" font-weight="500" fill="#27500A" data-page-node-id="t861s8JgfgBHZtQwJpyS3f">L3 移动保本</text>
   <text x="312" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="JjI4onyOpLoiTcIVlAtT93">浮盈 ≥1R 抬至保本; ≥2R ATR 跟踪</text>
-  <rect x="450" y="0" width="140" height="48" rx="6" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="0.5" data-page-node-id="HCe7kdIgcV3dNwwq8Ey8y0"/>
-  <rect x="450" y="0" width="4" height="48" rx="2" fill="#0F6E56" data-page-node-id="qaqJEltmXe5fupjgSUfZkD"/>
+  <rect x="450" y="0" width="140" height="48" rx="6" fill="#E1F5EE" stroke="#5DCAA5" stroke-width="0.5" data-page-node-id="HCe7kdIgcV3dNwwq8Ey8y0"></rect>
+  <rect x="450" y="0" width="4" height="48" rx="2" fill="#0F6E56" data-page-node-id="qaqJEltmXe5fupjgSUfZkD"></rect>
   <text x="462" y="18" font-size="11" font-weight="500" fill="#085041" data-page-node-id="6qxljD0PABZyYV1HRiQiMd">L4 时间收盘</text>
   <text x="462" y="34" font-size="10" fill="#5F5E5A" data-page-node-id="skfZ4VKwCzk43hpGGKsogg">持仓 ≥30 bar 或 14:55 强制出场</text>
 </g>
@@ -568,5 +1442,8 @@ footer { margin-top: 32px; text-align: center; color: #888780; font-size: 11px; 
 </div>
 </div>
 <footer data-page-node-id="e601DejPOSMWZtkcGpCriY">止盈止损四层策略原理 · 自包含文档 · 双击 HTML 离线可看</footer>
-</body>
-</html>
+
+
+<div data-trae-edit-ui="true" class="trae-image-download-btn" title="Download image" style="position: fixed; display: none; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 6px; background: var(--trae-bg-menu, #222427); border: 1px solid var(--trae-border-l2, rgba(255,255,255,0.12)); box-shadow: var(--trae-floating-shadow, 0px 2px 8px 0px rgba(0,0,0,0.2)); color: var(--trae-icon-default, #f5f9fe); cursor: pointer; z-index: 89990; transition: background 0.15s; pointer-events: auto;"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 2v8m0 0L5 7m3 3l3-3M3 12h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg></div></body></html>

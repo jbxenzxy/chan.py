@@ -96,7 +96,7 @@ def main():
     # 多单：R=min_r_points=2，止损=入场-2，止盈=入场+4
     pol = LayeredExitPolicy({"use_atr": False,
                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
-                             "min_r_points": 2.0})
+                             "min_r_points": 2.0, "use_trailing": False})
     plan = pol.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, spec)
     check("多单 止损 = 98（向上取整）", plan.stop_price, 98.0)
     check("多单 止盈 = 104（向下取整）", plan.tp_price, 104.0)
@@ -105,7 +105,7 @@ def main():
     # 空单镜像
     pol2 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
-                              "min_r_points": 2.0})
+                              "min_r_points": 2.0, "use_trailing": False})
     plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0), 100.0, spec)
     check("空单 止损 = 102（向下取整）", plan2.stop_price, 102.0)
     check("空单 止盈 = 96（向上取整）", plan2.tp_price, 96.0)
@@ -119,7 +119,8 @@ def main():
     print("\n[2] L2 ATR 自适应宽窄（use_atr=True，喂 15 根 TR=2 的 K 线 → ATR=2）")
     pol4 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
                               "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
-                              "min_r_points": 2.0, "stop_at_signal_extreme": False})
+                              "min_r_points": 2.0, "stop_at_signal_extreme": False,
+                              "use_trailing": False})
     feed(pol4, 15)  # 每根 h=101,l=99,c=100 → TR=2 → ATR≈2 → R=4
     plan4 = pol4.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, spec)
     check("ATR 路径 止损 = 96（R=2×ATR=4）", plan4.stop_price, 96.0)
@@ -150,6 +151,15 @@ def main():
     chk6 = pol6.check(pos6, make_bar(2100, 100, 111, 100, 111), spec, 5)
     check("保本触发 only_update", chk6.only_update if chk6 else None, True)
     check("保本新止损 = 100", chk6.plan.stop_price if chk6 else None, 100.0)
+    # 保本缓冲 >0：SL 抬到入场价之上 breakeven_buffer_ticks×tick，垫掉手续费+滑点
+    pol6b = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
+                               "r_multiple_tp": 2.0, "use_trailing": True,
+                               "breakeven_trigger_r": 1.0, "breakeven_buffer_ticks": 2.0,
+                               "trailing_trigger_r": 99.0, "trailing_distance_points": 0.0})
+    pos6b = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), spec, 5)
+    check("保本缓冲 2 tick → 止损=100.4（入场价之上）",
+          chk6b.plan.stop_price if chk6b else None, 100.4)
 
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
     pol7 = LayeredExitPolicy({"use_atr": False,
@@ -176,6 +186,15 @@ def main():
     pol12 = LayeredExitPolicy()
     check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
+    check("trailing_atr_multiple 默认 = config 1.0", pol12.trailing_atr_multiple, 1.0)
+    check("use_trailing 默认 = True（B 方案）", pol12.use_trailing, True)
+
+    print("\n[8b] B 方案（use_trailing=True 默认）：不设硬止盈，止盈交给 L3 跟踪")
+    polB = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
+                              "r_multiple_tp": 2.0, "min_r_points": 2.0})
+    planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, spec)
+    check("B 方案 tp_price = None（不硬止盈）", planB.tp_price is None, True)
+    check("B 方案 止损仍照常 = 98", planB.stop_price, 98.0)
 
     print("\n[12] L3 口径统一（best 极值）：解耦参数 + 盘中冲高回落也抬损（钉住 P8-A 场景）")
     # 解耦配置：tp=3R（130）、trailing 提前到 1.5R 启动、保本层用 trigger=99 屏蔽隔离
@@ -214,7 +233,8 @@ def main():
     print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR, min_r_points)")
     # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3
     pol20 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
-                               "r_multiple_tp": 2.0, "min_r_points": 2.0})
+                               "r_multiple_tp": 2.0, "min_r_points": 2.0,
+                               "use_trailing": False})
     plan20 = pol20.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=97.0), 100.0, spec)
     check("做多 A=entry−fractal_low=3 → 止损=97", plan20.stop_price, 97.0)
