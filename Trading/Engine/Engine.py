@@ -710,8 +710,18 @@ class TradingEngine(ReconcileMixin):
             else:
                 # ═══ 硬离场（平仓）= 记 Trade + remove 原仓 ═══
                 gross = pos.pnl_points(exit_price)
-                cost = self.spec.cost_points(pos.entry_price, exit_price,
-                                             close_today=self.spec.close_today_first)
+                # 2026-09-10：成本口径必须与 broker 实际发出的报文一致。
+                #   报文侧（SimNow._close_offset）已按被平腿的 entry_date 判今/昨仓：
+                #   昨仓发 CLOSE（平昨费率）、今仓且 close_today_first 才发 CLOSETODAY（平今费率）。
+                #   这里若仍沿用 spec.close_today_first 全局开关，会出现"实际付平昨费、
+                #   账面记平今费（0.0345%，约为平昨 15 倍）"的账实不符 —— 尤其 UNLOCK_FIRST 腿
+                #   （必为昨仓）会系统性多记成本，净利润被低估。
+                _today = (bar.date[:10] if (bar is not None and bar.date)
+                          else now_cn()[:10])
+                _is_today_leg = bool(pos.entry_date) and pos.entry_date[:10] >= _today
+                cost = self.spec.cost_points(
+                    pos.entry_price, exit_price,
+                    close_today=bool(_is_today_leg and self.spec.close_today_first))
                 net = gross - cost
                 cash = self.spec.points_to_cash(net, pos.volume)
                 bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
