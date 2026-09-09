@@ -69,7 +69,7 @@ def _default_tdx_install_dir() -> str:
     显式 .env / 环境变量仍可覆盖该默认值。
     """
     if os.name == "nt":
-        return r"C:\new_tdx_hd_test"
+        return r"D:\new_tdx_hd_test"
     return os.path.join(os.path.expanduser("~"), "tdx")
 
 

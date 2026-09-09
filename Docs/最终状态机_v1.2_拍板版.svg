@@ -1,0 +1,46 @@
+<svg viewBox="0 0 680 300" width="680" height="300" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>自动下单账户三态状态机（v1.2 拍板版）</title>
+<desc>空仓、运行、锁仓三个状态之间的转移：信号只在净敞口为零时起作用，离场一律由 L1-L3 出场策略决定。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<rect x="0" y="0" width="680" height="300" fill="#FFFFFF"/>
+
+<g>
+<rect x="60" y="108" width="150" height="70" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text x="135" y="130" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="14" font-weight="500" fill="#2C2C2A">空仓 FLAT</text>
+<text x="135" y="151" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">总持仓 = 0</text>
+<text x="135" y="170" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">等待信号</text>
+</g>
+
+<g>
+<rect x="265" y="108" width="150" height="70" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="340" y="130" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="14" font-weight="500" fill="#412402">运行 RUNNING</text>
+<text x="340" y="151" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#854F0B">净敞口 ≠ 0</text>
+<text x="340" y="170" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#854F0B">信号 → 一律忽略</text>
+</g>
+
+<g>
+<rect x="470" y="108" width="150" height="70" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="545" y="130" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="14" font-weight="500" fill="#042C53">锁仓 LOCKED</text>
+<text x="545" y="151" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#185FA5">净敞口 = 0</text>
+<text x="545" y="170" text-anchor="middle" dominant-baseline="central" font-family="system-ui,sans-serif" font-size="12" fill="#185FA5">L1-L3 不生效</text>
+</g>
+
+<path d="M175 106 C 200 68, 285 68, 306 104" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="240" y="58" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">信号 → 开新仓 1 笔 N 手</text>
+
+<path d="M374 104 C 400 68, 480 68, 506 104" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="440" y="58" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">L1-L3 → 今仓反向开仓</text>
+
+<path d="M506 182 C 480 218, 400 218, 374 182" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="440" y="240" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">信号 → 当日锁开新仓 / 昨仓锁平旧仓</text>
+
+<path d="M306 182 C 280 218, 200 218, 174 182" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="240" y="240" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#5F5E5A">L1-L3 → 昨仓平昨</text>
+
+<text x="340" y="266" text-anchor="middle" font-family="system-ui,sans-serif" font-size="12" fill="#888780">Q1=B：离场一律由 L1-L3 决定 · 信号只在净敞口为 0 时起作用</text>
+</svg>
