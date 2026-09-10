@@ -131,14 +131,17 @@ def build_engine(tmpdir):
 # [1] 枚举导入
 # ════════════════════════════════════════════════════════════════
 print("\n[1] 4 个枚举命名正确")
-check("OrderIntent 4 个值", [e.value for e in OrderIntent],
-      ["open", "unlock", "close", "lock"])
-check("PositionOrigin 3 个值（H1 增 locked）", [e.value for e in PositionOrigin],
-      ["signal_open", "unlock_upgrade", "soft_exit_lock"])
-check("ExitMode 2 个值", [e.value for e in ExitMode],
+# 断言的是"成员集合"而非"定义顺序"：枚举成员顺序无语义（详见 Types.py 枚举区注释），
+# 用 sorted() 解耦 → 今后任何一次纯可读性调序都不会再把本测试打红。
+# （2026-09-10 就因为按顺序比对，把一次无副作用的调序误报成 3 个失败。）
+check("OrderIntent 4 个值", sorted(e.value for e in OrderIntent),
+      ["close", "lock", "open", "unlock"])
+check("PositionOrigin 3 个值", sorted(e.value for e in PositionOrigin),
+      ["signal_open", "soft_exit_lock", "unlock_upgrade"])
+check("ExitMode 2 个值", sorted(e.value for e in ExitMode),
       ["hard_exit", "soft_exit"])
-check("EngineState 4 个值", [e.value for e in EngineState],
-      ["idle", "opening", "in_trade", "exiting"])
+check("EngineState 4 个值", sorted(e.value for e in EngineState),
+      ["exiting", "idle", "in_trade", "opening"])
 
 # ════════════════════════════════════════════════════════════════
 # [2] Position.origin 默认值 + 序列化兼容
@@ -444,7 +447,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [12] 旧持仓记录 to_dict/from_dict origin 双向兼容
 # ════════════════════════════════════════════════════════════════
-print("\n[12] 序列化兼容：open_first / unlock_first 双向")
+print("\n[12] 序列化兼容：SIGNAL_OPEN / UNLOCK_UPGRADE 双向")
 
 p_open = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
@@ -480,7 +483,7 @@ with tmp_dir() as tmp:
     with open(ev_path, "r", encoding="utf-8") as f:
         content = f.read()
     check("事件流含 origin", "origin" in content, True)
-    check("事件流含 open_first", "signal_open" in content, True)
+    check("事件流含 signal_open", "signal_open" in content, True)
 
 
 # ════════════════════════════════════════════════════════════════

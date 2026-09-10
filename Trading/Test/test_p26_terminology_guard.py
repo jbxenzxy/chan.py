@@ -38,6 +38,8 @@ P26 术语护栏（防"腿"及已废弃术语回潮）
   | leg / legs（英文） | pos / positions | 含 `_leg` 前缀标识符（_is_today_leg / locked_leg） |
   | 双仓              | 双向持仓        | v2 修正：自造词 |
   | 丢仓              | 丢失持仓        | v2 修正：自造缺陷名 |
+  | open_first        | SIGNAL_OPEN     | 2026-09-10 改名前的旧枚举值名 |
+  | unlock_first      | UNLOCK_UPGRADE  | 同上（p13 历史文件名除外，见下方正则） |
 
 为什么可以断言这件事
 --------------------
@@ -89,6 +91,15 @@ _BANNED_CN = {
 #   ✗ 不误伤：legal、legacy、privilege、elegant（leg 前后是字母）
 _LEG_RE = re.compile(r"(?<![A-Za-z])legs?(?![A-Za-z])", re.IGNORECASE)
 
+# 旧枚举值名（PositionOrigin 改名前的 open_first / unlock_first）。
+# 这些名字已不在 Types.py 中，但当时改名的遗漏让它们残留在注释与测试文案里
+# （如 `check("事件流含 open_first", ...)`），测试日志会误导读者以为旧名还在用。
+# 前后不得紧邻字母/下划线：
+#   ✓ 命中：来源标记 open_first、origin=unlock_first
+#   ✗ 不误伤：tests/test_p13_unlock_first_entry.py（历史文件名，unlock 前是下划线）
+#   ✗ 不误伤：unlock_upgrade / soft_exit_lock（新名）
+_OLD_ENUM_RE = re.compile(r"(?<![A-Za-z_])(?:open_first|unlock_first)(?![A-Za-z_])")
+
 _SKIP_DIRS = {"__pycache__", ".venv", ".git", "State", "replay_data", "node_modules"}
 _EXTS = (".py", ".js")
 
@@ -111,8 +122,8 @@ def _iter_scan_files():
 
 
 def _scan():
-    """返回 (cn_hits, leg_hits)，元素为 (相对路径, 行号, 命中词, 该行内容)。"""
-    cn_hits, leg_hits = [], []
+    """返回 (cn_hits, leg_hits, old_hits)，元素为 (相对路径, 行号, 命中词, 该行内容)。"""
+    cn_hits, leg_hits, old_hits = [], [], []
     self_path = os.path.abspath(__file__)
     for p in _iter_scan_files():
         if os.path.abspath(p) == self_path:
@@ -130,7 +141,10 @@ def _scan():
             m = _LEG_RE.search(ln)
             if m:
                 leg_hits.append((rel, i, m.group(0), ln.strip()[:110]))
-    return cn_hits, leg_hits
+            m2 = _OLD_ENUM_RE.search(ln)
+            if m2:
+                old_hits.append((rel, i, m2.group(0), ln.strip()[:110]))
+    return cn_hits, leg_hits, old_hits
 
 
 print("=" * 60)
@@ -151,16 +165,25 @@ check("leg 正则命中 'locked_leg'", bool(_LEG_RE.search("locked_leg")), True)
 check("leg 正则不误伤 'legacy'", bool(_LEG_RE.search("legacy")), False)
 check("leg 正则不误伤 'legal'", bool(_LEG_RE.search("legal")), False)
 check("leg 正则不误伤 'privilege'", bool(_LEG_RE.search("privilege")), False)
+check("旧枚举名正则命中 '来源标记 open_first'",
+      bool(_OLD_ENUM_RE.search("来源标记 open_first")), True)
+check("旧枚举名正则命中 'origin=unlock_first'",
+      bool(_OLD_ENUM_RE.search("origin=unlock_first")), True)
+check("旧枚举名正则不误伤 'unlock_upgrade'",
+      bool(_OLD_ENUM_RE.search("unlock_upgrade")), False)
+check("旧枚举名正则不误伤 p13 历史文件名",
+      bool(_OLD_ENUM_RE.search("tests/test_p13_unlock_first_entry.py")), False)
 
 
 # ── [1] 实际扫描 ──────────────────────────────────────────────────────────
 print("\n[1] 全仓扫描（Trading/ App/ Frontend/ + 根目录 verify_*.py）")
-_cn, _leg = _scan()
+_cn, _leg, _old = _scan()
 
 _n_files = len(list(_iter_scan_files()))
 check("扫描文件数 >= 50（确认真的扫到了）", _n_files >= 50, True)
 check("无已废弃中文术语（腿 / 双仓 / 丢仓 / 腿态 / 挑腿）", len(_cn), 0)
 check("无英文 leg / legs 标识符", len(_leg), 0)
+check("无旧枚举值名残留（open_first / unlock_first）", len(_old), 0)
 
 if _cn:
     print("\n    !! 中文禁用词命中的位置（请按对照表改写）：")
@@ -169,6 +192,10 @@ if _cn:
 if _leg:
     print("\n    !! 英文 leg 命中的位置（请改名为 pos / positions）：")
     for rel, i, w, ln in _leg:
+        print("      {}:{}  [{}]  {}".format(rel, i, w, ln))
+if _old:
+    print("\n    !! 旧枚举值名残留（请改为 SIGNAL_OPEN / UNLOCK_UPGRADE）：")
+    for rel, i, w, ln in _old:
         print("      {}:{}  [{}]  {}".format(rel, i, w, ln))
 
 

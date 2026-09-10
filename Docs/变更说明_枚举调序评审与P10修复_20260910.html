@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-page-node-id="pHLga6N9D2EEkLNDDckmAN">
+<head data-page-node-id="4QgB4rNA4J77Kd97vRpAAm">
+<meta charset="utf-8" data-page-node-id="OxSgQqFPZmMjyc7lXxFPcw">
+<meta name="viewport" content="width=device-width, initial-scale=1" data-page-node-id="IzBa2xflbaSrrMGKkWw8f7">
+<title>枚举调序评审与 P10 修复 — 变更说明</title>
+<style>
+:root{--bg:#fff;--fg:#1f2328;--muted:#57606a;--line:#d0d7de;--accent:#0b5cad;
+--ok:#1a7f37;--warn:#9a6700;--bad:#cf222e;--code-bg:#f6f8fa;--th:#f6f8fa;}
+*{box-sizing:border-box}
+body{margin:0;background:#f2f4f7;color:var(--fg);
+font:15px/1.75 -apple-system,"Segoe UI","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif}
+.wrap{max-width:1060px;margin:0 auto;padding:36px 44px 72px;background:var(--bg);
+box-shadow:0 1px 3px rgba(0,0,0,.10);min-height:100vh}
+h1{font-size:27px;margin:0 0 6px;padding-bottom:14px;border-bottom:3px solid var(--accent)}
+h2{font-size:21px;margin:40px 0 14px;padding:9px 0 9px 14px;border-left:5px solid var(--accent);
+background:linear-gradient(90deg,#eef4fb,transparent);border-radius:0 4px 4px 0}
+h3{font-size:17px;margin:26px 0 10px;color:#24292f}
+h4{font-size:15px;margin:20px 0 8px;color:var(--muted)}
+p{margin:10px 0}
+blockquote{margin:16px 0;padding:12px 18px;border-left:4px solid var(--warn);
+background:#fff8e6;color:#4d3b00;border-radius:0 4px 4px 0}
+blockquote p{margin:4px 0}
+table{border-collapse:collapse;width:100%;margin:16px 0;font-size:14px;
+display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+th{background:var(--th);font-weight:600;white-space:nowrap}
+tr:nth-child(even) td{background:#fcfdfe}
+code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:13px;
+font-family:"Cascadia Mono",Consolas,"Courier New",monospace;
+word-break:break-word}
+pre{background:var(--code-bg);border:1px solid var(--line);border-radius:6px;
+padding:14px 16px;overflow-x:auto;line-height:1.6}
+pre code{background:none;padding:0;font-size:12.5px;white-space:pre}
+ul,ol{margin:10px 0;padding-left:26px}
+li{margin:5px 0}
+hr{border:0;border-top:1px solid var(--line);margin:32px 0}
+strong{font-weight:650}
+a{color:var(--accent)}
+@media print{body{background:#fff}.wrap{box-shadow:none;padding:0;max-width:none}
+h2{break-after:avoid}table,pre,blockquote{break-inside:avoid}}
+</style>
+</head>
+<body data-page-node-id="dBov42xY3PQiiyW7gGtH9v">
+<div class="wrap" data-page-node-id="pYz0LbKGrok2Oby07ymPgD">
+<h1 id="p10-2026-09-10" data-page-node-id="AflJ8ScrC53qb1I6dwcyai">枚举调序评审与 P10 修复 — 变更说明（2026-09-10）</h1>
+<blockquote data-page-node-id="sJNAkPvEqOIvD6lERsb0g5">
+<p data-page-node-id="xNT59LefeET57b7fzwxq2u">基线：<code data-page-node-id="QJlUD4NEFZU6dIA9paqNUS">jbxenzxy/chan.py</code> @ <code data-page-node-id="BOe1RaDta9ympQokGmNM15">custom-dev</code> 提交 <code data-page-node-id="RY7kAhTa1XsifMM1pcOgvf">877de1e5</code>（2026-09-10 12:27:09 +08）
+本轮同时回答两个问题：⑴ 前四包是否都合入；⑵ 库上 <code data-page-node-id="K6KWF3BsuDJgQrweQW98Sb">Types.py</code> 的调序是否有问题。</p>
+</blockquote>
+<hr  data-page-node-id="nLaOV1IPPbNdsEo7iXwwJJ"/>
+<h2 id="_1" data-page-node-id="4RIernzAHmdfsG47bawm77">〇、结论先行</h2>
+<table data-page-node-id="5IMtAnK4ho3BBq8bY6FZ6M">
+<thead data-page-node-id="IGB45dvVRLDwqJAW211DRx">
+<tr data-page-node-id="jpBFzhECAc7lLypXIEGj1y">
+<th data-page-node-id="CXLg39DEYDgRtsflbYdMPD">问题</th>
+<th data-page-node-id="INQAwDF8zcNNepxclbk4TW">结论</th>
+</tr>
+</thead>
+<tbody data-page-node-id="pFXM8nEG9Hyq37G5BrDsuI">
+<tr data-page-node-id="T0YKoFJepq6K47Qxrk2G6Q">
+<td data-page-node-id="7TLbfFCRAPPI2GgQIW50sH">⑴ 四包是否合入</td>
+<td data-page-node-id="NWPquMCHWoQpNxGAHunUCj"><strong data-page-node-id="eYRjHwwW4BtABAOlWeUOGD">业务代码 100% 合入</strong>（69/69 个文件逐字节一致）。仅 4 个根目录交接物（<code data-page-node-id="FnZiFHALYJdBTAdjiE61Zh">verify_*.py</code>、<code data-page-node-id="TG2WCWgzvEj4zysRlvXTDA">mutation_test_p26.py</code>）与 2 份变更说明未入库 —— 它们不属于运行时，可不入。</td>
+</tr>
+<tr data-page-node-id="nbgylAxaLdBuHnQCK7EjqV">
+<td data-page-node-id="j87L6Jkj48itpMFHzQMWQC">⑵ <code data-page-node-id="7URMW6Qvf0d2WSlMI5FsvC">Types.py</code> 调序是否有问题</td>
+<td data-page-node-id="TpmtasQ9aYhMXBx8XnKWxN"><strong data-page-node-id="fkHNdyr1bFzghLSu5eYAbb">生产逻辑无风险</strong>（枚举全仓无顺序依赖），但<strong data-page-node-id="cnTMjpjekHsXKlw02fSWbV">引出一个真实破坏：<code data-page-node-id="sCtdhuKsgowdVz6LY5UL0h">test_p10_state_machine.py</code> 3 条断言变红</strong>（55 通过 / 3 失败）；另有一处注释因调序错位。</td>
+</tr>
+<tr data-page-node-id="qg6tFK3tdDBuJaNqlz9ofG">
+<td data-page-node-id="cP1mmieAxP9Sx66X5sNpVo">本包性质</td>
+<td data-page-node-id="7AUWmKSGvZay93VTlZq7ul">纯测试断言 + 注释，<strong data-page-node-id="HqDtWJ0T62IQFY9ZDVtSFP">不含任何生产逻辑改动</strong>；应用后全量回归 31/31 绿。</td>
+</tr>
+</tbody>
+</table>
+<hr  data-page-node-id="adkRAMpkhqyT1X1mmMDFA2"/>
+<h2 id="crlf" data-page-node-id="KqJErZLsGP1Hxy5aLU8WrG">一、合入核对（逐文件比对，忽略 CRLF）</h2>
+<p data-page-node-id="V5bI0oCKL57nBmdTjZWHAh">比对方法：按 GitHub tree API 拉取 <code data-page-node-id="AqdCyC906ZwjIChsFjwN7A">custom-dev</code> 全树 → <code data-page-node-id="PYFdJMfutHEC7Q2ul3jHCz">raw.githubusercontent.com</code> 取回 74 个文件 → 与本地四包交付基线（<code data-page-node-id="cOYZ0rG5eloP6cRgfBSrLg">deliver3</code> 改名包 ← <code data-page-node-id="8zBhEjvFa8UBc6lzJkzoCc">deliver4</code> 术语包 覆盖）逐字节比对。</p>
+<h3 id="11" data-page-node-id="6uYKAilRGoOSsww9meMu9U">1.1 业务代码：全部合入</h3>
+<table data-page-node-id="LgBjFksCQoJNzjGL8NHb27">
+<thead data-page-node-id="IubCSSpq1iEYaBrQDdpWZd">
+<tr data-page-node-id="WRVEGHWJgxvURRpyuvWON6">
+<th data-page-node-id="etfei7DN9ZoZJDRK5yh9rH">交付包</th>
+<th data-page-node-id="YYB0GDHJDYsJAgyXpvAmYO">关键合入点</th>
+<th data-page-node-id="R6opVoQ5JkWzWZXYtwSQWv">实测证据</th>
+</tr>
+</thead>
+<tbody data-page-node-id="A7hjpcCkM7AjKHR1x8ohE3">
+<tr data-page-node-id="ycuerWYtBuGEBLvJMSXwKe">
+<td data-page-node-id="Mortmzvaz9FeERCUbH3fqH">① <code data-page-node-id="TTSJdDHQxcBK1Lopya4tZG">chanpy_rule5_fix</code></td>
+<td data-page-node-id="gAKSKi6D4dXyHAOrAid8cz">规则 ⑸ 按日期判定</td>
+<td data-page-node-id="8WaRn1PSpEHlba7CXERvFK"><code data-page-node-id="LRachRI0GYscsqFi4zNeV5">Engine.py:1052 _exit_intent(pos, today)</code>，docstring 明写 <code data-page-node-id="Mzm1aamOuV3uTFmH9uMVxl">entry_date &gt;= today → LOCK</code> / <code data-page-node-id="ARtavOrQNu8PgBlQfKCkV8">&lt; today → CLOSE</code></td>
+</tr>
+<tr data-page-node-id="IWNuWoadNb7naRXxPNMYJD">
+<td data-page-node-id="CklX6UsWbJSB2MgME93Uc2">①</td>
+<td data-page-node-id="8fV6Ezn2nw73wKxYUr51TC">删 CLOSETODAY 不可达分支</td>
+<td data-page-node-id="7K5USnJ6oTNwy4vPfNtC4u"><code data-page-node-id="cWr4n39hltVJ4eHaWETUBs">SimNow.py</code> 仅存"已删除"说明性注释，无 <code data-page-node-id="wK6yCYyANYLETNeksqzt8D">def _close_offset</code></td>
+</tr>
+<tr data-page-node-id="tpZOztk6kgqISvE3XwOwjq">
+<td data-page-node-id="N2ee7ekxjMryAgGA5tjQSS">①</td>
+<td data-page-node-id="7Ooq85l5vsjHzqm8yJHpiE"><code data-page-node-id="mj63A3ciqsGtYmFr0k1Lqy">INTENT_TO_OFFSET</code> 修正</td>
+<td data-page-node-id="QgYRIeCSoC1MsWNOH9VEIW"><code data-page-node-id="PFbDv84CC9OwBp9fBgqdtT">Base.py:44-55</code>，UNLOCK/CLOSE 均为 <code data-page-node-id="XoDCoplaHuHG1O5iBdHpag">"CLOSE"</code>，无 <code data-page-node-id="09JGDzdWRvdWSMRf7DON4X">CLOSEYESTERDAY</code> 实发</td>
+</tr>
+<tr data-page-node-id="PIPMar2hzHxl2YK0tHZ8uF">
+<td data-page-node-id="6GFqHDvwLLA6l1cGM0gTtl">② <code data-page-node-id="XdYFwEnrtaYqD6fuUB8XzR">chanpy_entrymode_decouple</code></td>
+<td data-page-node-id="UulBuW5JsP3040VwYqmlWR">离场方式与 origin 解耦</td>
+<td data-page-node-id="Igc0FLOGErbiUb7CIjEaX3"><code data-page-node-id="QyBGQsGrn2FoQLBaxCPLuG">Types.py</code> 的 <code data-page-node-id="6gyGzcYP9xBpX3kpN0b0Tn">PositionOrigin</code> docstring + <code data-page-node-id="44YCQlQmeBd9AwnJp3WhuW">test_p25_origin_decoupled.py</code> 在库且绿</td>
+</tr>
+<tr data-page-node-id="62SU0wGgzfN0xl8ZNpMZtz">
+<td data-page-node-id="Q5pz2619HF8Kxf4tZkgHmZ">③ <code data-page-node-id="dZ9jf8D4GaVLcTeJea8VEt">chanpy_positionorigin_rename</code></td>
+<td data-page-node-id="kBxQZcy4FX5jJfeDEpPJRA">全量改名含枚举值</td>
+<td data-page-node-id="fI9Tplv21b2ei74xUAmpL2">生产代码零 <code data-page-node-id="9QZlr20G0448ksyATD6kvC">entry_mode</code> / <code data-page-node-id="ah4tVDVi7CbIaV7cV8tiYf">EntryMode</code> 残留（仅在旧 schema 闸门注释中出现，属说明性）</td>
+</tr>
+<tr data-page-node-id="04CsiYbZZPg2FDLFIFzjOe">
+<td data-page-node-id="f4R3vQrAXlfHNpS3qMcESP">③</td>
+<td data-page-node-id="TUrM3khc1cOAlVOy1pq9ay">旧 schema 拒绝启动闸门</td>
+<td data-page-node-id="AB5zjIFstysiOe5qr2QkCP"><code data-page-node-id="Pf22EVWua9K4Em5J4TEYHh">Engine.py:163 _LEGACY_POSITION_KEYS = ("entry_mode",)</code>；<code data-page-node-id="uME3qaHi5aJvXyOEOiibJU">:171 _reject_legacy_state</code>；<code data-page-node-id="1qoMKhPVaasEjILH5MKRnt">:200</code> 调用点</td>
+</tr>
+<tr data-page-node-id="mbRJCSkkAxGjF60UrAciRd">
+<td data-page-node-id="Aex6cHTjBkbE1X2CmhVP3n">③</td>
+<td data-page-node-id="KDRVCPatF2KYcgnMmuhW2v">前端同步</td>
+<td data-page-node-id="6XtKk6ETMV8zBivEpOZFFR"><code data-page-node-id="M9q4LZnLfAoOzYAKDrsevJ">Frontend/app.js:7449</code> → <code data-page-node-id="mV29h6tkZPD73UyVEVkYE3">p.origin === 'soft_exit_lock'</code></td>
+</tr>
+<tr data-page-node-id="RxvGqZkvVsD6pqRKkMSTzW">
+<td data-page-node-id="qGmHBFtFhQeEWjnZJZ0A5I">④ <code data-page-node-id="xf71NtZFg5m7khxvIzXh5n">chanpy_leg_terms_guard</code></td>
+<td data-page-node-id="VQCWmjxGJbABjXFG86Kumy">术语清理</td>
+<td data-page-node-id="hvw6ugjKoDMr6ixq1PWIX3"><code data-page-node-id="aAB76qrTzaeBMlXZmCozee">Trading/**</code> 中文"腿" 0 残留（仅 P26 自身定义处）</td>
+</tr>
+<tr data-page-node-id="hGorVrlcrENpBiWmfRAire">
+<td data-page-node-id="wvptl5WQXb7EvTrMldEQZW">④</td>
+<td data-page-node-id="gFRfJZtmsNN6KnlVxZSXNb">P26 护栏</td>
+<td data-page-node-id="ajLN4TBp7vK4Hnos4riGPm"><code data-page-node-id="cSd6sHCrl6qQgt3K9OBcVw">Trading/Test/test_p26_terminology_guard.py</code> 在库且绿</td>
+</tr>
+</tbody>
+</table>
+<h3 id="12" data-page-node-id="iCriaCGvBVeBxo7OF5mduo">1.2 未入库的文件（<strong data-page-node-id="SdERCQ8uMQb0Z0tQ0aiCO7">不影响运行</strong>，按需处理）</h3>
+<table data-page-node-id="xyvnZCPYzVugDR7cgloHFc">
+<thead data-page-node-id="Huiwmv1YqMUuqDwH44qDVC">
+<tr data-page-node-id="veY1Goqcni09Q56IbWFbr6">
+<th data-page-node-id="MiCIMy1gqIQ3YtFUBa0v5p">文件</th>
+<th data-page-node-id="0LVoTMAo6GcEDmCJ0k02Ss">性质</th>
+<th data-page-node-id="YSRGEAA8b7IBaV60KPBk0T">是否建议入库</th>
+</tr>
+</thead>
+<tbody data-page-node-id="3ZCbxAZJ18j1NHZHyQmNF4">
+<tr data-page-node-id="KmNHkqb7HQxXCdmvC7JbLG">
+<td data-page-node-id="pf2dNpNzMP8BvRk7T2a9V9"><code data-page-node-id="cK8Bbh0XNv5csrcQmdEV8l">verify_rule5.py</code> / <code data-page-node-id="nAeLcA1eum2t8GdQ5ODIhB">verify_anchor.py</code> / <code data-page-node-id="PDzN2754xTy6JxAtEo6PtB">verify_schema_gate.py</code></td>
+<td data-page-node-id="XrMH64xjgBiniLyiC7b102">一次性核对探针</td>
+<td data-page-node-id="Bc24tvE8YGegbM1tYDPxfC">可选。注意：<code data-page-node-id="BYXGqrtvFSXXOnDfOuGH12">test_p26</code> 会扫描根目录 <code data-page-node-id="IHsI5dJo0gMjXaTXohWBRm">verify_*.py</code>，入库前需确保无禁用词</td>
+</tr>
+<tr data-page-node-id="4BlK79wRtCGTTCgSieE1Yu">
+<td data-page-node-id="cu87IKrHfO8ITHxjOJCDD0"><code data-page-node-id="ny6pMDK5C1ZwG6UBEQ7yvV">mutation_test_p26.py</code></td>
+<td data-page-node-id="38c7yI58Dk7zUuRazWiWDJ">护栏变异测试</td>
+<td data-page-node-id="aBsDPqzJPBQqmBrn1yHDmS"><strong data-page-node-id="h6jPcicWMlYxFGVsdRlmZs">建议入库</strong>（本包已附新版，补了旧枚举名变异）</td>
+</tr>
+<tr data-page-node-id="VcIKobSB4wwoW5EBAiI0Db">
+<td data-page-node-id="lW1XM6nQmwHhUKhhD335gD"><code data-page-node-id="rcOINrd4BKEHRTmnAe02Kz">变更说明_*.md</code> ×2</td>
+<td data-page-node-id="bNBovDidkcuotcxlcDYhC5">交接文档</td>
+<td data-page-node-id="nNHRkv2AUXXDSkbvFI7mlN">建议放 <code data-page-node-id="1OoxHYJdJ37nBqMzf4IyOx">Docs/</code></td>
+</tr>
+</tbody>
+</table>
+<hr  data-page-node-id="eBywREfewMPKzKzHcwB50C"/>
+<h2 id="typespy" data-page-node-id="AKagaH8pMrf1uzzOVzz2nJ">二、<code data-page-node-id="DHfyGo4edf2iH9XoMdsJle">Types.py</code> 调序评审</h2>
+<h3 id="21-diff-3-2" data-page-node-id="HbP9cwtAxjr4yhXLN7ELDS">2.1 调序内容（diff 已核对：3 处移动 + 2 处标点，无第三类改动）</h3>
+<table data-page-node-id="4sScmEUd1kvq7wudd9HSHF">
+<thead data-page-node-id="D7JlD6m0Gvqx0KZMMggfkc">
+<tr data-page-node-id="Hk9bEIG0Y0BE22nLN5UUts">
+<th data-page-node-id="07rpHeiT7iYoKEhwkJ7WWe">枚举</th>
+<th data-page-node-id="rVwmMv32serMIsV6q0BF7U">调序前</th>
+<th data-page-node-id="XzsXChguZjVWRPAP9C6S0V">调序后</th>
+<th data-page-node-id="VdrI0kABwyh0XU6v2GvgOv">评价</th>
+</tr>
+</thead>
+<tbody data-page-node-id="C3GCipJAPGGqmMGlFV8ki7">
+<tr data-page-node-id="G2aH5DYJK3soRIqsmC6u89">
+<td data-page-node-id="Fk7EJfNGhxynLeJQ9IHYK3"><code data-page-node-id="wfAcs9wveqwjRnz1xUKQpJ">OrderIntent</code></td>
+<td data-page-node-id="OyH96Y3XZ5Fb1XyLdXrjGv">OPEN, UNLOCK, CLOSE, LOCK</td>
+<td data-page-node-id="jJSyOvBOEAagau4kpf6L9P">OPEN, <strong data-page-node-id="bVwsp6PLdqp8oV4ix7n7JH">LOCK</strong>, UNLOCK, CLOSE</td>
+<td data-page-node-id="9hpLnE4meIZIzX87qsugW5">✅ <strong data-page-node-id="MFAFBYXvPOk1hu3N3SanlG">更好</strong>：前两个 = <code data-page-node-id="6DdZU34jPnrUFx6hNSbtPG">offset=OPEN</code>，后两个 = <code data-page-node-id="GNbm0ZzVbL6UF4PDmsZjmA">offset=CLOSE</code>，与 <code data-page-node-id="3aIGdAohU0RYNAhS6uUkRR">INTENT_TO_OFFSET</code> 分组一致</td>
+</tr>
+<tr data-page-node-id="FWAg7RHekGDnkX0SUqVMD8">
+<td data-page-node-id="qDuBEpuPyywA2WDEDKEcGB"><code data-page-node-id="uCEgNVo2DGi6W13ccfLaLb">PositionOrigin</code></td>
+<td data-page-node-id="o9FxT1MmILX5xeuajBTh4v">SIGNAL_OPEN, UNLOCK_UPGRADE, SOFT_EXIT_LOCK</td>
+<td data-page-node-id="6Lzh0KDAwRIK1zq0005f4E">SIGNAL_OPEN, <strong data-page-node-id="j0w5OaSmZgVy1b3U0g05D6">SOFT_EXIT_LOCK</strong>, UNLOCK_UPGRADE</td>
+<td data-page-node-id="6Ijw3UeMrg0ETF6Rl6z473">⚠️ 中性；但<strong data-page-node-id="KxSAPvoE2cY5xExHm53KnS">带出注释错位</strong>（见 2.3）</td>
+</tr>
+<tr data-page-node-id="FEcX538gXpsGk6ouvDQnPe">
+<td data-page-node-id="xZvwLOZkqIkZEizJtvvXMX"><code data-page-node-id="eMnlkyIUWAutbrdos4XmyP">ExitMode</code></td>
+<td data-page-node-id="f7QBmP1ZtzGkrzghrOvGfr">HARD_EXIT, SOFT_EXIT</td>
+<td data-page-node-id="z2v2m4UBFJ4duESxCOmIqO"><strong data-page-node-id="bGFqvuhD8qBYP0N4k4wxGu">SOFT_EXIT</strong>, HARD_EXIT</td>
+<td data-page-node-id="Ih4972bsjAfQFmDHuY7X4U">✅ 中性偏好：与规则 ⑸"当日单→软离场、跨日单→硬离场"的判定顺序一致</td>
+</tr>
+</tbody>
+</table>
+<p data-page-node-id="FVSg4PbKqVo6c3LiRtkHTV">另 2 处：<code data-page-node-id="YATxWuaF46q1imQDqG7Fg1">SIGNAL_OPEN</code>、<code data-page-node-id="JOzWJM1WFrKqKCbQ7a9Sb0">SOFT_EXIT_LOCK</code> 的注释里补了一个逗号 —— 纯文案。</p>
+<h3 id="22" data-page-node-id="wBRrGsI6uFWDhhRJUEEi8p">2.2 顺序是否被依赖？—— 全仓扫描结论：<strong data-page-node-id="G1c1G7TkJLZWrY9uUHs6ZB">生产代码零依赖</strong></h3>
+<table data-page-node-id="QbLZjmB3KqY31Ye46N7NvH">
+<thead data-page-node-id="2ODOTb8AiJ4qEyqV1hXCY4">
+<tr data-page-node-id="gcaRqpDsLlFkRcs3UtRtqI">
+<th data-page-node-id="VvG3rOdlbAD7osl5wPzAmi">检查项</th>
+<th data-page-node-id="lXS2ehnlx2vXO9gDKcHeci">命令</th>
+<th data-page-node-id="Ox6DVx12qjmZyKHg2tcnKy">结果</th>
+</tr>
+</thead>
+<tbody data-page-node-id="6aJuQ0lko9DQd922bJMH8M">
+<tr data-page-node-id="LY1FXbZrIoImR2TOyGhJPd">
+<td data-page-node-id="aJu2vCMTXqYyBD6sTlTmFG">枚举迭代（序敏感）</td>
+<td data-page-node-id="9BhduBW2q6o0ZvgEgm3cik"><code data-page-node-id="oF5bHVaVX5RMFOEMRnuFt5">list(OrderIntent)</code> / <code data-page-node-id="BWEmCFEHXTevdpMCw66tAy">__members__</code> / <code data-page-node-id="3hIDZiFmHowBmduqi0Pm0K">for x in PositionOrigin</code></td>
+<td data-page-node-id="O8pVyYjpPrcKVCm1Y8MEsj">生产代码 <strong data-page-node-id="AfFnYEjLoJKsNXCG6eVeQ0">0 处</strong>；仅 <code data-page-node-id="dcf0CeXOpNRDLZdSHBZ4tr">test_p10</code> 用 <code data-page-node-id="eGfBbpDCJcnE4v2LD12RCC">[e.value for e in ...]</code></td>
+</tr>
+<tr data-page-node-id="pmaXgLCIxVACcTS9AJXD03">
+<td data-page-node-id="wHLAplMfpuW0wsGK42MrV3">大小比较</td>
+<td data-page-node-id="Aecnvz486BnUGQGOSrM43F"><code data-page-node-id="EyiMlkOdr5rcJN1CnchJDH">OrderIntent.OPEN &lt; ...</code></td>
+<td data-page-node-id="NNverBHHxgImEu8jPo4ZbA">0 处</td>
+</tr>
+<tr data-page-node-id="3GybUucWuuUQDOzVHQsX75">
+<td data-page-node-id="INXg1WNHzD2GRdZsKeyJno">索引/位序</td>
+<td data-page-node-id="bu3T67pGssEkPnNPLVU2OS"><code data-page-node-id="rFOgoVl9ZMdgqFFFbdHKwD">list(...).index()</code>、<code data-page-node-id="GAzvmBtlIFonJPozWntwwL">auto()</code>、位掩码</td>
+<td data-page-node-id="eQM9o4MFnOzTES0BRpkKbf">0 处</td>
+</tr>
+<tr data-page-node-id="7cq6uAn5mYfIURH14HLtxi">
+<td data-page-node-id="EedjDMuZgpHV8t1vaeEAHA">序列化</td>
+<td data-page-node-id="yuts3AQ4Kgp3UvKbLFoz2c">全部走 <code data-page-node-id="0ySLINeyr9oumxZInYrzUF">.value</code>（<code data-page-node-id="kmSvGUH9eESE7ufBpFkWXw">(str, Enum)</code> 继承 <code data-page-node-id="f5LDA6ReMFqDVpMqXvxLtU">str</code>，比较按字符串）</td>
+<td data-page-node-id="pGodeHb26yvWx8uaoG9lbA">顺序无关</td>
+</tr>
+</tbody>
+</table>
+<p data-page-node-id="B9qveRioOQDFzb3c4aGaa6"><strong data-page-node-id="BsGXUKTMI2tVncXxbuzFbv">→ 生产逻辑安全。</strong> 但 <code data-page-node-id="TIlJl5Z5EJ3BcoGiHD8oc5">test_p10_state_machine.py:134-140</code> 用的是<strong data-page-node-id="OHYdcd4r8CkrYInFoVeyFP">定义顺序</strong>断言，因此调序后实测：</p>
+<pre data-page-node-id="iZNHssMPSJooLE8YGjhuGn"><code data-page-node-id="uROBLNpFjA6GohJxIsir69">[1] 4 个枚举命名正确
+✗ OrderIntent 4 个值      -&gt; got=['open','lock','unlock','close']   expected=['open','unlock','close','lock']
+✗ PositionOrigin 3 个值   -&gt; got=['signal_open','soft_exit_lock','unlock_upgrade']
+                             expected=['signal_open','unlock_upgrade','soft_exit_lock']
+✗ ExitMode 2 个值         -&gt; got=['soft_exit','hard_exit']          expected=['hard_exit','soft_exit']
+✓ EngineState 4 个值
+结果: 55 通过 / 3 失败      （全量：30 绿 / 1 红）
+</code></pre>
+<h3 id="23" data-page-node-id="GX7Ejp3RlHeyAZhr8t2DU6">2.3 附带发现：一处注释因调序错位</h3>
+<p data-page-node-id="bLTYiOOOnBZvJggIVxs8ta"><code data-page-node-id="OrfwewPL8miHpc0dQGiewH">PositionOrigin</code> 的续行注释 <code data-page-node-id="2LeLwXsdYgclDSRDiU1FFj">唯一合法离场 = 对向信号触发 UNLOCK（平昨，次日语义）</code>
+原本是 <strong data-page-node-id="gZ8RZuAAqECHDAxvU3VYvx">SOFT_EXIT_LOCK</strong> 的第二行说明（描述"锁仓唯一合法出路"）；调序后它留在了原位置，
+现挂在 <strong data-page-node-id="PqE6esGXMgzjm8n900e3PE">UNLOCK_UPGRADE</strong> 下方 —— 语义被误读。本包已把它归位。</p>
+<h3 id="24-5" data-page-node-id="MyBkfWkakNiYi22H5OzTIZ">2.4 附带发现：改名遗漏的陈旧标签（5 处）</h3>
+<table data-page-node-id="H0g8iYKaXOOoEel8hJlwhG">
+<thead data-page-node-id="z8CceqldDdmegmFGwFSHAN">
+<tr data-page-node-id="yEZUGUZGzUvcenLW61Otvq">
+<th data-page-node-id="g5kdw4J2KFvIFo0IZRPKQ5">位置</th>
+<th data-page-node-id="uPCZX3MqhbQcrp25eyKWEB">原文</th>
+<th data-page-node-id="JogikiLGOA8qpX2yRsa2Su">问题</th>
+</tr>
+</thead>
+<tbody data-page-node-id="wURAd3yfqlu5uNqPvm90bM">
+<tr data-page-node-id="yVOYP00zytJ6l4cBDdSG9N">
+<td data-page-node-id="OCoqYC5BxFadb1dAhEcfXW"><code data-page-node-id="VpHgh7M3g5JOfETknIXB2d">test_p10:447</code></td>
+<td data-page-node-id="uUEpOKfUKj2Zqk5EEjxZeW"><code data-page-node-id="VEWSsubXxUTs5q6ElAvnWN">[12] 序列化兼容：open_first / unlock_first 双向</code></td>
+<td data-page-node-id="T3YHmAQU4JszAtaclrBFap">旧枚举名</td>
+</tr>
+<tr data-page-node-id="pI2xSBpTqwBurOzlyYEeMP">
+<td data-page-node-id="lcy4AC4F0n73HhrCtrTx9y"><code data-page-node-id="p7x7KV3wv4omQZZXxttVxa">test_p10:483</code></td>
+<td data-page-node-id="cGGa9jV5pBKHXqXGAkKqOV"><code data-page-node-id="bpXaP0oJEXg7xH4wv8PUKs">check("事件流含 open_first", "signal_open" in content)</code></td>
+<td data-page-node-id="0ApcPgZfLXn8DfoSHIZEyN">标签是旧名、断言是新值，<strong data-page-node-id="zRHccMtVrIBFdRWGaTnrEv">日志自相矛盾</strong></td>
+</tr>
+<tr data-page-node-id="EINwHTlUQtr17dBAPSBlfa">
+<td data-page-node-id="yMNiV4gYhoXbJuiGHStOzN"><code data-page-node-id="lSV1YHPdrCIufHeRbke7OA">test_p10:136</code></td>
+<td data-page-node-id="Uw9nbHAeVt2O22vr8y1ttI"><code data-page-node-id="eNzhgxy4U6aMOABm51TYRF">PositionOrigin 3 个值（H1 增 locked）</code></td>
+<td data-page-node-id="Q6xAQczXdFM333qiRToQAd"><code data-page-node-id="zjmUH6pwBIsqDToQmTX2ij">locked</code> 是旧值名</td>
+</tr>
+<tr data-page-node-id="DCaRzhFrvqJGIVDdPjzx1d">
+<td data-page-node-id="NADXQ3OUZDMHDtrtrpqsTl"><code data-page-node-id="dUA9qW9mKiE7WlUE8APAjd">test_p11:347</code></td>
+<td data-page-node-id="NOlx6ns4fc1AqhqdK3a7a7"><code data-page-node-id="GU0n8wtc2Q3UDfLEEDdEts">origin=unlock_first</code></td>
+<td data-page-node-id="uurxIPxPLF8cmsAYMBwaUS">旧枚举名</td>
+</tr>
+<tr data-page-node-id="1icQgGzY8XhSdypgrzWFE4">
+<td data-page-node-id="u2DrfY7iTPU9i3hEBGGbqY"><code data-page-node-id="JWZ06GouoewIl8QwSzbsOw">test_p18:223</code></td>
+<td data-page-node-id="d6mTDgKEJeq00cdAuqFd3O"><code data-page-node-id="1w3aQEBEPCDjiU5pzprJjC">[1p] 双向持仓已持久化（2 条 locked）</code></td>
+<td data-page-node-id="ekbc0Iu4a5CbMCGaSSKd4r">旧值名（断言用的是 <code data-page-node-id="DA3Hhup8Kyc4ZjwmxvpIAM">soft_exit_lock</code>）</td>
+</tr>
+<tr data-page-node-id="MAjFmBrpTd51bhQz1W5mrR">
+<td data-page-node-id="DmYV0qzb4txrpyrKPVgieW"><code data-page-node-id="HjReGqpEePGB6dTJyHZQFG">PositionBook.py:8</code></td>
+<td data-page-node-id="TPIicP9ZI4DH6sPBN1Cg0f">docstring <code data-page-node-id="qiO88g7knW0HUsJ8cI877s">来源标记 unlock_first</code></td>
+<td data-page-node-id="v3VQnM4CBy0xyk5iZpYmqI">旧枚举名</td>
+</tr>
+</tbody>
+</table>
+<blockquote data-page-node-id="acuixa8RMn2aiCBzqkwukG">
+<p data-page-node-id="6JvR2WYP4R0UPoDatVjows">保留不动的<strong data-page-node-id="Tz6BYeTBa2wSHVy5uK6a9j">合法</strong>用法：<code data-page-node-id="k6iNW6rJ3r5sc8P9j44Abb">Engine.py:158</code> 与 <code data-page-node-id="15acniUXTsTzEfvR2FGOcY">test_p25:229/235/263</code> 里的 <code data-page-node-id="Q17r0ftgFnTagTxnIrzh3z">entry_mode="locked"</code>
+—— 它们是<strong data-page-node-id="YotmCOTrmZsQjGqu3p9v5W">旧 schema 夹具/说明</strong>，是闸门测试的输入，不能改。
+<code data-page-node-id="KSGIyaTg87IpOhu0CRE92p">App/AppTrader.py:22</code> 的 <code data-page-node-id="3cY75gP05tMvq5jxxD0TXT">落簿 LOCKED 反向仓</code> 同属旧值名残留，但位于 <code data-page-node-id="IHN4roHrEDZtQr5y81MMzu">App/</code>，本包未动（见第六节）。</p>
+</blockquote>
+<hr  data-page-node-id="Faw1fs4dSQCjG34ZZzZH5i"/>
+<h2 id="18-6-1" data-page-node-id="Ru8RBUetgiIrihGrpiT7xS">三、本包修复清单（18 处编辑，6 文件 + 1 新增）</h2>
+<table data-page-node-id="0ojKxYFB2ekIVM6dHGWvYQ">
+<thead data-page-node-id="vr9NB5V1PG4QY3yVdloPJ5">
+<tr data-page-node-id="TSS48ybOh2GTwKajXZCvAD">
+<th data-page-node-id="HY1r7wq7rYEdYGMxn66xQD">#</th>
+<th data-page-node-id="WrxEPaKPuMiQluksG3CSAo">文件</th>
+<th data-page-node-id="C0nurijc68y3VzXn11XuYZ">改动</th>
+<th data-page-node-id="6HO9UH4C4QGRU8Gr88X3nn">类型</th>
+</tr>
+</thead>
+<tbody data-page-node-id="QuN4oCWCnNrfBFxAFQPA4i">
+<tr data-page-node-id="8jZ0Wlj66vewHfgsuFgJoI">
+<td data-page-node-id="RhAOhqJepFEkpjZr8kSgyC">A1</td>
+<td data-page-node-id="viMCwco8IrQXADsLoZMO8B"><code data-page-node-id="S6LgNCOJxDZt6wdv7TdK4F">Trading/Infra/Types.py</code></td>
+<td data-page-node-id="uYhLJUgz1kofgHXsaoH7rr">枚举区加"<strong data-page-node-id="yg3BDBdiBSdbapLpDcWKzF">成员定义顺序无语义</strong>"声明</td>
+<td data-page-node-id="or6oCP3XYXktiwKXiqw3IJ">注释</td>
+</tr>
+<tr data-page-node-id="cTEyfGSZExSgK8TkfvDYvy">
+<td data-page-node-id="s9RgqXBDCBNkURmyn5TTe5">A2</td>
+<td data-page-node-id="bHkePmTgpM7T1RgEy1ds9d">同上</td>
+<td data-page-node-id="wFtwizOWXuEv7jCH7E7tSe"><code data-page-node-id="5HRRe7MUspyQGFsRfLtXvw">OrderIntent</code> 补分组说明（前 2 个 offset=OPEN / 后 2 个 offset=CLOSE）</td>
+<td data-page-node-id="3udYtjlUrAEK7AXKP5Kj1n">注释</td>
+</tr>
+<tr data-page-node-id="FT4DaXwP92FNVSEBRKbqEV">
+<td data-page-node-id="KG50gdaLpsDureFIzf4gUY">A3</td>
+<td data-page-node-id="IBbY3FovbmUfILAlt0lwfZ">同上</td>
+<td data-page-node-id="lUEPmTUIe2hpbakJLkGMY6">把错位的"唯一合法离场"注释归位到 <code data-page-node-id="Mz8vaTuEgIPm8TPZan6ydT">SOFT_EXIT_LOCK</code></td>
+<td data-page-node-id="OBQoMG8KJOuP0HFY3QIKBc">注释</td>
+</tr>
+<tr data-page-node-id="vFDDy0N0yZQ6zF0vjpkCWP">
+<td data-page-node-id="XI2VnugES5GczEQ5Toi3aW">A4</td>
+<td data-page-node-id="TuoPmHH53yNaXplmiVywAG">同上</td>
+<td data-page-node-id="lfKioyCHGbhfuaIoZZTkFB"><code data-page-node-id="2kdPvMcNINBhT9vLDtEZdd">ExitMode</code> 补顺序说明（对齐规则 ⑸ 判定顺序）</td>
+<td data-page-node-id="0MXe011eQhwd3yEi9Erd4w">注释</td>
+</tr>
+<tr data-page-node-id="18W10PhflkOacsiuxKKGMI">
+<td data-page-node-id="Pvs6b79deqHGtvwms84TP1">B1</td>
+<td data-page-node-id="n3eE1FyT1HBkPyypOJlNfa"><code data-page-node-id="4Ty83ifYgB4wjcupe2GEBN">Trading/Test/test_p10_state_machine.py</code></td>
+<td data-page-node-id="vlV5Z1yNSpD09y1ahOYcKw"><strong data-page-node-id="RIHPBzEe0uCps4oDW9Df51">成员断言改用 <code data-page-node-id="ORE3eCBbAeFrGnemQxuEUA">sorted()</code></strong>，与定义顺序解耦（4 条）</td>
+<td data-page-node-id="5sIFFq9KDACjFECGEuXcJi">测试</td>
+</tr>
+<tr data-page-node-id="BOzT4fb4Bafn2dXm4iQAj5">
+<td data-page-node-id="IZuYViNgwZIsPAEVQbFvjU">B2</td>
+<td data-page-node-id="paHYmllIrTu6zlJO4p4UJ8">同上</td>
+<td data-page-node-id="E9newdEZHJk99itLQDhASW">陈旧标签 <code data-page-node-id="vYJWgzqb8lRgetrjv2JTAv">open_first / unlock_first</code> → 新名</td>
+<td data-page-node-id="maqmf4XXO1Hk5EKGCop0R2">文案</td>
+</tr>
+<tr data-page-node-id="pbtzRbGZ0OC5D9stFeFBBD">
+<td data-page-node-id="meUxWs3TtVJsmKjqEvc2K1">B3</td>
+<td data-page-node-id="jLgUvGqlPZ4CK91i6NDS0C">同上</td>
+<td data-page-node-id="bWb764CkQNHjopKuDBmpI1">陈旧标签 <code data-page-node-id="pTN92eJ17mu43T7YWlSfv4">事件流含 open_first</code> → <code data-page-node-id="jDYlrpehNFdCtMKR0Fy8rt">事件流含 signal_open</code></td>
+<td data-page-node-id="qdWRUWbL8VvrhS90SufIfq">文案</td>
+</tr>
+<tr data-page-node-id="pxGy2ZwDIN1ouANJSCudSI">
+<td data-page-node-id="At5bJl4XoQfnA46nfm1OvE">C1</td>
+<td data-page-node-id="iRz1KvjyDv2Gtm5oJ9S1nV"><code data-page-node-id="RcirJbLkOLVXuIg9krC67n">Trading/Test/test_p11_intent_exitmode.py</code></td>
+<td data-page-node-id="g1RbAiCLsCtQSYuIW8rdgT">陈旧标签 <code data-page-node-id="5nsCxWJIX8dYcbnKS7N0cd">origin=unlock_first</code> → <code data-page-node-id="DdDdfVbVBWlsks1sBBnkGA">unlock_upgrade</code></td>
+<td data-page-node-id="VHQDkIDFHNY20xK6v0R4Cl">文案</td>
+</tr>
+<tr data-page-node-id="m7q1jskRRoC5ig7VGmIazG">
+<td data-page-node-id="c4ZoSgnULXPQwyvYrp7O26">C2</td>
+<td data-page-node-id="oqdkl7H3Ab2mwTzp4eNEBw"><code data-page-node-id="QJkkQg6CwUE2R0kINme7Tq">Trading/Test/test_p18_phase_h1.py</code></td>
+<td data-page-node-id="HBOcrcwiN5MchhJzOZCzmt">陈旧标签 <code data-page-node-id="x1Ywj5NULnBtEVL59BcEKe">2 条 locked</code> → <code data-page-node-id="EZZXVCCGFworz74GZCFko4">2 条 soft_exit_lock</code></td>
+<td data-page-node-id="CmW9U10VgLMaGRZzVPnnGM">文案</td>
+</tr>
+<tr data-page-node-id="kzXa1VCfv6HLyUJXl28iPS">
+<td data-page-node-id="Jwr726znufBmYGDdYPAcm5">D1</td>
+<td data-page-node-id="6aP4JSESpQ8erYkMqYnFCO"><code data-page-node-id="Nq9TraVbgkwKUGXi5EwuL3">Trading/Engine/PositionBook.py</code></td>
+<td data-page-node-id="1b28WrZH2At75GLpEq9NnP">docstring <code data-page-node-id="IWqpRH3HYDAH3CRjCq0bjF">unlock_first</code> → <code data-page-node-id="HTS7HSZcEr09avkKum2v3C">unlock_upgrade</code></td>
+<td data-page-node-id="3R2qyUe76cr4U6pb3tFzgP">文案</td>
+</tr>
+<tr data-page-node-id="MOTEQhHB4F6xfqZMOxc9CC">
+<td data-page-node-id="8hAuxe2ODrReKEuCxvkKI4">E1-E8</td>
+<td data-page-node-id="nH1WJUpzVy9ndKk9ipqRKK"><code data-page-node-id="7bcQcQ8Y21R6HIShV7TpIm">Trading/Test/test_p26_terminology_guard.py</code></td>
+<td data-page-node-id="Gv1S7yNlogstnFliMZkuF7">新增<strong data-page-node-id="G8NQdMRDTs0H2R8xAC0UtQ">旧枚举值名扫描护栏</strong>（<code data-page-node-id="SlzmFsj4nHuA4tByrQo2WY">open_first</code> / <code data-page-node-id="z1I28lfvFj6aHDyEvYOolA">unlock_first</code>）+ 元护栏自证 + 命中打印</td>
+<td data-page-node-id="9CWtbCKY3TVBu5nlc6n3vo">护栏</td>
+</tr>
+<tr data-page-node-id="bx0P11ghwmEOllkL1C0unF">
+<td data-page-node-id="cxZ4YoAEsfFA4ogTsRC0mL">—</td>
+<td data-page-node-id="ZPnyTxtw2TLR9zrM5S5yB3"><code data-page-node-id="iSxVeq3iGPzvHzBUBHSaxJ">mutation_test_p26.py</code>（新增）</td>
+<td data-page-node-id="Rlw072c2A6SzlVCwchyTyq">变异测试扩到 4 例，每例<strong data-page-node-id="YhVsRnwPtXZ3HP3laYDGL5">单独注入</strong>验证护栏独立生效</td>
+<td data-page-node-id="FQ2wWEyWtLoaEa4XU7UP1U">验证</td>
+</tr>
+</tbody>
+</table>
+<p data-page-node-id="A32cwyZ6d7sI8sDQzEOT6U"><strong data-page-node-id="7rQ5SbjI885vRhlsnuxsl3">P26 新正则的边界</strong>（防误伤）：</p>
+<pre data-page-node-id="ddAd97sHGxn4QdjROqYz37"><code data-page-node-id="cmpwY9PMOlvAwJArIF8rFu">(?&lt;![A-Za-z_])(?:open_first|unlock_first)(?![A-Za-z_])
+</code></pre>
+<ul data-page-node-id="bSqKNpAyc9qB9CcaLwWrIM">
+<li data-page-node-id="suhAUzVWj2wPhrvZSPY7lN">✓ 命中 <code data-page-node-id="H4X9HmoUn2CnLL7IUP1yXZ">来源标记 open_first</code>、<code data-page-node-id="StuZtWtqBT9aP1cxACR57z">origin=unlock_first</code></li>
+<li data-page-node-id="xlHgFVz76PICVeN6WgC5da">✗ 不误伤 <code data-page-node-id="YFQRVvgGwScCD9ciC85IIO">unlock_upgrade</code>、<code data-page-node-id="QdT5jEQqjEcI46VeEUQrtK">soft_exit_lock</code></li>
+<li data-page-node-id="PvUCOClP8eG7FcUazeHDp1">✗ 不误伤 <code data-page-node-id="1RxENyGjnbsuDTRRAeKq8i">tests/test_p13_unlock_first_entry.py</code>（历史文件名，<code data-page-node-id="H611JP8TKutQlfg7ufqx5r">unlock</code> 前是下划线）</li>
+</ul>
+<hr  data-page-node-id="hVFIgsvUkFurRE4ApcM2A1"/>
+<h2 id="_2" data-page-node-id="L43Plu2XFw0aOBymVDCEfG">四、验证证据（全部在干净同构基线上跑）</h2>
+<table data-page-node-id="ods5CTFS0i6G4q89b8CMqB">
+<thead data-page-node-id="6EDimJrhnW42CrFNDwuSEJ">
+<tr data-page-node-id="d3UFdGtC4Sk2TNkLRI4ceO">
+<th data-page-node-id="YLOuSnuwnDdPip0GeoyoeS">验证项</th>
+<th data-page-node-id="bPuccjHUEA1qNkj0Tl1U3A">修复前</th>
+<th data-page-node-id="MuVVCACoTD02mNq34oS3wF">修复后</th>
+</tr>
+</thead>
+<tbody data-page-node-id="WziPGQaGP80HMlNF8pWdHi">
+<tr data-page-node-id="MxbUZ0ua0gBrZtTVmaRqtt">
+<td data-page-node-id="GCcwx5usOPgoZniHCf9md3"><strong data-page-node-id="xhFnV5D6yaq6eYsPrSQhFs">全量回归</strong>（31 个测试脚本）</td>
+<td data-page-node-id="THqMP0I91bn3odxSn5L7E3">30 绿 / <strong data-page-node-id="1v81mD6l1p01EOkEdw82U2">1 红</strong></td>
+<td data-page-node-id="0kwqXHdvjd257H8JUew3Tn"><strong data-page-node-id="4ZFkJo3O9HWdWjPZEBdOGw">31 绿 / 0 红</strong></td>
+</tr>
+<tr data-page-node-id="Zs9JLAEK98GU1RA8wqF5GO">
+<td data-page-node-id="BJne2vMTbzskblViNU566H"><code data-page-node-id="vVXdigYIkQejna9oVAKyD2">test_p10_state_machine</code></td>
+<td data-page-node-id="jcGFJzaANLc4JKtQoCZpxT">55 通过 / <strong data-page-node-id="hjoUkHRusdEqSqEESORmVO">3 失败</strong></td>
+<td data-page-node-id="pfSTGMOgJr77DsW8OjlUBk"><strong data-page-node-id="AzAOTFMXAOCMx9Uc6srFMc">58 通过 / 0 失败</strong></td>
+</tr>
+<tr data-page-node-id="rsuxI0DJjTGGWbTjcW3xky">
+<td data-page-node-id="jmmAm0GabNOFmf5fsH8TUs"><code data-page-node-id="J7zJzFFlmVjt68MzSARxdn">test_p11</code> / <code data-page-node-id="E84LVjpTZHCaebbd0iIt53">test_p18</code> / <code data-page-node-id="1jQeOzEcdC6eALfKTUL1Qc">test_p24</code> / <code data-page-node-id="awXRvRTsUAuBpRhwAj2Dir">test_p25</code> / <code data-page-node-id="9vPovewkppz52cOhrRFYK9">test_p26</code></td>
+<td data-page-node-id="mF8sx13XCQQqwtHcTvE0A9">全绿</td>
+<td data-page-node-id="ntPkZFzd5API59GYRBVCQr">全绿</td>
+</tr>
+<tr data-page-node-id="o1Ge8N5nj80lulzjBM8Sn5">
+<td data-page-node-id="tBpVvbpf1nYNWnxwZnwOlA">P26 断言数</td>
+<td data-page-node-id="YNwTDFquy9Dhae1wAvxH6P">20</td>
+<td data-page-node-id="nDkIad8cjOJTkOkRBnRyrE"><strong data-page-node-id="nVJVeYBwTviDMLLGwdDepA">23</strong>（+3：旧枚举名主断言 + 2 条元护栏自证）</td>
+</tr>
+<tr data-page-node-id="Bwqc0sbA67TZQuklM1RwQ2">
+<td data-page-node-id="v6QEas7r9hl02YBW0v7S2q">变异测试（4 例独立注入）</td>
+<td data-page-node-id="SA0cC0Wqa9BNzYLPJQvUCa">—</td>
+<td data-page-node-id="wBBfqYAyGY9G5oEWTXGAkm"><strong data-page-node-id="CB16VcPSVlVGOzhxHa4CgE">4/4 捕获，还原逐字节一致，还原后 P26 恢复绿</strong></td>
+</tr>
+</tbody>
+</table>
+<p data-page-node-id="sK5qdICC5GLpuzbAjio8Um">变异测试输出节选：</p>
+<pre data-page-node-id="GdENrB8BMeowFrGSSgxHrR"><code data-page-node-id="kGcoEzCD4CQDpnd8MPGV5Y">M1 中文禁用词（腿）            注入后 rc=1 红 ✓  命中[无已废弃中文术语] ✓  还原一致 ✓  还原后绿 ✓
+M2 英文 leg 标识符             注入后 rc=1 红 ✓  命中[无英文 leg / legs] ✓  还原一致 ✓  还原后绿 ✓
+M3 旧枚举值名 open_first       注入后 rc=1 红 ✓  命中[无旧枚举值名残留] ✓  还原一致 ✓  还原后绿 ✓
+M3b 旧枚举值名 unlock_first    注入后 rc=1 红 ✓  命中[无旧枚举值名残留] ✓  还原一致 ✓  还原后绿 ✓
+变异测试总结论: 全部通过（护栏真实有效）
+</code></pre>
+<p data-page-node-id="h5d4EHWQE2rLIBjbGF7rCj">环境：Python 3.13.12 / <code data-page-node-id="fCO6t56J8BH45zDBa4sMh1">~/.workbuddy/binaries/python/envs/default</code>；测试树含 <code data-page-node-id="qVOFxJ3DKWLfFdOTpMFdel">Trading/ + App/ + Frontend/ + 根目录</code>，保证 P20 跑满 82 项。</p>
+<hr  data-page-node-id="3blbxJzmp4wpc94tNrjRt3"/>
+<h2 id="_3" data-page-node-id="Bfvu8Jp4ZjtwO3cUHvarq9">五、应用步骤</h2>
+<ol data-page-node-id="16XolTeqUMAjE0HWtE72iq">
+<li data-page-node-id="3zNp6AcGbmsbHQtqCyAwfq">备份（可选）：<code data-page-node-id="lUJOHFK5EJuPTQ6tYtqHCH">cp Trading/Infra/Types.py Trading/Infra/Types.py.bak</code></li>
+<li data-page-node-id="vKIs85RHYCCO4U1qpt4fIN">解压本包，覆盖到仓库根（保持目录结构）。</li>
+<li data-page-node-id="2W2FQqkdid5mPdLN6Ax9bo">落盘校验（Windows 下建议确认 mtime 已更新，避免编辑器"保存了但没写盘"）：
+   <code data-page-node-id="l7eDl4bak2Zy5zlEd3ssCz">bash
+   grep -n "成员定义顺序无语义" Trading/Infra/Types.py
+   grep -n '"soft_exit_lock"\]' Trading/Test/test_p10_state_machine.py</code></li>
+<li data-page-node-id="65eMwNoU1IvpW80TrWK5tD">全量回归：
+   <code data-page-node-id="kmTm9eq7hAWYKGKNFlDT7b">bash
+   python Trading/Test/test_p10_state_machine.py     # 期望 58 通过 / 0 失败
+   python Trading/Test/test_p26_terminology_guard.py # 期望 23 passed, 0 failed</code></li>
+<li data-page-node-id="cYfWJlZ0Ws95Q4f9eT9Lax">（可选）<code data-page-node-id="HTUPRMWyJtOwo0X2K8kGoO">python mutation_test_p26.py</code> 验证护栏不是"永远绿"。</li>
+</ol>
+<p data-page-node-id="FiGQT8u0tVVGfDCKhK8oUx"><strong data-page-node-id="bbMPlDmKlPH0aTxVG7KX4i">无删除步骤，无 <code data-page-node-id="wMCtYvEUWtesZL24E8h8Tf">state.db</code> 需要清理，无生产逻辑变更。</strong></p>
+<hr  data-page-node-id="MJb8LNtXGVFdfgZWbua0cS"/>
+<h2 id="_4" data-page-node-id="uUvNB8zDFvaXMT9pObDUC1">六、已知遗留（本包未动，供决策）</h2>
+<table data-page-node-id="V151yQnS0ghNucmX8HkWdj">
+<thead data-page-node-id="gLLOHCOMhCn6Z2QvmbZ2Vy">
+<tr data-page-node-id="rKeXRqLUfmuUv28d7CjWFh">
+<th data-page-node-id="XivFRB1BmSSsGkNWGjxjbg">项</th>
+<th data-page-node-id="v6zFS7sf1EQmFDIyCERyOD">位置</th>
+<th data-page-node-id="T3Lb16qwASh3BpRMem2gNQ">说明</th>
+</tr>
+</thead>
+<tbody data-page-node-id="oBmpJHFInR1zajdTJqITQX">
+<tr data-page-node-id="R94A3LQPYHfUGhEfNnN4ni">
+<td data-page-node-id="N9Zf50IL68AhkplENfPYpW"><code data-page-node-id="Ea2KuF4DQzaPR0qBJsNZpF">AppTrader.py:22</code> 旧值名</td>
+<td data-page-node-id="2FrsjOGnYROSbAm1wNNNWC"><code data-page-node-id="E0WHytmNOhBWkq1I6hqyWA">App/AppTrader.py</code></td>
+<td data-page-node-id="J738T5Z1WV7ks0vsLtINNY"><code data-page-node-id="dBXwSJ6kEskV64YBkmuStM">落簿 LOCKED 反向仓</code> → 建议改 <code data-page-node-id="OgFVeYmyxFo1bkWKryyZfc">落簿 SOFT_EXIT_LOCK 反向仓</code>。本包刻意不碰 <code data-page-node-id="BRjxSJP17MGA1kVn8H7sYK">App/</code>（该文件不在交付链路内），一行注释改动可由你顺手处理</td>
+</tr>
+<tr data-page-node-id="9G6EbusbYqo9SrBgIhU78n">
+<td data-page-node-id="FiwB0cRGT9roRYW1vjG6BA">p13 文件名</td>
+<td data-page-node-id="e5HEapuRNKXk9vK9FWsJ3L"><code data-page-node-id="AQsYPg3ga9S0diRMTkkFBs">Trading/Test/test_p13_unlock_first_entry.py</code></td>
+<td data-page-node-id="1oeglGeulOHJ2V2NnFGXoa">文件名含旧名 <code data-page-node-id="nUlk3BCGLUkJ8P8BBCG2Zm">unlock_first</code>。改名会牵动运行脚本与 CI 引用，收益低；P26 正则已明确豁免</td>
+</tr>
+<tr data-page-node-id="3MeS2hWNf4Pz0bLqIG3fCK">
+<td data-page-node-id="aj0MkRrRsTK0tqvLhY32EX"><code data-page-node-id="YNLQq41nklrii6ahF6Uogc">Docs/**</code> 319 处"腿"</td>
+<td data-page-node-id="SsR2NXgr9uKDXQERyBONag"><code data-page-node-id="aVmUc3AXW4spgw0Ah0B5U0">Docs/</code></td>
+<td data-page-node-id="CD19nS652Jhjif9cJwop5b">历史决策快照，改会篡改可追溯性；P26 不扫 <code data-page-node-id="eo9Ke4XuyRDiGBgT5vTBTS">Docs/</code></td>
+</tr>
+<tr data-page-node-id="mmbIRujbzWtK94nz0qZ2CL">
+<td data-page-node-id="PFvRbmc773cpolBBor1NZ5"><code data-page-node-id="uxhvJ2lFSr6OCNI6UtFCLG">Types.py</code> 调序本身</td>
+<td data-page-node-id="6BcWma2gO90HeoioIL4Vca">—</td>
+<td data-page-node-id="RUvYn8coqvRCVkP2JUJQuw"><strong data-page-node-id="FSZ57xnoxPME4yYwTzEBGm">保留</strong>（生产零依赖 + 分组更清晰）。若你更想回到原顺序，只需回滚本包的 A1/A2/A4 注释块，B1 的 <code data-page-node-id="HMndsqMfI22gscRW72DTPn">sorted()</code> 断言两种顺序都能过</td>
+</tr>
+</tbody>
+</table>
+</div>
+</body>
+</html>

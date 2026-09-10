@@ -344,7 +344,7 @@ with tmp_dir() as tmp:
     if close_events:
         check("UNLOCK_UPGRADE close 事件 exit_mode=close",
               close_events[0].get("exit_mode"), "close")
-        check("UNLOCK_UPGRADE close 事件 origin=unlock_first",
+        check("UNLOCK_UPGRADE close 事件 origin=unlock_upgrade",
               close_events[0].get("origin"), "unlock_upgrade")
 
 

@@ -220,7 +220,7 @@ with tmp_dir() as tmp:
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
     check("[1n] 事件流含 lock_booked", "lock_booked" in kinds, True)
     check("[1o] 原仓 PnL 不兑现（trade 不落盘）", len(store.trades()), 0)
-    check("[1p] 双向持仓已持久化（2 条 locked）",
+    check("[1p] 双向持仓已持久化（2 条 soft_exit_lock）",
           [p["origin"] for p in (store.get_json("positions") or [])],
           ["soft_exit_lock", "soft_exit_lock"])
 
