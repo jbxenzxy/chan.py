@@ -15,7 +15,7 @@ M1 交易网关 · CLI 入口
     · 单次覆盖        → 命令行 --symbol / --freq / --broker / --source ...
     · 账户密码        → 只走环境变量（SN_ACCOUNT / LIVE_ACCOUNT / TQ_ACCOUNT ...），不落盘
 
-换止盈止损：改 Trading/Config.py 的 ExitConfig（L1-L4 分层出场的唯一参数模型），
+换止盈止损：改 Trading/Config.py 的 ExitConfig（L1-L3 分层出场的唯一参数模型），
     引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 """
 from __future__ import annotations
@@ -180,11 +180,17 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
             seg = "  ".join("{}: n={} net={:+.2f}".format(k, v["n"], v["net"])
                             for k, v in s["by_reason"].items())
             print("按出场    : {}".format(seg))
+    # 2026-09-10 修复：Engine.summary()["open_position"] 是**持仓 dict 的列表**
+    #   （Engine.py 明确 `[p.to_dict() ...] or None`），原代码当成单个 dict 取下标
+    #   → 只要收盘时簿内还有持仓，收尾必抛 TypeError、进程 rc=1，并连带跳过
+    #   --summary-json 写出 / stop 事件 / handle.close()。此处取第一笔展示。
+    _open_list = s.get("open_position") or []
+    _pos0 = _open_list[0] if _open_list else None
     print("当前持仓  : {}".format(
-        "无" if not s["open_position"] else
+        "无" if _pos0 is None else
         "{side} {volume}手 @{price}".format(
-            side=s["open_position"]["side"], volume=s["open_position"]["volume"],
-            price=s["open_position"]["entry_price"])))
+            side=_pos0["side"], volume=_pos0["volume"],
+            price=_pos0["entry_price"])))
     print(line)
     print("耗时 {:.2f}s   状态目录: {}".format(elapsed, os.path.abspath(out)))
     print("事件日志: {}".format(os.path.join(os.path.abspath(out), "events.jsonl")))

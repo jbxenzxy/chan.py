@@ -37,7 +37,11 @@ class InstrumentSpec(BaseModel):
     slippage_ticks: float = 1.0               # 单边滑点（tick 数）
     overprice_points: float = 0.6             # 超价点数（已废弃，仅为向后兼容保留；
                                               #   实际超价统一用 broker_params.overprice_points）
-    close_today_first: bool = True            # 平仓优先平今
+    close_today_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**
+                                              #   "平仓优先平今"）。实际语义 = 是否允许按持仓
+                                              #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
+                                              #   OrderIntent.CLOSE 只用于跨日单，正常流程
+                                              #   恒走平昨费率，置 False 可整体关闭今仓判定。
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:

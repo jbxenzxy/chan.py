@@ -160,8 +160,17 @@ class ReconcileMixin:
             # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供 trade 记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)
             gross = pos.pnl_points(ref_price)
-            cost = self.spec.cost_points(pos.entry_price, ref_price,
-                                         close_today=self.spec.close_today_first)
+            # 2026-09-10：成本口径与 Engine 的 hard-exit 路径对齐（规则 ⑸）。
+            #   原写法直接传全局开关 self.spec.close_today_first（默认 True）→ 恒按
+            #   "平今"费率（0.0345%）计，对**跨日单**高估 15 倍；而 Engine.py:758 那边
+            #   是按 entry_date 动态判定 —— 两处成本口径不一致。现改为与 Engine 同源。
+            _today = (self.last_bar.date[:10]
+                      if (self.last_bar is not None and self.last_bar.date)
+                      else now_cn()[:10])
+            _is_today_pos = bool(pos.entry_date) and pos.entry_date[:10] >= _today
+            cost = self.spec.cost_points(
+                pos.entry_price, ref_price,
+                close_today=bool(_is_today_pos and self.spec.close_today_first))
             net = gross - cost
             cash = self.spec.points_to_cash(net, pos.volume)
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)

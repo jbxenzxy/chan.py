@@ -6,7 +6,7 @@
 
 2026-09-08 精简：取消「策略选择器」抽象。
     生产环境入场只有一个策略 DefaultEntryPolicy、出场只有一个策略
-    LayeredExitPolicy（L1-L4 分层），用户明确不会增加第二种，因此不再有
+    LayeredExitPolicy（L1-L3 分层），用户明确不会增加第二种，因此不再有
     注册表 / @register / build_*_policy 这类路由机制。main.py 与测试直接
     实例化这两个类即可。
 
