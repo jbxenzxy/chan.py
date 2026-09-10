@@ -436,15 +436,36 @@ with tmp_dir() as tmp:
                err is not None, repr(err)[:80])
     st.close()
 
+# 2026-09-10（P31 收口，用户拍板"有问题把库删了就行"）：R3 的"空 id 跳过"是
+# 有意留的口子 —— 当时把空 id 一律当"未锁仓、合法"。此后核实证明：
+# origin=soft_exit_lock 的记录**必然**带 id（全仓仅 2 个写入点，都在
+# `_book_lock_pair` 内，两笔共用同一个 pair_id），故空 id 的锁仓记录只能是
+# 外部污染 → 改由更早的 `_reject_incomplete_records`（Engine._restore）一律拦。
+# 下面两格把新旧契约的边界钉死：**同为空 id，看 origin 决定放行还是拒绝**。
 with tmp_dir() as tmp:
     st = Store(os.path.join(tmp, "state_r3d.db"))
     st.set_json("positions", [
-        _pos(Side.LONG, "A", "").to_dict(),                        # 空 id 合法
+        _pos(Side.LONG, "A", "").to_dict(),                        # 锁仓 + 空 id → 污染
         _pos(Side.LONG, "B", "lock_00001").to_dict(),              # 单成员合法
     ])
-    eng, _ = build(tmp, "r3d")
-    check("[5g] 空 lock_pair_id + 单成员 → 正常启动",
-          len(eng.positions.positions), 2)
+    err = None
+    try:
+        build(tmp, "r3d")
+    except RuntimeError as e:
+        err = e
+    check_true("[5g] 锁仓（soft_exit_lock）+ 空 lock_pair_id → 拒绝启动（P31 收紧）",
+               err is not None and "不合契约" in str(err), repr(err)[:140])
+    st.close()
+
+with tmp_dir() as tmp:
+    st = Store(os.path.join(tmp, "state_r3e.db"))
+    st.set_json("positions", [_pos(Side.LONG, "A", "").to_dict()])
+    recs = st.get_json("positions")
+    recs[0]["origin"] = PositionOrigin.SIGNAL_OPEN.value   # 未锁仓的敞口持仓
+    st.set_json("positions", recs)
+    eng, _ = build(tmp, "r3e")
+    check("[5h] 敞口持仓（signal_open）+ 空 lock_pair_id → 正常启动（空 id 本身合法）",
+          len(eng.positions.positions), 1)
     st.close()
 
 # ════════════════════════════════════════════════════════════════════

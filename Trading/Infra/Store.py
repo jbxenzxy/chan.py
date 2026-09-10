@@ -223,8 +223,10 @@ class Store:
             会被 `try_mark_signal` 判为重复 → 全部 signal_dup → 本轮 0 笔成交。
             这正是 v6 跑出 trades=0 的直接原因。
           - trades：成交记录。
-          - kv 里的 position / day_stats / bars_seen。
-            （position 为当前持仓；day_stats / bars_seen 为历史键，一并清掉防旧库残留。）
+          - kv 里的 position / positions / day_stats / bars_seen。
+            （position 为单仓兼容壳（审计用）；**positions 才是多仓主键**，
+            不清它 = 上一轮持仓会随 restore 回来；day_stats / bars_seen 为历史键，
+            一并清掉防旧库残留。）
 
         2026-09-10（R1 配套）：一并清掉 `trade_seq` / `lock_pair_seq` ——
         这两者对应的数据（trades / positions）刚刚被清空，序号理应回到 1，
@@ -241,7 +243,14 @@ class Store:
                     "SELECT COUNT(*) AS n FROM {}".format(tbl)).fetchone()
                 counts[tbl] = int(row["n"]) if row else 0
                 self.conn.execute("DELETE FROM {}".format(tbl))
-            for k in ("position", "day_stats", "bars_seen",
+            # 2026-09-10 修正：补清 `positions`（复数）。此前只清 `position`（单数，
+            # 仅审计用），而**复数键才是多仓主键** —— `_persist` 写它、`_restore`
+            # 优先读它。漏清的后果：回放 `--fresh`（main.py:137）后簿内仍留着上一轮
+            # 的持仓（实测整对锁仓 lock_00001 残留）→ account_state() 判 LOCKED，
+            # 而 trades 已归零 → 账实不一致，"干净重跑"并不干净。
+            # 用 `positions` 键与 `--fresh` 的语义对齐：清派生状态 = 等价于删库重启
+            # （区别仅在 orders 表作为审计底稿保留，故 order_seq 仍刻意不清）。
+            for k in ("position", "positions", "day_stats", "bars_seen",
                       "trade_seq", "lock_pair_seq"):
                 self.conn.execute("DELETE FROM kv WHERE k=?", (k,))
         return counts

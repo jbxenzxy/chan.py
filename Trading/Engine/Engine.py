@@ -254,6 +254,97 @@ class TradingEngine(ReconcileMixin):
             "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
             .format(keys))
 
+    # ---------------- 记录完整性闸门（2026-09-10） ----------------
+    # 两类"记录写不出来、只能被外部污染进来"的持仓记录，一律拒绝启动：
+    #
+    #   (A) 缺 `origin` 键 —— `Position.from_dict` 会静默降级成 SIGNAL_OPEN。
+    #       任何版本写出的记录都带 `entry_mode` 或 `origin`（前者已被上一道闸门
+    #       拦下），故"两个键都没有"记录不了任何来源 → 无法判定它是不是锁仓仓，
+    #       若它其实是锁仓仓，会被当"真实净敞口"接进 L1-L3 止盈止损 → 对锁仓仓
+    #       发平仓单（账实不符）。
+    #
+    #   (B) `origin == soft_exit_lock` 但 `lock_pair_id` 空/缺 ——
+    #       SOFT_EXIT_LOCK 必然属于某个锁对：全仓只有 2 个写入点，都在
+    #       `_book_lock_pair` 内，两笔用的是**同一个局部变量** pair_id
+    #       （Engine._book_lock_pair）。且 lock_pair_id 与 origin 同源改名而来，
+    #       所有能写锁仓记录的版本都给两笔写 id → 空 id 的 SOFT_EXIT_LOCK
+    #       在自然流程与任何历史版本下都写不出来。
+    #       后果：`_upgrade_lock_pair` 首行 `if not locked_pos.lock_pair_id: return`
+    #       静默返回（该仓永不升级、一个事件都不写），而 `account_state()` 只按
+    #       origin 判 → 账户被判 LOCKED，该仓永久停在 SOFT_EXIT_LOCK
+    #       （不止盈止损、不参与 EOD），唯一出路是人工介入。
+    #
+    # 不变量不是"lock_pair_id 必须非空"：未锁仓的敞口持仓 lock_pair_id 本就为空，
+    # 这是合法的（见 (B) 只对 soft_exit_lock 生效）。
+    #
+    # 处置口径与既有三道闸门一致（reference：`_reject_legacy_state` /
+    # `_assert_lock_pair_invariant` / entry_date 三源全空）——拒绝启动，
+    # 让操作者在完整上下文（events.jsonl / 快期3 持仓 / gateway.log）里处理。
+    # 不做自动迁移：这类记录自然发生率为 0，判错则引擎会在后续解锁时"自信地"
+    # 平错一笔/升级错一笔，与 phantom 清仓同级（不可逆、账实不符）。
+    _REQUIRED_RECORD_KEYS = ("origin",)
+    _ORPHAN_LOCK_ORIGIN = "soft_exit_lock"
+
+    @staticmethod
+    def _incomplete_position_records(records) -> dict:
+        """挑出不合契约的持仓记录（纯函数，便于单测）。
+
+        返回 {"missing_origin": [...], "orphan_lock": [...]}，两个列表都是**记录本身**
+        （便于错误信息里回显 symbol / signal_key）。
+        """
+        missing_origin, orphan_lock = [], []
+        for d in (records or []):
+            if not isinstance(d, dict):
+                continue
+            if any(k not in d for k in TradingEngine._REQUIRED_RECORD_KEYS):
+                missing_origin.append(d)
+                continue
+            if (str(d.get("origin") or "") == TradingEngine._ORPHAN_LOCK_ORIGIN
+                    and not str(d.get("lock_pair_id") or "").strip()):
+                orphan_lock.append(d)
+        return {"missing_origin": missing_origin, "orphan_lock": orphan_lock}
+
+    def _reject_incomplete_records(self, records) -> None:
+        """检出不合契约的持仓记录时抛错，拒绝启动。"""
+        bad = self._incomplete_position_records(records)
+        if not (bad["missing_origin"] or bad["orphan_lock"]):
+            return
+        detail = {
+            "missing_origin": [
+                {"symbol": d.get("symbol"), "signal_key": d.get("signal_key"),
+                 "keys": sorted(d.keys())}
+                for d in bad["missing_origin"]],
+            "orphan_lock": [
+                {"symbol": d.get("symbol"), "signal_key": d.get("signal_key"),
+                 "lock_pair_id": d.get("lock_pair_id")}
+                for d in bad["orphan_lock"]],
+        }
+        self.ev.write(
+            "position_record_incomplete",
+            n_missing_origin=len(bad["missing_origin"]),
+            n_orphan_lock=len(bad["orphan_lock"]),
+            detail=detail,
+            note="持仓记录缺 origin 键 / 锁仓记录缺 lock_pair_id；正常路径与任何历史"
+                 "版本都写不出这类记录，判定为 state.db 被外部污染，拒绝启动")
+        raise RuntimeError(
+            "state.db 有 {} 笔持仓记录不合契约，拒绝启动：\n"
+            "  · 缺 origin 键：{} 笔 —— `from_dict` 会静默降级成 SIGNAL_OPEN，\n"
+            "    若它其实是锁仓仓，会被当真实净敞口纳入 L1-L3 止盈止损。\n"
+            "  · soft_exit_lock 但 lock_pair_id 为空：{} 笔 —— 该仓永不升级\n"
+            "    （`_upgrade_lock_pair` 首行静默 return）、永久停在软离场态，\n"
+            "    不参与止盈止损与收盘强平。\n"
+            "  原因：这两类记录自然流程与任何已发布版本都写不出来（锁仓落簿只有\n"
+            "        2 个写入点，共用同一个 pair_id；origin 与 lock_pair_id 同源），\n"
+            "        出现本错误说明 state.db 被手工改过 / 第三方工具改过 /\n"
+            "        多进程混写过。\n"
+            "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。\n"
+            "        删库后引擎从零重建（Store 用 CREATE TABLE IF NOT EXISTS），\n"
+            "        前提是账户已无未了结持仓 —— 库空时引擎不会对账，\n"
+            "        不能靠对账把实盘已有的仓认回来。\n"
+            "  明细：{}".format(
+                len(bad["missing_origin"]) + len(bad["orphan_lock"]),
+                len(bad["missing_origin"]), len(bad["orphan_lock"]), detail))
+
     # ════════════════════════════════════════════════════════════════
     # R3（2026-09-10）：锁仓配对不变量断言
     #   「一个锁对恰好 2 笔成员（原仓 + 反向仓，方向相反）」是**构造性**成立的：
@@ -353,6 +444,13 @@ class TradingEngine(ReconcileMixin):
         pd_list = self.store.get_json("positions")
         # 旧 schema 闸门：改名前写入的记录用 entry_mode 键，必须显式处理（见上方注释）
         self._reject_legacy_state(
+            pd_list if isinstance(pd_list, list) else [self.store.get_json("position")])
+        # 记录完整性闸门（2026-09-10）：缺 origin 键 / soft_exit_lock 缺 lock_pair_id。
+        #   与 _reject_legacy_state 同层同源（都只吃"原始记录列表"），放在装载进簿之前 ——
+        #   坏数据不许进入状态机。刻意扫**全部合约分片**（不按 my_symbol 过滤）：
+        #   与 `_max_lock_pair_seq_in_state` 同口径 —— 切合约后旧合约记录仍在库里，
+        #   "这份库能不能用"是全局判断，不能按当前合约重新放行。
+        self._reject_incomplete_records(
             pd_list if isinstance(pd_list, list) else [self.store.get_json("position")])
         if isinstance(pd_list, list):
             own = [d for d in pd_list
