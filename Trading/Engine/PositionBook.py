@@ -5,7 +5,7 @@
 设计动机
 --------
 v1 只支持"一个实例一手"，全部代码假定 `engine.position` 是单个 `Position` 或 None。
-v2 引入"同 K 线连开 N 单 (N≥1)"与"昨日锁仓 UNLOCK_FIRST 入场"两条路径后，
+v2 引入"同 K 线连开 N 单 (N≥1)"与"昨日锁仓解锁入场（来源标记 unlock_first）"两条路径后，
 引擎需要同时跟踪多个 Position（同方向拆批 / 跨日双边锁仓），单变量已不够用。
 
 E1 的目标（已交付）
@@ -214,9 +214,12 @@ class PositionBook:
     def has_opposite(self, side: Side) -> bool:
         """是否存在与给定 side 相反方向的持仓。
 
-        E2 (UNLOCK_FIRST 入场路径) 的判定依据：
-          收到新信号时，若本簿已有反向 Position → 这是一笔"昨仓解锁"，
-          不应再走开仓，应走 UNLOCK_FIRST（只平昨）。
+        用途：on_signal 里筛出"与信号反向"的候选持仓，供 Engine 进一步判定。
+
+        ⚠️ 本方法**只做方向筛选，不判日期** —— 是否走 UNLOCK 由调用方按
+        `entry_date < today` 决定（2026-09-10 规则 ⑸）。旧注释称本方法是
+        "UNLOCK_FIRST 入场路径的判定依据"已作废：存在反向仓只说明"可能是解锁"，
+        当日锁同样是反向仓，此时应开新仓而非解锁。
         """
         for p in self._positions:
             if p.side is not side:

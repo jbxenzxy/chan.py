@@ -604,9 +604,9 @@ class TradingEngine(ReconcileMixin):
           · 部分成交：剩余仓位保留在 book + state EXITING
           · 全部成交：state IDLE
 
-        force_lock（Phase I1）：True 时无视 entry_mode，目标持仓**全部 LOCK**
-        （开反向同手数锁仓）。用于自动下单关闭语义 ② —— 无论 OPEN_FIRST
-        还是 UNLOCK_FIRST 入场，关闭时一律锁仓（用户拍板：不区分入场方式）。
+        force_lock（Phase I1）：True 时无视建仓日期，目标持仓**全部 LOCK**
+        （开反向同手数锁仓）。用于自动下单关闭语义 ② —— 无论这笔仓是空仓新开
+        还是解锁升级来的，关闭时一律锁仓（用户拍板：不区分来源）。
 
         调用方传入的 positions 列表会自动按 entry_bar_seq 排序（防御性）。
         """
@@ -642,7 +642,10 @@ class TradingEngine(ReconcileMixin):
         first_rejected = False
 
         for idx, pos in enumerate(ordered):
-            # Phase D：按 pos.entry_mode 决定离场方式（硬规则，不留开关）。
+            # 规则 ⑸：按【建仓日期】决定离场方式（硬规则，不留开关）。
+            #   2026-09-10 起不再看 entry_mode：当日单 → LOCK 反向开仓锁仓；
+            #   跨日单 → CLOSE 平昨。（旧实现按 entry_mode 联动，会导致
+            #   "当日开、隔日平"的仓被误判为今日单而多余锁一次仓。）
             # force_lock（Phase I1）→ 全部 LOCK（自动下单关闭语义 ②）。
             if force_lock and pos.entry_mode is not EntryMode.LOCKED:
                 opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
@@ -915,7 +918,7 @@ class TradingEngine(ReconcileMixin):
             # 补开：state 由 _open_position 推进（成交→IN_TRADE / 拒单→IDLE）
             self._open_position(sig, side, new_lots)
         else:
-            # v1.3（S3/S4）：留双向持仓解锁后，升级的配对持仓（UNLOCK_FIRST）是单边敞口
+            # v1.3（S3/S4）：留双向持仓解锁后，升级的配对仓已不再是 LOCKED（单边敞口）
             #   → IN_TRADE；若簿内无任何非 LOCKED 持仓（纯解锁回空仓 / 旧数据 1 锁 1 笔）→ IDLE。
             if any(p.entry_mode is not EntryMode.LOCKED
                    for p in self.positions.positions):
@@ -998,7 +1001,9 @@ class TradingEngine(ReconcileMixin):
                           lock_pair_id=locked_leg.lock_pair_id,
                           signal_key=sig.key)
             return
-        # 升级：LOCKED → UNLOCK_FIRST + 重算 ExitPlan（anchor = 解锁成交价 P₂）
+        # 升级：LOCKED → UNLOCK_FIRST（审计标签，不参与离场决策）+ 重算 ExitPlan
+        #   （anchor = 解锁成交价 P₂；entry_date 保持原开仓日不动，
+        #    故该仓必为昨仓 → 离场恒走 CLOSE 平昨，与规则 ⑸ 一致）
         pair.entry_mode = EntryMode.UNLOCK_FIRST
         pair.exit_plan = self.exit_policy.plan(sig, pair.entry_price, self.spec,
                                                anchor=unlock_price)

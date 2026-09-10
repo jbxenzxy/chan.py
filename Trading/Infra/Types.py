@@ -50,9 +50,11 @@ class DecisionType(Enum):
 # ─────────────────────────────────────────────
 # Phase A 命名固化（2026-09-05）
 # ─────────────────────────────────────────────
-# 4 种订单意图、2 种入场模式、2 种离场方式、4 态引擎状态机 —— 全部用枚举固化。
-# 引入后默认行为零变化（Position.entry_mode 默认 OPEN_FIRST，与旧持仓记录兼容）；
-# 真正的报文区分（Phase C）和入场方式决定离场方式（Phase D）后续 phase 落地。
+# 4 种订单意图、3 种持仓来源标记、2 种离场方式、4 态引擎状态机 —— 全部用枚举固化。
+# 引入后默认行为零变化（Position.entry_mode 默认 OPEN_FIRST，与旧持仓记录兼容）。
+# 2026-09-10 规则 ⑸ 改造：离场方式改由【建仓日期】判定（Engine._exit_intent），
+#   EntryMode **不再决定离场方式** —— 只剩 LOCKED 有决策语义，
+#   OPEN_FIRST / UNLOCK_FIRST 降级为纯审计标签（见下方 EntryMode docstring）。
 class OrderIntent(str, Enum):
     """订单意图（CTP OpenCloseType 映射的源头）。"""
     OPEN = "open"        # 首次开仓        → CTP OpenCloseType=Open
@@ -62,17 +64,31 @@ class OrderIntent(str, Enum):
 
 
 class EntryMode(str, Enum):
-    """入场模式（**不再决定离场方式** —— 2026-09-10 规则 ⑸ 改造）。
+    """持仓来源标记（**不参与任何离场决策** —— 2026-09-10 规则 ⑸ 改造）。
 
-    离场方式自 2026-09-10 起由 `Engine._exit_intent(pos, today)` **按建仓日期**判定
-    （今日单 → LOCK 反向开仓；跨日单 → CLOSE 平昨），本枚举不再参与该决策。
-    现仅用于两处：
-      ① LOCKED —— _settle_positions 跳过（锁仓不等止盈止损，等解锁）+
-                  运行态判定（存在非 LOCKED 持仓 = 运行态）
-      ② 事件日志 / 持久化审计（标记这笔仓是怎么来的）
+    ⚠️ 命名沿革与陷阱（改代码前必读）
+      本枚举原名"入场模式"，早期设计假定"OPEN_FIRST → 锁仓软离场 /
+      UNLOCK_FIRST → 平仓硬离场"。该假定**已废弃**：同一笔 OPEN_FIRST 仓
+      当日平 → 锁仓，隔日平 → 平昨，离场方式随【日期】变化，不随来源变化。
+      因此 2026-09-10 起离场改由 `Engine._exit_intent(pos, today)` 按
+      `Position.entry_date` 判定，本枚举退出决策链。
+
+      现在剩下的语义只有两条：
+        ① LOCKED —— **唯一有决策语义的值**，出现在 9 处判定：
+             · settle 跳过（锁仓不等止盈止损，等解锁）
+             · 运行态判定（存在非 LOCKED 持仓 = 运行态 → 忽略信号）
+             · _exit_intent 防御分支 / force_lock 过滤 / 统计
+        ② OPEN_FIRST / UNLOCK_FIRST —— **纯审计标签**，写事件日志与 state.db，
+            标记"这笔仓是怎么来的"。代码中不存在任何对它们的判定性比较，
+            若有人新增 `if entry_mode is UNLOCK_FIRST: ...` 即视为回潮
+            （test_p25 的源码扫描会拦截）。
+
+      保留两值而非合并的原因：state.db 已持久化 "open_first"/"unlock_first"
+      字符串，合并需迁移；且区分来源对复盘"这笔是空仓新开还是解锁升级"有用。
     """
-    OPEN_FIRST = "open_first"          # 今日新开（空仓状态下的信号入场）
-    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓后，同向配对仓升级而来
+    OPEN_FIRST = "open_first"     # 空仓状态下的信号入场（建仓当日新开；跨日后标签不变，
+                                  #   但"今日"含义已失效 —— 判定当日/跨日必须看 entry_date）
+    UNLOCK_FIRST = "unlock_first"  # 解锁昨日锁仓后，同向配对仓升级而来（entry_date 保持原开仓日）
     # Phase H1：LOCK 软离场成交后，broker 端真实存在的反向锁仓落簿为本模式。
     # 唯一合法离场 = 对向信号触发 UNLOCK（CloseYesterday，次日语义）；
     # settle（TP/SL/EOD）跳过本模式 —— 锁仓不等止盈止损，等解锁。
@@ -242,8 +258,13 @@ class Position:
     open_order_id: str
     exit_plan: ExitPlan
     entry_bar_seq: int = 0        # 入场时的 bar 序号（计算持有根数、跳过入场K线）
-    # Phase A：入场模式，默认 OPEN_FIRST —— 旧持仓记录无此字段也能正常反序列化
-    # Phase D 由 entry_mode 自动决定 exit_mode（OPEN_FIRST→SOFT_EXIT 软离场 / UNLOCK_FIRST→HARD_EXIT 硬离场）
+    # 持仓来源标记，默认 OPEN_FIRST —— 旧持仓记录无此字段也能正常反序列化。
+    # 2026-09-10 规则 ⑸ 改造：**本字段不参与任何离场决策**
+    #   （离场只看下面的 entry_date，见 Engine._exit_intent）。
+    #   旧注释"由 entry_mode 自动决定 exit_mode（OPEN_FIRST→SOFT_EXIT /
+    #   UNLOCK_FIRST→HARD_EXIT）"已作废，勿恢复 —— 同一笔仓当日平走锁仓、
+    #   隔日平走平昨，离场方式随日期变，不随来源变。
+    #   唯一有决策语义的值是 EntryMode.LOCKED（settle 跳过 / 运行态判定）。
     # str Enum 单例不可变，可直接做 dataclass default（不像 list/dict 需要 default_factory）
     entry_mode: EntryMode = EntryMode.OPEN_FIRST
     # v1.3（S1）：入场交易日（YYYY-MM-DD，取 bar.date[:10]，绝不能用 now_cn()）。
