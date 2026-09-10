@@ -95,7 +95,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EngineState, EntryMode, ExitPlan, Position, Side,
+    Bar, EngineState, PositionOrigin, ExitPlan, Position, Side,
 )
 
 
@@ -208,7 +208,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                             params={"take_profit_points": tp_offset,
                                     "stop_loss_points": sl_offset}),
-        entry_mode=EntryMode.OPEN_FIRST, entry_date=entry_date)
+        origin=PositionOrigin.SIGNAL_OPEN, entry_date=entry_date)
 
 
 def read_events(eng, kinds=None, tail_n=200):
@@ -243,12 +243,12 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([pos], "manual", 4555.0, eng.last_bar, signal_key="P15B-1-1")
-    # v1.3（S3/S4）：OPEN_FIRST 软离场（锁仓）留双向持仓 = 原仓 LOCKED + 反向仓 LOCKED，
+    # v1.3（S3/S4）：SIGNAL_OPEN 软离场（锁仓）留双向持仓 = 原仓 SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，
     # 不兑现 PnL（0 条 Trade）。
-    check("单笔：留双向持仓 2 仓（原仓 LOCKED + 反向仓 LOCKED）", len(eng.positions), 2)
-    check("单笔：两笔 entry_mode=LOCKED",
-          sorted(p.entry_mode.value for p in eng.positions.positions),
-          ["locked", "locked"])
+    check("单笔：留双向持仓 2 仓（原仓 SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK）", len(eng.positions), 2)
+    check("单笔：两笔 origin=SOFT_EXIT_LOCK",
+          sorted(p.origin.value for p in eng.positions.positions),
+          ["soft_exit_lock", "soft_exit_lock"])
     check("单笔：state IDLE", eng._state, EngineState.IDLE)
     check("单笔：broker 1 单", len(eng.broker.orders), 1)
     trades = eng.store.trades()
@@ -267,10 +267,10 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p2, p0, p1], "manual", 4555.0, eng.last_bar)
-    # v1.3（S3/S4）：留双向持仓 = 3 原仓 + 3 反向仓 = 6 LOCKED，0 条 Trade。
+    # v1.3（S3/S4）：留双向持仓 = 3 原仓 + 3 反向仓 = 6 SOFT_EXIT_LOCK，0 条 Trade。
     check("FIFO：留双向持仓 6 仓（3 原仓 + 3 反向仓）", len(eng.positions), 6)
-    check("FIFO：全部 entry_mode=LOCKED",
-          all(p.entry_mode is EntryMode.LOCKED for p in eng.positions.positions), True)
+    check("FIFO：全部 origin=SOFT_EXIT_LOCK",
+          all(p.origin is PositionOrigin.SOFT_EXIT_LOCK for p in eng.positions.positions), True)
     check("FIFO：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
     check("FIFO：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
@@ -393,9 +393,10 @@ with tmp_dir() as td:
     check("第2笔拒单：state EXITING（仍有未锁 p1）", eng._state, EngineState.EXITING)
     trades = eng.store.trades()
     check("第2笔拒单：0 条 Trade（锁仓不兑现 PnL）", len(trades), 0)
-    modes = sorted(p.entry_mode.value for p in eng.positions.positions)
-    check("第2笔拒单：持仓模式组合 = 2 LOCKED + 1 OPEN_FIRST", modes,
-          ["locked", "locked", "open_first"])
+    modes = sorted(p.origin.value for p in eng.positions.positions)
+    # 期望值必须按**字母序**书写（modes 已 sorted）：signal_open < soft_exit_lock
+    check("第2笔拒单：持仓模式组合 = 2 SOFT_EXIT_LOCK + 1 SIGNAL_OPEN", modes,
+          ["signal_open", "soft_exit_lock", "soft_exit_lock"])
 
 # 1.6 空列表快速返回
 with tmp_dir() as td:
@@ -464,9 +465,9 @@ with tmp_dir() as td:
     check("1仓触发：broker 1 单", len(eng.broker.orders), 1)
     check("1仓触发：未触发 p1 仍在簿",
           any(p.signal_key == "P15B-2-2-B" for p in eng.positions.positions), True)
-    modes = sorted(p.entry_mode.value for p in eng.positions.positions)
-    check("1仓触发：持仓模式组合 = 2 LOCKED + 1 OPEN_FIRST", modes,
-          ["locked", "locked", "open_first"])
+    modes = sorted(p.origin.value for p in eng.positions.positions)
+    check("1仓触发：持仓模式组合 = 2 SOFT_EXIT_LOCK + 1 SIGNAL_OPEN", modes,
+          ["signal_open", "soft_exit_lock", "soft_exit_lock"])
     trades = eng.store.trades()
     check("1仓触发：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
 

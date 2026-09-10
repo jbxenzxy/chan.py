@@ -75,7 +75,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    EntryMode, ExitPlan, Position, Side,
+    PositionOrigin, ExitPlan, Position, Side,
 )
 
 _PASS = 0
@@ -115,7 +115,7 @@ def make_pos(side: Side, entry_price: float = 4500.0, vol: int = 1,
         entry_bar_seq=10, entry_bar_ts=4000,
         signal_key=signal_key, open_order_id="dry_run-test",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 5.0, tp_price=None, params={}),
-        entry_mode=EntryMode.OPEN_FIRST,
+        origin=PositionOrigin.SIGNAL_OPEN,
     )
 
 
@@ -360,19 +360,19 @@ with tmp_dir() as tmp:
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "PA", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
         {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4505.0, "entry_at": "2026-09-01 09:01",
          "entry_bar_ts": 4020, "entry_bar_seq": 11,
          "signal_key": "PB", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
         {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4510.0, "entry_at": "2026-09-01 09:02",
          "entry_bar_ts": 4040, "entry_bar_seq": 12,
          "signal_key": "PC", "open_order_id": "o3",
          "exit_plan": {"name": "x", "stop_price": 4500.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
     ])
     store.close()
 
@@ -449,8 +449,8 @@ with tmp_dir() as tmp:
     engine.on_bar(bar2)
     engine.on_signal(sig2)
 
-    check("反向信号被忽略：positions 仍 OPEN_FIRST（不锁仓）",
-          all(p.entry_mode.value == "open_first" for p in engine.positions.positions), True)
+    check("反向信号被忽略：positions 仍 SIGNAL_OPEN（不锁仓）",
+          all(p.origin.value == "signal_open" for p in engine.positions.positions), True)
     check("反向信号被忽略：_state 仍 IN_TRADE",
           engine._state.value, "in_trade")
     check("反向信号被忽略：_trade_seq == 0（无离场成交）",

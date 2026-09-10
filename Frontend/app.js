@@ -7446,7 +7446,7 @@
                 const posN = (data.auto_order && typeof data.auto_order.positions_n === 'number')
                     ? data.auto_order.positions_n : 0;
                 const lockedN = (data.auto_order && Array.isArray(data.auto_order.positions))
-                    ? data.auto_order.positions.filter(function(p) { return p.entry_mode === 'locked'; }).length : 0;
+                    ? data.auto_order.positions.filter(function(p) { return p.origin === 'soft_exit_lock'; }).length : 0;
                 const wrap = document.getElementById('auto-order-wrap');
                 if (wrap) {
                     let tip = '自动下单引擎：' + (running ? '运行中' : '已停止');

@@ -218,7 +218,7 @@ class PositionBook:
 
         ⚠️ 本方法**只做方向筛选，不判日期** —— 是否走 UNLOCK 由调用方按
         `entry_date < today` 决定（2026-09-10 规则 ⑸）。旧注释称本方法是
-        "UNLOCK_FIRST 入场路径的判定依据"已作废：存在反向仓只说明"可能是解锁"，
+        "UNLOCK_UPGRADE 入场路径的判定依据"已作废：存在反向仓只说明"可能是解锁"，
         当日锁同样是反向仓，此时应开新仓而非解锁。
         """
         for p in self._positions:

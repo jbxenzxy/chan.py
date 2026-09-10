@@ -332,7 +332,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
-    from Trading.Infra.Types import EntryMode, ExitPlan, now_cn
+    from Trading.Infra.Types import PositionOrigin, ExitPlan, now_cn
     if side is Side.LONG:
         tp = entry_price + 5.0
         stop = entry_price - 10.0
@@ -348,7 +348,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                            params={"take_profit_points": 5.0,
                                    "stop_loss_points": 10.0}),
-        entry_mode=EntryMode.OPEN_FIRST)
+        origin=PositionOrigin.SIGNAL_OPEN)
 
 
 def read_events(eng, kinds=None, tail_n=200):

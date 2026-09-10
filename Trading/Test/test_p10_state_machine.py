@@ -3,15 +3,15 @@
 P10 状态机 + 信号门单元测试（Phase A + B 合并）
 ==============================================
 背景
-    Phase A 在 types.py 里命名固化了 4 个枚举（OrderIntent / EntryMode / ExitMode /
-    EngineState）并给 Position 加了 entry_mode 字段（默认 OPEN_FIRST，向后兼容）。
+    Phase A 在 types.py 里命名固化了 4 个枚举（OrderIntent / PositionOrigin / ExitMode /
+    EngineState）并给 Position 加了 origin 字段（默认 SIGNAL_OPEN，向后兼容）。
     Phase B 把 engine 的 self.position 信号门重构成 self._state 4 态：
         IDLE → OPENING → IN_TRADE → EXITING → IDLE
     并把"反向信号只触发离场、不再反向开仓"的规则固化进 on_signal。
 
 硬性要求（本测试锁死）
     ① 4 个枚举可导入、值正确。
-    ② Position.entry_mode 默认 OPEN_FIRST，to_dict/from_dict 兼容旧 dict（无字段
+    ② Position.origin 默认 SIGNAL_OPEN，to_dict/from_dict 兼容旧 dict（无字段
        → 默认；坏值 → 回退）。
     ③ state 转移时序：
         IDLE → OPENING → IN_TRADE（开仓成功）
@@ -23,7 +23,7 @@ P10 状态机 + 信号门单元测试（Phase A + B 合并）
         IN_TRADE + 同向 → skip，不调 entry_policy
         IN_TRADE + 反向 → 仅触发 _close_position，不调 _open_position
         OPENING / EXITING + 任意 → in_flight 忽略，幂等键仍占位
-    ⑤ _open_position 写入 Position.entry_mode == OPEN_FIRST。
+    ⑤ _open_position 写入 Position.origin == SIGNAL_OPEN。
     ⑥ 持仓恢复（_restore）时按 position 推断初始 state。
 
 不需要真实 tqsdk / 网络；用 dry_run broker + 真实 Store(sqlite tempfile) 验证。
@@ -82,7 +82,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, DecisionType, EntryMode, EngineState, ExitMode, ExitPlan, OrderIntent,
+    Bar, DecisionType, PositionOrigin, EngineState, ExitMode, ExitPlan, OrderIntent,
     Position, Side, Signal,
 )
 
@@ -133,47 +133,47 @@ def build_engine(tmpdir):
 print("\n[1] 4 个枚举命名正确")
 check("OrderIntent 4 个值", [e.value for e in OrderIntent],
       ["open", "unlock", "close", "lock"])
-check("EntryMode 3 个值（H1 增 locked）", [e.value for e in EntryMode],
-      ["open_first", "unlock_first", "locked"])
+check("PositionOrigin 3 个值（H1 增 locked）", [e.value for e in PositionOrigin],
+      ["signal_open", "unlock_upgrade", "soft_exit_lock"])
 check("ExitMode 2 个值", [e.value for e in ExitMode],
       ["hard_exit", "soft_exit"])
 check("EngineState 4 个值", [e.value for e in EngineState],
       ["idle", "opening", "in_trade", "exiting"])
 
 # ════════════════════════════════════════════════════════════════
-# [2] Position.entry_mode 默认值 + 序列化兼容
+# [2] Position.origin 默认值 + 序列化兼容
 # ════════════════════════════════════════════════════════════════
-print("\n[2] Position.entry_mode 默认 + 序列化兼容")
+print("\n[2] Position.origin 默认 + 序列化兼容")
 p_default = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                      entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                      exit_plan=ExitPlan(name="x", stop_price=99.0))
-check("不传 entry_mode → 默认 OPEN_FIRST", p_default.entry_mode, EntryMode.OPEN_FIRST)
+check("不传 origin → 默认 SIGNAL_OPEN", p_default.origin, PositionOrigin.SIGNAL_OPEN)
 
 d = p_default.to_dict()
-check("to_dict 含 entry_mode 字段", d.get("entry_mode"), "open_first")
+check("to_dict 含 origin 字段", d.get("origin"), "signal_open")
 
 p2 = Position.from_dict(d)
-check("roundtrip 保留 entry_mode", p2.entry_mode, EntryMode.OPEN_FIRST)
+check("roundtrip 保留 origin", p2.origin, PositionOrigin.SIGNAL_OPEN)
 
-# 旧 dict 无 entry_mode 字段
+# 旧 dict 无 origin 字段
 old = {"symbol": "X", "side": "LONG", "volume": 1, "entry_price": 100.0,
        "entry_at": "", "entry_bar_ts": 0, "signal_key": "k", "open_order_id": "o",
        "exit_plan": {"name": "x", "stop_price": 99.0}}
 p3 = Position.from_dict(old)
-check("旧 dict 无 entry_mode → 默认 OPEN_FIRST", p3.entry_mode, EntryMode.OPEN_FIRST)
+check("旧 dict 无 origin → 默认 SIGNAL_OPEN", p3.origin, PositionOrigin.SIGNAL_OPEN)
 
 # 坏值回退
-bad = dict(old, entry_mode="garbage")
+bad = dict(old, origin="garbage")
 p4 = Position.from_dict(bad)
-check("坏值 entry_mode → 回退 OPEN_FIRST", p4.entry_mode, EntryMode.OPEN_FIRST)
+check("坏值 origin → 回退 SIGNAL_OPEN", p4.origin, PositionOrigin.SIGNAL_OPEN)
 
-# UNLOCK_FIRST 显式传
+# UNLOCK_UPGRADE 显式传
 p_unlock = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                      entry_at="", entry_bar_ts=0, signal_key="k2", open_order_id="o2",
                      exit_plan=ExitPlan(name="x", stop_price=99.0),
-                     entry_mode=EntryMode.UNLOCK_FIRST)
-check("显式 entry_mode=UNLOCK_FIRST 通过", p_unlock.entry_mode, EntryMode.UNLOCK_FIRST)
-check("UNLOCK_FIRST 序列化", p_unlock.to_dict()["entry_mode"], "unlock_first")
+                     origin=PositionOrigin.UNLOCK_UPGRADE)
+check("显式 origin=UNLOCK_UPGRADE 通过", p_unlock.origin, PositionOrigin.UNLOCK_UPGRADE)
+check("UNLOCK_UPGRADE 序列化", p_unlock.to_dict()["origin"], "unlock_upgrade")
 
 # ════════════════════════════════════════════════════════════════
 # [3] 状态机初始推断（_restore 路径）
@@ -192,7 +192,7 @@ with tmp_dir() as tmp:
     pos = Position(symbol="CFFEX.IF2609", side=Side.LONG, volume=1, entry_price=4550.0,
                    entry_at="2026-09-01 09:30", entry_bar_ts=0, signal_key="restored",
                    open_order_id="restored_o", exit_plan=ExitPlan(name="x", stop_price=4540.0),
-                   entry_mode=EntryMode.OPEN_FIRST)
+                   origin=PositionOrigin.SIGNAL_OPEN)
     store.set_json("position", pos.to_dict())
     # 重建 engine
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
@@ -206,8 +206,8 @@ with tmp_dir() as tmp:
     check("恢复持仓后 _state == IN_TRADE", engine2._state, EngineState.IN_TRADE)
     check("恢复持仓后 position.signal_key == restored",
           engine2.position.signal_key, "restored")
-    check("恢复持仓后 position.entry_mode == OPEN_FIRST",
-          engine2.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("恢复持仓后 position.origin == SIGNAL_OPEN",
+          engine2.position.origin, PositionOrigin.SIGNAL_OPEN)
 
 # ════════════════════════════════════════════════════════════════
 # [4] 状态转移时序：开仓成功
@@ -225,8 +225,8 @@ with tmp_dir() as tmp:
     engine.on_signal(sig)
     check("开仓成功后 _state == IN_TRADE", engine._state, EngineState.IN_TRADE)
     check("开仓成功后 self.position 非空", engine.position is not None, True)
-    check("新开仓 position.entry_mode == OPEN_FIRST",
-          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("新开仓 position.origin == SIGNAL_OPEN",
+          engine.position.origin, PositionOrigin.SIGNAL_OPEN)
     check("新开仓 position.side == LONG", engine.position.side, Side.LONG)
     check("新开仓 position.volume == 2（默认 max_volume=2）", engine.position.volume, 2)
 
@@ -271,10 +271,10 @@ with tmp_dir() as tmp:
     # 直接调 _close_position（用 sig.price 作为 trigger_price）
     engine._close_position("manual_test", 4560.0, engine.last_bar, signal_key="x")
     check("平仓成功后 _state 回 IDLE", engine._state, EngineState.IDLE)
-    # v1.3（S3/S4）：软离场（锁仓）留双向持仓 = 原仓 LOCKED + 反向仓 LOCKED，
+    # v1.3（S3/S4）：软离场（锁仓）留双向持仓 = 原仓 SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，
     # 净敞口归零、PnL 不兑现（0 笔 Trade）。
-    modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("平仓后留双向持仓：簿内 2 笔均 LOCKED", modes, ["locked", "locked"])
+    modes = sorted(p.origin.value for p in engine.positions.positions)
+    check("平仓后留双向持仓：簿内 2 笔均 SOFT_EXIT_LOCK", modes, ["soft_exit_lock", "soft_exit_lock"])
     # 验证 trades 表 0 条（锁仓不记 Trade）
     check("trades 表记录 0 条（软离场不兑现 PnL）", len(store.trades()), 0)
 
@@ -343,7 +343,7 @@ with tmp_dir() as tmp:
     check("IN_TRADE+反向 → _state 仍是 IN_TRADE（不因信号离场）",
           engine._state, EngineState.IN_TRADE)
     check("IN_TRADE+反向 → position 仍是原来那笔（不锁仓）",
-          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+          engine.position.origin, PositionOrigin.SIGNAL_OPEN)
     check("IN_TRADE+反向 → trades 增 0（不触发离场）", len(store.trades()), 0)
     check("IN_TRADE+反向 → signal_action 标 skip（running_ignore_signal）",
           store.signal_action(sig2.key), "skip")
@@ -371,7 +371,7 @@ with tmp_dir() as tmp:
     check("IDLE→IN_TRADE 后反向 → 忽略，trades 增 0",
           len(store.trades()), 0)
     check("反向信号后 _state 仍 IN_TRADE", engine._state, EngineState.IN_TRADE)
-    check("反向信号后 position 仍是空仓（未锁仓）", engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("反向信号后 position 仍是空仓（未锁仓）", engine.position.origin, PositionOrigin.SIGNAL_OPEN)
 
 # ════════════════════════════════════════════════════════════════
 # [10] 信号门：OPENING 瞬态时新信号被忽略（不调 entry_policy）
@@ -442,30 +442,30 @@ with tmp_dir() as tmp:
           engine._state, EngineState.EXITING)
 
 # ════════════════════════════════════════════════════════════════
-# [12] 旧持仓记录 to_dict/from_dict entry_mode 双向兼容
+# [12] 旧持仓记录 to_dict/from_dict origin 双向兼容
 # ════════════════════════════════════════════════════════════════
 print("\n[12] 序列化兼容：open_first / unlock_first 双向")
 
 p_open = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                   exit_plan=ExitPlan(name="x", stop_price=99.0),
-                  entry_mode=EntryMode.OPEN_FIRST)
+                  origin=PositionOrigin.SIGNAL_OPEN)
 d_open = p_open.to_dict()
-check("OPEN_FIRST 序列化 -> 'open_first'", d_open["entry_mode"], "open_first")
-check("OPEN_FIRST 反序列化", Position.from_dict(d_open).entry_mode, EntryMode.OPEN_FIRST)
+check("SIGNAL_OPEN 序列化 -> 'signal_open'", d_open["origin"], "signal_open")
+check("SIGNAL_OPEN 反序列化", Position.from_dict(d_open).origin, PositionOrigin.SIGNAL_OPEN)
 
 p_unl = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k2", open_order_id="o2",
                   exit_plan=ExitPlan(name="x", stop_price=101.0),
-                  entry_mode=EntryMode.UNLOCK_FIRST)
+                  origin=PositionOrigin.UNLOCK_UPGRADE)
 d_unl = p_unl.to_dict()
-check("UNLOCK_FIRST 序列化 -> 'unlock_first'", d_unl["entry_mode"], "unlock_first")
-check("UNLOCK_FIRST 反序列化", Position.from_dict(d_unl).entry_mode, EntryMode.UNLOCK_FIRST)
+check("UNLOCK_UPGRADE 序列化 -> 'unlock_upgrade'", d_unl["origin"], "unlock_upgrade")
+check("UNLOCK_UPGRADE 反序列化", Position.from_dict(d_unl).origin, PositionOrigin.UNLOCK_UPGRADE)
 
 # ════════════════════════════════════════════════════════════════
-# [13] 事件日志含 state / entry_mode 字段（便于离线分析）
+# [13] 事件日志含 state / origin 字段（便于离线分析）
 # ════════════════════════════════════════════════════════════════
-print("\n[13] 事件日志埋点：open/close 带 entry_mode 与 state 流转")
+print("\n[13] 事件日志埋点：open/close 带 origin 与 state 流转")
 
 with tmp_dir() as tmp:
     engine, store, broker = build_engine(tmp)
@@ -475,12 +475,12 @@ with tmp_dir() as tmp:
     engine.on_signal(sig)
     # EventLog 默认 64 条/1s 才 flush，本测试只产几条事件 → 手动 flush 一次
     engine.ev.flush()
-    # 验证事件流里有 entry_mode
+    # 验证事件流里有 origin
     ev_path = os.path.join(tmp, "events.jsonl")
     with open(ev_path, "r", encoding="utf-8") as f:
         content = f.read()
-    check("事件流含 entry_mode", "entry_mode" in content, True)
-    check("事件流含 open_first", "open_first" in content, True)
+    check("事件流含 origin", "origin" in content, True)
+    check("事件流含 open_first", "signal_open" in content, True)
 
 
 # ════════════════════════════════════════════════════════════════

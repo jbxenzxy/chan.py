@@ -24,9 +24,9 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
          "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，
          CLOSETODAY 在代码中**不可达** —— 留着只会误导后来人以为今日单可能走平今。
 
-    B. 离场方式判定改为按日期（规则 ⑸ 落地，原按 entry_mode 联动）
+    B. 离场方式判定改为按日期（规则 ⑸ 落地，原按 origin 联动）
        `Engine._exit_intent(pos, today)`：
-         · LOCKED             → (UNLOCK, pos.side)     防御分支
+         · SOFT_EXIT_LOCK             → (UNLOCK, pos.side)     防御分支
          · entry_date < today → (CLOSE,   pos.side)    跨日单：硬离场平昨
          · entry_date >= today→ (LOCK,    反向 side)   今日单：软离场锁仓
          · today 缺省/为空    → (LOCK,    反向 side)   无法判日期 → 选永不拒单一侧
@@ -69,7 +69,7 @@ try:
     from Trading.Engine.Engine import TradingEngine  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
     from Trading.Infra.Types import (  # noqa: E402
-        EntryMode, ExitPlan, OrderIntent, Position, Side,
+        PositionOrigin, ExitPlan, OrderIntent, Position, Side,
     )
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
@@ -211,15 +211,15 @@ check("昨仓离场 ≠ CLOSETODAY", _first_close_offset(_YESTERDAY) != "CLOSETO
 
 
 # ---------------- [5] 规则 ⑸：_exit_intent 按日期判定 ----------------
-def mk_pos(side=Side.LONG, entry_mode=EntryMode.OPEN_FIRST, entry_date=_TODAY):
+def mk_pos(side=Side.LONG, origin=PositionOrigin.SIGNAL_OPEN, entry_date=_TODAY):
     return Position(symbol="CFFEX.IF2609", side=side, volume=2,
                     entry_price=4000.0, entry_at="", entry_bar_ts=0,
                     signal_key="k", open_order_id="o",
                     exit_plan=ExitPlan(name="x", stop_price=3990.0),
-                    entry_mode=entry_mode, entry_date=entry_date)
+                    origin=origin, entry_date=entry_date)
 
 
-print("\n[5] 规则 ⑸：_exit_intent 按 entry_date vs today 判定（不再看 entry_mode）")
+print("\n[5] 规则 ⑸：_exit_intent 按 entry_date vs today 判定（不再看 origin）")
 i, s = TradingEngine._exit_intent(mk_pos(entry_date=_TODAY), _TODAY)
 check("今日单 → LOCK（反向开仓锁仓）", i, OrderIntent.LOCK)
 check("今日单 → 反向 side（LONG 仓 → 开 SHORT）", s, Side.SHORT)
@@ -228,20 +228,20 @@ i, s = TradingEngine._exit_intent(mk_pos(entry_date=_YESTERDAY), _TODAY)
 check("跨日单 → CLOSE（平昨）", i, OrderIntent.CLOSE)
 check("跨日单 → 原 side（LONG 仓 → 卖平）", s, Side.LONG)
 
-# 关键改造点：OPEN_FIRST 但已跨日 → 必须走 CLOSE（旧实现会错走 LOCK）
+# 关键改造点：SIGNAL_OPEN 但已跨日 → 必须走 CLOSE（旧实现会错走 LOCK）
 i, _s = TradingEngine._exit_intent(
-    mk_pos(entry_mode=EntryMode.OPEN_FIRST, entry_date=_YESTERDAY), _TODAY)
+    mk_pos(origin=PositionOrigin.SIGNAL_OPEN, entry_date=_YESTERDAY), _TODAY)
 check("当日开仓、隔日才离场 → CLOSE 平昨（旧实现误走 LOCK）", i, OrderIntent.CLOSE)
 
-# UNLOCK_FIRST 若 entry_date 恰好=今日（异常数据）→ 按今日单锁仓，不再无条件 CLOSE
+# UNLOCK_UPGRADE 若 entry_date 恰好=今日（异常数据）→ 按今日单锁仓，不再无条件 CLOSE
 i, _s = TradingEngine._exit_intent(
-    mk_pos(entry_mode=EntryMode.UNLOCK_FIRST, entry_date=_TODAY), _TODAY)
-check("UNLOCK_FIRST 但 entry_date=今日 → LOCK（按日期而非 entry_mode）",
+    mk_pos(origin=PositionOrigin.UNLOCK_UPGRADE, entry_date=_TODAY), _TODAY)
+check("UNLOCK_UPGRADE 但 entry_date=今日 → LOCK（按日期而非 origin）",
       i, OrderIntent.LOCK)
 
 i, s = TradingEngine._exit_intent(
-    mk_pos(entry_mode=EntryMode.LOCKED, entry_date=_YESTERDAY), _TODAY)
-check("LOCKED → UNLOCK + 原 side（防御分支）", (i, s), (OrderIntent.UNLOCK, Side.LONG))
+    mk_pos(origin=PositionOrigin.SOFT_EXIT_LOCK, entry_date=_YESTERDAY), _TODAY)
+check("SOFT_EXIT_LOCK → UNLOCK + 原 side（防御分支）", (i, s), (OrderIntent.UNLOCK, Side.LONG))
 
 i, _s = TradingEngine._exit_intent(mk_pos(entry_date=_YESTERDAY), "")
 check("today 缺省 → LOCK（无法判日期时选永不拒单的一侧）", i, OrderIntent.LOCK)

@@ -3,7 +3,7 @@
 P12 PositionBook 容器 + 兼容层单元测试（Phase E1）
 ==================================================
 背景
-    Phase E 引入 PositionBook 容器，为 E2 (UNLOCK_FIRST 入场) / E3 (N≥1 同 K 线连开)
+    Phase E 引入 PositionBook 容器，为 E2 (UNLOCK_UPGRADE 入场) / E3 (N≥1 同 K 线连开)
     预留多仓扩展点。E1 阶段聚焦"零行为变化"——
       · PositionBook 是 List[Position] 的薄封装，max=1 强约束
       · engine.position 走 property 转发到 book.legacy_single()，与旧版完全等价
@@ -20,8 +20,8 @@ P12 PositionBook 容器 + 兼容层单元测试（Phase E1）
     ⑧ _persist 双写新键 "positions" + 旧键 "position"；空簿时双删
     ⑨ _restore 从老 "position" 单字段恢复（迁移路径）
     ⑩ _restore 从新 "positions" list 恢复
-    ⑪ UNLOCK_FIRST 持仓经 PositionBook 完整 roundtrip 保留 entry_mode / volume
-        （与 _restore 路径无缝衔接，不会被静默回退到 OPEN_FIRST）
+    ⑪ UNLOCK_UPGRADE 持仓经 PositionBook 完整 roundtrip 保留 origin / volume
+        （与 _restore 路径无缝衔接，不会被静默回退到 SIGNAL_OPEN）
 
 不需要真实 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。P5..P11 不改一行。
 跑法：python tests/test_p12_position_book.py
@@ -80,7 +80,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    EntryMode, ExitPlan, Position, Side,
+    PositionOrigin, ExitPlan, Position, Side,
 )
 
 _PASS = 0
@@ -115,7 +115,7 @@ def check_raises(name, fn, exc_type):
 
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4550.0,
-             entry_mode=EntryMode.OPEN_FIRST):
+             origin=PositionOrigin.SIGNAL_OPEN):
     """构造一个最小化的 Position（绕开真实开仓流程，专测 PositionBook）。"""
     return Position(
         symbol=symbol, side=side, volume=vol,
@@ -123,7 +123,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4550.0,
         entry_bar_ts=4000, signal_key="P12-TEST",
         open_order_id="p12-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
-        entry_mode=entry_mode)
+        origin=origin)
 
 
 def build_engine(tmpdir):
@@ -252,7 +252,7 @@ print("\n[4] to_dict / from_dict roundtrip（新格式 list[dict]）")
 b4 = PositionBook()
 check("空簿 to_dict() → []", b4.to_dict(), [])
 b4.add(make_pos(entry_price=4500.0, side=Side.LONG, vol=2,
-                entry_mode=EntryMode.OPEN_FIRST))
+                origin=PositionOrigin.SIGNAL_OPEN))
 data = b4.to_dict()
 check("单仓 to_dict() 是 list", isinstance(data, list), True)
 check("单仓 to_dict() 长度 == 1", len(data), 1)
@@ -265,20 +265,20 @@ check("from_dict(list).legacy_single() side 与原一致",
       b4_rt.legacy_single().side, Side.LONG)
 check("from_dict(list).legacy_single().volume == 2",
       b4_rt.legacy_single().volume, 2)
-# 复杂：UNLOCK_FIRST + 双边
+# 复杂：UNLOCK_UPGRADE + 双边
 b4x = PositionBook()
 b4x._max = 5
 b4x.add(make_pos(entry_price=4500.0, side=Side.LONG, vol=1,
-                 entry_mode=EntryMode.OPEN_FIRST))
+                 origin=PositionOrigin.SIGNAL_OPEN))
 b4x.add(make_pos(entry_price=4555.0, side=Side.SHORT, vol=1,
-                 entry_mode=EntryMode.UNLOCK_FIRST))
+                 origin=PositionOrigin.UNLOCK_UPGRADE))
 data_x = b4x.to_dict()
 check("双边 to_dict() 长度 == 2", len(data_x), 2)
 b4x_rt = PositionBook.from_dict(data_x)
 check("双边 roundtrip 后 __len__ == 2", len(b4x_rt), 2)
-modes = sorted([p.entry_mode.value for p in b4x_rt.positions])
-check("双边 roundtrip 后 entry_mode 集合保留",
-      modes, ["open_first", "unlock_first"])
+modes = sorted([p.origin.value for p in b4x_rt.positions])
+check("双边 roundtrip 后 origin 集合保留",
+      modes, ["signal_open", "unlock_upgrade"])
 
 
 # ════════════════════════════════════════════════════════════════
@@ -291,12 +291,12 @@ legacy_dict = {
     "entry_bar_ts": 4000, "entry_bar_seq": 10,
     "signal_key": "OLD", "open_order_id": "old-o1",
     "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None, "params": {}},
-    "entry_mode": "open_first",
+    "origin": "signal_open",
 }
 b5 = PositionBook.from_dict(legacy_dict)
 check("旧 dict 反序列化 → __len__ == 1", len(b5), 1)
-check("旧 dict entry_mode → OPEN_FIRST",
-      b5.legacy_single().entry_mode, EntryMode.OPEN_FIRST)
+check("旧 dict origin → SIGNAL_OPEN",
+      b5.legacy_single().origin, PositionOrigin.SIGNAL_OPEN)
 check("旧 dict volume == 3", b5.legacy_single().volume, 3)
 
 empty_inputs = [None, {}, [], {"symbol": None}, [None, {}], [{"x": 1}]]
@@ -339,11 +339,11 @@ with tmp_dir() as tmp:
           engine._state.name, "IN_TRADE")
     engine._state = engine._state.__class__.IDLE  # 手动同步
 
-    # ④ 链式访问（position.entry_mode / .volume / .side）
+    # ④ 链式访问（position.origin / .volume / .side）
     engine.position = make_pos(entry_price=4500.0, side=Side.SHORT, vol=4,
-                               entry_mode=EntryMode.UNLOCK_FIRST)
-    check("engine.position.entry_mode = UNLOCK_FIRST",
-          engine.position.entry_mode, EntryMode.UNLOCK_FIRST)
+                               origin=PositionOrigin.UNLOCK_UPGRADE)
+    check("engine.position.origin = UNLOCK_UPGRADE",
+          engine.position.origin, PositionOrigin.UNLOCK_UPGRADE)
     check("engine.position.volume == 4", engine.position.volume, 4)
     check("engine.position.side = SHORT", engine.position.side, Side.SHORT)
 
@@ -402,7 +402,7 @@ with tmp_dir() as tmp:
         "signal_key": "LEGACY", "open_order_id": "l-o1",
         "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
                       "params": {}},
-        "entry_mode": "unlock_first",
+        "origin": "unlock_upgrade",
     }
     store.set_json("position", legacy_dict)
     store.close()
@@ -419,8 +419,8 @@ with tmp_dir() as tmp:
 
     check("老 'position' → engine.positions.__len__ == 1",
           len(engine.positions), 1)
-    check("老 'position' → engine.position.entry_mode = UNLOCK_FIRST",
-          engine.position.entry_mode, EntryMode.UNLOCK_FIRST)
+    check("老 'position' → engine.position.origin = UNLOCK_UPGRADE",
+          engine.position.origin, PositionOrigin.UNLOCK_UPGRADE)
     check("老 'position' → engine.position.signal_key = LEGACY",
           engine.position.signal_key, "LEGACY")
     check("老 'position' → engine._state = IN_TRADE",
@@ -445,14 +445,14 @@ with tmp_dir() as tmp:
          "signal_key": "K1", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
                        "params": {}},
-         "entry_mode": "open_first"},
+         "origin": "signal_open"},
         {"symbol": "CFFEX.IF2609", "side": "SHORT", "volume": 1,
          "entry_price": 4555.0, "entry_at": "2026-09-01 09:05",
          "entry_bar_ts": 4200, "entry_bar_seq": 12,
          "signal_key": "K2", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 4565.0, "tp_price": None,
                        "params": {}},
-         "entry_mode": "unlock_first"},
+         "origin": "unlock_upgrade"},
     ])
     store.close()
 
@@ -472,9 +472,9 @@ with tmp_dir() as tmp:
     sides = sorted([p.side.name for p in engine.positions.positions])
     check("新 'positions' → 两侧方向都恢复",
           sides, ["LONG", "SHORT"])
-    modes = sorted([p.entry_mode.value for p in engine.positions.positions])
-    check("新 'positions' → 两种 entry_mode 都保留",
-          modes, ["open_first", "unlock_first"])
+    modes = sorted([p.origin.value for p in engine.positions.positions])
+    check("新 'positions' → 两种 origin 都保留",
+          modes, ["signal_open", "unlock_upgrade"])
     check("有仓 → engine._state = IN_TRADE",
           engine._state.name, "IN_TRADE")
     # v1.3（Q5 拍板）：容器不限容量 —— max_positions 恒 None（不再受 cfg.risk.max_open_positions 约束）
@@ -501,19 +501,19 @@ with tmp_dir() as tmp:
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "P1", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
         {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4505.0, "entry_at": "2026-09-01 09:01",
          "entry_bar_ts": 4020, "entry_bar_seq": 11,
          "signal_key": "P2", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
         {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
          "entry_price": 4510.0, "entry_at": "2026-09-01 09:02",
          "entry_bar_ts": 4040, "entry_bar_seq": 12,
          "signal_key": "P3", "open_order_id": "o3",
          "exit_plan": {"name": "x", "stop_price": 4500.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
     ])
     store.close()
 
@@ -549,9 +549,9 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [10] UNLOCK_FIRST 持仓完整 roundtrip（端到端）
+# [10] UNLOCK_UPGRADE 持仓完整 roundtrip（端到端）
 # ════════════════════════════════════════════════════════════════
-print("\n[10] UNLOCK_FIRST 持仓端到端 roundtrip 保留 entry_mode")
+print("\n[10] UNLOCK_UPGRADE 持仓端到端 roundtrip 保留 origin")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     pos_u = Position(
@@ -560,7 +560,7 @@ with tmp_dir() as tmp:
         entry_bar_ts=4000, signal_key="U1",
         open_order_id="u-o1",
         exit_plan=ExitPlan(name="x", stop_price=4490.0),
-        entry_mode=EntryMode.UNLOCK_FIRST,
+        origin=PositionOrigin.UNLOCK_UPGRADE,
     )
     engine.position = pos_u   # 绕开正常开仓直接塞入
     engine._persist()
@@ -577,8 +577,8 @@ with tmp_dir() as tmp:
                                LayeredExitPolicy(), new_store, new_ev)
 
     check("重启后 positions.__len__ == 1", len(new_engine.positions), 1)
-    check("重启后 entry_mode 仍是 UNLOCK_FIRST",
-          new_engine.position.entry_mode, EntryMode.UNLOCK_FIRST)
+    check("重启后 origin 仍是 UNLOCK_UPGRADE",
+          new_engine.position.origin, PositionOrigin.UNLOCK_UPGRADE)
     check("重启后 side = LONG",
           new_engine.position.side, Side.LONG)
     check("重启后 volume == 2", new_engine.position.volume, 2)
@@ -606,13 +606,13 @@ with tmp_dir() as tmp:
          "entry_bar_ts": 4000, "entry_bar_seq": 10,
          "signal_key": "IF-L", "open_order_id": "o1",
          "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
         {"symbol": "CFFEX.IM2609", "side": "SHORT", "volume": 1,
          "entry_price": 6000.0, "entry_at": "2026-09-01 09:05",
          "entry_bar_ts": 4200, "entry_bar_seq": 12,
          "signal_key": "IM-S", "open_order_id": "o2",
          "exit_plan": {"name": "x", "stop_price": 6010.0, "tp_price": None,
-                       "params": {}}, "entry_mode": "open_first"},
+                       "params": {}}, "origin": "signal_open"},
     ])
     store.close()
 

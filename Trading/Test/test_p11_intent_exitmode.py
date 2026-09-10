@@ -5,23 +5,23 @@ P11 broker intent + exit_mode 联动单测（Phase C + D 合并）
 背景
     Phase C 把 broker.submit() 改用 OrderIntent 显式表达意图（OPEN/UNLOCK/CLOSE/LOCK），
     intent → CTP OpenCloseType 由 INTENT_TO_OFFSET 权威表映射。dry_run 同样遵守便于审计。
-    Phase D 按 pos.entry_mode 硬规则决定离场方式：
-        OPEN_FIRST   → SOFT_EXIT  → OrderIntent.LOCK  + 反向 side
-        UNLOCK_FIRST → HARD_EXIT → OrderIntent.CLOSE + pos.side
-    没有 entry_mode 字段的旧持仓（默认 OPEN_FIRST）也走 SOFT_EXIT。
+    Phase D 按 pos.origin 硬规则决定离场方式：
+        SIGNAL_OPEN   → SOFT_EXIT  → OrderIntent.LOCK  + 反向 side
+        UNLOCK_UPGRADE → HARD_EXIT → OrderIntent.CLOSE + pos.side
+    没有 origin 字段的旧持仓（默认 SIGNAL_OPEN）也走 SOFT_EXIT。
 
 硬性要求（本测试锁死）
     ① INTENT_TO_OFFSET 表 4 个键值对正确。
     ② broker._resolve_intent 兼容旧 action 字符串（"open"/"close"/"lock"/"unlock"）。
     ③ dry_run.submit 各 intent 写入 Order.meta.{intent,offset}；LOCK 报为 "open" 但 meta.intent="lock"。
     ④ engine._exit_intent：
-        OPEN_FIRST → (OrderIntent.LOCK, 反向 side)
-        UNLOCK_FIRST → (OrderIntent.CLOSE, pos.side)
-        默认 / 无 entry_mode → (OrderIntent.LOCK, 反向 side)
-    ⑤ end-to-end：dry_run broker，OPEN_FIRST 持仓 SL 触发 → broker 收到 LOCK + 反向 side。
-    ⑥ end-to-end：dry_run broker，UNLOCK_FIRST 持仓 SL 触发 → broker 收到 CLOSE + pos.side。
+        SIGNAL_OPEN → (OrderIntent.LOCK, 反向 side)
+        UNLOCK_UPGRADE → (OrderIntent.CLOSE, pos.side)
+        默认 / 无 origin → (OrderIntent.LOCK, 反向 side)
+    ⑤ end-to-end：dry_run broker，SIGNAL_OPEN 持仓 SL 触发 → broker 收到 LOCK + 反向 side。
+    ⑥ end-to-end：dry_run broker，UNLOCK_UPGRADE 持仓 SL 触发 → broker 收到 CLOSE + pos.side。
     ⑦ events.jsonl 里 close 事件 exit_mode 字段正确（lock / close）。
-    ⑧ 反向信号触发"只离场"时，离场方式也按 entry_mode 走（不反手开新仓）。
+    ⑧ 反向信号触发"只离场"时，离场方式也按 origin 走（不反手开新仓）。
 
 跑法：python tests/test_p11_intent_exitmode.py
 """
@@ -80,7 +80,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EntryMode, ExitPlan, OrderIntent, Position, Side, Signal,
+    Bar, PositionOrigin, ExitPlan, OrderIntent, Position, Side, Signal,
 )
 
 _PASS = 0
@@ -212,69 +212,69 @@ check('旧 "close" 字符串仍被接受 → meta.intent="close"',
 # [4] engine._exit_intent 联动规则
 # ════════════════════════════════════════════════════════════════
 # 2026-09-10 规则 ⑸ 改造：离场方式改为按**日期**判定（今日单 LOCK / 跨日单 CLOSE），
-# 不再按 entry_mode 联动。故这里必须给 Position 显式 entry_date 并传入 today。
+# 不再按 origin 联动。故这里必须给 Position 显式 entry_date 并传入 today。
 print("\n[4] engine._exit_intent 规则 ⑸ 硬规则（按 entry_date vs today）")
 _D_NOW = "2026-09-02"
 p_open = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                   exit_plan=ExitPlan(name="x", stop_price=99.0),
-                  entry_mode=EntryMode.OPEN_FIRST, entry_date=_D_NOW)
+                  origin=PositionOrigin.SIGNAL_OPEN, entry_date=_D_NOW)
 intent, side = TradingEngine._exit_intent(p_open, _D_NOW)
-check("今日单（OPEN_FIRST）→ OrderIntent.LOCK", intent, OrderIntent.LOCK)
-check("今日单（OPEN_FIRST）→ 反向 side (LONG→SHORT)", side, Side.SHORT)
+check("今日单（SIGNAL_OPEN）→ OrderIntent.LOCK", intent, OrderIntent.LOCK)
+check("今日单（SIGNAL_OPEN）→ 反向 side (LONG→SHORT)", side, Side.SHORT)
 
 p_unlock = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                     entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                     exit_plan=ExitPlan(name="x", stop_price=99.0),
-                    entry_mode=EntryMode.UNLOCK_FIRST, entry_date="2026-09-01")
+                    origin=PositionOrigin.UNLOCK_UPGRADE, entry_date="2026-09-01")
 intent2, side2 = TradingEngine._exit_intent(p_unlock, _D_NOW)
-check("跨日单（UNLOCK_FIRST, entry_date<today）→ OrderIntent.CLOSE",
+check("跨日单（UNLOCK_UPGRADE, entry_date<today）→ OrderIntent.CLOSE",
       intent2, OrderIntent.CLOSE)
 check("跨日单 → pos.side (LONG)", side2, Side.LONG)
 
 p_stale = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                    entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                    exit_plan=ExitPlan(name="x", stop_price=99.0),
-                   entry_mode=EntryMode.OPEN_FIRST, entry_date="2026-09-01")
+                   origin=PositionOrigin.SIGNAL_OPEN, entry_date="2026-09-01")
 intent_stale, _ = TradingEngine._exit_intent(p_stale, _D_NOW)
-check("当日开仓、隔日才离场 → CLOSE 平昨（旧 entry_mode 联动会误走 LOCK）",
+check("当日开仓、隔日才离场 → CLOSE 平昨（旧 origin 联动会误走 LOCK）",
       intent_stale, OrderIntent.CLOSE)
 
-# 默认 entry_mode（OPEN_FIRST）+ 今日 → SOFT_EXIT
+# 默认 origin（SIGNAL_OPEN）+ 今日 → SOFT_EXIT
 p_default = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                      entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                      exit_plan=ExitPlan(name="x", stop_price=99.0),
                      entry_date=_D_NOW)
-check("默认 entry_mode==OPEN_FIRST", p_default.entry_mode, EntryMode.OPEN_FIRST)
+check("默认 origin==SIGNAL_OPEN", p_default.origin, PositionOrigin.SIGNAL_OPEN)
 intent3, side3 = TradingEngine._exit_intent(p_default, _D_NOW)
 check("默认（今日单）→ OrderIntent.LOCK", intent3, OrderIntent.LOCK)
 check("默认 + SHORT 持仓 → 反向 side (LONG)", side3, Side.LONG)
 
 
 # ════════════════════════════════════════════════════════════════
-# [5] end-to-end：OPEN_FIRST 持仓 SL → broker 收 LOCK + 反向
+# [5] end-to-end：SIGNAL_OPEN 持仓 SL → broker 收 LOCK + 反向
 # ════════════════════════════════════════════════════════════════
-print("\n[5] end-to-end: OPEN_FIRST 持仓 SL 触发 → LOCK 报文")
+print("\n[5] end-to-end: SIGNAL_OPEN 持仓 SL 触发 → LOCK 报文")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
-    # 开多仓（OPEN_FIRST）
+    # 开多仓（SIGNAL_OPEN）
     sig = make_signal(is_buy=True, price=4550.0, high=4552.0, low=4548.0,
                       date="2026-09-01 09:35")
     engine.on_signal(sig)
     check("开仓后 state=IN_TRADE", engine._state.name, "IN_TRADE")
     check("开仓后 position.side=LONG", engine.position.side, Side.LONG)
-    check("开仓后 position.entry_mode=OPEN_FIRST",
-          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("开仓后 position.origin=SIGNAL_OPEN",
+          engine.position.origin, PositionOrigin.SIGNAL_OPEN)
     # 推一根 bar 让 SL 触发（low 触及 stop_price）
     bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
     check("SL 触发后 state=IDLE (已离场)", engine._state.name, "IDLE")
-    # 留双向持仓（软离场）：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，不记 Trade
+    # 留双向持仓（软离场）：原仓 → SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，共享 lock_pair_id，不记 Trade
     book_positions = engine.positions.positions
     check("SL 软离场留双向持仓：簿内 2 笔", len(book_positions), 2)
-    check("SL 软离场：两笔均 LOCKED",
-          sorted(p.entry_mode.value for p in book_positions),
-          ["locked", "locked"])
+    check("SL 软离场：两笔均 SOFT_EXIT_LOCK",
+          sorted(p.origin.value for p in book_positions),
+          ["soft_exit_lock", "soft_exit_lock"])
     check("SL 软离场：两笔 side 相反（LONG+SHORT）",
           {p.side for p in book_positions}, {Side.LONG, Side.SHORT})
     check("SL 软离场：共享同一 lock_pair_id",
@@ -308,25 +308,25 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [6] end-to-end：UNLOCK_FIRST 持仓 SL → broker 收 CLOSE + pos.side
+# [6] end-to-end：UNLOCK_UPGRADE 持仓 SL → broker 收 CLOSE + pos.side
 # ════════════════════════════════════════════════════════════════
-print("\n[6] end-to-end: UNLOCK_FIRST 持仓 SL 触发 → CLOSE 报文")
+print("\n[6] end-to-end: UNLOCK_UPGRADE 持仓 SL 触发 → CLOSE 报文")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
-    # 直接构造一个 UNLOCK_FIRST 持仓（绕开入场逻辑，模拟"昨日锁仓遗留"）
+    # 直接构造一个 UNLOCK_UPGRADE 持仓（绕开入场逻辑，模拟"昨日锁仓遗留"）
     pos = Position(symbol="CFFEX.IF", side=Side.LONG, volume=1,
                    entry_price=4550.0, entry_at="2026-09-01 09:00",
                    entry_bar_ts=4000, signal_key="LEGACY_LOCK",
                    open_order_id="legacy-o1",
                    exit_plan=ExitPlan(name="x", stop_price=4540.0),
-                   entry_mode=EntryMode.UNLOCK_FIRST)
+                   origin=PositionOrigin.UNLOCK_UPGRADE)
     engine.position = pos
     engine._state = engine._state.__class__.IN_TRADE
     store.set_json("position", pos.to_dict())
     # 推一根 bar 让 SL 触发
     bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
     engine.on_bar(bar)
-    check("UNLOCK_FIRST SL 触发 → state=IDLE", engine._state.name, "IDLE")
+    check("UNLOCK_UPGRADE SL 触发 → state=IDLE", engine._state.name, "IDLE")
     # broker 应该收到 CLOSE 报（不是 LOCK）
     close_orders = [b for b in broker.orders
                     if b.meta.get("intent") == "close"]
@@ -342,10 +342,10 @@ with tmp_dir() as tmp:
         lines = [json.loads(l) for l in f if l.strip()]
     close_events = [e for e in lines if e.get("kind") == "close"]
     if close_events:
-        check("UNLOCK_FIRST close 事件 exit_mode=close",
+        check("UNLOCK_UPGRADE close 事件 exit_mode=close",
               close_events[0].get("exit_mode"), "close")
-        check("UNLOCK_FIRST close 事件 entry_mode=unlock_first",
-              close_events[0].get("entry_mode"), "unlock_first")
+        check("UNLOCK_UPGRADE close 事件 origin=unlock_first",
+              close_events[0].get("origin"), "unlock_upgrade")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -355,7 +355,7 @@ with tmp_dir() as tmp:
 print("\n[7] 运行态反向信号 → 忽略（Q1=B）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
-    # 开多仓（OPEN_FIRST）
+    # 开多仓（SIGNAL_OPEN）
     sig_buy = make_signal(is_buy=True, price=4550.0, high=4552.0, low=4548.0,
                           date="2026-09-01 09:35")
     engine.on_signal(sig_buy)
@@ -368,8 +368,8 @@ with tmp_dir() as tmp:
                            date="2026-09-01 09:45", bsp_type="2")
     engine.on_signal(sig_sell)
     check("反向信号后 state 仍 IN_TRADE（不因信号离场）", engine._state.name, "IN_TRADE")
-    check("反向信号后 position 仍 OPEN_FIRST（不锁仓）",
-          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("反向信号后 position 仍 SIGNAL_OPEN（不锁仓）",
+          engine.position.origin, PositionOrigin.SIGNAL_OPEN)
     # broker 不应收到 LOCK 报（信号不触发离场）
     lock_orders = [b for b in broker.orders
                    if b.meta.get("intent") == "lock"]
@@ -381,16 +381,16 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [8] 持久化兼容：Position.entry_mode=UNLOCK_FIRST 也能 roundtrip
+# [8] 持久化兼容：Position.origin=UNLOCK_UPGRADE 也能 roundtrip
 # ════════════════════════════════════════════════════════════════
-print("\n[8] UNLOCK_FIRST 持久化兼容")
+print("\n[8] UNLOCK_UPGRADE 持久化兼容")
 p = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
             entry_at="t", entry_bar_ts=0, signal_key="k", open_order_id="o",
             exit_plan=ExitPlan(name="x", stop_price=99.0),
-            entry_mode=EntryMode.UNLOCK_FIRST)
+            origin=PositionOrigin.UNLOCK_UPGRADE)
 d = p.to_dict()
 p2 = Position.from_dict(d)
-check("UNLOCK_FIRST roundtrip", p2.entry_mode, EntryMode.UNLOCK_FIRST)
+check("UNLOCK_UPGRADE roundtrip", p2.origin, PositionOrigin.UNLOCK_UPGRADE)
 
 
 # ════════════════════════════════════════════════════════════════

@@ -79,7 +79,7 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EntryMode, EngineState, ExitPlan, OrderIntent, Position, Side, Signal,
+    Bar, PositionOrigin, EngineState, ExitPlan, OrderIntent, Position, Side, Signal,
 )
 
 _PASS = 0
@@ -137,7 +137,7 @@ def make_bar(ts=4000, o=4500.0, h=4500.0, l=4500.0, c=4500.0,
 
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
-             entry_mode=EntryMode.LOCKED, signal_key="P19-LOCK",
+             origin=PositionOrigin.SOFT_EXIT_LOCK, signal_key="P19-LOCK",
              entry_bar_seq=0):
     return Position(
         symbol=symbol, side=side, volume=vol,
@@ -146,7 +146,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         open_order_id="p19-legacy-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
         entry_bar_seq=entry_bar_seq,
-        entry_mode=entry_mode)
+        origin=origin)
 
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None):

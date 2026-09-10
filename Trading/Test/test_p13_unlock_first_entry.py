@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-P13 UNLOCK_FIRST 入场路径单元测试（Phase E2）
+P13 UNLOCK_UPGRADE 入场路径单元测试（Phase E2）
 ==============================================
 背景
-    Phase E2 在 on_signal 入口加"UNLOCK_FIRST"早分支：
+    Phase E2 在 on_signal 入口加"UNLOCK_UPGRADE"早分支：
       · 触发条件 —— state==IDLE + portfolio 非空 + has_opposite(sig.side)
         （含义：引擎书上那笔 Position 是昨日 LOCK 留下的反向对冲仓）
       · 行为 —— broker.submit(UNLOCK, target.side, vol, sig.price)
@@ -79,7 +79,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    EntryMode, EngineState, ExitPlan, OrderIntent, Position, Side,
+    PositionOrigin, EngineState, ExitPlan, OrderIntent, Position, Side,
 )
 
 _PASS = 0
@@ -97,10 +97,10 @@ def check(name, got, expected):
 
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
-             entry_mode=EntryMode.LOCKED, signal_key="P13-LEGACY",
+             origin=PositionOrigin.SOFT_EXIT_LOCK, signal_key="P13-LEGACY",
              entry_date="2026-09-01"):
     # v1.3（S1）：本测试注入的持仓代表"LOCK 留下的反向对冲仓"，故默认
-    # entry_mode=LOCKED；entry_date 默认昨日（2026-09-01 < 信号日 2026-09-02），
+    # origin=SOFT_EXIT_LOCK；entry_date 默认昨日（2026-09-01 < 信号日 2026-09-02），
     # 使信号门走"平昨仓"（UNLOCK）分支。要模拟"当日锁"则传 entry_date=信号日。
     return Position(
         symbol=symbol, side=side, volume=vol,
@@ -108,7 +108,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         entry_bar_ts=4000, signal_key=signal_key,
         open_order_id="p13-legacy-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
-        entry_mode=entry_mode, entry_date=entry_date)
+        origin=origin, entry_date=entry_date)
 
 
 def make_signal(is_buy, price=4550.0, high=4552.0, low=4548.0,
@@ -149,7 +149,7 @@ def seed_portfolio(engine, store, p):
 # [1] 入口分流：IDLE + has_opposite 走 UNLOCK；其它走原路径
 # ════════════════════════════════════════════════════════════════
 print("\n[1] 入口分流：基础 case 矩阵")
-# Case A: IDLE + 空 portfolio → 走 OPEN_FIRST（信号 → 开仓）
+# Case A: IDLE + 空 portfolio → 走 SIGNAL_OPEN（信号 → 开仓）
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     sig_buy = make_signal(is_buy=True, price=4500.0)
@@ -196,7 +196,7 @@ with tmp_dir() as tmp:
 # v1.3：出场只由 on_bar 的 L1-L3 负责；信号在运行态不再触发 LOCK/CLOSE/UNLOCK。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
-    # 模拟"今仓"流程：开仓后 engine 进入 IN_TRADE，簿内 1 笔 OPEN_FIRST（非 LOCKED）
+    # 模拟"今仓"流程：开仓后 engine 进入 IN_TRADE，簿内 1 笔 SIGNAL_OPEN（非 SOFT_EXIT_LOCK）
     sig_buy = make_signal(is_buy=True, price=4500.0)
     engine.on_signal(sig_buy)
     check("[D-pre] 开仓后 state=IN_TRADE", engine._state.name, "IN_TRADE")
@@ -357,7 +357,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [5] UNLOCK 完成后 → 下一信号可正常 OPEN
 # ════════════════════════════════════════════════════════════════
-print("\n[5] UNLOCK 完成后下一信号走 OPEN_FIRST")
+print("\n[5] UNLOCK 完成后下一信号走 SIGNAL_OPEN")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     seed_portfolio(engine, store,
@@ -378,8 +378,8 @@ with tmp_dir() as tmp:
           len(opens), 1)
     check("UNLOCK 完成后下一信号建仓成功 portfolio 非空",
           engine.positions.is_empty(), False)
-    check("UNLOCK 完成后下一信号 entry_mode = OPEN_FIRST（默认）",
-          engine.position.entry_mode, EntryMode.OPEN_FIRST)
+    check("UNLOCK 完成后下一信号 origin = SIGNAL_OPEN（默认）",
+          engine.position.origin, PositionOrigin.SIGNAL_OPEN)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -515,7 +515,7 @@ with tmp_dir() as tmp:
 # [10] 边界：簿非空但信号方向与锁仓持仓同向（has_opposite=False）→ 不走 UNLOCK
 # ════════════════════════════════════════════════════════════════
 print("\n[10] 边界：同向有仓（has_opposite=False）→ 不走 UNLOCK")
-# v1.3：锁仓持仓（LOCKED）与信号同向时，opposite_positions(side) 为空，
+# v1.3：锁仓持仓（SOFT_EXIT_LOCK）与信号同向时，opposite_positions(side) 为空，
 # 信号门跳过 UNLOCK 分支 → 直接走 OPEN 开新仓（规则 ⑸-① 的同向版本）。
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)

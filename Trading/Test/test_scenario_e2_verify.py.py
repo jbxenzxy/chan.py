@@ -6,7 +6,7 @@ Phase E2 三场景端到端验证（2026-09-05）
 
 覆盖三种现存场景：
   场景 A：dry-run 完整 UNLOCK 端到端剧本
-    —— 构造持仓 (SHORT 3手, 昨锁仓, entry_mode=OPEN_FIRST 隐含 → SOFT_EXIT 路径)，
+    —— 构造持仓 (SHORT 3手, 昨锁仓, origin=SIGNAL_OPEN 隐含 → SOFT_EXIT 路径)，
        注入今日正向买入信号 → 验证 `_unlock_position` 把昨仓平掉，trade 按 CloseYesterday 费率入账。
 
   场景 B：ReplaySource + DryRunBroker 烟雾回放
@@ -17,7 +17,7 @@ Phase E2 三场景端到端验证（2026-09-05）
 
   场景 C：SimNowBroker 接口层断言（不连真实 CTP）
     —— broker._conn_error 已配置（环境变量都没有），broker.submit(UNLOCK, ...) 走 _rejected 分支。
-       验证 Order.meta.intent / action 字段正确表达 UNLOCK_FIRST + CloseYesterday 语义。
+       验证 Order.meta.intent / action 字段正确表达 UNLOCK_UPGRADE + CloseYesterday 语义。
 
 退出码
   0 = 全 PASS
@@ -51,7 +51,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EngineState, EntryMode, ExitPlan, OrderIntent, Position, Side, Signal,
+    Bar, EngineState, PositionOrigin, ExitPlan, OrderIntent, Position, Side, Signal,
 )
 
 
@@ -117,8 +117,8 @@ def scenario_a_unlock_endtoend() -> bool:
     engine.on_bar(bar)
 
     # 手工塞一个"昨锁仓后留下的 SHORT 对冲仓"到 PositionBook。
-    # entry_mode=LOCKED：v1.3（S1）后 LOCK 软离场成交的反向对冲仓以 LOCKED 落簿
-    #   （见 _close_positions 的 lock_booked 分支），不再以 OPEN_FIRST 表示。
+    # origin=SOFT_EXIT_LOCK：v1.3（S1）后 LOCK 软离场成交的反向对冲仓以 SOFT_EXIT_LOCK 落簿
+    #   （见 _close_positions 的 lock_booked 分支），不再以 SIGNAL_OPEN 表示。
     # entry_date="2026-09-01"（昨日，< 信号日 2026-09-02）→ 信号门走"平昨仓"（UNLOCK）。
     pos = Position(
         symbol="CFFEX.IF2609", side=Side.SHORT, volume=3,
@@ -128,7 +128,7 @@ def scenario_a_unlock_endtoend() -> bool:
         signal_key="2026-09-01 13:30|1|S",
         open_order_id="dry_run-000001",
         exit_plan=ExitPlan(name="layered_v1", stop_price=4530.0, tp_price=4500.0),
-        entry_mode=EntryMode.LOCKED,
+        origin=PositionOrigin.SOFT_EXIT_LOCK,
         entry_date="2026-09-01",
     )
     engine.positions.set_legacy(pos)

@@ -5,8 +5,8 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
 背景（用户拍板关闭语义）
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
-      ② 簿内所有「未锁定」持仓全部锁仓（OPEN_FIRST / UNLOCK_FIRST 一律
-         LOCK，留双向持仓：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，
+      ② 簿内所有「未锁定」持仓全部锁仓（SIGNAL_OPEN / UNLOCK_UPGRADE 一律
+         LOCK，留双向持仓：原仓 → SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，共享 lock_pair_id，
          次日对向信号走解锁入场管线）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
@@ -18,8 +18,8 @@ Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（�
 
 硬性要求（本测试锁死）
     [1] 关闭后 on_signal 拒收（signal_action=skip / note=auto_order_off）
-    [2] shutdown_and_lock_all 锁全部未锁定持仓（OPEN_FIRST + UNLOCK_FIRST）
-        → 簿内只剩 LOCKED；enabled=False 持久化；auto_order_off 事件
+    [2] shutdown_and_lock_all 锁全部未锁定持仓（SIGNAL_OPEN + UNLOCK_UPGRADE）
+        → 簿内只剩 SOFT_EXIT_LOCK；enabled=False 持久化；auto_order_off 事件
     [3] 幂等：重复 shutdown 不产生新单 / 新 trade
     [4] 重启保持关闭：同 store 新引擎 auto_order_enabled=False，信号仍拒收
     [5] 关闭态 on_bar 补锁：锁仓被拒的残留持仓在后续 bar 自动补锁
@@ -89,7 +89,7 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EntryMode, Order, OrderIntent, Position, ExitPlan, Side, Signal, now_cn,
+    Bar, PositionOrigin, Order, OrderIntent, Position, ExitPlan, Side, Signal, now_cn,
 )
 
 _PASS = 0
@@ -127,7 +127,7 @@ def make_bar(ts, o=4500.0, h=4510.0, l=4490.0, c=4505.0,
 
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
-             entry_mode=EntryMode.OPEN_FIRST, signal_key="P20-pos",
+             origin=PositionOrigin.SIGNAL_OPEN, signal_key="P20-pos",
              entry_bar_seq=1):
     return Position(
         symbol=symbol, side=side, volume=vol,
@@ -136,7 +136,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         open_order_id="p20-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
         entry_bar_seq=entry_bar_seq,
-        entry_mode=entry_mode)
+        origin=origin)
 
 
 class LockRejectBroker(DryRunBroker):
@@ -215,26 +215,26 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [2] shutdown_and_lock_all 锁全部未锁定持仓（OPEN_FIRST + UNLOCK_FIRST）
+# [2] shutdown_and_lock_all 锁全部未锁定持仓（SIGNAL_OPEN + UNLOCK_UPGRADE）
 # ════════════════════════════════════════════════════════════════
-print("\n[2] shutdown_and_lock_all：2 笔未锁持仓 → 全部 LOCKED 落簿")
+print("\n[2] shutdown_and_lock_all：2 笔未锁持仓 → 全部 SOFT_EXIT_LOCK 落簿")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
     engine.positions.add(make_pos(signal_key="P20-2A", entry_bar_seq=1,
-                                       entry_mode=EntryMode.OPEN_FIRST))
+                                       origin=PositionOrigin.SIGNAL_OPEN))
     engine.positions.add(make_pos(signal_key="P20-2B", entry_bar_seq=2,
-                                       entry_mode=EntryMode.UNLOCK_FIRST))
+                                       origin=PositionOrigin.UNLOCK_UPGRADE))
 
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
-    modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("[2b] 簿内全是 LOCKED（留双向持仓：2 原仓 + 2 反向 = 4 笔）", modes,
-          ["locked", "locked", "locked", "locked"])
+    modes = sorted(p.origin.value for p in engine.positions.positions)
+    check("[2b] 簿内全是 SOFT_EXIT_LOCK（留双向持仓：2 原仓 + 2 反向 = 4 笔）", modes,
+          ["soft_exit_lock", "soft_exit_lock", "soft_exit_lock", "soft_exit_lock"])
     check("[2c] 信号键 = 原键 + 原键#lock（原仓保留原键）",
           sorted(p.signal_key for p in engine.positions.positions),
           ["P20-2A", "P20-2A#lock", "P20-2B", "P20-2B#lock"])
-    check("[2d] 全部 LOCKED → state=IDLE", engine._state.name, "IDLE")
+    check("[2d] 全部 SOFT_EXIT_LOCK → state=IDLE", engine._state.name, "IDLE")
     check("[2e] 2 笔 LOCK 报单", len(lock_orders(broker)), 2)
     check("[2f] 锁仓不兑现 PnL → 0 笔 Trade（软离场不记 Trade）",
           sum(1 for t in store.trades() if t["reason"] == "auto_order_off"), 0)
@@ -250,7 +250,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [3] 幂等：重复 shutdown 不产生新单 / 新 trade
 # ════════════════════════════════════════════════════════════════
-print("\n[3] 幂等：簿内只剩 LOCKED 时重复 shutdown 无操作")
+print("\n[3] 幂等：簿内只剩 SOFT_EXIT_LOCK 时重复 shutdown 无操作")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
@@ -259,12 +259,12 @@ with tmp_dir() as tmp:
     n_orders = len(broker.orders)
     n_trades = len(store.trades())
 
-    engine.shutdown_and_lock_all()          # 第二次关闭：全部已 LOCKED → no-op
+    engine.shutdown_and_lock_all()          # 第二次关闭：全部已 SOFT_EXIT_LOCK → no-op
     check("[3a] 无新增报单", len(broker.orders), n_orders)
     check("[3b] 无新增 trade", len(store.trades()), n_trades)
-    check("[3c] 簿仍 1 锁 2 笔（原仓 + 反向均 LOCKED）",
-          [p.entry_mode for p in engine.positions.positions],
-          [EntryMode.LOCKED, EntryMode.LOCKED])
+    check("[3c] 簿仍 1 锁 2 笔（原仓 + 反向均 SOFT_EXIT_LOCK）",
+          [p.origin for p in engine.positions.positions],
+          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
     check("[3d] enabled 仍 False", engine.auto_order_enabled, False)
 
 
@@ -280,9 +280,9 @@ with tmp_dir() as tmp:
 
     engine2, store2, broker2, ev2 = build_engine(tmp)
     check("[4a] 重启后 enabled=False", engine2.auto_order_enabled, False)
-    check("[4b] 簿内 LOCKED 已恢复（1 锁 2 笔）",
-          [p.entry_mode for p in engine2.positions.positions],
-          [EntryMode.LOCKED, EntryMode.LOCKED])
+    check("[4b] 簿内 SOFT_EXIT_LOCK 已恢复（1 锁 2 笔）",
+          [p.origin for p in engine2.positions.positions],
+          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
     sig = make_signal(is_buy=True, sig_key="P20-4|2|B")
     engine2.on_signal(sig)
     check("[4c] 重启后信号仍拒收（skip）",
@@ -304,9 +304,9 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()
     check("[5a] 首轮锁仓被拒：持仓未锁（state=EXITING）",
           engine._state.name, "EXITING")
-    check("[5b] 簿内仍 1 笔未锁（OPEN_FIRST）",
-          [p.entry_mode for p in engine.positions.positions],
-          [EntryMode.OPEN_FIRST])
+    check("[5b] 簿内仍 1 笔未锁（SIGNAL_OPEN）",
+          [p.origin for p in engine.positions.positions],
+          [PositionOrigin.SIGNAL_OPEN])
 
     # 冷却期外 → 关闭态自动补锁。
     # Step 1 修复（2026-09-08）：cooldown 现在真的按"根数"生效
@@ -314,9 +314,9 @@ with tmp_dir() as tmp:
     # 所以这里要推进 _close_retry_bars(5) 根 bar 才会重试补锁。
     for i in range(engine._close_retry_bars):
         engine.on_bar(make_bar(2000 + i))
-    check("[5c] 补锁后簿内 LOCKED（1 锁 2 笔）",
-          [p.entry_mode for p in engine.positions.positions],
-          [EntryMode.LOCKED, EntryMode.LOCKED])
+    check("[5c] 补锁后簿内 SOFT_EXIT_LOCK（1 锁 2 笔）",
+          [p.origin for p in engine.positions.positions],
+          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
     check("[5d] 补锁后 state=IDLE", engine._state.name, "IDLE")
     ev.flush()
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
@@ -342,9 +342,9 @@ with tmp_dir() as tmp:
     engine2.on_signal(sig)
     check("[6c] 信号 action=opened", store2.signal_action(sig.key), "opened")
     check("[6d] 1 笔开仓报单", len(broker2.orders), 1)
-    check("[6e] 簿内 1 笔 OPEN_FIRST",
-          [p.entry_mode for p in engine2.positions.positions],
-          [EntryMode.OPEN_FIRST])
+    check("[6e] 簿内 1 笔 SIGNAL_OPEN",
+          [p.origin for p in engine2.positions.positions],
+          [PositionOrigin.SIGNAL_OPEN])
 
 
 # ════════════════════════════════════════════════════════════════
