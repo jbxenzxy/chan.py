@@ -892,7 +892,7 @@ class TradingEngine(ReconcileMixin):
 
     def _close_positions(self, positions: List[Position], reason: str,
                          trigger_price: float, bar: Optional[Bar],
-                         signal_key: str = "", force_lock: bool = False) -> None:
+                         signal_key: str = "") -> None:
         """【E3.3】多仓平仓——按 FIFO（entry_bar_seq ASC）逐笔平仓。
 
         语义约定（与 E3.1 单仓 _close_position 等价 + 多仓扩展）：
@@ -903,9 +903,9 @@ class TradingEngine(ReconcileMixin):
           · 部分成交：剩余仓位保留在 book + state EXITING
           · 全部成交：state IDLE
 
-        force_lock（Phase I1）：True 时无视建仓日期，目标持仓**全部 LOCK**
-        （开反向同手数锁仓）。用于自动下单关闭语义 ② —— 无论这笔仓是空仓新开
-        还是解锁升级来的，关闭时一律锁仓（用户拍板：不区分来源）。
+        离场方式**只由规则 ⑸ 决定**（按建仓日期 → LOCK / CLOSE），没有任何调用方
+        可以覆盖它 —— 包括"自动下单关闭"：关闭时今仓锁、昨仓平，与常规离场同一判据。
+        （2026-09-10 P4 变体A 之前存在 `force_lock=True` 短路，会让昨仓也走反向开仓。）
 
         调用方传入的 positions 列表会自动按 entry_bar_seq 排序（防御性）。
         """
@@ -945,12 +945,9 @@ class TradingEngine(ReconcileMixin):
             #   2026-09-10 起不再看 origin：当日单 → LOCK 反向开仓锁仓；
             #   跨日单 → CLOSE 平昨。（旧实现按 origin 联动，会导致
             #   "当日开、隔日平"的仓被误判为今日单而多余锁一次仓。）
-            # force_lock（Phase I1）→ 全部 LOCK（自动下单关闭语义 ②）。
-            if force_lock and pos.origin is not PositionOrigin.SOFT_EXIT_LOCK:
-                opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
-                intent, side = OrderIntent.LOCK, opposite
-            else:
-                intent, side = self._exit_intent(pos, today_str)
+            #   2026-09-10 二次修正（P4 变体A）：删除 force_lock 短路 ——
+            #   自动下单关闭时也不再"一律 LOCK"，同样走本判据（今仓锁 / 昨仓平）。
+            intent, side = self._exit_intent(pos, today_str)
 
             # entry_date 传给 broker 供审计/诊断记录（DryRun 写入 Order.meta）。
             # 2026-09-10 起 offset 不再据此分支：规则 ⑸ 保证 CLOSE 只用于跨日单，
@@ -1077,7 +1074,9 @@ class TradingEngine(ReconcileMixin):
         锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
         （entry_price=P₀ 会计锚不动、entry_date 不动），反向仓作为新 SOFT_EXIT_LOCK 持仓落簿，
         两笔共享 lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
-        次日对向信号经 on_signal 门触发 UNLOCK（平反向仓 + 升级同向持仓）。
+        对向信号经 on_signal 门触发 UNLOCK（平反向仓 + 升级同向持仓）。
+        ⚠️ 该 UNLOCK 出口的**前提是自动下单处于开启态** —— 关闭态下 on_signal 顶部
+        直接 return，锁对没有任何自动出口（"冻结"语义，见 _lock_remaining_positions）。
         """
         self._lock_pair_seq += 1
         pair_id = "lock_{:05d}".format(self._lock_pair_seq)
@@ -1406,19 +1405,33 @@ class TradingEngine(ReconcileMixin):
     # Phase I1（2026-09-06）：自动下单关闭（前端开关 → 进程托管触发）
     #   关闭语义（用户拍板）：
     #     ① auto_order_enabled=False → on_signal 顶部拒收所有买卖点信号
-    #     ② _lock_remaining_positions → 簿内所有「未锁定」持仓全部 LOCK
-    #        （无论 SIGNAL_OPEN 还是 UNLOCK_UPGRADE 入场，关闭一律锁仓；
-    #         LOCK 成交后由 _close_positions 落簿反向 SOFT_EXIT_LOCK 仓，次日对向
-    #         信号经 has_opposite 门自动 UNLOCK —— 与正常 LOCK 完全同管线）
-    #   幂等性：重复关闭只对仍未锁定的持仓补锁；簿内只剩 SOFT_EXIT_LOCK 时无操作。
+    #     ② _lock_remaining_positions → 簿内「未锁定」持仓按【规则 ⑸】离场：
+    #          今仓 → LOCK（反向开仓锁仓，避开平今高费率）
+    #          昨仓 → CLOSE（平昨，费率正常）
+    #        ★ 2026-09-10 P4 变体A 修正：旧实现带 `force_lock=True`，对昨仓也发
+    #          反向开仓 → 昨仓被白锁一次（多付一次开仓费，且次日还要再平两笔）。
+    #          现在关闭与常规离场走**同一判据**，不再有覆盖开关。
+    #   幂等性：重复关闭只对仍未离场的持仓补做；簿内只剩 SOFT_EXIT_LOCK 时无操作。
     #   状态：auto_order_enabled 持久化（_persist），重启保持关闭语义。
+    #
+    #   ⚠️ 关闭后账户的归宿 —— "冻结"语义（用户 2026-09-10 明确选择 甲 方案）：
+    #     今仓被 LOCK 成的锁对（原仓 + 反向仓，双双 SOFT_EXIT_LOCK）**没有自动出口**：
+    #       · on_signal 顶部直接 return → 永远等不到 UNLOCK；
+    #       · on_bar 关闭态不调 _settle_position，而 _settle_positions 本就跳过
+    #         SOFT_EXIT_LOCK → 不止盈止损、不收盘强平；
+    #       · auto_order_enabled 持久化 → 重启后状态与出口完全不变。
+    #     净敞口为 0，PnL 不兑现，需**人工在交易所平掉**，或重新开启自动下单后
+    #     由对向信号走 UNLOCK 管线接管。这是**有意选择的行为，不是遗漏**；
+    #     为了让它在运维侧可见（而不是静默），关闭时若留下锁对会写一条
+    #     `account_frozen` 事件。护栏见 Trading/Test/test_p30_shutdown_exit_mode.py。
     # ════════════════════════════════════════════════════════════════
     def _lock_remaining_positions(self, bar: Optional[Bar] = None,
                                   reason: str = "auto_order_off") -> None:
-        """把簿内所有未锁定持仓锁仓（关闭语义 ② 的执行体）。
+        """把簿内所有未锁定持仓按规则 ⑸ 离场（关闭语义 ② 的执行体）。
 
-        on_bar 关闭态下每根 K 线调用一次：上次锁仓被拒（cooldown 期）的
-        残留持仓会在 cooldown 结束后自动补锁，直到簿内只剩 SOFT_EXIT_LOCK。
+        on_bar 关闭态下每根 K 线调用一次：上次离场被拒（cooldown 期）的残留持仓
+        会在 cooldown 结束后自动补做，直到簿内只剩 SOFT_EXIT_LOCK。
+        今仓 → LOCK、昨仓 → CLOSE（同一判据，见 _exit_intent）。
         """
         remaining = [p for p in self.positions.positions
                      if p.origin is not PositionOrigin.SOFT_EXIT_LOCK]
@@ -1429,14 +1442,21 @@ class TradingEngine(ReconcileMixin):
             ref_price = bar.close
         elif self.last_bar is not None and self.last_bar.close:
             ref_price = self.last_bar.close
-        self._close_positions(remaining, reason, ref_price, bar,
-                              signal_key="auto_order_off", force_lock=True)
+        # bar 为空时用 self.last_bar 兜底：否则 _close_positions 内的 today 会退化到
+        # **墙钟**（回放 / 补锁场景下与真实交易日不同）→ 今仓会被误判成昨仓 → 发平今。
+        # 两者都为空（进程启动后从未收到 K 线）时由 _current_trading_day 的墙钟兜底接手
+        # —— 那必然是无 K 线驱动的托管关闭场景，墙钟交易日与真实交易日一致。
+        self._close_positions(remaining, reason, ref_price,
+                              bar if bar is not None else self.last_bar,
+                              signal_key="auto_order_off")
 
     def shutdown_and_lock_all(self, reason: str = "auto_order_off") -> None:
         """自动下单关闭入口（main.py 收到退出信号时调用）。
 
         ① 停信号门（后续 SSE 推来的买卖点信号一律 skip）→
-        ② 锁全部未锁定持仓 → ③ 持久化。幂等：重复调用安全。
+        ② 未锁定持仓按规则 ⑸ 离场（今仓锁 / 昨仓平）→ ③ 持久化。幂等：重复调用安全。
+
+        关闭后账户归宿见上方类注释的"冻结语义"说明：留下的锁对无自动出口。
         """
         self.auto_order_enabled = False
         self._lock_remaining_positions(reason=reason)
@@ -1448,7 +1468,23 @@ class TradingEngine(ReconcileMixin):
                       remaining_unlocked=sum(
                           1 for p in self.positions.positions
                           if p.origin is not PositionOrigin.SOFT_EXIT_LOCK),
-                      note="停止接收信号 + 未锁定持仓已锁仓")
+                      note="停止接收信号 + 未锁定持仓已按规则 ⑸ 离场（今仓锁 / 昨仓平）")
+        # 账户归宿可见性（P4 变体A）：关闭后若还挂着持仓，写一条显式事件。
+        #   "关闭"在前端只体现为 enabled=false，看不出"账户还停在锁仓态、引擎不会
+        #   再自动平仓"。不给这条事件的话，运维必须去翻持仓明细才知道 —— 正是
+        #   本轮把它称为"静默冻结"的原因。仅记录，不影响任何交易行为。
+        frozen = [p for p in self.positions.positions
+                  if p.origin is PositionOrigin.SOFT_EXIT_LOCK]
+        if frozen:
+            self.ev.write(
+                "account_frozen", reason=reason,
+                frozen_n=len(frozen),
+                lock_pair_ids=sorted({p.lock_pair_id for p in frozen
+                                      if p.lock_pair_id}),
+                net_exposure=sum((1 if p.side is Side.LONG else -1) * p.volume
+                                 for p in frozen),
+                note="关闭后账户停在锁仓态（净敞口 0）：引擎无自动清仓路径，"
+                     "需人工平仓或重新开启自动下单后由对向信号解锁")
 
     def auto_order_status(self) -> Dict[str, Any]:
         """自动下单状态快照（供后端进程托管 / API / 前端轮询）。"""

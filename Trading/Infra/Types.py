@@ -154,7 +154,7 @@ class PositionOrigin(str, Enum):
         —— **唯一实现点 `TradingEngine.account_state()`**（P1 SSOT，2026-09-10 收口；
            `_restore` / `on_signal` / `_close_positions` / `_unlock_position` 四处
            调用它，不再各自内联 all/any 判定式）
-      · _exit_intent 防御分支 / force_lock 过滤 / 事件统计
+      · _exit_intent 防御分支 / 事件统计
     SIGNAL_OPEN 与 UNLOCK_UPGRADE 只写事件日志与 state.db，代码中不存在对它们的
     判定性比较（新增 `origin is UNLOCK_UPGRADE` 之类的分支会破坏契约，
     由 Trading/Test/test_p25_origin_decoupled.py 的源码扫描拦截）。
@@ -167,6 +167,9 @@ class PositionOrigin(str, Enum):
     SIGNAL_OPEN = "signal_open"        # 空仓状态下，由买卖点信号开新仓入场
     SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后，落簿的反向仓
                                        #   唯一合法离场 = 对向信号触发 UNLOCK（平昨，次日语义）
+                                       #   ⚠️ 自动下单关闭态下 on_signal 顶部 return，
+                                       #      该出口不存在 → 锁对只能人工平（"冻结"语义，
+                                       #      用户 2026-09-10 拍板，见 P30 契约测试）
     UNLOCK_UPGRADE = "unlock_upgrade"  # 锁仓解锁时，配对同向持仓升级而来（entry_date 保持原开仓日）
 
 

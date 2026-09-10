@@ -5,9 +5,13 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
 背景（用户拍板关闭语义）
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
-      ② 簿内所有「未锁定」持仓全部锁仓（SIGNAL_OPEN / UNLOCK_UPGRADE 一律
-         LOCK，留双向持仓：原仓 → SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，共享 lock_pair_id，
-         次日对向信号走解锁入场管线）
+      ② 簿内「未锁定」持仓按【规则 ⑸】离场（判据是建仓日期，与来源无关）：
+         今仓 → LOCK（留双向持仓：原仓 → SOFT_EXIT_LOCK + 反向仓
+                       SOFT_EXIT_LOCK，共享 lock_pair_id）
+         昨仓 → CLOSE（平昨）
+         ★ 2026-09-10 P4 变体A：此前是 `force_lock=True` 对**昨仓也**反向开仓，
+           已删除。本文件全部夹具都是"今仓"，故仍然全走 LOCK。
+           关闭后的"冻结"语义与自然流程契约见 test_p30_shutdown_exit_mode.py。
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
 Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
@@ -18,8 +22,9 @@ Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（�
 
 硬性要求（本测试锁死）
     [1] 关闭后 on_signal 拒收（signal_action=skip / note=auto_order_off）
-    [2] shutdown_and_lock_all 锁全部未锁定持仓（SIGNAL_OPEN + UNLOCK_UPGRADE）
-        → 簿内只剩 SOFT_EXIT_LOCK；enabled=False 持久化；auto_order_off 事件
+    [2] shutdown_and_lock_all：今仓未锁持仓全部 LOCK（SIGNAL_OPEN + UNLOCK_UPGRADE
+        都锁 —— 判据是日期不是来源）→ 簿内只剩 SOFT_EXIT_LOCK；
+        enabled=False 持久化；auto_order_off 事件
     [3] 幂等：重复 shutdown 不产生新单 / 新 trade
     [4] 重启保持关闭：同 store 新引擎 auto_order_enabled=False，信号仍拒收
     [5] 关闭态 on_bar 补锁：锁仓被拒的残留持仓在后续 bar 自动补锁
@@ -128,7 +133,17 @@ def make_bar(ts, o=4500.0, h=4510.0, l=4490.0, c=4505.0,
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
              origin=PositionOrigin.SIGNAL_OPEN, signal_key="P20-pos",
-             entry_bar_seq=1):
+             entry_bar_seq=1, entry_date="2026-09-03"):
+    """构造一笔"关闭时正在运行、且【当日】开仓"的持仓。
+
+    P4 变体A 配套（2026-09-10）：关闭不再"一律 LOCK"，而是与常规离场同一判据
+    —— 按 entry_date 判今仓 / 昨仓（今仓 LOCK / 昨仓 CLOSE）。
+      本组夹具的语义是"当日开、当日关" → entry_date 必须等于引擎的 today，
+      即 make_bar() 的日期 2026-09-03；否则会被判成昨仓走 CLOSE，
+      与 [2]/[3]/[4]/[5] 组"关闭 = 锁仓"的断言不符。
+      注：entry_date 显式给出后 Position.__post_init__（F4）原样保留，
+      不会再从 entry_bar_ts(序号×1000 → 1970) / entry_at("2026-09-02") 派生。
+    """
     return Position(
         symbol=symbol, side=side, volume=vol,
         entry_price=entry_price, entry_at="2026-09-02 09:00",
@@ -136,7 +151,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         open_order_id="p20-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
         entry_bar_seq=entry_bar_seq,
-        origin=origin)
+        origin=origin, entry_date=entry_date)
 
 
 class LockRejectBroker(DryRunBroker):
@@ -217,7 +232,7 @@ with tmp_dir() as tmp:
 # ════════════════════════════════════════════════════════════════
 # [2] shutdown_and_lock_all 锁全部未锁定持仓（SIGNAL_OPEN + UNLOCK_UPGRADE）
 # ════════════════════════════════════════════════════════════════
-print("\n[2] shutdown_and_lock_all：2 笔未锁持仓 → 全部 SOFT_EXIT_LOCK 落簿")
+print("\n[2] shutdown_and_lock_all：2 笔今仓未锁持仓 → 全部 LOCK → SOFT_EXIT_LOCK 落簿")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
