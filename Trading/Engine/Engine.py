@@ -1403,7 +1403,20 @@ class TradingEngine(ReconcileMixin):
         会计锚 entry_price（P₀）保持不动，风控锚 risk_anchor（P₂）写入 ExitPlan.params。
         """
         if not locked_pos.lock_pair_id:
-            # 旧数据 / 无配对（1 锁 1 笔旧口径）→ 无配对持仓可升级，仅防御记录
+            # 解锁标的自己没有 lock_pair_id → 无从定位配对仓。
+            #   （旧数据 / 1 锁 1 笔旧口径 / 簿被外力改过）
+            # 2026-09-10：原先这里 `return` 是**三个防御分支里唯一不写事件**的静默点
+            #   （对照：配对不在簿 → unlock_pair_missing；同 id 多候选 →
+            #     unlock_pair_ambiguous；配对 origin 异常 → unlock_pair_not_soft_exit_locked）。
+            #   行为不变（仍然拒绝升级），只补可见性：该同向仓会滞留 SOFT_EXIT_LOCK，
+            #   在 `_settle_positions` 里被跳过 → 不参与 L1-L3 止盈止损，必须留痕。
+            self.ev.write("unlock_pair_id_missing",
+                          signal_key=sig.key,
+                          position_signal_key=locked_pos.signal_key,
+                          side=str(locked_pos.side),
+                          volume=locked_pos.volume,
+                          note="解锁标的缺少 lock_pair_id → 无从定位配对仓，拒绝升级；"
+                               "同向仓会滞留 SOFT_EXIT_LOCK（不参与止盈止损），需人工介入")
             return
         # R3（2026-09-10）：原实现遍历取**第一个**匹配就 break（静默）。改为显式
         #   收集全部匹配：≥2 说明"选要平的仓"（方向 + 最老）与"选要升级的仓"

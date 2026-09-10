@@ -20,13 +20,16 @@ P31 —— 持仓记录契约闸门（缺 origin 键 / soft_exit_lock 缺 lock_p
   错误信息给出的处置办法就是"确认账户无未了结持仓后删除 Trading/State/state.db
   再启动"（与本项目既有 `_reject_legacy_state` 措辞一致）。
 
-本测试覆盖 6 组：
+本测试覆盖 8 组：
   [1] 纯函数 `_incomplete_position_records` 的判定边界
   [2] 缺 origin 键 → 拒绝启动 + 事件
   [3] soft_exit_lock 且 lock_pair_id 空 → 拒绝启动 + 事件
   [4] 不误伤：未锁仓敞口（空 id 合法）/ 合法锁对 / 空库
   [5] 自然流程产物（开仓 → 关闭锁仓 → 重启）不被误伤
   [6] `wipe_runtime_state` 补清 `positions`：`--fresh` 才真正等价于"删库重来"
+  [7] 源码护栏（防回潮）
+  [8] 运行期防御可见性：解锁标的缺 id 时 `_upgrade_lock_pair` 必须留痕
+      （2026-09-10 补：原先它是三个防御分支里唯一的静默点）
 
 跑法：cd <repo root> && PYTHONPATH=. python Trading/Test/test_p31_record_contract_gate.py
 """
@@ -62,6 +65,7 @@ _PASS = 0
 _FAIL = 0
 
 D1 = "2026-09-02"
+D2 = "2026-09-03"
 SYMBOL = "CFFEX.IF2609"
 
 
@@ -390,6 +394,7 @@ with tmp_dir() as tmp:
                eng2.positions.is_empty(), book(eng2))
     store2.close()
 
+
 # ════════════════════════════════════════════════════════════════════
 section("[7] 源码护栏（防回潮）")
 # ════════════════════════════════════════════════════════════════════
@@ -438,6 +443,109 @@ check_true("[7e] wipe 清 positions（复数 = 多仓主键，漏它就不是干
            '"positions"' in wipe_body)
 check_true("[7f] wipe 仍不清 order_seq（orders 是审计底稿，序号只增不减）",
            '"order_seq"' not in wipe_body)
+_upg = _safe_body(eng_src, "_upgrade_lock_pair")
+check_true("[7g] _upgrade_lock_pair 的「缺 id」分支不再静默（三个防御分支各有一事件）",
+           "unlock_pair_id_missing" in _upg
+           and "unlock_pair_missing" in _upg
+           and "unlock_pair_ambiguous" in _upg,
+           "缺 id 分支里的事件名：" + str(
+               [l.strip() for l in _upg.splitlines()
+                if "unlock_pair" in l][:6]))
+
+# ════════════════════════════════════════════════════════════════════
+section("[8] 运行期防御可见性：解锁标的缺 id → 必须留痕（原先静默）")
+# ════════════════════════════════════════════════════════════════════
+# `_upgrade_lock_pair` 有 4 个防御分支，其中 3 个本来就写事件；只有
+# 「解锁标的自己没有 lock_pair_id」这一条是静默 return。
+# 三个分支的判据互斥，本组逐个验证：缺 id / 配对不在簿 / 正常升级。
+
+
+def rig(tmp, tag):
+    """装配引擎（真实 Store + EventLog + dry_run），走自然流程开仓并锁仓。"""
+    spec = InstrumentSpec()
+    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
+    store = Store(os.path.join(tmp, "state_%s.db" % tag))
+    ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),
+                  echo=False, echo_kinds=None)
+    eng = TradingEngine(cfg_of(), broker, DefaultEntryPolicy({}),
+                        LayeredExitPolicy(cfg_of().exit_params.model_dump()),
+                        store, ev)
+    eng.spec = spec
+    eng.auto_order_enabled = True
+    eng.on_bar(make_bar(D1, "09:40", 4500, 4510, 4490, ms(2026, 9, 2, 9, 40)))
+    eng.on_signal(make_sig(D1, "09:40", True, 4505.0, ms(2026, 9, 2, 9, 40)))
+    eng.shutdown_and_lock_all()
+    return eng, broker, store, ev
+
+
+def unlock_next_day(eng, key):
+    """喂 D2 的 bar（推进交易日）→ 卖点信号（跨日 → 规则 ⑸-② UNLOCK 路径）。
+
+    bar 取值刻意避开引擎自身出口（锚 4500 / 2R=4511），确保簿面变化只来自解锁。
+    """
+    eng.auto_order_enabled = True
+    eng.on_bar(make_bar(D2, "09:35", 4500, 4508, 4495, ms(2026, 9, 3, 9, 35)))
+    eng.on_signal(make_sig(D2, "09:35", False, 4500.0,
+                           ms(2026, 9, 3, 9, 35), key=key))
+
+
+with tmp_dir() as tmp:
+    # ── 8-A：注入（外力清空「将被平掉的那笔」的 id）→ 新事件 ──
+    eng, broker, store, ev = rig(tmp, "h1")
+    locked = book(eng)
+    check_true("[8a] 前置：自然流程落锁对（两笔同 id、都是 soft_exit_lock）",
+               len(locked) == 2 and len(set(x[3] for x in locked)) == 1
+               and all(x[2] == "soft_exit_lock" for x in locked), locked)
+    victim = [p for p in eng.positions.positions if p.side is Side.LONG][0]
+    victim.lock_pair_id = ""                 # 注入：外力抹掉 target 的 id
+    unlock_next_day(eng, "%s 09:35|1|S" % D2)
+    evs = read_events(ev)
+    hit = [e for e in evs if e.get("kind") == "unlock_pair_id_missing"]
+    check("[8b] ★缺 id → 写入 1 条 unlock_pair_id_missing（修复前为 0）",
+          len(hit), 1)
+    if hit:
+        check("[8c] 事件带 signal_key（触发解锁的信号）",
+              hit[0].get("signal_key"), "%s 09:35|1|S" % D2)
+        check("[8d] 事件带 position_signal_key（被平掉的那笔）",
+              hit[0].get("position_signal_key"), victim.signal_key)
+        check_true("[8e] 事件带人工介入指引（note 非空）",
+                   bool(hit[0].get("note")), hit[0].get("note"))
+    else:
+        check("[8c] 事件带 signal_key", "（无事件，跳过）", "<有事件>")
+        check("[8d] 事件带 position_signal_key", "（无事件，跳过）", "<有事件>")
+        check_true("[8e] 事件带人工介入指引", False, "事件未写出")
+    after = book(eng)
+    # 被平掉的是「与信号反向」的多仓（id 已被注入清空）；留下的同向空仓仍是
+    # SOFT_EXIT_LOCK 且 id **非空** —— 成了没有同伴的孤儿，死锁态，只能人工介入。
+    check("[8f] 行为不变：簿面 = 1 笔滞留的 soft_exit_lock（同向仓）",
+          [(x[0], x[1], x[2], x[3] != "-") for x in after],
+          [("空", 2, "soft_exit_lock", True)])
+    store.close()
+
+    # ── 8-B：对照 ①：id 非空、配对不在簿 → 走 unlock_pair_missing ──
+    eng2, broker2, store2, ev2 = rig(tmp, "h2")
+    pair = [p for p in eng2.positions.positions if p.side is Side.SHORT][0]
+    eng2.positions.remove(pair)               # 注入：摘掉配对仓（id 仍在 target 上）
+    unlock_next_day(eng2, "%s 09:35|1|S" % D2)
+    ks2 = kinds(ev2)
+    check_true("[8g] 对照①：配对不在簿 → unlock_pair_missing（与缺 id 区分开）",
+               "unlock_pair_missing" in ks2
+               and "unlock_pair_id_missing" not in ks2,
+               [k for k in ks2 if (k or "").startswith("unlock_pair")])
+    store2.close()
+
+    # ── 8-C：对照 ②：自然流程（不注入）→ 不误报，走正常升级 ──
+    eng3, broker3, store3, ev3 = rig(tmp, "h3")
+    unlock_next_day(eng3, "%s 09:35|1|S" % D2)
+    ks3 = kinds(ev3)
+    check_true("[8h] 对照②：自然解锁不误报 unlock_pair_id_missing",
+               "unlock_pair_id_missing" not in ks3,
+               [k for k in ks3 if (k or "").startswith("unlock_pair")])
+    check_true("[8i] 对照②：自然解锁走正常升级（unlock_pair_upgraded）",
+               "unlock_pair_upgraded" in ks3, ks3[-6:])
+    check("[8j] 对照②：升级后簿内剩 1 笔且已脱离软离场态",
+          [x[2] for x in book(eng3)], ["unlock_upgrade"])
+    store3.close()
 
 print("\n" + "=" * 72)
 print("PASS={}  FAIL={}".format(_PASS, _FAIL))
