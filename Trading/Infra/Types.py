@@ -53,10 +53,10 @@ class DecisionType(Enum):
 class OrderIntent(str, Enum):
     """订单意图 —— 唯一决定 CTP 报文 offset 的来源（映射见 Broker/Base.INTENT_TO_OFFSET）。"""
     OPEN = "open"        # 开仓（空仓新开 / 锁仓后补开）→ offset=OPEN
+    LOCK = "lock"        # 软离场：反向开同手数锁仓     → offset=OPEN（与 OPEN 同报文、异语义）
     UNLOCK = "unlock"    # 解锁：平掉反向昨仓          → offset=CLOSE（平昨）
     CLOSE = "close"      # 硬离场：平仓了结            → offset=CLOSE（平昨）
                          #   规则 ⑸ 保证 CLOSE 只用于跨日单，故恒为平昨，无平今分支
-    LOCK = "lock"        # 软离场：反向开同手数锁仓     → offset=OPEN（与 OPEN 同报文、异语义）
 
 
 class PositionOrigin(str, Enum):
@@ -75,16 +75,16 @@ class PositionOrigin(str, Enum):
        跨日单 → CLOSE（平昨）。同一笔仓当日平与隔日平的离场方式不同，
        别再假设"来源决定离场方式"。
     """
-    SIGNAL_OPEN = "signal_open"        # 空仓状态下由买卖点信号开新仓入场
+    SIGNAL_OPEN = "signal_open"        # 空仓状态下，由买卖点信号开新仓入场
+    SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后，落簿的反向仓
     UNLOCK_UPGRADE = "unlock_upgrade"  # 锁仓解锁时，配对同向持仓升级而来（entry_date 保持原开仓日）
-    SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后落簿的反向仓
                                        #   唯一合法离场 = 对向信号触发 UNLOCK（平昨，次日语义）
 
 
 class ExitMode(str, Enum):
     """离场方式，由 `Engine._exit_intent` 按**建仓日期**决定（规则 ⑸ 硬规则，不留配置开关）。"""
-    HARD_EXIT = "hard_exit"            # 硬离场（平仓：真正了结，PnL 兑现）
     SOFT_EXIT = "soft_exit"            # 软离场（锁仓：开反向同手数，正反互锁等效离场，PnL 不兑现）
+    HARD_EXIT = "hard_exit"            # 硬离场（平仓：真正了结，PnL 兑现）
 
 
 class EngineState(str, Enum):
