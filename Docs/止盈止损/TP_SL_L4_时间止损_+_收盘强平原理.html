@@ -1,0 +1,56 @@
+<svg viewBox="0 0 680 400" width="100%" role="img">
+  <title>时间止损 + 收盘强平原理</title>
+  <desc>持仓时长的两层硬约束：N 根 K 线无进展 + 收盘必须平</desc>
+
+  <text x="40" y="32" font-size="15" font-weight="500" fill="#1f2937">L4 · 时间 / 收盘兜底</text>
+  <text x="40" y="50" font-size="12" fill="#5F5E5A">所有 TP/SL 都失效时，由时间与事件硬约束接管，避免机会成本与隔夜风险</text>
+
+  <text x="40" y="86" font-size="13" font-weight="500" fill="#0C447C">持仓时长的两道硬约束</text>
+
+  <line x1="60" y1="280" x2="640" y2="280" stroke="#D3D1C7" stroke-width="0.5"/>
+  <text x="350" y="298" text-anchor="middle" font-size="11" fill="#5F5E5A">持仓时长（K 线根数）→</text>
+
+  <line x1="60" y1="140" x2="60" y2="280" stroke="#D3D1C7" stroke-width="0.5"/>
+  <text x="40" y="210" font-size="11" fill="#5F5E5A" transform="rotate(-90, 40, 210)" text-anchor="middle">浮盈 / 浮亏</text>
+
+  <line x1="60" y1="220" x2="640" y2="220" stroke="#185FA5" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="64" y="216" font-size="10" fill="#185FA5">Entry E</text>
+
+  <polyline points="60,220 100,225 140,210 180,215 220,225 260,230 300,235 340,220 380,210 420,215 460,220 500,225 540,218 580,220 620,222" fill="none" stroke="#185FA5" stroke-width="1.5"/>
+
+  <line x1="340" y1="120" x2="340" y2="280" stroke="#854F0B" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="344" y="134" font-size="11" fill="#854F0B" font-weight="500">max_hold_bars = 30</text>
+  <text x="344" y="148" font-size="10" fill="#854F0B">（如 2.5 小时）</text>
+
+  <rect x="60" y="120" width="280" height="160" fill="#854F0B" fill-opacity="0.05"/>
+
+  <text x="200" y="140" font-size="11" font-weight="500" fill="#854F0B" text-anchor="middle">区间 A：等待浮盈走出</text>
+  <text x="200" y="156" font-size="10" fill="#5F5E5A" text-anchor="middle">价格窄幅震荡，</text>
+  <text x="200" y="170" font-size="10" fill="#5F5E5A" text-anchor="middle">既没触发 TP 也没触发 SL</text>
+
+  <line x1="620" y1="120" x2="620" y2="280" stroke="#A32D2D" stroke-width="1" stroke-dasharray="4 4"/>
+  <text x="624" y="134" font-size="11" fill="#A32D2D" font-weight="500">15:00 收盘</text>
+  <text x="624" y="148" font-size="10" fill="#A32D2D">（session end）</text>
+
+  <rect x="340" y="120" width="280" height="160" fill="#A32D2D" fill-opacity="0.05"/>
+
+  <text x="480" y="140" font-size="11" font-weight="500" fill="#A32D2D" text-anchor="middle">区间 B：硬约束接管</text>
+  <text x="480" y="156" font-size="10" fill="#5F5E5A" text-anchor="middle">信号失效或临近收盘，</text>
+  <text x="480" y="170" font-size="10" fill="#5F5E5A" text-anchor="middle">规则强制出场</text>
+
+  <circle cx="340" cy="220" r="5" fill="#854F0B"/>
+  <text x="340" y="304" font-size="10" fill="#854F0B" text-anchor="middle">时间止损触发</text>
+
+  <circle cx="620" cy="220" r="5" fill="#A32D2D"/>
+  <text x="620" y="304" font-size="10" fill="#A32D2D" text-anchor="middle">收盘强平</text>
+
+  <line x1="40" y1="328" x2="640" y2="328" stroke="#D3D1C7" stroke-width="0.5" stroke-dasharray="3 3"/>
+
+  <text x="40" y="350" font-size="11" font-weight="500" fill="#854F0B">时间止损</text>
+  <text x="40" y="364" font-size="10" fill="#5F5E5A">· N 根 K 线无进展 → 走</text>
+  <text x="40" y="378" font-size="10" fill="#5F5E5A">· 用途：信号失效 / 资金占用</text>
+
+  <text x="340" y="350" font-size="11" font-weight="500" fill="#A32D2D">收盘强平</text>
+  <text x="340" y="364" font-size="10" fill="#5F5E5A">· 日内交易必配</text>
+  <text x="340" y="378" font-size="10" fill="#5F5E5A">· 用途：避开跳空 / 隔夜成本</text>
+</svg>
