@@ -124,6 +124,11 @@ class RealPosBroker(DryRunBroker):
         return self._real.get(side, 0)
 
 
+# 本文件默认 K 线交易日。规则 ⑸ 改造后（离场按日期判定）用它作为"今日"，
+# make_pos 的 entry_date 默认取同日 → 今日单 → LOCK 软离场（本文件测试意图）。
+_BAR_DAY = "2026-09-02"
+
+
 def make_signal(is_buy, price=4500.0, high=4552.0, low=4548.0,
                 date="2026-09-02 09:35", bsp_type="1", sig_key=None):
     sig_key = sig_key or ("{}|{}|{}".format(date, bsp_type, "B" if is_buy else "S"))
@@ -138,7 +143,7 @@ def make_bar(ts, o, h, l, c, date="2026-09-02 09:40"):
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
              entry_mode=EntryMode.OPEN_FIRST, signal_key="P18-LEGACY",
-             entry_bar_seq=0):
+             entry_bar_seq=0, entry_date=_BAR_DAY):
     return Position(
         symbol=symbol, side=side, volume=vol,
         entry_price=entry_price, entry_at="2026-09-01 09:00",
@@ -146,7 +151,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         open_order_id="p18-legacy-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
         entry_bar_seq=entry_bar_seq,
-        entry_mode=entry_mode)
+        entry_mode=entry_mode, entry_date=entry_date)
 
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
@@ -192,7 +197,7 @@ with tmp_dir() as tmp:
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证留双向持仓落簿链路。
-    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
+    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
     check("[1c] LOCK 后留双向持仓（原仓 + 反向）", len(engine.positions), 2)
     legs = engine.positions.positions
     orig = next(p for p in legs if p.side is Side.LONG)
@@ -256,7 +261,7 @@ with tmp_dir() as tmp:
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证留双向持仓落簿链路。
-    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
+    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
     check("[3a] 锁仓双向持仓已落簿", len(engine.positions), 2)
     n_before = n_orders(broker)
 
@@ -286,7 +291,7 @@ with tmp_dir() as tmp:
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证 lock_booked 落簿链路。
-    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
+    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
 
     # 重启：同目录新 engine（新 store/ev 实例，同一磁盘文件；构造函数内 _restore）
     ev.flush()
@@ -322,7 +327,7 @@ with tmp_dir() as tmp:
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证 lock_booked 落簿链路。
-    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
+    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
     n_before = n_orders(broker)
     # SELL 信号与锁仓持仓（SHORT）同向 → v1.3：开新仓，不提前平锁仓持仓（规则 ⑸-① 同向版）
     engine.on_signal(make_signal(is_buy=False, price=4540.0,
@@ -351,7 +356,7 @@ with tmp_dir() as tmp:
     engine._persist()
     engine._state = EngineState.IN_TRADE
 
-    engine._close_positions([p1, p2], "lock_test", 4550.0, None,
+    engine._close_positions([p1, p2], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0),
                             signal_key="P18-BATCH")
     check("[6a] 2 笔多单留双向持仓（共 4 笔）", len(engine.positions), 4)
     check("[6b] 全部 entry_mode=LOCKED",
@@ -416,7 +421,7 @@ with tmp_dir() as tmp:
     # v1.3（Q1=B）：反向信号在运行态被忽略；LOCK 软离场改由出场层触发
     # （_settle_positions → _exit_intent(OPEN_FIRST)=LOCK）。此处直接调 _close_positions
     # 模拟出场层触发，验证 lock_booked 落簿链路。
-    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, None)
+    engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
     check("[8a] 锁仓双向持仓已落簿", len(engine.positions), 2)
 
     # bar1：真实持仓与簿一致（LONG=2 + SHORT=2 双边锁仓）→ 对账无动作

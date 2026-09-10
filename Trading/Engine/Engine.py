@@ -615,6 +615,10 @@ class TradingEngine(ReconcileMixin):
 
         # FIFO 排序——按建仓时间升序（防御性：即使调用方传乱序也保证 FIFO）
         ordered = sorted(positions, key=lambda p: p.entry_bar_seq)
+        # 规则 ⑸：离场方式按"今日单 / 跨日单"判定。today 取当前 K 线日期，
+        # 与下方成本口径（_is_today_leg）同源，避免两处日期口径漂移。
+        today_str = (bar.date[:10] if (bar is not None and bar.date)
+                     else now_cn()[:10])
 
         # Phase A：进入瞬态 EXITING（任一平仓动作触发）
         self._state = EngineState.EXITING
@@ -644,11 +648,11 @@ class TradingEngine(ReconcileMixin):
                 opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
                 intent, side = OrderIntent.LOCK, opposite
             else:
-                intent, side = self._exit_intent(pos)
+                intent, side = self._exit_intent(pos, today_str)
 
-            # 2026-09-10：把被平持仓的建仓日传给 broker，让它按今仓/昨仓选 offset
-            # （昨仓→CLOSE；今仓且 close_today_first→CLOSETODAY）。传参前 CLOSE 一律
-            # 发 CLOSETODAY，导致 UNLOCK_FIRST 持仓（必为昨仓）被发成平今 → CTP 拒单。
+            # entry_date 传给 broker 供审计/诊断记录（DryRun 写入 Order.meta）。
+            # 2026-09-10 起 offset 不再据此分支：规则 ⑸ 保证 CLOSE 只用于跨日单，
+            # 中金所平昨报文恒为 CLOSE（原"平今 CLOSETODAY"分支已随不可达路径删除）。
             o = self.broker.submit(intent, side, pos.volume, trigger_price,
                                    signal_key or pos.signal_key,
                                    note=reason, entry_date=pos.entry_date or "")
@@ -711,14 +715,10 @@ class TradingEngine(ReconcileMixin):
                 # ═══ 硬离场（平仓）= 记 Trade + remove 原仓 ═══
                 gross = pos.pnl_points(exit_price)
                 # 2026-09-10：成本口径必须与 broker 实际发出的报文一致。
-                #   报文侧（SimNow._close_offset）已按被平持仓的 entry_date 判今/昨仓：
-                #   昨仓发 CLOSE（平昨费率）、今仓且 close_today_first 才发 CLOSETODAY（平今费率）。
-                #   这里若仍沿用 spec.close_today_first 全局开关，会出现"实际付平昨费、
-                #   账面记平今费（0.0345%，约为平昨 15 倍）"的账实不符 —— 尤其 UNLOCK_FIRST 持仓
-                #   （必为昨仓）会系统性多记成本，净利润被低估。
-                _today = (bar.date[:10] if (bar is not None and bar.date)
-                          else now_cn()[:10])
-                _is_today_leg = bool(pos.entry_date) and pos.entry_date[:10] >= _today
+                #   规则 ⑸ 保证 OrderIntent.CLOSE 只用于跨日单（entry_date < today），
+                #   故 hard exit 恒按**平昨**费率计（0.0023%）。此处仍按 entry_date
+                #   动态判定，是为了对"旧数据 entry_date 缺失"与未来其它调用方保持防御。
+                _is_today_leg = bool(pos.entry_date) and pos.entry_date[:10] >= today_str
                 cost = self.spec.cost_points(
                     pos.entry_price, exit_price,
                     close_today=bool(_is_today_leg and self.spec.close_today_first))
@@ -1008,34 +1008,40 @@ class TradingEngine(ReconcileMixin):
                       lock_pair_id=pair.lock_pair_id,
                       signal_key=sig.key)
 
-    # ---------------- 离场方式（Phase D 硬规则） ----------------
+    # ---------------- 离场方式（规则 ⑸ 硬规则：按日期判定） ----------------
     @staticmethod
-    def _exit_intent(pos: Position) -> "Tuple[OrderIntent, Side]":
-        """按 pos.entry_mode 联动决定离场方式（不留配置开关）。
+    def _exit_intent(pos: Position, today: str = "") -> "Tuple[OrderIntent, Side]":
+        """按**建仓日期**决定离场方式（2026-09-10 用户拍板，替代旧的 entry_mode 联动）。
 
-        OPEN_FIRST   → SOFT_EXIT（软离场）→ OrderIntent.LOCK  + 反向 side
-                                          （开反向同手数；CTP OpenCloseType=Open）
-        UNLOCK_FIRST → HARD_EXIT（硬离场）→ OrderIntent.CLOSE + pos.side
-                                          （平昨无费率问题；CTP OpenCloseType=CloseToday / CloseAny）
-        LOCKED（Phase H1） → OrderIntent.UNLOCK + pos.side
-                                          （锁仓的唯一合法离场 = 解锁，CloseYesterday。
-                                           settle 已跳过 LOCKED，本分支纯防御；
-                                           若同日被触发，CTP 会拒"平昨"——预期行为，
-                                           防止锁仓当日走平今逃费路径。）
+        规则 ⑸ 字面语义（硬编码，不留配置开关）：
+          今日单（entry_date >= today）→ SOFT_EXIT 软离场
+              → OrderIntent.LOCK + 反向 side
+                （反向开仓锁仓；CTP 报文 offset=Open。避开平今 15× 费率）
+          跨日单（entry_date <  today）→ HARD_EXIT 硬离场
+              → OrderIntent.CLOSE + pos.side
+                （平昨；中金所 offset=Close，0.0023% 费率最优）
+          LOCKED → OrderIntent.UNLOCK + pos.side
+                （防御分支：_settle_positions 已跳过 LOCKED，正常路径不可达）
 
-        LOCK 在引擎视角是"软离场"——调用 broker.submit(OPEN, opposite, ...) 让 broker 真的
-        去开反向仓；引擎把当前 Position 视为已了结（pos=None），Trade 仍按 trigger_price
-        结算（cost 用 close_today_first 路径 = LOCK 替代平今的成本等价）。
-        Phase H1 起，LOCK 成交后 broker 端真实存在的反向仓由引擎落簿
-        （entry_mode=LOCKED，见 _close_positions 内 lock_booked 事件），
-        次日对向信号经 on_signal 的 has_opposite 门自动触发 UNLOCK。
+        为什么废弃旧"entry_mode 联动"
+          旧实现 OPEN_FIRST→LOCK / UNLOCK_FIRST→CLOSE 隐含假设"OPEN_FIRST 仓当日开、
+          当日平"。一旦**当日开仓、隔日才触发离场**，该仓物理上已是昨仓，却仍走 LOCK
+          （开反向今仓）→ 多付一次开仓费，且次日还要再平两笔（劣于直接平昨）。
+          按日期判定才是规则 ⑸ 的用户口径，也是 Q2=A 的既定决策（见
+          Docs/自动下单_Q1-Q6决策全记录_v1.3.md）。
+
+        entry_date 缺失（旧版 state.db 恢复）→ 沿用 Types.py:242 既定口径
+          "" < today 恒 True → 保守按昨仓 → 硬离场平昨。
+        today 为空（调用方未传，理论不应发生）→ 无法判日期 → 一律 LOCK：
+          LOCK 是"开反向仓"报文，永不因"持仓不足"被 CTP 拒单；CLOSE 平今会被拒并
+          可能触发 phantom 清仓（账实不符）。故缺省方向选永不拒单的一侧。
         """
         if pos.entry_mode is EntryMode.LOCKED:
-            # Phase H1：锁仓只能解锁（CloseYesterday）。防御分支，正常路径不可达。
+            # 防御分支，正常路径不可达（settle 已跳过 LOCKED）
             return OrderIntent.UNLOCK, pos.side
-        if pos.entry_mode is EntryMode.UNLOCK_FIRST:
+        if today and pos.entry_date[:10] < today[:10]:
+            # 跨日单 → 硬离场（平昨）
             return OrderIntent.CLOSE, pos.side
-        # OPEN_FIRST 或 默认 → SOFT_EXIT（软离场）
         opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
         return OrderIntent.LOCK, opposite
 

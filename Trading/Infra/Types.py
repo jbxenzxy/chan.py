@@ -62,9 +62,17 @@ class OrderIntent(str, Enum):
 
 
 class EntryMode(str, Enum):
-    """入场模式（决定了离场方式）。"""
-    OPEN_FIRST = "open_first"          # 今日新开 → 离场用 SOFT_EXIT 软离场（锁仓，避免平今 15× 费率）
-    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓 → 离场用 HARD_EXIT 硬离场（平昨，无费率问题）
+    """入场模式（**不再决定离场方式** —— 2026-09-10 规则 ⑸ 改造）。
+
+    离场方式自 2026-09-10 起由 `Engine._exit_intent(pos, today)` **按建仓日期**判定
+    （今日单 → LOCK 反向开仓；跨日单 → CLOSE 平昨），本枚举不再参与该决策。
+    现仅用于两处：
+      ① LOCKED —— _settle_positions 跳过（锁仓不等止盈止损，等解锁）+
+                  运行态判定（存在非 LOCKED 持仓 = 运行态）
+      ② 事件日志 / 持久化审计（标记这笔仓是怎么来的）
+    """
+    OPEN_FIRST = "open_first"          # 今日新开（空仓状态下的信号入场）
+    UNLOCK_FIRST = "unlock_first"      # 解锁昨日锁仓后，同向配对仓升级而来
     # Phase H1：LOCK 软离场成交后，broker 端真实存在的反向锁仓落簿为本模式。
     # 唯一合法离场 = 对向信号触发 UNLOCK（CloseYesterday，次日语义）；
     # settle（TP/SL/EOD）跳过本模式 —— 锁仓不等止盈止损，等解锁。
@@ -72,7 +80,8 @@ class EntryMode(str, Enum):
 
 
 class ExitMode(str, Enum):
-    """离场方式（Phase D 由 entry_mode 自动决定，不留配置开关）。"""
+    """离场方式。2026-09-10 起由 `Engine._exit_intent` 按**建仓日期**决定，
+    不再由 EntryMode 联动，也不留配置开关（规则 ⑸ 硬规则）。"""
     HARD_EXIT = "hard_exit"            # 硬离场（平仓：真正了结，PnL 兑现）
     SOFT_EXIT = "soft_exit"            # 软离场（锁仓：开反向同手数，正反互锁等效离场，PnL 不兑现）
 

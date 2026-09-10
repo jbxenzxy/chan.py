@@ -34,9 +34,10 @@ SimNow 仿真 broker（M2b）
       · fill_timeout_open/close 退化为通道异常兜底 watchdog：正常时交易所毫秒级
         给出终态，超时撤单分支仅在断线/回报丢失时兜底。
       郑商所期货不支持 FOK（tqsdk 直接抛异常，暂不处理：只交易中金所金融期货）。
-    - offset：open→OPEN；close→CLOSE（交易所自动平今/平昨）。
-      中金所平今手续费差异只体现在成本模型（dry_run 的 cost_points），
-      下单 offset 的精细平今（CLOSETODAY）留到实盘阶段再按持仓当日判定。
+    - offset：OPEN/LOCK→OPEN；UNLOCK/CLOSE→CLOSE。
+      2026-09-10：删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
+      规则 ⑸ 保证"今日单离场 = LOCK 反向开仓（offset=OPEN）"、"跨日单离场 = CLOSE
+      平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，CLOSETODAY（平今 0.0345%）不可达。
 
 并发与一致性保障（P0/P3/P4/P5/P6）
     P0：close 前等 tqsdk position 同步到 ≥ volume，防 CTP "平仓量超过持仓量"拒单。
@@ -547,11 +548,12 @@ class SimNowBroker(Broker):
     # 最多 close_max_chase 轮；close_chase_ticks 仅在行情临时取不到时作兜底步长。
     # 仍不成交（如涨跌停锁死）才放弃（rejected），由引擎对账机制（增强 B）兜底。
     #
-    # Phase C（2026-09-05）：按 intent 区分报文
-    #   - OPEN   offset=Open
+    # 报文（2026-09-10 按规则 ⑸ 定稿，见 Base.INTENT_TO_OFFSET）
+    #   - OPEN   offset=Open（买入/卖出开仓）
     #   - LOCK   offset=Open（方向由调用方填反，即"开反向同手数"），与 OPEN 报文相同但语义不同
-    #   - CLOSE  offset=CloseToday（spec.close_today_first=True 时）或 CloseAny（False）
-    #   - UNLOCK offset=CloseYesterday（避开平今）
+    #   - UNLOCK offset=Close（平掉昨仓的反向腿）
+    #   - CLOSE  offset=Close（平昨；只用于跨日单，今日单离场走 LOCK，
+    #                         故不存在"平今 CLOSETODAY"报文）
     def submit(self, intent, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "",
                entry_date: str = "") -> Order:
@@ -572,8 +574,8 @@ class SimNowBroker(Broker):
         if intent is OrderIntent.UNLOCK:
             # 2026-09-05 规格归一：解锁≈开仓（入场语义）——单次超价 + fill_timeout_open
             # 超时撤单、不追价（"入场没成功，最多不赚钱，但不会亏钱"）。
-            # 报文仍是平昨语义（平反向昨仓，避开平今费率），但 offset 必须是 tqsdk
-            # 白名单内的 "CLOSE"（见 _close_offset 注释）；
+            # 报文是平昨语义（平反向昨仓，避开平今费率），offset = tqsdk 白名单内的
+            # "CLOSE"（"CLOSEYESTERDAY"/"CLOSEANY" 都不在白名单，会本地 raise）；
             # 通道级异常兜底交给引擎 Phase F1（5 bar 后 trade_confirmed 复核 + cancel_pending）。
             return self._submit_unlock(intent, side, volume, ref_price, signal_key, note)
         return self._submit_close(intent, side, volume, ref_price, signal_key, note,
@@ -734,41 +736,15 @@ class SimNowBroker(Broker):
             prev_limit + chase_sign * chase_ticks * tick,
             "up" if chase_sign > 0 else "down")
 
-    @staticmethod
-    def _today_str() -> str:
-        """今日日期（YYYY-MM-DD，北京时间）。供今仓/昨仓判定使用。"""
-        return now_cn()[:10]
-
-    def _close_offset(self, entry_date: str) -> str:
-        """CLOSE 报文的 offset 选择（2026-09-10 修正）。
-
-        旧实现：CLOSETODAY（close_today_first=True）/ CLOSEANY（False），两者都有问题：
-          · CLOSEANY 不在 tqsdk 白名单 → insert_order 本地 raise → 平仓必失败；
-          · CLOSETODAY 无条件用于所有平仓 → UNLOCK_FIRST 持仓（必然是昨仓）被发成"平今"：
-            中金所无今仓 → CTP 拒单 → 引擎连续失败触发 phantom 清仓（账实不符）；
-            若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
-
-        新实现（按被平持仓的建仓日期判定，语义即"平昨/平今"）：
-          · 昨仓（entry_date < 今日）→ "CLOSE"（中金所/上期所平昨均用 CLOSE）
-          · 今仓（entry_date >= 今日）→ "CLOSETODAY"（仅当 spec.close_today_first，
-            用于上期所等区分今昨的交易所）；close_today_first=False → "CLOSE"（原 CLOSEANY 非法）
-          · entry_date 缺失 → 保守按昨仓处理（与引擎 on_signal 的 "" < today 口径一致）
-        """
-        if not self.spec.close_today_first:
-            return "CLOSE"
-        today = self._today_str()
-        if entry_date and entry_date[:10] >= today:
-            return "CLOSETODAY"     # 今仓：平今
-        return "CLOSE"              # 昨仓 或 日期缺失（保守按平昨）
-
     def _submit_close(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                       signal_key: str, note: str, entry_date: str = "") -> Order:
-        # Phase C：UNLOCK = 平昨报文（CLOSE，2026-09-10 由 CLOSEYESTERDAY 修正）；
-        # CLOSE 按被平持仓的 entry_date 选平今/平昨（见 _close_offset）。
-        if intent is OrderIntent.UNLOCK:
-            offset = "CLOSE"
-        else:
-            offset = self._close_offset(entry_date)
+        # 2026-09-10（用户拍板）：删除原 `_close_offset(entry_date)` 的平今分支。
+        #   规则 ⑸ 保证 OrderIntent.CLOSE **只用于跨日单**（today 判定在
+        #   Engine._exit_intent），今日单离场一律走 LOCK（反向开仓，offset=OPEN）。
+        #   因此 CLOSE 语义恒为"平昨"，中金所/上期所平昨报文都是 tqsdk 白名单内的
+        #   "CLOSE"；CLOSETODAY（平今，中金所 0.0345% ≈ 平昨 15 倍）在本代码中不可达，
+        #   留着只会误导后来人以为"今日单可能走平今"。
+        offset = "CLOSE"
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
         if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,

@@ -50,7 +50,7 @@ INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
     #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
     #   故解锁（只平昨）在中金所与上期所都应用 "CLOSE"。
     OrderIntent.UNLOCK: "CLOSE",           # 解锁：只平昨仓（中金所/上期所平昨报文均为 CLOSE）
-    OrderIntent.CLOSE: "CLOSE",            # 平仓：实际报文由 SimNow._close_offset 按今/昨仓决定
+    OrderIntent.CLOSE: "CLOSE",            # 平仓：恒 CLOSE（平昨）。规则 ⑸ 保证 CLOSE 只用于跨日单
     OrderIntent.LOCK: "OPEN",              # 锁仓：与 OPEN 报文相同，但方向相反（净额对冲）
 }
 
@@ -74,10 +74,11 @@ class Broker(ABC):
           - CLOSE    平仓
           - LOCK     锁仓（开反向同手数）
         ref_price: 策略参考价（开仓=信号K线收盘价；平仓=触发价；锁仓/解锁同 CLOSE）
-        entry_date: 被平持仓的建仓日期（YYYY-MM-DD，2026-09-10 新增）。
-          仅 CLOSE 使用：broker 据此判今仓/昨仓选 offset（昨仓→CLOSE，今仓→CLOSETODAY）。
-          留空时保守按昨仓处理（与引擎 on_signal 的 "" < today 口径一致）。
-          新增在参数表末尾且带默认值，既有位置参数调用不受影响。
+        entry_date: 被平持仓的建仓日期（YYYY-MM-DD）。2026-09-10 起**仅用于审计/诊断**
+          （DryRun 写入 Order.meta），**不再参与 offset 选择** —— 规则 ⑸ 保证
+          OrderIntent.CLOSE 只用于跨日单，中金所平昨报文恒为 "CLOSE"
+          （原"平今 CLOSETODAY"分支已随不可达路径删除）。
+          保留该位置参数（带默认值）是为了不破坏既有调用方签名。
         """
         raise NotImplementedError
 

@@ -167,6 +167,11 @@ def make_engine(tmpdir, *, max_open_positions=3, split_positions=1,
     return eng
 
 
+# 本文件所有 K 线的默认交易日。规则 ⑸ 改造后（离场按日期判定）用它作为
+# "今日"，持仓 entry_date 默认取同日 → 今日单 → LOCK 软离场（本文件的测试意图）。
+_BAR_DAY = "2026-09-01"
+
+
 def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
     """构造 Bar。默认 ts=5000（大于所有 make_position 的 entry_bar_ts），
     避免触发 _settle_positions 的「入场那根 K 线不参与出场判定」跳过逻辑。
@@ -176,12 +181,16 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
-                   tp_offset=5.0, sl_offset=10.0):
+                   tp_offset=5.0, sl_offset=10.0, entry_date=_BAR_DAY):
     """构造一个手动 Position（不走 _open_positions），用于测试 settle / close / reconcile。
 
     tp_offset / sl_offset 是相对 entry_price 的偏移量：
       · 多仓：tp = entry + tp_offset，stop = entry - sl_offset
       · 空仓：tp = entry - tp_offset，stop = entry + sl_offset
+
+    entry_date 默认 = _BAR_DAY（与 make_bar 的默认 K 线日期同日）——2026-09-10 规则 ⑸
+    改造后离场方式按日期判定，本文件的用例全部是"今日单离场 → LOCK 软离场落簿"，
+    故必须显式给出"今日"的 entry_date；留空会被保守判为昨仓 → 走 CLOSE 硬离场。
     """
     from Trading.Infra.Types import now_cn
     if side is Side.LONG:
@@ -199,7 +208,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                             params={"take_profit_points": tp_offset,
                                     "stop_loss_points": sl_offset}),
-        entry_mode=EntryMode.OPEN_FIRST)
+        entry_mode=EntryMode.OPEN_FIRST, entry_date=entry_date)
 
 
 def read_events(eng, kinds=None, tail_n=200):

@@ -211,31 +211,43 @@ check('旧 "close" 字符串仍被接受 → meta.intent="close"',
 # ════════════════════════════════════════════════════════════════
 # [4] engine._exit_intent 联动规则
 # ════════════════════════════════════════════════════════════════
-print("\n[4] engine._exit_intent 联动硬规则")
+# 2026-09-10 规则 ⑸ 改造：离场方式改为按**日期**判定（今日单 LOCK / 跨日单 CLOSE），
+# 不再按 entry_mode 联动。故这里必须给 Position 显式 entry_date 并传入 today。
+print("\n[4] engine._exit_intent 规则 ⑸ 硬规则（按 entry_date vs today）")
+_D_NOW = "2026-09-02"
 p_open = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                   exit_plan=ExitPlan(name="x", stop_price=99.0),
-                  entry_mode=EntryMode.OPEN_FIRST)
-intent, side = TradingEngine._exit_intent(p_open)
-check("OPEN_FIRST → OrderIntent.LOCK", intent, OrderIntent.LOCK)
-check("OPEN_FIRST → 反向 side (LONG→SHORT)", side, Side.SHORT)
+                  entry_mode=EntryMode.OPEN_FIRST, entry_date=_D_NOW)
+intent, side = TradingEngine._exit_intent(p_open, _D_NOW)
+check("今日单（OPEN_FIRST）→ OrderIntent.LOCK", intent, OrderIntent.LOCK)
+check("今日单（OPEN_FIRST）→ 反向 side (LONG→SHORT)", side, Side.SHORT)
 
 p_unlock = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
                     entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
                     exit_plan=ExitPlan(name="x", stop_price=99.0),
-                    entry_mode=EntryMode.UNLOCK_FIRST)
-intent2, side2 = TradingEngine._exit_intent(p_unlock)
-check("UNLOCK_FIRST → OrderIntent.CLOSE", intent2, OrderIntent.CLOSE)
-check("UNLOCK_FIRST → pos.side (LONG)", side2, Side.LONG)
+                    entry_mode=EntryMode.UNLOCK_FIRST, entry_date="2026-09-01")
+intent2, side2 = TradingEngine._exit_intent(p_unlock, _D_NOW)
+check("跨日单（UNLOCK_FIRST, entry_date<today）→ OrderIntent.CLOSE",
+      intent2, OrderIntent.CLOSE)
+check("跨日单 → pos.side (LONG)", side2, Side.LONG)
 
-# 默认 entry_mode（OPEN_FIRST）走 SOFT_EXIT
+p_stale = Position(symbol="X", side=Side.LONG, volume=1, entry_price=100.0,
+                   entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
+                   exit_plan=ExitPlan(name="x", stop_price=99.0),
+                   entry_mode=EntryMode.OPEN_FIRST, entry_date="2026-09-01")
+intent_stale, _ = TradingEngine._exit_intent(p_stale, _D_NOW)
+check("当日开仓、隔日才离场 → CLOSE 平昨（旧 entry_mode 联动会误走 LOCK）",
+      intent_stale, OrderIntent.CLOSE)
+
+# 默认 entry_mode（OPEN_FIRST）+ 今日 → SOFT_EXIT
 p_default = Position(symbol="X", side=Side.SHORT, volume=1, entry_price=100.0,
                      entry_at="", entry_bar_ts=0, signal_key="k", open_order_id="o",
-                     exit_plan=ExitPlan(name="x", stop_price=99.0))
-# entry_mode 默认 OPEN_FIRST
+                     exit_plan=ExitPlan(name="x", stop_price=99.0),
+                     entry_date=_D_NOW)
 check("默认 entry_mode==OPEN_FIRST", p_default.entry_mode, EntryMode.OPEN_FIRST)
-intent3, side3 = TradingEngine._exit_intent(p_default)
-check("默认 → OrderIntent.LOCK", intent3, OrderIntent.LOCK)
+intent3, side3 = TradingEngine._exit_intent(p_default, _D_NOW)
+check("默认（今日单）→ OrderIntent.LOCK", intent3, OrderIntent.LOCK)
 check("默认 + SHORT 持仓 → 反向 side (LONG)", side3, Side.LONG)
 
 

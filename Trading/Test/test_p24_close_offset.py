@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-P24 平仓 offset 今/昨仓判定 + tqsdk 白名单 单元测试（2026-09-10 新增）
+P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10 修订）
 =====================================================================
-背景（两个 P0 缺陷的回归测试）
+背景（两个 P0 缺陷的回归测试 + 规则 ⑸ 改造）
 
-    场景 Y（锁仓态跨日解锁入场 → 昨仓硬离场）在实盘上整条链路是断的，根因都在
-    CTP 报文 offset 上：
+    A. CTP 报文 offset 的两个 P0 缺陷（已修）
 
     1. UNLOCK 用 offset="CLOSEYESTERDAY"
        → 不在 tqsdk 白名单。tqsdk 3.10.2 三处硬校验
@@ -17,13 +16,20 @@ P24 平仓 offset 今/昨仓判定 + tqsdk 白名单 单元测试（2026-09-10 �
          **其他交易所（含中金所）直接用 CLOSE**）。
 
     2. CLOSE 无条件发 "CLOSETODAY"（spec.close_today_first=True）
-       → UNLOCK_FIRST 持仓必然是昨仓（它只在跨日解锁时由 _upgrade_lock_pair 产生），
-         昨仓发平今：中金所无今仓 → CTP 拒单 → 引擎连续失败达 close_max_streak
+       → 昨仓发平今：中金所无今仓 → CTP 拒单 → 引擎连续失败达 close_max_streak
          触发 phantom 清仓（真实持仓还在却从引擎簿消失 → 账实不符）；
          若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
-       修正：按被平持仓 entry_date 判定（昨仓→CLOSE，今仓→CLOSETODAY）。
+       修正（2026-09-10 用户拍板）：**删除今/昨仓分支**（原 `_close_offset`）。
+         规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
+         "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，
+         CLOSETODAY 在代码中**不可达** —— 留着只会误导后来人以为今日单可能走平今。
 
-    3. 附带：close_today_first=False 时的 "CLOSEANY" 同样不在白名单 → 改 "CLOSE"。
+    B. 离场方式判定改为按日期（规则 ⑸ 落地，原按 entry_mode 联动）
+       `Engine._exit_intent(pos, today)`：
+         · LOCKED             → (UNLOCK, pos.side)     防御分支
+         · entry_date < today → (CLOSE,   pos.side)    跨日单：硬离场平昨
+         · entry_date >= today→ (LOCK,    反向 side)   今日单：软离场锁仓
+         · today 缺省/为空    → (LOCK,    反向 side)   无法判日期 → 选永不拒单一侧
 
 本测试用 mock api 对象验证，不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p24_close_offset.py
@@ -60,8 +66,11 @@ try:
     from Trading.Broker.Base import INTENT_TO_OFFSET  # noqa: E402
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Config import DEFAULT_CONFIG  # noqa: E402
+    from Trading.Engine.Engine import TradingEngine  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
-    from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
+    from Trading.Infra.Types import (  # noqa: E402
+        EntryMode, ExitPlan, OrderIntent, Position, Side,
+    )
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
     raise SystemExit(2)
@@ -72,9 +81,9 @@ _FAIL = 0
 # tqsdk 硬性白名单（三处校验一致）
 _TQSDK_OFFSETS = ("OPEN", "CLOSE", "CLOSETODAY")
 
-_TODAY = _dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))).date().isoformat()
-_YESTERDAY = (_dt.datetime.now(_dt.timezone(_dt.timedelta(hours=8))).date()
-              - _dt.timedelta(days=1)).isoformat()
+_CN = _dt.timezone(_dt.timedelta(hours=8))
+_TODAY = _dt.datetime.now(_CN).date().isoformat()
+_YESTERDAY = (_dt.datetime.now(_CN).date() - _dt.timedelta(days=1)).isoformat()
 
 
 def check(name: str, got, want) -> None:
@@ -157,22 +166,24 @@ def make_broker(api=None, params=None, spec=None):
 _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
          "close_max_chase": 1, "chase_interval": 0.01}
 
-print("\n[1] _close_offset 今/昨仓判定（spec.close_today_first=True）")
-b = make_broker(api=MockApi(pos=MockPos()), params=_FAST)
-check("昨仓（entry_date={}）→ CLOSE（平昨）".format(_YESTERDAY),
-      b._close_offset(_YESTERDAY), "CLOSE")
-check("今仓（entry_date={}）→ CLOSETODAY（平今）".format(_TODAY),
-      b._close_offset(_TODAY), "CLOSETODAY")
-check("entry_date 缺失 → CLOSE（保守按昨仓，与引擎 '' < today 口径一致）",
-      b._close_offset(""), "CLOSE")
 
-print("\n[2] close_today_first=False → 一律 CLOSE（原 CLOSEANY 不在白名单）")
-spec_false = InstrumentSpec(close_today_first=False)
-b2 = make_broker(api=MockApi(pos=MockPos()), params=_FAST, spec=spec_false)
-check("今仓 + close_today_first=False → CLOSE", b2._close_offset(_TODAY), "CLOSE")
-check("昨仓 + close_today_first=False → CLOSE", b2._close_offset(_YESTERDAY), "CLOSE")
+def _first_close_offset(entry_date: str, spec=None) -> str:
+    a = MockApi(pos=MockPos())
+    bb = make_broker(api=a, params=_FAST, spec=spec)
+    bb._submit_close(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close", "",
+                     entry_date)
+    return a.inserted[0]["offset"]
 
-print("\n[3] UNLOCK 实发报文（P0-1：CLOSEYESTERDAY → CLOSE）")
+
+print("\n[1] CLOSE 报文恒为平昨 CLOSE（今/昨仓分支已删除，CLOSETODAY 不可达）")
+check("昨仓离场 → CLOSE", _first_close_offset(_YESTERDAY), "CLOSE")
+check("今仓离场 → CLOSE（规则 ⑸：今日单离场走 LOCK，不会走到 CLOSE）",
+      _first_close_offset(_TODAY), "CLOSE")
+check("entry_date 缺失 → CLOSE", _first_close_offset(""), "CLOSE")
+check("close_today_first=False 时同样 CLOSE",
+      _first_close_offset(_TODAY, InstrumentSpec(close_today_first=False)), "CLOSE")
+
+print("\n[2] UNLOCK 实发报文（P0-1：CLOSEYESTERDAY → CLOSE）")
 api = MockApi(pos=MockPos())
 b3 = make_broker(api=api, params=_FAST)
 b3._submit_unlock(OrderIntent.UNLOCK, Side.LONG, 1, 4550.0, "k-unlock", "")
@@ -182,24 +193,7 @@ check("UNLOCK offset = CLOSE（平昨，且 tqsdk 接受）",
 check("UNLOCK direction = SELL（平多）", api.inserted[0]["direction"], "SELL")
 check("UNLOCK advanced = FOK", api.inserted[0]["advanced"], "FOK")
 
-print("\n[4] CLOSE 实发报文：昨仓 vs 今仓（P0-2）")
-
-
-def _first_close_offset(entry_date: str) -> str:
-    a = MockApi(pos=MockPos())
-    bb = make_broker(api=a, params=_FAST)
-    bb._submit_close(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close", "",
-                     entry_date)
-    return a.inserted[0]["offset"]
-
-
-check("昨仓离场 → CLOSE（中金所不会因'无今仓'拒单）",
-      _first_close_offset(_YESTERDAY), "CLOSE")
-check("今仓离场 → CLOSETODAY（保持原平今行为）",
-      _first_close_offset(_TODAY), "CLOSETODAY")
-check("无 entry_date 保守 → CLOSE", _first_close_offset(""), "CLOSE")
-
-print("\n[5] 白名单总校验：实际发出的 offset 必须都被 tqsdk 接受")
+print("\n[3] 白名单总校验：实际发出的 offset 必须都被 tqsdk 接受")
 _emitted = [api.inserted[0]["offset"], _first_close_offset(_YESTERDAY),
             _first_close_offset(_TODAY), _first_close_offset("")]
 check("所有实发 offset ∈ ('OPEN','CLOSE','CLOSETODAY')",
@@ -208,11 +202,49 @@ check("INTENT_TO_OFFSET 全表 ∈ 白名单",
       all(v in _TQSDK_OFFSETS for v in INTENT_TO_OFFSET.values()), True)
 check("UNLOCK 映射不再是 CLOSEYESTERDAY",
       INTENT_TO_OFFSET[OrderIntent.UNLOCK] != "CLOSEYESTERDAY", True)
+check("CLOSE 映射 = CLOSE（不再是 CLOSEANY / CLOSETODAY）",
+      INTENT_TO_OFFSET[OrderIntent.CLOSE], "CLOSE")
 
-print("\n[6] 场景 Y 关键回归：UNLOCK_FIRST 持仓（昨仓）离场不得发平今")
-# UNLOCK_FIRST 持仓只在跨日解锁后产生 → entry_date 必然 < 今日
-check("UNLOCK_FIRST 持仓（entry_date=昨）离场 = CLOSE ≠ CLOSETODAY",
-      _first_close_offset(_YESTERDAY) != "CLOSETODAY", True)
+
+print("\n[4] 场景 Y 关键回归：跨日单（昨仓）离场不得发平今")
+check("昨仓离场 ≠ CLOSETODAY", _first_close_offset(_YESTERDAY) != "CLOSETODAY", True)
+
+
+# ---------------- [5] 规则 ⑸：_exit_intent 按日期判定 ----------------
+def mk_pos(side=Side.LONG, entry_mode=EntryMode.OPEN_FIRST, entry_date=_TODAY):
+    return Position(symbol="CFFEX.IF2609", side=side, volume=2,
+                    entry_price=4000.0, entry_at="", entry_bar_ts=0,
+                    signal_key="k", open_order_id="o",
+                    exit_plan=ExitPlan(name="x", stop_price=3990.0),
+                    entry_mode=entry_mode, entry_date=entry_date)
+
+
+print("\n[5] 规则 ⑸：_exit_intent 按 entry_date vs today 判定（不再看 entry_mode）")
+i, s = TradingEngine._exit_intent(mk_pos(entry_date=_TODAY), _TODAY)
+check("今日单 → LOCK（反向开仓锁仓）", i, OrderIntent.LOCK)
+check("今日单 → 反向 side（LONG 仓 → 开 SHORT）", s, Side.SHORT)
+
+i, s = TradingEngine._exit_intent(mk_pos(entry_date=_YESTERDAY), _TODAY)
+check("跨日单 → CLOSE（平昨）", i, OrderIntent.CLOSE)
+check("跨日单 → 原 side（LONG 仓 → 卖平）", s, Side.LONG)
+
+# 关键改造点：OPEN_FIRST 但已跨日 → 必须走 CLOSE（旧实现会错走 LOCK）
+i, _s = TradingEngine._exit_intent(
+    mk_pos(entry_mode=EntryMode.OPEN_FIRST, entry_date=_YESTERDAY), _TODAY)
+check("当日开仓、隔日才离场 → CLOSE 平昨（旧实现误走 LOCK）", i, OrderIntent.CLOSE)
+
+# UNLOCK_FIRST 若 entry_date 恰好=今日（异常数据）→ 按今日单锁仓，不再无条件 CLOSE
+i, _s = TradingEngine._exit_intent(
+    mk_pos(entry_mode=EntryMode.UNLOCK_FIRST, entry_date=_TODAY), _TODAY)
+check("UNLOCK_FIRST 但 entry_date=今日 → LOCK（按日期而非 entry_mode）",
+      i, OrderIntent.LOCK)
+
+i, s = TradingEngine._exit_intent(
+    mk_pos(entry_mode=EntryMode.LOCKED, entry_date=_YESTERDAY), _TODAY)
+check("LOCKED → UNLOCK + 原 side（防御分支）", (i, s), (OrderIntent.UNLOCK, Side.LONG))
+
+i, _s = TradingEngine._exit_intent(mk_pos(entry_date=_YESTERDAY), "")
+check("today 缺省 → LOCK（无法判日期时选永不拒单的一侧）", i, OrderIntent.LOCK)
 
 print("\n" + "=" * 60)
 print("P24 结果: {} passed, {} failed".format(_PASS, _FAIL))
