@@ -254,7 +254,92 @@ class TradingEngine(ReconcileMixin):
             "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
             .format(keys))
 
+    # ════════════════════════════════════════════════════════════════
+    # R3（2026-09-10）：锁仓配对不变量断言
+    #   「一个锁对恰好 2 笔成员（原仓 + 反向仓，方向相反）」是**构造性**成立的：
+    #     · lock_pair_id 全仓只有 2 个写入点，都在 `_book_lock_pair` 内
+    #       （原仓 `pos.lock_pair_id` 与新建反向仓 `lock_pos.lock_pair_id`），
+    #       且用的是**同一个局部变量** pair_id；
+    #     · pair_id 来自单调序号（R1 已跨重启恢复），不会重复；
+    #     · 成员只会被 remove（解锁 / 平仓 / 对账），不会再有人加入同一组；
+    #     · `_upgrade_lock_pair` 只改 origin，不动 id。
+    #   故成员数 ≥3 或"2 笔同向"的触发条件只有一个：**库被外部污染**
+    #   （手工改过 / 旧版序号复用残留 / 多进程共用一份库）。
+    #
+    #   为什么是"断言拒绝启动"而不是"拒绝升级 + 告警"的业务策略：
+    #     这分支触发时**不需要人类做业务决策** —— 它就是数据坏了。
+    #     而让 `_upgrade_lock_pair` 在 ≥3 笔候选里取第一笔的代价是：
+    #       升级错误的仓（错仓接风控）+ 本该升级的仓永久滞留 SOFT_EXIT_LOCK
+    #       （`_settle_positions` 显式跳过它 → 不参与 L1-L3 止盈止损、不参与 EOD）。
+    #     判断标准：需要业务决策 → 策略；不需要 → 断言。
+    # ════════════════════════════════════════════════════════════════
+    def lock_pair_groups(self) -> Dict[str, List[Position]]:
+        """簿内按 `lock_pair_id` 分组（空 id 不参与 —— 未锁 / 已解锁的合法状态）。"""
+        groups: Dict[str, List[Position]] = {}
+        for p in self.positions.positions:
+            if not p.lock_pair_id:
+                continue
+            groups.setdefault(p.lock_pair_id, []).append(p)
+        return groups
+
+    def _assert_lock_pair_invariant(self) -> None:
+        """同一 `lock_pair_id` 至多 2 笔成员，且 2 笔必须方向相反。违反 → 拒绝启动。"""
+        groups = self.lock_pair_groups()
+        too_many = {k: v for k, v in groups.items() if len(v) > 2}
+        same_side = {k: v for k, v in groups.items()
+                     if len(v) == 2 and v[0].side is v[1].side}
+        if not too_many and not same_side:
+            return
+        detail = {
+            "too_many": {k: [p.signal_key for p in v] for k, v in too_many.items()},
+            "same_side": {k: ["{} {}".format(p.side.name, p.signal_key)
+                              for p in v] for k, v in same_side.items()},
+        }
+        self.ev.write("lock_pair_id_invariant_violated",
+                      lock_pair_ids=sorted(set(detail["too_many"]) |
+                                           set(detail["same_side"])),
+                      detail=detail,
+                      note="同一 lock_pair_id 出现 >2 笔成员或 2 笔同向；"
+                           "正常路径不可达（构造性保证），判定为 state.db 被外部污染，"
+                           "拒绝启动以免升级错误的仓 / 锁仓仓永久滞留软离场")
+        raise RuntimeError(
+            "state.db 的锁仓配对不变量被破坏，拒绝启动：\n"
+            "  不变量：同一个 lock_pair_id 至多 2 笔持仓，且两笔方向相反。\n"
+            "  实际：{}\n"
+            "  后果：解锁时「选要平的仓」（方向 + 最老）与「选要升级的仓」\n"
+            "        （lock_pair_id 相同）会脱钩 → 平一笔、升另一笔；\n"
+            "        被漏掉的那笔会永久停在 SOFT_EXIT_LOCK（不参与 L1-L3 止盈\n"
+            "        止损、不参与 EOD），唯一出路是人工介入。\n"
+            "  原因：正常路径下 lock_pair_id 由单调序号生成且只有 2 个写入点，\n"
+            "        不会重复 —— 出现本错误说明 state.db 被手工改过 / 由旧版\n"
+            "        （序号跨重启归零）写入过 / 被多个进程同时写过。\n"
+            "  处理：备份 Trading/State/state.db，核对实盘持仓，必要时删除该库重启。"
+            .format(detail))
+
     # ---------------- 状态恢复 ----------------
+    @staticmethod
+    def _max_lock_pair_seq_in_state(records) -> int:
+        """从持久化持仓记录反推已用过的最大锁对序号（'lock_00007' → 7）。
+
+        R1 的第二道保险：即使 kv 里的 `lock_pair_seq` 丢了，也能从**真实数据**
+        推出已用过的最大号，保证新号不会与库内既有锁对相撞。
+
+        刻意扫**全部合约分片**（传进来的 records 是 `positions` 键的原始列表，
+        不只当前 trade_symbol）—— 切合约后旧合约的锁对仍留在库里，
+        "已用过的号"是全局集合，不能按当前合约重新从 1 开始。
+        """
+        best = 0
+        for d in (records or []):
+            if not isinstance(d, dict):
+                continue
+            s = str(d.get("lock_pair_id") or "")
+            if not s.startswith("lock_") or not s[5:].isdigit():
+                continue
+            n = int(s[5:])
+            if n > best:
+                best = n
+        return best
+
     def _restore(self) -> None:
         # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
@@ -280,6 +365,10 @@ class TradingEngine(ReconcileMixin):
                 new_book = PositionBook(max_positions=restore_max)
                 new_book.set_legacy(Position.from_dict(pd))
                 self.positions.replace_with(new_book)
+
+        # R3：锁仓配对不变量闸门（详见 _assert_lock_pair_invariant 注释）。
+        #   放在持仓装载后、任何业务逻辑前 —— 坏数据不许进入状态机。
+        self._assert_lock_pair_invariant()
 
         # ════════════════════════════════════════════════════════════════
         # F2（2026-09-10）：恢复后仍无 entry_date 的持仓 → 拒绝启动。
@@ -342,6 +431,38 @@ class TradingEngine(ReconcileMixin):
         else:
             self._state = EngineState.IN_TRADE
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
+        # ════════════════════════════════════════════════════════════════
+        # R1（2026-09-10）：三个持久 ID 的序号跨重启恢复。
+        #   症状（实测）：`_trade_seq` / `_lock_pair_seq` 是**进程内计数器**，
+        #     `_persist` / `_restore` 都不碰它们 → 重启归零 → `trade_id` 从
+        #     T00001 重来 → 与库内既有记录相撞 → 旧 `INSERT OR REPLACE` 把上一
+        #     进程的成交流水**静默覆盖**（实测：2 笔独立成交落库只剩 1 条）。
+        #   根因不是"计数器这个方案不可靠"，而是**漏接持久化** —— 同性质的
+        #     `bars_seen` 早就走 set_json/get_json 了（实测跨重启 7 → 7）。
+        #   修法（与 bars_seen 同构，不新增表、不改 schema）：
+        #     ① `_persist` 把序号写 kv；
+        #     ② 恢复取 max(kv 值, 库内数据推导值) —— 双保险：kv 丢了（换库 /
+        #        被外部清理）也能从真实数据反推出已用过的最大号；
+        #     ③ broker 的报单序号同理，从 `orders` 表抬升到 max 之上。
+        #   为什么不改成"时间戳 ID"：实测同一毫秒内批量锁仓会生成相同毫秒
+        #     （`_lock_remaining_positions` 逐笔调用同一毫秒），墙钟回拨后也会
+        #     与历史号重复 —— 症状和计数器一模一样，只是触发条件换了。单调
+        #     计数器不吃墙钟，且可读性/可续号性都更好。
+        #   同时不动 `entry_bar_seq`：它已持久化（bars_seen）且语义是"根数"
+        #     （`bars_held = bars_seen - entry_bar_seq`），换算成时间戳要除以
+        #     周期 → 引入周期依赖，与 `Engine.py` 注释里刻意保持的"与周期无关"相悖。
+        # ════════════════════════════════════════════════════════════════
+        state_records = (pd_list if isinstance(pd_list, list)
+                         else [p.to_dict() for p in self.positions.positions])
+        self._trade_seq = max(int(self.store.get_json("trade_seq", 0) or 0),
+                              self.store.max_trade_seq())
+        self._lock_pair_seq = max(
+            int(self.store.get_json("lock_pair_seq", 0) or 0),
+            self._max_lock_pair_seq_in_state(state_records))
+        fn_seed = getattr(self.broker, "seed_order_seq", None)
+        if callable(fn_seed):
+            fn_seed(max(int(self.store.get_json("order_seq", 0) or 0),
+                        self.store.max_order_seq(self.broker.name)))
         # Phase F：恢复 _unlock_in_flight —— 接续上次崩前的卡单标记，
         #   让 _check_unlock_stuck 在余下 bar 进度下继续推进到 5-bar 复核。
         #   不恢复的副作用：引擎崩溃一次即丢卡单检测能力，F1 形同虚设。
@@ -404,6 +525,15 @@ class TradingEngine(ReconcileMixin):
             self.store.delete_key("positions")
             self.store.delete_key("position")
         self.store.set_json("bars_seen", self.bars_seen)
+        # R1：三个持久 ID 的序号落 kv（跨重启不复用）。见 _restore 的 R1 段。
+        #   order_seq 是 broker 端计数器的当前值 —— 不落的话，只要中途没有
+        #   新报单，重启后 broker 计数器会回到旧值，下一条委托号就可能撞上
+        #   库内既有号（R2 之后会直接抛 IdCollisionError）。
+        self.store.set_json("trade_seq", int(self._trade_seq))
+        self.store.set_json("lock_pair_seq", int(self._lock_pair_seq))
+        fn_seq = getattr(self.broker, "order_seq", None)
+        if callable(fn_seq):
+            self.store.set_json("order_seq", int(fn_seq()))
         # Phase F：持久化 _unlock_in_flight —— 引擎崩 / 重启后 _restore 才能
         #   恢复卡单标记，让 _check_unlock_stuck 继续在 bars_seen>=submit+5 时
         #   触发 broker.trade_confirmed 复核。无此持久化时重启会让 in_flight
@@ -1178,17 +1308,47 @@ class TradingEngine(ReconcileMixin):
         if not locked_pos.lock_pair_id:
             # 旧数据 / 无配对（1 锁 1 笔旧口径）→ 无配对持仓可升级，仅防御记录
             return
+        # R3（2026-09-10）：原实现遍历取**第一个**匹配就 break（静默）。改为显式
+        #   收集全部匹配：≥2 说明"选要平的仓"（方向 + 最老）与"选要升级的仓"
+        #   （lock_pair_id 相同）脱钩 —— 平一笔、升另一笔，被漏掉那笔会永久停在
+        #   SOFT_EXIT_LOCK（`_settle_positions` 跳过它 → 不参与 L1-L3 止盈止损）。
+        #   启动期的不变量断言（_assert_lock_pair_invariant）已保证组内 ≤2 笔，
+        #   且调用方在进入本函数前已从簿中 remove 掉 target → matches ≤ 1。
+        #   此处的 >1 分支是**运行期纵深防御**（簿被外力改动时），不是策略：
+        #   不猜、不升级，写事件后原样返回。
         pair = None
-        for p in self.positions.positions:
-            if p is not locked_pos and p.lock_pair_id == locked_pos.lock_pair_id:
-                pair = p
-                break
+        ambiguous = [p for p in self.positions.positions
+                     if p is not locked_pos
+                     and p.lock_pair_id == locked_pos.lock_pair_id]
+        if len(ambiguous) > 1:
+            self.ev.write("unlock_pair_ambiguous",
+                          lock_pair_id=locked_pos.lock_pair_id,
+                          signal_key=sig.key,
+                          candidates=[p.signal_key for p in ambiguous],
+                          note="同一 lock_pair_id 匹配到多笔候选仓 —— 不猜哪笔是配对仓，"
+                               "拒绝升级（该同向仓会滞留 SOFT_EXIT_LOCK，需人工介入）")
+            return
+        if ambiguous:
+            pair = ambiguous[0]
         if pair is None:
             # 配对持仓已不在簿（异常）→ 防御记录
             self.ev.write("unlock_pair_missing",
                           lock_pair_id=locked_pos.lock_pair_id,
                           signal_key=sig.key)
             return
+        if pair.origin is not PositionOrigin.SOFT_EXIT_LOCK:
+            # 可见性事件（不改变行为）：被升级的配对仓不是 SOFT_EXIT_LOCK。
+            #   唯一可达路径是 `_check_unlock_stuck` 把 target 快照**重建**回簿
+            #   （UNLOCK 卡单确认：实盘反向仓还在），此时配对仓已是 UNLOCK_UPGRADE。
+            #   该场景下用新的解锁价 P₂ 重锚**是正确语义**（账户重新变成"锁住"
+            #   状态，风控锚应更新），故不阻断 —— 但必须可见，不许静默重升。
+            self.ev.write("unlock_pair_not_soft_exit_locked",
+                          lock_pair_id=pair.lock_pair_id,
+                          signal_key=sig.key,
+                          pair_signal_key=pair.signal_key,
+                          pair_origin=pair.origin.value,
+                          note="配对仓当前不是 SOFT_EXIT_LOCK 却走了升级路径"
+                               "（通常来自 UNLOCK 卡单快照重建）；仍按新解锁价重锚")
         # 升级：SOFT_EXIT_LOCK → UNLOCK_UPGRADE（审计标签，不参与离场决策）+ 重算 ExitPlan
         #   （anchor = 解锁成交价 P₂；entry_date 保持原开仓日不动，
         #    故该仓必为昨仓 → 离场恒走 CLOSE 平昨，与规则 ⑸ 一致）

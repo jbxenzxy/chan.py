@@ -67,7 +67,6 @@ SimNow 仿真 broker（M2b）
 """
 from __future__ import annotations
 
-import itertools
 import math
 import os
 import time
@@ -257,7 +256,11 @@ class SimNowBroker(Broker):
         # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
         self._quote = None
         self._trade_symbol = spec.trade_symbol
-        self._seq = itertools.count(1)
+        # R1（2026-09-10）：报单序号由 Base 的自增整数提供（原 itertools.count(1)
+        #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → orders 表
+        #   INSERT OR REPLACE 把上一进程的委托审计记录静默覆盖）。
+        #   SimNow 的 order_id 只是**审计用合成号**，真实委托号在 meta["raw_order_id"]，
+        #   故这里只需保证跨重启不重复即可。
         self.orders: List[Order] = []
         # Phase G1：signal_key → [raw_order_id] 索引（trade_confirmed / cancel_pending
         # 复查用）。必须在凭据检查**之前**初始化 —— 缺凭据 early-return 时也要保证
@@ -907,7 +910,7 @@ class SimNowBroker(Broker):
             self._note_reject(signal_key, note, order, reject_reason)
 
         o = Order(
-            order_id="{}-{:06d}".format(self.name, next(self._seq)),
+            order_id=self._next_order_id(),
             signal_key=signal_key, symbol=self._trade_symbol, side=side,
             action=action, volume=int(volume), price=limit,
             req_price=float(ref_price), filled_price=filled,
@@ -1045,7 +1048,7 @@ class SimNowBroker(Broker):
                   ref_price: float, note: str, why: str) -> Order:
         # Phase C：action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
         o = Order(
-            order_id="{}-{:06d}".format(self.name, next(self._seq)),
+            order_id=self._next_order_id(),
             signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
             action=action_str, volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",

@@ -61,6 +61,8 @@ class Broker(ABC):
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         self.spec = spec
         self.params: Dict[str, Any] = dict(params or {})
+        # R1：报单序号（跨重启唯一性）。见 order_seq / seed_order_seq 注释。
+        self._order_seq: int = 0
 
     @abstractmethod
     def submit(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
@@ -144,6 +146,32 @@ class Broker(ABC):
         SimNow 重写按 signal_key → raw_order_id 索引逐笔撤单。
         """
         return 0
+
+    # ════════════════════════════════════════════════════════════════
+    # 报单序号（R1，2026-09-10）：跨重启的 order_id 唯一性
+    #   问题：order_id = "{broker}-{seq:06d}"，seq 是**进程内计数器**（原
+    #     itertools.count(1)）→ 进程重启即归零 → 与 state.db 里上一进程写下的
+    #     order_id 相撞。orders 表主键冲突 + save_order 的 INSERT OR REPLACE
+    #     = 上一进程的委托审计记录被**静默覆盖**。
+    #   修法：把序号抬到库内 max 之上（引擎 `_restore` 调 `seed_order_seq`），
+    #     并把当前值持久化（`order_seq`），两路取大 —— 与 `trade_seq` 同构。
+    #   序号只增不减：`seed_order_seq` 用 max，绝不下调。
+    # ════════════════════════════════════════════════════════════════
+    def order_seq(self) -> int:
+        """当前报单序号（引擎 `_persist` 用它落 kv）。"""
+        return int(getattr(self, "_order_seq", 0) or 0)
+
+    def seed_order_seq(self, n: int) -> None:
+        """把报单序号抬升到 >= n。引擎 `_restore` 从 state.db 自愈后调用。"""
+        self._order_seq = max(self.order_seq(), int(n or 0))
+
+    def _next_order_id(self) -> str:
+        """下一个审计用委托号：``"{broker}-{序号:06d}"``。
+
+        序号单调递增（不复用、不依赖墙钟），跨重启由 `seed_order_seq` 抬升。
+        """
+        self._order_seq = self.order_seq() + 1
+        return "{}-{:06d}".format(self.name, self._order_seq)
 
     def close(self) -> None:
         pass

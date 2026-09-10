@@ -24,7 +24,6 @@ submit() 接受 OrderIntent，按 intent 决定报文与撮合语义：
 """
 from __future__ import annotations
 
-import itertools
 from typing import Any, Dict, List, Optional
 
 from ..Infra.InstrumentSpec import InstrumentSpec
@@ -38,7 +37,9 @@ class DryRunBroker(Broker):
 
     def __init__(self, spec: InstrumentSpec, params=None):
         super().__init__(spec, params)
-        self._seq = itertools.count(1)
+        # R1（2026-09-10）：报单序号改由 Base 的自增整数提供（原 itertools.count(1)
+        #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → 审计记录被覆盖）。
+        #   序号由引擎 `_restore` 从 state.db 抬升（seed_order_seq）。
         self.orders: List[Order] = []
 
     def submit(self, intent, side: Side, volume: int, ref_price: float,
@@ -63,7 +64,7 @@ class DryRunBroker(Broker):
         action_str = "open" if is_open_like else "close"
 
         o = Order(
-            order_id="{}-{:06d}".format(self.name, next(self._seq)),
+            order_id=self._next_order_id(),
             signal_key=signal_key, symbol=spec.trade_symbol, side=side,
             action=action_str, volume=int(volume), price=aligned,
             req_price=float(ref_price), filled_price=aligned,

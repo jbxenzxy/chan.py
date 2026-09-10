@@ -63,6 +63,16 @@ CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_at);
 """
 
 
+class IdCollisionError(RuntimeError):
+    """持久 ID 撞号（PRIMARY KEY 冲突）。
+
+    R2（2026-09-10）：trades / orders 是**审计底稿**，一条记录被覆盖 =
+    历史成交/报单凭空消失。撞号说明 ID 生成端出了问题（序号没跨重启恢复 /
+    state.db 被外部改过 / 多进程共用一份库），此时宁可让进程死在写入点，
+    也不留一份自相矛盾的账。故这两张表的写入一律 fail-fast。
+    """
+
+
 class Store:
     def __init__(self, path: str):
         self.path = path
@@ -103,28 +113,106 @@ class Store:
 
     # ---------- 委托 ----------
     def save_order(self, o: Order) -> None:
-        with self.conn:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (o.order_id, o.signal_key, o.created_at or now_cn(), o.symbol,
-                 o.side.name, o.action, o.volume, o.price, o.filled_price,
-                 o.status, o.broker, o.note,
-                 json.dumps(o.meta, ensure_ascii=False)))
+        """写委托审计记录。**fail-fast**：order_id 撞号即抛 `IdCollisionError`。
+
+        R2（2026-09-10）：原实现是 `INSERT OR REPLACE` —— 撞号时把**上一进程**的
+        同号记录静默覆盖。审计底稿从"N 条"变成"1 条"，无任何告警、无任何痕迹。
+        order_id 的唯一性由 R1 保证（broker 序号在 `_restore` 时从库内自愈抬升），
+        故此处的冲突只可能来自"库被外部改过 / 多实例共用一个库"这类真异常 ——
+        对这种异常，响亮地死比留一份自相矛盾的账要好。
+        """
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO orders VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (o.order_id, o.signal_key, o.created_at or now_cn(), o.symbol,
+                     o.side.name, o.action, o.volume, o.price, o.filled_price,
+                     o.status, o.broker, o.note,
+                     json.dumps(o.meta, ensure_ascii=False)))
+        except sqlite3.IntegrityError as e:
+            raise IdCollisionError(
+                "orders 表主键冲突：order_id={!r} 已存在（{}）。\n"
+                "  含义：本次委托号与库内一条历史委托号相同 —— 若沿用旧的\n"
+                "        INSERT OR REPLACE，这条历史审计记录会被**静默覆盖**。\n"
+                "  原因：报单序号没跨重启恢复（R1）／state.db 被外部改过／\n"
+                "        同一份 state.db 被多个进程同时写。\n"
+                "  处理：先备份 Trading/State/state.db，再核对 orders 表的\n"
+                "        order_id 与事件的 order_id 是否对得上。"
+                .format(o.order_id, e))
 
     # ---------- 成交 ----------
     def save_trade(self, t: Trade) -> None:
-        with self.conn:
-            self.conn.execute(
-                "INSERT OR REPLACE INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (t.trade_id, t.signal_key, t.symbol, t.side.name, t.volume,
-                 t.entry_price, t.exit_price, t.entry_at, t.exit_at, t.reason,
-                 t.gross_points, t.cost_points, t.net_points, t.net_cash,
-                 t.bars_held, t.exit_plan_name,
-                 json.dumps(t.exit_plan_params, ensure_ascii=False)))
+        """写成交流水。**fail-fast**：trade_id 撞号即抛 `IdCollisionError`。
+
+        R2（2026-09-10）：理由同 `save_order` —— trades 是成交审计底稿，
+        被覆盖等于历史成交凭空消失。trade_id 的唯一性由 R1 保证
+        （`_trade_seq` 落 kv + 恢复时与库内 max 取大）。
+        """
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (t.trade_id, t.signal_key, t.symbol, t.side.name, t.volume,
+                     t.entry_price, t.exit_price, t.entry_at, t.exit_at, t.reason,
+                     t.gross_points, t.cost_points, t.net_points, t.net_cash,
+                     t.bars_held, t.exit_plan_name,
+                     json.dumps(t.exit_plan_params, ensure_ascii=False)))
+        except sqlite3.IntegrityError as e:
+            raise IdCollisionError(
+                "trades 表主键冲突：trade_id={!r} 已存在（{}）。\n"
+                "  含义：本次成交号与库内一条历史成交号相同 —— 若沿用旧的\n"
+                "        INSERT OR REPLACE，这条历史成交流水会被**静默覆盖**。\n"
+                "  原因：成交序号没跨重启恢复（R1）／state.db 被外部改过／\n"
+                "        同一份 state.db 被多个进程同时写。\n"
+                "  处理：先备份 Trading/State/state.db，再核对 trades 表与\n"
+                "        events.jsonl 里 close/unlock 事件的 trade_id。"
+                .format(t.trade_id, e))
 
     def trades(self) -> List[Dict[str, Any]]:
         rows = self.conn.execute("SELECT * FROM trades ORDER BY exit_at").fetchall()
         return [dict(r) for r in rows]
+
+    # ---------- 序号自愈（R1 的数据侧：库内 max） ----------
+    def max_trade_seq(self) -> int:
+        """库内 `trades` 的最大成交序号（'T00007' → 7）。空表 / 全不成格式 → 0。
+
+        用途：R1 跨重启自愈的第二道保险 —— 即使 kv 里的 `trade_seq` 丢了
+        （库被外部清理 / 换过库文件），也能从**真实落库的数据**反推出
+        已用过的最大号，保证新号绝不与库内既有号相撞。
+        """
+        return self._max_int_suffix("trades", "trade_id", "T")
+
+    def max_order_seq(self, broker: str) -> int:
+        """库内**指定 broker** 的最大报单序号（'dry_run-000007' → 7）。
+
+        用途：order_id 由 broker 端计数器生成（`{broker}-{seq:06d}`），
+        进程重启后 broker 计数器归零 → 与库内既有号相撞。`_restore` 用本方法
+        把 broker 序号抬到库内 max 之上，从数据侧消除复用。
+        """
+        return self._max_int_suffix("orders", "order_id", "{}-".format(broker))
+
+    def _max_int_suffix(self, table: str, column: str, prefix: str = "") -> int:
+        """扫 table.column，取 "prefix + 纯数字" 形式的最大数字后缀。
+
+        带前缀时不匹配的行直接跳过（不把裸数字或别的格式混进来）——
+        宁可少算，也不要把无关记录的数字当成序号。
+        """
+        best = 0
+        for row in self.conn.execute(
+                "SELECT {} AS v FROM {}".format(column, table)):
+            s = str(row["v"] or "")
+            if prefix:
+                if not s.startswith(prefix):
+                    continue
+                tail = s[len(prefix):]
+            else:
+                tail = s
+            if not tail.isdigit():
+                continue
+            n = int(tail)
+            if n > best:
+                best = n
+        return best
 
     # ---------- 状态重置（回放重跑用） ----------
     def wipe_runtime_state(self) -> Dict[str, int]:
@@ -138,6 +226,12 @@ class Store:
           - kv 里的 position / day_stats / bars_seen。
             （position 为当前持仓；day_stats / bars_seen 为历史键，一并清掉防旧库残留。）
 
+        2026-09-10（R1 配套）：一并清掉 `trade_seq` / `lock_pair_seq` ——
+        这两者对应的数据（trades / positions）刚刚被清空，序号理应回到 1，
+        让重跑的 trade_id / lock_pair_id **逐轮一致**（回放可比对性）。
+        **刻意不清 `order_seq`**：orders 表保留作审计底稿，序号必须只增不减，
+        否则重跑会与保留下来的历史委托号相撞（R2 之后会直接抛 IdCollisionError）。
+
         返回各表被删的行数，便于打印确认。
         """
         counts = {}
@@ -147,7 +241,8 @@ class Store:
                     "SELECT COUNT(*) AS n FROM {}".format(tbl)).fetchone()
                 counts[tbl] = int(row["n"]) if row else 0
                 self.conn.execute("DELETE FROM {}".format(tbl))
-            for k in ("position", "day_stats", "bars_seen"):
+            for k in ("position", "day_stats", "bars_seen",
+                      "trade_seq", "lock_pair_seq"):
                 self.conn.execute("DELETE FROM kv WHERE k=?", (k,))
         return counts
 
