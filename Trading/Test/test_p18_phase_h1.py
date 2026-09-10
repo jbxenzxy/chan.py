@@ -199,9 +199,9 @@ with tmp_dir() as tmp:
     # 模拟出场层触发，验证留双向持仓落簿链路。
     engine._close_positions([engine.positions.positions[0]], "lock_test", 4550.0, make_bar(5000, 4550.0, 4550.0, 4550.0, 4550.0))
     check("[1c] LOCK 后留双向持仓（原仓 + 反向）", len(engine.positions), 2)
-    legs = engine.positions.positions
-    orig = next(p for p in legs if p.side is Side.LONG)
-    lock = next(p for p in legs if p.side is Side.SHORT)
+    pos_list = engine.positions.positions
+    orig = next(p for p in pos_list if p.side is Side.LONG)
+    lock = next(p for p in pos_list if p.side is Side.SHORT)
     check("[1d] 原仓 side=LONG 保留", orig.side, Side.LONG)
     check("[1e] 原仓 origin=SOFT_EXIT_LOCK", orig.origin, PositionOrigin.SOFT_EXIT_LOCK)
     check("[1f] 原仓 entry_price=P₀ 不变（会计锚）", orig.entry_price, open_price)

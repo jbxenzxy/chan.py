@@ -155,9 +155,9 @@ class TradingEngine(ReconcileMixin):
 
     # ---------------- 旧 schema 闸门（2026-09-10 改名配套） ----------------
     # 持仓记录的键由 entry_mode 改为 origin（枚举改名 PositionOrigin）。
-    # 若不设闸门：旧 state.db 里的锁仓腿（原 entry_mode="locked"）会被
+    # 若不设闸门：旧 state.db 里的锁仓持仓（原 entry_mode="locked"）会被
     # Position.from_dict 静默回退成 SIGNAL_OPEN —— 引擎把它当"真实净敞口"，
-    # 接进 L1-L3 止盈止损，可能对锁仓腿发平仓单（账实不符）。
+    # 接进 L1-L3 止盈止损，可能对锁仓持仓发平仓单（账实不符）。
     # 而 _reconcile_positions 只在 real_vol > engine_vol 时**告警**、不纠正，
     # 兜不住这个错。故宁可拒绝启动，让用户显式处理旧库。
     _LEGACY_POSITION_KEYS = ("entry_mode",)
@@ -176,11 +176,11 @@ class TradingEngine(ReconcileMixin):
         keys = "/".join(self._LEGACY_POSITION_KEYS)
         self.ev.write("state_schema_incompatible",
                       legacy_key=keys, legacy_n=len(legacy),
-                      note="旧 schema 持仓记录，拒绝恢复，避免锁仓腿被误判为敞口腿")
+                      note="旧 schema 持仓记录，拒绝恢复，避免锁仓持仓被误判为敞口持仓")
         raise RuntimeError(
             "state.db 的持仓记录仍是旧 schema（含 {} 键），与当前代码不兼容：\n"
-            "  改名后键为 origin；旧锁仓腿会被恢复成 SIGNAL_OPEN（敞口腿），\n"
-            "  进而被纳入 L1-L3 止盈止损，可能对锁仓腿发平仓单。\n"
+            "  改名后键为 origin；旧锁仓持仓会被恢复成 SIGNAL_OPEN（敞口持仓），\n"
+            "  进而被纳入 L1-L3 止盈止损，可能对锁仓持仓发平仓单。\n"
             "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
             .format(keys))
 
@@ -650,7 +650,7 @@ class TradingEngine(ReconcileMixin):
         # FIFO 排序——按建仓时间升序（防御性：即使调用方传乱序也保证 FIFO）
         ordered = sorted(positions, key=lambda p: p.entry_bar_seq)
         # 规则 ⑸：离场方式按"今日单 / 跨日单"判定。today 取当前 K 线日期，
-        # 与下方成本口径（_is_today_leg）同源，避免两处日期口径漂移。
+        # 与下方成本口径（_is_today_pos）同源，避免两处日期口径漂移。
         today_str = (bar.date[:10] if (bar is not None and bar.date)
                      else now_cn()[:10])
 
@@ -755,10 +755,10 @@ class TradingEngine(ReconcileMixin):
                 #   规则 ⑸ 保证 OrderIntent.CLOSE 只用于跨日单（entry_date < today），
                 #   故 hard exit 恒按**平昨**费率计（0.0023%）。此处仍按 entry_date
                 #   动态判定，是为了对"旧数据 entry_date 缺失"与未来其它调用方保持防御。
-                _is_today_leg = bool(pos.entry_date) and pos.entry_date[:10] >= today_str
+                _is_today_pos = bool(pos.entry_date) and pos.entry_date[:10] >= today_str
                 cost = self.spec.cost_points(
                     pos.entry_price, exit_price,
-                    close_today=bool(_is_today_leg and self.spec.close_today_first))
+                    close_today=bool(_is_today_pos and self.spec.close_today_first))
                 net = gross - cost
                 cash = self.spec.points_to_cash(net, pos.volume)
                 bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
@@ -1012,7 +1012,7 @@ class TradingEngine(ReconcileMixin):
         return t
 
     # ---------------- 解锁后升级配对持仓（Phase S3/S4） ----------------
-    def _upgrade_lock_pair(self, locked_leg: Position, unlock_price: float,
+    def _upgrade_lock_pair(self, locked_pos: Position, unlock_price: float,
                            sig: Signal) -> None:
         """解锁后升级配对同向持仓：SOFT_EXIT_LOCK → UNLOCK_UPGRADE + 重算风控锚（P₂）。
 
@@ -1021,18 +1021,18 @@ class TradingEngine(ReconcileMixin):
         离场走硬离场平昨），并以解锁成交价 P₂ 为风控锚重算出场计划。
         会计锚 entry_price（P₀）保持不动，风控锚 risk_anchor（P₂）写入 ExitPlan.params。
         """
-        if not locked_leg.lock_pair_id:
+        if not locked_pos.lock_pair_id:
             # 旧数据 / 无配对（1 锁 1 笔旧口径）→ 无配对持仓可升级，仅防御记录
             return
         pair = None
         for p in self.positions.positions:
-            if p is not locked_leg and p.lock_pair_id == locked_leg.lock_pair_id:
+            if p is not locked_pos and p.lock_pair_id == locked_pos.lock_pair_id:
                 pair = p
                 break
         if pair is None:
             # 配对持仓已不在簿（异常）→ 防御记录
             self.ev.write("unlock_pair_missing",
-                          lock_pair_id=locked_leg.lock_pair_id,
+                          lock_pair_id=locked_pos.lock_pair_id,
                           signal_key=sig.key)
             return
         # 升级：SOFT_EXIT_LOCK → UNLOCK_UPGRADE（审计标签，不参与离场决策）+ 重算 ExitPlan

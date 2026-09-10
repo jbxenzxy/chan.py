@@ -531,7 +531,7 @@ with tmp_dir() as tmp:
 
     check("persisted=3 且不限容量 → engine.positions.__len__ == 3（不截断）",
           len(engine.positions), 3)
-    # v1.3（Q5 拍板）：不限容量 → 恢复不截断、不丢仓（解 D3）
+    # v1.3（Q5 拍板）：不限容量 → 恢复不截断、不丢失持仓（解 D3）
     check("truncated_on_restore 为空（不限容量不截断）",
           len(engine.positions.truncated_on_restore), 0)
     # 验证 ev 未写入截断 warning

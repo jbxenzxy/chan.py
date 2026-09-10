@@ -32,7 +32,7 @@ P25 PositionOrigin 解耦契约测试（2026-09-10 规则 ⑸ 改造后的防回
 在 to_dict / from_dict 后不变（为将来可能的改名/合并保留兼容基线）。
 
 另附 [5] 旧 schema 闸门：改名把持久化键从 entry_mode 换成 origin，
-旧库静默回退会把锁仓腿恢复成 SIGNAL_OPEN（敞口腿）→ 纳入 L1-L3 会发错单。
+旧库静默回退会把锁仓持仓恢复成 SIGNAL_OPEN（敞口持仓）→ 纳入 L1-L3 会发错单。
 本组断言 `Engine._legacy_position_records` 能准确挑出旧键记录（供 _restore 拒绝启动）。
 
 跑法：python Trading/Test/test_p25_origin_decoupled.py
@@ -220,10 +220,10 @@ check("坏值 origin → SIGNAL_OPEN", Position.from_dict(_bad).origin,
 
 
 # ════════════════════════════════════════════════════════════════
-print("\n[5] 旧 schema 闸门：拒绝启动而不是静默把锁仓腿当敞口腿")
+print("\n[5] 旧 schema 闸门：拒绝启动而不是静默把锁仓持仓当敞口持仓")
 # ════════════════════════════════════════════════════════════════
-# 改名后 key 由 entry_mode → origin。旧库静默回退会把 "locked" 腿恢复成
-# SIGNAL_OPEN（敞口腿）→ 被纳入 L1-L3，可能对锁仓腿发平仓单。
+# 改名后 key 由 entry_mode → origin。旧库静默回退会把 "locked" 持仓恢复成
+# SIGNAL_OPEN（敞口持仓）→ 被纳入 L1-L3，可能对锁仓持仓发平仓单。
 check("旧键 entry_mode 记录被识别",
       len(TradingEngine._legacy_position_records(
           [{"entry_mode": "locked", "symbol": "X"}])), 1)

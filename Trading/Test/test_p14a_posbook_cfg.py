@@ -265,7 +265,7 @@ b_solo.set_legacy(make_pos(Side.LONG, signal_key="A"))
 b_solo.set_legacy(make_pos(Side.SHORT, signal_key="B"))
 check("max=1 set_legacy 替换整簿", b_solo.legacy_single().signal_key, "B")
 
-# max>1: 多仓时 set_legacy 仍允许（E1 兼容，doc 警告"会丢仓"）
+# max>1: 多仓时 set_legacy 仍允许（E1 兼容，doc 警告"会丢失持仓"）
 b_multi = PositionBook(max_positions=3)
 b_multi.add(make_pos(Side.LONG, signal_key="A"))
 b_multi.add(make_pos(Side.SHORT, signal_key="B"))
@@ -388,7 +388,7 @@ with tmp_dir() as tmp:
 
     check("persisted=3 且不限容量 → engine.positions.__len__ == 3（不截断）",
           len(engine.positions), 3)
-    check("v1.3 不限容量：truncated_on_restore 为空（不丢仓）",
+    check("v1.3 不限容量：truncated_on_restore 为空（不丢失持仓）",
           len(engine.positions.truncated_on_restore), 0)
 
     ev.flush()

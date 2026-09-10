@@ -551,7 +551,7 @@ class SimNowBroker(Broker):
     # 报文（2026-09-10 按规则 ⑸ 定稿，见 Base.INTENT_TO_OFFSET）
     #   - OPEN   offset=Open（买入/卖出开仓）
     #   - LOCK   offset=Open（方向由调用方填反，即"开反向同手数"），与 OPEN 报文相同但语义不同
-    #   - UNLOCK offset=Close（平掉昨仓的反向腿）
+    #   - UNLOCK offset=Close（平掉昨仓的反向仓）
     #   - CLOSE  offset=Close（平昨；只用于跨日单，今日单离场走 LOCK，
     #                         故不存在"平今 CLOSETODAY"报文）
     def submit(self, intent, side: Side, volume: int, ref_price: float,

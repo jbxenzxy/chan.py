@@ -63,7 +63,7 @@ class PositionOrigin(str, Enum):
     """持仓来源标记（**不参与任何交易决策**，仅作审计标签）。
 
     唯一有决策语义的值是 SOFT_EXIT_LOCK，判定集中在 Engine 的三类场合：
-      · settle 跳过（锁仓腿不等止盈止损，等解锁）
+      · settle 跳过（锁仓持仓不等止盈止损，等解锁）
       · 运行态判定（簿内存在非 SOFT_EXIT_LOCK 持仓 = 运行态 → 忽略信号）
       · _exit_intent 防御分支 / force_lock 过滤 / 事件统计
     SIGNAL_OPEN 与 UNLOCK_UPGRADE 只写事件日志与 state.db，代码中不存在对它们的
@@ -76,8 +76,8 @@ class PositionOrigin(str, Enum):
        别再假设"来源决定离场方式"。
     """
     SIGNAL_OPEN = "signal_open"        # 空仓状态下由买卖点信号开新仓入场
-    UNLOCK_UPGRADE = "unlock_upgrade"  # 锁仓解锁时，同向配对腿升级而来（entry_date 保持原开仓日）
-    SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后落簿的反向腿
+    UNLOCK_UPGRADE = "unlock_upgrade"  # 锁仓解锁时，配对同向持仓升级而来（entry_date 保持原开仓日）
+    SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后落簿的反向仓
                                        #   唯一合法离场 = 对向信号触发 UNLOCK（平昨，次日语义）
 
 
@@ -234,7 +234,7 @@ class ExitPlan:
 @dataclass
 class Position:
     """单笔持仓（一笔报单的产物）。簿内可同时存在多笔：同 K 线连开 N 笔、
-    以及锁仓留下的双向双腿（原腿 + 反向腿，共享 lock_pair_id）。"""
+    以及锁仓留下的双向持仓（原仓 + 反向仓，共享 lock_pair_id）。"""
     symbol: str
     side: Side
     volume: int
@@ -251,7 +251,7 @@ class Position:
     #   规则 ⑸ 判定"当日/跨日"的唯一依据 → 决定离场走 LOCK（今日单）还是 CLOSE（跨日单）。
     #   空串（记录缺失）= "" < today 恒真 → 保守当作昨仓 → 走 CLOSE 平昨。
     entry_date: str = ""
-    # 锁仓配对 ID：1 个锁仓 = 原腿 + 反向腿，两腿共享同一 ID。
+    # 锁仓配对 ID：1 个锁仓 = 原仓 + 反向仓，两笔共享同一 ID。
     #   解锁时据此找到"同锁的另一笔"升级为 UNLOCK_UPGRADE。空串 = 未配对。
     lock_pair_id: str = ""
 
