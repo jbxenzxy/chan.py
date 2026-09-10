@@ -234,9 +234,9 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([pos], "manual", 4555.0, eng.last_bar, signal_key="P15B-1-1")
-    # v1.3（S3/S4）：OPEN_FIRST 软离场（锁仓）留双仓 = 原仓 LOCKED + 反向仓 LOCKED，
+    # v1.3（S3/S4）：OPEN_FIRST 软离场（锁仓）留双向持仓 = 原仓 LOCKED + 反向仓 LOCKED，
     # 不兑现 PnL（0 条 Trade）。
-    check("单笔：留双仓 2 仓（原仓 LOCKED + 反向仓 LOCKED）", len(eng.positions), 2)
+    check("单笔：留双向持仓 2 仓（原仓 LOCKED + 反向仓 LOCKED）", len(eng.positions), 2)
     check("单笔：两笔 entry_mode=LOCKED",
           sorted(p.entry_mode.value for p in eng.positions.positions),
           ["locked", "locked"])
@@ -258,8 +258,8 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_positions([p2, p0, p1], "manual", 4555.0, eng.last_bar)
-    # v1.3（S3/S4）：留双仓 = 3 原仓 + 3 反向仓 = 6 LOCKED，0 条 Trade。
-    check("FIFO：留双仓 6 仓（3 原仓 + 3 反向仓）", len(eng.positions), 6)
+    # v1.3（S3/S4）：留双向持仓 = 3 原仓 + 3 反向仓 = 6 LOCKED，0 条 Trade。
+    check("FIFO：留双向持仓 6 仓（3 原仓 + 3 反向仓）", len(eng.positions), 6)
     check("FIFO：全部 entry_mode=LOCKED",
           all(p.entry_mode is EntryMode.LOCKED for p in eng.positions.positions), True)
     check("FIFO：broker 3 单", len(eng.broker.orders), 3)
@@ -431,7 +431,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # 触发 TP
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("3仓TP：留双仓 6 仓（3 原仓 + 3 反向仓）", len(eng.positions), 6)
+    check("3仓TP：留双向持仓 6 仓（3 原仓 + 3 反向仓）", len(eng.positions), 6)
     check("3仓TP：broker 3 单", len(eng.broker.orders), 3)
     trades = eng.store.trades()
     check("3仓TP：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
@@ -488,7 +488,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4538.0)  # 触发 SL
     eng.bars_seen = 10
     eng._settle_positions(eng.last_bar)
-    check("2仓SL：留双仓 4 仓（2 原仓 + 2 反向仓）", len(eng.positions), 4)
+    check("2仓SL：留双向持仓 4 仓（2 原仓 + 2 反向仓）", len(eng.positions), 4)
     check("2仓SL：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
     check("2仓SL：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
@@ -642,7 +642,7 @@ with tmp_dir() as td:
     eng.positions.add(p1)
     bar = make_bar(close=4558.0)  # 触发 TP
     eng.on_bar(bar)
-    check("on_bar TP：留双仓 4 仓（2 原仓 + 2 反向仓）", len(eng.positions), 4)
+    check("on_bar TP：留双向持仓 4 仓（2 原仓 + 2 反向仓）", len(eng.positions), 4)
     check("on_bar TP：broker 2 单", len(eng.broker.orders), 2)
     trades = eng.store.trades()
     check("on_bar TP：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
@@ -665,7 +665,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     eng._close_position("manual", 4555.0, eng.last_bar, signal_key="P15B-5-1")
-    check("兼容_close：留双仓 2 仓（原仓 + 反向仓）", len(eng.positions), 2)
+    check("兼容_close：留双向持仓 2 仓（原仓 + 反向仓）", len(eng.positions), 2)
     check("兼容_close：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
     check("兼容_close：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)
@@ -678,7 +678,7 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(close=4558.0)  # TP 触发
     eng.bars_seen = 10
     eng._settle_position(eng.last_bar)
-    check("兼容_settle：留双仓 2 仓（原仓 + 反向仓）", len(eng.positions), 2)
+    check("兼容_settle：留双向持仓 2 仓（原仓 + 反向仓）", len(eng.positions), 2)
     check("兼容_settle：state IDLE", eng._state, EngineState.IDLE)
     trades = eng.store.trades()
     check("兼容_settle：0 条 Trade（软离场不兑现 PnL）", len(trades), 0)

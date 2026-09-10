@@ -65,7 +65,7 @@ class PositionBook:
 
     def __init__(self, max_positions: Optional[int] = DEFAULT_MAX):
         # v1.3（Q5 拍板）：max_positions=None 表示"不限容量"。
-        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢仓 /
+        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢失持仓 /
         #   恢复截断）随"不限"一并消失。资金是唯一闸门（钱不够自然开不成功）。
         if max_positions is None:
             self._max: Optional[int] = None
@@ -136,7 +136,7 @@ class PositionBook:
             # E3.1 兼容：cfg.max 后续缩小时，已持久化的多仓不应让引擎启动失败。
             # 取前 max 个 FIFO 截断（与离场优先级一致），并返回被丢弃的 Positions
             # 让调用方可以写 warning。
-            # v1.3：max=None（不限）时不截断，永不丢仓。
+            # v1.3：max=None（不限）时不截断，永不丢失持仓。
             self._positions = list(other._positions[:self._max])
             self._truncated = other._positions[self._max:]
         else:
@@ -198,7 +198,7 @@ class PositionBook:
           · max=1：完全替换（v1 语义，旧引擎 `self.position = new_pos`）
           · max>1：整簿替换为单笔 p —— 其他仓被丢弃 ⚠️
 
-        多仓下丢仓风险：引擎主路径应避免在多仓状态下调用 set_legacy。
+        多仓下丢失持仓风险：引擎主路径应避免在多仓状态下调用 set_legacy。
         推荐：多仓场景下用 `book.clear()` + `book.add(p)`，或者 `book.remove(p)` 增量操作。
         legacy_single() 多仓抛错仍是守护 —— E3.3 之前不允许用单仓 API 操作多仓。
 

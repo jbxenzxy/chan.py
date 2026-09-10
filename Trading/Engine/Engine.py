@@ -61,7 +61,7 @@ class TradingEngine(ReconcileMixin):
         # —— 所有现存测试（P5..P13）零行为变化。
         # v1.3（Q5 拍板）：max_positions=None —— 不限容量。锁层/笔数不做任何上限，
         #   资金是唯一闸门（钱不够自然开不成功）。这同时消掉了 D2a（add 抛错崩网关）/
-        #   D2b（LOCK 落簿静默丢仓）/ D3（恢复截断丢仓）。
+        #   D2b（LOCK 落簿静默丢失持仓）/ D3（恢复截断丢失持仓）。
         self.positions: PositionBook = PositionBook(max_positions=None)
         # Phase A：4 态引擎状态机
         #   IDLE     无持仓，等待入场信号
@@ -157,7 +157,7 @@ class TradingEngine(ReconcileMixin):
     def _restore(self) -> None:
         # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
-        # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢仓（解 D3）。
+        # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢失持仓（解 D3）。
         restore_max = None
         # v1.4（切合约隔离）：只恢复当前 trade_symbol 的持仓。切换合约（如 IF→IM）后
         # 旧合约持仓留在 state.db 不加载进簿，避免 _restore 末尾的 _reconcile_positions
@@ -179,7 +179,7 @@ class TradingEngine(ReconcileMixin):
 
         # E3.1：截断 warning —— persisted 多仓数据超出 cfg max 时丢了一些仓。
         # v1.3：不限容量下 truncated 恒为空；保留本段仅为"若将来恢复有限容量"时
-        # 不再静默丢仓（写 error 级事件），且 avoid None 参与算术。
+        # 不再静默丢失持仓（写 error 级事件），且 avoid None 参与算术。
         truncated = self.positions.truncated_on_restore
         if truncated:
             self.ev.write(
@@ -702,7 +702,7 @@ class TradingEngine(ReconcileMixin):
             exit_price = o.filled_price
 
             if intent is OrderIntent.LOCK:
-                # ═══ 软离场（锁仓）= 留双仓：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL ═══
+                # ═══ 软离场（锁仓）= 留双向持仓：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL ═══
                 # 锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
                 # （entry_price=P₀ 会计锚不动），反向仓作为新 LOCKED 持仓落簿，两笔共享
                 # lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
@@ -764,10 +764,10 @@ class TradingEngine(ReconcileMixin):
             self._state = EngineState.IDLE
         # else: 仍有在持今仓（部分成交或 cooldown 中）→ 保持 EXITING
 
-    # ---------------- 软离场（锁仓）留双仓落簿（Phase S4） ----------------
+    # ---------------- 软离场（锁仓）留双向持仓落簿（Phase S4） ----------------
     def _book_lock_pair(self, pos: Position, side: Side, exit_price: float,
                         o: Order, reason: str, idx: int, pos_count: int) -> None:
-        """软离场（锁仓）留双仓落簿：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL。
+        """软离场（锁仓）留双向持仓落簿：原仓 → LOCKED + 反向仓 LOCKED，不兑现 PnL。
 
         锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
         （entry_price=P₀ 会计锚不动、entry_date 不动），反向仓作为新 LOCKED 持仓落簿，
@@ -915,7 +915,7 @@ class TradingEngine(ReconcileMixin):
             # 补开：state 由 _open_position 推进（成交→IN_TRADE / 拒单→IDLE）
             self._open_position(sig, side, new_lots)
         else:
-            # v1.3（S3/S4）：留双仓解锁后，升级的配对持仓（UNLOCK_FIRST）是单边敞口
+            # v1.3（S3/S4）：留双向持仓解锁后，升级的配对持仓（UNLOCK_FIRST）是单边敞口
             #   → IN_TRADE；若簿内无任何非 LOCKED 持仓（纯解锁回空仓 / 旧数据 1 锁 1 笔）→ IDLE。
             if any(p.entry_mode is not EntryMode.LOCKED
                    for p in self.positions.positions):
@@ -961,7 +961,7 @@ class TradingEngine(ReconcileMixin):
         self.store.save_trade(t)
         # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
         self.positions.remove(target)
-        # v1.3（S3/S4）：留双仓下，解锁平掉反向仓后，升级配对同向持仓
+        # v1.3（S3/S4）：留双向持仓下，解锁平掉反向仓后，升级配对同向持仓
         #   LOCKED → UNLOCK_FIRST + 重算风控锚（= 解锁成交价 P₂）。
         self._upgrade_lock_pair(target, o.filled_price, sig)
 
@@ -979,7 +979,7 @@ class TradingEngine(ReconcileMixin):
                            sig: Signal) -> None:
         """解锁后升级配对同向持仓：LOCKED → UNLOCK_FIRST + 重算风控锚（P₂）。
 
-        留双仓下，锁仓 = 原仓 + 反向仓（共享 lock_pair_id）。解锁平掉反向仓后，
+        留双向持仓下，锁仓 = 原仓 + 反向仓（共享 lock_pair_id）。解锁平掉反向仓后，
         同向持仓恢复单边敞口，必须从 LOCKED 升级为 UNLOCK_FIRST（接入 L1-L3 止盈止损，
         离场走硬离场平昨），并以解锁成交价 P₂ 为风控锚重算出场计划。
         会计锚 entry_price（P₀）保持不动，风控锚 risk_anchor（P₂）写入 ExitPlan.params。

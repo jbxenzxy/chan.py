@@ -6,7 +6,7 @@ P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
       ② 簿内所有「未锁定」持仓全部锁仓（OPEN_FIRST / UNLOCK_FIRST 一律
-         LOCK，留双仓：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，
+         LOCK，留双向持仓：原仓 → LOCKED + 反向仓 LOCKED，共享 lock_pair_id，
          次日对向信号走解锁入场管线）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
 
@@ -229,7 +229,7 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
     modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("[2b] 簿内全是 LOCKED（留双仓：2 原仓 + 2 反向 = 4 笔）", modes,
+    check("[2b] 簿内全是 LOCKED（留双向持仓：2 原仓 + 2 反向 = 4 笔）", modes,
           ["locked", "locked", "locked", "locked"])
     check("[2c] 信号键 = 原键 + 原键#lock（原仓保留原键）",
           sorted(p.signal_key for p in engine.positions.positions),

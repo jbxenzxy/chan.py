@@ -271,10 +271,10 @@ with tmp_dir() as tmp:
     # 直接调 _close_position（用 sig.price 作为 trigger_price）
     engine._close_position("manual_test", 4560.0, engine.last_bar, signal_key="x")
     check("平仓成功后 _state 回 IDLE", engine._state, EngineState.IDLE)
-    # v1.3（S3/S4）：软离场（锁仓）留双仓 = 原仓 LOCKED + 反向仓 LOCKED，
+    # v1.3（S3/S4）：软离场（锁仓）留双向持仓 = 原仓 LOCKED + 反向仓 LOCKED，
     # 净敞口归零、PnL 不兑现（0 笔 Trade）。
     modes = sorted(p.entry_mode.value for p in engine.positions.positions)
-    check("平仓后留双仓：簿内 2 笔均 LOCKED", modes, ["locked", "locked"])
+    check("平仓后留双向持仓：簿内 2 笔均 LOCKED", modes, ["locked", "locked"])
     # 验证 trades 表 0 条（锁仓不记 Trade）
     check("trades 表记录 0 条（软离场不兑现 PnL）", len(store.trades()), 0)
 
