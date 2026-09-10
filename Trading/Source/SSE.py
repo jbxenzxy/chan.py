@@ -137,7 +137,15 @@ class SseSource(Source):
         kl = payload.get("klines") or []
         latest_bar_ts = int(kl[-1].get("timestamp") or 0) if kl else 0  # 快照最新K(ms)
         for b in payload.get("bsps") or []:
-            s = Signal.from_bsp(b, self.symbol, self.freq)
+            # F3（2026-09-10）：Signal.from_bsp 对缺 date/timestamp 的 bsp 抛 ValueError
+            #   （否则幂等键退化成 '|1|B'，同类信号互相去重丢弃）。这里逐条捕获：
+            #   丢弃坏条目 + 告警，**不向上冒泡** —— 冒泡会被 events() 的重连兜底
+            #   当成连接故障，导致反复断线重连（一个坏 bsp 拖垮整条流）。
+            try:
+                s = Signal.from_bsp(b, self.symbol, self.freq)
+            except ValueError as e:
+                print("[sse] 丢弃非法 bsp：{}".format(e))
+                continue
             # 新鲜度过滤：信号归属K 距最新K > N（signal_k_tol_bars）根 → 历史残留丢弃。
             #   周期无关（N 是相对根数）；首连 init 重放的历史 bsp 归属K远，天然被滤。
             #   无 klines / 未知周期（_bar_ms 为空）→ 跳过本过滤，由引擎幂等兜底。

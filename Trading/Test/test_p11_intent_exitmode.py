@@ -323,8 +323,14 @@ with tmp_dir() as tmp:
     engine.position = pos
     engine._state = engine._state.__class__.IN_TRADE
     store.set_json("position", pos.to_dict())
-    # 推一根 bar 让 SL 触发
-    bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-01 09:40")
+    # 推一根 bar 让 SL 触发。
+    # 2026-09-10 夹具修正：本组意图是"**昨日**锁仓遗留 → 跨日离场走 CLOSE"，
+    #   但原夹具把 bar 也放在了 2026-09-01（与 entry_at 同一天）→ 语义上是"今仓"，
+    #   与新引入的 entry_date 派生（从 entry_at / entry_bar_ts 精确重建）自相矛盾。
+    #   旧实现之所以"通过"，是因为 entry_date 恒为 ""，而 "" < today 恒真，
+    #   歪打正着走了 CLOSE —— 那正是本次要根除的失效模式。
+    #   现改为真实的跨日：仓在 09-01 建，bar 在 09-02 → 判定昨仓 → CLOSE。
+    bar = make_bar(5000, 4551.0, 4551.0, 4535.0, 4540.0, date="2026-09-02 09:40")
     engine.on_bar(bar)
     check("UNLOCK_UPGRADE SL 触发 → state=IDLE", engine._state.name, "IDLE")
     # broker 应该收到 CLOSE 报（不是 LOCK）

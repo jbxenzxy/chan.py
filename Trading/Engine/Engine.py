@@ -32,8 +32,11 @@ from ..Infra.Store import Store
 from ..Strategy.Base import EntryPolicy, ExitCheck, ExitPolicy
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import (
+    PLAUSIBLE_DATE_MIN,
+    AccountState,
     Bar, DecisionType, PositionOrigin, EngineState, ExitMode, ExitPlan, Order, OrderIntent,
-    Position, Side, Signal, Trade, now_cn,
+    Position, Side, Signal, Trade, now_cn, now_ms, trading_day_from_clock,
+    trading_day_of_ms,
 )
 
 
@@ -140,6 +143,73 @@ class TradingEngine(ReconcileMixin):
         self.auto_order_enabled: bool = True
         self._restore()
 
+    # ════════════════════════════════════════════════════════════════
+    # 账户三态（P1 SSOT，2026-09-10）
+    #   用户口径 ⑴：账户只有三种状态 —— 空仓 / 锁仓 / 运行。
+    #   本方法是**全库唯一**的账户态判定点。此前该判定式在 4 处内联重复：
+    #     _restore（推初始 state）/ on_signal（运行态忽略信号）/
+    #     _close_positions（批次尾部回 IDLE）/ _unlock_position（解锁后回 IN_TRADE|IDLE）
+    #   4 份 all(...)/any(...) 写法互为逆否，口径靠"人肉保持一致"，任一处漂移
+    #   都会让"运行态忽略信号"与"解锁后回 IN_TRADE"打架。收口到此处。
+    #   —— 判定口径与 Old 完全一致（纯重构，零行为变化）：
+    #      · 簿空            → FLAT
+    #      · 簿内全是 SOFT   → LOCKED（含"今日锁"与"昨日锁"，两者都等信号）
+    #      · 否则            → RUNNING
+    # ════════════════════════════════════════════════════════════════
+    def account_state(self) -> AccountState:
+        """账户三态判定（唯一实现点）。详见 `AccountState` 文档。"""
+        poss = self.positions.positions
+        if not poss:
+            return AccountState.FLAT
+        if all(p.origin is PositionOrigin.SOFT_EXIT_LOCK for p in poss):
+            return AccountState.LOCKED
+        return AccountState.RUNNING
+
+    # ════════════════════════════════════════════════════════════════
+    # 当前交易日（SSOT，2026-09-10 立）
+    #   规则 ⑸ 的 today 口径**唯一实现点**。此前 2 处各自现算：
+    #     on_signal        : sig.date[:10] if sig.date else ""
+    #     _close_positions : bar.date[:10] if bar.date else now_cn()[:10]
+    #   前者用**信号自然日**、后者用**bar 自然日**，都建立在"格式化字符串"上 ——
+    #   既与建仓端 entry_date 的口径可能漂移，又无法处理夜盘（夜盘成交属于次一交易日）。
+    #   收口到 _day_of_anchor() + _current_trading_day()。
+    # ════════════════════════════════════════════════════════════════
+    @staticmethod
+    def _day_of_anchor(anchor) -> str:
+        """单个时间锚（Bar / Signal）→ 所属【交易日】'YYYY-MM-DD'。取不到 → ''。
+
+        一个锚上有两个**表达同一事实**的时间副本（都源自 chan.py 的 `klu.time`）：
+          · timestamp：毫秒时间戳 —— 权威，且是**唯一**能正确处理夜盘的来源
+            （夜盘 21:00 的成交属于次一交易日；用自然日会差一天 → 误判今仓为昨仓
+             → 发 CLOSE 平今 → CTP 拒单）。
+          · date：格式化字符串 —— timestamp 的展示副本。
+
+        可信度递减：timestamp 能派生出可信日期（>= PLAUSIBLE_DATE_MIN）就用它；
+        否则用 date 字符串。**两者都取不到才返回 ''**（由调用方 fail-fast）。
+        降级分支服务于"timestamp 不是真实毫秒"的数据（历史补录 / 测试夹具用序号），
+        生产路径（App 侧 int(ts*1000)）永远走 timestamp 分支。
+        """
+        if anchor is None:
+            return ""
+        d = trading_day_of_ms(int(getattr(anchor, "timestamp", 0) or 0))
+        if d and d >= PLAUSIBLE_DATE_MIN:
+            return d
+        return trading_day_from_clock(str(getattr(anchor, "date", "") or ""))
+
+    def _current_trading_day(self, bar: Optional[Bar] = None) -> str:
+        """当前所属【交易日】。恒返回非空 'YYYY-MM-DD'。
+
+        来源优先级：调用方 bar → self.last_bar → 墙钟 now_ms()。
+        墙钟兜底保证返回值非空，故下游**不再需要**"today 为空"的防御分支
+        （旧实现里 on_signal 的 `if today and ...` 在 today 为空时会走错分支，
+        而 _close_positions 早有 now_cn() 兜底 —— 两处口径本就不一致）。
+        """
+        for anchor in (bar, self.last_bar):
+            d = self._day_of_anchor(anchor)
+            if d:
+                return d
+        return trading_day_of_ms(now_ms())
+
     # ---------------- 兼容层：engine.position property ----------------
     # Phase E1：旧版代码（含 P5..P11 测试）读写 engine.position 都是按"单 Position 或 None"
     # 设计的。通过这两个 property，把读写都转发到 self.positions 这个容器，
@@ -211,6 +281,38 @@ class TradingEngine(ReconcileMixin):
                 new_book.set_legacy(Position.from_dict(pd))
                 self.positions.replace_with(new_book)
 
+        # ════════════════════════════════════════════════════════════════
+        # F2（2026-09-10）：恢复后仍无 entry_date 的持仓 → 拒绝启动。
+        #   entry_date 已在 Position.__post_init__（F4）里尽力重建，顺序为
+        #     entry_bar_ts（建仓 K 线的毫秒时间戳 —— 权威来源，旧库必定有它，
+        #                   因为 entry_bar_ts 比 entry_date 更早引入）
+        #     entry_at    （墙钟字符串，兜底）
+        #   三者全空 = 这条记录**真的不含任何时间信息**，"今仓/昨仓"无从判定 →
+        #   规则 ⑸ 必然判错 → 对今仓发 CLOSE 平今 → CTP 拒单 → 连锁 phantom 清仓
+        #   （簿面清空但实盘仍有仓，不可逆）。此处宁可拒绝启动，也不猜方向。
+        #   注意：这是"真无解"的脏数据，与旧实现把 "" 静默当"昨仓"是两回事 ——
+        #   后者让错误一路跑到报单，前者在启动期就把它挡住。
+        # ════════════════════════════════════════════════════════════════
+        unresolved = [p for p in self.positions.positions if not p.entry_date]
+        if unresolved:
+            self.ev.write(
+                "position_entry_date_unresolved",
+                n=len(unresolved),
+                signal_keys=[p.signal_key for p in unresolved],
+                entry_bar_ts=[p.entry_bar_ts for p in unresolved],
+                entry_at=[p.entry_at for p in unresolved],
+                note="持仓无任何可用时间锚（entry_date / entry_bar_ts / entry_at 全空），"
+                     "无法判定今仓/昨仓，拒绝启动")
+            raise RuntimeError(
+                "state.db 有 {} 笔持仓记录里 entry_date / entry_bar_ts / entry_at "
+                "三个时间源全空，无法判定「今仓 / 昨仓」，拒绝启动。\n"
+                "  原因：规则 ⑸ 用 entry_date 决定离场走 LOCK（今仓：反向开仓锁仓）\n"
+                "        还是 CLOSE（昨仓：平仓）。判错会对今仓发平今 CLOSE → 中金所\n"
+                "        拒单 → 连续拒单触发 phantom 清仓（簿面清空但实盘仍有仓）。\n"
+                "  处理：核对实盘持仓后，删除 Trading/State/state.db 再启动。\n"
+                "  受影响持仓：{}".format(
+                    len(unresolved), [p.signal_key for p in unresolved]))
+
         # E3.1：截断 warning —— persisted 多仓数据超出 cfg max 时丢了一些仓。
         # v1.3：不限容量下 truncated 恒为空；保留本段仅为"若将来恢复有限容量"时
         # 不再静默丢失持仓（写 error 级事件），且 avoid None 参与算术。
@@ -234,9 +336,8 @@ class TradingEngine(ReconcileMixin):
         # Phase H1：簿内只剩 SOFT_EXIT_LOCK 锁仓（昨日 LOCK 遗留、等对向信号解锁）→ IDLE，
         #   让下个信号走 on_signal 的 E2 UNLOCK 门（unlock_against_signal 记帐 +
         #   CloseYesterday 费率），而不是 IN_TRADE 的 signal_reverse 平仓路径。
-        if (self.positions.is_empty()
-                or all(p.origin is PositionOrigin.SOFT_EXIT_LOCK
-                       for p in self.positions.positions)):
+        # P1（2026-09-10）：判定收口到 account_state() —— 非运行态（空仓 / 锁仓）一律 IDLE。
+        if self.account_state() is not AccountState.RUNNING:
             self._state = EngineState.IDLE
         else:
             self._state = EngineState.IN_TRADE
@@ -485,8 +586,8 @@ class TradingEngine(ReconcileMixin):
         #   注意：H1 锁仓落簿 = 1 笔反向 SOFT_EXIT_LOCK 持仓（原仓被 Trade 了结），锁仓持仓 net = ±vol ≠ 0，
         #   故不能用 net 判"锁仓 vs 运行"，必须按 origin 区分。
         #   这与 _restore 的 state 推断（is_empty or all SOFT_EXIT_LOCK → IDLE）口径一致。
-        if any(p.origin is not PositionOrigin.SOFT_EXIT_LOCK
-               for p in self.positions.positions):
+        # P1（2026-09-10）：判定收口到 account_state()（SSOT）。
+        if self.account_state() is AccountState.RUNNING:
             # 运行态：有真实净敞口 → 一律忽略信号（Q1=B）
             self.store.update_signal_action(
                 sig.key, "skip", "running_ignore_signal")
@@ -495,12 +596,14 @@ class TradingEngine(ReconcileMixin):
             return
 
         # 净敞口 == 0：空仓 或 锁仓态。挑"与信号方向相反、且最早"的一笔看日期。
-        today = sig.date[:10] if sig.date else ""
+        # today 取**信号自身**的交易日（与建仓端同一解析链 _day_of_anchor），
+        #   取不到才回落到 last_bar / 墙钟。解锁判定比较的是"锁仓那笔仓的建仓日
+        #   vs 信号所属交易日"，用 sig 比用 last_bar 更贴合（信号可能滞后 1 根 K）。
+        today = self._day_of_anchor(sig) or self._current_trading_day()
         opp = sorted(self.positions.opposite_positions(sig.side),
                      key=lambda p: p.entry_bar_seq)
         if opp and opp[0].entry_date < today:
             # 锁仓·昨仓锁：平旧仓（与信号反向的最早一笔持仓），规则 ⑸-②。
-            # entry_date 缺失（旧记录 SOFT_EXIT_LOCK 持仓）时 "" < today 恒 True → 保守按平昨处理。
             self._unlock_position(sig, sig.side)
             self.ev.write("signal_unlock", key=sig.key,
                           reason="unlock_yesterday_position")
@@ -542,6 +645,39 @@ class TradingEngine(ReconcileMixin):
                 sig.key, "rejected", "zero_volume")
             self.ev.write("order_rejected", key=sig.key,
                           reason="zero_volume", volume=volume)
+            return
+
+        # ════════════════════════════════════════════════════════════════
+        # F1（2026-09-10）：建仓必须能确定"建仓所属交易日"，否则**拒绝建仓**。
+        #   entry_date 是规则 ⑸ 判「今仓 → 反向开仓锁仓 / 昨仓 → 平仓」的唯一依据，
+        #   它空着本身就是非法状态。旧实现会照常落一笔 entry_date="" 的仓，再由
+        #   下游 `"" < today` 恒真把它静默解释成"昨仓" → 对今仓发 CLOSE 平今 →
+        #   CTP 拒单 → 连锁 phantom 清仓（簿面清空但实盘仍有仓，不可逆）。
+        #
+        #   时间锚优先级：last_bar.timestamp（成交所在 K 线）→ sig.timestamp
+        #   （信号 K 线；与建仓 K 线同源，通常就是同一根）。两者都无效才拒绝。
+        #
+        #   ⚠️ 本检查位于 broker.submit **之前** —— 拒绝时没有任何报单发出，
+        #   账实天然一致。（对比 _book_lock_pair：那里的报单已成交，不能拒绝落簿。）
+        # ════════════════════════════════════════════════════════════════
+        entry_ts = (self.last_bar.timestamp
+                    if (self.last_bar is not None and self.last_bar.timestamp > 0)
+                    else int(sig.timestamp or 0))
+        # 交易日解析链：成交所在 K 线（last_bar）→ 信号 K 线（sig）。
+        #   二者是同一事实（成交时的 K 线时间）的副本，一个取不到就用另一个；
+        #   都取不到才拒绝建仓。详见 _day_of_anchor 的可信度说明。
+        entry_date = (self._day_of_anchor(self.last_bar)
+                      or self._day_of_anchor(sig))
+        if not entry_date:
+            self.store.update_signal_action(sig.key, "rejected", "no_time_anchor")
+            self.ev.write("order_rejected", key=sig.key,
+                          reason="no_time_anchor", volume=volume,
+                          last_bar_ts=(None if self.last_bar is None
+                                       else self.last_bar.timestamp),
+                          sig_ts=sig.timestamp,
+                          note="无可用时间锚（last_bar.timestamp / sig.timestamp 均无效）"
+                               "→ 拒绝建仓：entry_date 不可为空")
+            self._state = EngineState.IDLE
             return
 
         cfg_max = self.cfg.risk.max_open_positions
@@ -586,14 +722,13 @@ class TradingEngine(ReconcileMixin):
         # 成交：簿面记一笔持仓（volume 手，独立 exit_plan）
         entry_price = o.filled_price
         plan: ExitPlan = self.exit_policy.plan(sig, entry_price, self.spec)
-        # v1.3（S1）：entry_date 取信号 K 线日期（bar.date[:10]），绝不用 now_cn()。
-        #   这是规则 ⑸ "当日/非当日"判定与 Q2 "今仓锁/昨仓平"的唯一依据。
-        entry_date = (sig.date[:10] if sig.date
-                      else (self.last_bar.date[:10] if self.last_bar else ""))
+        # entry_date / entry_bar_ts 在上方 F1 段已确定（= 成交所在 K 线的交易日与时间戳）。
+        #   刻意不再从 sig.date 这类**格式化字符串**取 —— 字符串为空时会被下游
+        #   静默解释成合法语义，是本次重构要根除的失效模式。
         pos = Position(
             symbol=self.spec.trade_symbol, side=side, volume=volume,
             entry_price=entry_price, entry_at=now_cn(),
-            entry_bar_ts=self.last_bar.timestamp if self.last_bar else 0,
+            entry_bar_ts=entry_ts,
             entry_bar_seq=self.bars_seen,
             signal_key=sig.key, open_order_id=o.order_id, exit_plan=plan,
             origin=PositionOrigin.SIGNAL_OPEN,
@@ -649,10 +784,10 @@ class TradingEngine(ReconcileMixin):
 
         # FIFO 排序——按建仓时间升序（防御性：即使调用方传乱序也保证 FIFO）
         ordered = sorted(positions, key=lambda p: p.entry_bar_seq)
-        # 规则 ⑸：离场方式按"今日单 / 跨日单"判定。today 取当前 K 线日期，
-        # 与下方成本口径（_is_today_pos）同源，避免两处日期口径漂移。
-        today_str = (bar.date[:10] if (bar is not None and bar.date)
-                     else now_cn()[:10])
+        # 规则 ⑸：离场方式按"今日单 / 跨日单"判定。today 统一走 _current_trading_day()，
+        # 与建仓端 entry_date 同为**交易日**口径（含夜盘归属次日），且与下方成本口径
+        # （_is_today_pos）同源，避免任何一处日期口径漂移。
+        today_str = self._current_trading_day(bar)
 
         # Phase A：进入瞬态 EXITING（任一平仓动作触发）
         self._state = EngineState.EXITING
@@ -747,15 +882,18 @@ class TradingEngine(ReconcileMixin):
                 # 锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
                 # （entry_price=P₀ 会计锚不动），反向仓作为新 SOFT_EXIT_LOCK 持仓落簿，两笔共享
                 # lock_pair_id。原仓 PnL 不记 Trade（继续浮动），净敞口归零。
-                self._book_lock_pair(pos, side, exit_price, o, reason, idx, len(ordered))
+                self._book_lock_pair(pos, side, exit_price, o, reason, idx,
+                                     len(ordered), bar)
             else:
                 # ═══ 硬离场（平仓）= 记 Trade + remove 原仓 ═══
                 gross = pos.pnl_points(exit_price)
                 # 2026-09-10：成本口径必须与 broker 实际发出的报文一致。
                 #   规则 ⑸ 保证 OrderIntent.CLOSE 只用于跨日单（entry_date < today），
                 #   故 hard exit 恒按**平昨**费率计（0.0023%）。此处仍按 entry_date
-                #   动态判定，是为了对"旧数据 entry_date 缺失"与未来其它调用方保持防御。
-                _is_today_pos = bool(pos.entry_date) and pos.entry_date[:10] >= today_str
+                #   动态判定，是为了对"未来其它调用方"保持防御。
+                #   entry_date 由 Position.__post_init__ 保证非空且为 YYYY-MM-DD
+                #   （F4），故不再需要 `bool(pos.entry_date) and pos.entry_date[:10]`。
+                _is_today_pos = pos.entry_date >= today_str
                 cost = self.spec.cost_points(
                     pos.entry_price, exit_price,
                     close_today=bool(_is_today_pos and self.spec.close_today_first))
@@ -795,15 +933,15 @@ class TradingEngine(ReconcileMixin):
         self._persist()
         # Phase H1：簿空 或 簿内只剩 SOFT_EXIT_LOCK 锁仓（等待次日对向信号解锁）→ IDLE。
         # 锁仓不属于"平仓未完成"，不应让引擎卡在 EXITING。
-        remaining = self.positions.positions
-        if (self.positions.is_empty()
-                or all(p.origin is PositionOrigin.SOFT_EXIT_LOCK for p in remaining)):
+        # P1（2026-09-10）：判定收口到 account_state()（SSOT）。
+        if self.account_state() is not AccountState.RUNNING:
             self._state = EngineState.IDLE
         # else: 仍有在持今仓（部分成交或 cooldown 中）→ 保持 EXITING
 
     # ---------------- 软离场（锁仓）留双向持仓落簿（Phase S4） ----------------
     def _book_lock_pair(self, pos: Position, side: Side, exit_price: float,
-                        o: Order, reason: str, idx: int, pos_count: int) -> None:
+                        o: Order, reason: str, idx: int, pos_count: int,
+                        bar: Optional[Bar] = None) -> None:
         """软离场（锁仓）留双向持仓落簿：原仓 → SOFT_EXIT_LOCK + 反向仓 SOFT_EXIT_LOCK，不兑现 PnL。
 
         锁仓 = 反向开仓（底层只有开/平，锁仓不是平仓）：原仓保留
@@ -819,11 +957,27 @@ class TradingEngine(ReconcileMixin):
         pos.lock_pair_id = pair_id
 
         # 反向仓 SOFT_EXIT_LOCK 落簿（entry_price = 锁仓成交价 P₁）
-        lock_entry_date = (self.last_bar.date[:10] if self.last_bar else "")
+        #
+        # F1 配套（2026-09-10）：反向仓同样需要"建仓所属交易日"。但与 _open_position
+        #   不同，本处**不能因为拿不到时间锚就拒绝落簿** —— 反向报单已经成交，
+        #   不落簿会造成"实盘有反向仓、簿面无记录"的账实不符，比日期缺失更危险。
+        #   故取不到 K 线时间戳时用**墙钟**兜底：走到这一步说明进程启动后从未收到
+        #   K 线，那必然是实盘/托管关闭场景（回放与实盘推进都靠 K 线驱动），
+        #   墙钟的交易日与真实交易日一致。
+        #
+        #   时间锚必须优先取**触发锁仓的那根 bar**（调用方传入），而不是引擎最近的
+        #   self.last_bar —— 二者在"直接调 _close_positions（补锁 / 测试 / 手工触发）"
+        #   场景下会分叉，用 last_bar 会把锁仓反向仓的建仓日算成墙钟今天。
+        lock_anchor = bar if bar is not None else self.last_bar
+        lock_ts = (lock_anchor.timestamp
+                   if (lock_anchor is not None and lock_anchor.timestamp > 0)
+                   else now_ms())
+        lock_entry_date = (self._day_of_anchor(lock_anchor)
+                           or trading_day_of_ms(now_ms()))
         lock_pos = Position(
             symbol=pos.symbol, side=side, volume=pos.volume,
             entry_price=exit_price, entry_at=now_cn(),
-            entry_bar_ts=(self.last_bar.timestamp if self.last_bar else 0),
+            entry_bar_ts=lock_ts,
             signal_key=pos.signal_key + "#lock",
             open_order_id=o.order_id,
             exit_plan=ExitPlan(name="locked_await_unlock", stop_price=0.0),
@@ -954,8 +1108,8 @@ class TradingEngine(ReconcileMixin):
         else:
             # v1.3（S3/S4）：留双向持仓解锁后，升级的配对仓已不再是 SOFT_EXIT_LOCK（单边敞口）
             #   → IN_TRADE；若簿内无任何非 SOFT_EXIT_LOCK 持仓（纯解锁回空仓 / 旧数据 1 锁 1 笔）→ IDLE。
-            if any(p.origin is not PositionOrigin.SOFT_EXIT_LOCK
-                   for p in self.positions.positions):
+            # P1（2026-09-10）：判定收口到 account_state()（SSOT）。
+            if self.account_state() is AccountState.RUNNING:
                 self._state = EngineState.IN_TRADE
             else:
                 self._state = EngineState.IDLE
@@ -1066,19 +1220,23 @@ class TradingEngine(ReconcileMixin):
           旧实现 SIGNAL_OPEN→LOCK / UNLOCK_UPGRADE→CLOSE 隐含假设"SIGNAL_OPEN 仓当日开、
           当日平"。一旦**当日开仓、隔日才触发离场**，该仓物理上已是昨仓，却仍走 LOCK
           （开反向今仓）→ 多付一次开仓费，且次日还要再平两笔（劣于直接平昨）。
-          按日期判定才是规则 ⑸ 的用户口径，也是 Q2=A 的既定决策（见
-          Docs/自动下单_Q1-Q6决策全记录_v1.3.md）。
+          按日期判定才是规则 ⑸ 的用户口径，也是 Q2=A 的既定决策
+          （对应的决策记录文档已不在仓库内，2026-09-10 按用户要求删除本引用）。
 
-        entry_date 缺失（旧版 state.db 恢复）→ 沿用 Types.py:242 既定口径
-          "" < today 恒 True → 保守按昨仓 → 硬离场平昨。
-        today 为空（调用方未传，理论不应发生）→ 无法判日期 → 一律 LOCK：
-          LOCK 是"开反向仓"报文，永不因"持仓不足"被 CTP 拒单；CLOSE 平今会被拒并
-          可能触发 phantom 清仓（账实不符）。故缺省方向选永不拒单的一侧。
+        entry_date / today 的可空性（2026-09-10 根因治理后）
+          · entry_date：由 Position.__post_init__（F4）保证非空且为 YYYY-MM-DD ——
+            缺失时依次从 entry_bar_ts（真实毫秒，权威）→ entry_at（墙钟，兜底）重建；
+            三者全空的记录会被 _restore（F2）拒绝启动，**不会再流到这里**。
+            旧实现把 "" 交给 `"" < today` 恒真、静默当"昨仓"处理，是本次要根除的
+            失效模式：判错会对今仓发 CLOSE 平今 → CTP 拒单 → 连锁 phantom 清仓。
+          · today：由 _current_trading_day() 保证非空（末端有墙钟兜底）。
+          下方 `today and ...` 的判空仅为"防御不可达状态"：真有空值也不猜，走 LOCK
+          （反向开仓报文，永不因"持仓不足/平今"被 CTP 拒单），并让 F2/F4 的告警去暴露它。
         """
         if pos.origin is PositionOrigin.SOFT_EXIT_LOCK:
             # 防御分支，正常路径不可达（settle 已跳过 SOFT_EXIT_LOCK）
             return OrderIntent.UNLOCK, pos.side
-        if today and pos.entry_date[:10] < today[:10]:
+        if today and pos.entry_date < today:
             # 跨日单 → 硬离场（平昨）
             return OrderIntent.CLOSE, pos.side
         opposite = Side.SHORT if pos.side is Side.LONG else Side.LONG
@@ -1137,6 +1295,9 @@ class TradingEngine(ReconcileMixin):
         return {
             "enabled": self.auto_order_enabled,
             "state": self._state.value,
+            # P1（2026-09-10）：对外暴露账户三态（用户口径 ⑴）。此前 App/前端只能拿到
+            # 引擎过程态 EngineState（IDLE 同时覆盖空仓与锁仓），"空仓 vs 锁仓"不可见。
+            "account_state": self.account_state().value,
             "positions": [p.to_dict() for p in self.positions.positions],
         }
 

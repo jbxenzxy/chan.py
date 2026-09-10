@@ -162,12 +162,13 @@ class ReconcileMixin:
             gross = pos.pnl_points(ref_price)
             # 2026-09-10：成本口径与 Engine 的 hard-exit 路径对齐（规则 ⑸）。
             #   原写法直接传全局开关 self.spec.close_today_first（默认 True）→ 恒按
-            #   "平今"费率（0.0345%）计，对**跨日单**高估 15 倍；而 Engine.py:758 那边
+            #   "平今"费率（0.0345%）计，对**跨日单**高估 15 倍；而 Engine.py 那边
             #   是按 entry_date 动态判定 —— 两处成本口径不一致。现改为与 Engine 同源。
-            _today = (self.last_bar.date[:10]
-                      if (self.last_bar is not None and self.last_bar.date)
-                      else now_cn()[:10])
-            _is_today_pos = bool(pos.entry_date) and pos.entry_date[:10] >= _today
+            #   2026-09-10 二次修正：today 也统一走 engine._current_trading_day()
+            #   （交易日口径，含夜盘归属次日），不再自行解析 last_bar.date 自然日 ——
+            #   否则夜盘品种上会和 Engine 的判定差一天，成本口径再次分叉。
+            _today = self._current_trading_day(self.last_bar)
+            _is_today_pos = pos.entry_date >= _today
             cost = self.spec.cost_points(
                 pos.entry_price, ref_price,
                 close_today=bool(_is_today_pos and self.spec.close_today_first))
