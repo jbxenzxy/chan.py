@@ -24,17 +24,21 @@ SimNow 仿真 broker（M2b）
       读仓前先校验行情快照新鲜度：IF 交易时段每 0.5s 一个 tick，quote.datetime 停滞
       超过 BrokerConfig.channel.quote_stale_seconds（默认 30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
       覆盖"断连重连中"与"TCP 假死"两类场景，且不依赖 tqsdk 版本。
-    - 全 FOK 报单（2026-09-06 全量化改造）：四类报单（OPEN 开仓 / UNLOCK 解锁 /
-      LOCK 锁仓 / CLOSE 平仓）全部附加 CTP 报单属性 advanced="FOK"——限价立即
-      全部成交否则全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留。
-      · 入场（OPEN/UNLOCK）：全撤 → 本笔作废（rejected），不追价，等下一信号。
-      · 离场（LOCK/CLOSE）：全撤 → 立即按最新对手价重新超价报单，最多
+    - 报单属性 advanced 取自 `InstrumentSpec.order_advanced`（默认 "FOK"）——限价
+      立即全部成交否则全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留。
+      · **入场**（交易信号触发）：全撤 → 本笔作废（rejected），不追价，等下一信号。
+        "入场没成功，最多不赚钱，但不会亏钱。"
+      · **离场**（L1-L3 止盈止损触发）：全撤 → 立即按最新对手价重新超价报单，最多
         close_max_chase 轮（每轮间隔 chase_interval 秒，防报撤单频率超限）；
-        轮数用尽后由引擎跨 K 线持续重试，直到软/硬离场完成。
+        轮数用尽后由引擎跨 K 线持续重试，直到离场完成。
+        ⚠️ 但"资金不足 / 非交易时段"两类拒单会**立即停追**（D10 分类器）——
+        追 100 轮也不可能成交，只会空耗报撤单额度与中金所监管计数（风险 R13）。
       · fill_timeout_open/close 退化为通道异常兜底 watchdog：正常时交易所毫秒级
         给出终态，超时撤单分支仅在断线/回报丢失时兜底。
-      郑商所期货不支持 FOK（tqsdk 直接抛异常，暂不处理：只交易中金所金融期货）。
-    - offset：OPEN/LOCK→OPEN；UNLOCK/CLOSE→CLOSE。
+      ⚠️ **郑商所不支持 FOK**（tqsdk 直接抛异常）。二期上 CZCE 需把
+      `InstrumentSpec.order_advanced` 切成 "FAK" —— 这是当初把该值收进 spec 的原因，
+      别再把它写死回 Broker 里。
+    - offset：OPEN→OPEN；CLOSE→CLOSE（方向由调用方给的 side 决定）。
       2026-09-10：删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
       规则 ⑸ 保证"今日单离场 = LOCK 反向开仓（offset=OPEN）"、"跨日单离场 = CLOSE
       平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，CLOSETODAY（平今 0.0345%）不可达。
@@ -76,7 +80,8 @@ from ..Config import BrokerConfig
 from ..Config import BrokerConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
-from .Base import INTENT_TO_OFFSET, Broker, register_broker
+from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, Broker,
+                   classify_ctp_reject, register_broker)
 
 # broker 参数默认值的**单一事实源**：Trading/Config.py 的 BrokerConfig 模型。
 # 本文件不再自带任何兜底数值（2026-09-07 严格模式）—— params 由配置模型构造，
@@ -557,15 +562,16 @@ class SimNowBroker(Broker):
     # 最多 close_max_chase 轮；close_chase_ticks 仅在行情临时取不到时作兜底步长。
     # 仍不成交（如涨跌停锁死）才放弃（rejected），由引擎对账机制（增强 B）兜底。
     #
-    # 报文（2026-09-10 按规则 ⑸ 定稿，见 Base.INTENT_TO_OFFSET）
-    #   - OPEN   offset=Open（买入/卖出开仓）
-    #   - LOCK   offset=Open（方向由调用方填反，即"开反向同手数"），与 OPEN 报文相同但语义不同
-    #   - UNLOCK offset=Close（平掉昨仓的反向仓）
-    #   - CLOSE  offset=Close（平昨；只用于跨日单，今日单离场走 LOCK，
-    #                         故不存在"平今 CLOSETODAY"报文）
+    # 报文（见 Base.INTENT_TO_OFFSET）：OPEN → offset=OPEN，CLOSE → offset=CLOSE。
+    #   CLOSE 恒作用于跨日仓（引擎断言），故中金所下恒为平昨，**不存在平今 CLOSETODAY 报文** ——
+    #   这是"今日单永不 CLOSE"这条规则换来的：系统永远不需要 CLOSETODAY，
+    #   天然绕开六家交易所的平今/平昨指令差异。别把这条口子打开。
+    #
+    # 派发只有两路：OPEN → _submit_open，其余（CLOSE）→ _submit_close。
+    # 追不追价由 `is_exit` 决定，不由 intent 决定（理由见 Base 模块 docstring）。
     def submit(self, intent, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "",
-               entry_date: str = "") -> Order:
+               entry_date: str = "", is_exit: bool = False) -> Order:
         intent = self._resolve_intent(intent, side)
         if self._conn_error:
             return self._rejected(signal_key, side, intent.value, volume, ref_price,
@@ -575,26 +581,16 @@ class SimNowBroker(Broker):
                                   note, "未连接")
 
         if intent is OrderIntent.OPEN:
-            # 开仓=入场语义：单次超价 + 超时撤单、不追价（"最多不赚钱，但不会亏钱"）
-            return self._submit_open(intent, side, volume, ref_price, signal_key, note)
-        if intent is OrderIntent.LOCK:
-            # 锁仓=软离场，卡单必须追价（同平仓），否则浮亏扩大/浮盈变浮亏
-            return self._submit_lock(intent, side, volume, ref_price, signal_key, note)
-        if intent is OrderIntent.UNLOCK:
-            # 2026-09-05 规格归一：解锁≈开仓（入场语义）——单次超价 + fill_timeout_open
-            # 超时撤单、不追价（"入场没成功，最多不赚钱，但不会亏钱"）。
-            # 报文是平昨语义（平反向昨仓，避开平今费率），offset = tqsdk 白名单内的
-            # "CLOSE"（"CLOSEYESTERDAY"/"CLOSEANY" 都不在白名单，会本地 raise）；
-            # 通道级异常兜底交给引擎 Phase F1（5 bar 后 trade_confirmed 复核 + cancel_pending）。
-            return self._submit_unlock(intent, side, volume, ref_price, signal_key, note)
+            return self._submit_open(intent, side, volume, ref_price, signal_key, note,
+                                     is_exit=is_exit)
         return self._submit_close(intent, side, volume, ref_price, signal_key, note,
-                                  entry_date)
+                                  is_exit=is_exit)
 
     @staticmethod
     def _is_buy(action: str, side: Side) -> bool:
         """该笔委托是不是买方向（决定用 ask 还是 bid 作对手价）。
 
-        LOCK 的方向已在引擎填为 pos.side 的反向，所以这里只看 side。
+        方向一律由调用方给出（信号方向 / 净敞口反向），本方法不做任何推断。
         """
         if action == "open":
             return side is Side.LONG
@@ -628,7 +624,7 @@ class SimNowBroker(Broker):
         return self.spec.round_price(float(bid) - overprice_points, "down")
 
     def _overprice(self) -> float:
-        """超价点数（四类报单共用，config broker_params.overprice_points）。
+        """超价点数（开仓/平仓共用，config broker_params.overprice_points）。
 
         全 FOK 模式要求限价内盘口深度 ≥ 全部手数才给终态，超价越厚全成概率越高，
         默认 1.0（IF 5 tick）。
@@ -655,77 +651,62 @@ class SimNowBroker(Broker):
             return 0
 
     def _submit_open(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
-                     signal_key: str, note: str) -> Order:
+                     signal_key: str, note: str, is_exit: bool = False) -> Order:
+        """开仓（offset=OPEN）。
+
+        is_exit=False —— **入场**（转移 1/2/6，交易信号触发）：单次超价，不追价。
+          "入场没成功，最多不赚钱，但不会亏钱。" 全撤 → rejected，等下一个信号。
+        is_exit=True —— **软离场**（转移 4，运行态 L1-L3 触发的反向开仓锁仓）：
+          必须追价。锁仓本质也是离场，卡单不追会让浮亏扩大、浮盈变浮亏。
+
+        两种情形**报文完全相同**（offset=OPEN、direction=_DIRECTION[side]），
+        差别只在追不追价 —— broker 无法从 (side, offset) 推断，故由引擎按触发源给出。
+        """
         direction = _DIRECTION[side]
-        # OPEN / LOCK 都是 Open 报文——LOCK 是反向开仓（引擎已填反向 side）
         offset = INTENT_TO_OFFSET[intent]
         side_key = "LONG" if side is Side.LONG else "SHORT"
-        # 全 FOK：全成或全撤由交易所撮合引擎保证，无部分成交幽灵残留；
-        # 全撤 → 本笔作废（rejected），不追价，等下一信号
-        limit = self._build_limit_price("open", side, ref_price, opp=self._overprice())
-        baseline = self._take_baseline(side_key)
-        expected_delta = int(volume)
-        try:
-            order = self._api.insert_order(symbol=self._trade_symbol,
-                                           direction=direction, offset=offset,
-                                           volume=int(volume), limit_price=limit,
-                                           advanced="FOK")
-        except Exception as e:
-            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
-                                  "下单失败: {}: {}".format(type(e).__name__, e))
-        # fill_timeout_open 退化为通道异常兜底 watchdog（正常毫秒级终态，不会触发）
-        timeout = float(self._param("fill_timeout_open"))
-        self._wait_finished(order, timeout_s=timeout)
-        return self._finalize(order, intent.value, "open", side, volume, ref_price, signal_key,
-                             note, baseline, expected_delta, limit)
-
-    def _submit_unlock(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
-                       signal_key: str, note: str) -> Order:
-        """UNLOCK（解锁）：与 OPEN 同为入场语义——单笔 FOK，全撤即作废，不追价。
-
-        "入场没成功，最多不赚钱，但不会亏钱。"全撤 → rejected，锁仓持仓保持
-        锁定状态，等下一个对向信号再解。
-
-        与 _submit_open 的两点差异：
-          · offset=CLOSE（平反向昨仓，避开平今高费率）——2026-09-10 由 CLOSEYESTERDAY 修正。
-            CLOSEYESTERDAY 不在 tqsdk 白名单（api.py:1353 只接受 OPEN/CLOSE/CLOSETODAY），
-            insert_order 会在本地 raise → 被 except 吞成 rejected → 跨日解锁 100% 失败、
-            账户永久锁死在锁仓态。按 tqsdk 文档，中金所平仓直接用 CLOSE，
-            上期所平昨同样是 CLOSE —— 平昨语义不变，只是报文改成合法值。
-          · 保留 close 路径的 _wait_position_ok 前置守卫（close 类报文要求 CTP 侧
-            确有持仓，挡"平仓量超过持仓量"拒单；这是提交前检查，不是追价）
-
-        通道级异常兜底（撤单失败 / 回报漂移 / 判定后状态漂移）由引擎的解锁复核
-        （unlock reconcile，engine._check_unlock_stuck）接管：in-flight 持久化 +
-        5 bar 后 trade_confirmed 复核。
-        """
-        # P0 守卫：等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
-        if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
-            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
-                                  "等待持仓更新超时（>10s），可能上游未同步")
-        direction = _CLOSE_DIRECTION[side]  # 平多=SELL / 平空=BUY（2026-09-05 方向修复）
-        offset = "CLOSE"                    # 平昨（2026-09-10：CLOSEYESTERDAY → CLOSE，见上文）
-        # 全 FOK：与 OPEN 同源（实时对手价 ± 超价，主动跨价差确保一笔全成）
+        is_buy = self._is_buy("open", side)
+        chase_sign = 1 if is_buy else -1          # 买→加价 / 卖→降价，朝成交方向追
         opp = self._overprice()
-        limit = self._overprice_limit("close", side, opp)
-        if limit is None:
-            limit = self.spec.align_exit(ref_price, side.sign)
-        side_key = "LONG" if side is Side.LONG else "SHORT"
-        baseline = self._take_baseline(side_key)
-        expected_delta = -int(volume)
-        try:
-            order = self._api.insert_order(symbol=self._trade_symbol,
-                                           direction=direction, offset=offset,
-                                           volume=int(volume), limit_price=limit,
-                                           advanced="FOK")
-        except Exception as e:
-            return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
-                                  "下单失败: {}: {}".format(type(e).__name__, e))
-        # fill_timeout_open 退化为通道异常兜底 watchdog（正常毫秒级终态，不会触发）
-        timeout = float(self._param("fill_timeout_open"))
-        self._wait_finished(order, timeout_s=timeout)
-        return self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
-                              note, baseline, expected_delta, limit)
+        max_attempts = int(self._param("close_max_chase")) if is_exit else 1
+        per_wait = float(self._param("fill_timeout_close" if is_exit
+                                     else "fill_timeout_open"))
+        chase_ticks = float(self._param("close_chase_ticks"))
+        chase_interval = float(self._param("chase_interval"))
+
+        last: Optional[Order] = None
+        prev_limit: Optional[float] = None
+        for attempt in range(1, max_attempts + 1):
+            limit = self._overprice_limit("open", side, opp)
+            if limit is None:
+                limit = self._chase_fallback_limit("open", side, ref_price, prev_limit,
+                                                   chase_sign, chase_ticks)
+            prev_limit = limit
+            baseline = self._take_baseline(side_key)
+            expected_delta = int(volume)          # 开仓：side_key 方向 +volume
+            try:
+                order = self._api.insert_order(symbol=self._trade_symbol,
+                                               direction=direction, offset=offset,
+                                               volume=int(volume), limit_price=limit,
+                                               advanced=self.spec.order_advanced)
+            except Exception as e:
+                return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
+                                      "下单失败: {}: {}".format(type(e).__name__, e))
+            # 终态毫秒级到达；per_wait 仅为通道异常兜底 watchdog
+            self._wait_finished(order, timeout_s=per_wait)
+            o = self._finalize(order, intent.value, "open", side, volume, ref_price,
+                               signal_key, note, baseline, expected_delta, limit,
+                               attempt=attempt, max_attempts=max_attempts)
+            last = o
+            if o.status == "filled":
+                return o
+            if self._should_stop_chase(o):
+                return o                          # 资金不足 / 非交易时段：追也无用
+            # 全撤：隔一小段间隔立即重报（防报撤单频率超限/FOK 撤单计数爆量）
+            if attempt < max_attempts:
+                time.sleep(chase_interval)
+        return last if last is not None else self._rejected(
+            signal_key, side, intent.value, volume, ref_price, note, "开仓未成交")
 
     def _chase_fallback_limit(self, action: str, side: Side, ref_price: float,
                               prev_limit: Optional[float],
@@ -746,14 +727,19 @@ class SimNowBroker(Broker):
             "up" if chase_sign > 0 else "down")
 
     def _submit_close(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
-                      signal_key: str, note: str, entry_date: str = "") -> Order:
-        # 2026-09-10（用户拍板）：删除原 `_close_offset(entry_date)` 的平今分支。
-        #   规则 ⑸ 保证 OrderIntent.CLOSE **只用于跨日单**（today 判定在
-        #   Engine._exit_intent），今日单离场一律走 LOCK（反向开仓，offset=OPEN）。
-        #   因此 CLOSE 语义恒为"平昨"，中金所/上期所平昨报文都是 tqsdk 白名单内的
-        #   "CLOSE"；CLOSETODAY（平今，中金所 0.0345% ≈ 平昨 15 倍）在本代码中不可达，
-        #   留着只会误导后来人以为"今日单可能走平今"。
-        offset = "CLOSE"
+                      signal_key: str, note: str, is_exit: bool = False) -> Order:
+        """平仓（offset=CLOSE，中金所下恒为平昨）。
+
+        is_exit=True —— **硬离场**（转移 5，运行态 L1-L3 触发）：必须追价。
+        is_exit=False —— **拆锁**（转移 3，锁仓态收到交易信号）：不追价。
+          拆锁失败只是"继续锁着"，账户是安全的；为进场去追价反而不划算。
+
+        为什么没有平今分支：规则 ⑹/⑺ 保证 CLOSE **只作用于跨日仓**
+        （断言在 Engine._pre_trade_check），今日单离场一律反向 OPEN。
+        故中金所平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今，
+        中金所 0.0345% ≈ 平昨 15 倍）在本代码中不可达，留着只会误导后来人。
+        """
+        offset = INTENT_TO_OFFSET[intent]
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
         if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
@@ -763,8 +749,9 @@ class SimNowBroker(Broker):
         is_buy = self._is_buy("close", side)
         chase_sign = 1 if is_buy else -1          # 买→加价 / 卖→降价，朝成交方向追
         opp = self._overprice()
-        max_attempts = int(self._param("close_max_chase"))
-        per_wait = float(self._param("fill_timeout_close"))
+        max_attempts = int(self._param("close_max_chase")) if is_exit else 1
+        per_wait = float(self._param("fill_timeout_close" if is_exit
+                                     else "fill_timeout_open"))
         chase_ticks = float(self._param("close_chase_ticks"))
         chase_interval = float(self._param("chase_interval"))
 
@@ -786,11 +773,11 @@ class SimNowBroker(Broker):
                 order = self._api.insert_order(symbol=self._trade_symbol,
                                                direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit,
-                                               advanced="FOK")
+                                               advanced=self.spec.order_advanced)
             except Exception as e:
                 return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))
-            # 全 FOK：终态毫秒级到达；per_wait 仅为通道异常兜底 watchdog
+            # 终态毫秒级到达；per_wait 仅为通道异常兜底 watchdog
             self._wait_finished(order, timeout_s=per_wait)
             o = self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
                               note, baseline, expected_delta, limit,
@@ -798,65 +785,13 @@ class SimNowBroker(Broker):
             last = o
             if o.status == "filled":
                 return o
+            if self._should_stop_chase(o):
+                return o                          # 资金不足 / 非交易时段：追也无用
             # 全撤：隔一小段间隔立即重报（防报撤单频率超限/FOK 撤单计数爆量）
             if attempt < max_attempts:
                 time.sleep(chase_interval)
         return last if last is not None else self._rejected(
-            signal_key, side, intent.value, volume, ref_price, note, "平仓追价用尽仍未成交")
-
-    def _submit_lock(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
-                     signal_key: str, note: str) -> Order:
-        """锁仓（软离场）追价：与平仓同一 FOK 追价循环，但报文=Open（反向开仓）。
-
-        锁仓本质也是离场（软离场），卡单必须追价，否则浮亏扩大、浮盈变浮亏。
-        追价语义与 _submit_close 完全一致：每笔 FOK 全撤后隔 chase_interval 秒，
-        按最新对手价 ± overprice 重新定价重报，close_max_chase 轮；轮数用尽后
-        由引擎跨 K 线持续重试，直到锁仓完成。
-        方向已由引擎填为 pos.side 的反向；offset=OPEN（Open 报文，可反向加仓）。
-        """
-        offset = INTENT_TO_OFFSET[intent]              # LOCK -> OPEN
-        direction = _DIRECTION[side]                    # 开反向：方向=开仓方向
-        side_key = "LONG" if side is Side.LONG else "SHORT"
-        is_buy = self._is_buy("open", side)             # 开仓：买=side LONG
-        chase_sign = 1 if is_buy else -1                # 买→加价 / 卖→降价，朝成交方向追
-        opp = self._overprice()
-        max_attempts = int(self._param("close_max_chase"))
-        per_wait = float(self._param("fill_timeout_close"))
-        chase_ticks = float(self._param("close_chase_ticks"))
-        chase_interval = float(self._param("chase_interval"))
-
-        last: Optional[Order] = None
-        prev_limit: Optional[float] = None
-        for attempt in range(1, max_attempts + 1):
-            limit = self._overprice_limit("open", side, opp)
-            if limit is None:
-                limit = self._chase_fallback_limit("open", side, ref_price, prev_limit,
-                                                   chase_sign, chase_ticks)
-            prev_limit = limit
-            baseline = self._take_baseline(side_key)
-            expected_delta = int(volume)                # 反向开仓：side_key 方向 +volume
-            try:
-                order = self._api.insert_order(symbol=self._trade_symbol,
-                                               direction=direction, offset=offset,
-                                               volume=int(volume), limit_price=limit,
-                                               advanced="FOK")
-            except Exception as e:
-                return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
-                                      "下单失败: {}: {}".format(type(e).__name__, e))
-            # 全 FOK：终态毫秒级到达；per_wait 仅为通道异常兜底 watchdog
-            self._wait_finished(order, timeout_s=per_wait)
-            o = self._finalize(order, intent.value, "open", side, volume, ref_price, signal_key,
-                              note, baseline, expected_delta, limit,
-                              attempt=attempt, max_attempts=max_attempts)
-            last = o
-            if o.status == "filled":
-                return o
-            # 全撤：隔一小段间隔立即重报（防报撤单频率超限/FOK 撤单计数爆量）
-            if attempt < max_attempts:
-                time.sleep(chase_interval)
-        # 未成交：轮数用尽，引擎跨 K 线持续重试
-        return last if last is not None else self._rejected(
-            signal_key, side, intent.value, volume, ref_price, note, "锁仓追价用尽仍未成交")
+            signal_key, side, intent.value, volume, ref_price, note, "平仓未成交")
 
     def _finalize(self, order, intent_str: str, action: str, side: Side, volume: int, ref_price: float,
                   signal_key: str, note: str, baseline: int, expected_delta: int,
@@ -899,6 +834,11 @@ class SimNowBroker(Broker):
                                         baseline, expected_delta)
 
         status = "filled" if is_fully_filled else "rejected"
+        # D10（2026-09-11）：拒单原因分类。追价只在"价格不可达"时才有意义，
+        #   资金不足 / 非交易时段追 100 轮也不可能成交 —— 由调用方据此处 break。
+        reject_class = ""
+        if status == "rejected":
+            reject_class = classify_ctp_reject(getattr(order, "last_msg", ""))
         if status == "rejected" and getattr(order, "status", "") != "FINISHED":
             last_msg = getattr(order, "last_msg", "")
             reject_reason = (
@@ -917,13 +857,13 @@ class SimNowBroker(Broker):
             status=status, created_at=now_cn(), broker=self.name, note=note,
             meta={"raw_order_id": str(getattr(order, "order_id", "")),
                   "direction": _DIRECTION[side], "offset": action,
-                  # Phase C：intent 与 order.action 双向记录
-                  # action 仍是 "open"/"close"（兼容旧调用方），intent 表达真实语义
+                  # action 仍是 "open"/"close"（兼容旧调用方），intent 表达开/平语义
                   "intent": intent_str,
                   "trade_price": filled,
                   "volume_left": getattr(order, "volume_left", None),
                   "last_msg": getattr(order, "last_msg", ""),
                   "reject_reason": reject_reason,
+                  "reject_class": reject_class,
                   "attempt": attempt, "max_attempts": max_attempts},
         )
         self.orders.append(o)
@@ -937,6 +877,15 @@ class SimNowBroker(Broker):
         return o
 
     # ---------------- 内部工具 ----------------
+    @staticmethod
+    def _should_stop_chase(o: Order) -> bool:
+        """本轮拒单是否属于"追价无用"的两类（D10）。
+
+        命中 `funds`（资金不足）/ `not_tradable`（非交易时段、集合竞价、无权限）
+        → 立即停追并保留 Order 供引擎写告警，不再空耗报撤单额度与监管计数。
+        """
+        return o.meta.get("reject_class") in NO_CHASE_REJECT_CLASSES
+
     def _trade_price(self, order) -> Optional[float]:
         tp = getattr(order, "trade_price", None)
         if tp is None:
@@ -952,9 +901,8 @@ class SimNowBroker(Broker):
     def _wait_finished(self, order, timeout_s: float) -> None:
         """等待委托到达 FINISHED 终态；超时则尝试撤单（通道异常兜底 watchdog）。
 
-        2026-09-06 全 FOK 改造后的语义：
-          四类报单全部 advanced="FOK"，交易所撮合引擎保证毫秒级给出终态
-          （全成/全撤）。本函数退化为通道异常兜底 watchdog——正常永不触发；
+        全部报单用 spec.order_advanced（默认 "FOK"），交易所撮合引擎保证毫秒级
+          给出终态（全成/全撤）。本函数退化为通道异常兜底 watchdog——正常永不触发；
           仅当断线/回报丢失导致订单永不到终态时，超时主动撤单防 submit 永久
           阻塞挂死引擎线程（撤单多半也失败，Order 判 rejected 交引擎复核兜底）。
         """
@@ -1046,7 +994,7 @@ class SimNowBroker(Broker):
 
     def _rejected(self, signal_key: str, side: Side, action_str: str, volume: int,
                   ref_price: float, note: str, why: str) -> Order:
-        # Phase C：action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
+        # action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
         o = Order(
             order_id=self._next_order_id(),
             signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,

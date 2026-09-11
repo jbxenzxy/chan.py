@@ -1,0 +1,65 @@
+<svg viewBox="0 0 680 500" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif">
+  <rect x="0" y="0" width="680" height="500" fill="#ffffff"/>
+
+  <text x="24" y="30" font-size="17" font-weight="700" fill="#1f2937">SimNow 全绿 ≠ 实盘能跑 —— CTP 交互面的证明力边界（D12）</text>
+  <text x="24" y="50" font-size="12.5" fill="#64748b">凡与 CTP 交互或依赖 CTP 返回的逻辑，必须同时确认仿真与中金所实盘柜台</text>
+
+  <!-- 左栏：SimNow 能证明 -->
+  <rect x="24" y="66" width="306" height="228" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5"/>
+  <text x="40" y="90" font-size="14" font-weight="700" fill="#15803d">SimNow 能证明（两边一致）</text>
+  <g font-size="12.5" fill="#374151">
+    <text x="42" y="116">√ 连接 / 登录 / 退避重连流程</text>
+    <text x="42" y="144">√ trade_records 成交判定（P6）</text>
+    <text x="42" y="172">√ 持仓 pos_long_today / his 字段</text>
+    <text x="42" y="200">√ 状态机与净敞口逻辑（纯本地）</text>
+    <text x="42" y="228">√ FOK 指令被接受（中金所支持）</text>
+    <text x="42" y="256">√ 超价限价与 tick 取整计算</text>
+  </g>
+  <text x="42" y="282" font-size="11.5" fill="#15803d">这些在两环境同语义，可放心依赖</text>
+
+  <!-- 右栏：SimNow 证明不了 -->
+  <rect x="350" y="66" width="306" height="228" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+  <text x="366" y="90" font-size="14" font-weight="700" fill="#b91c1c">SimNow 证明不了（实盘独有关卡）</text>
+  <g font-size="12.5" fill="#374151">
+    <text x="368" y="116">× 盘口深度不足 → FOK 全撤</text>
+    <text x="368" y="144">× 部分成交</text>
+    <text x="368" y="172">× 昨仓日切（7x24 环境不结算）</text>
+    <text x="368" y="200">× 报撤单监管计数（FOK 计入）</text>
+    <text x="368" y="228">× 结算单确认（每日一次）</text>
+    <text x="368" y="256">× 程序化交易报备 / 报撤单收费</text>
+  </g>
+  <text x="368" y="282" font-size="11.5" fill="#b91c1c">SimNow 全绿对它们零证据力</text>
+
+  <!-- 分界 -->
+  <line x1="338" y1="76" x2="338" y2="286" stroke="#cbd5e1" stroke-width="1.5" stroke-dasharray="5 4"/>
+
+  <!-- 底部三盲区 -->
+  <text x="24" y="326" font-size="14" font-weight="700" fill="#c2410c">三个「SimNow 永远测不到」的盲区</text>
+
+  <rect x="24" y="340" width="205" height="140" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="38" y="364" font-size="13" font-weight="700" fill="#c2410c">① 不撮合</text>
+  <text x="38" y="386" font-size="11.5" fill="#44403c">SimNow 价格合适即</text>
+  <text x="38" y="403" font-size="11.5" fill="#44403c">全部成交，不会全撤、</text>
+  <text x="38" y="420" font-size="11.5" fill="#44403c">不会部分成交。</text>
+  <text x="38" y="443" font-size="11.5" fill="#44403c">追价 20 轮 / 全撤分支</text>
+  <text x="38" y="460" font-size="11.5" fill="#44403c">从未被真正执行。</text>
+  <text x="38" y="476" font-size="11.5" font-weight="700" fill="#c2410c">→ FakeApi 契约测试 p37</text>
+
+  <rect x="237" y="340" width="205" height="140" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="251" y="364" font-size="13" font-weight="700" fill="#c2410c">② 7x24 不结算</text>
+  <text x="251" y="386" font-size="11.5" fill="#44403c">官方明示不提供结算，</text>
+  <text x="251" y="403" font-size="11.5" fill="#44403c">钱 / 仓与上一交易日</text>
+  <text x="251" y="420" font-size="11.5" fill="#44403c">一致 → 昨仓恒定。</text>
+  <text x="251" y="443" font-size="11.5" fill="#44403c">跨日 CLOSE（转移 5/7）</text>
+  <text x="251" y="460" font-size="11.5" fill="#44403c">在这里测不出来。</text>
+  <text x="251" y="476" font-size="11.5" font-weight="700" fill="#c2410c">→ 改用第一套环境验证</text>
+
+  <rect x="450" y="340" width="206" height="140" rx="8" fill="#fff7ed" stroke="#fdba74" stroke-width="1.5"/>
+  <text x="464" y="364" font-size="13" font-weight="700" fill="#c2410c">③ 监管计数</text>
+  <text x="464" y="386" font-size="11.5" fill="#44403c">中金所：FOK / FAK 撤单</text>
+  <text x="464" y="403" font-size="11.5" fill="#44403c">计入频繁报撤单统计，</text>
+  <text x="464" y="420" font-size="11.5" fill="#44403c">普通限价单反而不计入。</text>
+  <text x="464" y="443" font-size="11.5" fill="#44403c">四类报单全是 FOK，</text>
+  <text x="464" y="460" font-size="11.5" fill="#44403c">白追满 20 轮最贵。</text>
+  <text x="464" y="476" font-size="11.5" font-weight="700" fill="#c2410c">→ D10 拒单分类器</text>
+</svg>

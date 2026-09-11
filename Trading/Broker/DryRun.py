@@ -12,15 +12,15 @@ dry-run 撮合
     - 不做成交量/排队假设：一律视为立即全部成交
     （真实 CTP 会有部分成交与排队，M3 接实盘时这里要换成真实回执）
 
-Phase C（2026-09-05）
----------------------
-submit() 接受 OrderIntent，按 intent 决定报文与撮合语义：
-  - OPEN     同旧 "open"
-  - UNLOCK   "unlock" = 平昨 → 与 CLOSE 同路径；偏移方向=平旧仓方向，cost 计算用平昨费率
-  - CLOSE    同旧 "close"
-  - LOCK     "lock"   = 开反向同手数 → side 已由引擎填为 pos.side 的反向，
-            撮合方向按"开仓"算（往不利方向让 slippage_ticks tick）
-记录 offset_meta 字段（OPEN/CLOSEYESTERDAY/CLOSE）供日志审计。
+撮合语义（2026-09-11 重构）
+---------------------------
+按 intent 决定让价方向：
+  - OPEN   开仓：往不利方向让 slippage_ticks 个 tick，再按 align_entry 对齐
+  - CLOSE  平仓：往不利方向让 slippage_ticks 个 tick，再按 align_exit 对齐
+`is_exit`（是否离场）对 dry-run 无影响 —— 本 broker 一律立即全部成交，
+不存在追价。保留该参数只为与 Broker 接口签名一致。
+
+meta 里记录 intent / offset 供日志审计。
 """
 from __future__ import annotations
 
@@ -44,18 +44,16 @@ class DryRunBroker(Broker):
 
     def submit(self, intent, side: Side, volume: int, ref_price: float,
                signal_key: str = "", note: str = "",
-               entry_date: str = "") -> Order:
+               entry_date: str = "", is_exit: bool = False) -> Order:
         intent = self._resolve_intent(intent, side)
         spec = self.spec
         sign = side.sign
 
-        # LOCK 是"开反向同手数"——和 OPEN 一样按开仓语义撮合（往不利方向让滑点）
-        is_open_like = intent in (OrderIntent.OPEN, OrderIntent.LOCK)
+        is_open_like = intent is OrderIntent.OPEN
         slip = spec.slippage_ticks * spec.price_tick
         if is_open_like:
             slipped = ref_price + sign * slip
         else:
-            # CLOSE / UNLOCK：平仓语义，往不利方向让价
             slipped = ref_price - sign * slip
         aligned = spec.align_entry(slipped, sign) if is_open_like \
             else spec.align_exit(slipped, sign)
@@ -72,8 +70,8 @@ class DryRunBroker(Broker):
             meta={
                 "dry_run": True,
                 "slippage_ticks": spec.slippage_ticks,
-                "intent": intent.value,            # Phase C：记账 intent
-                "offset": offset_str,              # Phase C：记账 CTP 报文类型
+                "intent": intent.value,            # 记账：开 / 平
+                "offset": offset_str,              # 记账：CTP 报文类型
                 "offset_close_yesterday_first": bool(
                     spec.close_today_first),       # 成本计算时按此选平今/平昨费率
                 "entry_date": entry_date,          # 2026-09-10：被平持仓建仓日（今/昨仓审计用）
@@ -86,8 +84,8 @@ class DryRunBroker(Broker):
         return {"broker": self.name, "orders": len(self.orders)}
 
     def trade_confirmed(self, intent, signal_key: str = "") -> bool:
-        """Phase F：dry_run 撮合是同步的，submit 返回 filled 即视为真实成交。
+        """dry_run 撮合是同步的，submit 返回 filled 即视为真实成交。
 
-        不需要二次复核。返回 True 让引擎 5 bars 后的 UNLOCK 卡单检测直接通过。
+        不需要二次复核。返回 True 让引擎的卡单复核直接通过。
         """
         return True

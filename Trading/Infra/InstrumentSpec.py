@@ -35,6 +35,11 @@ class InstrumentSpec(BaseModel):
     close_today_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
     close_fee_rate: float = 0.000023          # 平昨 0.0023%
     slippage_ticks: float = 1.0               # 单边滑点（tick 数）
+    # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
+    #   "FOK"  全成或全撤 —— 中金所支持，本系统默认依赖它（无部分成交幽灵）
+    #   "FAK"  部分成交后撤余量 —— **郑商所只支持 FAK**，二期上 CZCE 必须切这个
+    #   二期按交易所切换时改这一个字段即可，不要把值写死在 Broker/ 里。
+    order_advanced: str = "FOK"
     overprice_points: float = 0.6             # 超价点数（已废弃，仅为向后兼容保留；
                                               #   实际超价统一用 broker_params.overprice_points）
     close_today_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**

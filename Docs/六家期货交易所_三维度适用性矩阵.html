@@ -1,0 +1,70 @@
+<svg viewBox="0 0 680 468" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>六家期货交易所三个维度的规则差异矩阵</title>
+<desc>对比中金所、上期所、能源中心、大商所、郑商所、广期所在平今指令、单向大边保证金、FOK 指令三个维度上的差异，以及对该自动下单状态机的影响。</desc>
+
+<text class="th" x="40" y="26" font-size="14" font-weight="500" fill="#2C2C2A">六家交易所 × 三个维度：状态机本身通用，差异全在状态机之外</text>
+
+<text class="ts" x="40" y="60" font-size="12" fill="#5F5E5A">交易所</text>
+<text class="ts" x="196" y="60" font-size="12" fill="#5F5E5A">平今指令</text>
+<text class="ts" x="330" y="60" font-size="12" fill="#5F5E5A">单向大边保证金</text>
+<text class="ts" x="502" y="60" font-size="12" fill="#5F5E5A">限价 FOK</text>
+<line x1="40" y1="68" x2="640" y2="68" stroke="#D3D1C7" stroke-width="0.5"/>
+
+<g font-size="13" fill="#2C2C2A">
+<text x="40" y="94" dominant-baseline="central">中金所 CFFEX</text>
+<text x="40" y="132" dominant-baseline="central">上期所 SHFE</text>
+<text x="40" y="170" dominant-baseline="central">能源中心 INE</text>
+<text x="40" y="208" dominant-baseline="central">大商所 DCE</text>
+<text x="40" y="246" dominant-baseline="central">郑商所 CZCE</text>
+<text x="40" y="284" dominant-baseline="central">广期所 GFEX</text>
+</g>
+
+<rect x="186" y="80" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="245" y="94" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">无 · 统一 CLOSE</text>
+<rect x="186" y="118" width="118" height="28" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="245" y="132" font-size="12" fill="#854F0B" text-anchor="middle" dominant-baseline="central">有 · 必须区分</text>
+<rect x="186" y="156" width="118" height="28" rx="6" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+<text x="245" y="170" font-size="12" fill="#854F0B" text-anchor="middle" dominant-baseline="central">有 · 必须区分</text>
+<rect x="186" y="194" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="245" y="208" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">无 · 统一 CLOSE</text>
+<rect x="186" y="232" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="245" y="246" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">无 · 统一 CLOSE</text>
+<rect x="186" y="270" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="245" y="284" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">无 · 统一 CLOSE</text>
+
+<rect x="320" y="80" width="150" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="395" y="94" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">盘中实时 · 只收大边</text>
+<rect x="320" y="118" width="150" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="395" y="132" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">盘中实时 · 只收大边</text>
+<rect x="320" y="156" width="150" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="395" y="170" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">盘中实时 · 只收大边</text>
+<rect x="320" y="194" width="150" height="28" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="395" y="208" font-size="12" fill="#A32D2D" text-anchor="middle" dominant-baseline="central">盘中双边 · 盘后才退</text>
+<rect x="320" y="232" width="150" height="28" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="395" y="246" font-size="12" fill="#A32D2D" text-anchor="middle" dominant-baseline="central">盘中双边 · 规则未确认</text>
+<rect x="320" y="270" width="150" height="28" rx="6" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text x="395" y="284" font-size="12" fill="#5F5E5A" text-anchor="middle" dominant-baseline="central">未核实</text>
+
+<rect x="486" y="80" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="545" y="94" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">支持</text>
+<rect x="486" y="118" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="545" y="132" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">支持（限价）</text>
+<rect x="486" y="156" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="545" y="170" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">支持（限价）</text>
+<rect x="486" y="194" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="545" y="208" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">支持</text>
+<rect x="486" y="232" width="118" height="28" rx="6" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="545" y="246" font-size="12" fill="#A32D2D" text-anchor="middle" dominant-baseline="central">仅 FAK · 无 FOK</text>
+<rect x="486" y="270" width="118" height="28" rx="6" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+<text x="545" y="284" font-size="12" fill="#0F6E56" text-anchor="middle" dominant-baseline="central">支持</text>
+
+<line x1="40" y1="308" x2="640" y2="308" stroke="#D3D1C7" stroke-width="0.5"/>
+
+<rect x="40" y="326" width="600" height="56" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+<text x="60" y="346" font-size="13" font-weight="500" fill="#26215C" dominant-baseline="central">状态机不问交易所：只依赖净敞口与建仓交易日，两个量都交易所无关</text>
+<text x="60" y="366" font-size="12" fill="#534AB7" dominant-baseline="central">「今日单永不 CLOSE」→ 系统永远不需要平今指令 → 天然绕开六家最大的差异</text>
+
+<rect x="40" y="394" width="600" height="56" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+<text x="60" y="414" font-size="13" font-weight="500" fill="#501313" dominant-baseline="central">但要真正跑全品种，状态机之外还有 6 个适配点</text>
+<text x="60" y="434" font-size="12" fill="#A32D2D" dominant-baseline="central">郑商所无 FOK · 大商所盘中被占双倍保证金 · 平今经济性因品种而异 · 交割月 · 涨跌停 · 非交易时段</text>
+</svg>

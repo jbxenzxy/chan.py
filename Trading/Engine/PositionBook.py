@@ -1,34 +1,28 @@
-# -*- coding: utf-8 -*-
 """
 持仓簿（PositionBook）
 ======================
-设计动机
---------
-v1 只支持"一个实例一手"，全部代码假定 `engine.position` 是单个 `Position` 或 None。
-v2 引入"同 K 线连开 N 单 (N≥1)"与"昨日锁仓解锁入场（来源标记 unlock_upgrade）"两条路径后，
-引擎需要同时跟踪多个 Position（同方向拆批 / 跨日双边锁仓），单变量已不够用。
+职责
+----
+持有一个合约下的若干笔 `Position`，并提供**三态判定与对冲选仓**所需的查询。
+它是"容器 + 查询"，不含任何下单 / 判定逻辑 —— 决策一律在 Engine。
 
-E1 的目标（已交付）
-  ① 引入 `PositionBook` 容器（薄封装 List[Position]，配 max=1 的强约束）
-  ② 通过 `engine.position` 的 property 兼容层，**让所有现有调用点不需改一行**
-  ③ 序列化同时写新键 "positions" 与旧键 "position"，老数据库零侵入迁移
-  ④ 零行为变化 —— P5..P11 必须仍然全绿
+核心约定（需求附录，2026-09-11 重构确立）
+------------------------------------------
+1. **仓单之间没有配对关系。** 簿只是一个按建仓时间先后（FIFO）排列的序列。
+   平仓时与"序列中反向最早的一笔"对冲（见 `oldest_opposite`），
+   不需要、也不存在"这两笔是一对"的记录。
 
-E2 已交付
-  进场点：`on_signal` 入口检查 `book.has_opposite(side)` 决定走 OPEN 还是 UNLOCK。
+2. **三态只看净敞口。** 空仓 / 锁仓 / 运行的区别完全由 `net_volume()` 决定，
+   与"这笔仓是怎么来的"无关（历史上曾按来源标记判定，已废弃）。
 
-E3 计划（本次 E3.1 子步：cfg 化容器容量）
-  E3.1（本次）：`cfg.risk.max_open_positions` 配置化 + `book.set_max(N)` 动态调整 +
-                PositionBook 真支持多仓（add 不再 throw，只要总数 ≤ max）；legacy_single
-                在多仓时**仍抛守护错**（真正的多仓 API 由 E3.3 接入）
-  E3.2：（分仓拆分方案已废弃——固定手数精简后 `_open_position` 单笔挂 N 手即可）
-  E3.3：settle_position / _close_position 改 for-each + FIFO 出场 + _reconcile_position 多仓
+3. **不设笔数上限。** 容量不是本层的职责，资金才是唯一闸门
+   （钱不够自然开不成功，由柜台拒单兜底）。历史上曾有 `max_open_positions`
+   笔数上限，2026-09-11 按 D2 删除 —— 它会把正常的连续开仓静默挡掉。
 
-设计纪律
-  · max_open_positions 默认 = 1 → 所有现存测试（P5..P13）零行为变化
-  · 测试显式构造 `cfg = TradingConfig(risk=RiskConfig(max_open_positions=N))` 才能进入多仓路径
-  · legacy_single 在多仓抛错是有意的早期守护：E3.3 之前不允许"单仓 API 操作多仓"
-  · add 抛错改为按 cfg max 限制（max=1 仍等同 E1）；add 多仓时仍按 FIFO 顺序追加
+序列化形态
+----------
+`to_dict` -> list[dict]；`from_dict` 同时接受新版 list（"positions" 键）
+与旧版 dict（"position" 键，v1 单字段格式）。
 """
 from __future__ import annotations
 
@@ -44,29 +38,20 @@ class PositionBookError(Exception):
 class PositionBook:
     """持仓簿 —— 持有若干 Position 的最简容器。
 
-    关键不变量
-      `len(self._positions) <= max_positions`
-
     关键约定
-      * 容器按"添加顺序"持有 —— 决定离场优先级 / 结算顺序（FIFO）。
-      * 内部 List 不直接暴露给外部，避免被偷偷 mutate；统一通过 `positions` property 拷贝访问。
-      * `legacy_single()` 是 E1/E2 阶段的主入口（v1 单仓语义）：
-          · 空 → None
-          · 1 个 → 那个 Position
-          · 多仓（max>1 时可能发生）→ 抛 PositionBookError
-        E3.3 之前不允许用单仓 API 操作多仓 —— 引擎 settle/close 必须显式 for-each
-        `engine.positions.positions`，否则视为状态不自洽。
+      * 容器按"添加顺序"持有 —— 这个顺序就是 FIFO 出场顺序，
+        也是"哪一笔是最近建的"的依据（见 `latest` / `oldest_opposite`）。
+      * 内部 List 不直接暴露给外部，避免被偷偷 mutate；
+        统一通过 `positions` property 拷贝访问。
+      * `legacy_single()` 仅在**确知簿内至多一笔**的场景使用（如恢复后的兼容路径）：
+        空 → None，1 个 → 该 Position，多笔 → 抛 PositionBookError。
+        引擎的批量路径一律显式 for-each `engine.positions.positions`。
     """
-    # Step 2.2（2026-09-08）语义收窄：本常量**仅作测试直接构造 PositionBook() 的兜底**。
-    #   生产路径必须经 cfg.risk.max_open_positions 显式传入——Engine 构造（max_positions=
-    #   cfg.risk.max_open_positions）与 from_dict 恢复（max_positions=restore_max）均已如此。
-    #   不要在这里新增第二个"生产默认值"——它与 RiskConfig.max_open_positions 是双源，会漂移。
-    DEFAULT_MAX = 1   # E1 默认：单实例最多 1 仓；E3 由 cfg.risk.max_open_positions 覆盖
+    DEFAULT_MAX = None   # 默认不限容量（D2：笔数上限已删，资金是唯一闸门）
 
     def __init__(self, max_positions: Optional[int] = DEFAULT_MAX):
-        # v1.3（Q5 拍板）：max_positions=None 表示"不限容量"。
-        #   add 不校验、replace_with 不截断 —— 容量类缺陷（超限抛错 / 静默丢失持仓 /
-        #   恢复截断）随"不限"一并消失。资金是唯一闸门（钱不够自然开不成功）。
+        # max_positions=None 表示"不限容量"：add 不校验、replace_with 不截断。
+        # 参数本身保留仅因为部分调用点仍显式传值；新代码直接 `PositionBook()`。
         if max_positions is None:
             self._max: Optional[int] = None
         else:
@@ -77,7 +62,7 @@ class PositionBook:
         self._positions: List[Position] = []
         self._truncated: List[Position] = []   # replace_with 截断时丢弃的仓，供调用方记录
 
-    # ─── 容量管理（E3.1 新增）───────────────────────
+    # ─── 容量管理 ───────────────────────────────────
     def set_max(self, n: Optional[int]) -> None:
         """动态调整容量上限（cfg 化场景：引擎重启 / 改 cfg 后调用）。
         只能"放大"或"等量"，**不能缩小到现存数以下**（不允许隐式丢弃持仓）。
@@ -99,11 +84,7 @@ class PositionBook:
 
     # ─── 容器 CRUD ─────────────────────────────────────
     def add(self, p: Position) -> None:
-        """添加一个 Position（FIFO 追加）。
-        超过 max 立即报错 —— 不允许隐式合并/覆盖。
-        E1: max=1 即触发；E3.1: max=N 时第 N+1 个报错。
-        v1.3: max=None（不限）时不校验。
-        """
+        """添加一个 Position（FIFO 追加）。超过 max 立即报错 —— 不允许隐式合并/覆盖。"""
         if self._max is not None and len(self._positions) >= self._max:
             raise PositionBookError(
                 "PositionBook full (max={}, present={})".format(
@@ -124,19 +105,14 @@ class PositionBook:
         """引擎内部用：把整个簿替换成另一簿。
         仅用于 _restore 从持久化恢复的场景 —— 调用方要保证 other 内容合法。
 
-        兼容"持久化数据上限 > 当前 cfg 上限"的场景（典型：max 后续缩小，
-        或历史数据来自更宽容的版本）—— 此时截断到 self._max 并打 warning，
-        不抛错。这是 restore 路径的"宽松恢复"语义。
+        兼容"持久化数据笔数 > 当前 max"的场景 —— 此时截断到 self._max 并把
+        被丢弃的仓记入 `truncated_on_restore`，不抛错（restore 路径的宽松语义）。
         """
         if not isinstance(other, PositionBook):
             raise PositionBookError(
                 "replace_with requires PositionBook, got {}".format(type(other).__name__))
         n_other = len(other._positions)
         if self._max is not None and n_other > self._max:
-            # E3.1 兼容：cfg.max 后续缩小时，已持久化的多仓不应让引擎启动失败。
-            # 取前 max 个 FIFO 截断（与离场优先级一致），并返回被丢弃的 Positions
-            # 让调用方可以写 warning。
-            # v1.3：max=None（不限）时不截断，永不丢失持仓。
             self._positions = list(other._positions[:self._max])
             self._truncated = other._positions[self._max:]
         else:
@@ -174,36 +150,21 @@ class PositionBook:
 
     # ─── 兼容层：单仓 API（v1 主路径）─────────────────
     def legacy_single(self) -> Optional[Position]:
-        """E1/E2 阶段主入口。语义 = 旧版 `engine.position`：
-            · 空 → None
-            · 1 个 → 那个 Position
-            · 多仓（max>1 时可能发生）→ 抛 PositionBookError
-              —— E3.3 之前不允许用单仓 API 操作多仓。
-              调用方应当循环 .positions 显式处理。
-        """
+        """语义 = 旧版 `engine.position`：空 → None，1 笔 → 该 Position，
+        多笔 → 抛 PositionBookError（调用方应循环 `.positions` 显式处理）。"""
         if not self._positions:
             return None
         if len(self._positions) > 1:
-            # E3.1 仍守护：引擎主路径未 for-each 之前，多仓视为状态不自洽。
-            # 真正多仓接入是 E3.3（settle/close loop + FIFO）。
             raise PositionBookError(
                 "PositionBook holds {} positions; legacy_single() requires 0 or 1. "
-                "E3.3 will iterate .positions instead.".format(len(self._positions)))
+                "Iterate .positions instead.".format(len(self._positions)))
         return self._positions[0]
 
     def set_legacy(self, p: Optional[Position]) -> None:
-        """兼容层 setter：把整簿 reset 成只有 p 一个（或清空）。
+        """兼容层 setter：把整簿 reset 成只有 p 一笔（或清空）。
 
-        语义 —— 不论 max 是多少，set_legacy 都做"整簿替换"：
-          · max=1：完全替换（v1 语义，旧引擎 `self.position = new_pos`）
-          · max>1：整簿替换为单笔 p —— 其他仓被丢弃 ⚠️
-
-        多仓下丢失持仓风险：引擎主路径应避免在多仓状态下调用 set_legacy。
-        推荐：多仓场景下用 `book.clear()` + `book.add(p)`，或者 `book.remove(p)` 增量操作。
-        legacy_single() 多仓抛错仍是守护 —— E3.3 之前不允许用单仓 API 操作多仓。
-
-        此保留 E1 行为不收紧的原因是：测试 P12 line 208-211 锁死了"多仓 set_legacy 替换整簿"
-        语义，引擎 _restore 路径也走 set_legacy（虽然 E3.1 已改为走 replace_with 内部方法）。
+        ⚠️ 多仓下会把其他仓**整簿丢弃**。引擎主路径应避免在多仓状态下调用它；
+        需要精确控制时用 `book.clear()` + `book.add(p)`，或 `book.remove(p)` 增量操作。
         """
         if p is None:
             self._positions.clear()
@@ -214,12 +175,9 @@ class PositionBook:
     def has_opposite(self, side: Side) -> bool:
         """是否存在与给定 side 相反方向的持仓。
 
-        用途：on_signal 里筛出"与信号反向"的候选持仓，供 Engine 进一步判定。
-
-        ⚠️ 本方法**只做方向筛选，不判日期** —— 是否走 UNLOCK 由调用方按
-        `entry_date < today` 决定（2026-09-10 规则 ⑸）。旧注释称本方法是
-        "UNLOCK_UPGRADE 入场路径的判定依据"已作废：存在反向仓只说明"可能是解锁"，
-        当日锁同样是反向仓，此时应开新仓而非解锁。
+        ⚠️ 本方法**只做方向筛选，不判日期**。锁仓态下同样存在反向仓，
+        此时该 OPEN 还是 CLOSE 取决于 `latest().entry_date` 是否等于今日
+        （规则 ⑹/⑺），与本方法无关。
         """
         for p in self._positions:
             if p.side is not side:
@@ -227,12 +185,47 @@ class PositionBook:
         return False
 
     def opposite_positions(self, side: Side) -> List[Position]:
-        """取出所有与给定 side 相反方向的 Position（E2 用）。"""
+        """取出所有与给定 side 相反方向的 Position（保持 FIFO 顺序）。"""
         return [p for p in self._positions if p.side is not side]
 
     def same_side_positions(self, side: Side) -> List[Position]:
-        """取出与给定 side 同方向的 Position（E3 N≥1 拆批后用于合并 / 批量离场）。"""
+        """取出与给定 side 同方向的 Position（保持 FIFO 顺序）。"""
         return [p for p in self._positions if p.side is side]
+
+    # ─── 三态判定 / 选仓（2026-09-11 重构新增）─────────────────────────
+    def net_volume(self) -> int:
+        """净敞口（手，带符号）：Σ(side.sign × volume)。>0 净多，<0 净空。
+
+        **三态判定的唯一来源**（需求 ⑴，架构约束 A1）：
+          net == 0 且簿空 → FLAT（空仓态）
+          net == 0 且簿非空 → LOCKED（锁仓态）
+          net != 0 → RUNNING（运行态）
+        除 `TradingEngine.account_state()` 外，任何地方都不得再写第二处三态判定。
+        """
+        return sum(p.side.sign * int(p.volume) for p in self._positions)
+
+    def oldest_opposite(self, side: Side) -> Optional[Position]:
+        """反向仓中最早建仓的一笔（`entry_bar_seq` 最小）—— CLOSE 的对冲目标。
+
+        为什么是"反向最早"：需求附录规定，平仓就是跟持仓序列中反向最早的仓单
+        对冲掉。簿内仓单**没有配对概念**，只有时间先后，所以选仓规则是纯 FIFO。
+        平掉最早的一笔不会改变"最近一笔"是谁 —— 故拆锁全程 `D_last` 无需重算。
+        """
+        cands = self.opposite_positions(side)
+        if not cands:
+            return None
+        return min(cands, key=lambda p: p.entry_bar_seq)
+
+    def latest(self) -> Optional[Position]:
+        """最近建仓的一笔（`entry_bar_seq` 最大）—— 规则 ⑷⑸⑹⑺ 的 D_last 取值点。
+
+        为什么只看最近一笔就够：运行态 / 锁仓态下，簿内仓单要么全是今仓、
+        要么全是跨日仓，**不可能混合**（附录 A.3 归纳证明）。故"最近一笔的
+        建仓交易日"等价于"任一笔的建仓交易日"，看一笔即可判定当日 / 跨日。
+        """
+        if not self._positions:
+            return None
+        return max(self._positions, key=lambda p: p.entry_bar_seq)
 
     # ─── 序列化 ───────────────────────────────────────
     def to_dict(self) -> List[Dict[str, Any]]:

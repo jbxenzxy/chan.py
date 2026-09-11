@@ -136,45 +136,35 @@ class DecisionType(Enum):
 #      可以自由调整 —— P10 的成员断言已与顺序解耦（见 test_p10_state_machine.py [1]）。
 # ─────────────────────────────────────────────
 class OrderIntent(str, Enum):
-    """订单意图 —— 唯一决定 CTP 报文 offset 的来源（映射见 Broker/Base.INTENT_TO_OFFSET）。"""
-    # 排列顺序按 INTENT_TO_OFFSET 分组：前两个 → offset=OPEN，后两个 → offset=CLOSE
-    OPEN = "open"        # 开仓（空仓新开 / 锁仓后补开）→ offset=OPEN
-    LOCK = "lock"        # 软离场：反向开同手数锁仓     → offset=OPEN（与 OPEN 同报文、异语义）
-    UNLOCK = "unlock"    # 解锁：平掉反向昨仓          → offset=CLOSE（平昨）
-    CLOSE = "close"      # 硬离场：平仓了结            → offset=CLOSE（平昨）
-                         #   规则 ⑸ 保证 CLOSE 只用于跨日单，故恒为平昨，无平今分支
+    """订单意图 —— 唯一决定 CTP 报文 offset 的来源（映射见 Broker/Base.INTENT_TO_OFFSET）。
 
+    只有两个值，一一对应需求 ⑵ 的两种操作：
+      OPEN   开仓：买信号 → 买开，卖信号 → 卖开   → offset=OPEN
+      CLOSE  平仓：买信号 → 买平，卖信号 → 卖平   → offset=CLOSE
 
-class PositionOrigin(str, Enum):
-    """持仓来源标记（**不参与任何交易决策**，仅作审计标签）。
+    「买还是卖」**不在本枚举里**：方向由调用方按信号方向给出 `side`，
+    broker 只负责把 (side, offset) 翻译成 CTP 报文。
 
-    唯一有决策语义的值是 SOFT_EXIT_LOCK，判定集中在 Engine 的三类场合：
-      · settle 跳过（锁仓持仓不等止盈止损，等解锁）
-      · 账户态判定（簿内存在非 SOFT_EXIT_LOCK 持仓 = 运行态 → 忽略信号）
-        —— **唯一实现点 `TradingEngine.account_state()`**（P1 SSOT，2026-09-10 收口；
-           `_restore` / `on_signal` / `_close_positions` / `_unlock_position` 四处
-           调用它，不再各自内联 all/any 判定式）
-      · _exit_intent 防御分支 / 事件统计
-    SIGNAL_OPEN 与 UNLOCK_UPGRADE 只写事件日志与 state.db，代码中不存在对它们的
-    判定性比较（新增 `origin is UNLOCK_UPGRADE` 之类的分支会破坏契约，
-    由 Trading/Test/test_p25_origin_decoupled.py 的源码扫描拦截）。
+    为什么没有"锁仓 / 解锁"这两个意图
+      历史上这里有过 LOCK / UNLOCK 两个成员，但它们与 OPEN / CLOSE 在
+      **CTP 报文层面完全等价**（LOCK 就是反向 OPEN，UNLOCK 就是 CLOSE），
+      只是引擎内部的记账标签。围着标签长出来的"出身判定 / 配对 / 升级"
+      是复杂度的主要来源，2026-09-11 按需求方口径整体删除。
+      现在"这笔仓是开出来的还是锁出来的"**不是一个需要记录的属性** ——
+      账户长什么样只取决于净敞口（见 `AccountState`）。
 
-    ⚠️ 离场方式**不**由本枚举决定，而是由 `Engine._exit_intent(pos, today)` 按
-       `Position.entry_date` 判定：当日单 → LOCK（反向开仓锁仓），
-       跨日单 → CLOSE（平昨）。同一笔仓当日平与隔日平的离场方式不同，
-       别再假设"来源决定离场方式"。
+    不变量（规则 ⑹/⑺ 的推论，硬断言在 `Engine._pre_trade_check`）
+      CLOSE 的目标恒定是**跨日仓** → 中金所下恒为平昨，**不存在平今分支**。
+      这条不变量是全品种安全性的基础：它让本系统永远不需要 CLOSETODAY 指令，
+      从而天然绕开六家交易所平今/平昨的指令差异（仅上期所/能源中心有该指令，
+      其余四家传平今会直接报错）。**不要为"平今"开任何口子。**
     """
-    SIGNAL_OPEN = "signal_open"        # 空仓状态下，由买卖点信号开新仓入场
-    SOFT_EXIT_LOCK = "soft_exit_lock"  # 软离场锁仓成交后，落簿的反向仓
-                                       #   唯一合法离场 = 对向信号触发 UNLOCK（平昨，次日语义）
-                                       #   ⚠️ 自动下单关闭态下 on_signal 顶部 return，
-                                       #      该出口不存在 → 锁对只能人工平（"冻结"语义，
-                                       #      用户 2026-09-10 拍板，见 P30 契约测试）
-    UNLOCK_UPGRADE = "unlock_upgrade"  # 锁仓解锁时，配对同向持仓升级而来（entry_date 保持原开仓日）
+    OPEN = "open"     # 开仓 → offset=OPEN
+    CLOSE = "close"   # 平仓 → offset=CLOSE（中金所下恒为平昨）
 
 
 class AccountState(str, Enum):
-    """账户三态（用户口径 ⑴）—— 由持仓簿**派生**的只读状态，不是独立状态机。
+    """账户三态（需求 ⑴）—— 由持仓簿**派生**的只读状态，不是独立状态机。
 
     与 `EngineState` 的关系：`EngineState` 是引擎的 4 值**过程**状态机
     （IDLE / OPENING / IN_TRADE / EXITING，含两个下单瞬态）；本枚举是账户的
@@ -182,24 +172,21 @@ class AccountState(str, Enum):
       · OPENING / EXITING 是瞬态，期间账户态不变
       · EngineState 的 IDLE 同时覆盖本枚举的 FLAT 与 LOCKED（引擎在两者都"等信号"）
 
-    三态定义（用户 ⑴ 字面口径）：
-      FLAT     空仓：簿内无任何仓单，净敞口 = 0，盈亏恒 0。
-      LOCKED   锁仓：簿内**全部**为 SOFT_EXIT_LOCK（多空互锁，净敞口 = 0，盈亏锁定）。
-      RUNNING  运行：簿内存在非 SOFT_EXIT_LOCK 持仓（真实净敞口 ≠ 0，盈亏随行情实时变动）。
+    三态定义（需求 ⑴ 字面口径，**按净敞口判定，与"这笔仓什么出身"无关**）：
+      FLAT     空仓态：簿内无任何仓单，净敞口 = 0，盈亏恒 0。
+      LOCKED   锁仓态：有仓单但净敞口 = 0（多空互锁），盈亏锁定。
+      RUNNING  运行态：净敞口 ≠ 0，盈亏随行情实时变动。
 
-    判定 SSOT 在 `TradingEngine.account_state()`；除该实现外**不得**再写第二处
-    `all/any(p.origin is ... SOFT_EXIT_LOCK ...)` 的账户态判定。
+    判定式（唯一实现点 `TradingEngine.account_state()`，`PositionBook.net_volume()`）：
+      net = 0 且簿空 → FLAT；net = 0 且簿非空 → LOCKED；net ≠ 0 → RUNNING。
+
+    ⚠️ 除 `account_state()` 外**不得**再写第二处 `if net == 0` 之外的三态判定
+    （架构约束 A1）。历史上这里曾按"簿内是否存在特定出身的仓"判定，
+    那是本次重构要消除的耦合。
     """
-    FLAT = "flat"        # 空仓状态
-    LOCKED = "locked"    # 锁仓状态
-    RUNNING = "running"  # 运行状态
-
-
-class ExitMode(str, Enum):
-    """离场方式，由 `Engine._exit_intent` 按**建仓日期**决定（规则 ⑸ 硬规则，不留配置开关）。"""
-    # 排列顺序对齐规则 ⑸ 的判定顺序：当日单 → 软离场，跨日单 → 硬离场
-    SOFT_EXIT = "soft_exit"            # 软离场（锁仓：开反向同手数，正反互锁等效离场，PnL 不兑现）
-    HARD_EXIT = "hard_exit"            # 硬离场（平仓：真正了结，PnL 兑现）
+    FLAT = "flat"        # 空仓态
+    LOCKED = "locked"    # 锁仓态
+    RUNNING = "running"  # 运行态
 
 
 class EngineState(str, Enum):
@@ -323,8 +310,8 @@ class Order:
     signal_key: str
     symbol: str
     side: Side
-    action: str                 # 下单动作 = OrderIntent.value ∈ open|unlock|close|lock
-                                #   （DryRun 只发 open/close；SimNow 四值都可能）
+    action: str                 # 下单动作 = OrderIntent.value ∈ open|close
+                                #   方向由 side 给出，两者合起来唯一确定 CTP 报文
     volume: int
     price: float                # 委托价（已对齐 price_tick）
     req_price: float = 0.0      # 策略原始价（未对齐）
@@ -366,8 +353,18 @@ class ExitPlan:
 
 @dataclass
 class Position:
-    """单笔持仓（一笔报单的产物）。簿内可同时存在多笔：同 K 线连开 N 笔、
-    以及锁仓留下的双向持仓（原仓 + 反向仓，共享 lock_pair_id）。"""
+    """单笔持仓（一笔报单的产物，一笔挂 N 手，N ≥ 1）。
+
+    簿内可同时存在多笔：同一交易日连开数笔，以及锁仓留下的双向持仓。
+    **仓单之间没有配对关系** —— 簿只是一个按时间先后（FIFO）排列的序列。
+    平仓时与"序列中反向最早的一笔"对冲（由 `PositionBook.oldest_opposite` 选出），
+    不需要、也不应该记录"这两笔是一对"。
+
+    记录单位是**笔**（每笔 N 手），不是手：交易所/CTP 只按手聚合
+    （合约+方向+昨今，无"笔"概念，平仓只减手数），但"平反向最早那一撮"
+    的 FIFO 顺序柜台不替我们记，所以本地必须多留这一层。
+    前提：N 恒定（当前 2），否则一次 CLOSE 会跨笔 —— 由 `Engine._pre_trade_check` 断言。
+    """
     symbol: str
     side: Side
     volume: int
@@ -378,17 +375,12 @@ class Position:
     open_order_id: str
     exit_plan: ExitPlan
     entry_bar_seq: int = 0        # 入场时的 bar 序号（计算持有根数、跳过入场K线）
-    # 来源标记，**不参与任何交易决策**（语义与唯一例外见 PositionOrigin docstring）。
-    origin: PositionOrigin = PositionOrigin.SIGNAL_OPEN
     # 建仓所属【交易日】（YYYY-MM-DD），由 trading_day_of_ms() 派生（含夜盘归属次日）。
     #   规则 ⑸ 判定"当日/跨日"的唯一依据 → 决定离场走 LOCK（今仓锁仓）还是 CLOSE（昨仓平仓）。
     #   F4（2026-09-10）：本字段**不得为空**。它是派生字段，缺失时由 __post_init__
     #   依次从 entry_bar_ts → entry_at 精确重建；三者全空则保持空串，由调用方
     #   fail-fast（建仓期拒绝建仓 / 恢复期拒绝启动），**绝不由下游把空串解释成"昨仓"**。
     entry_date: str = ""
-    # 锁仓配对 ID：1 个锁仓 = 原仓 + 反向仓，两笔共享同一 ID。
-    #   解锁时据此找到"同锁的另一笔"升级为 UNLOCK_UPGRADE。空串 = 未配对。
-    lock_pair_id: str = ""
 
     def __post_init__(self) -> None:
         """不变量：entry_date 必须能解析出，不得靠"默认空串 + 下游解释"存在。
@@ -428,19 +420,11 @@ class Position:
             "signal_key": self.signal_key,
             "open_order_id": self.open_order_id,
             "exit_plan": self.exit_plan.to_dict(),
-            "origin": self.origin.value,
             "entry_date": self.entry_date,
-            "lock_pair_id": self.lock_pair_id,
         }
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Position":
-        # 缺字段 / 坏值 → SIGNAL_OPEN：不抛异常，避免一条脏记录阻断整簿恢复
-        raw = d.get("origin", PositionOrigin.SIGNAL_OPEN.value)
-        try:
-            origin = PositionOrigin(raw) if isinstance(raw, str) else PositionOrigin.SIGNAL_OPEN
-        except ValueError:
-            origin = PositionOrigin.SIGNAL_OPEN
         return cls(symbol=d["symbol"], side=Side[d["side"]], volume=int(d["volume"]),
                    entry_price=float(d["entry_price"]), entry_at=d.get("entry_at", ""),
                    entry_bar_ts=int(d.get("entry_bar_ts") or 0),
@@ -448,9 +432,7 @@ class Position:
                    signal_key=d.get("signal_key", ""),
                    open_order_id=d.get("open_order_id", ""),
                    exit_plan=ExitPlan.from_dict(d.get("exit_plan") or {}),
-                   origin=origin,
-                   entry_date=d.get("entry_date", ""),
-                   lock_pair_id=d.get("lock_pair_id", ""))
+                   entry_date=d.get("entry_date", ""))
 
 
 @dataclass
