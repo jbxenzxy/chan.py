@@ -225,7 +225,9 @@ class PositionBook:
         """
         if not self._positions:
             return None
-        return max(self._positions, key=lambda p: p.entry_bar_seq)
+        best = max(p.entry_bar_seq for p in self._positions)
+        # 同一序号（同一根 K 线内多笔）时取**最后追加**的一笔 —— 它才是时间上最新的
+        return [p for p in self._positions if p.entry_bar_seq == best][-1]
 
     # ─── 序列化 ───────────────────────────────────────
     def to_dict(self) -> List[Dict[str, Any]]:

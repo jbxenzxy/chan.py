@@ -228,9 +228,10 @@ class Store:
             不清它 = 上一轮持仓会随 restore 回来；day_stats / bars_seen 为历史键，
             一并清掉防旧库残留。）
 
-        2026-09-10（R1 配套）：一并清掉 `trade_seq` / `lock_pair_seq` ——
-        这两者对应的数据（trades / positions）刚刚被清空，序号理应回到 1，
-        让重跑的 trade_id / lock_pair_id **逐轮一致**（回放可比对性）。
+        2026-09-10（R1 配套）：一并清掉 `trade_seq` ——
+        它对应的数据（trades / positions）刚刚被清空，序号理应回到 1，
+        让重跑的 trade_id **逐轮一致**（回放可比对性）。
+        2026-09-11：`run` 也一并清 —— 它是运行态的风控锚，随持仓一起归零。
         **刻意不清 `order_seq`**：orders 表保留作审计底稿，序号必须只增不减，
         否则重跑会与保留下来的历史委托号相撞（R2 之后会直接抛 IdCollisionError）。
 
@@ -251,7 +252,7 @@ class Store:
             # 用 `positions` 键与 `--fresh` 的语义对齐：清派生状态 = 等价于删库重启
             # （区别仅在 orders 表作为审计底稿保留，故 order_seq 仍刻意不清）。
             for k in ("position", "positions", "day_stats", "bars_seen",
-                      "trade_seq", "lock_pair_seq"):
+                      "trade_seq", "run"):
                 self.conn.execute("DELETE FROM kv WHERE k=?", (k,))
         return counts
 

@@ -6,9 +6,9 @@
 
     _reconcile_position / _reconcile_positions / _reconcile_side
         持仓对账（增强 B）：账本 vs 真实持仓逐边比对，发现漂移时落事件并修正。
-    _check_unlock_stuck
-        Phase F1：UNLOCK 卡单监控。on_bar 每根 K 线调用一次，
-        超窗口期未确认成交则按 broker 回报重建/清理 _unlock_in_flight。
+    _check_close_stuck
+        CLOSE 卡单监控。on_bar 每根 K 线调用一次，
+        超窗口期未确认成交则按 broker 回报重建/清理 _close_in_flight。
 
 设计约束：本文件只依赖 Infra 数据结构与 self 注入的引擎上下文
 （positions/broker/store/ev/cfg 等），不反向 import 引擎主体，维持单向依赖。
@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..Infra.Types import Bar, EngineState, Order, OrderIntent, Position, Side, Trade, now_cn
+from ..Infra.Types import Bar, Order, OrderIntent, Position, Side, Trade, now_cn
+from .PositionBook import PositionBookError
 
 class ReconcileMixin:
     # ---------------- 持仓对账（增强 B） ----------------
@@ -35,7 +36,7 @@ class ReconcileMixin:
           · on_bar（默认）：用户在快期3等外部终端手工平仓 / 幽灵持仓 / 账户被改
           · restore（Phase F2 新增）：引擎启动 _restore 后立刻拉一次真实持仓，
             防止"本地 store 有持仓但真实账户已平"造成重启后第一根 bar 误判
-          · unlock_stuck（Phase F1 新增）：UNLOCK 卡单 5 bars 后复核走这里
+          · close_stuck：CLOSE 卡单 N bars 后复核走这里
 
         对账策略（每侧独立）：
           · real_vol < 0 或 None → skip（broker 不支持对账，如 dry_run）
@@ -106,7 +107,7 @@ class ReconcileMixin:
             # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
             self._last_close_failed_bar_seq = 0
             self._persist()
-            self._state = EngineState.IDLE
+            self._sync_state()
 
     def _reconcile_side(self, side: Side, side_positions: List[Position],
                         engine_vol: int, real_vol: int, source: str) -> bool:
@@ -221,32 +222,29 @@ class ReconcileMixin:
         return real_vol == 0
 
     # ════════════════════════════════════════════════════════════════
-    # Phase F1（2026-09-05）：UNLOCK 卡单监控
-    #   on_bar 入口每根 bar 调一次 _check_unlock_stuck(bar)
-    #   · _unlock_in_flight 为空 → skip（无卡单监控中）
-    #   · bars_elapsed < _unlock_stuck_bars → skip（窗口期内不打扰）
-    #   · 已达窗口 → 调 broker.trade_confirmed(UNLOCK, sig.key)：
+    # CLOSE 卡单监控（原 UNLOCK 卡单监控，2026-09-11 随 UNLOCK 概念改名）
+    #   on_bar 入口每根 bar 调一次 _check_close_stuck(bar)
+    #   · _close_in_flight 为空 → skip（无卡单监控中）
+    #   · bars_elapsed < _close_stuck_bars → skip（窗口期内不打扰）
+    #   · 已达窗口 → 调 broker.trade_confirmed(CLOSE, sig.key)：
     #       True  → 真成交（CTP 已收到回报）→ 清 in-flight
     #       False → 查 broker.real_position(target.side)：
-    #           · > 0  → UNLOCK 卡单确认 → 把 target 重建回 portfolio（真实账户仍在）
-    #             → state EXITING，让下一信号走 UNLOCK 重试
-    #           · == 0 → UNLOCK 卡单恢复（CTP 已平但 engine 端已删 target）→ 清 in-flight
+    #           · > 0  → 卡单确认 → 把 target 重建回簿（真实账户仍在）
+    #           · == 0 → 卡单恢复（CTP 已平但引擎端已删 target）→ 清 in-flight
     #           · None → broker 不支持对账 → 默认按"恢复"清 in-flight
     #
     #   设计要点：
-    #     · _unlock_position 报单前快照 target → _unlock_in_flight["target_snapshot"]
+    #     · 落账时快照 target → _close_in_flight["target_snapshot"]，
     #       卡单时用快照重建 Position（真实账户还在，引擎必须重新跟踪）
-    #     · 报单成功仍走 P13 旧路径（立即 remove + save_trade）—— 保持现有测试零变化
-    #     · 快照重建时**生成一条修正 trade**（reason='unlock_stuck_restored'），
-    #       避免后续 reconcile_external_partial 误把 target 视为外部平仓再平一次
-    #     · dry_run broker.trade_confirmed=True → 不触发 reconcile，行为零变化
+    #     · 先撤在途单再重建，防"重建后挂单又成交"的双重平仓
+    #     · dry_run 的 trade_confirmed=True → 不触发，行为零变化
     # ════════════════════════════════════════════════════════════════
-    def _check_unlock_stuck(self, bar: Bar) -> None:
-        if self._unlock_in_flight is None:
+    def _check_close_stuck(self, bar: Bar) -> None:
+        if self._close_in_flight is None:
             return
-        rec = self._unlock_in_flight
+        rec = self._close_in_flight
         bars_elapsed = self.bars_seen - rec["submit_bar_seq"]
-        if bars_elapsed < self._unlock_stuck_bars:
+        if bars_elapsed < self._close_stuck_bars:
             return  # 窗口期内：先信 submit 返回，不打扰
 
         # 窗口期已过：调 broker.trade_confirmed 复核
@@ -254,28 +252,28 @@ class ReconcileMixin:
         confirmed = True
         if callable(fn_tc):
             try:
-                confirmed = bool(fn_tc(OrderIntent.UNLOCK, rec["signal_key"]))
+                confirmed = bool(fn_tc(OrderIntent.CLOSE, rec["signal_key"]))
             except Exception:
                 # broker 查询异常 → 保守按未确认走 reconcile
                 confirmed = False
 
         if confirmed:
-            self.ev.write("unlock_confirmed",
+            self.ev.write("close_confirmed",
                           signal_key=rec["signal_key"],
                           target_signal_key=rec.get("target_signal_key", ""),
                           bars_elapsed=bars_elapsed)
-            self._unlock_in_flight = None
+            self._close_in_flight = None
             return
 
-        # 未确认：Phase G2 —— 先撤掉该 signal_key 的在途 UNLOCK 委托。
-        # 若不撤，重建 portfolio 后挂单仍可能成交 → 双重平仓。
+        # 未确认：先撤掉该 signal_key 的在途委托。
+        # 若不撤，重建持仓后挂单仍可能成交 → 双重平仓。
         # base/dry_run 的 cancel_pending 返回 0（无在途单），零行为影响。
         fn_cp = getattr(self.broker, "cancel_pending", None)
         if callable(fn_cp):
             try:
                 n_cancelled = int(fn_cp(rec["signal_key"]))
                 if n_cancelled > 0:
-                    self.ev.write("unlock_pending_cancelled",
+                    self.ev.write("close_pending_cancelled",
                                   signal_key=rec["signal_key"],
                                   target_signal_key=rec.get("target_signal_key", ""),
                                   cancelled=n_cancelled,
@@ -298,51 +296,46 @@ class ReconcileMixin:
                 real_vol = None
 
         if real_vol is not None and real_vol > 0:
-            # 卡单确认：真实账户仍有反向持仓 → 把 target 重建回 portfolio
+            # 卡单确认：真实账户仍有持仓 → 把 target 重建回簿
             snap = rec.get("target_snapshot")
             if snap is not None:
                 restored_pos = Position.from_dict(snap)
-                # 若 portfolio 已空（已被 P13 remove），直接 add 回去
-                # 若 portfolio 非空（极少：UNLOCK 后又开新仓）→ 防御性 add_max 检查
                 try:
                     self.positions.add(restored_pos)
-                except PositionBookError:
-                    # portfolio 已满（cfg.max_open_positions 缩到当前数以下）→ 告警
-                    self.ev.write("unlock_stuck_restore_failed",
+                except PositionBookError as e:
+                    self.ev.write("close_stuck_restore_failed",
                                   signal_key=rec["signal_key"],
-                                  reason="portfolio_full_cannot_restore_target")
-                    self._unlock_in_flight = None
+                                  reason="{}".format(e))
+                    self._close_in_flight = None
                     return
-                self.ev.write("unlock_stuck_confirmed",
+                self.ev.write("close_stuck_confirmed",
                               signal_key=rec["signal_key"],
                               target_signal_key=rec.get("target_signal_key", ""),
                               reason="real_position_still_held_after_stuck_window",
                               target_side=target_side_str,
                               real_vol=real_vol,
                               bars_elapsed=bars_elapsed)
-                # 重建后保持 EXITING，让下一信号走 UNLOCK 重试
-                # （_reconcile_positions 的 IDLE 转移会被 portfolio 非空挡住）
             else:
-                # 没有快照（理论上 _unlock_position 必须存了）→ 告警
-                self.ev.write("unlock_stuck_confirmed",
+                # 没有快照（理论上落账时必须存了）→ 告警
+                self.ev.write("close_stuck_confirmed",
                               signal_key=rec["signal_key"],
                               target_signal_key=rec.get("target_signal_key", ""),
                               reason="real_position_still_held_no_snapshot",
                               target_side=target_side_str,
                               real_vol=real_vol,
                               bars_elapsed=bars_elapsed)
-            self._unlock_in_flight = None
+            self._close_in_flight = None
+            self._sync_state()
             return
 
-        # 卡单恢复（real_vol == 0 / None）：portfolio 已空（已被 P13 remove），
-        # 清 in-flight，写恢复事件
-        self.ev.write("unlock_stuck_recovered",
+        # 卡单恢复（real_vol == 0 / None）：清 in-flight，写恢复事件
+        self.ev.write("close_stuck_recovered",
                       signal_key=rec["signal_key"],
                       target_signal_key=rec.get("target_signal_key", ""),
                       reason=("real_position_zero_after_stuck_window"
                               if real_vol is not None
-                              else "real_position_unknown_保守按恢复处理"),
+                              else "real_position_unknown_conservative"),
                       target_side=target_side_str,
                       real_vol=real_vol,
                       bars_elapsed=bars_elapsed)
-        self._unlock_in_flight = None
+        self._close_in_flight = None

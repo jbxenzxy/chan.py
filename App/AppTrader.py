@@ -778,8 +778,23 @@ class AppTrader:
             enabled = bool(s.get_json("auto_order_enabled", True))
             positions = s.get_json("positions") or []
             s.close()
+            # 账户三态（需求 ⑴）只由净敞口决定：net != 0 → running；
+            # net == 0 且有仓单 → locked；无仓单 → flat。
+            # 与引擎 account_state() 同口径（这里不 import 引擎，避免把
+            # 进程托管层与状态机耦合起来）。
+            _sign = {"LONG": 1, "SHORT": -1}
+            net = sum(_sign.get(str(p.get("side") or ""), 0)
+                      * int(p.get("volume") or 0) for p in positions)
+            if not positions:
+                state = "flat"
+            elif net:
+                state = "running"
+            else:
+                state = "locked"
             return {
                 "enabled": enabled,
+                "account_state": state,
+                "net_volume": net,
                 "positions_n": len(positions),
                 "positions": positions,
             }

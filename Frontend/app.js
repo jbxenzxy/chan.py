@@ -7445,8 +7445,11 @@
                 if (!autoOrderBusy) checkbox.checked = on;
                 const posN = (data.auto_order && typeof data.auto_order.positions_n === 'number')
                     ? data.auto_order.positions_n : 0;
-                const lockedN = (data.auto_order && Array.isArray(data.auto_order.positions))
-                    ? data.auto_order.positions.filter(function(p) { return p.origin === 'soft_exit_lock'; }).length : 0;
+                // 锁仓态 = 有仓单但净敞口为 0（需求 ⑴）。仓单上没有"来源"字段，
+                // 判据只看后端给出的 account_state。
+                const aoState = (data.auto_order && data.auto_order.account_state) || '';
+                const lockedN = (aoState === 'locked' && data.auto_order.positions_n)
+                    ? data.auto_order.positions_n : 0;
                 const wrap = document.getElementById('auto-order-wrap');
                 if (wrap) {
                     let tip = '自动下单引擎：' + (running ? '运行中' : '已停止');

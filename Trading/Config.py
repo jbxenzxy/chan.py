@@ -282,8 +282,9 @@ class ExitConfig(BaseModel):
 #      max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
 #      资金闸门（initial_cash）；仓位管理动态计算字段（capital_pct / atr_risk /
 #      risk_unit_pct / equity_source / fixed_volume / fallback_volume …）。
-#    保留：max_volume（每个买卖点一笔挂 N 手）、max_open_positions（同时持仓笔数上限）、
-#      unlock_no_new_open（解锁昨仓后是否补开今仓）。
+#    保留：max_volume（每个买卖点一笔挂 N 手）。
+#    2026-09-11 删除：max_open_positions（同时持仓笔数上限，D2 —— 资金是唯一闸门）、
+#      unlock_no_new_open（解锁昨仓后是否补开今仓 —— "解锁"概念随重构删除）。
 # ════════════════════════════════════════════════════════════════════
 class RiskConfig(BaseModel):
     """风控参数（2026-09-08 二次精简）：只保留开仓手数与持仓笔数上限。
@@ -297,15 +298,20 @@ class RiskConfig(BaseModel):
 
     max_volume: int = 2              # 每个买卖点一笔挂 N 手（= 单笔手数上限，默认 2）。
                                      #   中金所限价单单笔上限 20 手，配置不应超过。
-    max_open_positions: int = 1      # 同时持仓笔数上限（1=单仓；N=一次可连开 N 笔）
-    unlock_no_new_open: bool = True  # 解锁昨仓后是否补开今仓缺额。
-                                     #   True = 绝不补开（默认）：只解锁昨仓、缺口放弃，
-                                     #         规避金融期货"平今"高手续费坑
-                                     #   False = 补开：昨锁 3 手、今信号 5 手
-                                     #           → 解锁 3 后再开 2，净敞口到 5
-                                     #
-                                     #   两种情况（True/False）下解锁本身照常执行
-                                     #   （解锁 = 减风险动作，永不因补开开关而放弃）。
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_legacy_keys(cls, data: Any) -> Any:
+        """静默丢弃 2026-09-11 重构删除的两个键。
+
+        RiskConfig 是 extra="forbid"，若不放行，老配置文件带上这两个键会
+        **启动即报错**（pydantic 不认识的字段）。它们现在完全没有语义，
+        丢弃比让服务起不来合适。
+        """
+        if isinstance(data, dict):
+            for k in ("max_open_positions", "unlock_no_new_open"):
+                data.pop(k, None)
+        return data
 
     @field_validator("max_volume")
     @classmethod
@@ -395,7 +401,7 @@ class EngineConfig(BaseModel):
 
     close_retry_bars: int = 5    # close 被拒后冷却多少根 bar 再试（防每根 bar 重复平仓死循环）
     close_max_streak: int = 20   # 连续失败这么多根后认定幻影持仓，强制清除
-    unlock_stuck_bars: int = 5   # UNLOCK 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
+    close_stuck_bars: int = 5    # CLOSE 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
 
 
 # ════════════════════════════════════════════════════════════════════
