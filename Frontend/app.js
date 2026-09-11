@@ -7406,6 +7406,9 @@
         let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
         let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
         let autoOrderRunning = false;     // 引擎进程是否运行中（切换合约/周期的 guard 依据）
+        let autoOrderSeenAlertTs = 0;     // 告警本地水位：<= 它的一律不再弹（已处理过）
+        const autoOrderAlertCool = {};    // code → 上次弹框时刻（同因告警防连弹）
+        const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
 
         // 开关随"实时"徽标显隐：仅期货实时模式展示
         function syncAutoOrderWrap() {
@@ -7450,16 +7453,43 @@
                 const aoState = (data.auto_order && data.auto_order.account_state) || '';
                 const lockedN = (aoState === 'locked' && data.auto_order.positions_n)
                     ? data.auto_order.positions_n : 0;
+                const aoAlerts = (data.auto_order && Array.isArray(data.auto_order.alerts))
+                    ? data.auto_order.alerts : [];
+                const aoRun = (data.auto_order && data.auto_order.run) || null;
+                const aoCool = (data.auto_order && data.auto_order.close_cooldown) || null;
                 const wrap = document.getElementById('auto-order-wrap');
                 if (wrap) {
+                    // 三态（空仓/锁仓/运行）由后端 account_state 唯一给出：
+                    // 前端不再自己判"是不是锁着"，也不该知道持仓的"出身"。
+                    const stateLabel = { flat: '空仓', locked: '锁仓', running: '运行' }[aoState]
+                        || '未知';
+                    const netV = (data.auto_order && typeof data.auto_order.net_volume === 'number')
+                        ? data.auto_order.net_volume : 0;
                     let tip = '自动下单引擎：' + (running ? '运行中' : '已停止');
+                    tip += '，账户状态：' + stateLabel
+                        + (aoState === 'running' ? '（净敞口 ' + (netV > 0 ? '+' : '') + netV + ' 手）' : '');
                     if (data.symbol) tip += '，' + data.symbol + '/' + (data.freq || '5m');
                     if (posN) tip += '，持仓 ' + posN + ' 手（已锁仓 ' + lockedN + '）';
+                    // run = 当前这段敞口的风控锚与出场计划（后端 auto_order.run）：
+                    // 没有它就只能看到"有仓"，看不到"止损在哪"。
+                    if (aoRun) {
+                        tip += '；本段风控锚 ' + fmtPx(aoRun.anchor)
+                            + '，止损 ' + fmtPx(aoRun.stop)
+                            + '，止盈 ' + fmtPx(aoRun.tp)
+                            + '（' + aoRun.name + '）';
+                    }
+                    // CLOSE 冷却：被拒后 N 根 bar 内不补单 —— 不显示的话前端只能看到
+                    // "点了没动静"，会被误判成引擎卡死。
+                    if (aoCool && aoCool.active) {
+                        tip += '；平仓冷却中（剩 ' + aoCool.bars_left + ' 根 bar 后重试）';
+                    }
+                    if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';
                     if (data.broker) tip += '，broker=' + data.broker;
                     if (data.log_file) tip += '，日志=' + data.log_file;
                     tip += '；关闭时停止接收买卖点信号并锁定全部未锁定持仓';
                     wrap.title = tip;
                 }
+                handleAutoOrderAlerts(data);
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -7473,6 +7503,81 @@
             } catch (e) {
                 console.warn('[auto-order] 轮询失败: ' + e.message);
             }
+        }
+
+        // 价格显示：只去掉浮点尾巴，不做品种 tick 推断（tick 是后端的事）
+        function fmtPx(v) {
+            if (typeof v !== 'number' || !isFinite(v)) return '-';
+            return String(Math.round(v * 1000) / 1000);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] 自动下单告警弹窗（D11）
+        // 后端把「资金不足 / 非交易时段 / 追价跑满 / 平仓连续被拒」这类需要人工
+        // 介入的事件写成 alerts 队列（严重告警落盘，重启不丢），随状态轮询下发。
+        // 本函数只做三件事：
+        //   ① 按 ts 水位挑出新告警（同 code 5 分钟冷却，防一次故障连弹几十个框）
+        //   ② severe → alert() 阻塞弹窗；warn → showDualToast 轻提示
+        //   ③ 回 ack 把水位写回 state.db —— 不 ack 的话后端队列不清理，
+        //      同一批告警每次轮询都会重来
+        // ⚠️ alert() 会卡住浏览器 JS 线程，但引擎跑在独立子进程里，不会被卡住；
+        //    真正要防的是"一次弹几十个" —— 所以冷却与"合并成一条"缺一不可。
+        // ══════════════════════════════════════════════════════════════
+        function handleAutoOrderAlerts(data) {
+            const alerts = (data.auto_order && Array.isArray(data.auto_order.alerts))
+                ? data.auto_order.alerts : [];
+            if (!alerts.length) return;
+            const now = Date.now();
+            const fresh = [];
+            let maxTs = autoOrderSeenAlertTs;
+            for (let i = 0; i < alerts.length; i++) {
+                const a = alerts[i] || {};
+                const ts = Number(a.ts) || 0;
+                if (!ts) continue;
+                if (ts > maxTs) maxTs = ts;
+                if (ts <= autoOrderSeenAlertTs) continue;    // 本轮之前已处理过
+                const code = String(a.code || 'unknown');
+                if (now - (autoOrderAlertCool[code] || 0) < AUTO_ORDER_ALERT_COOL_MS) {
+                    continue;                                // 同 code 冷却中，跳过弹框
+                }
+                autoOrderAlertCool[code] = now;
+                fresh.push(a);
+            }
+            autoOrderSeenAlertTs = maxTs;
+            if (fresh.length) {
+                const severe = [];
+                const warn = [];
+                for (let i = 0; i < fresh.length; i++) {
+                    (fresh[i].level === 'severe' ? severe : warn).push(fresh[i]);
+                }
+                for (let i = 0; i < warn.length; i++) {
+                    console.warn('[auto-order] 告警(' + warn[i].code + '): ' + warn[i].msg);
+                    showDualToast('自动下单提醒：' + warn[i].msg);
+                }
+                if (severe.length) {
+                    console.error('[auto-order] 严重告警: ' + JSON.stringify(severe));
+                    alert('自动下单需要人工介入！\n\n'
+                        + severe.map(function (a, i) {
+                            return (i + 1) + '. ' + a.msg
+                                + (a.n > 1 ? '（已重复 ' + a.n + ' 次）' : '');
+                        }).join('\n\n'));
+                }
+            }
+            ackAutoOrderAlerts(maxTs);
+        }
+
+        function ackAutoOrderAlerts(ts) {
+            if (!ts || ts <= 0) return;
+            fetch('/api/trader/auto-order/ack', {
+                method: 'POST',
+                cache: 'no-store',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ts: ts })
+            }).then(function (resp) {
+                if (!resp.ok) console.warn('[auto-order] 告警 ack HTTP ' + resp.status);
+            }).catch(function (e) {
+                console.warn('[auto-order] 告警 ack 失败: ' + e.message);
+            });
         }
 
         async function onAutoOrderToggle(checkbox) {

@@ -80,8 +80,16 @@ def call_trader_stop(timeout=None):
 
 
 def call_trader_status():
-    """自动下单状态快照（进程 + 引擎开关 + 持仓）。"""
+    """自动下单状态快照（进程 + 引擎开关 + 持仓 + 未确认告警）。"""
     return trader.status()
+
+
+def call_trader_ack(ts=None):
+    """确认自动下单告警（D11）：把 ack 水位写进自动下单子进程的 state.db。
+
+    ts 为水位线（前端弹完告警框后回传）；已确认的告警不再随 status 下发。
+    """
+    return trader.ack_alerts(ts=ts)
 
 
 
@@ -273,4 +281,5 @@ __all__ = [
     # 自动下单（AppTrader）
     "AppTrader", "trader",
     "call_trader_start", "call_trader_stop", "call_trader_status",
+    "call_trader_ack",
 ]

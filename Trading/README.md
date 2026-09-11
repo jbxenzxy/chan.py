@@ -113,10 +113,12 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "close_today_first": true            // 上期所/中金所平今优先
   },
   "risk": {
-    "max_volume": 2,                     // 每个买卖点开一手、挂 N 手（=单笔手数上限，
+    "max_volume": 2                      // 每个买卖点开一手、挂 N 手（=单笔手数上限，
                                          //   默认 2；校验范围 1..20，越界启动即报错）
-    "max_open_positions": 1,             // 同时持仓笔数上限
-    "unlock_no_new_open": true           // 解锁昨仓后是否补开今仓（true=只解锁不补开）
+    // 2026-09-11 重构删除：max_open_positions（同时持仓笔数上限 —— 资金是唯一闸门）、
+    //   unlock_no_new_open（解锁后补开 ——「解锁」概念随重构一并删除）。
+    //   老配置里若还留着这两行：**丢弃 + 打 WARNING**，不阻断启动（与 state.db 的
+    //   旧 schema 严格拒绝不同口径 —— 配置是可编辑文本，那两个键已完全无语义）。
   },
   "entry_params": {
     "reverse_on_opposite_signal": false,  // 反向信号只平今不反手
@@ -137,9 +139,12 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "trailing_atr_multiple": 1.5
   },
   "engine": {
-    "close_retry_bars": 5,             // close 被拒后冷却多少根 bar 再试（防重复平仓死循环）
-    "close_max_streak": 20,            // 连续失败这么多根后认定幻影持仓，强制清除
-    "unlock_stuck_bars": 5             // UNLOCK 报单后多少根 bar 触发二次确认复核
+    "close_retry_bars": 5,             // CLOSE 被拒后冷却多少根 bar 再试。broker 内部
+                                       //   每笔 CLOSE 已追 close_max_chase 轮，引擎再
+                                       //   每根 bar 补一笔会顶「频繁报撤单」监管计数
+    "close_max_streak": 20,            // CLOSE 连续被拒这么多次 → 认定幻影仓，从簿中
+                                       //   清除并**弹窗告警**（D11），请人工核对实盘
+    "close_stuck_bars": 5              // CLOSE 报单后多少根 bar 触发二次确认复核
   },
   "broker_params": {
     "channel": {
@@ -188,10 +193,20 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
 ### 引擎时序参数（`TradingConfig.engine`，Step 2.2 归一）
 
-`close_retry_bars`（close 拒单冷却根数）/ `close_max_streak`（连续失败清幻影阈值）/
-`unlock_stuck_bars`（UNLOCK 卡单复核窗口）三项原来是 `Engine.__init__` 里的硬编码常量，
+`close_retry_bars`（CLOSE 拒单冷却根数）/ `close_max_streak`（连续被拒清幻影阈值）/
+`close_stuck_bars`（CLOSE 卡单复核窗口）三项原来是 `Engine.__init__` 里的硬编码常量，
 Step 2.2 起统一收口到 `Config.py` 的 `EngineConfig`——调参只改配置，不动引擎代码。
 三项都是「根数」口径、语义上周期敏感，当前取跨周期不变值。
+
+2026-09-11 重构补充（Phase 6）：
+
+- `unlock_stuck_bars` 随「解锁」概念删除，改名 `close_stuck_bars`（语义不变，只管 CLOSE）。
+- `close_retry_bars` / `close_max_streak` 在 Phase 4 重写引擎核心时**漏迁**（配置项留着、
+  判定没了），Phase 6 已按新分层恢复：判定挂在唯一报单出口 `Engine._execute` 上。
+- 两项都**只作用于 CLOSE**（转移 ④ 的反向 OPEN 不追价、也无冷却）；「关闭自动下单」的
+  收尾路径 `shutdown_and_lock_all` 豁免冷却 —— 用户当面点下的动作不等。
+- 连续被拒达 `close_max_streak` 时按兜底规则清除该笔仓单（清的是转移 ⑤ 的目标那一笔，
+  不是整批），并发**严重告警**（D11）到前端弹窗，提示人工核对柜台持仓。
 
 ---
 

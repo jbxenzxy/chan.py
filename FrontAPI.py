@@ -716,6 +716,24 @@ async def api_trader_auto_order_off():
     return _json_response(result)
 
 
+@router.post("/api/trader/auto-order/ack", tags=["trader"])
+async def api_trader_auto_order_ack(body: dict = Body(default={})):
+    """确认告警（D11）：前端弹完告警框后回 ack，已确认的告警不再下发。
+
+    body：{"ts": 1757xxxx.xx} —— 水位线，确认该时刻（含）之前发生的全部告警。
+    无 body / ts 缺失时直接返回 acked=0（前端在无告警时不会调用本接口）。
+    """
+    try:
+        result = await run_in_threadpool(
+            orch.call_trader_ack, ts=body.get("ts"))
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"确认自动下单告警失败: {exc}")
+    return _json_response(result)
+
+
 @router.get("/api/trader/auto-order/status", tags=["trader"])
 async def api_trader_auto_order_status():
     """自动下单状态（进程运行 + 引擎开关 + 持仓快照）"""

@@ -420,8 +420,10 @@ class EngineConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    close_retry_bars: int = 5    # close 被拒后冷却多少根 bar 再试（防每根 bar 重复平仓死循环）
-    close_max_streak: int = 20   # 连续失败这么多根后认定幻影持仓，强制清除
+    close_retry_bars: int = 5    # CLOSE 被拒后冷却多少根 bar 再试（防每根 bar
+                                 #   重复报单 —— broker 内部每笔已追 close_max_chase 轮）
+    close_max_streak: int = 20   # CLOSE 连续被拒这么多次 → 认定幻影仓，从簿中清除
+                                 #   并升级为严重告警（D11，弹窗叫人核对实盘）
     close_stuck_bars: int = 5    # CLOSE 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
 
 

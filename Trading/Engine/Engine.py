@@ -149,21 +149,27 @@ class TradingEngine(ReconcileMixin):
         self._run_plan: Optional[ExitPlan] = None
         # 上一次报单被拒的原因（供调用方写 signal_action）。每次 _execute 开头清空。
         self._last_reject: str = ""
-        # P3 配套：close 失败 cooldown 状态。
-        # 用途：上一笔 close 被拒后，连续 _close_retry_bars 根 K 线内不再尝试平仓，
-        # 避免"每根 bar 都触发一次平仓"导致的死循环；到 _close_max_streak 后
-        # 认定持仓为幻影（broker 端不存在），强制从引擎清掉。
-        self._last_close_failed_bar_ts: int = 0
-        # Step 1 修复（2026-09-08）：cooldown 改用**根数**口径。
-        #   旧代码拿"毫秒时间戳差值"去和"根数 5"比 → 实际是 5 毫秒，
-        #   冷却从来没生效过（namespace 级的单位混用 bug）。
-        #   真正的根数 = bars_seen 序号差，与周期、与时间戳单位都无关。
+        # ════════════════════════════════════════════════════════════════
+        # CLOSE 冷却与「连续被拒」兜底
+        #   ⚠️ 这两项在 Phase 4 重写引擎核心时**漏迁**（配置项留着、判定没了），
+        #      Phase 6 按新分层重新落地：判定挂在 `_execute` 这一唯一报单出口上。
+        #
+        #   为什么必须冷却：broker 内部一笔 CLOSE 已按 `close_max_chase` 轮追价
+        #     （最坏 = 20 组报单/撤单）。引擎若每根 bar 再补一笔，15s 周期下就是
+        #     每分钟 80 组报撤单 —— 直接顶中金所「频繁报撤单」监管计数（风险 R13）。
+        #   冷却口径是**根数**（bars_seen 序号差），与周期、与时间戳单位都无关
+        #     （旧代码曾拿毫秒时间戳差值去比"5 根" → 实际 5 毫秒，冷却从未生效）。
+        #   豁免：关闭自动下单（shutdown）路径不走冷却 —— 那是用户当面点下的收尾
+        #         动作，不值得为省报撤单额度让它等。
+        #
+        #   兜底：连续被拒到 `close_max_streak` 次 → 认定该仓在柜台不存在（幻影），
+        #     从簿里清掉，并升级为**严重告警**（D11）叫人核对实盘。
+        #   ⚠️ 冷却只作用于 CLOSE；转移 ④ 的反向 OPEN 不追价、也无冷却。
+        # ════════════════════════════════════════════════════════════════
         self._last_close_failed_bar_seq: int = 0
         self._close_fail_streak: int = 0
-        # Step 2.2（2026-09-08）：三项时序常量归一到 cfg.engine（原硬编码 5/20/5 收口），
-        #   属性名不变，下游消费点（cooldown 判定 / 幻影清除 / Reconcile 卡单复核）零改动。
         self._close_retry_bars: int = cfg.engine.close_retry_bars    # 失败后冷却多少根 bar 再试
-        self._close_max_streak: int = cfg.engine.close_max_streak    # 连续失败这么多根后清掉幻影持仓
+        self._close_max_streak: int = cfg.engine.close_max_streak    # 连续被拒多少次后清幻影仓
         # ════════════════════════════════════════════════════════════════
         # CLOSE 卡单检测（原 UNLOCK 卡单检测，2026-09-11 随 UNLOCK 概念一并改名）
         #   问题：CLOSE 报单后 broker 返回 filled，但 CTP 通道异常时真实未成交；
@@ -178,6 +184,18 @@ class TradingEngine(ReconcileMixin):
         # dict = {"signal_key": str, "target_signal_key": str, "target_side": str,
         #         "target_snapshot": dict, "submit_bar_ts": int, "submit_bar_seq": int}
         self._close_stuck_bars: int = cfg.engine.close_stuck_bars
+        # ════════════════════════════════════════════════════════════════
+        # D11 告警队列（Phase 6）
+        #   引擎是告警的**生产者**，但用户看到它走的是前端 5s 轮询 → 打的是 API
+        #   进程；而 API 进程与引擎是**两个进程**（App/AppTrader 托管子进程），
+        #   不共享内存。所以队列落 state.db 的 kv：引擎写 `alerts`，API 层读它、
+        #   并把用户确认的水位回写 `alerts_ack_ts`；引擎在下一次落盘时读到水位后
+        #   把已确认条目清出。两侧都以 state.db 为唯一事实源，不需要额外 IPC。
+        #   ⚠️ 必须落盘的另一个理由：资金不足 / 非交易时段这类故障，用户往往随后
+        #      就重启进程去处理；只留在内存里的告警等于没告过。
+        # ════════════════════════════════════════════════════════════════
+        self._alerts: List[Dict[str, Any]] = []
+        self._alerts_ack_ts: float = 0.0
         # ════════════════════════════════════════════════════════════════
         # 自动下单开关
         #   True  = 正常接收买卖点信号并交易（默认）
@@ -459,6 +477,8 @@ class TradingEngine(ReconcileMixin):
             self._close_in_flight = fl
         # Phase 5 G5：恢复的卡单标记可能与当前 bar 进度不自洽（自愈规则见方法注释）
         self._validate_close_in_flight()
+        # D11：恢复未确认告警（severe 落库的目的就是"重启后还在"）
+        self._load_alerts()
         # 运行态风控状态（run）：净敞口 ≠ 0 时必须有 run，否则 L1-L3 无从判定。
         self._restore_run()
 
@@ -532,6 +552,8 @@ class TradingEngine(ReconcileMixin):
         self._persist_run()
         # Phase I1：持久化自动下单开关（跨重启保持关闭语义）
         self.store.set_json("auto_order_enabled", self.auto_order_enabled)
+        # D11：告警队列 + ack 水位（顺带吃掉 API 层已确认的条目）
+        self._persist_alerts()
 
     # ════════════════════════════════════════════════════════════════
     # 运行态（run）持久化
@@ -904,8 +926,11 @@ class TradingEngine(ReconcileMixin):
 
     def _execute(self, act: "_Action", ref_price: float,
                  bar: Optional[Bar] = None, sig: Optional[Signal] = None,
-                 reason: str = "") -> Optional[Order]:
+                 reason: str = "", force: bool = False) -> Optional[Order]:
         """【A3 唯一报单出口】提交一笔委托并落账。
+
+        force: 绕过 CLOSE 冷却（只有"关闭自动下单"的收尾路径用 —— 用户当面点下的
+               动作不值得为省报撤单额度等冷却）。
 
         一次信号 / 一次离场 = 一笔报单（需求 ⑷）。成交后按 intent 分两条落账路径：
           OPEN  → 簿内新增一笔仓单
@@ -922,6 +947,13 @@ class TradingEngine(ReconcileMixin):
                           reason=why, transition=act.transition,
                           intent=act.intent.value, volume=act.volume,
                           note="报单前校验未通过，未向柜台发出任何委托")
+            return None
+
+        # CLOSE 冷却（Phase 6）：同一笔平仓刚被拒过就先别再砸单 —— 免得每根
+        # bar 都往柜台发一笔（broker 内部每笔已经追过 close_max_chase 轮）。
+        if (act.intent is OrderIntent.CLOSE and not force
+                and self._in_close_cooldown()):
+            self._last_reject = "close_cooldown"
             return None
 
         # 报单的审计键：优先用信号键。离场动作没有信号时从被平仓单 / 本段 run
@@ -956,6 +988,10 @@ class TradingEngine(ReconcileMixin):
                           reason=why, transition=act.transition,
                           volume=act.volume, is_exit=act.is_exit,
                           reject_class=o.meta.get("reject_class", ""))
+            # D11：把拒单升级成用户可见的告警（D10 已判出"追不追得动"）
+            self._alert_on_reject(act, o, why)
+            if act.intent is OrderIntent.CLOSE:
+                self._note_close_rejected(act, o)
             self._sync_state()
             return None
 
@@ -1060,6 +1096,11 @@ class TradingEngine(ReconcileMixin):
                           has_signal=sig is not None,
                           note="缺少成交价/信号，无法建立运行态风控锚；"
                                "本次运行不参与 L1-L3，需人工介入")
+            self.alert(
+                self.ALERT_SEVERE, "run_start_incomplete",
+                "净敞口已为 {:+} 手，但本段运行没有建立风控锚（缺成交价/信号），"
+                "L1-L3 止盈止损对本段失效。请人工盯盘或手工处理。".format(net),
+                net=net)
             return
         side = Side.LONG if net > 0 else Side.SHORT
         plan = self.exit_policy.plan(sig, anchor_price, self.spec,
@@ -1121,7 +1162,8 @@ class TradingEngine(ReconcileMixin):
 
     # ---------------- 离场执行（转移 ④⑤ 的执行体）----------------
     def _force_exit(self, bar: Optional[Bar], reason: str,
-                    trigger_price: Optional[float] = None) -> None:
+                    trigger_price: Optional[float] = None,
+                    force: bool = False) -> None:
         """无条件离场。两个调用方走**同一张转移表**（规则 ⑹）：
 
           · `_settle_positions` —— L1-L3 触发，trigger_price = 触发价
@@ -1140,7 +1182,8 @@ class TradingEngine(ReconcileMixin):
                 if anchor is not None and getattr(anchor, "close", 0):
                     price = float(anchor.close)
                     break
-        self._execute(act, ref_price=float(price or 0.0), bar=bar, reason=reason)
+        self._execute(act, ref_price=float(price or 0.0), bar=bar,
+                      reason=reason, force=force)
 
     # ════════════════════════════════════════════════════════════════
     # 自动下单关闭（前端开关 → 进程托管触发）
@@ -1163,7 +1206,9 @@ class TradingEngine(ReconcileMixin):
         # bar=None → 用 self.last_bar 兜底。两者都为空（进程启动后从未收到 K 线）
         # 时由 _current_trading_day 的墙钟兜底接手 —— 那必然是无 K 线驱动的
         # 托管关闭场景，墙钟交易日与真实交易日一致。
-        self._force_exit(self.last_bar, reason=reason)
+        # force=True：关闭是用户当面点下的收尾动作，不排队等冷却（否则刚被拒
+        # 过一次平仓时，关闭会"看起来什么都没做"）
+        self._force_exit(self.last_bar, reason=reason, force=True)
         self._persist()
         self._sync_state()
         self.ev.write(
@@ -1178,6 +1223,207 @@ class TradingEngine(ReconcileMixin):
                 positions_n=len(self.positions), net_volume=0,
                 note="关闭后账户停在锁仓态（净敞口 0）：引擎无自动清仓路径，"
                      "需人工平仓或重新开启自动下单后由对向信号拆锁")
+            self.alert(
+                self.ALERT_WARN, "account_frozen",
+                "自动下单已关闭，账户停在锁仓态（净敞口 0，持有 {} 笔仓单、"
+                "盈亏不再变动）。引擎无自动清仓路径：需人工平仓，或重新开启"
+                "自动下单后由对向信号拆锁。".format(len(self.positions)),
+                positions_n=len(self.positions))
+
+    # ════════════════════════════════════════════════════════════════
+    # D11 告警队列（Phase 6）
+    #   触发源三类（分析文档 §5.2.4）：
+    #     ① D10 判出的**不可挽救拒单** —— 资金不足 / 非交易时段 / 无权限 / 无此持仓
+    #     ② 离场追价跑满 `close_max_chase` 仍未成交（价格不可达，追不动了）
+    #     ③ CLOSE 连续被拒达 `close_max_streak` —— 兜底清幻影仓，同时叫人核对实盘
+    #   判定都不在这里：①②由 broker 的 D10 分类器给结论（写在 Order.meta），
+    #   ③在 `_note_close_rejected`；本段只负责**怎么存、怎么给前端**。
+    # ════════════════════════════════════════════════════════════════
+    ALERT_SEVERE = "severe"          # 前端 alert() 阻塞弹窗
+    ALERT_WARN = "warn"              # 前端 toast 轻提示
+    _ALERTS_KV = "alerts"
+    _ALERTS_ACK_KV = "alerts_ack_ts"
+    _ALERTS_KEEP = 20                # 队列上限：再多也只会淹没前端
+
+    # CTP 拒单分类（D10）→ (告警码, 级别, 标题)
+    #   · price（FOK 全撤 / 涨跌停）**不进这张表**：那是"追了有用"的一类，引擎会
+    #     继续追；只有追满 close_max_chase 仍不成交才升级（见 `_alert_on_reject`）。
+    _REJECT_ALERTS = {
+        "funds": ("ctp_reject_funds", "severe",
+                  "柜台拒单：资金 / 保证金不足"),
+        "not_tradable": ("ctp_reject_not_tradable", "severe",
+                         "柜台拒单：当前不可报单（非交易时段 / 无权限 / 无此持仓）"),
+    }
+
+    def alert(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
+        """登记一条告警（D11）。同 code 未确认 → **合并计数**，不新增条目。
+
+        合并而非追加的理由：一次通道故障会连着产生几十条同因告警，追加会把队列
+        淹没，而前端每 5s 轮询一次 —— 每次都会判成"有新告警"。
+        合并时**保留首次发生时刻 ts**，只推进 last_ts / n：前端按 ts 去重，
+        因此同一次故障只弹一次框；用户确认后条目被移除，下次故障才是新 ts
+        （于是重新弹一次 —— 这正好是"故障还在"的提醒节奏）。
+        """
+        now = time.time()
+        for a in self._alerts:
+            if a.get("code") == code:
+                a["n"] = int(a.get("n") or 1) + 1
+                a["last_ts"] = now
+                a["msg"] = msg
+                a.update(extra)
+                self.ev.write("alert", level=level, code=code, n=a["n"],
+                              msg=msg, merged=True)
+                self._persist_alerts()
+                return a
+        rec: Dict[str, Any] = {"level": level, "code": code, "msg": msg,
+                               "ts": now, "last_ts": now, "n": 1}
+        rec.update(extra)
+        self._alerts.append(rec)
+        if len(self._alerts) > self._ALERTS_KEEP:
+            self._alerts = self._alerts[-self._ALERTS_KEEP:]
+        self.ev.write("alert", level=level, code=code, n=1, msg=msg, merged=False)
+        self._persist_alerts()
+        return rec
+
+    def ack_alerts(self, ts: float = 0.0,
+                   codes: Optional[List[str]] = None) -> int:
+        """确认告警（D11）：确认过的条目不再下发。返回被移除的条数。
+
+        两种口径（可同时给）：
+          · ts    —— 水位线：确认该时刻（含）之前发生的全部告警。前端弹完一批框
+                     后回它，队列因此有界、不随运行时长增长。
+          · codes —— 只确认这几个 code。
+        """
+        before = len(self._alerts)
+        if codes:
+            want = {str(c) for c in codes}
+            self._alerts = [a for a in self._alerts
+                            if str(a.get("code")) not in want]
+        if ts:
+            ts = float(ts)
+            self._alerts_ack_ts = max(self._alerts_ack_ts, ts)
+            self._alerts = [a for a in self._alerts
+                            if float(a.get("ts") or 0.0) > ts]
+        removed = before - len(self._alerts)
+        self.ev.write("alert_ack", removed=removed, ts=ts,
+                      codes=list(codes or []), left=len(self._alerts))
+        self._persist_alerts()
+        return removed
+
+    def _load_alerts(self) -> None:
+        """恢复告警队列与 ack 水位（D11 落库的目的就是"重启后还在"）。"""
+        self._alerts_ack_ts = float(
+            self.store.get_json(self._ALERTS_ACK_KV, 0.0) or 0.0)
+        raw = self.store.get_json(self._ALERTS_KV)
+        items = raw if isinstance(raw, list) else []
+        keep = [a for a in items if isinstance(a, dict) and a.get("code")]
+        if self._alerts_ack_ts:
+            keep = [a for a in keep
+                    if float(a.get("ts") or 0.0) > self._alerts_ack_ts]
+        self._alerts = keep[-self._ALERTS_KEEP:]
+
+    def _persist_alerts(self) -> None:
+        """把队列与 ack 水位写回 state.db，顺便吃掉别处写进来的水位。
+
+        ⚠️ ack 水位每次**从库里现读**（不用内存副本）：ack 由 API 进程写入，
+        引擎不接收 HTTP，只有重读才知道用户已确认 —— 否则引擎会把已确认的条目
+        又写回去，前端就反复弹同一个框。
+        """
+        ack = float(self.store.get_json(self._ALERTS_ACK_KV, 0.0) or 0.0)
+        self._alerts_ack_ts = max(self._alerts_ack_ts, ack)
+        if self._alerts_ack_ts > ack:
+            # 引擎自己 ack 过 → 水位必须落库。**不能只留在内存**：水位就是库里
+            # 的一个键，不写回去，重启后已确认的告警会"复活"（自验 [2a]/[2d] 钉死）。
+            self.store.set_json(self._ALERTS_ACK_KV, self._alerts_ack_ts)
+        if self._alerts_ack_ts:
+            self._alerts = [a for a in self._alerts
+                            if float(a.get("ts") or 0.0) > self._alerts_ack_ts]
+        if self._alerts:
+            self.store.set_json(self._ALERTS_KV, self._alerts)
+        else:
+            self.store.delete_key(self._ALERTS_KV)
+
+    def _alert_on_reject(self, act: "_Action", o: Order, why: str) -> None:
+        """把一笔被拒的委托按 D10 分类升级成告警（D11 触发源 ①②）。"""
+        cls_ = str(o.meta.get("reject_class") or "")
+        info = self._REJECT_ALERTS.get(cls_)
+        if info is not None:
+            code, level, title = info
+            self.alert(level, code,
+                       "{} —— {} {} {} 手被拒：{}".format(
+                           title, o.symbol, act.intent.value, str(o.side), why),
+                       signal_key=o.signal_key, reject_class=cls_)
+            return
+        # 价格不可达 + 追价轮数跑满 → 这笔（离场）彻底没成，必须叫人。
+        # 开仓不追价（is_exit=False），一次不成就是不成，没有"跑满"的语义。
+        if (cls_ == "price" and act.is_exit
+                and int(o.meta.get("attempt") or 0)
+                >= int(o.meta.get("max_attempts") or 1)):
+            self.alert(self.ALERT_SEVERE, "close_chase_exhausted",
+                       "离场追价跑满 {} 轮仍未成交 —— {} {} {} 手，"
+                       "净敞口没有变动，请在柜台人工处理。".format(
+                           o.meta.get("max_attempts"), o.symbol,
+                           act.intent.value, str(o.side)),
+                       signal_key=o.signal_key, reject_class=cls_)
+
+    # ── CLOSE 冷却 / 连续被拒兜底（Phase 6 恢复，见 __init__ 注释）──
+    def _in_close_cooldown(self) -> bool:
+        """是否处于 CLOSE 冷却期（根数口径：bars_seen 序号差）。"""
+        if not self._last_close_failed_bar_seq:
+            return False
+        return (self.bars_seen - self._last_close_failed_bar_seq
+                < self._close_retry_bars)
+
+    def _close_cooldown_bars_left(self) -> int:
+        """冷却剩余根数（前端 / 诊断用；不在冷却期为 0）。"""
+        if not self._in_close_cooldown():
+            return 0
+        return max(0, self._close_retry_bars
+                   - (self.bars_seen - self._last_close_failed_bar_seq))
+
+    def _note_close_rejected(self, act: "_Action", o: Order) -> None:
+        """CLOSE 被拒后的记账：进入冷却；连续被拒到上限 → 清幻影仓 + 严重告警。
+
+        阈值口径与旧版一致（连续 `close_max_streak` 次被拒即认定幻影），差别只在
+        "清谁"：新模型一次只平一笔（转移 ⑤ 的目标 = 同向最早一单），故只清这一笔，
+        不再像旧版把整批一次清掉 —— 清得少一点，错了波及面就小一点；同一根 bar
+        的 `_reconcile_positions` 也会独立判一遍幻影，两条路互为兜底。
+        """
+        self._last_close_failed_bar_seq = self.bars_seen
+        self._close_fail_streak += 1
+        self.ev.write("close_retry_cooldown",
+                      key=o.signal_key, order_id=o.order_id,
+                      reject=o.meta.get("reject_reason") or o.status,
+                      cooldown_bars=self._close_retry_bars,
+                      streak=self._close_fail_streak,
+                      note="CLOSE 被拒，冷却 {} 根 bar 内不重复报单".format(
+                          self._close_retry_bars))
+        if self._close_fail_streak < self._close_max_streak:
+            return
+        target = act.target
+        self._close_fail_streak = 0
+        self._last_close_failed_bar_seq = 0
+        if target is None or target not in self.positions.positions:
+            return
+        self.positions.remove(target)
+        net = self.positions.net_volume()
+        self.ev.write("position_drop", reason="close_repeatedly_rejected",
+                      streak=self._close_max_streak,
+                      signal_key=target.signal_key, symbol=target.symbol,
+                      net_volume=net,
+                      note="CLOSE 连续被拒达上限，认定该仓在柜台不存在，从簿中清除")
+        self.alert(
+            self.ALERT_SEVERE, "close_repeatedly_rejected",
+            "平仓连续被拒 {} 次，已按兜底规则把 {} {} {} 手从簿中清除。"
+            "请核对柜台真实持仓：若柜台仍有该仓，说明簿面已与实盘不一致，"
+            "需人工平仓后重启引擎。".format(
+                self._close_max_streak, target.symbol, str(target.side),
+                target.volume),
+            signal_key=target.signal_key)
+        if net == 0:
+            self._run_reset()
+        self._persist()
+        self._sync_state()
 
     def auto_order_status(self) -> Dict[str, Any]:
         """自动下单状态快照（供后端进程托管 / API / 前端轮询）。"""
@@ -1199,6 +1445,14 @@ class TradingEngine(ReconcileMixin):
                         "name": self._run_plan.name,
                     }),
             "positions": [p.to_dict() for p in self.positions.positions],
+            # D11：未确认告警（前端按 code 去重 + 5 分钟冷却后弹窗，确认后回 ack）
+            "alerts": list(self._alerts),
+            # CLOSE 冷却可见性：否则"为什么半天不补单"在前端完全看不见
+            "close_cooldown": {
+                "active": self._in_close_cooldown(),
+                "bars_left": self._close_cooldown_bars_left(),
+                "streak": self._close_fail_streak,
+            },
         }
 
     # ---------------- 统计 ----------------

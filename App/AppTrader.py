@@ -531,6 +531,44 @@ class AppTrader:
                 "已关闭 pid={} graceful={} rc={}".format(pid, graceful, rc))
             return {"running": False, "pid": pid, "graceful": graceful, "rc": rc}
 
+    def ack_alerts(self, ts: Optional[float] = None) -> Dict[str, Any]:
+        """确认告警（D11）：把 ack 水位写进自动下单子进程的 state.db。
+
+        为什么是"写库"而不是"通知引擎"：告警的生产者是引擎**子进程**，而 HTTP
+        请求由 API 进程处理，两者不共享内存。state.db 是它们已有的事实源
+        （status 本来就直接读它），把确认写成一个水位键即可，不需要新加 IPC。
+        引擎在下一次落盘时读到水位，把已确认条目清出自己的队列。
+
+        ts：水位线 —— 确认该时刻（含）之前发生的全部告警（前端弹完一批后回它）。
+        """
+        want = float(ts or 0.0)
+        if want <= 0:
+            return {"acked": 0, "reason": "no_ts"}
+        with self._lock:
+            handle = self._handle
+        if handle is None or not os.path.isdir(handle.out_dir):
+            return {"acked": 0, "reason": "not_running"}
+        try:
+            s = _engine_store(handle.out_dir)
+            try:
+                before = [a for a in (s.get_json("alerts") or [])
+                          if isinstance(a, dict)]
+                ack = max(float(s.get_json("alerts_ack_ts", 0.0) or 0.0), want)
+                left = [a for a in before
+                        if float(a.get("ts") or 0.0) > ack]
+                s.set_json("alerts_ack_ts", ack)
+                if left:
+                    s.set_json("alerts", left)
+                else:
+                    s.delete_key("alerts")
+                return {"acked": len(before) - len(left), "left": len(left),
+                        "ack_ts": ack}
+            finally:
+                s.close()
+        except Exception as e:
+            log.info("[AppTrader] 确认告警失败: %s: %s", type(e).__name__, e)
+            return {"acked": 0, "reason": "{}: {}".format(type(e).__name__, e)}
+
     def status(self) -> Dict[str, Any]:
         """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""
         with self._lock:
@@ -777,7 +815,16 @@ class AppTrader:
             s = _engine_store(handle.out_dir)
             enabled = bool(s.get_json("auto_order_enabled", True))
             positions = s.get_json("positions") or []
+            # D11 告警：引擎子进程（生产者）把队列写进 state.db，本函数（API 侧）
+            # 读它、并按 ack 水位过滤。过滤放在**读取侧**而不是只靠引擎清理：
+            # 引擎可能正卡在一次长时间 wait_update 里没落盘，读取侧过滤能保证
+            # "用户确认过的告警立刻不再下发"，不依赖子进程醒来。
+            raw_alerts = s.get_json("alerts") or []
+            ack_ts = float(s.get_json("alerts_ack_ts", 0.0) or 0.0)
             s.close()
+            alerts = [a for a in raw_alerts
+                      if isinstance(a, dict)
+                      and float(a.get("ts") or 0.0) > ack_ts]
             # 账户三态（需求 ⑴）只由净敞口决定：net != 0 → running；
             # net == 0 且有仓单 → locked；无仓单 → flat。
             # 与引擎 account_state() 同口径（这里不 import 引擎，避免把
@@ -797,6 +844,7 @@ class AppTrader:
                 "net_volume": net,
                 "positions_n": len(positions),
                 "positions": positions,
+                "alerts": alerts,
             }
         except Exception:
             return None
