@@ -166,8 +166,8 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
     print(line)
     if s["trades"] == 0:
         print("本轮没有产生成交。检查：回放目录是否有 signals.json、")
-        print("仓位笔数上限是否把开仓静默填满了，或开仓报单是否被拒"
-              "（见 events.jsonl 的 open_silenced / order_rejected）。")
+        print("信号是否被入场策略/风控过滤（signal_skip / signal_dup），"
+              "或报单是否被拒（见 events.jsonl 的 order_rejected）。")
     else:
         print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
             s["trades"], s["wins"], s["losses"], s["win_rate"]))
