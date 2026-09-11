@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chan.py custom-dev — pytdx / mootdx 调用链路溯源</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#fff; --ink:#1a1d21; --ink2:#4a5158; --ink3:#7b848d;
+    --line:#e3e6ea; --line2:#d0d5db;
+    --red:#c62828; --red-bg:#fdecec; --red-ln:#f0b8b8;
+    --grn:#1e7a45; --grn-bg:#eaf7ef; --grn-ln:#b3ddc4;
+    --amb:#a86500; --amb-bg:#fff6e5; --amb-ln:#f0d49a;
+    --blu:#1a5fa8; --blu-bg:#eaf2fb; --blu-ln:#b3cdeb;
+    --pur:#6a3fa0; --pur-bg:#f3edfb; --pur-ln:#cdb8ea;
+    --mono:"Cascadia Mono","JetBrains Mono",Consolas,"SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 28px 90px}
+  header{border-bottom:2px solid var(--line2);padding-bottom:22px;margin-bottom:34px}
+  h1{font-size:26px;margin:0 0 10px;letter-spacing:-.3px}
+  .sub{color:var(--ink3);font-size:13.5px;font-family:var(--mono)}
+  h2{font-size:19px;margin:44px 0 16px;padding-left:11px;border-left:4px solid var(--blu)}
+  h3{font-size:15.5px;margin:26px 0 10px;color:var(--ink2)}
+  p{margin:10px 0}
+  code{font-family:var(--mono);font-size:12.5px;background:#eef1f4;
+    padding:1.5px 5px;border-radius:4px;color:#2a3138;white-space:nowrap}
+  a{color:var(--blu)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+    padding:18px 20px;margin:14px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.5px;background:#fff}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#f2f4f7;font-weight:600;font-size:12.5px;color:var(--ink2)}
+  td.mono,th.mono{font-family:var(--mono);font-size:12px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;
+    border:1px solid;font-weight:600;white-space:nowrap}
+  .t-live{color:var(--red);background:var(--red-bg);border-color:var(--red-ln)}
+  .t-dead{color:var(--ink3);background:#f1f2f4;border-color:var(--line2)}
+  .t-main{color:var(--grn);background:var(--grn-bg);border-color:var(--grn-ln)}
+  .t-fb{color:var(--amb);background:var(--amb-bg);border-color:var(--amb-ln)}
+  .t-doc{color:var(--pur);background:var(--pur-bg);border-color:var(--pur-ln)}
+  .banner{padding:14px 18px;border-radius:9px;border:1px solid;margin:16px 0;font-size:14.5px}
+  .b-red{background:var(--red-bg);border-color:var(--red-ln)}
+  .b-amb{background:var(--amb-bg);border-color:var(--amb-ln)}
+  .b-grn{background:var(--grn-bg);border-color:var(--grn-ln)}
+  .b-blu{background:var(--blu-bg);border-color:var(--blu-ln)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:9px;padding:14px 16px}
+  .kpi .n{font-size:25px;font-weight:700;font-family:var(--mono);letter-spacing:-1px}
+  .kpi .l{font-size:12.5px;color:var(--ink3);margin-top:3px}
+  .chain{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:9px 0;
+    font-family:var(--mono);font-size:12px}
+  .chain .n{background:#eef1f4;border:1px solid var(--line2);border-radius:6px;
+    padding:3px 8px;color:#2a3138}
+  .chain .n.hot{background:var(--red-bg);border-color:var(--red-ln);color:var(--red);font-weight:600}
+  .chain .n.ent{background:var(--grn-bg);border-color:var(--grn-ln);color:var(--grn)}
+  .chain .a{color:var(--ink3);font-weight:700}
+  ul,ol{margin:10px 0;padding-left:22px}
+  li{margin:5px 0}
+  .foot{margin-top:52px;padding-top:18px;border-top:1px solid var(--line);
+    color:var(--ink3);font-size:12.5px;font-family:var(--mono)}
+  .strike{text-decoration:line-through;color:var(--ink3)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>pytdx / mootdx 调用链路溯源</h1>
+  <div class="sub">
+    仓库 github.com/jbxenzxy/chan.py · 分支 <b>custom-dev</b> · commit <b>fde4a1dab9d0</b>（2026-09-11 18:29 北京时间，拉取时 1 分钟前）<br>
+    方法：GitHub API tree + raw 逐 blob 拉取 284 个文本文件（0 失败）→ AST 死活判定 → 调用者上溯 → 屏蔽依赖对照实验
+  </div>
+</header>
+
+<h2>一、结论速览</h2>
+
+<div class="banner b-red">
+  <b>pytdx：2 处活调用，全部收口在 <code>DataAPI/TdxAPI.py</code>，且都是函数内懒导入。</b><br>
+  一条是<b>「刷新」按钮的板块文件下载器</b>（真正主用途，pytdx 必需）；另一条是
+  <b>880xxx 成分股查询的兜底解析路径</b>（正常几乎不触发，且触发时返回<b>被截断的数据</b>）。
+</div>
+
+<div class="banner b-amb">
+  <b>mootdx：0 处活调用 —— 已从代码库彻底删除，不是「注释保留」。</b>
+  现存 4 处提及全是注释 / docstring / 文档说明文字，其中 <b>2 处文档描述与实际代码相反</b>（详见第五节）。
+</div>
+
+<div class="grid2" style="margin-top:18px">
+  <div class="kpi"><div class="n" style="color:var(--red)">2</div>
+    <div class="l">pytdx 活 import 点（均在 <code>TdxAPI.py</code>，均为懒导入）</div></div>
+  <div class="kpi"><div class="n" style="color:var(--ink3)">0</div>
+    <div class="l">mootdx 活 import 点（已整体删除）</div></div>
+  <div class="kpi"><div class="n" style="color:var(--grn)">220</div>
+    <div class="l">AST 解析的 .py 文件数（1 个语法错误文件除外）</div></div>
+  <div class="kpi"><div class="n" style="color:var(--amb)">400</div>
+    <div class="l">兜底路径的成分股硬上限（服务端截断，实测 1102 → 400）</div></div>
+</div>
+
+<h2>二、汇合图：两条流程 → 唯一库调用点</h2>
+
+<svg viewBox="0 0 1120 620" width="100%" style="background:#fff;border:1px solid var(--line);border-radius:10px">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#7b848d"/>
+    </marker>
+    <marker id="arR" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#c62828"/>
+    </marker>
+  </defs>
+
+  <!-- 流程A -->
+  <rect x="16" y="18" width="530" height="272" rx="10" fill="#fbfcfd" stroke="#b3cdeb"/>
+  <text x="32" y="44" font-size="14.5" font-weight="700" fill="#1a5fa8">流程 A · 板块文件刷新（pytdx 真正主用途）</text>
+
+  <rect x="34" y="60" width="330" height="34" rx="7" fill="#eaf7ef" stroke="#b3ddc4"/>
+  <text x="46" y="82" font-size="12.5" font-family="monospace" fill="#1e7a45">前端「刷新」按钮　app.js:5406</text>
+  <line x1="364" y1="77" x2="404" y2="77" stroke="#7b848d" marker-end="url(#ar)"/>
+
+  <rect x="408" y="60" width="120" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="418" y="76" font-size="11.5" font-family="monospace" fill="#2a3138">POST</text>
+  <text x="418" y="89" font-size="11" font-family="monospace" fill="#4a5158">/api/stocks/refresh</text>
+  <text x="540" y="82" font-size="11.5" font-family="monospace" fill="#7b848d">FrontAPI:639</text>
+
+  <line x1="249" y1="94" x2="249" y2="116" stroke="#7b848d" marker-end="url(#ar)"/>
+  <rect x="34" y="120" width="330" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="46" y="142" font-size="12" font-family="monospace" fill="#2a3138">AppRefresh._refresh_stock_names:344</text>
+
+  <line x1="249" y1="154" x2="249" y2="176" stroke="#7b848d" marker-end="url(#ar)"/>
+  <rect x="34" y="180" width="330" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="46" y="202" font-size="12" font-family="monospace" fill="#2a3138">refresh_block_files() 调用 AppRefresh:545</text>
+
+  <line x1="249" y1="214" x2="249" y2="236" stroke="#c62828" stroke-width="2" marker-end="url(#arR)"/>
+  <rect x="34" y="240" width="330" height="36" rx="7" fill="#fdecec" stroke="#f0b8b8" stroke-width="1.6"/>
+  <text x="46" y="258" font-size="12" font-family="monospace" font-weight="700" fill="#c62828">TdxAPI.refresh_block_files:1404</text>
+  <text x="46" y="271" font-size="11.5" font-family="monospace" fill="#c62828">from pytdx.hq import TdxHq_API ← :1438</text>
+
+  <!-- 流程B -->
+  <rect x="574" y="18" width="530" height="272" rx="10" fill="#fbfcfd" stroke="#f0d49a"/>
+  <text x="590" y="44" font-size="14.5" font-weight="700" fill="#a86500">流程 B · 板块成分股扫描（pytdx 兜底路径）</text>
+
+  <rect x="592" y="60" width="330" height="34" rx="7" fill="#eaf7ef" stroke="#b3ddc4"/>
+  <text x="604" y="82" font-size="12.5" font-family="monospace" fill="#1e7a45">扫描对话框「成分股」来源　app.js:4867</text>
+  <line x1="922" y1="77" x2="962" y2="77" stroke="#7b848d" marker-end="url(#ar)"/>
+  <rect x="966" y="60" width="120" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="976" y="76" font-size="11.5" font-family="monospace" fill="#2a3138">GET</text>
+  <text x="976" y="89" font-size="10" font-family="monospace" fill="#4a5158">/scan/read/candidates</text>
+
+  <line x1="807" y1="94" x2="807" y2="116" stroke="#7b848d" marker-end="url(#ar)"/>
+  <rect x="592" y="120" width="330" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="604" y="142" font-size="12" font-family="monospace" fill="#2a3138">Scanner.stock_list  AppScan:500（表 :533）</text>
+
+  <line x1="807" y1="154" x2="807" y2="176" stroke="#7b848d" marker-end="url(#ar)"/>
+  <rect x="592" y="180" width="330" height="34" rx="7" fill="#eef1f4" stroke="#d0d5db"/>
+  <text x="604" y="202" font-size="12" font-family="monospace" fill="#2a3138">get_index_stocks  AppScan:363 / TdxAPI:1665</text>
+
+  <line x1="807" y1="214" x2="807" y2="236" stroke="#c62828" stroke-width="2" marker-end="url(#arR)"/>
+  <rect x="592" y="240" width="330" height="36" rx="7" fill="#fff6e5" stroke="#f0d49a" stroke-width="1.6"/>
+  <text x="604" y="258" font-size="12" font-family="monospace" font-weight="700" fill="#a86500">Step4 兜底 → :1732</text>
+  <text x="604" y="271" font-size="11.5" font-family="monospace" fill="#a86500">_download_block_gn_from_network:1259</text>
+
+  <!-- 汇合 -->
+  <line x1="249" y1="290" x2="249" y2="330" stroke="#c62828" stroke-width="2" marker-end="url(#arR)"/>
+  <line x1="807" y1="290" x2="807" y2="330" stroke="#c62828" stroke-width="2" marker-end="url(#arR)"/>
+
+  <rect x="16" y="336" width="1088" height="52" rx="9" fill="#fdecec" stroke="#f0b8b8" stroke-width="1.6"/>
+  <text x="34" y="358" font-size="13.5" font-weight="700" font-family="monospace" fill="#c62828">
+    ⬤ 唯一库调用点：DataAPI/TdxAPI.py — from pytdx.hq import TdxHq_API　@:1288　@:1438
+  </text>
+  <text x="34" y="377" font-size="11.5" fill="#c62828">
+    两处均为函数体内懒导入 ⇒ 缺 pytdx 时服务照常启动（实测 import DataAPI.TdxAPI 成功，sys.modules 无 pytdx）
+  </text>
+
+  <line x1="560" y1="388" x2="560" y2="418" stroke="#c62828" stroke-width="2" marker-end="url(#arR)"/>
+
+  <rect x="16" y="424" width="1088" height="80" rx="9" fill="#f7f8fa" stroke="#d0d5db"/>
+  <text x="34" y="447" font-size="12.5" font-weight="700" fill="#1a1d21">落地产物</text>
+  <rect x="40" y="458" width="310" height="34" rx="7" fill="#fff" stroke="#d0d5db"/>
+  <text x="52" y="479" font-size="11.5" font-family="monospace" fill="#2a3138">T0002/hq_cache/*.dat 刷新（主路径）</text>
+  <rect x="366" y="458" width="310" height="34" rx="7" fill="#fff" stroke="#d0d5db"/>
+  <text x="378" y="479" font-size="11.5" font-family="monospace" fill="#2a3138">block_*.dat 解析 → 板块成分股</text>
+  <rect x="692" y="458" width="390" height="34" rx="7" fill="#fff6e5" stroke="#f0d49a"/>
+  <text x="704" y="479" font-size="11.5" font-family="monospace" fill="#a86500">扫描股票池（当 infoharbor 缺失时）</text>
+
+  <!-- mootdx 死 -->
+  <rect x="16" y="520" width="1088" height="76" rx="9" fill="#f1f2f4" stroke="#d0d5db" stroke-dasharray="5 4"/>
+  <text x="34" y="545" font-size="13" font-weight="700" fill="#7b848d">
+    ✕ mootdx — 0 处活 import，链路已断（2026-09 整体删除）
+  </text>
+  <text x="34" y="567" font-size="11.5" font-family="monospace" fill="#7b848d">
+    ElTdxAPI.py:222「mootdx / pytdx 三级回退已于 2026-09 整体删除」· 现存仅 4 处注释/docstring 遗产，无一行可执行代码
+  </text>
+  <text x="34" y="585" font-size="11.5" font-family="monospace" fill="#7b848d">
+    → 除权除息现为 eltdx 单源（TdxAPI.py:670 / ElTdxAPI.py:17 均有说明）
+  </text>
+</svg>
+
+<h2>三、两个活调用点详表</h2>
+
+<table>
+  <tr>
+    <th style="width:12%">调用点</th><th style="width:22%">所属函数 / 触发条件</th>
+    <th style="width:33%">上溯到用户入口</th><th style="width:15%">是否主路径</th><th style="width:18%">缺 pytdx 后果（实测）</th>
+  </tr>
+  <tr>
+    <td class="mono"><b>TdxAPI.py:1438</b><br><code>refresh_block_files</code></td>
+    <td><code>refresh_block_files()</code>（定义 :1404）<br>
+      触发：<b>点一次刷新按钮就执行一次</b><br>
+      <span class="tag t-main">主路径</span></td>
+    <td>
+      <div class="chain"><span class="n ent">app.js:5406 window.refreshStockNames</span><span class="a">→</span>
+      <span class="n">FrontAPI:639 POST /api/stocks/refresh</span><span class="a">→</span>
+      <span class="n">AppOrch:54 再导出</span><span class="a">→</span>
+      <span class="n">AppRefresh:577 async → :603 _do_refresh</span><span class="a">→</span>
+      <span class="n">AppRefresh:545</span></div>
+    </td>
+    <td><span class="tag t-main">是</span><br>每次刷新必走</td>
+    <td>打一条 WARNING<br><code>「pytdx 未安装，无法刷新板块文件；保留旧文件」</code><br>
+      <b>不抛异常、静默返回</b>，5 个板块文件都不更新</td>
+  </tr>
+  <tr>
+    <td class="mono"><b>TdxAPI.py:1288</b><br><code>_download_block_gn_from_network</code></td>
+    <td><code>_download_block_gn_from_network()</code>（定义 :1259）<br>
+      触发：<b>仅当</b> Step3（infoharbor_block.dat）没命中 880xxx 代码，才落到 Step4<br>
+      <span class="tag t-fb">兜底路径</span></td>
+    <td>
+      <div class="chain"><span class="n ent">app.js:4867 _fetchMergedStocks（扫描对话框选「成分股」）</span><span class="a">→</span>
+      <span class="n">FrontAPI:358 GET /scan/read/candidates</span><span class="a">→</span>
+      <span class="n">AppScan:500 Scanner.stock_list（表 :533）</span><span class="a">→</span>
+      <span class="n">AppScan:354 → :363</span><span class="a">→</span>
+      <span class="n">TdxAPI:1665 get_index_stocks</span><span class="a">→</span>
+      <span class="n">:1732 Step4</span></div>
+    </td>
+    <td><span class="tag t-fb">否</span><br>正常极少触发（见下）</td>
+    <td>先打 ERROR<br><code>「旧 block_*.dat 缓存中未找到板块 X」</code><br>
+      然后<b>返回空列表</b> → 扫描池 0 只<br>
+      <b>不抛异常</b></td>
+  </tr>
+</table>
+
+<h3>Step4 兜底到底覆盖多少板块？（实测本机真实数据）</h3>
+<table>
+  <tr><th>口径</th><th class="mono">数量</th><th>说明</th></tr>
+  <tr><td>infoharbor_block.dat 可服务板块</td><td class="mono">421</td><td>Step3 命中即为正常路径，<b>不碰 pytdx</b></td></tr>
+  <tr><td>tdxzs.cfg 中 880xxx 代码总数</td><td class="mono">604</td><td>其中 132 个是 8803xx/8804xx 旧版行业，代码里直接返回空</td></tr>
+  <tr><td>有效 880xxx</td><td class="mono">472</td><td>= 604 − 132</td></tr>
+  <tr><td>Step4 实际能取到数据的</td><td class="mono">370</td><td>tdxzs 名称能在 block_*.dat 里查到</td></tr>
+  <tr style="background:#fff6e5">
+    <td><b>其中「只能靠 Step4」的</b></td><td class="mono"><b>2</b></td>
+    <td><b>880524 含可转债 · 880735 专精特新</b>（占有效 880xxx 的 0.4%）</td></tr>
+  <tr style="background:#fdecec">
+    <td><b>若 infoharbor_block.dat 缺失 / 解析失败</b></td><td class="mono"><b>370 个</b>落到 Step4</td>
+    <td>此时 472 个有效代码中 370 个走兜底（且被截断到 400），102 个直接返回空</td></tr>
+</table>
+
+<div class="banner b-blu">
+  <b>关键判断：</b>Step4 在日常运行中几乎不是活路径（只覆盖 2 个板块），但它是一个
+  <b>「infoharbor 缺失时的大面积兜底」</b>——例如全新的通达信安装目录、或 infoharbor_block.dat 被清掉。
+  那时它承担 472 个板块中的 370 个（78%）。所以它<b>不是可以随手删的死代码</b>，但它有一个更危险的问题 ↓
+</div>
+
+<h2>四、对照实验：缺 pytdx 会怎样 + 400 截断实锤</h2>
+
+<p>实验环境使用<b>本机真实通达信数据</b>的只读副本（<code>D:\new_tdx_hd_test\T0002\hq_cache</code>，含真实
+<code>infoharbor_block.dat</code> / <code>tdxzs.cfg</code> / <code>block_*.dat</code>），pytdx 通过
+<code>sys.meta_path</code> 屏蔽器移除。样本板块 <code>880861 连续亏损</code>。</p>
+
+<table>
+  <tr><th style="width:30%">组别</th><th style="width:22%">路径</th><th style="width:12%">pytdx</th><th style="width:16%">成分股数</th><th>日志</th></tr>
+  <tr><td>组1</td><td>Step3 infoharbor</td><td>可用</td><td class="mono" style="color:var(--grn);font-weight:700">1102</td><td>—</td></tr>
+  <tr><td>组1b</td><td>Step3 infoharbor</td><td><b>屏蔽</b></td><td class="mono" style="color:var(--grn);font-weight:700">1102</td><td>不受影响（本就不碰 pytdx）</td></tr>
+  <tr style="background:#fdecec"><td>组2</td><td>Step4 兜底（本地文件在）</td><td>可用</td><td class="mono" style="color:var(--amb);font-weight:700">400</td><td>WARNING「可能受 400 只上限影响」</td></tr>
+  <tr style="background:#fdecec"><td><b>组2b</b></td><td>Step4 兜底（本地文件在）</td><td><b>屏蔽</b></td><td class="mono" style="color:var(--red);font-weight:700">0</td><td><b>ERROR「未找到板块」</b>，静默降级</td></tr>
+  <tr><td>组3</td><td>Step4 兜底（本地文件移走→真网络下载）</td><td>可用</td><td class="mono" style="color:var(--amb);font-weight:700">400</td><td>连上 115.238.90.165:7709 下载 4 文件成功</td></tr>
+  <tr><td>组3b</td><td>同上</td><td><b>屏蔽</b></td><td class="mono" style="color:var(--red);font-weight:700">0</td><td>ERROR「未找到板块」</td></tr>
+  <tr><td>组4</td><td><code>refresh_block_files</code></td><td>可用</td><td class="mono">—</td><td>5/5 文件刷新成功（真实网络）</td></tr>
+  <tr style="background:#fff6e5"><td>组4b</td><td><code>refresh_block_files</code></td><td><b>屏蔽</b></td><td class="mono">—</td><td>WARNING「pytdx 未安装…保留旧文件」，<b>不抛异常</b></td></tr>
+</table>
+
+<h3>发现 1 — 组2 vs 组2b：pytdx 缺得「冤枉」</h3>
+<p>组2 里本地 <code>block_*.dat</code> 全都在，<code>need_download</code> 为空，<b>pytdx 一个接口都不会被调用</b>。
+但 <code>:1288</code> 的 import 写在「读本地文件」之前，所以 pytdx 缺失时函数在
+<code>:1290-1291</code> 直接 <code>return {}</code> —— <b>把本来完全能工作的本地解析也一起废掉了</b>。
+1110 只 → 0 只，只留一条 ERROR。这是「无关依赖绑架整条兜底」，而不是「缺依赖所以功能不可用」。</p>
+
+<h3>发现 2 — 400 截断是<b>服务端</b>造成的，不是解析器</h3>
+<p>直接读二进制验证：<code>block_gn.dat</code>（269 板块）/ <code>block_zs.dat</code>（117）/
+<code>block_fg.dat</code>（161）/ <code>block.dat</code>（100）里，
+<b>声明成分股数最大就是 400，没有任何板块超过 400</b>。</p>
+<div class="card" style="font-family:var(--mono);font-size:12.5px;line-height:1.9">
+  记录步长 2800 字节 ÷ 每股 7 字节 = <b>400 只</b>（解析器 <code>:1545 pos = block_stock_begin + 2800</code>）<br>
+  实测 <code>block_gn.dat</code> 269 个板块中，<b>26 个板块恰好 400 只</b>（其余都 &lt;400）<br>
+  组3 从真实服务器重新下载后，结果<b>依然是 400</b> ⇒ 上限焊死在数据源侧
+</div>
+<p>所以 Step4 不只是「备胎」，它在被用到时会<b>静默返回不完整数据</b>：同一板块
+infoharbor 给 1102 只，block_*.dat 只给 400 只，<b>缺口 702 只（63.7%）</b>，且扫描照常进行、不报错。</p>
+
+<h2>五、mootdx：0 处活引用 + 2 处文档描述与代码相反</h2>
+
+<p>对全仓 220 个 <code>.py</code> 文件做 <code>ast.parse</code> 遍历 Import 节点：mootdx <b>零命中</b>。
+现存 4 处提及全部落在注释 / docstring / 文档里：</p>
+
+<table>
+  <tr><th style="width:34%">位置</th><th style="width:20%">性质</th><th>内容</th></tr>
+  <tr><td class="mono">ElTdxAPI.py:222</td><td><span class="tag t-dead">注释</span></td>
+    <td>「注：mootdx / pytdx 三级回退已于 2026-09 整体删除」——<b>描述正确</b></td></tr>
+  <tr><td class="mono">ElTdxAPI.py:17</td><td><span class="tag t-dead">docstring</span></td>
+    <td>「曾存在的 mootdx / pytdx 三级回退已彻底删除」——<b>描述正确</b></td></tr>
+  <tr><td class="mono">TdxAPI.py:670</td><td><span class="tag t-dead">注释</span></td>
+    <td>「mootdx/pytdx 三级回退已删除」——<b>描述正确</b></td></tr>
+  <tr style="background:#fff6e5"><td class="mono">TdxAPI.py:772</td><td><span class="tag t-dead">注释</span></td>
+    <td>「历史上 mootdx 接口不区分 SH/SZ，000001 会串到平安银行」——<b>解释性注释，保留合理</b></td></tr>
+</table>
+
+<h3>文档口径错误 2 处（同一个错误说了两遍）</h3>
+<table>
+  <tr><th style="width:26%">文件:行</th><th>原文</th><th style="width:30%">实际情况</th></tr>
+  <tr style="background:#fdecec"><td class="mono">Docs/data_source_inventory.md:9</td>
+    <td>…<code>mootdx</code> / <code>pytdx</code> 回退<span class="strike">已注释保留</span></td>
+    <td rowspan="2"><b>是「整体删除」，不是「注释保留」。</b><br>
+      ElTdxAPI.py 里对应位置只剩 10 行说明性注释（:221-231），
+      <b>没有任何被注释掉的 pytdx / mootdx 可执行代码</b>。</td></tr>
+  <tr style="background:#fdecec"><td class="mono">Docs/data_source_inventory.md:20</td>
+    <td><code>mootdx</code> / <code>pytdx</code> 回退分支<span class="strike">整体注释保留</span></td></tr>
+</table>
+
+<p>另外 <code>Docs/data_source_inventory.md</code> 头部标注基于 commit <code>386dd3c</code>，
+与当前 <code>fde4a1d</code> 已相距甚远，该文件的「底层真实数据源」列建议整体复核。</p>
+
+<h2>六、依赖清单该怎么放？</h2>
+
+<table>
+  <tr><th style="width:22%">问题</th><th>答案</th></tr>
+  <tr><td>项目现在声明了吗？</td>
+    <td><code>requirements.txt:17</code> 把 <code>pytdx&gt;=1.72</code> 放在
+      <b>「一、运行必需」</b>段；mootdx <b>未声明</b>（与 0 处调用一致，正确）。</td></tr>
+  <tr><td>缺 pytdx 服务能起来吗？</td>
+    <td><b>能。</b>实测屏蔽 pytdx 后 <code>import DataAPI.TdxAPI</code> 成功，
+      <code>sys.modules</code> 里没有 pytdx。<code>app_config</code> 启动路径不受影响。</td></tr>
+  <tr><td>缺 pytdx 什么功能没了？</td>
+    <td>① <b>「刷新」按钮的板块文件下载彻底失效</b>（5 个 .dat 都不更新，仅 WARNING）；
+      ② 880xxx 兜底成分股查询返回 0 只。<b>两者都不报错、不崩溃。</b></td></tr>
+  <tr><td>该不该留在「运行必需」？</td>
+    <td>留，但<b>建议改归位到「引擎可选数据源」</b>并注明「未装则刷新按钮的板块文件不更新」。
+      理由是它与同段的 fastapi / numpy / pandas 语义不同：那些缺了直接起不来，pytdx 缺了只是功能静默降级。
+      若产品上认定「板块文件必须能刷新」，那它就该<b>加启动期显式校验</b>（见下），而不是靠清单位置暗示。</td></tr>
+  <tr><td>能删掉 pytdx 吗？</td>
+    <td><b>不能。</b><code>refresh_block_files</code> 是前端刷新按钮的唯一实现，
+      删除会让 <code>T0002/hq_cache</code> 下 5 个板块文件永久停留在旧版本。
+      要下线必须先有替代下载通道（eltdx 或其它）。</td></tr>
+</table>
+
+<h2>七、建议的修复项（按性价比排序）</h2>
+
+<div class="card">
+  <h3 style="margin-top:0">P0 — 把 import 挪到真正需要它之前（改 2 行，消掉「无关依赖绑架」）</h3>
+  <p><code>TdxAPI.py:1288</code> 的 <code>from pytdx.hq import TdxHq_API</code> 移到
+  <code>:1332 if need_download:</code> 分支内部。这样当本地 <code>block_*.dat</code> 齐全时，
+  没装 pytdx 也能拿到 400 只，而不是 0 只。<b>实测组2 与组2b 的差距就是这 2 行。</b></p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">P1 — 把 400 截断从 WARNING 升级为显式标记</h3>
+  <p><code>:1736</code> 目前只在 <code>len(stocks) >= 400</code> 时打 WARNING 就照常 return。
+  建议：在返回结构里加 <code>truncated: true</code> 或把日志升为 ERROR，
+  让「扫描池从 1102 缩到 400」这件事<b>不可能被忽略</b>——这比报错危险得多，因为结果看起来是正常的。</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">P1 — 修正 <code>Docs/data_source_inventory.md</code> 两处口径</h3>
+  <p>:9 与 :20 的「注释保留」改为「已于 2026-09 整体删除，现为 eltdx 单源」，
+  并在 880xxx 行补注「block_*.dat 兜底仅 400 只上限、仅覆盖 2 个独有板块」。
+  顺带把头部 commit 标注更新到 <code>fde4a1d</code>。</p>
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">P2 — 刷新流程增加 pytdx 可用性前置校验</h3>
+  <p><code>AppRefresh._refresh_stock_names</code> 在调 <code>refresh_block_files</code> 前，
+  先探测 pytdx 是否可导入；不可用则把 <code>_set_refresh_status(error=...)</code> 置为可见错误，
+  而不是只写一条后端 WARNING —— 目前前端刷新进度条会「顺利完成」，用户不知道板块文件根本没更新。</p>
+</div>
+
+<div class="foot">
+  数据来源：custom-dev@fde4a1dab9d0　·　AST 扫描 220 个 .py　·　对照实验基于本机真实通达信数据只读副本<br>
+  实验脚本：sandbox/{fetch.py, ast_scan.py, exp2.py, trunc.py, net.py, cnt.py}　·　沙盒内未改动仓库任何文件
+</div>
+
+</div>
+</body>
+</html>

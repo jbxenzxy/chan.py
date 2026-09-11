@@ -173,6 +173,18 @@ class TradingEngine(ReconcileMixin):
         self._close_retry_bars: int = cfg.engine.close_retry_bars    # 失败后冷却多少根 bar 再试
         self._close_max_streak: int = cfg.engine.close_max_streak    # 连续被拒多少次后清幻影仓
         # ════════════════════════════════════════════════════════════════
+        # 运行期 run 风控锚自检（2026-09-12 补，G2 的运行期对等护栏）
+        #   G2 只在**启动期**拒「有净敞口但无 run」；运行期对账 / 卡单复核 /
+        #   连拒清仓三处改簿都可能让净敞口 0→非 0 而绕过 `_run_start`（run 的
+        #   唯一开启点）→ 这里补一道自检，否则 L1-L3 **静默**失效。
+        #   `_run_ready`：恢复流程走完才允许自检（`_restore` 中途的 `_sync_state`
+        #   会看到"有敞口、run 还没恢复"的瞬时假象）。
+        #   `_run_missing_notified`：同一次异常只报一次（D11 队列本就按 code 合并，
+        #   这里是挡**事件日志**刷屏 —— 每根 bar 一条会把真正的离场信号淹没）。
+        # ════════════════════════════════════════════════════════════════
+        self._run_ready: bool = False
+        self._run_missing_notified: bool = False
+        # ════════════════════════════════════════════════════════════════
         # CLOSE 卡单检测（原 UNLOCK 卡单检测，2026-09-11 随 UNLOCK 概念一并改名）
         #   问题：CLOSE 报单后 broker 返回 filled，但 CTP 通道异常时真实未成交；
         #         引擎若直接信 filled 删掉仓单，就变成"簿面已平、实盘仍有仓"。
@@ -512,6 +524,55 @@ class TradingEngine(ReconcileMixin):
                     self.ev.write("restore_reconcile_failed",
                                   reason="{}: {}".format(type(e).__name__, e),
                                   note="首拉真实持仓失败，引擎按本地 store 启动")
+        # 恢复流程到此结束 —— 之后才允许运行期 run 自检（见 `__init__` 的
+        # `_run_ready` 注释：`_restore` 中途的 `_sync_state` 会看到瞬时假象）。
+        self._run_ready = True
+
+    def _check_run_anchor(self, source: str) -> None:
+        """运行期 run 风控锚自检 —— G2 的运行期对等护栏（2026-09-12 补）。
+
+        缺口：`_run_start` 全仓唯一开启点是 `_execute` 的成交落账分支，而净敞口
+        有**三条路径不经过 `_execute`** 直接改簿：
+          · 对账删仓（`Reconcile._reconcile_positions` 的 `positions.remove`）
+          · CLOSE 卡单复核重建（同文件的 `positions.add`）
+          · 连拒达上限清幻影仓（`_note_close_rejected` 的 `positions.remove`）
+        三处都只补了「净敞口 → 0」的收口边，**0 → 非 0 那条边全缺** → 净敞口
+        非 0 却没有 run → `_settle_positions` 在 `_run_view() is None` 时直接
+        return，**L1-L3 静默失效且不写事件不发告警**（实测复现）。
+
+        本方法**只告警、不建锚**（保守方案）：`_run_plan` 必须靠
+        `exit_policy.plan(sig, ...)` 生成，而这三条路径共同缺的就是信号形态数据，
+        建锚只能靠猜 —— 猜出来的止损价可能比裸奔更危险。故先把它**显性化**：
+        写事件 + 发 severe 告警，下一次重启会被 G2 直接拒绝启动。
+        """
+        if not self._run_ready:
+            return
+        if self.account_state() is not AccountState.RUNNING:
+            # 空仓 / 锁仓没有净敞口，本就不需要 run —— 顺手复位通知锁，避免
+            # 「告警过一次 → 平仓 → 再开仓」之后不再提示。
+            self._run_missing_notified = False
+            return
+        if self._run_side is not None and self._run_plan is not None:
+            self._run_missing_notified = False
+            return
+        if self._run_missing_notified:
+            return                      # 同一次异常只报一次，避免事件日志刷屏
+        self._run_missing_notified = True
+        net = self.positions.net_volume()
+        self.ev.write("run_state_missing_runtime",
+                      source=source, net_volume=net,
+                      positions_n=len(self.positions.positions),
+                      run_side=str(self._run_side),
+                      note="净敞口 ≠ 0 但没有风控锚（run），L1-L3 已失效："
+                           "成因是「{}」改簿后净敞口 0→非 0，而 run 只在 "
+                           "`_execute` 成交时开启".format(source))
+        self.alert(
+            self.ALERT_SEVERE, "run_missing_anchor",
+            "检测到净敞口 {:+} 手但没有风控锚（run），L1-L3 止损止盈已失效。"
+            "成因：{} 使净敞口从 0 变成非 0，而 run 只在报单成交时开启。"
+            "当前敞口处于**无止损**状态，请人工核对柜台持仓并考虑手动平仓；"
+            "重启引擎会被启动闸门（G2）拒绝，直到该问题解决。".format(net, source),
+            net_volume=net)
 
     def _persist(self) -> None:
         # Phase E1：双写兼容 —— 新键 "positions"（list）保留扩展空间，
@@ -552,6 +613,14 @@ class TradingEngine(ReconcileMixin):
             self.store.delete_key("_close_in_flight")
         # 运行态风控状态（run）：跨重启保持 L1-L3 的风控锚与出场计划。
         self._persist_run()
+        # P6-F 补全（2026-09-12）：CLOSE 冷却落 kv。子进程架构下 API 侧读的是
+        # kv 而不是 `auto_order_status()`（后者只被测试调用），不落 kv 则前端
+        # tooltip 的"平仓冷却剩余"永远读不到 —— 前端只能看到"点了没动静"。
+        self.store.set_json("close_cooldown", {
+            "active": self._in_close_cooldown(),
+            "bars_left": self._close_cooldown_bars_left(),
+            "streak": self._close_fail_streak,
+        })
         # Phase I1：持久化自动下单开关（跨重启保持关闭语义）
         self.store.set_json("auto_order_enabled", self.auto_order_enabled)
         # D11：告警队列 + ack 水位（顺带吃掉 API 层已确认的条目）
@@ -667,10 +736,15 @@ class TradingEngine(ReconcileMixin):
 
         它不是独立状态机：真值恒等于 `account_state()`，此处只做一次投影，
         避免外部（API / 前端 / 旧测试）各自去判三态。
+
+        2026-09-12：这里顺带挂一次 run 风控锚自检 —— `_sync_state` 是所有改簿
+        路径（成交落账 / 拒单记账 / 对账 / 卡单复核）的共同收口点，挂在这里比在
+        三处各写一遍更不容易漏。见 `_check_run_anchor` 的文档串。
         """
         self._state = (EngineState.IN_TRADE
                        if self.account_state() is AccountState.RUNNING
                        else EngineState.IDLE)
+        self._check_run_anchor("runtime")
 
     # ---------------- bar 事件 ----------------
     def on_bar(self, bar: Bar) -> None:
@@ -911,6 +985,14 @@ class TradingEngine(ReconcileMixin):
             return "close_target_is_today"
         if act.volume > act.target.volume:
             return "close_volume_exceeds_target"
+        # 2026-09-12 补（对称）：`act.volume < target.volume` 同样是账实不符 ——
+        # broker 只平掉 `act.volume` 手，而 `_book_close` 是按 `pos.volume`
+        # **整笔**记 Trade 并整笔 `positions.remove` 的（它拿不到"实际平了多少"）。
+        # 触发场景：跨会话调小 `risk.max_volume`（如 4→2）后带旧仓重启，转移 ③⑤
+        # 的 `min(lots_per_signal, target.volume)` 就会算出"只平一部分"。
+        # 不猜、不做部分平仓（PositionBook 无减仓 API），直接拒绝并叫人处理。
+        if act.volume < act.target.volume:
+            return "close_volume_below_target"
         return None
 
     def _open_time_anchor(self, sig: Optional[Signal]) -> "Tuple[int, str]":
@@ -956,6 +1038,21 @@ class TradingEngine(ReconcileMixin):
         if (act.intent is OrderIntent.CLOSE and not force
                 and self._in_close_cooldown()):
             self._last_reject = "close_cooldown"
+            # 2026-09-12 补：冷却拦截原本**直接 return、不写任何事件**，与上方
+            # 前置校验失败会写 `order_rejected` 不对称。后果是"这根 bar 为什么没
+            # 补单"在事件日志里完全不可见（前端 tooltip 又因为 kv 里没有
+            # `close_cooldown` 而读不到）→ 运维侧彻底无感知。
+            # 注意：这里写的是"跳过"而不是"拒单" —— 冷却期内**没有**向柜台发出
+            # 任何委托，不能混进 `order_rejected`（那会让拒单统计与 R13 计数失真）。
+            self.ev.write("close_retry_skipped",
+                          key=(sig.key if sig is not None
+                               else (act.target.signal_key
+                                     if act.target is not None else "")),
+                          transition=act.transition,
+                          bars_left=self._close_cooldown_bars_left(),
+                          streak=self._close_fail_streak,
+                          note="CLOSE 冷却期内未报单（未向柜台发出委托），"
+                               "冷却结束后自动重试")
             return None
 
         # 报单的审计键：优先用信号键。离场动作没有信号时从被平仓单 / 本段 run
@@ -1007,6 +1104,12 @@ class TradingEngine(ReconcileMixin):
             self._sync_state()
             return None
 
+        if act.intent is OrderIntent.CLOSE:
+            # 2026-09-12 补：配置语义是"**连续**被拒 N 次清幻影仓"，而此前只有
+            # "达上限"时才清零 —— 成功 CLOSE 不清零 → 变成"**累计**被拒 N 次"：
+            # 一次拒单 + 中间若干笔正常成交 + 再一次拒单会跨 run 累积到阈值，
+            # 把引擎自己刚开出来的**真仓**当幻影清掉（实测：见 test_p42 [1]）。
+            self._close_fail_streak = 0
         # ── 成交落账：净敞口的变化决定 run 的开启 / 结束 ──
         net_before = self.positions.net_volume()
         if act.intent is OrderIntent.OPEN:

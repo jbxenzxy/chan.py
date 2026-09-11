@@ -394,7 +394,12 @@ check_true("[7g] 转移表编号只出现在 _decide_action / _decide_exit",
 # 对账侧（Phase 5 G4）：净敞口归零必须同步收口 run
 _rec = inspect.getsource(ReconcileMixin._reconcile_positions)
 check_true("[7h] 对账收口读 account_state()", "account_state()" in _rec)
-check_true("[7i] 对账收口在同处结束 run", "_run_end()" in _rec)
+# 对账收口（2026-09-12 口径对齐）：用 `_run_reset()`（清字段、**不写** `run_end`
+# 事件），与文档 §5.5「配套改动」一致 —— 对账清仓没有"一段 run 正常结束"的语义，
+# 再写一条 `run_end` 会让运维侧误以为真发生了一次离场。收口这件事本身由上面的
+# `run_ended_by_reconcile` 事件表达，所以这里断言的是 `_run_reset` 而非 `_run_end`。
+check_true("[7i] 对账收口在同处收口 run（_run_reset，不写 run_end 事件）",
+           "_run_reset()" in _rec and "_run_end()" not in _rec)
 
 print("\n" + "=" * 60)
 print("P27 结果: {} passed, {} failed".format(_PASS, _FAIL))

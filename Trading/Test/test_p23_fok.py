@@ -7,8 +7,11 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
     （限价立即全部成交否则全部撤销，交易所撮合引擎强制执行）：
       报文 offset 由 Base.INTENT_TO_OFFSET 权威表决定（OPEN→"OPEN"、CLOSE→"CLOSE"），
       **追不追价由 `is_exit` 决定、不由 intent 决定**（D13，2026-09-11 重构后）：
-      · 入场语义（is_exit=False）：转移 ①/②/③/⑥ —— 全撤 → 本笔作废（rejected），
-        不追价，等下一信号（"入场没成功，最多不赚钱，但不会亏钱"）
+       · 入场语义（is_exit=False）：转移 ①/②/③ —— 全撤 → 本笔作废（rejected），
+         不追价，等下一信号（"入场没成功，最多不赚钱，但不会亏钱"）
+         2026-09-12 更正：原文写"①/②/③/⑥"，而转移表**只有 1~5**
+         （`Engine.py` 全部 `transition=` 赋值集合 = {1,2,3,4,5}）。转移 ③ 是
+         CLOSE 但 `is_exit=False`，故归在"不追价"这一侧。
       · 离场语义（is_exit=True）：转移 ④（反向 OPEN 软离场）/ ⑤（CLOSE 硬离场）——
         FOK 全撤 → 隔 chase_interval 秒按最新对手价 ± overprice 重新定价重报，
         最多 close_max_chase 轮；轮数用尽由引擎跨 K 线继续重试

@@ -9,20 +9,25 @@
 set_tdx_hy_mapping 注入（与 set_tdx_config 同一注入模式）。
 
 验证点：
-  ① 文件合并完成：App/tdxhy_mapping_data.py 已删除（并入 AppData.py），
-     DataAPI/ 下无残留双份；AppData.py 内嵌映射表与加载函数
+  ① 单源化完成：映射数据**已整体移出仓库**（原独立数据文件
+     tdxhy_mapping_data.py 与 AppData.py 内嵌快照均已删除），权威源为该
+     程序所在机器的通达信文件 T0002/hq_cache/tdxzs3.cfg；
+     AppData.py 仅保留单一加载函数 load_tdxhy_mapping
   ② 单一加载点：AppData.load_tdxhy_mapping() 非空（缺失/空表硬失败，
      不静默降级）；DataAPI/TdxAPI.py 源码不再有按自身目录的 exec 寻址
   ③ 注入链：set_tdx_hy_mapping 注入后 TdxAPI 侧内容一致且对象身份同一
   ④ 双向互逆一致性 + ④b 条目质量（沿用原用例）
-  ⑤ 完整性快照：键数量 + sha256 与迁移前基线完全一致
-     （数据仅移动位置、内容零改动 → 哈希连续证明无静默降级）
+  ⑤ 单源契约：权威源路径 / 条数下限未漂移 + 无内嵌快照回潮
+     + 活体交叉校验（用例独立重解析权威源 ≡ 运行期映射）。
+     注：改造后映射数据不在仓库内，「内容 sha256 冻结」已失去意义
+     （冻结一份随时会随通达信行业树变化的哈希＝把移动靶当基线）。
 
 运行：python Test/test_industry_mapping.py [--update]
 """
 import hashlib
 import json
 import os
+import re
 import sys
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -56,8 +61,11 @@ def main():
     legacy_file = os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py")
     appdata_src = open(os.path.join(REPO_ROOT, "App", "AppData.py"),
                        encoding="utf-8").read()
-    merged_ok = ("_TDXHY_X_TO_881" in appdata_src and "_TDXHY_881_TO_X" in appdata_src
-                 and "def load_tdxhy_mapping" in appdata_src)
+    # 单源化判定：加载点与权威源定位常量在，且**内嵌快照不得回潮**
+    merged_ok = ("def load_tdxhy_mapping" in appdata_src
+                 and "_TDXZS3_RELPATH" in appdata_src
+                 and "_TDXHY_X_TO_881 = {" not in appdata_src
+                 and "_TDXHY_881_TO_X = {" not in appdata_src)
     if os.path.exists(map_file):
         print("[FAIL] ① 数据文件未删除:", map_file)
         failures.append("App/tdxhy_mapping_data.py 未删除（应已并入 AppData.py）")
@@ -66,7 +74,7 @@ def main():
         failures.append("DataAPI/tdxhy_mapping_data.py 未删除（双源风险）")
     elif not merged_ok:
         print("[FAIL] ① AppData.py 未内嵌映射表（合并未完成）")
-        failures.append("AppData.py 缺少 _TDXHY_X_TO_881/_TDXHY_881_TO_X/load_tdxhy_mapping")
+        failures.append("AppData.py 未采用单一权威源（或内嵌快照回潮）")
     else:
         print("[PASS] ① 文件合并完成: tdxhy_mapping_data.py 已并入 AppData.py，"
               "App/ 与 DataAPI/ 均无残留")
@@ -83,8 +91,8 @@ def main():
         else:
             print(f"[PASS] ② 单一加载点 AppData.load_tdxhy_mapping 非空: "
                   f"x_to_881={len(x_to_881)} 881_to_x={len(to_x)}")
-    except ValueError as e:
-        print(f"[FAIL] ② 单一加载: 硬失败（数据文件问题）: {e}")
+    except Exception as e:      # noqa: BLE001 —— 权威源缺失/残缺均应被视为硬失败
+        print(f"[FAIL] ② 单一加载: 硬失败（权威源不可用）: {e}")
         failures.append(f"load_tdxhy_mapping 硬失败: {e}")
         return _report(failures)
 
@@ -160,24 +168,67 @@ def main():
         print(f"[PASS] ④b 条目质量: {len(rev)} 条全部合法"
               f"（键/名称非空，881代码 6 位纯数字且无重复）")
 
-    # ⑤ 完整性快照（键数量 + 内容 sha256 冻结；基线沿用阶段 2.5——
-    #    数据文件阶段 5 仅移动位置、内容零改动，哈希连续即证明无静默降级）
-    digest = _digest(loaded)
+    # ⑤ 单源契约（替代原「内容 sha256 冻结」）
+    #    映射数据已移出仓库 → 冻结内容哈希无意义（它是随通达信行业树变化的
+    #    移动靶）。改为钉「契约 + 活体校验」：
+    #    ⑤a 权威源路径 / 条数下限未漂移（沿用 JSON 冻结机制，防被人悄悄放宽）
+    #    ⑤b 内嵌快照不得回潮（防有人把「读文件」改回「抄一份进来」）
+    #    ⑤c 用例**独立重解析**权威源，逐条比对运行期映射（活体交叉校验）
+    from App.AppConfig import app_config as _cfg
+    from App.AppData import _TDXZS3_MIN_ROWS, _TDXZS3_RELPATH
+    contract = {
+        "source_relpath": list(_TDXZS3_RELPATH),
+        "min_rows": _TDXZS3_MIN_ROWS,
+        "forbid_embedded_snapshot": True,
+    }
     if force_update or not os.path.exists(SNAPSHOT):
         os.makedirs(os.path.dirname(SNAPSHOT), exist_ok=True)
         with open(SNAPSHOT, "w", encoding="utf-8") as f:
-            json.dump(digest, f, ensure_ascii=False, indent=1, sort_keys=True)
-        print(f"[FROZEN] ⑤ 完整性基线: {digest}" if not force_update
-              else f"[UPDATED] ⑤ 完整性基线: {digest}")
+            json.dump(contract, f, ensure_ascii=False, indent=1, sort_keys=True)
+        print(f"[FROZEN] ⑤ 单源契约基线: {contract}" if not force_update
+              else f"[UPDATED] ⑤ 单源契约基线: {contract}")
     else:
         with open(SNAPSHOT, encoding="utf-8") as f:
             expected = json.load(f)
-        if expected == digest:
-            print(f"[PASS] ⑤ 完整性快照: n={digest['n_881_to_x']} "
-                  f"sha256={digest['sha256'][:12]}… 与迁移前基线一致（零内容漂移）")
+        if expected == contract:
+            print(f"[PASS] ⑤a 单源契约: 权威源={'/'.join(contract['source_relpath'])} "
+                  f"条数下限={contract['min_rows']} 未漂移")
         else:
-            failures.append(f"映射内容变化: 期望 {expected} 实际 {digest}")
-            print(f"[FAIL] ⑤ 完整性快照: 漂移\n  期望: {expected}\n  实际: {digest}")
+            failures.append(f"单源契约漂移: 期望 {expected} 实际 {contract}")
+            print(f"[FAIL] ⑤a 单源契约: 漂移\n  期望: {expected}\n  实际: {contract}")
+
+    if "_TDXHY_X_TO_881 = {" in appdata_src or "_TDXHY_881_TO_X = {" in appdata_src:
+        failures.append("内嵌映射快照回潮（应只读权威源文件）")
+        print("[FAIL] ⑤b 防回潮: AppData.py 又出现内嵌映射快照")
+    else:
+        print("[PASS] ⑤b 防回潮: AppData.py 无内嵌映射快照（单一权威源）")
+
+    _path = os.path.join(_cfg.tdx_install_dir, *_TDXZS3_RELPATH) if _cfg.tdx_install_dir else ""
+    if not _path or not os.path.exists(_path):
+        failures.append(f"权威源文件不存在: {_path}")
+        print(f"[FAIL] ⑤c 活体校验: 权威源不存在 {_path}")
+    else:
+        indep = {}
+        with open(_path, "rb") as fh:
+            for line in fh.read().decode("gbk", errors="ignore").splitlines():
+                q = line.split("|")
+                if len(q) < 6:
+                    continue
+                nm, cd, xc = q[0].strip(), q[1].strip(), q[5].strip()
+                if not nm or not re.match(r"^881\d{3}$", cd) or not re.match(r"^X\d+$", xc):
+                    continue
+                indep.setdefault(xc, (nm, cd))
+        if indep != rev:
+            only_a = sorted(set(indep) - set(rev))[:5]
+            only_b = sorted(set(rev) - set(indep))[:5]
+            failures.append(f"运行期映射 ≠ 独立重解析权威源（仅文件有 {only_a} / "
+                            f"仅运行期有 {only_b}）")
+            print(f"[FAIL] ⑤c 活体校验: 独立重解析 {len(indep)} 条 ≠ 运行期 {len(rev)} 条")
+        else:
+            print(f"[PASS] ⑤c 活体校验: 独立重解析权威源 {len(indep)} 条 ≡ 运行期映射")
+        _dg = _digest(loaded)
+        print(f"[INFO] ⑤ 当前权威源摘要（仅记录，不作断言）: "
+              f"n={_dg['n_881_to_x']} sha256={_dg['sha256'][:12]}…")
 
     return _report(failures)
 

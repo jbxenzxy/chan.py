@@ -1224,6 +1224,15 @@ def _validate_downloaded_block_file(file_name, raw_data):
             return False
         return 0 < block_count < 10000
 
+    if file_name == "tdxhy.cfg":
+        # 研究行业映射（GBK 文本）：格式 market|stock_code|old_T_code|||new_X_code
+        # 至少含字段分隔符 "|" 与行业 X 码标记 "X"，否则视为下载到脏数据。
+        try:
+            text = raw_data.decode("gbk", errors="ignore")
+        except Exception:
+            return False
+        return "|" in text and "X" in text
+
     return False
 
 
@@ -1413,6 +1422,7 @@ def refresh_block_files(progress_callback=None):
     """
     global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
     global _INFOHARBOR_BLOCK_CACHE, _INFOHARBOR_BLOCK_CACHE_LOADED
+    global _TDXHY_CACHE, _TDXHY_CACHE_LOADED
 
     vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
     if vipdoc_dir:
@@ -1427,6 +1437,7 @@ def refresh_block_files(progress_callback=None):
     os.makedirs(block_cache_dir, exist_ok=True)
 
     block_files = [
+        "tdxhy.cfg",
         "infoharbor_block.dat",
         "block_zs.dat",
         "block_gn.dat",
@@ -1469,6 +1480,10 @@ def refresh_block_files(progress_callback=None):
     _BLOCK_GN_CACHE_LOADED = False
     _INFOHARBOR_BLOCK_CACHE = None
     _INFOHARBOR_BLOCK_CACHE_LOADED = False
+    # 若本批次包含 tdxhy.cfg，使研究行业映射的内存缓存失效，下次扫描用新文件重读
+    if "tdxhy.cfg" in block_files:
+        _TDXHY_CACHE = None
+        _TDXHY_CACHE_LOADED = False
 
 
 def _parse_raw_block_gn(data, block_file="block_gn.dat"):

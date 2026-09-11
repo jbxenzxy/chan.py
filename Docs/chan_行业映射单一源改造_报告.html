@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>tdxzs3.cfg 权威性与「删表」可行性核实</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1b1f24; --ink2:#4a5461; --ink3:#78828f;
+    --line:#e4e7ec; --ok:#1a7f4b; --okbg:#eaf7f0; --bad:#b42318; --badbg:#fdecea;
+    --warn:#8a5a00; --warnbg:#fff6e5; --acc:#1f4fd8; --accbg:#eef3ff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1000px;margin:0 auto;padding:34px 22px 70px}
+  h1{font-size:25px;line-height:1.35;margin:0 0 8px}
+  .sub{color:var(--ink3);font-size:13.5px;margin-bottom:26px}
+  h2{font-size:18px;margin:36px 0 12px;padding-left:11px;border-left:4px solid var(--acc)}
+  h3{font-size:15.5px;margin:22px 0 8px;color:var(--ink2)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:18px 20px;margin:14px 0}
+  .q{background:var(--accbg);border:1px solid #cfdcff;border-radius:9px;padding:12px 15px;margin:10px 0;color:#1a2b52}
+  .verdict{font-weight:700;color:var(--ok)}
+  .verdict-no{font-weight:700;color:var(--bad)}
+  code{background:#f1f3f6;padding:1.5px 5px;border-radius:4px;font-size:13px;
+    font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+  pre{background:#f1f3f6;border:1px solid var(--line);border-radius:8px;padding:12px 14px;
+    overflow:auto;font-size:12.6px;line-height:1.6;font-family:ui-monospace,Consolas,monospace}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:13.6px}
+  th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+  th{background:#f2f4f7;font-weight:600;color:var(--ink2)}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  ul{margin:8px 0;padding-left:22px}
+  li{margin:5px 0}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:20px;margin-right:6px;
+    vertical-align:1px;border:1px solid transparent}
+  .t-ok{background:var(--okbg);color:var(--ok);border-color:#bfe3cf}
+  .t-bad{background:var(--badbg);color:var(--bad);border-color:#f5c6c1}
+  .t-warn{background:var(--warnbg);color:var(--warn);border-color:#f0dcae}
+  .t-acc{background:var(--accbg);color:var(--acc);border-color:#cfdcff}
+  .hl{background:var(--okbg);border-left:3px solid var(--ok);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .hl-bad{background:var(--badbg);border-left:3px solid var(--bad);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .hl-warn{background:var(--warnbg);border-left:3px solid #d99a00;padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .muted{color:var(--ink3);font-size:13px}
+  .foot{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--ink3);font-size:12.6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>tdxzs3.cfg 会不会自动更新？能删掉 AppData.py 里那 950 行吗？</h1>
+<div class="sub">代码基线 <code>jbxenzxy/chan.py @ custom-dev</code> · 实测日期 2026-09-11 · 结论均由本机实跑与 7709 主站实测得出</div>
+
+<h2>一、先回答：会更新，而且当前就与服务器完全同步</h2>
+
+<div class="q"><b>问</b>：这个文件应该也会随通达信启动或盘后数据下载更新吧？</div>
+<div class="card">
+  <p><span class="verdict">是的。</span>而且它不是「安装包自带」，是<b>下载包（<code>zhb.zip</code>）里的一个条目</b>，由通达信客户端「盘后数据下载」落盘。</p>
+
+  <h3>证据一：它就在今天的下载包里</h3>
+  <table>
+    <tr><th>对象</th><th>大小</th><th>sha1</th><th>说明</th></tr>
+    <tr><td>磁盘 <code>T0002/hq_cache/tdxzs3.cfg</code></td><td class="num">32730</td><td><code>d51e0f9e0d6a</code></td><td>mtime 2026-09-10 17:53:24</td></tr>
+    <tr><td>本机 <code>hq_cache/zhb.zip</code> 内</td><td class="num">32730</td><td><code>d51e0f9e0d6a</code></td><td>zip mtime <b>2026-09-11 16:12</b>（今天刚下）</td></tr>
+    <tr><td>服务器 <code>zhb.zip</code> 内（实下）</td><td class="num">32730</td><td><code>d51e0f9e0d6a</code></td><td>三者<b>字节完全相同</b></td></tr>
+  </table>
+  <p class="muted">zs 包内容 46 项：43 项与本机磁盘字节相同，另 3 项（<code>ilong.dat</code>/<code>incon.dat</code>/<code>nbcomte.dat</code>）解压到了安装根目录且内容也相同 → 确认 <code>zhb.zip</code> 是<b>服务器下发的包</b>，客户端解压进 <code>hq_cache/</code>。</p>
+
+  <h3>证据二：服务端「内容变了才改时间戳」</h3>
+  <p><code>zhb.zip</code> 内部各条目的时间戳跨度 <code>2024-03-29</code> ~ <code>2026-09-10</code>，而 <code>tdxzs3.cfg</code> 的内部时间戳 = 它在磁盘上的 mtime（<code>2026-09-10 17:53:24</code>）。也就是说：<b>该时间戳是服务端的「最后内容变更时间」</b>，今天重下（16:12）内容未变、时间戳未动。</p>
+  <p class="muted">顺带解释了一个容易误判的现象：今天 16:12 的下载批次里有 <code>tdxhy.cfg</code>，却没有改写 <code>tdxzs3.cfg</code> —— 不是「没下载」，而是<b>内容没变所以不落盘</b>。</p>
+
+  <h3>证据三：与服务器实时数据逐条相等</h3>
+  <table>
+    <tr><th>来源</th><th>881 代码数</th><th>与 <code>tdxzs3.cfg</code> 的差集</th></tr>
+    <tr><td><code>tdxzs3.cfg</code>（本机文件）</td><td class="num">467</td><td>—</td></tr>
+    <tr><td>服务器实时 881 代码表（eltdx 一次拉全）</td><td class="num">467</td><td><b>双向差 0，名称零不符</b></td></tr>
+  </table>
+  <div class="hl">结论：<b>它随通达信持续更新，且当前与服务器 100% 同步</b>。仓库里再冻结一份副本，只会得到一份必然过期的移动靶快照。</div>
+</div>
+
+<h2>二、那为什么原来没删？——能删，但要一并处理三件事</h2>
+
+<div class="q"><b>问</b>：以后直接从 <code>tdxzs3.cfg</code> 获取不就行了？</div>
+<div class="card">
+  <p><span class="verdict">可以，本轮已经这么改了</span>（净 −772 行）。但有三个地方必须同时处理，否则「删了但没删干净」：</p>
+  <table>
+    <tr><th>#</th><th>问题</th><th>不处理的后果</th></tr>
+    <tr><td>1</td><td>启动注入是<b>裸调用</b>（<code>AppEngine.py:127</code>），一抛异常整个应用起不来</td><td>板块文件缺失 → 连自选股扫描、K线都打不开（波及面远超一个功能）</td></tr>
+    <tr><td>2</td><td>仓库自带测试<b>冻结了两处硬数据</b>：<code>test_industry_mapping.py ⑤</code>（内容 sha256 快照 470 条）、<code>test_blk_parsing.py ⑧</code>（写死 <code>125/315</code>）</td><td>任何数据变化都会让守护测试报红 —— 实测<b>上一轮的补丁就是这样打破了 2 个测试</b></td></tr>
+    <tr><td>3</td><td>前端 <code>_fetchMergedStocks</code> 只认 <code>errors</code> 字段，而 <code>FrontAPI</code> 的兜底处理器故意不回传细节</td><td>硬失败 → 用户只看到「0 只候选」，没有任何提示（比报错更糟）</td></tr>
+  </table>
+
+  <div class="hl-bad">
+    <b>我上一轮交付的 bug（如实汇报）</b>：<code>chan_行业映射修复_完整版/最小版</code> 把映射修正到 467 条后，
+    <code>Test/test_blk_parsing.py</code> ⑧ 因写死 <code>125/315</code> 而失败、<code>Test/test_industry_mapping.py</code> ⑤ 因冻结哈希而失败。
+    本轮已一并修好（期望值改为<b>由权威源推出</b>，快照改为<b>单源契约 + 活体校验</b>），9 项测试全绿。
+  </div>
+</div>
+
+<h2>三、本轮改了什么</h2>
+
+<table>
+  <tr><th>文件</th><th>行数变化</th><th>内容</th></tr>
+  <tr><td><code>App/AppData.py</code></td><td class="num">2611 → 1753 <b>(−858)</b></td><td>删掉两张内嵌表（958 行）+ 遗留模块级 <code>load_tdxhy_mapping()</code>；换成单源加载器</td></tr>
+  <tr><td><code>App/AppEngine.py</code></td><td class="num">+8</td><td>启动注入加护栏：板块数据缺失只 WARNING，<b>不阻断启动</b></td></tr>
+  <tr><td><code>App/AppScan.py</code></td><td class="num">+10</td><td>docstring 去掉写死的 125/315；来源读取失败改为<b>记录 + 降级</b>（与既有「流通市值/预过滤」同构）</td></tr>
+  <tr><td><code>App/AppRefresh.py</code></td><td class="num">+2</td><td>注释同步</td></tr>
+  <tr><td><code>Test/</code>（3 个用例 + 1 快照）</td><td class="num">+66</td><td>断言改为「随行业树变化」，快照改为「单源契约」</td></tr>
+  <tr><th>合计</th><th class="num">净 <b>−772</b> 行</th><th>映射数据整体移出仓库</th></tr>
+</table>
+
+<h3>新的加载链</h3>
+<pre>&lt;TDX_INSTALL_DIR&gt;/T0002/hq_cache/tdxzs3.cfg
+        │  名称|881代码|12|1|0|X代码   （GBK）
+        ▼
+_read_tdxzs3_cfg()      解析 + 合法性校验（&lt; 300 条视为残缺，弃用）
+        ▼
+_load_tdxhy_mapping()   (路径, mtime, size) 缓存 → 文件一变自动重读
+        ▼
+AppData.load_tdxhy_mapping()   ← 唯一加载点
+        ├─→ 板块指数2/3 下拉（tdxhy_l2/l3_indices）
+        ├─→ 881 成分股取数（经 set_tdx_hy_mapping 注入 TdxAPI）
+        └─→ 股名刷新（AppRefresh 步骤 4/5）
+取不到 → RuntimeError（含路径与处理步骤），无兜底、不返回空表</pre>
+
+<h3>失败路径（实测，不是推断）</h3>
+<table>
+  <tr><th>场景</th><th>行为</th></tr>
+  <tr><td><code>import AppEngine</code>，权威源缺失</td><td>✅ <b>启动成功</b> + WARNING 打指引；自选股扫描/K线不受影响</td></tr>
+  <tr><td>扫描「板块指数2/3」</td><td>该来源失败 → 写进 <code>errors</code>、WARNING 留痕，<b>其余来源照常合并</b>（不再整批 500）</td></tr>
+  <tr><td>直接调 <code>load_tdxhy_mapping()</code></td><td>按预期抛 <code>RuntimeError</code>：<span class="muted">「缺少通达信行业映射权威源文件：…（该文件由通达信『盘后数据下载』随 zhb.zip 落盘；本仓库已不再内嵌映射快照。处理：通达信 → 盘后数据下载后重启本程序）」</span></td></tr>
+</table>
+
+<h2>四、验证</h2>
+
+<h3>测试套件 9/9 通过</h3>
+<p class="muted"><code>test_industry_mapping</code> · <code>test_blk_parsing</code> · <code>test_phase5_guards</code> · <code>test_phase4_guards</code> · <code>test_phase2_guards</code> · <code>func_map_check</code> · <code>test_lock_v5_guards</code> · <code>test_lock_completeness</code> · <code>test_scanpool_fallback</code></p>
+
+<h3>三树对照：映射逐条比对</h3>
+<table>
+  <tr><th>代码树</th><th>条数</th><th>映射 digest（全量序列化 sha256 前 16）</th><th>板块指数2</th><th>板块指数3</th></tr>
+  <tr><td>原始 custom-dev</td><td class="num">470</td><td><code>de0538e55d237a54</code></td><td class="num">125</td><td class="num">315</td></tr>
+  <tr><td>上一轮「完整版」</td><td class="num">467</td><td><code>516be0e627e97ff9</code></td><td class="num">128</td><td class="num">309</td></tr>
+  <tr><td><b>本版单一源</b></td><td class="num">467</td><td><b><code>516be0e627e97ff9</code></b>（完全相同）</td><td class="num">128</td><td class="num">309</td></tr>
+</table>
+<p class="muted">digest 相同 = 467 条映射<b>逐条完全一致</b>；说明本次只是「把数据从仓库挪到文件」，功能零变化，而代码少了 858 行。</p>
+
+<h3>成分股链路（端到端）</h3>
+<table>
+  <tr><th>881 代码</th><th>名称</th><th>成分股</th><th>备注</th></tr>
+  <tr><td>881218</td><td>汽车零部件</td><td class="num">267</td><td>原快照里根本没有这个节点</td></tr>
+  <tr><td>881219</td><td>车身附件及饰件</td><td class="num">52</td><td>原快照错标为「汽车零部件」</td></tr>
+  <tr><td>881220</td><td>底盘与发动机系统</td><td class="num">97</td><td>对照组，两版一致（证明是精确修复而非重算）</td></tr>
+  <tr><td>881008 / 881026</td><td>油服工程 / 化学原料</td><td class="num">14 / 81</td><td>原快照漏项</td></tr>
+  <tr><td>881164</td><td>—</td><td class="num">0</td><td>已下架，正确不在映射中</td></tr>
+</table>
+
+<h3>解压复验</h3>
+<p>按最小可替换单元交付：zip 内按 <code>App/</code>、<code>Test/</code> 层级组织，覆盖即用；<b>从 zip 解压到干净目录后复验通过</b>（无内嵌表残留、4 项测试通过、映射 digest 与源树一致）。</p>
+
+<h2>五、遗留事项（未包含在本包）</h2>
+<ol>
+  <li><b><code>zhb.zip</code> 在线自愈</b>：既然服务器能下 <code>zhb.zip</code>（实测 <code>meta.size = 1406899</code>，内含 <code>tdxzs3.cfg</code>），可以给「板块刷新」按钮加一项 —— 下载 <code>zhb.zip</code> → 解压出需要的文件。那样本机文件缺失也能一键修复。属新增功能，需单独评估，本轮未做。</li>
+  <li><b>前端不显示 <code>errors</code></b>：目前只 <code>console.warn</code>，失败原因不会弹到界面。若想让指引直达用户，需要动前端。</li>
+  <li><b>脏数据</b>：<code>tdxhy.cfg</code> 里仍有「股票挂着已撤行业码」的历史残留行，扫已下架码会返回 1~2 只旧票 —— 属数据侧问题，与本次改造无关。</li>
+</ol>
+
+<div class="foot">
+  核实方式：GitHub API + raw 通道拉取 <code>custom-dev</code> 基线；本机通达信目录 <code>D:\new_tdx_hd_test</code> 实测；
+  7709 主站（<code>115.238.90.165</code> 等）实测；<code>eltdx 3.1.7</code> 交叉对照。<br>
+  未改动用户项目目录，全部产出在沙盒内完成。
+</div>
+
+</div>
+</body>
+</html>

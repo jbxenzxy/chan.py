@@ -242,16 +242,20 @@ def test_tdxhy_bootstrap(failures):
     in_dapi = os.path.exists(os.path.join(REPO_ROOT, "DataAPI", "tdxhy_mapping_data.py"))
     appdata_src = open(os.path.join(REPO_ROOT, "App", "AppData.py"),
                        encoding="utf-8").read()
-    merged_ok = ("_TDXHY_X_TO_881" in appdata_src and "_TDXHY_881_TO_X" in appdata_src
-                 and "def load_tdxhy_mapping" in appdata_src)
+    # 单源化判定：映射数据已整体移出仓库，权威源为机器上的 tdxzs3.cfg；
+    # 只保留加载点与定位常量，内嵌快照不得回潮（连同 DataAPI/ 残留一起查）。
+    merged_ok = ("def load_tdxhy_mapping" in appdata_src
+                 and "_TDXZS3_RELPATH" in appdata_src
+                 and "_TDXHY_X_TO_881 = {" not in appdata_src
+                 and "_TDXHY_881_TO_X = {" not in appdata_src)
     if in_app or in_dapi or not merged_ok:
-        failures.append(f"⑤ tdxhy 文件位置异常: App/独立文件={in_app} "
-                        f"DataAPI/残留={in_dapi} AppData内嵌={merged_ok}")
-        print(f"[FAIL] ⑤a 文件合并: App/独立文件={in_app}, DataAPI/ 残留={in_dapi}, "
-              f"AppData内嵌={merged_ok}")
+        failures.append(f"⑤ tdxhy 单一源异常: App/独立文件={in_app} "
+                        f"DataAPI/残留={in_dapi} AppData单源ok={merged_ok}")
+        print(f"[FAIL] ⑤a 单一源: App/独立文件={in_app}, DataAPI/ 残留={in_dapi}, "
+              f"AppData单源ok={merged_ok}")
     else:
-        print("[PASS] ⑤a 文件合并: tdxhy_mapping_data.py 已并入 AppData.py，"
-              "App/ 与 DataAPI/ 均无残留")
+        print("[PASS] ⑤a 单一源: 映射数据已移出仓库，AppData.py 只读机器上的 "
+              "tdxzs3.cfg（App/ 与 DataAPI/ 均无数据文件残留）")
 
     from App import AppEngine as m  # noqa: F401  （bootstrap 注入在 import 时完成）
     from DataAPI import TdxAPI
@@ -260,11 +264,11 @@ def test_tdxhy_bootstrap(failures):
         failures.append("⑤ bootstrap 注入未生效（TdxAPI 侧映射为空）")
         print("[FAIL] ⑤b 启动注入: import AppEngine 后映射仍为空")
     elif len(x2) < 400 or len(t2x) < 400:
-        failures.append(f"⑤ 注入量异常: {len(x2)}/{len(t2x)}（基线 470）")
+        failures.append(f"⑤ 注入量异常: {len(x2)}/{len(t2x)}（下限 400）")
         print(f"[FAIL] ⑤b 启动注入: 映射量 {len(x2)}/{len(t2x)} 异常")
     else:
         print(f"[PASS] ⑤b 启动注入: import AppEngine 即完成注入，"
-              f"TdxAPI 侧 {len(t2x)} 条（基线 470）")
+              f"TdxAPI 侧 {len(t2x)} 条（随通达信行业树变化，不写死）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

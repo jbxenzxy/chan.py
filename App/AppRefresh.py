@@ -188,7 +188,7 @@ def _fetch_index_belong_from_akshare(timeout=30):
                 if mkt:
                     result[mkt + item["code"]] = _idx_name
                     count += 1
-            log.info(f"[指数归属] {_idx_name}({_idx_code}): 已成功获取 {count}只 成分股")
+            log.info(f"[指数归属] ✅ {_idx_name}({_idx_code}): 成功获取 {count}只 成分股")
         except Exception as e:
             log.info(f"[指数归属] {_idx_name}({_idx_code}) 获取失败: {e}")
 
@@ -445,7 +445,9 @@ def _refresh_stock_names():
         except Exception as e:
             log.info(f"[股名刷新]   读取tdxzs.cfg失败: {e}")
 
-    # 研究行业(881xxx)从 AppData 内嵌映射表读取（单一加载函数 app_data.load_tdxhy_mapping）
+    # 研究行业(881xxx)从本机权威源 tdxzs3.cfg 读取（单一加载函数
+    # app_data.load_tdxhy_mapping；该源缺失时抛 RuntimeError，下表 try 兜住 ——
+    # 补名失败不影响其余代码名）
     tdxhy_filled = 0
     try:
         _TDXHY_881_TO_X = app_data.load_tdxhy_mapping()[1]
@@ -532,7 +534,7 @@ def _refresh_stock_names():
             log.info(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count})")
         else:
             log.info(f"[股名刷新] 步骤5/5 过滤保存: 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count})")
-        log.info(f"[股名刷新] 刷新完成: 共 {len(all_names)} 只股票名称, 已保存到 {app_config.stock_names_cache_file}")
+        log.info(f"[股名刷新] ✅ 刷新完成: 共 {len(all_names)} 只股票名称, 已保存到 {app_config.stock_names_cache_file}")
     else:
         log.info("[股名刷新] 步骤5/5 过滤保存: 失败，未获取到任何数据")
 

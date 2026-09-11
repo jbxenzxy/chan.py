@@ -314,24 +314,25 @@ class RiskConfig(BaseModel):
         **启动即报错**（pydantic 不认识的字段）。它们现在完全没有语义，
         丢弃比让服务起不来合适。
 
-        但仍要**可见**：静默丢弃会让"配置里有这两行"这件事永远不被发现，
-        等哪天有人照着旧文档把它们加回去，会以为还在生效。故记入
-        `RiskConfig.dropped_legacy_keys` 并打一条 WARNING。
-
-        ⚠️ 与 state.db 的旧 schema 闸门（G1）**不同口径**：state.db 不可编辑、
-        语义已变 → 严格拒绝启动；config.json 可编辑、且多出的键已无语义
-        → 丢弃 + 告警。用户 2026-09-11 拍板沿用本口径。
+        ⚠️ 2026-09-12 修正：告警判据**只认本次输入的命中**（局部 `hits`），不再挂
+        在 `cls.dropped_legacy_keys` 这份共享类变量上。旧实现的后果（实测）：
+        进程内只要解析过**一次**带旧键的配置，此后**每次**加载——哪怕配置文件
+        早已删干净——都会再喊一遍，告警因此失去信号价值（真出问题时已喊了几
+        百遍）。`dropped_legacy_keys` 保留**累计记账**（诊断 / 测试用），但**不做
+        判据**。
         """
+        hits: List[str] = []
         if isinstance(data, dict):
             for k in ("max_open_positions", "unlock_no_new_open"):
                 if k in data:
                     data.pop(k, None)
+                    hits.append(k)
                     cls.dropped_legacy_keys.append(k)
-        if cls.dropped_legacy_keys:
+        if hits:
             _log.warning(
                 "配置文件含已删除的配置项 %s，已忽略（2026-09-11 重构："
                 "「同时持仓笔数上限」「解锁后补开」随概念一并删除）。"
-                "请从配置文件里删掉这几行。", sorted(set(cls.dropped_legacy_keys)))
+                "请从配置文件里删掉这几行。", sorted(set(hits)))
         return data
 
     @field_validator("max_volume")

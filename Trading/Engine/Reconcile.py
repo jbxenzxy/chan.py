@@ -104,8 +104,9 @@ class ReconcileMixin:
         if not self.positions.is_empty():
             all_cleared = False
         if all_cleared:
-            self._last_close_failed_bar_ts = 0
             # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
+            # （2026-09-12：原 `_last_close_failed_bar_ts = 0` 是旧 ts 口径冷却的
+            #  漏迁死代码 —— 全仓仅此一处赋值，无声明、无读取方，已删。）
             self._last_close_failed_bar_seq = 0
             self._persist()
             self._sync_state()
@@ -125,9 +126,22 @@ class ReconcileMixin:
                           net_volume=self.positions.net_volume(),
                           run_side=str(self._run_side), source=source,
                           note="对账后净敞口归零，同步结束 run，避免孤儿风控锚被持久化")
-            self._run_end()
+            # 2026-09-12：按文档 §5.5「配套改动」改用 `_run_reset`（清字段、不写
+            # 事件）—— 对账清仓没有"一段 run 正常结束"的语义，再写一条 `run_end`
+            # 会让运维侧误以为真发生了一次离场（原实现是 `run_ended_by_reconcile`
+            # + `run_end` 双事件）。上面那条事件已足够表达"被对账收口"。
+            self._run_reset()
             self._persist()
             self._sync_state()
+        # ══════════════════════════════════════════════════════════════
+        # Phase 5 G4 的**反向边**（2026-09-12 补）：对账只清掉**一侧**时，
+        # 净敞口会从 0 变成非 0（另一侧留下来变成裸奔敞口）。这一段必须在
+        # 上面的 if 块**之外**无条件执行 —— 上面的块只在"净敞口归零"时成立。
+        #   不补这条边的后果（实测）：`_run_start` 只在 `_execute` 成交时调用，
+        #   对账改簿不经过它 → 净敞口非 0 却没有风控锚 → `_settle_positions`
+        #   在 `_run_view() is None` 时静默 return → **L1-L3 失效且无任何告警**。
+        # ══════════════════════════════════════════════════════════════
+        self._check_run_anchor("持仓对账")
 
     def _reconcile_side(self, side: Side, side_positions: List[Position],
                         engine_vol: int, real_vol: int, source: str) -> bool:

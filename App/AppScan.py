@@ -364,13 +364,15 @@ def _debug_read_page_index_stocks(sector_code):
 
 
 def read_tdxhy_l2_indices():
-    """返回所有二级行业板块指数列表（X+4位代码对应的881yyy），共125个
+    """返回二级行业板块指数列表（X 码 4 位者对应的 881yyy，数量随
+    通达信行业树变化，不得写死；权威源见 AppData.load_tdxhy_mapping）
     （委托 app_data.tdxhy_l2_indices）"""
     return app_data.tdxhy_l2_indices()
 
 
 def read_tdxhy_l3_indices():
-    """返回所有三级行业板块指数列表（X+6位代码对应的881yyy），共315个
+    """返回三级行业板块指数列表（X 码 6 位者对应的 881yyy，数量随
+    通达信行业树变化，不得写死；权威源见 AppData.load_tdxhy_mapping）
     （委托 app_data.tdxhy_l3_indices）"""
     return app_data.tdxhy_l3_indices()
 
@@ -542,8 +544,16 @@ class Scanner:
             if reader is None:
                 errors.append(f"未知来源: {src}")
                 continue
-            read_fn, _ = reader
-            src_stocks[src] = read_fn()
+            read_fn, src_label = reader
+            try:
+                src_stocks[src] = read_fn()
+            except Exception as e:      # noqa: BLE001 —— 单来源失败不得中断整批扫描
+                # 与下方「流通市值」「预过滤」同构：记录 + 降级，其余来源照常合并。
+                # 行业映射权威源缺失即走此路（消息含可执行指引）；前端把 errors
+                # 打到控制台，后端 WARNING 留痕，避免「静默 0 只候选」。
+                src_stocks[src] = []
+                errors.append(f"{src_label} 来源失败: {e}")
+                log.warning(f"[扫描来源] {src_label} 读取失败，已跳过该来源: {e}")
 
         # 合并去重
         merged = []

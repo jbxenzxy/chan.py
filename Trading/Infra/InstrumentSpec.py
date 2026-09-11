@@ -45,6 +45,12 @@ class InstrumentSpec(BaseModel):
                                               #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
                                               #   OrderIntent.CLOSE 只用于跨日单，正常流程
                                               #   恒走平昨费率，置 False 可整体关闭今仓判定。
+    # 价格笼子band（§5.8.5 D12 落地项，2026-09-12 补字段位）。
+    #   含义：限价单相对最新价的**最大偏离点数**；超出即被交易所拒（中金所的
+    #   "价格保护带"、上期所的"涨跌停/限价距离"都归这一类）。
+    #   ⚠️ **一期不消费** —— 只是把字段位占住，避免二期加价格笼子护栏时又去
+    #   改一遍合约规格模型（届时只需在 Broker 的报单前校验里读它）。
+    price_band_points: float = 0.0            # 0 = 不限制（一期的唯一合法值）
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:

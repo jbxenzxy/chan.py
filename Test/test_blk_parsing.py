@@ -23,7 +23,7 @@
   ⑦ 成分股扫描：stock_list(source="page_index") 消费 get_index_stocks
      输出，经预过滤 + _source 标注
   ⑧ 板块指数2/3 扫描：stock_list(source="tdxhy2"/"tdxhy3") 走真实行业
-     映射数据（125/315 个），且不触发流通市值请求
+     映射数据（数量随通达信行业树变化，不写死），且不触发流通市值请求
   ⑨ 多来源合并去重：zxg + page_index 同码去重、非 zxg 来源覆盖 zxg 语义
 
 运行：python Test/test_blk_parsing.py            # 校验（run_all 组件）
@@ -259,12 +259,22 @@ def test_tdxhy_scan(failures):
         got2 = scanner.stock_list("tdxhy2")
         got3 = scanner.stock_list("tdxhy3")
         stocks2, stocks3 = got2["stocks"], got3["stocks"]
-        if len(stocks2) != 125:
-            failures.append(f"tdxhy2 数量不符: {len(stocks2)} != 125")
-            print(f"[FAIL] ⑧ 板块指数2: 数量 {len(stocks2)}")
-        if len(stocks3) != 315:
-            failures.append(f"tdxhy3 数量不符: {len(stocks3)} != 315")
-            print(f"[FAIL] ⑧ 板块指数3: 数量 {len(stocks3)}")
+        # 期望值由**权威源自身**推出（X 码位数），不写死固定条数：
+        # 通达信重构行业树会改变二级/三级数量（实测 2026-09 为 128 / 309）。
+        from App.AppData import app_data as _ad
+        _x2, _ = _ad.load_tdxhy_mapping()
+        _exp2 = sum(1 for _x in _x2 if len(_x) - 1 == 4)
+        _exp3 = sum(1 for _x in _x2 if len(_x) - 1 == 6)
+        # 量级护栏：防「权威源整体退化成空/残缺」时用例假通过
+        if not 80 <= _exp2 <= 400 or not 200 <= _exp3 <= 800:
+            failures.append(f"行业树量级异常: 二级={_exp2} 三级={_exp3}")
+            print(f"[FAIL] ⑧ 板块指数2/3: 权威源量级异常 二级={_exp2} 三级={_exp3}")
+        if len(stocks2) != _exp2:
+            failures.append(f"tdxhy2 数量不符: {len(stocks2)} != {_exp2}（权威源当前值）")
+            print(f"[FAIL] ⑧ 板块指数2: 数量 {len(stocks2)} != 权威源 {_exp2}")
+        if len(stocks3) != _exp3:
+            failures.append(f"tdxhy3 数量不符: {len(stocks3)} != {_exp3}（权威源当前值）")
+            print(f"[FAIL] ⑧ 板块指数3: 数量 {len(stocks3)} != 权威源 {_exp3}")
         for stk in stocks2:
             if stk.get("_source") != "tdxhy2" or stk.get("prefix") != "1" or not stk.get("code", "").startswith("881"):
                 failures.append(f"tdxhy2 条目格式不符: {stk!r}")
@@ -274,7 +284,8 @@ def test_tdxhy_scan(failures):
                 failures.append(f"tdxhy3 条目格式不符: {stk!r}")
                 break
         if not any("⑧" in f for f in failures):
-            print(f"[PASS] ⑧ 板块指数2/3: tdxhy2={len(stocks2)} tdxhy3={len(stocks3)}，无流通市值请求")
+            print(f"[PASS] ⑧ 板块指数2/3: tdxhy2={len(stocks2)} tdxhy3={len(stocks3)}"
+                  f"（权威源当前值 {_exp2}/{_exp3}），无流通市值请求")
     finally:
         _scan_mod.fetch_float_mc_from_tencent = orig_fetch
 

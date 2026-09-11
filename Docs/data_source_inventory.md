@@ -48,17 +48,17 @@
 入口：`TdxAPI.get_index_stocks(sector_code)`，**定义于 `DataAPI/TdxAPI.py:1665`**。
 上游：`AppScan.py:363`（`Scanner.stock_list` 的 `page_index` 来源，`AppScan.py:533` 注册）→ `FrontAPI.py:358` `GET /api/stocks/scan/read/candidates`。
 
-| 板块代码类型 | 取数方式 | 底层真实数据源 | 代码位置 |
-| --- | --- | --- | --- |
-| `881xxx` 研究行业（新版） | `_read_tdxhy_sector_stocks` | 通达信本地行业配置 `T0002/hq_cache/tdxhy.cfg` | `:2276` / 解析 `:2213` |
-| 港股指数 `HSTECH` / `HSIDI` | `_read_hk_index_stocks` | 恒生指数公司官网 `hsi.com.hk` Factsheet **PDF** | `:2077` |
-| `000001` 上证指数 | `_read_sh_index_stocks_exchange` | 上交所官网 `query.sse.com.cn/sseQuery/commonQuery.do`（主板A `STOCK_TYPE=1` + 科创板 `8` 两段合并） | `:1851` |
-| 中证指数 `000300/000905/000852/000688` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons` | AKShare / csindex（中证指数公司） | `:2119` |
-| `399xxx` 深交所指数 | 深交所官网 XLS 直连 | `www.szse.cn/api/report/ShowReport`（`CATALOGID=1747_zs`，`SHOWTYPE=xls`） | `:2168` |
-| 其他指数（`000xxx` 非中证 / `932xxx` 等） | `_fetch_csi_index_stocks`（兜底） | AKShare / csindex（中证指数公司） | `:2203` |
-| `880xxx` 概念 / 风格板块 | **Step3** 优先 `_read_infoharbor_sector_stocks` | 本地 `T0002/hq_cache/infoharbor_block.dat` | `:1694` / `:1653` |
-| `880xxx`（Step3 未命中时） | **Step4** 兜底 `_debug_read_page_index_stocks` 链路下的 `_download_block_gn_from_network` | 本地 `tdxzs.cfg` 查名 → `block_zs/gn/fg/dat` **本地优先，缺失才用 pytdx 联网下载**（`TDX_BLOCK_SERVERS` 16 台，7709） | `:1732` / `:1259` |
-| `8803xx` / `8804xx` 旧版行业 | 直接返回空并提示换用 `881` | （无成分股数据） | `:1727` |
+| 板块代码类型 | 取数方式 | 底层真实数据源 | 代码位置 | spblock.dat 能否取得（本地离线，本机实测） |
+| --- | --- | --- | --- | --- |
+| `881xxx` 研究行业（新版） | `_read_tdxhy_sector_stocks` | 通达信本地行业配置 `T0002/hq_cache/tdxhy.cfg` | `:2276` / 解析 `:2213` | **否** — spblock.dat 只含交易所／指数公司宽基 + ETF + 债券，不含研究行业分类 |
+| 港股指数 `HSTECH` / `HSIDI` | `_read_hk_index_stocks` | 恒生指数公司官网 `hsi.com.hk` Factsheet **PDF** | `:2077` | **否** — A股本地文件，不含港股指数 |
+| `000001` 上证指数 | `_read_sh_index_stocks_exchange` | 上交所官网 `query.sse.com.cn/sseQuery/commonQuery.do`（主板A `STOCK_TYPE=1` + 科创板 `8` 两段合并） | `:1851` | **否** — spblock.dat 无 上证指数（其成分股＝全部沪市，走专用接口） |
+| 中证指数 `000300/000905/000852/000688/000510` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons` | AKShare / csindex（中证指数公司） | `:2119` | **部分** — 中证500(000905)／中证1000(000852)／中证A500(000510) **是**（各 500／1000／500 只）；沪深300(000300)／科创50(000688)／中证800(000906) **否**（后三者走 infoharbor_block.dat 的 ZS 段） |
+| `399xxx` 深交所指数 | 深交所官网 XLS 直连 | `www.szse.cn/api/report/ShowReport`（`CATALOGID=1747_zs`，`SHOWTYPE=xls`） | `:2168` | **部分** — 深证成指(399001)／国证2000(399303) **是**（各 500／2000 只）；创业板指(399006)／深证100(399004) 等其余 399xxx **否** |
+| 其他指数（`000xxx` 非中证 / `932xxx` 等） | `_fetch_csi_index_stocks`（兜底） | AKShare / csindex（中证指数公司） | `:2203` | **个别** — 仅超大盘／超小盘宽基：中证2000(932000) **是**（2000 只）；上证50(000016)／上证180(000010)／上证380(000380) 等其余 **否** |
+| `880xxx` 概念 / 风格板块 | **Step3** 优先 `_read_infoharbor_sector_stocks` | 本地 `T0002/hq_cache/infoharbor_block.dat` | `:1694` / `:1653` | **否** — spblock.dat 不含概念／风格板块 |
+| `880xxx`（Step3 未命中时） | **Step4** 兜底 `_debug_read_page_index_stocks` 链路下的 `_download_block_gn_from_network` | 本地 `tdxzs.cfg` 查名 → `block_zs/gn/fg/dat` **本地优先，缺失才用 pytdx 联网下载**（`TDX_BLOCK_SERVERS` 16 台，7709） | `:1732` / `:1259` | **否** |
+| `8803xx` / `8804xx` 旧版行业 | 直接返回空并提示换用 `881` | （无成分股数据） | `:1727` | **否** |
 
 路由顺序（`get_index_stocks`）：`881xxx` → 港股指数 → 非 `88` 开头走标准指数 → `880xxx` 走 Step3/Step4。
 
@@ -67,6 +67,7 @@
 * **市场前缀以 csindex 的「交易所」字段为权威**（`_index_cons_to_stocks` `:1769`）；仅在拿不到时按代码首数字兜底（`_prefix_by_digit` `:1750`）。此前按 `first in "689"` 的旧规则会把北交所 `8xxxxx`/`920xxx` 误判为沪市。
 * 所有网络抓取均经 `_run_with_timeout` 限时，避免扫描因网络阻塞卡死。
 * `880xxx` 的 Step3 覆盖 421 个板块；Step4 仅在 Step3 未命中时触发，且 `block_*.dat` 的成分数存在 **400 只上限**（见第四节）。
+* **`spblock.dat` 仅覆盖「特定宽基」，不是「所有上交所／深交所／中证指数」的通用源**（2026-09-12 本机 `D:\new_tdx_hd_test` 实测，共 35 个块）。实测含成分股的宽基仅 6 个：中证500(500)／中证1000(1000)／中证2000(2000)／中证A500(500)／国证2000(2000)／深证成指(500)；另含 ETF（沪深股通ETF 447）、债券（上证／深证做市债券 725／222）、基金（创业和科创基金 187）等非指数块。**不含** 上证指数、上证50／180／380／580、沪深300、中证800、中证100／200、科创50／100、深证100、创业板指／50、国证1000 等。**两文件对宽基指数是「互补存储、不重叠」**（2026-09-12 实测，非按「成分股数 ≤ 800」划分——中证500(500)／深证成指(500)／中证A500(500) 虽 ≤800 却在 `infoharbor_block.dat` 的 ZS 段为空，而中证800(800) 虽 >500 却在 ZS 段有 800 只）：上述 6 个宽基**只**在 spblock.dat；沪深300、中证800、上证50／180／380／580、科创50／100、深证100、创业板指／50 等**只**在 `infoharbor_block.dat` 的 ZS 段（实测各有 50～800 只成员）。**例外**：上证指数、国证1000 在本快照两份文件里均为空（未固化成员列表，通达信可能另算）。因此「扩展 → 成分股」的本地二分是：spblock.dat 存的 6 个宽基走 spblock.dat，其余标准／中小盘宽基走 infoharbor_block.dat 的 ZS 段；`88` 开头（881 研究行业 + 880 概念风格）则分别来自 `tdxhy.cfg` 与 `infoharbor_block.dat`，**均不在 spblock.dat 内**。该列记录的是「可作为离线兜底的真实本地源」，chan.py 当前并未读取 spblock.dat（指数归属仍走 AKShare，见第一节）。
 
 ---
 

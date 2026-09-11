@@ -654,7 +654,10 @@ class SimNowBroker(Broker):
                      signal_key: str, note: str, is_exit: bool = False) -> Order:
         """开仓（offset=OPEN）。
 
-        is_exit=False —— **入场**（转移 1/2/6，交易信号触发）：单次超价，不追价。
+        is_exit=False —— **入场**（转移 1/2/3，交易信号触发）：单次超价，不追价。
+          2026-09-12 更正：原文写"转移 1/2/6"，而转移表**只有 1~5**
+          （`Engine.py` 全部 `transition=` 赋值集合 = {1,2,3,4,5}；文档 L332 明写
+          "状态转移表无第 6 种情况"）。转移 ③ 虽是 CLOSE，但 `is_exit=False`。
           "入场没成功，最多不赚钱，但不会亏钱。" 全撤 → rejected，等下一个信号。
         is_exit=True —— **软离场**（转移 4，运行态 L1-L3 触发的反向开仓锁仓）：
           必须追价。锁仓本质也是离场，卡单不追会让浮亏扩大、浮盈变浮亏。

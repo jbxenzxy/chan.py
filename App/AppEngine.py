@@ -118,13 +118,21 @@ _set_tdx_config(
     forward_adjust_enabled=FORWARD_ADJUST_ENABLED,
 )
 
-# 行业映射单源注入：映射表硬编码内嵌于 App/AppData.py（原独立数据文件
-# tdxhy_mapping_data.py 已合并入 AppData.py），由 AppData.load_tdxhy_mapping
-# 单一函数加载；DataAPI 与 App 互不依赖，TdxAPI 侧经 set_tdx_hy_mapping
-# 注入（与 set_tdx_config 同一注入模式）。加载失败硬失败（ValueError），
-# 不静默降级空表。
+# 行业映射单源注入：权威源为本机通达信文件 T0002/hq_cache/tdxzs3.cfg（本仓库
+# 不再内嵌映射快照），由 AppData.load_tdxhy_mapping 单一函数加载；DataAPI 与
+# App 互不依赖，TdxAPI 侧经 set_tdx_hy_mapping 注入（与 set_tdx_config 同一
+# 注入模式）。
+# 护栏：该文件缺失只应让『板块指数2/3』不可用，**不得阻断整个应用启动**
+# （自选股扫描、K线等与行业映射无关的功能必须照常可用）。故此处捕获并
+# WARNING 明示，失败详情由 load_tdxhy_mapping 在真正被使用时再抛给用户，
+# 报错仍带可执行指引 —— 属「延迟硬失败」，不是静默降级。
 from DataAPI.TdxAPI import set_tdx_hy_mapping as _set_tdx_hy_mapping
-_set_tdx_hy_mapping(*app_data.load_tdxhy_mapping())
+try:
+    _set_tdx_hy_mapping(*app_data.load_tdxhy_mapping())
+except Exception as _exc_tdxhy:      # noqa: BLE001 —— 板块数据缺失不得阻断启动
+    log.warning(
+        "[行业映射] 启动注入失败（『板块指数2/3』将不可用，其余功能不受影响）："
+        f"{_exc_tdxhy}")
 
 # 全量数据模式：True=加载全部K线不做时间截断；False=默认模式
 # 读取配置中心 AppConfig（单一事实源 app_config.full_data_mode）。
