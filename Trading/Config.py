@@ -199,7 +199,7 @@ class SourceConfig(BaseModel):
     sse_base: str = "http://127.0.0.1:18081"  # sse 模式的行情服务地址
     symbol: str = "KQ.m@CFFEX.IF"             # 订阅合约（与 instrument.signal_symbol 一致）
     freq: str = "5m"                          # K 线周期（周期只做字符串透传，不参与分钟换算）
-    speed: float = 0.0                        # replay 每根 K 线间隔秒数（0=尽快）
+    speed: float = 0.0                   # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
     # 信号新鲜度过滤 —— K 线位置口径（2026-09-08 取代原 signal_max_age_minutes）：
@@ -395,7 +395,7 @@ class BrokerConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    overprice_ticks: int = 5         # 超价 = overprice_ticks × 品种 tick（默认 5 tick；IF tick=0.2 → 1.0 点）。二期其它品种加载各自 price_tick 自动缩放。
+    overprice_ticks: int = 5              # 超价 = overprice_ticks × 品种 tick（默认 5 tick；IF tick=0.2 → 1.0 点）。二期其它品种加载各自 price_tick 自动缩放。
     fill_timeout_open: float = 5.0   # 入场报单等待终态秒数（FOK 下退化为通道异常 watchdog）
     fill_timeout_close: float = 5.0  # 离场报单每轮等待终态秒数；未成交则立即重报追价
     close_max_chase: int = 20             # 离场追价最大轮数（引擎还会跨 K 线继续重试，实际=直到成交）
