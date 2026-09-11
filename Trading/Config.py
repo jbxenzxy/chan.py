@@ -387,7 +387,7 @@ class BrokerConfig(BaseModel):
     """broker 专属参数（仅 simnow/live 生效；dry_run 忽略）。
 
     全部报单都是 FOK（中金所 IF/IH/IC/IM 支持；郑商所不支持 FOK）：
-      开仓 OPEN / 解锁 UNLOCK / 锁仓 LOCK / 平仓 CLOSE 四类共用 overprice_points。
+      开仓 OPEN / 解锁 UNLOCK / 锁仓 LOCK / 平仓 CLOSE 四类共用 overprice_ticks（默认 5 tick × 品种 price_tick，IF=1.0 点）。
       入场不成交 → 整笔作废等下一信号；离场不成交 → 立即按最新对手价重报直到成交。
 
     单一事实源：broker 参数默认值只在本模型维护，Broker/SimNow.py 不再自带兜底。
@@ -395,7 +395,7 @@ class BrokerConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    overprice_points: float = 1.0    # 超价点数：下单价 = 对手价 ± 此值并取整到 tick（IF tick=0.2 → 5 tick）
+    overprice_ticks: int = 5         # 超价 = overprice_ticks × 品种 tick（默认 5 tick；IF tick=0.2 → 1.0 点）。二期其它品种加载各自 price_tick 自动缩放。
     fill_timeout_open: float = 5.0   # 入场报单等待终态秒数（FOK 下退化为通道异常 watchdog）
     fill_timeout_close: float = 5.0  # 离场报单每轮等待终态秒数；未成交则立即重报追价
     close_max_chase: int = 20             # 离场追价最大轮数（引擎还会跨 K 线继续重试，实际=直到成交）

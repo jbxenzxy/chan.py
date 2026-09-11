@@ -501,7 +501,7 @@ class FakeInsertApi(FakeApi):
 
 
 bu = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.3,
-                                            "overprice_points": 0.6})
+                                            "overprice_ticks": 3})
 bu._conn_error = None  # 无凭据实例化会置连接错误，测试注入 api 前先清掉
 
 # 6.1 未成交：单次报单 + 超时撤单 + rejected，不追价
@@ -541,7 +541,7 @@ print("── [7] D13：is_exit 决定追价轮数（同一 intent）──")
 
 bu2 = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.05,
                                             "fill_timeout_close": 0.01,
-                                            "overprice_points": 0.6,
+                                            "overprice_ticks": 3,
                                             "chase_interval": 0.0})
 bu2._conn_error = None
 _cmc = int(DEFAULT_CONFIG["broker_params"]["close_max_chase"])

@@ -15,7 +15,7 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
       · 不再有 open_advanced / overprice_points_fok 配置（旧版可回退 GFD 的
         参数已删除，恒定 FOK，杜绝配置漂移回旧路径）
       · fill_timeout_open/close 退化为通道异常兜底 watchdog（断线防挂死）
-      · overprice_points 合并为单一值 1.0（两类报单共用）
+      · overprice_ticks 合并为单一值 5（=IF 1.0 点，两类报单共用）
 
     交易所事实依据（已核实）：
       · 中金所（IF/IH/IC/IM）官方支持限价+FOK（CFFEX 交易概览 + 2026 版异常交易管理办法）
@@ -184,7 +184,7 @@ _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
 
 print("\n[1] 配置默认值（单一事实源 Trading/Config.py）")
 bp = DEFAULT_CONFIG["broker_params"]
-check("overprice_points 合并为 1.0（四类报单共用）", bp["overprice_points"], 1.0)
+check("overprice_ticks 合并为 5（四类报单共用，IF=5×0.2=1.0 点）", bp["overprice_ticks"], 5)
 check("open_advanced 已删除（恒定 FOK，无 GFD 回退）", "open_advanced" in bp, False)
 check("overprice_points_fok 已删除（参数合并）", "overprice_points_fok" in bp, False)
 check("close_max_chase 默认 20 轮", bp["close_max_chase"], 20)
@@ -201,7 +201,7 @@ msg = api.inserted[0]
 check("advanced == FOK", msg["advanced"], "FOK")
 check("direction BUY", msg["direction"], "BUY")
 check("offset OPEN", msg["offset"], "OPEN")
-check("限价 = ask + overprice_points(1.0) = 4566.0", msg["limit_price"], 4566.0)
+check("限价 = ask + overprice_ticks(5)×tick(0.2)=1.0 = 4566.0", msg["limit_price"], 4566.0)
 check("watchdog 超时兜底撤单仍被调用（通道异常）", len(api.cancelled), 1)
 check("Order 判定 rejected（未成交）", o.status, "rejected")
 
@@ -235,7 +235,7 @@ b.submit(OrderIntent.OPEN, Side.SHORT, 1, 4550.0, "k-soft-exit", is_exit=True)
 check("软离场追价报单次数 = close_max_chase", len(api.inserted), 2)
 check("所有软离场报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
-check("软离场超价用 overprice_points 1.0（开空 bid-1.0=4559.0）",
+check("软离场超价用 overprice_ticks(5)×tick(0.2)=1.0（开空 bid-1.0=4559.0）",
       api.inserted[0]["limit_price"], 4559.0)
 check("软离场报文 offset=OPEN（反向开仓）", api.inserted[0]["offset"], "OPEN")
 
@@ -288,7 +288,7 @@ b = make_broker(api=api, params=dict(_FAST, open_advanced="GFD",
 b.submit(OrderIntent.OPEN, Side.LONG, 1, 4550.0, "k-neg")
 check("残留 open_advanced=GFD 仍是 FOK（恒定不可回退）",
       api.inserted[0]["advanced"], "FOK")
-check("残留 overprice_points_fok 不生效（仍用 overprice_points=1.0）",
+check("残留 overprice_points_fok 不生效（仍用 overprice_ticks=5=1.0 点）",
       api.inserted[0]["limit_price"], 4566.0)
 
 print("\n" + "=" * 60)

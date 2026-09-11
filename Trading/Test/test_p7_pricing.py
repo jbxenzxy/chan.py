@@ -5,7 +5,7 @@ P7 超价下单 + 平仓追价 单元测试
 背景（M4 改动）
     P0-P6 之前的挂单是「信号 K 线收盘价朝不利方向取整」的保守限价单，快速行情里
     容易挂偏一两档 → 卡单不成交。M4 改为「超价」：下单瞬间取实时对手价
-    （买方向=ask / 卖方向=bid），再 ± overprice_points（默认 1.0 点 = IF 5 tick，
+    （买方向=ask / 卖方向=bid），再 ± overprice_ticks×tick（默认 5 tick；IF=1.0 点，
     朝成交方向取整到 tick），主动跨过价差确保成交。
 
     方向映射（最容易搞反）：
@@ -143,10 +143,10 @@ check("平多回退 align_exit(4565.1,+)", b_fb._build_limit_price("close", Side
 b_ok = make_broker(api=MockApi(MockQuote(ask=4565.0, bid=4560.0)))
 check("有行情优先超价(开多)", b_ok._build_limit_price("open", Side.LONG, 9999.0), 4566.0)
 
-print("\n[5] 参数覆盖：overprice_points 从 params 读取（默认 spec=1.0）")
+print("\n[5] 参数覆盖：overprice_ticks 从 params 读取（默认 5 tick = IF 1.0 点）")
 b_p = make_broker(api=MockApi(MockQuote(ask=4565.0, bid=4560.0)))
-b_p.params = {"overprice_points": 1.0}
-check("params overprice=1.0 -> 开多 ask+1.0", b_p._build_limit_price("open", Side.LONG, 9999.0), 4566.0)
+b_p.params = {"overprice_ticks": 5}
+check("params overprice_ticks=5（=IF 1.0 点）-> 开多 ask+1.0", b_p._build_limit_price("open", Side.LONG, 9999.0), 4566.0)
 
 print("\n[6] 平仓兜底限价 _chase_fallback_limit(action=close)（仅行情取不到时使用）")
 b_fb2 = make_broker(api=None)

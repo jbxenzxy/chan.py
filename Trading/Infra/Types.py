@@ -396,7 +396,7 @@ class Position:
                因为 entry_bar_ts 比 entry_date 更早引入）
           ③ entry_at 墙钟字符串能读出日期 → 采用（兜底）
         三者都不成立 → 保持空串，交由调用方 fail-fast：
-          · 建仓期 Engine._open_position   → 拒绝建仓（不报单）
+          · 建仓期 Engine._pre_trade_check → 拒绝建仓（no_time_anchor，不报单）
           · 恢复期 Engine._restore         → 拒绝启动
         """
         if self.entry_date:

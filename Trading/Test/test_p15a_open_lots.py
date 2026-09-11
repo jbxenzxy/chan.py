@@ -237,8 +237,8 @@ check("[1j] config.broker_params 无 open_advanced 键",
       "open_advanced" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
 check("[1k] config.broker_params 无 overprice_points_fok 键",
       "overprice_points_fok" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
-check("[1l] 超价合并为单参数 overprice_points=1.0",
-      (DEFAULT_CONFIG.get("broker_params") or {}).get("overprice_points"), 1.0)
+check("[1l] 超价合并为单参数 overprice_ticks=5（IF=1.0 点）",
+      (DEFAULT_CONFIG.get("broker_params") or {}).get("overprice_ticks"), 5)
 
 
 # ════════════════════════════════════════════════════════════════

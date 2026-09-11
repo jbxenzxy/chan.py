@@ -40,8 +40,6 @@ class InstrumentSpec(BaseModel):
     #   "FAK"  部分成交后撤余量 —— **郑商所只支持 FAK**，二期上 CZCE 必须切这个
     #   二期按交易所切换时改这一个字段即可，不要把值写死在 Broker/ 里。
     order_advanced: str = "FOK"
-    overprice_points: float = 0.6             # 超价点数（已废弃，仅为向后兼容保留；
-                                              #   实际超价统一用 broker_params.overprice_points）
     close_today_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**
                                               #   "平仓优先平今"）。实际语义 = 是否允许按持仓
                                               #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下

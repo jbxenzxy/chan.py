@@ -15,7 +15,7 @@ SimNow 仿真 broker（M2b）
       quote.underlying_symbol 动态解析主力合约，替代手工写死 trade_symbol。
       解析失败才回退到 config 里的 trade_symbol。
     - 限价单超价（M4）：SimNow 不支持市价单，下单瞬间取实时对手价（买=ask/卖=bid）
-      ± overprice_points（默认 1.0 点 = IF 5 tick，朝成交方向取整到 tick）主动跨价差成交；
+      ± overprice_ticks×tick（默认 5 tick；IF=1.0 点，朝成交方向取整到 tick）主动跨价差成交；
       取不到行情则回退到基于信号价的 align_*。
     - 行情新鲜度守卫（2026-09-07 对账加固）：tqsdk 3.10.2 **没有**公开连接状态接口
       （is_connecting 不存在；内部重连 handler 是 _init_connection 局部变量不可达），
@@ -550,8 +550,8 @@ class SimNowBroker(Broker):
 
     # ---------------- 下单 ----------------
     # 下单价策略（M4 改）：不再用"信号K线收盘价朝不利方向取整"的保守挂单，
-    # 改为「超价」——下单瞬间取实时对手价（买→ask / 卖→bid），再 ± overprice_points
-    # （默认 0.6 点 = 3 tick，向上/向下取整到 tick 以保证不低于该超价），主动跨过价差确保成交。
+    # 改为「超价」——下单瞬间取实时对手价（买→ask / 卖→bid），再 ± overprice_ticks×tick
+    # （默认 5 tick = IF 1.0 点，向上/向下取整到 tick 以保证不低于该超价），主动跨过价差确保成交。
     #   · 开多 / 平空（买方向）：对手价 = ask，超价 = ask + overprice（向上取整）
     #   · 开空 / 平多（卖方向）：对手价 = bid，超价 = bid - overprice（向下取整）
     # 取不到实时行情时回退到旧的 align_entry/align_exit（基于信号价）。
@@ -598,8 +598,8 @@ class SimNowBroker(Broker):
         return side is Side.SHORT
 
     def _overprice_limit(self, action: str, side: Side,
-                         overprice_points: float) -> Optional[float]:
-        """超价限价：实时对手价 ± overprice_points，并取整到 tick。
+                         overprice: float) -> Optional[float]:
+        """超价限价：实时对手价 ± overprice（点数 = overprice_ticks × 品种 tick），并取整到 tick。
 
         取不到行情（未连接 / 无 tick 数据 / NaN）返回 None，由调用方回退。
         注意：tqsdk 在行情首帧未到 / 集合竞价 / 单边市缺一边报价时，
@@ -619,21 +619,21 @@ class SimNowBroker(Broker):
                 return None
         if self._is_buy(action, side):
             # 买方向：对手价=ask，超价=ask+overprice，向上取整（保证 ≥ overprice）
-            return self.spec.round_price(float(ask) + overprice_points, "up")
+            return self.spec.round_price(float(ask) + overprice, "up")
         # 卖方向：对手价=bid，超价=bid-overprice，向下取整（保证 ≥ overprice）
-        return self.spec.round_price(float(bid) - overprice_points, "down")
+        return self.spec.round_price(float(bid) - overprice, "down")
 
     def _overprice(self) -> float:
-        """超价点数（开仓/平仓共用，config broker_params.overprice_points）。
+        """超价点数 = overprice_ticks × 品种 tick（config broker_params.overprice_ticks）。
 
         全 FOK 模式要求限价内盘口深度 ≥ 全部手数才给终态，超价越厚全成概率越高，
-        默认 1.0（IF 5 tick）。
+        默认 5 tick（IF 5×0.2=1.0 点）。二期其它品种加载各自 spec.price_tick 自动缩放。
         """
-        return float(self._param("overprice_points"))
+        return float(self._param("overprice_ticks")) * self.spec.price_tick
 
     def _build_limit_price(self, action: str, side: Side, ref_price: float,
                            opp: Optional[float] = None) -> float:
-        opp = float(opp) if opp is not None else float(self._param("overprice_points"))
+        opp = float(opp) if opp is not None else float(self._param("overprice_ticks")) * self.spec.price_tick
         limit = self._overprice_limit(action, side, opp)
         if limit is None:
             spec = self.spec
@@ -758,7 +758,7 @@ class SimNowBroker(Broker):
         last: Optional[Order] = None
         prev_limit: Optional[float] = None
         for attempt in range(1, max_attempts + 1):
-            # 追价策略（价格归一）：每轮都取「最新对手价 ± overprice」重新定价。
+            # 追价策略（价格归一）：每轮都取「最新对手价 ± overprice」重新定价（overprice = overprice_ticks×tick）。
             # 超价本身自带追价属性——行情朝不利方向走了，下一轮的超价自动跟着盘口走，
             # 挂单价永远比当前对手价多让 overprice 一截，只要盘口有报价必然立即成交。
             # chase_ticks 只在行情临时取不到时作兜底步长。

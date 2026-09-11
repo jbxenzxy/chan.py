@@ -65,7 +65,7 @@ bc = BrokerConfig()
 check("channel 默认产出 ChannelTimingConfig",
       type(bc.channel).__name__, "ChannelTimingConfig")
 check("报单参数与时序参数独立（overprice 不受影响）",
-      bc.overprice_points, 1.0)
+      bc.overprice_ticks, 5)
 cfg_old = TradingConfig.from_dict(DEFAULT_CONFIG)  # 旧配置无 channel 键场景由 default_factory 兜底
 check("TradingConfig 默认含 channel（向后兼容）",
       type(cfg_old.broker_params.channel).__name__, "ChannelTimingConfig")

@@ -124,7 +124,9 @@ class TradingEngine(ReconcileMixin):
         #   OPENING  正在开仓（瞬态：下单到成交之间）
         #   IN_TRADE 已持仓，等待离场条件
         #   EXITING  正在离场（瞬态：下单到成交之间）
-        # 状态转移由 _open_position / _close_position / _reconcile_position 主导。
+        # 状态转移由 _execute（唯一报单出口）→ _book_open / _book_close 落账，
+        # 再由 _sync_state 按净敞口统一刷新；_reconcile_positions 负责对账纠偏。
+        # 2026-09-11 重构后 _state 是 account_state() 的派生镜像，不再有独立口径。
         # Phase B 信号门按此状态决定是否接收新信号、是否触发离场。
         self._state: EngineState = EngineState.IDLE
         self.last_bar: Optional[Bar] = None
@@ -969,6 +971,16 @@ class TradingEngine(ReconcileMixin):
             note=reason or "transition_{}".format(act.transition),
             entry_date=(act.target.entry_date if act.target is not None else ""),
             is_exit=act.is_exit)
+        # ── 审计补全（2026-09-11 Phase 7）──────────────────────────────
+        # OrderIntent 由 4 值收敛为 2 值（OPEN / CLOSE）后，`orders` 表里
+        # **① 开新仓**与**④ 反向开仓锁仓**都记成 intent="open"，单看这一行
+        # 无法区分"主动建仓"与"离场触发的锁仓"。旧版靠 intent="lock" 区分，
+        # 那个值没了 → 审计信息净损失。
+        # 这里在报单出口统一补回：把 is_exit 与 transition 一并写进 meta。
+        # 放在引擎侧而不是各 broker 内部，是为了**所有通道口径一致**
+        # （dry_run / simnow / live 三处不必各写一遍，也不会漏一个）。
+        o.meta["is_exit"] = bool(act.is_exit)
+        o.meta["transition"] = int(act.transition)
         self.store.save_order(o)
         self.ev.write("order", order_id=o.order_id, action=o.action,
                       intent=o.meta.get("intent", act.intent.value),
