@@ -287,14 +287,26 @@ class TradingEngine(ReconcileMixin):
     def position(self, value: Optional[Position]) -> None:
         self.positions.set_legacy(value)
 
-    # ---------------- 旧 schema 闸门 ----------------
-    # 持仓记录曾用 `entry_mode` 键标记来源（后改名 origin，2026-09-11 随
-    # "来源"概念一并删除）。带 `entry_mode` 的库是更早的版本写的，其持仓
-    # 语义（"锁仓仓当不当敞口"）与当前"只看净敞口"的口径不同，直接恢复会
-    # 让引擎对已对冲的仓发平仓单（账实不符）。
-    # 而 _reconcile_positions 只在 real_vol > engine_vol 时**告警**、不纠正，
-    # 兜不住这个错。故宁可拒绝启动，让用户显式处理旧库。
-    _LEGACY_POSITION_KEYS = ("entry_mode",)
+    # ────────────────────────────────────────────────────────────────
+    # 启动闸门（Phase 5 收口）—— 共同口径：**宁可启动不了，也不带半新半旧的状态跑**。
+    #   旧状态一旦被新口径解释，错误会一路跑到报单且不可逆（典型是 phantom 清仓：
+    #   簿面清空但实盘仍有仓）。故三道闸门一律 fail-fast：
+    #
+    #     G1 旧 schema 闸门（本段）    持仓记录带已删除的来源键 / kv 残留旧键 → 拒
+    #     G2 run 闸门（_restore_run）  净敞口≠0 却无 run、run 与净敞口方向矛盾 → 拒
+    #     G3 时间锚闸门（_restore）    entry_date 三源全空 → 拒
+    #
+    #   ⚠️ 用户拍板（2026-09-11）：旧库一律**严格拒绝**，不做"自动剥离 + 继续跑"的
+    #      兼容迁移。理由：旧记录的持仓语义（锁仓仓算不算敞口）与当前"只看净敞口"
+    #      的口径不同，自动迁移只是把账实不符从启动期推迟到报单期。
+    # ────────────────────────────────────────────────────────────────
+    # 持仓记录曾用 `entry_mode` 键标记来源（后改名 `origin`），2026-09-11 随
+    # "来源"概念连同 `lock_pair_id` / `exit_mode` 一并删除。带这些键的库由旧版本
+    # 写入 —— 直接恢复会让引擎对已对冲的仓发平仓单（账实不符）。
+    _LEGACY_POSITION_KEYS = ("entry_mode", "origin", "lock_pair_id", "exit_mode")
+    # kv 表同样可能残留旧键（旧版本把配对序号 / 解锁在途标记写在 kv 上）。
+    # 它们已经没有读取方了，留着只说明"这份库是旧版本写的"。
+    _LEGACY_KV_KEYS = ("lock_pair_seq", "unlock_in_flight")
 
     @staticmethod
     def _legacy_position_records(records) -> list:
@@ -303,20 +315,33 @@ class TradingEngine(ReconcileMixin):
                 and any(k in d for k in TradingEngine._LEGACY_POSITION_KEYS)]
 
     def _reject_legacy_state(self, records) -> None:
-        """检出旧 schema 持仓记录时抛错，拒绝启动。"""
+        """G1：检出旧 schema（持仓记录 / kv 残留键）→ 抛错拒绝启动。"""
         legacy = self._legacy_position_records(records)
-        if not legacy:
-            return
-        keys = "/".join(self._LEGACY_POSITION_KEYS)
-        self.ev.write("state_schema_incompatible",
-                      legacy_key=keys, legacy_n=len(legacy),
-                      note="旧 schema 持仓记录，拒绝恢复，避免锁仓持仓被误判为敞口持仓")
-        raise RuntimeError(
-            "state.db 的持仓记录仍是旧 schema（含 {} 键），与当前代码不兼容：\n"
-            "  旧记录用「来源标记」区分锁仓仓与敞口仓，而当前口径只看净敞口，\n"
-            "  直接恢复会让引擎对已对冲的仓发平仓单（账实不符）。\n"
-            "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
-            .format(keys))
+        if legacy:
+            keys = "/".join(self._LEGACY_POSITION_KEYS)
+            syms = sorted({str(d.get("symbol") or "?") for d in legacy})
+            self.ev.write("state_schema_incompatible",
+                          legacy_key=keys, legacy_n=len(legacy), symbols=syms,
+                          note="旧 schema 持仓记录，拒绝恢复，避免锁仓持仓被误判为敞口持仓")
+            raise RuntimeError(
+                "state.db 的持仓记录仍是旧 schema（含 {} 键），与当前代码不兼容：\n"
+                "  受影响合约：{}（共 {} 条）\n"
+                "  旧记录用「来源标记」区分锁仓仓与敞口仓，而当前口径只看净敞口，\n"
+                "  直接恢复会让引擎对已对冲的仓发平仓单（账实不符）。\n"
+                "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
+                .format(keys, ", ".join(syms), len(legacy)))
+        stale = [k for k in self._LEGACY_KV_KEYS
+                 if self.store.get_json(k) is not None]
+        if stale:
+            self.ev.write("state_schema_incompatible",
+                          legacy_key="/".join(stale), legacy_n=len(stale),
+                          note="kv 表残留旧 schema 键")
+            raise RuntimeError(
+                "state.db 的 kv 表残留旧 schema 键（{}），与当前代码不兼容：\n"
+                "  这些键随 2026-09-11「来源 / 配对 / 解锁」重构一并删除，\n"
+                "  库里还有它们说明这份库由旧版本写入，其余状态同样不可信。\n"
+                "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
+                .format("/".join(stale)))
 
 
     def _restore(self) -> None:
@@ -432,6 +457,8 @@ class TradingEngine(ReconcileMixin):
         fl = self.store.get_json("_close_in_flight")
         if isinstance(fl, dict):
             self._close_in_flight = fl
+        # Phase 5 G5：恢复的卡单标记可能与当前 bar 进度不自洽（自愈规则见方法注释）
+        self._validate_close_in_flight()
         # 运行态风控状态（run）：净敞口 ≠ 0 时必须有 run，否则 L1-L3 无从判定。
         self._restore_run()
 
@@ -528,15 +555,45 @@ class TradingEngine(ReconcileMixin):
         })
 
     def _restore_run(self) -> None:
-        """恢复 run。运行态（净敞口 ≠ 0）却拿不到 run → **拒绝启动**。
+        """G2：恢复 run，并校验它与净敞口自洽。三种不自洽，处理各不相同：
 
-        与 `entry_date` 三源全空那道闸门同口径：run 缺失意味着 L1-L3 没有风控锚，
-        继续跑等于让敞口裸奔（止损位无从计算），故宁可不启动，也不猜一个锚。
-        正常路径下 run 与持仓簿同批写入，拿不到只可能是库被外部改动 / 版本不兼容。
+        · **有敞口、无 run** → 拒绝启动。run 是 L1-L3 的风控锚，缺它等于让敞口
+          在没有止损的状态下运行（与 entry_date 三源全空那道闸门同口径）。
+        · **有 run、无敞口** → 清掉残留（不是错误）。典型成因：进程在 `_run_end`
+          之前崩了，或对账把仓清了。这段 run 对当前状态没有任何约束力，
+          留着只会让 `_persist` 把它写回，脏数据永远清不掉。
+        · **run 方向与净敞口符号矛盾** → 拒绝启动。这说明库被外部改过或版本
+          不兼容，继续跑会让 L1-L3 把止损判在错误的方向上（越亏越不止损）。
         """
         d = self.store.get_json(self._RUN_KV)
+        st = self.account_state()
         if isinstance(d, dict) and d.get("side") in ("LONG", "SHORT"):
-            self._run_side = Side[d["side"]]
+            if st is not AccountState.RUNNING:
+                self.ev.write("run_state_stale_cleared",
+                              run_side=str(d.get("side")),
+                              net_volume=self.positions.net_volume(),
+                              positions_n=len(self.positions),
+                              note="净敞口为 0 但 state.db 仍有运行态记录（run），"
+                                   "判定为上一段的残留，本次启动丢弃")
+                self._run_reset()
+                # 同步删库：否则这段孤儿 run 会一直躺在 kv 里，每次启动重复清一遍
+                self.store.delete_key(self._RUN_KV)
+                return
+            side = Side[d["side"]]
+            net = self.positions.net_volume()
+            if (side is Side.LONG and net < 0) or (side is Side.SHORT and net > 0):
+                self.ev.write("run_state_contradiction",
+                              run_side=str(side), net_volume=net,
+                              positions_n=len(self.positions),
+                              note="运行态方向与净敞口方向矛盾，拒绝启动")
+                raise RuntimeError(
+                    "state.db 的运行态（run）方向与净敞口方向矛盾，拒绝启动。\n"
+                    "  run 记录的是 {} 方向，而簿内净敞口为 {:+} 手（{}）。\n"
+                    "  继续跑会让 L1-L3 把止损判在错误的方向上（越亏越不止损）。\n"
+                    "  出现本错误说明：state.db 由旧版写入，或被手工/第三方工具改过。\n"
+                    "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。"
+                    .format(side.name, net, "净多" if net > 0 else "净空"))
+            self._run_side = side
             self._run_anchor = float(d.get("anchor") or 0.0)
             self._run_volume = int(d.get("volume") or 0)
             self._run_bar_ts = int(d.get("bar_ts") or 0)
@@ -544,7 +601,7 @@ class TradingEngine(ReconcileMixin):
             self._run_signal_key = str(d.get("signal_key") or "")
             self._run_plan = ExitPlan.from_dict(d.get("plan") or {})
             return
-        if self.account_state() is not AccountState.RUNNING:
+        if st is not AccountState.RUNNING:
             return          # 空仓态 / 锁仓态不需要 run
         self.ev.write("run_state_missing",
                       net_volume=self.positions.net_volume(),
@@ -556,6 +613,30 @@ class TradingEngine(ReconcileMixin):
             "  run 记录 L1-L3 的风控锚与出场计划；缺它等于让敞口在没有止损的状态下运行。\n"
             "  出现本错误说明：state.db 由旧版写入，或被手工/第三方工具改过。\n"
             "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。")
+
+    def _validate_close_in_flight(self) -> None:
+        """G5：恢复的 CLOSE 卡单标记若与当前 bar 进度不自洽 → 丢弃。
+
+        标记里的 `submit_bar_seq` 是落账那一刻的 `bars_seen`。若它比当前的
+        `bars_seen` 还大（库被清过 / bars_seen 被重置 / 换过库文件），
+        `_check_close_stuck` 算出的 `bars_elapsed` 恒为负 → 永远小于
+        `close_stuck_bars` → **二次确认复核永不触发**，标记永久悬挂。
+        宁可丢掉（最坏是少做一次复核），也不要留一个永不生效的死标记。
+        """
+        rec = self._close_in_flight
+        if not isinstance(rec, dict):
+            self._close_in_flight = None
+            return
+        seq = int(rec.get("submit_bar_seq") or 0)
+        if seq > self.bars_seen:
+            self.ev.write("close_in_flight_dropped_stale",
+                          signal_key=str(rec.get("signal_key") or ""),
+                          submit_bar_seq=seq, bars_seen=self.bars_seen,
+                          note="卡单标记的 bar 序号超前于当前进度，"
+                               "丢弃以避免二次确认复核永不触发")
+            self._close_in_flight = None
+            # 同步删库：否则死标记会一直躺在 kv 里，每次启动重复判一遍
+            self.store.delete_key("_close_in_flight")
 
     def _sync_state(self) -> None:
         """`_state` 是账户三态的**派生镜像**（IN_TRADE / IDLE），供外部读取。
@@ -1001,6 +1082,15 @@ class TradingEngine(ReconcileMixin):
         self.ev.write("run_end", side=str(self._run_side),
                       anchor=self._run_anchor,
                       account_state=self.account_state().value)
+        self._run_reset()
+
+    def _run_reset(self) -> None:
+        """清空 run 字段（不写事件）。
+
+        与 `_run_end` 分开，供**非正常收尾**的场景使用（对账清仓、恢复期丢弃
+        残留 run）—— 那些场景没有"一段 run 正常结束"的语义，写 `run_end`
+        事件会让运维侧误以为真的发生了一次离场。
+        """
         self._run_side = None
         self._run_anchor = 0.0
         self._run_volume = 0

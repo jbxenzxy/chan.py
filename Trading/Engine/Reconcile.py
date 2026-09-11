@@ -17,7 +17,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..Infra.Types import Bar, Order, OrderIntent, Position, Side, Trade, now_cn
+from ..Infra.Types import (AccountState, Bar, Order, OrderIntent,
+                          Position, Side, Trade, now_cn)
 from .PositionBook import PositionBookError
 
 class ReconcileMixin:
@@ -106,6 +107,25 @@ class ReconcileMixin:
             self._last_close_failed_bar_ts = 0
             # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
             self._last_close_failed_bar_seq = 0
+            self._persist()
+            self._sync_state()
+        # ══════════════════════════════════════════════════════════════
+        # Phase 5 G4：对账把净敞口判成 0 时，同步结束 run。
+        #   典型场景：用户在快期3手工平掉一侧 / 幽灵仓被清除 → 引擎簿被清空
+        #   → 净敞口归 0，但 `_run_plan` 还挂在进程里。不收口有两个后果：
+        #     ① L1-L3 继续拿一个"没有对应敞口"的风控锚判定，并在 `_run_view`
+        #        里合成出一笔虚拟仓单；
+        #     ② `_persist` 把这段孤儿 run 写回 state.db → 下次启动
+        #        `_restore_run` 读到它 → 与净敞口矛盾 → G2 直接拒绝启动。
+        #   即：**这里的漏收口，会变成下一次的启动失败**。
+        # ══════════════════════════════════════════════════════════════
+        if ((self._run_plan is not None or self._run_side is not None)
+                and self.account_state() is not AccountState.RUNNING):
+            self.ev.write("run_ended_by_reconcile",
+                          net_volume=self.positions.net_volume(),
+                          run_side=str(self._run_side), source=source,
+                          note="对账后净敞口归零，同步结束 run，避免孤儿风控锚被持久化")
+            self._run_end()
             self._persist()
             self._sync_state()
 
