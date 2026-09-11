@@ -4,7 +4,7 @@
 
 前复权功能：
   基于通达信除权除息数据（xdxr），对原始K线进行前复权处理。
-  数据获取策略（按优先级）：eltdx -> mootdx Quotes 网络接口 -> pytdx 网络接口（自动测速）。
+  数据获取策略：eltdx（通达信网络行情，7709 协议）。单一数据源，失败即显著报错。
   通过 set_tdx_config(forward_adjust_enabled=True) 启用。
 
 使用方法：将此文件放到 chan.py 仓库的 DataAPI/ 目录下
@@ -666,8 +666,8 @@ def _resample_day_to_week(day_records):
 #   前复权后价格 = (复权前价格 - 每股现金红利 + 配股比例 × 配股价)
 #                 / (1 + 送股比例 + 转增比例 + 配股比例)
 # 前复权递推方式：从最新日期向前，遇到除权除息日时，该日之前的所有OHLC都乘以 a 再加 b。
-# XDXR 数据获取：由 DataAPI/ElTdxAPI.py 提供（当前仅 eltdx 数据源，
-#   mootdx/pytdx 回退已注释保留于 ElTdxAPI，取消注释即可恢复三级回退）。
+# XDXR 数据获取：由 DataAPI/ElTdxAPI.py 提供（eltdx 单一数据源；
+#   mootdx/pytdx 三级回退已删除，详见 ElTdxAPI.py 中部说明）。
 # ============================================================
 
 from DataAPI.ElTdxAPI import get_xdxr_data
@@ -768,8 +768,8 @@ def _forward_adjust(records, market, code, end_date=None):
         return records, False
 
     # 入口过滤：根据 market 和 code 前缀判断是否为个股
-    # mootdx xdxr 接口不区分 SH/SZ（000001 永远返回 000001.SZ 平安银行），
-    # 必须用前缀规则在入口拦截，避免指数被错误复权
+    # 防御性入口拦截：仅个股参与前复权，指数/ETF/板块即使拿到 xdxr 记录也不复权
+    # （历史上 mootdx 接口不区分 SH/SZ，000001 会串到平安银行，故必须按前缀拦截）
     # SH：6 开头为个股（600/601/603/605/688），其余为指数/ETF/板块
     # SZ：000/001/002/003/300/301 为个股，399 为指数，其余为 ETF/板块
     if market.lower() == 'sh' and not code.startswith('6'):

@@ -12,9 +12,9 @@ fetch_main_level 提供）；本模块是 TdxAPI 前复权流水线依赖的下�
 依赖方向：TdxAPI → 本模块（单向）。本模块不反向 import TdxAPI，避免 import 环。
 
 数据源：
-  - eltdx（基于 7709 协议、0x000f 命令）——当前唯一活动数据源。
-  - mootdx / pytdx 回退分支已整体注释保留（测试 eltdx 稳定性期间彻底禁用回退、
-    失败即显著报错而非静默降级）；日后如需恢复三级回退，取消对应注释即可。
+  - eltdx（基于 7709 协议、0x000f 命令）——唯一数据源。
+  - 单一数据源是刻意设计：失败即显著报错（见 get_xdxr_data 的 log.error），
+    不做静默降级。曾存在的 mootdx / pytdx 三级回退已彻底删除（见文件中部说明）。
 """
 import threading
 import logging
@@ -40,17 +40,15 @@ _xdxr_fail_ttl = {}
 # ============================================================
 # 列名标准化
 # ============================================================
-# mootdx / pytdx 返回的列名可能不同，统一标准化。
-# （eltdx 返回的字段本就按标准名构造，也走同样标准化兜底。）
+# eltdx 返回的字段本就按标准名构造，这里再做一层标准化兜底；
+# col_map 同时保留一批历史别名，使上游字段名变动时无需改调用方。
 def _normalize_xdxr_df(df):
     """
-    将 mootdx / pytdx / eltdx 返回的 DataFrame 列名统一为标准列名。
+    将传入的 DataFrame 列名统一为标准列名。
 
-    mootdx 实际列名（本版本）:
-      year, month, day, category, name, fenhong, peigujia,
-      songzhuangu, peigu, suogu, panqianliutong, panhouliutong,
-      qianzongguben, houzongguben, fenshu, xingquanjia
-    其中 songzhuangu = 送股+转增 合计（每10股）
+    date 可由 (year, month, day) 三列合成，也可直接给 date / 除权日 等别名。
+    songzhuangu = 送股+转增 合计（每10股），随后拆分到 songgu。
+    最终保证输出含 date, category, fenhong, songgu, zhuanzeng, peigu, peigujia。
     """
     if df is None or len(df) == 0:
         return df
@@ -78,7 +76,7 @@ def _normalize_xdxr_df(df):
         # 分红（每10股）
         'fenhong': 'fenhong', 'cash_div': 'fenhong', 'cash': 'fenhong',
         '分红': 'fenhong', 'dividend': 'fenhong', 'div': 'fenhong',
-        # 送转股合计（每10股）— mootdx 本版本的关键字段
+        # 送转股合计（每10股）— eltdx c3_value 即映射到此处
         'songzhuangu': 'songzhuangu',
         # 送股（每10股）
         'songgu': 'songgu', 'bonus_share': 'songgu', '送股': 'songgu',
@@ -183,7 +181,7 @@ def _get_xdxr_eltdx(market, code):
     返回与 _normalize_xdxr_df 兼容的 DataFrame，失败返回 None。
     使用 client.corporate.capital_changes(code)，其中 0x000f 标签 1 即除权除息事件。字段映射：
       CapitalChangeRecord.c1_value=分红(每10股) · c2_value=配股价 ·
-      c3_value=送转(每10股) · c4_value=配股数量(每10股)，与 mootdx 返回等价。
+      c3_value=送转(每10股) · c4_value=配股数量(每10股)。
     """
     # 注意：此处不包 try/except——网络 / 接口（含 _check_eltdx_api_compat 的
     # RuntimeError 升级指引）异常一律上抛，由 get_xdxr_data 显著上报，不吞成「无数据」。
@@ -221,184 +219,16 @@ def _get_xdxr_eltdx(market, code):
 
 
 # ============================================================
-# 回退数据源：mootdx / pytdx（已注释保留，暂不启用）
+# 注：mootdx / pytdx 三级回退已于 2026-09 整体删除
 # ============================================================
-# 2026-08 临时测试：仅保留 eltdx 数据源，mootdx / pytdx 回退已整体注释。
-# 目的：单测 eltdx 是否稳定——一旦 eltdx 不 OK 即显著报错（见 get_xdxr_data），
-#       而非静默降级掩盖问题。日后如需恢复三级回退：把下方各段取消注释即可，
-#       并确保已 `pip install mootdx / pytdx`；另有 PYTDX_SERVERS 副本亦随之启用
-#        （注：该副本仅供"pytdx 除权回退"用；TdxAPI.py 的 TDX_BLOCK_SERVERS 是
-#        板块文件下载专用，二者独立、勿混淆）。
-# ------------------------------------------------------------------
-# # mootdx Quotes 单例连接（建一次，所有股票复用）
-# _mootdx_client = None
-# _mootdx_client_ready = False
-# # 检测到 mootdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-# _mootdx_api_mismatch = None
-#
-# def _check_mootdx_api_compat(client):
-#     """校验当前 mootdx 是否具备所需的 xdxr 接口。"""
-#     global _mootdx_api_mismatch
-#     if not hasattr(client, "xdxr"):
-#         _mootdx_api_mismatch = (
-#             "[mootdx 接口不兼容] 前复权所需的 Quotes.xdxr 接口不存在："
-#             "当前 mootdx 版本接口已变更。请锁定/升级适配版本：pip install -U 'mootdx'。"
-#         )
-#         raise RuntimeError(_mootdx_api_mismatch)
-#     return client
-#
-# def _ensure_mootdx_client():
-#     """确保 mootdx Quotes 客户端已连接，返回 client 或 None。线程安全。"""
-#     global _mootdx_client, _mootdx_client_ready
-#     if _mootdx_client_ready and _mootdx_client is not None:
-#         return _mootdx_client
-#     try:
-#         from mootdx.quotes import Quotes
-#         _mootdx_client = Quotes.factory(market='std', bestip=False, timeout=10)
-#         _mootdx_client_ready = True
-#         return _mootdx_client
-#     except Exception:
-#         _mootdx_client_ready = False
-#         _mootdx_client = None
-#         return None
-#
-# def _get_xdxr_mootdx(market, code):
-#     """通过 mootdx Quotes 单例连接获取除权除息数据。在锁内调用。"""
-#     global _mootdx_client, _mootdx_client_ready
-#     client = _ensure_mootdx_client()
-#     if client is None:
-#         return None
-#     _check_mootdx_api_compat(client)   # 接口失效即抛错，避免静默降级
-#     try:
-#         df = client.xdxr(symbol=code)
-#         if df is not None and len(df) > 0:
-#             return _normalize_xdxr_df(df)
-#     except Exception:
-#         _mootdx_client_ready = False
-#         _mootdx_client = None
-#     return None
-#
-# # pytdx TdxHq_API 单例连接（建一次，所有股票复用）
-# _pytdx_api = None
-# _pytdx_api_ready = False
-# # 检测到 pytdx 接口不兼容时的错误信息（仅记录一次，避免每票刷屏）
-# _pytdx_api_mismatch = None
-#
-# # pytdx 行情服务器地址列表（用于前复权 xdxr 数据获取）
-# PYTDX_SERVERS = [
-#     ('115.238.90.165', 7709),   # 最快的服务器，放在第一位
-#     ('119.147.212.81', 7709),
-#     ('120.76.152.2', 7709),
-#     ('180.153.18.170', 7709),
-#     ('218.75.126.9', 7709),
-#     ('60.12.136.250', 7709),
-#     ('60.191.117.167', 7709),
-#     ('59.173.18.140', 7709),
-#     ('60.28.23.80', 7709),
-#     ('218.60.29.136', 7709),
-#     ('106.14.190.13', 7709),
-#     ('47.103.48.45', 7709),
-#     ('124.71.223.19', 7709),
-#     ('106.37.229.202', 7709),
-#     ('180.153.18.171', 7709),
-#     ('218.108.98.244', 7709),
-# ]
-#
-# def _check_pytdx_api_compat(api):
-#     """校验当前 pytdx 是否具备所需的接口。"""
-#     global _pytdx_api_mismatch
-#     missing = [m for m in ("get_xdxr_info", "connect") if not hasattr(api, m)]
-#     if missing:
-#         _pytdx_api_mismatch = (
-#             "[pytdx 接口不兼容] 前复权所需接口缺失: " + ", ".join(missing)
-#             + "。当前 pytdx 版本接口已变更，请锁定/升级适配版本：pip install -U 'pytdx'。"
-#         )
-#         raise RuntimeError(_pytdx_api_mismatch)
-#     return api
-#
-# def _ensure_pytdx_api():
-#     """确保 pytdx TdxHq_API 已连接，返回 api 或 None。线程安全。"""
-#     global _pytdx_api, _pytdx_api_ready
-#     if _pytdx_api_ready and _pytdx_api is not None:
-#         return _pytdx_api
-#     try:
-#         import socket as _sock
-#         from pytdx.hq import TdxHq_API
-#         # 选最快服务器：daemon 线程做超时探测
-#         _sel = [None]
-#         def _select():
-#             try:
-#                 from pytdx.util.best_ip import select_best_ip
-#                 _sel[0] = select_best_ip()
-#             except Exception:
-#                 pass
-#         _th = _threading.Thread(target=_select, daemon=True)
-#         _th.start()
-#         _th.join(timeout=10)
-#         if _sel[0] and isinstance(_sel[0], dict) and 'ip' in _sel[0]:
-#             host, port = _sel[0]['ip'], _sel[0].get('port', 7709)
-#         else:
-#             host, port = _find_pytdx_server()
-#         if not host:
-#             return None
-#         _pytdx_api = TdxHq_API()
-#         if not _pytdx_api.connect(host, port):
-#             _pytdx_api = None
-#             _pytdx_api_ready = False
-#             return None
-#         _pytdx_api_ready = True
-#         return _pytdx_api
-#     except Exception:
-#         _pytdx_api = None
-#         _pytdx_api_ready = False
-#         return None
-#
-# def _find_pytdx_server():
-#     """找到可用的 pytdx 服务器（顺序探测 PYTDX_SERVERS）。"""
-#     import socket as _sock
-#     for host, port in PYTDX_SERVERS:
-#         try:
-#             _s = _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM)
-#             _s.settimeout(1.5)
-#             _r = _s.connect_ex((host, port))
-#             _s.close()
-#             if _r == 0:
-#                 return host, port
-#         except Exception:
-#             continue
-#     return None, None
-#
-# def _get_xdxr_pytdx(market, code):
-#     """通过 pytdx 单例连接获取除权除息数据。在锁内调用。"""
-#     global _pytdx_api, _pytdx_api_ready
-#     api = _ensure_pytdx_api()
-#     if api is None:
-#         return None
-#     _check_pytdx_api_compat(api)   # 接口失效即抛错，避免静默降级
-#     mkt = 1 if market.lower() == 'sh' else 0
-#     try:
-#         data = api.get_xdxr_info(mkt, code)
-#         if not data:
-#             return None
-#         rows = []
-#         for item in data:
-#             rows.append({
-#                 'code': item.get('code', code),
-#                 'date': item.get('date', 0),
-#                 'category': item.get('category', 0),
-#                 'fenhong': item.get('fenhong', 0) or 0,
-#                 'peigu': item.get('peigu', 0) or 0,
-#                 'peigujia': item.get('peigujia', 0) or 0,
-#                 'songgu': item.get('songgu', 0) or 0,
-#                 'zhuanzeng': item.get('zhuanzeng', 0) or 0,
-#             })
-#         df = pd.DataFrame(rows)
-#         return _normalize_xdxr_df(df)
-#     except Exception:
-#         _pytdx_api_ready = False
-#         _pytdx_api = None
-#         return None
-# ------------------------------------------------------------------
+# 删除理由：
+#   1. eltdx 单源已足够覆盖除权除息需求（0x000f 命令）；
+#   2. 回退链的语义是「上一源异常 → continue 试下一源」，会把「网络/接口故障」
+#      静默降级成「该股无除权除息数据」，掩盖真实故障并污染前复权结果；
+#   3. 单源 + 显著报错（log.error）更利于暴露问题，与 TdxAPI 前复权流水线的
+#      「失败即报错」口径一致。
+# 如需新增数据源：在第 3 段 get_xdxr_data 的来源元组中追加 (名称, 取数函数) 即可，
+# 返回值需能被 _normalize_xdxr_df 标准化；**不要**恢复静默 continue 式降级。
 
 
 def get_xdxr_data(market, code):
@@ -408,8 +238,7 @@ def get_xdxr_data(market, code):
 
     优先级：
       1. 缓存（内存命中，跳过网络请求）
-      2. eltdx（当前唯一活动数据源，基于 7709 协议、0x000f 命令；
-         mootdx / pytdx 回退分支已注释——测试 eltdx 稳定性，失败即报错而非降级）
+      2. eltdx（唯一数据源，基于 7709 协议、0x000f 命令；失败即报错而非静默降级）
 
     返回 pandas DataFrame，统一列名：
       date, category, fenhong, peigu, peigujia, songgu, zhuanzeng
@@ -433,8 +262,6 @@ def get_xdxr_data(market, code):
         _failed = False
         for _src_name, _src_fn in (
             ("eltdx", _get_xdxr_eltdx),
-            # ("mootdx", _get_xdxr_mootdx),
-            # ("pytdx", _get_xdxr_pytdx),
         ):
             try:
                 df = _src_fn(market, code)
@@ -443,7 +270,7 @@ def get_xdxr_data(market, code):
                 _failed = True
                 log.error("[xdxr] %s 取数失败(market=%s, code=%s): %s",
                           _src_name, market, code, _e)
-                # 回退链：continue 尝试下一数据源——取消对应注释即可恢复 mootdx/pytdx 三级回退
+                # 尝试下一数据源；当前仅 eltdx 一个，continue 后即进入 _failed 分支
                 continue
             if df is not None and len(df) > 0:
                 _xdxr_fail_ttl.pop(cache_key, None)   # 取数成功：清除失败退避记录
