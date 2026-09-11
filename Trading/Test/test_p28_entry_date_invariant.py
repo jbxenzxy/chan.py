@@ -2,7 +2,7 @@
 """P28 —— entry_date 不变量 / 交易日 SSOT 契约测试（2026-09-10）
 
 背景（为什么要这个文件）
-    规则 ⑸ 用 `Position.entry_date` 决定离场走 LOCK（今仓：反向开仓锁仓）
+    规则 ⑸ 用 `Position.entry_date` 决定离场走**反向 OPEN**（今仓：反向开仓软离场，避开平今高费率）
     还是 CLOSE（昨仓：平仓）。此前该字段是**可空字符串 + 默认 ""**，而判定式
     `"" < today` 恒真 → 空值被**静默解释成"昨仓"** → 对今仓发 CLOSE 平今 →
     中金所拒单 → 连续拒单触发 phantom 清仓（簿面清空但实盘仍有仓，不可逆）。
@@ -74,7 +74,8 @@ class tmp_dir(object):
 def build(tmp, tag, store_name=None):
     cfg = TradingConfig.from_dict(copy.deepcopy(DEFAULT_CONFIG))
     cfg.risk.max_volume = 2
-    cfg.risk.max_open_positions = 1
+    # max_open_positions 已于 Phase 1-4 删除（D2）：同向持仓不再有"笔数上限静默门"，
+    # 同向信号会正常开新仓。本文件不依赖该门。
     cfg.exit_params.use_atr = False
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {})
@@ -249,30 +250,37 @@ with tmp_dir() as tmp:
           ps[0].entry_date if ps else None, "2026-09-11")
 
 # ════════════════════════════════════════════════════════════════════
-print("\n[5] F2 恢复期（旧库自动修复 / 三源全空拒绝启动）")
+print("\n[5] F2 恢复期（旧 schema 严格拒绝 D16 / 三源全空拒绝启动）")
 
 with tmp_dir() as tmp:
-    # 旧库：缺 entry_date 键，但有真实 entry_bar_ts → 恢复后自动修复
+    # 旧 schema 持仓记录（含 origin 等已删键）写入 state.db
+    # → G1 闸门必须**拒绝启动**（D16：宁停不错，不做兼容迁移）
     build(tmp, "r1")
     eng2, broker2, spec2 = build(tmp, "r1b", store_name="state_r1.db")
     eng2.store.set_json("positions", [dict(old, symbol=spec2.trade_symbol)])
-    eng3, _, spec3 = build(tmp, "r1c", store_name="state_r1.db")
-    ps = eng3.positions.positions
-    check("[5a] 旧库恢复：entry_date 由 bar_ts 自动重建",
-          ps[0].entry_date if ps else None, "2026-09-02")
-    check("[5b] 旧库恢复：entry_bar_ts 保持原值", ps[0].entry_bar_ts if ps else None,
-          ms(2026, 9, 2, 9, 35))
+    raised_legacy = None
+    try:
+        build(tmp, "r1c", store_name="state_r1.db")
+    except RuntimeError as e:
+        raised_legacy = str(e)
+    check_true("[5a] 旧 schema 持仓记录 → 拒绝启动（D16 严格拒绝，不再自动修复）",
+               raised_legacy is not None,
+               "e.g. {}".format((raised_legacy or "")[:40]))
+    check_true("[5a2] 拒绝原因点名旧键名（可定位到要删的字段）",
+               bool(raised_legacy) and "origin" in raised_legacy)
+    check_true("[5a3] 拒绝原因给出处理方式（指向 state.db）",
+               bool(raised_legacy) and "state.db" in raised_legacy)
 
 with tmp_dir() as tmp:
-    # 三源全空 → 拒绝启动
+    # 三源全空 → 拒绝启动（G3 时间锚闸门）
     build(tmp, "r2")
     eng, _, spec = build(tmp, "r2b", store_name="state_r2.db")
+    # 注意：本条记录**不含**已删键，专测时间锚闸门（否则会先被 G1 拦掉）
     eng.store.set_json("positions", [{
         "symbol": spec.trade_symbol, "side": "LONG", "volume": 2,
         "entry_price": 4490.2, "entry_at": "", "entry_bar_ts": 0,
         "signal_key": "DEAD", "open_order_id": "o",
-        "exit_plan": {"name": "x", "stop_price": 0.0},
-        "origin": "signal_open"}])
+        "exit_plan": {"name": "x", "stop_price": 0.0}}])
     raised = None
     try:
         build(tmp, "r2c", store_name="state_r2.db")

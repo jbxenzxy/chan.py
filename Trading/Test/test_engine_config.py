@@ -6,7 +6,7 @@ test_engine_config.py — Step 2.2：引擎时序常量归一到 EngineConfig
   [1] EngineConfig 字段与默认值（5 / 20 / 5，SSOT 唯一声明处）
   [2] TradingConfig.engine 默认工厂 + 显式覆盖 + extra="forbid" 拒未知字段
   [3] 引擎接线：Engine.__init__ 从 cfg.engine 读值，属性名不变
-  [4] DEFAULT_MAX 语义收窄：仅测试兜底；生产路径经 cfg.risk.max_open_positions
+  [4] PositionBook 容量（D2：笔数上限已删除）+ 旧配置键丢弃（D17）
   [5] PeriodProfile.SESSION_SECS 收口（原 main.py 硬编码 4.5h）
   [6] bars_per_day(SESSION_SECS) 与四周期对账
 """
@@ -36,7 +36,7 @@ print("\n[1] EngineConfig 默认值（SSOT：Engine/Reconcile 不再自带兜底
 e = EngineConfig()
 check("close_retry_bars 默认 5", e.close_retry_bars, 5)
 check("close_max_streak 默认 20", e.close_max_streak, 20)
-check("unlock_stuck_bars 默认 5", e.unlock_stuck_bars, 5)
+check("close_stuck_bars 默认 5", e.close_stuck_bars, 5)
 try:
     EngineConfig(unknown_field=1)
     check("extra='forbid' 拒未知字段", "no_raise", "raise")
@@ -54,7 +54,7 @@ cfg2 = TradingConfig.from_dict(dict(
 check("显式覆盖 close_retry_bars=9", cfg2.engine.close_retry_bars, 9)
 check("覆盖后其余字段保持默认", cfg2.engine.close_max_streak, 20)
 check("覆盖后 close_max_streak 与 unlock 独立",
-      cfg2.engine.unlock_stuck_bars, 5)
+      cfg2.engine.close_stuck_bars, 5)
 try:
     TradingConfig.from_dict(dict(DEFAULT_CONFIG, engine={"bogus": 1}))
     check("engine 未知键报错（extra=forbid）", "no_raise", "raise")
@@ -91,29 +91,37 @@ check("engine._close_retry_bars == cfg.engine.close_retry_bars",
       eng._close_retry_bars, 5)
 check("engine._close_max_streak == cfg.engine.close_max_streak",
       eng._close_max_streak, 20)
-check("engine._unlock_stuck_bars == cfg.engine.unlock_stuck_bars",
-      eng._unlock_stuck_bars, 5)
+check("engine._close_stuck_bars == cfg.engine.close_stuck_bars",
+      eng._close_stuck_bars, 5)
 cfg9 = TradingConfig.from_dict(dict(
     DEFAULT_CONFIG, engine={"close_retry_bars": 9,
                             "close_max_streak": 40,
-                            "unlock_stuck_bars": 7}))
+                            "close_stuck_bars": 7}))
 eng9 = build_engine(cfg9)
 check("覆盖后引擎读到 9/40/7",
       (eng9._close_retry_bars, eng9._close_max_streak,
-       eng9._unlock_stuck_bars), (9, 40, 7))
+       eng9._close_stuck_bars), (9, 40, 7))
 
-# ═══ [4] DEFAULT_MAX 语义收窄（G2）═══
-print("\n[4] PositionBook.DEFAULT_MAX 语义收窄")
+# ═══ [4] PositionBook 容量 + 旧配置键丢弃（D2 / D17）═══
+print("\n[4] PositionBook 容量（D2：max_open_positions 已删）+ 旧配置键丢弃（D17）")
 from Trading.Engine.PositionBook import PositionBook, PositionBookError
-check("DEFAULT_MAX 仍为 1（测试兜底不变）", PositionBook.DEFAULT_MAX, 1)
-check("无参构造仍可用（测试路径）", PositionBook().max_positions, 1)
-check("显式 max_positions=3", PositionBook(max_positions=3).max_positions, 3)
-check("生产路径：cfg.risk.max_open_positions 传入",
-      PositionBook(max_positions=cfg.risk.max_open_positions).max_positions, 1)
-_cfg2 = TradingConfig.from_dict(dict(
-    DEFAULT_CONFIG, risk={"max_open_positions": 2}))
-check("生产路径：max_open_positions=2 传入",
-      PositionBook(max_positions=_cfg2.risk.max_open_positions).max_positions, 2)
+from Trading.Config import RiskConfig
+check("PositionBook.DEFAULT_MAX 为 None（D2 后容器不限容量）",
+      PositionBook.DEFAULT_MAX, None)
+check("无参构造 → max_positions=None", PositionBook().max_positions, None)
+check("显式 max_positions=3 仍可用（容器能力保留）",
+      PositionBook(max_positions=3).max_positions, 3)
+check("RiskConfig 已无 max_open_positions 字段",
+      "max_open_positions" in RiskConfig.model_fields, False)
+check("RiskConfig 已无 unlock_no_new_open 字段",
+      "unlock_no_new_open" in RiskConfig.model_fields, False)
+# D17：老配置里的旧键必须被**静默丢弃 + 记录**（与 D16 的 state.db 严格拒绝有意不同）
+risk_legacy = RiskConfig(**{"max_open_positions": 3, "unlock_no_new_open": True,
+                            "max_volume": 2})
+check("老配置键不阻断构造（D17）", risk_legacy.max_volume, 2)
+check("老配置键被记录进 dropped_legacy_keys（D17）",
+      ("max_open_positions" in RiskConfig.dropped_legacy_keys
+       and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys), True)
 
 # ═══ [5] SESSION_SECS 收口 ═══
 print("\n[5] PeriodProfile.SESSION_SECS（原 main.py 硬编码 4.5h）")

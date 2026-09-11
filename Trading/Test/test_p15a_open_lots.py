@@ -1,35 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-P15a 一笔报单开仓测试（2026-09-08 仓位管理整体删除后）
-===================================================
-背景
-    重构后开仓模型彻底归一：
-      · 一个信号 = 一笔报单 = 一笔持仓（Position）
-      · 每个买卖点只开一笔，一笔挂 N 手（FOK，全成或全撤），
-        N = 风控层 cfg.risk.max_volume。仓位管理 PositionSizing/SizingConfig
-        已整体删除，不再有 fixed_volume / sizer 定档。
-      · 开仓手数不再有 20 手上限截断，也没有 over_exchange_limit 拒单；
-        配 max_volume=25 就真开 25 手。
-      · 同向持仓笔数已达 cfg.risk.max_open_positions → 静默跳过 open_silenced
-      · 旧术语 split_positions / size_positions / #idx 分仓机制已全部删除；
-        unlock_no_new_open 已从 SizingConfig 迁入 RiskConfig（cfg.risk.unlock_no_new_open）
+P15a 一笔报单开仓测试（2026-09-11 Phase 7 改写）
+================================================
+本文件原来测的是两样**已被重构删除**的东西：
+  · `cfg.risk.max_open_positions`（同时持仓笔数上限）—— D2 判定删除：
+    "资金是唯一闸门"，同向笔数门连同 `open_silenced` 事件一起消失；
+  · `eng._open_position(sig, side, N)` 直接调 —— Phase 4 删除，开仓唯一路径改为
+    `on_signal` → `_decide_action` → `_pre_trade_check` → `_execute` → `_book_open`。
+  另 `RiskConfig.unlock_no_new_open` 随"解锁"概念一并删除（D17 丢弃旧键但不静默）。
 
-硬性要求（本测试锁死）
-    ① 术语纪律：config 无 sizing/split 键；RiskConfig 仅保留
-       max_volume(默认2) / max_open_positions(默认1) / unlock_no_new_open(默认True)
-    ② _open_position 直接调：
-        · volume=1 → broker 1 单、簿 1 笔持仓、signal_key 无后缀
-        · volume=5 → broker 1 单 5 手、簿 1 笔 5 手（一笔挂 N 手）
-        · volume=0 → zero_volume 拒单
-        · volume=21 → 一笔挂 21 手（无 20 手上限拒单）、signal_action=opened
-        · 拒单 → rejected、state IDLE
-        · 成交 → opened、state IN_TRADE、exit_plan 独立
-    ③ max_open_positions 静默语义：已满 → open_silenced，不开不报错
-    ④ 无分仓残留：簿内不会出现 #idx 后缀 signal_key
-    ⑤ on_signal 集成：cfg.risk.max_volume=N → 一笔挂 N 手；N=25 真开 25 手
+新口径（本测试锁死）
+    [1] 术语纪律：config 无 sizing 键；`RiskConfig` 只剩 `max_volume` 一个字段；
+        两个已删键（max_open_positions / unlock_no_new_open）按 D17 丢弃 + 可观测。
+    [2] 一笔报单挂 N 手：`max_volume=N` → broker **恰好 1 单 N 手**、簿 **1 笔 N 手**、
+        事件里恰好 1 条 order + 1 条 open（不是 N 单，也不是 1 笔拆 N 笔）。
+    [3] `max_volume` 启动期校验 1..20（配置层 fail-fast）—— 取代已删的运行期
+        20 手拦截（`over_exchange_limit` 随 PositionSizing 删除）。
+    [4] 拒单路径：全场拒 → 簿空 / `account_state()==FLAT` / `_state==IDLE` /
+        signal_action=rejected，且**不留幻影持仓**。
+    [5] 无分仓残留 + 唯一报单出口存在性（A3）。
 
 不需要真实 tqsdk / 网络；纯单测 + RejectDryBroker mock 测拒单路径。
-跑法：python tests/test_p15a_open_lots.py
+跑法：python Trading/Test/test_p15a_open_lots.py
 """
 from __future__ import annotations
 
@@ -56,7 +48,7 @@ def _locate_tg_root() -> str:
 
 _TG_ROOT = os.environ.get("TRADER_GATEWAY_HOME", "") or _locate_tg_root()
 if not _TG_ROOT:
-    print("\u2717 找不到 Trading 包。请把本文件放在 Trading/ 或 Trading/tests/ 下，"
+    print("\u2717 找不到 Trading 包。请把本文件放在 Trading/ 或 Trading/Test/ 下，"
           "或设环境变量 TRADER_GATEWAY_HOME 指向 Trading 目录。")
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
@@ -78,15 +70,15 @@ from Trading import Broker  # noqa: E402  注册 dry_run
 import json  # noqa: E402
 from Trading.Broker.Base import OrderIntent  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy
+from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EngineState, Side, Signal,
+    AccountState, Bar, EngineState, Signal,
 )
 
 _PASS = 0
@@ -104,7 +96,7 @@ def check(name, got, expected):
         _FAIL += 1
 
 
-def check_truthy(name, got):
+def check_true(name, got):
     global _PASS, _FAIL
     ok = bool(got)
     print(("\u2713" if ok else "\u2717") + " " + name +
@@ -116,37 +108,47 @@ def check_truthy(name, got):
 
 
 class RejectDryBroker(DryRunBroker):
-    """DryRunBroker 子类，可指定拒单次数。0=全过、1=首笔拒、-1=全拒。"""
+    """DryRunBroker 子类，可指定拒单次数。0=全过、1=首笔拒、-1=全拒。
+
+    2026-09-11：`submit` 签名已加到 8 参（多出 entry_date / is_exit，D12/D13），
+    子类必须同步，否则 TypeError 会被引擎当成 channel 故障。
+    """
     def __init__(self, spec, params=None, *, reject_first_n=0):
         super().__init__(spec, params)
         self.reject_first_n = reject_first_n
         self._calls = 0
 
-    def submit(self, intent, side, volume, ref_price, signal_key="", note=""):
+    def submit(self, intent, side, volume, ref_price, signal_key="", note="",
+               entry_date="", is_exit=False):
         self._calls += 1
         if self.reject_first_n == -1 or self._calls <= self.reject_first_n:
             from Trading.Infra.Types import Order
             o = Order(
                 order_id="reject-{:06d}".format(self._calls),
                 signal_key=signal_key, symbol=self.spec.trade_symbol,
-                side=side, action="open", volume=int(volume),
+                side=side,
+                action="open" if intent is OrderIntent.OPEN else "close",
+                volume=int(volume),
                 price=0.0, req_price=float(ref_price),
                 filled_price=None, status="rejected",
                 created_at="2026-09-01 09:30", broker=self.name, note=note,
                 meta={"intent": intent.value if hasattr(intent, "value") else str(intent),
+                      "entry_date": entry_date,
                       "reject_reason": "test_reject"})
             self.orders.append(o)
             return o
-        return super().submit(intent, side, volume, ref_price, signal_key, note)
+        return super().submit(intent, side, volume, ref_price, signal_key, note,
+                              entry_date, is_exit)
 
 
-def make_engine(tmpdir, *, max_open_positions=1, max_volume=1, broker=None,
-                unlock_no_new_open=False):
+def make_engine(tmpdir, *, max_volume=2, broker=None):
+    """构造引擎。
+
+    2026-09-11：不再设 `max_open_positions` / `unlock_no_new_open`（D2/D17 已删）。
+    开仓手数唯一来源 = `cfg.risk.max_volume` → `engine.lots_per_signal`。
+    """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_open_positions = max_open_positions
     cfg.risk.max_volume = max_volume
-    # unlock_no_new_open：自 SizingConfig 迁入 RiskConfig，现读 cfg.risk
-    cfg.risk.unlock_no_new_open = unlock_no_new_open
 
     spec = InstrumentSpec()
     if broker is None:
@@ -158,20 +160,26 @@ def make_engine(tmpdir, *, max_open_positions=1, max_volume=1, broker=None,
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 
-def read_event_kinds(eng, tail_n=200):
+def read_events(eng, tail_n=400):
+    """读事件日志尾部 → [(kind, 整个 dict), ...]（flush 后再读，保证不漏）。"""
     eng.ev.flush()
     out = []
     try:
         with open(eng.ev.path, "r", encoding="utf-8") as f:
             lines = f.readlines()
-        for line in lines[-tail_n:]:
-            try:
-                out.append(json.loads(line).get("kind"))
-            except Exception:
-                continue
     except FileNotFoundError:
-        pass
+        return out
+    for line in lines[-tail_n:]:
+        try:
+            d = json.loads(line)
+        except Exception:
+            continue
+        out.append((d.get("kind"), d))
     return out
+
+
+def kinds_of(eng, tail_n=400):
+    return [k for k, _d in read_events(eng, tail_n)]
 
 
 def make_sig(key="P15A-TEST|0|0", is_buy=True, price=4550.0, low=4540.0, high=4560.0):
@@ -187,181 +195,211 @@ def make_bar(date="2026-09-01 09:30", close=4550.0):
                timestamp=4000, vol=0)
 
 
+def _mk_risk(**kw):
+    """构造 RiskConfig，返回 (实例 or None, 异常串 or None)。"""
+    try:
+        return RiskConfig(**kw), None
+    except Exception as e:
+        return None, "{}: {}".format(type(e).__name__, str(e).replace("\n", " ")[:200])
+
+
 # ════════════════════════════════════════════════════════════════
-# [1] 术语纪律：仓位管理（PositionSizing/split）已彻底删除
+# [1] 术语纪律：仓位管理（PositionSizing/split）与 D2/D17 已删键
 # ════════════════════════════════════════════════════════════════
-print("\n[1] 术语纪律：仓位管理（PositionSizing/split）已删除")
-check("config 无 sizing 键（PositionSizing 整体删除）", "sizing" in DEFAULT_CONFIG, False)
-check("risk 保留 unlock_no_new_open（自 SizingConfig 迁入）",
-      (DEFAULT_CONFIG.get("risk") or {}).get("unlock_no_new_open"), True)
-check("config.broker_params 无 open_advanced 键",
+print("\n[1] 术语纪律：仓位管理已删 + D2/D17 已删键")
+check("[1a] config 无 sizing 键（PositionSizing 整体删除）",
+      "sizing" in DEFAULT_CONFIG, False)
+check("[1b] RiskConfig 只剩 max_volume 一个字段（D2 删除 max_open_positions）",
+      sorted(RiskConfig.model_fields), ["max_volume"])
+check("[1c] DEFAULT_CONFIG.risk 无 max_open_positions",
+      "max_open_positions" in (DEFAULT_CONFIG.get("risk") or {}), False)
+check("[1d] DEFAULT_CONFIG.risk 无 unlock_no_new_open",
+      "unlock_no_new_open" in (DEFAULT_CONFIG.get("risk") or {}), False)
+check("[1e] max_volume 默认 2",
+      (DEFAULT_CONFIG.get("risk") or {}).get("max_volume"), 2)
+
+# D17：旧键按"丢弃 + 可观测"处理（不静默、也不 fail-fast）
+RiskConfig.dropped_legacy_keys.clear()
+legacy_cfg, legacy_err = _mk_risk(max_volume=2, max_open_positions=3,
+                                  unlock_no_new_open=True)
+check("[1f] 带两个旧键的配置仍能构造（不 fail-fast）", legacy_err, None)
+check("[1g] 旧键被丢弃后 max_volume 原样保留",
+      (legacy_cfg.max_volume if legacy_cfg else None), 2)
+check("[1h] 丢弃动作**可观测**（dropped_legacy_keys 记账）",
+      sorted(set(RiskConfig.dropped_legacy_keys)),
+      ["max_open_positions", "unlock_no_new_open"])
+# 但 extra="forbid" 仍在：真正不认识的键必须报错（否则拼错键名会被静默吞掉）
+_bogus, _bogus_err = _mk_risk(max_volume=2, max_open_position=3)
+check_true("[1i] 未列入白名单的未知键仍 fail-fast（extra=forbid）",
+           _bogus_err is not None and "ValidationError" in _bogus_err)
+
+check("[1j] config.broker_params 无 open_advanced 键",
       "open_advanced" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
-check("config.broker_params 无 overprice_points_fok 键",
+check("[1k] config.broker_params 无 overprice_points_fok 键",
       "overprice_points_fok" in (DEFAULT_CONFIG.get("broker_params") or {}), False)
-check("超价合并为单参数 overprice_points=1.0",
+check("[1l] 超价合并为单参数 overprice_points=1.0",
       (DEFAULT_CONFIG.get("broker_params") or {}).get("overprice_points"), 1.0)
 
 
 # ════════════════════════════════════════════════════════════════
-# [2] _open_position：一笔报单挂 N 手
+# [2] 一笔报单挂 N 手（唯一开仓路径：on_signal）
 # ════════════════════════════════════════════════════════════════
-print("\n[2] _open_position：一笔报单挂 N 手")
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-2-1")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 1)
-    check("volume=1：broker 1 单", len(eng.broker.orders), 1)
-    check("volume=1：簿 1 笔持仓", len(eng.positions), 1)
-    check("volume=1：该笔 1 手", eng.positions.positions[0].volume, 1)
-    check("volume=1：signal_key 无 #idx 后缀",
-          eng.positions.positions[0].signal_key, "P15A-2-1")
-    check("volume=1：state=IN_TRADE", eng._state, EngineState.IN_TRADE)
-    check("volume=1：signal_action=opened", eng.store.signal_action(sig.key), "opened")
+print("\n[2] 一笔报单挂 N 手（max_volume=N → 1 单 N 手）")
+for _n in (1, 2, 5, 20):
+    with tmp_dir() as td:
+        eng = make_engine(td, max_volume=_n)
+        eng.on_bar(make_bar())
+        sig = make_sig(key="P15A-2-{}".format(_n))
+        eng.on_signal(sig)
 
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-2-5")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 5)
-    check("volume=5：broker 只有 1 单（一笔挂 5 手）", len(eng.broker.orders), 1)
-    check("volume=5：该单 5 手", eng.broker.orders[0].volume, 5)
-    check("volume=5：簿 1 笔持仓", len(eng.positions), 1)
-    check("volume=5：该笔 5 手", eng.positions.positions[0].volume, 5)
-    check("volume=5：exit_plan 已生成",
-          eng.positions.positions[0].exit_plan is not None, True)
-    check("volume=5：signal_key 无 #idx", eng.positions.positions[0].signal_key, "P15A-2-5")
+        check("[2] N={}：broker 恰好 1 单（不是 N 单）".format(_n),
+              len(eng.broker.orders), 1)
+        check("[2] N={}：该单 {} 手".format(_n, _n), eng.broker.orders[0].volume, _n)
+        check("[2] N={}：簿 1 笔（不是拆成 N 笔）".format(_n), len(eng.positions), 1)
+        check("[2] N={}：该笔 {} 手".format(_n, _n),
+              eng.positions.positions[0].volume, _n)
+        check("[2] N={}：signal_key 无 #idx 后缀".format(_n),
+              eng.positions.positions[0].signal_key, sig.key)
+        check("[2] N={}：lots_per_signal 就取自 cfg.risk.max_volume".format(_n),
+              eng.lots_per_signal, _n)
+        check("[2] N={}：signal_action=opened".format(_n),
+              eng.store.signal_action(sig.key), "opened")
+        check("[2] N={}：account_state=RUNNING".format(_n),
+              eng.account_state(), AccountState.RUNNING)
+        check("[2] N={}：净敞口 = {}".format(_n, _n),
+              eng.positions.net_volume(), _n)
+        check("[2] N={}：_state=IN_TRADE".format(_n), eng._state, EngineState.IN_TRADE)
 
-# 3) volume=0 → 拒单
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-2-0")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 0)
-    check("volume=0：零报单", len(eng.broker.orders), 0)
-    check("volume=0：signal_action=rejected", eng.store.signal_action(sig.key), "rejected")
-    kinds = read_event_kinds(eng)
-    check("volume=0：写 order_rejected", "order_rejected" in kinds, True)
+        # 事件账：1 条 order + 1 条 open（"一笔报单"在事件层同样成立）
+        evs = read_events(eng)
+        ks = [k for k, _d in evs]
+        check("[2] N={}：事件里恰好 1 条 order".format(_n), ks.count("order"), 1)
+        check("[2] N={}：事件里恰好 1 条 open".format(_n), ks.count("open"), 1)
+        _o = [d for k, d in evs if k == "order"][0]
+        check("[2] N={}：order.volume={}".format(_n, _n), _o.get("volume"), _n)
+        check("[2] N={}：order.transition=1（空仓开新仓）".format(_n),
+              _o.get("transition"), 1)
 
-# 4) volume=21 → 无 20 手上限拒单（over_exchange_limit 已随 PositionSizing 删除）
+# 同向第二信号：D2 删掉的是"笔数静默门"，但**规则 ⑶（运行态不响应信号）仍在**
+#   —— 已持仓（net≠0 → RUNNING）时第二信号被整条忽略，不是被笔数上限挡掉。
+#   两者的可观测区别：旧口径写 open_silenced，新口径写 signal_skip/running_ignore_signal。
 with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, max_volume=50)
+    eng = make_engine(td, max_volume=2)
     eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-2-21")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 21)
-    check("volume=21：一笔报单（无 20 手上限拒单）", len(eng.broker.orders), 1)
-    check("volume=21：该单 21 手", eng.broker.orders[0].volume, 21)
-    check("volume=21：signal_action=opened", eng.store.signal_action(sig.key), "opened")
-    check("volume=21：state=IN_TRADE", eng._state, EngineState.IN_TRADE)
-
-# 5) volume=20 边界：正常一笔 20 手成交
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, max_volume=50)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-2-20")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 20)
-    check("volume=20：一笔报单", len(eng.broker.orders), 1)
-    check("volume=20：该单 20 手", eng.broker.orders[0].volume, 20)
-    check("volume=20：簿 1 笔 20 手", eng.positions.positions[0].volume, 20)
-
-
-# ════════════════════════════════════════════════════════════════
-# [3] 拒单与静默语义
-# ════════════════════════════════════════════════════════════════
-print("\n[3] 拒单 / max_open_positions 静默")
-with tmp_dir() as td:
-    bk = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0}, reject_first_n=-1)
-    eng = make_engine(td, max_open_positions=3, broker=bk)
-    eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-3-r")
-    eng.store.try_mark_signal(sig.key, "processing")
-    eng._open_position(sig, Side.LONG, 3)
-    check("全场拒单：簿空（无幻影持仓）", eng.positions.is_empty(), True)
-    check("全场拒单：signal_action=rejected", eng.store.signal_action(sig.key), "rejected")
-    check("全场拒单：state=IDLE", eng._state, EngineState.IDLE)
-
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=1)
-    eng.on_bar(make_bar())
-    s1 = make_sig(key="P15A-3-a")
-    eng.store.try_mark_signal(s1.key, "processing")
-    eng._open_position(s1, Side.LONG, 2)
-    check("max=1 首笔成交：簿 1 笔", len(eng.positions), 1)
-    s2 = make_sig(key="P15A-3-b")
-    eng.store.try_mark_signal(s2.key, "processing")
-    eng._open_position(s2, Side.LONG, 2)
-    check("max=1 同向已满：不开（仍 1 笔）", len(eng.positions), 1)
-    check("max=1 同向已满：signal_action=open_silenced",
-          eng.store.signal_action(s2.key), "open_silenced")
-    kinds = read_event_kinds(eng)
-    check("max=1 同向已满：写 open_silenced 事件", "open_silenced" in kinds, True)
-
-with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=2)
-    eng.on_bar(make_bar())
-    for k in ("P15A-3-c", "P15A-3-d"):
-        s = make_sig(key=k)
-        eng.store.try_mark_signal(s.key, "processing")
-        eng._open_position(s, Side.LONG, 2)
-    check("max=2：两个信号各开 1 笔 → 簿 2 笔", len(eng.positions), 2)
-    keys = sorted(p.signal_key for p in eng.positions.positions)
-    check("max=2：signal_key 各自独立、无 #idx 后缀",
-          keys, ["P15A-3-c", "P15A-3-d"])
+    s1 = make_sig(key="P15A-2-c")
+    eng.on_signal(s1)
+    check("[2m] 首信号：簿 1 笔 2 手", len(eng.positions), 1)
+    s2 = make_sig(key="P15A-2-d")
+    eng.on_signal(s2)
+    check("[2n] 运行态第二信号（规则 ⑶）→ 不开新仓（仍 1 笔）",
+          len(eng.positions), 1)
+    check("[2o] 运行态第二信号 → 净敞口不变（仍 2）",
+          eng.positions.net_volume(), 2)
+    check("[2p] 运行态第二信号 → signal_action=skip",
+          eng.store.signal_action(s2.key), "skip")
+    check("[2q] 运行态第二信号 → 簿内 signal_key 仍只有第一笔",
+          sorted(p.signal_key for p in eng.positions.positions), ["P15A-2-c"])
+    _ks2 = kinds_of(eng)
+    check_true("[2r] 运行态第二信号 → 写 signal_skip 事件",
+               "signal_skip" in _ks2)
+    _skip = [d for k, d in read_events(eng) if k == "signal_skip"]
+    check("[2s] 跳过原因 = running_ignore_signal（不是笔数上限）",
+          (_skip[-1].get("reason") if _skip else None), "running_ignore_signal")
+    check_true("[2t] 事件里无 open_silenced（D2 已删该事件）",
+               "open_silenced" not in _ks2)
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] on_signal 集成：cfg.risk.max_volume=N → 一笔挂 N 手
+# [3] max_volume 启动期校验 1..20
 # ════════════════════════════════════════════════════════════════
-print("\n[4] on_signal 集成（cfg.risk.max_volume=N → 一笔挂 N 手）")
+print("\n[3] max_volume 启动期校验 1..20（配置层 fail-fast）")
+_r1, _e1 = _mk_risk(max_volume=1)
+check("[3a] max_volume=1 合法（下界）", _e1, None)
+_r20, _e20 = _mk_risk(max_volume=20)
+check("[3b] max_volume=20 合法（上界 = 中金所限价单单笔上限）", _e20, None)
+_r0, _e0 = _mk_risk(max_volume=0)
+check_true("[3c] max_volume=0 → 构造期报错", _e0 is not None)
+_r21, _e21 = _mk_risk(max_volume=21)
+check_true("[3d] max_volume=21 → 构造期报错（取代已删的运行期拦截）", _e21 is not None)
+check_true("[3e] 报错信息点明 1..20 区间",
+           _e21 is not None and "1..20" in _e21)
+# 诚实记录：pydantic 未开 validate_assignment，**构造之后**的属性赋值绕过校验。
+# 生产路径恒走 `TradingConfig.from_dict`（即构造期），故不构成实际风险；
+# 这里钉住现状，避免"以为赋值也会被拦"的错觉。
+_c = TradingConfig.from_dict(DEFAULT_CONFIG)
+try:
+    _c.risk.max_volume = 99
+    _post = _c.risk.max_volume
+except Exception:
+    _post = "RAISED"
+check("[3f] 现状记录：属性赋值不经校验（仅构造期生效）", _post, 99)
+
+
+# ════════════════════════════════════════════════════════════════
+# [4] 拒单路径（不留幻影持仓）
+# ════════════════════════════════════════════════════════════════
+print("\n[4] 拒单路径")
 with tmp_dir() as td:
-    eng = make_engine(td, max_open_positions=3, max_volume=8)
+    bk = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0},
+                         reject_first_n=-1)
+    eng = make_engine(td, max_volume=3, broker=bk)
     eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-4-8", is_buy=True)
+    sig = make_sig(key="P15A-4-r")
     eng.on_signal(sig)
-    check("max_volume=8：broker 1 单", len(eng.broker.orders), 1)
-    check("max_volume=8：该单 8 手", eng.broker.orders[0].volume, 8)
-    check("max_volume=8：簿 1 笔 8 手", eng.positions.positions[0].volume, 8)
-    check("max_volume=8：signal_action=opened", eng.store.signal_action(sig.key), "opened")
+    check("[4a] 全场拒单：簿空（无幻影持仓）", eng.positions.is_empty(), True)
+    check("[4b] 全场拒单：净敞口 0", eng.positions.net_volume(), 0)
+    check("[4c] 全场拒单：account_state=FLAT", eng.account_state(), AccountState.FLAT)
+    check("[4d] 全场拒单：_state=IDLE", eng._state, EngineState.IDLE)
+    check("[4e] 全场拒单：signal_action=rejected",
+          eng.store.signal_action(sig.key), "rejected")
+    _ks = kinds_of(eng)
+    check_true("[4f] 全场拒单：写 order_rejected 事件", "order_rejected" in _ks)
+    check("[4g] 全场拒单：不写 open 事件", _ks.count("open"), 0)
 
+# 首笔拒 + 第二笔过：拒单不污染后续
 with tmp_dir() as td:
-    # max_volume=25：一笔挂 25 手，不再被 sizer.max_volume 20 手上限截断、
-    #   也不再走 over_exchange_limit 拒单 —— 配多大就真开多少手。
-    eng = make_engine(td, max_open_positions=3, max_volume=25)
+    bk = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0},
+                         reject_first_n=1)
+    eng = make_engine(td, max_volume=2, broker=bk)
     eng.on_bar(make_bar())
-    sig = make_sig(key="P15A-4-25", is_buy=True)
-    eng.on_signal(sig)
-    check("max_volume=25：一笔挂 25 手（无 20 手上限截断/拒单）", len(eng.broker.orders), 1)
-    check("max_volume=25：该单 25 手", eng.broker.orders[0].volume, 25)
-    check("max_volume=25：簿 1 笔 25 手", eng.positions.positions[0].volume, 25)
-    check("max_volume=25：signal_action=opened", eng.store.signal_action(sig.key), "opened")
+    s1 = make_sig(key="P15A-4-s1")
+    eng.on_signal(s1)
+    check("[4h] 首笔拒：簿空", eng.positions.is_empty(), True)
+    s2 = make_sig(key="P15A-4-s2")
+    eng.on_signal(s2)
+    check("[4i] 第二笔过：簿 1 笔 2 手", len(eng.positions), 1)
+    check("[4j] 第二笔过：净敞口 2", eng.positions.net_volume(), 2)
+    check("[4k] 第二笔过：signal_action=opened",
+          eng.store.signal_action(s2.key), "opened")
 
 
 # ════════════════════════════════════════════════════════════════
-# [5] 无分仓残留断言
+# [5] 无分仓残留 + 唯一报单出口（A3）
 # ════════════════════════════════════════════════════════════════
-print("\n[5] 无分仓残留")
+print("\n[5] 无分仓残留 + 唯一报单出口")
 import Trading.Engine.Engine as _engine_mod  # noqa: E402
 _src = open(os.path.join(_TG_ROOT, "Engine", "Engine.py"), encoding="utf-8").read()
-check("engine 无 _open_positions（复数）方法", hasattr(_engine_mod.TradingEngine,
-                                                  "_open_positions"), False)
-check("engine 无 _book_positions 方法", hasattr(_engine_mod.TradingEngine,
-                                              "_book_positions"), False)
-check("engine 无 _unlock_round_entry 方法", hasattr(_engine_mod.TradingEngine,
-                                                 "_unlock_round_entry"), False)
-check("engine 无 _check_unlock_round 方法", hasattr(_engine_mod.TradingEngine,
-                                                  "_check_unlock_round"), False)
-check("engine 无 _unlock_round_settle 方法", hasattr(_engine_mod.TradingEngine,
-                                                   "_unlock_round_settle"), False)
-check("engine 源码无 H2 轮次残留", "unlock_round" in _src, False)
-check("engine 有 _open_position（单笔）", hasattr(_engine_mod.TradingEngine,
-                                              "_open_position"), True)
-check("engine 有 _unlock_position（单笔解锁）", hasattr(_engine_mod.TradingEngine,
-                                                   "_unlock_position"), True)
+_TE = _engine_mod.TradingEngine
+check("[5a] engine 无 _open_position（Phase 4 已删，开仓唯一路径走 _execute）",
+      hasattr(_TE, "_open_position"), False)
+check("[5b] engine 无 _close_position（Phase 4 已删）",
+      hasattr(_TE, "_close_position"), False)
+check("[5c] engine 无 _open_positions（复数，E3.2 批次开仓已删）",
+      hasattr(_TE, "_open_positions"), False)
+check("[5d] engine 无 _book_positions 方法", hasattr(_TE, "_book_positions"), False)
+check("[5e] engine 无 _unlock_position（「解锁」概念已删）",
+      hasattr(_TE, "_unlock_position"), False)
+for _m in ("_unlock_round_entry", "_check_unlock_round", "_unlock_round_settle"):
+    check("[5f] engine 无 {} 方法".format(_m), hasattr(_TE, _m), False)
+check("[5g] engine 源码无 unlock_round 残留", "unlock_round" in _src, False)
+check("[5h] engine 源码无 open_silenced 残留", "open_silenced" in _src, False)
+
+# A3：唯一报单出口 + 决策/落账分层
+for _m in ("_execute", "_book_open", "_book_close",
+           "_decide_action", "_decide_exit", "_pre_trade_check", "account_state"):
+    check("[5i] engine 有 {}".format(_m), hasattr(_TE, _m), True)
+check("[5j] engine 有 _sync_state（_state 派生镜像刷新点）",
+      hasattr(_TE, "_sync_state"), True)
 
 
 print("\n" + "=" * 60)

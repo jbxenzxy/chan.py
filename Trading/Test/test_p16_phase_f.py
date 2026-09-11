@@ -4,10 +4,10 @@ Phase F 卡单复核（2026-09-05）
 =============================
 背景
     Phase F 解决两类幽灵/错配风险：
-      · F1：UNLOCK 卡单 —— broker.submit 返回 filled 但 CTP 通道异常时真实未成交，
+      · F1：CLOSE 卡单 —— broker.submit 返回 filled 但 CTP 通道异常时真实未成交，
         引擎若直接信 filled 删 portfolio，次日同向信号进来时 has_opposite=False
         走正常开仓路径 → 真实账户持仓仍在 → 错配。
-        解决：报单成功后记 _unlock_in_flight，5 bars 后调 broker.trade_confirmed 复核：
+        解决：报单成功后记 _close_in_flight，5 bars 后调 broker.trade_confirmed 复核：
           · True  → 真成交（CTP 已收到回报）→ 清 in-flight
           · False → 调 _reconcile_positions 兜底（按真实持仓修正）
       · F2：_restore 末尾首拉真实持仓 —— 防止"本地 store 有持仓但真实账户已平"
@@ -18,16 +18,16 @@ Phase F 卡单复核（2026-09-05）
         · base 默认 True（兜底）
         · dry_run 重写 True（同步撮合，submit 返回 filled 即确认）
         · 自定义 broker 可重写返回 False
-    ② engine._check_unlock_stuck(bar)：
-        · _unlock_in_flight 空 → skip
-        · bars_elapsed < _unlock_stuck_bars → skip（不调 broker）
-        · bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 unlock_confirmed
+    ② engine._check_close_stuck(bar)：
+        · _close_in_flight 空 → skip
+        · bars_elapsed < _close_stuck_bars → skip（不调 broker）
+        · bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 close_confirmed
         · bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0
-              → 写 unlock_stuck_recovered
+              → 写 close_stuck_recovered
         · bars_elapsed = 5 + trade_confirmed=False + 真实持仓 > 0
-              → 写 unlock_stuck_confirmed（卡单确认）
+              → 写 close_stuck_confirmed（卡单确认）
         · broker.trade_confirmed 抛异常 → 保守走 reconcile
-        · UNLOCK 拒单不设 in-flight
+        · CLOSE 拒单不设 in-flight
     ③ engine._restore 末尾首拉真实持仓（source="restore"）：
         · 无持仓 → 不报错
         · broker 无 real_position → skip
@@ -40,7 +40,7 @@ Phase F 卡单复核（2026-09-05）
         · source="restore" 不拦截 bars_held < 1（与 on_bar 路径差异）
     ④ 兼容现有行为：dry_run broker 默认 trade_confirmed=True → 不触发 reconcile
        （保证现有 P13 UNLOCK 路径零行为变化）
-    ⑤ 集成：F2 _restore 末尾清残留 + F1 UNLOCK 卡单 5 bars 后 reconcile 兜底
+    ⑤ 集成：F2 _restore 末尾清残留 + F1 CLOSE 卡单 5 bars 后 reconcile 兜底
 
 不需要真实 tqsdk / 网络；纯单测 + ControlledTradeConfirmedBroker / RealPositionBroker mock。
 跑法：python tests/test_p16_phase_f.py
@@ -100,7 +100,7 @@ from Trading.Strategy.Entry import DefaultEntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, EngineState, PositionOrigin, ExitPlan, Position, Side,
+    AccountState, Bar, EngineState, ExitPlan, Position, Side,
 )
 
 
@@ -181,10 +181,11 @@ class ControlledTradeConfirmedBroker(DryRunBroker):
 
 
 class RejectDryBroker(DryRunBroker):
-    """DryRunBroker 子类：所有 submit 都拒单（用于测试 UNLOCK 拒单不设 in-flight）。"""
+    """DryRunBroker 子类：所有 submit 都拒单（用于测试拆锁 CLOSE 拒单不设 in-flight）。"""
     name = "reject_dry"
 
-    def submit(self, intent, side, volume, ref_price, signal_key="", note=""):
+    def submit(self, intent, side, volume, ref_price, signal_key="", note="",
+               entry_date="", is_exit=False):
         from Trading.Infra.Types import Order, now_cn
         o = Order(
             order_id="{}-REJ".format(self.name), signal_key=signal_key,
@@ -192,18 +193,34 @@ class RejectDryBroker(DryRunBroker):
             action="close", volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",
             created_at=now_cn(), broker=self.name, note=note,
-            meta={"reject_reason": "simulated reject", "intent": str(intent)},
+            meta={"reject_reason": "simulated reject",
+                  "reject_class": "not_tradable", "intent": intent.value},
         )
         self.orders.append(o)
         return o
 
 
-def make_engine(tmpdir, *, max_open_positions=1, split_positions=1,
+def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run"):
+    """预置运行态风控锚。
+
+    D15 / G2：净敞口 ≠ 0 却没有 run → `_restore` **拒绝启动**
+    （缺风控锚等于让敞口在没有止损的状态下运行）。旧版没有 run 概念，
+    故凡手工把持仓写进 state.db 的地方都要配套写 run。
+    """
+    store.set_json("run", {
+        "side": side, "anchor": anchor, "volume": volume,
+        "bar_ts": 4100, "bar_seq": 1, "signal_key": signal_key,
+        "plan": {"name": "seed_plan", "stop_price": anchor - 10.0,
+                 "tp_price": anchor + 10.0, "params": {}},
+    })
+
+
+def make_engine(tmpdir, *, split_positions=1,
                 cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
     """构造引擎：每笔手数 = 1（cfg.risk.max_volume）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_open_positions = max_open_positions
+    # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
     cfg.risk.max_volume = cfg_risk_max_volume
     # 每笔手数由 cfg.risk.max_volume 决定（PositionSizing 已整体删除）
     cfg.risk.max_volume = 1
@@ -228,8 +245,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
-                  tp_offset=5.0, sl_offset=10.0,
-                  origin=PositionOrigin.SIGNAL_OPEN, entry_date=""):
+                  tp_offset=5.0, sl_offset=10.0, entry_date=""):
     """构造手动 Position（不走 _open_positions），用于直接构造 portfolio 状态。"""
     from Trading.Infra.Types import now_cn
     if side is Side.LONG:
@@ -247,7 +263,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                             params={"take_profit_points": tp_offset,
                                     "stop_loss_points": sl_offset}),
-        origin=origin, entry_date=entry_date)
+        entry_date=entry_date)
 
 
 def make_signal(key, side, price=4550.0, date="2026-09-01 09:35", bsp_type="buy"):
@@ -309,46 +325,46 @@ check("1.1 base.Broker 默认 trade_confirmed=True", base_default, True)
 # 1.2 dry_run.DryRunBroker 重写返回 True
 dry_b = DryRunBroker(InstrumentSpec())
 check("1.2 dry_run.DryRunBroker trade_confirmed=True",
-      dry_b.trade_confirmed(OrderIntent.UNLOCK, "x"), True)
+      dry_b.trade_confirmed(OrderIntent.CLOSE, "x"), True)
 
 # 1.3 自定义 broker 可重写返回 False
 ctl = ControlledTradeConfirmedBroker(InstrumentSpec(), trade_confirmed_value=False)
 check("1.3 自定义 broker trade_confirmed=False",
-      ctl.trade_confirmed(OrderIntent.UNLOCK, "x"), False)
+      ctl.trade_confirmed(OrderIntent.CLOSE, "x"), False)
 
 # 1.4 自定义 broker 可抛异常
 ctl_raise = ControlledTradeConfirmedBroker(InstrumentSpec(),
                                            raise_on_trade_confirmed=True)
 raised = False
 try:
-    ctl_raise.trade_confirmed(OrderIntent.UNLOCK, "x")
+    ctl_raise.trade_confirmed(OrderIntent.CLOSE, "x")
 except RuntimeError:
     raised = True
 check_truthy("1.4 自定义 broker trade_confirmed 抛异常被捕获", raised)
 
 # 1.5 intent / signal_key 参数被接收并记录
 ctl.tc_calls = []
-ctl.trade_confirmed(OrderIntent.UNLOCK, "sig-key-1")
+ctl.trade_confirmed(OrderIntent.CLOSE, "sig-key-1")
 ctl.trade_confirmed(OrderIntent.OPEN, "sig-key-2")
-check("1.5a 记录 intent=UNLOCK 调用",
-      (ctl.tc_calls[0][0], ctl.tc_calls[0][1]), ("unlock", "sig-key-1"))
+check("1.5a 记录 intent=CLOSE 调用",
+      (ctl.tc_calls[0][0], ctl.tc_calls[0][1]), ("close", "sig-key-1"))
 check("1.5b 记录 intent=OPEN 调用",
       (ctl.tc_calls[1][0], ctl.tc_calls[1][1]), ("open", "sig-key-2"))
 
 
 # ════════════════════════════════════════════════════════════════
-# [2] F1 _check_unlock_stuck 直接调用
+# [2] F1 _check_close_stuck 直接调用
 # ════════════════════════════════════════════════════════════════
-print("\n[2] F1 _check_unlock_stuck 直接调用")
+print("\n[2] F1 _check_close_stuck 直接调用")
 
-# 2.1 _unlock_in_flight 空 → skip
+# 2.1 _close_in_flight 空 → skip
 with tmp_dir() as td:
     eng = make_engine(td)
     eng.last_bar = make_bar()
     eng.bars_seen = 10
-    before = eng._unlock_in_flight
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.1 in-flight 空 → 不变", eng._unlock_in_flight, before)
+    before = eng._close_in_flight
+    eng._check_close_stuck(eng.last_bar)
+    check("2.1 in-flight 空 → 不变", eng._close_in_flight, before)
 
 # 2.2 bars_elapsed < 5 → skip（不调 broker）
 with tmp_dir() as td:
@@ -357,34 +373,34 @@ with tmp_dir() as td:
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 5  # 报单 bar_seq = 1，bars_elapsed = 4 < 5
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "sig-2-2", "target_signal_key": "tgt-2-2",
         "target_side": "SHORT", "target_snapshot": None,
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.2 bars_elapsed<5 → in-flight 保留", eng._unlock_in_flight is not None, True)
+    eng._check_close_stuck(eng.last_bar)
+    check("2.2 bars_elapsed<5 → in-flight 保留", eng._close_in_flight is not None, True)
     check("2.2b 不调 broker.trade_confirmed", len(ctl_b.tc_calls), 0)
 
-# 2.3 bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 unlock_confirmed
+# 2.3 bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 close_confirmed
 with tmp_dir() as td:
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(),
                                            trade_confirmed_value=True)
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 6  # bars_elapsed = 5
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "sig-2-3", "target_signal_key": "tgt-2-3",
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.3a trade_confirmed=True → 清 in-flight", eng._unlock_in_flight, None)
+    eng._check_close_stuck(eng.last_bar)
+    check("2.3a trade_confirmed=True → 清 in-flight", eng._close_in_flight, None)
     check("2.3b 调了 broker.trade_confirmed", len(ctl_b.tc_calls), 1)
-    evs = read_events(eng, kinds={"unlock_confirmed"})
-    check("2.3c 写 unlock_confirmed 事件", len(evs) >= 1, True)
+    evs = read_events(eng, kinds={"close_confirmed"})
+    check("2.3c 写 close_confirmed 事件", len(evs) >= 1, True)
     if evs:
         check("2.3d 事件 signal_key 正确", evs[0].get("signal_key"), "sig-2-3")
         check("2.3e 事件 bars_elapsed 正确", evs[0].get("bars_elapsed"), 5)
 
-# 2.4 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0 → 写 unlock_stuck_recovered
+# 2.4 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0 → 写 close_stuck_recovered
 with tmp_dir() as td:
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(),
                                            trade_confirmed_value=False,
@@ -393,19 +409,19 @@ with tmp_dir() as td:
     eng.last_bar = make_bar()
     eng.bars_seen = 6
     # 设 portfolio 已空（UNLOCK 已删 target）
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "sig-2-4", "target_signal_key": "tgt-2-4",
         "target_side": "SHORT", "target_snapshot": None,
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.4a 清 in-flight", eng._unlock_in_flight, None)
-    evs = read_events(eng, kinds={"unlock_stuck_recovered"})
-    check("2.4b 写 unlock_stuck_recovered", len(evs) >= 1, True)
+    eng._check_close_stuck(eng.last_bar)
+    check("2.4a 清 in-flight", eng._close_in_flight, None)
+    evs = read_events(eng, kinds={"close_stuck_recovered"})
+    check("2.4b 写 close_stuck_recovered", len(evs) >= 1, True)
     if evs:
         check("2.4c 事件 reason 正确",
               evs[0].get("reason"), "real_position_zero_after_stuck_window")
 
-# 2.5 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 > 0 → 写 unlock_stuck_confirmed
+# 2.5 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 > 0 → 写 close_stuck_confirmed
 #     并用 target_snapshot 重建 portfolio
 with tmp_dir() as td:
     # target 是 SHORT 仓（UNLOCK 平昨仓 SHORT）→ 真实 SHORT 仍有持仓 → 卡单确认
@@ -419,14 +435,14 @@ with tmp_dir() as td:
     # 引擎 portfolio 应为空 → 用 target_snapshot 重建 target 回去
     target_snapshot = make_position(Side.SHORT, 2, 4545.0, 1,
                                     signal_key="yesterday-target-2-5").to_dict()
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "sig-2-5", "target_signal_key": "yesterday-target-2-5",
         "target_side": "SHORT", "target_snapshot": target_snapshot,
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.5a 清 in-flight", eng._unlock_in_flight, None)
-    evs = read_events(eng, kinds={"unlock_stuck_confirmed"})
-    check("2.5b 写 unlock_stuck_confirmed", len(evs) >= 1, True)
+    eng._check_close_stuck(eng.last_bar)
+    check("2.5a 清 in-flight", eng._close_in_flight, None)
+    evs = read_events(eng, kinds={"close_stuck_confirmed"})
+    check("2.5b 写 close_stuck_confirmed", len(evs) >= 1, True)
     if evs:
         check("2.5c 事件 reason 正确",
               evs[0].get("reason"), "real_position_still_held_after_stuck_window")
@@ -448,15 +464,15 @@ with tmp_dir() as td:
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 6
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "sig-2-6", "target_signal_key": "tgt-2-6",
         "target_side": "SHORT", "target_snapshot": None,
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_unlock_stuck(eng.last_bar)
-    check("2.6a 异常被吞掉，不阻断", eng._unlock_in_flight, None)
-    # 写 unlock_stuck_recovered 事件（保守按恢复处理：trade_confirmed 抛异常 → False，
+    eng._check_close_stuck(eng.last_bar)
+    check("2.6a 异常被吞掉，不阻断", eng._close_in_flight, None)
+    # 写 close_stuck_recovered 事件（保守按恢复处理：trade_confirmed 抛异常 → False，
     # broker.real_position(SHORT) 也保守按 None 处理 → reason 带 unknown）
-    evs_recovered = read_events(eng, kinds={"unlock_stuck_recovered"})
+    evs_recovered = read_events(eng, kinds={"close_stuck_recovered"})
     check("2.6b 保守按恢复处理（写 recovered 事件）", len(evs_recovered) >= 1, True)
 
 # 2.7 多次提交 in-flight 替换（每次新报单覆盖）
@@ -465,35 +481,43 @@ with tmp_dir() as td:
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 10   # bars_elapsed = 10 - 3 = 7 >= 5
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "old-sig", "target_signal_key": "old-tgt",
         "target_side": "SHORT", "target_snapshot": None,
         "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "new-sig", "target_signal_key": "new-tgt",
         "target_side": "SHORT", "target_snapshot": None,
         "submit_bar_ts": 5000, "submit_bar_seq": 3}
-    eng._check_unlock_stuck(eng.last_bar)
+    eng._check_close_stuck(eng.last_bar)
     # 调了 broker 一次（new-sig），signal_key 应是 new
     check("2.7 in-flight 被替换 → broker 收到新 sig",
           ctl_b.tc_calls[0][1] if ctl_b.tc_calls else None, "new-sig")
 
-# 2.8 UNLOCK 拒单不设 in-flight
+# 2.8 CLOSE 拒单不设 in-flight（拆锁被拒：继续锁着，账户安全）
+#     ⚠️ 新版口径：三态只看净敞口 —— 单笔 SOFT_EXIT_LOCK 已是带敞口的运行态
+#     （运行态不响应信号），所以**必须构造双向持仓**（net==0）才是锁仓态。
 with tmp_dir() as td:
     rej_b = RejectDryBroker(InstrumentSpec())
     eng = make_engine(td, broker=rej_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 5
-    # 设 portfolio 有一个反向仓（UNLOCK 触发条件）
-    # v1.3：UNLOCK 触发条件 = 锁仓态（SOFT_EXIT_LOCK）+ 反向信号 + 昨仓（entry_date < 信号日）
     pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-pos",
-                        origin=PositionOrigin.SOFT_EXIT_LOCK, entry_date="2026-08-31")
+                        entry_date="2026-08-31")
     eng.positions.add(pos)
-    sig = make_signal("unlock-sig", Side.SHORT)
+    eng.positions.add(make_position(Side.SHORT, 1, 4549.0, 2,
+                                    signal_key="yesterday-pos-b",
+                                    entry_date="2026-08-31"))
+    check("2.8a 前置：LOCKED（net==0 且非空）",
+          eng.account_state(), AccountState.LOCKED)
+    sig = make_signal("close-sig", Side.SHORT)
     eng.on_signal(sig)
-    check("2.8a UNLOCK 拒单 → portfolio 仍保留 pos", len(eng.positions), 1)
-    check("2.8b UNLOCK 拒单 → in-flight 未设", eng._unlock_in_flight, None)
-    check("2.8c state 回 IDLE", eng._state, EngineState.IDLE)
+    check("2.8b 拆锁被拒 → 两笔仓单都还在", len(eng.positions), 2)
+    check("2.8c 对冲目标（多头）未被删",
+          sorted(p.signal_key for p in eng.positions.positions),
+          ["yesterday-pos", "yesterday-pos-b"])
+    check("2.8d CLOSE 拒单 → in-flight 未设", eng._close_in_flight, None)
+    check("2.8e state 回 IDLE", eng._state, EngineState.IDLE)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -518,7 +542,6 @@ with tmp_dir() as td:
     dry_b = DryRunBroker(spec)  # 默认 real_position=None
     # 手动构造 engine 前先把 store 写入持仓
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_open_positions = 1
     cfg.risk.max_volume = 1
     entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
@@ -527,6 +550,7 @@ with tmp_dir() as td:
     pos_dict = make_position(Side.LONG, 1, 4545.0, 1, signal_key="restore-test").to_dict()
     store.set_json("positions", [pos_dict])
     store.set_json("bars_seen", 5)
+    seed_run(store)
     ev = EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None)
     eng = TradingEngine(cfg, dry_b, entry, exitp, store, ev)
     # broker 无 real_position → skip reconcile → portfolio 保留
@@ -538,6 +562,7 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=1, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)   # 触发 _restore
@@ -554,9 +579,10 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_a, pos_b])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=2, real_shorts=0)
-    eng = make_engine(td, max_open_positions=3, broker=ctl_b)
+    eng = make_engine(td, broker=ctl_b)
     check("3.4a 部分平后剩 1 仓", len(eng.positions), 1)
     check("3.4b 保留最晚建仓的 (entry_bar_seq=2，FIFO 平最早)",
           eng.positions.positions[0].signal_key, "restore-3-4-B")
@@ -577,6 +603,7 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -591,6 +618,7 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=5, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -612,6 +640,7 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     rp_b = RaisingRealPosBroker(InstrumentSpec())
     eng = make_engine(td, broker=rp_b)
@@ -626,6 +655,7 @@ with tmp_dir() as td:
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 1)  # bars_held = 1 - 1 = 0
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -638,36 +668,41 @@ with tmp_dir() as td:
 # ════════════════════════════════════════════════════════════════
 print("\n[4] F1+F2 集成")
 
-# 4.1 兼容回归：dry_run broker 默认 trade_confirmed=True → 现有 P13 UNLOCK 行为不变
+# 4.1 兼容回归：dry_run broker 默认 trade_confirmed=True → 拆锁成交后 5 bars 复核直接通过
 with tmp_dir() as td:
     eng = make_engine(td)  # 默认 DryRunBroker → trade_confirmed=True
     pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-4-1",
-                        origin=PositionOrigin.SOFT_EXIT_LOCK, entry_date="2026-08-31")
+                        entry_date="2026-08-31")
     eng.positions.add(pos)
+    eng.positions.add(make_position(Side.SHORT, 1, 4549.0, 2,
+                                    signal_key="yesterday-4-1-b",
+                                    entry_date="2026-08-31"))
     eng.last_bar = make_bar()
     eng.bars_seen = 5
-    sig = make_signal("unlock-sig-4-1", Side.SHORT)
+    sig = make_signal("close-sig-4-1", Side.SHORT)
     eng.on_signal(sig)
-    check("4.1a UNLOCK 成交 → portfolio 删", len(eng.positions), 0)
-    check("4.1b 设了 _unlock_in_flight", eng._unlock_in_flight is not None, True)
+    check("4.1a 拆锁成交 → 目标多头被平（只剩那笔空头）",
+          [p.signal_key for p in eng.positions.positions], ["yesterday-4-1-b"])
+    check("4.1b 设了 _close_in_flight", eng._close_in_flight is not None, True)
     # 跑 5 根 bar（每根 bars_seen+1，bars_elapsed 累计 1,2,3,4,5）
     for i in range(5):
         eng.bars_seen += 1
-        eng._check_unlock_stuck(eng.last_bar)
+        eng._check_close_stuck(eng.last_bar)
     # 第 5 次调（bars_elapsed=5）→ trade_confirmed=True → 清 in-flight
-    check("4.1c 5 bars 后 in-flight 清掉", eng._unlock_in_flight, None)
-    evs = read_events(eng, kinds={"unlock_confirmed"})
-    check("4.1d 写 unlock_confirmed 事件", len(evs) >= 1, True)
+    check("4.1c 5 bars 后 in-flight 清掉", eng._close_in_flight, None)
+    evs = read_events(eng, kinds={"close_confirmed"})
+    check("4.1d 写 close_confirmed 事件", len(evs) >= 1, True)
 
-# 4.2 F2+F1 联动：_restore 末尾清残留 → UNLOCK 不再被卡
-#     （场景：上轮 UNLOCK 卡单 + 真实持仓已平 → 重启后 F2 清掉残留仓，
-#      F1 看不到 in-flight（已清），新 UNLOCK 重新走 _unlock_position）
+# 4.2 F2+F1 联动：_restore 末尾清残留 → 拆锁不再被卡
+#     （场景：上轮 CLOSE 卡单 + 真实持仓已平 → 重启后 F2 清掉残留仓，
+#      F1 看不到 in-flight（已清），新信号走正常开仓路径）
 with tmp_dir() as td:
     # 准备：store 写一个残留多仓（模拟上轮卡单留下的幽灵）
     pos_dict = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-pos").to_dict()
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
     pre_store.set_json("bars_seen", 5)
+    seed_run(pre_store)
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -678,17 +713,17 @@ with tmp_dir() as td:
     eng.last_bar = make_bar()
     sig = make_signal("new-sig-4-2", Side.SHORT)
     eng.on_signal(sig)
-    check("4.2c 新 SHORT 信号 → 开空仓（非 UNLOCK）", len(eng.positions), 1)
+    check("4.2c 新 SHORT 信号 → 空仓态正常开空仓", len(eng.positions), 1)
     check("4.2d 开空仓 side 正确",
           eng.positions.positions[0].side, Side.SHORT)
 
-# 4.3 F1 持久化 + 重启：UNLOCK 报单 + 进程崩 + _restore 读出 in_flight + 5 bars 后复核
-#     场景：UNLOCK 报单成功 → 引擎进程崩（UNLOCK broker 返回 filled 但真实未成交，
+# 4.3 F1 持久化 + 重启：CLOSE 报单 + 进程崩 + _restore 读出 in_flight + 5 bars 后复核
+#     场景：CLOSE 报单成功 → 引擎进程崩（broker 返回 filled 但真实未成交，
 #              真实账户仍持仓）→ 重启：
 #       · _restore 末尾读出 in_flight（持久化生效）
-#       · 第 (5+1)=6 根 bar 调 _check_unlock_stuck → trade_confirmed=False
-#       · reconcile 检查 real_position=0（broker 真实未成交） → 写 unlock_stuck_recovered
-#       · _unlock_in_flight 清掉
+#       · 第 (5+1)=6 根 bar 调 _check_close_stuck → trade_confirmed=False
+#       · reconcile 检查 real_position=0（broker 真实未成交） → 写 close_stuck_recovered
+#       · _close_in_flight 清掉
 #     这是 F1 卡单检测在"持久化 + 重启"链路下的真正价值：
 #     若不持久化，引擎崩后 in_flight 丢了，5 bar 复核永远不会触发，
 #     F1 卡单检测在重启场景下形同虚设。
@@ -696,42 +731,46 @@ with tmp_dir() as td:
     ctl_b = ControlledTradeConfirmedBroker(InstrumentSpec(), real_longs=0, real_shorts=0,
                                            trade_confirmed_value=False)
     eng = make_engine(td, broker=ctl_b)
-    # 预置一个 LONG 仓（模拟"昨仓锁"），UNLOCK 把它清掉
+    # 预置双向持仓（跨日锁，net==0），拆锁把它里的多头清掉
     pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-4-3",
-                        origin=PositionOrigin.SOFT_EXIT_LOCK, entry_date="2026-08-31")
+                        entry_date="2026-08-31")
     eng.positions.add(pos)
+    eng.positions.add(make_position(Side.SHORT, 1, 4549.0, 2,
+                                    signal_key="ghost-4-3-b",
+                                    entry_date="2026-08-31"))
     eng.last_bar = make_bar()
     eng.bars_seen = 5
-    sig = make_signal("unlock-sig-4-3", Side.SHORT)
+    sig = make_signal("close-sig-4-3", Side.SHORT)
     eng.on_signal(sig)
-    # UNLOCK 报单成功（dry_run 同步撮合 → portfolio 立即清），
-    # 但 ControlledTradeConfirmedBroker.tc_value=False → _check_unlock_stuck 后续复核时
+    # CLOSE 报单成功（dry_run 同步撮合 → 目标仓单立即移除），
+    # 但 ControlledTradeConfirmedBroker.tc_value=False → _check_close_stuck 后续复核时
     #   trade_confirmed=False → 走卡单兜底
-    check("4.3a UNLOCK 成交 → portfolio 删", len(eng.positions), 0)
-    check("4.3b 设了 _unlock_in_flight（含 submit_bar_seq）",
-          eng._unlock_in_flight is not None, True)
-    # _persist 已把 in_flight 写入 store（_persist 是 _unlock_position 内末尾必走步骤）
-    persisted = eng.store.get_json("_unlock_in_flight")
-    check("4.3c store 已存 _unlock_in_flight（含目标仓 signal_key='ghost-4-3'）",
+    check("4.3a 拆锁成交 → 目标多头被平（只剩那笔空头）",
+          [p.signal_key for p in eng.positions.positions], ["ghost-4-3-b"])
+    check("4.3b 设了 _close_in_flight（含 submit_bar_seq）",
+          eng._close_in_flight is not None, True)
+    # _persist 已把 in_flight 写入 store（_book_close 落账即挂 in-flight，末尾统一 _persist）
+    persisted = eng.store.get_json("_close_in_flight")
+    check("4.3c store 已存 _close_in_flight（含目标仓 signal_key='ghost-4-3'）",
           isinstance(persisted, dict) and persisted.get("target_signal_key") == "ghost-4-3",
           True)
 
     # ── 模拟引擎进程崩溃 + 重启 ──
     eng2 = make_engine(td, broker=ctl_b)
-    check("4.3d 重启后 _restore 读出 _unlock_in_flight",
-          eng2._unlock_in_flight is not None, True)
-    check("4.3e 重启后 portfolio 仍为空（UNLOCK 已删残留）",
-          len(eng2.positions), 0)
+    check("4.3d 重启后 _restore 读出 _close_in_flight",
+          eng2._close_in_flight is not None, True)
+    check("4.3e 重启后簿内为空（F2 按真实持仓把残留的空头也清掉了）",
+          [p.signal_key for p in eng2.positions.positions], [])
 
-    # 跑 5 根 bar（bars_elapsed 累计到 5）→ 触发 _check_unlock_stuck 复核
+    # 跑 5 根 bar（bars_elapsed 累计到 5）→ 触发 _check_close_stuck 复核
     eng2.last_bar = make_bar()
     for i in range(5):
         eng2.bars_seen += 1
-        eng2._check_unlock_stuck(eng2.last_bar)
-    check("4.3f 5 bars 后 _check_unlock_stuck → 清 in-flight",
-          eng2._unlock_in_flight, None)
-    evs = read_events(eng2, kinds={"unlock_stuck_recovered"})
-    check("4.3g 写 unlock_stuck_recovered（trade_confirmed=False + real_position=0）",
+        eng2._check_close_stuck(eng2.last_bar)
+    check("4.3f 5 bars 后 _check_close_stuck → 清 in-flight",
+          eng2._close_in_flight, None)
+    evs = read_events(eng2, kinds={"close_stuck_recovered"})
+    check("4.3g 写 close_stuck_recovered（trade_confirmed=False + real_position=0）",
           len(evs) >= 1, True)
 
 

@@ -159,20 +159,49 @@ check("买方向 prev=4565.6 推 2 跳", b_fb2._chase_fallback_limit("close", Si
 # 非整 tick 中间值：prev=4559.3 卖方向 -0.4=4558.9 -> 向下取整 4558.8
 check("卖方向非整 tick 向下取整", b_fb2._chase_fallback_limit("close", Side.LONG, 4565.1, 4559.3, -1, 2), 4558.8)
 
-print("\n[7] submit 派发：LOCK 必须走追价(_submit_lock)，不走不追价(_submit_open)")
+print("\n[7] submit 派发：只按 intent 分两路；追不追价由 is_exit 决定（D13）")
 from Trading.Infra.Types import OrderIntent  # noqa
 _rec = {}
 b7 = make_broker(api=object())
 b7._conn_error = ""
-for _n in ("_submit_lock", "_submit_open", "_submit_close", "_submit_unlock"):
+for _n in ("_submit_open", "_submit_close"):
     _rec[_n] = []
-    setattr(b7, _n, (lambda n: lambda *a, **k: _rec[n].append(a))(_n))
-b7.submit(OrderIntent.LOCK, Side.SHORT, 1, 4560.0)
-check("LOCK -> _submit_lock(追价)", bool(_rec["_submit_lock"]) and not _rec["_submit_open"], True)
-for _r in _rec.values():
-    _r.clear()
+    setattr(b7, _n, (lambda n: lambda *a, **k: _rec[n].append((a, k)))(_n))
+
+
+def _dispatch():
+    """返回 (实际走的那一路, 该次调用收到的 is_exit)。"""
+    for _n in ("_submit_open", "_submit_close"):
+        if _rec[_n]:
+            _a, _k = _rec[_n][-1]
+            return _n, _k.get("is_exit")
+    return None, None
+
+
+def _reset():
+    for _r in _rec.values():
+        _r.clear()
+
+
+_reset()
 b7.submit(OrderIntent.OPEN, Side.LONG, 1, 4560.0)
-check("OPEN -> _submit_open(不追价)", bool(_rec["_submit_open"]) and not _rec["_submit_lock"], True)
+check("OPEN → _submit_open，is_exit=False（入场不追价）",
+      _dispatch(), ("_submit_open", False))
+_reset()
+b7.submit(OrderIntent.OPEN, Side.SHORT, 1, 4560.0, is_exit=True)
+check("OPEN + is_exit=True → 仍走 _submit_open，但 is_exit=True（转移 ④ 软离场要追价）",
+      _dispatch(), ("_submit_open", True))
+_reset()
+b7.submit(OrderIntent.CLOSE, Side.LONG, 1, 4560.0)
+check("CLOSE → _submit_close，is_exit=False（转移 ③ 拆锁不追价）",
+      _dispatch(), ("_submit_close", False))
+_reset()
+b7.submit(OrderIntent.CLOSE, Side.LONG, 1, 4560.0, is_exit=True)
+check("CLOSE + is_exit=True → _submit_close，is_exit=True（转移 ⑤ 硬离场追价）",
+      _dispatch(), ("_submit_close", True))
+check("合并前的方法已不存在（_submit_lock / _submit_unlock）",
+      (hasattr(SimNowBroker, "_submit_lock"),
+       hasattr(SimNowBroker, "_submit_unlock")), (False, False))
 
 print("\n" + "=" * 60)
 print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

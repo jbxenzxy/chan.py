@@ -8,7 +8,7 @@ Phase G 接入 SimNow 真实账户（2026-09-05）
       · G1：signal_key → raw_order_id 索引（_finalize 登记）+
         trade_confirmed 用 api.get_order 重新拉**当前**订单，累计
         trade_records 真实成交量判定（不信任 submit 时的 _finalize 判定）。
-      · G2：cancel_pending(signal_key) 撤在途单 + 引擎 _check_unlock_stuck
+      · G2：cancel_pending(signal_key) 撤在途单 + 引擎 _check_close_stuck
         在 confirmed=False 时先撤单再按真实持仓修正 —— 防「重建 portfolio
         后挂单又成交」的双重平仓。
 
@@ -24,9 +24,9 @@ Phase G 接入 SimNow 真实账户（2026-09-05）
         · api 不可用 / 无索引 → 0
         · LIVE 单撤掉、FINISHED 单跳过，返回撤单请求数
     ③ simnow._finalize：成功路径登记 signal_key → raw_order_id
-    ④ engine._check_unlock_stuck G2 集成：
+    ④ engine._check_close_stuck G2 集成：
         · confirmed=False → 先调 cancel_pending；cancelled>0 写
-          unlock_pending_cancelled 事件，再走 real_position 对账
+          close_pending_cancelled 事件，再走 real_position 对账
         · confirmed=True → 不调 cancel_pending
         · broker 无 cancel_pending → 不炸，走原 F1 逻辑
     ⑤ base.cancel_pending 默认 0；dry_run 继承（同步撮合无在途单）
@@ -182,20 +182,20 @@ print("── [1] G1 simnow.trade_confirmed ──")
 
 b = make_simnow_broker()
 check("1.1 api 不可用 → False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k1"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k1"), False)
 
 fake = FakeApi()
 b._api = fake
-check("1.2 空 signal_key → False", b.trade_confirmed(OrderIntent.UNLOCK, ""), False)
+check("1.2 空 signal_key → False", b.trade_confirmed(OrderIntent.CLOSE, ""), False)
 check("1.2b 无索引（signal_key 未登记）→ False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k-none"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k-none"), False)
 
 # 1.3 单笔全成
 b._sig_orders = {"k1": ["r1"]}
 b.orders = [NS(signal_key="k1", status="filled", volume=2)]
 fake._orders = {"r1": FakeRawOrder("r1", {"t1": _rec(2)})}
 check("1.3 单笔全成（traded 2 >= expected 2）→ True",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k1"), True)
+      b.trade_confirmed(OrderIntent.CLOSE, "k1"), True)
 
 # 1.4 跨追价重试：partial(1, 已撤) + 重试全成(2) 累加 3 >= 2
 b._sig_orders = {"k2": ["r1", "r2"]}
@@ -205,17 +205,17 @@ fake._orders = {
     "r2": FakeRawOrder("r2", {"t2": _rec(2)}),        # 重试单全成
 }
 check("1.4 跨重试累加（1+2 >= 2）→ True",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k2"), True)
+      b.trade_confirmed(OrderIntent.CLOSE, "k2"), True)
 
 # 1.5 在途未成交（trade_records 空）
 fake._orders = {"r1": FakeRawOrder("r1", {}, status="LIVE", volume_left=2)}
 check("1.5 在途未成交（records 空）→ False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k1"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k1"), False)
 
 # 1.6 get_order 抛异常 → 该单不计入 → False
 fake.fail_get_order = True
 check("1.6 get_order 异常 → False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k1"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k1"), False)
 fake.fail_get_order = False
 
 # 1.7 rejected 委托不计入 expected
@@ -224,18 +224,18 @@ b.orders = [NS(signal_key="k3", status="rejected", volume=2),
             NS(signal_key="k3", status="filled", volume=2)]
 fake._orders = {"r1": FakeRawOrder("r1", {"t1": _rec(2)})}
 check("1.7 rejected 不计入 expected（filled 2 为基准）→ True",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k3"), True)
+      b.trade_confirmed(OrderIntent.CLOSE, "k3"), True)
 
 # 1.7b 只有 rejected 委托 → expected=0 → False
 b.orders = [NS(signal_key="k3", status="rejected", volume=2)]
 check("1.7b 只有 rejected → expected=0 → False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k3"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k3"), False)
 
 # 1.8 成交不足（traded 1 < expected 2）
 b.orders = [NS(signal_key="k1", status="filled", volume=2)]
 fake._orders = {"r1": FakeRawOrder("r1", {"t1": _rec(1)})}
 check("1.8 成交不足（traded 1 < expected 2）→ False",
-      b.trade_confirmed(OrderIntent.UNLOCK, "k1"), False)
+      b.trade_confirmed(OrderIntent.CLOSE, "k1"), False)
 
 # ════════════════════════════════════════════════════════════════
 # [2] G2：simnow.cancel_pending
@@ -273,19 +273,19 @@ b3 = make_simnow_broker()
 fake3 = FakeApi(long_pos=2)  # baseline=0 + delta=2 → 校验立即通过
 b3._api = fake3
 raw = FakeRawOrder("RAW-001", {"t1": _rec(2), "t2": _rec(1)})
-o = b3._finalize(raw, "unlock", "close", Side.LONG, 2, 4550.0,
+o = b3._finalize(raw, "close", "close", Side.LONG, 2, 4550.0,
                  "sig-finalize", "test-note", baseline=0, expected_delta=2,
                  limit=4552.0)
 check("3.1 _finalize 返回 filled（2 手成交明细达标）", o.status, "filled")
 check("3.2 索引已登记", b3._sig_orders.get("sig-finalize"), ["RAW-001"])
 check("3.3 meta.raw_order_id 记录正确", o.meta.get("raw_order_id"), "RAW-001")
-check("3.4 meta.intent 记录 unlock", o.meta.get("intent"), "unlock")
+check("3.4 meta.intent 记录 close", o.meta.get("intent"), "close")
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] engine._check_unlock_stuck G2 集成
+# [4] engine._check_close_stuck G2 集成
 # ════════════════════════════════════════════════════════════════
-print("── [4] engine._check_unlock_stuck G2 集成 ──")
+print("── [4] engine._check_close_stuck G2 集成 ──")
 
 
 class GMockBroker(DryRunBroker):
@@ -314,7 +314,7 @@ class GMockBroker(DryRunBroker):
 
 def make_engine(tmpdir, *, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_open_positions = 1
+    # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
     cfg.risk.max_volume = 1
     spec = InstrumentSpec()
     if broker is None:
@@ -332,7 +332,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
-    from Trading.Infra.Types import PositionOrigin, ExitPlan, now_cn
+    from Trading.Infra.Types import ExitPlan, now_cn
     if side is Side.LONG:
         tp = entry_price + 5.0
         stop = entry_price - 10.0
@@ -348,7 +348,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
         exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
                            params={"take_profit_points": 5.0,
                                    "stop_loss_points": 10.0}),
-        origin=PositionOrigin.SIGNAL_OPEN)
+        )
 
 
 def read_events(eng, kinds=None, tail_n=200):
@@ -372,7 +372,7 @@ with tmp_dir() as td:
     mb = GMockBroker(InstrumentSpec(), tc_value=False, real_longs=0, cp_return=2)
     eng = make_engine(td, broker=mb)
     snap = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-g2").to_dict()
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "g2-sig",
         "target_signal_key": "ghost-g2",
         "target_side": "LONG",
@@ -380,39 +380,39 @@ with tmp_dir() as td:
         "submit_bar_ts": 0,
         "submit_bar_seq": eng.bars_seen - 5,
     }
-    eng._check_unlock_stuck(make_bar())
+    eng._check_close_stuck(make_bar())
     check("4.1 confirmed=False → 调了 cancel_pending", mb.cp_calls, ["g2-sig"])
-    evs = read_events(eng, kinds={"unlock_pending_cancelled"})
-    check("4.2 cancelled>0 → 写 unlock_pending_cancelled", len(evs), 1)
+    evs = read_events(eng, kinds={"close_pending_cancelled"})
+    check("4.2 cancelled>0 → 写 close_pending_cancelled", len(evs), 1)
     check("4.3 事件带 cancelled=2", evs[0].get("cancelled") if evs else None, 2)
     check("4.4 撤单后仍走 real_position 对账（real=0 → recovered）",
-          eng._unlock_in_flight, None)
-    evs2 = read_events(eng, kinds={"unlock_stuck_recovered"})
-    check("4.5 写 unlock_stuck_recovered", len(evs2), 1)
+          eng._close_in_flight, None)
+    evs2 = read_events(eng, kinds={"close_stuck_recovered"})
+    check("4.5 写 close_stuck_recovered", len(evs2), 1)
 
 with tmp_dir() as td:
     mb = GMockBroker(InstrumentSpec(), tc_value=False, real_longs=0, cp_return=0)
     eng = make_engine(td, broker=mb)
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "g2-sig-b", "target_signal_key": "t",
         "target_side": "LONG", "target_snapshot": None,
         "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
     }
-    eng._check_unlock_stuck(make_bar())
-    check("4.6 cancelled=0 → 不写 unlock_pending_cancelled",
-          len(read_events(eng, kinds={"unlock_pending_cancelled"})), 0)
+    eng._check_close_stuck(make_bar())
+    check("4.6 cancelled=0 → 不写 close_pending_cancelled",
+          len(read_events(eng, kinds={"close_pending_cancelled"})), 0)
 
 with tmp_dir() as td:
     mb = GMockBroker(InstrumentSpec(), tc_value=True, cp_return=2)
     eng = make_engine(td, broker=mb)
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "g2-sig-c", "target_signal_key": "t",
         "target_side": "LONG", "target_snapshot": None,
         "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
     }
-    eng._check_unlock_stuck(make_bar())
+    eng._check_close_stuck(make_bar())
     check("4.7 confirmed=True → 不调 cancel_pending", mb.cp_calls, [])
-    check("4.8 confirmed=True → 清 in-flight", eng._unlock_in_flight, None)
+    check("4.8 confirmed=True → 清 in-flight", eng._close_in_flight, None)
 
 with tmp_dir() as td:
     # broker 无 cancel_pending（老式 broker）→ 不炸，走原 F1 逻辑
@@ -428,14 +428,14 @@ with tmp_dir() as td:
         # 故意不定义 cancel_pending
 
     eng = make_engine(td, broker=BareBroker())
-    eng._unlock_in_flight = {
+    eng._close_in_flight = {
         "signal_key": "g2-sig-d", "target_signal_key": "t",
         "target_side": "LONG", "target_snapshot": None,
         "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
     }
-    eng._check_unlock_stuck(make_bar())  # 不应抛异常
+    eng._check_close_stuck(make_bar())  # 不应抛异常
     check("4.9 无 cancel_pending → 不炸", True, True)
-    check("4.10 仍走 F1 recovered", eng._unlock_in_flight, None)
+    check("4.10 仍走 F1 recovered", eng._close_in_flight, None)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -446,13 +446,16 @@ print("── [5] base / dry_run cancel_pending 默认值 ──")
 dr = DryRunBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0})
 check("5.1 dry_run.cancel_pending 继承 base → 0", dr.cancel_pending("k1"), 0)
 check("5.2 dry_run.trade_confirmed 仍为 True（Phase F 不变）",
-      dr.trade_confirmed(OrderIntent.UNLOCK, "k1"), True)
+      dr.trade_confirmed(OrderIntent.CLOSE, "k1"), True)
 
 
 # ════════════════════════════════════════════════════════════════
-# [6] UNLOCK 与 OPEN 归一（2026-09-05 规格拍板：解锁≈开仓，入场不追价）
+# [6] 拆锁 CLOSE（转移 ③）走「不追价」路径（D13：追不追价由 is_exit 决定）
+#     锁仓态收到交易信号 → 平掉反向最早的一笔 → is_exit=False → 单次报单。
+#     旧版这里测的是 UNLOCK（解锁≈开仓）；Phase 3 已把 UNLOCK 并入 CLOSE，
+#     报文与语义不变，仅 intent 名收敛为二值。
 # ════════════════════════════════════════════════════════════════
-print("── [6] UNLOCK 归一 OPEN：单次超价 + 超时撤单不追价 ──")
+print("── [6] 拆锁 CLOSE（is_exit=False）：单次超价 + 超时撤单不追价 ──")
 
 
 class FakeLiveOrder:
@@ -504,7 +507,7 @@ bu._conn_error = None  # 无凭据实例化会置连接错误，测试注入 api
 # 6.1 未成交：单次报单 + 超时撤单 + rejected，不追价
 api1 = FakeInsertApi(long_pos=2, fill=False)
 bu._api = api1
-o = bu.submit(OrderIntent.UNLOCK, Side.LONG, 2, 4550.0, "u-key-timeout")
+o = bu.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "u-key-timeout")
 check("6.1a 超时未成交 → rejected", o.status, "rejected")
 check("6.1b 只报了 1 次单（不追价）", len(api1.inserted), 1)
 # 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
@@ -512,13 +515,13 @@ check("6.1c 报文是 CLOSE（平昨；原 CLOSEYESTERDAY 不被 tqsdk 接受）
       api1.inserted[0]["offset"], "CLOSE")
 check("6.1d 方向 SELL（平多单）", api1.inserted[0]["direction"], "SELL")
 check("6.1e 超时后撤单被调用", len(api1.cancelled), 1)
-check("6.1f FOK 改造：UNLOCK 报文带 advanced=FOK",
+check("6.1f 拆锁 CLOSE 报文恒定带 advanced=FOK",
       api1.inserted[0]["advanced"], "FOK")
 
 # 6.2 立即成交：单次成交、不撤单、成交价来自 trade_records
 api2 = FakeInsertApi(long_pos=2, fill=True)
 bu._api = api2
-o = bu.submit(OrderIntent.UNLOCK, Side.LONG, 2, 4550.0, "u-key-fill")
+o = bu.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "u-key-fill")
 check("6.2a 立即成交 → filled", o.status, "filled")
 check("6.2b 只报了 1 次单", len(api2.inserted), 1)
 check("6.2c 未撤单", len(api2.cancelled), 0)
@@ -527,7 +530,38 @@ check("6.2d 成交价取 CTP 明细加权", o.filled_price, 4547.0)
 # 6.3 单次路径也登记 signal_key→raw_order_id 索引（trade_confirmed 可复核）
 check("6.3a 索引已登记", bu._sig_orders.get("u-key-fill"), ["raw-1"])
 check("6.3b trade_confirmed 对单次路径成交 → True",
-      bu.trade_confirmed(OrderIntent.UNLOCK, "u-key-fill"), True)
+      bu.trade_confirmed(OrderIntent.CLOSE, "u-key-fill"), True)
+
+# ════════════════════════════════════════════════════════════════
+# [7] D13 对照：同一个 intent(CLOSE)，is_exit 决定追不追价
+#     拆锁（转移 ③）is_exit=False → 单次；硬离场（转移 ⑤）is_exit=True → 追价。
+#     两者报文完全相同（offset=CLOSE），broker 无法自行推断，只能由引擎给。
+# ════════════════════════════════════════════════════════════════
+print("── [7] D13：is_exit 决定追价轮数（同一 intent）──")
+
+bu2 = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.05,
+                                            "fill_timeout_close": 0.01,
+                                            "overprice_points": 0.6,
+                                            "chase_interval": 0.0})
+bu2._conn_error = None
+_cmc = int(DEFAULT_CONFIG["broker_params"]["close_max_chase"])
+
+api_c = FakeInsertApi(long_pos=2, fill=False)
+bu2._api = api_c
+o_c = bu2.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "e-key-chase", is_exit=True)
+check("7.1 is_exit=True → 追价轮数 = close_max_chase", len(api_c.inserted), _cmc)
+check("7.2 追价未成交 → rejected", o_c.status, "rejected")
+check("7.3 每轮报文都是 CLOSE + SELL（重报不改报文类型）",
+      sorted({(m["offset"], m["direction"]) for m in api_c.inserted}),
+      [("CLOSE", "SELL")])
+
+api_n = FakeInsertApi(long_pos=2, fill=False)
+bu2._api = api_n
+o_n = bu2.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "e-key-single", is_exit=False)
+check("7.4 is_exit=False（拆锁）→ 只报 1 次", len(api_n.inserted), 1)
+check("7.5 报文字段与追价版一致（仅轮数不同）",
+      [(m["offset"], m["direction"], m["advanced"]) for m in api_n.inserted],
+      [("CLOSE", "SELL", "FOK")])
 
 # ════════════════════════════════════════════════════════════════
 print("")

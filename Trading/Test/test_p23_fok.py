@@ -3,16 +3,19 @@
 P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版）
 ===============================================================
 背景
-    四类报单（OPEN 开仓 / UNLOCK 解锁 / LOCK 锁仓 / CLOSE 平仓）**全部恒定
-    附加 advanced="FOK"**（限价立即全部成交否则全部撤销，交易所撮合引擎强制执行）：
-      · 入场（OPEN/UNLOCK）：全撤 → 本笔作废（rejected），不追价，等下一信号
-        （"入场没成功，最多不赚钱，但不会亏钱"）
-      · 离场（LOCK/CLOSE）：FOK 全撤 → 隔 chase_interval 秒按最新对手价 ± overprice
-        重新定价重报，最多 close_max_chase 轮；轮数用尽由引擎跨 K 线继续重试
+    两类报单（OPEN 开仓 / CLOSE 平仓）**全部恒定附加 advanced="FOK"**
+    （限价立即全部成交否则全部撤销，交易所撮合引擎强制执行）：
+      报文 offset 由 Base.INTENT_TO_OFFSET 权威表决定（OPEN→"OPEN"、CLOSE→"CLOSE"），
+      **追不追价由 `is_exit` 决定、不由 intent 决定**（D13，2026-09-11 重构后）：
+      · 入场语义（is_exit=False）：转移 ①/②/③/⑥ —— 全撤 → 本笔作废（rejected），
+        不追价，等下一信号（"入场没成功，最多不赚钱，但不会亏钱"）
+      · 离场语义（is_exit=True）：转移 ④（反向 OPEN 软离场）/ ⑤（CLOSE 硬离场）——
+        FOK 全撤 → 隔 chase_interval 秒按最新对手价 ± overprice 重新定价重报，
+        最多 close_max_chase 轮；轮数用尽由引擎跨 K 线继续重试
       · 不再有 open_advanced / overprice_points_fok 配置（旧版可回退 GFD 的
         参数已删除，恒定 FOK，杜绝配置漂移回旧路径）
       · fill_timeout_open/close 退化为通道异常兜底 watchdog（断线防挂死）
-      · overprice_points 合并为单一值 1.0（四类报单共用）
+      · overprice_points 合并为单一值 1.0（两类报单共用）
 
     交易所事实依据（已核实）：
       · 中金所（IF/IH/IC/IM）官方支持限价+FOK（CFFEX 交易概览 + 2026 版异常交易管理办法）
@@ -211,11 +214,11 @@ check("advanced == FOK", api.inserted[0]["advanced"], "FOK")
 check("Order 判定 filled", o.status, "filled")
 check("成交价 = CTP 成交明细价 4561.2（P6 权威层）", o.filled_price, 4561.2)
 
-print("\n[4] UNLOCK：恒定 FOK + CLOSEYESTERDAY 报文，全撤不追价")
+print("\n[4] CLOSE 拆锁（is_exit=False）：恒定 FOK + CLOSE 报文，全撤不追价")
 api = MockApi(pos=MockPos())
 b = make_broker(api=api, params=_FAST)
-o = b.submit(OrderIntent.UNLOCK, Side.LONG, 1, 4550.0, "k-unlock")
-check("报单次数 = 1（入场语义不追价）", len(api.inserted), 1)
+o = b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close-unlock")
+check("报单次数 = 1（转移 ③ 拆锁属入场语义，不追价）", len(api.inserted), 1)
 msg = api.inserted[0]
 check("advanced == FOK", msg["advanced"], "FOK")
 # 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
@@ -224,21 +227,22 @@ check("offset CLOSE（平昨，2026-09-10 由 CLOSEYESTERDAY 修正）",
 check("direction SELL（平多）", msg["direction"], "SELL")
 check("限价 = bid - 1.0 = 4559.0（卖方向向下取整）", msg["limit_price"], 4559.0)
 
-print("\n[5] LOCK：FOK 全撤立即重报追价，close_max_chase 轮全 FOK，offset=OPEN")
+print("\n[5] 软离场 OPEN+is_exit=True（转移 ④）：FOK 全撤立即重报追价，"
+      "close_max_chase 轮全 FOK，offset=OPEN")
 api = MockApi()
 b = make_broker(api=api, params=_FAST)
-b.submit(OrderIntent.LOCK, Side.SHORT, 1, 4550.0, "k-lock")
-check("LOCK 追价报单次数 = close_max_chase", len(api.inserted), 2)
-check("所有 LOCK 报单 advanced 均为 FOK",
+b.submit(OrderIntent.OPEN, Side.SHORT, 1, 4550.0, "k-soft-exit", is_exit=True)
+check("软离场追价报单次数 = close_max_chase", len(api.inserted), 2)
+check("所有软离场报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
-check("LOCK 超价用 overprice_points 1.0（开空 bid-1.0=4559.0）",
+check("软离场超价用 overprice_points 1.0（开空 bid-1.0=4559.0）",
       api.inserted[0]["limit_price"], 4559.0)
-check("LOCK 报文 offset=OPEN（反向开仓）", api.inserted[0]["offset"], "OPEN")
+check("软离场报文 offset=OPEN（反向开仓）", api.inserted[0]["offset"], "OPEN")
 
-print("\n[6] CLOSE：FOK 全撤立即重报追价，close_max_chase 轮全 FOK")
+print("\n[6] CLOSE 硬离场（is_exit=True）：FOK 全撤立即重报追价，close_max_chase 轮全 FOK")
 api = MockApi(pos=MockPos())
 b = make_broker(api=api, params=_FAST)
-b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close")
+b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close", is_exit=True)
 check("CLOSE 追价报单次数 = close_max_chase", len(api.inserted), 2)
 check("所有 CLOSE 报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
@@ -272,7 +276,7 @@ class HalfFillApi(MockApi):
 
 api = HalfFillApi(pos=MockPos())
 b = make_broker(api=api, params=_FAST)
-o = b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close-half")
+o = b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close-half", is_exit=True)
 check("第 2 轮全成后停止报单（总报单 = 2）", len(api.inserted), 2)
 check("Order 判定 filled", o.status, "filled")
 check("成交价 = 第 2 轮 CTP 明细价 4558.8", o.filled_price, 4558.8)

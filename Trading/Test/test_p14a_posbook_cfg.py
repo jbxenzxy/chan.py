@@ -1,30 +1,39 @@
 # -*- coding: utf-8 -*-
 """
-P14a Phase E3.1: cfg.risk.max_open_positions 配置化 + PositionBook 多仓容器
-=========================================================================
-E3.1 的范围（本次提交）
-  ① cfg.risk.max_open_positions 字段（默认=1，向后兼容）
-  ② PositionBook.__init__(max=N) / set_max(N) / max_positions property
-  ③ PositionBook 真支持多仓（add 在 len<max 时成功，>max 时抛错）
-  ④ legacy_single 在多仓时仍抛守护错（E3.3 之前不允许单仓 API 操作多仓）
-  ⑤ set_legacy 保留 E1 行为：max 不论，整簿替换
-  ⑥ replace_with：引擎 _restore 内部用；persisted 数据超出 cfg max 时截断 + 写 truncated
-  ⑦ engine 构造时 cfg.risk.max_open_positions 传到 PositionBook
-  ⑧ _restore 用 cfg 上限 + 写 positions_truncated_on_restore warning（若有截断）
+P14a PositionBook 容量语义 + 已删配置键的处置（Phase 7 重写，2026-09-11）
+====================================================================
+本文件原来测的是「`cfg.risk.max_open_positions` 配置化 + 容器多仓支持」。该配置项
+已在 Phase 1-4 **整体删除**（D2），原因是它是 Phase E1 引入 PositionBook 时为
+"让现存测试零行为变化"钉出来的纯迁移脚手架，钉住容量 = 1；而在新模型里它会造成
+**静默挡单**：容器满了 `add` 抛错 → 信号被吞 → 账户停摆且没有出口。
 
-E3.2 / E3.3 在 E3.1 容器基础上扩展（sizer 分仓 + settle/close loop）
+D2 的结论：**删除该字段**（不是改成 None），资金是唯一闸门
+（`Engine` 的设计意图：钱不够自然开不成功，CTP 会拒单，拒单有告警）。
 
-硬性要求
-  · 默认 max_open_positions=1 → 所有现存测试（P5..P13）零行为变化
-  · 测试显式传 max_open_positions=N 才能进入多仓路径
-  · 现有所有单仓断言（legacy_single / set_legacy / etc）继续通过
-  · 多仓 throw 守护（legacy_single + set_legacy 多仓覆盖）继续通过
+所以本文件改成两件事：
+  A. `PositionBook` 的**容量语义本身**仍然保留并要正确（显式传 max 时才生效）；
+  B. 已删的两个配置键（`max_open_positions` / `unlock_no_new_open`）必须按
+     **白名单静默丢弃**（D17）—— 老配置文件不至于让引擎起不来，但也不能
+     把"丢弃白名单"做成"放行任意未知键"（那会让 RiskConfig 的严格模式失效）。
 
-跑法：python tests/test_p14a_posbook_cfg.py
+覆盖
+----
+  [1] 容量 API：DEFAULT_MAX=None / set_max / max_positions
+  [2] add 语义：不限容量时可自由叠加；显式上限则"满了抛错"（不静默丢弃/合并）
+  [3] legacy_single / set_legacy 的单仓守护
+  [4] replace_with：仅在设了上限时截断，并记入 truncated_on_restore
+  [5] 配置层：两个旧键已删 + 白名单丢弃（D17）+ 严格模式仍然生效
+  [6] 引擎侧：容器不受配置约束（max is None）+ 源码不再读 cfg.risk.max_open_positions
+  [7] 端到端冒烟：默认配置下一开一平
+
+跑法：PYTHONPATH=<repo root> python Trading/Test/test_p14a_posbook_cfg.py
 """
 from __future__ import annotations
 
+import ast
+import inspect
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -37,7 +46,7 @@ def _locate_tg_root() -> str:
     d = _HERE
     for _ in range(5):
         if os.path.basename(d) == "Trading" and os.path.isfile(os.path.join(d, "__init__.py")):
-            return d  # Trading 包目录本身（消 tg/ 层后 Trading 即包）
+            return d
         parent = os.path.dirname(d)
         if parent == d:
             break
@@ -47,8 +56,7 @@ def _locate_tg_root() -> str:
 
 _TG_ROOT = os.environ.get("TRADER_GATEWAY_HOME", "") or _locate_tg_root()
 if not _TG_ROOT:
-    print("✗ 找不到 Trading 包。请把本文件放在 Trading/ 或 Trading/tests/ 下，"
-          "或设环境变量 TRADER_GATEWAY_HOME 指向 Trading 目录。")
+    print("✗ 找不到 Trading 包。")
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
@@ -59,448 +67,281 @@ def tmp_dir():
     try:
         yield d
     finally:
-        try:
-            shutil.rmtree(d, ignore_errors=True)
-        except Exception:
-            pass
+        shutil.rmtree(d, ignore_errors=True)
 
 
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig, RiskConfig  # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
-from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy
-from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
+from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    PositionOrigin, ExitPlan, Position, Side,
+    AccountState, Bar, ExitPlan, OrderIntent, Position, Side, Signal,
 )
+from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
 
 
-def check(name: str, actual, expected) -> None:
+def check(name, actual, expected):
     global _PASS, _FAIL
     ok = actual == expected
     if ok:
         _PASS += 1
-        print("✓ {}".format(name))
+        print("  ✓ {}".format(name))
     else:
         _FAIL += 1
-        print("✗ {}  -> got={!r} expected={!r}".format(name, actual, expected))
+        print("  ✗ {}  -> got={!r} expected={!r}".format(name, actual, expected))
 
 
-def check_raises(name: str, fn, exc_type) -> None:
+def check_true(name, cond, detail=""):
+    check(name + ("（%s）" % detail if detail else ""), bool(cond), True)
+
+
+def check_raises(name, fn, exc_type=PositionBookError):
     global _PASS, _FAIL
     try:
         fn()
         _FAIL += 1
-        print("✗ {}  -> no exception raised (expected {})".format(name, exc_type.__name__))
+        print("  ✗ {}  -> 未抛异常（期望 {}）".format(name, exc_type.__name__))
     except exc_type:
         _PASS += 1
-        print("✓ {}".format(name))
-    except Exception as e:
+        print("  ✓ {}".format(name))
+    except Exception as e:                                   # noqa: BLE001
         _FAIL += 1
-        print("✗ {}  -> got {} (expected {})".format(name, type(e).__name__, exc_type.__name__))
+        print("  ✗ {}  -> got {} (期望 {})".format(
+            name, type(e).__name__, exc_type.__name__))
 
 
-def make_pos(side: Side, entry_price: float = 4500.0, vol: int = 1,
-             signal_key: str = "test_key") -> Position:
+def make_pos(side, entry_price=4500.0, vol=1, signal_key="test_key", seq=10):
     return Position(
         symbol="CFFEX.IF2609", side=side, volume=vol,
         entry_price=entry_price, entry_at="2026-09-01 09:30:00",
-        entry_bar_seq=10, entry_bar_ts=4000,
+        entry_bar_seq=seq, entry_bar_ts=4000,
         signal_key=signal_key, open_order_id="dry_run-test",
-        exit_plan=ExitPlan(name="x", stop_price=entry_price - 5.0, tp_price=None, params={}),
-        origin=PositionOrigin.SIGNAL_OPEN,
+        exit_plan=ExitPlan(name="x", stop_price=entry_price - 5.0,
+                           tp_price=None, params={}),
     )
 
 
+def make_engine(tmpdir, tag="a", broker=None):
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    spec = InstrumentSpec()
+    if broker is None:
+        broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
+    return TradingEngine(
+        cfg, broker, DefaultEntryPolicy({"reverse_on_opposite_signal": False}),
+        LayeredExitPolicy(),
+        Store(os.path.join(tmpdir, "state_%s.db" % tag)),
+        EventLog(os.path.join(tmpdir, "events_%s.jsonl" % tag), echo=False,
+                 echo_kinds=None))
+
+
+def make_bar(ts=5000, close=4550.0, date="2026-09-01 09:30"):
+    return Bar(date=date, open=close, high=close, low=close, close=close,
+               timestamp=ts, vol=0)
+
+
 # ════════════════════════════════════════════════════════════════
-# [1] cfg.risk.max_open_positions 字段读取与默认值
+print("\n[1] 容量 API：DEFAULT_MAX=None / set_max / max_positions")
 # ════════════════════════════════════════════════════════════════
-print("\n[1] cfg.risk.max_open_positions 字段读取与默认值")
-risk = RiskConfig()
-check("RiskConfig() 默认 max_open_positions == 1（向后兼容）",
-      risk.max_open_positions, 1)
+check("[1a] PositionBook.DEFAULT_MAX is None（D2：笔数上限已删）",
+      PositionBook.DEFAULT_MAX, None)
+check("[1b] 无参构造 → max_positions is None",
+      PositionBook().max_positions, None)
+check("[1c] 显式 max_positions=3 → 3",
+      PositionBook(max_positions=3).max_positions, 3)
+check_raises("[1d] max_positions=0 非法（必须 >= 1）",
+             lambda: PositionBook(max_positions=0))
 
-risk2 = RiskConfig(max_open_positions=3)
-check("RiskConfig(max_open_positions=3) 显式赋值 ok",
-      risk2.max_open_positions, 3)
-
-def _raises(fn) -> bool:
-    """严格模式断言用：fn() 必须抛异常。"""
-    try:
-        fn()
-    except Exception:
-        return True
-    return False
+b = PositionBook()
+b.set_max(5)
+check("[1e] set_max(5) → 5", b.max_positions, 5)
+b.set_max(None)
+check("[1f] set_max(None) → 不限容量", b.max_positions, None)
+check_raises("[1g] 不允许把上限缩到现存笔数以下",
+             lambda: (lambda bb: (bb.add(make_pos(Side.LONG)),
+                                  bb.add(make_pos(Side.SHORT)),
+                                  bb.set_max(1)))(PositionBook()))
 
 
-risk3 = RiskConfig(max_open_positions=5)
-check("RiskConfig(max_open_positions=5) 显式赋值 ok",
-      risk3.max_open_positions, 5)
+# ════════════════════════════════════════════════════════════════
+print("\n[2] add 语义：不限容量可自由叠加；有上限则满了抛错")
+# ════════════════════════════════════════════════════════════════
+b2 = PositionBook()                      # 默认不限容量
+for i in range(4):
+    b2.add(make_pos(Side.LONG if i % 2 == 0 else Side.SHORT, signal_key="P%d" % i))
+check("[2a] 不限容量：4 笔（第 1 日 2 锁 = 4 笔）全部入簿，无静默挡单",
+      len(b2), 4)
+check("[2b] FIFO 顺序 = 添加顺序",
+      [p.signal_key for p in b2.positions], ["P0", "P1", "P2", "P3"])
+check("[2c] 不限容量下 net 正确", b2.net_volume(), 0)
 
-# 字段都是模型字段（未知键会报错，缺字段用默认值）
-risk4 = RiskConfig(**{"max_open_positions": 7, "max_volume": 2})
-check("RiskConfig(**{max_open_positions:7, max_volume:2}) → 7",
-      risk4.max_open_positions, 7)
-check("RiskConfig(**{}) 不影响 max_volume",
-      risk4.max_volume, 2)
-check("严格模式：RiskConfig 未知键报错",
-      _raises(lambda: RiskConfig(bogus_key=1)), True)
+b3 = PositionBook(max_positions=1)
+b3.add(make_pos(Side.LONG, signal_key="only"))
+check_raises("[2d] 上限 1：第 2 笔抛 PositionBookError（不静默丢弃）",
+             lambda: b3.add(make_pos(Side.SHORT)))
+check("[2e] 抛错后簿面未被破坏（仍是 1 笔）", len(b3), 1)
 
-# DEFAULT_CONFIG 中也要有 max_open_positions（默认=1）
+
+# ════════════════════════════════════════════════════════════════
+print("\n[3] legacy_single / set_legacy 的单仓守护")
+# ════════════════════════════════════════════════════════════════
+b4 = PositionBook()
+check("[3a] 空簿 legacy_single() → None", b4.legacy_single(), None)
+b4.add(make_pos(Side.LONG, signal_key="solo"))
+check("[3b] 1 笔 → 返回该笔", b4.legacy_single().signal_key, "solo")
+b4.add(make_pos(Side.SHORT, signal_key="second"))
+check_raises("[3c] 多笔 → 抛 PositionBookError（禁止单仓 API 操作多仓）",
+             lambda: b4.legacy_single())
+
+b5 = PositionBook()
+b5.add(make_pos(Side.LONG, signal_key="old"))
+b5.set_legacy(make_pos(Side.SHORT, signal_key="new"))
+check("[3d] set_legacy 整簿替换（不留旧仓）",
+      [p.signal_key for p in b5.positions], ["new"])
+b5.set_legacy(None)
+check("[3e] set_legacy(None) → 清空", len(b5), 0)
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[4] replace_with：仅在设了上限时截断，截断内容可查")
+# ════════════════════════════════════════════════════════════════
+src = PositionBook()
+for i in range(3):
+    src.add(make_pos(Side.LONG, signal_key="R%d" % i))
+
+capped = PositionBook(max_positions=2)
+capped.replace_with(src)
+check("[4a] 上限 2 + 持久化 3 笔 → 保留 2 笔", len(capped), 2)
+check("[4b] 被截断的 1 笔可查（供 _restore 写 warning）",
+      [p.signal_key for p in capped.truncated_on_restore], ["R2"])
+
+free = PositionBook()                     # 默认不限容量
+free.replace_with(src)
+check("[4c] 默认不限容量 → 3 笔全保留，不截断", len(free), 3)
+check("[4d] 未截断时 truncated_on_restore 为空", free.truncated_on_restore, [])
+
+check("[4e] from_dict 接受 max_positions 并写入容量字段",
+      PositionBook.from_dict(src.to_dict(), max_positions=2).max_positions, 2)
+# 已知不一致（不可达路径，如实记录）：from_dict 直接 append 进内部 list、绕过 add，
+# 所以**不做截断**。引擎的恢复路径已不再传上限（D2），因此这条在线上跑不到；
+# 保留断言是为了防止有人误以为"from_dict 会截断"。
+check("[4e2] from_dict 不截断（绕过 add）；引擎不传上限故不可达",
+      len(PositionBook.from_dict(src.to_dict(), max_positions=2)), 3)
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[5] 配置层：两个旧键已删（D2）+ 白名单静默丢弃（D17）")
+# ════════════════════════════════════════════════════════════════
+check("[5a] RiskConfig 已无 max_open_positions 字段",
+      "max_open_positions" in RiskConfig.model_fields, False)
+check("[5b] RiskConfig 已无 unlock_no_new_open 字段",
+      "unlock_no_new_open" in RiskConfig.model_fields, False)
+
+legacy = RiskConfig(**{"max_open_positions": 3, "unlock_no_new_open": True,
+                       "max_volume": 2})
+check("[5c] 带旧键构造不报错（老配置文件仍可用）", legacy.max_volume, 2)
+check_true("[5d] 旧键被记入 dropped_legacy_keys 白名单",
+           "max_open_positions" in RiskConfig.dropped_legacy_keys
+           and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys,
+           "got=%s" % RiskConfig.dropped_legacy_keys)
+
 cfg0 = TradingConfig.from_dict(DEFAULT_CONFIG)
-check("DEFAULT_CONFIG.risk.max_open_positions == 1",
-      cfg0.risk.max_open_positions, 1)
+check("[5e] DEFAULT_CONFIG.risk 不含旧键（磁盘上也没有）",
+      ("max_open_positions" in (DEFAULT_CONFIG.get("risk") or {}),
+       "unlock_no_new_open" in (DEFAULT_CONFIG.get("risk") or {})), (False, False))
+check("[5f] 从 DEFAULT_CONFIG 构造后 risk.max_volume 正常", cfg0.risk.max_volume, 2)
+
+# ★ 关键护栏：白名单丢弃 ≠ 放行任意未知键（否则 RiskConfig 的严格模式失效）
+check_raises("[5g] 严格模式仍然生效：真正的未知键必须报错",
+             lambda: RiskConfig(bogus_key=1), Exception)
+check("[5h] 元护栏：丢弃白名单确实非空（否则 [5c] 是假绿）",
+      len(RiskConfig.dropped_legacy_keys) >= 2, True)
 
 
 # ════════════════════════════════════════════════════════════════
-# [2] PositionBook.__init__(max=N) / set_max / max_positions
+print("\n[6] 引擎侧：容器不受配置约束 + 源码不再读 cfg.risk.max_open_positions")
 # ════════════════════════════════════════════════════════════════
-print("\n[2] PositionBook.__init__(max=N) / set_max / max_positions")
+with tmp_dir() as td:
+    eng = make_engine(td, "c6")
+    check("[6a] 引擎容器 max_positions is None（不限容量）",
+          eng.positions.max_positions, None)
+    check("[6b] 一笔手数来自 cfg.risk.max_volume（唯一还在用的 risk 字段）",
+          eng.lots_per_signal, cfg0.risk.max_volume)
 
-# 默认 max=1
-b1 = PositionBook()
-check("PositionBook() 默认 max=1", b1.max_positions, 1)
+_esrc = inspect.getsource(TradingEngine.__init__)
+check_true("[6c] Engine.__init__ 不再读 max_open_positions",
+           "max_open_positions" not in _esrc)
+check_true("[6d] Engine.__init__ 不再把 cfg 上限传给 PositionBook",
+           "PositionBook(" not in _esrc or "max_positions=" not in _esrc)
 
-# 显式 max=5
-b5 = PositionBook(max_positions=5)
-check("PositionBook(max=5).max_positions == 5", b5.max_positions, 5)
-
-# max<1 应抛错
-check_raises("PositionBook(max=0) 抛错", lambda: PositionBook(max_positions=0),
-             PositionBookError)
-check_raises("PositionBook(max=-1) 抛错", lambda: PositionBook(max_positions=-1),
-             PositionBookError)
-
-# set_max 动态调整
-b1.set_max(3)
-check("set_max(3) 后 max_positions == 3", b1.max_positions, 3)
-
-# set_max 不能缩到现存数以下
-b1.add(make_pos(Side.LONG))
-b1.add(make_pos(Side.SHORT))
-check("add 第二笔后 __len__ == 2", len(b1), 2)
-check_raises("set_max(0) 不能缩（簿非空）", lambda: b1.set_max(0),
-             PositionBookError)
-check_raises("set_max(1) 不能缩（2>1）", lambda: b1.set_max(1),
-             PositionBookError)
-
-# set_max 等量放小允许（len=2, max=2 → max=2 不抛）
-b1.set_max(2)
-check("set_max(2) 等量（簿满）允许", b1.max_positions, 2)
-
-# set_max 放大允许
-b1.set_max(5)
-check("set_max(5) 放大允许", b1.max_positions, 5)
-
-# set_max 不能缩到 < 1
-check_raises("set_max(0) 抛错", lambda: b1.set_max(0),
-             PositionBookError)
-
-
-# ════════════════════════════════════════════════════════════════
-# [3] PositionBook.add 多仓行为（max=1 仍 throw, max=N 可累加）
-# ════════════════════════════════════════════════════════════════
-print("\n[3] PositionBook.add 多仓行为")
-
-# max=1: add 第二笔 throw
-b_max1 = PositionBook(max_positions=1)
-b_max1.add(make_pos(Side.LONG, signal_key="K1"))
-check_raises("max=1 时 add 第二笔 throw",
-             lambda: b_max1.add(make_pos(Side.SHORT, signal_key="K2")),
-             PositionBookError)
-
-# max=3: 可累加 3 笔
-b_max3 = PositionBook(max_positions=3)
-p1 = make_pos(Side.LONG, signal_key="K1")
-p2 = make_pos(Side.SHORT, signal_key="K2")
-p3 = make_pos(Side.LONG, signal_key="K3")
-b_max3.add(p1)
-b_max3.add(p2)
-b_max3.add(p3)
-check("max=3 三笔 add 后 __len__ == 3", len(b_max3), 3)
-check("max=3 顺序 FIFO：positions[0] == p1", b_max3.positions[0] is p1, True)
-check("max=3 顺序 FIFO：positions[2] == p3", b_max3.positions[2] is p3, True)
-
-# max=3: 第 4 笔 throw
-check_raises("max=3 add 第 4 笔 throw",
-             lambda: b_max3.add(make_pos(Side.SHORT, signal_key="K4")),
-             PositionBookError)
+# 生产代码里该配置键不得再被**当作标识符引用**。
+# 用 AST 区分"代码引用"（ast.Name / ast.Attribute）与"字符串常量"
+# （丢弃白名单里的字面量、以及"历史上曾用 X"这类说明性 docstring）——
+# 只把前者算违规，否则护栏会被正常的白名单/文档注释误伤。
+_prod_hits = []
+_prod_notes = []
+for sub in ("Trading/Engine", "Trading/Infra", "Trading/Strategy",
+            "Trading/Broker", "App", "Frontend"):
+    base = os.path.join(os.path.dirname(_TG_ROOT), sub)
+    for dp, dns, fns in os.walk(base):
+        dns[:] = [d for d in dns if d not in ("__pycache__", "Test")]
+        for fn in fns:
+            if not fn.endswith((".py", ".js")):
+                continue
+            fp = os.path.join(dp, fn)
+            rel = os.path.relpath(fp, os.path.dirname(_TG_ROOT)).replace("\\", "/")
+            txt = open(fp, encoding="utf-8", errors="replace").read()
+            if fn.endswith(".js"):
+                if re.search(r"(?<![A-Za-z_])max_open_positions(?![A-Za-z_])", txt):
+                    _prod_hits.append(rel)
+                continue
+            try:
+                _tree = ast.parse(txt)
+            except SyntaxError:
+                continue
+            for node in ast.walk(_tree):
+                if isinstance(node, ast.Attribute) and node.attr == "max_open_positions":
+                    _prod_hits.append("%s:%d" % (rel, node.lineno))
+                elif isinstance(node, ast.Name) and node.id == "max_open_positions":
+                    _prod_hits.append("%s:%d" % (rel, node.lineno))
+                elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and "max_open_positions" in node.value):
+                    _prod_notes.append("%s:%d" % (rel, node.lineno))
+check("[6e] 生产代码无 max_open_positions 的**代码引用**", _prod_hits, [])
+check_true("[6e2] 元护栏：那些只有字符串常量的位置确实存在（证明 [6e] 不是假绿）",
+           len(_prod_notes) >= 1, "n=%d %s" % (len(_prod_notes), _prod_notes[:3]))
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] legacy_single 多仓仍抛守护（E3.3 之前不允许）
+print("\n[7] 端到端冒烟：默认配置下一开一平")
 # ════════════════════════════════════════════════════════════════
-print("\n[4] legacy_single 多仓仍抛守护")
+with tmp_dir() as td:
+    eng = make_engine(td, "c7")
+    eng.on_bar(make_bar(5000, date="2026-09-01 09:30"))
+    sig = Signal(key="P14A-BUY", symbol="CFFEX.IF2609", freq="5m",
+                 timestamp=5000, date="2026-09-01 09:35", bsp_type="buy",
+                 is_buy=True, price=4550.0, high=4555.0, low=4545.0)
+    eng.on_signal(sig)
+    check("[7a] 信号 → 开仓 1 笔", len(eng.positions), 1)
+    check("[7b] 方向 LONG", eng.positions.positions[0].side, Side.LONG)
+    check("[7c] 状态 RUNNING", eng.account_state(), AccountState.RUNNING)
 
-# max=1 + 单仓：正常
-b_solo = PositionBook(max_positions=1)
-b_solo.add(make_pos(Side.LONG, signal_key="K1"))
-check("max=1 单仓：legacy_single() 返回那笔",
-      b_solo.legacy_single() is b_solo.positions[0], True)
+    act = eng._decide_exit(make_bar(5100, date="2026-09-02 09:30"))
+    check("[7d] 跨日 → 转移 ⑤ CLOSE",
+          (act.transition, act.intent), (5, OrderIntent.CLOSE))
+    eng._force_exit(make_bar(5100, date="2026-09-02 09:30"),
+                    reason="p14a_smoke", trigger_price=4560.0)
+    check("[7e] 平仓后簿空", len(eng.positions), 0)
+    check("[7f] 状态 FLAT", eng.account_state(), AccountState.FLAT)
+    check("[7g] 记了 1 笔成交", len(eng.store.trades()), 1)
 
-# max=3 + 多仓：legacy_single 必须 throw（E3.3 之前不允许单仓 API 操作多仓）
-b_multi = PositionBook(max_positions=3)
-b_multi.add(make_pos(Side.LONG, signal_key="K1"))
-b_multi.add(make_pos(Side.SHORT, signal_key="K2"))
-check("多仓 len == 2", len(b_multi), 2)
-check_raises("多仓 legacy_single() 抛守护错",
-             b_multi.legacy_single, PositionBookError)
-
-
-# ════════════════════════════════════════════════════════════════
-# [5] set_legacy 保留 E1 行为：max 不论，整簿替换
-# ════════════════════════════════════════════════════════════════
-print("\n[5] set_legacy 保留 E1 行为（兼容层）")
-
-# max=1: 单仓时正常替换
-b_solo = PositionBook(max_positions=1)
-b_solo.set_legacy(make_pos(Side.LONG, signal_key="A"))
-b_solo.set_legacy(make_pos(Side.SHORT, signal_key="B"))
-check("max=1 set_legacy 替换整簿", b_solo.legacy_single().signal_key, "B")
-
-# max>1: 多仓时 set_legacy 仍允许（E1 兼容，doc 警告"会丢失持仓"）
-b_multi = PositionBook(max_positions=3)
-b_multi.add(make_pos(Side.LONG, signal_key="A"))
-b_multi.add(make_pos(Side.SHORT, signal_key="B"))
-b_multi.set_legacy(make_pos(Side.LONG, signal_key="C"))
-check("max>1 多仓 set_legacy 仍整簿替换（E1 兼容）",
-      len(b_multi), 1)
-check("整簿替换后唯一仓位 signal_key == 'C'",
-      b_multi.legacy_single().signal_key, "C")
-
-
-# ════════════════════════════════════════════════════════════════
-# [6] replace_with 引擎内部用：persisted > cfg.max 时截断
-# ════════════════════════════════════════════════════════════════
-print("\n[6] replace_with 持久化数据 > cfg max 时截断")
-
-# 簿 max=1，从 max=3 的另一簿 swap（典型场景：cfg 缩窄）
-src = PositionBook(max_positions=3)
-src.add(make_pos(Side.LONG, signal_key="A"))
-src.add(make_pos(Side.LONG, signal_key="B"))
-src.add(make_pos(Side.LONG, signal_key="C"))
-
-dst = PositionBook(max_positions=1)
-dst.replace_with(src)
-check("replace_with: 截断到 max=1", len(dst), 1)
-check("replace_with: 保留前 max 个（FIFO）", dst.positions[0].signal_key, "A")
-check("replace_with: truncated 字段含后 2 个",
-      len(dst.truncated_on_restore), 2)
-truncated_keys = sorted([p.signal_key for p in dst.truncated_on_restore])
-check("replace_with: truncated 是 B + C（FIFO 截断后丢弃）",
-      truncated_keys, ["B", "C"])
-
-# 簿 max=3，从 max=3 swap：全部接受
-src2 = PositionBook(max_positions=3)
-src2.add(make_pos(Side.LONG, signal_key="X"))
-src2.add(make_pos(Side.LONG, signal_key="Y"))
-src2.add(make_pos(Side.LONG, signal_key="Z"))
-
-dst2 = PositionBook(max_positions=3)
-dst2.replace_with(src2)
-check("replace_with 等量 swap：3 笔全恢复", len(dst2), 3)
-check("replace_with 等量 swap：无截断",
-      len(dst2.truncated_on_restore), 0)
-
-# 簿 max=5，从 max=3 swap：3 笔全接受，无截断
-dst3 = PositionBook(max_positions=5)
-dst3.replace_with(src2)
-check("replace_with 放大 swap：3 笔全接受", len(dst3), 3)
-check("replace_with 放大 swap：无截断",
-      len(dst3.truncated_on_restore), 0)
-
-
-# ════════════════════════════════════════════════════════════════
-# [7] engine 构造时 cfg.risk.max_open_positions → PositionBook
-# ════════════════════════════════════════════════════════════════
-print("\n[7] engine 构造时 cfg 化传递")
-
-with tmp_dir() as tmp:
-    # 默认 cfg: max=1
-    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = cfg.instrument
-    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
-    exitp = LayeredExitPolicy()
-    store = Store(os.path.join(tmp, "state.db"))
-    store.wipe_runtime_state()
-    ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
-    # v1.3（Q5 拍板）：容器不限容量，max_positions 恒 None（不再受 cfg.risk.max_open_positions 约束）
-    check("v1.3 不限容量：engine.positions.max_positions is None",
-          engine.positions.max_positions, None)
-
-    # cfg.max=3（字段仍可配置，但不再作为容器容量）
-    cfg.risk.max_open_positions = 3
-    store2 = Store(os.path.join(tmp, "state2.db"))
-    store2.wipe_runtime_state()
-    ev2 = EventLog(os.path.join(tmp, "events2.jsonl"), echo=False, echo_kinds=None)
-    engine2 = TradingEngine(cfg, broker, entry, exitp, store2, ev2)
-    check("cfg.max=3 时容器仍不限（max_positions is None）",
-          engine2.positions.max_positions, None)
-
-
-# ════════════════════════════════════════════════════════════════
-# [8] _restore 截断时 ev 写 warning
-# ════════════════════════════════════════════════════════════════
-print("\n[8] _restore 截断时 ev 写 warning")
-
-with tmp_dir() as tmp:
-    store = Store(os.path.join(tmp, "state.db"))
-    store.set_json("positions", [
-        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
-         "entry_price": 4500.0, "entry_at": "2026-09-01 09:00",
-         "entry_bar_ts": 4000, "entry_bar_seq": 10,
-         "signal_key": "PA", "open_order_id": "o1",
-         "exit_plan": {"name": "x", "stop_price": 4490.0, "tp_price": None,
-                       "params": {}}, "origin": "signal_open"},
-        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
-         "entry_price": 4505.0, "entry_at": "2026-09-01 09:01",
-         "entry_bar_ts": 4020, "entry_bar_seq": 11,
-         "signal_key": "PB", "open_order_id": "o2",
-         "exit_plan": {"name": "x", "stop_price": 4495.0, "tp_price": None,
-                       "params": {}}, "origin": "signal_open"},
-        {"symbol": "CFFEX.IF2609", "side": "LONG", "volume": 1,
-         "entry_price": 4510.0, "entry_at": "2026-09-01 09:02",
-         "entry_bar_ts": 4040, "entry_bar_seq": 12,
-         "signal_key": "PC", "open_order_id": "o3",
-         "exit_plan": {"name": "x", "stop_price": 4500.0, "tp_price": None,
-                       "params": {}}, "origin": "signal_open"},
-    ])
-    store.close()
-
-    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    check("默认 cfg.max=1", cfg.risk.max_open_positions, 1)
-    spec = cfg.instrument
-    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
-    exitp = LayeredExitPolicy()
-    store2 = Store(os.path.join(tmp, "state.db"))
-    ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = TradingEngine(cfg, broker, entry, exitp, store2, ev)
-
-    check("persisted=3 且不限容量 → engine.positions.__len__ == 3（不截断）",
-          len(engine.positions), 3)
-    check("v1.3 不限容量：truncated_on_restore 为空（不丢失持仓）",
-          len(engine.positions.truncated_on_restore), 0)
-
-    ev.flush()
-    events_log = os.path.join(tmp, "events.jsonl")
-    has_warning = False
-    if os.path.isfile(events_log):
-        with open(events_log, "r", encoding="utf-8") as fh:
-            for line in fh:
-                if "positions_truncated_on_restore" in line:
-                    has_warning = True
-                    break
-    check("v1.3 不限容量：不写 positions_truncated_on_restore warning",
-          has_warning, False)
-
-
-# ════════════════════════════════════════════════════════════════
-# [9] 默认 cfg 不变：所有现存测试场景行为不变（端到端冒烟）
-# ════════════════════════════════════════════════════════════════
-print("\n[9] 默认 cfg 不变：端到端冒烟（一开一平）")
-
-with tmp_dir() as tmp:
-    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = cfg.instrument
-    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
-    exitp = LayeredExitPolicy()
-    store = Store(os.path.join(tmp, "state.db"))
-    store.wipe_runtime_state()
-    ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
-
-    # 制造一个 bar + 信号
-    from Trading.Infra.Types import Bar, Signal, now_cn
-    bar = Bar(timestamp=4000, date="2026-09-02 09:30",
-              open=4500, high=4505, low=4498, close=4503, vol=100)
-    engine.on_bar(bar)
-
-    sig = Signal(key="K_open", date="2026-09-02 09:30",
-                 timestamp=4000, bsp_type="1", is_buy=True,
-                 price=4503, high=4505, low=4498,
-                 symbol="CFFEX.IF2609", freq="5m", extra={})
-    engine.on_signal(sig)
-
-    check("开仓后 positions.__len__ == 1", len(engine.positions), 1)
-    # v1.3：不限容量，max_positions 恒 None
-    check("开仓后 max_positions 仍 None（不限容量）",
-          engine.positions.max_positions, None)
-    check("开仓后 _state == IN_TRADE",
-          engine._state.value, "in_trade")
-
-    # 反向信号：v1.3（Q1=B）运行态一律忽略（出场只由 on_bar 的 L1-L3 负责）
-    sig2 = Signal(key="K_close", date="2026-09-02 09:35",
-                  timestamp=4300, bsp_type="2", is_buy=False,
-                  price=4510, high=4512, low=4508,
-                  symbol="CFFEX.IF2609", freq="5m", extra={})
-    bar2 = Bar(timestamp=4300, date="2026-09-02 09:35",
-               open=4505, high=4512, low=4505, close=4510, vol=100)
-    engine.on_bar(bar2)
-    engine.on_signal(sig2)
-
-    check("反向信号被忽略：positions 仍 SIGNAL_OPEN（不锁仓）",
-          all(p.origin.value == "signal_open" for p in engine.positions.positions), True)
-    check("反向信号被忽略：_state 仍 IN_TRADE",
-          engine._state.value, "in_trade")
-    check("反向信号被忽略：_trade_seq == 0（无离场成交）",
-          engine._trade_seq, 0)
-
-
-# ════════════════════════════════════════════════════════════════
-# [10] cfg.max>1 端到端：手动 add 多笔 + 检查多仓 throw 守护
-# ════════════════════════════════════════════════════════════════
-print("\n[10] cfg.max=3 端到端：多仓 throw 守护")
-
-with tmp_dir() as tmp:
-    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_open_positions = 3
-    spec = cfg.instrument
-    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
-    exitp = LayeredExitPolicy()
-    store = Store(os.path.join(tmp, "state.db"))
-    store.wipe_runtime_state()
-    ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False, echo_kinds=None)
-    engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
-    check("v1.3 不限容量：cfg.max=3 时 max_positions 仍 None",
-          engine.positions.max_positions, None)
-
-    # 通过 property（兼容层）写入两笔——但 set_legacy 单仓语义会让第二笔覆盖第一笔
-    p_a = make_pos(Side.LONG, signal_key="A")
-    engine.position = p_a
-    check("engine.position = p_a 后 __len__ == 1", len(engine.positions), 1)
-
-    # 通过 book.add 直接追加（绕过 property 测试多仓 API）
-    p_b = make_pos(Side.SHORT, signal_key="B")
-    engine.positions.add(p_b)
-    check("positions.add(p_b) 后 __len__ == 2", len(engine.positions), 2)
-
-    check_raises("engine.position 多仓抛守护错",
-                 lambda: engine.position, PositionBookError)
-
-    # 清理后恢复单仓 API
-    engine.positions.clear()
-    check("clear 后 __len__ == 0", len(engine.positions), 0)
-    check("清空后 engine.position = None",
-          engine.position, None)
-    check("清空后 _state = IDLE",
-          engine._state.value, "idle")
-
-
-print()
+print("\n" + "=" * 60)
+print("P14a 结果: {} passed, {} failed".format(_PASS, _FAIL))
 print("=" * 60)
-print("P14a 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
-print("=" * 60)
-if _FAIL:
-    raise SystemExit(1)
+sys.exit(1 if _FAIL else 0)

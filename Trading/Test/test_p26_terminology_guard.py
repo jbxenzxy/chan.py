@@ -202,11 +202,16 @@ if _old:
 # ── [2] 关键文件确实被纳入扫描（防止扫描逻辑被改窄而静默失效）──────────────
 print("\n[2] 扫描覆盖面自检（防扫描范围被改窄）")
 _rels = {os.path.relpath(p, _ROOT).replace("\\", "/") for p in _iter_scan_files()}
+# ⚠️ R16：本清单是**硬编码**的，禁止放"可能被退役"的文件名 —— 一旦某文件退役，
+#    本测试会先变红，且表现为"某文件不在扫描范围"而非"该文件没了"，极易误判成
+#    扫描逻辑被改窄。Phase 7 退役 p25 时即踩过此坑，故改为放入**长期存在**的
+#    契约测试 + 新一期新增的契约测试（新增文件时同步补进本清单）。
 for _must in ("Trading/Infra/Types.py",
               "Trading/Engine/Engine.py",
               "Trading/Engine/PositionBook.py",
               "Trading/Broker/SimNow.py",
-              "Trading/Test/test_p25_origin_decoupled.py",
+              "Trading/Test/test_p27_account_state_ssot.py",
+              "Trading/Test/test_p32_net_exposure_ssot.py",
               "Frontend/app.js"):
     check("已纳入扫描: %s" % _must, _must in _rels, True)
 

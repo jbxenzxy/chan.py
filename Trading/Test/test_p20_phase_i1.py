@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-P20 Phase I1：自动下单开关（关闭锁仓 / live 配置）单元测试
+P20 Phase I1：自动下单开关（关闭离场 / live 配置）单元测试
 ==========================================================
-背景（用户拍板关闭语义）
+2026-09-11 Phase 7 改写。旧版 [1]-[6] 建立在两个已删概念上：
+  · `OrderIntent.LOCK` / `PositionOrigin.SOFT_EXIT_LOCK` / `lock_pair_id`
+    —— "锁仓"不再是一种**打标的操作**，而是"净敞口 = 0 且簿非空"的**状态**
+    （`AccountState.LOCKED`）。今日仓离场走转移 ④（反向 OPEN），仓单上不打标。
+  · `cfg.risk.max_open_positions` —— D2 删除，夹具不再配置它。
+
+背景（用户拍板关闭语义，2026-09-11 复核后口径不变）
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
-      ② 簿内「未锁定」持仓按【规则 ⑸】离场（判据是建仓日期，与来源无关）：
-         今仓 → LOCK（留双向持仓：原仓 → SOFT_EXIT_LOCK + 反向仓
-                       SOFT_EXIT_LOCK，共享 lock_pair_id）
-         昨仓 → CLOSE（平昨）
-         ★ 2026-09-10 P4 变体A：此前是 `force_lock=True` 对**昨仓也**反向开仓，
-           已删除。本文件全部夹具都是"今仓"，故仍然全走 LOCK。
-           关闭后的"冻结"语义与自然流程契约见 test_p30_shutdown_exit_mode.py。
+      ② 运行态持仓按【规则 ⑹】离场（判据是建仓日期，与来源无关）：
+         今仓 → 转移 ④ 反向 OPEN（整段净敞口一次锁住）→ 账户停在 LOCKED
+         昨仓 → 转移 ⑤ CLOSE（平昨）
     状态持久化：auto_order_enabled 落盘 state.db，重启保持关闭语义。
+    ★ 关闭后 LOCKED 是**没有自动出口**的冻结态：既不收信号、也不参与 L1-L3。
+      两条人工出口 = 重新开启后由对向信号拆锁（转移 ③）/ 交易所手工平仓。
+      这条契约由 test_p30_shutdown_exit_mode.py 做完整覆盖，本文件只做基本确认。
 
 Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
     broker = dry_run / simnow / live
@@ -22,19 +27,20 @@ Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（�
 
 硬性要求（本测试锁死）
     [1] 关闭后 on_signal 拒收（signal_action=skip / note=auto_order_off）
-    [2] shutdown_and_lock_all：今仓未锁持仓全部 LOCK（SIGNAL_OPEN + UNLOCK_UPGRADE
-        都锁 —— 判据是日期不是来源）→ 簿内只剩 SOFT_EXIT_LOCK；
-        enabled=False 持久化；auto_order_off 事件
+    [2] shutdown_and_lock_all：今日仓 → 转移 ④ 反向 OPEN（**1 笔报单**把整段净敞口
+        锁住）→ 簿内 3 笔（2 原仓 + 1 反向仓）、net 0、LOCKED、0 Trade；
+        enabled=False 持久化；auto_order_off + account_frozen 事件
     [3] 幂等：重复 shutdown 不产生新单 / 新 trade
     [4] 重启保持关闭：同 store 新引擎 auto_order_enabled=False，信号仍拒收
-    [5] 关闭态 on_bar 补锁：锁仓被拒的残留持仓在后续 bar 自动补锁
-        （reason=auto_order_off_retry）
+    [5] 关闭态 on_bar 补锁：④ 被拒的残留持仓在后续 bar 自动补锁
+        （reason=auto_order_off_retry）；⑤（跨日 CLOSE）则要等满冷却根数
     [6] 开启恢复：_persist True → 重启后 on_signal 正常开仓
     [7] 实盘安全闸门（AppTrader._check_live_gate 三分支）
     [8] broker 路由：SimNowBroker.is_live 判定 + LiveCTPBroker 注册
+    [9]-[12] AppTrader 子进程 / 状态 / CWD 行为（依赖仓库根 App/ 包）
 
 不需要真实 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。
-跑法：python tests/test_p20_phase_i1.py
+跑法：python Trading/Test/test_p20_phase_i1.py
 """
 from __future__ import annotations
 
@@ -94,7 +100,7 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
-    Bar, PositionOrigin, Order, OrderIntent, Position, ExitPlan, Side, Signal, now_cn,
+    Bar, Order, OrderIntent, Position, ExitPlan, Side, Signal, now_cn,
 )
 
 _PASS = 0
@@ -112,9 +118,23 @@ def check(name, got, expected):
         _FAIL += 1
 
 
-def make_cfg(max_pos=2):
+def check_true(name, got):
+    global _PASS, _FAIL
+    ok = bool(got)
+    print(("✓" if ok else "✗") + " " + name
+          + ("" if ok else "  -> got={!r}".format(got)))
+    if ok:
+        _PASS += 1
+    else:
+        _FAIL += 1
+
+
+def make_cfg(max_pos=None):
+    """构造配置。2026-09-11：`max_open_positions` 已按 D2 删除（容器不限容量），
+    max_pos 形参仅为兼容旧调用点保留 —— 传了也不再生效（旧键会被 D17 白名单丢弃）。"""
     d = copy.deepcopy(DEFAULT_CONFIG)
-    d["risk"]["max_open_positions"] = max_pos
+    if max_pos is not None:
+        d["risk"]["max_open_positions"] = max_pos
     return TradingConfig.from_dict(d)
 
 
@@ -132,17 +152,14 @@ def make_bar(ts, o=4500.0, h=4510.0, l=4490.0, c=4505.0,
 
 
 def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
-             origin=PositionOrigin.SIGNAL_OPEN, signal_key="P20-pos",
-             entry_bar_seq=1, entry_date="2026-09-03"):
+             signal_key="P20-pos", entry_bar_seq=1, entry_date="2026-09-03"):
     """构造一笔"关闭时正在运行、且【当日】开仓"的持仓。
 
-    P4 变体A 配套（2026-09-10）：关闭不再"一律 LOCK"，而是与常规离场同一判据
-    —— 按 entry_date 判今仓 / 昨仓（今仓 LOCK / 昨仓 CLOSE）。
+    2026-09-11：**不再传 origin**（字段已删）。关闭时按 entry_date 判今/昨仓
+    （今仓 → 转移 ④ 反向 OPEN 锁仓 / 昨仓 → 转移 ⑤ CLOSE）。
       本组夹具的语义是"当日开、当日关" → entry_date 必须等于引擎的 today，
       即 make_bar() 的日期 2026-09-03；否则会被判成昨仓走 CLOSE，
-      与 [2]/[3]/[4]/[5] 组"关闭 = 锁仓"的断言不符。
-      注：entry_date 显式给出后 Position.__post_init__（F4）原样保留，
-      不会再从 entry_bar_ts(序号×1000 → 1970) / entry_at("2026-09-02") 派生。
+      与 [2]-[5] 组"关闭 = 锁仓"的断言不符。
     """
     return Position(
         symbol=symbol, side=side, volume=vol,
@@ -151,25 +168,31 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         open_order_id="p20-o1",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 10.0),
         entry_bar_seq=entry_bar_seq,
-        origin=origin, entry_date=entry_date)
+        entry_date=entry_date)
 
 
 class LockRejectBroker(DryRunBroker):
-    """前 reject_n 次 LOCK submit 拒绝（模拟锁仓拒单/卡单），之后放行。"""
+    """前 reject_n 次**离场向**报单拒绝（模拟锁仓/平仓拒单），之后放行。
+
+    2026-09-11：`OrderIntent.LOCK` 已删 —— "锁仓"现在是转移 ④ 的
+    `OPEN + is_exit=True`。拒单条件随之从 `intent is LOCK` 改为
+    `is_exit=True`（覆盖 ④⑤ 两条离场路径；开仓的 OPEN 不拒）。
+    """
 
     def __init__(self, spec, params, reject_n=1):
         super().__init__(spec, params)
         self._reject_left = reject_n
 
     def submit(self, intent, side, volume, ref_price, signal_key="", note="",
-               entry_date=""):
+               entry_date="", is_exit=False):
         intent = self._resolve_intent(intent, side)
-        if intent is OrderIntent.LOCK and self._reject_left > 0:
+        if is_exit and self._reject_left > 0:
             self._reject_left -= 1
             o = Order(
                 order_id="dry-reject-{:06d}".format(len(self.orders)),
                 signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
-                action="open", volume=int(volume), price=0.0,
+                action="close" if intent is OrderIntent.CLOSE else "open",
+                volume=int(volume), price=0.0,
                 req_price=float(ref_price), filled_price=None,
                 status="rejected", created_at=now_cn(), broker=self.name, note=note,
                 meta={"intent": intent.value, "offset": "OPEN",
@@ -177,12 +200,13 @@ class LockRejectBroker(DryRunBroker):
             self.orders.append(o)
             return o
         return super().submit(intent, side, volume, ref_price, signal_key,
-                              note=note, entry_date=entry_date)
+                              note=note, entry_date=entry_date, is_exit=is_exit)
 
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
                  store=None, ev=None):
-    cfg = cfg or make_cfg(max_pos=2)
+    # 2026-09-11：不再传 max_pos —— D2 删除该键后传它只会触发 D17 丢弃告警。
+    cfg = cfg or make_cfg()
     spec = InstrumentSpec()
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     from Trading.Strategy.Entry import DefaultEntryPolicy
@@ -207,7 +231,17 @@ def event_kinds(ev_path):
 
 
 def lock_orders(broker):
-    return [o for o in broker.orders if o.meta.get("intent") == "lock"]
+    """离场向报单（④ 反向 OPEN / ⑤ CLOSE）。
+
+    2026-09-11：旧判据 `meta["intent"] == "lock"` 随 4→2 intent 收敛失效
+    （① 与 ④ 现在都是 intent="open"）。改判 `is_exit` —— 它由引擎在报单出口
+    统一写进 Order.meta（Engine._execute，Phase 7 审计补全）。
+    """
+    return [o for o in broker.orders if o.meta.get("is_exit")]
+
+
+def sides_of(book):
+    return sorted(p.side.name for p in book.positions)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -230,42 +264,56 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [2] shutdown_and_lock_all 锁全部未锁定持仓（SIGNAL_OPEN + UNLOCK_UPGRADE）
+# [2] shutdown_and_lock_all：2 笔今仓 → 转移 ④ 反向 OPEN 整段锁住
 # ════════════════════════════════════════════════════════════════
-print("\n[2] shutdown_and_lock_all：2 笔今仓未锁持仓 → 全部 LOCK → SOFT_EXIT_LOCK 落簿")
+print("\n[2] shutdown_and_lock_all：2 笔今仓 → ④ 反向 OPEN（1 单锁整段）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
-    engine.positions.add(make_pos(signal_key="P20-2A", entry_bar_seq=1,
-                                       origin=PositionOrigin.SIGNAL_OPEN))
-    engine.positions.add(make_pos(signal_key="P20-2B", entry_bar_seq=2,
-                                       origin=PositionOrigin.UNLOCK_UPGRADE))
+    engine.positions.add(make_pos(signal_key="P20-2A", entry_bar_seq=1))
+    engine.positions.add(make_pos(signal_key="P20-2B", entry_bar_seq=2))
 
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
-    modes = sorted(p.origin.value for p in engine.positions.positions)
-    check("[2b] 簿内全是 SOFT_EXIT_LOCK（留双向持仓：2 原仓 + 2 反向 = 4 笔）", modes,
-          ["soft_exit_lock", "soft_exit_lock", "soft_exit_lock", "soft_exit_lock"])
-    check("[2c] 信号键 = 原键 + 原键#lock（原仓保留原键）",
-          sorted(p.signal_key for p in engine.positions.positions),
-          ["P20-2A", "P20-2A#lock", "P20-2B", "P20-2B#lock"])
-    check("[2d] 全部 SOFT_EXIT_LOCK → state=IDLE", engine._state.name, "IDLE")
-    check("[2e] 2 笔 LOCK 报单", len(lock_orders(broker)), 2)
-    check("[2f] 锁仓不兑现 PnL → 0 笔 Trade（软离场不记 Trade）",
-          sum(1 for t in store.trades() if t["reason"] == "auto_order_off"), 0)
+    # 2026-09-11 新口径：2 笔今仓多单（net=+2）→ 转移 ④ 反向 OPEN 2 手
+    #   → 簿内 2 原仓 + 1 反向仓 = 3 笔（旧口径是逐笔锁 → 4 笔）
+    check("[2b] 簿 3 笔：2 原仓 + 1 笔反向仓（整段净敞口一次锁住）",
+          len(engine.positions), 3)
+    check("[2c] 方向组合 = 2 LONG + 1 SHORT",
+          [sides_of(engine.positions).count("LONG"),
+           sides_of(engine.positions).count("SHORT")], [2, 1])
+    check("[2c2] 反向仓 2 手（= 净敞口，不是逐笔 1 手 ×2）",
+          [p.volume for p in engine.positions.positions
+           if p.side is Side.SHORT], [2])
+    check("[2d] 净敞口归零 → account_state LOCKED",
+          engine.account_state().value, "locked")
+    check("[2d2] LOCKED → _state=IDLE（IDLE 同时覆盖 FLAT 与 LOCKED）",
+          engine._state.name, "IDLE")
+    # 报单：整段只有 1 笔（旧口径 2 笔 LOCK）
+    check("[2e] 1 笔离场报单", len(lock_orders(broker)), 1)
+    check("[2e2] 该单 2 手", lock_orders(broker)[0].volume, 2)
+    check("[2e3] 该单 intent=open（④ 是反向开仓）",
+          lock_orders(broker)[0].meta.get("intent"), "open")
+    check("[2e4] 该单 transition=4",
+          lock_orders(broker)[0].meta.get("transition"), 4)
+    check("[2f] 锁仓不兑现 PnL → 0 笔 Trade（④ 不记 Trade）",
+          len(store.trades()), 0)
     check("[2g] enabled=False 已持久化",
           store.get_json("auto_order_enabled", True), False)
     ev.flush()
     kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[2h] auto_order_off 事件 locked_n=4/remaining_unlocked=0",
-          kinds.count("auto_order_off"), 1)
-    check("[2i] lock_booked ×2", kinds.count("lock_booked"), 2)
+    check("[2h] auto_order_off 事件 ×1", kinds.count("auto_order_off"), 1)
+    check("[2h2] account_frozen 事件 ×1（LOCKED 是冻结态）",
+          kinds.count("account_frozen"), 1)
+    check("[2i] 无 lock_booked 事件（软离场打标已随来源概念删除）",
+          kinds.count("lock_booked"), 0)
+    check_true("[2i2] LOCKED 冻结态升级告警（D11）", len(engine._alerts) >= 1)
 
 
 # ════════════════════════════════════════════════════════════════
 # [3] 幂等：重复 shutdown 不产生新单 / 新 trade
 # ════════════════════════════════════════════════════════════════
-print("\n[3] 幂等：簿内只剩 SOFT_EXIT_LOCK 时重复 shutdown 无操作")
+print("\n[3] 幂等：净敞口已归零时重复 shutdown 无操作")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
@@ -273,14 +321,17 @@ with tmp_dir() as tmp:
     engine.shutdown_and_lock_all()
     n_orders = len(broker.orders)
     n_trades = len(store.trades())
+    n_pos = len(engine.positions)
 
-    engine.shutdown_and_lock_all()          # 第二次关闭：全部已 SOFT_EXIT_LOCK → no-op
+    engine.shutdown_and_lock_all()          # 第二次：net==0 → _decide_exit 返回 None
     check("[3a] 无新增报单", len(broker.orders), n_orders)
     check("[3b] 无新增 trade", len(store.trades()), n_trades)
-    check("[3c] 簿仍 1 锁 2 笔（原仓 + 反向均 SOFT_EXIT_LOCK）",
-          [p.origin for p in engine.positions.positions],
-          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
+    check("[3c] 簿仍 2 笔（原仓 + 反向仓，net=0）",
+          (len(engine.positions), n_pos), (2, 2))
+    check("[3c2] 仍是双向持仓",
+          sides_of(engine.positions), ["LONG", "SHORT"])
     check("[3d] enabled 仍 False", engine.auto_order_enabled, False)
+    check("[3e] account_state 仍 LOCKED", engine.account_state().value, "locked")
 
 
 # ════════════════════════════════════════════════════════════════
@@ -289,15 +340,17 @@ with tmp_dir() as tmp:
 print("\n[4] 重启保持关闭语义（state.db 持久化）")
 with tmp_dir() as tmp:
     engine1, store1, broker1, ev1 = build_engine(tmp)
-    engine1.positions.add(make_pos(signal_key="P20-4A", entry_bar_seq=1))
     engine1.on_bar(make_bar(1000))
+    engine1.positions.add(make_pos(signal_key="P20-4A", entry_bar_seq=1))
     engine1.shutdown_and_lock_all()
+    check("[4a0] 关闭后 1 原仓 + 1 反向仓 = 2 笔", len(engine1.positions), 2)
 
     engine2, store2, broker2, ev2 = build_engine(tmp)
     check("[4a] 重启后 enabled=False", engine2.auto_order_enabled, False)
-    check("[4b] 簿内 SOFT_EXIT_LOCK 已恢复（1 锁 2 笔）",
-          [p.origin for p in engine2.positions.positions],
-          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
+    check("[4b] 簿内双向持仓已恢复（LOCKED 跨重启保持）",
+          sides_of(engine2.positions), ["LONG", "SHORT"])
+    check("[4b2] 净敞口仍 0", engine2.positions.net_volume(), 0)
+    check("[4b3] account_state LOCKED", engine2.account_state().value, "locked")
     sig = make_signal(is_buy=True, sig_key="P20-4|2|B")
     engine2.on_signal(sig)
     check("[4c] 重启后信号仍拒收（skip）",
@@ -306,9 +359,11 @@ with tmp_dir() as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-# [5] 关闭态 on_bar 补锁：锁仓被拒的残留持仓自动补锁
+# [5] 关闭态 on_bar 补锁：首轮离场被拒 → 后续 bar 自动补
 # ════════════════════════════════════════════════════════════════
-print("\n[5] 关闭态 on_bar 补锁（首轮锁仓被拒 → 后续 bar 自动补锁）")
+print("\n[5] 关闭态 on_bar 补锁（首轮被拒 → 后续 bar 自动补）")
+
+# 5A 今仓（转移 ④ OPEN）被拒 → **下一根 bar 立即**补（OPEN 不受 CLOSE 冷却约束）
 with tmp_dir() as tmp:
     broker = LockRejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
                               reject_n=1)
@@ -317,27 +372,49 @@ with tmp_dir() as tmp:
     engine.positions.add(make_pos(signal_key="P20-5A", entry_bar_seq=1))
 
     engine.shutdown_and_lock_all()
-    check("[5a] 首轮锁仓被拒：持仓未锁（state=EXITING）",
-          engine._state.name, "EXITING")
-    check("[5b] 簿内仍 1 笔未锁（SIGNAL_OPEN）",
-          [p.origin for p in engine.positions.positions],
-          [PositionOrigin.SIGNAL_OPEN])
+    check("[5a] 首轮锁仓被拒：持仓未锁（净敞口仍 +1）",
+          engine.positions.net_volume(), 1)
+    check("[5a2] 被拒后 state=IN_TRADE（净敞口≠0 → RUNNING 的镜像）",
+          engine._state.name, "IN_TRADE")
+    check("[5a3] 簿内仍 1 笔（未变）", len(engine.positions), 1)
+    ev.flush()      # EventLog 有缓冲，读文件前必须 flush，否则漏读
+    check_true("[5a4] 写 order_rejected 事件",
+               "order_rejected" in event_kinds(os.path.join(tmp, "events.jsonl")))
 
-    # 冷却期外 → 关闭态自动补锁。
-    # Step 1 修复（2026-09-08）：cooldown 现在真的按"根数"生效
-    # （旧口径是拿毫秒时间戳差值比 5，等价 5 毫秒，恒不生效 → 测试只需 1 根 bar），
-    # 所以这里要推进 _close_retry_bars(5) 根 bar 才会重试补锁。
+    # ④ 是 OPEN → 不进入 CLOSE 冷却 → 下一根 bar 就该补上
+    engine.on_bar(make_bar(2000))
+    check("[5b] 补锁后簿 2 笔（原仓 + 反向仓）", len(engine.positions), 2)
+    check("[5b2] 补锁后 net=0 → LOCKED", engine.account_state().value, "locked")
+    check("[5b3] 补锁后 state=IDLE", engine._state.name, "IDLE")
+    check("[5b4] 补锁报单 reason=auto_order_off_retry",
+          [o.note for o in broker.orders if o.meta.get("is_exit")][-1],
+          "auto_order_off_retry")
+    check("[5b5] 补锁不兑现 PnL → 0 笔 Trade", len(store.trades()), 0)
+
+# 5B 昨仓（转移 ⑤ CLOSE）被拒 → 必须等满冷却根数才重试
+with tmp_dir() as tmp:
+    broker = LockRejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+                              reject_n=1)
+    engine, store, broker, ev = build_engine(tmp, broker=broker)
+    engine.on_bar(make_bar(1000))
+    # entry_date 早于 bar 日 → 昨仓 → 转移 ⑤ CLOSE
+    engine.positions.add(make_pos(signal_key="P20-5B", entry_bar_seq=1,
+                                  entry_date="2026-09-02"))
+
+    engine.shutdown_and_lock_all()
+    check("[5c] 昨仓离场被拒：簿仍 1 笔", len(engine.positions), 1)
+    check("[5c2] 进入 CLOSE 冷却", engine._in_close_cooldown(), True)
+
+    engine.on_bar(make_bar(2000))          # 仅 1 根 → 仍在冷却
+    check("[5d] 冷却中：簿仍 1 笔（未重试）", len(engine.positions), 1)
+    check("[5d2] 冷却中离场报单仍只有首轮那 1 笔",
+          len([o for o in broker.orders if o.meta.get("is_exit")]), 1)
+
     for i in range(engine._close_retry_bars):
-        engine.on_bar(make_bar(2000 + i))
-    check("[5c] 补锁后簿内 SOFT_EXIT_LOCK（1 锁 2 笔）",
-          [p.origin for p in engine.positions.positions],
-          [PositionOrigin.SOFT_EXIT_LOCK, PositionOrigin.SOFT_EXIT_LOCK])
-    check("[5d] 补锁后 state=IDLE", engine._state.name, "IDLE")
-    ev.flush()
-    kinds = event_kinds(os.path.join(tmp, "events.jsonl"))
-    check("[5e] 补锁不兑现 PnL → 0 笔 trade（软离场不记 Trade）",
-          sum(1 for t in store.trades()
-              if t["reason"] == "auto_order_off_retry"), 0)
+        engine.on_bar(make_bar(3000 + i))
+    check("[5e] 冷却期满后补平：簿清空", len(engine.positions), 0)
+    check("[5e2] account_state FLAT", engine.account_state().value, "flat")
+    check("[5e3] ⑤ 是 CLOSE → 兑现 1 笔 Trade", len(store.trades()), 1)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -357,9 +434,14 @@ with tmp_dir() as tmp:
     engine2.on_signal(sig)
     check("[6c] 信号 action=opened", store2.signal_action(sig.key), "opened")
     check("[6d] 1 笔开仓报单", len(broker2.orders), 1)
-    check("[6e] 簿内 1 笔 SIGNAL_OPEN",
-          [p.origin for p in engine2.positions.positions],
-          [PositionOrigin.SIGNAL_OPEN])
+    check("[6d2] 该单是入场（is_exit=False），不是离场",
+          broker2.orders[0].meta.get("is_exit"), False)
+    check("[6d3] 该单 transition=1（空仓开新仓）",
+          broker2.orders[0].meta.get("transition"), 1)
+    check("[6e] 簿内 1 笔 LONG",
+          sides_of(engine2.positions), ["LONG"])
+    check("[6f] 净敞口 > 0 → RUNNING",
+          engine2.account_state().value, "running")
 
 
 # ════════════════════════════════════════════════════════════════
