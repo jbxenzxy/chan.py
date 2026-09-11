@@ -1,46 +1,145 @@
 # 数据源清单
 
-> 基于 `custom-dev` 分支（commit `386dd3c API update`）代码核查。口径：**信息 → 收口适配器 → 取数函数 → 底层真实数据源 → 消费方**。
+> 基于 `custom-dev` 分支（commit `fde4a1dab9d0`，2026-09-11）代码核查。
+> 口径：**信息 → 收口适配器 → 取数函数 → 底层真实数据源 → 消费方**。
+> 所有行号对应该 commit；函数名后括注定义行，便于定位。
 
-## 一、五类信息的数据源
+---
 
-| 信息          | 收口模块                    | 取数函数                            | 底层真实数据源                                                             | 消费方                                    |
-| ----------- | ----------------------- | ------------------------------- | ------------------------------------------------------------------- | -------------------------------------- |
-| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py`   | `get_xdxr_data(market, code)`   | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）；`mootdx` / `pytdx` 回退已注释保留 | `TdxAPI.fetch_main_level` 前复权流水线       |
-| 流通市值        | `DataAPI/TxAPI.py`      | `fetch_float_mc(stock_list)`    | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[44]`（亿元）                           | `AppScan` 扫描预过滤                        |
-| 股票名字（A股）    | `DataAPI/SinaAPI.py`    | `fetch_a_names(mkt_code_pairs)` | **新浪财经** `hq.sinajs.cn/list=`，字段 `[0]`（GBK）                         | `AppRefresh._refresh_stock_names`      |
-| 股票名字（港股）    | `DataAPI/TxAPI.py`      | `fetch_hk_names(hk_codes)`      | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[1]`（GBK）                           | `AppRefresh._refresh_stock_names`（第二轮） |
-| PE-TTM      | `DataAPI/TxAPI.py`      | `fetch_pe_ttm(mkt_codes)`       | **腾讯行情接口** `qt.gtimg.cn/q=`，字段 `[39]`（市盈率-动态）                       | `AppRefresh._refresh_pe_ttm`           |
-| 指数归属        | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)`  | **AKShare** **`index_stock_cons_csindex`**（中证指数公司 csindex）          | `AppRefresh`（线程池限时）                    |
+## 〇、K 线主数据源（chan 分析入口）
+
+全部 K 线经 `DataAPI/__init__.py:get_stock_api()` 单一工厂分派，**App 层不直连具体数据源类**：
+
+| 代码类型 | 适配器类 | 底层真实数据源 | App 层装配点 |
+| --- | --- | --- | --- |
+| 期货 / 期指（含 `CFFEX`/`SHFE`/`DCE`/`CZCE`/`INE`/`GFEX`/`SGX` 前缀，或 `KQ.m@` / `KQ.i@` / `KQD.m@`） | `TqSdkAPI.CTqSdkAPI` (`:216`) | **天勤 tqsdk**（SSE 实时接入；历史 K 线经 `fetch_futures_kline` `:398`） | `AppSSE.py:1219` `data_src="custom:TqSdkAPI.CTqSdkAPI"` |
+| 其他（A股 / 指数 / 板块 / 港股） | `TdxAPI.CTdxAPI` (`:985`) | **通达信本地 vipdoc**：日线 `.day` / 5分钟 `.lc5` / 1分钟 `.lc1`；周线与 15m/30m 由本地合成；**仅前复权需联网**（eltdx xdxr） | `AppEngine.py:691 / 709 / 731 / 747` `data_src="custom:TdxAPI.CTdxAPI"` |
 
 说明：
 
-* A股与港股股票名称分属不同数据源（新浪 vs 腾讯），在新浪港股接口失效后港股改走腾讯。
+* 本地文件路径规则：A股 `{vipdoc}/{sh|sz|bj}/lday/{market}{code}.day`；港股 `ds/lday/31#{code}.day`（指数为 `27#HZ{code}.day`）。周线由日线合成，15m/30m 由 5m 合成。
+* 前复权默认关闭，经 `set_tdx_config(forward_adjust_enabled=True)` 开启；开启后前复权流水线才向 `ElTdxAPI` 取 XDXR。
+* `CTdxAPI` 的 K 线数据由 `tdx_data_context()` 每请求线程局部注入，实例只在 `__init__` 绑定一次快照引用；脱离上下文直接实例化会返回空而非静默读到他人数据。
 
-* 除息除权现仅启用 eltdx 单一数据源，`mootdx` / `pytdx` 回退分支整体注释保留，失败即显著报错而非静默降级（便于单测 eltdx 稳定性）。
+---
 
-## 二、股票扫描·成分股的获取方式（`TdxAPI.get_index_stocks`，`DataAPI/TdxAPI.py:1695`）
+## 一、六类信息的数据源
 
-| 板块代码类型                             | 取数方式                                                       | 底层数据源                                                |
-| ---------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------- |
-| `881xxx` 研究行业（新版）                  | `_read_tdxhy_sector_stocks`                                | 通达信本地行业配置 `tdxhy.cfg`                                |
-| 港股指数（HSTECH / HSIDI 等，恒指）          | `_read_hk_index_stocks`                                    | 恒生指数公司官网 `hsi.com.hk` Factsheet PDF                  |
-| `000001` 上证指数                      | `_read_sh_index_stocks_exchange`                           | 上交所官网 `query.sse.com.cn`（沪市全部 A 股）                   |
-| 中证指数 `000300/000905/000852/000688` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons`  | AKShare / csindex（中证指数公司）                            |
-| `399xxx` 深交所指数                     | 深交所官网 XLS 直连                                               | `szse.cn/api/report/ShowReport`（CATALOGID=1747\_zs）  |
-| 其他指数（`000xxx` 非中证 / `932xxx`）      | `_fetch_csi_index_stocks`（兜底）                              | AKShare / csindex（中证指数公司）                            |
-| `880xxx` 概念 / 风格板块                 | 优先 `infoharbor_block.dat`；失败回退 `tdxzs.cfg` + `block_*.dat` | 本地缓存 / 网络下载（`pytdx TdxHq_API` → `TDX_BLOCK_SERVERS`） |
-| `8803xx` / `8804xx` 旧版行业           | 直接返回空并提示换用 `881`                                           | （无成分股数据）                                             |
+| 信息 | 收口模块 | 取数函数 | 底层真实数据源 | 消费方 |
+| --- | --- | --- | --- | --- |
+| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` (`:234`) | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** | `TdxAPI` 前复权流水线（`TdxAPI.py:673` 导入） |
+| 流通市值 | `DataAPI/TxAPI.py` | `fetch_float_mc(stock_list)` (`:80`) | **腾讯行情** `https://qt.gtimg.cn/q=`，字段 `[44]`（亿元） | `AppScan.py:578` 扫描预过滤 |
+| 股票名字（A股） | `DataAPI/SinaAPI.py` | `fetch_a_names(mkt_code_pairs)` (`:21`) | **新浪财经** `http://hq.sinajs.cn/list=`，字段 `[0]`（GBK） | `AppRefresh.py:150`（第一轮） |
+| 股票名字（港股） | `DataAPI/TxAPI.py` | `fetch_hk_names(hk_codes)` (`:117`) | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[1]`（GBK） | `AppRefresh.py:161`（第二轮） |
+| PE-TTM | `DataAPI/TxAPI.py` | `fetch_pe_ttm(mkt_codes)` (`:50`) | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[39]`（市盈率-动态） | `AppRefresh.py:264` |
+| 指数归属 | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)` (`:34`) | **AKShare `index_stock_cons_csindex`**（中证指数公司 csindex） | `AppRefresh.py:184`（线程池，每指数 30s 限时） |
 
-## 附：数据源适配器一览
+说明：
 
-`DataAPI/` 目录下的独立数据源适配器（P1-1 数据源抽象单轨化收口点）：
+* A股与港股股票名称分属两个数据源（新浪 vs 腾讯）：新浪港股接口已失效，港股改走腾讯并放宽批次间隔至 0.3s 以避限流。
+* **除息除权现为 eltdx 单一数据源，`mootdx` / `pytdx` 三级回退已于 2026-09 整体删除**（不是"注释保留"）。设计意图是失败即显著报错（`ElTdxAPI.py:271` `log.error`）而非静默降级，避免把「网络/接口故障」伪装成「该股无除权除息数据」。如需新增数据源，在 `get_xdxr_data` 的来源元组中追加即可，**不要**恢复静默 `continue` 式降级。
+* 指数归属的 `AKSHARE_INDEX_MAP` 只覆盖 4 个指数（`000300` 沪深300 / `000905` 中证500 / `000852` 中证1000 / `000688` 科创50），与第二节的成分股取数共用同一个 `fetch_index_cons`。
+* 腾讯 `_iter_records` 按行前缀 `v_sh` / `v_sz` / `v_hk` 判定市场；PE-TTM 与流通市值共用该解析但字段索引不同（`[39]` / `[44]`）。
 
-| 适配器             | 数据源                    | 提供能力                                     |
-| --------------- | ---------------------- | ---------------------------------------- |
-| `ElTdxAPI.py`   | eltdx（通达信网络行情）         | 除权除息（XDXR）                               |
-| `AkshareAPI.py` | AKShare                | 指数成分股（csindex）、指数归属；并提供 `CAkshare` K 线适配 |
-| `TxAPI.py`      | 腾讯财经行情（`qt.gtimg.cn`）  | PE-TTM、流通市值、港股名称                         |
-| `SinaAPI.py`    | 新浪财经行情（`hq.sinajs.cn`） | A股名称                                     |
-| `TdxAPI.py`     | 通达信本地 + 多源板块/指数        | 板块成分股、前复权流水线、block 下载等                   |
+---
 
+## 二、股票扫描 · 成分股的获取方式
+
+入口：`TdxAPI.get_index_stocks(sector_code)`，**定义于 `DataAPI/TdxAPI.py:1665`**。
+上游：`AppScan.py:363`（`Scanner.stock_list` 的 `page_index` 来源，`AppScan.py:533` 注册）→ `FrontAPI.py:358` `GET /api/stocks/scan/read/candidates`。
+
+| 板块代码类型 | 取数方式 | 底层真实数据源 | 代码位置 |
+| --- | --- | --- | --- |
+| `881xxx` 研究行业（新版） | `_read_tdxhy_sector_stocks` | 通达信本地行业配置 `T0002/hq_cache/tdxhy.cfg` | `:2276` / 解析 `:2213` |
+| 港股指数 `HSTECH` / `HSIDI` | `_read_hk_index_stocks` | 恒生指数公司官网 `hsi.com.hk` Factsheet **PDF** | `:2077` |
+| `000001` 上证指数 | `_read_sh_index_stocks_exchange` | 上交所官网 `query.sse.com.cn/sseQuery/commonQuery.do`（主板A `STOCK_TYPE=1` + 科创板 `8` 两段合并） | `:1851` |
+| 中证指数 `000300/000905/000852/000688` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons` | AKShare / csindex（中证指数公司） | `:2119` |
+| `399xxx` 深交所指数 | 深交所官网 XLS 直连 | `www.szse.cn/api/report/ShowReport`（`CATALOGID=1747_zs`，`SHOWTYPE=xls`） | `:2168` |
+| 其他指数（`000xxx` 非中证 / `932xxx` 等） | `_fetch_csi_index_stocks`（兜底） | AKShare / csindex（中证指数公司） | `:2203` |
+| `880xxx` 概念 / 风格板块 | **Step3** 优先 `_read_infoharbor_sector_stocks` | 本地 `T0002/hq_cache/infoharbor_block.dat` | `:1694` / `:1653` |
+| `880xxx`（Step3 未命中时） | **Step4** 兜底 `_debug_read_page_index_stocks` 链路下的 `_download_block_gn_from_network` | 本地 `tdxzs.cfg` 查名 → `block_zs/gn/fg/dat` **本地优先，缺失才用 pytdx 联网下载**（`TDX_BLOCK_SERVERS` 16 台，7709） | `:1732` / `:1259` |
+| `8803xx` / `8804xx` 旧版行业 | 直接返回空并提示换用 `881` | （无成分股数据） | `:1727` |
+
+路由顺序（`get_index_stocks`）：`881xxx` → 港股指数 → 非 `88` 开头走标准指数 → `880xxx` 走 Step3/Step4。
+
+说明：
+
+* **市场前缀以 csindex 的「交易所」字段为权威**（`_index_cons_to_stocks` `:1769`）；仅在拿不到时按代码首数字兜底（`_prefix_by_digit` `:1750`）。此前按 `first in "689"` 的旧规则会把北交所 `8xxxxx`/`920xxx` 误判为沪市。
+* 所有网络抓取均经 `_run_with_timeout` 限时，避免扫描因网络阻塞卡死。
+* `880xxx` 的 Step3 覆盖 421 个板块；Step4 仅在 Step3 未命中时触发，且 `block_*.dat` 的成分数存在 **400 只上限**（见第四节）。
+
+---
+
+## 三、板块文件刷新（`TdxAPI.refresh_block_files`）
+
+| 项 | 内容 |
+| --- | --- |
+| 入口 | `TdxAPI.refresh_block_files(progress_callback)`，定义 `DataAPI/TdxAPI.py:1404` |
+| 上游 | 前端「刷新」按钮 → `POST /api/stocks/refresh`（`FrontAPI.py:639`）→ `AppOrch` 再导出 → `AppRefresh.refresh_stock_names_async` (`:577`) → `_refresh_stock_names` (`:344`) → `AppRefresh.py:545` |
+| 底层数据源 | **pytdx `TdxHq_API`** → `TDX_BLOCK_SERVERS`（16 台通达信行情服务器，7709） |
+| 刷新目标 | `{TDX_INSTALL_DIR}/T0002/hq_cache/` 下 `infoharbor_block.dat`、`block_zs.dat`、`block_gn.dat`、`block_fg.dat`、`block.dat` 共 5 个文件 |
+| 安全策略 | 不先删旧文件；先下到内存 → 校验 → 写 `.tmp` → `os.replace` 原子替换；任一文件失败即保留旧文件 |
+
+> 这是 **pytdx 在项目中最主要的真实用途**（每次点刷新都执行）。第二节 Step4 的 pytdx 用法是次要的兜底路径。
+
+---
+
+## 附 A：`DataAPI/` 适配器一览
+
+| 文件 | 行数 | 数据源 | 提供能力 | 实际消费方 |
+| --- | --- | --- | --- | --- |
+| `CommonStockAPI.py` | 72 | — | `CCommonStockApi` 数据源抽象基类（承载频率映射 / 别名等元数据接口） | 全部适配器 + `Chan.py:14` |
+| `TdxAPI.py` | 2355 | 通达信本地 vipdoc + 多源板块/指数 | K 线主源、前复权流水线、成分股、板块文件下载、vipdoc 代码收集 | `AppEngine`、`AppRefresh`、`AppScan`、`DataAPI/__init__` 工厂 |
+| `TqSdkAPI.py` | 584 | 天勤 tqsdk | 期货/期指 K 线（`CTqSdkAPI`）、历史拉取、名称解析、账户加载、回看根数配置 | `DataAPI/__init__` 工厂、`AppEngine:147`、`AppSSE:30`、`App/utils:35`、`BSPointList:822` |
+| `TqSdkCSSESource.py` | 360 | 天勤 tqsdk（SSE 流） | SSE 流数据源抽象：`connect` / `get_kline_serial` / `wait_update` / `close_all` | `AppSSE:49`、`FrontAPI` re-export、`TqSdkAPI:263` |
+| `ElTdxAPI.py` | 290 | eltdx（通达信网络行情，7709 / `0x000f`） | 除权除息（XDXR）；模块定位面向未来扩展 | `TdxAPI:673` |
+| `AkshareAPI.py` | 213 | AKShare | 指数成分股 `fetch_index_cons`、指数归属映射常量、`CAkshare` K 线适配 | `AppRefresh:26`、`TdxAPI:674`、`Chan.py:189` |
+| `TxAPI.py` | 158 | 腾讯财经 `qt.gtimg.cn` | PE-TTM、流通市值、港股名称 | `AppRefresh:27`、`AppScan:41` |
+| `SinaAPI.py` | 70 | 新浪财经 `hq.sinajs.cn` | A股名称 | `AppRefresh:28` |
+| `ThsCloudZxgAPI.py` | 436 | 同花顺云端 Web API `t.10jqka.com.cn` | 云端自选股增删 / 批量替换（`save_scan_to_ths_cloud`） | `AppScan:422`、`AppEngine:172`、`Script/ths_sync_to_tdx.py` |
+| `BaoStockAPI.py` | 127 | BaoStock | `CBaoStock` K 线适配 | `Chan.py:180`（仅独立脚本路径） |
+| `ccxt.py` | 97 | ccxt（加密货币/外盘） | `CCXT` K 线适配 | `Chan.py:183`（仅独立脚本路径） |
+| `csvAPI.py` | 87 | 本地 CSV 文件 | `CSV_API` K 线适配 | `Chan.py:186`（仅独立脚本路径） |
+| `__init__.py` | 34 | — | `get_stock_api()` 数据源工厂（唯一分派点） | `AppOrch` 等 |
+
+---
+
+## 附 B：仅在独立脚本路径可达的数据源
+
+`Common/CEnum.py:DATA_SRC` 枚举里的 `BAO_STOCK` / `CCXT` / `CSV` / `AKSHARE` 四条，
+只经 `Chan.py:GetStockAPI()`（`:177`）按 `data_src` 参数选择，**API 服务（`python FrontAPI.py`）不会走到**：
+
+| 数据源 | 类 | 选择条件 | 可达场景 |
+| --- | --- | --- | --- |
+| BaoStock | `CBaoStock` | `data_src == DATA_SRC.BAO_STOCK` | `Debug/strategy_demo*.py`、独立 `Chan.py` 调用 |
+| CCXT | `CCXT` | `data_src == DATA_SRC.CCXT` | 独立 `Chan.py` 调用 |
+| 本地 CSV | `CSV_API` | `data_src == DATA_SRC.CSV` | 独立 `Chan.py` 调用 |
+| AKShare（K 线面） | `CAkshare` | `data_src == DATA_SRC.AKSHARE` | 独立 `Chan.py` 调用 |
+
+> 注意区分：`AkshareAPI.fetch_index_cons`（成分股面）**是** API 服务的活路径（见第二节）；`CAkshare`（K 线面）不是。
+> 另有 `custom:<模块>.<类>` 语法可动态加载 `DataAPI/` 下任意适配器，App 层正是用它装配 `TdxAPI.CTdxAPI` / `TqSdkAPI.CTqSdkAPI`。
+
+---
+
+## 附 C：依赖可用性与降级行为
+
+| 依赖 | 声明位置 | 缺失时的真实行为（实测） |
+| --- | --- | --- |
+| `eltdx` | `requirements.txt`「引擎可选数据源」 | 前复权不可用（`get_xdxr_data` 显著报错）；K 线本身仍可读 |
+| `pytdx` | `requirements.txt`「运行必需」 | 服务照常启动（函数内懒导入，实测 `import DataAPI.TdxAPI` 成功）。**板块文件刷新整体失效**（仅 WARNING，`TdxAPI.py:1440`）；`880xxx` 的 Step4 兜底返回空 |
+| `tqsdk` | `requirements.txt`「引擎可选数据源」 | 模块顶层无硬 import；期货功能不可用，股票侧不受影响 |
+| `akshare` | `requirements.txt`「引擎可选数据源」 | 指数归属与中证系指数成分获取跳过（`AkshareAPI.py:47` 打日志后返回 `[]`） |
+| `mootdx` | **未声明** | 无影响（0 处调用） |
+
+---
+
+## 附 D：已知限制与口径提醒
+
+> 本节数字为**实测样本值**，取自 2026-09-11 的通达信数据副本（`T0002/hq_cache/` 下
+> `infoharbor_block.dat` / `tdxzs.cfg` / `block_*.dat`）。板块数量会随通达信服务端更新而变化，
+> **判据（上限来源、覆盖口径、import 位置）不变，具体只数需重新实测**。
+
+1. **`block_*.dat` 成分数上限 400 只，且上限来自服务端。** 直接读二进制验证：`block_gn.dat`(269 板块) / `block_zs.dat`(117) / `block_fg.dat`(161) / `block.dat`(100) 中，声明成分数**最大即 400，无一超过**；从真实服务器重新下载后仍为 400。记录步长 2800 字节 ÷ 每股 7 字节 = 400，因此改本地解析器无效。同一板块实测差异：`880861 连续亏损` 走 `infoharbor_block.dat` 得 **1102 只**，走 Step4 兜底只得 **400 只**（缺口 63.7%），且只打一条 WARNING 就照常返回。
+2. **Step4 兜底的覆盖面要分两个口径看。** 实测：`infoharbor_block.dat` 覆盖 421 个板块；`tdxzs.cfg` 有 604 个 `880xxx`（其中 132 个是 `8803xx/8804xx`，直接返回空）→ 有效 472 个；Step4 可命中 370 个，但**只有 2 个是 Step4 独有**（`880524 含可转债`、`880735 专精特新`，占 0.4%）。反之，若 `infoharbor_block.dat` 缺失或解析失败，472 个中有 370 个（78%）会落到这条被截断的兜底上。
+3. **`pytdx` 的 import 位置早于「本地文件」分支。** `TdxAPI.py:1288` 的 `from pytdx.hq import TdxHq_API` 位于「读本地 `block_*.dat`」之前；当本地文件齐全、`need_download` 为空时 pytdx 一个接口都不会被调用，但缺 pytdx 仍会在 `:1290` 直接 `return {}`，把本可工作的本地解析一并废掉（实测 400 只 → 0 只）。
+4. **本文件此前版本的口径错误已修正**：`mootdx` / `pytdx` 回退是「**已于 2026-09 整体删除**」而非「注释保留」（`ElTdxAPI.py:221-231` 只剩说明性注释，无被注释的可执行代码）。
