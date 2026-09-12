@@ -253,9 +253,9 @@ def _get_reduction_flag(market, code, today):
     即潜在抛压区间——计划一经公告，抛压即告成立，直到窗口截止；不是已发生的
     实际成交。N009（变动起始日）仅作 N001 缺失时的回退。
 
-    性能：底层走 _f10_tqlex_post 强制 IPv4 直连 7615 网关（实测 117~350ms，
-    进程内每代码缓存 1 天），可安全同步调用；曾有版本因走 eltdx 默认 urlopen
-    被本机 IPv6 黑洞拖到 8~12s/次。
+    性能：底层走 eltdx >= 3.2.0 官方 F10Client（3.2.0 起 F10 默认 IPv4-first，
+    直连实测 113~133ms；进程内每代码缓存 1 天；失败重试 1 次 + 熔断），可安全
+    同步调用；曾有版本因旧版 eltdx 默认 urlopen 被本机 IPv6 黑洞拖到 8~12s/次。
     """
     if not today:
         return {"active": False, "windows": []}

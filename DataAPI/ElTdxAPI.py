@@ -29,10 +29,6 @@ eltdx 数据源适配器（通达信网络行情客户端封装）。
 import threading
 import logging
 import time
-import json
-import socket
-import urllib.parse
-import urllib.request
 
 import pandas as pd
 from datetime import datetime
@@ -575,10 +571,11 @@ def fetch_float_mc(stock_list):
 # ============================================================
 # 重要股东买卖：股东增减持计划（通达信 F10 7615 网关，按代码查询）
 # ============================================================
-# 数据源：7615 TQLEX 网关 Entry=CWServ.tdxf10_gg_gdyj + section gdzjcjh
-#   （与 eltdx.f10.F10Client.shareholder_change_plans 同一端点，但请求由
-#   _f10_tqlex_post 直发：强制 IPv4 + 禁代理，绕开本机 IPv6 黑洞导致的
-#   每请求 8~12s 卡顿——见 _f10_tqlex_post docstring 的实测数据）。
+# 数据源：eltdx.f10.F10Client.shareholder_change_plans（7615 TQLEX 网关
+#   Entry=CWServ.tdxf10_gg_gdyj + section gdzjcjh）。
+#   **要求 eltdx >= 3.2.0**：该版本起 F10 默认 IPv4-first（f10/_http.py 的
+#   _connect_ipv4_first），修复了旧版裸 urlopen 在「本机 IPv6 出口不通」时
+#   每请求卡 8~12s 的地址序问题。
 # 这是「按代码查询」的协议命令（与 xdxr 同类），**不是** PE-TTM 那样一次性
 # 下载全市场统计文件；故按单只股票取数 + 进程缓存，不落盘全市场文件。
 # 列名（实测 7615 网关 ColName 返回 N001..N012，与 eltdx 解析一致）：
@@ -588,8 +585,8 @@ def fetch_float_mc(stock_list):
 _REDUCTION_CACHE = {}          # mkt+code -> (epoch, [plans])
 _REDUCTION_CACHE_TTL = 24 * 3600
 _REDUCTION_LOCK = threading.Lock()
-# 7615 F10 网关 HTTP 超时。IPv4 直连实测 117~350ms，3s 余量已很大；
-# 不再用 eltdx F10Client（其 urlopen 无法控制地址族，见 _f10_tqlex_post）。
+# 7615 F10 网关 HTTP 超时。eltdx 3.2.0 起 F10 默认 IPv4-first（直连实测
+# 113~133ms），3s 余量已很大；走代理的环境约 310~360ms 也在余量内。
 _REDUCTION_TIMEOUT = 3.0
 # 瞬时抖动重试：单请求超时后再试 1 次（成功即返回），扫描逐票调用时可扛住偶发抖动。
 _REDUCTION_RETRIES = 1
@@ -600,43 +597,21 @@ _REDUCTION_CB_COOLDOWN = 600     # 熔断冷却 10 分钟
 _REDUCTION_CB_FAILS = 0          # 连续失败计数（受 _REDUCTION_LOCK 保护）
 _REDUCTION_CB_OPEN_UNTIL = 0.0   # 熔断解除时刻（epoch）；0=未熔断
 
-# 7615 TQLEX 网关请求头（与 eltdx F10Client 同款；URL 在 _f10_tqlex_post
-# 里按解析出的 IPv4 直连地址构造，Host 头固定回填域名）
-_TQLEX_HEADERS = {
-    "Content-Type": "application/json",
-    "Accept": "application/json",
-    "User-Agent": "eltdx/1.0",
-}
 
+def _fetch_plan_rows(code):
+    """取「股东增减持计划」原始行（list[dict-like]，键 N001~N012）。
 
-def _f10_tqlex_post(entry, params, timeout=_REDUCTION_TIMEOUT):
-    """直连 7615 TQLEX 网关的 POST（**强制 IPv4 + 禁代理**）。
-
-    为什么不复用 eltdx F10Client：其 _post 用裸 urlopen，无法控制地址族。
-    Windows 上 getaddrinfo 会把 IPv6 排在 IPv4 前面，而本机 IPv6 出口对
-    static.tdx.com.cn 不通（实测 TCP 握手 12s 超时），urllib 只能等 IPv6
-    SYN 重传失败后才回落 IPv4 → 每次请求固定卡 8~12 秒（这是「K 线页加载
-    凭空多 8 秒」的真正根因；走代理的环境则无此问题，因为代理客户端自己
-    连目标，不经本机 IPv6）。
-
-    修复：getaddrinfo 限定 AF_INET 拿 IPv4 → 直接连 IP、Host 头带域名 →
-    实测完整 POST 117ms（对比 eltdx 默认路径 8100ms，约 70 倍）。
-    同时用 ProxyHandler({}) 禁代理——TDX 国内网关直连即可，且不依赖用户
-    终端是否挂了代理（有代理走代理也快，但直连更快、环境更少依赖）。
-
-    返回 TQLEX JSON dict；失败抛异常（调用方决定吞不吞）。
+    走 eltdx >= 3.2.0 官方 F10Client：3.2.0 起 F10 默认 IPv4-first
+    （`f10/_http._connect_ipv4_first`：getaddrinfo 后稳定排序 AF_INET 优先、
+    逐地址回落，保留代理/Host/SNI/证书校验，不改全局 socket），上游已修复
+    「本机 IPv6 黑洞 → 每次卡 8~12s」的问题；IPv6-only 域名也仍可连。
+    取数失败抛异常，由调用方的重试/熔断处理。
     """
-    ipv4 = socket.getaddrinfo("static.tdx.com.cn", 7615, socket.AF_INET,
-                              socket.SOCK_STREAM)[0][4][0]
-    url = f"http://{ipv4}:7615/TQLEX?{urllib.parse.urlencode({'Entry': entry})}"
-    body = json.dumps({"Params": list(params)}, ensure_ascii=False,
-                      separators=(",", ":")).encode("utf-8")
-    request = urllib.request.Request(url, data=body, headers=_TQLEX_HEADERS, method="POST")
-    request.add_unredirected_header("Host", "static.tdx.com.cn")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    with opener.open(request, timeout=timeout) as response:
-        raw = response.read()
-    return json.loads(raw.decode("utf-8-sig"))
+    from eltdx.f10 import F10Client
+    resp = F10Client(timeout=_REDUCTION_TIMEOUT).shareholder_change_plans(code)
+    if not getattr(resp, "ok", False):
+        raise RuntimeError("网关返回 ok=False")
+    return list(getattr(resp, "rows", ()) or ())
 
 
 def get_shareholder_reduction_plans(market, code):
@@ -647,8 +622,9 @@ def get_shareholder_reduction_plans(market, code):
         reduce_shares, reduce_pct, start, end, progress
     非 A 股（指数 / 港股 / 期货等）、取数失败 → 返回 []。
 
-    注意：请求直接经 _f10_tqlex_post（强制 IPv4 直连 7615 网关），
-    **不再经过 eltdx F10Client**（其 urlopen 在本机 IPv6 不通时每次卡 8~12s）。
+    网络层：eltdx >= 3.2.0 官方客户端（IPv4-first，见 _fetch_plan_rows）。
+    **硬性要求 eltdx >= 3.2.0**（旧版裸 urlopen 在本机 IPv6 不通时每次卡 8~12s，
+    不做旧版回退——依赖以 requirements 明确，避免双路径难排查）。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return []
@@ -665,13 +641,10 @@ def get_shareholder_reduction_plans(market, code):
         # 静默返回——冷却期结束后的第一次失败会再打一条汇总日志。
         return []
     last_err = None
-    raw = None
+    rows = None
     for attempt in range(1 + _REDUCTION_RETRIES):
         try:
-            raw = _f10_tqlex_post(
-                "CWServ.tdxf10_gg_gdyj",
-                [code, "gdzjcjh", "", "", "1", "1", "20"],
-            )
+            rows = _fetch_plan_rows(code)
             last_err = None
             break
         except Exception as _e:
@@ -691,22 +664,8 @@ def get_shareholder_reduction_plans(market, code):
     with _REDUCTION_LOCK:
         _REDUCTION_CB_FAILS = 0
         _REDUCTION_CB_OPEN_UNTIL = 0.0
-    error_code = raw.get("ErrorCode")
-    result_sets = raw.get("ResultSets") or ()
-    if error_code not in (None, 0) or not result_sets:
-        log.warning("[股东增减持] 网关返回 ErrorCode=%s(%s%s)", error_code, market, code)
-        return []
-    rs0 = result_sets[0]
-    rows_raw = rs0.get("Content") or ()
-    col_names = [str(c) for c in (rs0.get("ColName") or ())]
     plans = []
-    for row in rows_raw:
-        if isinstance(row, dict):           # 防御：网关某些 Entry 返回 dict
-            item = row
-        elif col_names and isinstance(row, (list, tuple)):
-            item = dict(zip(col_names, row))
-        else:
-            continue
+    for item in rows:
         plans.append({
             "announce_date": item.get("N001"),
             "direction": item.get("N002"),
@@ -767,10 +726,11 @@ def get_shareholder_reduction_flag(market, code, today):
     N009（变动起始日）仅作 N001 缺失时的回退，不作为常规下界。
     若源数据错乱导致 起始 > 截止，该行跳过。
 
-    注意：本函数触发 7615 网关 HTTP 调用（强制 IPv4 直连，实测 117~130ms，
-    超时 5s；进程内每代码缓存 1 天），**可安全同步调用**——AppEngine 在 K 线
-    主分析路径上直接调用它。曾经「每次 8~12s」的卡顿根因是 eltdx 默认 urlopen
-    走了本机不通的 IPv6（详见 _f10_tqlex_post），与该函数本身的逻辑无关。
+    注意：本函数触发 7615 网关 HTTP 调用（eltdx >= 3.2.0 IPv4-first，直连实测
+    113~133ms、超时 3s；进程内每代码缓存 1 天；失败重试 1 次 + 连续失败熔断
+    10 分钟），**可安全同步调用**——AppEngine 在 K 线主分析路径上直接调用它。
+    曾经「每次 8~12s」的卡顿根因是旧版 eltdx 默认 urlopen 走了本机不通的
+    IPv6（3.2.0 已在上游修复），与本函数本身的逻辑无关。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return {"active": False}
