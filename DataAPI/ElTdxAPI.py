@@ -721,9 +721,10 @@ def get_shareholder_reduction_flag(market, code, today):
     """判断「当前交易日 today」是否落在某条「拟减持」计划的 减持窗口（公告日~变动截止日）内。
 
     today: 'YYYY-MM-DD' / 'YYYY/MM/DD' / 'YYYYMMDD'（建议传 K 线最新一根日期 = 屏幕上当前交易日）。
-    命中任一条拟减持计划即返回 active=True，并附带**每条被命中窗口的起止 MM-DD**
-    （按结束日升序，最多 4 条——典型场景就 1~2 条）、最近截止日 / 最大拟减持股比 /
-    股东名单；否则返回 {'active': False}。
+    命中任一条拟减持计划即返回 active=True，并把**所有被命中窗口合并为一个最大
+    连续区间**（最早起始 ~ 最晚截止；因命中窗口都包含 today，并集天然连续无空洞，
+    整段即潜在抛压区间）；windows 恒为 1 条，另附最大拟减持股比 / 股东名单；
+    否则返回 {'active': False}。
 
     窗口 = **公告日(N001) ~ 变动截止日(N010)**。语义：减持计划一经公告，
     潜在抛压即告成立，持续到窗口截止——这正是「公告日到截止日」的业务含义。
@@ -775,14 +776,33 @@ def get_shareholder_reduction_flag(market, code, today):
                 all_holders.append(holder)
     if not windows:
         return {"active": False}
-    # 按结束日（end_full）升序，最多保留 4 条；徽标里就「减持：√ MM-DD~MM-DD」展示
-    windows.sort(key=lambda w: w["end_full"])
-    windows = windows[:4]
+    # 合并为**最大连续区间**（最早起始 ~ 最晚截止）：能进入 windows 的窗口都
+    # 包含 today，故它们的并集天然连续、无空洞——整段都可视作潜在抛压区间
+    # （用户定版口径：不管命中几条计划，徽标只显示一个「06-14~12-16」式大区间）。
+    # 股东名「/」串接去重、占比取最大。
+    lo_full = min(w["start_full"] for w in windows)   # ISO 日期可直接按字符串比较
+    hi_full = max(w["end_full"] for w in windows)
+    span_holders = []
+    span_pct = None
+    for w in windows:
+        h = w.get("holder")
+        if h and h not in span_holders:
+            span_holders.append(h)
+        if w.get("pct") is not None and (span_pct is None or w["pct"] > span_pct):
+            span_pct = w["pct"]
+    windows = [{
+        "start": lo_full[5:],                # MM-DD
+        "end": hi_full[5:],                  # MM-DD
+        "start_full": lo_full,
+        "end_full": hi_full,
+        "pct": span_pct,
+        "holder": "/".join(span_holders),
+    }]
     return {
         "active": True,
-        "windows": windows,                  # 每条 {start, end, start_full, end_full, pct, holder}
+        "windows": windows,                  # 恒 1 条：{start, end, start_full, end_full, pct, holder}
         "max_pct": hit_pct,
         "holders": all_holders,
-        # 兼容旧字段（首个被命中窗口 = 最早到期日）—— 前端徽标默认取第一个
+        # 兼容旧字段（首个被命中窗口 = 区间截止日）—— 前端徽标默认取第一个
         "end": windows[0]["end_full"],
     }
