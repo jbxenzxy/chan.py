@@ -289,3 +289,63 @@ def get_xdxr_data(market, code):
                  market, code)
         _xdxr_cache[cache_key] = None
         return None
+
+
+# ============================================================
+# 板块文件下载 / 刷新（基于 eltdx 0x06B9 通用文件读取）
+# ============================================================
+# 2026-09-12：原 pytdx 板块刷新（TdxHq_API + get_block_info_meta/get_block_info）
+# 整体迁移到 eltdx。实证（见 TdxAPI.refresh_block_files 旁注）：eltdx 经 0x06B9 读取服务器文件，
+# 对 tdxhy.cfg / infoharbor_block.dat / block_zs.dat / block_gn.dat / block_fg.dat 返回的
+# 字节数与 pytdx 完全一致；spblock.dat 两者均返回 0 字节（服务器不服务该文件，刷新时保留旧文件）。
+# 因此 eltdx 可完全替代 pytdx 完成板块文件刷新，pytdx 不再用于本项目。
+_MAX_BLOCK_FILE_BYTES = 8_000_000
+
+
+def download_block_file_via_eltdx(file_name, hosts=None):
+    """通过 eltdx 0x06B9 下载单个板块文件，返回原始字节；不可用/失败返回 None。
+
+    hosts: 'host:port' 字符串列表；为 None 时使用 eltdx 默认服务器列表。
+    """
+    try:
+        from eltdx import TdxClient
+    except Exception:
+        return None
+    try:
+        client = TdxClient(timeout=10, probe_hosts=False, hosts=hosts)
+        with client:
+            data = client.resources.download_file(
+                file_name, max_bytes=_MAX_BLOCK_FILE_BYTES, chunk_size=0x4000
+            )
+        if not data:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def download_block_files_via_eltdx(file_names, hosts=None):
+    """批量下载板块文件，返回 {file_name: bytes}（失败/不可用的不计入）。
+
+    单次连接内顺序下载，避免每文件重建连接；任一文件失败不影响其余。
+    """
+    result = {}
+    try:
+        from eltdx import TdxClient
+    except Exception:
+        return result
+    try:
+        client = TdxClient(timeout=10, probe_hosts=False, hosts=hosts)
+        with client:
+            for file_name in file_names:
+                try:
+                    data = client.resources.download_file(
+                        file_name, max_bytes=_MAX_BLOCK_FILE_BYTES, chunk_size=0x4000
+                    )
+                except Exception:
+                    data = None
+                if data:
+                    result[file_name] = data
+    except Exception:
+        pass
+    return result

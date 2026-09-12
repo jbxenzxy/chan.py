@@ -227,7 +227,7 @@ def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
 
 
 # 板块文件（block_*.dat）网络下载/刷新用的通达信行情服务器列表。
-# 走 pytdx 的 TdxHq_API 连接拉取板块文件；与除权除息无关（除权除息现走 eltdx）。
+# 现统一经 eltdx 0x06B9 读取（替代原 pytdx 的 TdxHq_API）；与除权除息无关（除权除息现走 eltdx）。
 TDX_BLOCK_SERVERS = [
     ('115.238.90.165', 7709),   # 最快的服务器，放在第一位
     ('119.147.212.81', 7709),
@@ -670,7 +670,7 @@ def _resample_day_to_week(day_records):
 #   mootdx/pytdx 三级回退已删除，详见 ElTdxAPI.py 中部说明）。
 # ============================================================
 
-from DataAPI.ElTdxAPI import get_xdxr_data
+from DataAPI.ElTdxAPI import get_xdxr_data, download_block_files_via_eltdx
 from DataAPI.AkshareAPI import fetch_index_cons
 
 
@@ -1157,33 +1157,8 @@ _INFOHARBOR_BLOCK_CACHE = None       # dict: sector_code → {"name": str, "stoc
 _INFOHARBOR_BLOCK_CACHE_LOADED = False
 
 
-def _download_block_file(api, host, port, block_file):
-    """通过已连接的 PyTDX API 下载单个板块文件并返回原始字节"""
-    meta = api.get_block_info_meta(block_file)
-    if not meta or 'size' not in meta or meta['size'] == 0:
-        return None
-
-    total_size = meta['size']
-
-    ONE_CHUNK = 0x7530
-    chunks = (total_size + ONE_CHUNK - 1) // ONE_CHUNK
-    raw_data = bytearray()
-
-    for seg in range(chunks):
-        start = seg * ONE_CHUNK
-        chunk_size = min(ONE_CHUNK, total_size - start)
-        piece = api.get_block_info(block_file, start, chunk_size)
-        if piece is None or len(piece) == 0:
-            return None
-        raw_data.extend(piece)
-
-    if len(raw_data) >= total_size:
-        return raw_data
-    elif len(raw_data) > 386:
-        return raw_data
-    return None
-
-
+# 板块文件下载已迁移到 eltdx（见 DataAPI/ElTdxAPI.py 的 download_block_files_via_eltdx）；
+# 原 pytdx _download_block_file（TdxHq_API + get_block_info）于 2026-09-12 删除，不再使用。
 
 
 def _safe_replace_file(path, raw_data):
@@ -1204,12 +1179,12 @@ def _safe_replace_file(path, raw_data):
 
 
 # 板块刷新日志展示名：按文件说明其作用；值为 None 表示不加括号说明。
-# 注意：spblock.dat 实际装的是「超大盘/超小盘宽基」（中证500/1000/2000、国证2000、深证成指），
+# 注意：spblock.dat 实际装的是「中/小/微盘宽基」（中证500/1000/2000、国证2000、深证成指），
 # block_zs.dat 装的是「标准/中小盘宽基」（沪深300、上证50、中证800、科创50 等），两者互补，不要按字面误解。
 _BLOCK_FILE_DISPLAY = {
     "tdxhy.cfg": "研究行业新版",
     "infoharbor_block.dat": "概念 / 风格板块",
-    "spblock.dat": "宽基：中证500/1000/2000、国证2000、深证成指",
+    "spblock.dat": "中/小/微盘宽基：中证500/1000/2000、国证2000",
     "block_zs.dat": "标准宽基指数：沪深300、上证50、中证800、科创50",
     "block_gn.dat": None,
     "block_fg.dat": None,
@@ -1258,57 +1233,27 @@ def _validate_downloaded_block_file(file_name, raw_data):
     return False
 
 
-def _safe_refresh_one_block_file(api, host, port, file_name, block_cache_dir, progress_callback=None):
-    """下载单个板块文件，成功校验后再覆盖旧文件；失败时旧文件保持不变。"""
-    if progress_callback:
-        progress_callback(f"下载成分股: {file_name}...")
-    try:
-        meta = api.get_block_info_meta(file_name)
-        total_size = int(meta.get("size", 0) or 0) if meta else 0
-        if total_size <= 0:
-            log.warning(f"[板块刷新] {file_name} 服务端 size 无效，保留旧文件")
-            return False
-
-        raw = _download_block_file(api, host, port, file_name)
-        if not raw or len(raw) != total_size:
-            log.warning(f"[板块刷新] {file_name} 下载不完整，保留旧文件: {len(raw) if raw else 0}/{total_size}")
-            return False
-
-        if not _validate_downloaded_block_file(file_name, raw):
-            log.warning(f"[板块刷新] {file_name} 格式校验失败，保留旧文件")
-            return False
-
-        local_path = os.path.join(block_cache_dir, file_name)
-        _safe_replace_file(local_path, raw)
-        _desc = _BLOCK_FILE_DISPLAY.get(file_name)
-        _suffix = f"（{_desc}）" if _desc else ""
-        log.info(f"[板块刷新] ✅ {file_name}{_suffix} 刷新成功: {total_size} 字节")
-        return True
-    except Exception as e:
-        log.warning(f"[板块刷新] {file_name} 刷新失败，保留旧文件: {e}")
-        return False
+# 单文件刷新逻辑已内联进 refresh_block_files（eltdx 批量下载后逐文件校验/替换/记日志）；
+# 原 _safe_refresh_one_block_file（pytdx）于 2026-09-12 删除，不再使用。
 
 
 def _download_block_gn_from_network(progress_callback=None):
     """
-    通过 PyTDX 网络接口下载全量板块成分股数据。
-    
-    下载 block_hy(二级行业) + block_zs(指数) + block_gn(概念) + block_fg(风格) 四个文件并合并。
-    注意：block.dat 只有精选指数（约100条），不含行业板块，不能替代上述文件。
-    
-    磁盘缓存逻辑：
-      1. block_cache_dir 即 _tdx_config['vipdoc_dir']（和 stock_names.json 同目录）
-      2. 每个 block_*.dat 先尝试读本地文件，存在直接解析
-      3. 本地不存在才从服务器下载，下载后写入本地文件
-      4. 结果缓存在全局 _BLOCK_GN_CACHE，下次程序启动再走磁盘缓存
+    下载全量板块成分股数据（block_zs / block_gn / block_fg）。
 
-    返回 dict: {sector_name: [{"code": "000001", "prefix": "0", "name": "000001"}, ...], ...}
+    磁盘缓存逻辑：
+      1. 本地 hq_cache 目录优先；存在直接解析
+      2. 本地不存在才从服务器下载（eltdx 0x06B9），下载后写入本地文件
+      3. 结果缓存在全局 _BLOCK_GN_CACHE
+
+    注意：tdxhy.cfg / infoharbor_block.dat / spblock.dat 不在此路径下载
+    （由 refresh_block_files 统一刷新）；本函数只负责 block_zs/gn/fg。
+
+    返回 dict: {sector_name: [{"code": ..., "prefix": ..., "name": ...}, ...], ...}
     """
     global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
     if _BLOCK_GN_CACHE_LOADED:
         return _BLOCK_GN_CACHE or {}
-
-    result = {}
 
     # 本地缓存目录 = T0002/hq_cache/（和 tdxzs.cfg / tdxhy.cfg 同目录）
     vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
@@ -1317,20 +1262,14 @@ def _download_block_gn_from_network(progress_callback=None):
     else:
         block_cache_dir = None
 
-    try:
-        from pytdx.hq import TdxHq_API
-    except ImportError:
-        _BLOCK_GN_CACHE_LOADED = True
-        return {}
-
-    # 通达信服务器提供的板块文件（通过网络 get_block_info 协议下载）
+    # 通达信服务器提供的板块文件（经 eltdx 0x06B9 读取）
     # block_zs.dat: 标准/中小盘宽基指数（沪深300、上证50、中证800、科创50 等）
     # block_gn.dat: 概念板块（8805xx，锂电池、人工智能等）
     # block_fg.dat: 风格板块（8808xx，大盘股、小盘股等）
     # 注意：block_hy.dat（二级行业，含880491"半导体"）不在服务器上，
     #       它只存在于本地 T0002/hq_cache/ 目录，格式也不同（480字节/条 vs 2800字节/条）
     # 注意：block.dat 不再纳入下载——它是旧版整合文件（100 个块 = 指数 + 概念），
-    #       内容已被 block_zs.dat / block_gn.dat / block_fg.dat 完全覆盖（见 Docs/data_source_inventory.md 第四节），刷新纯属冗余。
+    #       内容已被 block_zs.dat / block_gn.dat / block_fg.dat 完全覆盖，刷新纯属冗余。
     candidate_files = [
         "block_zs.dat",
         "block_gn.dat",
@@ -1361,68 +1300,37 @@ def _download_block_gn_from_network(progress_callback=None):
         # 没有配置通达信目录，全部从网络下载
         need_download = candidate_files[:]
 
-    servers = TDX_BLOCK_SERVERS[:]
-
     if need_download:
         log.info(f"[板块成分股] 需从网络下载: {need_download}")
     else:
         log.info("[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
 
-    for host, port in servers:
-        if not need_download:
-            break
+    # Step 2: 经 eltdx 0x06B9 下载缺失文件（替代原 pytdx get_block_info）
+    if need_download:
+        hosts = [f"{h}:{p}" for h, p in TDX_BLOCK_SERVERS]
         try:
-            api = TdxHq_API(multithread=True)
-            if not api.connect(host, port):
+            downloaded = download_block_files_via_eltdx(need_download, hosts=hosts)
+        except Exception as e:
+            log.warning(f"[板块成分股] ⚠️ eltdx 下载异常: {e}")
+            downloaded = {}
+        for bf in need_download[:]:
+            raw = downloaded.get(bf)
+            if not raw:
+                log.warning(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
                 continue
-
-            # Step 1: 快速探测哪些文件存在（只取 meta，不下载）
-            existing_files = []
-            for bf in need_download:
-                try:
-                    meta = api.get_block_info_meta(bf)
-                    if meta and meta.get('size', 0) > 0:
-                        existing_files.append(bf)
-                except Exception:
-                    pass
-            if not existing_files:
-                api.disconnect()
-                continue
-
-            # Step 2: 下载并解析，写入本地缓存
-            for bf in existing_files:
-                if progress_callback:
-                    progress_callback(f"下载成分股: {bf}...")
-                log.info(f"[板块成分股] 开始下载 {bf}...")
-                raw = _download_block_file(api, host, port, bf)
-                if raw and len(raw) > 386:
-                    parsed = _parse_raw_block_gn(raw, bf)
-                    if parsed:
-                        result.update(parsed)
-                        log.info(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
-                        # 写入本地缓存文件：先写临时文件，校验成功后原子替换，避免下载失败破坏旧文件
-                        if block_cache_dir and _validate_downloaded_block_file(bf, raw):
-                            try:
-                                local_path = os.path.join(block_cache_dir, bf)
-                                _safe_replace_file(local_path, raw)
-                            except Exception as e:
-                                log.warning(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
-                        need_download.remove(bf)
-                else:
-                    log.warning(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
-
-            api.disconnect()
-            if not need_download:
-                break
-
-        except TypeError:
-            import traceback
-            traceback.print_exc()
-            continue
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            continue
+            parsed = _parse_raw_block_gn(raw, bf)
+            if parsed:
+                result.update(parsed)
+                log.info(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
+                # 写入本地缓存文件：先写临时文件，校验成功后原子替换，避免下载失败破坏旧文件
+                if block_cache_dir and _validate_downloaded_block_file(bf, raw):
+                    try:
+                        _safe_replace_file(os.path.join(block_cache_dir, bf), raw)
+                    except Exception as e:
+                        log.warning(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
+                need_download.remove(bf)
+            else:
+                log.warning(f"[板块成分股] ⚠️ {bf} 解析失败，数据无效")
 
     if not result:
         log.warning("[板块成分股] 所有服务器均下载失败，板块数据不可用")
@@ -1441,7 +1349,7 @@ def refresh_block_files(progress_callback=None):
 
     安全刷新策略：
       1. 不先删除旧文件；
-      2. 先从 PyTDX 下载到内存；
+      2. 先经 eltdx 0x06B9 批量下载到内存（替代原 pytdx TdxHq_API）；
       3. 校验成功后写入 .tmp，再用 os.replace 原子替换；
       4. 任一文件刷新失败时保留旧文件。
     """
@@ -1470,31 +1378,28 @@ def refresh_block_files(progress_callback=None):
         "block_fg.dat",
     ]
 
+    hosts = [f"{h}:{p}" for h, p in TDX_BLOCK_SERVERS]
     try:
-        from pytdx.hq import TdxHq_API
-    except ImportError:
-        log.warning("[板块刷新] pytdx 未安装，无法刷新板块文件；保留旧文件")
-        return
+        downloaded = download_block_files_via_eltdx(block_files, hosts=hosts)
+    except Exception as e:
+        log.warning(f"[板块刷新] eltdx 下载异常，保留旧文件: {e}")
+        downloaded = {}
 
     refreshed = 0
-    for host, port in TDX_BLOCK_SERVERS[:]:
-        try:
-            api = TdxHq_API(multithread=True)
-            if not api.connect(host, port):
-                continue
-            log.info(f"[板块刷新] 已连接服务器 {host}:{port}")
-            for bf in block_files:
-                if _safe_refresh_one_block_file(api, host, port, bf, block_cache_dir, progress_callback=progress_callback):
-                    refreshed += 1
-            api.disconnect()
-            break
-        except Exception as e:
-            log.warning(f"[板块刷新] 服务器 {host}:{port} 刷新失败: {e}")
-            try:
-                api.disconnect()
-            except Exception:
-                pass
+    for bf in block_files:
+        raw = downloaded.get(bf)
+        _desc = _BLOCK_FILE_DISPLAY.get(bf)
+        _suffix = f"（{_desc}）" if _desc else ""
+        if not raw:
+            log.warning(f"[板块刷新] {bf}{_suffix} 服务端 size 无效，保留旧文件")
             continue
+        if not _validate_downloaded_block_file(bf, raw):
+            log.warning(f"[板块刷新] {bf} 格式校验失败，保留旧文件")
+            continue
+        local_path = os.path.join(block_cache_dir, bf)
+        _safe_replace_file(local_path, raw)
+        log.info(f"[板块刷新] ✅ {bf}{_suffix} 刷新成功: {len(raw)} 字节")
+        refreshed += 1
 
     if refreshed == 0:
         log.warning("[板块刷新] 所有文件均未刷新成功，继续使用旧文件")
