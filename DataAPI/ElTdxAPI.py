@@ -14,7 +14,7 @@ fetch_main_level 提供）；本模块是 TdxAPI 前复权流水线依赖的下�
 数据源：
   - eltdx（基于 7709 协议、0x000f 命令）——唯一数据源。
   - 单一数据源是刻意设计：失败即显著报错（见 get_xdxr_data 的 log.error），
-    不做静默降级。曾存在的 mootdx / pytdx 三级回退已彻底删除（见文件中部说明）。
+    不做静默降级。
 """
 import threading
 import logging
@@ -218,16 +218,7 @@ def _get_xdxr_eltdx(market, code):
     return _normalize_xdxr_df(df)
 
 
-# ============================================================
-# 注：mootdx / pytdx 三级回退已于 2026-09 整体删除
-# ============================================================
-# 删除理由：
-#   1. eltdx 单源已足够覆盖除权除息需求（0x000f 命令）；
-#   2. 回退链的语义是「上一源异常 → continue 试下一源」，会把「网络/接口故障」
-#      静默降级成「该股无除权除息数据」，掩盖真实故障并污染前复权结果；
-#   3. 单源 + 显著报错（log.error）更利于暴露问题，与 TdxAPI 前复权流水线的
-#      「失败即报错」口径一致。
-# 如需新增数据源：在第 3 段 get_xdxr_data 的来源元组中追加 (名称, 取数函数) 即可，
+# 如需新增数据源：在 get_xdxr_data 的来源元组中追加 (名称, 取数函数) 即可，
 # 返回值需能被 _normalize_xdxr_df 标准化；**不要**恢复静默 continue 式降级。
 
 
@@ -294,11 +285,8 @@ def get_xdxr_data(market, code):
 # ============================================================
 # 板块文件下载 / 刷新（基于 eltdx 0x06B9 通用文件读取）
 # ============================================================
-# 2026-09-12：原 pytdx 板块刷新（TdxHq_API + get_block_info_meta/get_block_info）
-# 整体迁移到 eltdx。实证（见 TdxAPI.refresh_block_files 旁注）：eltdx 经 0x06B9 读取服务器文件，
-# 对 tdxhy.cfg / infoharbor_block.dat / block_zs.dat / block_gn.dat / block_fg.dat 返回的
-# 字节数与 pytdx 完全一致；spblock.dat 两者均返回 0 字节（服务器不服务该文件，刷新时保留旧文件）。
-# 因此 eltdx 可完全替代 pytdx 完成板块文件刷新，pytdx 不再用于本项目。
+# 注意：spblock.dat 服务器不经文件下载通道服务（实测返回 0 字节），
+# 刷新时保留旧文件（该文件由通达信客户端「盘后下载」单独写入）。
 _MAX_BLOCK_FILE_BYTES = 8_000_000
 
 

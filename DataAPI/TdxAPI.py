@@ -227,7 +227,7 @@ def set_tdx_config(vipdoc_dir=None, forward_adjust_enabled=None):
 
 
 # 板块文件（block_*.dat）网络下载/刷新用的通达信行情服务器列表。
-# 现统一经 eltdx 0x06B9 读取（替代原 pytdx 的 TdxHq_API）；与除权除息无关（除权除息现走 eltdx）。
+# 现统一经 eltdx 0x06B9 读取；与除权除息无关（除权除息现走 eltdx）。
 TDX_BLOCK_SERVERS = [
     ('115.238.90.165', 7709),   # 最快的服务器，放在第一位
     ('119.147.212.81', 7709),
@@ -666,8 +666,7 @@ def _resample_day_to_week(day_records):
 #   前复权后价格 = (复权前价格 - 每股现金红利 + 配股比例 × 配股价)
 #                 / (1 + 送股比例 + 转增比例 + 配股比例)
 # 前复权递推方式：从最新日期向前，遇到除权除息日时，该日之前的所有OHLC都乘以 a 再加 b。
-# XDXR 数据获取：由 DataAPI/ElTdxAPI.py 提供（eltdx 单一数据源；
-#   mootdx/pytdx 三级回退已删除，详见 ElTdxAPI.py 中部说明）。
+# XDXR 数据获取：由 DataAPI/ElTdxAPI.py 提供（eltdx 单一数据源，失败即显著报错）。
 # ============================================================
 
 from DataAPI.ElTdxAPI import get_xdxr_data, download_block_files_via_eltdx
@@ -769,7 +768,6 @@ def _forward_adjust(records, market, code, end_date=None):
 
     # 入口过滤：根据 market 和 code 前缀判断是否为个股
     # 防御性入口拦截：仅个股参与前复权，指数/ETF/板块即使拿到 xdxr 记录也不复权
-    # （历史上 mootdx 接口不区分 SH/SZ，000001 会串到平安银行，故必须按前缀拦截）
     # SH：6 开头为个股（600/601/603/605/688），其余为指数/ETF/板块
     # SZ：000/001/002/003/300/301 为个股，399 为指数，其余为 ETF/板块
     if market.lower() == 'sh' and not code.startswith('6'):
@@ -1154,17 +1152,8 @@ def read_blk_file(blk_path):
 _INFOHARBOR_BLOCK_CACHE = None       # dict: sector_code → {"name": str, "stocks": [...]}
 _INFOHARBOR_BLOCK_CACHE_LOADED = False
 
-# 原 block_*.dat 网络兜底（_BLOCK_GN_CACHE / _download_block_gn_from_network /
-# _parse_raw_block_gn / get_index_stocks Step4）于 2026-09-12 整体删除：
-#   ① 日常仅覆盖 2 个 infoharbor 未覆盖板块（880524 含可转债 / 880735 专精特新，占 0.4%）；
-#   ② block_*.dat 数据源有 400 只硬截断（实测同一板块 infoharbor 1102 只 vs block 400 只，
-#      静默缺口 63.7%，比报错更危险）；
-#   ③ infoharbor_block.dat 缺失/损坏时，点「刷新」按钮经 eltdx 重新下载即可恢复，
-#      无需静默降级的兜底。
 
-
-# 板块文件下载已迁移到 eltdx（见 DataAPI/ElTdxAPI.py 的 download_block_files_via_eltdx）；
-# 原 pytdx _download_block_file（TdxHq_API + get_block_info）于 2026-09-12 删除，不再使用。
+# 板块文件下载实现见 DataAPI/ElTdxAPI.py 的 download_block_files_via_eltdx。
 
 
 def _safe_replace_file(path, raw_data):
@@ -1239,13 +1228,7 @@ def _validate_downloaded_block_file(file_name, raw_data):
     return False
 
 
-# 单文件刷新逻辑已内联进 refresh_block_files（eltdx 批量下载后逐文件校验/替换/记日志）；
-# 原 _safe_refresh_one_block_file（pytdx）于 2026-09-12 删除，不再使用。
-
-
-# 原 block_*.dat 网络兜底 _download_block_gn_from_network（含 _parse_raw_block_gn 解析、
-# _BLOCK_GN_CACHE 缓存）于 2026-09-12 随 get_index_stocks Step4 一并整体删除，
-# 删除理由见文件上方「板块成分股缓存」段注释。
+# 单文件刷新逻辑已内联进 refresh_block_files（eltdx 批量下载后逐文件校验/替换/记日志）。
 
 
 def refresh_block_files(progress_callback=None):
@@ -1254,7 +1237,7 @@ def refresh_block_files(progress_callback=None):
 
     安全刷新策略：
       1. 不先删除旧文件；
-      2. 先经 eltdx 0x06B9 批量下载到内存（替代原 pytdx TdxHq_API）；
+      2. 先经 eltdx 0x06B9 批量下载到内存；
       3. 校验成功后写入 .tmp，再用 os.replace 原子替换；
       4. 任一文件刷新失败时保留旧文件。
     """
@@ -1464,14 +1447,9 @@ def get_index_stocks(sector_code):
     if stocks:
         return stocks
 
-    # Step 4（tdxzs.cfg + block_*.dat 兜底下载）已于 2026-09-12 整体删除：
-    #   ① 日常仅覆盖 2 个 infoharbor 未覆盖板块（880524 含可转债 / 880735 专精特新，占 0.4%）；
-    #   ② block_*.dat 数据源有 400 只硬截断（实测同一板块 infoharbor 1102 只 vs block 400 只，
-    #      静默缺口 63.7%，比报错更危险）；
-    #   ③ infoharbor_block.dat 缺失/损坏时，点「刷新」按钮经 eltdx 重新下载即可恢复，
-    #      无需静默降级的兜底。
+    # infoharbor_block.dat 未命中 → 告警并返回空列表（可点「刷新」按钮重新下载后重试）
     log.warning(
-        f"[板块成分股] infoharbor_block.dat 未命中板块 {sector_code}（Step4 兜底已删除），"
+        f"[板块成分股] infoharbor_block.dat 未命中板块 {sector_code}，"
         f"返回空列表；请点「刷新」按钮恢复 infoharbor_block.dat 后重试"
     )
     return []
