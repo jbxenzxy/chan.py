@@ -686,7 +686,10 @@ class Scanner:
             # cache_chan=False：扫描模式不缓存 CChan 对象与 K 线 records
             # （内存大头），只留轻量 result；配合扫描完成即销毁进程池
             # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
-            result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False)
+            # include_extra=False：扫描只消费 K 线/缠论结果（meta 仅用 name），
+            # 跳过 PE-TTM/归属/股东增减持 展示性取数——后者逐票打 7615 网关，
+            # 1000 只扫描就是 1000 次 HTTP，纯浪费（2026-09-12 用户定版）。
+            result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False, include_extra=False)
 
             t_analyze = time.time() - t0
             if "error" in result:

@@ -588,9 +588,17 @@ def fetch_float_mc(stock_list):
 _REDUCTION_CACHE = {}          # mkt+code -> (epoch, [plans])
 _REDUCTION_CACHE_TTL = 24 * 3600
 _REDUCTION_LOCK = threading.Lock()
-# 7615 F10 网关 HTTP 超时。IPv4 直连实测 117~350ms，5s 余量已极大；
+# 7615 F10 网关 HTTP 超时。IPv4 直连实测 117~350ms，3s 余量已很大；
 # 不再用 eltdx F10Client（其 urlopen 无法控制地址族，见 _f10_tqlex_post）。
-_REDUCTION_TIMEOUT = 5.0
+_REDUCTION_TIMEOUT = 3.0
+# 瞬时抖动重试：单请求超时后再试 1 次（成功即返回），扫描逐票调用时可扛住偶发抖动。
+_REDUCTION_RETRIES = 1
+# 熔断器：连续失败达阈值（网关整体不可达）后冷却期内直接返回 []，
+# 防止扫描 1000 只股票时每只都白等 超时×(1+重试) 把扫描拖爆。
+_REDUCTION_CB_THRESHOLD = 3      # 连续失败次数阈值
+_REDUCTION_CB_COOLDOWN = 600     # 熔断冷却 10 分钟
+_REDUCTION_CB_FAILS = 0          # 连续失败计数（受 _REDUCTION_LOCK 保护）
+_REDUCTION_CB_OPEN_UNTIL = 0.0   # 熔断解除时刻（epoch）；0=未熔断
 
 # 7615 TQLEX 网关请求头（与 eltdx F10Client 同款；URL 在 _f10_tqlex_post
 # 里按解析出的 IPv4 直连地址构造，Host 头固定回填域名）
@@ -644,50 +652,75 @@ def get_shareholder_reduction_plans(market, code):
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return []
+    global _REDUCTION_CB_FAILS, _REDUCTION_CB_OPEN_UNTIL
     key = market.lower() + code
     now = time.time()
     with _REDUCTION_LOCK:
         cached = _REDUCTION_CACHE.get(key)
         if cached and now - cached[0] < _REDUCTION_CACHE_TTL:
             return cached[1]
-    try:
-        raw = _f10_tqlex_post(
-            "CWServ.tdxf10_gg_gdyj",
-            [code, "gdzjcjh", "", "", "1", "1", "20"],
-        )
-        error_code = raw.get("ErrorCode")
-        result_sets = raw.get("ResultSets") or ()
-        if error_code not in (None, 0) or not result_sets:
-            log.warning("[股东增减持] 网关返回 ErrorCode=%s(%s%s)", error_code, market, code)
-            return []
-        rs0 = result_sets[0]
-        rows_raw = rs0.get("Content") or ()
-        col_names = [str(c) for c in (rs0.get("ColName") or ())]
-        plans = []
-        for row in rows_raw:
-            if isinstance(row, dict):           # 防御：网关某些 Entry 返回 dict
-                item = row
-            elif col_names and isinstance(row, (list, tuple)):
-                item = dict(zip(col_names, row))
-            else:
-                continue
-            plans.append({
-                "announce_date": item.get("N001"),
-                "direction": item.get("N002"),
-                "holder": item.get("N003"),
-                "identity": item.get("N004"),
-                "reduce_shares": item.get("N005"),
-                "reduce_pct": item.get("N006"),
-                "start": item.get("N009"),
-                "end": item.get("N010"),
-                "progress": item.get("N011"),
-            })
-        with _REDUCTION_LOCK:
-            _REDUCTION_CACHE[key] = (now, plans)
-        return plans
-    except Exception as _e:
-        log.warning("[股东增减持] 取数失败(%s%s): %s", market, code, _e)
+        cb_open = now < _REDUCTION_CB_OPEN_UNTIL
+    if cb_open:
+        # 熔断中：网关刚被判定整体不可达，直接放弃本次（不占扫描耗时）。
+        # 静默返回——冷却期结束后的第一次失败会再打一条汇总日志。
         return []
+    last_err = None
+    raw = None
+    for attempt in range(1 + _REDUCTION_RETRIES):
+        try:
+            raw = _f10_tqlex_post(
+                "CWServ.tdxf10_gg_gdyj",
+                [code, "gdzjcjh", "", "", "1", "1", "20"],
+            )
+            last_err = None
+            break
+        except Exception as _e:
+            last_err = _e
+    if last_err is not None:
+        with _REDUCTION_LOCK:
+            _REDUCTION_CB_FAILS += 1
+            if _REDUCTION_CB_FAILS >= _REDUCTION_CB_THRESHOLD:
+                _REDUCTION_CB_OPEN_UNTIL = time.time() + _REDUCTION_CB_COOLDOWN
+                log.warning("[股东增减持] 连续 %d 次取数失败（末次: %s%s: %s），"
+                            "熔断 %d 分钟内跳过该数据源",
+                            _REDUCTION_CB_FAILS, market, code, last_err,
+                            _REDUCTION_CB_COOLDOWN // 60)
+            else:
+                log.warning("[股东增减持] 取数失败(%s%s): %s", market, code, last_err)
+        return []
+    with _REDUCTION_LOCK:
+        _REDUCTION_CB_FAILS = 0
+        _REDUCTION_CB_OPEN_UNTIL = 0.0
+    error_code = raw.get("ErrorCode")
+    result_sets = raw.get("ResultSets") or ()
+    if error_code not in (None, 0) or not result_sets:
+        log.warning("[股东增减持] 网关返回 ErrorCode=%s(%s%s)", error_code, market, code)
+        return []
+    rs0 = result_sets[0]
+    rows_raw = rs0.get("Content") or ()
+    col_names = [str(c) for c in (rs0.get("ColName") or ())]
+    plans = []
+    for row in rows_raw:
+        if isinstance(row, dict):           # 防御：网关某些 Entry 返回 dict
+            item = row
+        elif col_names and isinstance(row, (list, tuple)):
+            item = dict(zip(col_names, row))
+        else:
+            continue
+        plans.append({
+            "announce_date": item.get("N001"),
+            "direction": item.get("N002"),
+            "holder": item.get("N003"),
+            "identity": item.get("N004"),
+            "reduce_shares": item.get("N005"),
+            "reduce_pct": item.get("N006"),
+            "start": item.get("N009"),
+            "end": item.get("N010"),
+            "progress": item.get("N011"),
+        })
+    with _REDUCTION_LOCK:
+        _REDUCTION_CACHE[key] = (now, plans)
+    return plans
 
 
 def _parse_plan_date(s):

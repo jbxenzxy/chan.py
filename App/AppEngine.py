@@ -341,7 +341,7 @@ FREQ_TO_COL = AppData_FREQ_TO_COL
 # 区域 3 · 股票分析
 # ═══════════════════════════════════════════════════════════════════════
 
-def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None):
+def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
     """
     使用通达信数据源 + chan.py 进行股票/指数缠论分析（内部实现，不处理期货分流）
     返回与 czsc 版本兼容的 JSON 数据结构
@@ -350,6 +350,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期
     cache_chan: 是否缓存CChan对象。扫描模式设为False以节省内存。
     sub_freq: 双窗口下窗周期（显式透传；缺省按 _SUB_FREQ_MAP 回退）。
+    include_extra: 是否获取「展示性」meta（PE-TTM / 指数归属 / 股东增减持）。
+        这些字段只供 K 线页前端展示、扫描过滤链路完全不消费；批量扫描传 False
+        可逐票省掉 7615 网关 HTTP（减持）与 PE/归属缓存装配，扫描明显提速。
+        默认 True（K 线页打开单只股票时保持原行为）。
     """
     import time
     t_start = time.time()
@@ -1258,10 +1262,13 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "saved_selection_date": _saved_sdt_for_meta,
             "is_replay": bool(end_date),
             "forward_adjust": forward_adjust_done,
-            "pe_ttm": _get_pe_ttm(market, code),
-            "index_belong": _get_index_belong(market, code),
-            "shareholder_reduction": _get_reduction_flag(
-                market, code, kline_data[-1]["date"] if kline_data else None
+            # 展示性 meta（PE-TTM/归属/减持）仅 K 线页需要；扫描路径
+            # include_extra=False 时置空缺省，省掉逐票 7615 HTTP 与缓存装配。
+            "pe_ttm": _get_pe_ttm(market, code) if include_extra else None,
+            "index_belong": _get_index_belong(market, code) if include_extra else None,
+            "shareholder_reduction": (
+                _get_reduction_flag(market, code, kline_data[-1]["date"] if kline_data else None)
+                if include_extra else {"active": False}
             ),
         },
         "klines": kline_data,
@@ -1684,7 +1691,7 @@ def _build_sub_kl_times(main_records, sub_records, main_freq, sub_freq):
     return times
 
 
-def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
+def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
     """公开分析入口：仅处理股票/指数（通达信数据源），支持 cache_chan 和 dual 双窗口。
 
     期货的一切拉流（实时/选点/复盘软断开）统一走 AppSSE 的 SSE 通道
@@ -1692,6 +1699,7 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     防止误传落到股票路径产生静默错误。
     sub_freq: 双窗口下窗周期（全链路显式透传：FrontAPI → 本入口 →
     _analyze_stock_internal；未传时按 _SUB_FREQ_MAP 缺省配对回退）。
+    include_extra: 是否获取展示性 meta（PE-TTM/归属/减持）。批量扫描传 False。
     """
     market, normalized_code = _get_market_code(code)
     if not market:
@@ -1702,6 +1710,6 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     # 器重建数据源标识符，此处绝不再拼点号/大写（旧格式会被严格解析拒掉）。
     stock_code = f"{market}{normalized_code}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan,
-                                   dual=dual, step=step, sub_freq=sub_freq)
+                                   dual=dual, step=step, sub_freq=sub_freq, include_extra=include_extra)
 
 
