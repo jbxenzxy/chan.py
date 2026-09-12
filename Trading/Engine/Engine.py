@@ -53,7 +53,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..Broker.Base import Broker
+from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.PeriodProfile import (
@@ -1108,7 +1108,7 @@ class TradingEngine(ReconcileMixin):
             # 2026-09-12 补：配置语义是"**连续**被拒 N 次清幻影仓"，而此前只有
             # "达上限"时才清零 —— 成功 CLOSE 不清零 → 变成"**累计**被拒 N 次"：
             # 一次拒单 + 中间若干笔正常成交 + 再一次拒单会跨 run 累积到阈值，
-            # 把引擎自己刚开出来的**真仓**当幻影清掉（实测：见 test_p42 [1]）。
+            # 把引擎自己刚开出来的**真仓**当幻影清掉（实测：见 test_p43_audit_fixes [1]）。
             self._close_fail_streak = 0
         # ── 成交落账：净敞口的变化决定 run 的开启 / 结束 ──
         net_before = self.positions.net_volume()
@@ -1363,11 +1363,15 @@ class TradingEngine(ReconcileMixin):
     # CTP 拒单分类（D10）→ (告警码, 级别, 标题)
     #   · price（FOK 全撤 / 涨跌停）**不进这张表**：那是"追了有用"的一类，引擎会
     #     继续追；只有追满 close_max_chase 仍不成交才升级（见 `_alert_on_reject`）。
+    #   · position（平仓量超过持仓量 / 平昨仓不足）2026-09-13 独立成项：它是
+    #     `_note_close_rejected` 唯一允许触发"清幻影仓"兜底的类别（见该函数）。
     _REJECT_ALERTS = {
         "funds": ("ctp_reject_funds", "severe",
                   "柜台拒单：资金 / 保证金不足"),
         "not_tradable": ("ctp_reject_not_tradable", "severe",
-                         "柜台拒单：当前不可报单（非交易时段 / 无权限 / 无此持仓）"),
+                         "柜台拒单：当前不可报单（非交易时段 / 无权限）"),
+        REJECT_POSITION: ("ctp_reject_position", "severe",
+                          "柜台拒单：可平持仓不足（柜台很可能没有这笔仓）"),
     }
 
     def alert(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
@@ -1471,7 +1475,7 @@ class TradingEngine(ReconcileMixin):
             return
         # 价格不可达 + 追价轮数跑满 → 这笔（离场）彻底没成，必须叫人。
         # 开仓不追价（is_exit=False），一次不成就是不成，没有"跑满"的语义。
-        if (cls_ == "price" and act.is_exit
+        if (cls_ == REJECT_PRICE and act.is_exit
                 and int(o.meta.get("attempt") or 0)
                 >= int(o.meta.get("max_attempts") or 1)):
             self.alert(self.ALERT_SEVERE, "close_chase_exhausted",
@@ -1503,17 +1507,58 @@ class TradingEngine(ReconcileMixin):
         "清谁"：新模型一次只平一笔（转移 ⑤ 的目标 = 同向最早一单），故只清这一笔，
         不再像旧版把整批一次清掉 —— 清得少一点，错了波及面就小一点；同一根 bar
         的 `_reconcile_positions` 也会独立判一遍幻影，两条路互为兜底。
+
+        ⚠️ **2026-09-13 补类别门槛（D10 §7.3）**：清仓兜底**只认 `position` 类**
+        （平仓量超过持仓量 / 平昨仓不足）= 柜台说"没有这个仓"。其余类别一律
+        **只进冷却 + 告警，不动簿面**：
+
+        | reject_class | 含义 | 是否清仓 |
+        |---|---|---|
+        | `position` | 柜台无此仓（幻影仓） | ✅ 清（这就是兜底的本意） |
+        | `funds` | 资金不足 | ❌ 仓是真的，清掉就账实不符 |
+        | `not_tradable` | 非交易时段 / 无权限 | ❌ 同上 |
+        | `price` | FOK 全撤 / 涨跌停 | ❌ 同上 |
+        | `""`（未分类） | 认不出来 | ❌ 保守不清（旧实现会清） |
+
+        为什么必须加这道门槛（实测危害）：旧实现是"连续被拒 N 次就清"，不问原因。
+        于是"资金不足"这种**明明说明仓在柜台**的拒单，累计够次数也会把真仓从簿里
+        删掉 —— 引擎自己开出来的仓被自己清掉，正是 P0 当初要消灭的账实不符形态。
+        代价是：未分类/其它类别的真幻影仓不会再被自动清，簿面会一直脏着
+        —— 这是**有意的**取舍：脏簿有告警可见，误删真仓是静默不可逆。
         """
+        reject_class = str(o.meta.get("reject_class") or "")
         self._last_close_failed_bar_seq = self.bars_seen
         self._close_fail_streak += 1
         self.ev.write("close_retry_cooldown",
                       key=o.signal_key, order_id=o.order_id,
                       reject=o.meta.get("reject_reason") or o.status,
+                      reject_class=reject_class,
                       cooldown_bars=self._close_retry_bars,
                       streak=self._close_fail_streak,
                       note="CLOSE 被拒，冷却 {} 根 bar 内不重复报单".format(
                           self._close_retry_bars))
         if self._close_fail_streak < self._close_max_streak:
+            return
+        # 达上限。区分两类：可清（柜台无此仓）/ 不可清（其它原因）。
+        if reject_class != REJECT_POSITION:
+            # 不清仓，但仍要把 streak 归零，否则下一次"仓位类"拒单会被历史计数
+            # 连带触发（等于绕过门槛）。告警级别降到 warn：它是"簿面需要人工核对"
+            # 的提示，不是"已确认柜台无此仓"的结论。
+            self._close_fail_streak = 0
+            self.ev.write("close_streak_not_cleared",
+                          reason="reject_class_not_position",
+                          reject_class=reject_class or "(未分类)",
+                          streak=self._close_max_streak,
+                          signal_key=(act.target.signal_key
+                                      if act.target is not None else o.signal_key),
+                          note="连续被拒达上限，但拒单原因不是「柜台无此仓」，"
+                               "故不清除簿面仓单（避免误删真仓）")
+            self.alert(
+                self.ALERT_WARN, "close_streak_not_phantom",
+                "平仓连续被拒 {} 次，但原因不是「柜台无此仓」（reject_class={}），"
+                "因此**未**从簿中清除 {}。请核对柜台状态后人工处理。".format(
+                    self._close_max_streak, reject_class or "(未分类)",
+                    act.target.symbol if act.target is not None else o.symbol))
             return
         target = act.target
         self._close_fail_streak = 0
@@ -1524,6 +1569,7 @@ class TradingEngine(ReconcileMixin):
         net = self.positions.net_volume()
         self.ev.write("position_drop", reason="close_repeatedly_rejected",
                       streak=self._close_max_streak,
+                      reject_class=reject_class,
                       signal_key=target.signal_key, symbol=target.symbol,
                       net_volume=net,
                       note="CLOSE 连续被拒达上限，认定该仓在柜台不存在，从簿中清除")

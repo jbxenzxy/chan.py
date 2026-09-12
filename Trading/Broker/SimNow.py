@@ -74,14 +74,14 @@ from __future__ import annotations
 import math
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
-from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, Broker,
-                   classify_ctp_reject, register_broker)
+from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
+                   Broker, classify_ctp_reject, register_broker)
 
 # broker 参数默认值的**单一事实源**：Trading/Config.py 的 BrokerConfig 模型。
 # 本文件不再自带任何兜底数值（2026-09-07 严格模式）—— params 由配置模型构造，
@@ -120,16 +120,21 @@ _POLL_INTERVAL_FAST = 0.1   # _verify_position_delta / _wait_position_ok 轮询
 _POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
 
 
-def _position_total(api, trade_symbol: str, side: str) -> int:
-    """读 tqsdk 当前持仓总数（今+昨），失败返回 -1。
+def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, int]]:
+    """读 tqsdk 持仓的 **(今仓, 昨仓)** 分解，失败返回 None。
 
-    用于 P4 修复的成交后二次校验。注意：传 symbol 也不传时，tqsdk 返回的是
-    整个账户的 dict[symbol, Position]；这里取与 trade_symbol 匹配的那一条。
+    为什么需要分解（D12 / §5.8.4 第 4 项，2026-09-13）：
+      `CLOSE` 在本系统里**恒作用于跨日仓**（不变量 6，断言在
+      `Engine._pre_trade_check`）→ 中金所下恒为**平昨**。而中金所撮合规则是
+      **同时有今仓和昨仓时默认先平今**，所以"总量够"并不等于"平昨能成"：
+      今仓 2 手 + 昨仓 0 手时，总量判据会放行，CTP 却会用今仓去平（平今费率
+      是平昨的 15 倍）或直接拒单。要挡住这件事，必须能分别看到今 / 昨。
+    取不到（api 异常）返回 None，调用方按"不可信"处理。
     """
     try:
         pos = api.get_position()
     except Exception:
-        return -1
+        return None
     item = None
     if isinstance(pos, dict):
         # 只认 trade_symbol 精确匹配；找不到 = 该合约当前无持仓（返回 0）。
@@ -140,13 +145,62 @@ def _position_total(api, trade_symbol: str, side: str) -> int:
     else:
         item = pos
     if item is None:
-        return 0
+        return (0, 0)
     if side == "LONG":
-        return (getattr(item, "pos_long_today", 0) or 0) \
-             + (getattr(item, "pos_long_his", 0) or 0)
-    else:
-        return (getattr(item, "pos_short_today", 0) or 0) \
-             + (getattr(item, "pos_short_his", 0) or 0)
+        return (int(getattr(item, "pos_long_today", 0) or 0),
+                int(getattr(item, "pos_long_his", 0) or 0))
+    return (int(getattr(item, "pos_short_today", 0) or 0),
+            int(getattr(item, "pos_short_his", 0) or 0))
+
+
+def _position_total(api, trade_symbol: str, side: str) -> int:
+    """读 tqsdk 当前持仓总数（今+昨），失败返回 -1。
+
+    用于 P4 修复的成交后二次校验。注意：传 symbol 也不传时，tqsdk 返回的是
+    整个账户的 dict[symbol, Position]；这里取与 trade_symbol 匹配的那一条。
+    2026-09-13：改为 `_position_split` 求和，避免"今/昨字段名"在两处各写一遍。
+    """
+    sp = _position_split(api, trade_symbol, side)
+    if sp is None:
+        return -1
+    return sp[0] + sp[1]
+
+
+def _verify_yesterday_delta(api, trade_symbol: str, side: str,
+                            today_baseline: int, his_baseline: int,
+                            volume: int, timeout_s: float = 5.0) -> bool:
+    """等 **昨仓** 精确减少 `volume`、且 **今仓一分不动**（D12 / p38 不变量的成交后半段）。
+
+    与 `_verify_position_delta` 的分工：
+      · 那个看的是**总量**，服务 OPEN（今仓增加，总量增加）；
+      · 这个看的是**今/昨分解**，只服务 CLOSE（平昨 → 昨仓减、今仓不动）。
+    判据（§5.8.4 第 4 项"平昨 CLOSE 是否真的减昨仓"）：
+      成立 ⟺ 昨仓落到 `his_baseline - volume`（±1 帧同步漂移）
+              且 今仓 == `today_baseline`（**下降即视为平到了今仓 → 不成立**）
+
+    "今仓下降"必须判失败而不是容忍：那说明柜台把 CLOSE 撮合到了今仓，
+    触发的是平今费率（中金所 0.0345% ≈ 平昨 15 倍），属于必须有人知道的
+    异常，不能静默通过。
+
+    返回 True/False；调用方只用于**诊断告警**（成交权威判据仍是 P6 `trade_records`），
+    不据此推翻已成交事实 —— 与 P4/P5 降级后的口径一致。
+    """
+    if today_baseline < 0 or his_baseline < 0:
+        return False
+    his_target = his_baseline - int(volume)
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        api.wait_update(deadline=deadline)
+        sp = _position_split(api, trade_symbol, side)
+        if sp is None:
+            continue
+        today_cur, his_cur = sp
+        if today_cur < today_baseline:
+            return False                    # 今仓被平掉了 → 平到了今仓，不成立
+        if today_cur == today_baseline and abs(his_cur - his_target) <= 1:
+            return True
+        time.sleep(_POLL_INTERVAL_FAST)
+    return False
 
 
 def _verify_position_delta(api, trade_symbol: str, side: str,
@@ -650,6 +704,20 @@ class SimNowBroker(Broker):
         except Exception:
             return 0
 
+    def _take_baseline_split(self, side_key: str) -> Tuple[int, int]:
+        """下单前的 **(今仓, 昨仓)** 快照，供 CLOSE 的平昨校验使用。
+
+        失败返回 (-1, -1) —— 与 `_take_baseline` 失败返回 -1 同口径，
+        `_verify_yesterday_delta` 见到负基线会直接判 False（不猜、不放行）。
+        """
+        try:
+            self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
+            self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
+            sp = _position_split(self._api, self._trade_symbol, side_key)
+        except Exception:
+            return (-1, -1)
+        return (-1, -1) if sp is None else sp
+
     def _submit_open(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                      signal_key: str, note: str, is_exit: bool = False) -> Order:
         """开仓（offset=OPEN）。
@@ -744,9 +812,19 @@ class SimNowBroker(Broker):
         """
         offset = INTENT_TO_OFFSET[intent]
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
-        if not self._wait_position_ok(side, int(volume), timeout_s=self._timing("position_ok_timeout")):
+        # D12/p38（2026-09-13）：这里的"持仓"必须是**昨仓** —— 本系统的 CLOSE 恒为平昨
+        #   （不变量 6，断言在 Engine._pre_trade_check）。旧的今+昨口径会放行
+        #   "只有今仓"的情形，而中金所同时有今昨仓时默认先平今 → 要么平今多付 15 倍
+        #   费率、要么被柜台拒，两者都与引擎的"平昨"假设不符。
+        #   等待超时 = 柜台很可能根本没有这笔昨仓（幻影仓的主路径）→ 带
+        #   REJECT_POSITION 类别返回，让引擎的兜底逻辑认得出来（见 Base.REJECT_POSITION）。
+        if not self._wait_position_ok(side, int(volume),
+                                      timeout_s=self._timing("position_ok_timeout")):
             return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
-                                  "等待持仓更新超时（>10s），可能上游未同步")
+                                  "等待昨仓持仓更新超时（>{}s，仅认 pos_*_his；"
+                                  "可能柜台无此昨仓）".format(
+                                      self._timing("position_ok_timeout")),
+                                  reject_class=REJECT_POSITION)
         side_key = "LONG" if side is Side.LONG else "SHORT"
         direction = _CLOSE_DIRECTION[side]  # 平多=SELL / 平空=BUY（2026-09-05 方向修复）
         is_buy = self._is_buy("close", side)
@@ -770,7 +848,10 @@ class SimNowBroker(Broker):
                 limit = self._chase_fallback_limit("close", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
-            baseline = self._take_baseline(side_key)
+            # p38：CLOSE 的基线要**分今/昨**取 —— 成交后要断言"昨仓降、今仓不动"，
+            # 一个总量基线做不到这件事（见 `_verify_yesterday_delta`）。
+            base_today, base_his = self._take_baseline_split(side_key)
+            baseline = base_today + base_his if base_today >= 0 else -1
             expected_delta = -int(volume)
             try:
                 order = self._api.insert_order(symbol=self._trade_symbol,
@@ -784,7 +865,8 @@ class SimNowBroker(Broker):
             self._wait_finished(order, timeout_s=per_wait)
             o = self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
                               note, baseline, expected_delta, limit,
-                              attempt=attempt, max_attempts=max_attempts)
+                              attempt=attempt, max_attempts=max_attempts,
+                              baseline_split=(base_today, base_his))
             last = o
             if o.status == "filled":
                 return o
@@ -798,7 +880,8 @@ class SimNowBroker(Broker):
 
     def _finalize(self, order, intent_str: str, action: str, side: Side, volume: int, ref_price: float,
                   signal_key: str, note: str, baseline: int, expected_delta: int,
-                  limit: float, attempt: int = 1, max_attempts: int = 1) -> Order:
+                  limit: float, attempt: int = 1, max_attempts: int = 1,
+                  baseline_split: Optional[Tuple[int, int]] = None) -> Order:
         # ===== P3：必须 status=="FINISHED" 且 volume_left==0 才是真成交 =====
         is_fully_filled = (getattr(order, "status", "") == "FINISHED"
                            and getattr(order, "volume_left", None) == 0)
@@ -825,16 +908,33 @@ class SimNowBroker(Broker):
             filled = traded_price
 
         # ===== P4/P5 降级为辅助层：只记录诊断，不再据此 reject =====
+        # D12/p38（2026-09-13）：CLOSE 与 OPEN 的"持仓变化正确性"是两件事，
+        #   必须分开看 ——
+        #     · OPEN：今仓增加 → 总量增加，`_verify_position_delta` 看总量就够；
+        #     · CLOSE：平昨 → **昨仓**下降且**今仓一分不动**。总量判据在这里是
+        #       "看不见"的：今仓 1 手被平掉、昨仓不变，总量同样减 1，旧判据照样通过。
+        #   故 CLOSE 走 `_verify_yesterday_delta`（有分拆基线时），OPEN 保持原逻辑。
         side_key = "LONG" if side is Side.LONG else "SHORT"
         verified = False
         if is_fully_filled:
-            verified = _verify_position_delta(self._api, self._trade_symbol, side_key,
-                                             baseline=baseline,
-                                             expected_delta=expected_delta,
-                                             timeout_s=self._timing("verify_delta_timeout"))
-            if not verified:
-                self._note_position_lag(signal_key, action, side_key,
-                                        baseline, expected_delta)
+            if action == "close" and baseline_split is not None:
+                today_b, his_b = baseline_split
+                verified = _verify_yesterday_delta(
+                    self._api, self._trade_symbol, side_key,
+                    today_baseline=today_b, his_baseline=his_b,
+                    volume=int(volume),
+                    timeout_s=self._timing("verify_delta_timeout"))
+                if not verified:
+                    self._note_yesterday_lag(signal_key, side_key,
+                                             today_b, his_b, int(volume))
+            else:
+                verified = _verify_position_delta(self._api, self._trade_symbol, side_key,
+                                                 baseline=baseline,
+                                                 expected_delta=expected_delta,
+                                                 timeout_s=self._timing("verify_delta_timeout"))
+                if not verified:
+                    self._note_position_lag(signal_key, action, side_key,
+                                            baseline, expected_delta)
 
         status = "filled" if is_fully_filled else "rejected"
         # D10（2026-09-11）：拒单原因分类。追价只在"价格不可达"时才有意义，
@@ -932,33 +1032,43 @@ class SimNowBroker(Broker):
         return False
 
     def _wait_position_ok(self, side: Side, volume: int,
-                          timeout_s: Optional[float] = None) -> bool:
-        """等 tqsdk position 字段更新到 ≥ volume（防 CTP "平仓量超过持仓量"）。
+                          timeout_s: Optional[float] = None,
+                          require_yesterday: bool = True) -> bool:
+        """等 tqsdk position 字段更新到"可平量 ≥ volume"（防 CTP "平仓量超过持仓量"）。
 
         上一笔 open 成交后，tqsdk 端 position.pos_long_today 等字段不会立刻同步，
         需要若干次 wait_update 推过来。如果直接发 close，CTP 端"看不到"对应持仓会拒。
         Step 2.3：timeout_s 缺省时走 BrokerConfig.channel.position_ok_timeout
         （原硬编码 10.0 收口）；生产调用点均显式传入。
+
+        `require_yesterday`（D12 / §5.8.4 第 4 项，2026-09-13 新增，默认 True）：
+          本方法**唯一的生产调用点是 `_submit_close`**，而本系统的 CLOSE 恒作用于
+          跨日仓（不变量 6）→ 中金所下恒为**平昨**。因此判据必须是 **昨仓 ≥ volume**，
+          不是"今+昨 ≥ volume"。
+          旧判据（今+昨）漏掉的正是最危险的一种情形：**今仓 2 手、昨仓 0 手** ——
+          总量判据放行，但中金所撮合规则是"同时有今昨仓默认先平今"，于是这笔单要么
+          被撮合成平今（费率是平昨的 15 倍），要么因昨仓不足被拒；
+          两种结果都和一个"以为在平昨"的引擎不相容。
+          传 False 可退回旧的今+昨口径（仅供诊断/对照，生产不要用）。
         """
         if timeout_s is None:
             timeout_s = self._timing("position_ok_timeout")
-        try:
-            pos = self._api.get_position(self._trade_symbol)
-        except Exception:
-            return False
-        if side is Side.LONG:
-            def _total():
-                return (getattr(pos, "pos_long_today", 0) or 0) \
-                     + (getattr(pos, "pos_long_his", 0) or 0)
-        else:
-            def _total():
-                return (getattr(pos, "pos_short_today", 0) or 0) \
-                     + (getattr(pos, "pos_short_his", 0) or 0)
+
+        def _avail() -> Optional[int]:
+            """可平量：默认只认昨仓；require_yesterday=False 时退回今+昨。"""
+            sp = _position_split(self._api, self._trade_symbol,
+                                 "LONG" if side is Side.LONG else "SHORT")
+            if sp is None:
+                return None
+            today, his = sp
+            return his if require_yesterday else today + his
+
         deadline = time.time() + timeout_s
         while time.time() < deadline:
             self._api.wait_update(deadline=deadline)
             try:
-                if _total() >= volume:
+                avail = _avail()
+                if avail is not None and avail >= volume:
                     return True
             except Exception:
                 pass
@@ -995,16 +1105,50 @@ class SimNowBroker(Broker):
             action, side_key, baseline, expected_delta,
             baseline + expected_delta, cur, signal_key or "-")
 
+    def _note_yesterday_lag(self, signal_key: str, side_key: str,
+                            today_baseline: int, his_baseline: int,
+                            volume: int) -> None:
+        """CLOSE 的平昨校验未成立时的诊断钩子（D12/p38，2026-09-13）。
+
+        两种成因，日志里分别是：
+          · `today_dropped`：今仓下降了 → 柜台把 CLOSE 撮合到了今仓（平今费率
+            中金所 0.0345% ≈ 平昨 15 倍）。这是**必须有人知道**的异常。
+          · `his_unchanged`：昨仓没按预期减少 → CTP 回报延迟，或簿面与柜台不一致。
+        与 `_note_position_lag` 一样只告警、不改变成交事实（权威判据仍是 P6）。
+        """
+        try:
+            sp = _position_split(self._api, self._trade_symbol, side_key)
+        except Exception:
+            sp = None
+        today_cur, his_cur = sp if sp is not None else (-1, -1)
+        if 0 <= today_cur < today_baseline:
+            why = "today_dropped（CLOSE 被撮合到了今仓 → 平今费率，须人工核对）"
+        else:
+            why = "his_unchanged（昨仓未按预期减少；CTP 延迟或簿实不一致）"
+        import logging
+        logging.getLogger("tg.brokers.simnow").warning(
+            "P4/P5 诊断（不影响成交判定）: close %s 平昨校验未成立 [%s] "
+            "(today baseline=%s → %s, his baseline=%s → %s, 期望昨仓减 %s, signal=%s)",
+            side_key, why, today_baseline, today_cur, his_baseline, his_cur,
+            volume, signal_key or "-")
+
     def _rejected(self, signal_key: str, side: Side, action_str: str, volume: int,
-                  ref_price: float, note: str, why: str) -> Order:
+                  ref_price: float, note: str, why: str,
+                  reject_class: str = "") -> Order:
         # action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
+        #
+        # `reject_class`（2026-09-13 新增）：本地拦下的拒单（没走到 CTP 回执，因此
+        # 没有 last_msg 可供 classify_ctp_reject 判）也要带类别，否则引擎侧的
+        # "清幻影仓"兜底会因为拿不到类别而永远不触发 —— "平仓前持仓等待超时"正是
+        # 幻影仓的主路径（见 `_submit_close` 的 P0 注释与 D10 的 REJECT_POSITION）。
         o = Order(
             order_id=self._next_order_id(),
             signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
             action=action_str, volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",
             created_at=now_cn(), broker=self.name, note=note,
-            meta={"reject_reason": why, "intent": action_str},
+            meta={"reject_reason": why, "intent": action_str,
+                  "reject_class": reject_class},
         )
         self.orders.append(o)
         return o

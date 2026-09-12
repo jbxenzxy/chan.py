@@ -69,32 +69,47 @@ INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
 }
 
 
-# ─── 拒单原因分类（D10，2026-09-11）────────────────────────────────────
+# ─── 拒单原因分类（D10，2026-09-11；2026-09-13 补第四类 position）──────────
 # 追价是有代价的（滑点 + 报撤单额度 + 中金所"频繁报撤单"监管计数，见风险 R13）。
 # 但并不是所有拒单都值得追：
 #   · 盘口深度不够（FOK 全撤）→ 价格会动，追了有用
 #   · 资金不足 / 非交易时段   → 追 100 次也不可能成交，纯亏
-# 分类器把 CTP 的 last_msg 归到三类，调用方据此决定要不要继续追。
+#   · 平仓量超过持仓量（柜台无此仓）→ 追 100 次也一样，且它是"簿实不符"的唯一信号
+# 分类器把 CTP 的 last_msg 归到四类，调用方据此决定要不要继续追。
 REJECT_FUNDS = "funds"              # 资金不足 → 立即停追，需人工加保证金
 REJECT_NOT_TRADABLE = "not_tradable"  # 非交易时段 / 集合竞价 / 无权限 → 立即停追
+REJECT_POSITION = "position"        # 平仓量超过持仓量 / 平今·平昨仓位不足 → 立即停追
 REJECT_PRICE = "price"              # 价格不可达（FOK 全撤 / 涨跌停）→ 继续追
 
-# 追价无用的两类：命中即 break
-NO_CHASE_REJECT_CLASSES = (REJECT_FUNDS, REJECT_NOT_TRADABLE)
+# 追价无用的三类：命中即 break
+NO_CHASE_REJECT_CLASSES = (REJECT_FUNDS, REJECT_NOT_TRADABLE, REJECT_POSITION)
 
 # CTP 错误码（2026-09-11 核实，来源：CTP_API 错误代码大全 + 申银万国官方报错释义）
 _CTP_CODE_FUNDS = ("31",)                       # 资金不足
-_CTP_CODE_NOT_TRADABLE = ("17", "28", "30", "50", "51")
-#   17 合约不能交易 / 28 无报单权限 / 30 平仓量超持仓 / 50 平今仓位不足 / 51 平昨仓位不足
+_CTP_CODE_NOT_TRADABLE = ("17", "28")           # 17 合约不能交易 / 28 无报单权限
+#   2026-09-13：原把 30/50/51 一并归在 not_tradable，现独立成 position —— 见下。
+_CTP_CODE_POSITION = ("30", "50", "51")
+#   30 平仓量超过持仓量 / 50 平今仓位不足 / 51 平昨仓位不足
+#
+# 为什么这三码必须单独一类（2026-09-13）：
+#   `not_tradable` 与 `position` 对**追价**的判断一致（都停追），但对**引擎记账**
+#   的语义完全不同 —— 只有「柜台说没有这个仓」才是"幻影仓"的判据，
+#   `Engine._note_close_rejected` 的"清幻影仓"兜底**只能**在这一类上触发。
+#   混在一起会让"资金不足"这种拒单也被当成幻影仓清掉（真仓被误删 = 账实不符）。
 
 # 非交易时段**没有稳定的数字码**，各期货公司文本还不一样 → 只能关键字兜底。
 _CTP_KW_NOT_TRADABLE = ("非交易", "不在交易时间", "禁止此操作", "不在报单时间",
                         "未开盘", "已收盘", "交易时间段", "当前状态不允许")
 _CTP_KW_FUNDS = ("资金不足", "保证金不足", "可用资金不足")
+# 仓位类关键字（2026-09-13 补）：各期货公司文本不一致，故按"超持仓 / 仓位不足"
+# 两个方向各列几种常见写法；命中即认定柜台无此仓（or 可用量不足）。
+_CTP_KW_POSITION = ("平仓量超过持仓量", "平仓量超持仓", "超过持仓量", "超过持仓",
+                    "仓位不足", "持仓不足", "可平仓位不足", "可用持仓不足",
+                    "平昨仓位不足", "平今仓位不足")
 
 
 def classify_ctp_reject(last_msg: str) -> str:
-    """把 CTP 的 `last_msg` 归到 `funds` / `not_tradable` / `price` 三类。
+    """把 CTP 的 `last_msg` 归到 `funds` / `not_tradable` / `position` / `price` 四类。
 
     判定顺序：数字码优先（权威），关键字兜底（"非交易时段"无稳定码）。
     认不出来一律归 `price` —— **宁可多追一次，不可漏掉一次真能成的离场**。
@@ -107,12 +122,18 @@ def classify_ctp_reject(last_msg: str) -> str:
     for tok in _CTP_CODE_FUNDS:
         if _code_hit(msg, tok):
             return REJECT_FUNDS
+    for tok in _CTP_CODE_POSITION:
+        if _code_hit(msg, tok):
+            return REJECT_POSITION
     for tok in _CTP_CODE_NOT_TRADABLE:
         if _code_hit(msg, tok):
             return REJECT_NOT_TRADABLE
     for kw in _CTP_KW_FUNDS:
         if kw in msg:
             return REJECT_FUNDS
+    for kw in _CTP_KW_POSITION:
+        if kw in msg:
+            return REJECT_POSITION
     for kw in _CTP_KW_NOT_TRADABLE:
         if kw in msg:
             return REJECT_NOT_TRADABLE

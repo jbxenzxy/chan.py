@@ -126,11 +126,20 @@ class FakeRawOrder:
 
 
 class FakePosition:
-    def __init__(self, long_=0, short=0):
-        self.pos_long_today = long_
-        self.pos_long_his = 0
-        self.pos_short_today = short
-        self.pos_short_his = 0
+    """满足 `_finalize` / `_wait_position_ok` 的最小持仓视图。
+
+    2026-09-13（D12/p38）：本文件用到持仓的用例**全是 CLOSE 侧**（拆锁 / 硬离场），
+    而 CLOSE 在本系统里恒作用于跨日仓（不变量 6）→ 这些仓位必须建模成**昨仓**
+    （`pos_*_his`）。改之前它们挂在 `pos_*_today` 上，等于在无意中测试"平今"，
+    既与不变量 6 矛盾，也让 `_wait_position_ok` 的昨仓判据永远覆盖不到。
+    总量（今+昨）保持不变，故只看总量的断言不受影响。
+    """
+
+    def __init__(self, long_=0, short=0, long_today=0, short_today=0):
+        self.pos_long_today = long_today
+        self.pos_long_his = long_
+        self.pos_short_today = short_today
+        self.pos_short_his = short
 
 
 class FakeApi:
@@ -479,7 +488,7 @@ class FakeInsertApi(FakeApi):
         self.fill = fill
         self.inserted = []
 
-    def get_position(self, sym):
+    def get_position(self, sym=None):
         # 不缓存：每次返回当前最新持仓（模拟 wait_update 推送后的视图）
         return FakePosition(self._long_pos, self._short_pos)
 

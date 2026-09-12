@@ -282,13 +282,17 @@ with tmp_dir("cooldown") as tmp:
     eng.on_bar(adverse(3000, D2))            # CLOSE#1 → 被拒 → 进入冷却
     check_true("[4a] 进入 CLOSE 冷却", eng._in_close_cooldown())
     n_rej = ev_count(eng, "order_rejected")
+    # 2026-09-13 修正：原写法是 `check(..., eng.broker.order_seq(), eng.broker.order_seq())`
+    # —— 同一次调用的返回值自己比自己，**恒通过**，根本护不住"冷却期内没发单"。
+    # 现在先取快照，再过 bar，再比。
+    seq_before = eng.broker.order_seq()
     eng.on_bar(adverse(4000, D2))            # 冷却期内 → 跳过报单
     check_true("[4b] ★ 冷却拦截写了 close_retry_skipped 事件",
                ev_count(eng, "close_retry_skipped") >= 1)
     check("[4c] 冷却拦截不算拒单（order_rejected 条数不变）",
           ev_count(eng, "order_rejected"), n_rej)
     check("[4d] 冷却期内未向柜台发单（报单序号未变）",
-          eng.broker.order_seq(), eng.broker.order_seq())
+          eng.broker.order_seq(), seq_before)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -325,6 +329,86 @@ with tmp_dir("apifields") as tmp:
     except Exception as e:                    # App 层不可导入时不算失败
         print("  ⚠ 跳过 [5]：App 层不可导入（{}: {}）".format(
             type(e).__name__, e))
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[6] 已删符号不得有任何「活引用」（AST 级，2026-09-13 新增）")
+# ════════════════════════════════════════════════════════════════
+# 背景：Phase 1 删掉 `OrderIntent.LOCK` / `UNLOCK` / `PositionOrigin` / `ExitMode`
+# 之后，`Trading/Test/smoke_simnow_phase_g.py` 里**仍留着 `OrderIntent.UNLOCK`
+# 的活引用**，直到 2026-09-13 才被发现（当时全套 39 项里唯一失败的就是它）。
+#
+# 为什么不能再用文本 grep（p32 [3c] 那种）：
+#   `PositionOrigin` / `lock_pair_id` / `UNLOCK` 这些词**必须**继续出现在注释、
+#   docstring 与护栏字符串里（p26 就是靠它们解释"这个概念已删"）。
+#   文本 grep 要么漏（不敢扫 Test 目录）、要么误伤（把注释全标红）。
+#   所以这里用 AST 只看**真会求值的节点**：
+#     · `X.LOCK` / `X.UNLOCK`，且 X 的写法以 `OrderIntent` 结尾；
+#     · 名为 `PositionOrigin` / `ExitMode` 的裸标识符；
+#   字符串常量、注释、docstring 一律不算（它们本就不参与求值）。
+import ast  # noqa: E402
+import io   # noqa: E402
+
+_DEAD_ATTRS = {"LOCK", "UNLOCK"}
+_DEAD_NAMES = {"PositionOrigin", "ExitMode"}
+# ⚠️ 不能把名为 "Test" 的目录跳过 —— 出问题的 smoke 脚本就在 Trading/Test/ 里。
+#    只跳真正的依赖/缓存/二进制目录。
+_SKIP_DIRS = {"__pycache__", ".git", ".venv", ".idea", "node_modules",
+              "Image", "Docs", "build", "dist"}
+_live_hits = []
+_scan_n = 0
+for _dp, _dns, _fns in os.walk(_ROOT):
+    _dns[:] = [d for d in _dns
+               if d not in _SKIP_DIRS and not d.startswith(".")]
+    for _fn in _fns:
+        if not _fn.endswith(".py"):
+            continue
+        _fp = os.path.join(_dp, _fn)
+        _rel = os.path.relpath(_fp, _ROOT).replace("\\", "/")
+        try:
+            _tree = ast.parse(io.open(_fp, encoding="utf-8",
+                                      errors="replace").read(), filename=_rel)
+        except SyntaxError:
+            continue
+        _scan_n += 1
+        for _node in ast.walk(_tree):
+            if isinstance(_node, ast.Attribute) and _node.attr in _DEAD_ATTRS:
+                _v = _node.value
+                _base = _v.id if isinstance(_v, ast.Name) else (
+                    _v.attr if isinstance(_v, ast.Attribute) else "")
+                if _base.endswith("OrderIntent"):
+                    _live_hits.append("{}:{} .{}".format(
+                        _rel, getattr(_node, "lineno", "?"), _node.attr))
+            elif isinstance(_node, ast.Name) and _node.id in _DEAD_NAMES:
+                _live_hits.append("{}:{} {}".format(
+                    _rel, getattr(_node, "lineno", "?"), _node.id))
+check_true("[6a] 扫描覆盖面够（扫到 ≥ 60 个 .py）", _scan_n >= 60, _scan_n)
+check("[6b] ★ 全仓无 OrderIntent.LOCK/UNLOCK、PositionOrigin、ExitMode 的活引用",
+      _live_hits, [])
+
+# 反向自检：护栏本身必须抓得住（构造一段该被拦下的代码，确认 AST 判据有判别力）
+# 期望命中 3 处：`OrderIntent.UNLOCK` / `PositionOrigin` / `ExitMode`
+# （`OrderIntent` 自身是 Name 但不在禁用清单里，不算命中）
+_probe = ast.parse("from x import OrderIntent\n"
+                   "OrderIntent.UNLOCK\n"
+                   "PositionOrigin\n"
+                   "ExitMode\n"
+                   "PositionOrigin = 1  # 赋值也算活引用\n")
+_hit2 = [n.attr for n in ast.walk(_probe)
+         if isinstance(n, ast.Attribute) and n.attr in _DEAD_ATTRS]
+_hit2 += [n.id for n in ast.walk(_probe)
+          if isinstance(n, ast.Name) and n.id in _DEAD_NAMES]
+check_true("[6c] 判据有判别力（样本代码被抓到 4 处）", len(_hit2) == 4, _hit2)
+# 注释/docstring 里的同名字符串**不得**被判为活引用（否则 p26 的解释性注释全要删）
+_quiet = ast.parse('"""PositionOrigin / ExitMode 已删除。"""\n'
+                   "_LEGACY = ('origin', 'lock_pair_id')\n"
+                   'w = "UNLOCK"\n')
+_hit3 = [n.attr for n in ast.walk(_quiet)
+         if isinstance(n, ast.Attribute) and n.attr in _DEAD_ATTRS]
+_hit3 += [n.id for n in ast.walk(_quiet)
+          if isinstance(n, ast.Name) and n.id in _DEAD_NAMES]
+check("[6d] 注释 / 字符串常量不误伤（避免 p26 的解释性注释被标红）",
+      _hit3, [])
 
 
 print("\n" + "=" * 60)

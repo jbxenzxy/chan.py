@@ -94,10 +94,16 @@ class MockQuote:
 
 
 class MockPos:
-    """满足 _wait_position_ok 的最小持仓视图（LONG 侧 2 手）。"""
+    """满足 _wait_position_ok 的最小持仓视图（LONG 侧 2 手）。
 
-    pos_long_today = 2
-    pos_long_his = 0
+    2026-09-13（D12/p38）：挂 **昨仓**（`pos_long_his`）而不是今仓 —— 本文件所有
+    CLOSE 用例都必须满足"CLOSE 只作用于跨日仓"（不变量 6），而 `_submit_close`
+    的下单前判据现在是"昨仓 ≥ volume"。原来写 `pos_long_today = 2` 的版本会在
+    新的昨仓判据下超时变成 rejected，掩盖 CLOSE 报文本身的行为。
+    """
+
+    pos_long_today = 0
+    pos_long_his = 2
     pos_short_today = 0
     pos_short_his = 0
 

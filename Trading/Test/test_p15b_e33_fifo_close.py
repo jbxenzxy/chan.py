@@ -74,7 +74,11 @@ def tmp_dir():
 
 
 from Trading import Broker  # noqa: E402  注册 dry_run
-from Trading.Broker.Base import OrderIntent  # noqa: E402
+from Trading.Broker.Base import (  # noqa: E402
+    REJECT_POSITION,
+    REJECT_PRICE,
+    OrderIntent,
+)
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
@@ -134,10 +138,15 @@ class RealPositionBroker(DryRunBroker):
 
 
 class RejectBroker(DryRunBroker):
-    """可指定拒单的单号集合（1-based）。"""
-    def __init__(self, spec, params=None, *, reject_calls=()):
+    """可指定拒单的单号集合（1-based）。
+
+    `reject_class` 写入 Order.meta，供引擎 `_note_close_rejected` 做类别分治
+    （2026-09-13 起：只有 `position` 类才允许清幻影仓）。默认空串 = 未分类。
+    """
+    def __init__(self, spec, params=None, *, reject_calls=(), reject_class=""):
         super().__init__(spec, params)
         self.reject_calls = set(reject_calls)
+        self.reject_class = reject_class
         self._calls = 0
 
     def submit(self, intent, side, volume, ref_price, signal_key="", note="",
@@ -155,6 +164,7 @@ class RejectBroker(DryRunBroker):
                 created_at="2026-09-01 09:30", broker=self.name, note=note,
                 meta={"intent": intent.value if hasattr(intent, "value") else str(intent),
                       "entry_date": entry_date,
+                      "reject_class": self.reject_class,
                       "reject_reason": "test_reject"})
             self.orders.append(o)
             return o
@@ -486,11 +496,23 @@ with tmp_dir() as td:
     check("[3.2b] 簿清空", eng.positions.is_empty(), True)
     check("[3.2c] 1 条 Trade", len(eng.store.trades()), 1)
 
-# 3.3 连续被拒到上限（close_max_streak，默认 20）→ position_drop（清掉该笔幻影仓）
+def _drive_close_rejects(eng, n):
+    """推进 bar 并反复触发 CLOSE（每轮都绕开冷却），最多 n 轮。"""
+    for _i in range(n):
+        eng.bars_seen += eng._close_retry_bars + 1     # 绕开冷却
+        _a = eng._decide_exit(eng.last_bar)
+        if _a is None:
+            break
+        eng._execute(_a, ref_price=4555.0, bar=eng.last_bar, reason="manual")
+
+
+# 3.3 连续被拒到上限（close_max_streak，默认 20）+ 类别=position → position_drop
+#     （只有"平仓量超过持仓量/平昨仓不足"这类拒单才能认定柜台没有该仓）
 with tmp_dir() as td:
     _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
     broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
-                          reject_calls=tuple(range(1, _streak + 1)))
+                          reject_calls=tuple(range(1, _streak + 5)),
+                          reject_class=REJECT_POSITION)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
                                     signal_key="P15B-3-3",
@@ -499,12 +521,7 @@ with tmp_dir() as td:
     eng.bars_seen = 100
     seed_run(eng, side=Side.LONG, anchor=4545.0)
     check("[3.3a-0] close_max_streak 阈值 = 20", _streak, 20)
-    for _i in range(_streak + 2):
-        eng.bars_seen += eng._close_retry_bars + 1     # 绕开冷却
-        _act = eng._decide_exit(eng.last_bar)
-        if _act is None:
-            break
-        eng._execute(_act, ref_price=4555.0, bar=eng.last_bar, reason="manual")
+    _drive_close_rejects(eng, _streak + 2)
     check("[3.3a] 连续被拒达上限 → 该仓从簿中清除（判定为柜台不存在）",
           len(eng.positions), 0)
     check_true("[3.3b] 写 position_drop 事件",
@@ -516,6 +533,40 @@ with tmp_dir() as td:
     check("[3.3e] 告警码 = close_repeatedly_rejected",
           (eng._alerts[-1].get("code") if eng._alerts else None),
           "close_repeatedly_rejected")
+
+# 3.4 反例（2026-09-13 补类别门槛）：连拒达上限但类别 = price（FOK 全撤/涨跌停）
+#     → **不得**清仓。仓是真的，只是价格报不进去；清掉就账实不符。
+#     引擎发 warn 级 `close_streak_not_phantom` + 事件 `close_streak_not_cleared`。
+with tmp_dir() as td:
+    _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
+    broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+                          reject_calls=tuple(range(1, _streak + 5)),
+                          reject_class=REJECT_PRICE)
+    eng = make_engine(td, broker=broker)
+    eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
+                                    signal_key="P15B-3-4",
+                                    entry_date="2026-08-28"))
+    eng.last_bar = make_bar(date="2026-09-01 09:40", close=4555.0)
+    eng.bars_seen = 100
+    seed_run(eng, side=Side.LONG, anchor=4545.0)
+    _drive_close_rejects(eng, _streak)
+    check("[3.4a] 非 position 类连拒达上限 → 簿**仍 1 笔**（不误删真仓）",
+          len(eng.positions), 1)
+    check_true("[3.4b] **不**写 position_drop 事件",
+               len(read_events(eng, kinds={"position_drop"})) == 0)
+    check_true("[3.4c] 写 close_streak_not_cleared 事件（留痕）",
+               len(read_events(eng, kinds={"close_streak_not_cleared"})) >= 1)
+    _ns = read_events(eng, kinds={"close_streak_not_cleared"})
+    check("[3.4d] 事件 reason = reject_class_not_position",
+          (_ns[-1].get("reason") if _ns else None),
+          "reject_class_not_position")
+    check("[3.4e] 告警码 = close_streak_not_phantom（warn 级，非 severe）",
+          (eng._alerts[-1].get("code") if eng._alerts else None),
+          "close_streak_not_phantom")
+    check("[3.4f] 告警级别 = warn",
+          (eng._alerts[-1].get("level") if eng._alerts else None), "warn")
+    check_true("[3.4g] 连拒计数已归零（不污染下次 position 类判定）",
+               eng._close_fail_streak == 0)
 
 
 # ════════════════════════════════════════════════════════════════

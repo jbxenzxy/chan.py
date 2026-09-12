@@ -4,9 +4,9 @@ Phase G SimNow 真连冒烟脚本（2026-09-05）
 ==========================================
 验证 Phase G 两条新链路在**真实 SimNow 环境**下不炸、行为符合预期：
 
-    ① simnow.trade_confirmed(UNLOCK, signal_key)
+    ① simnow.trade_confirmed(CLOSE, signal_key)
        —— 假 signal_key（无索引）必须安全返回 False；真 signal_key 需在
-          有真实 UNLOCK 报单后才能验证（本脚本默认只读，不做报单）。
+          有真实 CLOSE 报单后才能验证（本脚本默认只读，不做报单）。
     ② simnow.cancel_pending(signal_key)
        —— 假 signal_key 必须返回 0；真实在途单场景由引擎 G2 路径覆盖。
 
@@ -14,11 +14,17 @@ Phase G SimNow 真连冒烟脚本（2026-09-05）
 cancel_pending(假 key) → stats()。**不发任何委托**。
 
 用法（请在交易时段运行，SimNow 非交易时段可能连接失败/行情停推）：
-    cd Trading
-    python tests/smoke_simnow_phase_g.py
+    cd <repo root>
+    python Trading/Test/smoke_simnow_phase_g.py
 
 可选真单验证（自担风险，1 手开平一轮，验证 trade_confirmed 对真单的判定）：
-    python tests/smoke_simnow_phase_g.py --trade
+    python Trading/Test/smoke_simnow_phase_g.py --trade
+
+2026-09-13 修正：本脚本此前传 `OrderIntent.UNLOCK`，而该枚举值在 Phase 1
+    （类型层瘦身）已删除 → ③ 段必然抛 AttributeError（实测，基线 38/39 的
+    唯一失败项）。现改为 `OrderIntent.CLOSE`（CLOSE 是二值 intent 里唯一
+    走 `trade_confirmed` 离场复核的那个），并把用法里的 `tests/` 旧路径
+    改成 `Trading/Test/`。
 """
 from __future__ import annotations
 
@@ -88,7 +94,7 @@ def main() -> int:
           "" if ok_conn else "（连接失败：{}；注意 SimNow 非交易时段可能拒绝登录）"
           .format(getattr(b, "_conn_error", None)))
     if not ok_conn:
-        print("P17 冒烟：{} 通过 / {} 失败（连接失败，后续步骤跳过）".format(_PASS, _FAIL))
+        print("Phase G 冒烟：{} 通过 / {} 失败（连接失败，后续步骤跳过）".format(_PASS, _FAIL))
         return 1
 
     print("── ② real_position（Phase F2 对账数据源）──")
@@ -102,7 +108,7 @@ def main() -> int:
 
     print("── ③ G1 trade_confirmed（假 signal_key，无索引 → 必须安全 False）──")
     try:
-        v = b.trade_confirmed(OrderIntent.UNLOCK, "smoke-fake-key-不存在")
+        v = b.trade_confirmed(OrderIntent.CLOSE, "smoke-fake-key-不存在")
         check("trade_confirmed(假 key) == False", v is False,
               "got={!r}".format(v))
     except Exception as e:
@@ -169,7 +175,7 @@ def main() -> int:
         pass
 
     print("")
-    print("P17 冒烟：{} 通过 / {} 失败".format(_PASS, _FAIL))
+    print("Phase G 冒烟：{} 通过 / {} 失败".format(_PASS, _FAIL))
     return 1 if _FAIL else 0
 
 

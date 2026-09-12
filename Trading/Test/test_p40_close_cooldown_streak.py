@@ -9,18 +9,23 @@ CLOSE（转移 ⑤）被拒分两类处理：
   · 价格不可达（FOK 全撤 / 涨跌停）→ 继续追，但同一笔平仓刚被拒过就先别每根 bar
     都砸单 —— 进入 **CLOSE 冷却**（close_retry_bars 根），冷却期内 _execute 直接跳过
     ⑤ 报单（D19）。
-  · 连续被拒达上限（close_max_streak）→ 认定该仓在柜台不存在（幻影仓），从簿中清除
-    + 发 **severe 告警** `close_repeatedly_rejected`（D11 触发源 ③）。
+  · 连续被拒达上限（close_max_streak）→ **只有在「柜台无此仓」（reject_class=position）
+    这一类**下才认定幻影仓、从簿中清除 + 发 severe 告警 `close_repeatedly_rejected`
+    （D11 触发源 ③）。其它类别（funds / not_tradable / price）一律**不清簿面**
+    （2026-09-13 加的门槛，见 [3] 段反例）。
 
-本测试钉死 D19 的三条不变量：
+本测试钉死 D19 的四条不变量：
   [1] 首次 CLOSE 被拒 → 进入冷却（_in_close_cooldown()=True，status.close_cooldown
       可见），streak=1，仓仍在簿（不误清）；
-  [2] 冷却窗=1 时每根 bar 重新尝试；连拒达上限 → 清掉该仓、net 归 0、streak 归零；
+  [2] 冷却窗=1 时每根 bar 重新尝试；连拒达上限 + 类别=position → 清掉该仓、
+      net 归 0、streak 归零；
   [3] 清仓同时发 severe 告警 close_repeatedly_rejected，且 status.alerts 可见、
-       簿内无残留幻影仓。
+      簿内无残留幻影仓；
+  [4] **反例（2026-09-13）**：同样连拒达上限，但类别是 `price`（FOK 全撤）时
+      **不得**清仓 —— 那种拒单恰恰说明仓在柜台，清掉就账实不符。
 
 覆盖
-  [1]~[3] 如上（用「开仓成交 / 平仓拒单」broker 驱动，不依赖真实柜台）
+  [1]~[4] 如上（用「开仓成交 / 平仓拒单」broker 驱动，不依赖真实柜台）
 
 跑法：python Trading/Test/test_p40_close_cooldown_streak.py
 """
@@ -55,6 +60,7 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading import Broker  # noqa: E402,F401
+from Trading.Broker.Base import REJECT_POSITION, REJECT_PRICE  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
@@ -99,7 +105,16 @@ def tmp_dir(tag):
 
 
 class CloseRejectBroker(DryRunBroker):
-    """开仓（OPEN）正常成交；平仓（CLOSE）一律拒单（模拟盘口深度不足 FOK 全撤）。"""
+    """开仓（OPEN）正常成交；平仓（CLOSE）一律拒单。
+
+    `reject_class` 可配（2026-09-13）：
+      · `position`（默认）→ 模拟"柜台无此仓"，是清幻影仓兜底**唯一**认的类别；
+      · `price` → 模拟 FOK 全撤（盘口深度不足），用于 [4] 的反例。
+    """
+
+    def __init__(self, spec, opts, reject_class=REJECT_POSITION):
+        super().__init__(spec, opts)
+        self.reject_class = reject_class
 
     def submit(self, intent, side, volume, ref_price, signal_key="", note="",
                entry_date="", is_exit=False):
@@ -108,8 +123,9 @@ class CloseRejectBroker(DryRunBroker):
         if intent is OrderIntent.CLOSE:
             o.status = "rejected"
             o.filled_price = None
-            o.meta["reject_reason"] = "depth"
-            o.meta["reject_class"] = "price"
+            o.meta["reject_reason"] = (
+                "平仓量超过持仓量" if self.reject_class == REJECT_POSITION else "depth")
+            o.meta["reject_class"] = self.reject_class
         return o
 
 
@@ -172,6 +188,37 @@ with tmp_dir("cool") as tmp:
     codes = {a["code"] for a in st2["alerts"]}
     check_true("[2d] 清仓同时发 severe 告警 close_repeatedly_rejected",
                "close_repeatedly_rejected" in codes, codes)
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[3] 反例：连拒达上限但类别 ≠ position → **不得**清仓（2026-09-13 新增门槛）")
+# ════════════════════════════════════════════════════════════════
+# 背景（D10 §7.3）：`price`（FOK 全撤 / 涨跌停）恰恰说明**仓在柜台、只是没撮上**。
+# 旧实现不问原因、够次数就清 → 把引擎自己开出来的真仓从簿里删掉 = 账实不符（P0 形态）。
+with tmp_dir("novclear") as tmp:
+    spec = InstrumentSpec()
+    eng = TradingEngine(
+        make_cfg(), CloseRejectBroker(spec, {"sim_equity": 1_000_000.0},
+                                      reject_class=REJECT_PRICE),
+        DefaultEntryPolicy({}),
+        LayeredExitPolicy(make_cfg().exit_params.model_dump()),
+        Store(os.path.join(tmp, "state.db")),
+        EventLog(os.path.join(tmp, "events.jsonl"), echo=False,
+                 echo_kinds=None))
+    eng.on_bar(make_bar(1000, D1 + " 09:40", P0, P0 + 10, P0 - 10, P0))
+    eng.on_signal(make_sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
+    eng.on_bar(make_bar(3000, D2 + " 14:55", P_EXIT, P_EXIT + 10, 4000.0, P_EXIT))
+    eng.on_bar(make_bar(4000, D2 + " 14:56", P_EXIT, P_EXIT + 10, 4000.0, P_EXIT))
+    check("[3a] ★ 澄清仓门槛生效：净敞口仍在（真仓没被误清）",
+          eng.account_state(), AccountState.RUNNING)
+    check("[3b] 簿内仓单仍在", len(eng.positions.positions), 1)
+    check("[3c] streak 仍归零（不把历史计数带给下一笔）", eng._close_fail_streak, 0)
+    st3 = eng.auto_order_status()
+    codes3 = {a["code"] for a in st3["alerts"]}
+    check_true("[3d] ★ 改发 warn 级 close_streak_not_phantom（提示人工核对）",
+               "close_streak_not_phantom" in codes3, codes3)
+    check_true("[3e] ★ 不发 severe close_repeatedly_rejected",
+               "close_repeatedly_rejected" not in codes3, codes3)
 
 
 print("\n" + "=" * 60)
