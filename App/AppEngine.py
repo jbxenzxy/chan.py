@@ -808,7 +808,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                                        end_date=end_date,
                                        forward_adjust_done=forward_adjust_done,
                                        sub_records=(sub_records if (dual and sub_freq and dual_impl == "independent") else None),
-                                       start_time=start_time)
+                                       start_time=start_time,
+                                       include_extra=include_extra)
 
     # 双窗口模式：提取子级别数据
     # 独立双窗从下窗独立 CChan 提取；legacy 从联立 CChan 提取
@@ -882,7 +883,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
 # ============================================================
 def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_freq=None,
                               qualified_code="", end_date=None, forward_adjust_done=False,
-                              sub_records=None, start_time=None):
+                              sub_records=None, start_time=None, include_extra=True):
     """
     从 CChan 中提取主级别的 K线、笔、分型、中枢、线段、买卖点数据。
     返回与 czsc 版本兼容的 JSON 数据结构（不含 sub 字段）。
@@ -892,6 +893,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     start_time: 显式选点时间（B 操作重建传入）。meta.saved_selection_date
     回显规则：显式选点直接回显（双窗选点不落 CSV，仅会话内回显供前端
     全量显示）；否则单窗回显 CSV 保存的选点，双窗不读 CSV（不混用）。
+    include_extra: 是否获取展示性 meta（PE-TTM/归属/减持），由
+    _analyze_stock_internal 透传；扫描路径 False，置空缺省不取数。
     """
     t0 = time.time()
     kl_list = chan[_get_kl_type(freq)]
