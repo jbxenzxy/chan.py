@@ -7,13 +7,14 @@ eltdx 数据源适配器（通达信网络行情客户端封装）。
   2. PE-TTM（滚动市盈率）——0x06B9 统计文件（zhb.zip / tdxstat.cfg）；
   3. 流通市值——0x0010 财务批量（流通股本）× 0x054c 快照（最新价）。
 后两项与 DataAPI/TxAPI.py 的同名函数**契约一致**（PE 单位：倍；流通市值单位：
-亿元），由 DataAPI/MarketStatsAPI.py 按市场分流后互换使用。
+亿元）。「按市场 / 标的类型选源」是业务编排规则，收口在 App 层
+（App/AppRefresh.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
 
 职责：为使用方提供统一、标准化的 eltdx 取数入口。App 层不直接依赖本模块的
-统计取数（走 MarketStatsAPI 统一入口）；本模块是 TdxAPI 前复权流水线与
-MarketStatsAPI 共同依赖的下游数据源。
+统计取数；本模块是 TdxAPI 前复权流水线与 App 层 PE-TTM 取数共同依赖的
+下游数据源。
 
-依赖方向：TdxAPI / MarketStatsAPI → 本模块（单向）。本模块不反向 import
+依赖方向：TdxAPI / App 层 → 本模块（单向）。本模块不反向 import
 二者，避免 import 环。
 
 数据源：
@@ -231,12 +232,279 @@ def _get_xdxr_eltdx(market, code):
 # 返回值需能被 _normalize_xdxr_df 标准化；**不要**恢复静默 continue 式降级。
 
 
+# ── 全 A 股除权除息：进程级一次性预取 + 落盘镜像 ──────────────────
+# 为什么需要：逐只调 capital_changes 时，每打开一只新股票都要走一次网络；
+# 而 eltdx 的 capital_changes 接受**代码序列**并内部分批（默认 75/批），
+# 一次把全 A 股拉完，成本远低于逐只。故做成进程级全量缓存：
+#   · FastAPI 进程内首次用到除权除息时，批量拉全 A 股 → 内存 + 落盘
+#     stock_xdxr.json；进程不重启则后续一律命中内存，不再调 eltdx；
+#   · eltdx 整体失败 → 退回读落盘镜像；镜像也没有 → log.error 显著报错
+#     （不抛异常：本函数是前复权流水线的必经路径，抛异常会让 K 线接口整体
+#     500；这里与 PE-TTM 同款取舍——报 error 而不是静默返回空表）。
+#
+# 落盘路径与代码全集由 App 层注入（DataAPI 不得 import App，phase5 守卫 ④a）：
+# 用 set_xdxr_store() 注入读写实现，用 set_xdxr_universe_provider() 注入
+# 「全部 A 股代码」的获取实现。未注入时自动退化为改造前的「按需逐只取数」，
+# 行为与改造前完全一致（不影响任何既有调用方）。
+_xdxr_store = {"load": None, "save": None}
+_xdxr_universe_provider = None
+_XDXR_PRIMED = False
+_XDXR_PRIME_LOCK = threading.Lock()
+_XDXR_PRIME_LAST_FAIL = 0.0
+XDXR_PRIME_RETRY_TTL = 60        # 全量预取失败后的退避秒数
+XDXR_PRIME_TIME_BUDGET = 90.0    # 全量预取的总时间预算（秒），超时退化为逐只
+XDXR_BATCH = 75                  # capital_changes 内部批大小（与 eltdx 默认值一致）
+
+
+def set_xdxr_store(load_fn=None, save_fn=None):
+    """注入除权除息落盘镜像的读写实现（依赖倒置，路径由 App 层决定）。
+
+    load_fn() -> {market: {code: [record, ...]}} 或 {f"{mkt}{code}": [record...]}
+    save_fn(dict) -> None
+    未注入则不做落盘（等价于改造前行为）。
+    """
+    if load_fn is not None:
+        _xdxr_store["load"] = load_fn
+    if save_fn is not None:
+        _xdxr_store["save"] = save_fn
+
+
+def set_xdxr_universe_provider(fn):
+    """注入「全部 A 股代码」获取实现：fn() -> [(market, code), ...]。
+
+    未注入时不做全量预取，退化为按需逐只取数（改造前行为）。
+    """
+    global _xdxr_universe_provider
+    _xdxr_universe_provider = fn
+
+
+def _df_to_records(df):
+    """DataFrame → 可 JSON 序列化的记录列表。"""
+    if df is None or len(df) == 0:
+        return []
+    out = []
+    for _, r in df.iterrows():
+        d = r.get("date")
+        try:
+            d = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)
+        except Exception:
+            d = str(d)
+        out.append({
+            "date": d,
+            "category": int(r.get("category", 1) or 1),
+            "fenhong": float(r.get("fenhong", 0) or 0),
+            "peigu": float(r.get("peigu", 0) or 0),
+            "peigujia": float(r.get("peigujia", 0) or 0),
+            "songgu": float(r.get("songgu", 0) or 0),
+            "zhuanzeng": float(r.get("zhuanzeng", 0) or 0),
+        })
+    return out
+
+
+def _records_to_df(records, code):
+    """记录列表 → 标准化 DataFrame（None/空 → None）。"""
+    if not records:
+        return None
+    df = pd.DataFrame(records)
+    df["code"] = code
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    return _normalize_xdxr_df(df)
+
+
+def _fetch_xdxr_bulk(pairs):
+    """批量拉除权除息，返回 {(market, code): DataFrame}。
+
+    capital_changes 接受代码序列并内部分批；批次内失败时逐只重试隔离坏代码，
+    避免一颗「毒丸」拖掉整批。
+    """
+    client = _ensure_eltdx_client()
+    if client is None:
+        raise RuntimeError(
+            "[eltdx 不可用] 除权除息取数需要 eltdx，请安装/升级："
+            "pip install -U 'eltdx>=3.0.0'")
+    _check_eltdx_api_compat(client)
+
+    out = {}
+    deadline = time.time() + XDXR_PRIME_TIME_BUDGET
+    full_codes = [f"{m.lower()}{c}" for m, c in pairs]
+    for start in range(0, len(full_codes), XDXR_BATCH):
+        if time.time() > deadline:
+            log.warning("[xdxr] 全量预取超出时间预算 %.0fs，已取 %d/%d 只，"
+                        "剩余退化为按需逐只", XDXR_PRIME_TIME_BUDGET,
+                        len(out), len(full_codes))
+            break
+        chunk = full_codes[start:start + XDXR_BATCH]
+        try:
+            with client:
+                block = client.corporate.capital_changes(chunk)
+            _collect_capital_changes(block, chunk, out)
+        except Exception as e:
+            log.warning("[xdxr] 批次 %d-%d 取数失败，逐只隔离重试：%s: %s",
+                        start, start + len(chunk), type(e).__name__, e)
+            for one in chunk:
+                try:
+                    with client:
+                        blk = client.corporate.capital_changes(one)
+                    _collect_capital_changes(blk, [one], out)
+                except Exception:
+                    continue
+    return out
+
+
+def _collect_capital_changes(block, full_codes, out):
+    """把 capital_changes 返回块解析进 out（仅保留标签 1 = 除权除息）。"""
+    recs = list(getattr(block, "records", ()) or ())
+    if not recs:
+        return
+    # 按代码分组：批量返回里 code 字段形如 "sh600519" 或 "600519"
+    grouped = {}
+    for r in recs:
+        if int(getattr(r, "category_raw", 0)) != 1:
+            continue
+        raw = str(getattr(r, "code", "") or "")
+        key = None
+        for fc in full_codes:
+            if raw == fc or raw.endswith(fc[2:]) or fc.endswith(raw):
+                key = fc
+                break
+        if key is None:
+            key = full_codes[0] if len(full_codes) == 1 else raw
+        grouped.setdefault(key, []).append(r)
+    for full_code, rows in grouped.items():
+        mkt, code = full_code[:2], full_code[2:]
+        data = []
+        for r in rows:
+            d = getattr(r, "date", None)
+            if d is not None and not isinstance(d, datetime):
+                d = datetime(d.year, d.month, d.day)
+            data.append({
+                "code": code,
+                "date": d,
+                "category": int(getattr(r, "category_raw", 1)),
+                "fenhong": float(getattr(r, "c1_value", 0) or 0),
+                "peigujia": float(getattr(r, "c2_value", 0) or 0),
+                "songzhuangu": float(getattr(r, "c3_value", 0) or 0),
+                "peigu": float(getattr(r, "c4_value", 0) or 0),
+            })
+        if data:
+            df = pd.DataFrame(data, columns=["code", "date", "category",
+                                             "fenhong", "peigujia",
+                                             "songzhuangu", "peigu"])
+            out[(mkt, code)] = _normalize_xdxr_df(df)
+
+
+def _prime_xdxr_all():
+    """构建全 A 股除权除息进程缓存（在 _XDXR_PRIME_LOCK 内调用）。"""
+    global _XDXR_PRIMED, _XDXR_PRIME_LAST_FAIL
+    pairs = []
+    try:
+        pairs = list(_xdxr_universe_provider() or ())
+    except Exception as e:
+        log.error("[xdxr] 获取全 A 股代码列表失败，退化为按需逐只: %s: %s",
+                  type(e).__name__, e)
+        _XDXR_PRIMED = True
+        return
+
+    # ① eltdx 全量
+    got = {}
+    try:
+        got = _fetch_xdxr_bulk(pairs)
+    except Exception as e:
+        log.error("[xdxr] eltdx 全量除权除息取数失败: %s: %s", type(e).__name__, e)
+
+    if got:
+        with _xdxr_lock:
+            for k, v in got.items():
+                _xdxr_cache.setdefault(k, v)
+        _save_xdxr_snapshot()
+        _XDXR_PRIMED = True
+        log.info("[xdxr] 全量预取完成：%d 只股票有除权除息记录（共 %d 只）",
+                 len(got), len(pairs))
+        return
+
+    # ② 落盘镜像
+    if _load_xdxr_snapshot():
+        _XDXR_PRIMED = True
+        log.warning("[xdxr] eltdx 不可用，本次使用本地镜像 %s（数据可能陈旧）",
+                    "stock_xdxr.json")
+        return
+
+    # ③ 都没有：显著报错
+    _XDXR_PRIME_LAST_FAIL = time.time()
+    _XDXR_PRIMED = True
+    log.error("[xdxr] 无法获取除权除息：eltdx 全量取数失败，且本地镜像不存在/不可用 "
+              "→ 本次前复权将缺少除权除息（价格可能不正确）。请检查 eltdx/网络，"
+              "或先在能联网时打开过一次股票以生成镜像。")
+
+
+def _load_xdxr_snapshot():
+    """从落盘镜像填充内存缓存，返回是否成功。"""
+    fn = _xdxr_store.get("load")
+    if fn is None:
+        return False
+    try:
+        data = fn()
+    except Exception as e:
+        log.warning("[xdxr] 本地镜像读取失败: %s: %s", type(e).__name__, e)
+        return False
+    if not isinstance(data, dict) or not data:
+        return False
+    n = 0
+    with _xdxr_lock:
+        for key, records in data.items():
+            if not isinstance(key, str) or len(key) <= 2:
+                continue
+            mkt, code = key[:2], key[2:]
+            df = _records_to_df(records, code)
+            if df is not None and len(df) > 0:
+                _xdxr_cache.setdefault((mkt, code), df)
+                n += 1
+    log.info("[xdxr] 本地镜像载入 %d 只", n)
+    return n > 0
+
+
+def _save_xdxr_snapshot():
+    """把内存中的除权除息落盘（增量覆盖）。"""
+    fn = _xdxr_store.get("save")
+    if fn is None:
+        return
+    try:
+        with _xdxr_lock:
+            snap = {f"{m}{c}": _df_to_records(df)
+                    for (m, c), df in _xdxr_cache.items() if df is not None}
+        fn(snap)
+        log.info("[xdxr] 落盘 %d 只到 stock_xdxr.json", len(snap))
+    except Exception as e:
+        log.warning("[xdxr] 落盘失败: %s: %s", type(e).__name__, e)
+
+
+def _ensure_xdxr_primed():
+    """进程内首次用到除权除息时触发一次全量预取（single-flight）。"""
+    global _XDXR_PRIMED
+    if _XDXR_PRIMED or _xdxr_universe_provider is None:
+        _XDXR_PRIMED = True          # 未注入代码源：保持改造前的逐只行为
+        return
+    if (_XDXR_PRIME_LAST_FAIL
+            and time.time() - _XDXR_PRIME_LAST_FAIL < XDXR_PRIME_RETRY_TTL):
+        return
+    if not _XDXR_PRIME_LOCK.acquire(blocking=False):
+        return                        # 已有线程在预取：本次直接用当前缓存
+    try:
+        if not _XDXR_PRIMED:
+            _prime_xdxr_all()
+    finally:
+        _XDXR_PRIME_LOCK.release()
+
+
 def get_xdxr_data(market, code):
     """
     获取指定股票的除权除息数据。
     线程安全：多线程并发时，网络请求串行化，避免 socket 竞争。
 
     优先级：
+      0. 全 A 股进程级缓存（FastAPI 进程内首次调用时一次性批量预取，
+         见 _ensure_xdxr_primed；进程不重启则后续全部命中内存）
       1. 缓存（内存命中，跳过网络请求）
       2. eltdx（唯一数据源，基于 7709 协议、0x000f 命令；失败即报错而非静默降级）
 
@@ -247,6 +515,8 @@ def get_xdxr_data(market, code):
     """
     if market.lower() not in ('sh', 'sz'):
         return None
+
+    _ensure_xdxr_primed()
 
     cache_key = (market, code)
     with _xdxr_lock:
@@ -321,10 +591,15 @@ def download_block_file_via_eltdx(file_name, hosts=None):
         return None
 
 
-def download_block_files_via_eltdx(file_names, hosts=None):
+def download_block_files_via_eltdx(file_names, hosts=None, on_file=None):
     """批量下载板块文件，返回 {file_name: bytes}（失败/不可用的不计入）。
 
     单次连接内顺序下载，避免每文件重建连接；任一文件失败不影响其余。
+
+    on_file: 可选回调 on_file(file_name, ok, nbytes)，每下完一个文件调用一次。
+    刷新链路用它把「正在下载第 i/N 个文件」实时报到前端 —— 批量下载本身耗时
+    可观（见 TdxAPI.refresh_block_files），没有逐文件回调时 UI 的 step 文字会
+    在整个下载期间静止不动，用户只会感觉到"卡住了"。
     """
     result = {}
     try:
@@ -335,6 +610,7 @@ def download_block_files_via_eltdx(file_names, hosts=None):
         client = TdxClient(timeout=10, probe_hosts=False, hosts=hosts)
         with client:
             for file_name in file_names:
+                data = None
                 try:
                     data = client.resources.download_file(
                         file_name, max_bytes=_MAX_BLOCK_FILE_BYTES, chunk_size=0x4000
@@ -343,6 +619,11 @@ def download_block_files_via_eltdx(file_names, hosts=None):
                     data = None
                 if data:
                     result[file_name] = data
+                if on_file is not None:
+                    try:
+                        on_file(file_name, bool(data), len(data) if data else 0)
+                    except Exception:
+                        pass
     except Exception:
         pass
     return result
@@ -352,11 +633,11 @@ def download_block_files_via_eltdx(file_names, hosts=None):
 # 行情统计：PE-TTM / 流通市值（仅 A 股；eltdx 无港股通道）
 # ============================================================
 # 两个函数与 DataAPI/TxAPI.py 的同名函数**契约完全一致**，使
-# DataAPI/MarketStatsAPI.py 能按市场分流后互换调用：
+# App 层（AppRefresh._fetch_pe_ttm_live）能按标的类型选源后互换调用：
 #   - fetch_pe_ttm(mkt_codes)    → {mkt+code: PE-TTM(倍)}
 #   - fetch_float_mc(stock_list) → {code: 流通市值(亿元)}
 #
-# 分流规则（唯一一份）在 MarketStatsAPI：A 股 → 本模块；港股 → TxAPI。
+# 选源规则（唯一一份）在 App/AppRefresh.py：A 股个股 → 本模块；指数 / 港股 → TxAPI。
 # 港股不在本模块服务范围：eltdx 的 codes.all("hk") / 0x054c 对 hk 均不可用。
 ELTDX_MARKETS = ("sh", "sz", "bj")
 
@@ -426,7 +707,7 @@ def fetch_pe_ttm(mkt_codes):
     """eltdx 批量获取 **A 股** PE-TTM（滚动市盈率），返回 {mkt+code: float}。
 
     mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj}；其余市场（如 hk）
-               直接忽略——返回结果不含这些键，分流见 MarketStatsAPI。
+               直接忽略——返回结果不含这些键，选源见 App/AppRefresh.py。
     数据源：0x06B9 服务器文件读取 → zhb.zip 内 tdxstat.cfg（**盘后**统计
             快照），**单次请求即覆盖全市场**，无需按票分批。
     取值：pe_ttm 为 None（无值）或 0 的代码跳过；**负值保留**（亏损股口径）。
@@ -463,6 +744,43 @@ def fetch_pe_ttm(mkt_codes):
         if pe_val is None or pe_val == 0:
             continue
         result[mkt + code] = float(pe_val)
+    return result
+
+
+def fetch_pe_ttm_all():
+    """eltdx 一次性获取**全 A 股** PE-TTM，返回 {mkt+code: float}（不按 pair 过滤）。
+
+    与 fetch_pe_ttm 的关系：二者共用同一个数据源（0x06B9 → zhb.zip 内
+    tdxstat.cfg，单次请求覆盖全市场），fetch_pe_ttm 只是本函数的「按指定
+    pair 过滤」视图。取 1 只与取全市场网络成本相同，故「打开 K 线页面取
+    PE」这类场景应使用本函数一次拉全表、在进程内缓存，而不是逐只调用
+    fetch_pe_ttm（否则每打开一只股票都重下一次全表）。
+
+    返回不含 PE 为 None / 0 的代码；**负值保留**（亏损股口径）。
+    """
+    client = _ensure_eltdx_client()
+    if client is None:
+        raise RuntimeError(
+            "[eltdx 不可用] PE-TTM 取数需要 eltdx，请安装/升级："
+            "pip install -U 'eltdx>=3.0.0'"
+        )
+    with client:
+        stats = client.resources.read_stats()
+    log.info("[eltdx 统计] PE-TTM 统计日期=%s，全表 %d 行",
+             getattr(stats, "stats_date", None), getattr(stats, "stat_count", 0))
+
+    index = {}
+    for (market_id, code), row in stats.stat.items():
+        mkt = _MARKET_ID_TO_MKT.get(market_id)
+        if mkt:
+            index[(mkt, str(code).zfill(6))] = row
+
+    result = {}
+    for (mkt, code6), row in index.items():
+        pe_val = getattr(row, "pe_ttm", None) if row is not None else None
+        if pe_val is None or pe_val == 0:
+            continue
+        result[mkt + code6] = float(pe_val)
     return result
 
 

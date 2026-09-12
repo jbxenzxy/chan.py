@@ -1256,18 +1256,35 @@ def refresh_block_files(progress_callback=None):
 
     os.makedirs(block_cache_dir, exist_ok=True)
 
+    # 顺序即优先级：重要的、确定能下到的排前面；spblock.dat 实测常取不到
+    # （服务端不经文件下载通道服务），放最后，避免它拖在前面影响其余文件的
+    # 进度反馈。
     block_files = [
         "tdxhy.cfg",
         "infoharbor_block.dat",
-        "spblock.dat",
         "block_zs.dat",
         "block_gn.dat",
         "block_fg.dat",
+        "spblock.dat",
     ]
 
     hosts = [f"{h}:{p}" for h, p in TDX_BLOCK_SERVERS]
+
+    # 逐文件进度回传：批量下载是全流程里最慢的一段，不回传的话前端 step 文字
+    # 会一直停在「刷新成分股...」，表现为"进度卡住/变慢"。
+    _total = len(block_files)
+    _done = {"n": 0}
+
+    def _on_file(file_name, ok, nbytes):
+        _done["n"] += 1
+        _desc = _BLOCK_FILE_DISPLAY.get(file_name)
+        _suffix = f"（{_desc}）" if _desc else ""
+        if progress_callback:
+            progress_callback(f"下载成分股 {_done['n']}/{_total}: {file_name}{_suffix}")
+
     try:
-        downloaded = download_block_files_via_eltdx(block_files, hosts=hosts)
+        downloaded = download_block_files_via_eltdx(block_files, hosts=hosts,
+                                                    on_file=_on_file)
     except Exception as e:
         log.warning(f"[板块刷新] eltdx 下载异常，保留旧文件: {e}")
         downloaded = {}

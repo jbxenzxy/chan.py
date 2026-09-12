@@ -33,9 +33,9 @@
      装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
      AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
      CTqSdkAPI 主体经 AppEngine 显式名）、
-     AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属 + MarketStatsAPI PE-TTM
-      + TxAPI 港股名称 + SinaAPI A股名称）、
-     AppScan（TdxAPI.get_index_stocks + MarketStatsAPI 流通市值）、App/utils（仅 TqSdkAPI 纯函数依赖）
+     AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属
+      + ElTdxAPI A股PE-TTM + TxAPI 港股名称/指数·港股PE-TTM + SinaAPI A股名称）、
+     AppScan（TdxAPI.get_index_stocks + ElTdxAPI 流通市值）、App/utils（仅 TqSdkAPI 纯函数依赖）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -682,9 +682,11 @@ def test_datasource_import_gate(failures):
     # ── 装配点白名单：逐文件精确断言允许的 DataAPI 子模块 ──
     # AppEngine：TdxAPI 装配 + tqsdk 可用性探测
     #            + ThsCloudZxgAPI 同花顺云端自选股（扫描「保存到自选」装配点）
+    #            + ElTdxAPI 除权除息「进程级全量缓存 + 落盘镜像」的装配注入
+    #              （注入的是 App 侧的读写实现，DataAPI 侧不反向依赖 App）
     engine_mods = set(_datasource_imports(os.path.join("App", "AppEngine.py")))
     engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI",
-                    "DataAPI.ThsCloudZxgAPI"}
+                    "DataAPI.ThsCloudZxgAPI", "DataAPI.ElTdxAPI"}
     extra = engine_mods - engine_allow
     if extra:
         bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
@@ -695,16 +697,19 @@ def test_datasource_import_gate(failures):
     if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
         bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
     # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ collect_codes_from_vipdoc（vipdoc 代码收集）
-    #           + AkshareAPI 指数归属 + MarketStatsAPI PE-TTM（A股 eltdx / 港股腾讯分流）
-    #           + TxAPI 港股名称 + SinaAPI A股名称
+    #           + AkshareAPI 指数归属 + TxAPI 港股名称/指数·港股 PE-TTM + SinaAPI A股名称
+    #           + ElTdxAPI A股个股 PE-TTM 全量（进程级缓存）
+    #   注：PE-TTM 的「按市场/标的类型选源」是业务编排规则，收口在 App 层
+    #   （AppRefresh._fetch_pe_ttm_live），不再经 DataAPI 分流壳 —— DataAPI
+    #   各模块须一一对应真实数据源（见 Docs/data_source_inventory.md）。
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
-    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.MarketStatsAPI",
+    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.ElTdxAPI",
                         "DataAPI.TxAPI", "DataAPI.SinaAPI"}:
-        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/MarketStatsAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
-    # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ MarketStatsAPI 流通市值（A股 eltdx）
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/ElTdxAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
+    # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ ElTdxAPI 流通市值（A股）
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
-    if scan_mods != {"DataAPI.TdxAPI", "DataAPI.MarketStatsAPI"}:
-        bad.append(f"App/AppScan.py 的 DataAPI import 应仅为 TdxAPI/MarketStatsAPI，实测: {sorted(scan_mods)}")
+    if scan_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
+        bad.append(f"App/AppScan.py 的 DataAPI import 应仅为 TdxAPI/ElTdxAPI，实测: {sorted(scan_mods)}")
     # App/utils：仅 TqSdkAPI（引擎纯函数的 FREQ_SEC_MAP/期货代码解析依赖）
     utils_mods = set(_datasource_imports(os.path.join("App", "utils.py")))
     if utils_mods != {"DataAPI.TqSdkAPI"}:

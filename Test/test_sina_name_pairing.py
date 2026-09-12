@@ -171,13 +171,48 @@ def test_batching_keeps_correct_order():
         f"批数={len(urls)} 命中={len(got)}/60 首批结尾={urls[0][-24:] if urls else ''!r}")
 
 
+def test_sh_sz_same_bare_code_not_lost():
+    """⑥ 沪深同号（sh000001 上证指数 / sz000001 平安银行）必须两条都拿到名字。
+
+    回归背景：AppRefresh._fetch_names_from_sina_once 里的 compound_key_map 曾
+    用**裸代码**当键（`compound_key_map[bare_code] = compound_key`），沪深同号
+    时后遍历到的一只（sz）会覆盖前一只（sh）的映射 → 上证指数拿不到名字 →
+    被刷新步骤5 的「无名称」过滤删除 → 搜索框输入 000001 只剩平安银行一条。
+    该缺陷在「新浪拼参修正（本文件 ①~⑤）」之前被掩盖：那时新浪整批返回空，
+    两只都没名字，症状不同但同样是坏的。
+    """
+    from App import AppRefresh as R
+
+    def fake_fetch_a_names(mkt_code_pairs, batch_size=50, timeout=15, interval=0.3):
+        return {m + c: f"名称{m}{c}" for c, m in mkt_code_pairs}
+
+    orig = R.fetch_a_names
+    R.fetch_a_names = fake_fetch_a_names
+    try:
+        codes = {
+            "sh000001": {"name": "", "market": "sh"},
+            "sz000001": {"name": "", "market": "sz"},
+            "sh600519": {"name": "", "market": "sh"},
+        }
+        R._fetch_names_from_sina_once(codes)
+        lost = sorted(k for k, v in codes.items() if not v.get("name"))
+        ok = (not lost
+              and codes["sh000001"]["name"] == "名称sh000001"
+              and codes["sz000001"]["name"] == "名称sz000001")
+        rec("⑥", "沪深同号两只都拿到名称（000001 不丢上证指数）", ok,
+            f"结果={ {k: v['name'] for k, v in codes.items()} }；无名称={lost or '无'}")
+    finally:
+        R.fetch_a_names = orig
+
+
 def main():
     print("=" * 64)
     print("A 股名称补全「拼参顺序」护栏（2026-09-12 回归）")
     print("=" * 64)
     for fn in (test_url_order_is_market_first, test_reversed_input_normalized,
                test_result_key_is_market_plus_code, test_invalid_codes_yield_warning,
-               test_batching_keeps_correct_order):
+               test_batching_keeps_correct_order,
+               test_sh_sz_same_bare_code_not_lost):
         try:
             fn()
         except Exception as e:                              # noqa: BLE001

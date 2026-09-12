@@ -29,7 +29,8 @@ _REPO_ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _REPO_ROOT)
 
 from App.AppData import app_data                            # noqa: E402
-from DataAPI import ElTdxAPI, MarketStatsAPI, TxAPI         # noqa: E402
+from App.AppRefresh import _fetch_pe_ttm_live               # noqa: E402
+from DataAPI import ElTdxAPI, TxAPI                         # noqa: E402
 
 results = []
 
@@ -218,30 +219,44 @@ def test_legacy_migration():
 
 
 def test_source_routing():
-    """⑧ 分流单一源：A 股→eltdx、港股→腾讯（打桩验证，不联网）"""
+    """⑧ 分流单一源：A股个股→eltdx；指数 / 港股→腾讯（打桩验证，不联网）
+
+    回归要点（2026-09 修复）：旧实现按「市场」分流，把 sh000001 上证指数也
+    判给了 eltdx，而 eltdx 的统计文件只含 A 股个股 → 指数永远取不到 PE，
+    表现为「输入指数不显示 PE-TTM」。现改为按**标的类型**分流（is_index）。
+    """
     seen = {}
 
-    def fake_eltdx(pairs):
-        seen["eltdx"] = list(pairs)
-        return {m + c: 10.0 for m, c in pairs}
+    def fake_eltdx_all():
+        seen["eltdx_all"] = True
+        return {"sh600519": 10.0}
 
     def fake_tx(pairs):
-        seen["tx"] = list(pairs)
+        seen.setdefault("tx", []).extend(list(pairs))
         return {m + c: 11.0 for m, c in pairs}
 
-    _e, _t = ElTdxAPI.fetch_pe_ttm, TxAPI.fetch_pe_ttm
-    ElTdxAPI.fetch_pe_ttm, TxAPI.fetch_pe_ttm = fake_eltdx, fake_tx
+    import App.AppRefresh as R
+    # 注意：AppRefresh 是 `from DataAPI.TxAPI import fetch_pe_ttm as _tx_fetch_pe_ttm`
+    # 的直接名绑定，打桩必须打在 **AppRefresh 侧的名字** 上；只改 TxAPI.fetch_pe_ttm
+    # 不生效 —— 那样用例会真的联网请求腾讯（既非"不联网"，结果也不稳定）。
+    _e, _t = R._eltdx_fetch_pe_ttm_all, R._tx_fetch_pe_ttm
+    R._eltdx_fetch_pe_ttm_all, R._tx_fetch_pe_ttm = fake_eltdx_all, fake_tx
     try:
-        r_a = MarketStatsAPI.fetch_pe_ttm_live("sh", "600519")
-        r_hk = MarketStatsAPI.fetch_pe_ttm_live("hk", "00700")
-        ok = (seen.get("eltdx") == [("sh", "600519")]
-              and seen.get("tx") == [("hk", "00700")]
-              and r_a == {"sh600519": 10.0} and r_hk == {"hk00700": 11.0})
-        rec("⑧", "分流：A股→eltdx / 港股→腾讯", ok,
-            f"eltdx 收到={seen.get('eltdx')}；腾讯收到={seen.get('tx')}；"
-            f"返回={r_a}/{r_hk}")
+        # 强制重建一次进程级全量缓存（用例间 _PE_TTM_PRIMED 可能已为真）
+        R._PE_TTM_PRIMED = False
+        R._PE_TTM_LAST_FAIL = 0.0
+        r_a = R._fetch_pe_ttm_live("sh", "600519")      # A股个股 → eltdx
+        r_idx = R._fetch_pe_ttm_live("sh", "000001")    # 上证指数 → 腾讯
+        r_hk = R._fetch_pe_ttm_live("hk", "00700")      # 港股 → 腾讯
+        ok = (seen.get("eltdx_all") is True
+              and seen.get("tx") == [("sh", "000001"), ("hk", "00700")]
+              and r_a == {"sh600519": 10.0}
+              and r_idx == {"sh000001": 11.0} and r_hk == {"hk00700": 11.0})
+        rec("⑧", "分流：A股个股→eltdx / 指数·港股→腾讯", ok,
+            f"eltdx 全量被调用={seen.get('eltdx_all')}；腾讯收到={seen.get('tx')}；"
+            f"返回={r_a}/{r_idx}/{r_hk}")
     finally:
-        ElTdxAPI.fetch_pe_ttm, TxAPI.fetch_pe_ttm = _e, _t
+        R._eltdx_fetch_pe_ttm_all, R._tx_fetch_pe_ttm = _e, _t
 
 
 def main():

@@ -17,29 +17,182 @@ App/AppRefresh.py —— 刷新功能域
 
 依赖方向：AppRefresh.py → AppConfig / AppData / DataAPI（单向）
 """
+import json
 import os
 import threading
+import time
 import traceback
 
 from App.AppConfig import app_config
 from App.AppData import app_data
 from App.AppLog import get_logger
+from App.utils import is_index
 from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
 from DataAPI.AkshareAPI import AKSHARE_EXCHANGE_MAP, AKSHARE_INDEX_MAP, fetch_index_cons
-from DataAPI.MarketStatsAPI import fetch_pe_ttm_live
-from DataAPI.TxAPI import fetch_hk_names
+from DataAPI.ElTdxAPI import fetch_pe_ttm_all as _eltdx_fetch_pe_ttm_all
+from DataAPI.TxAPI import fetch_pe_ttm as _tx_fetch_pe_ttm, fetch_hk_names
 from DataAPI.SinaAPI import fetch_a_names
 
 log = get_logger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════
-# PE-TTM 实时层取数实现注入（依赖倒置）
+# PE-TTM 取数（A 股个股 → eltdx 全量进程缓存；指数 / 港股 → 腾讯）
 # ═══════════════════════════════════════════════════════════════════════
-# AppData 不得 import DataAPI（phase5 守卫 ④b：防影子双源），故取数实现由本
-# 模块在导入时注入。AppData.get_pe_ttm 在 K 线页面每次打开标的时经此回调实时
-# 取一次 PE；按市场分流规则（A股→eltdx / 港股→腾讯）唯一收口在 MarketStatsAPI。
+# 「按市场 / 按标的类型选数据源」是**业务编排规则**，不是某个数据源的能力，
+# 故收口在本模块（App 层），不另立 DataAPI 门面模块 —— 与本模块既有写法一致
+# （_fetch_names_from_sina_once 里 A 股走新浪、港股走腾讯，同样是 App 层选源）。
+#
+# 为什么指数不能走 eltdx：eltdx 的 0x06B9 统计文件 tdxstat.cfg 只覆盖 A 股
+# 个股，指数不在其中，取回来必然是空表（表现为「输入指数不显示 PE-TTM」）。
+# 指数与港股沿用腾讯 qt.gtimg.cn 字段 [39]（改造前就是这个方案，实测可用）。
+#
+# A 股个股：eltdx 的 read_stats() 是**单次请求覆盖全市场**，取 1 只与取 5000
+# 只耗时相同（约 1.3s）。故做成「进程级全量缓存」：FastAPI 进程内首次取数时
+# 拉全 A 股 → 内存 + 落盘 stock_pettm.json；只要进程不重启，后续任何股票都
+# 直接读内存，不再调 eltdx（本软件无实时行情，无需盘中获取最新 PE）。
+# eltdx 失败 → 退回落盘的 stock_pettm.json；落盘也没有 → 报错（抛异常，由
+# AppData 以 log.error 显著上报），不静默返回空表。
+_PE_TTM_ALL = {}                 # {mkt+code: float} 进程级全量 PE-TTM
+_PE_TTM_PRIMED = False           # 全量缓存是否已就绪（成功=True；彻底失败=False 并允许重试）
+_PE_TTM_PRIMED_AT = 0.0          # 就绪时刻
+_PE_TTM_LOCK = threading.Lock()  # 守卫全量缓存的构建（单飞）
+_PE_TTM_RETRY_TTL = 60           # 全量拉取失败后的退避秒数（抑制每次开股票都重试 1.3s 网络）
+_PE_TTM_LAST_FAIL = 0.0
+# 指数 / 港股走腾讯，属「打开即取」，不做进程级缓存（腾讯是单只批量接口，
+# 一次请求只查一只，成本与全量缓存策略无关）。
+
+
+def _eltdx_markets():
+    """eltdx 统计口径覆盖的市场（A 股）。"""
+    return ("sh", "sz", "bj")
+
+
+def _load_pe_ttm_snapshot():
+    """读落盘的 stock_pettm.json，返回 {mkt+code: float}；无文件 / 损坏返回 {}。"""
+    path = app_data.stock_pettm_file
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return {}
+        out = {}
+        for k, v in data.items():
+            if isinstance(v, (int, float)) and v != 0:
+                out[k] = float(v)
+        log.info(f"[PE-TTM] 已加载本地镜像 {len(out)} 条: {path}")
+        return out
+    except Exception as e:
+        log.warning(f"[PE-TTM] 本地镜像读取失败({path}): {e}")
+        return {}
+
+
+def _save_pe_ttm_snapshot(mapping):
+    """把全量 PE-TTM 落盘到 stock_pettm.json（原子写）。失败只告警，不影响内存态。"""
+    path = app_data.stock_pettm_file
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(mapping, f, ensure_ascii=False)
+        os.replace(tmp, path)
+        log.info(f"[PE-TTM] 全量 {len(mapping)} 条已落盘: {path}")
+        return True
+    except Exception as e:
+        log.warning(f"[PE-TTM] 落盘失败({path}): {e}")
+        return False
+
+
+def _prime_pe_ttm_all():
+    """构建全 A 股 PE-TTM 进程缓存（single-flight 内调用）。
+
+    优先级：① eltdx 全量拉取（成功即落盘）；② 落盘镜像 stock_pettm.json；
+    ③ 两者都没有 → 抛 RuntimeError（不静默降级为空表）。
+    """
+    global _PE_TTM_ALL, _PE_TTM_PRIMED, _PE_TTM_PRIMED_AT, _PE_TTM_LAST_FAIL
+
+    # ① eltdx 全量：read_stats() 单次请求即覆盖全市场（约 1.3s），
+    #    与逐只取数成本相同，故一次拉全表。
+    result = None
+    try:
+        result = _eltdx_fetch_pe_ttm_all()
+    except Exception as e:
+        log.error(f"[PE-TTM] eltdx 全量取数失败: {type(e).__name__}: {e}")
+        result = None
+
+    if result:
+        _PE_TTM_ALL = result
+        _PE_TTM_PRIMED = True
+        _PE_TTM_PRIMED_AT = time.time()
+        _save_pe_ttm_snapshot(result)
+        return
+
+    # ② 落盘镜像
+    snap = _load_pe_ttm_snapshot()
+    if snap:
+        _PE_TTM_ALL = snap
+        _PE_TTM_PRIMED = True
+        _PE_TTM_PRIMED_AT = time.time()
+        log.warning("[PE-TTM] eltdx 不可用，本次使用本地镜像（数据可能陈旧）")
+        return
+
+    # ③ 都无法获得
+    _PE_TTM_LAST_FAIL = time.time()
+    _PE_TTM_PRIMED = False
+    raise RuntimeError(
+        "[PE-TTM] 无法获取全 A 股 PE-TTM：eltdx 取数失败，且本地镜像 "
+        f"{app_data.stock_pettm_file} 不存在或不可用（请检查 eltdx/网络，或先在能联网时"
+        "打开过一次股票以生成镜像）")
+
+
+def _fetch_pe_ttm_live(market, code):
+    """PE-TTM 取数单一入口（注入 AppData，供 K 线页面打开标的时调用）。
+
+    分流（唯一实现，替代原先的 DataAPI/MarketStatsAPI.py）：
+      · A 股**指数**（sh000001 上证指数 / sh000300 沪深300 / sz399001 等）
+        → 腾讯（eltdx 统计文件不含指数，走 eltdx 必然取空）
+      · 港股 → 腾讯
+      · A 股个股（sh/sz/bj）→ eltdx 全量进程缓存
+    返回 {mkt+code: float}；该票确实无 PE 时返回 {}。
+    数据源整体不可用时**抛异常**（交由 AppData 记 error），不静默返回 {} ——
+    否则「取数失败」与「该票无 PE」不可区分。
+    """
+    market = (market or "").lower()
+    if market not in _eltdx_markets() or is_index(market, code):
+        # 指数 / 港股：腾讯单只实时（改造前方案）
+        return _tx_fetch_pe_ttm([(market, code)])
+
+    return _pe_ttm_from_all_cache(market, code)
+
+
+def _pe_ttm_from_all_cache(market, code):
+    """从 A 股全量进程缓存取一只；未就绪则先构建（single-flight + 失败退避）。"""
+    global _PE_TTM_PRIMED, _PE_TTM_LAST_FAIL
+    if _PE_TTM_PRIMED:
+        v = _PE_TTM_ALL.get(market + code)
+        return {market + code: v} if v is not None else {}
+
+    # 退避窗口内不再重试，避免"每次开股票都等一次 1.3s 网络超时"
+    if _PE_TTM_LAST_FAIL and time.time() - _PE_TTM_LAST_FAIL < _PE_TTM_RETRY_TTL:
+        raise RuntimeError("[PE-TTM] 全量缓存暂不可用（上次取数失败，退避中）")
+
+    if not _PE_TTM_LOCK.acquire(blocking=False):
+        # 已有线程在构建全量缓存：本次直接返回当前表（可能暂无该票）
+        v = _PE_TTM_ALL.get(market + code)
+        return {market + code: v} if v is not None else {}
+    try:
+        if not _PE_TTM_PRIMED:
+            _prime_pe_ttm_all()
+    finally:
+        _PE_TTM_LOCK.release()
+    v = _PE_TTM_ALL.get(market + code)
+    return {market + code: v} if v is not None else {}
+
+
+# 注入取数实现（依赖倒置：AppData 不得 import DataAPI，phase5 守卫 ④b）。
 # 导入本模块即成注入——真实运行链 FrontAPI → AppOrch → AppRefresh 必然经过。
-app_data.set_pe_ttm_live_fetcher(fetch_pe_ttm_live)
+app_data.set_pe_ttm_live_fetcher(_fetch_pe_ttm_live)
 
 
 # 股票名称缓存别名 = app_data 实例字段（共享同一对象）
@@ -150,7 +303,13 @@ def _fetch_names_from_sina_once(codes_dict):
     # 按市场分组：A股和港股必须分开请求
     a_stock_codes = []
     hk_codes = []
-    compound_key_map = {}  # sh000001 -> 000001
+    # ★ 键必须是 (market, bare_code) 复合键 —— 不能只用 bare_code。
+    # 沪深存在大量同号代码（sh000001 上证指数 vs sz000001 平安银行、
+    # sh000002 vs sz000002 …）：若按 bare_code 建索引，后遍历到的一只会把前
+    # 一只覆盖掉，于是两只里必然有一只拿不到名字 → 被步骤5 的「无名称」过滤
+    # 删除 → 搜索联想里 000001 只剩一条（实测丢的正是上证指数：vipdoc 先扫
+    # sh 再扫 sz，sz 后写入覆盖了映射）。
+    compound_key_map = {}   # (market, bare_code) -> compound_key
     for compound_key in codes_missing:
         market = codes_dict[compound_key].get("market", "")
         # 从复合键提取纯代码：去掉前缀 sh/sz/hk
@@ -158,7 +317,7 @@ def _fetch_names_from_sina_once(codes_dict):
             bare_code = compound_key[len(market):]
         else:
             bare_code = compound_key
-        compound_key_map[bare_code] = compound_key
+        compound_key_map[(market, bare_code)] = compound_key
         if market == "hk":
             hk_codes.append(bare_code)
         else:
@@ -172,7 +331,7 @@ def _fetch_names_from_sina_once(codes_dict):
         for bare_code, _market in a_stock_codes:
             name = name_map.get(_market + bare_code)
             if name:
-                compound_key = compound_key_map.get(bare_code)
+                compound_key = compound_key_map.get((_market, bare_code))
                 if compound_key in codes_dict:
                     codes_dict[compound_key]["name"] = name
                     filled += 1
@@ -183,7 +342,7 @@ def _fetch_names_from_sina_once(codes_dict):
         for bare_code in hk_codes:
             name = name_map.get("hk" + bare_code)
             if name:
-                compound_key = compound_key_map.get(bare_code)
+                compound_key = compound_key_map.get(("hk", bare_code))
                 if compound_key in codes_dict:
                     codes_dict[compound_key]["name"] = name
                     filled += 1

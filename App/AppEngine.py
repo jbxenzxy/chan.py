@@ -134,6 +134,62 @@ except Exception as _exc_tdxhy:      # noqa: BLE001 —— 板块数据缺失不
         "[行业映射] 启动注入失败（『板块指数2/3』将不可用，其余功能不受影响）："
         f"{_exc_tdxhy}")
 
+# ═══════════════════════════════════════════════════════════════════════
+# 除权除息「进程级全量缓存 + 落盘镜像」的注入（依赖倒置）
+# ═══════════════════════════════════════════════════════════════════════
+# ElTdxAPI 属 DataAPI 层，不得 import App（phase5 守卫 ④a），故落盘路径与
+# 「全 A 股代码列表」由本层注入。注入后：进程内首次用到除权除息时，eltdx 会
+# 一次批量拉全 A 股，之后一律命中内存；eltdx 不可用时退回 stock_xdxr.json。
+# 未注入 / 注入失败 → ElTdxAPI 自动退化为「按需逐只取数」（与改造前一致）。
+try:
+    import json as _json
+
+    from DataAPI.ElTdxAPI import (set_xdxr_store as _set_xdxr_store,
+                                  set_xdxr_universe_provider as _set_xdxr_universe)
+
+    def _xdxr_snapshot_load():
+        path = app_data.stock_xdxr_file
+        if not os.path.exists(path):
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        return data if isinstance(data, dict) else {}
+
+    def _xdxr_snapshot_save(mapping):
+        path = app_data.stock_xdxr_file
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            _json.dump(mapping, f, ensure_ascii=False)
+        os.replace(tmp, path)
+
+    def _xdxr_universe():
+        """全 A 股代码（sh/sz）——来自股票名缓存，缺缓存时退回 vipdoc 扫描。"""
+        pairs = []
+        for key, info in app_data.names_snapshot().items():
+            if not isinstance(info, dict):
+                continue
+            mkt = info.get("market", "")
+            if mkt not in ("sh", "sz"):
+                continue
+            code = key[len(mkt):] if key.startswith(mkt) else key
+            if code.isdigit() and len(code) == 6:
+                pairs.append((mkt, code))
+        if not pairs:
+            from DataAPI.TdxAPI import collect_codes_from_vipdoc
+            for key, info in collect_codes_from_vipdoc(
+                    app_config.vipdoc_dir).items():
+                mkt = info.get("market", "")
+                code = key[len(mkt):] if mkt and key.startswith(mkt) else key
+                if mkt in ("sh", "sz") and code.isdigit() and len(code) == 6:
+                    pairs.append((mkt, code))
+        return pairs
+
+    _set_xdxr_store(load_fn=_xdxr_snapshot_load, save_fn=_xdxr_snapshot_save)
+    _set_xdxr_universe(_xdxr_universe)
+except Exception as _exc_xdxr:       # noqa: BLE001 —— 注入失败退化为逐只取数
+    log.warning("[除权除息] 落盘镜像注入失败，将按需逐只取数: %s", _exc_xdxr)
+
 # 全量数据模式：True=加载全部K线不做时间截断；False=默认模式
 # 读取配置中心 AppConfig（单一事实源 app_config.full_data_mode）。
 FULL_DATA_MODE = app_config.full_data_mode

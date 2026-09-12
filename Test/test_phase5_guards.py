@@ -181,7 +181,6 @@ def test_metadata_interface(failures):
 DATA_API_MODULES = ["DataAPI/CommonStockAPI.py", "DataAPI/TdxAPI.py",
                     "DataAPI/TqSdkAPI.py", "DataAPI/ElTdxAPI.py",
                     "DataAPI/AkshareAPI.py", "DataAPI/TxAPI.py",
-                    "DataAPI/MarketStatsAPI.py",
                     "DataAPI/SinaAPI.py"]
 FORBIDDEN_UPPER = ("App", "AppEngine", "FrontAPI", "api_server")
 

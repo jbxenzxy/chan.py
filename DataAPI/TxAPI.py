@@ -4,7 +4,7 @@ DataAPI/TxAPI.py —— 腾讯财经（股票行情）数据源适配器
 =========================================================================
 收口「腾讯股票行情接口」（qt.gtimg.cn/q=）的全部数据获取与字段解析：
   - PE-TTM（滚动市盈率，字段 [39]）——**现仅服务港股**：A 股 PE-TTM 已统一
-    由 DataAPI/ElTdxAPI.py 提供，按市场分流见 DataAPI/MarketStatsAPI.py
+    由 DataAPI/ElTdxAPI.py 提供；按标的类型选源见 App/AppRefresh.py
   - 港股股票名称（字段 [1]，新浪港股接口已失效故改用腾讯）
 
 调用方（AppRefresh）只做「拼参 → 调 TxAPI → 缓存 / 落盘」，
@@ -61,7 +61,7 @@ def fetch_pe_ttm(mkt_codes, batch_size=_BATCH, timeout=10):
 
     mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj, hk}。改造后 A 股（sh/sz/bj）
     已由 ElTdxAPI 提供，本函数实际只服务**港股**；保留其它市场分支是为了保持
-    「数据源函数不预设调用方集合」的边界（分流规则在 MarketStatsAPI）。
+    「数据源函数不预设调用方集合」的边界（选源规则在 App/AppRefresh.py）。
     返回 {mkt+code: float PE-TTM}；网络 / 解析失败自动跳过该条，空数据返回 {}。
     不带内置超时策略之外的逻辑：调用方自行决定是否再包一层线程池限时。
     """

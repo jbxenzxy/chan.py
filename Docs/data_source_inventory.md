@@ -5,7 +5,9 @@
 > 所有行号对应该 commit（行号口径 = `content.count("\n")`，等价 `wc -l`）；函数名后括注定义行，便于定位。
 >
 > **本版相对上一版（`fde4a1dab9d0`，2026-09-11）刷新了以下内容**：
-> ① **PE-TTM / 流通市值从腾讯行情迁到 eltdx**，并新增 `DataAPI/MarketStatsAPI.py` 作「按市场分流」的单一源（见第一节）；
+> ① **PE-TTM / 流通市值从腾讯行情迁到 eltdx**；「按市场 / 标的类型选源」这一业务
+   编排规则收口在 App 层 `App/AppRefresh.py::_fetch_pe_ttm_live`（2026-09-12 评审后从
+   `DataAPI/MarketStatsAPI.py` 移出，该文件已删除——DataAPI 层各模块应一一对应真实数据源）；
 > ② **PE-TTM 再进一步：由「点刷新落盘缓存」改为「打开 K 线页面时实时取数」**（见第一节）。
 >    理由：PE 每日随行情变动，而落盘缓存只在点刷新时更新——实际使用中不会每天点刷新，页面读到的是陈旧 PE。
 >    随之 `stock_pettm_index.json` 只保留指数归属并**改名 `stock_index_belong.json`**（旧文件自动迁移、保留不删），
@@ -38,8 +40,8 @@
 | 信息 | 收口模块 | 取数函数 | 底层真实数据源 | 消费方 |
 | --- | --- | --- | --- | --- |
 | 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` (`:234`) | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** | `TdxAPI` 前复权流水线（`TdxAPI.py:672` 导入） |
-| PE-TTM（A股） | `DataAPI/MarketStatsAPI.py` | `fetch_pe_ttm_live(market, code)` (`:78`) → `ElTdxAPI.fetch_pe_ttm` (`:425`) | **eltdx**：`0x06B9` 服务器文件读取 → `zhb.zip` 内 `tdxstat.cfg` 第 3 列（滚动市盈率）· **单请求覆盖全市场**（故取单只与取全市场耗时相同，实测 1.2~1.4s） | **K 线页面按需实时取数**：`AppEngine.py:1241`（meta）← `AppData.get_pe_ttm`（`AppData.py:1230`）← `_ensure_pe_ttm_live`（`:1246`）；取数实现由 `AppRefresh.py:42` 注入 |
-| PE-TTM（港股） | `DataAPI/MarketStatsAPI.py` | `fetch_pe_ttm_live(market, code)` (`:78`) → `TxAPI.fetch_pe_ttm` (`:59`) | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[39]`（实测为 **TTM / 滚动**口径，非旧注释写的"动态"） | 同上（分流规则与 A 股同一处，不另立副本） |
+| PE-TTM（A股个股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `_eltdx_fetch_pe_ttm_all` → `ElTdxAPI.fetch_pe_ttm_all` | **eltdx**：`0x06B9` 服务器文件读取 → `zhb.zip` 内 `tdxstat.cfg` 第 3 列（滚动市盈率）· **单请求覆盖全市场**（取单只与取全市场耗时相同，实测 1.2~1.4s）→ 故做成**进程级全量缓存**：进程内首次取数拉全 A 股并落盘 `App/stock_pettm.json`，之后一律命中内存 | `AppRefresh` 注入 `AppData`（PE 实时层） |
+| PE-TTM（指数 / 港股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `TxAPI.fetch_pe_ttm` | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[39]`（实测为 **TTM / 滚动**口径）。**指数必须走腾讯**：eltdx 统计文件只含 A 股个股，指数走 eltdx 必然取空（2026-09 修复「输入指数不显示 PE-TTM」） | 同上 |
 | PE-TTM（批量入口） | `DataAPI/MarketStatsAPI.py` | `fetch_pe_ttm(mkt_codes)` (`:51`) | 按市场分流后合并两个源（A股 eltdx / 港股腾讯） | **当前无内部调用者**——刷新按钮已不再刷 PE。保留为批量取数公开入口 |
 | 流通市值（A股） | `DataAPI/MarketStatsAPI.py` | `fetch_float_mc(stock_list)` (`:97`) → `ElTdxAPI.fetch_float_mc` (`:469`) | **eltdx**：`0x0010` 流通股本 × `0x054c` 最新价，单位由「元」换算为「亿元」 | `AppScan.py:589` 扫描前置取数 → `AppScan.py:317` 阈值判定 |
 | 股票名字（A股） | `DataAPI/SinaAPI.py` | `fetch_a_names(mkt_code_pairs)` (`:39`) | **新浪财经** `http://hq.sinajs.cn/list=`（`SinaAPI.py:18`），字段 `[0]`（GBK） | `AppRefresh.py:171`（第一轮） |
@@ -59,7 +61,7 @@
 * **名称表落盘前有质量门槛**：新表条目数不足旧表 `_REFRESH_NAMES_MIN_KEEP_RATIO`（`AppRefresh.py:64`，0.5）
   时视为补全链路异常，**保留旧表、不覆盖内存、不落盘**（`AppRefresh.py:488`）——
   防「一次坏刷新把完好名称表永久换成残表」。
-* **PE-TTM 与流通市值自 2026-09-12 起由 `DataAPI/MarketStatsAPI.py` 收口，它只做一件事——按市场分流**：
+* **PE-TTM 与流通市值自 2026-09-12 起由 App 层 `App/AppRefresh.py` 收口选源**：
   A 股（`sh`/`sz`/`bj`）→ eltdx，港股（`hk`）→ 腾讯。分流规则**全项目只有这一份**（实现为 `_split_by_source` `:39`，两个公开取数函数共用），
   调用方（`AppRefresh.py:29` / `AppScan.py:41`）只 import 该模块，不再直接 import `ElTdxAPI` / `TxAPI` 取这两个口径
   （`Test/test_phase4_guards.py` ⑩ 已把装配点白名单固化）。
@@ -202,7 +204,7 @@ chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化
 | `TqSdkCSSESource.py` | 360 | 天勤 tqsdk（SSE 流） | SSE 流数据源抽象：`connect` / `get_kline_serial` / `wait_update` / `close_all` | `AppSSE:49`、`FrontAPI` re-export、`TqSdkAPI:263` |
 | `ElTdxAPI.py` | **519** | eltdx（通达信网络行情，7709） | 四条链路：除权除息（`0x000f`）、板块文件下载（`0x06B9`）、PE-TTM（`resources.read_stats` → `zhb.zip` 内 `tdxstat.cfg`）、流通市值（`0x0010` 流通股本 × `0x054c` 最新价） | `TdxAPI:672`（XDXR + 板块下载）、`MarketStatsAPI`（PE / 市值） |
 | `AkshareAPI.py` | 213 | AKShare | 指数成分股 `fetch_index_cons`、指数归属映射常量、`CAkshare` K 线适配 | `AppRefresh:28`、`TdxAPI:674`、`Chan.py:189` |
-| `MarketStatsAPI.py` | **107** | —（**分流壳，不直连数据源**） | PE-TTM / 流通市值**按市场分流的单一源**（`_split_by_source` `:39`）：A 股 → `ElTdxAPI`，港股 → `TxAPI`；三个取数函数契约与底层同名函数一致，可互换。`fetch_pe_ttm_live`（`:78`）为 K 线页面实时入口 | `AppRefresh:29`（注入 → `AppData:1220`）、`AppScan:41` |
+| ~~`MarketStatsAPI.py`~~ | — | —（**已删除**） | 原「按市场分流的壳」（项目文档自述『分流壳，不直连数据源』）。2026-09-12 评审：DataAPI 层各模块应一一对应真实数据源，选源属**业务编排**且 App 层本就有先例（`_fetch_names_from_sina_once` 里 A股→新浪、港股→腾讯），故分流逻辑上移到 `App/AppRefresh.py`，本文件删除 | — |
 | `TxAPI.py` | **132** | 腾讯财经 `qt.gtimg.cn` | **仅剩港股 PE-TTM（字段 `[39]`）+ 港股名称（字段 `[1]`）**；A 股 PE 与流通市值已迁出，`fetch_float_mc` 已下线 | `AppRefresh:30`（港股名）、`MarketStatsAPI`（港股 PE） |
 | `SinaAPI.py` | **100** | 新浪财经 `hq.sinajs.cn` | A股名称（`_normalize_sina_pair` `:24` 归一入参顺序；整批无有效返回时 WARNING `:97`） | `AppRefresh:31` |
 | `ThsCloudZxgAPI.py` | 436 | 同花顺云端 Web API `t.10jqka.com.cn` | 云端自选股增删 / 批量替换（`save_scan_to_ths_cloud`） | `AppScan:422`、`AppEngine:172`、`Script/ths_sync_to_tdx.py` |

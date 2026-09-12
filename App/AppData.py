@@ -610,6 +610,16 @@ class AppData:
         return app_config.legacy_stock_pe_ttm_file
 
     @property
+    def stock_pettm_file(self):
+        """A 股 PE-TTM 全量落盘镜像（见 AppConfig.stock_pettm_file）。"""
+        return app_config.stock_pettm_file
+
+    @property
+    def stock_xdxr_file(self):
+        """全 A 股除权除息落盘镜像（见 AppConfig.stock_xdxr_file）。"""
+        return app_config.stock_xdxr_file
+
+    @property
     def float_mc_cache_file(self):
         return app_config.float_mc_cache_file
 
@@ -1218,12 +1228,17 @@ class AppData:
     # PE-TTM 实时层（K 线页面「打开这个标的就取一次」）
     # ════════════════════════════════════════════════════════════════
     def set_pe_ttm_live_fetcher(self, fetcher):
-        """注入 PE-TTM 实时取数实现（依赖倒置）。
+        """注入 PE-TTM 取数实现（依赖倒置）。
 
-        由 App/AppRefresh.py 在模块导入时注入，实现为
-        DataAPI.MarketStatsAPI.fetch_pe_ttm_live(market, code)。
+        由 App/AppRefresh.py 在模块导入时注入，实现为 AppRefresh 的
+        `_fetch_pe_ttm_live(market, code)`（A 股个股走 eltdx 全量进程缓存、
+        指数 / 港股走腾讯；分流的单一实现在该函数内）。
         本类**不得**直接 import DataAPI（phase5 守卫 ④b：防影子双源），
-        故取数实现只能由上层注入；未注入时实时层静默降级为空表。
+        故取数实现只能由上层注入；未注入时实时层降级为空表。
+
+        注入的实现**自带进程级全量缓存**：FastAPI 进程内首次取数时才联网拉
+        一次全 A 股，之后命中内存（约 0 网络开销），因此这里可以每次调用都
+        走一遍而不用担心打开每只股票都打一次网络。
         """
         self._pe_live_fetcher = fetcher
 
@@ -1232,10 +1247,12 @@ class AppData:
 
         两级来源：
           ① `_pe_loaded` 为真（PE 表已由外部提供——落盘缓存或快照用例注入）
-             → 纯点查，不联网；
-          ② 常态 → **每次调用实时取一次**（K 线页面「打开即最新」），取到即
-             写入 _pe 供同批并发读者复用；取数失败保留旧值并返回 None
-             （页面不显示 PE），**不向上抛异常**。
+             → 纯点查，不取数；
+          ② 常态 → 每次调用经注入的取数实现取一次（该实现内部按进程缓存，
+             非每次联网），取到即写入 _pe 供同批并发读者复用；**取数失败与
+             「该票确实无 PE」必须可区分**，故失败以 log.error 显著上报并
+             返回 None（页面不显示 PE），**不向上抛异常**（K 线接口不应因
+             一个元数据取数失败而整体 500）。
         """
         key = market + code
         if self._pe_loaded:
@@ -1244,17 +1261,22 @@ class AppData:
         return self._pe.get(key)
 
     def _ensure_pe_ttm_live(self, market, code):
-        """实时取一只 PE-TTM 并写入 _pe（single-flight 门，失败静默降级）。
+        """取一只 PE-TTM 并写入 _pe（single-flight 门）。
 
-        为什么每次调用都取：PE-TTM 随行情每日变动，而落盘缓存只在点刷新时
-        更新（实际使用中不会每天点）→ 页面读到的是陈旧值。本软件不提供实时
-        行情（K 线读本地 vipdoc），故「打开这个标的就取一次」已满足新鲜度
-        要求；eltdx 统计文件是整体下载，取单只与取全市场耗时相同（约 1.3s）。
+        为什么每次调用都过一遍取数实现：PE-TTM 随行情每日变动，而落盘缓存
+        只在点刷新时更新（实际使用中不会每天点）→ 页面读到的是陈旧值。注入的
+        取数实现内部持有**进程级全量缓存**，故这里的"每次"不是"每次联网"：
+        进程内首次取数触发一次 eltdx 全 A 股拉取（约 1.3s），之后纯内存命中。
+
+        失败语义（与「该票无 PE」必须可区分）：
+          · 取数实现抛异常 = **数据源不可用**（eltdx 连不上、且落盘镜像也没有）
+            → log.error 显著上报（原为 log.info，与"正常无 PE"混在一起排障
+            时看不出问题），保留旧值、不抛出。
+          · 返回空 dict = 该票确实无 PE（次新股等），属正常，不记 error。
 
         并发语义：多标签页 / 多请求并发打开时，只有抢到 _pe_live_lock 的线程
-        真去联网，其余线程**立即返回当前表**（可能暂无该票 → 页面不显示 PE），
-        不排队等待——避免一个卡住的网络请求把整批请求一起拖住。真正并发很
-        罕见，抢不到锁的请求下一次打开即可拿到值。
+        真去取数，其余线程**立即返回当前表**（可能暂无该票 → 页面不显示 PE），
+        不排队等待——避免一个卡住的网络请求把整批请求一起拖住。
         """
         fetcher = self._pe_live_fetcher
         if fetcher is None:
@@ -1265,10 +1287,10 @@ class AppData:
             try:
                 result = fetcher(market, code)
             except Exception as e:              # noqa: BLE001
-                # 网络 / 协议异常一律降级：保留旧值。不抛出——K 线接口不应因
-                # 一个元数据取数失败而整体 500。
-                log.info(f"[PE-TTM] 实时取数失败({market}{code})，沿用旧值: "
-                         f"{type(e).__name__}: {e}")
+                # 数据源不可用：显著上报。不抛出——K 线接口不应因一个元数据
+                # 取数失败而整体 500，但必须留下 error 级痕迹。
+                log.error(f"[PE-TTM] 取数失败({market}{code})，沿用旧值: "
+                          f"{type(e).__name__}: {e}")
                 return
             if result:
                 self.update_pe_ttm(result)

@@ -37,8 +37,8 @@ from App.AppConfig import app_config
 # 板块成分读取（扫描来源 page_index）
 from DataAPI.TdxAPI import get_index_stocks
 
-# 流通市值批量获取（A 股走 eltdx），按市场分流的单一源见 MarketStatsAPI
-from DataAPI.MarketStatsAPI import fetch_float_mc
+# 流通市值批量获取（A 股走 eltdx；该口径本就只覆盖 A 股，无需按市场分流）
+from DataAPI.ElTdxAPI import fetch_float_mc
 
 from App.AppLog import get_logger
 log = get_logger(__name__)
@@ -328,7 +328,7 @@ def _quick_prefilter_pass(market, code):
 
 
 def _fetch_float_mc_all(stock_list):
-    """批量获取 A 股流通市值（经 MarketStatsAPI 统一取数，A 股走 eltdx）。
+    """批量获取 A 股流通市值（A 股走 eltdx；该口径只覆盖 A 股，无需选源）。
 
     stock_list: [{"code": "600519", "prefix": "1"}, ...]
     返回: {code: float_mc(亿元)}；取数异常**向上抛**——调用方（扫描前置
