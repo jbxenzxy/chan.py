@@ -93,10 +93,20 @@ def _save_pe_ttm_snapshot(mapping):
     path = app_data.stock_pettm_file
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(mapping, f, ensure_ascii=False)
-        os.replace(tmp, path)
+        # tmp 名含 pid+线程：批量扫描用 ProcessPool，spawn 出的 worker 各自会走到
+        # 本函数（各自拉 PE 全量并落盘）。共用固定 tmp 名会互相截断，且 Windows 上
+        # os.replace 撞到其它进程持有的句柄会报 WinError 32（实测 2026-09-12）。
+        tmp = "%s.%d.%d.tmp" % (path, os.getpid(), threading.get_ident())
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(mapping, f, ensure_ascii=False)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
         log.info(f"[PE-TTM] 全量 {len(mapping)} 条已落盘: {path}")
         return True
     except Exception as e:

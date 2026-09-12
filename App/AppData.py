@@ -615,11 +615,6 @@ class AppData:
         return app_config.stock_pettm_file
 
     @property
-    def stock_xdxr_file(self):
-        """全 A 股除权除息落盘镜像（见 AppConfig.stock_xdxr_file）。"""
-        return app_config.stock_xdxr_file
-
-    @property
     def float_mc_cache_file(self):
         return app_config.float_mc_cache_file
 

@@ -314,20 +314,9 @@ class _AppConfigBase:
         FastAPI 进程启动后首次取 PE 时用 eltdx 拉全 A 股一次性写入；只要进程
         不重启，后续一律读内存，不再调 eltdx。本文件只作「eltdx 不可用时的
         兜底快照」，因此它是**最后一次成功全量拉取的结果**，可能陈旧——这是
-        刻意取舍：本软件不提供实时行情，除权数据与 PE 都无需盘中精度。
+        刻意取舍：本软件不提供实时行情，PE 无需盘中精度。
         """
         return os.path.join(self.app_data_dir, "stock_pettm.json")
-
-    @property
-    def stock_xdxr_file(self) -> str:
-        """全 A 股除权除息的落盘镜像（App/stock_xdxr.json）。
-
-        语义同 stock_pettm.json：进程启动后首次用到除权除息时，用 eltdx 批量
-        拉全 A 股写入内存并落盘；进程内后续请求直接命中内存。eltdx 不可用时
-        退回读本文件；本文件也没有则按「硬失败」上报（不静默返回空表——空表
-        会让前复权把除权日全部算漏，价格静默错误，比报错更危险）。
-        """
-        return os.path.join(self.app_data_dir, "stock_xdxr.json")
 
     @property
     def float_mc_cache_file(self) -> str:

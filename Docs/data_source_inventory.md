@@ -39,11 +39,11 @@
 
 | 信息 | 收口模块 | 取数函数 | 底层真实数据源 | 消费方 |
 | --- | --- | --- | --- | --- |
-| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` (`:234`) | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** | `TdxAPI` 前复权流水线（`TdxAPI.py:672` 导入） |
+| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` (`:235`) | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** · **按需逐只取数**（`capital_changes` 是按代码查询的协议命令，非一次性全市场文件，故不与 PE-TTM 同样做成全量预取） | `TdxAPI` 前复权流水线（`TdxAPI.py:672` 导入） |
 | PE-TTM（A股个股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `_eltdx_fetch_pe_ttm_all` → `ElTdxAPI.fetch_pe_ttm_all` | **eltdx**：`0x06B9` 服务器文件读取 → `zhb.zip` 内 `tdxstat.cfg` 第 3 列（滚动市盈率）· **单请求覆盖全市场**（取单只与取全市场耗时相同，实测 1.2~1.4s）→ 故做成**进程级全量缓存**：进程内首次取数拉全 A 股并落盘 `App/stock_pettm.json`，之后一律命中内存 | `AppRefresh` 注入 `AppData`（PE 实时层） |
 | PE-TTM（指数 / 港股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `TxAPI.fetch_pe_ttm` | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[39]`（实测为 **TTM / 滚动**口径）。**指数必须走腾讯**：eltdx 统计文件只含 A 股个股，指数走 eltdx 必然取空（2026-09 修复「输入指数不显示 PE-TTM」） | 同上 |
-| PE-TTM（批量入口） | `DataAPI/MarketStatsAPI.py` | `fetch_pe_ttm(mkt_codes)` (`:51`) | 按市场分流后合并两个源（A股 eltdx / 港股腾讯） | **当前无内部调用者**——刷新按钮已不再刷 PE。保留为批量取数公开入口 |
-| 流通市值（A股） | `DataAPI/MarketStatsAPI.py` | `fetch_float_mc(stock_list)` (`:97`) → `ElTdxAPI.fetch_float_mc` (`:469`) | **eltdx**：`0x0010` 流通股本 × `0x054c` 最新价，单位由「元」换算为「亿元」 | `AppScan.py:589` 扫描前置取数 → `AppScan.py:317` 阈值判定 |
+| PE-TTM（A股批量入口） | `DataAPI/ElTdxAPI.py` | `fetch_pe_ttm_all()` (`:481`) | 返回 `{mkt+code: pe}`，**不做市场分流**（分流属 App 层编排） | `AppRefresh.py:129`（进程级全量缓存的唯一取数点） |
+| 流通市值（A股） | `App/AppScan.py` | `fetch_float_mc_all(stock_list)` (`:340`) → `ElTdxAPI.fetch_float_mc` (`:518`) | **eltdx**：`0x0010` 流通股本 × `0x054c` 最新价，单位由「元」换算为「亿元」 | `AppScan.py:589` 扫描前置取数 → `AppScan.py:317` 阈值判定 |
 | 股票名字（A股） | `DataAPI/SinaAPI.py` | `fetch_a_names(mkt_code_pairs)` (`:39`) | **新浪财经** `http://hq.sinajs.cn/list=`（`SinaAPI.py:18`），字段 `[0]`（GBK） | `AppRefresh.py:171`（第一轮） |
 | 股票名字（港股） | `DataAPI/TxAPI.py` | `fetch_hk_names(hk_codes)` (`:91`) | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[1]`（GBK） | `AppRefresh.py:182`（第二轮） |
 | 指数归属 | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)` (`:34`) | **AKShare `index_stock_cons_csindex`**（中证指数公司 csindex） | `AppRefresh.py:194`（线程池，每指数 30s 限时）；落盘 `stock_index_belong.json`（`AppData.save_index_belong_cache` `:1187`） |
@@ -90,7 +90,7 @@
   - 流通市值：A 股股票 5553 只中 5462 只（98.4%）落在腾讯「亿元两位小数」的取整半格内，其余 91 只差异根因是 eltdx `0x0010`
     流通股本滞后于解禁 / 增发（附 D-6）；**基金 / REIT 判据不同**（腾讯 `[44]` 对该类返回"份额 × 价"，与其 `[45]` 同值），详见附 D-6。
   - 取数耗时：PE 12.9s（27 批 HTTP）→ **1.2s**（`read_stats` 单请求，实测 1.16~1.36s）；流通市值 ≈9~14s（27 批）→ **6.7s**（全市场，含坏代码逐只隔离重试）。
-* **除息除权现为 eltdx 单一数据源，`mootdx` / `pytdx` 三级回退已于 2026-09 整体删除**（不是"注释保留"）。设计意图是失败即显著报错（`ElTdxAPI.py:271` `log.error`）而非静默降级，避免把「网络/接口故障」伪装成「该股无除权除息数据」。如需新增数据源，在 `get_xdxr_data` 的来源元组中追加即可，**不要**恢复静默 `continue` 式降级。
+* **除息除权现为 eltdx 单一数据源，`mootdx` / `pytdx` 三级回退已于 2026-09 整体删除**（不是"注释保留"）。设计意图是失败即显著报错（`ElTdxAPI.py:272` `log.error`）而非静默降级，避免把「网络/接口故障」伪装成「该股无除权除息数据」。如需新增数据源，在 `get_xdxr_data` 的来源元组中追加即可，**不要**恢复静默 `continue` 式降级。
 * 指数归属的 `AKSHARE_INDEX_MAP` 只覆盖 4 个指数（`000300` 沪深300 / `000905` 中证500 / `000852` 中证1000 / `000688` 科创50），与第二节的成分股取数共用同一个 `fetch_index_cons`。
 * 腾讯 `_iter_records`（`TxAPI.py:41`）按行前缀 `v_sh` / `v_sz` / `v_hk` 判定市场；改造后**只剩「港股名称」与「港股 PE-TTM」两处在用它**（A 股 PE 与流通市值已迁至 eltdx）。腾讯字段 `[39]` 的解析见 `TxAPI.py:79`。
 
@@ -202,7 +202,7 @@ chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化
 | `TdxAPI.py` | **2067** | 通达信本地 vipdoc + 多源板块/指数 | K 线主源、前复权流水线、成分股、板块文件刷新（经 eltdx）、vipdoc 代码收集 | `AppEngine`、`AppRefresh`、`AppScan`、`DataAPI/__init__` 工厂 |
 | `TqSdkAPI.py` | 584 | 天勤 tqsdk | 期货/期指 K 线（`CTqSdkAPI`）、历史拉取、名称解析、账户加载、回看根数配置 | `DataAPI/__init__` 工厂、`AppEngine:147`、`AppSSE:30`、`App/utils:35`、`BSPointList:822` |
 | `TqSdkCSSESource.py` | 360 | 天勤 tqsdk（SSE 流） | SSE 流数据源抽象：`connect` / `get_kline_serial` / `wait_update` / `close_all` | `AppSSE:49`、`FrontAPI` re-export、`TqSdkAPI:263` |
-| `ElTdxAPI.py` | **519** | eltdx（通达信网络行情，7709） | 四条链路：除权除息（`0x000f`）、板块文件下载（`0x06B9`）、PE-TTM（`resources.read_stats` → `zhb.zip` 内 `tdxstat.cfg`）、流通市值（`0x0010` 流通股本 × `0x054c` 最新价） | `TdxAPI:672`（XDXR + 板块下载）、`MarketStatsAPI`（PE / 市值） |
+| `ElTdxAPI.py` | **569** | eltdx（通达信网络行情，7709） | 四条链路：除权除息（`0x000f`）、板块文件下载（`0x06B9`）、PE-TTM（`resources.read_stats` → `zhb.zip` 内 `tdxstat.cfg`）、流通市值（`0x0010` 流通股本 × `0x054c` 最新价） | `TdxAPI:672`（XDXR + 板块下载）、`AppRefresh`（PE 全量）、`AppScan`（市值，`:41` 直连） |
 | `AkshareAPI.py` | 213 | AKShare | 指数成分股 `fetch_index_cons`、指数归属映射常量、`CAkshare` K 线适配 | `AppRefresh:28`、`TdxAPI:674`、`Chan.py:189` |
 | ~~`MarketStatsAPI.py`~~ | — | —（**已删除**） | 原「按市场分流的壳」（项目文档自述『分流壳，不直连数据源』）。2026-09-12 评审：DataAPI 层各模块应一一对应真实数据源，选源属**业务编排**且 App 层本就有先例（`_fetch_names_from_sina_once` 里 A股→新浪、港股→腾讯），故分流逻辑上移到 `App/AppRefresh.py`，本文件删除 | — |
 | `TxAPI.py` | **132** | 腾讯财经 `qt.gtimg.cn` | **仅剩港股 PE-TTM（字段 `[39]`）+ 港股名称（字段 `[1]`）**；A 股 PE 与流通市值已迁出，`fetch_float_mc` 已下线 | `AppRefresh:30`（港股名）、`MarketStatsAPI`（港股 PE） |
@@ -236,7 +236,7 @@ chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化
 
 | 依赖 | 声明位置 | 缺失时的真实行为（实测） |
 | --- | --- | --- |
-| `eltdx` | `requirements.txt`「引擎可选数据源」 | **四条链路同时失效**（2026-09 单源归一化后的既知代价）：① 前复权不可用（`ElTdxAPI.py:271` `log.error` 显著报错，非静默降级）；② **板块文件刷新整体失效**（`TdxAPI.py:1272` WARNING「eltdx 下载异常，保留旧文件」）；③ A 股 PE-TTM 取数失败——**K 线页面本次不显示 PE**（实时层捕获后静默降级、保留旧值，`AppData.py:1246` 记 `log.info`），**不抛错、不影响 K 线本身**；④ A 股流通市值取数抛错（`MarketStatsAPI.py:97` 不吞异常，扫描前置取数由 AppScan 的「回退本地缓存 + 过期告警」兜底）。服务照常启动 |
+| `eltdx` | `requirements.txt`「引擎可选数据源」 | **四条链路同时失效**（2026-09 单源归一化后的既知代价）：① 前复权不可用（`ElTdxAPI.py:272` `log.error` 显著报错，非静默降级）；② **板块文件刷新整体失效**（`TdxAPI.py:1272` WARNING「eltdx 下载异常，保留旧文件」）；③ A 股 PE-TTM 取数失败——**K 线页面本次不显示 PE**（实时层捕获后静默降级、保留旧值，`AppData.py:1246` 记 `log.info`），**不抛错、不影响 K 线本身**；④ A 股流通市值取数抛错（`ElTdxAPI.fetch_float_mc (:518)` 不吞异常，扫描前置取数由 AppScan 的「回退本地缓存 + 过期告警」兜底）。服务照常启动 |
 | `pytdx` | **已不使用**（源码 0 处引用、`requirements.txt` 未声明） | 无影响。2026-09 起 pytdx 已从项目彻底退场：板块刷新改走 eltdx `0x06B9`、`880xxx` 的 Step4 兜底链路整体删除。若历史环境仍装有 pytdx，项目也不会导入它 |
 | `tqsdk` | `requirements.txt`「引擎可选数据源」 | 模块顶层无硬 import；期货功能不可用，股票侧不受影响 |
 | `akshare` | `requirements.txt`「引擎可选数据源」 | 指数归属与中证系指数成分获取跳过（`AkshareAPI.py:44` 捕获 `ImportError`，`:45` 打日志后 `:46` 返回 `[]`） |
@@ -252,7 +252,7 @@ chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化
 
 1. **`block_*.dat` 成分数上限 400 只，且上限来自服务端。** 直接读二进制验证（2026-09-12）：`block_gn.dat`(269 板块) / `block_zs.dat`(117) / `block_fg.dat`(161) / `block.dat`(100) 中，声明成分数**最大即 400，无一超过**；从真实服务器重新下载后仍为 400。记录步长 2800 字节 ÷ 每股 7 字节 = 400，因此改本地解析器无效。**注意该 400 上限只影响 `block_*.dat` 路径，而 `get_index_stocks` 当前已不使用该路径**（`880xxx` 走 `infoharbor_block.dat`，实测 `880861` 取到 1103 只，不受 400 限制）；`block_*.dat` 现仅由 `block.dat` 冗余判定（第四节）与外部脚本读取。
 2. **`infoharbor_block.dat` 的 `declared_count` 一致性过滤会剔除「声明数 ≠ 实际数」的段。** 2026-09-12 实测：文件含 **547 段**（`#GN_` 269 / `#FG_` 161 / `#ZS_` 117），但经 `_parse_infoharbor_block` 的 `declared == 0 or declared == len(stocks)` 过滤后（`TdxAPI.py:1374`），`_read_infoharbor_blocks` 只返回 **420 个带代码板块**。这是 `880xxx` 「文件里有这个名字的段、但取成分股却是空」的常见原因之一——表现与「文件里没有」完全一致，排查时需区分。
-3. **缺 `eltdx` 的影响面在 2026-09 单源归一化后显著扩大。** 旧版只有「前复权」依赖它；现在 **除权除息、板块文件刷新、A 股 PE-TTM、A 股流通市值** 四条链路全走 eltdx 7709 通道：缺包或通道故障时，前复权显著报错（`ElTdxAPI.py:271`）、板块刷新整体失效（`TdxAPI.py:1272`）、市值取数抛错上浮，**A 股 PE 则表现为页面不显示 PE**（实时层静默降级，见第 8 条）。**这是「一次做完单源归一化」的既知代价**——一个通道故障会同时打掉四个功能；权衡点是「维护成本 vs 单点耦合」，当前选择前者（同源口径统一、规则只有一份）。
+3. **缺 `eltdx` 的影响面在 2026-09 单源归一化后显著扩大。** 旧版只有「前复权」依赖它；现在 **除权除息、板块文件刷新、A 股 PE-TTM、A 股流通市值** 四条链路全走 eltdx 7709 通道：缺包或通道故障时，前复权显著报错（`ElTdxAPI.py:272`）、板块刷新整体失效（`TdxAPI.py:1272`）、市值取数抛错上浮，**A 股 PE 则表现为页面不显示 PE**（实时层静默降级，见第 8 条）。**这是「一次做完单源归一化」的既知代价**——一个通道故障会同时打掉四个功能；权衡点是「维护成本 vs 单点耦合」，当前选择前者（同源口径统一、规则只有一份）。
 4. **本文件此前版本的口径错误已修正**：① `mootdx` / `pytdx` 回退是「**已于 2026-09 整体删除**」而非「注释保留」（`ElTdxAPI.py:230-231` 只剩说明性注释，无被注释的可执行代码）；② **「Step4 兜底」相关章节本轮整体删除**（`_download_block_gn_from_network` 已不存在）；③ `pytdx` 从未在 `requirements.txt` 中以「运行必需」声明（基线即无该行），旧表述有误。
 5. **PE-TTM 迁移的差异边界（2026-09-12 实测，全市场 8037 只对照）：真实 A 股股票零缺失。** 「旧路径有值、新路径无值」的 144 个**全部是指数 / 板块代码**（`sh000001`、`sh000300`、`880xxx` 等，eltdx 统计文件只覆盖可交易证券）——股票侧无损失。港股覆盖 2583 只**完全不变**（仍走腾讯）。**取数耗时**：12.9s（27 批 HTTP）→ **1.2s**（`read_stats` 单请求，实测 1.16～1.36s）。
 6. **流通市值迁移的差异边界（同批实测）：A 股股票 5553 只中 5462 只（98.4%）落在腾讯「亿元两位小数」的取整半格内。** 其余 91 只差异根因是 eltdx `0x0010` 流通股本**滞后于解禁 / 增发**（季报口径 vs 实时流通口径），非换算错误。**基金 / REIT 类判据不同**：腾讯字段 `[44]` 对该类返回「份额 × 价」（与其 `[45]` 同值，实测大量 80% 相对差集中在此），与 eltdx 的「流通股本 × 价」口径本就不同源——该类不属 A 股股票，不计入差异统计。另注：初期的 2110 处「缓存 vs 实时」不符经核对是**缓存为增量合并旧值**（落盘时间戳可证），非口径错误。**取数耗时**：≈9～14s（27 批 HTTP）→ **6.7s**（全市场，含北交所坏代码逐只隔离重试）。

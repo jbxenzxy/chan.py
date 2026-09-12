@@ -682,11 +682,9 @@ def test_datasource_import_gate(failures):
     # ── 装配点白名单：逐文件精确断言允许的 DataAPI 子模块 ──
     # AppEngine：TdxAPI 装配 + tqsdk 可用性探测
     #            + ThsCloudZxgAPI 同花顺云端自选股（扫描「保存到自选」装配点）
-    #            + ElTdxAPI 除权除息「进程级全量缓存 + 落盘镜像」的装配注入
-    #              （注入的是 App 侧的读写实现，DataAPI 侧不反向依赖 App）
     engine_mods = set(_datasource_imports(os.path.join("App", "AppEngine.py")))
     engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI",
-                    "DataAPI.ThsCloudZxgAPI", "DataAPI.ElTdxAPI"}
+                    "DataAPI.ThsCloudZxgAPI"}
     extra = engine_mods - engine_allow
     if extra:
         bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
