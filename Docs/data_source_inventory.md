@@ -78,10 +78,55 @@
 | 入口 | `TdxAPI.refresh_block_files(progress_callback)`，定义 `DataAPI/TdxAPI.py:1404` |
 | 上游 | 前端「刷新」按钮 → `POST /api/stocks/refresh`（`FrontAPI.py:639`）→ `AppOrch` 再导出 → `AppRefresh.refresh_stock_names_async` (`:577`) → `_refresh_stock_names` (`:344`) → `AppRefresh.py:545` |
 | 底层数据源 | **pytdx `TdxHq_API`** → `TDX_BLOCK_SERVERS`（16 台通达信行情服务器，7709） |
-| 刷新目标 | `{TDX_INSTALL_DIR}/T0002/hq_cache/` 下 `infoharbor_block.dat`、`block_zs.dat`、`block_gn.dat`、`block_fg.dat`、`block.dat` 共 5 个文件 |
+| 刷新目标 | `{TDX_INSTALL_DIR}/T0002/hq_cache/` 下 `tdxhy.cfg`、`infoharbor_block.dat`、`spblock.dat`、`block_zs.dat`、`block_gn.dat`、`block_fg.dat` 共 6 个文件（`block.dat` 已移除：其 100 个块全部已被 `block_zs/gn/fg` 覆盖，属冗余旧整合文件，见第四节） |
 | 安全策略 | 不先删旧文件；先下到内存 → 校验 → 写 `.tmp` → `os.replace` 原子替换；任一文件失败即保留旧文件 |
+| 日志格式 | `[板块刷新] ✅ {文件名}（{作用说明}）刷新成功: {字节数} 字节`；`tdxhy.cfg`/`infoharbor_block.dat`/`spblock.dat`/`block_zs.dat` 带括号说明，`block_gn.dat`/`block_fg.dat` 不带 |
 
 > 这是 **pytdx 在项目中最主要的真实用途**（每次点刷新都执行）。第二节 Step4 的 pytdx 用法是次要的兜底路径。
+
+> **`spblock.dat` 刷新现状（2026-09-12 实测）**：`refresh_block_files` 走 pytdx `get_block_info_meta` 通道（板块目录查询），该目录**不含 `spblock.dat`**——实测 6 台 `TDX_BLOCK_SERVERS` 均返回 `size=0`。因此点刷新按钮时 `spblock.dat` 会落到「服务端 size 无效，保留旧文件」分支，**当前实际不刷新**。`spblock.dat` 由通达信客户端的「盘后 / 板块下载」单独写入，chan.py 只读取、不负责刷新它。若要让按钮也能刷 `spblock.dat`，需改用通达信另一条板块下载协议（非 `get_block_info`），属后续增强项。
+
+---
+
+---
+
+## 四、通达信「扩展 → 成分股」界面真实来源全景
+
+> 本节描述的是**通达信软件自身**「指数页 → 扩展 → 成分股」这一界面动作的数据来源，
+> 与第二节「chan.py 扫描时如何取成分股」是两回事（chan.py 走 AKShare / 本地 block 文件兜底，见第二节）。
+> 本节结论来自 2026-09-12 对本机 `D:\new_tdx_hd_test\T0002\hq_cache\` 下各文件的**二进制 / 文本实测枚举**。
+
+### 4.1 总机制
+
+通达信在「扩展 → 成分股」时**先查本地缓存、本地没有再联网按需拉取**，并非单一文件、也并非只有两条路：
+
+1. 先在本地的三个 block 文件里查该指数的成分股段：`block_zs.dat`（1999 老格式）、`spblock.dat`（新版文本）、`infoharbor_block.dat`（现代 `#ZS_/#GN_/#FG_` 段）。三者**互补 + 部分重叠**，不是谁替代谁。
+2. `88` 开头板块单独走：`881xxx` 研究行业读 `tdxhy.cfg`；`880xxx` 概念/风格读 `infoharbor_block.dat`。
+3. **上证指数（000001）是特例**：全市场指数，不在任何 block 文件，通达信用「全部沪市股票」逻辑呈现（源自 `shs.tnf` / 专用接口）。
+4. 若三个 block 文件都查不到（如 `国证1000` 本机未缓存），通达信会**联网从指数公司 / 服务端按需拉取**并写回本地缓存——证据：同属国证的 `国证2000` 已缓存在 `spblock.dat`，而 `国证1000` 未缓存 → 是**缓存状态差异**而非结构性缺失。
+
+### 4.2 各指数类型的真实来源（本机实测）
+
+| 指数类型 | 本地源文件 | 格式 | 实测成员数（本机快照） |
+| --- | --- | --- | --- |
+| 中小盘 / 标准宽基（沪深300、中证800、上证50/180/380/580、科创50/100、深证100、创业板指/50、国证成长/价值、中证央企…） | `block_zs.dat` **与** `infoharbor_block.dat` 的 ZS 段（两者重叠覆盖） | 老格式：384 字节头 + 每记录 13 字节头 + 2800 字节定长；现代：`#ZS_` 文本段 | 沪深300=300、中证800=800、上证580=400、国证成长/价值=332… |
+| 超大盘 / 超小盘宽基（中证500、中证1000、中证2000、中证A500、国证2000、深证成指） | **`spblock.dat`**（其余两文件对应段为空） | GBK 文本：`#板块名` 头 + 每行一个 7 位代码（首位=市场 0深/1沪） | 中证1000=1000、中证2000=2000、国证2000=2000、中证500=500、中证A500=500、深证成指=500 |
+| `881xxx` 研究行业 | `tdxhy.cfg` | GBK 文本：`市场｜代码｜旧T码｜｜｜X码` | 467 个行业 |
+| `880xxx` 概念 / 风格板块 | `infoharbor_block.dat`（`#GN_`/`#FG_` 段） | 现代文本段 | 概念 421+、风格 161 段 |
+| 上证指数（000001） | 特例：全部沪市股票（`shs.tnf` / 专用逻辑） | — | 非离散块 |
+| 未缓存指数（如 `国证1000` 399311） | 联网按需拉取（不在任何本地 block 文件） | — | 见 4.1 |
+
+> 关键纠正：此前的「两条路 / ≤800」结论是错的——
+> 中证500(500) 在 spblock、`block_zs.dat` 里中证央企=400 到顶而深证成指仅 39 残桩，无任何数字边界；
+> 真实是 **block_zs.dat + spblock.dat + infoharbor_block.dat 三文件 + 上证特例 + 联网兜底**（详见第三节 `spblock.dat` 刷新现状与第二节说明段）。
+
+### 4.3 `block.dat` 为何不再刷新（冗余旧整合文件）
+
+`block.dat` 是 1999 老格式，本机实测含 **100 个块**：12 个指数块（上证50、沪深300、创业板指…与 `block_zs.dat` 重叠）+ 86 个概念块（3D打印、5G概念、光伏、锂电池…，与 `block_gn.dat` 重叠）+ 融资融券/专精特新（与 `block_fg.dat` 重叠）。**四文件比对：block.dat 的 100 个块 100% 已被 `block_zs.dat` ∪ `block_gn.dat` ∪ `block_fg.dat` 覆盖（独有块=0）**。因此它纯属历史整合文件，刷新它只是重复下载 281KB 冗余数据，已从「刷新目标」与 `_download_block_gn_from_network` 的 `candidate_files` 中移除。
+
+### 4.4 对 chan.py 的指征
+
+chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化）；若将来做**离线兜底**取本地，应 **block_zs.dat（中小盘完整）+ spblock.dat（超大盘/超小盘宽基）并用**、infoharbor 补充；上证指数 / 国证类仍需联网或 AKShare，不能依赖任一单一本地文件。注意 `spblock.dat` 当前按钮刷新不到（见第三节），离线兜底读本地即可。
 
 ---
 

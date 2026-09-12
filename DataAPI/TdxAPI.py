@@ -1203,10 +1203,32 @@ def _safe_replace_file(path, raw_data):
                 pass
 
 
+# 板块刷新日志展示名：按文件说明其作用；值为 None 表示不加括号说明。
+# 注意：spblock.dat 实际装的是「超大盘/超小盘宽基」（中证500/1000/2000、国证2000、深证成指），
+# block_zs.dat 装的是「标准/中小盘宽基」（沪深300、上证50、中证800、科创50 等），两者互补，不要按字面误解。
+_BLOCK_FILE_DISPLAY = {
+    "tdxhy.cfg": "研究行业新版",
+    "infoharbor_block.dat": "概念 / 风格板块",
+    "spblock.dat": "宽基：中证500/1000/2000、国证2000、深证成指",
+    "block_zs.dat": "标准宽基指数：沪深300、上证50、中证800、科创50",
+    "block_gn.dat": None,
+    "block_fg.dat": None,
+}
+
+
 def _validate_downloaded_block_file(file_name, raw_data):
     """下载后做轻量格式校验，校验通过才覆盖旧文件。"""
     if not raw_data:
         return False
+
+    if file_name == "spblock.dat":
+        # spblock.dat 是 GBK 文本：以 `#板块名` 头行 + 每行一个 7 位代码，非 2800 字节定长二进制。
+        try:
+            text = raw_data.decode("gbk", errors="ignore")
+        except Exception:
+            return False
+        # 至少含一个板块头（# 开头），且含数字代码，否则视为下载到脏数据。
+        return "#" in text and any(ch.isdigit() for ch in text)
 
     if file_name == "infoharbor_block.dat":
         try:
@@ -1215,7 +1237,7 @@ def _validate_downloaded_block_file(file_name, raw_data):
             return False
         return "#GN_" in head or "#FG_" in head or "#ZS_" in head
 
-    if file_name in ("block_zs.dat", "block_gn.dat", "block_fg.dat", "block.dat"):
+    if file_name in ("block_zs.dat", "block_gn.dat", "block_fg.dat"):
         if len(raw_data) < 386:
             return False
         try:
@@ -1258,7 +1280,9 @@ def _safe_refresh_one_block_file(api, host, port, file_name, block_cache_dir, pr
 
         local_path = os.path.join(block_cache_dir, file_name)
         _safe_replace_file(local_path, raw)
-        log.info(f"[板块刷新] ✅ {file_name} 刷新成功: {total_size} 字节")
+        _desc = _BLOCK_FILE_DISPLAY.get(file_name)
+        _suffix = f"（{_desc}）" if _desc else ""
+        log.info(f"[板块刷新] ✅ {file_name}{_suffix} 刷新成功: {total_size} 字节")
         return True
     except Exception as e:
         log.warning(f"[板块刷新] {file_name} 刷新失败，保留旧文件: {e}")
@@ -1300,16 +1324,17 @@ def _download_block_gn_from_network(progress_callback=None):
         return {}
 
     # 通达信服务器提供的板块文件（通过网络 get_block_info 协议下载）
-    # block_zs.dat: 精选指数板块（沪深300、中证500等）
+    # block_zs.dat: 标准/中小盘宽基指数（沪深300、上证50、中证800、科创50 等）
     # block_gn.dat: 概念板块（8805xx，锂电池、人工智能等）
     # block_fg.dat: 风格板块（8808xx，大盘股、小盘股等）
     # 注意：block_hy.dat（二级行业，含880491"半导体"）不在服务器上，
     #       它只存在于本地 T0002/hq_cache/ 目录，格式也不同（480字节/条 vs 2800字节/条）
+    # 注意：block.dat 不再纳入下载——它是旧版整合文件（100 个块 = 指数 + 概念），
+    #       内容已被 block_zs.dat / block_gn.dat / block_fg.dat 完全覆盖（见 Docs/data_source_inventory.md 第四节），刷新纯属冗余。
     candidate_files = [
         "block_zs.dat",
         "block_gn.dat",
         "block_fg.dat",
-        "block.dat",
     ]
 
     result = {}
@@ -1439,10 +1464,10 @@ def refresh_block_files(progress_callback=None):
     block_files = [
         "tdxhy.cfg",
         "infoharbor_block.dat",
+        "spblock.dat",
         "block_zs.dat",
         "block_gn.dat",
         "block_fg.dat",
-        "block.dat",
     ]
 
     try:
