@@ -2252,6 +2252,15 @@
             // 双窗口：下面窗口渲染时，仅当鼠标不在下面窗口上（mouseX<0）才跳过 OHLC 更新
             // 避免"鼠标在上面窗口时，下面窗口的最后一根K线数据覆盖上面窗口的 OHLC"
             if (!(window._isRenderingBottom && mouseX < 0)) {
+                // 「减持计划」徽标：命中窗口时显示「减持:√ 08-04~11-03」（多窗口取前 2 条）
+                let reductionBadge = "";
+                const reduction = chartData.meta.shareholder_reduction;
+                if (reduction && reduction.active) {
+                    const ws = (reduction.windows || []).slice(0, 2)
+                        .map(w => (w && w.start && w.end) ? w.start + "~" + w.end : null)
+                        .filter(Boolean).join(",");
+                    reductionBadge = ` &nbsp; <span class="label" style="color:#e74c3c">减持:</span> <span class="label" style="color:#e74c3c">√${ws ? " " + ws : ""}</span>`;
+                }
                 // 显示真实OHLC（翻转视图不改数值，前复权负价原样显示含负号）
                 const dispOpen = k.open;
                 const dispHigh = k.high;
@@ -2266,8 +2275,8 @@
                     `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
                     `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>` +
                     (chartData.meta.pe_ttm != null ? ` &nbsp; <span class="label">PE-TTM:</span> <span class="label">${chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损"}</span>` : "") +
-                    (chartData.meta.shareholder_reduction && chartData.meta.shareholder_reduction.active ? ` &nbsp; <span class="label" style="color:#e74c3c">减持:</span> <span class="label" style="color:#e74c3c">√</span>` : "") +
-                    (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "");
+                    (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "") +
+                    reductionBadge;
             }
 
             // 均线浮动提示：检测鼠标是否靠近某条均线，若在阈值内则显示tooltip

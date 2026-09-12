@@ -244,13 +244,21 @@ def _get_pe_ttm(market, code):
 
 
 def _get_reduction_flag(market, code, today):
-    """获取「重要股东买卖」减持窗口标记（委托 ElTdxAPI，按代码查 F10）。
+    """获取「重要股东买卖」减持标记（委托 ElTdxAPI，读通达信 F10 股东增减持计划）。
 
-    today 取屏幕上当前交易日（K 线最新一根日期）；非 A 股 / eltdx 不可用 /
-    无减持计划 → 返回 {'active': False}。
+    today 取屏幕上当前交易日（K 线最新一根日期）；非 A 股 / 取数失败 /
+    当日不在任何「拟减持」计划的减持窗口内 → 返回 {'active': False}。
+
+    注意：这里取的是「减持计划」窗口（**公告日 N001 ~ 变动截止日 N010**），
+    即潜在抛压区间——计划一经公告，抛压即告成立，直到窗口截止；不是已发生的
+    实际成交。N009（变动起始日）仅作 N001 缺失时的回退。
+
+    性能：底层走 _f10_tqlex_post 强制 IPv4 直连 7615 网关（实测 117~350ms，
+    进程内每代码缓存 1 天），可安全同步调用；曾有版本因走 eltdx 默认 urlopen
+    被本机 IPv6 黑洞拖到 8~12s/次。
     """
     if not today:
-        return {"active": False}
+        return {"active": False, "windows": []}
     return get_shareholder_reduction_flag(market, code, today)
 
 

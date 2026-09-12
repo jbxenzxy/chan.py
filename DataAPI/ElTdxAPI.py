@@ -29,6 +29,10 @@ eltdx 数据源适配器（通达信网络行情客户端封装）。
 import threading
 import logging
 import time
+import json
+import socket
+import urllib.parse
+import urllib.request
 
 import pandas as pd
 from datetime import datetime
@@ -571,17 +575,60 @@ def fetch_float_mc(stock_list):
 # ============================================================
 # 重要股东买卖：股东增减持计划（通达信 F10 7615 网关，按代码查询）
 # ============================================================
-# 数据源：eltdx.f10.F10Client.shareholder_change_plans(code)
-#   → CWServ.tdxf10_gg_gdyj + section gdzjcjh
+# 数据源：7615 TQLEX 网关 Entry=CWServ.tdxf10_gg_gdyj + section gdzjcjh
+#   （与 eltdx.f10.F10Client.shareholder_change_plans 同一端点，但请求由
+#   _f10_tqlex_post 直发：强制 IPv4 + 禁代理，绕开本机 IPv6 黑洞导致的
+#   每请求 8~12s 卡顿——见 _f10_tqlex_post docstring 的实测数据）。
 # 这是「按代码查询」的协议命令（与 xdxr 同类），**不是** PE-TTM 那样一次性
 # 下载全市场统计文件；故按单只股票取数 + 进程缓存，不落盘全市场文件。
-# 列名（实测 7615 网关返回 rows 为 {N001..N012: ...} 字典）：
+# 列名（实测 7615 网关 ColName 返回 N001..N012，与 eltdx 解析一致）：
 #   N001 公告日期  N002 拟减持/拟增持  N003 股东名称  N004 股东身份
 #   N005 拟减持股数  N006 占总股本%  N007/N008 拟增持股数(下限/上限)
 #   N009 变动起始日期  N010 变动截止日期  N011 进度(完成/进行中/未实施)
 _REDUCTION_CACHE = {}          # mkt+code -> (epoch, [plans])
 _REDUCTION_CACHE_TTL = 24 * 3600
 _REDUCTION_LOCK = threading.Lock()
+# 7615 F10 网关 HTTP 超时。IPv4 直连实测 117~350ms，5s 余量已极大；
+# 不再用 eltdx F10Client（其 urlopen 无法控制地址族，见 _f10_tqlex_post）。
+_REDUCTION_TIMEOUT = 5.0
+
+# 7615 TQLEX 网关请求头（与 eltdx F10Client 同款；URL 在 _f10_tqlex_post
+# 里按解析出的 IPv4 直连地址构造，Host 头固定回填域名）
+_TQLEX_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "eltdx/1.0",
+}
+
+
+def _f10_tqlex_post(entry, params, timeout=_REDUCTION_TIMEOUT):
+    """直连 7615 TQLEX 网关的 POST（**强制 IPv4 + 禁代理**）。
+
+    为什么不复用 eltdx F10Client：其 _post 用裸 urlopen，无法控制地址族。
+    Windows 上 getaddrinfo 会把 IPv6 排在 IPv4 前面，而本机 IPv6 出口对
+    static.tdx.com.cn 不通（实测 TCP 握手 12s 超时），urllib 只能等 IPv6
+    SYN 重传失败后才回落 IPv4 → 每次请求固定卡 8~12 秒（这是「K 线页加载
+    凭空多 8 秒」的真正根因；走代理的环境则无此问题，因为代理客户端自己
+    连目标，不经本机 IPv6）。
+
+    修复：getaddrinfo 限定 AF_INET 拿 IPv4 → 直接连 IP、Host 头带域名 →
+    实测完整 POST 117ms（对比 eltdx 默认路径 8100ms，约 70 倍）。
+    同时用 ProxyHandler({}) 禁代理——TDX 国内网关直连即可，且不依赖用户
+    终端是否挂了代理（有代理走代理也快，但直连更快、环境更少依赖）。
+
+    返回 TQLEX JSON dict；失败抛异常（调用方决定吞不吞）。
+    """
+    ipv4 = socket.getaddrinfo("static.tdx.com.cn", 7615, socket.AF_INET,
+                              socket.SOCK_STREAM)[0][4][0]
+    url = f"http://{ipv4}:7615/TQLEX?{urllib.parse.urlencode({'Entry': entry})}"
+    body = json.dumps({"Params": list(params)}, ensure_ascii=False,
+                      separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(url, data=body, headers=_TQLEX_HEADERS, method="POST")
+    request.add_unredirected_header("Host", "static.tdx.com.cn")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=timeout) as response:
+        raw = response.read()
+    return json.loads(raw.decode("utf-8-sig"))
 
 
 def get_shareholder_reduction_plans(market, code):
@@ -590,7 +637,10 @@ def get_shareholder_reduction_plans(market, code):
     返回 list[dict]，每条字段：
         announce_date, direction, holder, identity,
         reduce_shares, reduce_pct, start, end, progress
-    非 A 股（指数 / 港股 / 期货等）、eltdx 不可用、取数失败 → 返回 []。
+    非 A 股（指数 / 港股 / 期货等）、取数失败 → 返回 []。
+
+    注意：请求直接经 _f10_tqlex_post（强制 IPv4 直连 7615 网关），
+    **不再经过 eltdx F10Client**（其 urlopen 在本机 IPv6 不通时每次卡 8~12s）。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return []
@@ -601,26 +651,36 @@ def get_shareholder_reduction_plans(market, code):
         if cached and now - cached[0] < _REDUCTION_CACHE_TTL:
             return cached[1]
     try:
-        from eltdx.f10 import F10Client
-    except Exception:
-        log.warning("[股东增减持] eltdx 不可用，跳过（请 pip install -U 'eltdx>=3.0.0'）")
-        return []
-    try:
-        resp = F10Client().shareholder_change_plans(code)
-        if not getattr(resp, "ok", False):
+        raw = _f10_tqlex_post(
+            "CWServ.tdxf10_gg_gdyj",
+            [code, "gdzjcjh", "", "", "1", "1", "20"],
+        )
+        error_code = raw.get("ErrorCode")
+        result_sets = raw.get("ResultSets") or ()
+        if error_code not in (None, 0) or not result_sets:
+            log.warning("[股东增减持] 网关返回 ErrorCode=%s(%s%s)", error_code, market, code)
             return []
+        rs0 = result_sets[0]
+        rows_raw = rs0.get("Content") or ()
+        col_names = [str(c) for c in (rs0.get("ColName") or ())]
         plans = []
-        for row in getattr(resp, "rows", ()):
+        for row in rows_raw:
+            if isinstance(row, dict):           # 防御：网关某些 Entry 返回 dict
+                item = row
+            elif col_names and isinstance(row, (list, tuple)):
+                item = dict(zip(col_names, row))
+            else:
+                continue
             plans.append({
-                "announce_date": row.get("N001"),
-                "direction": row.get("N002"),
-                "holder": row.get("N003"),
-                "identity": row.get("N004"),
-                "reduce_shares": row.get("N005"),
-                "reduce_pct": row.get("N006"),
-                "start": row.get("N009"),
-                "end": row.get("N010"),
-                "progress": row.get("N011"),
+                "announce_date": item.get("N001"),
+                "direction": item.get("N002"),
+                "holder": item.get("N003"),
+                "identity": item.get("N004"),
+                "reduce_shares": item.get("N005"),
+                "reduce_pct": item.get("N006"),
+                "start": item.get("N009"),
+                "end": item.get("N010"),
+                "progress": item.get("N011"),
             })
         with _REDUCTION_LOCK:
             _REDUCTION_CACHE[key] = (now, plans)
@@ -650,15 +710,30 @@ def _parse_plan_date(s):
     return None
 
 
-def get_shareholder_reduction_flag(market, code, today):
-    """判断「当前交易日 today」是否落在某条「拟减持」计划的 公告日~截止日 窗口内。
+def _fmt_mmdd(d):
+    """date → 'MM-DD'（徽标里展示的紧凑形式），None 原样返回 None。"""
+    if d is None:
+        return None
+    return d.strftime("%m-%d")
 
-    today: 'YYYY-MM-DD' 或 'YYYYMMDD'（建议传 K 线最新一根日期 = 屏幕上当前交易日）。
-    命中任一条拟减持计划即返回 active=True，并附带最近截止日 / 最大拟减持股比 /
+
+def get_shareholder_reduction_flag(market, code, today):
+    """判断「当前交易日 today」是否落在某条「拟减持」计划的 减持窗口（公告日~变动截止日）内。
+
+    today: 'YYYY-MM-DD' / 'YYYY/MM/DD' / 'YYYYMMDD'（建议传 K 线最新一根日期 = 屏幕上当前交易日）。
+    命中任一条拟减持计划即返回 active=True，并附带**每条被命中窗口的起止 MM-DD**
+    （按结束日升序，最多 4 条——典型场景就 1~2 条）、最近截止日 / 最大拟减持股比 /
     股东名单；否则返回 {'active': False}。
 
-    窗口下界用**公告日(N001)**（按需求字面）；若源数据错乱导致
-    公告日 > 截止日（实测 000651 曾出现），该行跳过，避免空区间误判。
+    窗口 = **公告日(N001) ~ 变动截止日(N010)**。语义：减持计划一经公告，
+    潜在抛压即告成立，持续到窗口截止——这正是「公告日到截止日」的业务含义。
+    N009（变动起始日）仅作 N001 缺失时的回退，不作为常规下界。
+    若源数据错乱导致 起始 > 截止，该行跳过。
+
+    注意：本函数触发 7615 网关 HTTP 调用（强制 IPv4 直连，实测 117~130ms，
+    超时 5s；进程内每代码缓存 1 天），**可安全同步调用**——AppEngine 在 K 线
+    主分析路径上直接调用它。曾经「每次 8~12s」的卡顿根因是 eltdx 默认 urlopen
+    走了本机不通的 IPv6（详见 _f10_tqlex_post），与该函数本身的逻辑无关。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
         return {"active": False}
@@ -666,32 +741,48 @@ def get_shareholder_reduction_flag(market, code, today):
     if today_d is None:
         return {"active": False}
     plans = get_shareholder_reduction_plans(market, code)
-    hit_end = None
+    windows = []      # [(end, start_str, end_str, pct, holder), ...] 只保留「今日命中」的窗口
     hit_pct = None
-    holders = []
+    all_holders = []
     for p in plans:
         direction = p.get("direction") or ""
         if "减持" not in direction:
             continue
+        # 窗口 = 公告日(N001) ~ 变动截止日(N010)。语义：公告披露后即可视为
+        # 潜在抛压开始，直到窗口截止；N009（变动起始日）仅作 N001 缺失时的回退。
         lo = _parse_plan_date(p.get("announce_date")) or _parse_plan_date(p.get("start"))
         hi = _parse_plan_date(p.get("end"))
         if lo is None or hi is None or lo > hi:
             continue
         if lo <= today_d <= hi:
-            holders.append(p.get("holder"))
-            if hit_end is None or hi > hit_end:
-                hit_end = hi
+            window = {
+                "start": _fmt_mmdd(lo),
+                "end": _fmt_mmdd(hi),
+                "start_full": lo.strftime("%Y-%m-%d"),
+                "end_full": hi.strftime("%Y-%m-%d"),
+            }
             try:
                 pct = float(p["reduce_pct"])
             except (TypeError, ValueError):
                 pct = None
+            window["pct"] = pct
+            window["holder"] = p.get("holder")
+            windows.append(window)
             if pct is not None and (hit_pct is None or pct > hit_pct):
                 hit_pct = pct
-    if holders:
-        return {
-            "active": True,
-            "end": hit_end.strftime("%Y-%m-%d") if hit_end else None,
-            "max_pct": hit_pct,
-            "holders": holders,
-        }
-    return {"active": False}
+            holder = p.get("holder")
+            if holder and holder not in all_holders:
+                all_holders.append(holder)
+    if not windows:
+        return {"active": False}
+    # 按结束日（end_full）升序，最多保留 4 条；徽标里就「减持：√ MM-DD~MM-DD」展示
+    windows.sort(key=lambda w: w["end_full"])
+    windows = windows[:4]
+    return {
+        "active": True,
+        "windows": windows,                  # 每条 {start, end, start_full, end_full, pct, holder}
+        "max_pct": hit_pct,
+        "holders": all_holders,
+        # 兼容旧字段（首个被命中窗口 = 最早到期日）—— 前端徽标默认取第一个
+        "end": windows[0]["end_full"],
+    }
