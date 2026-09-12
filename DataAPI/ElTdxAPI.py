@@ -566,3 +566,132 @@ def fetch_float_mc(stock_list):
             continue
         result[full_code[2:]] = shares_val * price_val / 1e8
     return result
+
+
+# ============================================================
+# 重要股东买卖：股东增减持计划（通达信 F10 7615 网关，按代码查询）
+# ============================================================
+# 数据源：eltdx.f10.F10Client.shareholder_change_plans(code)
+#   → CWServ.tdxf10_gg_gdyj + section gdzjcjh
+# 这是「按代码查询」的协议命令（与 xdxr 同类），**不是** PE-TTM 那样一次性
+# 下载全市场统计文件；故按单只股票取数 + 进程缓存，不落盘全市场文件。
+# 列名（实测 7615 网关返回 rows 为 {N001..N012: ...} 字典）：
+#   N001 公告日期  N002 拟减持/拟增持  N003 股东名称  N004 股东身份
+#   N005 拟减持股数  N006 占总股本%  N007/N008 拟增持股数(下限/上限)
+#   N009 变动起始日期  N010 变动截止日期  N011 进度(完成/进行中/未实施)
+_REDUCTION_CACHE = {}          # mkt+code -> (epoch, [plans])
+_REDUCTION_CACHE_TTL = 24 * 3600
+_REDUCTION_LOCK = threading.Lock()
+
+
+def get_shareholder_reduction_plans(market, code):
+    """获取某股票的「股东增减持计划」原始列表（按代码查，进程缓存 1 天）。
+
+    返回 list[dict]，每条字段：
+        announce_date, direction, holder, identity,
+        reduce_shares, reduce_pct, start, end, progress
+    非 A 股（指数 / 港股 / 期货等）、eltdx 不可用、取数失败 → 返回 []。
+    """
+    if market.lower() not in ('sh', 'sz', 'bj'):
+        return []
+    key = market.lower() + code
+    now = time.time()
+    with _REDUCTION_LOCK:
+        cached = _REDUCTION_CACHE.get(key)
+        if cached and now - cached[0] < _REDUCTION_CACHE_TTL:
+            return cached[1]
+    try:
+        from eltdx.f10 import F10Client
+    except Exception:
+        log.warning("[股东增减持] eltdx 不可用，跳过（请 pip install -U 'eltdx>=3.0.0'）")
+        return []
+    try:
+        resp = F10Client().shareholder_change_plans(code)
+        if not getattr(resp, "ok", False):
+            return []
+        plans = []
+        for row in getattr(resp, "rows", ()):
+            plans.append({
+                "announce_date": row.get("N001"),
+                "direction": row.get("N002"),
+                "holder": row.get("N003"),
+                "identity": row.get("N004"),
+                "reduce_shares": row.get("N005"),
+                "reduce_pct": row.get("N006"),
+                "start": row.get("N009"),
+                "end": row.get("N010"),
+                "progress": row.get("N011"),
+            })
+        with _REDUCTION_LOCK:
+            _REDUCTION_CACHE[key] = (now, plans)
+        return plans
+    except Exception as _e:
+        log.warning("[股东增减持] 取数失败(%s%s): %s", market, code, _e)
+        return []
+
+
+def _parse_plan_date(s):
+    """把 'YYYY-MM-DD' / 'YYYY/MM/DD' / 'YYYYMMDD'（可带 ' HH:MM[:SS]' 时间尾部，
+    来自日内周期 K 线日期）解析为 date；无法解析返回 None。
+
+    注意：应用里 K 线日期用 func_util._get_date_fmt 的 %Y/%m/%d（斜杠）格式，
+    而 eltdx 网关返回的减持计划日期是 %Y-%m-%d（短横）；两者都要兼容。
+    """
+    if not s:
+        return None
+    s = str(s).strip()
+    s = s.split(" ")[0]          # 丢弃时间部分（日内周期日期形如 2026/09/11 15:00）
+    s = s.replace("/", "-")      # 兼容 / 与 - 分隔符
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def get_shareholder_reduction_flag(market, code, today):
+    """判断「当前交易日 today」是否落在某条「拟减持」计划的 公告日~截止日 窗口内。
+
+    today: 'YYYY-MM-DD' 或 'YYYYMMDD'（建议传 K 线最新一根日期 = 屏幕上当前交易日）。
+    命中任一条拟减持计划即返回 active=True，并附带最近截止日 / 最大拟减持股比 /
+    股东名单；否则返回 {'active': False}。
+
+    窗口下界用**公告日(N001)**（按需求字面）；若源数据错乱导致
+    公告日 > 截止日（实测 000651 曾出现），该行跳过，避免空区间误判。
+    """
+    if market.lower() not in ('sh', 'sz', 'bj'):
+        return {"active": False}
+    today_d = _parse_plan_date(today)
+    if today_d is None:
+        return {"active": False}
+    plans = get_shareholder_reduction_plans(market, code)
+    hit_end = None
+    hit_pct = None
+    holders = []
+    for p in plans:
+        direction = p.get("direction") or ""
+        if "减持" not in direction:
+            continue
+        lo = _parse_plan_date(p.get("announce_date")) or _parse_plan_date(p.get("start"))
+        hi = _parse_plan_date(p.get("end"))
+        if lo is None or hi is None or lo > hi:
+            continue
+        if lo <= today_d <= hi:
+            holders.append(p.get("holder"))
+            if hit_end is None or hi > hit_end:
+                hit_end = hi
+            try:
+                pct = float(p["reduce_pct"])
+            except (TypeError, ValueError):
+                pct = None
+            if pct is not None and (hit_pct is None or pct > hit_pct):
+                hit_pct = pct
+    if holders:
+        return {
+            "active": True,
+            "end": hit_end.strftime("%Y-%m-%d") if hit_end else None,
+            "max_pct": hit_pct,
+            "holders": holders,
+        }
+    return {"active": False}

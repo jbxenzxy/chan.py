@@ -2266,6 +2266,7 @@
                     `<span class="label">涨幅:</span> <span class="${cls}">${sign}${changePct}%</span> &nbsp; ` +
                     `<span class="label">复权:</span> <span class="label">${chartData.meta.forward_adjust ? "前复权" : "不复权"}</span>` +
                     (chartData.meta.pe_ttm != null ? ` &nbsp; <span class="label">PE-TTM:</span> <span class="label">${chartData.meta.pe_ttm > 0 ? chartData.meta.pe_ttm.toFixed(2) : "亏损"}</span>` : "") +
+                    (chartData.meta.shareholder_reduction && chartData.meta.shareholder_reduction.active ? ` &nbsp; <span class="label" style="color:#e74c3c">减持:</span> <span class="label" style="color:#e74c3c">√</span>` : "") +
                     (chartData.meta.index_belong ? ` &nbsp; <span class="label">归属:</span> <span class="label">${chartData.meta.index_belong}</span>` : "");
             }
 

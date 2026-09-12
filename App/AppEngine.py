@@ -153,6 +153,7 @@ DUAL_SUB_FALLBACK_MIN = app_config.dual_sub_fallback_min
 # 注入的 FUTURES_LOOKBACK_CONFIG，与 CTqSdkAPI/tqsdk 是否可用无关，
 # 故放在 tqsdk 的 try/except 之外，避免 tqsdk 未装时被置 None 的边界问题。
 from DataAPI.TqSdkAPI import resolve_lookback_bars
+from DataAPI.ElTdxAPI import get_shareholder_reduction_flag
 
 # 导入天勤数据源适配器（期货/期指）
 # 频率映射/别名/支持列表/fetch_kline 一律经 CTqSdkAPI 元数据接口访问
@@ -240,6 +241,17 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 def _get_pe_ttm(market, code):
     """获取单只股票的 PE-TTM 值（委托 app_data）"""
     return app_data.get_pe_ttm(market, code)
+
+
+def _get_reduction_flag(market, code, today):
+    """获取「重要股东买卖」减持窗口标记（委托 ElTdxAPI，按代码查 F10）。
+
+    today 取屏幕上当前交易日（K 线最新一根日期）；非 A 股 / eltdx 不可用 /
+    无减持计划 → 返回 {'active': False}。
+    """
+    if not today:
+        return {"active": False}
+    return get_shareholder_reduction_flag(market, code, today)
 
 
 def _get_index_belong(market, code):
@@ -1240,6 +1252,9 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "forward_adjust": forward_adjust_done,
             "pe_ttm": _get_pe_ttm(market, code),
             "index_belong": _get_index_belong(market, code),
+            "shareholder_reduction": _get_reduction_flag(
+                market, code, kline_data[-1]["date"] if kline_data else None
+            ),
         },
         "klines": kline_data,
         "bis": bi_data,
