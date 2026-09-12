@@ -1149,12 +1149,18 @@ def read_blk_file(blk_path):
 
 
 # ============================================================
-# 板块成分股缓存（网络下载，全量缓存，支持所有88指数）
+# 板块成分股缓存（infoharbor_block.dat 本地解析，支持所有 88 指数）
 # ============================================================
-_BLOCK_GN_CACHE = None       # dict: sector_name → [{"code","prefix","name"}, ...]
-_BLOCK_GN_CACHE_LOADED = False
 _INFOHARBOR_BLOCK_CACHE = None       # dict: sector_code → {"name": str, "stocks": [...]}
 _INFOHARBOR_BLOCK_CACHE_LOADED = False
+
+# 原 block_*.dat 网络兜底（_BLOCK_GN_CACHE / _download_block_gn_from_network /
+# _parse_raw_block_gn / get_index_stocks Step4）于 2026-09-12 整体删除：
+#   ① 日常仅覆盖 2 个 infoharbor 未覆盖板块（880524 含可转债 / 880735 专精特新，占 0.4%）；
+#   ② block_*.dat 数据源有 400 只硬截断（实测同一板块 infoharbor 1102 只 vs block 400 只，
+#      静默缺口 63.7%，比报错更危险）；
+#   ③ infoharbor_block.dat 缺失/损坏时，点「刷新」按钮经 eltdx 重新下载即可恢复，
+#      无需静默降级的兜底。
 
 
 # 板块文件下载已迁移到 eltdx（见 DataAPI/ElTdxAPI.py 的 download_block_files_via_eltdx）；
@@ -1237,110 +1243,9 @@ def _validate_downloaded_block_file(file_name, raw_data):
 # 原 _safe_refresh_one_block_file（pytdx）于 2026-09-12 删除，不再使用。
 
 
-def _download_block_gn_from_network(progress_callback=None):
-    """
-    下载全量板块成分股数据（block_zs / block_gn / block_fg）。
-
-    磁盘缓存逻辑：
-      1. 本地 hq_cache 目录优先；存在直接解析
-      2. 本地不存在才从服务器下载（eltdx 0x06B9），下载后写入本地文件
-      3. 结果缓存在全局 _BLOCK_GN_CACHE
-
-    注意：tdxhy.cfg / infoharbor_block.dat / spblock.dat 不在此路径下载
-    （由 refresh_block_files 统一刷新）；本函数只负责 block_zs/gn/fg。
-
-    返回 dict: {sector_name: [{"code": ..., "prefix": ..., "name": ...}, ...], ...}
-    """
-    global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
-    if _BLOCK_GN_CACHE_LOADED:
-        return _BLOCK_GN_CACHE or {}
-
-    # 本地缓存目录 = T0002/hq_cache/（和 tdxzs.cfg / tdxhy.cfg 同目录）
-    vipdoc_dir = _tdx_config.get("vipdoc_dir", "")
-    if vipdoc_dir:
-        block_cache_dir = os.path.join(os.path.dirname(vipdoc_dir), "T0002", "hq_cache")
-    else:
-        block_cache_dir = None
-
-    # 通达信服务器提供的板块文件（经 eltdx 0x06B9 读取）
-    # block_zs.dat: 标准/中小盘宽基指数（沪深300、上证50、中证800、科创50 等）
-    # block_gn.dat: 概念板块（8805xx，锂电池、人工智能等）
-    # block_fg.dat: 风格板块（8808xx，大盘股、小盘股等）
-    # 注意：block_hy.dat（二级行业，含880491"半导体"）不在服务器上，
-    #       它只存在于本地 T0002/hq_cache/ 目录，格式也不同（480字节/条 vs 2800字节/条）
-    # 注意：block.dat 不再纳入下载——它是旧版整合文件（100 个块 = 指数 + 概念），
-    #       内容已被 block_zs.dat / block_gn.dat / block_fg.dat 完全覆盖，刷新纯属冗余。
-    candidate_files = [
-        "block_zs.dat",
-        "block_gn.dat",
-        "block_fg.dat",
-    ]
-
-    result = {}
-    need_download = []
-
-    # Step 1: 先读本地文件
-    if block_cache_dir:
-        for bf in candidate_files:
-            local_path = os.path.join(block_cache_dir, bf)
-            if not os.path.exists(local_path):
-                need_download.append(bf)
-                continue
-            try:
-                with open(local_path, "rb") as f:
-                    raw = f.read()
-                parsed = _parse_raw_block_gn(raw, bf)
-                if parsed:
-                    log.info(f"[板块成分股] ✅ 从本地缓存读取 {bf}: {len(parsed)} 个板块")
-                    result.update(parsed)
-            except Exception as e:
-                log.warning(f"[板块成分股] ⚠️ 本地缓存 {bf} 读取失败，尝试从网络下载: {e}")
-                need_download.append(bf)
-    else:
-        # 没有配置通达信目录，全部从网络下载
-        need_download = candidate_files[:]
-
-    if need_download:
-        log.info(f"[板块成分股] 需从网络下载: {need_download}")
-    else:
-        log.info("[板块成分股] 所有板块文件已从本地缓存加载，无需下载")
-
-    # Step 2: 经 eltdx 0x06B9 下载缺失文件（替代原 pytdx get_block_info）
-    if need_download:
-        hosts = [f"{h}:{p}" for h, p in TDX_BLOCK_SERVERS]
-        try:
-            downloaded = download_block_files_via_eltdx(need_download, hosts=hosts)
-        except Exception as e:
-            log.warning(f"[板块成分股] ⚠️ eltdx 下载异常: {e}")
-            downloaded = {}
-        for bf in need_download[:]:
-            raw = downloaded.get(bf)
-            if not raw:
-                log.warning(f"[板块成分股] ⚠️ {bf} 下载失败或数据无效")
-                continue
-            parsed = _parse_raw_block_gn(raw, bf)
-            if parsed:
-                result.update(parsed)
-                log.info(f"[板块成分股] ✅ {bf} 下载完成: {len(parsed)} 个板块")
-                # 写入本地缓存文件：先写临时文件，校验成功后原子替换，避免下载失败破坏旧文件
-                if block_cache_dir and _validate_downloaded_block_file(bf, raw):
-                    try:
-                        _safe_replace_file(os.path.join(block_cache_dir, bf), raw)
-                    except Exception as e:
-                        log.warning(f"[板块成分股] ⚠️ 写入本地缓存 {bf} 失败: {e}")
-                need_download.remove(bf)
-            else:
-                log.warning(f"[板块成分股] ⚠️ {bf} 解析失败，数据无效")
-
-    if not result:
-        log.warning("[板块成分股] 所有服务器均下载失败，板块数据不可用")
-        _BLOCK_GN_CACHE_LOADED = True
-        return {}
-
-    _BLOCK_GN_CACHE = result
-    _BLOCK_GN_CACHE_LOADED = True
-    log.info(f"[板块成分股] 解析完成，共 {len(result)} 个板块有成分股数据")
-    return result
+# 原 block_*.dat 网络兜底 _download_block_gn_from_network（含 _parse_raw_block_gn 解析、
+# _BLOCK_GN_CACHE 缓存）于 2026-09-12 随 get_index_stocks Step4 一并整体删除，
+# 删除理由见文件上方「板块成分股缓存」段注释。
 
 
 def refresh_block_files(progress_callback=None):
@@ -1353,7 +1258,6 @@ def refresh_block_files(progress_callback=None):
       3. 校验成功后写入 .tmp，再用 os.replace 原子替换；
       4. 任一文件刷新失败时保留旧文件。
     """
-    global _BLOCK_GN_CACHE, _BLOCK_GN_CACHE_LOADED
     global _INFOHARBOR_BLOCK_CACHE, _INFOHARBOR_BLOCK_CACHE_LOADED
     global _TDXHY_CACHE, _TDXHY_CACHE_LOADED
 
@@ -1406,92 +1310,12 @@ def refresh_block_files(progress_callback=None):
     else:
         log.info(f"[板块刷新] 刷新完成: {refreshed}/{len(block_files)} 个文件成功, 已保存到 {block_cache_dir}")
 
-    _BLOCK_GN_CACHE = None
-    _BLOCK_GN_CACHE_LOADED = False
     _INFOHARBOR_BLOCK_CACHE = None
     _INFOHARBOR_BLOCK_CACHE_LOADED = False
     # 若本批次包含 tdxhy.cfg，使研究行业映射的内存缓存失效，下次扫描用新文件重读
     if "tdxhy.cfg" in block_files:
         _TDXHY_CACHE = None
         _TDXHY_CACHE_LOADED = False
-
-
-def _parse_raw_block_gn(data, block_file="block_gn.dat"):
-    """
-    解析 block_*.dat 二进制数据（完全参考 pytdx BlockReader 源码）。
-    block_gn.dat / block_zs.dat / block_fg.dat 格式相同。
-    格式：384字节文件头 + 2字节板块数 + N条板块记录
-
-    每条板块记录：
-      9字节名称(GBK) + 2字节成分股数(uint16) + 2字节类别(uint16)
-      + 成分股列表(每只7字节，UTF-8编码，格式如 "0000001" = 市场前缀+6位代码)
-    每条记录固定占 2800 字节（从成分股列表起始位置算起，包含股票代码数据 + 尾部填充）
-    """
-    result = {}
-
-    if len(data) < 386:
-        return result
-
-    # 跳过384字节文件头，读取板块数量
-    pos = 384
-    block_count = struct.unpack_from("<H", data, pos)[0]
-    pos += 2
-
-    for i in range(block_count):
-        if pos + 13 > len(data):
-            break
-
-        # 板块名称（9字节 GBK）
-        raw_name = data[pos:pos + 9]
-        pos += 9
-        block_name = raw_name.decode("gbk", errors="ignore").rstrip("\x00")
-
-        # 成分股数量 + 板块类别（各2字节 uint16 LE）
-        stock_count, block_type = struct.unpack_from("<HH", data, pos)
-        pos += 4
-
-        # 记录成分股列表起始位置（用于后续跳转到下一条记录）
-        block_stock_begin = pos
-
-        # 调试打印：只保留 block_count 总数打印，不打印单个板块（已移除详细输出）
-
-        if block_name and stock_count > 0 and stock_count < 10000:
-            stocks = []
-            for j in range(stock_count):
-                if pos + 7 > len(data):
-                    break
-                raw_stock = data[pos:pos + 7]
-                pos += 7
-                # 关键：使用 UTF-8 解码（与 pytdx BlockReader 一致）
-                one_code = raw_stock.decode("utf-8", errors="ignore").rstrip("\x00")
-                # block_*.dat 中存储的是 6 位纯数字股票代码（如 "600028"）
-                if len(one_code) == 6 and one_code.isdigit():
-                    # 根据代码规则推断市场前缀
-                    first = one_code[0]
-                    if first in "689":
-                        prefix = "1"   # 沪市（含主板、科创板）
-                    elif first in "03":
-                        prefix = "0"   # 深市（含主板、创业板）
-                    elif first in "24":
-                        prefix = "2"   # 北交所/新三板
-                    else:
-                        prefix = "1"   # 默认沪市
-                    stocks.append({
-                        "code": one_code,
-                        "prefix": prefix,
-                        "name": one_code,
-                    })
-
-            if stocks:
-                result[block_name] = stocks
-
-        # 跳到下一个板块：从 block_stock_begin 起跳过 2800 字节
-        # （参考 pytdx BlockReader: pos = block_stock_begin + 2800）
-        pos = block_stock_begin + 2800
-
-    return result
-
-
 
 
 def _parse_infoharbor_block(raw_data):
@@ -1613,7 +1437,7 @@ def get_index_stocks(sector_code):
 
     支持的类型：
     - 881xxx: 研究行业(新版) → 本地 tdxhy.cfg
-    - 880xxx: 概念/风格板块 → 优先 infoharbor_block.dat，失败再用 tdxzs.cfg + block_*.dat
+    - 880xxx: 概念/风格板块 → 本地 infoharbor_block.dat（未命中返回空，提示点「刷新」恢复）
     - 000xxx/399xxx: 标准指数 → AKShare (中证指数公司)
 
     返回: [{"code": "000001", "prefix": "0", "name": "000001"}, ...]
@@ -1640,52 +1464,17 @@ def get_index_stocks(sector_code):
     if stocks:
         return stocks
 
-    # Step 4: infoharbor 不可用时，回退到 tdxzs.cfg + block_*.dat
-    hq_cache = _get_hq_cache_dir()
-    sector_name = None
-    if hq_cache:
-        tdxzs_file = os.path.join(hq_cache, "tdxzs.cfg")
-        if os.path.exists(tdxzs_file):
-            try:
-                with open(tdxzs_file, "r", encoding="gbk", errors="ignore") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or line.startswith("#"):
-                            continue
-                        parts = line.split("|")
-                        if len(parts) >= 2:
-                            name = parts[0].strip()
-                            code = parts[1].strip()
-                            if "." in code:
-                                code = code.split(".")[0]
-                            if code == sector_code:
-                                sector_name = name
-                                break
-            except Exception as e:
-                log.warning(f"[板块成分股] 读取tdxzs.cfg失败: {e}")
-
-    if not sector_name:
-        log.info(f"[板块成分股] 未在tdxzs.cfg中找到板块代码 {sector_code}")
-        return []
-
-    # 8803xx-8804xx（旧版行业）无成分股数据
-    if sector_code.startswith("8803") or sector_code.startswith("8804"):
-        log.warning(f"[板块成分股] 旧版行业代码 {sector_code}，无成分股数据。请使用 881 研究行业代码。")
-        return []
-
-    # 从 block_*.dat 缓存中查找
-    cache = _download_block_gn_from_network()
-    stocks = cache.get(sector_name, [])
-
-    if stocks:
-        if len(stocks) >= 400:
-            log.warning(f"[板块成分股] ⚠️ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只，可能受 400 只上限影响")
-        else:
-            log.info(f"[板块成分股] ✅ 从旧 block_*.dat 找到 '{sector_name}' 共 {len(stocks)} 只成分股")
-    else:
-        log.error(f"[板块成分股] ❌ 旧 block_*.dat 缓存中未找到板块 '{sector_name}'")
-
-    return stocks
+    # Step 4（tdxzs.cfg + block_*.dat 兜底下载）已于 2026-09-12 整体删除：
+    #   ① 日常仅覆盖 2 个 infoharbor 未覆盖板块（880524 含可转债 / 880735 专精特新，占 0.4%）；
+    #   ② block_*.dat 数据源有 400 只硬截断（实测同一板块 infoharbor 1102 只 vs block 400 只，
+    #      静默缺口 63.7%，比报错更危险）；
+    #   ③ infoharbor_block.dat 缺失/损坏时，点「刷新」按钮经 eltdx 重新下载即可恢复，
+    #      无需静默降级的兜底。
+    log.warning(
+        f"[板块成分股] infoharbor_block.dat 未命中板块 {sector_code}（Step4 兜底已删除），"
+        f"返回空列表；请点「刷新」按钮恢复 infoharbor_block.dat 后重试"
+    )
+    return []
 
 
 # 权威市场 → 板块前缀（与通达信市场前缀约定一致：1=沪、0=深、2=北交所/新三板）
@@ -2298,4 +2087,4 @@ if __name__ == "__main__":
     print("  - 通过 set_tdx_config(forward_adjust_enabled=True) 启用前复权")
     print("")
     print("板块功能：")
-    print("  - get_index_stocks(): 获取指数/板块成分股（88x→tdxhy/block, 标准指数→AKShare）")
+    print("  - get_index_stocks(): 获取指数/板块成分股（881→tdxhy.cfg、880→infoharbor, 标准指数→AKShare）")
