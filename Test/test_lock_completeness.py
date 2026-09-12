@@ -108,7 +108,9 @@ ALLOWLIST = {
 
     # 点查（dict.get）在 CPython 下是原子的，无需加锁
     "get_stock_name": "self._names.get() 点查，原子",
-    "get_pe_ttm": "self._pe.get() 点查，原子",
+    # 2026-09：PE-TTM 改为「打开 K 线页面实时取数」，取数/写入在
+    # _ensure_pe_ttm_live 内完成（_pe_live_lock 单飞门 + update_pe_ttm 锁内写）
+    "get_pe_ttm": "点查原子；实时取数在 _ensure_pe_ttm_live 内持锁完成",
     "get_index_belong": "self._belong.get() 点查，原子",
     "get_float_mc_from_cache": "self._float_mc.get() 点查，原子",
     "get_annotated_codes": "self._names.get() 点查（标注表本身是锁内快照）",

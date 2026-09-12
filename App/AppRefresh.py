@@ -2,19 +2,21 @@
 """
 App/AppRefresh.py —— 刷新功能域
 =========================================================================
-点击页面右上角「刷新」按钮后的操作，刷新股票名、指数归属、PE-TTM、
-板块文件等。
+点击页面右上角「刷新」按钮后的操作，刷新股票名、指数归属、板块文件等。
+（PE-TTM **不在此列**：它每日随行情变动，落盘缓存在用户不点刷新时必然陈旧，
+已在 2026-09 改为「打开 K 线页面实时取数」——见 AppData 的 PE-TTM 实时层，
+本模块只负责把取数实现注入进去。）
 
 本模块收纳：
   - 股票名称刷新（refresh_stock_names / refresh_stock_names_async / refresh_status）
-  - 名称 / PE / 指数归属 缓存读写（AppData 直连）
-  - 刷新实现（_refresh_stock_names / _refresh_pe_ttm /
+  - 名称 / 指数归属 缓存读写（AppData 直连）
+  - PE-TTM 实时取数实现的注入点（依赖倒置，见下方 app_data.set_pe_ttm_live_fetcher）
+  - 刷新实现（_refresh_stock_names / _refresh_index_belong /
       _fetch_index_belong_from_akshare / _collect_codes_from_vipdoc /
       _fetch_names_from_sina_once 等）
 
 依赖方向：AppRefresh.py → AppConfig / AppData / DataAPI（单向）
 """
-import json
 import os
 import threading
 import traceback
@@ -24,10 +26,20 @@ from App.AppData import app_data
 from App.AppLog import get_logger
 from DataAPI.TdxAPI import collect_codes_from_vipdoc, refresh_block_files
 from DataAPI.AkshareAPI import AKSHARE_EXCHANGE_MAP, AKSHARE_INDEX_MAP, fetch_index_cons
-from DataAPI.TxAPI import fetch_pe_ttm, fetch_hk_names
+from DataAPI.MarketStatsAPI import fetch_pe_ttm_live
+from DataAPI.TxAPI import fetch_hk_names
 from DataAPI.SinaAPI import fetch_a_names
 
 log = get_logger(__name__)
+
+# ═══════════════════════════════════════════════════════════════════════
+# PE-TTM 实时层取数实现注入（依赖倒置）
+# ═══════════════════════════════════════════════════════════════════════
+# AppData 不得 import DataAPI（phase5 守卫 ④b：防影子双源），故取数实现由本
+# 模块在导入时注入。AppData.get_pe_ttm 在 K 线页面每次打开标的时经此回调实时
+# 取一次 PE；按市场分流规则（A股→eltdx / 港股→腾讯）唯一收口在 MarketStatsAPI。
+# 导入本模块即成注入——真实运行链 FrontAPI → AppOrch → AppRefresh 必然经过。
+app_data.set_pe_ttm_live_fetcher(fetch_pe_ttm_live)
 
 
 # 股票名称缓存别名 = app_data 实例字段（共享同一对象）
@@ -41,6 +53,15 @@ _stock_names_cache = app_data.names_cache
 # 审计 P3：两条都是死别名（本模块零引用）。P1-2 把 PE/归属表的读写全部收进
 # app_data.update_pe_ttm() / pe_snapshot() / belong_snapshot() 之后，这两
 # 个别名就没用了。留着等于给"绕开锁直接全表遍历"留一个现成入口。
+
+# 「残缺表不得覆盖完好表」门槛（刷新落盘前的最后一道闸）
+# 补全链路整体故障时（拼参错误 / 接口被封），合并表里绝大多数条目没有名称，
+# 会被步骤5 的过滤器剔除；若照旧落盘并 replace_names，**一次坏刷新就把完好的
+# 名称表永久换成了残表** —— 表现为页面名称退化成代码、拼音搜不到，且重启也
+# 不恢复（残表已落盘）。故新表条目数不足旧表该比例时视为刷新异常：保留旧表。
+# 放本模块而非 AppConfig：这是刷新流程的内部安全阈值、不是可配置业务参数，
+# 放配置层会牵动 phase2 的「AppConfig↔AppData property 配对」守卫，扩大波及面。
+_REFRESH_NAMES_MIN_KEEP_RATIO = 0.5
 
 # 刷新状态（股票名称刷新用；获取侧状态）
 # 访问者：刷新工作线程（写）+ /api/stocks/refresh/read|POST 的 REST 线程
@@ -74,7 +95,7 @@ def _set_refresh_status(**fields):
 
 # AKShare 指数代码 → 市场前缀映射
 # ═══════════════════════════════════════════════════════════════════════
-# 名称 / PE / 指数归属 缓存
+# 名称 / 指数归属 缓存
 # ═══════════════════════════════════════════════════════════════════════
 # AKShare 交易所映射 / 指数归属映射常量已在 DataAPI/AkshareAPI.py 统一收纳
 # （AKSHARE_EXCHANGE_MAP / AKSHARE_INDEX_MAP），此处经顶部 import 复用，不再本地重复定义。
@@ -84,9 +105,9 @@ def load_stock_names_from_cache_file():
     return app_data.load_stock_names_from_cache_file()
 
 
-def load_pe_ttm_cache():
-    """加载 PE-TTM 缓存（AppData 直连）"""
-    return app_data.load_pe_ttm_cache()
+def load_index_belong_cache():
+    """加载指数归属缓存（AppData 直连；新旧文件名自动迁移，见 AppData）"""
+    return app_data.load_index_belong_cache()
 
 
 def get_pe_ttm(market, code):
@@ -205,112 +226,48 @@ def _fetch_index_belong_from_akshare(timeout=30):
         finally:
             executor.shutdown(wait=False)  # 不等待卡住的线程，直接进入下一个指数
 
-    app_data.replace_index_belong(result)
+    if result:
+        app_data.replace_index_belong(result)
+    else:
+        # 空结果不替换：replace_index_belong 是 clear()+update() **整体替换**，
+        # 网络全挂时用它会把内存里已有的指数归属一并清空（改造前即如此，随后
+        # 还会把空表落盘）。指数归属季度才变，保留旧值远优于清空。
+        log.info("[指数归属] 本次未获取到任何指数归属，保留内存中的既有数据")
     return result
 
 
-def _refresh_pe_ttm():
+def _refresh_index_belong():
     """
-    刷新 PE-TTM，增量更新 stock_pettm_index.json。
-    从 stock_names.json 中读取所有股票代码，经 TxAPI.fetch_pe_ttm（腾讯行情接口）
-    批量获取，缓存写入留在这里（_pe_ttm_cache 与合并落盘）。
+    刷新指数归属（AKShare 在线获取），落盘 stock_index_belong.json。
+
+    历史说明：本函数原为 _refresh_pe_ttm，同时刷新 PE-TTM 与指数归属并**合并**
+    写入 stock_pettm_index.json。PE-TTM 每日随行情变动、指数归属季度调仓才变，
+    两者时间维度不匹配，且实际使用中不会每天点刷新 → 那份缓存的 PE 必然陈旧。
+    故 PE-TTM 改为「打开 K 线页面实时取数」（见 AppData PE-TTM 实时层），不再
+    参与本刷新、不再落盘；本函数只保留指数归属部分——它适合缓存。
+
+    落盘走 AppData.save_index_belong_cache()（原子写 + 过滤旧格式纯数字 key +
+    空表保护），不再由本模块手工拼装合并字典。
     """
-    _set_refresh_status(step="刷新PE-TTM...")
-    load_pe_ttm_cache()  # 先加载已有缓存
-
-    # 从 stock_names.json 收集所有纯数字股票代码（路径：AppConfig 派生属性）
-    if not os.path.exists(app_config.stock_names_cache_file):
-        log.info("[PE-TTM] stock_names.json 不存在，无法刷新")
-        _set_refresh_status(error="stock_names.json 不存在，请先刷新股票名称")
-        return
-
-    try:
-        with open(app_config.stock_names_cache_file, "r", encoding="utf-8") as f:
-            names_data = json.load(f)
-    except Exception as e:
-        log.info(f"[PE-TTM] 读取 stock_names.json 失败: {e}")
-        _set_refresh_status(error=f"读取 stock_names.json 失败: {e}")
-        return
-
-    if not isinstance(names_data, dict):
-        _set_refresh_status(error="stock_names.json 格式错误")
-        return
-
-    # 收集股票代码并构建腾讯代码列表
-    codes = []
-    for key, info in names_data.items():
-        if not isinstance(info, dict):
-            continue
-        mkt = info.get("market", "")
-        # 提取纯数字代码
-        code = key
-        if not code.isdigit() and len(key) > 1:
-            # 复合键如 sh000001 → 提取数字部分
-            code = key[2:] if key[:2] in ("sh", "sz", "bj", "hk") else key
-        # A股6位，港股5位
-        code_len = len(code) if code.isdigit() else 0
-        if mkt == "hk" and code_len == 5:
-            codes.append((mkt, code))
-        elif mkt in ("sh", "sz", "bj") and code_len == 6:
-            codes.append((mkt, code))
-
-    total = len(codes)
-    _set_refresh_status(total=total)
-    _set_refresh_status(loaded=0)
-    log.info(f"[PE-TTM] 开始刷新 {total} 只股票的 PE-TTM...")
-
-    # 经 TxAPI.fetch_pe_ttm 批量获取（腾讯行情接口，字段[39]=市盈率动态，内部分批）
-    got_set = set()  # 本次成功获取到PE-TTM的代码
-    mv_map = fetch_pe_ttm(codes)
-    got_set.update(mv_map.keys())
-    # 审计 P1：写入收回 AppData 锁内方法 —— 裸写共享 dict 会与整表遍历的
-    # 读者撞车（「dictionary changed size during iteration」，或条数不变时
-    # 静默串表）。update_pe_ttm 与 pe_snapshot() 共用 _meta_cache_lock。
-    new_count = app_data.update_pe_ttm(mv_map)
-    _set_refresh_status(loaded=total)
-    log.info(f"[PE-TTM] 进度: {_refresh_status['loaded']}/{total}, 新增/更新 {new_count} 条")
-
-    # 统计未获取到的股票
-    all_queried = {mkt + code for mkt, code in codes}
-    missed = all_queried - got_set
-    if missed:
-        missed_list = sorted(missed)[:20]
-        log.info(f"[PE-TTM] 未获取到PE-TTM: {len(missed)} 只 (如: {', '.join(missed_list)}{'...' if len(missed) > 20 else ''})")
-
-    # 刷新指数归属（AKShare在线获取，与PE-TTM一起保存）
     _set_refresh_status(step="刷新指数归属...")
+    load_index_belong_cache()   # 先加载已有缓存（含新旧文件名一次性迁移）
     log.info("[指数归属] ========== 开始刷新指数归属 ==========")
-    _fetch_index_belong_from_akshare()
-
-    # 保存到文件（合并PE-TTM和指数归属，过滤掉旧格式的纯数字key）
     try:
-        os.makedirs(os.path.dirname(app_config.stock_pe_ttm_file), exist_ok=True)
-        # 找出所有有PE-TTM或指数归属的股票代码
-        # 审计 P1：整表遍历一律走**快照**（与写者互斥）。直接
-        # set(_pe_ttm_cache.keys()) 是无锁全表迭代，写者（本函数上方的
-        # update_pe_ttm、以及 replace_index_belong 的 clear()+update()）
-        # 一旦并发，就会撞「dictionary changed size during iteration」。
-        pe_snap = app_data.pe_snapshot()
-        belong_snap = app_data.belong_snapshot()
-        all_keys = set(pe_snap.keys()) | set(belong_snap.keys())
-        combined = {}
-        for k in all_keys:
-            if k.isdigit() and len(k) == 6:
-                continue  # 过滤旧格式纯数字key
-            entry = {}
-            pe_val = pe_snap.get(k)
-            idx_val = belong_snap.get(k)
-            if isinstance(pe_val, (int, float)) and pe_val != 0:
-                entry["pe_ttm"] = pe_val
-            if idx_val:
-                entry["index"] = idx_val
-            if entry:
-                combined[k] = entry
-        _safe_write_json_file(app_config.stock_pe_ttm_file, combined, ensure_ascii=False)
-        log.info(f"刷新完成: 共 {len(combined)} 条 (PE-TTM: {sum(1 for v in combined.values() if 'pe_ttm' in v)} 条, 指数归属: {sum(1 for v in combined.values() if 'index' in v)} 条), 已保存到 {app_config.stock_pe_ttm_file}")
+        _fetch_index_belong_from_akshare()
     except Exception as e:
-        log.info(f"[PE-TTM] 保存失败: {e}")
-        _set_refresh_status(error=f"保存 PE-TTM 失败: {e}")
+        log.info(f"[指数归属] 获取失败: {e}")
+        _set_refresh_status(error=f"指数归属获取失败: {e}")
+        return
+
+    snap = app_data.belong_snapshot()
+    if not snap:
+        log.info("[指数归属] 本次未获取到任何指数归属，保留既有文件不落盘")
+        return
+    if app_data.save_index_belong_cache():
+        log.info(f"[指数归属] ✅ 刷新完成: 共 {len(snap)} 条，已保存到 "
+                 f"{app_data.stock_index_belong_file}")
+    else:
+        _set_refresh_status(error="保存指数归属失败")
 
 
 def _reset_refresh_running(fn):
@@ -406,9 +363,18 @@ def _refresh_stock_names():
                 raw_names[code] = info
         failed = len(codes_without_name) - filled
         if failed > 0:
-            log.info(f"[股名刷新] 步骤3/5 补全名称: 成功 {filled} 只, 失败 {failed} 只")
+            # 失败率过半说明「不是个别票取不到」而是链路级故障（如拼参错误 /
+            # 接口被封），用 warning 让它跳出 INFO 噪音——此前的静默 INFO
+            # 让 5000+ 只名称整体丢失只表现为一行和平的日志。
+            _rate = failed * 100.0 / max(1, len(codes_without_name))
+            _msg = (f"[股名刷新]   └─ 补全结果: 成功 {filled} 只, "
+                    f"失败 {failed} 只 ({_rate:.0f}%)")
+            if _rate >= 50:
+                log.warning(_msg)
+            else:
+                log.info(_msg)
         else:
-            log.info(f"[股名刷新] 步骤3/5 补全名称: 全部成功 {filled} 只")
+            log.info(f"[股名刷新]   └─ 补全结果: 全部成功 {filled} 只")
     else:
         log.info("[股名刷新] 步骤3/5 补全名称: 无需补全")
 
@@ -519,7 +485,17 @@ def _refresh_stock_names():
             del all_names[_code]
             filtered_count += 1
             filtered_delist += 1
-    if all_names:
+    # === 步骤5 落盘前的质量门槛（见 _REFRESH_NAMES_MIN_KEEP_RATIO 注释）===
+    _old_count = len(app_data.names_snapshot())
+    _new_count = len(all_names)
+    _keep = bool(all_names) and (
+        _old_count == 0 or _new_count >= _old_count * _REFRESH_NAMES_MIN_KEEP_RATIO)
+    if all_names and not _keep:
+        log.warning(
+            f"[股名刷新] 步骤5/5 拒绝覆盖: 新表 {_new_count} 只不足旧表 {_old_count} 只的 "
+            f"{_REFRESH_NAMES_MIN_KEEP_RATIO:.0%}，判定为名称补全链路异常 "
+            f"→ 保留旧名称表（不覆盖内存、不落盘）。请检查补全数据源。")
+    elif all_names:
         os.makedirs(os.path.dirname(app_config.stock_names_cache_file), exist_ok=True)
         _safe_write_json_file(app_config.stock_names_cache_file, all_names, ensure_ascii=False)
         app_data.replace_names(all_names)  # 同对象替换：别名 _stock_names_cache 即时可见
@@ -548,13 +524,12 @@ def _refresh_stock_names():
     except Exception as e:
         log.info(f"[板块刷新] 板块文件刷新失败: {e}")
 
-    # 刷新 PE-TTM（增量更新 stock_pettm_index.json）
-    log.info("[PE-TTM] ========== 开始刷新PE-TTM ==========")
+    # 刷新指数归属（PE-TTM 已改为「打开 K 线页面实时取数」，不再随刷新按钮更新）
     try:
-        _refresh_pe_ttm()
+        _refresh_index_belong()
     except Exception as e:
-        log.info(f"[PE-TTM] PE-TTM 刷新失败: {e}")
-        _set_refresh_status(error=f"PE-TTM 刷新失败: {e}")
+        log.info(f"[指数归属] 指数归属刷新失败: {e}")
+        _set_refresh_status(error=f"指数归属刷新失败: {e}")
 
     # 全部刷新完成，标记状态
     _set_refresh_status(running=False)

@@ -1,20 +1,29 @@
 """
 eltdx 数据源适配器（通达信网络行情客户端封装）。
 
-定位：**并非仅面向 XDXR，能力面向未来开放扩展。** 本模块封装 eltdx 客户端这
-一个通达信网络数据源，**当前实现/用法是获取除权除息（XDXR）数据**，供 TdxAPI
-前复权流水线消费；未来若 eltdx 可提供其它通达信信息，同样经本模块扩展暴露。
+定位：本模块封装 eltdx 客户端这一个通达信网络数据源，对外暴露 eltdx 的
+三类取数能力（均**仅覆盖 A 股**）：
+  1. 除权除息（XDXR）——0x000f 事件表，供 TdxAPI 前复权流水线消费；
+  2. PE-TTM（滚动市盈率）——0x06B9 统计文件（zhb.zip / tdxstat.cfg）；
+  3. 流通市值——0x0010 财务批量（流通股本）× 0x054c 快照（最新价）。
+后两项与 DataAPI/TxAPI.py 的同名函数**契约一致**（PE 单位：倍；流通市值单位：
+亿元），由 DataAPI/MarketStatsAPI.py 按市场分流后互换使用。
 
-职责：为使用方提供统一、标准化的 eltdx 取数入口（当前为除权除息事件表）。
-服务层**不直接依赖本模块**——它们消费"前复权后的 K 线"（由 TdxAPI 的
-fetch_main_level 提供）；本模块是 TdxAPI 前复权流水线依赖的下游数据源。
+职责：为使用方提供统一、标准化的 eltdx 取数入口。App 层不直接依赖本模块的
+统计取数（走 MarketStatsAPI 统一入口）；本模块是 TdxAPI 前复权流水线与
+MarketStatsAPI 共同依赖的下游数据源。
 
-依赖方向：TdxAPI → 本模块（单向）。本模块不反向 import TdxAPI，避免 import 环。
+依赖方向：TdxAPI / MarketStatsAPI → 本模块（单向）。本模块不反向 import
+二者，避免 import 环。
 
 数据源：
-  - eltdx（基于 7709 协议、0x000f 命令）——唯一数据源。
+  - eltdx（7709 协议）——唯一数据源。
   - 单一数据源是刻意设计：失败即显著报错（见 get_xdxr_data 的 log.error），
     不做静默降级。
+
+**港股不支持**：eltdx 无 hk 通道（codes.all("hk") 抛 ValueError、0x054c
+快照对 hk 不可用），故本模块三个入口一律只服务 sh / sz / bj。港股 PE-TTM
+仍由 DataAPI/TxAPI.py 提供。
 """
 import threading
 import logging
@@ -336,4 +345,175 @@ def download_block_files_via_eltdx(file_names, hosts=None):
                     result[file_name] = data
     except Exception:
         pass
+    return result
+
+
+# ============================================================
+# 行情统计：PE-TTM / 流通市值（仅 A 股；eltdx 无港股通道）
+# ============================================================
+# 两个函数与 DataAPI/TxAPI.py 的同名函数**契约完全一致**，使
+# DataAPI/MarketStatsAPI.py 能按市场分流后互换调用：
+#   - fetch_pe_ttm(mkt_codes)    → {mkt+code: PE-TTM(倍)}
+#   - fetch_float_mc(stock_list) → {code: 流通市值(亿元)}
+#
+# 分流规则（唯一一份）在 MarketStatsAPI：A 股 → 本模块；港股 → TxAPI。
+# 港股不在本模块服务范围：eltdx 的 codes.all("hk") / 0x054c 对 hk 均不可用。
+ELTDX_MARKETS = ("sh", "sz", "bj")
+
+# 逐批请求上限。实测 0x0010 财务批量与 0x054c 快照在 **80 只/批** 稳定；
+# 单批放大到 200 只时服务端会截断（返回 100 条）或给出错位响应，
+# 故取 80（与 eltdx helpers 内部同值）。
+STATS_BATCH = 80
+
+# eltdx 统计文件里的 market_id ↔ 市场前缀（与 chan.py 的 prefix 语义同构：
+# 0→sz / 1→sh / 2→bj）
+_MARKET_ID_TO_MKT = {0: "sz", 1: "sh", 2: "bj"}
+
+
+def _chunked_stats_fetch(full_codes, batch_fn, extract):
+    """按 STATS_BATCH 分批取数，返回 {full_code: 值}。
+
+    单批异常时**逐只重试**以隔离坏代码，避免一颗「毒丸」拖掉整批 80 只：
+    实测 0x054c 快照遇到个别代码（如北交所 bj920025）会抛 ProtocolError
+    （"snapshot record marker not found"），且是**整批失败**而非跳过单条。
+    """
+    out = {}
+    for start in range(0, len(full_codes), STATS_BATCH):
+        chunk = full_codes[start:start + STATS_BATCH]
+        try:
+            rows = batch_fn(chunk)
+        except Exception as _e:
+            log.warning("[eltdx 统计] 批次 %d-%d 取数失败，逐只隔离重试：%s: %s",
+                        start, start + len(chunk), type(_e).__name__, _e)
+            rows = []
+            for _code in chunk:
+                try:
+                    rows.extend(batch_fn([_code]))
+                except Exception:
+                    continue
+        out.update(extract(rows))
+    return out
+
+
+def _finance_shares_map(records):
+    """0x0010 财务批量记录 → {full_code: 流通股本(股)}。
+
+    流通股本为 0/None 的代码不计入（如部分北交所标的无流通股本，
+    市值本就无从计算）——不写 0，交由调用方按「未获取到」统计。
+    """
+    out = {}
+    for r in records:
+        exchange = getattr(r, "exchange", None) or ""
+        code = getattr(r, "code", None)
+        shares = getattr(r, "circulating_shares", None)
+        if exchange and code and shares:
+            out[f"{exchange}{code}"] = float(shares)
+    return out
+
+
+def _snapshot_price_map(rows):
+    """0x054c 快照 → {full_code: 最新价(元)}"""
+    out = {}
+    for r in rows:
+        full_code = getattr(r, "full_code", None)
+        price = getattr(r, "last_price", None)
+        if full_code and price:
+            out[full_code] = float(price)
+    return out
+
+
+def fetch_pe_ttm(mkt_codes):
+    """eltdx 批量获取 **A 股** PE-TTM（滚动市盈率），返回 {mkt+code: float}。
+
+    mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj}；其余市场（如 hk）
+               直接忽略——返回结果不含这些键，分流见 MarketStatsAPI。
+    数据源：0x06B9 服务器文件读取 → zhb.zip 内 tdxstat.cfg（**盘后**统计
+            快照），**单次请求即覆盖全市场**，无需按票分批。
+    取值：pe_ttm 为 None（无值）或 0 的代码跳过；**负值保留**（亏损股口径）。
+
+    与腾讯 [39] 的实测一致性：A 股 5224 只中 97.6% 浮点严格相等、99.6% 差
+    ≤0.05；eltdx 无值而腾讯有值的 5 只全为次新股（口径差，非缺失）。
+    """
+    pairs = [(m, c) for m, c in (mkt_codes or ()) if m in ELTDX_MARKETS]
+    if not pairs:
+        return {}
+    client = _ensure_eltdx_client()
+    if client is None:
+        raise RuntimeError(
+            "[eltdx 不可用] PE-TTM 取数需要 eltdx，请安装/升级："
+            "pip install -U 'eltdx>=3.0.0'"
+        )
+    with client:
+        stats = client.resources.read_stats()
+    log.info("[eltdx 统计] PE-TTM 统计日期=%s，全表 %d 行",
+             getattr(stats, "stats_date", None), getattr(stats, "stat_count", 0))
+
+    # 全表一次建成索引：key=(市场, 6 位代码)。统计文件里的 code 未保证补零，
+    # 统一 zfill(6) 后再比对，避免 "1" / "000001" 这类同票不同写法漏配。
+    index = {}
+    for (market_id, code), row in stats.stat.items():
+        mkt = _MARKET_ID_TO_MKT.get(market_id)
+        if mkt:
+            index[(mkt, str(code).zfill(6))] = row
+
+    result = {}
+    for mkt, code in pairs:
+        row = index.get((mkt, str(code).zfill(6)))
+        pe_val = getattr(row, "pe_ttm", None) if row is not None else None
+        if pe_val is None or pe_val == 0:
+            continue
+        result[mkt + code] = float(pe_val)
+    return result
+
+
+def fetch_float_mc(stock_list):
+    """eltdx 批量获取 **A 股** 流通市值，返回 {code: 流通市值(亿元)}。
+
+    stock_list: list[{"code": "600519", "prefix": "1"}, ...]，prefix
+                0→sz / 1→sh / 2→bj；其它前缀（hk / us）一律跳过——与改造前的
+                腾讯路径一致：流通市值本就只覆盖 A 股。
+    口径：流通市值 = 流通股本(0x0010) × 最新价(0x054c)，与 eltdx
+          StockProfile.circulating_market_value 同源同式；单位由「元」→「亿元」
+          （腾讯 [44] 返回亿元且只有两位小数，本路径为原值，精度更高）。
+    缺失语义：无股本 / 股本为 0 / 无快照的代码不计入结果，不写 0。
+    """
+    _PFX_TO_MKT = {"0": "sz", "1": "sh", "2": "bj"}
+    full_codes = []
+    for stk in stock_list or ():
+        mkt = _PFX_TO_MKT.get(stk.get("prefix", ""), "")
+        code = stk.get("code", "")
+        if mkt and code:
+            full_codes.append(mkt + code)
+    if not full_codes:
+        return {}
+    full_codes = list(dict.fromkeys(full_codes))    # 去重保序：同一票不重复请求
+
+    client = _ensure_eltdx_client()
+    if client is None:
+        raise RuntimeError(
+            "[eltdx 不可用] 流通市值取数需要 eltdx，请安装/升级："
+            "pip install -U 'eltdx>=3.0.0'"
+        )
+    with client:
+        # 先跑完股本批再取快照批：实测同一连接上「前一个请求失败」会让紧随其后的
+        # 一个请求读到错位响应（invalid ASCII response code）。把股本批放在前面，
+        # 快照批的坏代码隔离就不会牵连股本数据。
+        shares = _chunked_stats_fetch(
+            full_codes,
+            lambda ch: list(getattr(client.corporate.finance_batch(ch), "records", ()) or ()),
+            _finance_shares_map,
+        )
+        prices = _chunked_stats_fetch(
+            full_codes,
+            lambda ch: list(client.quotes.get_snapshots(ch)),
+            _snapshot_price_map,
+        )
+
+    result = {}
+    for full_code in full_codes:
+        shares_val = shares.get(full_code)
+        price_val = prices.get(full_code)
+        if not shares_val or not price_val:
+            continue
+        result[full_code[2:]] = shares_val * price_val / 1e8
     return result

@@ -52,9 +52,9 @@ def test_explicit_param_normalized(failures):
     import App.AppScan as _scan_mod
     from App.AppScan import scanner
     orig_read = _scan_mod._debug_read_page_index_stocks
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     try:
-        _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
+        _scan_mod.fetch_float_mc_all = lambda stock_list: {}
         cases = [
             ("sh000852", "000852"),   # 本次 bug 靶点：中证1000
             ("sh000300", "000300"),
@@ -75,7 +75,7 @@ def test_explicit_param_normalized(failures):
         print(f"[PASS] ① 显式归一化: {len(cases)} 组全部归一为裸码（sh000852→000852 等）")
     finally:
         _scan_mod._debug_read_page_index_stocks = orig_read
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
 
 
 def test_session_path_normalized(failures):
@@ -83,10 +83,10 @@ def test_session_path_normalized(failures):
     import App.AppScan as _scan_mod
     from App.AppScan import scanner
     orig_read = _scan_mod._debug_read_page_index_stocks
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     token = None
     try:
-        _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
+        _scan_mod.fetch_float_mc_all = lambda stock_list: {}
         r = scanner.start(page_index_code="sh000852")
         token = r.get("scan_token")
         got = _spy_page_index_scan(scanner, _scan_mod, None, scan_token=token)
@@ -98,7 +98,7 @@ def test_session_path_normalized(failures):
         print(f"[PASS] ② 会话归一化: start(sh000852) -> 成分层收到 ['000852']")
     finally:
         _scan_mod._debug_read_page_index_stocks = orig_read
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
         if token:
             try:
                 scanner.end(token)

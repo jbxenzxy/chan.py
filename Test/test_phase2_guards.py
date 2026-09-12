@@ -64,7 +64,7 @@ def test_config_consistency(failures):
         ("annotations_file",      d.annotations_file,      app_config.annotations_file),
         ("last_code_freq_file",   d.last_code_freq_file,   app_config.last_code_freq_file),
         ("stock_names_cache_file", d.stock_names_cache_file, app_config.stock_names_cache_file),
-        ("stock_pe_ttm_file",     d.stock_pe_ttm_file,     app_config.stock_pe_ttm_file),
+        ("stock_index_belong_file", d.stock_index_belong_file, app_config.stock_index_belong_file),
         ("float_mc_cache_file",   d.float_mc_cache_file,   app_config.float_mc_cache_file),
     ]
     bad = [f"{n}: 数据层 {a!r} != 配置侧 {b!r}"

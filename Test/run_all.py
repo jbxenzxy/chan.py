@@ -204,6 +204,13 @@ COMPONENTS = [
     # 双窗口一致性等。原先漏登记，等于没有该回归（详见 15m 对比评审）。
     ("15m_period",
      [sys.executable, os.path.join("Test", "test_15m_period.py")]),
+    # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
+    # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
+    # 全程打桩，**不联网**。
+    ("pe_ttm_live",
+     [sys.executable, os.path.join("Test", "test_pe_ttm_live.py")]),
+    ("sina_name_pairing",
+     [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

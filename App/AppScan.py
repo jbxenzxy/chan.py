@@ -11,8 +11,8 @@ App/AppScan.py —— 股票扫描功能域
   - 同花顺云端自选股（save_scan_to_ths_cloud）
   - 扫描预过滤 + 行业索引读取 + 扫描态（_quick_prefilter_pass /
       read_tdxhy_l2_indices / read_tdxhy_l3_indices 等）
-  - 流通市值批量获取 + 缓存壳（_fetch_float_mc_from_tencent /
-      fetch_float_mc_from_tencent / load_float_mc_cache / update_float_mc_cache）
+  - 流通市值批量获取 + 缓存壳（_fetch_float_mc_all / fetch_float_mc_all /
+      load_float_mc_cache / update_float_mc_cache）
   - Windows 扫描完成通知（_send_windows_notification）
 
 依赖方向：AppScan.py → AppEngine / AppData / AppScanPool（单向）
@@ -37,8 +37,8 @@ from App.AppConfig import app_config
 # 板块成分读取（扫描来源 page_index）
 from DataAPI.TdxAPI import get_index_stocks
 
-# 流通市值批量获取（腾讯行情接口，经 TxAPI 收口）
-from DataAPI.TxAPI import fetch_float_mc
+# 流通市值批量获取（A 股走 eltdx），按市场分流的单一源见 MarketStatsAPI
+from DataAPI.MarketStatsAPI import fetch_float_mc
 
 from App.AppLog import get_logger
 log = get_logger(__name__)
@@ -327,18 +327,19 @@ def _quick_prefilter_pass(market, code):
         return (True, None, None)
 
 
-def _fetch_float_mc_from_tencent(stock_list):
-    """通过腾讯行情接口批量获取流通市值（经 TxAPI.fetch_float_mc 收口）。
+def _fetch_float_mc_all(stock_list):
+    """批量获取 A 股流通市值（经 MarketStatsAPI 统一取数，A 股走 eltdx）。
 
     stock_list: [{"code": "600519", "prefix": "1"}, ...]
-    返回: {code: float_mc(亿元)}，失败返回空字典。
+    返回: {code: float_mc(亿元)}；取数异常**向上抛**——调用方（扫描前置
+    取数）已有「回退本地缓存 + 缓存过期告警」兜底，不在本层再吞一次。
     """
     return fetch_float_mc(stock_list)
 
 
-def fetch_float_mc_from_tencent(stock_list):
-    """从腾讯接口获取流通市值（获取侧）"""
-    return _fetch_float_mc_from_tencent(stock_list)
+def fetch_float_mc_all(stock_list):
+    """获取 A 股流通市值（获取侧）"""
+    return _fetch_float_mc_all(stock_list)
 
 
 def load_float_mc_cache():
@@ -585,25 +586,28 @@ class Scanner:
                 log.info(f"[流通市值] 本地缓存已加载 {app_data.float_mc_count()} 只")
             try:
                 t_mc = time.time()
-                mv_dict = fetch_float_mc_from_tencent(merged)
+                mv_dict = fetch_float_mc_all(merged)
                 if mv_dict:
                     total_stocks = len(merged)
                     got_count = len(mv_dict)
                     miss_count = total_stocks - got_count
                     app_data.update_float_mc_cache(mv_dict)
-                    if miss_count == 0:
-                        log.info(f"[流通市值] 腾讯接口 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
+                    if miss_count <= 0:
+                        log.info(f"[流通市值] eltdx 获取全部 {got_count} 只 (耗时{time.time()-t_mc:.1f}s)")
                     else:
-                        log.info(f"[流通市值] 腾讯接口 获取 {got_count}/{total_stocks} 只，{miss_count} 只未获取到 (耗时{time.time()-t_mc:.1f}s)")
+                        # 差值含两类：非 A 股（港股/美股，本口径本就不覆盖）与
+                        # 真缺失（无股本/无快照）。只报总数，不误指为接口失败。
+                        log.info(f"[流通市值] eltdx 获取 {got_count}/{total_stocks} 只，"
+                                 f"{miss_count} 只未获取到（含非 A 股）(耗时{time.time()-t_mc:.1f}s)")
                 else:
-                    log.info("[流通市值] 腾讯接口未返回数据，使用本地缓存")
+                    log.info("[流通市值] eltdx 未返回数据，使用本地缓存")
                     if app_data.float_mc_cache_stale():
-                        log.warning("[流通市值] 警告：腾讯接口未返回数据，且本地缓存已过期，"
+                        log.warning("[流通市值] 警告：eltdx 未返回数据，且本地缓存已过期，"
                                     "本次流通市值判定可能使用旧数据，建议稍后重新刷新。")
             except Exception as e:
-                log.info(f"[流通市值] 腾讯接口异常: {type(e).__name__}: {e}，使用本地缓存")
+                log.info(f"[流通市值] eltdx 异常: {type(e).__name__}: {e}，使用本地缓存")
                 if app_data.float_mc_cache_stale():
-                    log.warning("[流通市值] 警告：腾讯接口异常，且本地缓存已过期，"
+                    log.warning("[流通市值] 警告：eltdx 异常，且本地缓存已过期，"
                                 "本次流通市值判定可能使用旧数据，建议稍后重新刷新。")
 
         # 后端预过滤

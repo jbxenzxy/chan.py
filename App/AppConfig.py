@@ -271,7 +271,7 @@ class _AppConfigBase:
         """应用持久化数据目录（= App/ 包目录）。
 
         应用自生成的缓存 / 状态类文件统一落此目录，不再散落到 vipdoc
-        数据目录：股票名、PE-TTM/指数归属、流通市值、手动选点、文本标注、
+        数据目录：股票名、指数归属、流通市值、手动选点、文本标注、
         上次查看代码周期、扫描任务 DB。App/ 目录随仓库存取，天然随部署迁移。
         """
         return os.path.join(_REPO_ROOT, "App")
@@ -286,8 +286,24 @@ class _AppConfigBase:
         return os.path.join(self.app_data_dir, "stock_names.json")
 
     @property
-    def stock_pe_ttm_file(self) -> str:
-        """PE-TTM / 指数归属缓存文件"""
+    def stock_index_belong_file(self) -> str:
+        """指数归属缓存文件（沪深300/中证500/中证1000，季度调仓才变）。
+
+        历史说明：本文件原名 stock_pettm_index.json，同时承载 PE-TTM 与指数
+        归属两个口径。PE-TTM 每日随行情变动，与季度调仓的指数归属时间维度
+        不匹配，且实际使用中不会每天点刷新 → 页面读到的是陈旧 PE。现 PE-TTM
+        改为「打开 K 线页面时实时取数」（见 AppData 的 PE 实时层），不再落盘，
+        本文件只保存指数归属，故一并改名以免误导。
+        """
+        return os.path.join(self.app_data_dir, "stock_index_belong.json")
+
+    @property
+    def legacy_stock_pe_ttm_file(self) -> str:
+        """旧版「PE-TTM + 指数归属」合并缓存文件路径（**仅供一次性迁移读取**）。
+
+        迁移逻辑在 AppData.load_index_belong_cache()：新文件不存在而本文件
+        存在时读取其 index 字段写成新文件。旧文件**保留不删**（可回退）。
+        """
         return os.path.join(self.app_data_dir, "stock_pettm_index.json")
 
     @property

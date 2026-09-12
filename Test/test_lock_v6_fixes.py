@@ -8,7 +8,9 @@
 覆盖（对应 Docs/chan_lock_audit_v6.md 的问题编号）：
   ① P1-1  get_annotated_codes 并发遍历标注表 —— 不再 RuntimeError
   ② P1-2  replace_names 并发快照遍历 —— 不再抛错、也不再静默串表
-  ③ P1-3  load_pe_ttm_cache 并发加载 —— 读者不会拿到半成品
+  ③ P1-3  load_index_belong_cache 并发加载 —— 读者不会拿到半成品
+         （原为 load_pe_ttm_cache：PE-TTM 已改为实时取数、不再落盘，
+          该并发加载保护现服务于指数归属表）
   ④ P0-3  缓存条目读-改-写 —— 不再丢失更新
   ⑤ P0-3  读者不再写共享缓存（命中缓存返回的是副本）
 """
@@ -123,32 +125,32 @@ def test_names_snapshot():
         f"无异常={not err}；替换后快照全部为新表={all_new}（条数 {len(snap)}，无新旧串表）")
 
 
-# ── ③ load_pe_ttm_cache 并发（P1-3）────────────────────────────────
-def test_pe_ttm():
+# ── ③ load_index_belong_cache 并发（P1-3）──────────────────────────
+def test_index_belong_load():
     import json
     import tempfile
     tmpdir = tempfile.mkdtemp()
-    p = os.path.join(tmpdir, "stock_pettm_index.json")
+    p = os.path.join(tmpdir, "stock_index_belong.json")
     with open(p, "w", encoding="utf-8") as f:
-        json.dump({f"sh{600000 + i}": {"pe_ttm": 20.0 + i, "index": "沪深300"}
+        json.dump({f"sh{600000 + i}": {"index": "沪深300"}
                    for i in range(2000)}, f)
 
     # 保存**类上的 property 对象**本身（不是它的值），用完原样还原
-    _prop = type(app_data).stock_pe_ttm_file
-    type(app_data).stock_pe_ttm_file = property(lambda self: p)
+    _prop = type(app_data).stock_index_belong_file
+    type(app_data).stock_index_belong_file = property(lambda self: p)
 
-    app_data._pe.clear(); app_data._belong.clear()
-    app_data._pe_loaded = False; app_data._belong_loaded = False
+    app_data._belong.clear()
+    app_data._belong_loaded = False
 
     seen_partial = []
     start = threading.Barrier(8)
 
     def reader(i):
         start.wait(5)
-        # 该键在测试文件中对应 pe_ttm = 20.0 + 0 = 20.0
-        v = app_data.get_pe_ttm("sh", "600000")
+        # 该键在测试文件中对应 index = "沪深300"
+        v = app_data.get_index_belong("sh", "600000")
         # 「半成品」= flag 已为真但值还没提交进来 → 读到 None
-        if v is None and app_data._pe_loaded:
+        if v is None and app_data._belong_loaded:
             seen_partial.append(i)
 
     ts = [threading.Thread(target=reader, args=(i,)) for i in range(8)]
@@ -157,12 +159,13 @@ def test_pe_ttm():
     for t in ts:
         t.join(10)
 
-    val = app_data.get_pe_ttm("sh", "600000")
-    type(app_data).stock_pe_ttm_file = _prop      # 还原 property 对象
+    val = app_data.get_index_belong("sh", "600000")
+    type(app_data).stock_index_belong_file = _prop      # 还原 property 对象
 
-    ok = not seen_partial and val == 20.0
-    rec("③", "load_pe_ttm_cache 并发（先填后置位）", ok,
-        f"8 并发读者中读到半成品的: {len(seen_partial)} 个；最终值={val}（期望 20.0）")
+    ok = not seen_partial and val == "沪深300"
+    rec("③", "load_index_belong_cache 并发（先填后置位）", ok,
+        f"8 并发读者中读到半成品的: {len(seen_partial)} 个；"
+        f"最终值={val}（期望 沪深300）")
 
 
 # ── ④ 缓存条目读-改-写（P0-3）──────────────────────────────────────
@@ -211,7 +214,7 @@ def main():
     print("=" * 60)
     print("v6 锁修复验证（确定性交错）")
     print("=" * 60)
-    for fn in (test_annotated_codes, test_names_snapshot, test_pe_ttm,
+    for fn in (test_annotated_codes, test_names_snapshot, test_index_belong_load,
                test_cache_update, test_reader_no_mutation):
         try:
             fn()

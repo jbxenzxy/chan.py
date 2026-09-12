@@ -3,12 +3,21 @@
 DataAPI/TxAPI.py —— 腾讯财经（股票行情）数据源适配器
 =========================================================================
 收口「腾讯股票行情接口」（qt.gtimg.cn/q=）的全部数据获取与字段解析：
-  - PE-TTM（市盈率-动态，字段 [39]）
-  - 流通市值（单位：亿元，字段 [44]）
+  - PE-TTM（滚动市盈率，字段 [39]）——**现仅服务港股**：A 股 PE-TTM 已统一
+    由 DataAPI/ElTdxAPI.py 提供，按市场分流见 DataAPI/MarketStatsAPI.py
+  - 港股股票名称（字段 [1]，新浪港股接口已失效故改用腾讯）
 
-调用方（AppRefresh / AppScan）只做「拼参 → 调 TxAPI → 缓存 / 落盘」，
+调用方（AppRefresh）只做「拼参 → 调 TxAPI → 缓存 / 落盘」，
 不直连腾讯接口、不解析字段。单向依赖：App → TxAPI。
 与 ElTdxAPI / AkshareAPI 同为 P1-1 数据源抽象单轨化的一个收口点。
+
+口径校准（2026-09-12 实测）：字段 [39] 原注释写作「市盈率-动态」，实测 A 股
+样本中其值与通达信滚动市盈率（tdxstat.cfg 第 3 列）严格相等 → 实为 **TTM
+（滚动）** 口径，注释与命名已按 TTM 更正。
+
+【已下线】fetch_float_mc（流通市值，字段 [44]）：该口径已整体迁至
+DataAPI/ElTdxAPI.py（0x0010 流通股本 × 0x054c 最新价），本模块不再提供，
+避免同一口径两处实现。
 """
 import logging
 import time
@@ -48,9 +57,11 @@ def _iter_records(text):
 
 
 def fetch_pe_ttm(mkt_codes, batch_size=_BATCH, timeout=10):
-    """腾讯行情接口批量获取 PE-TTM（市盈率-动态，字段 [39]）。
+    """腾讯行情接口批量获取 PE-TTM（滚动市盈率，字段 [39]）。
 
-    mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj, hk}。
+    mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj, hk}。改造后 A 股（sh/sz/bj）
+    已由 ElTdxAPI 提供，本函数实际只服务**港股**；保留其它市场分支是为了保持
+    「数据源函数不预设调用方集合」的边界（分流规则在 MarketStatsAPI）。
     返回 {mkt+code: float PE-TTM}；网络 / 解析失败自动跳过该条，空数据返回 {}。
     不带内置超时策略之外的逻辑：调用方自行决定是否再包一层线程池限时。
     """
@@ -66,7 +77,7 @@ def fetch_pe_ttm(mkt_codes, batch_size=_BATCH, timeout=10):
                     continue
                 stock_code = fields[2]
                 pe_str = fields[39]
-                # 市盈率(动态)：仅接受纯数字（可含小数点/负号），且非 0
+                # 市盈率(TTM)：仅接受纯数字（可含小数点/负号），且非 0
                 if (stock_code and stock_code.isdigit() and pe_str
                         and pe_str.replace(".", "").replace("-", "").isdigit()):
                     pe_val = float(pe_str)
@@ -74,43 +85,6 @@ def fetch_pe_ttm(mkt_codes, batch_size=_BATCH, timeout=10):
                         result[(line_mkt or "") + stock_code] = pe_val
         except Exception as e:
             log.info(f"[PE-TTM] 腾讯接口第{i // batch_size + 1}批失败: {e}")
-    return result
-
-
-def fetch_float_mc(stock_list, batch_size=_BATCH, timeout=5):
-    """腾讯行情接口批量获取流通市值（单位：亿元，字段 [44]）。
-
-    stock_list: list[{"code": "600519", "prefix": "1"}, ...]，prefix 0→sz、1→sh、2→bj。
-    返回 {code: 流通市值(亿元)}；网络 / 解析失败自动跳过该条，空数据返回 {}。
-    """
-    if not stock_list:
-        return {}
-    _PFX = {"0": "sz", "1": "sh", "2": "bj"}
-    mkt_codes = []
-    for stk in stock_list:
-        code = stk.get("code", "")
-        mkt = _PFX.get(stk.get("prefix", ""), "")
-        if mkt and code:
-            mkt_codes.append((mkt, code))
-    if not mkt_codes:
-        return {}
-    result = {}
-    for i in range(0, len(mkt_codes), batch_size):
-        batch_q = [f"{m}{c}" for m, c in mkt_codes[i:i + batch_size]]
-        try:
-            text = _http_get(batch_q, timeout)
-            for _line_mkt, fields in _iter_records(text):
-                if len(fields) <= 44:
-                    continue
-                stock_code = fields[2]
-                nmc = fields[44]  # 流通市值(亿元，腾讯接口直接返回亿元)
-                if stock_code and nmc:
-                    try:
-                        result[stock_code] = float(nmc)
-                    except (ValueError, TypeError):
-                        pass
-        except Exception as e:
-            log.info(f"[流通市值] 腾讯接口第{i // batch_size + 1}批失败: {type(e).__name__}: {e}")
     return result
 
 

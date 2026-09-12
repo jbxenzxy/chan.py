@@ -4,7 +4,10 @@ App/AppData.py — 业务数据层
 ================================================
 缓存 / 持久化 / 标注 / 自选股全部收敛于此，持有真实实现与真实状态：
   · 分析结果 LRU 缓存（股票 + 期货）
-  · 名称 / PE-TTM / 指数归属 / 流通市值 四类惰性缓存
+  · 名称 / 指数归属 / 流通市值 三类惰性缓存
+  · PE-TTM **实时层**：K 线页面打开标的时按需取数，**不落盘**（PE 每日随
+    行情变动，落盘缓存在不点刷新时必然陈旧）；取数实现由 AppRefresh 注入
+    （AppData 不得 import DataAPI，依赖倒置）
   · 手动选点 CSV 持久化（double_click_dt.csv）
   · 上次查看代码/周期（last_code_freq.json）
   · 文字标注（text_annotation.json）
@@ -546,13 +549,29 @@ class AppData:
         # ── 名称 / PE / 归属 / 流通市值（惰性加载标志 + 字典）──
         self._names = {}
         self._names_loaded = False
+        # PE-TTM 表：**不再从落盘缓存加载**，由实时层（K 线页面按需取数）填充。
+        # 仍保留本表作为「点查源」：写入一律走 update_pe_ttm（持 _meta_cache_lock），
+        # 遍历一律走 pe_snapshot()——快照用例也直接注入本表以冻结基线。
         self._pe = {}
+        # _pe_loaded 的语义是「PE 表已由外部提供（落盘缓存 / 用例注入）」，
+        # 为真时**禁用实时层**（纯点查）。快照用例注入确定性参考表后置位。
+        # 生产路径恒为 False（不再从缓存加载 PE），故每次 get_pe_ttm 都实时取数。
         self._pe_loaded = False
         self._belong = {}
         self._belong_loaded = False
         self._float_mc = {}
         self._float_mc_loaded = False
         self._float_mc_saved_at = None   # 本地缓存写入时刻（time.time()），用于"接口失败且缓存过期"告警
+
+        # ── PE-TTM 实时层（K 线页面「打开即取」）──
+        # _pe_live_lock：single-flight 门。**独立叶子锁**，不参与
+        #   _user_store_lock → _meta_cache_lock → _stocks_cache_lock 的顺序——
+        #   持有它期间不得再取任何其它锁（联网取数约 1.3s）；写入时由
+        #   update_pe_ttm 去取 _meta_cache_lock，两者**不嵌套持有**，无死锁路径。
+        # _pe_live_fetcher：取数实现，由 AppRefresh 在模块导入时注入
+        #   （依赖倒置：AppData 不得 import DataAPI，见 phase5 守卫 ④b）。
+        self._pe_live_lock = threading.Lock()
+        self._pe_live_fetcher = None
 
         # ── 标注 ──
         self._annotations = {}   # { "code_freq": [ {date,text,y_offset}, ... ] }
@@ -582,8 +601,13 @@ class AppData:
         return app_config.stock_names_cache_file
 
     @property
-    def stock_pe_ttm_file(self):
-        return app_config.stock_pe_ttm_file
+    def stock_index_belong_file(self):
+        return app_config.stock_index_belong_file
+
+    @property
+    def legacy_stock_pe_ttm_file(self):
+        """旧版「PE-TTM + 指数归属」合并缓存路径（仅供一次性迁移读取）。"""
+        return app_config.legacy_stock_pe_ttm_file
 
     @property
     def float_mc_cache_file(self):
@@ -1100,67 +1124,156 @@ class AppData:
             self._names_loaded = True
 
     # ════════════════════════════════════════════════════════════════
-    # PE-TTM / 指数归属缓存（同文件 stock_pettm_index.json）
+    # 指数归属缓存（本地 stock_index_belong.json）
     # ════════════════════════════════════════════════════════════════
-    def load_pe_ttm_cache(self):
-        """从 stock_pettm_index.json 加载 PE-TTM 和指数归属缓存到内存。文件不存在则返回空。
-        向后兼容旧格式 {"sh600519": 25.3}，新格式为 {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}
+    # 本段原为「PE-TTM / 指数归属」双字段缓存（同文件 stock_pettm_index.json）。
+    # PE-TTM 每日随行情变动、指数归属季度调仓才变，两者时间维度不匹配，且
+    # 实际使用中不会每天点刷新 → 页面读到的是陈旧 PE。现 PE-TTM 改为
+    # 「打开 K 线页面时实时取数」（见本类 PE-TTM 实时层），不再落盘；
+    # 本文件只保存指数归属，故连文件名一并改掉。
+    def load_index_belong_cache(self):
+        """从本地 JSON 加载**指数归属**缓存到内存。文件不存在则返回空表。
 
-        审计 P1-3，两处修复：
-        ① 原实现「先置 _pe_loaded=True，再逐条填充」——并发读者见 loaded
-           为真直接返回**半成品**（实测拿到 None，而文件里明明有 25.3），
-           且 flag 已置真后**这一轮再也不会重试**，扫描列表的 PE / 指数
+        一次性迁移：新文件 stock_index_belong.json 不存在、而旧文件
+        stock_pettm_index.json 存在时，读旧文件取其 index 字段、写成新文件；
+        旧文件**保留不删**（可回退）。
+
+        向后兼容旧格式（其中的 pe_ttm 字段一律忽略，不再消费）：
+          {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}   ← 旧合并格式
+          {"sh600519": {"index": "沪深300"}}                   ← 现格式
+
+        审计 P1-3，两处修复（沿用原实现）：
+        ① 原实现「先置 loaded 旗，再逐条填充」——并发读者见 loaded 为真
+           直接返回**半成品**，且 flag 已置真后这一轮再也不会重试，指数
            归属列静默显空。现改为先填本地字典、整体提交后才置位：读者
            要么看到「未加载」走完整路径，要么看到完整数据。
         ② 双检锁：并发首次调用只解析一次文件。
         """
-        if self._pe_loaded:
-            return self._pe
-        pe_local = {}
+        if self._belong_loaded:
+            return self._belong
         belong_local = {}
-        if os.path.exists(self.stock_pe_ttm_file):
-            try:
-                with open(self.stock_pe_ttm_file, "r", encoding="utf-8") as f:
+        path = self.stock_index_belong_file
+        migrated = False
+        try:
+            if not os.path.exists(path):
+                legacy = self.legacy_stock_pe_ttm_file
+                if os.path.exists(legacy):
+                    path, migrated = legacy, True
+                else:
+                    path = None
+            if path:
+                with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                pe_count = 0
-                idx_count = 0
                 if isinstance(data, dict):
                     for k, v in data.items():
-                        if isinstance(v, dict):
-                            # 新格式：{"pe_ttm": float, "index": str}
-                            pe_val = v.get("pe_ttm")
-                            idx_val = v.get("index")
-                            if isinstance(pe_val, (int, float)) and pe_val != 0:
-                                pe_local[k] = pe_val
-                                pe_count += 1
-                            if isinstance(idx_val, str) and idx_val:
-                                belong_local[k] = idx_val
-                                idx_count += 1
-                        elif isinstance(v, (int, float)) and v != 0:
-                            # 旧格式：直接是数字
-                            pe_local[k] = v
-                            pe_count += 1
-                log.info(f"[信息] 从缓存文件加载PE-TTM：{pe_count}只；加载指数归属：{idx_count}只")
-            except Exception as e:
-                log.info(f"[PE-TTM] 加载缓存失败: {e}")
+                        idx_val = v.get("index") if isinstance(v, dict) else None
+                        if isinstance(idx_val, str) and idx_val:
+                            belong_local[k] = idx_val
+                log.info(f"[信息] 从缓存文件加载指数归属：{len(belong_local)}只")
+        except Exception as e:
+            log.info(f"[指数归属] 加载缓存失败: {e}")
+            belong_local = {}
         with self._meta_cache_lock:
-            if not self._pe_loaded:          # 双检锁：并发只提交一次
-                self._pe.update(pe_local)
+            if not self._belong_loaded:      # 双检锁：并发只提交一次
                 self._belong.update(belong_local)
                 # ★ 填充完成后才置位
-                self._pe_loaded = True
                 self._belong_loaded = True
-        return self._pe
+        if migrated:
+            # 旧文件 → 新文件的落盘迁移（失败不影响已提交的内存态：
+            # 下次启动会再走一遍本迁移路径）
+            self.save_index_belong_cache()
+        return self._belong
 
-    def get_pe_ttm(self, market, code):
-        """获取单只股票的 PE-TTM 值，未缓存则返回 None。key 为 market+code 避免沪市深市同号冲突。"""
-        self.load_pe_ttm_cache()
-        return self._pe.get(market + code)
+    def save_index_belong_cache(self):
+        """把内存中的指数归属表落盘到 stock_index_belong.json（原子写）。返回是否成功。
+
+        写入格式（**只含 index，不再写 pe_ttm**）：
+            {"sh600519": {"index": "沪深300"}, ...}
+        旧格式的纯数字 key（6 位）在此过滤，与改造前的落盘口径一致。
+        """
+        try:
+            snap = self.belong_snapshot()
+            combined = {}
+            for k, v in snap.items():
+                if k.isdigit() and len(k) == 6:
+                    continue                     # 过滤旧格式纯数字 key
+                if v:
+                    combined[k] = {"index": v}
+            os.makedirs(os.path.dirname(self.stock_index_belong_file), exist_ok=True)
+            safe_write_json_file(self.stock_index_belong_file, combined,
+                                 ensure_ascii=False)
+            log.info(f"[指数归属] 已保存 {len(combined)} 条到 "
+                     f"{self.stock_index_belong_file}")
+            return True
+        except Exception as e:
+            log.info(f"[指数归属] 保存失败: {e}")
+            return False
 
     def get_index_belong(self, market, code):
         """获取单只股票的指数归属（沪深300/中证500/中证1000），未缓存则返回 None。"""
-        self.load_pe_ttm_cache()
+        self.load_index_belong_cache()
         return self._belong.get(market + code)
+
+    # ════════════════════════════════════════════════════════════════
+    # PE-TTM 实时层（K 线页面「打开这个标的就取一次」）
+    # ════════════════════════════════════════════════════════════════
+    def set_pe_ttm_live_fetcher(self, fetcher):
+        """注入 PE-TTM 实时取数实现（依赖倒置）。
+
+        由 App/AppRefresh.py 在模块导入时注入，实现为
+        DataAPI.MarketStatsAPI.fetch_pe_ttm_live(market, code)。
+        本类**不得**直接 import DataAPI（phase5 守卫 ④b：防影子双源），
+        故取数实现只能由上层注入；未注入时实时层静默降级为空表。
+        """
+        self._pe_live_fetcher = fetcher
+
+    def get_pe_ttm(self, market, code):
+        """获取单只股票的 PE-TTM 值，无值返回 None。key 为 market+code 避免沪深同号冲突。
+
+        两级来源：
+          ① `_pe_loaded` 为真（PE 表已由外部提供——落盘缓存或快照用例注入）
+             → 纯点查，不联网；
+          ② 常态 → **每次调用实时取一次**（K 线页面「打开即最新」），取到即
+             写入 _pe 供同批并发读者复用；取数失败保留旧值并返回 None
+             （页面不显示 PE），**不向上抛异常**。
+        """
+        key = market + code
+        if self._pe_loaded:
+            return self._pe.get(key)
+        self._ensure_pe_ttm_live(market, code)
+        return self._pe.get(key)
+
+    def _ensure_pe_ttm_live(self, market, code):
+        """实时取一只 PE-TTM 并写入 _pe（single-flight 门，失败静默降级）。
+
+        为什么每次调用都取：PE-TTM 随行情每日变动，而落盘缓存只在点刷新时
+        更新（实际使用中不会每天点）→ 页面读到的是陈旧值。本软件不提供实时
+        行情（K 线读本地 vipdoc），故「打开这个标的就取一次」已满足新鲜度
+        要求；eltdx 统计文件是整体下载，取单只与取全市场耗时相同（约 1.3s）。
+
+        并发语义：多标签页 / 多请求并发打开时，只有抢到 _pe_live_lock 的线程
+        真去联网，其余线程**立即返回当前表**（可能暂无该票 → 页面不显示 PE），
+        不排队等待——避免一个卡住的网络请求把整批请求一起拖住。真正并发很
+        罕见，抢不到锁的请求下一次打开即可拿到值。
+        """
+        fetcher = self._pe_live_fetcher
+        if fetcher is None:
+            return          # 未注入取数实现（未走 AppRefresh 导入链）：降级为空
+        if not self._pe_live_lock.acquire(blocking=False):
+            return          # 已有线程在拉取，本次直接用当前表
+        try:
+            try:
+                result = fetcher(market, code)
+            except Exception as e:              # noqa: BLE001
+                # 网络 / 协议异常一律降级：保留旧值。不抛出——K 线接口不应因
+                # 一个元数据取数失败而整体 500。
+                log.info(f"[PE-TTM] 实时取数失败({market}{code})，沿用旧值: "
+                         f"{type(e).__name__}: {e}")
+                return
+            if result:
+                self.update_pe_ttm(result)
+        finally:
+            self._pe_live_lock.release()
 
     def replace_index_belong(self, result):
         """整体替换指数归属缓存（获取侧 AKShare 刷新完成时调用）

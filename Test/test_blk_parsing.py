@@ -160,7 +160,7 @@ def test_scan_stock_list_consume(failures):
     from App.AppScan import scanner
     import App.AppScan as _scan_mod
     orig_dir = app_config.tdx_install_dir
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     try:
         with tempfile.TemporaryDirectory() as td:
             blk_dir = os.path.join(td, "T0002", "blocknew")
@@ -168,7 +168,7 @@ def test_scan_stock_list_consume(failures):
             # 含重复行，验证合并去重
             _write_blk(blk_dir, ["1600519", "0000001", "1600519"], name="zxg.blk")
             app_config.tdx_install_dir = td
-            _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
+            _scan_mod.fetch_float_mc_all = lambda stock_list: {}
             got = scanner.stock_list("zxg")
         # stock_list 返回汇总 dict：{stocks, sources, total, pre_skipped, errors}
         if not isinstance(got, dict) or "stocks" not in got:
@@ -188,7 +188,7 @@ def test_scan_stock_list_consume(failures):
         print(f"[PASS] ⑤ 扫描消费: stock_list(source=zxg) 去重后 {len(stocks)} 条，格式兼容")
     finally:
         app_config.tdx_install_dir = orig_dir
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
 
 
 def test_no_tdx_blk_regression(failures):
@@ -218,7 +218,7 @@ def test_page_index_scan(failures):
     orig_code = _scan_mod._page_index_code
     orig_read = _scan_mod._debug_read_page_index_stocks
     orig_pre = _scan_mod._quick_prefilter_pass
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     try:
         _scan_mod._page_index_code = "881001"
         _scan_mod._debug_read_page_index_stocks = lambda code: [
@@ -227,7 +227,7 @@ def test_page_index_scan(failures):
             {"code": "600000", "prefix": "1", "name": "浦发银行"},
         ]
         _scan_mod._quick_prefilter_pass = lambda market, code: (True, None, None)
-        _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
+        _scan_mod.fetch_float_mc_all = lambda stock_list: {}
         got = scanner.stock_list("page_index")
         stocks = got["stocks"]
         if len(stocks) != 3:
@@ -244,17 +244,17 @@ def test_page_index_scan(failures):
         _scan_mod._page_index_code = orig_code
         _scan_mod._debug_read_page_index_stocks = orig_read
         _scan_mod._quick_prefilter_pass = orig_pre
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
 
 
 def test_tdxhy_scan(failures):
     """⑧ 板块指数2/3 扫描：stock_list(source=tdxhy2/tdxhy3) 走真实行业映射数据"""
     import App.AppScan as _scan_mod
     from App.AppScan import scanner
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     try:
         # tdxhy2/tdxhy3 不应触发流通市值请求（_need_float_mc=False）
-        _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: (
+        _scan_mod.fetch_float_mc_all = lambda stock_list: (
             (_ for _ in ()).throw(AssertionError("tdxhy 来源不应请求流通市值")))
         got2 = scanner.stock_list("tdxhy2")
         got3 = scanner.stock_list("tdxhy3")
@@ -287,7 +287,7 @@ def test_tdxhy_scan(failures):
             print(f"[PASS] ⑧ 板块指数2/3: tdxhy2={len(stocks2)} tdxhy3={len(stocks3)}"
                   f"（权威源当前值 {_exp2}/{_exp3}），无流通市值请求")
     finally:
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
 
 
 def test_multi_source_merge(failures):
@@ -298,7 +298,7 @@ def test_multi_source_merge(failures):
     orig_code = _scan_mod._page_index_code
     orig_read = _scan_mod._debug_read_page_index_stocks
     orig_pre = _scan_mod._quick_prefilter_pass
-    orig_fetch = _scan_mod.fetch_float_mc_from_tencent
+    orig_fetch = _scan_mod.fetch_float_mc_all
     try:
         _scan_mod._page_index_code = "881001"
         _scan_mod._debug_read_page_index_stocks = lambda code: [
@@ -306,7 +306,7 @@ def test_multi_source_merge(failures):
             {"code": "000002", "prefix": "0", "name": "万科A"},
         ]
         _scan_mod._quick_prefilter_pass = lambda market, code: (True, None, None)
-        _scan_mod.fetch_float_mc_from_tencent = lambda stock_list: {}
+        _scan_mod.fetch_float_mc_all = lambda stock_list: {}
         with tempfile.TemporaryDirectory() as td:
             blk_dir = os.path.join(td, "T0002", "blocknew")
             os.makedirs(blk_dir, exist_ok=True)
@@ -336,7 +336,7 @@ def test_multi_source_merge(failures):
         _scan_mod._page_index_code = orig_code
         _scan_mod._debug_read_page_index_stocks = orig_read
         _scan_mod._quick_prefilter_pass = orig_pre
-        _scan_mod.fetch_float_mc_from_tencent = orig_fetch
+        _scan_mod.fetch_float_mc_all = orig_fetch
 
 
 def main():
