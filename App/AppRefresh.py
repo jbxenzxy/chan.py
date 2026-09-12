@@ -205,6 +205,41 @@ def _pe_ttm_from_all_cache(market, code):
 app_data.set_pe_ttm_live_fetcher(_fetch_pe_ttm_live)
 
 
+def prime_pe_ttm_cache():
+    """启动预热：确保 A 股全量 PE-TTM 进程缓存就绪（幂等、single-flight）。
+
+    背景：全量缓存（eltdx read_stats 全表拉取 + 落盘）原本只在**首个 K 线
+    请求路径**上惰性构建（_pe_ttm_from_all_cache 触发），导致每次启动后的
+    第一次加载要多背一次全表下载（实测 ~8s）。FrontAPI 的 lifespan 在服务
+    启动阶段调用本函数预热；请求路径零改动——预热完成后
+    _pe_ttm_from_all_cache 直接命中 _PE_TTM_PRIMED 快路径（纯内存）。
+
+    语义：
+      · 幂等：已就绪直接返回 True，不发网络；
+      · single-flight：与请求路径共用 _PE_TTM_LOCK，不会重复构建；
+      · **失败不抛出**（返回 False）——预热失败只影响首个请求多等一次，
+        不能阻断服务启动；请求路径原有的退避/本地镜像降级逻辑不受影响。
+    """
+    global _PE_TTM_PRIMED
+    if _PE_TTM_PRIMED:
+        return True
+    if not _PE_TTM_LOCK.acquire(blocking=False):
+        return _PE_TTM_PRIMED        # 已有线程在构建（防御，正常不会发生）
+    t0 = time.time()
+    try:
+        if not _PE_TTM_PRIMED:
+            _prime_pe_ttm_all()
+        return _PE_TTM_PRIMED
+    except Exception as e:  # noqa: BLE001 —— 预热失败不阻断启动
+        log.warning(f"[PE-TTM] 启动预热失败（首个请求将按原逻辑重试）: "
+                    f"{type(e).__name__}: {e}")
+        return False
+    finally:
+        _PE_TTM_LOCK.release()
+        log.info(f"[PE-TTM] 启动预热结束: {time.time() - t0:.2f}s, "
+                 f"就绪={_PE_TTM_PRIMED}, 全量表 {len(_PE_TTM_ALL)} 条")
+
+
 # 股票名称缓存别名 = app_data 实例字段（共享同一对象）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
 # 只用于**判空**（:360 的 `if _stock_names_cache:`）——真值测试在 CPython

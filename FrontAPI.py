@@ -88,6 +88,15 @@ async def lifespan(app):
     否则进程退出时 TqApi 内部挂起任务被销毁，触发
     「Task was destroyed but it is pending!」级联。
     """
+    # 启动预热：A 股 PE-TTM 全表进程缓存原本在**首个 K 线请求路径**上惰性
+    # 构建，导致启动后第一次加载要多背一次全表下载（实测 ~8s）。挪到启动
+    # 阶段同步预热——服务开始接客前表已就绪，请求路径零改动。预热失败不
+    # 阻断启动（prime 内部已 catch 并返回 False，这里再兜一层防御）。
+    try:
+        await run_in_threadpool(orch.prime_pe_ttm_cache)
+    except Exception as exc:  # noqa: BLE001 —— 预热兜底，不让启动挂掉
+        log.warning(f"[FrontAPI] PE-TTM 启动预热异常: {type(exc).__name__}: {exc}")
+
     yield
     try:
         from App.AppScanPool import shutdown as scan_pool_shutdown

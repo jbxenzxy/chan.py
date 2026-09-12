@@ -52,6 +52,7 @@ from App.AppRefresh import (
     load_stock_names_from_cache_file, refresh_stock_names,
     load_index_belong_cache, get_pe_ttm, get_index_belong,
     refresh_status, refresh_stock_names_async,
+    prime_pe_ttm_cache,
 )
 from App.AppAMO import call_amo
 # 自动下单（AppTrader）：进程托管单例 + 三个 call_* 漏斗（API 层只认 orch.*）
@@ -274,6 +275,7 @@ __all__ = [
     "load_stock_names_from_cache_file", "refresh_stock_names",
     "load_index_belong_cache", "get_pe_ttm",
     "get_index_belong", "refresh_status", "refresh_stock_names_async",
+    "prime_pe_ttm_cache",
     # 市场量能（AppAMO）
     "call_amo",
     # 标注（AppChart）
