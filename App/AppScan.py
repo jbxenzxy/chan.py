@@ -583,7 +583,10 @@ class Scanner:
                 # 审计 P2：原为 `len(app_data.float_mc_cache)` —— 裸读共享容器。
                 # 改走 app_data 加锁取数口，与写者（update_float_mc_cache）
                 # 共用 _user_store_lock，也给后来人留一个正确的样板。
-                log.info(f"[流通市值] 本地缓存已加载 {app_data.float_mc_count()} 只")
+                # 注意：这是**全局累积缓存**（跨次扫描 dict.update 合并、只增不减），
+                # 数字通常大于本次成分股数，属正常现象，勿与成分股数量对照。
+                log.info(f"[流通市值] 本地缓存已加载 {app_data.float_mc_count()} 只"
+                         f"（全局累积，非本次成分股数）")
             try:
                 t_mc = time.time()
                 mv_dict = fetch_float_mc_all(merged)
