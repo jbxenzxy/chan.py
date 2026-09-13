@@ -1,22 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-P46 郑商所 PTA 品种档案 + 品种白名单弹窗 契约测试
-==================================================
+P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
+====================================================
 背景（2026-09-13，用户拍板）：
   · Trading 网关品种档案补齐第 8 个品种：PTA（CZCE，Tier 2 能源化工），
-    使 PRODUCT_PROFILES = IF/IH/IC/IM + AU/AG/CU + PTA；
-  · 用户输入的品种代码**不在支持清单内**时，启动期发 severe 告警（D11 通道，
-    前端阻塞弹窗）告知"不可用"—— 不阻断启动（回放/测试需要任意代码造合约；
-    实盘安全性由 A′ fail-closed 闸门兜底），但用户必须看见。
+    使 PRODUCT_PROFILES = IF/IH/IC/IM + AU/AG/CU + TA；
+  · 品种参数档案**不是限制**：乘数/tick 实盘自动从行情取（A′ fail-closed）、
+    exchange 自动派生（CZCE→FAK）、R 下限默认 3 点（商品档经验未积累前统一
+    用默认，同 IF/IH=3 / IC/IM=5 的经验标定路径）。未知品种不构成"不可用"。
 
 本测试锁死的断言：
-  [1] parse_product：KQ.m@CZCE.TA → PTA
-  [2] PRODUCT_PROFILES 含 PTA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
-  [3] TradingConfig 初始加载：PTA 注入五个随品种可变字段
-  [4] PTA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
+  [1] parse_product：KQ.m@CZCE.TA → TA（PTA 是俗名，符号代码是 TA）
+  [2] PRODUCT_PROFILES 含 TA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
+  [3] TradingConfig 初始加载：TA 注入五个随品种可变字段（min_r_points = 默认 3 点）
+  [4] TA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
       返回 FAK、Engine._open_volume() 钉 1 手 —— 档案只管品种参数、不管报单属性
-  [5] 品种白名单弹窗：未知品种（ZZ）引擎启动 → _alerts 含 code="unknown_product"
-      level="severe"；已知品种（PTA/IF）→ 无该告警
+  [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
+      （2026-09-13 拍板：不在白名单不允许启动，无需告警）；已知品种正常启动
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p46_pta_product.py
@@ -77,17 +77,6 @@ def check(name, got, expected):
         _FAIL += 1
 
 
-def check_true(name, got):
-    global _PASS, _FAIL
-    ok = bool(got)
-    print(("✓" if ok else "✗") + " " + name +
-          ("" if ok else "  -> got={!r}".format(got)))
-    if ok:
-        _PASS += 1
-    else:
-        _FAIL += 1
-
-
 @contextmanager
 def tmp_dir():
     d = tempfile.mkdtemp(prefix="tg_p46_")
@@ -111,8 +100,15 @@ def build_engine(tmpdir, signal_symbol):
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 
-def has_alert(engine, code):
-    return any(a.get("code") == code for a in engine._alerts)
+def check_true(name, got):
+    global _PASS, _FAIL
+    ok = bool(got)
+    print(("✓" if ok else "✗") + " " + name +
+          ("" if ok else "  -> got={!r}".format(got)))
+    if ok:
+        _PASS += 1
+    else:
+        _FAIL += 1
 
 
 def main():
@@ -130,13 +126,13 @@ def main():
         check("TA product=TA", p.product, "TA")
         check("TA multiplier=5.0（5 吨/手）", p.multiplier, 5.0)
         check("TA price_tick=2.0", p.price_tick, 2.0)
-        check("TA min_r_points=30.0（15 tick）", p.min_r_points, 30.0)
+        check("TA min_r_points=3.0（默认点数，2026-09-13 拍板）", p.min_r_points, 3.0)
         check("TA r_multiple_tp=2.0", p.r_multiple_tp, 2.0)
         check("TA breakeven_buffer_ticks=2.0", p.breakeven_buffer_ticks, 2.0)
 
     print("\n[3] TradingConfig 初始加载：TA(PTA) 注入五个随品种可变字段")
     c_ta = TradingConfig(instrument={"signal_symbol": "KQ.m@CZCE.TA"})
-    check("TA min_r_points 注入 30.0", c_ta.exit_params.min_r_points, 30.0)
+    check("TA min_r_points 注入 3.0（默认点数）", c_ta.exit_params.min_r_points, 3.0)
     check("TA r_multiple_tp 注入 2.0", c_ta.exit_params.r_multiple_tp, 2.0)
     check("TA breakeven_buffer_ticks 注入 2.0",
           c_ta.exit_params.breakeven_buffer_ticks, 2.0)
@@ -156,27 +152,27 @@ def main():
         check("TA 配错交易所(SHFE) _open_volume() 走 lots_per_signal=2（配置责任）",
               eng_ta._open_volume(), 2)
 
-    print("\n[5] 品种白名单弹窗：未知品种 severe 告警、已知品种无告警")
+    print("\n[5] 品种白名单硬约束：未知品种引擎拒绝启动（2026-09-13 拍板）")
     with tmp_dir() as td:
-        eng_unk = build_engine(td, "KQ.m@SHFE.ZZ")
-        check_true("未知品种(ZZ) 启动即发 unknown_product 告警",
-                   has_alert(eng_unk, "unknown_product"))
-        if has_alert(eng_unk, "unknown_product"):
-            a = next(a for a in eng_unk._alerts if a.get("code") == "unknown_product")
-            check("告警级别 = severe（前端阻塞弹窗）", a.get("level"), "severe")
-            check("告警含品种符号", a.get("signal_symbol"), "KQ.m@SHFE.ZZ")
-            check("告警 msg 列出支持清单", "TA" in a.get("msg", ""), True)
+        try:
+            build_engine(td, "KQ.m@SHFE.ZZ")
+            raised = None
+        except ValueError as e:
+            raised = str(e)
+        check_true("未知品种(ZZ) 构造引擎即抛 ValueError（拒绝启动）",
+                   raised is not None)
+        if raised:
+            check("异常 msg 列出支持清单", "TA" in raised, True)
+            check("异常 msg 说明'禁止启动'", "禁止启动" in raised, True)
     with tmp_dir() as td:
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
-        check("已知品种(TA/PTA) 无 unknown_product 告警",
-              has_alert(eng_ta, "unknown_product"), False)
+        check("已知品种(TA/PTA) 正常启动", eng_ta is not None, True)
     with tmp_dir() as td:
         eng_if = build_engine(td, "KQ.m@CFFEX.IF")
-        check("已知品种(IF) 无 unknown_product 告警",
-              has_alert(eng_if, "unknown_product"), False)
+        check("已知品种(IF) 正常启动", eng_if is not None, True)
 
     print("\n============================================================")
-    print("P46 PTA 档案 + 品种白名单弹窗 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
+    print("P46 PTA 档案 + 未标定品种轻提示 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("============================================================")
     raise SystemExit(1 if _FAIL else 0)
 

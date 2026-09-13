@@ -627,14 +627,14 @@ with tmp_dir() as tmp:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
         res = t.start(out_dir=out_dir,
-                      symbol="KQ.m@CFFEX.SH", freq="5m",
+                      symbol="KQ.m@CFFEX.IM", freq="5m",
                       sse_base="http://127.0.0.1:18081")
         cmd = captured.get("cmd") or []
         check("[9a] 带 --source sse", "--source" in cmd
               and cmd[cmd.index("--source") + 1] == "sse", True)
         check("[9b] 带 --symbol 当前页面品种",
               "--symbol" in cmd
-              and cmd[cmd.index("--symbol") + 1] == "KQ.m@CFFEX.SH", True)
+              and cmd[cmd.index("--symbol") + 1] == "KQ.m@CFFEX.IM", True)
         check("[9c] 带 --freq 当前页面周期",
               "--freq" in cmd
               and cmd[cmd.index("--freq") + 1] == "5m", True)
@@ -646,11 +646,47 @@ with tmp_dir() as tmp:
             os.path.join(out_dir, "gateway.log")), True)
         check("[9f] handle 记录 symbol/freq/sse_base",
               (res.get("symbol"), res.get("freq"), res.get("sse_base")),
-              ("KQ.m@CFFEX.SH", "5m", "http://127.0.0.1:18081"))
+              ("KQ.m@CFFEX.IM", "5m", "http://127.0.0.1:18081"))
         check("[9g] 状态文件含来源参数",
-              _read_json(state_file).get("symbol"), "KQ.m@CFFEX.SH")
+              _read_json(state_file).get("symbol"), "KQ.m@CFFEX.IM")
         check("[9h0] 子进程命令不再带 --config（配置归一：无 config.json）",
               "--config" in cmd, False)
+    finally:
+        AT.subprocess.Popen = orig_popen
+        AT._STATE_FILE = orig_state_file
+        AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
+
+# [9w] 品种白名单硬约束（2026-09-13 拍板）：不在 PRODUCT_PROFILES 的品种，
+# AppTrader.start 前置拒绝（AppError → 400 → 前端 alert），不 spawn 子进程。
+# 引擎侧同一判定在 Engine._restore（见 test_p47）。
+with tmp_dir() as tmp:
+    out_dir = os.path.join(tmp, "state")
+    os.makedirs(out_dir, exist_ok=True)
+    orig_popen = AT.subprocess.Popen
+    orig_state_file = AT._STATE_FILE
+    orig_load_cfg = AT.AppTrader._load_cfg
+    _spawned = {"n": 0}
+    try:
+        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT.AppTrader._load_cfg = staticmethod(
+            lambda: TradingConfig(broker="dry_run", state_dir=out_dir))
+        def _count_popen(cmd, **kw):
+            _spawned["n"] += 1
+            return _FakeProc(cmd)
+        AT.subprocess.Popen = _count_popen
+        t = AT.AppTrader()
+        _raised = None
+        try:
+            t.start(out_dir=out_dir, symbol="KQ.m@SHFE.RB", freq="5m",
+                    sse_base="http://127.0.0.1:18081")
+        except AppError as e:
+            _raised = str(e)
+        check("[9w1] 未支持品种(RB) start() 抛 AppError", _raised is not None, True)
+        if _raised:
+            check("[9w2] 异常列出支持清单(含 IM)", "IM" in _raised, True)
+            check("[9w3] 异常说明'拒绝启动交易引擎'",
+                  "拒绝启动交易引擎" in _raised, True)
+        check("[9w4] 拒绝路径未 spawn 子进程", _spawned["n"], 0)
     finally:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
@@ -728,14 +764,14 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         AT.AppTrader._load_cfg = staticmethod(lambda: TradingConfig(
             broker="dry_run", state_dir=os.path.join(tmp, "State"),
-            source={"symbol": "KQ.m@CFFEX.RB", "freq": "15m"}))
+            source={"symbol": "KQ.m@CFFEX.IC", "freq": "15m"}))
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
         res = t.start(out_dir=os.path.join(tmp, "State"))
         cmd = captured.get("cmd") or []
         check("[9h] 缺省品种走 cfg.source.symbol",
-              cmd[cmd.index("--symbol") + 1], "KQ.m@CFFEX.RB")
+              cmd[cmd.index("--symbol") + 1], "KQ.m@CFFEX.IC")
         check("[9i] 缺省周期走 cfg.source.freq",
               cmd[cmd.index("--freq") + 1], "15m")
     finally:

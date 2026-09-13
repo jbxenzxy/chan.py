@@ -351,6 +351,31 @@ class AppTrader:
             use_freq = freq or src_cfg.freq
             use_base = sse_base or src_cfg.sse_base
 
+            # 品种白名单硬约束（2026-09-13 用户拍板）：不在 PRODUCT_PROFILES
+            # 的品种**不允许启动交易引擎**（R 下限等执行参数未标定，启动即错）。
+            # 在这里前置拒绝（AppError → 400 → 前端 alert 弹出原因），比 spawn
+            # 后让引擎在 _restore 白名单闸门处自杀更快、反馈更明确；引擎侧
+            # （Engine._restore）仍保留同一判定作为权威闸门（回放/CLI 直启拦）。
+            # 惰性 import：Trading 包对本模块零依赖，此处只碰纯 dataclass 模块。
+            try:
+                from Trading.Infra.ProductProfile import (
+                    PRODUCT_PROFILES, parse_product,
+                )
+                _product = parse_product(use_symbol)
+                if _product not in PRODUCT_PROFILES:
+                    self._engine_log(
+                        log_file,
+                        "品种白名单拦截: {} (解析品种={!r})".format(
+                            use_symbol, _product))
+                    raise AppError(
+                        "品种 {} 不在自动下单支持清单（{}）中：执行参数未标定，"
+                        "已拒绝启动交易引擎。请更换品种，或在 PRODUCT_PROFILES "
+                        "中标定后再试。".format(
+                            _product or use_symbol,
+                            "/".join(sorted(PRODUCT_PROFILES))))
+            except ImportError:  # pragma: no cover — Trading 缺失时交引擎闸门兜底
+                pass
+
             cmd = [sys.executable, _RUN_GATEWAY,
                    "--out", out_dir,
                    "--no-fresh",     # 保留持仓/信号幂等键，不 wipe

@@ -75,7 +75,7 @@ def main():
 
     print("\n[3] TradingConfig 初始加载：AU 注入五个随品种可变字段")
     c_au = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AU"})
-    check("AU min_r_points=0.5", c_au.exit_params.min_r_points, 0.5)
+    check("AU min_r_points=3.0（默认点数，2026-09-13 拍板）", c_au.exit_params.min_r_points, 3.0)
     check("AU r_multiple_tp=2.0", c_au.exit_params.r_multiple_tp, 2.0)
     check("AU multiplier=1000.0", c_au.instrument.multiplier, 1000.0)
     check("AU breakeven_buffer_ticks=2.0", c_au.exit_params.breakeven_buffer_ticks, 2.0)
@@ -84,11 +84,11 @@ def main():
 
     print("\n[4] TradingConfig 初始加载：AG / CU 注入")
     c_ag = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AG"})
-    check("AG min_r_points=20.0", c_ag.exit_params.min_r_points, 20.0)
+    check("AG min_r_points=3.0（默认点数）", c_ag.exit_params.min_r_points, 3.0)
     check("AG multiplier=15.0", c_ag.instrument.multiplier, 15.0)
     check("AG price_tick=1.0", c_ag.instrument.price_tick, 1.0)
     c_cu = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.CU"})
-    check("CU min_r_points=100.0", c_cu.exit_params.min_r_points, 100.0)
+    check("CU min_r_points=3.0（默认点数）", c_cu.exit_params.min_r_points, 3.0)
     check("CU multiplier=5.0", c_cu.instrument.multiplier, 5.0)
     check("CU price_tick=10.0", c_cu.instrument.price_tick, 10.0)
     check("CU breakeven_buffer_ticks=3.0", c_cu.exit_params.breakeven_buffer_ticks, 3.0)

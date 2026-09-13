@@ -84,38 +84,39 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
         breakeven_buffer_ticks=3.0, price_tick=0.2,
         note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
-    # min_r_points 是 R 下限地板，单位 = 品种价格单位（元/克·元/kg·元/吨），**不是指数点**；
-    #   按各品种 price_tick 量级给 ~10~25 tick 地板，防极端横盘+极窄分型把 R 压到无意义。
-    #   下列 R 下限 / 盈亏比 / 保本缓冲为**起始标定值，需回测确认**（参照 IF/IH/IC/IM 同款 note 惯例）。
+    # min_r_points 是 R 下限地板，单位 = 品种报价点数（IF=指数点、商品=元/克·元/kg·元/吨）。
+    # 2026-09-13 用户拍板：商品档 min_r_points **暂全部用默认 3 点** —— IF/IH=3、
+    #   IC/IM=5 是交易经验标定，商品侧尚无同等经验积累，先用默认值跑，待回测/实盘
+    #   积累后再手工调（此前按 tick 数推 10~25 的标定已废弃：tick 粒度是交易所报价
+    #   惯例，不是波动尺度）。
     #   手续费（open/close/close_today_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
     #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
     "AU": ProductProfile(
-        product="AU", min_r_points=0.5, r_multiple_tp=2.0, multiplier=1000.0,
+        product="AU", min_r_points=3.0, r_multiple_tp=2.0, multiplier=1000.0,
         breakeven_buffer_ticks=2.0, price_tick=0.02,
-        note="SHFE 沪金：乘数 1000(元/克)、tick 0.02；R 下限 0.5 元/克(25 tick)；"
-             "趋势强、盈亏比可上探 1:3；平今免收(手续费 InstrumentSpec 配)；需回测标定"),
+        note="SHFE 沪金：乘数 1000(元/克)、tick 0.02；R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "趋势强、盈亏比可上探 1:3；平今免收(手续费 InstrumentSpec 配)"),
     "AG": ProductProfile(
-        product="AG", min_r_points=20.0, r_multiple_tp=2.0, multiplier=15.0,
+        product="AG", min_r_points=3.0, r_multiple_tp=2.0, multiplier=15.0,
         breakeven_buffer_ticks=2.0, price_tick=1.0,
-        note="SHFE 沪银：乘数 15(元/kg)、tick 1；R 下限 20 元/kg(20 tick)；"
-             "开平昨/平今均万0.5(手续费 InstrumentSpec 配)；需回测标定"),
+        note="SHFE 沪银：乘数 15(元/kg)、tick 1；R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "开平昨/平今均万0.5(手续费 InstrumentSpec 配)"),
     "CU": ProductProfile(
-        product="CU", min_r_points=100.0, r_multiple_tp=2.0, multiplier=5.0,
+        product="CU", min_r_points=3.0, r_multiple_tp=2.0, multiplier=5.0,
         breakeven_buffer_ticks=3.0, price_tick=10.0,
-        note="SHFE 沪铜：乘数 5(元/吨)、tick 10；R 下限 100 元/吨(10 tick)；"
-             "平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)；需回测标定"),
+        note="SHFE 沪铜：乘数 5(元/吨)、tick 10；R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)"),
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
     #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
     #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
     "TA": ProductProfile(
-        product="TA", min_r_points=30.0, r_multiple_tp=2.0, multiplier=5.0,
+        product="TA", min_r_points=3.0, r_multiple_tp=2.0, multiplier=5.0,
         breakeven_buffer_ticks=2.0, price_tick=2.0,
-        note="CZCE PTA(精对苯二甲酸)：乘数 5(元/吨)、tick 2；R 下限 30 元/吨(15 tick)；"
+        note="CZCE PTA(精对苯二甲酸)：乘数 5(元/吨)、tick 2；R 下限暂用默认 3 点(待经验积累后手工调)；"
              "郑商所品种报单走 FAK + OPEN 钉 1 手；"
-             "偶发装置/政策消息急拉急跌，假突破多于金属；"
-             "手续费固定值以交易所最新公示为准(InstrumentSpec 配)；需回测标定"),
+             "偶发装置/政策消息急拉急跌；手续费固定值以交易所最新公示为准(InstrumentSpec 配)"),
 }
 
 
@@ -124,6 +125,14 @@ def parse_product(signal_symbol: str) -> str:
 
     例："KQ.m@CFFEX.IF" → "IF"（取最后一个 '.' 之后的片段）。
     无 '.' 或缺失时返回 ""（= 未知品种，不套用任何品种档案）。
+
+    大小写归一为**大写**（2026-09-13）：前端别名表（DataAPI/TqSdkAPI.py
+    FUTURES_ALIASES）把 SHFE/DCE 品种解析成 tqsdk 惯例的**小写**主连
+    （如 AU → "KQ.m@SHFE.au"、RB → "KQ.m@SHFE.rb"），若按原文取末段
+    会得到 "au"/"rb"，与档案键（大写）匹配不上——已标定品种反而被当成
+    未知品种。档案键统一大写，故在此归一，调用方无需各自 upper()。
     """
     s = str(signal_symbol or "").strip()
-    return s.split(".")[-1] if "." in s else ""
+    if "." not in s:
+        return ""
+    return s.split(".")[-1].upper()
