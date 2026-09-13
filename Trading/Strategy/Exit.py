@@ -27,7 +27,7 @@ from typing import Optional
 from ..Config import ExitConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
-from .Base import ExitCheck, ExitPolicy
+from .Base import ExitCheck
 
 
 # 参数默认值单一事实源（2026-09-07 严格模式）：
@@ -35,13 +35,13 @@ from .Base import ExitCheck, ExitPolicy
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
 
 
-class LayeredExitPolicy(ExitPolicy):
+class LayeredExitPolicy:
     name = "LayeredExitPolicy"
 
     # ---------- 参数 ----------
     def __init__(self, params=None):
-        super().__init__(params)
-        p = ExitConfig(**(self.params or {}))
+        self.params = dict(params or {})
+        p = ExitConfig(**self.params)
         self.p = p
         # L1 R 倍数定基线
         self.stop_at_signal_extreme = p.stop_at_signal_extreme
@@ -64,6 +64,15 @@ class LayeredExitPolicy(ExitPolicy):
 
         # ATR 历史缓冲（on_bar 维护，平着也收）
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
+
+    # ---------- 基类折叠进来的共享方法（本层仅单一实现，无需抽象基类） ----------
+    def describe(self) -> str:
+        return "{}({})".format(self.name, self.params)
+
+    def check_with(self, position: Position, bar: Bar, spec: InstrumentSpec,
+                   bars_held: int = 0) -> Optional["ExitCheck"]:
+        """引擎唯一调用入口（兼容旧签名策略）。"""
+        return self.check(position, bar, spec, bars_held=bars_held)
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:

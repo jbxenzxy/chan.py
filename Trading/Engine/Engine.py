@@ -62,7 +62,7 @@ from ..Infra.PeriodProfile import (
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
-from ..Strategy.Base import EntryPolicy, ExitCheck, ExitPolicy
+from ..Strategy.Base import ExitCheck
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import (
     PLAUSIBLE_DATE_MIN,
@@ -102,7 +102,7 @@ class _Action:
 
 class TradingEngine(ReconcileMixin):
     def __init__(self, cfg: TradingConfig, broker: Broker,
-                 entry_policy: EntryPolicy, exit_policy: ExitPolicy,
+                 entry_policy: "EntryPolicy", exit_policy: "LayeredExitPolicy",
                  store: Store, ev: EventLog):
         self.cfg = cfg
         self.spec: InstrumentSpec = cfg.instrument
@@ -874,7 +874,8 @@ class TradingEngine(ReconcileMixin):
             return
 
         if act.transition == 1:
-            # 空仓开新仓：先过入场策略的三道过滤
+            # 空仓开新仓：入场策略只做数据兜底（signal.price<=0 → SKIP），
+            # 不再做信号质量过滤（振幅/止损距离上下限）—— 该职责已归缠论分析引擎（见 §9 Q13）
             decision = self.entry_policy.decide(sig, None, self.spec)
             if not decision:
                 self.store.update_signal_action(sig.key, "skip", decision.reason)

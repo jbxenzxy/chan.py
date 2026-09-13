@@ -18,9 +18,9 @@ Trading/                        # 自动下单网关（Python 包）
 │   ├── Replay.py               # 离线回放 M0 录制数据
 │   └── Base.py                 # Source 接口 + @register 装饰器
 ├── Strategy/                   # ③ 可插拔策略（新增文件即注册）
-│   ├── Base.py                 # EntryPolicy / ExitPolicy 接口 + @register 装饰器
-│   ├── Entry.py                # 默认入场策略（用户当前规则）
-│   └── Exit.py                 # 出场策略合集：默认止盈止损 / 分层离场 L1-L3 / 移动止损示例
+│   ├── Base.py                 # ExitCheck 数据结构（出场判定结果）
+│   ├── Entry.py                # 入场策略（用户当前规则，唯一实现）
+│   └── Exit.py                 # 出场策略：分层离场 L1-L3 / 移动止损（唯一实现）
 ├── Risk/                       # ④ 风控层（精简后：手数/持仓上限全收敛在 RiskConfig）
 │                               #    （PositionSizing 固定手数仓位管理已于 2026-09-08 删除）
 ├── Engine/                     # ⑤ 执行层
@@ -80,7 +80,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)       (手数/持仓上限)  (dry_run/…)
 ```
 
-**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `DefaultEntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
+**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `EntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
 
 三个刻意保留的保守设定（`Strategy/Exit.py` 的 LayeredExitPolicy）：
 
@@ -121,10 +121,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     //   旧 schema 严格拒绝不同口径 —— 配置是可编辑文本，那两个键已完全无语义）。
   },
   "entry_params": {
-    "reverse_on_opposite_signal": false,  // 反向信号只平今不反手
-    "max_signal_range_points": 0.0,       // 0=不限；>0 过滤振幅过大的信号
-    "min_stop_distance_points": 0.0,
-    "max_stop_distance_points": 0.0
+    "reverse_on_opposite_signal": false  // 反向信号只平今不反手
   },
   "exit_params": {
     "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
@@ -189,8 +186,6 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 `Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）
 → 跑 `Test/test_period_matrix.py`（四周期 × 毫秒/秒源回归矩阵）。
 
-> `max_signal_range_points` / `min_stop_distance_points` / `max_stop_distance_points` 配合 M0 的「信号振幅分布」结果，能直接过滤掉止损过宽或信号振幅过大的信号。
-
 ### 引擎时序参数（`TradingConfig.engine`，Step 2.2 归一）
 
 `close_retry_bars`（CLOSE 拒单冷却根数）/ `close_max_streak`（连续被拒清幻影阈值）/
@@ -233,7 +228,7 @@ demo 数据是**合成随机行情**，结果必然负期望，只用于验证�
 
 - 默认会**回放最终消失的信号**（保守）；加 `--only-alive` 只回放存活信号（会高估策略，仅供对比）。
 - 期指**平今手续费 0.0345%**（约 1.38 点），是开仓（0.09 点）的 15 倍。成本模型已含，务必把 `close_today_first` 与手续费率填对，否则胜率判断会失真。
-- 建议先看 `by_reason` 拆分：如果 `sl` 占比过高，说明止损距离（=信号K线振幅）太紧，用 M0 的振幅分布反推合理的 `min_stop_distance_points`。
+- 信号质量（止损距离 / 振幅是否过宽过窄）由缠论分析引擎在产生买卖点信号时判定，Trading 层不再做此类过滤；回放只看执行与风控。
 
 ---
 

@@ -78,7 +78,7 @@ from Trading.Infra.EventLog import EventLog               # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec   # noqa: E402
 from Trading.Infra.Store import Store                     # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, OrderIntent, Side, Signal  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy     # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy     # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy       # noqa: E402
 
 _PASS = 0
@@ -181,7 +181,7 @@ def build(tmpd, broker, **engine_over):
     cfg = make_cfg(**engine_over)
     ev_path = os.path.join(tmpd, "events.jsonl")
     eng = TradingEngine(
-        cfg, broker, DefaultEntryPolicy({}),
+        cfg, broker, EntryPolicy({}),
         LayeredExitPolicy(cfg.exit_params.model_dump()),
         Store(os.path.join(tmpd, "state.db")),
         EventLog(ev_path, echo=False, echo_kinds=None))

@@ -29,16 +29,16 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 
 策略层（2026-09-08 精简：取消策略选择器抽象）
 ------------------------------------------------------------------
-    ③ 策略层**没有「策略选择」这一层**。生产环境入场只有一个策略 `DefaultEntryPolicy`、
+    ③ 策略层**没有「策略选择」这一层**。生产环境入场只有一个策略 `EntryPolicy`、
     出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场，2026-09-08 已删 L4），
     用户明确不会增加第二种，因此不再需要 `name` 字段、注册表、或 build_*_policy 路由。
 
     配置直接持有参数模型：
-      · `entry_params: EntryConfig`   —— DefaultEntryPolicy 的可调数值（默认值唯一来源）
+      · `entry_params: EntryConfig`   —— EntryPolicy 的可调数值（默认值唯一来源）
       · `exit_params: ExitConfig`     —— LayeredExitPolicy（L1-L3）的可调数值
 
     main.py 直接实例化，不再经选择器：
-        entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
+        entry = EntryPolicy(cfg.entry_params.model_dump())
         exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
     原 `DefaultExitPolicy`（简单固定点数出场）已删除——它是可选的「第二种」出场策略，
     生产从不选用，保留它只会让配置与测试多一套无用的选择分支。
@@ -59,7 +59,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     · 每个 section 都是 `extra="forbid"` 的 pydantic 模型：
       传入未知键、缺字段，一律立即抛异常（启动期 fail-fast），
       不再有组件内 `p.get(key, 兜底值)` 那种"第二套默认值"。
-    · 组件（ExitPolicy / EntryPolicy / SimNow / Broker）只接受配置模型
+    · 组件（EntryPolicy / LayeredExitPolicy / SimNow / Broker）只接受配置模型
       或经模型校验的 dict，传错直接报错 —— 缺键/拼错在配置阶段就暴露，
       绝不带错误默认值悄悄跑。
 
@@ -230,17 +230,14 @@ class SourceConfig(BaseModel):
 
 # ════════════════════════════════════════════════════════════════════
 # ③ 策略层（Strategy）配置
-#    入场 / 出场各只有一个策略（DefaultEntryPolicy / LayeredExitPolicy），
+#    入场 / 出场各只有一个策略（EntryPolicy / LayeredExitPolicy），
 #    配置层不再有「策略选择」抽象——直接持有参数模型 entry_params / exit_params。
 # ════════════════════════════════════════════════════════════════════
 class EntryConfig(BaseModel):
-    """DefaultEntryPolicy 参数（唯一入场策略，在此加字段，别处不再写默认值）。"""
+    """EntryPolicy 参数（唯一入场策略，在此加字段，别处不再写默认值）。"""
     model_config = ConfigDict(extra="forbid")
 
     reverse_on_opposite_signal: bool = False  # 持仓时出现反向信号是否反手
-    max_signal_range_points: float = 0.0      # 信号 K 线最大振幅（点数）过滤，0=不过滤
-    min_stop_distance_points: float = 0.0     # 止损位与入场价最小距离（点数），0=不校验
-    max_stop_distance_points: float = 0.0     # 止损位与入场价最大距离（点数），0=不校验
 
 
 class ExitConfig(BaseModel):

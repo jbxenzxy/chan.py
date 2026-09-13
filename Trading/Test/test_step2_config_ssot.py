@@ -83,12 +83,11 @@ check("ExitConfig 拒未知键（extra=forbid）",
       _raises(lambda: ExitConfig(**{"not_a_field": 1})), True)
 
 # ═══ [2] 2.0.3 策略选择器删除 ═══
-print("\n[2] 选择器删除（2.0.3）：只留 DefaultEntryPolicy / LayeredExitPolicy")
+print("\n[2] 选择器删除（2.0.3）：只留 EntryPolicy / LayeredExitPolicy")
 from Trading import Strategy
-check("Strategy.__all__ 精确 5 项",
+check("Strategy.__all__ 精确 3 项",
       sorted(Strategy.__all__),
-      ["DefaultEntryPolicy", "EntryPolicy", "ExitCheck", "ExitPolicy",
-       "LayeredExitPolicy"])
+      ["EntryPolicy", "ExitCheck", "LayeredExitPolicy"])
 check("Strategy.Exit 无 DefaultExitPolicy",
       hasattr(Strategy.Exit, "DefaultExitPolicy"), False)
 for _sym in ("EXIT_POLICIES", "ENTRY_POLICIES",
@@ -116,7 +115,7 @@ check("字段声明 entry_params: EntryConfig",
 check("字段声明 exit_params: ExitConfig",
       bool(re.search(r"^    exit_params:\s*ExitConfig\b", _CFG_TXT, re.M)), True)
 check("main.py 经 cfg.entry_params 构造入场策略",
-      "DefaultEntryPolicy(cfg.entry_params" in _MAIN_TXT, True)
+      "EntryPolicy(cfg.entry_params" in _MAIN_TXT, True)
 check("main.py 经 cfg.exit_params 构造出场策略",
       "LayeredExitPolicy(cfg.exit_params" in _MAIN_TXT, True)
 
