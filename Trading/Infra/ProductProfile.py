@@ -11,12 +11,13 @@ PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有
 
   · `min_r_points`（R 下限）：IF/IH 波动率较低，3.0 点足够兜底；IC/IM 波动
     更大，3.0 点会被极端横盘+极窄分型轻易击穿，需放大到 5.0 点；
-  · `r_multiple_tp`（止盈盈亏比）：IF/IH 惯用 1:2；IC/IM 波动大、趋势性弱，
-    1:3 的盈亏比更合适；
-  · `multiplier`（合约乘数）：IF/IH = 300 元/点，IC/IM = 200 元/点；
   · `breakeven_buffer_ticks`（保本缓冲）：保本出场只保"价差为零"，往返手续费+
     滑点仍会让净收益为负，故保本位 = 入场价 ± 此 tick 数。IF/IH 滑点小取 2 tick，
-    IC/IM 波动大、冲击成本高取 3 tick。
+    IC/IM 波动大、冲击成本高取 3 tick；
+  · `r_multiple_tp`（止盈盈亏比）：IF/IH 惯用 1:2；IC/IM 波动大、趋势性弱，
+    1:3 的盈亏比更合适；
+  · `price_tick` / `multiplier`（最小变动价位 / 合约乘数）：IF/IH = 0.2 点 / 300 元/点，
+    IC/IM = 0.2 点 / 200 元/点 —— 合约事实，实盘以行情为准（详见类 docstring）。
 
 这些差异与周期无关（4 个品种在 4 个周期下都应保持各自的 R 下限/盈亏比/乘数/保本缓冲），
 因此**不放 PeriodProfile**，而单独成立本模块的 `ProductProfile`。
@@ -40,14 +41,19 @@ from typing import Dict
 class ProductProfile:
     """一个合约品种的全部品种相关设定。
 
-    覆盖五个「随品种可变」的 flat 字段（详见模块 docstring）：
+    字段分两组（2026-09-13 用户定序：**各档案条目按此顺序书写**）——
+      【策略标定值（随经验调，放前面）】
       min_r_points             R 下限（点数），防极端横盘+极窄分型
-      r_multiple_tp            止盈盈亏比（r_multiple_tp × R）
-      multiplier               合约乘数（元/点）
       breakeven_buffer_ticks    保本位缓冲 tick（覆盖往返手续费+滑点，真正"不亏钱"）
+      r_multiple_tp            止盈盈亏比（r_multiple_tp × R）
+      【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
       price_tick               最小变动价位 —— Phase 8（D20）新增，**仅作离线模式
                                （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
                                （apply_quote），配置值不会被采用。
+      multiplier               合约乘数（元/点）
+
+    注：下方**声明顺序**受 dataclass 规则约束（无默认值字段必须在前），
+    与上述概念分组不同属有意为之；书写/阅读以各档案条目的实参顺序为准。
     """
     product: str
     min_r_points: float
@@ -63,26 +69,27 @@ class ProductProfile:
 
 
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
-# min_r_points / r_multiple_tp / multiplier / breakeven_buffer_ticks / price_tick 显式给真值；note 标定状态。
+# 条目实参顺序（2026-09-13 用户定序）：策略标定值在前（min_r_points → breakeven_buffer_ticks
+# → r_multiple_tp），合约事实在后（price_tick → multiplier）；note 同序。显式给真值；note 标定状态。
 # ⚠️ 手续费（open/close/close_today_fee_rate）**不在此处** —— 它们随 broker 加收变化，
 #   属 InstrumentSpec 配置项，由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
 PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     "IF": ProductProfile(
-        product="IF", min_r_points=3.0, r_multiple_tp=2.0, multiplier=300.0,
-        breakeven_buffer_ticks=2.0, price_tick=0.2,
-        note="IF/IH 基线：波动较低，R 下限 3.0 点、盈亏比 1:2、保本缓冲 2 tick"),
+        product="IF", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        price_tick=0.2, multiplier=300.0,
+        note="IF基线：波动较低，R 下限 3.0 点；保本缓冲 2 tick；盈亏比 1:2"),
     "IH": ProductProfile(
-        product="IH", min_r_points=3.0, r_multiple_tp=2.0, multiplier=300.0,
-        breakeven_buffer_ticks=2.0, price_tick=0.2,
-        note="IF/IH 基线：波动较低，R 下限 3.0 点、盈亏比 1:2、保本缓冲 2 tick"),
+        product="IH", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        price_tick=0.2, multiplier=300.0,
+        note="IH基线：波动较低，R 下限 3.0 点；保本缓冲 2 tick；盈亏比 1:2"),
     "IC": ProductProfile(
-        product="IC", min_r_points=5.0, r_multiple_tp=3.0, multiplier=200.0,
-        breakeven_buffer_ticks=3.0, price_tick=0.2,
-        note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
+        product="IC", min_r_points=5.0, breakeven_buffer_ticks=3.0, r_multiple_tp=3.0,
+        price_tick=0.2, multiplier=200.0,
+        note="IC调整：波动较大，R 下限 5.0 点；保本缓冲 3 tick；盈亏比 1:3；乘数 200 元/点"),
     "IM": ProductProfile(
-        product="IM", min_r_points=5.0, r_multiple_tp=3.0, multiplier=200.0,
-        breakeven_buffer_ticks=3.0, price_tick=0.2,
-        note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
+        product="IM", min_r_points=5.0, breakeven_buffer_ticks=3.0, r_multiple_tp=3.0,
+        price_tick=0.2, multiplier=200.0,
+        note="IM调整：波动较大，R 下限 5.0 点；保本缓冲 3 tick；盈亏比 1:3；乘数 200 元/点"),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
     # min_r_points 是 R 下限地板，单位 = 品种报价点数（IF=指数点、商品=元/克·元/kg·元/吨）。
     # 2026-09-13 用户拍板：商品档 min_r_points **暂全部用默认 3 点** —— IF/IH=3、
@@ -92,29 +99,30 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     #   手续费（open/close/close_today_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
     #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
     "AU": ProductProfile(
-        product="AU", min_r_points=3.0, r_multiple_tp=2.0, multiplier=1000.0,
-        breakeven_buffer_ticks=2.0, price_tick=0.02,
-        note="SHFE 沪金：乘数 1000(元/克)、tick 0.02；R 下限暂用默认 3 点(待经验积累后手工调)；"
-             "趋势强、盈亏比可上探 1:3；平今免收(手续费 InstrumentSpec 配)"),
+        product="AU", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        price_tick=0.02, multiplier=1000.0,
+        note="SHFE 沪金：R 下限暂用默认 3 点(待经验积累后手工调)；趋势强、盈亏比可上探 1:3；"
+             "乘数 1000(元/克)、tick 0.02；平今免收(手续费 InstrumentSpec 配)"),
     "AG": ProductProfile(
-        product="AG", min_r_points=3.0, r_multiple_tp=2.0, multiplier=15.0,
-        breakeven_buffer_ticks=2.0, price_tick=1.0,
-        note="SHFE 沪银：乘数 15(元/kg)、tick 1；R 下限暂用默认 3 点(待经验积累后手工调)；"
-             "开平昨/平今均万0.5(手续费 InstrumentSpec 配)"),
+        product="AG", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        price_tick=1.0, multiplier=15.0,
+        note="SHFE 沪银：R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "乘数 15(元/kg)、tick 1；开平昨/平今均万0.5(手续费 InstrumentSpec 配)"),
     "CU": ProductProfile(
-        product="CU", min_r_points=3.0, r_multiple_tp=2.0, multiplier=5.0,
-        breakeven_buffer_ticks=3.0, price_tick=10.0,
-        note="SHFE 沪铜：乘数 5(元/吨)、tick 10；R 下限暂用默认 3 点(待经验积累后手工调)；"
-             "平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)"),
+        product="CU", min_r_points=3.0, breakeven_buffer_ticks=3.0, r_multiple_tp=2.0,
+        price_tick=10.0, multiplier=5.0,
+        note="SHFE 沪铜：R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "乘数 5(元/吨)、tick 10；平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)"),
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
     #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
     #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
     "TA": ProductProfile(
-        product="TA", min_r_points=3.0, r_multiple_tp=2.0, multiplier=5.0,
-        breakeven_buffer_ticks=2.0, price_tick=2.0,
-        note="CZCE PTA(精对苯二甲酸)：乘数 5(元/吨)、tick 2；R 下限暂用默认 3 点(待经验积累后手工调)；"
+        product="TA", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        price_tick=2.0, multiplier=5.0,
+        note="CZCE PTA(精对苯二甲酸)：R 下限暂用默认 3 点(待经验积累后手工调)；"
+             "乘数 5(元/吨)、tick 2；"
              "郑商所品种报单走 FAK + OPEN 钉 1 手；"
              "偶发装置/政策消息急拉急跌；手续费固定值以交易所最新公示为准(InstrumentSpec 配)"),
 }
