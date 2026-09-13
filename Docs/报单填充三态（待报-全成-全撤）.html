@@ -1,0 +1,51 @@
+<svg viewBox="0 0 680 360" width="100%" xmlns="http://www.w3.org/2000/svg" role="img">
+  <title>Order fill-state machine: FOK vs FAK</title>
+  <desc>Three panels comparing order fill states under FOK, FAK with N greater than 1, and FAK forced to 1 lot.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="28" font-size="14" font-weight="500" fill="#1f2933">报单填充状态机：FOK vs FAK（郑商所场景）</text>
+
+  <!-- Panel A: FOK -->
+  <text x="140" y="52" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2933">A. FOK（N 手）</text>
+  <text x="140" y="70" text-anchor="middle" font-size="11" fill="#64748b">CFFEX / DCE / SHFE / GFEX</text>
+  <rect x="90" y="92" width="100" height="40" rx="8" fill="#E6F1FB" stroke="#378ADD" stroke-width="0.5"/>
+  <text x="140" y="112" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#042C53">待报</text>
+  <line x1="140" y1="132" x2="140" y2="166" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="140" y1="132" x2="140" y2="236" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="90" y="166" width="100" height="40" rx="8" fill="#EAF3DE" stroke="#639922" stroke-width="0.5"/>
+  <text x="140" y="186" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#27500A">全成</text>
+  <rect x="90" y="236" width="100" height="40" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+  <text x="140" y="256" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#444441">全撤</text>
+  <text x="140" y="300" text-anchor="middle" font-size="11" fill="#16a34a">无部分成交 · 三态完整</text>
+
+  <!-- Panel B: FAK N>1 (rejected) -->
+  <text x="350" y="52" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2933">B. FAK + N&gt;1 手</text>
+  <text x="350" y="70" text-anchor="middle" font-size="11" fill="#64748b">郑商所 · 不采用</text>
+  <rect x="300" y="92" width="100" height="40" rx="8" fill="#E6F1FB" stroke="#378ADD" stroke-width="0.5"/>
+  <text x="350" y="112" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#042C53">待报</text>
+  <line x1="350" y1="132" x2="350" y2="166" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="300" y="166" width="100" height="40" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+  <text x="350" y="186" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#633806">部分成</text>
+  <line x1="350" y1="206" x2="350" y2="240" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="270" y="240" width="160" height="44" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+  <text x="350" y="258" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#712B13">补单 / 余量处理</text>
+  <text x="350" y="276" text-anchor="middle" dominant-baseline="central" font-size="11" fill="#712B13">需扩展状态机</text>
+  <text x="350" y="300" text-anchor="middle" font-size="11" fill="#D85A30">出现第 4 态 · 不变量4 失效</text>
+
+  <!-- Panel C: FAK 1 lot (adopted) -->
+  <text x="560" y="52" text-anchor="middle" font-size="13" font-weight="500" fill="#1f2933">C. FAK + 强制 1 手</text>
+  <text x="560" y="70" text-anchor="middle" font-size="11" fill="#64748b">郑商所 · 采用</text>
+  <rect x="510" y="92" width="100" height="40" rx="8" fill="#E6F1FB" stroke="#378ADD" stroke-width="0.5"/>
+  <text x="560" y="112" text-anchor="middle" dominant-baseline="central" font-size="13" fill="#042C53">待报</text>
+  <line x1="560" y1="132" x2="560" y2="166" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="560" y1="132" x2="560" y2="236" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <rect x="510" y="166" width="100" height="40" rx="8" fill="#EAF3DE" stroke="#639922" stroke-width="0.5"/>
+  <text x="560" y="186" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#27500A">成 1 ≡ 全成</text>
+  <rect x="510" y="236" width="100" height="40" rx="8" fill="#F1EFE8" stroke="#888780" stroke-width="0.5"/>
+  <text x="560" y="256" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#444441">撤 0 ≡ 全撤</text>
+  <text x="560" y="300" text-anchor="middle" font-size="11" fill="#16a34a">FAK ≡ FOK · 三态完整</text>
+</svg>

@@ -912,21 +912,39 @@ class TradingEngine(ReconcileMixin):
     #       校验链（二期 Q1 全品种 / Q2 平今开关 / Q3 交割月的护栏都往这条链上加，
     #       不碰转移表结构）。
     # ════════════════════════════════════════════════════════════════
+    def _open_volume(self) -> int:
+        """Phase 9（CZCE）：OPEN 手数钉死 1 —— 郑商所不支持 FOK，单笔 1 手下
+        FAK ≡ FOK（没有"剩余"可撤），报单填充三态（待报/全成/全撤）不变量 4 天然
+        保持，无需扩展状态机、无需补簿。
+
+        其余交易所沿用 lots_per_signal（= risk.max_volume，当前默认 2）。
+
+        CLOSE 手数 = min(lots_per_signal, 持仓) 自然跟随：CZCE 的 OPEN 恒为 1 →
+        持仓恒为 1 → 平仓也 1 手，无需单独钉（见 _decide_action 转移 ③）。
+
+        注意：设计上**一次信号只报 1 笔**，这里只是把那 1 笔的手数从 N 钉成 1，
+        **没有任何拆单**（拆 N 笔 1 手的逻辑不存在，也不允许存在）。
+        """
+        if self.spec.exchange == "CZCE":
+            return 1
+        return self.lots_per_signal
+
     def _decide_action(self, sig: Signal, today: str) -> Optional["_Action"]:
         """交易信号到达时的动作决策（转移 ①②③）。**纯函数：不改任何状态。**"""
         st = self.account_state()
         if st is AccountState.RUNNING:
             return None                                    # 规则 ⑶
         if st is AccountState.FLAT:
-            # 转移 ①：空仓 → OPEN（信号方向），一笔挂 lots_per_signal 手
-            return _Action(OrderIntent.OPEN, sig.side, self.lots_per_signal,
+            # 转移 ①：空仓 → OPEN（信号方向），一笔挂 _open_volume() 手
+            #   （CZCE 钉 1，其余交易所 lots_per_signal；设计上一次信号只 1 笔，无拆单）
+            return _Action(OrderIntent.OPEN, sig.side, self._open_volume(),
                            None, is_exit=False, transition=1)
 
         # 锁仓态：看最近一笔仓单的建仓交易日（D_last）
         latest = self.positions.latest()
         if latest is None or latest.entry_date >= today:
             # 转移 ②：当日锁 → OPEN（信号方向），不动锁仓仓单
-            return _Action(OrderIntent.OPEN, sig.side, self.lots_per_signal,
+            return _Action(OrderIntent.OPEN, sig.side, self._open_volume(),
                            None, is_exit=False, transition=2)
 
         # 转移 ③：跨日锁 → CLOSE（信号方向）

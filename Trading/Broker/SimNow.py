@@ -909,7 +909,7 @@ class SimNowBroker(Broker):
                 order = self._api.insert_order(symbol=self._trade_symbol,
                                                direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit,
-                                               advanced=self.spec.order_advanced)
+                                               advanced=self.spec.effective_order_advanced())
             except Exception as e:
                 return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))
@@ -1013,7 +1013,7 @@ class SimNowBroker(Broker):
                 order = self._api.insert_order(symbol=self._trade_symbol,
                                                direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit,
-                                               advanced=self.spec.order_advanced)
+                                               advanced=self.spec.effective_order_advanced())
             except Exception as e:
                 return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))

@@ -197,6 +197,25 @@ class InstrumentSpec(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
 
+    def effective_order_advanced(self) -> str:
+        """Phase 9（FOK/FAK 按交易所切换）：返回实际报单用的 advanced 属性。
+
+        郑商所（CZCE）是唯一不支持 FOK 的交易所（tqsdk 限价+FOK 仅拒郑商所期货），
+        故 CZCE **强制**切 FAK，忽略 `order_advanced` 配置。其余交易所沿用
+        `order_advanced`（默认 "FOK"）。
+
+        为什么要集中到 spec 而不是在 Broker/ 里判 exchange：A2 既定"报单属性一处
+        配置、所有 insert_order 调用点读取"，加交易所分支也只改这一处，避免
+        Broker/ 里散落 `if exchange=="CZCE"`。
+
+        配套约束（见 Engine._decide_action / _open_volume）：CZCE 的 OPEN 手数钉死 1
+        —— 单笔 1 手下 FAK ≡ FOK（没有"剩余"可撤），报单填充三态（待报/全成/全撤）
+        不变量 4 天然保持，无需扩展状态机、无需补簿。
+        """
+        if self.exchange == "CZCE":
+            return "FAK"
+        return self.order_advanced
+
 
 def derive_exchange(symbol: str) -> str:
     """从合约/主连 symbol 推导交易所代码（Phase 8.1 · O-1）。

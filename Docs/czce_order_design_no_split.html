@@ -1,0 +1,44 @@
+<svg viewBox="0 0 680 440" width="100%" role="img">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <title>CZCE 下单方案：一次信号一笔报单，不拆单</title>
+  <desc>非 CZCE 走 1 笔 N 手 FOK；CZCE 走 1 笔 1 手 FAK。两者都收敛到全成或全撤三态，因为 1 手没有剩余可撤。</desc>
+
+  <g class="node c-gray">
+    <rect x="190" y="30" width="300" height="56" rx="10" stroke-width="0.5" fill="#F1EFE8" stroke="#5F5E5A"/>
+    <text class="th" x="340" y="52" text-anchor="middle" dominant-baseline="central">一次交易信号 → 一笔报单</text>
+    <text class="ts" x="340" y="72" text-anchor="middle" dominant-baseline="central">设计不变：绝不拆单（文档 §4.3）</text>
+  </g>
+
+  <line x1="280" y1="86" x2="175" y2="150" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="400" y1="86" x2="505" y2="150" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g class="node c-blue">
+    <rect x="50" y="150" width="250" height="120" rx="10" stroke-width="0.5" fill="#E6F1FB" stroke="#185FA5"/>
+    <text class="th" x="175" y="174" text-anchor="middle" dominant-baseline="central">非 CZCE（其余 5 家）</text>
+    <text class="ts" x="175" y="200" text-anchor="middle" dominant-baseline="central">1 笔 N 手（N=2 = risk.max_volume）</text>
+    <text class="th" x="175" y="224" text-anchor="middle" dominant-baseline="central">指令属性：FOK</text>
+    <text class="ts" x="175" y="250" text-anchor="middle" dominant-baseline="central">全成 或 全撤</text>
+  </g>
+
+  <g class="node c-amber">
+    <rect x="380" y="150" width="250" height="120" rx="10" stroke-width="0.5" fill="#FAEEDA" stroke="#854F0B"/>
+    <text class="th" x="505" y="174" text-anchor="middle" dominant-baseline="central">CZCE（郑商所）</text>
+    <text class="ts" x="505" y="200" text-anchor="middle" dominant-baseline="central">1 笔 1 手（钉死，不取 N）</text>
+    <text class="th" x="505" y="224" text-anchor="middle" dominant-baseline="central">指令属性：FAK</text>
+    <text class="ts" x="505" y="250" text-anchor="middle" dominant-baseline="central">FAK(1) ≡ FOK(1)：1 手无剩余可撤</text>
+  </g>
+
+  <line x1="175" y1="270" x2="340" y2="330" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <line x1="505" y1="270" x2="340" y2="330" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <g class="node c-green">
+    <rect x="150" y="330" width="380" height="86" rx="10" stroke-width="0.5" fill="#EAF3DE" stroke="#3B6D11"/>
+    <text class="th" x="340" y="356" text-anchor="middle" dominant-baseline="central">报单填充三态保持（待报 / 全成 / 全撤）</text>
+    <text class="ts" x="340" y="380" text-anchor="middle" dominant-baseline="central">不变量 4 与状态机无需扩展</text>
+    <text class="ts" x="340" y="400" text-anchor="middle" dominant-baseline="central">账户三态只看净敞口，与手数无关</text>
+  </g>
+</svg>
