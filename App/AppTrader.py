@@ -356,23 +356,21 @@ class AppTrader:
             # 在这里前置拒绝（AppError → 400 → 前端 alert 弹出原因），比 spawn
             # 后让引擎在 _restore 白名单闸门处自杀更快、反馈更明确；引擎侧
             # （Engine._restore）仍保留同一判定作为权威闸门（回放/CLI 直启拦）。
+            #
+            # 2026-09-14 评审 P1-1 + P2-1：判定与文案都收敛到
+            #   ProductProfile.assert_product_allowed —— 原先这里和 Engine._restore
+            #   各写一遍 `if _product not in PRODUCT_PROFILES`（文案还不一样：
+            #   "已拒绝" vs "禁止"），白名单一改就容易漏一处 → 前端放行、引擎自杀。
+            #   同时解析口径换成 parse_product_key（剥合约月份），修掉
+            #   "CFFEX.IF2609 被当成未标定品种 IF2609" 的误杀。
             # 惰性 import：Trading 包对本模块零依赖，此处只碰纯 dataclass 模块。
             try:
-                from Trading.Infra.ProductProfile import (
-                    PRODUCT_PROFILES, parse_product,
-                )
-                _product = parse_product(use_symbol)
-                if _product not in PRODUCT_PROFILES:
-                    self._engine_log(
-                        log_file,
-                        "品种白名单拦截: {} (解析品种={!r})".format(
-                            use_symbol, _product))
-                    raise AppError(
-                        "品种 {} 不在自动下单支持清单（{}）中：执行参数未标定，"
-                        "已拒绝启动交易引擎。请更换品种，或在 PRODUCT_PROFILES "
-                        "中标定后再试。".format(
-                            _product or use_symbol,
-                            "/".join(sorted(PRODUCT_PROFILES))))
+                from Trading.Infra.ProductProfile import assert_product_allowed
+                try:
+                    assert_product_allowed(use_symbol)
+                except ValueError as e:
+                    self._engine_log(log_file, "品种白名单拦截: {}".format(e))
+                    raise AppError(str(e))
             except ImportError:  # pragma: no cover — Trading 缺失时交引擎闸门兜底
                 pass
 

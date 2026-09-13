@@ -138,6 +138,16 @@ def build_runtime(args):
         print("[gw] ⚠ instrument_fetch_policy=off 在在线通道（{}）下不生效："
               "合约参数仍必须从行情获取（A′ fail-closed），"
               "未验证前所有报单将被拒单".format(broker.name))
+    # 2026-09-14 评审 P1-3：quote_partial 是给"不走 tqsdk 的自研/第三方在线通道"
+    # 的逃生舱（只强制 tick/乘数，涨跌停缺失时护栏降级）。降级必须在**启动横幅**
+    # 里声明一次 —— broker 侧的告警要等取值失败才发，运维在第一屏就该看到
+    # "本轮没有涨跌停保护"，而不是等事后从 events.jsonl 里翻。
+    if (str(cfg.broker_params.instrument_fetch_policy).strip().lower()
+            == "quote_partial" and not getattr(broker, "is_offline", False)):
+        print("[gw] ⚠ instrument_fetch_policy=quote_partial：只强制从行情取 "
+              "price_tick / 乘数（缺一即拒单）；涨跌停区间取不到时**护栏降级为"
+              "不校验**（来源会标 QUOTE_PARTIAL 并发 instrument_band_degraded 告警），"
+              "本通道不提供停板保护")
 
     # Phase 8（§5.9.3 规则 2 · 来源标记）：离线模式（dry_run，含 replay 数据源）
     # 没有行情连接，合约参数用配置值 —— 但必须显式标记来源，让"回测口径"能自证。

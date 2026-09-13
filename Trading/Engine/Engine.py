@@ -60,7 +60,7 @@ from ..Infra.EventLog import EventLog
 from ..Infra.PeriodProfile import (
     bar_secs_for,
 )
-from ..Infra.ProductProfile import PRODUCT_PROFILES, parse_product
+from ..Infra.ProductProfile import ProductProfile, assert_product_allowed
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
@@ -111,6 +111,10 @@ class TradingEngine(ReconcileMixin):
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
         self._spec_drift_checked: bool = False
+        # 2026-09-14 评审 P2-3：离线（dry_run/replay）路径的漂移对账同样只做一次。
+        #   与上面分开计数的原因：两条路径的前提互斥（一个需要 verified、一个需要
+        #   离线），共用一个标志会让先走的那个把后走的那个吞掉。
+        self._spec_drift_offline_checked: bool = False
         self.broker = broker
         self.entry_policy = entry_policy
         self.exit_policy = exit_policy
@@ -393,17 +397,15 @@ class TradingEngine(ReconcileMixin):
         #   实盘入口的提前拦截在 App/AppTrader.start（AppError → 400 → 前端
         #   alert 弹出原因）；这里是引擎侧的权威闸门（回放/CLI 直启同样拦）。
         #   注意大小写：前端别名表把 SHFE/DCE 解析成小写主连（KQ.m@SHFE.au），
-        #   归一在 parse_product 内完成（档案键统一大写）。
+        #   归一在 parse_product_key 内完成（档案键统一大写）。
+        #
+        # 2026-09-14 评审 P1-1 + P2-1：判定收敛到 ProductProfile.assert_product_allowed
+        #   —— ① 只用一处实现（原 App/Engine 两份，文案还不一样）；
+        #      ② 解析口径从 parse_product（取末段）换成 parse_product_key（剥月份）：
+        #         `CFFEX.IF2609` 原来解析成 "IF2609" 查不到档案 → 已标定的 IF 被
+        #         白名单误杀，CLI 直启/回放直接起不来，报错还极具误导性。
         # ════════════════════════════════════════════════════════════════
-        _product = parse_product(self.cfg.instrument.signal_symbol)
-        if _product not in PRODUCT_PROFILES:
-            raise ValueError(
-                "品种 {!r} 不在自动下单支持清单（{}）中：执行参数未标定，"
-                "禁止启动交易引擎。请更换品种，或在 "
-                "Trading/Infra/ProductProfile.py 的 PRODUCT_PROFILES 中"
-                "标定后再试。".format(
-                    _product or self.cfg.instrument.signal_symbol,
-                    "/".join(sorted(PRODUCT_PROFILES))))
+        assert_product_allowed(self.cfg.instrument.signal_symbol)
         # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
         # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢失持仓（解 D3）。
@@ -1018,13 +1020,51 @@ class TradingEngine(ReconcileMixin):
 
         一次性：verified 首次为真时查一次即置位（合约规格会话内不变）。
         挂在 A3 校验链（_pre_trade_check）上，遵循"二期扩展往链上加"惯例。
+
+        2026-09-14 评审 P2-3：**离线路径补上同一份对账**。
+          原实现以 `instrument_verified` 为前提，而离线（dry_run/replay）恒为
+          False → 离线分支永远不查。可离线恰恰是**唯一**会用到档案兜底值的场景
+          （实盘被行情覆盖），兜底值过期在离线侧完全静默：tick 错 → 限价口径错，
+          乘数错 → PnL 错，回测结论直接不可用。
+          现补离线分支：此时 spec 里是配置值（正常情况下就是由品种档案注入的，
+          两边应相等），不等 = 用户手填覆盖了 / 档案改过而配置没跟上 → warn。
         """
-        if (self._spec_drift_checked
-                or not getattr(self.spec, "instrument_verified", False)
-                or self.cfg.product_profile is None):
+        if self.cfg.product_profile is None:
             return
-        self._spec_drift_checked = True
         p = self.cfg.product_profile
+        if getattr(self.spec, "instrument_verified", False):
+            if self._spec_drift_checked:
+                return
+            self._spec_drift_checked = True
+            self._check_spec_drift_online(p)
+            return
+        # ── 离线分支（dry_run / replay / 未取到行情的在线通道）──
+        if (self._spec_drift_offline_checked
+                or not getattr(self.broker, "is_offline", False)):
+            return
+        self._spec_drift_offline_checked = True
+        diffs = []
+        # 只比对"离线真的会用"的两个字段，且要求 spec 侧已注入（>0）——
+        # 0 = 未注入/未知，不是漂移，不报。
+        if self.spec.price_tick > 0 and self.spec.price_tick != p.price_tick:
+            diffs.append("price_tick 档案={} / 配置={}".format(
+                p.price_tick, self.spec.price_tick))
+        if self.spec.multiplier > 0 and self.spec.multiplier != p.multiplier:
+            diffs.append("multiplier 档案={} / 配置={}".format(
+                p.multiplier, self.spec.multiplier))
+        if diffs:
+            self.alert(
+                self.ALERT_WARN, "spec_drift_offline",
+                "离线模式：引擎实际使用的合约规格与品种档案兜底值不一致（{}）。"
+                "离线没有行情可校验，档案值即真值 —— 回测/模拟的限价口径与 PnL "
+                "已受影响，请核对 instrument 配置与 PRODUCT_PROFILES。"
+                .format("；".join(diffs)),
+                signal_symbol=str(self.cfg.instrument.signal_symbol),
+                source=getattr(self.spec, "instrument_source", ""),
+                mode="offline")
+
+    def _check_spec_drift_online(self, p: "ProductProfile") -> None:
+        """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
         diffs = []
         if self.spec.price_tick != p.price_tick:
             diffs.append("price_tick 档案={} / 行情={}".format(
@@ -1073,9 +1113,15 @@ class TradingEngine(ReconcileMixin):
                     policy = str(_getp("instrument_fetch_policy") or "").strip().lower()
                 except Exception:
                     policy = ""
-            why = ("instrument_fetch_policy=off 在在线通道不生效（A′）"
-                   if policy == "off"
-                   else "行情未就绪或校验未通过（超时 / nan / 区间不自洽）")
+            if policy == "off":
+                why = "instrument_fetch_policy=off 在在线通道不生效（A′）"
+            elif policy == "quote_partial":
+                # 2026-09-14 评审 P1-3：partial 档只豁免涨跌停，tick/乘数仍强制。
+                #   文案要说清"这一档拒的不是涨跌停"，否则排障会往错的方向查。
+                why = ("quote_partial 档：price_tick / 乘数仍未从行情取到（该档"
+                       "只豁免涨跌停，这两项缺失照样 fail-closed）")
+            else:
+                why = "行情未就绪或校验未通过（超时 / nan / 区间不自洽）"
             self.alert(self.ALERT_SEVERE, "instrument_unverified",
                        "合约参数未通过行情校验（{}），已拒单。".format(why) +
                        "fail-closed：宁可不下单，也不用可能错的参数下单",

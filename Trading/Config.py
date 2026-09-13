@@ -82,7 +82,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
 from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile
-from .Infra.ProductProfile import PRODUCT_PROFILES, ProductProfile, parse_product
+from .Infra.ProductProfile import (
+    PRODUCT_PROFILES, ProductProfile, parse_product_key,
+)
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
@@ -175,15 +177,25 @@ class TradingConfig(BaseSettings):
         return self
 
     def _apply_product_profile_values(self, force: bool = False) -> None:
-        product = parse_product(self.instrument.signal_symbol)
+        # 2026-09-14 评审 P1-1：查档案必须用 parse_product_key（剥合约月份）。
+        #   传真实月份合约（"CFFEX.IF2609"）时，parse_product 会得到 "IF2609"，
+        #   查不到档案 → 已标定的 IF 被当成未知品种（且不注入参数还打警告）。
+        product = parse_product_key(self.instrument.signal_symbol)
         profile = PRODUCT_PROFILES.get(product)
         if profile is None:
             # §5.9.3 校验清单「未知品种」：不阻断，但必须可见 —— 否则
             # min_r_points / r_multiple_tp / multiplier 会静默沿用 IF 基线。
-            _log.warning(
+            #
+            # 2026-09-14 评审 P2-4：级别 warning → info，避免双份噪音。
+            #   原实现这里打 WARNING，随后 Engine._restore 的白名单闸门必然抛
+            #   ValueError（同一件事在日志里出现两次，措辞还不一样）。未知品种在
+            #   引擎路径**一定会**被引擎侧拦下并给出面向用户的完整文案，故此处只
+            #   记 info 保留可追迹性即可；纯配置（不启引擎）场景也仍查得到。
+            _log.info(
                 "品种 %r 不在 PRODUCT_PROFILES（已知: %s）—— 品种档案字段"
                 "（min_r_points / r_multiple_tp / multiplier / price_tick / breakeven_buffer_ticks）"
-                "沿用配置值，实盘请确认行情参数自动获取（strict）已开启",
+                "沿用配置值。启动交易引擎时白名单闸门会拒绝启动，详见 "
+                "ProductProfile.assert_product_allowed",
                 product, ", ".join(sorted(PRODUCT_PROFILES)))
             return
         if force:
@@ -223,8 +235,14 @@ class TradingConfig(BaseSettings):
 
     @property
     def product_profile(self) -> Optional["ProductProfile"]:
-        """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。"""
-        return PRODUCT_PROFILES.get(parse_product(self.instrument.signal_symbol))
+        """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。
+
+        2026-09-14 评审 P1-1：与注入路径同源用 parse_product_key（剥合约月份），
+        否则 `--symbol CFFEX.IF2609` 时这里返回 None，而注入那边（改用 key 后）
+        能命中 → 「参数注入了但 product_profile 查不到」的自相矛盾状态，
+        连带 _check_spec_drift 的漂移校验被静默跳过。
+        """
+        return PRODUCT_PROFILES.get(parse_product_key(self.instrument.signal_symbol))
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -455,13 +473,25 @@ class BrokerConfig(BaseModel):
     tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
     # ── Phase 8（D20 · A′）：合约参数自动获取开关（§5.9.4 项 4）──
-    #   只有两档，**没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
+    #   **没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
     #   需求方 2026-09-11 明确否决）：
     #     strict（默认）：实盘必须从行情取到并通过校验 price_tick / volume_multiple /
     #                    涨跌停，否则 Engine._pre_trade_check 拒单 + 严重告警（fail-closed）。
     #     off          ：只用配置值。**仅 dry_run/replay 离线模式生效** —— SimNow
     #                    （在线通道）下永不标记 verified → 闸门照样拒单（规则 4：
     #                    调试开关不得绕过 A′）。
+    #     quote_partial：2026-09-14 评审 P1-3 新增的**逃生舱档**（面向不走 tqsdk 的
+    #                    自研/第三方在线通道，如 CTP 直连）。语义：
+    #                      · 只强制 price_tick + volume_multiple（缺一即 fail-closed，
+    #                        这两个错 = 限价口径和 PnL 全错，绝不让步）；
+    #                      · 涨跌停区间（upper/lower_limit）取不到时**允许放行**，
+    #                        但必须把 band 护栏显式降级为不校验，并回一条 warn 告警
+    #                        （code=instrument_band_degraded）让前端可见 —— 降级必须
+    #                        出声，不能静默。
+    #                    为什么需要这一档：Broker.is_offline 基类默认 False，
+    #                    任何新通道不显式声明离线就 100% 拒单，而它未必能提供
+    #                    tqsdk 那套涨跌停字段。没有中间档 = 新通道要么自欺欺人
+    #                    声明离线，要么根本接不进来。
     instrument_fetch_policy: str = "strict"
     # —— 通道时序（Step 2.3 归一，见 ChannelTimingConfig docstring）——
     channel: ChannelTimingConfig = Field(default_factory=lambda: ChannelTimingConfig())
@@ -470,11 +500,15 @@ class BrokerConfig(BaseModel):
     @classmethod
     def _validate_fetch_policy(cls, v: str) -> str:
         v = str(v).strip().lower()
-        if v not in ("strict", "off"):
+        # 2026-09-14 评审 P1-3：新增 quote_partial 逃生舱档（valid 三档）。
+        #   'prefer' 依旧非法（宽容档已按需求方 2026-09-11 拍板删除），
+        #   故 test_p42 对 prefer / whatever 的断言仍然成立。
+        if v not in ("strict", "off", "quote_partial"):
             raise ValueError(
                 "instrument_fetch_policy 只允许 'strict'（默认，实盘必须行情取值）"
-                " 或 'off'（仅离线生效），得到 {!r} —— 宽容档 prefer 已按需求方"
-                " 2026-09-11 拍板删除".format(v))
+                " / 'off'（仅离线生效） / 'quote_partial'（只强制 tick+乘数，"
+                "涨跌停缺失时降级为不校验并告警），得到 {!r} —— 宽容档 prefer "
+                "已按需求方 2026-09-11 拍板删除".format(v))
         return v
 
 

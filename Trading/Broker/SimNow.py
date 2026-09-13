@@ -302,30 +302,47 @@ def _traded_price_from_records(order) -> Optional[float]:
     return total_amt / total_vol
 
 
-def _quote_params_ready(quote: Any, expect_symbol: str):
-    """Phase 8：quote 的四个静态合约参数是否已就绪（供 _wait 轮询）。
+def _quote_params_ready(quote: Any, expect_symbol: str,
+                        require_band: bool = True):
+    """Phase 8：quote 的静态合约参数是否已就绪（供 _wait 轮询）。
 
     tqsdk 取不到的字段返回 **nan 而不是 None**（nan 是 truthy，`not v` 拦不住），
     故必须 isfinite + > 0 显式判；涨跌停还需 lower < upper（区间自洽）。
     返回 bool —— 让谓词自身吞异常，轮询循环里不中断。
+
+    require_band（2026-09-14 评审 P1-3，默认 True = 既有语义）：
+      · True  —— 四字段全等（strict 档）；
+      · False —— 只等 price_tick + volume_multiple（quote_partial 档）：
+                 涨跌停不是等下去的理由，缺就缺，走降级路径。
     """
+    keys = ("price_tick", "volume_multiple")
+    if require_band:
+        keys = keys + ("upper_limit", "lower_limit")
+
     def _ready() -> bool:
         try:
-            v = [float(getattr(quote, k)) for k in
-                 ("price_tick", "volume_multiple", "upper_limit", "lower_limit")]
+            v = [float(getattr(quote, k)) for k in keys]
         except (TypeError, ValueError, AttributeError):
             return False
         if not all(math.isfinite(x) and x > 0 for x in v):
             return False
         if str(getattr(quote, "symbol", "")) != str(expect_symbol):
             return False
-        return v[2] > v[3]
+        if require_band:
+            return v[2] > v[3]
+        return True
     return _ready
 
 
 @register_broker
 class SimNowBroker(Broker):
     name = "simnow"
+
+    # 2026-09-14 评审 P1-2：pulse() 合约参数重试的节流间隔（单位 = bar 根数）。
+    #   20 根：5m 周期 ≈ 100 分钟重试一次；15s 周期 ≈ 5 分钟一次。
+    #   取值权衡 —— 太小（<10）：仍会显著拖慢实时模式；太大（>60）：非交易时段
+    #   启动后要等几小时才恢复。20 是"不吃掉正常行情节奏"与"能自愈"的交点。
+    INSTRUMENT_RETRY_EVERY_BARS: int = 20
 
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         super().__init__(spec, params)
@@ -352,6 +369,13 @@ class SimNowBroker(Broker):
         #   首次从真实月份合约行情取到并通过校验后置 True，全进程不再变 ——
         #   防止盘中换月 / 异常推送导致同一批持仓的限价口径漂移。
         self._instrument_frozen: bool = False
+        # 2026-09-14 评审 P1-2：pulse() 里的重试节流计数器。
+        #   _apply_instrument_quote 内部是**阻塞**等待（_wait，默认 30s）；
+        #   原实现"每根 bar 重试一次"，在参数一直取不到时（非交易时段 / 夜盘休市 /
+        #   合约异常 / tqsdk 不推送）会让 15s 周期的引擎每根 bar 卡 30s —— bar 间隔
+        #   < 阻塞时长 → 引擎永远追不上行情。改成"启动期 1 次 + 之后每
+        #   INSTRUMENT_RETRY_EVERY_BARS 根一次"（见 pulse 的节流注释）。
+        self._instrument_retry_tick: int = 0
 
         # ════════════════════════════════════════════════════════════════
         # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
@@ -549,10 +573,27 @@ class SimNowBroker(Broker):
         """
         if self._api is None:
             return
-        # Phase 8（A′）：合约参数未冻结（启动时超时/断线未取到）→ 每根 bar 借
-        #   心跳重试一次，避免把阻塞等待放进报单路径；取到即冻结，此后为空操作。
+        # ══════════════════════════════════════════════════════════════
+        # Phase 8（A′）：合约参数未冻结（启动时超时/断线未取到）→ 借心跳重试。
+        #
+        # 2026-09-14 评审 P1-2：**必须节流，不能每根 bar 都试**。
+        #   _apply_instrument_quote → _wait(..., timeout_s=instrument_fetch_timeout)
+        #   是阻塞循环（默认 30s）。参数一直取不到时，"每根 bar 试一次" = 每根
+        #   bar 阻塞 30s：15s 周期下 bar 间隔 15s < 30s → 引擎永远追不上行情，
+        #   信号延迟、离场窗口错过，且是**持续**惩罚（取到才冻结）。
+        #   改为：启动期（_connect）试 1 次 → 之后每 INSTRUMENT_RETRY_EVERY_BARS
+        #   根 bar 再试一次（5m 周期 ≈ 每 100 分钟；15s 周期 ≈ 每 5 分钟）。
+        #   为什么不是"缩短单次超时"：30s 是为开盘阶段静态字段推齐留的窗口，
+        #   砍短会让正常场景误触发 fail-closed；节流只惩罚"长期取不到"场景。
+        # ══════════════════════════════════════════════════════════════
         if not self._instrument_frozen:
-            self._apply_instrument_quote()
+            # getattr 兜底：测试里用 __new__ 手工装配的 broker 可能没走 __init__
+            # （与 p42 同款手法），此时按"尚未尝试过"处理，首根 bar 必试。
+            tick = int(getattr(self, "_instrument_retry_tick", 0)) + 1
+            self._instrument_retry_tick = tick
+            if (tick == 1                                   # 启动期没试过 → 首根 bar 必试
+                    or tick % self.INSTRUMENT_RETRY_EVERY_BARS == 0):
+                self._apply_instrument_quote()
         try:
             self._api.wait_update(deadline=time.time() + self._timing("keepalive_wait"))
         except Exception:
@@ -614,10 +655,21 @@ class SimNowBroker(Broker):
         """
         if self._instrument_frozen:
             return
-        if str(self._param("instrument_fetch_policy")).strip().lower() == "off":
+        policy = str(self._param("instrument_fetch_policy")).strip().lower()
+        if policy == "off":
             return
         if self._api is None or not self._trade_symbol:
             return
+        # 2026-09-14 评审 P1-3：quote_partial 档（自研/第三方在线通道逃生舱）
+        #   —— 只强制 tick + 乘数，涨跌停取不到就降级为不校验（但必须出声）。
+        partial = (policy == "quote_partial")
+        require_band = not partial
+        # 2026-09-14 评审 P1-2：本次是**真实发起**取值，计入节流计数
+        #   （_connect 里调过一次后，pulse 的首根 bar 就不会再阻塞一轮）。
+        #   getattr 兜底：p42 等用例用 __new__ 手工装配 broker（不走 __init__），
+        #   此时按 0 处理。
+        self._instrument_retry_tick = max(
+            int(getattr(self, "_instrument_retry_tick", 0)), 1)
         try:
             # 必须订阅**真实月份合约**，不是主连 KQ.m@… —— 主连是虚拟合约，
             # 静态字段（tick / 乘数 / 涨跌停）多为 nan（§5.9.3 校验清单第 2 条）。
@@ -625,19 +677,36 @@ class SimNowBroker(Broker):
             # Phase 8.1（B-2）：参数就绪等待用**独立超时** instrument_fetch_timeout
             # （默认 30s）—— 主连映射通常 <1s，而真实月份合约的静态字段在非交易
             # 时段可能 10~30s 才推齐，两者期望不同，不该共用一把 underlying_map_timeout。
-            ready = self._wait(_quote_params_ready(q, self._trade_symbol),
-                               timeout_s=self._timing("instrument_fetch_timeout"))
+            ready = self._wait(
+                _quote_params_ready(q, self._trade_symbol, require_band=require_band),
+                timeout_s=self._timing("instrument_fetch_timeout"))
             if not ready:
                 self._instrument_warn(
-                    "合约参数未在超时内就绪（tick/乘数/涨跌停含 nan）→ fail-closed，"
-                    "拒单直至取到（pulse 每根 bar 重试）",
+                    "合约参数未在超时内就绪（{}含 nan）→ fail-closed，"
+                    "拒单直至取到（pulse 节流重试：每 {} 根 bar 一次）"
+                    .format("tick/乘数" if partial else "tick/乘数/涨跌停",
+                            self.INSTRUMENT_RETRY_EVERY_BARS),
                     code="instrument_quote_timeout", symbol=self._trade_symbol)
                 return
             old = {f: float(getattr(self.spec, f)) for f in
                    ("price_tick", "multiplier", "upper_limit", "lower_limit")}
-            changed = self.spec.apply_quote(q)          # 任一值非法 → ValueError，不落半新半旧
+            changed = self.spec.apply_quote(             # 任一值非法 → ValueError，不落半新半旧
+                q, require_band=require_band)
             self.spec.instrument_verified = True
-            self.spec.instrument_source = self.spec.SOURCE_QUOTE
+            # partial 档下若 band 没取到，来源标 QUOTE_PARTIAL 并显式告警 ——
+            # "verified 为真但涨跌停护栏已降级"必须可诊断，不能混在 QUOTE 里。
+            band_ok = (self.spec.upper_limit > 0 and self.spec.lower_limit > 0
+                       and self.spec.upper_limit > self.spec.lower_limit)
+            self.spec.instrument_source = (
+                self.spec.SOURCE_QUOTE if (band_ok or not partial)
+                else self.spec.SOURCE_QUOTE_PARTIAL)
+            if partial and not band_ok:
+                self._instrument_warn(
+                    "quote_partial 档：涨跌停区间未取到 → 涨跌停护栏已**降级为不校验**"
+                    "（引擎侧对未知区间不拦，见 Engine._ref_price_out_of_band）。"
+                    "tick/乘数取自行情（可信）；若该交易所需要涨跌停保护，"
+                    "请改回 instrument_fetch_policy='strict'",
+                    code="instrument_band_degraded", symbol=self._trade_symbol)
             self._instrument_frozen = True
             # Phase 8.1（O-1）：exchange 从真实合约 symbol 前缀推导填充
             # （"CFFEX.IF2609" → "CFFEX"）。Phase 9（FOK/FAK 切换）正式消费，

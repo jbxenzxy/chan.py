@@ -157,6 +157,20 @@ class Broker(ABC):
     # Phase 8（A′ · §5.9.3）：是否离线通道（无行情连接，允许用配置参数）。
     #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
     #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
+    #
+    #   ⚠️ 新增 broker 通道必读（2026-09-14 评审 P1-3）：默认 False 意味着
+    #   **不声明就 100% 拒单**（Engine._pre_trade_check 的 instrument_unverified
+    #   闸门，且拒得很安静 —— 只有 D11 告警）。接新通道时必须**二选一**：
+    #     ① 自己实现合约参数取值 —— 从自家行情源填 spec 的 price_tick /
+    #        multiplier / upper_limit / lower_limit 并置
+    #        `spec.instrument_verified = True`（照抄 SimNow._apply_instrument_quote
+    #        的契约：任一值非法就不能置位，绝不回退配置值）；
+    #     ② 确实拿不到行情 → 显式 `is_offline = True`（配置值路径，来源会被标
+    #        CONFIG_OFFLINE，仅回测/模拟可接受）。
+    #   中间形态（拿得到 tick/乘数、拿不到涨跌停）：不要自欺欺人声明离线，
+    #   走 `instrument_fetch_policy="quote_partial"`（见 BrokerConfig）——
+    #   只强制 tick/乘数，涨跌停缺失时护栏降级为不校验并回一条
+    #   code=instrument_band_degraded 的 warn 告警。
     is_offline: bool = False
 
     # ── Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker → Engine 告警回流 ──

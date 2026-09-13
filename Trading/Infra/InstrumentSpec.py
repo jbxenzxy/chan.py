@@ -86,6 +86,10 @@ class InstrumentSpec(BaseModel):
     # 参数来源标记的合法值（apply_quote / mark_config_offline 维护，外部只读比较）
     SOURCE_QUOTE: ClassVar[str] = "QUOTE"
     SOURCE_CONFIG_OFFLINE: ClassVar[str] = "CONFIG_OFFLINE"
+    # 2026-09-14 评审 P1-3：quote_partial 档（自研/第三方在线通道逃生舱）的来源标记。
+    #   tick + 乘数来自行情，但**涨跌停区间缺失** → band 护栏已降级为不校验。
+    #   留这个独立标记是为了诊断时能一眼看出"verified 为真但护栏是降级的"。
+    SOURCE_QUOTE_PARTIAL: ClassVar[str] = "QUOTE_PARTIAL"
 
     # apply_quote 回填的行情字段 → spec 字段映射（tqsdk quote 字段名 → 本模型字段名）
     _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
@@ -96,11 +100,11 @@ class InstrumentSpec(BaseModel):
     )
 
     # ---------- Phase 8：行情参数回填（A′） ----------
-    def apply_quote(self, quote: Any) -> List[str]:
+    def apply_quote(self, quote: Any, require_band: bool = True) -> List[str]:
         """从行情 quote 回填合约参数（§5.9.4 项 2 · D20）。返回**值发生变化**的字段名列表。
 
         纯数据方法：鸭子类型读 quote 的四个字段，**不 import tqsdk**（便于单测）。
-        原子性：先对四个值全部校验，任一不过 → 抛 ValueError 且**一个字段都不改**
+        原子性：先对全部待填值校验，任一不过 → 抛 ValueError 且**一个字段都不改**
         （半新半旧的一组参数比全旧更危险）。
 
         校验清单（§5.9.3，任一不过即 fail）：
@@ -110,9 +114,20 @@ class InstrumentSpec(BaseModel):
           · upper_limit / lower_limit：isfinite 且 > 0，且 lower < upper（区间自洽）；
           · 行情必须是**真实月份合约**的（订阅目标 trade_symbol）—— 由调用方
             （SimNow）保证订阅对象，本方法只验数值。
+
+        require_band（2026-09-14 评审 P1-3，默认 True = 既有语义不变）：
+          · True  —— 四字段全强制（strict 档）：涨跌停缺失/不自洽 → ValueError。
+          · False —— 只强制 price_tick + volume_multiple（quote_partial 档）：
+                    涨跌停**可用且自洽**就照样填；不可用（nan / 0 / 区间不自洽）
+                    则**跳过不填**（保留原值 0 = 未知），由 Engine 侧
+                    _ref_price_out_of_band 对未知区间自然降级为不校验。
+                    调用方（SimNow）必须就此回一条 warn 告警，降级不能静默。
         """
         vals = {}
         for q_attr, s_field in self._QUOTE_FIELD_MAP:
+            if not require_band and s_field in ("upper_limit", "lower_limit"):
+                # 部分档：band 是"有就填、没有就不填"，先跳过，下面单独处理。
+                continue
             try:
                 raw = getattr(quote, q_attr)
             except AttributeError:
@@ -126,10 +141,23 @@ class InstrumentSpec(BaseModel):
                     "行情字段 {}={!r} 非法（要求 isfinite 且 > 0；tqsdk 取不到时是 nan）"
                     .format(q_attr, raw))
             vals[s_field] = v
-        if vals["lower_limit"] >= vals["upper_limit"]:
-            raise ValueError(
-                "涨跌停区间不自洽: lower_limit={!r} >= upper_limit={!r}"
-                .format(vals["lower_limit"], vals["upper_limit"]))
+
+        if require_band:
+            if vals["lower_limit"] >= vals["upper_limit"]:
+                raise ValueError(
+                    "涨跌停区间不自洽: lower_limit={!r} >= upper_limit={!r}"
+                    .format(vals["lower_limit"], vals["upper_limit"]))
+        else:
+            # 部分档：band 单独取（允许取不到）。取到就用，取不到/不自洽就整个跳过
+            # —— 绝不允许只填 upper 不填 lower（半边区间会让护栏按错误的界校验）。
+            try:
+                hi = float(getattr(quote, "upper_limit"))
+                lo = float(getattr(quote, "lower_limit"))
+            except (TypeError, ValueError, AttributeError):
+                hi = lo = float("nan")
+            if (math.isfinite(hi) and math.isfinite(lo) and hi > 0 and lo > 0
+                    and hi > lo):
+                vals["upper_limit"], vals["lower_limit"] = hi, lo
 
         changed = []
         for s_field, v in vals.items():
