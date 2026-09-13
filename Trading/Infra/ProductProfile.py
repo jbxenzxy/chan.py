@@ -40,17 +40,21 @@ from typing import Dict, Optional
 class ProductProfile:
     """一个合约品种的全部品种相关设定。
 
-    覆盖四个「随品种可变」的 flat 字段（详见模块 docstring）：
+    覆盖五个「随品种可变」的 flat 字段（详见模块 docstring）：
       min_r_points             R 下限（点数），防极端横盘+极窄分型
       r_multiple_tp            止盈盈亏比（r_multiple_tp × R）
       multiplier               合约乘数（元/点）
       breakeven_buffer_ticks    保本位缓冲 tick（覆盖往返手续费+滑点，真正"不亏钱"）
+      price_tick               最小变动价位 —— Phase 8（D20）新增，**仅作离线模式
+                               （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
+                               （apply_quote），配置值不会被采用。
     """
     product: str
     min_r_points: float
     r_multiple_tp: float
     multiplier: float
     breakeven_buffer_ticks: float = 2.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
+    price_tick: float = 0.2                # 最小变动价位（离线兜底；中金所四品种均 0.2）
     note: str = ""                              # 调参记录 / 数据来源 / 标定状态
 
     @property
@@ -59,23 +63,23 @@ class ProductProfile:
 
 
 # 4 个品种的档案（中金所股指期货：IF/IH 一组、IC/IM 一组）。
-# min_r_points / r_multiple_tp / multiplier / breakeven_buffer_ticks 显式给真值；note 标定状态。
+# min_r_points / r_multiple_tp / multiplier / breakeven_buffer_ticks / price_tick 显式给真值；note 标定状态。
 PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     "IF": ProductProfile(
         product="IF", min_r_points=3.0, r_multiple_tp=2.0, multiplier=300.0,
-        breakeven_buffer_ticks=2.0,
+        breakeven_buffer_ticks=2.0, price_tick=0.2,
         note="IF/IH 基线：波动较低，R 下限 3.0 点、盈亏比 1:2、保本缓冲 2 tick"),
     "IH": ProductProfile(
         product="IH", min_r_points=3.0, r_multiple_tp=2.0, multiplier=300.0,
-        breakeven_buffer_ticks=2.0,
+        breakeven_buffer_ticks=2.0, price_tick=0.2,
         note="IF/IH 基线：波动较低，R 下限 3.0 点、盈亏比 1:2、保本缓冲 2 tick"),
     "IC": ProductProfile(
         product="IC", min_r_points=5.0, r_multiple_tp=3.0, multiplier=200.0,
-        breakeven_buffer_ticks=3.0,
+        breakeven_buffer_ticks=3.0, price_tick=0.2,
         note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
     "IM": ProductProfile(
         product="IM", min_r_points=5.0, r_multiple_tp=3.0, multiplier=200.0,
-        breakeven_buffer_ticks=3.0,
+        breakeven_buffer_ticks=3.0, price_tick=0.2,
         note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
 }
 

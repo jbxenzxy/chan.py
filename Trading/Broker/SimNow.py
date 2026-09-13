@@ -71,6 +71,7 @@ SimNow 仿真 broker（M2b）
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
@@ -301,6 +302,27 @@ def _traded_price_from_records(order) -> Optional[float]:
     return total_amt / total_vol
 
 
+def _quote_params_ready(quote: Any, expect_symbol: str):
+    """Phase 8：quote 的四个静态合约参数是否已就绪（供 _wait 轮询）。
+
+    tqsdk 取不到的字段返回 **nan 而不是 None**（nan 是 truthy，`not v` 拦不住），
+    故必须 isfinite + > 0 显式判；涨跌停还需 lower < upper（区间自洽）。
+    返回 bool —— 让谓词自身吞异常，轮询循环里不中断。
+    """
+    def _ready() -> bool:
+        try:
+            v = [float(getattr(quote, k)) for k in
+                 ("price_tick", "volume_multiple", "upper_limit", "lower_limit")]
+        except (TypeError, ValueError, AttributeError):
+            return False
+        if not all(math.isfinite(x) and x > 0 for x in v):
+            return False
+        if str(getattr(quote, "symbol", "")) != str(expect_symbol):
+            return False
+        return v[2] > v[3]
+    return _ready
+
+
 @register_broker
 class SimNowBroker(Broker):
     name = "simnow"
@@ -326,6 +348,10 @@ class SimNowBroker(Broker):
         # 字段存在，否则单测实例化（无凭据）后访问会 AttributeError。
         self._sig_orders: Dict[str, List[str]] = {}
         self._conn_error: Optional[str] = None
+        # Phase 8（A′ · §5.9.4 项 11）：合约参数"取值即冻结"一次性开关。
+        #   首次从真实月份合约行情取到并通过校验后置 True，全进程不再变 ——
+        #   防止盘中换月 / 异常推送导致同一批持仓的限价口径漂移。
+        self._instrument_frozen: bool = False
 
         # ════════════════════════════════════════════════════════════════
         # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
@@ -502,6 +528,10 @@ class SimNowBroker(Broker):
                 self._quote = self._api.get_quote(self._trade_symbol)
             except Exception:
                 self._quote = None
+            # Phase 8（A′ · §5.9.4 项 3）：在首次下单前完成合约参数取值。
+            #   失败不阻断启动 —— Engine._pre_trade_check 的 fail-closed 闸门会拒单，
+            #   pulse() 每根 bar 借心跳重试。取到即冻结（_instrument_frozen）。
+            self._apply_instrument_quote()
             return
 
         self._conn_error = last_err or "CTP 登录失败（未知原因）"
@@ -519,6 +549,10 @@ class SimNowBroker(Broker):
         """
         if self._api is None:
             return
+        # Phase 8（A′）：合约参数未冻结（启动时超时/断线未取到）→ 每根 bar 借
+        #   心跳重试一次，避免把阻塞等待放进报单路径；取到即冻结，此后为空操作。
+        if not self._instrument_frozen:
+            self._apply_instrument_quote()
         try:
             self._api.wait_update(deadline=time.time() + self._timing("keepalive_wait"))
         except Exception:
@@ -560,6 +594,86 @@ class SimNowBroker(Broker):
                 self.spec.trade_symbol = q.underlying_symbol
         except Exception as e:
             self._conn_error = "主连映射失败: {}: {}".format(type(e).__name__, e)
+
+    # ══════════════════════════════════════════════════════════════════
+    # Phase 8（D20 · A′）：合约参数自动获取 + 涨跌停护栏（§5.9 / §5.4 阻塞点 5）
+    # ══════════════════════════════════════════════════════════════════
+    def _apply_instrument_quote(self) -> None:
+        """从**真实月份合约**（self._trade_symbol）行情回填合约参数（§5.9.2/5.9.4）。
+
+        A′ fail-closed 语义（§5.9.3，四条硬规则）：
+          · 取到并通过校验 → spec.apply_quote() 覆盖 + instrument_verified=True +
+            instrument_source="QUOTE" + 冻结（全进程不再变）；
+          · 任一环节失败（超时 / nan / 区间不自洽）→ verified 保持 False，
+            Engine._pre_trade_check 拒单 + 严重告警 —— **绝不回退配置值**
+            （"取不到就回退"的分支不存在，由 p42 用例③ 钉死）；
+          · policy=off（§5.9.4 项 4）：只允许离线（dry_run/replay）使用；
+            SimNow 是在线通道 → 直接返回、永不置 verified，实盘配 off 的结果
+            就是闸门拒单（调试开关不得绕过 A′，规则 4）。
+          · 冻结后再不重取（避免盘中换月 / 异常推送导致限价口径漂移）。
+        """
+        if self._instrument_frozen:
+            return
+        if str(self._param("instrument_fetch_policy")).strip().lower() == "off":
+            return
+        if self._api is None or not self._trade_symbol:
+            return
+        try:
+            # 必须订阅**真实月份合约**，不是主连 KQ.m@… —— 主连是虚拟合约，
+            # 静态字段（tick / 乘数 / 涨跌停）多为 nan（§5.9.3 校验清单第 2 条）。
+            q = self._api.get_quote(self._trade_symbol)
+            ready = self._wait(_quote_params_ready(q, self._trade_symbol),
+                               timeout_s=self._timing("underlying_map_timeout"))
+            if not ready:
+                self._instrument_warn(
+                    "合约参数未在超时内就绪（tick/乘数/涨跌停含 nan）→ fail-closed，"
+                    "拒单直至取到（pulse 每根 bar 重试）")
+                return
+            old = {f: float(getattr(self.spec, f)) for f in
+                   ("price_tick", "multiplier", "upper_limit", "lower_limit")}
+            changed = self.spec.apply_quote(q)          # 任一值非法 → ValueError，不落半新半旧
+            self.spec.instrument_verified = True
+            self.spec.instrument_source = self.spec.SOURCE_QUOTE
+            self._instrument_frozen = True
+            log = logging.getLogger("tg.brokers.simnow")
+            if changed:
+                log.info("合约参数已从行情覆盖并冻结: %s", ", ".join(changed))
+            else:
+                log.info("合约参数与配置一致，已从行情确认并冻结")
+            # 与配置不一致 → WARN（两个值都打出来），以行情值为准、不阻断
+            # （§5.9.3 校验清单「与配置差异」；让"配置过时"可见）。
+            for f in ("price_tick", "multiplier", "upper_limit", "lower_limit"):
+                if abs(old[f] - float(getattr(self.spec, f))) > 1e-12 and old[f] > 0:
+                    self._instrument_warn(
+                        "行情值与配置不一致: {} 行情={!r} 配置={!r} —— 以行情值为准"
+                        .format(f, getattr(self.spec, f), old[f]))
+        except ValueError as e:
+            self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e))
+        except Exception as e:
+            self._instrument_warn(
+                "合约参数获取异常: {}: {} → fail-closed，拒单直至取到".format(type(e).__name__, e))
+
+    def _instrument_warn(self, msg: str) -> None:
+        logging.getLogger("tg.brokers.simnow").warning("[instrument] %s", msg)
+
+    def _price_out_of_band(self, limit: Optional[float]) -> Optional[str]:
+        """涨跌停护栏（§5.9.4 项 6 · 阻塞点 5）：最终限价必须落在当日涨跌停区间内。
+
+        区间未知（0 = 离线模式未从行情取到）→ 不校验（不校验未知的东西）。
+        限价恰等于涨跌停价（区间内）**放行** —— 那是合法报单，能否成交由市场决定；
+        护栏只拦"报出去必然被废"的单。返回 None = 通过；返回字符串 = 拒单原因。
+        """
+        lo = float(getattr(self.spec, "lower_limit", 0.0) or 0.0)
+        hi = float(getattr(self.spec, "upper_limit", 0.0) or 0.0)
+        if lo <= 0 or hi <= 0 or hi <= lo or limit is None:
+            return None
+        p = float(limit)
+        if math.isnan(p):
+            return None                          # NaN 限价由下游既有路径兜底
+        if p < lo or p > hi:
+            return ("price_out_of_limit: 限价 {!r} 超出当日涨跌停区间 [{!r}, {!r}] "
+                    "—— 本地拒单，未发往柜台".format(p, lo, hi))
+        return None
 
     def _capture_initial_account_state(self) -> None:
         """P5: 在 _connect 后强制等 5 秒，让 CTP 推送所有未确认回报，建立启动时账户快照。
@@ -753,6 +867,12 @@ class SimNowBroker(Broker):
                 limit = self._chase_fallback_limit("open", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
+            # 涨跌停护栏（Phase 8 · 阻塞点 5）：限价出区间 → 本地拒单，不发柜台。
+            #   不追价 —— 追价只会把限价推得更出区间，追 100 轮也一样废。
+            band_err = self._price_out_of_band(limit)
+            if band_err:
+                return self._rejected(signal_key, side, intent.value, volume,
+                                      ref_price, note, band_err)
             baseline = self._take_baseline(side_key)
             expected_delta = int(volume)          # 开仓：side_key 方向 +volume
             try:
@@ -848,6 +968,12 @@ class SimNowBroker(Broker):
                 limit = self._chase_fallback_limit("close", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
+            # 涨跌停护栏（Phase 8 · 阻塞点 5）：同开仓 —— 出区间即本地拒单。
+            #   下一根 bar 由引擎冷却后重试，届时对手价可能已回到区间内。
+            band_err = self._price_out_of_band(limit)
+            if band_err:
+                return self._rejected(signal_key, side, intent.value, volume,
+                                      ref_price, note, band_err)
             # p38：CLOSE 的基线要**分今/昨**取 —— 成交后要断言"昨仓降、今仓不动"，
             # 一个总量基线做不到这件事（见 `_verify_yesterday_delta`）。
             base_today, base_his = self._take_baseline_split(side_key)

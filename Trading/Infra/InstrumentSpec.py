@@ -14,7 +14,7 @@ M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变—�
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List
+from typing import Any, ClassVar, Dict, List, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,6 +51,101 @@ class InstrumentSpec(BaseModel):
     #   ⚠️ **一期不消费** —— 只是把字段位占住，避免二期加价格笼子护栏时又去
     #   改一遍合约规格模型（届时只需在 Broker 的报单前校验里读它）。
     price_band_points: float = 0.0            # 0 = 不限制（一期的唯一合法值）
+
+    # ════════════════════════════════════════════════════════════════
+    # Phase 8（二期 · D20）：品种参数自动获取的字段位（§5.6 六个缺字段在此兑现）
+    # ════════════════════════════════════════════════════════════════
+    exchange: str = ""                        # 交易所：CFFEX/SHFE/INE/DCE/CZCE/GFEX。
+                                              #   A5 预留的字段位在此兑现；Phase 9（FOK/FAK
+                                              #   切换）正式消费，Phase 8 只填充不分支。
+    max_order_volume: int = 0                 # 交易所单笔报单上限（手）。0 = 不限制。
+                                              #   中金所限价单上限到底是 20 还是 5000 未决（Q9），
+                                              #   故默认 0 = 不做该校验，Phase 11/确认后启用。
+    limit_up_pct: float = 0.0                 # 涨跌停板幅度（%，如 10.0）。仅作档案记录：
+                                              #   区间真值是绝对价 upper/lower_limit（随日结算价变），
+                                              #   从行情取，见下。
+    limit_down_pct: float = 0.0
+    last_trade_date: str = ""                 # 最后交易日 YYYY-MM-DD（阻塞点 4 交割月护栏，Phase 11 消费）
+    night_session: bool = False               # 是否有夜盘（阻塞点 6 交易时段护栏，Phase 11 消费）
+
+    # 当日涨跌停区间（绝对价）。**唯一真值来源是行情**（apply_quote 回填），
+    #   配置里的 limit_up_pct/limit_down_pct 只是档案，换算不出当日绝对价。
+    #   0 = 未知（离线模式未取到）→ 涨跌停护栏对未知区间不校验（不校验未知的东西）。
+    upper_limit: float = 0.0
+    lower_limit: float = 0.0
+
+    # ── A′ fail-closed 闸门（§5.9.3）──
+    # instrument_verified: 行情参数（tick/乘数/涨跌停）已取到并通过校验。
+    #   实盘（非离线 broker）未置 True → Engine._pre_trade_check 拒单 + 严重告警。
+    #   **代码里不得存在"取不到就回退配置值下单"的分支**（p42 用例③ 钉死）。
+    instrument_verified: bool = False
+    # instrument_source: 当前参数来源标记 —— "QUOTE"（行情，实盘唯一合法来源）
+    #   / "CONFIG_OFFLINE"（dry_run/replay 离线兜底）/ ""（尚未定）。
+    instrument_source: str = ""
+
+    # 参数来源标记的合法值（apply_quote / mark_config_offline 维护，外部只读比较）
+    SOURCE_QUOTE: ClassVar[str] = "QUOTE"
+    SOURCE_CONFIG_OFFLINE: ClassVar[str] = "CONFIG_OFFLINE"
+
+    # apply_quote 回填的行情字段 → spec 字段映射（tqsdk quote 字段名 → 本模型字段名）
+    _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
+        ("price_tick", "price_tick"),
+        ("volume_multiple", "multiplier"),
+        ("upper_limit", "upper_limit"),
+        ("lower_limit", "lower_limit"),
+    )
+
+    # ---------- Phase 8：行情参数回填（A′） ----------
+    def apply_quote(self, quote: Any) -> List[str]:
+        """从行情 quote 回填合约参数（§5.9.4 项 2 · D20）。返回**值发生变化**的字段名列表。
+
+        纯数据方法：鸭子类型读 quote 的四个字段，**不 import tqsdk**（便于单测）。
+        原子性：先对四个值全部校验，任一不过 → 抛 ValueError 且**一个字段都不改**
+        （半新半旧的一组参数比全旧更危险）。
+
+        校验清单（§5.9.3，任一不过即 fail）：
+          · price_tick / multiplier(volume_multiple)：isfinite 且 > 0
+            —— tqsdk 取不到的字段返回 **nan 而不是 None**，nan 是 truthy，
+            `if not v` 判空会漏过 nan → 必须 math.isfinite；
+          · upper_limit / lower_limit：isfinite 且 > 0，且 lower < upper（区间自洽）；
+          · 行情必须是**真实月份合约**的（订阅目标 trade_symbol）—— 由调用方
+            （SimNow）保证订阅对象，本方法只验数值。
+        """
+        vals = {}
+        for q_attr, s_field in self._QUOTE_FIELD_MAP:
+            try:
+                raw = getattr(quote, q_attr)
+            except AttributeError:
+                raise ValueError("行情缺少字段 {!r}（合约参数校验失败）".format(q_attr))
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                raise ValueError("行情字段 {}={!r} 不是数值（合约参数校验失败）".format(q_attr, raw))
+            if not math.isfinite(v) or v <= 0:
+                raise ValueError(
+                    "行情字段 {}={!r} 非法（要求 isfinite 且 > 0；tqsdk 取不到时是 nan）"
+                    .format(q_attr, raw))
+            vals[s_field] = v
+        if vals["lower_limit"] >= vals["upper_limit"]:
+            raise ValueError(
+                "涨跌停区间不自洽: lower_limit={!r} >= upper_limit={!r}"
+                .format(vals["lower_limit"], vals["upper_limit"]))
+
+        changed = []
+        for s_field, v in vals.items():
+            old = float(getattr(self, s_field))
+            setattr(self, s_field, v)
+            if abs(old - v) > 1e-12:
+                changed.append(s_field)
+        return changed
+
+    def mark_config_offline(self) -> None:
+        """离线模式（dry_run/replay）显式降级标记（§5.9.3 规则 2）。
+
+        配置值只允许在离线模式生效，且必须能自证来源 —— 启动横幅 + WARN
+        写明"tick/乘数取自配置，回测结果不可直接外推实盘"由调用方（main.py）负责。
+        """
+        self.instrument_source = self.SOURCE_CONFIG_OFFLINE
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:

@@ -154,6 +154,10 @@ def _code_hit(msg: str, code: str) -> bool:
 
 class Broker(ABC):
     name: str = "base"
+    # Phase 8（A′ · §5.9.3）：是否离线通道（无行情连接，允许用配置参数）。
+    #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
+    #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
+    is_offline: bool = False
 
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         self.spec = spec

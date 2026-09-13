@@ -176,6 +176,27 @@ class TradingConfig(BaseSettings):
             self.exit_params.r_multiple_tp = profile.r_multiple_tp
             self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
             self.instrument.multiplier = profile.multiplier
+            # Phase 8（D20）：price_tick 纳入品种档案注入。**仅作离线模式
+            # （dry_run/replay）兜底** —— 实盘按 A′ 必须从行情取（SimNow.apply_quote），
+            # 取不到就不许下单，这里注入的配置值在实盘会被行情值覆盖或被闸门拦截。
+            self.instrument.price_tick = profile.price_tick
+        else:
+            # §5.9.3 校验清单「未知品种」：不阻断，但必须可见 —— 否则
+            # min_r_points / r_multiple_tp / multiplier 会静默沿用 IF 基线。
+            _log.warning(
+                "品种 %r 不在 PRODUCT_PROFILES（已知: %s）—— 品种档案字段"
+                "（min_r_points / r_multiple_tp / multiplier / price_tick）"
+                "沿用配置值，实盘请确认行情参数自动获取（strict）已开启",
+                product, ", ".join(sorted(PRODUCT_PROFILES)))
+
+    def apply_product_profile(self) -> None:
+        """品种档案注入的公开入口。
+
+        除启动期 model_validator 自动调用外，Phase 8 里 `--symbol` 在启动期
+        改写 `instrument.signal_symbol` 后也调它重注入（换品种后 multiplier /
+        price_tick 等跟随新品种，而不是沿用上一品种的值）。
+        """
+        self._apply_product_profile_values()
 
     @property
     def product_profile(self) -> Optional["ProductProfile"]:
@@ -403,8 +424,28 @@ class BrokerConfig(BaseModel):
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
+    # ── Phase 8（D20 · A′）：合约参数自动获取开关（§5.9.4 项 4）──
+    #   只有两档，**没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
+    #   需求方 2026-09-11 明确否决）：
+    #     strict（默认）：实盘必须从行情取到并通过校验 price_tick / volume_multiple /
+    #                    涨跌停，否则 Engine._pre_trade_check 拒单 + 严重告警（fail-closed）。
+    #     off          ：只用配置值。**仅 dry_run/replay 离线模式生效** —— SimNow
+    #                    （在线通道）下永不标记 verified → 闸门照样拒单（规则 4：
+    #                    调试开关不得绕过 A′）。
+    instrument_fetch_policy: str = "strict"
     # —— 通道时序（Step 2.3 归一，见 ChannelTimingConfig docstring）——
     channel: ChannelTimingConfig = Field(default_factory=lambda: ChannelTimingConfig())
+
+    @field_validator("instrument_fetch_policy")
+    @classmethod
+    def _validate_fetch_policy(cls, v: str) -> str:
+        v = str(v).strip().lower()
+        if v not in ("strict", "off"):
+            raise ValueError(
+                "instrument_fetch_policy 只允许 'strict'（默认，实盘必须行情取值）"
+                " 或 'off'（仅离线生效），得到 {!r} —— 宽容档 prefer 已按需求方"
+                " 2026-09-11 拍板删除".format(v))
+        return v
 
 
 class EngineConfig(BaseModel):

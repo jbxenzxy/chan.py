@@ -65,6 +65,14 @@ def build_runtime(args):
         cfg.source.replay_dir = args.replay_dir
     if args.symbol:
         cfg.source.symbol = args.symbol
+        # Phase 8（§5.9.1 隐患根治 · §5.9.4 项 7）：--symbol 必须同步打通到
+        # instrument.signal_symbol。旧代码只写 source.symbol，"两者一致"只是
+        # Config.py 的一句注释约定 —— 前端切品种后 tick/乘数/费率全不变，
+        # SimNow 仍按旧 signal_symbol 解析主力合约（实际还在交易 IF），即便
+        # 走到下单也会因 tick 不是最小变动价位整数倍被 CTP 拒单。
+        if cfg.instrument.signal_symbol != args.symbol:
+            cfg.instrument.signal_symbol = args.symbol
+            cfg.apply_product_profile()   # 按新品种重注入品种档案（multiplier/price_tick/…）
     if args.freq:
         cfg.source.freq = args.freq
     if args.sse_base:
@@ -119,6 +127,15 @@ def build_runtime(args):
 
     broker = Broker.build_broker(args.broker or cfg.broker, spec,
                                  cfg.broker_params.model_dump())
+
+    # Phase 8（§5.9.3 规则 2 · 来源标记）：离线模式（dry_run，含 replay 数据源）
+    # 没有行情连接，合约参数用配置值 —— 但必须显式标记来源，让"回测口径"能自证。
+    # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
+    # 取不到则 instrument_verified=False → Engine 闸门拒单（fail-closed）。
+    if getattr(broker, "is_offline", False):
+        spec.mark_config_offline()
+        print("[gw] ⚠ 离线模式：tick/乘数取自配置（source=CONFIG_OFFLINE），"
+              "可能与交易所口径不符，回测结果不可直接外推实盘")
     entry = EntryPolicy(cfg.entry_params.model_dump())
     exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
     store_path = os.path.join(out, "state.db")
@@ -232,7 +249,10 @@ def run(args) -> int:
              instrument={"signal": cfg.instrument.signal_symbol,
                          "trade": cfg.instrument.trade_symbol,
                          "tick": cfg.instrument.price_tick,
-                         "multiplier": cfg.instrument.multiplier})
+                         "multiplier": cfg.instrument.multiplier,
+                         "verified": cfg.instrument.instrument_verified,
+                         "source": cfg.instrument.instrument_source,
+                         "fetch_policy": cfg.broker_params.instrument_fetch_policy})
     # （2026-09-08：原 engine.risk.roll_day("") 当日统计初始化已随 RiskGate 删除。）
 
     t0 = time.time()

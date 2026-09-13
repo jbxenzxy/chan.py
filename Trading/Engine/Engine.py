@@ -957,16 +957,44 @@ class TradingEngine(ReconcileMixin):
                        is_exit=True, transition=5)
 
     def _pre_trade_check(self, act: "_Action", today: str,
-                         sig: Optional[Signal] = None) -> Optional[str]:
+                         sig: Optional[Signal] = None,
+                         ref_price: float = 0.0) -> Optional[str]:
         """报单前校验链（A3）。返回 None = 通过；返回字符串 = 拒绝原因。
 
         ⚠️ 二期（Q1 全品种 / Q2 平今开关 / Q3 交割月护栏）一律往这条链上加，
         不要去改 `_decide_action` / `_decide_exit` 的转移表结构。
+        Phase 8（D20）在此链上加了两个 item（A3：不新增报单入口）：
+          · instrument_unverified —— A′ fail-closed 闸门（§5.9.3 规则 1/4）；
+          · price_out_of_limit    —— 参考价出当日涨跌停区间的**粗检**（阻塞点 5；
+            broker 侧对最终限价还有一次精确校验，见 SimNow._price_out_of_band ——
+            最终限价（对手价±overprice）只有 broker 知道，引擎侧先拦参考价）。
         """
+        # ── A′ fail-closed 闸门（Phase 8 · §5.9.3 规则 1/4）──
+        #   在线通道（simnow/live）：合约参数（tick/乘数/涨跌停）必须已从行情
+        #   取到并通过校验，否则拒单 + 严重告警 —— 绝不静默回退配置值。
+        #   实盘配 instrument_fetch_policy="off" 时 verified 恒为 False →
+        #   同样被这里拦下（调试开关不得绕过 A′）。
+        #   离线通道（dry_run）放行：配置值来源已在 main.py 标记 CONFIG_OFFLINE。
+        if not (getattr(self.broker, "is_offline", False)
+                or getattr(self.spec, "instrument_verified", False)):
+            self.alert(self.ALERT_SEVERE, "instrument_unverified",
+                       "合约参数未通过行情校验（tick/乘数/涨跌停），已拒单。"
+                       "fail-closed：宁可不下单，也不用可能错的参数下单",
+                       source=getattr(self.spec, "instrument_source", ""),
+                       broker=getattr(self.broker, "name", ""))
+            return "instrument_unverified"
         if act.volume <= 0:
             return "zero_volume"
         if not today:
             return "no_trading_day"
+        # ── 涨跌停护栏 · 粗检（Phase 8 · 阻塞点 5）──
+        #   参考价（信号 K 线收盘价 / 离场触发价）出当日区间 → 拦下。挡两类：
+        #   ① 行情/合约异常（最新价本身不在区间内 = 数据是坏的，用错数据交易不可逆）；
+        #   ② 停板边缘的必然废单（最终限价的精确校验在 broker 侧补刀）。
+        #   区间未知（0，离线模式）→ 不校验未知的东西；参考价恰等于涨跌停价放行。
+        why = self._ref_price_out_of_band(ref_price)
+        if why is not None:
+            return why
         if act.intent is OrderIntent.OPEN:
             # 建仓必须能确定"建仓所属交易日"：entry_date 是规则 ⑷⑸ 判
             # 「今仓 → 反向开仓 / 跨日 → 平仓」的唯一依据，空着就是非法状态。
@@ -994,6 +1022,20 @@ class TradingEngine(ReconcileMixin):
         # 不猜、不做部分平仓（PositionBook 无减仓 API），直接拒绝并叫人处理。
         if act.volume < act.target.volume:
             return "close_volume_below_target"
+        return None
+
+    def _ref_price_out_of_band(self, ref_price: float) -> Optional[str]:
+        """涨跌停护栏 · 粗检（Phase 8 · §5.9.4 项 6）。返回 None = 通过。"""
+        lo = float(getattr(self.spec, "lower_limit", 0.0) or 0.0)
+        hi = float(getattr(self.spec, "upper_limit", 0.0) or 0.0)
+        if lo <= 0 or hi <= 0 or hi <= lo:
+            return None                          # 区间未知（离线/未取到）→ 不校验
+        p = float(ref_price or 0.0)
+        if p <= 0:
+            return None                          # 无参考价（历史调用点兼容）→ 不校验
+        if p < lo or p > hi:
+            return ("price_out_of_limit: 参考价 {!r} 超出当日涨跌停区间 [{!r}, {!r}]"
+                    .format(p, lo, hi))
         return None
 
     def _open_time_anchor(self, sig: Optional[Signal]) -> "Tuple[int, str]":
@@ -1024,7 +1066,7 @@ class TradingEngine(ReconcileMixin):
         """
         self._last_reject = ""
         today = self._current_trading_day(bar)
-        why = self._pre_trade_check(act, today, sig)
+        why = self._pre_trade_check(act, today, sig, ref_price=ref_price)
         if why is not None:
             self._last_reject = why
             self.ev.write("order_rejected",

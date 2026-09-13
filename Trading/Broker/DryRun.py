@@ -34,6 +34,9 @@ from .Base import INTENT_TO_OFFSET, Broker, register_broker
 @register_broker
 class DryRunBroker(Broker):
     name = "dry_run"
+    # Phase 8（A′）：离线通道 —— 引擎的 fail-closed 闸门对它不生效，
+    #   合约参数用配置值（来源标记 CONFIG_OFFLINE 由 main.py 写入）。
+    is_offline = True
 
     def __init__(self, spec: InstrumentSpec, params=None):
         super().__init__(spec, params)
