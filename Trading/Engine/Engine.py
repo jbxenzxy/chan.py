@@ -108,6 +108,9 @@ class TradingEngine(ReconcileMixin):
                  store: Store, ev: EventLog):
         self.cfg = cfg
         self.spec: InstrumentSpec = cfg.instrument
+        # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
+        # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
+        self._spec_drift_checked: bool = False
         self.broker = broker
         self.entry_policy = entry_policy
         self.exit_policy = exit_policy
@@ -1004,6 +1007,40 @@ class TradingEngine(ReconcileMixin):
                        min(abs(net), target.volume), target,
                        is_exit=True, transition=5)
 
+    def _check_spec_drift(self) -> None:
+        """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
+
+        背景：PRODUCT_PROFILES 里的 multiplier / price_tick **不是实盘真值**
+        （实盘由 apply_quote 从行情原子覆盖，A′ fail-closed 兜底），而是
+        dry_run / replay 的离线兜底。行情值与档案值不一致 = 档案兜底值过期
+        —— 实盘不受影响，但离线回测/模拟成交会静默用错数。这里把双源漂移
+        从静默变显性：发 warn 轻提示（D11 通道，前端 toast），不拒单。
+
+        一次性：verified 首次为真时查一次即置位（合约规格会话内不变）。
+        挂在 A3 校验链（_pre_trade_check）上，遵循"二期扩展往链上加"惯例。
+        """
+        if (self._spec_drift_checked
+                or not getattr(self.spec, "instrument_verified", False)
+                or self.cfg.product_profile is None):
+            return
+        self._spec_drift_checked = True
+        p = self.cfg.product_profile
+        diffs = []
+        if self.spec.price_tick != p.price_tick:
+            diffs.append("price_tick 档案={} / 行情={}".format(
+                p.price_tick, self.spec.price_tick))
+        if self.spec.multiplier != p.multiplier:
+            diffs.append("multiplier 档案={} / 行情={}".format(
+                p.multiplier, self.spec.multiplier))
+        if diffs:
+            self.alert(
+                self.ALERT_WARN, "spec_drift",
+                "行情合约规格与品种档案兜底值不一致（{}）。实盘以行情为准、"
+                "不受影响；但 dry_run / 回测的离线兜底已过期，请同步更新 "
+                "PRODUCT_PROFILES。".format("；".join(diffs)),
+                signal_symbol=str(self.cfg.instrument.signal_symbol),
+                source=getattr(self.spec, "instrument_source", ""))
+
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
                          ref_price: float = 0.0) -> Optional[str]:
@@ -1046,6 +1083,8 @@ class TradingEngine(ReconcileMixin):
                        broker=getattr(self.broker, "name", ""),
                        policy=policy)
             return "instrument_unverified"
+        # 合约规格漂移校验（verified 首次为真后查一次；warn 不拒单）
+        self._check_spec_drift()
         if act.volume <= 0:
             return "zero_volume"
         if not today:
