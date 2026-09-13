@@ -31,7 +31,7 @@ PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict
 
 # ══════════════════════════════════════════════════════════════════
 # 品种档案（与 PeriodProfile 平行的"随品种可变参数"归总）
@@ -92,8 +92,3 @@ def parse_product(signal_symbol: str) -> str:
     """
     s = str(signal_symbol or "").strip()
     return s.split(".")[-1] if "." in s else ""
-
-
-def profile_for(signal_symbol: str) -> Optional[ProductProfile]:
-    """signal_symbol 对应的品种档案（未知品种返回 None）。"""
-    return PRODUCT_PROFILES.get(parse_product(signal_symbol))

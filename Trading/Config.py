@@ -157,37 +157,57 @@ class TradingConfig(BaseSettings):
         return PERIOD_PROFILES.get(self.source.freq)
 
     # ── 品种档案注入（2026-09-09：随品种可变参数入 ProductProfile）──
-    # 按 instrument.signal_symbol 选品种，把 min_r_points / r_multiple_tp /
-    # multiplier / breakeven_buffer_ticks 四个「随品种可变」的 flat 字段强制覆盖
-    # （品种档案是真值来源）：
-    #   · 未知品种（signal_symbol 不含 '.' 或不在 4 个品种表内）时跳过，保留 flat 默认。
-    # 与周期档案「仅当仍是模型默认值才覆盖」的语义不同——品种字段没有跨越 IF 基线的
-    #   「通用默认值」，flat 默认本身就是 IF 基线，故这里整体覆盖、语义更直白。
+    # 按 instrument.signal_symbol 选品种，注入 min_r_points / r_multiple_tp /
+    # multiplier / breakeven_buffer_ticks / price_tick 五个「随品种可变」的字段。
+    #
+    # 一致性规则（修复 B-3：原实现只给 price_tick 加 model_fields_set 守护、
+    # 其余四字段无条件覆盖，语义半截子）—— 现五个字段统一：
+    #   · 初始加载（model_validator，force=False）：user-explicit-wins。
+    #     仅当用户**没在配置里显式写**该字段（不在 model_fields_set）时，
+    #     才用品种档案兜底；用户显式写的字段不被覆盖。
+    #   · --symbol 换品种重载（apply_product_profile，force=True）：品种已切换，
+    #     profile 是新品种的权威真值，整块覆盖，避免沿用例品种的
+    #     multiplier / price_tick 造成限价口径漂移。
+    #   · 未知品种：跳过注入并 WARN（字段沿用当前值/模型默认值）。
     @model_validator(mode="after")
     def _reconcile_product_profile(self) -> "TradingConfig":
         self._apply_product_profile_values()
         return self
 
-    def _apply_product_profile_values(self) -> None:
+    def _apply_product_profile_values(self, force: bool = False) -> None:
         product = parse_product(self.instrument.signal_symbol)
         profile = PRODUCT_PROFILES.get(product)
-        if profile:
-            self.exit_params.min_r_points = profile.min_r_points
-            self.exit_params.r_multiple_tp = profile.r_multiple_tp
-            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
-            self.instrument.multiplier = profile.multiplier
-            # Phase 8（D20）：price_tick 纳入品种档案注入。**仅作离线模式
-            # （dry_run/replay）兜底** —— 实盘按 A′ 必须从行情取（SimNow.apply_quote），
-            # 取不到就不许下单，这里注入的配置值在实盘会被行情值覆盖或被闸门拦截。
-            self.instrument.price_tick = profile.price_tick
-        else:
+        if profile is None:
             # §5.9.3 校验清单「未知品种」：不阻断，但必须可见 —— 否则
             # min_r_points / r_multiple_tp / multiplier 会静默沿用 IF 基线。
             _log.warning(
                 "品种 %r 不在 PRODUCT_PROFILES（已知: %s）—— 品种档案字段"
-                "（min_r_points / r_multiple_tp / multiplier / price_tick）"
+                "（min_r_points / r_multiple_tp / multiplier / price_tick / breakeven_buffer_ticks）"
                 "沿用配置值，实盘请确认行情参数自动获取（strict）已开启",
                 product, ", ".join(sorted(PRODUCT_PROFILES)))
+            return
+        if force:
+            # 换品种重载：profile 为新品种权威，整块覆盖。
+            self.exit_params.min_r_points = profile.min_r_points
+            self.exit_params.r_multiple_tp = profile.r_multiple_tp
+            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
+            self.instrument.multiplier = profile.multiplier
+            self.instrument.price_tick = profile.price_tick
+            return
+        # 初始加载：只补缺、不覆盖用户显式配置（user-explicit-wins）。
+        if "min_r_points" not in self.exit_params.model_fields_set:
+            self.exit_params.min_r_points = profile.min_r_points
+        if "r_multiple_tp" not in self.exit_params.model_fields_set:
+            self.exit_params.r_multiple_tp = profile.r_multiple_tp
+        if "breakeven_buffer_ticks" not in self.exit_params.model_fields_set:
+            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
+        if "multiplier" not in self.instrument.model_fields_set:
+            self.instrument.multiplier = profile.multiplier
+        # Phase 8（D20）：price_tick 纳入品种档案注入。**仅作离线模式
+        # （dry_run/replay）兜底** —— 实盘按 A′ 必须从行情取（SimNow.apply_quote），
+        # 取不到就不许下单，这里注入的配置值在实盘会被行情值覆盖或被闸门拦截。
+        if "price_tick" not in self.instrument.model_fields_set:
+            self.instrument.price_tick = profile.price_tick
 
     def apply_product_profile(self) -> None:
         """品种档案注入的公开入口。
@@ -195,8 +215,11 @@ class TradingConfig(BaseSettings):
         除启动期 model_validator 自动调用外，Phase 8 里 `--symbol` 在启动期
         改写 `instrument.signal_symbol` 后也调它重注入（换品种后 multiplier /
         price_tick 等跟随新品种，而不是沿用上一品种的值）。
+
+        换品种走 force=True：品种已切换，profile 是新品种的权威真值，整块覆盖
+        （否则 model_fields_set 仍记着初始注入的字段，会跳过覆盖、沿用例品种值）。
         """
-        self._apply_product_profile_values()
+        self._apply_product_profile_values(force=True)
 
     @property
     def product_profile(self) -> Optional["ProductProfile"]:
