@@ -220,7 +220,7 @@ from Trading.Broker.DryRun import DryRunBroker            # noqa: E402
 from Trading.Config import TradingConfig                  # noqa: E402
 from Trading.Infra.EventLog import EventLog               # noqa: E402
 from Trading.Infra.Store import Store                     # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy     # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy     # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy       # noqa: E402
 
 
@@ -240,7 +240,7 @@ def mk_engine(tmp, book):
     cfg.exit_params.use_atr = False
     eng = TradingEngine(
         cfg, DryRunBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0}),
-        DefaultEntryPolicy({}), LayeredExitPolicy(),
+        EntryPolicy({}), LayeredExitPolicy(),
         Store(os.path.join(tmp, "state_p24.db")),
         EventLog(os.path.join(tmp, "events_p24.jsonl"), echo=False, echo_kinds=None))
     for p in book:

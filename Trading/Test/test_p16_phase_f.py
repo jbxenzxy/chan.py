@@ -96,7 +96,7 @@ from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy
+from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
@@ -228,7 +228,7 @@ def make_engine(tmpdir, *, split_positions=1,
     spec = InstrumentSpec()
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
+    entry = EntryPolicy({"reverse_on_opposite_signal": False})
     # 注：旧代码传的 stop_loss_points 是错键（策略实际读 stop_points），
     #    此前被静默忽略；严格模式下会被拒绝，故移除以保持行为不变。
     exitp = LayeredExitPolicy()
@@ -543,7 +543,7 @@ with tmp_dir() as td:
     # 手动构造 engine 前先把 store 写入持仓
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_volume = 1
-    entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
+    entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(td, "state.db"))
     # 写入持仓

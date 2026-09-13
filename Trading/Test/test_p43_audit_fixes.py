@@ -356,12 +356,21 @@ print("\n[6] 已删符号不得有任何「活引用」（AST 级，2026-09-13 �
 #   所以这里用 AST 只看**真会求值的节点**：
 #     · `X.LOCK` / `X.UNLOCK`，且 X 的写法以 `OrderIntent` 结尾；
 #     · 名为 `PositionOrigin` / `ExitMode` 的裸标识符；
+#     · `from ... import <已删符号>` 的导入名。
 #   字符串常量、注释、docstring 一律不算（它们本就不参与求值）。
+#
+# 2026-09-13 补：`DefaultEntryPolicy`（→ `EntryPolicy`）与 `ExitPolicy`（已删）
+#   也纳入。本轮把 `DefaultEntryPolicy` 改名后**漏改了 21 个文件 / 48 处活引用**
+#   （含生产入口 `Trading/main.py`），全套 42 项里 23 项直接 ImportError；
+#   而本护栏当时只覆盖 LOCK/UNLOCK/PositionOrigin/ExitMode，**恰好没覆盖本轮
+#   改动的那个符号** —— 加进来才能在下一次改名时立刻报警，而不是等跑测试。
 import ast  # noqa: E402
 import io   # noqa: E402
 
 _DEAD_ATTRS = {"LOCK", "UNLOCK"}
-_DEAD_NAMES = {"PositionOrigin", "ExitMode"}
+_DEAD_NAMES = {"PositionOrigin", "ExitMode", "DefaultEntryPolicy", "ExitPolicy"}
+# `from x import <name>` 里的名字不是 ast.Name，需单独判。
+_DEAD_IMPORTS = {"DefaultEntryPolicy", "ExitPolicy"}
 # ⚠️ 不能把名为 "Test" 的目录跳过 —— 出问题的 smoke 脚本就在 Trading/Test/ 里。
 #    只跳真正的依赖/缓存/二进制目录。
 _SKIP_DIRS = {"__pycache__", ".git", ".venv", ".idea", "node_modules",
@@ -393,31 +402,47 @@ for _dp, _dns, _fns in os.walk(_ROOT):
             elif isinstance(_node, ast.Name) and _node.id in _DEAD_NAMES:
                 _live_hits.append("{}:{} {}".format(
                     _rel, getattr(_node, "lineno", "?"), _node.id))
+            elif isinstance(_node, ast.ImportFrom):
+                for _al in _node.names:
+                    if _al.name in _DEAD_IMPORTS:
+                        _live_hits.append("{}:{} import {}".format(
+                            _rel, getattr(_node, "lineno", "?"), _al.name))
 check_true("[6a] 扫描覆盖面够（扫到 ≥ 60 个 .py）", _scan_n >= 60, _scan_n)
-check("[6b] ★ 全仓无 OrderIntent.LOCK/UNLOCK、PositionOrigin、ExitMode 的活引用",
+check("[6b] ★ 全仓无 OrderIntent.LOCK/UNLOCK、PositionOrigin、ExitMode、"
+      "DefaultEntryPolicy、ExitPolicy 的活引用",
       _live_hits, [])
 
 # 反向自检：护栏本身必须抓得住（构造一段该被拦下的代码，确认 AST 判据有判别力）
-# 期望命中 3 处：`OrderIntent.UNLOCK` / `PositionOrigin` / `ExitMode`
+# 期望命中 6 处：`OrderIntent.UNLOCK` / `PositionOrigin`×2 / `ExitMode`
+#               / `from ... import DefaultEntryPolicy` / `ExitPolicy`
 # （`OrderIntent` 自身是 Name 但不在禁用清单里，不算命中）
 _probe = ast.parse("from x import OrderIntent\n"
                    "OrderIntent.UNLOCK\n"
                    "PositionOrigin\n"
                    "ExitMode\n"
-                   "PositionOrigin = 1  # 赋值也算活引用\n")
+                   "PositionOrigin = 1  # 赋值也算活引用\n"
+                   "from Trading.Strategy import DefaultEntryPolicy\n"
+                   "ExitPolicy\n")
 _hit2 = [n.attr for n in ast.walk(_probe)
          if isinstance(n, ast.Attribute) and n.attr in _DEAD_ATTRS]
 _hit2 += [n.id for n in ast.walk(_probe)
           if isinstance(n, ast.Name) and n.id in _DEAD_NAMES]
-check_true("[6c] 判据有判别力（样本代码被抓到 4 处）", len(_hit2) == 4, _hit2)
+_hit2 += [a.name for n in ast.walk(_probe)
+          if isinstance(n, ast.ImportFrom) for a in n.names
+          if a.name in _DEAD_IMPORTS]
+check_true("[6c] 判据有判别力（样本代码被抓到 6 处）", len(_hit2) == 6, _hit2)
 # 注释/docstring 里的同名字符串**不得**被判为活引用（否则 p26 的解释性注释全要删）
 _quiet = ast.parse('"""PositionOrigin / ExitMode 已删除。"""\n'
                    "_LEGACY = ('origin', 'lock_pair_id')\n"
-                   'w = "UNLOCK"\n')
+                   'w = "UNLOCK"\n'
+                   '# DefaultEntryPolicy 是旧名，已改 EntryPolicy\n')
 _hit3 = [n.attr for n in ast.walk(_quiet)
          if isinstance(n, ast.Attribute) and n.attr in _DEAD_ATTRS]
 _hit3 += [n.id for n in ast.walk(_quiet)
           if isinstance(n, ast.Name) and n.id in _DEAD_NAMES]
+_hit3 += [a.name for n in ast.walk(_quiet)
+          if isinstance(n, ast.ImportFrom) for a in n.names
+          if a.name in _DEAD_IMPORTS]
 check("[6d] 注释 / 字符串常量不误伤（避免 p26 的解释性注释被标红）",
       _hit3, [])
 

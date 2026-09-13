@@ -35,7 +35,7 @@ from Trading.Infra.Store import Store
 from Trading.Infra.Types import (CN_TZ, Bar, ExitPlan, NIGHT_SESSION_START_HOUR,
                                  PLAUSIBLE_DATE_MIN, Position, Side, Signal,
                                  trading_day_from_clock, trading_day_of_ms)
-from Trading.Strategy.Entry import DefaultEntryPolicy
+from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy
 
 PASSED = 0
@@ -82,7 +82,7 @@ def build(tmp, tag, store_name=None):
     store = Store(os.path.join(tmp, store_name or ("state_%s.db" % tag)))
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),
                   echo=False, echo_kinds=None)
-    eng = TradingEngine(cfg, broker, DefaultEntryPolicy({}),
+    eng = TradingEngine(cfg, broker, EntryPolicy({}),
                         LayeredExitPolicy(cfg.exit_params.model_dump()), store, ev)
     return eng, broker, spec
 

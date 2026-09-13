@@ -4,7 +4,7 @@
 范围（交接文档 §5.1 的 2.6 定义）：
   对四个支持周期各完整走一遍 main.build_runtime() 启动链路（不联网）：
     TradingConfig() → CLI --freq 覆盖 → bar_secs_for 校验（fail-fast 在这）
-    → bars_per_day → build_broker(dry_run) → DefaultEntryPolicy / LayeredExitPolicy
+    → bars_per_day → build_broker(dry_run) → EntryPolicy / LayeredExitPolicy
     → Store / EventLog / TradingEngine → build_source("sse")
   断言：bar_secs、根数/日、period_profile 选到对应档案、
   引擎与策略与信号源对象构造齐全。
@@ -46,7 +46,7 @@ from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.PeriodProfile import (PERIOD_PROFILES, SESSION_SECS,
                                          bar_secs_for, bars_per_day)
 from Trading.Source.SSE import SseSource
-from Trading.Strategy import DefaultEntryPolicy, LayeredExitPolicy
+from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 
 # 期望值（SSOT 校验对账：PeriodProfile.FREQ_SEC / 4.5h 交易日近似）
 _EXPECT_BAR_SECS = {"30m": 1800, "5m": 300, "1m": 60, "15s": 15}
@@ -83,8 +83,8 @@ for freq in ("30m", "5m", "1m", "15s"):
               cfg.source.signal_k_tol_bars, 1)
 
         check("引擎构造 TradingEngine", type(engine), TradingEngine)
-        check("入场策略 DefaultEntryPolicy", type(engine.entry_policy),
-              DefaultEntryPolicy)
+        check("入场策略 EntryPolicy", type(engine.entry_policy),
+              EntryPolicy)
         check("出场策略 LayeredExitPolicy", type(engine.exit_policy),
               LayeredExitPolicy)
         check("默认 broker dry_run（离线）", engine.broker.name, "dry_run")

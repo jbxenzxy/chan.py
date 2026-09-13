@@ -62,7 +62,7 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import Bar, Side, Signal  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
 _PASS = 0
@@ -136,7 +136,7 @@ with tmp_dir("cycle") as tmp:
     spec = InstrumentSpec()
     eng = TradingEngine(
         make_cfg(), DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
-        DefaultEntryPolicy({}),
+        EntryPolicy({}),
         LayeredExitPolicy(make_cfg().exit_params.model_dump()),
         Store(db_path),
         EventLog(os.path.join(tmp, "events.jsonl"), echo=False,

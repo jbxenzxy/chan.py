@@ -88,7 +88,7 @@ from Trading.Infra.Store import IdCollisionError, Store   # noqa: E402
 from Trading.Infra.Types import (                         # noqa: E402
     Bar, ExitPlan, Order, Position, Side, Signal, Trade,
 )
-from Trading.Strategy.Entry import DefaultEntryPolicy     # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy     # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy       # noqa: E402
 
 CN_TZ = timezone(timedelta(hours=8))
@@ -139,7 +139,7 @@ def build(tmp, tag="a"):
     store = Store(os.path.join(tmp, "state_%s.db" % tag))
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),
                   echo=False, echo_kinds=None)
-    eng = TradingEngine(cfg, broker, DefaultEntryPolicy({}),
+    eng = TradingEngine(cfg, broker, EntryPolicy({}),
                         LayeredExitPolicy(cfg.exit_params.model_dump()),
                         store, ev)
     return eng, broker

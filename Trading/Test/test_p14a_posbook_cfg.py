@@ -80,7 +80,7 @@ from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, ExitPlan, OrderIntent, Position, Side, Signal,
 )
-from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
 _PASS = 0
@@ -134,7 +134,7 @@ def make_engine(tmpdir, tag="a", broker=None):
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     return TradingEngine(
-        cfg, broker, DefaultEntryPolicy({"reverse_on_opposite_signal": False}),
+        cfg, broker, EntryPolicy({"reverse_on_opposite_signal": False}),
         LayeredExitPolicy(),
         Store(os.path.join(tmpdir, "state_%s.db" % tag)),
         EventLog(os.path.join(tmpdir, "events_%s.jsonl" % tag), echo=False,

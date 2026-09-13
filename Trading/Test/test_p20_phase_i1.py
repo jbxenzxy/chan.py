@@ -209,9 +209,9 @@ def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
     cfg = cfg or make_cfg()
     spec = InstrumentSpec()
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    from Trading.Strategy.Entry import DefaultEntryPolicy
+    from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
-    entry = DefaultEntryPolicy({})
+    entry = EntryPolicy({})
     exitp = exit_policy or LayeredExitPolicy()
     store = store or Store(os.path.join(tmpdir, "state.db"))
     ev = ev or EventLog(os.path.join(tmpdir, "events.jsonl"),

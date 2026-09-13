@@ -74,7 +74,7 @@ from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E4
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
@@ -153,7 +153,7 @@ def make_engine(tmpdir, *, max_volume=2, broker=None):
     spec = InstrumentSpec()
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
-    entry = DefaultEntryPolicy({"reverse_on_opposite_signal": False})
+    entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)

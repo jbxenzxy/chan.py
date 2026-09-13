@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # 仓库根（import Trading）
 
 from Trading import Broker, Source                        # noqa: E402  导入触发注册
-from Trading.Strategy import (DefaultEntryPolicy,          # noqa: E402
+from Trading.Strategy import (EntryPolicy,          # noqa: E402
                               LayeredExitPolicy)
 from Trading.Config import TradingConfig                         # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
@@ -119,7 +119,7 @@ def build_runtime(args):
 
     broker = Broker.build_broker(args.broker or cfg.broker, spec,
                                  cfg.broker_params.model_dump())
-    entry = DefaultEntryPolicy(cfg.entry_params.model_dump())
+    entry = EntryPolicy(cfg.entry_params.model_dump())
     exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
     store_path = os.path.join(out, "state.db")
     store = Store(store_path)

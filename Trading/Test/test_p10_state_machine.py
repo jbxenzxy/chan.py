@@ -88,7 +88,7 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Strategy.Entry import DefaultEntryPolicy  # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 import Trading.Infra.Types as _T  # noqa: E402
@@ -139,7 +139,7 @@ def build_engine(tmpdir, *, ev_name="events.jsonl"):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
+    entry = EntryPolicy({})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, ev_name), echo=False, echo_kinds=None)

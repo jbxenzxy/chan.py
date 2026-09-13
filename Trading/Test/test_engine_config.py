@@ -72,13 +72,13 @@ from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
 from Trading.Infra.InstrumentSpec import InstrumentSpec
 from Trading.Infra.Store import Store
-from Trading.Strategy import DefaultEntryPolicy, LayeredExitPolicy
+from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 
 
 def build_engine(cfg):
     spec = InstrumentSpec()
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = DefaultEntryPolicy({})
+    entry = EntryPolicy({})
     exitp = LayeredExitPolicy()
     tmp = tempfile.mkdtemp(prefix="p22_")
     store = Store(os.path.join(tmp, "state.db"))
