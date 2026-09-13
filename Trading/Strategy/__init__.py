@@ -7,7 +7,7 @@ LayeredExitPolicy（L1-L3 分层），不再有「注册表 / @register / build_
 
 参考 Exit.py 里 LayeredExitPolicy 的完整实现（L1-L3 各层注释）。
 """
-from .Base import ExitCheck
+from .Exit import ExitCheck
 from .Entry import EntryPolicy
 from .Exit import LayeredExitPolicy
 

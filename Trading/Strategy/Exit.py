@@ -27,7 +27,20 @@ from typing import Optional
 from ..Config import ExitConfig
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
-from .Base import ExitCheck
+from dataclasses import dataclass
+
+
+@dataclass
+class ExitCheck:
+    """出场判定结果。price 是"触发价"，不是最终成交价（成交价由 broker 决定）。
+
+    only_update=True 表示"只更新出场计划、不登场"——移动止损 / 跟踪止盈走这条路。
+    此时 plan 必须给，price 无意义。
+    """
+    reason: str                       # tp / sl / time / trailing / custom
+    price: float
+    plan: Optional[ExitPlan] = None   # 非空则替换持仓的出场计划
+    only_update: bool = False
 
 
 # 参数默认值单一事实源（2026-09-07 严格模式）：

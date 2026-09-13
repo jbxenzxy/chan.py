@@ -62,7 +62,7 @@ from ..Infra.PeriodProfile import (
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
-from ..Strategy.Base import ExitCheck
+from ..Strategy.Exit import ExitCheck
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import (
     PLAUSIBLE_DATE_MIN,

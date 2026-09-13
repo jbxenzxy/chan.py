@@ -18,9 +18,8 @@ Trading/                        # 自动下单网关（Python 包）
 │   ├── Replay.py               # 离线回放 M0 录制数据
 │   └── Base.py                 # Source 接口 + @register 装饰器
 ├── Strategy/                   # ③ 可插拔策略（新增文件即注册）
-│   ├── Base.py                 # ExitCheck 数据结构（出场判定结果）
 │   ├── Entry.py                # 入场策略（用户当前规则，唯一实现）
-│   └── Exit.py                 # 出场策略：分层离场 L1-L3 / 移动止损（唯一实现）
+│   └── Exit.py                 # 出场策略：分层离场 L1-L3 / 移动止损（唯一实现，含 ExitCheck 数据结构）
 ├── Risk/                       # ④ 风控层（精简后：手数/持仓上限全收敛在 RiskConfig）
 │                               #    （PositionSizing 固定手数仓位管理已于 2026-09-08 删除）
 ├── Engine/                     # ⑤ 执行层
