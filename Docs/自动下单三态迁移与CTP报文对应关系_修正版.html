@@ -1,0 +1,56 @@
+<svg width="100%" viewBox="0 0 680 582" role="img" xmlns="http://www.w3.org/2000/svg">
+<title>三态迁移图与对应的下单意图</title>
+<desc>空仓、运行、锁仓三态之间的六条转移路径及其 CTP 报单意图。运行态与锁仓态之间双向各画两条边，按「最新一笔仓单的建仓交易日」分为今日分支与跨日分支。</desc>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+<path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<!-- ── 三态 ─────────────────────────────────────────────── -->
+<rect x="40" y="236" width="140" height="64" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+<text x="110" y="258" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="14" font-weight="500" fill="#2C2C2A">空仓态</text>
+<text x="110" y="280" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#5F5E5A">净敞口 = 0，簿为空</text>
+<rect x="280" y="236" width="140" height="64" rx="8" fill="#B5D4F4" stroke="#185FA5" stroke-width="0.5"/>
+<text x="350" y="258" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="14" font-weight="500" fill="#042C53">运行态</text>
+<text x="350" y="280" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0C447C">净敞口 ≠ 0</text>
+<rect x="500" y="236" width="140" height="64" rx="8" fill="#85B7EB" stroke="#185FA5" stroke-width="0.5"/>
+<text x="570" y="258" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="14" font-weight="500" fill="#042C53">锁仓态</text>
+<text x="570" y="280" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0C447C">净敞口 = 0，簿非空</text>
+
+<!-- ── ① 空仓 → 运行（灰色：不涉及锁仓） ──────────────── -->
+<path d="M110 236 L110 192 L300 192 L300 236" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="195" y="155" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#5F5E5A">① 空仓 + 信号 → 开新仓</text>
+<text x="195" y="172" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#5F5E5A">offset=OPEN</text>
+
+<!-- ── 今日分支：④ 运行 → 锁仓 ────────────────────────── -->
+<path d="M350 236 L350 64 L610 64 L610 236" fill="none" stroke="#534AB7" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="480" y="28" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#3C3489">④ 今日仓 + 离场 → 反向开仓</text>
+<text x="480" y="45" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#3C3489">offset=OPEN（反向开仓，净敞口归零）</text>
+
+<!-- ── 今日分支：② 锁仓 → 运行 ────────────────────────── -->
+<path d="M550 236 L550 128 L400 128 L400 236" fill="none" stroke="#534AB7" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="480" y="91" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#3C3489">② 今日锁 + 信号 → 顺势开新仓</text>
+<text x="480" y="108" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#3C3489">offset=OPEN，不动锁仓单</text>
+
+<!-- ── 跨日分支：⑤ 运行 → 锁仓（有残留） ──────────────── -->
+<path d="M400 300 L400 322 L560 322 L560 300" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="475" y="340" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">⑤ 跨日仓 + 离场 → 平仓后仍有残留</text>
+<text x="475" y="357" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">→ 落到锁仓态（offset=CLOSE）</text>
+
+<!-- ── 跨日分支：③ 锁仓 → 运行 ────────────────────────── -->
+<path d="M610 300 L610 393 L300 393 L300 300" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="470" y="411" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">③ 跨日锁 + 信号 → 买平反向仓</text>
+<text x="470" y="428" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">offset=CLOSE（平掉最早一笔反向仓）</text>
+
+<!-- ── 跨日分支：⑤ 运行 → 空仓（平光） ────────────────── -->
+<path d="M280 276 L240 276 L240 457 L110 457 L110 300" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+<text x="200" y="475" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">⑤ 跨日仓 + 离场 → 平光</text>
+<text x="200" y="492" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">→ 空仓态（offset=CLOSE）</text>
+
+<!-- ── 附注 ───────────────────────────────────────────── -->
+<text x="40" y="518" font-family="system-ui" font-size="11" fill="#5F5E5A">判据：最新一笔仓单 latest.entry_date &gt;= 今日 → 今日分支；否则 → 跨日分支。（信号与离场同一口径）</text>
+<text x="40" y="535" font-family="system-ui" font-size="11" fill="#5F5E5A">「离场」含止盈/止损与关闭自动下单两条调用路径，二者共用同一 _decide_exit，落点规则一致。</text>
+<text x="40" y="552" font-family="system-ui" font-size="11" fill="#5F5E5A">三态是派生量：净敞口 ≠ 0 → 运行态；净敞口 = 0 且簿为空 → 空仓态；净敞口 = 0 且簿非空 → 锁仓态。</text>
+<text x="40" y="569" font-family="system-ui" font-size="11" fill="#5F5E5A">⑤ 残留同向仓（仅跨会话变更 max_volume 致各笔手数不一致时）→ 仍停在运行态。</text>
+</svg>
