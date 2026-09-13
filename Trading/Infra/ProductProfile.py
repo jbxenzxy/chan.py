@@ -2,7 +2,7 @@
 """
 品种档案（Trading/Infra/ProductProfile.py）
 =====================================
-本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM 期指 + AU/AG/CU 上期所金属）"参数差异**的唯一事实源。
+本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM 期指 + AU/AG/CU 上期所金属 + PTA 郑商所）"参数差异**的唯一事实源。
 
 背景（与周期档案 Infra/PeriodProfile.py 成对出现）
 ----------------------------------------------------
@@ -62,7 +62,7 @@ class ProductProfile:
         return self.product
 
 
-# 7 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU）。
+# 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
 # min_r_points / r_multiple_tp / multiplier / breakeven_buffer_ticks / price_tick 显式给真值；note 标定状态。
 # ⚠️ 手续费（open/close/close_today_fee_rate）**不在此处** —— 它们随 broker 加收变化，
 #   属 InstrumentSpec 配置项，由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
@@ -104,6 +104,18 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
         breakeven_buffer_ticks=3.0, price_tick=10.0,
         note="SHFE 沪铜：乘数 5(元/吨)、tick 10；R 下限 100 元/吨(10 tick)；"
              "平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)；需回测标定"),
+    # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
+    # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
+    #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
+    #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
+    #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
+    "TA": ProductProfile(
+        product="TA", min_r_points=30.0, r_multiple_tp=2.0, multiplier=5.0,
+        breakeven_buffer_ticks=2.0, price_tick=2.0,
+        note="CZCE PTA(精对苯二甲酸)：乘数 5(元/吨)、tick 2；R 下限 30 元/吨(15 tick)；"
+             "郑商所品种报单走 FAK + OPEN 钉 1 手；"
+             "偶发装置/政策消息急拉急跌，假突破多于金属；"
+             "手续费固定值以交易所最新公示为准(InstrumentSpec 配)；需回测标定"),
 }
 
 

@@ -60,6 +60,7 @@ from ..Infra.EventLog import EventLog
 from ..Infra.PeriodProfile import (
     bar_secs_for,
 )
+from ..Infra.ProductProfile import PRODUCT_PROFILES
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
@@ -497,6 +498,24 @@ class TradingEngine(ReconcileMixin):
         self._validate_close_in_flight()
         # D11：恢复未确认告警（severe 落库的目的就是"重启后还在"）
         self._load_alerts()
+        # ════════════════════════════════════════════════════════════════
+        # 品种白名单弹窗（2026-09-13）：品种不在 PRODUCT_PROFILES → severe 弹窗
+        #   告知"不可用"。不阻断启动的理由：回放/测试会用任意代码造合约（硬拦
+        #   会把测试也拦死）；实盘安全性由 A′ fail-closed 闸门兜底（行情参数
+        #   strict 校验不过就不许下单）。但用户必须看到 —— 无档案品种的
+        #   multiplier / price_tick / min_r_points 是 IF 基线或用户手工值，
+        #   拿去实盘，止盈止损与保本缓冲全是错的。
+        #   挂在 _load_alerts 之后：severe 落库 → 重启后弹窗仍在（D11 语义）。
+        # ════════════════════════════════════════════════════════════════
+        if self.cfg.product_profile is None:
+            self.alert(
+                self.ALERT_SEVERE, "unknown_product",
+                "品种 {!r} 不在支持清单（{}）中，合约乘数 / 最小变动价位 / "
+                "R 下限等执行参数不可信，**不可用于实盘**。请更换为支持的品种，"
+                "或在配置中显式补齐 instrument 参数并自行确认正确性。"
+                .format(self.cfg.instrument.signal_symbol,
+                        ", ".join(sorted(PRODUCT_PROFILES))),
+                signal_symbol=str(self.cfg.instrument.signal_symbol))
         # 运行态风控状态（run）：净敞口 ≠ 0 时必须有 run，否则 L1-L3 无从判定。
         self._restore_run()
 
