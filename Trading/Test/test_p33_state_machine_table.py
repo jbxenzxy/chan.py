@@ -463,6 +463,10 @@ with tmp_dir("t7") as tmp:
           None in seen, True)
 
     # 每条转移的 (intent, is_exit) 组合也必须是**固定的**，不能混
+    # ⚠️ Phase 10（D6 平今开关）：转移 ④ 的 intent 不再是常量 ——
+    #   `prefer_lock_over_closetoday=False` + SHFE/INE 时改为 CLOSE_TODAY。
+    #   本引擎用默认 CFFEX 配置（开关缺省 True + 交易所不支持平今）→ 恒走
+    #   OPEN 锁仓，故下列断言仍成立；平今分支由 test_p51 [3c] 单独钉死。
     eng = build_engine(tmp, "t7_cmb")
     eng.on_bar(make_bar(1000))
     combos = {}

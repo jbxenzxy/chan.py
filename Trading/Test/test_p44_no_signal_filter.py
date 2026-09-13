@@ -14,11 +14,34 @@ P44 防回潮：Trading 层不再做任何"信号质量过滤"
 
 跑法：python Trading/Test/test_p44_no_signal_filter.py
 """
+import os
 import sys
 
-from Trading.Infra.Types import Signal, Side, DecisionType
-from Trading.Strategy.Entry import EntryPolicy
-from Trading.Config import EntryConfig
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _locate_tg_root() -> str:
+    d = _HERE
+    for _ in range(5):
+        if os.path.basename(d) == "Trading" and os.path.isfile(
+                os.path.join(d, "__init__.py")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return ""
+
+
+_TG_ROOT = os.environ.get("TRADER_GATEWAY_HOME", "") or _locate_tg_root()
+if not _TG_ROOT:
+    print("✗ 找不到 Trading 包。")
+    raise SystemExit(2)
+sys.path.insert(0, os.path.dirname(_TG_ROOT))
+
+from Trading.Infra.Types import Signal, Side, DecisionType  # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
+from Trading.Config import EntryConfig  # noqa: E402
 
 _PASS, _FAIL = 0, 0
 

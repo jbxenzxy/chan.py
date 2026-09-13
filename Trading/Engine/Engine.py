@@ -996,8 +996,24 @@ class TradingEngine(ReconcileMixin):
         if latest is None:
             return None
         net_side = Side.LONG if net > 0 else Side.SHORT
-        if latest.entry_date >= self._current_trading_day(bar):
-            # 转移 ④：今日仓 → 反向 OPEN（净敞口归零，进入锁仓态）
+        today = self._current_trading_day(bar)
+        if latest.entry_date >= today:
+            # 转移 ④：今日仓 → 默认反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
+            #   D6 平今开关（Phase 10 · §5.4 阻塞点 3）：品种配置
+            #   `prefer_lock_over_closetoday=False` **且**交易所支持平今
+            #   （SHFE/INE，`spec.supports_close_today`）时，改为直接
+            #   CLOSE_TODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态，
+            #   不再进锁仓态（"平今免收/便宜"品种省一次开仓费 + 跨日平仓费）。
+            #   开关缺省（无品种档案）/ 交易所不支持时走锁仓，保守侧。
+            if (not self._prefer_lock_over_closetoday()
+                    and self.spec.supports_close_today):
+                today_target = _oldest([
+                    p for p in self.positions.positions
+                    if p.side is net_side and p.entry_date >= today])
+                if today_target is not None:
+                    return _Action(OrderIntent.CLOSE_TODAY, net_side,
+                                   min(abs(net), today_target.volume),
+                                   today_target, is_exit=True, transition=4)
             return _Action(OrderIntent.OPEN, _opposite(net_side), abs(net),
                            None, is_exit=True, transition=4)
         # 转移 ⑤：跨日仓 → CLOSE（净敞口方向），对冲目标 = 同向最早一笔
@@ -1008,6 +1024,17 @@ class TradingEngine(ReconcileMixin):
         return _Action(OrderIntent.CLOSE, net_side,
                        min(abs(net), target.volume), target,
                        is_exit=True, transition=5)
+
+    def _prefer_lock_over_closetoday(self) -> bool:
+        """D6 平今开关读取（Phase 10）。True = 今仓离场锁仓优先（现状，默认）。
+
+        无品种档案（未知品种，理论上被白名单闸门拒绝启动）→ 取 True，
+        保证"取不到配置 → 走锁仓"的保守侧（宁可多花一次开仓费，不生成平今单）。
+        """
+        profile = self.cfg.product_profile
+        if profile is None:
+            return True
+        return bool(getattr(profile, "prefer_lock_over_closetoday", True))
 
     def _check_spec_drift(self) -> None:
         """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
@@ -1149,17 +1176,30 @@ class TradingEngine(ReconcileMixin):
             if not self._open_time_anchor(sig)[1]:
                 return "no_time_anchor"
             return None
-        # ── CLOSE ──
+        # ── CLOSE / CLOSE_TODAY ──
+        # Phase 10（D6）：CLOSETODAY 仅上期所/上期能源（SHFE/INE）可用，其余
+        # 交易所传平今会直接报错。转移④ 的分支条件已按 `supports_close_today`
+        # 生成动作，这里再兜一道（防未来新增调用点直接构造 CLOSE_TODAY 动作）。
+        if (act.intent is OrderIntent.CLOSE_TODAY
+                and not self.spec.supports_close_today):
+            return "close_today_not_supported"
         if act.target is None:
             return "close_without_target"
         if not act.target.entry_date:
             return "close_target_no_entry_date"
-        # ★ 全交易所安全性硬约束（契约测试 p35）：CLOSE 的目标必须是跨日仓。
-        #   中金所没有平今指令，对今仓发 CLOSE 会被当平昨处理并按平今收费
-        #   （0.0345%，是平昨的 15 倍）；上期所 / 能源中心则需要 CLOSETODAY。
+        # ★ 全交易所安全性硬约束（契约测试 p35 / p51）：CLOSE 与 CLOSE_TODAY
+        #   的目标日期必须与意图匹配 ——
+        #   对今仓发 CLOSE：中金所没有平今指令，会被当平昨处理并按平今费率收费
+        #     （0.0345%，是平昨的 15 倍）；上期所/能源中心则需要 CLOSETODAY。
+        #   对昨仓发 CLOSE_TODAY：今仓不足 → 柜台拒单（平今仓位不足），
+        #     且簿面按今仓记账会与实盘错位。
         #   规则 ⑷⑸⑹⑺ 保证正常路径不会产生这种报单，这里是最后一道闸。
-        if act.target.entry_date >= today:
-            return "close_target_is_today"
+        if act.intent is OrderIntent.CLOSE_TODAY:
+            if act.target.entry_date < today:
+                return "close_today_target_is_yesterday"
+        else:
+            if act.target.entry_date >= today:
+                return "close_target_is_today"
         if act.volume > act.target.volume:
             return "close_volume_exceeds_target"
         # 2026-09-12 补（对称）：`act.volume < target.volume` 同样是账实不符 ——

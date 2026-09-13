@@ -50,8 +50,8 @@ def build_broker(name: str, spec: InstrumentSpec,
 
 
 # intent → CTP OpenCloseType 的权威表
-# 只有两项（需求 ⑵）：开仓 → OPEN，平仓 → CLOSE。**本表不参与方向决策** ——
-# 买还是卖由调用方给的 `side` 决定。
+# 三个值（需求 ⑵ + Phase 10 D6）：开仓 → OPEN，平昨 → CLOSE，平今 → CLOSETODAY。
+# **本表不参与方向决策** —— 买还是卖由调用方给的 `side` 决定。
 #
 # tqsdk 白名单硬校验（api.py:1353 / lib/utils.py:39 / scenario/tqscenario.py:445）：
 #   offset ∈ ("OPEN", "CLOSE", "CLOSETODAY")，其它值**直接 raise**（不是 CTP 拒单，
@@ -60,12 +60,15 @@ def build_broker(name: str, spec: InstrumentSpec,
 #   实盘 insert_order 本地抛异常 → 跨日解锁 100% 失败。
 #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
 #
-# A4（二期预留）：保持 dict 形态，便于二期加入 "CLOSETODAY"（仅上期所/能源中心可用）。
-#   一期**不要加** —— 本系统的 CLOSE 恒作用于跨日仓（断言在 Engine._pre_trade_check），
-#   加了只是给"今日单走平今"开出口子，而中金所平今费率是平昨的 15 倍。
+# CLOSETODAY 的可用边界（A4 → Phase 10 落地）：**仅上期所（SHFE）/ 上期能源（INE）**
+# 有平今指令，其余四家（含中金所）传 CLOSETODAY 会直接报错 —— 引擎侧由
+# `InstrumentSpec.supports_close_today` 守卫（转移④ 的分支条件 + _pre_trade_check 校验链）。
+# 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 落地品种开关
+# `prefer_lock_over_closetoday`（默认 True = 锁仓优先）后按需启用第三项。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
-    OrderIntent.OPEN: "OPEN",      # 买开 / 卖开
-    OrderIntent.CLOSE: "CLOSE",    # 买平 / 卖平；中金所下恒为平昨（无平今分支）
+    OrderIntent.OPEN: "OPEN",              # 买开 / 卖开；④ 反向开仓锁仓也走它
+    OrderIntent.CLOSE: "CLOSE",            # 买平 / 卖平；恒作用于跨日仓（平昨）
+    OrderIntent.CLOSE_TODAY: "CLOSETODAY", # 平今；仅 SHFE/INE，目标恒为今仓
 }
 
 

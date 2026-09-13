@@ -244,6 +244,20 @@ class InstrumentSpec(BaseModel):
             return "FAK"
         return self.order_advanced
 
+    @property
+    def supports_close_today(self) -> bool:
+        """本品种所在交易所是否支持**平今指令**（CLOSETODAY offset）。
+
+        Phase 10（D6 · 2026-09-14）：六家交易所里**只有上期所（SHFE）与
+        上期能源（INE）**有 CLOSETODAY 平今指令，其余四家（CFFEX/DCE/CZCE/GFEX）
+        传平今会直接报错。`prefer_lock_over_closetoday=False` 的平今分支
+        以本属性为唯一守卫（转移④ + _pre_trade_check 双处消费）。
+
+        exchange 可能为 ""（离线配置未填充 / Phase 8 之前）→ 一律 False，
+        保守侧：宁可继续锁仓，也不生成一张会被拒的平今单。
+        """
+        return str(self.exchange or "").upper() in ("SHFE", "INE")
+
 
 def derive_exchange(symbol: str) -> str:
     """从合约/主连 symbol 推导交易所代码（Phase 8.1 · O-1）。

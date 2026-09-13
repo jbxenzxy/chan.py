@@ -21,8 +21,13 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
          若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
        修正（2026-09-10 用户拍板）：**删除今/昨仓分支**（原 `_close_offset`）。
          规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
-         "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，
-         CLOSETODAY 在代码中**不可达** —— 留着只会误导后来人以为今日单可能走平今。
+         "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨。
+        Phase 10（D6 平今开关，2026-09-14）：CLOSETODAY **不再是不可达** ——
+         品种配置 `prefer_lock_over_closetoday=False` **且**交易所支持平今
+         （SHFE/INE，`spec.supports_close_today`）时，转移 ④ 生成
+         CLOSE_TODAY 意图（offset=CLOSETODAY，目标恒为今仓）。本文件的
+         CLOSE 恒平昨断言不受影响（引擎 _pre_trade_check 保证两意图各司其职），
+         新增 CLOSE_TODAY 的报单断言见 [6]。
 
     B. 离场方式判定改为按日期（规则 ⑸ 落地，原按 origin 联动）
        `Engine._exit_intent(pos, today)`：
@@ -201,11 +206,13 @@ check("所有实发 offset ∈ ('OPEN','CLOSE','CLOSETODAY')",
       all(x in _TQSDK_OFFSETS for x in _emitted), True)
 check("INTENT_TO_OFFSET 全表 ∈ 白名单",
       all(v in _TQSDK_OFFSETS for v in INTENT_TO_OFFSET.values()), True)
-check("INTENT_TO_OFFSET 恰为二值 {OPEN:'OPEN', CLOSE:'CLOSE'}（四值已收敛）",
+check("INTENT_TO_OFFSET 恰为三值 {OPEN, CLOSE, CLOSETODAY}（四值已收敛 + Phase 10 平今）",
       {k.value: v for k, v in INTENT_TO_OFFSET.items()},
-      {"open": "OPEN", "close": "CLOSE"})
+      {"open": "OPEN", "close": "CLOSE", "close_today": "CLOSETODAY"})
 check("CLOSE 映射 = CLOSE（不再是 CLOSEANY / CLOSETODAY / CLOSEYESTERDAY）",
       INTENT_TO_OFFSET[OrderIntent.CLOSE], "CLOSE")
+check("CLOSE_TODAY 映射 = CLOSETODAY（Phase 10，仅 SHFE/INE 消费）",
+      INTENT_TO_OFFSET[OrderIntent.CLOSE_TODAY], "CLOSETODAY")
 
 
 print("\n[4] 场景 Y 关键回归：跨日单（昨仓）离场不得发平今")
@@ -317,6 +324,29 @@ with_tmp(_latest_wins_case)
 check("旧方法已不存在（_exit_intent / _close_positions）",
       (hasattr(TradingEngine, "_exit_intent"),
        hasattr(TradingEngine, "_close_positions")), (False, False))
+
+
+print("\n[6] Phase 10：CLOSE_TODAY 平今报单（目标恒为今仓，P0 判据 = 今仓）")
+api6 = MockApi(pos=MockPos())          # MockPos: pos_long_today=2, pos_long_his=2
+b6 = make_broker(api=api6, params=_FAST)
+b6.submit(OrderIntent.CLOSE_TODAY, Side.LONG, 1, 4550.0, "k-close-today",
+          is_exit=True)
+check("[6a] CLOSE_TODAY 报单已发出", len(api6.inserted) >= 1, True)
+check("[6b] offset = CLOSETODAY（平今）",
+      api6.inserted[0]["offset"], "CLOSETODAY")
+check("[6c] direction = SELL（平多）", api6.inserted[0]["direction"], "SELL")
+check("[6d] advanced = FOK", api6.inserted[0]["advanced"], "FOK")
+
+# 今仓不足、昨仓充足 → 平今 P0 判据（仅今仓）必须挡住（放行就是平今被拒的预演）
+api7 = MockApi(pos=MockPos())
+api7._pos = type("PosToday0", (), {"pos_long_today": 0, "pos_long_his": 5,
+                                   "pos_short_today": 0, "pos_short_his": 0})()
+b7 = make_broker(api=api7, params=dict(_FAST, position_ok_timeout=0.05))
+o7 = b7.submit(OrderIntent.CLOSE_TODAY, Side.LONG, 1, 4550.0, "k-ct-p0",
+               is_exit=True)
+check("[6e] 只有昨仓、今仓 0 → 平今被 P0 拦截（REJECT_POSITION，不下单）",
+      (o7.status, o7.meta.get("reject_class")), ("rejected", "position"))
+check("[6f] 今仓不足时确实没有发出任何报单", len(api7.inserted), 0)
 
 print("\n" + "=" * 60)
 print("P24 结果: {} passed, {} failed".format(_PASS, _FAIL))

@@ -53,6 +53,12 @@ class ProductProfile:
       min_r_points             R 下限（点数），防极端横盘+极窄分型
       breakeven_buffer_ticks    保本位缓冲 tick（覆盖往返手续费+滑点，真正"不亏钱"）
       r_multiple_tp            止盈盈亏比（r_multiple_tp × R）
+      prefer_lock_over_closetoday  D6 平今开关（Phase 10，默认 True = 锁仓优先）。
+                               True：今仓离场走转移 ④ 反向开仓锁仓（现状）；
+                               False：今仓离场直接平今（offset=CLOSETODAY），
+                               仅当交易所支持平今（SHFE/INE）时生效 ——
+                               "平今免收/平今便宜"的品种（如沪金 AU、部分农产品、
+                               原油 SC）关掉锁仓可省一次开仓费 + 一次跨日平仓费。
       【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
       price_tick               最小变动价位 —— Phase 8（D20）新增，**仅作离线模式
                                （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
@@ -68,6 +74,7 @@ class ProductProfile:
     multiplier: float
     breakeven_buffer_ticks: float = 2.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
     price_tick: float = 0.2                # 最小变动价位（离线兜底；中金所四品种均 0.2）
+    prefer_lock_over_closetoday: bool = True   # D6 平今开关（Phase 10）：默认锁仓优先
     note: str = ""                              # 调参记录 / 数据来源 / 标定状态
 
     @property
@@ -119,19 +126,24 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
     "AU": ProductProfile(
         product="AU", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        prefer_lock_over_closetoday=False,   # Phase 10（D6）：沪金平今免收 → 今仓离场直接平今
         price_tick=0.02, multiplier=1000.0,
         note="上期所 SHFE 沪金：R 下限暂用默认 3 点(待经验积累后手工调)；趋势强、盈亏比可上探 1:3；"
-             "乘数 1000(元/克)、tick 0.02；平今免收(手续费 InstrumentSpec 配)"),
+             "乘数 1000(元/克)、tick 0.02；平今免收(手续费 InstrumentSpec 配)；"
+             "prefer_lock_over_closetoday=False(平今免收→今仓直接平今，不走锁仓)"),
     "AG": ProductProfile(
         product="AG", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        prefer_lock_over_closetoday=False,   # Phase 10（D6）：沪银平今=平昨费率 → 平今不贵于锁仓
         price_tick=1.0, multiplier=15.0,
         note="上期所 SHFE 沪银：R 下限暂用默认 3 点(待经验积累后手工调)；"
-             "乘数 15(元/kg)、tick 1；开平昨/平今均万0.5(手续费 InstrumentSpec 配)"),
+             "乘数 15(元/kg)、tick 1；开平昨/平今均万0.5(手续费 InstrumentSpec 配)；"
+             "prefer_lock_over_closetoday=False(平今不贵→今仓直接平今，省一次开仓+跨日平)"),
     "CU": ProductProfile(
         product="CU", min_r_points=3.0, breakeven_buffer_ticks=3.0, r_multiple_tp=2.0,
         price_tick=10.0, multiplier=5.0,
         note="上期所 SHFE 沪铜：R 下限暂用默认 3 点(待经验积累后手工调)；"
-             "乘数 5(元/吨)、tick 10；平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)"),
+             "乘数 5(元/吨)、tick 10；平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)；"
+             "平今=锁仓后再平昨的总费、不占便宜 → prefer_lock_over_closetoday 保持默认 True"),
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
