@@ -12,6 +12,9 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
     ⑥ ProductProfile 品种档案：随品种参数覆盖（min_r_points / r_multiple_tp / multiplier）
+    ⑦ 品种档案注入的双档语义（B-3 修复锚点）：初始加载 user-explicit-wins
+      （用户显式写的字段不被档案覆盖）、--symbol 换品种 force=True 整块覆盖
+      （含用户显式值 —— 换品种后旧品种参数必须让位）
 
 跑法：python test_period_profile.py
 """
@@ -125,6 +128,37 @@ def main():
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
     check("未知品种 product_profile=None", c_unk.product_profile, None)
     check("未知品种 min_r_points 保默认 3.0", c_unk.exit_params.min_r_points, 3.0)
+
+    print("\n[7] 品种档案注入双档语义（B-3 锚点：初始 user-explicit-wins / 换品种 force 覆盖）")
+    # (a) 初始加载：用户在配置里**显式写**的字段不被档案覆盖（写错了也是用户的决定，
+    #     实盘还有 SimNow 行情回填 + fail-closed 闸门兜底）；未显式写的字段照常注入。
+    c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC", "multiplier": 999.0},
+                          exit_params={"min_r_points": 7.0})
+    check("显式 multiplier=999 初始加载不被档案覆盖", c_exp.instrument.multiplier, 999.0)
+    check("显式 min_r_points=7.0 初始加载不被档案覆盖", c_exp.exit_params.min_r_points, 7.0)
+    check("未显式的 r_multiple_tp 照常注入 IC 档案值 3.0", c_exp.exit_params.r_multiple_tp, 3.0)
+    check("未显式的 breakeven_buffer_ticks 照常注入 IC 档案值 3.0",
+          c_exp.exit_params.breakeven_buffer_ticks, 3.0)
+
+    # (b) --symbol 换品种重载（main.py: apply_product_profile）：品种已切换，
+    #     档案是新品种的权威真值，整块覆盖 —— **含用户显式值**，否则沿用旧品种的
+    #     multiplier/price_tick 会造成限价口径漂移。
+    #     ⚠️ 这里必须绕过 model_fields_set 守护：初始注入已把字段写进 fields_set，
+    #     若按 (a) 的规则跳过，换品种后旧品种的值会残留。
+    c_exp.instrument.signal_symbol = "KQ.m@CFFEX.IF"
+    c_exp.apply_product_profile()
+    check("换品种 force 后 multiplier 覆盖为 IF 档案 300.0", c_exp.instrument.multiplier, 300.0)
+    check("换品种 force 后 min_r_points 覆盖为 IF 档案 3.0", c_exp.exit_params.min_r_points, 3.0)
+    check("换品种 force 后 r_multiple_tp 覆盖为 IF 档案 2.0", c_exp.exit_params.r_multiple_tp, 2.0)
+    check("换品种 force 后 breakeven_buffer_ticks 覆盖为 IF 档案 2.0",
+          c_exp.exit_params.breakeven_buffer_ticks, 2.0)
+
+    # (c) 换品种后 price_tick 回档案值：显式 0.5 在初始加载存活、被 force 覆盖回 0.2
+    c_tick = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF", "price_tick": 0.5})
+    check("显式 price_tick=0.5 初始加载不被档案覆盖", c_tick.instrument.price_tick, 0.5)
+    c_tick.instrument.signal_symbol = "KQ.m@CFFEX.IM"
+    c_tick.apply_product_profile()
+    check("换品种 force 后 price_tick 回档案值 0.2", c_tick.instrument.price_tick, 0.2)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
