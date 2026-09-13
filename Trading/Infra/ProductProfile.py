@@ -2,7 +2,7 @@
 """
 品种档案（Trading/Infra/ProductProfile.py）
 =====================================
-本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM）"参数差异**的唯一事实源。
+本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM 期指 + AU/AG/CU 上期所金属）"参数差异**的唯一事实源。
 
 背景（与周期档案 Infra/PeriodProfile.py 成对出现）
 ----------------------------------------------------
@@ -62,8 +62,10 @@ class ProductProfile:
         return self.product
 
 
-# 4 个品种的档案（中金所股指期货：IF/IH 一组、IC/IM 一组）。
+# 7 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU）。
 # min_r_points / r_multiple_tp / multiplier / breakeven_buffer_ticks / price_tick 显式给真值；note 标定状态。
+# ⚠️ 手续费（open/close/close_today_fee_rate）**不在此处** —— 它们随 broker 加收变化，
+#   属 InstrumentSpec 配置项，由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
 PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     "IF": ProductProfile(
         product="IF", min_r_points=3.0, r_multiple_tp=2.0, multiplier=300.0,
@@ -81,6 +83,27 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
         product="IM", min_r_points=5.0, r_multiple_tp=3.0, multiplier=200.0,
         breakeven_buffer_ticks=3.0, price_tick=0.2,
         note="IC/IM 调整：波动较大，R 下限 5.0 点、盈亏比 1:3、乘数 200 元/点、保本缓冲 3 tick"),
+    # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
+    # min_r_points 是 R 下限地板，单位 = 品种价格单位（元/克·元/kg·元/吨），**不是指数点**；
+    #   按各品种 price_tick 量级给 ~10~25 tick 地板，防极端横盘+极窄分型把 R 压到无意义。
+    #   下列 R 下限 / 盈亏比 / 保本缓冲为**起始标定值，需回测确认**（参照 IF/IH/IC/IM 同款 note 惯例）。
+    #   手续费（open/close/close_today_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
+    #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
+    "AU": ProductProfile(
+        product="AU", min_r_points=0.5, r_multiple_tp=2.0, multiplier=1000.0,
+        breakeven_buffer_ticks=2.0, price_tick=0.02,
+        note="SHFE 沪金：乘数 1000(元/克)、tick 0.02；R 下限 0.5 元/克(25 tick)；"
+             "趋势强、盈亏比可上探 1:3；平今免收(手续费 InstrumentSpec 配)；需回测标定"),
+    "AG": ProductProfile(
+        product="AG", min_r_points=20.0, r_multiple_tp=2.0, multiplier=15.0,
+        breakeven_buffer_ticks=2.0, price_tick=1.0,
+        note="SHFE 沪银：乘数 15(元/kg)、tick 1；R 下限 20 元/kg(20 tick)；"
+             "开平昨/平今均万0.5(手续费 InstrumentSpec 配)；需回测标定"),
+    "CU": ProductProfile(
+        product="CU", min_r_points=100.0, r_multiple_tp=2.0, multiplier=5.0,
+        breakeven_buffer_ticks=3.0, price_tick=10.0,
+        note="SHFE 沪铜：乘数 5(元/吨)、tick 10；R 下限 100 元/吨(10 tick)；"
+             "平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)；需回测标定"),
 }
 
 

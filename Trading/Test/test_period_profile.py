@@ -106,7 +106,7 @@ def main():
     check("30m profile.bar_secs=1800", c2.period_profile.bar_secs, 1800)
 
     print("\n[6] ProductProfile 品种档案：随品种参数影子覆盖（2026-09-09）")
-    check("PRODUCT_PROFILES 仍是 4 品种", len(PRODUCT_PROFILES), 4)
+    check("PRODUCT_PROFILES 已是 7 品种（期指 4 + 上期所金属 3）", len(PRODUCT_PROFILES), 7)
     check("parse KQ.m@CFFEX.IF → IF", parse_product("KQ.m@CFFEX.IF"), "IF")
     check("parse KQ.m@CFFEX.IC → IC", parse_product("KQ.m@CFFEX.IC"), "IC")
     check("parse 无点串 → ''", parse_product("IF2609"), "")
