@@ -30,6 +30,17 @@ P43 一期审计修复回归（契约测试，2026-09-12）
       —— 前端 `app.js:7458-7459` 读这两个字段拼 tooltip（本段风控锚/止损/止盈、
          平仓冷却剩余），而 API 链路走的是本函数，不返回就是永久死数据。
 
+  [6] 已删符号不得有任何「活引用」（AST 级）
+      —— 一期漏改的形态就是"代码删了符号、某个角落还在引用它"，语法上不报错、
+         文本 grep 又分不清注释与求值，只有真执行到那一行才炸。
+
+  [7] 建锚失败只报一条告警（2026-09-13 新增）
+      —— `_run_start` 拿不到信号时写事件 + 发 `run_start_incomplete` 后 return，
+         `_run_side` 仍是 None；紧接着的 `_sync_state → _check_run_anchor` 看到
+         "净敞口 ≠ 0 且无锚"又发一条 `run_missing_anchor`。同一根因两个 code，
+         D11 队列按 code 合并 → 用户连看两个弹窗。修法是 incomplete 分支置上
+         通知锁（首条已说清成因，自检不必重复喊）。
+
 跑法：python Trading/Test/test_p43_audit_fixes.py
 """
 from __future__ import annotations
@@ -409,6 +420,35 @@ _hit3 += [n.id for n in ast.walk(_quiet)
           if isinstance(n, ast.Name) and n.id in _DEAD_NAMES]
 check("[6d] 注释 / 字符串常量不误伤（避免 p26 的解释性注释被标红）",
       _hit3, [])
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[7] 「建锚失败」只报一条告警（run_start_incomplete 不叠加 run_missing_anchor）")
+# ════════════════════════════════════════════════════════════════
+# 背景：`_run_start` 拿不到信号（sig is None）时会走 incomplete 分支，写事件 +
+# 发 severe 告警 `run_start_incomplete` 后 return —— 此时 `_run_side` 仍是 None。
+# 紧接着的 `_sync_state()` 会调 `_check_run_anchor`，它看到"净敞口 ≠ 0 且无 run"
+# 又发一条 severe `run_missing_anchor`。
+# 同一根因、两个 code：D11 队列按 code 合并 → 用户连着看到两个弹窗，且两条文案
+# 说的是同一件事。2026-09-13 修法：`_run_start` 的 incomplete 分支置上通知锁
+# `_run_missing_notified`，自检不再重复喊（首条已把成因说清楚）。
+with tmp_dir("dupalert") as tmp:
+    spec = InstrumentSpec()
+    eng, _ = build(tmp, DryRunBroker(spec, {"sim_equity": 1_000_000.0}))
+    eng.on_bar(bar(1000, D1 + " 09:40", P0))
+    eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
+    check("[7a] 开仓后 RUNNING 且有 run", eng._run_view() is not None, True)
+    # 人为制造"净敞口非 0 但建锚时缺信号"的形态（= _run_start 的 incomplete 分支）
+    eng._run_end()
+    eng._run_start(P0, eng.last_bar, None)
+    eng._sync_state()
+    codes = sorted({a["code"] for a in eng.auto_order_status()["alerts"]})
+    check_true("[7b] 写了 run_start_incomplete 事件",
+               ev_count(eng, "run_start_incomplete") >= 1)
+    check("[7c] ★ 告警 code 集合只含 run_start_incomplete（不叠加 run_missing_anchor）",
+          [c for c in codes if "run_" in c], ["run_start_incomplete"])
+    check("[7d] 通知锁已置上（后续自检不重复刷屏）",
+          eng._run_missing_notified, True)
 
 
 print("\n" + "=" * 60)

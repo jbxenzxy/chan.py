@@ -1216,6 +1216,11 @@ class TradingEngine(ReconcileMixin):
                 "净敞口已为 {:+} 手，但本段运行没有建立风控锚（缺成交价/信号），"
                 "L1-L3 止盈止损对本段失效。请人工盯盘或手工处理。".format(net),
                 net=net)
+            # 2026-09-13：置上通知锁，否则同一次异常会被 `_sync_state` 里的
+            # `_check_run_anchor` 再报一条 `run_missing_anchor` —— 同一根因、
+            # 两个 code，用户看到两个弹窗（D11 队列按 code 合并，两条都会弹）。
+            # 本条已经把成因说清楚了，后续自检不必重复喊。见 test_p43 [7]。
+            self._run_missing_notified = True
             return
         side = Side.LONG if net > 0 else Side.SHORT
         plan = self.exit_policy.plan(sig, anchor_price, self.spec,
