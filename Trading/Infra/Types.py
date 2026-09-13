@@ -330,7 +330,7 @@ class Order:
 
 @dataclass
 class ExitPlan:
-    """出场计划。由 ExitPolicy.plan() 生成，随持仓持久化。
+    """出场计划。由 LayeredExitPolicy.plan() 生成，随持仓持久化。
 
     params 会原样落盘——将来做参数敏感性分析时，
     只看事件日志就能知道"这一笔当时用的是哪套止盈止损"。

@@ -360,7 +360,7 @@ print("\n[6] 已删符号不得有任何「活引用」（AST 级，2026-09-13 �
 #   字符串常量、注释、docstring 一律不算（它们本就不参与求值）。
 #
 # 2026-09-13 补：`DefaultEntryPolicy`（→ `EntryPolicy`）与 `ExitPolicy`（已删）
-#   也纳入。本轮把 `DefaultEntryPolicy` 改名后**漏改了 21 个文件 / 48 处活引用**
+#   也纳入。本轮把 `DefaultEntryPolicy` 改名后**漏改了 23 个文件 / 48 处活引用**
 #   （含生产入口 `Trading/main.py`），全套 42 项里 23 项直接 ImportError；
 #   而本护栏当时只覆盖 LOCK/UNLOCK/PositionOrigin/ExitMode，**恰好没覆盖本轮
 #   改动的那个符号** —— 加进来才能在下一次改名时立刻报警，而不是等跑测试。

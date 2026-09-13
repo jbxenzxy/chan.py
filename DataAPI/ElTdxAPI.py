@@ -11,7 +11,7 @@ eltdx 数据源适配器（通达信网络行情客户端封装）。
   4. 股东增减持计划——7615 F10/TQLEX HTTP 网关（按代码查询）；
   5. 板块文件下载 / 刷新——0x06B9 通用文件读取。
 PE 单位：倍；流通市值单位：亿元。「按市场 / 标的类型选源」是业务编排规则，
-收口在 App 层（App/AppRefresh.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
+收口在 App 层（App/AppEngine.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
 
 职责：为使用方提供统一、标准化的 eltdx 取数入口。App 层不直接依赖本模块的
 统计取数；本模块是 TdxAPI 前复权流水线与 App 层 PE-TTM 取数共同依赖的
@@ -367,11 +367,11 @@ def download_block_files_via_eltdx(file_names, hosts=None, on_file=None):
 # 行情统计：PE-TTM / 流通市值（仅 A 股；eltdx 无港股通道）
 # ============================================================
 # 两个取数函数与 DataAPI/TxAPI.py 的对应函数**契约一致**，使
-# App 层（AppRefresh._fetch_pe_ttm_live）能按标的类型选源后互换调用：
+# App 层（AppEngine._fetch_pe_ttm_live）能按标的类型选源后互换调用：
 #   - fetch_pe_ttm_single(market, code) → {mkt+code: PE-TTM(倍)}（7615 HTTP 单只）
 #   - fetch_float_mc(stock_list)        → {code: 流通市值(亿元)}
 #
-# 选源规则（唯一一份）在 App/AppRefresh.py：A 股个股 → 本模块；指数 / 港股 → TxAPI。
+# 选源规则（唯一一份）在 App/AppEngine.py：A 股个股 → 本模块；指数 / 港股 → TxAPI。
 # 港股不在本模块服务范围：eltdx 的 codes.all("hk") / 0x054c 对 hk 均不可用。
 ELTDX_MARKETS = ("sh", "sz", "bj")
 
@@ -492,7 +492,7 @@ def fetch_pe_ttm_single(market, code):
     """eltdx **单只查询** **A 股** PE-TTM（滚动市盈率），返回 {mkt+code: float}。
 
     market: 'sh'/'sz'/'bj'；其余市场（如 hk）直接忽略——返回 {}，选源见
-    App/AppRefresh.py。
+    App/AppEngine.py。
     数据源：7615 F10 / TQLEX HTTP 网关 `F10Client.valuation`（Entry=
     HQServ.hq_nlp_gpsj，ReqId=200191 估值表，**按代码单只查询**）——与股东
     增减持同类：打开一只股票时取一次，**不做全量拉取、不落盘**（2026-09
@@ -500,7 +500,7 @@ def fetch_pe_ttm_single(market, code):
     fetch_pe_ttm / fetch_pe_ttm_all 批量取数）。
     网络层：eltdx >= 3.2.0 官方 F10Client（IPv4-first）；重试 1 次 + 连续
     失败 3 次熔断 10 分钟（与股东增减持同策略）。
-    取数失败**抛异常**（由 AppRefresh / AppData 显著上报，不静默返回 {} ——
+    取数失败**抛异常**（由 AppData 记 error 显著上报，不静默返回 {} ——
     「取数失败」与「该票无 PE」必须可区分）。
     """
     market = (market or "").lower()
