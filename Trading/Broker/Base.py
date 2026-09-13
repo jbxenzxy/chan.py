@@ -29,7 +29,7 @@ broker 需要知道的事。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, List, Optional, Type
 
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Order, OrderIntent, Side
@@ -158,6 +158,36 @@ class Broker(ABC):
     #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
     #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
     is_offline: bool = False
+
+    # ── Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker → Engine 告警回流 ──
+    # broker 侧的 instrument 故障（行情超时 / nan / 与配置不一致）原来只写
+    # logging，D11 前端完全看不到。现在 broker 用 notify() 暂存进本队列，
+    # Engine 每根 bar 调 drain_alerts() 取走并转手 Engine.alert（D11 通道）。
+    # 类属性声明 + 惰性实例化：子类（含测试里 __new__ 手工装配的）不必调 super().__init__。
+    _pending_alerts: Optional[List[Dict[str, Any]]] = None
+
+    def notify(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
+        """broker 侧告警入队（Phase 8.1 · §5.9.4 项 5 "Broker → Engine.alert()"）。
+
+        level/code 语义与 Engine.alert 对齐（"warn"/"severe"）；extra 透传
+        （field / quote / cfg 等诊断字段）。返回入队的 dict（便于测试断言）。
+        """
+        if self._pending_alerts is None:
+            self._pending_alerts = []
+        alert: Dict[str, Any] = {"level": level, "code": code, "msg": msg,
+                                 "broker": self.name}
+        if extra:
+            alert.update(extra)
+        self._pending_alerts.append(alert)
+        return alert
+
+    def drain_alerts(self) -> List[Dict[str, Any]]:
+        """取走全部暂存告警并清空队列（Engine 每根 bar 调用一次）。"""
+        if not self._pending_alerts:
+            return []
+        out, self._pending_alerts = self._pending_alerts, []
+        return out
+
 
     def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
         self.spec = spec

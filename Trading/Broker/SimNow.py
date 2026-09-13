@@ -79,7 +79,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import InstrumentSpec, derive_exchange
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
                    Broker, classify_ctp_reject, register_broker)
@@ -622,12 +622,16 @@ class SimNowBroker(Broker):
             # 必须订阅**真实月份合约**，不是主连 KQ.m@… —— 主连是虚拟合约，
             # 静态字段（tick / 乘数 / 涨跌停）多为 nan（§5.9.3 校验清单第 2 条）。
             q = self._api.get_quote(self._trade_symbol)
+            # Phase 8.1（B-2）：参数就绪等待用**独立超时** instrument_fetch_timeout
+            # （默认 30s）—— 主连映射通常 <1s，而真实月份合约的静态字段在非交易
+            # 时段可能 10~30s 才推齐，两者期望不同，不该共用一把 underlying_map_timeout。
             ready = self._wait(_quote_params_ready(q, self._trade_symbol),
-                               timeout_s=self._timing("underlying_map_timeout"))
+                               timeout_s=self._timing("instrument_fetch_timeout"))
             if not ready:
                 self._instrument_warn(
                     "合约参数未在超时内就绪（tick/乘数/涨跌停含 nan）→ fail-closed，"
-                    "拒单直至取到（pulse 每根 bar 重试）")
+                    "拒单直至取到（pulse 每根 bar 重试）",
+                    code="instrument_quote_timeout", symbol=self._trade_symbol)
                 return
             old = {f: float(getattr(self.spec, f)) for f in
                    ("price_tick", "multiplier", "upper_limit", "lower_limit")}
@@ -635,6 +639,12 @@ class SimNowBroker(Broker):
             self.spec.instrument_verified = True
             self.spec.instrument_source = self.spec.SOURCE_QUOTE
             self._instrument_frozen = True
+            # Phase 8.1（O-1）：exchange 从真实合约 symbol 前缀推导填充
+            # （"CFFEX.IF2609" → "CFFEX"）。Phase 9（FOK/FAK 切换）正式消费，
+            # Phase 8 只填充不分支 —— 兑现 InstrumentSpec.exchange 字段注释的承诺。
+            ex = derive_exchange(self._trade_symbol)
+            if ex:
+                self.spec.exchange = ex
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
                 log.info("合约参数已从行情覆盖并冻结: %s", ", ".join(changed))
@@ -646,15 +656,29 @@ class SimNowBroker(Broker):
                 if abs(old[f] - float(getattr(self.spec, f))) > 1e-12 and old[f] > 0:
                     self._instrument_warn(
                         "行情值与配置不一致: {} 行情={!r} 配置={!r} —— 以行情值为准"
-                        .format(f, getattr(self.spec, f), old[f]))
+                        .format(f, getattr(self.spec, f), old[f]),
+                        code="instrument_spec_conflict", field=f,
+                        quote=float(getattr(self.spec, f)), cfg=old[f])
         except ValueError as e:
-            self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e))
+            self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e),
+                                  code="instrument_spec_invalid")
         except Exception as e:
             self._instrument_warn(
-                "合约参数获取异常: {}: {} → fail-closed，拒单直至取到".format(type(e).__name__, e))
+                "合约参数获取异常: {}: {} → fail-closed，拒单直至取到".format(type(e).__name__, e),
+                code="instrument_quote_error", err=type(e).__name__)
 
-    def _instrument_warn(self, msg: str) -> None:
+    def _instrument_warn(self, msg: str, code: str = "instrument_spec",
+                         **extra) -> None:
+        """instrument 故障**双通道**（Phase 8.1 · O-2/O-3，§5.9.4 项 5）：
+        logging 给运维日志；notify() 暂存 broker 告警队列，由 Engine 每根 bar
+        `_drain_broker_alerts()` 转手 `Engine.alert`（D11 前端可见）。
+        code 用于 D11 侧同因合并计数：timeout / invalid / conflict / error 四档。
+        """
         logging.getLogger("tg.brokers.simnow").warning("[instrument] %s", msg)
+        try:
+            self.notify("warn", code, msg, **extra)
+        except Exception:
+            pass  # 告警回流失败不影响主流程（闸门语义不依赖它）
 
     def _price_out_of_band(self, limit: Optional[float]) -> Optional[str]:
         """涨跌停护栏（§5.9.4 项 6 · 阻塞点 5）：最终限价必须落在当日涨跌停区间内。
@@ -668,8 +692,14 @@ class SimNowBroker(Broker):
         if lo <= 0 or hi <= 0 or hi <= lo or limit is None:
             return None
         p = float(limit)
-        if math.isnan(p):
-            return None                          # NaN 限价由下游既有路径兜底
+        if not math.isfinite(p):
+            # Phase 8.1（B-1）：nan / inf 统一 fail-closed —— §5.9.3 校验清单第 1 条
+            # "math.isfinite(v) and v > 0" 是 A′ 全路径守则，band 护栏是"用路径"
+            # 的最后一道闸，不例外（原版 nan 放行是 fail-open 隐患：下游
+            # round_price 会在 math.ceil(nan) 上抛 ValueError，等于把可预判的
+            # 异常漏到报单时刻）。
+            return ("price_invalid: 限价 {!r} 非法（要求 isfinite）—— "
+                    "本地拒单，未发往柜台".format(p))
         if p < lo or p > hi:
             return ("price_out_of_limit: 限价 {!r} 超出当日涨跌停区间 [{!r}, {!r}] "
                     "—— 本地拒单，未发往柜台".format(p, lo, hi))

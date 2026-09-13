@@ -37,6 +37,7 @@ from Trading.Strategy import (EntryPolicy,          # noqa: E402
 from Trading.Config import TradingConfig                         # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
+from Trading.Infra.InstrumentSpec import derive_exchange          # noqa: E402  Phase 8.1 (O-1)
 from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS, SESSION_SECS,  # noqa: E402
                                         bar_secs_for, bars_per_day)
 from Trading.Infra.Store import Store                           # noqa: E402
@@ -128,12 +129,28 @@ def build_runtime(args):
     broker = Broker.build_broker(args.broker or cfg.broker, spec,
                                  cfg.broker_params.model_dump())
 
+    # Phase 8.1（O-4 收窄）：off 只对离线生效 —— 在线通道配 off 时**启动期**
+    # 就明确告知（原版静默，运维要等第一笔报单被闸门拒了才从告警反推原因）。
+    # 不在此处阻断：闸门（Engine._pre_trade_check）本身会拒单 + 严重告警兜底，
+    # 这里只负责"让原因在启动日志里第一屏可见"。只打一次，不会刷屏。
+    if (str(cfg.broker_params.instrument_fetch_policy).strip().lower() == "off"
+            and not getattr(broker, "is_offline", False)):
+        print("[gw] ⚠ instrument_fetch_policy=off 在在线通道（{}）下不生效："
+              "合约参数仍必须从行情获取（A′ fail-closed），"
+              "未验证前所有报单将被拒单".format(broker.name))
+
     # Phase 8（§5.9.3 规则 2 · 来源标记）：离线模式（dry_run，含 replay 数据源）
     # 没有行情连接，合约参数用配置值 —— 但必须显式标记来源，让"回测口径"能自证。
     # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
     # 取不到则 instrument_verified=False → Engine 闸门拒单（fail-closed）。
     if getattr(broker, "is_offline", False):
         spec.mark_config_offline()
+        # Phase 8.1（O-1）：离线模式下 exchange 也按 symbol 前缀填充
+        # （与在线路径 SimNow._apply_instrument_quote 的填充口径一致，
+        # Phase 9 FOK/FAK 分支两种模式下都能拿到非空 exchange）。
+        _ex = derive_exchange(spec.signal_symbol)
+        if _ex:
+            spec.exchange = _ex
         print("[gw] ⚠ 离线模式：tick/乘数取自配置（source=CONFIG_OFFLINE），"
               "可能与交易所口径不符，回测结果不可直接外推实盘")
     entry = EntryPolicy(cfg.entry_params.model_dump())

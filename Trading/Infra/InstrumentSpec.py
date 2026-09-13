@@ -196,3 +196,21 @@ class InstrumentSpec(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         return self.model_dump()
+
+
+def derive_exchange(symbol: str) -> str:
+    """从合约/主连 symbol 推导交易所代码（Phase 8.1 · O-1）。
+
+    支持两种形态（tqsdk 惯例）：
+      · 真实月份合约："CFFEX.IF2609" → "CFFEX"、"SHFE.au2608" → "SHFE"
+      · 天勤主连：    "KQ.m@CZCE.TA"  → "CZCE"（取 "@" 后段的交易所前缀）
+    解析不出（空串 / 不含 "." 分隔）→ 返回 ""（不猜 —— exchange 是 Phase 9
+    FOK/FAK 分支的判据，宁缺勿错）。结果统一大写。
+    """
+    raw = str(symbol or "").strip()
+    if "." not in raw:
+        return ""
+    s = raw.split("@", 1)[1] if "@" in raw else raw
+    head = s.split(".", 1)[0].strip().upper()
+    return head
+

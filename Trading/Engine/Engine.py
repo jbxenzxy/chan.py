@@ -49,6 +49,7 @@
 """
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -239,6 +240,9 @@ class TradingEngine(ReconcileMixin):
 
         self.auto_order_enabled: bool = True
         self._restore()
+        # Phase 8.1（O-2/O-3）：构造期把 broker 已暂存的告警转手进 D11；
+        # 此后每根 bar 在 on_bar 的 pulse() 之后续 drain（见 _drain_broker_alerts）。
+        self._drain_broker_alerts()
 
     # ════════════════════════════════════════════════════════════════
     # 账户三态（需求 ⑴）—— 架构约束 A1 的**唯一**实现点
@@ -773,6 +777,12 @@ class TradingEngine(ReconcileMixin):
         except Exception:
             pass
 
+        # Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker 侧 instrument 故障告警
+        # 回流 D11 —— SimNow 用 notify() 暂存的诊断（超时 / nan / 与配置不一致）
+        # 在这里转手 Engine.alert（同 code 自动合并，不会刷屏）。不支持
+        # drain_alerts 的通道（鸭子判断）静默跳过。
+        self._drain_broker_alerts()
+
         # ════════════════════════════════════════════════════════════════
         # CLOSE 卡单复核
         #   CLOSE 报单 N bars 后未确认 → 按真实持仓兜底（重建或清理）
@@ -977,11 +987,26 @@ class TradingEngine(ReconcileMixin):
         #   离线通道（dry_run）放行：配置值来源已在 main.py 标记 CONFIG_OFFLINE。
         if not (getattr(self.broker, "is_offline", False)
                 or getattr(self.spec, "instrument_verified", False)):
+            # Phase 8.1（O-4 收窄）：告警文案带上"为什么 unverified"——
+            # policy=off 时点名（调试开关在在线通道不生效），否则给行情侧
+            # 的通用原因。诊断细节（超时 / nan / 哪个字段冲突）由 broker 侧
+            # notify → _drain_broker_alerts 回流补充（O-2/O-3）。
+            policy = ""
+            _getp = getattr(self.broker, "_param", None)
+            if callable(_getp):
+                try:
+                    policy = str(_getp("instrument_fetch_policy") or "").strip().lower()
+                except Exception:
+                    policy = ""
+            why = ("instrument_fetch_policy=off 在在线通道不生效（A′）"
+                   if policy == "off"
+                   else "行情未就绪或校验未通过（超时 / nan / 区间不自洽）")
             self.alert(self.ALERT_SEVERE, "instrument_unverified",
-                       "合约参数未通过行情校验（tick/乘数/涨跌停），已拒单。"
+                       "合约参数未通过行情校验（{}），已拒单。".format(why) +
                        "fail-closed：宁可不下单，也不用可能错的参数下单",
                        source=getattr(self.spec, "instrument_source", ""),
-                       broker=getattr(self.broker, "name", ""))
+                       broker=getattr(self.broker, "name", ""),
+                       policy=policy)
             return "instrument_unverified"
         if act.volume <= 0:
             return "zero_volume"
@@ -1033,6 +1058,12 @@ class TradingEngine(ReconcileMixin):
         p = float(ref_price or 0.0)
         if p <= 0:
             return None                          # 无参考价（历史调用点兼容）→ 不校验
+        if not math.isfinite(p):
+            # Phase 8.1（B-1 引擎侧同源修复）：nan 是 truthy，`nan or 0.0` 仍是
+            # nan，`nan <= 0` / `nan < lo` / `nan > hi` 全为 False → 原版会放行。
+            # 区间已知时参考价非有限值一律 fail-closed（§5.9.3 第 1 条 isfinite 守则）。
+            return ("price_invalid: 参考价 {!r} 非法（要求 isfinite）"
+                    .format(p))
         if p < lo or p > hi:
             return ("price_out_of_limit: 参考价 {!r} 超出当日涨跌停区间 [{!r}, {!r}]"
                     .format(p, lo, hi))
@@ -1421,6 +1452,29 @@ class TradingEngine(ReconcileMixin):
         REJECT_POSITION: ("ctp_reject_position", "severe",
                           "柜台拒单：可平持仓不足（柜台很可能没有这笔仓）"),
     }
+
+    def _drain_broker_alerts(self) -> None:
+        """broker 侧告警回流 D11（Phase 8.1 · O-2/O-3，§5.9.4 项 5）。
+
+        把 Broker.notify() 暂存的告警（instrument 超时 / nan / 与配置不一致等
+        诊断）逐条转手 `Engine.alert`（沿用 D11 通道：severe → 阻塞弹窗、
+        warn → toast；同 code 在 alert 内自动合并计数，不会刷屏）。
+        鸭子兼容：broker 未实现 drain_alerts（如测试替身 / 裸通道）→ 跳过。
+        """
+        drain = getattr(self.broker, "drain_alerts", None)
+        if not callable(drain):
+            return
+        try:
+            pending = drain()
+        except Exception:
+            return
+        for a in pending or []:
+            extra = {k: v for k, v in a.items()
+                     if k not in ("level", "code", "msg")}
+            self.alert(str(a.get("level") or self.ALERT_WARN),
+                       str(a.get("code") or "broker_alert"),
+                       str(a.get("msg") or ""),
+                       **extra)
 
     def alert(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
         """登记一条告警（D11）。同 code 未确认 → **合并计数**，不新增条目。

@@ -26,7 +26,14 @@ P42 品种参数从行情获取（A′ fail-closed · 契约测试，Phase 8 / D
   [7] ⑦ 实盘配 instrument_fetch_policy="off" → verified 恒 False → 闸门拒单
       （调试开关不得绕过 A′）；policy 非法值 → 配置期报错；宽容档 prefer 已删除；
   [8] 涨跌停护栏：broker 侧最终限价出区间 → 本地拒单（恰在涨跌停价上放行、
-      区间未知不校验）；引擎侧参考价粗检同理。
+      区间未知不校验）；引擎侧参考价粗检同理；
+  [8i-8m] Phase 8.1（B-1）：nan / inf 限价与参考价一律 fail-closed（原版
+      nan 放行是 fail-open 隐患）；
+  [9] Phase 8.1（O-2/O-3）：broker 侧故障诊断经 notify/drain_alerts 回流
+      Engine.alert（D11 通道，§5.9.4 项 5 "Broker → Engine.alert()"）；
+  [10] Phase 8.1（O-6）：组合反例 policy=off × 坏行情 → 仍 unverified + 拒单；
+  [11] Phase 8.1（O-1）：derive_exchange 从真实合约/主连 symbol 推导交易所，
+      在线成功路径填充 spec.exchange。
 
 跑法：python Trading/Test/test_p42_price_from_quote.py
 """
@@ -123,6 +130,10 @@ class FakeLiveBroker(Broker):
     name = "fake_live"
     is_offline = False
 
+    def _param(self, key, default=None):
+        # 与 SimNowBroker._param 同语义（供 Engine 闸门 duck 读取 policy）
+        return (self.params or {}).get(key, default)
+
     def submit(self, intent, side, volume, ref_price, signal_key="", note="",
                entry_date="", is_exit=False):
         raise NotImplementedError("P42 替身不应触发真实报单")
@@ -133,7 +144,8 @@ def make_simnow(quote, policy="strict", spec=None, frozen=False):
     b = SimNowBroker.__new__(SimNowBroker)
     b.spec = spec if spec is not None else InstrumentSpec()
     b.params = {"instrument_fetch_policy": policy, "overprice_ticks": 5,
-                "channel": {"underlying_map_timeout": 0.5}}
+                "channel": {"underlying_map_timeout": 0.5,
+                            "instrument_fetch_timeout": 0.5}}  # Phase 8.1（B-2）独立超时
     b._api = FakeApi(quote)
     b._trade_symbol = "CFFEX.IF2609"
     b._instrument_frozen = frozen
@@ -311,6 +323,106 @@ why_in = eng8._pre_trade_check(act_past_close, "2026-09-02", None, ref_price=450
 check("[8g] 参考价 4500 在区间 → 校验链通过（None）", why_in, None)
 why_edge = eng8._pre_trade_check(act_past_close, "2026-09-02", None, ref_price=5000.0)
 check("[8h] 参考价恰等于涨停价 → 放行", why_edge, None)
+
+# ── Phase 8.1（B-1）：非有限限价 / 参考价一律 fail-closed ──
+check("[8i] broker 侧 nan 限价 → 拒单（原版放行是 fail-open）",
+      b8._price_out_of_band(float("nan")) is not None, True)
+check("[8j] broker 侧 inf 限价 → 拒单",
+      b8._price_out_of_band(float("inf")) is not None, True)
+check_true("[8k] 拒单原因带 price_invalid 前缀",
+           str(b8._price_out_of_band(float("nan"))).startswith("price_invalid"))
+eng8_nan, _ = make_engine(FakeLiveBroker(spec8), spec8,
+                          tempfile.mkdtemp(prefix="tg_p42_bandnan_"))
+why_nan = eng8_nan._pre_trade_check(act_past_close, "2026-09-02", None,
+                                    ref_price=float("nan"))
+check("[8l] 引擎侧 nan 参考价 → price_invalid（区间已知时不再放行）",
+      str(why_nan).startswith("price_invalid"), True)
+# 区间未知时参考价校验整体跳过（含 nan）—— 走离线放行路径才能真正到达粗检
+spec8_off = InstrumentSpec()
+spec8_off.mark_config_offline()
+eng8_nan2, _ = make_engine(DryRunBroker(spec8_off), spec8_off,
+                           tempfile.mkdtemp(prefix="tg_p42_bandnan2_"))
+check("[8m] 区间未知 → 参考价校验整体跳过（nan 也不拦，语义不变）",
+      eng8_nan2._pre_trade_check(act_past_close, "2026-09-02", None,
+                                 ref_price=float("nan")),
+      None)
+
+# ════════════════════════════════════════════════════════════════
+print("\n[9] Phase 8.1（O-2/O-3）：broker 故障诊断经 notify/drain 回流 D11")
+spec9 = InstrumentSpec()
+b9 = make_simnow(FakeQuote(price_tick=float("nan")), spec=spec9)
+b9._apply_instrument_quote()                 # 超时失败 → _instrument_warn → notify 入队
+q9 = b9.drain_alerts()
+check_true("[9a] 超时诊断进 broker 告警队列（code=instrument_quote_timeout）",
+           any(a.get("code") == "instrument_quote_timeout" for a in q9), q9)
+check_true("[9b] 队列条目带 level=warn 与 broker 名",
+           all(a.get("level") == "warn" and a.get("broker") == "simnow" for a in q9), q9)
+check("[9c] drain 后队列清空", b9.drain_alerts(), [])
+# 与配置不一致 → instrument_spec_conflict（带 field/quote/cfg 诊断字段）
+spec9b = InstrumentSpec()
+b9b = make_simnow(FakeQuote(), spec=spec9b)  # 配置 tick=0.2 vs 行情 2.0
+b9b._apply_instrument_quote()
+conf = [a for a in b9b.drain_alerts() if a.get("code") == "instrument_spec_conflict"]
+check_true("[9d] 覆盖不一致写 conflict 告警且带 field 诊断",
+           any(a.get("field") == "price_tick" for a in conf), conf)
+# 引擎回流：_drain_broker_alerts 把 broker 队列转手 Engine.alert（D11）
+tmp9 = tempfile.mkdtemp(prefix="tg_p42_route_")
+eng9, alerts9 = make_engine(b9, spec9, tmp9)
+b9._apply_instrument_quote()                 # 未冻结，再失败一次 → 重新入队
+eng9._drain_broker_alerts()
+check_true("[9e] broker 诊断经 _drain_broker_alerts 进入 D11（warn 级）",
+           any(lv == "warn" and str(cd).startswith("instrument_")
+               for lv, cd in alerts9), alerts9)
+eng9_nobroker, alerts9b = make_engine(FakeLiveBroker(spec9), spec9,
+                                      tempfile.mkdtemp(prefix="tg_p42_route2_"))
+eng9_nobroker._drain_broker_alerts()         # 无 drain_alerts 能力的通道
+check("[9f] 鸭子兼容：无 notify 能力的通道静默跳过", alerts9b, [])
+
+# ════════════════════════════════════════════════════════════════
+print("\n[10] Phase 8.1（O-6）：组合反例 policy=off × 坏行情")
+spec10 = InstrumentSpec()
+b10 = make_simnow(FakeQuote(price_tick=float("nan")), policy="off", spec=spec10)
+b10._apply_instrument_quote()                # off：直接 return，行情好坏都无关
+check("[10a] off + nan → verified 仍 False", spec10.instrument_verified, False)
+check("[10b] off + nan → tick 不被污染（保持配置 0.2）", spec10.price_tick, 0.2)
+tmp10 = tempfile.mkdtemp(prefix="tg_p42_combo_")
+eng10, alerts10 = make_engine(FakeLiveBroker(spec10), spec10, tmp10)
+why10 = eng10._pre_trade_check(act_past_close, "2026-09-02", None)
+check("[10c] 组合下闸门照样拒单", why10, "instrument_unverified")
+check_true("[10d] 组合下仍伴 severe 告警",
+           ("severe", "instrument_unverified") in alerts10, alerts10)
+# [10e] 用未替换的 alert 通道验证 extra.policy（O-4 收窄：告警点名原因）
+tmp10b = tempfile.mkdtemp(prefix="tg_p42_combo2_")
+eng10b, alerts10b = make_engine(FakeLiveBroker(spec10), spec10, tmp10b)
+eng10b.broker.params = {"instrument_fetch_policy": "off"}  # duck _param 数据源
+_kw = {}
+
+
+def _cap_alert(level, code, msg, **extra):
+    _kw.update(extra)
+    alerts10b.append((level, code))
+
+
+eng10b.alert = _cap_alert
+eng10b._pre_trade_check(act_past_close, "2026-09-02", None)
+check("[10e] 闸门告警 extra.policy == 'off'", _kw.get("policy"), "off")
+
+# ════════════════════════════════════════════════════════════════
+print("\n[11] Phase 8.1（O-1）：derive_exchange + spec.exchange 填充")
+from Trading.Infra.InstrumentSpec import derive_exchange  # noqa: E402
+check("[11a] CFFEX.IF2609 → CFFEX", derive_exchange("CFFEX.IF2609"), "CFFEX")
+check("[11b] KQ.m@CZCE.TA → CZCE", derive_exchange("KQ.m@CZCE.TA"), "CZCE")
+check("[11c] SHFE.au2608 → SHFE（小写品种不影响）", derive_exchange("SHFE.au2608"), "SHFE")
+check("[11d] 空串 → ''（不猜）", derive_exchange(""), "")
+check("[11e] 无分隔 → ''（不猜）", derive_exchange("IF2609"), "")
+spec11 = InstrumentSpec()
+b11 = make_simnow(FakeQuote(), spec=spec11)
+b11._apply_instrument_quote()
+check("[11f] 在线成功路径填充 spec.exchange", spec11.exchange, "CFFEX")
+spec11b = InstrumentSpec()
+b11b = make_simnow(FakeQuote(price_tick=float("nan")), spec=spec11b)
+b11b._apply_instrument_quote()               # 失败 → 不冻结、不填 exchange
+check("[11g] 失败路径不填 exchange（保持默认空串）", spec11b.exchange, "")
 
 print("\n" + "=" * 60)
 print("P42 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

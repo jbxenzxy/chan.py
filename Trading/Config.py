@@ -394,6 +394,13 @@ class ChannelTimingConfig(BaseModel):
     verify_delta_timeout: float = 5.0     # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
     underlying_map_timeout: float = 20.0  # 主连→主力合约映射等待秒数（get_quote.underlying_symbol）
     cancel_settle_wait: float = 5.0       # 超时撤单后等最后一笔回报的窗口秒数
+    # Phase 8.1（B-2）：合约参数（tick/乘数/涨跌停）就绪等待**独立**秒数。
+    #   与 underlying_map_timeout 分开的原因：主连映射通常 <1s，而真实月份
+    #   合约的静态字段在非交易时段可能 10~30s 才推齐，两者超时期望不同。
+    #   默认 30s —— 取宽松端：超时不是终态（pulse 每根 bar 重试），宁可
+    #   多等一轮也别在开盘阶段误触发 fail-closed（外部评审建议 10s 与其
+    #   自己"10~30s 才到齐"的论证矛盾，不采纳）。
+    instrument_fetch_timeout: float = 30.0
 
 
 # ════════════════════════════════════════════════════════════════════
