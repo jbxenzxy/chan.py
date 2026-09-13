@@ -568,7 +568,7 @@ class AppData:
         #   _user_store_lock → _meta_cache_lock → _stocks_cache_lock 的顺序——
         #   持有它期间不得再取任何其它锁（联网取数约 1.3s）；写入时由
         #   update_pe_ttm 去取 _meta_cache_lock，两者**不嵌套持有**，无死锁路径。
-        # _pe_live_fetcher：取数实现，由 AppRefresh 在模块导入时注入
+        # _pe_live_fetcher：取数实现，由 AppEngine 在模块导入时注入
         #   （依赖倒置：AppData 不得 import DataAPI，见 phase5 守卫 ④b）。
         self._pe_live_lock = threading.Lock()
         self._pe_live_fetcher = None
@@ -608,11 +608,6 @@ class AppData:
     def legacy_stock_pe_ttm_file(self):
         """旧版「PE-TTM + 指数归属」合并缓存路径（仅供一次性迁移读取）。"""
         return app_config.legacy_stock_pe_ttm_file
-
-    @property
-    def stock_pettm_file(self):
-        """A 股 PE-TTM 全量落盘镜像（见 AppConfig.stock_pettm_file）。"""
-        return app_config.stock_pettm_file
 
     @property
     def float_mc_cache_file(self):
@@ -1225,15 +1220,14 @@ class AppData:
     def set_pe_ttm_live_fetcher(self, fetcher):
         """注入 PE-TTM 取数实现（依赖倒置）。
 
-        由 App/AppRefresh.py 在模块导入时注入，实现为 AppRefresh 的
-        `_fetch_pe_ttm_live(market, code)`（A 股个股走 eltdx 全量进程缓存、
-        指数 / 港股走腾讯；分流的单一实现在该函数内）。
+        由 App/AppEngine.py 在模块导入时注入，实现为 AppEngine 的
+        `_fetch_pe_ttm_live(market, code)`（A 股个股走 eltdx 7615 HTTP 单只
+        查询、指数 / 港股走腾讯；分流的单一实现在该函数内）。
         本类**不得**直接 import DataAPI（phase5 守卫 ④b：防影子双源），
         故取数实现只能由上层注入；未注入时实时层降级为空表。
 
-        注入的实现**自带进程级全量缓存**：FastAPI 进程内首次取数时才联网拉
-        一次全 A 股，之后命中内存（约 0 网络开销），因此这里可以每次调用都
-        走一遍而不用担心打开每只股票都打一次网络。
+        注入的实现**按代码单只取数**（eltdx 7615 HTTP，实测 ~0.22~0.24s/只），
+        因此这里可以每次调用都走一遍而不用担心整表下载。
         """
         self._pe_live_fetcher = fetcher
 
@@ -1260,8 +1254,8 @@ class AppData:
 
         为什么每次调用都过一遍取数实现：PE-TTM 随行情每日变动，而落盘缓存
         只在点刷新时更新（实际使用中不会每天点）→ 页面读到的是陈旧值。注入的
-        取数实现内部持有**进程级全量缓存**，故这里的"每次"不是"每次联网"：
-        进程内首次取数触发一次 eltdx 全 A 股拉取（约 1.3s），之后纯内存命中。
+        取数实现是 eltdx 7615 HTTP **按代码单只查询**（实测 ~0.22~0.24s/只），
+        故「每次打开都取一次」的体验可接受，不落盘、无进程全量缓存。
 
         失败语义（与「该票无 PE」必须可区分）：
           · 取数实现抛异常 = **数据源不可用**（eltdx 连不上、且落盘镜像也没有）
@@ -1275,7 +1269,7 @@ class AppData:
         """
         fetcher = self._pe_live_fetcher
         if fetcher is None:
-            return          # 未注入取数实现（未走 AppRefresh 导入链）：降级为空
+            return          # 未注入取数实现（未走 AppEngine 导入链）：降级为空
         if not self._pe_live_lock.acquire(blocking=False):
             return          # 已有线程在拉取，本次直接用当前表
         try:

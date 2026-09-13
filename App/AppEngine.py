@@ -153,7 +153,12 @@ DUAL_SUB_FALLBACK_MIN = app_config.dual_sub_fallback_min
 # 注入的 FUTURES_LOOKBACK_CONFIG，与 CTqSdkAPI/tqsdk 是否可用无关，
 # 故放在 tqsdk 的 try/except 之外，避免 tqsdk 未装时被置 None 的边界问题。
 from DataAPI.TqSdkAPI import resolve_lookback_bars
-from DataAPI.ElTdxAPI import get_shareholder_reduction_flag
+from DataAPI.ElTdxAPI import (
+    ELTDX_MARKETS,
+    fetch_pe_ttm_single as _eltdx_fetch_pe_ttm_single,
+    get_shareholder_reduction_flag,
+)
+from DataAPI.TxAPI import fetch_pe_ttm as _tx_fetch_pe_ttm
 
 # 导入天勤数据源适配器（期货/期指）
 # 频率映射/别名/支持列表/fetch_kline 一律经 CTqSdkAPI 元数据接口访问
@@ -236,6 +241,30 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 # _stock_names_cache——不是清理无用代码，是**拆掉一个指向共享容器的公开
 # 入口**。读取一律走 app_data.get_pe_ttm() / get_index_belong() 点查，
 # 遍历一律走 pe_snapshot() / belong_snapshot()。
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PE-TTM 取数实现 + 实时注入（A 股个股 → eltdx 7615 HTTP 单只；指数/港股 → 腾讯）
+# ═══════════════════════════════════════════════════════════════════════
+# 「按市场 / 按标的类型选源」是业务编排规则，不是某数据源能力；PE-TTM 不属
+# 刷新功能（2026-09 已从刷新移除），故收口在本装配点（AppEngine，App 层）。
+# A 股个股走 eltdx 7615 F10/TQLEX HTTP valuation 表（ReqId=200191）按代码
+# 单只查询（约 0.22~0.24s/只，类似股东增减持，打开一只取一次，不落盘）；
+# 指数（eltdx 口径不含指数）与港股走腾讯 qt.gtimg.cn 字段 [39]。取数失败
+# 抛异常由 AppData 记 error，不静默返回空——「取数失败」与「该票无 PE」
+# 须可区分。
+def _fetch_pe_ttm_live(market, code):
+    """PE-TTM 取数单一入口（注入 AppData，供 K 线页面打开标的时调用）。"""
+    market = (market or "").lower()
+    if market not in ELTDX_MARKETS or is_index(market, code):
+        # 指数 / 港股：腾讯单只实时
+        return _tx_fetch_pe_ttm([(market, code)])
+    return _eltdx_fetch_pe_ttm_single(market, code)
+
+
+# 注入取数实现（依赖倒置：AppData 不得 import DataAPI，phase5 守卫 ④b）。
+# import AppEngine 即成注入——真实运行链 FrontAPI → AppOrch → AppEngine 必然经过。
+app_data.set_pe_ttm_live_fetcher(_fetch_pe_ttm_live)
 
 
 def _get_pe_ttm(market, code):

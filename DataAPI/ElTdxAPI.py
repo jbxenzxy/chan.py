@@ -2,13 +2,16 @@
 eltdx 数据源适配器（通达信网络行情客户端封装）。
 
 定位：本模块封装 eltdx 客户端这一个通达信网络数据源，对外暴露 eltdx 的
-三类取数能力（均**仅覆盖 A 股**）：
-  1. 除权除息（XDXR）——0x000f 事件表，供 TdxAPI 前复权流水线消费；
-  2. PE-TTM（滚动市盈率）——0x06B9 统计文件（zhb.zip / tdxstat.cfg）；
-  3. 流通市值——0x0010 财务批量（流通股本）× 0x054c 快照（最新价）。
-后两项与 DataAPI/TxAPI.py 的同名函数**契约一致**（PE 单位：倍；流通市值单位：
-亿元）。「按市场 / 标的类型选源」是业务编排规则，收口在 App 层
-（App/AppRefresh.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
+五类取数能力（均**仅覆盖 A 股**）：
+  1. 除权除息（XDXR）——7709 协议 0x000f 事件表，供 TdxAPI 前复权流水线消费；
+  2. PE-TTM（滚动市盈率）——7615 F10/TQLEX HTTP 网关 valuation 估值表
+     （ReqId=200191），**按代码单只查询**（类似股东增减持；不再走 0x06B9
+     全市场统计文件）；
+  3. 流通市值——0x0010 财务批量（流通股本）× 0x054c 快照（最新价）；
+  4. 股东增减持计划——7615 F10/TQLEX HTTP 网关（按代码查询）；
+  5. 板块文件下载 / 刷新——0x06B9 通用文件读取。
+PE 单位：倍；流通市值单位：亿元。「按市场 / 标的类型选源」是业务编排规则，
+收口在 App 层（App/AppRefresh.py 的 _fetch_pe_ttm_live），不在 DataAPI 层。
 
 职责：为使用方提供统一、标准化的 eltdx 取数入口。App 层不直接依赖本模块的
 统计取数；本模块是 TdxAPI 前复权流水线与 App 层 PE-TTM 取数共同依赖的
@@ -363,10 +366,10 @@ def download_block_files_via_eltdx(file_names, hosts=None, on_file=None):
 # ============================================================
 # 行情统计：PE-TTM / 流通市值（仅 A 股；eltdx 无港股通道）
 # ============================================================
-# 两个函数与 DataAPI/TxAPI.py 的同名函数**契约完全一致**，使
+# 两个取数函数与 DataAPI/TxAPI.py 的对应函数**契约一致**，使
 # App 层（AppRefresh._fetch_pe_ttm_live）能按标的类型选源后互换调用：
-#   - fetch_pe_ttm(mkt_codes)    → {mkt+code: PE-TTM(倍)}
-#   - fetch_float_mc(stock_list) → {code: 流通市值(亿元)}
+#   - fetch_pe_ttm_single(market, code) → {mkt+code: PE-TTM(倍)}（7615 HTTP 单只）
+#   - fetch_float_mc(stock_list)        → {code: 流通市值(亿元)}
 #
 # 选源规则（唯一一份）在 App/AppRefresh.py：A 股个股 → 本模块；指数 / 港股 → TxAPI。
 # 港股不在本模块服务范围：eltdx 的 codes.all("hk") / 0x054c 对 hk 均不可用。
@@ -376,10 +379,6 @@ ELTDX_MARKETS = ("sh", "sz", "bj")
 # 单批放大到 200 只时服务端会截断（返回 100 条）或给出错位响应，
 # 故取 80（与 eltdx helpers 内部同值）。
 STATS_BATCH = 80
-
-# eltdx 统计文件里的 market_id ↔ 市场前缀（与 chan.py 的 prefix 语义同构：
-# 0→sz / 1→sh / 2→bj）
-_MARKET_ID_TO_MKT = {0: "sz", 1: "sh", 2: "bj"}
 
 
 def _chunked_stats_fetch(full_codes, batch_fn, extract):
@@ -434,85 +433,112 @@ def _snapshot_price_map(rows):
     return out
 
 
-def fetch_pe_ttm(mkt_codes):
-    """eltdx 批量获取 **A 股** PE-TTM（滚动市盈率），返回 {mkt+code: float}。
+# 7615 F10/TQLEX HTTP 网关超时。eltdx 3.2.0 起 F10 默认 IPv4-first（直连实测
+# 113~133ms），3s 余量已很大；走代理的环境约 310~360ms 也在余量内。
+_PE_SINGLE_TIMEOUT = 3.0
+# 瞬时抖动重试：单请求超时后再试 1 次（成功即返回），打开 K 线页面时可扛住偶发抖动。
+_PE_SINGLE_RETRIES = 1
+# 熔断器：连续失败达阈值（网关整体不可达）后冷却期内直接返回 {}，
+# 防止反复点开股票时每只都白等 超时×(1+重试)。
+_PE_CB_THRESHOLD = 3      # 连续失败次数阈值
+_PE_CB_COOLDOWN = 600     # 熔断冷却 10 分钟
+_PE_CB_FAILS = 0          # 连续失败计数（受 _PE_CB_LOCK 保护）
+_PE_CB_OPEN_UNTIL = 0.0   # 熔断解除时刻（epoch）；0=未熔断
+_PE_CB_LOCK = threading.Lock()
 
-    mkt_codes: list[(mkt, code)]，mkt ∈ {sh, sz, bj}；其余市场（如 hk）
-               直接忽略——返回结果不含这些键，选源见 App/AppRefresh.py。
-    数据源：0x06B9 服务器文件读取 → zhb.zip 内 tdxstat.cfg（**盘后**统计
-            快照），**单次请求即覆盖全市场**，无需按票分批。
-    取值：pe_ttm 为 None（无值）或 0 的代码跳过；**负值保留**（亏损股口径）。
 
-    与腾讯 [39] 的实测一致性：A 股 5224 只中 97.6% 浮点严格相等、99.6% 差
-    ≤0.05；eltdx 无值而腾讯有值的 5 只全为次新股（口径差，非缺失）。
+def _fetch_valuation_rows(code):
+    """取单只股票的 7615 估值表原始行（list[dict]，键含 PETTM / DATE 等）。
+
+    走 eltdx >= 3.2.0 官方 F10Client（IPv4-first，与股东增减持 _fetch_plan_rows
+    同策略）。取数失败抛异常，由调用方的重试/熔断处理。
     """
-    pairs = [(m, c) for m, c in (mkt_codes or ()) if m in ELTDX_MARKETS]
-    if not pairs:
+    from eltdx.f10 import F10Client
+    resp = F10Client(timeout=_PE_SINGLE_TIMEOUT).valuation(code)
+    if not getattr(resp, "ok", False):
+        raise RuntimeError("网关返回 ok=False")
+    rows = []
+    for table in getattr(resp, "tables", ()) or ():
+        rows.extend(list(getattr(table, "rows", ()) or ()))
+    return rows
+
+
+def _pe_value_from_valuation_rows(key, rows):
+    """从估值表行中取 PETTM 字段 → {key: float}；无值 / 非法返回 {}。
+
+    PETTM 为服务端返回的字符串（如 "49.31"）；行内 DATE 最大者即最新估值。
+    无 PETTM / 为 0 / 非法数值 → 该票无 PE（正常空结果），返回 {}；
+    **负值保留**（亏损股口径，与 0x06B9 全量表过滤规则一致）。
+    """
+    best = None
+    best_date = None
+    for r in rows:
+        v = r.get("PETTM")
+        if v is None or str(v).strip() == "":
+            continue
+        try:
+            val = float(v)
+        except (TypeError, ValueError):
+            continue
+        if val == 0:
+            continue
+        d = r.get("DATE")
+        if best is None or (d is not None and (best_date is None or d > best_date)):
+            best, best_date = val, d
+    return {key: best} if best is not None else {}
+
+
+def fetch_pe_ttm_single(market, code):
+    """eltdx **单只查询** **A 股** PE-TTM（滚动市盈率），返回 {mkt+code: float}。
+
+    market: 'sh'/'sz'/'bj'；其余市场（如 hk）直接忽略——返回 {}，选源见
+    App/AppRefresh.py。
+    数据源：7615 F10 / TQLEX HTTP 网关 `F10Client.valuation`（Entry=
+    HQServ.hq_nlp_gpsj，ReqId=200191 估值表，**按代码单只查询**）——与股东
+    增减持同类：打开一只股票时取一次，**不做全量拉取、不落盘**（2026-09
+    用户定版：不再走 0x06B9 zhb.zip / tdxstat.cfg 全市场统计文件，删除原
+    fetch_pe_ttm / fetch_pe_ttm_all 批量取数）。
+    网络层：eltdx >= 3.2.0 官方 F10Client（IPv4-first）；重试 1 次 + 连续
+    失败 3 次熔断 10 分钟（与股东增减持同策略）。
+    取数失败**抛异常**（由 AppRefresh / AppData 显著上报，不静默返回 {} ——
+    「取数失败」与「该票无 PE」必须可区分）。
+    """
+    market = (market or "").lower()
+    if market not in ELTDX_MARKETS:
         return {}
-    client = _ensure_eltdx_client()
-    if client is None:
-        raise RuntimeError(
-            "[eltdx 不可用] PE-TTM 取数需要 eltdx，请安装/升级："
-            "pip install -U 'eltdx>=3.0.0'"
-        )
-    with client:
-        stats = client.resources.read_stats()
-    log.info("[eltdx 统计] PE-TTM 统计日期=%s，全表 %d 行",
-             getattr(stats, "stats_date", None), getattr(stats, "stat_count", 0))
-
-    # 全表一次建成索引：key=(市场, 6 位代码)。统计文件里的 code 未保证补零，
-    # 统一 zfill(6) 后再比对，避免 "1" / "000001" 这类同票不同写法漏配。
-    index = {}
-    for (market_id, code), row in stats.stat.items():
-        mkt = _MARKET_ID_TO_MKT.get(market_id)
-        if mkt:
-            index[(mkt, str(code).zfill(6))] = row
-
-    result = {}
-    for mkt, code in pairs:
-        row = index.get((mkt, str(code).zfill(6)))
-        pe_val = getattr(row, "pe_ttm", None) if row is not None else None
-        if pe_val is None or pe_val == 0:
-            continue
-        result[mkt + code] = float(pe_val)
-    return result
-
-
-def fetch_pe_ttm_all():
-    """eltdx 一次性获取**全 A 股** PE-TTM，返回 {mkt+code: float}（不按 pair 过滤）。
-
-    与 fetch_pe_ttm 的关系：二者共用同一个数据源（0x06B9 → zhb.zip 内
-    tdxstat.cfg，单次请求覆盖全市场），fetch_pe_ttm 只是本函数的「按指定
-    pair 过滤」视图。取 1 只与取全市场网络成本相同，故「打开 K 线页面取
-    PE」这类场景应使用本函数一次拉全表、在进程内缓存，而不是逐只调用
-    fetch_pe_ttm（否则每打开一只股票都重下一次全表）。
-
-    返回不含 PE 为 None / 0 的代码；**负值保留**（亏损股口径）。
-    """
-    client = _ensure_eltdx_client()
-    if client is None:
-        raise RuntimeError(
-            "[eltdx 不可用] PE-TTM 取数需要 eltdx，请安装/升级："
-            "pip install -U 'eltdx>=3.0.0'"
-        )
-    with client:
-        stats = client.resources.read_stats()
-    log.info("[eltdx 统计] PE-TTM 统计日期=%s，全表 %d 行",
-             getattr(stats, "stats_date", None), getattr(stats, "stat_count", 0))
-
-    index = {}
-    for (market_id, code), row in stats.stat.items():
-        mkt = _MARKET_ID_TO_MKT.get(market_id)
-        if mkt:
-            index[(mkt, str(code).zfill(6))] = row
-
-    result = {}
-    for (mkt, code6), row in index.items():
-        pe_val = getattr(row, "pe_ttm", None) if row is not None else None
-        if pe_val is None or pe_val == 0:
-            continue
-        result[mkt + code6] = float(pe_val)
-    return result
+    global _PE_CB_FAILS, _PE_CB_OPEN_UNTIL
+    key = market + code
+    now = time.time()
+    with _PE_CB_LOCK:
+        if now < _PE_CB_OPEN_UNTIL:
+            # 熔断中：网关刚被判定整体不可达，直接放弃本次（静默返回 {}，
+            # 冷却期结束后的第一次失败会再打一条汇总日志）。
+            return {}
+    last_err = None
+    rows = None
+    for _attempt in range(1 + _PE_SINGLE_RETRIES):
+        try:
+            rows = _fetch_valuation_rows(code)
+            last_err = None
+            break
+        except Exception as _e:              # noqa: BLE001
+            last_err = _e
+    if last_err is not None:
+        with _PE_CB_LOCK:
+            _PE_CB_FAILS += 1
+            if _PE_CB_FAILS >= _PE_CB_THRESHOLD:
+                _PE_CB_OPEN_UNTIL = time.time() + _PE_CB_COOLDOWN
+                log.warning("[PE-TTM] 连续 %d 次取数失败（末次: %s%s: %s），"
+                            "熔断 %d 分钟内跳过该数据源",
+                            _PE_CB_FAILS, market, code, last_err,
+                            _PE_CB_COOLDOWN // 60)
+            else:
+                log.warning("[PE-TTM] 取数失败(%s%s): %s", market, code, last_err)
+        raise RuntimeError(f"[PE-TTM] 取数失败({market}{code}): {last_err}")
+    with _PE_CB_LOCK:
+        _PE_CB_FAILS = 0
+        _PE_CB_OPEN_UNTIL = 0.0
+    return _pe_value_from_valuation_rows(key, rows)
 
 
 def fetch_float_mc(stock_list):

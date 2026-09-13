@@ -307,18 +307,6 @@ class _AppConfigBase:
         return os.path.join(self.app_data_dir, "stock_pettm_index.json")
 
     @property
-    def stock_pettm_file(self) -> str:
-        """A 股 PE-TTM 进程级缓存的落盘镜像（App/stock_pettm.json）。
-
-        与 stock_index_belong.json 的区别：本文件**不由「刷新」按钮驱动**，而是
-        FastAPI 进程启动后首次取 PE 时用 eltdx 拉全 A 股一次性写入；只要进程
-        不重启，后续一律读内存，不再调 eltdx。本文件只作「eltdx 不可用时的
-        兜底快照」，因此它是**最后一次成功全量拉取的结果**，可能陈旧——这是
-        刻意取舍：本软件不提供实时行情，PE 无需盘中精度。
-        """
-        return os.path.join(self.app_data_dir, "stock_pettm.json")
-
-    @property
     def float_mc_cache_file(self) -> str:
         """流通市值缓存文件"""
         return os.path.join(self.app_data_dir, "stock_float_mc.json")

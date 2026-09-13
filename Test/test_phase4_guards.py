@@ -682,9 +682,12 @@ def test_datasource_import_gate(failures):
     # ── 装配点白名单：逐文件精确断言允许的 DataAPI 子模块 ──
     # AppEngine：TdxAPI 装配 + tqsdk 可用性探测
     #            + ThsCloudZxgAPI 同花顺云端自选股（扫描「保存到自选」装配点）
+    #            + ElTdxAPI 股东增减持 / A股个股 PE-TTM（_fetch_pe_ttm_live，F10 能力）
+    #            + TxAPI 指数·港股 PE-TTM（_fetch_pe_ttm_live 腾讯分支）
     engine_mods = set(_datasource_imports(os.path.join("App", "AppEngine.py")))
     engine_allow = {"DataAPI.TdxAPI", "DataAPI.TqSdkAPI",
-                    "DataAPI.ThsCloudZxgAPI"}
+                    "DataAPI.ThsCloudZxgAPI", "DataAPI.ElTdxAPI",
+                    "DataAPI.TxAPI"}
     extra = engine_mods - engine_allow
     if extra:
         bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
@@ -695,13 +698,11 @@ def test_datasource_import_gate(failures):
     if sse_mods != {"DataAPI.TqSdkCSSESource", "DataAPI.TqSdkAPI"}:
         bad.append(f"App/AppSSE.py 的 DataAPI import 应仅为 TqSdkCSSESource/TqSdkAPI，实测: {sorted(sse_mods)}")
     # AppRefresh：TdxAPI.refresh_block_files（block 刷新）+ collect_codes_from_vipdoc（vipdoc 代码收集）
-    #           + AkshareAPI 指数归属 + TxAPI 港股名称/指数·港股 PE-TTM + SinaAPI A股名称
-    #           + ElTdxAPI A股个股 PE-TTM 全量（进程级缓存）
-    #   注：PE-TTM 的「按市场/标的类型选源」是业务编排规则，收口在 App 层
-    #   （AppRefresh._fetch_pe_ttm_live），不再经 DataAPI 分流壳 —— DataAPI
-    #   各模块须一一对应真实数据源（见 Docs/data_source_inventory.md）。
+    #           + AkshareAPI 指数归属 + TxAPI 港股名称 + SinaAPI A股名称
+    #   注：A 股个股 PE-TTM（ElTdxAPI）已随「PE-TTM 不属于刷新功能」迁至
+    #   AppEngine 装配点（_fetch_pe_ttm_live 注入 AppData）。
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
-    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI", "DataAPI.ElTdxAPI",
+    if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI",
                         "DataAPI.TxAPI", "DataAPI.SinaAPI"}:
         bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/ElTdxAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
     # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ ElTdxAPI 流通市值（A股）
