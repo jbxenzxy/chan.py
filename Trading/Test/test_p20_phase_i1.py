@@ -699,8 +699,10 @@ with tmp_dir() as tmp:
 #   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
 #   **同源**（同一个 ProductProfile.assert_product_allowed）——否则会出现
 #   "前端说能开、引擎却自杀"的分叉，正是要防的那种漂移。
-#   解耦口径：看行情侧恢复全表（83 个别名，不设品种限制，见 AppChart.search_stocks）；
-#   品种约束**只在下单侧**生效。
+#   解耦口径：看行情侧走 `TqSdkAPI.FUTURES_ALIASES`（2026-09-14 第二轮用户点名
+#   **收窄到 16 品种**，且**不做品种过滤**，见 AppChart.search_stocks）；
+#   品种约束**只在下单侧**生效。下面 [9x4]~[9x9] 用的就是这个典型：
+#   **RB（螺纹钢）能看行情、但不能自动下单** —— 两个数字（16 / 8）互不耦合。
 print("\n[9x] AppTrader.check_symbol_allowed：下单侧品种前置检查")
 _chk_if = AT.trader.check_symbol_allowed("KQ.m@CFFEX.IF")
 check("[9x1] 白名单品种 IF → allowed=True", _chk_if["allowed"], True)

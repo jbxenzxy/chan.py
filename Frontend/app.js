@@ -4209,7 +4209,15 @@
             }
             document.getElementById("stock-history").classList.remove("show");
             document.getElementById("loading").classList.remove("hidden");
-            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","T","TF","TL","TS","CU","AL","ZN","PB","NI","SN","AO","AU","AG","RB","WR","HC","SS","BU","RU","FU","SP","BR","M","Y","A","B","P","J","JM","I","C","CS","L","V","PP","EG","EB","PG","FB","BB","RR","LH","JD","TA","PTA","MA","FG","SA","SR","CF","CY","OI","RM","ZC","UR","PF","PK","AP","CJ","SM","SF","SH","PX","LR","RI","JR","WH","PM","RS","SC","LU","NR","BC","EC","SI","LC","PS","A50","CN"]);
+            // ⚠️ 本表必须与后端 DataAPI/TqSdkAPI.FUTURES_ALIASES **键集一致**
+            //   （2026-09-14 第二轮用户点名收窄到 16 品种；原为 83 条全表）。
+            //   用途：判定"用户敲的短代码是不是期货"。只改一边会出现
+            //   「本表命中 → 认作期货 → connectRealtimeInit → 后端解析不出代码」的空转。
+            //   契约测试：Trading/Test/test_p47_product_case_whitelist.py [4] 段
+            //   （逐键比对本表 ⇔ FUTURES_ALIASES，改漏即打红）。
+            //   注意：这不是"可交易清单"—— 可自动下单的只有 8 个品种，
+            //   由后端 /api/trader/product-check 判定，前端不复制白名单。
+            const FUTURES_ALIAS_KEYS = new Set(["IF","IH","IC","IM","AU","AG","CU","RB","M","P","JM","LH","TA","PTA","MA","SC","LC"]);
             const isFuturesCode = code.includes('KQ.m@') || code.includes('KQ.i@') || code.includes('KQD.m@') || /^[A-Z]+\.[A-Z]/.test(code) || FUTURES_ALIAS_KEYS.has(code.toUpperCase());
             // 判断切换前是否为期指
             const wasFutures = chartData && chartData.meta && chartData.meta.market === 'futures';

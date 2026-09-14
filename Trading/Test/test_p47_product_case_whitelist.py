@@ -19,6 +19,12 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
       AU/AG/CU/TA/IF 档案全部命中、五字段正确注入（回归 ①）
   [3] 白名单硬约束（回归 ②）：未知品种（RB/ZZ）构造引擎抛 ValueError；
       异常 msg 含支持清单与"禁止启动"；已知品种（小写 au 主连）正常启动
+  [4] 【2026-09-14 新增】别名表 ⇔ 前端硬编码表 **同源契约**（防"两表不同源"回潮）：
+      · `TqSdkAPI.FUTURES_ALIASES` = 16 品种 / 17 条别名（用户点名收窄，原 83 条）；
+      · `Frontend/app.js` 的 `FUTURES_ALIAS_KEYS` 键集与之一致（逐键比对）；
+      · **每个可下单品种（PRODUCT_PROFILES）都必须能在别名表里搜到**
+        —— 否则会出现"能下单却画不出 K 线"的死角；
+      · 已裁掉的品种（T/TF/NI/SR/PP/Y/A50…）确实不在表内（负向断言）。
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p47_product_case_whitelist.py
@@ -26,6 +32,7 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -39,7 +46,7 @@ if _RROOT not in sys.path:
     sys.path.insert(0, _RROOT)
 
 from Trading.Infra.ProductProfile import (  # noqa: E402
-    PRODUCT_PROFILES, parse_product,
+    PRODUCT_PROFILES, parse_product, parse_product_key,
 )
 from Trading.Config import TradingConfig  # noqa: E402
 
@@ -142,6 +149,49 @@ def main():
         with tmp_dir() as td:
             eng = build_engine(td, sym)
             check("{}（小写/大写主连）正常启动".format(sym), eng is not None, True)
+
+    print("\n[4] 别名表 ⇔ 前端硬编码表 同源契约（16 品种 / 17 别名）")
+    from DataAPI.TqSdkAPI import FUTURES_ALIASES
+
+    # 4a 表本身的口径（2026-09-14 第二轮用户点名收窄，原 83 条全表）
+    check("别名表条数 = 17", len(FUTURES_ALIASES), 17)
+    contracts = sorted({parse_product_key(v) for v in FUTURES_ALIASES.values()})
+    check("别名表覆盖品种数 = 16", len(contracts), 16)
+    all_values = list(FUTURES_ALIASES.values())
+    check("重复写法只允许 TA/PTA（同指 CZCE.TA）",
+          sorted(a for a, v in FUTURES_ALIASES.items()
+                 if all_values.count(v) > 1),
+          ["PTA", "TA"])
+    check("16 品种清单逐项", contracts,
+          ["AG", "AU", "CU", "IC", "IF", "IH", "IM", "JM", "LC", "LH",
+           "M", "MA", "P", "RB", "SC", "TA"])
+
+    # 4b 前端硬编码表必须与后端同源
+    #    （"两表不同源"是 2026-09-14 实测过的真实漏洞：下拉挡得住、回车挡不住 ——
+    #      根因就是前端硬编码表与后端别名表各写一份。此断言把两边钉在一起。）
+    _app_js = os.path.join(_RROOT, "Frontend", "app.js")
+    with open(_app_js, encoding="utf-8") as fh:
+        js = fh.read()
+    m = re.search(r"const FUTURES_ALIAS_KEYS = new Set\(\[(.*?)\]\);", js, re.S)
+    check_true("app.js 中抓到 FUTURES_ALIAS_KEYS", m is not None)
+    fe_keys = set()
+    if m:
+        fe_keys = {k.strip().strip('"').strip("'")
+                   for k in m.group(1).split(",") if k.strip()}
+    check("前端键集 == 后端别名表键集", sorted(fe_keys), sorted(FUTURES_ALIASES))
+
+    # 4c 每个**可下单**品种都必须能在别名表里搜到
+    #    （否则出现"能下单却画不出 K 线"的死角：引擎允许跑，但界面上翻不到行情）
+    reachable = {parse_product_key(v) for v in FUTURES_ALIASES.values()}
+    check("可下单品种全部可在别名表搜到（无死角）",
+          sorted(set(PRODUCT_PROFILES) - reachable), [])
+    check("可下单品种数仍为 8（本轮未动白名单）", len(PRODUCT_PROFILES), 8)
+
+    # 4d 负向断言：本轮裁掉的品种确实不在表内（防止"以为删了其实没删"）
+    for gone in ["T", "TF", "TL", "TS", "NI", "AL", "ZN", "SR", "I",
+                 "PP", "Y", "A", "SI", "PS", "LU", "NR", "A50", "CN"]:
+        check_true("已裁掉 {!r}（不在别名表）".format(gone),
+                   gone not in FUTURES_ALIASES)
 
     print("\n============================================================")
     print("P47 大小写归一 + 白名单硬约束 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

@@ -145,43 +145,42 @@ def load_tq_account(config_dir):
 
 # ===== 期货品种别名映射表 =====
 # 支持用户直接输入短名称（如 PTA、IF、rb、TA 等），自动映射到完整的主连代码
+#
+# ⚠️ 本表 = **"能看行情"的范围**（输入能否解析出一个合约代码），**不等于"能自动下单"的范围**。
+#   2026-09-14 用户拍板（详见 Docs/自动下单重构-分析与实施计划v2.0.md 附录 D.8）：
+#     · 看行情侧**收窄到 16 个品种**（本表）—— 只保留用户关注的这 16 个，
+#       其余品种不再可搜/可看（此前是 83 条「人工累加」的全表，已按用户点名裁掉）；
+#     · 下单侧白名单**保持 8 个**（Trading/Infra/ProductProfile.PRODUCT_PROFILES：
+#       IF/IH/IC/IM + AU/AG/CU/TA）—— 本表**不是**下单白名单，别拿它当闸门用。
+#
+#   两表语义分工（混用会出 bug）：
+#     · 本表（16 品种）→ **能不能看行情**；
+#     · PRODUCT_PROFILES（8 品种）→ **能不能自动下单**（参数标定 + 引擎启动闸门）。
+#
+#   ⚠️ 本表**与前端硬编码表必须同源同步**：`Frontend/app.js` 的 `FUTURES_ALIAS_KEYS`
+#      用来判定"用户输入的短代码是不是期货"，键集必须与本表一致 —— 只改一边会出现
+#      「前端认作期货 → 后端解析不出代码」的空转路径。该契约由
+#      `Trading/Test/test_p47_product_case_whitelist.py` 的 [4] 段锁死（改漏即打红）。
+#
+#   ⚠️ 收窄本表会让"此前能看的品种"变成搜不到 —— 这是**用户要的效果**，不是 bug。
+#      反向要扩时：只加本表，**无需**动下单白名单（除非该品种也要自动下单，
+#      那要同时在 PRODUCT_PROFILES 标定参数）。
 FUTURES_ALIASES = {
-    # ===== 中金所 CFFEX =====
-    "IF": "KQ.m@CFFEX.IF", "IH": "KQ.m@CFFEX.IH", "IC": "KQ.m@CFFEX.IC",
-    "IM": "KQ.m@CFFEX.IM", "T": "KQ.m@CFFEX.T", "TF": "KQ.m@CFFEX.TF",
-    "TL": "KQ.m@CFFEX.TL", "TS": "KQ.m@CFFEX.TS",
-    # ===== 上期所 SHFE =====
-    "CU": "KQ.m@SHFE.cu", "AL": "KQ.m@SHFE.al", "ZN": "KQ.m@SHFE.zn",
-    "PB": "KQ.m@SHFE.pb", "NI": "KQ.m@SHFE.ni", "SN": "KQ.m@SHFE.sn",
-    "AO": "KQ.m@SHFE.ao", "AU": "KQ.m@SHFE.au", "AG": "KQ.m@SHFE.ag",
-    "RB": "KQ.m@SHFE.rb", "WR": "KQ.m@SHFE.wr", "HC": "KQ.m@SHFE.hc",
-    "SS": "KQ.m@SHFE.ss", "BU": "KQ.m@SHFE.bu", "RU": "KQ.m@SHFE.ru",
-    "FU": "KQ.m@SHFE.fu", "SP": "KQ.m@SHFE.sp", "BR": "KQ.m@SHFE.br",
-    # ===== 大商所 DCE =====
-    "M": "KQ.m@DCE.m", "Y": "KQ.m@DCE.y", "A": "KQ.m@DCE.a",
-    "B": "KQ.m@DCE.b", "P": "KQ.m@DCE.p", "J": "KQ.m@DCE.j",
-    "JM": "KQ.m@DCE.jm", "I": "KQ.m@DCE.i", "C": "KQ.m@DCE.c",
-    "CS": "KQ.m@DCE.cs", "L": "KQ.m@DCE.l", "V": "KQ.m@DCE.v",
-    "PP": "KQ.m@DCE.pp", "EG": "KQ.m@DCE.eg", "EB": "KQ.m@DCE.eb",
-    "PG": "KQ.m@DCE.pg", "FB": "KQ.m@DCE.fb", "BB": "KQ.m@DCE.bb",
-    "RR": "KQ.m@DCE.rr", "LH": "KQ.m@DCE.lh", "JD": "KQ.m@DCE.jd",
-    # ===== 郑商所 CZCE =====
-    "TA": "KQ.m@CZCE.TA", "PTA": "KQ.m@CZCE.TA", "MA": "KQ.m@CZCE.MA",
-    "FG": "KQ.m@CZCE.FG", "SA": "KQ.m@CZCE.SA", "SR": "KQ.m@CZCE.SR",
-    "CF": "KQ.m@CZCE.CF", "CY": "KQ.m@CZCE.CY", "OI": "KQ.m@CZCE.OI",
-    "RM": "KQ.m@CZCE.RM", "ZC": "KQ.m@CZCE.ZC", "UR": "KQ.m@CZCE.UR",
-    "PF": "KQ.m@CZCE.PF", "PK": "KQ.m@CZCE.PK", "AP": "KQ.m@CZCE.AP",
-    "CJ": "KQ.m@CZCE.CJ", "SM": "KQ.m@CZCE.SM", "SF": "KQ.m@CZCE.SF",
-    "SH": "KQ.m@CZCE.SH", "PX": "KQ.m@CZCE.PX", "LR": "KQ.m@CZCE.LR",
-    "RI": "KQ.m@CZCE.RI", "JR": "KQ.m@CZCE.JR", "WH": "KQ.m@CZCE.WH",
-    "PM": "KQ.m@CZCE.PM", "RS": "KQ.m@CZCE.RS",
-    # ===== 上海国际能源交易中心 INE =====
-    "SC": "KQ.m@INE.sc", "LU": "KQ.m@INE.lu", "NR": "KQ.m@INE.nr",
-    "BC": "KQ.m@INE.bc", "EC": "KQ.m@INE.ec",
-    # ===== 广期所 GFEX =====
-    "SI": "KQ.m@GFEX.si", "LC": "KQ.m@GFEX.lc", "PS": "KQ.m@GFEX.ps",
-    # ===== 新加坡 SGX（外盘延时） =====
-    "A50": "KQD.m@SGX.CN", "CN": "KQD.m@SGX.CN",
+    # ===== 中金所 CFFEX（4：股指全家）=====
+    "IF": "KQ.m@CFFEX.IF", "IH": "KQ.m@CFFEX.IH",
+    "IC": "KQ.m@CFFEX.IC", "IM": "KQ.m@CFFEX.IM",
+    # ===== 上期所 SHFE（4：沪金 / 沪银 / 沪铜 / 螺纹钢）=====
+    "AU": "KQ.m@SHFE.au", "AG": "KQ.m@SHFE.ag",
+    "CU": "KQ.m@SHFE.cu", "RB": "KQ.m@SHFE.rb",
+    # ===== 大商所 DCE（4：豆粕 / 棕榈油 / 焦煤 / 生猪）=====
+    "M": "KQ.m@DCE.m", "P": "KQ.m@DCE.p",
+    "JM": "KQ.m@DCE.jm", "LH": "KQ.m@DCE.lh",
+    # ===== 郑商所 CZCE（2 品种 / 3 别名：甲醇 + PTA 的 TA·PTA 双写法）=====
+    "MA": "KQ.m@CZCE.MA", "TA": "KQ.m@CZCE.TA", "PTA": "KQ.m@CZCE.TA",
+    # ===== 上海国际能源交易中心 INE（1：原油）=====
+    "SC": "KQ.m@INE.sc",
+    # ===== 广期所 GFEX（1：碳酸锂）=====
+    "LC": "KQ.m@GFEX.lc",
 }
 
 # 前端可用的周期列表（用于变灰不可用按钮）

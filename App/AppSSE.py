@@ -1779,18 +1779,24 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 def get_futures_aliases():
     """期货别名映射**全表**（经 CTqSdkAPI 查询）。
 
-    单一事实源 = `DataAPI/TqSdkAPI.FUTURES_ALIASES`（手写维护，当前 **83 条**
-    = 81 个唯一合约 + 2 组重复别名：`TA`/`PTA` 同指 `KQ.m@CZCE.TA`、
-    `A50`/`CN` 同指 `KQD.m@SGX.CN`）。
+    单一事实源 = `DataAPI/TqSdkAPI.FUTURES_ALIASES`（手写维护，**16 个品种 /
+    17 条别名** = 16 个唯一合约 + 1 组重复写法：`TA`/`PTA` 同指 `KQ.m@CZCE.TA`）。
 
-    ⚠️ 这是**"能看行情"的口径**（输入能解析出一个代码），**不等于"可交易范围"**。
-    2026-09-14 用户拍板「K线图与自动下单解耦」后，本全表同时服务两处：
-      · 搜索漏斗 / SSE 别名解析 —— **全表放行**（看行情不设品种限制）；
-      · 自动下单开关 —— 由 `AppTrader.check_symbol_allowed` 单独拦品种，
+    2026-09-14 第二轮用户拍板（口径变更，见实施计划 附录 D.8）：
+      · 本表是**"能看行情"的口径**（输入能解析出一个代码），**不等于"可交易范围"**；
+      · 用户点名把本表**收窄到 16 个品种**（原为 83 条「人工累加」的全表）——
+        收窄后 RB/M/SC 等**仍在**表内，而 T/TF/NI/SR/PP/Y/PG… 等**移出**者
+        不再可搜可看。这是预期效果，不是 bug。
+
+    两处消费（解耦后各自独立）：
+      · 搜索漏斗 / SSE 别名解析 —— 走本表，**不做品种过滤**（看行情不设限）；
+      · 自动下单开关 —— 由 `AppTrader.check_symbol_allowed` 单独拦品种（白名单 8 个），
         引擎侧 `ProductProfile.assert_product_allowed` 是权威闸门。
 
     因此**不要再**在搜索/解析侧做品种过滤：那会让"看行情"被"能不能下单"牵连
     （反例见 2026-09-14 当天先做后撤的 `get_tradable_futures_aliases`）。
+    要缩"能看什么"，改的是 `TqSdkAPI.FUTURES_ALIASES` 本身（+ 同步前端
+    `FUTURES_ALIAS_KEYS`），**不是**在这里加过滤。
     """
     if CTqSdkAPI is None:
         return {}
