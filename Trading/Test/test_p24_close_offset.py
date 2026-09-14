@@ -74,7 +74,7 @@ try:
     from Trading.Engine.Engine import TradingEngine  # noqa: E402
     from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
     from Trading.Infra.Types import (  # noqa: E402
-    ExitPlan, OrderIntent, Position, Side,
+    ExitPlan, OrderIntent, Position, Side, now_ms, trading_day_of_ms,
 )
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
@@ -86,9 +86,15 @@ _FAIL = 0
 # tqsdk 硬性白名单（三处校验一致）
 _TQSDK_OFFSETS = ("OPEN", "CLOSE", "CLOSETODAY")
 
-_CN = _dt.timezone(_dt.timedelta(hours=8))
-_TODAY = _dt.datetime.now(_CN).date().isoformat()
-_YESTERDAY = (_dt.datetime.now(_CN).date() - _dt.timedelta(days=1)).isoformat()
+# 日期锚必须与引擎**同口径**：【交易日】（trading_day_of_ms），不是自然日。
+#   引擎 Engine._current_trading_day() 在无 K 线时走 trading_day_of_ms(now_ms())，
+#   按夜盘规则 >=20:00 归属**次一交易日**。若此处用自然日，则 20:00 之后
+#   [5] 段的 _today_case / _latest_wins_case 会把"今仓"误判成跨日（④ 变 ⑤），
+#   恒红 5 条 —— 且只在 20:00 后跑才暴露（白天永远绿），属"墙钟依赖"型假绿。
+#   口径权威定义见 Trading/Infra/Types.py:63 trading_day_of_ms()。
+_TRADING_DAY = _dt.date.fromisoformat(trading_day_of_ms(now_ms()))
+_TODAY = _TRADING_DAY.isoformat()
+_YESTERDAY = (_TRADING_DAY - _dt.timedelta(days=1)).isoformat()
 
 
 def check(name: str, got, want) -> None:

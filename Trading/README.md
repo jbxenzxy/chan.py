@@ -35,7 +35,8 @@ Trading/                        # 自动下单网关（Python 包）
 │   ├── Config.py               # JSON 配置加载（零依赖）
 │   ├── EventLog.py             # jsonl 事件日志（每笔委托/成交/信号全落盘）
 │   ├── Store.py                # sqlite：信号幂等键、持仓状态、当日统计
-│   └── InstrumentSpec.py       # 合约映射、price_tick 对齐、手续费/滑点成本模型
+│   └── InstrumentSpec.py       # InstrumentSpec（静态规格）+ InstrumentState（运行时状态）
+│                               #   运行时状态 = 行情回填的有效 tick/乘数/费率 + 定价与成本模型
 ├── Test/                       # 回归测试（独立脚本，按退出码判定）
 │   ├── test_p5 ~ test_p23      # 20 个历史迭代回归测试（文件名保持）
 │   └── smoke_simnow_phase_g.py # SimNow 冒烟（需真实凭据：环境变量）
@@ -79,7 +80,30 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
    (sse/replay)                 (状态机)          (可插拔)       (手数/持仓上限)  (dry_run/…)
 ```
 
-**出场参数（止盈止损）直接在 Trading/Config.py 的 `ExitConfig` 调**，引擎 / 信号源 / broker 一行不动。入场策略固定 `EntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
+### 配置的两把尺子（双轴，勿混）
+
+配置按两把**正交**的尺子分区，别把它们并成一把：
+
+| 轴 | 载体 | 怎么改 | 装什么 |
+|---|---|---|---|
+| **消费层** | `Trading/Config.py`（① 信号源 / ③ 策略 / ④ 风控 / ⑥ Broker 分区） | `.env` / CLI 可覆盖 | 与品种、周期无关的**部署参数** |
+| **变异维度** | `Infra/PeriodProfile.py`（随周期）<br>`Infra/ProductProfile.py`（随品种） | **改文件 = 改代码资产**，走 git 评审 + 对账测试 | 跨层横切的**领域注册表** |
+
+两轴正交，所以三张档案表**不按消费层挪进 Config.py**：以 `ProductProfile` 为例，一行供 ③ 策略
+（`min_r_points`）、一行供 ⑤ 执行（`prefer_lock_over_closetoday`）、一行供 ⑥ Broker
+（`price_tick` / `multiplier`），整表没有唯一归属层。`TradingConfig.period_profile` /
+`product_profile` property 是「入口聚合档案」的唯一形态（只读视图）。
+
+**推论（调参前必读）**：品种相关项——`price_tick` / `multiplier` / `min_r_points` /
+`r_multiple_tp` / `breakeven_buffer_ticks`——的真值**只在档案里**。在 `Config.py` 或 `.env`
+里写同名字段**不再生效**（会被档案覆盖）；改品种参数 = 改 `Infra/ProductProfile.py`。
+品种无关的出场参数（ATR / 跟踪 / 触发倍数）仍在 `Config.py` 调。
+
+> 权威声明见 `Trading/Config.py` 模块 docstring 顶部的「双轴声明」段。
+
+**出场参数（止盈止损）里「品种无关项」在 Trading/Config.py 的 `ExitConfig` / `ExitPolicyParams` 调**，
+「品种相关三项」（见上表推论）的真值在 `Infra/ProductProfile.py` 档案，由
+`Config.resolved_exit_params()` 唯一合并后喂给 `LayeredExitPolicy` —— 引擎 / 信号源 / broker 一行不动。入场策略固定 `EntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
 
 三个刻意保留的保守设定（`Strategy/Exit.py` 的 LayeredExitPolicy）：
 
