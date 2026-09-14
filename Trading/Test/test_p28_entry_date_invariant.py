@@ -14,8 +14,10 @@
     [3] Signal.from_bsp fail-fast（F3：缺 date/timestamp 不得静默补空串）
     [4] F1 建仓时间锚（无时间锚 → 拒绝建仓，且**不报单**）
     [5] F2 恢复期（旧库自动修复 / 三源全空 → 拒绝启动）
-    [6] 源码护栏（判定式里不得再出现自然日字符串切片）
+    [6] 源码护栏（判定式里不得再出现自然日字符串切片；不得手写第二处夜盘偏移
+        —— 后者按「夜盘语义」判定，纯日历算术不算，见 6c 的判据自测）
 """
+import ast
 import copy
 import os
 import re
@@ -325,7 +327,64 @@ check_true("[6b] Engine 代码里不再出现 bool(pos.entry_date) 这类'空串
 check_true("[6b2] Engine 代码里 entry_date 不再做 [:10] 切片比较",
            "entry_date[:10]" not in engine_code)
 
-# trading_day_of_ms 必须是唯一换算入口：不得有第二处手写夜盘偏移
+# trading_day_of_ms 必须是唯一换算入口：不得有第二处手写夜盘偏移。
+#
+# ⚠️ 2026-09-14 判据收窄（原判据误伤）：
+#   原判据 = "出现 timedelta(days=1) 即违规"，会把 Phase 11 新增的
+#   InstrumentSpec._weekdays_between() 判成手写夜盘偏移 —— 但那里是在**数工作日**
+#   （纯日历算术），与夜盘归属次日无关。改成"按夜盘语义判定"：
+#     同一个代码块（每个函数体 / 模块顶层）内**同时**出现
+#       (a) `timedelta(days=1)`，且
+#       (b) 夜盘语义信号 —— 引用 NIGHT_SESSION_START_HOUR，或 `.hour` 与
+#           0/20/21/23 这几个夜盘小时常量比较
+#   纯日历算术不含 (b) → 不违规；真手写夜盘偏移必含 (b) → 照样被抓（见下方自测）。
+#   ⚠️ 刻意**不采用**"把 InstrumentSpec 加进白名单"的修法 —— 那会连该文件里将来
+#   真出现的手写夜盘偏移一起放过，属于削弱护栏。
+NIGHT_HOURS = {0, 20, 21, 23}
+_RE_HOUR_L = re.compile(r"\.hour\s*(?:>=|<=|==|!=|>|<)\s*(\d{1,2})")
+_RE_HOUR_R = re.compile(r"(\d{1,2})\s*(?:>=|<=|==|!=|>|<)\s*[\w.]*\.hour")
+
+
+def _strip_comments(text):
+    return "\n".join(l.split("#")[0] for l in text.splitlines())
+
+
+def _night_signal(text):
+    """块内是否含夜盘语义信号（夜盘小时常量比较 / 引用夜盘起始小时）。"""
+    if "NIGHT_SESSION_START_HOUR" in text:
+        return True
+    for rx in (_RE_HOUR_L, _RE_HOUR_R):
+        for m in rx.finditer(text):
+            if int(m.group(1)) in NIGHT_HOURS:
+                return True
+    return False
+
+
+def hand_rolled_night_offset(source_text):
+    """返回 source_text 中「手写第二处夜盘偏移」的块起始行（1-based）。"""
+    try:
+        tree = ast.parse(source_text)
+    except SyntaxError:
+        return []
+    lines = source_text.splitlines()
+    fn_blocks, covered = [], set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            fn_blocks.append((node.lineno, node.end_lineno))
+            covered.update(range(node.lineno, node.end_lineno + 1))
+    hits = set()
+    for a, b in fn_blocks:
+        seg = _strip_comments("\n".join(lines[a - 1:b]))
+        if "timedelta(days=1)" in seg and _night_signal(seg):
+            hits.add(a)
+    top_lines = [i for i in range(1, len(lines) + 1) if i not in covered]
+    if top_lines:
+        seg = _strip_comments("\n".join(lines[i - 1] for i in top_lines))
+        if "timedelta(days=1)" in seg and _night_signal(seg):
+            hits.add(top_lines[0])
+    return sorted(hits)
+
+
 hand_rolled = []
 for sub in ("Trading/Engine", "Trading/Infra", "Trading/Source", "Trading/Broker"):
     for dirpath, _dirs, files in os.walk(os.path.join(ROOT, sub)):
@@ -333,13 +392,34 @@ for sub in ("Trading/Engine", "Trading/Infra", "Trading/Source", "Trading/Broker
             if not fn.endswith(".py"):
                 continue
             fp = os.path.join(dirpath, fn)
+            if "Types.py" in fp or "PeriodProfile" in fp:
+                continue
             txt = open(fp, encoding="utf-8").read()
-            code_txt = "\n".join(l.split("#")[0] for l in txt.splitlines())
-            if "timedelta(days=1)" in code_txt or "timedelta(days=1)" in code_txt:
-                if "Types.py" not in fp and "PeriodProfile" not in fp:
-                    hand_rolled.append(os.path.relpath(fp, ROOT).replace("\\", "/"))
-check_true("[6c] 夜盘日期偏移只在 Infra/Types.py 一处实现",
-           not hand_rolled, "另见: {}".format(hand_rolled))
+            for ln in hand_rolled_night_offset(txt):
+                hand_rolled.append("{}:{}".format(
+                    os.path.relpath(fp, ROOT).replace("\\", "/"), ln))
+check_true("[6c] 夜盘日期偏移只在 Infra/Types.py 一处实现（按夜盘语义判定）",
+           not hand_rolled, "另见: {}".format(hand_rolled[:5]))
+
+# 6c 判据自测：证明"收窄"没有变成"削弱护栏"。
+check("[6c-s1] 判据不误伤纯日历算术（_weekdays_between 形态）",
+      hand_rolled_night_offset(
+          "def f(a, b):\n    d = a\n    d += timedelta(days=1)\n    return d\n"),
+      [])
+check("[6c-s2] 判据仍抓得住手写夜盘偏移（dt.hour >= 21 加一天）",
+      hand_rolled_night_offset(
+          "def f(dt):\n    if dt.hour >= 21:\n        dt += timedelta(days=1)\n"
+          "    return dt\n"),
+      [1])
+check("[6c-s3] 判据仍抓得住引用夜盘常量的手写偏移",
+      hand_rolled_night_offset(
+          "def f(dt):\n    if dt.hour >= NIGHT_SESSION_START_HOUR:\n"
+          "        dt = dt + timedelta(days=1)\n    return dt\n"),
+      [1])
+check("[6c-s4] 判据仍抓得住模块顶层的手写夜盘偏移",
+      hand_rolled_night_offset(
+          "X = 1\nif dt.hour >= 20:\n    X = dt + timedelta(days=1)\n"),
+      [1])
 
 # ════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)

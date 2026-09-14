@@ -10,8 +10,13 @@ P15a 一笔报单开仓测试（2026-09-11 Phase 7 改写）
   另 `RiskConfig.unlock_no_new_open` 随"解锁"概念一并删除（D17 丢弃旧键但不静默）。
 
 新口径（本测试锁死）
-    [1] 术语纪律：config 无 sizing 键；`RiskConfig` 只剩 `max_volume` 一个字段；
-        两个已删键（max_open_positions / unlock_no_new_open）按 D17 丢弃 + 可观测。
+    [1] 术语纪律：config 无 sizing 键；`RiskConfig` 字段集**受控**（无已删键、也不得
+        出现预期外的新字段）；两个已删键（max_open_positions / unlock_no_new_open）
+        按 D17 丢弃 + 可观测。
+        ⚠️ 2026-09-14 修正：原断言把字段集写死为 `{"max_volume"}`，Phase 11 新增
+        `delivery_guard_days`（交割月护栏阈值）后误报 —— 改为「已删键不在 + 字段集
+        不超出已知清单 + max_volume 仍在」三条。新增非 sizing 字段时**同步已知清单**
+        即可（这是有意确认，不是漏改），新字段若误入则会红。
     [2] 一笔报单挂 N 手：`max_volume=N` → broker **恰好 1 单 N 手**、簿 **1 笔 N 手**、
         事件里恰好 1 条 order + 1 条 open（不是 N 单，也不是 1 笔拆 N 笔）。
     [3] `max_volume` 启动期校验 1..20（配置层 fail-fast）—— 取代已删的运行期
@@ -209,8 +214,17 @@ def _mk_risk(**kw):
 print("\n[1] 术语纪律：仓位管理已删 + D2/D17 已删键")
 check("[1a] config 无 sizing 键（PositionSizing 整体删除）",
       "sizing" in DEFAULT_CONFIG, False)
-check("[1b] RiskConfig 只剩 max_volume 一个字段（D2 删除 max_open_positions）",
-      sorted(RiskConfig.model_fields), ["max_volume"])
+# Phase 11 新增 delivery_guard_days（交割月护栏阈值）。原断言 "字段集 == {max_volume}"
+# 等于把字段清单写死 —— 任何**有意**新增都会误报。拆成三条：保住原意（无已删键 +
+# 字段体积不失控），且新增字段只需同步 _RISK_KNOWN 一行，属"有意确认"而非漏改。
+_RISK_KNOWN = {"max_volume", "delivery_guard_days"}
+_risk_fields = set(RiskConfig.model_fields)
+check("[1b] RiskConfig 无已删键（D2 max_open_positions / D17 unlock_no_new_open）",
+      sorted(_risk_fields & {"max_open_positions", "unlock_no_new_open"}), [])
+check("[1b2] RiskConfig 字段集不超出已知清单（新增字段须同步本行）",
+      sorted(_risk_fields - _RISK_KNOWN), [])
+check("[1b3] max_volume 仍在（唯一 sizing 字段）",
+      "max_volume" in _risk_fields, True)
 check("[1c] DEFAULT_CONFIG.risk 无 max_open_positions",
       "max_open_positions" in (DEFAULT_CONFIG.get("risk") or {}), False)
 check("[1d] DEFAULT_CONFIG.risk 无 unlock_no_new_open",
