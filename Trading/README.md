@@ -90,14 +90,14 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | **变异维度** | `Infra/PeriodProfile.py`（随周期）<br>`Infra/ProductProfile.py`（随品种） | **改文件 = 改代码资产**，走 git 评审 + 对账测试 | 跨层横切的**领域注册表** |
 
 两轴正交，所以三张档案表**不按消费层挪进 Config.py**：以 `ProductProfile` 为例，一行供 ③ 策略
-（`min_r_points`）、一行供 ⑤ 执行（`prefer_lock_over_closetoday`）、一行供 ⑥ Broker
+（`r_multiple_tp`）、一行供 ⑤ 执行（`prefer_lock_over_closetoday`）、一行供 ⑥ Broker
 （`price_tick` / `multiplier`），整表没有唯一归属层。`TradingConfig.period_profile` /
 `product_profile` property 是「入口聚合档案」的唯一形态（只读视图）。
 
-**推论（调参前必读）**：品种相关项——`price_tick` / `multiplier` / `min_r_points` /
-`r_multiple_tp` / `breakeven_buffer_ticks`——的真值**只在档案里**。在 `Config.py` 或 `.env`
-里写同名字段**不再生效**（会被档案覆盖）；改品种参数 = 改 `Infra/ProductProfile.py`。
-品种无关的出场参数（ATR / 跟踪）仍在 `Config.py` 调；L3 触发倍数 = 品种级 r_multiple_tp（在 Infra/ProductProfile.py，IC/IM=3R、其余=2R，不再有全局 trailing_trigger_r）。
+**推论（调参前必读）**：品种相关项——`price_tick` / `multiplier` / `r_multiple_tp`——的真值
+**只在档案里**。在 `Config.py` 或 `.env` 里写同名字段**不再生效**（会被档案覆盖）；改品种参数
+= 改 `Infra/ProductProfile.py`。品种无关的出场参数（ATR / 跟踪 / `breakeven_buffer_r` 等）仍在
+`Config.py` 的 `ExitConfig` 调；L3 触发倍数 = 品种级 `r_multiple_tp`（在 Infra/ProductProfile.py，IC/IM=3R、其余=2R，不再有全局 trailing_trigger_r）。
 
 > 权威声明见 `Trading/Config.py` 模块 docstring 顶部的「双轴声明」段。
 
@@ -149,13 +149,12 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
   "exit_params": {
     "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
     "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
-    "r_multiple_tp": 2.0,              // 止盈 = 入场 ± 2R
-    "min_r_points": 2.0,               // R 下限（点数）
     "use_atr": true,                   // ATR 自适应止损/止盈宽度
-    "atr_sl_multiple": 2.0,
+    "atr_sl_multiple": 2.0,            // R = max(结构止损, atr_sl_multiple×ATR)
     "use_trailing": true,              // 保本 + 跟踪止损（L3）
-    "breakeven_trigger_r": 1.0,
-    "trailing_atr_multiple": 1.5
+    "breakeven_trigger_r": 1.0,        // 浮盈 ≥ 1R 启动保本/锁利层
+    "breakeven_buffer_r": 0.5,         // 锁利层落点 = 入场价 ± 0.5R（=0 即真正保本）
+    "trailing_atr_multiple": 1.0       // 跟踪缓冲 = 1.0×ATR（最坏回吐 0.5R）
   },
   "engine": {
     "close_retry_bars": 5,             // CLOSE 被拒后冷却多少根 bar 再试。broker 内部

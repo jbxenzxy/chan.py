@@ -143,8 +143,7 @@ class InstrumentSpec(BaseModel):
           · `profile` 非空 → `price_tick` / `multiplier` **强制**取档案值。
             这两个字段随品种变，档案是它们唯一的真值来源；显式传进来的
             `price_tick=` / `multiplier=` 会被忽略。这是刻意的 —— 与 Fix A
-            把 min_r_points / r_multiple_tp / breakeven_buffer_ticks 从
-            ExitConfig 删掉、只留档案件是**同一个决策**（D1：放弃 .env 覆盖
+            把 r_multiple_tp 从 ExitConfig 删掉、只留档案件是**同一个决策**（D1：放弃 .env 覆盖
             品种相关参数的能力；调参 = 改档案 = git 评审 + 对账测试守护）。
 
           · 其余字段逐项取 `overrides`（signal_symbol / trade_symbol / exchange /

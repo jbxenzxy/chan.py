@@ -13,8 +13,8 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
   [1] parse_product：KQ.m@CZCE.TA → TA（PTA 是俗名，符号代码是 TA）
   [2] PRODUCT_PROFILES 含 TA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
   [3] TradingConfig 品种档案（Fix A；Phase 3 起为**显式播种**）：TA 的
-      multiplier / price_tick 经 main._seed_instrument() 播种；exit 三参数经
-      resolved_exit_params() 合并（min_r_points = 默认 3 点）
+      multiplier / price_tick 经 main._seed_instrument() 播种；r_multiple_tp 经
+      resolved_exit_params() 合并（min_r_points 已于 2026-09-14 删除）
   [4] TA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
       返回 FAK、Engine._open_volume() 钉 1 手 —— 档案只管品种参数、不管报单属性
   [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
@@ -146,17 +146,20 @@ def main():
         check("TA product=TA", p.product, "TA")
         check("TA multiplier=5.0（5 吨/手）", p.multiplier, 5.0)
         check("TA price_tick=2.0", p.price_tick, 2.0)
-        check("TA min_r_points=3.0（默认点数，2026-09-13 拍板）", p.min_r_points, 3.0)
         check("TA r_multiple_tp=2.0", p.r_multiple_tp, 2.0)
-        check("TA breakeven_buffer_ticks=2.0", p.breakeven_buffer_ticks, 2.0)
+        check("TA 档案已无 min_r_points（2026-09-14 删除）",
+              hasattr(p, "min_r_points"), False)
+        check("TA 档案已无 breakeven_buffer_ticks（改为全局比例）",
+              hasattr(p, "breakeven_buffer_ticks"), False)
 
     print("\n[3] TradingConfig 品种档案：TA(PTA)（显式播种 + resolved 合并）")
     c_ta = seeded("KQ.m@CZCE.TA")
     _res_ta = resolved_exit_params(c_ta)
-    check("TA resolved min_r_points=3.0（默认点数）", _res_ta["min_r_points"], 3.0)
+    check("TA resolved 已无 min_r_points（2026-09-14 删除）",
+          "min_r_points" in _res_ta, False)
     check("TA resolved r_multiple_tp=2.0", _res_ta["r_multiple_tp"], 2.0)
-    check("TA resolved breakeven_buffer_ticks=2.0",
-          _res_ta["breakeven_buffer_ticks"], 2.0)
+    check("TA resolved breakeven_buffer_r=0.5（全局，不随品种）",
+          _res_ta["breakeven_buffer_r"], 0.5)
     check("TA multiplier 播种 5.0", c_ta.instrument.multiplier, 5.0)
     check("TA price_tick 播种 2.0", c_ta.instrument.price_tick, 2.0)
     check("TA product_profile 命中", c_ta.product_profile.product, "TA")

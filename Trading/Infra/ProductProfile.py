@@ -15,17 +15,14 @@ App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向�
 PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
 **不随周期变化、而随合约品种变化**：
 
-  · `min_r_points`（R 下限）：IF/IH 波动率较低，3.0 点足够兜底；IC/IM 波动
-    更大，3.0 点会被极端横盘+极窄分型轻易击穿，需放大到 5.0 点；
-  · `breakeven_buffer_ticks`（保本缓冲）：保本出场只保"价差为零"，往返手续费+
-    滑点仍会让净收益为负，故保本位 = 入场价 ± 此 tick 数。IF/IH 滑点小取 2 tick，
-    IC/IM 波动大、冲击成本高取 3 tick；
-  · `r_multiple_tp`（止盈盈亏比）：IF/IH 惯用 1:2；IC/IM 波动大、趋势性弱，
-    1:3 的盈亏比更合适；
+  · `r_multiple_tp`（止盈盈亏比 / L3 启动阈值）：IF/IH 惯用 1:2（L3 在 2R 启动）；
+    IC/IM 波动大、趋势性弱，1:3 的盈亏比更合适（L3 在 3R 启动）；
+  · 保本/锁利层的"缓冲"已改为**全局比例** `breakeven_buffer_r`（在 Trading/Config.py
+    的 ExitConfig，默认 0.5R，跨品种跨周期统一），不再随品种变 —— 故本档案不再含该字段。
   · `price_tick` / `multiplier`（最小变动价位 / 合约乘数）：IF/IH = 0.2 点 / 300 元/点，
     IC/IM = 0.2 点 / 200 元/点 —— 合约事实，实盘以行情为准（详见类 docstring）。
 
-这些差异与周期无关（4 个品种在 4 个周期下都应保持各自的 R 下限/盈亏比/乘数/保本缓冲），
+这些差异与周期无关（各品种在 4 个周期下都应保持各自的盈亏比/乘数），
 因此**不放 PeriodProfile**，而单独成立本模块的 `ProductProfile`。
 
 为什么 Trading 自持一份品种表，而不是 import 主程序
@@ -45,9 +42,8 @@ from typing import Dict
 # 品种档案（与 PeriodProfile 平行的"随品种可变参数"归总）
 # ══════════════════════════════════════════════════════════════════
 # kw_only（2026-09-14 评审 P2-2）：强制关键字构造。
-#   price_tick 是 Phase 8 后加的字段，插在 breakeven_buffer_ticks 与 note 之间；
-#   位置参数构造 ProductProfile("IF", 3.0, 2.0, 300.0, 2.0, "note") 会把第 6 个
-#   实参（note）静默落进 price_tick —— dataclass 不做类型校验，不报错。
+#   price_tick 是 Phase 8 后加的字段；位置参数构造 ProductProfile(...) 会把实参
+#   静默错位到错误字段 —— dataclass 不做类型校验，不报错。
 #   加 kw_only=True 后位置构造直接 TypeError，把静默错位变成启动期硬失败。
 #   （改动前已核查：全仓 8 处构造全部是关键字参数，故无调用点需要改。）
 @dataclass(frozen=True, kw_only=True)
@@ -56,9 +52,8 @@ class ProductProfile:
 
     字段分两组（2026-09-13 用户定序：**各档案条目按此顺序书写**）——
       【策略标定值（随经验调，放前面）】
-      min_r_points             R 下限（点数），防极端横盘+极窄分型
-      breakeven_buffer_ticks    保本位缓冲 tick（覆盖往返手续费+滑点，真正"不亏钱"）
-      r_multiple_tp            止盈盈亏比（r_multiple_tp × R）
+      r_multiple_tp            止盈盈亏比（r_multiple_tp × R），同时是 L3 启动阈值（品种级）
+                               （保本/锁利缓冲 breakeven_buffer_r 已改为全局比例，见 ExitConfig）
       prefer_lock_over_closetoday  D6 平今开关（Phase 10，默认 True = 锁仓优先）。
                                True：今仓离场走转移 ④ 反向开仓锁仓（现状）；
                                False：今仓离场直接平今（offset=CLOSETODAY），
@@ -75,10 +70,8 @@ class ProductProfile:
     与上述概念分组不同属有意为之；书写/阅读以各档案条目的实参顺序为准。
     """
     product: str
-    min_r_points: float
     r_multiple_tp: float
     multiplier: float
-    breakeven_buffer_ticks: float = 2.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
     price_tick: float = 0.2                # 最小变动价位（离线兜底；中金所四品种均 0.2）
     prefer_lock_over_closetoday: bool = True   # D6 平今开关（Phase 10）：默认锁仓优先
     note: str = ""                              # 调参记录 / 数据来源 / 标定状态
@@ -88,23 +81,23 @@ class ProductProfile:
         return self.product
 
     def exit_overrides(self) -> Dict[str, float]:
-        """品种相关的出场参数三件套（Fix A · 2026-09-14 策略参数单源化）。
+        """品种相关的出场参数（Fix A · 2026-09-14 策略参数单源化）。
 
-        min_r_points / r_multiple_tp / breakeven_buffer_ticks **只存在于本档案**
-        （D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
+        仅 r_multiple_tp **只存在于本档案**（它同时是 L3 启动阈值，品种级；
+        D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
+        min_r_points（R 下限）、breakeven_buffer_ticks 已于 2026-09-14 删除：
+        R 改为纯自适应 max(A, 2×ATR)，保本缓冲改为全局比例 breakeven_buffer_r（ExitConfig）。
         Trading/Config.py 的 resolved_exit_params() 是唯一合并点 —— 把本返回值
         合到品种无关的 ExitConfig 上，组装出 LayeredExitPolicy 的完整参数。
         """
         return {
-            "min_r_points": self.min_r_points,
             "r_multiple_tp": self.r_multiple_tp,
-            "breakeven_buffer_ticks": self.breakeven_buffer_ticks,
         }
 
 
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
-# 条目实参顺序（2026-09-13 用户定序）：策略标定值在前（min_r_points → breakeven_buffer_ticks
-# → r_multiple_tp），合约事实在后（price_tick → multiplier）；note 同序。显式给真值；note 标定状态。
+# 条目实参顺序：策略标定值在前（r_multiple_tp），合约事实在后（price_tick →
+# multiplier）；note 同序。显式给真值；note 标定状态。
 # ⚠️ 手续费（open/close/closetoday_fee_rate）**不在此处** —— 它们随 broker 加收变化，
 #   属 InstrumentSpec 的**静态默认值**（离线兜底种子；实盘有效值由 InstrumentState
 #   经行情/成交回报回填），由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
@@ -125,47 +118,44 @@ class ProductProfile:
 #   Trading/Test/test_p50_review_fixes.py 的对账用例。
 PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     "IF": ProductProfile(
-        product="IF", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        product="IF", r_multiple_tp=2.0,
         price_tick=0.2, multiplier=300.0,
-        note="中金所 CFFEX IF：波动较低，R 下限 3.0 点；保本缓冲 2 tick；盈亏比 1:2"),
+        note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）"),
     "IH": ProductProfile(
-        product="IH", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        product="IH", r_multiple_tp=2.0,
         price_tick=0.2, multiplier=300.0,
-        note="中金所 CFFEX IH：波动较低，R 下限 3.0 点；保本缓冲 2 tick；盈亏比 1:2"),
+        note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）"),
     "IC": ProductProfile(
-        product="IC", min_r_points=5.0, breakeven_buffer_ticks=3.0, r_multiple_tp=3.0,
+        product="IC", r_multiple_tp=3.0,
         price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IC：波动较大，R 下限 5.0 点；保本缓冲 3 tick；盈亏比 1:3；乘数 200 元/点"),
+        note="中金所 CFFEX IC：波动较大，盈亏比 1:3（L3 在 3R 启动）；乘数 200 元/点"),
     "IM": ProductProfile(
-        product="IM", min_r_points=5.0, breakeven_buffer_ticks=3.0, r_multiple_tp=3.0,
+        product="IM", r_multiple_tp=3.0,
         price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IM：波动较大，R 下限 5.0 点；保本缓冲 3 tick；盈亏比 1:3；乘数 200 元/点"),
+        note="中金所 CFFEX IM：波动较大，盈亏比 1:3（L3 在 3R 启动）；乘数 200 元/点"),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
-    # min_r_points 是 R 下限地板，单位 = 品种报价点数（IF=指数点、商品=元/克·元/kg·元/吨）。
-    # 2026-09-13 用户拍板：商品档 min_r_points **暂全部用默认 3 点** —— IF/IH=3、
-    #   IC/IM=5 是交易经验标定，商品侧尚无同等经验积累，先用默认值跑，待回测/实盘
-    #   积累后再手工调（此前按 tick 数推 10~25 的标定已废弃：tick 粒度是交易所报价
-    #   惯例，不是波动尺度）。
+    # 商品档盈亏比暂统一 1:2（L3 在 2R 启动），与 IF/IH 一致；IC/IM 因波动大、趋势性弱
+    #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     #   手续费（open/close/closetoday_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
     #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
     "AU": ProductProfile(
-        product="AU", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        product="AU", r_multiple_tp=2.0,
         prefer_lock_over_closetoday=False,   # Phase 10（D6）：沪金平今免收 → 今仓离场直接平今
         price_tick=0.02, multiplier=1000.0,
-        note="上期所 SHFE 沪金：R 下限暂用默认 3 点(待经验积累后手工调)；趋势强、盈亏比可上探 1:3；"
+        note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
              "乘数 1000(元/克)、tick 0.02；平今免收(手续费 InstrumentSpec 配)；"
              "prefer_lock_over_closetoday=False(平今免收→今仓直接平今，不走锁仓)"),
     "AG": ProductProfile(
-        product="AG", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        product="AG", r_multiple_tp=2.0,
         prefer_lock_over_closetoday=False,   # Phase 10（D6）：沪银平今=平昨费率 → 平今不贵于锁仓
         price_tick=1.0, multiplier=15.0,
-        note="上期所 SHFE 沪银：R 下限暂用默认 3 点(待经验积累后手工调)；"
+        note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 15(元/kg)、tick 1；开平昨/平今均万0.5(手续费 InstrumentSpec 配)；"
              "prefer_lock_over_closetoday=False(平今不贵→今仓直接平今，省一次开仓+跨日平)"),
     "CU": ProductProfile(
-        product="CU", min_r_points=3.0, breakeven_buffer_ticks=3.0, r_multiple_tp=2.0,
+        product="CU", r_multiple_tp=2.0,
         price_tick=10.0, multiplier=5.0,
-        note="上期所 SHFE 沪铜：R 下限暂用默认 3 点(待经验积累后手工调)；"
+        note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 10；平今万1.0/开平昨万0.5(手续费 InstrumentSpec 配)；"
              "平今=锁仓后再平昨的总费、不占便宜 → prefer_lock_over_closetoday 保持默认 True"),
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
@@ -174,9 +164,9 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
     #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
     "TA": ProductProfile(
-        product="TA", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
+        product="TA", r_multiple_tp=2.0,
         price_tick=2.0, multiplier=5.0,
-        note="郑商所 CZCE PTA(精对苯二甲酸)：R 下限暂用默认 3 点(待经验积累后手工调)；"
+        note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；"
              "郑商所品种报单走 FAK + OPEN 钉 1 手；"
              "偶发装置/政策消息急拉急跌；手续费固定值以交易所最新公示为准(InstrumentSpec 配)"),

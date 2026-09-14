@@ -100,34 +100,33 @@ def feed(pol, n, o=100.0, h=101.0, l=99.0, c=100.0, start_ts=1000):
 def main():
     state = make_state()
 
-    print("\n[1] L1 R 倍数基线（use_atr=False）：多/空方向与 1:2 比例 + P2 防护")
-    # 多单：R=min_r_points=2，止损=入场-2，止盈=入场+4
+    print("\n[1] L1 R 倍数基线（stop_at_signal_extreme=True，A=2）：多/空方向与 1:2 比例 + P2 防护")
+    # 多单：A = entry−fractal_low = 100−98 = 2 → R=2，止损=入场-2，止盈=入场+4
     pol = LayeredExitPolicy({"use_atr": False,
-                             "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
-                             "min_r_points": 2.0, "use_trailing": False})
-    plan = pol.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
+                             "stop_at_signal_extreme": True, "r_multiple_tp": 2.0,
+                             "use_trailing": False})
+    plan = pol.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
     check("多单 止损 = 98（向上取整）", plan.stop_price, 98.0)
     check("多单 止盈 = 104（向下取整）", plan.tp_price, 104.0)
     check("多单 1:2（止盈距=2×止损距）",
           approx((plan.tp_price - 100.0), 2 * (100.0 - plan.stop_price)), True)
     # 空单镜像
     pol2 = LayeredExitPolicy({"use_atr": False,
-                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
-                              "min_r_points": 2.0, "use_trailing": False})
-    plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0), 100.0, state)
+                              "stop_at_signal_extreme": True, "r_multiple_tp": 2.0,
+                              "use_trailing": False})
+    plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0, fractal_high=102.0), 100.0, state)
     check("空单 止损 = 102（向下取整）", plan2.stop_price, 102.0)
     check("空单 止盈 = 96（向上取整）", plan2.tp_price, 96.0)
     # P2 防护：陈旧信号，极值已越过入场价 → 止损必须仍在 entry 不利侧
-    pol3 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
-                              "min_r_points": 2.0})
-    # 信号最低价 102 > 入场 100（行情已涨），极端情况止损本应=102 在 entry 上方 → 必须被压回
+    pol3 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True})
+    # 行情已涨（最低价 102 > 入场 100），fractal_low 缺省=0（哨兵）→ A=0 → R=0 → P2 压回
     plan3 = pol3.plan(make_signal(Side.LONG, 100.0, 105.0, 102.0), 100.0, state)
     check("P2 多单止损严格在 entry 下方", plan3.stop_price < 100.0, True)
 
     print("\n[2] L2 ATR 自适应宽窄（use_atr=True，喂 15 根 TR=2 的 K 线 → ATR=2）")
     pol4 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
                               "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
-                              "min_r_points": 2.0, "stop_at_signal_extreme": False,
+                              "stop_at_signal_extreme": False,
                               "use_trailing": False})
     feed(pol4, 15)  # 每根 h=101,l=99,c=100 → TR=2 → ATR≈2 → R=4
     plan4 = pol4.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
@@ -135,12 +134,11 @@ def main():
     check("ATR 路径 止盈 = 108（2R=8）", plan4.tp_price, 108.0)
     check("ATR 路径 R 落盘", approx(plan4.params.get("R", 0), 4.0), True)
 
-    print("\n[3] ATR 不可用（首根未喂）回退 L1（min_r_points 保底）")
+    print("\n[3] ATR 不可用（首根未喂）+ 无结构 → R=0 → P2 边界保护（止损压在入场价 1 tick 外）")
     pol5 = LayeredExitPolicy({"use_atr": True,
-                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
-                              "min_r_points": 2.0})
+                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0})
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
-    check("无 ATR 回退 止损 = 98", plan5.stop_price, 98.0)
+    check("无 ATR/无结构 R=0 → 止损 = 99.8（P2 边界保护）", plan5.stop_price, 99.8)
 
     print("\n[4] 同根 K 线同时触止盈止损 → 按止损计（悲观）")
     pos = make_position(Side.LONG, 100.0, 90.0, 110.0)
@@ -152,28 +150,28 @@ def main():
     pol6 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 99.0,
+                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 99.0,
                               "trailing_distance_points": 0.0})
     pos6 = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     # close=111 → 浮盈 11 ≥ 1R(10) → 保本位=100 > 90 → 更新
     chk6 = pol6.check(pos6, make_bar(2100, 100, 111, 100, 111), state, 5)
     check("保本触发 only_update", chk6.only_update if chk6 else None, True)
     check("保本新止损 = 100", chk6.plan.stop_price if chk6 else None, 100.0)
-    # 保本缓冲 >0：SL 抬到入场价之上 breakeven_buffer_ticks×tick，垫掉手续费+滑点
+    # 缓冲 >0：SL 抬到入场价之上 breakeven_buffer_r×R（0.5R，与品种/周期解耦）
     pol6b = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
                                "use_trailing": True,
-                               "breakeven_trigger_r": 1.0, "breakeven_buffer_ticks": 2.0,
+                               "breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5,
                                "r_multiple_tp": 99.0, "trailing_distance_points": 0.0})
     pos6b = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
-    check("保本缓冲 2 tick → 止损=100.4（入场价之上）",
-          chk6b.plan.stop_price if chk6b else None, 100.4)
+    check("保本缓冲 0.5R → 止损=105（入场价之上 0.5R=5）",
+          chk6b.plan.stop_price if chk6b else None, 105.0)
 
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
     pol7 = LayeredExitPolicy({"use_atr": False,
                               "stop_at_signal_extreme": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 2.0,
+                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
                               "trailing_distance_points": 5.0})
     # 已先保本到 100；本根 close=130（浮盈30≥2R=20），最高 131 → 跟踪=131-5=126
     # 用 tp=9999 排除"硬止盈"干扰，low=101>保本止损100 排除"硬止损"干扰，只验跟踪
@@ -198,9 +196,9 @@ def main():
     check("use_trailing 默认 = True（B 方案）", pol12.use_trailing, True)
 
     print("\n[8b] B 方案（use_trailing=True 默认）：不设硬止盈，止盈交给 L3 跟踪")
-    polB = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
-                              "r_multiple_tp": 2.0, "min_r_points": 2.0})
-    planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
+    polB = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
+                              "r_multiple_tp": 2.0})
+    planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
     check("B 方案 tp_price = None（不硬止盈）", planB.tp_price is None, True)
     check("B 方案 止损仍照常 = 98", planB.stop_price, 98.0)
 
@@ -209,7 +207,7 @@ def main():
     pol13 = LayeredExitPolicy({"use_atr": False,
                                "stop_at_signal_extreme": False,
                                "use_trailing": True, "breakeven_trigger_r": 99.0,
-                               "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 1.5,
+                               "breakeven_buffer_r": 0.0, "r_multiple_tp": 1.5,
                                "trailing_atr_multiple": 0.0, "trailing_distance_points": 1.0})
     # A 场景（R=10）：盘中冲 2R（high=120，未到 3R 止盈 130）、收盘回落 1.2R（112）
     #   旧口径（fav 看收盘 1.2R=12 点 < 1.5R=15 点）漏检；
@@ -242,11 +240,11 @@ def main():
     # IC：r_multiple_tp=3.0 → L3 在 3R 才启动；IF：r_multiple_tp=2.0 → 2R 启动
     pol_ic = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
                                 "use_trailing": True, "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 3.0,
+                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0,
                                 "trailing_distance_points": 1.0})
     pol_if = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
                                 "use_trailing": True, "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 2.0,
+                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
                                 "trailing_distance_points": 1.0})
     # R=10、_trail_best=100。IC 在 2.5R（best=125, fav=25 < 3R=30）不启动 L3；
     #   IF 在 2.5R（fav=25 ≥ 2R=20）已启动。
@@ -261,10 +259,10 @@ def main():
     chk_ic2 = pol_ic.check(pos_ic2, make_bar(2702, 100, 135, 105, 130), state, 5)
     check("IC(3R) 在 3.5R 启动 L3", (chk_ic2 is not None and chk_ic2.only_update), True)
 
-    print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR, min_r_points)")
+    print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)（已删 min_r_points 地板）")
     # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3
     pol20 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
-                               "r_multiple_tp": 2.0, "min_r_points": 2.0,
+                               "r_multiple_tp": 2.0,
                                "use_trailing": False})
     plan20 = pol20.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=97.0), 100.0, state)
@@ -278,15 +276,15 @@ def main():
     # max(A, 2×ATR)：A=3、2×ATR=4 → R=4（2×ATR 更大）
     pol22 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
                                "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
-                               "min_r_points": 2.0, "stop_at_signal_extreme": True})
+                               "stop_at_signal_extreme": True})
     feed(pol22, 15)  # TR=2 → ATR≈2 → 2×ATR=4
     plan22 = pol22.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=97.0), 100.0, state)
     check("max(A=3, 2×ATR=4)=4 → 止损=96", plan22.stop_price, 96.0)
-    # A ≤ 0（行情已穿越分型）→ 交给 min_r_points 兜底
+    # A ≤ 0（行情已穿越分型）且无 ATR → R=0，由 P2 守卫把止损压在入场价外 1 tick
     plan23 = pol20.plan(make_signal(Side.LONG, 100.0, 99.0, 98.0,
                                     fractal_low=102.0), 100.0, state)
-    check("A≤0 → R=max(0,0,min_r)=2 → 止损=98", plan23.stop_price, 98.0)
+    check("A≤0 且无 ATR → R=0 → P2 守卫压到 入场−1tick=99.8", plan23.stop_price, 99.8)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

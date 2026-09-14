@@ -64,7 +64,6 @@ class LayeredExitPolicy:
         self.stop_at_signal_extreme = p.stop_at_signal_extreme
         self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
         self.r_multiple_tp = float(p.r_multiple_tp)
-        self.min_r_points = float(p.min_r_points)
         # L2 波动率(ATR)定宽窄
         self.use_atr = p.use_atr
         self.atr_period = int(p.atr_period)
@@ -72,7 +71,7 @@ class LayeredExitPolicy:
         # L3 移动/保本锁利
         self.use_trailing = p.use_trailing
         self.breakeven_trigger_r = float(p.breakeven_trigger_r)
-        self.breakeven_buffer_ticks = float(p.breakeven_buffer_ticks or 0.0)
+        self.breakeven_buffer_r = float(p.breakeven_buffer_r)
         self.trailing_atr_multiple = float(p.trailing_atr_multiple)
         self.trailing_distance_points = float(p.trailing_distance_points or 0.0)
         # 跨日清空 ATR 缓冲用
@@ -126,19 +125,20 @@ class LayeredExitPolicy:
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
     def _initial_r(self, signal, entry_price: float, state: InstrumentState) -> float:
-        """初始风险距离 R = max(A, B, min_r_points)。
+        """初始风险距离 R = max(A, B)。
 
         A = 结构止损（分型极值距离）：
               做多 A = entry_price − 底分型最低点(fractal_low)；
               做空 A = 顶分型最高点(fractal_high) − entry_price。
-            A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B / min_r_points 兜底。
+            A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B（2×ATR）兜底。
         B = 波动率止损 = atr_sl_multiple × ATR（use_atr 且 ATR 样本足够时）。
-        min_r_points = R 下限地板，防极端横盘+极窄分型。
+        （2026-09-14：已删除 min_r_points 绝对点数地板 —— R 完全由结构/波动率自适应，
+         不再设"死市保底"；A、B 同时缺失时 R=0，由 plan() 的 P2 守卫把止损压在入场价 1 tick 外。）
         """
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
         # fractal_low/fractal_high ≤ 0 表示信号未携带有效分型（哨兵值，价格为 0 不可能），
-        # 此时视为「无结构止损信息」，A 钳 0 交给 B（2×ATR）/ min_r_points 兜底；
+        # 此时视为「无结构止损信息」，A 钳 0 交给 B（2×ATR）兜底；
         # 否则会被误读成「分型最低点 = 0」→ A = entry_price → 止损打飞到 ~0，SL 永不触发。
         A = 0.0
         if self.stop_at_signal_extreme:
@@ -154,7 +154,7 @@ class LayeredExitPolicy:
             atr = self._atr()
             if atr:
                 B = self.atr_sl_multiple * atr
-        return max(A, B, self.min_r_points)
+        return max(A, B)
 
     # ---------- 开仓时生成出场计划 ----------
     def plan(self, signal: Signal, entry_price: float, state: InstrumentState,
@@ -253,10 +253,11 @@ class LayeredExitPolicy:
                                 and fav_profit >= self.r_multiple_tp * R)
             new_stop = stop
 
-            # 保本：浮盈 ≥ breakeven_trigger_r·R → 止损抬至保本
+            # 保本/锁利：浮盈 ≥ breakeven_trigger_r·R → 止损抬至 入场价 ± breakeven_buffer_r·R
+            #   breakeven_buffer_r=0 → 真正保本（止损=入场价）；=0.5 → 锁定 0.5R（与品种/周期解耦）
             if self.breakeven_trigger_r > 0 and fav_profit >= self.breakeven_trigger_r * R:
-                be = (entry + self.breakeven_buffer_ticks * state.price_tick) if is_long \
-                    else (entry - self.breakeven_buffer_ticks * state.price_tick)
+                be = (entry + self.breakeven_buffer_r * R) if is_long \
+                    else (entry - self.breakeven_buffer_r * R)
                 be = state.round_price(be, "up" if is_long else "down")
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be

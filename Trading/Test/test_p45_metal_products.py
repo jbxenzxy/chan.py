@@ -8,9 +8,9 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
     ② PRODUCT_PROFILES 含 AU/AG/CU，且 multiplier/price_tick 为合约真值
     ③ TradingConfig 品种档案（Fix A · 2026-09-14；Phase 3 起为**显式播种**）：
        multiplier / price_tick 经 `main._seed_instrument()`（= `InstrumentSpec.
-       for_product(profile)`）播种；min_r_points / r_multiple_tp /
-       breakeven_buffer_ticks 经 resolved_exit_params() 合并
-       （品种档案是唯一默认值来源）
+       for_product(profile)`）播种；r_multiple_tp 经 resolved_exit_params() 合并
+       （品种档案是唯一默认值来源；min_r_points / breakeven_buffer_ticks 已于
+       2026-09-14 删除，保本缓冲改为全局比例 breakeven_buffer_r）
     ④ InstrumentSpec.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
        交易所分支；CZCE 才切 FAK）—— 确认金属走默认 order_advanced
     ⑤ 未知品种仍 product_profile=None（不误伤）
@@ -94,25 +94,29 @@ def main():
     print("\n[3] TradingConfig 品种档案：AU（显式播种 + resolved 合并）")
     c_au = seeded("KQ.m@SHFE.AU")
     _res_au = resolved_exit_params(c_au)
-    check("AU resolved min_r_points=3.0（默认点数，2026-09-13 拍板）", _res_au["min_r_points"], 3.0)
+    check("AU resolved 已无 min_r_points（2026-09-14 删除）", "min_r_points" in _res_au, False)
     check("AU resolved r_multiple_tp=2.0", _res_au["r_multiple_tp"], 2.0)
     check("AU multiplier=1000.0", c_au.instrument.multiplier, 1000.0)
-    check("AU resolved breakeven_buffer_ticks=2.0", _res_au["breakeven_buffer_ticks"], 2.0)
+    check("AU resolved 已无 breakeven_buffer_ticks（改为全局比例）",
+          "breakeven_buffer_ticks" in _res_au, False)
+    check("AU resolved breakeven_buffer_r=0.5（全局，不随品种）",
+          _res_au["breakeven_buffer_r"], 0.5)
     check("AU price_tick=0.02", c_au.instrument.price_tick, 0.02)
     check("AU product_profile 命中", c_au.product_profile.product, "AU")
 
     print("\n[4] TradingConfig 品种档案：AG / CU")
     c_ag = seeded("KQ.m@SHFE.AG")
     _res_ag = resolved_exit_params(c_ag)
-    check("AG resolved min_r_points=3.0（默认点数）", _res_ag["min_r_points"], 3.0)
+    check("AG resolved 已无 min_r_points（2026-09-14 删除）", "min_r_points" in _res_ag, False)
     check("AG multiplier=15.0", c_ag.instrument.multiplier, 15.0)
     check("AG price_tick=1.0", c_ag.instrument.price_tick, 1.0)
     c_cu = seeded("KQ.m@SHFE.CU")
     _res_cu = resolved_exit_params(c_cu)
-    check("CU resolved min_r_points=3.0（默认点数）", _res_cu["min_r_points"], 3.0)
+    check("CU resolved 已无 min_r_points（2026-09-14 删除）", "min_r_points" in _res_cu, False)
     check("CU multiplier=5.0", c_cu.instrument.multiplier, 5.0)
     check("CU price_tick=10.0", c_cu.instrument.price_tick, 10.0)
-    check("CU resolved breakeven_buffer_ticks=3.0", _res_cu["breakeven_buffer_ticks"], 3.0)
+    check("CU resolved breakeven_buffer_r=0.5（全局，不随品种）",
+          _res_cu["breakeven_buffer_r"], 0.5)
 
     print("\n[5] effective_order_advanced：SHFE 仍走默认 FOK（不破坏 Phase 9 交易所分支）")
     sp_au = InstrumentSpec(signal_symbol="KQ.m@SHFE.AU", exchange="SHFE", order_advanced="FOK")

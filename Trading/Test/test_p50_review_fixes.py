@@ -183,18 +183,17 @@ def t2_assert_product_allowed():
 # ══════════════════════════════════════════════════════════════════
 def t3_kw_only():
     print("\n[3] P2-2 ProductProfile(kw_only=True)：位置构造硬失败")
-    # price_tick 插在 breakeven_buffer_ticks 与 note 之间 → 位置构造会把 note
-    # 静默落进 price_tick（dataclass 不做类型校验）。加 kw_only 后必须 TypeError。
+    # 字段顺序变动曾导致位置构造把 note 静默落进 price_tick（dataclass 不做类型
+    # 校验）。加 kw_only 后位置构造必须 TypeError —— 与具体字段顺序解耦。
     err = None
     try:
-        ProductProfile("IF", 3.0, 2.0, 300.0, 2.0, "note")
+        ProductProfile("IF", 2.0, 300.0, 0.2, "note")
     except TypeError as e:
         err = str(e)
     check_true("位置构造 ProductProfile(...) 抛 TypeError", err)
     # 关键字构造不受影响
-    p = ProductProfile(product="IF", min_r_points=3.0, r_multiple_tp=2.0,
-                       multiplier=300.0, breakeven_buffer_ticks=2.0,
-                       price_tick=0.2, note="x")
+    p = ProductProfile(product="IF", r_multiple_tp=2.0,
+                       multiplier=300.0, price_tick=0.2, note="x")
     check("关键字构造 OK（price_tick 落对位置）", p.price_tick, 0.2)
     check("关键字构造 OK（note 落对位置）", p.note, "x")
     # 8 个档案条目仍然全部可构造（防 kw_only 改动把既有表打坏）

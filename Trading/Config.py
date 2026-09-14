@@ -12,8 +12,9 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
     · 周期只作时间语义（freq → bar_secs），收口在 Infra/PeriodProfile.py 的
-      FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（min_r_points / r_multiple_tp /
-      breakeven_buffer_ticks，Fix A 单源化 + D1 拍板）收口在 Infra/ProductProfile.py，
+      FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（r_multiple_tp，Fix A 单源化 + D1
+      拍板）收口在 Infra/ProductProfile.py，品种无关项（breakeven_* / ATR / trailing）
+      在本文件 ExitConfig 调；
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
     · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14）：
       品种播种（multiplier / price_tick）改由启动路径显式调用
@@ -271,14 +272,13 @@ class ExitConfig(BaseModel):
 
     LayeredExitPolicy（L1-L3 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
     L3 保本/跟踪锁利。原 L4 时间/收盘兜底已删除（含引擎侧收盘前强平）。
-    R 的产生见 Strategy/Exit.py：R = max(A, 2×ATR, min_r_points)，其中
-      A = 结构止损（分型极值距离），2×ATR = 波动率止损，min_r_points = R 下限地板。
+    R 的产生见 Strategy/Exit.py：R = max(A, 2×ATR)，其中
+      A = 结构止损（分型极值距离），2×ATR = 波动率止损（自适应下限，无绝对点数地板）。
 
     （2026-09-08：原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
 
-    品种相关字段单源化（Fix A · 2026-09-14 · D1 拍板）：min_r_points /
-    r_multiple_tp / breakeven_buffer_ticks **不在本模型** —— 它们随品种变，
+    品种相关字段单源化（Fix A · 2026-09-14 · D1 拍板）：r_multiple_tp **不在本模型** —— 它随品种变，
     唯一默认值来源是 Infra/ProductProfile.py 的品种档案；.env / 环境变量
     的覆盖能力已放弃（extra=forbid 下带旧键构造直接报错，这是刻意的：
     调参 = 改档案 = git 评审 + 对账测试守护）。组装 LayeredExitPolicy 的
@@ -287,7 +287,7 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR 与品种档案的 min_r_points
+    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
@@ -295,7 +295,8 @@ class ExitConfig(BaseModel):
     atr_sl_multiple: float = 2.0           # 初始止损距离 = atr_sl_multiple × ATR
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
-    breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，止损抬至保本
+    breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，启动保本/锁利层
+    breakeven_buffer_r: float = 0.5       # 保本/锁利层落点 = 入场价 ± 此倍数×R（=0.5 即锁定半 R；=0 为真正保本）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
                                                 #   注：B 方案（use_trailing=True）下**不生成硬止盈单**，止盈完全交给
@@ -308,16 +309,14 @@ class ExitConfig(BaseModel):
 class ExitPolicyParams(ExitConfig):
     """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
 
-    继承 ExitConfig 的品种无关项（ATR / trailing），另持品种相关三参数（含 r_multiple_tp，它同时是 L3 启动阈值，品种级）。
+    继承 ExitConfig 的品种无关项（ATR / trailing / breakeven_*），另持品种相关参数 r_multiple_tp（它同时是 L3 启动阈值，品种级）。
     三参数的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
     合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
     如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。
     """
     model_config = ConfigDict(extra="forbid")
 
-    min_r_points: float = 3.0              # R 下限（点数），防极端横盘+极窄分型
     r_multiple_tp: float = 2.0             # 盈亏比。止盈 = 入场价 ± r_multiple_tp × R（默认 1:2）
-    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -541,8 +540,7 @@ def resolved_exit_params(cfg: TradingConfig) -> Dict[str, Any]:
 
     合并两个来源：
       · 品种无关项 —— cfg.exit_params（ATR / trailing / 触发倍数等）
-      · 品种相关项 —— cfg.product_profile.exit_overrides()（min_r_points /
-        r_multiple_tp / breakeven_buffer_ticks，唯一默认值来源是品种档案）
+      · 品种相关项 —— cfg.product_profile.exit_overrides()（r_multiple_tp，唯一默认值来源是品种档案）
     档案值整块生效：本函数产出的 dict 才是 LayeredExitPolicy 的合法入参，
     直接传 cfg.exit_params.model_dump() 会缺品种三参数（构造期 AttributeError）。
 

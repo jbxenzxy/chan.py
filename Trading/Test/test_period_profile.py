@@ -134,7 +134,8 @@ def main():
 
     c_if = seeded("KQ.m@CFFEX.IF")
     _res_if = resolved_exit_params(c_if)
-    check("IF resolved min_r_points=3.0", _res_if["min_r_points"], 3.0)
+    check("IF resolved 已无 min_r_points（2026-09-14 删除）",
+          "min_r_points" in _res_if, False)
     check("IF resolved r_multiple_tp=2.0", _res_if["r_multiple_tp"], 2.0)
     check("IF 播种后 multiplier=300.0（与模型默认同值，此处不作强断言）",
           c_if.instrument.multiplier, 300.0)
@@ -144,7 +145,8 @@ def main():
     # 而不是恰好等于模型默认值。
     c_ic = seeded("KQ.m@CFFEX.IC")
     _res_ic = resolved_exit_params(c_ic)
-    check("IC resolved min_r_points=5.0", _res_ic["min_r_points"], 5.0)
+    check("IC resolved 已无 min_r_points（2026-09-14 删除）",
+          "min_r_points" in _res_ic, False)
     check("IC resolved r_multiple_tp=3.0", _res_ic["r_multiple_tp"], 3.0)
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.instrument.multiplier, 200.0)
@@ -168,8 +170,9 @@ def main():
     #       price_tick / multiplier 不被档案覆盖（靠 model_fields_set 判据）。
     #     Phase 3 按 D1 拍板取消这条：档案是这两个字段**唯一**的真值来源，
     #       显式写进去的值在播种时同样被档案覆盖。理由与 Fix A 把
-    #       min_r_points / r_multiple_tp / breakeven_buffer_ticks 从 ExitConfig
-    #       删掉是同一个决策 —— 调参 = 改档案 = git 评审 + 对账测试守护。
+    #       r_multiple_tp 从 ExitConfig 删掉是同一个决策 —— 调参 = 改档案
+    #       = git 评审 + 对账测试守护（min_r_points / breakeven_buffer_ticks
+    #       已于 2026-09-14 一并删除）。
     #     安全性：实盘 tick/乘数由 SimNow 行情原子回填 + A′ fail-closed 兜底，
     #       配置值本就只是离线（dry_run/replay）的种子，被档案覆盖无损。
     c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC",
@@ -194,16 +197,15 @@ def main():
     #     Phase 3 删掉了 apply_product_profile/force 那套双档语义 ——
     #     品种已切换，档案立即成为新品种的权威真值（含 tick/乘数整块覆盖），
     #     否则沿用旧品种的 multiplier/price_tick 会造成限价口径漂移。
-    #     品种三参数不在播种范围 —— 换品种后经 resolved_exit_params 跟随
-    #     新品种档案（IC 5.0/3.0 → IF 3.0/2.0）。
+    #     r_multiple_tp 不在播种范围 —— 换品种后经 resolved_exit_params 跟随
+    #     新品种档案（IC 3.0 → IF 2.0）。
     c_exp.instrument.signal_symbol = "KQ.m@CFFEX.IF"
     _main._seed_instrument(c_exp)
     check("换品种播种后 multiplier 覆盖为 IF 档案 300.0", c_exp.instrument.multiplier, 300.0)
     _res_exp = resolved_exit_params(c_exp)
-    check("换品种后 resolved min_r_points 跟随 IF 档案 3.0", _res_exp["min_r_points"], 3.0)
     check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0", _res_exp["r_multiple_tp"], 2.0)
-    check("换品种后 resolved breakeven_buffer_ticks 跟随 IF 档案 2.0",
-          _res_exp["breakeven_buffer_ticks"], 2.0)
+    check("换品种后 resolved breakeven_buffer_r=0.5（全局，不随品种）",
+          _res_exp["breakeven_buffer_r"], 0.5)
 
     # (c) price_tick 同理：显式 0.5 在构造后存活（无副作用），一经播种即回档案值，
     #     换品种再播种继续跟新品种档案走。

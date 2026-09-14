@@ -153,8 +153,10 @@ def main():
               c.instrument.multiplier, mult)
         check("{} price_tick 播种 {}".format(product, tick),
               c.instrument.price_tick, tick)
-        check("{} R 下限 = 默认 3 点（2026-09-13 拍板，档案经 resolved 合并）".format(product),
-              resolved_exit_params(c)["min_r_points"], 3.0)
+        check("{} resolved 已无 min_r_points（2026-09-14 删除）".format(product),
+              "min_r_points" in resolved_exit_params(c), False)
+        check("{} resolved 已无 breakeven_buffer_ticks（改为全局比例）".format(product),
+              "breakeven_buffer_ticks" in resolved_exit_params(c), False)
 
     print("\n[3] 白名单硬约束：未知品种拒绝启动、已知品种正常启动")
     for sym in ["KQ.m@SHFE.rb", "KQ.m@SHFE.ZZ"]:
