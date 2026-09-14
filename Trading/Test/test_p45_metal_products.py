@@ -6,9 +6,11 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
 
     ① parse_product 从主连符号提取品种代码（SHFE.AU → AU）
     ② PRODUCT_PROFILES 含 AU/AG/CU，且 multiplier/price_tick 为合约真值
-    ③ TradingConfig 品种档案（Fix A · 2026-09-14）：multiplier / price_tick 经
-       instrument 注入播种；min_r_points / r_multiple_tp / breakeven_buffer_ticks
-       经 resolved_exit_params() 合并（品种档案是唯一默认值来源）
+    ③ TradingConfig 品种档案（Fix A · 2026-09-14；Phase 3 起为**显式播种**）：
+       multiplier / price_tick 经 `main._seed_instrument()`（= `InstrumentSpec.
+       for_product(profile)`）播种；min_r_points / r_multiple_tp /
+       breakeven_buffer_ticks 经 resolved_exit_params() 合并
+       （品种档案是唯一默认值来源）
     ④ InstrumentSpec.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
        交易所分支；CZCE 才切 FAK）—— 确认金属走默认 order_advanced
     ⑤ 未知品种仍 product_profile=None（不误伤）
@@ -45,9 +47,24 @@ sys.path.insert(0, _REPO_ROOT)
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
+from Trading import main as _main  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
+
+
+def seeded(signal_symbol: str) -> TradingConfig:
+    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+
+    Phase 3 把"档案播种"从 TradingConfig 的构造副作用（model_validator +
+    model_fields_set）改成启动路径上的一次显式调用（main._seed_instrument）。
+    本测试走与生产完全相同的入口 —— 只构造 TradingConfig 就断言
+    `instrument.multiplier` 的话，测到的是模型默认值，播种整条通道被漏接
+    也照样绿灯（假阳性）。
+    """
+    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    _main._seed_instrument(cfg)
+    return cfg
 
 
 def check(name, got, expected):
@@ -74,8 +91,8 @@ def main():
             check("{} multiplier={}".format(code, mult), p.multiplier, mult)
             check("{} price_tick={}".format(code, tick), p.price_tick, tick)
 
-    print("\n[3] TradingConfig 品种档案：AU（instrument 播种 + resolved 合并）")
-    c_au = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AU"})
+    print("\n[3] TradingConfig 品种档案：AU（显式播种 + resolved 合并）")
+    c_au = seeded("KQ.m@SHFE.AU")
     _res_au = resolved_exit_params(c_au)
     check("AU resolved min_r_points=3.0（默认点数，2026-09-13 拍板）", _res_au["min_r_points"], 3.0)
     check("AU resolved r_multiple_tp=2.0", _res_au["r_multiple_tp"], 2.0)
@@ -85,12 +102,12 @@ def main():
     check("AU product_profile 命中", c_au.product_profile.product, "AU")
 
     print("\n[4] TradingConfig 品种档案：AG / CU")
-    c_ag = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AG"})
+    c_ag = seeded("KQ.m@SHFE.AG")
     _res_ag = resolved_exit_params(c_ag)
     check("AG resolved min_r_points=3.0（默认点数）", _res_ag["min_r_points"], 3.0)
     check("AG multiplier=15.0", c_ag.instrument.multiplier, 15.0)
     check("AG price_tick=1.0", c_ag.instrument.price_tick, 1.0)
-    c_cu = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.CU"})
+    c_cu = seeded("KQ.m@SHFE.CU")
     _res_cu = resolved_exit_params(c_cu)
     check("CU resolved min_r_points=3.0（默认点数）", _res_cu["min_r_points"], 3.0)
     check("CU multiplier=5.0", c_cu.instrument.multiplier, 5.0)

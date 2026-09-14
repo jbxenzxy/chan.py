@@ -12,8 +12,9 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
 本测试锁死的断言：
   [1] parse_product：KQ.m@CZCE.TA → TA（PTA 是俗名，符号代码是 TA）
   [2] PRODUCT_PROFILES 含 TA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
-  [3] TradingConfig 品种档案（Fix A）：TA 的 multiplier / price_tick 经 instrument
-      注入播种；exit 三参数经 resolved_exit_params() 合并（min_r_points = 默认 3 点）
+  [3] TradingConfig 品种档案（Fix A；Phase 3 起为**显式播种**）：TA 的
+      multiplier / price_tick 经 main._seed_instrument() 播种；exit 三参数经
+      resolved_exit_params() 合并（min_r_points = 默认 3 点）
   [4] TA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
       返回 FAK、Engine._open_volume() 钉 1 手 —— 档案只管品种参数、不管报单属性
   [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
@@ -62,9 +63,23 @@ from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
+from Trading import main as _main  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
+
+
+def seeded(signal_symbol: str) -> TradingConfig:
+    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+
+    Phase 3 把"档案播种"从 TradingConfig 的构造副作用（model_validator +
+    model_fields_set）改成启动路径上的一次显式调用（main._seed_instrument）。
+    本测试走与生产完全相同的入口；只构造 TradingConfig 就断言
+    `instrument.multiplier` 测的是模型默认值 —— 播种被漏接也照样绿灯。
+    """
+    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    _main._seed_instrument(cfg)
+    return cfg
 
 
 def check(name, got, expected):
@@ -91,8 +106,12 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol):
-    """构造引擎：cfg 按 signal_symbol 生成（品种档案随 model_validator 注入）。"""
-    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    """构造引擎：cfg 按 signal_symbol 生成并**显式播种**品种档案（Phase 3）。
+
+    播种在 broker/引擎之前完成 —— 与 main.py 的启动次序一致（先
+    _seed_instrument，再 build_broker，最后 TradingEngine）。
+    """
+    cfg = seeded(signal_symbol)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -131,15 +150,15 @@ def main():
         check("TA r_multiple_tp=2.0", p.r_multiple_tp, 2.0)
         check("TA breakeven_buffer_ticks=2.0", p.breakeven_buffer_ticks, 2.0)
 
-    print("\n[3] TradingConfig 品种档案：TA(PTA)（instrument 播种 + resolved 合并）")
-    c_ta = TradingConfig(instrument={"signal_symbol": "KQ.m@CZCE.TA"})
+    print("\n[3] TradingConfig 品种档案：TA(PTA)（显式播种 + resolved 合并）")
+    c_ta = seeded("KQ.m@CZCE.TA")
     _res_ta = resolved_exit_params(c_ta)
     check("TA resolved min_r_points=3.0（默认点数）", _res_ta["min_r_points"], 3.0)
     check("TA resolved r_multiple_tp=2.0", _res_ta["r_multiple_tp"], 2.0)
     check("TA resolved breakeven_buffer_ticks=2.0",
           _res_ta["breakeven_buffer_ticks"], 2.0)
-    check("TA multiplier 注入 5.0", c_ta.instrument.multiplier, 5.0)
-    check("TA price_tick 注入 2.0", c_ta.instrument.price_tick, 2.0)
+    check("TA multiplier 播种 5.0", c_ta.instrument.multiplier, 5.0)
+    check("TA price_tick 播种 2.0", c_ta.instrument.price_tick, 2.0)
     check("TA product_profile 命中", c_ta.product_profile.product, "TA")
 
     print("\n[4] PTA 的 CZCE 报单语义（档案不管报单属性，exchange 决定）")

@@ -25,7 +25,7 @@ from collections import deque
 from typing import Optional
 
 from ..Config import ExitPolicyParams
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import InstrumentState
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
 
@@ -84,13 +84,13 @@ class LayeredExitPolicy:
     def describe(self) -> str:
         return "{}({})".format(self.name, self.params)
 
-    def check_with(self, position: Position, bar: Bar, spec: InstrumentSpec,
+    def check_with(self, position: Position, bar: Bar, state: InstrumentState,
                    bars_held: int = 0) -> Optional["ExitCheck"]:
         """引擎唯一调用入口（兼容旧签名策略）。"""
-        return self.check(position, bar, spec, bars_held=bars_held)
+        return self.check(position, bar, state, bars_held=bars_held)
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
-    def on_bar(self, bar: Bar, spec: InstrumentSpec) -> None:
+    def on_bar(self, bar: Bar, state: InstrumentState) -> None:
         # 跨日清空 ATR 缓冲：昨收 → 今开的隔夜跳空会造出一个巨大 TR。
         # 30m 下一天只有 8 根 bar、缓冲要 atr_period+1=15 根，
         # 一个跳空能把近两天的 ATR 都顶高 → 止损/跟踪距离被系统性放大。
@@ -124,7 +124,7 @@ class LayeredExitPolicy:
         return self._atr()
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
-    def _initial_r(self, signal, entry_price: float, spec: InstrumentSpec) -> float:
+    def _initial_r(self, signal, entry_price: float, state: InstrumentState) -> float:
         """初始风险距离 R = max(A, B, min_r_points)。
 
         A = 结构止损（分型极值距离）：
@@ -156,7 +156,7 @@ class LayeredExitPolicy:
         return max(A, B, self.min_r_points)
 
     # ---------- 开仓时生成出场计划 ----------
-    def plan(self, signal: Signal, entry_price: float, spec: InstrumentSpec,
+    def plan(self, signal: Signal, entry_price: float, state: InstrumentState,
              anchor: Optional[float] = None) -> ExitPlan:
         """生成出场计划。
 
@@ -167,21 +167,21 @@ class LayeredExitPolicy:
         """
         base = anchor if anchor is not None else entry_price
         is_long = signal.side is Side.LONG
-        min_gap = spec.price_tick
-        R = self._initial_r(signal, base, spec)
+        min_gap = state.price_tick
+        R = self._initial_r(signal, base, state)
         stop_dist = R
         tp_dist = self.r_multiple_tp * R
 
         if is_long:
-            raw_stop = base - stop_dist - self.stop_buffer_ticks * spec.price_tick
+            raw_stop = base - stop_dist - self.stop_buffer_ticks * state.price_tick
             raw_tp = base + tp_dist
-            stop = spec.round_price(raw_stop, "up")        # 易触发（保守）
-            nominal_tp = spec.round_price(raw_tp, "down")  # 难触发（保守）
+            stop = state.round_price(raw_stop, "up")        # 易触发（保守）
+            nominal_tp = state.round_price(raw_tp, "down")  # 难触发（保守）
         else:
-            raw_stop = base + stop_dist + self.stop_buffer_ticks * spec.price_tick
+            raw_stop = base + stop_dist + self.stop_buffer_ticks * state.price_tick
             raw_tp = base - tp_dist
-            stop = spec.round_price(raw_stop, "down")
-            nominal_tp = spec.round_price(raw_tp, "up")
+            stop = state.round_price(raw_stop, "down")
+            nominal_tp = state.round_price(raw_tp, "up")
 
         # B 方案：启用保本/跟踪（use_trailing=True）时**不落硬止盈单**，止盈交给 L3 的
         #   ATR 跟踪兑现。原因：IF/IH 的 r_multiple_tp 与 trailing_trigger_r 同为 2.0，
@@ -193,10 +193,10 @@ class LayeredExitPolicy:
         # 否则遇到陈旧信号（行情已走远）会变成"开仓即触发止盈"的反向单。
         if is_long:
             if stop is not None and stop >= base - min_gap:
-                stop = spec.round_price(base - max(stop_dist, min_gap), "down")
+                stop = state.round_price(base - max(stop_dist, min_gap), "down")
         else:
             if stop is not None and stop <= base + min_gap:
-                stop = spec.round_price(base + max(stop_dist, min_gap), "up")
+                stop = state.round_price(base + max(stop_dist, min_gap), "up")
 
         params = dict(self.params)
         params["R"] = R
@@ -207,7 +207,7 @@ class LayeredExitPolicy:
         return ExitPlan(name=self.name, stop_price=stop, tp_price=tp, params=params)
 
     # ---------- 每根 bar 闭合后判定 ----------
-    def check(self, position: Position, bar: Bar, spec: InstrumentSpec,
+    def check(self, position: Position, bar: Bar, state: InstrumentState,
               bars_held: int = 0) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price
@@ -254,9 +254,9 @@ class LayeredExitPolicy:
 
             # 保本：浮盈 ≥ breakeven_trigger_r·R → 止损抬至保本
             if self.breakeven_trigger_r > 0 and fav_profit >= self.breakeven_trigger_r * R:
-                be = (entry + self.breakeven_buffer_ticks * spec.price_tick) if is_long \
-                    else (entry - self.breakeven_buffer_ticks * spec.price_tick)
-                be = spec.round_price(be, "up" if is_long else "down")
+                be = (entry + self.breakeven_buffer_ticks * state.price_tick) if is_long \
+                    else (entry - self.breakeven_buffer_ticks * state.price_tick)
+                be = state.round_price(be, "up" if is_long else "down")
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be
 
@@ -266,7 +266,7 @@ class LayeredExitPolicy:
                     else self.trailing_distance_points
                 if trail_dist and trail_dist > 0:
                     tgt = (best - trail_dist) if is_long else (best + trail_dist)
-                    tgt = spec.round_price(tgt, "up" if is_long else "down")
+                    tgt = state.round_price(tgt, "up" if is_long else "down")
                     if (is_long and tgt > new_stop) or (not is_long and tgt < new_stop):
                         new_stop = tgt
 

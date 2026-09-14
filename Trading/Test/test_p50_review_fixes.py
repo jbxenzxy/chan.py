@@ -32,8 +32,10 @@ _RROOT = os.path.dirname(os.path.dirname(_HERE))     # Test/ → Trading/ → �
 if _RROOT not in sys.path:
     sys.path.insert(0, _RROOT)
 
+from Trading import main as _main                                      # noqa: E402
 from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec                # noqa: E402
+from Trading.Infra.InstrumentSpec import (                             # noqa: E402
+    InstrumentSpec, InstrumentState)
 from Trading.Infra.ProductProfile import (                             # noqa: E402
     PRODUCT_PROFILES, ProductProfile, assert_product_allowed,
     describe_unknown_product, parse_product, parse_product_key,
@@ -84,7 +86,9 @@ def build_engine(tmpdir, signal_symbol, broker=None):
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 
+    # Phase 3（Fix B）：品种档案播种改为启动路径上的一次显式调用。
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    _main._seed_instrument(cfg)
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
     b = broker if broker is not None else DryRunBroker(
@@ -278,14 +282,16 @@ def t5_quote_partial():
             self.upper_limit = hi
             self.lower_limit = lo
 
-    # 5a InstrumentSpec.apply_quote 的 require_band 开关
-    s = InstrumentSpec()
+    # 5a InstrumentState.apply_quote 的 require_band 开关
+    #   Phase 3（Fix B）：apply_quote 回填的是**运行时有效值**，故返回/断言
+    #   一律针对 InstrumentState；InstrumentSpec 只存离线种子。
+    s = InstrumentState(InstrumentSpec())
     ok = s.apply_quote(_Q(), require_band=False)
     check("partial：tick 已从行情填入", s.price_tick, 0.5)
     check("partial：乘数已从行情填入", s.multiplier, 200.0)
     check("partial：band 缺失 → 不填（保持 0 = 未知）", s.upper_limit, 0.0)
     check("partial：apply_quote 返回变更字段", sorted(ok), ["multiplier", "price_tick"])
-    s2 = InstrumentSpec()
+    s2 = InstrumentState(InstrumentSpec())
     err = None
     try:
         s2.apply_quote(_Q())                          # 默认 require_band=True
@@ -294,7 +300,7 @@ def t5_quote_partial():
     check_true("strict：band 缺失仍 fail-closed（抛 ValueError）", err)
 
     # partial 档下 band 可用时照样填（不是"一律不填"）
-    s3 = InstrumentSpec()
+    s3 = InstrumentState(InstrumentSpec())
     s3.apply_quote(_Q(hi=5000.0, lo=4000.0), require_band=False)
     check("partial：band 可用时照样填", (s3.lower_limit, s3.upper_limit),
           (4000.0, 5000.0))
@@ -335,9 +341,9 @@ def t5_quote_partial():
 
     b = make(_Q(), "quote_partial")
     b._apply_instrument_quote()
-    check("partial 档：verified 置位（不再永拒单）", b.spec.instrument_verified, True)
+    check("partial 档：verified 置位（不再永拒单）", b.state.verified, True)
     check("partial 档：band 缺失 → 来源标 QUOTE_PARTIAL",
-          b.spec.instrument_source, InstrumentSpec.SOURCE_QUOTE_PARTIAL)
+          b.state.source, InstrumentState.SOURCE_QUOTE_PARTIAL)
     codes = [a.get("code") for a in (b.drain_alerts() or [])]
     check_true("partial 档：降级必须出声（instrument_band_degraded 告警）",
                "instrument_band_degraded" in codes)
@@ -345,12 +351,12 @@ def t5_quote_partial():
     b2 = make(_Q(), "strict")
     b2._apply_instrument_quote()
     check("strict 档：band 缺失 → verified 保持 False（fail-closed 不回退）",
-          b2.spec.instrument_verified, False)
+          b2.state.verified, False)
 
     b3 = make(_Q(hi=5000.0, lo=4000.0), "quote_partial")
     b3._apply_instrument_quote()
     check("partial 档：band 可用 → 来源标 QUOTE（不降级）",
-          b3.spec.instrument_source, InstrumentSpec.SOURCE_QUOTE)
+          b3.state.source, InstrumentState.SOURCE_QUOTE)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -360,13 +366,13 @@ def t6_offline_drift():
     print("\n[6] P2-3 离线（dry_run/replay）规格漂移对账：用错规格不再静默")
     with tmp_dir() as td:
         eng = build_engine(td, "KQ.m@CFFEX.IF")      # DryRunBroker.is_offline = True
-        check("离线引擎：verified 恒 False", eng.spec.instrument_verified, False)
+        check("离线引擎：verified 恒 False", eng.state.verified, False)
         eng._alerts = []
         eng._check_spec_drift()
         check("规格与档案一致 → 不告警",
               [a.get("code") for a in eng._alerts], [])
-        # 手填一个与档案不符的乘数（= 用户覆盖配置 / 档案改过而配置没跟上）
-        eng.spec.multiplier = 999.0
+        # 手填一个与档案不符的乘数（= 行情取到的值与档案不一致）
+        eng.state.multiplier = 999.0
         eng._alerts = []
         eng._spec_drift_offline_checked = False
         eng._check_spec_drift()
@@ -434,6 +440,39 @@ def t8_dead_field_removed():
     except Exception:
         _raised = True
     check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
+
+    # ── Phase 3（Fix B）完成判据：静态规格**不含**任何运行时可变状态字段 ──
+    #   这是乱源②（InstrumentSpec 三重身份）被消掉的**可执行证据**：
+    #   配置对象 TradingConfig.instrument 构造后只读，行情回填一律落在
+    #   InstrumentState 上。若有人把 did 字段加回 spec，本断言立刻红。
+    print("\n[8b] Phase 3 拆分的完成判据：运行时字段已在 spec 上消失")
+    runtime_fields = ("instrument_verified", "instrument_source", "fee_source",
+                      "upper_limit", "lower_limit")
+    for f in runtime_fields:
+        check("InstrumentSpec 不含运行时字段 {}".format(f), f in fields, False)
+    # 反向：这些字段必须真的存在于 InstrumentState（防止"删了但没搬走"）
+    st = InstrumentState(InstrumentSpec())
+    for f in ("verified", "source", "fee_source", "upper_limit", "lower_limit"):
+        check_true("InstrumentState 拥有运行时字段 {}".format(f),
+                   f in vars(st))
+    # 静态项仍在 spec 上（Phase 3 只搬运行时，没顺手搬静态）
+    for keep in ("signal_symbol", "trade_symbol", "price_tick", "multiplier",
+                 "open_fee_rate", "close_fee_rate", "closetoday_fee_rate",
+                 "slippage_ticks", "order_advanced", "closetoday_first"):
+        check_true("静态项仍留 InstrumentSpec：{}".format(keep), keep in fields)
+    # 定价/成本五方法也归 state（读的是有效 tick / 有效费率）
+    for m in ("round_price", "align_entry", "align_exit", "slip_price",
+              "cost_points", "points_to_cash"):
+        check_true("定价/成本方法已迁到 InstrumentState：{}".format(m),
+                   callable(getattr(st, m, None)))
+        check("InstrumentSpec 不再有同名方法：{}".format(m),
+              hasattr(InstrumentSpec, m), False)
+    # 静态判定**留** spec（不读任何有效值）
+    for m in ("effective_order_advanced", "delivery_guard_blocked", "is_new_day"):
+        check_true("静态判定仍留 InstrumentSpec：{}".format(m),
+                   callable(getattr(InstrumentSpec, m, None)))
+    check_true("supports_closetoday 仍是 InstrumentSpec 的静态属性",
+               isinstance(InstrumentSpec.supports_closetoday, property))
 
 
 def main():

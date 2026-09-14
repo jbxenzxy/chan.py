@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
 from ..Infra.Types import Order, OrderIntent, Side
 
 BROKERS: Dict[str, Type["Broker"]] = {}
@@ -43,10 +43,19 @@ def register_broker(cls: Type["Broker"]) -> Type["Broker"]:
 
 
 def build_broker(name: str, spec: InstrumentSpec,
-                 params: Optional[Dict[str, Any]] = None) -> "Broker":
+                 params: Optional[Dict[str, Any]] = None,
+                 state: Optional[InstrumentState] = None) -> "Broker":
+    """按名字构造 broker。
+
+    `spec`  = **静态**合约规格（symbol / 费率 / slippage / order_advanced …）
+    `state` = **运行时**状态（有效 tick/乘数、涨跌停、verified、费率来源）。
+              Phase 3 起由 main.py 建好后注入，与 Engine 共用同一份
+              —— 传 None 时 broker 会自建一份（单测/直连场景的便利），
+              但**生产路径必须显式传**，否则 SimNow 写的 verified 引擎看不见。
+    """
     if name not in BROKERS:
         raise KeyError("未注册的 broker: {}（已注册: {}）".format(name, list(BROKERS)))
-    return BROKERS[name](spec, params or {})
+    return BROKERS[name](spec, params or {}, state=state)
 
 
 # intent → CTP OpenCloseType 的权威表
@@ -161,13 +170,14 @@ class Broker(ABC):
     #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
     #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
     #
-    #   ⚠️ 新增 broker 通道必读（2026-09-14 评审 P1-3）：默认 False 意味着
-    #   **不声明就 100% 拒单**（Engine._pre_trade_check 的 instrument_unverified
-    #   闸门，且拒得很安静 —— 只有 D11 告警）。接新通道时必须**二选一**：
-    #     ① 自己实现合约参数取值 —— 从自家行情源填 spec 的 price_tick /
-    #        multiplier / upper_limit / lower_limit 并置
-    #        `spec.instrument_verified = True`（照抄 SimNow._apply_instrument_quote
-    #        的契约：任一值非法就不能置位，绝不回退配置值）；
+    #   ⚠️ 新增 broker 通道必读（2026-09-14 评审 P1-3；Phase 3 起改为写 state）：
+    #   默认 False 意味着**不声明就 100% 拒单**（Engine._pre_trade_check 的
+    #   instrument_unverified 闸门，且拒得很安静 —— 只有 D11 告警）。接新通道时
+    #   必须**二选一**：
+    #     ① 自己实现合约参数取值 —— 从自家行情源填 `self.state` 的 price_tick /
+    #        multiplier / upper_limit / lower_limit 并置 `self.state.verified = True`
+    #        （照抄 SimNow._apply_instrument_quote 的契约：任一值非法就不能置位，
+    #        绝不回退配置值）；
     #     ② 确实拿不到行情 → 显式 `is_offline = True`（配置值路径，来源会被标
     #        CONFIG_OFFLINE，仅回测/模拟可接受）。
     #   中间形态（拿得到 tick/乘数、拿不到涨跌停）：不要自欺欺人声明离线，
@@ -175,6 +185,11 @@ class Broker(ABC):
     #   只强制 tick/乘数，涨跌停缺失时护栏降级为不校验并回一条
     #   code=instrument_band_degraded 的 warn 告警。
     is_offline: bool = False
+
+    # Phase 3（Fix B）：运行时状态引用。类属性声明 + 惰性实例化
+    #   （同 `_pending_alerts` 惯例）：`__new__` 手工装配的 broker 子类
+    #   （大量单测这么干）不必调 super().__init__ 也能拿到 state。
+    _state: Optional[InstrumentState] = None
 
     # ── Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker → Engine 告警回流 ──
     # broker 侧的 instrument 故障（行情超时 / nan / 与配置不一致）原来只写
@@ -206,11 +221,32 @@ class Broker(ABC):
         return out
 
 
-    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
+    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None,
+                 state: Optional[InstrumentState] = None):
         self.spec = spec
+        # Phase 3（Fix B）：运行时状态引用。None → 惰性自建（见 state property）——
+        #   这样用 __new__ 手工装配 broker 的单测（不走 __init__）也能直接拿到
+        #   一份由 self.spec 播种的状态，不必逐个改测试装配代码。
+        self._state: Optional[InstrumentState] = state
         self.params: Dict[str, Any] = dict(params or {})
         # R1：报单序号（跨重启唯一性）。见 order_seq / seed_order_seq 注释。
         self._order_seq: int = 0
+
+    @property
+    def state(self) -> InstrumentState:
+        """合约规格的运行时状态（Phase 3）。惰性自建：首次访问时由 `self.spec` 播种。
+
+        ⚠️ 生产路径（main.py）**必须**由外部传入同一个 state 给 Engine 与 Broker；
+          惰性自建只是兼容"单测手工装配 / 直连 broker"的便利，
+          两边各自自建会造成 SimNow 写的 verified 引擎读不到。
+        """
+        if getattr(self, "_state", None) is None:
+            self._state = InstrumentState(self.spec)
+        return self._state
+
+    @state.setter
+    def state(self, value: InstrumentState) -> None:
+        self._state = value
 
     @abstractmethod
     def submit(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,

@@ -15,6 +15,11 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（min_r_points / r_multiple_tp /
       breakeven_buffer_ticks，Fix A 单源化 + D1 拍板）收口在 Infra/ProductProfile.py，
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
+    · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14）：
+      品种播种（multiplier / price_tick）改由启动路径显式调用
+      `InstrumentSpec.for_product(profile, **...)`（见 main.py `_seed_instrument`），
+      合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、费率来源）
+      收口在 Infra/InstrumentSpec.py 的 `InstrumentState`，**不在本配置树上**。
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -57,8 +62,10 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       只 import 档案的纯函数（白名单闸门），挪进来会反向拉起整个 TradingConfig。
       `TradingConfig.period_profile / product_profile` property 是「入口聚合
       档案」的唯一形态。
-    Infra/InstrumentSpec.py 的合约规格经 `TradingConfig.instrument` 字段挂载，
-      属本配置树的一部分（角色定位见其模块 docstring）。
+    Infra/InstrumentSpec.py 的**静态**合约规格经 `TradingConfig.instrument`
+      字段挂载，属本配置树的一部分（角色定位见其模块 docstring）；
+      同一文件里的 `InstrumentState`（运行时状态）**不在**本配置树上 ——
+      它由 main.py 构造并注入 Engine / Broker，见 Phase 3（Fix B）。
 
 设计约定（与项目主线对齐：根 ChanConfig.py + App/AppConfig.py）
 ------------------------------------------------------------------
@@ -94,7 +101,8 @@ import logging
 import os
 from typing import Any, ClassVar, Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_validator,
+                      model_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentSpec
@@ -177,76 +185,25 @@ class TradingConfig(BaseSettings):
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
-    # ── 品种档案注入（instrument 两字段播种）──
-    # 按 instrument.signal_symbol 选品种，注入 multiplier / price_tick 两个
-    # 「随品种可变」的 instrument 字段（Fix A · 2026-09-14 起 exit 三参数
-    # 不再走注入 —— 改由 resolved_exit_params() 从档案直接合并，唯一来源）。
+    # ── 品种档案：只读视图（Phase 3 · Fix B · 2026-09-14 起不再有任何注入机制）──
+    # Phase 2 之前这里是一整套"注入"逻辑（model_validator + _apply_product_profile_values
+    #   + apply_product_profile，含 model_fields_set 的 user-explicit-wins 判据与
+    #   --symbol 换品种的 force 双语义）。它的副作用是：TradingConfig 一构造就会
+    #   改写 instrument 的字段 —— 配置对象因此**构造后可变**，且"哪些字段会被改"
+    #   只能靠读源码得知。
     #
-    # 一致性规则（修复 B-3 后的统一语义）：
-    #   · 初始加载（model_validator，force=False）：user-explicit-wins。
-    #     仅当用户**没在配置里显式写**该字段（不在 model_fields_set）时，
-    #     才用品种档案兜底；用户显式写的字段不被覆盖。
-    #   · --symbol 换品种重载（apply_product_profile，force=True）：品种已切换，
-    #     profile 是新品种的权威真值，整块覆盖，避免沿用例品种的
-    #     multiplier / price_tick 造成限价口径漂移。
-    #   · 未知品种：跳过注入并记 info（字段沿用当前值/模型默认值）。
-    @model_validator(mode="after")
-    def _reconcile_product_profile(self) -> "TradingConfig":
-        self._apply_product_profile_values()
-        return self
-
-    def _apply_product_profile_values(self, force: bool = False) -> None:
-        # 2026-09-14 评审 P1-1：查档案必须用 parse_product_key（剥合约月份）。
-        #   传真实月份合约（"CFFEX.IF2609"）时，parse_product 会得到 "IF2609"，
-        #   查不到档案 → 已标定的 IF 被当成未知品种（且不注入参数还打警告）。
-        product = parse_product_key(self.instrument.signal_symbol)
-        profile = PRODUCT_PROFILES.get(product)
-        if profile is None:
-            # §5.9.3 校验清单「未知品种」：不阻断，但必须可见 —— 否则
-            # multiplier / price_tick 会静默沿用基线。
-            #
-            # 引擎路径（AppTrader / Engine._restore / resolved_exit_params）
-            # 一定会被白名单闸门拦下并给出面向用户的完整文案，此处只记
-            # info 保留可追迹性；纯配置（不启引擎）场景也仍查得到。
-            _log.info(
-                "品种 %r 不在 PRODUCT_PROFILES（已知: %s）—— 品种档案字段"
-                "（multiplier / price_tick）沿用配置值。启动交易引擎时"
-                "白名单闸门会拒绝启动，详见 ProductProfile.assert_product_allowed",
-                product, ", ".join(sorted(PRODUCT_PROFILES)))
-            return
-        if force:
-            # 换品种重载：profile 为新品种权威，整块覆盖。
-            self.instrument.multiplier = profile.multiplier
-            self.instrument.price_tick = profile.price_tick
-            return
-        # 初始加载：只补缺、不覆盖用户显式配置（user-explicit-wins）。
-        if "multiplier" not in self.instrument.model_fields_set:
-            self.instrument.multiplier = profile.multiplier
-        # Phase 8（D20）：price_tick 纳入品种档案注入。**仅作离线模式
-        # （dry_run/replay）兜底** —— 实盘按 A′ 必须从行情取（SimNow.apply_quote），
-        # 取不到就不许下单，这里注入的配置值在实盘会被行情值覆盖或被闸门拦截。
-        if "price_tick" not in self.instrument.model_fields_set:
-            self.instrument.price_tick = profile.price_tick
-
-    def apply_product_profile(self) -> None:
-        """品种档案注入的公开入口（instrument 的 multiplier / price_tick）。
-
-        除启动期 model_validator 自动调用外，Phase 8 里 `--symbol` 在启动期
-        改写 `instrument.signal_symbol` 后也调它重注入（换品种后 multiplier /
-        price_tick 跟随新品种，而不是沿用上一品种的值）。
-
-        换品种走 force=True：品种已切换，profile 是新品种的权威真值，整块覆盖
-        （否则 model_fields_set 仍记着初始注入的字段，会跳过覆盖、沿用例品种值）。
-        """
-        self._apply_product_profile_values(force=True)
-
+    # Phase 3 把整条通道删掉，换成两个显式、无状态的形态：
+    #   · 播种（一次性、构造时）：`InstrumentSpec.for_product(profile, **overrides)`
+    #     —— 唯一默认值来源是品种档案；启动路径上看得见地调用（main.py `_seed_instrument`）。
+    #   · 读取（随时、只读）：本 property —— 引擎白名单闸门 / resolved_exit_params /
+    #     _check_spec_drift 都只用它查档案，不再有任何写回。
     @property
     def product_profile(self) -> Optional["ProductProfile"]:
         """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。
 
-        2026-09-14 评审 P1-1：与注入路径同源用 parse_product_key（剥合约月份），
-        否则 `--symbol CFFEX.IF2609` 时这里返回 None，而注入那边（改用 key 后）
-        能命中 → 「参数注入了但 product_profile 查不到」的自相矛盾状态，
+        2026-09-14 评审 P1-1：与播种路径同源用 parse_product_key（剥合约月份），
+        否则 `--symbol CFFEX.IF2609` 时这里返回 None，而播种那边（改用 key 后）
+        能命中 → 「参数播种了但 product_profile 查不到」的自相矛盾状态，
         连带 _check_spec_drift 的漂移校验被静默跳过。
         """
         return PRODUCT_PROFILES.get(parse_product_key(self.instrument.signal_symbol))

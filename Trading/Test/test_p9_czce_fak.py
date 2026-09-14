@@ -422,7 +422,9 @@ with tmp_dir() as td:
     # 单元测试无真实行情：放开 A′ fail-closed 闸门（模拟 dry_run 的 is_offline 放行），
     # 否则 _pre_trade_check 会直接 instrument_unverified 拒单、insert_order 不会被调用。
     bk.is_offline = True
-    bk.spec.instrument_verified = True
+    # Phase 3（Fix B）：A′ 的 verified 是**运行时状态**，落在 broker 的 state 上
+    # （Engine 通过 broker.state 读同一份 —— 不是 spec）。
+    bk.state.verified = True
     eng = build_engine(td, max_volume=2, exchange="CZCE", broker=bk)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-5-e2e")

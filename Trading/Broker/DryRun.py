@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import INTENT_TO_OFFSET, Broker, register_broker
 
@@ -35,11 +35,12 @@ from .Base import INTENT_TO_OFFSET, Broker, register_broker
 class DryRunBroker(Broker):
     name = "dry_run"
     # Phase 8（A′）：离线通道 —— 引擎的 fail-closed 闸门对它不生效，
-    #   合约参数用配置值（来源标记 CONFIG_OFFLINE 由 main.py 写入）。
+    #   合约参数用配置值（来源标记 CONFIG_OFFLINE 由 main.py 写入 state）。
     is_offline = True
 
-    def __init__(self, spec: InstrumentSpec, params=None):
-        super().__init__(spec, params)
+    def __init__(self, spec: InstrumentSpec, params=None,
+                 state: Optional[InstrumentState] = None):
+        super().__init__(spec, params, state=state)
         # R1（2026-09-10）：报单序号改由 Base 的自增整数提供（原 itertools.count(1)
         #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → 审计记录被覆盖）。
         #   序号由引擎 `_restore` 从 state.db 抬升（seed_order_seq）。
@@ -49,17 +50,20 @@ class DryRunBroker(Broker):
                signal_key: str = "", note: str = "",
                entry_date: str = "", is_exit: bool = False) -> Order:
         intent = self._resolve_intent(intent, side)
-        spec = self.spec
+        # Phase 3（Fix B）：DryRun **只读** state 的种子值、从不写它
+        #   （离线没有行情可回填；来源标记由 main.py 的 mark_config_offline 写入）。
+        state = self.state
+        spec = state.spec
         sign = side.sign
 
         is_open_like = intent is OrderIntent.OPEN
-        slip = spec.slippage_ticks * spec.price_tick
+        slip = spec.slippage_ticks * state.price_tick
         if is_open_like:
             slipped = ref_price + sign * slip
         else:
             slipped = ref_price - sign * slip
-        aligned = spec.align_entry(slipped, sign) if is_open_like \
-            else spec.align_exit(slipped, sign)
+        aligned = state.align_entry(slipped, sign) if is_open_like \
+            else state.align_exit(slipped, sign)
 
         offset_str = INTENT_TO_OFFSET[intent]
         action_str = "open" if is_open_like else "close"

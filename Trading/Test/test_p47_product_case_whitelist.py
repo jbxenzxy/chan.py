@@ -16,7 +16,8 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
 本测试锁死的断言：
   [1] parse_product 大小写归一：小写主连 → 大写品种代码；无点串/缺失 → ""
   [2] TradingConfig 以**前端真实形态**（别名解析后的小写主连）构造时，
-      AU/AG/CU/TA/IF 档案全部命中、五字段正确注入（回归 ①）
+      AU/AG/CU/TA/IF 档案全部命中（Phase 3：经启动路径显式播种后
+      multiplier/price_tick 落位；回归 ①）
   [3] 白名单硬约束（回归 ②）：未知品种（RB/ZZ）构造引擎抛 ValueError；
       异常 msg 含支持清单与"禁止启动"；已知品种（小写 au 主连）正常启动
   [4] 【2026-09-14 新增】别名表 ⇔ 前端硬编码表 **同源契约**（防"两表不同源"回潮）：
@@ -55,9 +56,23 @@ from Trading.Infra.ProductProfile import (  # noqa: E402
     PRODUCT_PROFILES, parse_product, parse_product_key,
 )
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
+from Trading import main as _main  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
+
+
+def seeded(signal_symbol: str) -> TradingConfig:
+    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+
+    Phase 3 把"档案播种"从 TradingConfig 的构造副作用（model_validator +
+    model_fields_set）改成启动路径上的一次显式调用（main._seed_instrument）。
+    本测试走与生产完全相同的入口 —— 只构造 TradingConfig 就断言
+    `instrument.multiplier` 测的是模型默认值，播种被漏接也照样绿灯。
+    """
+    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    _main._seed_instrument(cfg)
+    return cfg
 
 
 def check(name, got, expected):
@@ -92,7 +107,10 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol):
-    """构造引擎（与本目录 test_p46 同款最小装配）。未知品种应抛 ValueError。"""
+    """构造引擎（与本目录 test_p46 同款最小装配）。未知品种应抛 ValueError。
+
+    Phase 3：品种档案**显式播种**后再建 broker/引擎，与 main.py 启动次序一致。
+    """
     from Trading import Broker  # noqa: F401  # 注册 dry_run broker
     from Trading.Broker.DryRun import DryRunBroker
     from Trading.Engine.Engine import TradingEngine
@@ -101,7 +119,7 @@ def build_engine(tmpdir, signal_symbol):
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 
-    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    cfg = seeded(signal_symbol)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -121,19 +139,19 @@ def main():
     check("parse 空串 → ''", parse_product(""), "")
     check("parse None → ''", parse_product(None), "")
 
-    print("\n[2] 前端真实形态（小写主连）构造 TradingConfig：档案全部命中")
+    print("\n[2] 前端真实形态（小写主连）构造 TradingConfig：档案全部命中并播种")
     for sym, product, mult, tick in [
             ("KQ.m@SHFE.au", "AU", 1000.0, 0.02),
             ("KQ.m@SHFE.ag", "AG", 15.0, 1.0),
             ("KQ.m@SHFE.cu", "CU", 5.0, 10.0),
             ("KQ.m@CZCE.ta", "TA", 5.0, 2.0),
             ("KQ.m@CFFEX.if", "IF", 300.0, 0.2)]:
-        c = TradingConfig(instrument={"signal_symbol": sym})
+        c = seeded(sym)
         check("{} product_profile 命中 {}".format(sym, product),
               (c.product_profile.product if c.product_profile else None), product)
-        check("{} multiplier 注入 {}".format(product, mult),
+        check("{} multiplier 播种 {}".format(product, mult),
               c.instrument.multiplier, mult)
-        check("{} price_tick 注入 {}".format(product, tick),
+        check("{} price_tick 播种 {}".format(product, tick),
               c.instrument.price_tick, tick)
         check("{} R 下限 = 默认 3 点（2026-09-13 拍板，档案经 resolved 合并）".format(product),
               resolved_exit_params(c)["min_r_points"], 3.0)

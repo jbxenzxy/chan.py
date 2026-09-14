@@ -65,7 +65,7 @@ from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
 from ..Strategy.Exit import ExitCheck
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
 from ..Infra.Types import (
     PLAUSIBLE_DATE_MIN,
     AccountState,
@@ -105,9 +105,28 @@ class _Action:
 class TradingEngine(ReconcileMixin):
     def __init__(self, cfg: TradingConfig, broker: Broker,
                  entry_policy: "EntryPolicy", exit_policy: "LayeredExitPolicy",
-                 store: Store, ev: EventLog):
+                 store: Store, ev: EventLog,
+                 state: Optional[InstrumentState] = None):
         self.cfg = cfg
+        # ── 合约规格：静态项 vs 运行时状态（Phase 3 · Fix B · 2026-09-14）──
+        #   self.spec  = 静态规格（symbol / exchange / slippage / order_advanced /
+        #                closetoday_first / last_trade_date …）—— 启动后不变
+        #   self.state = 运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
+        #                三档费率有效值 + 来源）—— 由行情/回报回填
+        # 所有权：**一次运行只有一份 state**。默认沿用 broker 的（不显式给时），
+        #   这是必须的 —— SimNow 把 verified 写在 state 上，引擎若自建一份就看
+        #   不见，A′ 闸门会恒拒单且原因难查。main.py 显式传入同一份只为可读性。
+        #   第三档（getattr 回落）留给**鸭子类型 broker**（不继承 Broker、
+        #   只实现 submit/real_position 的测试替身与外接通道）：它们没有
+        #   `.state` 属性、也就不可能写行情回填，此时由 cfg.instrument 播种一份
+        #   —— 与 Phase 3 之前 `self.spec = cfg.instrument` 的可见性完全等价。
+        #   注意：Broker 子类永远走前两档（基类有 state property），
+        #   不会出现"两边各建一份"。
         self.spec: InstrumentSpec = cfg.instrument
+        self.state: InstrumentState = (
+            state if state is not None
+            else getattr(broker, "state", None)
+            or InstrumentState(self.spec))
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
         self._spec_drift_checked: bool = False
@@ -791,7 +810,7 @@ class TradingEngine(ReconcileMixin):
         # LayeredExitPolicy 等需要历史的策略借此在开仓瞬间就有足够样本。
         # 默认 no-op，不影响其它策略。
         try:
-            self.exit_policy.on_bar(bar, self.spec)
+            self.exit_policy.on_bar(bar, self.state)
         except Exception:
             pass
 
@@ -858,7 +877,7 @@ class TradingEngine(ReconcileMixin):
 
         bars_held = max(0, self.bars_seen - run.entry_bar_seq)
         check: Optional[ExitCheck] = self.exit_policy.check_with(
-            run, bar, self.spec, bars_held=bars_held)
+            run, bar, self.state, bars_held=bars_held)
         if check is None:
             return
 
@@ -1058,13 +1077,17 @@ class TradingEngine(ReconcileMixin):
           False → 离线分支永远不查。可离线恰恰是**唯一**会用到档案兜底值的场景
           （实盘被行情覆盖），兜底值过期在离线侧完全静默：tick 错 → 限价口径错，
           乘数错 → PnL 错，回测结论直接不可用。
-          现补离线分支：此时 spec 里是配置值（正常情况下就是由品种档案注入的，
+          现补离线分支：此时 state 里是配置值（正常情况下就是由品种档案播种的，
           两边应相等），不等 = 用户手填覆盖了 / 档案改过而配置没跟上 → warn。
+
+        Phase 3（Fix B）：比对对象从 spec 换成 **self.state** ——
+          price_tick / multiplier 的"引擎实际在用值"现在住在 state 上
+          （spec 上那两个只剩离线种子，不参与判定）。
         """
         if self.cfg.product_profile is None:
             return
         p = self.cfg.product_profile
-        if getattr(self.spec, "instrument_verified", False):
+        if self.state.verified:
             if self._spec_drift_checked:
                 return
             self._spec_drift_checked = True
@@ -1076,14 +1099,14 @@ class TradingEngine(ReconcileMixin):
             return
         self._spec_drift_offline_checked = True
         diffs = []
-        # 只比对"离线真的会用"的两个字段，且要求 spec 侧已注入（>0）——
-        # 0 = 未注入/未知，不是漂移，不报。
-        if self.spec.price_tick > 0 and self.spec.price_tick != p.price_tick:
+        # 只比对"离线真的会用"的两个字段，且要求 state 侧已播种（>0）——
+        # 0 = 未播种/未知，不是漂移，不报。
+        if self.state.price_tick > 0 and self.state.price_tick != p.price_tick:
             diffs.append("price_tick 档案={} / 配置={}".format(
-                p.price_tick, self.spec.price_tick))
-        if self.spec.multiplier > 0 and self.spec.multiplier != p.multiplier:
+                p.price_tick, self.state.price_tick))
+        if self.state.multiplier > 0 and self.state.multiplier != p.multiplier:
             diffs.append("multiplier 档案={} / 配置={}".format(
-                p.multiplier, self.spec.multiplier))
+                p.multiplier, self.state.multiplier))
         if diffs:
             self.alert(
                 self.ALERT_WARN, "spec_drift_offline",
@@ -1092,18 +1115,18 @@ class TradingEngine(ReconcileMixin):
                 "已受影响，请核对 instrument 配置与 PRODUCT_PROFILES。"
                 .format("；".join(diffs)),
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
-                source=getattr(self.spec, "instrument_source", ""),
+                source=self.state.source,
                 mode="offline")
 
     def _check_spec_drift_online(self, p: "ProductProfile") -> None:
         """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
         diffs = []
-        if self.spec.price_tick != p.price_tick:
+        if self.state.price_tick != p.price_tick:
             diffs.append("price_tick 档案={} / 行情={}".format(
-                p.price_tick, self.spec.price_tick))
-        if self.spec.multiplier != p.multiplier:
+                p.price_tick, self.state.price_tick))
+        if self.state.multiplier != p.multiplier:
             diffs.append("multiplier 档案={} / 行情={}".format(
-                p.multiplier, self.spec.multiplier))
+                p.multiplier, self.state.multiplier))
         if diffs:
             self.alert(
                 self.ALERT_WARN, "spec_drift",
@@ -1111,7 +1134,7 @@ class TradingEngine(ReconcileMixin):
                 "不受影响；但 dry_run / 回测的离线兜底已过期，请同步更新 "
                 "PRODUCT_PROFILES。".format("；".join(diffs)),
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
-                source=getattr(self.spec, "instrument_source", ""))
+                source=self.state.source)
 
     def _check_closetoday_economy(self) -> None:
         """平今经济性判定（Phase 12，2026-09-14 插入）。
@@ -1120,20 +1143,20 @@ class TradingEngine(ReconcileMixin):
         配置 —— "能不能平今"（= 交易所是否支持 CLOSETODAY）能运行时判定，但
         "贵不贵"（费率）读不到。Phase 12 把费率自动获取补上：模拟盘走
         `TqSim.get_commission`（SOURCE_FEE_QUOTE）、在线实盘走成交回报反推
-        （SOURCE_FEE_TRADE），回填三档费率到 spec 后在此判定。
+        （SOURCE_FEE_TRADE），回填三档费率到 **state**（Phase 3 起）后在此判定。
 
         规则（与文档 §5.x 一致）：
           · 只读建议，**永不改写** prefer_lock_over_closetoday（决策留给人）；
-            spec 侧 `evaluate_closetoday_economy()` 算好 suggest_lock，这里只上报。
+            state 侧 `evaluate_closetoday_economy()` 算好 suggest_lock，这里只上报。
           · fail-closed：`fee_source` 为空（费率没拿到）→ 直接返回，不置位标志
             —— 费率可能经成交回报反推**晚到**，置位会吞掉后续判定。
           · 一次性：置位后不再查（费率会话内不变）。跨会话的判定在每次新会话
             首次取到费率时重新触发。
         """
-        if self._closetoday_economy_checked or not getattr(self.spec, "fee_source", ""):
+        if self._closetoday_economy_checked or not self.state.fee_source:
             return
         self._closetoday_economy_checked = True
-        result = self.spec.evaluate_closetoday_economy()
+        result = self.state.evaluate_closetoday_economy()
         if not result:
             return
         self.ev.write("closetoday_economy",
@@ -1168,8 +1191,9 @@ class TradingEngine(ReconcileMixin):
         #   实盘配 instrument_fetch_policy="off" 时 verified 恒为 False →
         #   同样被这里拦下（调试开关不得绕过 A′）。
         #   离线通道（dry_run）放行：配置值来源已在 main.py 标记 CONFIG_OFFLINE。
+        #   Phase 3：verified / source 读自 **self.state**（与 broker 同一份）。
         if not (getattr(self.broker, "is_offline", False)
-                or getattr(self.spec, "instrument_verified", False)):
+                or self.state.verified):
             # Phase 8.1（O-4 收窄）：告警文案带上"为什么 unverified"——
             # policy=off 时点名（调试开关在在线通道不生效），否则给行情侧
             # 的通用原因。诊断细节（超时 / nan / 哪个字段冲突）由 broker 侧
@@ -1193,7 +1217,7 @@ class TradingEngine(ReconcileMixin):
             self.alert(self.ALERT_SEVERE, "instrument_unverified",
                        "合约参数未通过行情校验（{}），已拒单。".format(why) +
                        "fail-closed：宁可不下单，也不用可能错的参数下单",
-                       source=getattr(self.spec, "instrument_source", ""),
+                       source=self.state.source,
                        broker=getattr(self.broker, "name", ""),
                        policy=policy)
             return "instrument_unverified"
@@ -1284,9 +1308,12 @@ class TradingEngine(ReconcileMixin):
         return None
 
     def _ref_price_out_of_band(self, ref_price: float) -> Optional[str]:
-        """涨跌停护栏 · 粗检（Phase 8 · §5.9.4 项 6）。返回 None = 通过。"""
-        lo = float(getattr(self.spec, "lower_limit", 0.0) or 0.0)
-        hi = float(getattr(self.spec, "upper_limit", 0.0) or 0.0)
+        """涨跌停护栏 · 粗检（Phase 8 · §5.9.4 项 6）。返回 None = 通过。
+
+        Phase 3：区间读自 **self.state**（与 broker 侧 _price_out_of_band 同源）。
+        """
+        lo = float(getattr(self.state, "lower_limit", 0.0) or 0.0)
+        hi = float(getattr(self.state, "upper_limit", 0.0) or 0.0)
         if lo <= 0 or hi <= 0 or hi <= lo:
             return None                          # 区间未知（离线/未取到）→ 不校验
         p = float(ref_price or 0.0)
@@ -1469,12 +1496,14 @@ class TradingEngine(ReconcileMixin):
         gross = pos.pnl_points(exit_price)
         # CLOSE 恒作用于跨日仓（`_pre_trade_check` 已断言）→ 恒按平昨费率计。
         # 这里仍按 entry_date 动态判定，是为"未来其它调用方"保留防御。
-        cost = self.spec.cost_points(
+        # Phase 3：成本/折算读 state（有效费率 + 有效乘数）；
+        #   closetoday_first 是静态开关，留 spec。
+        cost = self.state.cost_points(
             pos.entry_price, exit_price,
             closetoday=bool(self.spec.closetoday_first
                              and pos.entry_date >= self._current_trading_day()))
         net = gross - cost
-        cash = self.spec.points_to_cash(net, pos.volume)
+        cash = self.state.points_to_cash(net, pos.volume)
         bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
         plan = self._run_plan or pos.exit_plan
         self._trade_seq += 1
@@ -1531,7 +1560,7 @@ class TradingEngine(ReconcileMixin):
             self._run_missing_notified = True
             return
         side = Side.LONG if net > 0 else Side.SHORT
-        plan = self.exit_policy.plan(sig, anchor_price, self.spec,
+        plan = self.exit_policy.plan(sig, anchor_price, self.state,
                                      anchor=anchor_price)
         self._run_side = side
         self._run_anchor = anchor_price
@@ -1980,8 +2009,10 @@ class TradingEngine(ReconcileMixin):
             "open_position": ([p.to_dict() for p in self.positions.positions] or None),
             "exit_policy": self.exit_policy.describe(),
             "entry_policy": self.entry_policy.describe(),
+            # Phase 3：tick / 乘数取 **state 的有效值**（引擎实际使用的口径）；
+            #   symbol / 交易合约仍取静态 spec。
             "spec": {"signal_symbol": self.spec.signal_symbol,
                      "trade_symbol": self.spec.trade_symbol,
-                     "price_tick": self.spec.price_tick,
-                     "multiplier": self.spec.multiplier},
+                     "price_tick": self.state.price_tick,
+                     "multiplier": self.state.multiplier},
         }

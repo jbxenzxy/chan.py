@@ -106,17 +106,21 @@ class ProductProfile:
 # 条目实参顺序（2026-09-13 用户定序）：策略标定值在前（min_r_points → breakeven_buffer_ticks
 # → r_multiple_tp），合约事实在后（price_tick → multiplier）；note 同序。显式给真值；note 标定状态。
 # ⚠️ 手续费（open/close/closetoday_fee_rate）**不在此处** —— 它们随 broker 加收变化，
-#   属 InstrumentSpec 配置项，由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
+#   属 InstrumentSpec 的**静态默认值**（离线兜底种子；实盘有效值由 InstrumentState
+#   经行情/成交回报回填），由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
 #
 # ⚠️⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**（2026-09-14 评审 P2-3）
 #   —— 半句都不能省的背景：
 #     · 实盘（simnow/live）：由 SimNow._apply_instrument_quote 从**真实月份合约行情**
-#       原子覆盖这两个字段（InstrumentSpec.apply_quote），本表的取值**在实盘不被采用**；
-#     · 离线（dry_run/replay）：没有行情可比，spec 用的就是本表注入的配置值 ——
-#       本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
-#   原实现里 Engine._check_spec_drift 只在 instrument_verified=True 时才比对（即只在实盘
-#   生效），离线路径永远不查 —— 兜底值过期在离线模式完全不可见。现已补齐离线对账：
-#   见 Engine._check_spec_drift 的 offline 分支（比对 spec 实际值 vs 本档案值，warn 提示）。
+#       原子覆盖这两个字段（`InstrumentState.apply_quote`，Phase 3 起运行时有效值归
+#       InstrumentState），本表的取值**在实盘不被采用**；
+#     · 离线（dry_run/replay）：没有行情可比，state 的有效值就是本表播种的配置值
+#       （Phase 3 起播种发生在启动路径：main._seed_instrument → InstrumentSpec.for_product）
+#       —— 本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
+#   原实现里 Engine._check_spec_drift 只在 instrument_verified（现 state.verified）=True 时
+#   才比对（即只在实盘生效），离线路径永远不查 —— 兜底值过期在离线模式完全不可见。
+#   现已补齐离线对账：见 Engine._check_spec_drift 的 offline 分支
+#   （比对 state 的实际有效值 vs 本档案值，warn 提示）。
 #   维护口径：每次品种合约参数调整（交易所公告换月/改乘数）后，同步改本表并跑
 #   Trading/Test/test_p50_review_fixes.py 的对账用例。
 PRODUCT_PROFILES: Dict[str, ProductProfile] = {

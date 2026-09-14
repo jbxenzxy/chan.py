@@ -80,7 +80,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
-from ..Infra.InstrumentSpec import InstrumentSpec, derive_exchange
+from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState, derive_exchange
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
                    Broker, classify_ctp_reject, register_broker)
@@ -419,8 +419,9 @@ class SimNowBroker(Broker):
     #   启动后要等几小时才恢复。20 是"不吃掉正常行情节奏"与"能自愈"的交点。
     INSTRUMENT_RETRY_EVERY_BARS: int = 20
 
-    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None):
-        super().__init__(spec, params)
+    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None,
+                 state: Optional[InstrumentState] = None):
+        super().__init__(spec, params, state=state)
         # 严格模式（2026-09-07）：broker_params 以 Trading/Config.py 的
         # BrokerConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
         # 传了模型里没有的键（拼错 / 残留旧键）直接报错，不再静默忽略。
@@ -725,8 +726,8 @@ class SimNowBroker(Broker):
         """从**真实月份合约**（self._trade_symbol）行情回填合约参数（§5.9.2/5.9.4）。
 
         A′ fail-closed 语义（§5.9.3，四条硬规则）：
-          · 取到并通过校验 → spec.apply_quote() 覆盖 + instrument_verified=True +
-            instrument_source="QUOTE" + 冻结（全进程不再变）；
+          · 取到并通过校验 → **state**.apply_quote() 覆盖 + verified=True +
+            source="QUOTE" + 冻结（全进程不再变）；
           · 任一环节失败（超时 / nan / 区间不自洽）→ verified 保持 False，
             Engine._pre_trade_check 拒单 + 严重告警 —— **绝不回退配置值**
             （"取不到就回退"的分支不存在，由 p42 用例③ 钉死）；
@@ -734,6 +735,10 @@ class SimNowBroker(Broker):
             SimNow 是在线通道 → 直接返回、永不置 verified，实盘配 off 的结果
             就是闸门拒单（调试开关不得绕过 A′，规则 4）。
           · 冻结后再不重取（避免盘中换月 / 异常推送导致限价口径漂移）。
+
+        Phase 3（Fix B）：回填目标从 spec 换成 **self.state** ——
+          有效 tick/乘数/涨跌停与 verified/source 都是运行时状态，
+          配置树（cfg.instrument）自此不再被行情改写。
         """
         if self._instrument_frozen:
             return
@@ -770,18 +775,18 @@ class SimNowBroker(Broker):
                             self.INSTRUMENT_RETRY_EVERY_BARS),
                     code="instrument_quote_timeout", symbol=self._trade_symbol)
                 return
-            old = {f: float(getattr(self.spec, f)) for f in
+            st = self.state
+            old = {f: float(getattr(st, f)) for f in
                    ("price_tick", "multiplier", "upper_limit", "lower_limit")}
-            changed = self.spec.apply_quote(             # 任一值非法 → ValueError，不落半新半旧
+            changed = st.apply_quote(                    # 任一值非法 → ValueError，不落半新半旧
                 q, require_band=require_band)
-            self.spec.instrument_verified = True
+            st.verified = True
             # partial 档下若 band 没取到，来源标 QUOTE_PARTIAL 并显式告警 ——
             # "verified 为真但涨跌停护栏已降级"必须可诊断，不能混在 QUOTE 里。
-            band_ok = (self.spec.upper_limit > 0 and self.spec.lower_limit > 0
-                       and self.spec.upper_limit > self.spec.lower_limit)
-            self.spec.instrument_source = (
-                self.spec.SOURCE_QUOTE if (band_ok or not partial)
-                else self.spec.SOURCE_QUOTE_PARTIAL)
+            band_ok = (st.upper_limit > 0 and st.lower_limit > 0
+                       and st.upper_limit > st.lower_limit)
+            st.source = (st.SOURCE_QUOTE if (band_ok or not partial)
+                         else st.SOURCE_QUOTE_PARTIAL)
             if partial and not band_ok:
                 self._instrument_warn(
                     "quote_partial 档：涨跌停区间未取到 → 涨跌停护栏已**降级为不校验**"
@@ -804,12 +809,12 @@ class SimNowBroker(Broker):
             # 与配置不一致 → WARN（两个值都打出来），以行情值为准、不阻断
             # （§5.9.3 校验清单「与配置差异」；让"配置过时"可见）。
             for f in ("price_tick", "multiplier", "upper_limit", "lower_limit"):
-                if abs(old[f] - float(getattr(self.spec, f))) > 1e-12 and old[f] > 0:
+                if abs(old[f] - float(getattr(st, f))) > 1e-12 and old[f] > 0:
                     self._instrument_warn(
                         "行情值与配置不一致: {} 行情={!r} 配置={!r} —— 以行情值为准"
-                        .format(f, getattr(self.spec, f), old[f]),
+                        .format(f, getattr(st, f), old[f]),
                         code="instrument_spec_conflict", field=f,
-                        quote=float(getattr(self.spec, f)), cfg=old[f])
+                        quote=float(getattr(st, f)), cfg=old[f])
             # Phase 12（2026-09-14 插入）：行情就绪后顺手取三档费率
             #   （纯模拟 TqSim.get_commission 通道；取不到 → fee_source 保持 ""，
             #   由成交回报反推通道兜底，见 _sample_fee_from_fill —— 两通道都失败
@@ -820,6 +825,8 @@ class SimNowBroker(Broker):
             #   护栏按"不校验未知"降级（Engine.delivery_guard_blocked 已对未知
             #   放行；交易时段护栏对无夜盘品种按日盘时段校验）—— 与涨跌停护栏
             #   对未知区间的处理同哲学。
+            #   注：last_trade_date 是**静态元数据**（换月前不变），Phase 3 未随
+            #   运行时字段迁往 state，仍写在 spec 上（见 InstrumentSpec 字段注释）。
             self._fill_delivery_calendar(q)
         except ValueError as e:
             self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e),
@@ -870,8 +877,11 @@ class SimNowBroker(Broker):
 
         一次性：fee_source 非空后不再重取（费率会话内不变，与 _instrument_frozen
         同纪律）。一切异常静默跳过 —— 费率获取失败不能拖垮行情参数流程。
+
+        Phase 3：读写目标都是 **self.state**（费率有效值 + fee_source）。
         """
-        if self.spec.fee_source:
+        st = self.state
+        if st.fee_source:
             return
         if self._api is None or not self._trade_symbol:
             return
@@ -888,7 +898,7 @@ class SimNowBroker(Broker):
             price = float(getattr(q, "last_price", 0.0) or 0.0)
             if not math.isfinite(price) or price <= 0:
                 return                              # 行情价未就绪 → 下次再试
-            denom = price * float(self.spec.multiplier)
+            denom = price * float(st.multiplier)
             rates: Dict[str, float] = {}
             for t in ("OPEN", "CLOSE", "CLOSETODAY"):
                 try:
@@ -898,9 +908,9 @@ class SimNowBroker(Broker):
                 if not math.isfinite(v) or v < 0:
                     return
                 rates[t] = v / denom
-            changed = self.spec.apply_fee_rates(
+            changed = st.apply_fee_rates(
                 rates["OPEN"], rates["CLOSE"], rates["CLOSETODAY"],
-                self.spec.SOURCE_FEE_QUOTE)
+                st.SOURCE_FEE_QUOTE)
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
                 log.info("模拟盘费率已自动获取并回填: %s", ", ".join(changed))
@@ -921,8 +931,11 @@ class SimNowBroker(Broker):
 
         ⚠️ 只**采样**，绝不参与成交判定：一切异常静默跳过（try/except 兜底），
         commission 读不到只是少一个样本，不能把已成交的单子变成 rejected。
+
+        Phase 3：读写目标都是 **self.state**（费率有效值 + fee_source）。
         """
-        if self.spec.fee_source:
+        st = self.state
+        if st.fee_source:
             return                                  # 费率已定，不再采样
         recs = getattr(order, "trade_records", None)
         if not recs:
@@ -963,12 +976,12 @@ class SimNowBroker(Broker):
             if len(self._fee_samples) < 3:
                 return                              # 三档未攒齐 → 继续等后续成交
             # 三档齐 → 加权费率并原子回填（apply_fee_rates 校验失败会抛，兜底跳过）
-            mult = float(self.spec.multiplier)
+            mult = float(st.multiplier)
             rates = {k: sum(c for c, _ in v) / (sum(nv for _, nv in v) * mult)
                      for k, v in self._fee_samples.items()}
-            changed = self.spec.apply_fee_rates(
+            changed = st.apply_fee_rates(
                 rates["OPEN"], rates["CLOSE"], rates["CLOSETODAY"],
-                self.spec.SOURCE_FEE_TRADE)
+                st.SOURCE_FEE_TRADE)
             self._fee_samples = {}
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
@@ -998,9 +1011,11 @@ class SimNowBroker(Broker):
         区间未知（0 = 离线模式未从行情取到）→ 不校验（不校验未知的东西）。
         限价恰等于涨跌停价（区间内）**放行** —— 那是合法报单，能否成交由市场决定；
         护栏只拦"报出去必然被废"的单。返回 None = 通过；返回字符串 = 拒单原因。
+
+        Phase 3：区间读自 **self.state**（行情回填的运行时值）。
         """
-        lo = float(getattr(self.spec, "lower_limit", 0.0) or 0.0)
-        hi = float(getattr(self.spec, "upper_limit", 0.0) or 0.0)
+        lo = float(getattr(self.state, "lower_limit", 0.0) or 0.0)
+        hi = float(getattr(self.state, "upper_limit", 0.0) or 0.0)
         if lo <= 0 or hi <= 0 or hi <= lo or limit is None:
             return None
         p = float(limit)
@@ -1129,26 +1144,26 @@ class SimNowBroker(Broker):
                 return None
         if self._is_buy(action, side):
             # 买方向：对手价=ask，超价=ask+overprice，向上取整（保证 ≥ overprice）
-            return self.spec.round_price(float(ask) + overprice, "up")
+            return self.state.round_price(float(ask) + overprice, "up")
         # 卖方向：对手价=bid，超价=bid-overprice，向下取整（保证 ≥ overprice）
-        return self.spec.round_price(float(bid) - overprice, "down")
+        return self.state.round_price(float(bid) - overprice, "down")
 
     def _overprice(self) -> float:
         """超价点数 = overprice_ticks × 品种 tick（config broker_params.overprice_ticks）。
 
         全 FOK 模式要求限价内盘口深度 ≥ 全部手数才给终态，超价越厚全成概率越高，
-        默认 5 tick（IF 5×0.2=1.0 点）。二期其它品种加载各自 spec.price_tick 自动缩放。
+        默认 5 tick（IF 5×0.2=1.0 点）。二期其它品种加载各自 state.price_tick 自动缩放。
         """
-        return float(self._param("overprice_ticks")) * self.spec.price_tick
+        return float(self._param("overprice_ticks")) * self.state.price_tick
 
     def _build_limit_price(self, action: str, side: Side, ref_price: float,
                            opp: Optional[float] = None) -> float:
-        opp = float(opp) if opp is not None else float(self._param("overprice_ticks")) * self.spec.price_tick
+        opp = float(opp) if opp is not None else float(self._param("overprice_ticks")) * self.state.price_tick
         limit = self._overprice_limit(action, side, opp)
         if limit is None:
-            spec = self.spec
-            limit = spec.align_entry(ref_price, side.sign) if action == "open" \
-                else spec.align_exit(ref_price, side.sign)
+            st = self.state
+            limit = st.align_entry(ref_price, side.sign) if action == "open" \
+                else st.align_exit(ref_price, side.sign)
         return limit
 
     def _take_baseline(self, side_key: str) -> int:
@@ -1252,10 +1267,10 @@ class SimNowBroker(Broker):
         """
         if prev_limit is None:
             if action == "open":
-                return self.spec.align_entry(ref_price, side.sign)
-            return self.spec.align_exit(ref_price, side.sign)
-        tick = self.spec.price_tick
-        return self.spec.round_price(
+                return self.state.align_entry(ref_price, side.sign)
+            return self.state.align_exit(ref_price, side.sign)
+        tick = self.state.price_tick
+        return self.state.round_price(
             prev_limit + chase_sign * chase_ticks * tick,
             "up" if chase_sign > 0 else "down")
 

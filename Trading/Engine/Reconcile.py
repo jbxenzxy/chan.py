@@ -204,11 +204,13 @@ class ReconcileMixin:
             #   否则夜盘品种上会和 Engine 的判定差一天，成本口径再次分叉。
             _today = self._current_trading_day(self.last_bar)
             _is_today_pos = pos.entry_date >= _today
-            cost = self.spec.cost_points(
+            # Phase 3：成本/折算读 state（有效费率 + 有效乘数）；
+            #   closetoday_first 是静态开关，留 spec。
+            cost = self.state.cost_points(
                 pos.entry_price, ref_price,
                 closetoday=bool(_is_today_pos and self.spec.closetoday_first))
             net = gross - cost
-            cash = self.spec.points_to_cash(net, pos.volume)
+            cash = self.state.points_to_cash(net, pos.volume)
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
 
             self._trade_seq += 1

@@ -8,9 +8,11 @@ P49 合约规格漂移校验（spec_drift）契约测试
     （dry_run 模拟成交 / replay 回测没有行情来源，必须有个确定的数算钱）；
     实盘真值 = 行情（SimNow.apply_quote 原子覆盖 + A′ fail-closed）。
   · 双源风险：交易所改合约规格后档案值过期 → 实盘没事，但离线回测静默
-    用错数。处置：verified 首次为真时，引擎比对 spec（行情值）与
-    product_profile（档案兜底值），不一致 → warn 告警（D11 通道，前端
-    toast），**不拒单**（实盘本就以行情为准）。
+    用错数。处置：verified 首次为真时，引擎比对 **InstrumentState 的有效值
+    （行情值）** 与 product_profile（档案兜底值），不一致 → warn 告警
+    （D11 通道，前端 toast），**不拒单**（实盘本就以行情为准）。
+    Phase 3（Fix B）：对账右侧从 InstrumentSpec 改为 InstrumentState ——
+    拆前两者是同一个对象，拆后"行情值"只在 state 上，读错对象会恒判"一致"。
 
 本测试锁死的断言：
   [1] verified=False（dry_run 离线兜底，无行情可比）→ 不告警、不置位
@@ -53,6 +55,7 @@ sys.path.insert(0, _TG_ROOT)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading import Broker  # noqa: E402,F401  注册 dry_run
+from Trading import main as _main  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
@@ -100,8 +103,15 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol="KQ.m@CFFEX.IF"):
-    """构造引擎：IF 档案随 model_validator 注入（profile 一定非 None）。"""
+    """构造引擎：先按品种档案**显式播种**（Phase 3 起为启动路径的一次调用），
+    再建 broker/引擎 —— 与 main.py 的启动次序一致（profile 一定非 None）。
+
+    state 归属：不显式传 state 时引擎沿用 broker 的那一份（Broker.state
+    惰性自建），所以一次运行仍只有**一份** state —— 测试直接改 `eng.state`
+    即可，读到的正是引擎对账时用的那个对象。
+    """
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
+    _main._seed_instrument(cfg)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -122,8 +132,8 @@ def main():
     print("\n[1] verified=False：不告警、不置位")
     with tmp_dir() as td:
         eng = build_engine(td)
-        check("初始 instrument_verified=False",
-              eng.spec.instrument_verified, False)
+        check("初始 state.verified=False",
+              eng.state.verified, False)
         eng._check_spec_drift()
         check("无 spec_drift 告警", find_alert(eng, "spec_drift"), None)
         check("未置位（下次 verified 时仍会查）",
@@ -132,7 +142,7 @@ def main():
     print("\n[2] verified=True 且与档案一致：不告警、置位")
     with tmp_dir() as td:
         eng = build_engine(td)
-        eng.spec.instrument_verified = True
+        eng.state.verified = True
         eng._check_spec_drift()
         check("无 spec_drift 告警", find_alert(eng, "spec_drift"), None)
         check("已置位", eng._spec_drift_checked, True)
@@ -140,9 +150,9 @@ def main():
     print("\n[3] verified=True 且漂移：warn 告警，msg 含档案值与行情值")
     with tmp_dir() as td:
         eng = build_engine(td)
-        eng.spec.instrument_verified = True
-        eng.spec.price_tick = 0.5      # 模拟 apply_quote 覆盖后的行情值
-        eng.spec.multiplier = 100.0
+        eng.state.verified = True
+        eng.state.price_tick = 0.5      # 模拟 apply_quote 覆盖后的行情值
+        eng.state.multiplier = 100.0
         eng._check_spec_drift()
         a = find_alert(eng, "spec_drift")
         check_true("spec_drift 告警存在", a is not None)
@@ -158,8 +168,8 @@ def main():
     print("\n[4] 一次性：告警后重复调用不新增条目")
     with tmp_dir() as td:
         eng = build_engine(td)
-        eng.spec.instrument_verified = True
-        eng.spec.multiplier = 100.0
+        eng.state.verified = True
+        eng.state.multiplier = 100.0
         eng._check_spec_drift()
         n1 = len(eng._alerts)
         eng._check_spec_drift()
@@ -171,8 +181,8 @@ def main():
     from Trading.Infra.Types import OrderIntent, Side
     with tmp_dir() as td:
         eng = build_engine(td)
-        eng.spec.instrument_verified = True
-        eng.spec.multiplier = 100.0    # 漂移
+        eng.state.verified = True
+        eng.state.multiplier = 100.0    # 漂移
         act = _Action(OrderIntent.OPEN, Side.LONG, 1, None, is_exit=False,
                       transition=1)
         reason = eng._pre_trade_check(act, "2026-09-13")
@@ -186,13 +196,13 @@ def main():
     print("\n[6] 无档案（防御分支）：不告警")
     with tmp_dir() as td:
         eng = build_engine(td)
-        eng.spec.instrument_verified = True
+        eng.state.verified = True
         # product_profile 是只读 property 且 P48 白名单保证非 None（直构造
         # 到不了 None 分支）——换桩 cfg 走防御分支。
         class _CfgStub:
             product_profile = None
         eng.cfg = _CfgStub()
-        eng.spec.multiplier = 100.0
+        eng.state.multiplier = 100.0
         eng._check_spec_drift()
         check("无 spec_drift 告警", find_alert(eng, "spec_drift"), None)
         check("未置位（None 档案没做过比对，早退零成本）",

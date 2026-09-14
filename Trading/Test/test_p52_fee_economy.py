@@ -8,6 +8,10 @@ Phase 10（D6）落地 `prefer_lock_over_closetoday` 品种开关时是**静态*
 "能不能平今"（= 交易所是否支持 CLOSETODAY）运行时能判定，但"贵不贵"（费率）
 读不到 —— 只能靠品种档案人工配置开关。Phase 12 把费率自动获取补上：
 
+  Phase 3（Fix B · 2026-09-14）归属：三档费率的**有效值**与 fee_source 都在
+  InstrumentState 上（费率是会话内被回填的运行时状态），InstrumentSpec 只留
+  离线兜底种子。本测试随之迁移 —— 断言对象一律是 state。
+
   费率来源（三通道，按优先级判定）：
     · FEE_QUOTE  —— 纯模拟 `TqSim.get_commission`（SimNow._apply_fee_rates）
     · FEE_TRADE  —— 在线 CTP/SimNow 从成交回报 commission **反推**
@@ -87,7 +91,8 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import (  # noqa: E402
+    InstrumentSpec, InstrumentState)
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
@@ -120,13 +125,20 @@ def tmp_dir(tag):
         pass
 
 
-def build_engine(tmpdir, cfg, spec, tag="a"):
+def build_engine(tmpdir, cfg, spec, tag="a", state=None):
+    """Phase 3（Fix B）：Engine 与 Broker **共用同一份** InstrumentState。
+
+    一次运行只有一份 state 是硬要求（见 InstrumentSpec.py 的所有权规则）：
+    SimNow/dry_run 把费率回填在 state 上，引擎若另建一份就永远读不到。
+    """
+    state = state if state is not None else InstrumentState(spec)
     return TradingEngine(
-        cfg, DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
+        cfg, DryRunBroker(spec, {"sim_equity": 1_000_000.0}, state=state),
         EntryPolicy({}), LayeredExitPolicy(),
         Store(os.path.join(tmpdir, "state_%s.db" % tag)),
         EventLog(os.path.join(tmpdir, "events_%s.jsonl" % tag),
-                 echo=False, echo_kinds=None))
+                 echo=False, echo_kinds=None),
+        state=state)
 
 
 def make_cfg(signal_symbol: str = "KQ.m@SHFE.IF"):
@@ -149,7 +161,7 @@ def _find_alert(eng, code):
 print("\n[1] apply_fee_rates 原子回填")
 # ══════════════════════════════════════════════════════════════
 # [1a] 合法三档 + FEE_QUOTE → 字段更新，fee_source 置位，返回变更字段
-S = InstrumentSpec()  # 默认 IF：open=0.000023 close=0.000023 ct=0.000345
+S = InstrumentState(InstrumentSpec())  # 默认 IF：open=2.3e-5 close=2.3e-5 ct=3.45e-4
 assert S.fee_source == ""
 changed = S.apply_fee_rates(3e-5, 2e-5, 1e-5, S.SOURCE_FEE_QUOTE)
 check("三档费率全部变更", set(changed), {"open_fee_rate", "close_fee_rate",
@@ -169,7 +181,7 @@ except ValueError:
     check_true("[1b] 非法来源抛 ValueError", True)
 
 # [1c] 负费率 / nan → ValueError 且原子（一档都不改）
-S2 = InstrumentSpec()
+S2 = InstrumentState(InstrumentSpec())
 snapshot = (S2.open_fee_rate, S2.close_fee_rate, S2.closetoday_fee_rate, S2.fee_source)
 for bad in (-1e-5, float("nan"), float("inf")):
     try:
@@ -181,7 +193,7 @@ for bad in (-1e-5, float("nan"), float("inf")):
     check("  原子性：三档+来源保持不变", cur, snapshot)
 
 # [1d] 允许 0 费率（平今免收，沪金 AU）
-S3 = InstrumentSpec()
+S3 = InstrumentState(InstrumentSpec())
 S3.apply_fee_rates(2e-5, 2e-5, 0.0, S3.SOURCE_FEE_QUOTE)
 check("  0 费率合法（平今免收）", S3.closetoday_fee_rate, 0.0)
 check("  0 费率下 fee_source 仍置位", S3.fee_source, "FEE_QUOTE")
@@ -189,7 +201,7 @@ check("  0 费率下 fee_source 仍置位", S3.fee_source, "FEE_QUOTE")
 # ══════════════════════════════════════════════════════════════
 print("\n[2] mark_fee_config（离线显式声明）")
 # ══════════════════════════════════════════════════════════════
-S4 = InstrumentSpec()
+S4 = InstrumentState(InstrumentSpec())
 S4.mark_fee_config()
 check("mark_fee_config → FEE_CONFIG", S4.fee_source, "FEE_CONFIG")
 
@@ -197,11 +209,11 @@ check("mark_fee_config → FEE_CONFIG", S4.fee_source, "FEE_CONFIG")
 print("\n[3] evaluate_closetoday_economy 判定")
 # ══════════════════════════════════════════════════════════════
 # [3a] fee_source 空 → None（fail-closed）
-S5 = InstrumentSpec()          # fee_source = ""
+S5 = InstrumentState(InstrumentSpec())          # fee_source = ""
 check("fee_source 空 → None（fail-closed）", S5.evaluate_closetoday_economy(), None)
 
 # [3b] 平今更便宜（AU：ct=0, close=2e-5）
-S6 = InstrumentSpec()
+S6 = InstrumentState(InstrumentSpec())
 S6.apply_fee_rates(2e-5, 2e-5, 0.0, S6.SOURCE_FEE_QUOTE)
 r = S6.evaluate_closetoday_economy()
 check("平今免收 → suggest_lock=False", r["suggest_lock"], False)
@@ -209,7 +221,7 @@ check("平今免收 → cheaper=closetoday", r["cheaper"], "closetoday")
 check("平今免收 → source=FEE_QUOTE", r["source"], "FEE_QUOTE")
 
 # [3c] 平今更贵（IF 默认：ct=0.000345, close=0.000023）
-S7 = InstrumentSpec()
+S7 = InstrumentState(InstrumentSpec())
 S7.apply_fee_rates(2.3e-5, 2.3e-5, 3.45e-4, S7.SOURCE_FEE_TRADE)
 r = S7.evaluate_closetoday_economy()
 check("平今更贵 → suggest_lock=True", r["suggest_lock"], True)
@@ -217,7 +229,7 @@ check("平今更贵 → cheaper=close", r["cheaper"], "close")
 check("平今更贵 → source=FEE_TRADE", r["source"], "FEE_TRADE")
 
 # [3d] 平今=平昨 → suggest_lock=False（≤ 规则）/ cheaper=same
-S8 = InstrumentSpec()
+S8 = InstrumentState(InstrumentSpec())
 S8.apply_fee_rates(2e-5, 2e-5, 2e-5, S8.SOURCE_FEE_QUOTE)
 r = S8.evaluate_closetoday_economy()
 check("平今=平昨 → suggest_lock=False", r["suggest_lock"], False)
@@ -228,8 +240,8 @@ print("\n[4] Engine._check_closetoday_economy")
 # ══════════════════════════════════════════════════════════════
 # [4a] fee_source 空 → 无告警、无事件（fail-closed）
 with tmp_dir("eng_empty") as td:
-    spec0 = InstrumentSpec()
-    eng0 = build_engine(td, make_cfg(), spec0, "empty")
+    spec0 = InstrumentState(InstrumentSpec())
+    eng0 = build_engine(td, make_cfg(), spec0.spec, "empty", state=spec0)
     eng0._check_closetoday_economy()
     check("fee_source 空 → 无 closetoday_suggestion 告警",
           _find_alert(eng0, "closetoday_suggestion"), None)
@@ -237,11 +249,12 @@ with tmp_dir("eng_empty") as td:
           eng0._closetoday_economy_checked, False)
 
 # [4b] 回填费率后触发 → alert + event
-#   ⚠️ 引擎的费率来自 self.spec = cfg.instrument（不是 build_engine 传给 broker
-#   的独立 spec），故直接对 engB.spec 回填费率再触发。
+#   ⚠️ Phase 3 起引擎读的费率来自 self.state（= build_engine 与 broker 共用
+#   的那一份），故直接对 engB.state 回填费率再触发 —— 这条"共用"关系本身
+#   就是本用例能通过的前提（若两边各建一份，回填会写进引擎看不见的地方）。
 with tmp_dir("eng_fire") as td:
     engB = build_engine(td, make_cfg(), InstrumentSpec(), "fire")
-    engB.spec.apply_fee_rates(2e-5, 2.3e-5, 1e-5, engB.spec.SOURCE_FEE_QUOTE)  # 平今更便宜
+    engB.state.apply_fee_rates(2e-5, 2.3e-5, 1e-5, engB.state.SOURCE_FEE_QUOTE)  # 平今更便宜
     engB._check_closetoday_economy()
     a = _find_alert(engB, "closetoday_suggestion")
     check_true("[4b] 触发 closetoday_suggestion 告警", a is not None)
@@ -297,16 +310,18 @@ def _fill_order(tids):
 
 # [5a] 三档各成交一笔 → 原子回填 FEE_TRADE
 #   ⚠️ SimNowBroker.__init__ 会 _connect() 连 CTP（需 tqsdk + 网络）。这里用
-#   __new__ 绕过构造，只喂 `_sample_fee_from_fill` 用到的 spec/_api/_fee_samples。
-def _mk_simnow(spec, api):
+#   __new__ 绕过构造，只喂 `_sample_fee_from_fill` 用到的 state/_api/_fee_samples。
+def _mk_simnow(state, api):
+    """Phase 3：费率回填落在 state 上，故这里收到的是 InstrumentState。"""
     b = SimNowBroker.__new__(SimNowBroker)
-    b.spec = spec
+    b.spec = state.spec
+    b.state = state
     b._api = api
     b._fee_samples = {}
     return b
 
 
-_spec = InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0)
+_spec = InstrumentState(InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0))
 _fake_api, _trades = _mk_fake_api(
     ["t1", "t2", "t3"], {"t1": 6.0, "t2": 4.0, "t3": 2.0})
 _broker = _mk_simnow(_spec, _fake_api)
@@ -325,7 +340,7 @@ _broker._sample_fee_from_fill(_fill_order(["t9"]), "open", "open")
 check("[5c] 已回填后不再采样（fee_source 已定）", _spec.fee_source, "FEE_TRADE")
 
 # [5b] 只攒两档 → 不回填（fail-closed，等齐第三档）
-_spec2 = InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0)
+_spec2 = InstrumentState(InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0))
 _fake2, _ = _mk_fake_api([], {})
 _broker2 = _mk_simnow(_spec2, _fake2)
 _broker2._sample_fee_from_fill(_fill_order(["a1"]), "open", "open")         # OPEN 只有一档
@@ -334,7 +349,7 @@ check("[5b] 只攒两档 → fee_source 仍为空（fail-closed）", _spec2.fee_
 check("[5b] 只攒两档 → 样本数=2", len(_broker2._fee_samples), 2)
 
 # [5d] 单笔异常（无 trade_id）→ 静默跳过，不炸
-_spec3 = InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0)
+_spec3 = InstrumentState(InstrumentSpec(trade_symbol="SHFE.AU2602", multiplier=1000.0))
 _broker3 = _mk_simnow(
     _spec3, SimpleNamespace(get_trade=lambda tid: SimpleNamespace(commission=3.0)))
 # 一条记录 trade_id 为空、一条正常 → 空记录跳过，正常记录计入
