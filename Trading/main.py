@@ -70,7 +70,8 @@ def _seed_instrument(cfg: TradingConfig) -> None:
     且对「初始加载」与「--symbol 换品种」是同一条路径 —— 不再有两套语义。
 
       · `InstrumentSpec.for_product()` 里 price_tick / multiplier **强制**取档案值
-        （档案是这两个字段唯一的真值来源，与 Fix A 对出场三参数的处置同纪律）；
+        （档案是这两个字段唯一的真值来源，与 Fix A 对品种相关出场参数
+         `r_multiple_tp` 的处置同纪律）；
       · 其余静态项原样带过（signal_symbol / trade_symbol / 三档费率 / slippage /
         order_advanced / last_trade_date …），用户在配置里设的不会被吞掉；
       · 品种未标定（profile=None）→ 不播种，规格沿用现值；随后的

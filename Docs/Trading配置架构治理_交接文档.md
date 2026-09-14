@@ -8,6 +8,23 @@
 | 文档目的 | ① 记录问题分析与设计决策；② 分阶段实施指南，任一阶段完成后可中断，接手人凭本文档继续 |
 | 文中行号口径 | 均基于 commit `101fca5`。行号漂移后以**符号名**（类/方法/字段）为准定位 |
 
+> ## ⚠️ 口径变更（晚于本文的两个提交，读前三思）
+>
+> 本文档写于 `custom-dev@101fca5`（2026-09-14 上午）。其后同一分支又推了
+> `199ee31c7a8d`、`6b7925d0f6d3` 两个提交（快进），把 Fix A **又收窄了一层**：
+>
+> | 本文描述 | 现行口径（`6b7925d0` 起） |
+> |---|---|
+> | 档案提供品种相关出场参数**三个**（`min_r_points` / `r_multiple_tp` / `breakeven_buffer_ticks`） | **只剩 `r_multiple_tp`** —— 它同时是 L3 跟踪触发阈值 |
+> | 保本缓冲按品种 tick 数差异化（IF/IH=2、IC/IM=3） | 改为**全局比例** `breakeven_buffer_r`（默认 0.5R），在 `ExitConfig` |
+> | L3 触发用全局 `trailing_trigger_r`（恒 2R） | 删除该字段，触发改取 `r_multiple_tp`（IC/IM=3R、其余=2R）—— 此前 IC/IM 的 1:3 是**死配置** |
+> | R 有绝对点数地板 `min_r_points`（IF=3.0、IC/IM=5.0） | 删除，且**不再补任何下限**（2026-09-15 评审拍板：口径是「有分型才有买卖点 → 入场时 A 恒 > 0」，地板是多余的）。R = max(A, 2×ATR)；A=0 时 `_initial_r()` 打 WARNING 供抓样本 |
+> | 六个品种仅 IC/IM 差异 | 同上，品种档案现在只有这 1 个差异字段 |
+>
+> 因此：读本文时凡出现 `min_r_points` / `breakeven_buffer_ticks` / `trailing_trigger_r`，
+> 一律视为**已被删除**；保留它们是为了还原当时的决策过程，不是当前架构。
+> 另见 `Docs/止盈止损/止盈止损四层策略原理.html`（参数表已同步到现行口径）。
+
 ---
 
 ## 〇、给接手人的一句话导读
@@ -26,7 +43,10 @@
 
 **不挪。** 核心理由：Config.py 的分区轴是「消费层」（①信号源/③策略/④风控/⑥Broker），三张档案表的分区轴是「变异维度」（随品种/随周期），**两把尺子正交**。档案表在「按层分类」下没有唯一归属——例如 ProductProfile 一张表里：
 
-- `min_r_points / r_multiple_tp / breakeven_buffer_ticks` → ③策略层消费（LayeredExitPolicy）
+- `r_multiple_tp` → ③策略层消费（LayeredExitPolicy）
+  （2026-09-14 14:xx 起档案里只剩这一个品种相关出场参数；原先同行列出的
+   `min_r_points` / `breakeven_buffer_ticks` 已在 `199ee31c` / `6b7925d0` 两个提交里删除，
+   详见文末「口径变更」小节）
 - `prefer_lock_over_closetoday` → ⑤执行层消费（Engine 转移④ / `_pre_trade_check`）
 - `price_tick / multiplier` → ⑥Broker 层消费（InstrumentSpec / 报单价格口径）
 

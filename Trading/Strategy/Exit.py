@@ -23,6 +23,7 @@ B 方案：止盈交给跟踪，不落硬止盈单（2026-09-09）
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from typing import Optional
 
@@ -30,6 +31,8 @@ from ..Config import ExitPolicyParams
 from ..Infra.InstrumentSpec import InstrumentState
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,9 +51,11 @@ class ExitCheck:
 # 参数默认值单一事实源（2026-09-07 严格模式；2026-09-14 Fix A 拆分）：
 #   不再从 DEFAULT_CONFIG 抄一份 `_DEF_EXIT_PARAMS` 兜底，直接由 Trading/Config.py
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
-#   校验模型用 ExitPolicyParams（继承 ExitConfig + 品种三参数）：ExitConfig 是
+#   校验模型用 ExitPolicyParams（继承 ExitConfig + 品种相关出场参数）：ExitConfig 是
 #   **部署配置**（品种无关项），本 policy 的入参是 resolved_exit_params() 合并后的
-#   完整参数（含品种三件），故校验/持有模型必须两样都有。
+#   完整参数（含品种相关项 r_multiple_tp —— 2026-09-14 前档案提供 min_r_points /
+#   r_multiple_tp / breakeven_buffer_ticks 三者，现只剩这一个），
+#   故校验/持有模型必须两样都有。
 
 class LayeredExitPolicy:
     name = "LayeredExitPolicy"
@@ -125,15 +130,24 @@ class LayeredExitPolicy:
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
     def _initial_r(self, signal, entry_price: float, state: InstrumentState) -> float:
-        """初始风险距离 R = max(A, B)。
+        """初始风险距离 R = max(A, B) —— 完全自适应，不设任何下限。
 
         A = 结构止损（分型极值距离）：
               做多 A = entry_price − 底分型最低点(fractal_low)；
               做空 A = 顶分型最高点(fractal_high) − entry_price。
             A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B（2×ATR）兜底。
         B = 波动率止损 = atr_sl_multiple × ATR（use_atr 且 ATR 样本足够时）。
-        （2026-09-14：已删除 min_r_points 绝对点数地板 —— R 完全由结构/波动率自适应，
-         不再设"死市保底"；A、B 同时缺失时 R=0，由 plan() 的 P2 守卫把止损压在入场价 1 tick 外。）
+
+        关于「R 会不会退化」（2026-09-15 评审 · 结论：不改口径，只加观测）：
+            2026-09-14 删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
+            口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
+            且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
+            因此本函数**不兜底、不钳下限**；仅在 A 真的归零时打一条 WARNING
+            （见下方），把现场信息打到控制台供后续抓样本。真出现了再分析成因 ——
+            已知候选：① stop_at_signal_extreme=False 配置（此时 A 恒 0，属预期、
+            不算异常，故该配置下不打告警）；② 入场价已穿越分型（陈旧信号）；
+            ③ 买卖点无右肩 K 线时 bsp.klu 退回 bi.get_end_klu()（chan.py
+               BuySellPoint/BS_Point.py），该 K 线收在自身极值点时 A = 0。
         """
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
@@ -154,6 +168,17 @@ class LayeredExitPolicy:
             atr = self._atr()
             if atr:
                 B = self.atr_sl_multiple * atr
+        # A=0 观测告警（2026-09-15 评审补）：不改 R 的取值，只把现场打出来。
+        #   stop_at_signal_extreme=False 时 A 恒为 0 是配置预期，不打告警。
+        if self.stop_at_signal_extreme and A <= 0.0:
+            _log.warning(
+                "[R 结构距离归零] A=0，R 将由 2×ATR 单独决定：side=%s entry=%.6g "
+                "fractal_low=%.6g fractal_high=%.6g atr=%s B=%.6g signal_key=%s "
+                "—— 请核对信号是否缺失/失真分型（本条仅观测，R = max(A, B) 不变）",
+                getattr(signal.side, "value", signal.side), entry_price,
+                signal.fractal_low, signal.fractal_high,
+                (self._atr() if self.use_atr else None), B,
+                getattr(signal, "key", "?"))
         return max(A, B)
 
     # ---------- 开仓时生成出场计划 ----------
@@ -221,8 +246,8 @@ class LayeredExitPolicy:
         # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
         #   R 未知时激进触发反而危险；硬止损/止盈均不依赖 R，不受影响
         R = plan.params.get("R")
+        R = float(R) if R is not None else None
         atr = self._atr()
-
         # ① 硬出场：同根 K 线同时触及止盈与止损 → 按止损计（悲观）
         #   B 方案（use_trailing=True）下 plan 不生成止盈单（tp is None），
         #   故此处的止盈分支只对 A 方案（use_trailing=False）与旧 state.db
@@ -239,7 +264,11 @@ class LayeredExitPolicy:
                 return ExitCheck("tp", tp)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
-        if self.use_trailing and R:
+        #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出
+        #   （2026-09-15 评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
+        #   里被静默吞掉；显式化后行为不变，但把「R=0 则 L3 不跑」这条写在明处
+        #   （是否加告警由 _initial_r 的 A=0 观测点负责）。
+        if self.use_trailing and R is not None and R > 0:
             best = float(plan.params.get("_trail_best", entry))
             prev_best = best
             # fav_profit 用"根内有利极值 best"而非收盘价衡量：

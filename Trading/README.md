@@ -150,10 +150,12 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
     "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
     "use_atr": true,                   // ATR 自适应止损/止盈宽度
-    "atr_sl_multiple": 2.0,            // R = max(结构止损, atr_sl_multiple×ATR)
+    "atr_sl_multiple": 2.0,            // R = max(结构止损 A, atr_sl_multiple×ATR)，不设下限
     "use_trailing": true,              // 保本 + 跟踪止损（L3）
     "breakeven_trigger_r": 1.0,        // 浮盈 ≥ 1R 启动保本/锁利层
     "breakeven_buffer_r": 0.5,         // 锁利层落点 = 入场价 ± 0.5R（=0 即真正保本）
+                                       //   ⚠️ 必须 < breakeven_trigger_r，构造期报错
+                                       //   （缓冲 ≥ 触发时保本止损会抬到市价之上 → 下一根立即被止损）
     "trailing_atr_multiple": 1.0       // 跟踪缓冲 = 1.0×ATR（最坏回吐 0.5R）
   },
   "engine": {

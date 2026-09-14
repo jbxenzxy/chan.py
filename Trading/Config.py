@@ -305,12 +305,41 @@ class ExitConfig(BaseModel):
                                                 #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，不再有全局
                                                 #   trailing_trigger_r）。
 
+    @model_validator(mode="after")
+    def _check_exit_param_order(self) -> "ExitConfig":
+        """构造期 fail-fast：参数之间的**大小关系**（2026-09-15 评审补，P2）。
+
+        两条不变式（违反任一条都直接抛错，绝不带错值进实盘）：
+
+        ① `breakeven_buffer_r < breakeven_trigger_r`（trigger > 0 时）
+            保本层的语义是「浮盈到 breakeven_trigger_r×R → 把止损抬到入场价 +
+            breakeven_buffer_r×R」。改成 R 的倍数之后，这两个参数第一次有了**可比较性**，
+            但代码没做比较：buffer ≥ trigger 时保本位会落在**当前浮盈之上**（实测
+            trigger=1.0 / buffer=1.5、R=10、浮盈 1.1R 时抬到入场价之上 15 点，市价
+            4011 → 新止损 4015），下一根 bar 立刻被硬止损打掉。
+            旧实现用 tick 计量（IF=2 tick=0.4 点），天然越不过 trigger，才一直没暴露。
+            trigger=0（关闭保本层）时不校验 —— 那一层根本不跑。
+
+        注：R 本身不设下限（2026-09-15 评审 · 采纳"有分型才有买卖点"的口径，
+        删除 min_r_points 后不再补地板）。A=0 的可观测性由
+        LayeredExitPolicy._initial_r() 的 WARNING 负责，不在配置层拦。
+        """
+        if self.breakeven_trigger_r > 0 and \
+                self.breakeven_buffer_r >= self.breakeven_trigger_r:
+            raise ValueError(
+                "exit_params: breakeven_buffer_r({}) 必须 < breakeven_trigger_r({}) —— "
+                "缓冲 ≥ 触发时，保本止损会被抬到市价之上，下一根 bar 立刻被硬止损出场。"
+                "（若确要「浮盈即锁利」，把 breakeven_trigger_r 设 0 关掉该层，"
+                "或让 buffer 小于 trigger）".format(
+                    self.breakeven_buffer_r, self.breakeven_trigger_r))
+        return self
+
 
 class ExitPolicyParams(ExitConfig):
     """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
 
     继承 ExitConfig 的品种无关项（ATR / trailing / breakeven_*），另持品种相关参数 r_multiple_tp（它同时是 L3 启动阈值，品种级）。
-    三参数的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
+    r_multiple_tp 的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
     合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
     如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。
     """
@@ -542,7 +571,9 @@ def resolved_exit_params(cfg: TradingConfig) -> Dict[str, Any]:
       · 品种无关项 —— cfg.exit_params（ATR / trailing / 触发倍数等）
       · 品种相关项 —— cfg.product_profile.exit_overrides()（r_multiple_tp，唯一默认值来源是品种档案）
     档案值整块生效：本函数产出的 dict 才是 LayeredExitPolicy 的合法入参，
-    直接传 cfg.exit_params.model_dump() 会缺品种三参数（构造期 AttributeError）。
+    直接传 cfg.exit_params.model_dump() 会缺品种参数 r_multiple_tp（构造期 AttributeError）。
+    （2026-09-14 前档案提供 min_r_points / r_multiple_tp / breakeven_buffer_ticks 三个品种参数，
+     现只剩 r_multiple_tp 一个 —— 另两个已分别删除 / 上移为全局比例。）
 
     未标定品种 → 抛 ValueError（describe_unknown_product 统一文案，与
     AppTrader / Engine._restore 白名单闸门同源同文案）—— 把「品种参数没标定」

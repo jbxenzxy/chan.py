@@ -13,7 +13,7 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
     ⑥ ProductProfile 品种档案：经 `InstrumentSpec.for_product` **显式播种**
        multiplier/price_tick（Phase 3 起不再由 TradingConfig 构造副作用注入）+
-       exit 三参数经 resolved_exit_params() 合并（Fix A · 2026-09-14）
+       exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并（Fix A · 2026-09-14）
     ⑦ 播种语义（Phase 3 · Fix B 起，**取代**原"注入双档"锚点）：
        档案是 price_tick / multiplier 的**唯一真值来源** —— 用户显式写的值
        在播种时同样被档案覆盖（D1：放弃配置覆盖品种参数的能力）；
@@ -152,7 +152,7 @@ def main():
           c_ic.instrument.multiplier, 200.0)
 
     # 未知品种：档案缺失（product_profile=None）。Fix A 后 exit_params 上没有
-    # 品种三参数 —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
+    # 品种相关出场参数（现只剩 r_multiple_tp） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
     # 把「品种参数没标定」拦在启动期，与周期 fail-fast 同一纪律）。
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
     check("未知品种 product_profile=None", c_unk.product_profile, None)
@@ -183,15 +183,20 @@ def main():
     check("播种后：显式 999 被档案覆盖回 IC 的 200.0（D1 · 档案唯一真值）",
           c_exp.instrument.multiplier, 200.0)
 
-    # 出场三参数：Fix A 保持 —— 显式写旧键直接 ValidationError（extra=forbid）。
+    # 出场品种参数：Fix A 保持 —— 显式写品种相关键直接 ValidationError（extra=forbid）。
+    #   ⚠️ 探针键 2026-09-15 由 min_r_points 换成 r_multiple_tp（评审修）：
+    #   min_r_points 在 2026-09-14 被删除，用它当探针只能证明「extra=forbid 拒绝未知键」，
+    #   **证明不了「品种参数不能写进 ExitConfig」** —— 守卫失去了判别力。
+    #   r_multiple_tp 是今天真实存在的品种级键；将来若有人把它加回 ExitConfig
+    #   （双源回潮），本条会立刻变红。
     try:
         TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC"},
-                      exit_params={"min_r_points": 7.0})
+                      exit_params={"r_multiple_tp": 7.0})
         _old_key_err = ""
     except Exception as e:  # pydantic ValidationError（extra=forbid）
         _old_key_err = str(e)
-    check("ExitConfig 显式写品种参数（min_r_points）直接报错（D1 放弃 env 覆盖）",
-          "min_r_points" in _old_key_err, True)
+    check("ExitConfig 显式写品种参数（r_multiple_tp）直接报错（D1 放弃 env 覆盖）",
+          "r_multiple_tp" in _old_key_err, True)
 
     # (b) 换品种：与初始加载**同一条路径**（同一个 _seed_instrument），
     #     Phase 3 删掉了 apply_product_profile/force 那套双档语义 ——

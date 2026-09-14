@@ -140,6 +140,47 @@ def main():
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
     check("无 ATR/无结构 R=0 → 止损 = 99.8（P2 边界保护）", plan5.stop_price, 99.8)
 
+    print("\n[3b] A=0 观测告警（2026-09-15 评审补）：不改 R 口径，只打 WARNING 抓样本")
+    # 口径（用户拍板）：有分型才有买卖点 → 入场时 A 恒 > 0，故 R 不设下限、不兜底。
+    #   但 A 真归零时必须出声，便于后续 grep "[R 结构距离归零]" 抓现场。
+    import logging as _logging
+
+    class _CapLog(_logging.Handler):
+        def __init__(self):
+            _logging.Handler.__init__(self)
+            self.msgs = []
+
+        def emit(self, rec):
+            self.msgs.append(rec.getMessage())
+
+    _lg = _logging.getLogger(LayeredExitPolicy.__module__)
+    _cap = _CapLog()
+    _lg.addHandler(_cap)
+    _old_lvl, _old_prop = _lg.level, _lg.propagate
+    _lg.setLevel(_logging.WARNING)
+    # ① stop_at_signal_extreme=True 且分型贴身（fractal_low == entry）→ A=0 → 必须告警
+    pol5w = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
+                               "r_multiple_tp": 2.0})
+    plan5w = pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                                    fractal_low=100.0), 100.0, state)
+    check("A=0（分型贴身）→ R=0，止损仍走 P2 = 99.8（口径不变）",
+          plan5w.stop_price, 99.8)
+    check("A=0 → 打 WARNING 观测日志（[R 结构距离归零]）",
+          any("R 结构距离归零" in m for m in _cap.msgs), True)
+    # ② stop_at_signal_extreme=False 时 A 恒 0 是配置预期 → 不该刷屏
+    _cap.msgs = []
+    pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
+    check("stop_at_signal_extreme=False（A 恒 0 属预期）→ 不打告警",
+          _cap.msgs, [])
+    # ③ A > 0 正常路径 → 不打告警
+    _cap.msgs = []
+    pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                           fractal_low=97.0), 100.0, state)
+    check("A=3 正常路径 → 不打告警", _cap.msgs, [])
+    _lg.removeHandler(_cap)
+    _lg.setLevel(_old_lvl)
+    _lg.propagate = _old_prop
+
     print("\n[4] 同根 K 线同时触止盈止损 → 按止损计（悲观）")
     pos = make_position(Side.LONG, 100.0, 90.0, 110.0)
     # bar.low=89（破止损）<=90 且 bar.high=111（破止盈）>=110 → 取 sl
@@ -259,7 +300,8 @@ def main():
     chk_ic2 = pol_ic.check(pos_ic2, make_bar(2702, 100, 135, 105, 130), state, 5)
     check("IC(3R) 在 3.5R 启动 L3", (chk_ic2 is not None and chk_ic2.only_update), True)
 
-    print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)（已删 min_r_points 地板）")
+    print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)"
+          "（min_r_points 地板已删，且不再补任何下限）")
     # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3
     pol20 = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": True,
                                "r_multiple_tp": 2.0,
@@ -281,10 +323,48 @@ def main():
     plan22 = pol22.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=97.0), 100.0, state)
     check("max(A=3, 2×ATR=4)=4 → 止损=96", plan22.stop_price, 96.0)
-    # A ≤ 0（行情已穿越分型）且无 ATR → R=0，由 P2 守卫把止损压在入场价外 1 tick
+    # max(A, 2×ATR)：A ≤ 0（行情已穿越分型）且无 ATR → R=0，由 P2 守卫压在入场价外 1 tick
     plan23 = pol20.plan(make_signal(Side.LONG, 100.0, 99.0, 98.0,
                                     fractal_low=102.0), 100.0, state)
-    check("A≤0 且无 ATR → R=0 → P2 守卫压到 入场−1tick=99.8", plan23.stop_price, 99.8)
+    check("A≤0 且无 ATR → R=0", approx(plan23.params.get("R", 0), 0.0), True)
+    check("A≤0 且无 ATR → 止损 = 入场−1tick = 99.8（P2 边界保护）",
+          plan23.stop_price, 99.8)
+
+    print("\n[10] 构造期参数校验（2026-09-15 评审补 · Config.ExitConfig._check_exit_param_order）")
+    # ① breakeven_buffer_r < breakeven_trigger_r：
+    #    缓冲 ≥ 触发时，保本位会落在**当前浮盈之上**（浮盈 1.1R 却把止损抬到 1.5R），
+    #    下一根 bar 立刻被硬止损打掉 —— 旧实现用 tick 计量，天然越不过 trigger。
+    _be_err = ""
+    try:
+        LayeredExitPolicy({"breakeven_trigger_r": 1.0, "breakeven_buffer_r": 1.5})
+    except Exception as e:  # pydantic ValidationError
+        _be_err = str(e)
+    check("breakeven_buffer_r(1.5) ≥ trigger(1.0) → 构造期报错（保本止损会越过市价）",
+          "breakeven_buffer_r" in _be_err, True)
+    _be_eq_err = ""
+    try:
+        LayeredExitPolicy({"breakeven_trigger_r": 1.0, "breakeven_buffer_r": 1.0})
+    except Exception as e:
+        _be_eq_err = str(e)
+    check("buffer == trigger 同样报错（边界必须是严格小于）",
+          "breakeven_buffer_r" in _be_eq_err, True)
+    _be_ok_err = ""
+    try:
+        LayeredExitPolicy({"breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5})
+    except Exception as e:
+        _be_ok_err = str(e)
+    check("默认口径 buffer(0.5) < trigger(1.0) 正常构造", _be_ok_err, "")
+    # trigger=0 = 关闭保本层，那一层根本不跑 → 不做大小校验
+    LayeredExitPolicy({"breakeven_trigger_r": 0.0, "breakeven_buffer_r": 0.5})
+    # ② 已删除的 min_r_points 不能"悄悄复活"：ExitConfig 是 extra=forbid，
+    #    显式写旧键必须报错（防止有人照着旧文档/旧 .env 把地板加回来）
+    _mr_err = ""
+    try:
+        LayeredExitPolicy({"min_r_points": 3.0})
+    except Exception as e:  # pydantic ValidationError（extra=forbid）
+        _mr_err = str(e)
+    check("显式写已删除的 min_r_points → 构造期报错（防地板悄悄复活）",
+          "min_r_points" in _mr_err, True)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
