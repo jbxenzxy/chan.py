@@ -1,4 +1,11 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* ── 头部两个控件（实时徽标 / 自动下单）的统一高度（2026-09-14）──
+           两者并排，必须同高，否则会差 1px。高度**只在这里定义一处**，
+           由 .realtime-badge / .auto-order-wrap / .auto-order-switch 共同引用
+           → 结构上不可能漂移（改这一个值，两个控件一起变）。
+           用 min-height 而非 height：窗口很窄时头部会被挤压、文字会折行撑高，
+           此时两者仍各自按内容长高（与改动前一致），不会把文字压出框。 */
+        :root { --hdr-chip-h: 19px; }
         html { background: #1a1a2e; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
@@ -99,6 +106,7 @@
         #btn-dual { margin-left: 4px; }
         .realtime-badge {
             display: none; align-items: center; gap: 4px; padding: 2px 8px;
+            min-height: var(--hdr-chip-h);                      /* ← 统一高度 */
             border-radius: 10px; background: #27ae60; color: #fff; font-size: 11px;
             font-weight: bold; margin-left: 8px; animation: pulse-badge 2s infinite;
         }
@@ -111,6 +119,7 @@
         /* ── 自动下单开关（期货实时徽标右侧，2026-09-06）── */
         .auto-order-wrap {
             display: none; align-items: center; gap: 6px; margin-left: 10px;
+            min-height: var(--hdr-chip-h);                      /* ← 与徽标同高 */
             font-size: 11px; color: #a8b2d1; user-select: none;
         }
         .auto-order-wrap.visible { display: flex; }
@@ -127,19 +136,24 @@
             display: none; font-size: 10px; color: #e0a458; margin-left: 2px;
         }
         .auto-order-wrap.disabled .auto-order-hint { display: inline; }
-        .auto-order-switch { position: relative; display: inline-block; width: 40px; height: 20px; }
+        /* 开关本体：宽度保持 40px，高度跟徽标一致（19 → 圆角钳到 9.5，观感与徽标同档）。
+           几何自洽：上下各留 3px，13 + 3 + 3 = 19；滑块开到右侧时右边距同样 3px。 */
+        .auto-order-switch {
+            position: relative; display: inline-block; width: 40px;
+            height: var(--hdr-chip-h);                          /* ← 与徽标同高 */
+        }
         .auto-order-switch input { opacity: 0; width: 0; height: 0; }
         .auto-order-slider {
             position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-            background: #3a3f5c; border-radius: 20px; transition: 0.25s;
+            background: #3a3f5c; border-radius: 10px; transition: 0.25s;
         }
         .auto-order-slider::before {
-            content: ""; position: absolute; width: 14px; height: 14px; left: 3px; top: 3px;
+            content: ""; position: absolute; width: 13px; height: 13px; left: 3px; top: 3px;
             background: #a8b2d1; border-radius: 50%; transition: 0.25s;
         }
         .auto-order-switch input:checked + .auto-order-slider { background: #e94560; }
         .auto-order-switch input:checked + .auto-order-slider::before {
-            transform: translateX(20px); background: #fff;
+            transform: translateX(21px); background: #fff;
         }
         .auto-order-switch input:disabled + .auto-order-slider { opacity: 0.4; cursor: not-allowed; }
         .auto-order-dot {
