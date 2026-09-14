@@ -203,7 +203,7 @@ def parse_product_key(signal_symbol: str) -> str:
 
     与 parse_product 的分工（2026-09-14 评审 P1-1）：
       · parse_product   —— 语义 =「取符号末段」，保留月份。
-        `"CFFEX.IF2609"` → `"IF2609"`（test_period_profile.py:114 明确断言此行为，
+        `"CFFEX.IF2609"` → `"IF2609"`（test_period_profile.py:133 明确断言此行为，
         不能改，改了会把已标定的既有用例打红）。
       · parse_product_key —— 语义 =「查档案用的键」，剥掉月份。
         `"CFFEX.IF2609"` → `"IF"`；`"KQ.m@CFFEX.IF"` → `"IF"`（主连本来就没月份，
