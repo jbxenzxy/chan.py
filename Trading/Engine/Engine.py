@@ -1219,6 +1219,23 @@ class TradingEngine(ReconcileMixin):
             # 「今仓 → 反向开仓 / 跨日 → 平仓」的唯一依据，空着就是非法状态。
             if not self._open_time_anchor(sig)[1]:
                 return "no_time_anchor"
+            # ── 交割月护栏（Phase 11 · 阻塞点 4 · D8）──
+            #   距最后交易日不足 `delivery_guard_days`（默认 1，仅当天）个交易日 →
+            #   拒绝**开新仓** + 严重告警（fail-closed）。只拦开仓，平旧仓永不拦。
+            #   护栏对象 = 现行主力 last_trade_date（换月自动解除）；last_trade_date
+            #   未知（离线 dry_run / 行情未取到）→ 不拦（"不校验未知的东西"）。
+            #   guard_days=0 表示关闭护栏（恒放行）；None/缺失时取默认 1。
+            guard_days = int(getattr(self.cfg.risk, "delivery_guard_days", 1))
+            if self.spec.delivery_guard_blocked(today, threshold_days=guard_days):
+                self.alert(
+                    self.ALERT_SEVERE, "delivery_guard_blocked",
+                    "距最后交易日 {} 不足 {} 个交易日（交割月护栏）—— 已拒绝开新仓；"
+                    "当前主力换月后自动解除，旧仓仍可正常平掉。"
+                    .format(self.spec.last_trade_date or "未知", guard_days),
+                    symbol=self.spec.trade_symbol,
+                    last_trade_date=self.spec.last_trade_date,
+                    guard_days=guard_days)
+                return "delivery_guard_blocked"
             return None
         # ── CLOSE / CLOSETODAY ──
         # Phase 10（D6）：CLOSETODAY 仅上期所/上期能源（SHFE/INE）可用，其余

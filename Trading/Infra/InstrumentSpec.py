@@ -14,7 +14,8 @@ M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变—�
 from __future__ import annotations
 
 import math
-from typing import Any, ClassVar, Dict, List, Tuple
+from datetime import date, datetime, timedelta
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -368,6 +369,65 @@ class InstrumentSpec(BaseModel):
         保守侧：宁可继续锁仓，也不生成一张会被拒的平今单。
         """
         return str(self.exchange or "").upper() in ("SHFE", "INE")
+
+    def delivery_guard_blocked(self, today: str, threshold_days: int = 1) -> bool:
+        """交割月护栏判定（Phase 11 · 阻塞点 4 · D8）。返回 True = 距最后交易日不足
+        `threshold_days` 个交易日（含当天）→ 应**拒绝开新仓**（fail-closed）。
+
+        语义（2026-09-14 拍板，见实施计划 §6.2 Phase 11 行）：
+          · 判据 =「剩余交易日 **<** threshold_days 即拦」；
+          · **护栏对象 = 现行主力 `trade_symbol`** 的 last_trade_date —— 主连换月
+            （IF2609→IF2610）时 trade_symbol 更新、判定随之解除；
+          · 只拦开新仓（Engine 在 OPEN 分支消费）；平旧仓/离场永不拦；
+          · `last_trade_date` 未知（离线 dry_run / 行情未取到）→ 返回 False，
+            与涨跌停护栏同哲学（"不校验未知的东西"）。
+
+        天数口径：只数工作日（Mon-Fri），不计法定节假日 —— 节假日需交易日历，
+        未引入（一期不消费），文档已注明 N=1 ≈ 仅最后交易日当天拦。
+
+        例：today=2026-09-18、last_trade_date=2026-09-18 → 剩 0 日 < 1 → 拦；
+            today=2026-09-17（=N 前一天）→ 剩 1 日 < 1 不拦 → 正常可开。
+        """
+        if not self.last_trade_date:
+            return False
+        rem = _weekdays_between(today, self.last_trade_date)
+        return rem < int(threshold_days)
+
+    def is_night_session(self) -> bool:
+        """本品种是否有夜盘（Phase 11 · 阻塞点 6 交易时段护栏的数据位）。
+
+        真值来源：行情（SimNow._apply_instrument_quote 回填）。未知（离线 dry_run
+        未取到 / Phase 11 之前）→ 返回 False：交易时段护栏对"无夜盘记录"的品种
+        按**日盘时段**校验（保守，见 TradingSession 注释）。
+        """
+        return bool(self.night_session)
+
+
+def _weekdays_between(start: str, end: str) -> int:
+    """统计 (start, end] 区间内的**工作日**（Mon-Fri）数，供交割月护栏用。
+
+    仅数工作日不算节假日：start 到 end 跨越周末时，周末不计入剩余交易日
+    —— 这使「最后交易日为周一、今天是上周五」时剩 1 日（周一），N=1 不拦，
+    与"只拦最后交易日当天"语义一致。
+
+    返回 0 的情形：start >= end（已过期 / 同日，即最后交易日当天）或
+    start/end 解析失败（空串 / 非 YYYY-MM-DD）。
+    """
+    try:
+        s = date.fromisoformat(str(start or "")[:10])
+        e = date.fromisoformat(str(end or "")[:10])
+    except (ValueError, TypeError):
+        return 0
+    if e <= s:
+        return 0
+    n, d = 0, s
+    while True:
+        d += timedelta(days=1)
+        if d > e:
+            break
+        if d.weekday() < 5:
+            n += 1
+    return n
 
 
 def derive_exchange(symbol: str) -> str:

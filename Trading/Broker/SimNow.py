@@ -75,6 +75,7 @@ import logging
 import math
 import os
 import time
+import datetime as _dt
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
@@ -366,6 +367,46 @@ def _quote_params_ready(quote: Any, expect_symbol: str,
             return v[2] > v[3]
         return True
     return _ready
+
+
+def _extract_last_trade_date(quote: Any) -> str:
+    """从行情对象提取最后交易日（Phase 11 · 交割月护栏数据位，YYYY-MM-DD）。
+
+    优先读 quote.last_trade_date；tqsdk 部分版本只暴露 expiry_datetime
+    （datetime 对象 / int 毫秒三种形态），取其日期部分。解析不出 → 返回 ""。
+    """
+    def _normalize(v: Any) -> str:
+        if isinstance(v, _dt.datetime):
+            return v.strftime("%Y-%m-%d")
+        if isinstance(v, _dt.date):
+            return v.strftime("%Y-%m-%d")
+        if isinstance(v, (int, float)) and v > 0:
+            try:
+                return _dt.datetime.fromtimestamp(v / 1000.0).strftime("%Y-%m-%d")
+            except (ValueError, OverflowError, OSError):
+                return ""
+        s = str(v or "").strip()
+        if len(s) >= 10:
+            s = s[:10]
+        try:
+            _dt.date.fromisoformat(s)
+            return s
+        except (ValueError, TypeError):
+            return ""
+
+    if quote is None:
+        return ""
+    for attr in ("last_trade_date", "expiry_datetime"):
+        try:
+            got = getattr(quote, attr, None)
+        except Exception:
+            continue
+        if got is None:
+            continue
+        s = _normalize(got)
+        if s:
+            return s
+    return ""
 
 
 @register_broker
@@ -774,6 +815,12 @@ class SimNowBroker(Broker):
             #   由成交回报反推通道兜底，见 _sample_fee_from_fill —— 两通道都失败
             #   = fail-closed，经济性判定不做，平今开关走保守侧）。
             self._apply_fee_rates()
+            # Phase 11（2026-09-14 插入）：交割月护栏的数据位（last_trade_date /
+            #   night_session）从**真实月份合约**行情回填。取不到 → 保持 ""/False，
+            #   护栏按"不校验未知"降级（Engine.delivery_guard_blocked 已对未知
+            #   放行；交易时段护栏对无夜盘品种按日盘时段校验）—— 与涨跌停护栏
+            #   对未知区间的处理同哲学。
+            self._fill_delivery_calendar(q)
         except ValueError as e:
             self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e),
                                   code="instrument_spec_invalid")
@@ -781,6 +828,30 @@ class SimNowBroker(Broker):
             self._instrument_warn(
                 "合约参数获取异常: {}: {} → fail-closed，拒单直至取到".format(type(e).__name__, e),
                 code="instrument_quote_error", err=type(e).__name__)
+
+    # ══════════════════════════════════════════════════════════════════
+    # Phase 11（阻塞点 4 · D8 / 阻塞点 6 · Q5 · 2026-09-14 插入）：交割月 + 交易时段
+    # ══════════════════════════════════════════════════════════════════
+    def _fill_delivery_calendar(self, quote: Any) -> None:
+        """从**真实月份合约**行情回填 `last_trade_date` / `night_session`。
+
+        数据位（InstrumentSpec，Phase 11 消费）：
+          · last_trade_date —— 优先读 quote.last_trade_date（YYYY-MM-DD）；tqsdk
+            部分版本只暴露 expiry_datetime（datetime / int 毫秒戳），取其日期部分；
+            都取不到或解析不出合法日期 → 保持 ""（交割月护栏降级为不校验）。
+          · night_session —— quote.night_session（bool）；取不到 → 保持 False
+            （交易时段护栏按日盘时段校验）。
+
+        一切异常静默跳过 —— 取不到交割/时段数据不能拖垮行情参数流程。
+        """
+        if self.spec.last_trade_date or self.spec.night_session:
+            return
+        try:
+            self.spec.last_trade_date = _extract_last_trade_date(quote)
+            ns = getattr(quote, "night_session", None)
+            self.spec.night_session = bool(ns)
+        except Exception:
+            pass
 
     # ══════════════════════════════════════════════════════════════════
     # Phase 12（D6 喂数 · 2026-09-14 插入）：三档费率自动获取 + 平今经济性判定喂数

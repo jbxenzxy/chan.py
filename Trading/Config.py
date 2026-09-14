@@ -360,6 +360,12 @@ class RiskConfig(BaseModel):
     max_volume: int = 2              # 每个买卖点一笔挂 N 手（= 单笔手数上限，默认 2）。
                                      #   中金所限价单单笔上限 20 手，配置不应超过。
 
+    # 交割月护栏（Phase 11 · 阻塞点 4 · D8）：距最后交易日不足 `delivery_guard_days`
+    #   个交易日时拒绝**开新仓**（fail-closed）。判据 = 剩余交易日 < N 即拦。
+    #   默认 1 = 仅最后交易日当天拦（2026-09-14 拍板）。只拦开新仓，平旧仓永不拦；
+    #   护栏对象 = 现行主力（随 `last_trade_date` 换月自动解除）。
+    delivery_guard_days: int = 1
+
     dropped_legacy_keys: ClassVar[List[str]] = []
     # 2026-09-11 重构删除的两个键被 `_drop_legacy_keys` 丢弃时记在这里。
     # 只为"可见"服务 —— 静默丢弃会让"配置里还有这两行"永远不被发现。
