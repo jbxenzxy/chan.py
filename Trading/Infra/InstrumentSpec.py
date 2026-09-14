@@ -64,9 +64,14 @@ class InstrumentSpec(BaseModel):
     exchange: str = ""                        # 交易所：CFFEX/SHFE/INE/DCE/CZCE/GFEX。
                                               #   A5 预留的字段位在此兑现；Phase 9（FOK/FAK
                                               #   切换）正式消费，Phase 8 只填充不分支。
-    max_order_volume: int = 0                 # 交易所单笔报单上限（手）。0 = 不限制。
-                                              #   中金所限价单上限到底是 20 还是 5000 未决（Q9），
-                                              #   故默认 0 = 不做该校验，Phase 11/确认后启用。
+    # 2026-09-14 删除：原 `max_order_volume` 字段（"交易所单笔报单上限（手）"）自 Phase 8
+    #   加入起**从未被任何代码消费**（全仓只有字段定义一处，0 处读取）。单笔手数的唯一
+    #   来源是 risk.max_volume（Config.py → Engine.lots_per_signal → Engine._open_volume），
+    #   CZCE 钉 1 手则按交易所直接硬编码在 Engine._open_volume 里 —— 与本字段无关。
+    #   死字段留着会误导（看起来像"手数上限在这里配"），故删除。
+    #   Q9（中金所限价单单笔上限究竟是 20 还是 5000）**仍未决**；将来真要落地该校验时，
+    #   按当时的真实需求重新设计（很可能是"每交易所/每品种的上限表"），**不要**靠恢复
+    #   这个字段了事。防回潮断言见 Trading/Test/test_p50_review_fixes.py [8]。
     limit_up_pct: float = 0.0                 # 涨跌停板幅度（%，如 10.0）。仅作档案记录：
                                               #   区间真值是绝对价 upper/lower_limit（随日结算价变），
                                               #   从行情取，见下。

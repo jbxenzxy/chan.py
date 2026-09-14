@@ -570,7 +570,12 @@ def search_stocks(q):
     results = results[:10]
 
     # 期货/期指别名搜索（经期货域元数据出口，图表层不直连 CTqSdkAPI）
-    _futures_aliases = _sse.get_futures_aliases()
+    #   2026-09-14（用户拍板「限制往前提」）：只枚举**自动下单可交易**品种
+    #   （= Trading/Infra/ProductProfile.PRODUCT_PROFILES 的 8 个品种），
+    #   非白名单品种不再出现在搜索结果里 —— 用户根本选不到"点了会让引擎
+    #   拒绝启动"的品种，而不是等到启动时才报错。
+    #   范围口径与降级行为见 AppSSE.get_tradable_futures_aliases 的 docstring。
+    _futures_aliases = _sse.get_tradable_futures_aliases()
     for alias, full_code in _futures_aliases.items():
         if keyword_upper in alias.upper():
             name = _sse.get_futures_name(full_code)

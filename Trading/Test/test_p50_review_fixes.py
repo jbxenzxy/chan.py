@@ -12,6 +12,7 @@ P50 · 2026-09-14 评审问题修复 契约测试
   [5] P1-3 quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
   [6] P2-3 离线模式规格漂移对账：dry_run/replay 用错规格不再静默
   [7] P2-4 未知品种日志去重：Config 侧不再重复打 WARNING
+  [8] 死字段清理（2026-09-14）：InstrumentSpec 不含从未被消费的 max_order_volume
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p50_review_fixes.py
@@ -403,6 +404,38 @@ def t7_log_dedup():
           dup, [])
 
 
+def t8_dead_field_removed():
+    """[8] 2026-09-14：死字段 `max_order_volume` 已删除，不许回潮。
+
+    背景：该字段在 Phase 8 作为 §5.6「六个缺字段」之一加入，但**从未被消费**
+    （全仓只有字段定义一处、0 处读取）。单笔手数的唯一来源是 `risk.max_volume`
+    —— Config.py → Engine.lots_per_signal → Engine._open_volume；CZCE 钉 1 手
+    由 Engine._open_volume 按交易所硬编码，与本字段无关。
+
+    为什么必须钉死：这类"看起来像配置项、实际没有读取点"的字段是最危险的文档
+    噪声 —— 下一个人会以为"手数上限在这里配"，改完发现没生效，再花时间排查。
+    发现即删，并用断言拦住回潮。Q9（中金所限价单上限）仍未决，真要落地时按真实
+    需求重新设计，不要靠恢复这个字段。
+    """
+    print("\n[8] 死字段 max_order_volume 已删除（InstrumentSpec 不含该字段）")
+    fields = set(InstrumentSpec.model_fields)
+    check("InstrumentSpec 不含 max_order_volume",
+          "max_order_volume" in fields, False)
+    # 顺带把 Phase 8 真正在用的字段点一遍，防止"删过头"：
+    for keep in ("exchange", "limit_up_pct", "limit_down_pct",
+                 "last_trade_date", "night_session"):
+        check_true("InstrumentSpec 保留 Phase 8 在用字段 {}".format(keep),
+                   keep in fields)
+    # `extra="forbid"` 下老配置若仍写该键会构造失败 —— 确认这一行为是显式的
+    # （报错而非静默忽略），这样"配置文件没清干净"能被立刻发现。
+    _raised = False
+    try:
+        InstrumentSpec(max_order_volume=1)
+    except Exception:
+        _raised = True
+    check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
+
+
 def main():
     t1_parse_product_key()
     t2_assert_product_allowed()
@@ -411,6 +444,7 @@ def main():
     t5_quote_partial()
     t6_offline_drift()
     t7_log_dedup()
+    t8_dead_field_removed()
     print("\n============================================================")
     print("P50 评审问题修复 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("============================================================")
