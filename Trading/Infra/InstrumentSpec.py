@@ -2,6 +2,11 @@
 """
 合约规格 / 价格对齐 / 成本模型
 ==============================
+角色定位（2026-09-14 双轴声明）：本模型的静态规格默认值经
+TradingConfig.instrument（Trading/Config.py）挂载进配置树，属部署配置的
+一部分；与 Config.py 的分区关系（消费层 × 变异维度两把尺子）见该文件
+模块 docstring 的「双轴声明」。
+
 v1 的合约映射用**配置表**（Trading/Config.py 的 instrument.trade_symbol）。
 M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变——
 这是刻意留的替换点，不要把这层的调用散到引擎里。

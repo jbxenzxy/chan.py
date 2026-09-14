@@ -72,7 +72,8 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from Trading.Broker.DryRun import DryRunBroker            # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
+                            resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine           # noqa: E402
 from Trading.Infra.EventLog import EventLog               # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec   # noqa: E402
@@ -131,7 +132,7 @@ def sig(key, date, ts, price, is_buy):
 def make_cfg(**engine_over):
     c = copy.deepcopy(DEFAULT_CONFIG)
     c["risk"]["max_volume"] = 2
-    c["exit_params"].update({"use_atr": False, "min_r_points": 3.0,
+    c["exit_params"].update({"use_atr": False,
                              "use_trailing": False})
     c["engine"]["close_retry_bars"] = 1
     c["engine"]["close_max_streak"] = 2
@@ -182,7 +183,7 @@ def build(tmpd, broker, **engine_over):
     ev_path = os.path.join(tmpd, "events.jsonl")
     eng = TradingEngine(
         cfg, broker, EntryPolicy({}),
-        LayeredExitPolicy(cfg.exit_params.model_dump()),
+        LayeredExitPolicy(resolved_exit_params(cfg)),
         Store(os.path.join(tmpd, "state.db")),
         EventLog(ev_path, echo=False, echo_kinds=None))
     return eng, ev_path

@@ -54,7 +54,7 @@ if _RROOT not in sys.path:
 from Trading.Infra.ProductProfile import (  # noqa: E402
     PRODUCT_PROFILES, parse_product, parse_product_key,
 )
-from Trading.Config import TradingConfig  # noqa: E402
+from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
@@ -135,8 +135,8 @@ def main():
               c.instrument.multiplier, mult)
         check("{} price_tick 注入 {}".format(product, tick),
               c.instrument.price_tick, tick)
-        check("{} R 下限 = 默认 3 点（2026-09-13 拍板）".format(product),
-              c.exit_params.min_r_points, 3.0)
+        check("{} R 下限 = 默认 3 点（2026-09-13 拍板，档案经 resolved 合并）".format(product),
+              resolved_exit_params(c)["min_r_points"], 3.0)
 
     print("\n[3] 白名单硬约束：未知品种拒绝启动、已知品种正常启动")
     for sym in ["KQ.m@SHFE.rb", "KQ.m@SHFE.ZZ"]:

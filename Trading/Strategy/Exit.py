@@ -24,7 +24,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 
-from ..Config import ExitConfig
+from ..Config import ExitPolicyParams
 from ..Infra.InstrumentSpec import InstrumentSpec
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
@@ -43,10 +43,12 @@ class ExitCheck:
     only_update: bool = False
 
 
-# 参数默认值单一事实源（2026-09-07 严格模式）：
+# 参数默认值单一事实源（2026-09-07 严格模式；2026-09-14 Fix A 拆分）：
 #   不再从 DEFAULT_CONFIG 抄一份 `_DEF_EXIT_PARAMS` 兜底，直接由 Trading/Config.py
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
-
+#   校验模型用 ExitPolicyParams（继承 ExitConfig + 品种三参数）：ExitConfig 是
+#   **部署配置**（品种无关项），本 policy 的入参是 resolved_exit_params() 合并后的
+#   完整参数（含品种三件），故校验/持有模型必须两样都有。
 
 class LayeredExitPolicy:
     name = "LayeredExitPolicy"
@@ -54,7 +56,7 @@ class LayeredExitPolicy:
     # ---------- 参数 ----------
     def __init__(self, params=None):
         self.params = dict(params or {})
-        p = ExitConfig(**self.params)
+        p = ExitPolicyParams(**self.params)
         self.p = p
         # L1 R 倍数定基线
         self.stop_at_signal_extreme = p.stop_at_signal_extreme

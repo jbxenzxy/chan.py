@@ -11,7 +11,8 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
-    ⑥ ProductProfile 品种档案：随品种参数覆盖（min_r_points / r_multiple_tp / multiplier）
+    ⑥ ProductProfile 品种档案：instrument 字段播种（multiplier/price_tick）+
+       exit 三参数经 resolved_exit_params() 合并（Fix A · 2026-09-14）
     ⑦ 品种档案注入的双档语义（B-3 修复锚点）：初始加载 user-explicit-wins
       （用户显式写的字段不被档案覆盖）、--symbol 换品种 force=True 整块覆盖
       （含用户显式值 —— 换品种后旧品种参数必须让位）
@@ -45,7 +46,7 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Config import TradingConfig  # noqa: E402
+from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.PeriodProfile import (  # noqa: E402
     FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
 )
@@ -114,44 +115,62 @@ def main():
           parse_product("CFFEX.IF2609"), "IF2609")
 
     c_if = TradingConfig()
-    check("IF min_r_points=3.0", c_if.exit_params.min_r_points, 3.0)
-    check("IF r_multiple_tp=2.0", c_if.exit_params.r_multiple_tp, 2.0)
+    _res_if = resolved_exit_params(c_if)
+    check("IF resolved min_r_points=3.0", _res_if["min_r_points"], 3.0)
+    check("IF resolved r_multiple_tp=2.0", _res_if["r_multiple_tp"], 2.0)
     check("IF multiplier=300.0", c_if.instrument.multiplier, 300.0)
     check("IF 生效的品种档案 product=IF", c_if.product_profile.product, "IF")
 
     c_ic = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC"})
-    check("IC min_r_points=5.0", c_ic.exit_params.min_r_points, 5.0)
-    check("IC r_multiple_tp=3.0", c_ic.exit_params.r_multiple_tp, 3.0)
+    _res_ic = resolved_exit_params(c_ic)
+    check("IC resolved min_r_points=5.0", _res_ic["min_r_points"], 5.0)
+    check("IC resolved r_multiple_tp=3.0", _res_ic["r_multiple_tp"], 3.0)
     check("IC multiplier=200.0", c_ic.instrument.multiplier, 200.0)
 
-    # 未知品种：不套任何品种档案，保留 flat 默认（= IF 基线）
+    # 未知品种：档案缺失（product_profile=None）。Fix A 后 exit_params 上没有
+    # 品种三参数 —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
+    # 把「品种参数没标定」拦在启动期，与周期 fail-fast 同一纪律）。
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
     check("未知品种 product_profile=None", c_unk.product_profile, None)
-    check("未知品种 min_r_points 保默认 3.0", c_unk.exit_params.min_r_points, 3.0)
+    try:
+        resolved_exit_params(c_unk)
+        _raised = ""
+    except ValueError as e:
+        _raised = str(e)
+    check("未知品种 resolved_exit_params 抛 ValueError（启动期闸门，文案含支持清单）",
+          "支持清单" in _raised, True)
 
     print("\n[7] 品种档案注入双档语义（B-3 锚点：初始 user-explicit-wins / 换品种 force 覆盖）")
     # (a) 初始加载：用户在配置里**显式写**的字段不被档案覆盖（写错了也是用户的决定，
     #     实盘还有 SimNow 行情回填 + fail-closed 闸门兜底）；未显式写的字段照常注入。
-    c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC", "multiplier": 999.0},
-                          exit_params={"min_r_points": 7.0})
+    #     Fix A（2026-09-14）：品种三参数已不在 ExitConfig —— 显式写旧键直接
+    #     ValidationError（extra=forbid，D1 拍板：放弃 .env 覆盖，调参 = 改档案）。
+    c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC", "multiplier": 999.0})
     check("显式 multiplier=999 初始加载不被档案覆盖", c_exp.instrument.multiplier, 999.0)
-    check("显式 min_r_points=7.0 初始加载不被档案覆盖", c_exp.exit_params.min_r_points, 7.0)
-    check("未显式的 r_multiple_tp 照常注入 IC 档案值 3.0", c_exp.exit_params.r_multiple_tp, 3.0)
-    check("未显式的 breakeven_buffer_ticks 照常注入 IC 档案值 3.0",
-          c_exp.exit_params.breakeven_buffer_ticks, 3.0)
+    try:
+        TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC"},
+                      exit_params={"min_r_points": 7.0})
+        _old_key_err = ""
+    except Exception as e:  # pydantic ValidationError（extra=forbid）
+        _old_key_err = str(e)
+    check("ExitConfig 显式写品种参数（min_r_points）直接报错（D1 放弃 env 覆盖）",
+          "min_r_points" in _old_key_err, True)
 
     # (b) --symbol 换品种重载（main.py: apply_product_profile）：品种已切换，
-    #     档案是新品种的权威真值，整块覆盖 —— **含用户显式值**，否则沿用旧品种的
-    #     multiplier/price_tick 会造成限价口径漂移。
+    #     档案是新品种的权威真值，整块覆盖 instrument 字段 —— **含用户显式值**，
+    #     否则沿用旧品种的 multiplier/price_tick 会造成限价口径漂移。
     #     ⚠️ 这里必须绕过 model_fields_set 守护：初始注入已把字段写进 fields_set，
     #     若按 (a) 的规则跳过，换品种后旧品种的值会残留。
+    #     品种三参数（Fix A）不在注入范围 —— 换品种后经 resolved_exit_params
+    #     跟随新品种档案（IC 5.0/3.0 → IF 3.0/2.0）。
     c_exp.instrument.signal_symbol = "KQ.m@CFFEX.IF"
     c_exp.apply_product_profile()
     check("换品种 force 后 multiplier 覆盖为 IF 档案 300.0", c_exp.instrument.multiplier, 300.0)
-    check("换品种 force 后 min_r_points 覆盖为 IF 档案 3.0", c_exp.exit_params.min_r_points, 3.0)
-    check("换品种 force 后 r_multiple_tp 覆盖为 IF 档案 2.0", c_exp.exit_params.r_multiple_tp, 2.0)
-    check("换品种 force 后 breakeven_buffer_ticks 覆盖为 IF 档案 2.0",
-          c_exp.exit_params.breakeven_buffer_ticks, 2.0)
+    _res_exp = resolved_exit_params(c_exp)
+    check("换品种后 resolved min_r_points 跟随 IF 档案 3.0", _res_exp["min_r_points"], 3.0)
+    check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0", _res_exp["r_multiple_tp"], 2.0)
+    check("换品种后 resolved breakeven_buffer_ticks 跟随 IF 档案 2.0",
+          _res_exp["breakeven_buffer_ticks"], 2.0)
 
     # (c) 换品种后 price_tick 回档案值：显式 0.5 在初始加载存活、被 force 覆盖回 0.2
     c_tick = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF", "price_tick": 0.5})

@@ -12,8 +12,9 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
     · 周期只作时间语义（freq → bar_secs），收口在 Infra/PeriodProfile.py 的
-      FREQ_SEC / PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在
-      Infra/ProductProfile.py。
+      FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（min_r_points / r_multiple_tp /
+      breakeven_buffer_ticks，Fix A 单源化 + D1 拍板）收口在 Infra/ProductProfile.py，
+      经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -39,9 +40,25 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 
     main.py 直接实例化，不再经选择器：
         entry = EntryPolicy(cfg.entry_params.model_dump())
-        exitp = LayeredExitPolicy(cfg.exit_params.model_dump())
+        exitp = LayeredExitPolicy(resolved_exit_params(cfg))
     原 `DefaultExitPolicy`（简单固定点数出场）已删除——它是可选的「第二种」出场策略，
     生产从不选用，保留它只会让配置与测试多一套无用的选择分支。
+
+双轴声明（2026-09-14 配置架构评审定稿）
+------------------------------------------------------------------
+    Trading 侧的配置存在**两把正交的分区尺子**，各管各的数据，不互相搬家：
+      · 本文件按**消费层**分区（①③④⑥ 各层 *Config）—— 是**部署配置入口**：
+        环境变量 / 命令行 / .env 可覆盖的运维参数。
+      · Infra/PeriodProfile.py / Infra/ProductProfile.py 按**变异维度**分区
+        （随周期变 / 随品种变）—— 是**领域注册表**：凭交易经验标定的代码资产，
+        进 git 评审 + 对账测试守护，不走 env 覆盖。
+    两轴正交：品种/周期档案**不按消费层归入**本文件 —— 一张档案表里一行供
+      ③策略层、一行供⑤执行层、一行供⑥Broker 层，无法唯一归属；且 App/AppTrader
+      只 import 档案的纯函数（白名单闸门），挪进来会反向拉起整个 TradingConfig。
+      `TradingConfig.period_profile / product_profile` property 是「入口聚合
+      档案」的唯一形态。
+    Infra/InstrumentSpec.py 的合约规格经 `TradingConfig.instrument` 字段挂载，
+      属本配置树的一部分（角色定位见其模块 docstring）。
 
 设计约定（与项目主线对齐：根 ChanConfig.py + App/AppConfig.py）
 ------------------------------------------------------------------
@@ -83,15 +100,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from .Infra.InstrumentSpec import InstrumentSpec
 from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile
 from .Infra.ProductProfile import (
-    PRODUCT_PROFILES, ProductProfile, parse_product_key,
+    PRODUCT_PROFILES, ProductProfile, describe_unknown_product, parse_product_key,
 )
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
     "TradingConfig", "default_config", "DEFAULT_CONFIG",
+    # 出场参数合并点（Fix A：品种档案 + 品种无关项 → LayeredExitPolicy 完整参数）
+    "resolved_exit_params",
     # 各层 section 模型（按下层顺序声明，见文件内 banner）
     "SourceConfig",
-    "EntryConfig", "ExitConfig",
+    "EntryConfig", "ExitConfig", "ExitPolicyParams",
     "RiskConfig",
     "BrokerConfig",
     "ChannelTimingConfig",
@@ -158,19 +177,19 @@ class TradingConfig(BaseSettings):
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
-    # ── 品种档案注入（2026-09-09：随品种可变参数入 ProductProfile）──
-    # 按 instrument.signal_symbol 选品种，注入 min_r_points / r_multiple_tp /
-    # multiplier / breakeven_buffer_ticks / price_tick 五个「随品种可变」的字段。
+    # ── 品种档案注入（instrument 两字段播种）──
+    # 按 instrument.signal_symbol 选品种，注入 multiplier / price_tick 两个
+    # 「随品种可变」的 instrument 字段（Fix A · 2026-09-14 起 exit 三参数
+    # 不再走注入 —— 改由 resolved_exit_params() 从档案直接合并，唯一来源）。
     #
-    # 一致性规则（修复 B-3：原实现只给 price_tick 加 model_fields_set 守护、
-    # 其余四字段无条件覆盖，语义半截子）—— 现五个字段统一：
+    # 一致性规则（修复 B-3 后的统一语义）：
     #   · 初始加载（model_validator，force=False）：user-explicit-wins。
     #     仅当用户**没在配置里显式写**该字段（不在 model_fields_set）时，
     #     才用品种档案兜底；用户显式写的字段不被覆盖。
     #   · --symbol 换品种重载（apply_product_profile，force=True）：品种已切换，
     #     profile 是新品种的权威真值，整块覆盖，避免沿用例品种的
     #     multiplier / price_tick 造成限价口径漂移。
-    #   · 未知品种：跳过注入并 WARN（字段沿用当前值/模型默认值）。
+    #   · 未知品种：跳过注入并记 info（字段沿用当前值/模型默认值）。
     @model_validator(mode="after")
     def _reconcile_product_profile(self) -> "TradingConfig":
         self._apply_product_profile_values()
@@ -184,35 +203,23 @@ class TradingConfig(BaseSettings):
         profile = PRODUCT_PROFILES.get(product)
         if profile is None:
             # §5.9.3 校验清单「未知品种」：不阻断，但必须可见 —— 否则
-            # min_r_points / r_multiple_tp / multiplier 会静默沿用 IF 基线。
+            # multiplier / price_tick 会静默沿用基线。
             #
-            # 2026-09-14 评审 P2-4：级别 warning → info，避免双份噪音。
-            #   原实现这里打 WARNING，随后 Engine._restore 的白名单闸门必然抛
-            #   ValueError（同一件事在日志里出现两次，措辞还不一样）。未知品种在
-            #   引擎路径**一定会**被引擎侧拦下并给出面向用户的完整文案，故此处只
-            #   记 info 保留可追迹性即可；纯配置（不启引擎）场景也仍查得到。
+            # 引擎路径（AppTrader / Engine._restore / resolved_exit_params）
+            # 一定会被白名单闸门拦下并给出面向用户的完整文案，此处只记
+            # info 保留可追迹性；纯配置（不启引擎）场景也仍查得到。
             _log.info(
                 "品种 %r 不在 PRODUCT_PROFILES（已知: %s）—— 品种档案字段"
-                "（min_r_points / r_multiple_tp / multiplier / price_tick / breakeven_buffer_ticks）"
-                "沿用配置值。启动交易引擎时白名单闸门会拒绝启动，详见 "
-                "ProductProfile.assert_product_allowed",
+                "（multiplier / price_tick）沿用配置值。启动交易引擎时"
+                "白名单闸门会拒绝启动，详见 ProductProfile.assert_product_allowed",
                 product, ", ".join(sorted(PRODUCT_PROFILES)))
             return
         if force:
             # 换品种重载：profile 为新品种权威，整块覆盖。
-            self.exit_params.min_r_points = profile.min_r_points
-            self.exit_params.r_multiple_tp = profile.r_multiple_tp
-            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
             self.instrument.multiplier = profile.multiplier
             self.instrument.price_tick = profile.price_tick
             return
         # 初始加载：只补缺、不覆盖用户显式配置（user-explicit-wins）。
-        if "min_r_points" not in self.exit_params.model_fields_set:
-            self.exit_params.min_r_points = profile.min_r_points
-        if "r_multiple_tp" not in self.exit_params.model_fields_set:
-            self.exit_params.r_multiple_tp = profile.r_multiple_tp
-        if "breakeven_buffer_ticks" not in self.exit_params.model_fields_set:
-            self.exit_params.breakeven_buffer_ticks = profile.breakeven_buffer_ticks
         if "multiplier" not in self.instrument.model_fields_set:
             self.instrument.multiplier = profile.multiplier
         # Phase 8（D20）：price_tick 纳入品种档案注入。**仅作离线模式
@@ -222,11 +229,11 @@ class TradingConfig(BaseSettings):
             self.instrument.price_tick = profile.price_tick
 
     def apply_product_profile(self) -> None:
-        """品种档案注入的公开入口。
+        """品种档案注入的公开入口（instrument 的 multiplier / price_tick）。
 
         除启动期 model_validator 自动调用外，Phase 8 里 `--symbol` 在启动期
         改写 `instrument.signal_symbol` 后也调它重注入（换品种后 multiplier /
-        price_tick 等跟随新品种，而不是沿用上一品种的值）。
+        price_tick 跟随新品种，而不是沿用上一品种的值）。
 
         换品种走 force=True：品种已切换，profile 是新品种的权威真值，整块覆盖
         （否则 model_fields_set 仍记着初始注入的字段，会跳过覆盖、沿用例品种值）。
@@ -312,14 +319,19 @@ class ExitConfig(BaseModel):
 
     （2026-09-08：原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
+
+    品种相关字段单源化（Fix A · 2026-09-14 · D1 拍板）：min_r_points /
+    r_multiple_tp / breakeven_buffer_ticks **不在本模型** —— 它们随品种变，
+    唯一默认值来源是 Infra/ProductProfile.py 的品种档案；.env / 环境变量
+    的覆盖能力已放弃（extra=forbid 下带旧键构造直接报错，这是刻意的：
+    调参 = 改档案 = git 评审 + 对账测试守护）。组装 LayeredExitPolicy 的
+    完整参数一律经 resolved_exit_params(cfg) —— 唯一合并点。
     """
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR 与 min_r_points
+    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR 与品种档案的 min_r_points
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
-    r_multiple_tp: float = 2.0             # 盈亏比。止盈 = 入场价 ± r_multiple_tp × R（默认 1:2，品种档案可覆盖）
-    min_r_points: float = 3.0              # R 下限（点数），防极端横盘+极窄分型（品种档案可覆盖）
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
     atr_period: int = 14                        # ATR 计算周期
@@ -327,12 +339,26 @@ class ExitConfig(BaseModel):
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，止损抬至保本
-    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick(覆盖往返手续费+滑点；品种档案 IF/IH=2、IC/IM=3)
-    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈 (IF/IH/IC/IM共用，不随品种档案覆盖)
+    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈（跨品种共用，不随品种档案）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
-                                                #   注：B 方案（use_trailing=True）下 r_multiple_tp 仅作"名义盈亏比"
-                                                #   （期望值口径），不生成硬止盈单；止盈交给 L3 ATR 跟踪兑现
+                                                #   注：B 方案（use_trailing=True）下 r_multiple_tp（品种档案）仅作
+                                                #   "名义盈亏比"（期望值口径），不生成硬止盈单；止盈交给 L3 ATR 跟踪兑现
+
+
+class ExitPolicyParams(ExitConfig):
+    """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
+
+    继承 ExitConfig 的品种无关项（ATR / trailing / 触发倍数），另持品种相关三参数。
+    三参数的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
+    合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
+    如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    min_r_points: float = 3.0              # R 下限（点数），防极端横盘+极窄分型
+    r_multiple_tp: float = 2.0             # 盈亏比。止盈 = 入场价 ± r_multiple_tp × R（默认 1:2）
+    breakeven_buffer_ticks: float = 0.0    # 保本位缓冲 tick（覆盖往返手续费+滑点）
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -549,6 +575,29 @@ class BrokerConfig(BaseModel):
 TradingConfig.model_rebuild()
 # 注：2.0.3 起已删除 *PolicyConfig 选择器抽象，配置层直接持有 entry_params / exit_params
 # 两个参数模型，不再有需单独 model_rebuild 的 *PolicyConfig 类。
+
+
+def resolved_exit_params(cfg: TradingConfig) -> Dict[str, Any]:
+    """LayeredExitPolicy 完整出场参数的**唯一合并点**（Fix A · 2026-09-14 · D1 拍板）。
+
+    合并两个来源：
+      · 品种无关项 —— cfg.exit_params（ATR / trailing / 触发倍数等）
+      · 品种相关项 —— cfg.product_profile.exit_overrides()（min_r_points /
+        r_multiple_tp / breakeven_buffer_ticks，唯一默认值来源是品种档案）
+    档案值整块生效：本函数产出的 dict 才是 LayeredExitPolicy 的合法入参，
+    直接传 cfg.exit_params.model_dump() 会缺品种三参数（构造期 AttributeError）。
+
+    未标定品种 → 抛 ValueError（describe_unknown_product 统一文案，与
+    AppTrader / Engine._restore 白名单闸门同源同文案）—— 把「品种参数没标定」
+    拦在启动期，与 main.py 的周期 fail-fast（bar_secs_for）同一纪律。
+
+    用法：main.py `exitp = LayeredExitPolicy(resolved_exit_params(cfg))`；
+    测试里需要覆盖品种值时，在本函数返回的 dict 上改再传 LayeredExitPolicy。
+    """
+    profile = cfg.product_profile
+    if profile is None:
+        raise ValueError(describe_unknown_product(cfg.instrument.signal_symbol))
+    return {**cfg.exit_params.model_dump(), **profile.exit_overrides()}
 
 
 def default_config() -> TradingConfig:

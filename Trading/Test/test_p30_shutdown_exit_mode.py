@@ -81,7 +81,8 @@ for _p in (os.path.dirname(_TG_ROOT), _REPO_ROOT):
 
 from Trading import Broker  # noqa: E402,F401  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
+                            resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine, OrderIntent  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -150,7 +151,6 @@ def build(tmpdir, tag="a", store_path=None):
     # max_open_positions / unlock_no_new_open 已于 Phase 1-4 删除（D2）：前者是同向笔数门，
     # 后者在 D1（风控锚改挂在 run 上）后失去意义。
     cfg.exit_params.use_atr = False
-    cfg.exit_params.min_r_points = 3.0
     cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
     cfg.exit_params.trailing_trigger_r = 2.0
@@ -162,7 +162,7 @@ def build(tmpdir, tag="a", store_path=None):
     ev = EventLog(os.path.join(tmpdir, "events_%s.jsonl" % tag),
                   echo=False, echo_kinds=None)
     eng = TradingEngine(cfg, broker, EntryPolicy({}),
-                        LayeredExitPolicy(cfg.exit_params.model_dump()), store, ev)
+                        LayeredExitPolicy(resolved_exit_params(cfg)), store, ev)
     eng.spec = spec
     return eng, store, broker, ev, db
 

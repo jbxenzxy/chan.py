@@ -4,6 +4,12 @@
 =====================================
 本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM 期指 + AU/AG/CU 上期所金属 + PTA 郑商所）"参数差异**的唯一事实源。
 
+角色定位（2026-09-14 双轴声明）：本档案按**变异维度（随品种变）**分区，
+是领域注册表（凭交易经验标定的代码资产，git 评审 + 对账测试守护），
+不是部署配置入口 —— **不按消费层挪入 Trading/Config.py**；
+两轴关系见 Config.py 模块 docstring 的「双轴声明」。
+App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向依赖 Config.py。
+
 背景（与周期档案 Infra/PeriodProfile.py 成对出现）
 ----------------------------------------------------
 PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
@@ -80,6 +86,20 @@ class ProductProfile:
     @property
     def label(self) -> str:
         return self.product
+
+    def exit_overrides(self) -> Dict[str, float]:
+        """品种相关的出场参数三件套（Fix A · 2026-09-14 策略参数单源化）。
+
+        min_r_points / r_multiple_tp / breakeven_buffer_ticks **只存在于本档案**
+        （D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
+        Trading/Config.py 的 resolved_exit_params() 是唯一合并点 —— 把本返回值
+        合到品种无关的 ExitConfig 上，组装出 LayeredExitPolicy 的完整参数。
+        """
+        return {
+            "min_r_points": self.min_r_points,
+            "r_multiple_tp": self.r_multiple_tp,
+            "breakeven_buffer_ticks": self.breakeven_buffer_ticks,
+        }
 
 
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。

@@ -117,7 +117,7 @@ check("字段声明 exit_params: ExitConfig",
 check("main.py 经 cfg.entry_params 构造入场策略",
       "EntryPolicy(cfg.entry_params" in _MAIN_TXT, True)
 check("main.py 经 cfg.exit_params 构造出场策略",
-      "LayeredExitPolicy(cfg.exit_params" in _MAIN_TXT, True)
+      "LayeredExitPolicy(resolved_exit_params(cfg" in _MAIN_TXT, True)
 
 # ═══ [4] SSOT：每个模型只定义一次 ═══
 print("\n[4] SSOT：每个 *Config 在 Config.py 只定义一次")

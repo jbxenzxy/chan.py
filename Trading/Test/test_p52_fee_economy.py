@@ -133,7 +133,7 @@ def make_cfg(signal_symbol: str = "KQ.m@SHFE.IF"):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
     base["risk"]["max_volume"] = 2
-    base["exit_params"].update({"use_atr": False, "min_r_points": 3.0,
+    base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})
     return TradingConfig.from_dict(base)
 

@@ -12,7 +12,8 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
 本测试锁死的断言：
   [1] parse_product：KQ.m@CZCE.TA → TA（PTA 是俗名，符号代码是 TA）
   [2] PRODUCT_PROFILES 含 TA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
-  [3] TradingConfig 初始加载：TA 注入五个随品种可变字段（min_r_points = 默认 3 点）
+  [3] TradingConfig 品种档案（Fix A）：TA 的 multiplier / price_tick 经 instrument
+      注入播种；exit 三参数经 resolved_exit_params() 合并（min_r_points = 默认 3 点）
   [4] TA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
       返回 FAK、Engine._open_volume() 钉 1 手 —— 档案只管品种参数、不管报单属性
   [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
@@ -53,7 +54,7 @@ sys.path.insert(0, _REPO_ROOT)
 
 from Trading import Broker  # noqa: E402,F401  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import TradingConfig  # noqa: E402
+from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -130,12 +131,13 @@ def main():
         check("TA r_multiple_tp=2.0", p.r_multiple_tp, 2.0)
         check("TA breakeven_buffer_ticks=2.0", p.breakeven_buffer_ticks, 2.0)
 
-    print("\n[3] TradingConfig 初始加载：TA(PTA) 注入五个随品种可变字段")
+    print("\n[3] TradingConfig 品种档案：TA(PTA)（instrument 播种 + resolved 合并）")
     c_ta = TradingConfig(instrument={"signal_symbol": "KQ.m@CZCE.TA"})
-    check("TA min_r_points 注入 3.0（默认点数）", c_ta.exit_params.min_r_points, 3.0)
-    check("TA r_multiple_tp 注入 2.0", c_ta.exit_params.r_multiple_tp, 2.0)
-    check("TA breakeven_buffer_ticks 注入 2.0",
-          c_ta.exit_params.breakeven_buffer_ticks, 2.0)
+    _res_ta = resolved_exit_params(c_ta)
+    check("TA resolved min_r_points=3.0（默认点数）", _res_ta["min_r_points"], 3.0)
+    check("TA resolved r_multiple_tp=2.0", _res_ta["r_multiple_tp"], 2.0)
+    check("TA resolved breakeven_buffer_ticks=2.0",
+          _res_ta["breakeven_buffer_ticks"], 2.0)
     check("TA multiplier 注入 5.0", c_ta.instrument.multiplier, 5.0)
     check("TA price_tick 注入 2.0", c_ta.instrument.price_tick, 2.0)
     check("TA product_profile 命中", c_ta.product_profile.product, "TA")

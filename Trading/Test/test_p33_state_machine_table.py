@@ -132,7 +132,7 @@ def tmp_dir(tag="a"):
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["risk"]["max_volume"] = 2
-    base["exit_params"].update({"use_atr": False, "min_r_points": 3.0})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 

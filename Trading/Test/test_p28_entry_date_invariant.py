@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from Trading.Broker.DryRun import DryRunBroker
-from Trading.Config import DEFAULT_CONFIG, TradingConfig
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, resolved_exit_params
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
 from Trading.Infra.InstrumentSpec import InstrumentSpec
@@ -85,7 +85,7 @@ def build(tmp, tag, store_name=None):
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),
                   echo=False, echo_kinds=None)
     eng = TradingEngine(cfg, broker, EntryPolicy({}),
-                        LayeredExitPolicy(cfg.exit_params.model_dump()), store, ev)
+                        LayeredExitPolicy(resolved_exit_params(cfg)), store, ev)
     return eng, broker, spec
 
 

@@ -52,7 +52,8 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading import Broker  # noqa: E402,F401
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
+                            resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -100,7 +101,7 @@ def build_engine(tmpdir):
     return TradingEngine(
         make_cfg(), DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),
-        LayeredExitPolicy(make_cfg().exit_params.model_dump()),
+        LayeredExitPolicy(resolved_exit_params(make_cfg())),
         Store(os.path.join(tmpdir, "state.db")),
         EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False,
                  echo_kinds=None))

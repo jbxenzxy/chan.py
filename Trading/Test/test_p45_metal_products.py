@@ -6,8 +6,9 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
 
     ① parse_product 从主连符号提取品种代码（SHFE.AU → AU）
     ② PRODUCT_PROFILES 含 AU/AG/CU，且 multiplier/price_tick 为合约真值
-    ③ TradingConfig 初始加载按品种注入 min_r_points / r_multiple_tp /
-       multiplier / breakeven_buffer_ticks / price_tick（五个随品种可变字段）
+    ③ TradingConfig 品种档案（Fix A · 2026-09-14）：multiplier / price_tick 经
+       instrument 注入播种；min_r_points / r_multiple_tp / breakeven_buffer_ticks
+       经 resolved_exit_params() 合并（品种档案是唯一默认值来源）
     ④ InstrumentSpec.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
        交易所分支；CZCE 才切 FAK）—— 确认金属走默认 order_advanced
     ⑤ 未知品种仍 product_profile=None（不误伤）
@@ -41,7 +42,7 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Config import TradingConfig  # noqa: E402
+from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
 
@@ -73,25 +74,28 @@ def main():
             check("{} multiplier={}".format(code, mult), p.multiplier, mult)
             check("{} price_tick={}".format(code, tick), p.price_tick, tick)
 
-    print("\n[3] TradingConfig 初始加载：AU 注入五个随品种可变字段")
+    print("\n[3] TradingConfig 品种档案：AU（instrument 播种 + resolved 合并）")
     c_au = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AU"})
-    check("AU min_r_points=3.0（默认点数，2026-09-13 拍板）", c_au.exit_params.min_r_points, 3.0)
-    check("AU r_multiple_tp=2.0", c_au.exit_params.r_multiple_tp, 2.0)
+    _res_au = resolved_exit_params(c_au)
+    check("AU resolved min_r_points=3.0（默认点数，2026-09-13 拍板）", _res_au["min_r_points"], 3.0)
+    check("AU resolved r_multiple_tp=2.0", _res_au["r_multiple_tp"], 2.0)
     check("AU multiplier=1000.0", c_au.instrument.multiplier, 1000.0)
-    check("AU breakeven_buffer_ticks=2.0", c_au.exit_params.breakeven_buffer_ticks, 2.0)
+    check("AU resolved breakeven_buffer_ticks=2.0", _res_au["breakeven_buffer_ticks"], 2.0)
     check("AU price_tick=0.02", c_au.instrument.price_tick, 0.02)
     check("AU product_profile 命中", c_au.product_profile.product, "AU")
 
-    print("\n[4] TradingConfig 初始加载：AG / CU 注入")
+    print("\n[4] TradingConfig 品种档案：AG / CU")
     c_ag = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.AG"})
-    check("AG min_r_points=3.0（默认点数）", c_ag.exit_params.min_r_points, 3.0)
+    _res_ag = resolved_exit_params(c_ag)
+    check("AG resolved min_r_points=3.0（默认点数）", _res_ag["min_r_points"], 3.0)
     check("AG multiplier=15.0", c_ag.instrument.multiplier, 15.0)
     check("AG price_tick=1.0", c_ag.instrument.price_tick, 1.0)
     c_cu = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.CU"})
-    check("CU min_r_points=3.0（默认点数）", c_cu.exit_params.min_r_points, 3.0)
+    _res_cu = resolved_exit_params(c_cu)
+    check("CU resolved min_r_points=3.0（默认点数）", _res_cu["min_r_points"], 3.0)
     check("CU multiplier=5.0", c_cu.instrument.multiplier, 5.0)
     check("CU price_tick=10.0", c_cu.instrument.price_tick, 10.0)
-    check("CU breakeven_buffer_ticks=3.0", c_cu.exit_params.breakeven_buffer_ticks, 3.0)
+    check("CU resolved breakeven_buffer_ticks=3.0", _res_cu["breakeven_buffer_ticks"], 3.0)
 
     print("\n[5] effective_order_advanced：SHFE 仍走默认 FOK（不破坏 Phase 9 交易所分支）")
     sp_au = InstrumentSpec(signal_symbol="KQ.m@SHFE.AU", exchange="SHFE", order_advanced="FOK")

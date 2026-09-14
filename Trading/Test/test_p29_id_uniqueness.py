@@ -80,7 +80,8 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Broker.DryRun import DryRunBroker            # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
+                            resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine           # noqa: E402
 from Trading.Infra.EventLog import EventLog               # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec   # noqa: E402
@@ -127,7 +128,7 @@ def ms(y, mo, d, h, mi):
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["risk"].update({"max_volume": 2})
-    base["exit_params"].update({"use_atr": False, "min_r_points": 3.0})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 
@@ -140,7 +141,7 @@ def build(tmp, tag="a"):
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),
                   echo=False, echo_kinds=None)
     eng = TradingEngine(cfg, broker, EntryPolicy({}),
-                        LayeredExitPolicy(cfg.exit_params.model_dump()),
+                        LayeredExitPolicy(resolved_exit_params(cfg)),
                         store, ev)
     return eng, broker
 

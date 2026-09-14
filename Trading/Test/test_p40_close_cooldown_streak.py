@@ -62,7 +62,8 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 from Trading import Broker  # noqa: E402,F401
 from Trading.Broker.Base import REJECT_POSITION, REJECT_PRICE  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
-from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
+from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
+                            resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
@@ -132,7 +133,7 @@ class CloseRejectBroker(DryRunBroker):
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["risk"]["max_volume"] = 2
-    base["exit_params"].update({"use_atr": False, "min_r_points": 3.0,
+    base["exit_params"].update({"use_atr": False,
                                  "use_trailing": False})
     # 冷却窗 = 1（每根 bar 重新尝试），连拒上限 = 2（两根即清幻影仓）
     base["engine"]["close_retry_bars"] = 1
@@ -157,7 +158,7 @@ with tmp_dir("cool") as tmp:
     eng = TradingEngine(
         make_cfg(), CloseRejectBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),
-        LayeredExitPolicy(make_cfg().exit_params.model_dump()),
+        LayeredExitPolicy(resolved_exit_params(make_cfg())),
         Store(os.path.join(tmp, "state.db")),
         EventLog(os.path.join(tmp, "events.jsonl"), echo=False,
                  echo_kinds=None))
@@ -201,7 +202,7 @@ with tmp_dir("novclear") as tmp:
         make_cfg(), CloseRejectBroker(spec, {"sim_equity": 1_000_000.0},
                                       reject_class=REJECT_PRICE),
         EntryPolicy({}),
-        LayeredExitPolicy(make_cfg().exit_params.model_dump()),
+        LayeredExitPolicy(resolved_exit_params(make_cfg())),
         Store(os.path.join(tmp, "state.db")),
         EventLog(os.path.join(tmp, "events.jsonl"), echo=False,
                  echo_kinds=None))

@@ -137,7 +137,7 @@ def make_cfg(guard_days=1):
     base["instrument"]["exchange"] = "CFFEX"
     base["risk"]["max_volume"] = 2
     base["risk"]["delivery_guard_days"] = guard_days
-    base["exit_params"].update({"use_atr": False, "min_r_points": 3.0,
+    base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})
     return TradingConfig.from_dict(base)
 
