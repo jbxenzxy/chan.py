@@ -27,30 +27,30 @@ class InstrumentSpec(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    signal_symbol: str = "KQ.m@CFFEX.IF"      # 缠论分析用的主连
-    trade_symbol: str = "CFFEX.IF2609"        # 实际下单的月份合约
-    price_tick: float = 0.2                   # IF 最小变动价位
-    multiplier: float = 300.0                 # 合约乘数（元/点）
-    open_fee_rate: float = 0.000023           # 开仓 0.0023%
-    closetoday_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
-    close_fee_rate: float = 0.000023          # 平昨 0.0023%
-    slippage_ticks: float = 1.0               # 单边滑点（tick 数）
+    signal_symbol: str = "KQ.m@CFFEX.IF"            # 缠论分析用的主连
+    trade_symbol: str = "CFFEX.IF2609"              # 实际下单的月份合约
+    price_tick: float = 0.2                    # IF 最小变动价位
+    multiplier: float = 300.0                  # 合约乘数（元/点）
+    open_fee_rate: float = 0.000023            # 开仓 0.0023%
+    closetoday_fee_rate: float = 0.000345      # 平今 0.0345%（中金所，期指很贵）
+    close_fee_rate: float = 0.000023           # 平昨 0.0023%
+    slippage_ticks: float = 1.0                # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
     #   "FOK"  全成或全撤 —— 中金所支持，本系统默认依赖它（无部分成交幽灵）
     #   "FAK"  部分成交后撤余量 —— **郑商所只支持 FAK**，二期上 CZCE 必须切这个
     #   二期按交易所切换时改这一个字段即可，不要把值写死在 Broker/ 里。
     order_advanced: str = "FOK"
-    closetoday_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**
-                                              #   "平仓优先平今"）。实际语义 = 是否允许按持仓
-                                              #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
-                                              #   OrderIntent.CLOSE 只用于跨日单，正常流程
-                                              #   恒走平昨费率，置 False 可整体关闭今仓判定。
+    closetoday_first: bool = True                   # 今仓成本开关（2026-09-10 更正注释：**不是**
+                                                    #   "平仓优先平今"）。实际语义 = 是否允许按持仓
+                                                    #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
+                                                    #   OrderIntent.CLOSE 只用于跨日单，正常流程
+                                                    #   恒走平昨费率，置 False 可整体关闭今仓判定。
     # 价格笼子band（§5.8.5 D12 落地项，2026-09-12 补字段位）。
     #   含义：限价单相对最新价的**最大偏离点数**；超出即被交易所拒（中金所的
     #   "价格保护带"、上期所的"涨跌停/限价距离"都归这一类）。
     #   ⚠️ **一期不消费** —— 只是把字段位占住，避免二期加价格笼子护栏时又去
     #   改一遍合约规格模型（届时只需在 Broker 的报单前校验里读它）。
-    price_band_points: float = 0.0            # 0 = 不限制（一期的唯一合法值）
+    price_band_points: float = 0.0       # 0 = 不限制（一期的唯一合法值）
 
     # ════════════════════════════════════════════════════════════════
     # Phase 8（二期 · D20）：品种参数自动获取的字段位（§5.6 六个缺字段在此兑现）
