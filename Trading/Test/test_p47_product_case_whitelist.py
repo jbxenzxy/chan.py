@@ -25,6 +25,12 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
       · **每个可下单品种（PRODUCT_PROFILES）都必须能在别名表里搜到**
         —— 否则会出现"能下单却画不出 K 线"的死角；
       · 已裁掉的品种（T/TF/NI/SR/PP/Y/A50…）确实不在表内（负向断言）。
+  [5] 【2026-09-14 第 6 批新增】「未标定品种置灰」契约（防"置灰越界去限制搜索"回潮）：
+      · 开关容器有置灰类名 + 提示位（index.html / app.css / app.js 三处齐备）；
+      · 置灰判定**复用** /api/trader/product-check（与开启路径同一来源，不另写白名单）；
+      · 引擎运行中**不置灰**（否则用户关不掉正在跑的引擎）；
+      · 接口失败 = **放行**（置灰不能把开关卡死在灰态）；
+      · 置灰**只作用于下单开关** —— 搜索/解析侧不得出现任何品种过滤（负向断言）。
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p47_product_case_whitelist.py
@@ -192,6 +198,74 @@ def main():
                  "PP", "Y", "A", "SI", "PS", "LU", "NR", "A50", "CN"]:
         check_true("已裁掉 {!r}（不在别名表）".format(gone),
                    gone not in FUTURES_ALIASES)
+
+    print("\n[5] 未标定品种置灰契约（只置灰下单开关，不限制行情搜索）")
+    _html_p = os.path.join(_RROOT, "Frontend", "index.html")
+    _css_p = os.path.join(_RROOT, "Frontend", "app.css")
+    with open(_html_p, encoding="utf-8") as fh:
+        html = fh.read()
+    with open(_css_p, encoding="utf-8") as fh:
+        css = fh.read()
+
+    # 5a 三处落点齐备（缺一处 = 置灰不生效或看不到原因）
+    check_true("index.html 有置灰提示位 auto-order-hint",
+               'id="auto-order-hint"' in html)
+    check_true("提示位在 auto-order-wrap 容器内",
+               re.search(r'id="auto-order-wrap".*?id="auto-order-hint"', html, re.S)
+               is not None)
+    check_true("app.css 有 .auto-order-wrap.disabled 样式",
+               ".auto-order-wrap.disabled" in css)
+    check_true("app.js 有置灰渲染函数 applyAutoOrderTradableUI",
+               "function applyAutoOrderTradableUI(" in js)
+    check_true("app.js 有置灰查询函数 refreshAutoOrderTradable",
+               "function refreshAutoOrderTradable(" in js)
+
+    # 5b 判定来源与开启路径同一份（复用 checkSymbolTradable → /product-check），
+    #    且**没有**在前端另抄一份白名单
+    _fn = re.search(r"async function refreshAutoOrderTradable\(\)\s*\{(.*?)\n        \}",
+                    js, re.S)
+    check_true("置灰查询函数已抓到", _fn is not None)
+    if _fn:
+        check_true("置灰判定复用 checkSymbolTradable（同一来源）",
+                   "checkSymbolTradable(" in _fn.group(1))
+    check_true("前端没有另抄白名单常量（不得出现 PRODUCT_PROFILES 硬编码）",
+               "PRODUCT_PROFILES" not in js)
+
+    # 5c 引擎运行中不置灰（否则关不掉正在跑的引擎）
+    _ui = re.search(r"function applyAutoOrderTradableUI\(\)\s*\{(.*?)\n        \}",
+                    js, re.S)
+    check_true("置灰渲染函数已抓到", _ui is not None)
+    if _ui:
+        check_true("置灰条件排除「引擎运行中」",
+                   "!autoOrderRunning" in _ui.group(1))
+    # 5d 接口失败 = 放行（allowed: true）—— 置灰不能把开关卡死
+    _ck = re.search(r"async function checkSymbolTradable\(symbol\)\s*\{(.*?)\n        \}",
+                    js, re.S)
+    check_true("checkSymbolTradable 已抓到", _ck is not None)
+    if _ck:
+        body = _ck.group(1)
+        check("异常降级为放行的分支数 = 2（HTTP 非 2xx + 抛异常）",
+              body.count("return { allowed: true, message: '' };"), 2)
+    # 5e 开关复位走置灰重算，而不是无脑 disabled=false
+    check_true("onAutoOrderToggle 的 finally 用置灰重算复位",
+               re.search(r"finally\s*\{\s*autoOrderBusy = false;.*?applyAutoOrderTradableUI\(\);",
+                         js, re.S) is not None)
+    check_true("不再无脑 checkbox.disabled = false（防解除灰态）",
+               "checkbox.disabled = false;" not in js)
+
+    # 5f ⚠️ 负向：置灰**不得**越界去限制行情搜索
+    #    （搜索/解析侧一旦出现品种过滤，就退回"消费端加过滤"的旧做法 ——
+    #      实测有 4 条绕过点，2026-09-14 当天即被用户撤销）
+    _chart = os.path.join(_RROOT, "App", "AppChart.py")
+    with open(_chart, encoding="utf-8") as fh:
+        chart_py = fh.read()
+    _search = re.search(r"def search_stocks\(.*?\n(?=def |\Z)", chart_py, re.S)
+    check_true("AppChart.search_stocks 已抓到", _search is not None)
+    if _search:
+        sb = _search.group(0)
+        check_true("搜索侧不出现置灰/白名单过滤符号",
+                   not any(t in sb for t in ("autoOrderTradable", "disabled",
+                                             "PRODUCT_PROFILES")))
 
     print("\n============================================================")
     print("P47 大小写归一 + 白名单硬约束 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

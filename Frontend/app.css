@@ -114,6 +114,19 @@
             font-size: 11px; color: #a8b2d1; user-select: none;
         }
         .auto-order-wrap.visible { display: flex; }
+        /* ── 未标定品种置灰（2026-09-14 第 6 批）──
+           只作用于**下单开关**：不在下单白名单的品种开关变灰不可点 + 旁边给一行说明。
+           ⚠️ 不要用这里去限制行情搜索 —— 那会退回"消费端加过滤"的旧做法（有 4 条绕过点）。 */
+        .auto-order-wrap.disabled { opacity: 0.55; cursor: not-allowed; }
+        .auto-order-wrap.disabled .auto-order-label { color: #8b93a7; }
+        .auto-order-wrap.disabled .auto-order-dot { background: #5a6172; }
+        .auto-order-wrap.disabled .auto-order-slider {
+            cursor: not-allowed; background: #2f3346;
+        }
+        .auto-order-hint {
+            display: none; font-size: 10px; color: #e0a458; margin-left: 2px;
+        }
+        .auto-order-wrap.disabled .auto-order-hint { display: inline; }
         .auto-order-switch { position: relative; display: inline-block; width: 40px; height: 20px; }
         .auto-order-switch input { opacity: 0; width: 0; height: 0; }
         .auto-order-slider {

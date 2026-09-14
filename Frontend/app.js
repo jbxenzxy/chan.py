@@ -7428,13 +7428,75 @@
         const autoOrderAlertCool = {};    // code → 上次弹框时刻（同因告警防连弹）
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
 
+        // ══════════════════════════════════════════════════════════════
+        // 未标定品种置灰（2026-09-14 第 6 批）
+        //   看行情**不设**品种限制（搜索/解析走全表别名表，见 AppChart.search_stocks）；
+        //   品种约束只落在**下单侧**：不在下单白名单的品种把开关置灰 + 一行说明，
+        //   让用户在"点之前"就知道不能下单，而不是点一下被弹框。
+        //   ⚠️ 这是**体验优化，不是安全前置** —— 安全由 /auto-order/on 的启动拦截 +
+        //      Engine 权威闸门覆盖。判定口径与开启路径**同一来源**
+        //      （/api/trader/product-check），所以两边永不漂移。
+        //   ⚠️ 只置灰**下单开关**，绝不用它去限制行情搜索 —— 那会退回
+        //      "消费端加过滤"的旧做法（实测有 4 条绕过点，当天即被撤销）。
+        // ══════════════════════════════════════════════════════════════
+        let autoOrderTradable = { allowed: true, message: '', products: [] };
+        let autoOrderTradableFor = null;   // 上面的状态对应哪个品种（防异步竞态贴错标签）
+
+        function applyAutoOrderTradableUI() {
+            const wrap = document.getElementById('auto-order-wrap');
+            if (!wrap) return;
+            const checkbox = document.getElementById('auto-order-checkbox');
+            const hint = document.getElementById('auto-order-hint');
+            // 引擎运行中**不置灰**：否则用户点不动开关、关不掉正在跑的引擎。
+            const off = !autoOrderTradable.allowed && !autoOrderRunning;
+            wrap.classList.toggle('disabled', off);
+            // 请求进行中时开关的 disabled 由 onAutoOrderToggle 管，别抢
+            if (checkbox && !autoOrderBusy) checkbox.disabled = off;
+            if (hint) hint.textContent = off ? '该品种不支持自动下单' : '';
+            if (off) {
+                const list = autoOrderTradable.products.join(' / ');
+                wrap.title = '该品种不支持自动下单\n\n' + (autoOrderTradable.message || '')
+                    + (list ? '\n\n当前支持：' + list : '');
+            }
+        }
+
+        async function refreshAutoOrderTradable() {
+            const sym = realtimeSymbol;
+            if (!sym) return;
+            const chk = await checkSymbolTradable(sym);
+            // 竞态：等待期间用户又换了品种 → 本次结果作废
+            if (sym !== realtimeSymbol) return;
+            autoOrderTradable = chk;
+            autoOrderTradableFor = sym;
+            applyAutoOrderTradableUI();
+            if (!chk.allowed) {
+                console.info('[auto-order] 品种未标定，开关已置灰: ' + sym
+                    + '  ' + chk.message);
+            }
+        }
+
         // 开关随"实时"徽标显隐：仅期货实时模式展示
         function syncAutoOrderWrap() {
             const wrap = document.getElementById('auto-order-wrap');
             if (!wrap) return;
             const show = !!(isRealtimeMode && realtimeSymbol);
             wrap.classList.toggle('visible', show);
-            if (show) pollAutoOrderStatus();
+            if (show) {
+                if (autoOrderTradableFor !== realtimeSymbol) {
+                    // 换品种 → 先按"放行"渲染（不让旧品种的灰态残留），
+                    // 再异步问后端纠偏。接口挂了 = 放行，与开启路径同一降级方向：
+                    // 置灰只是提示，**绝不能因为查询失败就把开关卡死在灰态**。
+                    autoOrderTradable = { allowed: true, message: '', products: [] };
+                    applyAutoOrderTradableUI();
+                    refreshAutoOrderTradable();
+                }
+                pollAutoOrderStatus();
+            } else {
+                // 隐藏时复位，避免灰态/说明残留在下一个品种上
+                autoOrderTradable = { allowed: true, message: '', products: [] };
+                autoOrderTradableFor = null;
+                applyAutoOrderTradableUI();
+            }
         }
 
         async function pollAutoOrderStatus() {
@@ -7476,7 +7538,9 @@
                 const aoRun = (data.auto_order && data.auto_order.run) || null;
                 const aoCool = (data.auto_order && data.auto_order.close_cooldown) || null;
                 const wrap = document.getElementById('auto-order-wrap');
-                if (wrap) {
+                if (wrap && !wrap.classList.contains('disabled')) {
+                    // 置灰时保留"该品种不支持自动下单"的悬停说明，
+                    // 不让轮询把提示覆盖成引擎状态（否则用户看不到置灰原因）
                     // 三态（空仓/锁仓/运行）由后端 account_state 唯一给出：
                     // 前端不再自己判"是不是锁着"，也不该知道持仓的"出身"。
                     const stateLabel = { flat: '空仓', locked: '锁仓', running: '运行' }[aoState]
@@ -7600,12 +7664,15 @@
 
         // ══════════════════════════════════════════════════════════════
         // 品种白名单前置检查（2026-09-14「K线图 vs 自动下单」解耦配套）
-        //   看行情不设品种限制（搜索走全表 83 个别名，见 AppChart.search_stocks）；
+        //   看行情不设品种限制（搜索走别名全表，第 5 批已收窄为 16 品种 / 17 别名，
+        //   见 AppChart.search_stocks）；
         //   品种约束**只在下单侧**生效：开启前先问后端，闸门实现与
         //   /auto-order/on 的启动拦截同源（ProductProfile.assert_product_allowed），
         //   故"前端说能开"与"引擎允许开"永远一致。
+        //   同一接口还驱动**开关置灰**（未标定品种开关变灰不可点，见
+        //   applyAutoOrderTradableUI），一个来源两处用途，不会各写一份白名单。
         //   接口异常时**放行**（allowed=true）：宁可让引擎启动闸门兜底报错，
-        //   也不能因为一个查询接口挂了就彻底开不了自动下单。
+        //   也不能因为一个查询接口挂了就彻底开不了自动下单（置灰也不能因此卡死）。
         // ══════════════════════════════════════════════════════════════
         async function checkSymbolTradable(symbol) {
             try {
@@ -7633,6 +7700,8 @@
             if (autoOrderBusy) { checkbox.checked = !on; return; } // 防连点
             if (on && realtimeSymbol) {
                 // 只在"开启"路径检查；"关闭"永远允许 —— 不能因为页面品种变了就关不掉。
+                // 置灰已把这条挡在"点之前"，这里保留为**兜底**（接口降级为放行时，
+                // 用户仍可能点到；且升级/多标签页场景下前端状态可能过期）。
                 const chk = await checkSymbolTradable(realtimeSymbol);
                 if (!chk.allowed) {
                     checkbox.checked = false;   // 回弹开关，且**不发启动请求**
@@ -7681,7 +7750,9 @@
                 alert('自动下单' + (on ? '开启' : '关闭') + '失败：' + (err && err.message ? err.message : err));
             } finally {
                 autoOrderBusy = false;
-                checkbox.disabled = false;
+                // 用置灰态重算 disabled，而不是无脑置 false ——
+                // 否则一次开启/关闭请求就会把"未标定品种"的灰态解除
+                applyAutoOrderTradableUI();
                 if (label) label.textContent = '自动下单';
             }
         }
