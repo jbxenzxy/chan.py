@@ -570,12 +570,15 @@ def search_stocks(q):
     results = results[:10]
 
     # 期货/期指别名搜索（经期货域元数据出口，图表层不直连 CTqSdkAPI）
-    #   2026-09-14（用户拍板「限制往前提」）：只枚举**自动下单可交易**品种
-    #   （= Trading/Infra/ProductProfile.PRODUCT_PROFILES 的 8 个品种），
-    #   非白名单品种不再出现在搜索结果里 —— 用户根本选不到"点了会让引擎
-    #   拒绝启动"的品种，而不是等到启动时才报错。
-    #   范围口径与降级行为见 AppSSE.get_tradable_futures_aliases 的 docstring。
-    _futures_aliases = _sse.get_tradable_futures_aliases()
+    #   2026-09-14 用户拍板「K线图与自动下单解耦」，**推翻**同日早先的
+    #   "限制往前提"：搜索不再做品种过滤，**全表 83 个别名全部可搜可看**
+    #   （螺纹/豆粕/原油/白糖… 都回来了）。理由：本界面既能看行情也能下单，
+    #   看行情的范围不该被"能不能下单"的白名单牵连 —— 两者解耦。
+    #   下单侧的品种约束改在**开启自动下单时**前置提示：
+    #   前端 onAutoOrderToggle → GET /api/trader/product-check（AppTrader.
+    #   check_symbol_allowed）→ 不通过则弹「不支持交易」且不发启动请求；
+    #   引擎启动闸门 ProductProfile.assert_product_allowed 仍是权威兜底。
+    _futures_aliases = _sse.get_futures_aliases()
     for alias, full_code in _futures_aliases.items():
         if keyword_upper in alias.upper():
             name = _sse.get_futures_name(full_code)

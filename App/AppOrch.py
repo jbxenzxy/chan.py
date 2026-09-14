@@ -92,6 +92,17 @@ def call_trader_ack(ts=None):
     return trader.ack_alerts(ts=ts)
 
 
+def call_trader_check_symbol(symbol=None):
+    """查询某品种是否允许自动下单（前端开关的前置提示出口，2026-09-14）。
+
+    与「K线图 vs 自动下单 解耦」配套：看行情不设品种限制，品种约束只在
+    下单侧。前端在开启自动下单前先调它，不通过则弹「不支持交易」且不发
+    启动请求 —— 避免"点一下就报错"。闸门实现与 start() 同源（见
+    AppTrader.check_symbol_allowed），本函数只做漏斗。
+    """
+    return trader.check_symbol_allowed(symbol=symbol)
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 共享资源登记表（按「资源」索引，不是按「入口」索引）
@@ -281,5 +292,5 @@ __all__ = [
     # 自动下单（AppTrader）
     "AppTrader", "trader",
     "call_trader_start", "call_trader_stop", "call_trader_status",
-    "call_trader_ack",
+    "call_trader_ack", "call_trader_check_symbol",
 ]

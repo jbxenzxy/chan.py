@@ -592,6 +592,54 @@ class AppTrader:
             log.info("[AppTrader] 确认告警失败: %s: %s", type(e).__name__, e)
             return {"acked": 0, "reason": "{}: {}".format(type(e).__name__, e)}
 
+    def check_symbol_allowed(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """查询某品种是否**允许自动下单**（前端开关的前置提示出口，2026-09-14）。
+
+        为什么单开一个查询口、而不让前端自己判：
+          白名单与解析口径（剥合约月份、大小写归一）都住在
+          `Trading/Infra/ProductProfile`，前端复刻一份必然漂移。本方法**复用**
+          `assert_product_allowed` —— 与 `start()` 的启动前置拦截、引擎
+          `_restore` 的权威闸门是**同一实现**，故"前端说能开"与"引擎允许开"永远一致。
+
+        与「K线图 vs 自动下单 解耦」的关系：
+          搜索/看行情走全表 `FUTURES_ALIASES`（83 个别名，不设限）；品种约束
+          **只在下单侧生效**。用户在非白名单品种页面上点开关 → 前端先调本接口
+          拿到 allowed=False → 弹「不支持交易」，**不发启动请求**。
+
+        返回（**不抛异常**，调用方按 allowed 分支即可）：
+          allowed  bool   是否可自动下单
+          product  str    解析出的品种键（如 "IF"/"RB"；解析不出时为空串）
+          products list   当前白名单全量品种键（供前端提示里列出）
+          reason   str    "ok" / "not_in_whitelist" / "whitelist_unavailable"
+          message  str    可直接展示给用户的说明
+        """
+        try:
+            from Trading.Infra.ProductProfile import (
+                PRODUCT_PROFILES, assert_product_allowed, parse_product_key)
+        except Exception as e:      # pragma: no cover — Trading 缺失时交引擎闸门兜底
+            return {"allowed": True, "product": "", "products": [],
+                    "reason": "whitelist_unavailable",
+                    "message": "品种白名单不可用（{}: {}）：交由引擎启动闸门判定".format(
+                        type(e).__name__, e)}
+        raw = str(symbol or "").strip()
+        products = sorted(PRODUCT_PROFILES)
+        try:
+            key = assert_product_allowed(raw)
+        except ValueError as e:
+            try:
+                prod = parse_product_key(raw)
+            except Exception:
+                prod = ""
+            return {"allowed": False, "product": prod, "products": products,
+                    "reason": "not_in_whitelist", "message": str(e)}
+        except Exception as e:      # pragma: no cover — 解析异常不阻塞前端
+            return {"allowed": True, "product": "", "products": products,
+                    "reason": "whitelist_unavailable",
+                    "message": "品种判定异常（{}: {}）：交由引擎启动闸门判定".format(
+                        type(e).__name__, e)}
+        return {"allowed": True, "product": key, "products": products,
+                "reason": "ok", "message": ""}
+
     def status(self) -> Dict[str, Any]:
         """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""
         with self._lock:

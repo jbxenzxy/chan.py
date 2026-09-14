@@ -7590,9 +7590,50 @@
             });
         }
 
+        // ══════════════════════════════════════════════════════════════
+        // 品种白名单前置检查（2026-09-14「K线图 vs 自动下单」解耦配套）
+        //   看行情不设品种限制（搜索走全表 83 个别名，见 AppChart.search_stocks）；
+        //   品种约束**只在下单侧**生效：开启前先问后端，闸门实现与
+        //   /auto-order/on 的启动拦截同源（ProductProfile.assert_product_allowed），
+        //   故"前端说能开"与"引擎允许开"永远一致。
+        //   接口异常时**放行**（allowed=true）：宁可让引擎启动闸门兜底报错，
+        //   也不能因为一个查询接口挂了就彻底开不了自动下单。
+        // ══════════════════════════════════════════════════════════════
+        async function checkSymbolTradable(symbol) {
+            try {
+                const resp = await fetch('/api/trader/product-check?symbol='
+                    + encodeURIComponent(symbol || ''), { cache: 'no-store' });
+                if (!resp.ok) {
+                    console.warn('[auto-order] 品种检查 HTTP ' + resp.status + '，按放行处理');
+                    return { allowed: true, message: '' };
+                }
+                const j = await resp.json();
+                return {
+                    allowed: j.allowed !== false,
+                    message: j.message || '',
+                    product: j.product || '',
+                    products: Array.isArray(j.products) ? j.products : []
+                };
+            } catch (e) {
+                console.warn('[auto-order] 品种检查失败，按放行处理: ' + e.message);
+                return { allowed: true, message: '' };
+            }
+        }
+
         async function onAutoOrderToggle(checkbox) {
             const on = checkbox.checked;
             if (autoOrderBusy) { checkbox.checked = !on; return; } // 防连点
+            if (on && realtimeSymbol) {
+                // 只在"开启"路径检查；"关闭"永远允许 —— 不能因为页面品种变了就关不掉。
+                const chk = await checkSymbolTradable(realtimeSymbol);
+                if (!chk.allowed) {
+                    checkbox.checked = false;   // 回弹开关，且**不发启动请求**
+                    console.warn('[auto-order] 品种不支持交易，已取消开启: '
+                        + realtimeSymbol + '  ' + chk.message);
+                    alert('不支持交易\n\n' + chk.message);
+                    return;
+                }
+            }
             autoOrderBusy = true;
             checkbox.disabled = true;
             const label = document.getElementById('auto-order-label');

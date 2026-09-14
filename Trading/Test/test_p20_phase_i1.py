@@ -38,6 +38,8 @@ Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（�
     [7] 实盘安全闸门（AppTrader._check_live_gate 三分支）
     [8] broker 路由：SimNowBroker.is_live 判定 + LiveCTPBroker 注册
     [9]-[12] AppTrader 子进程 / 状态 / CWD 行为（依赖仓库根 App/ 包）
+    [9x] 下单侧品种前置检查出口（check_symbol_allowed）—— 2026-09-14 新增，
+         配套「K线图 vs 自动下单 解耦」：看行情不设品种限制，品种约束只在下单侧。
 
 不需要真实 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。
 跑法：python Trading/Test/test_p20_phase_i1.py
@@ -691,6 +693,37 @@ with tmp_dir() as tmp:
         AT.subprocess.Popen = orig_popen
         AT._STATE_FILE = orig_state_file
         AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
+
+# [9x] 品种**前置检查出口**（2026-09-14 用户拍板「K线图 vs 自动下单 解耦」配套）：
+#   AppTrader.check_symbol_allowed 是前端开关的**前置提示出口**（前端拿到
+#   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
+#   **同源**（同一个 ProductProfile.assert_product_allowed）——否则会出现
+#   "前端说能开、引擎却自杀"的分叉，正是要防的那种漂移。
+#   解耦口径：看行情侧恢复全表（83 个别名，不设品种限制，见 AppChart.search_stocks）；
+#   品种约束**只在下单侧**生效。
+print("\n[9x] AppTrader.check_symbol_allowed：下单侧品种前置检查")
+_chk_if = AT.trader.check_symbol_allowed("KQ.m@CFFEX.IF")
+check("[9x1] 白名单品种 IF → allowed=True", _chk_if["allowed"], True)
+check("[9x2] 解析出品种键 IF", _chk_if["product"], "IF")
+check("[9x3] reason=ok", _chk_if["reason"], "ok")
+_chk_rb = AT.trader.check_symbol_allowed("KQ.m@SHFE.rb")
+check("[9x4] 非白名单 RB → allowed=False", _chk_rb["allowed"], False)
+check("[9x5] 解析出品种键 RB", _chk_rb["product"], "RB")
+check("[9x6] reason=not_in_whitelist", _chk_rb["reason"], "not_in_whitelist")
+check("[9x7] 列出白名单全量 8 个品种", _chk_rb["products"],
+      ["AG", "AU", "CU", "IC", "IF", "IH", "IM", "TA"])
+check("[9x8] 文案含'拒绝启动交易引擎'（与 [9w3] 同一文案源）",
+      "拒绝启动交易引擎" in _chk_rb["message"], True)
+check("[9x9] 文案含'禁止启动'（与 p47 引擎侧契约同源）",
+      "禁止启动" in _chk_rb["message"], True)
+_chk_m = AT.trader.check_symbol_allowed("CFFEX.IF2609")
+check("[9xA] 月份合约剥月（IF2609 → IF）且放行",
+      (_chk_m["allowed"], _chk_m["product"]), (True, "IF"))
+check("[9xB] 股票代码 → allowed=False",
+      AT.trader.check_symbol_allowed("600519")["allowed"], False)
+check("[9xC] 空符号不抛异常且返回结构完整",
+      sorted(AT.trader.check_symbol_allowed("").keys()),
+      ["allowed", "message", "product", "products", "reason"])
 
 # [9i] P1-3：start() 必须清除上次遗留 .stop_request，否则第二次开启秒退
 #（残留 flag 会让新看护线程一眼就叫停并锁仓退出）。

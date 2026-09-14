@@ -1779,52 +1779,22 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 def get_futures_aliases():
     """期货别名映射**全表**（经 CTqSdkAPI 查询）。
 
-    ⚠️ 这是**"能解析"的口径**（输入能得到一个代码），不是**"可交易范围"**。
-    左上角搜索漏斗要的是后者，请用 `get_tradable_futures_aliases()`；
-    本函数保留全表供别名解析/清理等不涉及交易许可的场景使用。
+    单一事实源 = `DataAPI/TqSdkAPI.FUTURES_ALIASES`（手写维护，当前 **83 条**
+    = 81 个唯一合约 + 2 组重复别名：`TA`/`PTA` 同指 `KQ.m@CZCE.TA`、
+    `A50`/`CN` 同指 `KQD.m@SGX.CN`）。
+
+    ⚠️ 这是**"能看行情"的口径**（输入能解析出一个代码），**不等于"可交易范围"**。
+    2026-09-14 用户拍板「K线图与自动下单解耦」后，本全表同时服务两处：
+      · 搜索漏斗 / SSE 别名解析 —— **全表放行**（看行情不设品种限制）；
+      · 自动下单开关 —— 由 `AppTrader.check_symbol_allowed` 单独拦品种，
+        引擎侧 `ProductProfile.assert_product_allowed` 是权威闸门。
+
+    因此**不要再**在搜索/解析侧做品种过滤：那会让"看行情"被"能不能下单"牵连
+    （反例见 2026-09-14 当天先做后撤的 `get_tradable_futures_aliases`）。
     """
     if CTqSdkAPI is None:
         return {}
     return CTqSdkAPI.FUTURES_ALIASES
-
-
-def get_tradable_futures_aliases():
-    """**自动下单可交易**品种的期货别名子集（左上角搜索漏斗专用）。
-
-    白名单的单一事实源 = `Trading/Infra/ProductProfile.PRODUCT_PROFILES`
-    —— 与 Engine 启动校验（`assert_product_allowed`）、AppTrader 启动前置拦截
-    **同源**，不在此处另抄一份品种清单（否则又多一处会漂移的 SSOT）。
-
-    动机（2026-09-14 用户拍板「限制往前提」）：原实现里前端可搜到 70+ 个期货品种，
-    而自动下单白名单只有 8 个 —— 选到未标定品种时引擎会 `assert_product_allowed`
-    拒绝启动，表现为"点一下就报错"。把限制提到**搜索期**（非白名单品种直接搜不到），
-    用户就不会走到那个报错。
-
-    判定口径：按 `parse_product(full_code)` 解析出的**品种代码**比对，**不是**按别名键。
-    原因：别名表里一个品种可能有多个别名（`TA` 与 `PTA` 都指向 `KQ.m@CZCE.TA`），
-    按别名键过滤会漏；`parse_product` 已做大小写归一（见 p47），正是为此准备的。
-
-    降级：Trading 侧导入失败时**返回全表**（即不做品种限制），并打一条 WARNING。
-    方向是刻意选的 —— 引擎启动期 `assert_product_allowed` 仍是硬兜底，搜索层放宽的
-    后果只是"用户多走一步到启动报错"；而搜索层收紧成空表的后果是"输什么都搜不到"，
-    会把可用性彻底打断，且故障现象离根因很远。
-    """
-    if CTqSdkAPI is None:
-        return {}
-    try:
-        from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product
-    except Exception as e:
-        log.warning("[警告] 可交易品种白名单不可用，搜索不做品种限制: %s: %s",
-                    type(e).__name__, e)
-        return dict(CTqSdkAPI.FUTURES_ALIASES)
-    out = {}
-    for alias, full_code in CTqSdkAPI.FUTURES_ALIASES.items():
-        try:
-            if parse_product(full_code) in PRODUCT_PROFILES:
-                out[alias] = full_code
-        except Exception:
-            continue
-    return out
 
 
 def get_futures_name(full_code):
