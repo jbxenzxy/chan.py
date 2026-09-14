@@ -296,17 +296,19 @@ class ExitConfig(BaseModel):
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，止损抬至保本
-    trailing_trigger_r: float = 2.0        # 浮盈 ≥ 此倍数×R 时，启动 ATR 跟踪止盈（跨品种共用，不随品种档案）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
-                                                #   注：B 方案（use_trailing=True）下 r_multiple_tp（品种档案）仅作
-                                                #   "名义盈亏比"（期望值口径），不生成硬止盈单；止盈交给 L3 ATR 跟踪兑现
+                                                #   注：B 方案（use_trailing=True）下**不生成硬止盈单**，止盈完全交给
+                                                #   L3 的 ATR 跟踪兑现；L3 启动阈值 = r_multiple_tp（品种档案，IC/IM=3R、
+                                                #   其余=2R），即"盈利到 r_multiple_tp×R 时进 L3"——r_multiple_tp 由此从
+                                                #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，不再有全局
+                                                #   trailing_trigger_r）。
 
 
 class ExitPolicyParams(ExitConfig):
     """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
 
-    继承 ExitConfig 的品种无关项（ATR / trailing / 触发倍数），另持品种相关三参数。
+    继承 ExitConfig 的品种无关项（ATR / trailing），另持品种相关三参数（含 r_multiple_tp，它同时是 L3 启动阈值，品种级）。
     三参数的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
     合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
     如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。

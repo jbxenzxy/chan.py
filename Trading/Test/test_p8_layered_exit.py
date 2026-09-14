@@ -150,9 +150,9 @@ def main():
 
     print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
     pol6 = LayeredExitPolicy({"use_atr": False,
-                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
+                              "stop_at_signal_extreme": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 99.0,
+                              "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 99.0,
                               "trailing_distance_points": 0.0})
     pos6 = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     # close=111 → 浮盈 11 ≥ 1R(10) → 保本位=100 > 90 → 更新
@@ -161,9 +161,9 @@ def main():
     check("保本新止损 = 100", chk6.plan.stop_price if chk6 else None, 100.0)
     # 保本缓冲 >0：SL 抬到入场价之上 breakeven_buffer_ticks×tick，垫掉手续费+滑点
     pol6b = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
-                               "r_multiple_tp": 2.0, "use_trailing": True,
+                               "use_trailing": True,
                                "breakeven_trigger_r": 1.0, "breakeven_buffer_ticks": 2.0,
-                               "trailing_trigger_r": 99.0, "trailing_distance_points": 0.0})
+                               "r_multiple_tp": 99.0, "trailing_distance_points": 0.0})
     pos6b = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
     check("保本缓冲 2 tick → 止损=100.4（入场价之上）",
@@ -171,9 +171,9 @@ def main():
 
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
     pol7 = LayeredExitPolicy({"use_atr": False,
-                              "stop_at_signal_extreme": False, "r_multiple_tp": 2.0,
+                              "stop_at_signal_extreme": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 2.0,
+                              "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 2.0,
                               "trailing_distance_points": 5.0})
     # 已先保本到 100；本根 close=130（浮盈30≥2R=20），最高 131 → 跟踪=131-5=126
     # 用 tp=9999 排除"硬止盈"干扰，low=101>保本止损100 排除"硬止损"干扰，只验跟踪
@@ -204,12 +204,12 @@ def main():
     check("B 方案 tp_price = None（不硬止盈）", planB.tp_price is None, True)
     check("B 方案 止损仍照常 = 98", planB.stop_price, 98.0)
 
-    print("\n[12] L3 口径统一（best 极值）：解耦参数 + 盘中冲高回落也抬损（钉住 P8-A 场景）")
-    # 解耦配置：tp=3R（130）、trailing 提前到 1.5R 启动、保本层用 trigger=99 屏蔽隔离
+    print("\n[12] L3 口径统一（best 极值）：L3 触发 = r_multiple_tp，盘中冲高回落也抬损（钉住 P8-A 场景）")
+    # 配置：r_multiple_tp=1.5（L3 启动阈值=1.5R）、保本层用 breakeven_trigger_r=99 屏蔽隔离
     pol13 = LayeredExitPolicy({"use_atr": False,
-                               "stop_at_signal_extreme": False, "r_multiple_tp": 3.0,
+                               "stop_at_signal_extreme": False,
                                "use_trailing": True, "breakeven_trigger_r": 99.0,
-                               "breakeven_buffer_ticks": 0.0, "trailing_trigger_r": 1.5,
+                               "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 1.5,
                                "trailing_atr_multiple": 0.0, "trailing_distance_points": 1.0})
     # A 场景（R=10）：盘中冲 2R（high=120，未到 3R 止盈 130）、收盘回落 1.2R（112）
     #   旧口径（fav 看收盘 1.2R=12 点 < 1.5R=15 点）漏检；
@@ -237,6 +237,29 @@ def main():
     chk14 = pol13.check(pos14, make_bar(2600, 90.0, 95.0, 80.0, 88.0), state, 5)
     check("空单镜像 only_update", chk14.only_update if chk14 else None, True)
     check("空单镜像新止损 = best+1 = 81", chk14.plan.stop_price if chk14 else None, 81.0)
+
+    print("\n[12b] L3 触发阈值 = 品种级 r_multiple_tp（IC/IM=3R、IF/IH=2R）")
+    # IC：r_multiple_tp=3.0 → L3 在 3R 才启动；IF：r_multiple_tp=2.0 → 2R 启动
+    pol_ic = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
+                                "use_trailing": True, "breakeven_trigger_r": 99.0,
+                                "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 3.0,
+                                "trailing_distance_points": 1.0})
+    pol_if = LayeredExitPolicy({"use_atr": False, "stop_at_signal_extreme": False,
+                                "use_trailing": True, "breakeven_trigger_r": 99.0,
+                                "breakeven_buffer_ticks": 0.0, "r_multiple_tp": 2.0,
+                                "trailing_distance_points": 1.0})
+    # R=10、_trail_best=100。IC 在 2.5R（best=125, fav=25 < 3R=30）不启动 L3；
+    #   IF 在 2.5R（fav=25 ≥ 2R=20）已启动。
+    pos_ic = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
+    pos_if = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk_ic = pol_ic.check(pos_ic, make_bar(2700, 100, 125, 105, 120), state, 5)
+    chk_if = pol_if.check(pos_if, make_bar(2701, 100, 125, 105, 120), state, 5)
+    check("IC(3R) 在 2.5R 不启动 L3", chk_ic is None, True)
+    check("IF(2R) 在 2.5R 已启动 L3", (chk_if is not None and chk_if.only_update), True)
+    # IC 到 3.5R（best=135, fav=35 ≥ 3R=30）启动
+    pos_ic2 = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk_ic2 = pol_ic.check(pos_ic2, make_bar(2702, 100, 135, 105, 130), state, 5)
+    check("IC(3R) 在 3.5R 启动 L3", (chk_ic2 is not None and chk_ic2.only_update), True)
 
     print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR, min_r_points)")
     # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3

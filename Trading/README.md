@@ -97,7 +97,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 **推论（调参前必读）**：品种相关项——`price_tick` / `multiplier` / `min_r_points` /
 `r_multiple_tp` / `breakeven_buffer_ticks`——的真值**只在档案里**。在 `Config.py` 或 `.env`
 里写同名字段**不再生效**（会被档案覆盖）；改品种参数 = 改 `Infra/ProductProfile.py`。
-品种无关的出场参数（ATR / 跟踪 / 触发倍数）仍在 `Config.py` 调。
+品种无关的出场参数（ATR / 跟踪）仍在 `Config.py` 调；L3 触发倍数 = 品种级 r_multiple_tp（在 Infra/ProductProfile.py，IC/IM=3R、其余=2R，不再有全局 trailing_trigger_r）。
 
 > 权威声明见 `Trading/Config.py` 模块 docstring 顶部的「双轴声明」段。
 
@@ -155,7 +155,6 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "atr_sl_multiple": 2.0,
     "use_trailing": true,              // 保本 + 跟踪止损（L3）
     "breakeven_trigger_r": 1.0,
-    "trailing_trigger_r": 2.0,
     "trailing_atr_multiple": 1.5
   },
   "engine": {
