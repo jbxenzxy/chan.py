@@ -72,7 +72,10 @@ class InstrumentSpec(BaseModel):
                                               #   从行情取，见下。
     limit_down_pct: float = 0.0
     last_trade_date: str = ""                 # 最后交易日 YYYY-MM-DD（阻塞点 4 交割月护栏，Phase 11 消费）
-    night_session: bool = False               # 是否有夜盘（阻塞点 6 交易时段护栏，Phase 11 消费）
+    night_session: bool = False               # 是否有夜盘。字段位保留但**不消费**：
+                                              #   交易时段护栏（阻塞点 6 · Q5）已于 2026-09-14
+                                              #   判定为**不需要**（纯 K 线推送架构下非交易时段
+                                              #   无 K 线 → 无信号 → 无报单，无从拦截）。
 
     # 当日涨跌停区间（绝对价）。**唯一真值来源是行情**（apply_quote 回填），
     #   配置里的 limit_up_pct/limit_down_pct 只是档案，换算不出当日绝对价。
@@ -372,13 +375,16 @@ class InstrumentSpec(BaseModel):
 
     def delivery_guard_blocked(self, today: str, threshold_days: int = 1) -> bool:
         """交割月护栏判定（Phase 11 · 阻塞点 4 · D8）。返回 True = 距最后交易日不足
-        `threshold_days` 个交易日（含当天）→ 应**拒绝开新仓**（fail-closed）。
+        `threshold_days` 个交易日（含当天）→ 本护栏命中（具体拦哪个动作由 Engine
+        按账户三态×意图再判，本方法只回答"是否在禁用窗内"）。
 
         语义（2026-09-14 拍板，见实施计划 §6.2 Phase 11 行）：
           · 判据 =「剩余交易日 **<** threshold_days 即拦」；
           · **护栏对象 = 现行主力 `trade_symbol`** 的 last_trade_date —— 主连换月
             （IF2609→IF2610）时 trade_symbol 更新、判定随之解除；
-          · 只拦开新仓（Engine 在 OPEN 分支消费）；平旧仓/离场永不拦；
+          · 三态分发在 Engine._pre_trade_check：空仓态拦【开仓】、锁仓态拦【平仓/
+            解锁】、运行态不拦（Principle：交割月附近不让新进裸仓，也不让解锁成
+            裸仓，已运行仓位可正常交易/锁仓）；
           · `last_trade_date` 未知（离线 dry_run / 行情未取到）→ 返回 False，
             与涨跌停护栏同哲学（"不校验未知的东西"）。
 
@@ -392,15 +398,6 @@ class InstrumentSpec(BaseModel):
             return False
         rem = _weekdays_between(today, self.last_trade_date)
         return rem < int(threshold_days)
-
-    def is_night_session(self) -> bool:
-        """本品种是否有夜盘（Phase 11 · 阻塞点 6 交易时段护栏的数据位）。
-
-        真值来源：行情（SimNow._apply_instrument_quote 回填）。未知（离线 dry_run
-        未取到 / Phase 11 之前）→ 返回 False：交易时段护栏对"无夜盘记录"的品种
-        按**日盘时段**校验（保守，见 TradingSession 注释）。
-        """
-        return bool(self.night_session)
 
 
 def _weekdays_between(start: str, end: str) -> int:

@@ -830,26 +830,23 @@ class SimNowBroker(Broker):
                 code="instrument_quote_error", err=type(e).__name__)
 
     # ══════════════════════════════════════════════════════════════════
-    # Phase 11（阻塞点 4 · D8 / 阻塞点 6 · Q5 · 2026-09-14 插入）：交割月 + 交易时段
+    # Phase 11（阻塞点 4 · D8 · 2026-09-14 插入）：交割月护栏的数据位回填
     # ══════════════════════════════════════════════════════════════════
     def _fill_delivery_calendar(self, quote: Any) -> None:
-        """从**真实月份合约**行情回填 `last_trade_date` / `night_session`。
+        """从**真实月份合约**行情回填 `last_trade_date`（交割月护栏数据位）。
 
-        数据位（InstrumentSpec，Phase 11 消费）：
-          · last_trade_date —— 优先读 quote.last_trade_date（YYYY-MM-DD）；tqsdk
-            部分版本只暴露 expiry_datetime（datetime / int 毫秒戳），取其日期部分；
-            都取不到或解析不出合法日期 → 保持 ""（交割月护栏降级为不校验）。
-          · night_session —— quote.night_session（bool）；取不到 → 保持 False
-            （交易时段护栏按日盘时段校验）。
+        优先读 quote.last_trade_date（YYYY-MM-DD）；tqsdk 部分版本只暴露
+        expiry_datetime（datetime / int 毫秒戳），取其日期部分；都取不到或
+        解析不出合法日期 → 保持 ""（交割月护栏降级为不校验）。
 
-        一切异常静默跳过 —— 取不到交割/时段数据不能拖垮行情参数流程。
+        一切异常静默跳过 —— 取不到交割数据不能拖垮行情参数流程。
+        注：交易时段护栏（night_session）已判定为不需要（纯 K 线推送架构下
+        非交易时段无 K 线 → 无信号 → 无报单），故不再回填。
         """
-        if self.spec.last_trade_date or self.spec.night_session:
+        if self.spec.last_trade_date:
             return
         try:
             self.spec.last_trade_date = _extract_last_trade_date(quote)
-            ns = getattr(quote, "night_session", None)
-            self.spec.night_session = bool(ns)
         except Exception:
             pass
 

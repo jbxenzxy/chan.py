@@ -1202,6 +1202,33 @@ class TradingEngine(ReconcileMixin):
         # 平今经济性判定（Phase 12，2026-09-14 插入）：费率已自动获取后检查一次，
         # warn 不拒单，只给建议值（前端横幅 / D11 toast）。
         self._check_closetoday_economy()
+        # ── 交割月护栏（Phase 11 · 阻塞点 4 · D8）──
+        #   三态语义（2026-09-14 拍板）：空仓态拦截开仓、锁仓态拦截平仓、运行态不拦截。
+        #   原则：交割月附近不让**新进裸仓**、也不让**解锁成裸仓**，已运行的仓位
+        #   可正常交易 / 锁仓（运行态不拦）。判据 = 剩余交易日 < delivery_guard_days
+        #   即拦（默认 1 = 仅最后交易日当天）。护栏对象 = 现行主力 last_trade_date
+        #   （换月自动解除）；last_trade_date 未知（离线 dry_run / 行情未取到）→
+        #   不拦。guard_days=0 → 关闭护栏。
+        guard_days = int(getattr(self.cfg.risk, "delivery_guard_days", 1))
+        if self.spec.delivery_guard_blocked(today, threshold_days=guard_days):
+            state = self.account_state()
+            is_open = act.intent is OrderIntent.OPEN
+            is_close = act.intent in (OrderIntent.CLOSE, OrderIntent.CLOSETODAY)
+            blocked = ((state is AccountState.FLAT and is_open) or
+                       (state is AccountState.LOCKED and is_close))
+            if blocked:
+                self.alert(
+                    self.ALERT_SEVERE, "delivery_guard_blocked",
+                    "距最后交易日 {} 不足 {} 个交易日（交割月护栏）—— 已拒绝{}："
+                    "{}。当前主力换月后自动解除（运行态仓位不受影响）。"
+                    .format(
+                        self.spec.last_trade_date or "未知", guard_days,
+                        "开新仓" if is_open else "平仓/解锁",
+                        "空仓态不进裸仓" if is_open else "锁仓态不放开成裸仓"),
+                    symbol=self.spec.trade_symbol,
+                    last_trade_date=self.spec.last_trade_date,
+                    state=state.value, intent=act.intent.value, guard_days=guard_days)
+                return "delivery_guard_blocked"
         if act.volume <= 0:
             return "zero_volume"
         if not today:
@@ -1219,23 +1246,6 @@ class TradingEngine(ReconcileMixin):
             # 「今仓 → 反向开仓 / 跨日 → 平仓」的唯一依据，空着就是非法状态。
             if not self._open_time_anchor(sig)[1]:
                 return "no_time_anchor"
-            # ── 交割月护栏（Phase 11 · 阻塞点 4 · D8）──
-            #   距最后交易日不足 `delivery_guard_days`（默认 1，仅当天）个交易日 →
-            #   拒绝**开新仓** + 严重告警（fail-closed）。只拦开仓，平旧仓永不拦。
-            #   护栏对象 = 现行主力 last_trade_date（换月自动解除）；last_trade_date
-            #   未知（离线 dry_run / 行情未取到）→ 不拦（"不校验未知的东西"）。
-            #   guard_days=0 表示关闭护栏（恒放行）；None/缺失时取默认 1。
-            guard_days = int(getattr(self.cfg.risk, "delivery_guard_days", 1))
-            if self.spec.delivery_guard_blocked(today, threshold_days=guard_days):
-                self.alert(
-                    self.ALERT_SEVERE, "delivery_guard_blocked",
-                    "距最后交易日 {} 不足 {} 个交易日（交割月护栏）—— 已拒绝开新仓；"
-                    "当前主力换月后自动解除，旧仓仍可正常平掉。"
-                    .format(self.spec.last_trade_date or "未知", guard_days),
-                    symbol=self.spec.trade_symbol,
-                    last_trade_date=self.spec.last_trade_date,
-                    guard_days=guard_days)
-                return "delivery_guard_blocked"
             return None
         # ── CLOSE / CLOSETODAY ──
         # Phase 10（D6）：CLOSETODAY 仅上期所/上期能源（SHFE/INE）可用，其余

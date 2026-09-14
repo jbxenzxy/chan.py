@@ -183,60 +183,81 @@ check("[2e] 跨周末（周五→下周一）→ 1（只计周一）",
 check("[2f] 非法/空串 → 0", _weekdays_between("", D_MAIN), 0)
 
 # ════════════════════════════════════════════════════════════════
-print("\n[3] Engine._pre_trade_check 挂点（dry_run；dry_run 是 offline → A′ 闸门放行）")
+print("\n[3] Engine._pre_trade_check 挂点 —— 三态×意图（dry_run；dry_run 是 offline → A′ 闸门放行）")
+print("    空仓态: 今天=交割日 → 拦【开仓】；锁仓态: → 拦【平仓】；运行态: → 都不拦")
 # ════════════════════════════════════════════════════════════════
-#   注：Engine.spec = cfg.instrument，护栏数据要设在 cfg.instrument（而非传给
-#   DryRunBroker 的 spec 实例）上 —— 这里直接对 eng.spec 赋值，模拟"行情回填"。
-# 3a：today = 现行主力最后交易日 D_MAIN → OPEN 被拒
+#   注：Engine.spec = cfg.instrument，交割日直接对 eng.spec 赋值（模拟行情回填）。
+#   账户态由持仓派生：无仓=FLAT；净敞口≠0=RUNNING；净敞口0且簿非空=LOCKED。
+# 3a：空仓态(FLAT) + OPEN + today=最后交易日 → 拦（不让新进裸仓）
 with tmp_dir("t3a") as tmp:
     eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "a")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
-    check("[3a] OPEN + today=最后交易日 → 拒 delivery_guard_blocked",
-          why, "delivery_guard_blocked")
+    check("[3a] 空仓态 OPEN + 交割日 → 拦", why, "delivery_guard_blocked")
 
-# 3b：现行主力换月到远月（last=FAR）→ OPEN 放行
+# 3b：运行态(RUNNING) + today=交割日 → 开(④锁仓)/平(⑤) 都不拦
 with tmp_dir("t3b") as tmp:
     eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "b")
+    eng.spec.last_trade_date = D_MAIN
+    eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))  # → RUNNING
+    eng.on_bar(make_bar(1000))
+    check("[3b0] 前置：pn 已增持 → RUNNING", eng.account_state().value, "running")
+    why_open = eng._pre_trade_check(_Action(OrderIntent.OPEN, Side.SHORT, 2),
+                                    D_MAIN, make_sig(), ref_price=4500.0)
+    check("[3b1] 运行态 OPEN(④锁仓) + 交割日 → 不拦", why_open, None)
+    why_close = eng._pre_trade_check(
+        _Action(OrderIntent.CLOSE, Side.LONG, 1, target=make_pos(entry_date=D1)),
+        D_MAIN, make_sig(), ref_price=4500.0)
+    check("[3b2] 运行态 CLOSE(⑤) + 交割日 → 不拦（≠ delivery_guard_blocked）",
+          why_close != "delivery_guard_blocked", True)
+
+# 3c：锁仓态(LOCKED) + today=交割日 → 拦【平仓/解锁】；但 OPEN(②) 不拦
+with tmp_dir("t3c") as tmp:
+    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "c")
+    eng.spec.last_trade_date = D_MAIN
+    eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))
+    eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.SHORT))
+    eng.on_bar(make_bar(1000))
+    check("[3c0] 前置：pn 多空对锁 → LOCKED", eng.account_state().value, "locked")
+    act_close = _Action(OrderIntent.CLOSE, Side.LONG, 1,
+                        target=make_pos(entry_date=D1, side=Side.LONG))
+    why_close = eng._pre_trade_check(act_close, D_MAIN, make_sig(), ref_price=4500.0)
+    check("[3c1] 锁仓态 CLOSE(③解锁) + 交割日 → 栏", why_close, "delivery_guard_blocked")
+    why_open = eng._pre_trade_check(_Action(OrderIntent.OPEN, Side.LONG, 2),
+                                    D_MAIN, make_sig(), ref_price=4500.0)
+    check("[3c2] 锁仓态 OPEN(②) + 交割日 → 不拦", why_open, None)
+
+# 3d：空仓态 + 换月远月（last=FAR）→ OPEN 放行（换月自动解除）
+with tmp_dir("t3d") as tmp:
+    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "d")
     eng.spec.last_trade_date = D_FAR
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
-    check("[3b] OPEN + 换月远月（10 月交割）→ 放行 None", why, None)
-
-# 3c：CLOSE 今天=最后交易日 → 不被交割月护栏拦
-with tmp_dir("t3c") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "c")
-    eng.spec.last_trade_date = D_MAIN
-    eng.on_bar(make_bar(1000))
-    pos = make_pos(entry_date=D1)
-    act = _Action(OrderIntent.CLOSE, Side.LONG, 1, target=pos)
-    why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
-    check("[3c] CLOSE + 今天=最后交易日 → 交割月护栏不拦（≠ delivery_guard_blocked）",
-          why != "delivery_guard_blocked", True)
+    check("[3d] 空仓态 OPEN + 换月远月 → 放行 None", why, None)
 
 # ════════════════════════════════════════════════════════════════
 print("\n[4] 配置旋钮 risk.delivery_guard_days")
 # ════════════════════════════════════════════════════════════════
-# 4a：guard_days=2 → 昨天（剩 1 日 < 2）也拦
+# 4a：guard_days=2 → 空仓态仅剩 1 个交易日（9/17→9/18）也拦
 with tmp_dir("t4a") as tmp:
     eng = build_engine(tmp, make_cfg(guard_days=2), InstrumentSpec(), "a")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, "2026-09-17", make_sig(), ref_price=4500.0)
-    check("[4a] guard_days=2 + today=前一天 → 拦", why, "delivery_guard_blocked")
+    check("[4a] guard_days=2 + 空仓态 OPEN 前一天 → 拦", why, "delivery_guard_blocked")
 
-# 4b：guard_days=0 → 恒放行（关闭护栏）
+# 4b：guard_days=0 → 恒放行（关闭护栏）—— 空仓态 OPEN 交割日当天也放行
 with tmp_dir("t4b") as tmp:
     eng = build_engine(tmp, make_cfg(guard_days=0), InstrumentSpec(), "b")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
-    check("[4b] guard_days=0 → 即使交割日当天也放行 None", why, None)
+    check("[4b] guard_days=0 → 空仓态 OPEN 交割日当天也放行 None", why, None)
 
 print("\nPASS:{} FAIL:{}".format(_PASS, _FAIL))
 sys.exit(1 if _FAIL else 0)
