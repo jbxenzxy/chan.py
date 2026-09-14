@@ -115,6 +115,11 @@ class TradingEngine(ReconcileMixin):
         #   与上面分开计数的原因：两条路径的前提互斥（一个需要 verified、一个需要
         #   离线），共用一个标志会让先走的那个把后走的那个吞掉。
         self._spec_drift_offline_checked: bool = False
+        # Phase 12（2026-09-14 插入）：平今经济性判定一次性标志。
+        #   与 _spec_drift_checked 同纪律：费率会话内不变，重复检查只会把同 code
+        #   告警的 n 刷大。注意：fee_source 尚未回填（空串）时**不置位**——
+        #   费率可能经成交回报反推晚到，置位会吞掉后续判定。
+        self._closetoday_economy_checked: bool = False
         self.broker = broker
         self.entry_policy = entry_policy
         self.exit_policy = exit_policy
@@ -1108,6 +1113,42 @@ class TradingEngine(ReconcileMixin):
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
                 source=getattr(self.spec, "instrument_source", ""))
 
+    def _check_closetoday_economy(self) -> None:
+        """平今经济性判定（Phase 12，2026-09-14 插入）。
+
+        背景：Phase 10（D6）落地 `prefer_lock_over_closetoday` 品种开关时是**静态**
+        配置 —— "能不能平今"（= 交易所是否支持 CLOSETODAY）能运行时判定，但
+        "贵不贵"（费率）读不到。Phase 12 把费率自动获取补上：模拟盘走
+        `TqSim.get_commission`（SOURCE_FEE_QUOTE）、在线实盘走成交回报反推
+        （SOURCE_FEE_TRADE），回填三档费率到 spec 后在此判定。
+
+        规则（与文档 §5.x 一致）：
+          · 只读建议，**永不改写** prefer_lock_over_closetoday（决策留给人）；
+            spec 侧 `evaluate_closetoday_economy()` 算好 suggest_lock，这里只上报。
+          · fail-closed：`fee_source` 为空（费率没拿到）→ 直接返回，不置位标志
+            —— 费率可能经成交回报反推**晚到**，置位会吞掉后续判定。
+          · 一次性：置位后不再查（费率会话内不变）。跨会话的判定在每次新会话
+            首次取到费率时重新触发。
+        """
+        if self._closetoday_economy_checked or not getattr(self.spec, "fee_source", ""):
+            return
+        self._closetoday_economy_checked = True
+        result = self.spec.evaluate_closetoday_economy()
+        if not result:
+            return
+        self.ev.write("closetoday_economy",
+                      symbol=str(self.cfg.instrument.signal_symbol),
+                      suggest_lock=result["suggest_lock"],
+                      closetoday_rate=round(float(result["closetoday_rate"]), 6),
+                      close_rate=round(float(result["close_rate"]), 6),
+                      cheaper=result["cheaper"],
+                      source=result["source"])
+        self.alert(
+            self.ALERT_WARN, "closetoday_suggestion", result["reason"],
+            suggest_lock=result["suggest_lock"],
+            source=result["source"],
+            signal_symbol=str(self.cfg.instrument.signal_symbol))
+
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
                          ref_price: float = 0.0) -> Optional[str]:
@@ -1158,6 +1199,9 @@ class TradingEngine(ReconcileMixin):
             return "instrument_unverified"
         # 合约规格漂移校验（verified 首次为真后查一次；warn 不拒单）
         self._check_spec_drift()
+        # 平今经济性判定（Phase 12，2026-09-14 插入）：费率已自动获取后检查一次，
+        # warn 不拒单，只给建议值（前端横幅 / D11 toast）。
+        self._check_closetoday_economy()
         if act.volume <= 0:
             return "zero_volume"
         if not today:

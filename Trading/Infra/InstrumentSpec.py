@@ -34,6 +34,11 @@ class InstrumentSpec(BaseModel):
     open_fee_rate: float = 0.000023            # 开仓 0.0023%
     closetoday_fee_rate: float = 0.000345      # 平今 0.0345%（中金所，期指很贵）
     close_fee_rate: float = 0.000023           # 平昨 0.0023%
+    # Phase 12（2026-09-14 插入 · D6 喂数）：三档费率的**来源标记**。
+    #   空串 = 仍用配置默认值（未自动获取）→ 不做平今经济性自动判定（fail-closed，
+    #   平今开关走保守侧锁仓）。合法值见 SOURCE_FEE_* 常量，由
+    #   apply_fee_rates() 统一维护，外部只读比较。
+    fee_source: str = ""
     slippage_ticks: float = 1.0                # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
     #   "FOK"  全成或全撤 —— 中金所支持，本系统默认依赖它（无部分成交幽灵）
@@ -90,6 +95,17 @@ class InstrumentSpec(BaseModel):
     #   tick + 乘数来自行情，但**涨跌停区间缺失** → band 护栏已降级为不校验。
     #   留这个独立标记是为了诊断时能一眼看出"verified 为真但护栏是降级的"。
     SOURCE_QUOTE_PARTIAL: ClassVar[str] = "QUOTE_PARTIAL"
+
+    # Phase 12（D6 喂数）：三档费率（open / close / closetoday_fee_rate）的来源标记。
+    #   与 instrument_source 平行但独立 —— 费率可能来自与行情不同的通道
+    #   （成交回报反推晚于行情就绪），混在一个字段里会互相污染。
+    #     FEE_QUOTE   —— 从费率通道自动获取（纯模拟 TqSim.get_commission）
+    #     FEE_TRADE   —— 从成交回报 commission 反推（在线 CTP/SimNow 通道）
+    #     FEE_CONFIG  —— 配置默认值（离线 dry_run/replay 显式声明，见 mark_fee_config）
+    #   空串 = 未知（未自动获取）→ 经济性判定 fail-closed。
+    SOURCE_FEE_QUOTE: ClassVar[str] = "FEE_QUOTE"
+    SOURCE_FEE_TRADE: ClassVar[str] = "FEE_TRADE"
+    SOURCE_FEE_CONFIG: ClassVar[str] = "FEE_CONFIG"
 
     # apply_quote 回填的行情字段 → spec 字段映射（tqsdk quote 字段名 → 本模型字段名）
     _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
@@ -174,6 +190,101 @@ class InstrumentSpec(BaseModel):
         写明"tick/乘数取自配置，回测结果不可直接外推实盘"由调用方（main.py）负责。
         """
         self.instrument_source = self.SOURCE_CONFIG_OFFLINE
+
+    # ---------- Phase 12：三档费率自动回填 + 平今经济性判定（D6 喂数） ----------
+    def apply_fee_rates(self, open_rate: float, close_rate: float,
+                        closetoday_rate: float, source: str) -> List[str]:
+        """自动获取到三档费率后**原子回填**（Phase 12 · 2026-09-14 插入）。
+
+        与 apply_quote 同一纪律：先对全部待填值校验，任一不过 → 抛 ValueError
+        且**一个字段都不改**（半新半旧的费率比全旧更危险）。费率必须是
+        isfinite 且 >= 0 的比率（0.000023 = 0.0023%；**0 = 平今免收**，合法）
+        —— tqsdk/TqSim 取不到时可能是 nan 或 0，`if not v` 判空会漏过 nan，
+        必须 math.isfinite。
+
+        source 必须是 SOURCE_FEE_* 常量之一（防拼错）—— 取不到三档费率时
+        调用方**不得**调用本方法（fee_source 保持 "" = fail-closed）。
+
+        返回值发生变化的字段名列表。
+        """
+        if source not in (self.SOURCE_FEE_QUOTE, self.SOURCE_FEE_TRADE,
+                          self.SOURCE_FEE_CONFIG):
+            raise ValueError(
+                "非法费率来源 {!r}（必须为 SOURCE_FEE_* 常量）".format(source))
+        vals = {"open_fee_rate": float(open_rate),
+                "close_fee_rate": float(close_rate),
+                "closetoday_fee_rate": float(closetoday_rate)}
+        for f, v in vals.items():
+            # 允许 v == 0（平今免收 = 合法费率 0，如沪金 AU）；拒 nan / 负值
+            if not math.isfinite(v) or v < 0:
+                raise ValueError(
+                    "费率字段 {}={!r} 非法（要求 isfinite 且 >= 0；0 = 免收）"
+                    "—— 原子回填失败，三档费率保持原值".format(f, v))
+        changed = []
+        for f, v in vals.items():
+            old = float(getattr(self, f))
+            setattr(self, f, v)
+            if abs(old - v) > 1e-12:
+                changed.append(f)
+        self.fee_source = source
+        return changed
+
+    def mark_fee_config(self) -> None:
+        """离线模式（dry_run/replay）显式声明费率来源 = 配置默认值（Phase 12）。
+
+        与 mark_config_offline 平行：离线没有费率通道，三档费率就是配置值，
+        必须能自证来源 —— 但不触发经济性判定（费率非行情真值，判了也不可信）。
+        实盘永远不调本方法（在线通道取不到费率 → fee_source 保持 ""，fail-closed）。
+        """
+        self.fee_source = self.SOURCE_FEE_CONFIG
+
+    def evaluate_closetoday_economy(self) -> Optional[Dict[str, Any]]:
+        """平今经济性判定（Phase 12 · D6 喂数，纯函数）。
+
+        判定规则（文档 Phase 12 行）：`closetoday_fee_rate ≤ close_fee_rate`
+        → 平今免收/便宜 → 建议 `prefer_lock_over_closetoday=False`（今仓直接平今，
+        省一次开仓费 + 跨日平仓费）；否则建议 True（锁仓优先，平今更贵）。
+
+        **fail-closed**：fee_source 为空（费率未自动获取）→ 返回 None，
+        调用方（Engine）不做任何判定，平今开关走保守侧（锁仓，默认 True）。
+
+        产出是**建议值**：引擎只读不改配置，人工确认后写回品种档案。
+
+        返回 None（费率未知）或 dict：
+          suggest_lock          建议的 prefer_lock_over_closetoday（True=锁仓）
+          closetoday_rate / close_rate  判定用的两档费率
+          cheaper               "closetoday"（平今更便宜）/ "close"（平昨更便宜）
+                               / "same"（相等，按 ≤ 规则归入平今便宜侧）
+          reason                供横幅/告警展示的一句话结论
+          source                费率来源（FEE_QUOTE / FEE_TRADE）
+        """
+        if not self.fee_source:
+            return None
+        ct = float(self.closetoday_fee_rate)
+        cl = float(self.close_fee_rate)
+        if not (math.isfinite(ct) and math.isfinite(cl) and ct >= 0 and cl >= 0):
+            # 费率非法（nan/负值）→ 视同未知，fail-closed
+            return None
+        cheaper_side = "same" if abs(ct - cl) <= 1e-12 else \
+            ("closetoday" if ct < cl else "close")
+        suggest_lock = ct > cl          # 平今更贵 → 锁仓；平今 ≤ 平昨 → 平今
+        if cheaper_side == "same":
+            reason = "平今费率=平昨费率（{:.4%}），平今不省不贵 → 建议走平今".format(ct)
+        elif cheaper_side == "closetoday":
+            reason = ("平今费率 {:.4%} ≤ 平昨费率 {:.4%}，平今免收/便宜"
+                      " → 建议 prefer_lock_over_closetoday=False".format(ct, cl))
+        else:
+            reason = ("平今费率 {:.4%} > 平昨费率 {:.4%}，平今更贵"
+                      " → 建议 prefer_lock_over_closetoday=True（锁仓优先）"
+                      .format(ct, cl))
+        return {
+            "suggest_lock": suggest_lock,
+            "closetoday_rate": ct,
+            "close_rate": cl,
+            "cheaper": cheaper_side,
+            "reason": reason,
+            "source": self.fee_source,
+        }
 
     # ---------- 价格对齐 ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:
