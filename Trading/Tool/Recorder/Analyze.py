@@ -38,7 +38,7 @@ except Exception:
 # IF 默认参数
 DEFAULT_MULTIPLIER = 300.0      # 元/点
 DEFAULT_OPEN_RATE = 0.000023    # 开仓费率
-DEFAULT_CLOSE_TODAY_RATE = 0.000345  # 平今费率
+DEFAULT_CLOSETODAY_RATE = 0.000345  # 平今费率
 DEFAULT_SLIPPAGE = 0.2          # 点/边
 
 
@@ -106,10 +106,10 @@ def stats(signals, klines):
 
 
 def backtest(signals, klines, take_profit, slippage,
-             multiplier, open_rate, close_today_rate, use_close_today=True):
+             multiplier, open_rate, closetoday_rate, use_closetoday=True):
     """返回逐笔交易明细 + 汇总。"""
     by_ts, by_date = build_index(klines)
-    close_rate = close_today_rate if use_close_today else open_rate
+    close_rate = closetoday_rate if use_closetoday else open_rate
     trades, skipped = [], 0
 
     for key, s in signals.items():
@@ -254,9 +254,9 @@ def main():
     ap.add_argument("--slippage", type=float, default=DEFAULT_SLIPPAGE, help="单边滑点(点)")
     ap.add_argument("--multiplier", type=float, default=DEFAULT_MULTIPLIER, help="合约乘数(元/点)")
     ap.add_argument("--open-rate", type=float, default=DEFAULT_OPEN_RATE, help="开仓费率")
-    ap.add_argument("--close-today-rate", type=float,
-                    default=DEFAULT_CLOSE_TODAY_RATE, help="平今费率")
-    ap.add_argument("--no-close-today", action="store_true",
+    ap.add_argument("--closetoday-rate", type=float,
+                    default=DEFAULT_CLOSETODAY_RATE, help="平今费率")
+    ap.add_argument("--no-closetoday", action="store_true",
                     help="按平昨费率计算（隔夜持仓）")
     ap.add_argument("--scan", action="store_true", help="启用止盈参数扫描")
     ap.add_argument("--scan-list", default="5,8,10,12,15,20,30", help="扫描的止盈点数")
@@ -282,13 +282,13 @@ def main():
     print("=" * 72)
     trades, summary = backtest(
         signals, klines, args.take_profit, args.slippage, args.multiplier,
-        args.open_rate, args.close_today_rate, not args.no_close_today)
+        args.open_rate, args.closetoday_rate, not args.no_closetoday)
     print_summary(summary, args.multiplier)
 
     if args.scan:
         tps = [float(x) for x in args.scan_list.split(",")]
         scan(signals, klines, tps, args.slippage, args.multiplier,
-             args.open_rate, args.close_today_rate)
+             args.open_rate, args.closetoday_rate)
 
     if args.dump:
         with open(args.dump, "w", encoding="utf-8") as f:

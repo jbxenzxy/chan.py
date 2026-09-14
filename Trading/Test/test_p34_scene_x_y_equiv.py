@@ -326,8 +326,8 @@ _spec = InstrumentSpec()
 check("[5a] 中金所开仓费率 == 平昨费率（0.0023%）",
       _spec.open_fee_rate, _spec.close_fee_rate)
 check_true("[5b] 平今费率 = 平昨的 15 倍（本代码不可达 → 今日单永不 CLOSE）",
-           abs(_spec.close_today_fee_rate / _spec.close_fee_rate - 15.0) < 1e-9,
-           _spec.close_today_fee_rate / _spec.close_fee_rate)
+           abs(_spec.closetoday_fee_rate / _spec.close_fee_rate - 15.0) < 1e-9,
+           _spec.closetoday_fee_rate / _spec.close_fee_rate)
 def _fee_ratio(t):
     notional = t["volume"] * t["exit_price"]
     return t["cost_points"] / notional if notional else 0.0

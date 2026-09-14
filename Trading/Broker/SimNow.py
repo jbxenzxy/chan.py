@@ -210,7 +210,7 @@ def _verify_today_delta(api, trade_symbol: str, side: str,
     """等 **今仓** 精确减少 `volume`、且 **昨仓一分不动**（Phase 10 / p51 的成交后半段）。
 
     `_verify_yesterday_delta` 的镜像：那个服务 CLOSE（平昨），这个只服务
-    **CLOSE_TODAY（平今）**。判据：
+    **CLOSETODAY（平今）**。判据：
       成立 ⟺ 今仓落到 `today_baseline - volume`（±1 帧同步漂移）
               且 昨仓 == `his_baseline`（**下降即视为平到了昨仓 → 不成立**）
 
@@ -1052,7 +1052,7 @@ class SimNowBroker(Broker):
 
     def _submit_close(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                       signal_key: str, note: str, is_exit: bool = False) -> Order:
-        """平仓（offset 由 intent 决定：CLOSE→平昨 / CLOSE_TODAY→平今）。
+        """平仓（offset 由 intent 决定：CLOSE→平昨 / CLOSETODAY→平今）。
 
         is_exit=True —— **硬离场**（转移 5，运行态 L1-L3 触发）：必须追价。
         is_exit=False —— **拆锁**（转移 3，锁仓态收到交易信号）：不追价。
@@ -1063,18 +1063,18 @@ class SimNowBroker(Broker):
         故平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今）在本系统
         里**由 Phase 10（D6）开关显式开启**：品种配置
         `prefer_lock_over_closetoday=False` **且**交易所支持平今（SHFE/INE，
-        `spec.supports_close_today`）时，转移 ④ 生成 CLOSE_TODAY 意图 →
+        `spec.supports_closetoday`）时，转移 ④ 生成 CLOSETODAY 意图 →
         offset=CLOSETODAY、目标恒为**今仓**（引擎 _pre_trade_check 断言）。
         两意图在 P0 可平量判据与成交后今/昨验证上完全相反，见下。
         """
         offset = INTENT_TO_OFFSET[intent]
-        is_today = intent is OrderIntent.CLOSE_TODAY
+        is_today = intent is OrderIntent.CLOSETODAY
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
         # D12/p38（2026-09-13）：CLOSE 的判据必须是**昨仓** —— 本系统的 CLOSE 恒为平昨
         #   （不变量 6，断言在 Engine._pre_trade_check）。旧的今+昨口径会放行
         #   "只有今仓"的情形，而中金所同时有今昨仓时默认先平今 → 要么平今多付 15 倍
         #   费率、要么被柜台拒，两者都与引擎的"平昨"假设不符。
-        # Phase 10（2026-09-14）：CLOSE_TODAY 反之 —— 判据必须是**今仓**
+        # Phase 10（2026-09-14）：CLOSETODAY 反之 —— 判据必须是**今仓**
         #   （`today_only=True`），否则"只有昨仓、今仓不足"也会被总量放行 → 平今被拒。
         #   等待超时 = 柜台很可能根本没有这笔昨仓/今仓（幻影仓的主路径）→ 带
         #   REJECT_POSITION 类别返回，让引擎的兜底逻辑认得出来（见 Base.REJECT_POSITION）。
@@ -1183,16 +1183,16 @@ class SimNowBroker(Broker):
         #     · OPEN：今仓增加 → 总量增加，`_verify_position_delta` 看总量就够；
         #     · CLOSE：平昨 → **昨仓**下降且**今仓一分不动**。总量判据在这里是
         #       "看不见"的：今仓 1 手被平掉、昨仓不变，总量同样减 1，旧判据照样通过。
-        #     · CLOSE_TODAY：平今 → **今仓**下降且**昨仓一分不动**（Phase 10），
+        #     · CLOSETODAY：平今 → **今仓**下降且**昨仓一分不动**（Phase 10），
         #       是 CLOSE 的镜像，由 `_verify_today_delta` 验证。
-        #   故 CLOSE 走 `_verify_yesterday_delta`、CLOSE_TODAY 走 `_verify_today_delta`
+        #   故 CLOSE 走 `_verify_yesterday_delta`、CLOSETODAY 走 `_verify_today_delta`
         #   （均有分拆基线时），OPEN 保持原逻辑。
         side_key = "LONG" if side is Side.LONG else "SHORT"
         verified = False
         if is_fully_filled:
             if action == "close" and baseline_split is not None:
                 today_b, his_b = baseline_split
-                if intent_str == "close_today":
+                if intent_str == "closetoday":
                     verified = _verify_today_delta(
                         self._api, self._trade_symbol, side_key,
                         today_baseline=today_b, his_baseline=his_b,
@@ -1336,10 +1336,10 @@ class SimNowBroker(Broker):
           传 False 可退回旧的今+昨口径（仅供诊断/对照，生产不要用）。
 
         `today_only`（Phase 10 / p51，2026-09-14 新增，默认 False）：
-          平今 CLOSE_TODAY 报文的目标恒为**今仓**（引擎 _pre_trade_check 断言），
+          平今 CLOSETODAY 报文的目标恒为**今仓**（引擎 _pre_trade_check 断言），
           可平量判据必须是 **今仓 ≥ volume**（不是今+昨，也不是昨仓）。
           为 True 时覆盖 require_yesterday 的语义；本方法两个生产调用方
-          （CLOSE → require_yesterday=True；CLOSE_TODAY → today_only=True）
+          （CLOSE → require_yesterday=True；CLOSETODAY → today_only=True）
           永远不会同时传 True。
         """
         if timeout_s is None:
@@ -1428,10 +1428,10 @@ class SimNowBroker(Broker):
     def _note_today_lag(self, signal_key: str, side_key: str,
                         today_baseline: int, his_baseline: int,
                         volume: int) -> None:
-        """CLOSE_TODAY 的平今校验未成立时的诊断钩子（Phase 10 / p51，2026-09-14）。
+        """CLOSETODAY 的平今校验未成立时的诊断钩子（Phase 10 / p51，2026-09-14）。
 
         `_note_yesterday_lag` 的镜像（对应 `_verify_today_delta`）：
-          · `his_dropped`：昨仓下降了 → 柜台把 CLOSE_TODAY 撮合到了昨仓 → 账实错位
+          · `his_dropped`：昨仓下降了 → 柜台把 CLOSETODAY 撮合到了昨仓 → 账实错位
             （引擎簿按今仓记账），这是**必须有人知道**的异常。
           · `today_unchanged`：今仓没按预期减少 → CTP 回报延迟，或簿面与柜台不一致。
         与 `_note_position_lag` 一样只告警、不改变成交事实（权威判据仍是 P6）。
@@ -1442,12 +1442,12 @@ class SimNowBroker(Broker):
             sp = None
         today_cur, his_cur = sp if sp is not None else (-1, -1)
         if 0 <= his_cur < his_baseline:
-            why = "his_dropped（CLOSE_TODAY 被撮合到了昨仓 → 账实错位，须人工核对）"
+            why = "his_dropped（CLOSETODAY 被撮合到了昨仓 → 账实错位，须人工核对）"
         else:
             why = "today_unchanged（今仓未按预期减少；CTP 延迟或簿实不一致）"
         import logging
         logging.getLogger("tg.brokers.simnow").warning(
-            "P4/P5 诊断（不影响成交判定）: close_today %s 平今校验未成立 [%s] "
+            "P4/P5 诊断（不影响成交判定）: closetoday %s 平今校验未成立 [%s] "
             "(today baseline=%s → %s, his baseline=%s → %s, 期望今仓减 %s, signal=%s)",
             side_key, why, today_baseline, today_cur, his_baseline, his_cur,
             volume, signal_key or "-")

@@ -76,7 +76,7 @@ class DryRunBroker(Broker):
                 "intent": intent.value,            # 记账：开 / 平
                 "offset": offset_str,              # 记账：CTP 报文类型
                 "offset_close_yesterday_first": bool(
-                    spec.close_today_first),       # 成本计算时按此选平今/平昨费率
+                    spec.closetoday_first),       # 成本计算时按此选平今/平昨费率
                 "entry_date": entry_date,          # 2026-09-10：被平持仓建仓日（今/昨仓审计用）
             },
         )

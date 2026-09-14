@@ -1001,17 +1001,17 @@ class TradingEngine(ReconcileMixin):
             # 转移 ④：今日仓 → 默认反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
             #   D6 平今开关（Phase 10 · §5.4 阻塞点 3）：品种配置
             #   `prefer_lock_over_closetoday=False` **且**交易所支持平今
-            #   （SHFE/INE，`spec.supports_close_today`）时，改为直接
-            #   CLOSE_TODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态，
+            #   （SHFE/INE，`spec.supports_closetoday`）时，改为直接
+            #   CLOSETODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态，
             #   不再进锁仓态（"平今免收/便宜"品种省一次开仓费 + 跨日平仓费）。
             #   开关缺省（无品种档案）/ 交易所不支持时走锁仓，保守侧。
             if (not self._prefer_lock_over_closetoday()
-                    and self.spec.supports_close_today):
+                    and self.spec.supports_closetoday):
                 today_target = _oldest([
                     p for p in self.positions.positions
                     if p.side is net_side and p.entry_date >= today])
                 if today_target is not None:
-                    return _Action(OrderIntent.CLOSE_TODAY, net_side,
+                    return _Action(OrderIntent.CLOSETODAY, net_side,
                                    min(abs(net), today_target.volume),
                                    today_target, is_exit=True, transition=4)
             return _Action(OrderIntent.OPEN, _opposite(net_side), abs(net),
@@ -1176,27 +1176,27 @@ class TradingEngine(ReconcileMixin):
             if not self._open_time_anchor(sig)[1]:
                 return "no_time_anchor"
             return None
-        # ── CLOSE / CLOSE_TODAY ──
+        # ── CLOSE / CLOSETODAY ──
         # Phase 10（D6）：CLOSETODAY 仅上期所/上期能源（SHFE/INE）可用，其余
-        # 交易所传平今会直接报错。转移④ 的分支条件已按 `supports_close_today`
-        # 生成动作，这里再兜一道（防未来新增调用点直接构造 CLOSE_TODAY 动作）。
-        if (act.intent is OrderIntent.CLOSE_TODAY
-                and not self.spec.supports_close_today):
-            return "close_today_not_supported"
+        # 交易所传平今会直接报错。转移④ 的分支条件已按 `supports_closetoday`
+        # 生成动作，这里再兜一道（防未来新增调用点直接构造 CLOSETODAY 动作）。
+        if (act.intent is OrderIntent.CLOSETODAY
+                and not self.spec.supports_closetoday):
+            return "closetoday_not_supported"
         if act.target is None:
             return "close_without_target"
         if not act.target.entry_date:
             return "close_target_no_entry_date"
-        # ★ 全交易所安全性硬约束（契约测试 p35 / p51）：CLOSE 与 CLOSE_TODAY
+        # ★ 全交易所安全性硬约束（契约测试 p35 / p51）：CLOSE 与 CLOSETODAY
         #   的目标日期必须与意图匹配 ——
         #   对今仓发 CLOSE：中金所没有平今指令，会被当平昨处理并按平今费率收费
         #     （0.0345%，是平昨的 15 倍）；上期所/能源中心则需要 CLOSETODAY。
-        #   对昨仓发 CLOSE_TODAY：今仓不足 → 柜台拒单（平今仓位不足），
+        #   对昨仓发 CLOSETODAY：今仓不足 → 柜台拒单（平今仓位不足），
         #     且簿面按今仓记账会与实盘错位。
         #   规则 ⑷⑸⑹⑺ 保证正常路径不会产生这种报单，这里是最后一道闸。
-        if act.intent is OrderIntent.CLOSE_TODAY:
+        if act.intent is OrderIntent.CLOSETODAY:
             if act.target.entry_date < today:
-                return "close_today_target_is_yesterday"
+                return "closetoday_target_is_yesterday"
         else:
             if act.target.entry_date >= today:
                 return "close_target_is_today"
@@ -1400,7 +1400,7 @@ class TradingEngine(ReconcileMixin):
         # 这里仍按 entry_date 动态判定，是为"未来其它调用方"保留防御。
         cost = self.spec.cost_points(
             pos.entry_price, exit_price,
-            close_today=bool(self.spec.close_today_first
+            closetoday=bool(self.spec.closetoday_first
                              and pos.entry_date >= self._current_trading_day()))
         net = gross - cost
         cash = self.spec.points_to_cash(net, pos.volume)

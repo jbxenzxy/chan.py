@@ -141,7 +141,7 @@ class OrderIntent(str, Enum):
     三个值，一一对应 CTP 报文三种 offset：
       OPEN         开仓：买信号 → 买开，卖信号 → 卖开   → offset=OPEN
       CLOSE        平仓：跨日仓离场 / 跨日锁拆锁         → offset=CLOSE（恒平昨）
-      CLOSE_TODAY  平今：今仓离场（D6 平今开关关闭锁仓） → offset=CLOSETODAY
+      CLOSETODAY  平今：今仓离场（D6 平今开关关闭锁仓） → offset=CLOSETODAY
 
     「买还是卖」**不在本枚举里**：方向由调用方按信号方向给出 `side`，
     broker 只负责把 (side, offset) 翻译成 CTP 报文。
@@ -157,9 +157,9 @@ class OrderIntent(str, Enum):
     不变量（规则 ⑹/⑺ 的推论，硬断言在 `Engine._pre_trade_check`）
       CLOSE        目标恒定是**跨日仓** → 恒为平昨。中金所期指平今费率是平昨的
                    15 倍，对今仓发 CLOSE 会被当平昨处理并按平今收费 —— 绝不。
-      CLOSE_TODAY  目标恒定是**今仓**，且**仅上期所 / 上期能源（SHFE/INE）可用**
+      CLOSETODAY  目标恒定是**今仓**，且**仅上期所 / 上期能源（SHFE/INE）可用**
                    —— 其余四家交易所没有平今指令，传 CLOSETODAY 会直接报错
-                   （守卫：`InstrumentSpec.supports_close_today` + 转移④分支条件）。
+                   （守卫：`InstrumentSpec.supports_closetoday` + 转移④分支条件）。
 
       Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
       刻意不开平今口子（A4 一期只保证映射可扩展）；随品种开关
@@ -167,7 +167,7 @@ class OrderIntent(str, Enum):
     """
     OPEN = "open"     # 开仓 → offset=OPEN（④ 反向开仓锁仓也走它）
     CLOSE = "close"   # 平仓 → offset=CLOSE（中金所下恒为平昨）
-    CLOSE_TODAY = "close_today"  # 平今 → offset=CLOSETODAY（仅 SHFE/INE）
+    CLOSETODAY = "closetoday"  # 平今 → offset=CLOSETODAY（仅 SHFE/INE）
 
 
 class AccountState(str, Enum):
@@ -317,7 +317,7 @@ class Order:
     signal_key: str
     symbol: str
     side: Side
-    action: str                 # 下单动作 = OrderIntent.value ∈ open|close|close_today
+    action: str                 # 下单动作 = OrderIntent.value ∈ open|close|closetoday
                                 #   方向由 side 给出，两者合起来唯一确定 CTP 报文
     volume: int
     price: float                # 委托价（已对齐 price_tick）

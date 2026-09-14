@@ -106,10 +106,10 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "price_tick": 0.2,
     "multiplier": 300.0,
     "open_fee_rate": 0.000023,           // 期指开仓手续费率
-    "close_today_fee_rate": 0.000345,    // 平今（贵！）
+    "closetoday_fee_rate": 0.000345,    // 平今（贵！）
     "close_fee_rate": 0.000023,
     "slippage_ticks": 1.0,
-    "close_today_first": true            // 上期所/中金所平今优先
+    "closetoday_first": true            // 上期所/中金所平今优先
   },
   "risk": {
     "max_volume": 2                      // 每个买卖点开一手、挂 N 手（=单笔手数上限，
@@ -226,7 +226,7 @@ python main.py --source replay --replay-dir <M0输出目录> --out ./run_real
 demo 数据是**合成随机行情**，结果必然负期望，只用于验证链路与幂等。真实结论要以 M0 录制数据为准，并注意：
 
 - 默认会**回放最终消失的信号**（保守）；加 `--only-alive` 只回放存活信号（会高估策略，仅供对比）。
-- 期指**平今手续费 0.0345%**（约 1.38 点），是开仓（0.09 点）的 15 倍。成本模型已含，务必把 `close_today_first` 与手续费率填对，否则胜率判断会失真。
+- 期指**平今手续费 0.0345%**（约 1.38 点），是开仓（0.09 点）的 15 倍。成本模型已含，务必把 `closetoday_first` 与手续费率填对，否则胜率判断会失真。
 - 信号质量（止损距离 / 振幅是否过宽过窄）由缠论分析引擎在产生买卖点信号时判定，Trading 层不再做此类过滤；回放只看执行与风控。
 
 ---

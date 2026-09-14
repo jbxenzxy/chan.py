@@ -134,13 +134,13 @@ today_target = SimpleNamespace(entry_date=D1, volume=2, side=Side.LONG,
                                signal_key="X|buy|1")
 past_target = SimpleNamespace(entry_date="2026-09-01", volume=2,
                                side=Side.LONG, signal_key="X|buy|1")
-act_close_today = _Action(intent=OrderIntent.CLOSE, side=Side.SHORT,
+act_closetoday = _Action(intent=OrderIntent.CLOSE, side=Side.SHORT,
                            volume=2, target=today_target, is_exit=True,
                            transition=5)
 act_close_past = _Action(intent=OrderIntent.CLOSE, side=Side.SHORT,
                           volume=2, target=past_target, is_exit=True,
                           transition=5)
-why_today = eng._pre_trade_check(act_close_today, D1, None)
+why_today = eng._pre_trade_check(act_closetoday, D1, None)
 why_past = eng._pre_trade_check(act_close_past, D1, None)
 check("[1a] 今仓 CLOSE → 拒绝原因 'close_target_is_today'",
       why_today, "close_target_is_today")

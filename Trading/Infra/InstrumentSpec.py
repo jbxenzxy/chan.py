@@ -32,7 +32,7 @@ class InstrumentSpec(BaseModel):
     price_tick: float = 0.2                   # IF 最小变动价位
     multiplier: float = 300.0                 # 合约乘数（元/点）
     open_fee_rate: float = 0.000023           # 开仓 0.0023%
-    close_today_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
+    closetoday_fee_rate: float = 0.000345    # 平今 0.0345%（中金所，期指很贵）
     close_fee_rate: float = 0.000023          # 平昨 0.0023%
     slippage_ticks: float = 1.0               # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
@@ -40,7 +40,7 @@ class InstrumentSpec(BaseModel):
     #   "FAK"  部分成交后撤余量 —— **郑商所只支持 FAK**，二期上 CZCE 必须切这个
     #   二期按交易所切换时改这一个字段即可，不要把值写死在 Broker/ 里。
     order_advanced: str = "FOK"
-    close_today_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**
+    closetoday_first: bool = True            # 今仓成本开关（2026-09-10 更正注释：**不是**
                                               #   "平仓优先平今"）。实际语义 = 是否允许按持仓
                                               #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
                                               #   OrderIntent.CLOSE 只用于跨日单，正常流程
@@ -205,9 +205,9 @@ class InstrumentSpec(BaseModel):
 
     # ---------- 成本 ----------
     def cost_points(self, entry_price: float, exit_price: float,
-                    close_today: bool = True) -> float:
+                    closetoday: bool = True) -> float:
         """往返手续费，折算成点数。滑点不在此处计（见模块 docstring）。"""
-        rate = self.close_today_fee_rate if close_today else self.close_fee_rate
+        rate = self.closetoday_fee_rate if closetoday else self.close_fee_rate
         return entry_price * self.open_fee_rate + exit_price * rate
 
     def points_to_cash(self, points: float, volume: int = 1) -> float:
@@ -245,7 +245,7 @@ class InstrumentSpec(BaseModel):
         return self.order_advanced
 
     @property
-    def supports_close_today(self) -> bool:
+    def supports_closetoday(self) -> bool:
         """本品种所在交易所是否支持**平今指令**（CLOSETODAY offset）。
 
         Phase 10（D6 · 2026-09-14）：六家交易所里**只有上期所（SHFE）与

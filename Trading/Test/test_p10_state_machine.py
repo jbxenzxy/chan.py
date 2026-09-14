@@ -21,7 +21,7 @@ P10 引擎态 / 账户态 / 信号门 单元测试
        净敞口归零、PnL 不兑现）；跨日仓 → 转移 ⑤ CLOSE（记 Trade、离场兑现）。
 
 硬性要求（本测试锁死）
-    [1] 枚举：OrderIntent 3 值（OPEN/CLOSE/CLOSE_TODAY，Phase 10 加平今）/
+    [1] 枚举：OrderIntent 3 值（OPEN/CLOSE/CLOSETODAY，Phase 10 加平今）/
         AccountState 3 值 / EngineState 4 值；PositionOrigin
         与 ExitMode **不存在**。
     [2] `Position` 无 origin 字段；to_dict 不含；from_dict 宽容忽略多余键；
@@ -173,14 +173,14 @@ def seed_run(store, side="LONG", anchor=4550.0, volume=1):
 # ════════════════════════════════════════════════════════════════
 # [1] 枚举：收敛后的值集合 + 已删枚举的缺席
 # ════════════════════════════════════════════════════════════════
-print("\n[1] 枚举值集合（OrderIntent 收敛为 3 值：Phase 10 加 CLOSE_TODAY）")
-check("[1a] OrderIntent 只剩 open / close / close_today（LOCK/UNLOCK 已删）",
+print("\n[1] 枚举值集合（OrderIntent 收敛为 3 值：Phase 10 加 CLOSETODAY）")
+check("[1a] OrderIntent 只剩 open / close / closetoday（LOCK/UNLOCK 已删）",
       sorted(e.value for e in OrderIntent),
-      ["close", "close_today", "open"])
+      ["close", "closetoday", "open"])
 check("[1b] OrderIntent.OPEN 值", OrderIntent.OPEN.value, "open")
 check("[1c] OrderIntent.CLOSE 值", OrderIntent.CLOSE.value, "close")
-check("[1c2] OrderIntent.CLOSE_TODAY 值（Phase 10 · D6）",
-      OrderIntent.CLOSE_TODAY.value, "close_today")
+check("[1c2] OrderIntent.CLOSETODAY 值（Phase 10 · D6）",
+      OrderIntent.CLOSETODAY.value, "closetoday")
 check("[1d] AccountState 3 个值（三态唯一来源）",
       sorted(e.value for e in AccountState), ["flat", "locked", "running"])
 check("[1e] EngineState 4 个值（OPENING/EXITING 保留给二期异步 broker）",

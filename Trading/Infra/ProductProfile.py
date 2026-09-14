@@ -85,7 +85,7 @@ class ProductProfile:
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
 # 条目实参顺序（2026-09-13 用户定序）：策略标定值在前（min_r_points → breakeven_buffer_ticks
 # → r_multiple_tp），合约事实在后（price_tick → multiplier）；note 同序。显式给真值；note 标定状态。
-# ⚠️ 手续费（open/close/close_today_fee_rate）**不在此处** —— 它们随 broker 加收变化，
+# ⚠️ 手续费（open/close/closetoday_fee_rate）**不在此处** —— 它们随 broker 加收变化，
 #   属 InstrumentSpec 配置项，由用户在 instrument 配置里按实际账户填写（交易所基准见各 note）。
 #
 # ⚠️⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**（2026-09-14 评审 P2-3）
@@ -122,7 +122,7 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     #   IC/IM=5 是交易经验标定，商品侧尚无同等经验积累，先用默认值跑，待回测/实盘
     #   积累后再手工调（此前按 tick 数推 10~25 的标定已废弃：tick 粒度是交易所报价
     #   惯例，不是波动尺度）。
-    #   手续费（open/close/close_today_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
+    #   手续费（open/close/closetoday_fee_rate）交易所基准：AU 平今免收、开平昨固定约万1(¥10/手)；
     #   AG 开平昨/平今均万0.5；CU 开平昨万0.5、平今万1.0 —— 在 InstrumentSpec 配置里按实际 broker 填写。
     "AU": ProductProfile(
         product="AU", min_r_points=3.0, breakeven_buffer_ticks=2.0, r_multiple_tp=2.0,
