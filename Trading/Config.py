@@ -411,6 +411,28 @@ class RiskConfig(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
+# ⑥b 引擎时序配置（Step 2.2 归一：原 Engine.__init__ 硬编码常量，根数口径）
+#    与通道层（⑥a）/Broker 报单层（⑥）区分：本组是「执行层」的等待节奏。
+# ════════════════════════════════════════════════════════════════════
+class EngineConfig(BaseModel):
+    """引擎时序参数（Step 2.2：原 Engine.__init__ 硬编码常量归一）。
+
+    三项都是「根数」口径（单位 = K 线根数，与墙钟时间无关）：
+      语义上周期敏感（15s 的 5 根 = 75 秒；30m 的 5 根 = 2.5 小时），
+      当前按跨周期不变值放本模型（用户拍板 F1）。
+
+    单一事实源：默认值只在本模型维护，Engine/Reconcile 不再自带兜底数字。
+    """
+    model_config = ConfigDict(extra="forbid")
+
+    close_retry_bars: int = 5    # CLOSE 被拒后冷却多少根 bar 再试（防每根 bar
+                                 #   重复报单 —— broker 内部每笔已追 close_max_chase 轮）
+    close_max_streak: int = 20   # CLOSE 连续被拒这么多次 → 认定幻影仓，从簿中清除
+                                 #   并升级为严重告警（D11，弹窗叫人核对实盘）
+    close_stuck_bars: int = 5    # CLOSE 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
+
+
+# ════════════════════════════════════════════════════════════════════
 # ⑥a 通道时序配置（Step 2.3 归一：原 Broker/SimNow.py 散落的超时/等待/退避因子）
 #    仅 simnow/live 生效（dry_run 无 tqsdk 通道，不消费本组）。
 #    全部默认值 == 原硬编码值（行为等价）。
@@ -510,24 +532,6 @@ class BrokerConfig(BaseModel):
                 "涨跌停缺失时降级为不校验并告警），得到 {!r} —— 宽容档 prefer "
                 "已按需求方 2026-09-11 拍板删除".format(v))
         return v
-
-
-class EngineConfig(BaseModel):
-    """引擎时序参数（Step 2.2：原 Engine.__init__ 硬编码常量归一）。
-
-    三项都是「根数」口径（单位 = K 线根数，与墙钟时间无关）：
-      语义上周期敏感（15s 的 5 根 = 75 秒；30m 的 5 根 = 2.5 小时），
-      当前按跨周期不变值放本模型（用户拍板 F1）。
-
-    单一事实源：默认值只在本模型维护，Engine/Reconcile 不再自带兜底数字。
-    """
-    model_config = ConfigDict(extra="forbid")
-
-    close_retry_bars: int = 5    # CLOSE 被拒后冷却多少根 bar 再试（防每根 bar
-                                 #   重复报单 —— broker 内部每笔已追 close_max_chase 轮）
-    close_max_streak: int = 20   # CLOSE 连续被拒这么多次 → 认定幻影仓，从簿中清除
-                                 #   并升级为严重告警（D11，弹窗叫人核对实盘）
-    close_stuck_bars: int = 5    # CLOSE 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
 
 
 # ════════════════════════════════════════════════════════════════════
