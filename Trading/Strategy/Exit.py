@@ -34,7 +34,7 @@ from typing import Optional
 
 from ..Config import ExitPolicyParams
 from ..Infra.InstrumentSpec import Instrument
-from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
+from ..Infra.Records import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
 
 _log = logging.getLogger(__name__)

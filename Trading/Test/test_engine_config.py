@@ -7,7 +7,7 @@ test_engine_config.py — Step 2.2：引擎时序常量归一到 EngineConfig
   [2] TradingConfig.engine 默认工厂 + 显式覆盖 + extra="forbid" 拒未知字段
   [3] 引擎接线：Engine.__init__ 从 cfg.engine 读值，属性名不变
   [4] PositionBook 容量（D2：笔数上限已删除）+ 旧配置键丢弃（D17）
-  [5] PeriodProfile.SESSION_SECS 收口（原 main.py 硬编码 4.5h）
+  [5] Period.SESSION_SECS 收口（原 main.py 硬编码 4.5h）
   [6] bars_per_day(SESSION_SECS) 与四周期对账
 """
 from __future__ import annotations
@@ -71,9 +71,10 @@ from Trading.Broker.DryRun import DryRunBroker
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
 from Trading.Infra.InstrumentSpec import Instrument
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Store import Store
+from Trading.Infra.StateDB import Store
 from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 
 
@@ -126,13 +127,14 @@ check("老配置键被记录进 dropped_legacy_keys（D17）",
        and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys), True)
 
 # ═══ [5] SESSION_SECS 收口 ═══
-print("\n[5] PeriodProfile.SESSION_SECS（原 main.py 硬编码 4.5h）")
-from Trading.Infra.PeriodProfile import SESSION_SECS, bars_per_day
+print("\n[5] Period.SESSION_SECS（原 main.py 硬编码 4.5h）")
+from Trading.Infra.Period import bars_per_day
+from Trading.Infra.TradingClock import SESSION_SECS
 check("SESSION_SECS == 4.5h", SESSION_SECS, 4.5 * 3600)
 
 # ═══ [6] bars_per_day 四周期对账 ═══
 print("\n[6] bars_per_day(SESSION_SECS) 四周期")
-from Trading.Infra.PeriodProfile import FREQ_SEC
+from Trading.Infra.Period import FREQ_SEC
 for freq, secs in FREQ_SEC.items():
     expect = int(SESSION_SECS // secs)
     check("freq={} → {} 根/交易日".format(freq, expect),

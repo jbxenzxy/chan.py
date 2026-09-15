@@ -3,7 +3,7 @@
 周期表对账测试：Trading 自持 FREQ_SEC ↔ 主程序 Common.CEnum.FREQ_SEC_MAP
 ========================================================================
 Trading 为了保持"对 chan.py 零 import、独立部署"的架构约定，自己维护了一份
-`freq → 秒` 映射（Trading/Infra/PeriodProfile.py 的 FREQ_SEC）。
+`freq → 秒` 映射（Trading/Infra/Period.py 的 FREQ_SEC）。
 
 代价是两份表可能漂移：主程序在 Common/CEnum.py 新增周期或改了秒数，
 而 Trading 没跟上 → 网关会按错误的 bar 秒数去算时间止损与收盘强平，
@@ -43,9 +43,7 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Infra.PeriodProfile import (  # noqa: E402
-    FREQ_SEC, PERIOD_PROFILES, PeriodProfile, SUPPORTED_FREQS, bar_secs_for,
-)
+from Trading.Infra.Period import FREQ_SEC, PERIOD_PROFILES, Period, SUPPORTED_FREQS, bar_secs_for
 
 _PASS = 0
 _FAIL = 0
@@ -73,14 +71,14 @@ def main():
     check("SUPPORTED_FREQS 按粗细升序", list(SUPPORTED_FREQS),
           ["15s", "1m", "5m", "30m"])
 
-    print("\n[2] PeriodProfile 档案自洽")
+    print("\n[2] Period 档案自洽")
     for f in SUPPORTED_FREQS:
         p = PERIOD_PROFILES[f]
         check("{} 档案 bar_secs 与 FREQ_SEC 一致".format(f),
               p.bar_secs, FREQ_SEC[f])
     # 档案构造会校验与 FREQ_SEC 一致 → 人为写错必须抛异常
     try:
-        PeriodProfile(freq="5m", bar_secs=60)
+        Period(freq="5m", bar_secs=60)
         check("档案写错秒数应抛异常", "no-raise", "ValueError")
     except ValueError:
         check("档案写错秒数抛 ValueError", True, True)

@@ -32,8 +32,8 @@ import urllib.request
 from typing import Any, Dict, Iterator, Optional, Set
 
 from ..Config import SourceConfig
-from ..Infra.PeriodProfile import bar_secs_for
-from ..Infra.Types import Bar, Signal
+from ..Infra.Period import bar_secs_for
+from ..Infra.Records import Bar, Signal
 from .Base import Event, Source, register_source
 
 

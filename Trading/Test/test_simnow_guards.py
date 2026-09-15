@@ -42,7 +42,8 @@ if _REPO:
 
 import Trading.Broker.Base as _base_mod          # noqa: E402  (触发包初始化)
 from Trading.Config import BrokerConfig           # noqa: E402  Step 2.3: _make 注入 params
-from Trading.Infra.Types import Side              # noqa: E402
+from Trading.Infra.Records import Side  # noqa: E402
+
 
 # ---- 以 Trading.Broker 的包上下文 exec 加载同仓库的加固版 SimNow.py ----
 _PKG_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

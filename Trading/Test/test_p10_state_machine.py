@@ -88,16 +88,16 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-import Trading.Infra.Types as _T  # noqa: E402
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, Bar, EngineState, ExitPlan, OrderIntent, Position, Side, Signal,
-)
+import Trading.Infra.Records as _T  # noqa: E402
+from Trading.Infra.Records import AccountState, Bar, EngineState, ExitPlan, OrderIntent, Position, Side, Signal
 
 _PASS = 0
 _FAIL = 0
@@ -187,8 +187,8 @@ check("[1d] AccountState 3 个值（三态唯一来源）",
       sorted(e.value for e in AccountState), ["flat", "locked", "running"])
 check("[1e] EngineState 4 个值（OPENING/EXITING 保留给二期异步 broker）",
       sorted(e.value for e in EngineState), ["exiting", "idle", "in_trade", "opening"])
-check("[1f] PositionOrigin 已从 Types 删除", hasattr(_T, "PositionOrigin"), False)
-check("[1g] ExitMode 已从 Types 删除", hasattr(_T, "ExitMode"), False)
+check("[1f] PositionOrigin 已从 Records 删除", hasattr(_T, "PositionOrigin"), False)
+check("[1g] ExitMode 已从 Records 删除", hasattr(_T, "ExitMode"), False)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -303,7 +303,7 @@ with tmp_dir() as tmp:
 
     def boom(intent, side, volume, ref_price, signal_key="", note="",
              entry_date="", is_exit=False):
-        from Trading.Infra.Types import Order
+        from Trading.Infra.Records import Order
         return Order(order_id="x", signal_key=signal_key, symbol=_SYM,
                      side=side, action="open", volume=int(volume),
                      price=0.0, status="rejected",

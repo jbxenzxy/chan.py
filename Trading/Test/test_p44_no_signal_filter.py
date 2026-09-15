@@ -39,7 +39,8 @@ if not _TG_ROOT:
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
-from Trading.Infra.Types import Signal, Side, DecisionType  # noqa: E402
+from Trading.Infra.Records import Signal, Side, DecisionType  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Config import EntryConfig  # noqa: E402
 

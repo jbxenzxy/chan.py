@@ -33,13 +33,13 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig, resolved_exit_params
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
 from Trading.Infra.InstrumentSpec import Instrument
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Store import Store
-from Trading.Infra.Types import (CN_TZ, Bar, ExitPlan, NIGHT_SESSION_START_HOUR,
-                                 PLAUSIBLE_DATE_MIN, Position, Side, Signal,
-                                 trading_day_from_clock, trading_day_of_ms)
+from Trading.Infra.StateDB import Store
+from Trading.Infra.Records import Bar, ExitPlan, Position, Side, Signal
+from Trading.Infra.TradingClock import CN_TZ, NIGHT_SESSION_START_HOUR, PLAUSIBLE_DATE_MIN, trading_day_from_clock, trading_day_of_ms
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy
 
@@ -395,13 +395,13 @@ for sub in ("Trading/Engine", "Trading/Infra", "Trading/Source", "Trading/Broker
             if not fn.endswith(".py"):
                 continue
             fp = os.path.join(dirpath, fn)
-            if "Types.py" in fp or "PeriodProfile" in fp:
+            if "TradingClock.py" in fp or "Period.py" in fp:
                 continue
             txt = open(fp, encoding="utf-8").read()
             for ln in hand_rolled_night_offset(txt):
                 hand_rolled.append("{}:{}".format(
                     os.path.relpath(fp, ROOT).replace("\\", "/"), ln))
-check_true("[6c] 夜盘日期偏移只在 Infra/Types.py 一处实现（按夜盘语义判定）",
+check_true("[6c] 夜盘日期偏移只在 Infra/TradingClock.py 一处实现（按夜盘语义判定）",
            not hand_rolled, "另见: {}".format(hand_rolled[:5]))
 
 # 6c 判据自测：证明"收窄"没有变成"削弱护栏"。

@@ -89,13 +89,16 @@ from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import Bar, Position, Side  # noqa: E402
+from Trading.Infra.Records import Bar, Position, Side  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0
@@ -343,7 +346,8 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
-    from Trading.Infra.Types import ExitPlan, now_cn
+    from Trading.Infra.Records import ExitPlan
+    from Trading.Infra.TradingClock import now_cn
     if side is Side.LONG:
         tp = entry_price + 5.0
         stop = entry_price - 10.0

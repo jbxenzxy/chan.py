@@ -95,15 +95,15 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, Bar, EngineState, ExitPlan, Position, Side,
-)
+from Trading.Infra.Records import AccountState, Bar, EngineState, ExitPlan, Position, Side
 
 
 _PASS = 0
@@ -188,7 +188,8 @@ class RejectDryBroker(DryRunBroker):
 
     def submit(self, intent, side, volume, ref_price, signal_key="", note="",
                entry_date="", is_exit=False):
-        from Trading.Infra.Types import Order, now_cn
+        from Trading.Infra.Records import Order
+        from Trading.Infra.TradingClock import now_cn
         o = Order(
             order_id="{}-REJ".format(self.name), signal_key=signal_key,
             symbol=self.spec.trade_symbol, side=side,
@@ -249,7 +250,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
                   tp_offset=5.0, sl_offset=10.0, entry_date=""):
     """构造手动 Position（不走 _open_positions），用于直接构造 portfolio 状态。"""
-    from Trading.Infra.Types import now_cn
+    from Trading.Infra.TradingClock import now_cn
     if side is Side.LONG:
         tp = entry_price + tp_offset
         stop = entry_price - sl_offset
@@ -270,7 +271,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
 
 def make_signal(key, side, price=4550.0, date="2026-09-01 09:35", bsp_type="buy"):
     """构造手动 Signal（不走 chan.py 上游）。"""
-    from Trading.Infra.Types import Signal
+    from Trading.Infra.Records import Signal
     return Signal(key=key, symbol="CFFEX.IF2609", freq="5m",
                   timestamp=5000, date=date, bsp_type=bsp_type,
                   is_buy=(side is Side.LONG), price=price,

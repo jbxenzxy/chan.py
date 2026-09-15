@@ -1,108 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-核心数据类型
-============
-设计原则：
+核心业务记录（Trading/Infra/Records.py）
+========================================
+本模块是 Trading 侧的「词汇表」：5 个枚举 + 7 个数据记录
+（2026-09-15 P-C 由 Types.py 拆出 · Infra划分治理 §5.1）。
+
+设计原则（承自原 Types.py）：
   ① 纯数据 + 无业务逻辑，方便序列化（sqlite / jsonl / 回放）
   ② 幂等键 `Signal.make_key` 必须与 M0 录制器 `bsp_key()` 完全一致，
      否则回放源与实时源会产生不同的去重结果（这是最容易埋雷的地方）
+
+时间/交易日语义工具（now_cn / trading_day_of_ms 等）已迁 Infra/TradingClock.py，
+本模块只 import 使用，不再是它们的定义处。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timezone, timedelta
 from enum import Enum
 from typing import Any, Dict, Optional
 
-CN_TZ = timezone(timedelta(hours=8))
-
-# ── 建仓日 / 交易日（SSOT，2026-09-10 立）─────────────────────────────
-# 规则 ⑸「今仓 → 反向开仓锁仓 / 昨仓 → 平仓」以及平今•平昨费率口径，
-# 全部只认 trading_day_of_ms() 一个函数。权威输入是**毫秒时间戳**
-# （bar.timestamp / Signal.timestamp），不是格式化字符串 —— 字符串是展示产物，
-# 一旦为空就会被下游解释成一个合法业务语义（"很久以前" = 昨仓），错误无法暴露。
-#
-# 夜盘起点（北京时间整点）：>= 该时刻的成交归属【次一交易日】。
-# 期货夜盘最早 21:00 开盘，取 20:00 留边界余量（20:00-21:00 是休市静默段）。
-NIGHT_SESSION_START_HOUR = 20
-# 派生日期可信下限：低于它的派生结果说明该"时间戳"不是真实毫秒
-# （如测试夹具用 4000 = 序号），必须拒绝采用，避免算成 1970-01-01。
-PLAUSIBLE_DATE_MIN = "2020-01-01"
-
-
-def now_cn() -> str:
-    """北京时间 ISO 字符串（秒精度）。"""
-    return datetime.now(CN_TZ).isoformat(timespec="seconds")
-
-
-def now_ms() -> int:
-    """当前毫秒时间戳（墙钟）。"""
-    return int(datetime.now(CN_TZ).timestamp() * 1000)
-
-
-def _ms_to_dt(ts_ms: int) -> Optional[datetime]:
-    """毫秒时间戳 → 北京时间 datetime。无效（None/0/负/越界）→ None。"""
-    try:
-        ts = int(ts_ms)
-    except (TypeError, ValueError):
-        return None
-    if ts <= 0:
-        return None
-    try:
-        return datetime.fromtimestamp(ts / 1000.0, CN_TZ)
-    except (OverflowError, OSError, ValueError):
-        return None
-
-
-def date_of_ms(ts_ms: int) -> str:
-    """毫秒时间戳 → 自然日 'YYYY-MM-DD'（北京时间）。无效 → ''。"""
-    dt = _ms_to_dt(ts_ms)
-    return dt.strftime("%Y-%m-%d") if dt is not None else ""
-
-
-def trading_day_of_ms(ts_ms: int,
-                      night_start_hour: int = NIGHT_SESSION_START_HOUR) -> str:
-    """毫秒时间戳 → 所属【交易日】'YYYY-MM-DD'（北京时间）。无效 → ''。
-
-    为什么不能直接用自然日
-      夜盘的成交属于**次一交易日**。用自然日会漏判：夜盘 21:00 建的仓，
-      自然日是 9/9，而 9/10 日盘平它实为【平今】，自然日口径却判成"昨仓"
-      → 规则 ⑸ 发 CLOSE 平昨 → 中金所拒单（平今/平昨报错）→ 连锁 phantom 清仓。
-      日盘品种（如 IF）两者恒等，所以此坑只在夜盘品种（au/ag/螺纹/原油）暴露。
-
-    规则
-      北京时间 hour >= night_start_hour（默认 20）→ 归属次一自然日；否则归属当日。
-      周末/节假日不做精细处理：**所有调用方共用本函数**，只要口径一致，
-      "是否同一交易日"的判定就正确 —— 例如周五夜盘 → 周六，与下周一的日盘
-      不等，判为跨交易日，符合事实（周五夜盘的仓到下周一确实是昨仓）。
-      真正需要"精确交易日历"的场景（如对账按日切片）不在本函数职责内。
-    """
-    dt = _ms_to_dt(ts_ms)
-    if dt is None:
-        return ""
-    if dt.hour >= night_start_hour:
-        dt = dt + timedelta(days=1)
-    return dt.strftime("%Y-%m-%d")
-
-
-def trading_day_from_clock(clock: str) -> str:
-    """墙钟字符串（`entry_at` / `now_cn()` 产物）→ 交易日 'YYYY-MM-DD'。无效 → ''。
-
-    仅作**第三兜底**：既无 entry_date 又无有效 entry_bar_ts 时才用。
-    刻意不做夜盘偏移 —— 墙钟在回放/补录场景下未必等于 K 线的交易日，
-    把它当权威会引入比"缺失"更隐蔽的错误。这里只负责"能读出个像样的日期"。
-    """
-    if not clock or len(clock) < 10:
-        return ""
-    head = clock[:10]
-    if head[4] != "-" or head[7] != "-":
-        return ""
-    if not (head[:4].isdigit() and head[5:7].isdigit() and head[8:10].isdigit()):
-        return ""
-    if head < PLAUSIBLE_DATE_MIN:
-        return ""
-    return head
-
+from .TradingClock import (
+    PLAUSIBLE_DATE_MIN,
+    trading_day_from_clock,
+    trading_day_of_ms,
+)
 
 class Side(Enum):
     """持仓/信号方向。value 即符号，可直接参与盈亏乘算。"""
@@ -164,7 +85,7 @@ class OrderIntent(str, Enum):
 
       Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
       刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起
-      "走不走平今"由品种档案费率**单源派生**（ProductProfile.prefer_closetoday，
+      "走不走平今"由品种档案费率**单源派生**（Product.prefer_closetoday，
       3× 口径），不再有手写开关。
     """
     OPEN = "open"     # 开仓 → offset=OPEN（④ 反向开仓锁仓也走它）

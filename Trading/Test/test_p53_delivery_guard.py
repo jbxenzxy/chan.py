@@ -68,7 +68,8 @@ from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import (  # noqa: E402
     Instrument, _weekdays_between)
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 
 _IF = PRODUCT_PROFILES["IF"]
 
@@ -78,10 +79,9 @@ def _inst(ltd=""):
     ins = Instrument(None, _IF)
     ins.last_trade_date = ltd
     return ins
-from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Infra.Types import (  # noqa: E402
-    Bar, ExitPlan, OrderIntent, Position, Side, Signal,
-)
+from Trading.Infra.StateDB import Store  # noqa: E402
+
+from Trading.Infra.Records import Bar, ExitPlan, OrderIntent, Position, Side, Signal
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 

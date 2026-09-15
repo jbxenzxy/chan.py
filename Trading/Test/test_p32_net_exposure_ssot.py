@@ -86,12 +86,12 @@ from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, EngineState, ExitPlan, Position, Side,
-)
+from Trading.Infra.StateDB import Store  # noqa: E402
+
+from Trading.Infra.Records import AccountState, EngineState, ExitPlan, Position, Side
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
@@ -333,13 +333,13 @@ for sub in ("Trading/Engine", "Trading/Infra", "Trading/Strategy",
                 continue
             fp = os.path.join(dp, fn)
             rel = os.path.relpath(fp, _ROOT).replace("\\", "/")
-            if rel.endswith("Trading/Infra/Types.py") or rel.endswith("Engine/Engine.py"):
+            if rel.endswith("Trading/Infra/Records.py") or rel.endswith("Engine/Engine.py"):
                 continue          # 这两个文件里有"已删除"说明注释与 legacy 键清单
             txt = io.open(fp, encoding="utf-8", errors="replace").read()
             for w in ("PositionOrigin", "ExitMode", "SOFT_EXIT_LOCK"):
                 if w in txt:
                     _prod_hits.append("%s[%s]" % (rel, w))
-check("[3c] 生产代码（除 Types/Engine 外）无 PositionOrigin/ExitMode/SOFT_EXIT_LOCK",
+check("[3c] 生产代码（除 Records/Engine 外）无 PositionOrigin/ExitMode/SOFT_EXIT_LOCK",
       _prod_hits, [])
 
 # Engine 里这三者只允许出现在"已删除说明"注释与 legacy 键清单中

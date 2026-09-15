@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..Infra.Types import Position, Side
+from ..Infra.Records import Position, Side
 
 
 class PositionBookError(Exception):

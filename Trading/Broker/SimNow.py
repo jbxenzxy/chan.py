@@ -81,7 +81,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
 from ..Infra.InstrumentSpec import Instrument, derive_exchange
-from ..Infra.Types import Order, OrderIntent, Side, now_cn
+from ..Infra.Records import Order, OrderIntent, Side
+from ..Infra.TradingClock import now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
                    Broker, classify_ctp_reject, register_broker)
 
@@ -793,7 +794,7 @@ class SimNowBroker(Broker):
                     "请改回 instrument_fetch_policy='strict'",
                     code="instrument_band_degraded", symbol=self._trade_symbol)
             self._instrument_frozen = True
-            # P-B（2026-09-15）：exchange 真值源 = 品种档案（ProductProfile.exchange，
+            # P-B（2026-09-15）：exchange 真值源 = 品种档案（Product.exchange，
             #   §5.3 裁决）。原"从真实合约 symbol 前缀推导并写入 spec.exchange"
             #   的就地写入随双类合并删除 —— 改为**对账告警**：行情推导与档案
             #   不一致时 warn（两个值都打出来），以档案为准、不阻断。
@@ -860,7 +861,7 @@ class SimNowBroker(Broker):
             pass
 
     # 2026-09-15 P-A 删除：_apply_fee_rates / _sample_fee_from_fill（共 135 行）。
-    #   费率真值源 = 品种档案 ProductProfile 的 Fee 两档（静态、启动即确定），
+    #   费率真值源 = 品种档案 Product 的 Fee 两档（静态、启动即确定），
     #   不再经 TqSim.get_commission / 成交回报 commission 反推两条运行时通道。
     def _instrument_warn(self, msg: str, code: str = "instrument_spec",
                          **extra) -> None:

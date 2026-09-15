@@ -756,7 +756,7 @@ async def api_trader_product_check(symbol: str = Query(
     **不发起启动请求**（避免"点一下就报错"）。查询本身无副作用，故用 GET。
 
     闸门实现与 `/auto-order/on` 的启动前置拦截同源
-    （AppTrader.check_symbol_allowed → ProductProfile.assert_product_allowed），
+    （AppTrader.check_symbol_allowed → Product.assert_product_allowed），
     保证"前端说能开"与"引擎允许开"一致。接口不可用时前端按放行处理，
     由引擎启动闸门兜底。
     """

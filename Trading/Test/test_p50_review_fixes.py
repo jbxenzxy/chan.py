@@ -7,7 +7,7 @@ P50 · 2026-09-14 评审问题修复 契约测试
 
   [1] P1-1 parse_product_key：真实月份合约写法（CFFEX.IF2609）能查到档案
   [2] P1-1 + P2-1 assert_product_allowed：白名单单一事实源 + 引擎不再误杀
-  [3] P2-2 ProductProfile kw_only：位置构造硬失败（原会静默错位到 price_tick）
+  [3] P2-2 Product kw_only：位置构造硬失败（原会静默错位到 price_tick）
   [4] P1-2 pulse 重试节流：不再每根 bar 阻塞 30s
   [5] P1-3 quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
   [6] P2-3 离线模式规格漂移对账：dry_run/replay 用错规格不再静默
@@ -36,13 +36,11 @@ from Trading import main as _main                                      # noqa: E
 from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E402
 from Trading.Infra.InstrumentSpec import (                             # noqa: E402
     Instrument, InstrumentConfig)
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.ProductProfile import (                             # noqa: E402
-    PRODUCT_PROFILES, Fee, ProductProfile, assert_product_allowed,
-    describe_unknown_product, parse_product, parse_product_key,
-)
+from Trading.Infra.Product import PRODUCT_PROFILES, Fee, Product, assert_product_allowed, describe_unknown_product, parse_product, parse_product_key
 
 _PASS = 0
 _FAIL = 0
@@ -85,7 +83,7 @@ def build_engine(tmpdir, signal_symbol, broker=None):
     from Trading.Broker.DryRun import DryRunBroker
     from Trading.Engine.Engine import TradingEngine
     from Trading.Infra.EventLog import EventLog
-    from Trading.Infra.Store import Store
+    from Trading.Infra.StateDB import Store
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 
@@ -169,7 +167,7 @@ def t2_assert_product_allowed():
             check("{} 文案含'拒绝启动交易引擎'（p20 [9w3] 契约）".format(sym),
                   "拒绝启动交易引擎" in msg, True)
 
-    # 引擎侧抛出的文案必须与 ProductProfile 的单一文案完全一致
+    # 引擎侧抛出的文案必须与 Product 的单一文案完全一致
     # （原 App/Engine 两份实现，措辞一个是"已拒绝"、一个是"禁止"）
     with tmp_dir() as td:
         eng_msg = None
@@ -182,20 +180,20 @@ def t2_assert_product_allowed():
 
 
 # ══════════════════════════════════════════════════════════════════
-# [3] P2-2：ProductProfile kw_only
+# [3] P2-2：Product kw_only
 # ══════════════════════════════════════════════════════════════════
 def t3_kw_only():
-    print("\n[3] P2-2 ProductProfile(kw_only=True)：位置构造硬失败")
+    print("\n[3] P2-2 Product(kw_only=True)：位置构造硬失败")
     # 字段顺序变动曾导致位置构造把 note 静默落进 price_tick（dataclass 不做类型
     # 校验）。加 kw_only 后位置构造必须 TypeError —— 与具体字段顺序解耦。
     err = None
     try:
-        ProductProfile("IF", 2.0, 300.0, 0.2, "note")
+        Product("IF", 2.0, 300.0, 0.2, "note")
     except TypeError as e:
         err = str(e)
-    check_true("位置构造 ProductProfile(...) 抛 TypeError", err)
+    check_true("位置构造 Product(...) 抛 TypeError", err)
     # 关键字构造不受影响（P-A 起 open_fee 为必填字段，须一并给出）
-    p = ProductProfile(product="IF", r_multiple_tp=2.0,
+    p = Product(product="IF", r_multiple_tp=2.0,
                        open_fee=Fee("rate", 0.23), multiplier=300.0,
                        price_tick=0.2, note="x")
     check("关键字构造 OK（price_tick 落对位置）", p.price_tick, 0.2)
@@ -426,7 +424,7 @@ def t8_dead_field_removed():
     check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
 
     # ── P-B（2026-09-15）完成判据：归位键在配置上**显式报错** ──
-    #   乱源②（合约模型多重身份）的最终态：tick/乘数/exchange 归 ProductProfile，
+    #   乱源②（合约模型多重身份）的最终态：tick/乘数/exchange 归 Product，
     #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率 P-A 已归位。
     #   _check_removed_keys 对旧键显式 ValueError（§7.2：不允许静默吞掉）。
     print("\n[8b] P-B 归位完成判据：tick/乘数/exchange/last_trade_date 已迁出配置")
@@ -443,14 +441,14 @@ def t8_dead_field_removed():
             except Exception:
                 _r2 = True
             check("旧键 {} 残留 → 构造期显式报错（非静默）".format(gone), _r2, True)
-    # 反向：这些字段必须真的活在 Instrument / ProductProfile（防止"删了但没搬走"）
+    # 反向：这些字段必须真的活在 Instrument / Product（防止"删了但没搬走"）
     st = Instrument(None, _IF)
     for f in ("verified", "source", "upper_limit", "lower_limit",
               "price_tick", "multiplier", "trade_symbol", "last_trade_date"):
         check_true("Instrument 拥有运行时字段 {}".format(f),
                    f in vars(st))
     for f in ("price_tick", "multiplier", "exchange"):
-        check_true("ProductProfile 拥有档案字段 {}".format(f),
+        check_true("Product 拥有档案字段 {}".format(f),
                    hasattr(PRODUCT_PROFILES["IF"], f))
     # 配置只读转发项仍在 Instrument 上
     for f in ("signal_symbol", "slippage_ticks", "order_advanced",

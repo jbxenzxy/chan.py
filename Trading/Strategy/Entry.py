@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Optional
 
 from ..Infra.InstrumentSpec import Instrument
-from ..Infra.Types import Decision, DecisionType, Position, Signal
+from ..Infra.Records import Decision, DecisionType, Position, Signal
 from ..Config import EntryConfig
 
 

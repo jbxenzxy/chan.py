@@ -87,22 +87,22 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 | 轴 | 载体 | 怎么改 | 装什么 |
 |---|---|---|---|
 | **消费层** | `Trading/Config.py`（① 信号源 / ③ 策略 / ④ 风控 / ⑥ Broker 分区） | `.env` / CLI 可覆盖 | 与品种、周期无关的**部署参数** |
-| **变异维度** | `Infra/PeriodProfile.py`（随周期）<br>`Infra/ProductProfile.py`（随品种） | **改文件 = 改代码资产**，走 git 评审 + 对账测试 | 跨层横切的**领域注册表** |
+| **变异维度** | `Infra/Period.py`（随周期）<br>`Infra/Product.py`（随品种） | **改文件 = 改代码资产**，走 git 评审 + 对账测试 | 跨层横切的**领域注册表** |
 
-两轴正交，所以三张档案表**不按消费层挪进 Config.py**：以 `ProductProfile` 为例，一行供 ③ 策略
+两轴正交，所以三张档案表**不按消费层挪进 Config.py**：以 `Product` 为例，一行供 ③ 策略
 （`r_multiple_tp`）、一行供 ⑤ 执行（`prefer_lock_over_closetoday`）、一行供 ⑥ Broker
 （`price_tick` / `multiplier`），整表没有唯一归属层。`TradingConfig.period_profile` /
 `product_profile` property 是「入口聚合档案」的唯一形态（只读视图）。
 
 **推论（调参前必读）**：品种相关项——`price_tick` / `multiplier` / `r_multiple_tp`——的真值
 **只在档案里**。在 `Config.py` 或 `.env` 里写同名字段**不再生效**（会被档案覆盖）；改品种参数
-= 改 `Infra/ProductProfile.py`。品种无关的出场参数（ATR / 跟踪 / `breakeven_buffer_r` 等）仍在
-`Config.py` 的 `ExitConfig` 调；L3 触发倍数 = 品种级 `r_multiple_tp`（在 Infra/ProductProfile.py，IC/IM=3R、其余=2R，不再有全局 trailing_trigger_r）。
+= 改 `Infra/Product.py`。品种无关的出场参数（ATR / 跟踪 / `breakeven_buffer_r` 等）仍在
+`Config.py` 的 `ExitConfig` 调；L3 触发倍数 = 品种级 `r_multiple_tp`（在 Infra/Product.py，IC/IM=3R、其余=2R，不再有全局 trailing_trigger_r）。
 
 > 权威声明见 `Trading/Config.py` 模块 docstring 顶部的「双轴声明」段。
 
 **出场参数（止盈止损）里「品种无关项」在 Trading/Config.py 的 `ExitConfig` / `ExitPolicyParams` 调**，
-「品种相关三项」（见上表推论）的真值在 `Infra/ProductProfile.py` 档案，由
+「品种相关三项」（见上表推论）的真值在 `Infra/Product.py` 档案，由
 `Config.resolved_exit_params()` 唯一合并后喂给 `LayeredExitPolicy` —— 引擎 / 信号源 / broker 一行不动。入场策略固定 `EntryPolicy`、出场策略固定 `LayeredExitPolicy`（L1-L3 分层，2026-09-08 已删 L4 时间/收盘兜底），不再有「注册表 / @register / 换类名」这类策略选择抽象。
 
 三个刻意保留的保守设定（`Strategy/Exit.py` 的 LayeredExitPolicy）：
@@ -197,7 +197,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 `source.freq` 目前支持 `30m` / `5m` / `1m` / `15s` 四种，**改这一个字段即可切换**。
 不支持的周期会在启动时直接报错退出（fail-fast），不会静默降级。
 
-周期相关的全部时间语义集中在 `Infra/PeriodProfile.py`（唯一事实源）：
+周期相关的全部时间语义集中在 `Infra/Period.py`（唯一事实源）：
 
 | 参数 | 含义 | 周期相关性 |
 |---|---|---|
@@ -206,7 +206,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 信号新鲜度过滤 `source.signal_k_tol_bars`（每信号距最新 K 的容差根数，默认 1；
 0=必须最右一根 K）是**按 K 线相对根数**计，**不随周期改变**（非周期敏感项）。
 
-新增周期的正确姿势：改 `Infra/PeriodProfile.py` 的 `FREQ_SEC` → 跑
+新增周期的正确姿势：改 `Infra/Period.py` 的 `FREQ_SEC` → 跑
 `Test/test_period_consistency.py`（会自动与主程序 `Common.CEnum.FREQ_SEC_MAP` 对账）
 → 跑 `Test/test_period_matrix.py`（四周期 × 毫秒/秒源回归矩阵）。
 

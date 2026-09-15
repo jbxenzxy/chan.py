@@ -11,15 +11,15 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ④ 风控层       → RiskConfig（开仓手数/持仓上限/补开开关）
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
-    · 周期只作时间语义（freq → bar_secs），收口在 Infra/PeriodProfile.py 的
+    · 周期只作时间语义（freq → bar_secs），收口在 Infra/Period.py 的
       FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（r_multiple_tp，Fix A 单源化 + D1
-      拍板）收口在 Infra/ProductProfile.py，品种无关项（breakeven_* / ATR / trailing）
+      拍板）收口在 Infra/Product.py，品种无关项（breakeven_* / ATR / trailing）
       在本文件 ExitConfig 调；
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
     · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14；
       P-B · 2026-09-15 起配置类 frozen=True）：
       品种播种机制已消亡（P-B 删 for_product/_seed_instrument）—— tick/乘数/
-      exchange/费率真值源 = 品种档案 ProductProfile，运行时对象 `Instrument`
+      exchange/费率真值源 = 品种档案 Product，运行时对象 `Instrument`
       构造时直接取档案初值（见 Infra/InstrumentSpec.py）；
       合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
       trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**。
@@ -57,7 +57,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     Trading 侧的配置存在**两把正交的分区尺子**，各管各的数据，不互相搬家：
       · 本文件按**消费层**分区（①③④⑥ 各层 *Config）—— 是**部署配置入口**：
         环境变量 / 命令行 / .env 可覆盖的运维参数。
-      · Infra/PeriodProfile.py / Infra/ProductProfile.py 按**变异维度**分区
+      · Infra/Period.py / Infra/Product.py 按**变异维度**分区
         （随周期变 / 随品种变）—— 是**领域注册表**：凭交易经验标定的代码资产，
         进 git 评审 + 对账测试守护，不走 env 覆盖。
     两轴正交：品种/周期档案**不按消费层归入**本文件 —— 一张档案表里一行供
@@ -109,10 +109,8 @@ from pydantic import (BaseModel, ConfigDict, Field, field_validator,
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .Infra.InstrumentSpec import InstrumentConfig
-from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile
-from .Infra.ProductProfile import (
-    PRODUCT_PROFILES, ProductProfile, describe_unknown_product, parse_product_key,
-)
+from .Infra.Period import PERIOD_PROFILES, Period
+from .Infra.Product import PRODUCT_PROFILES, Product, describe_unknown_product, parse_product_key
 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
@@ -188,7 +186,7 @@ class TradingConfig(BaseSettings):
         return self.model_dump()
 
     @property
-    def period_profile(self) -> Optional["PeriodProfile"]:
+    def period_profile(self) -> Optional["Period"]:
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
@@ -205,7 +203,7 @@ class TradingConfig(BaseSettings):
     #   · 读取（随时、只读）：本 property —— 引擎白名单闸门 / resolved_exit_params /
     #     _check_spec_drift 都只用它查档案，不再有任何写回。
     @property
-    def product_profile(self) -> Optional["ProductProfile"]:
+    def product_profile(self) -> Optional["Product"]:
         """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。
 
         2026-09-14 评审 P1-1：与播种路径同源用 parse_product_key（剥合约月份），
@@ -220,7 +218,7 @@ class TradingConfig(BaseSettings):
 # ① 信号源层（Signal Source）配置
 #    行情来源 / 周期 / 信号新鲜度过滤。全部字段与「周期选择」相关，
 #    但语义上属于「信号源」这一层；其中 freq 是周期选择项（bar_secs 见
-#    Infra/PeriodProfile.py）；signal_k_tol_bars 是「按 K 线相对根数」
+#    Infra/Period.py）；signal_k_tol_bars 是「按 K 线相对根数」
 #    的容差、**不随周期改变**，属非周期敏感项。
 # ════════════════════════════════════════════════════════════════════
 class SourceConfig(BaseModel):
@@ -285,7 +283,7 @@ class ExitConfig(BaseModel):
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
 
     品种相关字段单源化（Fix A · 2026-09-14 · D1 拍板）：r_multiple_tp **不在本模型** —— 它随品种变，
-    唯一默认值来源是 Infra/ProductProfile.py 的品种档案；.env / 环境变量
+    唯一默认值来源是 Infra/Product.py 的品种档案；.env / 环境变量
     的覆盖能力已放弃（extra=forbid 下带旧键构造直接报错，这是刻意的：
     调参 = 改档案 = git 评审 + 对账测试守护）。组装 LayeredExitPolicy 的
     完整参数一律经 resolved_exit_params(cfg) —— 唯一合并点。
@@ -351,7 +349,7 @@ class ExitPolicyParams(ExitConfig):
     """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
 
     继承 ExitConfig 的品种无关项（ATR / trailing / breakeven_*），另持品种相关参数 r_multiple_tp（它同时是 L3 启动阈值，品种级）。
-    r_multiple_tp 的**权威默认值在 ProductProfile 档案**（生产路径经 resolved_exit_params()
+    r_multiple_tp 的**权威默认值在 Product 档案**（生产路径经 resolved_exit_params()
     合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
     如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。
     """

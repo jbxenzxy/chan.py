@@ -2,16 +2,16 @@
 """
 Step 2.1 周期档案测试：周期时间语义 + 品种档案
 ================================================
-周期只承载时间语义（freq / bar_secs），收口在 Infra/PeriodProfile.py 的
-PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/ProductProfile.py。
+周期只承载时间语义（freq / bar_secs），收口在 Infra/Period.py 的
+PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Product.py。
 
 本测试验证：
-    ① PeriodProfile 只有 freq / bar_secs（无 note / 无周期敏感副字段）
+    ① Period 只有 freq / bar_secs（无 note / 无周期敏感副字段）
     ② TradingConfig 默认 flat 字段（信号新鲜度容差非周期敏感，不随周期变）
     ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
-    ⑥ ProductProfile 品种档案：P-B（2026-09-15）起 Instrument 构造时直接取
+    ⑥ Product 品种档案：P-B（2026-09-15）起 Instrument 构造时直接取
        档案（播种桥 for_product 已删除，Phase 3 的注入副作用更早删除）+
        exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并（Fix A · 2026-09-14）
     ⑦ 播种语义（Phase 3 · Fix B 起，**取代**原"注入双档"锚点）：
@@ -49,11 +49,10 @@ _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
-from Trading.Infra.PeriodProfile import (  # noqa: E402
-    FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
-)
+from Trading.Infra.Period import FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS
 from Trading.Infra.InstrumentSpec import InstrumentConfig  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0
@@ -81,7 +80,7 @@ def seeded(signal_symbol: str) -> TradingConfig:
 
 
 def main():
-    print("\n[1] PeriodProfile 周期档案（仅 freq / bar_secs 时间语义）")
+    print("\n[1] Period 周期档案（仅 freq / bar_secs 时间语义）")
     check("PERIOD_PROFILES 仍是 4 周期", len(PERIOD_PROFILES), 4)
     for f in SUPPORTED_FREQS:
         p = PERIOD_PROFILES[f]
@@ -120,7 +119,7 @@ def main():
     check("改 freq=30m 后 period_profile=30m", c2.period_profile.freq, "30m")
     check("30m profile.bar_secs=1800", c2.period_profile.bar_secs, 1800)
 
-    print("\n[6] ProductProfile 品种档案：显式播种（Phase 3 · Fix B）")
+    print("\n[6] Product 品种档案：显式播种（Phase 3 · Fix B）")
     check("PRODUCT_PROFILES 已是 8 品种（期指 4 + 上期所金属 3 + 郑商所 PTA）", len(PRODUCT_PROFILES), 8)
     check("parse KQ.m@CFFEX.IF → IF", parse_product("KQ.m@CFFEX.IF"), "IF")
     check("parse KQ.m@CFFEX.IC → IC", parse_product("KQ.m@CFFEX.IC"), "IC")
@@ -165,7 +164,7 @@ def main():
     #     Phase 2：user-explicit-wins；Phase 3：档案唯一真值（播种覆盖显式值）。
     #     P-B（2026-09-15）：播种桥（_seed_instrument）删除 —— 配置里根本不再
     #       有 tick/乘数字段，旧键显式报错（_check_removed_keys，§7.2 不静默吞）。
-    #       真值在 ProductProfile（调参 = 改档案 = git 评审 + 对账测试守护），
+    #       真值在 Product（调参 = 改档案 = git 评审 + 对账测试守护），
     #       运行时由 Instrument 构造时直接取档案；实盘再被行情原子覆盖。
     _err999 = ""
     try:

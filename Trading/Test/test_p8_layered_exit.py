@@ -36,10 +36,12 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import Bar, ExitPlan, Position, Signal, Side  # noqa: E402
+from Trading.Infra.Records import Bar, ExitPlan, Position, Signal, Side  # noqa: E402
+
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
 _PASS = 0

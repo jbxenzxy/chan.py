@@ -77,7 +77,8 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 from dataclasses import replace as _dc_replace  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -86,13 +87,10 @@ _IF = PRODUCT_PROFILES["IF"]
 def _prod(ex):
     """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
     return _dc_replace(_IF, exchange=ex)
-from Trading.Infra.ProductProfile import (  # noqa: E402
-    PRODUCT_PROFILES,
-)
-from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, Bar, ExitPlan, OrderIntent, Position, Side, Signal,
-)
+from Trading.Infra.Product import PRODUCT_PROFILES
+from Trading.Infra.StateDB import Store  # noqa: E402
+
+from Trading.Infra.Records import AccountState, Bar, ExitPlan, OrderIntent, Position, Side, Signal
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
@@ -185,7 +183,7 @@ print("\n[2] 品种档案平今派生：AU/AG/CU 判平今；IF/IH/IC/IM/TA 被�
 # ══════════════════════════════════════════════════════════════
 # P-A（2026-09-15）：手写布尔 prefer_lock_over_closetoday 已删除，改为档案费率
 # 单源派生（prefer_closetoday，3× 口径）。ref_price 用 1.0 占位 —— 8 品种
-# 两档计价方式恒相同，比较式里价格自动约掉（见 ProductProfile.prefer_closetoday）。
+# 两档计价方式恒相同，比较式里价格自动约掉（见 Product.prefer_closetoday）。
 check("[2a] AU 派生 = True（平今免收 → 平今）",
       PRODUCT_PROFILES["AU"].prefer_closetoday(1.0), True)
 check("[2b] AG 派生 = True（平今=开仓 → 平今不贵）",

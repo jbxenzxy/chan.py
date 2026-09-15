@@ -150,7 +150,7 @@ def load_tq_account(config_dir):
 #   2026-09-14 用户拍板（详见 Docs/自动下单重构-分析与实施计划v2.0.md 附录 D.8）：
 #     · 看行情侧**收窄到 16 个品种**（本表）—— 只保留用户关注的这 16 个，
 #       其余品种不再可搜/可看（此前是 83 条「人工累加」的全表，已按用户点名裁掉）；
-#     · 下单侧白名单**保持 8 个**（Trading/Infra/ProductProfile.PRODUCT_PROFILES：
+#     · 下单侧白名单**保持 8 个**（Trading/Infra/Product.PRODUCT_PROFILES：
 #       IF/IH/IC/IM + AU/AG/CU/TA）—— 本表**不是**下单白名单，别拿它当闸门用。
 #
 #   两表语义分工（混用会出 bug）：

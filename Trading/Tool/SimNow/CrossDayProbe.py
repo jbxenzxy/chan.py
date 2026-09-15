@@ -75,7 +75,8 @@ from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _position_split, _verify_yesterday_delta)
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig as InstrumentSpec_cls  # noqa: E402
-from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
+from Trading.Infra.Records import OrderIntent, Side  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0

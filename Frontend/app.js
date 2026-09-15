@@ -7667,7 +7667,7 @@
         //   看行情不设品种限制（搜索走别名全表，第 5 批已收窄为 16 品种 / 17 别名，
         //   见 AppChart.search_stocks）；
         //   品种约束**只在下单侧**生效：开启前先问后端，闸门实现与
-        //   /auto-order/on 的启动拦截同源（ProductProfile.assert_product_allowed），
+        //   /auto-order/on 的启动拦截同源（Product.assert_product_allowed），
         //   故"前端说能开"与"引擎允许开"永远一致。
         //   同一接口还驱动**开关置灰**（未标定品种开关变灰不可点，见
         //   applyAutoOrderTradableUI），一个来源两处用途，不会各写一份白名单。

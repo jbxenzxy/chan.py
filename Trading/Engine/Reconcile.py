@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..Infra.Types import (AccountState, Bar, Order, OrderIntent,
-                          Position, Side, Trade, now_cn)
+from ..Infra.Records import AccountState, Bar, Order, OrderIntent, Position, Side, Trade
+from ..Infra.TradingClock import now_cn
 from .PositionBook import PositionBookError
 
 class ReconcileMixin:

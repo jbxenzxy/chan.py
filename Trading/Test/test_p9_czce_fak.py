@@ -65,7 +65,8 @@ from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import (  # noqa: E402
     Instrument, InstrumentConfig, derive_exchange)
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 from dataclasses import replace as _dc_replace  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -74,10 +75,9 @@ _IF = PRODUCT_PROFILES["IF"]
 def _prod(ex):
     """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
     return _dc_replace(_IF, exchange=ex)
-from Trading.Infra.Store import Store  # noqa: E402
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, Bar, EngineState, Signal, Side,
-)
+from Trading.Infra.StateDB import Store  # noqa: E402
+
+from Trading.Infra.Records import AccountState, Bar, EngineState, Signal, Side
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
@@ -382,7 +382,7 @@ with tmp_dir() as td:
     class RejectDryBroker(DryRunBroker):
         def submit(self, intent, side, volume, ref_price, signal_key="", note="",
                    entry_date="", is_exit=False):
-            from Trading.Infra.Types import Order
+            from Trading.Infra.Records import Order
             o = Order(
                 order_id="reject-000001", signal_key=signal_key,
                 symbol=self.spec.trade_symbol, side=side,

@@ -1,8 +1,26 @@
 # -*- coding: utf-8 -*-
 """
-品种档案（Trading/Infra/ProductProfile.py）
+品种档案（Trading/Infra/Product.py）
 =====================================
 本模块是 Trading 侧**所有"合约品种（IF/IH/IC/IM 期指 + AU/AG/CU 上期所金属 + PTA 郑商所）"参数差异**的唯一事实源。
+
+术语锚点（§附F.2 · 2026-09-15 P-D 落位）
+----------------------------------------------------
+  · product（品种）= IF / IH / AU / PTA 这类「品种族」，一行档案管全族合约
+    （IF2509 / IF2512 / IF2603…换月不换档案）；
+  · instrument（合约）= IF2509 这类「一张具体合约」，每张一份
+    （运行时对象在 Infra/InstrumentSpec.py 的 Instrument）；
+  · symbol 只是代码字符串（signal_symbol / trade_symbol），不是粒度概念。
+  · parse_product（保月份，认定到合约）与 parse_product_key（剥月份，查品种档案）
+    这对函数的分工就是两个粒度的代码体现。
+
+变更纪律（§5.4 · 取代旧「Profile=标定 / Spec=事实」后缀规则）
+----------------------------------------------------
+文件名只回答「这是 per-product 粒度的东西」；「该不该走 git 评审」用两个正交手段表达：
+  · 标定值（r_multiple_tp / 两档费率）：改 = 改代码资产，走 git 评审 + 对账测试
+    （test_product_fee_table.py 快照对账 / test_p50）；
+  · 合约事实（price_tick / multiplier）：随交易所/券商公告人工同步
+    （实盘由行情 apply_quote 原子覆盖，档案值仅离线兜底）。
 
 角色定位（2026-09-14 双轴声明）：本档案按**变异维度（随品种变）**分区，
 是领域注册表（凭交易经验标定的代码资产，git 评审 + 对账测试守护），
@@ -10,9 +28,9 @@
 两轴关系见 Config.py 模块 docstring 的「双轴声明」。
 App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向依赖 Config.py。
 
-背景（与周期档案 Infra/PeriodProfile.py 成对出现）
+背景（与周期档案 Infra/Period.py 成对出现）
 ----------------------------------------------------
-PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
+Period 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
 **不随周期变化、而随合约品种变化**：
 
   · `r_multiple_tp`（止盈盈亏比 / L3 启动阈值）：IF/IH 惯用 1:2（L3 在 2R 启动）；
@@ -23,11 +41,11 @@ PeriodProfile 承载周期的时间语义（freq / bar_secs）；参数里另有
     IC/IM = 0.2 点 / 200 元/点 —— 合约事实，实盘以行情为准（详见类 docstring）。
 
 这些差异与周期无关（各品种在 4 个周期下都应保持各自的盈亏比/乘数），
-因此**不放 PeriodProfile**，而单独成立本模块的 `ProductProfile`。
+因此**不放 Period**，而单独成立本模块的 `Product`。
 
 为什么 Trading 自持一份品种表，而不是 import 主程序
 ------------------------------------------------------
-  与 PeriodProfile 同理：Trading/ 对 chan.py 零侵入、零 import，只通过 HTTP/SSE
+  与 Period 同理：Trading/ 对 chan.py 零侵入、零 import，只通过 HTTP/SSE
   取数。品种乘数/盈亏比这类执行层参数由网关自持，避免把 chan.py 依赖树拖进来。
 
   代价是两表可能漂移 → 后续可仿照 period_consistency 增加品种对账测试。
@@ -76,15 +94,15 @@ class Fee:
 
 
 # ══════════════════════════════════════════════════════════════════
-# 品种档案（与 PeriodProfile 平行的"随品种可变参数"归总）
+# 品种档案（与 Period 平行的"随品种可变参数"归总）
 # ══════════════════════════════════════════════════════════════════
 # kw_only（2026-09-14 评审 P2-2）：强制关键字构造。
-#   price_tick 是 Phase 8 后加的字段；位置参数构造 ProductProfile(...) 会把实参
+#   price_tick 是 Phase 8 后加的字段；位置参数构造 Product(...) 会把实参
 #   静默错位到错误字段 —— dataclass 不做类型校验，不报错。
 #   加 kw_only=True 后位置构造直接 TypeError，把静默错位变成启动期硬失败。
 #   （改动前已核查：全仓 8 处构造全部是关键字参数，故无调用点需要改。）
 @dataclass(frozen=True, kw_only=True)
-class ProductProfile:
+class Product:
     """一个合约品种的全部品种相关设定。
 
     字段分三组（2026-09-13 用户定序 + 2026-09-15 P-A 费率归位）——
@@ -227,8 +245,8 @@ class ProductProfile:
 #
 # ⚠️ 覆盖档（合约月份差异化费率）**不做**（P-A 用户拍板 2026-09-15）：AU / AG 的
 #   "6、12 合约 & 2607-2610"档只记录在 note 里备查，费率一律按基准档。
-PRODUCT_PROFILES: Dict[str, ProductProfile] = {
-    "IF": ProductProfile(
+PRODUCT_PROFILES: Dict[str, Product] = {
+    "IF": Product(
         product="IF", r_multiple_tp=2.0,
         exchange="CFFEX",
         open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
@@ -236,19 +254,19 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
              "CFFEX 无平今指令 → 派生恒走锁仓（能力闸门短路）"),
-    "IH": ProductProfile(
+    "IH": Product(
         product="IH", r_multiple_tp=2.0,
         exchange="CFFEX",
         open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）"),
-    "IC": ProductProfile(
+    "IC": Product(
         product="IC", r_multiple_tp=3.0,
         exchange="CFFEX",
         open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=200.0,
         note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF"),
-    "IM": ProductProfile(
+    "IM": Product(
         product="IM", r_multiple_tp=3.0,
         exchange="CFFEX",
         open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
@@ -257,7 +275,7 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
     # 商品档盈亏比暂统一 1:2（L3 在 2R 启动），与 IF/IH 一致；IC/IM 因波动大、趋势性弱
     #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
-    "AU": ProductProfile(
+    "AU": Product(
         product="AU", r_multiple_tp=2.0,
         exchange="SHFE",
         open_fee=Fee("per_lot", 10.0), closetoday_fee=Fee.free(),
@@ -266,7 +284,7 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
              "（覆盖档：6、12 合约 & 2607-2610 = 20 元/手，本期不消费按基准档）；"
              "平今免收 → 派生走平今（今仓离场直接平今，不走锁仓）"),
-    "AG": ProductProfile(
+    "AG": Product(
         product="AG", r_multiple_tp=2.0,
         exchange="SHFE",
         open_fee=Fee("rate", 0.1), closetoday_fee=None,
@@ -276,7 +294,7 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
              "无独立平今行 → 平今=开仓（closetoday_fee=None）"
              "（覆盖档：6、12 合约 & 2607-2610 = 万0.5，本期不消费按基准档）；"
              "平今不贵 → 派生走平今（省一次开仓 + 跨日平仓）"),
-    "CU": ProductProfile(
+    "CU": Product(
         product="CU", r_multiple_tp=2.0,
         exchange="SHFE",
         open_fee=Fee("rate", 0.5), closetoday_fee=Fee("rate", 1.0),
@@ -290,7 +308,7 @@ PRODUCT_PROFILES: Dict[str, ProductProfile] = {
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
     #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
     #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
-    "TA": ProductProfile(
+    "TA": Product(
         product="TA", r_multiple_tp=2.0,
         exchange="CZCE",
         open_fee=Fee("per_lot", 3.0), closetoday_fee=Fee.free(),
@@ -376,7 +394,7 @@ def describe_unknown_product(signal_symbol: str) -> str:
     return (
         "品种 {} 不在自动下单支持清单（{}）中：执行参数未标定，"
         "已拒绝启动交易引擎（清单外品种禁止启动）。请更换品种，或在 "
-        "Trading/Infra/ProductProfile.py 的 PRODUCT_PROFILES 中"
+        "Trading/Infra/Product.py 的 PRODUCT_PROFILES 中"
         "标定后再试。（原始符号={!r}，解析品种键={!r}）"
         .format(key or raw, "/".join(sorted(PRODUCT_PROFILES)), raw, key))
 

@@ -52,9 +52,7 @@ _RROOT = os.path.dirname(os.path.dirname(_HERE))
 if _RROOT not in sys.path:
     sys.path.insert(0, _RROOT)
 
-from Trading.Infra.ProductProfile import (  # noqa: E402
-    PRODUCT_PROFILES, parse_product, parse_product_key,
-)
+from Trading.Infra.Product import PRODUCT_PROFILES, parse_product, parse_product_key
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading import main as _main  # noqa: E402
 
@@ -65,7 +63,7 @@ _FAIL = 0
 def seeded(signal_symbol: str) -> TradingConfig:
     """构造配置（P-B：播种桥 _seed_instrument 已删，tick/乘数真值源 = 品种档案）。
 
-    Instrument 有效值初值在构造时直接取 ProductProfile（档案→运行时单向取值）；
+    Instrument 有效值初值在构造时直接取 Product（档案→运行时单向取值）；
     下方断言改读 product_profile —— 品种解析与档案真值这条链仍被钉死。
     """
     return TradingConfig(instrument={"signal_symbol": signal_symbol})
@@ -111,7 +109,7 @@ def build_engine(tmpdir, signal_symbol):
     from Trading.Broker.DryRun import DryRunBroker
     from Trading.Engine.Engine import TradingEngine
     from Trading.Infra.EventLog import EventLog
-    from Trading.Infra.Store import Store
+    from Trading.Infra.StateDB import Store
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 

@@ -66,9 +66,11 @@ from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _traded_volume_from_records)
 from Trading.Config import DEFAULT_CONFIG  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
+from Trading.Infra.Records import OrderIntent, Side  # noqa: E402
+
 
 _PASS = 0
 _FIX = 0

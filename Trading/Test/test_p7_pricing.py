@@ -52,9 +52,11 @@ from Trading.Config import BrokerConfig  # noqa: E402
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-    from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+    from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
     _IF = PRODUCT_PROFILES["IF"]
-    from Trading.Infra.Types import Side  # noqa: E402
+    from Trading.Infra.Records import Side  # noqa: E402
+
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
     print("  Trading 根目录解析为: {}".format(_TG_ROOT))
@@ -162,7 +164,8 @@ check("买方向 prev=4565.6 推 2 跳", b_fb2._chase_fallback_limit("close", Si
 check("卖方向非整 tick 向下取整", b_fb2._chase_fallback_limit("close", Side.LONG, 4565.1, 4559.3, -1, 2), 4558.8)
 
 print("\n[7] submit 派发：只按 intent 分两路；追不追价由 is_exit 决定（D13）")
-from Trading.Infra.Types import OrderIntent  # noqa
+from Trading.Infra.Records import OrderIntent  # noqa
+
 _rec = {}
 b7 = make_broker(api=object())
 b7._conn_error = ""

@@ -83,15 +83,15 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import (  # noqa: E402
-    AccountState, Bar, EngineState, ExitPlan, Position, Side,
-)
+from Trading.Infra.Records import AccountState, Bar, EngineState, ExitPlan, Position, Side
 
 _PASS = 0
 _FAIL = 0
@@ -155,7 +155,7 @@ class RejectBroker(DryRunBroker):
                entry_date="", is_exit=False):
         self._calls += 1
         if self._calls in self.reject_calls:
-            from Trading.Infra.Types import Order
+            from Trading.Infra.Records import Order
             o = Order(
                 order_id="reject-{:06d}".format(self._calls),
                 signal_key=signal_key, symbol=self.spec.trade_symbol,
@@ -199,7 +199,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000,
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
                   entry_date=_BAR_DAY):
     """构造一笔手写仓单（不带 origin —— 字段已删）。"""
-    from Trading.Infra.Types import now_cn
+    from Trading.Infra.TradingClock import now_cn
     return Position(
         symbol=_SYM, side=side, volume=vol,
         entry_price=entry_price, entry_at=now_cn(),

@@ -17,7 +17,7 @@ M1 交易网关 · CLI 入口
 
 换止盈止损：品种无关参数（ATR / trailing / 触发倍数 / breakeven_buffer_r）改 Trading/Config.py 的
     ExitConfig；品种相关参数（r_multiple_tp，2026-09-14 Fix A 单源化）改
-    Trading/Infra/ProductProfile.py 的品种档案。
+    Trading/Infra/Product.py 的品种档案。
     引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 
 合约规格（P-B · 2026-09-15 合并）：部署配置收口在 Trading/Config.py 的
@@ -49,10 +49,12 @@ from Trading.Infra.EventLog import EventLog                       # noqa: E402
 from Trading.Infra.InstrumentSpec import (Instrument,              # noqa: E402
                                           InstrumentConfig,
                                           derive_exchange)
-from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS, SESSION_SECS,  # noqa: E402
-                                        bar_secs_for, bars_per_day)
-from Trading.Infra.Store import Store                           # noqa: E402
-from Trading.Infra.Types import now_cn                          # noqa: E402
+from Trading.Infra.Period import SUPPORTED_FREQS, bar_secs_for, bars_per_day
+from Trading.Infra.TradingClock import SESSION_SECS
+from Trading.Infra.StateDB import Store  # noqa: E402
+
+from Trading.Infra.TradingClock import now_cn  # noqa: E402
+
 
 ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
                 "error", "stop"}
@@ -67,7 +69,7 @@ _STOP_REQUEST = ".stop_request"
 # 2026-09-15 P-B 删除 `_seed_instrument`（Phase 3.2 · Fix B 的播种桥）：
 #   `InstrumentSpec.for_product()` + `cfg.instrument.model_dump(exclude={...})` 的
 #   躲闪随双类合并一并消亡 —— tick/乘数/exchange/费率真值源 = 品种档案
-#   ProductProfile，运行时对象 Instrument 构造时直接取档案初值，不再有
+#   Product，运行时对象 Instrument 构造时直接取档案初值，不再有
 #   "先构造 spec 再播种"的两段式。换品种 = 构造期重建 InstrumentConfig
 #   （frozen=True 下不能就地改 signal_symbol，见 build_runtime）。
 
@@ -149,10 +151,10 @@ def build_runtime(args):
     if _bs is None:
         raise SystemExit(
             "[gw] 不支持的 K 线周期: {!r}（当前支持: {}）。"
-            "新增周期请同步 Trading/Infra/PeriodProfile.py 的 FREQ_SEC "
+            "新增周期请同步 Trading/Infra/Period.py 的 FREQ_SEC "
             "并补 test_period_consistency 对账。".format(
                 cfg.source.freq, ", ".join(SUPPORTED_FREQS)))
-    # Step 2.2：4.5h 交易日近似收口到 PeriodProfile.SESSION_SECS（原硬编码在此处）
+    # Step 2.2：4.5h 交易日近似收口到 Period.SESSION_SECS（原硬编码在此处）
     _bpd = bars_per_day(_bs, SESSION_SECS)
     print("[gw] 周期档案 freq={} bar_secs={}s（约 {} 根/交易日，按 {}h 近似）".format(
         cfg.source.freq, _bs,
@@ -226,7 +228,7 @@ def build_runtime(args):
               "可能与交易所口径不符，回测结果不可直接外推实盘")
 
     entry = EntryPolicy(cfg.entry_params.model_dump())
-    # Fix A（2026-09-14）：品种相关出场参数（r_multiple_tp）的唯一来源是 ProductProfile
+    # Fix A（2026-09-14）：品种相关出场参数（r_multiple_tp）的唯一来源是 Product
     #   档案 —— 经 resolved_exit_params 合并成完整参数；直接用 exit_params.model_dump()
     #   会缺品种参数（LayeredExitPolicy 构造期 AttributeError）。
     exitp = LayeredExitPolicy(resolved_exit_params(cfg))

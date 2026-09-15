@@ -72,7 +72,8 @@ if not _TG_ROOT:
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0

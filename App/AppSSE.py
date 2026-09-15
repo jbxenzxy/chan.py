@@ -1791,7 +1791,7 @@ def get_futures_aliases():
     两处消费（解耦后各自独立）：
       · 搜索漏斗 / SSE 别名解析 —— 走本表，**不做品种过滤**（看行情不设限）；
       · 自动下单开关 —— 由 `AppTrader.check_symbol_allowed` 单独拦品种（白名单 8 个），
-        引擎侧 `ProductProfile.assert_product_allowed` 是权威闸门。
+        引擎侧 `Product.assert_product_allowed` 是权威闸门。
 
     因此**不要再**在搜索/解析侧做品种过滤：那会让"看行情"被"能不能下单"牵连
     （反例见 2026-09-14 当天先做后撤的 `get_tradable_futures_aliases`）。

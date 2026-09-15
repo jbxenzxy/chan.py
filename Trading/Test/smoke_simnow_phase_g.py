@@ -57,9 +57,11 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 from Trading.Broker.Base import OrderIntent, build_broker  # noqa: E402
 from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import Side  # noqa: E402
+from Trading.Infra.Records import Side  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0

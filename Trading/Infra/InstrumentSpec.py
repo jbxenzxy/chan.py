@@ -3,6 +3,16 @@
 合约轴：部署配置 + 唯一运行时对象（P-B · 2026-09-15 合并）
 ==========================================================
 
+术语锚点（§附F.1/F.2 · 2026-09-15 P-D 落位）
+----------------------------------------------------
+`Instrument` = 被交易的那张**具体合约**（IF2509 / AU2512），名字借自 CTP
+柜台协议 `InstrumentField`（price_tick / multiplier / exchange / last_trade_date
+一一对应）—— 不是自造词。与相邻轴的分工：
+  · `Product`（Infra/Product.py）：品种族档案（IF 全族一份），per-product；
+  · `symbol`（signal_symbol / trade_symbol）：只是代码字符串，不是粒度概念；
+  · 换月换的是本轴的 instrument 身份（trade_symbol / last_trade_date 行情回填），
+    品种档案不动。已拍板：不改名为 ContractSpec（对齐 CTP 行业词，备选否决）。
+
 P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
 ----------------------------------------------------
 本文件承载**两个**模型，但语义与 P-B 之前完全不同：
@@ -15,8 +25,8 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
     exchange / last_trade_date / signal_symbol）已随 P-B 归位到运行时对象或
     构造期，本类被写即炸正是 P-B 要的护栏。
     摘除的字段（旧键会构造期报错，见 _REMOVED_KEYS 提示）：
-      price_tick / multiplier → 品种档案 `ProductProfile`（P-B 归位）
-      exchange                → 品种档案 `ProductProfile`（P-B 归位）
+      price_tick / multiplier → 品种档案 `Product`（P-B 归位）
+      exchange                → 品种档案 `Product`（P-B 归位）
       last_trade_date         → `Instrument` 运行时身份（行情回填）
       open/close/closetoday_fee_rate → 品种档案 Fee 两档（P-A 已归位）
 
@@ -41,7 +51,7 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
   last_trade_date 回填），Engine 读（闸门 / 对账 / 成本）。
 
 成本口径（P-A · 2026-09-15 改"元"，不变）
-    - 费率真值源 = 品种档案 ProductProfile 的 Fee 两档（开仓 / 平今），静态；
+    - 费率真值源 = 品种档案 Product 的 Fee 两档（开仓 / 平今），静态；
     - 手续费按 `Fee.cash(price, multiplier)` 折算为**每手元**，成本记账统一在元上做；
     - 盈亏毛值仍以"点"记账（gross_points），净值为元（net_cash = 毛利元 − 成本元）；
     - 滑点**不计入** cost_cash，而是体现在成交价上（见 dry_run broker 的让价）。
@@ -55,20 +65,20 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from Trading.Infra.ProductProfile import ProductProfile
+    from Trading.Infra.Product import Product
 
 
 # P-B 摘除的旧键 → 归属去向（extra=forbid 报错前的明确提示，交接文档 §7.2）。
 #   旧配置/旧测试若仍传这些键，构造期直接 ValueError 并指路 —— 不允许
 #   "填了但被静默忽略"（§3.4-D 情形 A 的教训）。
 _REMOVED_KEYS: Dict[str, str] = {
-    "price_tick": "品种档案 ProductProfile.price_tick（P-B 归位，调参=改档案）",
-    "multiplier": "品种档案 ProductProfile.multiplier（P-B 归位，调参=改档案）",
-    "exchange": "品种档案 ProductProfile.exchange（P-B 归位）",
+    "price_tick": "品种档案 Product.price_tick（P-B 归位，调参=改档案）",
+    "multiplier": "品种档案 Product.multiplier（P-B 归位，调参=改档案）",
+    "exchange": "品种档案 Product.exchange（P-B 归位）",
     "last_trade_date": "Instrument 运行时身份（行情回填，配置不再持有）",
-    "open_fee_rate": "品种档案 ProductProfile.open_fee（P-A 归位）",
-    "close_fee_rate": "品种档案 ProductProfile（平昨≡开仓档，P-A 删第三档）",
-    "closetoday_fee_rate": "品种档案 ProductProfile.closetoday_fee（P-A 归位）",
+    "open_fee_rate": "品种档案 Product.open_fee（P-A 归位）",
+    "close_fee_rate": "品种档案 Product（平昨≡开仓档，P-A 删第三档）",
+    "closetoday_fee_rate": "品种档案 Product.closetoday_fee（P-A 归位）",
     "instrument_verified": "Instrument.verified（Phase 3 已迁运行时）",
     "instrument_source": "Instrument.source（Phase 3 已迁运行时）",
     "max_order_volume": "已删除的死字段（从未被消费，见 test_p50 [8]）",
@@ -117,7 +127,7 @@ class InstrumentConfig(BaseModel):
                                               #   无 K 线 → 无信号 → 无报单，无从拦截）。
     #
     # 2026-09-15 P-B 归位/迁出（含去向，详见模块 docstring）：
-    #   price_tick / multiplier / exchange → ProductProfile（品种轴档案）
+    #   price_tick / multiplier / exchange → Product（品种轴档案）
     #   last_trade_date → Instrument（运行时身份，行情回填）
     #   2026-09-15 P-A：三档费率字段删除（费率归位品种档案 Fee 两档）。
     #   2026-09-14：max_order_volume 死字段删除（0 消费，防回潮见 test_p50 [8]）。
@@ -165,7 +175,7 @@ class Instrument:
 
     构造：`Instrument(config, product)`
       · config  — InstrumentConfig（frozen 部署配置），缺省 = 默认 IF 配置
-      · product — ProductProfile 品种档案（tick/乘数/exchange/费率的真值源）；
+      · product — Product 品种档案（tick/乘数/exchange/费率的真值源）；
         None = 未标定品种（有效值取 0 → 定价/对齐 fail-closed；启动期会被
         白名单闸门拒绝，这里允许 None 只为离线探针/测试便利）。
 
@@ -196,7 +206,7 @@ class Instrument:
     )
 
     def __init__(self, config: Optional[InstrumentConfig] = None,
-                 product: Optional["ProductProfile"] = None):
+                 product: Optional["Product"] = None):
         self._config: InstrumentConfig = config if config is not None else InstrumentConfig()
         self._product = product
         # —— 运行时身份：初值取 config，行情路径回填（SimNow）——
@@ -243,7 +253,7 @@ class Instrument:
         return self._config
 
     @property
-    def product(self) -> Optional["ProductProfile"]:
+    def product(self) -> Optional["Product"]:
         """品种档案（exchange / Fee 两档 / prefer_closetoday 的真值源）。"""
         return self._product
 
@@ -282,7 +292,7 @@ class Instrument:
         Phase 10（D6 · 2026-09-14）：六家交易所里**只有上期所（SHFE）与
         上期能源（INE）**有 CLOSETODAY 平今指令，其余四家（CFFEX/DCE/CZCE/GFEX）
         传平今会直接报错。平今分支（转移④ + _pre_trade_check 双处消费）
-        以本属性为能力守卫 —— "走不走平今"由费率派生（ProductProfile.
+        以本属性为能力守卫 —— "走不走平今"由费率派生（Product.
         prefer_closetoday 单源派生），"能不能走平今"由本属性守卫，
         两者缺一不可，**本闸门永不可删**。
 
@@ -457,7 +467,7 @@ class Instrument:
         return price + side_sign * tick if for_open else price - side_sign * tick
 
     # ---------- 成本（P-A · 2026-09-15：读品种档案 Fee 两档 + 有效乘数，统一在元上算） ----------
-    def cost_cash(self, product: "ProductProfile", entry_price: float,
+    def cost_cash(self, product: "Product", entry_price: float,
                   exit_price: float, closetoday: bool, volume: int = 1) -> float:
         """往返手续费，**元**口径（每手元 × 手数）。
 
@@ -516,7 +526,7 @@ def derive_exchange(symbol: str) -> str:
     解析不出（空串 / 不含 "." 分隔）→ 返回 ""（不猜 —— exchange 是 Phase 9
     FOK/FAK 分支的判据，宁缺勿错）。结果统一大写。
 
-    P-B（2026-09-15）：exchange 真值源 = 品种档案（ProductProfile.exchange）。
+    P-B（2026-09-15）：exchange 真值源 = 品种档案（Product.exchange）。
     本函数降级为**对账工具**：SimNow / main 把行情推导值与档案值比对，
     不一致 → warn 告警，**不再写任何对象**（原 spec.exchange = derive_exchange(…)
     的就地写入随 P-B 删除）。

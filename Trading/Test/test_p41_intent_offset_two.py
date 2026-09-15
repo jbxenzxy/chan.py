@@ -53,7 +53,8 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Broker.Base import INTENT_TO_OFFSET  # noqa: E402
-from Trading.Infra.Types import OrderIntent  # noqa: E402
+from Trading.Infra.Records import OrderIntent  # noqa: E402
+
 
 _PASS = 0
 _FAIL = 0

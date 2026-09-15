@@ -57,8 +57,8 @@ def check(name, got, expected):
 from Trading import main as gw
 from Trading.Config import TradingConfig
 from Trading.Engine.Engine import TradingEngine
-from Trading.Infra.PeriodProfile import (PERIOD_PROFILES, SESSION_SECS,
-                                         bar_secs_for, bars_per_day)
+from Trading.Infra.Period import PERIOD_PROFILES, bar_secs_for, bars_per_day
+from Trading.Infra.TradingClock import SESSION_SECS
 from Trading.Source.SSE import SseSource
 from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 
@@ -91,7 +91,7 @@ def isolated_trading_env(**overrides):
         os.environ.update(saved)
 
 
-# 期望值（SSOT 校验对账：PeriodProfile.FREQ_SEC / 4.5h 交易日近似）
+# 期望值（SSOT 校验对账：Period.FREQ_SEC / 4.5h 交易日近似）
 _EXPECT_BAR_SECS = {"30m": 1800, "5m": 300, "1m": 60, "15s": 15}
 _EXPECT_BPD = {"30m": 9, "5m": 54, "1m": 270, "15s": 1080}
 

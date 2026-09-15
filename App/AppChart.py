@@ -580,7 +580,7 @@ def search_stocks(q):
     #   下单侧的品种约束仍在**开启自动下单时**前置提示：
     #   前端 onAutoOrderToggle → GET /api/trader/product-check（AppTrader.
     #   check_symbol_allowed）→ 不通过则弹「不支持交易」且不发启动请求；
-    #   引擎启动闸门 ProductProfile.assert_product_allowed 仍是权威兜底。
+    #   引擎启动闸门 Product.assert_product_allowed 仍是权威兜底。
     _futures_aliases = _sse.get_futures_aliases()
     for alias, full_code in _futures_aliases.items():
         if keyword_upper in alias.upper():

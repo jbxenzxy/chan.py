@@ -159,7 +159,7 @@ def _write_state_file(data: Dict[str, Any]) -> None:
 
 def _engine_store(out_dir: str):
     """按 out_dir 打开自动下单子进程 state.db 的 Store（只读场景为主）。"""
-    from Trading.Infra.Store import Store
+    from Trading.Infra.StateDB import Store
     return Store(os.path.join(out_dir, "state.db"))
 
 
@@ -358,14 +358,14 @@ class AppTrader:
             # （Engine._restore）仍保留同一判定作为权威闸门（回放/CLI 直启拦）。
             #
             # 2026-09-14 评审 P1-1 + P2-1：判定与文案都收敛到
-            #   ProductProfile.assert_product_allowed —— 原先这里和 Engine._restore
+            #   Product.assert_product_allowed —— 原先这里和 Engine._restore
             #   各写一遍 `if _product not in PRODUCT_PROFILES`（文案还不一样：
             #   "已拒绝" vs "禁止"），白名单一改就容易漏一处 → 前端放行、引擎自杀。
             #   同时解析口径换成 parse_product_key（剥合约月份），修掉
             #   "CFFEX.IF2609 被当成未标定品种 IF2609" 的误杀。
             # 惰性 import：Trading 包对本模块零依赖，此处只碰纯 dataclass 模块。
             try:
-                from Trading.Infra.ProductProfile import assert_product_allowed
+                from Trading.Infra.Product import assert_product_allowed
                 try:
                     assert_product_allowed(use_symbol)
                 except ValueError as e:
@@ -597,7 +597,7 @@ class AppTrader:
 
         为什么单开一个查询口、而不让前端自己判：
           白名单与解析口径（剥合约月份、大小写归一）都住在
-          `Trading/Infra/ProductProfile`，前端复刻一份必然漂移。本方法**复用**
+          `Trading/Infra/Product`，前端复刻一份必然漂移。本方法**复用**
           `assert_product_allowed` —— 与 `start()` 的启动前置拦截、引擎
           `_restore` 的权威闸门是**同一实现**，故"前端说能开"与"引擎允许开"永远一致。
 
@@ -619,8 +619,7 @@ class AppTrader:
           message  str    可直接展示给用户的说明
         """
         try:
-            from Trading.Infra.ProductProfile import (
-                PRODUCT_PROFILES, assert_product_allowed, parse_product_key)
+            from Trading.Infra.Product import PRODUCT_PROFILES, assert_product_allowed, parse_product_key
         except Exception as e:      # pragma: no cover — Trading 缺失时交引擎闸门兜底
             return {"allowed": True, "product": "", "products": [],
                     "reason": "whitelist_unavailable",

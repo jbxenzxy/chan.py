@@ -61,7 +61,8 @@ from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
@@ -180,7 +181,7 @@ def main():
 
     print("\n[5] 挂点在 A3 校验链：_pre_trade_check 触发漂移检查")
     from Trading.Engine.Engine import _Action
-    from Trading.Infra.Types import OrderIntent, Side
+    from Trading.Infra.Records import OrderIntent, Side
     with tmp_dir() as td:
         eng = build_engine(td)
         eng.state.verified = True

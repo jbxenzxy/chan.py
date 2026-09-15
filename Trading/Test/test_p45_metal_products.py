@@ -46,7 +46,8 @@ sys.path.insert(0, _REPO_ROOT)
 
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
+
 from Trading import main as _main  # noqa: E402
 
 _PASS = 0
@@ -57,7 +58,7 @@ def seeded(signal_symbol: str) -> TradingConfig:
     """构造配置（P-B：tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
 
     Phase 3 的"显式播种"（main._seed_instrument）已随 P-B 删除：Instrument
-    有效值初值在**构造时**直接取 ProductProfile（档案→运行时单向取值，
+    有效值初值在**构造时**直接取 Product（档案→运行时单向取值，
     结构上保证一致，无需运行时对账）。本 helper 保留名字只为改动最小；
     下方 product_profile 命中断言即覆盖"档案解析"这条链。
     """

@@ -19,7 +19,7 @@ import json
 import os
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from ..Infra.Types import Bar, Signal
+from ..Infra.Records import Bar, Signal
 from .Base import Event, Source, register_source
 
 

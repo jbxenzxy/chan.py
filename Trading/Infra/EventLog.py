@@ -16,7 +16,7 @@ import sys
 import time
 from typing import Any, Dict
 
-from .Types import now_cn
+from .TradingClock import now_cn
 
 _KIND_LABEL = {
     "start": "启动", "stop": "停止", "bar": "K线", "signal": "信号",

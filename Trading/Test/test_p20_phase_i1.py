@@ -99,13 +99,14 @@ from Trading.Broker.SimNow import LiveCTPBroker, SimNowBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Store import Store  # noqa: E402
+from Trading.Infra.StateDB import Store  # noqa: E402
+
 from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
-from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Types import (  # noqa: E402
-    Bar, Order, OrderIntent, Position, ExitPlan, Side, Signal, now_cn,
-)
+from Trading.Infra.Records import Bar, Order, OrderIntent, Position, ExitPlan, Side, Signal
+from Trading.Infra.TradingClock import now_cn
 
 _PASS = 0
 _FAIL = 0
@@ -699,7 +700,7 @@ with tmp_dir() as tmp:
 # [9x] 品种**前置检查出口**（2026-09-14 用户拍板「K线图 vs 自动下单 解耦」配套）：
 #   AppTrader.check_symbol_allowed 是前端开关的**前置提示出口**（前端拿到
 #   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
-#   **同源**（同一个 ProductProfile.assert_product_allowed）——否则会出现
+#   **同源**（同一个 Product.assert_product_allowed）——否则会出现
 #   "前端说能开、引擎却自杀"的分叉，正是要防的那种漂移。
 #   解耦口径：看行情侧走 `TqSdkAPI.FUTURES_ALIASES`（2026-09-14 第二轮用户点名
 #   **收窄到 16 品种**，且**不做品种过滤**，见 AppChart.search_stocks）；
@@ -770,7 +771,8 @@ with tmp_dir() as tmp:
         for _ in range(2):
             json.dump({"kind": "auto_order_off"}, f)
             f.write("\n")
-    from Trading.Infra.Store import Store  # noqa: E402
+    from Trading.Infra.StateDB import Store  # noqa: E402
+
     s = Store(os.path.join(out_dir, "state.db"))
     s.set_json("auto_order_enabled", False)   # 恰好是上一轮遗留的 false
     s.close()

@@ -206,7 +206,7 @@ _rels = {os.path.relpath(p, _ROOT).replace("\\", "/") for p in _iter_scan_files(
 #    本测试会先变红，且表现为"某文件不在扫描范围"而非"该文件没了"，极易误判成
 #    扫描逻辑被改窄。Phase 7 退役 p25 时即踩过此坑，故改为放入**长期存在**的
 #    契约测试 + 新一期新增的契约测试（新增文件时同步补进本清单）。
-for _must in ("Trading/Infra/Types.py",
+for _must in ("Trading/Infra/Records.py",
               "Trading/Engine/Engine.py",
               "Trading/Engine/PositionBook.py",
               "Trading/Broker/SimNow.py",

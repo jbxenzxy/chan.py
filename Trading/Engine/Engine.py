@@ -57,22 +57,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
-from ..Infra.PeriodProfile import (
-    bar_secs_for,
-)
-from ..Infra.ProductProfile import ProductProfile, assert_product_allowed
+from ..Infra.Period import bar_secs_for
+from ..Infra.Product import Product, assert_product_allowed
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
-from ..Infra.Store import Store
+from ..Infra.StateDB import Store
 from ..Strategy.Exit import ExitCheck
 from ..Infra.InstrumentSpec import Instrument
-from ..Infra.Types import (
-    PLAUSIBLE_DATE_MIN,
-    AccountState,
-    Bar, DecisionType, EngineState, ExitPlan, Order, OrderIntent,
-    Position, Side, Signal, Trade, now_cn, now_ms, trading_day_from_clock,
-    trading_day_of_ms,
-)
+from ..Infra.Records import AccountState, Bar, DecisionType, EngineState, ExitPlan, Order, OrderIntent, Position, Side, Signal, Trade
+from ..Infra.TradingClock import PLAUSIBLE_DATE_MIN, now_cn, now_ms, trading_day_from_clock, trading_day_of_ms
 
 
 def _opposite(side: Side) -> Side:
@@ -413,7 +406,7 @@ class TradingEngine(ReconcileMixin):
         #   注意大小写：前端别名表把 SHFE/DCE 解析成小写主连（KQ.m@SHFE.au），
         #   归一在 parse_product_key 内完成（档案键统一大写）。
         #
-        # 2026-09-14 评审 P1-1 + P2-1：判定收敛到 ProductProfile.assert_product_allowed
+        # 2026-09-14 评审 P1-1 + P2-1：判定收敛到 Product.assert_product_allowed
         #   —— ① 只用一处实现（原 App/Engine 两份，文案还不一样）；
         #      ② 解析口径从 parse_product（取末段）换成 parse_product_key（剥月份）：
         #         `CFFEX.IF2609` 原来解析成 "IF2609" 查不到档案 → 已标定的 IF 被
@@ -1021,7 +1014,7 @@ class TradingEngine(ReconcileMixin):
             #   开关缺省（无品种档案）/ 交易所不支持 / 费率判锁仓 → 走锁仓，保守侧。
             #   ref_price 用最近一笔持仓的入场价（8 品种两档计价方式恒相同，
             #   比较式里价格自动约掉；仅混合计价时才真正参与，见
-            #   ProductProfile.prefer_closetoday docstring）。
+            #   Product.prefer_closetoday docstring）。
             if (self.spec.supports_closetoday
                     and self._prefer_closetoday(float(latest.entry_price))):
                 today_target = _oldest([
@@ -1047,7 +1040,7 @@ class TradingEngine(ReconcileMixin):
 
         True = 今仓离场走 CLOSETODAY 平今；False = 反向开仓锁仓（保守侧）。
 
-        判定唯一来源 = 品种档案 `ProductProfile.prefer_closetoday(ref_price)`
+        判定唯一来源 = 品种档案 `Product.prefer_closetoday(ref_price)`
         （3× 口径纯派生：平今路径 2 笔 vs 锁仓路径 4 笔）。无品种档案 →
         False（保守侧：宁可多花一次开仓费，不生成平今单）—— 无档案品种
         理论上已被白名单闸门拒绝启动，此处仅为防御。
@@ -1089,7 +1082,7 @@ class TradingEngine(ReconcileMixin):
             self._spec_drift_checked = True
             self._check_spec_drift_online(self.cfg.product_profile)
 
-    def _check_spec_drift_online(self, p: "ProductProfile") -> None:
+    def _check_spec_drift_online(self, p: "Product") -> None:
         """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
         diffs = []
         if self.state.price_tick != p.price_tick:
@@ -1108,7 +1101,7 @@ class TradingEngine(ReconcileMixin):
                 source=self.state.source)
 
     # 2026-09-15 P-A 删除 _check_closetoday_economy（共 36 行）：
-    #   平今经济性从"成交后建议"改为档案费率启动即派生（ProductProfile.prefer_closetoday），
+    #   平今经济性从"成交后建议"改为档案费率启动即派生（Product.prefer_closetoday），
     #   建议与执行分叉的裂缝消除。
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
