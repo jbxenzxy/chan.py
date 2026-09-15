@@ -9,7 +9,7 @@
   · product（品种）= IF / IH / AU / PTA 这类「品种族」，一行档案管全族合约
     （IF2509 / IF2512 / IF2603…换月不换档案）；
   · instrument（合约）= IF2509 这类「一张具体合约」，每张一份
-    （运行时对象在 Infra/InstrumentSpec.py 的 Instrument）；
+    （运行时对象在 Infra/Instrument.py 的 Instrument）；
   · symbol 只是代码字符串（signal_symbol / trade_symbol），不是粒度概念。
   · parse_product（保月份，认定到合约）与 parse_product_key（剥月份，查品种档案）
     这对函数的分工就是两个粒度的代码体现。
@@ -238,7 +238,7 @@ class Product:
 #       原子覆盖这两个字段（`InstrumentState.apply_quote`，Phase 3 起运行时有效值归
 #       InstrumentState），本表的取值**在实盘不被采用**；
 #     · 离线（dry_run/replay）：没有行情可比，state 的有效值就是本表播种的配置值
-#       （Phase 3 起播种发生在启动路径：main._seed_instrument → InstrumentSpec.for_product）
+#       （Phase 3 起播种在启动路径；2026-09-15 P-B 起播种桥已删，Instrument 构造时直接取档案初值）
 #       —— 本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
 #   维护口径：每次品种合约参数调整（交易所公告换月/改乘数）后，同步改本表并跑
 #   Trading/Test/test_p50_review_fixes.py 的对账用例。
@@ -306,7 +306,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
-    #   exchange="CZCE" 时报单属性 FOK→FAK（InstrumentSpec.effective_order_advanced）、
+    #   exchange="CZCE" 时报单属性 FOK→FAK（Instrument.effective_order_advanced）、
     #   OPEN 手数钉 1 手（Engine._open_volume），档案只管品种参数、不管报单属性。
     "TA": Product(
         product="TA", r_multiple_tp=2.0,

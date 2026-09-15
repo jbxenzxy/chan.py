@@ -101,12 +101,12 @@ from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
 
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Records import Bar, Order, OrderIntent, Position, ExitPlan, Side, Signal
-from Trading.Infra.TradingClock import now_cn
+from Trading.Infra.Clock import now_cn
 
 _PASS = 0
 _FAIL = 0

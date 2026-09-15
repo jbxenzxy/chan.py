@@ -9,8 +9,8 @@
     Risk/      ④ 风控层       开仓手数 / 持仓笔数 / 补开开关（收敛于 RiskConfig）
     Engine/    ⑤ 执行层       Engine 四态状态机编排 / Reconcile 对账+F1 / PositionBook 账本
     Broker/    ⑥ Broker 适配  DryRun 模拟 / SimNow CTP 真实通道
-    Infra/     横切基础设施   Records / TradingClock / Period / Product / StateDB /
-                             Config / EventLog / InstrumentSpec
+    Infra/     横切基础设施   Records / Clock / Period / Product / StateDB /
+                             Config / EventLog / Instrument
 
 依赖规则：Engine import 全部模块；没有任何模块反向 import Engine。
 """

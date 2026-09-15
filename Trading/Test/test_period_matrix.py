@@ -42,7 +42,7 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Infra.Period import bar_secs_for
-from Trading.Infra.TradingClock import norm_delta_sec, parse_hhmmss, ts_scale
+from Trading.Infra.Clock import norm_delta_sec, parse_hhmmss, ts_scale
 
 _PASS = 0
 _FAIL = 0

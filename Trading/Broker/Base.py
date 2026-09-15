@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
-from ..Infra.InstrumentSpec import Instrument
+from ..Infra.Instrument import Instrument
 from ..Infra.Records import Order, OrderIntent, Side
 
 BROKERS: Dict[str, Type["Broker"]] = {}

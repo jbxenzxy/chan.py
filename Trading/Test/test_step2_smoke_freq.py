@@ -58,7 +58,7 @@ from Trading import main as gw
 from Trading.Config import TradingConfig
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.Period import PERIOD_PROFILES, bar_secs_for, bars_per_day
-from Trading.Infra.TradingClock import SESSION_SECS
+from Trading.Infra.Clock import SESSION_SECS
 from Trading.Source.SSE import SseSource
 from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 

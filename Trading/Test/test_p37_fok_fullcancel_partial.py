@@ -65,7 +65,7 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _traded_volume_from_records)
 from Trading.Config import DEFAULT_CONFIG  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]

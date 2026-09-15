@@ -26,9 +26,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..Infra.InstrumentSpec import Instrument
+from ..Infra.Instrument import Instrument
 from ..Infra.Records import Order, OrderIntent, Side
-from ..Infra.TradingClock import now_cn
+from ..Infra.Clock import now_cn
 from .Base import INTENT_TO_OFFSET, Broker, register_broker
 
 

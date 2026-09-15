@@ -87,7 +87,7 @@ from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -199,7 +199,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000,
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
                   entry_date=_BAR_DAY):
     """构造一笔手写仓单（不带 origin —— 字段已删）。"""
-    from Trading.Infra.TradingClock import now_cn
+    from Trading.Infra.Clock import now_cn
     return Position(
         symbol=_SYM, side=side, volume=vol,
         entry_price=entry_price, entry_at=now_cn(),

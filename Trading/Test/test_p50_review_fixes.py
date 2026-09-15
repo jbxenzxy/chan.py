@@ -34,7 +34,7 @@ if _RROOT not in sys.path:
 
 from Trading import main as _main                                      # noqa: E402
 from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E402
-from Trading.Infra.InstrumentSpec import (                             # noqa: E402
+from Trading.Infra.Instrument import (                             # noqa: E402
     Instrument, InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
@@ -276,7 +276,7 @@ def t5_quote_partial():
         """tick/乘数就绪、涨跌停缺失（nan）—— 模拟不走 tqsdk 的自研通道。"""
 
         def __init__(self, hi=nan, lo=nan, tick=0.5, mult=200.0):
-            # tick/乘数刻意与 InstrumentSpec 默认值（0.2 / 300）不同，
+            # tick/乘数刻意与 InstrumentConfig 默认值（0.2 / 300）不同，
             # 便于断言"行情值确实落进了 spec"。
             self.symbol = "CFFEX.IF2609"
             self.price_tick = tick
@@ -428,7 +428,7 @@ def t8_dead_field_removed():
     #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率 P-A 已归位。
     #   _check_removed_keys 对旧键显式 ValueError（§7.2：不允许静默吞掉）。
     print("\n[8b] P-B 归位完成判据：tick/乘数/exchange/last_trade_date 已迁出配置")
-    from Trading.Infra.InstrumentSpec import _REMOVED_KEYS
+    from Trading.Infra.Instrument import _REMOVED_KEYS
     for gone in ("price_tick", "multiplier", "exchange", "last_trade_date",
                  "open_fee_rate", "close_fee_rate", "closetoday_fee_rate",
                  "instrument_verified", "instrument_source", "fee_source"):

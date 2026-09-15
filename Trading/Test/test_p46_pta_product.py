@@ -58,7 +58,7 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from dataclasses import replace as _dc_replace  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
 

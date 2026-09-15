@@ -11,7 +11,7 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
        for_product(profile)`）播种；r_multiple_tp 经 resolved_exit_params() 合并
        （品种档案是唯一默认值来源；min_r_points / breakeven_buffer_ticks 已于
        2026-09-14 删除，保本缓冲改为全局比例 breakeven_buffer_r）
-    ④ InstrumentSpec.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
+    ④ Instrument.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
        交易所分支；CZCE 才切 FAK）—— 确认金属走默认 order_advanced
     ⑤ 未知品种仍 product_profile=None（不误伤）
 
@@ -45,7 +45,7 @@ _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
 
 from Trading import main as _main  # noqa: E402

@@ -80,9 +80,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
-from ..Infra.InstrumentSpec import Instrument, derive_exchange
+from ..Infra.Instrument import Instrument, derive_exchange
 from ..Infra.Records import Order, OrderIntent, Side
-from ..Infra.TradingClock import now_cn
+from ..Infra.Clock import now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
                    Broker, classify_ctp_reject, register_broker)
 
@@ -115,7 +115,7 @@ _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 #        共用它，不再各自解析自然日字符串。
 #     ② 【仍未解决】本判据把"绝对时钟差"当陈旧依据，夜盘静默段会被恒判陈旧 →
 #        real_position 恒 None → 夜盘对账被静默跳过。届时需改为"按合约交易时段表
-#        判断是否处于应报价区间"（参考 Infra/InstrumentSpec.py 扩展交易时段元数据）。
+#        判断是否处于应报价区间"（参考 Infra/Instrument.py 扩展交易时段元数据）。
 # ── 微轮询节奏（Step 2.3，拍板 C1：文件级命名常量，不进配置面板）────────
 #   行情陈旧阈值已收口到 BrokerConfig.channel.quote_stale_seconds（_timing 读取）；
 #   0.1/0.2 的纯轮询节奏无实际调参价值，只消灭字面量、收口为命名常量。
@@ -826,7 +826,7 @@ class SimNowBroker(Broker):
             #   放行；交易时段护栏对无夜盘品种按日盘时段校验）—— 与涨跌停护栏
             #   对未知区间的处理同哲学。
             #   注：last_trade_date 是**静态元数据**（换月前不变），Phase 3 未随
-            #   运行时字段迁往 state，仍写在 spec 上（见 InstrumentSpec 字段注释）。
+            #   运行时字段迁往 state，仍写在 spec 上（见 Instrument 字段注释）。
             self._fill_delivery_calendar(q)
         except ValueError as e:
             self._instrument_warn("行情参数校验失败（{}）→ fail-closed，拒单直至取到".format(e),

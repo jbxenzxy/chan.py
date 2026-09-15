@@ -76,7 +76,7 @@ from Trading.Broker.Base import (  # noqa: E402
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _position_split, _position_total, _verify_yesterday_delta)
 from Trading.Config import DEFAULT_CONFIG  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]

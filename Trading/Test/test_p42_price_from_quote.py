@@ -85,7 +85,7 @@ from Trading.Config import (BrokerConfig, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import (  # noqa: E402
+from Trading.Infra.Instrument import (  # noqa: E402
     Instrument, InstrumentConfig, derive_exchange)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 

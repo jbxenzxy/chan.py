@@ -17,7 +17,7 @@
        这条护栏是跨仓一致性的唯一保险，删不掉。
 
 时间语义工具（ts_scale / norm_delta_sec / parse_hhmmss / 两阈值常量 /
-SESSION_SECS）已于 2026-09-15 P-C 迁往 Infra/TradingClock.py，本模块不再定义。
+SESSION_SECS）已于 2026-09-15 P-C 迁往 Infra/Clock.py，本模块不再定义。
 
 角色定位（2026-09-14 双轴声明）：本档案按**变异维度（随周期变）**分区，
 是领域注册表（凭经验标定的代码资产，git 评审 + 对账测试守护），

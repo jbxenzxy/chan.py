@@ -32,14 +32,14 @@ from Trading.Broker.DryRun import DryRunBroker
 from Trading.Config import DEFAULT_CONFIG, TradingConfig, resolved_exit_params
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
-from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.Instrument import Instrument
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 
 _IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.StateDB import Store
 from Trading.Infra.Records import Bar, ExitPlan, Position, Side, Signal
-from Trading.Infra.TradingClock import CN_TZ, NIGHT_SESSION_START_HOUR, PLAUSIBLE_DATE_MIN, trading_day_from_clock, trading_day_of_ms
+from Trading.Infra.Clock import CN_TZ, NIGHT_SESSION_START_HOUR, PLAUSIBLE_DATE_MIN, trading_day_from_clock, trading_day_of_ms
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy
 
@@ -334,14 +334,14 @@ check_true("[6b2] Engine 代码里 entry_date 不再做 [:10] 切片比较",
 #
 # ⚠️ 2026-09-14 判据收窄（原判据误伤）：
 #   原判据 = "出现 timedelta(days=1) 即违规"，会把 Phase 11 新增的
-#   InstrumentSpec._weekdays_between() 判成手写夜盘偏移 —— 但那里是在**数工作日**
+#   Instrument._weekdays_between() 判成手写夜盘偏移 —— 但那里是在**数工作日**
 #   （纯日历算术），与夜盘归属次日无关。改成"按夜盘语义判定"：
 #     同一个代码块（每个函数体 / 模块顶层）内**同时**出现
 #       (a) `timedelta(days=1)`，且
 #       (b) 夜盘语义信号 —— 引用 NIGHT_SESSION_START_HOUR，或 `.hour` 与
 #           0/20/21/23 这几个夜盘小时常量比较
 #   纯日历算术不含 (b) → 不违规；真手写夜盘偏移必含 (b) → 照样被抓（见下方自测）。
-#   ⚠️ 刻意**不采用**"把 InstrumentSpec 加进白名单"的修法 —— 那会连该文件里将来
+#   ⚠️ 刻意**不采用**"把 Instrument.py 加进白名单"的修法 —— 那会连该文件里将来
 #   真出现的手写夜盘偏移一起放过，属于削弱护栏。
 NIGHT_HOURS = {0, 20, 21, 23}
 _RE_HOUR_L = re.compile(r"\.hour\s*(?:>=|<=|==|!=|>|<)\s*(\d{1,2})")
@@ -395,13 +395,13 @@ for sub in ("Trading/Engine", "Trading/Infra", "Trading/Source", "Trading/Broker
             if not fn.endswith(".py"):
                 continue
             fp = os.path.join(dirpath, fn)
-            if "TradingClock.py" in fp or "Period.py" in fp:
+            if "Clock.py" in fp or "Period.py" in fp:
                 continue
             txt = open(fp, encoding="utf-8").read()
             for ln in hand_rolled_night_offset(txt):
                 hand_rolled.append("{}:{}".format(
                     os.path.relpath(fp, ROOT).replace("\\", "/"), ln))
-check_true("[6c] 夜盘日期偏移只在 Infra/TradingClock.py 一处实现（按夜盘语义判定）",
+check_true("[6c] 夜盘日期偏移只在 Infra/Clock.py 一处实现（按夜盘语义判定）",
            not hand_rolled, "另见: {}".format(hand_rolled[:5]))
 
 # 6c 判据自测：证明"收窄"没有变成"削弱护栏"。

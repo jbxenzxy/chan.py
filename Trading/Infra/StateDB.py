@@ -17,7 +17,7 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from .Records import Order, Trade
-from .TradingClock import now_cn
+from .Clock import now_cn
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS processed_signals (

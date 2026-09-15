@@ -35,7 +35,7 @@ if not _TG_ROOT:
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 

@@ -66,7 +66,7 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import (  # noqa: E402
+from Trading.Infra.Instrument import (  # noqa: E402
     Instrument, _weekdays_between)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 

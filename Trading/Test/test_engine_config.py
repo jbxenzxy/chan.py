@@ -70,7 +70,7 @@ from Trading import Broker  # noqa: F401,E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
-from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.Instrument import Instrument
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -129,7 +129,7 @@ check("老配置键被记录进 dropped_legacy_keys（D17）",
 # ═══ [5] SESSION_SECS 收口 ═══
 print("\n[5] Period.SESSION_SECS（原 main.py 硬编码 4.5h）")
 from Trading.Infra.Period import bars_per_day
-from Trading.Infra.TradingClock import SESSION_SECS
+from Trading.Infra.Clock import SESSION_SECS
 check("SESSION_SECS == 4.5h", SESSION_SECS, 4.5 * 3600)
 
 # ═══ [6] bars_per_day 四周期对账 ═══

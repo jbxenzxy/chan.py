@@ -93,7 +93,7 @@ from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -347,7 +347,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
     from Trading.Infra.Records import ExitPlan
-    from Trading.Infra.TradingClock import now_cn
+    from Trading.Infra.Clock import now_cn
     if side is Side.LONG:
         tp = entry_price + 5.0
         stop = entry_price - 10.0

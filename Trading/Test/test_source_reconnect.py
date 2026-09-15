@@ -58,7 +58,7 @@ check("旧键名 'reconnect' 仍被 extra=forbid 拒绝",
 
 # ═══ [2] SseSource 离线构造：默认读 SSOT ═══
 print("\n[2] SseSource 默认参数来自 SourceConfig（不连网）")
-from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.Instrument import Instrument
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]

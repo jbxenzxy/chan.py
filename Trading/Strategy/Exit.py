@@ -33,7 +33,7 @@ from collections import deque
 from typing import Optional
 
 from ..Config import ExitPolicyParams
-from ..Infra.InstrumentSpec import Instrument
+from ..Infra.Instrument import Instrument
 from ..Infra.Records import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
 

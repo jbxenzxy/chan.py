@@ -31,12 +31,14 @@ Trading/                        # 自动下单网关（Python 包）
 │   ├── DryRun.py               # 模拟撮合（滑点 + 价格对齐 + 成交回报）
 │   └── SimNow.py               # SimNow 仿真下单（TqAccount + 主连自动映射，全 FOK）
 ├── Infra/                      # 横切·基础设施
-│   ├── Types.py                # Signal/Bar/Position/Trade/ExitPlan 等数据结构
+│   ├── Records.py              # Signal/Bar/Position/Trade/ExitPlan 等数据结构（原 Types.py）
+│   ├── Clock.py                # 墙钟/交易日归属/时间戳单位（原 Types.py 时间部分）
+│   ├── Period.py               # 周期档案：freq↔秒 单一事实源（原 PeriodProfile.py）
+│   ├── Product.py              # 品种档案：标定参数+费率+exchange（原 ProductProfile.py）
+│   ├── StateDB.py              # sqlite：信号幂等键、持仓状态、当日统计（原 Store.py）
+│   ├── Instrument.py           # InstrumentConfig（部署配置，frozen）+ Instrument（运行时对象）
 │   ├── Config.py               # JSON 配置加载（零依赖）
-│   ├── EventLog.py             # jsonl 事件日志（每笔委托/成交/信号全落盘）
-│   ├── Store.py                # sqlite：信号幂等键、持仓状态、当日统计
-│   └── InstrumentSpec.py       # InstrumentSpec（静态规格）+ InstrumentState（运行时状态）
-│                               #   运行时状态 = 行情回填的有效 tick/乘数/费率 + 定价与成本模型
+│   └── EventLog.py             # jsonl 事件日志（每笔委托/成交/信号全落盘）
 ├── Test/                       # 回归测试（独立脚本，按退出码判定）
 │   ├── test_p5 ~ test_p23      # 20 个历史迭代回归测试（文件名保持）
 │   └── smoke_simnow_phase_g.py # SimNow 冒烟（需真实凭据：环境变量）

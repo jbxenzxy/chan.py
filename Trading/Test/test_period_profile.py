@@ -50,7 +50,7 @@ sys.path.insert(0, _REPO_ROOT)
 
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.Period import FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS
-from Trading.Infra.InstrumentSpec import InstrumentConfig  # noqa: E402
+from Trading.Infra.Instrument import InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
 
 

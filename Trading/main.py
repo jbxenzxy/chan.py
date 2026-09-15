@@ -23,7 +23,7 @@ M1 交易网关 · CLI 入口
 合约规格（P-B · 2026-09-15 合并）：部署配置收口在 Trading/Config.py 的
     `instrument`（InstrumentConfig，frozen=True）；运行时的有效 tick/乘数、
     涨跌停区间、A′ verified、trade_symbol/last_trade_date 回填收口在**唯一一份**
-    `Instrument`（Infra/InstrumentSpec.py），由本文件构造并交给 Engine 与 Broker
+    `Instrument`（Infra/Instrument.py），由本文件构造并交给 Engine 与 Broker
     —— 静态身份与运行时状态合并为同一对象（播种桥 for_product/_seed_instrument 已消亡，
     tick/乘数初值直接取品种档案）。
 """
@@ -46,14 +46,14 @@ from Trading.Strategy import (EntryPolicy,          # noqa: E402
 from Trading.Config import TradingConfig, resolved_exit_params     # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
-from Trading.Infra.InstrumentSpec import (Instrument,              # noqa: E402
+from Trading.Infra.Instrument import (Instrument,              # noqa: E402
                                           InstrumentConfig,
                                           derive_exchange)
 from Trading.Infra.Period import SUPPORTED_FREQS, bar_secs_for, bars_per_day
-from Trading.Infra.TradingClock import SESSION_SECS
+from Trading.Infra.Clock import SESSION_SECS
 from Trading.Infra.StateDB import Store  # noqa: E402
 
-from Trading.Infra.TradingClock import now_cn  # noqa: E402
+from Trading.Infra.Clock import now_cn  # noqa: E402
 
 
 ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",

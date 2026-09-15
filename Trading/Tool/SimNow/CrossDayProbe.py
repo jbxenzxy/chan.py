@@ -74,7 +74,7 @@ sys.path.insert(0, _ROOT)
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _position_split, _verify_yesterday_delta)
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig as InstrumentSpec_cls  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Records import OrderIntent, Side  # noqa: E402
 
 
@@ -107,7 +107,7 @@ def _make_broker(symbol: str):
     #   Instrument —— 换 trade_symbol 用「重建配置」表达（不能就地改 frozen 字段）。
     _d = cfg.instrument.model_dump()
     _d["trade_symbol"] = symbol or cfg.instrument.trade_symbol
-    spec = Instrument(InstrumentSpec_cls(**_d), cfg.product_profile)
+    spec = Instrument(InstrumentConfig(**_d), cfg.product_profile)
     params = cfg.broker_params.model_dump()
     from Trading.Broker.Base import build_broker
     return build_broker("simnow", spec, params), spec

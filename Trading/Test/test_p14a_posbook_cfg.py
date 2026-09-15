@@ -75,7 +75,7 @@ from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E4
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]

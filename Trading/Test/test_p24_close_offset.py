@@ -73,12 +73,12 @@ try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Config import DEFAULT_CONFIG  # noqa: E402
     from Trading.Engine.Engine import TradingEngine  # noqa: E402
-    from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
+    from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
     from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
     _IF = PRODUCT_PROFILES["IF"]
     from Trading.Infra.Records import ExitPlan, OrderIntent, Position, Side
-    from Trading.Infra.TradingClock import now_ms, trading_day_of_ms
+    from Trading.Infra.Clock import now_ms, trading_day_of_ms
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
     raise SystemExit(2)
@@ -94,7 +94,7 @@ _TQSDK_OFFSETS = ("OPEN", "CLOSE", "CLOSETODAY")
 #   按夜盘规则 >=20:00 归属**次一交易日**。若此处用自然日，则 20:00 之后
 #   [5] 段的 _today_case / _latest_wins_case 会把"今仓"误判成跨日（④ 变 ⑤），
 #   恒红 5 条 —— 且只在 20:00 后跑才暴露（白天永远绿），属"墙钟依赖"型假绿。
-#   口径权威定义见 Trading/Infra/TradingClock.py trading_day_of_ms()。
+#   口径权威定义见 Trading/Infra/Clock.py trading_day_of_ms()。
 _TRADING_DAY = _dt.date.fromisoformat(trading_day_of_ms(now_ms()))
 _TODAY = _TRADING_DAY.isoformat()
 _YESTERDAY = (_TRADING_DAY - _dt.timedelta(days=1)).isoformat()

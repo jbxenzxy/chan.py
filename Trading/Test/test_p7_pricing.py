@@ -51,7 +51,7 @@ from Trading.Config import BrokerConfig  # noqa: E402
 
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-    from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+    from Trading.Infra.Instrument import Instrument  # noqa: E402
     from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
     _IF = PRODUCT_PROFILES["IF"]

@@ -10,7 +10,7 @@
   ② 幂等键 `Signal.make_key` 必须与 M0 录制器 `bsp_key()` 完全一致，
      否则回放源与实时源会产生不同的去重结果（这是最容易埋雷的地方）
 
-时间/交易日语义工具（now_cn / trading_day_of_ms 等）已迁 Infra/TradingClock.py，
+时间/交易日语义工具（now_cn / trading_day_of_ms 等）已迁 Infra/Clock.py，
 本模块只 import 使用，不再是它们的定义处。
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Dict, Optional
 
-from .TradingClock import (
+from .Clock import (
     PLAUSIBLE_DATE_MIN,
     trading_day_from_clock,
     trading_day_of_ms,
@@ -81,7 +81,7 @@ class OrderIntent(str, Enum):
                    并按平今收费 —— 绝不。
       CLOSETODAY  目标恒定是**今仓**，且**仅上期所 / 上期能源（SHFE/INE）可用**
                    —— 其余四家交易所没有平今指令，传 CLOSETODAY 会直接报错
-                   （守卫：`InstrumentSpec.supports_closetoday` + 转移④分支条件）。
+                   （守卫：`Instrument.supports_closetoday` + 转移④分支条件）。
 
       Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
       刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起

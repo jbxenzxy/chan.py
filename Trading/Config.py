@@ -20,7 +20,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       P-B · 2026-09-15 起配置类 frozen=True）：
       品种播种机制已消亡（P-B 删 for_product/_seed_instrument）—— tick/乘数/
       exchange/费率真值源 = 品种档案 Product，运行时对象 `Instrument`
-      构造时直接取档案初值（见 Infra/InstrumentSpec.py）；
+      构造时直接取档案初值（见 Infra/Instrument.py）；
       合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
       trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**。
 
@@ -65,7 +65,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       只 import 档案的纯函数（白名单闸门），挪进来会反向拉起整个 TradingConfig。
       `TradingConfig.period_profile / product_profile` property 是「入口聚合
       档案」的唯一形态。
-    Infra/InstrumentSpec.py 的**部署级配置** `InstrumentConfig`（frozen=True）
+    Infra/Instrument.py 的**部署级配置** `InstrumentConfig`（frozen=True）
       经 `TradingConfig.instrument` 字段挂载，属本配置树的一部分（角色定位见其
       模块 docstring）；同一文件里的 `Instrument`（唯一运行时对象）**不在**本
       配置树上 —— 它由 main.py 构造并注入 Engine / Broker（P-B · 2026-09-15）。
@@ -108,7 +108,7 @@ from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .Infra.InstrumentSpec import InstrumentConfig
+from .Infra.Instrument import InstrumentConfig
 from .Infra.Period import PERIOD_PROFILES, Period
 from .Infra.Product import PRODUCT_PROFILES, Product, describe_unknown_product, parse_product_key
 

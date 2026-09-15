@@ -63,7 +63,7 @@ from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import (  # noqa: E402
+from Trading.Infra.Instrument import (  # noqa: E402
     Instrument, InstrumentConfig, derive_exchange)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
@@ -266,7 +266,7 @@ _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
 
 
 # ════════════════════════════════════════════════════════════════
-# [1] InstrumentSpec.effective_order_advanced() 契约
+# [1] Instrument.effective_order_advanced() 契约
 # ════════════════════════════════════════════════════════════════
 print("\n[1] Instrument.effective_order_advanced()：CZCE 强制 FAK，其余沿用配置"
       "（P-B：exchange 真值源 = 品种档案）")

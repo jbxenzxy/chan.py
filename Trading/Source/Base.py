@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator, Optional, Tuple, Type
 
-from ..Infra.InstrumentSpec import Instrument
+from ..Infra.Instrument import Instrument
 from ..Infra.Records import Bar, Signal
 
 SOURCES: Dict[str, Type["Source"]] = {}
