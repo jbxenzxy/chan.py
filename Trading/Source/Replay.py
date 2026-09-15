@@ -27,8 +27,8 @@ from .Base import Event, Source, register_source
 class ReplaySource(Source):
     name = "replay"
 
-    def __init__(self, params: Dict[str, Any], spec):
-        super().__init__(params, spec)
+    def __init__(self, params: Dict[str, Any], state):
+        super().__init__(params, state)
         self.dir = str(self.params.get("replay_dir") or "./replay_data")
         self.only_alive = bool(self.params.get("only_alive", False))
         self.speed = float(self.params.get("speed", 0.0) or 0.0)

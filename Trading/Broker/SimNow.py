@@ -702,7 +702,7 @@ class SimNowBroker(Broker):
             return False
 
     def _resolve_trade_symbol(self) -> None:
-        sig = self.spec.signal_symbol
+        sig = self.state.signal_symbol
         if not sig.startswith("KQ."):
             return
         try:
@@ -714,7 +714,7 @@ class SimNowBroker(Broker):
                 # P-B（2026-09-15）：trade_symbol 是运行时身份字段（行情回填）——
                 #   原"就地改写配置对象 spec.trade_symbol"（§4.2 例 1 写入点①）
                 #   现在写的是 Instrument 自身的可变字段，配置（frozen）不再被动。
-                self.spec.trade_symbol = q.underlying_symbol
+                self.state.trade_symbol = q.underlying_symbol
         except Exception as e:
             self._conn_error = "主连映射失败: {}: {}".format(type(e).__name__, e)
 
@@ -799,13 +799,13 @@ class SimNowBroker(Broker):
             #   的就地写入随双类合并删除 —— 改为**对账告警**：行情推导与档案
             #   不一致时 warn（两个值都打出来），以档案为准、不阻断。
             ex = derive_exchange(self._trade_symbol)
-            if ex and ex != self.spec.exchange:
+            if ex and ex != self.state.exchange:
                 self._instrument_warn(
                     "行情推导交易所与品种档案不一致: 行情推导={!r} 档案={!r} "
                     "—— 以档案为准（FOK/FAK、平今能力等分支都读档案值）；"
-                    "若档案填错请改 PRODUCT_PROFILES".format(ex, self.spec.exchange),
+                    "若档案填错请改 PRODUCT_PROFILES".format(ex, self.state.exchange),
                     code="exchange_mismatch", symbol=self._trade_symbol,
-                    derived=ex, profile=self.spec.exchange)
+                    derived=ex, profile=self.state.exchange)
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
                 log.info("合约参数已从行情覆盖并冻结: %s", ", ".join(changed))
@@ -850,13 +850,13 @@ class SimNowBroker(Broker):
         注：交易时段护栏（night_session）已判定为不需要（纯 K 线推送架构下
         非交易时段无 K 线 → 无信号 → 无报单），故不再回填。
         """
-        if self.spec.last_trade_date:
+        if self.state.last_trade_date:
             return
         try:
             # P-B（2026-09-15）：last_trade_date 是 Instrument 运行时身份字段
             #   （行情回填）—— 原"就地改写配置对象"（§4.2 例 1 写入点③）随
             #   双类合并归位：写的是运行时对象自身，frozen 配置不再被动。
-            self.spec.last_trade_date = _extract_last_trade_date(quote)
+            self.state.last_trade_date = _extract_last_trade_date(quote)
         except Exception:
             pass
 
@@ -1107,7 +1107,7 @@ class SimNowBroker(Broker):
                 order = self._api.insert_order(symbol=self._trade_symbol,
                                                direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit,
-                                               advanced=self.spec.effective_order_advanced())
+                                               advanced=self.state.effective_order_advanced())
             except Exception as e:
                 return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))
@@ -1222,7 +1222,7 @@ class SimNowBroker(Broker):
                 order = self._api.insert_order(symbol=self._trade_symbol,
                                                direction=direction, offset=offset,
                                                volume=int(volume), limit_price=limit,
-                                               advanced=self.spec.effective_order_advanced())
+                                               advanced=self.state.effective_order_advanced())
             except Exception as e:
                 return self._rejected(signal_key, side, intent.value, volume, ref_price, note,
                                       "下单失败: {}: {}".format(type(e).__name__, e))
@@ -1558,7 +1558,7 @@ class SimNowBroker(Broker):
         # 幻影仓的主路径（见 `_submit_close` 的 P0 注释与 D10 的 REJECT_POSITION）。
         o = Order(
             order_id=self._next_order_id(),
-            signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
+            signal_key=signal_key, symbol=self.state.trade_symbol, side=side,
             action=action_str, volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",
             created_at=now_cn(), broker=self.name, note=note,

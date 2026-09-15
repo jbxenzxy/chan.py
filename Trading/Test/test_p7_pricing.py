@@ -86,10 +86,10 @@ class MockApi:
 def make_broker(api=None, spec=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = spec or Instrument(None, _IF)
+    b.state = spec or Instrument(None, _IF)
     b.params = BrokerConfig().model_dump()   # 严格模式：params 必须完整
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders = []
     return b

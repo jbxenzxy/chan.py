@@ -197,12 +197,12 @@ check("[2f] 非法/空串 → 0", _weekdays_between("", D_MAIN), 0)
 print("\n[3] Engine._pre_trade_check 挂点 —— 三态×意图（dry_run；dry_run 是 offline → A′ 闸门放行）")
 print("    空仓态: 今天=交割日 → 拦【开仓】；锁仓态: → 拦【平仓】；运行态: → 都不拦")
 # ════════════════════════════════════════════════════════════════
-#   注：Engine.spec = cfg.instrument，交割日直接对 eng.spec 赋值（模拟行情回填）。
+#   注：Engine.state = cfg.instrument，交割日直接对 eng.state 赋值（模拟行情回填）。
 #   账户态由持仓派生：无仓=FLAT；净敞口≠0=RUNNING；净敞口0且簿非空=LOCKED。
 # 3a：空仓态(FLAT) + OPEN + today=最后交易日 → 拦（不让新进裸仓）
 with tmp_dir("t3a") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "a")
-    eng.spec.last_trade_date = D_MAIN
+    eng.state.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
@@ -211,7 +211,7 @@ with tmp_dir("t3a") as tmp:
 # 3b：运行态(RUNNING) + today=交割日 → 开(④锁仓)/平(⑤) 都不拦
 with tmp_dir("t3b") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "b")
-    eng.spec.last_trade_date = D_MAIN
+    eng.state.last_trade_date = D_MAIN
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))  # → RUNNING
     eng.on_bar(make_bar(1000))
     check("[3b0] 前置：pn 已增持 → RUNNING", eng.account_state().value, "running")
@@ -227,7 +227,7 @@ with tmp_dir("t3b") as tmp:
 # 3c：锁仓态(LOCKED) + today=交割日 → 拦【平仓/解锁】；但 OPEN(②) 不拦
 with tmp_dir("t3c") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "c")
-    eng.spec.last_trade_date = D_MAIN
+    eng.state.last_trade_date = D_MAIN
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.SHORT))
     eng.on_bar(make_bar(1000))
@@ -243,7 +243,7 @@ with tmp_dir("t3c") as tmp:
 # 3d：空仓态 + 换月远月（last=FAR）→ OPEN 放行（换月自动解除）
 with tmp_dir("t3d") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "d")
-    eng.spec.last_trade_date = D_FAR
+    eng.state.last_trade_date = D_FAR
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)
@@ -255,7 +255,7 @@ print("\n[4] 配置旋钮 risk.delivery_guard_days")
 # 4a：guard_days=2 → 空仓态仅剩 1 个交易日（9/17→9/18）也拦
 with tmp_dir("t4a") as tmp:
     eng = build_engine(tmp, make_cfg(guard_days=2), Instrument(None, _IF), "a")
-    eng.spec.last_trade_date = D_MAIN
+    eng.state.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, "2026-09-17", make_sig(), ref_price=4500.0)
@@ -264,7 +264,7 @@ with tmp_dir("t4a") as tmp:
 # 4b：guard_days=0 → 恒放行（关闭护栏）—— 空仓态 OPEN 交割日当天也放行
 with tmp_dir("t4b") as tmp:
     eng = build_engine(tmp, make_cfg(guard_days=0), Instrument(None, _IF), "b")
-    eng.spec.last_trade_date = D_MAIN
+    eng.state.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
     why = eng._pre_trade_check(act, D_MAIN, make_sig(), ref_price=4500.0)

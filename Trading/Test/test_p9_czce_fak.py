@@ -196,10 +196,10 @@ class MockApi:
 def make_broker(api=None, params=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = Instrument(None, _IF)
+    b.state = Instrument(None, _IF)
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders = []
     b._sig_orders = {}
@@ -211,7 +211,7 @@ def make_czce_broker(api=None, params=None):
     """make_broker 的 CZCE 版：P-B 起 exchange 归品种档案 —— 直接用 TA 档案
     构造 Instrument，trade_symbol 用郑商所月份合约（运行时可写身份字段）。"""
     b = make_broker(api=api, params=params)
-    b.spec = Instrument(
+    b.state = Instrument(
         InstrumentConfig(signal_symbol="KQ.m@CZCE.TA", trade_symbol="CZCE.TA501"),
         PRODUCT_PROFILES["TA"])
     b._trade_symbol = "CZCE.TA501"
@@ -237,7 +237,7 @@ def build_engine(tmpdir, *, max_volume=2, exchange="CZCE", broker=None):
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     else:
-        broker.spec = spec          # 注入目标档案 spec 到传入 broker（如 SimNow+MockApi）
+        broker.state = spec          # 注入目标档案 spec 到传入 broker（如 SimNow+MockApi）
         broker._state = spec
         broker._trade_symbol = tsym
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
@@ -385,7 +385,7 @@ with tmp_dir() as td:
             from Trading.Infra.Records import Order
             o = Order(
                 order_id="reject-000001", signal_key=signal_key,
-                symbol=self.spec.trade_symbol, side=side,
+                symbol=self.state.trade_symbol, side=side,
                 action="open" if intent is OrderIntent.OPEN else "close",
                 volume=int(volume), price=0.0, req_price=float(ref_price),
                 filled_price=None, status="rejected",

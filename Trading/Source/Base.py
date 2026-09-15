@@ -26,18 +26,20 @@ def register_source(cls: Type["Source"]) -> Type["Source"]:
     return cls
 
 
-def build_source(name: str, params: Dict[str, Any], spec: "Instrument") -> "Source":
+def build_source(name: str, params: Dict[str, Any], state: "Instrument") -> "Source":
     if name not in SOURCES:
         raise KeyError("未注册的信号源: {}（已注册: {}）".format(name, list(SOURCES)))
-    return SOURCES[name](params or {}, spec)
+    return SOURCES[name](params or {}, state)
 
 
 class Source(ABC):
     name: str = "base"
 
-    def __init__(self, params: Dict[str, Any], spec: "Instrument"):
+    def __init__(self, params: Dict[str, Any], state: "Instrument"):
+        # D-C（2026-09-15）：属性名统一为 state（原 self.spec 别名已删，
+        #   与 Broker / Engine 同名，全仓只有"运行时对象"这一个说法）。
         self.params = dict(params or {})
-        self.spec = spec
+        self.state = state
 
     @abstractmethod
     def events(self) -> Iterator[Event]:

@@ -127,6 +127,28 @@ def find_alert(engine, code):
     return next((a for a in engine._alerts if a.get("code") == code), None)
 
 
+class _Q:
+    """最小行情替身：只喂 tick / 乘数，涨跌停用自洽值（本测试不关心）。"""
+
+    def __init__(self, tick, mult, hi=1e9, lo=1e-9):
+        self.price_tick = tick
+        self.volume_multiple = mult
+        self.upper_limit = hi
+        self.lower_limit = lo
+
+
+def _drift(engine, tick=None, mult=None):
+    """把有效值"漂移"到指定 tick / 乘数。
+
+    D-D（2026-09-15）：Instrument 的有效值收进不可变 `EffectiveSpec`，
+    **唯一改写路径是 apply_quote**（四个值改成了只读 property，没有 setter）。
+    这里走真实路径 —— 比原"直接给属性赋值"更贴近行情覆盖的真实语义。
+    """
+    st = engine.state
+    st.apply_quote(_Q(tick if tick is not None else st.price_tick,
+                      mult if mult is not None else st.multiplier))
+
+
 def main():
     p = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF"}).product_profile
     check("[0] IF 档案已注入（price_tick=0.2/multiplier=300）",
@@ -154,8 +176,7 @@ def main():
     with tmp_dir() as td:
         eng = build_engine(td)
         eng.state.verified = True
-        eng.state.price_tick = 0.5      # 模拟 apply_quote 覆盖后的行情值
-        eng.state.multiplier = 100.0
+        _drift(eng, tick=0.5, mult=100.0)   # 模拟 apply_quote 覆盖后的行情值
         eng._check_spec_drift()
         a = find_alert(eng, "spec_drift")
         check_true("spec_drift 告警存在", a is not None)
@@ -172,7 +193,7 @@ def main():
     with tmp_dir() as td:
         eng = build_engine(td)
         eng.state.verified = True
-        eng.state.multiplier = 100.0
+        _drift(eng, mult=100.0)
         eng._check_spec_drift()
         n1 = len(eng._alerts)
         eng._check_spec_drift()
@@ -185,7 +206,7 @@ def main():
     with tmp_dir() as td:
         eng = build_engine(td)
         eng.state.verified = True
-        eng.state.multiplier = 100.0    # 漂移
+        _drift(eng, mult=100.0)    # 漂移
         act = _Action(OrderIntent.OPEN, Side.LONG, 1, None, is_exit=False,
                       transition=1)
         reason = eng._pre_trade_check(act, "2026-09-13")
@@ -205,7 +226,7 @@ def main():
         class _CfgStub:
             product_profile = None
         eng.cfg = _CfgStub()
-        eng.state.multiplier = 100.0
+        _drift(eng, mult=100.0)
         eng._check_spec_drift()
         check("无 spec_drift 告警", find_alert(eng, "spec_drift"), None)
         check("未置位（None 档案没做过比对，早退零成本）",

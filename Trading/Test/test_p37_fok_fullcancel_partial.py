@@ -191,7 +191,7 @@ class FakeApi:
 def make_broker(api, over=None):
     """`object.__new__` 绕过真实 `_connect`（不碰网络、不需要凭据）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = Instrument(None, _IF)
+    b.state = Instrument(None, _IF)
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     for k, v in (over or {}).items():
@@ -201,7 +201,7 @@ def make_broker(api, over=None):
             params[k] = v
     b.params = params
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders = []
     b._sig_orders = {}

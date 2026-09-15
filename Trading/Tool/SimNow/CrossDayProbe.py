@@ -185,7 +185,7 @@ class _FakeApi:
 
 def _fake_broker(api):
     b = object.__new__(SimNowBroker)
-    b.spec = Instrument()  # P-B：唯一运行时对象（默认 IF 档案）
+    b.state = Instrument()  # P-B：唯一运行时对象（默认 IF 档案）
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     params["channel"].update({"position_ok_timeout": 0.2,
@@ -195,7 +195,7 @@ def _fake_broker(api):
                    "fill_timeout_open": 0.05, "fill_timeout_close": 0.05})
     b.params = params
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders, b._sig_orders, b._conn_error = [], {}, None
     return b

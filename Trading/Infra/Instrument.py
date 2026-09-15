@@ -41,9 +41,13 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
         └ 定价与成本：round_price / align_* / slip_price / cost_cash /
             points_to_cash（读有效 tick/乘数 × 档案 Fee 两档，属运行时语义）
 
-  兼容视图：`instrument.spec` **返回 instrument 自身** —— 合并后"静态规格"
-  与"运行时状态"是同一个对象，历史上 `state.spec.xxx` / `b.spec.xxx` 的
-  只读引用继续工作（读到的是运行时有效值 + 转发项，语义比旧版更一致）。
+  D-C（2026-09-15）：原 `instrument.spec` 兼容别名**已删除** —— 它让
+  `instrument` / `.spec` / `.state` 三个名字指向同一块内存，把 P-B"概念更少"
+  的合并收益吃回去一半；更麻烦的是 `instrument.spec.price_tick` 读起来像
+  "静态规格"，实际读到的是**行情回填后的有效值**（歧义正是方案自己列为
+  "唯一需要权衡"的那处）。现在两处说法各自名副其实：
+    · 对象本身 `instrument`（或调用方持有的 `self.state`）—— 唯一运行时对象；
+    · 持有者一律用 `.state` 这一个属性名（Broker / Engine / Source 同名）。
 
   所有权规则（不变，务必遵守）：一次运行**只有一份** Instrument ——
   main.py 建好后同时交给 `Broker.build_broker(..., state=instr)` 与
@@ -59,6 +63,7 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
 
@@ -163,6 +168,28 @@ class InstrumentConfig(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
+# EffectiveSpec —— 行情回填后的**合约有效参数**（D-D · 2026-09-15）
+# ════════════════════════════════════════════════════════════════════
+@dataclass(frozen=True)
+class EffectiveSpec:
+    """一张合约在**当前**的四个有效参数（行情口径），不可变值对象。
+
+    为什么单独立一个类（D-D）：这四个值必须**同时**换新 —— 半新半旧的一组
+    参数（新 tick 配旧乘数）比全旧更危险。原实现靠"校验循环跑在赋值循环
+    之前"的代码顺序来保证这一点，任何一次重构都可能悄悄破坏它（而测试未必
+    覆盖得到）。改成"构造新值对象 → 一次赋值替换"后，原子性由**结构**保证：
+    `Instrument._effective` 要么指向完整旧值、要么指向完整新值，没有中间态。
+
+    归属：离线（dry_run/replay）初值取品种档案；在线由 `apply_quote` 从
+    真实月份合约行情整体替换。涨跌停 0 = 未知（离线未取到）→ 护栏不校验。
+    """
+    price_tick: float
+    multiplier: float
+    upper_limit: float = 0.0
+    lower_limit: float = 0.0
+
+
+# ════════════════════════════════════════════════════════════════════
 # Instrument —— 合约轴的**唯一一份运行时对象**（P-B · 2026-09-15）
 #   原 InstrumentSpec（静态身份）+ InstrumentState（运行时状态）合并而成。
 #   为什么是普通类而不是 pydantic：它是**可变状态**；pydantic 的
@@ -217,13 +244,15 @@ class Instrument:
         #   0 值（""）= 未知 → 交割月护栏对未知不校验（不校验未知的东西）。
         self.last_trade_date: str = ""
         # —— 有效值：初值直接取品种档案（§5.1；在线路径由行情原子覆盖）——
-        self.price_tick: float = float(product.price_tick) if product is not None else 0.0
-        self.multiplier: float = float(product.multiplier) if product is not None else 0.0
-        # —— 运行时采集：行情 / 离线显式声明写入 ——
-        #   当日涨跌停区间（绝对价）。**唯一真值来源是行情**（apply_quote 回填）。
-        #     0 = 未知（离线模式未取到）→ 涨跌停护栏对未知区间不校验。
-        self.upper_limit: float = 0.0
-        self.lower_limit: float = 0.0
+        #   D-D（2026-09-15）：四个有效值收进**不可变** EffectiveSpec ——
+        #   改写路径 = 整体替换（apply_quote 校验通过后一次赋值），
+        #   "半新半旧"在类型层面不可能出现。下面四个同名 property 只读转发。
+        self._effective: EffectiveSpec = EffectiveSpec(
+            price_tick=float(product.price_tick) if product is not None else 0.0,
+            multiplier=float(product.multiplier) if product is not None else 0.0,
+            upper_limit=0.0,   # 0 = 未知（离线未取到）→ 涨跌停护栏对未知不校验
+            lower_limit=0.0,
+        )
         # ── A′ fail-closed 闸门（§5.9.3）──
         # verified: 行情参数（tick/乘数/涨跌停）已取到并通过校验。
         #   实盘（非离线 broker）未置 True → Engine._pre_trade_check 拒单 + 严重告警。
@@ -234,18 +263,8 @@ class Instrument:
         #   / "CONFIG_OFFLINE"（dry_run/replay 离线兜底）/ ""（尚未定）。
         self.source: str = ""
 
-    # ---------- 兼容视图（P-B）----------
-    @property
-    def spec(self) -> "Instrument":
-        """合并后"静态规格"与"运行时状态"是同一个对象 —— 返回自身。
-
-        历史上 `state.spec.xxx` / `broker.spec.xxx` / `eng.spec.xxx` 的只读
-        引用因此继续工作：读到的是运行时有效值（price_tick / trade_symbol /
-        last_trade_date）或转发项（signal_symbol / exchange / supports_closetoday
-        …），语义比旧版（种子值 vs 有效值两套）更一致。
-        新代码请直接用 `instrument.xxx`，不要再写 `.spec`。
-        """
-        return self
+    # D-C（2026-09-15）：这里原有 `spec` 兼容 property（返回 self 自身），
+    #   已删除 —— 见模块 docstring「D-C」段。取有效值请直接用 `instrument.xxx`。
 
     @property
     def config(self) -> InstrumentConfig:
@@ -256,6 +275,29 @@ class Instrument:
     def product(self) -> Optional["Product"]:
         """品种档案（exchange / Fee 两档 / prefer_closetoday 的真值源）。"""
         return self._product
+
+    # —— 有效值转发（D-D · 2026-09-15：不可变 EffectiveSpec，只读）——
+    #   实盘由 apply_quote 整体替换；离线初值取品种档案。四个值同源同寿命，
+    #   刻意**不给逐个 setter** —— 那正是 D-D 要消掉的"半新半旧"来源。
+    @property
+    def price_tick(self) -> float:
+        """有效最小变动价位（对齐 / 滑点口径都读它）。"""
+        return self._effective.price_tick
+
+    @property
+    def multiplier(self) -> float:
+        """有效合约乘数（元/点；points_to_cash / cost_cash 读它）。"""
+        return self._effective.multiplier
+
+    @property
+    def upper_limit(self) -> float:
+        """当日涨停价（绝对价）。0 = 未知（离线）→ 涨跌停护栏不校验。"""
+        return self._effective.upper_limit
+
+    @property
+    def lower_limit(self) -> float:
+        """当日跌停价（绝对价）。0 = 未知（离线）→ 涨跌停护栏不校验。"""
+        return self._effective.lower_limit
 
     # —— config 只读转发（替代旧 InstrumentSpec 的静态字段读点）——
     @property
@@ -362,7 +404,9 @@ class Instrument:
         """从行情 quote 回填合约参数（§5.9.4 项 2 · D20）。返回**值发生变化**的字段名列表。
 
         纯数据方法：鸭子类型读 quote 的四个字段，**不 import tqsdk**（便于单测）。
-        原子性：先对全部待填值校验，任一不过 → 抛 ValueError 且**一个字段都不改**
+        原子性（D-D · 2026-09-15 升级为**结构保证**）：先对全部待填值校验，任一
+        不过 → 抛 ValueError 且**一个字段都不改**；通过后把四个值一次性装进新的
+        不可变 `EffectiveSpec` 整体替换 —— 不再是"逐字段 setattr、靠代码顺序保证"
         （半新半旧的一组参数比全旧更危险）。
 
         校验清单（§5.9.3，任一不过即 fail）：
@@ -417,13 +461,21 @@ class Instrument:
                     and hi > lo):
                 vals["upper_limit"], vals["lower_limit"] = hi, lo
 
-        changed = []
-        for s_field, v in vals.items():
-            old = float(getattr(self, s_field))
-            setattr(self, s_field, v)
-            if abs(old - v) > 1e-12:
-                changed.append(s_field)
-        return changed
+        # D-D（2026-09-15）：校验已**全部**通过 → **一次整体替换**（不可变值对象）。
+        #   原实现是"逐字段 setattr"，原子性依赖"校验循环跑在赋值循环之前"这一
+        #   代码顺序 —— 顺序被将来的重构打乱就会悄悄不原子，且未必有测试兜住。
+        #   换成整体替换后，原子性是**结构保证**：调用方看到的 _effective 要么
+        #   整个是旧值、要么整个是新值，不存在"改了 tick 还没改 multiplier"。
+        old = self._effective
+        self._effective = EffectiveSpec(
+            price_tick=vals.get("price_tick", old.price_tick),
+            multiplier=vals.get("multiplier", old.multiplier),
+            upper_limit=vals.get("upper_limit", old.upper_limit),
+            lower_limit=vals.get("lower_limit", old.lower_limit),
+        )
+        new = self._effective
+        return [f for f in ("price_tick", "multiplier", "upper_limit", "lower_limit")
+                if abs(getattr(old, f) - getattr(new, f)) > 1e-12]
 
     def mark_config_offline(self) -> None:
         """离线模式（dry_run/replay）显式降级标记（§5.9.3 规则 2）。

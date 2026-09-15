@@ -230,34 +230,34 @@ class Broker(ABC):
     def __init__(self, instrument: "Instrument",
                  params: Optional[Dict[str, Any]] = None,
                  state: Optional["Instrument"] = None):
-        # P-B（2026-09-15）：双类合并 —— spec/state 都是同一个 Instrument。
-        #   self.spec 保留为兼容名（大量只读引用 spec.trade_symbol 等），
-        #   语义 = 运行时对象自身；self._state 若外部显式传入必须同对象。
+        # P-B（2026-09-15）：双类合并 —— 唯一一份运行时对象（instrument）。
+        # D-C（2026-09-15）：原 spec 兼容别名**已删除** —— 本类现在只有
+        #   `state` 一个属性名（与 Engine / Source 同名），不再"两个属性指同一
+        #   块内存"。`instrument` 与 `state` 参数仍须同一对象，否则显式报错。
         if state is not None and state is not instrument:
             raise ValueError(
-                "P-B 合并后 spec 与 state 是同一个 Instrument 对象（got 不同实例）")
-        self.spec = instrument
-        self._state: Optional["Instrument"] = state if state is not None else instrument
+                "P-B 合并后 instrument 与 state 是同一个 Instrument 对象（got 不同实例）")
+        self._state: "Instrument" = state if state is not None else instrument
         self.params: Dict[str, Any] = dict(params or {})
         # R1：报单序号（跨重启唯一性）。见 order_seq / seed_order_seq 注释。
         self._order_seq: int = 0
 
     @property
     def state(self) -> "Instrument":
-        """合约运行时对象（P-B 合并后 = self.spec 同一对象）。
+        """合约运行时对象（P-B 合并后**唯一一份**；D-C 起本类只有这一个名字）。
 
-        兼容说明：Phase 3 时代"惰性自建"分支已无意义 —— Instrument 不再
-        需要"从 spec 播种"（tick/乘数初值在构造时直接取品种档案）。
-        __new__ 手工装配的测试若未跑 __init__，这里回落到 self.spec。
+        D-C（2026-09-15）：原 `self.spec` 回落分支已删 —— `__new__` 手工装配的
+        替身（不跑 `__init__`）**必须显式赋 `state=`**，否则这里明确报错，
+        而不是悄悄回落到另一个名字上（那正是要消掉的歧义）。
         """
         st = getattr(self, "_state", None)
-        return st if st is not None else self.spec
+        if st is None:
+            raise RuntimeError(
+                "broker.state 未初始化：不跑 __init__ 的装配路径必须显式赋 state=…")
+        return st
 
     @state.setter
     def state(self, value: "Instrument") -> None:
-        if value is not self.spec:
-            raise ValueError(
-                "P-B 合并后 spec 与 state 是同一个 Instrument 对象（got 不同实例）")
         self._state = value
 
     @abstractmethod

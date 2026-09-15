@@ -167,7 +167,7 @@ def build(tmpdir, tag="a", store_path=None):
                   echo=False, echo_kinds=None)
     eng = TradingEngine(cfg, broker, EntryPolicy({}),
                         LayeredExitPolicy(resolved_exit_params(cfg)), store, ev)
-    eng.spec = spec
+    eng.state = spec
     return eng, store, broker, ev, db
 
 

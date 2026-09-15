@@ -192,7 +192,7 @@ class RejectDryBroker(DryRunBroker):
         from Trading.Infra.Clock import now_cn
         o = Order(
             order_id="{}-REJ".format(self.name), signal_key=signal_key,
-            symbol=self.spec.trade_symbol, side=side,
+            symbol=self.state.trade_symbol, side=side,
             action="close", volume=int(volume), price=float(ref_price),
             req_price=float(ref_price), filled_price=None, status="rejected",
             created_at=now_cn(), broker=self.name, note=note,

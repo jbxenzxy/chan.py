@@ -166,10 +166,10 @@ class MockApi:
 
 def make_broker(api=None, params=None, spec=None):
     b = object.__new__(SimNowBroker)
-    b.spec = spec or Instrument(None, _IF)
+    b.state = spec or Instrument(None, _IF)
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders = []
     b._sig_orders = {}

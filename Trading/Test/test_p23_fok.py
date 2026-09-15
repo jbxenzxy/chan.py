@@ -180,11 +180,11 @@ class MockApi:
 def make_broker(api=None, params=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = Instrument(None, _IF)
+    b.state = Instrument(None, _IF)
     # 严格模式：以配置模型默认值为底，测试只覆盖自己关心的键
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
-    b._trade_symbol = b.spec.trade_symbol
+    b._trade_symbol = b.state.trade_symbol
     b._seq = itertools.count(1)
     b.orders = []
     b._sig_orders = {}

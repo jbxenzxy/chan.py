@@ -66,8 +66,8 @@ def iter_sse(resp) -> Iterator[tuple]:
 class SseSource(Source):
     name = "sse"
 
-    def __init__(self, params: Dict[str, Any], spec):
-        super().__init__(params, spec)
+    def __init__(self, params: Dict[str, Any], state):
+        super().__init__(params, state)
         self.base = str(self.params.get("sse_base") or "http://127.0.0.1:18081").rstrip("/")
         self.symbol = str(self.params.get("symbol") or "KQ.m@CFFEX.IF")
         self.freq = str(self.params.get("freq") or "5m")

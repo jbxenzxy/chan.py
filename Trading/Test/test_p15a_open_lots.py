@@ -132,7 +132,7 @@ class RejectDryBroker(DryRunBroker):
             from Trading.Infra.Records import Order
             o = Order(
                 order_id="reject-{:06d}".format(self._calls),
-                signal_key=signal_key, symbol=self.spec.trade_symbol,
+                signal_key=signal_key, symbol=self.state.trade_symbol,
                 side=side,
                 action="open" if intent is OrderIntent.OPEN else "close",
                 volume=int(volume),

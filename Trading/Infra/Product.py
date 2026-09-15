@@ -17,8 +17,11 @@
 变更纪律（§5.4 · 取代旧「Profile=标定 / Spec=事实」后缀规则）
 ----------------------------------------------------
 文件名只回答「这是 per-product 粒度的东西」；「该不该走 git 评审」用两个正交手段表达：
-  · 标定值（r_multiple_tp / 两档费率）：改 = 改代码资产，走 git 评审 + 对账测试
-    （test_product_fee_table.py 快照对账 / test_p50）；
+  · 标定值（r_multiple_tp）：改 = 改代码资产，走 git 评审 + 对账测试（test_p50）；
+  · **费率：不再是手抄值** —— 真值源 = 券商费率表 `Docs/手续费标准-.xlsx`，
+    经 `Tool/GenFeeTable.py` 刷新**本文件内的 GENERATED 标记区块**（机器生成、
+    禁止手改），费率数字在本文件的手写部分里**一个字面量都没有**（D-B · 2026-09-15）。
+    对账测试：`Trading/Test/test_product_fee_table.py`（生成区块 ⇄ 档案 ⇄ xlsx 三方一致）。
   · 合约事实（price_tick / multiplier）：随交易所/券商公告人工同步
     （实盘由行情 apply_quote 原子覆盖，档案值仅离线兜底）。
 
@@ -54,7 +57,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import ClassVar, Dict, List, Optional, Tuple
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -93,6 +96,71 @@ class Fee:
         return "{:.2f} 元/手".format(self.value)
 
 
+def _freeze_fee(t: Tuple[str, float]) -> Fee:
+    """费率区块里的 (kind, value) 元组 → Fee 对象（唯一转换点）。"""
+    return Fee(t[0], t[1])
+
+
+# 覆盖档条目 = (标签, 开仓档, 平今档)。见 Product.fee_overrides。
+OverrideItem = Tuple[str, Fee, Optional[Fee]]
+
+
+# ══════════════════════════════════════════════════════════════════
+# 费率数据区（D-B · 生成式 SSOT）—— **机器生成，禁止手工编辑**
+# ══════════════════════════════════════════════════════════════════
+# 真值源 = `Docs/手续费标准-.xlsx`。区块内是纯数据元组，与本文件的手写内容严格分离，
+# 分离手段不是"文件边界"而是"标记 + 逐字节护栏"（为什么不用独立文件：见
+# `Tool/GenFeeTable.py` 模块 docstring —— 交接文档 §5.1 把 Infra/ 定死成 7 个模块）：
+#   · 生成器只重写两块标记之间的文本，**区块外逐字节不动**；
+#   · 有人在区块里手改一个数字 → `Tool/GenFeeTable.py --check` 与
+#     `Test/test_product_fee_table.py [3f]`（逐字节比对）立刻变红；`[3g]-[3i]`
+#     还会自检"这道闸门不是恒返回 0"。
+# 改费率 = 改 xlsx（或改生成器解析规则）→ 重跑：
+#
+#     python Trading/Tool/GenFeeTable.py
+#
+# >>> GENERATED: FeeTable（禁止手工编辑；改费率请改 xlsx 后重跑生成器）
+# 纯数据元组（kind, value）：
+#   kind="rate"    → value = 万分之几（xlsx 里打印的 "0.23%%" 就存 0.23）
+#   kind="per_lot" → value = 元/手
+FeeTuple = Tuple[str, float]
+Pair = Tuple[FeeTuple, Optional[FeeTuple]]   # (开仓档, 平今档; None=同开仓档)
+
+# 源表品种名（备案：便于人工回查 xlsx 行）
+BASE_LABELS: Dict[str, str] = {
+    'AG': '白银',
+    'AU': '黄金',
+    'CU': '铜',
+    'IC': '中证500',
+    'IF': '沪深300指数',
+    'IH': '上证50',
+    'IM': '中证1000',
+    'TA': 'PTA',
+}
+
+# 基准档：品种键 → (开仓/平昨档, 平今档)。平今 None = xlsx 无独立平今行（同开仓档）。
+BASE: Dict[str, Pair] = {
+    'AG': (('rate', 0.1), None),
+    'AU': (('per_lot', 10.0), ('per_lot', 0.0)),
+    'CU': (('rate', 0.5), ('rate', 1.0)),
+    'IC': (('rate', 0.23), ('rate', 2.3)),
+    'IF': (('rate', 0.23), ('rate', 2.3)),
+    'IH': (('rate', 0.23), ('rate', 2.3)),
+    'IM': (('rate', 0.23), ('rate', 2.3)),
+    'TA': (('per_lot', 3.0), ('per_lot', 0.0)),
+}
+
+# 覆盖档（合约月份差异化费率）：品种键 → ((标签, 开仓档, 平今档), …)
+# ⚠️ 当前**不消费**（Product.fee_overrides 字段位保留、默认空）。
+#    AU/AG 主力滚到覆盖档合约时若不启用本表，回测成本会静默低估；
+#    启用方式见 Product.fee_overrides 字段注释（一处收口，勿在别处另开分支）。
+OVERRIDES: Dict[str, List[OverrideItem]] = {
+    'AG': [('6、12合约&2607、2608、2609、2610合约', ('rate', 0.5), None)],
+    'AU': [('6、12合约&2607、2608、2609、2610合约', ('per_lot', 20.0), ('per_lot', 0.0))],
+}
+# <<< END GENERATED
+
+
 # ══════════════════════════════════════════════════════════════════
 # 品种档案（与 Period 平行的"随品种可变参数"归总）
 # ══════════════════════════════════════════════════════════════════
@@ -109,12 +177,16 @@ class Product:
       【策略标定值（随经验调，放前面）】
       r_multiple_tp            止盈盈亏比（r_multiple_tp × R），同时是 L3 启动阈值（品种级）
                                （保本/锁利缓冲 breakeven_buffer_r 已改为全局比例，见 ExitConfig）
-      【费率（P-A 静态化 · 2026-09-15）：真值源 = 券商费率表（Docs/手续费标准-.xlsx）】
+      【费率（P-A 静态化 · D-B 生成式 · 2026-09-15）：真值源 = 券商费率表
+        （Docs/手续费标准-.xlsx → Tool/GenFeeTable.py → 本文件 GENERATED 区块）】
       open_fee                 开仓费率。xlsx 只有两个口径：交易（= 开仓 = 平昨）与平今
                                —— 全表 90 条带独立平今行的基准条目里没有一行把"平昨"
                                单独列出来（§6.4），故**平昨档 = 开仓档，不设第三档**。
       closetoday_fee           平今费率；None = 与开仓同档（如 AG 无独立平今行）；
                                Fee.free() = 平今免收（如 AU/TA）。
+      fee_overrides            **覆盖档**（合约月份差异化费率）字段位，默认空 = 不消费。
+                               来源 = 费率区块的 OVERRIDES（AU 6/12 合约 20 元/手、
+                               AG 6/12 合约 万0.5）。留位理由见字段处注释。
       exchange                 交易所（CFFEX/SHFE/INE/DCE/CZCE/GFEX）。
                                supports_closetoday（平今指令能力闸门）读它判定。
       【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
@@ -134,6 +206,15 @@ class Product:
     price_tick: float = 0.2                # 最小变动价位（离线兜底；中金所四品种均 0.2）
     exchange: str = ""                     # 交易所：平今能力闸门 / FOK-FAK 语义的档案侧来源
     note: str = ""                              # 调参记录 / 数据来源 / 标定状态
+    # 覆盖档字段位（R3 · 2026-09-15，交接文档 §6.3-b 明令"字段位必须留"）。
+    #   ⚠️ **当前不消费**：`fee_pair()` / `prefer_closetoday` 一律读基准档。
+    #   后果（量化）：AU 主力滚到 6/12 合约时基准档 10 元/手 vs 覆盖档 20 元/手
+    #   → 回测成本低估 2.0×；AG 万0.1 vs 万0.5 → 低估 5.0×。
+    #   **决策侧不受影响**（AU 覆盖档仍平今免、AG 仍平今=开仓，`prefer_closetoday`
+    #   结论不变），受影响的只有会计侧 `cost_cash`。
+    #   启用方式：把 `effective_fee_override()` 接进 `fee_pair()`，并在
+    #   `Instrument.cost_cash` 传 trade_symbol —— 一处收口，勿在别处另开分支。
+    fee_overrides: Tuple[OverrideItem, ...] = ()
 
     # 锁仓路径**比平今路径多出来的**开仓档成交笔数（P-A · §6.5.1 实测，非推理）：
     #   平今路径 = 2 笔：开 A + 平今 A
@@ -141,7 +222,42 @@ class Product:
     #              （两笔平仓建仓于前一日，按**平昨**计；xlsx 已证 平昨 ≡ 开仓）
     #   ⇒ 4X > X + Y  ⟺  Y < 3X → 走平今（阈值 = 3 × 开仓费）。
     #   这 4 笔全部由现有转移表自动走出（③ 拆锁 + ⑤ 出场），不需要新路径。
-    LOCK_PATH_MULT: int = 3
+    #
+    # ⚠️ ClassVar（R2 · 2026-09-15 修）：原写法 `LOCK_PATH_MULT: int = 3` 在
+    #   dataclass 体内 = **字段不是常量** —— dataclasses.fields() 含它、可逐实例
+    #   覆写（`Product(..., LOCK_PATH_MULT=5)` 静默把阈值改成 5×）、并混进
+    #   asdict() 的配置快照。它是"品类级常量"，必须 ClassVar：脱离 dataclass
+    #   字段机制，构造期拒绝传参、快照不含它。同提交的 Instrument.py 用的是
+    #   正确写法（ClassVar），此处与其对齐。
+    LOCK_PATH_MULT: ClassVar[int] = 3
+    # 计价方式的两种合法值（Fee.kind），供静态派生判"两档是否可比"。
+    _KIND_RATE: ClassVar[str] = "rate"
+    _KIND_PER_LOT: ClassVar[str] = "per_lot"
+
+    def __post_init__(self) -> None:
+        """构造期算一次**静态平今派生**（D-A · 2026-09-15）。
+
+        原实现 `prefer_closetoday(ref_price)` 每次调用都重算一遍 —— 而 8 个品种
+        两档**计价方式恒相同**（全 rate 或全 per_lot），比较式两边同乘
+        price × multiplier 后价格被约掉 → 结论对任意价格恒定。也就是说
+        "每次重算"算的是一个 import 期就完全确定的常量，调用点还被逼着传
+        魔法值（`prefer_closetoday(1.0)`）。
+
+        现在结论在**构造期**算一次并冻结：
+          · 同计价方式 → True/False（静态确定，不需要价格）
+          · 混合计价（一档 rate 一档 per_lot）→ None（真需要价格，走
+            prefer_closetoday_at(ref_price) 运行期路径）
+        用 `Optional[bool]` 把"这个结论是否已确定"写进类型，而非写在 docstring 里。
+        """
+        o, ct = self.fee_pair()
+        if o.kind != ct.kind:
+            static: Optional[bool] = None          # 混合计价：价格不可约，须运行期比
+        elif not self.supports_closetoday:
+            static = False                          # 能力闸门短路（不看费率）
+        else:
+            # 同 kind 时 cash() 里的 price × multiplier 是公因子 → 直接比 value
+            static = ct.value < self.LOCK_PATH_MULT * o.value
+        object.__setattr__(self, "_prefer_ct_static", static)
 
     @property
     def label(self) -> str:
@@ -160,46 +276,57 @@ class Product:
         return str(self.exchange or "").strip().upper() in ("SHFE", "INE")
 
     def fee_pair(self) -> Tuple[Fee, Fee]:
-        """返回（开仓费, 平今费）两档。closetoday_fee=None（无独立平今行）→ 回开仓档。
+        """返回（开仓费, 平今费）两档**基准档**。closetoday_fee=None → 回开仓档。
 
-        P-A 用户拍板（2026-09-15）：**不做合约月份覆盖档**（fee_overrides 不实现，
-        连字段位也不留）——有覆盖档的品种（AU 6/12 合约 20 元/手、AG 6/12 万0.5）
-        一律按第一个基准档计，覆盖档信息只留在 note 里备查。
-        `trade_symbol` 参数随覆盖档一并取消，签名只留 ref_price。
+        P-A 用户拍板（2026-09-15）：**不做合约月份覆盖档** —— 有覆盖档的品种
+        （AU 6/12 合约 20 元/手、AG 6/12 万0.5）一律按第一个基准档计。
+        R3（2026-09-15）：**字段位已留**（`fee_overrides`，数据由费率区块提供、
+        构造期填入），但本方法与 `prefer_closetoday` 仍只读基准档 ——
+        字段位存在 ≠ 已消费，启用方式见 `fee_overrides` 的注释。
         """
         return self.open_fee, (self.open_fee if self.closetoday_fee is None
                                else self.closetoday_fee)
 
-    def prefer_closetoday(self, ref_price: float) -> bool:
-        """今仓离场：直接平今还是反向锁仓？**单源派生，无手写布尔**（P-A · §6.5）。
+    @property
+    def prefer_closetoday(self) -> Optional[bool]:
+        """今仓离场：直接平今还是反向锁仓？**构造期已定的静态派生**（D-A · §6.5）。
 
-        返回 True = 走 CLOSETODAY 平今；False = 反向开仓锁仓（现状流程）。
+        True  = 走 CLOSETODAY 平今；
+        False = 反向开仓锁仓（现状流程）；
+        None  = 两档计价方式不同（混合 rate/per_lot）→ 结论依赖价格，
+                须改用 `prefer_closetoday_at(ref_price)`。
 
-        两层判定，缺一不可：
+        两层判定，缺一不可（均在 `__post_init__` 内完成）：
           ① 能力闸门（交易所事实）：无 CLOSETODAY 指令 → 结构上发不出去 → 锁仓。
-             ⚠️ 引擎路径（Engine._decide_exit）在调本方法**之前**已按
-             `spec.supports_closetoday`（运行时有效 exchange）闸过一次；
-             本方法内的闸门读档案 exchange，供纯函数独立使用（费率表对账 /
+             ⚠️ 引擎路径（Engine._decide_exit）在调本属性**之前**已按
+             `instrument.supports_closetoday`（运行时有效 exchange）闸过一次；
+             本属性内的闸门读档案 exchange，供纯函数独立使用（费率表对账 /
              启动横幅）时兜底。
           ② 费率会计：比「平今路径 2 笔」vs「锁仓路径 4 笔」→ 阈值 = LOCK_PATH_MULT × 开仓费。
 
         ⚠️ **不要复用已删除的 `evaluate_closetoday_economy`**：它是 1× 口径
         （只比平今 vs 平昨**单笔**），漏算锁仓路径多出的两笔平仓 → 判据错
-        （分歧区间 X < Y < 3X，CU 的 Y=2X 正落在这里）。本方法为 3× 口径新写。
+        （分歧区间 X < Y < 3X，CU 的 Y=2X 正落在这里）。本属性为 3× 口径新写。
 
         ⚠️ **"手数 N / 价格自动约掉"是架构不变量，不是数学恒等式**：
         前提 = 一次信号只报一笔（无拆单）+ FOK/FAK 全成全撤（无部分成交）
         → 每笔手数恒等（Engine._open_volume / 转移③⑤ 的 min() 都取等）。
-        且本表 8 个品种两档**计价方式恒相同**（全 rate 或全 per_lot），
-        比较式两边同乘 price × multiplier 后价格约掉 —— `ref_price` 仅在
-        将来出现"混合计价"（一档 rate 一档 per_lot）时才真正参与比较；
-        传入当前持仓入场价或最近 bar 收盘价均可。
-        若未来引入差异化手数 / 部分成交 / 混合计价，本判定需重新推导。
+        且本表 8 个品种两档**计价方式恒相同**（全 rate 或全 per_lot）→ 比较式
+        两边同乘 price × multiplier 后价格约掉，故结论可按品种静态冻结。
+        若未来引入差异化手数 / 部分成交 / 混合计价，本判定需重新推导
+        （混合计价已被 `Optional[bool]` 的 None 分支显式承接）。
         """
-        # ① 能力闸门：无 CLOSETODAY 指令 → 只能锁仓（早退，不看费率）
+        return self._prefer_ct_static
+
+    def prefer_closetoday_at(self, ref_price: float) -> bool:
+        """运行期口径的平今派生 —— **仅在 `prefer_closetoday is None` 时需要**。
+
+        存在意义（D-A）：把"什么时候真的需要价格"显式化。静态可判定的品种
+        走 `prefer_closetoday`（无需价格）；只有混合计价的两档才落到这里。
+        调用方（Engine._prefer_closetoday）应先读静态属性、None 时才用本方法。
+        """
         if not self.supports_closetoday:
             return False
-        # ② 费率会计：平今路径（NX + NY） vs 锁仓路径（4NX，两笔平仓按平昨 ≡ 开仓档）
         open_fee, ct_fee = self.fee_pair()
         o = open_fee.cash(ref_price, self.multiplier)
         ct = ct_fee.cash(ref_price, self.multiplier)
@@ -221,88 +348,120 @@ class Product:
         }
 
 
+def _fee_kw(code: str) -> Dict[str, object]:
+    """从**本模块的生成区块**取费率 → Product 构造参数（两档费率 + 覆盖档）。
+
+    D-B（2026-09-15）唯一手抄消除点：本函数是费率数据进入档案的**唯一入口**，
+    Product 条目里不再出现任何费率数字。区块由 `Tool/GenFeeTable.py` 机器生成、
+    就写在**本文件上方**（`>>> GENERATED` … `<<< END GENERATED`）—— 所以这里读的
+    只是同模块的模块级常量，没有额外模块依赖。生成区块缺该品种时直接 KeyError
+    （启动期硬失败，好过静默用错费率）。
+    """
+    o, ct = BASE[code]
+    overrides: Tuple[OverrideItem, ...] = tuple(
+        (label, _freeze_fee(bo), (_freeze_fee(bct) if bct is not None else None))
+        for label, bo, bct in OVERRIDES.get(code, ()))
+    return {
+        "open_fee": _freeze_fee(o),
+        "closetoday_fee": (_freeze_fee(ct) if ct is not None else None),
+        "fee_overrides": overrides,
+    }
+
+
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
 # 条目实参顺序：策略标定值在前（r_multiple_tp），费率与合约事实在后；
 # note 同序。显式给真值；note 标定状态。
 #
-# ⚠️ 手续费（P-A · 2026-09-15 归位）：费率真值源 = 券商费率表 Docs/手续费标准-.xlsx，
-#   **静态档案，启动即确定**（取代已删除的"成交回报反推 / TqSim 查询"两条运行时通道）。
-#   数值由解析脚本从 xlsx 派生（Parsing 规则见对账测试 test_product_fee_table.py 的快照注释），
-#   平今口径分歧（如 CFFEX 万2.3 vs 代码旧值万3.45 = 万2.3 × 1.5）已按用户拍板"以 xlsx 为准"落值；
-#   若实盘成交单显示券商按 1.5 倍加收，改对应品种的 Fee 数值一行即可。
-#   对账守护：Trading/Test/test_product_fee_table.py（xlsx 派生快照 vs 本表逐项断言）。
+# ⚠️ 手续费（D-B · 2026-09-15 生成式）：本段**不再手写任何费率数字** ——
+#   费率经 `_fee_kw(code)` 从**本文件的 GENERATED 费率区块**（由 Tool/GenFeeTable.py
+#   从 Docs/手续费标准-.xlsx 生成）注入。改费率 = 改 xlsx（或生成器解析规则）
+#   + 重跑生成器，**不要在本文件里加数字**（加了就成了第二份事实源，且会被
+#   `GenFeeTable.py --check` 当场抓出）。
+#   ⚠️ 平今口径分歧（CFFEX 万2.3 vs 早期代码的万3.45 = 万2.3 × 1.5）已按
+#   用户拍板"以 xlsx 为准"落值；若实盘成交单显示券商按 1.5 倍加收，
+#   改 xlsx（或生成器）后重跑，而非改本文件。
+#   对账守护：Trading/Test/test_product_fee_table.py（费率区块 ⇄ 档案 ⇄ xlsx 三方一致）。
 #
 # ⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**（2026-09-14 评审 P2-3）
 #   —— 半句都不能省的背景：
 #     · 实盘（simnow/live）：由 SimNow._apply_instrument_quote 从**真实月份合约行情**
-#       原子覆盖这两个字段（`InstrumentState.apply_quote`，Phase 3 起运行时有效值归
-#       InstrumentState），本表的取值**在实盘不被采用**；
-#     · 离线（dry_run/replay）：没有行情可比，state 的有效值就是本表播种的配置值
-#       （Phase 3 起播种在启动路径；2026-09-15 P-B 起播种桥已删，Instrument 构造时直接取档案初值）
+#       原子覆盖这两个字段（`Instrument.apply_quote`，Phase 3 起运行时有效值归
+#       Instrument），本表的取值**在实盘不被采用**；
+#     · 离线（dry_run/replay）：没有行情可比，有效值就是本表播种的配置值
+#       （2026-09-15 P-B 起播种桥已删，Instrument 构造时直接取档案初值）
 #       —— 本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
 #   维护口径：每次品种合约参数调整（交易所公告换月/改乘数）后，同步改本表并跑
 #   Trading/Test/test_p50_review_fixes.py 的对账用例。
 #
-# ⚠️ 覆盖档（合约月份差异化费率）**不做**（P-A 用户拍板 2026-09-15）：AU / AG 的
-#   "6、12 合约 & 2607-2610"档只记录在 note 里备查，费率一律按基准档。
+# ⚠️ 覆盖档（合约月份差异化费率）**字段位已留但不消费**（R3 · 2026-09-15）：
+#   费率区块 OVERRIDES 已收录 AU/AG 的 6、12 合约档并填入 `fee_overrides`，
+#   但 `fee_pair()` / `prefer_closetoday` 一律读基准档 —— 启用方式与量化后果
+#   见 `Product.fee_overrides` 字段注释。
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", r_multiple_tp=2.0,
         exchange="CFFEX",
-        open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
-             "CFFEX 无平今指令 → 派生恒走锁仓（能力闸门短路）"),
+             "CFFEX 无平今指令 → 派生恒走锁仓（能力闸门短路）",
+        **_fee_kw("IF"),
+    ),
     "IH": Product(
         product="IH", r_multiple_tp=2.0,
         exchange="CFFEX",
-        open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=300.0,
-        note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）"),
+        note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）",
+        **_fee_kw("IH"),
+    ),
     "IC": Product(
         product="IC", r_multiple_tp=3.0,
         exchange="CFFEX",
-        open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF"),
+        note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
+        **_fee_kw("IC"),
+    ),
     "IM": Product(
         product="IM", r_multiple_tp=3.0,
         exchange="CFFEX",
-        open_fee=Fee("rate", 0.23), closetoday_fee=Fee("rate", 2.3),
         price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF"),
+        note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
+        **_fee_kw("IM"),
+    ),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
     # 商品档盈亏比暂统一 1:2（L3 在 2R 启动），与 IF/IH 一致；IC/IM 因波动大、趋势性弱
     #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", r_multiple_tp=2.0,
         exchange="SHFE",
-        open_fee=Fee("per_lot", 10.0), closetoday_fee=Fee.free(),
         price_tick=0.02, multiplier=1000.0,
         note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
-             "（覆盖档：6、12 合约 & 2607-2610 = 20 元/手，本期不消费按基准档）；"
-             "平今免收 → 派生走平今（今仓离场直接平今，不走锁仓）"),
+             "（覆盖档：6、12 合约 & 2607-2610 = 20 元/手，字段位已留未消费）；"
+             "平今免收 → 派生走平今（今仓离场直接平今，不走锁仓）",
+        **_fee_kw("AU"),
+    ),
     "AG": Product(
         product="AG", r_multiple_tp=2.0,
         exchange="SHFE",
-        open_fee=Fee("rate", 0.1), closetoday_fee=None,
         price_tick=1.0, multiplier=15.0,
         note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 15(元/kg)、tick 1；费率 xlsx：交易万0.1（xlsx 基准档，2026-09-15 用户确认），"
              "无独立平今行 → 平今=开仓（closetoday_fee=None）"
-             "（覆盖档：6、12 合约 & 2607-2610 = 万0.5，本期不消费按基准档）；"
-             "平今不贵 → 派生走平今（省一次开仓 + 跨日平仓）"),
+             "（覆盖档：6、12 合约 & 2607-2610 = 万0.5，字段位已留未消费）；"
+             "平今不贵 → 派生走平今（省一次开仓 + 跨日平仓）",
+        **_fee_kw("AG"),
+    ),
     "CU": Product(
         product="CU", r_multiple_tp=2.0,
         exchange="SHFE",
-        open_fee=Fee("rate", 0.5), closetoday_fee=Fee("rate", 1.0),
         price_tick=10.0, multiplier=5.0,
         note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 10；费率 xlsx：开/平昨万0.5 / 平今万1.0；"
              "Y=2X 落在 3× 判据的分歧区（Y < 3X）→ 派生走**平今**"
-             "（P-A 唯一行为变更品种：旧手写开关为锁仓，3× 经济账更正为平今，§6.5.5）"),
+             "（P-A 唯一行为变更品种：旧手写开关为锁仓，3× 经济账更正为平今，§6.5.5）",
+        **_fee_kw("CU"),
+    ),
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。注意：PTA 走 **CZCE 报单语义**（Phase 9）——
@@ -311,12 +470,13 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "TA": Product(
         product="TA", r_multiple_tp=2.0,
         exchange="CZCE",
-        open_fee=Fee("per_lot", 3.0), closetoday_fee=Fee.free(),
         price_tick=2.0, multiplier=5.0,
         note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"
              "郑商所品种报单走 FAK + OPEN 钉 1 手；CZCE 无平今指令 → 派生恒走锁仓；"
-             "偶发装置/政策消息急拉急跌"),
+             "偶发装置/政策消息急拉急跌",
+        **_fee_kw("TA"),
+    ),
 }
 
 

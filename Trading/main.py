@@ -87,10 +87,13 @@ def _fee_banner(cfg: TradingConfig) -> None:
     open_fee, ct_fee = p.fee_pair()
     if not p.supports_closetoday:
         concl = "交易所无平今指令 → 今仓离场走反向锁仓（平今指令已禁用）"
-    elif p.prefer_closetoday(1.0):
+    elif p.prefer_closetoday:
         concl = "平今更省（平今费 < 3× 开仓费）→ 今仓离场直接平今"
-    else:
+    elif p.prefer_closetoday is False:
         concl = "平今更贵（平今费 ≥ 3× 开仓费）→ 今仓离场走反向锁仓"
+    else:
+        concl = ("两档计价方式不同（rate/per_lot 混合）→ 结论随价格变，"
+                 "需按现价比价（当前品种表不涉及）")
     print("[gw] 品种 {}（{}）：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
         p.product, p.exchange or "?", open_fee.describe(),
         open_fee.describe(), ct_fee.describe()))

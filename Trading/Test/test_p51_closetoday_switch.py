@@ -182,17 +182,29 @@ for ex, want in (("SHFE", True), ("INE", True),
 print("\n[2] 品种档案平今派生：AU/AG/CU 判平今；IF/IH/IC/IM/TA 被能力闸门短路")
 # ══════════════════════════════════════════════════════════════
 # P-A（2026-09-15）：手写布尔 prefer_lock_over_closetoday 已删除，改为档案费率
-# 单源派生（prefer_closetoday，3× 口径）。ref_price 用 1.0 占位 —— 8 品种
-# 两档计价方式恒相同，比较式里价格自动约掉（见 Product.prefer_closetoday）。
+# 单源派生（prefer_closetoday，3× 口径）。D-A（2026-09-15）：结论在 Product
+# **构造期静态冻结**（8 品种两档计价方式恒相同 → 比较式里价格约掉），故它是
+# **无参属性**，不再需要 ref_price 占位值；静态可判定的品种一律不是 None。
 check("[2a] AU 派生 = True（平今免收 → 平今）",
-      PRODUCT_PROFILES["AU"].prefer_closetoday(1.0), True)
+      PRODUCT_PROFILES["AU"].prefer_closetoday, True)
 check("[2b] AG 派生 = True（平今=开仓 → 平今不贵）",
-      PRODUCT_PROFILES["AG"].prefer_closetoday(1.0), True)
+      PRODUCT_PROFILES["AG"].prefer_closetoday, True)
 check("[2c1] CU 派生 = True（Y=2X < 3X → 平今；P-A 唯一行为变更品种，旧开关为锁仓）",
-      PRODUCT_PROFILES["CU"].prefer_closetoday(1.0), True)
+      PRODUCT_PROFILES["CU"].prefer_closetoday, True)
 for p in ("IF", "IH", "IC", "IM", "TA"):
     check("[2c2] {} 派生 = False（CFFEX/CZCE 无平今指令 → 能力闸门短路走锁仓）".format(p),
-          PRODUCT_PROFILES[p].prefer_closetoday(1.0), False)
+          PRODUCT_PROFILES[p].prefer_closetoday, False)
+# D-A 回归护栏：8 品种必须全部**静态可判定**（非 None）—— 一旦有人把某品种改成
+# 混合计价（一档 rate 一档 per_lot），这里的 None 会立刻把它抓住（而不是静默
+# 退化成运行期比价、又回到"每根 bar 重算一个常量"的老路）。
+check("[2d] 8 品种全部静态可判定（prefer_closetoday 非 None）",
+      [p for p in PRODUCT_PROFILES if PRODUCT_PROFILES[p].prefer_closetoday is None], [])
+# 静态属性与运行期口径必须一致（无参属性 vs at(ref_price)），防止两条路径分叉。
+check("[2e] 静态属性 == 运行期口径（抽样 AU/CU/IF）",
+      [(PRODUCT_PROFILES[k].prefer_closetoday,
+        PRODUCT_PROFILES[k].prefer_closetoday_at(4500.0))
+       for k in ("AU", "CU", "IF")],
+      [(True, True), (True, True), (False, False)])
 
 
 # ══════════════════════════════════════════════════════════════

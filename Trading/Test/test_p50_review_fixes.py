@@ -330,7 +330,7 @@ def t5_quote_partial():
 
     def make(quote, policy):
         b = SimNowBroker.__new__(SimNowBroker)
-        b.spec = Instrument(None, _IF)
+        b.state = Instrument(None, _IF)
         b.params = BrokerConfig(instrument_fetch_policy=policy).model_dump()
         b.params["channel"]["instrument_fetch_timeout"] = 0.3
         b._api = _Api(quote)
@@ -443,10 +443,25 @@ def t8_dead_field_removed():
             check("旧键 {} 残留 → 构造期显式报错（非静默）".format(gone), _r2, True)
     # 反向：这些字段必须真的活在 Instrument / Product（防止"删了但没搬走"）
     st = Instrument(None, _IF)
-    for f in ("verified", "source", "upper_limit", "lower_limit",
-              "price_tick", "multiplier", "trade_symbol", "last_trade_date"):
+    for f in ("verified", "source", "trade_symbol", "last_trade_date"):
         check_true("Instrument 拥有运行时字段 {}".format(f),
                    f in vars(st))
+    # D-D（2026-09-15）：四个"有效参数"收进**不可变** EffectiveSpec，由同名
+    #   只读 property 转发 —— 故它们不再出现在 vars(st) 里。断言随之升级为
+    #   "可读 + 确实落在 _effective 值对象上 + 该值对象不可写"，既保住
+    #   "删了但没搬走"的防回潮意图，又把 D-D 的不可变性一并钉住。
+    _eff = st._effective
+    for f in ("price_tick", "multiplier", "upper_limit", "lower_limit"):
+        check_true("Instrument 有效参数可读 {}".format(f), hasattr(st, f))
+        check_true("  └ 收在 EffectiveSpec 上 {}".format(f), f in vars(_eff))
+    _blocked = False
+    try:
+        _eff.price_tick = 9.9
+    except Exception:
+        _blocked = True
+    check_true("EffectiveSpec 不可写（frozen → 改写只能整体替换）", _blocked)
+    check_true("Instrument.price_tick 是只读 property（无 setter）",
+               type(st).price_tick.fset is None)
     for f in ("price_tick", "multiplier", "exchange"):
         check_true("Product 拥有档案字段 {}".format(f),
                    hasattr(PRODUCT_PROFILES["IF"], f))

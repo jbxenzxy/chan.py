@@ -195,7 +195,7 @@ class LockRejectBroker(DryRunBroker):
             self._reject_left -= 1
             o = Order(
                 order_id="dry-reject-{:06d}".format(len(self.orders)),
-                signal_key=signal_key, symbol=self.spec.trade_symbol, side=side,
+                signal_key=signal_key, symbol=self.state.trade_symbol, side=side,
                 action="close" if intent is OrderIntent.CLOSE else "open",
                 volume=int(volume), price=0.0,
                 req_price=float(ref_price), filled_price=None,

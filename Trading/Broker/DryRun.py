@@ -53,12 +53,13 @@ class DryRunBroker(Broker):
         intent = self._resolve_intent(intent, side)
         # Phase 3（Fix B）：DryRun **只读** state 的种子值、从不写它
         #   （离线没有行情可回填；来源标记由 main.py 的 mark_config_offline 写入）。
+        # D-C（2026-09-15）：原 `spec = state.spec` 局部别名已删（同名消歧义），
+        #   直接读 `state` 本身 —— 两者本就是同一个 Instrument。
         state = self.state
-        spec = state.spec
         sign = side.sign
 
         is_open_like = intent is OrderIntent.OPEN
-        slip = spec.slippage_ticks * state.price_tick
+        slip = state.slippage_ticks * state.price_tick
         if is_open_like:
             slipped = ref_price + sign * slip
         else:
@@ -71,17 +72,17 @@ class DryRunBroker(Broker):
 
         o = Order(
             order_id=self._next_order_id(),
-            signal_key=signal_key, symbol=spec.trade_symbol, side=side,
+            signal_key=signal_key, symbol=state.trade_symbol, side=side,
             action=action_str, volume=int(volume), price=aligned,
             req_price=float(ref_price), filled_price=aligned,
             status="filled", created_at=now_cn(), broker=self.name, note=note,
             meta={
                 "dry_run": True,
-                "slippage_ticks": spec.slippage_ticks,
+                "slippage_ticks": state.slippage_ticks,
                 "intent": intent.value,            # 记账：开 / 平
                 "offset": offset_str,              # 记账：CTP 报文类型
                 "offset_close_yesterday_first": bool(
-                    spec.closetoday_first),       # 成本计算时按此选平今/平昨费率
+                    state.closetoday_first),       # 成本计算时按此选平今/平昨费率
                 "entry_date": entry_date,          # 2026-09-10：被平持仓建仓日（今/昨仓审计用）
             },
         )

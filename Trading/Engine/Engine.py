@@ -102,23 +102,23 @@ class TradingEngine(ReconcileMixin):
                  state: Optional["Instrument"] = None):
         self.cfg = cfg
         # ── 合约运行时对象（P-B · 2026-09-15 双类合并）──
-        #   原 self.spec（静态规格 cfg.instrument）与 self.state（运行时状态）
+        #   原 self.state（静态规格 cfg.instrument）与 self.state（运行时状态）
         #   现在是**同一个 Instrument**：静态身份经 config/product 转发只读，
         #   有效值/回填字段（tick/乘数/涨跌停/verified/trade_symbol/last_trade_date）
-        #   是可变运行时字段。self.spec 保留为兼容名（指向 self.state 同一对象，
-        #   Instrument.spec property 返回自身）—— 大量 spec.xxx 只读引用因此
-        #   不需要逐个改写。
+        #   是可变运行时字段。
+        # D-C（2026-09-15）：原 spec 兼容别名**已删除** —— 本类只有
+        #   `self.state` 一个名字（与 Broker / Source 同名），原 spec 点号引用
+        #   全部改读 `self.state.xxx`，不再"三个名字指同一块内存"。
         # 所有权（不变）：**一次运行只有一份 Instrument**。默认沿用 broker 的
         #   （不显式给时）；main.py 显式传入同一份只为可读性。第三档（原
-        #   getattr 回落 + InstrumentState(self.spec) 自建）随合并消亡 ——
-        #   Instrument 构造即完成档案取值，不存在"从 spec 播种"。
+        #   getattr 回落 + InstrumentState 自建）随合并消亡 ——
+        #   Instrument 构造即完成档案取值，不存在"从部署配置播种"。
         self.state: "Instrument" = (
             state if state is not None
             else getattr(broker, "state", None)
             # 鸭子类型 broker（不继承 Broker、无 .state 的测试替身/外接通道）
             # 回落：由部署配置 + 品种档案现建一份（等价 P-B 前"从 cfg 播种"）。
             or Instrument(cfg.instrument, cfg.product_profile))
-        self.spec = self.state
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
         self._spec_drift_checked: bool = False
@@ -421,7 +421,7 @@ class TradingEngine(ReconcileMixin):
         # 旧合约持仓留在 state.db 不加载进簿，避免 _restore 末尾的 _reconcile_positions
         # 把旧合约持仓当成「外部平仓」误清（PnL 还会按新合约 spec 算，全错）。
         # 旧合约持仓由 _persist 的分片合并继续保留在库里，切回原合约时可恢复。
-        my_symbol = self.spec.trade_symbol
+        my_symbol = self.state.trade_symbol
         pd_list = self.store.get_json("positions")
         # 旧 schema 闸门：改名前写入的记录用 entry_mode 键，必须显式处理（见上方注释）
         self._reject_legacy_state(
@@ -619,7 +619,7 @@ class TradingEngine(ReconcileMixin):
         # v1.4（切合约隔离）：positions 按 trade_symbol 分片写回 —— 只覆盖当前合约的
         # 持仓，保留库里其它合约的持仓，切走再切回时能恢复管理。旧键 "position" 优先
         # 写当前合约首仓，否则退回其它合约首仓（仅供审计「看一眼是哪个合约」）。
-        my_symbol = self.spec.trade_symbol
+        my_symbol = self.state.trade_symbol
         existing = self.store.get_json("positions")
         existing_list = existing if isinstance(existing, list) else []
         others = [d for d in existing_list
@@ -918,7 +918,7 @@ class TradingEngine(ReconcileMixin):
         if act.transition == 1:
             # 空仓开新仓：入场策略只做数据兜底（signal.price<=0 → SKIP），
             # 不再做信号质量过滤（振幅/止损距离上下限）—— 该职责已归缠论分析引擎（见 §9 Q13）
-            decision = self.entry_policy.decide(sig, None, self.spec)
+            decision = self.entry_policy.decide(sig, None, self.state)
             if not decision:
                 self.store.update_signal_action(sig.key, "skip", decision.reason)
                 self.ev.write("signal_skip", key=sig.key, reason=decision.reason)
@@ -957,7 +957,7 @@ class TradingEngine(ReconcileMixin):
         注意：设计上**一次信号只报 1 笔**，这里只是把那 1 笔的手数从 N 钉成 1，
         **没有任何拆单**（拆 N 笔 1 手的逻辑不存在，也不允许存在）。
         """
-        if self.spec.exchange == "CZCE":
+        if self.state.exchange == "CZCE":
             return 1
         return self.lots_per_signal
 
@@ -1009,13 +1009,13 @@ class TradingEngine(ReconcileMixin):
             #   P-A 平今单源派生（2026-09-15，取代 Phase 10 手写布尔）：
             #   品种档案费率判"平今更省"（`prefer_closetoday`，3× 口径：
             #   平今 2 笔 vs 锁仓 4 笔 ⟺ 平今费 < 3× 开仓费）**且**交易所
-            #   支持平今（SHFE/INE，`spec.supports_closetoday` 能力闸门，永不可删）
+            #   支持平今（SHFE/INE，`instrument.supports_closetoday` 能力闸门，永不可删）
             #   时，改为直接 CLOSETODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态。
             #   开关缺省（无品种档案）/ 交易所不支持 / 费率判锁仓 → 走锁仓，保守侧。
-            #   ref_price 用最近一笔持仓的入场价（8 品种两档计价方式恒相同，
-            #   比较式里价格自动约掉；仅混合计价时才真正参与，见
-            #   Product.prefer_closetoday docstring）。
-            if (self.spec.supports_closetoday
+            #   D-A（2026-09-15）：派生结论已在 Product **构造期静态冻结**
+            #   （8 品种两档计价方式恒相同 → 比较式里价格约掉），此处不再重算；
+            #   传入场价只为"混合计价"兜底（届时档案返回 None，走运行期口径）。
+            if (self.state.supports_closetoday
                     and self._prefer_closetoday(float(latest.entry_price))):
                 today_target = _oldest([
                     p for p in self.positions.positions
@@ -1036,23 +1036,31 @@ class TradingEngine(ReconcileMixin):
                        is_exit=True, transition=5)
 
     def _prefer_closetoday(self, ref_price: float) -> bool:
-        """平今取舍（P-A 单源派生 · 2026-09-15，取代 `_prefer_lock_over_closetoday`）。
+        """平今取舍（P-A 单源派生 · D-A 静态化 · 2026-09-15）。
 
         True = 今仓离场走 CLOSETODAY 平今；False = 反向开仓锁仓（保守侧）。
 
-        判定唯一来源 = 品种档案 `Product.prefer_closetoday(ref_price)`
-        （3× 口径纯派生：平今路径 2 笔 vs 锁仓路径 4 笔）。无品种档案 →
-        False（保守侧：宁可多花一次开仓费，不生成平今单）—— 无档案品种
-        理论上已被白名单闸门拒绝启动，此处仅为防御。
+        判定唯一来源 = 品种档案 `Product.prefer_closetoday`（3× 口径纯派生：
+        平今路径 2 笔 vs 锁仓路径 4 笔）。该结论在 **Product 构造期**已算好
+        （D-A）：8 品种两档计价方式恒相同 → 价格约掉 → 与传入的 ref_price 无关。
+        故本方法直接读静态属性，**不再每次重算**；`ref_price` 仅在档案返回
+        None（一档 rate 一档 per_lot 的混合计价）时才被消费。
 
-        注意：交易所能力闸门（`spec.supports_closetoday`）**不在本方法里**，
-        由调用点（转移④）先闸 —— 能力判据读运行时有效 exchange（spec），
+        无品种档案 → False（保守侧：宁可多花一次开仓费，不生成平今单）——
+        无档案品种理论上已被白名单闸门拒绝启动，此处仅为防御。
+
+        注意：交易所能力闸门（`instrument.supports_closetoday`）**不在本方法里**，
+        由调用点（转移④）先闸 —— 能力判据读运行时有效 exchange（Instrument），
         档案侧 exchange 仅作纯函数独立使用时的兜底，两层各司其职。
         """
         profile = self.cfg.product_profile
         if profile is None:
             return False
-        return bool(profile.prefer_closetoday(ref_price))
+        static = profile.prefer_closetoday
+        if static is None:
+            # 混合计价：价格不可约，落回运行期口径（当前 8 品种都不会走到这里）
+            return profile.prefer_closetoday_at(ref_price)
+        return bool(static)
 
     def _check_spec_drift(self) -> None:
         """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
@@ -1162,7 +1170,7 @@ class TradingEngine(ReconcileMixin):
         #   （换月自动解除）；last_trade_date 未知（离线 dry_run / 行情未取到）→
         #   不拦。guard_days=0 → 关闭护栏。
         guard_days = int(getattr(self.cfg.risk, "delivery_guard_days", 1))
-        if self.spec.delivery_guard_blocked(today, threshold_days=guard_days):
+        if self.state.delivery_guard_blocked(today, threshold_days=guard_days):
             state = self.account_state()
             is_open = act.intent is OrderIntent.OPEN
             is_close = act.intent in (OrderIntent.CLOSE, OrderIntent.CLOSETODAY)
@@ -1174,11 +1182,11 @@ class TradingEngine(ReconcileMixin):
                     "距最后交易日 {} 不足 {} 个交易日（交割月护栏）—— 已拒绝{}："
                     "{}。当前主力换月后自动解除（运行态仓位不受影响）。"
                     .format(
-                        self.spec.last_trade_date or "未知", guard_days,
+                        self.state.last_trade_date or "未知", guard_days,
                         "开新仓" if is_open else "平仓/解锁",
                         "空仓态不进裸仓" if is_open else "锁仓态不放开成裸仓"),
-                    symbol=self.spec.trade_symbol,
-                    last_trade_date=self.spec.last_trade_date,
+                    symbol=self.state.trade_symbol,
+                    last_trade_date=self.state.last_trade_date,
                     state=state.value, intent=act.intent.value, guard_days=guard_days)
                 return "delivery_guard_blocked"
         if act.volume <= 0:
@@ -1204,7 +1212,7 @@ class TradingEngine(ReconcileMixin):
         # 交易所传平今会直接报错。转移④ 的分支条件已按 `supports_closetoday`
         # 生成动作，这里再兜一道（防未来新增调用点直接构造 CLOSETODAY 动作）。
         if (act.intent is OrderIntent.CLOSETODAY
-                and not self.spec.supports_closetoday):
+                and not self.state.supports_closetoday):
             return "closetoday_not_supported"
         if act.target is None:
             return "close_without_target"
@@ -1398,7 +1406,7 @@ class TradingEngine(ReconcileMixin):
         """
         entry_ts, entry_date = self._open_time_anchor(sig)
         pos = Position(
-            symbol=self.spec.trade_symbol, side=act.side, volume=act.volume,
+            symbol=self.state.trade_symbol, side=act.side, volume=act.volume,
             entry_price=o.filled_price, entry_at=now_cn(),
             entry_bar_ts=entry_ts, entry_bar_seq=self.bars_seen,
             signal_key=(sig.key if sig is not None else o.signal_key),
@@ -1429,7 +1437,7 @@ class TradingEngine(ReconcileMixin):
         #   净值口径：毛利（点）× 有效乘数 × 手数 = 毛利（元），减成本（元）
         #   —— 全程在元上做，不再有"点减元"的口径混算点。
         p = self.cfg.product_profile
-        closetoday = bool(self.spec.closetoday_first
+        closetoday = bool(self.state.closetoday_first
                           and pos.entry_date >= self._current_trading_day())
         cost = (self.state.cost_cash(p, pos.entry_price, exit_price,
                                      closetoday=closetoday, volume=pos.volume)
@@ -1541,7 +1549,7 @@ class TradingEngine(ReconcileMixin):
         if self._run_plan is None or self._run_side is None:
             return None
         return Position(
-            symbol=self.spec.trade_symbol, side=self._run_side,
+            symbol=self.state.trade_symbol, side=self._run_side,
             volume=abs(self.positions.net_volume()),
             entry_price=self._run_anchor, entry_at="",
             entry_bar_ts=self._run_bar_ts, entry_bar_seq=self._run_bar_seq,
@@ -1945,8 +1953,8 @@ class TradingEngine(ReconcileMixin):
             "entry_policy": self.entry_policy.describe(),
             # Phase 3：tick / 乘数取 **state 的有效值**（引擎实际使用的口径）；
             #   symbol / 交易合约仍取静态 spec。
-            "spec": {"signal_symbol": self.spec.signal_symbol,
-                     "trade_symbol": self.spec.trade_symbol,
+            "spec": {"signal_symbol": self.state.signal_symbol,
+                     "trade_symbol": self.state.trade_symbol,
                      "price_tick": self.state.price_tick,
                      "multiplier": self.state.multiplier},
         }

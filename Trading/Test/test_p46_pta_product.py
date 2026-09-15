@@ -171,7 +171,7 @@ def main():
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
         check("TA(CZCE) _open_volume()=1（钉 1 手）", eng_ta._open_volume(), 1)
         # P-B：配置 frozen、exchange 归档案 —— "配错交易所"用现场档案注入 spec 表达
-        eng_ta.spec = Instrument(None, _dc_replace(
+        eng_ta.state = Instrument(None, _dc_replace(
             PRODUCT_PROFILES["TA"], exchange="SHFE"))
         check("TA 配错交易所(SHFE) _open_volume() 走 lots_per_signal=2（配置责任）",
               eng_ta._open_volume(), 2)

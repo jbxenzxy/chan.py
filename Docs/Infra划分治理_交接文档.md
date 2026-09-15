@@ -1008,3 +1008,90 @@ parse_product_key("CFFEX.IF2609")  -> "IF"       # 剥月份 = 查品种档案�
 **成本/收益**：211 处纯机械替换 + 若干测试钉死字符串，换来可读性增益 ≈ 0。
 
 **替代动作（低成本高收益）**：术语治理落在**文档层**——概念讨论、docstring、交接文档统一按 F.2 的三行表用词。在 `Product.py` / `Instrument.py` 模块 docstring 各加一小段术语锚点（约 5 行），随 **P-D** 做，不单开一轮。
+---
+
+## 附G 落地补记（2026-09-15 夜 · 三项偏离修复 + 四项决定 + 费率改为内联生成区块）
+
+> 本附录是**增量记录**，不改写上文任何分析（上文是审计稿，保留原貌）。
+> 凡与上文口径冲突处，**以本附录为准**。基线：HEAD `5a04905db370`（未变）。
+
+### G.1 一条纪律判定：费率生成物**不新开文件**
+
+§5.1 把 `Trading/Infra/` 定死成 **7 个模块、按变异轴排**，§附C 原则 1 又明令
+「名字 = 领域概念，不是技术机制」。落地 D-B（生成式 SSOT）时曾一度新增
+`Trading/Infra/_FeeTable.py`（独立生成文件），**与上述两条同时冲突**：
+
+- 它使 `Infra/` 变成第 8 个文件，且不属于任何一根变异轴；
+- `_` 前缀是 Python 的**可见性机制**（不是领域概念），而该模块被 `Product.py`
+  与测试跨模块引用 —— "私有"语义是假的。
+
+**定案（用户拍板）**：生成的纯数据**不新开文件**，改为内联进 `Product.py` 的
+`>>> GENERATED … <<< END GENERATED` 标记区块。机器生成内容与手写内容的分离
+靠「标记 + 逐字节护栏」，而不是靠文件边界。
+
+→ **`Trading/Infra/` 仍是 §5.1 定的 7 个模块**（`Clock / Records / Period /
+Product / Instrument / StateDB / EventLog`），本条纪律未被突破。
+
+### G.2 对 §6.1 / §6.9 的口径修正：费率改为生成式
+
+| 上文口径 | 落地后的口径 |
+|---|---|
+| §6.1 的 8 品种费率表是**手抄进 `Product.py`** 的静态表 | 费率**不再手抄**。真值源 = `Docs/手续费标准-.xlsx` → `Trading/Tool/GenFeeTable.py` → `Product.py` 的 GENERATED 区块 → `_fee_kw()` 构造期注入档案 |
+| §6.9「一次转换 + 一道对账」 | 仍成立，且对账升级为**逐字节**：`GenFeeTable.py --check` 与 `test_product_fee_table.py` 都拿"重新渲染的区块"与磁盘区块比对 |
+| 改费率 = 改代码 | 改费率 = **改 xlsx（或改生成器解析规则）+ 重跑生成器**；`Product.py` 手写部分一个字面量都不许有（`[1f]` 断言） |
+
+**三层护栏**（缺一不可）：
+
+1. 生成器只重写两块标记之间的文本，**区块外逐字节不动**（`replace_block`；
+   标记缺失/重复直接报错，不"以为替换成功"）；
+2. `GenFeeTable.py --check` → 不一致 `rc=1`（CI 用；xlsx 缺失时 `rc=0` + skip）；
+3. `Trading/Test/test_product_fee_table.py [3f]` 逐字节比对 + `[3g]-[3i]`
+   **自检护栏会咬人**（未改副本 `rc=0`；手改区块一个数字 → `rc=1`）。
+
+### G.3 对 §6.3(c) 的修正：`prefer_closetoday` 改静态属性
+
+§6.3(c) 的样例是 `product.prefer_closetoday(spec.trade_symbol, ref_price)`。落地方案（决定 A）否定了这个签名 ——
+`ref_price` 在 8 品种下是**死参数**（两档计价方式恒相同 → 价格约掉 → 结论恒定），
+调用点被迫传魔法值。
+
+| 现口径 | 说明 |
+|---|---|
+| `Product.prefer_closetoday -> Optional[bool]` | **无参 property**，结论在 `Product.__post_init__` 算一次并冻结 |
+| `Product.prefer_closetoday_at(ref_price) -> bool` | 运行期路径，**仅当静态属性返回 `None`**（两档混合 `rate`/`per_lot`，价格不可约）时才用 |
+| 引擎消费点 | `Engine._prefer_closetoday`：先读静态属性，`None` 才落回 `_at()` |
+| 启动横幅 | `main.py:_fee_banner` 三态分支，不再传 `(1.0)` |
+
+`Optional[bool]` 的 `None` 承载的是「**该结论是否已静态确定**」，不是"未知"。
+
+### G.4 其余落地项（一句话表）
+
+| 编号 | 内容 | 关键落点 |
+|---|---|---|
+| R1（P0） | 补建费率对账测试（原为**零覆盖**） | `Test/test_product_fee_table.py`（**100 断言**，7 组） |
+| R2 | `LOCK_PATH_MULT` 改 `ClassVar`（原写在 dataclass 体内 = 字段，可逐实例覆写阈值） | `Product.py` |
+| R3 | 补 `fee_overrides` 字段位（数据由生成区块填，**仍不消费**、行为零变化） | `Product.py` |
+| 决定 C | 删 `.spec` 兼容别名，Broker/Engine/Source 统一 `.state` | `Broker/Base.py` 未初始化时显式 `RuntimeError` |
+| 决定 D | 有效值收进 `frozen` 的 `EffectiveSpec`，`apply_quote` 改**单次整体替换** | `Instrument.py`；原子性从"靠代码顺序"升级为"结构保证" |
+
+**测试基线**：51 → **52**（补回的费率测试以「区块 ⇄ 档案 ⇄ xlsx 三方一致」承接了
+被删的 `test_p52_fee_economy.py` 的覆盖，兑现 §7.3 的验收纪律）。
+
+### G.5 本轮**未动**（不在授权范围，探针复核后如实留档）
+
+| 编号 | 现状（实测） | 建议修法 |
+|---|---|---|
+| R4 | `InstrumentConfig` 旧键守卫在 `__init__` → 构造期报错 ✅，但 `model_copy(update={"price_tick":0.5})` **静默通过**（pydantic v2 `model_copy` 不跑 `__init__`） | 挪到 `@model_validator(mode="before")` |
+| R5 | `Instrument.cost_cash(self, product, …)` 仍收外部品种档案 → 同源性后门 | 去掉形参，内部读 `self.product` |
+| R7 | `Infra/StateDB.py` 里类名仍叫 `Store`；文档写 `TradingClock.py`、实现是 `Clock.py` | 类名/文档口径二选一对齐 |
+| R8 | `InstrumentState` / `InstrumentSpec` / `ProductProfile` 仍出现在多个 docstring 的历史叙述里 | 属留档说明，不改不影响行为 |
+
+### G.6 复现命令
+
+```bash
+# 刷新费率区块（改了 xlsx 或生成器解析规则后）
+python Trading/Tool/GenFeeTable.py
+# CI 口径：校验区块与 xlsx 是否一致（不一致 rc=1；xlsx 缺失则 rc=0 + skip）
+python Trading/Tool/GenFeeTable.py --check
+# 费率对账（离线可跑；缺 xlsx/openpyxl 时 [3] 组自动 skip）
+python Trading/Test/test_product_fee_table.py
+```
