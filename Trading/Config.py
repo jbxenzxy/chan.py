@@ -287,7 +287,10 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    stop_at_signal_extreme: bool = True         # True=用分型极值作结构止损；False=只靠 2×ATR
+    # 注：2026-09-15 已删除 `stop_at_signal_extreme` 开关。R 的口径唯一：
+    #     R = max(分型极值距离 A, atr_sl_multiple × ATR)（取大，不是二选一）。
+    #     信号未携带分型时 fractal ≤ 0（哨兵）→ A = 0 → R 自动退化为 2×ATR，
+    #     「只靠 ATR」由数据缺失表达，无需配置项。
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度

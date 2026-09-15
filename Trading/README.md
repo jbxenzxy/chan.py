@@ -147,7 +147,8 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "reverse_on_opposite_signal": false  // 反向信号只平今不反手
   },
   "exit_params": {
-    "stop_at_signal_extreme": true,    // 止损=信号K线极值（多=最低价/空=最高价）
+    // 注：R 的口径唯一，没有开关：R = max(分型极值距离 A, atr_sl_multiple×ATR)。
+    //     信号未携带分型时 A=0，R 自动退化为 2×ATR（原 stop_at_signal_extreme 已删）
     "stop_buffer_ticks": 0.0,          // 止损外扩缓冲（跳数）
     "use_atr": true,                   // ATR 自适应止损/止盈宽度
     "atr_sl_multiple": 2.0,            // R = max(结构止损 A, atr_sl_multiple×ATR)，不设下限

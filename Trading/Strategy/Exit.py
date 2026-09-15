@@ -66,9 +66,11 @@ class LayeredExitPolicy:
         p = ExitPolicyParams(**self.params)
         self.p = p
         # L1 R 倍数定基线
-        self.stop_at_signal_extreme = p.stop_at_signal_extreme
         self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
         self.r_multiple_tp = float(p.r_multiple_tp)
+        # 注：2026-09-15 已删除 stop_at_signal_extreme 开关 —— R 的口径唯一：
+        #     R = max(分型极值距离 A, atr_sl_multiple × ATR)。信号未带分型时 A 自然为 0，
+        #     不需要开关去表达「只靠 ATR」。
         # L2 波动率(ATR)定宽窄
         self.use_atr = p.use_atr
         self.atr_period = int(p.atr_period)
@@ -130,7 +132,7 @@ class LayeredExitPolicy:
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
     def _initial_r(self, signal, entry_price: float, state: InstrumentState) -> float:
-        """初始风险距离 R = max(A, B) —— 完全自适应，不设任何下限。
+        """初始风险距离 R = max(A, B) —— **唯一的口径**（2026-09-15 去掉 stop_at_signal_extreme 开关）。
 
         A = 结构止损（分型极值距离）：
               做多 A = entry_price − 底分型最低点(fractal_low)；
@@ -138,16 +140,23 @@ class LayeredExitPolicy:
             A ≤ 0（陈旧信号、行情已穿越分型）时钳到 0，交给 B（2×ATR）兜底。
         B = 波动率止损 = atr_sl_multiple × ATR（use_atr 且 ATR 样本足够时）。
 
+        为什么没有「只靠 2×ATR」这个选项（原 `stop_at_signal_extreme=False`）：
+            分型极值与 2×ATR 是**取大**关系，不是二选一。信号未携带分型时
+            （fractal ≤ 0 哨兵）A 自然为 0，R 自动退化为 2×ATR —— 这个能力本来
+            就由「数据缺失」表达，不需要一个配置项去重复表达同一件事。
+            留着开关只会让人以为「两种止损方案可选」，而实际上只有一种。
+
         关于「R 会不会退化」（2026-09-15 评审 · 结论：不改口径，只加观测）：
             2026-09-14 删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
             口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
             且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
             因此本函数**不兜底、不钳下限**；仅在 A 真的归零时打一条 WARNING
             （见下方），把现场信息打到控制台供后续抓样本。真出现了再分析成因 ——
-            已知候选：① stop_at_signal_extreme=False 配置（此时 A 恒 0，属预期、
-            不算异常，故该配置下不打告警）；② 入场价已穿越分型（陈旧信号）；
-            ③ 买卖点无右肩 K 线时 bsp.klu 退回 bi.get_end_klu()（chan.py
+            已知候选：① 信号未携带分型（fractal ≤ 0 哨兵，走 `[R 结构距离缺失]`）；
+            ② 入场价已穿越分型（陈旧信号）；③ 分型贴身（A 极小）；
+            ④ 买卖点无右肩 K 线时 bsp.klu 退回 bi.get_end_klu()（chan.py
                BuySellPoint/BS_Point.py），该 K 线收在自身极值点时 A = 0。
+            ②③④ 走 `[R 结构距离归零]`。
         """
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
@@ -155,13 +164,17 @@ class LayeredExitPolicy:
         # 此时视为「无结构止损信息」，A 钳 0 交给 B（2×ATR）兜底；
         # 否则会被误读成「分型最低点 = 0」→ A = entry_price → 止损打飞到 ~0，SL 永不触发。
         A = 0.0
-        if self.stop_at_signal_extreme:
-            if is_long:
-                if signal.fractal_low > 0:
-                    A = max(entry_price - signal.fractal_low, 0.0)
+        _fractal_missing = False
+        if is_long:
+            if signal.fractal_low > 0:
+                A = max(entry_price - signal.fractal_low, 0.0)
             else:
-                if signal.fractal_high > 0:
-                    A = max(signal.fractal_high - entry_price, 0.0)
+                _fractal_missing = True
+        else:
+            if signal.fractal_high > 0:
+                A = max(signal.fractal_high - entry_price, 0.0)
+            else:
+                _fractal_missing = True
         # B：波动率止损（2×ATR）
         B = 0.0
         if self.use_atr:
@@ -169,12 +182,15 @@ class LayeredExitPolicy:
             if atr:
                 B = self.atr_sl_multiple * atr
         # A=0 观测告警（2026-09-15 评审补）：不改 R 的取值，只把现场打出来。
-        #   stop_at_signal_extreme=False 时 A 恒为 0 是配置预期，不打告警。
-        if self.stop_at_signal_extreme and A <= 0.0:
+        #   分两支，便于 grep 时一眼区分成因：
+        #     [R 结构距离缺失] = 信号压根没带分型（fractal ≤ 0 哨兵）→ 查信号源；
+        #     [R 结构距离归零] = 带了分型但 A ≤ 0（穿越 / 贴身）→ 查行情与分型口径。
+        if A <= 0.0:
             _log.warning(
-                "[R 结构距离归零] A=0，R 将由 2×ATR 单独决定：side=%s entry=%.6g "
+                "[R %s] A=0，R 将由 2×ATR 单独决定：side=%s entry=%.6g "
                 "fractal_low=%.6g fractal_high=%.6g atr=%s B=%.6g signal_key=%s "
                 "—— 请核对信号是否缺失/失真分型（本条仅观测，R = max(A, B) 不变）",
+                "结构距离缺失" if _fractal_missing else "结构距离归零",
                 getattr(signal.side, "value", signal.side), entry_price,
                 signal.fractal_low, signal.fractal_high,
                 (self._atr() if self.use_atr else None), B,
