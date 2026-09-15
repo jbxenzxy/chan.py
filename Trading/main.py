@@ -82,6 +82,29 @@ def _seed_instrument(cfg: TradingConfig) -> None:
         **cfg.instrument.model_dump(exclude={"price_tick", "multiplier"}))
 
 
+def _fee_banner(cfg: TradingConfig) -> None:
+    """启动费率横幅（P-A · 2026-09-15，交接文档 §6.3-d）。
+
+    取代已删除的运行期"平今经济性告警"（closetoday_suggestion）——
+    费率是静态档案，启动第一屏就给出两档费率与派生结论，
+    比"等成交后才告警"早得多、也不用状态机。只打一次，不刷屏。
+    """
+    p = cfg.product_profile
+    if p is None:
+        return
+    open_fee, ct_fee = p.fee_pair()
+    if not p.supports_closetoday:
+        concl = "交易所无平今指令 → 今仓离场走反向锁仓（平今指令已禁用）"
+    elif p.prefer_closetoday(1.0):
+        concl = "平今更省（平今费 < 3× 开仓费）→ 今仓离场直接平今"
+    else:
+        concl = "平今更贵（平今费 ≥ 3× 开仓费）→ 今仓离场走反向锁仓"
+    print("[gw] 品种 {}（{}）：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
+        p.product, p.exchange or "?", open_fee.describe(),
+        open_fee.describe(), ct_fee.describe()))
+    print("[gw]   → " + concl)
+
+
 def build_runtime(args):
     # 配置来源（2026-09-07 归一）：Trading/Config.py 模型默认值
     #   ← 环境变量/仓库根 .env（TRADING_ 前缀，pydantic-settings 自动读取）
@@ -122,6 +145,9 @@ def build_runtime(args):
     # Phase 3.2（Fix B）：品种档案播种 —— 显式一次，覆盖「初始加载」与
     # 「--symbol 换品种」两种情形（必须在上面所有改写 signal_symbol 的分支之后）。
     _seed_instrument(cfg)
+
+    # P-A（2026-09-15）：费率横幅 —— 两档费率 + 平今派生结论，启动第一屏可见。
+    _fee_banner(cfg)
 
     # Step 1（2026-09-08）：启动期周期校验 —— fail-fast。
     #   周期是所有时间语义（时间止损 / 收盘强平 / 追价窗口）的地基。旧设计里
@@ -265,11 +291,12 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
     else:
         print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
             s["trades"], s["wins"], s["losses"], s["win_rate"]))
-        print("平均盈利  : {:+.2f} 点    平均亏损: {:+.2f} 点".format(
+        # P-A（2026-09-15）：净统计口径改元（net_cash）—— per_lot 费率档
+        # 无法在点数口径无损表达，净盈亏只有元是自洽的。
+        print("平均盈利  : {:+.2f} 元    平均亏损: {:+.2f} 元".format(
             s["avg_win"], s["avg_loss"]))
-        print("净盈亏    : {:+.2f} 点   ({:+.2f} 元)".format(
-            s["net_points"], s["net_cash"]))
-        print("单笔期望  : {:+.3f} 点".format(s["expectancy_points"]))
+        print("净盈亏    : {:+.2f} 元".format(s["net_cash"]))
+        print("单笔期望  : {:+.2f} 元".format(s["expectancy_cash"]))
         if s["by_reason"]:
             seg = "  ".join("{}: n={} net={:+.2f}".format(k, v["n"], v["net"])
                             for k, v in s["by_reason"].items())
@@ -420,7 +447,7 @@ def run(args) -> int:
             with open(args.summary_json, "w", encoding="utf-8") as f:
                 json.dump(summary, f, ensure_ascii=False, indent=2)
         ev.write("stop", bars=counted, elapsed=round(elapsed, 2),
-                 trades=summary["trades"], net_points=summary["net_points"])
+                 trades=summary["trades"], net_cash=summary["net_cash"])
         engine.broker.close()
         source.close()
         store.close()

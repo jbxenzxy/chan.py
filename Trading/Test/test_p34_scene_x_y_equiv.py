@@ -85,6 +85,7 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -321,25 +322,32 @@ check_true("[4i] 出场计划确实带了 risk_anchor（可审计）",
            snap_x["plan"])
 
 # ══════════════════════════════════════════════════════════════
-print("\n[5] 费率：建敞口的成本相等")
+print("\n[5] 费率：建敞口的成本相等（P-A 元口径）")
 # ══════════════════════════════════════════════════════════════
-_spec = InstrumentSpec()
-check("[5a] 中金所开仓费率 == 平昨费率（0.0023%）",
-      _spec.open_fee_rate, _spec.close_fee_rate)
-check_true("[5b] 平今费率 = 平昨的 15 倍（本代码不可达 → 今日单永不 CLOSE）",
-           abs(_spec.closetoday_fee_rate / _spec.close_fee_rate - 15.0) < 1e-9,
-           _spec.closetoday_fee_rate / _spec.close_fee_rate)
+_p = PRODUCT_PROFILES["IF"]
+_open_fee, _ct_fee = _p.fee_pair()
+check("[5a] 档案只有两档：开仓 万0.23 / 平今 万2.30（平昨 ≡ 开仓，无第三档）",
+      (_open_fee.describe(), _ct_fee.describe()), ("万0.23", "万2.30"))
+check_true("[5b] 平今费 = 开仓费的 10 倍（xlsx 万2.3/万0.23；旧值 15 倍已于 P-A 按 xlsx 更正）",
+           abs(_ct_fee.value / _open_fee.value - 10.0) < 1e-9,
+           _ct_fee.value / _open_fee.value)
 def _fee_ratio(t):
-    notional = t["volume"] * t["exit_price"]
-    return t["cost_points"] / notional if notional else 0.0
+    # 成本（元）/（手数 × 乘数 × 离场价）—— rate 档下即"折算费率"，
+    # 与旧点数口径 cost_points/notional 等价（乘数同时出现在分子分母）。
+    denom = t["volume"] * _p.multiplier * t["exit_price"]
+    return t["cost_cash"] / denom if denom else 0.0
 _r_lx = _fee_ratio(lx)
 _r_ly = _fee_ratio(ly)
-_tol = 0.05  # 相对容差 5%：足以区分「平昨」与「15 倍平今」（后者偏离 ~1400%）
-check_true("[5c] ⑤ 平仓费率：X（跨日）与 Y 一致且都 ≈ 平昨 close_fee_rate（远离 15 倍平今 3.45e-4）",
-           abs(_r_lx - _spec.close_fee_rate) / _spec.close_fee_rate < _tol
-           and abs(_r_ly - _spec.close_fee_rate) / _spec.close_fee_rate < _tol
-           and abs(_r_lx - _r_ly) / _spec.close_fee_rate < _tol,
-           (_r_lx, _r_ly, _spec.close_fee_rate))
+_open_r = _open_fee.value * 1e-4
+_ct_r = _ct_fee.value * 1e-4
+_expected = _open_r * (1.0 + lx["entry_price"] / lx["exit_price"])
+_tol = 0.05  # 相对容差 5%：足以区分「平昨（= 开仓档）」与「10 倍平今」
+check_true("[5c] ⑤ 平仓成本：X（跨日）与 Y 一致，都按**开仓档（平昨 ≡ 开仓）**计（远离 10 倍平今）",
+           abs(_r_lx - _expected) / _expected < _tol
+           and abs(_r_ly - _expected) / _expected < _tol
+           and abs(_r_lx - _r_ly) / _expected < _tol
+           and _r_lx < _ct_r,
+           (_r_lx, _r_ly, _expected))
 
 # ══════════════════════════════════════════════════════════════
 print("\n[6] 离场报单逐字段相同（同一个 ⑤、同一触发价）")
@@ -365,19 +373,19 @@ check_true("[7e] 该差额**只**体现在会计层：敞口持仓 gross 之差�
            abs(round(lx["gross_points"] - ly["gross_points"], 6))
            == abs(P_ANCHOR - P_Y_ENTRY),
            "%.4f vs %.4f" % (lx["gross_points"], ly["gross_points"]))
-check_true("[7f] 对账：Σ_Y − Σ_X = 锁仓持仓 net_points + 敞口持仓 net_points 之差",
-           abs((sum(t["net_points"] for t in tr_y)
-                - sum(t["net_points"] for t in tr_x))
-               - (lock_pos["net_points"] + (ly["net_points"] - lx["net_points"]))
+check_true("[7f] 对账：Σ_Y − Σ_X = 锁仓持仓 net_cash + 敞口持仓 net_cash 之差（P-A 元口径）",
+           abs((sum(t["net_cash"] for t in tr_y)
+                - sum(t["net_cash"] for t in tr_x))
+               - (lock_pos["net_cash"] + (ly["net_cash"] - lx["net_cash"]))
                ) < 1e-9,
            "ΣY=%.4f ΣX=%.4f lock=%.4f Δ敞口=%.4f" % (
-               sum(t["net_points"] for t in tr_y),
-               sum(t["net_points"] for t in tr_x), lock_pos["net_points"],
-               ly["net_points"] - lx["net_points"]))
+               sum(t["net_cash"] for t in tr_y),
+               sum(t["net_cash"] for t in tr_x), lock_pos["net_cash"],
+               ly["net_cash"] - lx["net_cash"]))
 check_true("[7g] 锁仓持仓在 ③ 拆锁时以成交价 4520 平仓了结（与敞口持仓分离的独立一段）",
            abs(lock_pos["exit_price"] - P_ANCHOR) < 1e-9,
            "lock_exit=%.4f anchor=%.4f net=%.4f"
-           % (lock_pos["exit_price"], P_ANCHOR, lock_pos["net_points"]))
+           % (lock_pos["exit_price"], P_ANCHOR, lock_pos["net_cash"]))
 check_true("[7h] 风控层等价是本文件的断言结论（止损价与离场报单全等由 [4][6] 钉死）",
            snap_x["plan"] == snap_y["plan"] and ord_x == ord_y, "")
 

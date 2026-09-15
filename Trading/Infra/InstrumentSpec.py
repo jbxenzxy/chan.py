@@ -12,19 +12,18 @@ TradingConfig.instrument（Trading/Config.py）挂载进配置树，属部署配
 本文件从此承载**两个生命周期完全不同**的模型，这是刻意的：
 
   · `InstrumentSpec`（pydantic，**静态**）—— 部署资产 / 领域注册表。
-    字段是"启动前就写死、启动后不变"的值：symbol / exchange / 费率默认值 /
-    slippage / order_advanced / 涨跌停幅度 / 最后交易日 等。
+    字段是"启动前就写死、启动后不变"的值：symbol / exchange / slippage /
+    order_advanced / 涨跌停幅度 / 最后交易日 等。
     它经 `TradingConfig.instrument` 挂进配置树 —— 正因如此，**它必须只读**：
     TradingConfig 是配置对象，构造后不该有任何字段被行情推着改。
 
   · `InstrumentState`（普通类，**运行时**）—— 行情 / 成交回报回填的活状态。
-    有效价 tick / 乘数、当日涨跌停区间、A′ 的 verified+source、三档费率的
-    有效值与 fee_source 都在这里。它还承载**订单定价与成本口径**
-    （round_price / align_* / cost_points / points_to_cash）—— 这些读的是
-    "有效 tick / 有效费率"，天然属于运行时。
+    有效价 tick / 乘数、当日涨跌停区间、A′ 的 verified+source 都在这里。
+    它还承载**订单定价与成本口径**（round_price / align_* / cost_cash /
+    points_to_cash）—— 成本读"有效乘数 × 品种档案费率"，天然属运行时。
 
   分工改写历史（乱源②）：Phase 8~12 把行情回填的运行时字段直接挂在了
-  InstrumentSpec 上（`instrument_verified` / `instrument_source` / `fee_source` /
+  InstrumentSpec 上（`instrument_verified` / `instrument_source` /
   `upper_limit` / `lower_limit`，以及被 apply_quote 就地覆盖的 price_tick /
   multiplier），于是同一份模型同时是"配置"、"状态容器"和"计算服务"。
   现在拆开：**配置类只存配置，运行时状态持 spec 引用**，Engine 建一份 state
@@ -33,17 +32,21 @@ TradingConfig.instrument（Trading/Config.py）挂载进配置树，属部署配
   所有权规则（务必遵守，否则 A′ fail-closed 会失效）：
       一次运行**只有一份** InstrumentState —— main.py 建好后同时交给
       `Broker.build_broker(..., state=state)` 与 `TradingEngine(..., state=state)`。
-      Broker 写（apply_quote / apply_fee_rates），Engine 读（闸门 / 漂移对账 /
-      平今经济性 / 成本）。若两边各建一份，SimNow 置的 verified 引擎永远看不见
+      Broker 写（apply_quote），Engine 读（闸门 / 漂移对账 / 成本）。
+      若两边各建一份，SimNow 置的 verified 引擎永远看不见
       → 闸门恒拒单（且看不出原因）。
 
 v1 的合约映射用**配置表**（Trading/Config.py 的 instrument.trade_symbol）。
 M2 接 tqsdk 后换成 `quote.underlying_symbol` 动态解析，接口不变——
 这是刻意留的替换点，不要把这层的调用散到引擎里。
 
-成本口径（重要）
-    - 手续费按比率折算成"点数"：费 = 价格 × 费率，单位就是指数点
-    - 滑点**不计入** cost_points，而是体现在成交价上（见 dry_run broker 的让价）
+成本口径（重要，P-A · 2026-09-15 改"元"）
+    - 费率真值源 = 品种档案 ProductProfile 的 Fee 两档（开仓 / 平今），静态、启动即确定；
+    - 手续费按 `Fee.cash(price, multiplier)` 折算为**每手元**：rate 档 = 万分比 × 价 × 乘数，
+      per_lot 档 = 固定元/手 —— "点数"口径无法表达 per_lot 档（10 元/手 ÷ 乘数再乘回，
+      中间还过一次浮点），故成本记账**统一在元上做**（cost_cash）；
+    - 盈亏毛值仍以"点"记账（gross_points），净值为元（net_cash = 毛利元 − 成本元）；
+    - 滑点**不计入** cost_cash，而是体现在成交价上（见 dry_run broker 的让价）
       否则同一笔滑点会被算两次，回测虚高、实盘对不上
 """
 from __future__ import annotations
@@ -63,8 +66,13 @@ class InstrumentSpec(BaseModel):
 
     ⚠️ 本模型是 `TradingConfig.instrument`，**构造后必须只读**。
       凡"行情 / 成交回报会回填"的值一律属于 `InstrumentState`，不要往这里加。
-      唯一例外是离线兜底种子（price_tick / multiplier / 三档费率）：
+      唯一例外是离线兜底种子（price_tick / multiplier）：
       它们在**构造时**作种子，之后由 state 持有有效值，本模型自身不再变。
+
+    2026-09-15 P-A 删除三档费率字段（open/close/closetoday_fee_rate）：
+      费率真值源 = 券商费率表 → 归位到品种档案 ProductProfile 的 Fee 两档
+      （静态、启动即确定），不再经"成交回报反推 / TqSim 查询"运行时通道，
+      也不再需要 fee_source 来源标记 —— "取不到费率"这个状态彻底消失。
     """
     model_config = ConfigDict(extra="forbid")
 
@@ -73,13 +81,6 @@ class InstrumentSpec(BaseModel):
     # —— 离线兜底种子（在线路径由行情原子覆盖，见 InstrumentState.apply_quote）——
     price_tick: float = 0.2                    # IF 最小变动价位
     multiplier: float = 300.0                  # 合约乘数（元/点）
-    open_fee_rate: float = 0.000023            # 开仓 0.0023%
-    closetoday_fee_rate: float = 0.000345      # 平今 0.0345%（中金所，期指很贵）
-    close_fee_rate: float = 0.000023           # 平昨 0.0023%
-    #
-    # 注（Phase 12 三档费率的**来源标记** fee_source）：Phase 3 起随运行时语义
-    #   迁到 InstrumentState.fee_source —— 空串 = 仍用配置默认值（未自动获取）
-    #   → 不做平今经济性自动判定（fail-closed，平今开关走保守侧锁仓）。
     slippage_ticks: float = 1.0                # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
     #   "FOK"  全成或全撤 —— 中金所支持，本系统默认依赖它（无部分成交幽灵）
@@ -124,8 +125,9 @@ class InstrumentSpec(BaseModel):
     #
     # 2026-09-14 Phase 3 迁出（→ InstrumentState）：
     #   `upper_limit` / `lower_limit`（当日涨跌停绝对价，唯一真值来源是行情）、
-    #   `instrument_verified` / `instrument_source`（A′ fail-closed 闸门与来源标记）、
-    #   `fee_source`（三档费率来源标记）。它们是**运行时状态**，不是配置。
+    #   `instrument_verified` / `instrument_source`（A′ fail-closed 闸门与来源标记）。
+    #   它们是**运行时状态**，不是配置。
+    #   2026-09-15 P-A：三档费率字段与 fee_source 直接删除（费率归位品种档案）。
 
     # ════════════════════════════════════════════════════════════════
     # 品种档案显式播种（Phase 3 · Fix B · 2026-09-14）
@@ -147,7 +149,7 @@ class InstrumentSpec(BaseModel):
             品种相关参数的能力；调参 = 改档案 = git 评审 + 对账测试守护）。
 
           · 其余字段逐项取 `overrides`（signal_symbol / trade_symbol / exchange /
-            三档费率 / slippage_ticks / order_advanced / last_trade_date …），
+            slippage_ticks / order_advanced / last_trade_date …），
             缺省回落到模型默认值。调用方通常传
             `**cfg.instrument.model_dump(exclude={"price_tick", "multiplier"})`
             把用户已经配好的静态项带过来。
@@ -204,8 +206,10 @@ class InstrumentSpec(BaseModel):
 
         Phase 10（D6 · 2026-09-14）：六家交易所里**只有上期所（SHFE）与
         上期能源（INE）**有 CLOSETODAY 平今指令，其余四家（CFFEX/DCE/CZCE/GFEX）
-        传平今会直接报错。`prefer_lock_over_closetoday=False` 的平今分支
-        以本属性为唯一守卫（转移④ + _pre_trade_check 双处消费）。
+        传平今会直接报错。平今分支（转移④ + _pre_trade_check 双处消费）
+        以本属性为唯一守卫 —— "走不走平今"由费率派生（P-A 起在
+        ProductProfile.prefer_closetoday 单源派生），"能不能走平今"由本属性守卫，
+        两者缺一不可，**本闸门永不可删**。
 
         exchange 可能为 ""（离线配置未填充 / Phase 8 之前）→ 一律 False，
         保守侧：宁可继续锁仓，也不生成一张会被拒的平今单。
@@ -256,19 +260,18 @@ class InstrumentState:
     """合约规格的运行时状态（Phase 3 · Fix B）：有效值 + 行情/回报来源标记 + 定价与成本。
 
     构造：`InstrumentState(spec)` —— 从静态规格**播种**有效值
-    （price_tick / multiplier / 三档费率）。之后只有两条路径能改写它：
+    （price_tick / multiplier）。之后只有一条路径能改写它：
       · 行情路径：`apply_quote()`（tick / 乘数 / 涨跌停）
-      · 费率路径：`apply_fee_rates()`（三档费率 + 来源）
-      · 离线显式声明：`mark_config_offline()` / `mark_fee_config()`
+      · 离线显式声明：`mark_config_offline()`
+      （2026-09-15 P-A 删除费率路径：费率归位品种档案，无运行时回填）
 
     归属判据（本类字段 vs InstrumentSpec 字段）：
-      · 启动后**会变** → 本类（有效 tick/乘数、涨跌停、verified/source、费率有效值/fee_source）
+      · 启动后**会变** → 本类（有效 tick/乘数、涨跌停、verified/source）
       · 启动后**不变** → InstrumentSpec（symbol / exchange / slippage / order_advanced /
         closetoday_first / 涨跌停幅度 / last_trade_date / 离线种子）
 
-    定价与成本（round_price / align_* / slip_price / cost_points / points_to_cash）
-    也放在本类：它们读的是"有效 tick / 有效费率 / 有效乘数"，属运行时语义。
-    方法签名与 Phase 3 之前**完全一致**（调用点只需把 spec 换成 state）。
+    定价与成本（round_price / align_* / slip_price / cost_cash / points_to_cash）
+    也放在本类：成本读"有效乘数 × 品种档案费率"，属运行时语义。
     """
 
     # ── 参数来源标记的合法值 ──
@@ -279,17 +282,6 @@ class InstrumentState:
     #   tick + 乘数来自行情，但**涨跌停区间缺失** → band 护栏已降级为不校验。
     #   留这个独立标记是为了诊断时能一眼看出"verified 为真但护栏是降级的"。
     SOURCE_QUOTE_PARTIAL: ClassVar[str] = "QUOTE_PARTIAL"
-
-    # Phase 12（D6 喂数）：三档费率（open / close / closetoday_fee_rate）的来源标记。
-    #   与 source 平行但独立 —— 费率可能来自与行情不同的通道
-    #   （成交回报反推晚于行情就绪），混在一个字段里会互相污染。
-    #     FEE_QUOTE   —— 从费率通道自动获取（纯模拟 TqSim.get_commission）
-    #     FEE_TRADE   —— 从成交回报 commission 反推（在线 CTP/SimNow 通道）
-    #     FEE_CONFIG  —— 配置默认值（离线 dry_run/replay 显式声明，见 mark_fee_config）
-    #   空串 = 未知（未自动获取）→ 经济性判定 fail-closed。
-    SOURCE_FEE_QUOTE: ClassVar[str] = "FEE_QUOTE"
-    SOURCE_FEE_TRADE: ClassVar[str] = "FEE_TRADE"
-    SOURCE_FEE_CONFIG: ClassVar[str] = "FEE_CONFIG"
 
     # apply_quote 回填的行情字段 → state 字段映射（tqsdk quote 字段名 → 本类字段名）
     _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
@@ -302,12 +294,10 @@ class InstrumentState:
     def __init__(self, spec: InstrumentSpec):
         self.spec: InstrumentSpec = spec
         # —— 有效值：构造时从静态规格播种（离线兜底；在线路径由行情原子覆盖）——
+        #   （2026-09-15 P-A：费率不再经 state —— 成本计算直接读品种档案 Fee 两档）
         self.price_tick: float = float(spec.price_tick)
         self.multiplier: float = float(spec.multiplier)
-        self.open_fee_rate: float = float(spec.open_fee_rate)
-        self.close_fee_rate: float = float(spec.close_fee_rate)
-        self.closetoday_fee_rate: float = float(spec.closetoday_fee_rate)
-        # —— 运行时采集：行情 / 成交回报 / 离线显式声明写入 ——
+        # —— 运行时采集：行情 / 离线显式声明写入 ——
         #   当日涨跌停区间（绝对价）。**唯一真值来源是行情**（apply_quote 回填），
         #     配置里的 limit_up_pct/limit_down_pct 只是档案，换算不出当日绝对价。
         #     0 = 未知（离线模式未取到）→ 涨跌停护栏对未知区间不校验（不校验未知的东西）。
@@ -322,15 +312,13 @@ class InstrumentState:
         #   / "QUOTE_PARTIAL"（tick+乘数来自行情，涨跌停护栏降级）
         #   / "CONFIG_OFFLINE"（dry_run/replay 离线兜底）/ ""（尚未定）。
         self.source: str = ""
-        # fee_source: 三档费率的来源标记（空串 = 未自动获取 → 经济性判定 fail-closed）。
-        self.fee_source: str = ""
 
     def __repr__(self) -> str:
         return ("InstrumentState(trade_symbol={!r}, price_tick={!r}, multiplier={!r}, "
-                "band=({!r}, {!r}), verified={!r}, source={!r}, fee_source={!r})"
+                "band=({!r}, {!r}), verified={!r}, source={!r})"
                 .format(self.spec.trade_symbol, self.price_tick, self.multiplier,
                         self.lower_limit, self.upper_limit,
-                        self.verified, self.source, self.fee_source))
+                        self.verified, self.source))
 
     # ---------- Phase 8：行情参数回填（A′） ----------
     def apply_quote(self, quote: Any, require_band: bool = True) -> List[str]:
@@ -408,108 +396,10 @@ class InstrumentState:
         """
         self.source = self.SOURCE_CONFIG_OFFLINE
 
-    # ---------- Phase 12：三档费率自动回填 + 平今经济性判定（D6 喂数） ----------
-    def apply_fee_rates(self, open_rate: float, close_rate: float,
-                        closetoday_rate: float, source: str) -> List[str]:
-        """自动获取到三档费率后**原子回填**（Phase 12 · 2026-09-14 插入）。
-
-        与 apply_quote 同一纪律：先对全部待填值校验，任一不过 → 抛 ValueError
-        且**一个字段都不改**（半新半旧的费率比全旧更危险）。费率必须是
-        isfinite 且 >= 0 的比率（0.000023 = 0.0023%；**0 = 平今免收**，合法）
-        —— tqsdk/TqSim 取不到时可能是 nan 或 0，`if not v` 判空会漏过 nan，
-        必须 math.isfinite。
-
-        source 必须是 SOURCE_FEE_* 常量之一（防拼错）—— 取不到三档费率时
-        调用方**不得**调用本方法（fee_source 保持 "" = fail-closed）。
-
-        返回值发生变化的字段名列表。
-        """
-        if source not in (self.SOURCE_FEE_QUOTE, self.SOURCE_FEE_TRADE,
-                          self.SOURCE_FEE_CONFIG):
-            raise ValueError(
-                "非法费率来源 {!r}（必须为 SOURCE_FEE_* 常量）".format(source))
-        vals = {"open_fee_rate": float(open_rate),
-                "close_fee_rate": float(close_rate),
-                "closetoday_fee_rate": float(closetoday_rate)}
-        for f, v in vals.items():
-            # 允许 v == 0（平今免收 = 合法费率 0，如沪金 AU）；拒 nan / 负值
-            if not math.isfinite(v) or v < 0:
-                raise ValueError(
-                    "费率字段 {}={!r} 非法（要求 isfinite 且 >= 0；0 = 免收）"
-                    "—— 原子回填失败，三档费率保持原值".format(f, v))
-        changed = []
-        for f, v in vals.items():
-            old = float(getattr(self, f))
-            setattr(self, f, v)
-            if abs(old - v) > 1e-12:
-                changed.append(f)
-        self.fee_source = source
-        return changed
-
-    def mark_fee_config(self) -> None:
-        """离线模式（dry_run/replay）显式声明费率来源 = 配置默认值（Phase 12）。
-
-        与 mark_config_offline 平行：离线没有费率通道，三档费率就是配置值，
-        必须能自证来源 —— 但不触发经济性判定（费率非行情真值，判了也不可信）。
-        实盘永远不调本方法（在线通道取不到费率 → fee_source 保持 ""，fail-closed）。
-
-        ⚠️ 现状说明（Phase 3 原样搬运，行为零变化）：本方法在仓库里**目前没有
-          调用点** —— main.py 的离线路径只调 mark_config_offline。保留它是为了
-          离线*显式声明费率来源*这条语义不丢（Phase 12 设计的一部分）；真接上之前
-          注意：evaluate_closetoday_economy 目前只判 `fee_source` 是否为空，
-          一旦本方法被接上，离线也会触发经济性判定，与本 docstring 的
-          "不触发经济性判定"意图不一致，接上时需同步收紧判据。
-        """
-        self.fee_source = self.SOURCE_FEE_CONFIG
-
-    def evaluate_closetoday_economy(self) -> Optional[Dict[str, Any]]:
-        """平今经济性判定（Phase 12 · D6 喂数，纯函数）。
-
-        判定规则（文档 Phase 12 行）：`closetoday_fee_rate ≤ close_fee_rate`
-        → 平今免收/便宜 → 建议 `prefer_lock_over_closetoday=False`（今仓直接平今，
-        省一次开仓费 + 跨日平仓费）；否则建议 True（锁仓优先，平今更贵）。
-
-        **fail-closed**：fee_source 为空（费率未自动获取）→ 返回 None，
-        调用方（Engine）不做任何判定，平今开关走保守侧（锁仓，默认 True）。
-
-        产出是**建议值**：引擎只读不改配置，人工确认后写回品种档案。
-
-        返回 None（费率未知）或 dict：
-          suggest_lock          建议的 prefer_lock_over_closetoday（True=锁仓）
-          closetoday_rate / close_rate  判定用的两档费率
-          cheaper               "closetoday"（平今更便宜）/ "close"（平昨更便宜）
-                               / "same"（相等，按 ≤ 规则归入平今便宜侧）
-          reason                供横幅/告警展示的一句话结论
-          source                费率来源（FEE_QUOTE / FEE_TRADE）
-        """
-        if not self.fee_source:
-            return None
-        ct = float(self.closetoday_fee_rate)
-        cl = float(self.close_fee_rate)
-        if not (math.isfinite(ct) and math.isfinite(cl) and ct >= 0 and cl >= 0):
-            # 费率非法（nan/负值）→ 视同未知，fail-closed
-            return None
-        cheaper_side = "same" if abs(ct - cl) <= 1e-12 else \
-            ("closetoday" if ct < cl else "close")
-        suggest_lock = ct > cl          # 平今更贵 → 锁仓；平今 ≤ 平昨 → 平今
-        if cheaper_side == "same":
-            reason = "平今费率=平昨费率（{:.4%}），平今不省不贵 → 建议走平今".format(ct)
-        elif cheaper_side == "closetoday":
-            reason = ("平今费率 {:.4%} ≤ 平昨费率 {:.4%}，平今免收/便宜"
-                      " → 建议 prefer_lock_over_closetoday=False".format(ct, cl))
-        else:
-            reason = ("平今费率 {:.4%} > 平昨费率 {:.4%}，平今更贵"
-                      " → 建议 prefer_lock_over_closetoday=True（锁仓优先）"
-                      .format(ct, cl))
-        return {
-            "suggest_lock": suggest_lock,
-            "closetoday_rate": ct,
-            "close_rate": cl,
-            "cheaper": cheaper_side,
-            "reason": reason,
-            "source": self.fee_source,
-        }
-
+    # 2026-09-15 P-A 删除（Phase 12 三档费率回填 + 平今经济性判定三件套，共 102 行）：
+    #   apply_fee_rates / mark_fee_config / evaluate_closetoday_economy / SOURCE_FEE_*。
+    #   费率真值源 = 品种档案 ProductProfile 的 Fee 两档（静态）；平今取舍 =
+    #   ProductProfile.prefer_closetoday（3× 口径纯派生）。
     # ---------- 价格对齐（读**有效 tick**） ----------
     def round_price(self, price: float, mode: str = "nearest") -> float:
         """把价格对齐到**有效** price_tick。mode: nearest / up / down。"""
@@ -542,12 +432,25 @@ class InstrumentState:
         tick = self.spec.slippage_ticks * self.price_tick
         return price + side_sign * tick if for_open else price - side_sign * tick
 
-    # ---------- 成本（读**有效费率 / 有效乘数**） ----------
-    def cost_points(self, entry_price: float, exit_price: float,
-                    closetoday: bool = True) -> float:
-        """往返手续费，折算成点数。滑点不在此处计（见模块 docstring）。"""
-        rate = self.closetoday_fee_rate if closetoday else self.close_fee_rate
-        return entry_price * self.open_fee_rate + exit_price * rate
+    # ---------- 成本（P-A · 2026-09-15：读品种档案 Fee 两档 + 有效乘数，统一在元上算） ----------
+    def cost_cash(self, product: "ProductProfile", entry_price: float,
+                  exit_price: float, closetoday: bool, volume: int = 1) -> float:
+        """往返手续费，**元**口径（每手元 × 手数）。
+
+        closetoday=False → 平昨档；True → 平今档。平昨 ≡ 开仓（xlsx 全表没有
+        一行把"平昨"单独列出来，见交接文档 §6.4）→ 两种情形都是
+        「开仓档成交一笔 + 相应离场档成交一笔」。
+
+        滑点不在此处计（见模块 docstring）。
+        ⚠️ 取代已删除的 `cost_points`（点数口径）：per_lot 档（如黄金 10 元/手、
+        PTA 3 元/手）在点数口径下无法无损表达（10 ÷ 乘数再乘回，中间还过一次
+        浮点），成本记账统一在**元**上做；毛盈亏仍以点记（gross_points），
+        净值 = 毛利元 − 成本元（net_cash）。
+        """
+        open_fee, ct_fee = product.fee_pair()
+        exit_fee = ct_fee if closetoday else open_fee
+        return (open_fee.cash(entry_price, self.multiplier)
+                + exit_fee.cash(exit_price, self.multiplier)) * volume
 
     def points_to_cash(self, points: float, volume: int = 1) -> float:
         return points * self.multiplier * volume

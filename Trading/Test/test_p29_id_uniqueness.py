@@ -320,7 +320,7 @@ with tmp_dir() as tmp:
             trade_id="T{:05d}".format(i), symbol="CFFEX.IF2609", side=Side.LONG,
             volume=2, entry_price=4500.0, exit_price=4510.0,
             entry_at="2026-09-01 09:00", exit_at="2026-09-02 09:00",
-            reason="sl", gross_points=10.0, cost_points=1.0, net_points=9.0,
+            reason="sl", gross_points=10.0, cost_cash=1.0,
             net_cash=180.0, bars_held=3, signal_key="K{}".format(i),
             exit_plan_name="x", exit_plan_params={}))
     for i in (4, 20):
@@ -362,7 +362,7 @@ with tmp_dir() as tmp:
     store.save_trade(Trade(
         trade_id="T00001", symbol="CFFEX.IF2609", side=Side.LONG, volume=2,
         entry_price=4500.0, exit_price=4510.0, entry_at="A", exit_at="B",
-        reason="sl", gross_points=10.0, cost_points=1.0, net_points=9.0,
+        reason="sl", gross_points=10.0, cost_cash=1.0,
         net_cash=180.0, bars_held=3, signal_key="ORIG",
         exit_plan_name="x", exit_plan_params={}))
 
@@ -371,7 +371,7 @@ with tmp_dir() as tmp:
         store.save_trade(Trade(
             trade_id="T00001", symbol="CFFEX.IF2609", side=Side.SHORT, volume=9,
             entry_price=1.0, exit_price=2.0, entry_at="C", exit_at="D",
-            reason="IMPOSTOR", gross_points=1.0, cost_points=0.0, net_points=1.0,
+            reason="IMPOSTOR", gross_points=1.0, cost_cash=0.0,
             net_cash=1.0, bars_held=0, signal_key="IMPOSTOR",
             exit_plan_name="y", exit_plan_params={}))
     except IdCollisionError as e:

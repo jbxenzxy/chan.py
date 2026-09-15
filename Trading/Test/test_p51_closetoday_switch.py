@@ -6,7 +6,7 @@ P51 平今开关（Phase 10 · D6）契约（2026-09-14）
 --------------------------------
 对"平今免收/平今便宜"的品种（如沪金 AU 平今免收、沪银 AG 平今=平昨费率、
 部分农产品、原油 SC），"锁仓再跨日平"反而更贵（多一次开仓费 + 一次跨日平仓费）。
-Phase 10 落地品种开关 `prefer_lock_over_closetoday`（默认 True = 锁仓优先）：
+Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）：
 为 False 时转移 ④（今仓离场）改走 **CLOSETODAY 直接平今** → 今仓清零直接回
 空仓态，不再进锁仓态 —— 对这类品种，状态机退化为「空仓态 + 运行态」两态
 （见文档「账户三态（空仓-运行-锁仓）.html」尾部注释）。
@@ -22,12 +22,13 @@ Phase 10 落地品种开关 `prefer_lock_over_closetoday`（默认 True = 锁仓
 覆盖
 --------------------------------------------------------------------------
   [1] `supports_closetoday`：SHFE/INE → True；其余四家 + "" → False
-  [2] 品种档案开关值：AU/AG = False（平今免收/便宜）；IF/IH/IC/IM/CU/TA = 默认 True
+  [2] 品种档案平今派生（P-A · 3× 口径）：AU/AG/CU = True（平今）；
+      IF/IH/IC/IM/TA = False（能力闸门短路 → 锁仓）
   [3] 转移 ④ 三分支（_decide_exit）：
-        a. 开关 True（默认，IF）→ OPEN 反向开仓锁仓
-        b. 开关 False 但交易所非 SHFE/INE → OPEN（保守侧）
-        c. 开关 False + SHFE（AU）→ CLOSETODAY / target=今仓 / transition=4
-        d. 无品种档案 → True 保守侧 → OPEN
+        a. CFFEX（能力闸门短路）→ OPEN 反向开仓锁仓
+        b. 档案判平今但交易所非 SHFE/INE → OPEN（保守侧，spec 闸门优先）
+        c. AU + SHFE（派生平今 + 能力可用）→ CLOSETODAY / target=今仓 / transition=4
+        d. 无品种档案 → False 保守侧 → OPEN
   [4] `_pre_trade_check` 对 CLOSETODAY 的校验链：
         a. 非 SHFE/INE → "closetoday_not_supported"
         b. 今仓目标 + SHFE → 通过（None）
@@ -169,13 +170,20 @@ for ex, want in (("SHFE", True), ("INE", True),
 
 
 # ══════════════════════════════════════════════════════════════
-print("\n[2] 品种档案开关：AU/AG 已关（平今免收/便宜），其余默认 True")
+print("\n[2] 品种档案平今派生：AU/AG/CU 判平今；IF/IH/IC/IM/TA 被能力闸门短路")
 # ══════════════════════════════════════════════════════════════
-check("[2a] AU 开关 = False", PRODUCT_PROFILES["AU"].prefer_lock_over_closetoday, False)
-check("[2b] AG 开关 = False", PRODUCT_PROFILES["AG"].prefer_lock_over_closetoday, False)
-for p in ("IF", "IH", "IC", "IM", "CU", "TA"):
-    check("[2c] {} 开关 = 默认 True".format(p),
-          PRODUCT_PROFILES[p].prefer_lock_over_closetoday, True)
+# P-A（2026-09-15）：手写布尔 prefer_lock_over_closetoday 已删除，改为档案费率
+# 单源派生（prefer_closetoday，3× 口径）。ref_price 用 1.0 占位 —— 8 品种
+# 两档计价方式恒相同，比较式里价格自动约掉（见 ProductProfile.prefer_closetoday）。
+check("[2a] AU 派生 = True（平今免收 → 平今）",
+      PRODUCT_PROFILES["AU"].prefer_closetoday(1.0), True)
+check("[2b] AG 派生 = True（平今=开仓 → 平今不贵）",
+      PRODUCT_PROFILES["AG"].prefer_closetoday(1.0), True)
+check("[2c1] CU 派生 = True（Y=2X < 3X → 平今；P-A 唯一行为变更品种，旧开关为锁仓）",
+      PRODUCT_PROFILES["CU"].prefer_closetoday(1.0), True)
+for p in ("IF", "IH", "IC", "IM", "TA"):
+    check("[2c2] {} 派生 = False（CFFEX/CZCE 无平今指令 → 能力闸门短路走锁仓）".format(p),
+          PRODUCT_PROFILES[p].prefer_closetoday(1.0), False)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -217,18 +225,18 @@ with tmp_dir("t3c") as tmp:
     check("[3c4] 平今量 = min(|净敞口|, 今仓目标手数) = 3",
           act.volume, min(3, 3))
 
-# 3d：无品种档案 → 开关取 True 保守侧 → OPEN
+# 3d：无品种档案 → 派生取 False 保守侧 → OPEN
 #   注意：白名单硬约束（_restore）拒绝对未知品种（如 ZZ）构造引擎，实盘启动时
 #   "无档案"本身不会出现 → 这里用 AU 引擎 + 覆写 cfg 模拟"配置注入缺档"
-#   （引擎仅经 _prefer_lock_over_closetoday 读取 cfg.product_profile，其余不受影响）。
+#   （引擎仅经 _prefer_closetoday 读取 cfg.product_profile，其余不受影响）。
 with tmp_dir("t3d") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
     eng = build_engine(tmp, cfg, InstrumentSpec(exchange="SHFE"), "d")
     eng.cfg = SimpleNamespace(product_profile=None)
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
-    check("[3d] 无品种档案 → _prefer_lock_over_closetoday=True（保守侧）",
-          eng._prefer_lock_over_closetoday(), True)
+    check("[3d] 无品种档案 → _prefer_closetoday=False（保守侧）",
+          eng._prefer_closetoday(1.0), False)
     act = eng._decide_exit(eng.last_bar)
     check("[3d2] 无档案 → 仍走 OPEN 锁仓（宁可多花一次开仓费，不生成平今单）",
           (act.intent.value, act.transition), ("open", 4))

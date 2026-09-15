@@ -72,8 +72,8 @@ def build_broker(name: str, spec: InstrumentSpec,
 # CLOSETODAY 的可用边界（A4 → Phase 10 落地）：**仅上期所（SHFE）/ 上期能源（INE）**
 # 有平今指令，其余四家（含中金所）传 CLOSETODAY 会直接报错 —— 引擎侧由
 # `InstrumentSpec.supports_closetoday` 守卫（转移④ 的分支条件 + _pre_trade_check 校验链）。
-# 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 落地品种开关
-# `prefer_lock_over_closetoday`（默认 True = 锁仓优先）后按需启用第三项。
+# 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 启用第三项。
+# P-A（2026-09-15）：走不走平今由品种档案费率单源派生（ProductProfile.prefer_closetoday）。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
     OrderIntent.OPEN: "OPEN",              # 买开 / 卖开；④ 反向开仓锁仓也走它
     OrderIntent.CLOSE: "CLOSE",            # 买平 / 卖平；恒作用于跨日仓（平昨）

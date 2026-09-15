@@ -204,13 +204,15 @@ class ReconcileMixin:
             #   否则夜盘品种上会和 Engine 的判定差一天，成本口径再次分叉。
             _today = self._current_trading_day(self.last_bar)
             _is_today_pos = pos.entry_date >= _today
-            # Phase 3：成本/折算读 state（有效费率 + 有效乘数）；
-            #   closetoday_first 是静态开关，留 spec。
-            cost = self.state.cost_points(
-                pos.entry_price, ref_price,
-                closetoday=bool(_is_today_pos and self.spec.closetoday_first))
-            net = gross - cost
-            cash = self.state.points_to_cash(net, pos.volume)
+            # P-A（2026-09-15）：成本改读**品种档案 Fee 两档**（元口径，state 提供
+            #   有效乘数），与 Engine._book_close 同源；closetoday_first 留 spec。
+            #   净值 = 毛利（点）× 有效乘数 × 手数 − 成本（元），全程元口径。
+            _p = self.cfg.product_profile
+            _closetoday = bool(_is_today_pos and self.spec.closetoday_first)
+            cost = (self.state.cost_cash(_p, pos.entry_price, ref_price,
+                                         closetoday=_closetoday, volume=pos.volume)
+                    if _p is not None else 0.0)
+            net_cash = (gross * self.state.multiplier * pos.volume) - cost
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
 
             self._trade_seq += 1
@@ -219,8 +221,8 @@ class ReconcileMixin:
                 side=pos.side, volume=pos.volume, entry_price=pos.entry_price,
                 exit_price=ref_price, entry_at=pos.entry_at, exit_at=now_cn(),
                 reason="reconcile_external_partial", gross_points=round(gross, 4),
-                cost_points=round(cost, 4), net_points=round(net, 4),
-                net_cash=round(cash, 2), bars_held=bars_held,
+                cost_cash=round(cost, 4), net_cash=round(net_cash, 2),
+                bars_held=bars_held,
                 signal_key=pos.signal_key, exit_plan_name=pos.exit_plan.name,
                 exit_plan_params=pos.exit_plan.params)
             self.store.save_trade(t)
@@ -233,7 +235,7 @@ class ReconcileMixin:
                           signal_key=pos.signal_key,
                           exit_price=ref_price,
                           gross_points=t.gross_points,
-                          net_points=t.net_points,
+                          net_cash=t.net_cash,
                           fifo_index=idx, pos_count=len(close_list),
                           source=source)
 

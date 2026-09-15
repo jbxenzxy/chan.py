@@ -49,8 +49,8 @@ CREATE TABLE IF NOT EXISTS trades (
     entry_price REAL, exit_price REAL,
     entry_at   TEXT, exit_at TEXT,
     reason     TEXT,
-    gross_points REAL, cost_points REAL,
-    net_points REAL, net_cash REAL,
+    gross_points REAL, cost_cash REAL,
+    net_cash REAL,
     bars_held  INTEGER,
     exit_plan_name TEXT,
     exit_plan_params TEXT
@@ -86,6 +86,16 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(_SCHEMA)
+        # P-A（2026-09-15）：trades 成本口径迁移 —— cost_points/net_points（点）
+        #   → cost_cash/net_cash（元）。Fee 模型下 per_lot 档（黄金 10 元/手）无法
+        #   在点数口径无损表达，成本统一在元上算（见 InstrumentState.cost_cash）。
+        #   旧 schema 的库：整表改名 trades_legacy_points 保留作审计（旧值单位是
+        #   "点"，与新表不可混读），再按新 schema 重建空表 —— 历史成交不删，
+        #   但不再参与新口径的统计。
+        _cols = {r[1] for r in self.conn.execute("PRAGMA table_info(trades)")}
+        if "net_points" in _cols:
+            self.conn.execute("ALTER TABLE trades RENAME TO trades_legacy_points")
+            self.conn.executescript(_SCHEMA)
         self.conn.commit()
 
     # ---------- 信号幂等 ----------
@@ -151,10 +161,10 @@ class Store:
         try:
             with self.conn:
                 self.conn.execute(
-                    "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (t.trade_id, t.signal_key, t.symbol, t.side.name, t.volume,
                      t.entry_price, t.exit_price, t.entry_at, t.exit_at, t.reason,
-                     t.gross_points, t.cost_points, t.net_points, t.net_cash,
+                     t.gross_points, t.cost_cash, t.net_cash,
                      t.bars_held, t.exit_plan_name,
                      json.dumps(t.exit_plan_params, ensure_ascii=False)))
         except sqlite3.IntegrityError as e:

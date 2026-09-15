@@ -156,14 +156,16 @@ class OrderIntent(str, Enum):
 
     不变量（规则 ⑹/⑺ 的推论，硬断言在 `Engine._pre_trade_check`）
       CLOSE        目标恒定是**跨日仓** → 恒为平昨。中金所期指平今费率是平昨的
-                   15 倍，对今仓发 CLOSE 会被当平昨处理并按平今收费 —— 绝不。
+                   10 倍（xlsx 万2.3 vs 万0.23），对今仓发 CLOSE 会被当平昨处理
+                   并按平今收费 —— 绝不。
       CLOSETODAY  目标恒定是**今仓**，且**仅上期所 / 上期能源（SHFE/INE）可用**
                    —— 其余四家交易所没有平今指令，传 CLOSETODAY 会直接报错
                    （守卫：`InstrumentSpec.supports_closetoday` + 转移④分支条件）。
 
       Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
-      刻意不开平今口子（A4 一期只保证映射可扩展）；随品种开关
-      `prefer_lock_over_closetoday`（默认 True = 锁仓优先）落地后按需启用。
+      刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起
+      "走不走平今"由品种档案费率**单源派生**（ProductProfile.prefer_closetoday，
+      3× 口径），不再有手写开关。
     """
     OPEN = "open"     # 开仓 → offset=OPEN（④ 反向开仓锁仓也走它）
     CLOSE = "close"   # 平仓 → offset=CLOSE（中金所下恒为平昨）
@@ -456,9 +458,9 @@ class Trade:
     reason: str                 # 离场原因：tp / sl（L1-L3 触发）、settle_exit（兜底）、
                                 #   auto_order_off（关闭托管时锁仓）、manual（调用方自定）
     gross_points: float
-    cost_points: float
-    net_points: float
-    net_cash: float
+    cost_cash: float            # 往返手续费（**元**；P-A 2026-09-15 由 cost_points 改元口径并更名
+                                #   —— per_lot 档（黄金 10 元/手）无法在点数口径下无损表达）
+    net_cash: float             # 净盈亏（元）= gross_points × 乘数 × 手数 − cost_cash
     bars_held: int
     signal_key: str
     exit_plan_name: str

@@ -37,7 +37,7 @@ from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E
 from Trading.Infra.InstrumentSpec import (                             # noqa: E402
     InstrumentSpec, InstrumentState)
 from Trading.Infra.ProductProfile import (                             # noqa: E402
-    PRODUCT_PROFILES, ProductProfile, assert_product_allowed,
+    PRODUCT_PROFILES, Fee, ProductProfile, assert_product_allowed,
     describe_unknown_product, parse_product, parse_product_key,
 )
 
@@ -191,11 +191,13 @@ def t3_kw_only():
     except TypeError as e:
         err = str(e)
     check_true("位置构造 ProductProfile(...) 抛 TypeError", err)
-    # 关键字构造不受影响
+    # 关键字构造不受影响（P-A 起 open_fee 为必填字段，须一并给出）
     p = ProductProfile(product="IF", r_multiple_tp=2.0,
-                       multiplier=300.0, price_tick=0.2, note="x")
+                       open_fee=Fee("rate", 0.23), multiplier=300.0,
+                       price_tick=0.2, note="x")
     check("关键字构造 OK（price_tick 落对位置）", p.price_tick, 0.2)
     check("关键字构造 OK（note 落对位置）", p.note, "x")
+    check("关键字构造 OK（open_fee 落对位置）", p.open_fee.describe(), "万0.23")
     # 8 个档案条目仍然全部可构造（防 kw_only 改动把既有表打坏）
     check("PRODUCT_PROFILES 8 条全部可构造", len(PRODUCT_PROFILES), 8)
 
@@ -358,28 +360,9 @@ def t5_quote_partial():
           b3.state.source, InstrumentState.SOURCE_QUOTE)
 
 
-# ══════════════════════════════════════════════════════════════════
-# [6] P2-3：离线模式规格漂移对账
-# ══════════════════════════════════════════════════════════════════
-def t6_offline_drift():
-    print("\n[6] P2-3 离线（dry_run/replay）规格漂移对账：用错规格不再静默")
-    with tmp_dir() as td:
-        eng = build_engine(td, "KQ.m@CFFEX.IF")      # DryRunBroker.is_offline = True
-        check("离线引擎：verified 恒 False", eng.state.verified, False)
-        eng._alerts = []
-        eng._check_spec_drift()
-        check("规格与档案一致 → 不告警",
-              [a.get("code") for a in eng._alerts], [])
-        # 手填一个与档案不符的乘数（= 行情取到的值与档案不一致）
-        eng.state.multiplier = 999.0
-        eng._alerts = []
-        eng._spec_drift_offline_checked = False
-        eng._check_spec_drift()
-        codes = [a.get("code") for a in eng._alerts]
-        check("离线条目规格漂移 → spec_drift_offline 告警",
-              "spec_drift_offline" in codes, True)
-
-
+# 2026-09-15 P-A 删除 [6] 离线模式规格漂移对账（原 22 行）：
+#   Engine._check_spec_drift 的离线分支已删除 —— for_product 无条件播种
+#   → 离线 state ≡ 档案恒成立，分支结构性不可达（见交接文档 §3.4-D）。
 # ══════════════════════════════════════════════════════════════════
 # [7] P2-4：未知品种日志去重
 # ══════════════════════════════════════════════════════════════════
@@ -445,23 +428,27 @@ def t8_dead_field_removed():
     #   配置对象 TradingConfig.instrument 构造后只读，行情回填一律落在
     #   InstrumentState 上。若有人把 did 字段加回 spec，本断言立刻红。
     print("\n[8b] Phase 3 拆分的完成判据：运行时字段已在 spec 上消失")
-    runtime_fields = ("instrument_verified", "instrument_source", "fee_source",
+    runtime_fields = ("instrument_verified", "instrument_source",
                       "upper_limit", "lower_limit")
     for f in runtime_fields:
         check("InstrumentSpec 不含运行时字段 {}".format(f), f in fields, False)
     # 反向：这些字段必须真的存在于 InstrumentState（防止"删了但没搬走"）
     st = InstrumentState(InstrumentSpec())
-    for f in ("verified", "source", "fee_source", "upper_limit", "lower_limit"):
+    for f in ("verified", "source", "upper_limit", "lower_limit"):
         check_true("InstrumentState 拥有运行时字段 {}".format(f),
                    f in vars(st))
     # 静态项仍在 spec 上（Phase 3 只搬运行时，没顺手搬静态）
     for keep in ("signal_symbol", "trade_symbol", "price_tick", "multiplier",
-                 "open_fee_rate", "close_fee_rate", "closetoday_fee_rate",
                  "slippage_ticks", "order_advanced", "closetoday_first"):
         check_true("静态项仍留 InstrumentSpec：{}".format(keep), keep in fields)
+    # P-A（2026-09-15）：三档费率字段已删除（费率归位 ProductProfile 的 Fee 两档），
+    #   防回潮：spec 上不得再有这三档费率字段。
+    for gone in ("open_fee_rate", "close_fee_rate", "closetoday_fee_rate"):
+        check("InstrumentSpec 不含费率字段 {}（P-A 已归位品种档案）".format(gone),
+              gone in fields, False)
     # 定价/成本五方法也归 state（读的是有效 tick / 有效费率）
     for m in ("round_price", "align_entry", "align_exit", "slip_price",
-              "cost_points", "points_to_cash"):
+              "cost_cash", "points_to_cash"):
         check_true("定价/成本方法已迁到 InstrumentState：{}".format(m),
                    callable(getattr(st, m, None)))
         check("InstrumentSpec 不再有同名方法：{}".format(m),
@@ -480,7 +467,6 @@ def main():
     t3_kw_only()
     t4_pulse_throttle()
     t5_quote_partial()
-    t6_offline_drift()
     t7_log_dedup()
     t8_dead_field_removed()
     print("\n============================================================")

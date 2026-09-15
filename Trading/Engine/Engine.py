@@ -130,15 +130,6 @@ class TradingEngine(ReconcileMixin):
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
         self._spec_drift_checked: bool = False
-        # 2026-09-14 评审 P2-3：离线（dry_run/replay）路径的漂移对账同样只做一次。
-        #   与上面分开计数的原因：两条路径的前提互斥（一个需要 verified、一个需要
-        #   离线），共用一个标志会让先走的那个把后走的那个吞掉。
-        self._spec_drift_offline_checked: bool = False
-        # Phase 12（2026-09-14 插入）：平今经济性判定一次性标志。
-        #   与 _spec_drift_checked 同纪律：费率会话内不变，重复检查只会把同 code
-        #   告警的 n 刷大。注意：fee_source 尚未回填（空串）时**不置位**——
-        #   费率可能经成交回报反推晚到，置位会吞掉后续判定。
-        self._closetoday_economy_checked: bool = False
         self.broker = broker
         self.entry_policy = entry_policy
         self.exit_policy = exit_policy
@@ -1023,14 +1014,17 @@ class TradingEngine(ReconcileMixin):
         today = self._current_trading_day(bar)
         if latest.entry_date >= today:
             # 转移 ④：今日仓 → 默认反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
-            #   D6 平今开关（Phase 10 · §5.4 阻塞点 3）：品种配置
-            #   `prefer_lock_over_closetoday=False` **且**交易所支持平今
-            #   （SHFE/INE，`spec.supports_closetoday`）时，改为直接
-            #   CLOSETODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态，
-            #   不再进锁仓态（"平今免收/便宜"品种省一次开仓费 + 跨日平仓费）。
-            #   开关缺省（无品种档案）/ 交易所不支持时走锁仓，保守侧。
-            if (not self._prefer_lock_over_closetoday()
-                    and self.spec.supports_closetoday):
+            #   P-A 平今单源派生（2026-09-15，取代 Phase 10 手写布尔）：
+            #   品种档案费率判"平今更省"（`prefer_closetoday`，3× 口径：
+            #   平今 2 笔 vs 锁仓 4 笔 ⟺ 平今费 < 3× 开仓费）**且**交易所
+            #   支持平今（SHFE/INE，`spec.supports_closetoday` 能力闸门，永不可删）
+            #   时，改为直接 CLOSETODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态。
+            #   开关缺省（无品种档案）/ 交易所不支持 / 费率判锁仓 → 走锁仓，保守侧。
+            #   ref_price 用最近一笔持仓的入场价（8 品种两档计价方式恒相同，
+            #   比较式里价格自动约掉；仅混合计价时才真正参与，见
+            #   ProductProfile.prefer_closetoday docstring）。
+            if (self.spec.supports_closetoday
+                    and self._prefer_closetoday(float(latest.entry_price))):
                 today_target = _oldest([
                     p for p in self.positions.positions
                     if p.side is net_side and p.entry_date >= today])
@@ -1049,16 +1043,24 @@ class TradingEngine(ReconcileMixin):
                        min(abs(net), target.volume), target,
                        is_exit=True, transition=5)
 
-    def _prefer_lock_over_closetoday(self) -> bool:
-        """D6 平今开关读取（Phase 10）。True = 今仓离场锁仓优先（现状，默认）。
+    def _prefer_closetoday(self, ref_price: float) -> bool:
+        """平今取舍（P-A 单源派生 · 2026-09-15，取代 `_prefer_lock_over_closetoday`）。
 
-        无品种档案（未知品种，理论上被白名单闸门拒绝启动）→ 取 True，
-        保证"取不到配置 → 走锁仓"的保守侧（宁可多花一次开仓费，不生成平今单）。
+        True = 今仓离场走 CLOSETODAY 平今；False = 反向开仓锁仓（保守侧）。
+
+        判定唯一来源 = 品种档案 `ProductProfile.prefer_closetoday(ref_price)`
+        （3× 口径纯派生：平今路径 2 笔 vs 锁仓路径 4 笔）。无品种档案 →
+        False（保守侧：宁可多花一次开仓费，不生成平今单）—— 无档案品种
+        理论上已被白名单闸门拒绝启动，此处仅为防御。
+
+        注意：交易所能力闸门（`spec.supports_closetoday`）**不在本方法里**，
+        由调用点（转移④）先闸 —— 能力判据读运行时有效 exchange（spec），
+        档案侧 exchange 仅作纯函数独立使用时的兜底，两层各司其职。
         """
         profile = self.cfg.product_profile
         if profile is None:
-            return True
-        return bool(getattr(profile, "prefer_lock_over_closetoday", True))
+            return False
+        return bool(profile.prefer_closetoday(ref_price))
 
     def _check_spec_drift(self) -> None:
         """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
@@ -1072,13 +1074,12 @@ class TradingEngine(ReconcileMixin):
         一次性：verified 首次为真时查一次即置位（合约规格会话内不变）。
         挂在 A3 校验链（_pre_trade_check）上，遵循"二期扩展往链上加"惯例。
 
-        2026-09-14 评审 P2-3：**离线路径补上同一份对账**。
-          原实现以 `instrument_verified` 为前提，而离线（dry_run/replay）恒为
-          False → 离线分支永远不查。可离线恰恰是**唯一**会用到档案兜底值的场景
-          （实盘被行情覆盖），兜底值过期在离线侧完全静默：tick 错 → 限价口径错，
-          乘数错 → PnL 错，回测结论直接不可用。
-          现补离线分支：此时 state 里是配置值（正常情况下就是由品种档案播种的，
-          两边应相等），不等 = 用户手填覆盖了 / 档案改过而配置没跟上 → warn。
+        2026-09-15 P-A 删除离线分支（原 2026-09-14 P2-3 补的
+        `_spec_drift_offline_checked` + `spec_drift_offline` 告警，24 行）：
+        `InstrumentSpec.for_product` 对 price_tick / multiplier **无条件强制取
+        档案值** → 离线 state ≡ 档案恒成立 → 离线分支结构性不可达
+        （唯一命中路径是绕过 _seed_instrument 的旁路构造，生产不存在）。
+        离线兜底值的对账由档案→种子的**单向播种**结构本身保证，无需运行时校验。
 
         Phase 3（Fix B）：比对对象从 spec 换成 **self.state** ——
           price_tick / multiplier 的"引擎实际在用值"现在住在 state 上
@@ -1086,37 +1087,11 @@ class TradingEngine(ReconcileMixin):
         """
         if self.cfg.product_profile is None:
             return
-        p = self.cfg.product_profile
         if self.state.verified:
             if self._spec_drift_checked:
                 return
             self._spec_drift_checked = True
-            self._check_spec_drift_online(p)
-            return
-        # ── 离线分支（dry_run / replay / 未取到行情的在线通道）──
-        if (self._spec_drift_offline_checked
-                or not getattr(self.broker, "is_offline", False)):
-            return
-        self._spec_drift_offline_checked = True
-        diffs = []
-        # 只比对"离线真的会用"的两个字段，且要求 state 侧已播种（>0）——
-        # 0 = 未播种/未知，不是漂移，不报。
-        if self.state.price_tick > 0 and self.state.price_tick != p.price_tick:
-            diffs.append("price_tick 档案={} / 配置={}".format(
-                p.price_tick, self.state.price_tick))
-        if self.state.multiplier > 0 and self.state.multiplier != p.multiplier:
-            diffs.append("multiplier 档案={} / 配置={}".format(
-                p.multiplier, self.state.multiplier))
-        if diffs:
-            self.alert(
-                self.ALERT_WARN, "spec_drift_offline",
-                "离线模式：引擎实际使用的合约规格与品种档案兜底值不一致（{}）。"
-                "离线没有行情可校验，档案值即真值 —— 回测/模拟的限价口径与 PnL "
-                "已受影响，请核对 instrument 配置与 PRODUCT_PROFILES。"
-                .format("；".join(diffs)),
-                signal_symbol=str(self.cfg.instrument.signal_symbol),
-                source=self.state.source,
-                mode="offline")
+            self._check_spec_drift_online(self.cfg.product_profile)
 
     def _check_spec_drift_online(self, p: "ProductProfile") -> None:
         """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
@@ -1136,42 +1111,9 @@ class TradingEngine(ReconcileMixin):
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
                 source=self.state.source)
 
-    def _check_closetoday_economy(self) -> None:
-        """平今经济性判定（Phase 12，2026-09-14 插入）。
-
-        背景：Phase 10（D6）落地 `prefer_lock_over_closetoday` 品种开关时是**静态**
-        配置 —— "能不能平今"（= 交易所是否支持 CLOSETODAY）能运行时判定，但
-        "贵不贵"（费率）读不到。Phase 12 把费率自动获取补上：模拟盘走
-        `TqSim.get_commission`（SOURCE_FEE_QUOTE）、在线实盘走成交回报反推
-        （SOURCE_FEE_TRADE），回填三档费率到 **state**（Phase 3 起）后在此判定。
-
-        规则（与文档 §5.x 一致）：
-          · 只读建议，**永不改写** prefer_lock_over_closetoday（决策留给人）；
-            state 侧 `evaluate_closetoday_economy()` 算好 suggest_lock，这里只上报。
-          · fail-closed：`fee_source` 为空（费率没拿到）→ 直接返回，不置位标志
-            —— 费率可能经成交回报反推**晚到**，置位会吞掉后续判定。
-          · 一次性：置位后不再查（费率会话内不变）。跨会话的判定在每次新会话
-            首次取到费率时重新触发。
-        """
-        if self._closetoday_economy_checked or not self.state.fee_source:
-            return
-        self._closetoday_economy_checked = True
-        result = self.state.evaluate_closetoday_economy()
-        if not result:
-            return
-        self.ev.write("closetoday_economy",
-                      symbol=str(self.cfg.instrument.signal_symbol),
-                      suggest_lock=result["suggest_lock"],
-                      closetoday_rate=round(float(result["closetoday_rate"]), 6),
-                      close_rate=round(float(result["close_rate"]), 6),
-                      cheaper=result["cheaper"],
-                      source=result["source"])
-        self.alert(
-            self.ALERT_WARN, "closetoday_suggestion", result["reason"],
-            suggest_lock=result["suggest_lock"],
-            source=result["source"],
-            signal_symbol=str(self.cfg.instrument.signal_symbol))
-
+    # 2026-09-15 P-A 删除 _check_closetoday_economy（共 36 行）：
+    #   平今经济性从"成交后建议"改为档案费率启动即派生（ProductProfile.prefer_closetoday），
+    #   建议与执行分叉的裂缝消除。
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
                          ref_price: float = 0.0) -> Optional[str]:
@@ -1223,9 +1165,6 @@ class TradingEngine(ReconcileMixin):
             return "instrument_unverified"
         # 合约规格漂移校验（verified 首次为真后查一次；warn 不拒单）
         self._check_spec_drift()
-        # 平今经济性判定（Phase 12，2026-09-14 插入）：费率已自动获取后检查一次，
-        # warn 不拒单，只给建议值（前端横幅 / D11 toast）。
-        self._check_closetoday_economy()
         # ── 交割月护栏（Phase 11 · 阻塞点 4 · D8）──
         #   三态语义（2026-09-14 拍板）：空仓态拦截开仓、锁仓态拦截平仓、运行态不拦截。
         #   原则：交割月附近不让**新进裸仓**、也不让**解锁成裸仓**，已运行的仓位
@@ -1494,16 +1433,20 @@ class TradingEngine(ReconcileMixin):
             return
         exit_price = o.filled_price
         gross = pos.pnl_points(exit_price)
-        # CLOSE 恒作用于跨日仓（`_pre_trade_check` 已断言）→ 恒按平昨费率计。
+        # CLOSE 恒作用于跨日仓（`_pre_trade_check` 已断言）→ 恒按平昨档计。
         # 这里仍按 entry_date 动态判定，是为"未来其它调用方"保留防御。
-        # Phase 3：成本/折算读 state（有效费率 + 有效乘数）；
-        #   closetoday_first 是静态开关，留 spec。
-        cost = self.state.cost_points(
-            pos.entry_price, exit_price,
-            closetoday=bool(self.spec.closetoday_first
-                             and pos.entry_date >= self._current_trading_day()))
-        net = gross - cost
-        cash = self.state.points_to_cash(net, pos.volume)
+        # P-A（2026-09-15）：成本改读**品种档案 Fee 两档**（元口径，state 提供
+        #   有效乘数）；closetoday_first 是静态开关，留 spec。
+        #   净值口径：毛利（点）× 有效乘数 × 手数 = 毛利（元），减成本（元）
+        #   —— 全程在元上做，不再有"点减元"的口径混算点。
+        p = self.cfg.product_profile
+        closetoday = bool(self.spec.closetoday_first
+                          and pos.entry_date >= self._current_trading_day())
+        cost = (self.state.cost_cash(p, pos.entry_price, exit_price,
+                                     closetoday=closetoday, volume=pos.volume)
+                if p is not None else 0.0)
+        gross_cash = gross * self.state.multiplier * pos.volume
+        net_cash = gross_cash - cost
         bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
         plan = self._run_plan or pos.exit_plan
         self._trade_seq += 1
@@ -1512,16 +1455,16 @@ class TradingEngine(ReconcileMixin):
             side=pos.side, volume=pos.volume, entry_price=pos.entry_price,
             exit_price=exit_price, entry_at=pos.entry_at, exit_at=now_cn(),
             reason=reason, gross_points=round(gross, 4),
-            cost_points=round(cost, 4), net_points=round(net, 4),
-            net_cash=round(cash, 2), bars_held=bars_held,
+            cost_cash=round(cost, 4), net_cash=round(net_cash, 2),
+            bars_held=bars_held,
             signal_key=pos.signal_key, exit_plan_name=plan.name,
             exit_plan_params=plan.params)
         self.store.save_trade(t)
         self.positions.remove(pos)
         self.ev.write("close", symbol=t.symbol, side=str(t.side), reason=reason,
                       entry=t.entry_price, exit=t.exit_price,
-                      gross=t.gross_points, cost=t.cost_points,
-                      net=t.net_points, cash=t.net_cash, bars_held=bars_held,
+                      gross=t.gross_points, cost_cash=t.cost_cash,
+                      net_cash=t.net_cash, bars_held=bars_held,
                       trade_id=t.trade_id, exit_policy=t.exit_plan_name,
                       transition=act.transition,
                       position_signal_key=pos.signal_key)
@@ -1983,27 +1926,29 @@ class TradingEngine(ReconcileMixin):
 
     # ---------------- 统计 ----------------
     def summary(self) -> Dict[str, Any]:
+        # P-A（2026-09-15）：统计口径改**元**（net_cash）。原"点"口径的
+        # net_points 已随 Trade.cost_points→cost_cash 删除 —— per_lot 费率档
+        # 无法在点数口径无损表达，净值只有元是自洽的；毛利仍有点口径
+        # （gross_points），净统计一律 net_cash。
         trades = self.store.trades()
         n = len(trades)
-        wins = [t for t in trades if t["net_points"] > 0]
-        losses = [t for t in trades if t["net_points"] <= 0]
-        tot = sum(t["net_points"] for t in trades)
+        wins = [t for t in trades if t["net_cash"] > 0]
+        losses = [t for t in trades if t["net_cash"] <= 0]
         cash = sum(t["net_cash"] for t in trades)
         by_reason: Dict[str, Any] = {}
         for t in trades:
             r = t["reason"]
             by_reason.setdefault(r, {"n": 0, "net": 0.0})
             by_reason[r]["n"] += 1
-            by_reason[r]["net"] = round(by_reason[r]["net"] + t["net_points"], 4)
+            by_reason[r]["net"] = round(by_reason[r]["net"] + t["net_cash"], 2)
         return {
             "trades": n,
             "wins": len(wins), "losses": len(losses),
             "win_rate": round(len(wins) / n, 4) if n else 0.0,
-            "avg_win": round(sum(t["net_points"] for t in wins) / len(wins), 4) if wins else 0.0,
-            "avg_loss": round(sum(t["net_points"] for t in losses) / len(losses), 4) if losses else 0.0,
-            "net_points": round(tot, 4),
+            "avg_win": round(sum(t["net_cash"] for t in wins) / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(sum(t["net_cash"] for t in losses) / len(losses), 2) if losses else 0.0,
             "net_cash": round(cash, 2),
-            "expectancy_points": round(tot / n, 4) if n else 0.0,
+            "expectancy_cash": round(cash / n, 2) if n else 0.0,
             "by_reason": by_reason,
             # G1：不用 self.position（legacy_single 在多仓会抛）；直接列全部持仓。
             "open_position": ([p.to_dict() for p in self.positions.positions] or None),

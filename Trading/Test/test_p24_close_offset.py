@@ -23,7 +23,8 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
          规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
          "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨。
         Phase 10（D6 平今开关，2026-09-14）：CLOSETODAY **不再是不可达** ——
-         品种配置 `prefer_lock_over_closetoday=False` **且**交易所支持平今
+         P-A（2026-09-15）起由品种档案费率**单源派生**：档案
+         `prefer_closetoday`（3× 口径）判平今更省 **且**交易所支持平今
          （SHFE/INE，`spec.supports_closetoday`）时，转移 ④ 生成
          CLOSETODAY 意图（offset=CLOSETODAY，目标恒为今仓）。本文件的
          CLOSE 恒平昨断言不受影响（引擎 _pre_trade_check 保证两意图各司其职），

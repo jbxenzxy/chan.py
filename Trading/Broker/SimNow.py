@@ -452,13 +452,7 @@ class SimNowBroker(Broker):
         #   < 阻塞时长 → 引擎永远追不上行情。改成"启动期 1 次 + 之后每
         #   INSTRUMENT_RETRY_EVERY_BARS 根一次"（见 pulse 的节流注释）。
         self._instrument_retry_tick: int = 0
-        # Phase 12（2026-09-14 插入）：成交回报反推费率的样本缓存。
-        #   键 = offset 档（"OPEN"/"CLOSE"/"CLOSETODAY"），值 = [样本]；
-        #   每个样本 = (commission, 价×手数乘积)。三档都攒到才原子回填 spec
-        #   （_sample_fee_from_fill），缺任一档 → 永不回填 = fail-closed。
-        #   必须在凭据检查之前初始化（同 _sig_orders 纪律：缺凭据 early-return
-        #   后单测实例化访问不炸）。
-        self._fee_samples: Dict[str, List[Tuple[float, float]]] = {}
+        # 2026-09-15 P-A 删除 _fee_samples 样本缓存（费率反推通道随 P-A 移除）。
 
         # ════════════════════════════════════════════════════════════════
         # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
@@ -815,11 +809,6 @@ class SimNowBroker(Broker):
                         .format(f, getattr(st, f), old[f]),
                         code="instrument_spec_conflict", field=f,
                         quote=float(getattr(st, f)), cfg=old[f])
-            # Phase 12（2026-09-14 插入）：行情就绪后顺手取三档费率
-            #   （纯模拟 TqSim.get_commission 通道；取不到 → fee_source 保持 ""，
-            #   由成交回报反推通道兜底，见 _sample_fee_from_fill —— 两通道都失败
-            #   = fail-closed，经济性判定不做，平今开关走保守侧）。
-            self._apply_fee_rates()
             # Phase 11（2026-09-14 插入）：交割月护栏的数据位（last_trade_date /
             #   night_session）从**真实月份合约**行情回填。取不到 → 保持 ""/False，
             #   护栏按"不校验未知"降级（Engine.delivery_guard_blocked 已对未知
@@ -857,141 +846,9 @@ class SimNowBroker(Broker):
         except Exception:
             pass
 
-    # ══════════════════════════════════════════════════════════════════
-    # Phase 12（D6 喂数 · 2026-09-14 插入）：三档费率自动获取 + 平今经济性判定喂数
-    # ══════════════════════════════════════════════════════════════════
-    def _apply_fee_rates(self) -> None:
-        """纯模拟通道自动获取三档费率（open/close/closetoday_fee_rate）。
-
-        通道（文档 Phase 12 行）：
-          · FEE_QUOTE —— **纯模拟**（TqApi 的账户是 TqSim 实例，带 get_commission）：
-            `get_commission(symbol, type)` 返回**每手手续费**（元），折算费率
-            = 每手 / (last_price × multiplier)；
-          · 在线 CTP/SimNow（TqAccount）→ 无 get_commission，本方法直接返回，
-            由成交回报反推通道（_sample_fee_from_fill）兜底 —— tqsdk v1 公共
-            API 不暴露 ReqQryInstrumentCommissionRate，真实费率只能从成交的
-            commission 反推（文档三通道中的 CTP 查询通道在 tqsdk 上不可达，
-            在线路径以反推通道落地）；
-          · fail-closed —— 两通道都取不到 → fee_source 保持 ""，不做经济性
-            判定，平今开关走保守侧（锁仓）。**绝不回退配置值冒充自动识别**。
-
-        一次性：fee_source 非空后不再重取（费率会话内不变，与 _instrument_frozen
-        同纪律）。一切异常静默跳过 —— 费率获取失败不能拖垮行情参数流程。
-
-        Phase 3：读写目标都是 **self.state**（费率有效值 + fee_source）。
-        """
-        st = self.state
-        if st.fee_source:
-            return
-        if self._api is None or not self._trade_symbol:
-            return
-        # TqAccount（CTP/SimNow）没有 get_commission —— 用它判别"是不是纯模拟"。
-        # ⚠️ 不能用 api._sim：TqApi 内部恒有一份 TqSim（**默认**手续费，非真实
-        # 费率），拿它当真值会污染判定；只有用户显式传 TqSim 当账户时，_account
-        # 才是那份带真实配置的 TqSim。
-        account = getattr(self._api, "_account", None)
-        get_comm = getattr(account, "get_commission", None)
-        if not callable(get_comm):
-            return                                  # 在线 CTP → 走成交回报反推
-        try:
-            q = self._api.get_quote(self._trade_symbol)
-            price = float(getattr(q, "last_price", 0.0) or 0.0)
-            if not math.isfinite(price) or price <= 0:
-                return                              # 行情价未就绪 → 下次再试
-            denom = price * float(st.multiplier)
-            rates: Dict[str, float] = {}
-            for t in ("OPEN", "CLOSE", "CLOSETODAY"):
-                try:
-                    v = float(get_comm(self._trade_symbol, type=t))
-                except Exception:
-                    return          # 平今档不可查（非 SHFE/INE）→ 三档不齐 → fail-closed
-                if not math.isfinite(v) or v < 0:
-                    return
-                rates[t] = v / denom
-            changed = st.apply_fee_rates(
-                rates["OPEN"], rates["CLOSE"], rates["CLOSETODAY"],
-                st.SOURCE_FEE_QUOTE)
-            log = logging.getLogger("tg.brokers.simnow")
-            if changed:
-                log.info("模拟盘费率已自动获取并回填: %s", ", ".join(changed))
-            else:
-                log.info("模拟盘费率与配置一致，已从 TqSim 确认（来源 FEE_QUOTE）")
-        except Exception as e:
-            logging.getLogger("tg.brokers.simnow").warning(
-                "[fee] 模拟盘费率自动获取失败: %s: %s", type(e).__name__, e)
-
-    def _sample_fee_from_fill(self, order, action: str, intent_str: str) -> None:
-        """成交回报反推费率（在线 CTP/SimNow 通道，Phase 12 · 2026-09-14 插入）。
-
-        从一笔**真成交**的 CTP 回报里取 commission 反推费率：
-          费率 = commission / (成交价 × 手数 × 合约乘数)
-        按 offset 档（"OPEN"/"CLOSE"/"CLOSETODAY"）缓存样本；**三档都攒到**
-        才原子回填（apply_fee_rates）—— 缺任一档（如 CFFEX 永不产生
-        CLOSETODAY 成交）→ 永不回填 = fail-closed，平今开关走保守侧。
-
-        ⚠️ 只**采样**，绝不参与成交判定：一切异常静默跳过（try/except 兜底），
-        commission 读不到只是少一个样本，不能把已成交的单子变成 rejected。
-
-        Phase 3：读写目标都是 **self.state**（费率有效值 + fee_source）。
-        """
-        st = self.state
-        if st.fee_source:
-            return                                  # 费率已定，不再采样
-        recs = getattr(order, "trade_records", None)
-        if not recs:
-            return
-        if action == "open":
-            offset_key = "OPEN"
-        elif intent_str == "closetoday":
-            offset_key = "CLOSETODAY"
-        else:
-            offset_key = "CLOSE"
-        try:
-            items = recs.values() if isinstance(recs, dict) else list(recs)
-            for r in items:
-                if r is None:
-                    continue
-                tid = r.get("trade_id") if isinstance(r, dict) \
-                    else getattr(r, "trade_id", None)
-                if not tid:
-                    continue
-                prc = r.get("price") if isinstance(r, dict) else getattr(r, "price", None)
-                vol = r.get("volume") if isinstance(r, dict) else getattr(r, "volume", None)
-                try:
-                    prc = float(prc)
-                    vol = int(vol)
-                except (TypeError, ValueError):
-                    continue
-                if not (math.isfinite(prc) and prc > 0 and vol > 0):
-                    continue
-                trade = self._api.get_trade(tid)
-                comm = float(getattr(trade, "commission", 0.0) or 0.0)
-                if not math.isfinite(comm) or comm < 0:
-                    continue
-                # 每档各攒一个样本即可（费率=comm/(价×手数×乘数)，取最近一笔
-                # 完整样本，避免把多个 price 段的加权平均复杂化）。
-                if self._fee_samples.get(offset_key):
-                    continue
-                self._fee_samples[offset_key] = [(comm, prc * vol)]
-            if len(self._fee_samples) < 3:
-                return                              # 三档未攒齐 → 继续等后续成交
-            # 三档齐 → 加权费率并原子回填（apply_fee_rates 校验失败会抛，兜底跳过）
-            mult = float(st.multiplier)
-            rates = {k: sum(c for c, _ in v) / (sum(nv for _, nv in v) * mult)
-                     for k, v in self._fee_samples.items()}
-            changed = st.apply_fee_rates(
-                rates["OPEN"], rates["CLOSE"], rates["CLOSETODAY"],
-                st.SOURCE_FEE_TRADE)
-            self._fee_samples = {}
-            log = logging.getLogger("tg.brokers.simnow")
-            if changed:
-                log.info("成交回报反推费率并回填: %s（来源 FEE_TRADE）", ", ".join(changed))
-            else:
-                log.info("成交回报反推费率与配置一致，已确认（来源 FEE_TRADE）")
-        except Exception as e:
-            logging.getLogger("tg.brokers.simnow").warning(
-                "[fee] 成交回报费率反推失败: %s: %s", type(e).__name__, e)
-
+    # 2026-09-15 P-A 删除：_apply_fee_rates / _sample_fee_from_fill（共 135 行）。
+    #   费率真值源 = 品种档案 ProductProfile 的 Fee 两档（静态、启动即确定），
+    #   不再经 TqSim.get_commission / 成交回报 commission 反推两条运行时通道。
     def _instrument_warn(self, msg: str, code: str = "instrument_spec",
                          **extra) -> None:
         """instrument 故障**双通道**（Phase 8.1 · O-2/O-3，§5.9.4 项 5）：
@@ -1285,8 +1142,8 @@ class SimNowBroker(Broker):
         为什么 CLOSE 恒为平昨：规则 ⑹/⑺ 保证 CLOSE **只作用于跨日仓**
         （断言在 Engine._pre_trade_check），今日单离场默认走反向 OPEN 软离场。
         故平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今）在本系统
-        里**由 Phase 10（D6）开关显式开启**：品种配置
-        `prefer_lock_over_closetoday=False` **且**交易所支持平今（SHFE/INE，
+        里由费率**单源派生**开启（P-A · 2026-09-15）：品种档案
+        `prefer_closetoday` 判为平今更省 **且** 交易所支持平今（SHFE/INE，
         `spec.supports_closetoday`）时，转移 ④ 生成 CLOSETODAY 意图 →
         offset=CLOSETODAY、目标恒为**今仓**（引擎 _pre_trade_check 断言）。
         两意图在 P0 可平量判据与成交后今/昨验证上完全相反，见下。
@@ -1444,10 +1301,6 @@ class SimNowBroker(Broker):
                                             baseline, expected_delta)
 
         status = "filled" if is_fully_filled else "rejected"
-        # Phase 12（2026-09-14 插入）：真成交 → 顺手采样费率（成交回报反推通道）。
-        #   只采样不改判：内部全 try/except 兜底，失败不影响已成交事实。
-        if is_fully_filled:
-            self._sample_fee_from_fill(order, action, intent_str)
         # D10（2026-09-11）：拒单原因分类。追价只在"价格不可达"时才有意义，
         #   资金不足 / 非交易时段追 100 轮也不可能成交 —— 由调用方据此处 break。
         reject_class = ""
