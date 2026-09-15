@@ -85,7 +85,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine, OrderIntent  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -154,7 +156,7 @@ def build(tmpdir, tag="a", store_path=None):
     cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
     cfg.exit_params.trailing_distance_points = 10.0
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     db = store_path or os.path.join(tmpdir, "state_%s.db" % tag)
     store = Store(db)

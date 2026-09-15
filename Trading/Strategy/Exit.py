@@ -33,7 +33,7 @@ from collections import deque
 from typing import Optional
 
 from ..Config import ExitPolicyParams
-from ..Infra.InstrumentSpec import InstrumentState
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import Bar, ExitPlan, Position, Side, Signal
 from dataclasses import dataclass
 
@@ -106,13 +106,13 @@ class LayeredExitPolicy:
     def describe(self) -> str:
         return "{}({})".format(self.name, self.params)
 
-    def check_with(self, position: Position, bar: Bar, state: InstrumentState,
+    def check_with(self, position: Position, bar: Bar, state: "Instrument",
                    bars_held: int = 0) -> Optional["ExitCheck"]:
         """引擎唯一调用入口（兼容旧签名策略）。"""
         return self.check(position, bar, state, bars_held=bars_held)
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
-    def on_bar(self, bar: Bar, state: InstrumentState) -> None:
+    def on_bar(self, bar: Bar, state: "Instrument") -> None:
         # 跨日清空 ATR 缓冲：昨收 → 今开的隔夜跳空会造出一个巨大 TR。
         # 30m 下一天只有 8 根 bar、缓冲要 atr_period+1=15 根，
         # 一个跳空能把近两天的 ATR 都顶高 → 止损/跟踪距离被系统性放大。
@@ -146,7 +146,7 @@ class LayeredExitPolicy:
         return self._atr()
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
-    def _initial_r(self, signal, entry_price: float, state: InstrumentState) -> float:
+    def _initial_r(self, signal, entry_price: float, state: "Instrument") -> float:
         """初始风险距离 R = max(A, B) —— **唯一的口径**（2026-09-15 去掉 stop_at_signal_extreme 开关）。
 
         A = 结构止损（分型极值距离）：
@@ -249,7 +249,7 @@ class LayeredExitPolicy:
         return R
 
     # ---------- 开仓时生成出场计划 ----------
-    def plan(self, signal: Signal, entry_price: float, state: InstrumentState,
+    def plan(self, signal: Signal, entry_price: float, state: "Instrument",
              anchor: Optional[float] = None) -> ExitPlan:
         """生成出场计划。
 
@@ -300,7 +300,7 @@ class LayeredExitPolicy:
         return ExitPlan(name=self.name, stop_price=stop, tp_price=tp, params=params)
 
     # ---------- 每根 bar 闭合后判定 ----------
-    def check(self, position: Position, bar: Bar, state: InstrumentState,
+    def check(self, position: Position, bar: Bar, state: "Instrument",
               bars_held: int = 0) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price

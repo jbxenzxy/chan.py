@@ -16,11 +16,13 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       拍板）收口在 Infra/ProductProfile.py，品种无关项（breakeven_* / ATR / trailing）
       在本文件 ExitConfig 调；
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
-    · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14）：
-      品种播种（multiplier / price_tick）改由启动路径显式调用
-      `InstrumentSpec.for_product(profile, **...)`（见 main.py `_seed_instrument`），
-      合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、费率来源）
-      收口在 Infra/InstrumentSpec.py 的 `InstrumentState`，**不在本配置树上**。
+    · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14；
+      P-B · 2026-09-15 起配置类 frozen=True）：
+      品种播种机制已消亡（P-B 删 for_product/_seed_instrument）—— tick/乘数/
+      exchange/费率真值源 = 品种档案 ProductProfile，运行时对象 `Instrument`
+      构造时直接取档案初值（见 Infra/InstrumentSpec.py）；
+      合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
+      trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**。
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -63,10 +65,10 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       只 import 档案的纯函数（白名单闸门），挪进来会反向拉起整个 TradingConfig。
       `TradingConfig.period_profile / product_profile` property 是「入口聚合
       档案」的唯一形态。
-    Infra/InstrumentSpec.py 的**静态**合约规格经 `TradingConfig.instrument`
-      字段挂载，属本配置树的一部分（角色定位见其模块 docstring）；
-      同一文件里的 `InstrumentState`（运行时状态）**不在**本配置树上 ——
-      它由 main.py 构造并注入 Engine / Broker，见 Phase 3（Fix B）。
+    Infra/InstrumentSpec.py 的**部署级配置** `InstrumentConfig`（frozen=True）
+      经 `TradingConfig.instrument` 字段挂载，属本配置树的一部分（角色定位见其
+      模块 docstring）；同一文件里的 `Instrument`（唯一运行时对象）**不在**本
+      配置树上 —— 它由 main.py 构造并注入 Engine / Broker（P-B · 2026-09-15）。
 
 设计约定（与项目主线对齐：根 ChanConfig.py + App/AppConfig.py）
 ------------------------------------------------------------------
@@ -106,7 +108,7 @@ from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .Infra.InstrumentSpec import InstrumentSpec
+from .Infra.InstrumentSpec import InstrumentConfig
 from .Infra.PeriodProfile import PERIOD_PROFILES, PeriodProfile
 from .Infra.ProductProfile import (
     PRODUCT_PROFILES, ProductProfile, describe_unknown_product, parse_product_key,
@@ -163,7 +165,11 @@ class TradingConfig(BaseSettings):
     # —— 横切·基础设施三件套 ——
     broker: str = "dry_run"              # dry_run 离线模拟 / simnow 仿真 / live 实盘 CTP
     state_dir: str = "./State"           # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
-    instrument: InstrumentSpec = Field(default_factory=InstrumentSpec)
+    # P-B（2026-09-15）：InstrumentSpec → InstrumentConfig（frozen=True）。
+    #   旧配置若仍带 price_tick / multiplier / exchange / last_trade_date 键，
+    #   构造期 ValueError 并指路（见 InstrumentConfig._REMOVED_KEYS）——
+    #   显式报错而不是静默忽略（交接文档 §7.2）。
+    instrument: InstrumentConfig = Field(default_factory=InstrumentConfig)
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "TradingConfig":

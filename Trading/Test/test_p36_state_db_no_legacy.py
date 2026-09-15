@@ -60,7 +60,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import Bar, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -134,7 +136,7 @@ def make_sig(key, date, ts, price, is_buy):
 print("\n[1] 跑完整开→平周期，让 positions / orders / trades 全部落盘")
 with tmp_dir("cycle") as tmp:
     db_path = os.path.join(tmp, "state.db")
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng = TradingEngine(
         make_cfg(), DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),

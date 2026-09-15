@@ -32,7 +32,10 @@ from Trading.Broker.DryRun import DryRunBroker
 from Trading.Config import DEFAULT_CONFIG, TradingConfig, resolved_exit_params
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
-from Trading.Infra.InstrumentSpec import InstrumentSpec
+from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store
 from Trading.Infra.Types import (CN_TZ, Bar, ExitPlan, NIGHT_SESSION_START_HOUR,
                                  PLAUSIBLE_DATE_MIN, Position, Side, Signal,
@@ -79,7 +82,7 @@ def build(tmp, tag, store_name=None):
     # max_open_positions 已于 Phase 1-4 删除（D2）：同向持仓不再有"笔数上限静默门"，
     # 同向信号会正常开新仓。本文件不依赖该门。
     cfg.exit_params.use_atr = False
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = DryRunBroker(spec, {})
     store = Store(os.path.join(tmp, store_name or ("state_%s.db" % tag)))
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),

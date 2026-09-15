@@ -11,8 +11,8 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
-    ⑥ ProductProfile 品种档案：经 `InstrumentSpec.for_product` **显式播种**
-       multiplier/price_tick（Phase 3 起不再由 TradingConfig 构造副作用注入）+
+    ⑥ ProductProfile 品种档案：P-B（2026-09-15）起 Instrument 构造时直接取
+       档案（播种桥 for_product 已删除，Phase 3 的注入副作用更早删除）+
        exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并（Fix A · 2026-09-14）
     ⑦ 播种语义（Phase 3 · Fix B 起，**取代**原"注入双档"锚点）：
        档案是 price_tick / multiplier 的**唯一真值来源** —— 用户显式写的值
@@ -52,8 +52,8 @@ from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Infra.PeriodProfile import (  # noqa: E402
     FREQ_SEC, PERIOD_PROFILES, SUPPORTED_FREQS,
 )
+from Trading.Infra.InstrumentSpec import InstrumentConfig  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
-from Trading import main as _main  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
@@ -70,18 +70,14 @@ def check(name, got, expected):
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+    """构造配置（P-B：播种桥 _seed_instrument 已删）。
 
-    为什么测试要绕这一道：Phase 3 把"档案播种"从 TradingConfig 的构造副作用
-    （model_validator + model_fields_set）改成启动路径上的一次显式调用
-    （Trading/main.py::_seed_instrument）。若测试仍只构造 TradingConfig 就断言
-    `instrument.multiplier`，测的其实是模型默认值 —— 档案播种整条通道被漏接
-    也照样绿灯（假阳性）。故这里走与生产**完全相同**的入口；
-    初始加载与 --symbol 换品种都是同一个函数，Phase 3 已删掉 force 双档语义。
+    Phase 3 的"显式播种"是启动路径上的一次调用；P-B（2026-09-15）起该桥
+    消亡 —— 配置不再携带 tick/乘数，Instrument 构造时直接取品种档案
+    （档案→运行时单向取值，结构上保证一致）。本 helper 保留名字只为改动
+    最小；下方档案真值断言改读 product_profile。
     """
-    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    _main._seed_instrument(cfg)
-    return cfg
+    return TradingConfig(instrument={"signal_symbol": signal_symbol})
 
 
 def main():
@@ -138,7 +134,7 @@ def main():
           "min_r_points" in _res_if, False)
     check("IF resolved r_multiple_tp=2.0", _res_if["r_multiple_tp"], 2.0)
     check("IF 播种后 multiplier=300.0（与模型默认同值，此处不作强断言）",
-          c_if.instrument.multiplier, 300.0)
+          c_if.product_profile.multiplier, 300.0)
     check("IF 生效的品种档案 product=IF", c_if.product_profile.product, "IF")
 
     # IC 档案值（200.0 / 0.2）与模型默认（300.0）不同 —— 用它证明"播种真的发生了"，
@@ -149,7 +145,7 @@ def main():
           "min_r_points" in _res_ic, False)
     check("IC resolved r_multiple_tp=3.0", _res_ic["r_multiple_tp"], 3.0)
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
-          c_ic.instrument.multiplier, 200.0)
+          c_ic.product_profile.multiplier, 200.0)
 
     # 未知品种：档案缺失（product_profile=None）。Fix A 后 exit_params 上没有
     # 品种相关出场参数（现只剩 r_multiple_tp） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
@@ -164,24 +160,21 @@ def main():
     check("未知品种 resolved_exit_params 抛 ValueError（启动期闸门，文案含支持清单）",
           "支持清单" in _raised, True)
 
-    print("\n[7] 播种语义（Phase 3：档案是 tick/乘数唯一真值来源，无 user-explicit-wins）")
-    # (a) 语义反转锚点（Phase 2 → Phase 3）：
-    #     Phase 2 及之前是"初始加载 user-explicit-wins"——用户在配置里显式写的
-    #       price_tick / multiplier 不被档案覆盖（靠 model_fields_set 判据）。
-    #     Phase 3 按 D1 拍板取消这条：档案是这两个字段**唯一**的真值来源，
-    #       显式写进去的值在播种时同样被档案覆盖。理由与 Fix A 把
-    #       r_multiple_tp 从 ExitConfig 删掉是同一个决策 —— 调参 = 改档案
-    #       = git 评审 + 对账测试守护（min_r_points / breakeven_buffer_ticks
-    #       已于 2026-09-14 一并删除）。
-    #     安全性：实盘 tick/乘数由 SimNow 行情原子回填 + A′ fail-closed 兜底，
-    #       配置值本就只是离线（dry_run/replay）的种子，被档案覆盖无损。
-    c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC",
-                                     "multiplier": 999.0})
-    check("播种前：显式 multiplier=999 原样保留（构造已无副作用）",
-          c_exp.instrument.multiplier, 999.0)
-    _main._seed_instrument(c_exp)
-    check("播种后：显式 999 被档案覆盖回 IC 的 200.0（D1 · 档案唯一真值）",
-          c_exp.instrument.multiplier, 200.0)
+    print("\n[7] P-B 归位语义：tick/乘数真值源 = 品种档案；配置里写旧键直接报错")
+    # (a) 语义演进锚点（Phase 2 → Phase 3 → P-B）：
+    #     Phase 2：user-explicit-wins；Phase 3：档案唯一真值（播种覆盖显式值）。
+    #     P-B（2026-09-15）：播种桥（_seed_instrument）删除 —— 配置里根本不再
+    #       有 tick/乘数字段，旧键显式报错（_check_removed_keys，§7.2 不静默吞）。
+    #       真值在 ProductProfile（调参 = 改档案 = git 评审 + 对账测试守护），
+    #       运行时由 Instrument 构造时直接取档案；实盘再被行情原子覆盖。
+    _err999 = ""
+    try:
+        TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC",
+                                  "multiplier": 999.0})
+    except Exception as e:
+        _err999 = str(e)
+    check("配置里显式写 multiplier → 构造期显式报错（P-B 归位，非静默吞掉）",
+          "multiplier" in _err999, True)
 
     # 出场品种参数：Fix A 保持 —— 显式写品种相关键直接 ValidationError（extra=forbid）。
     #   ⚠️ 探针键 2026-09-15 由 min_r_points 换成 r_multiple_tp（评审修）：
@@ -198,30 +191,26 @@ def main():
     check("ExitConfig 显式写品种参数（r_multiple_tp）直接报错（D1 放弃 env 覆盖）",
           "r_multiple_tp" in _old_key_err, True)
 
-    # (b) 换品种：与初始加载**同一条路径**（同一个 _seed_instrument），
-    #     Phase 3 删掉了 apply_product_profile/force 那套双档语义 ——
-    #     品种已切换，档案立即成为新品种的权威真值（含 tick/乘数整块覆盖），
-    #     否则沿用旧品种的 multiplier/price_tick 会造成限价口径漂移。
-    #     r_multiple_tp 不在播种范围 —— 换品种后经 resolved_exit_params 跟随
-    #     新品种档案（IC 3.0 → IF 2.0）。
-    c_exp.instrument.signal_symbol = "KQ.m@CFFEX.IF"
-    _main._seed_instrument(c_exp)
-    check("换品种播种后 multiplier 覆盖为 IF 档案 300.0", c_exp.instrument.multiplier, 300.0)
+    # (b) 换品种 = 重建配置（frozen，与 main.py --symbol 路径同款）：
+    #     signal_symbol 变 → cfg.product_profile 跟随新品种档案；
+    #     r_multiple_tp 经 resolved_exit_params 跟随新品种（IC 3.0 → IF 2.0）。
+    c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF"})
+    check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0",
+          resolved_exit_params(c_exp)["r_multiple_tp"], 2.0)
     _res_exp = resolved_exit_params(c_exp)
     check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0", _res_exp["r_multiple_tp"], 2.0)
     check("换品种后 resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_exp["breakeven_buffer_r"], 0.5)
 
-    # (c) price_tick 同理：显式 0.5 在构造后存活（无副作用），一经播种即回档案值，
-    #     换品种再播种继续跟新品种档案走。
-    c_tick = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF",
-                                       "price_tick": 0.5})
-    check("播种前：显式 price_tick=0.5 原样保留", c_tick.instrument.price_tick, 0.5)
-    _main._seed_instrument(c_tick)
-    check("播种后：price_tick 回 IF 档案值 0.2", c_tick.instrument.price_tick, 0.2)
-    c_tick.instrument.signal_symbol = "KQ.m@CFFEX.IM"
-    _main._seed_instrument(c_tick)
-    check("换品种播种后 price_tick 回 IM 档案值 0.2", c_tick.instrument.price_tick, 0.2)
+    # (c) price_tick 同理：配置里写旧键 → 构造期显式报错（P-B 归位）。
+    _err05 = ""
+    try:
+        TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF",
+                                  "price_tick": 0.5})
+    except Exception as e:
+        _err05 = str(e)
+    check("配置里显式写 price_tick → 构造期显式报错（P-B 归位）",
+          "price_tick" in _err05, True)
 
     print("\n" + "=" * 60)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

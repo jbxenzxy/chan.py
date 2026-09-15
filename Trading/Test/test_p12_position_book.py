@@ -81,7 +81,9 @@ from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa:
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, ExitPlan, Position, Side,
 )
@@ -165,7 +167,7 @@ def seed_run(store, side="LONG", anchor=4500.0, volume=1):
 
 def build_engine(tmpdir, *, store=None, ev_name="events.jsonl"):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({})
     exitp = LayeredExitPolicy()

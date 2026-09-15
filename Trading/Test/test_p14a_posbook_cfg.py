@@ -75,7 +75,9 @@ from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E4
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -130,7 +132,7 @@ def make_pos(side, entry_price=4500.0, vol=1, signal_key="test_key", seq=10):
 
 def make_engine(tmpdir, tag="a", broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     return TradingEngine(

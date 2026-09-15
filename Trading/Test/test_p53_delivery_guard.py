@@ -66,7 +66,18 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec, _weekdays_between  # noqa: E402
+from Trading.Infra.InstrumentSpec import (  # noqa: E402
+    Instrument, _weekdays_between)
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
+
+
+def _inst(ltd=""):
+    """现场 Instrument + 指定最后交易日（P-B：last_trade_date 是运行时字段）。"""
+    ins = Instrument(None, _IF)
+    ins.last_trade_date = ltd
+    return ins
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     Bar, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -134,7 +145,7 @@ def build_engine(tmpdir, cfg, spec, tag="a"):
 def make_cfg(guard_days=1):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = "KQ.m@CFFEX.IF"
-    base["instrument"]["exchange"] = "CFFEX"
+    # P-B：配置不再携带 exchange（归品种档案；写旧键会触发 _check_removed_keys）
     base["risk"]["max_volume"] = 2
     base["risk"]["delivery_guard_days"] = guard_days
     base["exit_params"].update({"use_atr": False,
@@ -143,33 +154,33 @@ def make_cfg(guard_days=1):
 
 
 # ════════════════════════════════════════════════════════════════
-print("\n[1] InstrumentSpec.delivery_guard_blocked（N=1 默认）")
+print("\n[1] Instrument.delivery_guard_blocked（N=1 默认；P-B：last_trade_date 为运行时字段）")
 # ════════════════════════════════════════════════════════════════
 check("[1a] last_trade_date 未知 → 不拦（降级）",
-      InstrumentSpec(last_trade_date="").delivery_guard_blocked(D_MAIN), False)
+      _inst("").delivery_guard_blocked(D_MAIN), False)
 check("[1b] last_trade_date == today（IF2609 交割日当天）→ 拦",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked(D_MAIN), True)
+      _inst(D_MAIN).delivery_guard_blocked(D_MAIN), True)
 check("[1c] 前一天（9/17 周四，剩 1 个交易日）→ 不拦",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked("2026-09-17"), False)
+      _inst(D_MAIN).delivery_guard_blocked("2026-09-17"), False)
 check("[1d] N=2、仅剩 1 个交易日（9/17→9/18）→ 拦",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked(
+      _inst(D_MAIN).delivery_guard_blocked(
           "2026-09-17", threshold_days=2), True)
 check("[1e] N=2、剩 2 个交易日（9/16→9/18）=N → 不拦（rem<N 才拦）",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked(
+      _inst(D_MAIN).delivery_guard_blocked(
           "2026-09-16", threshold_days=2), False)
 check("[1f] N=3、剩 2 个交易日 → 拦",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked(
+      _inst(D_MAIN).delivery_guard_blocked(
           "2026-09-16", threshold_days=3), True)
 check("[1g] N=3、剩 4 个交易日（9/14→9/18）→ 不拦",
-      InstrumentSpec(last_trade_date=D_MAIN).delivery_guard_blocked(
+      _inst(D_MAIN).delivery_guard_blocked(
           "2026-09-14", threshold_days=3), False)
 check("[1h] 跨周末：last=周一 9/21、today=周五 9/18 → 剩 1 日 → N=1 不拦",
-      InstrumentSpec(last_trade_date=D_MON).delivery_guard_blocked("2026-09-18"), False)
+      _inst(D_MON).delivery_guard_blocked("2026-09-18"), False)
 check("[1i] 跨周末：last=周一 9/21、today=周四 9/17 → 剩 2 日 → N=3 拦",
-      InstrumentSpec(last_trade_date=D_MON).delivery_guard_blocked(
+      _inst(D_MON).delivery_guard_blocked(
           "2026-09-17", threshold_days=3), True)
 check("[1j] 已过期（today > last_trade_date）→ 拦（剩 0）",
-      InstrumentSpec(last_trade_date=D1).delivery_guard_blocked(D_MAIN), True)
+      _inst(D1).delivery_guard_blocked(D_MAIN), True)
 
 # ════════════════════════════════════════════════════════════════
 print("\n[2] _weekdays_between 边界（区间 (start, end]，仅工作日）")
@@ -190,7 +201,7 @@ print("    空仓态: 今天=交割日 → 拦【开仓】；锁仓态: → 拦�
 #   账户态由持仓派生：无仓=FLAT；净敞口≠0=RUNNING；净敞口0且簿非空=LOCKED。
 # 3a：空仓态(FLAT) + OPEN + today=最后交易日 → 拦（不让新进裸仓）
 with tmp_dir("t3a") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "a")
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "a")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
@@ -199,7 +210,7 @@ with tmp_dir("t3a") as tmp:
 
 # 3b：运行态(RUNNING) + today=交割日 → 开(④锁仓)/平(⑤) 都不拦
 with tmp_dir("t3b") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "b")
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "b")
     eng.spec.last_trade_date = D_MAIN
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))  # → RUNNING
     eng.on_bar(make_bar(1000))
@@ -215,7 +226,7 @@ with tmp_dir("t3b") as tmp:
 
 # 3c：锁仓态(LOCKED) + today=交割日 → 拦【平仓/解锁】；但 OPEN(②) 不拦
 with tmp_dir("t3c") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "c")
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "c")
     eng.spec.last_trade_date = D_MAIN
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.LONG))
     eng.positions.add(make_pos(entry_date=D1, vol=2, side=Side.SHORT))
@@ -231,7 +242,7 @@ with tmp_dir("t3c") as tmp:
 
 # 3d：空仓态 + 换月远月（last=FAR）→ OPEN 放行（换月自动解除）
 with tmp_dir("t3d") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(), "d")
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "d")
     eng.spec.last_trade_date = D_FAR
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
@@ -243,7 +254,7 @@ print("\n[4] 配置旋钮 risk.delivery_guard_days")
 # ════════════════════════════════════════════════════════════════
 # 4a：guard_days=2 → 空仓态仅剩 1 个交易日（9/17→9/18）也拦
 with tmp_dir("t4a") as tmp:
-    eng = build_engine(tmp, make_cfg(guard_days=2), InstrumentSpec(), "a")
+    eng = build_engine(tmp, make_cfg(guard_days=2), Instrument(None, _IF), "a")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)
@@ -252,7 +263,7 @@ with tmp_dir("t4a") as tmp:
 
 # 4b：guard_days=0 → 恒放行（关闭护栏）—— 空仓态 OPEN 交割日当天也放行
 with tmp_dir("t4b") as tmp:
-    eng = build_engine(tmp, make_cfg(guard_days=0), InstrumentSpec(), "b")
+    eng = build_engine(tmp, make_cfg(guard_days=0), Instrument(None, _IF), "b")
     eng.spec.last_trade_date = D_MAIN
     eng.on_bar(make_bar(1000))
     act = _Action(OrderIntent.OPEN, Side.LONG, 2)

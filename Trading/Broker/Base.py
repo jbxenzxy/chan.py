@@ -31,7 +31,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
-from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import Order, OrderIntent, Side
 
 BROKERS: Dict[str, Type["Broker"]] = {}
@@ -42,20 +42,26 @@ def register_broker(cls: Type["Broker"]) -> Type["Broker"]:
     return cls
 
 
-def build_broker(name: str, spec: InstrumentSpec,
+def build_broker(name: str, instrument: "Instrument",
                  params: Optional[Dict[str, Any]] = None,
-                 state: Optional[InstrumentState] = None) -> "Broker":
+                 state: Optional["Instrument"] = None) -> "Broker":
     """按名字构造 broker。
 
-    `spec`  = **静态**合约规格（symbol / 费率 / slippage / order_advanced …）
-    `state` = **运行时**状态（有效 tick/乘数、涨跌停、verified、费率来源）。
-              Phase 3 起由 main.py 建好后注入，与 Engine 共用同一份
-              —— 传 None 时 broker 会自建一份（单测/直连场景的便利），
-              但**生产路径必须显式传**，否则 SimNow 写的 verified 引擎看不见。
+    `instrument` = **唯一一份运行时对象**（P-B · 2026-09-15 双类合并：
+    静态身份 + 有效 tick/乘数 + 涨跌停 + verified + 定价成本都在它上面）。
+    `state` 参数保留仅为调用点兼容：P-B 起传入值必须与 instrument 同一对象
+    （或 None），否则 ValueError —— 合并后"spec 与 state 两份对象"不存在了。
+    生产路径 main.py 建好一份同时交给 Broker 与 Engine；漏传时 broker 会
+    直接用 instrument 自身（本来就是同一个），不会再出现"两边各建一份"
+    导致 SimNow 写的 verified 引擎看不见的问题。
     """
     if name not in BROKERS:
         raise KeyError("未注册的 broker: {}（已注册: {}）".format(name, list(BROKERS)))
-    return BROKERS[name](spec, params or {}, state=state)
+    if state is not None and state is not instrument:
+        raise ValueError(
+            "P-B 合并后 spec 与 state 是同一个 Instrument 对象："
+            "build_broker(state=…) 传入的必须是 instrument 自身（或省略）")
+    return BROKERS[name](instrument, params or {})
 
 
 # intent → CTP OpenCloseType 的权威表
@@ -71,7 +77,7 @@ def build_broker(name: str, spec: InstrumentSpec,
 #
 # CLOSETODAY 的可用边界（A4 → Phase 10 落地）：**仅上期所（SHFE）/ 上期能源（INE）**
 # 有平今指令，其余四家（含中金所）传 CLOSETODAY 会直接报错 —— 引擎侧由
-# `InstrumentSpec.supports_closetoday` 守卫（转移④ 的分支条件 + _pre_trade_check 校验链）。
+# `Instrument.supports_closetoday`（品种档案 exchange 派生）守卫（转移④ 的分支条件 + _pre_trade_check 校验链）。
 # 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 启用第三项。
 # P-A（2026-09-15）：走不走平今由品种档案费率单源派生（ProductProfile.prefer_closetoday）。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
@@ -189,7 +195,7 @@ class Broker(ABC):
     # Phase 3（Fix B）：运行时状态引用。类属性声明 + 惰性实例化
     #   （同 `_pending_alerts` 惯例）：`__new__` 手工装配的 broker 子类
     #   （大量单测这么干）不必调 super().__init__ 也能拿到 state。
-    _state: Optional[InstrumentState] = None
+    _state: Optional["Instrument"] = None
 
     # ── Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker → Engine 告警回流 ──
     # broker 侧的 instrument 故障（行情超时 / nan / 与配置不一致）原来只写
@@ -221,31 +227,37 @@ class Broker(ABC):
         return out
 
 
-    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None,
-                 state: Optional[InstrumentState] = None):
-        self.spec = spec
-        # Phase 3（Fix B）：运行时状态引用。None → 惰性自建（见 state property）——
-        #   这样用 __new__ 手工装配 broker 的单测（不走 __init__）也能直接拿到
-        #   一份由 self.spec 播种的状态，不必逐个改测试装配代码。
-        self._state: Optional[InstrumentState] = state
+    def __init__(self, instrument: "Instrument",
+                 params: Optional[Dict[str, Any]] = None,
+                 state: Optional["Instrument"] = None):
+        # P-B（2026-09-15）：双类合并 —— spec/state 都是同一个 Instrument。
+        #   self.spec 保留为兼容名（大量只读引用 spec.trade_symbol 等），
+        #   语义 = 运行时对象自身；self._state 若外部显式传入必须同对象。
+        if state is not None and state is not instrument:
+            raise ValueError(
+                "P-B 合并后 spec 与 state 是同一个 Instrument 对象（got 不同实例）")
+        self.spec = instrument
+        self._state: Optional["Instrument"] = state if state is not None else instrument
         self.params: Dict[str, Any] = dict(params or {})
         # R1：报单序号（跨重启唯一性）。见 order_seq / seed_order_seq 注释。
         self._order_seq: int = 0
 
     @property
-    def state(self) -> InstrumentState:
-        """合约规格的运行时状态（Phase 3）。惰性自建：首次访问时由 `self.spec` 播种。
+    def state(self) -> "Instrument":
+        """合约运行时对象（P-B 合并后 = self.spec 同一对象）。
 
-        ⚠️ 生产路径（main.py）**必须**由外部传入同一个 state 给 Engine 与 Broker；
-          惰性自建只是兼容"单测手工装配 / 直连 broker"的便利，
-          两边各自自建会造成 SimNow 写的 verified 引擎读不到。
+        兼容说明：Phase 3 时代"惰性自建"分支已无意义 —— Instrument 不再
+        需要"从 spec 播种"（tick/乘数初值在构造时直接取品种档案）。
+        __new__ 手工装配的测试若未跑 __init__，这里回落到 self.spec。
         """
-        if getattr(self, "_state", None) is None:
-            self._state = InstrumentState(self.spec)
-        return self._state
+        st = getattr(self, "_state", None)
+        return st if st is not None else self.spec
 
     @state.setter
-    def state(self, value: InstrumentState) -> None:
+    def state(self, value: "Instrument") -> None:
+        if value is not self.spec:
+            raise ValueError(
+                "P-B 合并后 spec 与 state 是同一个 Instrument 对象（got 不同实例）")
         self._state = value
 
     @abstractmethod

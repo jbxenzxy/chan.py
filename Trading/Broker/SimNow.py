@@ -24,7 +24,7 @@ SimNow 仿真 broker（M2b）
       读仓前先校验行情快照新鲜度：IF 交易时段每 0.5s 一个 tick，quote.datetime 停滞
       超过 BrokerConfig.channel.quote_stale_seconds（默认 30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
       覆盖"断连重连中"与"TCP 假死"两类场景，且不依赖 tqsdk 版本。
-    - 报单属性 advanced 取自 `InstrumentSpec.order_advanced`（默认 "FOK"）——限价
+    - 报单属性 advanced 取自配置 `order_advanced`（默认 "FOK"）——限价
       立即全部成交否则全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留。
       · **入场**（交易信号触发）：全撤 → 本笔作废（rejected），不追价，等下一信号。
         "入场没成功，最多不赚钱，但不会亏钱。"
@@ -36,7 +36,7 @@ SimNow 仿真 broker（M2b）
       · fill_timeout_open/close 退化为通道异常兜底 watchdog：正常时交易所毫秒级
         给出终态，超时撤单分支仅在断线/回报丢失时兜底。
       ⚠️ **郑商所不支持 FOK**（tqsdk 直接抛异常）。二期上 CZCE 需把
-      `InstrumentSpec.order_advanced` 切成 "FAK" —— 这是当初把该值收进 spec 的原因，
+      配置 `order_advanced` 切成 "FAK" —— 这是当初把该值收进合约配置的原因，
       别再把它写死回 Broker 里。
     - offset：OPEN→OPEN；CLOSE→CLOSE（方向由调用方给的 side 决定）。
       2026-09-10：删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
@@ -80,7 +80,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
-from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState, derive_exchange
+from ..Infra.InstrumentSpec import Instrument, derive_exchange
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
                    Broker, classify_ctp_reject, register_broker)
@@ -419,9 +419,10 @@ class SimNowBroker(Broker):
     #   启动后要等几小时才恢复。20 是"不吃掉正常行情节奏"与"能自愈"的交点。
     INSTRUMENT_RETRY_EVERY_BARS: int = 20
 
-    def __init__(self, spec: InstrumentSpec, params: Optional[Dict[str, Any]] = None,
-                 state: Optional[InstrumentState] = None):
-        super().__init__(spec, params, state=state)
+    def __init__(self, instrument: "Instrument",
+                 params: Optional[Dict[str, Any]] = None,
+                 state: Optional["Instrument"] = None):
+        super().__init__(instrument, params, state=state)
         # 严格模式（2026-09-07）：broker_params 以 Trading/Config.py 的
         # BrokerConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
         # 传了模型里没有的键（拼错 / 残留旧键）直接报错，不再静默忽略。
@@ -429,7 +430,7 @@ class SimNowBroker(Broker):
         self._api = None
         # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
         self._quote = None
-        self._trade_symbol = spec.trade_symbol
+        self._trade_symbol = instrument.trade_symbol
         # R1（2026-09-10）：报单序号由 Base 的自增整数提供（原 itertools.count(1)
         #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → orders 表
         #   INSERT OR REPLACE 把上一进程的委托审计记录静默覆盖）。
@@ -709,6 +710,9 @@ class SimNowBroker(Broker):
                              timeout_s=self._timing("underlying_map_timeout"))
             if hit and q.underlying_symbol:
                 self._trade_symbol = q.underlying_symbol
+                # P-B（2026-09-15）：trade_symbol 是运行时身份字段（行情回填）——
+                #   原"就地改写配置对象 spec.trade_symbol"（§4.2 例 1 写入点①）
+                #   现在写的是 Instrument 自身的可变字段，配置（frozen）不再被动。
                 self.spec.trade_symbol = q.underlying_symbol
         except Exception as e:
             self._conn_error = "主连映射失败: {}: {}".format(type(e).__name__, e)
@@ -789,12 +793,18 @@ class SimNowBroker(Broker):
                     "请改回 instrument_fetch_policy='strict'",
                     code="instrument_band_degraded", symbol=self._trade_symbol)
             self._instrument_frozen = True
-            # Phase 8.1（O-1）：exchange 从真实合约 symbol 前缀推导填充
-            # （"CFFEX.IF2609" → "CFFEX"）。Phase 9（FOK/FAK 切换）正式消费，
-            # Phase 8 只填充不分支 —— 兑现 InstrumentSpec.exchange 字段注释的承诺。
+            # P-B（2026-09-15）：exchange 真值源 = 品种档案（ProductProfile.exchange，
+            #   §5.3 裁决）。原"从真实合约 symbol 前缀推导并写入 spec.exchange"
+            #   的就地写入随双类合并删除 —— 改为**对账告警**：行情推导与档案
+            #   不一致时 warn（两个值都打出来），以档案为准、不阻断。
             ex = derive_exchange(self._trade_symbol)
-            if ex:
-                self.spec.exchange = ex
+            if ex and ex != self.spec.exchange:
+                self._instrument_warn(
+                    "行情推导交易所与品种档案不一致: 行情推导={!r} 档案={!r} "
+                    "—— 以档案为准（FOK/FAK、平今能力等分支都读档案值）；"
+                    "若档案填错请改 PRODUCT_PROFILES".format(ex, self.spec.exchange),
+                    code="exchange_mismatch", symbol=self._trade_symbol,
+                    derived=ex, profile=self.spec.exchange)
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
                 log.info("合约参数已从行情覆盖并冻结: %s", ", ".join(changed))
@@ -842,6 +852,9 @@ class SimNowBroker(Broker):
         if self.spec.last_trade_date:
             return
         try:
+            # P-B（2026-09-15）：last_trade_date 是 Instrument 运行时身份字段
+            #   （行情回填）—— 原"就地改写配置对象"（§4.2 例 1 写入点③）随
+            #   双类合并归位：写的是运行时对象自身，frozen 配置不再被动。
             self.spec.last_trade_date = _extract_last_trade_date(quote)
         except Exception:
             pass

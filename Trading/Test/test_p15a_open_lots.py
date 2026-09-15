@@ -81,7 +81,9 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, EngineState, Signal,
 )
@@ -155,7 +157,7 @@ def make_engine(tmpdir, *, max_volume=2, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_volume = max_volume
 
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
@@ -354,7 +356,7 @@ check("[3f] 现状记录：属性赋值不经校验（仅构造期生效）", _p
 # ════════════════════════════════════════════════════════════════
 print("\n[4] 拒单路径")
 with tmp_dir() as td:
-    bk = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0},
+    bk = RejectDryBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0},
                          reject_first_n=-1)
     eng = make_engine(td, max_volume=3, broker=bk)
     eng.on_bar(make_bar())
@@ -372,7 +374,7 @@ with tmp_dir() as td:
 
 # 首笔拒 + 第二笔过：拒单不污染后续
 with tmp_dir() as td:
-    bk = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0},
+    bk = RejectDryBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0},
                          reject_first_n=1)
     eng = make_engine(td, max_volume=2, broker=bk)
     eng.on_bar(make_bar())

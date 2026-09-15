@@ -13,7 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator, Optional, Tuple, Type
 
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import Bar, Signal
 
 SOURCES: Dict[str, Type["Source"]] = {}
@@ -26,7 +26,7 @@ def register_source(cls: Type["Source"]) -> Type["Source"]:
     return cls
 
 
-def build_source(name: str, params: Dict[str, Any], spec: InstrumentSpec) -> "Source":
+def build_source(name: str, params: Dict[str, Any], spec: "Instrument") -> "Source":
     if name not in SOURCES:
         raise KeyError("未注册的信号源: {}（已注册: {}）".format(name, list(SOURCES)))
     return SOURCES[name](params or {}, spec)
@@ -35,7 +35,7 @@ def build_source(name: str, params: Dict[str, Any], spec: InstrumentSpec) -> "So
 class Source(ABC):
     name: str = "base"
 
-    def __init__(self, params: Dict[str, Any], spec: InstrumentSpec):
+    def __init__(self, params: Dict[str, Any], spec: "Instrument"):
         self.params = dict(params or {})
         self.spec = spec
 

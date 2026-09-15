@@ -63,16 +63,12 @@ _FAIL = 0
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+    """构造配置（P-B：播种桥 _seed_instrument 已删，tick/乘数真值源 = 品种档案）。
 
-    Phase 3 把"档案播种"从 TradingConfig 的构造副作用（model_validator +
-    model_fields_set）改成启动路径上的一次显式调用（main._seed_instrument）。
-    本测试走与生产完全相同的入口 —— 只构造 TradingConfig 就断言
-    `instrument.multiplier` 测的是模型默认值，播种被漏接也照样绿灯。
+    Instrument 有效值初值在构造时直接取 ProductProfile（档案→运行时单向取值）；
+    下方断言改读 product_profile —— 品种解析与档案真值这条链仍被钉死。
     """
-    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    _main._seed_instrument(cfg)
-    return cfg
+    return TradingConfig(instrument={"signal_symbol": signal_symbol})
 
 
 def check(name, got, expected):
@@ -149,10 +145,10 @@ def main():
         c = seeded(sym)
         check("{} product_profile 命中 {}".format(sym, product),
               (c.product_profile.product if c.product_profile else None), product)
-        check("{} multiplier 播种 {}".format(product, mult),
-              c.instrument.multiplier, mult)
-        check("{} price_tick 播种 {}".format(product, tick),
-              c.instrument.price_tick, tick)
+        check("{} multiplier=档案真值 {}（P-B 无播种动作）".format(product, mult),
+              c.product_profile.multiplier, mult)
+        check("{} price_tick=档案真值 {}".format(product, tick),
+              c.product_profile.price_tick, tick)
         check("{} resolved 已无 min_r_points（2026-09-14 删除）".format(product),
               "min_r_points" in resolved_exit_params(c), False)
         check("{} resolved 已无 breakeven_buffer_ticks（改为全局比例）".format(product),

@@ -66,7 +66,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, OrderIntent, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -154,7 +156,7 @@ def make_sig(key, date, ts, price, is_buy):
 
 print("\n[1] 首次 CLOSE 被拒 → 进入冷却、streak=1、仓仍在簿（不误清）")
 with tmp_dir("cool") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng = TradingEngine(
         make_cfg(), CloseRejectBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),
@@ -197,7 +199,7 @@ print("\n[3] 反例：连拒达上限但类别 ≠ position → **不得**清仓
 # 背景（D10 §7.3）：`price`（FOK 全撤 / 涨跌停）恰恰说明**仓在柜台、只是没撮上**。
 # 旧实现不问原因、够次数就清 → 把引擎自己开出来的真仓从簿里删掉 = 账实不符（P0 形态）。
 with tmp_dir("novclear") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng = TradingEngine(
         make_cfg(), CloseRejectBroker(spec, {"sim_equity": 1_000_000.0},
                                       reject_class=REJECT_PRICE),

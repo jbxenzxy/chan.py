@@ -61,7 +61,9 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Config import DEFAULT_CONFIG  # noqa: E402
-    from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+    from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+    from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+    _IF = PRODUCT_PROFILES["IF"]
     from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
@@ -176,7 +178,7 @@ class MockApi:
 def make_broker(api=None, params=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = InstrumentSpec()
+    b.spec = Instrument(None, _IF)
     # 严格模式：以配置模型默认值为底，测试只覆盖自己关心的键
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api

@@ -76,7 +76,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine           # noqa: E402
 from Trading.Infra.EventLog import EventLog               # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec   # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument   # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store                     # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, OrderIntent, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy     # noqa: E402
@@ -203,7 +205,7 @@ def ev_count(eng, kind):
 print("\n[1] 成功 CLOSE 后 _close_fail_streak 必须归零（语义是「连续」不是「累计」）")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("streak") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng, _ = build(tmp, SeqCloseBroker(spec, {"sim_equity": 1_000_000.0},
                                        reject_at=[1]))
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
@@ -223,7 +225,7 @@ with tmp_dir("streak") as tmp:
 print("\n[2] act.volume < target.volume 的部分平仓必须被拒绝（不整笔记账）")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("partial") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng, evp = build(tmp, SeqCloseBroker(spec, {"sim_equity": 1_000_000.0}))
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
     eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
@@ -250,7 +252,7 @@ with tmp_dir("partial") as tmp:
 print("\n[3] 运行期「净敞口≠0 但无风控锚」必须显性化（不再静默）")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("runanchor") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = RealShortMissingBroker(spec, {"sim_equity": 1_000_000.0})
     eng, evp = build(tmp, broker)
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
@@ -286,7 +288,7 @@ with tmp_dir("runanchor") as tmp:
 print("\n[4] CLOSE 冷却拦截必须写事件（且不算拒单）")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("cooldown") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng, evp = build(tmp, AlwaysRejectCloseBroker(spec, {"sim_equity": 1_000_000.0}),
                      close_retry_bars=2, close_max_streak=5)
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
@@ -311,7 +313,7 @@ with tmp_dir("cooldown") as tmp:
 print("\n[5] P6-F：API 侧必须返回 run / close_cooldown")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("apifields") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng, _ = build(tmp, SeqCloseBroker(spec, {"sim_equity": 1_000_000.0},
                                        reject_at=[1]))
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
@@ -459,7 +461,7 @@ print("\n[7] 「建锚失败」只报一条告警（run_start_incomplete 不叠�
 # 说的是同一件事。2026-09-13 修法：`_run_start` 的 incomplete 分支置上通知锁
 # `_run_missing_notified`，自检不再重复喊（首条已把成因说清楚）。
 with tmp_dir("dupalert") as tmp:
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     eng, _ = build(tmp, DryRunBroker(spec, {"sim_equity": 1_000_000.0}))
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
     eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))

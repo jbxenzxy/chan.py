@@ -84,8 +84,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -169,7 +170,7 @@ class FixedFillBroker(DryRunBroker):
 
 
 def build_engine(tmpdir, tag):
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     return TradingEngine(
         make_cfg(), FixedFillBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),

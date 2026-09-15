@@ -58,7 +58,8 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
+from dataclasses import replace as _dc_replace  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.ProductProfile import PRODUCT_PROFILES, parse_product  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -70,16 +71,13 @@ _FAIL = 0
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置 + **按启动路径显式播种**品种档案（Phase 3 · Fix B）。
+    """构造配置（P-B：tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
 
-    Phase 3 把"档案播种"从 TradingConfig 的构造副作用（model_validator +
-    model_fields_set）改成启动路径上的一次显式调用（main._seed_instrument）。
-    本测试走与生产完全相同的入口；只构造 TradingConfig 就断言
-    `instrument.multiplier` 测的是模型默认值 —— 播种被漏接也照样绿灯。
+    Phase 3 的"显式播种"（main._seed_instrument）已随 P-B 删除：Instrument
+    有效值初值在**构造时**直接取 ProductProfile（档案→运行时单向取值）。
+    本 helper 保留名字只为改动最小。
     """
-    cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    _main._seed_instrument(cfg)
-    return cfg
+    return TradingConfig(instrument={"signal_symbol": signal_symbol})
 
 
 def check(name, got, expected):
@@ -106,17 +104,16 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol):
-    """构造引擎：cfg 按 signal_symbol 生成并**显式播种**品种档案（Phase 3）。
-
-    播种在 broker/引擎之前完成 —— 与 main.py 的启动次序一致（先
-    _seed_instrument，再 build_broker，最后 TradingEngine）。
+    """构造引擎：cfg 按 signal_symbol 生成（P-B：播种桥已删，Instrument
+    构造时直接取 cfg.product_profile 档案 —— 与 main.py 启动次序一致）。
     """
     cfg = seeded(signal_symbol)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    broker = DryRunBroker(cfg.instrument, {"sim_equity": 10_000_000.0})
+    broker = DryRunBroker(Instrument(cfg.instrument, cfg.product_profile),
+                          {"sim_equity": 10_000_000.0})
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 
@@ -152,7 +149,7 @@ def main():
         check("TA 档案已无 breakeven_buffer_ticks（改为全局比例）",
               hasattr(p, "breakeven_buffer_ticks"), False)
 
-    print("\n[3] TradingConfig 品种档案：TA(PTA)（显式播种 + resolved 合并）")
+    print("\n[3] TradingConfig 品种档案：TA(PTA)（P-B：档案即真值 + resolved 合并）")
     c_ta = seeded("KQ.m@CZCE.TA")
     _res_ta = resolved_exit_params(c_ta)
     check("TA resolved 已无 min_r_points（2026-09-14 删除）",
@@ -160,19 +157,20 @@ def main():
     check("TA resolved r_multiple_tp=2.0", _res_ta["r_multiple_tp"], 2.0)
     check("TA resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_ta["breakeven_buffer_r"], 0.5)
-    check("TA multiplier 播种 5.0", c_ta.instrument.multiplier, 5.0)
-    check("TA price_tick 播种 2.0", c_ta.instrument.price_tick, 2.0)
+    check("TA multiplier=5.0（档案真值，P-B 无播种动作）",
+          c_ta.product_profile.multiplier, 5.0)
+    check("TA price_tick=2.0（档案真值）", c_ta.product_profile.price_tick, 2.0)
     check("TA product_profile 命中", c_ta.product_profile.product, "TA")
 
-    print("\n[4] PTA 的 CZCE 报单语义（档案不管报单属性，exchange 决定）")
-    sp_ta = InstrumentSpec(signal_symbol="KQ.m@CZCE.TA", exchange="CZCE",
-                           order_advanced="FOK")
+    print("\n[4] PTA 的 CZCE 报单语义（P-B：exchange 归品种档案，报单属性由其派生）")
+    sp_ta = Instrument(None, PRODUCT_PROFILES["TA"])
     check("TA(CZCE) advanced=FAK", sp_ta.effective_order_advanced(), "FAK")
     with tmp_dir() as td:
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
-        eng_ta.cfg.instrument.exchange = "CZCE"
         check("TA(CZCE) _open_volume()=1（钉 1 手）", eng_ta._open_volume(), 1)
-        eng_ta.cfg.instrument.exchange = "SHFE"
+        # P-B：配置 frozen、exchange 归档案 —— "配错交易所"用现场档案注入 spec 表达
+        eng_ta.spec = Instrument(None, _dc_replace(
+            PRODUCT_PROFILES["TA"], exchange="SHFE"))
         check("TA 配错交易所(SHFE) _open_volume() 走 lots_per_signal=2（配置责任）",
               eng_ta._open_volume(), 2)
 

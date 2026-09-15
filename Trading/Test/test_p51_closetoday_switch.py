@@ -13,7 +13,7 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
 
 硬约束（A4 / 全交易所安全性）：
   · CLOSETODAY 平今指令**仅上期所（SHFE）/ 上期能源（INE）**可用，其余四家
-    （CFFEX/DCE/CZCE/GFEX）传平今会直接报错 —— 由 `InstrumentSpec.supports_closetoday`
+    （CFFEX/DCE/CZCE/GFEX）传平今会直接报错 —— 由 `Instrument.supports_closetoday`
     守卫，转移④ 分支条件 + `_pre_trade_check` 校验链**双处**消费；
   · 平今目标恒为**今仓**（`_pre_trade_check` 断言 `closetoday_target_is_yesterday`）；
   · 开关缺省（无品种档案）/ 交易所不支持 → 走锁仓，保守侧（宁可多花一次开仓费，
@@ -76,7 +76,16 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from dataclasses import replace as _dc_replace  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
+
+
+def _prod(ex):
+    """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
+    return _dc_replace(_IF, exchange=ex)
 from Trading.Infra.ProductProfile import (  # noqa: E402
     PRODUCT_PROFILES,
 )
@@ -138,7 +147,7 @@ def make_pos(side=Side.LONG, vol=2, entry_price=4500.0, key="P51",
         entry_bar_seq=entry_bar_seq, entry_date=entry_date)
 
 
-def build_engine(tmpdir, cfg: TradingConfig, spec: InstrumentSpec,
+def build_engine(tmpdir, cfg: TradingConfig, spec: "Instrument",
                  tag="a"):
     return TradingEngine(
         cfg, DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
@@ -150,9 +159,11 @@ def build_engine(tmpdir, cfg: TradingConfig, spec: InstrumentSpec,
 
 def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
              exchange: str = ""):
+    """exchange 参数保留只为调用点兼容：P-B 起交易所归品种档案（frozen 配置
+    不携带该键，写入会触发 _check_removed_keys 显式报错）；交易所差异由
+    build_engine 的 Instrument 档案参数表达。"""
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
-    base["instrument"]["exchange"] = exchange
     base["risk"]["max_volume"] = 2
     base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})
@@ -160,13 +171,13 @@ def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
 
 
 # ══════════════════════════════════════════════════════════════
-print("\n[1] supports_closetoday：平今指令仅 SHFE/INE 可用")
+print("\n[1] supports_closetoday：平今指令仅 SHFE/INE 可用（P-B：档案侧派生）")
 # ══════════════════════════════════════════════════════════════
 for ex, want in (("SHFE", True), ("INE", True),
                  ("CFFEX", False), ("DCE", False), ("CZCE", False),
                  ("GFEX", False), ("", False), ("shfe", True)):
     check("exchange={!r} → {}".format(ex, want),
-          InstrumentSpec(exchange=ex).supports_closetoday, want)
+          _prod(ex).supports_closetoday, want)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -191,7 +202,7 @@ print("\n[3] 转移 ④ 三分支 + 保守侧（_decide_exit）")
 # ══════════════════════════════════════════════════════════════
 # 3a：默认开关 True（IF 档案 + CFFEX）→ OPEN 锁仓
 with tmp_dir("t3a") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec())
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF))
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
     act = eng._decide_exit(eng.last_bar)
@@ -203,7 +214,7 @@ with tmp_dir("t3a") as tmp:
 # 3b：开关 False 但交易所非 SHFE/INE → 保守侧 OPEN
 with tmp_dir("t3b") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="CFFEX")
-    eng = build_engine(tmp, cfg, InstrumentSpec(exchange="CFFEX"), "b")
+    eng = build_engine(tmp, cfg, Instrument(None, _prod("CFFEX")), "b")
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
     act = eng._decide_exit(eng.last_bar)
@@ -213,7 +224,7 @@ with tmp_dir("t3b") as tmp:
 # 3c：开关 False + SHFE（AU）→ CLOSETODAY 平今
 with tmp_dir("t3c") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
-    eng = build_engine(tmp, cfg, InstrumentSpec(exchange="SHFE"), "c")
+    eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "c")
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1, vol=3))
     act = eng._decide_exit(eng.last_bar)
@@ -231,7 +242,7 @@ with tmp_dir("t3c") as tmp:
 #   （引擎仅经 _prefer_closetoday 读取 cfg.product_profile，其余不受影响）。
 with tmp_dir("t3d") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
-    eng = build_engine(tmp, cfg, InstrumentSpec(exchange="SHFE"), "d")
+    eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "d")
     eng.cfg = SimpleNamespace(product_profile=None)
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
@@ -252,7 +263,7 @@ past_target = SimpleNamespace(entry_date="2026-09-01", volume=2,
 
 # 4a：非 SHFE/INE → 兜底拒单
 with tmp_dir("t4a") as tmp:
-    eng = build_engine(tmp, make_cfg(), InstrumentSpec(exchange="CFFEX"), "a")
+    eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "a")
     act = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                   target=today_target, is_exit=True, transition=4)
     check("[4a] CLOSETODAY + 非 SHFE/INE → 'closetoday_not_supported'",
@@ -261,7 +272,7 @@ with tmp_dir("t4a") as tmp:
 # 4b/4c/4d：SHFE 引擎
 with tmp_dir("t4b") as tmp:
     eng = build_engine(tmp, make_cfg("KQ.m@SHFE.AU", exchange="SHFE"),
-                       InstrumentSpec(exchange="SHFE"), "b")
+                       Instrument(None, PRODUCT_PROFILES["AU"]), "b")
     act_ok = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                      target=today_target, is_exit=True, transition=4)
     check("[4b] CLOSETODAY + SHFE + 今仓目标 → 通过（None）",
@@ -286,7 +297,7 @@ with tmp_dir("t4b") as tmp:
 print("\n[5] DryRun 报单：CLOSETODAY → offset=CLOSETODAY（meta 审计可见）")
 # ══════════════════════════════════════════════════════════════
 with tmp_dir("t5") as tmp:
-    spec = InstrumentSpec(exchange="SHFE")
+    spec = Instrument(None, PRODUCT_PROFILES["AU"])
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     o = broker.submit(OrderIntent.CLOSETODAY, Side.LONG, 2, 4500.0,
                       "p51|t5", is_exit=True)
@@ -305,7 +316,7 @@ with tmp_dir("t6") as tmp:
     P0 = 4520.0
     P_EXIT = 4110.0
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
-    eng = build_engine(tmp, cfg, InstrumentSpec(exchange="SHFE"), "a")
+    eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "a")
     eng.on_bar(make_bar(1000, D1 + " 09:40", P0, P0 + 10, P0 - 10, P0))
     eng.on_signal(make_sig("P51|buy|1", is_buy=True, price=P0))
     check("[6a] 开仓后 RUNNING", eng.account_state(), AccountState.RUNNING)

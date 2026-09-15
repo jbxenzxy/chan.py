@@ -60,7 +60,9 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import AccountState, Bar, OrderIntent, Side, Signal  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -118,7 +120,7 @@ def make_sig(key, date, ts, price, is_buy):
 
 
 def build_engine(tmpdir):
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     return TradingEngine(
         make_cfg(), DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}),

@@ -56,7 +56,9 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Broker.Base import OrderIntent, build_broker  # noqa: E402
 from Trading.Config import TradingConfig  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import Side  # noqa: E402
 
 _PASS = 0
@@ -81,7 +83,8 @@ def main() -> int:
     # 配置来自 Trading/Config.py（+ 环境变量/仓库根 .env 覆盖），不再读 config.json。
     # 凭据一律走环境变量：SN_ACCOUNT / SN_PASSWORD / TQ_ACCOUNT / TQ_PASSWORD
     cfg = TradingConfig()
-    spec = cfg.instrument
+    # P-B：唯一运行时对象 Instrument（部署配置 + 品种档案）
+    spec = Instrument(cfg.instrument, cfg.product_profile)
     params = cfg.broker_params.model_dump()
     if cfg.broker != "simnow":
         print("⚠ 配置 broker={}（可用 TRADING_BROKER=simnow 覆盖），本脚本用于 "

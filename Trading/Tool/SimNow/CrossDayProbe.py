@@ -74,7 +74,7 @@ sys.path.insert(0, _ROOT)
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _position_split, _verify_yesterday_delta)
 from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig as InstrumentSpec_cls  # noqa: E402
 from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 
 _PASS = 0
@@ -102,9 +102,11 @@ def _creds():
 def _make_broker(symbol: str):
     """走**生产同一条构造路径**（TradingConfig + build_broker），不是手搓 broker。"""
     cfg = TradingConfig()
-    spec = InstrumentSpec(
-        **dict(cfg.instrument.model_dump(),
-               trade_symbol=symbol or cfg.instrument.trade_symbol))
+    # P-B（2026-09-15）：部署配置 InstrumentConfig（frozen）+ 唯一运行时对象
+    #   Instrument —— 换 trade_symbol 用「重建配置」表达（不能就地改 frozen 字段）。
+    _d = cfg.instrument.model_dump()
+    _d["trade_symbol"] = symbol or cfg.instrument.trade_symbol
+    spec = Instrument(InstrumentSpec_cls(**_d), cfg.product_profile)
     params = cfg.broker_params.model_dump()
     from Trading.Broker.Base import build_broker
     return build_broker("simnow", spec, params), spec
@@ -182,7 +184,7 @@ class _FakeApi:
 
 def _fake_broker(api):
     b = object.__new__(SimNowBroker)
-    b.spec = InstrumentSpec()
+    b.spec = Instrument()  # P-B：唯一运行时对象（默认 IF 档案）
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     params["channel"].update({"position_ok_timeout": 0.2,

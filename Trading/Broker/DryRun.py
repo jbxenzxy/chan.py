@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import Order, OrderIntent, Side, now_cn
 from .Base import INTENT_TO_OFFSET, Broker, register_broker
 
@@ -38,9 +38,9 @@ class DryRunBroker(Broker):
     #   合约参数用配置值（来源标记 CONFIG_OFFLINE 由 main.py 写入 state）。
     is_offline = True
 
-    def __init__(self, spec: InstrumentSpec, params=None,
-                 state: Optional[InstrumentState] = None):
-        super().__init__(spec, params, state=state)
+    def __init__(self, instrument: "Instrument", params=None,
+                 state: Optional["Instrument"] = None):
+        super().__init__(instrument, params, state=state)
         # R1（2026-09-10）：报单序号改由 Base 的自增整数提供（原 itertools.count(1)
         #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → 审计记录被覆盖）。
         #   序号由引擎 `_restore` 从 state.db 抬升（seed_order_seq）。

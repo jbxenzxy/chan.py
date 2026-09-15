@@ -65,7 +65,9 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _traded_volume_from_records)
 from Trading.Config import DEFAULT_CONFIG  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 
 _PASS = 0
@@ -187,7 +189,7 @@ class FakeApi:
 def make_broker(api, over=None):
     """`object.__new__` 绕过真实 `_connect`（不碰网络、不需要凭据）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = InstrumentSpec()
+    b.spec = Instrument(None, _IF)
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     for k, v in (over or {}).items():
@@ -220,7 +222,7 @@ check("close_max_chase 默认 20 轮（实盘追价上限）", bp["close_max_cha
 check("chase_interval 默认 1.0 秒（防报撤单频率超限 / FOK 撤单计数爆量）",
       bp["chase_interval"], 1.0)
 check("order_advanced 默认 FOK（A2：值在 spec，不在 Broker 正文）",
-      InstrumentSpec().order_advanced, "FOK")
+      Instrument(None, _IF).order_advanced, "FOK")
 check("本用例实际使用的追价上限（快参数）", _CAP, 3)
 
 

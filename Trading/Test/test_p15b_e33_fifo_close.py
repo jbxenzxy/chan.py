@@ -86,7 +86,9 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, EngineState, ExitPlan, Position, Side,
 )
@@ -176,7 +178,7 @@ def make_engine(tmpdir, *, max_volume=1, broker=None):
     """构造引擎。每笔手数 = cfg.risk.max_volume（D2 后仓位管理已整体删除）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_volume = max_volume
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
@@ -316,7 +318,7 @@ with tmp_dir() as td:
 
 # 1.4 拒单：整段锁仓失败 → 簿不动、无 Trade、写 order_rejected 与冷却计数
 with tmp_dir() as td:
-    broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=(1,))
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 2, 4545.0, 1, signal_key="P15B-1-4"))
@@ -340,7 +342,7 @@ with tmp_dir() as td:
 
 # 1.5 跨日仓离场被拒（⑤ CLOSE）→ **才**进入 CLOSE 冷却记账
 with tmp_dir() as td:
-    broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=(1,))
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 2, 4545.0, 1,
@@ -510,7 +512,7 @@ def _drive_close_rejects(eng, n):
 #     （只有"平仓量超过持仓量/平昨仓不足"这类拒单才能认定柜台没有该仓）
 with tmp_dir() as td:
     _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
-    broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=tuple(range(1, _streak + 5)),
                           reject_class=REJECT_POSITION)
     eng = make_engine(td, broker=broker)
@@ -539,7 +541,7 @@ with tmp_dir() as td:
 #     引擎发 warn 级 `close_streak_not_phantom` + 事件 `close_streak_not_cleared`。
 with tmp_dir() as td:
     _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
-    broker = RejectBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=tuple(range(1, _streak + 5)),
                           reject_class=REJECT_PRICE)
     eng = make_engine(td, broker=broker)
@@ -678,7 +680,7 @@ print("\n[5] _reconcile_positions 多仓 FIFO 对账")
 
 # 5.1 real == engine → 无操作
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=2, real_shorts=0)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-1-A"))
@@ -692,7 +694,7 @@ with tmp_dir() as td:
 
 # 5.2 real < engine → FIFO 部分平最早一笔
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=2, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4547.0, 5, signal_key="P15B-5-2-C"))
@@ -714,7 +716,7 @@ with tmp_dir() as td:
 
 # 5.3 real == 0 → 清空同侧全部 + summary 事件
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=0, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-3-A"))
@@ -733,7 +735,7 @@ with tmp_dir() as td:
 
 # 5.4 real > engine → 仅告警
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=5, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-4-A"))
@@ -759,7 +761,7 @@ with tmp_dir() as td:
 
 # 5.6 入场 K 线跳过（min_bars_held < 1）
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=0, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-6-A"))
@@ -771,7 +773,7 @@ with tmp_dir() as td:
 
 # 5.7 G4：对账把净敞口判成 0 → 同步结束 run（防孤儿风控锚被持久化）
 with tmp_dir() as td:
-    broker = RealPositionBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0},
+    broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                                 real_longs=0, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-7-A"))

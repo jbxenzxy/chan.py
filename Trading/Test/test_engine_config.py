@@ -70,13 +70,15 @@ from Trading import Broker  # noqa: F401,E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker
 from Trading.Engine.Engine import TradingEngine
 from Trading.Infra.EventLog import EventLog
-from Trading.Infra.InstrumentSpec import InstrumentSpec
+from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store
 from Trading.Strategy import EntryPolicy, LayeredExitPolicy
 
 
 def build_engine(cfg):
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({})
     exitp = LayeredExitPolicy()

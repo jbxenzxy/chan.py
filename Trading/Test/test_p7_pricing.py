@@ -51,7 +51,9 @@ from Trading.Config import BrokerConfig  # noqa: E402
 
 try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
-    from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+    from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+    from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+    _IF = PRODUCT_PROFILES["IF"]
     from Trading.Infra.Types import Side  # noqa: E402
 except Exception as e:  # pragma: no cover
     print("✗ 无法导入被测类: {}: {}".format(type(e).__name__, e))
@@ -82,7 +84,7 @@ class MockApi:
 def make_broker(api=None, spec=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = spec or InstrumentSpec()
+    b.spec = spec or Instrument(None, _IF)
     b.params = BrokerConfig().model_dump()   # 严格模式：params 必须完整
     b._api = api
     b._trade_symbol = b.spec.trade_symbol

@@ -12,7 +12,7 @@ P50 · 2026-09-14 评审问题修复 契约测试
   [5] P1-3 quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
   [6] P2-3 离线模式规格漂移对账：dry_run/replay 用错规格不再静默
   [7] P2-4 未知品种日志去重：Config 侧不再重复打 WARNING
-  [8] 死字段清理（2026-09-14）：InstrumentSpec 不含从未被消费的 max_order_volume
+  [8] 死字段清理（2026-09-14）：InstrumentConfig 不含从未被消费的 max_order_volume
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p50_review_fixes.py
@@ -35,7 +35,10 @@ if _RROOT not in sys.path:
 from Trading import main as _main                                      # noqa: E402
 from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E402
 from Trading.Infra.InstrumentSpec import (                             # noqa: E402
-    InstrumentSpec, InstrumentState)
+    Instrument, InstrumentConfig)
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.ProductProfile import (                             # noqa: E402
     PRODUCT_PROFILES, Fee, ProductProfile, assert_product_allowed,
     describe_unknown_product, parse_product, parse_product_key,
@@ -86,13 +89,13 @@ def build_engine(tmpdir, signal_symbol, broker=None):
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 
-    # Phase 3（Fix B）：品种档案播种改为启动路径上的一次显式调用。
+    # P-B（2026-09-15）：播种桥已删 —— Instrument 构造时直接取品种档案。
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    _main._seed_instrument(cfg)
+    inst = Instrument(cfg.instrument, cfg.product_profile)
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
     b = broker if broker is not None else DryRunBroker(
-        cfg.instrument, {"sim_equity": 10_000_000.0})
+        inst, {"sim_equity": 10_000_000.0})
     return TradingEngine(cfg, b, EntryPolicy({"reverse_on_opposite_signal": False}),
                          LayeredExitPolicy(), store, ev)
 
@@ -283,16 +286,16 @@ def t5_quote_partial():
             self.upper_limit = hi
             self.lower_limit = lo
 
-    # 5a InstrumentState.apply_quote 的 require_band 开关
-    #   Phase 3（Fix B）：apply_quote 回填的是**运行时有效值**，故返回/断言
-    #   一律针对 InstrumentState；InstrumentSpec 只存离线种子。
-    s = InstrumentState(InstrumentSpec())
+    # 5a Instrument.apply_quote 的 require_band 开关
+    #   P-B（2026-09-15）：spec/state 合并 —— apply_quote 回填运行时有效值，
+    #   断言一律针对 Instrument（有效 tick/乘数初值取档案，行情可覆盖）。
+    s = Instrument(None, _IF)
     ok = s.apply_quote(_Q(), require_band=False)
     check("partial：tick 已从行情填入", s.price_tick, 0.5)
     check("partial：乘数已从行情填入", s.multiplier, 200.0)
     check("partial：band 缺失 → 不填（保持 0 = 未知）", s.upper_limit, 0.0)
     check("partial：apply_quote 返回变更字段", sorted(ok), ["multiplier", "price_tick"])
-    s2 = InstrumentState(InstrumentSpec())
+    s2 = Instrument(None, _IF)
     err = None
     try:
         s2.apply_quote(_Q())                          # 默认 require_band=True
@@ -301,7 +304,7 @@ def t5_quote_partial():
     check_true("strict：band 缺失仍 fail-closed（抛 ValueError）", err)
 
     # partial 档下 band 可用时照样填（不是"一律不填"）
-    s3 = InstrumentState(InstrumentSpec())
+    s3 = Instrument(None, _IF)
     s3.apply_quote(_Q(hi=5000.0, lo=4000.0), require_band=False)
     check("partial：band 可用时照样填", (s3.lower_limit, s3.upper_limit),
           (4000.0, 5000.0))
@@ -329,7 +332,7 @@ def t5_quote_partial():
 
     def make(quote, policy):
         b = SimNowBroker.__new__(SimNowBroker)
-        b.spec = InstrumentSpec()
+        b.spec = Instrument(None, _IF)
         b.params = BrokerConfig(instrument_fetch_policy=policy).model_dump()
         b.params["channel"]["instrument_fetch_timeout"] = 0.3
         b._api = _Api(quote)
@@ -344,7 +347,7 @@ def t5_quote_partial():
     b._apply_instrument_quote()
     check("partial 档：verified 置位（不再永拒单）", b.state.verified, True)
     check("partial 档：band 缺失 → 来源标 QUOTE_PARTIAL",
-          b.state.source, InstrumentState.SOURCE_QUOTE_PARTIAL)
+          b.state.source, Instrument.SOURCE_QUOTE_PARTIAL)
     codes = [a.get("code") for a in (b.drain_alerts() or [])]
     check_true("partial 档：降级必须出声（instrument_band_degraded 告警）",
                "instrument_band_degraded" in codes)
@@ -357,7 +360,7 @@ def t5_quote_partial():
     b3 = make(_Q(hi=5000.0, lo=4000.0), "quote_partial")
     b3._apply_instrument_quote()
     check("partial 档：band 可用 → 来源标 QUOTE（不降级）",
-          b3.state.source, InstrumentState.SOURCE_QUOTE)
+          b3.state.source, Instrument.SOURCE_QUOTE)
 
 
 # 2026-09-15 P-A 删除 [6] 离线模式规格漂移对账（原 22 行）：
@@ -405,60 +408,69 @@ def t8_dead_field_removed():
     发现即删，并用断言拦住回潮。Q9（中金所限价单上限）仍未决，真要落地时按真实
     需求重新设计，不要靠恢复这个字段。
     """
-    print("\n[8] 死字段 max_order_volume 已删除（InstrumentSpec 不含该字段）")
-    fields = set(InstrumentSpec.model_fields)
-    check("InstrumentSpec 不含 max_order_volume",
+    print("\n[8] 死字段 max_order_volume 已删除（InstrumentConfig 不含该字段）")
+    fields = set(InstrumentConfig.model_fields)
+    check("InstrumentConfig 不含 max_order_volume",
           "max_order_volume" in fields, False)
-    # 顺带把 Phase 8 真正在用的字段点一遍，防止"删过头"：
-    for keep in ("exchange", "limit_up_pct", "limit_down_pct",
-                 "last_trade_date", "night_session"):
-        check_true("InstrumentSpec 保留 Phase 8 在用字段 {}".format(keep),
+    # 档案位（字段位保留、当前不消费）仍在配置上，防止"删过头"：
+    for keep in ("limit_up_pct", "limit_down_pct", "night_session"):
+        check_true("InstrumentConfig 保留档案位 {}".format(keep),
                    keep in fields)
     # `extra="forbid"` 下老配置若仍写该键会构造失败 —— 确认这一行为是显式的
     # （报错而非静默忽略），这样"配置文件没清干净"能被立刻发现。
     _raised = False
     try:
-        InstrumentSpec(max_order_volume=1)
+        InstrumentConfig(max_order_volume=1)
     except Exception:
         _raised = True
     check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
 
-    # ── Phase 3（Fix B）完成判据：静态规格**不含**任何运行时可变状态字段 ──
-    #   这是乱源②（InstrumentSpec 三重身份）被消掉的**可执行证据**：
-    #   配置对象 TradingConfig.instrument 构造后只读，行情回填一律落在
-    #   InstrumentState 上。若有人把 did 字段加回 spec，本断言立刻红。
-    print("\n[8b] Phase 3 拆分的完成判据：运行时字段已在 spec 上消失")
-    runtime_fields = ("instrument_verified", "instrument_source",
-                      "upper_limit", "lower_limit")
-    for f in runtime_fields:
-        check("InstrumentSpec 不含运行时字段 {}".format(f), f in fields, False)
-    # 反向：这些字段必须真的存在于 InstrumentState（防止"删了但没搬走"）
-    st = InstrumentState(InstrumentSpec())
-    for f in ("verified", "source", "upper_limit", "lower_limit"):
-        check_true("InstrumentState 拥有运行时字段 {}".format(f),
-                   f in vars(st))
-    # 静态项仍在 spec 上（Phase 3 只搬运行时，没顺手搬静态）
-    for keep in ("signal_symbol", "trade_symbol", "price_tick", "multiplier",
-                 "slippage_ticks", "order_advanced", "closetoday_first"):
-        check_true("静态项仍留 InstrumentSpec：{}".format(keep), keep in fields)
-    # P-A（2026-09-15）：三档费率字段已删除（费率归位 ProductProfile 的 Fee 两档），
-    #   防回潮：spec 上不得再有这三档费率字段。
-    for gone in ("open_fee_rate", "close_fee_rate", "closetoday_fee_rate"):
-        check("InstrumentSpec 不含费率字段 {}（P-A 已归位品种档案）".format(gone),
+    # ── P-B（2026-09-15）完成判据：归位键在配置上**显式报错** ──
+    #   乱源②（合约模型多重身份）的最终态：tick/乘数/exchange 归 ProductProfile，
+    #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率 P-A 已归位。
+    #   _check_removed_keys 对旧键显式 ValueError（§7.2：不允许静默吞掉）。
+    print("\n[8b] P-B 归位完成判据：tick/乘数/exchange/last_trade_date 已迁出配置")
+    from Trading.Infra.InstrumentSpec import _REMOVED_KEYS
+    for gone in ("price_tick", "multiplier", "exchange", "last_trade_date",
+                 "open_fee_rate", "close_fee_rate", "closetoday_fee_rate",
+                 "instrument_verified", "instrument_source", "fee_source"):
+        check("InstrumentConfig 不含已归位字段 {}（P-A/P-B）".format(gone),
               gone in fields, False)
-    # 定价/成本五方法也归 state（读的是有效 tick / 有效费率）
+        if gone in _REMOVED_KEYS:
+            _r2 = False
+            try:
+                InstrumentConfig(**{gone: 1})
+            except Exception:
+                _r2 = True
+            check("旧键 {} 残留 → 构造期显式报错（非静默）".format(gone), _r2, True)
+    # 反向：这些字段必须真的活在 Instrument / ProductProfile（防止"删了但没搬走"）
+    st = Instrument(None, _IF)
+    for f in ("verified", "source", "upper_limit", "lower_limit",
+              "price_tick", "multiplier", "trade_symbol", "last_trade_date"):
+        check_true("Instrument 拥有运行时字段 {}".format(f),
+                   f in vars(st))
+    for f in ("price_tick", "multiplier", "exchange"):
+        check_true("ProductProfile 拥有档案字段 {}".format(f),
+                   hasattr(PRODUCT_PROFILES["IF"], f))
+    # 配置只读转发项仍在 Instrument 上
+    for f in ("signal_symbol", "slippage_ticks", "order_advanced",
+              "closetoday_first", "price_band_points"):
+        check_true("Instrument 转发配置项 {}".format(f), hasattr(st, f))
+    # 定价/成本五方法在 Instrument（读的是有效 tick / 档案费率）
     for m in ("round_price", "align_entry", "align_exit", "slip_price",
               "cost_cash", "points_to_cash"):
-        check_true("定价/成本方法已迁到 InstrumentState：{}".format(m),
+        check_true("定价/成本方法已迁到 Instrument：{}".format(m),
                    callable(getattr(st, m, None)))
-        check("InstrumentSpec 不再有同名方法：{}".format(m),
-              hasattr(InstrumentSpec, m), False)
-    # 静态判定**留** spec（不读任何有效值）
-    for m in ("effective_order_advanced", "delivery_guard_blocked", "is_new_day"):
-        check_true("静态判定仍留 InstrumentSpec：{}".format(m),
-                   callable(getattr(InstrumentSpec, m, None)))
-    check_true("supports_closetoday 仍是 InstrumentSpec 的静态属性",
-               isinstance(InstrumentSpec.supports_closetoday, property))
+        check("InstrumentConfig 不再有同名方法：{}".format(m),
+              hasattr(InstrumentConfig, m), False)
+    # 静态判定：is_new_day 留 config（纯静态）；其余判定在 Instrument
+    check_true("is_new_day 留 InstrumentConfig（纯静态判定）",
+               callable(getattr(InstrumentConfig, "is_new_day", None)))
+    for m in ("effective_order_advanced", "delivery_guard_blocked"):
+        check_true("判定方法在 Instrument：{}".format(m),
+                   callable(getattr(st, m, None)))
+    check_true("supports_closetoday 是 Instrument 的派生属性",
+               isinstance(Instrument.supports_closetoday, property))
 
 
 def main():

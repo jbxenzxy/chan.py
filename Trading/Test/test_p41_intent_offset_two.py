@@ -20,7 +20,7 @@ P41 报单意图 → CTP offset 只有三个值（2026-09-11 / Phase 10 三值�
 （④ 锁仓与 ① 开仓都走 OPEN、⑤ 平仓走 CLOSE、④ 平今分支走 CLOSETODAY，
 靠 is_exit / intent 区分语义而非靠不同的 offset）。若有人偷偷加回 lock/unlock，
 本测试立即变红；CLOSETODAY 的**可用边界**（仅 SHFE/INE）由
-`InstrumentSpec.supports_closetoday` 守卫（引擎 _pre_trade_check + 转移④
+`Instrument.supports_closetoday` 守卫（引擎 _pre_trade_check + 转移④
 分支条件双处消费），见 test_p51。
 
 跑法：python Trading/Test/test_p41_intent_offset_two.py

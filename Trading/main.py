@@ -20,10 +20,12 @@ M1 交易网关 · CLI 入口
     Trading/Infra/ProductProfile.py 的品种档案。
     引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 
-合约规格（Phase 3 · Fix B · 2026-09-14）：静态规格在 Trading/Config.py 的
-    `instrument`（离线兜底种子 tick/乘数由 `_seed_instrument` 按品种档案**显式播种**）；
-    运行时的有效 tick/乘数、涨跌停区间、A′ verified、费率来源收口在
-    `InstrumentState`（Infra/InstrumentSpec.py），由本文件建一份交给 Engine 与 Broker。
+合约规格（P-B · 2026-09-15 合并）：部署配置收口在 Trading/Config.py 的
+    `instrument`（InstrumentConfig，frozen=True）；运行时的有效 tick/乘数、
+    涨跌停区间、A′ verified、trade_symbol/last_trade_date 回填收口在**唯一一份**
+    `Instrument`（Infra/InstrumentSpec.py），由本文件构造并交给 Engine 与 Broker
+    —— 静态身份与运行时状态合并为同一对象（播种桥 for_product/_seed_instrument 已消亡，
+    tick/乘数初值直接取品种档案）。
 """
 from __future__ import annotations
 
@@ -44,8 +46,8 @@ from Trading.Strategy import (EntryPolicy,          # noqa: E402
 from Trading.Config import TradingConfig, resolved_exit_params     # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
-from Trading.Infra.InstrumentSpec import (InstrumentSpec,          # noqa: E402
-                                          InstrumentState,
+from Trading.Infra.InstrumentSpec import (Instrument,              # noqa: E402
+                                          InstrumentConfig,
                                           derive_exchange)
 from Trading.Infra.PeriodProfile import (SUPPORTED_FREQS, SESSION_SECS,  # noqa: E402
                                         bar_secs_for, bars_per_day)
@@ -62,24 +64,12 @@ ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
 _STOP_REQUEST = ".stop_request"
 
 
-def _seed_instrument(cfg: TradingConfig) -> None:
-    """按当前 signal_symbol 的品种档案**显式播种**合约规格（Phase 3.2 · Fix B）。
-
-    取代已删除的 Config.py 注入机制（model_validator + model_fields_set 判据 +
-    force 双语义）。播种现在是一条**看得见的调用**，落在启动路径上，
-    且对「初始加载」与「--symbol 换品种」是同一条路径 —— 不再有两套语义。
-
-      · `InstrumentSpec.for_product()` 里 price_tick / multiplier **强制**取档案值
-        （档案是这两个字段唯一的真值来源，与 Fix A 对品种相关出场参数
-         `r_multiple_tp` 的处置同纪律）；
-      · 其余静态项原样带过（signal_symbol / trade_symbol / 三档费率 / slippage /
-        order_advanced / last_trade_date …），用户在配置里设的不会被吞掉；
-      · 品种未标定（profile=None）→ 不播种，规格沿用现值；随后的
-        resolved_exit_params() 与引擎白名单闸门会在启动期拒绝并给出完整文案。
-    """
-    cfg.instrument = InstrumentSpec.for_product(
-        cfg.product_profile,
-        **cfg.instrument.model_dump(exclude={"price_tick", "multiplier"}))
+# 2026-09-15 P-B 删除 `_seed_instrument`（Phase 3.2 · Fix B 的播种桥）：
+#   `InstrumentSpec.for_product()` + `cfg.instrument.model_dump(exclude={...})` 的
+#   躲闪随双类合并一并消亡 —— tick/乘数/exchange/费率真值源 = 品种档案
+#   ProductProfile，运行时对象 Instrument 构造时直接取档案初值，不再有
+#   "先构造 spec 再播种"的两段式。换品种 = 构造期重建 InstrumentConfig
+#   （frozen=True 下不能就地改 signal_symbol，见 build_runtime）。
 
 
 def _fee_banner(cfg: TradingConfig) -> None:
@@ -124,11 +114,14 @@ def build_runtime(args):
         # SimNow 仍按旧 signal_symbol 解析主力合约（实际还在交易 IF），即便
         # 走到下单也会因 tick 不是最小变动价位整数倍被 CTP 拒单。
         #
-        # Phase 3.2：这里不再调 cfg.apply_product_profile()（该入口已随
-        #   Config.py 的注入机制一并删除）—— 换品种的重新播种统一由下面
-        #   那一次 _seed_instrument(cfg) 完成（同一个函数管初始加载与换品种）。
+        # Phase 3.2：换品种的重新播种已随 P-B 消亡 —— InstrumentConfig
+        #   frozen=True 下不能就地改 signal_symbol，改为**构造期重建**配置对象
+        #   （其余字段原样带过；旧配置若带 price_tick 等已归位键，重建时
+        #   InstrumentConfig._check_removed_keys 会显式报错，交接文档 §7.2）。
         if cfg.instrument.signal_symbol != args.symbol:
-            cfg.instrument.signal_symbol = args.symbol
+            _d = cfg.instrument.model_dump()
+            _d["signal_symbol"] = args.symbol
+            cfg.instrument = InstrumentConfig(**_d)
     if args.freq:
         cfg.source.freq = args.freq
     if args.sse_base:
@@ -142,9 +135,8 @@ def build_runtime(args):
     if args.broker:
         cfg.broker = args.broker
 
-    # Phase 3.2（Fix B）：品种档案播种 —— 显式一次，覆盖「初始加载」与
-    # 「--symbol 换品种」两种情形（必须在上面所有改写 signal_symbol 的分支之后）。
-    _seed_instrument(cfg)
+    # 2026-09-15 P-B：品种播种调用已删除（播种桥消亡，见 _seed_instrument 处注释）；
+    #   tick/乘数等有效值初值由下面 Instrument 构造直接取品种档案。
 
     # P-A（2026-09-15）：费率横幅 —— 两档费率 + 平今派生结论，启动第一屏可见。
     _fee_banner(cfg)
@@ -186,15 +178,15 @@ def build_runtime(args):
                    encoding="utf-8", buffering=1)
     sys.stdout = _log_fh
     sys.stderr = _log_fh
-    spec = cfg.instrument
-    # Phase 3.4（Fix B）：合约参数的**运行时状态**单独一份，由本进程持有并
-    #   同时交给 Broker（写：行情/成交回报回填）与 Engine（读：闸门 / 漂移对账 /
-    #   平今经济性 / 成本）—— 必须同源，否则 SimNow 置的 verified 引擎看不见，
-    #   A′ 闸门会恒拒单且看不出原因。
-    state = InstrumentState(spec)
+    # P-B（2026-09-15）：唯一一份**运行时对象** —— 静态身份（config 转发）+
+    #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（初值直接取
+    #   品种档案，行情原子覆盖）+ 定价成本，合并于同一个 Instrument。
+    #   由本进程持有并同时交给 Broker（写）与 Engine（读）—— 必须同源，
+    #   否则 SimNow 置的 verified 引擎看不见，A′ 闸门会恒拒单且看不出原因。
+    instr = Instrument(cfg.instrument, cfg.product_profile)
 
-    broker = Broker.build_broker(args.broker or cfg.broker, spec,
-                                 cfg.broker_params.model_dump(), state=state)
+    broker = Broker.build_broker(args.broker or cfg.broker, instr,
+                                 cfg.broker_params.model_dump())
 
     # Phase 8.1（O-4 收窄）：off 只对离线生效 —— 在线通道配 off 时**启动期**
     # 就明确告知（原版静默，运维要等第一笔报单被闸门拒了才从告警反推原因）。
@@ -217,19 +209,20 @@ def build_runtime(args):
               "本通道不提供停板保护")
 
     # Phase 8（§5.9.3 规则 2 · 来源标记）：离线模式（dry_run，含 replay 数据源）
-    # 没有行情连接，合约参数用配置值 —— 但必须显式标记来源，让"回测口径"能自证。
+    # 没有行情连接，合约参数用品种档案值 —— 但必须显式标记来源，让"回测口径"能自证。
     # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
     # 取不到则 verified=False → Engine 闸门拒单（fail-closed）。
-    # Phase 3.4：标记写在 **state** 上（原 spec.instrument_source 已随运行时字段迁走）。
+    # P-B（2026-09-15）：exchange 真值源 = 品种档案 —— 离线不再写对象
+    #   （原 spec.exchange = derive_exchange(...) 就地写入随双类合并删除），
+    #   改为对账提示：symbol 推导与档案不一致时显式说出来。
     if getattr(broker, "is_offline", False):
-        state.mark_config_offline()
-        # Phase 8.1（O-1）：离线模式下 exchange 也按 symbol 前缀填充
-        # （与在线路径 SimNow._apply_instrument_quote 的填充口径一致，
-        # Phase 9 FOK/FAK 分支两种模式下都能拿到非空 exchange）。
-        _ex = derive_exchange(spec.signal_symbol)
-        if _ex:
-            spec.exchange = _ex
-        print("[gw] ⚠ 离线模式：tick/乘数取自配置（source=CONFIG_OFFLINE），"
+        instr.mark_config_offline()
+        _ex = derive_exchange(instr.signal_symbol)
+        if _ex and _ex != instr.exchange:
+            print("[gw] ⚠ 离线对账：symbol 推导交易所 {!r} ≠ 品种档案 exchange {!r}"
+                  "（以档案为准；若档案填错请改 PRODUCT_PROFILES）".format(
+                      _ex, instr.exchange))
+        print("[gw] ⚠ 离线模式：tick/乘数取自品种档案（source=CONFIG_OFFLINE），"
               "可能与交易所口径不符，回测结果不可直接外推实盘")
 
     entry = EntryPolicy(cfg.entry_params.model_dump())
@@ -259,18 +252,17 @@ def build_runtime(args):
 
     ev = EventLog(os.path.join(out, "events.jsonl"), echo=not args.quiet,
                   echo_kinds=None if args.echo_all else ECHO_DEFAULT)
-    # Phase 3.4：state 与 broker 共用同一份（引擎侧以 state=state 显式注入；
+    # P-B：state 与 broker 共用同一份 Instrument（引擎侧以 state=instr 显式注入；
     # 不给的话引擎会沿用 broker.state，两者本就是同一个对象 —— 显式传只为可读性）。
-    engine = TradingEngine(cfg, broker, entry, exitp, store, ev, state=state)
-    source = Source.build_source(src.get("type", "replay"), src, spec)
+    engine = TradingEngine(cfg, broker, entry, exitp, store, ev, state=instr)
+    source = Source.build_source(src.get("type", "replay"), src, instr)
     return cfg, engine, source, store, ev, out, src
 
 
 def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
                   cfg: TradingConfig, elapsed: float) -> Dict[str, Any]:
     s = engine.summary()
-    spec = cfg.instrument
-    state = engine.state          # Phase 3：有效 tick/乘数在 state 上（spec 只留离线种子）
+    instr = engine.state          # P-B：唯一运行时对象（部署配置在 instr.config）
     line = "-" * 60
     print("\n" + "=" * 60)
     print("运行摘要  {}".format(now_cn()))
@@ -279,7 +271,7 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
                                        src.get("replay_dir") or src.get("sse_base", "")))
     print("Broker    : {}".format(engine.broker.name))
     print("合约      : {} -> {}  (tick={}, 乘数={})".format(
-        spec.signal_symbol, spec.trade_symbol, state.price_tick, state.multiplier))
+        instr.signal_symbol, instr.trade_symbol, instr.price_tick, instr.multiplier))
 
     print("入场策略  : {}".format(s["entry_policy"]))
     print("出场策略  : {}".format(s["exit_policy"]))

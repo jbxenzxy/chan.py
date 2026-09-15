@@ -91,7 +91,9 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 import Trading.Infra.Types as _T  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, EngineState, ExitPlan, OrderIntent, Position, Side, Signal,
@@ -138,7 +140,7 @@ def make_bar(ts, o, h, l, c, date="2026-09-01 09:40"):
 
 def build_engine(tmpdir, *, ev_name="events.jsonl"):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({})
     exitp = LayeredExitPolicy()

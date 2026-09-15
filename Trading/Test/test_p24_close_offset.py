@@ -73,7 +73,9 @@ try:
     from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
     from Trading.Config import DEFAULT_CONFIG  # noqa: E402
     from Trading.Engine.Engine import TradingEngine  # noqa: E402
-    from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+    from Trading.Infra.InstrumentSpec import Instrument, InstrumentConfig  # noqa: E402
+    from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+    _IF = PRODUCT_PROFILES["IF"]
     from Trading.Infra.Types import (  # noqa: E402
     ExitPlan, OrderIntent, Position, Side, now_ms, trading_day_of_ms,
 )
@@ -164,7 +166,7 @@ class MockApi:
 
 def make_broker(api=None, params=None, spec=None):
     b = object.__new__(SimNowBroker)
-    b.spec = spec or InstrumentSpec()
+    b.spec = spec or Instrument(None, _IF)
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
     b._trade_symbol = b.spec.trade_symbol
@@ -194,7 +196,7 @@ check("今仓离场 → CLOSE（规则 ⑸：今仓离场走反向 OPEN 软离�
       _first_close_offset(_TODAY), "CLOSE")
 check("entry_date 缺失 → CLOSE", _first_close_offset(""), "CLOSE")
 check("closetoday_first=False 时同样 CLOSE",
-      _first_close_offset(_TODAY, InstrumentSpec(closetoday_first=False)), "CLOSE")
+      _first_close_offset(_TODAY, Instrument(InstrumentConfig(closetoday_first=False), _IF)), "CLOSE")
 
 print("\n[2] CLOSE 拆锁实发报文（旧 UNLOCK 路径；P0-1：CLOSEYESTERDAY → CLOSE）")
 api = MockApi(pos=MockPos())
@@ -253,7 +255,7 @@ def mk_engine(tmp, book):
     cfg.risk.max_volume = 2
     cfg.exit_params.use_atr = False
     eng = TradingEngine(
-        cfg, DryRunBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0}),
+        cfg, DryRunBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0}),
         EntryPolicy({}), LayeredExitPolicy(),
         Store(os.path.join(tmp, "state_p24.db")),
         EventLog(os.path.join(tmp, "events_p24.jsonl"), echo=False, echo_kinds=None))

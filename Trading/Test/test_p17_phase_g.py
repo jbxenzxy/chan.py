@@ -92,7 +92,9 @@ from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import Bar, Position, Side  # noqa: E402
 
 _PASS = 0
@@ -180,7 +182,7 @@ def _rec(vol, price=4547.0):
 def make_simnow_broker():
     """无凭据实例化 SimNowBroker（early return，_api=None，不碰网络）。"""
     # 严格模式：broker_params 必须完整（这里用配置模型的默认值全量传入）
-    return SimNowBroker(InstrumentSpec(),
+    return SimNowBroker(Instrument(None, _IF),
                         params=dict(DEFAULT_CONFIG["broker_params"]))
 
 
@@ -325,7 +327,7 @@ def make_engine(tmpdir, *, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
     cfg.risk.max_volume = 1
-    spec = InstrumentSpec()
+    spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
@@ -378,7 +380,7 @@ def read_events(eng, kinds=None, tail_n=200):
     return out
 
 with tmp_dir() as td:
-    mb = GMockBroker(InstrumentSpec(), tc_value=False, real_longs=0, cp_return=2)
+    mb = GMockBroker(Instrument(None, _IF), tc_value=False, real_longs=0, cp_return=2)
     eng = make_engine(td, broker=mb)
     snap = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-g2").to_dict()
     eng._close_in_flight = {
@@ -400,7 +402,7 @@ with tmp_dir() as td:
     check("4.5 写 close_stuck_recovered", len(evs2), 1)
 
 with tmp_dir() as td:
-    mb = GMockBroker(InstrumentSpec(), tc_value=False, real_longs=0, cp_return=0)
+    mb = GMockBroker(Instrument(None, _IF), tc_value=False, real_longs=0, cp_return=0)
     eng = make_engine(td, broker=mb)
     eng._close_in_flight = {
         "signal_key": "g2-sig-b", "target_signal_key": "t",
@@ -412,7 +414,7 @@ with tmp_dir() as td:
           len(read_events(eng, kinds={"close_pending_cancelled"})), 0)
 
 with tmp_dir() as td:
-    mb = GMockBroker(InstrumentSpec(), tc_value=True, cp_return=2)
+    mb = GMockBroker(Instrument(None, _IF), tc_value=True, cp_return=2)
     eng = make_engine(td, broker=mb)
     eng._close_in_flight = {
         "signal_key": "g2-sig-c", "target_signal_key": "t",
@@ -452,7 +454,7 @@ with tmp_dir() as td:
 # ════════════════════════════════════════════════════════════════
 print("── [5] base / dry_run cancel_pending 默认值 ──")
 
-dr = DryRunBroker(InstrumentSpec(), {"sim_equity": 1_000_000.0})
+dr = DryRunBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0})
 check("5.1 dry_run.cancel_pending 继承 base → 0", dr.cancel_pending("k1"), 0)
 check("5.2 dry_run.trade_confirmed 仍为 True（Phase F 不变）",
       dr.trade_confirmed(OrderIntent.CLOSE, "k1"), True)
@@ -509,7 +511,7 @@ class FakeInsertApi(FakeApi):
         return o
 
 
-bu = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.3,
+bu = SimNowBroker(Instrument(None, _IF), params={"fill_timeout_open": 0.3,
                                             "overprice_ticks": 3})
 bu._conn_error = None  # 无凭据实例化会置连接错误，测试注入 api 前先清掉
 
@@ -548,7 +550,7 @@ check("6.3b trade_confirmed 对单次路径成交 → True",
 # ════════════════════════════════════════════════════════════════
 print("── [7] D13：is_exit 决定追价轮数（同一 intent）──")
 
-bu2 = SimNowBroker(InstrumentSpec(), params={"fill_timeout_open": 0.05,
+bu2 = SimNowBroker(Instrument(None, _IF), params={"fill_timeout_open": 0.05,
                                             "fill_timeout_close": 0.01,
                                             "overprice_ticks": 3,
                                             "chase_interval": 0.0})

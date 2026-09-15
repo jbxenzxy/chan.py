@@ -65,7 +65,7 @@ from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.Store import Store
 from ..Strategy.Exit import ExitCheck
-from ..Infra.InstrumentSpec import InstrumentSpec, InstrumentState
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import (
     PLAUSIBLE_DATE_MIN,
     AccountState,
@@ -106,27 +106,26 @@ class TradingEngine(ReconcileMixin):
     def __init__(self, cfg: TradingConfig, broker: Broker,
                  entry_policy: "EntryPolicy", exit_policy: "LayeredExitPolicy",
                  store: Store, ev: EventLog,
-                 state: Optional[InstrumentState] = None):
+                 state: Optional["Instrument"] = None):
         self.cfg = cfg
-        # ── 合约规格：静态项 vs 运行时状态（Phase 3 · Fix B · 2026-09-14）──
-        #   self.spec  = 静态规格（symbol / exchange / slippage / order_advanced /
-        #                closetoday_first / last_trade_date …）—— 启动后不变
-        #   self.state = 运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
-        #                三档费率有效值 + 来源）—— 由行情/回报回填
-        # 所有权：**一次运行只有一份 state**。默认沿用 broker 的（不显式给时），
-        #   这是必须的 —— SimNow 把 verified 写在 state 上，引擎若自建一份就看
-        #   不见，A′ 闸门会恒拒单且原因难查。main.py 显式传入同一份只为可读性。
-        #   第三档（getattr 回落）留给**鸭子类型 broker**（不继承 Broker、
-        #   只实现 submit/real_position 的测试替身与外接通道）：它们没有
-        #   `.state` 属性、也就不可能写行情回填，此时由 cfg.instrument 播种一份
-        #   —— 与 Phase 3 之前 `self.spec = cfg.instrument` 的可见性完全等价。
-        #   注意：Broker 子类永远走前两档（基类有 state property），
-        #   不会出现"两边各建一份"。
-        self.spec: InstrumentSpec = cfg.instrument
-        self.state: InstrumentState = (
+        # ── 合约运行时对象（P-B · 2026-09-15 双类合并）──
+        #   原 self.spec（静态规格 cfg.instrument）与 self.state（运行时状态）
+        #   现在是**同一个 Instrument**：静态身份经 config/product 转发只读，
+        #   有效值/回填字段（tick/乘数/涨跌停/verified/trade_symbol/last_trade_date）
+        #   是可变运行时字段。self.spec 保留为兼容名（指向 self.state 同一对象，
+        #   Instrument.spec property 返回自身）—— 大量 spec.xxx 只读引用因此
+        #   不需要逐个改写。
+        # 所有权（不变）：**一次运行只有一份 Instrument**。默认沿用 broker 的
+        #   （不显式给时）；main.py 显式传入同一份只为可读性。第三档（原
+        #   getattr 回落 + InstrumentState(self.spec) 自建）随合并消亡 ——
+        #   Instrument 构造即完成档案取值，不存在"从 spec 播种"。
+        self.state: "Instrument" = (
             state if state is not None
             else getattr(broker, "state", None)
-            or InstrumentState(self.spec))
+            # 鸭子类型 broker（不继承 Broker、无 .state 的测试替身/外接通道）
+            # 回落：由部署配置 + 品种档案现建一份（等价 P-B 前"从 cfg 播种"）。
+            or Instrument(cfg.instrument, cfg.product_profile))
+        self.spec = self.state
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
         self._spec_drift_checked: bool = False
@@ -1076,14 +1075,11 @@ class TradingEngine(ReconcileMixin):
 
         2026-09-15 P-A 删除离线分支（原 2026-09-14 P2-3 补的
         `_spec_drift_offline_checked` + `spec_drift_offline` 告警，24 行）：
-        `InstrumentSpec.for_product` 对 price_tick / multiplier **无条件强制取
-        档案值** → 离线 state ≡ 档案恒成立 → 离线分支结构性不可达
-        （唯一命中路径是绕过 _seed_instrument 的旁路构造，生产不存在）。
-        离线兜底值的对账由档案→种子的**单向播种**结构本身保证，无需运行时校验。
-
-        Phase 3（Fix B）：比对对象从 spec 换成 **self.state** ——
-          price_tick / multiplier 的"引擎实际在用值"现在住在 state 上
-          （spec 上那两个只剩离线种子，不参与判定）。
+        P-A/P-B 之前 `for_product` 播种桥对 price_tick / multiplier **无条件强制取
+        档案值** → 离线 state ≡ 档案恒成立 → 离线分支结构性不可达。
+        P-B（2026-09-15）播种桥整体消亡（for_product/_seed_instrument 删除），
+        Instrument 有效值初值**直接取档案**（构造期一次成型），单向取值结构
+        本身保证离线对账恒成立，无需运行时校验。
         """
         if self.cfg.product_profile is None:
             return

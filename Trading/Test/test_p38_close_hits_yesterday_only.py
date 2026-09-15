@@ -76,7 +76,9 @@ from Trading.Broker.Base import (  # noqa: E402
 from Trading.Broker.SimNow import (  # noqa: E402
     SimNowBroker, _position_split, _position_total, _verify_yesterday_delta)
 from Trading.Config import DEFAULT_CONFIG  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 
 _PASS = 0
@@ -201,7 +203,7 @@ class SeqApi:
 
 def make_broker(api, over=None):
     b = object.__new__(SimNowBroker)
-    b.spec = InstrumentSpec()
+    b.spec = Instrument(None, _IF)
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     for k, v in (over or {}).items():

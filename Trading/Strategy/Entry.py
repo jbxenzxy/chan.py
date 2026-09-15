@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..Infra.InstrumentSpec import InstrumentSpec
+from ..Infra.InstrumentSpec import Instrument
 from ..Infra.Types import Decision, DecisionType, Position, Signal
 from ..Config import EntryConfig
 
@@ -37,7 +37,7 @@ class EntryPolicy:
         return "{}({})".format(self.name, self.params)
 
     def decide(self, signal: Signal, position: Optional[Position],
-               spec: InstrumentSpec) -> Decision:
+               spec: "Instrument") -> Decision:
         if signal.price <= 0 or signal.high <= 0 or signal.low <= 0:
             return Decision(DecisionType.SKIP, reason="信号价格无效")
 

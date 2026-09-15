@@ -135,7 +135,7 @@ class ProductProfile:
 
         六家交易所里只有上期所（SHFE）与上期能源（INE）有 CLOSETODAY，
         其余四家（CFFEX/DCE/CZCE/GFEX）传平今会直接报错。
-        ⚠️ 引擎路径真正的守卫是 `InstrumentSpec.supports_closetoday`
+        ⚠️ 引擎路径真正的守卫是 `Instrument.supports_closetoday`
         （运行时有效 exchange，19 处消费点，双处消费不变）；本档案侧属性
         供纯函数派生（prefer_closetoday）与对账测试使用。
         """

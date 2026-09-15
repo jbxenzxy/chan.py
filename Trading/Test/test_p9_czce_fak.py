@@ -13,7 +13,7 @@ P9 郑商所 CZCE · FOK→FAK + OPEN 钉 1 手 契约测试
   其余交易所（CFFEX/DCE/SHFE/INE/GFEX）完全不变：1 笔 N 手（N=risk.max_volume，默认 2）FOK。
 
 本测试锁死用户的三条断言：
-  [1] InstrumentSpec.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖）
+  [1] Instrument.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖；P-B 起 exchange 真值源 = 品种档案）
   [2] Engine._decide_action OPEN 手数：CZCE→1（无拆单），其余→lots_per_signal
   [3] Broker submit 报文：CZCE 两个 insert_order 站点（OPEN/CLOSE/离场）advanced 均 "FAK"；
       CFFEX 回归 "FOK"
@@ -63,7 +63,17 @@ from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.InstrumentSpec import InstrumentSpec, derive_exchange  # noqa: E402
+from Trading.Infra.InstrumentSpec import (  # noqa: E402
+    Instrument, InstrumentConfig, derive_exchange)
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+from dataclasses import replace as _dc_replace  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
+
+
+def _prod(ex):
+    """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
+    return _dc_replace(_IF, exchange=ex)
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import (  # noqa: E402
     AccountState, Bar, EngineState, Signal, Side,
@@ -186,7 +196,7 @@ class MockApi:
 def make_broker(api=None, params=None):
     """用 object.__new__ 绕过 __init__（避免真实 _connect 连 SimNow）。"""
     b = object.__new__(SimNowBroker)
-    b.spec = InstrumentSpec()
+    b.spec = Instrument(None, _IF)
     b.params = dict(DEFAULT_CONFIG["broker_params"], **(params or {}))
     b._api = api
     b._trade_symbol = b.spec.trade_symbol
@@ -198,36 +208,38 @@ def make_broker(api=None, params=None):
 
 
 def make_czce_broker(api=None, params=None):
-    """make_broker 的 CZCE 版：spec 显式钉成郑商所，trade_symbol 也用郑商所合约。"""
+    """make_broker 的 CZCE 版：P-B 起 exchange 归品种档案 —— 直接用 TA 档案
+    构造 Instrument，trade_symbol 用郑商所月份合约（运行时可写身份字段）。"""
     b = make_broker(api=api, params=params)
-    b.spec = InstrumentSpec()
-    b.spec.exchange = "CZCE"
-    b.spec.signal_symbol = "KQ.m@CZCE.TA"
-    b.spec.trade_symbol = "CZCE.TA501"
-    b._trade_symbol = b.spec.trade_symbol
+    b.spec = Instrument(
+        InstrumentConfig(signal_symbol="KQ.m@CZCE.TA", trade_symbol="CZCE.TA501"),
+        PRODUCT_PROFILES["TA"])
+    b._trade_symbol = "CZCE.TA501"
     return b
 
 
 def build_engine(tmpdir, *, max_volume=2, exchange="CZCE", broker=None):
     """构造引擎（CZCE 或指定交易所）。
 
-    2026-09-13 Phase 9：Engine 读 self.spec = cfg.instrument，broker 另持一份 spec；
-    两处都要把 exchange 钉成目标交易所，才能端到端验证 FOK/FAK 切换。
+    2026-09-13 Phase 9：Engine 与 broker 共用同一份 Instrument（P-B 合并），
+    exchange 由档案给定，端到端验证 FOK/FAK 切换。
     """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     cfg.risk.max_volume = max_volume
-    cfg.instrument.exchange = exchange  # Engine 的 spec（self.spec = cfg.instrument）
-    spec = InstrumentSpec()
-    spec.exchange = exchange
-    spec.signal_symbol = "KQ.m@CZCE.TA" if exchange == "CZCE" else "KQ.m@CFFEX.IF"
-    spec.trade_symbol = "CZCE.TA501" if exchange == "CZCE" else "CFFEX.IF2609"
+    # P-B（2026-09-15）：exchange 归品种档案，frozen 配置不可就地改写 ——
+    #   CZCE 用 TA 档案、CFFEX 用 IF 档案；Instrument 单例整体替换进 cfg
+    #   并同时注入 broker（Engine 读 self.state = broker.state = 同一对象）。
+    is_czce = exchange == "CZCE"
+    sym = "KQ.m@CZCE.TA" if is_czce else "KQ.m@CFFEX.IF"
+    tsym = "CZCE.TA501" if is_czce else "CFFEX.IF2609"
+    cfg.instrument = InstrumentConfig(signal_symbol=sym, trade_symbol=tsym)
+    spec = Instrument(None, PRODUCT_PROFILES["TA"] if is_czce else PRODUCT_PROFILES["IF"])
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     else:
-        broker.spec.exchange = exchange  # 注入 CZCE spec 到传入 broker（如 SimNow+MockApi）
-        broker.spec.signal_symbol = spec.signal_symbol
-        broker.spec.trade_symbol = spec.trade_symbol
-        broker._trade_symbol = spec.trade_symbol
+        broker.spec = spec          # 注入目标档案 spec 到传入 broker（如 SimNow+MockApi）
+        broker._state = spec
+        broker._trade_symbol = tsym
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -256,27 +268,28 @@ _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
 # ════════════════════════════════════════════════════════════════
 # [1] InstrumentSpec.effective_order_advanced() 契约
 # ════════════════════════════════════════════════════════════════
-print("\n[1] InstrumentSpec.effective_order_advanced()：CZCE 强制 FAK，其余沿用配置")
-check("[1a] 默认 InstrumentSpec（exchange=''）→ FOK",
-      InstrumentSpec().effective_order_advanced(), "FOK")
+print("\n[1] Instrument.effective_order_advanced()：CZCE 强制 FAK，其余沿用配置"
+      "（P-B：exchange 真值源 = 品种档案）")
+check("[1a] 无档案 Instrument（exchange=''）→ FOK",
+      Instrument(None).effective_order_advanced(), "FOK")
 check("[1b] CFFEX → FOK",
-      InstrumentSpec(exchange="CFFEX").effective_order_advanced(), "FOK")
+      Instrument(None, _prod("CFFEX")).effective_order_advanced(), "FOK")
 check("[1c] ★ CZCE → FAK（不论 order_advanced 默认 FOK）",
-      InstrumentSpec(exchange="CZCE").effective_order_advanced(), "FAK")
+      Instrument(None, _prod("CZCE")).effective_order_advanced(), "FAK")
 check("[1d] CZCE 且 order_advanced 显式='FOK' → 仍 FAK（郑商所强制覆盖配置）",
-      InstrumentSpec(exchange="CZCE", order_advanced="FOK").effective_order_advanced(),
+      Instrument(InstrumentConfig(order_advanced="FOK"), _prod("CZCE")).effective_order_advanced(),
       "FAK")
 check("[1e] CZCE 且 order_advanced 显式='FAK' → FAK",
-      InstrumentSpec(exchange="CZCE", order_advanced="FAK").effective_order_advanced(),
+      Instrument(InstrumentConfig(order_advanced="FAK"), _prod("CZCE")).effective_order_advanced(),
       "FAK")
 check("[1f] DCE → 沿用 order_advanced（FOK）",
-      InstrumentSpec(exchange="DCE").effective_order_advanced(), "FOK")
+      Instrument(None, _prod("DCE")).effective_order_advanced(), "FOK")
 check("[1g] SHFE → 沿用 order_advanced（FOK）",
-      InstrumentSpec(exchange="SHFE").effective_order_advanced(), "FOK")
+      Instrument(None, _prod("SHFE")).effective_order_advanced(), "FOK")
 check("[1h] INE → 沿用 order_advanced（FOK）",
-      InstrumentSpec(exchange="INE").effective_order_advanced(), "FOK")
+      Instrument(None, _prod("INE")).effective_order_advanced(), "FOK")
 check("[1i] GFEX → 沿用 order_advanced（FOK）",
-      InstrumentSpec(exchange="GFEX").effective_order_advanced(), "FOK")
+      Instrument(None, _prod("GFEX")).effective_order_advanced(), "FOK")
 check("[1j] derive_exchange('KQ.m@CZCE.TA') == 'CZCE'（exchange 推导正确，Phase 8 已就位）",
       derive_exchange("KQ.m@CZCE.TA"), "CZCE")
 
@@ -364,7 +377,7 @@ with tmp_dir() as td:
 
 # 全撤（拒单）路径：CZCE 信号 → 恰好 1 单 1 手、net=0、FLAT、status rejected（无幻影）
 with tmp_dir() as td:
-    broker = DryRunBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0})
+    broker = DryRunBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0})
 
     class RejectDryBroker(DryRunBroker):
         def submit(self, intent, side, volume, ref_price, signal_key="", note="",
@@ -382,9 +395,11 @@ with tmp_dir() as td:
             self.orders.append(o)
             return o
 
-    rb = RejectDryBroker(InstrumentSpec(), {"sim_equity": 10_000_000.0})
-    rb.spec.exchange = "CZCE"
-    rb.spec.trade_symbol = "CZCE.TA501"
+    # P-B：exchange 归档案 —— CZCE 语义直接用 TA 档案表达（frozen 配置不可改写）
+    rb = RejectDryBroker(
+        Instrument(InstrumentConfig(trade_symbol="CZCE.TA501"),
+                   PRODUCT_PROFILES["TA"]),
+        {"sim_equity": 10_000_000.0})
     eng = build_engine(td, max_volume=2, exchange="CZCE", broker=rb)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-rej")

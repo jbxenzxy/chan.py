@@ -35,8 +35,10 @@ if not _TG_ROOT:
     raise SystemExit(2)
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
-from Trading.Infra.InstrumentSpec import (  # noqa: E402
-    InstrumentSpec, InstrumentState)
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Types import Bar, ExitPlan, Position, Signal, Side  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 
@@ -61,12 +63,11 @@ def approx(a, b, tol=1e-6):
 def make_state():
     """Phase 3（Fix B）：出场策略读的是**运行时状态**（有效 tick + 定价方法）。
 
-    Phase 3 之前这里返回的是 InstrumentSpec 本身；拆分后 Engine 传给
-    exit_policy 的就是 InstrumentState —— 本测试走同一条路径，
-    避免"测试钉死的是旧对象"的假绿灯。tick 仍取合约规格的默认值 0.2
-    （由 InstrumentState 构造时从 spec 播种）。
+    Phase 3 拆分后 Engine 传给 exit_policy 的是运行时状态；P-B（2026-09-15）
+    双类合并后它就是 Instrument —— 本测试走同一条路径，避免"测试钉死
+    旧对象"的假绿灯。tick 取 IF 档案真值（P-B 起无播种桥，构造时取档案）。
     """
-    return InstrumentState(InstrumentSpec())
+    return (Instrument(None, _IF))
 
 
 def make_signal(side, price, high, low, date="2026-09-01 09:35",

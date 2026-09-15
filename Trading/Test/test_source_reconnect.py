@@ -58,9 +58,11 @@ check("旧键名 'reconnect' 仍被 extra=forbid 拒绝",
 
 # ═══ [2] SseSource 离线构造：默认读 SSOT ═══
 print("\n[2] SseSource 默认参数来自 SourceConfig（不连网）")
-from Trading.Infra.InstrumentSpec import InstrumentSpec
+from Trading.Infra.InstrumentSpec import Instrument
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Source.SSE import SseSource
-s = SseSource({}, InstrumentSpec())
+s = SseSource({}, Instrument(None, _IF))
 check("默认 reconnect == 5.0", s.reconnect, 5.0)
 check("默认 reconnect_max == 60.0", s.reconnect_max, 60.0)
 check("默认 max_retry == 0（无限）", s.max_retry, 0)
@@ -68,7 +70,7 @@ check("默认 max_retry == 0（无限）", s.max_retry, 0)
 # 读配置实证：改 SourceConfig 值 → SseSource 跟随
 sc2 = SourceConfig(reconnect_wait=2.0, reconnect_wait_max=30.0,
                    reconnect_max_retry=7)
-s2 = SseSource(sc2.model_dump(), InstrumentSpec())
+s2 = SseSource(sc2.model_dump(), Instrument(None, _IF))
 check("reconnect_wait=2.0 传入 -> s.reconnect == 2.0", s2.reconnect, 2.0)
 check("reconnect_wait_max=30.0 传入 -> s.reconnect_max == 30.0", s2.reconnect_max, 30.0)
 check("reconnect_max_retry=7 传入 -> s.max_retry == 7", s2.max_retry, 7)
@@ -78,7 +80,7 @@ print("\n[3] 非法值构造期报错（fail-fast）")
 
 
 def _mk(**over):
-    return SseSource(SourceConfig(**over).model_dump(), InstrumentSpec())
+    return SseSource(SourceConfig(**over).model_dump(), Instrument(None, _IF))
 
 
 check("reconnect_wait=0 -> ValueError", _raises(lambda: _mk(reconnect_wait=0.0)), True)

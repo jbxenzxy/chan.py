@@ -8,11 +8,11 @@ P49 合约规格漂移校验（spec_drift）契约测试
     （dry_run 模拟成交 / replay 回测没有行情来源，必须有个确定的数算钱）；
     实盘真值 = 行情（SimNow.apply_quote 原子覆盖 + A′ fail-closed）。
   · 双源风险：交易所改合约规格后档案值过期 → 实盘没事，但离线回测静默
-    用错数。处置：verified 首次为真时，引擎比对 **InstrumentState 的有效值
+    用错数。处置：verified 首次为真时，引擎比对 **Instrument 的有效值
     （行情值）** 与 product_profile（档案兜底值），不一致 → warn 告警
     （D11 通道，前端 toast），**不拒单**（实盘本就以行情为准）。
-    Phase 3（Fix B）：对账右侧从 InstrumentSpec 改为 InstrumentState ——
-    拆前两者是同一个对象，拆后"行情值"只在 state 上，读错对象会恒判"一致"。
+    Phase 3（Fix B）→ P-B（2026-09-15）：对账右侧统一在 Instrument（双类
+    合并后 spec/state 同一对象，"行情值"只此一份，读错对象无从谈起）。
 
 本测试锁死的断言：
   [1] verified=False（dry_run 离线兜底，无行情可比）→ 不告警、不置位
@@ -60,6 +60,7 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
+from Trading.Infra.InstrumentSpec import Instrument  # noqa: E402
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
@@ -103,7 +104,7 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol="KQ.m@CFFEX.IF"):
-    """构造引擎：先按品种档案**显式播种**（Phase 3 起为启动路径的一次调用），
+    """构造引擎：Instrument 构造时直接取品种档案（P-B：播种桥已删），
     再建 broker/引擎 —— 与 main.py 的启动次序一致（profile 一定非 None）。
 
     state 归属：不显式传 state 时引擎沿用 broker 的那一份（Broker.state
@@ -111,12 +112,13 @@ def build_engine(tmpdir, signal_symbol="KQ.m@CFFEX.IF"):
     即可，读到的正是引擎对账时用的那个对象。
     """
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    _main._seed_instrument(cfg)
+    # P-B（2026-09-15）：播种桥已删 —— Instrument 构造时直接取品种档案
+    inst = Instrument(cfg.instrument, cfg.product_profile)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    broker = DryRunBroker(cfg.instrument, {"sim_equity": 10_000_000.0})
+    broker = DryRunBroker(inst, {"sim_equity": 10_000_000.0})
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 

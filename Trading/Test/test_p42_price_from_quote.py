@@ -6,7 +6,7 @@ P42 品种参数从行情获取（A′ fail-closed · 契约测试，Phase 8 / D
 ----------------------------------------------------
 换品种用错 tick 会直接导致 CTP 拒单（R20）。Phase 8 起，实盘的合约参数
 （price_tick / volume_multiple→multiplier / 涨跌停区间）**唯一真值来源是行情**
-（SimNow._apply_instrument_quote 从真实月份合约回填 InstrumentState），配置值
+（SimNow._apply_instrument_quote 从真实月份合约回填 Instrument），配置值
 只在离线（dry_run / replay）生效且必须标记 CONFIG_OFFLINE。
 
 "取不到正确值就不许下单"这条 fail-closed 语义必须由反例钉死 ——
@@ -14,9 +14,9 @@ P42 品种参数从行情获取（A′ fail-closed · 契约测试，Phase 8 / D
 
 Phase 3（Fix B · 2026-09-14）归属变更
 ----------------------------------------------------
-Phase 3 把 InstrumentSpec 拆成「静态规格（spec）」+「运行时状态（state）」：
+P-B（2026-09-15）把 InstrumentSpec+InstrumentState 合并为唯一运行时对象 Instrument：
 apply_quote 回填的 price_tick / multiplier / upper_limit / lower_limit 与
-A′ 的 verified / source 全部搬到 InstrumentState 上。本测试随之迁移，
+A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
 并**新增**两条只有拆分后才存在的断言：
   · [1f] apply_quote 不改静态规格（spec.price_tick 恒为配置种子）；
   · [4e]/[5e] Engine 与 Broker 必须共用**同一份** state（否则 SimNow 置的
@@ -86,7 +86,10 @@ from Trading.Config import (BrokerConfig, TradingConfig,  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.InstrumentSpec import (  # noqa: E402
-    InstrumentSpec, InstrumentState, derive_exchange)
+    Instrument, InstrumentConfig, derive_exchange)
+from Trading.Infra.ProductProfile import PRODUCT_PROFILES  # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Store import Store  # noqa: E402
 from Trading.Infra.Types import OrderIntent, Side  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -154,8 +157,9 @@ class FakeLiveBroker(Broker):
 # Phase 3（Fix B）：本次运行的那一份运行时状态。生产路径由 main.py 建好后
 # 同时交给 Broker 与 Engine（一次运行只有一份）；测试里同样显式共享同一个
 # 对象，避免"两边各建一份 → verified 谁都看不见"的假绿灯。
-def _st(spec=None) -> InstrumentState:
-    return InstrumentState(spec if spec is not None else InstrumentSpec())
+def _st(spec=None) -> Instrument:
+    # P-B：双类合并 —— 有效值初值直接取档案；spec/state 是同一个对象。
+    return spec if spec is not None else Instrument(None, _IF)
 
 
 def make_simnow(quote, policy="strict", spec=None, state=None, frozen=False):
@@ -165,8 +169,8 @@ def make_simnow(quote, policy="strict", spec=None, state=None, frozen=False):
     用的便利路径，本测试要断言的现象都发生在 state 上，故显式给）。
     """
     b = SimNowBroker.__new__(SimNowBroker)
-    b.spec = spec if spec is not None else InstrumentSpec()
-    b.state = state if state is not None else InstrumentState(b.spec)
+    b.spec = spec if spec is not None else Instrument(None, _IF)
+    b.state = state if state is not None else b.spec
     b.params = {"instrument_fetch_policy": policy, "overprice_ticks": 5,
                 "channel": {"underlying_map_timeout": 0.5,
                             "instrument_fetch_timeout": 0.5}}  # Phase 8.1（B-2）独立超时
@@ -205,11 +209,10 @@ check("[1c] upper_limit / lower_limit 被覆盖", (st1.upper_limit, st1.lower_li
 check_true("[1d] 返回值含 price_tick / multiplier / upper_limit / lower_limit",
            set(changed) == {"price_tick", "multiplier", "upper_limit", "lower_limit"},
            changed)
-# Phase 3 新增：静态规格自身**一个字段都不动** —— 这正是"配置对象构造后只读"
-# 的可执行证据。行情只改 state 上的有效值。
-check_true("[1f] 静态规格不受影响（spec 的 tick/乘数仍是配置种子）",
-           (st1.spec.price_tick, st1.spec.multiplier) == (0.2, 300.0),
-           (st1.spec.price_tick, st1.spec.multiplier))
+# P-B（2026-09-15）双类合并：原"静态规格一个字段都不动"断言随拆分消亡 ——
+# spec 与 state 是同一对象，行情回填的就是唯一一份运行时有效值。
+check("[1f] P-B：无双类影子 —— tick/乘数只有这一份（= 行情值，非配置种子）",
+      (st1.price_tick, st1.multiplier), (2.0, 50.0))
 b1 = make_simnow(FakeQuote(), spec=st1.spec, state=st1, frozen=True)
 check("[1e] 超价随之变为 overprice_ticks × 新 tick = 5×2.0", b1._overprice(), 10.0)
 
@@ -450,22 +453,30 @@ eng10b._pre_trade_check(act_past_close, "2026-09-02", None)
 check("[10e] 闸门告警 extra.policy == 'off'", _kw.get("policy"), "off")
 
 # ════════════════════════════════════════════════════════════════
-print("\n[11] Phase 8.1（O-1）：derive_exchange + spec.exchange 填充")
+print("\n[11] Phase 8.1（O-1）：derive_exchange（P-B：exchange 归档案，SimNow 降级对账）")
 check("[11a] CFFEX.IF2609 → CFFEX", derive_exchange("CFFEX.IF2609"), "CFFEX")
 check("[11b] KQ.m@CZCE.TA → CZCE", derive_exchange("KQ.m@CZCE.TA"), "CZCE")
 check("[11c] SHFE.au2608 → SHFE（小写品种不影响）", derive_exchange("SHFE.au2608"), "SHFE")
 check("[11d] 空串 → ''（不猜）", derive_exchange(""), "")
 check("[11e] 无分隔 → ''（不猜）", derive_exchange("IF2609"), "")
-spec11 = InstrumentSpec()
-st11 = InstrumentState(spec11)
-b11 = make_simnow(FakeQuote(), spec=spec11, state=st11)
+st11 = Instrument(None, _IF)  # P-B：spec/state 同一对象
+b11 = make_simnow(FakeQuote(), spec=st11, state=st11)
 b11._apply_instrument_quote()
-check("[11f] 在线成功路径填充 spec.exchange（静态项仍留 spec）", spec11.exchange, "CFFEX")
-spec11b = InstrumentSpec()
-st11b = InstrumentState(spec11b)
-b11b = make_simnow(FakeQuote(price_tick=float("nan")), spec=spec11b, state=st11b)
-b11b._apply_instrument_quote()               # 失败 → 不冻结、不填 exchange
-check("[11g] 失败路径不填 exchange（保持默认空串）", spec11b.exchange, "")
+codes11 = [a.get("code") for a in (b11.drain_alerts() or [])]
+check("[11f] P-B：SimNow 不再写 exchange；档案 CFFEX 与行情推导一致 → 无对账告警",
+      ("exchange_mismatch" in codes11, st11.exchange), (False, "CFFEX"))
+st11x = Instrument(None, PRODUCT_PROFILES["TA"])  # 档案 CZCE，行情推导 CFFEX → 不一致
+b11x = make_simnow(FakeQuote(), spec=st11x, state=st11x)
+b11x._apply_instrument_quote()
+codes11x = [a.get("code") for a in (b11x.drain_alerts() or [])]
+check("[11g] 档案与行情推导不一致 → exchange_mismatch 对账告警（降级为 warn）",
+      "exchange_mismatch" in codes11x, True)
+check("[11g2] 对账只告警不写对象：档案 exchange 保持 CZCE", st11x.exchange, "CZCE")
+st11b = Instrument(None, _IF)
+b11b = make_simnow(FakeQuote(price_tick=float("nan")), spec=st11b, state=st11b)
+b11b._apply_instrument_quote()               # 失败 → 不冻结、不触发对账
+check("[11h] 失败路径不冻结、档案不变、无对账告警",
+      (st11b.verified, st11b.exchange), (False, "CFFEX"))
 
 print("\n" + "=" * 60)
 print("P42 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
