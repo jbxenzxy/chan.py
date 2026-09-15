@@ -11,29 +11,29 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
 空仓态，不再进锁仓态 —— 对这类品种，状态机退化为「空仓态 + 运行态」两态
 （见文档「账户三态（空仓-运行-锁仓）.html」尾部注释）。
 
-硬约束（A4 / 全交易所安全性）：
-  · CLOSETODAY 平今指令**仅上期所（SHFE）/ 上期能源（INE）**可用，其余四家
-    （CFFEX/DCE/CZCE/GFEX）传平今会直接报错 —— 由 `Instrument.supports_closetoday`
-    守卫，转移④ 分支条件 + `_pre_trade_check` 校验链**双处**消费；
+硬约束（2026-09-16 起）
+--------------------------------
+  · 走不走平今 = **品种执行策略表第 1 列**（`EXEC_POLICY[code].close_mode`），
+    由用户按费率自己算定后填表 —— 代码不从费率推导、也不看交易所名字
+    （原「按交易所能力守卫的闸门」与「按费率 3× 口径派生的开关」**均已删除**）；
+    转移④ 分支条件 + `_pre_trade_check` 校验链**双处**消费同一张表；
   · 平今目标恒为**今仓**（`_pre_trade_check` 断言 `closetoday_target_is_yesterday`）；
-  · 开关缺省（无品种档案）/ 交易所不支持 → 走锁仓，保守侧（宁可多花一次开仓费，
-    不生成一张会被拒的平今单）。
+  · 无品种档案 → 走锁仓，保守侧（宁可多花一次开仓费，不生成一张会被拒的平今单）。
 
 覆盖
 --------------------------------------------------------------------------
-  [1] `supports_closetoday`：SHFE/INE → True；其余四家 + "" → False
-  [2] 品种档案平今派生（P-A · 3× 口径）：AU/AG/CU = True（平今）；
-      IF/IH/IC/IM/TA = False（能力闸门短路 → 锁仓）
-  [3] 转移 ④ 三分支（_decide_exit）：
-        a. CFFEX（能力闸门短路）→ OPEN 反向开仓锁仓
-        b. 档案判平今但交易所非 SHFE/INE → OPEN（保守侧，spec 闸门优先）
-        c. AU + SHFE（派生平今 + 能力可用）→ CLOSETODAY / target=今仓 / transition=4
-        d. 无品种档案 → False 保守侧 → OPEN
-  [4] `_pre_trade_check` 对 CLOSETODAY 的校验链：
-        a. 非 SHFE/INE → "closetoday_not_supported"
-        b. 今仓目标 + SHFE → 通过（None）
-        c. 昨仓目标 + SHFE → "closetoday_target_is_yesterday"
-        d. 量超过目标手数 → "close_volume_exceeds_target"
+  [1] 品种执行策略表：第 1 列（今仓离场 offset）—— 8 行取值 + 与档案同源
+  [2] 硬断言：`FAK ⟹ 一笔 1 手`；非法 close_mode / order_advanced / N 构造期拒绝
+  [3] 转移 ④ **两路平铺**（_decide_exit）：
+        a. 表 = CLOSE（IF）→ OPEN 反向开仓锁仓
+        b. 表 = CLOSETODAY（AU）→ CLOSETODAY / target=当日仓 / transition=4
+        c. 无品种档案 → 保守侧 OPEN
+        d. 两态机前提：CLOSETODAY 品种运行态仓单数恒为 1（锁仓态不可达）
+  [4] `_pre_trade_check` 对 CLOSETODAY 的校验链（判据 = 表第 1 列）：
+        a. 表第 1 列 = CLOSE 却发 CLOSETODAY → "closetoday_not_supported"
+        b. 今仓目标 + 表 = CLOSETODAY → 通过（None）
+        c. 昨仓目标 → "closetoday_target_is_yesterday"
+        d. 量超过目标手数 → "close_volume_exceeds_target"（不足 → below）
   [5] DryRun 报单：CLOSETODAY → offset=CLOSETODAY（meta 审计可见）
   [6] 平今成交后状态机：今仓直接回**空仓态**（不经锁仓态）—— 两态退化实证
 
@@ -77,7 +77,8 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
-from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import (EXEC_POLICY,  # noqa: E402
+                                   PRODUCT_PROFILES, ExecPolicy)
 
 from dataclasses import replace as _dc_replace  # noqa: E402
 
@@ -168,124 +169,110 @@ def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
     return TradingConfig.from_dict(base)
 
 
-# ══════════════════════════════════════════════════════════════
-print("\n[1] supports_closetoday：平今指令仅 SHFE/INE 可用（P-B：档案侧派生）")
-# ══════════════════════════════════════════════════════════════
-for ex, want in (("SHFE", True), ("INE", True),
-                 ("CFFEX", False), ("DCE", False), ("CZCE", False),
-                 ("GFEX", False), ("", False), ("shfe", True)):
-    check("exchange={!r} → {}".format(ex, want),
-          _prod(ex).supports_closetoday, want)
+print("\n[1] 品种执行策略表：今仓离场口径 = 表第 1 列（不看交易所名字、不算费率）")
+check("[1a] AU/AG/CU → CLOSETODAY（用户按费率算定：平今更省）",
+      [EXEC_POLICY[k].close_mode for k in ("AU", "AG", "CU")],
+      ["CLOSETODAY", "CLOSETODAY", "CLOSETODAY"])
+check("[1b] IF/IH/IC/IM/TA → CLOSE（反向开仓锁仓）",
+      [EXEC_POLICY[k].close_mode for k in ("IF", "IH", "IC", "IM", "TA")],
+      ["CLOSE"] * 5)
+check("[1c] ★ 交易所名字不参与判断：TA 档案改 exchange='SHFE' → 仍按表 = CLOSE",
+      _dc_replace(PRODUCT_PROFILES["TA"], exchange="SHFE").exec_policy.close_mode,
+      "CLOSE")
+check("[1d] 表与档案同源（Product.exec_policy 就是 EXEC_POLICY 那一行）",
+      all(PRODUCT_PROFILES[k].exec_policy is EXEC_POLICY[k] for k in EXEC_POLICY),
+      True)
+check("[1e] 8 行齐全（与 PRODUCT_PROFILES 同键）",
+      sorted(EXEC_POLICY) == sorted(PRODUCT_PROFILES), True)
 
 
-# ══════════════════════════════════════════════════════════════
-print("\n[2] 品种档案平今派生：AU/AG/CU 判平今；IF/IH/IC/IM/TA 被能力闸门短路")
-# ══════════════════════════════════════════════════════════════
-# P-A（2026-09-15）：手写布尔 prefer_lock_over_closetoday 已删除，改为档案费率
-# 单源派生（prefer_closetoday，3× 口径）。D-A（2026-09-15）：结论在 Product
-# **构造期静态冻结**（8 品种两档计价方式恒相同 → 比较式里价格约掉），故它是
-# **无参属性**，不再需要 ref_price 占位值；静态可判定的品种一律不是 None。
-check("[2a] AU 派生 = True（平今免收 → 平今）",
-      PRODUCT_PROFILES["AU"].prefer_closetoday, True)
-check("[2b] AG 派生 = True（平今=开仓 → 平今不贵）",
-      PRODUCT_PROFILES["AG"].prefer_closetoday, True)
-check("[2c1] CU 派生 = True（Y=2X < 3X → 平今；P-A 唯一行为变更品种，旧开关为锁仓）",
-      PRODUCT_PROFILES["CU"].prefer_closetoday, True)
-for p in ("IF", "IH", "IC", "IM", "TA"):
-    check("[2c2] {} 派生 = False（CFFEX/CZCE 无平今指令 → 能力闸门短路走锁仓）".format(p),
-          PRODUCT_PROFILES[p].prefer_closetoday, False)
-# D-A 回归护栏：8 品种必须全部**静态可判定**（非 None）—— 一旦有人把某品种改成
-# 混合计价（一档 rate 一档 per_lot），这里的 None 会立刻把它抓住（而不是静默
-# 退化成运行期比价、又回到"每根 bar 重算一个常量"的老路）。
-check("[2d] 8 品种全部静态可判定（prefer_closetoday 非 None）",
-      [p for p in PRODUCT_PROFILES if PRODUCT_PROFILES[p].prefer_closetoday is None], [])
-# 静态属性与运行期口径必须一致（无参属性 vs at(ref_price)），防止两条路径分叉。
-check("[2e] 静态属性 == 运行期口径（抽样 AU/CU/IF）",
-      [(PRODUCT_PROFILES[k].prefer_closetoday,
-        PRODUCT_PROFILES[k].prefer_closetoday_at(4500.0))
-       for k in ("AU", "CU", "IF")],
-      [(True, True), (True, True), (False, False)])
+print("\n[2] 硬断言：FAK ⟹ 一笔挂 1 手（构造期拒绝，不留静默默认值）")
 
 
-# ══════════════════════════════════════════════════════════════
-print("\n[3] 转移 ④ 三分支 + 保守侧（_decide_exit）")
-# ══════════════════════════════════════════════════════════════
-# 3a：默认开关 True（IF 档案 + CFFEX）→ OPEN 锁仓
+def _ctor_rejects(close_mode, adv, n):
+    try:
+        ExecPolicy(close_mode, adv, n)
+        return False
+    except ValueError:
+        return True
+
+
+check("[2a] 表里 FAK 的品种 = 只有 TA",
+      sorted(k for k in EXEC_POLICY if EXEC_POLICY[k].order_advanced == "FAK"),
+      ["TA"])
+check("[2b] TA 一笔 1 手", EXEC_POLICY["TA"].lots_per_order, 1)
+check("[2c] ★ FAK + N=2 → 构造期 ValueError（硬断言，不是警告）",
+      _ctor_rejects("CLOSE", "FAK", 2), True)
+check("[2d] FAK + N=1 → 合法", ExecPolicy("CLOSE", "FAK", 1).lots_per_order, 1)
+check("[2e] 非法 close_mode / order_advanced / N=0 同样构造期拒绝",
+      [_ctor_rejects("CLOSEX", "FOK", 2), _ctor_rejects("CLOSE", "FOKX", 2),
+       _ctor_rejects("CLOSE", "FOK", 0)], [True, True, True])
+check("[2f] 8 品种全部 N ≥ 1",
+      all(EXEC_POLICY[k].lots_per_order >= 1 for k in EXEC_POLICY), True)
+
+
+print("\n[3] 转移 ④ 两分支（_decide_exit）：按表第 1 列平铺，无兜底分支")
 with tmp_dir("t3a") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF))
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
     act = eng._decide_exit(eng.last_bar)
-    check("[3a] 开关 True（IF）→ ④ OPEN 反向锁仓",
+    check("[3a] IF（表=CLOSE）→ ④ OPEN 反向锁仓",
           (act.transition, act.intent.value, act.side, act.is_exit),
           (4, "open", Side.SHORT, True))
     check("[3a2] target=None（锁仓不指定被平仓单）", act.target, None)
 
-# 3b：开关 False 但交易所非 SHFE/INE → 保守侧 OPEN
-with tmp_dir("t3b") as tmp:
-    cfg = make_cfg("KQ.m@SHFE.AU", exchange="CFFEX")
-    eng = build_engine(tmp, cfg, Instrument(None, _prod("CFFEX")), "b")
-    eng.on_bar(make_bar(1000))
-    eng.positions.add(make_pos(entry_date=D1))
-    act = eng._decide_exit(eng.last_bar)
-    check("[3b] 开关 False + 非 SHFE/INE → 仍走 OPEN 锁仓（保守侧）",
-          (act.intent.value, act.transition), ("open", 4))
-
-# 3c：开关 False + SHFE（AU）→ CLOSETODAY 平今
 with tmp_dir("t3c") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
     eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "c")
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1, vol=3))
     act = eng._decide_exit(eng.last_bar)
-    check("[3c] 开关 False + SHFE → ④ CLOSETODAY 平今",
+    check("[3c] AU（表=CLOSETODAY）→ ④ CLOSETODAY 平今",
           (act.transition, act.intent.value, act.is_exit),
           (4, "closetoday", True))
     check("[3c2] 平今方向 = 净敞口方向（LONG 仓 → 平多）", act.side, Side.LONG)
-    check("[3c3] 平今目标 = 今仓那一笔", act.target.entry_date >= D1, True)
-    check("[3c4] 平今量 = min(|净敞口|, 今仓目标手数) = 3",
-          act.volume, min(3, 3))
+    check("[3c3] 平今目标 = 那笔当日仓（两态机：latest 即唯一目标）",
+          act.target.entry_date >= D1, True)
+    check("[3c4] 平今量 = min(|净敞口|, 目标手数) = 3", act.volume, min(3, 3))
 
-# 3d：无品种档案 → 派生取 False 保守侧 → OPEN
-#   注意：白名单硬约束（_restore）拒绝对未知品种（如 ZZ）构造引擎，实盘启动时
-#   "无档案"本身不会出现 → 这里用 AU 引擎 + 覆写 cfg 模拟"配置注入缺档"
-#   （引擎仅经 _prefer_closetoday 读取 cfg.product_profile，其余不受影响）。
 with tmp_dir("t3d") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
-    eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "d")
-    eng.cfg = SimpleNamespace(product_profile=None)
+    eng = build_engine(tmp, cfg, Instrument(None, None), "d")
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
-    check("[3d] 无品种档案 → _prefer_closetoday=False（保守侧）",
-          eng._prefer_closetoday(1.0), False)
     act = eng._decide_exit(eng.last_bar)
-    check("[3d2] 无档案 → 仍走 OPEN 锁仓（宁可多花一次开仓费，不生成平今单）",
+    check("[3d] 无品种档案 → 仍走 OPEN 锁仓（保守侧）",
           (act.intent.value, act.transition), ("open", 4))
 
+with tmp_dir("t3e") as tmp:
+    cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
+    eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "e")
+    eng.on_bar(make_bar(1000))
+    eng.positions.add(make_pos(entry_date=D1, vol=2))
+    check("[3e] ★ 两态机前提：CLOSETODAY 品种运行态仓单数 = 1（锁仓态不可达）",
+          len(eng.positions.positions), 1)
 
-# ══════════════════════════════════════════════════════════════
-print("\n[4] _pre_trade_check 对 CLOSETODAY 的校验链")
-# ══════════════════════════════════════════════════════════════
+
+print("\n[4] _pre_trade_check 对 CLOSETODAY 的校验链（判据 = 表第 1 列）")
 today_target = SimpleNamespace(entry_date=D1, volume=2, side=Side.LONG,
                                signal_key="X|buy|1")
 past_target = SimpleNamespace(entry_date="2026-09-01", volume=2,
                               side=Side.LONG, signal_key="X|buy|1")
 
-# 4a：非 SHFE/INE → 兜底拒单
 with tmp_dir("t4a") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "a")
     act = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                   target=today_target, is_exit=True, transition=4)
-    check("[4a] CLOSETODAY + 非 SHFE/INE → 'closetoday_not_supported'",
+    check("[4a] CLOSETODAY 但该品种表第 1 列 = CLOSE → 'closetoday_not_supported'",
           eng._pre_trade_check(act, D1, None), "closetoday_not_supported")
 
-# 4b/4c/4d：SHFE 引擎
 with tmp_dir("t4b") as tmp:
     eng = build_engine(tmp, make_cfg("KQ.m@SHFE.AU", exchange="SHFE"),
                        Instrument(None, PRODUCT_PROFILES["AU"]), "b")
     act_ok = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                      target=today_target, is_exit=True, transition=4)
-    check("[4b] CLOSETODAY + SHFE + 今仓目标 → 通过（None）",
+    check("[4b] 表第 1 列 = CLOSETODAY + 今仓目标 + SHFE → 通过（None）",
           eng._pre_trade_check(act_ok, D1, None), None)
     act_past = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                        target=past_target, is_exit=True, transition=4)
@@ -296,7 +283,6 @@ with tmp_dir("t4b") as tmp:
                       target=today_target, is_exit=True, transition=4)
     check("[4d] 平今量 > 目标手数 → 'close_volume_exceeds_target'",
           eng._pre_trade_check(act_big, D1, None), "close_volume_exceeds_target")
-    # 对称：部分平仓也不允许（PositionBook 无减仓 API）
     act_small = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=1,
                         target=today_target, is_exit=True, transition=4)
     check("[4e] 平今量 < 目标手数 → 'close_volume_below_target'",

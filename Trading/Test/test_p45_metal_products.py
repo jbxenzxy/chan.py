@@ -11,8 +11,8 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
        for_product(profile)`）播种；r_multiple_tp 经 resolved_exit_params() 合并
        （品种档案是唯一默认值来源；min_r_points / breakeven_buffer_ticks 已于
        2026-09-14 删除，保本缓冲改为全局比例 breakeven_buffer_r）
-    ④ Instrument.effective_order_advanced 对 SHFE 仍返回 FOK（不破坏 Phase 9 的
-       交易所分支；CZCE 才切 FAK）—— 确认金属走默认 order_advanced
+    ④ Instrument.effective_order_advanced 对 AU/AG/CU 返回 FOK（2026-09-16 起
+       唯一口径 = 品种执行策略表第 2 列，不按交易所分支）—— 确认金属走 FOK
     ⑤ 未知品种仍 product_profile=None（不误伤）
 
 跑法：python test_p45_metal_products.py
@@ -116,17 +116,17 @@ def main():
     check("CU resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_cu["breakeven_buffer_r"], 0.5)
 
-    print("\n[5] effective_order_advanced：SHFE 仍走默认 FOK（P-B：exchange 归档案，"
-          "直接用现成品种构造）")
+    print("\n[5] effective_order_advanced：AU/AG/CU = FOK（表第 2 列）")
     sp_au = Instrument(None, PRODUCT_PROFILES["AU"])
     check("AU(SHFE) advanced=FOK", sp_au.effective_order_advanced(), "FOK")
     sp_ag = Instrument(None, PRODUCT_PROFILES["AG"])
     check("AG(SHFE) advanced=FOK", sp_ag.effective_order_advanced(), "FOK")
     sp_cu = Instrument(None, PRODUCT_PROFILES["CU"])
     check("CU(SHFE) advanced=FOK", sp_cu.effective_order_advanced(), "FOK")
-    # 对照：CZCE 仍强制 FAK（回归，确保金属改动未误伤 Phase 9）
+    # 对照：TA 表第 2 列 = FAK（回归，确保金属改动未误伤）
     sp_czce = Instrument(None, PRODUCT_PROFILES["TA"])
-    check("CZCE 对照仍强制 FAK", sp_czce.effective_order_advanced(), "FAK")
+    check("TA 对照仍 FAK（表第 2 列，非因交易所名）",
+          sp_czce.effective_order_advanced(), "FAK")
 
     print("\n[6] 未知品种不误伤")
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@SHFE.ZZ"})

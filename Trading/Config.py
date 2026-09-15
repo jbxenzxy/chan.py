@@ -504,7 +504,9 @@ class ChannelTimingConfig(BaseModel):
 class BrokerConfig(BaseModel):
     """broker 专属参数（仅 simnow/live 生效；dry_run 忽略）。
 
-    全部报单都是 FOK（中金所 IF/IH/IC/IM 支持；郑商所不支持 FOK）：
+    报单方式（FOK / FAK）逐品种定，**唯一口径 = 品种执行策略表第 2 列**
+    （`Infra/Product.py` 的 `EXEC_POLICY[code].order_advanced`）：
+    IF/IH/IC/IM/AU/AG/CU = FOK，TA = FAK。此处不重复声明、也不按交易所推。
       开仓 OPEN / 解锁 UNLOCK / 锁仓 LOCK / 平仓 CLOSE 四类共用 overprice_ticks（默认 5 tick × 品种 price_tick，IF=1.0 点）。
       入场不成交 → 整笔作废等下一信号；离场不成交 → 立即按最新对手价重报直到成交。
 

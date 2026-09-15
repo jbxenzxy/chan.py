@@ -24,8 +24,10 @@ SimNow 仿真 broker（M2b）
       读仓前先校验行情快照新鲜度：IF 交易时段每 0.5s 一个 tick，quote.datetime 停滞
       超过 BrokerConfig.channel.quote_stale_seconds（默认 30s）判数据陈旧 → 返回 None，引擎对账跳过该侧。
       覆盖"断连重连中"与"TCP 假死"两类场景，且不依赖 tqsdk 版本。
-    - 报单属性 advanced 取自配置 `order_advanced`（默认 "FOK"）——限价
-      立即全部成交否则全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留。
+    - 报单属性 advanced 取自**品种执行策略表第 2 列**
+      （`Instrument.effective_order_advanced()`）—— "FOK" 限价立即全部成交否则
+      全部撤销，由交易所撮合引擎强制执行，杜绝部分成交幽灵残留；"FAK" 部分成交
+      后撤余量（该品种一笔恒挂 1 手时 FAK ≡ FOK）。
       · **入场**（交易信号触发）：全撤 → 本笔作废（rejected），不追价，等下一信号。
         "入场没成功，最多不赚钱，但不会亏钱。"
       · **离场**（L1-L3 止盈止损触发）：全撤 → 立即按最新对手价重新超价报单，最多
@@ -35,9 +37,9 @@ SimNow 仿真 broker（M2b）
         追 100 轮也不可能成交，只会空耗报撤单额度与中金所监管计数（风险 R13）。
       · fill_timeout_open/close 退化为通道异常兜底 watchdog：正常时交易所毫秒级
         给出终态，超时撤单分支仅在断线/回报丢失时兜底。
-      ⚠️ **郑商所不支持 FOK**（tqsdk 直接抛异常）。二期上 CZCE 需把
-      配置 `order_advanced` 切成 "FAK" —— 这是当初把该值收进合约配置的原因，
-      别再把它写死回 Broker 里。
+      ⚠️ 报单属性是**品种属性**（FOK / FAK），由品种执行策略表按品种给定；
+      Broker 只调 `Instrument.effective_order_advanced()` 取生效值，
+      不判交易所、不判品种 —— 别在这里写 `if exchange == ...`。
     - offset：OPEN→OPEN；CLOSE→CLOSE（方向由调用方给的 side 决定）。
       2026-09-10：删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
       规则 ⑸ 保证"今日单离场 = LOCK 反向开仓（offset=OPEN）"、"跨日单离场 = CLOSE
@@ -80,7 +82,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
 from ..Config import BrokerConfig
-from ..Infra.Instrument import Instrument, derive_exchange
+from ..Infra.Instrument import Instrument
 from ..Infra.Records import Order, OrderIntent, Side
 from ..Infra.Clock import now_cn
 from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
@@ -794,18 +796,6 @@ class SimNowBroker(Broker):
                     "请改回 instrument_fetch_policy='strict'",
                     code="instrument_band_degraded", symbol=self._trade_symbol)
             self._instrument_frozen = True
-            # P-B（2026-09-15）：exchange 真值源 = 品种档案（Product.exchange，
-            #   §5.3 裁决）。原"从真实合约 symbol 前缀推导并写入 spec.exchange"
-            #   的就地写入随双类合并删除 —— 改为**对账告警**：行情推导与档案
-            #   不一致时 warn（两个值都打出来），以档案为准、不阻断。
-            ex = derive_exchange(self._trade_symbol)
-            if ex and ex != self.state.exchange:
-                self._instrument_warn(
-                    "行情推导交易所与品种档案不一致: 行情推导={!r} 档案={!r} "
-                    "—— 以档案为准（FOK/FAK、平今能力等分支都读档案值）；"
-                    "若档案填错请改 PRODUCT_PROFILES".format(ex, self.state.exchange),
-                    code="exchange_mismatch", symbol=self._trade_symbol,
-                    derived=ex, profile=self.state.exchange)
             log = logging.getLogger("tg.brokers.simnow")
             if changed:
                 log.info("合约参数已从行情覆盖并冻结: %s", ", ".join(changed))
@@ -959,9 +949,10 @@ class SimNowBroker(Broker):
     # 仍不成交（如涨跌停锁死）才放弃（rejected），由引擎对账机制（增强 B）兜底。
     #
     # 报文（见 Base.INTENT_TO_OFFSET）：OPEN → offset=OPEN，CLOSE → offset=CLOSE。
-    #   CLOSE 恒作用于跨日仓（引擎断言），故中金所下恒为平昨，**不存在平今 CLOSETODAY 报文** ——
-    #   这是"今日单永不 CLOSE"这条规则换来的：系统永远不需要 CLOSETODAY，
-    #   天然绕开六家交易所的平今/平昨指令差异。别把这条口子打开。
+    #   CLOSE 恒作用于跨日仓（引擎断言），故恒为平昨。
+    #   平今 CLOSETODAY 只在**品种执行策略表第 1 列 = CLOSETODAY** 的品种上出现
+    #   （2026-09-16 起；此前由费率派生 + 交易所能力闸门双判，两者均已删除）——
+    #   开不开这个口子由表说了算，Broker 不做任何品种 / 交易所判断。
     #
     # 派发只有两路：OPEN → _submit_open，其余（CLOSE）→ _submit_close。
     # 追不追价由 `is_exit` 决定，不由 intent 决定（理由见 Base 模块 docstring）。
@@ -1156,9 +1147,8 @@ class SimNowBroker(Broker):
         为什么 CLOSE 恒为平昨：规则 ⑹/⑺ 保证 CLOSE **只作用于跨日仓**
         （断言在 Engine._pre_trade_check），今日单离场默认走反向 OPEN 软离场。
         故平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今）在本系统
-        里由费率**单源派生**开启（P-A · 2026-09-15）：品种档案
-        `prefer_closetoday` 判为平今更省 **且** 交易所支持平今（SHFE/INE，
-        `spec.supports_closetoday`）时，转移 ④ 生成 CLOSETODAY 意图 →
+        里由**品种执行策略表第 1 列**开启（2026-09-16）：该品种
+        `ExecPolicy.close_mode == "CLOSETODAY"` 时，转移 ④ 生成 CLOSETODAY 意图 →
         offset=CLOSETODAY、目标恒为**今仓**（引擎 _pre_trade_check 断言）。
         两意图在 P0 可平量判据与成交后今/昨验证上完全相反，见下。
         """
@@ -1382,7 +1372,8 @@ class SimNowBroker(Broker):
     def _wait_finished(self, order, timeout_s: float) -> None:
         """等待委托到达 FINISHED 终态；超时则尝试撤单（通道异常兜底 watchdog）。
 
-        全部报单用 spec.order_advanced（默认 "FOK"），交易所撮合引擎保证毫秒级
+        全部报单用 `Instrument.effective_order_advanced()`（品种执行策略表第 2 列），
+        交易所撮合引擎保证毫秒级
           给出终态（全成/全撤）。本函数退化为通道异常兜底 watchdog——正常永不触发；
           仅当断线/回报丢失导致订单永不到终态时，超时主动撤单防 submit 永久
           阻塞挂死引擎线程（撤单多半也失败，Order 判 rejected 交引擎复核兜底）。

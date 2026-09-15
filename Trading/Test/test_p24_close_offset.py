@@ -23,9 +23,9 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
          规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
          "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨。
         Phase 10（D6 平今开关，2026-09-14）：CLOSETODAY **不再是不可达** ——
-         P-A（2026-09-15）起由品种档案费率**单源派生**：档案
-         `prefer_closetoday`（3× 口径）判平今更省 **且**交易所支持平今
-         （SHFE/INE，`spec.supports_closetoday`）时，转移 ④ 生成
+         P-A（2026-09-15）先由档案费率派生；**2026-09-16 起改为品种执行策略表
+         第 1 列直接给定**（`EXEC_POLICY[code].close_mode == CLOSETODAY`）：
+         代码只读表，不看交易所名字、不算费率。命中该列时转移 ④ 生成
          CLOSETODAY 意图（offset=CLOSETODAY，目标恒为今仓）。本文件的
          CLOSE 恒平昨断言不受影响（引擎 _pre_trade_check 保证两意图各司其职），
          新增 CLOSETODAY 的报单断言见 [6]。
@@ -220,7 +220,7 @@ check("INTENT_TO_OFFSET 恰为三值 {OPEN, CLOSE, CLOSETODAY}（四值已收敛
       {"open": "OPEN", "close": "CLOSE", "closetoday": "CLOSETODAY"})
 check("CLOSE 映射 = CLOSE（不再是 CLOSEANY / CLOSETODAY / CLOSEYESTERDAY）",
       INTENT_TO_OFFSET[OrderIntent.CLOSE], "CLOSE")
-check("CLOSETODAY 映射 = CLOSETODAY（Phase 10，仅 SHFE/INE 消费）",
+check("CLOSETODAY 映射 = CLOSETODAY（表第 1 列 = CLOSETODAY 的品种消费）",
       INTENT_TO_OFFSET[OrderIntent.CLOSETODAY], "CLOSETODAY")
 
 

@@ -79,18 +79,20 @@ class OrderIntent(str, Enum):
       CLOSE        目标恒定是**跨日仓** → 恒为平昨。中金所期指平今费率是平昨的
                    10 倍（xlsx 万2.3 vs 万0.23），对今仓发 CLOSE 会被当平昨处理
                    并按平今收费 —— 绝不。
-      CLOSETODAY  目标恒定是**今仓**，且**仅上期所 / 上期能源（SHFE/INE）可用**
-                   —— 其余四家交易所没有平今指令，传 CLOSETODAY 会直接报错
-                   （守卫：`Instrument.supports_closetoday` + 转移④分支条件）。
+      CLOSETODAY  目标恒定是**今仓**；是否启用 = **品种执行策略表第 1 列**
+                   （`ExecPolicy.close_mode == "CLOSETODAY"`，由用户按费率自己算定）
+                   —— 代码不从费率推导、也不看交易所名字
+                   （守卫：`Engine._pre_trade_check` 校验该品种表第 1 列确为
+                   CLOSETODAY + 转移④ 的分支条件）。
 
       Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
-      刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起
-      "走不走平今"由品种档案费率**单源派生**（Product.prefer_closetoday，
-      3× 口径），不再有手写开关。
+      刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起由品种档案
+      费率单源派生；**2026-09-16 起改为品种执行策略表直接给定** ——
+      决策侧不再读费率（费率数据保留给会计侧 cost_cash）。
     """
     OPEN = "open"     # 开仓 → offset=OPEN（④ 反向开仓锁仓也走它）
     CLOSE = "close"   # 平仓 → offset=CLOSE（中金所下恒为平昨）
-    CLOSETODAY = "closetoday"  # 平今 → offset=CLOSETODAY（仅 SHFE/INE）
+    CLOSETODAY = "closetoday"  # 平今 → offset=CLOSETODAY（按表第 1 列）
 
 
 class AccountState(str, Enum):

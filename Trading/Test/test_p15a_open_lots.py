@@ -261,7 +261,7 @@ check("[1l] 超价合并为单参数 overprice_ticks=5（IF=1.0 点）",
 # [2] 一笔报单挂 N 手（唯一开仓路径：on_signal）
 # ════════════════════════════════════════════════════════════════
 print("\n[2] 一笔报单挂 N 手（max_volume=N → 1 单 N 手）")
-for _n in (1, 2, 5, 20):
+for _n in (1, 2):
     with tmp_dir() as td:
         eng = make_engine(td, max_volume=_n)
         eng.on_bar(make_bar())
@@ -295,6 +295,21 @@ for _n in (1, 2, 5, 20):
         check("[2] N={}：order.volume={}".format(_n, _n), _o.get("volume"), _n)
         check("[2] N={}：order.transition=1（空仓开新仓）".format(_n),
               _o.get("transition"), 1)
+
+# ════════════════════════════════════════════════════════════════
+# [2b] 品种执行策略表第 3 列 = 「一笔挂几手」：与风控上限取小
+# ════════════════════════════════════════════════════════════════
+# 2026-09-16：N 的口径由品种执行策略表给定（IF = 2 手），
+# risk.max_volume 退化为**风控上限** → 实际一笔手数 = min(表, 风控)。
+# 故把 max_volume 调到 5 / 20 时，开仓手数被表的 2 手压住。
+print("\n[2b] 表第 3 列 ∩ 风控上限：max_volume 调大到 5/20 仍只开 2 手")
+for _n in (5, 20):
+    with tmp_dir() as td:
+        eng = make_engine(td, max_volume=_n)
+        check("[2b] N={}：lots_per_signal 仍取自 cfg.risk.max_volume".format(_n),
+              eng.lots_per_signal, _n)
+        check("[2b] ★ N={}：_open_volume() 被品种表第 3 列压到 2 手".format(_n),
+              eng._open_volume(), 2)
 
 # 同向第二信号：D2 删掉的是"笔数静默门"，但**规则 ⑶（运行态不响应信号）仍在**
 #   —— 已持仓（net≠0 → RUNNING）时第二信号被整条忽略，不是被笔数上限挡掉。

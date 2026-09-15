@@ -38,9 +38,9 @@ D-B（生成式 SSOT）之后本文件的职责
 
 外加四条结构性护栏（R2 / R3 / D-A 的防回潮 + 内联设计本身的护栏）：
 
-  [C] `LOCK_PATH_MULT` 必须是 ClassVar（不是 dataclass 字段）
+  [C] `LOCK_PATH_MULT` 必须已从 Product 删除（3× 费率口径判据消亡）
   [D] `fee_overrides` 字段位必须存在（方案 §6.3-b 明令"字段位必须留"）
-  [E] `prefer_closetoday` 必须是**静态属性**（Optional[bool]，非方法）
+  [E] 平今判据 = 品种执行策略表第 1 列 `close_mode`（静态、不读费率）
   [F] 费率数字只许出现在 GENERATED 区块内（手写部分一个字面量都不许有）
 
 跑法：python Trading/Test/test_product_fee_table.py
@@ -80,7 +80,8 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Infra.Product import (BASE, BASE_LABELS, OVERRIDES,  # noqa: E402
+from Trading.Infra.Product import (BASE, BASE_LABELS, CLOSE,  # noqa: E402
+                                   CLOSETODAY, EXEC_POLICY, OVERRIDES,
                                    PRODUCT_PROFILES, Fee, Product)
 
 try:
@@ -179,9 +180,11 @@ _EXPECT_OVERRIDES = {
     "AG": (("6、12合约&2607、2608、2609、2610合约", ("rate", 0.5), None),),
 }
 
-# 平今派生期望（3× 口径：平今单手费 < 3 × 开仓单手费 → 平今）
-_EXPECT_PREFER_CT = {"IF": False, "IH": False, "IC": False, "IM": False,
-                     "AU": True, "AG": True, "CU": True, "TA": False}
+# 平今判据期望（品种执行策略表第 1 列 close_mode；不看交易所、不算费率）
+_EXPECT_CLOSE_MODE = {"IF": "CLOSE", "IH": "CLOSE",
+                      "IC": "CLOSE", "IM": "CLOSE",
+                      "AU": "CLOSETODAY", "AG": "CLOSETODAY",
+                      "CU": "CLOSETODAY", "TA": "CLOSE"}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -335,25 +338,21 @@ else:
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n[4] R2 护栏：LOCK_PATH_MULT 必须是 ClassVar 而非 dataclass 字段")
+print("\n[4] 决策侧不再有平今费率派生（2026-09-16：改由品种执行策略表给定）")
 # ══════════════════════════════════════════════════════════════════
-check("[4a] LOCK_PATH_MULT 不在 dataclasses.fields 里（不是字段）",
+check("[4a] LOCK_PATH_MULT 已从 Product 删除（3× 口径判据随之消亡）",
+      hasattr(Product, "LOCK_PATH_MULT"), False)
+check("[4b] prefer_closetoday 已从 Product 删除（决策侧不再读费率）",
+      hasattr(PRODUCT_PROFILES["IF"], "prefer_closetoday"), False)
+check("[4c] prefer_closetoday_at 已从 Product 删除",
+      hasattr(PRODUCT_PROFILES["IF"], "prefer_closetoday_at"), False)
+check("[4d] LOCK_PATH_MULT 不在 dataclasses.fields 里",
       "LOCK_PATH_MULT" in [f.name for f in dataclasses.fields(Product)], False)
-check("[4b] LOCK_PATH_MULT == 3（阈值口径）", Product.LOCK_PATH_MULT, 3)
-def _ctor_rejects_mult():
-    """尝试用 LOCK_PATH_MULT 构造 —— 期望 TypeError（ClassVar 不是构造参数）。"""
-    try:
-        Product(product="X", r_multiple_tp=1.0, multiplier=1.0,
-                open_fee=Fee("rate", 1.0), LOCK_PATH_MULT=5)
-        return False
-    except TypeError:
-        return True
-
-
-check("[4c] 构造期拒绝传 LOCK_PATH_MULT（不能逐实例覆写阈值）",
-      _ctor_rejects_mult(), True)
-check("[4d] asdict() 不含 LOCK_PATH_MULT（不混进配置快照）",
-      "LOCK_PATH_MULT" in dataclasses.asdict(PRODUCT_PROFILES["IF"]), False)
+check("[4e] exec_policy 是新的 dataclass 字段（执行策略表注入口）",
+      "exec_policy" in [f.name for f in dataclasses.fields(Product)], True)
+check("[4f] ★ 费率数据仍在（会计侧 cost_cash 要用），只是决策侧不读",
+      PRODUCT_PROFILES["CU"].fee_pair(),
+      (Fee("rate", 0.5), Fee("rate", 1.0)))
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -363,7 +362,8 @@ check("[5a] fee_overrides 是 dataclass 字段（字段位已留）",
       "fee_overrides" in [f.name for f in dataclasses.fields(Product)], True)
 check("[5b] 默认值 = 空元组（未消费 → 行为零变化）",
       Product(product="X", r_multiple_tp=1.0, multiplier=1.0,
-              open_fee=Fee("rate", 1.0)).fee_overrides, ())
+              open_fee=Fee("rate", 1.0),
+              exec_policy=PRODUCT_PROFILES["IF"].exec_policy).fee_overrides, ())
 check("[5c] AU 覆盖档已由生成区块填入字段位",
       tuple((lb, (o.kind, o.value), None if ct is None else (ct.kind, ct.value))
             for lb, o, ct in PRODUCT_PROFILES["AU"].fee_overrides),
@@ -379,20 +379,29 @@ check("[5f] 未消费：fee_pair() 仍返回基准档（AU 10 元/手，非覆�
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n[6] D-A 护栏：prefer_closetoday 是静态属性（非方法、非 None）")
+print("\n[6] D-A 护栏（新）：平今判据 = 表第 1 列 close_mode（静态、不读费率）")
 # ══════════════════════════════════════════════════════════════════
-check("[6a] prefer_closetoday 不是可调用对象（已从方法改属性）",
-      callable(PRODUCT_PROFILES["IF"].prefer_closetoday), False)
-for _code in sorted(_EXPECT_PREFER_CT):
-    check("[6b] {} prefer_closetoday == 期望".format(_code),
-          PRODUCT_PROFILES[_code].prefer_closetoday, _EXPECT_PREFER_CT[_code])
-check("[6c] 8 品种全部静态可判定（无 None → 无需运行期价格）",
+check("[6a] close_mode 取值域 = {CLOSE, CLOSETODAY}（无第三种、无 None）",
+      sorted({p.exec_policy.close_mode for p in PRODUCT_PROFILES.values()}),
+      sorted({CLOSE, CLOSETODAY}))
+for _code in sorted(_EXPECT_CLOSE_MODE):
+    check("[6b] {} close_mode == 期望".format(_code),
+          PRODUCT_PROFILES[_code].exec_policy.close_mode,
+          _EXPECT_CLOSE_MODE[_code])
+check("[6c] 8 品种全部静态可判定（无空值 → 不依赖运行期价格/费率比较）",
       [c for c in PRODUCT_PROFILES
-       if PRODUCT_PROFILES[c].prefer_closetoday is None], [])
-check("[6d] 静态属性 ⇄ prefer_closetoday_at 两条路径一致（8 品种全比）",
-      all(PRODUCT_PROFILES[c].prefer_closetoday
-          == PRODUCT_PROFILES[c].prefer_closetoday_at(4500.0)
+       if not PRODUCT_PROFILES[c].exec_policy.close_mode], [])
+check("[6d] Product 上不残留旧费率派生符号",
+      [n for n in ("prefer_closetoday", "prefer_closetoday_at",
+                   "supports_closetoday")
+       if hasattr(PRODUCT_PROFILES["IF"], n)], [])
+check("[6e] Product.exec_policy ⇄ EXEC_POLICY 同源（不是另算一遍）",
+      all(PRODUCT_PROFILES[c].exec_policy is EXEC_POLICY[c]
           for c in PRODUCT_PROFILES), True)
+check("[6f] close_mode 与交易所名字无关：同表不同交易所同值亦允许"
+      "（IF=CLOSE 与 TA=CLOSE 分属 CFFEX/CZCE）",
+      (PRODUCT_PROFILES["IF"].exec_policy.close_mode,
+       PRODUCT_PROFILES["TA"].exec_policy.close_mode), (CLOSE, CLOSE))
 
 
 print("\n" + "=" * 62)

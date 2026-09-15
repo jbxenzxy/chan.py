@@ -195,7 +195,8 @@ def t3_kw_only():
     # 关键字构造不受影响（P-A 起 open_fee 为必填字段，须一并给出）
     p = Product(product="IF", r_multiple_tp=2.0,
                        open_fee=Fee("rate", 0.23), multiplier=300.0,
-                       price_tick=0.2, note="x")
+                       price_tick=0.2, note="x",
+                       exec_policy=PRODUCT_PROFILES["IF"].exec_policy)
     check("关键字构造 OK（price_tick 落对位置）", p.price_tick, 0.2)
     check("关键字构造 OK（note 落对位置）", p.note, "x")
     check("关键字构造 OK（open_fee 落对位置）", p.open_fee.describe(), "万0.23")
@@ -397,9 +398,10 @@ def t8_dead_field_removed():
     """[8] 2026-09-14：死字段 `max_order_volume` 已删除，不许回潮。
 
     背景：该字段在 Phase 8 作为 §5.6「六个缺字段」之一加入，但**从未被消费**
-    （全仓只有字段定义一处、0 处读取）。单笔手数的唯一来源是 `risk.max_volume`
-    —— Config.py → Engine.lots_per_signal → Engine._open_volume；CZCE 钉 1 手
-    由 Engine._open_volume 按交易所硬编码，与本字段无关。
+    （全仓只有字段定义一处、0 处读取）。单笔开仓手数的来源是 `risk.max_volume`
+    （风控上限）与品种执行策略表第 3 列 `lots_per_order`（1 笔挂 N 手）取小者
+    —— Config.py → Engine.lots_per_signal → Engine.lots_per_order；
+    2026-09-16 起不再按交易所硬编码，与本字段无关。
 
     为什么必须钉死：这类"看起来像配置项、实际没有读取点"的字段是最危险的文档
     噪声 —— 下一个人会以为"手数上限在这里配"，改完发现没生效，再花时间排查。
@@ -482,8 +484,10 @@ def t8_dead_field_removed():
     for m in ("effective_order_advanced", "delivery_guard_blocked"):
         check_true("判定方法在 Instrument：{}".format(m),
                    callable(getattr(st, m, None)))
-    check_true("supports_closetoday 是 Instrument 的派生属性",
-               isinstance(Instrument.supports_closetoday, property))
+    check_true("exec_policy 是 Instrument 的派生属性（读品种执行策略表）",
+               isinstance(Instrument.exec_policy, property))
+    check_true("★ Instrument 不再有 supports_closetoday（按交易所名字判断的闸门已删）",
+               not hasattr(Instrument, "supports_closetoday"))
 
 
 def main():

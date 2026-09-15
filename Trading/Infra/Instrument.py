@@ -34,7 +34,7 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
     合约身份 + InstrumentState 的运行时状态合并而成：
         ├ 静态身份（config 转发只读）：signal_symbol / slippage_ticks /
         │   order_advanced / closetoday_first / price_band_points
-        ├ 品种派生（product 转发只读）：exchange / supports_closetoday
+        ├ 品种派生（product 转发只读）：exchange（纯备案）/ exec_policy（执行策略表）
         ├ 运行时身份（行情回填可写）：trade_symbol / last_trade_date
         ├ 有效值（行情回填可写）：price_tick / multiplier / 涨跌停区间 /
         │   verified / source   ← 初值直接取 Product 档案（播种桥已消亡）
@@ -106,9 +106,10 @@ class InstrumentConfig(BaseModel):
     trade_symbol: str = "CFFEX.IF2609"              # 初始月份合约（运行时由行情刷新）
     slippage_ticks: float = 1.0                # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
-    #   "FOK"  全成或全撤 —— 中金所支持，本系统默认依赖它（无部分成交幽灵）
-    #   "FAK"  部分成交后撤余量 —— **郑商所只支持 FAK**
-    #   实际生效值经 Instrument.effective_order_advanced（CZCE 强制 FAK）。
+    #   "FOK"  全成或全撤 —— 本系统默认依赖它（无部分成交幽灵）
+    #   "FAK"  部分成交后撤余量
+    #   ⚠️ 2026-09-16 起：**已标定品种的实际生效值 = 品种执行策略表第 2 列**
+    #   （见 Instrument.effective_order_advanced）；本字段只服务未标定品种的兜底。
     order_advanced: str = "FOK"
     closetoday_first: bool = True                   # 今仓成本开关（2026-09-10 更正注释：**不是**
                                                     #   "平仓优先平今"）。实际语义 = 是否允许按持仓
@@ -273,7 +274,7 @@ class Instrument:
 
     @property
     def product(self) -> Optional["Product"]:
-        """品种档案（exchange / Fee 两档 / prefer_closetoday 的真值源）。"""
+        """品种档案（exchange / Fee 两档 / exec_policy 的真值源）。"""
         return self._product
 
     # —— 有效值转发（D-D · 2026-09-15：不可变 EffectiveSpec，只读）——
@@ -328,24 +329,15 @@ class Instrument:
         return str(self._product.exchange or "") if self._product is not None else ""
 
     @property
-    def supports_closetoday(self) -> bool:
-        """本品种所在交易所是否支持**平今指令**（CLOSETODAY offset）。
+    def exec_policy(self) -> Optional[Any]:
+        """品种执行策略三件事（今仓离场 offset / 报单属性 / 一笔挂几手）。
 
-        Phase 10（D6 · 2026-09-14）：六家交易所里**只有上期所（SHFE）与
-        上期能源（INE）**有 CLOSETODAY 平今指令，其余四家（CFFEX/DCE/CZCE/GFEX）
-        传平今会直接报错。平今分支（转移④ + _pre_trade_check 双处消费）
-        以本属性为能力守卫 —— "走不走平今"由费率派生（Product.
-        prefer_closetoday 单源派生），"能不能走平今"由本属性守卫，
-        两者缺一不可，**本闸门永不可删**。
-
-        P-B 起 exchange 真值源 = 品种档案（P-A 已把档案侧同名派生铺好）；
-        SimNow 的「月份合约 → exchange」推导降级为对账告警（档案与行情
-        推导不一致时 warn，不再写任何对象）。
-        无档案 → 一律 False，保守侧：宁可继续锁仓，也不生成会被拒的平今单。
+        真值源 = `Product.EXEC_POLICY` 表（经 `Product.exec_policy` 字段注入），
+        **代码只读不推** —— 不读费率、不看交易所名字。未标定品种 → None，
+        调用方按保守侧处理（报单 FOK、今仓走 CLOSE 反向锁仓）。
         """
-        if self._product is None:
-            return False
-        return self._product.supports_closetoday
+        p = self._product
+        return getattr(p, "exec_policy", None) if p is not None else None
 
     def __repr__(self) -> str:
         return ("Instrument(trade_symbol={!r}, exchange={!r}, price_tick={!r}, "
@@ -356,22 +348,23 @@ class Instrument:
 
     # ---------- 报单属性 / 交割护栏（原 InstrumentSpec 静态判定，P-B 迁入）----------
     def effective_order_advanced(self) -> str:
-        """Phase 9（FOK/FAK 按交易所切换）：返回实际报单用的 advanced 属性。
+        """返回实际报单用的 advanced 属性（FOK / FAK）。
 
-        郑商所（CZCE）是唯一不支持 FOK 的交易所（tqsdk 限价+FOK 仅拒郑商所期货），
-        故 CZCE **强制**切 FAK，忽略 `order_advanced` 配置。其余交易所沿用
-        配置值（默认 "FOK"）。
+        2026-09-16 起**唯一口径 = 品种执行策略表第 2 列**（`EXEC_POLICY`），
+        取代原 Phase 9 的「CZCE 强制 FAK」交易所分支 —— 用户明令：代码里不得
+        出现按交易所名字判断走向的逻辑，只看品种、只看表。
 
-        为什么要集中到这里而不是在 Broker/ 里判 exchange：A2 既定"报单属性一处
-        配置、所有 insert_order 调用点读取"，加交易所分支也只改这一处，避免
-        Broker/ 里散落 `if exchange=="CZCE"`。
+        未标定品种（无档案 / 档案无策略行）→ 回落部署配置 `order_advanced`
+        （默认 "FOK"，保守侧）。
 
-        配套约束（见 Engine._decide_action / _open_volume）：CZCE 的 OPEN 手数钉死 1
-        —— 单笔 1 手下 FAK ≡ FOK（没有"剩余"可撤），报单填充三态（待报/全成/全撤）
-        不变量 4 天然保持，无需扩展状态机、无需补簿。
+        ⚠️ 配套不变式：**FAK 的品种一笔必须挂 1 手** —— 单笔 1 手下 FAK ≡ FOK
+        （没有"剩余"可撤），报单填充三态（待报/全成/全撤）不变量 4 天然保持，
+        无需扩展状态机、无需补簿。该不变式由 `ExecPolicy.__post_init__`
+        在构造期硬断言（改表即炸，不留静默默认值）。
         """
-        if self.exchange == "CZCE":
-            return "FAK"
+        pol = self.exec_policy
+        if pol is not None:
+            return str(pol.order_advanced)
         return self.order_advanced
 
     def delivery_guard_blocked(self, today: str, threshold_days: int = 1) -> bool:
@@ -567,25 +560,3 @@ def _weekdays_between(start: str, end: str) -> int:
         if d.weekday() < 5:
             n += 1
     return n
-
-
-def derive_exchange(symbol: str) -> str:
-    """从合约/主连 symbol 推导交易所代码（Phase 8.1 · O-1）。
-
-    支持两种形态（tqsdk 惯例）：
-      · 真实月份合约："CFFEX.IF2609" → "CFFEX"、"SHFE.au2608" → "SHFE"
-      · 天勤主连：    "KQ.m@CZCE.TA"  → "CZCE"（取 "@" 后段的交易所前缀）
-    解析不出（空串 / 不含 "." 分隔）→ 返回 ""（不猜 —— exchange 是 Phase 9
-    FOK/FAK 分支的判据，宁缺勿错）。结果统一大写。
-
-    P-B（2026-09-15）：exchange 真值源 = 品种档案（Product.exchange）。
-    本函数降级为**对账工具**：SimNow / main 把行情推导值与档案值比对，
-    不一致 → warn 告警，**不再写任何对象**（原 spec.exchange = derive_exchange(…)
-    的就地写入随 P-B 删除）。
-    """
-    raw = str(symbol or "").strip()
-    if "." not in raw:
-        return ""
-    s = raw.split("@", 1)[1] if "@" in raw else raw
-    head = s.split(".", 1)[0].strip().upper()
-    return head

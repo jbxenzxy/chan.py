@@ -5,8 +5,8 @@ P41 报单意图 → CTP offset 只有三个值（2026-09-11 / Phase 10 三值�
 背景（一期架构约束 A4 / 文档 §5.2 / 退役 p11）
 -------------------------------------------------
 `OrderIntent` 从旧版的 4 值（open / close / lock / unlock）收敛为 2 值
-（OPEN / CLOSE）；Phase 10（D6 平今开关）追加第 3 值 **CLOSETODAY**（平今，
-仅上期所 / 上期能源 SHFE/INE 可用）。CTP 报文 offset 由 `Broker/Base.INTENT_TO_OFFSET`
+（OPEN / CLOSE）；Phase 10（D6 平今开关）追加第 3 值 **CLOSETODAY**（平今）。
+CTP 报文 offset 由 `Broker/Base.INTENT_TO_OFFSET`
 **唯一**决定（见 `SimNow.submit` 注释："offset 由 INTENT_TO_OFFSET 决定"）。
 
 本测试钉死这条映射：
@@ -19,9 +19,10 @@ P41 报单意图 → CTP offset 只有三个值（2026-09-11 / Phase 10 三值�
 为什么可以断言：offset 是纯查表，无运行时分支；这是"净敞口模型"能成立的前提
 （④ 锁仓与 ① 开仓都走 OPEN、⑤ 平仓走 CLOSE、④ 平今分支走 CLOSETODAY，
 靠 is_exit / intent 区分语义而非靠不同的 offset）。若有人偷偷加回 lock/unlock，
-本测试立即变红；CLOSETODAY 的**可用边界**（仅 SHFE/INE）由
-`Instrument.supports_closetoday` 守卫（引擎 _pre_trade_check + 转移④
-分支条件双处消费），见 test_p51。
+本测试立即变红；CLOSETODAY 的**可用边界**由品种执行策略表第 1 列
+（`ExecPolicy.close_mode`，2026-09-16 起取代原「交易所能力守卫」与
+「费率 3× 派生开关」）守卫：引擎 _pre_trade_check + 转移④ 分支条件双处
+消费，见 test_p51。
 
 跑法：python Trading/Test/test_p41_intent_offset_two.py
 """
@@ -91,7 +92,7 @@ print("\n[3] 语义钉死：OPEN→OPEN，CLOSE→CLOSE（平昨），CLOSETODAY
 check("[3a] OPEN 意图恒映射 offset=OPEN", INTENT_TO_OFFSET[OrderIntent.OPEN], "OPEN")
 check("[3b] CLOSE 意图恒映射 offset=CLOSE（跨日仓恒平昨）",
       INTENT_TO_OFFSET[OrderIntent.CLOSE], "CLOSE")
-check("[3c] CLOSETODAY 意图恒映射 offset=CLOSETODAY（Phase 10 平今，仅 SHFE/INE）",
+check("[3c] CLOSETODAY 意图恒映射 offset=CLOSETODAY（表第 1 列 = CLOSETODAY）",
       INTENT_TO_OFFSET[OrderIntent.CLOSETODAY], "CLOSETODAY")
 
 

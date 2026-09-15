@@ -58,7 +58,7 @@ from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.Period import bar_secs_for
-from ..Infra.Product import Product, assert_product_allowed
+from ..Infra.Product import CLOSETODAY, Product, assert_product_allowed
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.StateDB import Store
@@ -941,25 +941,37 @@ class TradingEngine(ReconcileMixin):
     #       `_decide_exit` 三个方法里判定，别处不许再写 `if net == 0` 之类
     #       的内联判定 —— 二期加品种护栏时不用回头找"还有哪里判了三态"。
     #   A3：`_execute` 是全引擎**唯一**的报单出口，前面挂 `_pre_trade_check`
-    #       校验链（二期 Q1 全品种 / Q2 平今开关 / Q3 交割月的护栏都往这条链上加，
+    #       校验链（二期 Q1 全品种 / Q3 交割月的护栏都往这条链上加，
     #       不碰转移表结构）。
     # ════════════════════════════════════════════════════════════════
+    @property
+    def lots_per_order(self) -> int:
+        """一笔报单挂几手 —— **开仓 / 平仓手数的唯一口径**（2026-09-16）。
+
+        = min(风控上限 `lots_per_signal`（= risk.max_volume）,
+              品种执行策略表第 3 列 `lots_per_order`)。
+        两个闸门取小：表说的是"这个品种一笔挂几手"，风控说的是"单笔手数上限"。
+
+        ⚠️ 动态属性（不是 __init__ 里算好的常量）：`lots_per_signal` 允许
+        运行期被改（对账/降级路径），取小必须每次重算。
+        """
+        cap = int(self.lots_per_signal)
+        pol = getattr(self.state, "exec_policy", None)
+        if pol is not None:
+            cap = min(cap, int(pol.lots_per_order))
+        return cap
+
     def _open_volume(self) -> int:
-        """Phase 9（CZCE）：OPEN 手数钉死 1 —— 郑商所不支持 FOK，单笔 1 手下
-        FAK ≡ FOK（没有"剩余"可撤），报单填充三态（待报/全成/全撤）不变量 4 天然
-        保持，无需扩展状态机、无需补簿。
+        """一笔报单挂几手 —— **开仓手数的唯一来源**。
 
-        其余交易所沿用 lots_per_signal（= risk.max_volume，当前默认 2）。
+        2026-09-16 起唯一口径 = `lots_per_order`（品种执行策略表第 3 列 ∩ 风控
+        上限），取代原 Phase 9 的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所
+        名字，只读表（用户第 3 轮 ⑵ 明令）。
 
-        CLOSE 手数 = min(lots_per_signal, 持仓) 自然跟随：CZCE 的 OPEN 恒为 1 →
-        持仓恒为 1 → 平仓也 1 手，无需单独钉（见 _decide_action 转移 ③）。
-
-        注意：设计上**一次信号只报 1 笔**，这里只是把那 1 笔的手数从 N 钉成 1，
+        注意：设计上**一次信号只报 1 笔**，这里只是决定那 1 笔挂几手，
         **没有任何拆单**（拆 N 笔 1 手的逻辑不存在，也不允许存在）。
         """
-        if self.state.exchange == "CZCE":
-            return 1
-        return self.lots_per_signal
+        return self.lots_per_order
 
     def _decide_action(self, sig: Signal, today: str) -> Optional["_Action"]:
         """交易信号到达时的动作决策（转移 ①②③）。**纯函数：不改任何状态。**"""
@@ -968,7 +980,8 @@ class TradingEngine(ReconcileMixin):
             return None                                    # 规则 ⑶
         if st is AccountState.FLAT:
             # 转移 ①：空仓 → OPEN（信号方向），一笔挂 _open_volume() 手
-            #   （CZCE 钉 1，其余交易所 lots_per_signal；设计上一次信号只 1 笔，无拆单）
+            #   （= lots_per_order：品种执行策略表第 3 列 ∩ 风控上限；
+            #     设计上一次信号只 1 笔，无拆单）
             return _Action(OrderIntent.OPEN, sig.side, self._open_volume(),
                            None, is_exit=False, transition=1)
 
@@ -1005,25 +1018,23 @@ class TradingEngine(ReconcileMixin):
         net_side = Side.LONG if net > 0 else Side.SHORT
         today = self._current_trading_day(bar)
         if latest.entry_date >= today:
-            # 转移 ④：今日仓 → 默认反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
-            #   P-A 平今单源派生（2026-09-15，取代 Phase 10 手写布尔）：
-            #   品种档案费率判"平今更省"（`prefer_closetoday`，3× 口径：
-            #   平今 2 笔 vs 锁仓 4 笔 ⟺ 平今费 < 3× 开仓费）**且**交易所
-            #   支持平今（SHFE/INE，`instrument.supports_closetoday` 能力闸门，永不可删）
-            #   时，改为直接 CLOSETODAY 平今 —— 付平今费、今仓直接清零 → 回空仓态。
-            #   开关缺省（无品种档案）/ 交易所不支持 / 费率判锁仓 → 走锁仓，保守侧。
-            #   D-A（2026-09-15）：派生结论已在 Product **构造期静态冻结**
-            #   （8 品种两档计价方式恒相同 → 比较式里价格约掉），此处不再重算；
-            #   传入场价只为"混合计价"兜底（届时档案返回 None，走运行期口径）。
-            if (self.state.supports_closetoday
-                    and self._prefer_closetoday(float(latest.entry_price))):
-                today_target = _oldest([
-                    p for p in self.positions.positions
-                    if p.side is net_side and p.entry_date >= today])
-                if today_target is not None:
-                    return _Action(OrderIntent.CLOSETODAY, net_side,
-                                   min(abs(net), today_target.volume),
-                                   today_target, is_exit=True, transition=4)
+            # 转移 ④：今日仓离场。**唯一口径 = 品种执行策略表第 1 列**
+            #   （`ExecPolicy.close_mode`） —— 不看交易所名字、不算费率
+            #   （用户 2026-09-16 拍板：人算 → 改表 → 启动，代码只读表）。
+            #
+            #   · CLOSETODAY → 直接平今（今仓清零 → 回空仓态）。
+            #     手数 = min(净敞口, 该笔手数)：平仓必须平满目标，
+            #     故这里**不套** `lots_per_order`（那顶帽子只属于 OPEN）。
+            #     两态机：这类品种的运行态**有且只有一笔当日仓**（只能由转移①
+            #     产生、平完即空仓），锁仓态**结构性不可达** —— 所以 `latest`
+            #     就是那笔、也就是唯一的平今目标：不必再查一次 positions，
+            #     也不存在"找不到目标"的分支（故无兜底、无 Optional）。
+            #   · CLOSE → 反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
+            _pol = getattr(self.state, "exec_policy", None)
+            if _pol is not None and _pol.close_mode == CLOSETODAY:
+                return _Action(OrderIntent.CLOSETODAY, net_side,
+                               min(abs(net), latest.volume),
+                               latest, is_exit=True, transition=4)
             return _Action(OrderIntent.OPEN, _opposite(net_side), abs(net),
                            None, is_exit=True, transition=4)
         # 转移 ⑤：跨日仓 → CLOSE（净敞口方向），对冲目标 = 同向最早一笔
@@ -1034,33 +1045,6 @@ class TradingEngine(ReconcileMixin):
         return _Action(OrderIntent.CLOSE, net_side,
                        min(abs(net), target.volume), target,
                        is_exit=True, transition=5)
-
-    def _prefer_closetoday(self, ref_price: float) -> bool:
-        """平今取舍（P-A 单源派生 · D-A 静态化 · 2026-09-15）。
-
-        True = 今仓离场走 CLOSETODAY 平今；False = 反向开仓锁仓（保守侧）。
-
-        判定唯一来源 = 品种档案 `Product.prefer_closetoday`（3× 口径纯派生：
-        平今路径 2 笔 vs 锁仓路径 4 笔）。该结论在 **Product 构造期**已算好
-        （D-A）：8 品种两档计价方式恒相同 → 价格约掉 → 与传入的 ref_price 无关。
-        故本方法直接读静态属性，**不再每次重算**；`ref_price` 仅在档案返回
-        None（一档 rate 一档 per_lot 的混合计价）时才被消费。
-
-        无品种档案 → False（保守侧：宁可多花一次开仓费，不生成平今单）——
-        无档案品种理论上已被白名单闸门拒绝启动，此处仅为防御。
-
-        注意：交易所能力闸门（`instrument.supports_closetoday`）**不在本方法里**，
-        由调用点（转移④）先闸 —— 能力判据读运行时有效 exchange（Instrument），
-        档案侧 exchange 仅作纯函数独立使用时的兜底，两层各司其职。
-        """
-        profile = self.cfg.product_profile
-        if profile is None:
-            return False
-        static = profile.prefer_closetoday
-        if static is None:
-            # 混合计价：价格不可约，落回运行期口径（当前 8 品种都不会走到这里）
-            return profile.prefer_closetoday_at(ref_price)
-        return bool(static)
 
     def _check_spec_drift(self) -> None:
         """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
@@ -1109,8 +1093,9 @@ class TradingEngine(ReconcileMixin):
                 source=self.state.source)
 
     # 2026-09-15 P-A 删除 _check_closetoday_economy（共 36 行）：
-    #   平今经济性从"成交后建议"改为档案费率启动即派生（Product.prefer_closetoday），
-    #   建议与执行分叉的裂缝消除。
+    #   平今经济性从"成交后建议"改为档案费率启动即派生（Product.prefer_closetoday）；
+    #   2026-09-16 起再改一次：改为**品种执行策略表第 1 列直接给定**
+    #   （ExecPolicy.close_mode）—— 决策侧不再读费率，建议与执行分叉的裂缝消除。
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
                          ref_price: float = 0.0) -> Optional[str]:
@@ -1208,12 +1193,14 @@ class TradingEngine(ReconcileMixin):
                 return "no_time_anchor"
             return None
         # ── CLOSE / CLOSETODAY ──
-        # Phase 10（D6）：CLOSETODAY 仅上期所/上期能源（SHFE/INE）可用，其余
-        # 交易所传平今会直接报错。转移④ 的分支条件已按 `supports_closetoday`
-        # 生成动作，这里再兜一道（防未来新增调用点直接构造 CLOSETODAY 动作）。
-        if (act.intent is OrderIntent.CLOSETODAY
-                and not self.state.supports_closetoday):
-            return "closetoday_not_supported"
+        # 2026-09-16 起判据换源：不看"交易所是否支持平今"，而是看
+        # **该品种执行策略表第 1 列是否就是 CLOSETODAY** —— 表是唯一事实源，
+        # 动作本来就照着表生成；这里再兜一道是防未来新增调用点绕过
+        # `_decide_exit` 直接构造 CLOSETODAY 动作。
+        if act.intent is OrderIntent.CLOSETODAY:
+            _pol = getattr(self.state, "exec_policy", None)
+            if _pol is None or _pol.close_mode != CLOSETODAY:
+                return "closetoday_not_supported"
         if act.target is None:
             return "close_without_target"
         if not act.target.entry_date:

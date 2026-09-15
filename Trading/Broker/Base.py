@@ -75,15 +75,16 @@ def build_broker(name: str, instrument: "Instrument",
 #   实盘 insert_order 本地抛异常 → 跨日解锁 100% 失败。
 #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
 #
-# CLOSETODAY 的可用边界（A4 → Phase 10 落地）：**仅上期所（SHFE）/ 上期能源（INE）**
-# 有平今指令，其余四家（含中金所）传 CLOSETODAY 会直接报错 —— 引擎侧由
-# `Instrument.supports_closetoday`（品种档案 exchange 派生）守卫（转移④ 的分支条件 + _pre_trade_check 校验链）。
+# CLOSETODAY 的启用判据（2026-09-16）：**品种执行策略表第 1 列**
+#   （`ExecPolicy.close_mode == "CLOSETODAY"`）—— 用户按费率自己算定后填表，
+#   代码只读表，不从费率推导、也不看交易所名字（原按 SHFE/INE 能力守卫的
+#   `Instrument.supports_closetoday` 已删除）。
+#   引擎侧守卫 = 转移④ 分支条件 + `_pre_trade_check`（校验该品种表第 1 列确为 CLOSETODAY）。
 # 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 启用第三项。
-# P-A（2026-09-15）：走不走平今由品种档案费率单源派生（Product.prefer_closetoday）。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
     OrderIntent.OPEN: "OPEN",              # 买开 / 卖开；④ 反向开仓锁仓也走它
     OrderIntent.CLOSE: "CLOSE",            # 买平 / 卖平；恒作用于跨日仓（平昨）
-    OrderIntent.CLOSETODAY: "CLOSETODAY", # 平今；仅 SHFE/INE，目标恒为今仓
+    OrderIntent.CLOSETODAY: "CLOSETODAY", # 平今；按品种执行策略表启用，目标恒为今仓
 }
 
 

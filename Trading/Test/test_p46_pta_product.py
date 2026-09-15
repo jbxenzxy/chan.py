@@ -6,7 +6,8 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
   · Trading 网关品种档案补齐第 8 个品种：PTA（CZCE，Tier 2 能源化工），
     使 PRODUCT_PROFILES = IF/IH/IC/IM + AU/AG/CU + TA；
   · 品种参数档案**不是限制**：乘数/tick 实盘自动从行情取（A′ fail-closed）、
-    exchange 自动派生（CZCE→FAK）、R 下限默认 3 点（商品档经验未积累前统一
+    报单方式由品种执行策略表第 2 列给定（TA = FAK；2026-09-16 起不再由
+    exchange 派生）、R 下限默认 3 点（商品档经验未积累前统一
     用默认，同 IF/IH=3 / IC/IM=5 的经验标定路径）。未知品种不构成"不可用"。
 
 本测试锁死的断言：
@@ -15,8 +16,8 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
   [3] TradingConfig 品种档案（Fix A；Phase 3 起为**显式播种**）：TA 的
       multiplier / price_tick 经 main._seed_instrument() 播种；r_multiple_tp 经
       resolved_exit_params() 合并（min_r_points 已于 2026-09-14 删除）
-  [4] TA 的 CZCE 报单语义（Phase 9）：exchange=CZCE → effective_order_advanced()
-      返回 FAK、Engine._open_volume() 钉 1 手 —— 档案只管品种参数、不管报单属性
+  [4] TA 的报单语义：表第 2 列 → effective_order_advanced() 返回 FAK、
+      表第 3 列 → _open_volume() = 1 手 —— 报单属性由表给，不看 exchange 名字
   [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
       （2026-09-13 拍板：不在白名单不允许启动，无需告警）；已知品种正常启动
 
@@ -164,17 +165,19 @@ def main():
     check("TA price_tick=2.0（档案真值）", c_ta.product_profile.price_tick, 2.0)
     check("TA product_profile 命中", c_ta.product_profile.product, "TA")
 
-    print("\n[4] PTA 的 CZCE 报单语义（P-B：exchange 归品种档案，报单属性由其派生）")
+    print("\n[4] PTA 的报单语义（2026-09-16：唯一口径 = 品种执行策略表）")
     sp_ta = Instrument(None, PRODUCT_PROFILES["TA"])
     check("TA(CZCE) advanced=FAK", sp_ta.effective_order_advanced(), "FAK")
     with tmp_dir() as td:
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
-        check("TA(CZCE) _open_volume()=1（钉 1 手）", eng_ta._open_volume(), 1)
+        check("TA _open_volume()=1（表第 3 列 = 1 笔 1 手）",
+              eng_ta._open_volume(), 1)
         # P-B：配置 frozen、exchange 归档案 —— "配错交易所"用现场档案注入 spec 表达
         eng_ta.state = Instrument(None, _dc_replace(
             PRODUCT_PROFILES["TA"], exchange="SHFE"))
-        check("TA 配错交易所(SHFE) _open_volume() 走 lots_per_signal=2（配置责任）",
-              eng_ta._open_volume(), 2)
+        check("★ TA 配错交易所(SHFE) 仍按表：_open_volume()=1"
+              "（不看交易所名字 —— 表第 3 列说了算，配错交易所不再改变手数）",
+              eng_ta._open_volume(), 1)
 
     print("\n[5] 品种白名单硬约束：未知品种引擎拒绝启动（2026-09-13 拍板）")
     with tmp_dir() as td:

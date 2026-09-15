@@ -63,8 +63,8 @@ from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Instrument import (  # noqa: E402
-    Instrument, InstrumentConfig, derive_exchange)
+from Trading.Infra.Instrument import (Instrument,  # noqa: E402
+                                      InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 from dataclasses import replace as _dc_replace  # noqa: E402
@@ -268,30 +268,30 @@ _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
 # ════════════════════════════════════════════════════════════════
 # [1] Instrument.effective_order_advanced() 契约
 # ════════════════════════════════════════════════════════════════
-print("\n[1] Instrument.effective_order_advanced()：CZCE 强制 FAK，其余沿用配置"
-      "（P-B：exchange 真值源 = 品种档案）")
-check("[1a] 无档案 Instrument（exchange=''）→ FOK",
+print("\n[1] Instrument.effective_order_advanced()：唯一口径 = 品种执行策略表第 2 列"
+      "（2026-09-16 起不再按交易所名字分支）")
+check("[1a] 无档案 Instrument → FOK（回落部署配置 order_advanced）",
       Instrument(None).effective_order_advanced(), "FOK")
-check("[1b] CFFEX → FOK",
-      Instrument(None, _prod("CFFEX")).effective_order_advanced(), "FOK")
-check("[1c] ★ CZCE → FAK（不论 order_advanced 默认 FOK）",
-      Instrument(None, _prod("CZCE")).effective_order_advanced(), "FAK")
-check("[1d] CZCE 且 order_advanced 显式='FOK' → 仍 FAK（郑商所强制覆盖配置）",
-      Instrument(InstrumentConfig(order_advanced="FOK"), _prod("CZCE")).effective_order_advanced(),
+check("[1b] IF 档案 → FOK",
+      Instrument(None, PRODUCT_PROFILES["IF"]).effective_order_advanced(), "FOK")
+check("[1c] ★ TA 档案 → FAK（表第 2 列；与交易所名字无关）",
+      Instrument(None, PRODUCT_PROFILES["TA"]).effective_order_advanced(), "FAK")
+check("[1d] ★ TA 档案 + 配置 order_advanced='FOK' → 仍 FAK（表覆盖配置）",
+      Instrument(InstrumentConfig(order_advanced="FOK"),
+                 PRODUCT_PROFILES["TA"]).effective_order_advanced(), "FAK")
+check("[1e] ★ IF 档案 + 配置 order_advanced='FAK' → 仍 FOK（表覆盖配置）",
+      Instrument(InstrumentConfig(order_advanced="FAK"),
+                 PRODUCT_PROFILES["IF"]).effective_order_advanced(), "FOK")
+for _k in ("AU", "AG", "CU"):
+    check("[1f] {} 档案 → FOK（表第 2 列）".format(_k),
+          Instrument(None, PRODUCT_PROFILES[_k]).effective_order_advanced(), "FOK")
+check("[1g] ★ 配错交易所不改表结论：TA 档案改 exchange='SHFE' → 仍 FAK",
+      Instrument(None, _dc_replace(PRODUCT_PROFILES["TA"],
+                                   exchange="SHFE")).effective_order_advanced(),
       "FAK")
-check("[1e] CZCE 且 order_advanced 显式='FAK' → FAK",
-      Instrument(InstrumentConfig(order_advanced="FAK"), _prod("CZCE")).effective_order_advanced(),
-      "FAK")
-check("[1f] DCE → 沿用 order_advanced（FOK）",
-      Instrument(None, _prod("DCE")).effective_order_advanced(), "FOK")
-check("[1g] SHFE → 沿用 order_advanced（FOK）",
-      Instrument(None, _prod("SHFE")).effective_order_advanced(), "FOK")
-check("[1h] INE → 沿用 order_advanced（FOK）",
-      Instrument(None, _prod("INE")).effective_order_advanced(), "FOK")
-check("[1i] GFEX → 沿用 order_advanced（FOK）",
-      Instrument(None, _prod("GFEX")).effective_order_advanced(), "FOK")
-check("[1j] derive_exchange('KQ.m@CZCE.TA') == 'CZCE'（exchange 推导正确，Phase 8 已就位）",
-      derive_exchange("KQ.m@CZCE.TA"), "CZCE")
+check("[1h] 表第 3 列：TA 一笔 1 手 / IF 一笔 2 手",
+      (PRODUCT_PROFILES["TA"].exec_policy.lots_per_order,
+       PRODUCT_PROFILES["IF"].exec_policy.lots_per_order), (1, 2))
 
 
 # ════════════════════════════════════════════════════════════════

@@ -47,11 +47,11 @@ from Trading.Config import TradingConfig, resolved_exit_params     # noqa: E402
 from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                       # noqa: E402
 from Trading.Infra.Instrument import (Instrument,              # noqa: E402
-                                          InstrumentConfig,
-                                          derive_exchange)
+                                          InstrumentConfig)
 from Trading.Infra.Period import SUPPORTED_FREQS, bar_secs_for, bars_per_day
 from Trading.Infra.Clock import SESSION_SECS
 from Trading.Infra.StateDB import Store  # noqa: E402
+from Trading.Infra.Product import CLOSETODAY  # noqa: E402
 
 from Trading.Infra.Clock import now_cn  # noqa: E402
 
@@ -75,29 +75,30 @@ _STOP_REQUEST = ".stop_request"
 
 
 def _fee_banner(cfg: TradingConfig) -> None:
-    """启动费率横幅（P-A · 2026-09-15，交接文档 §6.3-d）。
+    """启动横幅（P-A · 2026-09-15 费率 + 2026-09-16 品种执行策略表）。
 
     取代已删除的运行期"平今经济性告警"（closetoday_suggestion）——
-    费率是静态档案，启动第一屏就给出两档费率与派生结论，
+    费率是静态档案、执行策略是静态表，启动第一屏就给出结论，
     比"等成交后才告警"早得多、也不用状态机。只打一次，不刷屏。
+
+    ⚠️ 2026-09-16：结论**直接读执行策略表**（用户按费率自己算定后填表），
+    不再由代码比费率 —— 决策侧零费率引用。
     """
     p = cfg.product_profile
     if p is None:
         return
     open_fee, ct_fee = p.fee_pair()
-    if not p.supports_closetoday:
-        concl = "交易所无平今指令 → 今仓离场走反向锁仓（平今指令已禁用）"
-    elif p.prefer_closetoday:
-        concl = "平今更省（平今费 < 3× 开仓费）→ 今仓离场直接平今"
-    elif p.prefer_closetoday is False:
-        concl = "平今更贵（平今费 ≥ 3× 开仓费）→ 今仓离场走反向锁仓"
+    pol = p.exec_policy
+    if pol.close_mode == CLOSETODAY:
+        concl = "今仓离场 = CLOSETODAY（直接平今，两态机：平完即回空仓）"
     else:
-        concl = ("两档计价方式不同（rate/per_lot 混合）→ 结论随价格变，"
-                 "需按现价比价（当前品种表不涉及）")
+        concl = "今仓离场 = CLOSE（反向开仓锁仓，三态机：次日拆锁）"
     print("[gw] 品种 {}（{}）：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
         p.product, p.exchange or "?", open_fee.describe(),
         open_fee.describe(), ct_fee.describe()))
     print("[gw]   → " + concl)
+    print("[gw]   执行策略：报单 {} ｜ 一笔 {} 手（品种执行策略表第 2/3 列，代码只读不推）".format(
+        pol.order_advanced, pol.lots_per_order))
 
 
 def build_runtime(args):
@@ -217,16 +218,8 @@ def build_runtime(args):
     # 没有行情连接，合约参数用品种档案值 —— 但必须显式标记来源，让"回测口径"能自证。
     # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
     # 取不到则 verified=False → Engine 闸门拒单（fail-closed）。
-    # P-B（2026-09-15）：exchange 真值源 = 品种档案 —— 离线不再写对象
-    #   （原 spec.exchange = derive_exchange(...) 就地写入随双类合并删除），
-    #   改为对账提示：symbol 推导与档案不一致时显式说出来。
     if getattr(broker, "is_offline", False):
         instr.mark_config_offline()
-        _ex = derive_exchange(instr.signal_symbol)
-        if _ex and _ex != instr.exchange:
-            print("[gw] ⚠ 离线对账：symbol 推导交易所 {!r} ≠ 品种档案 exchange {!r}"
-                  "（以档案为准；若档案填错请改 PRODUCT_PROFILES）".format(
-                      _ex, instr.exchange))
         print("[gw] ⚠ 离线模式：tick/乘数取自品种档案（source=CONFIG_OFFLINE），"
               "可能与交易所口径不符，回测结果不可直接外推实盘")
 

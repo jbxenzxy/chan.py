@@ -42,8 +42,8 @@ A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
   [9] Phase 8.1（O-2/O-3）：broker 侧故障诊断经 notify/drain_alerts 回流
       Engine.alert（D11 通道，§5.9.4 项 5 "Broker → Engine.alert()"）；
   [10] Phase 8.1（O-6）：组合反例 policy=off × 坏行情 → 仍 unverified + 拒单；
-  [11] Phase 8.1（O-1）：derive_exchange 从真实合约/主连 symbol 推导交易所，
-      在线成功路径填充 spec.exchange（exchange 是**静态**项，Phase 3 仍留 spec）。
+  （原 [11] Phase 8.1（O-1）「symbol → 交易所」对账已于 2026-09-16 整节删除：
+    exchange 是纯备案字段，对账只会给一个不参与逻辑的字段发噪音告警。）
 
 跑法：python Trading/Test/test_p42_price_from_quote.py
 """
@@ -85,8 +85,8 @@ from Trading.Config import (BrokerConfig, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine, _Action  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Instrument import (  # noqa: E402
-    Instrument, InstrumentConfig, derive_exchange)
+from Trading.Infra.Instrument import (Instrument,  # noqa: E402
+                                      InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 
@@ -454,32 +454,6 @@ def _cap_alert(level, code, msg, **extra):
 eng10b.alert = _cap_alert
 eng10b._pre_trade_check(act_past_close, "2026-09-02", None)
 check("[10e] 闸门告警 extra.policy == 'off'", _kw.get("policy"), "off")
-
-# ════════════════════════════════════════════════════════════════
-print("\n[11] Phase 8.1（O-1）：derive_exchange（P-B：exchange 归档案，SimNow 降级对账）")
-check("[11a] CFFEX.IF2609 → CFFEX", derive_exchange("CFFEX.IF2609"), "CFFEX")
-check("[11b] KQ.m@CZCE.TA → CZCE", derive_exchange("KQ.m@CZCE.TA"), "CZCE")
-check("[11c] SHFE.au2608 → SHFE（小写品种不影响）", derive_exchange("SHFE.au2608"), "SHFE")
-check("[11d] 空串 → ''（不猜）", derive_exchange(""), "")
-check("[11e] 无分隔 → ''（不猜）", derive_exchange("IF2609"), "")
-st11 = Instrument(None, _IF)  # P-B：spec/state 同一对象
-b11 = make_simnow(FakeQuote(), spec=st11, state=st11)
-b11._apply_instrument_quote()
-codes11 = [a.get("code") for a in (b11.drain_alerts() or [])]
-check("[11f] P-B：SimNow 不再写 exchange；档案 CFFEX 与行情推导一致 → 无对账告警",
-      ("exchange_mismatch" in codes11, st11.exchange), (False, "CFFEX"))
-st11x = Instrument(None, PRODUCT_PROFILES["TA"])  # 档案 CZCE，行情推导 CFFEX → 不一致
-b11x = make_simnow(FakeQuote(), spec=st11x, state=st11x)
-b11x._apply_instrument_quote()
-codes11x = [a.get("code") for a in (b11x.drain_alerts() or [])]
-check("[11g] 档案与行情推导不一致 → exchange_mismatch 对账告警（降级为 warn）",
-      "exchange_mismatch" in codes11x, True)
-check("[11g2] 对账只告警不写对象：档案 exchange 保持 CZCE", st11x.exchange, "CZCE")
-st11b = Instrument(None, _IF)
-b11b = make_simnow(FakeQuote(price_tick=float("nan")), spec=st11b, state=st11b)
-b11b._apply_instrument_quote()               # 失败 → 不冻结、不触发对账
-check("[11h] 失败路径不冻结、档案不变、无对账告警",
-      (st11b.verified, st11b.exchange), (False, "CFFEX"))
 
 print("\n" + "=" * 60)
 print("P42 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
