@@ -139,9 +139,11 @@ def main():
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
     check("无 ATR/无结构 R=0 → 止损 = 99.8（P2 边界保护）", plan5.stop_price, 99.8)
 
-    print("\n[3b] A=0 观测告警（2026-09-15 评审补）：不改 R 口径，只打 WARNING 抓样本")
+    print("\n[3b] A 观测告警（2026-09-15 评审补 · 阈值放宽为 A < 3.0）：不改 R 口径，只打 WARNING 抓样本")
     # 口径（用户拍板）：有分型才有买卖点 → 入场时 A 恒 > 0，故 R 不设下限、不兜底。
-    #   但 A 真归零时必须出声，便于后续 grep "[R 结构距离归零]" 抓现场。
+    #   但 A 偏小时必须出声：2026-09-15 评审后阈值由 A==0 放宽为 **A < 3.0**
+    #   （= 已删 min_r_points 地板原值），三支文案便于 grep ——
+    #   [R 结构距离缺失] / [R 结构距离归零] / [R 结构距离偏小]；另有 [R 归零]（R=0）。
     import logging as _logging
 
     class _CapLog(_logging.Handler):
@@ -177,7 +179,31 @@ def main():
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.0), 100.0, state)
-    check("A=3 正常路径 → 不打告警", _cap.msgs, [])
+    check("A=3.0 正常路径 → 不打告警（阈值严格小于）", _cap.msgs, [])
+    # ④ 阈值放宽后的边界（2026-09-15 评审 · 用户拍板「改为 A < 3.0」）：
+    #    A=2.9 → 必须出声；A=3.0 → 必须安静。这两条把"风险窗口 0 < A < 地板"的
+    #    内部真正钉住 —— 原实现只测 A=0 这个极端点，区间内部全是盲区。
+    _cap.msgs = []
+    pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                           fractal_low=97.1), 100.0, state)
+    check("A=2.9 < 阈值 3.0 → 打 WARNING [R 结构距离偏小]",
+          any("R 结构距离偏小" in m for m in _cap.msgs), True)
+    _cap.msgs = []
+    pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                           fractal_low=97.0), 100.0, state)
+    check("A=3.0 == 阈值 → 严格小于，不打告警", _cap.msgs, [])
+    # ⑤ R 归零观测（2026-09-15 评审补 · 用户要求"R=0 加控制台告警"）：
+    #    R > 0 时不得出 [R 归零]（与 [R 结构距离偏小] 严格分开）；R = 0 时必须出。
+    _cap.msgs = []
+    pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                           fractal_low=97.1), 100.0, state)
+    check("A=2.9（R>0）→ 不打 [R 归零]（两支文案不混）",
+          any("R 归零" in m for m in _cap.msgs), False)
+    _cap.msgs = []
+    pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
+                           fractal_low=100.0), 100.0, state)
+    check("A=0 且无 ATR（R=0）→ 打 [R 归零] 控制台告警",
+          any("R 归零" in m for m in _cap.msgs), True)
     _lg.removeHandler(_cap)
     _lg.setLevel(_old_lvl)
     _lg.propagate = _old_prop
@@ -207,6 +233,17 @@ def main():
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
     check("保本缓冲 0.5R → 止损=105（入场价之上 0.5R=5）",
           chk6b.plan.stop_price if chk6b else None, 105.0)
+    # 缓冲默认值 = 0.5R 的**行为层钉子**（2026-09-15 评审补 · 用户要求
+    #   "盯死 buffer 为 0.5R，避免后续被改"）：**不显式传 breakeven_buffer_r**，
+    #   走 config 单一事实源的默认值，断言落点 = 入场价 + 0.5×R。
+    #   配置层默认值另由 [8] 钉住 → 双保险：改默认值这里红，改落点公式这里也红。
+    pol6c = LayeredExitPolicy({"use_atr": False,
+                               "use_trailing": True, "breakeven_trigger_r": 1.0,
+                               "r_multiple_tp": 99.0, "trailing_distance_points": 0.0})
+    pos6c = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
+    chk6c = pol6c.check(pos6c, make_bar(2102, 100, 111, 100, 111), state, 5)
+    check("缓冲默认值（未显式传）= 0.5R → 止损 = 入场价 + 0.5×10 = 105",
+          chk6c.plan.stop_price if chk6c else None, 105.0)
 
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
     pol7 = LayeredExitPolicy({"use_atr": False,
@@ -233,14 +270,23 @@ def main():
     check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
     check("trailing_atr_multiple 默认 = config 1.0", pol12.trailing_atr_multiple, 1.0)
-    check("use_trailing 默认 = True（B 方案）", pol12.use_trailing, True)
+    check("use_trailing 默认 = True（跟踪止盈模式）", pol12.use_trailing, True)
+    # 2026-09-15 评审补 · 用户要求：把"保本缓冲 = 0.5R"钉死，避免后续被顺手改掉。
+    #   三层钉子：① 配置层默认值（此处）② 行为层落点（[5]）③ 跨品种 resolved
+    #   一致性（test_p45 / p46 / p47 / test_period_profile 已各自断言）。
+    check("breakeven_buffer_r 默认 = 0.5（锁定半 R，全局不随品种）",
+          pol12.p.breakeven_buffer_r, 0.5)
+    check("breakeven_trigger_r 默认 = 1.0（缓冲 < 触发的不变式基准）",
+          pol12.p.breakeven_trigger_r, 1.0)
+    check("r_alert_a_floor 默认 = 3.0（A 告警灵敏度，取自被删 min_r_points 原值）",
+          pol12.r_alert_a_floor, 3.0)
 
-    print("\n[8b] B 方案（use_trailing=True 默认）：不设硬止盈，止盈交给 L3 跟踪")
+    print("\n[8b] 跟踪止盈模式（use_trailing=True 默认）：不设硬止盈，止盈交给 L3 跟踪")
     polB = LayeredExitPolicy({"use_atr": False,
                               "r_multiple_tp": 2.0})
     planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
-    check("B 方案 tp_price = None（不硬止盈）", planB.tp_price is None, True)
-    check("B 方案 止损仍照常 = 98", planB.stop_price, 98.0)
+    check("跟踪止盈模式 tp_price = None（不硬止盈）", planB.tp_price is None, True)
+    check("跟踪止盈模式 止损仍照常 = 98", planB.stop_price, 98.0)
 
     print("\n[12] L3 口径统一（best 极值）：L3 触发 = r_multiple_tp，盘中冲高回落也抬损（钉住 P8-A 场景）")
     # 配置：r_multiple_tp=1.5（L3 启动阈值=1.5R）、保本层用 breakeven_trigger_r=99 屏蔽隔离
@@ -275,8 +321,13 @@ def main():
     check("空单镜像 only_update", chk14.only_update if chk14 else None, True)
     check("空单镜像新止损 = best+1 = 81", chk14.plan.stop_price if chk14 else None, 81.0)
 
-    print("\n[12b] L3 触发阈值 = 品种级 r_multiple_tp（IC/IM=3R、IF/IH=2R）")
-    # IC：r_multiple_tp=3.0 → L3 在 3R 才启动；IF：r_multiple_tp=2.0 → 2R 启动
+    print("\n[12b] L3 触发阈值 = 品种级 r_multiple_tp（IC/IM=3R、IF/IH=2R），"
+          "边界精确到 R")
+    # 2026-09-15 评审修：**本节的采样网格改细**。原实现只在 2.5R / 3.5R 两点取样，
+    #   于是"IC 在 3.5R 启动"这个说法其实没被钉住 —— 粗网格（2.5R 未启动 + 3.5R 已启动）
+    #   会被读成"阈值在 3.5R"，而代码里的判定是 `fav_profit >= r_multiple_tp × R`，
+    #   阈值就是**精确的 3.0R**（3.5R 只是我上一轮探针的采样点，不是语义）。
+    #   现补 2.99R / 3.0R 边界点：等于阈值必须启动（严格 ≥）。
     pol_ic = LayeredExitPolicy({"use_atr": False,
                                 "use_trailing": True, "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0,
@@ -285,18 +336,24 @@ def main():
                                 "use_trailing": True, "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
                                 "trailing_distance_points": 1.0})
-    # R=10、_trail_best=100。IC 在 2.5R（best=125, fav=25 < 3R=30）不启动 L3；
-    #   IF 在 2.5R（fav=25 ≥ 2R=20）已启动。
-    pos_ic = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
-    pos_if = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
-    chk_ic = pol_ic.check(pos_ic, make_bar(2700, 100, 125, 105, 120), state, 5)
-    chk_if = pol_if.check(pos_if, make_bar(2701, 100, 125, 105, 120), state, 5)
-    check("IC(3R) 在 2.5R 不启动 L3", chk_ic is None, True)
-    check("IF(2R) 在 2.5R 已启动 L3", (chk_if is not None and chk_if.only_update), True)
-    # IC 到 3.5R（best=135, fav=35 ≥ 3R=30）启动
-    pos_ic2 = make_position(Side.LONG, 100.0, 90.0, 9999.0, params={"R": 10.0, "_trail_best": 100.0})
-    chk_ic2 = pol_ic.check(pos_ic2, make_bar(2702, 100, 135, 105, 130), state, 5)
-    check("IC(3R) 在 3.5R 启动 L3", (chk_ic2 is not None and chk_ic2.only_update), True)
+
+    def _l3_started(pol, high, ts):
+        """R=10、_trail_best=100 的单根 bar：high 抬高到 100+fav → 返回 L3 是否启动。"""
+        pos = make_position(Side.LONG, 100.0, 90.0, 9999.0,
+                            params={"R": 10.0, "_trail_best": 100.0})
+        chk = pol.check(pos, make_bar(ts, 100, high, 105, high - 5), state, 5)
+        return bool(chk is not None and chk.only_update)
+
+    # 边界（fav 单位 = 点，R=10）：2.99R=29.9 点 < 3R=30 点 → 不启动；3.0R=30 点 → 启动
+    check("IC(3R) 在 2.99R 不启动 L3（阈值严格 ≥ 的下侧）",
+          _l3_started(pol_ic, 129.9, 2710), False)
+    check("IC(3R) 在 3.0R **恰好**启动 L3（fav = 3R 即触发，不是 3.5R）",
+          _l3_started(pol_ic, 130.0, 2711), True)
+    check("IF(2R) 在 1.99R 不启动 L3", _l3_started(pol_if, 119.9, 2712), False)
+    check("IF(2R) 在 2.0R **恰好**启动 L3", _l3_started(pol_if, 120.0, 2713), True)
+    # 同一根 2.5R bar 上 IC 与 IF 必须分野：IC 不动、IF 已启动
+    check("同一 2.5R bar：IC(3R) 不启动 L3", _l3_started(pol_ic, 125.0, 2714), False)
+    check("同一 2.5R bar：IF(2R) 已启动 L3", _l3_started(pol_if, 125.0, 2715), True)
 
     print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)"
           "（min_r_points 地板已删，且不再补任何下限）")

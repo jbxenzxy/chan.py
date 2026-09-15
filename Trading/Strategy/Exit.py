@@ -10,7 +10,7 @@
     ② 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
     ③ 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
 
-B 方案：止盈交给跟踪，不落硬止盈单（2026-09-09）
+跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落硬止盈单（2026-09-09）
     `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
     的 ATR 跟踪止损兑现；L3 启动阈值（= r_multiple_tp×R）直接取品种档案的 `r_multiple_tp`
     （IC/IM=3R、其余=2R），故"盈利到 r_multiple_tp×R 时进 L3 跟踪锁利"，不同品种进 L3
@@ -18,7 +18,12 @@ B 方案：止盈交给跟踪，不落硬止盈单（2026-09-09）
     历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 r_multiple_tp 解耦），
     2026-09-14 合并：删 trailing_trigger_r，L3 触发统一走品种级 r_multiple_tp
     （消除"r_multiple_tp=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
-    `use_trailing=False` 即回到 A 方案（有硬止盈、无保本、无跟踪）。
+    硬止盈模式（`use_trailing=False`）：落固定止盈单（= r_multiple_tp×R），无保本、无跟踪。
+
+    ⚠️ 术语沿革（2026-09-15 清理）：出场策略自 2026-09-08 起**只有 LayeredExitPolicy
+    一套（L1-L3）**，不存在两套可选的出场策略；旧文档/旧注释里的「A 方案 / B 方案」只是
+    本策略 `use_trailing` 两种取值的遗留叫法（B = 跟踪止盈模式、A = 硬止盈模式），已废弃 ——
+    新写的代码 / 日志 / 报告一律用模式名，不要再出现 A/B 方案。
 """
 
 from __future__ import annotations
@@ -59,6 +64,16 @@ class ExitCheck:
 
 class LayeredExitPolicy:
     name = "LayeredExitPolicy"
+
+    # R 观测阈值（2026-09-15 评审补 · 用户拍板「A < 3.0」）：结构距离 A 低于本值时打
+    #   WARNING（见 _initial_r）。取值含义 = **已删除的 min_r_points 地板原值** ——
+    #   IF/IH 与商品档当时是 3.0，IC/IM 是 5.0。
+    #   ⚠️ A 的单位是**报价点数**，不同品种量级不同 → 本值是"观测灵敏度"旋钮，
+    #   不是风控参数：它**不参与、也不会改变** R = max(A, B) 的取值，
+    #   只决定多早把现场打到控制台。要更早抓样本就调大本值（如按 IC/IM 口径设 5.0）。
+    #   本属性**不是配置项**：ExitPolicyParams 是 extra="forbid"，它只走类属性，
+    #   避免和"改标定值必须过 git 评审"的纪律混淆。
+    r_alert_a_floor: float = 3.0
 
     # ---------- 参数 ----------
     def __init__(self, params=None):
@@ -150,13 +165,31 @@ class LayeredExitPolicy:
             2026-09-14 删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
             口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
             且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
-            因此本函数**不兜底、不钳下限**；仅在 A 真的归零时打一条 WARNING
-            （见下方），把现场信息打到控制台供后续抓样本。真出现了再分析成因 ——
-            已知候选：① 信号未携带分型（fractal ≤ 0 哨兵，走 `[R 结构距离缺失]`）；
-            ② 入场价已穿越分型（陈旧信号）；③ 分型贴身（A 极小）；
-            ④ 买卖点无右肩 K 线时 bsp.klu 退回 bi.get_end_klu()（chan.py
-               BuySellPoint/BS_Point.py），该 K 线收在自身极值点时 A = 0。
-            ②③④ 走 `[R 结构距离归零]`。
+            因此本函数**不兜底、不钳下限**，只打 WARNING 把现场丢到控制台抓样本。
+            两个观测点（都**不改变** R 的取值）：
+
+            [1] `A < r_alert_a_floor`（默认 3.0）—— 2026-09-15 评审后**放宽**：
+                原实现只在 `A == 0` 出声，恰好把真正会出问题的区间吞掉了。
+                风险窗口是 `0 < A < 地板`：B 未就绪时（on_bar 每交易日 `_bars.clear()`，
+                atr_period=14 → 开盘后前 15 根 bar 的 ATR 必然未就绪）R 只由 A 决定，
+                A=0.1 时止损距离从 3.0 点塌到 1 tick —— 实测同一根普通 bar 下
+                旧版持仓存活、新版第一根就判 sl。三支文案便于 grep 区分成因：
+                  `[R 结构距离缺失]` = 信号压根没带分型（fractal ≤ 0 哨兵）；
+                  `[R 结构距离归零]` = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）；
+                  `[R 结构距离偏小]` = 0 < A < 地板（分型贴身但未归零）。
+                已知成因候选：① 信号未携带分型；② 入场价已穿越分型（陈旧信号）；
+                ③ 分型贴身（A 极小）；④ 买卖点无右肩 K 线时 bsp.klu 退回
+                bi.get_end_klu()（chan.py BuySellPoint/BS_Point.py），该 K 线收在
+                自身极值点时 A = 0。
+                ⚠️ 阈值单位是**报价点数**，IC/IM 的旧地板原为 5.0（比 3.0 宽一档）——
+                本告警不按品种分档；要按 IC/IM 口径收窄，改类属性
+                `LayeredExitPolicy.r_alert_a_floor`。
+
+            [2] `R <= 0` → `[R 归零]`（2026-09-15 评审补 · 用户要求"R=0 加控制台告警"）。
+                R=0 是唯一会让 L3 整层失效的值（check() 里的 `R > 0` 判定），
+                此时 stop/tp 全靠 P2 边界守卫压在入场价外 1 tick。用户判断
+                「R 不可能为 0」，故此处**只出声不兜底**，也不给 tp 加对称防护 ——
+                真在实盘抓到即用本条日志分析成因。
         """
         is_long = signal.side is Side.LONG
         # A：结构止损（分型极值）
@@ -175,27 +208,45 @@ class LayeredExitPolicy:
                 A = max(signal.fractal_high - entry_price, 0.0)
             else:
                 _fractal_missing = True
-        # B：波动率止损（2×ATR）
+        # B：波动率止损（2×ATR）。atr 只取一次，供 B 与下面两条告警共用
+        #   （2026-09-15 评审修 · P3：原实现告警里又调了一次 self._atr()，
+        #   同一次判定里重复计算）。
         B = 0.0
-        if self.use_atr:
-            atr = self._atr()
-            if atr:
-                B = self.atr_sl_multiple * atr
-        # A=0 观测告警（2026-09-15 评审补）：不改 R 的取值，只把现场打出来。
-        #   分两支，便于 grep 时一眼区分成因：
+        atr = self._atr() if self.use_atr else None
+        if atr:
+            B = self.atr_sl_multiple * atr
+        # 观测告警 [1]：A < 地板（默认 3.0）。不改 R 的取值，只把现场打出来。
+        #   分三支，便于 grep 时一眼区分成因（详见 docstring）：
         #     [R 结构距离缺失] = 信号压根没带分型（fractal ≤ 0 哨兵）→ 查信号源；
-        #     [R 结构距离归零] = 带了分型但 A ≤ 0（穿越 / 贴身）→ 查行情与分型口径。
-        if A <= 0.0:
+        #     [R 结构距离归零] = 带了分型但 A ≤ 0（穿越分型 / 分型贴身到等于入场价）；
+        #     [R 结构距离偏小] = 0 < A < 地板（分型贴身但未归零）→ 查行情与分型口径。
+        if A < self.r_alert_a_floor:
+            _kind = ("结构距离缺失" if _fractal_missing
+                     else "结构距离归零" if A <= 0.0
+                     else "结构距离偏小")
             _log.warning(
-                "[R %s] A=0，R 将由 2×ATR 单独决定：side=%s entry=%.6g "
-                "fractal_low=%.6g fractal_high=%.6g atr=%s B=%.6g signal_key=%s "
-                "—— 请核对信号是否缺失/失真分型（本条仅观测，R = max(A, B) 不变）",
-                "结构距离缺失" if _fractal_missing else "结构距离归零",
+                "[R %s] A=%.6g < 阈值 %.6g：R 可能只由结构距离 A 决定（B 未就绪时尤其）"
+                "：side=%s entry=%.6g fractal_low=%.6g fractal_high=%.6g atr=%s "
+                "B=%.6g signal_key=%s —— 请核对分型是否缺失/穿越/贴身"
+                "（本条仅观测，R = max(A, B) 不变；阈值见 LayeredExitPolicy."
+                "r_alert_a_floor）",
+                _kind, A, self.r_alert_a_floor,
                 getattr(signal.side, "value", signal.side), entry_price,
-                signal.fractal_low, signal.fractal_high,
-                (self._atr() if self.use_atr else None), B,
+                signal.fractal_low, signal.fractal_high, atr, B,
                 getattr(signal, "key", "?"))
-        return max(A, B)
+        R = max(A, B)
+        # 观测告警 [2]：R 归零（2026-09-15 评审补 · 用户要求）。
+        #   用户判断「R 不可能为 0」→ 本函数不兜底、不钳下限，也不给 tp 加对称防护；
+        #   只在真发生时出声，便于事后捞样本分析成因。
+        if R <= 0.0:
+            _log.warning(
+                "[R 归零] R=0（A=%.6g、B=%.6g）：本次入场 stop/tp 会退化为入场价外 "
+                "1 tick，且 L3 保本/跟踪整层跳过（check() 的 R > 0 判定）。side=%s "
+                "entry=%.6g atr=%s signal_key=%s —— 本条仅观测（不兜底、不钳下限），"
+                "请提供该现场供分析",
+                A, B, getattr(signal.side, "value", signal.side), entry_price, atr,
+                getattr(signal, "key", "?"))
+        return R
 
     # ---------- 开仓时生成出场计划 ----------
     def plan(self, signal: Signal, entry_price: float, state: InstrumentState,
@@ -225,10 +276,10 @@ class LayeredExitPolicy:
             stop = state.round_price(raw_stop, "down")
             nominal_tp = state.round_price(raw_tp, "up")
 
-        # B 方案：启用保本/跟踪（use_trailing=True）时**不落硬止盈单**，止盈交给 L3 的
+        # 跟踪止盈模式（use_trailing=True，默认）：**不落硬止盈单**，止盈交给 L3 的
         #   ATR 跟踪兑现。L3 启动阈值 = r_multiple_tp×R（品种档案，IC/IM=3R、其余=2R），
         #   故不同品种的"进 L3 时机"天然不同；名义止盈价（= r_multiple_tp×R）仍写入
-        #   params，供事后对照分析。
+        #   params，供事后对照分析。硬止盈模式（use_trailing=False）则落固定止盈单。
         tp = None if self.use_trailing else nominal_tp
 
         # P2 防护：止损必须严格在风控锚的"不利侧"且至少 1 tick 间距，
@@ -242,7 +293,7 @@ class LayeredExitPolicy:
 
         params = dict(self.params)
         params["R"] = R
-        params["_tp_nominal"] = nominal_tp  # 名义止盈价（B 方案不落单，仅供事后对照）
+        params["_tp_nominal"] = nominal_tp  # 名义止盈价（跟踪止盈模式下不落单，仅供事后对照）
         params["_trail_best"] = base              # 跟踪极值初值 = 风控锚（或入场价）
         if anchor is not None:
             params["risk_anchor"] = anchor        # 风控锚（解锁重算时 = P₂）
@@ -265,8 +316,8 @@ class LayeredExitPolicy:
         R = float(R) if R is not None else None
         atr = self._atr()
         # ① 硬出场：同根 K 线同时触及止盈与止损 → 按止损计（悲观）
-        #   B 方案（use_trailing=True）下 plan 不生成止盈单（tp is None），
-        #   故此处的止盈分支只对 A 方案（use_trailing=False）与旧 state.db
+        #   跟踪止盈模式（use_trailing=True）下 plan 不生成止盈单（tp is None），
+        #   故此处的止盈分支只对硬止盈模式（use_trailing=False）与旧 state.db
         #   恢复的存量持仓生效；硬止损任何情况下都保留。
         if is_long:
             if stop and bar.low <= stop:
@@ -283,7 +334,7 @@ class LayeredExitPolicy:
         #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出
         #   （2026-09-15 评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
         #   里被静默吞掉；显式化后行为不变，但把「R=0 则 L3 不跑」这条写在明处
-        #   （是否加告警由 _initial_r 的 A=0 观测点负责）。
+        #   （R=0 是否发生由 _initial_r 的 [R 归零] 观测点负责；本行只负责不跑 L3）。
         if self.use_trailing and R is not None and R > 0:
             best = float(plan.params.get("_trail_best", entry))
             prev_best = best

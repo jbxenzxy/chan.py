@@ -302,7 +302,7 @@ class ExitConfig(BaseModel):
     breakeven_buffer_r: float = 0.5       # 保本/锁利层落点 = 入场价 ± 此倍数×R（=0.5 即锁定半 R；=0 为真正保本）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
-                                                #   注：B 方案（use_trailing=True）下**不生成硬止盈单**，止盈完全交给
+                                                #   注：跟踪止盈模式（use_trailing=True）下**不生成硬止盈单**，止盈完全交给
                                                 #   L3 的 ATR 跟踪兑现；L3 启动阈值 = r_multiple_tp（品种档案，IC/IM=3R、
                                                 #   其余=2R），即"盈利到 r_multiple_tp×R 时进 L3"——r_multiple_tp 由此从
                                                 #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，不再有全局
@@ -312,7 +312,7 @@ class ExitConfig(BaseModel):
     def _check_exit_param_order(self) -> "ExitConfig":
         """构造期 fail-fast：参数之间的**大小关系**（2026-09-15 评审补，P2）。
 
-        两条不变式（违反任一条都直接抛错，绝不带错值进实盘）：
+        **一条**不变式（违反即直接抛错，绝不带错值进实盘）：
 
         ① `breakeven_buffer_r < breakeven_trigger_r`（trigger > 0 时）
             保本层的语义是「浮盈到 breakeven_trigger_r×R → 把止损抬到入场价 +
@@ -324,8 +324,11 @@ class ExitConfig(BaseModel):
             trigger=0（关闭保本层）时不校验 —— 那一层根本不跑。
 
         注：R 本身不设下限（2026-09-15 评审 · 采纳"有分型才有买卖点"的口径，
-        删除 min_r_points 后不再补地板）。A=0 的可观测性由
-        LayeredExitPolicy._initial_r() 的 WARNING 负责，不在配置层拦。
+        删除 min_r_points 后不再补地板）。可观测性由 LayeredExitPolicy._initial_r()
+        的两条 WARNING 负责，不在配置层拦：
+          `[R 结构距离*]` —— A < LayeredExitPolicy.r_alert_a_floor
+                              （默认 3.0 = 已删地板原值；IC/IM 原为 5.0）；
+          `[R 归零]`      —— R = max(A, B) = 0。
         """
         if self.breakeven_trigger_r > 0 and \
                 self.breakeven_buffer_r >= self.breakeven_trigger_r:
