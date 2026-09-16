@@ -230,10 +230,10 @@ class Instrument:
 
     # apply_quote 回填的行情字段 → 本类字段映射（tqsdk quote 字段名 → 本类字段名）
     _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
-        ("price_tick", "price_tick"),
-        ("volume_multiple", "multiplier"),
-        ("upper_limit", "upper_limit"),
-        ("lower_limit", "lower_limit"),
+        ("price_tick", "price_tick"),      # 最小变动单位
+        ("volume_multiple", "multiplier"), # 合约乘数
+        ("upper_limit", "upper_limit"),    # 涨停价
+        ("lower_limit", "lower_limit"),    # 跌停价
     )
 
     def __init__(self, config: Optional[InstrumentConfig] = None,
