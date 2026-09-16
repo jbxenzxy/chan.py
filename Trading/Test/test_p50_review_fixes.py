@@ -427,10 +427,12 @@ def t8_dead_field_removed():
     check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
 
     # ── P-B（2026-09-15）完成判据：归位键在配置上**显式报错** ──
-    #   乱源②（合约模型多重身份）的最终态：tick/乘数/exchange 归 Product，
+    #   乱源②（合约模型多重身份）的最终态：tick/乘数 归 Product
+    #   （exchange 不是"归位"而是**已删除** —— 2026-09-16 B 批），
     #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率 P-A 已归位。
     #   _check_removed_keys 对旧键显式 ValueError（§7.2：不允许静默吞掉）。
-    print("\n[8b] P-B 归位完成判据：tick/乘数/exchange/last_trade_date 已迁出配置")
+    print("\n[8b] P-B 归位完成判据：tick/乘数/last_trade_date 已迁出配置"
+          "（exchange 更进一步：字段已整体删除）")
     from Trading.Infra.Instrument import _REMOVED_KEYS
     for gone in ("price_tick", "multiplier", "exchange", "last_trade_date",
                  "open_fee_rate", "close_fee_rate", "closetoday_fee_rate",
@@ -465,9 +467,14 @@ def t8_dead_field_removed():
     check_true("EffectiveSpec 不可写（frozen → 改写只能整体替换）", _blocked)
     check_true("Instrument.price_tick 是只读 property（无 setter）",
                type(st).price_tick.fset is None)
-    for f in ("price_tick", "multiplier", "exchange"):
+    for f in ("price_tick", "multiplier"):
         check_true("Product 拥有档案字段 {}".format(f),
                    hasattr(PRODUCT_PROFILES["IF"], f))
+    # 反向：exchange 必须**彻底没有**（2026-09-16 B 批删除字段）——
+    #   注意这不同于上面那些"搬走了"的字段：它是"不再需要存在"。
+    check("Product 已无 exchange 字段（B 批删除，非搬迁）",
+          [k for k in PRODUCT_PROFILES
+           if hasattr(PRODUCT_PROFILES[k], "exchange")], [])
     # 配置只读转发项仍在 Instrument 上
     for f in ("signal_symbol", "slippage_ticks", "order_advanced",
               "closetoday_first", "price_band_points"):

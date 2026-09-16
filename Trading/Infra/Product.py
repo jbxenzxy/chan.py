@@ -167,9 +167,16 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 # 这三件事原先散落在三处（交易所能力闸门 + 费率 3× 判据 + 交易所 FOK/FAK 分支），
 # 现在收成**一张 8 行的表**，代码只读不推。
 #
-#   close_mode      今仓离场用哪个 offset ——
+#   today_exit      今仓离场走哪条路
+#                    （**字段名 2026-09-16 B 批由 ``close_mode`` 改回 `today_exit`**）——
 #                     "R-OPEN"     → 反向开仓锁仓（三态机：会进锁仓态，次日拆锁）
 #                     "CLOSETODAY" → 直接平今（两态机：平完即回空仓，锁仓态不可达）
+#                    ⚠️ 旧名 ``close_mode`` 误导在哪：8 行里 **5 行**取值是 R-OPEN，
+#                    那一支干的是**开仓**（反向 OPEN），根本不 "close" —— 字段名
+#                    却宣称自己在描述"平仓方式"。`today_exit` 描述的是**问题**
+#                    （今仓怎么离场），R-OPEN / CLOSETODAY 才是**答案**，层级才对得上。
+#                    （历史：本字段 §5.1 原名 today_exit → §15 曾改成 ``close_mode``，
+#                      本批是**第三次翻转**，理由如上，详见交接文档 §19。）
 #   order_advanced  报单属性 —— "FOK"（全成全撤）/ "FAK"（部分成交后撤余量）
 #   lots_per_order  一笔挂几手
 #
@@ -178,7 +185,7 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 #    要平今，无需代码去计算，代码只需读这个表格即可。」
 #    —— 所以**决策侧零费率引用**；费率数据保留给会计侧 `cost_cash` 用。
 #
-# ⚠️ close_mode 是「我们的选择」，不是「交易所的能力」：上期所虽然支持平今指令，
+# ⚠️ today_exit 是「我们的选择」，不是「交易所的能力」：上期所虽然支持平今指令，
 #    但并非每个品种平今都便宜 —— 只有用户算出来平今便宜的才填 CLOSETODAY。
 #    **代码里禁止再用交易所名字判断任何走向**（用户第 3 轮 ⑵ 明令，第 2 列纯注释）。
 #
@@ -186,7 +193,7 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 #    本表第 1 列只约束**今仓**怎么离场。
 #
 # 硬断言（构造期拒绝启动，不留静默默认值）：
-#   · 三列取值合法（close_mode / order_advanced / 1 ≤ lots_per_order ≤ 20）；
+#   · 三列取值合法（today_exit / order_advanced / 1 ≤ lots_per_order ≤ 20）；
 #   · **FAK ⟹ lots_per_order == 1**（用户第 2 轮 ⑵⑶ 定为硬断言）——
 #     FAK 允许部分成交后撤余量，只有"一笔 1 手、没有余量可撤"时 FAK 才等价于
 #     FOK；放开 N 会破坏「待报 / 全成 / 全撤」三态不变量。
@@ -205,14 +212,14 @@ _LOTS_MAX = 20
 @dataclass(frozen=True)
 class ExecPolicy:
     """一个品种的执行侧三件事。**不可变**，构造期自校验（见上方硬断言）。"""
-    close_mode: str
+    today_exit: str
     order_advanced: str
     lots_per_order: int
 
     def __post_init__(self) -> None:
-        if self.close_mode not in (R_OPEN, CLOSETODAY):
-            raise ValueError("close_mode 必须是 {} / {}，收到 {!r}".format(
-                R_OPEN, CLOSETODAY, self.close_mode))
+        if self.today_exit not in (R_OPEN, CLOSETODAY):
+            raise ValueError("today_exit 必须是 {} / {}，收到 {!r}".format(
+                R_OPEN, CLOSETODAY, self.today_exit))
         if self.order_advanced not in (FOK, FAK):
             raise ValueError("order_advanced 必须是 {} / {}，收到 {!r}".format(
                 FOK, FAK, self.order_advanced))
@@ -271,9 +278,6 @@ class Product:
       exec_policy              执行侧三件事（今仓离场 offset / 报单属性 / 一笔挂几手）。
                                唯一事实源 = 本模块上方 `EXEC_POLICY` 表 —— **代码只读不推**：
                                不读费率、不看交易所名字（2026-09-16 用户拍板）。
-      exchange                 交易所（CFFEX/SHFE/INE/DCE/CZCE/GFEX）。
-                               ⚠️ **纯备案/注释**：不参与任何判断，也没有任何代码读它
-                               去做分支（用户第 3 轮 ⑵⑶ 明令清掉按交易所名字的判断）。
       【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
       price_tick               最小变动价位 —— Phase 8（D20）新增，**仅作离线模式
                                （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
@@ -282,6 +286,17 @@ class Product:
 
     注：下方**声明顺序**受 dataclass 规则约束（无默认值字段必须在前），
     与上述概念分组不同属有意为之；书写/阅读以各档案条目的实参顺序为准。
+
+    ⚠️ **已删除字段：`exchange`（2026-09-16 B 批 · 用户拍板）**
+      交易所曾是本类的一个字段（8 行档案各写一次 `exchange="CFFEX"` 之类）。
+      删除理由有两层：
+        · 冗余 —— 它与 `EXEC_POLICY` 每行末尾的交易所注释、各档案 `note` 里的
+          "中金所 CFFEX …" 是**同一事实的三份副本**；
+        · 更要紧的一层 —— "交易所不参与任何判断"原先只是一条**纪律**（谁都不许读
+          它），而字段还在，就始终存在"能读它"的可能，纪律只能靠人守。字段删掉后
+          交易所只剩**注释**形态（注释无法参与分支），"零判断"从纪律升级为**结构**。
+      这是用户第 3 轮 ⑵⑶「清掉按交易所名字的判断」的结构化收口：当时删的是判据 I3，
+      本批删的是最后一份"可被读的副本"。
     """
     product: str
     r_multiple_tp: float
@@ -290,7 +305,6 @@ class Product:
     exec_policy: ExecPolicy                 # 执行策略表行（今仓离场/报单属性/每笔手数）
     closetoday_fee: Optional[Fee] = None    # None = 同开仓档（xlsx 无独立平今行）
     price_tick: float = 0.2            # 最小变动价位（离线兜底；中金所四品种均 0.2）
-    exchange: str = ""                      # 交易所：**纯备案**，零判断（见字段 docstring）
     note: str = ""                          # 调参记录 / 数据来源 / 标定状态
     # 覆盖档字段位（R3 · 2026-09-15，交接文档 §6.3-b 明令"字段位必须留"）。
     #   ⚠️ **当前不消费**：`fee_pair()` 一律读基准档。
@@ -400,7 +414,6 @@ def _exec_kw(code: str) -> Dict[str, object]:
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", r_multiple_tp=2.0,
-        exchange="CFFEX",
         price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
@@ -410,7 +423,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "IH": Product(
         product="IH", r_multiple_tp=2.0,
-        exchange="CFFEX",
         price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）",
         **_fee_kw("IH"),
@@ -418,7 +430,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "IC": Product(
         product="IC", r_multiple_tp=3.0,
-        exchange="CFFEX",
         price_tick=0.2, multiplier=200.0,
         note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IC"),
@@ -426,7 +437,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "IM": Product(
         product="IM", r_multiple_tp=3.0,
-        exchange="CFFEX",
         price_tick=0.2, multiplier=200.0,
         note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IM"),
@@ -437,7 +447,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", r_multiple_tp=2.0,
-        exchange="SHFE",
         price_tick=0.02, multiplier=1000.0,
         note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
@@ -448,7 +457,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "AG": Product(
         product="AG", r_multiple_tp=2.0,
-        exchange="SHFE",
         price_tick=1.0, multiplier=15.0,
         note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 15(元/kg)、tick 1；费率 xlsx：交易万0.1（xlsx 基准档，2026-09-15 用户确认），"
@@ -460,7 +468,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "CU": Product(
         product="CU", r_multiple_tp=2.0,
-        exchange="SHFE",
         price_tick=10.0, multiplier=5.0,
         note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 10；费率 xlsx：开/平昨万0.5 / 平今万1.0；"
@@ -474,7 +481,6 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     #   由 `**_exec_kw("TA")` 注入 —— 不再由交易所名字推导（2026-09-16）。
     "TA": Product(
         product="TA", r_multiple_tp=2.0,
-        exchange="CZCE",
         price_tick=2.0, multiplier=5.0,
         note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"

@@ -85,18 +85,21 @@ def _fee_banner(cfg: TradingConfig) -> None:
     不再由代码比费率 —— 决策侧零费率引用。
     ⚠️ 2026-09-16 其二：**单笔手数只剩这一个来源**（`risk.max_volume` 已删）——
     横幅打出的就是实际生效值，不存在"横幅说 2 手、实际挂 1 手"的第二个旋钮。
+    ⚠️ 2026-09-16 B 批：横幅**不再打交易所** —— `Product.exchange` 字段已整体删除，
+    交易所仅以注释形态存在于 `EXEC_POLICY` 行尾与各档案 note；横幅改打品种键，
+    而品种键 + 执行策略表已经是决策的完整输入。
     """
     p = cfg.product_profile
     if p is None:
         return
     open_fee, ct_fee = p.fee_pair()
     pol = p.exec_policy
-    if pol.close_mode == CLOSETODAY:
+    if pol.today_exit == CLOSETODAY:
         concl = "今仓离场 = CLOSETODAY（直接平今，两态机：平完即回空仓）"
     else:
         concl = "今仓离场 = R-OPEN（反向开仓锁仓，三态机：次日拆锁）"
-    print("[gw] 品种 {}（{}）：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
-        p.product, p.exchange or "?", open_fee.describe(),
+    print("[gw] 品种 {}：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
+        p.product, open_fee.describe(),
         open_fee.describe(), ct_fee.describe()))
     print("[gw]   → " + concl)
     print("[gw]   执行策略：报单 {} ｜ 一笔 {} 手"

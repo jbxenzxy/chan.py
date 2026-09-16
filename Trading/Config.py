@@ -19,7 +19,8 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14；
       P-B · 2026-09-15 起配置类 frozen=True）：
       品种播种机制已消亡（P-B 删 for_product/_seed_instrument）—— tick/乘数/
-      exchange/费率真值源 = 品种档案 Product，运行时对象 `Instrument`
+      费率的真值源 = 品种档案 Product（exchange 已于 2026-09-16 B 批删除），
+      运行时对象 `Instrument`
       构造时直接取档案初值（见 Infra/Instrument.py）；
       合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
       trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**。

@@ -975,8 +975,10 @@ class TradingEngine(ReconcileMixin):
         走（见各分支注释）—— 跨会话改小表 N 后带旧仓重启，旧仓仍能**全额**平掉，
         不会算出"只平一部分"而撞 `close_volume_below_target`。
 
-        无品种档案 → **1 手**（保守侧：宁可少开，不按猜出来的手数下单；与
-        `Instrument.exchange` 未标定 → "" 同一约定）。
+        无品种档案 → **1 手**（保守侧：宁可少开，不按猜出来的手数下单；
+        与"档案缺失时其余派生值一律取保守侧"同一约定 ——
+        原文举的 `Instrument.exchange` 未标定 → "" 一例，随该字段于
+        2026-09-16 B 批删除而不再存在）。
         """
         pol = self._exec_policy()
         return int(pol.lots_per_order) if pol is not None else 1
@@ -1046,7 +1048,7 @@ class TradingEngine(ReconcileMixin):
         today = self._current_trading_day(bar)
         if latest.entry_date >= today:
             # 转移 ④：今日仓离场。**唯一口径 = 品种执行策略表第 1 列**
-            #   （`ExecPolicy.close_mode`） —— 不看交易所名字、不算费率
+            #   （`ExecPolicy.today_exit`） —— 不看交易所名字、不算费率
             #   （用户 2026-09-16 拍板：人算 → 改表 → 启动，代码只读表）。
             #
             #   · CLOSETODAY → 直接平今（今仓清零 → 回空仓态）。
@@ -1057,7 +1059,7 @@ class TradingEngine(ReconcileMixin):
             #     就是那笔、也就是唯一的平今目标：不必再查一次 positions，
             #     也不存在"找不到目标"的分支（故无兜底、无 Optional）。
             #   · R-OPEN → 反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
-            if self._close_mode() == CLOSETODAY:
+            if self._today_exit() == CLOSETODAY:
                 return _Action(OrderIntent.CLOSETODAY, net_side,
                                min(abs(net), latest.volume),
                                latest, is_exit=True, transition=4)
@@ -1149,18 +1151,23 @@ class TradingEngine(ReconcileMixin):
                 "否则引擎会静默按保守侧（报单 FOK / 今仓 R-OPEN / 手数 1）下真单。"
                 .format(allowed_key))
 
-    def _close_mode(self) -> Optional[str]:
-        """执行策略表第 1 列：今仓离场 offset（`CLOSETODAY` / `R-OPEN`）。
+    def _today_exit(self) -> Optional[str]:
+        """执行策略表第 1 列：**今仓离场走哪条路**（`CLOSETODAY` / `R-OPEN`）。
 
         `None` = 无品种档案 → 保守侧（照 `R-OPEN` 走锁仓，不生成会被拒的平今单）。
+
+        ⚠️ 2026-09-16 B 批：本方法原名 `_close_mode`（字段名同理），改回 `today_exit`。
+        旧名对 8 行里 **5 行**（IF/IH/IC/IM/TA，取值 R-OPEN）是误导 —— 那一支发的是
+        **反向 OPEN**，属于开仓而非平仓。改名只动名字、不动任何判据：
+        两处比较（转移④ / `_check_two_state_invariant`）与取值域完全不变。
         """
         pol = self._exec_policy()
-        return pol.close_mode if pol is not None else None
+        return pol.today_exit if pol is not None else None
 
     def _check_two_state_invariant(self, where: str) -> None:
         """两态机前提的运行时守卫（2026-09-16 补）。
 
-        **前提**：`close_mode == CLOSETODAY` 的品种，运行态**有且只有一笔当日仓**
+        **前提**：`today_exit == CLOSETODAY` 的品种，运行态**有且只有一笔当日仓**
         —— 它只能由转移①（开仓）产生，离场直接平今、平完即回空仓态。故锁仓态
         在这类品种上**结构性不可达**。转移④ 正是靠这条前提才敢用 `latest` 直接
         当平今目标（不回查 positions、不存在"找不到目标"的分支）。
@@ -1178,7 +1185,7 @@ class TradingEngine(ReconcileMixin):
         调用点两处：`_restore`（恢复完持仓后 —— 抓真实破口"带旧库重启"）、
         `_book_open`（落账后 —— 抓运行期任何产生第二笔 OPEN 的路径）。
         """
-        if self._close_mode() != CLOSETODAY:
+        if self._today_exit() != CLOSETODAY:
             return
         n = len(self.positions.positions)
         if n <= 1:
@@ -1190,7 +1197,7 @@ class TradingEngine(ReconcileMixin):
                "处理（改表或清库），引擎不自动猜方向。").format(n)
         self.ev.write("two_state_invariant_broken", where=where,
                       positions_n=n, net_volume=self.positions.net_volume(),
-                      close_mode=self._close_mode(),
+                      today_exit=self._today_exit(),
                       note="CLOSETODAY 两态品种出现多笔仓单（锁仓态应不可达）")
         self.alert(self.ALERT_SEVERE, "two_state_invariant_broken", msg,
                    where=where, positions_n=n)
@@ -1250,7 +1257,7 @@ class TradingEngine(ReconcileMixin):
     # 2026-09-15 P-A 删除 _check_closetoday_economy（共 36 行）：
     #   平今经济性从"成交后建议"改为档案费率启动即派生（Product.prefer_closetoday）；
     #   2026-09-16 起再改一次：改为**品种执行策略表第 1 列直接给定**
-    #   （ExecPolicy.close_mode）—— 决策侧不再读费率，建议与执行分叉的裂缝消除。
+    #   （ExecPolicy.today_exit）—— 决策侧不再读费率，建议与执行分叉的裂缝消除。
     def _pre_trade_check(self, act: "_Action", today: str,
                          sig: Optional[Signal] = None,
                          ref_price: float = 0.0) -> Optional[str]:
@@ -1353,7 +1360,7 @@ class TradingEngine(ReconcileMixin):
         # 动作本来就照着表生成；这里再兜一道是防未来新增调用点绕过
         # `_decide_exit` 直接构造 CLOSETODAY 动作。
         if act.intent is OrderIntent.CLOSETODAY:
-            if self._close_mode() != CLOSETODAY:
+            if self._today_exit() != CLOSETODAY:
                 return "closetoday_not_supported"
         if act.target is None:
             return "close_without_target"

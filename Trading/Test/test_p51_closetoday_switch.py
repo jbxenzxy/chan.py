@@ -13,7 +13,7 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
 
 硬约束（2026-09-16 起）
 --------------------------------
-  · 走不走平今 = **品种执行策略表第 1 列**（`EXEC_POLICY[code].close_mode`），
+  · 走不走平今 = **品种执行策略表第 1 列**（`EXEC_POLICY[code].today_exit`），
     由用户按费率自己算定后填表 —— 代码不从费率推导、也不看交易所名字
     （原「按交易所能力守卫的闸门」与「按费率 3× 口径派生的开关」**均已删除**）；
     转移④ 分支条件 + `_pre_trade_check` 校验链**双处**消费同一张表；
@@ -23,7 +23,7 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
 覆盖
 --------------------------------------------------------------------------
   [1] 品种执行策略表：第 1 列（今仓离场 offset）—— 8 行取值 + 与档案同源
-  [2] 硬断言：`FAK ⟹ 一笔 1 手`；非法 close_mode / order_advanced / N 构造期拒绝
+  [2] 硬断言：`FAK ⟹ 一笔 1 手`；非法 today_exit / order_advanced / N 构造期拒绝
   [3] 转移 ④ **两路平铺**（_decide_exit）：
         a. 表 = R-OPEN（IF）→ OPEN 反向开仓锁仓
         b. 表 = CLOSETODAY（AU）→ CLOSETODAY / target=当日仓 / transition=4
@@ -81,14 +81,9 @@ from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import (EXEC_POLICY,  # noqa: E402
                                    PRODUCT_PROFILES, ExecPolicy)
 
-from dataclasses import replace as _dc_replace  # noqa: E402
-
+# 2026-09-16 B 批：`_prod(ex)`（换交易所造现场档案）随 `Product.exchange`
+#   字段删除一并移除 —— 该动作在结构上已无法表达。`_dc_replace` 导入同时删除。
 _IF = PRODUCT_PROFILES["IF"]
-
-
-def _prod(ex):
-    """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
-    return _dc_replace(_IF, exchange=ex)
 from Trading.Infra.Product import PRODUCT_PROFILES
 from Trading.Infra.StateDB import Store  # noqa: E402
 
@@ -157,11 +152,13 @@ def build_engine(tmpdir, cfg: TradingConfig, spec: "Instrument",
                  echo=False, echo_kinds=None))
 
 
-def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
-             exchange: str = ""):
-    """exchange 参数保留只为调用点兼容：P-B 起交易所归品种档案（frozen 配置
-    不携带该键，写入会触发 _check_removed_keys 显式报错）；交易所差异由
-    build_engine 的 Instrument 档案参数表达。"""
+def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF"):
+    """构造部署配置。
+
+    2026-09-16 B 批：原 `exchange: str = ""` 形参已删 —— `Product.exchange`
+    字段整体删除后，这个"只为调用点兼容"的形参再没有承载对象；留着只会让人
+    以为配置里还认这个键（真写进去是触发 `_check_removed_keys` 报错）。
+    """
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
@@ -172,14 +169,16 @@ def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
 
 print("\n[1] 品种执行策略表：今仓离场口径 = 表第 1 列（不看交易所名字、不算费率）")
 check("[1a] AU/AG/CU → CLOSETODAY（用户按费率算定：平今更省）",
-      [EXEC_POLICY[k].close_mode for k in ("AU", "AG", "CU")],
+      [EXEC_POLICY[k].today_exit for k in ("AU", "AG", "CU")],
       ["CLOSETODAY", "CLOSETODAY", "CLOSETODAY"])
 check("[1b] IF/IH/IC/IM/TA → R-OPEN（反向开仓锁仓）",
-      [EXEC_POLICY[k].close_mode for k in ("IF", "IH", "IC", "IM", "TA")],
+      [EXEC_POLICY[k].today_exit for k in ("IF", "IH", "IC", "IM", "TA")],
       ["R-OPEN"] * 5)
-check("[1c] ★ 交易所名字不参与判断：TA 档案改 exchange='SHFE' → 仍按表 = CLOSE",
-      _dc_replace(PRODUCT_PROFILES["TA"], exchange="SHFE").exec_policy.close_mode,
-      "R-OPEN")
+# [1c] 原为「交易所名字不参与判断：TA 档案改 exchange='SHFE' → 仍按表 = CLOSE」。
+#      2026-09-16 B 批删除字段后升级为结构断言（与 test_p9 [1g] 同款）。
+check("[1c] ★ 交易所彻底出代码：8 档均无 exchange 字段（2026-09-16 B 批删除）",
+      [k for k in PRODUCT_PROFILES if hasattr(PRODUCT_PROFILES[k], "exchange")],
+      [])
 check("[1d] 表与档案同源（Product.exec_policy 就是 EXEC_POLICY 那一行）",
       all(PRODUCT_PROFILES[k].exec_policy is EXEC_POLICY[k] for k in EXEC_POLICY),
       True)
@@ -190,9 +189,9 @@ check("[1e] 8 行齐全（与 PRODUCT_PROFILES 同键）",
 print("\n[2] 硬断言：FAK ⟹ 一笔挂 1 手（构造期拒绝，不留静默默认值）")
 
 
-def _ctor_rejects(close_mode, adv, n):
+def _ctor_rejects(today_exit, adv, n):
     try:
-        ExecPolicy(close_mode, adv, n)
+        ExecPolicy(today_exit, adv, n)
         return False
     except ValueError:
         return True
@@ -205,7 +204,7 @@ check("[2b] TA 一笔 1 手", EXEC_POLICY["TA"].lots_per_order, 1)
 check("[2c] ★ FAK + N=2 → 构造期 ValueError（硬断言，不是警告）",
       _ctor_rejects("R-OPEN", "FAK", 2), True)
 check("[2d] FAK + N=1 → 合法", ExecPolicy("R-OPEN", "FAK", 1).lots_per_order, 1)
-check("[2e] 非法 close_mode / order_advanced / N=0 同样构造期拒绝",
+check("[2e] 非法 today_exit / order_advanced / N=0 同样构造期拒绝",
       [_ctor_rejects("CLOSEX", "FOK", 2), _ctor_rejects("R-OPEN", "FOKX", 2),
        _ctor_rejects("R-OPEN", "FOK", 0)], [True, True, True])
 check("[2f] 8 品种全部 N ≥ 1",
@@ -224,7 +223,7 @@ with tmp_dir("t3a") as tmp:
     check("[3a2] target=None（锁仓不指定被平仓单）", act.target, None)
 
 with tmp_dir("t3c") as tmp:
-    cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
+    cfg = make_cfg("KQ.m@SHFE.AU")
     eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "c")
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1, vol=3))
@@ -246,7 +245,7 @@ with tmp_dir("t3d") as tmp:
     #     [3d]  引擎层 —— 品种在册却没档案 → **拒绝启动**（不再静默走保守侧）；
     #     [3d2] Instrument 层 —— 保守侧本身仍在（未标定品种的离线探针用）。
     #   这样"保守侧存在"与"生产路径不依赖它"两件事都被钉住。
-    cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
+    cfg = make_cfg("KQ.m@SHFE.AU")
     _err = ""
     try:
         build_engine(tmp, cfg, Instrument(None, None), "d")
@@ -260,7 +259,7 @@ with tmp_dir("t3d") as tmp:
           (_bare.exec_policy, _bare.effective_order_advanced()), (None, "FOK"))
 
 with tmp_dir("t3e") as tmp:
-    cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
+    cfg = make_cfg("KQ.m@SHFE.AU")
     eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "e")
     eng.on_bar(make_bar(1000))
     # 走**真实路径**开仓（转移①）再数仓单。
@@ -309,7 +308,7 @@ with tmp_dir("t4a") as tmp:
           eng._pre_trade_check(act, D1, None), "closetoday_not_supported")
 
 with tmp_dir("t4b") as tmp:
-    eng = build_engine(tmp, make_cfg("KQ.m@SHFE.AU", exchange="SHFE"),
+    eng = build_engine(tmp, make_cfg("KQ.m@SHFE.AU"),
                        Instrument(None, PRODUCT_PROFILES["AU"]), "b")
     act_ok = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                      target=today_target, is_exit=True, transition=4)
@@ -352,7 +351,7 @@ print("\n[6] 平今成交后状态机：今仓直接回**空仓态**（不经锁
 with tmp_dir("t6") as tmp:
     P0 = 4520.0
     P_EXIT = 4110.0
-    cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
+    cfg = make_cfg("KQ.m@SHFE.AU")
     eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "a")
     eng.on_bar(make_bar(1000, D1 + " 09:40", P0, P0 + 10, P0 - 10, P0))
     eng.on_signal(make_sig("P51|buy|1", is_buy=True, price=P0))

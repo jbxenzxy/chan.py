@@ -145,7 +145,8 @@ def build_engine(tmpdir, cfg, spec, tag="a"):
 def make_cfg(guard_days=1):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = "KQ.m@CFFEX.IF"
-    # P-B：配置不再携带 exchange（归品种档案；写旧键会触发 _check_removed_keys）
+    # P-B：配置不再携带 exchange；2026-09-16 B 批该字段**整体删除**（交易所只作
+    #   注释备案），写旧键仍会触发 _check_removed_keys 指路
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["risk"]["delivery_guard_days"] = guard_days
     base["exit_params"].update({"use_atr": False,

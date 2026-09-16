@@ -76,7 +76,7 @@ def build_broker(name: str, instrument: "Instrument",
 #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
 #
 # CLOSETODAY 的启用判据（2026-09-16）：**品种执行策略表第 1 列**
-#   （`ExecPolicy.close_mode == "CLOSETODAY"`）—— 用户按费率自己算定后填表，
+#   （`ExecPolicy.today_exit == "CLOSETODAY"`）—— 用户按费率自己算定后填表，
 #   代码只读表，不从费率推导、也不看交易所名字（原按 SHFE/INE 能力守卫的
 #   `Instrument.supports_closetoday` 已删除）。
 #   引擎侧守卫 = 转移④ 分支条件 + `_pre_trade_check`（校验该品种表第 1 列确为 CLOSETODAY）。

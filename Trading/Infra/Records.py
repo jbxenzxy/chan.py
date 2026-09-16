@@ -80,7 +80,7 @@ class OrderIntent(str, Enum):
                    10 倍（xlsx 万2.3 vs 万0.23），对今仓发 CLOSE 会被当平昨处理
                    并按平今收费 —— 绝不。
       CLOSETODAY  目标恒定是**今仓**；是否启用 = **品种执行策略表第 1 列**
-                   （`ExecPolicy.close_mode == "CLOSETODAY"`，由用户按费率自己算定）
+                   （`ExecPolicy.today_exit == "CLOSETODAY"`，由用户按费率自己算定）
                    —— 代码不从费率推导、也不看交易所名字
                    （守卫：`Engine._pre_trade_check` 校验该品种表第 1 列确为
                    CLOSETODAY + 转移④ 的分支条件）。

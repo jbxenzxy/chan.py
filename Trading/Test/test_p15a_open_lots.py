@@ -268,7 +268,7 @@ def _mk_risk(**kw):
 
 def _mk_pol(**kw):
     """构造 ExecPolicy，返回 (实例 or None, 异常串 or None)。"""
-    kw.setdefault("close_mode", R_OPEN)
+    kw.setdefault("today_exit", R_OPEN)
     kw.setdefault("order_advanced", FOK)
     kw.setdefault("lots_per_order", 2)
     try:
@@ -431,7 +431,9 @@ with tmp_dir() as td:
         state=Instrument(None, _IF))
     eng.state._product = None            # ← 运行期摘掉档案（模拟未标定品种）
     check("[2d] 兜底仍在：无品种档案 → 保守 1 手"
-          "（与 exchange 未标定 → '' 同一约定）", eng.lots_per_order, 1)
+          "（与「档案缺失时派生值一律取保守侧」同一约定；"
+          "原举的 exchange 未标定 → '' 一例随该字段于 B 批删除而不再存在）",
+          eng.lots_per_order, 1)
     check("[2d] _open_volume() 同为 1", eng._open_volume(), 1)
 
 # 启动期硬失败（A 批 ⑵）：品种在册却没拿到档案 → 拒绝启动，不再静默走保守侧

@@ -40,7 +40,7 @@ D-B（生成式 SSOT）之后本文件的职责
 
   [C] `LOCK_PATH_MULT` 必须已从 Product 删除（3× 费率口径判据消亡）
   [D] `fee_overrides` 字段位必须存在（方案 §6.3-b 明令"字段位必须留"）
-  [E] 平今判据 = 品种执行策略表第 1 列 `close_mode`（静态、不读费率）
+  [E] 平今判据 = 品种执行策略表第 1 列 `today_exit`（静态、不读费率）
   [F] 费率数字只许出现在 GENERATED 区块内（手写部分一个字面量都不许有）
 
 跑法：python Trading/Test/test_product_fee_table.py
@@ -180,8 +180,8 @@ _EXPECT_OVERRIDES = {
     "AG": (("6、12合约&2607、2608、2609、2610合约", ("rate", 0.5), None),),
 }
 
-# 平今判据期望（品种执行策略表第 1 列 close_mode；不看交易所、不算费率）
-_EXPECT_CLOSE_MODE = {"IF": "R-OPEN", "IH": "R-OPEN",
+# 平今判据期望（品种执行策略表第 1 列 today_exit；不看交易所、不算费率）
+_EXPECT_TODAY_EXIT = {"IF": "R-OPEN", "IH": "R-OPEN",
                       "IC": "R-OPEN", "IM": "R-OPEN",
                       "AU": "CLOSETODAY", "AG": "CLOSETODAY",
                       "CU": "CLOSETODAY", "TA": "R-OPEN"}
@@ -379,18 +379,18 @@ check("[5f] 未消费：fee_pair() 仍返回基准档（AU 10 元/手，非覆�
 
 
 # ══════════════════════════════════════════════════════════════════
-print("\n[6] D-A 护栏（新）：平今判据 = 表第 1 列 close_mode（静态、不读费率）")
+print("\n[6] D-A 护栏（新）：平今判据 = 表第 1 列 today_exit（静态、不读费率）")
 # ══════════════════════════════════════════════════════════════════
-check("[6a] close_mode 取值域 = {R_OPEN, CLOSETODAY}（无第三种、无 None）",
-      sorted({p.exec_policy.close_mode for p in PRODUCT_PROFILES.values()}),
+check("[6a] today_exit 取值域 = {R_OPEN, CLOSETODAY}（无第三种、无 None）",
+      sorted({p.exec_policy.today_exit for p in PRODUCT_PROFILES.values()}),
       sorted({R_OPEN, CLOSETODAY}))
-for _code in sorted(_EXPECT_CLOSE_MODE):
-    check("[6b] {} close_mode == 期望".format(_code),
-          PRODUCT_PROFILES[_code].exec_policy.close_mode,
-          _EXPECT_CLOSE_MODE[_code])
+for _code in sorted(_EXPECT_TODAY_EXIT):
+    check("[6b] {} today_exit == 期望".format(_code),
+          PRODUCT_PROFILES[_code].exec_policy.today_exit,
+          _EXPECT_TODAY_EXIT[_code])
 check("[6c] 8 品种全部静态可判定（无空值 → 不依赖运行期价格/费率比较）",
       [c for c in PRODUCT_PROFILES
-       if not PRODUCT_PROFILES[c].exec_policy.close_mode], [])
+       if not PRODUCT_PROFILES[c].exec_policy.today_exit], [])
 check("[6d] Product 上不残留旧费率派生符号",
       [n for n in ("prefer_closetoday", "prefer_closetoday_at",
                    "supports_closetoday")
@@ -398,10 +398,12 @@ check("[6d] Product 上不残留旧费率派生符号",
 check("[6e] Product.exec_policy ⇄ EXEC_POLICY 同源（不是另算一遍）",
       all(PRODUCT_PROFILES[c].exec_policy is EXEC_POLICY[c]
           for c in PRODUCT_PROFILES), True)
-check("[6f] close_mode 与交易所名字无关：同表不同交易所同值亦允许"
-      "（IF=R-OPEN 与 TA=R-OPEN 分属 CFFEX/CZCE）",
-      (PRODUCT_PROFILES["IF"].exec_policy.close_mode,
-       PRODUCT_PROFILES["TA"].exec_policy.close_mode), (R_OPEN, R_OPEN))
+check("[6f] today_exit 与交易所无关：IF(CFFEX) / TA(CZCE) 同为 R-OPEN",
+      (PRODUCT_PROFILES["IF"].exec_policy.today_exit,
+       PRODUCT_PROFILES["TA"].exec_policy.today_exit), (R_OPEN, R_OPEN))
+check("[6g] ★ 交易所已彻底出代码：8 档均无 exchange 字段（2026-09-16 B 批删除）",
+      [k for k in PRODUCT_PROFILES if hasattr(PRODUCT_PROFILES[k], "exchange")],
+      [])
 
 
 print("\n" + "=" * 62)

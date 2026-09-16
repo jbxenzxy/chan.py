@@ -1148,7 +1148,7 @@ class SimNowBroker(Broker):
         （断言在 Engine._pre_trade_check），今日单离场默认走反向 OPEN 软离场。
         故平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今）在本系统
         里由**品种执行策略表第 1 列**开启（2026-09-16）：该品种
-        `ExecPolicy.close_mode == "CLOSETODAY"` 时，转移 ④ 生成 CLOSETODAY 意图 →
+        `ExecPolicy.today_exit == "CLOSETODAY"` 时，转移 ④ 生成 CLOSETODAY 意图 →
         offset=CLOSETODAY、目标恒为**今仓**（引擎 _pre_trade_check 断言）。
         两意图在 P0 可平量判据与成交后今/昨验证上完全相反，见下。
         """

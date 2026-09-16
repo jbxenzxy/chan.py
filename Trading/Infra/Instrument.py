@@ -6,8 +6,9 @@
 术语锚点（§附F.1/F.2 · 2026-09-15 P-D 落位）
 ----------------------------------------------------
 `Instrument` = 被交易的那张**具体合约**（IF2509 / AU2512），名字借自 CTP
-柜台协议 `InstrumentField`（price_tick / multiplier / exchange / last_trade_date
-一一对应）—— 不是自造词。与相邻轴的分工：
+柜台协议 `InstrumentField`（price_tick / multiplier / last_trade_date 一一对应；
+其 exchange 一项自 2026-09-16 B 批起在本仓**不再对应任何字段**）—— 不是自造词。
+与相邻轴的分工：
   · `Product`（Infra/Product.py）：品种族档案（IF 全族一份），per-product；
   · `symbol`（signal_symbol / trade_symbol）：只是代码字符串，不是粒度概念；
   · 换月换的是本轴的 instrument 身份（trade_symbol / last_trade_date 行情回填），
@@ -26,7 +27,7 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
     构造期，本类被写即炸正是 P-B 要的护栏。
     摘除的字段（旧键会构造期报错，见 _REMOVED_KEYS 提示）：
       price_tick / multiplier → 品种档案 `Product`（P-B 归位）
-      exchange                → 品种档案 `Product`（P-B 归位）
+      exchange                → **已整体删除**（2026-09-16 B 批：交易所只作注释备案）
       last_trade_date         → `Instrument` 运行时身份（行情回填）
       open/close/closetoday_fee_rate → 品种档案 Fee 两档（P-A 已归位）
 
@@ -34,7 +35,7 @@ P-B 合并（交接文档 §4.3 · 2026-09-15 拍板"真合并"）
     合约身份 + InstrumentState 的运行时状态合并而成：
         ├ 静态身份（config 转发只读）：signal_symbol / slippage_ticks /
         │   order_advanced / closetoday_first / price_band_points
-        ├ 品种派生（product 转发只读）：exchange（纯备案）/ exec_policy（执行策略表）
+        ├ 品种派生（product 转发只读）：exec_policy（执行策略表）
         ├ 运行时身份（行情回填可写）：trade_symbol / last_trade_date
         ├ 有效值（行情回填可写）：price_tick / multiplier / 涨跌停区间 /
         │   verified / source   ← 初值直接取 Product 档案（播种桥已消亡）
@@ -79,7 +80,8 @@ if TYPE_CHECKING:
 _REMOVED_KEYS: Dict[str, str] = {
     "price_tick": "品种档案 Product.price_tick（P-B 归位，调参=改档案）",
     "multiplier": "品种档案 Product.multiplier（P-B 归位，调参=改档案）",
-    "exchange": "品种档案 Product.exchange（P-B 归位）",
+    "exchange": "已整体删除（2026-09-16 B 批）—— 交易所只作注释备案"
+                "（EXEC_POLICY 行尾 + 各档案 note 散文）",
     "last_trade_date": "Instrument 运行时身份（行情回填，配置不再持有）",
     "open_fee_rate": "品种档案 Product.open_fee（P-A 归位）",
     "close_fee_rate": "品种档案 Product（平昨≡开仓档，P-A 删第三档）",
@@ -133,7 +135,8 @@ class InstrumentConfig(BaseModel):
                                               #   无 K 线 → 无信号 → 无报单，无从拦截）。
     #
     # 2026-09-15 P-B 归位/迁出（含去向，详见模块 docstring）：
-    #   price_tick / multiplier / exchange → Product（品种轴档案）
+    #   price_tick / multiplier → Product（品种轴档案）
+    #   exchange 已于 2026-09-16 B 批**整体删除**（不再有任何字段承载）
     #   last_trade_date → Instrument（运行时身份，行情回填）
     #   2026-09-15 P-A：三档费率字段删除（费率归位品种档案 Fee 两档）。
     #   2026-09-14：max_order_volume 死字段删除（0 消费，防回潮见 test_p50 [8]）。
@@ -203,7 +206,7 @@ class Instrument:
 
     构造：`Instrument(config, product)`
       · config  — InstrumentConfig（frozen 部署配置），缺省 = 默认 IF 配置
-      · product — Product 品种档案（tick/乘数/exchange/费率的真值源）；
+      · product — Product 品种档案（tick/乘数/费率的真值源）；
         None = 未标定品种（有效值取 0 → 定价/对齐 fail-closed；启动期会被
         白名单闸门拒绝，这里允许 None 只为离线探针/测试便利）。
 
@@ -274,7 +277,7 @@ class Instrument:
 
     @property
     def product(self) -> Optional["Product"]:
-        """品种档案（exchange / Fee 两档 / exec_policy 的真值源）。"""
+        """品种档案（Fee 两档 / exec_policy / 策略标定值的真值源）。"""
         return self._product
 
     # —— 有效值转发（D-D · 2026-09-15：不可变 EffectiveSpec，只读）——
@@ -321,13 +324,9 @@ class Instrument:
     def price_band_points(self) -> float:
         return self._config.price_band_points
 
-    # —— product 只读转发（P-B：exchange 归品种档案，§5.3）——
-    @property
-    def exchange(self) -> str:
-        """交易所代码（CFFEX/SHFE/INE/DCE/CZCE/GFEX）。真值源 = 品种档案；
-        未标定 → ""。**纯备案 + 展示**（`describe()` / 启动横幅）——
-        执行判据已全部归品种执行策略表，没有任何逻辑读本字段。"""
-        return str(self._product.exchange or "") if self._product is not None else ""
+    # —— product 只读转发 ——
+    #   原 `exchange` 只读属性随 `Product.exchange` 字段于 2026-09-16 B 批一并删除：
+    #   字段没了，"转发它"就没有意义；交易所从此只以**注释**形态存在。
 
     @property
     def exec_policy(self) -> Optional["ExecPolicy"]:
@@ -338,7 +337,7 @@ class Instrument:
 
         ⚠️ 2026-09-16 收紧（跨文件 fallback 清理，A 批 ⑵）：
           · 类型 `Optional[Any]` → `Optional[ExecPolicy]`：`Any` 会把
-            `pol.close_mode` 这类拼写错误从"静态可查"降级成"运行时才发现"；
+            `pol.today_exit` 这类拼写错误从"静态可查"降级成"运行时才发现"；
           · **去掉 `getattr(p, "exec_policy", None)`** —— `exec_policy` 是
             `Product` 的**必填 dataclass 字段**（无默认值），那段 fallback 在
             正常路径上**不可达**；它唯一的实际作用是"哪天字段被删/改名了也
@@ -356,9 +355,9 @@ class Instrument:
         return p.exec_policy if p is not None else None
 
     def __repr__(self) -> str:
-        return ("Instrument(trade_symbol={!r}, exchange={!r}, price_tick={!r}, "
+        return ("Instrument(trade_symbol={!r}, price_tick={!r}, "
                 "multiplier={!r}, band=({!r}, {!r}), verified={!r}, source={!r})"
-                .format(self.trade_symbol, self.exchange, self.price_tick,
+                .format(self.trade_symbol, self.price_tick,
                         self.multiplier, self.lower_limit, self.upper_limit,
                         self.verified, self.source))
 

@@ -43,7 +43,8 @@ A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
       Engine.alert（D11 通道，§5.9.4 项 5 "Broker → Engine.alert()"）；
   [10] Phase 8.1（O-6）：组合反例 policy=off × 坏行情 → 仍 unverified + 拒单；
   （原 [11] Phase 8.1（O-1）「symbol → 交易所」对账已于 2026-09-16 整节删除：
-    exchange 是纯备案字段，对账只会给一个不参与逻辑的字段发噪音告警。）
+    exchange 曾是纯备案字段（该字段已于 2026-09-16 B 批整体删除），
+    对账只会给一个不参与逻辑的字段发噪音告警。）
 
 跑法：python Trading/Test/test_p42_price_from_quote.py
 """

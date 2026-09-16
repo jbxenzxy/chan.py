@@ -7,7 +7,7 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
     使 PRODUCT_PROFILES = IF/IH/IC/IM + AU/AG/CU + TA；
   · 品种参数档案**不是限制**：乘数/tick 实盘自动从行情取（A′ fail-closed）、
     报单方式由品种执行策略表第 2 列给定（TA = FAK；2026-09-16 起不再由
-    exchange 派生）、R 下限默认 3 点（商品档经验未积累前统一
+    交易所名字派生）、R 下限默认 3 点（商品档经验未积累前统一
     用默认，同 IF/IH=3 / IC/IM=5 的经验标定路径）。未知品种不构成"不可用"。
 
 本测试锁死的断言：
@@ -60,7 +60,6 @@ from Trading.Config import TradingConfig, resolved_exit_params  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
-from dataclasses import replace as _dc_replace  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Infra.Product import PRODUCT_PROFILES, parse_product  # noqa: E402
@@ -172,12 +171,13 @@ def main():
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
         check("TA _open_volume()=1（表第 3 列 = 1 笔 1 手）",
               eng_ta._open_volume(), 1)
-        # P-B：配置 frozen、exchange 归档案 —— "配错交易所"用现场档案注入 spec 表达
-        eng_ta.state = Instrument(None, _dc_replace(
-            PRODUCT_PROFILES["TA"], exchange="SHFE"))
-        check("★ TA 配错交易所(SHFE) 仍按表：_open_volume()=1"
-              "（不看交易所名字 —— 表第 3 列说了算，配错交易所不再改变手数）",
-              eng_ta._open_volume(), 1)
+        # 2026-09-16 B 批：原「配错交易所(SHFE) 仍按表」用 `_dc_replace(…, exchange=…)`
+        #   现场注入表达；`Product.exchange` 字段删除后这一步在结构上无法表达
+        #   （没有能填错的地方），故断言升级为"档案上确实不再有该字段"。
+        check("★ 8 档均无 exchange 字段（配错交易所已无法表达，2026-09-16 B 批）",
+              [k for k in PRODUCT_PROFILES
+               if hasattr(PRODUCT_PROFILES[k], "exchange")],
+              [])
 
     print("\n[5] 品种白名单硬约束：未知品种引擎拒绝启动（2026-09-13 拍板）")
     with tmp_dir() as td:

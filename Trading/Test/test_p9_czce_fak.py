@@ -13,7 +13,8 @@ P9 郑商所 CZCE · FOK→FAK + OPEN 手数（执行策略表第 5 列） 契�
   其余品种完全不变：1 笔 N 手（N = 品种执行策略表第 3 列，IF = 2）FOK。
 
 本测试锁死用户的三条断言：
-  [1] Instrument.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖；P-B 起 exchange 真值源 = 品种档案）
+  [1] Instrument.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖；
+      P-B 起报单属性真值源 = 品种档案；2026-09-16 B 批删 exchange 字段后交易所彻底出代码）
   [2] Engine._decide_action OPEN 手数：按表第 3 列（TA=1 / IF=2，无拆单）
   [3] Broker submit 报文：CZCE 两个 insert_order 站点（OPEN/CLOSE/离场）advanced 均 "FAK"；
       CFFEX 回归 "FOK"
@@ -67,14 +68,11 @@ from Trading.Infra.Instrument import (Instrument,  # noqa: E402
                                       InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
-from dataclasses import replace as _dc_replace  # noqa: E402
-
+# 2026-09-16 B 批：`Product.exchange` 字段整体删除后，原先的
+#   `_prod(ex) = _dc_replace(_IF, exchange=ex)`（"换交易所造一份现场档案"）
+#   在结构上无法表达 —— 连能填错的地方都没有了，故连同 `_dc_replace`
+#   导入一并删除（本文件其余地方不再需要它）。
 _IF = PRODUCT_PROFILES["IF"]
-
-
-def _prod(ex):
-    """现场档案：以 IF 档案为模板换交易所（P-B：exchange 真值源 = 品种档案）。"""
-    return _dc_replace(_IF, exchange=ex)
 from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Infra.Records import AccountState, Bar, EngineState, Signal, Side
@@ -208,7 +206,7 @@ def make_broker(api=None, params=None):
 
 
 def make_czce_broker(api=None, params=None):
-    """make_broker 的 CZCE 版：P-B 起 exchange 归品种档案 —— 直接用 TA 档案
+    """make_broker 的 CZCE 版：P-B 起报单属性归品种档案 —— 直接用 TA 档案
     构造 Instrument，trade_symbol 用郑商所月份合约（运行时可写身份字段）。"""
     b = make_broker(api=api, params=params)
     b.state = Instrument(
@@ -218,23 +216,27 @@ def make_czce_broker(api=None, params=None):
     return b
 
 
-def build_engine(tmpdir, *, exchange="CZCE", broker=None):
-    """构造引擎（CZCE 或指定交易所）。
+def build_engine(tmpdir, *, code="TA", broker=None):
+    """构造引擎（TA / IF 两份档案二选一）。
 
     2026-09-13 Phase 9：Engine 与 broker 共用同一份 Instrument（P-B 合并），
-    exchange 由档案给定，端到端验证 FOK/FAK 切换。
+    报单属性由**品种档案**给定，端到端验证 FOK/FAK 切换。
     2026-09-16：单笔手数不再由配置给（`risk.max_volume` 已删），
     真值源 = 品种执行策略表第 3 列（TA → 1 / IF → 2）。
+    2026-09-16 B 批：形参由 `exchange="CZCE"/"CFFEX"` 改为 `code="TA"/"IF"`。
+    本参数**从来就只是"选哪份档案"**（CZCE/CFFEX 是当时能想到的场景名），
+    改用品种键才与代码真正读的东西（`PRODUCT_PROFILES[code]`）对得上；
+    何况 `Product.exchange` 字段已删除，交易所名再无字段可承载。
     """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # P-B（2026-09-15）：exchange 归品种档案，frozen 配置不可就地改写 ——
-    #   CZCE 用 TA 档案、CFFEX 用 IF 档案；Instrument 单例整体替换进 cfg
+    # P-B（2026-09-15）：frozen 配置不可就地改写 ——
+    #   按品种键取档案；Instrument 单例整体替换进 cfg，
     #   并同时注入 broker（Engine 读 self.state = broker.state = 同一对象）。
-    is_czce = exchange == "CZCE"
-    sym = "KQ.m@CZCE.TA" if is_czce else "KQ.m@CFFEX.IF"
-    tsym = "CZCE.TA501" if is_czce else "CFFEX.IF2609"
+    is_ta = code == "TA"
+    sym = "KQ.m@CZCE.TA" if is_ta else "KQ.m@CFFEX.IF"
+    tsym = "CZCE.TA501" if is_ta else "CFFEX.IF2609"
     cfg.instrument = InstrumentConfig(signal_symbol=sym, trade_symbol=tsym)
-    spec = Instrument(None, PRODUCT_PROFILES["TA"] if is_czce else PRODUCT_PROFILES["IF"])
+    spec = Instrument(None, PRODUCT_PROFILES[code])
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
     else:
@@ -286,10 +288,13 @@ check("[1e] ★ IF 档案 + 配置 order_advanced='FAK' → 仍 FOK（表覆盖�
 for _k in ("AU", "AG", "CU"):
     check("[1f] {} 档案 → FOK（表第 2 列）".format(_k),
           Instrument(None, PRODUCT_PROFILES[_k]).effective_order_advanced(), "FOK")
-check("[1g] ★ 配错交易所不改表结论：TA 档案改 exchange='SHFE' → 仍 FAK",
-      Instrument(None, _dc_replace(PRODUCT_PROFILES["TA"],
-                                   exchange="SHFE")).effective_order_advanced(),
-      "FAK")
+# [1g] 原为「配错交易所不改表结论：TA 档案改 exchange='SHFE' → 仍 FAK」。
+#      2026-09-16 B 批删除 `Product.exchange` 字段后，这条从**行为断言**升级为
+#      **结构断言**：交易所连"能被填错的地方"都不存在了 —— 比"填错也不影响"更强，
+#      因为它不再依赖"有人记得去测配错这个动作"。
+check("[1g] ★ 交易所彻底出代码：8 档均无 exchange 字段（2026-09-16 B 批删除）",
+      [k for k in PRODUCT_PROFILES if hasattr(PRODUCT_PROFILES[k], "exchange")],
+      [])
 check("[1h] 表第 3 列：TA 一笔 1 手 / IF 一笔 2 手",
       (PRODUCT_PROFILES["TA"].exec_policy.lots_per_order,
        PRODUCT_PROFILES["IF"].exec_policy.lots_per_order), (1, 2))
@@ -300,7 +305,7 @@ check("[1h] 表第 3 列：TA 一笔 1 手 / IF 一笔 2 手",
 # ════════════════════════════════════════════════════════════════
 print("\n[2] Engine._decide_action OPEN 手数：读执行策略表第 5 列（TA=1，无拆单）")
 with tmp_dir() as td:
-    eng = build_engine(td, exchange="CZCE")
+    eng = build_engine(td, code="TA")
     check("[2a] CZCE 引擎初始 account_state=FLAT", eng.account_state(), AccountState.FLAT)
     sig = make_sig(key="P9-2a")
     act = eng._decide_action(sig, sig.date)
@@ -309,7 +314,7 @@ with tmp_dir() as td:
     check("[2d] CZCE 转移① transition=1", act.transition, 1)
 
 with tmp_dir() as td:
-    eng = build_engine(td, exchange="CFFEX")
+    eng = build_engine(td, code="IF")
     check("[2e] CFFEX 引擎初始 account_state=FLAT", eng.account_state(), AccountState.FLAT)
     act = eng._decide_action(make_sig(key="P9-2e", symbol="KQ.m@CFFEX.IF"), "2026-09-01 09:30")
     check("[2f] CFFEX 转移① OPEN 手数 = 表第 3 列(=2)", act.volume, 2)
@@ -317,10 +322,10 @@ with tmp_dir() as td:
 
 # 转移②（当日锁→OPEN）与 ① 共用 self._open_volume() —— 直接钉死 helper 即覆盖两者
 with tmp_dir() as td:
-    eng = build_engine(td, exchange="CZCE")
+    eng = build_engine(td, code="TA")
     check("[2h] ★ CZCE 引擎 _open_volume()=1（转移①/② 共用，钉死 1 手）",
           eng._open_volume(), 1)
-    eng2 = build_engine(td, exchange="CFFEX")
+    eng2 = build_engine(td, code="IF")
     check("[2i] CFFEX 引擎 _open_volume()=表第 3 列(=2)（其余所不变）",
           eng2._open_volume(), 2)
 
@@ -360,7 +365,7 @@ print("\n[4] 端到端 Engine + DryRunBroker：CZCE 1 笔 1 手、net 正确、�
 
 # 全成路径：CZCE 信号 → 恰好 1 单 1 手、net=1、RUNNING、status filled
 with tmp_dir() as td:
-    eng = build_engine(td, exchange="CZCE")
+    eng = build_engine(td, code="TA")
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-ok")
     eng.on_signal(sig)
@@ -401,7 +406,7 @@ with tmp_dir() as td:
         Instrument(InstrumentConfig(trade_symbol="CZCE.TA501"),
                    PRODUCT_PROFILES["TA"]),
         {"sim_equity": 10_000_000.0})
-    eng = build_engine(td, exchange="CZCE", broker=rb)
+    eng = build_engine(td, code="TA", broker=rb)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-rej")
     eng.on_signal(sig)
@@ -419,7 +424,7 @@ with tmp_dir() as td:
 
 # 回归：CFFEX 全成仍是 N=2 手（确认 TA 的表第 5 列 = 1 不影响其它品种）
 with tmp_dir() as td:
-    eng = build_engine(td, exchange="CFFEX")
+    eng = build_engine(td, code="IF")
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-cffex", symbol="KQ.m@CFFEX.IF")
     eng.on_signal(sig)
@@ -441,7 +446,7 @@ with tmp_dir() as td:
     # Phase 3（Fix B）：A′ 的 verified 是**运行时状态**，落在 broker 的 state 上
     # （Engine 通过 broker.state 读同一份 —— 不是 spec）。
     bk.state.verified = True
-    eng = build_engine(td, exchange="CZCE", broker=bk)
+    eng = build_engine(td, code="TA", broker=bk)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-5-e2e")
     eng.on_signal(sig)
