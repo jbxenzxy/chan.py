@@ -548,6 +548,40 @@ def parse_product_key(signal_symbol: str) -> str:
     return _MONTH_SUFFIX_RE.sub("", s.split(".")[-1]).upper()
 
 
+def product_key_of(symbol: Optional[str]) -> str:
+    """把「任意写法的合约符号」归一到**品种键** —— 落库 / 统计合并的唯一口径。
+
+    例::
+
+        product_key_of("KQ.m@CFFEX.IF")  -> "IF"    # 主连（前端 chartData.meta.symbol）
+        product_key_of("CFFEX.IF2609")   -> "IF"    # 月份合约（库内 trades.symbol）
+        product_key_of("SHFE.au2512")    -> "AU"
+        product_key_of("IF2609")         -> "IF"    # 裸代码（无交易所前缀）
+        product_key_of("")               -> ""
+
+    为什么必须换掉「双向后缀 GLOB」（2026-09-16 前的旧口径）：
+      库内 `trades.symbol` = 月份合约 `CFFEX.IF2609`，前端传的是主连
+      `KQ.m@CFFEX.IF` —— **两者互不为后缀**（`KQ.m@CFFEX.IF` 里根本没有
+      "IF2609" 这段），于是查询**恒返回 0 笔**，面板永远显示「该品种暂无历史成交」。
+      旧验证之所以没发现：它刻意挑了**互为后缀**的一对
+      （`IF2609` ↔ `CFFEX.IF2609`），那条用例**在设计上就必然通过**。
+
+    归一规则**只有一份**：转发同文件的 `parse_product_key`（末段 + 剥月份 +
+    转大写），不在别处重写第二份正则 —— 否则两处规则漂移时，"哪个键算同一品种"
+    会出现两个答案。裸代码（无 "."）补一个前导点即可复用同一套规则。
+
+    住址与消费方（2026-09-16 · C 批 ⑶-d）：
+      · **写入侧** `Infra/StateDB.py` 的 `save_trade` —— 落进 `trades.product_key`；
+      · **查询侧** `Infra/TradeStats.py` 的 `load_trades_report` —— 只用来把
+        调用方传来的符号（主连/月份/裸代码）归一成键，再拿这个键去比**列**；
+      · 两者调用的是本函数，故"写入时算的键"与"查询时算的键"恒同源。
+    """
+    s = str(symbol or "").strip()
+    if not s:
+        return ""
+    return parse_product_key(s if "." in s else "." + s)
+
+
 def describe_unknown_product(signal_symbol: str) -> str:
     """未知品种的统一文案（单一事实源，2026-09-14 评审 P2-4）。
 

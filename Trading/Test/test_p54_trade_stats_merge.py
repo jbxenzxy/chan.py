@@ -19,7 +19,12 @@ P54 成交统计「按品种键合并」契约（2026-09-16 · P0-1 修复）
 用户拍板（2026-09-16）
 ----------------------
 **同品种的多个月份合约合并统计** —— 判据 = **品种键相等**（归一规则只有一份：
-`Infra/Product.parse_product_key`，统计侧经 `TradeStats.product_key_of` 转发）。
+`Infra/Product.parse_product_key`）。
+
+C 批（同日 · ⑶-d）：归一从**查询侧**搬到**写入侧** —— `product_key_of`（裸代码
+补前导点）也移居 `Infra/Product.py`，`Store.save_trade` 落列 `trades.product_key`，
+本文件验的"合并统计"因此走 `WHERE product_key = ?`（列相等）。
+落库/回填/列相等的专门契约见 `test_p57_trades_product_key.py`。
 
 覆盖
 --------------------------------------------------------------------------

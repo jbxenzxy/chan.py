@@ -9,10 +9,15 @@
     绝不触发 Store 的 schema 迁移写操作（Store.__init__ 会写库）。
   · 账户无关：trades 表无 broker/账户列，simnow/实盘天然合并；调用方
     传入多个 db 路径即 union。
-  · **按品种键合并（2026-09-16 修 P0-1）**：匹配口径 = `product_key_of()`
-    的品种键相等 —— 盘前在主连上跑（`KQ.m@CFFEX.IF`）、盘后在月份合约上记账
-    (`CFFEX.IF2609`)，两边归一后同键 → 合并统计（用户 2026-09-16 拍板）。
-    旧实现用「双向后缀 GLOB」，对**真实取值**恒不命中（详见 `product_key_of`）。
+  · **按品种键合并**：盘前在主连上跑（`KQ.m@CFFEX.IF`）、盘后在月份合约上记账
+    (`CFFEX.IF2609`) —— 两边归一后同键 → 合并统计（用户 2026-09-16 拍板）。
+    旧实现用「双向后缀 GLOB」，对**真实取值**恒不命中（详见
+    `Product.product_key_of`）。
+  · **归一已搬到写入侧（2026-09-16 · C 批 ⑶-d）**：品种键由 `Store.save_trade`
+    落进 `trades.product_key` 列，本模块的过滤判据因此是**列相等**
+    （`WHERE product_key = ?`），**不再解读 `symbol`**。这样"同一批成交算不算
+    同一品种"只有一个答案来源（写入那一刻算好的键），而不是"写库一份 symbol +
+    查库时现算一次"两处口径。
   · **读库结果逐库上报**（2026-09-16 补）：见 `load_trades_report`。
 """
 from __future__ import annotations
@@ -21,7 +26,7 @@ import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
-from .Product import parse_product_key
+from .Product import product_key_of
 
 # 读库状态码（`load_trades_report` 的 sources[].status）
 SRC_OK = "ok"                    # 读取成功（rows=0 也可能是真的没有成交）
@@ -32,41 +37,14 @@ SRC_QUERY_FAILED = "query_failed"  # 打开了但 SELECT 失败（库损坏 / �
 _FAILED_STATUSES = (SRC_OPEN_FAILED, SRC_QUERY_FAILED)
 
 
-def product_key_of(symbol: Optional[str]) -> str:
-    """把「任意写法的合约符号」归一到**品种键** —— 统计合并的唯一口径。
-
-    例::
-
-        product_key_of("KQ.m@CFFEX.IF")  -> "IF"    # 主连（前端 chartData.meta.symbol）
-        product_key_of("CFFEX.IF2609")   -> "IF"    # 月份合约（库内 trades.symbol）
-        product_key_of("SHFE.au2512")    -> "AU"
-        product_key_of("IF2609")         -> "IF"    # 裸代码（无交易所前缀）
-        product_key_of("")               -> ""
-
-    为什么必须换掉「双向后缀 GLOB」（旧实现，本文件 2026-09-16 前的口径）：
-      库内 `trades.symbol` = 月份合约 `CFFEX.IF2609`，前端传的是主连
-      `KQ.m@CFFEX.IF` —— **两者互不为后缀**（`KQ.m@CFFEX.IF` 里根本没有
-      "IF2609" 这段），于是查询**恒返回 0 笔**，面板永远显示「该品种暂无历史成交」。
-      旧验证之所以没发现：它刻意挑了**互为后缀**的一对
-      （`IF2609` ↔ `CFFEX.IF2609`），那条用例**在设计上就必然通过**。
-
-    归一规则**只有一份**：转发 `Product.parse_product_key`（末段 + 剥月份 +
-    转大写），不在这里重写第二份正则 —— 否则两处规则漂移时，"哪个键算同一品种"
-    会出现两个答案。裸代码（无 "."）补一个前导点即可复用同一套规则。
-    """
-    s = str(symbol or "").strip()
-    if not s:
-        return ""
-    return parse_product_key(s if "." in s else "." + s)
-
-
 def load_trades_report(db_paths: List[str],
                        symbol: Optional[str] = None) -> Dict[str, Any]:
     """从若干 state.db（只读）取 trades 行，**并把每个库的读取结果一并报出**。
 
     symbol 为空 → 不按品种过滤（跨库取全部）。
-    symbol 非空 → 按**品种键相等**过滤（同品种的多个合约月份合并，见
-    `product_key_of`）。
+    symbol 非空 → 按**品种键相等**过滤（同品种的多个合约月份合并）：先把传入
+    的符号归一成品种键（`Product.product_key_of`），再拿它去比**列**
+    `trades.product_key`（写入侧落好的，见 `StateDB.save_trade`）。
 
     返回::
 
@@ -85,9 +63,11 @@ def load_trades_report(db_paths: List[str],
     它长得和"这个品种没有成交"一模一样（旧 schema 里 `trades` 表被改名为
     `trades_legacy_points`、或库文件损坏，都会走到这里）。
 
-    **为什么过滤放在 Python 侧**：品种键是「剥掉合约月份」后的派生值，SQL 里
-    没有这个函数；若改写成 `LIKE '%IF%'` 之类，等于把归一规则抄成第二份，
-    两处迟早漂移。trades 行数是百量级，全表读回再过滤的代价可以忽略。
+    **为什么判据是「列相等」而不是「查库时现算」**（2026-09-16 · C 批 ⑶-d）：
+    旧实现读回全表后逐行 `product_key_of(row["symbol"])` —— 于是同一件事有了
+    两个口径来源：写库那一刻的 symbol 与查库时现算的键。归一搬到写入侧后，
+    "这笔成交属于哪个品种"在**落库时**就定好了，查询只做 `WHERE product_key = ?`。
+    这也顺手去掉了"读回全表再过滤"的隐含前提（SQL 侧不能算品种键）。
 
     ⚠️ **「传了符号」与「解析不出品种键」必须分开**（本文件第一版踩过）：若判据写成
     `if key:`，当 `symbol="CFFEX."`（末段为空 → key=""）时会走 else 分支 —— **不过滤**，
@@ -123,13 +103,18 @@ def load_trades_report(db_paths: List[str],
             continue
         try:
             con.row_factory = sqlite3.Row
-            got = [dict(r) for r in
-                   con.execute("SELECT * FROM trades ORDER BY exit_at")]
-            if want_filter:
-                # key 为空 = 解析不出品种键 → 一行都不匹配（**绝不退回"不过滤"**）。
-                got = ([r for r in got
-                        if product_key_of(r.get("symbol")) == key]
-                       if key else [])
+            if want_filter and not key:
+                # 传了符号但解析不出品种键 → 一行都不匹配
+                # （**绝不退回"不过滤"**：那会把全库成交当成这次查询的结果，
+                # 面板会显示一个"有数据但串了品种"的假象）。
+                got = []
+            elif key:
+                got = [dict(r) for r in con.execute(
+                    "SELECT * FROM trades WHERE product_key = ?"
+                    " ORDER BY exit_at", (key,))]
+            else:
+                got = [dict(r) for r in
+                       con.execute("SELECT * FROM trades ORDER BY exit_at")]
             rows.extend(got)
             rec["rows"] = len(got)
         except sqlite3.Error as e:

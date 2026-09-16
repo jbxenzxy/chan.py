@@ -16,6 +16,7 @@ import json
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+from .Product import product_key_of
 from .Records import Order, Trade
 from .Clock import now_cn
 
@@ -54,7 +55,8 @@ CREATE TABLE IF NOT EXISTS trades (
     net_cash REAL,
     bars_held  INTEGER,
     exit_plan_name TEXT,
-    exit_plan_params TEXT
+    exit_plan_params TEXT,
+    product_key TEXT
 );
 CREATE TABLE IF NOT EXISTS kv (
     k TEXT PRIMARY KEY,
@@ -97,6 +99,33 @@ class Store:
         if "net_points" in _cols:
             self.conn.execute("ALTER TABLE trades RENAME TO trades_legacy_points")
             self.conn.executescript(_SCHEMA)
+            _cols = {r[1] for r in
+                     self.conn.execute("PRAGMA table_info(trades)")}
+        # C 批（2026-09-16 · ⑶-d）：`trades.product_key` —— 品种键**落库**。
+        #   原先「同品种多合约月份合并统计」的归一发生在**查询侧**
+        #   （`TradeStats.load_trades_report` 读回全表后逐行现算），于是同一件事
+        #   有两个口径来源：写库那份 `symbol` 与查库时现算的键。归一搬到写入侧后，
+        #   判据 = 「列相等」，查询侧不再解释 `symbol`。
+        #   迁移**幂等**：
+        #     · 列不存在 → 加列（**不给 DEFAULT**，旧行留 NULL）+ 全表回填；
+        #     · 列已存在 → 只补 `product_key IS NULL` 的行（上次回填中断的残留）。
+        #   NULL 与 "" 的区别被保留：NULL = "还没算过"，"" = "算过，解析不出品种"
+        #   —— 若给 DEFAULT ''，两者会糊成一个，回填就再也没法自愈。
+        #   回填值与写入侧同一个函数（`product_key_of`），故两条路径结果恒同。
+        if "product_key" not in _cols:
+            self.conn.execute("ALTER TABLE trades ADD COLUMN product_key TEXT")
+            _backfill = True
+        else:
+            _backfill = self.conn.execute(
+                "SELECT 1 FROM trades WHERE product_key IS NULL"
+                " LIMIT 1").fetchone() is not None
+        if _backfill:
+            for _tid, _sym in [tuple(r) for r in self.conn.execute(
+                    "SELECT trade_id, symbol FROM trades"
+                    " WHERE product_key IS NULL")]:
+                self.conn.execute(
+                    "UPDATE trades SET product_key=? WHERE trade_id=?",
+                    (product_key_of(_sym), _tid))
         self.conn.commit()
 
     # ---------- 信号幂等 ----------
@@ -161,13 +190,26 @@ class Store:
         """
         try:
             with self.conn:
+                # C 批（2026-09-16 · ⑶-d）：
+                #   ① **显式列名**取代 `INSERT INTO trades VALUES (...)` ——
+                #      位置绑定把"物理列序 = 本语句的参数序"变成隐式约定，
+                #      加一列就要确保新列在**表尾**且参数补在**末尾**（两处
+                #      各自正确才不出错）。写成列名后，加列不再有这种耦合。
+                #   ② `product_key` 在这里算好落库（`product_key_of(t.symbol)`）——
+                #      "这笔成交属于哪个品种"从此在**写入那一刻**定型，
+                #      查询侧直接比列，不再解读 symbol。
                 self.conn.execute(
-                    "INSERT INTO trades VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "INSERT INTO trades (trade_id, signal_key, symbol, side,"
+                    " volume, entry_price, exit_price, entry_at, exit_at,"
+                    " reason, gross_points, cost_cash, net_cash, bars_held,"
+                    " exit_plan_name, exit_plan_params, product_key)"
+                    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (t.trade_id, t.signal_key, t.symbol, t.side.name, t.volume,
                      t.entry_price, t.exit_price, t.entry_at, t.exit_at, t.reason,
                      t.gross_points, t.cost_cash, t.net_cash,
                      t.bars_held, t.exit_plan_name,
-                     json.dumps(t.exit_plan_params, ensure_ascii=False)))
+                     json.dumps(t.exit_plan_params, ensure_ascii=False),
+                     product_key_of(t.symbol)))
         except sqlite3.IntegrityError as e:
             raise IdCollisionError(
                 "trades 表主键冲突：trade_id={!r} 已存在（{}）。\n"

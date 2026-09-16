@@ -544,14 +544,19 @@ def _code_only(src):
     return "\n".join(line.split("#")[0] for line in src.splitlines())
 
 
+# ⚠️ 判据必须**先剥注释**（`_code_only`）：2026-09-16 C 批把 save_trade 的
+#    INSERT 改成**显式列名**（加列时不再依赖"参数顺序 = 物理列序"这个隐式
+#    约定），函数体注释里随之出现「取代 `INSERT INTO trades VALUES (...)`」
+#    这类留档文字 —— 朴素 `in` 判定会被**自己的说明**蒙过去：改回
+#    OR REPLACE 也照样绿（护栏失效）。test_p57 的 [0a]/[0b] 钉住了这个坑。
+_trades_sql = _code_only(_body(store_src, "save_trade"))
+_order_sql = _code_only(_body(store_src, "save_order"))
 check_true("[6a] save_trade 的 SQL 是裸 INSERT（不带 OR REPLACE）",
-           "INSERT INTO trades VALUES" in _body(store_src, "save_trade")
-           and "INSERT OR REPLACE INTO trades"
-           not in _body(store_src, "save_trade"))
+           "INSERT INTO trades (" in _trades_sql
+           and "INSERT OR REPLACE INTO trades" not in _trades_sql)
 check_true("[6b] save_order 的 SQL 是裸 INSERT（不带 OR REPLACE）",
-           "INSERT INTO orders VALUES" in _body(store_src, "save_order")
-           and "INSERT OR REPLACE INTO orders"
-           not in _body(store_src, "save_order"))
+           "INSERT INTO orders VALUES" in _order_sql
+           and "INSERT OR REPLACE INTO orders" not in _order_sql)
 check_true("[6c] 两函数都抛出 IdCollisionError",
            "IdCollisionError" in _body(store_src, "save_trade")
            and "IdCollisionError" in _body(store_src, "save_order"))
