@@ -1102,7 +1102,7 @@ python Trading/Test/test_product_fee_table.py
 
 ---
 
-## 附H 第 8 个模块登记：`Infra/trade_stats.py`（2026-09-16）
+## 附H 第 8 个模块登记：`Infra/TradeStats.py`（2026-09-16；**原名 `trade_stats.py`**）
 
 > 与附G 同样是**增量记录**：不改写 §5.1 正文，以本附录为准。
 
@@ -1110,13 +1110,13 @@ python Trading/Test/test_product_fee_table.py
 
 §5.1 把 `Trading/Infra/` 定死成 **7 个模块**（`Clock / Records / Period / Product /
 Instrument / StateDB / EventLog`），§附G.1 又重申过一次这条纪律。
-**2026-09-16 落地的「成交统计面板」新增了第 8 个文件**：`Trading/Infra/trade_stats.py`
+**2026-09-16 落地的「成交统计面板」新增了第 8 个文件**：`Trading/Infra/TradeStats.py`
 （216 行：纯计算 + 只读）。本条把它正式登记并给出变异轴。
 
 ### H.2 它与 G.1 的定案不冲突，但**确实是第 8 个文件**
 
 G.1 禁的是「**机器生成的纯数据**另开文件」—— 理由是"生成物与手写物"的分离该靠
-「标记 + 逐字节护栏」，而不是靠文件边界。`trade_stats.py` **不是生成物**（无 xlsx
+「标记 + 逐字节护栏」，而不是靠文件边界。`TradeStats.py` **不是生成物**（无 xlsx
 真值源、无 `--check`、无 GENERATED 区块），它是**手写的计算模块**，故 G.1 不适用。
 
 但它**确实**让 `Infra/` 变成了第 8 个文件 —— **破的是"7 个"这个数字，
@@ -1134,6 +1134,6 @@ G.1 禁的是「**机器生成的纯数据**另开文件」—— 理由是"生�
 
 ### H.4 结论
 
-`Trading/Infra/` 现为 **8 个模块** = §5.1 的 7 个 + `trade_stats.py`（本附录）。
+`Trading/Infra/` 现为 **8 个模块** = §5.1 的 7 个 + `TradeStats.py`（本附录）。
 §5.1 正文的"定死 7 个"**不改**（遵本附录惯例），但后续新增文件时请按 H.3 的
 三问句先答一遍：答不上"什么变了它才变"的，就不该开新文件。

@@ -19,7 +19,7 @@ P54 成交统计「按品种键合并」契约（2026-09-16 · P0-1 修复）
 用户拍板（2026-09-16）
 ----------------------
 **同品种的多个月份合约合并统计** —— 判据 = **品种键相等**（归一规则只有一份：
-`Infra/Product.parse_product_key`，统计侧经 `trade_stats.product_key_of` 转发）。
+`Infra/Product.parse_product_key`，统计侧经 `TradeStats.product_key_of` 转发）。
 
 覆盖
 --------------------------------------------------------------------------
@@ -70,7 +70,7 @@ sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 from Trading.Infra.Records import Side, Trade  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
-from Trading.Infra.trade_stats import (  # noqa: E402
+from Trading.Infra.TradeStats import (  # noqa: E402
     SRC_QUERY_FAILED, compute_trade_stats, load_trades_report, product_key_of)
 
 _PASS = 0

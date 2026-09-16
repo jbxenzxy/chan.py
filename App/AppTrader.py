@@ -679,7 +679,7 @@ class AppTrader:
         返回值 = 统计摘要 + **读库可见性**（2026-09-16 补）：
           dbs_scanned  实际扫描的库数（0 = 一个 state.db 都没找到）
           dbs_ok       读取成功的库数
-          sources      每库一条 {path, status, rows, error}（status 见 trade_stats）
+          sources      每库一条 {path, status, rows, error}（status 见 TradeStats）
           read_errors  真故障的库（库损坏 / 旧 schema 无 trades 表 / 打不开）；
                        前端据此把「真的没有成交」与「读不出来」分开显示
           symbol_raw / symbol_key   前端传的原始符号 / 归一后的品种键
@@ -689,7 +689,7 @@ class AppTrader:
         显示"该品种暂无历史成交" —— 和真没成交长得一模一样，库里其实可能有
         几百笔。失败必须可见（服务端同时打 warning，见下）。
         """
-        from Trading.Infra.trade_stats import (
+        from Trading.Infra.TradeStats import (
             load_trades_report, compute_trade_stats)
         dbs = (_discover_state_dbs() if union else
                ([os.path.join(_DEFAULT_OUT, "state.db")]
