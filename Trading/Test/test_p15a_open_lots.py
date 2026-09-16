@@ -40,6 +40,7 @@ P15a 一笔报单开仓测试（2026-09-16 第三轮改写）
 """
 from __future__ import annotations
 
+import copy
 import io
 import json
 import os
@@ -178,6 +179,15 @@ def profile_with_lots(code="IF", lots=None):
                                                      lots_per_order=int(lots)))
 
 
+_EXCHANGE_PREFIX = {"IF": "CFFEX", "IH": "CFFEX", "IC": "CFFEX", "IM": "CFFEX",
+                    "AU": "SHFE", "AG": "SHFE", "CU": "SHFE", "TA": "CZCE"}
+
+
+def _symbol_of(code):
+    """品种键 → 主连符号（只服务本测试构造 cfg，不参与任何判据）。"""
+    return "KQ.m@{}.{}".format(_EXCHANGE_PREFIX.get(code, "CFFEX"), code)
+
+
 def make_engine(tmpdir, *, code="IF", lots=None, broker_cls=None, reject_first_n=0):
     """构造引擎。
 
@@ -186,8 +196,19 @@ def make_engine(tmpdir, *, code="IF", lots=None, broker_cls=None, reject_first_n
     = 品种执行策略表第 3 列**，要改手数就 `lots=N` 改表（见 `profile_with_lots`）。
     ⚠️ broker 与 engine 必须共用**同一份** `spec`：引擎的 `self.state` 默认沿用
     `broker.state`，手数就是从这里实时读表取到的。
+
+    🆕 2026-09-16 A 批 ⑶-b：**cfg 的品种必须跟着 `code` 走**。
+      原来这里固定 `TradingConfig.from_dict(DEFAULT_CONFIG)`（signal_symbol = IF），
+      却在 `spec` 上传别的品种档案（如 TA）来测"手数来自表" —— 这个状态在生产
+      路径上**不可能出现**（main.py 把同一份 cfg 同时交给 Broker 与引擎），
+      而引擎构造期现在会断言「白名单放行的品种 == 运行时档案的品种」
+      （`_assert_product_ssot`）→ "cfg 说 IF、档案说 TA"的构造被当场拒绝启动。
+      故让 cfg 同源：要测"手数来自表"，改的是**档案里的表行**（`lots`），
+      而不是让 cfg 与档案互相矛盾 —— 后者本来就在测一个不存在的状态。
     """
-    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    _base = copy.deepcopy(DEFAULT_CONFIG)
+    _base["instrument"]["signal_symbol"] = _symbol_of(code)
+    cfg = TradingConfig.from_dict(_base)
 
     spec = Instrument(None, profile_with_lots(code, lots))
     if broker_cls is None:
@@ -393,6 +414,13 @@ with tmp_dir() as td:
     check("[2c] _open_volume() 同步为 5", eng._open_volume(), 5)
 
 # 无品种档案 → 保守 1 手（宁可少开，不按猜出来的手数下单）
+#
+# 2026-09-16 A 批 ⑵：原版这里是"引擎侧刻意不给品种档案"
+#   （`state=Instrument(None, None)`）—— 这条路在**引擎层已不可达**：品种既然
+#   过了白名单（IF 在册），运行时对象就必须拿到档案，否则 `_assert_product_ssot`
+#   在引擎构造期直接拒绝启动（见下面 [2d2]）。
+#   兜底逻辑本身**仍在代码里**（`lots_per_order` 的 `pol is None → 1`），
+#   故改为**运行期摘档案**来验证（与上面 [2c] 换档案同一手法）。
 with tmp_dir() as td:
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     _bk = DryRunBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0})
@@ -400,10 +428,27 @@ with tmp_dir() as td:
         cfg, _bk, EntryPolicy({"reverse_on_opposite_signal": False}),
         LayeredExitPolicy(), Store(os.path.join(td, "state.db")),
         EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None),
-        state=Instrument(None, None))          # ← 引擎侧刻意不给品种档案
-    check("[2d] 无品种档案 → 保守 1 手（与 exchange 未标定 → '' 同一约定）",
-          eng.lots_per_order, 1)
+        state=Instrument(None, _IF))
+    eng.state._product = None            # ← 运行期摘掉档案（模拟未标定品种）
+    check("[2d] 兜底仍在：无品种档案 → 保守 1 手"
+          "（与 exchange 未标定 → '' 同一约定）", eng.lots_per_order, 1)
     check("[2d] _open_volume() 同为 1", eng._open_volume(), 1)
+
+# 启动期硬失败（A 批 ⑵）：品种在册却没拿到档案 → 拒绝启动，不再静默走保守侧
+with tmp_dir() as td:
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    _bk = DryRunBroker(Instrument(None, None), {"sim_equity": 10_000_000.0})
+    _err = ""
+    try:
+        TradingEngine(
+            cfg, _bk, EntryPolicy({"reverse_on_opposite_signal": False}),
+            LayeredExitPolicy(), Store(os.path.join(td, "state.db")),
+            EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None),
+            state=Instrument(None, None))
+    except ValueError as e:
+        _err = str(e)
+    check("[2d2] ★ 引擎侧刻意不给档案 → 拒绝启动（而非静默按 1 手下真单）",
+          "品种档案缺失" in _err, True)
 
 # 代码不看交易所名字：CZCE(TA) 的 1 手来自**表**，不是"按交易所硬编码"
 with tmp_dir() as td:

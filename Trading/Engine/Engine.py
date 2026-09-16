@@ -58,7 +58,7 @@ from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.Period import bar_secs_for
-from ..Infra.Product import CLOSETODAY, Product, assert_product_allowed
+from ..Infra.Product import CLOSETODAY, ExecPolicy, Product, assert_product_allowed
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
 from ..Infra.StateDB import Store
@@ -416,7 +416,13 @@ class TradingEngine(ReconcileMixin):
         #         `CFFEX.IF2609` 原来解析成 "IF2609" 查不到档案 → 已标定的 IF 被
         #         白名单误杀，CLI 直启/回放直接起不来，报错还极具误导性。
         # ════════════════════════════════════════════════════════════════
-        assert_product_allowed(self.cfg.instrument.signal_symbol)
+        _key = assert_product_allowed(self.cfg.instrument.signal_symbol)
+        # 启动期 SSOT 断言（2026-09-16 · A 批 ⑵+⑶-b）：
+        #   白名单放行的品种 vs `self.state.product`（Instrument 构造期冻结的
+        #   那份档案）**必须是同一个品种**，且该品种必须有执行策略行。
+        #   见 `_assert_product_ssot` 的 docstring —— 这里把"两个来源只是
+        #   碰巧一致"从约定升级为启动期硬失败。
+        self._assert_product_ssot(_key)
         # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
         # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢失持仓（解 D3）。
@@ -1073,14 +1079,75 @@ class TradingEngine(ReconcileMixin):
     #   None)`。重复读取的风险不是"多打几个字"，而是**守卫与决策可能读到不同
     #   口径**（守卫说"你是两态品种"、决策说"你不是" → 守卫形同虚设）。
     #   故收敛到本方法一处：判据恒同源。
+    #
+    #   2026-09-16 A 批 ⑵：**本方法内部也不再 `getattr`** —— 连"没有该属性就
+    #   静默给 None"这最后一个降级口也关掉；同时把 `Optional[Any]` 收紧成
+    #   `Optional[ExecPolicy]`。启动期由 `_assert_product_ssot` 断言"已标定品种
+    #   恒非 None"，故运行期拿到的永远是表里那一行。
     # ════════════════════════════════════════════════════════════════
-    def _exec_policy(self) -> Optional[Any]:
+    def _exec_policy(self) -> Optional[ExecPolicy]:
         """本品种执行策略（`Infra/Product.py` 的 `EXEC_POLICY[code]` 那一行）。
 
         真值源 = `Instrument.exec_policy` → `Product.exec_policy`。无品种档案
-        → `None`（保守侧：按"不支持平今、按风控手数"走）。
+        → `None`（保守侧：按"不支持平今、按手数兜底"走；**已标定品种恒非 None**，
+        见 `_assert_product_ssot`）。
+
+        ⚠️ 2026-09-16 去掉 `getattr(self.state, "exec_policy", None)`（A 批 ⑵）：
+          `self.state` 恒是本仓的 `Instrument`（`__init__` 回落链保证：显式
+          state → broker.state → 新建 Instrument），该属性**恒存在** → 用
+          getattr 等于给"哪天属性被改名/搬走"留了一条静默降级：守卫读到 None
+          会说"你不是两态品种"、决策读到 None 会走另一套 → **守卫形同虚设，
+          且没有任何告警**。改成直接属性访问后，属性没了就是 AttributeError，
+          响亮地死在启动期（正是本仓"不搞跨文件 fallback"的立场）。
         """
-        return getattr(self.state, "exec_policy", None)
+        return self.state.exec_policy
+
+    def _assert_product_ssot(self, allowed_key: str) -> None:
+        """启动期断言：品种档案只有一个来源，且执行策略行必须存在（2026-09-16 · A 批）。
+
+        **为什么要断言** —— 本引擎里"当前品种是哪一只"有**两个**读取口径：
+          · `cfg.product_profile` —— **实时**按 `cfg.instrument.signal_symbol`
+            查表（`Config.py` 的 property，每次调用都重新查一遍）；
+          · `self.state.product` —— `Instrument` **构造期**传入并冻结的那份。
+        两者恒等只靠一个**约定**：「`--symbol` 的配置重建（main.py）发生在
+        `Instrument` 构造之前」。将来任何"先建 Instrument、后改 cfg"的路径都会
+        让它们分叉，症状 = **决策按 A 品种、记账按 B 品种**（成本/乘数口径全错，
+        而且完全静默）。这里把约定变成启动期硬失败。
+
+        **另断言执行策略行必须存在**：`Instrument.exec_policy` 的类型是
+        `Optional[ExecPolicy]`（那一层 Optional 是给"未标定品种"的离线探针留的），
+        而品种既然过了白名单闸门，就必然在 `PRODUCT_PROFILES` 里、也就必然在
+        `EXEC_POLICY` 里（`_exec_kw()` 在构造期就硬 KeyError）。这里为 `None`
+        只可能是"表里漏了行 / 字段被改名"这类真异常 —— **拒绝启动**，而不是让
+        引擎静默走保守侧（报单 FOK、今仓 R-OPEN、手数 1）：那等于用一套没人
+        宣布过的策略下真单。
+
+        调用点：`_restore`（构造期，紧随白名单闸门）。断言是启动期一次性事实，
+        不必每笔报单重复检查。
+        """
+        p = self.state.product
+        if p is None:
+            raise ValueError(
+                "品种档案缺失：白名单已放行 {!r}（解析品种键 = {}），但运行时对象 "
+                "`Instrument.product` 为 None —— Instrument 构造时没拿到该品种档案，"
+                "决策侧与记账侧会各按一套参数走。拒绝启动交易引擎。".format(
+                    self.cfg.instrument.signal_symbol, allowed_key))
+        got = str(p.product or "").strip().upper()
+        if got != allowed_key:
+            raise ValueError(
+                "品种来源分叉：白名单按 cfg.instrument.signal_symbol={!r} 放行品种 "
+                "{!r}，但运行时对象持有的档案是 {!r} —— 会造成「按前者决策、按后者"
+                "记账」（成本与乘数口径不一致）。请检查 Instrument 的构造参数与 cfg "
+                "是否同源（main.py 必须把**同一份** cfg 同时交给 Broker 与引擎）。"
+                "拒绝启动交易引擎。".format(
+                    self.cfg.instrument.signal_symbol, allowed_key, got))
+        if self.state.exec_policy is None:
+            raise ValueError(
+                "品种 {!r} 缺少执行策略行：它在 PRODUCT_PROFILES 白名单里，但 "
+                "`Instrument.exec_policy` 为 None（EXEC_POLICY 漏行，或 "
+                "Product.exec_policy 字段被改名）—— 执行策略不确定时不允许启动，"
+                "否则引擎会静默按保守侧（报单 FOK / 今仓 R-OPEN / 手数 1）下真单。"
+                .format(allowed_key))
 
     def _close_mode(self) -> Optional[str]:
         """执行策略表第 1 列：今仓离场 offset（`CLOSETODAY` / `R-OPEN`）。
@@ -1148,13 +1215,19 @@ class TradingEngine(ReconcileMixin):
         Instrument 有效值初值**直接取档案**（构造期一次成型），单向取值结构
         本身保证离线对账恒成立，无需运行时校验。
         """
-        if self.cfg.product_profile is None:
+        # 2026-09-16 A 批 ⑶-b：档案来源由 `cfg.product_profile`（**实时**按
+        #   cfg.instrument.signal_symbol 查表）改为 `self.state.product`
+        #   （唯一运行时对象、构造期冻结）—— 与 `_book_close` 的成本口径同源，
+        #   杜绝"按 A 品种判漂移、按 B 品种记账"。启动期已由
+        #   `_assert_product_ssot` 断言两者是同一个品种。
+        p = self.state.product
+        if p is None:
             return
         if self.state.verified:
             if self._spec_drift_checked:
                 return
             self._spec_drift_checked = True
-            self._check_spec_drift_online(self.cfg.product_profile)
+            self._check_spec_drift_online(p)
 
     def _check_spec_drift_online(self, p: "Product") -> None:
         """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
@@ -1508,12 +1581,18 @@ class TradingEngine(ReconcileMixin):
         #   有效乘数）；closetoday_first 是静态开关，留 spec。
         #   净值口径：毛利（点）× 有效乘数 × 手数 = 毛利（元），减成本（元）
         #   —— 全程在元上做，不再有"点减元"的口径混算点。
-        p = self.cfg.product_profile
+        #
+        # A 批 ⑶-b（2026-09-16）：**品种档案来源 = `self.state.product`**。
+        #   原写法 `p = self.cfg.product_profile` 是**实时**按
+        #   `cfg.instrument.signal_symbol` 查表，而状态机 / 手数 / 报单属性读的是
+        #   `Instrument` 构造期冻结的那份 —— 两者不等 = 「按 AU 决策、按 IF 记账」
+        #   （成本与乘数口径全错且完全静默）。现在**连入参都不再传**：
+        #   `cost_cash` 已去掉 product 形参、内部读 `self._product`，
+        #   于是"传进来的档案 ≠ 决策用的档案"在结构上不可能发生。
         closetoday = bool(self.state.closetoday_first
                           and pos.entry_date >= self._current_trading_day())
-        cost = (self.state.cost_cash(p, pos.entry_price, exit_price,
-                                     closetoday=closetoday, volume=pos.volume)
-                if p is not None else 0.0)
+        cost = self.state.cost_cash(pos.entry_price, exit_price,
+                                    closetoday=closetoday, volume=pos.volume)
         gross_cash = gross * self.state.multiplier * pos.volume
         net_cash = gross_cash - cost
         bars_held = max(0, self.bars_seen - pos.entry_bar_seq)

@@ -207,11 +207,14 @@ class ReconcileMixin:
             # P-A（2026-09-15）：成本改读**品种档案 Fee 两档**（元口径，state 提供
             #   有效乘数），与 Engine._book_close 同源；closetoday_first 留 spec。
             #   净值 = 毛利（点）× 有效乘数 × 手数 − 成本（元），全程元口径。
-            _p = self.cfg.product_profile
+            #
+            # A 批 ⑶-b（2026-09-16）：档案来源 = `self.state.product`（唯一运行时
+            #   对象），不再读 `cfg.product_profile`（**实时**按 cfg 的 symbol 查表）
+            #   —— 与 `Engine._book_close` 同源；且 `cost_cash` 已去掉 product 入参，
+            #   结构上不可能出现"按 A 品种决策、按 B 品种记账"。
             _closetoday = bool(_is_today_pos and self.state.closetoday_first)
-            cost = (self.state.cost_cash(_p, pos.entry_price, ref_price,
-                                         closetoday=_closetoday, volume=pos.volume)
-                    if _p is not None else 0.0)
+            cost = self.state.cost_cash(pos.entry_price, ref_price,
+                                        closetoday=_closetoday, volume=pos.volume)
             net_cash = (gross * self.state.multiplier * pos.volume) - cost
             bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
 

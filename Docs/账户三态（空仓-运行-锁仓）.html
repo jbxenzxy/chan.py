@@ -1,6 +1,6 @@
-<svg width="100%" viewBox="0 55 680 470" role="img" xmlns="http://www.w3.org/2000/svg">
+<svg width="100%" viewBox="0 55 680 525" role="img" xmlns="http://www.w3.org/2000/svg">
 <title>三态迁移图与对应的下单意图</title>
-<desc>空仓、运行、锁仓三态之间的六条转移路径及其 CTP 报单意图。运行态与锁仓态之间双向各画两条边，按「最新一笔仓单的建仓交易日」分为今日分支与跨日分支。</desc>
+<desc>空仓、运行、锁仓三态之间的六条转移路径及其 CTP 报单意图。运行态与锁仓态之间双向各画两条边，按「持仓中仓单是否全为今日」分为今日分支与跨日分支。</desc>
 <defs>
 <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
 <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
@@ -49,7 +49,11 @@
 <text x="205" y="428" text-anchor="middle" dominant-baseline="central" font-family="system-ui" font-size="12" fill="#0F6E56">→ 空仓态（offset=CLOSE）</text>
 
 <!-- ── 附注 ───────────────────────────────────────────── -->
-<text x="40" y="458" font-family="system-ui" font-size="11" fill="#5F5E5A">判据：最近一笔仓单 latest.entry_date &gt;= 今日 → 今日分支（此分支有是否要平今的判定）；否则 → 跨日分支（此分支都是平昨，不涉及平今判定）</text>
-<text x="40" y="475" font-family="system-ui" font-size="11" fill="#5F5E5A">离场条件：含"止盈止损"与"关闭自动下单"两条路径</text>
-<text x="40" y="492" font-family="system-ui" font-size="11" fill="#5F5E5A">当日没有回到空仓或锁仓态，状态机依然适用</text>
+<text x="40" y="458" font-family="system-ui" font-size="11" fill="#5F5E5A">今日仓：运行态时，持仓中仓单全为今日 —— 有 CLOSE 和 CLOSETODAY 分支</text>
+<text x="40" y="475" font-family="system-ui" font-size="11" fill="#5F5E5A">跨日仓：运行态时，持仓中仓单全为跨日</text>
+<text x="40" y="492" font-family="system-ui" font-size="11" fill="#5F5E5A">运行态时，持仓中仓单全为今日或全为跨日</text>
+<text x="40" y="509" font-family="system-ui" font-size="11" fill="#5F5E5A">今日锁：锁仓态时，持仓中仓单全为今日</text>
+<text x="40" y="526" font-family="system-ui" font-size="11" fill="#5F5E5A">跨日锁：锁仓态时，持仓中仓单全为跨日</text>
+<text x="40" y="549" font-family="system-ui" font-size="11" fill="#5F5E5A">离场条件：含"止盈止损"与"关闭自动下单"两条路径</text>
+<text x="40" y="566" font-family="system-ui" font-size="11" fill="#5F5E5A">特别说明：状态机也适用于当日不回"空仓态"或"锁仓态"</text>
 </svg>

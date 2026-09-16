@@ -109,6 +109,7 @@ def build_engine(tmpdir, signal_symbol):
     from Trading.Broker.DryRun import DryRunBroker
     from Trading.Engine.Engine import TradingEngine
     from Trading.Infra.EventLog import EventLog
+    from Trading.Infra.Instrument import Instrument
     from Trading.Infra.StateDB import Store
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
@@ -118,7 +119,8 @@ def build_engine(tmpdir, signal_symbol):
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
-    broker = DryRunBroker(cfg.instrument, {"sim_equity": 10_000_000.0})
+    broker = DryRunBroker(Instrument(cfg.instrument, cfg.product_profile),
+                          {"sim_equity": 10_000_000.0})
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
 

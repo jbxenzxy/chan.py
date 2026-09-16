@@ -220,13 +220,17 @@ def main():
     print("\n[6] 无档案（防御分支）：不告警")
     with tmp_dir() as td:
         eng = build_engine(td)
+        # 2026-09-16 A 批 ⑶-b：早退判据由 `cfg.product_profile`（**实时**按
+        #   cfg.instrument.signal_symbol 查表）换成 `self.state.product`
+        #   （唯一运行时对象）→ 桩必须打在 **state** 上。
+        #   打在 cfg 上已经触发不了这条分支了：品种在册却没有档案，会在引擎
+        #   构造期被 `_assert_product_ssot` 直接拒绝启动（test_p55 [3a]）。
+        eng.state = Instrument(None, None)
+        # ⚠️ 顺序：`verified` 必须在**替换 state 之后**置位 —— 新 Instrument 的
+        #   verified 初值是 False，先置位再替换等于把它重置掉，于是
+        #   `if self.state.verified:` 直接为假 → 本用例会退化成"恒真断言"
+        #   （不管早退分支在不在都绿）。这是本文件第一次改写时踩到的坑。
         eng.state.verified = True
-        # product_profile 是只读 property 且 P48 白名单保证非 None（直构造
-        # 到不了 None 分支）——换桩 cfg 走防御分支。
-        class _CfgStub:
-            product_profile = None
-        eng.cfg = _CfgStub()
-        _drift(eng, mult=100.0)
         eng._check_spec_drift()
         check("无 spec_drift 告警", find_alert(eng, "spec_drift"), None)
         check("未置位（None 档案没做过比对，早退零成本）",

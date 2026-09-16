@@ -238,13 +238,26 @@ with tmp_dir("t3c") as tmp:
     check("[3c4] 平今量 = min(|净敞口|, 目标手数) = 3", act.volume, min(3, 3))
 
 with tmp_dir("t3d") as tmp:
+    # 2026-09-16 A 批（⑵+⑶-b）：原版这里用 `Instrument(None, None)` 构造引擎，
+    #   断言"无品种档案 → 仍走 OPEN 锁仓（保守侧）"。
+    #   但这条路径在**引擎层已经结构不可达**：品种既然过了白名单（AU 在册），
+    #   运行时对象就必须拿到该品种档案，否则 `_assert_product_ssot` 在引擎
+    #   构造期直接拒绝启动。所以断言口径改成两头：
+    #     [3d]  引擎层 —— 品种在册却没档案 → **拒绝启动**（不再静默走保守侧）；
+    #     [3d2] Instrument 层 —— 保守侧本身仍在（未标定品种的离线探针用）。
+    #   这样"保守侧存在"与"生产路径不依赖它"两件事都被钉住。
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
-    eng = build_engine(tmp, cfg, Instrument(None, None), "d")
-    eng.on_bar(make_bar(1000))
-    eng.positions.add(make_pos(entry_date=D1))
-    act = eng._decide_exit(eng.last_bar)
-    check("[3d] 无品种档案 → 仍走 OPEN 锁仓（保守侧）",
-          (act.intent.value, act.transition), ("open", 4))
+    _err = ""
+    try:
+        build_engine(tmp, cfg, Instrument(None, None), "d")
+    except ValueError as e:
+        _err = str(e)
+    check("[3d] ★ 品种在册却没拿到档案 → 拒绝启动（不再静默走保守侧）",
+          "品种档案缺失" in _err, True)
+
+    _bare = Instrument(None, None)
+    check("[3d2] 保守侧仍在 Instrument 层：无档案 → exec_policy=None ＋ 报单 FOK",
+          (_bare.exec_policy, _bare.effective_order_advanced()), (None, "FOK"))
 
 with tmp_dir("t3e") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")

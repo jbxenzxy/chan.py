@@ -70,7 +70,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict
 
 if TYPE_CHECKING:
-    from Trading.Infra.Product import Product
+    from Trading.Infra.Product import ExecPolicy, Product
 
 
 # P-B 摘除的旧键 → 归属去向（extra=forbid 报错前的明确提示，交接文档 §7.2）。
@@ -330,15 +330,30 @@ class Instrument:
         return str(self._product.exchange or "") if self._product is not None else ""
 
     @property
-    def exec_policy(self) -> Optional[Any]:
+    def exec_policy(self) -> Optional["ExecPolicy"]:
         """品种执行策略三件事（今仓离场 offset / 报单属性 / 一笔挂几手）。
 
-        真值源 = `Product.EXEC_POLICY` 表（经 `Product.exec_policy` 字段注入），
-        **代码只读不推** —— 不读费率、不看交易所名字。未标定品种 → None，
-        调用方按保守侧处理（报单 FOK、今仓走 CLOSE 反向锁仓）。
+        真值源 = `Product.EXEC_POLICY` 表（构造期由 `_exec_kw()` 注入
+        `Product.exec_policy` 字段），**代码只读不推** —— 不读费率、不看交易所名字。
+
+        ⚠️ 2026-09-16 收紧（跨文件 fallback 清理，A 批 ⑵）：
+          · 类型 `Optional[Any]` → `Optional[ExecPolicy]`：`Any` 会把
+            `pol.close_mode` 这类拼写错误从"静态可查"降级成"运行时才发现"；
+          · **去掉 `getattr(p, "exec_policy", None)`** —— `exec_policy` 是
+            `Product` 的**必填 dataclass 字段**（无默认值），那段 fallback 在
+            正常路径上**不可达**；它唯一的实际作用是"哪天字段被删/改名了也
+            静默给 None，然后引擎按保守侧悄悄换一套执行策略" —— 正是本仓
+            禁止的跨文件静默降级。现在直接属性访问：字段没了就是 AttributeError。
+
+        未标定品种（`product is None`，仅离线探针/测试便利）→ `None`，调用方按
+        保守侧处理（报单 FOK、今仓走 R-OPEN 反向锁仓）。
+
+        **已标定品种恒非 None** —— 这条不是靠本方法自觉，而是由
+        `Engine._restore` 启动期硬断言守住（`_assert_product_ssot`）：品种在册
+        却没有执行策略行 → 拒绝启动，而不是静默降级。
         """
         p = self._product
-        return getattr(p, "exec_policy", None) if p is not None else None
+        return p.exec_policy if p is not None else None
 
     def __repr__(self) -> str:
         return ("Instrument(trade_symbol={!r}, exchange={!r}, price_tick={!r}, "
@@ -513,8 +528,8 @@ class Instrument:
         return price + side_sign * tick if for_open else price - side_sign * tick
 
     # ---------- 成本（P-A · 2026-09-15：读品种档案 Fee 两档 + 有效乘数，统一在元上算） ----------
-    def cost_cash(self, product: "Product", entry_price: float,
-                  exit_price: float, closetoday: bool, volume: int = 1) -> float:
+    def cost_cash(self, entry_price: float, exit_price: float,
+                  closetoday: bool, volume: int = 1) -> float:
         """往返手续费，**元**口径（每手元 × 手数）。
 
         closetoday=False → 平昨档；True → 平今档。平昨 ≡ 开仓（xlsx 全表没有
@@ -526,8 +541,26 @@ class Instrument:
         PTA 3 元/手）在点数口径下无法无损表达（10 ÷ 乘数再乘回，中间还过一次
         浮点），成本记账统一在**元**上做；毛盈亏仍以点记（gross_points），
         净值 = 毛利元 − 成本元（net_cash）。
+
+        ⚠️ 2026-09-16 去掉 `product` 入参（A 批 ⑶-b · 会计侧 SSOT 收敛）：
+          原签名 `cost_cash(product, entry_price, …)` 允许调用方把**自己查到的**
+          品种档案传进来 —— 而两个调用点（`Engine._book_close` /
+          `Reconcile`）查的是 `cfg.product_profile`（**实时按
+          `cfg.instrument.signal_symbol` 查表**），`Instrument` 持有的却是
+          **构造期冻结**的那份（`self._product`）。两者只在"`--symbol` 变更
+          发生在 Instrument 构造之前"这个**约定**下恒等 —— 一旦不等，
+          就是「按 AU 决策、按 IF 记账」：成本算错且完全静默。
+          品种来源收敛到 `self._product` 后，"传进来的档案与决策用的不是同一份"
+          在**结构上**不再可能（连入口都没有了）。
+
+        未标定品种（`self._product is None`）→ 0.0：与调用方原写法
+        `… if p is not None else 0.0` 逐字等价（无档案即不计成本），
+        只是把这条判据从**每个调用点**收回本对象一处。
         """
-        open_fee, ct_fee = product.fee_pair()
+        p = self._product
+        if p is None:
+            return 0.0
+        open_fee, ct_fee = p.fee_pair()
         exit_fee = ct_fee if closetoday else open_fee
         return (open_fee.cash(entry_price, self.multiplier)
                 + exit_fee.cash(exit_price, self.multiplier)) * volume
