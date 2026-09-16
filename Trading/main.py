@@ -92,7 +92,7 @@ def _fee_banner(cfg: TradingConfig) -> None:
     if pol.close_mode == CLOSETODAY:
         concl = "今仓离场 = CLOSETODAY（直接平今，两态机：平完即回空仓）"
     else:
-        concl = "今仓离场 = CLOSE（反向开仓锁仓，三态机：次日拆锁）"
+        concl = "今仓离场 = R-OPEN（反向开仓锁仓，三态机：次日拆锁）"
     print("[gw] 品种 {}（{}）：开仓 {} ｜ 平昨 {} ｜ 平今 {}".format(
         p.product, p.exchange or "?", open_fee.describe(),
         open_fee.describe(), ct_fee.describe()))

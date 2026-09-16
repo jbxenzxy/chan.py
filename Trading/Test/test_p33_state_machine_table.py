@@ -469,7 +469,7 @@ with tmp_dir("t7") as tmp:
     #   2026-09-16 起由**品种执行策略表第 1 列**给定：
     #   `EXEC_POLICY[code].close_mode == CLOSETODAY` 时走 CLOSETODAY，
     #   否则走 OPEN 锁仓（代码只读表，不看交易所、不算费率）。
-    #   本引擎用默认 IF 配置（表第 1 列 = CLOSE）→ 恒走 OPEN 锁仓，
+    #   本引擎用默认 IF 配置（表第 1 列 = R-OPEN）→ 恒走 OPEN 锁仓，
     #   故下列断言仍成立；平今分支由 test_p51 [3c] 单独钉死。
     eng = build_engine(tmp, "t7_cmb")
     eng.on_bar(make_bar(1000))

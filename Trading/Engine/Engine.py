@@ -1029,7 +1029,7 @@ class TradingEngine(ReconcileMixin):
             #     产生、平完即空仓），锁仓态**结构性不可达** —— 所以 `latest`
             #     就是那笔、也就是唯一的平今目标：不必再查一次 positions，
             #     也不存在"找不到目标"的分支（故无兜底、无 Optional）。
-            #   · CLOSE → 反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
+            #   · R-OPEN → 反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
             _pol = getattr(self.state, "exec_policy", None)
             if _pol is not None and _pol.close_mode == CLOSETODAY:
                 return _Action(OrderIntent.CLOSETODAY, net_side,

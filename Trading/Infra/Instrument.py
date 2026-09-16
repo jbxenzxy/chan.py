@@ -123,7 +123,7 @@ class InstrumentConfig(BaseModel):
     price_band_points: float = 0.0       # 0 = 不限制（一期的唯一合法值）
 
     # ── 档案位（字段位保留，**当前不消费**）──
-    limit_up_pct: float = 0.0                 # 涨跌停板幅度（%，如 10.0）。仅作档案记录：
+    limit_up_pct: float = 0.0            # 涨跌停板幅度（%，如 10.0）。仅作档案记录：
                                               #   区间真值是绝对价 upper/lower_limit（随日结算价变），
                                               #   从行情取，写在 Instrument 上。
     limit_down_pct: float = 0.0

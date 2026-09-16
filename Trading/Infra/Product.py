@@ -168,7 +168,7 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 # 现在收成**一张 8 行的表**，代码只读不推。
 #
 #   close_mode      今仓离场用哪个 offset ——
-#                     "CLOSE"      → 反向开仓锁仓（三态机：会进锁仓态，次日拆锁）
+#                     "R-OPEN"     → 反向开仓锁仓（三态机：会进锁仓态，次日拆锁）
 #                     "CLOSETODAY" → 直接平今（两态机：平完即回空仓，锁仓态不可达）
 #   order_advanced  报单属性 —— "FOK"（全成全撤）/ "FAK"（部分成交后撤余量）
 #   lots_per_order  一笔挂几手
@@ -190,7 +190,7 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 #   · **FAK ⟹ lots_per_order == 1**（用户第 2 轮 ⑵⑶ 定为硬断言）——
 #     FAK 允许部分成交后撤余量，只有"一笔 1 手、没有余量可撤"时 FAK 才等价于
 #     FOK；放开 N 会破坏「待报 / 全成 / 全撤」三态不变量。
-CLOSE = "CLOSE"
+R_OPEN = "R-OPEN"
 CLOSETODAY = "CLOSETODAY"
 FOK = "FOK"
 FAK = "FAK"
@@ -204,9 +204,9 @@ class ExecPolicy:
     lots_per_order: int
 
     def __post_init__(self) -> None:
-        if self.close_mode not in (CLOSE, CLOSETODAY):
+        if self.close_mode not in (R_OPEN, CLOSETODAY):
             raise ValueError("close_mode 必须是 {} / {}，收到 {!r}".format(
-                CLOSE, CLOSETODAY, self.close_mode))
+                R_OPEN, CLOSETODAY, self.close_mode))
         if self.order_advanced not in (FOK, FAK):
             raise ValueError("order_advanced 必须是 {} / {}，收到 {!r}".format(
                 FOK, FAK, self.order_advanced))
@@ -223,14 +223,14 @@ class ExecPolicy:
 # 8 个品种的执行策略（与 PRODUCT_PROFILES 同键）。
 #   行尾注释的交易所只是**备案**，不参与任何判断 —— 代码只读后三列。
 EXEC_POLICY: Dict[str, ExecPolicy] = {
-    "IF": ExecPolicy(CLOSE, FOK, 2),        # CFFEX
-    "IH": ExecPolicy(CLOSE, FOK, 2),        # CFFEX
-    "IC": ExecPolicy(CLOSE, FOK, 2),        # CFFEX
-    "IM": ExecPolicy(CLOSE, FOK, 2),        # CFFEX
-    "AU": ExecPolicy(CLOSETODAY, FOK, 2),   # SHFE
-    "AG": ExecPolicy(CLOSETODAY, FOK, 2),   # SHFE
-    "CU": ExecPolicy(CLOSETODAY, FOK, 2),   # SHFE
-    "TA": ExecPolicy(CLOSE, FAK, 1),        # CZCE
+    "IF": ExecPolicy(R_OPEN, FOK, 2),        # CFFEX
+    "IH": ExecPolicy(R_OPEN, FOK, 2),        # CFFEX
+    "IC": ExecPolicy(R_OPEN, FOK, 2),        # CFFEX
+    "IM": ExecPolicy(R_OPEN, FOK, 2),        # CFFEX
+    "AU": ExecPolicy(CLOSETODAY, FOK, 2),    # SHFE
+    "AG": ExecPolicy(CLOSETODAY, FOK, 2),    # SHFE
+    "CU": ExecPolicy(CLOSETODAY, FOK, 2),    # SHFE
+    "TA": ExecPolicy(R_OPEN, FAK, 1),        # CZCE
 }
 
 
@@ -279,11 +279,11 @@ class Product:
     r_multiple_tp: float
     multiplier: float
     open_fee: Fee
-    exec_policy: ExecPolicy                    # 执行策略表行（今仓离场/报单属性/每笔手数）
+    exec_policy: ExecPolicy                 # 执行策略表行（今仓离场/报单属性/每笔手数）
     closetoday_fee: Optional[Fee] = None    # None = 同开仓档（xlsx 无独立平今行）
-    price_tick: float = 0.2                # 最小变动价位（离线兜底；中金所四品种均 0.2）
-    exchange: str = ""                     # 交易所：**纯备案**，零判断（见字段 docstring）
-    note: str = ""                              # 调参记录 / 数据来源 / 标定状态
+    price_tick: float = 0.2            # 最小变动价位（离线兜底；中金所四品种均 0.2）
+    exchange: str = ""                      # 交易所：**纯备案**，零判断（见字段 docstring）
+    note: str = ""                          # 调参记录 / 数据来源 / 标定状态
     # 覆盖档字段位（R3 · 2026-09-15，交接文档 §6.3-b 明令"字段位必须留"）。
     #   ⚠️ **当前不消费**：`fee_pair()` 一律读基准档。
     #   后果（量化）：AU 主力滚到 6/12 合约时基准档 10 元/手 vs 覆盖档 20 元/手
@@ -396,7 +396,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
-             "今仓离场 = CLOSE（反向锁仓）",
+             "今仓离场 = R-OPEN（反向锁仓）",
         **_fee_kw("IF"),
         **_exec_kw("IF"),
     ),
@@ -470,7 +470,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         price_tick=2.0, multiplier=5.0,
         note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"
-             "报单 FAK + 一笔 1 手；今仓离场 = CLOSE（反向锁仓）；"
+             "报单 FAK + 一笔 1 手；今仓离场 = R-OPEN（反向锁仓）；"
              "偶发装置/政策消息急拉急跌",
         **_fee_kw("TA"),
         **_exec_kw("TA"),

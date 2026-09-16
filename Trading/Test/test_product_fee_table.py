@@ -80,7 +80,7 @@ if not _TG_ROOT:
 _REPO_ROOT = os.path.dirname(_TG_ROOT)
 sys.path.insert(0, _REPO_ROOT)
 
-from Trading.Infra.Product import (BASE, BASE_LABELS, CLOSE,  # noqa: E402
+from Trading.Infra.Product import (BASE, BASE_LABELS, R_OPEN,  # noqa: E402
                                    CLOSETODAY, EXEC_POLICY, OVERRIDES,
                                    PRODUCT_PROFILES, Fee, Product)
 
@@ -181,10 +181,10 @@ _EXPECT_OVERRIDES = {
 }
 
 # 平今判据期望（品种执行策略表第 1 列 close_mode；不看交易所、不算费率）
-_EXPECT_CLOSE_MODE = {"IF": "CLOSE", "IH": "CLOSE",
-                      "IC": "CLOSE", "IM": "CLOSE",
+_EXPECT_CLOSE_MODE = {"IF": "R-OPEN", "IH": "R-OPEN",
+                      "IC": "R-OPEN", "IM": "R-OPEN",
                       "AU": "CLOSETODAY", "AG": "CLOSETODAY",
-                      "CU": "CLOSETODAY", "TA": "CLOSE"}
+                      "CU": "CLOSETODAY", "TA": "R-OPEN"}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -381,9 +381,9 @@ check("[5f] 未消费：fee_pair() 仍返回基准档（AU 10 元/手，非覆�
 # ══════════════════════════════════════════════════════════════════
 print("\n[6] D-A 护栏（新）：平今判据 = 表第 1 列 close_mode（静态、不读费率）")
 # ══════════════════════════════════════════════════════════════════
-check("[6a] close_mode 取值域 = {CLOSE, CLOSETODAY}（无第三种、无 None）",
+check("[6a] close_mode 取值域 = {R_OPEN, CLOSETODAY}（无第三种、无 None）",
       sorted({p.exec_policy.close_mode for p in PRODUCT_PROFILES.values()}),
-      sorted({CLOSE, CLOSETODAY}))
+      sorted({R_OPEN, CLOSETODAY}))
 for _code in sorted(_EXPECT_CLOSE_MODE):
     check("[6b] {} close_mode == 期望".format(_code),
           PRODUCT_PROFILES[_code].exec_policy.close_mode,
@@ -399,9 +399,9 @@ check("[6e] Product.exec_policy ⇄ EXEC_POLICY 同源（不是另算一遍）",
       all(PRODUCT_PROFILES[c].exec_policy is EXEC_POLICY[c]
           for c in PRODUCT_PROFILES), True)
 check("[6f] close_mode 与交易所名字无关：同表不同交易所同值亦允许"
-      "（IF=CLOSE 与 TA=CLOSE 分属 CFFEX/CZCE）",
+      "（IF=R-OPEN 与 TA=R-OPEN 分属 CFFEX/CZCE）",
       (PRODUCT_PROFILES["IF"].exec_policy.close_mode,
-       PRODUCT_PROFILES["TA"].exec_policy.close_mode), (CLOSE, CLOSE))
+       PRODUCT_PROFILES["TA"].exec_policy.close_mode), (R_OPEN, R_OPEN))
 
 
 print("\n" + "=" * 62)

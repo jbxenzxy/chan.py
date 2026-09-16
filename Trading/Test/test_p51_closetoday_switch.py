@@ -25,12 +25,12 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
   [1] 品种执行策略表：第 1 列（今仓离场 offset）—— 8 行取值 + 与档案同源
   [2] 硬断言：`FAK ⟹ 一笔 1 手`；非法 close_mode / order_advanced / N 构造期拒绝
   [3] 转移 ④ **两路平铺**（_decide_exit）：
-        a. 表 = CLOSE（IF）→ OPEN 反向开仓锁仓
+        a. 表 = R-OPEN（IF）→ OPEN 反向开仓锁仓
         b. 表 = CLOSETODAY（AU）→ CLOSETODAY / target=当日仓 / transition=4
         c. 无品种档案 → 保守侧 OPEN
         d. 两态机前提：CLOSETODAY 品种运行态仓单数恒为 1（锁仓态不可达）
   [4] `_pre_trade_check` 对 CLOSETODAY 的校验链（判据 = 表第 1 列）：
-        a. 表第 1 列 = CLOSE 却发 CLOSETODAY → "closetoday_not_supported"
+        a. 表第 1 列 = R-OPEN 却发 CLOSETODAY → "closetoday_not_supported"
         b. 今仓目标 + 表 = CLOSETODAY → 通过（None）
         c. 昨仓目标 → "closetoday_target_is_yesterday"
         d. 量超过目标手数 → "close_volume_exceeds_target"（不足 → below）
@@ -173,12 +173,12 @@ print("\n[1] 品种执行策略表：今仓离场口径 = 表第 1 列（不看�
 check("[1a] AU/AG/CU → CLOSETODAY（用户按费率算定：平今更省）",
       [EXEC_POLICY[k].close_mode for k in ("AU", "AG", "CU")],
       ["CLOSETODAY", "CLOSETODAY", "CLOSETODAY"])
-check("[1b] IF/IH/IC/IM/TA → CLOSE（反向开仓锁仓）",
+check("[1b] IF/IH/IC/IM/TA → R-OPEN（反向开仓锁仓）",
       [EXEC_POLICY[k].close_mode for k in ("IF", "IH", "IC", "IM", "TA")],
-      ["CLOSE"] * 5)
+      ["R-OPEN"] * 5)
 check("[1c] ★ 交易所名字不参与判断：TA 档案改 exchange='SHFE' → 仍按表 = CLOSE",
       _dc_replace(PRODUCT_PROFILES["TA"], exchange="SHFE").exec_policy.close_mode,
-      "CLOSE")
+      "R-OPEN")
 check("[1d] 表与档案同源（Product.exec_policy 就是 EXEC_POLICY 那一行）",
       all(PRODUCT_PROFILES[k].exec_policy is EXEC_POLICY[k] for k in EXEC_POLICY),
       True)
@@ -202,11 +202,11 @@ check("[2a] 表里 FAK 的品种 = 只有 TA",
       ["TA"])
 check("[2b] TA 一笔 1 手", EXEC_POLICY["TA"].lots_per_order, 1)
 check("[2c] ★ FAK + N=2 → 构造期 ValueError（硬断言，不是警告）",
-      _ctor_rejects("CLOSE", "FAK", 2), True)
-check("[2d] FAK + N=1 → 合法", ExecPolicy("CLOSE", "FAK", 1).lots_per_order, 1)
+      _ctor_rejects("R-OPEN", "FAK", 2), True)
+check("[2d] FAK + N=1 → 合法", ExecPolicy("R-OPEN", "FAK", 1).lots_per_order, 1)
 check("[2e] 非法 close_mode / order_advanced / N=0 同样构造期拒绝",
-      [_ctor_rejects("CLOSEX", "FOK", 2), _ctor_rejects("CLOSE", "FOKX", 2),
-       _ctor_rejects("CLOSE", "FOK", 0)], [True, True, True])
+      [_ctor_rejects("CLOSEX", "FOK", 2), _ctor_rejects("R-OPEN", "FOKX", 2),
+       _ctor_rejects("R-OPEN", "FOK", 0)], [True, True, True])
 check("[2f] 8 品种全部 N ≥ 1",
       all(EXEC_POLICY[k].lots_per_order >= 1 for k in EXEC_POLICY), True)
 
@@ -217,7 +217,7 @@ with tmp_dir("t3a") as tmp:
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(entry_date=D1))
     act = eng._decide_exit(eng.last_bar)
-    check("[3a] IF（表=CLOSE）→ ④ OPEN 反向锁仓",
+    check("[3a] IF（表=R-OPEN）→ ④ OPEN 反向锁仓",
           (act.transition, act.intent.value, act.side, act.is_exit),
           (4, "open", Side.SHORT, True))
     check("[3a2] target=None（锁仓不指定被平仓单）", act.target, None)
@@ -264,7 +264,7 @@ with tmp_dir("t4a") as tmp:
     eng = build_engine(tmp, make_cfg(), Instrument(None, _IF), "a")
     act = _Action(intent=OrderIntent.CLOSETODAY, side=Side.LONG, volume=2,
                   target=today_target, is_exit=True, transition=4)
-    check("[4a] CLOSETODAY 但该品种表第 1 列 = CLOSE → 'closetoday_not_supported'",
+    check("[4a] CLOSETODAY 但该品种表第 1 列 = R-OPEN → 'closetoday_not_supported'",
           eng._pre_trade_check(act, D1, None), "closetoday_not_supported")
 
 with tmp_dir("t4b") as tmp:
