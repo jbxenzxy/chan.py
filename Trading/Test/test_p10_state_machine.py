@@ -284,7 +284,8 @@ with tmp_dir() as tmp:
     check("[4b] 开仓成功后 _state IN_TRADE", engine._state, EngineState.IN_TRADE)
     check("[4c] 开仓成功后 position 非空", engine.position is not None, True)
     check("[4d] 新开仓 side LONG", engine.position.side, Side.LONG)
-    check("[4e] 新开仓 volume 2（默认 max_volume=2）", engine.position.volume, 2)
+    check("[4e] 新开仓 volume 2（品种执行策略表第 3 列 IF → 2 手）",
+          engine.position.volume, 2)
     check("[4f] 新开仓 entry_date = 信号交易日",
           engine.position.entry_date, "2026-09-01")
     check("[4g] 开仓后 account_state RUNNING", engine.account_state(), AccountState.RUNNING)
@@ -583,7 +584,8 @@ with tmp_dir() as tmp:
     _a1 = engine._decide_action(_buy, today)
     check("[12b] ① FLAT → intent OPEN", _a1.intent, OrderIntent.OPEN)
     check("[12c] ① FLAT → side = 信号方向", _a1.side, Side.LONG)
-    check("[12d] ① FLAT → volume = lots_per_signal", _a1.volume, engine.lots_per_signal)
+    check("[12d] ① FLAT → volume = lots_per_order（表第 3 列）",
+          _a1.volume, engine.lots_per_order)
     check("[12e] ① FLAT → transition=1", _a1.transition, 1)
     check("[12f] ① FLAT → is_exit=False", _a1.is_exit, False)
     # 纯函数：不得改状态
@@ -626,8 +628,8 @@ with tmp_dir() as tmp:
           _a4.target.signal_key if _a4.target else None, "OLD-S")
     check("[12s] ③ 跨日锁 → transition=3", _a4.transition, 3)
     check("[12t] ③ 跨日锁 → is_exit=False（拆锁不是离场，D13）", _a4.is_exit, False)
-    check("[12u] ③ 跨日锁 → volume = min(lots, target.volume)",
-          _a4.volume, min(engine.lots_per_signal, 2))
+    check("[12u] ③ 跨日锁 → volume = target.volume（平满目标，不套开仓帽子）",
+          _a4.volume, _a4.target.volume)
     # 卖信号 → 平多头最早一笔
     _sell = make_signal(is_buy=False, date="2026-09-01 09:36")
     _a5 = engine._decide_action(_sell, today)

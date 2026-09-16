@@ -247,17 +247,19 @@ check("[5b] RiskConfig 已无 unlock_no_new_open 字段",
 
 legacy = RiskConfig(**{"max_open_positions": 3, "unlock_no_new_open": True,
                        "max_volume": 2})
-check("[5c] 带旧键构造不报错（老配置文件仍可用）", legacy.max_volume, 2)
-check_true("[5d] 旧键被记入 dropped_legacy_keys 白名单",
+check("[5c] 带旧键构造不报错（老配置文件仍可用）", legacy.delivery_guard_days, 1)
+check_true("[5d] 旧键被记入 dropped_legacy_keys 白名单（含 max_volume）",
            "max_open_positions" in RiskConfig.dropped_legacy_keys
-           and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys,
+           and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys
+           and "max_volume" in RiskConfig.dropped_legacy_keys,
            "got=%s" % RiskConfig.dropped_legacy_keys)
 
 cfg0 = TradingConfig.from_dict(DEFAULT_CONFIG)
 check("[5e] DEFAULT_CONFIG.risk 不含旧键（磁盘上也没有）",
       ("max_open_positions" in (DEFAULT_CONFIG.get("risk") or {}),
        "unlock_no_new_open" in (DEFAULT_CONFIG.get("risk") or {})), (False, False))
-check("[5f] 从 DEFAULT_CONFIG 构造后 risk.max_volume 正常", cfg0.risk.max_volume, 2)
+check("[5f] DEFAULT_CONFIG.risk 已无 max_volume（手数旋钮已删）",
+      "max_volume" in (DEFAULT_CONFIG.get("risk") or {}), False)
 
 # ★ 关键护栏：白名单丢弃 ≠ 放行任意未知键（否则 RiskConfig 的严格模式失效）
 check_raises("[5g] 严格模式仍然生效：真正的未知键必须报错",
@@ -273,8 +275,8 @@ with tmp_dir() as td:
     eng = make_engine(td, "c6")
     check("[6a] 引擎容器 max_positions is None（不限容量）",
           eng.positions.max_positions, None)
-    check("[6b] 一笔手数来自 cfg.risk.max_volume（唯一还在用的 risk 字段）",
-          eng.lots_per_signal, cfg0.risk.max_volume)
+    check("[6b] 一笔手数来自品种执行策略表第 3 列（risk 层已无手数旋钮）",
+          eng.lots_per_order, PRODUCT_PROFILES["IF"].exec_policy.lots_per_order)
 
 _esrc = inspect.getsource(TradingEngine.__init__)
 check_true("[6c] Engine.__init__ 不再读 max_open_positions",

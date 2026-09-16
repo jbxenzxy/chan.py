@@ -83,6 +83,8 @@ def _fee_banner(cfg: TradingConfig) -> None:
 
     ⚠️ 2026-09-16：结论**直接读执行策略表**（用户按费率自己算定后填表），
     不再由代码比费率 —— 决策侧零费率引用。
+    ⚠️ 2026-09-16 其二：**单笔手数只剩这一个来源**（`risk.max_volume` 已删）——
+    横幅打出的就是实际生效值，不存在"横幅说 2 手、实际挂 1 手"的第二个旋钮。
     """
     p = cfg.product_profile
     if p is None:
@@ -97,8 +99,9 @@ def _fee_banner(cfg: TradingConfig) -> None:
         p.product, p.exchange or "?", open_fee.describe(),
         open_fee.describe(), ct_fee.describe()))
     print("[gw]   → " + concl)
-    print("[gw]   执行策略：报单 {} ｜ 一笔 {} 手（品种执行策略表第 2/3 列，代码只读不推）".format(
-        pol.order_advanced, pol.lots_per_order))
+    print("[gw]   执行策略：报单 {} ｜ 一笔 {} 手"
+          "（品种执行策略表第 2/3 列 = 手数唯一来源，代码只读不推）".format(
+              pol.order_advanced, pol.lots_per_order))
 
 
 def build_runtime(args):

@@ -880,12 +880,18 @@ print("\n[11] 配置加载失败：仍落盘 gateway.log 记录失败原因")
 with tmp_dir() as tmp:
     out_dir = os.path.join(tmp, "State")
     orig_state_file = AT._STATE_FILE
-    _env_bak = os.environ.get("TRADING_RISK__MAX_VOLUME")
+    _env_bak = os.environ.get("TRADING_RISK__DELIVERY_GUARD_DAYS")
     try:
         AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
         # 真实失败路径：.env / 环境变量写错 → Trading/Config.py 严格校验抛错。
         # 不再有"配置文件不存在"这种失败 —— 配置本来就不是文件了。
-        os.environ["TRADING_RISK__MAX_VOLUME"] = "abc"
+        # ⚠️ 2026-09-16 换键：原用 `TRADING_RISK__MAX_VOLUME=abc` 当"非法值"触发器，
+        #   但 max_volume 已列为**已删键**（D17 丢弃 + 打 WARNING，见
+        #   `RiskConfig._DROPPED_KEYS`）→ 它不再进校验，写错也不会报错，
+        #   本段会退化成"配置怎么都不失败"。故改用**仍然存在**的 int 字段
+        #   `delivery_guard_days` 承载同一条失败路径（"已删键不报错"本身由
+        #   test_p15a [1f]/[1h] 与 test_p14a [5d] 单独锁死）。
+        os.environ["TRADING_RISK__DELIVERY_GUARD_DAYS"] = "abc"
         t = AT.AppTrader()
         try:
             t.start(out_dir=out_dir)
@@ -906,9 +912,9 @@ with tmp_dir() as tmp:
         check("[11f] 日志含失败原因", "读取配置失败" in content, True)
     finally:
         if _env_bak is None:
-            os.environ.pop("TRADING_RISK__MAX_VOLUME", None)
+            os.environ.pop("TRADING_RISK__DELIVERY_GUARD_DAYS", None)
         else:
-            os.environ["TRADING_RISK__MAX_VOLUME"] = _env_bak
+            os.environ["TRADING_RISK__DELIVERY_GUARD_DAYS"] = _env_bak
         AT._STATE_FILE = orig_state_file
 
 

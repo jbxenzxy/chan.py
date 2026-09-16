@@ -186,7 +186,7 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 #    本表第 1 列只约束**今仓**怎么离场。
 #
 # 硬断言（构造期拒绝启动，不留静默默认值）：
-#   · 三列取值合法（close_mode / order_advanced / lots_per_order ≥ 1）；
+#   · 三列取值合法（close_mode / order_advanced / 1 ≤ lots_per_order ≤ 20）；
 #   · **FAK ⟹ lots_per_order == 1**（用户第 2 轮 ⑵⑶ 定为硬断言）——
 #     FAK 允许部分成交后撤余量，只有"一笔 1 手、没有余量可撤"时 FAK 才等价于
 #     FOK；放开 N 会破坏「待报 / 全成 / 全撤」三态不变量。
@@ -194,6 +194,12 @@ R_OPEN = "R-OPEN"
 CLOSETODAY = "CLOSETODAY"
 FOK = "FOK"
 FAK = "FAK"
+
+# 单笔报单手数上限。**原 `RiskConfig._check_max_volume` 的 1..20 校验**
+# （P1-1 · 2026-09-08）在 2026-09-16 删掉 `risk.max_volume` 时**迁到这里** ——
+# 手数真值源既然变成本表，约束就该长在表上；若直接丢掉，超限手数会退化成
+# "dry_run 无告警照常成交、实盘才被 CTP 拒单"的行为分歧（这正是原校验要防的）。
+_LOTS_MAX = 20
 
 
 @dataclass(frozen=True)
@@ -210,9 +216,11 @@ class ExecPolicy:
         if self.order_advanced not in (FOK, FAK):
             raise ValueError("order_advanced 必须是 {} / {}，收到 {!r}".format(
                 FOK, FAK, self.order_advanced))
-        if int(self.lots_per_order) < 1:
-            raise ValueError("lots_per_order 必须 ≥ 1，收到 {!r}".format(
-                self.lots_per_order))
+        if not 1 <= int(self.lots_per_order) <= _LOTS_MAX:
+            raise ValueError(
+                "lots_per_order 必须落在 1..{}（单笔报单手数上限；原 "
+                "`risk.max_volume` 的 1..20 校验已于 2026-09-16 迁到本表），"
+                "收到 {!r}".format(_LOTS_MAX, self.lots_per_order))
         if self.order_advanced == FAK and int(self.lots_per_order) != 1:
             raise ValueError(
                 "FAK 品种一笔必须挂 1 手（收到 {}）：FAK 允许部分成交后撤余量，"

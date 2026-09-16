@@ -253,7 +253,7 @@ def mk_pos(side=Side.LONG, entry_date=_TODAY, vol=2):
 def mk_engine(tmp, book):
     """建引擎后在**构造之后**灌簿 —— 避免触发 G2「有敞口无 run → 拒绝启动」。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_volume = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     cfg.exit_params.use_atr = False
     eng = TradingEngine(
         cfg, DryRunBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0}),

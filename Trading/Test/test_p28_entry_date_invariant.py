@@ -78,7 +78,7 @@ class tmp_dir(object):
 
 def build(tmp, tag, store_name=None):
     cfg = TradingConfig.from_dict(copy.deepcopy(DEFAULT_CONFIG))
-    cfg.risk.max_volume = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     # max_open_positions 已于 Phase 1-4 删除（D2）：同向持仓不再有"笔数上限静默门"，
     # 同向信号会正常开新仓。本文件不依赖该门。
     cfg.exit_params.use_atr = False

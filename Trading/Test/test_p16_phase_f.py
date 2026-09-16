@@ -101,8 +101,16 @@ from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+from dataclasses import replace as _dc_replace  # noqa: E402
 
-_IF = PRODUCT_PROFILES["IF"]
+# 单笔手数的唯一来源 = 品种执行策略表第 3 列（2026-09-16 起；原 `risk.max_volume`
+# 已删除）。本文件的场景按「一笔 1 手」构造（多笔叠加才是观察对象），故这里直接
+# 改**表值** —— 只把 IF 档案的执行策略第 3 列换成 1，"改表即生效"正是它的口径。
+# ⚠️ 引擎的有效档案来自 `broker.state`（P-B 合并），本文件所有
+#    `Instrument(None, _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
+_IF = _dc_replace(PRODUCT_PROFILES["IF"],
+                  exec_policy=_dc_replace(PRODUCT_PROFILES["IF"].exec_policy,
+                                          lots_per_order=1))
 from Trading.Infra.Records import AccountState, Bar, EngineState, ExitPlan, Position, Side
 
 
@@ -219,14 +227,11 @@ def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run")
 
 
 def make_engine(tmpdir, *, split_positions=1,
-                cfg_risk_max_volume=10, tp_points=5.0, stop_points=10.0,
+                tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
-    """构造引擎：每笔手数 = 1（cfg.risk.max_volume）。"""
+    """构造引擎：每笔手数 = 1（= 品种执行策略表第 3 列，见 `_IF` 改写说明）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
-    cfg.risk.max_volume = cfg_risk_max_volume
-    # 每笔手数由 cfg.risk.max_volume 决定（PositionSizing 已整体删除）
-    cfg.risk.max_volume = 1
 
     spec = Instrument(None, _IF)
     if broker is None:
@@ -545,7 +550,6 @@ with tmp_dir() as td:
     dry_b = DryRunBroker(spec)  # 默认 real_position=None
     # 手动构造 engine 前先把 store 写入持仓
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_volume = 1
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(td, "state.db"))

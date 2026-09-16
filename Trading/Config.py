@@ -8,7 +8,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ① 信号源层     → SourceConfig
         ② 信号适配层   → （无独立配置模型，仅解析/去重行为）
         ③ 策略层       → Entry/Exit 参数（单一策略，无选择器）
-        ④ 风控层       → RiskConfig（开仓手数/持仓上限/补开开关）
+        ④ 风控层       → RiskConfig（交割月护栏；**单笔手数已迁品种执行策略表**）
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
     · 周期只作时间语义（freq → bar_secs），收口在 Infra/Period.py 的
@@ -77,8 +77,11 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     2. 环境变量 / 仓库根 `.env`
         前缀 `TRADING_`，嵌套用双下划线，如：
             TRADING_SOURCE__FREQ=15s
-            TRADING_RISK__MAX_VOLUME=3
-            TRADING_SIZING__ENABLED=true
+            TRADING_RISK__DELIVERY_GUARD_DAYS=3
+            TRADING_BROKER=dry_run
+        （⚠️ 2026-09-16：示例里**不再**举 `TRADING_RISK__MAX_VOLUME` /
+        `TRADING_SIZING__ENABLED` —— 单笔手数旋钮已删（迁品种执行策略表第 3 列）、
+        `sizing` 整节更早就删了。拿已删键当示例会教人往配置里写无用行。）
     3. 本文件各模型字段的默认值 —— **默认值的唯一来源，别处不再写第二套**
 
 严格模式（用户拍板：不要兜底）
@@ -102,7 +105,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List, Optional, Tuple
 
 from pydantic import (BaseModel, ConfigDict, Field, field_validator,
                       model_validator)
@@ -141,7 +144,7 @@ _log = logging.getLogger(__name__)
 # ════════════════════════════════════════════════════════════════════
 class TradingConfig(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="TRADING_",           # TRADING_BROKER / TRADING_RISK__MAX_VOLUME ...
+        env_prefix="TRADING_",           # TRADING_BROKER / TRADING_RISK__DELIVERY_GUARD_DAYS ...
         env_nested_delimiter="__",
         env_file=_ENV_FILE,              # 仓库根 .env（与 App/AppConfig.py 同一份）
         env_file_encoding="utf-8",
@@ -361,27 +364,33 @@ class ExitPolicyParams(ExitConfig):
 # ════════════════════════════════════════════════════════════════════
 # ④ 风控层（Risk Gate）配置
 #    2026-09-08 二次精简：删除整条"仓位管理（手数定档）"通道（PositionSizing /
-#      SizingConfig）。开仓手数直接由本层 max_volume 决定。
+#      SizingConfig）。
 #    已删除：原五道硬闸门（enforce_session / no_open_after / max_trades_per_day /
 #      max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
 #      资金闸门（initial_cash）；仓位管理动态计算字段（capital_pct / atr_risk /
 #      risk_unit_pct / equity_source / fixed_volume / fallback_volume …）。
-#    保留：max_volume（每个买卖点一笔挂 N 手）。
 #    2026-09-11 删除：max_open_positions（同时持仓笔数上限，D2 —— 资金是唯一闸门）、
 #      unlock_no_new_open（解锁昨仓后是否补开今仓 —— "解锁"概念随重构删除）。
+#    2026-09-16 删除：**max_volume**（单笔手数）—— 手数旋钮**只留一个**，真值源 =
+#      品种执行策略表第 3 列（`Infra/Product.py` 的 `EXEC_POLICY[code].lots_per_order`）。
+#      背景（评审 P2-3）：原先引擎按 `min(risk.max_volume, 表第 3 列)` 取小，于是
+#      "单笔手数"有了两个旋钮，而启动横幅只打表值 —— `max_volume=1` 而表写 2 时
+#      横幅说"一笔 2 手"、实际挂 1 手，**唯一可见的行为变更处反而会误导**；
+#      用户也提不动"改表 N"（被风控压住），与"填表即生效"的心智模型冲突。
+#      用户拍板：删掉本键，表第 3 列就是用来替换它的。
 # ════════════════════════════════════════════════════════════════════
 class RiskConfig(BaseModel):
-    """风控参数（2026-09-08 二次精简）：只保留开仓手数与持仓笔数上限。
+    """风控参数：**本层不含任何手数旋钮**（2026-09-16 起）。
 
     手数语义（与"每个买卖点只开一笔"绑定）：
-      · 每个买卖点信号触发时**只开一笔**，一笔挂 N 手，N = `max_volume`。
-      · `max_volume` 即单笔手数上限，默认 2。默认不会配置超过中金所限价单
-        单笔上限 20 手，故引擎不再另设交易所 20 手拦截。
+      · 每个买卖点信号触发时**只开一笔**，一笔挂 N 手；
+      · N 的**唯一来源 = 品种执行策略表第 3 列**
+        （`Infra/Product.py` 的 `EXEC_POLICY[code].lots_per_order`），由用户按
+        品种算定后填表，代码只读不推；
+      · 1..20 的取值约束在 `ExecPolicy.__post_init__` 构造期 fail-fast ——
+        同一份约束只写一处（原 `_check_max_volume` 的职责随之迁移）。
     """
     model_config = ConfigDict(extra="forbid")
-
-    max_volume: int = 2              # 每个买卖点一笔挂 N 手（= 单笔手数上限，默认 2）。
-                                     #   中金所限价单单笔上限 20 手，配置不应超过。
 
     # 交割月护栏（Phase 11 · 阻塞点 4 · D8）：距最后交易日不足 `delivery_guard_days`
     #   个交易日时拒绝**开新仓**（fail-closed）。判据 = 剩余交易日 < N 即拦。
@@ -390,15 +399,27 @@ class RiskConfig(BaseModel):
     delivery_guard_days: int = 1
 
     dropped_legacy_keys: ClassVar[List[str]] = []
-    # 2026-09-11 重构删除的两个键被 `_drop_legacy_keys` 丢弃时记在这里。
-    # 只为"可见"服务 —— 静默丢弃会让"配置里还有这两行"永远不被发现。
+    # 被 `_drop_legacy_keys` 丢弃的键记在这里（**累计记账**，诊断 / 测试用）。
+    # 只为"可见"服务 —— 静默丢弃会让"配置里还有这几行"永远不被发现。
+
+    # 已删除的配置键 → 丢弃原因。**本层唯一一份"哪些键已删除"的清单**，
+    # 增删只改这里（key, 为什么删），不散落在循环与文案里。
+    _DROPPED_KEYS: ClassVar[Tuple[Tuple[str, str], ...]] = (
+        ("max_open_positions",
+         "「同时持仓笔数上限」随 D2 删除（资金是唯一闸门）"),
+        ("unlock_no_new_open",
+         "「解锁后补开」随「解锁」概念一并删除"),
+        ("max_volume",
+         "单笔手数迁到品种执行策略表第 3 列（Infra/Product.py 的 EXEC_POLICY），"
+         "本层不再有手数旋钮（2026-09-16 拍板）"),
+    )
 
     @model_validator(mode="before")
     @classmethod
     def _drop_legacy_keys(cls, data: Any) -> Any:
-        """丢弃 2026-09-11 重构删除的两个键 —— **但不静默**（Phase 5 G6）。
+        """丢弃已删除的配置键（清单见 `_DROPPED_KEYS`）—— **但不静默**（Phase 5 G6）。
 
-        RiskConfig 是 extra="forbid"，若不放行，老配置文件带上这两个键会
+        RiskConfig 是 extra="forbid"，若不放行，老配置文件带上这些键会
         **启动即报错**（pydantic 不认识的字段）。它们现在完全没有语义，
         丢弃比让服务起不来合适。
 
@@ -409,34 +430,26 @@ class RiskConfig(BaseModel):
         百遍）。`dropped_legacy_keys` 保留**累计记账**（诊断 / 测试用），但**不做
         判据**。
         """
-        hits: List[str] = []
+        hits: List[Tuple[str, str]] = []
         if isinstance(data, dict):
-            for k in ("max_open_positions", "unlock_no_new_open"):
+            for k, why in cls._DROPPED_KEYS:
                 if k in data:
                     data.pop(k, None)
-                    hits.append(k)
+                    hits.append((k, why))
                     cls.dropped_legacy_keys.append(k)
         if hits:
             _log.warning(
-                "配置文件含已删除的配置项 %s，已忽略（2026-09-11 重构："
-                "「同时持仓笔数上限」「解锁后补开」随概念一并删除）。"
-                "请从配置文件里删掉这几行。", sorted(set(hits)))
+                "配置文件含已删除的配置项 %s，已忽略 —— %s。"
+                "请从配置文件里删掉这几行。",
+                sorted({k for k, _ in hits}),
+                "；".join("{}：{}".format(k, why) for k, why in hits))
         return data
 
-    @field_validator("max_volume")
-    @classmethod
-    def _check_max_volume(cls, v: int) -> int:
-        """P1-1 启动期校验（2026-09-08）：越界 fail-fast。
-
-        引擎不再做运行期单笔 20 手上限拦截（over_exchange_limit 已随
-        PositionSizing 删除），合法性完全靠这里在配置构造时兜底，杜绝
-        dry_run 无告警"照常成交超限手数"、实盘才被 CTP 拒单的行为分歧。
-        """
-        if not 1 <= v <= 20:
-            raise ValueError(
-                "risk.max_volume 必须落在 1..20（中金所限价单单笔上限 20 手），"
-                "实际={}".format(v))
-        return v
+    # ⚠️ 原 `@field_validator("max_volume")` 的 1..20 越界校验（P1-1 · 2026-09-08）
+    #   随本字段一并删除，**职责迁到 `Infra/Product.py` 的 `ExecPolicy.__post_init__`**
+    #   —— 手数真值源既已变成品种执行策略表，约束就该长在表上（构造期 fail-fast
+    #   的效果不变：dry_run 与实盘不会出现"超限手数照常成交" vs "被 CTP 拒单"的
+    #   行为分歧）。同一份约束只留一处，不在这里兜底。
 
 
 # ════════════════════════════════════════════════════════════════════

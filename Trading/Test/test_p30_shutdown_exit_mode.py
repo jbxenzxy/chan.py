@@ -152,7 +152,7 @@ def make_sig(date, hhmm, is_buy, price, ts, key=None):
 
 def build(tmpdir, tag="a", store_path=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_volume = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     # max_open_positions / unlock_no_new_open 已于 Phase 1-4 删除（D2）：前者是同向笔数门，
     # 后者在 D1（风控锚改挂在 run 上）后失去意义。
     cfg.exit_params.use_atr = False

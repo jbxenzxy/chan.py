@@ -398,10 +398,11 @@ def t8_dead_field_removed():
     """[8] 2026-09-14：死字段 `max_order_volume` 已删除，不许回潮。
 
     背景：该字段在 Phase 8 作为 §5.6「六个缺字段」之一加入，但**从未被消费**
-    （全仓只有字段定义一处、0 处读取）。单笔开仓手数的来源是 `risk.max_volume`
-    （风控上限）与品种执行策略表第 3 列 `lots_per_order`（1 笔挂 N 手）取小者
-    —— Config.py → Engine.lots_per_signal → Engine.lots_per_order；
-    2026-09-16 起不再按交易所硬编码，与本字段无关。
+    （全仓只有字段定义一处、0 处读取）。单笔开仓手数的**唯一来源 = 品种执行
+    策略表第 3 列** `EXEC_POLICY[code].lots_per_order`（1 笔挂 N 手）——
+    Product.py → Instrument.exec_policy → Engine.lots_per_order；
+    2026-09-16 起不再按交易所硬编码、也不再与风控上限取小
+    （`risk.max_volume` 同日删除，手数旋钮只留一个），与本字段无关。
 
     为什么必须钉死：这类"看起来像配置项、实际没有读取点"的字段是最危险的文档
     噪声 —— 下一个人会以为"手数上限在这里配"，改完发现没生效，再花时间排查。

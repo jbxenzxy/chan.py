@@ -649,8 +649,12 @@ net == 0 且簿空     -> FLAT    空仓态
 
 判定 `4NX > NX + NY` ⟺ **`Y < 3X` → 走平今**（否则走反向开仓的现状流程）。
 
-**手数 `N` 自动约掉** —— 每笔都是 N 手（反向开仓量 = `abs(net)`、拆锁量 = `min(lots_per_signal, target.volume)`、
+**手数 `N` 自动约掉** —— 每笔都是 N 手（反向开仓量 = `abs(net)`、拆锁量 = `target.volume`、
 离场量 = `min(abs(net), target.volume)`，在单一方向簿下都 = N）。
+
+> ⚠️ 2026-09-16 第三轮：拆锁量由 `min(lots_per_signal, target.volume)` 改为 `target.volume`（**平满目标**），
+> 且 `lots_per_signal` / `risk.max_volume` 已删除 —— 单笔手数的唯一来源是**品种执行策略表第 3 列**。
+> 详见 `Docs/品种执行策略表_设计与交接.md` §17。
 
 **价格也自动约掉**（同品种内 X 与 Y 同计价方式时，两边同乘 `price × multiplier`）
 —— 所以判定可以**完全静态化**，不需要运行时价格。

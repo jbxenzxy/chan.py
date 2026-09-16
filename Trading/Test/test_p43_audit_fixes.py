@@ -82,7 +82,8 @@ from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 _IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.StateDB import Store  # noqa: E402
 
-from Trading.Infra.Records import AccountState, Bar, OrderIntent, Side, Signal  # noqa: E402
+from Trading.Infra.Records import (AccountState, Bar, ExitPlan,  # noqa: E402
+                                   OrderIntent, Position, Side, Signal)
 
 from Trading.Strategy.Entry import EntryPolicy     # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy       # noqa: E402
@@ -134,9 +135,19 @@ def sig(key, date, ts, price, is_buy):
                   fractal_low=price - 12.0, fractal_high=price + 12.0)
 
 
+def make_pos(side, volume, price, key, entry_date):
+    """一笔仓单 —— 用于复刻「上一会话遗留的簿面」（跨会话换表 / 带旧仓重启）。"""
+    return Position(
+        symbol="CFFEX.IF2609", side=side, volume=volume, entry_price=price,
+        entry_at=entry_date + " 09:30", entry_bar_ts=1000, signal_key=key,
+        open_order_id="p43-" + key,
+        exit_plan=ExitPlan(name="x", stop_price=price - 10.0),
+        entry_bar_seq=1, entry_date=entry_date)
+
+
 def make_cfg(**engine_over):
     c = copy.deepcopy(DEFAULT_CONFIG)
-    c["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     c["exit_params"].update({"use_atr": False,
                              "use_trailing": False})
     c["engine"]["close_retry_bars"] = 1
@@ -227,27 +238,45 @@ with tmp_dir("streak") as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[2] act.volume < target.volume 的部分平仓必须被拒绝（不整笔记账）")
 # ════════════════════════════════════════════════════════════════
+# 触发形态（2026-09-16 复核后的**唯一**一条路）：**跨会话把表第 3 列调小**
+# （如 4 → 2）后带旧仓重启 —— 簿内一笔 4 手多头（旧表遗留）+ 一笔 2 手空头，
+# 净敞口 +2 却要对冲那笔 4 手 → 转移 ⑤ 算出"只平 2 手"。
+#   为什么不沿用 `eng.lots_per_signal = 1` 造假：该属性已随 `risk.max_volume`
+#   一并删除（评审 P2-3：单笔手数只留一个旋钮 = 品种执行策略表第 3 列），
+#   引擎侧再没有可被运行期覆盖的手数镜像 —— 这条不足量只剩"簿面被外力改过 /
+#   换表后带旧仓"一种来源，故按**注入旧仓簿**复刻（等价于 `_restore` 的结果）。
 with tmp_dir("partial") as tmp:
     spec = Instrument(None, _IF)
     eng, evp = build(tmp, SeqCloseBroker(spec, {"sim_equity": 1_000_000.0}))
-    eng.on_bar(bar(1000, D1 + " 09:40", P0))
-    eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
-    # 同日不利 K 线 → 转移④ 反向 OPEN → 净敞口归零、进入锁仓态
-    eng.on_bar(bar(2000, D1 + " 10:00", P0 - 60.0, lo=P0 - 80.0))
-    check("[2a] 锁仓态（有仓单、净敞口 0）", eng.account_state(),
-          AccountState.LOCKED)
+    eng.positions.add(make_pos(Side.LONG, 4, P0, "OLD-L", D1))
+    eng.positions.add(make_pos(Side.SHORT, 2, P0 - 40.0, "OLD-S", D1))
+    eng.on_bar(bar(1000, D2 + " 09:40", P0))
+    # 簿内两笔反向仓单**不等量**（4 多 + 2 空）→ 净敞口 +2 ≠ 0 → 状态是 RUNNING
+    # （LOCKED 要求净敞口恰好为 0）。这一点正是本组的关键：转移 ⑤ 只认"最近一笔
+    # 是昨仓 + 有反向仓单"，它在 **RUNNING** 态下就会算出"只平 min(|净敞口|, 目标)"
+    # 的不足量手数 —— 不需要真进锁仓态。
+    check("[2a] RUNNING 态 + 净敞口 +2（两笔不等量反向仓单）",
+          (eng.account_state(), eng.positions.net_volume()),
+          (AccountState.RUNNING, 2))
     n_before = len(eng.positions.positions)
-    check("[2b] 簿内两笔仓单", n_before, 2)
-    # 模拟"跨会话把 risk.max_volume 从 4 调到 2"：lots_per_signal 小于仓单手数
-    eng.lots_per_signal = 1
-    eng.on_bar(bar(3000, D2 + " 09:40", P0 - 60.0))
-    eng.on_signal(sig("X|buy|2", D2 + " 09:40", 3000, P0 - 60.0, True))
-    check("[2c] ★ 部分平仓被拒绝（close_volume_below_target）",
+    act = eng._decide_exit(eng.last_bar)          # 纯函数：不改状态
+    check("[2b] 转移 ⑤：目标 = 最早那笔多头（4 手）",
+          (act.transition, act.intent, act.target.volume),
+          (5, OrderIntent.CLOSE, 4))
+    check("[2c] 动作手数 = min(|净敞口|, 目标手数) = 2 < 目标 4 手",
+          act.volume, 2)
+    why = eng._pre_trade_check(
+        act, D2, sig("X|buy|2", D2 + " 09:40", 1000, P0, True), ref_price=P0)
+    check("[2d] ★ 部分平仓被拒绝（close_volume_below_target）",
+          why, "close_volume_below_target")
+    eng._execute(act, P0, bar=eng.last_bar,
+                 sig=sig("X|buy|2", D2 + " 09:40", 1000, P0, True))
+    check("[2e] _last_reject 记录在案",
           eng._last_reject, "close_volume_below_target")
-    check("[2d] 簿面未被改动（没有整笔记账 / 整笔移除）",
+    check("[2f] 簿面未被改动（没有整笔记账 / 整笔移除）",
           len(eng.positions.positions), n_before)
-    check("[2e] 净敞口仍是 0（未误平）", eng.positions.net_volume(), 0)
-    check_true("[2f] 拒绝动作写进了事件日志（order_rejected）",
+    check("[2g] 净敞口仍是 +2（未误平）", eng.positions.net_volume(), 2)
+    check_true("[2h] 拒绝动作写进了事件日志（order_rejected）",
                ev_count(eng, "order_rejected") >= 1)
 
 

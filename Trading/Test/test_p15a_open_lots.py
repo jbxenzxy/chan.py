@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-P15a 一笔报单开仓测试（2026-09-11 Phase 7 改写）
+P15a 一笔报单开仓测试（2026-09-16 第三轮改写）
 ================================================
 本文件原来测的是两样**已被重构删除**的东西：
   · `cfg.risk.max_open_positions`（同时持仓笔数上限）—— D2 判定删除：
@@ -9,32 +9,46 @@ P15a 一笔报单开仓测试（2026-09-11 Phase 7 改写）
     `on_signal` → `_decide_action` → `_pre_trade_check` → `_execute` → `_book_open`。
   另 `RiskConfig.unlock_no_new_open` 随"解锁"概念一并删除（D17 丢弃旧键但不静默）。
 
+⚠️ 2026-09-16（第三轮）**再改写一次**：用户拍板 —— **"删掉 `risk.max_volume`，
+   表第 3 列就是用来替换这个的"**。故本文件里所有"改风控手数"的手法全部换成
+   **"改品种执行策略表第 3 列"**（用 `dataclasses.replace` 造一份改过表的品种档案）。
+   手数旋钮从此只有一个，**本文件的写法本身就是"唯一来源"的示范**。
+
 新口径（本测试锁死）
-    [1] 术语纪律：config 无 sizing 键；`RiskConfig` 字段集**受控**（无已删键、也不得
-        出现预期外的新字段）；两个已删键（max_open_positions / unlock_no_new_open）
+    [1] 术语纪律：config 无 sizing 键、**风控层无任何手数旋钮**；`RiskConfig`
+        字段集**受控**（无已删键、也不得出现预期外的新字段）；三个已删键
+        （`max_open_positions` / `unlock_no_new_open` / **`max_volume`**）
         按 D17 丢弃 + 可观测。
-        ⚠️ 2026-09-14 修正：原断言把字段集写死为 `{"max_volume"}`，Phase 11 新增
-        `delivery_guard_days`（交割月护栏阈值）后误报 —— 改为「已删键不在 + 字段集
-        不超出已知清单 + max_volume 仍在」三条。新增非 sizing 字段时**同步已知清单**
-        即可（这是有意确认，不是漏改），新字段若误入则会红。
-    [2] 一笔报单挂 N 手：`max_volume=N` → broker **恰好 1 单 N 手**、簿 **1 笔 N 手**、
-        事件里恰好 1 条 order + 1 条 open（不是 N 单，也不是 1 笔拆 N 笔）。
-    [3] `max_volume` 启动期校验 1..20（配置层 fail-fast）—— 取代已删的运行期
-        20 手拦截（`over_exchange_limit` 随 PositionSizing 删除）。
+    [2] 一笔报单挂 N 手：**表第 3 列 = N** → broker **恰好 1 单 N 手**、簿
+        **1 笔 N 手**、事件里恰好 1 条 order + 1 条 open（不是 N 单，也不是
+        1 笔拆 N 笔）。
+    [2b] **改表即生效**（用户 ⑵ 的核心诉求）：表值 3/7/20 手时实开就是那么多
+        —— 不再被任何风控上限"取小"压住（旧口径 `min(risk.max_volume, 表值)`
+        会让"改表 N"不生效，而启动横幅只显示表值 → 唯一可见处反而误导）。
+        另锁：`lots_per_order` **每次实时读表**（会话中换表立即可见）+ 无品种档案 → 1 手。
+    [3] 手数 1..20 的构造期 fail-fast：**原 `RiskConfig` 的校验已迁到
+        `ExecPolicy.__post_init__`**（手数真值源既然变成表，约束就必须长在表上，
+        dry_run 与实盘不能出现"超限照常成交" vs "被 CTP 拒单"的行为分歧）。
     [4] 拒单路径：全场拒 → 簿空 / `account_state()==FLAT` / `_state==IDLE` /
         signal_action=rejected，且**不留幻影持仓**。
-    [5] 无分仓残留 + 唯一报单出口存在性（A3）。
+    [5] 无分仓残留 + 唯一报单出口存在性（A3）+ **手数只剩一条通道**：
+        `lots_per_signal` / `max_volume` / `CZCE` 在**可执行代码**里零残留
+        （token 级判定 —— 注释与文档串里的历史说明不算残留，那是给后人读的）。
 
 不需要真实 tqsdk / 网络；纯单测 + RejectDryBroker mock 测拒单路径。
 跑法：python Trading/Test/test_p15a_open_lots.py
 """
 from __future__ import annotations
 
+import io
+import json
 import os
 import shutil
 import sys
 import tempfile
+import tokenize
 from contextlib import contextmanager
+from dataclasses import replace as _dc_replace
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -72,7 +86,6 @@ def tmp_dir():
 
 
 from Trading import Broker  # noqa: E402  注册 dry_run
-import json  # noqa: E402
 from Trading.Broker.Base import OrderIntent  # noqa: E402
 from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import DEFAULT_CONFIG, RiskConfig, TradingConfig  # noqa: E402
@@ -83,10 +96,12 @@ from Trading.Infra.StateDB import Store  # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
 from Trading.Infra.Instrument import Instrument  # noqa: E402
-from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
+from Trading.Infra.Product import (  # noqa: E402
+    EXEC_POLICY, FAK, FOK, PRODUCT_PROFILES, R_OPEN, ExecPolicy,
+)
 
 _IF = PRODUCT_PROFILES["IF"]
-from Trading.Infra.Records import AccountState, Bar, EngineState, Signal
+from Trading.Infra.Records import AccountState, Bar, EngineState, Signal  # noqa: E402
 
 _PASS = 0
 _FAIL = 0
@@ -148,18 +163,38 @@ class RejectDryBroker(DryRunBroker):
                               entry_date, is_exit)
 
 
-def make_engine(tmpdir, *, max_volume=2, broker=None):
+def profile_with_lots(code="IF", lots=None):
+    """品种档案，可把**执行策略表第 3 列**换成 `lots`。
+
+    2026-09-16：这就是单测里"改表"的等价物 —— `ExecPolicy` / `Product` 都是
+    `frozen=True`，改表 = 换一份档案对象（生产路径是改 `Infra/Product.py` 的
+    `EXEC_POLICY` 源码或重跑生成器，运行期不可就地改，见 [3k]）。
+    `lots=None` = 直接用**真实表值**（不打任何补丁）。
+    """
+    prof = PRODUCT_PROFILES[code]
+    if lots is None:
+        return prof
+    return _dc_replace(prof, exec_policy=_dc_replace(prof.exec_policy,
+                                                     lots_per_order=int(lots)))
+
+
+def make_engine(tmpdir, *, code="IF", lots=None, broker_cls=None, reject_first_n=0):
     """构造引擎。
 
     2026-09-11：不再设 `max_open_positions` / `unlock_no_new_open`（D2/D17 已删）。
-    开仓手数唯一来源 = `cfg.risk.max_volume` → `engine.lots_per_signal`。
+    2026-09-16：不再设 `risk.max_volume`（该旋钮已删）—— **开仓手数的唯一来源
+    = 品种执行策略表第 3 列**，要改手数就 `lots=N` 改表（见 `profile_with_lots`）。
+    ⚠️ broker 与 engine 必须共用**同一份** `spec`：引擎的 `self.state` 默认沿用
+    `broker.state`，手数就是从这里实时读表取到的。
     """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_volume = max_volume
 
-    spec = Instrument(None, _IF)
-    if broker is None:
+    spec = Instrument(None, profile_with_lots(code, lots))
+    if broker_cls is None:
         broker = DryRunBroker(spec, {"sim_equity": 10_000_000.0})
+    else:
+        broker = broker_cls(spec, {"sim_equity": 10_000_000.0},
+                            reject_first_n=reject_first_n)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -210,42 +245,69 @@ def _mk_risk(**kw):
         return None, "{}: {}".format(type(e).__name__, str(e).replace("\n", " ")[:200])
 
 
+def _mk_pol(**kw):
+    """构造 ExecPolicy，返回 (实例 or None, 异常串 or None)。"""
+    kw.setdefault("close_mode", R_OPEN)
+    kw.setdefault("order_advanced", FOK)
+    kw.setdefault("lots_per_order", 2)
+    try:
+        return ExecPolicy(**kw), None
+    except Exception as e:
+        return None, "{}: {}".format(type(e).__name__, str(e).replace("\n", " ")[:200])
+
+
+def _code_tokens(path):
+    """Python 文件的**可执行 token** 序列（剔除注释 / 文档串 / 空白）。
+
+    用途：判定"某个旧符号在代码里是否还有残留"。直接用 `in src` 会把
+    **注释与 docstring 里的历史说明**也算成残留（那些是刻意保留给后人读的
+    变更记录），token 级判定才反映"代码是否还依赖它"。
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        src = f.read()
+    skip = {tokenize.COMMENT, tokenize.STRING, tokenize.NL,
+            tokenize.NEWLINE, tokenize.INDENT, tokenize.DEDENT}
+    return [t.string for t in tokenize.generate_tokens(io.StringIO(src).readline)
+            if t.type not in skip]
+
+
 # ════════════════════════════════════════════════════════════════
-# [1] 术语纪律：仓位管理（PositionSizing/split）与 D2/D17 已删键
+# [1] 术语纪律：仓位管理已删 + D2/D17/第三轮已删键
 # ════════════════════════════════════════════════════════════════
-print("\n[1] 术语纪律：仓位管理已删 + D2/D17 已删键")
+print("\n[1] 术语纪律：仓位管理已删 + 已删键（含 max_volume）")
 check("[1a] config 无 sizing 键（PositionSizing 整体删除）",
       "sizing" in DEFAULT_CONFIG, False)
-# Phase 11 新增 delivery_guard_days（交割月护栏阈值）。原断言 "字段集 == {max_volume}"
-# 等于把字段清单写死 —— 任何**有意**新增都会误报。拆成三条：保住原意（无已删键 +
-# 字段体积不失控），且新增字段只需同步 _RISK_KNOWN 一行，属"有意确认"而非漏改。
-_RISK_KNOWN = {"max_volume", "delivery_guard_days"}
+# Phase 11 新增 delivery_guard_days（交割月护栏阈值）；2026-09-16 又删掉 max_volume。
+# 原断言 "字段集 == {...}" 等于把字段清单写死 —— 任何**有意**增删都会误报。
+# 拆成三条：保住原意（无已删键 + 字段体积不失控 + 手数旋钮为零），
+# 新增字段只需同步 _RISK_KNOWN 一行，属"有意确认"而非漏改。
+_RISK_KNOWN = {"delivery_guard_days"}
+_DROPPED = ["max_open_positions", "max_volume", "unlock_no_new_open"]
 _risk_fields = set(RiskConfig.model_fields)
 check("[1b] RiskConfig 无已删键（D2 max_open_positions / D17 unlock_no_new_open）",
       sorted(_risk_fields & {"max_open_positions", "unlock_no_new_open"}), [])
 check("[1b2] RiskConfig 字段集不超出已知清单（新增字段须同步本行）",
       sorted(_risk_fields - _RISK_KNOWN), [])
-check("[1b3] max_volume 仍在（唯一 sizing 字段）",
-      "max_volume" in _risk_fields, True)
+check("[1b3] RiskConfig 已无 max_volume（手数旋钮已删 → 真值源 = 品种执行策略表第 3 列）",
+      "max_volume" in _risk_fields, False)
 check("[1c] DEFAULT_CONFIG.risk 无 max_open_positions",
       "max_open_positions" in (DEFAULT_CONFIG.get("risk") or {}), False)
 check("[1d] DEFAULT_CONFIG.risk 无 unlock_no_new_open",
       "unlock_no_new_open" in (DEFAULT_CONFIG.get("risk") or {}), False)
-check("[1e] max_volume 默认 2",
-      (DEFAULT_CONFIG.get("risk") or {}).get("max_volume"), 2)
+check("[1e] DEFAULT_CONFIG.risk 无 max_volume（默认配置里也没有第二个手数旋钮）",
+      "max_volume" in (DEFAULT_CONFIG.get("risk") or {}), False)
 
 # D17：旧键按"丢弃 + 可观测"处理（不静默、也不 fail-fast）
 RiskConfig.dropped_legacy_keys.clear()
-legacy_cfg, legacy_err = _mk_risk(max_volume=2, max_open_positions=3,
-                                  unlock_no_new_open=True)
-check("[1f] 带两个旧键的配置仍能构造（不 fail-fast）", legacy_err, None)
-check("[1g] 旧键被丢弃后 max_volume 原样保留",
-      (legacy_cfg.max_volume if legacy_cfg else None), 2)
-check("[1h] 丢弃动作**可观测**（dropped_legacy_keys 记账）",
-      sorted(set(RiskConfig.dropped_legacy_keys)),
-      ["max_open_positions", "unlock_no_new_open"])
+legacy_cfg, legacy_err = _mk_risk(delivery_guard_days=5, max_open_positions=3,
+                                  unlock_no_new_open=True, max_volume=2)
+check("[1f] 带三个已删键的配置仍能构造（不 fail-fast）", legacy_err, None)
+check("[1g] 其余合法键原样保留（delivery_guard_days=5）",
+      (legacy_cfg.delivery_guard_days if legacy_cfg else None), 5)
+check("[1h] 丢弃动作**可观测**（dropped_legacy_keys 记账，含 max_volume）",
+      sorted(set(RiskConfig.dropped_legacy_keys)), _DROPPED)
 # 但 extra="forbid" 仍在：真正不认识的键必须报错（否则拼错键名会被静默吞掉）
-_bogus, _bogus_err = _mk_risk(max_volume=2, max_open_position=3)
+_bogus, _bogus_err = _mk_risk(delivery_guard_days=1, max_open_position=3)
 check_true("[1i] 未列入白名单的未知键仍 fail-fast（extra=forbid）",
            _bogus_err is not None and "ValidationError" in _bogus_err)
 
@@ -260,10 +322,10 @@ check("[1l] 超价合并为单参数 overprice_ticks=5（IF=1.0 点）",
 # ════════════════════════════════════════════════════════════════
 # [2] 一笔报单挂 N 手（唯一开仓路径：on_signal）
 # ════════════════════════════════════════════════════════════════
-print("\n[2] 一笔报单挂 N 手（max_volume=N → 1 单 N 手）")
+print("\n[2] 一笔报单挂 N 手（表第 3 列 = N → 1 单 N 手）")
 for _n in (1, 2):
     with tmp_dir() as td:
-        eng = make_engine(td, max_volume=_n)
+        eng = make_engine(td, lots=_n)
         eng.on_bar(make_bar())
         sig = make_sig(key="P15A-2-{}".format(_n))
         eng.on_signal(sig)
@@ -276,8 +338,8 @@ for _n in (1, 2):
               eng.positions.positions[0].volume, _n)
         check("[2] N={}：signal_key 无 #idx 后缀".format(_n),
               eng.positions.positions[0].signal_key, sig.key)
-        check("[2] N={}：lots_per_signal 就取自 cfg.risk.max_volume".format(_n),
-              eng.lots_per_signal, _n)
+        check("[2] N={}：lots_per_order 就取自品种执行策略表第 3 列".format(_n),
+              eng.lots_per_order, _n)
         check("[2] N={}：signal_action=opened".format(_n),
               eng.store.signal_action(sig.key), "opened")
         check("[2] N={}：account_state=RUNNING".format(_n),
@@ -297,25 +359,65 @@ for _n in (1, 2):
               _o.get("transition"), 1)
 
 # ════════════════════════════════════════════════════════════════
-# [2b] 品种执行策略表第 3 列 = 「一笔挂几手」：与风控上限取小
+# [2b] 「改表即生效」—— 表第 3 列是**唯一**手数来源，不再被风控上限取小
 # ════════════════════════════════════════════════════════════════
-# 2026-09-16：N 的口径由品种执行策略表给定（IF = 2 手），
-# risk.max_volume 退化为**风控上限** → 实际一笔手数 = min(表, 风控)。
-# 故把 max_volume 调到 5 / 20 时，开仓手数被表的 2 手压住。
-print("\n[2b] 表第 3 列 ∩ 风控上限：max_volume 调大到 5/20 仍只开 2 手")
-for _n in (5, 20):
+# 2026-09-16（用户第 3 轮 ⑵）：原实现 = min(risk.max_volume, 表第 3 列)，
+# 于是"改表 N"不生效、而启动横幅只打表值 —— 唯一可见处反而误导。删掉
+# risk.max_volume 后，表值就是实开手数。下面用 3/7/20 手（> 旧默认 2 手）
+# 直接验证"表说了算"。
+print("\n[2b] 改表即生效：表值 1/3/7/20 手 → 实开就是那么多手")
+for _n in (1, 3, 7, 20):
     with tmp_dir() as td:
-        eng = make_engine(td, max_volume=_n)
-        check("[2b] N={}：lots_per_signal 仍取自 cfg.risk.max_volume".format(_n),
-              eng.lots_per_signal, _n)
-        check("[2b] ★ N={}：_open_volume() 被品种表第 3 列压到 2 手".format(_n),
-              eng._open_volume(), 2)
+        eng = make_engine(td, lots=_n)
+        check("[2b] 表值 {} 手：lots_per_order == {}".format(_n, _n),
+              eng.lots_per_order, _n)
+        check("[2b] 表值 {} 手：_open_volume() == {}".format(_n, _n),
+              eng._open_volume(), _n)
+        eng.on_bar(make_bar())
+        eng.on_signal(make_sig(key="P15A-2b-{}".format(_n)))
+        check("[2b] ★ 表 {} 手 → 实报 1 单 {} 手（没有被压到 2 手）".format(_n, _n),
+              eng.broker.orders[0].volume, _n)
+        check("[2b] ★ 表 {} 手 → 簿 1 笔 {} 手".format(_n, _n),
+              eng.positions.positions[0].volume, _n)
+
+# 每次实时读表（无缓存）：会话中换表 → 立刻可见
+with tmp_dir() as td:
+    eng = make_engine(td, lots=2)
+    check("[2c] 初始：表 2 手 → lots_per_order=2", eng.lots_per_order, 2)
+    # 模拟"会话中改表"：整份换掉引擎持有的品种档案（ExecPolicy 是 frozen，
+    # 换表 = 换对象）。若手数像旧实现那样在 __init__ 里算成 self.lots_per_signal，
+    # 这里读到的还会是 2。
+    eng.state._product = profile_with_lots("IF", 5)
+    check("[2c] ★ 换表后立刻读到 5（property 每次实时读表，无缓存镜像）",
+          eng.lots_per_order, 5)
+    check("[2c] _open_volume() 同步为 5", eng._open_volume(), 5)
+
+# 无品种档案 → 保守 1 手（宁可少开，不按猜出来的手数下单）
+with tmp_dir() as td:
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    _bk = DryRunBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0})
+    eng = TradingEngine(
+        cfg, _bk, EntryPolicy({"reverse_on_opposite_signal": False}),
+        LayeredExitPolicy(), Store(os.path.join(td, "state.db")),
+        EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None),
+        state=Instrument(None, None))          # ← 引擎侧刻意不给品种档案
+    check("[2d] 无品种档案 → 保守 1 手（与 exchange 未标定 → '' 同一约定）",
+          eng.lots_per_order, 1)
+    check("[2d] _open_volume() 同为 1", eng._open_volume(), 1)
+
+# 代码不看交易所名字：CZCE(TA) 的 1 手来自**表**，不是"按交易所硬编码"
+with tmp_dir() as td:
+    eng = make_engine(td, code="TA", lots=None)
+    check("[2e] TA 用**真实表值**：FAK 品种 → 1 手（不是按 CZCE 名字钉的）",
+          eng.lots_per_order, 1)
+    check("[2e] TA 的手数 == 表第 3 列",
+          eng.lots_per_order, EXEC_POLICY["TA"].lots_per_order)
 
 # 同向第二信号：D2 删掉的是"笔数静默门"，但**规则 ⑶（运行态不响应信号）仍在**
 #   —— 已持仓（net≠0 → RUNNING）时第二信号被整条忽略，不是被笔数上限挡掉。
 #   两者的可观测区别：旧口径写 open_silenced，新口径写 signal_skip/running_ignore_signal。
 with tmp_dir() as td:
-    eng = make_engine(td, max_volume=2)
+    eng = make_engine(td, lots=2)
     eng.on_bar(make_bar())
     s1 = make_sig(key="P15A-2-c")
     eng.on_signal(s1)
@@ -341,29 +443,48 @@ with tmp_dir() as td:
 
 
 # ════════════════════════════════════════════════════════════════
-# [3] max_volume 启动期校验 1..20
+# [3] 手数 1..20 构造期校验（原 RiskConfig 的职责已迁 ExecPolicy）
 # ════════════════════════════════════════════════════════════════
-print("\n[3] max_volume 启动期校验 1..20（配置层 fail-fast）")
-_r1, _e1 = _mk_risk(max_volume=1)
-check("[3a] max_volume=1 合法（下界）", _e1, None)
-_r20, _e20 = _mk_risk(max_volume=20)
-check("[3b] max_volume=20 合法（上界 = 中金所限价单单笔上限）", _e20, None)
-_r0, _e0 = _mk_risk(max_volume=0)
-check_true("[3c] max_volume=0 → 构造期报错", _e0 is not None)
-_r21, _e21 = _mk_risk(max_volume=21)
-check_true("[3d] max_volume=21 → 构造期报错（取代已删的运行期拦截）", _e21 is not None)
+print("\n[3] 手数 1..20 构造期 fail-fast（原 risk.max_volume 校验已迁品种执行策略表）")
+_r1, _e1 = _mk_pol(lots_per_order=1)
+check("[3a] lots_per_order=1 合法（下界）", _e1, None)
+_r20, _e20 = _mk_pol(lots_per_order=20)
+check("[3b] lots_per_order=20 合法（上界 = 中金所限价单单笔上限）", _e20, None)
+_r0, _e0 = _mk_pol(lots_per_order=0)
+check_true("[3c] lots_per_order=0 → 构造期报错", _e0 is not None)
+_r21, _e21 = _mk_pol(lots_per_order=21)
+check_true("[3d] lots_per_order=21 → 构造期报错（取代已删的运行期拦截）",
+           _e21 is not None)
 check_true("[3e] 报错信息点明 1..20 区间",
            _e21 is not None and "1..20" in _e21)
+# FAK ⟹ N == 1（放开 N 会破坏「待报 / 全成 / 全撤」三态不变量）
+_rf, _ef = _mk_pol(order_advanced=FAK, lots_per_order=2)
+check_true("[3f] FAK + 2 手 → 构造期报错（FAK 一笔必须 1 手）", _ef is not None)
+_rf1, _ef1 = _mk_pol(order_advanced=FAK, lots_per_order=1)
+check("[3g] FAK + 1 手 合法", _ef1, None)
+# 真实表逐行复核（表值本身也是数据，同样要过约束）
+check("[3h] 真实 EXEC_POLICY 全表手数均落在 1..20",
+      sorted(c for c, p in EXEC_POLICY.items() if not 1 <= p.lots_per_order <= 20), [])
+check("[3i] 真实表里 FAK 品种手数恒 1",
+      sorted(c for c, p in EXEC_POLICY.items()
+             if p.order_advanced == FAK and p.lots_per_order != 1), [])
+# 表行 frozen：运行期不能就地改手数 —— "改表"是源码/生成器层面的事
+try:
+    EXEC_POLICY["IF"].lots_per_order = 99
+    _froze = "MUTATED"
+except Exception:
+    _froze = "FROZEN"
+check("[3j] ExecPolicy 行 frozen：运行期不可就地改手数", _froze, "FROZEN")
 # 诚实记录：pydantic 未开 validate_assignment，**构造之后**的属性赋值绕过校验。
 # 生产路径恒走 `TradingConfig.from_dict`（即构造期），故不构成实际风险；
 # 这里钉住现状，避免"以为赋值也会被拦"的错觉。
 _c = TradingConfig.from_dict(DEFAULT_CONFIG)
 try:
-    _c.risk.max_volume = 99
-    _post = _c.risk.max_volume
+    _c.risk.delivery_guard_days = 99
+    _post = _c.risk.delivery_guard_days
 except Exception:
     _post = "RAISED"
-check("[3f] 现状记录：属性赋值不经校验（仅构造期生效）", _post, 99)
+check("[3k] 现状记录：属性赋值不经校验（仅构造期生效）", _post, 99)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -371,9 +492,7 @@ check("[3f] 现状记录：属性赋值不经校验（仅构造期生效）", _p
 # ════════════════════════════════════════════════════════════════
 print("\n[4] 拒单路径")
 with tmp_dir() as td:
-    bk = RejectDryBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0},
-                         reject_first_n=-1)
-    eng = make_engine(td, max_volume=3, broker=bk)
+    eng = make_engine(td, lots=3, broker_cls=RejectDryBroker, reject_first_n=-1)
     eng.on_bar(make_bar())
     sig = make_sig(key="P15A-4-r")
     eng.on_signal(sig)
@@ -389,9 +508,7 @@ with tmp_dir() as td:
 
 # 首笔拒 + 第二笔过：拒单不污染后续
 with tmp_dir() as td:
-    bk = RejectDryBroker(Instrument(None, _IF), {"sim_equity": 10_000_000.0},
-                         reject_first_n=1)
-    eng = make_engine(td, max_volume=2, broker=bk)
+    eng = make_engine(td, lots=2, broker_cls=RejectDryBroker, reject_first_n=1)
     eng.on_bar(make_bar())
     s1 = make_sig(key="P15A-4-s1")
     eng.on_signal(s1)
@@ -405,11 +522,12 @@ with tmp_dir() as td:
 
 
 # ════════════════════════════════════════════════════════════════
-# [5] 无分仓残留 + 唯一报单出口（A3）
+# [5] 无分仓残留 + 唯一报单出口（A3）+ 手数只剩一条通道
 # ════════════════════════════════════════════════════════════════
-print("\n[5] 无分仓残留 + 唯一报单出口")
+print("\n[5] 无分仓残留 + 唯一报单出口 + 手数单通道")
 import Trading.Engine.Engine as _engine_mod  # noqa: E402
-_src = open(os.path.join(_TG_ROOT, "Engine", "Engine.py"), encoding="utf-8").read()
+_ENGINE_PY = os.path.join(_TG_ROOT, "Engine", "Engine.py")
+_src = open(_ENGINE_PY, encoding="utf-8").read()
 _TE = _engine_mod.TradingEngine
 check("[5a] engine 无 _open_position（Phase 4 已删，开仓唯一路径走 _execute）",
       hasattr(_TE, "_open_position"), False)
@@ -431,6 +549,16 @@ for _m in ("_execute", "_book_open", "_book_close",
     check("[5i] engine 有 {}".format(_m), hasattr(_TE, _m), True)
 check("[5j] engine 有 _sync_state（_state 派生镜像刷新点）",
       hasattr(_TE, "_sync_state"), True)
+
+# ── 手数只剩一条通道（用户第 3 轮 ⑵ 的护栏）────────────────────
+check("[5k] engine 无 lots_per_signal 镜像属性（手数不再有第二来源）",
+      hasattr(_TE, "lots_per_signal"), False)
+check("[5l] engine 有 lots_per_order property（表第 3 列的实时只读转发）",
+      isinstance(getattr(_TE, "lots_per_order", None), property), True)
+_toks = _code_tokens(_ENGINE_PY)
+for _sym in ("lots_per_signal", "max_volume", "CZCE"):
+    check("[5m] ★ 引擎**可执行代码**（token 级，剔注释/文档串）无 {} 残留".format(_sym),
+          _sym in _toks, False)
 
 
 print("\n" + "=" * 60)

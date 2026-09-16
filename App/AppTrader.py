@@ -672,12 +672,18 @@ class AppTrader:
         False 仅默认 out_dir。读取用 sqlite3 只读模式，绝不写库。
         symbol 为空 → 跨库取全部 trades 汇总（前端通常带 symbol）。
 
+        匹配口径 = **品种键相等**（2026-09-16 修 P0-1）：前端传主连
+        `KQ.m@CFFEX.IF`、库内存月份合约 `CFFEX.IF2609`，两边归一到 "IF" 即命中，
+        同品种多个月份合并统计（用户拍板）。
+
         返回值 = 统计摘要 + **读库可见性**（2026-09-16 补）：
           dbs_scanned  实际扫描的库数（0 = 一个 state.db 都没找到）
           dbs_ok       读取成功的库数
           sources      每库一条 {path, status, rows, error}（status 见 trade_stats）
           read_errors  真故障的库（库损坏 / 旧 schema 无 trades 表 / 打不开）；
                        前端据此把「真的没有成交」与「读不出来」分开显示
+          symbol_raw / symbol_key   前端传的原始符号 / 归一后的品种键
+          by_symbol    命中的**合约拆分**（合约 → 笔数），供面板显示合并了哪几个合约
 
         为什么要把这些字段回给前端：旧实现里任一库读失败都静默跳过，面板于是
         显示"该品种暂无历史成交" —— 和真没成交长得一模一样，库里其实可能有
@@ -701,6 +707,11 @@ class AppTrader:
         stats["read_errors"] = [s for s in rep["sources"]
                                 if s["status"] in ("open_failed",
                                                    "query_failed")]
+        # 品种键 / 合约拆分：统计口径是**整个品种**（多合约月份合并），
+        # 这栏让面板能说清"合的是哪几个合约"，也让解析不出品种键时可见。
+        stats["symbol_raw"] = rep["symbol_raw"]
+        stats["symbol_key"] = rep["symbol_key"]
+        stats["by_symbol"] = rep["by_symbol"]
         return stats
 
     def status(self) -> Dict[str, Any]:

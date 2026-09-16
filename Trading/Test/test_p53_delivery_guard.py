@@ -146,7 +146,7 @@ def make_cfg(guard_days=1):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = "KQ.m@CFFEX.IF"
     # P-B：配置不再携带 exchange（归品种档案；写旧键会触发 _check_removed_keys）
-    base["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["risk"]["delivery_guard_days"] = guard_days
     base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})

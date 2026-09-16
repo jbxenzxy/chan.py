@@ -137,7 +137,7 @@ class CloseRejectBroker(DryRunBroker):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    base["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["exit_params"].update({"use_atr": False,
                                  "use_trailing": False})
     # 冷却窗 = 1（每根 bar 重新尝试），连拒上限 = 2（两根即清幻影仓）

@@ -112,7 +112,7 @@ def tmp_dir():
 def make_cfg():
     import copy
     base = copy.deepcopy(DEFAULT_CONFIG)
-    base["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
@@ -176,7 +176,7 @@ with tmp_dir() as tmp:
     check("[1b] 决策 = 转移 ① / OPEN / LONG",
           (act.transition, act.intent, act.side),
           (1, OrderIntent.OPEN, Side.LONG))
-    check("[1b] 手数 = lots_per_signal", act.volume, eng.lots_per_signal)
+    check("[1b] 手数 = lots_per_order（表第 3 列）", act.volume, eng.lots_per_order)
     check("[1b] is_exit=False（入场不追价，D13）", act.is_exit, False)
 
     eng.on_signal(sig)

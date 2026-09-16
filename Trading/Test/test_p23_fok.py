@@ -24,8 +24,10 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
       · 中金所（IF/IH/IC/IM）官方支持限价+FOK（CFFEX 交易概览 + 2026 版异常交易管理办法）
       · tqsdk 限价+FOK 仅拒郑商所期货（api.py L1463），中金所放行
       · 报文映射：time_condition=IOC, volume_condition=ALL
-      · 每笔开仓手数由风控层 `risk.max_volume` 决定（每个买卖点一笔挂 N 手，
-        引擎不再做 20 手上限截断、也不再有 over_exchange_limit 拒单）
+      · 每笔开仓手数 = 品种执行策略表第 3 列（每个买卖点一笔挂 N 手；
+        2026-09-16 起 `risk.max_volume` 已删，表是唯一来源）
+      · 引擎不做 20 手上限截断、也没有 over_exchange_limit 拒单
+        （上限在表构造期校验：`ExecPolicy.__post_init__`）
 
 本测试用 mock api 对象验证，不需要真实 tqsdk / 网络。
 跑法：python tests/test_p23_fok.py

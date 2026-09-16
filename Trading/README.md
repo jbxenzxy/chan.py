@@ -138,8 +138,13 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
     "closetoday_first": true            // 上期所/中金所平今优先
   },
   "risk": {
-    "max_volume": 2                      // 每个买卖点开一手、挂 N 手（=单笔手数上限，
-                                         //   默认 2；校验范围 1..20，越界启动即报错）
+    // 2026-09-16：**本层已无任何手数旋钮** —— max_volume 已删除。
+    //   单笔手数（每个买卖点一笔挂 N 手）的唯一来源 = 品种执行策略表第 3 列
+    //   （Trading/Infra/Product.py 的 EXEC_POLICY[code].lots_per_order），
+    //   由用户按品种填表；1..20 越界在表构造期 fail-fast。
+    //   老配置里若还留着 max_volume：**丢弃 + 打 WARNING**，不阻断启动。
+    "delivery_guard_days": 1             // 交割月护栏：距最后交易日不足 N 个交易日
+                                         //   拒绝开新仓（只拦开仓，平仓永不拦）
     // 2026-09-11 重构删除：max_open_positions（同时持仓笔数上限 —— 资金是唯一闸门）、
     //   unlock_no_new_open（解锁后补开 ——「解锁」概念随重构一并删除）。
     //   老配置里若还留着这两行：**丢弃 + 打 WARNING**，不阻断启动（与 state.db 的

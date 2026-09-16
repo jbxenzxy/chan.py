@@ -118,13 +118,16 @@ check("RiskConfig 已无 max_open_positions 字段",
       "max_open_positions" in RiskConfig.model_fields, False)
 check("RiskConfig 已无 unlock_no_new_open 字段",
       "unlock_no_new_open" in RiskConfig.model_fields, False)
+check("RiskConfig 已无 max_volume 字段（手数旋钮迁品种执行策略表）",
+      "max_volume" in RiskConfig.model_fields, False)
 # D17：老配置里的旧键必须被**静默丢弃 + 记录**（与 D16 的 state.db 严格拒绝有意不同）
 risk_legacy = RiskConfig(**{"max_open_positions": 3, "unlock_no_new_open": True,
                             "max_volume": 2})
-check("老配置键不阻断构造（D17）", risk_legacy.max_volume, 2)
-check("老配置键被记录进 dropped_legacy_keys（D17）",
+check("已删键不阻断构造（D17）", risk_legacy.delivery_guard_days, 1)
+check("已删键被记录进 dropped_legacy_keys（D17，含 max_volume）",
       ("max_open_positions" in RiskConfig.dropped_legacy_keys
-       and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys), True)
+       and "unlock_no_new_open" in RiskConfig.dropped_legacy_keys
+       and "max_volume" in RiskConfig.dropped_legacy_keys), True)
 
 # ═══ [5] SESSION_SECS 收口 ═══
 print("\n[5] Period.SESSION_SECS（原 main.py 硬编码 4.5h）")

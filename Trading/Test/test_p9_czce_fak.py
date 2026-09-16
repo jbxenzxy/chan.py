@@ -9,12 +9,12 @@ P9 郑商所 CZCE · FOK→FAK + OPEN 手数（执行策略表第 5 列） 契�
   所以：
     · 报单填充三态（待报/全成/全撤）不变量 4 保持 —— 无需扩展状态机、无需补簿；
     · 账户三态只看净敞口，不受影响；
-    · 平仓手数 = min(lots_per_signal, 持仓) 自然跟随（CZCE 持仓恒为 1 → 平 1 手）。
-  其余交易所（CFFEX/DCE/SHFE/INE/GFEX）完全不变：1 笔 N 手（N=risk.max_volume，默认 2）FOK。
+    · 平仓手数 = 目标仓单全额（2026-09-16 起，不受单笔手数旋钮影响）。
+  其余品种完全不变：1 笔 N 手（N = 品种执行策略表第 3 列，IF = 2）FOK。
 
 本测试锁死用户的三条断言：
   [1] Instrument.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖；P-B 起 exchange 真值源 = 品种档案）
-  [2] Engine._decide_action OPEN 手数：CZCE→1（无拆单），其余→lots_per_signal
+  [2] Engine._decide_action OPEN 手数：按表第 3 列（TA=1 / IF=2，无拆单）
   [3] Broker submit 报文：CZCE 两个 insert_order 站点（OPEN/CLOSE/离场）advanced 均 "FAK"；
       CFFEX 回归 "FOK"
   [4] 端到端（Engine + DryRunBroker）：CZCE 信号 → 恰好 1 笔 1 手、net 正确、
@@ -218,14 +218,15 @@ def make_czce_broker(api=None, params=None):
     return b
 
 
-def build_engine(tmpdir, *, max_volume=2, exchange="CZCE", broker=None):
+def build_engine(tmpdir, *, exchange="CZCE", broker=None):
     """构造引擎（CZCE 或指定交易所）。
 
     2026-09-13 Phase 9：Engine 与 broker 共用同一份 Instrument（P-B 合并），
     exchange 由档案给定，端到端验证 FOK/FAK 切换。
+    2026-09-16：单笔手数不再由配置给（`risk.max_volume` 已删），
+    真值源 = 品种执行策略表第 3 列（TA → 1 / IF → 2）。
     """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    cfg.risk.max_volume = max_volume
     # P-B（2026-09-15）：exchange 归品种档案，frozen 配置不可就地改写 ——
     #   CZCE 用 TA 档案、CFFEX 用 IF 档案；Instrument 单例整体替换进 cfg
     #   并同时注入 broker（Engine 读 self.state = broker.state = 同一对象）。
@@ -299,7 +300,7 @@ check("[1h] 表第 3 列：TA 一笔 1 手 / IF 一笔 2 手",
 # ════════════════════════════════════════════════════════════════
 print("\n[2] Engine._decide_action OPEN 手数：读执行策略表第 5 列（TA=1，无拆单）")
 with tmp_dir() as td:
-    eng = build_engine(td, max_volume=2, exchange="CZCE")
+    eng = build_engine(td, exchange="CZCE")
     check("[2a] CZCE 引擎初始 account_state=FLAT", eng.account_state(), AccountState.FLAT)
     sig = make_sig(key="P9-2a")
     act = eng._decide_action(sig, sig.date)
@@ -308,19 +309,19 @@ with tmp_dir() as td:
     check("[2d] CZCE 转移① transition=1", act.transition, 1)
 
 with tmp_dir() as td:
-    eng = build_engine(td, max_volume=2, exchange="CFFEX")
+    eng = build_engine(td, exchange="CFFEX")
     check("[2e] CFFEX 引擎初始 account_state=FLAT", eng.account_state(), AccountState.FLAT)
     act = eng._decide_action(make_sig(key="P9-2e", symbol="KQ.m@CFFEX.IF"), "2026-09-01 09:30")
-    check("[2f] CFFEX 转移① OPEN 手数 = lots_per_signal(=2)", act.volume, 2)
+    check("[2f] CFFEX 转移① OPEN 手数 = 表第 3 列(=2)", act.volume, 2)
     check("[2g] CFFEX 转移① intent=OPEN", act.intent, OrderIntent.OPEN)
 
 # 转移②（当日锁→OPEN）与 ① 共用 self._open_volume() —— 直接钉死 helper 即覆盖两者
 with tmp_dir() as td:
-    eng = build_engine(td, max_volume=2, exchange="CZCE")
+    eng = build_engine(td, exchange="CZCE")
     check("[2h] ★ CZCE 引擎 _open_volume()=1（转移①/② 共用，钉死 1 手）",
           eng._open_volume(), 1)
-    eng2 = build_engine(td, max_volume=2, exchange="CFFEX")
-    check("[2i] CFFEX 引擎 _open_volume()=lots_per_signal(=2)（其余所不变）",
+    eng2 = build_engine(td, exchange="CFFEX")
+    check("[2i] CFFEX 引擎 _open_volume()=表第 3 列(=2)（其余所不变）",
           eng2._open_volume(), 2)
 
 
@@ -359,7 +360,7 @@ print("\n[4] 端到端 Engine + DryRunBroker：CZCE 1 笔 1 手、net 正确、�
 
 # 全成路径：CZCE 信号 → 恰好 1 单 1 手、net=1、RUNNING、status filled
 with tmp_dir() as td:
-    eng = build_engine(td, max_volume=2, exchange="CZCE")
+    eng = build_engine(td, exchange="CZCE")
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-ok")
     eng.on_signal(sig)
@@ -400,7 +401,7 @@ with tmp_dir() as td:
         Instrument(InstrumentConfig(trade_symbol="CZCE.TA501"),
                    PRODUCT_PROFILES["TA"]),
         {"sim_equity": 10_000_000.0})
-    eng = build_engine(td, max_volume=2, exchange="CZCE", broker=rb)
+    eng = build_engine(td, exchange="CZCE", broker=rb)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-rej")
     eng.on_signal(sig)
@@ -418,7 +419,7 @@ with tmp_dir() as td:
 
 # 回归：CFFEX 全成仍是 N=2 手（确认 TA 的表第 5 列 = 1 不影响其它品种）
 with tmp_dir() as td:
-    eng = build_engine(td, max_volume=2, exchange="CFFEX")
+    eng = build_engine(td, exchange="CFFEX")
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-4-cffex", symbol="KQ.m@CFFEX.IF")
     eng.on_signal(sig)
@@ -440,7 +441,7 @@ with tmp_dir() as td:
     # Phase 3（Fix B）：A′ 的 verified 是**运行时状态**，落在 broker 的 state 上
     # （Engine 通过 broker.state 读同一份 —— 不是 spec）。
     bk.state.verified = True
-    eng = build_engine(td, max_volume=2, exchange="CZCE", broker=bk)
+    eng = build_engine(td, exchange="CZCE", broker=bk)
     eng.on_bar(make_bar())
     sig = make_sig(key="P9-5-e2e")
     eng.on_signal(sig)

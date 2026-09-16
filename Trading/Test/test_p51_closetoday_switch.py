@@ -164,7 +164,7 @@ def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF",
     build_engine 的 Instrument 档案参数表达。"""
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
-    base["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})
     return TradingConfig.from_dict(base)

@@ -127,10 +127,14 @@ class TradingEngine(ReconcileMixin):
         self.exit_policy = exit_policy
         self.store = store
         self.ev = ev
-        # 开仓手数（@2026-09-08 二次精简）：每个买卖点只开一笔，一笔挂 N 手，
-        # N = 风控层 `risk.max_volume`。原"仓位管理 PositionSizer/SizingConfig"
-        # 整条通道已删除，开仓手数不再经任何计算，直接取风险层配置。
-        self.lots_per_signal: int = int(cfg.risk.max_volume)
+        # 单笔手数（2026-09-16 收敛为**唯一来源**）：每个买卖点只开一笔，一笔挂
+        # N 手，N = **品种执行策略表第 3 列**（见下方 `lots_per_order` property，
+        # 每次实时读 `self.state.exec_policy`）。
+        #   原"仓位管理 PositionSizer/SizingConfig"与后来的"风控层
+        #   `risk.max_volume`"两条通道**均已删除** —— 手数不再是 __init__ 里算好
+        #   的常量，引擎侧也**不再保留任何可被运行期覆盖的镜像属性**
+        #   （旧 `self.lots_per_signal` 已删）。理由：两个旋钮会让"改表 N"不生效、
+        #   而启动横幅只显示其中一个（评审 P2-3；用户 2026-09-16 拍板删 max_volume）。
 
         # 持仓簿：按建仓时间先后排列的仓单序列，**没有配对概念**。
         # 不设笔数上限（D2）—— 资金是唯一闸门（钱不够自然开不成功，由柜台拒单兜底）。
@@ -951,27 +955,33 @@ class TradingEngine(ReconcileMixin):
     # ════════════════════════════════════════════════════════════════
     @property
     def lots_per_order(self) -> int:
-        """一笔报单挂几手 —— **开仓 / 平仓手数的唯一口径**（2026-09-16）。
+        """一笔报单挂几手 —— **开仓手数的唯一口径**（2026-09-16 收敛）。
 
-        = min(风控上限 `lots_per_signal`（= risk.max_volume）,
-              品种执行策略表第 3 列 `lots_per_order`)。
-        两个闸门取小：表说的是"这个品种一笔挂几手"，风控说的是"单笔手数上限"。
+        = 品种执行策略表第 3 列（`EXEC_POLICY[code].lots_per_order`），**就这一个
+        来源**。原实现是 `min(risk.max_volume, 表值)`，于是单笔手数有了两个旋钮：
+        用户"改表 N"不一定生效（被风控压住），而启动横幅只打表值 —— `max_volume=1`
+        而表写 2 时，横幅说"一笔 2 手"、实际挂 1 手（唯一可见的行为变更处反而误导，
+        评审 P2-3）。用户 2026-09-16 拍板：**删掉 `risk.max_volume`，本列就是用来
+        替换它的** —— 故这里不再取小，表即唯一来源。
 
-        ⚠️ 动态属性（不是 __init__ 里算好的常量）：`lots_per_signal` 允许
-        运行期被改（对账/降级路径），取小必须每次重算。
+        ⚠️ **平仓不套这个帽子**（这是本 property 名不叫"手数唯一口径"的原因）：
+        `_decide_exit` 的转移④⑤、`_decide_action` 的转移③一律按"平满目标"的手数
+        走（见各分支注释）—— 跨会话改小表 N 后带旧仓重启，旧仓仍能**全额**平掉，
+        不会算出"只平一部分"而撞 `close_volume_below_target`。
+
+        无品种档案 → **1 手**（保守侧：宁可少开，不按猜出来的手数下单；与
+        `Instrument.exchange` 未标定 → "" 同一约定）。
         """
-        cap = int(self.lots_per_signal)
         pol = self._exec_policy()
-        if pol is not None:
-            cap = min(cap, int(pol.lots_per_order))
-        return cap
+        return int(pol.lots_per_order) if pol is not None else 1
 
     def _open_volume(self) -> int:
         """一笔报单挂几手 —— **开仓手数的唯一来源**。
 
-        2026-09-16 起唯一口径 = `lots_per_order`（品种执行策略表第 3 列 ∩ 风控
-        上限），取代原 Phase 9 的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所
-        名字，只读表（用户第 3 轮 ⑵ 明令）。
+        2026-09-16 起唯一口径 = `lots_per_order`（品种执行策略表第 3 列），取代
+        原 Phase 9 的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所名字，只读表
+        （用户第 3 轮 ⑵ 明令）；也不再与任何风控上限取小（同日起 `risk.max_volume`
+        删除，见 `lots_per_order` docstring）。
 
         注意：设计上**一次信号只报 1 笔**，这里只是决定那 1 笔挂几手，
         **没有任何拆单**（拆 N 笔 1 手的逻辑不存在，也不允许存在）。
@@ -985,8 +995,8 @@ class TradingEngine(ReconcileMixin):
             return None                                    # 规则 ⑶
         if st is AccountState.FLAT:
             # 转移 ①：空仓 → OPEN（信号方向），一笔挂 _open_volume() 手
-            #   （= lots_per_order：品种执行策略表第 3 列 ∩ 风控上限；
-            #     设计上一次信号只 1 笔，无拆单）
+            #   （= lots_per_order = 品种执行策略表第 3 列；设计上一次信号只
+            #     1 笔，无拆单。2026-09-16 起不再与风控上限取小）
             return _Action(OrderIntent.OPEN, sig.side, self._open_volume(),
                            None, is_exit=False, transition=1)
 
@@ -1000,6 +1010,12 @@ class TradingEngine(ReconcileMixin):
         # 转移 ③：跨日锁 → CLOSE（信号方向）
         #   买信号 = 买平 = 平掉空头仓；卖信号 = 卖平 = 平掉多头仓。
         #   对冲目标 = 持仓序列中**反向最早**的一笔（附录：仓单无配对，纯 FIFO）。
+        #   手数 = `target.volume`（**平满目标**）：平仓不接受任何"单笔手数上限"
+        #   —— 那顶帽子只属于开仓（`lots_per_order`）。原先这里写
+        #   `min(lots_per_signal, target.volume)`，一旦跨会话把风控手数/表 N 调小
+        #   就会算出"只平一部分"，而 `_book_close` 是**整笔**记账的（PositionBook
+        #   无减仓 API）→ 直接被 `close_volume_below_target` 拒单。手数旋钮收敛后
+        #   （2026-09-16 删 `risk.max_volume`）这里也就没有取小的必要。
         side = _opposite(sig.side)
         target = self.positions.oldest_opposite(sig.side)
         if target is None:
@@ -1009,7 +1025,7 @@ class TradingEngine(ReconcileMixin):
                           note="锁仓态下找不到可对冲的反向仓单，放弃本信号")
             return None
         return _Action(OrderIntent.CLOSE, side,
-                       min(self.lots_per_signal, target.volume),
+                       target.volume,
                        target, is_exit=False, transition=3)
 
     def _decide_exit(self, bar: Optional[Bar] = None) -> Optional["_Action"]:
@@ -1288,8 +1304,10 @@ class TradingEngine(ReconcileMixin):
         # 2026-09-12 补（对称）：`act.volume < target.volume` 同样是账实不符 ——
         # broker 只平掉 `act.volume` 手，而 `_book_close` 是按 `pos.volume`
         # **整笔**记 Trade 并整笔 `positions.remove` 的（它拿不到"实际平了多少"）。
-        # 触发场景：跨会话调小 `risk.max_volume`（如 4→2）后带旧仓重启，转移 ③⑤
-        # 的 `min(lots_per_signal, target.volume)` 就会算出"只平一部分"。
+        # 触发场景（2026-09-16 删 `risk.max_volume` 时复核并收窄）：转移 ③④ 已改成
+        # "平满目标"，不再产生不足量；**仍可产生**的只剩转移 ⑤ —— `|net| < 目标那笔
+        # 的手数`，形如「跨会话把表第 3 列从 4 调到 2」后带旧仓重启：簿内一笔 4 手
+        # 多头（旧表遗留）+ 一笔 2 手空头 → 净 +2，而对冲目标却是那笔 4 手。
         # 不猜、不做部分平仓（PositionBook 无减仓 API），直接拒绝并叫人处理。
         if act.volume < act.target.volume:
             return "close_volume_below_target"

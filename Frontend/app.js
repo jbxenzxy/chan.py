@@ -4531,6 +4531,13 @@
             var count = (d && d.count) || 0;
             var readErrs = statsReadErrors(d);
             if (!count) {
+                // 品种键解析失败优先说 —— 此时"没有匹配"是因为请求本身不可解释，
+                // 而不是"库里没成交"，两者混在一起会把真问题藏掉。
+                if (d && d.symbol_raw && !d.symbol_key) {
+                    _writeStatsHtml('<div class="stats-empty">无法从「'
+                        + statsEsc(d.symbol_raw) + '」解析品种键，未做任何匹配</div>');
+                    return;
+                }
                 if (readErrs.length) {
                     var lines = "";
                     for (var i = 0; i < readErrs.length; i++) {
@@ -4567,6 +4574,20 @@
             // ③ 明细行
             html += '<div class="stats-rows">';
             html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
+            // 品种键 + 合约拆分：统计口径是「整个品种」（同品种多月份合并），
+            // 说明合了哪几个合约，避免把"多个合约的合计"误读成"单个合约"。
+            if (d.symbol_key) {
+                var syms = [];
+                for (var sk in (d.by_symbol || {})) { syms.push(sk); }
+                syms.sort();
+                var sub = "";
+                if (syms.length > 1) {
+                    sub = '（合并 ' + syms.length + ' 个合约：' + statsEsc(syms.join("　")) + '）';
+                } else if (syms.length === 1) {
+                    sub = '（合约 ' + statsEsc(syms[0]) + '）';
+                }
+                html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + sub + '</span></div>';
+            }
             html += '<div class="stats-row"><span class="stats-label">盈亏比 PF</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">平均盈利 / 平均亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
             html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_win.exit_at + '</span>' : '') + '</span></div>';

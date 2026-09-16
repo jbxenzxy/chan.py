@@ -133,7 +133,7 @@ def tmp_dir(tag="a"):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    base["risk"]["max_volume"] = 2
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
     base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
@@ -257,7 +257,7 @@ with tmp_dir("t1") as tmp:
           (1, OrderIntent.OPEN, Side.LONG))
     check("[2c] 无对冲目标（新建仓）", act.target, None)
     check("[2d] is_exit=False（入场不追价，D13）", act.is_exit, False)
-    check("[2e] 手数 = lots_per_signal", act.volume, eng.lots_per_signal)
+    check("[2e] 手数 = lots_per_order（表第 3 列）", act.volume, eng.lots_per_order)
 
     act_s = eng._decide_action(make_sig("P33-2-S", is_buy=False), TODAY)
     check("[2f] 卖信号 → ① / OPEN / SHORT",
@@ -281,8 +281,8 @@ with tmp_dir("t2") as tmp:
     check("[3b] 当日锁 + 买信号 → ② / OPEN / LONG",
           (act.transition, act.intent, act.side),
           (2, OrderIntent.OPEN, Side.LONG))
-    check("[3c] 手数 = lots_per_signal（与 ① 同口径）",
-          act.volume, eng.lots_per_signal)
+    check("[3c] 手数 = lots_per_order（与 ① 同口径）",
+          act.volume, eng.lots_per_order)
     check("[3d] 无对冲目标（② 是加仓不是对冲）", act.target, None)
     check("[3e] is_exit=False", act.is_exit, False)
     check("[3f] 纯函数：簿仍 2 笔（决策不动锁仓仓单）",
@@ -305,8 +305,8 @@ with tmp_dir("t3") as tmp:
     check("[4c] 目标 = 簿内那笔空头（FIFO 最早反向仓）",
           act.target is eng.positions.oldest_opposite(Side.LONG), True)
     check("[4d] 目标方向 = SHORT", act.target.side.name, "SHORT")
-    check("[4e] 量 = min(lots_per_signal, 目标手数)",
-          act.volume, min(eng.lots_per_signal, act.target.volume))
+    check("[4e] 量 = 目标手数（平满，不套开仓帽子）",
+          act.volume, act.target.volume)
     check("[4f] is_exit=False（拆锁不追价，D13 的另一半）", act.is_exit, False)
 
     act_s = eng._decide_action(make_sig("P33-4-S", is_buy=False), TODAY)
