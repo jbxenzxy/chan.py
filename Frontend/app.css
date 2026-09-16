@@ -222,21 +222,44 @@
         .error-icon { font-size: 48px; margin-bottom: 16px; }
         .error-title { font-size: 20px; color: #e94560; margin-bottom: 8px; }
         .error-msg { font-size: 14px; color: #8892b0; max-width: 500px; text-align: center; line-height: 1.6; }
+        /* 成交统计面板（与「市场量能」面板同款：右下浮动卡片 + header/× + 可滚动 body） */
         .stats-panel {
-            position: fixed; top: 56px; right: 12px;
-            background: rgba(22, 33, 62, 0.95);
+            position: fixed; bottom: 40px; right: 10px;
+            width: 440px; max-height: calc(100vh - 120px);
+            background: rgba(22, 33, 62, 0.97);
             border: 1px solid #0f3460; border-radius: 8px;
-            padding: 12px 16px; font-size: 12px;
-            z-index: 100; min-width: 180px; display: none;
+            z-index: 200; display: none;
+            flex-direction: column; overflow: hidden;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.4);
         }
-        .stats-panel.show { display: block; }
-        .stats-title { font-size: 13px; font-weight: 600; color: #e94560;
-            margin-bottom: 8px; padding-bottom: 6px;
-            border-bottom: 1px solid #0f3460;
+        .stats-panel.show { display: flex; }
+        .stats-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 14px; border-bottom: 1px solid #0f3460;
+            background: rgba(15, 52, 96, 0.3);
         }
-        .stats-row { display: flex; justify-content: space-between; padding: 3px 0; }
+        .stats-title { font-size: 13px; font-weight: 600; color: #e94560; }
+        .stats-close {
+            font-size: 18px; color: #8892b0; cursor: pointer;
+            padding: 0 4px; line-height: 1;
+        }
+        .stats-close:hover { color: #e94560; }
+        .stats-body { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 12px; }
+        #trade-equity-canvas { width: 100%; height: 220px; display: block; }
+        .stats-hero {
+            display: flex; justify-content: space-between;
+            margin-top: 8px; padding-top: 8px;
+            border-top: 1px solid #0f3460;
+        }
+        .stats-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+        .stats-cell .stats-label { color: #8892b0; font-size: 11px; }
+        .stats-cell .stats-value { color: #a8b2d1; font-weight: 600; font-size: 13px; }
+        .stats-rows { margin-top: 8px; padding-top: 8px; border-top: 1px solid #0f3460; }
+        .stats-row { display: flex; justify-content: space-between; padding: 3px 0; gap: 10px; }
         .stats-label { color: #8892b0; }
         .stats-value { color: #a8b2d1; font-weight: 500; }
+        .stats-empty { text-align: center; color: #555; padding: 40px 0; }
+        .stats-note { margin-top: 6px; color: #8892b0; font-size: 11px; text-align: center; }
         .goto-date {
             display: flex; align-items: center; gap: 6px;
         }

@@ -94,9 +94,15 @@
         <div class="range-slider-label" id="slider-label"></div>
     </div>
 
-        <div class="stats-panel" id="stats-panel">
-        <div class="stats-title">成交统计</div>
-        <div id="stats-content"></div>
+    <!-- 成交统计面板（样式/交互对齐「市场量能」面板） -->
+    <div class="stats-panel" id="stats-panel">
+        <div class="stats-header">
+            <span class="stats-title">成交统计（历史成交盈亏）</span>
+            <span class="stats-close" onclick="closeStatsPanel()" title="关闭面板">×</span>
+        </div>
+        <div class="stats-body" id="stats-content">
+            <div class="stats-empty">点击上方「统计」按钮加载</div>
+        </div>
     </div>
     <div class="scan-panel" id="scan-panel">
         <div class="scan-header">

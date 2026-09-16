@@ -4428,90 +4428,136 @@
 
         window.toggleStats = function() {
             var panel = document.getElementById("stats-panel");
-            var btn = document.getElementById("btn-stats");
+            if (!panel) return;
             if (panel.classList.contains("show")) {
-                panel.classList.remove("show");
-                document.removeEventListener("click", _onClickOutsideStats);
+                closeStatsPanel();
             } else {
                 panel.classList.add("show");
-                // 延迟绑定，避免当前点击冒泡立即触发关闭
-                setTimeout(function() {
-                    document.addEventListener("click", _onClickOutsideStats);
-                }, 0);
-                generateStats();  // 打开时拉取成交统计（确保画布可见、数据最新）
+                generateStats(true);  // 打开时强制刷新一次（要最新数据）；render() 热路径保持 force=false 走缓存
             }
         };
 
-        function _onClickOutsideStats(e) {
+        window.closeStatsPanel = function() {
             var panel = document.getElementById("stats-panel");
+            if (panel) panel.classList.remove("show");
+        };
+
+        // 打开面板后点击面板之外区域 → 自动关闭（与「市场量能」面板同款 mousedown 语义）
+        document.addEventListener("mousedown", function(e) {
+            var panel = document.getElementById("stats-panel");
+            if (!panel || !panel.classList.contains("show")) return;
+            if (panel.contains(e.target)) return;        // 点击面板内部 → 不关闭
             var btn = document.getElementById("btn-stats");
-            if (!panel.contains(e.target) && !btn.contains(e.target)) {
-                panel.classList.remove("show");
-                document.removeEventListener("click", _onClickOutsideStats);
-            }
+            if (btn && btn.contains(e.target)) return;   // 点击「统计」按钮本身 → 交给 toggleStats 处理
+            closeStatsPanel();
+        });
+
+        // ── 成交统计：与图表重绘解耦 ────────────────────────────────────
+        // 旧「缠论统计」依赖可见区间(getVisibleKlines)，必须每次重绘重算，故挂在 render() 热路径上；
+        // 新「成交统计」只依赖 symbol + state.db，与视图无关。若仍留在热路径里「先清空 → 再请求 → 再写回」，
+        // 则每次重绘（鼠标移动 app.js:2699 / 1 秒倒计时 2628 / 缩放）都会制造一次可见闪断 → 面板「一闪一闪」。
+        // 三道护栏：①结果按品种缓存 ②在途请求去重 + 过期响应丢弃 ③内容不变则零 DOM 写。
+        var _tradeStatsCache = { symbol: null, data: null, html: null, seq: 0, inflight: false };
+        var _TRADE_STATS_LOADING = '<div class="stats-loading" style="padding:8px;color:#a8b2d1;">加载成交统计…</div>';
+        var _TRADE_STATS_NO_SYMBOL = '<div class="stats-row"><span class="stats-value">无品种上下文</span></div>';
+
+        // 内容未变则不触碰 DOM —— 这是消除闪烁的关键。
+        function _writeStatsHtml(html) {
+            var box = document.getElementById("stats-content");
+            if (!box) return false;
+            if (_tradeStatsCache.html === html) return false;
+            box.innerHTML = html;
+            _tradeStatsCache.html = html;
+            return true;
         }
 
-        function generateStats() {
-            // 仅当面板已打开时拉取（避免渲染循环里反复无效请求 + 画布不可见时画不出）。
+        // force=true 只在「打开面板」时用（要最新数据）；render() 热路径一律 force=false → 命中缓存，零请求零闪烁。
+        function generateStats(force) {
             var panel = document.getElementById("stats-panel");
             if (!panel || !panel.classList.contains("show")) return;
             if (!chartData || !chartData.meta || !chartData.meta.symbol) {
-                document.getElementById("stats-content").innerHTML =
-                    '<div class="stats-row"><span class="stats-value">无品种上下文</span></div>';
+                _writeStatsHtml(_TRADE_STATS_NO_SYMBOL);
                 return;
             }
             var symbol = chartData.meta.symbol;
-            document.getElementById("stats-content").innerHTML =
-                '<div class="stats-loading" style="padding:8px;color:#a8b2d1;">加载成交统计…</div>';
+            var cached = (_tradeStatsCache.symbol === symbol) ? _tradeStatsCache.data : null;
+            if (!force && cached) {          // 命中缓存：同步渲染，不发请求、不显示「加载中」
+                renderTradeStats(cached);
+                return;
+            }
+            if (_tradeStatsCache.inflight && _tradeStatsCache.symbol === symbol) return;  // 在途请求去重
+            var seq = ++_tradeStatsCache.seq;
+            _tradeStatsCache.inflight = true;
+            _tradeStatsCache.symbol = symbol;
+            if (!cached) _writeStatsHtml(_TRADE_STATS_LOADING);   // 仅「该品种首屏无缓存」才显示占位
             var url = "/api/trader/trades?symbol=" + encodeURIComponent(symbol) + "&union=true";
             fetch(url, { cache: "no-store" })
                 .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
-                .then(function (d) { renderTradeStats(d); })
+                .then(function (d) {
+                    if (seq !== _tradeStatsCache.seq) return;     // 过期响应丢弃，防旧结果覆盖新品种
+                    _tradeStatsCache.symbol = symbol;
+                    _tradeStatsCache.data = d;
+                    _tradeStatsCache.inflight = false;
+                    renderTradeStats(d);
+                })
                 .catch(function (err) {
-                    var p = document.getElementById("stats-content");
-                    if (p) p.innerHTML = '<div class="stats-row"><span class="stats-value">统计加载失败：'
-                        + (err && err.message ? err.message : err) + '</span></div>';
+                    if (seq !== _tradeStatsCache.seq) return;
+                    _tradeStatsCache.inflight = false;
+                    _writeStatsHtml('<div class="stats-row"><span class="stats-value">统计加载失败：'
+                        + (err && err.message ? err.message : err) + '</span></div>');
                 });
         }
 
         function renderTradeStats(d) {
-            var panel = document.getElementById("stats-content");
-            if (!panel) return;
             var count = (d && d.count) || 0;
             if (!count) {
-                panel.innerHTML = '<div class="stats-row"><span class="stats-value">该品种暂无历史成交（已兑现平仓）</span></div>';
+                _writeStatsHtml('<div class="stats-empty">该品种暂无历史成交</div>');
                 return;
             }
             var pct = function (x) { return (x * 100).toFixed(1) + "%"; };
             var yuan = function (x) { return (x >= 0 ? "+" : "") + Number(x).toFixed(2) + " 元"; };
+            var col = function (x) { return x >= 0 ? "#FF3C3C" : "#00F0F0"; };  // 涨红跌绿
+            var num = function (x) { return x != null ? Number(x).toFixed(2) : "—"; };
             var html = "";
+            // ① 曲线在上（对齐「市场量能」的 amo-chart 位置）
+            html += '<canvas id="trade-equity-canvas"></canvas>';
+            // ② 一行三格核心数（对齐「市场量能」的 amo-stats）
+            html += '<div class="stats-hero">';
+            html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + yuan(d.total_net) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">平均盈亏比</span><span class="stats-value">' + num(d.avg_pl_ratio) + '</span></div>';
+            html += '</div>';
+            // ③ 明细行
+            html += '<div class="stats-rows">';
             html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">平均盈亏比</span><span class="stats-value">' + (d.avg_pl_ratio != null ? Number(d.avg_pl_ratio).toFixed(2) : "—") + '（盈亏比PF ' + (d.profit_factor != null ? Number(d.profit_factor).toFixed(2) : "—") + '）</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">平均盈利/亏损</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span class="stats-value" style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' (' + d.max_win.exit_at + ')' : '') + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + (d.max_loss.exit_at ? ' (' + d.max_loss.exit_at + ')' : '') + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + (d.total_net >= 0 ? '#FF3C3C' : '#00F0F0') + '">' + yuan(d.total_net) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">期望值/笔</span><span class="stats-value">' + yuan(d.expectancy) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">盈亏比 PF</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">平均盈利 / 平均亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_win.exit_at + '</span>' : '') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + (d.max_loss.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_loss.exit_at + '</span>' : '') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">期望值/笔</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuan(d.expectancy) + '</span></div>';
             if (d.by_reason && Object.keys(d.by_reason).length) {
                 var rs = [];
                 for (var k in d.by_reason) { rs.push(k + " " + yuan(d.by_reason[k])); }
-                html += '<div class="stats-row"><span class="stats-label">按出场</span><span class="stats-value" style="font-size:11px">' + rs.join("　") + '</span></div>';
+                html += '<div class="stats-row"><span class="stats-label">按出场原因</span><span class="stats-value" style="font-size:11px;text-align:right">' + rs.join("　") + '</span></div>';
             }
-            html += '<div class="stats-subtitle" style="margin-top:8px;color:#a8b2d1;font-size:11px;">历史盈亏曲线（累计净值，0=盈亏平衡）</div>';
-            html += '<canvas id="trade-equity-canvas" style="width:100%;height:180px;display:block;margin-top:4px;"></canvas>';
-            panel.innerHTML = html;
-            drawEquityCurve(d.equity_curve || []);
+            html += '<div class="stats-note">曲线口径：累计净值（平仓时间序，0 = 盈亏平衡）</div>';
+            html += '</div>';
+            if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);
         }
 
         function drawEquityCurve(curve) {
             var cv = document.getElementById("trade-equity-canvas");
             if (!cv || !curve.length) return;
-            var box = document.getElementById("stats-panel");
-            var w = (box ? box.clientWidth : 0) || 300;
-            w = Math.max(240, w - 24);
-            var h = 180;
+            // 用 body（含 14px 左右内边距）反推可用宽度，避免 440px 卡片里出现横向滚动条。
+            var box = cv.parentNode || document.getElementById("stats-panel");
+            var w = Math.max(240, ((box ? box.clientWidth : 0) || 300) - 28);
+            var h = 220;
             var dpr = window.devicePixelRatio || 1;
+            // 尺寸与数据都未变则跳过重绘：给 canvas.width 赋值会清空画布，重复调用会让曲线闪动。
+            // key 存在 canvas 自身 dataset 上，故每次重建 DOM（新 canvas 无 key）仍会正常绘制一次。
+            var key = w + "x" + h + "@" + dpr + "#" + curve.length + ":" + curve[curve.length - 1].cumulative;
+            if (cv.dataset && cv.dataset.drawnKey === key) return;
+            if (cv.dataset) cv.dataset.drawnKey = key;
             cv.width = w * dpr; cv.height = h * dpr;
             cv.style.width = w + "px"; cv.style.height = h + "px";
             var ctx = cv.getContext("2d");
