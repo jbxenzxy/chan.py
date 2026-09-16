@@ -325,7 +325,8 @@ class Instrument:
     @property
     def exchange(self) -> str:
         """交易所代码（CFFEX/SHFE/INE/DCE/CZCE/GFEX）。真值源 = 品种档案；
-        未标定 → ""（保守侧：能力派生恒 False）。"""
+        未标定 → ""。**纯备案 + 展示**（`describe()` / 启动横幅）——
+        执行判据已全部归品种执行策略表，没有任何逻辑读本字段。"""
         return str(self._product.exchange or "") if self._product is not None else ""
 
     @property

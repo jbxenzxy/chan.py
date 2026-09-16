@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-P9 郑商所 CZCE · FOK→FAK + OPEN 钉 1 手 契约测试
+P9 郑商所 CZCE · FOK→FAK + OPEN 手数（执行策略表第 5 列） 契约测试
 =================================================
 背景（设计，见 自动下单重构-分析与实施计划 v1.3 · Phase 9；用户拍板方案）：
   郑商所（CZCE）不支持 FOK（tqsdk 限价+FOK 仅拒郑商所期货）。用户拍板：
@@ -297,7 +297,7 @@ check("[1h] 表第 3 列：TA 一笔 1 手 / IF 一笔 2 手",
 # ════════════════════════════════════════════════════════════════
 # [2] Engine._decide_action OPEN 手数契约（FLAT→OPEN 转移① / 同日锁→OPEN 转移②）
 # ════════════════════════════════════════════════════════════════
-print("\n[2] Engine._decide_action OPEN 手数：CZCE 钉 1（无拆单），其余→lots_per_signal")
+print("\n[2] Engine._decide_action OPEN 手数：读执行策略表第 5 列（TA=1，无拆单）")
 with tmp_dir() as td:
     eng = build_engine(td, max_volume=2, exchange="CZCE")
     check("[2a] CZCE 引擎初始 account_state=FLAT", eng.account_state(), AccountState.FLAT)
@@ -325,7 +325,7 @@ with tmp_dir() as td:
 
 
 # ════════════════════════════════════════════════════════════════
-# [3] Broker submit 报文契约（CZCE → FAK，覆盖 OPEN/CLOSE/离场 三个 insert_order 站点）
+# [3] Broker submit 报文契约（TA 的表第 4 列 = FAK，覆盖 OPEN/CLOSE/离场 三个 insert_order 站点）
 # ════════════════════════════════════════════════════════════════
 print("\n[3] Broker submit 报文：CZCE advanced='FAK'（OPEN/CLOSE/离场），CFFEX 回归 'FOK'")
 # OPEN 站点（SimNow._submit_open:912）
@@ -416,7 +416,7 @@ with tmp_dir() as td:
     check_true("[4n] ★ CZCE 全撤：所有报单终态 ∈ {filled,rejected}（无 partial）",
                all(o.status in ("filled", "rejected") for o in eng.broker.orders))
 
-# 回归：CFFEX 全成仍是 N=2 手（确认 CZCE 钉 1 不影响其它所）
+# 回归：CFFEX 全成仍是 N=2 手（确认 TA 的表第 5 列 = 1 不影响其它品种）
 with tmp_dir() as td:
     eng = build_engine(td, max_volume=2, exchange="CFFEX")
     eng.on_bar(make_bar())
@@ -456,6 +456,6 @@ with tmp_dir() as td:
 
 
 print("\n" + "=" * 60)
-print("P9 郑商所 FOK→FAK + OPEN 钉 1 手 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
+print("P9 郑商所 FOK→FAK + OPEN 手数（表第 5 列） 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
 print("=" * 60)
 sys.exit(1 if _FAIL else 0)

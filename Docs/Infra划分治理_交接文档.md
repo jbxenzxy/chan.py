@@ -1095,3 +1095,41 @@ python Trading/Tool/GenFeeTable.py --check
 # 费率对账（离线可跑；缺 xlsx/openpyxl 时 [3] 组自动 skip）
 python Trading/Test/test_product_fee_table.py
 ```
+
+---
+
+## 附H 第 8 个模块登记：`Infra/trade_stats.py`（2026-09-16）
+
+> 与附G 同样是**增量记录**：不改写 §5.1 正文，以本附录为准。
+
+### H.1 事实
+
+§5.1 把 `Trading/Infra/` 定死成 **7 个模块**（`Clock / Records / Period / Product /
+Instrument / StateDB / EventLog`），§附G.1 又重申过一次这条纪律。
+**2026-09-16 落地的「成交统计面板」新增了第 8 个文件**：`Trading/Infra/trade_stats.py`
+（216 行：纯计算 + 只读）。本条把它正式登记并给出变异轴。
+
+### H.2 它与 G.1 的定案不冲突，但**确实是第 8 个文件**
+
+G.1 禁的是「**机器生成的纯数据**另开文件」—— 理由是"生成物与手写物"的分离该靠
+「标记 + 逐字节护栏」，而不是靠文件边界。`trade_stats.py` **不是生成物**（无 xlsx
+真值源、无 `--check`、无 GENERATED 区块），它是**手写的计算模块**，故 G.1 不适用。
+
+但它**确实**让 `Infra/` 变成了第 8 个文件 —— **破的是"7 个"这个数字，
+不是"按变异轴归位"这条原则**。所以处置是登记 + 说清变异轴，而不是硬塞进某个现有模块。
+
+### H.3 变异轴
+
+| 问句 | 答 |
+|---|---|
+| 它装什么 | 从已落库的 `trades` 表汇总「已兑现往返」的统计（胜率 / PF / 期望值 / 累计净值曲线） |
+| 什么变了它才变 | **统计口径**（想看哪些指标、胜负怎么定义、曲线怎么画） |
+| 与那 7 个的关系 | 与 `Product`（品种事实）/ `Instrument`（运行时状态）/ `StateDB`（持久化）**全部正交**：它们变它不变，它变它们不变 |
+| 为什么不塞进 `StateDB` | `StateDB` 的变异轴是**持久化格式**；而统计**刻意绕开 `Store`**（`Store.__init__` 会 `executescript(_SCHEMA)`、对旧库还可能 `RENAME TABLE` —— 都是写操作），改用 `sqlite3.connect(uri mode=ro)`。塞进去等于把"只读统计"绑上"会写库"的载体 |
+| 为什么不塞进 `Records` | `Records` 装的是**数据结构**（Position / Trade / Signal / Order），不装"从数据算出来的东西" |
+
+### H.4 结论
+
+`Trading/Infra/` 现为 **8 个模块** = §5.1 的 7 个 + `trade_stats.py`（本附录）。
+§5.1 正文的"定死 7 个"**不改**（遵本附录惯例），但后续新增文件时请按 H.3 的
+三问句先答一遍：答不上"什么变了它才变"的，就不该开新文件。

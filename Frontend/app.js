@@ -4508,9 +4508,46 @@
                 });
         }
 
+        // 读库可见性（2026-09-16）：把「真的没有成交」与「库读不出来」分开显示。
+        // 后端 read_errors 只含真故障（库损坏 / 旧 schema 无 trades 表 / 打不开），
+        // 不含「文件还没生成」—— 后者是正常空态，dbs_scanned 会体现。
+        function statsReadErrors(d) { return (d && d.read_errors) || []; }
+
+        function statsEsc(s) {
+            return String(s == null ? "" : s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+        }
+
+        function statsReadWarningHtml(d) {
+            var errs = statsReadErrors(d);
+            if (!errs.length) return "";
+            return '<div class="stats-row"><span class="stats-label" style="color:#FFB020">读取警告</span>'
+                + '<span class="stats-value" style="color:#FFB020;font-size:11px">'
+                + errs.length + ' 个库读取失败，汇总不完整</span></div>';
+        }
+
         function renderTradeStats(d) {
             var count = (d && d.count) || 0;
+            var readErrs = statsReadErrors(d);
             if (!count) {
+                if (readErrs.length) {
+                    var lines = "";
+                    for (var i = 0; i < readErrs.length; i++) {
+                        lines += '<div class="stats-row"><span class="stats-label" style="font-size:11px">'
+                            + statsEsc(readErrs[i].path) + '</span>'
+                            + '<span class="stats-value" style="color:#FFB020;font-size:11px">'
+                            + statsEsc(readErrs[i].error || readErrs[i].status) + '</span></div>';
+                    }
+                    _writeStatsHtml('<div class="stats-empty">该品种暂无历史成交，'
+                        + '但以下 ' + readErrs.length + ' 个库读取失败 —— 此结果不可信：</div>'
+                        + '<div class="stats-rows">' + lines + '</div>');
+                    return;
+                }
+                if (d && d.dbs_scanned === 0) {
+                    _writeStatsHtml('<div class="stats-empty">未找到 state.db（尚无自动下单记录）</div>');
+                    return;
+                }
                 _writeStatsHtml('<div class="stats-empty">该品种暂无历史成交</div>');
                 return;
             }
@@ -4540,6 +4577,7 @@
                 for (var k in d.by_reason) { rs.push(k + " " + yuan(d.by_reason[k])); }
                 html += '<div class="stats-row"><span class="stats-label">按出场原因</span><span class="stats-value" style="font-size:11px;text-align:right">' + rs.join("　") + '</span></div>';
             }
+            html += statsReadWarningHtml(d);
             html += '<div class="stats-note">曲线口径：累计净值（平仓时间序，0 = 盈亏平衡）</div>';
             html += '</div>';
             if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);

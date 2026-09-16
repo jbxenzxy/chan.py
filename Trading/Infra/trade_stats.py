@@ -12,39 +12,97 @@
   · symbol 匹配用**双向后缀 GLOB**：前端 chartData.meta.symbol 可能是
     "KQ.m@CFFEX.IF2609"，而库内 pos.symbol 可能是 "IF2609"（或反过来），
     任一方是另一方后缀即可命中，兼容各代码约定。
+  · **读库结果逐库上报**（2026-09-16 补）：见 `load_trades_report`。
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 from typing import Any, Dict, List, Optional
 
+# 读库状态码（`load_trades_report` 的 sources[].status）
+SRC_OK = "ok"                    # 读取成功（rows=0 也可能是真的没有成交）
+SRC_MISSING = "missing"          # 文件不存在 —— 尚未产生过自动下单记录，**非故障**
+SRC_OPEN_FAILED = "open_failed"  # sqlite 打不开（权限 / 路径非法 / 磁盘故障）
+SRC_QUERY_FAILED = "query_failed"  # 打开了但 SELECT 失败（库损坏 / 旧 schema）
+# 判定"真故障"的口径：不是 ok 也不是 missing。missing 是正常的"没跑过"。
+_FAILED_STATUSES = (SRC_OPEN_FAILED, SRC_QUERY_FAILED)
 
-def load_trades_from_dbs(db_paths: List[str], symbol: str) -> List[Dict[str, Any]]:
-    """从若干 state.db（只读）按 symbol 取出 trades 行，合并后按 exit_at 升序返回。
 
-    任一库缺失/损坏/无 trades 表都静默跳过（统计容错，不阻断面板）。
+def load_trades_report(db_paths: List[str],
+                       symbol: Optional[str] = None) -> Dict[str, Any]:
+    """从若干 state.db（只读）取 trades 行，**并把每个库的读取结果一并报出**。
+
+    symbol 为空 → 不按品种过滤（跨库取全部）。
     匹配规则：exact OR 双向后缀 GLOB（见模块 docstring）。
+
+    返回::
+
+        {
+          "rows":       List[Dict]   合并后的成交行（按 exit_at 升序）
+          "sources":    List[Dict]   每库一条 {path, status, rows, error}
+          "dbs_total":  int          实际扫描的库数
+          "dbs_ok":     int          读取成功的库数
+          "dbs_failed": int          真故障的库数（不含 missing）
+        }
+
+    `status` 取值为模块级 `SRC_*` 常量之一。其中 **`query_failed` 最危险** ——
+    它长得和"这个品种没有成交"一模一样（旧 schema 里 `trades` 表被改名为
+    `trades_legacy_points`、或库文件损坏，都会走到这里）。
+
+    **为什么不再静默跳过（2026-09-16 修）**：旧实现对任一库的失败一律 `continue`
+    / `pass`，最终只返回一个空列表 —— 调用方无法区分"真的没有成交"与"读不出来"，
+    于是面板会理直气壮地显示「该品种暂无历史成交」，哪怕库里躺着几百笔。
+    失败必须可见，这个函数就是为了让调用方拿到这个区分。
     """
     rows: List[Dict[str, Any]] = []
+    sources: List[Dict[str, Any]] = []
+
     for db in db_paths:
+        rec: Dict[str, Any] = {"path": db, "status": SRC_OK,
+                               "rows": 0, "error": None}
+        if not os.path.isfile(db):
+            rec["status"] = SRC_MISSING
+            rec["error"] = "文件不存在"
+            sources.append(rec)
+            continue
         try:
             con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
-        except sqlite3.Error:
+        except sqlite3.Error as e:
+            rec["status"] = SRC_OPEN_FAILED
+            rec["error"] = "{}: {}".format(type(e).__name__, e)
+            sources.append(rec)
             continue
         try:
             con.row_factory = sqlite3.Row
-            cur = con.execute(
-                "SELECT * FROM trades "
-                "WHERE symbol=? OR ? GLOB ('*'||symbol) OR symbol GLOB ('*'||?) "
-                "ORDER BY exit_at",
-                (symbol, symbol, symbol))
-            rows.extend(dict(r) for r in cur.fetchall())
-        except sqlite3.Error:
-            pass
+            if symbol:
+                cur = con.execute(
+                    "SELECT * FROM trades "
+                    "WHERE symbol=? OR ? GLOB ('*'||symbol) "
+                    "OR symbol GLOB ('*'||?) "
+                    "ORDER BY exit_at",
+                    (symbol, symbol, symbol))
+            else:
+                cur = con.execute("SELECT * FROM trades ORDER BY exit_at")
+            got = [dict(r) for r in cur.fetchall()]
+            rows.extend(got)
+            rec["rows"] = len(got)
+        except sqlite3.Error as e:
+            rec["status"] = SRC_QUERY_FAILED
+            rec["error"] = "{}: {}".format(type(e).__name__, e)
         finally:
             con.close()
+        sources.append(rec)
+
     rows.sort(key=lambda r: r.get("exit_at") or "")
-    return rows
+    return {
+        "rows": rows,
+        "sources": sources,
+        "dbs_total": len(sources),
+        "dbs_ok": sum(1 for s in sources if s["status"] == SRC_OK),
+        "dbs_failed": sum(1 for s in sources
+                          if s["status"] in _FAILED_STATUSES),
+    }
 
 
 def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:

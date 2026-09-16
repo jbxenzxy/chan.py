@@ -560,6 +560,11 @@ class TradingEngine(ReconcileMixin):
                     self.ev.write("restore_reconcile_failed",
                                   reason="{}: {}".format(type(e).__name__, e),
                                   note="首拉真实持仓失败，引擎按本地 store 启动")
+        # 两态机前提守卫 —— 放在恢复完持仓（含尾部的对账）之后、允许运行期
+        # 自检之前：**这里才是真实破口**（改表后带旧 R-OPEN 的 state.db 重启，
+        # 仓单数会是 2）。早于 `_load_alerts` 会被库内告警覆盖，故必须在其后。
+        self._check_two_state_invariant("restore")
+
         # 恢复流程到此结束 —— 之后才允许运行期 run 自检（见 `__init__` 的
         # `_run_ready` 注释：`_restore` 中途的 `_sync_state` 会看到瞬时假象）。
         self._run_ready = True
@@ -956,7 +961,7 @@ class TradingEngine(ReconcileMixin):
         运行期被改（对账/降级路径），取小必须每次重算。
         """
         cap = int(self.lots_per_signal)
-        pol = getattr(self.state, "exec_policy", None)
+        pol = self._exec_policy()
         if pol is not None:
             cap = min(cap, int(pol.lots_per_order))
         return cap
@@ -1030,8 +1035,7 @@ class TradingEngine(ReconcileMixin):
             #     就是那笔、也就是唯一的平今目标：不必再查一次 positions，
             #     也不存在"找不到目标"的分支（故无兜底、无 Optional）。
             #   · R-OPEN → 反向 OPEN 锁仓（净敞口归零，进入锁仓态）。
-            _pol = getattr(self.state, "exec_policy", None)
-            if _pol is not None and _pol.close_mode == CLOSETODAY:
+            if self._close_mode() == CLOSETODAY:
                 return _Action(OrderIntent.CLOSETODAY, net_side,
                                min(abs(net), latest.volume),
                                latest, is_exit=True, transition=4)
@@ -1045,6 +1049,68 @@ class TradingEngine(ReconcileMixin):
         return _Action(OrderIntent.CLOSE, net_side,
                        min(abs(net), target.volume), target,
                        is_exit=True, transition=5)
+
+    # ════════════════════════════════════════════════════════════════
+    # 品种执行策略表的**单点读取**（2026-09-16 补）
+    #   表第 1/3 列的四个消费点（`lots_per_order` / 转移④ / `_pre_trade_check`
+    #   平今判据 / 两态守卫）此前各写一遍 `getattr(self.state, "exec_policy",
+    #   None)`。重复读取的风险不是"多打几个字"，而是**守卫与决策可能读到不同
+    #   口径**（守卫说"你是两态品种"、决策说"你不是" → 守卫形同虚设）。
+    #   故收敛到本方法一处：判据恒同源。
+    # ════════════════════════════════════════════════════════════════
+    def _exec_policy(self) -> Optional[Any]:
+        """本品种执行策略（`Infra/Product.py` 的 `EXEC_POLICY[code]` 那一行）。
+
+        真值源 = `Instrument.exec_policy` → `Product.exec_policy`。无品种档案
+        → `None`（保守侧：按"不支持平今、按风控手数"走）。
+        """
+        return getattr(self.state, "exec_policy", None)
+
+    def _close_mode(self) -> Optional[str]:
+        """执行策略表第 1 列：今仓离场 offset（`CLOSETODAY` / `R-OPEN`）。
+
+        `None` = 无品种档案 → 保守侧（照 `R-OPEN` 走锁仓，不生成会被拒的平今单）。
+        """
+        pol = self._exec_policy()
+        return pol.close_mode if pol is not None else None
+
+    def _check_two_state_invariant(self, where: str) -> None:
+        """两态机前提的运行时守卫（2026-09-16 补）。
+
+        **前提**：`close_mode == CLOSETODAY` 的品种，运行态**有且只有一笔当日仓**
+        —— 它只能由转移①（开仓）产生，离场直接平今、平完即回空仓态。故锁仓态
+        在这类品种上**结构性不可达**。转移④ 正是靠这条前提才敢用 `latest` 直接
+        当平今目标（不回查 positions、不存在"找不到目标"的分支）。
+
+        **为什么需要它**：这条前提此前只有文档声明（§9.4 / §9.6），没有任何运行时
+        检查。唯一能打破它的是「改表（`R-OPEN` → `CLOSETODAY`）后带着旧
+        `state.db` 重启」—— 旧库里留着的反向锁仓单会让仓单数变成 2，此时
+        `latest` 不再是唯一目标，离场只平一笔、另一笔**静默漏平**（簿面与实盘
+        脱节且无人知晓）。本守卫把这条静默路径变显性。
+
+        **处置 = 只告警、不自动修**：该平哪笔、要不要先拆锁，是人的决定；引擎
+        自己猜一个方向只会让账实更不一致。故写事件 + 发 SEVERE 告警（前端阻塞
+        弹窗），由人核对实盘后处理。
+
+        调用点两处：`_restore`（恢复完持仓后 —— 抓真实破口"带旧库重启"）、
+        `_book_open`（落账后 —— 抓运行期任何产生第二笔 OPEN 的路径）。
+        """
+        if self._close_mode() != CLOSETODAY:
+            return
+        n = len(self.positions.positions)
+        if n <= 1:
+            return
+        msg = ("两态机前提被破坏：该品种执行策略表今仓离场 = CLOSETODAY（两态品种），"
+               "但当前有 {} 笔仓单（应为 1 笔）。最常见原因：品种档案在 R-OPEN → "
+               "CLOSETODAY 之间改过表，而 state.db 里还留着旧的反向锁仓单。"
+               "此时离场只按最新一笔走，另一笔会漏平 —— 请核对实盘持仓后人工"
+               "处理（改表或清库），引擎不自动猜方向。").format(n)
+        self.ev.write("two_state_invariant_broken", where=where,
+                      positions_n=n, net_volume=self.positions.net_volume(),
+                      close_mode=self._close_mode(),
+                      note="CLOSETODAY 两态品种出现多笔仓单（锁仓态应不可达）")
+        self.alert(self.ALERT_SEVERE, "two_state_invariant_broken", msg,
+                   where=where, positions_n=n)
 
     def _check_spec_drift(self) -> None:
         """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
@@ -1198,8 +1264,7 @@ class TradingEngine(ReconcileMixin):
         # 动作本来就照着表生成；这里再兜一道是防未来新增调用点绕过
         # `_decide_exit` 直接构造 CLOSETODAY 动作。
         if act.intent is OrderIntent.CLOSETODAY:
-            _pol = getattr(self.state, "exec_policy", None)
-            if _pol is None or _pol.close_mode != CLOSETODAY:
+            if self._close_mode() != CLOSETODAY:
                 return "closetoday_not_supported"
         if act.target is None:
             return "close_without_target"
@@ -1405,6 +1470,8 @@ class TradingEngine(ReconcileMixin):
                       volume=pos.volume, entry_price=pos.entry_price,
                       entry_date=entry_date, order_id=o.order_id,
                       transition=act.transition, signal_key=pos.signal_key)
+        # 两态机前提守卫（CLOSETODAY 品种仓单数应恒为 1）—— 见方法 docstring
+        self._check_two_state_invariant("book_open")
 
     def _book_close(self, act: "_Action", o: Order, reason: str) -> None:
         """CLOSE 成交 → 记一笔 Trade + 移除被对冲的那笔仓单。

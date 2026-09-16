@@ -28,7 +28,8 @@ Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）�
         a. 表 = R-OPEN（IF）→ OPEN 反向开仓锁仓
         b. 表 = CLOSETODAY（AU）→ CLOSETODAY / target=当日仓 / transition=4
         c. 无品种档案 → 保守侧 OPEN
-        d. 两态机前提：CLOSETODAY 品种运行态仓单数恒为 1（锁仓态不可达）
+        d. 两态机前提 + **运行时守卫**：CLOSETODAY 品种开仓后仓单数 = 1；
+           注入第 2 笔仓单 → SEVERE `two_state_invariant_broken`（守卫必须咬人）
   [4] `_pre_trade_check` 对 CLOSETODAY 的校验链（判据 = 表第 1 列）：
         a. 表第 1 列 = R-OPEN 却发 CLOSETODAY → "closetoday_not_supported"
         b. 今仓目标 + 表 = CLOSETODAY → 通过（None）
@@ -249,9 +250,36 @@ with tmp_dir("t3e") as tmp:
     cfg = make_cfg("KQ.m@SHFE.AU", exchange="SHFE")
     eng = build_engine(tmp, cfg, Instrument(None, PRODUCT_PROFILES["AU"]), "e")
     eng.on_bar(make_bar(1000))
-    eng.positions.add(make_pos(entry_date=D1, vol=2))
-    check("[3e] ★ 两态机前提：CLOSETODAY 品种运行态仓单数 = 1（锁仓态不可达）",
-          len(eng.positions.positions), 1)
+    # 走**真实路径**开仓（转移①）再数仓单。
+    # ⚠️ 旧版这里是 `eng.positions.add(...)` 之后断言 `len(...) == 1` ——
+    #    那测的是 add 方法本身，**永远通过**，跟两态前提无关（恒真断言）。
+    eng.on_signal(make_sig("P51|buy|1", is_buy=True, price=4500.0))
+    check("[3e] ★ 两态机前提：CLOSETODAY 品种开仓后运行态仓单数 = 1"
+          "（锁仓态不可达）", len(eng.positions.positions), 1)
+
+    def _broken_alerts(e):
+        return [a for a in e._alerts
+                if a["code"] == "two_state_invariant_broken"]
+
+    check("[3e2] 前提成立时，两态守卫不发告警", _broken_alerts(eng), [])
+
+    # ── 负向：这两条**能失败**，才算守护（旧版缺的就是这一段）──
+    # 人工制造「改表（R-OPEN → CLOSETODAY）后带旧 state.db 重启」的现场：
+    # 已有 1 笔仓单，再落一笔 OPEN → 仓单数变 2。
+    eng._book_open(
+        _Action(intent=OrderIntent.OPEN, side=Side.LONG, volume=2,
+                target=None, is_exit=False, transition=1),
+        eng.broker.orders[-1], None)
+    broken = _broken_alerts(eng)
+    check("[3e3] ★ 守卫会咬人：注入第 2 笔仓单 → SEVERE "
+          "two_state_invariant_broken（带 positions_n）",
+          [(a["level"], a.get("positions_n"), a.get("where")) for a in broken],
+          [("severe", 2, "book_open")])
+    # 恢复路径（真实破口）走同一个守卫 → 同 code 合并计数、不新增条目
+    eng._check_two_state_invariant("restore")
+    check("[3e4] 恢复路径守卫同源（同 code 合并，n: 1 → 2，where 覆盖为 restore）",
+          [(a["n"], a.get("where")) for a in _broken_alerts(eng)],
+          [(2, "restore")])
 
 
 print("\n[4] _pre_trade_check 对 CLOSETODAY 的校验链（判据 = 表第 1 列）")

@@ -46,7 +46,6 @@ import json
 import logging
 import os
 import signal
-import sqlite3
 import subprocess
 import sys
 import threading
@@ -672,33 +671,37 @@ class AppTrader:
         union=True（默认）合并全部发现的 state.db（simnow+实盘）；
         False 仅默认 out_dir。读取用 sqlite3 只读模式，绝不写库。
         symbol 为空 → 跨库取全部 trades 汇总（前端通常带 symbol）。
+
+        返回值 = 统计摘要 + **读库可见性**（2026-09-16 补）：
+          dbs_scanned  实际扫描的库数（0 = 一个 state.db 都没找到）
+          dbs_ok       读取成功的库数
+          sources      每库一条 {path, status, rows, error}（status 见 trade_stats）
+          read_errors  真故障的库（库损坏 / 旧 schema 无 trades 表 / 打不开）；
+                       前端据此把「真的没有成交」与「读不出来」分开显示
+
+        为什么要把这些字段回给前端：旧实现里任一库读失败都静默跳过，面板于是
+        显示"该品种暂无历史成交" —— 和真没成交长得一模一样，库里其实可能有
+        几百笔。失败必须可见（服务端同时打 warning，见下）。
         """
         from Trading.Infra.trade_stats import (
-            load_trades_from_dbs, compute_trade_stats)
+            load_trades_report, compute_trade_stats)
         dbs = (_discover_state_dbs() if union else
                ([os.path.join(_DEFAULT_OUT, "state.db")]
                 if os.path.isfile(os.path.join(_DEFAULT_OUT, "state.db")) else []))
-        if not dbs:
-            return compute_trade_stats([])
-        if symbol:
-            rows = load_trades_from_dbs(dbs, symbol)
-        else:
-            rows = []
-            for db in dbs:
-                try:
-                    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
-                except sqlite3.Error:
-                    continue
-                try:
-                    con.row_factory = sqlite3.Row
-                    rows.extend(dict(r) for r in
-                                con.execute(
-                                    "SELECT * FROM trades ORDER BY exit_at"))
-                except sqlite3.Error:
-                    pass
-                finally:
-                    con.close()
-        return compute_trade_stats(rows)
+        rep = load_trades_report(dbs, symbol or None)
+        for s in rep["sources"]:
+            if s["status"] in ("open_failed", "query_failed"):
+                log.warning(
+                    "[AppTrader] 成交统计读库失败 db=%s status=%s error=%s",
+                    s["path"], s["status"], s["error"])
+        stats = compute_trade_stats(rep["rows"])
+        stats["dbs_scanned"] = rep["dbs_total"]
+        stats["dbs_ok"] = rep["dbs_ok"]
+        stats["sources"] = rep["sources"]
+        stats["read_errors"] = [s for s in rep["sources"]
+                                if s["status"] in ("open_failed",
+                                                   "query_failed")]
+        return stats
 
     def status(self) -> Dict[str, Any]:
         """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""

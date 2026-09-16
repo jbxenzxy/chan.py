@@ -62,7 +62,7 @@ class OrderIntent(str, Enum):
     三个值，一一对应 CTP 报文三种 offset：
       OPEN         开仓：买信号 → 买开，卖信号 → 卖开   → offset=OPEN
       CLOSE        平仓：跨日仓离场 / 跨日锁拆锁         → offset=CLOSE（恒平昨）
-      CLOSETODAY  平今：今仓离场（D6 平今开关关闭锁仓） → offset=CLOSETODAY
+      CLOSETODAY  平今：今仓离场（执行策略表第 1 列 = CLOSETODAY）→ offset=CLOSETODAY
 
     「买还是卖」**不在本枚举里**：方向由调用方按信号方向给出 `side`，
     broker 只负责把 (side, offset) 翻译成 CTP 报文。
