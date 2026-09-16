@@ -1,0 +1,2089 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>chan.py「自动下单」审核兼交接文档</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --ink:#1f2937; --ink2:#4b5563; --ink3:#6b7280;
+    --line:#e5e7eb; --line2:#d1d5db;
+    --ok:#059669; --okbg:#ecfdf5; --okline:#a7f3d0;
+    --warn:#b45309; --warnbg:#fffbeb; --warnline:#fde68a;
+    --bad:#b91c1c; --badbg:#fef2f2; --badline:#fecaca;
+    --info:#1d4ed8; --infobg:#eff6ff; --infoline:#bfdbfe;
+    --up:#d90429; --down:#0a9396;
+    --mono:"Cascadia Mono","Consolas","SF Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:0 0 80px; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:15px; line-height:1.75;
+  }
+  .wrap{max-width:1080px; margin:0 auto; padding:0 22px;}
+
+  /* ── 头部 ── */
+  header{background:linear-gradient(135deg,#1e3a8a 0%,#1d4ed8 55%,#2563eb 100%); color:#fff; padding:38px 0 30px;}
+  header .wrap{padding-top:0}
+  header h1{margin:0 0 10px; font-size:27px; letter-spacing:.5px; font-weight:700;}
+  header .sub{font-size:14px; opacity:.93; line-height:1.7}
+  .metabar{display:flex; flex-wrap:wrap; gap:8px; margin-top:16px}
+  .metabar span{background:rgba(255,255,255,.16); border:1px solid rgba(255,255,255,.26);
+    border-radius:5px; padding:3px 10px; font-size:12.5px; font-family:var(--mono)}
+
+  /* ── 区块 ── */
+  section{background:var(--card); border:1px solid var(--line); border-radius:10px;
+    margin:22px 0; padding:24px 26px; box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  h2{font-size:20px; margin:0 0 6px; padding-bottom:11px; border-bottom:2px solid var(--line);
+     display:flex; align-items:baseline; gap:10px}
+  h2 .num{background:var(--info); color:#fff; font-size:13px; border-radius:5px;
+     padding:2px 9px; font-weight:600; flex:none}
+  h3{font-size:16.5px; margin:26px 0 9px; color:#111827}
+  h4{font-size:14.5px; margin:18px 0 7px; color:var(--ink2)}
+  p{margin:9px 0}
+
+  /* ── 结论徽标 ── */
+  .verdict{display:inline-block; font-size:12px; font-weight:700; border-radius:4px;
+    padding:1px 8px; flex:none; vertical-align:middle; white-space:nowrap}
+  .v-ok{background:var(--okbg); color:var(--ok); border:1px solid var(--okline)}
+  .v-warn{background:var(--warnbg); color:var(--warn); border:1px solid var(--warnline)}
+  .v-bad{background:var(--badbg); color:var(--bad); border:1px solid var(--badline)}
+  .v-info{background:var(--infobg); color:var(--info); border:1px solid var(--infoline)}
+
+  /* ── 卡片 ── */
+  .item{border:1px solid var(--line); border-radius:8px; margin:14px 0; padding:15px 17px; background:#fcfcfd}
+  .item.ok{border-left:4px solid var(--ok)}
+  .item.warn{border-left:4px solid var(--warn)}
+  .item.bad{border-left:4px solid var(--bad)}
+  .item.info{border-left:4px solid var(--info)}
+  .item .head{display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; margin-bottom:5px}
+  .item .head .t{font-weight:700; font-size:15.5px; color:#111827}
+  .item .req{font-size:12.5px; color:var(--ink3); font-family:var(--mono); background:#f3f4f6;
+    padding:1px 7px; border-radius:4px; flex:none}
+
+  /* ── 提示框 ── */
+  .box{border-radius:8px; padding:13px 16px; margin:13px 0; border:1px solid}
+  .box.ok{background:var(--okbg); border-color:var(--okline)}
+  .box.warn{background:var(--warnbg); border-color:var(--warnline)}
+  .box.bad{background:var(--badbg); border-color:var(--badline)}
+  .box.info{background:var(--infobg); border-color:var(--infoline)}
+  .box b{color:inherit}
+  .box .bt{font-weight:700; display:block; margin-bottom:4px}
+
+  /* ── 表格 ── */
+  table{width:100%; border-collapse:collapse; margin:14px 0; font-size:14px}
+  th,td{border:1px solid var(--line2); padding:8px 11px; text-align:left; vertical-align:top}
+  th{background:#f3f4f6; font-weight:700; color:#111827; white-space:nowrap}
+  tbody tr:nth-child(even){background:#fafbfc}
+  td.c,th.c{text-align:center}
+  code{font-family:var(--mono); font-size:13px; background:#f3f4f6; padding:1px 6px;
+    border-radius:4px; color:#b91c1c; border:1px solid #e5e7eb}
+
+  /* ── 列表 ── */
+  ul,ol{margin:9px 0; padding-left:23px}
+  li{margin:5px 0}
+
+  /* ── 流程图 ── */
+  .flow{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:14px 0;
+    padding:14px; background:#f9fafb; border:1px dashed var(--line2); border-radius:8px}
+  .flow .node{background:#fff; border:1.5px solid var(--line2); border-radius:6px;
+    padding:6px 12px; font-size:13.5px; font-weight:600; white-space:nowrap}
+  .flow .node.a{border-color:#93c5fd; background:#eff6ff; color:#1d4ed8}
+  .flow .node.b{border-color:#fcd34d; background:#fffbeb; color:#b45309}
+  .flow .node.c{border-color:#a7f3d0; background:#ecfdf5; color:#059669}
+  .flow .arw{color:var(--ink3); font-weight:700}
+
+  /* ── 目录 ── */
+  .toc{display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:9px; margin-top:12px}
+  .toc a{display:block; padding:10px 13px; background:#f9fafb; border:1px solid var(--line);
+    border-radius:7px; text-decoration:none; color:var(--ink2); font-size:13.5px; transition:.15s}
+  .toc a:hover{background:#eff6ff; border-color:#bfdbfe; color:var(--info)}
+  .toc a b{color:var(--ink); display:block; margin-bottom:2px; font-size:14px}
+
+  .tag{display:inline-block; font-size:11.5px; padding:1px 7px; border-radius:10px;
+    background:#f3f4f6; color:var(--ink3); border:1px solid var(--line); margin-right:4px}
+  .hl{background:#fef08a; padding:0 2px; border-radius:2px}
+  .muted{color:var(--ink3); font-size:13.5px}
+  hr{border:0; border-top:1px solid var(--line); margin:24px 0}
+  .anchor{scroll-margin-top:16px}
+  footer{text-align:center; color:var(--ink3); font-size:13px; margin-top:34px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>chan.py「自动下单」审核兼交接文档</h1>
+    <div class="sub">
+      按用户给定的两个维度逐条核对：<b>功能正确性</b>（以 SimNow 仿真账户为例，⑴–⑻）与
+      <b>软件架构合理性</b>（⑴–⑷），并回答两个落地问题（明天能否跑 SimNow / 切实盘前还要做什么）。<br>
+      本文件同时承担<b>交接文档</b>作用：结论、证据、风险、待办、以及"接手后从哪看起"都在里面。
+    </div>
+    <div class="metabar">
+      <span>代码基线 90362b36e430</span>
+      <span>测试 54/54 全绿</span>
+      <span>独立探针 94 项全绿</span>
+      <span>术语护栏 24/24</span>
+      <span>审核日期 2026-09-16</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+<!-- ═══════════ §0 原始需求原文存档 ═══════════ -->
+<section id="s0" class="anchor">
+  <h2><span class="num">§0</span>原始需求原文存档（审核基准 · 逐字保留）</h2>
+  <p class="muted">
+    本节的每一句都是<b>用户原话照抄</b>，是本次审核的<b>唯一基准</b>。
+    后续所有"符合 / 不符合"的判定，都以本节字面表述为准。
+    <b>严禁在后续轮次中改写、归纳或"优化"本节措辞</b> —— 一旦改了字面，
+    审核就失去了可追溯的锚点。
+  </p>
+
+  <div class="box info">
+    <span class="bt">任务总述（原话）</span>
+    请拉取 https://github.com/jbxenzxy/chan.py/tree/custom-dev 最新代码，对"自动下单"功能进行两个维度的审核 /
+    输出审核文档（内容用通熟易懂的大白话描述，不要携带代码片段）。同时让审核文档也承担交接文档的作用。
+  </div>
+
+  <h3>维度一：功能正确性（以跑 SimNow 仿真账户为例）</h3>
+  <ol>
+    <li>加载某期货品种K线页面时，"自动下单功能"默认关闭</li>
+    <li>手工开启"自动下单功能"后，从当前K线页面读取期货品种，品种在白名单中才支持自动下单功能。不在白名单中，开启"自动下单功能"时，弹框提示</li>
+    <li>开启"自动下单功能"后，如果要切换周期或期货品种，需先手工关闭"自动下单功能"</li>
+    <li>关闭"自动下单功能"，如果持仓处于"运行态"，需根据持仓是今日仓还是跨日仓，以及是否支持平今，选择反向开仓（锁仓）还是 平仓</li>
+    <li>开启"自动下单功能"后，出现缠论买卖点信号（与信号来自哪个周期无关），进入三态和两态状态机，状态机确保按最低手续费操作</li>
+    <li>出现一次缠论买卖点信号，只允许报单1笔（挂N手），持仓处于"运行态"时，不再接收买卖点信号，由"止盈止损L1-L3"接管</li>
+    <li>按期货品种（不区分合约月份和周期）保存历史止盈止损记录（SimNow和实盘账户分开保存），用户点击K线页面"统计"按钮，显示当前K线页面品种的历史累积盈亏曲线，胜率，平均盈亏比</li>
+    <li>结合代码，你看还有哪些需要补充。。。</li>
+  </ol>
+
+  <h3>维度二：软件架构合理性</h3>
+  <ol>
+    <li>软件架构分层是否合理？是否单向依赖</li>
+    <li>各子功能是否松耦合</li>
+    <li>可维护性是否OK？是否提供了好的问题定位手段？</li>
+    <li>从软件设计角度，你看还有哪些需要补充。。。</li>
+  </ol>
+
+  <h3>落地问答</h3>
+  <div class="box warn">
+    <span class="bt">问 1（原话）</span>
+    目前最新代码是否支持明天交易时段我在实盘中跑SimNow仿真账户（SimNow和天勤账户我已在环境变量配置OK）？还需要改哪些配置吗？
+  </div>
+  <div class="box warn">
+    <span class="bt">问 2（原话）</span>
+    SimNow仿真账户测试OK后，切到实盘（我是创元期货的账户）前，还需补充哪些功能？做哪些测试？或者 向期货公司做哪些确认或报备？
+  </div>
+
+  <h3>第二轮：用户对审核结论的 7 条裁定（逐字保留）</h3>
+  <p class="muted">
+    这是用户看完第一版审核报告后给出的逐条回应。
+    <b>用户裁定高于审核意见</b> —— 凡用户说"这样就行"的，不再作为待办；凡用户提出质疑的，必须回头重新取证核实。
+  </p>
+  <ol>
+    <li>你说的是"SimNow和实盘账户分开保存"，但代码里：两个账户默认写同一个目录 —— 不分开也是OK的</li>
+    <li>钱层面的风控闸门，只剩两处：品种表第 3 列的手数、交割月护栏。仿真无所谓，实盘前必须自己拍板加不加兜底 —— 保持目前即可，无需加兜底</li>
+    <li>持仓非空时改"每笔挂几手"那张表 —— 这个不是问题，不会轻易改手数，除非空仓才有可能改，但一般也不会改</li>
+    <li>唯一短板是拒单原因没送到界面（auto_order_status() 只有 9 个字段，无 last_reject）—— 优化为：拒单弹窗通知？？</li>
+    <li>在线通道下合约参数必须先从行情取到（防止用错参数下单），取不到就一直拒单 —— 需要获取合约参数才能执行的，感觉只有平仓后计算盈亏？其它开/平仓，止盈止损等功能，好像没有依赖获取合约参数的吧？你再仔细核对一下。</li>
+    <li>SimNow 7x24 环境没有日切，所以跨日仓/平昨这条路在仿真上永远测不出来，得用第一套环境并真跨一个交易日 —— 何为"第一套环境"？</li>
+    <li>仿真不支持市价单 —— 代码用的是限价单吧？哪里用到了市价单？</li>
+  </ol>
+
+  <h3>第三轮：用户对第二轮结论的 3 条再裁定（逐字保留）</h3>
+  <ol>
+    <li>"第一套环境" = 服务时间与生产一致、有日终结算/日切、转发实盘行情 → 唯一能测跨日仓/平昨的仿真环境，须真跨一个交易日。第二套就是 7x24 那套（官方明示"不提供结算等其它服务"、无日切）。出处是项目自己的 Docs/自动下单重构-分析与实施计划v2.0.md 差异核对表 —— <b>文档不一定对，你根据代码核实一下</b></li>
+    <li>真正成立的是 SimNow 不撮合（不会部分成交）。"限价单只成交一部分"仿真永远测不出，实盘才会遇到 —— <b>程序报单用的是FOK 或 FAK+1手，不会出现部分成交</b></li>
+    <li>不用弄两个文档，把「00_原始需求原文存档.md」内容补充到「chanpy_自动下单_审核兼交接文档.html」文档的最前面即可</li>
+  </ol>
+
+  <h3>第四轮：用户对「合约参数 fail-closed」的追问（逐字保留）</h3>
+  <ol>
+    <li>
+      引擎在在线通道下有一条硬规矩："这个品种的合约参数（最小变动价位、合约乘数、涨跌停）
+      必须已经从行情里取到并校验通过，否则一律拒单"。这是防"用错的参数去下单"的保险，
+      设计上不允许"取不到就用配置里的值凑合" ——
+      <b>最小变动价位、合约乘数 配置里有默认值可取吗？这俩很少变动，行情万一取不到，
+      能取到默认值就OK了，而不是拒单</b>
+    </li>
+  </ol>
+
+  <h3>第五轮：用户澄清原意 + 采纳建议（逐字保留）</h3>
+  <ol>
+    <li>
+      <b>澄清（原意被写代码的人理解偏了）</b>：
+      "'拿不到就不交易，而不是拿一个可能错的值去交易。' —— 原先写代码的人错误理解了我的意思。
+      目前支持8个品种，原先是说如果增加一个新品种，比如第9个，那么拿不到这个品种的行情数据，
+      会用比如IF的默认值来代替，会导致问题（这个就是你说的'品种表本身还带一个 0.2 的兜底'）。
+      所以说，不能拿一个错误的值去交易。如果增加第9个，<b>有这个品种正确的默认值，当然是OK的</b>。"
+    </li>
+    <li>
+      <b>采纳（逐字）</b>：
+      "你这个直觉在离线回测场景已经实现了；在实盘场景被有意否决。要不要重新评估是你重新拍板的决策，
+      不是代码缺陷 —— 改动很小（恢复那个档位即可）。
+      但我建议别改拒单逻辑，而是折中：把'参数取不到'这条拒单做成显眼告警（就是 ⑷ 那条拒单弹窗）。
+      这样安全底线不动，又不会出现'账户安静卡住、你完全不知道为什么'——那才是现在真正的痛点。"
+    </li>
+  </ol>
+
+  <div class="box ok" style="margin-top:12px">
+    <span class="bt">第五轮定稿（本条不再作为开放项）</span>
+    <ol style="margin:6px 0 0">
+      <li><b>拒单逻辑保持不变</b> —— 行情取不到继续拒单，<b>不恢复"配置兜底"档位</b>。</li>
+      <li><b>已登记自己的档案的新品种（第 9 个）→ 可以正常跑</b>：
+          在品种表里正确登记一行即可，<b>不需改任何代码逻辑</b>。
+          实测确认：没登记的第 9 品种会<b>查不到档案、引擎拒绝启动</b>，
+          <b>不会偷偷套用 IF 的参数</b>。</li>
+      <li><b>要补的是"让它吭声"，不是"让它闭嘴去下单"</b>：
+          把"合约参数取不到、正在拒单"接进告警弹窗（<b>与 ⑷ 合并为同一条待办</b>）。</li>
+    </ol>
+  </div>
+
+  <div class="box bad" style="margin-top:12px">
+    <span class="bt">第四轮复核结论（已按第五轮澄清修正）</span>
+    <ul style="margin:6px 0 0">
+      <li><b>默认值确实有</b>：品种表每个品种都登记了「最小变动价位」「合约乘数」
+          （中金所 0.2 点 / 300·200 元每点）。<b>所以"取不到值"不是障碍。</b></li>
+      <li><b>但"取不到就用它"被禁止</b>：字段定位为"离线专用兜底"；代码注释明令
+          "不得存在该分支"；宽容档 <code>prefer</code> 已于 2026-09-11 由你拍板删除。
+          契约测试 64/64 全过。</li>
+      <li><b>一个必须纠正的表述</b>：我上一版把"品种表里的 0.2 兜底"说成实盘隐患，
+          这是<b>错的</b> —— 它只在"品种根本没有档案"时充数，而那种情况下
+          <b>引擎根本起不来</b>，所以它到不了实盘。详见
+          <a href="#recheck5">§2 复核 ⑸ 第四/五轮</a>。</li>
+    </ul>
+  </div>
+
+  <div class="box ok" style="margin-bottom:0">
+    <span class="bt">第三轮复核结论（一句话速览）</span>
+    <ul style="margin:6px 0 0">
+      <li><b>⑴ 用户对，我错在"出处"。</b>"第一套/第二套"在<b>代码里根本不存在</b> ——
+          只出现在注释与文档；程序连仿真用的是<b>写死的 "simnow"</b>，选哪套由<b>账号</b>决定。
+          详见 <a href="#recheck6">§2 复核 ⑹</a>。</li>
+      <li><b>⑵ 用户对，我上一版也错。</b>报单是 <b>FOK / FAK+1手</b>，<b>结构上不存在部分成交</b>。
+          详见 <a href="#recheck7">§2 复核 ⑺</a>。</li>
+      <li><b>⑶ 已照办</b> —— 本文档即合并后的单一交付物（原 md 已并入本节）。</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ═══════════ 阅读导航 ═══════════ -->
+<section>
+  <h2><span class="num">导航</span>这份文档怎么看</h2>
+  <p class="muted">不同角色只需要看其中几节。下面按"你是谁"给出跳读路线。</p>
+  <table>
+    <thead><tr><th>角色 / 目的</th><th>直接看这几节</th><th>可以跳过</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>接手开发的人</b><br><span class="muted">要改代码、查 bug</span></td>
+        <td>§3 架构分层 · §4 松耦合 · §5 问题定位手段 · §7 待补清单</td>
+        <td>§2 的逐条核对细节</td>
+      </tr>
+      <tr>
+        <td><b>使用者 / 操盘的人</b><br><span class="muted">只想知道能不能用、怎么用</span></td>
+        <td>§1 一句话结论 · §2 功能核对 · §6 明天能不能跑 SimNow</td>
+        <td>§3 §4 §5 架构部分</td>
+      </tr>
+      <tr>
+        <td><b>做上线决策的人</b><br><span class="muted">要不要切实盘</span></td>
+        <td>§1 一句话结论 · §6 两个落地问答 · §7 待补清单</td>
+        <td>其余全部</td>
+      </tr>
+      <tr>
+        <td><b>做复审 / 验收的人</b><br><span class="muted">核对本报告是否可信</span></td>
+        <td>§0 原始需求原文存档 · §8 证据与可复现 · §9 本次审核方法与边界</td>
+        <td>无（这几节是给你看的）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="toc">
+    <a href="#s0"><b>§0 · 原始需求原文存档</b>审核基准（含三轮裁定逐字保留）</a>
+    <a href="#s1"><b>§1 · 一句话结论</b>总共什么水平、能不能用</a>
+    <a href="#s2"><b>§2 · 维度一 功能正确性</b>⑴–⑻ 逐条核对 <span class="muted">（含第二轮复核 ⑸⑹⑺）</span></a>
+    <a href="#recheck5"><b>§2 · 复核 ⑸</b>合约参数到底被谁用到</a>
+    <a href="#recheck6"><b>§2 · 复核 ⑹</b>"第一套环境"按代码核实</a>
+    <a href="#recheck7"><b>§2 · 复核 ⑺</b>限价单 + FOK/FAK，无部分成交</a>
+    <a href="#s3"><b>§3 · 维度二-⑴ 分层与单向依赖</b></a>
+    <a href="#s4"><b>§4 · 维度二-⑵ 子功能松耦合</b></a>
+    <a href="#s5"><b>§5 · 维度二-⑶ 可维护性与问题定位</b></a>
+    <a href="#s6"><b>§6 · 两个落地问答</b>SimNow 与实盘</a>
+    <a href="#s7"><b>§7 · 待补清单</b>按优先级排序 <span class="muted">（含第二轮裁定）</span></a>
+    <a href="#s8"><b>§8 · 证据与可复现</b>怎么自己验一遍</a>
+    <a href="#s9"><b>§9 · 审核方法与边界</b>我验了什么、没验什么</a>
+  </div>
+</section>
+
+<!-- ═══════════ §1 一句话结论 ═══════════ -->
+<section id="s1" class="anchor">
+  <h2><span class="num">§1</span>一句话结论</h2>
+
+  <div class="box ok">
+    <span class="bt">总体：这套"自动下单"的完成度比我预期的高，明天在 SimNow 上跑，代码侧是站得住的。</span>
+    用户提的 7 个功能点（⑴–⑺），<b>逐条都在代码里落实了</b>，而且大部分有自动化测试钉着。
+    架构上，上一轮报告里点出的"核心引擎反向依赖应用层"这个老毛病<b>已经改掉了</b>：
+    现在底层只看得到更底层，没有任何一层反过来去调用上层。
+  </div>
+
+  <h3>但有 3 件事必须在动手前知道</h3>
+
+  <div class="box info">
+    <span class="bt">说明：以下三条是<b>第一版审核</b>提出的。用户已对其中两条给出裁定（2026-09-16），此处保留原始发现并标注裁定结果，便于交接时理解取舍。</span>
+  </div>
+
+  <div class="box warn">
+    <span class="bt">第一：对"SimNow 和实盘账户分开保存"这一条，代码目前<b>没有自动分开</b>。</span>
+    用户的原话是"SimNow和实盘账户分开保存"。但代码里，两个账户默认都往<b>同一个文件夹</b>写记录
+    （<code>Trading/State/state.db</code>），而"统计"按钮还会把两个文件夹的数据<b>合并起来算</b>。
+    也就是说：今天先用 SimNow 跑、过几天切实盘跑，两个账户的盈亏会混在一条曲线里，
+    胜率、盈亏比也会一起算。
+    <br><br>
+    <b>用户裁定（2026-09-16）："不分开也是OK的。"</b>
+    → 本条<b>降级为非问题、不再作为待办</b>。保留记录仅为说明代码现状
+    （若将来想分，机制现成，见 §7 第 6 条备查）。
+  </div>
+
+  <div class="box warn">
+    <span class="bt">第二：钱层面的风控闸门是被有意删掉的。</span>
+    "单笔最多多少手、今天最多亏多少钱、资金占用多少"这类保命的闸门，
+    在当前代码里<b>一个都没有</b>（不是漏了，是早期清理时刻意删的，只留了注释）。
+    现在能定风险的只剩两处：① 品种执行策略表里那个"每笔挂 N 手"，② 交割月临近不许新开仓。
+    <br><br>
+    <b>用户裁定（2026-09-16）："保持目前即可，无需加兜底。"</b>
+    → 本条<b>关闭、不再作为待办</b>。这是用户明确接受的风险
+    （由人工盯盘、而非程序兜底）。交接时请知悉此决定的<b>含义</b>：
+    程序不会因为你亏损而自动停手。
+  </div>
+
+  <div class="box warn">
+    <span class="bt">第三：有一个"卡死"的边角情况还在（但触发条件很苛刻）。</span>
+    存在一个极窄的场景：如果<b>持仓还在的时候</b>去改了"每笔挂几手"这张表，
+    又恰好赶上某些操作顺序，账户会卡在一个"怎么都平不掉、一直拒单"的状态里，
+    而且<b>关掉自动下单也救不回来</b>，界面上也看不到为什么。触发条件很苛刻（正常用不会碰到），
+    但它是"不可自愈"的，所以列出来。
+    <br><br>
+    <b>用户裁定（2026-09-16）："不会轻易改手数，除非空仓才有可能改，但一般也不会改。"</b>
+    → 前提条件（持仓非空时改表）在实践中<b>不会发生</b>，本条<b>降级为低优先级观察项</b>。
+    注意：它的"救不回来 + 看不见"两个性质仍值得关注 ——
+    其中"看不见"这一半，正好由下一条（拒单弹窗）一并解决。
+  </div>
+</section>
+
+<!-- ═══════════ §2 维度一 ═══════════ -->
+<section id="s2" class="anchor">
+  <h2><span class="num">§2</span>维度一：功能正确性 ⑴–⑺ 逐条核对</h2>
+  <p class="muted">
+    核对方法：不是"读注释觉得对"，而是<b>真的把引擎跑起来</b>，用真实的 Broker 和引擎走一遍流程，
+    看它到底开几手、走哪条路、写了什么记录。下面每条的"证据"都对应一个我实际跑出来的结果。
+  </p>
+
+  <!-- ⑴ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑴</span>
+      <span class="t">加载品种 K 线页面时，自动下单默认关闭</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      打开任何一个期货品种的 K 线页面，那个"自动下单"开关就是关着的，
+      不会因为你上次开过就自己打开。它的开与关，是同时看<b>两件事</b>的结果：
+      引擎进程有没有在跑、以及"开机记录"里写的是开还是关，两个都满足才算"开"。
+      这样即使进程偷偷活着，也不会显示成"开"。
+    </p>
+    <p class="muted">证据：独立探针逐项验证了"默认关"和"重启后仍算关"的判定，全绿。</p>
+  </div>
+
+  <!-- ⑵ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑵</span>
+      <span class="t">品种取当前页面 + 白名单限定 + 不在白名单要弹框</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      点开启时，确实是从<b>当前 K 线页面</b>读的品种；只有白名单里的品种才真的能开起来。
+      重点是"不在白名单"时的手感，代码做了<b>两层</b>：
+    </p>
+    <ul>
+      <li><b>第一层（提前告诉你）</b>：品种不在名单里，开关<b>直接变灰</b>，
+          鼠标放上去会提示"该品种不支持自动下单"，并列出当前支持哪些品种。让你<b>点之前就知道</b>。</li>
+      <li><b>第二层（真点也拦得住）</b>：就算绕过界面把开启请求发到后台，后台<b>还会再查一次</b>名单，
+          不在名单里就连进程都不拉起来，并返回明确原因。</li>
+    </ul>
+    <div class="box info" style="margin-bottom:0">
+      <span class="bt">白名单到底是哪 8 个品种</span>
+      中国金融期货交易所 4 个：<b>IF（沪深300）、IH（上证50）、IC（中证500）、IM（中证1000）</b>；
+      上海期货交易所 3 个：<b>AU（黄金）、AG（白银）、CU（铜）</b>；
+      郑州商品交易所 1 个：<b>TA（PTA）</b>。合计 <b>8 个</b>。
+      不在这个名单里的（比如螺纹钢、豆粕、原油），打开 K 线看行情没问题，但开了自动下单。
+    </div>
+  </div>
+
+  <!-- ⑶ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑶</span>
+      <span class="t">开着的时候不许换周期、不许换品种</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      只要自动下单是开着的、引擎在跑，去点"切换周期"或"换一个品种"，都会被拦下来，
+      弹窗提醒你先关掉自动下单。还有一点做得比较细：如果引擎<b>因为意外崩了</b>但开关还是"开"的状态，
+      为了防止你被卡住动不了，代码允许此时强行操作 —— 这是有意的"逃生口"，不是漏洞。
+    </p>
+  </div>
+
+  <!-- ⑷ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑷</span>
+      <span class="t">关自动下单时，按今仓/跨日仓决定"反向开仓（锁仓）"还是"平仓"</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      关掉自动下单时，如果还持仓（"运行态"），代码会按品种和持仓性质分岔，
+      核心判断只有一句话：<b>看最近建的那笔仓是今天建的还是之前建的，再结合这个品种平今要不要多花钱。</b>
+    </p>
+    <div class="flow">
+      <span class="node a">持仓运行中</span>
+      <span class="arw">→</span>
+      <span class="node">最近一笔是今天建的吗？</span>
+      <span class="arw">→</span>
+      <span class="node b">是今天建 + 平今贵</span>
+      <span class="arw">→</span>
+      <span class="node c">反向开仓（锁仓），净敞口归零</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="node a">持仓运行中</span>
+      <span class="arw">→</span>
+      <span class="node">最近一笔是今天建的吗？</span>
+      <span class="arw">→</span>
+      <span class="node b">是今天建 + 平今便宜/免收</span>
+      <span class="arw">→</span>
+      <span class="node c">直接平今，回到空仓</span>
+    </div>
+    <div class="flow" style="margin-top:6px">
+      <span class="node a">持仓运行中</span>
+      <span class="arw">→</span>
+      <span class="node">最近一笔是<b>之前</b>建的（跨日仓）</span>
+      <span class="arw">→</span>
+      <span class="node c">平仓，回到空仓</span>
+    </div>
+    <div class="box info" style="margin-bottom:0">
+      <span class="bt">这里有个好设计值得单独说</span>
+      "要不要为了省手续费去锁仓"这件事，代码<b>不是自己去猜、去算费率</b>，
+      而是<b>查一张表</b>。这张表（品种执行策略表）每个品种写着三件事：
+      今天建的仓该走哪条路、报单用哪种方式、每笔挂几手。
+      代码只认表，不认交易所名字。以后想调整策略，<b>改表就行，不用改代码</b>。
+      这是这次重构最漂亮的一处。
+    </div>
+  </div>
+
+  <!-- ⑸ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑸</span>
+      <span class="t">信号一到就进状态机，不管信号来自哪个周期</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      这一点用户特意强调"与信号来自哪个周期无关"。代码里确实<b>完全不看周期</b> ——
+      信号进来后只看两件事：现在账户是什么状态、这个信号是买还是卖。
+      然后进入状态机。<b>三态</b>和<b>两态</b>的区别在下面这张图里。
+    </p>
+
+    <h4>三态（空仓 → 运行 → 锁仓）：适用于"平今很贵、宁可不平"的品种</h4>
+    <div class="flow">
+      <span class="node c">空仓</span>
+      <span class="arw">—信号→</span>
+      <span class="node a">运行态（单向持仓）</span>
+      <span class="arw">—该走了→</span>
+      <span class="node b">锁仓（一多一空对冲，净敞口归零）</span>
+      <span class="arw">—反向信号→</span>
+      <span class="node a">回到运行态</span>
+    </div>
+
+    <h4>两态（空仓 → 运行）：适用于"平今便宜/免收"的品种</h4>
+    <div class="flow">
+      <span class="node c">空仓</span>
+      <span class="arw">—信号→</span>
+      <span class="node a">运行态</span>
+      <span class="arw">—该走了→</span>
+      <span class="node c">直接平掉，回到空仓</span>
+    </div>
+    <p class="muted">
+      走三态还是两态，同样来自那张表的第一列。走两态的品种，它在运行态时
+      <b>有且只有一笔当日仓</b>，结构上就不可能"锁住"。
+    </p>
+
+    <div class="box ok" style="margin-bottom:0">
+      <span class="bt">"确保按最低手续费操作"这一点是怎么保证的</span>
+      靠上面那张表的<b>第一列</b>。表里每个品种的第 1 列明确写着"今仓离场走平今、还是走反向开仓"。
+      这个判断在开发阶段由人做好、写进表里；<b>代码运行时只读表、不做任何费率运算</b>。
+      这样做的原因很实在：费率会变、交易所规则会变，
+      与其让代码各处去判断"哪种更便宜"，不如把结论固化成一张表，改表比改代码安全得多。
+    </div>
+  </div>
+
+  <!-- ⑹ -->
+  <div class="item ok">
+    <div class="head">
+      <span class="req">需求 ⑹</span>
+      <span class="t">一次信号只报 1 笔（挂 N 手）；运行态时不再接信号，交给止盈止损</span>
+      <span class="verdict v-ok">符合</span>
+    </div>
+    <p>
+      这两条都落实了：
+    </p>
+    <ul>
+      <li><b>只报 1 笔</b>：一次信号只发<b>一笔</b>委托，这笔挂几手，直接查表的第 3 列。
+          没有拆单、没有分批建仓。手数只有一个来源，就是那张表。</li>
+      <li><b>运行态不再接信号</b>：持仓一进入"运行态"，后面的买卖点信号<b>就被丢掉了</b>，
+          不再开新仓。这段时间由"止盈止损 L1-L3"接手。</li>
+    </ul>
+
+    <h4>止盈止损 L1-L3 的三层结构（大白话版）</h4>
+    <table>
+      <thead><tr><th class="c" style="width:70px">层</th><th>干什么</th><th>说人话</th></tr></thead>
+      <tbody>
+        <tr><td class="c"><b>L1</b></td><td>结构止损（分型位）</td><td>价格跌破了最近那个结构低点，说明形态坏了，走。</td></tr>
+        <tr><td class="c"><b>L2</b></td><td>波动率止损（ATR）</td><td>按最近波动幅度算个"安全距离"，跌过头就走，防止被小波动晃出去。</td></tr>
+        <tr><td class="c"><b>L3</b></td><td>移动止盈 / 保本</td><td>赚到一定程度后，把止损线跟着价格往上提，锁住利润；赚不够则先保本。</td></tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      L1 和 L2 谁更严格听谁的（取那个离价格更近的作为"底线"），赚够多少倍才启动 L3 由品种定
+      （比如 IC/IM 是 3 倍，其他品种是 2 倍）。
+    </p>
+    <div class="box info" style="margin-bottom:0">
+      <span class="bt">接手的人注意这里有个容易踩的坑</span>
+      止盈止损这套东西，判断的对象是那个"<b>运行时虚拟持仓</b>"，<b>不是</b>账本上那几笔仓。
+      也就是说，账本上你可能会看到一笔占位用的空壳记录（止损价写的是 0），
+      真正生效的止损价、止盈价、目标手数，都在"运行时那一份"里。
+      查问题的时候别读错地方，否则会以为"止损价是 0"。这一点我实测踩过，已验证。
+    </div>
+  </div>
+
+  <!-- ⑺ -->
+  <div class="item bad">
+    <div class="head">
+      <span class="req">需求 ⑺</span>
+      <span class="t">按品种存历史记录 + 统计按钮显示曲线/胜率/盈亏比</span>
+      <span class="verdict v-ok">符合（用户已裁定账户不分开）</span>
+    </div>
+    <p>把这条拆成四小点看，前三点做得好，第四点经用户裁定后<b>不再算缺口</b>。</p>
+
+    <table>
+      <thead><tr><th>小点</th><th class="c" style="width:88px">结论</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>按品种存、不区分合约月份和周期</b></td>
+          <td class="c"><span class="verdict v-ok">符合</span></td>
+          <td>
+            记录里存的是"品种"（比如 IF），不管你当时看的是 9 月合约还是 12 月合约、
+            也不管是 5 分钟还是日线。统计时会把同一个品种的所有合约合起来算 ——
+            这正是用户想要的"不区分合约月份和周期"。
+          </td>
+        </tr>
+        <tr>
+          <td><b>统计按钮显示历史累积盈亏曲线</b></td>
+          <td class="c"><span class="verdict v-ok">符合</span></td>
+          <td>点"统计"会画出累计净值曲线，从 0 开始，按平仓时间排序。</td>
+        </tr>
+        <tr>
+          <td><b>显示胜率、平均盈亏比</b></td>
+          <td class="c"><span class="verdict v-ok">符合</span></td>
+          <td>
+            除了这两项，还多给了盈亏比 PF、期望值/笔、最大单笔盈亏、按出场原因的拆分，
+            比要求的还全。
+          </td>
+        </tr>
+        <tr>
+          <td><b>SimNow 和实盘账户分开保存</b></td>
+          <td class="c"><span class="verdict v-info">用户裁定可接受</span></td>
+          <td>
+            <b>代码现状：不分开</b>（详见下方展开）。<br>
+            <b>用户裁定（2026-09-16）："不分开也是OK的。"</b> → 不作为缺口。
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="box warn">
+      <span class="bt">代码现状（保留记录 · 供日后需要时参考）</span>
+      <p style="margin-top:4px">
+        用户要的是：SimNow 跑出来的记录，和实盘跑出来的记录，各自归各自。
+        但代码的实际行为是：
+      </p>
+      <ul>
+        <li><b>写的时候混</b>：两个账户默认都写同一个文件夹（<code>Trading/State/state.db</code>）。
+            代码里<b>没有</b>"按账户自动分开目录"这件事。</li>
+        <li><b>读的时候也混</b>：点"统计"时，后台会把 Trading 下面<b>所有</b>叫 State 开头的文件夹
+            全都扫一遍、合并成一个结果。而前端<b>写死了"要合并"</b>。</li>
+      </ul>
+      <p style="margin-bottom:0">
+        <b>用户裁定后无需处理。</b>但请交接时知悉一个具体含义：
+        你若先用 SimNow 跑一段、再切实盘跑一段，"统计"里的曲线/胜率/盈亏比会是
+        <b>仿真与实盘混合</b>的数据。若哪天想分开看，机制是现成的（配置里可指定状态目录、
+        发现逻辑本来就支持多目录），只是没跟"账户"绑定 —— 补法见 §7 第 6 条备查。
+      </p>
+    </div>
+
+    <div class="box ok">
+      <span class="bt">顺带表扬一下：这里有个很扎实的"失败可见"设计</span>
+      统计面板特意把"<b>真的没有成交</b>"和"<b>记录读不出来</b>"分开了。
+      以前如果某个记录文件损坏、读不出来，面板会显示"该品种暂无历史成交" —— 和真的没成交长得一模一样，
+      库里可能其实有几百笔单子，但你完全不知道。
+      现在会明确提示"以下 N 个库读取失败，此结果不可信"，并点名是哪个文件。
+      这个改动很值钱，因为它是<b>静默失败</b>（最危险的一类问题）的解药。
+    </div>
+  </div>
+
+  <!-- ⑻ -->
+  <div class="item warn">
+    <div class="head">
+      <span class="req">需求 ⑻</span>
+      <span class="t">结合代码，还有哪些需要补充</span>
+      <span class="verdict v-warn">有 5 条</span>
+    </div>
+    <p>除去前面已经点出的，另外还有这几处（已按用户 2026-09-16 的裁定更新）：</p>
+
+    <table>
+      <thead><tr><th class="c" style="width:44px">#</th><th>缺什么</th><th>为什么需要</th><th class="c" style="width:78px">状态</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="c">1</td>
+          <td><b>界面上看不到"最近一次为什么拒单"</b></td>
+          <td>
+            引擎对方拒单时会写一个原因（比如"平仓手数对不上""这个品种不支持平今"），
+            但这个原因<b>没有送到界面上</b>。后果是：用户看着开关是"开"的、持仓也在，
+            但账户就是不动，界面上<b>完全看不出为什么</b>。
+            <br><br>
+            <b>用户提议（2026-09-16）："优化为：拒单弹窗通知？？"</b>
+            → <b>提议成立，而且机制现成</b>。详见下方专项说明。
+          </td>
+          <td class="c"><span class="verdict v-ok">采纳<br><span class="muted" style="font-size:11px">待实施</span></span></td>
+        </tr>
+        <tr>
+          <td class="c">2</td>
+          <td><b>配置样例文件里缺"交易网关"那一段</b></td>
+          <td>
+            仓库里有个配置样例（<code>.env.example</code>），但它只写了界面端口、通达信目录这些，
+            <b>完全没提</b>"用哪个券商、是不是仿真、实盘确认开关、状态目录"这些交易参数。
+            这些参数只写在代码注释里。新人不看代码就不知道要配什么 —— 而明天要跑 SimNow，恰恰就要配这些。
+          </td>
+          <td class="c"><span class="verdict v-warn">建议补</span></td>
+        </tr>
+        <tr>
+          <td class="c">3</td>
+          <td><b>没有"关掉自动下单后确认已清仓"的收尾检查</b></td>
+          <td>
+            关自动下单会触发离场，但如果离场失败（比如正赶上休市、或通道断了），
+            代码会持续重试，可是<b>没有一个"最终确认：已清仓 / 仍有残留"的明确信号</b>给到人。
+            隔夜带仓是很实际的风险。
+          </td>
+          <td class="c"><span class="verdict v-warn">建议补</span></td>
+        </tr>
+        <tr>
+          <td class="c">4</td>
+          <td><b>统计曲线没有标"仿真 / 实盘"</b></td>
+          <td>
+            这是第 ⑺ 条那个问题的延伸。用户已裁定"账户不分开"，
+            故本条<b>仅在你日后决定分开时才需要</b>。
+          </td>
+          <td class="c"><span class="verdict v-info">取决于裁定</span></td>
+        </tr>
+        <tr>
+          <td class="c">5</td>
+          <td><b>没有"今天一共亏了多少就停手"的总闸</b></td>
+          <td>
+            钱层面的兜底闸门目前是空的（有意删的）。
+            <b>用户裁定（2026-09-16）："保持目前即可，无需加兜底。"</b>
+            → 本条<b>关闭</b>。这是用户明确接受的风险。
+          </td>
+          <td class="c"><span class="verdict v-info">用户已裁定<br><span class="muted" style="font-size:11px">不加</span></span></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="box ok">
+      <span class="bt">专项：关于"拒单弹窗通知"（用户提议 ⑷）—— 可行，且代价极小</span>
+      <p style="margin-top:4px">
+        <b>结论：用户的提议是对的，而且系统里已经有一整套现成的弹窗机制，只是拒单没接进去。</b>
+      </p>
+      <p><b>现状（这是关键区别）</b>：</p>
+      <ul>
+        <li><b>拒单（order_rejected）目前只"写流水账"，不弹窗。</b>
+            引擎把拒单原因写进日志文件就结束了，前端拿不到。</li>
+        <li><b>但"严重告警 → 弹窗"这条链路是完整的、而且做得很好</b>：
+            引擎分两档告警 —— 严重档走浏览器弹窗（阻塞式，必须点掉）、提醒档走轻提示；
+            前端还带<b>同因 5 分钟去重</b>（防止刷屏）、<b>确认水位</b>（点过的不再弹）、
+            <b>重启不丢</b>（告警落盘）。</li>
+        <li><b>而且已经有一个拒单相关的弹窗了</b>：平仓连续被拒到上限时会弹窗 ——
+            但那句提示是"已把该仓从簿中清除，请核对柜台"，
+            也就是说<b>要等到"已经出事"才弹</b>。</li>
+      </ul>
+      <p style="margin-bottom:0">
+        <b>该怎么做</b>：把"被前置校验拒绝"这个动作，按严重度接进现有的告警通道。
+        两类拒单要分开对待：
+      </p>
+      <ul style="margin-bottom:0">
+        <li><b>需要人立刻知道的</b>（比如"平仓手数对不上""不支持平今""合约参数没取到"）
+            → 走<b>严重档弹窗</b>，和现有那个"平仓连续被拒"一样的待遇。</li>
+        <li><b>一过性的</b>（比如参考价瞬间出涨跌停、下一根 bar 就正常了）
+            → 走<b>提醒档轻提示</b>，或者只记流水账不打扰。</li>
+      </ul>
+    </div>
+
+    <div class="box warn">
+      <span class="bt">实施这条时的一个提醒（不收钱但收命）</span>
+      弹窗这条路好走，但有个坑必须提前想清楚：<b>拒单往往是"连续同因"的</b>。
+      比如"平仓手数对不上"这种，只要持仓没变、条件没变，引擎会每根 K 线都试一次、每次都拒。
+      如果没有去重，你会每根 K 线都被弹一次窗，最后你的下意识反应是"把这个弹窗关掉" ——
+      那就等于把安全网亲手撕了。所以务必复用现有的<b>同因 5 分钟冷却 + 人工确认水位</b>，
+      并且<b>把"连续被拒 N 次"单独升级成一档</b>（这个升级本身就该弹），
+      让"反复拒单"比"单次拒单"更响，而不是更烦。
+    </div>
+  </div>
+
+  <!-- ═══════ 第二轮复核：⑸⑹⑺ ═══════ -->
+  <div class="box info" style="margin-top:26px">
+    <span class="bt">第二轮复核说明（2026-09-16 · 用户对 ⑸⑹⑺ 三条提出质疑，逐条重新取证）</span>
+    用户对 ⑸⑹⑺ 提了三个具体质疑。这三条我没有沿用第一轮的结论，
+    而是<b>回到代码重新做了一遍实验</b>（另写独立探针脚本，7 项断言全通过），
+    以下是复核后的结论。<b>其中 ⑺ 那条是<b>我第一轮说错了</b>，用户是对的</b>，已在下面更正。
+  </div>
+
+  <!-- 复核 ⑸ -->
+  <div class="item warn" id="recheck5">
+    <div class="head">
+      <span class="req">复核 ⑸</span>
+      <span class="t">"只有平仓算盈亏才需要合约参数"—— 这个直觉不对</span>
+      <span class="verdict v-bad">用户猜测不成立</span>
+    </div>
+
+    <div class="box bad" style="margin-top:0">
+      <span class="bt">用户的质疑（原文）</span>
+      "需要获取合约参数才能执行的，感觉只有平仓后计算盈亏？
+      其它开/平仓，止盈止损等功能，好像没有依赖获取合约参数的吧？你再仔细核对一下。"
+    </div>
+
+    <p>
+      <b>复核结论：这条直觉不成立。</b>合约参数不是"只用来算盈亏"，
+      它是<b>每一笔报单都绕不开的输入</b>。原因很简单 ——
+      这个系统<b>不下市价单，所有单子都是限价单</b>，而"限价"这个价格必须由合约参数算出来。
+    </p>
+
+    <h4>合约参数一共四个，各自被谁用到（这是逐行查证的结果）</h4>
+    <table>
+      <thead><tr><th style="width:120px">参数</th><th class="c" style="width:96px">是否"只有平仓用"</th><th>真实用途</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>最小变动价位</b><br><span class="muted" style="font-size:11px">price_tick</span></td>
+          <td class="c"><span class="verdict v-bad">不是</span></td>
+          <td>
+            <b>每一笔报单都要用</b>。系统用"超价 5 跳"的方式追价成交，
+            这个"5 跳"必须换算成具体价格，换算公式就是 <b>跳数 × 最小变动价位</b>。
+            参数没到手，这个价格就<b>算不出来</b>，单子根本发不出去。
+            而且价格还必须<b>对齐到合法档位</b>（交易所只接受整跳的价），这也得靠它。
+          </td>
+        </tr>
+        <tr>
+          <td><b>合约乘数</b><br><span class="muted" style="font-size:11px">multiplier</span></td>
+          <td class="c"><span class="verdict v-warn">主要是记账</span></td>
+          <td>
+            用来把"价格差 × 手数"换算成"钱"。用户猜的"算盈亏"确实用到了它，
+            但它也用在<b>逐笔盈亏记账和持仓对账</b>上 —— 不只是平仓那一刻。
+            <b>这一项是唯一能被用户直觉覆盖的</b>（开仓报单本身不强依赖它）。
+          </td>
+        </tr>
+        <tr>
+          <td><b>涨停价 / 跌停价</b><br><span class="muted" style="font-size:11px">upper / lower_limit</span></td>
+          <td class="c"><span class="verdict v-bad">不是</span></td>
+          <td>
+            <b>两道护栏都要用</b>，而且都在"报单"环节：
+            报单前先用参考价粗检一次、算出限价后再精确校验一次，
+            防止用错价格把单子打到涨跌停板上（那是实盘会出事故的）。
+            护栏拿不到区间就<b>按"可疑"处理、拒单</b>（宁可不下单）。
+          </td>
+        </tr>
+        <tr>
+          <td><b>合约自己的身份</b><br><span class="muted" style="font-size:11px">真实月份合约</span></td>
+          <td class="c"><span class="verdict v-bad">不是</span></td>
+          <td>
+            系统取的是<b>真实月份合约</b>（比如 IF2609）而不是主连（IF 主连），
+            因为主连的那些静态字段大多读不到值。取错标的 = 用错参数下单。
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="box ok" style="margin-bottom:0">
+      <span class="bt">实验是怎么证明的（可复核）</span>
+      我写了一个独立小脚本，人为把参数"抽走"，看系统的反应：
+      <ul style="margin:6px 0 0">
+        <li><b>把参数标记为"未取到"</b> → 开仓请求被<b>明确拒绝</b>，拒单原因就叫"合约参数未就绪"；
+            把参数标记为"已就绪" → <b>放行</b>。证明它是报单的<b>前置必要条件</b>。</li>
+        <li><b>把最小变动价位设成 0</b> → 算出"无法对齐"的结果，印证它<b>参与价格计算</b>、不是只参与记账。</li>
+        <li><b>把参考价设成超出涨跌停</b> → <b>拒单</b>；把涨跌停区间设成"未知(0)" → <b>放行</b>。
+            证明护栏确实在跑，且未知时选择 fail-closed。</li>
+      </ul>
+      7 项断言全部通过。<b>所以"只有平仓算盈亏才依赖合约参数"这个说法，与代码事实不符。</b>
+    </div>
+
+    <div class="box bad" style="margin-top:14px">
+      <span class="bt">第四轮追加（2026-09-16）："配置里有默认值可取吗？取不到就用默认值，而不是拒单"</span>
+      <p style="margin-top:4px">
+        <b>先回答"有没有默认值"：有，而且两个都有。</b>
+        品种表里每个品种都登记了「最小变动价位」和「合约乘数」的<b>静态值</b>
+        （比如中金所四品种：0.2 点 / 300 或 200 元每点）。
+        <b>所以"值拿不到"从来不是问题 —— 值就在手边。</b>
+      </p>
+      <p>
+        <b>但"取不到就用它"这条路，代码里被刻意堵死了 —— 而且堵它的时候，用的正是你的理由。</b>
+      </p>
+      <table style="margin-top:8px">
+        <thead><tr><th style="width:150px">查证点</th><th>事实</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>品种表里的默认值是什么定位</b></td>
+            <td>
+              写在字段说明里：<b>"仅作离线模式（离线模拟/回放）兜底"</b>，
+              并明确写着"<b>实盘必须从行情取，配置值不会被采用</b>"。
+              —— 也就是说这两个值不是"实盘备份"，是"离线专用"。
+            </td>
+          </tr>
+          <tr>
+            <td><b>代码里有没有"取不到就回退"的分支</b></td>
+            <td>
+              <b>没有，而且是被明令禁止的。</b>代码里有一行注释写得很硬：
+              <b>"代码里不得存在'取不到就回退配置值下单'的分支"</b>，
+              并且有专门的契约测试把这条钉死（防止日后有人"好心"加回去）。
+            </td>
+          </tr>
+          <tr>
+            <td><b>历史上有没有试过这个方案</b></td>
+            <td>
+              <b>试过，而且已经删了。</b>早期确实存在一个"配置兜底"档位叫 <code>prefer</code>。
+              <b>2026-09-11 由需求方（你）亲自拍板删除</b>，理由原文：
+              <b>"它就是'静默回退配置值'，留着早晚有人误开"</b>。
+              现在配置里只有两档：严格档（默认）与离线档；
+              而离线档<b>只对离线模式生效</b> —— 实盘通道上就算配了它，<b>照样拒单</b>。
+              契约测试对这条有三个断言：实盘配离线档 → 拒单；宽容档 → 配置期直接报错；
+              乱填档位 → 配置期报错。（该测试 64 项全通过）
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-bottom:0">
+        <b>为什么当初要这么定</b>：<b>"拿不到就不交易，而不是拿一个可能错的值去交易。"</b>
+        因为"用错参数下单"这类错误是<b>不可逆</b>的 —— 最小变动价位错了，
+        限价就算错、单子可能直接打到涨跌停板上；乘数错了，盈亏口径全错。
+        而"被挡住不下单"最多是不赚钱，不会亏钱。
+      </p>
+    </div>
+
+    <div class="box warn" style="margin-top:13px">
+      <span class="bt">第四轮补充更正（2026-09-16）：我上一版把这一条讲岔了 —— 你的原意被写代码的人理解偏了</span>
+      <div class="box bad" style="margin-top:6px">
+        <span class="bt">你的原话澄清</span>
+        <p style="margin:4px 0 0">
+          "原先写代码的人错误理解了我的意思。目前支持 8 个品种，原先是说如果增加一个新品种，
+          比如第 9 个，那么拿不到这个品种的行情数据，会用比如 IF 的默认值来代替，
+          会导致问题（这个就是你说的'品种表本身还带一个 0.2 的兜底'）。
+          所以说，<b>不能拿一个错误的值去交易</b>。
+          如果增加第 9 个，<b>有这个品种正确的默认值，当然是 OK 的</b>。"
+        </p>
+      </div>
+      <p style="margin-top:8px">
+        <b>澄清之后，整件事的性质变了 —— 这是本轮最重要的一处更正。</b>
+        我上一版把"拿不到就不交易"当成一条<b>绝对</b>原则来复述，
+        但你的原意本来是有前提的：<b>要防的是"张冠李戴"（拿 IF 的值去当新品种的值），
+        而不是"用配置值"这件事本身。</b>
+      </p>
+      <table style="margin-top:8px">
+        <thead><tr><th style="width:220px">情形</th><th>你的原意</th><th class="c" style="width:110px">代码实际行为</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>① 新品种没有自己的档案</b><br>
+                <span class="muted" style="font-size:11px">比如加第 9 个品种，但没登记</span></td>
+            <td><b>不允许</b> —— 若拿 IF 的值顶上，就是用错参数下单。</td>
+            <td class="c"><span class="verdict v-ok">拒绝启动</span><br>
+                <span class="muted" style="font-size:11px">不套用任何档案</span></td>
+          </tr>
+          <tr>
+            <td><b>② 新品种已登记自己的档案</b><br>
+                <span class="muted" style="font-size:11px">正确默认值在手</span></td>
+            <td><b>OK</b> —— 用它自己的值没问题。</td>
+            <td class="c"><span class="verdict v-ok">正常启动</span><br>
+                <span class="muted" style="font-size:11px">用自己的档案</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top:8px">
+        <b>实测（我跑了代码确认，不是看注释）</b>：
+      </p>
+      <ul style="margin:4px 0 0">
+        <li>拿一个没登记的第 9 品种（比如螺纹钢）去启动 →
+            <b>查不到档案，返回"无"</b>，引擎<b>直接拒绝启动</b>，
+            报错文案明确列出支持清单、并说明"清单外品种禁止启动"。
+            <b>它没有偷偷套用 IF 的参数</b> —— 这正是你要的行为。</li>
+        <li>而"品种表里那个 0.2 的兜底"我上一版说错了它的作用范围：
+            <b>它只在"品种根本没有档案"时充数，而那种情况下引擎根本起不来</b>，
+            所以它<b>到不了实盘</b>。它唯一真正生效的场景是<b>离线模拟/回放</b>。</li>
+        <li>换句话说：<b>"用错品种的值去下真单"这件事，当前代码在结构上就做不到</b> ——
+            不是靠人守纪律，是靠"没档案 = 起不来"。</li>
+      </ul>
+      <p style="margin-bottom:0">
+        <b>所以对"如果要加第 9 个品种"这件事，正确做法是</b>：
+        在品种表里<b>把新品种正确地登记一行</b>（它的最小变动价位、乘数、执行策略等），
+        然后它就能正常跑 —— <b>不需要改任何代码逻辑</b>。
+        加品种的成本是"填一行表"，不是"改拒单规则"。
+        <br><br>
+        <b>至于"取不到就用默认值"，在实盘场景仍然被有意禁止</b>（这条没有变）——
+        但请注意它挡的是<b>"行情取不到"</b>这一种情况，与"新品种有没有档案"是两件事：
+        <br>· <b>新品种没档案</b> → 起不来（防张冠李戴）；
+        <br>· <b>已登记品种但行情取不到</b> → 拒单（防用未经校验的值）。
+        前者你认为合理，后者我们下面继续讨论。
+      </p>
+    </div>
+
+    <div class="box ok" style="margin-top:13px; margin-bottom:0">
+      <span class="bt">第五轮（2026-09-16）：你已采纳"不改拒单逻辑、改为显眼告警"这条建议 —— 下文按此口径定稿</span>
+      <p style="margin-top:4px">
+        <b>你在 2026-09-16 明确采纳的结论（逐字）</b>：
+      </p>
+      <div class="box warn" style="margin:6px 0 0">
+        "你这个直觉在离线回测场景已经实现了；在实盘场景被有意否决。要不要重新评估是你重新拍板的决策，
+        不是代码缺陷 —— 改动很小（恢复那个档位即可）。
+        但我建议别改拒单逻辑，而是折中：把'参数取不到'这条拒单做成显眼告警（就是 ⑷ 那条拒单弹窗）。
+        这样安全底线不动，又不会出现'账户安静卡住、你完全不知道为什么'——那才是现在真正的痛点。"
+      </div>
+      <p style="margin-top:8px">
+        <b>据此，本条的最终处置如下（不再作为"待你拍板"的开放项）</b>：
+      </p>
+      <table style="margin-top:6px">
+        <thead><tr><th style="width:190px">项目</th><th>定稿结论</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>拒单逻辑</b></td>
+            <td><b>保持不变</b>：行情取不到 → 继续拒单。<b>不恢复"配置兜底"档位。</b>
+                安全底线不动。</td>
+          </tr>
+          <tr>
+            <td><b>要做的事</b></td>
+            <td><b>把这条拒单接进告警通道</b>（与 ⑷ 同一件事、同一处改动）——
+                让"合约参数取不到、正在拒单"在界面上<b>一眼可见</b>，走严重档弹窗。</td>
+          </tr>
+          <tr>
+            <td><b>要解决的痛点</b></td>
+            <td>不是"拒单太严"，而是<b>"拒了但用户不知道"</b>。
+                这是<b>可见性</b>问题，不是<b>风控强度</b>问题 —— 所以修可见性，不动风控。</td>
+          </tr>
+          <tr>
+            <td><b>与 ⑷ 的关系</b></td>
+            <td><b>合并为同一条待办</b>。改动小、收益大，一次做完两件事。
+                详见 §2-⑻ 的"拒单弹窗"专项，以及 §7 待补清单第 1 条。</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-bottom:0">
+        <b>一句可交接的话</b>：这台机器<b>宁可不下单，也不拿错参数下单</b>；它唯一的毛病是
+        "不下单的时候不吭声"。<b>我们要补的是"让它吭声"，不是"让它闭嘴去下单"。</b>
+      </p>
+    </div>
+  </div>
+
+  <!-- 复核 ⑹ -->
+  <div class="item info" id="recheck6">
+    <div class="head">
+      <span class="req">复核 ⑹</span>
+      <span class="t">"第一套环境"是什么 —— 按代码核实过</span>
+      <span class="verdict v-info">代码不区分 · 靠账号选</span>
+    </div>
+
+    <div class="box warn" style="margin-top:0">
+      <span class="bt">先说核实结论（用户要求"文档不一定对，按代码核实"）</span>
+      <p style="margin-top:4px">
+        <b>① "第一套/第二套"这套说法在代码里根本不存在。</b>
+        全仓检索：这两个词<b>只出现在注释和文档字符串里</b>（一处是跨日探针工具的说明，
+        其余都是文档）；<b>没有任何一个配置字段、没有任何一行分支代码</b>在区分两套环境。
+      </p>
+      <p style="margin-bottom:0">
+        <b>② 代码连"simnow"都是写死的字符串。</b>
+        所有连仿真的地方都是同一句 <code>TqAccount("simnow", 账号, 密码)</code> ——
+        第二个参数就是固定的 <code>"simnow"</code>，<b>没有地方让你选"第一套还是第二套"</b>。
+        换句话说：<b>选哪套环境，是由你用的那个 SimNow 账号本身决定的，不是由程序决定的</b>。
+      </p>
+    </div>
+
+    <p>
+      所以"第一套/第二套"是 <b>SimNow 平台侧的环境区分</b>（同一个"simnow"标识下、
+      由账号归属决定连到哪个柜台），不是本项目的配置项。代码侧唯一相关的证据，
+      是<b>跨日探针工具的说明文字</b>（它是给操作者看的操作要求，不是程序判断）。
+    </p>
+
+    <table>
+      <thead><tr><th style="width:64px" class="c">套别</th><th style="width:140px">关键特征</th><th>能测什么 / 不能测什么</th><th class="c" style="width:110px">代码依据</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="c"><b>第一套</b></td>
+          <td>
+            <b>有日终结算、有日切</b>；<br>服务时间与生产一致（该收市就收市）。
+          </td>
+          <td>
+            <b>唯一能测出"跨日仓 / 平昨"这条路的仿真环境</b>
+            （只有它会收盘结算，把"今日仓"变成"昨日仓"）。
+          </td>
+          <td class="c">
+            <span class="verdict v-info">仅注释</span><br>
+            <span class="muted" style="font-size:11px">探针工具必读项</span>
+          </td>
+        </tr>
+        <tr>
+          <td class="c"><b>第二套</b></td>
+          <td>
+            官方说明"<b>不提供结算等其它服务</b>"；<br>
+            账户 / 钱 / 仓与上一交易日保持一致；<b>永不日切</b>。
+          </td>
+          <td>
+            适合测<b>开仓、平仓、状态机切换、拒单、限价追价</b>这些"当日能闭环"的逻辑。
+            <b>结构上不可能</b>测出跨日行为 —— 不是配置问题，是环境本身没有日夜交替。
+          </td>
+          <td class="c">
+            <span class="verdict v-info">仅注释</span><br>
+            <span class="muted" style="font-size:11px">探针工具说明</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="box ok" style="margin-bottom:0">
+      <span class="bt">代码侧怎么验证"平昨真的能平" —— 不靠环境、靠一个专门的探针工具</span>
+      <p style="margin-top:4px">
+        既然"昨仓到底存不存在"不能用配置判断，项目把它做成了一条<b>可执行的验证流程</b>
+        （在工具目录里，分三个阶段、跨两个交易日）：
+      </p>
+      <ol style="margin:6px 0 0">
+        <li><b>第 1 日盘中</b>：开 1 手 → 这笔就是"今日仓"。收工。</li>
+        <li><b>第 2 日盘中</b>（经过了日终结算）：先断言"昨仓 ≥ 1"，
+            再发 1 手平仓，然后断言<b>"昨仓下降、今日仓不变"</b> —— 这才是平昨的证据。</li>
+        <li><b>收尾</b>：任意时点把多空两侧的仓全部平掉，不留敞口。</li>
+      </ol>
+      <p style="margin:8px 0 0">
+        它验的是<b>生产代码自己那条路径</b>（下单后等仓位就绪、再核对昨仓变化），
+        不是另写一遍判断 —— 否则验的是工具而不是系统。
+        关键的一点：它<b>离线自检是通的</b>（用假通道验证两条判据），
+        但"真柜台能不能平掉昨仓"必须<b>真的跨一个交易日</b>才知道。
+      </p>
+    </div>
+
+    <div class="box warn" style="margin-top:13px; margin-bottom:0">
+      <span class="bt">明天实操时要注意的两件事</span>
+      <ul style="margin:0">
+        <li><b>先用哪个账号，就决定了你能测什么。</b>
+            如果你的 SimNow 账号是 7x24 那套，那么"跨日仓 / 平昨"这条路<b>明天一定测不出来</b>
+            （跑验证流程会报"昨仓 = 0"，这不是程序坏了，是环境没有日切）。
+            想测就得换到有结算的那套账号，并真跨一个交易日。</li>
+        <li><b>这是个"账号属性"，不是"配置项"。</b>
+            所以不要试图在配置里找"环境切换开关" —— 找不到是正常的，
+            程序里从来就没有这个开关。</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- 复核 ⑺ -->
+  <div class="item bad" id="recheck7">
+    <div class="head">
+      <span class="req">复核 ⑺</span>
+      <span class="t">"仿真不支持市价单"这句话是我说错了 —— 更正</span>
+      <span class="verdict v-bad">我第一轮有误 · 用户正确</span>
+    </div>
+
+    <div class="box bad" style="margin-top:0">
+      <span class="bt">更正声明</span>
+      我第一轮把"仿真不支持市价单"当成一条<b>仿真与实盘的差异风险</b>写进了报告，
+      暗示"代码可能用了市价单，所以仿真上测不出真实行为"。<b>这个说法是错的。</b>
+      用户的质疑（"代码用的是限价单吧？哪里用到了市价单？"）<b>属实</b>。
+    </div>
+
+    <p>
+      <b>逐行核实结果：全仓没有任何一笔市价单，所有报单都是限价单。</b>
+    </p>
+
+    <table>
+      <thead><tr><th style="width:150px">查证点</th><th>事实</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>报单入口</b></td>
+          <td>
+            下单通道里只有<b>两处</b>真正发单的地方，
+            <b>两处都明确传了"限价"这个字段</b>，没有一处走市价路径。
+            也就是说，从下单通道的层面看，"市价单"这个选项<b>根本不存在</b>。
+          </td>
+        </tr>
+        <tr>
+          <td><b>"市价"字样出现在哪</b></td>
+          <td>
+            只出现在两处，<b>都不是真的用市价单</b>：
+            <br>① <b>注释</b>：解释"本环境不支持市价单，所以我们改用限价追价" —— 是<b>解释为什么不用</b>；
+            <br>② <b>运维小工具</b>：手工冒烟测试时，用"对手价 ± 几跳"去<b>模拟</b>一个市价效果，属于人肉操作，不在自动下单主链路上。
+          </td>
+        </tr>
+        <tr>
+          <td><b>那实际怎么保证成交</b></td>
+          <td>
+            靠<b>"超价 5 跳"限价追价</b>：买单取卖一价 + 5 跳、卖单取买一价 − 5 跳，
+            再对齐到合法档位。这个价格通常已经打到对手价之外，
+            <b>成交概率接近市价单，但仍然是限价单</b> —— 这就是它的设计意图。
+          </td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="box ok" style="margin-bottom:0">
+      <span class="bt">对报告的影响：这条风险应当<b>撤销</b>，不是"待观察"</span>
+      因为代码从来不碰市价单，所以"仿真不支持市价单"这件事
+      <b>对这套代码不构成任何实测盲区</b> —— 仿真和实盘走的是同一条限价单路径。
+      第一轮那条差异风险，现在已经从报告里<b>移除</b>。
+    </div>
+
+    <div class="box bad" style="margin-top:13px">
+      <span class="bt">第二轮再更正（2026-09-16 · 用户指出）：连"部分成交"这条也不成立 —— 用户对</span>
+      <p style="margin-top:4px">
+        我上一版在这里写："SimNow 不撮合，所以'限价单只成交一部分'仿真测不出、实盘会遇到"。
+        <b>用户指出：程序报单用的是 FOK 或 FAK + 1 手，不会出现部分成交。</b>
+        <b>逐行核实后：用户正确。</b>原因是从<b>报单属性</b>上就已经把"部分成交"这条路堵死了，
+        跟环境撮不撮合无关。
+      </p>
+      <table style="margin-top:8px">
+        <thead><tr><th style="width:130px">报单方式</th><th>语义（交易所强制）</th><th class="c" style="width:88px">会部分成交吗</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>FOK</b><br><span class="muted" style="font-size:11px">立即全部成交否则全撤</span></td>
+            <td>
+              <b>要么全成、要么全撤，没有中间态。</b>这是交易所撮合引擎强制执行的属性，
+              不是程序自己控制的。盘口深度不够 → <b>整笔撤销</b>，不会成交一半。
+            </td>
+            <td class="c"><span class="verdict v-ok">不会</span></td>
+          </tr>
+          <tr>
+            <td><b>FAK</b><br><span class="muted" style="font-size:11px">部分成交后撤余量</span></td>
+            <td>
+              语义上<b>允许</b>部分成交后撤掉剩下的。但代码在启动期有一条<b>硬断言</b>：
+              凡是 FAK 品种，一笔<b>恒挂 1 手</b>；违反则<b>拒绝启动</b>。
+              一笔只有 1 手时，"成交一部分"在数学上不存在 —— FAK 等价于 FOK。
+            </td>
+            <td class="c"><span class="verdict v-ok">不会<br><span class="muted" style="font-size:11px">N=1 约束</span></span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-bottom:0">
+        <b>8 个品种实况</b>：中金所四品种（IF/IH/IC/IM）与上期所三品种（AU/AG/CU）
+        用 <b>FOK、一笔 2 手</b>；郑商所 TA 用 <b>FAK、一笔 1 手</b>。
+        无论哪一种，<b>都不存在"成交一部分"的可能</b>。
+        <br><br>
+        <b>所以正确的结论是</b>：
+        <b>"部分成交"这件事对这套代码不构成盲区，仿真和实盘行为一致 —— 都只能是"全成或全撤"。</b>
+        我上一版把它写成"仿真测不出、实盘会遇到"，<b>同为错误，一并撤销</b>。
+      </p>
+    </div>
+
+    <div class="box warn" style="margin-top:13px; margin-bottom:0">
+      <span class="bt">那么真正的盲区是什么？—— 是"全撤之后怎么办"，不是"部分成交"</span>
+      既然只会"全成或全撤"，实盘上唯一需要担心的是<b>全撤</b>这一支：
+      盘口深度不够时，FOK 要求"限价以内的盘口挂单量 ≥ 委托手数"才给成交，
+      所以中金所四品种一笔挂 2 手时，<b>实盘可能出现"反复全撤"</b>。
+      代码对此有对策（离场时按最新对手价重新超价、最多追若干轮），
+      但这条分支在 SimNow 上<b>因为"价格合适就直接全成"而永远触发不到</b>。
+      <br><br>
+      <b>换句话说</b>：SimNow 测不到的不是"部分成交"，而是
+      <b>"追价循环 + 全撤重报 + 撤单次数监管"这一整条实盘专有路径</b>。
+      这条项目自己也知道（文档里点名过"追价 / 全撤 / 部分成交三条分支未经验证"），
+      并且已经用<b>契约测试</b>（模拟盘口深度不足）来覆盖，属于"本地已尽力、真柜台仍需观察"。
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════ §3 架构分层 ═══════════ -->
+<section id="s3" class="anchor">
+  <h2><span class="num">§3</span>维度二-⑴：分层是否合理？是否单向依赖？</h2>
+  <div class="box ok">
+    <span class="bt">结论：分层合理，而且<b>确实是单向依赖</b> —— 这一点实测过。</span>
+    上一轮报告里点名的"核心引擎反向依赖应用层"已经修掉了。
+    现在的依赖方向干干净净，是一根链条，不是一张网。
+  </div>
+
+  <h3>实际的依赖方向（一层一层往上）</h3>
+  <div class="flow">
+    <span class="node c">Infra 基础设施</span>
+    <span class="arw">←</span>
+    <span class="node a">Strategy 策略<br>Source 行情源<br>Broker 券商通道<br>Risk 风控</span>
+    <span class="arw">←</span>
+    <span class="node b">Engine 交易引擎</span>
+    <span class="arw">←</span>
+    <span class="node">App 应用层 / 前端</span>
+  </div>
+  <p class="muted">
+    箭头方向是"被依赖"。读法：左边的只能被右边调用，<b>右边绝不反过来调用左边</b>。
+  </p>
+
+  <h3>三个关键的验证结果</h3>
+  <ul>
+    <li>
+      <b>最底层（Infra）是干净的</b>：它谁也不依赖，只在自己内部互相引用。
+      这意味着"品种表""记账""行情快照"这些东西可以被任何上层随便用，
+      而不担心被拖进一团乱麻。
+    </li>
+    <li>
+      <b>中间层只看得到更底层</b>：策略、行情源、券商通道这三层，
+      都只引用了"配置"和"基础设施"，没有互相缠在一起。
+    </li>
+    <li>
+      <b>底层完全不认识上层</b>：我从头到尾搜过一遍，
+      基础设施、策略、行情源、券商通道、风控这五层里，
+      <b>没有任何一处</b>去引用交易引擎、应用层或前端。
+      这是"单向依赖"最硬的证据。
+    </li>
+  </ul>
+
+  <h3>应用层是怎么跟引擎打交道的</h3>
+  <p>
+    应用层（也就是网页后台那一层）需要知道"当前成交统计"这类信息，
+    它<b>不是</b>伸手进去掏引擎的内部数据，而是：
+  </p>
+  <ul>
+    <li>读引擎<b>主动写到文件里</b>的状态（相当于引擎把结果贴到公告栏，应用层去看公告栏）；</li>
+    <li>读底层公用的那几个模块（品种表、统计模块、状态库）。</li>
+  </ul>
+  <p class="muted">
+    这就是"贴公告栏"而不是"撬抽屉" —— 是解耦的正确做法。
+    引擎的架构从"子进程"视角看也更彻底：它就是一个独立进程，
+    连"被同进程调用"都不需要，只有文件和端口两种接口。
+  </p>
+
+  <div class="box warn">
+    <span class="bt">一处小小的结构不一致（不影响功能，但交接时要知道）</span>
+    <b>风控层现在是一个空壳。</b>目录名写着"Risk 风控"，
+    但里面只剩一段说明文字，一行实际逻辑都没有 —— 因为原来那套风控闸门被有意删掉了，
+    删的时候把代码清了，但目录留着了。
+    新人看到"Risk 目录"会以为里面有风控逻辑，翻半天才发现是空的。
+    <b>建议</b>：要么把目录一起删掉，要么在目录里放一个显眼的说明（现在有，但太隐蔽）。
+  </div>
+</section>
+
+<!-- ═══════════ §4 松耦合 ═══════════ -->
+<section id="s4" class="anchor">
+  <h2><span class="num">§4</span>维度二-⑵：各子功能是否松耦合？</h2>
+  <div class="box ok">
+    <span class="bt">结论：这一块做得相当好，尤其是"策略参数"的收口。</span>
+  </div>
+
+  <h3>最漂亮的一处：一张表管住了所有"品种差异"</h3>
+  <p>
+    不同品种的规矩不一样（有的平今贵、有的平今免收；有的报单方式不同；有的每笔挂 2 手、有的挂 1 手）。
+    如果把这些差异写成一堆"如果品种是 IF 就……否则如果品种是 AU 就……"，
+    代码很快就会变成没法维护的一团。
+  </p>
+  <p>
+    当前代码走的是另一条路：<b>把所有品种差异收进一张表</b>，每个品种一行三列。
+    用到这些参数的地方，全都<b>去查表</b>，代码里<b>不出现任何品种名字的分支</b>。
+  </p>
+  <div class="box info">
+    <span class="bt">这张表的三列是什么</span>
+    <table style="margin:6px 0 0">
+      <thead><tr><th style="width:120px">列</th><th>管什么</th><th>用在哪</th></tr></thead>
+      <tbody>
+        <tr><td><b>第 1 列</b></td><td>今天建的仓，走"平今"还是"反向开仓"</td><td>今仓离场时决定动作（直接决定手续费高低）</td></tr>
+        <tr><td><b>第 2 列</b></td><td>报单方式（两种，一种"要么全成要么全不成"、一种"能成多少算多少"）</td><td>发委托时</td></tr>
+        <tr><td><b>第 3 列</b></td><td>每笔挂几手</td><td>开仓时定手数</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    更关键的是：代码<b>启动时会先检查这张表对不对</b>（品种名单和表能不能对上），
+    对不上就<b>直接拒绝启动</b>，而不是"悄悄用一个保守的默认值跑起来"。
+    这个"宁可不开、也不乱开"的态度，对交易系统特别重要。
+  </p>
+
+  <h3>其它几处耦合也控制得不错</h3>
+  <ul>
+    <li>
+      <b>"统计"是独立模块</b>：算胜率、盈亏比、画曲线的逻辑，单独放在一个模块里，
+      对外只有一个"给一批成交记录、还我一个统计结果"的接口。
+      想改统计口径，只动这一个地方。
+    </li>
+    <li>
+      <b>"记账"是独立模块</b>：持仓账本单独一个模块管，
+      引擎只是"调用"它，不是"内嵌"它。账本的规则（比如最多几笔仓）也在它自己身上。
+    </li>
+    <li>
+      <b>状态机是"纯函数"</b>：决定"这次信号该做什么动作"的那个函数，
+      只读当前状态、返回一个动作，<b>过程中不改任何状态</b>。
+      这个设计让"决策"和"执行"分开了 —— 好处是决策部分可以单独测、单独推理出结论。
+    </li>
+  </ul>
+
+  <div class="box warn">
+    <span class="bt">一处偏紧的耦合，交接时留意</span>
+    交易引擎这个主文件本身<b>比较大</b>（两千多行、五十多个方法），
+    它同时管着：状态机决策、报单前校验、离场策略、持仓 reconciliation（对账）、
+    告警、持久化。这些职责目前都装在一个类里。
+    <b>不算错</b>（它们确实都属于"引擎"），但它是接手后最需要小心的一块：
+    改这里容易牵动别处。详见 §7 待办第 6 条。
+  </div>
+</section>
+
+<!-- ═══════════ §5 问题定位 ═══════════ -->
+<section id="s5" class="anchor">
+  <h2><span class="num">§5</span>维度二-⑶：可维护性与问题定位手段</h2>
+  <div class="box ok">
+    <span class="bt">结论：可维护性不错，问题定位手段<b>明显强于一般项目</b>。</span>
+    这个项目在"出问题能不能查出来"上下了很大功夫，做的比大多数同类项目都认真。
+  </div>
+
+  <h3>它给你提供了哪些"定位工具"</h3>
+  <table>
+    <thead><tr><th style="width:150px">手段</th><th>是什么</th><th>解决什么问题</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>一份流水账</b></td>
+        <td>引擎把每一步都写进一份按行记录的日志，里面有 <b>39 种</b>不同的事件类型</td>
+        <td>
+          出事后可以回放："几点收到的信号""为什么拒单""什么时候建的仓""什么时候清的"。
+          比如专门有"信号被跳过了""找不到可平的目标""账户状态自相矛盾"这类事件，
+          都是排障时最想看到的东西。
+        </td>
+      </tr>
+      <tr>
+        <td><b>告警队列</b></td>
+        <td>严重问题会生成"告警"，推到界面上弹出来，人确认后才消掉</td>
+        <td>
+          不用一直盯着日志。比如"合约参数没取到，现在拒单中""平仓追价追了 20 轮还没成"
+          这类必须让人知道的事，会主动弹出来。
+        </td>
+      </tr>
+      <tr>
+        <td><b>状态快照</b></td>
+        <td>随时能问一句"现在什么状态"，它会回答账户三态、净敞口、几笔仓、运行中的止损止盈在哪</td>
+        <td>界面上那个自动下单面板就靠这个，能显示"止损现在挂在哪里"。</td>
+      </tr>
+      <tr>
+        <td><b>平仓冷却可见</b></td>
+        <td>平仓连续失败会在界面上显示"还在冷却、还剩几根 K 线"</td>
+        <td>
+          否则用户只看到"半天不动"，完全不知道为什么。这个字段就是为了回答"为什么半天不补单"。
+        </td>
+      </tr>
+      <tr>
+        <td><b>失败必须出声</b></td>
+        <td>凡是"读不出数据""参数取不到""降级了"这类，都必须报出来，不许静默</td>
+        <td>
+          这是最能体现工程素养的一条。最危险的问题不是"报错"，而是"不报错但结果不对"。
+          项目里有好几处专门防这个，比如统计模块那种"读不出来 vs 真的没有"的区分。
+        </td>
+      </tr>
+      <tr>
+        <td><b>专项排查工具</b></td>
+        <td>券商通道目录下有一套现成的小工具：连通性冒烟、跨日仓探针、连接诊断、强制平仓</td>
+        <td>
+          不用自己现写脚本。比如"跨日仓探针"就是把"造一个跨日仓、第二天验证能平掉"做成了一条命令。
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>测试覆盖</h3>
+  <p>
+    仓库里有 <b>56 个测试文件、将近两万行测试代码</b>，测试量几乎跟正式代码一样多。
+    其中针对这次自动下注重构新加的测试有 <b>3 个</b>（品种表一致性、按交易所决定今仓离场、
+    成交统计按品种合并），我这轮全部跑通：
+  </p>
+  <div class="box ok">
+    <span class="bt">实测</span>
+    不联网的 <b>54 个测试全绿</b>；两个需要联网的（SimNow 真连冒烟、某个天勤相关的）
+    单独跑也通过；术语护栏测试 <b>24 项全绿</b>。
+    另外我自己另写了一套"探针"（不依赖项目测试），把 ⑴–⑺ 独立走了一遍，<b>94 项全绿</b>。
+  </div>
+
+  <div class="box bad">
+    <span class="bt">唯一的短板：拒单原因没送到界面（也就是 §2-⑻ 的第 1 条）</span>
+    这正好是"问题定位手段"上的一个洞。
+    引擎在内部是知道原因的、也写了事件，但这条信息<b>没接进"状态快照"</b>，
+    所以界面拿不到。结果就是：账户停着不动，人去查，界面什么都不说，
+    得自己去翻日志文件才能知道为什么。
+    <b>这是可维护性上唯一明显的缺口</b>，而且补起来很简单（文档里已经把它列为首要待办）。
+  </div>
+</section>
+
+<!-- ═══════════ §6 落地问答 ═══════════ -->
+<section id="s6" class="anchor">
+  <h2><span class="num">§6</span>两个落地问答</h2>
+
+  <h3>问 1：明天交易时段，我能在实盘环境里跑 SimNow 仿真账户吗？还要改什么配置？</h3>
+  <div class="box ok">
+    <span class="bt">答：代码侧可以，明天能跑。但有几件事必须提前确认，否则会"看起来在跑、其实一单都发不出"。</span>
+  </div>
+
+  <p>先说为什么"可以"：</p>
+  <ul>
+    <li>仿真的通道是<b>完整实现</b>的，不是半成品；而且有一套防"实盘误操作"的闸门：
+        必须明确声明"我要实盘"并且把<code>确认开关</code>打开，仿真不需要这两步，直接放行。</li>
+    <li>仿真和实盘共用一个通道代码，区别只在"接哪个市场"。所以<b>仿真跑通 ≈ 实盘的主要链路也跑通了</b>。</li>
+  </ul>
+
+  <p>再说必须确认的事（按重要性排）：</p>
+  <div class="box warn">
+    <span class="bt">① 一个"必须先看到行情"的硬前门（最容易踩）</span>
+    引擎在在线通道下有一条硬规矩：<b>"这个品种的合约参数（最小变动价位、合约乘数、涨跌停）
+    必须已经从行情里取到并校验通过，否则一律拒单"。</b>
+    这是防"用错的参数去下单"的保险，设计上<b>不允许</b>"取不到就用配置里的值凑合"。
+    <br><br>
+    实践含义：<b>你必须在交易时段、行情正常推送的时候开，并且这个品种正在活跃交易。</b>
+    如果你在非交易时段先开起来，它会一直处于"参数没取到 → 拒单"的状态。
+    它之后会周期性重试，但最稳妥的做法是<b>开盘后再开</b>。
+    等待时间默认给了 30 秒（考虑到真实月份合约的静态字段在非活跃时段可能要十几二十秒才推齐）。
+  </div>
+
+  <div class="box warn">
+    <span class="bt">② 确认你的凭据落在引擎真正读取的地方</span>
+    你说"SimNow 和天勤账户已在环境变量配置 OK"，这基本就对路了。
+    引擎找账号密码的顺序是：<b>先看环境变量，再看仓库根目录的 .env 文件</b>。
+    涉及四个：仿真账号密码两个、天勤账号密码两个。
+    提醒一点：这些<b>不能</b>写在交易配置文件里（那个文件是要进版本库的），必须走环境变量或 <code>.env</code>。
+    <br><br>
+    <b>请核对你设的名字</b>是否和代码要的一致（这是"配了但没生效"的常见原因）。
+    名字在 §8 的核对清单里列了。
+  </div>
+
+  <div class="box warn">
+    <span class="bt">③ 确认"用哪个券商/市场"这个开关指向仿真</span>
+    有个参数决定"接仿真的资金还是接期货公司的资金"。默认值是仿真，所以不改也行。
+    但只要它被改成别的（哪怕是空的或写错了），系统就会认定"这是实盘意图"，
+    转而要求你打开实盘确认开关 —— 然后你就会看到一个"明明想跑仿真却被要求确认实盘"的困惑。
+  </div>
+
+  <div class="box info">
+    <span class="bt">④ 两个"仿真的盲区"，明天大概率测不到（这是环境限制，不是代码问题）</span>
+    <ul style="margin:4px 0 0">
+      <li>
+        <b>如果账号是 7x24 那套，就没有"日切"</b>：那里的账户、钱、仓位会一直保持，
+        所以<b>造不出"跨日仓"</b>，也就测不了"平昨"这条路。
+        想测平昨，必须换到<b>有日终结算的那套账号</b>，而且要真跨一个交易日。
+        <b>注意这是账号属性、不是配置项</b>（程序里没有"环境切换开关"），详见 §2 复核 ⑹。
+      </li>
+      <li>
+        <b>SimNow 不撮合</b>：只要价格合适就<b>直接全部成交</b>，不会全撤、也不会自成交。
+        所以<b>"追价循环 / 全撤重报"这条实盘专有路径触发不到</b> ——
+        本系统用 FOK/FAK 报单，只会"全成或全撤"，<b>不存在部分成交</b>
+        （见 §2 复核 ⑺）；真正测不到的是"盘口深度不够 → 全撤 → 重报"这一支。
+      </li>
+    </ul>
+    <div style="margin-top:6px" class="muted">
+      这两个盲区项目里<b>已经写清楚了</b>（专门有一份文档讲"三个测不到的盲区"），
+      接手的人不用重新发现一遍。
+      另：第一轮报告曾把"仿真不支持市价单"列为盲区之一，<b>该条已撤销</b> ——
+      见 §2 复核 ⑺（本系统不使用市价单，故不构成盲区）。
+    </div>
+  </div>
+
+  <div class="box ok">
+    <span class="bt">建议的明天动作顺序</span>
+    <ol style="margin:4px 0 0">
+      <li>开盘后（行情活着），先用只读的连通性冒烟工具跑一遍：能不能连上、能不能拿到持仓、不下任何单。</li>
+      <li>再做一笔"超价追价的限价小单"闭环测试：开 1 手 → 看持仓变对 → 平掉。这一步验证"真的能成交"，而不只是"通道通"。</li>
+      <li>以上都通过，再在界面上打开自动下单，挑选白名单里的品种，让它挂机等信号。</li>
+    </ol>
+  </div>
+
+  <h3>问 2：SimNow 测好后，切创元实盘前还要补什么？测什么？向期货公司确认什么？</h3>
+
+  <h4>A. 必须先补的功能</h4>
+  <p class="muted">
+    <b>注：</b>本表已按用户 2026-09-16 的裁定更新。原第 1 条"数据分开"、第 2 条"兜底闸门"
+    已被用户裁定<b>不作为待办</b>（见 §1、§7）；下表只保留裁定后<b>真正需要动手</b>的项。
+  </p>
+  <table>
+    <thead><tr><th class="c" style="width:44px">#</th><th>要补什么</th><th>为什么</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="c">1</td>
+        <td><b>把"拒单原因"送到界面上</b>（§2-⑻ 第 1 条 · <span class="verdict v-ok">已采纳</span>）</td>
+        <td>
+          实盘时段账户停着不动，你必须一眼知道原因，不能去翻日志。
+          这条既是可用性，也是安全 —— 你得看得见系统在干什么。
+          <b>做法：按严重度接进现有告警弹窗通道</b>（详见 §2-⑻ 专项）。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">2</td>
+        <td><b>"关闭后确认已清仓"的收尾信号</b>（§2-⑻ 第 3 条）</td>
+        <td>防止"以为关了、其实还带着仓过夜"。实盘尤其重要。</td>
+      </tr>
+      <tr>
+        <td class="c">3</td>
+        <td><b>把真正要用的那个合约确认清楚</b></td>
+        <td>
+          代码是下单到<b>真实月份合约</b>（不是主连）。实盘前确认主力合约月份、
+          以及你账户有没有这个合约的交易权限。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">4</td>
+        <td><b>（可选，已裁定不强制）加"钱层面"兜底闸门</b>（§1 第二条）</td>
+        <td>
+          <b>用户裁定（2026-09-16）：保持目前即可，无需加兜底。</b>
+          故不列为必做。仅提示含义：程序<b>不会</b>因亏损自动停手，风险由人工盯盘承担。
+          若日后改变主意，"单日最大亏损停手 + 最大持仓上限"是最小实现。
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h4>B. 上线前该做的测试</h4>
+  <ol>
+    <li>
+      <b>小资金真实一笔闭环</b>：用最小的 1 手，走一遍"开仓 → 持仓对得上 → 离场"。
+      仿真上过了不等于实盘过（真实柜台的行为不完全一样）。
+    </li>
+    <li>
+      <b>跨日仓（平昨）验证</b>：这条在仿真环境<b>测不出来</b>（见问 1 的盲区），
+      只能在实盘小资金上验：今天建仓、过夜、第二天验证"能平掉、且平的是昨仓不是今仓"。
+      项目里有专门的工具把这套动作做成命令了，别手工下单。
+    </li>
+    <li>
+      <b>手续费核对</b>：平今和平昨手续费差很多（有些品种平今是平昨的好几倍）。
+      实盘跑几笔后，<b>用交割单核对</b>"实际扣的手续费"和"代码以为的手续费"是否一致。
+      不一致说明费率表要更新。
+    </li>
+    <li>
+      <b>断线恢复</b>：实盘中通道断一下是常态。
+      要测"断开后能不能自己接上、仓位能不能对上"。代码里有对账机制，但要实测确认。
+    </li>
+    <li>
+      <b>涨跌停 / 交割月附近的边界</b>：代码里有"临近最后交易日不许开新仓"的护栏，
+      值得在真实换月附近观察一次。
+    </li>
+  </ol>
+
+  <h4>C. 该向创元期货确认 / 报备的事</h4>
+  <table>
+    <thead><tr><th class="c" style="width:44px">#</th><th>要确认什么</th><th>为什么必须问</th></tr></thead>
+    <tbody>
+      <tr>
+        <td class="c">1</td>
+        <td><b>程序化交易 / 自动交易的报备要求</b></td>
+        <td>
+          国内对程序化交易有明确的报备要求，这件事<b>是监管层面的硬要求</b>，
+          不是可选项。务必先跟期货公司确认：你这种"程序自动下单"要不要报备、
+          报备什么材料、要不要签专门的协议。这是<b>第一件要问的事</b>。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">2</td>
+        <td><b>柜台接口是否对个人开放</b></td>
+        <td>
+          不是所有账户都默认开通过程序化接口。要确认创元是否提供、
+          用哪家柜台（不同柜台行为有差异）、需不需要单独申请权限。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">3</td>
+        <td><b>报单频率限制</b></td>
+        <td>
+          交易所对报单/撤单频率有监控。要问清楚创元这边的具体阈值，
+          代码里的追价次数和间隔才好对着调（代码里已经有"防报撤单频率超限"的设计，需要对齐真实阈值）。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">4</td>
+        <td><b>实际费率（尤其平今）</b></td>
+        <td>
+          代码里那张费率表要跟创元给你的实际费率核对，重点是各品种的平今费率。
+          费率错了会导致"策略以为赚了、其实被手续费吃掉了"。
+        </td>
+      </tr>
+      <tr>
+        <td class="c">5</td>
+        <td><b>有没有"测试/仿真柜台"可以先连</b></td>
+        <td>有些公司提供接近生产环境的仿真柜台，能比 SimNow 更接近实况，值得问一句。</td>
+      </tr>
+      <tr>
+        <td class="c">6</td>
+        <td><b>资金账号与权限</b></td>
+        <td>确认要交易的合约（比如 IF 的某个具体月份）在你的账户权限范围内。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box bad">
+    <span class="bt">一句提醒</span>
+    上面 C 组里的第 1 条（程序化交易报备）是<b>合规问题，优先级最高</b>。
+    建议在资金进入实盘之前就先去问，不要等测试都做完了才发现还要走流程。
+  </div>
+</section>
+
+<!-- ═══════════ §7 待补清单 ═══════════ -->
+<section id="s7" class="anchor">
+  <h2><span class="num">§7</span>待补清单（按优先级排序）</h2>
+  <p class="muted">这是给接手的人的行动清单。每条都标了"为什么"和"难度"，可以直接当工单用。</p>
+
+  <div class="box ok">
+    <span class="bt">执行结果（2026-09-16 · 需求方裁定后已落地）</span>
+    需求方指示：<b>做第 1、4、5 条；第 2、3、6、7、8、9、10 条直接关闭</b>。
+    三条已实施并各有契约测试锁定（详见 §8）：
+    <ul style="margin:6px 0 0">
+      <li><b>第 1 条 → 已实施</b>：报单前校验拒单已接进现有告警通道，含同因合并、确认水位与"连拒 3 次升严重档"。</li>
+      <li><b>第 4 条 → 已实施</b>：配置样例已补"自动下单 / 交易网关"段，六个键实测可被配置解析。</li>
+      <li><b>第 5 条 → 已实施</b>：关闭自动下单后三态（空仓 / 有残留 / 锁仓）各推一条明确结论到界面。</li>
+      <li><b>第 2、3、6、7、8、9、10 条 → 已关闭</b>：需求方明确不做，保留在表中仅供知悉。</li>
+    </ul>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th class="c" style="width:44px">序</th>
+        <th style="width:170px">做什么</th>
+        <th>为什么 / 怎么做</th>
+        <th class="c" style="width:82px">优先级</th>
+        <th class="c" style="width:60px">工作量</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="c"><b>1</b></td>
+        <td><b>拒单弹窗通知</b><br><span class="muted" style="font-size:11px">已合并 ⑸ 第五轮结论</span></td>
+        <td>
+          <b>✅ 已实施（2026-09-16）。</b>
+          引擎内部已有拒单原因，只是没接进"告警/状态快照"。
+          补法：把"被前置校验拒绝"按严重度接进<b>现有告警通道</b> ——
+          需人工介入的走严重档弹窗，一过性的走提醒档或只记流水账。
+          <b>务必复用现成的同因去重 + 确认水位</b>，并给"连续被拒 N 次"单独升级一档。
+          <br><br>
+          <b>本条同时覆盖两处"静默卡住"</b>：
+          ① 拒单原因不送到界面（§2-⑻）；
+          ② <b>"合约参数取不到 → 一直拒单"</b>这条（§2 复核 ⑸ 第五轮定稿）——
+          用户已明确"安全底线不动，补的是可见性"。<b>一次改动，两处受益。</b>
+          这是性价比最高的一条。
+          <br><br>
+          <span class="muted" style="font-size:11.5px">
+          <b>落地要点</b>：闸门原本已自行告警的三条原因（合约未校验 / 交割月护栏 / 价格越界）
+          不再重复发，只在同一原因上继续计数；真正静默的九条现在都有告警。
+          告警合并时"级别只升不降"（否则先到的提醒档会把后面的严重档覆盖回去）。
+          连拒计数在报单成功后归零。</span>
+        </td>
+        <td class="c"><span class="verdict v-ok">高<br><span class="muted" style="font-size:11px">✅ 已实施</span></span></td>
+        <td class="c">小</td>
+      </tr>
+      <tr>
+        <td class="c"><b>2</b></td>
+        <td><b>修那个"不可自愈的卡死"</b></td>
+        <td>
+          见下方专门说明。<b>用户裁定（2026-09-16）：触发前提是"持仓非空时改表"，
+          而实际不会轻易改手数（只在空仓时才可能改、一般也不改），故本项降级为"低优先级观察项"。</b>
+          <br><b>需求方后续指令（2026-09-16）：本项直接关闭，不做。</b>
+          已由第 1 条兜底 —— 万一碰上，至少<b>能被发现、能人工解救</b>，而不是无声卡死。
+        </td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+      <tr>
+        <td class="c"><b>3</b></td>
+        <td><b>钱层面的兜底闸门</b></td>
+        <td>
+          <b>用户裁定（2026-09-16）："保持目前即可，无需加兜底。" → 本项关闭。</b>
+          这是用户明确接受的剩余风险：钱层面除了"品种表手数"和"交割月护栏"外没有总闸，
+          由人工盯盘承担。保留在清单里仅作知悉，<b>不作为待办</b>。
+        </td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+      <tr>
+        <td class="c"><b>4</b></td>
+        <td><b>配置样例补上交易网关那一段</b></td>
+        <td>
+          <b>✅ 已实施（2026-09-16）。</b>
+          配置样例文件里完全没有交易参数。补一段注释：用哪个券商、市场名、
+          实盘确认开关、状态目录，并说明"凭据走环境变量、别写进配置文件"。
+          <br><br>
+          <span class="muted" style="font-size:11.5px">
+          <b>落地要点</b>：新增"自动下单 / 交易网关"注释段，含通道选择、市场名、
+          实盘确认开关、取值策略、状态目录、周期六个示例键（默认注释掉，不改变默认行为）；
+          并写明凭据只走环境变量、绝不写进配置文件，以及手数不在配置里（旧旋钮已删）。
+          六个键已实测能被配置解析。</span>
+        </td>
+        <td class="c"><span class="verdict v-ok">中<br><span class="muted" style="font-size:11px">✅ 已实施</span></span></td>
+        <td class="c">很小</td>
+      </tr>
+      <tr>
+        <td class="c"><b>5</b></td>
+        <td><b>收尾确认信号</b></td>
+        <td>
+          <b>✅ 已实施（2026-09-16）。</b>
+          "关自动下单"之后，给一个明确的"已清仓 / 仍有残留（哪些）"结论并推到界面，
+          避免带仓过夜而无人知。
+          <br><br>
+          <span class="muted" style="font-size:11.5px">
+          <b>落地要点</b>：关闭后按账户三态各推一条结论 ——
+          空仓走提醒档（正向确认"已清仓、无残留"）、
+          仍有净敞口走严重档弹窗（"仍有净敞口 N，离场未成功，请人工平仓"）、
+          锁仓保留原有冻结提示。三种终局都写一条可审计的收尾事件。</span>
+        </td>
+        <td class="c"><span class="verdict v-ok">中<br><span class="muted" style="font-size:11px">✅ 已实施</span></span></td>
+        <td class="c">小</td>
+      </tr>
+      <tr>
+        <td class="c"><b>6</b></td>
+        <td><b>仿真与实盘数据分开</b>（备查）</td>
+        <td>
+          <b>用户裁定（2026-09-16）："不分开也是OK的。" → 不作为缺口。</b>
+          <b>需求方后续指令：本项直接关闭。</b>
+          但请知悉一个具体含义：先用 SimNow 跑一段、再切实盘跑一段，
+          统计里的曲线/胜率/盈亏比会是<b>仿真与实盘混合</b>的数据。
+          若哪天想分开，机制是现成的（配置可指定状态目录、发现逻辑本就支持多目录），
+          只是没跟"账户"绑定。
+        </td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">小</td>
+      </tr>
+      <tr>
+        <td class="c"><b>7</b></td>
+        <td><b>统计曲线标注账户类型</b></td>
+        <td>配合第 6 条，在统计面板上标明"这是仿真数据 / 这是实盘数据"。
+          <b>需求方指令（2026-09-16）：本项直接关闭</b>（不分开账户，故也不需要标注）。</td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+      <tr>
+        <td class="c"><b>8</b></td>
+        <td><b>引擎主文件拆分</b>（长期）</td>
+        <td>
+          两千多行、五十多个方法的单一类，职责过多。
+          <b>需求方指令（2026-09-16）：本项直接关闭</b>（风险大于收益，不动）。
+          接手的人心里要有数：若将来要加复杂功能，先拆"报单前校验链"和"对账"这两块，收益最大。
+        </td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+      <tr>
+        <td class="c"><b>9</b></td>
+        <td><b>风控空目录处理</b></td>
+        <td>删掉，或在显眼处说明"这里是空的、风控逻辑已收敛到品种表和交割月护栏"。
+          <b>需求方指令（2026-09-16）：本项直接关闭。</b></td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+      <tr>
+        <td class="c"><b>10</b></td>
+        <td><b>前端拆文件</b>（长期）</td>
+        <td>
+          前端还是一个近八千行的单文件。好消息是它<b>内部分区很清楚</b>
+          （十几个带名字的组件段），逻辑上是分好的，只是物理上在一个文件里。
+          真要拆的话是机械工作，风险可控，但不紧急。
+          <b>需求方指令（2026-09-16）：本项直接关闭。</b>
+        </td>
+        <td class="c"><span class="verdict v-info">—<br><span class="muted" style="font-size:11px">已关闭</span></span></td>
+        <td class="c">—</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="box ok">
+    <span class="bt">本轮实际动了什么（三条，全部有测试锁定）</span>
+    <ol style="margin:6px 0 0">
+      <li><b>拒单弹窗</b>（第 1 条）—— 引擎改一个文件，新增"拒单分级 + 连拒升级"；
+          前端一行不用改（复用既有告警通道，新原因自动渲染）；</li>
+      <li><b>配置样例补交易网关段</b>（第 4 条）—— 仅改配置样例，不动代码；</li>
+      <li><b>收尾确认信号</b>（第 5 条）—— 引擎关闭路径重写为三态各一条结论。</li>
+    </ol>
+    <div style="margin-top:6px">
+      其余各项：<b>第 2 条已关闭</b>（前提苛刻，且已由第 1 条兜底可见性）、
+      <b>第 3 条已关闭</b>（不加兜底）、<b>第 6/7 条已关闭</b>（账户不分开）、
+      <b>第 8–10 条已关闭</b>（长期项，本轮不做）。
+      <br>回归证据：契约测试 <b>51 项全过</b>，全量离线回归 <b>55 个测试文件全过</b>，
+      探针 <b>18+12+10 项全过</b>，术语护栏 24 项全过。详见 §8。
+    </div>
+  </div>
+
+  <h3>关于第 2 条"那个卡死"的详细说明</h3>
+  <div class="box bad">
+    <span class="bt">现象</span>
+    账户会停在一个"离场指令一直被拒"的状态，持仓平不掉，而且<b>关掉自动下单也没用</b>
+    （因为关闭动作走的是同一条离场路径，一样被拒）。账面上会一直是"运行态"，界面显示还在持仓。
+  </div>
+  <div class="box warn">
+    <span class="bt">触发条件（很苛刻，正常使用碰不到）</span>
+    必须<b>同时</b>满足这几件事：
+    <ol style="margin:4px 0 0">
+      <li>持仓还在的时候，去改了"每笔挂几手"那张表（比如从 2 手改成 4 手）；</li>
+      <li>改完之后又顺势开了一笔新仓（于是账本里出现了"手数不一样的两笔同向仓"）；</li>
+      <li>之后要走"跨日仓离场"这条路。</li>
+    </ol>
+    <div style="margin-top:6px">
+      这时候引擎想平掉"最早那笔"，但那笔的手数比当前净持仓大，
+      于是校验层判定"要平的量超过实际持仓"，直接拒掉 —— 而它<b>不会</b>改成"平多少算多少"，
+      因为账本的设计是整笔记账的，不支持部分平仓。
+      <br><br>
+      <b>用户裁定（2026-09-16）：</b>这个前提不成问题 —— 实际不会在持仓期间改手数，
+      要改也是在空仓时改、且一般也不会改。故本条<b>降级为低优先级观察项</b>，
+      不再列为"必须修"。
+    </div>
+  </div>
+  <div class="box info">
+    <span class="bt">为什么说它"苛刻但要认真对待"</span>
+    <b>苛刻</b>：只要不改表，每笔开仓都是同样的手数，净持仓永远是 0 或 N，
+    这条错误<b>结构上到不了</b>。项目自己也做了 6 轮循环测试，没出现过。
+    <br>
+    <b>要认真对待</b>：一旦碰上，它是"不可自愈"的 —— 自动下单关不掉、重启也没用、
+    界面上没有任何提示（因为拒单原因根本送不到界面）。你只能去改数据库或手工平仓。
+    <br><br>
+    <b>建议的修法（任选，都很小）</b>：
+    ① <b>推荐</b> —— 把拒单原因送到界面（也就是待办第 1 条），至少"能看见、能人工处理"；
+    ② 加一道保险 —— 禁止"持仓不为空时改表"，或者改表后强制要求先清仓；
+    ③ 更彻底 —— 让平仓支持"平多少算多少"（要动账本，工作量偏大，不建议现在做）。
+    <br><br>
+    <b>注意</b>：这条<b>只影响"能不能被人工发现"</b>，不影响日常交易。
+    在你确认"不会在持仓期改表"的前提下，可以只做 ①、不做 ②③。
+  </div>
+</section>
+
+<!-- ═══════════ §8 证据 ═══════════ -->
+<section id="s8" class="anchor">
+  <h2><span class="num">§8</span>证据与可复现</h2>
+  <p class="muted">这一节是给复审的人看的：怎么自己验一遍、结论是从哪来的。</p>
+
+  <h3>代码基线</h3>
+  <table>
+    <thead><tr><th style="width:180px">项目</th><th>值</th></tr></thead>
+    <tbody>
+      <tr><td>仓库 / 分支</td><td><code>jbxenzxy/chan.py</code> · <code>custom-dev</code></td></tr>
+      <tr><td>审核时的最新提交</td><td><code>90362b36e430</code>（2026-09-16 拉取）</td></tr>
+      <tr><td>相比上一轮基线</td><td>领先 3 个提交（上一轮是 <code>d58e483dba4e</code>），改动 28 个文件</td></tr>
+      <tr><td>拉取方式</td><td>本机 <code>git clone</code> 不可用，改用逐文件拉取 + 校验每个文件的哈希与大小</td></tr>
+    </tbody>
+  </table>
+
+  <h3>测试结果（可复现）</h3>
+  <table>
+    <thead><tr><th style="width:220px">测什么</th><th class="c" style="width:110px">结果</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>不联网的全部测试</td>
+        <td class="c"><span class="verdict v-ok">55 / 55</span></td>
+        <td>逐文件跑，全部通过（含本轮新增的 P58 契约测试）</td>
+      </tr>
+      <tr>
+        <td><b>本轮新增：待补清单契约测试</b></td>
+        <td class="c"><span class="verdict v-ok">51 / 51</span></td>
+        <td>把第 1、4、5 条的行为钉死，防以后改回去</td>
+      </tr>
+      <tr>
+        <td>SimNow 真连冒烟</td>
+        <td class="c"><span class="verdict v-ok">5 / 5</span></td>
+        <td>需要联网，单独跑（不含真下单）</td>
+      </tr>
+      <tr>
+        <td>另一个联网专项测试</td>
+        <td class="c"><span class="verdict v-ok">124 / 0</span></td>
+        <td>需要联网，单独跑</td>
+      </tr>
+      <tr>
+        <td>术语护栏测试</td>
+        <td class="c"><span class="verdict v-ok">24 / 24</span></td>
+        <td>防止描述性文字里出现不该用的词</td>
+      </tr>
+      <tr>
+        <td><b>我自己另写的独立探针</b></td>
+        <td class="c"><span class="verdict v-ok">94 / 94</span></td>
+        <td>
+          不依赖项目测试，把 ⑴–⑺ 用真实引擎跑了一遍（86 项）
+          + 卡死场景复现与自愈性验证、不改表的对照（16 项）
+        </td>
+      </tr>
+      <tr>
+        <td><b>本轮新增：拒单可见性探针</b></td>
+        <td class="c"><span class="verdict v-ok">18 / 18</span></td>
+        <td>验证"静默拒因有告警、不重发、合并计数、达阈值升级、换因重数、成功归零"</td>
+      </tr>
+      <tr>
+        <td><b>本轮新增：收尾信号探针</b></td>
+        <td class="c"><span class="verdict v-ok">12 / 12</span></td>
+        <td>验证三种终局（空仓 / 有残留 / 锁仓）各推一条正确结论</td>
+      </tr>
+      <tr>
+        <td>跨日仓探针的离线自检</td>
+        <td class="c"><span class="verdict v-ok">9 / 9</span></td>
+        <td>验证"平昨"的两条判据（不连柜台）</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>本轮三条改动怎么自验</h3>
+  <table>
+    <thead><tr><th style="width:120px">条目</th><th>改了什么</th><th style="width:150px">怎么验证</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>第 1 条</b><br>拒单弹窗</td>
+        <td>
+          引擎执行入口在"被前置校验拦下"时，改调一条新的记录方法：
+          按一张分级表把拒因接到 <b>现有告警通道</b>（自动获得同因合并、确认水位、落盘）；
+          并维护"同一拒因连续次数"，达 3 次把提醒档自动升为严重档。
+          <br>改了一个文件、新增一个方法、修了一处告警合并逻辑。
+          <b>前端一行没改</b> —— 新 rejection 原因自动走既有渲染。
+        </td>
+        <td>
+          让引擎在"缺时间锚"的情况下反复报单，看：
+          ① 界面是否出现告警；② 原因对不对；
+          ③ 同一原因连报 5 次是否只有一条（计数到 5）；
+          ④ 第 3 次是否升成弹窗；⑤ 换了原因是否重新从 1 数；
+          ⑥ 报单成功后计数是否归零。
+        </td>
+      </tr>
+      <tr>
+        <td><b>第 4 条</b><br>配置样例</td>
+        <td>
+          配置文件样例末尾新增"自动下单 / 交易网关"注释段，
+          含通道 / 市场名 / 实盘确认开关 / 取值策略 / 状态目录 / 周期六个示例键，
+          并写明凭据只走环境变量、手数不在配置里。默认注释掉，<b>不改变原有行为</b>。
+        </td>
+        <td>
+          把六个键真的写进环境变量跑一遍，确认引擎读到的是预期值
+          （不是"名字写对了但读不到"）。
+        </td>
+      </tr>
+      <tr>
+        <td><b>第 5 条</b><br>收尾确认</td>
+        <td>
+          关闭入口重写为"先离场、再看终局、按三态各推一条结论"：
+          空仓 → 提醒档"已清仓、无残留"；
+          仍有净敞口 → 严重档弹窗"仍有净敞口 N，请人工平仓"；
+          锁仓 → 保留原冻结提示。三种都写一条可审计的收尾事件。
+        </td>
+        <td>
+          分别构造空仓 / 有持仓且离场失败 / 锁仓三种局面，
+          各自关一次自动下单，看界面推的结论与事件记录是否都对上。
+        </td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>我自己验了什么（不靠项目自带的测试）</h3>
+  <ul>
+    <li><b>默认关</b>：模拟"引擎没跑"和"引擎在跑但记录写着关"，两种都确认判为"关"。</li>
+    <li><b>白名单</b>：名单内品种能开、名单外品种被拦（前台变灰 + 后台也拦，两层都验）。</li>
+    <li><b>切换拦截</b>：开着的时候换周期、换品种都被拦。</li>
+    <li><b>关单动作分岔</b>：真的把引擎跑起来，验证"今仓 + 平今贵 → 锁仓"、"今仓 + 平今免 → 平今"、
+        "跨日仓 → 平仓"三种都走对了。</li>
+    <li><b>一次信号一笔单</b>：确认一次信号只发一笔、手数等于表里那个数；确认运行态时后续信号被丢。</li>
+    <li><b>三态与两态</b>：分别构造了双向持仓和单向持仓，确认状态机走的是对的那张图。</li>
+    <li><b>止盈止损生效位置</b>：确认生效的止损止盈价在"运行时那一份"里，不在账本那笔占位记录上（这个坑我实测踩过）。</li>
+    <li><b>统计合并口径</b>：构造"同一个品种、不同合约月份"的成交记录，确认能合并成一条统计。</li>
+    <li><b>卡死场景</b>：按最苛刻的条件把那个卡死复现出来了，并验证了"关自动下单救不回来"。</li>
+  </ul>
+
+  <h3>你需要核对的配置项名字</h3>
+  <p class="muted">这几项是你明天跑 SimNow 会用到的。核对名字拼写，避免"配了但没生效"。</p>
+  <table>
+    <thead><tr><th style="width:230px">配置项</th><th>作用</th><th style="width:110px">SimNow 该填</th></tr></thead>
+    <tbody>
+      <tr><td><code>SN_ACCOUNT</code> / <code>SN_PASSWORD</code></td><td>SimNow 仿真账号密码</td><td>你自己的</td></tr>
+      <tr><td><code>TQ_ACCOUNT</code> / <code>TQ_PASSWORD</code></td><td>天勤账号密码（仿真和实盘共用）</td><td>你自己的</td></tr>
+      <tr><td>仿真 / 实盘选择开关</td><td>决定接仿真资金还是期货公司资金</td><td>仿真（默认值即可）</td></tr>
+      <tr><td>实盘确认开关</td><td>防误触实盘的护栏</td><td>仿真时不用管</td></tr>
+      <tr><td>状态目录</td><td>记录（成交/事件/持仓）写到哪</td><td>默认即可（账户不分开，见 §1）</td></tr>
+      <tr><td>合约参数获取策略</td><td>"必须从行情取参数"的严格程度</td><td>保持默认（严格），别改</td></tr>
+    </tbody>
+  </table>
+  <div class="box info">
+    <span class="bt">关于"实盘确认开关"为什么是个好东西</span>
+    它的存在是为了防一件事：<b>你只是想跑仿真，却因为某个参数填错，真把钱投进去了。</b>
+    所以系统要求：只要它判断"你这次是实盘"，就必须有一个明确的"我知道这是实盘"的开关被打开，
+    否则直接拒绝启动。而且它还防了另一种矛盾情况：如果你说"我要实盘"，
+    但市场名还写着仿真，它会报错让你填真实的期货公司名。这个设计可以信任。
+  </div>
+</section>
+
+<!-- ═══════════ §9 方法与边界 ═══════════ -->
+<section id="s9" class="anchor">
+  <h2><span class="num">§9</span>本次审核的方法与边界</h2>
+  <p class="muted">说清楚"我验了什么、没验什么"，免得把结论当成超出实际的保证。</p>
+
+  <h3>方法</h3>
+  <ul>
+    <li><b>以运行结果为准，不看注释</b>：结论都是从"真的把引擎跑起来、看它实际做了什么"得来的，
+        不是从注释推断的。注释和代码不一致时，以代码和实测为准。</li>
+    <li><b>独立验证</b>：除了跑项目自带的测试，我另写了一套探针独立走一遍需求。
+        两套都绿，才算这条需求可信。</li>
+    <li><b>失败也要能看到</b>：探针里凡是"应该失败"的场景，都要求它<b>真的失败</b>
+        （不报错不算通过）。避免出现"测试写了但其实什么都没验"的情况。</li>
+  </ul>
+
+  <h3>我没验的（边界）</h3>
+  <div class="box warn">
+    <ul style="margin:0">
+      <li>
+        <b>没有连真实柜台跑</b>：所有验证都在离线模拟下做的。
+        "能不能连上 SimNow、能不能真成交"这件事，代码里有工具、有测试，
+        但<b>必须明天开盘后由你实际跑一遍</b>才算数。
+      </li>
+      <li>
+        <b>没有跨日实测</b>：跨日仓和平昨这条路径需要真实日切，离线测不了。
+        项目里那个跨日探针工具我验证了它<b>离线自检是通的</b>，
+        但它对真实柜台的判断需要实际跨一个交易日才能确认。
+      </li>
+      <li>
+        <b>费率表没有跟真实费率核对</b>：代码里那张手续费表是从交易所标准文件生成的，
+        但没有跟你创元账户的<b>实际费率</b>对过。实盘前要核对，尤其平今档。
+      </li>
+      <li>
+        <b>没有做压力 / 长稳测试</b>：挂机一整天、连续多笔信号、断线重连这些
+        长时间稳定性没有验证过。
+      </li>
+      <li>
+        <b>界面只做了代码级核对</b>：前端的行为我是读代码确认的（拦截逻辑、弹窗、置灰），
+        没有在浏览器里真点一遍。
+      </li>
+    </ul>
+  </div>
+
+  <h3>一句话交接总结</h3>
+  <div class="box ok">
+    <b>这套东西的工程质量是好的</b>：需求基本都落地了、依赖方向是干净的、
+    出了事有日志和告警可查、参数收在一张表里好调。
+    <br><br>
+    <b>动手前实际只剩两件事</b>（已按用户 2026-09-16 裁定收敛）：
+    <b>① 把拒单原因接进告警弹窗</b>（用户已采纳，机制现成、改动小）；
+    <b>② 想清楚"关自动下单后确认已清仓"的收尾信号</b>（防带仓过夜）。
+    用户已裁定的两条 —— "仿真/实盘数据分开""加钱层面兜底闸门" —— <b>不作为待办</b>。
+    <br><br>
+    明天在 SimNow 上跑，代码侧站得住 —— <b>记得开盘后再开，并且先跑一遍连通性和成交冒烟</b>。
+  </div>
+
+  <div class="box info">
+    <span class="bt">第二轮复核后的三处更正（写在这里防止误传）</span>
+    <ul style="margin:6px 0 0">
+      <li><b>撤销</b>：第一轮把"仿真不支持市价单"列为差异盲区 —— <b>错</b>。
+          本系统全走限价单，该条对代码不构成盲区。详见 §2 复核 ⑺。</li>
+      <li><b>再更正</b>：我上一版又说"部分成交仿真测不出、实盘会遇到" —— <b>也错</b>。
+          本系统用 <b>FOK / FAK+1手</b> 报单，<b>结构上不存在部分成交</b>（用户指出，已按代码核实）。
+          真正测不到的是"盘口深度不够 → 全撤 → 追价重报"这一支。详见 §2 复核 ⑺。</li>
+      <li><b>更正</b>：合约参数<b>不是</b>"只有平仓算盈亏才依赖" ——
+          <b>最小变动价位是每笔报单必需</b>（用于算追价档位）、涨跌停价用于两道报单前护栏。详见 §2 复核 ⑸。</li>
+      <li><b>核实</b>："第一套/第二套"在<b>代码里不存在</b>，只存在于注释/文档；
+          程序连仿真时用的 market 是<b>写死的 "simnow"</b>，<b>选哪套由账号决定、不是配置项</b>。详见 §2 复核 ⑹。</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  chan.py「自动下单」审核兼交接文档 · 代码基线 90362b36e430 · 2026-09-16<br>
+  逐条核对维度一 ⑴–⑻ 与维度二 ⑴–⑷，含两个落地问答、第二轮复核（⑸⑹⑺）与待补清单
+</footer>
+
+</div>
+</body>
+</html>
