@@ -41,15 +41,17 @@ confirm_live_trading=true，否则抛 AppError（前端提示，不拉起进程�
 状态持久化：App/auto_trader_state.json 记录最后一次启动参数
 （pid/out_dir/started_at/broker），服务重启后可查可停。
 """
+import glob
 import json
 import logging
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from App.AppErrors import AppError
 from App.AppLog import get_logger
@@ -161,6 +163,25 @@ def _engine_store(out_dir: str):
     """按 out_dir 打开自动下单子进程 state.db 的 Store（只读场景为主）。"""
     from Trading.Infra.StateDB import Store
     return Store(os.path.join(out_dir, "state.db"))
+
+
+def _discover_state_dbs() -> List[str]:
+    """发现全部 state.db（simnow + 实盘合并统计用）。
+
+    默认 out_dir = Trading/State/state.db；另扫描 Trading/ 下名为 State* 的目录
+    （如 State_simnow / State_live）内的 state.db，全部纳入 union。无则仅默认。
+    """
+    found: List[str] = []
+    default_db = os.path.join(_DEFAULT_OUT, "state.db")
+    if os.path.isfile(default_db):
+        found.append(default_db)
+    for d in glob.glob(os.path.join(_TG_ROOT, "State*")):
+        if not os.path.isdir(d):
+            continue
+        p = os.path.join(d, "state.db")
+        if os.path.isfile(p) and p not in found:
+            found.append(p)
+    return found
 
 
 def _count_off_events(out_dir: str) -> int:
@@ -643,6 +664,41 @@ class AppTrader:
                         type(e).__name__, e)}
         return {"allowed": True, "product": key, "products": products,
                 "reason": "ok", "message": ""}
+
+    def trades_stats(self, symbol: Optional[str] = None,
+                     union: bool = True) -> Dict[str, Any]:
+        """前端「成交统计」面板后端：按品种汇总已兑现成交（账户无关）。
+
+        union=True（默认）合并全部发现的 state.db（simnow+实盘）；
+        False 仅默认 out_dir。读取用 sqlite3 只读模式，绝不写库。
+        symbol 为空 → 跨库取全部 trades 汇总（前端通常带 symbol）。
+        """
+        from Trading.Infra.trade_stats import (
+            load_trades_from_dbs, compute_trade_stats)
+        dbs = (_discover_state_dbs() if union else
+               ([os.path.join(_DEFAULT_OUT, "state.db")]
+                if os.path.isfile(os.path.join(_DEFAULT_OUT, "state.db")) else []))
+        if not dbs:
+            return compute_trade_stats([])
+        if symbol:
+            rows = load_trades_from_dbs(dbs, symbol)
+        else:
+            rows = []
+            for db in dbs:
+                try:
+                    con = sqlite3.connect("file:{}?mode=ro".format(db), uri=True)
+                except sqlite3.Error:
+                    continue
+                try:
+                    con.row_factory = sqlite3.Row
+                    rows.extend(dict(r) for r in
+                                con.execute(
+                                    "SELECT * FROM trades ORDER BY exit_at"))
+                except sqlite3.Error:
+                    pass
+                finally:
+                    con.close()
+        return compute_trade_stats(rows)
 
     def status(self) -> Dict[str, Any]:
         """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""

@@ -4438,6 +4438,7 @@
                 setTimeout(function() {
                     document.addEventListener("click", _onClickOutsideStats);
                 }, 0);
+                generateStats();  // 打开时拉取成交统计（确保画布可见、数据最新）
             }
         };
 
@@ -4451,26 +4452,100 @@
         }
 
         function generateStats() {
-            if (!chartData) return;
-            const klines = getVisibleKlines();
-            if (!klines.length) return;
-            const startDate = klines[0].date, endDate = klines[klines.length - 1].date;
-            const visBis = chartData.bis.filter(bi => bi.sdt >= startDate && bi.edt <= endDate);
-            const visFxs = chartData.fxs.filter(fx => fx.date >= startDate && fx.date <= endDate);
-            const allBis = chartData.bis, allFxs = chartData.fxs;
-            let visUp = 0, visDown = 0, totalPower = 0, maxPower = 0;
-            visBis.forEach(bi => { if (bi.direction === "up") visUp++; else visDown++; totalPower += bi.power; if (bi.power > maxPower) maxPower = bi.power; });
-            const avgPower = visBis.length > 0 ? (totalPower / visBis.length).toFixed(2) : 0;
-            let allUp = 0, allDown = 0;
-            allBis.forEach(bi => { if (bi.direction === "up") allUp++; else allDown++; });
-            document.getElementById("stats-content").innerHTML = `
-                <div class="stats-row"><span class="stats-label">可见笔数</span><span class="stats-value">${visBis.length} / ${allBis.length}</span></div>
-                <div class="stats-row"><span class="stats-label">向上笔</span><span class="stats-value" style="color:#FF3C3C">${visUp} / ${allUp}</span></div>
-                <div class="stats-row"><span class="stats-label">向下笔</span><span class="stats-value" style="color:#00F0F0">${visDown} / ${allDown}</span></div>
-                <div class="stats-row"><span class="stats-label">平均力度</span><span class="stats-value">${avgPower}</span></div>
-                <div class="stats-row"><span class="stats-label">最大力度</span><span class="stats-value" style="color:#FFD700">${maxPower.toFixed(2)}</span></div>
-                <div class="stats-row"><span class="stats-label">顶分型</span><span class="stats-value" style="color:#FF3C3C">${visFxs.filter(f=>f.mark==="G").length} / ${allFxs.filter(f=>f.mark==="G").length}</span></div>
-                <div class="stats-row"><span class="stats-label">底分型</span><span class="stats-value" style="color:#00F0F0">${visFxs.filter(f=>f.mark==="D").length} / ${allFxs.filter(f=>f.mark==="D").length}</span></div>`;
+            // 仅当面板已打开时拉取（避免渲染循环里反复无效请求 + 画布不可见时画不出）。
+            var panel = document.getElementById("stats-panel");
+            if (!panel || !panel.classList.contains("show")) return;
+            if (!chartData || !chartData.meta || !chartData.meta.symbol) {
+                document.getElementById("stats-content").innerHTML =
+                    '<div class="stats-row"><span class="stats-value">无品种上下文</span></div>';
+                return;
+            }
+            var symbol = chartData.meta.symbol;
+            document.getElementById("stats-content").innerHTML =
+                '<div class="stats-loading" style="padding:8px;color:#a8b2d1;">加载成交统计…</div>';
+            var url = "/api/trader/trades?symbol=" + encodeURIComponent(symbol) + "&union=true";
+            fetch(url, { cache: "no-store" })
+                .then(function (r) { return r.ok ? r.json() : Promise.reject(new Error("HTTP " + r.status)); })
+                .then(function (d) { renderTradeStats(d); })
+                .catch(function (err) {
+                    var p = document.getElementById("stats-content");
+                    if (p) p.innerHTML = '<div class="stats-row"><span class="stats-value">统计加载失败：'
+                        + (err && err.message ? err.message : err) + '</span></div>';
+                });
+        }
+
+        function renderTradeStats(d) {
+            var panel = document.getElementById("stats-content");
+            if (!panel) return;
+            var count = (d && d.count) || 0;
+            if (!count) {
+                panel.innerHTML = '<div class="stats-row"><span class="stats-value">该品种暂无历史成交（已兑现平仓）</span></div>';
+                return;
+            }
+            var pct = function (x) { return (x * 100).toFixed(1) + "%"; };
+            var yuan = function (x) { return (x >= 0 ? "+" : "") + Number(x).toFixed(2) + " 元"; };
+            var html = "";
+            html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">平均盈亏比</span><span class="stats-value">' + (d.avg_pl_ratio != null ? Number(d.avg_pl_ratio).toFixed(2) : "—") + '（盈亏比PF ' + (d.profit_factor != null ? Number(d.profit_factor).toFixed(2) : "—") + '）</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">平均盈利/亏损</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span class="stats-value" style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' (' + d.max_win.exit_at + ')' : '') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + (d.max_loss.exit_at ? ' (' + d.max_loss.exit_at + ')' : '') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + (d.total_net >= 0 ? '#FF3C3C' : '#00F0F0') + '">' + yuan(d.total_net) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">期望值/笔</span><span class="stats-value">' + yuan(d.expectancy) + '</span></div>';
+            if (d.by_reason && Object.keys(d.by_reason).length) {
+                var rs = [];
+                for (var k in d.by_reason) { rs.push(k + " " + yuan(d.by_reason[k])); }
+                html += '<div class="stats-row"><span class="stats-label">按出场</span><span class="stats-value" style="font-size:11px">' + rs.join("　") + '</span></div>';
+            }
+            html += '<div class="stats-subtitle" style="margin-top:8px;color:#a8b2d1;font-size:11px;">历史盈亏曲线（累计净值，0=盈亏平衡）</div>';
+            html += '<canvas id="trade-equity-canvas" style="width:100%;height:180px;display:block;margin-top:4px;"></canvas>';
+            panel.innerHTML = html;
+            drawEquityCurve(d.equity_curve || []);
+        }
+
+        function drawEquityCurve(curve) {
+            var cv = document.getElementById("trade-equity-canvas");
+            if (!cv || !curve.length) return;
+            var box = document.getElementById("stats-panel");
+            var w = (box ? box.clientWidth : 0) || 300;
+            w = Math.max(240, w - 24);
+            var h = 180;
+            var dpr = window.devicePixelRatio || 1;
+            cv.width = w * dpr; cv.height = h * dpr;
+            cv.style.width = w + "px"; cv.style.height = h + "px";
+            var ctx = cv.getContext("2d");
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            ctx.clearRect(0, 0, w, h);
+            var padL = 46, padR = 8, padT = 10, padB = 18;
+            var plotW = w - padL - padR, plotH = h - padT - padB;
+            var vals = curve.map(function (c) { return c.cumulative; }).concat([0]);
+            var maxV = Math.max.apply(null, vals), minV = Math.min.apply(null, vals);
+            if (maxV === minV) { maxV += 1; minV -= 1; }
+            var range = maxV - minV;
+            function yOf(v) { return padT + plotH * (1 - (v - minV) / range); }
+            var n = curve.length;
+            function xOf(i) { return padL + (n <= 1 ? plotW / 2 : plotW * i / (n - 1)); }
+            var y0 = yOf(0);
+            ctx.strokeStyle = "#888"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+            ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = "#a8b2d1"; ctx.font = "10px system-ui"; ctx.textAlign = "right";
+            ctx.fillText("0", padL - 4, y0 + 3);
+            ctx.fillText(maxV.toFixed(0), padL - 4, yOf(maxV) + 8);
+            ctx.fillText(minV.toFixed(0), padL - 4, yOf(minV) - 2);
+            ctx.beginPath();
+            curve.forEach(function (c, i) {
+                var x = xOf(i), y = yOf(c.cumulative);
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.strokeStyle = "#FFD700"; ctx.lineWidth = 1.5; ctx.stroke();
+            ctx.lineTo(xOf(n - 1), y0); ctx.lineTo(xOf(0), y0); ctx.closePath();
+            ctx.fillStyle = "rgba(255,215,0,0.10)"; ctx.fill();
+            var last = curve[n - 1];
+            ctx.fillStyle = last.cumulative >= 0 ? "#FF3C3C" : "#00F0F0";
+            ctx.textAlign = "left";
+            ctx.fillText(last.cumulative.toFixed(0), xOf(n - 1) - 30, yOf(last.cumulative) - 4);
         }
 
         function updateSlider() {

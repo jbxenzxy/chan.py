@@ -103,6 +103,14 @@ def call_trader_check_symbol(symbol=None):
     return trader.check_symbol_allowed(symbol=symbol)
 
 
+def call_trader_trades(symbol=None, union=True):
+    """K 线页「成交统计」面板：按品种汇总已兑现成交（账户无关，simnow+实盘合并）。
+
+    symbol 为前端当前品种（chartData.meta.symbol）；union=True 合并全部 state.db。
+    """
+    return trader.trades_stats(symbol=symbol, union=union)
+
+
 
 # ═══════════════════════════════════════════════════════════════════════
 # 共享资源登记表（按「资源」索引，不是按「入口」索引）
@@ -292,5 +300,5 @@ __all__ = [
     # 自动下单（AppTrader）
     "AppTrader", "trader",
     "call_trader_start", "call_trader_stop", "call_trader_status",
-    "call_trader_ack", "call_trader_check_symbol",
+    "call_trader_ack", "call_trader_check_symbol", "call_trader_trades",
 ]

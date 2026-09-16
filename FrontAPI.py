@@ -770,6 +770,27 @@ async def api_trader_product_check(symbol: str = Query(
     return _json_response(result)
 
 
+@router.get("/api/trader/trades", tags=["trader"])
+async def api_trader_trades(
+        symbol: str = Query(
+            default="", description="品种/合约代码，如 KQ.m@CFFEX.IF 或 IF2609"),
+        union: bool = Query(
+            default=True, description="合并 simnow+实盘 全部 state.db")):
+    """按品种汇总历史成交统计（账户无关）。
+
+    前端 K 线页「成交统计」面板数据源：已兑现往返的累计净值曲线、
+    实际胜率、平均盈亏比、最大单笔盈亏等。只读打开 state.db，不写库。
+    """
+    try:
+        result = await run_in_threadpool(orch.call_trader_trades, symbol, union)
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"查询成交统计失败: {exc}")
+    return _json_response(result)
+
+
 # ── 路由挂载（单一路由源）────────────────────────────────────────────
 app.include_router(router)
 
