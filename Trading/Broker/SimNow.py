@@ -1340,9 +1340,11 @@ class SimNowBroker(Broker):
         # action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
         #
         # `reject_class`（新增）：本地拦下的拒单（没走到 CTP 回执，因此
-        # 没有 last_msg 可供 classify_ctp_reject 判）也要带类别，否则引擎侧的
-        # "清幻影仓"兜底会因为拿不到类别而永远不触发 —— "平仓前持仓等待超时"正是
-        # 幻影仓的主路径（见 `_submit_close` 的 P0 注释与 D10 的 REJECT_POSITION）。
+        # 没有 last_msg 可供 classify_ctp_reject 判）也要带类别 —— 引擎
+        # `_alert_on_reject` 靠它查 `_REJECT_ALERTS` 决定弹什么告警；拿不到
+        # 类别就只剩 `order_rejected` 流水，前端看不见。
+        # "平仓前持仓等待超时"是「柜台无此仓」的典型路径（见 `_submit_close`
+        # 的 P0 注释与 D10 的 REJECT_POSITION），分类为 position。
         o = Order(
             order_id=self._next_order_id(),
             signal_key=signal_key, symbol=self.state.trade_symbol, side=side,

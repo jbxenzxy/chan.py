@@ -150,8 +150,11 @@ class RealPositionBroker(DryRunBroker):
 class RejectBroker(DryRunBroker):
     """可指定拒单的单号集合（1-based）。
 
-    `reject_class` 写入 Order.meta，供引擎 `_note_close_rejected` 做类别分治
-    （只有 `position` 类才允许清幻影仓）。默认空串 = 未分类。
+    `reject_class` 写入 Order.meta，供引擎 `_alert_on_reject` 按类别升级为告警
+    （`_REJECT_ALERTS`：funds / not_tradable / position / price）。默认空串 =
+    未分类 —— 不命中告警表，只写 `order_rejected` 流水。
+    注：2026-09-17 起「连拒达上限清幻影仓」兜底已删除，引擎不再据
+    `reject_class` 改动簿面：任何类别都只告警、不动仓。
     """
     def __init__(self, spec, params=None, *, reject_calls=(), reject_class=""):
         super().__init__(spec, params)

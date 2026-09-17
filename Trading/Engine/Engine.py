@@ -312,8 +312,8 @@ class TradingEngine(ReconcileMixin):
 
     # ────────────────────────────────────────────────────────────────
     # 启动闸门（收口）—— 共同口径：**宁可启动不了，也不带半新半旧的状态跑**。
-    #   旧状态一旦被新口径解释，错误会一路跑到报单且不可逆（典型是 phantom 清仓：
-    #   簿面清空但实盘仍有仓）。故三道闸门一律 fail-fast：
+    #   旧状态一旦被新口径解释，错误会一路跑到报单且不可逆（典型是对今仓发
+    #   平今 CLOSE → 中金所拒单、离场卡住）。故三道闸门一律 fail-fast：
     #
     #     G1 旧 schema 闸门（本段）    持仓记录带已删除的来源键 / kv 残留旧键 → 拒
     #     G2 run 闸门（_restore_run）  净敞口≠0 却无 run、run 与净敞口方向矛盾 → 拒
@@ -423,8 +423,8 @@ class TradingEngine(ReconcileMixin):
         #                   因为 entry_bar_ts 比 entry_date 更早引入）
         #     entry_at    （墙钟字符串，兜底）
         #   三者全空 = 这条记录**真的不含任何时间信息**，"今仓/昨仓"无从判定 →
-        #   规则 ⑸ 必然判错 → 对今仓发 CLOSE 平今 → CTP 拒单 → 连锁 phantom 清仓
-        #   （簿面清空但实盘仍有仓，不可逆）。此处宁可拒绝启动，也不猜方向。
+        #   规则 ⑸ 必然判错 → 对今仓发 CLOSE 平今 → CTP 拒单（reject_class=
+        #   position）→ 离场卡住、只留 severe 告警。此处宁可拒绝启动，也不猜方向。
         #   注意：这是"真无解"的脏数据，与旧实现把 "" 静默当"昨仓"是两回事 ——
         #   后者让错误一路跑到报单，前者在启动期就把它挡住。
         # ════════════════════════════════════════════════════════════════
@@ -443,7 +443,7 @@ class TradingEngine(ReconcileMixin):
                 "三个时间源全空，无法判定「今仓 / 昨仓」，拒绝启动。\n"
                 "  原因：规则 ⑸ 用 entry_date 决定离场走 LOCK（今仓：反向开仓锁仓）\n"
                 "        还是 CLOSE（昨仓：平仓）。判错会对今仓发平今 CLOSE → 中金所\n"
-                "        拒单 → 连续拒单触发 phantom 清仓（簿面清空但实盘仍有仓）。\n"
+                "        拒单 → 离场卡住并升 severe 告警 ctp_reject_position。\n"
                 "  处理：核对实盘持仓后，删除 Trading/State/state.db 再启动。\n"
                 "  受影响持仓：{}".format(
                     len(unresolved), [p.signal_key for p in unresolved]))

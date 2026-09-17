@@ -8,9 +8,10 @@
       · G1：signal_key → raw_order_id 索引（_finalize 登记）+
         trade_confirmed 用 api.get_order 重新拉**当前**订单，累计
         trade_records 真实成交量判定（不信任 submit 时的 _finalize 判定）。
-      · G2：cancel_pending(signal_key) 撤在途单 + 引擎 _check_close_stuck
-        在 confirmed=False 时先撤单再按真实持仓修正 —— 防「重建 portfolio
-        后挂单又成交」的双重平仓。
+      · G2：cancel_pending(signal_key) 撤在途单 —— 供调用方按真实持仓修正，
+        防「重建 portfolio 后挂单又成交」的双重平仓。
+        （2026-09-17 起引擎主链路不再自动复核卡单：`_check_close_stuck`
+         已删除，`trade_confirmed` / `cancel_pending` 转为工具用途。）
 
 硬性要求（本测试锁死）
     ① simnow.trade_confirmed：
@@ -24,10 +25,8 @@
         · api 不可用 / 无索引 → 0
         · LIVE 单撤掉、FINISHED 单跳过，返回撤单请求数
     ③ simnow._finalize：成功路径登记 signal_key → raw_order_id
-    ④ engine._check_close_stuck G2 集成：
-        · confirmed=False → 先调 cancel_pending；cancelled>0 写
-          close_pending_cancelled 事件，再走 real_position 对账
-        · confirmed=True → 不调 cancel_pending
+    ④ 引擎侧卡单复核已删除（漂移护栏，见 [4]）：引擎无
+        `_check_close_stuck`，主链路不再调 cancel_pending。
         · broker 无 cancel_pending → 不炸，走原 F1 逻辑
     ⑤ base.cancel_pending 默认 0；dry_run 继承（同步撮合无在途单）
 
@@ -305,10 +304,7 @@ check("3.4 meta.intent 记录 close", o.meta.get("intent"), "close")
 
 
 # ════════════════════════════════════════════════════════════════
-# [4] engine._check_close_stuck G2 集成
-# ════════════════════════════════════════════════════════════════
 # [4] 卡单复核已删除（2026-09-17 拍板）—— 漂移护栏
-# ════════════════════════════════════════════════════════════════
 print("── [4] 卡单复核 _check_close_stuck 已整体删除 ──")
 
 

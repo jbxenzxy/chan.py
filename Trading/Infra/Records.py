@@ -318,8 +318,8 @@ class Position:
         """不变量：entry_date 必须能解析出，不得靠"默认空串 + 下游解释"存在。
 
         F4 。此前的实现是 `entry_date: str = ""` + 判定式 `"" < today`
-        恒真 → 空串被**静默解释成"昨仓"** → 对今仓发 CLOSE 平今 → CTP 拒单 →
-        连锁到 phantom 清仓（簿面清空但实盘仍有仓，不可逆）。
+        恒真 → 空串被**静默解释成"昨仓"** → 对今仓发 CLOSE 平今 → CTP 拒单
+        （reject_class=position）→ 离场卡住、只留 severe 告警。
 
         构造期按**权威性递减**依次重建，能算就算，绝不猜：
           ① entry_date 已显式给出 → 原样保留（调用方口径优先）

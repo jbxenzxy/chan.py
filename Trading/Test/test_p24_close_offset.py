@@ -16,8 +16,10 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
          **其他交易所（含中金所）直接用 CLOSE**）。
 
     2. CLOSE 无条件发 "CLOSETODAY"（spec.closetoday_first=True）
-       → 昨仓发平今：中金所无今仓 → CTP 拒单 → 引擎连续失败达 close_max_streak
-         触发 phantom 清仓（真实持仓还在却从引擎簿消失 → 账实不符）；
+       → 昨仓发平今：中金所无今仓 → CTP 拒单（reject_class=position）
+         → 引擎升 severe 告警 `ctp_reject_position`，仓单保留在簿面；
+         （2026-09-17 前是「连拒达 close_max_streak 触发 phantom 清仓」——
+           真实持仓还在却从引擎簿消失 → 账实不符；该兜底已随冷却机制删除）
          若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
        修正（用户拍板）：**删除今/昨仓分支**（原 `_close_offset`）。
          规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
