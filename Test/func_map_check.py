@@ -65,11 +65,11 @@ TARGET_FUNCS = {
     # DataAPI/TdxAPI.py；AppEngine 兼容壳仍转发之）
     "_collect_codes_from_vipdoc": ("DAPI", "✓5 兼容壳 → DataAPI/TdxAPI.collect_codes_from_vipdoc"),
 
-    # ── 消费侧：指标计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：指标计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：周期/日期/代码 工具（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：周期/日期/代码工具（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：缠论结构计算（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：缠论结构计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
     # ── 消费侧：核心分析链 ──
     "_analyze_stock_internal":    ("ORCH_E", "股票分析核心（440 行：拉取→注入→CChan→提取）"),
@@ -83,11 +83,11 @@ TARGET_FUNCS = {
     "_stocks_sub_dt_algo":        ("ORCH_E", "独立下窗截断边界（结束时间语义纯函数）"),
     "_build_sub_kl_times":        ("ORCH_E", "灰框对照表合成（上窗K线→下窗K线时间分桶，双指针）"),
 
-    # ── 获取侧（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）──
+    # ── 获取侧（已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）──
 
-    # ── 扫描（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
+    # ── 扫描（已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
 
-    # ── 公共工具（P1-3：_send_windows_notification 已迁 App/AppScan.py，不再属 AppEngine 映射）──
+    # ── 公共工具（_send_windows_notification 已迁 App/AppScan.py，不再属 AppEngine 映射）──
 
     # ── AppData：名称/PE/归属/市值 缓存族 ──
     "_load_stock_names_from_cache_file": ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
@@ -105,7 +105,7 @@ TARGET_FUNCS = {
 
     # ── AppData：上次代码/周期 + 标注族（阶段 8 瘦身：随功能域迁移删除）──
 
-    # ── DataAPI / 行业映射（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
+    # ── DataAPI / 行业映射（已物理迁入 App/AppScan.py，不再属 AppEngine 映射）──
 
     # ── 配置 ──
     # _verify_config_consistency 已随 my_chan_main 下线（阶段 10.1 删除）
@@ -126,27 +126,27 @@ TARGET_STATES = {
     # 由 test_phase4_guards 的 _FORBIDDEN_PATH_ALIASES 守卫「不得复活」。
     "SAVED_POINT_COLUMNS":     ("CFG", "选点表列定义（= App/AppData.SAVED_POINT_COLUMNS 同值别名）"),
 
-    # 统一日志（P0-3：App/AppLog.py 框架，全项目共享）
+    # 统一日志（App/AppLog.py 框架，全项目共享）
     "log":                     ("ORCH_C", "统一日志 logger（P0-3 App/AppLog.py；get_logger(__name__)）"),
 
     # 业务缓存 → ✓4 已收敛：别名 = app_data 实例字段（共享同一对象，身份校验见 phase4 守护）
     # P3：_pe_ttm_cache / _index_belong_cache / _saved_point_times /
     # _stock_names_cache（AppEngine 侧）四条死别名已删除——它们指向**共享
     # 可变容器**却零引用，留着就是「绕开锁直接全表遍历」的现成入口
-    # （指导书 §8.3 形态②）。注释保留，防止有人照旧条目加回。
+    # （指导书形态②）。注释保留，防止有人照旧条目加回。
     "_stocks_analysis_cache": ("DATA", "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）"),
-    # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有，期货缓存仅经 app_data.futures_cache_*）
+    # _futures_analysis_cache 死别名已删除（AppEngine 不再持有，期货缓存仅经 app_data.futures_cache_*）
     "_stocks_cache_lock":  ("DATA", "✓4 缓存锁（= app_data._stocks_cache_lock）"),
 
-    # 获取侧状态（P0-1a 已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）
+    # 获取侧状态（已物理迁入 App/AppRefresh.py，不再属 AppEngine 映射）
 
-    # 扫描状态（P0-1b 已物理迁入 App/AppScan.py，不再属 AppEngine 映射）
+    # 扫描状态（已物理迁入 App/AppScan.py，不再属 AppEngine 映射）
 
     # 消费侧常量
     "FREQ_TO_COL":     ("ORCH_E", "freq→选点列（6 读）→ 消费侧常量"),
     "_SUB_FREQ_MAP":   ("ORCH_E", "子级别映射（2 读）"),
     # INTRADAY_FREQS / SUBSECOND_FREQS / _FREQ_SEC_TO_KL / _FUTURES_DUAL_FREQ_MAP
-    # （P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
+    # （已物理迁入 App/utils.py，不再属 AppEngine 映射）
     "STOCKS_LOOKBACK_CONFIG": ("ORCH_E", "股票K线回看条数配置（→ ChanConfig/参数化）"),
     "FULL_DATA_MODE":  ("ORCH_E", "全量模式开关（→ ChanConfig）"),
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),
@@ -166,7 +166,7 @@ TARGET_STATES = {
     "engine_section":       ("RETIRE", "✓2026-08 已删除：随 _ENGINE_LOCK 一并移除"),
     "_scan_lock":           ("RETIRE", "✓2026-08 已删除：API 进程无调用，worker 内不竞争"),
 
-    # SSE 调试旗（P0-1c 已物理迁入 App/utils.py，不再属 AppEngine 映射）
+    # SSE 调试旗（已物理迁入 App/utils.py，不再属 AppEngine 映射）
 
     # 启动基础设施（活状态，P2 由 RETIRE 更正为活登记）
     "SCRIPT_DIR":    ("CFG", "引擎目录 sys.path 引导（AppEngine 顶部 import 前置），活状态"),

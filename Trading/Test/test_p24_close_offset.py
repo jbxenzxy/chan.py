@@ -19,11 +19,11 @@ P24 平仓 offset 定稿 + 离场方式按日期判定 单元测试（2026-09-10
        → 昨仓发平今：中金所无今仓 → CTP 拒单 → 引擎连续失败达 close_max_streak
          触发 phantom 清仓（真实持仓还在却从引擎簿消失 → 账实不符）；
          若账户恰有同向今仓 → 平错持仓；即便成交也按 0.0345% 平今费率计费。
-       修正（2026-09-10 用户拍板）：**删除今/昨仓分支**（原 `_close_offset`）。
+       修正（用户拍板）：**删除今/昨仓分支**（原 `_close_offset`）。
          规则 ⑸ 定稿为"今日单离场 = LOCK 反向开仓（offset=OPEN）"、
          "跨日单离场 = CLOSE 平昨（offset=CLOSE）"，故 CLOSE 恒为平昨。
-        Phase 10（D6 平今开关，2026-09-14）：CLOSETODAY **不再是不可达** ——
-         P-A（2026-09-15）先由档案费率派生；**2026-09-16 起改为品种执行策略表
+        （D6 平今开关）：CLOSETODAY **不再是不可达** ——
+         先由档案费率派生；** 起改为品种执行策略表
          第 1 列直接给定**（`EXEC_POLICY[code].close_mode == CLOSETODAY`）：
          代码只读表，不看交易所名字、不算费率。命中该列时转移 ④ 生成
          CLOSETODAY 意图（offset=CLOSETODAY，目标恒为今仓）。本文件的
@@ -242,7 +242,7 @@ from Trading.Strategy.Exit import LayeredExitPolicy       # noqa: E402
 
 
 def mk_pos(side=Side.LONG, entry_date=_TODAY, vol=2):
-    """新口径：Position **不再有** origin / lock_pair_id（Phase 1-4 已删）。"""
+    """新口径：Position **不再有** origin / lock_pair_id（已删）。"""
     return Position(symbol="CFFEX.IF2609", side=side, volume=vol,
                     entry_price=4000.0, entry_at="", entry_bar_ts=0,
                     signal_key="k", open_order_id="o",
@@ -253,7 +253,7 @@ def mk_pos(side=Side.LONG, entry_date=_TODAY, vol=2):
 def mk_engine(tmp, book):
     """建引擎后在**构造之后**灌簿 —— 避免触发 G2「有敞口无 run → 拒绝启动」。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     cfg.exit_params.use_atr = False
     eng = TradingEngine(
         cfg, DryRunBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0}),

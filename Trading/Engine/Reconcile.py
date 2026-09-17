@@ -31,11 +31,11 @@ class ReconcileMixin:
         self._reconcile_positions()
 
     def _reconcile_positions(self, source: str = "on_bar") -> None:
-        """【E3.3 + Phase F2】多仓对账——每侧（LONG/SHORT）独立与券商真实持仓比对。
+        """【E3.3 + 】多仓对账——每侧（LONG/SHORT）独立与券商真实持仓比对。
 
         触发场景：
           · on_bar（默认）：用户在快期3等外部终端手工平仓 / 幽灵持仓 / 账户被改
-          · restore（Phase F2 新增）：引擎启动 _restore 后立刻拉一次真实持仓，
+          · restore（新增）：引擎启动 _restore 后立刻拉一次真实持仓，
             防止"本地 store 有持仓但真实账户已平"造成重启后第一根 bar 误判
           · close_stuck：CLOSE 卡单 N bars 后复核走这里
 
@@ -83,7 +83,7 @@ class ReconcileMixin:
             try:
                 real_vol = fn(side)
             except Exception as e:
-                # Phase F2：source="restore" 时 broker.real_position 异常 → 写告警事件
+                # source="restore" 时 broker.real_position 异常 → 写告警事件
                 # 让 _restore 的外层 try/except 也能感知（便于审计/告警）
                 if source == "restore":
                     self.ev.write("restore_reconcile_failed",
@@ -105,13 +105,13 @@ class ReconcileMixin:
             all_cleared = False
         if all_cleared:
             # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
-            # （2026-09-12：原 `_last_close_failed_bar_ts = 0` 是旧 ts 口径冷却的
+            # （原 `_last_close_failed_bar_ts = 0` 是旧 ts 口径冷却的
             #  漏迁死代码 —— 全仓仅此一处赋值，无声明、无读取方，已删。）
             self._last_close_failed_bar_seq = 0
             self._persist()
             self._sync_state()
         # ══════════════════════════════════════════════════════════════
-        # Phase 5 G4：对账把净敞口判成 0 时，同步结束 run。
+        # G4：对账把净敞口判成 0 时，同步结束 run。
         #   典型场景：用户在快期3手工平掉一侧 / 幽灵仓被清除 → 引擎簿被清空
         #   → 净敞口归 0，但 `_run_plan` 还挂在进程里。不收口有两个后果：
         #     ① L1-L3 继续拿一个"没有对应敞口"的风控锚判定，并在 `_run_view`
@@ -126,7 +126,7 @@ class ReconcileMixin:
                           net_volume=self.positions.net_volume(),
                           run_side=str(self._run_side), source=source,
                           note="对账后净敞口归零，同步结束 run，避免孤儿风控锚被持久化")
-            # 2026-09-12：按文档 §5.5「配套改动」改用 `_run_reset`（清字段、不写
+            # 按文档「配套改动」改用 `_run_reset`（清字段、不写
             # 事件）—— 对账清仓没有"一段 run 正常结束"的语义，再写一条 `run_end`
             # 会让运维侧误以为真发生了一次离场（原实现是 `run_ended_by_reconcile`
             # + `run_end` 双事件）。上面那条事件已足够表达"被对账收口"。
@@ -134,7 +134,7 @@ class ReconcileMixin:
             self._persist()
             self._sync_state()
         # ══════════════════════════════════════════════════════════════
-        # Phase 5 G4 的**反向边**（2026-09-12 补）：对账只清掉**一侧**时，
+        # G4 的**反向边**（补）：对账只清掉**一侧**时，
         # 净敞口会从 0 变成非 0（另一侧留下来变成裸奔敞口）。这一段必须在
         # 上面的 if 块**之外**无条件执行 —— 上面的块只在"净敞口归零"时成立。
         #   不补这条边的后果（实测）：`_run_start` 只在 `_execute` 成交时调用，
@@ -145,7 +145,7 @@ class ReconcileMixin:
 
     def _reconcile_side(self, side: Side, side_positions: List[Position],
                         engine_vol: int, real_vol: int, source: str) -> bool:
-        """【Phase F2】单侧对账（与 _reconcile_positions 解耦）。
+        """【】单侧对账（与 _reconcile_positions 解耦）。
 
         返回 True 表示该侧已全部清空（real_vol == 0）。
         返回 False 表示：一致 / 部分平后仍有残留 / 告警不接管。
@@ -195,20 +195,20 @@ class ReconcileMixin:
             # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供 trade 记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)
             gross = pos.pnl_points(ref_price)
-            # 2026-09-10：成本口径与 Engine 的 hard-exit 路径对齐（规则 ⑸）。
+            # 成本口径与 Engine 的 hard-exit 路径对齐（规则 ⑸）。
             #   原写法直接传全局开关 self.state.closetoday_first（默认 True）→ 恒按
             #   "平今"费率（0.0345%）计，对**跨日单**高估 15 倍；而 Engine.py 那边
             #   是按 entry_date 动态判定 —— 两处成本口径不一致。现改为与 Engine 同源。
-            #   2026-09-10 二次修正：today 也统一走 engine._current_trading_day()
+            #   二次修正：today 也统一走 engine._current_trading_day()
             #   （交易日口径，含夜盘归属次日），不再自行解析 last_bar.date 自然日 ——
             #   否则夜盘品种上会和 Engine 的判定差一天，成本口径再次分叉。
             _today = self._current_trading_day(self.last_bar)
             _is_today_pos = pos.entry_date >= _today
-            # P-A（2026-09-15）：成本改读**品种档案 Fee 两档**（元口径，state 提供
+            # 成本改读**品种档案 Fee 两档**（元口径，state 提供
             #   有效乘数），与 Engine._book_close 同源；closetoday_first 留 spec。
             #   净值 = 毛利（点）× 有效乘数 × 手数 − 成本（元），全程元口径。
             #
-            # A 批 ⑶-b（2026-09-16）：档案来源 = `self.state.product`（唯一运行时
+            # 档案来源 = `self.state.product`（唯一运行时
             #   对象），不再读 `cfg.product_profile`（**实时**按 cfg 的 symbol 查表）
             #   —— 与 `Engine._book_close` 同源；且 `cost_cash` 已去掉 product 入参，
             #   结构上不可能出现"按 A 品种决策、按 B 品种记账"。
@@ -229,7 +229,7 @@ class ReconcileMixin:
                 signal_key=pos.signal_key, exit_plan_name=pos.exit_plan.name,
                 exit_plan_params=pos.exit_plan.params)
             self.store.save_trade(t)
-            # （2026-09-08：原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
+            # （原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
 
             self.positions.remove(pos)
             self.ev.write("position_externally_closed",
@@ -263,7 +263,7 @@ class ReconcileMixin:
         return real_vol == 0
 
     # ════════════════════════════════════════════════════════════════
-    # CLOSE 卡单监控（原 UNLOCK 卡单监控，2026-09-11 随 UNLOCK 概念改名）
+    # CLOSE 卡单监控（原 UNLOCK 卡单监控，随 UNLOCK 概念改名）
     #   on_bar 入口每根 bar 调一次 _check_close_stuck(bar)
     #   · _close_in_flight 为空 → skip（无卡单监控中）
     #   · bars_elapsed < _close_stuck_bars → skip（窗口期内不打扰）

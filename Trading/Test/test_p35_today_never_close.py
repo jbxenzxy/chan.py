@@ -2,7 +2,7 @@
 """
 P35 「今日单永不 CLOSE」（硬约束 · 契约测试，2026-09-11）
 =========================================================
-背景（文档 §5.8.5 行 14 / 不变量 6 / 引擎 _pre_trade_check 注释）
+背景（文档行 14 / 不变量 6 / 引擎 _pre_trade_check 注释）
 --------------------------------------------------------------------
 中金所没有平今指令：对**今仓**发 CLOSE 会被交易所当平昨处理，并按**平今费率**
 （0.0345%，是平昨的 15 倍）收费；上期所 / 能源中心则需要 CLOSETODAY 才平今。
@@ -105,7 +105,7 @@ def tmp_dir(tag):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False,
                                  "use_trailing": False})
     return TradingConfig.from_dict(base)

@@ -20,14 +20,14 @@ CI / 迁移每阶段的验收门禁）。
                                                      SSE 双实现/分层方向
  10. 阶段 4 成果防护   test_phase4_guards.py        委托壳+目标存在/状态别名同一性/
                                                      配置别名清零/自选股收敛/语义子窗/
-                                                     分层方向/LRU 语义/数据源 import 门禁(P1-1)
+                                                     分层方向/LRU 语义/数据源 import 门禁
  11. 市场量能行为测试  test_app_amo.py               真行为测试（合成 .day 合成数据）
  12. 双窗公式纯函数    test_stocks_dual_algo.py      P0 4 向公式单测（方向×边界）
  13. .blk 解析与自选股  test_blk_parsing.py          黄金行为（对齐 DoubleOptimize）/
                                                      双解析器一致性/缺失文件/自选股链路/
                                                      扫描消费兼容/防 tdx_blk 回归/
                                                      成分股/板块指数2·3/多来源合并
- 14. SSE 增量快照      test_sse_incremental.py       P2-4：增量 klines/MACD ≡ 全量 /
+ 14. SSE 增量快照 test_sse_incremental.py：增量 klines/MACD ≡ 全量 /
                                                      快照同构/状态缺失回退
  15. SSE 灰度比对      test_sse_gray.py              3b-1：native vs 冻结基线
                                                      （①类型序列 ②剥离时间戳结构 ③总数）
@@ -40,14 +40,14 @@ CI / 迁移每阶段的验收门禁）。
  18. 阶段 7 成果防护   test_phase7_guards.py         批量扫描异步化：ScanStore 分层缓存/
                                                      ScanPool ProcessPool 编排/AppOrch 薄封装/
                                                      双路径 API/前端三模式接入/依赖方向
- 19. API 集成测试      test_api_integration.py       P2-2①：TestClient 起 app 打核心端点/
+ 19. API 集成测试 test_api_integration.py ①：TestClient 起 app 打核心端点/
                                                      健康检查/搜索/扫描守卫/领域异常映射
  20. 代码输入链路守护  test_code_resolution_guards.py 沪深重名消歧/大小写契约/搜索双市场候选/
                                                      search 与引擎同源兜底
- 21. SSE 多连接并发    test_sse_concurrent.py        P2-2②：8 连接并发隔离/事件序列一致
- 22. 扫描池失败收敛  test_scanpool_fallback.py     P2-2③：装配/派发失败收敛为任务
+ 21. SSE 多连接并发 test_sse_concurrent.py ②：8 连接并发隔离/事件序列一致
+ 22. 扫描池失败收敛 test_scanpool_fallback.py ③：装配/派发失败收敛为任务
                                                      error + 坏池自愈（无线程降级）
- 23. 前端 JS 冒烟      test_frontend_smoke.py        P2-2④：HTML 骨架/JS 语法/组件注册/事件引用
+ 23. 前端 JS 冒烟 test_frontend_smoke.py ④：HTML 骨架/JS 语法/组件注册/事件引用
  24. 锁 v5 守护        test_lock_v5_guards.py        2026-08 锁收敛：线程局部注入隔离 /
                                                      复盘标志线程局部 / AppData 锁覆盖 /
                                                      原子写 / 已删符号防回潮
@@ -57,7 +57,7 @@ CI / 迁移每阶段的验收门禁）。
                                                      线程局部注入隔离（非空测试的自检）
  27. 锁覆盖完整性      test_lock_completeness.py      三形态静态扫描：实例字段 / 模块级
                                                      别名 / 跨模块守卫方法 + 扫描器自证
-29. 扫描候选归一化  test_scan_pageindex_normalize.py   审计 X3 候选路径 page_index 板块
+29. 扫描候选归一化 test_scan_pageindex_normalize.py 候选路径 page_index 板块
                                                      代码须在进入成分取数层前归一化
                                                      （spy + 会话 + 静态回潮三防）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
@@ -138,11 +138,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_scanpool_fallback.py")]),
     ("frontend_smoke",
      [sys.executable, os.path.join("Test", "test_frontend_smoke.py")]),
-    # 2026-08-31 补注册：此前 lock_completeness **从未进入过回归套件**——
+    # 补注册：此前 lock_completeness **从未进入过回归套件**——
     # 它扫得出问题，但没人跑它，等于没有（审计发现的覆盖面盲区之一）。
     ("lock_completeness",
      [sys.executable, os.path.join("Test", "test_lock_completeness.py")]),
-    # ── 2026-09-01 补注册（审计 v1.3 §四 守护覆盖面补齐）──────────────
+    # ──补注册（守护覆盖面补齐）──────────────
     # 这三个用例此前**写完却没进门禁**——与 lock_completeness 同款盲区：
     # 扫得出问题，但没人跑它，等于没有。三者当前均为「通过」态，可直接
     # 接入 CI；语义与门禁一致（失败非 0 退出）。
@@ -152,11 +152,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_user_store_rmw.py")]),
     ("repro_n3_scan_leak",
      [sys.executable, os.path.join("Test", "repro_n3_scan_session_leak.py")]),
-    # ── 2026-09-01 补注册 · P1 优先级三条守护（审计 v1.3 §四 缺口）────
+    # ──补注册 · P1 优先级三条守护（缺口）────
     # 这三条都经「变异测试」验证过有效性：把各自防范的缺陷人为塞回去后
     # 均会变红（G11 摘守卫→5 红、G5 丢文件锁→红、G1 去 LRU 上限→2 红），
     # 不是「跑得绿但拦不住」的摆设用例。
-    #   G11 期货清理作用域 —— X1（P0 历史缺陷）此前**零回归拦截**，
+    #   G11 期货清理作用域 ——（P0 历史缺陷）此前**零回归拦截**，
     #       守卫一旦被删，一页期转股掐断所有期货页而 CI 全绿。
     #   G5  zxg.blk 并发写盘 —— 登记表写的「进程锁 + OS 文件锁叠加」
     #       从未被验证过；其中**跨进程**维度更是零测试。

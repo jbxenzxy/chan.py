@@ -16,7 +16,7 @@ K 线闭合判定（bar_mode）
     只有"上一帧没有、这一帧出现"的 key 才发。信号消失后再次出现会重新发一次，
     引擎侧的 store 会判定为重复并记录 signal_dup 事件——这正是重绘率的观测点。
 
-信号新鲜度过滤（2026-09-08 改为 K 线位置口径，取代原 signal_max_age_minutes）
+信号新鲜度过滤（改为 K 线位置口径，取代原 signal_max_age_minutes）
     chan.py 的 SSE 是「累计推」语义：每次新连接都会把当前已存在的所有 bsp 一起推过来。
     网关首次启动会收到一大批历史信号（几天前的）。每个买卖点信号的 timestamp = 它
     所在分型右肩 K 的时间戳；快照最后一根 K 即「当前最新 K」。这里按
@@ -137,7 +137,7 @@ class SseSource(Source):
         kl = payload.get("klines") or []
         latest_bar_ts = int(kl[-1].get("timestamp") or 0) if kl else 0  # 快照最新K(ms)
         for b in payload.get("bsps") or []:
-            # F3（2026-09-10）：Signal.from_bsp 对缺 date/timestamp 的 bsp 抛 ValueError
+            # F3：Signal.from_bsp 对缺 date/timestamp 的 bsp 抛 ValueError
             #   （否则幂等键退化成 '|1|B'，同类信号互相去重丢弃）。这里逐条捕获：
             #   丢弃坏条目 + 告警，**不向上冒泡** —— 冒泡会被 events() 的重连兜底
             #   当成连接故障，导致反复断线重连（一个坏 bsp 拖垮整条流）。

@@ -4,10 +4,10 @@
 =====================================================
 本模块是 Trading 侧所有「时钟 / 时间戳单位 / 交易日归属」语义的唯一事实源。
 
-内容（2026-09-15 P-C 改名拆分 · Infra划分治理 §5.1）：
+内容（2026-09-15 P-C 改名拆分 · Infra划分治理）：
   · 墙钟：now_cn / now_ms（CN_TZ 北京时间）
   · 交易日归属：trading_day_of_ms / trading_day_from_clock / date_of_ms
-    （夜盘归属次一交易日，规则 ⑸ 的权威口径，SSOT 2026-09-10 立）
+    （夜盘归属次一交易日，规则 ⑸ 的权威口径，SSOT 立）
   · 时间戳单位嗅探：ts_scale / norm_delta_sec / parse_hhmmss + 两阈值常量
     （原 Period.py 的时间工具，P-C 搭车迁入）
   · 交易日墙钟近似：SESSION_SECS（仅展示/粗算，原 Period.py）
@@ -22,7 +22,7 @@ from typing import Any, Optional
 
 CN_TZ = timezone(timedelta(hours=8))
 
-# ── 建仓日 / 交易日（SSOT，2026-09-10 立）─────────────────────────────
+# ── 建仓日 / 交易日（SSOT，立）─────────────────────────────
 # 规则 ⑸「今仓 → 反向开仓锁仓 / 昨仓 → 平仓」以及平今•平昨费率口径，
 # 全部只认 trading_day_of_ms() 一个函数。权威输入是**毫秒时间戳**
 # （bar.timestamp / Signal.timestamp），不是格式化字符串 —— 字符串是展示产物，

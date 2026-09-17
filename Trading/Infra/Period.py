@@ -4,9 +4,9 @@
 ===================================
 本模块是「周期轴」的唯一登记处：freq → 秒 的单一事实源 + 4 个周期的档案。
 
-⚠️ 周期特有参数当前为空（诚实答案，2026-09-15 P-C 改名时重申 · §5.2）：
+⚠️ 周期特有参数当前为空（诚实答案，2026-09-15 P-C 改名时重申）：
   周期相关的行为参数（max_hold_bars / eod_lead_bars / session_end_hhmm /
-  max_trades_per_day / signal_max_age_minutes 等）已于 2026-09-08 删除；
+  max_trades_per_day / signal_max_age_minutes 等）删除；
   止盈止损等盈利参数**不随周期变、随品种变**，归口在 Infra/Product.py。
   **若未来周期行为参数回归，家在这里。**
   本模块的价值不在「装参数」，而在两件事：
@@ -17,7 +17,7 @@
        这条护栏是跨仓一致性的唯一保险，删不掉。
 
 时间语义工具（ts_scale / norm_delta_sec / parse_hhmmss / 两阈值常量 /
-SESSION_SECS）已于 2026-09-15 P-C 迁往 Infra/Clock.py，本模块不再定义。
+SESSION_SECS） P-C 迁往 Infra/Clock.py，本模块不再定义。
 
 角色定位（2026-09-14 双轴声明）：本档案按**变异维度（随周期变）**分区，
 是领域注册表（凭经验标定的代码资产，git 评审 + 对账测试守护），
@@ -95,8 +95,8 @@ def bars_per_day(bar_secs: Optional[int], session_secs: float) -> Optional[int]:
 class Period:
     """一个 K 线周期的时间语义设定（freq / bar_secs）。
 
-    Step 1（2026-09-08）只装时间语义——目标是"任何周期能正确跑通"。
-    2026-09-08 精简：原 L4 时间/收盘兜底（max_hold_bars / max_hold_seconds /
+    Step 1 只装时间语义——目标是"任何周期能正确跑通"。
+    精简：原 L4 时间/收盘兜底（max_hold_bars / max_hold_seconds /
       eod_lead_bars / session_end_hhmm）、风控五道硬闸门（max_trades_per_day）
       以及 signal_max_age_minutes（改为 K 线相对容差 signal_k_tol_bars，非周期敏感、
       不再放本档案）随功能一并删除。

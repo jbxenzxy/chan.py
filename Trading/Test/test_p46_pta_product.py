@@ -13,13 +13,13 @@ P46 郑商所 PTA 品种档案 + 未标定品种轻提示 契约测试
 本测试锁死的断言：
   [1] parse_product：KQ.m@CZCE.TA → TA（PTA 是俗名，符号代码是 TA）
   [2] PRODUCT_PROFILES 含 TA 且 multiplier/price_tick 为合约真值（5 吨/手、tick 2）
-  [3] TradingConfig 品种档案（Fix A；Phase 3 起为**显式播种**）：TA 的
+  [3] TradingConfig 品种档案（为**显式播种**）：TA 的
       multiplier / price_tick 经 main._seed_instrument() 播种；r_multiple_tp 经
-      resolved_exit_params() 合并（min_r_points 已于 2026-09-14 删除）
+      resolved_exit_params() 合并（min_r_points 删除）
   [4] TA 的报单语义：表第 2 列 → effective_order_advanced() 返回 FAK、
       表第 3 列 → _open_volume() = 1 手 —— 报单属性由表给，不看 exchange 名字
   [5] 品种白名单硬约束：未知品种（ZZ）构造引擎即抛 ValueError 拒绝启动
-      （2026-09-13 拍板：不在白名单不允许启动，无需告警）；已知品种正常启动
+      （拍板：不在白名单不允许启动，无需告警）；已知品种正常启动
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p46_pta_product.py
@@ -73,9 +73,9 @@ _FAIL = 0
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置（P-B：tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
+    """构造配置（tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
 
-    Phase 3 的"显式播种"（main._seed_instrument）已随 P-B 删除：Instrument
+    的"显式播种"（main._seed_instrument）已随删除：Instrument
     有效值初值在**构造时**直接取 Product（档案→运行时单向取值）。
     本 helper 保留名字只为改动最小。
     """
@@ -106,7 +106,7 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol):
-    """构造引擎：cfg 按 signal_symbol 生成（P-B：播种桥已删，Instrument
+    """构造引擎：cfg 按 signal_symbol 生成（播种桥已删，Instrument
     构造时直接取 cfg.product_profile 档案 —— 与 main.py 启动次序一致）。
     """
     cfg = seeded(signal_symbol)
@@ -171,7 +171,7 @@ def main():
         eng_ta = build_engine(td, "KQ.m@CZCE.TA")
         check("TA _open_volume()=1（表第 3 列 = 1 笔 1 手）",
               eng_ta._open_volume(), 1)
-        # 2026-09-16 B 批：原「配错交易所(SHFE) 仍按表」用 `_dc_replace(…, exchange=…)`
+        # 原「配错交易所(SHFE) 仍按表」用 `_dc_replace(…, exchange=…)`
         #   现场注入表达；`Product.exchange` 字段删除后这一步在结构上无法表达
         #   （没有能填错的地方），故断言升级为"档案上确实不再有该字段"。
         check("★ 8 档均无 exchange 字段（配错交易所已无法表达，2026-09-16 B 批）",

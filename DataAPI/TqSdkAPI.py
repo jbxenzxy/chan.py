@@ -26,7 +26,7 @@ from Common.CEnum import FREQ_SEC_MAP
 
 log = logging.getLogger(__name__)
 
-# ── 当前线程会话（P0-1 修复：缓存实例化到各连接会话）────────────
+# ── 当前线程会话（修复：缓存实例化到各连接会话）────────────
 # CChan 内部经 data_src="custom:TqSdkAPI.CTqSdkAPI" 自行实例化数据源
 # （code/k_type 等构造参数由引擎传入），无法直接注入会话。SSE 生成器
 # 为同步单线程（StreamingResponse 线程池），故用线程局部保存「本线程当前
@@ -147,7 +147,7 @@ def load_tq_account(config_dir):
 # 支持用户直接输入短名称（如 PTA、IF、rb、TA 等），自动映射到完整的主连代码
 #
 # ⚠️ 本表 = **"能看行情"的范围**（输入能否解析出一个合约代码），**不等于"能自动下单"的范围**。
-#   2026-09-14 用户拍板（详见 Docs/自动下单重构-分析与实施计划v2.0.md 附录 D.8）：
+#   用户拍板（详见 Docs/自动下单重构-分析与实施计划v2.0.md 附录 D.8）：
 #     · 看行情侧**收窄到 16 个品种**（本表）—— 只保留用户关注的这 16 个，
 #       其余品种不再可搜/可看（此前是 83 条「人工累加」的全表，已按用户点名裁掉）；
 #     · 下单侧白名单**保持 8 个**（Trading/Infra/Product.PRODUCT_PROFILES：
@@ -217,7 +217,7 @@ class CTqSdkAPI(CCommonStockApi):
     天勤数据源适配器，继承 CCommonStockApi 实现完整接口。
     缓存键为 "symbol:freq_sec" 格式，同品种不同周期各自独立。
 
-    P0-1 修复：K 线记录缓存由类级全局改为「每连接会话实例级」——
+    修复：K 线记录缓存由类级全局改为「每连接会话实例级」——
     SSE 各连接持有独立 CTqSdkSession，其 _records_by_symbol 即本类
     实例读取的缓存（经线程局部绑定，见 session_context / __init__）。
     类级接口保留作兼容（fetch_kline 等元数据/取数方法不变）。
@@ -256,7 +256,7 @@ class CTqSdkAPI(CCommonStockApi):
     def clear_all_cache(cls):
         """清空全部期货K线缓存（期货切股票时调用）。
 
-        P0-1 修复：缓存已实例化到各连接 CTqSdkSession，类级统一清空改为
+        修复：缓存已实例化到各连接 CTqSdkSession，类级统一清空改为
         遍历活跃会话注册表逐个清空；无活跃会话（纯工具场景）自动无操作。
         """
         from DataAPI.TqSdkCSSESource import _ACTIVE_SOURCES, _ACTIVE_SOURCES_LOCK
@@ -301,7 +301,7 @@ class CTqSdkAPI(CCommonStockApi):
         self.end_date = end_date
         self.end_time = None
         self.autype = autype
-        # P0-1 修复：缓存实例级。SSE 单线程生成器内经 session_context /
+        # 修复：缓存实例级。SSE 单线程生成器内经 session_context /
         # session_set 绑定的会话缓存共享同一份记录；脱离会话（工具脚本/
         # 测试直实例化）回退自有空缓存。
         _session = getattr(_CURRENT_SESSION, "session", None)

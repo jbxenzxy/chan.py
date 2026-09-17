@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Phase G SimNow 真连冒烟脚本（2026-09-05）
+SimNow 真连冒烟脚本
 ==========================================
-验证 Phase G 两条新链路在**真实 SimNow 环境**下不炸、行为符合预期：
+验证两条新链路在**真实 SimNow 环境**下不炸、行为符合预期：
 
     ① simnow.trade_confirmed(CLOSE, signal_key)
        —— 假 signal_key（无索引）必须安全返回 False；真 signal_key 需在
@@ -20,7 +20,7 @@ cancel_pending(假 key) → stats()。**不发任何委托**。
 可选真单验证（自担风险，1 手开平一轮，验证 trade_confirmed 对真单的判定）：
     python Trading/Test/smoke_simnow_phase_g.py --trade
 
-2026-09-13 修正：本脚本此前传 `OrderIntent.UNLOCK`，而该枚举值在 Phase 1
+修正：本脚本此前传 `OrderIntent.UNLOCK`，而该枚举值在
     （类型层瘦身）已删除 → ③ 段必然抛 AttributeError（实测，基线 38/39 的
     唯一失败项）。现改为 `OrderIntent.CLOSE`（CLOSE 是二值 intent 里唯一
     走 `trade_confirmed` 离场复核的那个），并把用法里的 `tests/` 旧路径
@@ -85,7 +85,7 @@ def main() -> int:
     # 配置来自 Trading/Config.py（+ 环境变量/仓库根 .env 覆盖），不再读 config.json。
     # 凭据一律走环境变量：SN_ACCOUNT / SN_PASSWORD / TQ_ACCOUNT / TQ_PASSWORD
     cfg = TradingConfig()
-    # P-B：唯一运行时对象 Instrument（部署配置 + 品种档案）
+    # 唯一运行时对象 Instrument（部署配置 + 品种档案）
     spec = Instrument(cfg.instrument, cfg.product_profile)
     params = cfg.broker_params.model_dump()
     if cfg.broker != "simnow":

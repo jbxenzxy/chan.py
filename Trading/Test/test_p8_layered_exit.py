@@ -63,11 +63,11 @@ def approx(a, b, tol=1e-6):
 
 
 def make_state():
-    """Phase 3（Fix B）：出场策略读的是**运行时状态**（有效 tick + 定价方法）。
+    """出场策略读的是**运行时状态**（有效 tick + 定价方法）。
 
-    Phase 3 拆分后 Engine 传给 exit_policy 的是运行时状态；P-B（2026-09-15）
+    拆分后 Engine 传给 exit_policy 的是运行时状态
     双类合并后它就是 Instrument —— 本测试走同一条路径，避免"测试钉死
-    旧对象"的假绿灯。tick 取 IF 档案真值（P-B 起无播种桥，构造时取档案）。
+    旧对象"的假绿灯。tick 取 IF 档案真值（无播种桥，构造时取档案）。
     """
     return (Instrument(None, _IF))
 
@@ -144,7 +144,7 @@ def main():
 
     print("\n[3b] A 观测告警（2026-09-15 评审补 · 阈值放宽为 A < 3.0）：不改 R 口径，只打 WARNING 抓样本")
     # 口径（用户拍板）：有分型才有买卖点 → 入场时 A 恒 > 0，故 R 不设下限、不兜底。
-    #   但 A 偏小时必须出声：2026-09-15 评审后阈值由 A==0 放宽为 **A < 3.0**
+    #   但 A 偏小时必须出声：评审后阈值由 A==0 放宽为 **A < 3.0**
     #   （= 已删 min_r_points 地板原值），三支文案便于 grep ——
     #   [R 结构距离缺失] / [R 结构距离归零] / [R 结构距离偏小]；另有 [R 归零]（R=0）。
     import logging as _logging
@@ -183,7 +183,7 @@ def main():
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.0), 100.0, state)
     check("A=3.0 正常路径 → 不打告警（阈值严格小于）", _cap.msgs, [])
-    # ④ 阈值放宽后的边界（2026-09-15 评审 · 用户拍板「改为 A < 3.0」）：
+    # ④ 阈值放宽后的边界（评审 · 用户拍板「改为 A < 3.0」）：
     #    A=2.9 → 必须出声；A=3.0 → 必须安静。这两条把"风险窗口 0 < A < 地板"的
     #    内部真正钉住 —— 原实现只测 A=0 这个极端点，区间内部全是盲区。
     _cap.msgs = []
@@ -195,7 +195,7 @@ def main():
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                            fractal_low=97.0), 100.0, state)
     check("A=3.0 == 阈值 → 严格小于，不打告警", _cap.msgs, [])
-    # ⑤ R 归零观测（2026-09-15 评审补 · 用户要求"R=0 加控制台告警"）：
+    # ⑤ R 归零观测（评审补 · 用户要求"R=0 加控制台告警"）：
     #    R > 0 时不得出 [R 归零]（与 [R 结构距离偏小] 严格分开）；R = 0 时必须出。
     _cap.msgs = []
     pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
@@ -236,7 +236,7 @@ def main():
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
     check("保本缓冲 0.5R → 止损=105（入场价之上 0.5R=5）",
           chk6b.plan.stop_price if chk6b else None, 105.0)
-    # 缓冲默认值 = 0.5R 的**行为层钉子**（2026-09-15 评审补 · 用户要求
+    # 缓冲默认值 = 0.5R 的**行为层钉子**（评审补 · 用户要求
     #   "盯死 buffer 为 0.5R，避免后续被改"）：**不显式传 breakeven_buffer_r**，
     #   走 config 单一事实源的默认值，断言落点 = 入场价 + 0.5×R。
     #   配置层默认值另由 [8] 钉住 → 双保险：改默认值这里红，改落点公式这里也红。
@@ -274,7 +274,7 @@ def main():
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
     check("trailing_atr_multiple 默认 = config 1.0", pol12.trailing_atr_multiple, 1.0)
     check("use_trailing 默认 = True（跟踪止盈模式）", pol12.use_trailing, True)
-    # 2026-09-15 评审补 · 用户要求：把"保本缓冲 = 0.5R"钉死，避免后续被顺手改掉。
+    # 评审补 · 用户要求：把"保本缓冲 = 0.5R"钉死，避免后续被顺手改掉。
     #   三层钉子：① 配置层默认值（此处）② 行为层落点（[5]）③ 跨品种 resolved
     #   一致性（test_p45 / p46 / p47 / test_period_profile 已各自断言）。
     check("breakeven_buffer_r 默认 = 0.5（锁定半 R，全局不随品种）",
@@ -326,7 +326,7 @@ def main():
 
     print("\n[12b] L3 触发阈值 = 品种级 r_multiple_tp（IC/IM=3R、IF/IH=2R），"
           "边界精确到 R")
-    # 2026-09-15 评审修：**本节的采样网格改细**。原实现只在 2.5R / 3.5R 两点取样，
+    # 评审修：**本节的采样网格改细**。原实现只在 2.5R / 3.5R 两点取样，
     #   于是"IC 在 3.5R 启动"这个说法其实没被钉住 —— 粗网格（2.5R 未启动 + 3.5R 已启动）
     #   会被读成"阈值在 3.5R"，而代码里的判定是 `fav_profit >= r_multiple_tp × R`，
     #   阈值就是**精确的 3.0R**（3.5R 只是我上一轮探针的采样点，不是语义）。
@@ -423,7 +423,7 @@ def main():
         _mr_err = str(e)
     check("显式写已删除的 min_r_points → 构造期报错（防地板悄悄复活）",
           "min_r_points" in _mr_err, True)
-    # ③ 同理：stop_at_signal_extreme 开关已于 2026-09-15 删除（R 口径唯一 = max(分型, 2×ATR)）
+    # ③ 同理：stop_at_signal_extreme 开关删除（R 口径唯一 = max(分型, 2×ATR)）
     _sse_err = ""
     try:
         LayeredExitPolicy({"stop_at_signal_extreme": False})

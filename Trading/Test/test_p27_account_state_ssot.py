@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-P27 账户三态在调用点的行为契约（Phase 7 重写，2026-09-11）
+P27 账户三态在调用点的行为契约（重写）
 ================================================================
 本文件与 p32 的分工
 -------------------
@@ -112,7 +112,7 @@ def tmp_dir():
 def make_cfg():
     import copy
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
@@ -393,11 +393,11 @@ check_true("[7g] 转移表编号只出现在 _decide_action / _decide_exit",
            set(int(x) for x in re.findall(r"transition=(\d)", _da + _de)),
            {1, 2, 3, 4, 5})
 
-# 对账侧（Phase 5 G4）：净敞口归零必须同步收口 run
+# 对账侧（G4）：净敞口归零必须同步收口 run
 _rec = inspect.getsource(ReconcileMixin._reconcile_positions)
 check_true("[7h] 对账收口读 account_state()", "account_state()" in _rec)
 # 对账收口（2026-09-12 口径对齐）：用 `_run_reset()`（清字段、**不写** `run_end`
-# 事件），与文档 §5.5「配套改动」一致 —— 对账清仓没有"一段 run 正常结束"的语义，
+# 事件），与文档「配套改动」一致 —— 对账清仓没有"一段 run 正常结束"的语义，
 # 再写一条 `run_end` 会让运维侧误以为真发生了一次离场。收口这件事本身由上面的
 # `run_ended_by_reconcile` 事件表达，所以这里断言的是 `_run_reset` 而非 `_run_end`。
 check_true("[7i] 对账收口在同处收口 run（_run_reset，不写 run_end 事件）",

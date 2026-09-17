@@ -8,7 +8,7 @@ G4 · 期货选点/删点 —— 并发守护（对应审计矩阵 G4，P2）
 
   AppData.save_point_time          (写选点，持 _user_store_lock)
   AppData.clear_saved_point_time   (清点，持 _user_store_lock)
-  AppData.get_saved_point_time     (锁内读，审计 P2 收敛后的安全读)
+  AppData.get_saved_point_time (锁内读，收敛后的安全读)
   AppSSE._get_saved_point         (审计点名的**无锁读**，check-then-act 隐患)
 
 守护目标：

@@ -104,7 +104,7 @@ async def lifespan(app):
     #   服务退出后 SSE 源即消失，若不管子进程会无限重连空转成孤儿。
     #   此处 SIGTERM 子进程 → shutdown_and_lock_all（停信号 + 锁全部未锁定
     #   持仓）→ 优雅退出，不在服务退出后留下无人托管的交易进程。
-    #   P2-6：关服务用短超时（30s），别等满默认 150s（撞 uvicorn
+    #   关服务用短超时（30s），别等满默认 150s（撞 uvicorn
     #   graceful-shutdown 阈值会被整服务强杀、连子进程收尾机会都没有）。
     try:
         await run_in_threadpool(orch.call_trader_stop, 30)
@@ -270,7 +270,7 @@ async def api_stocks_analyze(
     # 持久化最近代码/周期（仅非复盘路径持久化；本路由 analyze 到不了期货——
     # analyze_stock 入口对期货代码已明确拒绝，market!="futures" 属历史防御）
     #
-    # 审计 X6（多页语义，非并发缺陷）：这是**进程级单例**，多页浏览不同标
+    # （多页语义，非并发缺陷）：这是**进程级单例**，多页浏览不同标
     # 的时互相覆盖，最终只记住最后 analyze 的那一个。
     #   · 并发安全性：已达标。save_last_code_freq 持 _user_store_lock +
     #     原子落盘，多页同时写不会写坏文件——**不需要再加锁**。
@@ -279,7 +279,7 @@ async def api_stocks_analyze(
     #     的习惯推断，不是本功能的承诺。
     #   · 若要改成"每个标签页各记各的"，正确位置是**前端 localStorage**
     #     （它本来就是标签页级状态），而不是在后端加任何锁或分片——把会话级
-    #     状态放在进程级才是 X6 与 X1/X3 共同的根因（指导书 §0.2 模式 A）。
+    #     状态放在进程级才是共同的根因（指导书模式 A）。
     if not end_date and result.get("meta", {}).get("market") != "futures":
         await run_in_threadpool(orch.save_last_code_freq, code, freq)
 
@@ -362,7 +362,7 @@ async def api_stocks_scan_read_candidates(source: str = Query("zxg"),
     """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）
 
     page_index_code：**本次请求**要用的板块指数代码（成分股来源）。
-    审计 X3：必须随请求传入，不能让后端去读进程级全局——多网页下
+    必须随请求传入，不能让后端去读进程级全局——多网页下
     A 页选沪深300、B 页选中证500 时，读全局会让两页都按最后设置的
     那个扫，静默扫错一整批成分股。
     """
@@ -376,7 +376,7 @@ async def api_stocks_scan_set_index(code: str = Query("")):
     """【已废弃】设置板块指数代码（全局兜底，仅供旧客户端兼容）
 
     新路径：把代码作为 page_index_code 参数传给
-    GET /api/stocks/scan/read/candidates，随请求走、不落全局（审计 X3）。
+    GET /api/stocks/scan/read/candidates，随请求走、不落全局。
     """
     result = await run_in_threadpool(orch.scanner.set_page_index_code, code)
     if "error" in result:
@@ -389,7 +389,7 @@ async def api_stocks_scan_start(page_index_code: str = Query("")):
     """新一轮扫描开始 → {ok, scan_token}
 
     scan_token 是本次扫描的私有上下文标识，后续 end / submit 需带上它，
-    两个页面同时扫描才不会互相覆盖（审计 X3）。
+    两个页面同时扫描才不会互相覆盖。
     """
     result = await run_in_threadpool(orch.scanner.start, page_index_code or None)
     return _json_response(result)
@@ -428,7 +428,7 @@ async def api_stocks_scan_submit(stocks: list = Body(...),
 
     body: {stocks: [{code, prefix, _source}], freq, mode, recent, source, scan_token}
     返回 task_id；进度经 /api/stocks/scan/{task_id}/read/status 轮询。
-    scan_token 用于把收割线程的跳过记录写回发起它的那次扫描（审计 X3）。
+    scan_token 用于把收割线程的跳过记录写回发起它的那次扫描。
     """
     if not stocks:
         return _json_response({"error": "股票列表为空"}, 400)
@@ -551,7 +551,7 @@ async def api_futures_delete_point(symbol: str = Path(...), freq: str = Query("1
 async def api_futures_cleanup():
     """清理期货残留数据（期指切股票时由前端 fire-and-forget 调用）
 
-    【审计 X1 · P0 修复】**不再**调用 close_all()。
+    【· P0 修复】**不再**调用 close_all()。
 
     原实现先 close_all() 关闭**所有**活跃 CTqSdkSession——那是主机级操作，
     一个页面切走期货会把其余所有期货页面的 SSE 流一并掐断，并清空它们的
@@ -796,7 +796,7 @@ app.include_router(router)
 
 
 # ── 静态资源：Frontend/ ──────────────────────────────────────────────
-# P0-4 修复：删除 OUTPUT_DIR 回退分支。AppEngine 无 OUTPUT_DIR（该符号
+# 修复：删除 OUTPUT_DIR 回退分支。AppEngine 无 OUTPUT_DIR（该符号
 # 仅存于历史注释与守护测试），Frontend/ 目录缺失时原回退分支必然抛
 # AttributeError；前端静态资源缺失即部署错误，改为显式 fail fast。
 _frontend_dir = app_config.frontend_dir

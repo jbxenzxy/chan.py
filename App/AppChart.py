@@ -49,7 +49,6 @@ log = get_logger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 # 消费侧：分析引擎
 # ═══════════════════════════════════════════════════════════════════════
-# 【已删除】_ENGINE_LOCK + engine_section
 # 二者是套在 AppEngine._stock_analysis_lock 外的第二层壳（两层护同一段代码）。
 # 根因锁随 CTdxAPI._tdx_data 改为每请求线程局部注入而删除后，外层壳净贡献
 # 归零，一并删除。共享资源的锁现由 AppData 按资源持有（stocks_cache_lock /
@@ -365,7 +364,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     normalized_code = code.strip().upper()
 
     # ── 期货双窗口 ──
-    # 审计 P0-2（残留漏点）：缓存里存的是**活着的 CChan**。futures_cache_get
+    # （残留漏点）：缓存里存的是**活着的 CChan**。futures_cache_get
     # 只在「取指针」这一瞬间持容器锁，随后 `kl_list.bi_list` 的遍历完全在锁外
     # ——写侧（SSE 线程）每根K线 _drain_chan → step_load → do_init 把
     # chan.kl_datas 整条替换成新的空 CKLine_List 再回填，读者可能正落在该空窗。
@@ -402,7 +401,7 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     # 服务重启/双窗重建间隙等异常态不静默回退，交前端提示重开双窗口）。
     if _m._stock_dual_impl() == "independent":
         chan_code = market + normalized_code
-        # 审计 P0-2：缓存里存的是**活着的 CChan**。`stocks_sub_cache_get`
+        # 缓存里存的是**活着的 CChan**。`stocks_sub_cache_get`
         # 只在「取指针」这一瞬间持锁，随后 `kl_list.bi_list` 的遍历完全在
         # 锁外——写侧（分析线程）整条替换缓存条目时，读者可能正遍历到一半。
         # 改为锁内取对象 + 锁内浅拷贝成快照，出锁后再遍历（do_init/整条替换
@@ -522,7 +521,7 @@ def search_stocks(q):
         else:
             other_results.append(item)
 
-    # 审计 P1-2：原直接遍历共享别名 `_m._stock_names_cache`（= app_data._names
+    # 原直接遍历共享别名 `_m._stock_names_cache`（= app_data._names
     # 本体）。刷新线程的 replace_names 是 clear()+update()：
     #   · 条数变化 → 抛「dictionary changed size during iteration」→ /api/search 500；
     #   · 条数**恰好相同** → 绕过 CPython 的 ma_used 检查，不抛异常而
@@ -570,11 +569,11 @@ def search_stocks(q):
     results = results[:10]
 
     # 期货/期指别名搜索（经期货域元数据出口，图表层不直连 CTqSdkAPI）
-    #   2026-09-14 用户拍板「K线图与自动下单解耦」，**推翻**同日早先的
+    #   用户拍板「K线图与自动下单解耦」，**推翻**同日早先的
     #   "限制往前提"：搜索不再做品种过滤，**表内别名全部可搜可看**。
     #   理由：本界面既能看行情也能下单，看行情的范围不该被"能不能下单"的白名单
     #   牵连 —— 两者解耦。因此本函数**不加任何品种过滤**。
-    #   ⚠️ 同日第二轮用户另行点名把表本身**收窄到 16 个品种**
+    #   ⚠️ 同日用户另行点名把表本身**收窄到 16 个品种**
     #   （`TqSdkAPI.FUTURES_ALIASES`，原 83 条）—— 那是**改数据源**，不是在这里过滤：
     #   表里有什么就能搜什么（16 品种），表外的品种搜不到属于预期。
     #   下单侧的品种约束仍在**开启自动下单时**前置提示：
@@ -634,7 +633,7 @@ def load_last_code_freq():
 # ═══════════════════════════════════════════════════════════════════════
 
 def futures_cleanup():
-    """清理期货数据（孤儿清扫；有活跃会话时自动跳过，见审计 X1）
+    """清理期货数据（孤儿清扫；有活跃会话时自动跳过，见）
 
     实现在 App/AppSSE.py，此处为图表交互入口漏斗。
     返回 {"swept": bool, "active_sessions": int}。

@@ -43,7 +43,7 @@ def install_data_source(main_fixture, sub_fixture=None, truncate_to=None):
     main_fixture/sub_fixture: fixtures 文件名；sub 为 None 时保持原函数。
     truncate_to: 若非 None，返回 dt <= truncate_to 的子集（全量截断对照用）。
 
-    P1-1 数据源抽象单轨化：打桩点随引擎层迁移，改打 CTdxAPI.fetch_main_level /
+    数据源抽象单轨化：打桩点随引擎层迁移，改打 CTdxAPI.fetch_main_level /
     fetch_sub_level（CommonStockAPI 适配器类方法），不再打 AppEngine 模块级
     read_main_level_records / read_sub_level_records 符号。
     """
@@ -379,7 +379,7 @@ def _c_multilevel():
 
 @case("multilevel_d_30m_indep")
 def _c_multilevel_indep():
-    """多级别双窗（independent 新基线 · P0-P3）：A/B 开关强制
+    """多级别双窗（independent 新基线）：A/B 开关强制
     independent，下窗独立拉取独立建 CChan（先下后上）：
       · 下窗按「结束时间语义」精确截断（P0）；
       · 灰框 sub_kl_times 后端时间分桶合成（P3 · D2=A）；

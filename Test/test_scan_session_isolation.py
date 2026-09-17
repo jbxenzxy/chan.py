@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""X3 动态守护：两个扫描会话（两标签页）并发互不串参
+"""动态守护：两个扫描会话（两标签页）并发互不串参
 =====================================================================
-背景：审计 v1.3 §四「功能 × 并发安全矩阵」把 **批量扫描** 的多标签页
-安全性押在 X3 会话化（scan_token → _ScanSession）上，但修复当时仅有：
+背景：「功能 × 并发安全矩阵」把 **批量扫描** 的多标签页
+安全性押在会话化（scan_token → _ScanSession）上，但修复当时仅有：
   - 静态/归一化守护 test_scan_pageindex_normalize.py（page_index 归一）
   - 会话 TTL 回归 repro_n3_scan_session_leak.py（弃扫泄漏）
-X3 的**核心承诺**——两个会话并发读写各自状态互不串——没有动态测试。
+的**核心承诺**——两个会话并发读写各自状态互不串——没有动态测试。
 本用例补上（确定性构造 + 并发压测，不依赖调度运气）。
 
-覆盖（对应审计报告 §四 批量扫描行「✅ 多标签页」判定的依据）：
+覆盖（对应审计报告批量扫描行「✅ 多标签页」判定的依据）：
   ① 两会话并发 append/snapshot skip_log —— 记录按 token 归位，零串写
-  ② 会话 page_index_code 互不覆盖（X3 病灶本身：任务级状态曾放进程级）
+  ② 会话 page_index_code 互不覆盖（病灶本身：任务级状态曾放进程级）
   ③ drop 一方不影响另一方（一页关扫描不误伤另一页）
   ④ legacy 兜底指向最近一次会话（旧客户端兼容语义不回潮）
   ⑤ task_token 绑定/反查/回收与会话生命周期一致（收割回写路由正确）
@@ -89,7 +89,7 @@ def test_concurrent_skip_log_isolation():
     _cleanup()
 
 
-# ── ② 会话 page_index_code 互不覆盖（X3 病灶本身）──────────────────
+# ── ② 会话 page_index_code 互不覆盖（病灶本身）──────────────────
 def test_page_index_not_clobbered():
     _cleanup()
     t1, s1 = AppScan.new_scan_session("sh.881101")

@@ -16,11 +16,11 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
 本测试锁死的断言：
   [1] parse_product 大小写归一：小写主连 → 大写品种代码；无点串/缺失 → ""
   [2] TradingConfig 以**前端真实形态**（别名解析后的小写主连）构造时，
-      AU/AG/CU/TA/IF 档案全部命中（Phase 3：经启动路径显式播种后
+      AU/AG/CU/TA/IF 档案全部命中（经启动路径显式播种后
       multiplier/price_tick 落位；回归 ①）
   [3] 白名单硬约束（回归 ②）：未知品种（RB/ZZ）构造引擎抛 ValueError；
       异常 msg 含支持清单与"禁止启动"；已知品种（小写 au 主连）正常启动
-  [4] 【2026-09-14 新增】别名表 ⇔ 前端硬编码表 **同源契约**（防"两表不同源"回潮）：
+  [4] 【新增】别名表 ⇔ 前端硬编码表 **同源契约**（防"两表不同源"回潮）：
       · `TqSdkAPI.FUTURES_ALIASES` = 16 品种 / 17 条别名（用户点名收窄，原 83 条）；
       · `Frontend/app.js` 的 `FUTURES_ALIAS_KEYS` 键集与之一致（逐键比对）；
       · **每个可下单品种（PRODUCT_PROFILES）都必须能在别名表里搜到**
@@ -61,7 +61,7 @@ _FAIL = 0
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置（P-B：播种桥 _seed_instrument 已删，tick/乘数真值源 = 品种档案）。
+    """构造配置（播种桥 _seed_instrument 已删，tick/乘数真值源 = 品种档案）。
 
     Instrument 有效值初值在构造时直接取 Product（档案→运行时单向取值）；
     下方断言改读 product_profile —— 品种解析与档案真值这条链仍被钉死。
@@ -103,7 +103,7 @@ def tmp_dir():
 def build_engine(tmpdir, signal_symbol):
     """构造引擎（与本目录 test_p46 同款最小装配）。未知品种应抛 ValueError。
 
-    Phase 3：品种档案**显式播种**后再建 broker/引擎，与 main.py 启动次序一致。
+    品种档案**显式播种**后再建 broker/引擎，与 main.py 启动次序一致。
     """
     from Trading import Broker  # noqa: F401  # 注册 dry_run broker
     from Trading.Broker.DryRun import DryRunBroker
@@ -175,7 +175,7 @@ def main():
     print("\n[4] 别名表 ⇔ 前端硬编码表 同源契约（16 品种 / 17 别名）")
     from DataAPI.TqSdkAPI import FUTURES_ALIASES
 
-    # 4a 表本身的口径（2026-09-14 第二轮用户点名收窄，原 83 条全表）
+    # 4a 表本身的口径（收窄，原 83 条全表）
     check("别名表条数 = 17", len(FUTURES_ALIASES), 17)
     contracts = sorted({parse_product_key(v) for v in FUTURES_ALIASES.values()})
     check("别名表覆盖品种数 = 16", len(contracts), 16)
@@ -189,7 +189,7 @@ def main():
            "M", "MA", "P", "RB", "SC", "TA"])
 
     # 4b 前端硬编码表必须与后端同源
-    #    （"两表不同源"是 2026-09-14 实测过的真实漏洞：下拉挡得住、回车挡不住 ——
+    #    （"两表不同源"是实测过的真实漏洞：下拉挡得住、回车挡不住 ——
     #      根因就是前端硬编码表与后端别名表各写一份。此断言把两边钉在一起。）
     _app_js = os.path.join(_RROOT, "Frontend", "app.js")
     with open(_app_js, encoding="utf-8") as fh:

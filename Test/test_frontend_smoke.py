@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-P2-2 补测试缺口 ④ —— 前端 JS 冒烟测试
+补测试缺口 ④ —— 前端 JS 冒烟测试
 =====================================================================
 背景：前端为「零构建」原生 JS（Frontend/app.js），无打包器/无类型检查，
 重构（阶段 6 组件化）后缺少「前端可加载、关键入口存在」的冒烟守护。
@@ -13,7 +13,7 @@ P2-2 补测试缺口 ④ —— 前端 JS 冒烟测试
      loadStock / startScanZxg / toggleStats 等）
   ⑤ 事件引用：onclick 内联引用与 window 函数一一对应（防死引用）
 
-注：P1-6 已删除 ChanApp.components 组件注册表（纯写入死结构，仅被本用例
+注：已删除 ChanApp.components 组件注册表（纯写入死结构，仅被本用例
 用正则"确认字符串存在"，实际无任何消费方）及其守护项，④ 不再存在。
 
 运行：python Test/test_frontend_smoke.py [--update]
@@ -51,7 +51,7 @@ REQUIRED_WINDOW_FUNCS = [
     "onInputKeydown", "onInputChange", "clearInput", "showHistory",
 ]
 
-# KLineChart 组件契约方法（阶段 6 组件化对外接口；P1-6 注册表删除后
+# KLineChart 组件契约方法（阶段 6 组件化对外接口；注册表删除后
 # 由 window 绑定面 + ② 渲染管线守护接管，此处仅保留文档）
 
 def test_html_skeleton(failures):
@@ -160,7 +160,7 @@ def test_inline_event_refs(failures):
 def test_chart_action_guards(failures):
     """⑥ N1 防回潮：每个「chartData 全文替换点」都必须受并发守卫保护
 
-    背景：审计 v1.3 遗留缺口 N1 —— 前端并发请求后到响应覆盖先到（图表
+    背景：遗留缺口 N1 —— 前端并发请求后到响应覆盖先到（图表
     「闪回」）。修复按数据源分三类守卫，本用例分别静态断言：
 
       A. HTTP fetch 响应链 —— 请求序号守卫三件套：

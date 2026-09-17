@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Phase F 卡单复核（2026-09-05）
+卡单复核
 =============================
 背景
-    Phase F 解决两类幽灵/错配风险：
+    解决两类幽灵/错配风险：
       · F1：CLOSE 卡单 —— broker.submit 返回 filled 但 CTP 通道异常时真实未成交，
         引擎若直接信 filled 删 portfolio，次日同向信号进来时 has_opposite=False
         走正常开仓路径 → 真实账户持仓仍在 → 错配。
@@ -103,10 +103,10 @@ from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 from dataclasses import replace as _dc_replace  # noqa: E402
 
-# 单笔手数的唯一来源 = 品种执行策略表第 3 列（2026-09-16 起；原 `risk.max_volume`
+# 单笔手数的唯一来源 = 品种执行策略表第 3 列（原 `risk.max_volume`
 # 已删除）。本文件的场景按「一笔 1 手」构造（多笔叠加才是观察对象），故这里直接
 # 改**表值** —— 只把 IF 档案的执行策略第 3 列换成 1，"改表即生效"正是它的口径。
-# ⚠️ 引擎的有效档案来自 `broker.state`（P-B 合并），本文件所有
+# ⚠️ 引擎的有效档案来自 `broker.state`（合并），本文件所有
 #    `Instrument(None, _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
 _IF = _dc_replace(PRODUCT_PROFILES["IF"],
                   exec_policy=_dc_replace(PRODUCT_PROFILES["IF"].exec_policy,
@@ -231,7 +231,7 @@ def make_engine(tmpdir, *, split_positions=1,
                 close_before_session_end=False, broker=None):
     """构造引擎：每笔手数 = 1（= 品种执行策略表第 3 列，见 `_IF` 改写说明）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
+    # 同向笔数上限已在删除（D2）：簿容器不限容量，同向可叠加
 
     spec = Instrument(None, _IF)
     if broker is None:

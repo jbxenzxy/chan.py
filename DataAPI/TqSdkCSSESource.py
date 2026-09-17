@@ -67,7 +67,7 @@ def active_session_count():
     """当前活跃 CTqSdkSession 数（每 SSE 连接一个，进程级共享）
 
     用途：让「期货退出清理」能判断**是否还有别的页面正在看期货**——
-    这是审计 X1 的关键判据。清理动作的作用域不得大于被清理对象的
+    这是的关键判据。清理动作的作用域不得大于被清理对象的
     生命周期归属：会话自有的资源由各生成器 finally 自行回收，全局
     清扫只在**无人持有**时才成立。
     """
@@ -78,7 +78,7 @@ def active_session_count():
 def close_all():
     """关闭所有活跃 CTqSdkSession（幂等）——**仅供 lifespan 服务器退出钩子调用**
 
-    ⚠️【审计 X1 · 作用域纪律】本函数会关闭**所有页面**的会话，属于
+    ⚠️【· 作用域纪律】本函数会关闭**所有页面**的会话，属于
     主机级/进程级操作，**绝不可**由页面级 REST 端点（/api/futures/cleanup）
     调用：一个页面切走期货会连带掐断其余所有期货页面的 SSE 流。
     页面的会话回收由该页 SSE 生成器 finally 自行完成（src.close() →
@@ -228,7 +228,7 @@ class CTqSdkSession(CSSESource):
         self._closed = False    # 关闭旗：wait_update 检测到后抛 CSSESourceClosed 让生成器干净退出
         self._close_lock = threading.Lock()   # 串行化 api.close()（多源并发关闭场景）
         self._api_closed = threading.Event()  # api.close() 完成（生成器线程置位）
-        # P0-1 修复：K 线记录缓存实例级（每连接自包含，不再共享类级全局）。
+        # 修复：K 线记录缓存实例级（每连接自包含，不再共享类级全局）。
         # CTqSdkAPI 实例经线程局部（session_context/session_set）绑定本缓存，
         # CChan step_load 重建数据源时仍读写同一份记录。
         self._records_by_symbol = {}

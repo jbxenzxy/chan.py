@@ -12,14 +12,14 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
         ⑤ 执行层       → （无独立配置模型，状态机/对账行为）
         ⑥ Broker 适配器层 → BrokerConfig
     · 周期只作时间语义（freq → bar_secs），收口在 Infra/Period.py 的
-      FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（r_multiple_tp，Fix A 单源化 + D1
+      FREQ_SEC / PERIOD_PROFILES；品种相关的出场参数（r_multiple_tp，单源化 + D1
       拍板）收口在 Infra/Product.py，品种无关项（breakeven_* / ATR / trailing）
       在本文件 ExitConfig 调；
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
-    · 本文件**不含任何"构造后改字段"的副作用**（Phase 3 · Fix B · 2026-09-14；
-      P-B · 2026-09-15 起配置类 frozen=True）：
-      品种播种机制已消亡（P-B 删 for_product/_seed_instrument）—— tick/乘数/
-      费率的真值源 = 品种档案 Product（exchange 已于 2026-09-16 B 批删除），
+    · 本文件**不含任何"构造后改字段"的副作用**（
+      起配置类 frozen=True）：
+      品种播种机制已消亡（删 for_product/_seed_instrument）—— tick/乘数/
+      费率的真值源 = 品种档案 Product（exchange 删除），
       运行时对象 `Instrument`
       构造时直接取档案初值（见 Infra/Instrument.py）；
       合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
@@ -28,7 +28,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
 
-命名约定（2026-09-08）
+命名约定
 ------------------------------------------------------------------
     · 顶层根配置类 `TradingConfig`（模块由 trade_gateway/ 更名为 Trading/ 后同步改名）。
     · 引擎类 `TradingEngine`（同步改名）。
@@ -37,10 +37,10 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       与六层架构的「每层一个 *Config」约定对齐。字段名 `broker_params` 不变。
     · 凡引用处一律更新；旧名 `Gateway*` / `BrokerConfig` 不再存在于代码中。
 
-策略层（2026-09-08 精简：取消策略选择器抽象）
+策略层（精简：取消策略选择器抽象）
 ------------------------------------------------------------------
     ③ 策略层**没有「策略选择」这一层**。生产环境入场只有一个策略 `EntryPolicy`、
-    出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场，2026-09-08 已删 L4），
+    出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场，已删 L4），
     用户明确不会增加第二种，因此不再需要 `name` 字段、注册表、或 build_*_policy 路由。
 
     配置直接持有参数模型：
@@ -69,7 +69,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
     Infra/Instrument.py 的**部署级配置** `InstrumentConfig`（frozen=True）
       经 `TradingConfig.instrument` 字段挂载，属本配置树的一部分（角色定位见其
       模块 docstring）；同一文件里的 `Instrument`（唯一运行时对象）**不在**本
-      配置树上 —— 它由 main.py 构造并注入 Engine / Broker（P-B · 2026-09-15）。
+      配置树上 —— 它由 main.py 构造并注入 Engine / Broker。
 
 设计约定（与项目主线对齐：根 ChanConfig.py + App/AppConfig.py）
 ------------------------------------------------------------------
@@ -80,7 +80,7 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
             TRADING_SOURCE__FREQ=15s
             TRADING_RISK__DELIVERY_GUARD_DAYS=3
             TRADING_BROKER=dry_run
-        （⚠️ 2026-09-16：示例里**不再**举 `TRADING_RISK__MAX_VOLUME` /
+        （⚠️：示例里**不再**举 `TRADING_RISK__MAX_VOLUME` /
         `TRADING_SIZING__ENABLED` —— 单笔手数旋钮已删（迁品种执行策略表第 3 列）、
         `sizing` 整节更早就删了。拿已删键当示例会教人往配置里写无用行。）
     3. 本文件各模型字段的默认值 —— **默认值的唯一来源，别处不再写第二套**
@@ -119,7 +119,7 @@ from .Infra.Product import PRODUCT_PROFILES, Product, describe_unknown_product, 
 __all__ = [
     # 顶层根配置（横切·基础设施）—— 置于最前，是整个配置树的根
     "TradingConfig", "default_config", "DEFAULT_CONFIG",
-    # 出场参数合并点（Fix A：品种档案 + 品种无关项 → LayeredExitPolicy 完整参数）
+    # 出场参数合并点（品种档案 + 品种无关项 → LayeredExitPolicy 完整参数）
     "resolved_exit_params",
     # 各层 section 模型（按下层顺序声明，见文件内 banner）
     "SourceConfig",
@@ -167,10 +167,10 @@ class TradingConfig(BaseSettings):
     # —— 横切·基础设施三件套 ——
     broker: str = "dry_run"              # dry_run 离线模拟 / simnow 仿真 / live 实盘 CTP
     state_dir: str = "./State"           # 运行时状态目录（state.db / events.jsonl / orders.jsonl）
-    # P-B（2026-09-15）：InstrumentSpec → InstrumentConfig（frozen=True）。
+    # InstrumentSpec → InstrumentConfig（frozen=True）。
     #   旧配置若仍带 price_tick / multiplier / exchange / last_trade_date 键，
     #   构造期 ValueError 并指路（见 InstrumentConfig._REMOVED_KEYS）——
-    #   显式报错而不是静默忽略（交接文档 §7.2）。
+    #   显式报错而不是静默忽略（交接文档）。
     instrument: InstrumentConfig = Field(default_factory=InstrumentConfig)
 
     @classmethod
@@ -194,14 +194,14 @@ class TradingConfig(BaseSettings):
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
-    # ── 品种档案：只读视图（Phase 3 · Fix B · 2026-09-14 起不再有任何注入机制）──
-    # Phase 2 之前这里是一整套"注入"逻辑（model_validator + _apply_product_profile_values
+    # ── 品种档案：只读视图（起不再有任何注入机制）──
+    # 之前这里是一整套"注入"逻辑（model_validator + _apply_product_profile_values
     #   + apply_product_profile，含 model_fields_set 的 user-explicit-wins 判据与
     #   --symbol 换品种的 force 双语义）。它的副作用是：TradingConfig 一构造就会
     #   改写 instrument 的字段 —— 配置对象因此**构造后可变**，且"哪些字段会被改"
     #   只能靠读源码得知。
     #
-    # Phase 3 把整条通道删掉，换成两个显式、无状态的形态：
+    # 把整条通道删掉，换成两个显式、无状态的形态：
     #   · 播种（一次性、构造时）：`InstrumentSpec.for_product(profile, **overrides)`
     #     —— 唯一默认值来源是品种档案；启动路径上看得见地调用（main.py `_seed_instrument`）。
     #   · 读取（随时、只读）：本 property —— 引擎白名单闸门 / resolved_exit_params /
@@ -210,7 +210,7 @@ class TradingConfig(BaseSettings):
     def product_profile(self) -> Optional["Product"]:
         """当前 instrument.signal_symbol 对应的品种档案（只读视图；未知品种返回 None）。
 
-        2026-09-14 评审 P1-1：与播种路径同源用 parse_product_key（剥合约月份），
+        与播种路径同源用 parse_product_key（剥合约月份），
         否则 `--symbol CFFEX.IF2609` 时这里返回 None，而播种那边（改用 key 后）
         能命中 → 「参数播种了但 product_profile 查不到」的自相矛盾状态，
         连带 _check_spec_drift 的漂移校验被静默跳过。
@@ -237,7 +237,7 @@ class SourceConfig(BaseModel):
     speed: float = 0.0                   # replay 每根 K 线间隔秒数（0=尽快）
     bar_mode: str = "confirmed"               # confirmed=只取已闭合 K 线；last=含未闭合
     only_alive: bool = False                  # 只处理存活（未到期）合约
-    # 信号新鲜度过滤 —— K 线位置口径（2026-09-08 取代原 signal_max_age_minutes）：
+    # 信号新鲜度过滤 —— K 线位置口径（取代原 signal_max_age_minutes）：
     #   chan.py SSE 首连会 replay 一批历史 bsp。每个买卖点信号的 timestamp =
     #   它所在分型右肩 K 的时间戳；快照最后一根 K 即「当前最新 K」。
     #   这里按「信号归属K 距最新K 的根数」判新旧：距最新 K > N 根 → 视为历史
@@ -276,17 +276,17 @@ class EntryConfig(BaseModel):
 
 
 class ExitConfig(BaseModel):
-    """出场参数（单一模型，LayeredExitPolicy 即 L1-L3 分层出场，2026-09-08 精简）。
+    """出场参数（单一模型，LayeredExitPolicy 即 L1-L3 分层出场，精简）。
 
     LayeredExitPolicy（L1-L3 分层出场）：L1 R 倍数定基线 → L2 ATR 定宽窄 →
     L3 保本/跟踪锁利。原 L4 时间/收盘兜底已删除（含引擎侧收盘前强平）。
     R 的产生见 Strategy/Exit.py：R = max(A, 2×ATR)，其中
       A = 结构止损（分型极值距离），2×ATR = 波动率止损（自适应下限，无绝对点数地板）。
 
-    （2026-09-08：原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
+    （原独立的 DefaultExitParamsConfig 已并入本模型，统一为单一出场参数模型；
      可选的第二套出场 DefaultExitPolicy 一并删除——生产只用 L1-L3，不再保留无用选择分支。）
 
-    品种相关字段单源化（Fix A · 2026-09-14 · D1 拍板）：r_multiple_tp **不在本模型** —— 它随品种变，
+    品种相关字段单源化（D1 拍板）：r_multiple_tp **不在本模型** —— 它随品种变，
     唯一默认值来源是 Infra/Product.py 的品种档案；.env / 环境变量
     的覆盖能力已放弃（extra=forbid 下带旧键构造直接报错，这是刻意的：
     调参 = 改档案 = git 评审 + 对账测试守护）。组装 LayeredExitPolicy 的
@@ -295,7 +295,7 @@ class ExitConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # ---- L1 R 倍数定基线 ----
-    # 注：2026-09-15 已删除 `stop_at_signal_extreme` 开关。R 的口径唯一：
+    # 注：已删除 `stop_at_signal_extreme` 开关。R 的口径唯一：
     #     R = max(分型极值距离 A, atr_sl_multiple × ATR)（取大，不是二选一）。
     #     信号未携带分型时 fractal ≤ 0（哨兵）→ A = 0 → R 自动退化为 2×ATR，
     #     「只靠 ATR」由数据缺失表达，无需配置项。
@@ -318,7 +318,7 @@ class ExitConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_exit_param_order(self) -> "ExitConfig":
-        """构造期 fail-fast：参数之间的**大小关系**（2026-09-15 评审补，P2）。
+        """构造期 fail-fast：参数之间的**大小关系**（评审补，P2）。
 
         **一条**不变式（违反即直接抛错，绝不带错值进实盘）：
 
@@ -331,7 +331,7 @@ class ExitConfig(BaseModel):
             旧实现用 tick 计量（IF=2 tick=0.4 点），天然越不过 trigger，才一直没暴露。
             trigger=0（关闭保本层）时不校验 —— 那一层根本不跑。
 
-        注：R 本身不设下限（2026-09-15 评审 · 采纳"有分型才有买卖点"的口径，
+        注：R 本身不设下限（评审 · 采纳"有分型才有买卖点"的口径，
         删除 min_r_points 后不再补地板）。可观测性由 LayeredExitPolicy._initial_r()
         的两条 WARNING 负责，不在配置层拦：
           `[R 结构距离*]` —— A < LayeredExitPolicy.r_alert_a_floor
@@ -350,7 +350,7 @@ class ExitConfig(BaseModel):
 
 
 class ExitPolicyParams(ExitConfig):
-    """LayeredExitPolicy 的运行时参数模型（Fix A · 2026-09-14 拆分）。
+    """LayeredExitPolicy 的运行时参数模型（拆分）。
 
     继承 ExitConfig 的品种无关项（ATR / trailing / breakeven_*），另持品种相关参数 r_multiple_tp（它同时是 L3 启动阈值，品种级）。
     r_multiple_tp 的**权威默认值在 Product 档案**（生产路径经 resolved_exit_params()
@@ -364,24 +364,24 @@ class ExitPolicyParams(ExitConfig):
 
 # ════════════════════════════════════════════════════════════════════
 # ④ 风控层（Risk Gate）配置
-#    2026-09-08 二次精简：删除整条"仓位管理（手数定档）"通道（PositionSizing /
+#    二次精简：删除整条"仓位管理（手数定档）"通道（PositionSizing /
 #      SizingConfig）。
 #    已删除：原五道硬闸门（enforce_session / no_open_after / max_trades_per_day /
 #      max_daily_loss_points / block_on_daily_loss）与 RiskGate 类本身；
 #      资金闸门（initial_cash）；仓位管理动态计算字段（capital_pct / atr_risk /
 #      risk_unit_pct / equity_source / fixed_volume / fallback_volume …）。
-#    2026-09-11 删除：max_open_positions（同时持仓笔数上限，D2 —— 资金是唯一闸门）、
+#    删除：max_open_positions（同时持仓笔数上限，D2 —— 资金是唯一闸门）、
 #      unlock_no_new_open（解锁昨仓后是否补开今仓 —— "解锁"概念随重构删除）。
-#    2026-09-16 删除：**max_volume**（单笔手数）—— 手数旋钮**只留一个**，真值源 =
+#    删除：**max_volume**（单笔手数）—— 手数旋钮**只留一个**，真值源 =
 #      品种执行策略表第 3 列（`Infra/Product.py` 的 `EXEC_POLICY[code].lots_per_order`）。
-#      背景（评审 P2-3）：原先引擎按 `min(risk.max_volume, 表第 3 列)` 取小，于是
+#      背景：原先引擎按 `min(risk.max_volume, 表第 3 列)` 取小，于是
 #      "单笔手数"有了两个旋钮，而启动横幅只打表值 —— `max_volume=1` 而表写 2 时
 #      横幅说"一笔 2 手"、实际挂 1 手，**唯一可见的行为变更处反而会误导**；
 #      用户也提不动"改表 N"（被风控压住），与"填表即生效"的心智模型冲突。
 #      用户拍板：删掉本键，表第 3 列就是用来替换它的。
 # ════════════════════════════════════════════════════════════════════
 class RiskConfig(BaseModel):
-    """风控参数：**本层不含任何手数旋钮**（2026-09-16 起）。
+    """风控参数：**本层不含任何手数旋钮**。
 
     手数语义（与"每个买卖点只开一笔"绑定）：
       · 每个买卖点信号触发时**只开一笔**，一笔挂 N 手；
@@ -393,9 +393,9 @@ class RiskConfig(BaseModel):
     """
     model_config = ConfigDict(extra="forbid")
 
-    # 交割月护栏（Phase 11 · 阻塞点 4 · D8）：距最后交易日不足 `delivery_guard_days`
+    # 交割月护栏（阻塞点 4 · D8）：距最后交易日不足 `delivery_guard_days`
     #   个交易日时拒绝**开新仓**（fail-closed）。判据 = 剩余交易日 < N 即拦。
-    #   默认 1 = 仅最后交易日当天拦（2026-09-14 拍板）。只拦开新仓，平旧仓永不拦；
+    #   默认 1 = 仅最后交易日当天拦（拍板）。只拦开新仓，平旧仓永不拦；
     #   护栏对象 = 现行主力（随 `last_trade_date` 换月自动解除）。
     delivery_guard_days: int = 1
 
@@ -418,13 +418,13 @@ class RiskConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _drop_legacy_keys(cls, data: Any) -> Any:
-        """丢弃已删除的配置键（清单见 `_DROPPED_KEYS`）—— **但不静默**（Phase 5 G6）。
+        """丢弃已删除的配置键（清单见 `_DROPPED_KEYS`）—— **但不静默**（G6）。
 
         RiskConfig 是 extra="forbid"，若不放行，老配置文件带上这些键会
         **启动即报错**（pydantic 不认识的字段）。它们现在完全没有语义，
         丢弃比让服务起不来合适。
 
-        ⚠️ 2026-09-12 修正：告警判据**只认本次输入的命中**（局部 `hits`），不再挂
+        ⚠️修正：告警判据**只认本次输入的命中**（局部 `hits`），不再挂
         在 `cls.dropped_legacy_keys` 这份共享类变量上。旧实现的后果（实测）：
         进程内只要解析过**一次**带旧键的配置，此后**每次**加载——哪怕配置文件
         早已删干净——都会再喊一遍，告警因此失去信号价值（真出问题时已喊了几
@@ -446,7 +446,7 @@ class RiskConfig(BaseModel):
                 "；".join("{}：{}".format(k, why) for k, why in hits))
         return data
 
-    # ⚠️ 原 `@field_validator("max_volume")` 的 1..20 越界校验（P1-1 · 2026-09-08）
+    # ⚠️ 原 `@field_validator("max_volume")` 的 1..20 越界校验
     #   随本字段一并删除，**职责迁到 `Infra/Product.py` 的 `ExecPolicy.__post_init__`**
     #   —— 手数真值源既已变成品种执行策略表，约束就该长在表上（构造期 fail-fast
     #   的效果不变：dry_run 与实盘不会出现"超限手数照常成交" vs "被 CTP 拒单"的
@@ -500,7 +500,7 @@ class ChannelTimingConfig(BaseModel):
     verify_delta_timeout: float = 5.0     # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
     underlying_map_timeout: float = 20.0  # 主连→主力合约映射等待秒数（get_quote.underlying_symbol）
     cancel_settle_wait: float = 5.0       # 超时撤单后等最后一笔回报的窗口秒数
-    # Phase 8.1（B-2）：合约参数（tick/乘数/涨跌停）就绪等待**独立**秒数。
+    # 合约参数（tick/乘数/涨跌停）就绪等待**独立**秒数。
     #   与 underlying_map_timeout 分开的原因：主连映射通常 <1s，而真实月份
     #   合约的静态字段在非交易时段可能 10~30s 才推齐，两者超时期望不同。
     #   默认 30s —— 取宽松端：超时不是终态（pulse 每根 bar 重试），宁可
@@ -512,7 +512,7 @@ class ChannelTimingConfig(BaseModel):
 # ════════════════════════════════════════════════════════════════════
 # ⑥ Broker 适配器层（Broker，可替换）配置
 #    下单/成交复核/撤单（未成交按对手价重报追价）。账号/密码不在此处。
-#    （类名 2026-09-08 由 BrokerConfig 改为 BrokerConfig，与「每层一个 *Config」约定对齐；
+#    （类名由 BrokerConfig 改为 BrokerConfig，与「每层一个 *Config」约定对齐；
 #      字段名 broker_params 不变。）
 # ════════════════════════════════════════════════════════════════════
 class BrokerConfig(BaseModel):
@@ -539,15 +539,15 @@ class BrokerConfig(BaseModel):
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
-    # ── Phase 8（D20 · A′）：合约参数自动获取开关（§5.9.4 项 4）──
+    # ──（D20 · A′）：合约参数自动获取开关──
     #   **没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
-    #   需求方 2026-09-11 明确否决）：
+    #   需求方明确否决）：
     #     strict（默认）：实盘必须从行情取到并通过校验 price_tick / volume_multiple /
     #                    涨跌停，否则 Engine._pre_trade_check 拒单 + 严重告警（fail-closed）。
     #     off          ：只用配置值。**仅 dry_run/replay 离线模式生效** —— SimNow
     #                    （在线通道）下永不标记 verified → 闸门照样拒单（规则 4：
     #                    调试开关不得绕过 A′）。
-    #     quote_partial：2026-09-14 评审 P1-3 新增的**逃生舱档**（面向不走 tqsdk 的
+    #     quote_partial：新增的**逃生舱档**（面向不走 tqsdk 的
     #                    自研/第三方在线通道，如 CTP 直连）。语义：
     #                      · 只强制 price_tick + volume_multiple（缺一即 fail-closed，
     #                        这两个错 = 限价口径和 PnL 全错，绝不让步）；
@@ -567,8 +567,8 @@ class BrokerConfig(BaseModel):
     @classmethod
     def _validate_fetch_policy(cls, v: str) -> str:
         v = str(v).strip().lower()
-        # 2026-09-14 评审 P1-3：新增 quote_partial 逃生舱档（valid 三档）。
-        #   'prefer' 依旧非法（宽容档已按需求方 2026-09-11 拍板删除），
+        # 新增 quote_partial 逃生舱档（valid 三档）。
+        #   'prefer' 依旧非法（宽容档已按需求方拍板删除），
         #   故 test_p42 对 prefer / whatever 的断言仍然成立。
         if v not in ("strict", "off", "quote_partial"):
             raise ValueError(
@@ -591,7 +591,7 @@ TradingConfig.model_rebuild()
 
 
 def resolved_exit_params(cfg: TradingConfig) -> Dict[str, Any]:
-    """LayeredExitPolicy 完整出场参数的**唯一合并点**（Fix A · 2026-09-14 · D1 拍板）。
+    """LayeredExitPolicy 完整出场参数的**唯一合并点**（D1 拍板）。
 
     合并两个来源：
       · 品种无关项 —— cfg.exit_params（ATR / trailing / 触发倍数等）

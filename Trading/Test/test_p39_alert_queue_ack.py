@@ -2,7 +2,7 @@
 """
 P39 D11 告警队列 / 确认（契约测试，2026-09-11）
 ================================================
-背景（文档 Phase 6 P6-B / §10）
+背景（文档）
 ---------------------------------
 后端把严重告警写进 `auto_order_status()` 的 `alerts` 字段，前端在已有轮询回调里
 检测新告警 → `alert()` 弹窗。队列走 state.db 已有的 kv 通道（D18 不新增 IPC），
@@ -96,7 +96,7 @@ def tmp_dir(tag):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     return TradingConfig.from_dict(base)
 
 

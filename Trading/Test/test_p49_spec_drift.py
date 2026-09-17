@@ -11,7 +11,7 @@ P49 合约规格漂移校验（spec_drift）契约测试
     用错数。处置：verified 首次为真时，引擎比对 **Instrument 的有效值
     （行情值）** 与 product_profile（档案兜底值），不一致 → warn 告警
     （D11 通道，前端 toast），**不拒单**（实盘本就以行情为准）。
-    Phase 3（Fix B）→ P-B（2026-09-15）：对账右侧统一在 Instrument（双类
+    →：对账右侧统一在 Instrument（双类
     合并后 spec/state 同一对象，"行情值"只此一份，读错对象无从谈起）。
 
 本测试锁死的断言：
@@ -105,7 +105,7 @@ def tmp_dir():
 
 
 def build_engine(tmpdir, signal_symbol="KQ.m@CFFEX.IF"):
-    """构造引擎：Instrument 构造时直接取品种档案（P-B：播种桥已删），
+    """构造引擎：Instrument 构造时直接取品种档案（播种桥已删），
     再建 broker/引擎 —— 与 main.py 的启动次序一致（profile 一定非 None）。
 
     state 归属：不显式传 state 时引擎沿用 broker 的那一份（Broker.state
@@ -113,7 +113,7 @@ def build_engine(tmpdir, signal_symbol="KQ.m@CFFEX.IF"):
     即可，读到的正是引擎对账时用的那个对象。
     """
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
-    # P-B（2026-09-15）：播种桥已删 —— Instrument 构造时直接取品种档案
+    # 播种桥已删 —— Instrument 构造时直接取品种档案
     inst = Instrument(cfg.instrument, cfg.product_profile)
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
     exitp = LayeredExitPolicy()
@@ -140,7 +140,7 @@ class _Q:
 def _drift(engine, tick=None, mult=None):
     """把有效值"漂移"到指定 tick / 乘数。
 
-    D-D（2026-09-15）：Instrument 的有效值收进不可变 `EffectiveSpec`，
+    D-D：Instrument 的有效值收进不可变 `EffectiveSpec`，
     **唯一改写路径是 apply_quote**（四个值改成了只读 property，没有 setter）。
     这里走真实路径 —— 比原"直接给属性赋值"更贴近行情覆盖的真实语义。
     """
@@ -220,7 +220,7 @@ def main():
     print("\n[6] 无档案（防御分支）：不告警")
     with tmp_dir() as td:
         eng = build_engine(td)
-        # 2026-09-16 A 批 ⑶-b：早退判据由 `cfg.product_profile`（**实时**按
+        # 早退判据由 `cfg.product_profile`（**实时**按
         #   cfg.instrument.signal_symbol 查表）换成 `self.state.product`
         #   （唯一运行时对象）→ 桩必须打在 **state** 上。
         #   打在 cfg 上已经触发不了这条分支了：品种在册却没有档案，会在引擎

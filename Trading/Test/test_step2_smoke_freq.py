@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Step 2.6 收官测试：--freq {30m,5m,1m,15s} 四周期启动冒烟全通。
 
-范围（交接文档 §5.1 的 2.6 定义）：
+范围（交接文档的 2.6 定义）：
   对四个支持周期各完整走一遍 main.build_runtime() 启动链路（不联网）：
     TradingConfig() → CLI --freq 覆盖 → bar_secs_for 校验（fail-fast 在这）
     → bars_per_day → build_broker(dry_run) → EntryPolicy / LayeredExitPolicy

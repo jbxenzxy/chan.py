@@ -162,7 +162,7 @@ def backtest(signals, klines, take_profit, slippage,
             gross = entry - exit_price
         gross -= slippage * 2                      # 双边滑点
         # 本工具是**离线信号复盘回测**（对录制 K 线重放），费率来自命令行参数
-        # （--open-rate 万分比），与 Trade/Store 的元口径成本（cost_cash，P-A）
+        # （--open-rate 万分比），与 Trade/Store 的元口径成本（cost_cash）
         # 无关 —— 下方 cost_points/net_points/expectancy_points 是本工具
         # 自己的 JSON 输出键名，勿与 Trade 字段混淆。
         cost_pts = entry * open_rate + exit_price * close_rate   # 元→点

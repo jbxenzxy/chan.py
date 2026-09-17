@@ -1,18 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-P50 · 2026-09-14 评审问题修复 契约测试
+P50 评审问题修复契约测试
 =======================================
 把 `09132 → custom-dev(0914)` 评审里列的 3 个 P1 + 4 个 P2 **逐条钉死**，
 防止回潮（这些全是"改动没写错、但边界形态不对"的问题，靠人眼 review 抓不住）。
 
-  [1] P1-1 parse_product_key：真实月份合约写法（CFFEX.IF2609）能查到档案
-  [2] P1-1 + P2-1 assert_product_allowed：白名单单一事实源 + 引擎不再误杀
-  [3] P2-2 Product kw_only：位置构造硬失败（原会静默错位到 price_tick）
-  [4] P1-2 pulse 重试节流：不再每根 bar 阻塞 30s
-  [5] P1-3 quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
-  [6] P2-3 离线模式规格漂移对账：dry_run/replay 用错规格不再静默
-  [7] P2-4 未知品种日志去重：Config 侧不再重复打 WARNING
-  [8] 死字段清理（2026-09-14）：InstrumentConfig 不含从未被消费的 max_order_volume
+  [1] parse_product_key：真实月份合约写法（CFFEX.IF2609）能查到档案
+  [2] assert_product_allowed：白名单单一事实源 + 引擎不再误杀
+  [3] Product kw_only：位置构造硬失败（原会静默错位到 price_tick）
+  [4] pulse 重试节流：不再每根 bar 阻塞 30s
+  [5] quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
+  [6]离线模式规格漂移对账：dry_run/replay 用错规格不再静默
+  [7]未知品种日志去重：Config 侧不再重复打 WARNING
+  [8] 死字段清理：InstrumentConfig 不含从未被消费的 max_order_volume
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_p50_review_fixes.py
@@ -87,7 +87,7 @@ def build_engine(tmpdir, signal_symbol, broker=None):
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
 
-    # P-B（2026-09-15）：播种桥已删 —— Instrument 构造时直接取品种档案。
+    # 播种桥已删 —— Instrument 构造时直接取品种档案。
     cfg = TradingConfig(instrument={"signal_symbol": signal_symbol})
     inst = Instrument(cfg.instrument, cfg.product_profile)
     store = Store(os.path.join(tmpdir, "state.db"))
@@ -99,7 +99,7 @@ def build_engine(tmpdir, signal_symbol, broker=None):
 
 
 # ══════════════════════════════════════════════════════════════════
-# [1] P1-1：parse_product_key —— 剥合约月份后查档案
+# [1]：parse_product_key —— 剥合约月份后查档案
 # ══════════════════════════════════════════════════════════════════
 def t1_parse_product_key():
     print("\n[1] P1-1 parse_product_key：真实月份合约写法 → 品种键")
@@ -144,7 +144,7 @@ def t1_parse_product_key():
 
 
 # ══════════════════════════════════════════════════════════════════
-# [2] P1-1 + P2-1：白名单单一事实源
+# [2]：白名单单一事实源
 # ══════════════════════════════════════════════════════════════════
 def t2_assert_product_allowed():
     print("\n[2] P2-1 assert_product_allowed：白名单判定 + 文案的唯一实现")
@@ -180,7 +180,7 @@ def t2_assert_product_allowed():
 
 
 # ══════════════════════════════════════════════════════════════════
-# [3] P2-2：Product kw_only
+# [3]：Product kw_only
 # ══════════════════════════════════════════════════════════════════
 def t3_kw_only():
     print("\n[3] P2-2 Product(kw_only=True)：位置构造硬失败")
@@ -192,7 +192,7 @@ def t3_kw_only():
     except TypeError as e:
         err = str(e)
     check_true("位置构造 Product(...) 抛 TypeError", err)
-    # 关键字构造不受影响（P-A 起 open_fee 为必填字段，须一并给出）
+    # 关键字构造不受影响（open_fee 为必填字段，须一并给出）
     p = Product(product="IF", r_multiple_tp=2.0,
                        open_fee=Fee("rate", 0.23), multiplier=300.0,
                        price_tick=0.2, note="x",
@@ -205,7 +205,7 @@ def t3_kw_only():
 
 
 # ══════════════════════════════════════════════════════════════════
-# [4] P1-2：pulse() 合约参数重试节流
+# [4]：pulse() 合约参数重试节流
 # ══════════════════════════════════════════════════════════════════
 def t4_pulse_throttle():
     print("\n[4] P1-2 pulse 重试节流（原：每根 bar 阻塞 30s）")
@@ -255,7 +255,7 @@ def t4_pulse_throttle():
 
 
 # ══════════════════════════════════════════════════════════════════
-# [5] P1-3：quote_partial 逃生舱档
+# [5]：quote_partial 逃生舱档
 # ══════════════════════════════════════════════════════════════════
 def t5_quote_partial():
     print("\n[5] P1-3 quote_partial 逃生舱：只强制 tick/乘数，涨跌停缺失 → 降级并出声")
@@ -286,7 +286,7 @@ def t5_quote_partial():
             self.lower_limit = lo
 
     # 5a Instrument.apply_quote 的 require_band 开关
-    #   P-B（2026-09-15）：spec/state 合并 —— apply_quote 回填运行时有效值，
+    #   spec/state 合并 —— apply_quote 回填运行时有效值，
     #   断言一律针对 Instrument（有效 tick/乘数初值取档案，行情可覆盖）。
     s = Instrument(None, _IF)
     ok = s.apply_quote(_Q(), require_band=False)
@@ -362,11 +362,11 @@ def t5_quote_partial():
           b3.state.source, Instrument.SOURCE_QUOTE)
 
 
-# 2026-09-15 P-A 删除 [6] 离线模式规格漂移对账（原 22 行）：
+# 删除 [6] 离线模式规格漂移对账（原 22 行）：
 #   Engine._check_spec_drift 的离线分支已删除 —— for_product 无条件播种
-#   → 离线 state ≡ 档案恒成立，分支结构性不可达（见交接文档 §3.4-D）。
+#   → 离线 state ≡ 档案恒成立，分支结构性不可达（见交接文档 -D）。
 # ══════════════════════════════════════════════════════════════════
-# [7] P2-4：未知品种日志去重
+# [7]：未知品种日志去重
 # ══════════════════════════════════════════════════════════════════
 def t7_log_dedup():
     print("\n[7] P2-4 未知品种不再双份告警（Config 侧 WARN → INFO）")
@@ -395,9 +395,9 @@ def t7_log_dedup():
 
 
 def t8_dead_field_removed():
-    """[8] 2026-09-14：死字段 `max_order_volume` 已删除，不许回潮。
+    """[8]：死字段 `max_order_volume` 已删除，不许回潮。
 
-    背景：该字段在 Phase 8 作为 §5.6「六个缺字段」之一加入，但**从未被消费**
+    背景：该字段在作为「六个缺字段」之一加入，但**从未被消费**
     （全仓只有字段定义一处、0 处读取）。单笔开仓手数的**唯一来源 = 品种执行
     策略表第 3 列** `EXEC_POLICY[code].lots_per_order`（1 笔挂 N 手）——
     Product.py → Instrument.exec_policy → Engine.lots_per_order；
@@ -426,11 +426,11 @@ def t8_dead_field_removed():
         _raised = True
     check_true("老配置残留该键 → 构造期显式报错（extra=forbid，非静默）", _raised)
 
-    # ── P-B（2026-09-15）完成判据：归位键在配置上**显式报错** ──
+    # ──完成判据：归位键在配置上**显式报错** ──
     #   乱源②（合约模型多重身份）的最终态：tick/乘数 归 Product
-    #   （exchange 不是"归位"而是**已删除** —— 2026-09-16 B 批），
-    #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率 P-A 已归位。
-    #   _check_removed_keys 对旧键显式 ValueError（§7.2：不允许静默吞掉）。
+    #   （exchange 不是"归位"而是**已删除** ——），
+    #   last_trade_date/verified/涨跌停归 Instrument（运行时），费率已归位。
+    #   _check_removed_keys 对旧键显式 ValueError（不允许静默吞掉）。
     print("\n[8b] P-B 归位完成判据：tick/乘数/last_trade_date 已迁出配置"
           "（exchange 更进一步：字段已整体删除）")
     from Trading.Infra.Instrument import _REMOVED_KEYS
@@ -451,7 +451,7 @@ def t8_dead_field_removed():
     for f in ("verified", "source", "trade_symbol", "last_trade_date"):
         check_true("Instrument 拥有运行时字段 {}".format(f),
                    f in vars(st))
-    # D-D（2026-09-15）：四个"有效参数"收进**不可变** EffectiveSpec，由同名
+    # D-D：四个"有效参数"收进**不可变** EffectiveSpec，由同名
     #   只读 property 转发 —— 故它们不再出现在 vars(st) 里。断言随之升级为
     #   "可读 + 确实落在 _effective 值对象上 + 该值对象不可写"，既保住
     #   "删了但没搬走"的防回潮意图，又把 D-D 的不可变性一并钉住。
@@ -470,7 +470,7 @@ def t8_dead_field_removed():
     for f in ("price_tick", "multiplier"):
         check_true("Product 拥有档案字段 {}".format(f),
                    hasattr(PRODUCT_PROFILES["IF"], f))
-    # 反向：exchange 必须**彻底没有**（2026-09-16 B 批删除字段）——
+    # 反向：exchange 必须**彻底没有**（删除字段）——
     #   注意这不同于上面那些"搬走了"的字段：它是"不再需要存在"。
     check("Product 已无 exchange 字段（B 批删除，非搬迁）",
           [k for k in PRODUCT_PROFILES

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """P29 —— 持久 ID 跨重启唯一性 / fail-fast / 旧 schema 闸门（R1+R2，2026-09-10）
 ==============================================================================
-2026-09-11 Phase 7 改写。**R1（序号持久化）与 R2（撞号 fail-fast）原样保留** ——
+改写。**R1（序号持久化）与 R2（撞号 fail-fast）原样保留** ——
 它们与本次重构无关，且是真实事故（2 笔成交落库只剩 1 条）的护栏。
 被删掉的是 **R3（锁仓配对不变量）**：`lock_pair_id` / `_lock_pair_seq` /
 `_assert_lock_pair_invariant()` 随"配对"概念一并删除。旧版 R3 那段
@@ -33,7 +33,7 @@ R3 的继任者是**旧 schema 闸门（G1）**：库里出现 `origin` / `lock_
         批量离场会生成相同毫秒、墙钟回拨后会与历史号重复，症状与计数器一样。
     R2  写入 fail-fast：`save_trade` / `save_order` 改 `INSERT`，撞号抛
         `IdCollisionError`（撞号 = 审计底稿要被覆盖，必须响亮地死）。
-    （原 R3 锁仓配对不变量 → 已被 G1 旧 schema 闸门取代，见 §5）
+    （原 R3 锁仓配对不变量 → 已被 G1 旧 schema 闸门取代，见）
 
 本文件共 6 组：
     [1] 端到端自然流程：开→平→再开→④ 锁仓 ‖ 重启 ‖ ③ 拆锁→再平，全程无重复、无丢失
@@ -129,7 +129,7 @@ def ms(y, mo, d, h, mi):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
@@ -294,7 +294,7 @@ with tmp_dir() as tmp:
     eng._persist()
     check("[2a] kv 写入 trade_seq", eng.store.get_json("trade_seq"), 7)
     check("[2b] kv 写入 order_seq", eng.store.get_json("order_seq"), 11)
-    # 2026-09-11：lock_pair_seq 已随配对概念删除 —— 它现在属于**旧 schema 键**，
+    # lock_pair_seq 已随配对概念删除 —— 它现在属于**旧 schema 键**，
     # 库里出现它会让引擎拒绝启动（见 [5c]），更不该由 _persist 写出来。
     check("[2c] _persist 不再写 lock_pair_seq（键已随概念删除）",
           eng.store.get_json("lock_pair_seq"), None)
@@ -544,7 +544,7 @@ def _code_only(src):
     return "\n".join(line.split("#")[0] for line in src.splitlines())
 
 
-# ⚠️ 判据必须**先剥注释**（`_code_only`）：2026-09-16 C 批把 save_trade 的
+# ⚠️ 判据必须**先剥注释**（`_code_only`）：把 save_trade 的
 #    INSERT 改成**显式列名**（加列时不再依赖"参数顺序 = 物理列序"这个隐式
 #    约定），函数体注释里随之出现「取代 `INSERT INTO trades VALUES (...)`」
 #    这类留档文字 —— 朴素 `in` 判定会被**自己的说明**蒙过去：改回

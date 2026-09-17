@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-P2-2 补测试缺口 ① —— API 集成测试（TestClient 起 app 打核心端点）
+补测试缺口 ① —— API 集成测试（TestClient 起 app 打核心端点）
 =====================================================================
 背景：此前自动化测试覆盖了引擎/SSE/扫描服务层，但缺少「真实 HTTP 路由
 层」的集成守护。本用例用 FastAPI TestClient 起 FrontAPI.app，直接打核心
 REST 端点，锁定路由装配 / 参数校验 / 统一 JSON 响应 / 领域异常映射：
 
-  ① 健康检查：/api/health 200 + status=ok + freq_sec_map（P2-8 前端共享）
+  ① 健康检查：/api/health 200 + status=ok + freq_sec_map（前端共享）
   ② 期货状态/配置：/api/futures/read/status · /api/futures/read/config
   ③ 搜索：空关键词 400；有关键词 200（无缓存时返回 need_refresh 引导）
   ④ 扫描候选：/api/stocks/scan/read/candidates 200 + stocks 键（无数据空表）
@@ -42,7 +42,7 @@ client = TestClient(FrontAPI.app)
 
 
 def test_api_health(failures):
-    """① 健康检查：200 + status=ok + freq_sec_map（P2-8 前端共享）"""
+    """① 健康检查：200 + status=ok + freq_sec_map（前端共享）"""
     r = client.get("/api/health")
     if r.status_code != 200:
         failures.append(f"① /api/health 状态码 {r.status_code} != 200")

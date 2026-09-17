@@ -26,7 +26,7 @@ from datetime import datetime
 from App.AppEngine import (
     TQ_AVAILABLE, CTqSdkAPI, _get_futures_name, resolve_lookback_bars,
 )
-# P0-1 会话上下文：缓存实例化到连接会话，绑定 CChan 内部 CTqSdkAPI 实例
+# 会话上下文：缓存实例化到连接会话，绑定 CChan 内部 CTqSdkAPI 实例
 from DataAPI.TqSdkAPI import session_context, session_set, session_clear
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError
@@ -242,7 +242,7 @@ def _truncate_records_by_end(records, end_time, freq_sec, step=None, fmt_list=No
 
 
 def _per_frame_session(gen, src):
-    """SSE 生成器的「逐帧重绑定会话」包装（审计 P0-1，见
+    """SSE 生成器的「逐帧重绑定会话」包装（见
     Docs/chan_lock_audit_v6.md 前提 A）。
 
     为什么需要它：starlette 对**同步生成器**是「每帧一次独立的
@@ -296,7 +296,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
     source 可注入（默认 CTqSdkSession）；Test/test_sse_gray.py 用 MockSource
     驱动确定性比对。锁：每连接独立会话，共享缓存经 AppData 按资源加锁。
     """
-    # P0-5 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
+    # 修复：删除全局日志级别污染（原在此处将 tqsdk 及 root 全部 handler
     # 设 WARNING，永不恢复，导致整个进程 log.info 消失）。tqsdk 抑制已在
     # DataAPI/TqSdkAPI.py 顶层完成（只抑制自身 logger，绝不设 root）。
     log.info("SSE 单窗口连接: symbol=%s freq=%s", symbol, freq)
@@ -304,7 +304,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
     src = source if source is not None else CTqSdkSession()
     # 入口这次绑定保留：覆盖第一帧，以及「本生成器被直接调用、未经
     # _per_frame_session 包装」的场景。**跨帧保障由 _per_frame_session
-    # 负责**——审计 P0-1：starlette 每帧独立线程派发，入口一次绑定覆盖
+    # 负责**—— starlette 每帧独立线程派发，入口一次绑定覆盖
     # 不到后续帧（实测 4/6 连接跨线程迭代）。
     session_set(src)
 
@@ -659,7 +659,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         # 清理该连接的K线缓存
         if symbol is not None and freq_sec is not None:
             src.cleanup_records(f"{symbol}:{freq_sec}")
-        # P0-1 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
+        # 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
         session_clear()
 
 
@@ -667,7 +667,7 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
     """期货 SSE 双窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
 
     与 sse_futures_stream_single 同构：普通函数（非生成器），会话提前建好
-    后交给 _per_frame_session 逐帧重绑定（审计 P0-1）。
+    后交给 _per_frame_session 逐帧重绑定。
     """
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
@@ -690,7 +690,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
 
     src = source if source is not None else CTqSdkSession()
     # 入口这次绑定保留：覆盖第一帧与「直接调用本体」场景；跨帧保障由
-    # _per_frame_session 负责（审计 P0-1：starlette 每帧独立线程派发）。
+    # _per_frame_session 负责（starlette 每帧独立线程派发）。
     session_set(src)
 
     from datetime import datetime
@@ -791,7 +791,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
         sub_kl_type = _get_kl_type(sub_freq)
         # 缓存下窗 CChan 供 /api/dual_zs 访问（语义化漏斗：key 规则内聚数据层）
         app_data.set_futures_sub_chan(symbol, sub_freq, sub_chan)
-        # 下窗「对象图锁」（审计 P0-2）：缓存里存的是**活着的 CChan**，实时
+        # 下窗「对象图锁」：缓存里存的是**活着的 CChan**，实时
         # 循环每根K线 _drain_chan → step_load → do_init 会就地清空重建
         # kl_datas，而 REST 侧读取方拿到指针后在锁外遍历 bi_list。容器锁只
         # 护「取指针」护不住对象图，故取一把按 key 稳定的锁，让重建与遍历
@@ -918,7 +918,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
                                       is_main, window_label, chan_lock=None):
             """处理单个窗口的K线检测，返回 (updated, cached_snapshot, last_bar_dt_ns, last_processed_dt_ns, need_tick)
 
-            chan_lock：该窗口 CChan **对象图**的锁（审计 P0-2）。
+            chan_lock：该窗口 CChan **对象图**的锁。
             下窗 CChan 经 set_futures_sub_chan 发布进共享缓存供 REST 读取，
             而 `_drain_chan → step_load → do_init` 会**就地清空重建**
             kl_datas；缓存 dict 的锁（_futures_cache_lock）只护住「取指针」
@@ -1063,7 +1063,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
                 t_step_start = time.time()
                 try:
                     if chan_lock is not None:
-                        # 与 REST 侧读取方的遍历互斥（审计 P0-2）
+                        # 与 REST 侧读取方的遍历互斥
                         with chan_lock:
                             _drain_chan(chan)
                     else:
@@ -1186,7 +1186,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
             app_data.pop_futures_sub_chan(symbol, sub_freq)  # 语义化漏斗失效（key 规则内聚数据层）
         except Exception as e:
             log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
-        # P0-1 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
+        # 修复：清除线程局部会话（线程池复用前必须清，防串连其它连接缓存）
         session_clear()
 
 
@@ -1201,7 +1201,7 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
       - 周期映射：_get_kl_type_by_sec(freq_sec)
       - 配置：_make_chan_config()
     数据注入经 src.set_data（Session 协议）完成；
-    src 为必填（P0-1 修复：缓存实例化到连接会话，不再回退类级缓存）。
+    src 为必填（修复：缓存实例化到连接会话，不再回退类级缓存）。
     返回 (chan, kl_type)。缓存逻辑留在各调用方，本函数只负责「数据 → CChan」。
     """
     if src is None:
@@ -1211,7 +1211,7 @@ def _build_futures_chan(records, symbol, freq_sec, config=None, code=None, src=N
     src.set_data(records, symbol=chan_code)
     kl_type = _get_kl_type_by_sec(freq_sec)
     config = config or _make_chan_config()
-    # P0-1 修复：CChan 内部自行实例化 CTqSdkAPI（data_src="custom:..."），
+    # 修复：CChan 内部自行实例化 CTqSdkAPI（data_src="custom:..."），
     # 经线程局部绑定本会话缓存，使 set_data 写入与 get_kl_data 读取同源。
     with session_context(src):
         chan = CChan(
@@ -1258,7 +1258,7 @@ def _extract_chan_structure(kl_list, chan, date_fmt):
                         end_fx_idx = idx
                         break
             # 左/右边界原始K线时间（双窗口红框定位）
-            # 2026-09-02 归一化：与股票/区间套统一走 _main_bi_range（取分型自身
+            # 归一化：与股票/区间套统一走 _main_bi_range（取分型自身
             # 极值（峰/谷）原始K线，allow_partial=True 保留单侧结果——期货分析
             # 路径依赖此行为）。旧内联逻辑（分型左肩/右肩外沿）已注释保留，
             # 如需恢复取消注释即可。
@@ -1782,7 +1782,7 @@ def get_futures_aliases():
     单一事实源 = `DataAPI/TqSdkAPI.FUTURES_ALIASES`（手写维护，**16 个品种 /
     17 条别名** = 16 个唯一合约 + 1 组重复写法：`TA`/`PTA` 同指 `KQ.m@CZCE.TA`）。
 
-    2026-09-14 第二轮用户拍板（口径变更，见实施计划 附录 D.8）：
+    用户拍板（口径变更，见实施计划附录 D.8）：
       · 本表是**"能看行情"的口径**（输入能解析出一个代码），**不等于"可交易范围"**；
       · 用户点名把本表**收窄到 16 个品种**（原为 83 条「人工累加」的全表）——
         收窄后 RB/M/SC 等**仍在**表内，而 T/TF/NI/SR/PP/Y/PG… 等**移出**者
@@ -1843,7 +1843,7 @@ def get_futures_freq_sec_map():
 def _cleanup_all_futures_data():
     """期货切到股票时清理期货数据：K线缓存、分析缓存、选点记录
 
-    【审计 X1 · P0 修复】作用域纪律：本函数是**全局清扫**，只在
+    【· P0 修复】作用域纪律：本函数是**全局清扫**，只在
     「没有任何页面正在看期货」时才成立。
 
     原实现无条件清扫，导致一个页面切走期货时，其余期货页面的 SSE 会话
@@ -1901,7 +1901,7 @@ def futures_cleanup():
 
     返回 dict：{"swept": bool, "active_sessions": int}
       swept=True  —— 已执行全局清扫（当时无活跃期货会话）
-      swept=False —— 跳过清扫（仍有页面在看期货，避免误伤，见 X1）
+      swept=False —— 跳过清扫（仍有页面在看期货，避免误伤，见）
     """
     swept, active = _cleanup_all_futures_data()
     return {"swept": swept, "active_sessions": active}

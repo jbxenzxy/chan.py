@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""G11 守护：期货退出清理的**作用域纪律**（审计 X1 回归拦截）
+"""G11 守护：期货退出清理的**作用域纪律**（回归拦截）
 
 ## 为什么要这条守护
 
-X1 是本项目审计出的唯一一个 **P0 级、确定性故障**（不是概率性竞争）：
+是本项目审计出的唯一一个 **P0 级、确定性故障**（不是概率性竞争）：
 原实现里 `/api/futures/cleanup` 无条件做**全局清扫**并调用 `close_all()`。
 后果是——用户在 A 页把期货切回股票，会连带掐断 B、C、D 页正在跑的期货
 SSE 流、清空它们的 K 线记录缓存、抹掉下窗 chan 与选点。**每次必错**。
@@ -181,7 +181,7 @@ def test_sweep_when_no_sessions():
             f"清扫副作用计数={calls}（期望三项各 ≥1）")
 
 
-# ── ③ X1 核心：cleanup 绝不可触碰他页会话 ─────────────────────────────
+# ── ③核心：cleanup 绝不可触碰他页会话 ─────────────────────────────
 def test_cleanup_never_closes_other_pages():
     """「跨页核弹」回归点：页面级 REST 端点不得关掉别的页面的 SSE 流。
 
@@ -308,7 +308,7 @@ def _find_calls_in_def(py_path, def_name, func_name):
 def test_source_guard_present():
     """行为测试挡不住所有回归形式，补一层源码断言：
     守卫函数必须真的以 active_session_count() 为判据，且清理调用链
-    不得出现 close_all（页面级端点调用进程级回收 = X1 本尊）。
+    不得出现 close_all（页面级端点调用进程级回收 = 本尊）。
     """
     try:
         src = inspect.getsource(AppSSE._cleanup_all_futures_data)
@@ -321,7 +321,7 @@ def test_source_guard_present():
         "源码中调用了 active_session_count()"
         if has_guard else "源码中**未调用** active_session_count()，守卫已被移除！")
 
-    # 清理调用链不得出现 close_all 调用（页面级端点调进程级回收 = X1 本尊）
+    # 清理调用链不得出现 close_all 调用（页面级端点调进程级回收 = 本尊）
     chain_hits = []
     for fn in (AppSSE.futures_cleanup, AppSSE._cleanup_all_futures_data):
         try:

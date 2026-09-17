@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-P42 品种参数从行情获取（A′ fail-closed · 契约测试，Phase 8 / D20）
+P42 品种参数从行情获取（A′ fail-closed · 契约测试，D20）
 ================================================================
-背景（文档 §5.9 / §6.2 Phase 8 / §7.3 p42）
+背景（文档 p42）
 ----------------------------------------------------
-换品种用错 tick 会直接导致 CTP 拒单（R20）。Phase 8 起，实盘的合约参数
+换品种用错 tick 会直接导致 CTP 拒单（R20）。实盘的合约参数
 （price_tick / volume_multiple→multiplier / 涨跌停区间）**唯一真值来源是行情**
 （SimNow._apply_instrument_quote 从真实月份合约回填 Instrument），配置值
 只在离线（dry_run / replay）生效且必须标记 CONFIG_OFFLINE。
@@ -12,9 +12,9 @@ P42 品种参数从行情获取（A′ fail-closed · 契约测试，Phase 8 / D
 "取不到正确值就不许下单"这条 fail-closed 语义必须由反例钉死 ——
 否则实现极易退化成"静默回退"，而回退值错的时候损失不可逆。
 
-Phase 3（Fix B · 2026-09-14）归属变更
+归属变更
 ----------------------------------------------------
-P-B（2026-09-15）把 InstrumentSpec+InstrumentState 合并为唯一运行时对象 Instrument：
+把 InstrumentSpec+InstrumentState 合并为唯一运行时对象 Instrument：
 apply_quote 回填的 price_tick / multiplier / upper_limit / lower_limit 与
 A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
 并**新增**两条只有拆分后才存在的断言：
@@ -22,7 +22,7 @@ A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
   · [4e]/[5e] Engine 与 Broker 必须共用**同一份** state（否则 SimNow 置的
     verified 引擎读不到 → 闸门恒拒单，且原因极难查）。
 
-覆盖（对应 §7.3 p42 用例 ①~⑦ + 涨跌停护栏）
+覆盖（对应 p42 用例 ①~⑦ + 涨跌停护栏）
   [1] ① apply_quote 覆盖 state 的 price_tick / multiplier / 涨跌停，返回变更列表，
       且超价随之变为 overprice_ticks × 新 tick；
   [1b] apply_quote 原子性：nan / 0 / 缺字段 / 区间不自洽 → ValueError 且一个字段都不改；
@@ -37,13 +37,13 @@ A′ 的 verified / source 落在 Instrument 上。本测试随之迁移，
       （调试开关不得绕过 A′）；policy 非法值 → 配置期报错；宽容档 prefer 已删除；
   [8] 涨跌停护栏：broker 侧最终限价出区间 → 本地拒单（恰在涨跌停价上放行、
       区间未知不校验）；引擎侧参考价粗检同理；
-  [8i-8m] Phase 8.1（B-1）：nan / inf 限价与参考价一律 fail-closed（原版
+  [8i-8m]：nan / inf 限价与参考价一律 fail-closed（原版
       nan 放行是 fail-open 隐患）；
-  [9] Phase 8.1（O-2/O-3）：broker 侧故障诊断经 notify/drain_alerts 回流
-      Engine.alert（D11 通道，§5.9.4 项 5 "Broker → Engine.alert()"）；
-  [10] Phase 8.1（O-6）：组合反例 policy=off × 坏行情 → 仍 unverified + 拒单；
-  （原 [11] Phase 8.1（O-1）「symbol → 交易所」对账已于 2026-09-16 整节删除：
-    exchange 曾是纯备案字段（该字段已于 2026-09-16 B 批整体删除），
+  [9]（O-2/O-3）：broker 侧故障诊断经 notify/drain_alerts 回流
+      Engine.alert（D11 通道，"Broker → Engine.alert()"）；
+  [10]（O-6）：组合反例 policy=off × 坏行情 → 仍 unverified + 拒单；
+  （原 [11]（O-1）「symbol → 交易所」对账整节删除：
+    exchange 曾是纯备案字段（该字段整体删除），
     对账只会给一个不参与逻辑的字段发噪音告警。）
 
 跑法：python Trading/Test/test_p42_price_from_quote.py
@@ -158,18 +158,18 @@ class FakeLiveBroker(Broker):
         raise NotImplementedError("P42 替身不应触发真实报单")
 
 
-# Phase 3（Fix B）：本次运行的那一份运行时状态。生产路径由 main.py 建好后
+# 本次运行的那一份运行时状态。生产路径由 main.py 建好后
 # 同时交给 Broker 与 Engine（一次运行只有一份）；测试里同样显式共享同一个
 # 对象，避免"两边各建一份 → verified 谁都看不见"的假绿灯。
 def _st(spec=None) -> Instrument:
-    # P-B：双类合并 —— 有效值初值直接取档案；spec/state 是同一个对象。
+    # 双类合并 —— 有效值初值直接取档案；spec/state 是同一个对象。
     return spec if spec is not None else Instrument(None, _IF)
 
 
 def make_simnow(quote, policy="strict", spec=None, state=None, frozen=False):
     """跳过 __init__（不连 CTP）手工装配 SimNowBroker，只填闸门路径用到的字段。
 
-    Phase 3：手工装配也要显式挂上 state（基类的惰性自建是给"直连 broker"
+    手工装配也要显式挂上 state（基类的惰性自建是给"直连 broker"
     用的便利路径，本测试要断言的现象都发生在 state 上，故显式给）。
     """
     b = SimNowBroker.__new__(SimNowBroker)
@@ -177,7 +177,7 @@ def make_simnow(quote, policy="strict", spec=None, state=None, frozen=False):
     b.state = state if state is not None else b.state
     b.params = {"instrument_fetch_policy": policy, "overprice_ticks": 5,
                 "channel": {"underlying_map_timeout": 0.5,
-                            "instrument_fetch_timeout": 0.5}}  # Phase 8.1（B-2）独立超时
+                            "instrument_fetch_timeout": 0.5}}  # 独立超时
     b._api = FakeApi(quote)
     b._trade_symbol = "CFFEX.IF2609"
     b._instrument_frozen = frozen
@@ -213,7 +213,7 @@ check("[1c] upper_limit / lower_limit 被覆盖", (st1.upper_limit, st1.lower_li
 check_true("[1d] 返回值含 price_tick / multiplier / upper_limit / lower_limit",
            set(changed) == {"price_tick", "multiplier", "upper_limit", "lower_limit"},
            changed)
-# P-B（2026-09-15）双类合并：原"静态规格一个字段都不动"断言随拆分消亡 ——
+# 双类合并：原"静态规格一个字段都不动"断言随拆分消亡 ——
 # spec 与 state 是同一对象，行情回填的就是唯一一份运行时有效值。
 check("[1f] P-B：无双类影子 —— tick/乘数只有这一份（= 行情值，非配置种子）",
       (st1.price_tick, st1.multiplier), (2.0, 50.0))
@@ -369,7 +369,7 @@ check("[8g] 参考价 4500 在区间 → 校验链通过（None）", why_in, Non
 why_edge = eng8._pre_trade_check(act_past_close, "2026-09-02", None, ref_price=5000.0)
 check("[8h] 参考价恰等于涨停价 → 放行", why_edge, None)
 
-# ── Phase 8.1（B-1）：非有限限价 / 参考价一律 fail-closed ──
+# ── 非有限限价 / 参考价一律 fail-closed ──
 check("[8i] broker 侧 nan 限价 → 拒单（原版放行是 fail-open）",
       b8._price_out_of_band(float("nan")) is not None, True)
 check("[8j] broker 侧 inf 限价 → 拒单",

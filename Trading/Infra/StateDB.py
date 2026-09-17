@@ -69,7 +69,7 @@ CREATE INDEX IF NOT EXISTS idx_trades_exit ON trades(exit_at);
 class IdCollisionError(RuntimeError):
     """持久 ID 撞号（PRIMARY KEY 冲突）。
 
-    R2（2026-09-10）：trades / orders 是**审计底稿**，一条记录被覆盖 =
+    R2：trades / orders 是**审计底稿**，一条记录被覆盖 =
     历史成交/报单凭空消失。撞号说明 ID 生成端出了问题（序号没跨重启恢复 /
     state.db 被外部改过 / 多进程共用一份库），此时宁可让进程死在写入点，
     也不留一份自相矛盾的账。故这两张表的写入一律 fail-fast。
@@ -89,7 +89,7 @@ class Store:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self.conn.executescript(_SCHEMA)
-        # P-A（2026-09-15）：trades 成本口径迁移 —— cost_points/net_points（点）
+        # trades 成本口径迁移 —— cost_points/net_points（点）
         #   → cost_cash/net_cash（元）。Fee 模型下 per_lot 档（黄金 10 元/手）无法
         #   在点数口径无损表达，成本统一在元上算（见 InstrumentState.cost_cash）。
         #   旧 schema 的库：整表改名 trades_legacy_points 保留作审计（旧值单位是
@@ -101,7 +101,7 @@ class Store:
             self.conn.executescript(_SCHEMA)
             _cols = {r[1] for r in
                      self.conn.execute("PRAGMA table_info(trades)")}
-        # C 批（2026-09-16 · ⑶-d）：`trades.product_key` —— 品种键**落库**。
+        # `trades.product_key` —— 品种键**落库**。
         #   原先「同品种多合约月份合并统计」的归一发生在**查询侧**
         #   （`TradeStats.load_trades_report` 读回全表后逐行现算），于是同一件事
         #   有两个口径来源：写库那份 `symbol` 与查库时现算的键。归一搬到写入侧后，
@@ -155,7 +155,7 @@ class Store:
     def save_order(self, o: Order) -> None:
         """写委托审计记录。**fail-fast**：order_id 撞号即抛 `IdCollisionError`。
 
-        R2（2026-09-10）：原实现是 `INSERT OR REPLACE` —— 撞号时把**上一进程**的
+        R2：原实现是 `INSERT OR REPLACE` —— 撞号时把**上一进程**的
         同号记录静默覆盖。审计底稿从"N 条"变成"1 条"，无任何告警、无任何痕迹。
         order_id 的唯一性由 R1 保证（broker 序号在 `_restore` 时从库内自愈抬升），
         故此处的冲突只可能来自"库被外部改过 / 多实例共用一个库"这类真异常 ——
@@ -184,13 +184,12 @@ class Store:
     def save_trade(self, t: Trade) -> None:
         """写成交流水。**fail-fast**：trade_id 撞号即抛 `IdCollisionError`。
 
-        R2（2026-09-10）：理由同 `save_order` —— trades 是成交审计底稿，
+        R2：理由同 `save_order` —— trades 是成交审计底稿，
         被覆盖等于历史成交凭空消失。trade_id 的唯一性由 R1 保证
         （`_trade_seq` 落 kv + 恢复时与库内 max 取大）。
         """
         try:
             with self.conn:
-                # C 批（2026-09-16 · ⑶-d）：
                 #   ① **显式列名**取代 `INSERT INTO trades VALUES (...)` ——
                 #      位置绑定把"物理列序 = 本语句的参数序"变成隐式约定，
                 #      加一列就要确保新列在**表尾**且参数补在**末尾**（两处
@@ -284,7 +283,7 @@ class Store:
         2026-09-10（R1 配套）：一并清掉 `trade_seq` ——
         它对应的数据（trades / positions）刚刚被清空，序号理应回到 1，
         让重跑的 trade_id **逐轮一致**（回放可比对性）。
-        2026-09-11：`run` 也一并清 —— 它是运行态的风控锚，随持仓一起归零。
+        `run` 也一并清 —— 它是运行态的风控锚，随持仓一起归零。
         **刻意不清 `order_seq`**：orders 表保留作审计底稿，序号必须只增不减，
         否则重跑会与保留下来的历史委托号相撞（R2 之后会直接抛 IdCollisionError）。
 
@@ -297,7 +296,7 @@ class Store:
                     "SELECT COUNT(*) AS n FROM {}".format(tbl)).fetchone()
                 counts[tbl] = int(row["n"]) if row else 0
                 self.conn.execute("DELETE FROM {}".format(tbl))
-            # 2026-09-10 修正：补清 `positions`（复数）。此前只清 `position`（单数，
+            # 修正：补清 `positions`（复数）。此前只清 `position`（单数，
             # 仅审计用），而**复数键才是多仓主键** —— `_persist` 写它、`_restore`
             # 优先读它。漏清的后果：回放 `--fresh`（main.py:137）后簿内仍留着上一轮
             # 的持仓（实测整对锁仓 lock_00001 残留）→ account_state() 判 LOCKED，

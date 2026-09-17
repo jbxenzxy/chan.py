@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""策略层（2026-09-08 精简：取消策略选择器抽象）。
+"""策略层（精简：取消策略选择器抽象）。
 
 生产环境入场只有一个策略 EntryPolicy、出场只有一个策略
 LayeredExitPolicy（L1-L3 分层），不再有「注册表 / @register / build_*_policy」

@@ -12,7 +12,7 @@ dry-run 撮合
     - 不做成交量/排队假设：一律视为立即全部成交
     （真实 CTP 会有部分成交与排队，M3 接实盘时这里要换成真实回执）
 
-撮合语义（2026-09-11 重构）
+撮合语义（重构）
 ---------------------------
 按 intent 决定让价方向：
   - OPEN   开仓：往不利方向让 slippage_ticks 个 tick，再按 align_entry 对齐
@@ -35,14 +35,14 @@ from .Base import INTENT_TO_OFFSET, Broker, register_broker
 @register_broker
 class DryRunBroker(Broker):
     name = "dry_run"
-    # Phase 8（A′）：离线通道 —— 引擎的 fail-closed 闸门对它不生效，
+    # （A′）：离线通道 —— 引擎的 fail-closed 闸门对它不生效，
     #   合约参数用配置值（来源标记 CONFIG_OFFLINE 由 main.py 写入 state）。
     is_offline = True
 
     def __init__(self, instrument: "Instrument", params=None,
                  state: Optional["Instrument"] = None):
         super().__init__(instrument, params, state=state)
-        # R1（2026-09-10）：报单序号改由 Base 的自增整数提供（原 itertools.count(1)
+        # R1：报单序号改由 Base 的自增整数提供（原 itertools.count(1)
         #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → 审计记录被覆盖）。
         #   序号由引擎 `_restore` 从 state.db 抬升（seed_order_seq）。
         self.orders: List[Order] = []
@@ -51,9 +51,9 @@ class DryRunBroker(Broker):
                signal_key: str = "", note: str = "",
                entry_date: str = "", is_exit: bool = False) -> Order:
         intent = self._resolve_intent(intent, side)
-        # Phase 3（Fix B）：DryRun **只读** state 的种子值、从不写它
+        # DryRun **只读** state 的种子值、从不写它
         #   （离线没有行情可回填；来源标记由 main.py 的 mark_config_offline 写入）。
-        # D-C（2026-09-15）：原 `spec = state.spec` 局部别名已删（同名消歧义），
+        # D-C：原 `spec = state.spec` 局部别名已删（同名消歧义），
         #   直接读 `state` 本身 —— 两者本就是同一个 Instrument。
         state = self.state
         sign = side.sign
@@ -83,7 +83,7 @@ class DryRunBroker(Broker):
                 "offset": offset_str,              # 记账：CTP 报文类型
                 "offset_close_yesterday_first": bool(
                     state.closetoday_first),       # 成本计算时按此选平今/平昨费率
-                "entry_date": entry_date,          # 2026-09-10：被平持仓建仓日（今/昨仓审计用）
+                "entry_date": entry_date,          # 被平持仓建仓日（今/昨仓审计用）
             },
         )
         self.orders.append(o)

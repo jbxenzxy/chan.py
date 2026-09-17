@@ -17,7 +17,7 @@
     OPEN  开仓：买信号 → 买开，卖信号 → 卖开
     CLOSE 平仓：买信号 → 买平，卖信号 → 卖平
     「锁仓 / 解锁」不是操作：它们与 OPEN / CLOSE 在 CTP 报文层完全等价，
-    只是引擎的记账标签（2026-09-11 删除）。
+    只是引擎的记账标签（删除）。
 
 转移表（需求 ⑷⑸⑹⑺）—— 全部集中在 `_decide_action` / `_decide_exit`
     ① 空仓 + 信号           → OPEN（信号方向）  → 成交后净敞口 ≠ 0 → 运行态
@@ -33,7 +33,7 @@
 一段运行（run）—— 风控锚的载体
     净敞口从 0 变非 0 的那一刻开启一段 run，用**该次成交价**作风控锚（D1）。
     L1-L3 只判这段 run，不逐笔判仓单 —— 这让「空仓做多」与「锁仓做多」的
-    风控表现天然一致（场景 X / Y 等价，见分析文档 §4.7）。
+    风控表现天然一致（场景 X / Y 等价，见分析文档）。
     净敞口回到 0（转移 ④⑤）时 run 结束。
 
 每根 K 线的处理顺序（顺序错了结果就错了）
@@ -101,12 +101,12 @@ class TradingEngine(ReconcileMixin):
                  store: Store, ev: EventLog,
                  state: Optional["Instrument"] = None):
         self.cfg = cfg
-        # ── 合约运行时对象（P-B · 2026-09-15 双类合并）──
+        # ── 合约运行时对象（双类合并）──
         #   原 self.state（静态规格 cfg.instrument）与 self.state（运行时状态）
         #   现在是**同一个 Instrument**：静态身份经 config/product 转发只读，
         #   有效值/回填字段（tick/乘数/涨跌停/verified/trade_symbol/last_trade_date）
         #   是可变运行时字段。
-        # D-C（2026-09-15）：原 spec 兼容别名**已删除** —— 本类只有
+        # D-C：原 spec 兼容别名**已删除** —— 本类只有
         #   `self.state` 一个名字（与 Broker / Source 同名），原 spec 点号引用
         #   全部改读 `self.state.xxx`，不再"三个名字指同一块内存"。
         # 所有权（不变）：**一次运行只有一份 Instrument**。默认沿用 broker 的
@@ -117,7 +117,7 @@ class TradingEngine(ReconcileMixin):
             state if state is not None
             else getattr(broker, "state", None)
             # 鸭子类型 broker（不继承 Broker、无 .state 的测试替身/外接通道）
-            # 回落：由部署配置 + 品种档案现建一份（等价 P-B 前"从 cfg 播种"）。
+            # 回落：由部署配置 + 品种档案现建一份（等价前"从 cfg 播种"）。
             or Instrument(cfg.instrument, cfg.product_profile))
         # 合约规格漂移校验只做一次（verified 首次为真时）：合约规格在一次
         # 会话内不会变，重复检查只会把同 code 告警的 n 刷大。
@@ -127,27 +127,27 @@ class TradingEngine(ReconcileMixin):
         self.exit_policy = exit_policy
         self.store = store
         self.ev = ev
-        # 单笔手数（2026-09-16 收敛为**唯一来源**）：每个买卖点只开一笔，一笔挂
+        # 单笔手数（收敛为**唯一来源**）：每个买卖点只开一笔，一笔挂
         # N 手，N = **品种执行策略表第 3 列**（见下方 `lots_per_order` property，
         # 每次实时读 `self.state.exec_policy`）。
         #   原"仓位管理 PositionSizer/SizingConfig"与后来的"风控层
         #   `risk.max_volume`"两条通道**均已删除** —— 手数不再是 __init__ 里算好
         #   的常量，引擎侧也**不再保留任何可被运行期覆盖的镜像属性**
         #   （旧 `self.lots_per_signal` 已删）。理由：两个旋钮会让"改表 N"不生效、
-        #   而启动横幅只显示其中一个（评审 P2-3；用户 2026-09-16 拍板删 max_volume）。
+        #   而启动横幅只显示其中一个（用户拍板删 max_volume）。
 
         # 持仓簿：按建仓时间先后排列的仓单序列，**没有配对概念**。
         # 不设笔数上限（D2）—— 资金是唯一闸门（钱不够自然开不成功，由柜台拒单兜底）。
         self.positions: PositionBook = PositionBook()
-        # Phase A：4 态引擎状态机
+        # 4 态引擎状态机
         #   IDLE     无持仓，等待入场信号
         #   OPENING  正在开仓（瞬态：下单到成交之间）
         #   IN_TRADE 已持仓，等待离场条件
         #   EXITING  正在离场（瞬态：下单到成交之间）
         # 状态转移由 _execute（唯一报单出口）→ _book_open / _book_close 落账，
         # 再由 _sync_state 按净敞口统一刷新；_reconcile_positions 负责对账纠偏。
-        # 2026-09-11 重构后 _state 是 account_state() 的派生镜像，不再有独立口径。
-        # Phase B 信号门按此状态决定是否接收新信号、是否触发离场。
+        # 重构后 _state 是 account_state() 的派生镜像，不再有独立口径。
+        # 信号门按此状态决定是否接收新信号、是否触发离场。
         self._state: EngineState = EngineState.IDLE
         self.last_bar: Optional[Bar] = None
         self.bars_seen: int = 0
@@ -172,13 +172,13 @@ class TradingEngine(ReconcileMixin):
         # 上一次报单被拒的原因（供调用方写 signal_action）。每次 _execute 开头清空。
         self._last_reject: str = ""
         # ════════════════════════════════════════════════════════════════
-        # 报单前校验被拒的**可见性**（2026-09-16 · 待补清单第 1 条）
+        # 报单前校验被拒的**可见性**
         #   此前只有"柜台侧拒单"（broker 返回非 filled）会经 `_alert_on_reject`
         #   升级为告警；而**报单前校验链**（`_pre_trade_check`）拦下的拒单
         #   只写一条 `order_rejected` 流水账，**不接告警**，于是前端完全看不见。
         #   两处后果都在此收口：
-        #     ① 拒单原因送不到界面（§2-⑻）—— 用户提的原始诉求；
-        #     ② "合约参数取不到 → 一直拒单"（§2 复核 ⑸ 第五轮定稿）——
+        #     ① 拒单原因送不到界面（-⑻）—— 用户提的原始诉求；
+        #     ② "合约参数取不到 → 一直拒单"（复核 ⑸定稿）——
         #        这条同样是静默的，用户以为引擎在跑，实际一笔都发不出去。
         #   设计沿用既有 D11 通道：`self.alert()` 自带**同 code 合并计数** +
         #   确认水位，故不需要新的去重机制；本段只负责"分级 + 计数升级"。
@@ -189,8 +189,8 @@ class TradingEngine(ReconcileMixin):
         self._reject_streak_code: str = ""
         # ════════════════════════════════════════════════════════════════
         # CLOSE 冷却与「连续被拒」兜底
-        #   ⚠️ 这两项在 Phase 4 重写引擎核心时**漏迁**（配置项留着、判定没了），
-        #      Phase 6 按新分层重新落地：判定挂在 `_execute` 这一唯一报单出口上。
+        #   ⚠️ 这两项在重写引擎核心时**漏迁**（配置项留着、判定没了），
+        #      按新分层重新落地：判定挂在 `_execute` 这一唯一报单出口上。
         #
         #   为什么必须冷却：broker 内部一笔 CLOSE 已按 `close_max_chase` 轮追价
         #     （最坏 = 20 组报单/撤单）。引擎若每根 bar 再补一笔，15s 周期下就是
@@ -209,7 +209,7 @@ class TradingEngine(ReconcileMixin):
         self._close_retry_bars: int = cfg.engine.close_retry_bars    # 失败后冷却多少根 bar 再试
         self._close_max_streak: int = cfg.engine.close_max_streak    # 连续被拒多少次后清幻影仓
         # ════════════════════════════════════════════════════════════════
-        # 运行期 run 风控锚自检（2026-09-12 补，G2 的运行期对等护栏）
+        # 运行期 run 风控锚自检（补，G2 的运行期对等护栏）
         #   G2 只在**启动期**拒「有净敞口但无 run」；运行期对账 / 卡单复核 /
         #   连拒清仓三处改簿都可能让净敞口 0→非 0 而绕过 `_run_start`（run 的
         #   唯一开启点）→ 这里补一道自检，否则 L1-L3 **静默**失效。
@@ -221,7 +221,7 @@ class TradingEngine(ReconcileMixin):
         self._run_ready: bool = False
         self._run_missing_notified: bool = False
         # ════════════════════════════════════════════════════════════════
-        # CLOSE 卡单检测（原 UNLOCK 卡单检测，2026-09-11 随 UNLOCK 概念一并改名）
+        # CLOSE 卡单检测（原 UNLOCK 卡单检测，随 UNLOCK 概念一并改名）
         #   问题：CLOSE 报单后 broker 返回 filled，但 CTP 通道异常时真实未成交；
         #         引擎若直接信 filled 删掉仓单，就变成"簿面已平、实盘仍有仓"。
         #   方案：成交落账后记 `_close_in_flight`，若干 bars 后调
@@ -235,7 +235,7 @@ class TradingEngine(ReconcileMixin):
         #         "target_snapshot": dict, "submit_bar_ts": int, "submit_bar_seq": int}
         self._close_stuck_bars: int = cfg.engine.close_stuck_bars
         # ════════════════════════════════════════════════════════════════
-        # D11 告警队列（Phase 6）
+        # D11 告警队列
         #   引擎是告警的**生产者**，但用户看到它走的是前端 5s 轮询 → 打的是 API
         #   进程；而 API 进程与引擎是**两个进程**（App/AppTrader 托管子进程），
         #   不共享内存。所以队列落 state.db 的 kv：引擎写 `alerts`，API 层读它、
@@ -249,7 +249,7 @@ class TradingEngine(ReconcileMixin):
         # ════════════════════════════════════════════════════════════════
         # 自动下单开关
         #   True  = 正常接收买卖点信号并交易（默认）
-        #   False = 关闭语义（用户拍板，2026-09-11 确认保留）：
+        #   False = 关闭语义（用户拍板，确认保留）：
         #       ① 不再接收买卖点信号（on_signal 顶部门，见 auto_order_off skip）
         #       ② 运行态（净敞口 ≠ 0）持仓按规则 ⑹ 离场一次：
         #          今仓 → 反向 OPEN（变锁仓），跨日仓 → CLOSE
@@ -257,8 +257,8 @@ class TradingEngine(ReconcileMixin):
         #   shutdown_and_lock_all），_restore/_persist 持久化，重启不漂移。
         # ════════════════════════════════════════════════════════════════
         # ════════════════════════════════════════════════════════════════
-        # Step 1（2026-09-08）：周期 bar 秒数 —— 引擎按 source.freq 推导（用于追价窗口检查）。
-        #   （2026-09-08 精简：原 L4 时间/收盘兜底的 set_bar_secs 注入已随功能删除。）
+        # Step 1：周期 bar 秒数 —— 引擎按 source.freq 推导（用于追价窗口检查）。
+        #   （精简：原 L4 时间/收盘兜底的 set_bar_secs 注入已随功能删除。）
         self.bar_secs: Optional[int] = bar_secs_for(cfg.source.freq, default=None)
         # 离场追价窗口（close_max_chase × chase_interval）若长于一根 bar，
         # 15s 下会出现"上一轮还没追完、下一根 bar 又发起新一轮"的叠加。
@@ -275,7 +275,7 @@ class TradingEngine(ReconcileMixin):
 
         self.auto_order_enabled: bool = True
         self._restore()
-        # Phase 8.1（O-2/O-3）：构造期把 broker 已暂存的告警转手进 D11；
+        # （O-2/O-3）：构造期把 broker 已暂存的告警转手进 D11；
         # 此后每根 bar 在 on_bar 的 pulse() 之后续 drain（见 _drain_broker_alerts）。
         self._drain_broker_alerts()
 
@@ -301,7 +301,7 @@ class TradingEngine(ReconcileMixin):
         return AccountState.LOCKED
 
     # ════════════════════════════════════════════════════════════════
-    # 当前交易日（SSOT，2026-09-10 立）
+    # 当前交易日（SSOT，立）
     #   规则 ⑷⑸⑹⑺ 的 today 口径**唯一实现点**。此前 2 处各自现算：
     #     on_signal : sig.date[:10] if sig.date else ""
     #     离场      : bar.date[:10] if bar.date else now_cn()[:10]
@@ -346,7 +346,7 @@ class TradingEngine(ReconcileMixin):
         return trading_day_of_ms(now_ms())
 
     # ---------------- 兼容层：engine.position property ----------------
-    # Phase E1：旧版代码（含 P5..P11 测试）读写 engine.position 都是按"单 Position 或 None"
+    # 旧版代码（含 P5..P11 测试）读写 engine.position 都是按"单 Position 或 None"
     # 设计的。通过这两个 property，把读写都转发到 self.positions 这个容器，
     # 让现有调用点不需要改任何一行 —— E2/E3 接入多仓语义时，再逐步把
     # `engine.position.x` 替换成 `engine.positions.legacy_single()?.x` 或 .positions[*].x。
@@ -359,7 +359,7 @@ class TradingEngine(ReconcileMixin):
         self.positions.set_legacy(value)
 
     # ────────────────────────────────────────────────────────────────
-    # 启动闸门（Phase 5 收口）—— 共同口径：**宁可启动不了，也不带半新半旧的状态跑**。
+    # 启动闸门（收口）—— 共同口径：**宁可启动不了，也不带半新半旧的状态跑**。
     #   旧状态一旦被新口径解释，错误会一路跑到报单且不可逆（典型是 phantom 清仓：
     #   簿面清空但实盘仍有仓）。故三道闸门一律 fail-fast：
     #
@@ -367,11 +367,11 @@ class TradingEngine(ReconcileMixin):
     #     G2 run 闸门（_restore_run）  净敞口≠0 却无 run、run 与净敞口方向矛盾 → 拒
     #     G3 时间锚闸门（_restore）    entry_date 三源全空 → 拒
     #
-    #   ⚠️ 用户拍板（2026-09-11）：旧库一律**严格拒绝**，不做"自动剥离 + 继续跑"的
+    #   ⚠️ 用户拍板：旧库一律**严格拒绝**，不做"自动剥离 + 继续跑"的
     #      兼容迁移。理由：旧记录的持仓语义（锁仓仓算不算敞口）与当前"只看净敞口"
     #      的口径不同，自动迁移只是把账实不符从启动期推迟到报单期。
     # ────────────────────────────────────────────────────────────────
-    # 持仓记录曾用 `entry_mode` 键标记来源（后改名 `origin`），2026-09-11 随
+    # 持仓记录曾用 `entry_mode` 键标记来源（后改名 `origin`），随
     # "来源"概念连同 `lock_pair_id` / `exit_mode` 一并删除。带这些键的库由旧版本
     # 写入 —— 直接恢复会让引擎对已对冲的仓发平仓单（账实不符）。
     _LEGACY_POSITION_KEYS = ("entry_mode", "origin", "lock_pair_id", "exit_mode")
@@ -417,7 +417,7 @@ class TradingEngine(ReconcileMixin):
 
     def _restore(self) -> None:
         # ════════════════════════════════════════════════════════════════
-        # 品种白名单硬约束（2026-09-13 用户拍板）：品种不在 PRODUCT_PROFILES
+        # 品种白名单硬约束（用户拍板）：品种不在 PRODUCT_PROFILES
         #   → **拒绝启动引擎**（抛异常，子进程退出），不发告警、不带病运行。
         #   理由：告警应挂在交易引擎启动（用户确认的位置），而更严格的做法是
         #   未标定品种根本不允许启动——R 下限等执行参数未标定，启动即错。
@@ -426,20 +426,20 @@ class TradingEngine(ReconcileMixin):
         #   注意大小写：前端别名表把 SHFE/DCE 解析成小写主连（KQ.m@SHFE.au），
         #   归一在 parse_product_key 内完成（档案键统一大写）。
         #
-        # 2026-09-14 评审 P1-1 + P2-1：判定收敛到 Product.assert_product_allowed
+        # 判定收敛到 Product.assert_product_allowed
         #   —— ① 只用一处实现（原 App/Engine 两份，文案还不一样）；
         #      ② 解析口径从 parse_product（取末段）换成 parse_product_key（剥月份）：
         #         `CFFEX.IF2609` 原来解析成 "IF2609" 查不到档案 → 已标定的 IF 被
         #         白名单误杀，CLI 直启/回放直接起不来，报错还极具误导性。
         # ════════════════════════════════════════════════════════════════
         _key = assert_product_allowed(self.cfg.instrument.signal_symbol)
-        # 启动期 SSOT 断言（2026-09-16 · A 批 ⑵+⑶-b）：
+        # 启动期 SSOT 断言：
         #   白名单放行的品种 vs `self.state.product`（Instrument 构造期冻结的
         #   那份档案）**必须是同一个品种**，且该品种必须有执行策略行。
         #   见 `_assert_product_ssot` 的 docstring —— 这里把"两个来源只是
         #   碰巧一致"从约定升级为启动期硬失败。
         self._assert_product_ssot(_key)
-        # Phase E1：优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
+        # 优先读新版 "positions" list（多仓），回退到老版 "position" 单字段。
         # 老数据库无 "positions" 键时也能恢复，且不破坏现有迁移路径。
         # v1.3（Q5 拍板）：restore 不再用 cfg 容量截断 —— 不限容量，恢复永不丢失持仓（解 D3）。
         restore_max = None
@@ -465,7 +465,7 @@ class TradingEngine(ReconcileMixin):
                 self.positions.replace_with(new_book)
 
         # ════════════════════════════════════════════════════════════════
-        # F2（2026-09-10）：恢复后仍无 entry_date 的持仓 → 拒绝启动。
+        # F2：恢复后仍无 entry_date 的持仓 → 拒绝启动。
         #   entry_date 已在 Position.__post_init__（F4）里尽力重建，顺序为
         #     entry_bar_ts（建仓 K 线的毫秒时间戳 —— 权威来源，旧库必定有它，
         #                   因为 entry_bar_ts 比 entry_date 更早引入）
@@ -520,7 +520,7 @@ class TradingEngine(ReconcileMixin):
         self._sync_state()
         self.bars_seen = int(self.store.get_json("bars_seen", 0) or 0)
         # ════════════════════════════════════════════════════════════════
-        # R1（2026-09-10）：三个持久 ID 的序号跨重启恢复。
+        # R1：三个持久 ID 的序号跨重启恢复。
         #   症状（实测）：`_trade_seq` 是**进程内计数器**，
         #     `_persist` / `_restore` 都不碰它们 → 重启归零 → `trade_id` 从
         #     T00001 重来 → 与库内既有记录相撞 → 旧 `INSERT OR REPLACE` 把上一
@@ -551,20 +551,20 @@ class TradingEngine(ReconcileMixin):
         fl = self.store.get_json("_close_in_flight")
         if isinstance(fl, dict):
             self._close_in_flight = fl
-        # Phase 5 G5：恢复的卡单标记可能与当前 bar 进度不自洽（自愈规则见方法注释）
+        # G5：恢复的卡单标记可能与当前 bar 进度不自洽（自愈规则见方法注释）
         self._validate_close_in_flight()
         # D11：恢复未确认告警（severe 落库的目的就是"重启后还在"）
         self._load_alerts()
         # 运行态风控状态（run）：净敞口 ≠ 0 时必须有 run，否则 L1-L3 无从判定。
         self._restore_run()
 
-        # Phase I1：恢复自动下单开关。关闭语义要跨重启保持
+        # 恢复自动下单开关。关闭语义要跨重启保持
         # （前端关闭 → 子进程退出 → 再启动服务/引擎必须仍是关闭态，
         # 不能悄悄重新开始接收信号）。AppTrader.start 显式置 True 再拉起。
         self.auto_order_enabled = bool(self.store.get_json("auto_order_enabled", True))
 
         # ════════════════════════════════════════════════════════════════
-        # Phase F2（2026-09-05）：_restore 末尾首拉真实持仓
+        # _restore 末尾首拉真实持仓
         #   场景：上轮 SSE 实时成交留下持仓 → 进程重启 → _restore 从 store 读出持仓
         #         但真实账户可能已被用户在快期3手工平仓 / 隔夜强减 / 其它程序操作。
         #         若不在 _restore 末尾立刻对账，第一根 on_bar 之前引擎会误把
@@ -596,7 +596,7 @@ class TradingEngine(ReconcileMixin):
         self._run_ready = True
 
     def _check_run_anchor(self, source: str) -> None:
-        """运行期 run 风控锚自检 —— G2 的运行期对等护栏（2026-09-12 补）。
+        """运行期 run 风控锚自检 —— G2 的运行期对等护栏（补）。
 
         缺口：`_run_start` 全仓唯一开启点是 `_execute` 的成交落账分支，而净敞口
         有**三条路径不经过 `_execute`** 直接改簿：
@@ -642,7 +642,7 @@ class TradingEngine(ReconcileMixin):
             net_volume=net)
 
     def _persist(self) -> None:
-        # Phase E1：双写兼容 —— 新键 "positions"（list）保留扩展空间，
+        # 双写兼容 —— 新键 "positions"（list）保留扩展空间，
         # 旧键 "position"（单字段）继续写以做审计 / 旧流程回归。
         # 多仓时旧键取 positions[0] —— 是为了保留"看一眼持仓是哪个合约"的旧 API，
         # 不是引擎主入口（主入口走 self.positions）。legacy_single() 在多仓会抛错
@@ -680,7 +680,7 @@ class TradingEngine(ReconcileMixin):
             self.store.delete_key("_close_in_flight")
         # 运行态风控状态（run）：跨重启保持 L1-L3 的风控锚与出场计划。
         self._persist_run()
-        # P6-F 补全（2026-09-12）：CLOSE 冷却落 kv。子进程架构下 API 侧读的是
+        # 补全：CLOSE 冷却落 kv。子进程架构下 API 侧读的是
         # kv 而不是 `auto_order_status()`（后者只被测试调用），不落 kv 则前端
         # tooltip 的"平仓冷却剩余"永远读不到 —— 前端只能看到"点了没动静"。
         self.store.set_json("close_cooldown", {
@@ -688,7 +688,7 @@ class TradingEngine(ReconcileMixin):
             "bars_left": self._close_cooldown_bars_left(),
             "streak": self._close_fail_streak,
         })
-        # Phase I1：持久化自动下单开关（跨重启保持关闭语义）
+        # 持久化自动下单开关（跨重启保持关闭语义）
         self.store.set_json("auto_order_enabled", self.auto_order_enabled)
         # D11：告警队列 + ack 水位（顺带吃掉 API 层已确认的条目）
         self._persist_alerts()
@@ -804,7 +804,7 @@ class TradingEngine(ReconcileMixin):
         它不是独立状态机：真值恒等于 `account_state()`，此处只做一次投影，
         避免外部（API / 前端 / 旧测试）各自去判三态。
 
-        2026-09-12：这里顺带挂一次 run 风控锚自检 —— `_sync_state` 是所有改簿
+        这里顺带挂一次 run 风控锚自检 —— `_sync_state` 是所有改簿
         路径（成交落账 / 拒单记账 / 对账 / 卡单复核）的共同收口点，挂在这里比在
         三处各写一遍更不容易漏。见 `_check_run_anchor` 的文档串。
         """
@@ -828,7 +828,7 @@ class TradingEngine(ReconcileMixin):
         except Exception:
             pass
 
-        # （2026-09-08：原 on_bar 里的 RiskGate.roll_day 换日统计随风控五道硬闸门整体删除。）
+        # （原 on_bar 里的 RiskGate.roll_day 换日统计随风控五道硬闸门整体删除。）
 
         self.ev.write("bar", date=bar.date, close=bar.close,
                       high=bar.high, low=bar.low, seq=self.bars_seen)
@@ -840,7 +840,7 @@ class TradingEngine(ReconcileMixin):
         except Exception:
             pass
 
-        # Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker 侧 instrument 故障告警
+        # （O-2/O-3）：broker 侧 instrument 故障告警
         # 回流 D11 —— SimNow 用 notify() 暂存的诊断（超时 / nan / 与配置不一致）
         # 在这里转手 Engine.alert（同 code 自动合并，不会刷屏）。不支持
         # drain_alerts 的通道（鸭子判断）静默跳过。
@@ -948,7 +948,7 @@ class TradingEngine(ReconcileMixin):
 
         if act.transition == 1:
             # 空仓开新仓：入场策略只做数据兜底（signal.price<=0 → SKIP），
-            # 不再做信号质量过滤（振幅/止损距离上下限）—— 该职责已归缠论分析引擎（见 §9 Q13）
+            # 不再做信号质量过滤（振幅/止损距离上下限）—— 该职责已归缠论分析引擎（见 Q13）
             decision = self.entry_policy.decide(sig, None, self.state)
             if not decision:
                 self.store.update_signal_action(sig.key, "skip", decision.reason)
@@ -977,13 +977,13 @@ class TradingEngine(ReconcileMixin):
     # ════════════════════════════════════════════════════════════════
     @property
     def lots_per_order(self) -> int:
-        """一笔报单挂几手 —— **开仓手数的唯一口径**（2026-09-16 收敛）。
+        """一笔报单挂几手 —— **开仓手数的唯一口径**（收敛）。
 
         = 品种执行策略表第 3 列（`EXEC_POLICY[code].lots_per_order`），**就这一个
         来源**。原实现是 `min(risk.max_volume, 表值)`，于是单笔手数有了两个旋钮：
         用户"改表 N"不一定生效（被风控压住），而启动横幅只打表值 —— `max_volume=1`
         而表写 2 时，横幅说"一笔 2 手"、实际挂 1 手（唯一可见的行为变更处反而误导，
-        评审 P2-3）。用户 2026-09-16 拍板：**删掉 `risk.max_volume`，本列就是用来
+        ）。用户拍板：**删掉 `risk.max_volume`，本列就是用来
         替换它的** —— 故这里不再取小，表即唯一来源。
 
         ⚠️ **平仓不套这个帽子**（这是本 property 名不叫"手数唯一口径"的原因）：
@@ -994,7 +994,7 @@ class TradingEngine(ReconcileMixin):
         无品种档案 → **1 手**（保守侧：宁可少开，不按猜出来的手数下单；
         与"档案缺失时其余派生值一律取保守侧"同一约定 ——
         原文举的 `Instrument.exchange` 未标定 → "" 一例，随该字段于
-        2026-09-16 B 批删除而不再存在）。
+        删除而不再存在）。
         """
         pol = self._exec_policy()
         return int(pol.lots_per_order) if pol is not None else 1
@@ -1003,7 +1003,7 @@ class TradingEngine(ReconcileMixin):
         """一笔报单挂几手 —— **开仓手数的唯一来源**。
 
         2026-09-16 起唯一口径 = `lots_per_order`（品种执行策略表第 3 列），取代
-        原 Phase 9 的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所名字，只读表
+        原的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所名字，只读表
         （用户第 3 轮 ⑵ 明令）；也不再与任何风控上限取小（同日起 `risk.max_volume`
         删除，见 `lots_per_order` docstring）。
 
@@ -1039,7 +1039,7 @@ class TradingEngine(ReconcileMixin):
         #   `min(lots_per_signal, target.volume)`，一旦跨会话把风控手数/表 N 调小
         #   就会算出"只平一部分"，而 `_book_close` 是**整笔**记账的（PositionBook
         #   无减仓 API）→ 直接被 `close_volume_below_target` 拒单。手数旋钮收敛后
-        #   （2026-09-16 删 `risk.max_volume`）这里也就没有取小的必要。
+        #   （删 `risk.max_volume`）这里也就没有取小的必要。
         side = _opposite(sig.side)
         target = self.positions.oldest_opposite(sig.side)
         if target is None:
@@ -1065,7 +1065,7 @@ class TradingEngine(ReconcileMixin):
         if latest.entry_date >= today:
             # 转移 ④：今日仓离场。**唯一口径 = 品种执行策略表第 1 列**
             #   （`ExecPolicy.today_exit`） —— 不看交易所名字、不算费率
-            #   （用户 2026-09-16 拍板：人算 → 改表 → 启动，代码只读表）。
+            #   （用户拍板：人算 → 改表 → 启动，代码只读表）。
             #
             #   · CLOSETODAY → 直接平今（今仓清零 → 回空仓态）。
             #     手数 = min(净敞口, 该笔手数)：平仓必须平满目标，
@@ -1091,14 +1091,14 @@ class TradingEngine(ReconcileMixin):
                        is_exit=True, transition=5)
 
     # ════════════════════════════════════════════════════════════════
-    # 品种执行策略表的**单点读取**（2026-09-16 补）
+    # 品种执行策略表的**单点读取**（补）
     #   表第 1/3 列的四个消费点（`lots_per_order` / 转移④ / `_pre_trade_check`
     #   平今判据 / 两态守卫）此前各写一遍 `getattr(self.state, "exec_policy",
     #   None)`。重复读取的风险不是"多打几个字"，而是**守卫与决策可能读到不同
     #   口径**（守卫说"你是两态品种"、决策说"你不是" → 守卫形同虚设）。
     #   故收敛到本方法一处：判据恒同源。
     #
-    #   2026-09-16 A 批 ⑵：**本方法内部也不再 `getattr`** —— 连"没有该属性就
+    #   **本方法内部也不再 `getattr`** —— 连"没有该属性就
     #   静默给 None"这最后一个降级口也关掉；同时把 `Optional[Any]` 收紧成
     #   `Optional[ExecPolicy]`。启动期由 `_assert_product_ssot` 断言"已标定品种
     #   恒非 None"，故运行期拿到的永远是表里那一行。
@@ -1110,7 +1110,7 @@ class TradingEngine(ReconcileMixin):
         → `None`（保守侧：按"不支持平今、按手数兜底"走；**已标定品种恒非 None**，
         见 `_assert_product_ssot`）。
 
-        ⚠️ 2026-09-16 去掉 `getattr(self.state, "exec_policy", None)`（A 批 ⑵）：
+        ⚠️ 2026-09-16 去掉 `getattr(self.state, "exec_policy", None)`：
           `self.state` 恒是本仓的 `Instrument`（`__init__` 回落链保证：显式
           state → broker.state → 新建 Instrument），该属性**恒存在** → 用
           getattr 等于给"哪天属性被改名/搬走"留了一条静默降级：守卫读到 None
@@ -1121,7 +1121,7 @@ class TradingEngine(ReconcileMixin):
         return self.state.exec_policy
 
     def _assert_product_ssot(self, allowed_key: str) -> None:
-        """启动期断言：品种档案只有一个来源，且执行策略行必须存在（2026-09-16 · A 批）。
+        """启动期断言：品种档案只有一个来源，且执行策略行必须存在。
 
         **为什么要断言** —— 本引擎里"当前品种是哪一只"有**两个**读取口径：
           · `cfg.product_profile` —— **实时**按 `cfg.instrument.signal_symbol`
@@ -1172,7 +1172,7 @@ class TradingEngine(ReconcileMixin):
 
         `None` = 无品种档案 → 保守侧（照 `R-OPEN` 走锁仓，不生成会被拒的平今单）。
 
-        ⚠️ 2026-09-16 B 批：本方法原名 `_close_mode`（字段名同理），改回 `today_exit`。
+        ⚠️：本方法原名 `_close_mode`（字段名同理），改回 `today_exit`。
         旧名对 8 行里 **5 行**（IF/IH/IC/IM/TA，取值 R-OPEN）是误导 —— 那一支发的是
         **反向 OPEN**，属于开仓而非平仓。改名只动名字、不动任何判据：
         两处比较（转移④ / `_check_two_state_invariant`）与取值域完全不变。
@@ -1181,14 +1181,14 @@ class TradingEngine(ReconcileMixin):
         return pol.today_exit if pol is not None else None
 
     def _check_two_state_invariant(self, where: str) -> None:
-        """两态机前提的运行时守卫（2026-09-16 补）。
+        """两态机前提的运行时守卫（补）。
 
         **前提**：`today_exit == CLOSETODAY` 的品种，运行态**有且只有一笔当日仓**
         —— 它只能由转移①（开仓）产生，离场直接平今、平完即回空仓态。故锁仓态
         在这类品种上**结构性不可达**。转移④ 正是靠这条前提才敢用 `latest` 直接
         当平今目标（不回查 positions、不存在"找不到目标"的分支）。
 
-        **为什么需要它**：这条前提此前只有文档声明（§9.4 / §9.6），没有任何运行时
+        **为什么需要它** 这条前提此前只有文档声明，没有任何运行时
         检查。唯一能打破它的是「改表（`R-OPEN` → `CLOSETODAY`）后带着旧
         `state.db` 重启」—— 旧库里留着的反向锁仓单会让仓单数变成 2，此时
         `latest` 不再是唯一目标，离场只平一笔、另一笔**静默漏平**（簿面与实盘
@@ -1219,7 +1219,7 @@ class TradingEngine(ReconcileMixin):
                    where=where, positions_n=n)
 
     def _check_spec_drift(self) -> None:
-        """合约规格漂移校验（2026-09-13 用户拍板「保留 + 漂移校验」）。
+        """合约规格漂移校验（用户拍板「保留 + 漂移校验」）。
 
         背景：PRODUCT_PROFILES 里的 multiplier / price_tick **不是实盘真值**
         （实盘由 apply_quote 从行情原子覆盖，A′ fail-closed 兜底），而是
@@ -1230,15 +1230,15 @@ class TradingEngine(ReconcileMixin):
         一次性：verified 首次为真时查一次即置位（合约规格会话内不变）。
         挂在 A3 校验链（_pre_trade_check）上，遵循"二期扩展往链上加"惯例。
 
-        2026-09-15 P-A 删除离线分支（原 2026-09-14 P2-3 补的
+        删除离线分支（原补的
         `_spec_drift_offline_checked` + `spec_drift_offline` 告警，24 行）：
-        P-A/P-B 之前 `for_product` 播种桥对 price_tick / multiplier **无条件强制取
+        之前 `for_product` 播种桥对 price_tick / multiplier **无条件强制取
         档案值** → 离线 state ≡ 档案恒成立 → 离线分支结构性不可达。
-        P-B（2026-09-15）播种桥整体消亡（for_product/_seed_instrument 删除），
+        播种桥整体消亡（for_product/_seed_instrument 删除），
         Instrument 有效值初值**直接取档案**（构造期一次成型），单向取值结构
         本身保证离线对账恒成立，无需运行时校验。
         """
-        # 2026-09-16 A 批 ⑶-b：档案来源由 `cfg.product_profile`（**实时**按
+        # 档案来源由 `cfg.product_profile`（**实时**按
         #   cfg.instrument.signal_symbol 查表）改为 `self.state.product`
         #   （唯一运行时对象、构造期冻结）—— 与 `_book_close` 的成本口径同源，
         #   杜绝"按 A 品种判漂移、按 B 品种记账"。启动期已由
@@ -1270,7 +1270,7 @@ class TradingEngine(ReconcileMixin):
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
                 source=self.state.source)
 
-    # 2026-09-15 P-A 删除 _check_closetoday_economy（共 36 行）：
+    # 删除 _check_closetoday_economy（共 36 行）：
     #   平今经济性从"成交后建议"改为档案费率启动即派生（Product.prefer_closetoday）；
     #   2026-09-16 起再改一次：改为**品种执行策略表第 1 列直接给定**
     #   （ExecPolicy.today_exit）—— 决策侧不再读费率，建议与执行分叉的裂缝消除。
@@ -1281,22 +1281,22 @@ class TradingEngine(ReconcileMixin):
 
         ⚠️ 二期（Q1 全品种 / Q2 平今开关 / Q3 交割月护栏）一律往这条链上加，
         不要去改 `_decide_action` / `_decide_exit` 的转移表结构。
-        Phase 8（D20）在此链上加了两个 item（A3：不新增报单入口）：
-          · instrument_unverified —— A′ fail-closed 闸门（§5.9.3 规则 1/4）；
+        （D20）在此链上加了两个 item（A3：不新增报单入口）：
+          · instrument_unverified —— A′ fail-closed 闸门；
           · price_out_of_limit    —— 参考价出当日涨跌停区间的**粗检**（阻塞点 5；
             broker 侧对最终限价还有一次精确校验，见 SimNow._price_out_of_band ——
             最终限价（对手价±overprice）只有 broker 知道，引擎侧先拦参考价）。
         """
-        # ── A′ fail-closed 闸门（Phase 8 · §5.9.3 规则 1/4）──
+        # ── A′ fail-closed 闸门──
         #   在线通道（simnow/live）：合约参数（tick/乘数/涨跌停）必须已从行情
         #   取到并通过校验，否则拒单 + 严重告警 —— 绝不静默回退配置值。
         #   实盘配 instrument_fetch_policy="off" 时 verified 恒为 False →
         #   同样被这里拦下（调试开关不得绕过 A′）。
         #   离线通道（dry_run）放行：配置值来源已在 main.py 标记 CONFIG_OFFLINE。
-        #   Phase 3：verified / source 读自 **self.state**（与 broker 同一份）。
+        #   verified / source 读自 **self.state**（与 broker 同一份）。
         if not (getattr(self.broker, "is_offline", False)
                 or self.state.verified):
-            # Phase 8.1（O-4 收窄）：告警文案带上"为什么 unverified"——
+            # （O-4 收窄）：告警文案带上"为什么 unverified"——
             # policy=off 时点名（调试开关在在线通道不生效），否则给行情侧
             # 的通用原因。诊断细节（超时 / nan / 哪个字段冲突）由 broker 侧
             # notify → _drain_broker_alerts 回流补充（O-2/O-3）。
@@ -1310,7 +1310,7 @@ class TradingEngine(ReconcileMixin):
             if policy == "off":
                 why = "instrument_fetch_policy=off 在在线通道不生效（A′）"
             elif policy == "quote_partial":
-                # 2026-09-14 评审 P1-3：partial 档只豁免涨跌停，tick/乘数仍强制。
+                # partial 档只豁免涨跌停，tick/乘数仍强制。
                 #   文案要说清"这一档拒的不是涨跌停"，否则排障会往错的方向查。
                 why = ("quote_partial 档：price_tick / 乘数仍未从行情取到（该档"
                        "只豁免涨跌停，这两项缺失照样 fail-closed）")
@@ -1325,8 +1325,8 @@ class TradingEngine(ReconcileMixin):
             return "instrument_unverified"
         # 合约规格漂移校验（verified 首次为真后查一次；warn 不拒单）
         self._check_spec_drift()
-        # ── 交割月护栏（Phase 11 · 阻塞点 4 · D8）──
-        #   三态语义（2026-09-14 拍板）：空仓态拦截开仓、锁仓态拦截平仓、运行态不拦截。
+        # ── 交割月护栏（阻塞点 4 · D8）──
+        #   三态语义（拍板）：空仓态拦截开仓、锁仓态拦截平仓、运行态不拦截。
         #   原则：交割月附近不让**新进裸仓**、也不让**解锁成裸仓**，已运行的仓位
         #   可正常交易 / 锁仓（运行态不拦）。判据 = 剩余交易日 < delivery_guard_days
         #   即拦（默认 1 = 仅最后交易日当天）。护栏对象 = 现行主力 last_trade_date
@@ -1356,7 +1356,7 @@ class TradingEngine(ReconcileMixin):
             return "zero_volume"
         if not today:
             return "no_trading_day"
-        # ── 涨跌停护栏 · 粗检（Phase 8 · 阻塞点 5）──
+        # ── 涨跌停护栏 · 粗检（阻塞点 5）──
         #   参考价（信号 K 线收盘价 / 离场触发价）出当日区间 → 拦下。挡两类：
         #   ① 行情/合约异常（最新价本身不在区间内 = 数据是坏的，用错数据交易不可逆）；
         #   ② 停板边缘的必然废单（最终限价的精确校验在 broker 侧补刀）。
@@ -1397,10 +1397,10 @@ class TradingEngine(ReconcileMixin):
                 return "close_target_is_today"
         if act.volume > act.target.volume:
             return "close_volume_exceeds_target"
-        # 2026-09-12 补（对称）：`act.volume < target.volume` 同样是账实不符 ——
+        # 补（对称）：`act.volume < target.volume` 同样是账实不符 ——
         # broker 只平掉 `act.volume` 手，而 `_book_close` 是按 `pos.volume`
         # **整笔**记 Trade 并整笔 `positions.remove` 的（它拿不到"实际平了多少"）。
-        # 触发场景（2026-09-16 删 `risk.max_volume` 时复核收窄；同日端到端实测校准）：
+        # 触发场景（删 `risk.max_volume` 时复核收窄；同日端到端实测校准）：
         #   转移 ③④ 已改成"平满目标"，不再产生不足量；**仍可产生**的只剩转移 ⑤ ——
         #   `|net| < 目标那笔的手数`。
         #   ⚠️ 它的前提是「**簿内同向各笔手数不一致**」，而这只可能来自
@@ -1418,9 +1418,9 @@ class TradingEngine(ReconcileMixin):
         return None
 
     def _ref_price_out_of_band(self, ref_price: float) -> Optional[str]:
-        """涨跌停护栏 · 粗检（Phase 8 · §5.9.4 项 6）。返回 None = 通过。
+        """涨跌停护栏 · 粗检。返回 None = 通过。
 
-        Phase 3：区间读自 **self.state**（与 broker 侧 _price_out_of_band 同源）。
+        区间读自 **self.state**（与 broker 侧 _price_out_of_band 同源）。
         """
         lo = float(getattr(self.state, "lower_limit", 0.0) or 0.0)
         hi = float(getattr(self.state, "upper_limit", 0.0) or 0.0)
@@ -1430,9 +1430,9 @@ class TradingEngine(ReconcileMixin):
         if p <= 0:
             return None                          # 无参考价（历史调用点兼容）→ 不校验
         if not math.isfinite(p):
-            # Phase 8.1（B-1 引擎侧同源修复）：nan 是 truthy，`nan or 0.0` 仍是
+            # （引擎侧同源修复）：nan 是 truthy，`nan or 0.0` 仍是
             # nan，`nan <= 0` / `nan < lo` / `nan > hi` 全为 False → 原版会放行。
-            # 区间已知时参考价非有限值一律 fail-closed（§5.9.3 第 1 条 isfinite 守则）。
+            # 区间已知时参考价非有限值一律 fail-closed（第 1 条 isfinite 守则）。
             return ("price_invalid: 参考价 {!r} 非法（要求 isfinite）"
                     .format(p))
         if p < lo or p > hi:
@@ -1476,17 +1476,17 @@ class TradingEngine(ReconcileMixin):
                           reason=why, transition=act.transition,
                           intent=act.intent.value, volume=act.volume,
                           note="报单前校验未通过，未向柜台发出任何委托")
-            # 待补清单第 1 条：把"被前置校验拦下"也接进告警通道，否则前端
+            # 把"被前置校验拦下"也接进告警通道，否则前端
             # 看不见（原始诉求）+ "合约参数取不到一直拒单"会静默卡住。
             self._note_precheck_reject(act, why, sig)
             return None
 
-        # CLOSE 冷却（Phase 6）：同一笔平仓刚被拒过就先别再砸单 —— 免得每根
+        # CLOSE 冷却：同一笔平仓刚被拒过就先别再砸单 —— 免得每根
         # bar 都往柜台发一笔（broker 内部每笔已经追过 close_max_chase 轮）。
         if (act.intent is OrderIntent.CLOSE and not force
                 and self._in_close_cooldown()):
             self._last_reject = "close_cooldown"
-            # 2026-09-12 补：冷却拦截原本**直接 return、不写任何事件**，与上方
+            # 补：冷却拦截原本**直接 return、不写任何事件**，与上方
             # 前置校验失败会写 `order_rejected` 不对称。后果是"这根 bar 为什么没
             # 补单"在事件日志里完全不可见（前端 tooltip 又因为 kv 里没有
             # `close_cooldown` 而读不到）→ 运维侧彻底无感知。
@@ -1516,7 +1516,7 @@ class TradingEngine(ReconcileMixin):
             note=reason or "transition_{}".format(act.transition),
             entry_date=(act.target.entry_date if act.target is not None else ""),
             is_exit=act.is_exit)
-        # ── 审计补全（2026-09-11 Phase 7）──────────────────────────────
+        # ── 审计补全──────────────────────────────
         # OrderIntent 由 4 值收敛为 2 值（OPEN / CLOSE）后，`orders` 表里
         # **① 开新仓**与**④ 反向开仓锁仓**都记成 intent="open"，单看这一行
         # 无法区分"主动建仓"与"离场触发的锁仓"。旧版靠 intent="lock" 区分，
@@ -1553,12 +1553,12 @@ class TradingEngine(ReconcileMixin):
             return None
 
         if act.intent is OrderIntent.CLOSE:
-            # 2026-09-12 补：配置语义是"**连续**被拒 N 次清幻影仓"，而此前只有
+            # 补：配置语义是"**连续**被拒 N 次清幻影仓"，而此前只有
             # "达上限"时才清零 —— 成功 CLOSE 不清零 → 变成"**累计**被拒 N 次"：
             # 一次拒单 + 中间若干笔正常成交 + 再一次拒单会跨 run 累积到阈值，
             # 把引擎自己刚开出来的**真仓**当幻影清掉（实测：见 test_p43_audit_fixes [1]）。
             self._close_fail_streak = 0
-        # 待补清单第 1 条：报单真的发出去了 → 前置校验连拒计数器归零。口径与
+        # 报单真的发出去了 → 前置校验连拒计数器归零。口径与
         # `_close_fail_streak` 一致（"连续"而非"累计"），否则偶发几次跨天累积
         # 到阈值会误升级成严重告警。
         self._reject_streak = 0
@@ -1616,12 +1616,12 @@ class TradingEngine(ReconcileMixin):
         gross = pos.pnl_points(exit_price)
         # CLOSE 恒作用于跨日仓（`_pre_trade_check` 已断言）→ 恒按平昨档计。
         # 这里仍按 entry_date 动态判定，是为"未来其它调用方"保留防御。
-        # P-A（2026-09-15）：成本改读**品种档案 Fee 两档**（元口径，state 提供
+        # 成本改读**品种档案 Fee 两档**（元口径，state 提供
         #   有效乘数）；closetoday_first 是静态开关，留 spec。
         #   净值口径：毛利（点）× 有效乘数 × 手数 = 毛利（元），减成本（元）
         #   —— 全程在元上做，不再有"点减元"的口径混算点。
         #
-        # A 批 ⑶-b（2026-09-16）：**品种档案来源 = `self.state.product`**。
+        # **品种档案来源 = `self.state.product`**。
         #   原写法 `p = self.cfg.product_profile` 是**实时**按
         #   `cfg.instrument.signal_symbol` 查表，而状态机 / 手数 / 报单属性读的是
         #   `Instrument` 构造期冻结的那份 —— 两者不等 = 「按 AU 决策、按 IF 记账」
@@ -1683,7 +1683,7 @@ class TradingEngine(ReconcileMixin):
                 "净敞口已为 {:+} 手，但本段运行没有建立风控锚（缺成交价/信号），"
                 "L1-L3 止盈止损对本段失效。请人工盯盘或手工处理。".format(net),
                 net=net)
-            # 2026-09-13：置上通知锁，否则同一次异常会被 `_sync_state` 里的
+            # 置上通知锁，否则同一次异常会被 `_sync_state` 里的
             # `_check_run_anchor` 再报一条 `run_missing_anchor` —— 同一根因、
             # 两个 code，用户看到两个弹窗（D11 队列按 code 合并，两条都会弹）。
             # 本条已经把成因说清楚了，后续自检不必重复喊。见 test_p43 [7]。
@@ -1758,7 +1758,7 @@ class TradingEngine(ReconcileMixin):
 
         今仓 → 反向 OPEN（转移 ④）；跨日仓 → CLOSE（转移 ⑤）。
 
-        返回值（2026-09-16 · 待补清单第 5 条）：本次离场动作产生的委托
+        返回值：本次离场动作产生的委托
           · `None`   —— 没有离场动作要发（账本已空 / 不在运行态）→ 无需离场
           · `Order`  —— 发过一笔委托（**不代表成交**；未成交时 `_execute`
                         内部已走拒单告警路径并返回 None，故此处拿到的是
@@ -1781,7 +1781,7 @@ class TradingEngine(ReconcileMixin):
 
     # ════════════════════════════════════════════════════════════════
     # 自动下单关闭（前端开关 → 进程托管触发）
-    #   关闭语义（用户拍板，2026-09-11 确认保留）：
+    #   关闭语义（用户拍板，确认保留）：
     #     ① on_signal 顶部拒收所有买卖点信号
     #     ② 运行态持仓按【规则 ⑹】离场：今仓 → 反向 OPEN（锁仓），昨仓 → CLOSE
     #   幂等：重复关闭只对仍未离场的持仓补做；净敞口归零后无操作。
@@ -1797,7 +1797,7 @@ class TradingEngine(ReconcileMixin):
     def shutdown_and_lock_all(self, reason: str = "auto_order_off") -> None:
         """自动下单关闭入口（main.py 收到退出信号时调用）。幂等：重复调用安全。
 
-        **收尾确认信号（2026-09-16 · 待补清单第 5 条）**：
+        **收尾确认信号**
           关闭之后必须给用户一个**明确的终局结论** —— 要么"已清仓、无残留"，
           要么"仍有残留（哪些）"。此前的实现只覆盖了"锁仓态"一种，于是：
             · 已清仓（FLAT）→ **一声不响**，用户无法确认是否真的清干净了；
@@ -1875,8 +1875,8 @@ class TradingEngine(ReconcileMixin):
                 positions_n=n_pos, reason=reason)
 
     # ════════════════════════════════════════════════════════════════
-    # D11 告警队列（Phase 6）
-    #   触发源三类（分析文档 §5.2.4）：
+    # D11 告警队列
+    #   触发源三类（分析文档）：
     #     ① D10 判出的**不可挽救拒单** —— 资金不足 / 非交易时段 / 无权限 / 无此持仓
     #     ② 离场追价跑满 `close_max_chase` 仍未成交（价格不可达，追不动了）
     #     ③ CLOSE 连续被拒达 `close_max_streak` —— 兜底清幻影仓，同时叫人核对实盘
@@ -1904,7 +1904,7 @@ class TradingEngine(ReconcileMixin):
     }
 
     def _drain_broker_alerts(self) -> None:
-        """broker 侧告警回流 D11（Phase 8.1 · O-2/O-3，§5.9.4 项 5）。
+        """broker 侧告警回流 D11（O-2/O-3）。
 
         把 Broker.notify() 暂存的告警（instrument 超时 / nan / 与配置不一致等
         诊断）逐条转手 `Engine.alert`（沿用 D11 通道：severe → 阻塞弹窗、
@@ -1942,7 +1942,7 @@ class TradingEngine(ReconcileMixin):
                 a["last_ts"] = now
                 a["msg"] = msg
                 a.update(extra)
-                # ⚠️ 级别**只升不降**（2026-09-16 · 待补清单第 1 条）：
+                # ⚠️ 级别**只升不降**
                 #   合并时若把 level 直接覆盖成本次的值，则"同因连拒达阈值 →
                 #   从 warn 升级 severe"这条永远不生效 —— 首个 warn 条目会
                 #   一直把后面来的 severe 覆盖回去（方向写反）。
@@ -2049,7 +2049,7 @@ class TradingEngine(ReconcileMixin):
                            act.intent.value, str(o.side)),
                        signal_key=o.signal_key, reject_class=cls_)
 
-    # 报单前校验拒单 → 告警分级表（2026-09-16 · 待补清单第 1 条）
+    # 报单前校验拒单 → 告警分级表
     #   键 = `_pre_trade_check` 返回的原因字符串；(告警码, 级别)。
     #
     #   ⚠️ **只列"自己不会告警"的原因**。有三个原因在 `_pre_trade_check`
@@ -2068,7 +2068,7 @@ class TradingEngine(ReconcileMixin):
     #     · 一过性、行情/状态一到就恢复     → warn（前端 toast 轻提示）。
     #
     #   ⚠️ 这张表**只管可见性**，不改任何判定 —— 拒单与否仍由 `_pre_trade_check`
-    #      决定（fail-closed 底线不动，用户 2026-09-16 第五轮已明确）。
+    #      决定（fail-closed 底线不动，用户已明确）。
     _PRECHECK_ALERTS = {
         # CLOSE 的账实不符类：簿面与柜台对不上，必须有人核对，不会自己好。
         "close_volume_exceeds_target": ("precheck_close_volume_mismatch",
@@ -2106,10 +2106,10 @@ class TradingEngine(ReconcileMixin):
 
     def _note_precheck_reject(self, act: "_Action", why: str,
                               sig: Optional[Signal] = None) -> None:
-        """把"报单前校验被拒"升级成用户可见的告警（待补清单第 1 条）。
+        """把"报单前校验被拒"升级成用户可见的告警。
 
         覆盖两处原本静默的卡住（见 `__init__` 内 `_reject_streak` 注释）：
-          ① 拒单原因送不到界面（§2-⑻）；
+          ① 拒单原因送不到界面（-⑻）；
           ② 连续被同一原因拒绝（含"合约参数取不到"）—— 从"偶发"升级为"卡死"。
 
         复用既有 D11 通道（`self.alert`），因此**自动获得**同 code 合并计数与
@@ -2153,7 +2153,7 @@ class TradingEngine(ReconcileMixin):
             signal_key=(sig.key if sig is not None else ""),
             transition=act.transition, escalated=escalated)
 
-    # ── CLOSE 冷却 / 连续被拒兜底（Phase 6 恢复，见 __init__ 注释）──
+    # ── CLOSE 冷却 / 连续被拒兜底（恢复，见 __init__ 注释）──
     def _in_close_cooldown(self) -> bool:
         """是否处于 CLOSE 冷却期（根数口径：bars_seen 序号差）。"""
         if not self._last_close_failed_bar_seq:
@@ -2176,7 +2176,7 @@ class TradingEngine(ReconcileMixin):
         不再像旧版把整批一次清掉 —— 清得少一点，错了波及面就小一点；同一根 bar
         的 `_reconcile_positions` 也会独立判一遍幻影，两条路互为兜底。
 
-        ⚠️ **2026-09-13 补类别门槛（D10 §7.3）**：清仓兜底**只认 `position` 类**
+        ⚠️ ** 补类别门槛（D10）** 清仓兜底**只认 `position` 类**
         （平仓量超过持仓量 / 平昨仓不足）= 柜台说"没有这个仓"。其余类别一律
         **只进冷却 + 告警，不动簿面**：
 
@@ -2286,7 +2286,7 @@ class TradingEngine(ReconcileMixin):
 
     # ---------------- 统计 ----------------
     def summary(self) -> Dict[str, Any]:
-        # P-A（2026-09-15）：统计口径改**元**（net_cash）。原"点"口径的
+        # 统计口径改**元**（net_cash）。原"点"口径的
         # net_points 已随 Trade.cost_points→cost_cash 删除 —— per_lot 费率档
         # 无法在点数口径无损表达，净值只有元是自洽的；毛利仍有点口径
         # （gross_points），净统计一律 net_cash。
@@ -2314,7 +2314,7 @@ class TradingEngine(ReconcileMixin):
             "open_position": ([p.to_dict() for p in self.positions.positions] or None),
             "exit_policy": self.exit_policy.describe(),
             "entry_policy": self.entry_policy.describe(),
-            # Phase 3：tick / 乘数取 **state 的有效值**（引擎实际使用的口径）；
+            # tick / 乘数取 **state 的有效值**（引擎实际使用的口径）；
             #   symbol / 交易合约仍取静态 spec。
             "spec": {"signal_symbol": self.state.signal_symbol,
                      "trade_symbol": self.state.trade_symbol,

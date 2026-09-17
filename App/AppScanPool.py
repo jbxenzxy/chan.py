@@ -32,7 +32,7 @@ App/AppScanPool.py —— 批量扫描 ProcessPool 编排
   - 中止：task 级中止经 AppScanStore 状态传播（worker 每票前检查
     is_aborted），不依赖进程内 _scan_aborted 标志。
   - 收割：collector 把 worker 错误行合并进**发起该任务的扫描会话**
-    （审计 X3：经 task_id → scan_token 反查，不再写全局 _scan_skip_log；
+    （经 task_id → scan_token 反查，不再写全局 _scan_skip_log；
     /api/scan_end 汇总口径一致，中止行不计入）。
   - 生命周期：提交入口 best-effort 清理过期任务；
     atexit 注册显式关池（shutdown(wait=False, cancel_futures=True)）。
@@ -201,9 +201,9 @@ def _monitor_task(task_id, futures):
 
         # 错误明细并入**发起本次任务的那一次扫描**的跳过记录（中止行不计入）
         try:
-            # 审计 P1-5：经加锁访问器追加（本线程是收割线程，与 REST 线程的
+            # 经加锁访问器追加（本线程是收割线程，与 REST 线程的
             # 清空 / 遍历并发；原实现直接 append 模块级 list，无锁无登记）
-            # 审计 X3：进一步按 scan_token 归属——收割线程只拿得到 task_id，
+            # 进一步按 scan_token 归属——收割线程只拿得到 task_id，
             # 故由 submit_batch_scan 预先绑定 task_id → scan_token，此处
             # 反查后写入那一次扫描自己的会话，不再混入全局（多页同时扫描
             # 时，别页的明细不会串进本页的汇总打印）。
@@ -236,7 +236,7 @@ def _monitor_task(task_id, futures):
             pass
         finally:
             # 任务到终态即解绑 task_id → scan_token，避免映射表只增不减
-            # （审计 X3 生命周期：绑定的生命周期须与被绑对象一致）
+            # （生命周期：绑定的生命周期须与被绑对象一致）
             try:
                 from App.AppScan import drop_task_scan_token
                 drop_task_scan_token(task_id)
@@ -292,7 +292,7 @@ def submit_batch_scan(stocks, freq="d", mode="", recent="1", source="zxg"):
         store.set_status(task_id, "error", msg)
         return {"error": msg}
 
-    # 审计 P1-6：`_get_pool()` 已在锁内把 `_active_scans += 1`，而归还责任
+    # `_get_pool()` 已在锁内把 `_active_scans += 1`，而归还责任
     # 交给收割线程 `_monitor_task`（其 finally 调 `_release_scan()`）。从
     # 这里到「线程成功启动」之间的每一步都可能抛异常（_resolve_workers /
     # log / set_status / Thread.start），任一一处抛出 → 计数只增不减 →

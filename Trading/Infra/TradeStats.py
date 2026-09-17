@@ -10,15 +10,15 @@
   · 账户无关：trades 表无 broker/账户列，simnow/实盘天然合并；调用方
     传入多个 db 路径即 union。
   · **按品种键合并**：盘前在主连上跑（`KQ.m@CFFEX.IF`）、盘后在月份合约上记账
-    (`CFFEX.IF2609`) —— 两边归一后同键 → 合并统计（用户 2026-09-16 拍板）。
+    (`CFFEX.IF2609`) —— 两边归一后同键 → 合并统计（用户拍板）。
     旧实现用「双向后缀 GLOB」，对**真实取值**恒不命中（详见
     `Product.product_key_of`）。
-  · **归一已搬到写入侧（2026-09-16 · C 批 ⑶-d）**：品种键由 `Store.save_trade`
+  · **归一已搬到写入侧** 品种键由 `Store.save_trade`
     落进 `trades.product_key` 列，本模块的过滤判据因此是**列相等**
     （`WHERE product_key = ?`），**不再解读 `symbol`**。这样"同一批成交算不算
     同一品种"只有一个答案来源（写入那一刻算好的键），而不是"写库一份 symbol +
     查库时现算一次"两处口径。
-  · **读库结果逐库上报**（2026-09-16 补）：见 `load_trades_report`。
+  · **读库结果逐库上报**（补）：见 `load_trades_report`。
 """
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def load_trades_report(db_paths: List[str],
     它长得和"这个品种没有成交"一模一样（旧 schema 里 `trades` 表被改名为
     `trades_legacy_points`、或库文件损坏，都会走到这里）。
 
-    **为什么判据是「列相等」而不是「查库时现算」**（2026-09-16 · C 批 ⑶-d）：
+    **为什么判据是「列相等」而不是「查库时现算」**
     旧实现读回全表后逐行 `product_key_of(row["symbol"])` —— 于是同一件事有了
     两个口径来源：写库那一刻的 symbol 与查库时现算的键。归一搬到写入侧后，
     "这笔成交属于哪个品种"在**落库时**就定好了，查询只做 `WHERE product_key = ?`。
@@ -150,7 +150,7 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     entry_at, exit_at, reason, gross_points, cost_cash, net_cash, bars_held,
     exit_plan_name, exit_plan_params。
 
-    ⚠️ 返回值里**没有 `symbol` 字段**（2026-09-16）：一行成交一个合约，而统计
+    ⚠️ 返回值里**没有 `symbol` 字段** 一行成交一个合约，而统计
     口径是**整个品种**（多合约月份合并），取任意一行的 symbol 都是误导。
     "统计的是哪个品种"由调用方用 `load_trades_report` 的 `symbol_key` 给出。
 

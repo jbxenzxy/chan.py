@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-P41 报单意图 → CTP offset 只有三个值（2026-09-11 / Phase 10 三值化 2026-09-14）
+P41 报单意图 → CTP offset 只有三个值（三值化）
 =============================================================================
-背景（一期架构约束 A4 / 文档 §5.2 / 退役 p11）
+背景（一期架构约束 A4 / 文档退役 p11）
 -------------------------------------------------
 `OrderIntent` 从旧版的 4 值（open / close / lock / unlock）收敛为 2 值
-（OPEN / CLOSE）；Phase 10（D6 平今开关）追加第 3 值 **CLOSETODAY**（平今）。
+（OPEN / CLOSE）；（D6 平今开关）追加第 3 值 **CLOSETODAY**（平今）。
 CTP 报文 offset 由 `Broker/Base.INTENT_TO_OFFSET`
 **唯一**决定（见 `SimNow.submit` 注释："offset 由 INTENT_TO_OFFSET 决定"）。
 

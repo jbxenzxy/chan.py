@@ -4210,7 +4210,7 @@
             document.getElementById("stock-history").classList.remove("show");
             document.getElementById("loading").classList.remove("hidden");
             // ⚠️ 本表必须与后端 DataAPI/TqSdkAPI.FUTURES_ALIASES **键集一致**
-            //   （2026-09-14 第二轮用户点名收窄到 16 品种；原为 83 条全表）。
+            //   （收窄到 16 品种；原为 83 条全表）。
             //   用途：判定"用户敲的短代码是不是期货"。只改一边会出现
             //   「本表命中 → 认作期货 → connectRealtimeInit → 后端解析不出代码」的空转。
             //   契约测试：Trading/Test/test_p47_product_case_whitelist.py [4] 段
@@ -4508,7 +4508,7 @@
                 });
         }
 
-        // 读库可见性（2026-09-16）：把「真的没有成交」与「库读不出来」分开显示。
+        // 读库可见性：把「真的没有成交」与「库读不出来」分开显示。
         // 后端 read_errors 只含真故障（库损坏 / 旧 schema 无 trades 表 / 打不开），
         // 不含「文件还没生成」—— 后者是正常空态，dbs_scanned 会体现。
         function statsReadErrors(d) { return (d && d.read_errors) || []; }
@@ -4953,7 +4953,7 @@
             document.getElementById("scan-mode-dialog").classList.remove("show");
             // 注：原先勾选"成分股"时会先 PUT /scan/set/index 把指数代码写进
             // 后端**全局**，后端读全局来决定扫哪些成分股。多网页下后设置的
-            // 页面会覆盖先设置的，两页会按同一指数扫（审计 X3）。
+            // 页面会覆盖先设置的，两页会按同一指数扫。
             // 现改为在 read/candidates 与 scan/start 上随请求传
             // page_index_code（见 runScan），故不再需要这次写全局的调用。
             // 执行实际扫描
@@ -5058,7 +5058,7 @@
         };
 
         // 多来源合并：后端统一合并去重，前端只需传逗号分隔的来源列表
-        // 审计 X3：成分股来源的板块指数代码**随本请求传入**（page_index_code），
+        // 成分股来源的板块指数代码**随本请求传入**（page_index_code），
         // 不再依赖「先 PUT /scan/set/index 写全局、后端再读全局」——多网页下
         // 后设置的页面会覆盖先设置的，导致两页都按同一指数扫错一整批成分股。
         function _fetchMergedStocks(sources, freq, pageIndexCode, scanToken) {
@@ -5179,7 +5179,7 @@
         }
 
         // 实际执行扫描（由对话框确认后调用）
-        // P1-7 辅助：市场分布摘要（上海/深圳/北京/香港 计数），fx_d / fangliang / bsp 共用
+        // 辅助：市场分布摘要（上海/深圳/北京/香港计数），fx_d / fangliang / bsp 共用
         function _scanMarketSummaryHtml(results) {
             var shCount = 0, szCount = 0, bjCount = 0, hkCount = 0;
             for (var i = 0; i < results.length; i++) {
@@ -5276,13 +5276,13 @@
                 return;
             }
 
-            // P1-7：fx_d / ma / fangliang / bsp 四种扫描模式共用同一条执行管线
+            // fx_d / ma / fangliang / bsp 四种扫描模式共用同一条执行管线
             // （原 4 个近复制分支，各含 3 个重复闭包，共 12 份近似副本）。
             // 差异收敛为 spec：mode 字符串 + 结果分类谓词 + 进度/结果渲染函数。
             var runScan = function(spec) {
                 var sourceLabel = _scanSourceLabel();
                 body.innerHTML = '<div class="scan-loading"><div class="spinner"></div><br>正在读取：' + sourceLabel + '...</div>';
-                // 审计 X3：① 板块指数代码**随请求传入**（page_index_code），
+                // ① 板块指数代码**随请求传入**（page_index_code），
                 // 不再「先 PUT /scan/set/index 写后端全局、后端再读全局」——
                 // 多网页下后设置的页面会覆盖先设置的，两页会按同一指数扫，
                 // 静默扫错一整批成分股；② start() 返回本次扫描私有的
@@ -5336,7 +5336,7 @@
                             // 把"正在扫描"写回 body，覆盖 render* 的结果（spinner 残留）
                             if (_updateTimer) { clearInterval(_updateTimer); _updateTimer = null; }
                             _pendingUpdate = false;
-                            // 带 scan_token：结算本页这一次扫描（审计 X3）
+                            // 带 scan_token：结算本页这一次扫描
                             var endUrl = "/api/stocks/scan/end"
                                 + (scanToken ? "?scan_token=" + encodeURIComponent(scanToken) : "");
                             fetch(endUrl, { method: "POST" }).then(function() {

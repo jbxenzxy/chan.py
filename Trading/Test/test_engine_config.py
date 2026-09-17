@@ -2,7 +2,7 @@
 """
 test_engine_config.py — Step 2.2：引擎时序常量归一到 EngineConfig
 ====================================================================
-验证点（对应可行性分析 §3 拍板结论 E1 + F1 + G2）：
+验证点（对应可行性分析拍板结论 E1 + F1 + G2）：
   [1] EngineConfig 字段与默认值（5 / 20 / 5，SSOT 唯一声明处）
   [2] TradingConfig.engine 默认工厂 + 显式覆盖 + extra="forbid" 拒未知字段
   [3] 引擎接线：Engine.__init__ 从 cfg.engine 读值，属性名不变

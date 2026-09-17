@@ -101,7 +101,7 @@ class ScanStore:
         scan_results 无 seq 列，若先执行 _SCHEMA 的 CREATE INDEX 会抛
         "no such column: seq"。
 
-        ⚠ 已知边界（审计 P2，此处不改，仅记录）：下面的 `self._init_lock`
+        ⚠ 已知边界（此处不改，仅记录）：下面的 `self._init_lock`
         是 threading.Lock，只在**进程内**有效。真正兜住多进程并发的是
         SQLite 的 WAL + busy_timeout + 幂等 DDL，不是这把锁。当前生产时序
         是「父进程先建库、worker 后启动」，所以两个进程不会同时跑 DROP

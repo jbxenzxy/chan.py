@@ -2,19 +2,19 @@
 """
 P9 郑商所 CZCE · FOK→FAK + OPEN 手数（执行策略表第 5 列） 契约测试
 =================================================
-背景（设计，见 自动下单重构-分析与实施计划 v1.3 · Phase 9；用户拍板方案）：
+背景（设计，见自动下单重构-分析与实施计划 v1.3 ；用户拍板方案）：
   郑商所（CZCE）不支持 FOK（tqsdk 限价+FOK 仅拒郑商所期货）。用户拍板：
   对 CZCE 期货，**一次信号只报 1 笔、该笔固定挂 1 手、指令属性 FOK→FAK**。
   因为单笔 1 手，FAK 在 1 手下要么成 1、要么成 0，与 FOK 完全同构（FAK(1)≡FOK(1)），
   所以：
     · 报单填充三态（待报/全成/全撤）不变量 4 保持 —— 无需扩展状态机、无需补簿；
     · 账户三态只看净敞口，不受影响；
-    · 平仓手数 = 目标仓单全额（2026-09-16 起，不受单笔手数旋钮影响）。
+    · 平仓手数 = 目标仓单全额（不受单笔手数旋钮影响）。
   其余品种完全不变：1 笔 N 手（N = 品种执行策略表第 3 列，IF = 2）FOK。
 
 本测试锁死用户的三条断言：
   [1] Instrument.effective_order_advanced()：CZCE→"FAK"，其余→"FOK"（含配置覆盖；
-      P-B 起报单属性真值源 = 品种档案；2026-09-16 B 批删 exchange 字段后交易所彻底出代码）
+      报单属性真值源 = 品种档案；删 exchange 字段后交易所彻底出代码）
   [2] Engine._decide_action OPEN 手数：按表第 3 列（TA=1 / IF=2，无拆单）
   [3] Broker submit 报文：CZCE 两个 insert_order 站点（OPEN/CLOSE/离场）advanced 均 "FAK"；
       CFFEX 回归 "FOK"
@@ -68,7 +68,7 @@ from Trading.Infra.Instrument import (Instrument,  # noqa: E402
                                       InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
-# 2026-09-16 B 批：`Product.exchange` 字段整体删除后，原先的
+# `Product.exchange` 字段整体删除后，原先的
 #   `_prod(ex) = _dc_replace(_IF, exchange=ex)`（"换交易所造一份现场档案"）
 #   在结构上无法表达 —— 连能填错的地方都没有了，故连同 `_dc_replace`
 #   导入一并删除（本文件其余地方不再需要它）。
@@ -206,7 +206,7 @@ def make_broker(api=None, params=None):
 
 
 def make_czce_broker(api=None, params=None):
-    """make_broker 的 CZCE 版：P-B 起报单属性归品种档案 —— 直接用 TA 档案
+    """make_broker 的 CZCE 版：报单属性归品种档案 —— 直接用 TA 档案
     构造 Instrument，trade_symbol 用郑商所月份合约（运行时可写身份字段）。"""
     b = make_broker(api=api, params=params)
     b.state = Instrument(
@@ -219,17 +219,17 @@ def make_czce_broker(api=None, params=None):
 def build_engine(tmpdir, *, code="TA", broker=None):
     """构造引擎（TA / IF 两份档案二选一）。
 
-    2026-09-13 Phase 9：Engine 与 broker 共用同一份 Instrument（P-B 合并），
+    Engine 与 broker 共用同一份 Instrument（合并），
     报单属性由**品种档案**给定，端到端验证 FOK/FAK 切换。
-    2026-09-16：单笔手数不再由配置给（`risk.max_volume` 已删），
+    单笔手数不再由配置给（`risk.max_volume` 已删），
     真值源 = 品种执行策略表第 3 列（TA → 1 / IF → 2）。
-    2026-09-16 B 批：形参由 `exchange="CZCE"/"CFFEX"` 改为 `code="TA"/"IF"`。
+    形参由 `exchange="CZCE"/"CFFEX"` 改为 `code="TA"/"IF"`。
     本参数**从来就只是"选哪份档案"**（CZCE/CFFEX 是当时能想到的场景名），
     改用品种键才与代码真正读的东西（`PRODUCT_PROFILES[code]`）对得上；
     何况 `Product.exchange` 字段已删除，交易所名再无字段可承载。
     """
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # P-B（2026-09-15）：frozen 配置不可就地改写 ——
+    # frozen 配置不可就地改写 ——
     #   按品种键取档案；Instrument 单例整体替换进 cfg，
     #   并同时注入 broker（Engine 读 self.state = broker.state = 同一对象）。
     is_ta = code == "TA"
@@ -289,7 +289,7 @@ for _k in ("AU", "AG", "CU"):
     check("[1f] {} 档案 → FOK（表第 2 列）".format(_k),
           Instrument(None, PRODUCT_PROFILES[_k]).effective_order_advanced(), "FOK")
 # [1g] 原为「配错交易所不改表结论：TA 档案改 exchange='SHFE' → 仍 FAK」。
-#      2026-09-16 B 批删除 `Product.exchange` 字段后，这条从**行为断言**升级为
+#      删除 `Product.exchange` 字段后，这条从**行为断言**升级为
 #      **结构断言**：交易所连"能被填错的地方"都不存在了 —— 比"填错也不影响"更强，
 #      因为它不再依赖"有人记得去测配错这个动作"。
 check("[1g] ★ 交易所彻底出代码：8 档均无 exchange 字段（2026-09-16 B 批删除）",
@@ -401,7 +401,7 @@ with tmp_dir() as td:
             self.orders.append(o)
             return o
 
-    # P-B：exchange 归档案 —— CZCE 语义直接用 TA 档案表达（frozen 配置不可改写）
+    # exchange 归档案 —— CZCE 语义直接用 TA 档案表达（frozen 配置不可改写）
     rb = RejectDryBroker(
         Instrument(InstrumentConfig(trade_symbol="CZCE.TA501"),
                    PRODUCT_PROFILES["TA"]),
@@ -443,7 +443,7 @@ with tmp_dir() as td:
     # 单元测试无真实行情：放开 A′ fail-closed 闸门（模拟 dry_run 的 is_offline 放行），
     # 否则 _pre_trade_check 会直接 instrument_unverified 拒单、insert_order 不会被调用。
     bk.is_offline = True
-    # Phase 3（Fix B）：A′ 的 verified 是**运行时状态**，落在 broker 的 state 上
+    # A′ 的 verified 是**运行时状态**，落在 broker 的 state 上
     # （Engine 通过 broker.state 读同一份 —— 不是 spec）。
     bk.state.verified = True
     eng = build_engine(td, code="TA", broker=bk)

@@ -1,14 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-P20 Phase I1：自动下单开关（关闭离场 / live 配置）单元测试
+P20：自动下单开关（关闭离场 / live 配置）单元测试
 ==========================================================
-2026-09-11 Phase 7 改写。旧版 [1]-[6] 建立在两个已删概念上：
+改写。旧版 [1]-[6] 建立在两个已删概念上：
   · `OrderIntent.LOCK` / `PositionOrigin.SOFT_EXIT_LOCK` / `lock_pair_id`
     —— "锁仓"不再是一种**打标的操作**，而是"净敞口 = 0 且簿非空"的**状态**
     （`AccountState.LOCKED`）。今日仓离场走转移 ④（反向 OPEN），仓单上不打标。
   · `cfg.risk.max_open_positions` —— D2 删除，夹具不再配置它。
 
-背景（用户拍板关闭语义，2026-09-11 复核后口径不变）
+背景（用户拍板关闭语义，复核后口径不变）
     关闭自动下单：
       ① 不再接收买卖点信号（on_signal 顶部拒收，幂等键照常消费）
       ② 运行态持仓按【规则 ⑹】离场（判据是建仓日期，与来源无关）：
@@ -19,7 +19,7 @@ P20 Phase I1：自动下单开关（关闭离场 / live 配置）单元测试
       两条人工出口 = 重新开启后由对向信号拆锁（转移 ③）/ 交易所手工平仓。
       这条契约由 test_p30_shutdown_exit_mode.py 做完整覆盖，本文件只做基本确认。
 
-Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
+配置（账户选择）—— 配置唯一入口 Trading/Config.py（无 config.json）
     broker = dry_run / simnow / live
     broker_params.tq_market：simnow=仿真；实盘填期货公司名（如"创元期货"）
     实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式
@@ -38,7 +38,7 @@ Phase I1 配置（账户选择）—— 配置唯一入口 Trading/Config.py（�
     [7] 实盘安全闸门（AppTrader._check_live_gate 三分支）
     [8] broker 路由：SimNowBroker.is_live 判定 + LiveCTPBroker 注册
     [9]-[12] AppTrader 子进程 / 状态 / CWD 行为（依赖仓库根 App/ 包）
-    [9x] 下单侧品种前置检查出口（check_symbol_allowed）—— 2026-09-14 新增，
+    [9x] 下单侧品种前置检查出口（check_symbol_allowed）——新增，
          配套「K线图 vs 自动下单 解耦」：看行情不设品种限制，品种约束只在下单侧。
 
 不需要真实 tqsdk / 网络；纯单测 + 真实 sqlite tempfile。
@@ -135,7 +135,7 @@ def check_true(name, got):
 
 
 def make_cfg(max_pos=None):
-    """构造配置。2026-09-11：`max_open_positions` 已按 D2 删除（容器不限容量），
+    """构造配置。`max_open_positions` 已按 D2 删除（容器不限容量），
     max_pos 形参仅为兼容旧调用点保留 —— 传了也不再生效（旧键会被 D17 白名单丢弃）。"""
     d = copy.deepcopy(DEFAULT_CONFIG)
     if max_pos is not None:
@@ -160,7 +160,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
              signal_key="P20-pos", entry_bar_seq=1, entry_date="2026-09-03"):
     """构造一笔"关闭时正在运行、且【当日】开仓"的持仓。
 
-    2026-09-11：**不再传 origin**（字段已删）。关闭时按 entry_date 判今/昨仓
+    **不再传 origin**（字段已删）。关闭时按 entry_date 判今/昨仓
     （今仓 → 转移 ④ 反向 OPEN 锁仓 / 昨仓 → 转移 ⑤ CLOSE）。
       本组夹具的语义是"当日开、当日关" → entry_date 必须等于引擎的 today，
       即 make_bar() 的日期 2026-09-03；否则会被判成昨仓走 CLOSE，
@@ -179,7 +179,7 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
 class LockRejectBroker(DryRunBroker):
     """前 reject_n 次**离场向**报单拒绝（模拟锁仓/平仓拒单），之后放行。
 
-    2026-09-11：`OrderIntent.LOCK` 已删 —— "锁仓"现在是转移 ④ 的
+    `OrderIntent.LOCK` 已删 —— "锁仓"现在是转移 ④ 的
     `OPEN + is_exit=True`。拒单条件随之从 `intent is LOCK` 改为
     `is_exit=True`（覆盖 ④⑤ 两条离场路径；开仓的 OPEN 不拒）。
     """
@@ -210,7 +210,7 @@ class LockRejectBroker(DryRunBroker):
 
 def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
                  store=None, ev=None):
-    # 2026-09-11：不再传 max_pos —— D2 删除该键后传它只会触发 D17 丢弃告警。
+    # 不再传 max_pos —— D2 删除该键后传它只会触发 D17 丢弃告警。
     cfg = cfg or make_cfg()
     spec = Instrument(None, _IF)
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
@@ -238,9 +238,9 @@ def event_kinds(ev_path):
 def lock_orders(broker):
     """离场向报单（④ 反向 OPEN / ⑤ CLOSE）。
 
-    2026-09-11：旧判据 `meta["intent"] == "lock"` 随 4→2 intent 收敛失效
+    旧判据 `meta["intent"] == "lock"` 随 4→2 intent 收敛失效
     （① 与 ④ 现在都是 intent="open"）。改判 `is_exit` —— 它由引擎在报单出口
-    统一写进 Order.meta（Engine._execute，Phase 7 审计补全）。
+    统一写进 Order.meta（Engine._execute，审计补全）。
     """
     return [o for o in broker.orders if o.meta.get("is_exit")]
 
@@ -579,7 +579,7 @@ class _FakeProc:
     def wait(self, timeout=None):
         return 0
 
-    # 第四轮 P0 回归修复：AT.subprocess 就是真实 subprocess 模块，测试把
+    # P0 回归修复：AT.subprocess 就是真实 subprocess 模块，测试把
     # Popen 换成 _FakeProc 后，stop() 强杀分支的 _taskkill 内部
     # subprocess.run(...) 也会命中 _FakeProc，而 run 会 `with process:`
     # 复用返回值的 context manager 协议。若不实现 __enter__/__exit__，
@@ -661,7 +661,7 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = orig_state_file
         AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
-# [9w] 品种白名单硬约束（2026-09-13 拍板）：不在 PRODUCT_PROFILES 的品种，
+# [9w] 品种白名单硬约束（拍板）：不在 PRODUCT_PROFILES 的品种，
 # AppTrader.start 前置拒绝（AppError → 400 → 前端 alert），不 spawn 子进程。
 # 引擎侧同一判定在 Engine._restore（见 test_p47）。
 with tmp_dir() as tmp:
@@ -697,12 +697,12 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = orig_state_file
         AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
-# [9x] 品种**前置检查出口**（2026-09-14 用户拍板「K线图 vs 自动下单 解耦」配套）：
+# [9x] 品种**前置检查出口**（用户拍板「K线图 vs 自动下单解耦」配套）：
 #   AppTrader.check_symbol_allowed 是前端开关的**前置提示出口**（前端拿到
 #   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
 #   **同源**（同一个 Product.assert_product_allowed）——否则会出现
 #   "前端说能开、引擎却自杀"的分叉，正是要防的那种漂移。
-#   解耦口径：看行情侧走 `TqSdkAPI.FUTURES_ALIASES`（2026-09-14 第二轮用户点名
+#   解耦口径：看行情侧走 `TqSdkAPI.FUTURES_ALIASES`（
 #   **收窄到 16 品种**，且**不做品种过滤**，见 AppChart.search_stocks）；
 #   品种约束**只在下单侧**生效。下面 [9x4]~[9x9] 用的就是这个典型：
 #   **RB（螺纹钢）能看行情、但不能自动下单** —— 两个数字（16 / 8）互不耦合。
@@ -730,7 +730,7 @@ check("[9xC] 空符号不抛异常且返回结构完整",
       sorted(AT.trader.check_symbol_allowed("").keys()),
       ["allowed", "message", "product", "products", "reason"])
 
-# [9i] P1-3：start() 必须清除上次遗留 .stop_request，否则第二次开启秒退
+# [9i]：start() 必须清除上次遗留 .stop_request，否则第二次开启秒退
 #（残留 flag 会让新看护线程一眼就叫停并锁仓退出）。
 with tmp_dir() as tmp:
     out_dir = os.path.join(tmp, "state")
@@ -761,7 +761,7 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = orig_state_file
         AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
-# [9j] P2-5 回援分支修正：只认本轮新增事件，历史 off + 上轮残留 state=false
+# [9j]回援分支修正：只认本轮新增事件，历史 off + 上轮残留 state=false
 # 不得判优雅（否则"本轮超时强杀没锁仓"仍被谎报 graceful=True）。
 with tmp_dir() as tmp:
     out_dir = tmp

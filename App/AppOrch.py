@@ -73,7 +73,7 @@ def call_trader_stop(timeout=None):
     """关闭自动下单：写 .stop_request → 引擎锁全部未锁定持仓 → 优雅退出。
 
     timeout：可选覆盖优雅退出宽限（秒）。服务退出（lifespan）场景建议传短
-    超时（P2-6），避免关服务等满 150s 或与 uvicorn graceful-shutdown 阈值
+    超时，避免关服务等满 150s 或与 uvicorn graceful-shutdown 阈值
     冲突被强杀；用户主动点关闭则用默认宽限。
     """
     return trader.stop(timeout=timeout)

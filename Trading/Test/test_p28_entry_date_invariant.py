@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""P28 —— entry_date 不变量 / 交易日 SSOT 契约测试（2026-09-10）
+"""P28 —— entry_date 不变量 / 交易日 SSOT 契约测试
 
 背景（为什么要这个文件）
     规则 ⑸ 用 `Position.entry_date` 决定离场走**反向 OPEN**（今仓：反向开仓软离场，避开平今高费率）
@@ -78,8 +78,8 @@ class tmp_dir(object):
 
 def build(tmp, tag, store_name=None):
     cfg = TradingConfig.from_dict(copy.deepcopy(DEFAULT_CONFIG))
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
-    # max_open_positions 已于 Phase 1-4 删除（D2）：同向持仓不再有"笔数上限静默门"，
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
+    # max_open_positions 已删除（D2）：同向持仓不再有"笔数上限静默门"，
     # 同向信号会正常开新仓。本文件不依赖该门。
     cfg.exit_params.use_atr = False
     spec = Instrument(None, _IF)
@@ -333,7 +333,7 @@ check_true("[6b2] Engine 代码里 entry_date 不再做 [:10] 切片比较",
 # trading_day_of_ms 必须是唯一换算入口：不得有第二处手写夜盘偏移。
 #
 # ⚠️ 2026-09-14 判据收窄（原判据误伤）：
-#   原判据 = "出现 timedelta(days=1) 即违规"，会把 Phase 11 新增的
+#   原判据 = "出现 timedelta(days=1) 即违规"，会把新增的
 #   Instrument._weekdays_between() 判成手写夜盘偏移 —— 但那里是在**数工作日**
 #   （纯日历算术），与夜盘归属次日无关。改成"按夜盘语义判定"：
 #     同一个代码块（每个函数体 / 模块顶层）内**同时**出现

@@ -2,7 +2,7 @@
 """
 P40 D19 平仓冷却 / 连续被拒清幻影仓（契约测试，2026-09-11）
 =============================================================
-背景（文档 §5.2.2 / 引擎 _note_close_rejected / auto_order_status.close_cooldown）
+背景（文档引擎 _note_close_rejected / auto_order_status.close_cooldown）
 ------------------------------------------------------------------------------------
 CLOSE（转移 ⑤）被拒分两类处理：
   · 追价无用类（资金不足 / 非交易时段）→ 立即停追（D10）；
@@ -21,7 +21,7 @@ CLOSE（转移 ⑤）被拒分两类处理：
       net 归 0、streak 归零；
   [3] 清仓同时发 severe 告警 close_repeatedly_rejected，且 status.alerts 可见、
       簿内无残留幻影仓；
-  [4] **反例（2026-09-13）**：同样连拒达上限，但类别是 `price`（FOK 全撤）时
+  [4] **反例 ** 同样连拒达上限，但类别是 `price`（FOK 全撤）时
       **不得**清仓 —— 那种拒单恰恰说明仓在柜台，清掉就账实不符。
 
 覆盖
@@ -113,7 +113,7 @@ def tmp_dir(tag):
 class CloseRejectBroker(DryRunBroker):
     """开仓（OPEN）正常成交；平仓（CLOSE）一律拒单。
 
-    `reject_class` 可配（2026-09-13）：
+    `reject_class` 可配：
       · `position`（默认）→ 模拟"柜台无此仓"，是清幻影仓兜底**唯一**认的类别；
       · `price` → 模拟 FOK 全撤（盘口深度不足），用于 [4] 的反例。
     """
@@ -137,7 +137,7 @@ class CloseRejectBroker(DryRunBroker):
 
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False,
                                  "use_trailing": False})
     # 冷却窗 = 1（每根 bar 重新尝试），连拒上限 = 2（两根即清幻影仓）
@@ -199,7 +199,7 @@ with tmp_dir("cool") as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[3] 反例：连拒达上限但类别 ≠ position → **不得**清仓（2026-09-13 新增门槛）")
 # ════════════════════════════════════════════════════════════════
-# 背景（D10 §7.3）：`price`（FOK 全撤 / 涨跌停）恰恰说明**仓在柜台、只是没撮上**。
+# 背景（D10）：`price`（FOK 全撤 / 涨跌停）恰恰说明**仓在柜台、只是没撮上**。
 # 旧实现不问原因、够次数就清 → 把引擎自己开出来的真仓从簿里删掉 = 账实不符（P0 形态）。
 with tmp_dir("novclear") as tmp:
     spec = Instrument(None, _IF)

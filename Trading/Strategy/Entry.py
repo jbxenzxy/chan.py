@@ -26,7 +26,7 @@ class EntryPolicy:
     name = "EntryPolicy"
 
     def __init__(self, params=None):
-        # 严格模式（2026-09-07）：参数由 EntryConfig 校验，缺省键用模型
+        # 严格模式：参数由 EntryConfig 校验，缺省键用模型
         # 默认值（唯一来源在 Trading/Config.py），拼错的键立即报错。
         self.params = dict(params or {})
         p = EntryConfig(**self.params)

@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-P51 平今开关（Phase 10 · D6）契约（2026-09-14）
+P51 平今开关（D6）契约
 ===============================================
-背景（阻塞点 3 · D6，文档 §5.4）
+背景（阻塞点 3 · D6，文档）
 --------------------------------
 对"平今免收/平今便宜"的品种（如沪金 AU 平今免收、沪银 AG 平今=平昨费率、
 部分农产品、原油 SC），"锁仓再跨日平"反而更贵（多一次开仓费 + 一次跨日平仓费）。
-Phase 10 落地品种平今取舍（P-A · 2026-09-15 起为**单源派生**）：
+落地品种平今取舍（起为**单源派生**）：
 为 False 时转移 ④（今仓离场）改走 **CLOSETODAY 直接平今** → 今仓清零直接回
 空仓态，不再进锁仓态 —— 对这类品种，状态机退化为「空仓态 + 运行态」两态
 （见文档「账户三态（空仓-运行-锁仓）.html」尾部注释）。
 
-硬约束（2026-09-16 起）
+硬约束
 --------------------------------
   · 走不走平今 = **品种执行策略表第 1 列**（`EXEC_POLICY[code].today_exit`），
     由用户按费率自己算定后填表 —— 代码不从费率推导、也不看交易所名字
@@ -81,7 +81,7 @@ from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import (EXEC_POLICY,  # noqa: E402
                                    PRODUCT_PROFILES, ExecPolicy)
 
-# 2026-09-16 B 批：`_prod(ex)`（换交易所造现场档案）随 `Product.exchange`
+# `_prod(ex)`（换交易所造现场档案）随 `Product.exchange`
 #   字段删除一并移除 —— 该动作在结构上已无法表达。`_dc_replace` 导入同时删除。
 _IF = PRODUCT_PROFILES["IF"]
 from Trading.Infra.Product import PRODUCT_PROFILES
@@ -155,13 +155,13 @@ def build_engine(tmpdir, cfg: TradingConfig, spec: "Instrument",
 def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF"):
     """构造部署配置。
 
-    2026-09-16 B 批：原 `exchange: str = ""` 形参已删 —— `Product.exchange`
+    原 `exchange: str = ""` 形参已删 —— `Product.exchange`
     字段整体删除后，这个"只为调用点兼容"的形参再没有承载对象；留着只会让人
     以为配置里还认这个键（真写进去是触发 `_check_removed_keys` 报错）。
     """
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})
     return TradingConfig.from_dict(base)
@@ -175,7 +175,7 @@ check("[1b] IF/IH/IC/IM/TA → R-OPEN（反向开仓锁仓）",
       [EXEC_POLICY[k].today_exit for k in ("IF", "IH", "IC", "IM", "TA")],
       ["R-OPEN"] * 5)
 # [1c] 原为「交易所名字不参与判断：TA 档案改 exchange='SHFE' → 仍按表 = CLOSE」。
-#      2026-09-16 B 批删除字段后升级为结构断言（与 test_p9 [1g] 同款）。
+#      删除字段后升级为结构断言（与 test_p9 [1g] 同款）。
 check("[1c] ★ 交易所彻底出代码：8 档均无 exchange 字段（2026-09-16 B 批删除）",
       [k for k in PRODUCT_PROFILES if hasattr(PRODUCT_PROFILES[k], "exchange")],
       [])
@@ -237,7 +237,7 @@ with tmp_dir("t3c") as tmp:
     check("[3c4] 平今量 = min(|净敞口|, 目标手数) = 3", act.volume, min(3, 3))
 
 with tmp_dir("t3d") as tmp:
-    # 2026-09-16 A 批（⑵+⑶-b）：原版这里用 `Instrument(None, None)` 构造引擎，
+    # 原版这里用 `Instrument(None, None)` 构造引擎，
     #   断言"无品种档案 → 仍走 OPEN 锁仓（保守侧）"。
     #   但这条路径在**引擎层已经结构不可达**：品种既然过了白名单（AU 在册），
     #   运行时对象就必须拿到该品种档案，否则 `_assert_product_ssot` 在引擎

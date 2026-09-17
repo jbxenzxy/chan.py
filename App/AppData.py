@@ -100,11 +100,11 @@ def _atomic_replace(tmp_path, path):
 
 @contextlib.contextmanager
 def file_lock(lock_path, *, timeout=10.0, poll=0.02):
-    """跨进程文件锁（审计 P1-4：threading.Lock 只在**进程内**有效）。
+    """跨进程文件锁（threading.Lock 只在**进程内**有效）。
 
     zxg.blk 有两个写者跑在**不同进程**——生产 API 进程与独立的同步脚本。
     `_user_store_lock` 是 `threading.Lock`，对另一个进程毫无约束力，正是
-    v5 §1.2 自己点名的「最危险的误用」，只是它出现在文件层而没被识别。
+    v5 自己点名的「最危险的误用」，只是它出现在文件层而没被识别。
     故 .blk 这类跨进程共享文件的读-改-写，必须**额外**加 OS 级文件锁。
 
     - POSIX：`fcntl.flock`（劝告锁，要求所有写者都遵守同一约定）
@@ -156,7 +156,7 @@ def safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
     dir_name = os.path.dirname(path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
-    # 临时文件名唯一化（审计 P2）：原用 path + ".tmp" 固定名，同一目录下
+    # 临时文件名唯一化：原用 path + ".tmp" 固定名，同一目录下
     # 一旦出现两个写者（如 worker 进程落盘），先完成的那个在 finally 里
     # os.remove 会删掉别人刚建的临时文件，导致后者 os.replace 失败或
     # 写出空文件。mkstemp 保证同目录唯一（同目录是 os.replace 原子的前提）。
@@ -188,7 +188,7 @@ def _atomic_write_text(path, text, *, encoding="utf-8", newline=None):
     dir_name = os.path.dirname(path)
     if dir_name:
         os.makedirs(dir_name, exist_ok=True)
-    # 临时文件名唯一化（同上，审计 P2）：固定 ".tmp" 名在多写者场景下会被
+    # 临时文件名唯一化（同上）：固定 ".tmp" 名在多写者场景下会被
     # 彼此的 finally: os.remove 误删。
     _fd, tmp_path = tempfile.mkstemp(dir=dir_name or ".", prefix=".tmp_", suffix=".wr")
     os.close(_fd)
@@ -387,7 +387,7 @@ def make_futures_sub_key_from_code(chan_code, sub_freq):
     读侧（BSPointList 区间套）专用：CChan.code 带 ":freq_sec" 周期后缀，
     先 rsplit 还原纯 symbol，再委托 make_futures_sub_key 工厂，与写侧
     （AppSSE.set_futures_sub_chan）同源，避免手工拼接造成 key 漂移
-    （P0-2 根因：原先直接以 chan_code 拼接得 "SYMBOL:freq_sec:sub_freq"，
+    （根因：原先直接以 chan_code 拼接得 "SYMBOL:freq_sec:sub_freq"，
     与写侧 "SYMBOL:sub_freq" 永不相等，区间套 100% 静默失效）。
     """
     symbol = chan_code.rsplit(":", 1)[0]
@@ -405,7 +405,7 @@ def make_futures_sub_key_from_code(chan_code, sub_freq):
 # 权威定义 —— 本仓库无需、也不应再冻结副本。
 #
 # 沿革：原内嵌 470 条快照自官方 PDF《板块指数和行业分类》3.6 节提取，
-# 2026-09-11 实测已漂移 12 处（补 4 / 删 7 / 改 1），且漂移症状**全部不报错**
+# 实测已漂移 12 处（补 4 / 删 7 / 改 1），且漂移症状**全部不报错**
 # （下拉少几项、失效码返回残留票、名称整体错位一格），故整体删除本块数据。
 #
 # 取不到权威源时**硬失败**（RuntimeError，含可执行指引），不静默降级 ——
@@ -519,7 +519,7 @@ class AppData:
         #                        合并为一把的理由：都是毫秒级 RMW，且消除
         #                        「标注→缓存」与「缓存→选点」跨锁顺序死锁
         #   _meta_cache_lock     护「名称 / PE-TTM / 指数归属」三张元数据表
-        #                        （v5 漏登记，审计 P1-1~P1-3）。写者只有刷新
+        #                        （v5 漏登记）。写者只有刷新
         #                        线程，读者是全部 REST / 扫描线程，故独立成
         #                        锁而非并入 _user_store_lock（后者要护文件
         #                        I/O，持有时间以毫秒计，不该被元数据拖住）。
@@ -537,7 +537,7 @@ class AppData:
         # 缓存 dict 由 _futures_cache_lock 保护，但 dict 里存的是**活着的
         # CChan**，SSE 每根K线 step_load → do_init 会就地清空重建 kl_datas。
         # 容器锁护不住对象图，故按 key 单列一把锁，让「SSE 重建」与
-        # 「读取方遍历」互斥（审计 P0-2）。由 _futures_cache_lock 护本表。
+        # 「读取方遍历」互斥。由 _futures_cache_lock 护本表。
         self._futures_chan_locks = {}
 
         # ── 分析结果缓存 ──
@@ -738,7 +738,7 @@ class AppData:
         命中移尾，序即 LRU 新旧序。单窗键不受影响。
 
         返回：是否发生了淘汰 —— 调用方据此在**出锁后**补一次 GC
-        （见 _gc_outside_lock 与审计 X4′）。
+        （见 _gc_outside_lock 与′）。
         """
         evicted = False
         dual_keys = [k for k in self._stocks_analysis_cache if self._is_dual_key(k)]
@@ -764,7 +764,7 @@ class AppData:
         """（内部，须持 _stocks_cache_lock）写入并维护 LRU/容量
 
         返回：是否发生了淘汰 —— 调用方据此在**出锁后**补一次 GC
-        （见 _gc_outside_lock 与审计 X4′：GC 不得在临界区内执行）。
+        （见 _gc_outside_lock 与′：GC 不得在临界区内执行）。
         """
         evicted = False
         if key in self._stocks_analysis_cache:
@@ -782,7 +782,7 @@ class AppData:
         return evicted
 
     def cache_update(self, key, **fields):
-        """在**同一把锁内**完成缓存条目的读-改-写（审计 P0-3）。
+        """在**同一把锁内**完成缓存条目的读-改-写。
 
         原先调用方是 `_cache_get → 锁外改字段 → _cache_put`：每一步单独看
         都持了锁，但整段不是原子的。两个并发请求各取到同一个 dict、各自
@@ -820,7 +820,7 @@ class AppData:
     def stocks_cache_clear(self):
         """清空股票分析 LRU 缓存（持 _stocks_cache_lock，线程安全），返回清除条数
 
-        P0-3 后调用方为：下载完成回调（AppDownload.stocks_cache_clear →
+        后调用方为：下载完成回调（AppDownload.stocks_cache_clear →
         on_finish，该回调已随「盘后下载」功能移除）；扫描面板关闭
         （Scanner.clear_cache）已不再清池（返回 cleared=0，缓存由 LRU
         自然淘汰）。与 futures_cache_clear 同模式。
@@ -848,7 +848,7 @@ class AppData:
     def futures_cache_pop(self, key, default=None):
         """期货分析缓存失效（子级别切换时释放旧中间状态）
 
-        审计 P2（生命周期）：连带回收该 key 的**对象图锁**。_futures_chan_locks
+        （生命周期）：连带回收该 key 的**对象图锁**。_futures_chan_locks
         原本只增不删——切换一次子级别就新建一把 RLock 留着，长跑下与「缓存
         条目已释放」形成不对称增长（锁对象本身很轻，但登记表无界增长说明
         生命周期没人管，且同名 key 复用时会拿到**新**锁而与旧持有者失去互斥）。
@@ -869,7 +869,7 @@ class AppData:
         注：清理只对「当前无 SSE 连接写入」成立；正在推送的连接在下一
         帧重新 set_futures_sub_chan 会自行补回，不会读到半清状态。
 
-        审计 P2（生命周期）：整池清空时一并清空**对象图锁表**
+        （生命周期）：整池清空时一并清空**对象图锁表**
         _futures_chan_locks，与缓存条目生命周期对齐（理由见
         futures_cache_pop）。注意此时若有并发读取方正持有某把锁，
         `dict.clear()` 只是摘除登记表的引用，不会销毁仍在使用的锁对象——
@@ -893,7 +893,7 @@ class AppData:
         """弹出并删除期货子窗口 CChan（SSE 连接关闭 / 子级别切换时释放）"""
         return self.futures_cache_pop(make_futures_sub_key(symbol, sub_freq), None)
 
-    # ── 期货下窗 CChan 的「对象图锁」（审计 P0-2）────────────────
+    # ── 期货下窗 CChan 的「对象图锁」────────────────
     #   v5 的三问在**容器**这一层是完备的，但缓存里存的不是容器，是**一张
     #   活着的对象图**：SSE 线程每根K线 _drain_chan → step_load → do_init
     #   会把 chan.kl_datas 整个替换成新的空 CKLine_List（Chan.py:90），
@@ -1034,7 +1034,7 @@ class AppData:
         自动将纯数字键（旧缓存格式）转换为 market+code 复合键。
 
         写入段持 _meta_cache_lock：并发首次调用只解析一次，且不与刷新
-        线程的 replace_names 交错（审计 P1-2）。
+        线程的 replace_names 交错。
         """
         if self._names_loaded:
             return len(self._names)
@@ -1069,7 +1069,7 @@ class AppData:
         return 0
 
     def names_snapshot(self):
-        """返回名称表**快照**（审计 P1-2，遍历专用）。
+        """返回名称表**快照**（遍历专用）。
 
         点查（.get / `in`）在 CPython 下是原子的，用别名直接查没问题；
         但**遍历**必须与写者互斥。刷新线程的 replace_names 是
@@ -1092,7 +1092,7 @@ class AppData:
             return dict(self._belong)
 
     def update_pe_ttm(self, mapping):
-        """批量写入 PE-TTM（审计 P1：写者收口到锁内，与遍历读者互斥）
+        """批量写入 PE-TTM（写者收口到锁内，与遍历读者互斥）
 
         原先刷新线程经模块级别名 `_pe_ttm_cache[k] = v` 裸写共享 dict：
         写是「点查 + 下标赋值」两步，读者若在两次操作之间整表遍历
@@ -1116,7 +1116,7 @@ class AppData:
         同对象清空+灌入，保证所有共享别名同步可见）
 
         整段 RMW 持 _meta_cache_lock：clear()+update() 期间与快照读者
-        及其它写者互斥，杜绝「遍历中途换表」（审计 P1-2）。
+        及其它写者互斥，杜绝「遍历中途换表」。
         """
         with self._meta_cache_lock:
             self._names.clear()
@@ -1142,7 +1142,7 @@ class AppData:
           {"sh600519": {"pe_ttm": 25.3, "index": "沪深300"}}   ← 旧合并格式
           {"sh600519": {"index": "沪深300"}}                   ← 现格式
 
-        审计 P1-3，两处修复（沿用原实现）：
+        两处修复（沿用原实现）：
         ① 原实现「先置 loaded 旗，再逐条填充」——并发读者见 loaded 为真
            直接返回**半成品**，且 flag 已置真后这一轮再也不会重试，指数
            归属列静默显空。现改为先填本地字典、整体提交后才置位：读者
@@ -1289,7 +1289,7 @@ class AppData:
     def replace_index_belong(self, result):
         """整体替换指数归属缓存（获取侧 AKShare 刷新完成时调用）
 
-        整段 RMW 持 _meta_cache_lock（审计 P1-2，与 replace_names 同形）：
+        整段 RMW 持 _meta_cache_lock（与 replace_names 同形）：
         clear()+update() 期间与快照读者互斥。
         """
         with self._meta_cache_lock:
@@ -1315,7 +1315,7 @@ class AppData:
             with open(self.float_mc_cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict) and "data" in data:
-                # 审计 P1-2/P1-3 同形修复：clear()+update() 的整段 RMW 持
+                # 同形修复：clear()+update() 的整段 RMW 持
                 # _user_store_lock，与扫描预过滤的读、update_float_mc_cache
                 # 的写互斥；并加双检锁避免并发重复解析。
                 with self._user_store_lock:
@@ -1398,7 +1398,7 @@ class AppData:
     def get_saved_point_time(self, code, col):
         """加锁读取某代码某周期的选点时间（无则返回 ""）。
 
-        审计 P2：调用方原先是 `if code in _saved_point_times:` 再下标取值
+        调用方原先是 `if code in _saved_point_times:` 再下标取值
         的 **check-then-act**，两步之间写者可能删掉该键 → KeyError。写者
         clear_saved_points_by_prefix 只删 `KQ.` 前缀，与股票代码不重叠，
         所以目前**撞不上是靠数据巧合，不是靠设计**。收敛到本方法后即与
@@ -1574,7 +1574,7 @@ class AppData:
         自己持 _user_store_lock（RLock，调用方已持锁时可重入，无害）。
         原先依赖「所有调用方都已在外层持锁」——这个约定没有机器可验证的
         保障，任一个新调用方忘了持锁就会静默退化成无锁 clear+update
-        （审计 P1-1 的根因之一）。收敛到方法内部后约定消失。
+        （的根因之一）。收敛到方法内部后约定消失。
         """
         # 快速路径（无锁）：已加载直接返回，避免每次都进锁
         if self._annotations_loaded:
@@ -1691,7 +1691,7 @@ class AppData:
         例如 key "sh000001_d" → {"code": "000001", "market": "sh", "name": "上证指数", "freq": "d", "count": N}
         期货 key "KQ.m@SHFE.rb_d" → {"code": "KQ.m@SHFE.rb", "market": "", "name": "", "freq": "d", "count": N}
         """
-        # 审计 P1-1：原实现在**无锁**状态下直接遍历 self._annotations，
+        # 原实现在**无锁**状态下直接遍历 self._annotations，
         # 而写者 add_annotation 持 _user_store_lock 修改同一张表 → 并发
         # 即抛「dictionary changed size during iteration」，路由 500。
         # 改为「锁内取快照、锁外遍历」，遍历的是锁内构造的副本：
@@ -1774,7 +1774,7 @@ class AppData:
         自动去重，已存在的不会重复添加；无法识别的代码跳过。
         格式转换单一源：本方法内部统一走 _code_to_zxg_line。
         """
-        # 审计 P1-4：原实现是 `open(path, "a")` 的**无锁非原子追加**——
+        # 原实现是 `open(path, "a")` 的**无锁非原子追加**——
         # ① 并发两次 POST 会让两批代码交错写入；② 写一半进程退出会留下
         # 截断行。现与 sync_zxg_blk 统一为「读-改-写 + 原子落盘」，并同时
         # 持进程内锁与**跨进程文件锁**（另一个写者跑在独立脚本进程里，
@@ -1848,7 +1848,7 @@ class AppData:
             _dir = os.path.dirname(blk_path)
             if _dir:
                 os.makedirs(_dir, exist_ok=True)
-            # 跨进程文件锁（审计 P1-4）：本方法也被**独立脚本进程**调用，
+            # 跨进程文件锁：本方法也被**独立脚本进程**调用，
             # 它与 API 进程各自的 _user_store_lock 互不可见，必须靠 OS 级
             # 文件锁才能真正串行化两进程的读-改-写。
             with file_lock(blk_path + ".lock"):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-跨日仓构造 + 平昨 探针（D12 · §5.8.3 盲区②，2026-09-13）
+跨日仓构造 + 平昨探针（D12 盲区②，2026-09-13）
 =========================================================
 为什么需要这个工具
 ------------------------------------------------
@@ -103,7 +103,7 @@ def _creds():
 def _make_broker(symbol: str):
     """走**生产同一条构造路径**（TradingConfig + build_broker），不是手搓 broker。"""
     cfg = TradingConfig()
-    # P-B（2026-09-15）：部署配置 InstrumentConfig（frozen）+ 唯一运行时对象
+    # 部署配置 InstrumentConfig（frozen）+ 唯一运行时对象
     #   Instrument —— 换 trade_symbol 用「重建配置」表达（不能就地改 frozen 字段）。
     _d = cfg.instrument.model_dump()
     _d["trade_symbol"] = symbol or cfg.instrument.trade_symbol
@@ -185,7 +185,7 @@ class _FakeApi:
 
 def _fake_broker(api):
     b = object.__new__(SimNowBroker)
-    b.state = Instrument()  # P-B：唯一运行时对象（默认 IF 档案）
+    b.state = Instrument()  # 唯一运行时对象（默认 IF 档案）
     params = dict(DEFAULT_CONFIG["broker_params"])
     params["channel"] = dict(DEFAULT_CONFIG["broker_params"]["channel"])
     params["channel"].update({"position_ok_timeout": 0.2,

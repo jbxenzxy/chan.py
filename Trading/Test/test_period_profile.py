@@ -11,10 +11,10 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
-    ⑥ Product 品种档案：P-B（2026-09-15）起 Instrument 构造时直接取
-       档案（播种桥 for_product 已删除，Phase 3 的注入副作用更早删除）+
-       exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并（Fix A · 2026-09-14）
-    ⑦ 播种语义（Phase 3 · Fix B 起，**取代**原"注入双档"锚点）：
+    ⑥ Product 品种档案：起 Instrument 构造时直接取
+       档案（播种桥 for_product 已删除，的注入副作用更早删除）+
+       exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并
+    ⑦ 播种语义（起，**取代**原"注入双档"锚点）：
        档案是 price_tick / multiplier 的**唯一真值来源** —— 用户显式写的值
        在播种时同样被档案覆盖（D1：放弃配置覆盖品种参数的能力）；
        初始加载与换品种走**同一个** `main._seed_instrument()`，无 force 双语义。
@@ -69,9 +69,9 @@ def check(name, got, expected):
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置（P-B：播种桥 _seed_instrument 已删）。
+    """构造配置（播种桥 _seed_instrument 已删）。
 
-    Phase 3 的"显式播种"是启动路径上的一次调用；P-B（2026-09-15）起该桥
+    的"显式播种"是启动路径上的一次调用；起该桥
     消亡 —— 配置不再携带 tick/乘数，Instrument 构造时直接取品种档案
     （档案→运行时单向取值，结构上保证一致）。本 helper 保留名字只为改动
     最小；下方档案真值断言改读 product_profile。
@@ -146,7 +146,7 @@ def main():
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.product_profile.multiplier, 200.0)
 
-    # 未知品种：档案缺失（product_profile=None）。Fix A 后 exit_params 上没有
+    # 未知品种：档案缺失（product_profile=None）。后 exit_params 上没有
     # 品种相关出场参数（现只剩 r_multiple_tp） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
     # 把「品种参数没标定」拦在启动期，与周期 fail-fast 同一纪律）。
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
@@ -160,10 +160,10 @@ def main():
           "支持清单" in _raised, True)
 
     print("\n[7] P-B 归位语义：tick/乘数真值源 = 品种档案；配置里写旧键直接报错")
-    # (a) 语义演进锚点（Phase 2 → Phase 3 → P-B）：
-    #     Phase 2：user-explicit-wins；Phase 3：档案唯一真值（播种覆盖显式值）。
-    #     P-B（2026-09-15）：播种桥（_seed_instrument）删除 —— 配置里根本不再
-    #       有 tick/乘数字段，旧键显式报错（_check_removed_keys，§7.2 不静默吞）。
+    # (a) 语义演进锚点：
+    #     user-explicit-wins；档案唯一真值（播种覆盖显式值）。
+    #     播种桥（_seed_instrument）删除 —— 配置里根本不再
+    #       有 tick/乘数字段，旧键显式报错（_check_removed_keys，不静默吞）。
     #       真值在 Product（调参 = 改档案 = git 评审 + 对账测试守护），
     #       运行时由 Instrument 构造时直接取档案；实盘再被行情原子覆盖。
     _err999 = ""
@@ -175,8 +175,8 @@ def main():
     check("配置里显式写 multiplier → 构造期显式报错（P-B 归位，非静默吞掉）",
           "multiplier" in _err999, True)
 
-    # 出场品种参数：Fix A 保持 —— 显式写品种相关键直接 ValidationError（extra=forbid）。
-    #   ⚠️ 探针键 2026-09-15 由 min_r_points 换成 r_multiple_tp（评审修）：
+    # 出场品种参数：保持 —— 显式写品种相关键直接 ValidationError（extra=forbid）。
+    #   ⚠️ 探针键由 min_r_points 换成 r_multiple_tp（评审修）：
     #   min_r_points 在 2026-09-14 被删除，用它当探针只能证明「extra=forbid 拒绝未知键」，
     #   **证明不了「品种参数不能写进 ExitConfig」** —— 守卫失去了判别力。
     #   r_multiple_tp 是今天真实存在的品种级键；将来若有人把它加回 ExitConfig
@@ -201,7 +201,7 @@ def main():
     check("换品种后 resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_exp["breakeven_buffer_r"], 0.5)
 
-    # (c) price_tick 同理：配置里写旧键 → 构造期显式报错（P-B 归位）。
+    # (c) price_tick 同理：配置里写旧键 → 构造期显式报错（归位）。
     _err05 = ""
     try:
         TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF",

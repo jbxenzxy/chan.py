@@ -7,7 +7,7 @@ DataAPI/SinaAPI.py —— 新浪财经数据源适配器
 
 调用方（AppRefresh）只做「拼参 → 调 SinaAPI → 缓存」，
 不直连新浪接口、不解析字段。单向依赖：App → SinaAPI。
-与 ElTdxAPI / AkshareAPI / TxAPI 同为 P1-1 数据源抽象单轨化的一个收口点。
+与 ElTdxAPI / AkshareAPI / TxAPI 同为数据源抽象单轨化的一个收口点。
 """
 import logging
 import time

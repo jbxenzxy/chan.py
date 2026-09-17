@@ -74,7 +74,7 @@ check("cfg.exit_params -> ExitConfig", type(cfg.exit_params), ExitConfig)
 check("cfg.risk -> RiskConfig", type(cfg.risk), RiskConfig)
 check("cfg.broker_params -> BrokerConfig", type(cfg.broker_params), BrokerConfig)
 check("cfg.engine -> EngineConfig", type(cfg.engine), EngineConfig)
-# （2026-09-08：SizingConfig / cfg.sizing 已随仓位管理删除，不再有该子模型）
+# （SizingConfig / cfg.sizing 已随仓位管理删除，不再有该子模型）
 check("根模型拒未知键（extra=forbid）",
       _raises(lambda: TradingConfig(**{"not_a_field": 1})), True)
 check("SourceConfig 拒未知键（extra=forbid）",

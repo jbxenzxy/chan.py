@@ -4,7 +4,7 @@
 为什么需要它
 ------------
 `test_lock_v5_guards.py` 用计数包装锁断言「这些入口持锁」——它问的是
-**「这扇门有没有锁」**，没问**「是不是所有门都上了锁」**。审计 v6 里
+**「这扇门有没有锁」**，没问**「是不是所有门都上了锁」**。里
 `_scan_skip_log` 整个逃出登记表、`replace_names` / `get_annotated_codes`
 无锁遍历，都是靠这个盲区一路溜过去的。
 
@@ -12,7 +12,7 @@
 一律报告。新增代码若忘了加锁会立刻失败，而不是等线上 500。
 
 ════════════════════════════════════════════════════════════════════
-三种形态（指导书 §8.3：扫描器的覆盖面就是盲区）
+三种形态（指导书：扫描器的覆盖面就是盲区）
 ════════════════════════════════════════════════════════════════════
 v6 版只认形态 ①，另外两种整片在视野外——AppRefresh.py 那段无锁全表迭代
 （`set(_pe_ttm_cache.keys())`）就是这么溜过去的：它用的是**模块级别名**，
@@ -95,7 +95,7 @@ ALLOWLIST = {
     # 「同对象清空+灌入」的零漂移语义（别名将永远读到旧表）。
     # 契约：点查（.get / `in`）在 CPython 下原子，允许；**遍历必须**改用
     # names_snapshot() / pe_snapshot() / belong_snapshot() / annotations
-    # 快照。审计 v6 §根因一。
+    # 快照。§根因一。
     "stocks_analysis_cache": "裸出口 property：仅点查用，遍历须走快照方法",
     "futures_analysis_cache": "裸出口 property：仅点查用，遍历须走快照方法",
     "names_cache": "裸出口 property：仅点查用，遍历须走 names_snapshot()",
@@ -431,7 +431,7 @@ PROP_LIVE_EXEMPT = {}
 
 
 def _check_bare_property_contract():
-    """裸出口 property 的「返回活对象」契约（审计 P2：从注释升级为机器校验）"""
+    """裸出口 property 的「返回活对象」契约（从注释升级为机器校验）"""
     tree = ast.parse(open(_APPDATA, encoding="utf-8").read())
     cls = next((n for n in tree.body
                 if isinstance(n, ast.ClassDef) and n.name == "AppData"), None)
@@ -468,9 +468,9 @@ def _check_bare_property_contract():
 
 
 def _check_scan_skip_session():
-    """审计 X3：跳过记录必须每次扫描私有，且只能经 token 感知的访问器碰
+    """跳过记录必须每次扫描私有，且只能经 token 感知的访问器碰
 
-    v6 版断言的是「_scan_skip_log 只能经加锁访问器碰」。X3 之后该列表已
+    v6 版断言的是「_scan_skip_log 只能经加锁访问器碰」。之后该列表已
     下沉为 `_ScanSession.skip_log`（每次扫描私有），故断言升级为：
       ① 模块级 `_scan_skip_log` 全局**不得**复活（复活 = 跨页串批）；
       ② `.skip_log` 只能由四个访问器内部触碰，其他任何地方直接碰即失败。
@@ -537,7 +537,7 @@ def main():
             f"[PASS] 形态②③ 模块别名 + 跨模块守卫："
             f"{len(covered)} 个模块、{len(PROP_FIELD)} 个共享出口，无非原子裸用")
 
-    # ③ 扫描跳过记录的归属（X3）
+    # ③ 扫描跳过记录的归属
     bad = _check_scan_skip_session()
     if bad:
         for rel, lineno, why in bad:
@@ -599,7 +599,7 @@ def _module_has_alias(rel):
 def _selfcheck():
     """扫描器自证：喂进去三种形态的样本，确认都能被识别
 
-    指导书 §8.4「警惕验证脚本自身的假阴性」——只保证「扫出问题」不够，
+    指导书「警惕验证脚本自身的假阴性」——只保证「扫出问题」不够，
     还要保证「问题摆在面前时真能扫出来」。
     """
     out = []
@@ -633,7 +633,7 @@ def f_bare_iter():                  # 应被判违规
 
     # 形态① + ②③ 端到端自证：写一个**真实文件**走完整扫描链路。
     # 只测「扫出问题」不够，还要证「问题摆在面前时真能扫出来」——
-    # 否则扫描器一旦失灵，产出的是永假的 PASS（指导书 §8.4）。
+    # 否则扫描器一旦失灵，产出的是永假的 PASS（指导书）。
     probe = os.path.join(_HERE, "_selftest_probe.py")
     src = '''# -*- coding: utf-8 -*-
 """自证探针（临时文件，扫完即删）——故意放三种形态的违规与正例"""

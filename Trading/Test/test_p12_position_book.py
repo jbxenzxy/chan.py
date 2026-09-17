@@ -2,9 +2,9 @@
 """
 P12 PositionBook 容器 + 兼容层单元测试
 =====================================
-2026-09-11 Phase 7 改写。旧版测的三件事里有两件已经不存在了：
+改写。旧版测的三件事里有两件已经不存在了：
   · `Position.origin` / `PositionOrigin.SIGNAL_OPEN|UNLOCK_UPGRADE` —— 随
-    "持仓来源"概念一起删除（Phase 1-4）。仓单现在**不记出身**，只记
+    "持仓来源"概念一起删除。仓单现在**不记出身**，只记
     symbol / side / volume / entry_price / entry_date / entry_bar_seq。
   · `cfg.risk.max_open_positions` 作为容器容量来源 —— D2 删除。
     `PositionBook.DEFAULT_MAX` 现在是 **None（不限容量）**，"资金是唯一闸门"。
@@ -138,7 +138,7 @@ def make_pos(symbol=_SYM, side=Side.LONG, vol=1, entry_price=4550.0,
              signal_key="P12-TEST", entry_bar_seq=1, entry_date="2026-09-01"):
     """构造一个最小化的 Position（绕开真实开仓流程，专测 PositionBook）。
 
-    2026-09-11：**不再传 origin**（字段已删）。显式给 entry_date，
+    **不再传 origin**（字段已删）。显式给 entry_date，
     免得依赖 entry_bar_ts=4000 派生（那是序号不是真实毫秒）。
     """
     return Position(

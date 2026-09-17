@@ -3,7 +3,7 @@
 核心业务记录（Trading/Infra/Records.py）
 ========================================
 本模块是 Trading 侧的「词汇表」：5 个枚举 + 7 个数据记录
-（2026-09-15 P-C 由 Types.py 拆出 · Infra划分治理 §5.1）。
+（2026-09-15 P-C 由 Types.py 拆出 · Infra划分治理）。
 
 设计原则（承自原 Types.py）：
   ① 纯数据 + 无业务逻辑，方便序列化（sqlite / jsonl / 回放）
@@ -71,7 +71,7 @@ class OrderIntent(str, Enum):
       历史上这里有过 LOCK / UNLOCK 两个成员，但它们与 OPEN / CLOSE 在
       **CTP 报文层面完全等价**（LOCK 就是反向 OPEN，UNLOCK 就是 CLOSE），
       只是引擎内部的记账标签。围着标签长出来的"出身判定 / 配对 / 升级"
-      是复杂度的主要来源，2026-09-11 按需求方口径整体删除。
+      是复杂度的主要来源，按需求方口径整体删除。
       现在"这笔仓是开出来的还是锁出来的"**不是一个需要记录的属性** ——
       账户长什么样只取决于净敞口（见 `AccountState`）。
 
@@ -85,8 +85,8 @@ class OrderIntent(str, Enum):
                    （守卫：`Engine._pre_trade_check` 校验该品种表第 1 列确为
                    CLOSETODAY + 转移④ 的分支条件）。
 
-      Phase 10（D6 · 2026-09-14）之前本枚举只有 OPEN / CLOSE 两个值，
-      刻意不开平今口子（A4 一期只保证映射可扩展）；P-A（2026-09-15）起由品种档案
+      （D6）之前本枚举只有 OPEN / CLOSE 两个值，
+      刻意不开平今口子（A4 一期只保证映射可扩展）；起由品种档案
       费率单源派生；**2026-09-16 起改为品种执行策略表直接给定** ——
       决策侧不再读费率（费率数据保留给会计侧 cost_cash）。
     """
@@ -159,7 +159,7 @@ class Signal:
     def from_bsp(cls, b: Dict[str, Any], symbol: str, freq: str) -> "Signal":
         """从 chan.py SSE 快照的 bsp 条目构造信号。
 
-        F3（2026-09-10）：`date` / `timestamp` 缺失 → **抛 ValueError**，不再静默补空串。
+        F3：`date` / `timestamp` 缺失 → **抛 ValueError**，不再静默补空串。
           理由：`date` 同时是规则 ⑸ 的建仓日判据与幂等键的组成部分。若容忍缺失，
           `make_key` 会退化成 `'|1|B'` —— 所有同类信号**撞同一个键**，除第一条外
           全部被引擎判为重复丢弃。这是比"日期为空"更早发作的静默失效。
@@ -309,7 +309,7 @@ class Position:
     entry_bar_seq: int = 0        # 入场时的 bar 序号（计算持有根数、跳过入场K线）
     # 建仓所属【交易日】（YYYY-MM-DD），由 trading_day_of_ms() 派生（含夜盘归属次日）。
     #   规则 ⑸ 判定"当日/跨日"的唯一依据 → 决定离场走 LOCK（今仓锁仓）还是 CLOSE（昨仓平仓）。
-    #   F4（2026-09-10）：本字段**不得为空**。它是派生字段，缺失时由 __post_init__
+    #   F4：本字段**不得为空**。它是派生字段，缺失时由 __post_init__
     #   依次从 entry_bar_ts → entry_at 精确重建；三者全空则保持空串，由调用方
     #   fail-fast（建仓期拒绝建仓 / 恢复期拒绝启动），**绝不由下游把空串解释成"昨仓"**。
     entry_date: str = ""
@@ -317,7 +317,7 @@ class Position:
     def __post_init__(self) -> None:
         """不变量：entry_date 必须能解析出，不得靠"默认空串 + 下游解释"存在。
 
-        F4（2026-09-10）。此前的实现是 `entry_date: str = ""` + 判定式 `"" < today`
+        F4 。此前的实现是 `entry_date: str = ""` + 判定式 `"" < today`
         恒真 → 空串被**静默解释成"昨仓"** → 对今仓发 CLOSE 平今 → CTP 拒单 →
         连锁到 phantom 清仓（簿面清空但实盘仍有仓，不可逆）。
 
@@ -381,7 +381,7 @@ class Trade:
     reason: str                 # 离场原因：tp / sl（L1-L3 触发）、settle_exit（兜底）、
                                 #   auto_order_off（关闭托管时锁仓）、manual（调用方自定）
     gross_points: float
-    cost_cash: float            # 往返手续费（**元**；P-A 2026-09-15 由 cost_points 改元口径并更名
+    cost_cash: float            # 往返手续费（**元**；由 cost_points 改元口径并更名
                                 #   —— per_lot 档（黄金 10 元/手）无法在点数口径下无损表达）
     net_cash: float             # 净盈亏（元）= gross_points × 乘数 × 手数 − cost_cash
     bars_held: int

@@ -6,13 +6,13 @@
 「会不会崩 / 会不会串」反转为「不再崩 / 不再串」。
 
 覆盖（对应 Docs/chan_lock_audit_v6.md 的问题编号）：
-  ① P1-1  get_annotated_codes 并发遍历标注表 —— 不再 RuntimeError
-  ② P1-2  replace_names 并发快照遍历 —— 不再抛错、也不再静默串表
-  ③ P1-3  load_index_belong_cache 并发加载 —— 读者不会拿到半成品
+  ① get_annotated_codes 并发遍历标注表 —— 不再 RuntimeError
+  ② replace_names 并发快照遍历 —— 不再抛错、也不再静默串表
+  ③ load_index_belong_cache 并发加载 —— 读者不会拿到半成品
          （原为 load_pe_ttm_cache：PE-TTM 已改为实时取数、不再落盘，
           该并发加载保护现服务于指数归属表）
-  ④ P0-3  缓存条目读-改-写 —— 不再丢失更新
-  ⑤ P0-3  读者不再写共享缓存（命中缓存返回的是副本）
+  ④缓存条目读-改-写 —— 不再丢失更新
+  ⑤读者不再写共享缓存（命中缓存返回的是副本）
 """
 import os
 import sys
@@ -35,7 +35,7 @@ def rec(no, title, ok, detail=""):
         print(f"        {detail}")
 
 
-# ── ① get_annotated_codes 并发遍历标注表（P1-1）────────────────────
+# ── ① get_annotated_codes 并发遍历标注表────────────────────
 def test_annotated_codes():
     # 修复点：get_annotated_codes 改为「锁内取快照（dict + list 两层浅拷贝）、
     # 锁外遍历」。故本用例走**公开入口**并发压测——原实现在无锁状态下直接
@@ -86,7 +86,7 @@ def test_annotated_codes():
         app_data.delete_all_annotations(f"sh{900000 + i}", "d")
 
 
-# ── ② replace_names 并发快照遍历（P1-2）────────────────────────────
+# ── ② replace_names 并发快照遍历────────────────────────────
 def test_names_snapshot():
     err = []
     mid = threading.Event()
@@ -125,7 +125,7 @@ def test_names_snapshot():
         f"无异常={not err}；替换后快照全部为新表={all_new}（条数 {len(snap)}，无新旧串表）")
 
 
-# ── ③ load_index_belong_cache 并发（P1-3）──────────────────────────
+# ── ③ load_index_belong_cache 并发──────────────────────────
 def test_index_belong_load():
     import json
     import tempfile
@@ -168,7 +168,7 @@ def test_index_belong_load():
         f"最终值={val}（期望 沪深300）")
 
 
-# ── ④ 缓存条目读-改-写（P0-3）──────────────────────────────────────
+# ── ④ 缓存条目读-改-写──────────────────────────────────────
 def test_cache_update():
     key = "__verify_dual_main__"
     app_data.cache_remove(key)
@@ -192,7 +192,7 @@ def test_cache_update():
     app_data.cache_remove(key)
 
 
-# ── ⑤ 读者不再写共享缓存（P0-3）────────────────────────────────────
+# ── ⑤ 读者不再写共享缓存────────────────────────────────────
 def test_reader_no_mutation():
     from App import AppEngine as _m
     key = "__verify_reader_copy__"

@@ -14,7 +14,7 @@
 import sys
 import os
 
-# P2-2：本脚本位于 Script/，仓库根 = 父目录；DataAPI/ 与 App/ 包均自仓库根导入
+# 本脚本位于 Script/，仓库根 = 父目录；DataAPI/ 与 App/ 包均自仓库根导入
 script_dir = os.path.dirname(os.path.abspath(__file__))
 repo_root = os.path.dirname(script_dir)
 if repo_root not in sys.path:

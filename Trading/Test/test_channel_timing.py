@@ -2,9 +2,9 @@
 """
 test_channel_timing.py — Step 2.3：Broker/Channel 时序参数归一到 ChannelTimingConfig
 ====================================================================================
-验证点（对应可行性分析 §3 拍板结论 A1 + B1 + C1）：
+验证点（对应可行性分析拍板结论 A1 + B1 + C1）：
   [1] ChannelTimingConfig 11 字段默认值 == 原硬编码值（行为等价；第 11 字段
-      instrument_fetch_timeout 为 Phase 8.1 · B-2 新增），extra="forbid"
+      instrument_fetch_timeout 为新增），extra="forbid"
   [2] BrokerConfig.channel 嵌套挂载 + default_factory 向后兼容（旧配置无 channel 键）
   [3] SimNowBroker.__init__ 严格模式：params 含完整 channel（BrokerConfig 补齐）
   [4] _timing() 严格读取：缺 key 抛 KeyError（配置模型漏字段=代码 bug fail-fast）

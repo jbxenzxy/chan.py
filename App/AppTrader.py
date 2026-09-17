@@ -34,7 +34,7 @@ SSE 行情流）。
 入口）broker=live 或 broker_params.tq_market≠simnow 时必须显式
 confirm_live_trading=true，否则抛 AppError（前端提示，不拉起进程）。
 
-配置来源（2026-09-07 归一）：不再有 config.json。本模块通过 _load_cfg()
+配置来源（归一）：不再有 config.json。本模块通过 _load_cfg()
 取一份 TradingConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
 改参数去 .env 或 Trading/Config.py，改运行时参数用本 start() 的入参。
 
@@ -62,7 +62,7 @@ _TG_ROOT = os.path.join(_REPO_ROOT, "Trading")
 _RUN_GATEWAY = os.path.join(_TG_ROOT, "main.py")
 
 # 让 AppTrader 能直接读 state.db（Store 是纯 sqlite，只读安全）。
-# P3-6：用 append 而非 insert(0)，避免把 Trading 顶到 sys.path 前面、
+# 用 append 而非 insert(0)，避免把 Trading 顶到 sys.path 前面、
 # 造成顶层命名污染（不以 Trading 下的同名 package 遮蔽项目其它路径）。
 if _TG_ROOT not in sys.path:
     sys.path.append(_TG_ROOT)
@@ -85,7 +85,7 @@ _STOP_REQUEST = ".stop_request"
 _log_file_handler: Optional[logging.Handler] = None
 
 # 关闭时给子进程的优雅退出宽限（秒）。
-# P2-4：锁仓每笔 submit 是同步阻塞的（平仓每轮 5s × 最多 20 轮追价 → 单笔最坏
+# 锁仓每笔 submit 是同步阻塞的（平仓每轮 5s × 最多 20 轮追价 → 单笔最坏
 # ~100s），stop() 需等子进程主循环完成收尾，故宽限必须覆盖最坏锁仓耗时，
 # 超时再强杀兜底。20s 会被 SIGKILL 锁仓半途而废。
 _STOP_TIMEOUT = 150.0
@@ -142,7 +142,7 @@ def _read_state_file() -> Dict[str, Any]:
 
 
 def _write_state_file(data: Dict[str, Any]) -> None:
-    # 原子写（P3-1）：先写临时文件再 os.replace，避免中途崩溃留下半截 JSON，
+    # 原子写：先写临时文件再 os.replace，避免中途崩溃留下半截 JSON，
     # 下次 _read_state_file 解析失败 → 静默 {} → 进程在跑但托管失联。
     tmp = _STATE_FILE + ".tmp"
     try:
@@ -186,7 +186,7 @@ def _discover_state_dbs() -> List[str]:
 def _count_off_events(out_dir: str) -> int:
     """统计 events.jsonl 里 auto_order_off 事件的总条数。
 
-    P2-5：events.jsonl 是追加日志，跨轮次持续累积。扫全文件不区分轮次的话，
+    events.jsonl 是追加日志，跨轮次持续累积。扫全文件不区分轮次的话，
     上一轮的 auto_order_off 会让"本轮超时强杀（压根没锁仓）"也被判成优雅
     收尾——谎报成功换个入口还在。故需按轮次取增量：start 前记一次基线，
     stop 后比较是否新增。
@@ -207,14 +207,14 @@ def _graceful_by_result(out_dir: str, off_before: int) -> bool:
     """按结果判定优雅关闭：本轮确实执行了收尾（锁仓 + 落盘关闭态）。
 
     只认关闭期间**新增**的 auto_order_off 事件（off_before 为 stop() 起点的
-    基线条数），避免历史事件谎报（P2-5）。回援 state.db 仅在 events 历史上
+    基线条数），避免历史事件谎报。回援 state.db 仅在 events 历史上
     从无 auto_order_off（即引擎从未走通过收尾、事件可能因故未刷盘）时才兜底；
     若 events 已出现过 off 而本轮无新增，说明收尾事件确凿地没发生 → 不判优雅。
     """
     now_off = _count_off_events(out_dir)
     if now_off > off_before:
         return True
-    # 回援条件收紧（P2-5 第二轮修正）：只有当 events 里一条 off 记录都没有
+    # 回援条件收紧（修正）：只有当 events 里一条 off 记录都没有
     #（history_off == 0，events 既然从未记录收尾，可信度打折）才用 state.db。
     history_off = max(now_off, off_before)
     if history_off > 0:
@@ -292,7 +292,7 @@ class AppTrader:
             if self._handle is not None and self._handle.running:
                 return self._handle.to_dict()
 
-            # P3-2 防御：本地无 handle 但状态文件里记录了"仍存活"的旧 pid →
+            # 防御：本地无 handle 但状态文件里记录了"仍存活"的旧 pid →
             # 疑似多 worker/多实例同时托管自动下单（单个例失效）。不主动去杀
             # （避免误伤他 worker 的进程），只记录告警，让部署问题第一时间暴露，
             # 而不是两个 worker 各拉起一条自动下单子进程静默双开。
@@ -336,7 +336,7 @@ class AppTrader:
                 "收到开启请求: out={} symbol={} freq={} sse_base={}".format(
                     out_dir, symbol, freq, sse_base))
 
-            # P1-3：清除上一轮遗留的 .stop_request flag。看护线程在子进程
+            # 清除上一轮遗留的 .stop_request flag。看护线程在子进程
             # 启动后立刻轮询，flag 不清会触发"第二次开机关不掉也开不起来——
             # 秒退"。持锁内、Popen 前删，无启动竞态。
             stop_flag = os.path.join(out_dir, _STOP_REQUEST)
@@ -371,13 +371,13 @@ class AppTrader:
             use_freq = freq or src_cfg.freq
             use_base = sse_base or src_cfg.sse_base
 
-            # 品种白名单硬约束（2026-09-13 用户拍板）：不在 PRODUCT_PROFILES
+            # 品种白名单硬约束（用户拍板）：不在 PRODUCT_PROFILES
             # 的品种**不允许启动交易引擎**（R 下限等执行参数未标定，启动即错）。
             # 在这里前置拒绝（AppError → 400 → 前端 alert 弹出原因），比 spawn
             # 后让引擎在 _restore 白名单闸门处自杀更快、反馈更明确；引擎侧
             # （Engine._restore）仍保留同一判定作为权威闸门（回放/CLI 直启拦）。
             #
-            # 2026-09-14 评审 P1-1 + P2-1：判定与文案都收敛到
+            # 判定与文案都收敛到
             #   Product.assert_product_allowed —— 原先这里和 Engine._restore
             #   各写一遍 `if _product not in PRODUCT_PROFILES`（文案还不一样：
             #   "已拒绝" vs "禁止"），白名单一改就容易漏一处 → 前端放行、引擎自杀。
@@ -459,7 +459,7 @@ class AppTrader:
         """关闭自动下单：跨平台 flag 文件停止协议 → 子进程收尾锁仓 → 退出。
 
         timeout：None 用默认宽限 _STOP_TIMEOUT（150s，覆盖最坏锁仓 ~100s）；
-        传入短超时（如服务退出 lifespan 场景 30s，P2-6）则按传入值等待，到期
+        传入短超时（如服务退出 lifespan 场景 30s）则按传入值等待，到期
         强杀兜底——避免关服务等满 150s 或撞 uvicorn graceful-shutdown 阈值。
 
         ① 写 {out_dir}/.stop_request —— 子进程 main.py 主循环/看护线程观测到
@@ -468,9 +468,9 @@ class AppTrader:
            Windows **不发** —— SIGTERM 在 Windows 上是 TerminateProcess，会抢在
            flag 被消费前强杀，反而破坏优雅；
         ③ 等子进程退出，超时再强杀兜底（Windows 追加 taskkill /T 防 venv shim
-           pid 留下真进程孤儿，P1-2）；
+           pid 留下真进程孤儿）；
         ④ graceful 按**结果**判定：EXIT 且出现 auto_order_off 事件（或 state.db
-           auto_order_enabled==False），而不是"退出来即优雅"（修 P1-1 谎报成功）。
+           auto_order_enabled==False），而不是"退出来即优雅"（修谎报成功）。
         """
         with self._lock:
             handle = self._handle
@@ -496,12 +496,12 @@ class AppTrader:
             self._set_engine_log_handler(log_file)
             self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
 
-            # P2-5：记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
+            # 记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
             # 历史锁仓事件让本轮超时强杀被误判为优雅收尾（谎报成功）。
             off_before = _count_off_events(out_dir)
 
             # timeout=None → 用户主动点关闭，用默认宽限（覆盖最坏锁仓）；
-            # 传入短超时（lifespan 服务退出）按传入值等待（P2-6）。
+            # 传入短超时（lifespan 服务退出）按传入值等待。
             wait_secs = _STOP_TIMEOUT if timeout is None else timeout
 
             # ① 写停止 flag —— 子进程唯一的跨平台停止触发
@@ -554,8 +554,8 @@ class AppTrader:
             except Exception:
                 pass
 
-            # ④ graceful 按结果校验（P1-1：不再信任"退出来即优雅"；
-            #   P2-5：只认关闭期间新增的 auto_order_off，防历史事件谎报）
+            # ④ graceful 按结果校验（不再信任"退出来即优雅"；
+            #   只认关闭期间新增的 auto_order_off，防历史事件谎报）
             graceful = exited and _graceful_by_result(out_dir, off_before)
             if graceful:
                 log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓并持久化关闭态）",
@@ -622,7 +622,7 @@ class AppTrader:
           `_restore` 的权威闸门是**同一实现**，故"前端说能开"与"引擎允许开"永远一致。
 
         与「K线图 vs 自动下单 解耦」的关系：
-          搜索/看行情走 `FUTURES_ALIASES`（2026-09-14 第二轮用户点名为 **16 品种**，
+          搜索/看行情走 `FUTURES_ALIASES`（为 **16 品种**，
           **不做品种过滤**）；品种约束**只在下单侧生效**。用户在非白名单品种页面上
           点开关 → 前端先调本接口拿到 allowed=False → 弹「不支持交易」，
           **不发启动请求**。
@@ -672,11 +672,11 @@ class AppTrader:
         False 仅默认 out_dir。读取用 sqlite3 只读模式，绝不写库。
         symbol 为空 → 跨库取全部 trades 汇总（前端通常带 symbol）。
 
-        匹配口径 = **品种键相等**（2026-09-16 修 P0-1）：前端传主连
+        匹配口径 = **品种键相等**（修）：前端传主连
         `KQ.m@CFFEX.IF`、库内存月份合约 `CFFEX.IF2609`，两边归一到 "IF" 即命中，
         同品种多个月份合并统计（用户拍板）。
 
-        返回值 = 统计摘要 + **读库可见性**（2026-09-16 补）：
+        返回值 = 统计摘要 + **读库可见性**（补）：
           dbs_scanned  实际扫描的库数（0 = 一个 state.db 都没找到）
           dbs_ok       读取成功的库数
           sources      每库一条 {path, status, rows, error}（status 见 TradeStats）
@@ -918,7 +918,7 @@ class AppTrader:
         必须显式 confirm_live_trading=true 才允许拉起自动下单子进程。
         非 simnow/live（如 dry_run 离线模拟）不经任何实盘路由，直接放行
         ——此前无此短路，用户设 broker=dry_run 但 tq_market 填了期货公司名时
-        dry_run 会被实盘闸门误拦（P2-1）。
+        dry_run 会被实盘闸门误拦。
         """
         if broker not in ("simnow", "live"):
             return
@@ -966,7 +966,7 @@ class AppTrader:
             # "用户确认过的告警立刻不再下发"，不依赖子进程醒来。
             raw_alerts = s.get_json("alerts") or []
             ack_ts = float(s.get_json("alerts_ack_ts", 0.0) or 0.0)
-            # 2026-09-12 补（P6-F）：前端 tooltip 会读 `auto_order.run`（本段风控锚/
+            # 补：前端 tooltip 会读 `auto_order.run`（本段风控锚/
             # 止损/止盈）与 `auto_order.close_cooldown`（平仓冷却剩余），而这两个
             # 字段此前**没有出现在任何 API 返回里** —— 引擎的 `auto_order_status()`
             # 虽然有，但子进程架构下它只被测试调用，API 链路走的是本函数。
@@ -1052,7 +1052,7 @@ def _send_signal_best_effort(handle, sig) -> bool:
 def _taskkill(pid: int) -> None:
     """Windows 兜底：taskkill /F /T 保进程树必死。
 
-    venv 下 Popen.pid 是 shim（python.exe 壳）而非真解释器进程（P1-2）；
+    venv 下 Popen.pid 是 shim（python.exe 壳）而非真解释器进程；
     仅 kill shim 可能留下背后真进程成为孤儿（继续连行情/下单）。用 /T 连根杀。
     仅作强杀兜底，正常优雅路径（flag 文件）不走这里。
     """

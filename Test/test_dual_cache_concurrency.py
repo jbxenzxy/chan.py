@@ -3,12 +3,12 @@
 G2 · 股票双窗口缓存 —— 并发守护（对应审计矩阵 G2，P3）
 
 矩阵上「双窗口」只标注了「单锁覆盖」✅，但**双窗键单独限额（10 键上限）
-与单窗口的共存边界**、以及审计 P0-3 的「cache_update 原子读-改-写」
+与单窗口的共存边界**、以及的「cache_update 原子读-改-写」
 从未被测过。本用例直达存储层：
 
   AppData.cache_put              (写，持 _stocks_cache_lock；新键先过双窗限额)
   AppData._evict_dual_overflow_locked  (双窗键单独限额，须持 _stocks_cache_lock)
-  AppData.cache_update          (审计 P0-3：同一把锁内完成读-改-写，防字段丢失)
+  AppData.cache_update (同一把锁内完成读-改-写，防字段丢失)
   AppData._is_dual_key          (双窗结构化键判定)
 
 守护目标：
@@ -123,7 +123,7 @@ def test_cache_update_atomic_rmw():
     entry = app_data._stocks_analysis_cache.get(key, {})
     present = [f"f{t}" for t in range(n_threads) if f"f{t}" in entry]
     lost = n_threads - len(present)
-    # seed 字段也须保留（P0-3：先读到的值不能被覆盖丢）
+    # seed 字段也须保留（先读到的值不能被覆盖丢）
     seed_ok = entry.get("seed") == 1
     ok = (not errs) and lost == 0 and seed_ok
     rec("②", f"并发 cache_update 同键：{n_threads} 字段无丢失、seed 保留",

@@ -35,9 +35,8 @@ log = get_logger(__name__)
 # 下是原子的；遍历一律走 app_data.names_snapshot()。
 _stock_names_cache = app_data.names_cache
 
-# 【已删除】_pe_ttm_cache = app_data.pe_cache
 #          _index_belong_cache = app_data.belong_cache
-# 审计 P3：两条都是死别名（本模块零引用）。P1-2 把 PE/归属表的读写全部收进
+# 两条都是死别名（本模块零引用）。把 PE/归属表的读写全部收进
 # app_data.update_pe_ttm() / pe_snapshot() / belong_snapshot() 之后，这两
 # 个别名就没用了。留着等于给"绕开锁直接全表遍历"留一个现成入口。
 
@@ -60,12 +59,12 @@ _refresh_state_lock = threading.Lock()
 
 # 「起线程排队门」：与 _refresh_status 共用 _refresh_state_lock。
 # 与 running 旗分离——running 由装饰器在子线程内 CAS，本旗只用于让
-# refresh_stock_names_async 如实回答「到底是不是我启动的」（审计 P2）。
+# refresh_stock_names_async 如实回答「到底是不是我启动的」。
 _refresh_starting = False
 
 
 def _set_refresh_status(**fields):
-    """加锁写入刷新状态（审计 P2）。
+    """加锁写入刷新状态。
 
     原实现只有**读者**（refresh_status）持 _refresh_state_lock，写者
     （step / error / total / loaded / running）全部裸写。dict 的键集合固定
@@ -159,7 +158,7 @@ def _fetch_names_from_sina_once(codes_dict):
 
     filled = 0
 
-    # === 第一轮：A股（新浪财经，经 SinaAPI 收口）===
+    # === A股（新浪财经，经 SinaAPI 收口）===
     if a_stock_codes:
         name_map = fetch_a_names(a_stock_codes)
         for bare_code, _market in a_stock_codes:
@@ -170,7 +169,7 @@ def _fetch_names_from_sina_once(codes_dict):
                     codes_dict[compound_key]["name"] = name
                     filled += 1
 
-    # === 第二轮：港股（用腾讯财经API，新浪港股接口已失效；经 TxAPI 收口）===
+    # === 港股（用腾讯财经API，新浪港股接口已失效；经 TxAPI 收口）===
     if hk_codes:
         name_map = fetch_hk_names(hk_codes)
         for bare_code in hk_codes:
@@ -309,7 +308,7 @@ def _refresh_stock_names():
     raw_names = {}
     load_stock_names_from_cache_file()
     if _stock_names_cache:
-        # 审计 P1-2：遍历共享表须走快照。本线程虽是 names 的主要写者，但
+        # 遍历共享表须走快照。本线程虽是 names 的主要写者，但
         # REST 线程的 load_stock_names_from_cache_file 也会 `self._names
         # .update(...)`（惰性加载），与此处遍历可并发 → 同样会触发
         # 「dictionary changed size during iteration」或静默串表。
@@ -557,7 +556,7 @@ def refresh_stock_names_async():
     with _refresh_state_lock:
         if _refresh_status["running"]:
             return {"status": "already_running", **_refresh_status}
-        # 审计 P2：原实现「预检查 → 放锁 → 起线程」，两个并发 POST 会在
+        # 原实现「预检查 → 放锁 → 起线程」，两个并发 POST 会在
         # 窗口期双双通过预检查、双双返回 "started"；但真正的 CAS 在装饰器
         # 里，只有一条线程能进正文，另一条**静默退出**——调用方（前端）
         # 却以为自己启动成功了。

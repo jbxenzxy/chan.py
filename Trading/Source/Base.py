@@ -36,7 +36,7 @@ class Source(ABC):
     name: str = "base"
 
     def __init__(self, params: Dict[str, Any], state: "Instrument"):
-        # D-C（2026-09-15）：属性名统一为 state（原 self.spec 别名已删，
+        # D-C：属性名统一为 state（原 self.spec 别名已删，
         #   与 Broker / Engine 同名，全仓只有"运行时对象"这一个说法）。
         self.params = dict(params or {})
         self.state = state

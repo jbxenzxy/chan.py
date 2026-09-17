@@ -548,7 +548,7 @@ def test_constituent_fetch_robustness(TC):
       ② 000001 走 _read_sh_index_stocks_exchange（上交所 query.sse.com.cn 直连），
          与 399xxx 深交所直连风格一致；不得走本地枚举、不得盲 return []；
       ③ 上交所/深交所/中证 网络源都被 _run_with_timeout 限时包裹；
-      ④ P1-5：AppScan 遗留中止链路（_scan_aborted / Scanner.abort）已删除，
+      ④：AppScan 遗留中止链路（_scan_aborted / Scanner.abort）已删除，
          TdxAPI 通用限时机制 _run_with_timeout 保留。
     """
     problems = []
@@ -584,7 +584,7 @@ def test_constituent_fetch_robustness(TC):
         if pat in tsrc and n_to < 3:
             problems.append(f"[⑫超时] 网络源 {pat} 未被 _run_with_timeout 限时包裹(共{n_to}处)")
 
-    # ── ④ P1-5：遗留中止链路已删除，通用限时机制保留 ──
+    # ── ④：遗留中止链路已删除，通用限时机制保留 ──
     scan_path = os.path.join(REPO_ROOT, "App", "AppScan.py")
     with open(scan_path, "r", encoding="utf-8") as f:
         ssrc = f.read()

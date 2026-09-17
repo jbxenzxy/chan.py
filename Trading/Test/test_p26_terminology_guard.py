@@ -38,7 +38,7 @@ P26 术语护栏（防"腿"及已废弃术语回潮）
   | leg / legs（英文） | pos / positions | 含 `_leg` 前缀标识符（_is_today_leg / locked_leg） |
   | 双仓              | 双向持仓        | v2 修正：自造词 |
   | 丢仓              | 丢失持仓        | v2 修正：自造缺陷名 |
-  | open_first        | SIGNAL_OPEN     | 2026-09-10 改名前的旧枚举值名 |
+  | open_first | SIGNAL_OPEN | 改名前的旧枚举值名 |
   | unlock_first      | UNLOCK_UPGRADE  | 同上（p13 历史文件名除外，见下方正则） |
 
 为什么可以断言这件事
@@ -204,7 +204,7 @@ print("\n[2] 扫描覆盖面自检（防扫描范围被改窄）")
 _rels = {os.path.relpath(p, _ROOT).replace("\\", "/") for p in _iter_scan_files()}
 # ⚠️ R16：本清单是**硬编码**的，禁止放"可能被退役"的文件名 —— 一旦某文件退役，
 #    本测试会先变红，且表现为"某文件不在扫描范围"而非"该文件没了"，极易误判成
-#    扫描逻辑被改窄。Phase 7 退役 p25 时即踩过此坑，故改为放入**长期存在**的
+#    扫描逻辑被改窄。退役 p25 时即踩过此坑，故改为放入**长期存在**的
 #    契约测试 + 新一期新增的契约测试（新增文件时同步补进本清单）。
 for _must in ("Trading/Infra/Records.py",
               "Trading/Engine/Engine.py",

@@ -2,16 +2,16 @@
 """
 Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
 ====================================================
-验证 Phase 9.5 新增的 3 个商品品种档案能被 Trading 网关正确识别与注入：
+验证新增的 3 个商品品种档案能被 Trading 网关正确识别与注入：
 
     ① parse_product 从主连符号提取品种代码（SHFE.AU → AU）
     ② PRODUCT_PROFILES 含 AU/AG/CU，且 multiplier/price_tick 为合约真值
-    ③ TradingConfig 品种档案（Fix A · 2026-09-14；Phase 3 起为**显式播种**）：
-       multiplier / price_tick 真值源 = 品种档案（P-B：播种桥已删，Instrument 构造时取档案，原 `InstrumentSpec.
+    ③ TradingConfig 品种档案（为**显式播种**）：
+       multiplier / price_tick 真值源 = 品种档案（播种桥已删，Instrument 构造时取档案，原 `InstrumentSpec.
        for_product(profile)`）播种；r_multiple_tp 经 resolved_exit_params() 合并
        （品种档案是唯一默认值来源；min_r_points / breakeven_buffer_ticks 已于
-       2026-09-14 删除，保本缓冲改为全局比例 breakeven_buffer_r）
-    ④ Instrument.effective_order_advanced 对 AU/AG/CU 返回 FOK（2026-09-16 起
+       删除，保本缓冲改为全局比例 breakeven_buffer_r）
+    ④ Instrument.effective_order_advanced 对 AU/AG/CU 返回 FOK（
        唯一口径 = 品种执行策略表第 2 列，不按交易所分支）—— 确认金属走 FOK
     ⑤ 未知品种仍 product_profile=None（不误伤）
 
@@ -55,9 +55,9 @@ _FAIL = 0
 
 
 def seeded(signal_symbol: str) -> TradingConfig:
-    """构造配置（P-B：tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
+    """构造配置（tick/乘数真值源 = 品种档案，配置不再携带、无播种动作）。
 
-    Phase 3 的"显式播种"（main._seed_instrument）已随 P-B 删除：Instrument
+    的"显式播种"（main._seed_instrument）已随删除：Instrument
     有效值初值在**构造时**直接取 Product（档案→运行时单向取值，
     结构上保证一致，无需运行时对账）。本 helper 保留名字只为改动最小；
     下方 product_profile 命中断言即覆盖"档案解析"这条链。

@@ -28,7 +28,7 @@
      导入块）—— 防阶段 4 迁移遗漏导致运行时 AttributeError
      （实测：_m.read_zxg_stocks / _m._float_mc_loaded /
      _m._STOCK_NAMES_CACHE_FILE）
-  ⑩ 数据源 import 门禁（P1-1 数据源抽象单轨化）：
+  ⑩ 数据源 import 门禁（数据源抽象单轨化）：
      FrontAPI / AppChart / AppOrch 任何层级禁止 import DataAPI.*；
      装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
      AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
@@ -175,13 +175,13 @@ def test_shell_purity(failures):
 # ═══════════════════════════════════════════════════════════════════════
 ALIAS_PAIRS = [
     # (AppEngine 属性, app_data 内部字段属性)
-    # P1-3：_futures_analysis_cache 死别名已删除（AppEngine 不再持有），
+    # _futures_analysis_cache 死别名已删除（AppEngine 不再持有），
     # 期货缓存仅经 app_data.futures_cache_* 公共 API 访问
     ("_stocks_analysis_cache", "stocks_analysis_cache"),
     ("_stocks_cache_lock",            "stocks_cache_lock"),
     # P3：以下四条死别名已从 AppEngine 删除（本模块零引用），故一并从本
     # 清单移除。它们不是"无用赋值"，而是**指向共享可变容器的模块级入口**
-    # ——留着等于给"绕开锁直接全表遍历"留现成把手（指导书 §8.3 形态②）。
+    # ——留着等于给"绕开锁直接全表遍历"留现成把手（指导书形态②）。
     # 保留注释是为了防止有人照着旧条目把它们加回来。
     #   _stock_names_cache   (names_cache)
     #   _pe_ttm_cache        (pe_cache)
@@ -213,9 +213,9 @@ def test_alias_identity(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ②b 状态别名零绕行（P0-2 守护：服务层不得再绕行 AppEngine 状态别名）
+# ②b 状态别名零绕行（守护：服务层不得再绕行 AppEngine 状态别名）
 # ═══════════════════════════════════════════════════════════════════════
-# P0-2 把 AppChart/AppScan/BSPointList 对 _m._cache_get/_saved_point_times/
+# 把 AppChart/AppScan/BSPointList 对 _m._cache_get/_saved_point_times/
 # _stocks_analysis_cache/_futures_analysis_cache/_cache_remove 等的绕行调用
 # 全部改为 app_data.* 公共 API。本守护封禁该模式复活（防止回归到双写路径）。
 _BYPASS_PATTERNS = [
@@ -238,7 +238,7 @@ _BYPASS_FILES = [
 
 
 def test_no_state_bypass(failures):
-    """服务层不得绕行 AppEngine 状态别名（P0-2 成果守护）"""
+    """服务层不得绕行 AppEngine 状态别名（成果守护）"""
     bad = []
     for rel in _BYPASS_FILES:
         src = read_src(rel)
@@ -264,9 +264,9 @@ def test_no_state_bypass(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ②c 数据层直改零残留（P1-2 守护：服务层不得直改 app_data 缓存 dict）
+# ②c 数据层直改零残留（守护：服务层不得直改 app_data 缓存 dict）
 # ═══════════════════════════════════════════════════════════════════════
-# P1-2 收尾：红框/期货选点路径对期货子窗缓存的读写全部经
+# 收尾：红框/期货选点路径对期货子窗缓存的读写全部经
 # futures_cache_get/put/pop（语义化 set/get/pop_futures_sub_chan）；
 # 股票分析缓存删除经 cache_remove（内部持锁）。本守护封禁服务层对
 # app_data.futures_analysis_cache / stocks_analysis_cache 的直改直读复活
@@ -289,7 +289,7 @@ _DIRECT_CACHE_FILES = [
 
 
 def test_no_direct_cache_access(failures):
-    """服务层不得直改 app_data 缓存 dict（P1-2 成果守护）"""
+    """服务层不得直改 app_data 缓存 dict（成果守护）"""
     bad = []
     for rel in _DIRECT_CACHE_FILES:
         src = read_src(rel)
@@ -647,7 +647,7 @@ def test_engine_refs_valid(failures):
 # 入口
 # ═══════════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════════
-# ⑩ 数据源 import 门禁（P1-1 数据源抽象单轨化）
+# ⑩ 数据源 import 门禁（数据源抽象单轨化）
 # ═══════════════════════════════════════════════════════════════════════
 def _datasource_imports(rel):
     """返回**任何层级**（模块级+函数体）import 的 DataAPI.* 子模块全名列表。
@@ -672,7 +672,7 @@ def _datasource_imports(rel):
 
 def test_datasource_import_gate(failures):
     bad = []
-    # ── 消费侧三文件：任何层级禁止 import DataAPI.*（P1-1 后为零）──
+    # ── 消费侧三文件：任何层级禁止 import DataAPI.*（后为零）──
     for rel in ("FrontAPI.py",
                 os.path.join("App", "AppChart.py"),
                 os.path.join("App", "AppOrch.py")):
@@ -691,7 +691,7 @@ def test_datasource_import_gate(failures):
     extra = engine_mods - engine_allow
     if extra:
         bad.append(f"App/AppEngine.py 装配点白名单外新增 DataAPI import: {sorted(extra)}")
-    # AppSSE：TqSdkCSSESource（SSE 流协议）+ TqSdkAPI（P0-1 会话上下文
+    # AppSSE：TqSdkCSSESource（SSE 流协议）+ TqSdkAPI（会话上下文
     # session_context/session_set/session_clear 线程局部缓存绑定，未走引擎再导出）；
     # CTqSdkAPI 主体仍经 AppEngine 显式名获取
     sse_mods = set(_datasource_imports(os.path.join("App", "AppSSE.py")))

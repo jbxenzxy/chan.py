@@ -26,7 +26,7 @@ P43 一期审计修复回归（契约测试，2026-09-12）
          注意它**不是** `order_rejected`：冷却期内没有向柜台发过任何委托，
          混进去会让拒单统计与 R13 报撤单计数失真。
 
-  [5] P6-F：`_read_engine_switch` 必须返回 `run` / `close_cooldown`
+  [5]：`_read_engine_switch` 必须返回 `run` / `close_cooldown`
       —— 前端 `app.js:7458-7459` 读这两个字段拼 tooltip（本段风控锚/止损/止盈、
          平仓冷却剩余），而 API 链路走的是本函数，不返回就是永久死数据。
 
@@ -34,7 +34,7 @@ P43 一期审计修复回归（契约测试，2026-09-12）
       —— 一期漏改的形态就是"代码删了符号、某个角落还在引用它"，语法上不报错、
          文本 grep 又分不清注释与求值，只有真执行到那一行才炸。
 
-  [7] 建锚失败只报一条告警（2026-09-13 新增）
+  [7] 建锚失败只报一条告警（新增）
       —— `_run_start` 拿不到信号时写事件 + 发 `run_start_incomplete` 后 return，
          `_run_side` 仍是 None；紧接着的 `_sync_state → _check_run_anchor` 看到
          "净敞口 ≠ 0 且无锚"又发一条 `run_missing_anchor`。同一根因两个 code，
@@ -147,7 +147,7 @@ def make_pos(side, volume, price, key, entry_date):
 
 def make_cfg(**engine_over):
     c = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     c["exit_params"].update({"use_atr": False,
                              "use_trailing": False})
     c["engine"]["close_retry_bars"] = 1
@@ -238,14 +238,14 @@ with tmp_dir("streak") as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[2] act.volume < target.volume 的部分平仓必须被拒绝（不整笔记账）")
 # ════════════════════════════════════════════════════════════════
-# 触发形态（2026-09-16 复核后的**唯一**一条路）：**改表第 3 列 N 时簿非空**，
+# 触发形态（复核后的**唯一**一条路）：**改表第 3 列 N 时簿非空**，
 # 之后又顺势开过一笔新仓 —— 只有这样才能让两种手数并存（本例 4 手多 + 2 手空），
 # 净敞口 +2 却要对冲那笔 4 手 → 转移 ⑤ 算出"只平 2 手"。
 #   ⚠️ 前提是「**改 N 时簿非空**」，不是"跨会话改 N"本身：N 恒定时每笔开仓都挂 N 手，
 #      净敞口恒 ∈ {0, ±N}，转移 ⑤ 恒平满（实测 6 轮循环 6/6 平满、零拒单）；
 #      只在空仓态改 N 则簿已清空、旧手数不残留，本条也不可达。
 #   为什么不沿用 `eng.lots_per_signal = 1` 造假：该属性已随 `risk.max_volume`
-#   一并删除（评审 P2-3：单笔手数只留一个旋钮 = 品种执行策略表第 3 列），
+#   一并删除（单笔手数只留一个旋钮 = 品种执行策略表第 3 列），
 #   引擎侧再没有可被运行期覆盖的手数镜像 —— 故按**注入旧仓簿**复刻该形态
 #   （注入的是"改 N 前留下的旧手数笔"，与真实路径产出的簿同形）。
 with tmp_dir("partial") as tmp:
@@ -331,7 +331,7 @@ with tmp_dir("cooldown") as tmp:
     eng.on_bar(adverse(3000, D2))            # CLOSE#1 → 被拒 → 进入冷却
     check_true("[4a] 进入 CLOSE 冷却", eng._in_close_cooldown())
     n_rej = ev_count(eng, "order_rejected")
-    # 2026-09-13 修正：原写法是 `check(..., eng.broker.order_seq(), eng.broker.order_seq())`
+    # 修正：原写法是 `check(..., eng.broker.order_seq(), eng.broker.order_seq())`
     # —— 同一次调用的返回值自己比自己，**恒通过**，根本护不住"冷却期内没发单"。
     # 现在先取快照，再过 bar，再比。
     seq_before = eng.broker.order_seq()
@@ -383,7 +383,7 @@ with tmp_dir("apifields") as tmp:
 # ════════════════════════════════════════════════════════════════
 print("\n[6] 已删符号不得有任何「活引用」（AST 级，2026-09-13 新增）")
 # ════════════════════════════════════════════════════════════════
-# 背景：Phase 1 删掉 `OrderIntent.LOCK` / `UNLOCK` / `PositionOrigin` / `ExitMode`
+# 背景：删掉 `OrderIntent.LOCK` / `UNLOCK` / `PositionOrigin` / `ExitMode`
 # 之后，`Trading/Test/smoke_simnow_phase_g.py` 里**仍留着 `OrderIntent.UNLOCK`
 # 的活引用**，直到 2026-09-13 才被发现（当时全套 39 项里唯一失败的就是它）。
 #
@@ -397,7 +397,7 @@ print("\n[6] 已删符号不得有任何「活引用」（AST 级，2026-09-13 �
 #     · `from ... import <已删符号>` 的导入名。
 #   字符串常量、注释、docstring 一律不算（它们本就不参与求值）。
 #
-# 2026-09-13 补：`DefaultEntryPolicy`（→ `EntryPolicy`）与 `ExitPolicy`（已删）
+# 补：`DefaultEntryPolicy`（→ `EntryPolicy`）与 `ExitPolicy`（已删）
 #   也纳入。本轮把 `DefaultEntryPolicy` 改名后**漏改了 23 个文件 / 48 处活引用**
 #   （含生产入口 `Trading/main.py`），全套 42 项里 23 项直接 ImportError；
 #   而本护栏当时只覆盖 LOCK/UNLOCK/PositionOrigin/ExitMode，**恰好没覆盖本轮

@@ -1549,7 +1549,7 @@ def _run_with_timeout(fn, timeout):
     不可打断）。扫描「成分股」来源在 API 线程池线程里解析股票清单，若阻塞则
     「中断扫描」也结束不了（见 App/app 单组来源 page_index 卡死历史）。本函数：
       守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None。
-    （P1-5 后 abort_check 中止链路已随任务级 cancel 语义下线，参数随之删除。）
+    （后 abort_check 中止链路已随任务级 cancel 语义下线，参数随之删除。）
     返回 fn 结果；超时返回 None；fn 内部异常原样透出（调用方捕获）。
     """
     import threading
@@ -1942,10 +1942,10 @@ _TDXHY_CACHE_LOADED = False
 def _parse_tdxhy_cfg():
     """
     解析本地 tdxhy.cfg 文件，构建 X代码 → 成分股映射。
-    
+
     tdxhy.cfg 格式：market|stock_code|old_T_code|||new_X_code
-    例如：0|000001|T1001|||X500102
-    
+    例如：0|000001|T1001|||
+
     返回：{X_code: [{"code","prefix","name"}, ...]}
     """
     global _TDXHY_CACHE, _TDXHY_CACHE_LOADED
@@ -2005,10 +2005,10 @@ def _parse_tdxhy_cfg():
 def _read_tdxhy_sector_stocks(sector_code):
     """
     根据 881xxx 研究行业代码，从 tdxhy.cfg 获取成分股。
-    
-    对于父级X代码（如 X4001 半导体），聚合并所有子级X代码的股票。
-    对于子级X代码（如 X400101 半导体材料），只返回该子级股票。
-    
+
+    对于父级X代码（如半导体），聚合并所有子级X代码的股票。
+    对于子级X代码（如半导体材料），只返回该子级股票。
+
     返回：[{"code":"000001","prefix":"0","name":"000001"}, ...]
     """
     if sector_code not in _TDXHY_881_TO_X:

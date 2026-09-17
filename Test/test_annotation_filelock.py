@@ -5,7 +5,7 @@ G3 · 标注跨进程文件锁 —— 并发守护（对应审计矩阵 G3，P3�
 矩阵上「文字标注」标注了「_user_store_lock + 原子落盘」✅，但**跨进程**这一
 维从未被测。标注文件 text_annotation.json 有两个潜在写者跑在不同进程
 （前端 API 进程 + 独立标注同步脚本），threading.Lock 对另一个进程毫无约束
-力（指导书 §1.2 点名的「最危险误用」）。本用例分三层验证：
+力（指导书点名的「最危险误用」）。本用例分三层验证：
 
   AppData.add_annotation / save_annotations  (_user_store_lock + safe_write_json)
   AppData.safe_write_json_file              (mkstemp 唯一临时名 + os.replace 原子写)

@@ -32,7 +32,7 @@
      中止经 POST /api/stocks/scan/{task_id}/cancel；
      终态 done/aborted/error 三态停轮询；连续 3 次失败熔断（退避重试）；
      保留旧回调形状 onData(单票)/onDone(err, interrupted)（渲染零漂移）；
-     P1-7 四分支合一：runScan 单一漏斗单点调用 _asyncScanAll（四种模式全走异步径），
+     四分支合一：runScan 单一漏斗单点调用 _asyncScanAll（四种模式全走异步径），
      旧 /api/scan_one 并发循环清零；
      index.html 缓存版本 v>=8（阶段 7 前端改动的缓存击穿）。
   ⑦ 功能冒烟（存储层）：ScanStore CRUD + since 增量语义 + 同 seq 幂等 +
@@ -334,7 +334,7 @@ def test_abort_semantics(failures):
     # W6：错误明细并入 _scan_skip_log（/api/stocks/scan/end 汇总口径与旧路径一致）
     if "_scan_skip_log" not in src_pool:
         bad.append("collector 未把错误行并入 _scan_skip_log（W6 未修复）")
-    # P1-5：旧全局 abort 链路（Scanner.abort / abort_all_running）已删除，
+    # 旧全局 abort 链路（Scanner.abort / abort_all_running）已删除，
     # 前端 task cancel 语义唯一入口为 AppScan.abort_batch_scan → Pool.abort(task_id)。
     if "abort_batch_scan" not in read("App/AppScan.py"):
         bad.append("abort_batch_scan 缺失（前端 task cancel 唯一入口）")
@@ -374,7 +374,7 @@ def test_frontend_polling(failures):
     # W5：轮询失败熔断（3 次退避重试）
     if "failCount >= 3" not in src:
         bad.append("轮询连续失败熔断缺失（单次网络抖动即废弃整个扫描）")
-    # P1-7 四分支合一：runScan 为唯一批量扫描漏斗（内部单点调用 _asyncScanAll，
+    # 四分支合一：runScan 为唯一批量扫描漏斗（内部单点调用 _asyncScanAll，
     # 四种模式 fx_d/ma/fangliang/bsp 全部经此异步径，旧并发循环清零）
     n_calls = len(re.findall(r"_asyncScanAll\(stocks, \{", src))
     if "var runScan = function(spec)" not in src:

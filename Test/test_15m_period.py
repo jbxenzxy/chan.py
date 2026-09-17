@@ -4,9 +4,9 @@ Test/test_15m_period.py —— 15m 周期 + 30m 分桶回归测试（零第三�
 =========================================================================
 覆盖评估《chan.py_custom-dev_vs_v4.0_分析报告》的采纳项：
   P1    _get_date_fmt(15m)=带时分 + INTRADAY_FREQS 双副本一致含 15m
-  P2-2  15m+5m 双窗纳入加载量优化分支
+  15m+5m 双窗纳入加载量优化分支
   港股30m  anchor 分桶 bug 修复（A股零回归、港股 12:00/16:00 桶正确、单一事实源）
-  拒绝 P2-1：保留「单窗15m/5m 灰化双窗口入口；双窗内 15m 仍可作上窗」（见 test_dual_consistency）
+  拒绝：保留「单窗15m/5m 灰化双窗口入口；双窗内 15m 仍可作上窗」（见 test_dual_consistency）
 
 设计要点：
   - 沙箱/CI 可能无 pandas/numpy，无法 import 整个 TdxAPI/AppEngine；
@@ -196,7 +196,7 @@ def test_30m_p2_2_optim_branch():
 
 
 def test_dual_consistency():
-    """保留 P2-1 拒绝语义：单窗 15m/5m 灰化入口，但双窗内 15m 仍可作上窗。"""
+    """保留拒绝语义：单窗 15m/5m 灰化入口，但双窗内 15m 仍可作上窗。"""
     # 后端配对表含 15m（双窗内 15m 上窗 → 5m）
     appeng = extract_from_file("App/AppEngine.py", ["_STOCKS_DUAL_PAIRS"])
     assert appeng["_STOCKS_DUAL_PAIRS"]["15m"] == {"5m"}, "_STOCKS_DUAL_PAIRS 缺 15m 配对"

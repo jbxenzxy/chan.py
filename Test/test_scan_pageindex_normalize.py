@@ -2,7 +2,7 @@
 """
 阶段 4.1·补充：扫描候选 page_index 板块代码归一化守护
 =====================================================================
-背景：审计 X3 引入新路径 `/api/stocks/scan/read/candidates`，它把前端
+背景：引入新路径 `/api/stocks/scan/read/candidates`，它把前端
 `page_index_code` 直接透传给 `AppScan.Scanner.stock_list`。此前归一化
 （sh000852→000852）只写在 `set_page_index_code`（旧入口），新路径漏了
 这一步，导致 `sh000852` 命中不了 `get_index_stocks` 的 `CSI_INDICES`

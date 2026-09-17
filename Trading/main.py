@@ -9,18 +9,18 @@ M1 交易网关 · CLI 入口
     # 实时接入 chan.py 的 SSE
     python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 
-配置（2026-09-07 归一）：**只有一处** —— Trading/Config.py
+配置（归一）：**只有一处** —— Trading/Config.py
     · 改默认值        → 改 Trading/Config.py 里对应模型字段
     · 临时改（不入库）→ 环境变量或仓库根 .env（TRADING_ 前缀，如 TRADING_SOURCE__FREQ=15s）
     · 单次覆盖        → 命令行 --symbol / --freq / --broker / --source ...
     · 账户密码        → 只走环境变量（SN_ACCOUNT / LIVE_ACCOUNT / TQ_ACCOUNT ...），不落盘
 
 换止盈止损：品种无关参数（ATR / trailing / 触发倍数 / breakeven_buffer_r）改 Trading/Config.py 的
-    ExitConfig；品种相关参数（r_multiple_tp，2026-09-14 Fix A 单源化）改
+    ExitConfig；品种相关参数（r_multiple_tp，单源化）改
     Trading/Infra/Product.py 的品种档案。
     引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 
-合约规格（P-B · 2026-09-15 合并）：部署配置收口在 Trading/Config.py 的
+合约规格（合并）：部署配置收口在 Trading/Config.py 的
     `instrument`（InstrumentConfig，frozen=True）；运行时的有效 tick/乘数、
     涨跌停区间、A′ verified、trade_symbol/last_trade_date 回填收口在**唯一一份**
     `Instrument`（Infra/Instrument.py），由本文件构造并交给 Engine 与 Broker
@@ -62,11 +62,11 @@ ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
 # 跨平台停止协议：父进程（AppTrader.stop）在 out_dir 写该文件 → 本模块
 # 看护线程观测到 → 请求优雅收尾（lock_all + 持久化 + 退出 0）。
 # 绕开 Windows SIGTERM=TerminateProcess（signal handler 不执行）与
-# venv shim pid 两处平台陷阱（P1-1 / P1-2）。与 App/AppTrader._STOP_REQUEST 保持一致。
+# venv shim pid 两处平台陷阱。与 App/AppTrader._STOP_REQUEST 保持一致。
 _STOP_REQUEST = ".stop_request"
 
 
-# 2026-09-15 P-B 删除 `_seed_instrument`（Phase 3.2 · Fix B 的播种桥）：
+# 删除 `_seed_instrument`（的播种桥）：
 #   `InstrumentSpec.for_product()` + `cfg.instrument.model_dump(exclude={...})` 的
 #   躲闪随双类合并一并消亡 —— tick/乘数/exchange/费率真值源 = 品种档案
 #   Product，运行时对象 Instrument 构造时直接取档案初值，不再有
@@ -75,17 +75,17 @@ _STOP_REQUEST = ".stop_request"
 
 
 def _fee_banner(cfg: TradingConfig) -> None:
-    """启动横幅（P-A · 2026-09-15 费率 + 2026-09-16 品种执行策略表）。
+    """启动横幅（费率 + 品种执行策略表）。
 
     取代已删除的运行期"平今经济性告警"（closetoday_suggestion）——
     费率是静态档案、执行策略是静态表，启动第一屏就给出结论，
     比"等成交后才告警"早得多、也不用状态机。只打一次，不刷屏。
 
-    ⚠️ 2026-09-16：结论**直接读执行策略表**（用户按费率自己算定后填表），
+    ⚠️：结论**直接读执行策略表**（用户按费率自己算定后填表），
     不再由代码比费率 —— 决策侧零费率引用。
     ⚠️ 2026-09-16 其二：**单笔手数只剩这一个来源**（`risk.max_volume` 已删）——
     横幅打出的就是实际生效值，不存在"横幅说 2 手、实际挂 1 手"的第二个旋钮。
-    ⚠️ 2026-09-16 B 批：横幅**不再打交易所** —— `Product.exchange` 字段已整体删除，
+    ⚠️：横幅**不再打交易所** —— `Product.exchange` 字段已整体删除，
     交易所仅以注释形态存在于 `EXEC_POLICY` 行尾与各档案 note；横幅改打品种键，
     而品种键 + 执行策略表已经是决策的完整输入。
     """
@@ -108,7 +108,7 @@ def _fee_banner(cfg: TradingConfig) -> None:
 
 
 def build_runtime(args):
-    # 配置来源（2026-09-07 归一）：Trading/Config.py 模型默认值
+    # 配置来源（归一）：Trading/Config.py 模型默认值
     #   ← 环境变量/仓库根 .env（TRADING_ 前缀，pydantic-settings 自动读取）
     #   ← 命令行参数（最高优先级，下面逐个套用）
     cfg = TradingConfig()
@@ -120,16 +120,16 @@ def build_runtime(args):
         cfg.source.replay_dir = args.replay_dir
     if args.symbol:
         cfg.source.symbol = args.symbol
-        # Phase 8（§5.9.1 隐患根治 · §5.9.4 项 7）：--symbol 必须同步打通到
+        # （隐患根治）：--symbol 必须同步打通到
         # instrument.signal_symbol。旧代码只写 source.symbol，"两者一致"只是
         # Config.py 的一句注释约定 —— 前端切品种后 tick/乘数/费率全不变，
         # SimNow 仍按旧 signal_symbol 解析主力合约（实际还在交易 IF），即便
         # 走到下单也会因 tick 不是最小变动价位整数倍被 CTP 拒单。
         #
-        # Phase 3.2：换品种的重新播种已随 P-B 消亡 —— InstrumentConfig
+        # 换品种的重新播种已随消亡 —— InstrumentConfig
         #   frozen=True 下不能就地改 signal_symbol，改为**构造期重建**配置对象
         #   （其余字段原样带过；旧配置若带 price_tick 等已归位键，重建时
-        #   InstrumentConfig._check_removed_keys 会显式报错，交接文档 §7.2）。
+        #   InstrumentConfig._check_removed_keys 会显式报错，交接文档）。
         if cfg.instrument.signal_symbol != args.symbol:
             _d = cfg.instrument.model_dump()
             _d["signal_symbol"] = args.symbol
@@ -147,13 +147,13 @@ def build_runtime(args):
     if args.broker:
         cfg.broker = args.broker
 
-    # 2026-09-15 P-B：品种播种调用已删除（播种桥消亡，见 _seed_instrument 处注释）；
+    # 品种播种调用已删除（播种桥消亡，见 _seed_instrument 处注释）；
     #   tick/乘数等有效值初值由下面 Instrument 构造直接取品种档案。
 
-    # P-A（2026-09-15）：费率横幅 —— 两档费率 + 平今派生结论，启动第一屏可见。
+    # 费率横幅 —— 两档费率 + 平今派生结论，启动第一屏可见。
     _fee_banner(cfg)
 
-    # Step 1（2026-09-08）：启动期周期校验 —— fail-fast。
+    # Step 1：启动期周期校验 —— fail-fast。
     #   周期是所有时间语义（时间止损 / 收盘强平 / 追价窗口）的地基。旧设计里
     #   周期错了不会报错，只会让策略在运行时"推断失败 → 静默降级"，实盘上表现
     #   为"兜底逻辑从没生效过但没人知道"。这里直接拦下，比事后查日志便宜得多。
@@ -190,7 +190,7 @@ def build_runtime(args):
                    encoding="utf-8", buffering=1)
     sys.stdout = _log_fh
     sys.stderr = _log_fh
-    # P-B（2026-09-15）：唯一一份**运行时对象** —— 静态身份（config 转发）+
+    # 唯一一份**运行时对象** —— 静态身份（config 转发）+
     #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（初值直接取
     #   品种档案，行情原子覆盖）+ 定价成本，合并于同一个 Instrument。
     #   由本进程持有并同时交给 Broker（写）与 Engine（读）—— 必须同源，
@@ -200,7 +200,7 @@ def build_runtime(args):
     broker = Broker.build_broker(args.broker or cfg.broker, instr,
                                  cfg.broker_params.model_dump())
 
-    # Phase 8.1（O-4 收窄）：off 只对离线生效 —— 在线通道配 off 时**启动期**
+    # （O-4 收窄）：off 只对离线生效 —— 在线通道配 off 时**启动期**
     # 就明确告知（原版静默，运维要等第一笔报单被闸门拒了才从告警反推原因）。
     # 不在此处阻断：闸门（Engine._pre_trade_check）本身会拒单 + 严重告警兜底，
     # 这里只负责"让原因在启动日志里第一屏可见"。只打一次，不会刷屏。
@@ -209,7 +209,7 @@ def build_runtime(args):
         print("[gw] ⚠ instrument_fetch_policy=off 在在线通道（{}）下不生效："
               "合约参数仍必须从行情获取（A′ fail-closed），"
               "未验证前所有报单将被拒单".format(broker.name))
-    # 2026-09-14 评审 P1-3：quote_partial 是给"不走 tqsdk 的自研/第三方在线通道"
+    # quote_partial 是给"不走 tqsdk 的自研/第三方在线通道"
     # 的逃生舱（只强制 tick/乘数，涨跌停缺失时护栏降级）。降级必须在**启动横幅**
     # 里声明一次 —— broker 侧的告警要等取值失败才发，运维在第一屏就该看到
     # "本轮没有涨跌停保护"，而不是等事后从 events.jsonl 里翻。
@@ -220,7 +220,7 @@ def build_runtime(args):
               "不校验**（来源会标 QUOTE_PARTIAL 并发 instrument_band_degraded 告警），"
               "本通道不提供停板保护")
 
-    # Phase 8（§5.9.3 规则 2 · 来源标记）：离线模式（dry_run，含 replay 数据源）
+    # （来源标记）：离线模式（dry_run，含 replay 数据源）
     # 没有行情连接，合约参数用品种档案值 —— 但必须显式标记来源，让"回测口径"能自证。
     # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
     # 取不到则 verified=False → Engine 闸门拒单（fail-closed）。
@@ -230,7 +230,7 @@ def build_runtime(args):
               "可能与交易所口径不符，回测结果不可直接外推实盘")
 
     entry = EntryPolicy(cfg.entry_params.model_dump())
-    # Fix A（2026-09-14）：品种相关出场参数（r_multiple_tp）的唯一来源是 Product
+    # 品种相关出场参数（r_multiple_tp）的唯一来源是 Product
     #   档案 —— 经 resolved_exit_params 合并成完整参数；直接用 exit_params.model_dump()
     #   会缺品种参数（LayeredExitPolicy 构造期 AttributeError）。
     exitp = LayeredExitPolicy(resolved_exit_params(cfg))
@@ -256,7 +256,7 @@ def build_runtime(args):
 
     ev = EventLog(os.path.join(out, "events.jsonl"), echo=not args.quiet,
                   echo_kinds=None if args.echo_all else ECHO_DEFAULT)
-    # P-B：state 与 broker 共用同一份 Instrument（引擎侧以 state=instr 显式注入；
+    # state 与 broker 共用同一份 Instrument（引擎侧以 state=instr 显式注入；
     # 不给的话引擎会沿用 broker.state，两者本就是同一个对象 —— 显式传只为可读性）。
     engine = TradingEngine(cfg, broker, entry, exitp, store, ev, state=instr)
     source = Source.build_source(src.get("type", "replay"), src, instr)
@@ -266,7 +266,7 @@ def build_runtime(args):
 def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
                   cfg: TradingConfig, elapsed: float) -> Dict[str, Any]:
     s = engine.summary()
-    instr = engine.state          # P-B：唯一运行时对象（部署配置在 instr.config）
+    instr = engine.state          # 唯一运行时对象（部署配置在 instr.config）
     line = "-" * 60
     print("\n" + "=" * 60)
     print("运行摘要  {}".format(now_cn()))
@@ -287,7 +287,7 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
     else:
         print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
             s["trades"], s["wins"], s["losses"], s["win_rate"]))
-        # P-A（2026-09-15）：净统计口径改元（net_cash）—— per_lot 费率档
+        # 净统计口径改元（net_cash）—— per_lot 费率档
         # 无法在点数口径无损表达，净盈亏只有元是自洽的。
         print("平均盈利  : {:+.2f} 元    平均亏损: {:+.2f} 元".format(
             s["avg_win"], s["avg_loss"]))
@@ -297,7 +297,7 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
             seg = "  ".join("{}: n={} net={:+.2f}".format(k, v["n"], v["net"])
                             for k, v in s["by_reason"].items())
             print("按出场    : {}".format(seg))
-    # 2026-09-10 修复：Engine.summary()["open_position"] 是**持仓 dict 的列表**
+    # 修复：Engine.summary()["open_position"] 是**持仓 dict 的列表**
     #   （Engine.py 明确 `[p.to_dict() ...] or None`），原代码当成单个 dict 取下标
     #   → 只要收盘时簿内还有持仓，收尾必抛 TypeError、进程 rc=1，并连带跳过
     #   --summary-json 写出 / stop 事件 / handle.close()。此处取第一笔展示。
@@ -318,7 +318,7 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
 def run(args) -> int:
     cfg, engine, source, store, ev, out, src = build_runtime(args)
 
-    # P1-3 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
+    # 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
     # AppTrader.start() 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、直接
     # CLI 拉起）一启动就会被残留 flag 看护线程立刻关停。AppTrader.start() 也会
     # 清，这里双保险，让 CLI 直启同样健壮。幂等：文件不存在即跳过。
@@ -344,7 +344,7 @@ def run(args) -> int:
               src.get("freq"), src.get("sse_base", ""), engine.broker.name,
               os.path.abspath(out), cfg.state_dir))
 
-    # Phase 3：verified / source 现在读 **engine.state**（唯一运行时状态对象），
+    # verified / source 现在读 **engine.state**（唯一运行时状态对象），
     #   不再从配置树的 instrument 上读 —— 启动横幅因此反映的是真实运行口径。
     _st = engine.state
     ev.write("start", source=src.get("type"), broker=engine.broker.name,
@@ -356,14 +356,14 @@ def run(args) -> int:
                          "verified": _st.verified,
                          "source": _st.source,
                          "fetch_policy": cfg.broker_params.instrument_fetch_policy})
-    # （2026-09-08：原 engine.risk.roll_day("") 当日统计初始化已随 RiskGate 删除。）
+    # （原 engine.risk.roll_day("") 当日统计初始化已随 RiskGate 删除。）
 
     t0 = time.time()
     counted = 0
 
-    # ── 停止请求（跨平台 flag / 信号 / Ctrl-C）· P1-1/P1-2/P2-4 ──
+    # ── 停止请求（跨平台 flag / 信号 / Ctrl-C）──
     # 任一触发源命中 → stop_event 置位。真正的收尾（shutdown_and_lock_all，
-    # 内含阻塞式 CTP 下单）不放在 signal handler 里做（P2-4：handler 内阻塞
+    # 内含阻塞式 CTP 下单）不放在 signal handler 里做（handler 内阻塞
     # 下单有重入风险，且锁仓最坏 ~100s > _STOP_TIMEOUT 会被 SIGKILL 半途而废），
     # 而是放回主循环：handler / 看护线程只负责"请求停止 + 让主循环退出"，
     # 主循环退出前统一执行收尾。
@@ -429,7 +429,7 @@ def run(args) -> int:
     finally:
         # 主循环已退出 → 若确有停止请求，执行真正的收尾（停信号门 + 锁仓 +
         # 持久化）。仅在停止请求时锁仓；正常数据流跑完（max_bars / 源自然
-        # 结束）不锁。收尾放 finally 而非 signal handler（P2-4）。
+        # 结束）不锁。收尾放 finally 而非 signal handler。
         if stop_event.is_set():
             try:
                 engine.shutdown_and_lock_all()

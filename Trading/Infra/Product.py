@@ -14,7 +14,7 @@
   · parse_product（保月份，认定到合约）与 parse_product_key（剥月份，查品种档案）
     这对函数的分工就是两个粒度的代码体现。
 
-变更纪律（§5.4 · 取代旧「Profile=标定 / Spec=事实」后缀规则）
+变更纪律（取代旧「Profile=标定 / Spec=事实」后缀规则）
 ----------------------------------------------------
 文件名只回答「这是 per-product 粒度的东西」；「该不该走 git 评审」用两个正交手段表达：
   · 标定值（r_multiple_tp）：改 = 改代码资产，走 git 评审 + 对账测试（test_p50）；
@@ -61,9 +61,9 @@ from typing import ClassVar, Dict, List, Optional, Tuple
 
 
 # ══════════════════════════════════════════════════════════════════
-# Fee —— 一档费率（P-A 费率静态化 · 2026-09-15，Infra划分治理 §6.3-a）
+# Fee —— 一档费率（费率静态化，Infra划分治理 -a）
 # ══════════════════════════════════════════════════════════════════
-# 交易所基准表就两种计价方式混排，单一 float 表达不了（P-A 之前 PTA=3 元/手、
+# 交易所基准表就两种计价方式混排，单一 float 表达不了（之前 PTA=3 元/手、
 # 黄金=10 元/手 只能"按当时价折成一个 rate"，价格一变就失真 → 回测净盈亏错）。
 # value 存"万分之几"而不是小数：档案里的数必须能直接对上 xlsx 打印出来的字
 # （xlsx 写 0.23%%，档案就存 0.23），对账退化成一次肉眼比对；
@@ -110,7 +110,7 @@ OverrideItem = Tuple[str, Fee, Optional[Fee]]
 # ══════════════════════════════════════════════════════════════════
 # 真值源 = `Docs/手续费标准-.xlsx`。区块内是纯数据元组，与本文件的手写内容严格分离，
 # 分离手段不是"文件边界"而是"标记 + 逐字节护栏"（为什么不用独立文件：见
-# `Tool/GenFeeTable.py` 模块 docstring —— 交接文档 §5.1 把 Infra/ 定死成 7 个模块）：
+# `Tool/GenFeeTable.py` 模块 docstring —— 交接文档把 Infra/ 定死成 7 个模块）：
 #   · 生成器只重写两块标记之间的文本，**区块外逐字节不动**；
 #   · 有人在区块里手改一个数字 → `Tool/GenFeeTable.py --check` 与
 #     `Test/test_product_fee_table.py [3f]`（逐字节比对）立刻变红；`[3g]-[3i]`
@@ -162,21 +162,21 @@ OVERRIDES: Dict[str, List[OverrideItem]] = {
 
 
 # ══════════════════════════════════════════════════════════════════
-# 品种执行策略表（2026-09-16 用户拍板）—— 今仓离场 / 报单属性 / 每笔手数
+# 品种执行策略表（用户拍板）—— 今仓离场 / 报单属性 / 每笔手数
 # ══════════════════════════════════════════════════════════════════
 # 这三件事原先散落在三处（交易所能力闸门 + 费率 3× 判据 + 交易所 FOK/FAK 分支），
 # 现在收成**一张 8 行的表**，代码只读不推。
 #
 #   today_exit      今仓离场走哪条路
-#                    （**字段名 2026-09-16 B 批由 ``close_mode`` 改回 `today_exit`**）——
+#                    （**字段名由 ``close_mode`` 改回 `today_exit`**）——
 #                     "R-OPEN"     → 反向开仓锁仓（三态机：会进锁仓态，次日拆锁）
 #                     "CLOSETODAY" → 直接平今（两态机：平完即回空仓，锁仓态不可达）
 #                    ⚠️ 旧名 ``close_mode`` 误导在哪：8 行里 **5 行**取值是 R-OPEN，
 #                    那一支干的是**开仓**（反向 OPEN），根本不 "close" —— 字段名
 #                    却宣称自己在描述"平仓方式"。`today_exit` 描述的是**问题**
 #                    （今仓怎么离场），R-OPEN / CLOSETODAY 才是**答案**，层级才对得上。
-#                    （历史：本字段 §5.1 原名 today_exit → §15 曾改成 ``close_mode``，
-#                      本批是**第三次翻转**，理由如上，详见交接文档 §19。）
+#                    （历史：本字段原名 today_exit →曾改成 ``close_mode``，
+#                      本批是**第三次翻转**，理由如上，详见交接文档。）
 #   order_advanced  报单属性 —— "FOK"（全成全撤）/ "FAK"（部分成交后撤余量）
 #   lots_per_order  一笔挂几手
 #
@@ -203,7 +203,7 @@ FOK = "FOK"
 FAK = "FAK"
 
 # 单笔报单手数上限。**原 `RiskConfig._check_max_volume` 的 1..20 校验**
-# （P1-1 · 2026-09-08）在 2026-09-16 删掉 `risk.max_volume` 时**迁到这里** ——
+# 在删掉 `risk.max_volume` 时**迁到这里** ——
 # 手数真值源既然变成本表，约束就该长在表上；若直接丢掉，超限手数会退化成
 # "dry_run 无告警照常成交、实盘才被 CTP 拒单"的行为分歧（这正是原校验要防的）。
 _LOTS_MAX = 20
@@ -252,8 +252,8 @@ EXEC_POLICY: Dict[str, ExecPolicy] = {
 # ══════════════════════════════════════════════════════════════════
 # 品种档案（与 Period 平行的"随品种可变参数"归总）
 # ══════════════════════════════════════════════════════════════════
-# kw_only（2026-09-14 评审 P2-2）：强制关键字构造。
-#   price_tick 是 Phase 8 后加的字段；位置参数构造 Product(...) 会把实参
+# kw_only：强制关键字构造。
+#   price_tick 是后加的字段；位置参数构造 Product(...) 会把实参
 #   静默错位到错误字段 —— dataclass 不做类型校验，不报错。
 #   加 kw_only=True 后位置构造直接 TypeError，把静默错位变成启动期硬失败。
 #   （改动前已核查：全仓 8 处构造全部是关键字参数，故无调用点需要改。）
@@ -261,15 +261,15 @@ EXEC_POLICY: Dict[str, ExecPolicy] = {
 class Product:
     """一个合约品种的全部品种相关设定。
 
-    字段分三组（2026-09-13 用户定序 + 2026-09-15 P-A 费率归位）——
+    字段分三组（用户定序 + 费率归位）——
       【策略标定值（随经验调，放前面）】
       r_multiple_tp            止盈盈亏比（r_multiple_tp × R），同时是 L3 启动阈值（品种级）
                                （保本/锁利缓冲 breakeven_buffer_r 已改为全局比例，见 ExitConfig）
-      【费率（P-A 静态化 · D-B 生成式 · 2026-09-15）：真值源 = 券商费率表
+      【费率（静态化 · D-B 生成式）：真值源 = 券商费率表
         （Docs/手续费标准-.xlsx → Tool/GenFeeTable.py → 本文件 GENERATED 区块）】
       open_fee                 开仓费率。xlsx 只有两个口径：交易（= 开仓 = 平昨）与平今
                                —— 全表 90 条带独立平今行的基准条目里没有一行把"平昨"
-                               单独列出来（§6.4），故**平昨档 = 开仓档，不设第三档**。
+                               单独列出来，故**平昨档 = 开仓档，不设第三档**。
       closetoday_fee           平今费率；None = 与开仓同档（如 AG 无独立平今行）；
                                Fee.free() = 平今免收（如 AU/TA）。
       fee_overrides            **覆盖档**（合约月份差异化费率）字段位，默认空 = 不消费。
@@ -277,9 +277,9 @@ class Product:
                                AG 6/12 合约 万0.5）。留位理由见字段处注释。
       exec_policy              执行侧三件事（今仓离场 offset / 报单属性 / 一笔挂几手）。
                                唯一事实源 = 本模块上方 `EXEC_POLICY` 表 —— **代码只读不推**：
-                               不读费率、不看交易所名字（2026-09-16 用户拍板）。
+                               不读费率、不看交易所名字（用户拍板）。
       【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
-      price_tick               最小变动价位 —— Phase 8（D20）新增，**仅作离线模式
+      price_tick 最小变动价位 ——（D20）新增，**仅作离线模式
                                （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
                                （apply_quote），配置值不会被采用。
       multiplier               合约乘数（元/点）
@@ -287,7 +287,7 @@ class Product:
     注：下方**声明顺序**受 dataclass 规则约束（无默认值字段必须在前），
     与上述概念分组不同属有意为之；书写/阅读以各档案条目的实参顺序为准。
 
-    ⚠️ **已删除字段：`exchange`（2026-09-16 B 批 · 用户拍板）**
+    ⚠️ **已删除字段：`exchange`（用户拍板）**
       交易所曾是本类的一个字段（8 行档案各写一次 `exchange="CFFEX"` 之类）。
       删除理由有两层：
         · 冗余 —— 它与 `EXEC_POLICY` 每行末尾的交易所注释、各档案 `note` 里的
@@ -306,11 +306,11 @@ class Product:
     closetoday_fee: Optional[Fee] = None    # None = 同开仓档（xlsx 无独立平今行）
     price_tick: float = 0.2            # 最小变动价位（离线兜底；中金所四品种均 0.2）
     note: str = ""                          # 调参记录 / 数据来源 / 标定状态
-    # 覆盖档字段位（R3 · 2026-09-15，交接文档 §6.3-b 明令"字段位必须留"）。
+    # 覆盖档字段位（R3 · 2026-09-15，交接文档 -b 明令"字段位必须留"）。
     #   ⚠️ **当前不消费**：`fee_pair()` 一律读基准档。
     #   后果（量化）：AU 主力滚到 6/12 合约时基准档 10 元/手 vs 覆盖档 20 元/手
     #   → 回测成本低估 2.0×；AG 万0.1 vs 万0.5 → 低估 5.0×。
-    #   **决策侧完全不受影响** —— 2026-09-16 起"走不走平今"由 `EXEC_POLICY` 表
+    #   **决策侧完全不受影响** ——"走不走平今"由 `EXEC_POLICY` 表
     #   第 1 列直接给定，决策侧**根本不读费率**（用户第 4 轮 ⑴ 拍板：人算 → 改表 →
     #   启动），受影响的只有会计侧 `cost_cash`。
     #   启用方式：把 `effective_fee_override()` 接进 `fee_pair()`，并在
@@ -324,9 +324,9 @@ class Product:
     def fee_pair(self) -> Tuple[Fee, Fee]:
         """返回（开仓费, 平今费）两档**基准档**。closetoday_fee=None → 回开仓档。
 
-        P-A 用户拍板（2026-09-15）：**不做合约月份覆盖档** —— 有覆盖档的品种
+        用户拍板：**不做合约月份覆盖档** —— 有覆盖档的品种
         （AU 6/12 合约 20 元/手、AG 6/12 万0.5）一律按第一个基准档计。
-        R3（2026-09-15）：**字段位已留**（`fee_overrides`，数据由费率区块提供、
+        R3：**字段位已留**（`fee_overrides`，数据由费率区块提供、
         构造期填入），但本方法仍只读基准档 ——
         字段位存在 ≠ 已消费，启用方式见 `fee_overrides` 的注释。
 
@@ -337,11 +337,11 @@ class Product:
                                else self.closetoday_fee)
 
     def exit_overrides(self) -> Dict[str, float]:
-        """品种相关的出场参数（Fix A · 2026-09-14 策略参数单源化）。
+        """品种相关的出场参数（策略参数单源化）。
 
         仅 r_multiple_tp **只存在于本档案**（它同时是 L3 启动阈值，品种级；
         D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
-        min_r_points（R 下限）、breakeven_buffer_ticks 已于 2026-09-14 删除：
+        min_r_points（R 下限）、breakeven_buffer_ticks 删除：
         R 改为纯自适应 max(A, 2×ATR)，保本缓冲改为全局比例 breakeven_buffer_r（ExitConfig）。
         Trading/Config.py 的 resolved_exit_params() 是唯一合并点 —— 把本返回值
         合到品种无关的 ExitConfig 上，组装出 LayeredExitPolicy 的完整参数。
@@ -354,7 +354,7 @@ class Product:
 def _fee_kw(code: str) -> Dict[str, object]:
     """从**本模块的生成区块**取费率 → Product 构造参数（两档费率 + 覆盖档）。
 
-    D-B（2026-09-15）唯一手抄消除点：本函数是费率数据进入档案的**唯一入口**，
+    D-B 唯一手抄消除点：本函数是费率数据进入档案的**唯一入口**，
     Product 条目里不再出现任何费率数字。区块由 `Tool/GenFeeTable.py` 机器生成、
     就写在**本文件上方**（`>>> GENERATED` … `<<< END GENERATED`）—— 所以这里读的
     只是同模块的模块级常量，没有额外模块依赖。生成区块缺该品种时直接 KeyError
@@ -395,13 +395,13 @@ def _exec_kw(code: str) -> Dict[str, object]:
 #   改 xlsx（或生成器）后重跑，而非改本文件。
 #   对账守护：Trading/Test/test_product_fee_table.py（费率区块 ⇄ 档案 ⇄ xlsx 三方一致）。
 #
-# ⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**（2026-09-14 评审 P2-3）
+# ⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**
 #   —— 半句都不能省的背景：
 #     · 实盘（simnow/live）：由 SimNow._apply_instrument_quote 从**真实月份合约行情**
-#       原子覆盖这两个字段（`Instrument.apply_quote`，Phase 3 起运行时有效值归
+#       原子覆盖这两个字段（`Instrument.apply_quote`，运行时有效值归
 #       Instrument），本表的取值**在实盘不被采用**；
 #     · 离线（dry_run/replay）：没有行情可比，有效值就是本表播种的配置值
-#       （2026-09-15 P-B 起播种桥已删，Instrument 构造时直接取档案初值）
+#       （播种桥已删，Instrument 构造时直接取档案初值）
 #       —— 本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
 #   维护口径：每次品种合约参数调整（交易所公告换月/改乘数）后，同步改本表并跑
 #   Trading/Test/test_p50_review_fixes.py 的对账用例。
@@ -410,7 +410,7 @@ def _exec_kw(code: str) -> Dict[str, object]:
 #   费率区块 OVERRIDES 已收录 AU/AG 的 6、12 合约档并填入 `fee_overrides`，
 #   但 `fee_pair()` 一律读基准档 —— 启用方式与量化后果
 #   见 `Product.fee_overrides` 字段注释。
-#   ⚠️ 决策侧（走不走平今）自 2026-09-16 起**根本不读费率**，只读 `EXEC_POLICY`。
+#   ⚠️ 决策侧（走不走平今）起**根本不读费率**，只读 `EXEC_POLICY`。
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", r_multiple_tp=2.0,
@@ -478,7 +478,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     # ── 郑商所 PTA（Tier 2 能源化工：成交额常年前三、随原油联动趋势明确）──
     # 键名 = 天勤符号末段："KQ.m@CZCE.TA" → parse_product() = "TA"（PTA 是俗名，
     #   符号代码是 TA）。报单属性与每笔手数 = `EXEC_POLICY["TA"]`（FAK + 1 手），
-    #   由 `**_exec_kw("TA")` 注入 —— 不再由交易所名字推导（2026-09-16）。
+    #   由 `**_exec_kw("TA")` 注入 —— 不再由交易所名字推导。
     "TA": Product(
         product="TA", r_multiple_tp=2.0,
         price_tick=2.0, multiplier=5.0,
@@ -498,7 +498,7 @@ def parse_product(signal_symbol: str) -> str:
     例："KQ.m@CFFEX.IF" → "IF"（取最后一个 '.' 之后的片段）。
     无 '.' 或缺失时返回 ""（= 未知品种，不套用任何品种档案）。
 
-    大小写归一为**大写**（2026-09-13）：前端别名表（DataAPI/TqSdkAPI.py
+    大小写归一为**大写** 前端别名表（DataAPI/TqSdkAPI.py
     FUTURES_ALIASES）把 SHFE/DCE 品种解析成 tqsdk 惯例的**小写**主连
     （如 AU → "KQ.m@SHFE.au"、RB → "KQ.m@SHFE.rb"），若按原文取末段
     会得到 "au"/"rb"，与档案键（大写）匹配不上——已标定品种反而被当成
@@ -520,7 +520,7 @@ _MONTH_SUFFIX_RE = re.compile(r"\d+$")
 def parse_product_key(signal_symbol: str) -> str:
     """**档案 / 白名单查询专用**的品种键：在 parse_product 结果上再剥合约月份。
 
-    与 parse_product 的分工（2026-09-14 评审 P1-1）：
+    与 parse_product 的分工：
       · parse_product   —— 语义 =「取符号末段」，保留月份。
         `"CFFEX.IF2609"` → `"IF2609"`（test_period_profile.py:133 明确断言此行为，
         不能改，改了会把已标定的既有用例打红）。
@@ -570,7 +570,7 @@ def product_key_of(symbol: Optional[str]) -> str:
     转大写），不在别处重写第二份正则 —— 否则两处规则漂移时，"哪个键算同一品种"
     会出现两个答案。裸代码（无 "."）补一个前导点即可复用同一套规则。
 
-    住址与消费方（2026-09-16 · C 批 ⑶-d）：
+    住址与消费方：
       · **写入侧** `Infra/StateDB.py` 的 `save_trade` —— 落进 `trades.product_key`；
       · **查询侧** `Infra/TradeStats.py` 的 `load_trades_report` —— 只用来把
         调用方传来的符号（主连/月份/裸代码）归一成键，再拿这个键去比**列**；
@@ -583,7 +583,7 @@ def product_key_of(symbol: Optional[str]) -> str:
 
 
 def describe_unknown_product(signal_symbol: str) -> str:
-    """未知品种的统一文案（单一事实源，2026-09-14 评审 P2-4）。
+    """未知品种的统一文案（单一事实源）。
 
     原实现有两份文案（Config 打 WARN + Engine._restore 抛 ValueError），且解析口径
     不一致（一个用末段、一个剥月份），日志里同一件事出现两次、措辞还不一样。
@@ -606,7 +606,7 @@ def describe_unknown_product(signal_symbol: str) -> str:
 
 
 def assert_product_allowed(signal_symbol: str) -> str:
-    """品种白名单硬约束的**唯一实现**（2026-09-14 评审 P1-1 + P2-1）。
+    """品种白名单硬约束的**唯一实现**。
 
     返回解析出的品种键；不在 PRODUCT_PROFILES 中则抛 ValueError（文案由
     describe_unknown_product 统一给出）。

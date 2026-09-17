@@ -2,11 +2,11 @@
 """
 P10 引擎态 / 账户态 / 信号门 单元测试
 ====================================
-2026-09-11 Phase 7 改写。旧版锁死的是 Phase A/B 的**旧**状态机，其中三样已删除：
+改写。旧版锁死的是 B 的**旧**状态机，其中三样已删除：
   · `PositionOrigin` / `ExitMode` 两个枚举 —— 随"持仓来源 / 出场模式"概念删除；
   · `Position.origin` 字段 —— 同上，仓单不再记出身；
   · `OrderIntent` 的 4 值（OPEN / LOCK / UNLOCK / CLOSE）→ 收敛为 **2 值**（OPEN / CLOSE）；
-  · `Engine._close_position` / `_open_position` —— Phase 4 删除，统一走
+  · `Engine._close_position` / `_open_position` ——删除，统一走
     `_decide_action` / `_decide_exit` → `_execute`。
 
 新旧口径的关键差别（本测试正面钉死）
@@ -21,7 +21,7 @@ P10 引擎态 / 账户态 / 信号门 单元测试
        净敞口归零、PnL 不兑现）；跨日仓 → 转移 ⑤ CLOSE（记 Trade、离场兑现）。
 
 硬性要求（本测试锁死）
-    [1] 枚举：OrderIntent 3 值（OPEN/CLOSE/CLOSETODAY，Phase 10 加平今）/
+    [1] 枚举：OrderIntent 3 值（OPEN/CLOSE/CLOSETODAY，加平今）/
         AccountState 3 值 / EngineState 4 值；PositionOrigin
         与 ExitMode **不存在**。
     [2] `Position` 无 origin 字段；to_dict 不含；from_dict 宽容忽略多余键；

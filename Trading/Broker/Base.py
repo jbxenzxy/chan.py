@@ -10,7 +10,7 @@ submit() 被设计成**同步返回 Order**，是为了让 dry-run 与真实 CTP
 真实 CTP 是异步回执，届时在 broker 内部用 wait_update 阻塞到终态再返回，
 对外仍是同步的。这样引擎的状态机不用为异步改写成回调地狱。
 
-订单意图（2026-09-11 重构）
+订单意图（重构）
 ---------------------------
 submit() 只接受两种意图：**OPEN**（开仓）与 **CLOSE**（平仓）。
 买还是卖由调用方的 `side` 决定，broker 只负责把 (side, offset) 翻成 CTP 报文。
@@ -47,9 +47,9 @@ def build_broker(name: str, instrument: "Instrument",
                  state: Optional["Instrument"] = None) -> "Broker":
     """按名字构造 broker。
 
-    `instrument` = **唯一一份运行时对象**（P-B · 2026-09-15 双类合并：
+    `instrument` = **唯一一份运行时对象**（双类合并：
     静态身份 + 有效 tick/乘数 + 涨跌停 + verified + 定价成本都在它上面）。
-    `state` 参数保留仅为调用点兼容：P-B 起传入值必须与 instrument 同一对象
+    `state` 参数保留仅为调用点兼容：传入值必须与 instrument 同一对象
     （或 None），否则 ValueError —— 合并后"spec 与 state 两份对象"不存在了。
     生产路径 main.py 建好一份同时交给 Broker 与 Engine；漏传时 broker 会
     直接用 instrument 自身（本来就是同一个），不会再出现"两边各建一份"
@@ -65,22 +65,22 @@ def build_broker(name: str, instrument: "Instrument",
 
 
 # intent → CTP OpenCloseType 的权威表
-# 三个值（需求 ⑵ + Phase 10 D6）：开仓 → OPEN，平昨 → CLOSE，平今 → CLOSETODAY。
+# 三个值（需求 ⑵ + D6）：开仓 → OPEN，平昨 → CLOSE，平今 → CLOSETODAY。
 # **本表不参与方向决策** —— 买还是卖由调用方给的 `side` 决定。
 #
 # tqsdk 白名单硬校验（api.py:1353 / lib/utils.py:39 / scenario/tqscenario.py:445）：
 #   offset ∈ ("OPEN", "CLOSE", "CLOSETODAY")，其它值**直接 raise**（不是 CTP 拒单，
 #   是 SDK 本地抛错，被 except 吞掉后表现为"下单失败"，极易误判成通道问题）。
-#   2026-09-10 修正（P0）：原 UNLOCK 的值 "CLOSEYESTERDAY" 不在白名单 →
+#   修正（P0）：原 UNLOCK 的值 "CLOSEYESTERDAY" 不在白名单 →
 #   实盘 insert_order 本地抛异常 → 跨日解锁 100% 失败。
 #   tqsdk 文档口径：上期所/上期能源平昨用 "CLOSE"，**其他交易所（含中金所）平仓直接用 "CLOSE"**。
 #
-# CLOSETODAY 的启用判据（2026-09-16）：**品种执行策略表第 1 列**
+# CLOSETODAY 的启用判据：**品种执行策略表第 1 列**
 #   （`ExecPolicy.today_exit == "CLOSETODAY"`）—— 用户按费率自己算定后填表，
 #   代码只读表，不从费率推导、也不看交易所名字（原按 SHFE/INE 能力守卫的
 #   `Instrument.supports_closetoday` 已删除）。
 #   引擎侧守卫 = 转移④ 分支条件 + `_pre_trade_check`（校验该品种表第 1 列确为 CLOSETODAY）。
-# 一期（Phase 1-9）本表只有两项、刻意不开平今口子（原 A4 注释）；Phase 10 启用第三项。
+# 一期本表只有两项、刻意不开平今口子（原 A4 注释）；启用第三项。
 INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
     OrderIntent.OPEN: "OPEN",              # 买开 / 卖开；④ 反向开仓锁仓也走它
     OrderIntent.CLOSE: "CLOSE",            # 买平 / 卖平；恒作用于跨日仓（平昨）
@@ -88,7 +88,7 @@ INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
 }
 
 
-# ─── 拒单原因分类（D10，2026-09-11；2026-09-13 补第四类 position）──────────
+# ─── 拒单原因分类（D10，2026-09-11；补第四类 position）──────────
 # 追价是有代价的（滑点 + 报撤单额度 + 中金所"频繁报撤单"监管计数，见风险 R13）。
 # 但并不是所有拒单都值得追：
 #   · 盘口深度不够（FOK 全撤）→ 价格会动，追了有用
@@ -103,14 +103,14 @@ REJECT_PRICE = "price"              # 价格不可达（FOK 全撤 / 涨跌停�
 # 追价无用的三类：命中即 break
 NO_CHASE_REJECT_CLASSES = (REJECT_FUNDS, REJECT_NOT_TRADABLE, REJECT_POSITION)
 
-# CTP 错误码（2026-09-11 核实，来源：CTP_API 错误代码大全 + 申银万国官方报错释义）
+# CTP 错误码（核实，来源：CTP_API 错误代码大全 + 申银万国官方报错释义）
 _CTP_CODE_FUNDS = ("31",)                       # 资金不足
 _CTP_CODE_NOT_TRADABLE = ("17", "28")           # 17 合约不能交易 / 28 无报单权限
-#   2026-09-13：原把 30/50/51 一并归在 not_tradable，现独立成 position —— 见下。
+#   原把 30/50/51 一并归在 not_tradable，现独立成 position —— 见下。
 _CTP_CODE_POSITION = ("30", "50", "51")
 #   30 平仓量超过持仓量 / 50 平今仓位不足 / 51 平昨仓位不足
 #
-# 为什么这三码必须单独一类（2026-09-13）：
+# 为什么这三码必须单独一类：
 #   `not_tradable` 与 `position` 对**追价**的判断一致（都停追），但对**引擎记账**
 #   的语义完全不同 —— 只有「柜台说没有这个仓」才是"幻影仓"的判据，
 #   `Engine._note_close_rejected` 的"清幻影仓"兜底**只能**在这一类上触发。
@@ -120,7 +120,7 @@ _CTP_CODE_POSITION = ("30", "50", "51")
 _CTP_KW_NOT_TRADABLE = ("非交易", "不在交易时间", "禁止此操作", "不在报单时间",
                         "未开盘", "已收盘", "交易时间段", "当前状态不允许")
 _CTP_KW_FUNDS = ("资金不足", "保证金不足", "可用资金不足")
-# 仓位类关键字（2026-09-13 补）：各期货公司文本不一致，故按"超持仓 / 仓位不足"
+# 仓位类关键字（补）：各期货公司文本不一致，故按"超持仓 / 仓位不足"
 # 两个方向各列几种常见写法；命中即认定柜台无此仓（or 可用量不足）。
 _CTP_KW_POSITION = ("平仓量超过持仓量", "平仓量超持仓", "超过持仓量", "超过持仓",
                     "仓位不足", "持仓不足", "可平仓位不足", "可用持仓不足",
@@ -173,11 +173,11 @@ def _code_hit(msg: str, code: str) -> bool:
 
 class Broker(ABC):
     name: str = "base"
-    # Phase 8（A′ · §5.9.3）：是否离线通道（无行情连接，允许用配置参数）。
+    # （A′）：是否离线通道（无行情连接，允许用配置参数）。
     #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
     #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
     #
-    #   ⚠️ 新增 broker 通道必读（2026-09-14 评审 P1-3；Phase 3 起改为写 state）：
+    #   ⚠️ 新增 broker 通道必读（改为写 state）：
     #   默认 False 意味着**不声明就 100% 拒单**（Engine._pre_trade_check 的
     #   instrument_unverified 闸门，且拒得很安静 —— 只有 D11 告警）。接新通道时
     #   必须**二选一**：
@@ -193,12 +193,12 @@ class Broker(ABC):
     #   code=instrument_band_degraded 的 warn 告警。
     is_offline: bool = False
 
-    # Phase 3（Fix B）：运行时状态引用。类属性声明 + 惰性实例化
+    # 运行时状态引用。类属性声明 + 惰性实例化
     #   （同 `_pending_alerts` 惯例）：`__new__` 手工装配的 broker 子类
     #   （大量单测这么干）不必调 super().__init__ 也能拿到 state。
     _state: Optional["Instrument"] = None
 
-    # ── Phase 8.1（O-2/O-3 · §5.9.4 项 5）：broker → Engine 告警回流 ──
+    # ──（O-2/O-3）：broker → Engine 告警回流 ──
     # broker 侧的 instrument 故障（行情超时 / nan / 与配置不一致）原来只写
     # logging，D11 前端完全看不到。现在 broker 用 notify() 暂存进本队列，
     # Engine 每根 bar 调 drain_alerts() 取走并转手 Engine.alert（D11 通道）。
@@ -206,7 +206,7 @@ class Broker(ABC):
     _pending_alerts: Optional[List[Dict[str, Any]]] = None
 
     def notify(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
-        """broker 侧告警入队（Phase 8.1 · §5.9.4 项 5 "Broker → Engine.alert()"）。
+        """broker 侧告警入队（"Broker → Engine.alert()"）。
 
         level/code 语义与 Engine.alert 对齐（"warn"/"severe"）；extra 透传
         （field / quote / cfg 等诊断字段）。返回入队的 dict（便于测试断言）。
@@ -231,8 +231,8 @@ class Broker(ABC):
     def __init__(self, instrument: "Instrument",
                  params: Optional[Dict[str, Any]] = None,
                  state: Optional["Instrument"] = None):
-        # P-B（2026-09-15）：双类合并 —— 唯一一份运行时对象（instrument）。
-        # D-C（2026-09-15）：原 spec 兼容别名**已删除** —— 本类现在只有
+        # 双类合并 —— 唯一一份运行时对象（instrument）。
+        # D-C：原 spec 兼容别名**已删除** —— 本类现在只有
         #   `state` 一个属性名（与 Engine / Source 同名），不再"两个属性指同一
         #   块内存"。`instrument` 与 `state` 参数仍须同一对象，否则显式报错。
         if state is not None and state is not instrument:
@@ -245,9 +245,9 @@ class Broker(ABC):
 
     @property
     def state(self) -> "Instrument":
-        """合约运行时对象（P-B 合并后**唯一一份**；D-C 起本类只有这一个名字）。
+        """合约运行时对象（合并后**唯一一份**；D-C 起本类只有这一个名字）。
 
-        D-C（2026-09-15）：原 `self.spec` 回落分支已删 —— `__new__` 手工装配的
+        D-C：原 `self.spec` 回落分支已删 —— `__new__` 手工装配的
         替身（不跑 `__init__`）**必须显式赋 `state=`**，否则这里明确报错，
         而不是悄悄回落到另一个名字上（那正是要消掉的歧义）。
         """

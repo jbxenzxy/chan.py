@@ -4,7 +4,7 @@ G6 · 搜索 × 刷新流 —— 并发守护（对应审计矩阵 G6，P3）
 
 矩阵上「搜索」只标注了「读 path 在 _meta_cache_lock 下」✅，但搜索遍历
 （search_stocks 经 names_snapshot 遍历）与刷新换表（replace_names 的
-clear()+update()）的**交织**从未被测过。审计 P1-2 已指出风险：遍历共享
+clear()+update()）的**交织**从未被测过。已指出风险：遍历共享
 别名会在换表时抛「dictionary changed size during iteration」或**静默串表**。
 本用例直达这条交织路径：
 

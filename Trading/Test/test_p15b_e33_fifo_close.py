@@ -2,7 +2,7 @@
 """
 P15b 离场分流（转移 ④⑤）+ L1-L3 结算 + 多仓 FIFO 对账
 ====================================================
-2026-09-11 Phase 7 改写。旧版围绕三个**已被删除**的东西组织：
+改写。旧版围绕三个**已被删除**的东西组织：
   · `Engine._close_positions(positions, ...)` 批量逐笔平仓 —— 删除。新模型一次
     离场只发**一笔**报单：转移 ④（今日仓 → 反向 OPEN，整段净敞口一次锁住）
     或转移 ⑤（跨日仓 → CLOSE，平「净敞口方向最早的一笔」）。
@@ -91,10 +91,10 @@ from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 from dataclasses import replace as _dc_replace  # noqa: E402
 
-# 单笔手数的唯一来源 = 品种执行策略表第 3 列（2026-09-16 起；原 `risk.max_volume`
+# 单笔手数的唯一来源 = 品种执行策略表第 3 列（原 `risk.max_volume`
 # 已删除）。本文件的场景按「一笔 1 手」构造（多笔叠加才是观察对象），故这里直接
 # 改**表值** —— 只把 IF 档案的执行策略第 3 列换成 1，"改表即生效"正是它的口径。
-# ⚠️ 引擎的有效档案来自 `broker.state`（P-B 合并），本文件所有
+# ⚠️ 引擎的有效档案来自 `broker.state`（合并），本文件所有
 #    `Instrument(None, _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
 _IF = _dc_replace(PRODUCT_PROFILES["IF"],
                   exec_policy=_dc_replace(PRODUCT_PROFILES["IF"].exec_policy,
@@ -151,7 +151,7 @@ class RejectBroker(DryRunBroker):
     """可指定拒单的单号集合（1-based）。
 
     `reject_class` 写入 Order.meta，供引擎 `_note_close_rejected` 做类别分治
-    （2026-09-13 起：只有 `position` 类才允许清幻影仓）。默认空串 = 未分类。
+    （只有 `position` 类才允许清幻影仓）。默认空串 = 未分类。
     """
     def __init__(self, spec, params=None, *, reject_calls=(), reject_class=""):
         super().__init__(spec, params)
@@ -543,7 +543,7 @@ with tmp_dir() as td:
           (eng._alerts[-1].get("code") if eng._alerts else None),
           "close_repeatedly_rejected")
 
-# 3.4 反例（2026-09-13 补类别门槛）：连拒达上限但类别 = price（FOK 全撤/涨跌停）
+# 3.4 反例（补类别门槛）：连拒达上限但类别 = price（FOK 全撤/涨跌停）
 #     → **不得**清仓。仓是真的，只是价格报不进去；清掉就账实不符。
 #     引擎发 warn 级 `close_streak_not_phantom` + 事件 `close_streak_not_cleared`。
 with tmp_dir() as td:

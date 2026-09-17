@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-P32 净敞口 SSOT 契约测试（Phase 7 新增，2026-09-11）
+P32 净敞口 SSOT 契约测试（新增）
 ================================================================
 背景（这条契约替换了什么）
 --------------------------
@@ -126,7 +126,7 @@ def tmp_dir():
 def make_cfg():
     import copy
     base = copy.deepcopy(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 

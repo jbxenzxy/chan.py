@@ -5,7 +5,7 @@ G10 · 期货双窗口 SSE 子缠论 —— 并发守护（对应审计矩阵 G1
 矩阵上「期货双窗口 SSE」此前只标注了「set/get 在 _futures_cache_lock 下」，
 但缓存里存的是**活着的 CChan 对象图**：SSE 线程每根 K 线 do_init 会就地
 清空重建 kl_datas，而 REST 读取方拿到指针后在锁外遍历 bi_list。容器锁只
-护「取指针」护不住对象图（审计 P0-2）。本用例直达这一层：
+护「取指针」护不住对象图。本用例直达这一层：
 
   AppData.set_futures_sub_chan / get_futures_sub_chan  (_futures_cache_lock)
   AppData.futures_sub_chan_lock     (按 key 稳定的对象图锁，写侧取)

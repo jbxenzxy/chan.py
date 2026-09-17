@@ -41,7 +41,7 @@ SimNow 仿真 broker（M2b）
       Broker 只调 `Instrument.effective_order_advanced()` 取生效值，
       不判交易所、不判品种 —— 别在这里写 `if exchange == ...`。
     - offset：OPEN→OPEN；CLOSE→CLOSE（方向由调用方给的 side 决定）。
-      2026-09-10：删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
+      删除按持仓当日判今/昨仓选 offset 的逻辑（原 `_close_offset`）。
       规则 ⑸ 保证"今日单离场 = LOCK 反向开仓（offset=OPEN）"、"跨日单离场 = CLOSE
       平昨（offset=CLOSE）"，故 CLOSE 恒为平昨，CLOSETODAY（平今 0.0345%）不可达。
 
@@ -95,7 +95,7 @@ from .Base import (INTENT_TO_OFFSET, NO_CHASE_REJECT_CLASSES, REJECT_POSITION,
 
 _DIRECTION = {Side.LONG: "BUY", Side.SHORT: "SELL"}
 # close 类报文（CLOSE/UNLOCK）的方向：平多=SELL、平空=BUY（与 _DIRECTION 相反）。
-# 2026-09-05 修复：旧 _submit_close 直接用 _DIRECTION[side]，平多发 BUY —— CTP 会拒单
+# 修复：旧 _submit_close 直接用 _DIRECTION[side]，平多发 BUY —— CTP 会拒单
 # 或平错方向；此前 dry_run 撮合不校验 direction 字符串，故回归未暴露。
 _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 
@@ -104,13 +104,13 @@ _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 # 此时 get_position 缓存必然不可信。刻意不走 _param（config 单一事实源）——
 # 这是通道级安全阈值而非策略参数，避免用户 config 漏键导致 fail-fast 起不来。
 #
-# ⚠️ 夜盘/非交易时段限制（**本判据本身仍待改**，见下方 2026-09-10 更新）：
+# ⚠️ 夜盘/非交易时段限制（**本判据本身仍待改**，见下方更新）：
 #   非交易时段行情停滞是正常现象，本判据会把"数据陈旧"误判为常态 →
 #   real_position 恒返回 None。日盘 IF 无碍（引擎对账只由 bar 事件驱动，
 #   交易时段外没有 bar，对账根本不触发）；但夜盘品种（如 au/ag 21:00-02:30、
 #   螺纹 21:00-23:00）盘中存在"合约无 tick 的静默段"。
 #
-#   2026-09-10 更新（两件事必须分开看）：
+#   更新（两件事必须分开看）：
 #     ① 【已解决】"21:00-次日 02:30 跨越本地日期变更，quote.datetime 的交易日
 #        语义也随之变化" —— 交易日口径已收口到 Infra/Types.trading_day_of_ms()
 #        （夜盘成交归属**次一交易日**），建仓端 entry_date 与离场判定端 today
@@ -128,7 +128,7 @@ _POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
 def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, int]]:
     """读 tqsdk 持仓的 **(今仓, 昨仓)** 分解，失败返回 None。
 
-    为什么需要分解（D12 / §5.8.4 第 4 项，2026-09-13）：
+    为什么需要分解（D12 第 4 项，2026-09-13）：
       `CLOSE` 在本系统里**恒作用于跨日仓**（不变量 6，断言在
       `Engine._pre_trade_check`）→ 中金所下恒为**平昨**。而中金所撮合规则是
       **同时有今仓和昨仓时默认先平今**，所以"总量够"并不等于"平昨能成"：
@@ -143,7 +143,7 @@ def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, in
     item = None
     if isinstance(pos, dict):
         # 只认 trade_symbol 精确匹配；找不到 = 该合约当前无持仓（返回 0）。
-        # 2026-09-07 收窄：删除旧的"取第一条多/空非零持仓"兜底——账户同时持有
+        # 收窄：删除旧的"取第一条多/空非零持仓"兜底——账户同时持有
         # 其他品种时会把别的合约误当本合约读（跨品种误判，污染 P4/P5 校验）。
         # 陈旧缓存 dict 缺键的场景由 real_position 的新鲜度守卫前置拦截。
         item = pos.get(trade_symbol)
@@ -163,7 +163,7 @@ def _position_total(api, trade_symbol: str, side: str) -> int:
 
     用于 P4 修复的成交后二次校验。注意：传 symbol 也不传时，tqsdk 返回的是
     整个账户的 dict[symbol, Position]；这里取与 trade_symbol 匹配的那一条。
-    2026-09-13：改为 `_position_split` 求和，避免"今/昨字段名"在两处各写一遍。
+    改为 `_position_split` 求和，避免"今/昨字段名"在两处各写一遍。
     """
     sp = _position_split(api, trade_symbol, side)
     if sp is None:
@@ -179,7 +179,7 @@ def _verify_yesterday_delta(api, trade_symbol: str, side: str,
     与 `_verify_position_delta` 的分工：
       · 那个看的是**总量**，服务 OPEN（今仓增加，总量增加）；
       · 这个看的是**今/昨分解**，只服务 CLOSE（平昨 → 昨仓减、今仓不动）。
-    判据（§5.8.4 第 4 项"平昨 CLOSE 是否真的减昨仓"）：
+    判据（第 4 项"平昨 CLOSE 是否真的减昨仓"）：
       成立 ⟺ 昨仓落到 `his_baseline - volume`（±1 帧同步漂移）
               且 今仓 == `today_baseline`（**下降即视为平到了今仓 → 不成立**）
 
@@ -211,7 +211,7 @@ def _verify_yesterday_delta(api, trade_symbol: str, side: str,
 def _verify_today_delta(api, trade_symbol: str, side: str,
                         today_baseline: int, his_baseline: int,
                         volume: int, timeout_s: float = 5.0) -> bool:
-    """等 **今仓** 精确减少 `volume`、且 **昨仓一分不动**（Phase 10 / p51 的成交后半段）。
+    """等 **今仓** 精确减少 `volume`、且 **昨仓一分不动**（p51 的成交后半段）。
 
     `_verify_yesterday_delta` 的镜像：那个服务 CLOSE（平昨），这个只服务
     **CLOSETODAY（平今）**。判据：
@@ -342,13 +342,13 @@ def _traded_price_from_records(order) -> Optional[float]:
 
 def _quote_params_ready(quote: Any, expect_symbol: str,
                         require_band: bool = True):
-    """Phase 8：quote 的静态合约参数是否已就绪（供 _wait 轮询）。
+    """quote 的静态合约参数是否已就绪（供 _wait 轮询）。
 
     tqsdk 取不到的字段返回 **nan 而不是 None**（nan 是 truthy，`not v` 拦不住），
     故必须 isfinite + > 0 显式判；涨跌停还需 lower < upper（区间自洽）。
     返回 bool —— 让谓词自身吞异常，轮询循环里不中断。
 
-    require_band（2026-09-14 评审 P1-3，默认 True = 既有语义）：
+    require_band（默认 True = 既有语义）：
       · True  —— 四字段全等（strict 档）；
       · False —— 只等 price_tick + volume_multiple（quote_partial 档）：
                  涨跌停不是等下去的理由，缺就缺，走降级路径。
@@ -373,7 +373,7 @@ def _quote_params_ready(quote: Any, expect_symbol: str,
 
 
 def _extract_last_trade_date(quote: Any) -> str:
-    """从行情对象提取最后交易日（Phase 11 · 交割月护栏数据位，YYYY-MM-DD）。
+    """从行情对象提取最后交易日（交割月护栏数据位，YYYY-MM-DD）。
 
     优先读 quote.last_trade_date；tqsdk 部分版本只暴露 expiry_datetime
     （datetime 对象 / int 毫秒三种形态），取其日期部分。解析不出 → 返回 ""。
@@ -416,7 +416,7 @@ def _extract_last_trade_date(quote: Any) -> str:
 class SimNowBroker(Broker):
     name = "simnow"
 
-    # 2026-09-14 评审 P1-2：pulse() 合约参数重试的节流间隔（单位 = bar 根数）。
+    # pulse() 合约参数重试的节流间隔（单位 = bar 根数）。
     #   20 根：5m 周期 ≈ 100 分钟重试一次；15s 周期 ≈ 5 分钟一次。
     #   取值权衡 —— 太小（<10）：仍会显著拖慢实时模式；太大（>60）：非交易时段
     #   启动后要等几小时才恢复。20 是"不吃掉正常行情节奏"与"能自愈"的交点。
@@ -426,7 +426,7 @@ class SimNowBroker(Broker):
                  params: Optional[Dict[str, Any]] = None,
                  state: Optional["Instrument"] = None):
         super().__init__(instrument, params, state=state)
-        # 严格模式（2026-09-07）：broker_params 以 Trading/Config.py 的
+        # 严格模式：broker_params 以 Trading/Config.py 的
         # BrokerConfig 为**唯一默认值来源**补齐 —— 调用方可以只传要覆盖的键；
         # 传了模型里没有的键（拼错 / 残留旧键）直接报错，不再静默忽略。
         self.params = BrokerConfig(**(params or {})).model_dump()
@@ -434,32 +434,32 @@ class SimNowBroker(Broker):
         # 行情快照引用（_connect 成功后订阅），供 _quote_stale 新鲜度守卫读 datetime
         self._quote = None
         self._trade_symbol = instrument.trade_symbol
-        # R1（2026-09-10）：报单序号由 Base 的自增整数提供（原 itertools.count(1)
+        # R1：报单序号由 Base 的自增整数提供（原 itertools.count(1)
         #   是进程内计数器，重启归零 → order_id 与上一进程相撞 → orders 表
         #   INSERT OR REPLACE 把上一进程的委托审计记录静默覆盖）。
         #   SimNow 的 order_id 只是**审计用合成号**，真实委托号在 meta["raw_order_id"]，
         #   故这里只需保证跨重启不重复即可。
         self.orders: List[Order] = []
-        # Phase G1：signal_key → [raw_order_id] 索引（trade_confirmed / cancel_pending
+        # signal_key → [raw_order_id] 索引（trade_confirmed / cancel_pending
         # 复查用）。必须在凭据检查**之前**初始化 —— 缺凭据 early-return 时也要保证
         # 字段存在，否则单测实例化（无凭据）后访问会 AttributeError。
         self._sig_orders: Dict[str, List[str]] = {}
         self._conn_error: Optional[str] = None
-        # Phase 8（A′ · §5.9.4 项 11）：合约参数"取值即冻结"一次性开关。
+        # （A′）：合约参数"取值即冻结"一次性开关。
         #   首次从真实月份合约行情取到并通过校验后置 True，全进程不再变 ——
         #   防止盘中换月 / 异常推送导致同一批持仓的限价口径漂移。
         self._instrument_frozen: bool = False
-        # 2026-09-14 评审 P1-2：pulse() 里的重试节流计数器。
+        # pulse() 里的重试节流计数器。
         #   _apply_instrument_quote 内部是**阻塞**等待（_wait，默认 30s）；
         #   原实现"每根 bar 重试一次"，在参数一直取不到时（非交易时段 / 夜盘休市 /
         #   合约异常 / tqsdk 不推送）会让 15s 周期的引擎每根 bar 卡 30s —— bar 间隔
         #   < 阻塞时长 → 引擎永远追不上行情。改成"启动期 1 次 + 之后每
         #   INSTRUMENT_RETRY_EVERY_BARS 根一次"（见 pulse 的节流注释）。
         self._instrument_retry_tick: int = 0
-        # 2026-09-15 P-A 删除 _fee_samples 样本缓存（费率反推通道随 P-A 移除）。
+        # 删除 _fee_samples 样本缓存（费率反推通道随移除）。
 
         # ════════════════════════════════════════════════════════════════
-        # Phase I1（2026-09-06）：SimNow 仿真 ↔ 实盘 CTP 账户选择
+        # SimNow 仿真 ↔ 实盘 CTP 账户选择
         #   账户路由（优先级：环境变量 > 配置文件，env 为空才回落 config）：
         #     仿真：sn_account/sn_password（SN_ACCOUNT/SN_PASSWORD）
         #     实盘：live_account/live_password（LIVE_ACCOUNT/LIVE_PASSWORD）
@@ -528,7 +528,7 @@ class SimNowBroker(Broker):
             self._capture_initial_account_state()
 
     def _cred(self, param_key: str, env_key: str) -> str:
-        # P3-7：凭据只走环境变量。2026-09-07 起配置里不再有账号密码字段（若将来
+        # 凭据只走环境变量。起配置里不再有账号密码字段（若将来
         # 残留明文密码，会反客为主覆盖开发者想用 LIVE_PASSWORD 等环境变量注入
         # 的凭据（与"密码不落盘"的意图相反）。env 有值用 env；env 为空才回落
         # 又在配置里加回明文密码，会反客为主覆盖环境变量，与"密码不落盘"相悖）。
@@ -566,7 +566,7 @@ class SimNowBroker(Broker):
     def _connect(self) -> None:
         """登录 CTP（SimNow 仿真 / 实盘期货公司），带重试。
 
-        Phase I1：账户路由按 self.is_live 选择
+        账户路由按 self.is_live 选择
           · 仿真 → TqAccount("simnow", sn_account, sn_password)
           · 实盘 → TqAccount(tq_market, live_account, live_password)
             （tq_market = 期货公司名，如 "创元期货"）
@@ -633,7 +633,7 @@ class SimNowBroker(Broker):
                 self._quote = self._api.get_quote(self._trade_symbol)
             except Exception:
                 self._quote = None
-            # Phase 8（A′ · §5.9.4 项 3）：在首次下单前完成合约参数取值。
+            # （A′）：在首次下单前完成合约参数取值。
             #   失败不阻断启动 —— Engine._pre_trade_check 的 fail-closed 闸门会拒单，
             #   pulse() 每根 bar 借心跳重试。取到即冻结（_instrument_frozen）。
             self._apply_instrument_quote()
@@ -655,9 +655,9 @@ class SimNowBroker(Broker):
         if self._api is None:
             return
         # ══════════════════════════════════════════════════════════════
-        # Phase 8（A′）：合约参数未冻结（启动时超时/断线未取到）→ 借心跳重试。
+        # （A′）：合约参数未冻结（启动时超时/断线未取到）→ 借心跳重试。
         #
-        # 2026-09-14 评审 P1-2：**必须节流，不能每根 bar 都试**。
+        # **必须节流，不能每根 bar 都试**。
         #   _apply_instrument_quote → _wait(..., timeout_s=instrument_fetch_timeout)
         #   是阻塞循环（默认 30s）。参数一直取不到时，"每根 bar 试一次" = 每根
         #   bar 阻塞 30s：15s 周期下 bar 间隔 15s < 30s → 引擎永远追不上行情，
@@ -713,31 +713,31 @@ class SimNowBroker(Broker):
                              timeout_s=self._timing("underlying_map_timeout"))
             if hit and q.underlying_symbol:
                 self._trade_symbol = q.underlying_symbol
-                # P-B（2026-09-15）：trade_symbol 是运行时身份字段（行情回填）——
-                #   原"就地改写配置对象 spec.trade_symbol"（§4.2 例 1 写入点①）
+                # trade_symbol 是运行时身份字段（行情回填）——
+                #   原"就地改写配置对象 spec.trade_symbol"（例 1 写入点①）
                 #   现在写的是 Instrument 自身的可变字段，配置（frozen）不再被动。
                 self.state.trade_symbol = q.underlying_symbol
         except Exception as e:
             self._conn_error = "主连映射失败: {}: {}".format(type(e).__name__, e)
 
     # ══════════════════════════════════════════════════════════════════
-    # Phase 8（D20 · A′）：合约参数自动获取 + 涨跌停护栏（§5.9 / §5.4 阻塞点 5）
+    # （D20 · A′）：合约参数自动获取 + 涨跌停护栏（阻塞点 5）
     # ══════════════════════════════════════════════════════════════════
     def _apply_instrument_quote(self) -> None:
-        """从**真实月份合约**（self._trade_symbol）行情回填合约参数（§5.9.2/5.9.4）。
+        """从**真实月份合约**（self._trade_symbol）行情回填合约参数（5.9.4）。
 
-        A′ fail-closed 语义（§5.9.3，四条硬规则）：
+        A′ fail-closed 语义（四条硬规则）：
           · 取到并通过校验 → **state**.apply_quote() 覆盖 + verified=True +
             source="QUOTE" + 冻结（全进程不再变）；
           · 任一环节失败（超时 / nan / 区间不自洽）→ verified 保持 False，
             Engine._pre_trade_check 拒单 + 严重告警 —— **绝不回退配置值**
             （"取不到就回退"的分支不存在，由 p42 用例③ 钉死）；
-          · policy=off（§5.9.4 项 4）：只允许离线（dry_run/replay）使用；
+          · policy=off：只允许离线（dry_run/replay）使用；
             SimNow 是在线通道 → 直接返回、永不置 verified，实盘配 off 的结果
             就是闸门拒单（调试开关不得绕过 A′，规则 4）。
           · 冻结后再不重取（避免盘中换月 / 异常推送导致限价口径漂移）。
 
-        Phase 3（Fix B）：回填目标从 spec 换成 **self.state** ——
+        回填目标从 spec 换成 **self.state** ——
           有效 tick/乘数/涨跌停与 verified/source 都是运行时状态，
           配置树（cfg.instrument）自此不再被行情改写。
         """
@@ -748,11 +748,11 @@ class SimNowBroker(Broker):
             return
         if self._api is None or not self._trade_symbol:
             return
-        # 2026-09-14 评审 P1-3：quote_partial 档（自研/第三方在线通道逃生舱）
+        # quote_partial 档（自研/第三方在线通道逃生舱）
         #   —— 只强制 tick + 乘数，涨跌停取不到就降级为不校验（但必须出声）。
         partial = (policy == "quote_partial")
         require_band = not partial
-        # 2026-09-14 评审 P1-2：本次是**真实发起**取值，计入节流计数
+        # 本次是**真实发起**取值，计入节流计数
         #   （_connect 里调过一次后，pulse 的首根 bar 就不会再阻塞一轮）。
         #   getattr 兜底：p42 等用例用 __new__ 手工装配 broker（不走 __init__），
         #   此时按 0 处理。
@@ -760,9 +760,9 @@ class SimNowBroker(Broker):
             int(getattr(self, "_instrument_retry_tick", 0)), 1)
         try:
             # 必须订阅**真实月份合约**，不是主连 KQ.m@… —— 主连是虚拟合约，
-            # 静态字段（tick / 乘数 / 涨跌停）多为 nan（§5.9.3 校验清单第 2 条）。
+            # 静态字段（tick / 乘数 / 涨跌停）多为 nan（校验清单第 2 条）。
             q = self._api.get_quote(self._trade_symbol)
-            # Phase 8.1（B-2）：参数就绪等待用**独立超时** instrument_fetch_timeout
+            # 参数就绪等待用**独立超时** instrument_fetch_timeout
             # （默认 30s）—— 主连映射通常 <1s，而真实月份合约的静态字段在非交易
             # 时段可能 10~30s 才推齐，两者期望不同，不该共用一把 underlying_map_timeout。
             ready = self._wait(
@@ -802,7 +802,7 @@ class SimNowBroker(Broker):
             else:
                 log.info("合约参数与配置一致，已从行情确认并冻结")
             # 与配置不一致 → WARN（两个值都打出来），以行情值为准、不阻断
-            # （§5.9.3 校验清单「与配置差异」；让"配置过时"可见）。
+            # （校验清单「与配置差异」；让"配置过时"可见）。
             for f in ("price_tick", "multiplier", "upper_limit", "lower_limit"):
                 if abs(old[f] - float(getattr(st, f))) > 1e-12 and old[f] > 0:
                     self._instrument_warn(
@@ -810,12 +810,12 @@ class SimNowBroker(Broker):
                         .format(f, getattr(st, f), old[f]),
                         code="instrument_spec_conflict", field=f,
                         quote=float(getattr(st, f)), cfg=old[f])
-            # Phase 11（2026-09-14 插入）：交割月护栏的数据位（last_trade_date /
+            # （插入）：交割月护栏的数据位（last_trade_date /
             #   night_session）从**真实月份合约**行情回填。取不到 → 保持 ""/False，
             #   护栏按"不校验未知"降级（Engine.delivery_guard_blocked 已对未知
             #   放行；交易时段护栏对无夜盘品种按日盘时段校验）—— 与涨跌停护栏
             #   对未知区间的处理同哲学。
-            #   注：last_trade_date 是**静态元数据**（换月前不变），Phase 3 未随
+            #   注：last_trade_date 是**静态元数据**（换月前不变），未随
             #   运行时字段迁往 state，仍写在 spec 上（见 Instrument 字段注释）。
             self._fill_delivery_calendar(q)
         except ValueError as e:
@@ -827,7 +827,7 @@ class SimNowBroker(Broker):
                 code="instrument_quote_error", err=type(e).__name__)
 
     # ══════════════════════════════════════════════════════════════════
-    # Phase 11（阻塞点 4 · D8 · 2026-09-14 插入）：交割月护栏的数据位回填
+    # （阻塞点 4 · D8 插入）：交割月护栏的数据位回填
     # ══════════════════════════════════════════════════════════════════
     def _fill_delivery_calendar(self, quote: Any) -> None:
         """从**真实月份合约**行情回填 `last_trade_date`（交割月护栏数据位）。
@@ -843,19 +843,19 @@ class SimNowBroker(Broker):
         if self.state.last_trade_date:
             return
         try:
-            # P-B（2026-09-15）：last_trade_date 是 Instrument 运行时身份字段
-            #   （行情回填）—— 原"就地改写配置对象"（§4.2 例 1 写入点③）随
+            # last_trade_date 是 Instrument 运行时身份字段
+            #   （行情回填）—— 原"就地改写配置对象"（例 1 写入点③）随
             #   双类合并归位：写的是运行时对象自身，frozen 配置不再被动。
             self.state.last_trade_date = _extract_last_trade_date(quote)
         except Exception:
             pass
 
-    # 2026-09-15 P-A 删除：_apply_fee_rates / _sample_fee_from_fill（共 135 行）。
+    # 删除：_apply_fee_rates / _sample_fee_from_fill（共 135 行）。
     #   费率真值源 = 品种档案 Product 的 Fee 两档（静态、启动即确定），
     #   不再经 TqSim.get_commission / 成交回报 commission 反推两条运行时通道。
     def _instrument_warn(self, msg: str, code: str = "instrument_spec",
                          **extra) -> None:
-        """instrument 故障**双通道**（Phase 8.1 · O-2/O-3，§5.9.4 项 5）：
+        """instrument 故障**双通道**（O-2/O-3）：
         logging 给运维日志；notify() 暂存 broker 告警队列，由 Engine 每根 bar
         `_drain_broker_alerts()` 转手 `Engine.alert`（D11 前端可见）。
         code 用于 D11 侧同因合并计数：timeout / invalid / conflict / error 四档。
@@ -867,13 +867,13 @@ class SimNowBroker(Broker):
             pass  # 告警回流失败不影响主流程（闸门语义不依赖它）
 
     def _price_out_of_band(self, limit: Optional[float]) -> Optional[str]:
-        """涨跌停护栏（§5.9.4 项 6 · 阻塞点 5）：最终限价必须落在当日涨跌停区间内。
+        """涨跌停护栏（阻塞点 5）：最终限价必须落在当日涨跌停区间内。
 
         区间未知（0 = 离线模式未从行情取到）→ 不校验（不校验未知的东西）。
         限价恰等于涨跌停价（区间内）**放行** —— 那是合法报单，能否成交由市场决定；
         护栏只拦"报出去必然被废"的单。返回 None = 通过；返回字符串 = 拒单原因。
 
-        Phase 3：区间读自 **self.state**（行情回填的运行时值）。
+        区间读自 **self.state**（行情回填的运行时值）。
         """
         lo = float(getattr(self.state, "lower_limit", 0.0) or 0.0)
         hi = float(getattr(self.state, "upper_limit", 0.0) or 0.0)
@@ -881,7 +881,7 @@ class SimNowBroker(Broker):
             return None
         p = float(limit)
         if not math.isfinite(p):
-            # Phase 8.1（B-1）：nan / inf 统一 fail-closed —— §5.9.3 校验清单第 1 条
+            # nan / inf 统一 fail-closed ——校验清单第 1 条
             # "math.isfinite(v) and v > 0" 是 A′ 全路径守则，band 护栏是"用路径"
             # 的最后一道闸，不例外（原版 nan 放行是 fail-open 隐患：下游
             # round_price 会在 math.ceil(nan) 上抛 ValueError，等于把可预判的
@@ -951,7 +951,7 @@ class SimNowBroker(Broker):
     # 报文（见 Base.INTENT_TO_OFFSET）：OPEN → offset=OPEN，CLOSE → offset=CLOSE。
     #   CLOSE 恒作用于跨日仓（引擎断言），故恒为平昨。
     #   平今 CLOSETODAY 只在**品种执行策略表第 1 列 = CLOSETODAY** 的品种上出现
-    #   （2026-09-16 起；此前由费率派生 + 交易所能力闸门双判，两者均已删除）——
+    #   （此前由费率派生 + 交易所能力闸门双判，两者均已删除）——
     #   开不开这个口子由表说了算，Broker 不做任何品种 / 交易所判断。
     #
     # 派发只有两路：OPEN → _submit_open，其余（CLOSE）→ _submit_close。
@@ -1086,7 +1086,7 @@ class SimNowBroker(Broker):
                 limit = self._chase_fallback_limit("open", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
-            # 涨跌停护栏（Phase 8 · 阻塞点 5）：限价出区间 → 本地拒单，不发柜台。
+            # 涨跌停护栏（阻塞点 5）：限价出区间 → 本地拒单，不发柜台。
             #   不追价 —— 追价只会把限价推得更出区间，追 100 轮也一样废。
             band_err = self._price_out_of_band(limit)
             if band_err:
@@ -1147,7 +1147,7 @@ class SimNowBroker(Broker):
         为什么 CLOSE 恒为平昨：规则 ⑹/⑺ 保证 CLOSE **只作用于跨日仓**
         （断言在 Engine._pre_trade_check），今日单离场默认走反向 OPEN 软离场。
         故平昨报文恒为 tqsdk 白名单内的 "CLOSE"；CLOSETODAY（平今）在本系统
-        里由**品种执行策略表第 1 列**开启（2026-09-16）：该品种
+        里由**品种执行策略表第 1 列**开启：该品种
         `ExecPolicy.today_exit == "CLOSETODAY"` 时，转移 ④ 生成 CLOSETODAY 意图 →
         offset=CLOSETODAY、目标恒为**今仓**（引擎 _pre_trade_check 断言）。
         两意图在 P0 可平量判据与成交后今/昨验证上完全相反，见下。
@@ -1155,11 +1155,11 @@ class SimNowBroker(Broker):
         offset = INTENT_TO_OFFSET[intent]
         is_today = intent is OrderIntent.CLOSETODAY
         # P0：close 前先等 tqsdk 持仓字段同步到 ≥ volume，挡"平仓量超过持仓量"拒单
-        # D12/p38（2026-09-13）：CLOSE 的判据必须是**昨仓** —— 本系统的 CLOSE 恒为平昨
+        # D12/p38：CLOSE 的判据必须是**昨仓** —— 本系统的 CLOSE 恒为平昨
         #   （不变量 6，断言在 Engine._pre_trade_check）。旧的今+昨口径会放行
         #   "只有今仓"的情形，而中金所同时有今昨仓时默认先平今 → 要么平今多付 15 倍
         #   费率、要么被柜台拒，两者都与引擎的"平昨"假设不符。
-        # Phase 10（2026-09-14）：CLOSETODAY 反之 —— 判据必须是**今仓**
+        # CLOSETODAY 反之 —— 判据必须是**今仓**
         #   （`today_only=True`），否则"只有昨仓、今仓不足"也会被总量放行 → 平今被拒。
         #   等待超时 = 柜台很可能根本没有这笔昨仓/今仓（幻影仓的主路径）→ 带
         #   REJECT_POSITION 类别返回，让引擎的兜底逻辑认得出来（见 Base.REJECT_POSITION）。
@@ -1196,14 +1196,14 @@ class SimNowBroker(Broker):
                 limit = self._chase_fallback_limit("close", side, ref_price, prev_limit,
                                                    chase_sign, chase_ticks)
             prev_limit = limit
-            # 涨跌停护栏（Phase 8 · 阻塞点 5）：同开仓 —— 出区间即本地拒单。
+            # 涨跌停护栏（阻塞点 5）：同开仓 —— 出区间即本地拒单。
             #   下一根 bar 由引擎冷却后重试，届时对手价可能已回到区间内。
             band_err = self._price_out_of_band(limit)
             if band_err:
                 return self._rejected(signal_key, side, intent.value, volume,
                                       ref_price, note, band_err)
             # p38：平仓的基线要**分今/昨**取 —— 成交后要断言"平昨→昨仓降、今仓不动"
-            # / "平今→今仓降、昨仓不动"（Phase 10），一个总量基线做不到这件事
+            # / "平今→今仓降、昨仓不动"，一个总量基线做不到这件事
             # （见 `_verify_yesterday_delta` / `_verify_today_delta`）。
             base_today, base_his = self._take_baseline_split(side_key)
             baseline = base_today + base_his if base_today >= 0 else -1
@@ -1263,12 +1263,12 @@ class SimNowBroker(Broker):
             filled = traded_price
 
         # ===== P4/P5 降级为辅助层：只记录诊断，不再据此 reject =====
-        # D12/p38（2026-09-13）+ Phase 10（2026-09-14）：平仓与 OPEN 的
+        # D12/p38：平仓与 OPEN 的
         #   "持仓变化正确性"是两件事，必须分开看 ——
         #     · OPEN：今仓增加 → 总量增加，`_verify_position_delta` 看总量就够；
         #     · CLOSE：平昨 → **昨仓**下降且**今仓一分不动**。总量判据在这里是
         #       "看不见"的：今仓 1 手被平掉、昨仓不变，总量同样减 1，旧判据照样通过。
-        #     · CLOSETODAY：平今 → **今仓**下降且**昨仓一分不动**（Phase 10），
+        #     · CLOSETODAY：平今 → **今仓**下降且**昨仓一分不动**，
         #       是 CLOSE 的镜像，由 `_verify_today_delta` 验证。
         #   故 CLOSE 走 `_verify_yesterday_delta`、CLOSETODAY 走 `_verify_today_delta`
         #   （均有分拆基线时），OPEN 保持原逻辑。
@@ -1305,7 +1305,7 @@ class SimNowBroker(Broker):
                                             baseline, expected_delta)
 
         status = "filled" if is_fully_filled else "rejected"
-        # D10（2026-09-11）：拒单原因分类。追价只在"价格不可达"时才有意义，
+        # D10：拒单原因分类。追价只在"价格不可达"时才有意义，
         #   资金不足 / 非交易时段追 100 轮也不可能成交 —— 由调用方据此处 break。
         reject_class = ""
         if status == "rejected":
@@ -1338,7 +1338,7 @@ class SimNowBroker(Broker):
                   "attempt": attempt, "max_attempts": max_attempts},
         )
         self.orders.append(o)
-        # Phase G1：登记 signal_key → raw_order_id（trade_confirmed / cancel_pending
+        # 登记 signal_key → raw_order_id（trade_confirmed / cancel_pending
         # 复查用）。同一 signal_key 的追价重试会登记多条 raw 单，各自的
         # trade_records 互不重复，复查时累加安全。_rejected 路径没有真实
         # raw 单，不在此登记。
@@ -1411,7 +1411,7 @@ class SimNowBroker(Broker):
         Step 2.3：timeout_s 缺省时走 BrokerConfig.channel.position_ok_timeout
         （原硬编码 10.0 收口）；生产调用点均显式传入。
 
-        `require_yesterday`（D12 / §5.8.4 第 4 项，2026-09-13 新增，默认 True）：
+        `require_yesterday`（D12 第 4 项，新增，默认 True）：
           本方法**唯一的生产调用点是 `_submit_close`**，而本系统的 CLOSE 恒作用于
           跨日仓（不变量 6）→ 中金所下恒为**平昨**。因此判据必须是 **昨仓 ≥ volume**，
           不是"今+昨 ≥ volume"。
@@ -1421,7 +1421,7 @@ class SimNowBroker(Broker):
           两种结果都和一个"以为在平昨"的引擎不相容。
           传 False 可退回旧的今+昨口径（仅供诊断/对照，生产不要用）。
 
-        `today_only`（Phase 10 / p51，2026-09-14 新增，默认 False）：
+        `today_only`（p51，新增，默认 False）：
           平今 CLOSETODAY 报文的目标恒为**今仓**（引擎 _pre_trade_check 断言），
           可平量判据必须是 **今仓 ≥ volume**（不是今+昨，也不是昨仓）。
           为 True 时覆盖 require_yesterday 的语义；本方法两个生产调用方
@@ -1514,7 +1514,7 @@ class SimNowBroker(Broker):
     def _note_today_lag(self, signal_key: str, side_key: str,
                         today_baseline: int, his_baseline: int,
                         volume: int) -> None:
-        """CLOSETODAY 的平今校验未成立时的诊断钩子（Phase 10 / p51，2026-09-14）。
+        """CLOSETODAY 的平今校验未成立时的诊断钩子（p51）。
 
         `_note_yesterday_lag` 的镜像（对应 `_verify_today_delta`）：
           · `his_dropped`：昨仓下降了 → 柜台把 CLOSETODAY 撮合到了昨仓 → 账实错位
@@ -1543,7 +1543,7 @@ class SimNowBroker(Broker):
                   reject_class: str = "") -> Order:
         # action_str 实际是 OrderIntent.value；为兼容旧调用方沿用 "open"/"close" 字符串
         #
-        # `reject_class`（2026-09-13 新增）：本地拦下的拒单（没走到 CTP 回执，因此
+        # `reject_class`（新增）：本地拦下的拒单（没走到 CTP 回执，因此
         # 没有 last_msg 可供 classify_ctp_reject 判）也要带类别，否则引擎侧的
         # "清幻影仓"兜底会因为拿不到类别而永远不触发 —— "平仓前持仓等待超时"正是
         # 幻影仓的主路径（见 `_submit_close` 的 P0 注释与 D10 的 REJECT_POSITION）。
@@ -1589,7 +1589,7 @@ class SimNowBroker(Broker):
         持仓（实测：SimNow OTG 掉线重连期间对账读到 real=0，把一笔 2 手多单在
         引擎内存整笔冲销，而账户实际持仓未动）。故在**读仓前**统一把关。
 
-        2026-09-07 加固：tqsdk 3.10.2 **没有**公开连接状态接口——TqApi.is_connecting
+        加固：tqsdk 3.10.2 **没有**公开连接状态接口——TqApi.is_connecting
         不存在（hasattr=False，全包 grep 0 命中）；内部重连标志
         （TqReconnect._un_processed）挂在 _init_connection 局部变量上，外部不可达。
         因此采用**行情新鲜度判据**（不依赖 tqsdk 版本）：
@@ -1615,7 +1615,7 @@ class SimNowBroker(Broker):
         """查询 SimNow 真实持仓（引擎对账用）。未连接 / 通道不稳定 / 行情陈旧
         返回 None，引擎对账对应跳过该侧，避免用不可靠读数误清真实持仓。
 
-        2026-09-07 加固：新增行情新鲜度守卫（见 _channel_unstable docstring）——
+        加固：新增行情新鲜度守卫（见 _channel_unstable docstring）——
         断连/重连/假死窗口内行情停滞，读数不可信，宁可让对账跳过也不冒误清风险。
 
         返回该方向当前净持仓手数；供 engine 的持仓对账（增强 B）检测
@@ -1630,7 +1630,7 @@ class SimNowBroker(Broker):
             return None
 
     def trade_confirmed(self, intent, signal_key: str = "") -> bool:
-        """Phase G1：UNLOCK 卡单 5 bars 后复核 —— 查 CTP 真实成交明细。
+        """UNLOCK 卡单 5 bars 后复核 —— 查 CTP 真实成交明细。
 
         复查策略：**不信任** submit 时 ``_finalize`` 的判定（F1 防的正是提交
         时刻的状态漂移——CTP 通道异常会让 tqsdk 端状态与交易所实际不符），而是
@@ -1687,7 +1687,7 @@ class SimNowBroker(Broker):
         return total_traded >= expected
 
     def cancel_pending(self, signal_key: str = "") -> int:
-        """Phase G2：撤掉该 signal_key 下所有未终态的在途委托，返回撤单请求数。
+        """撤掉该 signal_key 下所有未终态的在途委托，返回撤单请求数。
 
         引擎在 5-bar 卡单复核 trade_confirmed=False 时调用：先撤在途单，
         再按真实持仓修正 —— 防止「重建 portfolio 后挂单又成交」的双重平仓。
@@ -1734,18 +1734,18 @@ class SimNowBroker(Broker):
                 "conn_error": self._conn_error,
                 # P5：把启动时账户基线暴露到 stats，便于日志/诊断能看到"幽灵仓从哪来"
                 "initial_account_state": dict(self._initial_account_state),
-                # Phase I1：暴露账户路由信息（审计用）
+                # 暴露账户路由信息（审计用）
                 "market": (str(self.tq_market).strip()
                            if self.is_live else "simnow"),
                 "is_live": self.is_live,
                 "confirm_live_trading": self.confirm_live,
-                # 2026-09-07 加固：行情新鲜度诊断（True=陈旧，real_position 会降级 None）
+                # 加固：行情新鲜度诊断（True=陈旧，real_position 会降级 None）
                 "quote_stale": (self._quote_stale() if self._api is not None else None)}
 
 
 @register_broker
 class LiveCTPBroker(SimNowBroker):
-    """实盘 CTP broker（Phase I1）。
+    """实盘 CTP broker。
 
     Trading/Config.py 里 ``broker = "live"`` 时使用。与 SimNowBroker 共享全部
     逻辑（超价/追价/P0..P6 保障），仅 name 不同 → 账户路由走实盘分支：

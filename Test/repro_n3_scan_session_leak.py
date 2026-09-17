@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """N3 回归：扫描会话（_ScanSession）超时回收 —— 弃扫泄漏 + 旧会话兜底串值。
 
-指导书 v1.3 附录 N3。X3 修复（a334284）把扫描上下文下沉为按 scan_token
+指导书 v1.3 附录 N3。修复（a334284）把扫描上下文下沉为按 scan_token
 的会话对象，解决了跨页串参；但会话的注销只有一条路：前端调用
 /api/stocks/scan/end。若页面在扫描中途被关闭/刷新（不会调 end），
 该 _ScanSession 将永久驻留 _scan_sessions。

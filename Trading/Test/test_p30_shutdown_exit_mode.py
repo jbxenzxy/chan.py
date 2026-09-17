@@ -2,7 +2,7 @@
 """
 P30 关闭自动下单：离场口径（今仓反向开 / 昨仓平）＋「冻结」语义契约
 ====================================================================
-背景（用户 2026-09-10 拍板 = 甲 方案；2026-09-11 Phase 7 贴合新转移表改写）
+背景（用户拍板 = 甲方案；贴合新转移表改写）
     关闭自动下单（shutdown_and_lock_all / 关闭态 on_bar 补做）时：
         今仓 → 转移 ④（反向 OPEN：净敞口归零，进入锁仓态，避开平今高费率）
         昨仓 → 转移 ⑤（CLOSE 平昨，费率正常）
@@ -20,7 +20,7 @@ P30 关闭自动下单：离场口径（今仓反向开 / 昨仓平）＋「冻�
                     ② 在交易所手工平仓。
       为避免"静默"，关闭时若净敞口已归零但簿非空 → 写 `account_frozen` 事件。
 
-2026-09-11 改写说明
+改写说明
     · "来源标记"（origin）/ 配对号（lock_pair_id）/ `lock_booked` 事件随
       "配对"概念一并删除 → 簿面指纹不再含这两项，改用
       (方向, 手数, 建仓日, 建仓价) 表达"纹丝不动"。
@@ -152,8 +152,8 @@ def make_sig(date, hhmm, is_buy, price, ts, key=None):
 
 def build(tmpdir, tag="a", store_path=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
-    # max_open_positions / unlock_no_new_open 已于 Phase 1-4 删除（D2）：前者是同向笔数门，
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
+    # max_open_positions / unlock_no_new_open 已删除（D2）：前者是同向笔数门，
     # 后者在 D1（风控锚改挂在 run 上）后失去意义。
     cfg.exit_params.use_atr = False
     cfg.exit_params.use_trailing = True
@@ -179,7 +179,7 @@ def net_exposure(eng):
 def book_sig(eng):
     """簿面指纹（方向 + 手数 + 建仓日 + 建仓价），用于断言"纹丝不动"。
 
-    2026-09-11：原来还含 p.origin / p.lock_pair_id —— 两者随"来源 / 配对"
+    原来还含 p.origin / p.lock_pair_id —— 两者随"来源 / 配对"
     概念删除，改用建仓日 + 建仓价表达"同一笔仓单没被动过"（这对一个只做
     FIFO 对消的簿来说是充分的：既没被平掉、也没被替换）。
     """

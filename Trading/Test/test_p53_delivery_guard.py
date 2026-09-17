@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-P53 交割月护栏（Phase 11 · 阻塞点 4 · D8）契约（2026-09-14）
+P53 交割月护栏（阻塞点 4 · D8）契约
 =============================================================
-设计前提（拍板，见实施计划 §6.2 Phase 11 行）：
+设计前提（拍板，见实施计划行）：
   · **护栏对象 = 现行主力 `trade_symbol`** 的 last_trade_date —— 主连换月
     （IF2609→IF2610）时 trade_symbol 更新，判定随之解除；
   · **判据 = 剩余交易日 < N 即拦**，N 默认 1（仅最后交易日当天拦）；
@@ -75,7 +75,7 @@ _IF = PRODUCT_PROFILES["IF"]
 
 
 def _inst(ltd=""):
-    """现场 Instrument + 指定最后交易日（P-B：last_trade_date 是运行时字段）。"""
+    """现场 Instrument + 指定最后交易日（last_trade_date 是运行时字段）。"""
     ins = Instrument(None, _IF)
     ins.last_trade_date = ltd
     return ins
@@ -145,9 +145,9 @@ def build_engine(tmpdir, cfg, spec, tag="a"):
 def make_cfg(guard_days=1):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = "KQ.m@CFFEX.IF"
-    # P-B：配置不再携带 exchange；2026-09-16 B 批该字段**整体删除**（交易所只作
+    # 配置不再携带 exchange；该字段**整体删除**（交易所只作
     #   注释备案），写旧键仍会触发 _check_removed_keys 指路
-    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 已于 2026-09-16 删除
+    # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["risk"]["delivery_guard_days"] = guard_days
     base["exit_params"].update({"use_atr": False,
                                 "use_trailing": False})

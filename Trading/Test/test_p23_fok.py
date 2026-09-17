@@ -6,7 +6,7 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
     两类报单（OPEN 开仓 / CLOSE 平仓）**全部恒定附加 advanced="FOK"**
     （限价立即全部成交否则全部撤销，交易所撮合引擎强制执行）：
       报文 offset 由 Base.INTENT_TO_OFFSET 权威表决定（OPEN→"OPEN"、CLOSE→"CLOSE"），
-      **追不追价由 `is_exit` 决定、不由 intent 决定**（D13，2026-09-11 重构后）：
+      **追不追价由 `is_exit` 决定、不由 intent 决定**（D13，重构后）：
        · 入场语义（is_exit=False）：转移 ①/②/③ —— 全撤 → 本笔作废（rejected），
          不追价，等下一信号（"入场没成功，最多不赚钱，但不会亏钱"）
          2026-09-12 更正：原文写"①/②/③/⑥"，而转移表**只有 1~5**
@@ -25,7 +25,7 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
       · tqsdk 限价+FOK 仅拒郑商所期货（api.py L1463），中金所放行
       · 报文映射：time_condition=IOC, volume_condition=ALL
       · 每笔开仓手数 = 品种执行策略表第 3 列（每个买卖点一笔挂 N 手；
-        2026-09-16 起 `risk.max_volume` 已删，表是唯一来源）
+        `risk.max_volume` 已删，表是唯一来源）
       · 引擎不做 20 手上限截断、也没有 over_exchange_limit 拒单
         （上限在表构造期校验：`ExecPolicy.__post_init__`）
 
@@ -236,7 +236,7 @@ o = b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close-unlock")
 check("报单次数 = 1（转移 ③ 拆锁属入场语义，不追价）", len(api.inserted), 1)
 msg = api.inserted[0]
 check("advanced == FOK", msg["advanced"], "FOK")
-# 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
+# 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
 check("offset CLOSE（平昨，2026-09-10 由 CLOSEYESTERDAY 修正）",
       msg["offset"], "CLOSE")
 check("direction SELL（平多）", msg["direction"], "SELL")
@@ -261,7 +261,7 @@ b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close", is_exit=True)
 check("CLOSE 追价报单次数 = close_max_chase", len(api.inserted), 2)
 check("所有 CLOSE 报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
-# 2026-09-10 修正：CLOSEANY 同样不在 tqsdk 白名单 → 白名单只剩 CLOSE / CLOSETODAY。
+# 修正：CLOSEANY 同样不在 tqsdk 白名单 → 白名单只剩 CLOSE / CLOSETODAY。
 # 本用例未传 entry_date → 保守按昨仓 → CLOSE。
 check("CLOSE 报文 CLOSE/CLOSETODAY（且必须在 tqsdk 白名单内）",
       api.inserted[0]["offset"] in ("CLOSE", "CLOSETODAY"), True)

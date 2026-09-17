@@ -211,10 +211,9 @@ from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 # 区域 2 · 数据委托层
 # ═══════════════════════════════════════════════════════════════════════
 
-# 【已删除】_stock_names_cache = app_data.names_cache
-# 审计 P3：死别名——本模块零引用。它不是"无害的一行赋值"：它把**共享可变
+# 死别名——本模块零引用。它不是"无害的一行赋值"：它把**共享可变
 # 容器**挂在模块级名字上，任何人照着写一句 `_stock_names_cache.keys()` 就
-# 绕过 app_data 的锁直接全表遍历（指导书 §8.3 形态②）。已改为按需调用
+# 绕过 app_data 的锁直接全表遍历（指导书形态②）。已改为按需调用
 # app_data.get_stock_name() / names_snapshot()，不留这个样板。
 
 def _load_stock_names_from_cache_file():
@@ -235,9 +234,8 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 # ============================================================
 # PE-TTM / 指数归属缓存（实现位于 App/AppData.py）
 # ============================================================
-# 【已删除】_pe_ttm_cache = app_data.pe_cache
 #          _index_belong_cache = app_data.belong_cache
-# 审计 P3：两条都是死别名（本模块零引用）。删它们的理由同上面的
+# 两条都是死别名（本模块零引用）。删它们的理由同上面的
 # _stock_names_cache——不是清理无用代码，是**拆掉一个指向共享容器的公开
 # 入口**。读取一律走 app_data.get_pe_ttm() / get_index_belong() 点查，
 # 遍历一律走 pe_snapshot() / belong_snapshot()。
@@ -318,7 +316,6 @@ _stocks_cache_lock = app_data.stocks_cache_lock            # 保护缓存的并�
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
 
-# 【已删除】_stock_analysis_lock（原 AppEngine.py:258）
 # 它唯一保护的是 CTdxAPI._tdx_data —— 一个由 set_data() classmethod 写入的
 # 进程级**类变量**。并发请求共用同一个类变量，必然互相覆盖，只能靠串行锁兜。
 # 现改为每请求线程局部注入（DataAPI/TdxAPI.py 的 tdx_data_context），
@@ -341,7 +338,7 @@ def _cache_get(key):
 def _cache_update(key, **fields):
     """在**同一把锁内**完成缓存条目的读-改-写（委托 app_data.cache_update）。
 
-    审计 P0-3：用来替代「_cache_get → 锁外改字段 → _cache_put」。后者每一步
+    用来替代「_cache_get → 锁外改字段 → _cache_put」。后者每一步
     单独看都持了锁，但**整段不是原子的**：两个并发请求各取到同一个条目
     dict、各自补字段、先后 put 回去，后写的会整体覆盖先写的（实测最终只剩
     `['records']`，另一线程写入的 `chan` 被静默吞掉）。
@@ -361,8 +358,7 @@ SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 FREQ_TO_COL = AppData_FREQ_TO_COL
 
 
-# 【已删除】_saved_point_times = app_data.saved_point_times
-# 审计 P3：死别名（本模块零引用）。选点时间一律经
+# 死别名（本模块零引用）。选点时间一律经
 # app_data.get_saved_point_time() 读取。
 
 
@@ -427,7 +423,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         sub_cached = _cache_get(sub_cache_key)
         if not end_date and main_cached is not None and sub_cached is not None \
                 and "result" in main_cached and "result" in sub_cached:
-            # 审计 P0-3（读者写共享缓存）：main_cached["result"] 是**缓存里的
+            # （读者写共享缓存）：main_cached["result"] 是**缓存里的
             # 那个对象**，直接给它挂 "sub" 等于改缓存本体。两个并发请求
             # （不同 sub_freq）会互相污染响应体；且 FastAPI 在事件循环上
             # 序列化这个 dict 时，若另一线程正在改它，可直接抛 RuntimeError。
@@ -455,17 +451,17 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         cache_key = make_single_key(market, code, freq, date_suffix)
         cached_result = _cache_get(cache_key)
         if not end_date and cached_result is not None and "result" in cached_result:
-            # 审计 P2（与双窗 :369-370 统一口径）：cached_result["result"] 是
+            # （与双窗 :369-370 统一口径）：cached_result["result"] 是
             # **缓存里的那个对象**，零拷贝直接发布出去，等于把共享对象交给
             # 调用方。双窗路径早已浅拷贝，单窗路径漏了同一处。一旦下游挂载
             # 字段（如双窗的 result["sub"]）或事件循环序列化期间另一线程改动
             # 它，就会污染缓存本体 / 抛 RuntimeError。故统一先复制再用。
             result = dict(cached_result["result"])
             col = FREQ_TO_COL.get(freq, "")
-            # 审计 P2：原为 `in` 判存在再下标的 check-then-act（无锁），改走
+            # 原为 `in` 判存在再下标的 check-then-act（无锁），改走
             # app_data 加锁读取接口，与选点写者互斥。
             if col:
-                # 审计 P2：加锁读取（原为无锁 check-then-act）
+                # 加锁读取（原为无锁 check-then-act）
                 saved_sdt = app_data.get_saved_point_time(qualified_code, col) or None
             else:
                 saved_sdt = None
@@ -639,7 +635,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if start_time is None and not dual:
             col = FREQ_TO_COL.get(freq, "")
             if col:
-                # 审计 P2：加锁读取（原为无锁 check-then-act）
+                # 加锁读取（原为无锁 check-then-act）
                 _saved = app_data.get_saved_point_time(qualified_code, col) or None
                 if _saved:
                     start_time = _saved
@@ -872,7 +868,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if cache_chan:
             main_fields["records"] = full_records
             main_fields["chan"] = chan       # CChan 只存一份在主级别缓存
-        # 审计 P0-3：整段读-改-写在**同一把锁内**完成
+        # 整段读-改-写在**同一把锁内**完成
         _cache_update(main_cache_key, **main_fields)
 
         # 双窗口：子级别缓存（独立存储，下次切回双窗口直接命中）
@@ -1233,7 +1229,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
         if start_time:
             _saved_sdt_for_meta = start_time
         elif not dual and _col_meta:
-            # 审计 P2：加锁读取（原为无锁 check-then-act）
+            # 加锁读取（原为无锁 check-then-act）
             _saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _col_meta)
 
     # 7. 计算最新笔的白色横虚线数据

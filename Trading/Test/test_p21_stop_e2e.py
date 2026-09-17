@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-P21 Phase I1 · 真实停止链路端到端测试（P2-3 修复）
+P21 · 真实停止链路端到端测试（修复）
 ====================================================
-评审 P2-3：新增的 77 条 p20 都是 in-process 直接调 engine.shutdown_and_lock_all()，
+新增的 77 条 p20 都是 in-process 直接调 engine.shutdown_and_lock_all()，
 没有一条覆盖「真实跨进程停止链路」。桩测不出 SIGTERM/flag 语义——必须真实
 Popen 拉 main.py 子进程，再真实触发停止，断言落盘结果。
 
 本测试真实链路：
     main.py --source replay --speed 0.05 ...
     → 子进程主循环开始消费 K 线（一直活着）
-    → 测试写 {out}/.stop_request（AppTrader.stop 的真实停止协议，P1-1/P1-2）
+    → 测试写 {out}/.stop_request（AppTrader.stop 的真实停止协议）
     → 子进程看护线程观测到 flag → 停行情源 → 主循环 finally 里
       engine.shutdown_and_lock_all()（停信号门 + 锁仓 + 持久化）→ 退出 0
     → 断言：
@@ -18,24 +18,24 @@ Popen 拉 main.py 子进程，再真实触发停止，断言落盘结果。
         [3] events.jsonl 含 auto_order_off（shutdown 真实执行过）
         [4] gateway.log 含「收到停止请求」（flag 协议确实被观测到）
 
-这 4 条在 Windows 上均会失败（SIGTERM=TerminateProcess），是 P1-1 的回归防线。
+这 4 条在 Windows 上均会失败（SIGTERM=TerminateProcess），是的回归防线。
 
-第二轮（P1-3 CLI 路径守护）：
-    第一轮停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删，由
+（CLI 路径守护）：
+    停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删，由
     AppTrader.start 在下次启动时删）。若 main.py 自身不自清该 flag，则
     任何"不走 AppTrader.start 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、
     直接 CLI 拉起）一启动就会被残留 flag 看护线程立刻关停（实测存活约 1s 即退）。
-    本测试第二轮用「相同 out_dir、纯 CLI 直启」复现该场景，断言：
-        [6] 第二轮成功落盘 start 事件（未被残留 flag 误杀）
-        [7] 第二轮子进程存活 ≥10s（P1-3 在 CLI 路径闭环，探针侧 wallclock）
-        [8] 第二轮可被正常 flag 停止（退出码 0）
+    本测试用「相同 out_dir、纯 CLI 直启」复现该场景，断言：
+        [6]成功落盘 start 事件（未被残留 flag 误杀）
+        [7]子进程存活 ≥10s（在 CLI 路径闭环，探针侧 wallclock）
+        [8]可被正常 flag 停止（退出码 0）
         [9] events.jsonl 含第二条 auto_order_off（shutdown 再次执行）
-        [10] 第二轮关闭态仍持久化为 false
+        [10]关闭态仍持久化为 false
         [11] 两轮 auto_order_off `at` 间隔 ≥5s（事件日志侧审计，与 [7] 互证）
-    配合 main.py 启动时自清 .stop_request（P1-3 防御），第二轮应稳定存活。
+    配合 main.py 启动时自清 .stop_request（防御），应稳定存活。
 
 [9]/[10]/[11] 在误杀场景下"shutdown 路径仍真实执行过"，所以它们的"通过"
-不能区分"误杀"与"正常"。真正拦截 P1-3 回归的核心是 [7]（探针侧 wallclock）
+不能区分"误杀"与"正常"。真正拦截回归的核心是 [7]（探针侧 wallclock）
 与 [11]（事件日志侧时戳审计）两条从不同维度互证。
 
 跑法：python tests/test_p21_stop_e2e.py
@@ -141,7 +141,7 @@ def _launch_gateway(replay_dir: str, out_dir: str, speed: str = "0.05") -> subpr
     持续活着直到 flag 到达。--no-fresh 保留关闭前状态（与真实 AppTrader 一致）。
 
     speed 控制回放速率：replay 源每个 bar 休眠 speed 秒、播完即自然退出且不锁仓。
-    第二轮用更慢的 speed（如 0.2），让播放时长(≈144*0.2≈29s) 远大于存活断言窗口，
+    用更慢的 speed（如 0.2），让播放时长(≈144*0.2≈29s) 远大于存活断言窗口，
     从而把『残留 flag 误杀』与『replay 自然播完』两种退出区分开。"""
     cmd = [sys.executable, os.path.join(_TG_ROOT, "main.py"),
            "--source", "replay",
@@ -202,7 +202,7 @@ def main() -> int:
         _gen_demo_replay(replay_dir)
         events_path = os.path.join(out_dir, "events.jsonl")
 
-        # ───────── 第一轮：启动 → 真实 flag 停止 → 断言关闭链路 ─────────
+        # ───────── 启动 → 真实 flag 停止 → 断言关闭链路 ─────────
         proc = _launch_gateway(replay_dir, out_dir)
         try:
             started = _await_start(events_path)
@@ -235,10 +235,10 @@ def main() -> int:
         finally:
             _force_kill(proc)
 
-        # ───────── 第二轮（P1-3 CLI 路径守护）─────────
-        # 第一轮停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删）。
-        # 若 main.py 不自清，第二轮一启动即被看护线程误杀。此处断言：
-        # 第二轮成功启动且存活 ≥10s（未被残留 flag 误杀），随后可被正常 flag 停止。
+        # ─────────（CLI 路径守护）─────────
+        # 停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删）。
+        # 若 main.py 不自清，一启动即被看护线程误杀。此处断言：
+        # 成功启动且存活 ≥10s（未被残留 flag 误杀），随后可被正常 flag 停止。
         proc2 = _launch_gateway(replay_dir, out_dir, speed="0.2")
         try:
             started2 = _await_start(events_path)
@@ -273,7 +273,7 @@ def main() -> int:
 
             # [e2e-11] 事件日志侧审计：两轮 auto_order_off `at` 间隔 ≥5s
             # 目的：与 [e2e-7]（探针侧 wallclock 实时感知）从不同维度互证
-            # "第二轮确实活过了观察窗口"。误杀场景下两 off 间隔约 1~2s，
+            # "确实活过了观察窗口"。误杀场景下两 off 间隔约 1~2s，
             # 正常场景下 ≥10s，5s 阈值给两边都留缓冲。
             off_ats = _event_ats(events_path, "auto_order_off")
             if len(off_ats) >= 2:

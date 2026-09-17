@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-Phase G 接入 SimNow 真实账户（2026-09-05）
+接入 SimNow 真实账户
 ==========================================
 背景
-    Phase F 留下的起步态：simnow.trade_confirmed 保守返回 False（未维护
-    signal_key→order 索引）。Phase G 补齐真实成交复核链路：
+    留下的起步态：simnow.trade_confirmed 保守返回 False（未维护
+    signal_key→order 索引）。补齐真实成交复核链路：
       · G1：signal_key → raw_order_id 索引（_finalize 登记）+
         trade_confirmed 用 api.get_order 重新拉**当前**订单，累计
         trade_records 真实成交量判定（不信任 submit 时的 _finalize 判定）。
@@ -97,10 +97,10 @@ from Trading.Infra.Instrument import Instrument  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 from dataclasses import replace as _dc_replace  # noqa: E402
 
-# 单笔手数的唯一来源 = 品种执行策略表第 3 列（2026-09-16 起；原 `risk.max_volume`
+# 单笔手数的唯一来源 = 品种执行策略表第 3 列（原 `risk.max_volume`
 # 已删除）。本文件的场景按「一笔 1 手」构造（多笔叠加才是观察对象），故这里直接
 # 改**表值** —— 只把 IF 档案的执行策略第 3 列换成 1，"改表即生效"正是它的口径。
-# ⚠️ 引擎的有效档案来自 `broker.state`（P-B 合并），本文件所有
+# ⚠️ 引擎的有效档案来自 `broker.state`（合并），本文件所有
 #    `Instrument(None, _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
 _IF = _dc_replace(PRODUCT_PROFILES["IF"],
                   exec_policy=_dc_replace(PRODUCT_PROFILES["IF"].exec_policy,
@@ -336,7 +336,7 @@ class GMockBroker(DryRunBroker):
 
 def make_engine(tmpdir, *, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # 同向笔数上限已在 Phase 1-4 删除（D2）：簿容器不限容量，同向可叠加
+    # 同向笔数上限已在删除（D2）：簿容器不限容量，同向可叠加
     spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
@@ -474,7 +474,7 @@ check("5.2 dry_run.trade_confirmed 仍为 True（Phase F 不变）",
 # ════════════════════════════════════════════════════════════════
 # [6] 拆锁 CLOSE（转移 ③）走「不追价」路径（D13：追不追价由 is_exit 决定）
 #     锁仓态收到交易信号 → 平掉反向最早的一笔 → is_exit=False → 单次报单。
-#     旧版这里测的是 UNLOCK（解锁≈开仓）；Phase 3 已把 UNLOCK 并入 CLOSE，
+#     旧版这里测的是 UNLOCK（解锁≈开仓）；已把 UNLOCK 并入 CLOSE，
 #     报文与语义不变，仅 intent 名收敛为二值。
 # ════════════════════════════════════════════════════════════════
 print("── [6] 拆锁 CLOSE（is_exit=False）：单次超价 + 超时撤单不追价 ──")
@@ -532,7 +532,7 @@ bu._api = api1
 o = bu.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "u-key-timeout")
 check("6.1a 超时未成交 → rejected", o.status, "rejected")
 check("6.1b 只报了 1 次单（不追价）", len(api1.inserted), 1)
-# 2026-09-10 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
+# 修正：CLOSEYESTERDAY 不在 tqsdk 白名单 → 改 CLOSE（平昨语义不变）
 check("6.1c 报文是 CLOSE（平昨；原 CLOSEYESTERDAY 不被 tqsdk 接受）",
       api1.inserted[0]["offset"], "CLOSE")
 check("6.1d 方向 SELL（平多单）", api1.inserted[0]["direction"], "SELL")

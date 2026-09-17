@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-P15a 一笔报单开仓测试（2026-09-16 第三轮改写）
+P15a 一笔报单开仓测试（改写）
 ================================================
 本文件原来测的是两样**已被重构删除**的东西：
   · `cfg.risk.max_open_positions`（同时持仓笔数上限）—— D2 判定删除：
     "资金是唯一闸门"，同向笔数门连同 `open_silenced` 事件一起消失；
-  · `eng._open_position(sig, side, N)` 直接调 —— Phase 4 删除，开仓唯一路径改为
+  · `eng._open_position(sig, side, N)` 直接调 ——删除，开仓唯一路径改为
     `on_signal` → `_decide_action` → `_pre_trade_check` → `_execute` → `_book_open`。
   另 `RiskConfig.unlock_no_new_open` 随"解锁"概念一并删除（D17 丢弃旧键但不静默）。
 
-⚠️ 2026-09-16（第三轮）**再改写一次**：用户拍板 —— **"删掉 `risk.max_volume`，
+⚠️ **再改写一次** 用户拍板 —— **"删掉 `risk.max_volume`，
    表第 3 列就是用来替换这个的"**。故本文件里所有"改风控手数"的手法全部换成
    **"改品种执行策略表第 3 列"**（用 `dataclasses.replace` 造一份改过表的品种档案）。
    手数旋钮从此只有一个，**本文件的写法本身就是"唯一来源"的示范**。
@@ -133,7 +133,7 @@ def check_true(name, got):
 class RejectDryBroker(DryRunBroker):
     """DryRunBroker 子类，可指定拒单次数。0=全过、1=首笔拒、-1=全拒。
 
-    2026-09-11：`submit` 签名已加到 8 参（多出 entry_date / is_exit，D12/D13），
+    `submit` 签名已加到 8 参（多出 entry_date / is_exit，D12/D13），
     子类必须同步，否则 TypeError 会被引擎当成 channel 故障。
     """
     def __init__(self, spec, params=None, *, reject_first_n=0):
@@ -167,7 +167,7 @@ class RejectDryBroker(DryRunBroker):
 def profile_with_lots(code="IF", lots=None):
     """品种档案，可把**执行策略表第 3 列**换成 `lots`。
 
-    2026-09-16：这就是单测里"改表"的等价物 —— `ExecPolicy` / `Product` 都是
+    这就是单测里"改表"的等价物 —— `ExecPolicy` / `Product` 都是
     `frozen=True`，改表 = 换一份档案对象（生产路径是改 `Infra/Product.py` 的
     `EXEC_POLICY` 源码或重跑生成器，运行期不可就地改，见 [3k]）。
     `lots=None` = 直接用**真实表值**（不打任何补丁）。
@@ -191,13 +191,13 @@ def _symbol_of(code):
 def make_engine(tmpdir, *, code="IF", lots=None, broker_cls=None, reject_first_n=0):
     """构造引擎。
 
-    2026-09-11：不再设 `max_open_positions` / `unlock_no_new_open`（D2/D17 已删）。
-    2026-09-16：不再设 `risk.max_volume`（该旋钮已删）—— **开仓手数的唯一来源
+    不再设 `max_open_positions` / `unlock_no_new_open`（D2/D17 已删）。
+    不再设 `risk.max_volume`（该旋钮已删）—— **开仓手数的唯一来源
     = 品种执行策略表第 3 列**，要改手数就 `lots=N` 改表（见 `profile_with_lots`）。
     ⚠️ broker 与 engine 必须共用**同一份** `spec`：引擎的 `self.state` 默认沿用
     `broker.state`，手数就是从这里实时读表取到的。
 
-    🆕 2026-09-16 A 批 ⑶-b：**cfg 的品种必须跟着 `code` 走**。
+    🆕：**cfg 的品种必须跟着 `code` 走**。
       原来这里固定 `TradingConfig.from_dict(DEFAULT_CONFIG)`（signal_symbol = IF），
       却在 `spec` 上传别的品种档案（如 TA）来测"手数来自表" —— 这个状态在生产
       路径上**不可能出现**（main.py 把同一份 cfg 同时交给 Broker 与引擎），
@@ -293,12 +293,12 @@ def _code_tokens(path):
 
 
 # ════════════════════════════════════════════════════════════════
-# [1] 术语纪律：仓位管理已删 + D2/D17/第三轮已删键
+# [1] 术语纪律：仓位管理已删 + D2/D17 已删键
 # ════════════════════════════════════════════════════════════════
 print("\n[1] 术语纪律：仓位管理已删 + 已删键（含 max_volume）")
 check("[1a] config 无 sizing 键（PositionSizing 整体删除）",
       "sizing" in DEFAULT_CONFIG, False)
-# Phase 11 新增 delivery_guard_days（交割月护栏阈值）；2026-09-16 又删掉 max_volume。
+# 新增 delivery_guard_days（交割月护栏阈值）；又删掉 max_volume。
 # 原断言 "字段集 == {...}" 等于把字段清单写死 —— 任何**有意**增删都会误报。
 # 拆成三条：保住原意（无已删键 + 字段体积不失控 + 手数旋钮为零），
 # 新增字段只需同步 _RISK_KNOWN 一行，属"有意确认"而非漏改。
@@ -415,7 +415,7 @@ with tmp_dir() as td:
 
 # 无品种档案 → 保守 1 手（宁可少开，不按猜出来的手数下单）
 #
-# 2026-09-16 A 批 ⑵：原版这里是"引擎侧刻意不给品种档案"
+# 原版这里是"引擎侧刻意不给品种档案"
 #   （`state=Instrument(None, None)`）—— 这条路在**引擎层已不可达**：品种既然
 #   过了白名单（IF 在册），运行时对象就必须拿到档案，否则 `_assert_product_ssot`
 #   在引擎构造期直接拒绝启动（见下面 [2d2]）。
@@ -436,7 +436,7 @@ with tmp_dir() as td:
           eng.lots_per_order, 1)
     check("[2d] _open_volume() 同为 1", eng._open_volume(), 1)
 
-# 启动期硬失败（A 批 ⑵）：品种在册却没拿到档案 → 拒绝启动，不再静默走保守侧
+# 启动期硬失败：品种在册却没拿到档案 → 拒绝启动，不再静默走保守侧
 with tmp_dir() as td:
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     _bk = DryRunBroker(Instrument(None, None), {"sim_equity": 10_000_000.0})

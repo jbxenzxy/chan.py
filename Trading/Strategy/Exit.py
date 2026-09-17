@@ -2,7 +2,7 @@
 """
 出场策略（Exit.py）
 ====================
-2026-09-08 精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场），
+精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场），
 原可选的 `DefaultExitPolicy`（简单固定点数出场）与 L4 时间/收盘兜底均已删除。
 
 三个刻意保留的保守设定（LayeredExitPolicy）
@@ -10,17 +10,17 @@
     ② 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
     ③ 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
 
-跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落硬止盈单（2026-09-09）
+跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落硬止盈单
     `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
     的 ATR 跟踪止损兑现；L3 启动阈值（= r_multiple_tp×R）直接取品种档案的 `r_multiple_tp`
     （IC/IM=3R、其余=2R），故"盈利到 r_multiple_tp×R 时进 L3 跟踪锁利"，不同品种进 L3
     时机天然不同。名义止盈价（= r_multiple_tp×R）仍写入 params["_tp_nominal"] 供事后对照。
     历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 r_multiple_tp 解耦），
-    2026-09-14 合并：删 trailing_trigger_r，L3 触发统一走品种级 r_multiple_tp
+    合并：删 trailing_trigger_r，L3 触发统一走品种级 r_multiple_tp
     （消除"r_multiple_tp=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
     硬止盈模式（`use_trailing=False`）：落固定止盈单（= r_multiple_tp×R），无保本、无跟踪。
 
-    ⚠️ 术语沿革（2026-09-15 清理）：出场策略自 2026-09-08 起**只有 LayeredExitPolicy
+    ⚠️ 术语沿革（2026-09-15 清理）：出场策略起**只有 LayeredExitPolicy
     一套（L1-L3）**，不存在两套可选的出场策略；旧文档/旧注释里的「A 方案 / B 方案」只是
     本策略 `use_trailing` 两种取值的遗留叫法（B = 跟踪止盈模式、A = 硬止盈模式），已废弃 ——
     新写的代码 / 日志 / 报告一律用模式名，不要再出现 A/B 方案。
@@ -53,7 +53,7 @@ class ExitCheck:
     only_update: bool = False
 
 
-# 参数默认值单一事实源（2026-09-07 严格模式；2026-09-14 Fix A 拆分）：
+# 参数默认值单一事实源（严格模式；拆分）：
 #   不再从 DEFAULT_CONFIG 抄一份 `_DEF_EXIT_PARAMS` 兜底，直接由 Trading/Config.py
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
 #   校验模型用 ExitPolicyParams（继承 ExitConfig + 品种相关出场参数）：ExitConfig 是
@@ -65,7 +65,7 @@ class ExitCheck:
 class LayeredExitPolicy:
     name = "LayeredExitPolicy"
 
-    # R 观测阈值（2026-09-15 评审补 · 用户拍板「A < 3.0」）：结构距离 A 低于本值时打
+    # R 观测阈值（评审补 · 用户拍板「A < 3.0」）：结构距离 A 低于本值时打
     #   WARNING（见 _initial_r）。取值含义 = **已删除的 min_r_points 地板原值** ——
     #   IF/IH 与商品档当时是 3.0，IC/IM 是 5.0。
     #   ⚠️ A 的单位是**报价点数**，不同品种量级不同 → 本值是"观测灵敏度"旋钮，
@@ -83,7 +83,7 @@ class LayeredExitPolicy:
         # L1 R 倍数定基线
         self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
         self.r_multiple_tp = float(p.r_multiple_tp)
-        # 注：2026-09-15 已删除 stop_at_signal_extreme 开关 —— R 的口径唯一：
+        # 注：已删除 stop_at_signal_extreme 开关 —— R 的口径唯一：
         #     R = max(分型极值距离 A, atr_sl_multiple × ATR)。信号未带分型时 A 自然为 0，
         #     不需要开关去表达「只靠 ATR」。
         # L2 波动率(ATR)定宽窄
@@ -140,7 +140,7 @@ class LayeredExitPolicy:
     def current_atr(self) -> Optional[float]:
         """对外暴露当前 ATR（点数）。供外部观测/日志使用。
 
-        （2026-09-08：原 atr_risk 仓位模式随动态定仓删除，ATR 仅保留观测用途。）
+        （原 atr_risk 仓位模式随动态定仓删除，ATR 仅保留观测用途。）
         样本不足（on_bar 缓冲未攒够 atr_period+1 根）时返回 None。
         """
         return self._atr()
@@ -161,14 +161,14 @@ class LayeredExitPolicy:
             就由「数据缺失」表达，不需要一个配置项去重复表达同一件事。
             留着开关只会让人以为「两种止损方案可选」，而实际上只有一种。
 
-        关于「R 会不会退化」（2026-09-15 评审 · 结论：不改口径，只加观测）：
-            2026-09-14 删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
+        关于「R 会不会退化」（评审 · 结论：不改口径，只加观测）：
+            删除 min_r_points 后，R 不再有绝对点数地板 —— 这是刻意的：
             口径是「有分型才有买卖点 → 有买卖点才入场 → 入场时 A 恒 > 0」，
             且 B（2×ATR）在正常行情下量级远大于旧地板，R 的地板是多余的。
             因此本函数**不兜底、不钳下限**，只打 WARNING 把现场丢到控制台抓样本。
             两个观测点（都**不改变** R 的取值）：
 
-            [1] `A < r_alert_a_floor`（默认 3.0）—— 2026-09-15 评审后**放宽**：
+            [1] `A < r_alert_a_floor`（默认 3.0）——评审后**放宽**
                 原实现只在 `A == 0` 出声，恰好把真正会出问题的区间吞掉了。
                 风险窗口是 `0 < A < 地板`：B 未就绪时（on_bar 每交易日 `_bars.clear()`，
                 atr_period=14 → 开盘后前 15 根 bar 的 ATR 必然未就绪）R 只由 A 决定，
@@ -185,7 +185,7 @@ class LayeredExitPolicy:
                 本告警不按品种分档；要按 IC/IM 口径收窄，改类属性
                 `LayeredExitPolicy.r_alert_a_floor`。
 
-            [2] `R <= 0` → `[R 归零]`（2026-09-15 评审补 · 用户要求"R=0 加控制台告警"）。
+            [2] `R <= 0` → `[R 归零]`（评审补 · 用户要求"R=0 加控制台告警"）。
                 R=0 是唯一会让 L3 整层失效的值（check() 里的 `R > 0` 判定），
                 此时 stop/tp 全靠 P2 边界守卫压在入场价外 1 tick。用户判断
                 「R 不可能为 0」，故此处**只出声不兜底**，也不给 tp 加对称防护 ——
@@ -209,7 +209,7 @@ class LayeredExitPolicy:
             else:
                 _fractal_missing = True
         # B：波动率止损（2×ATR）。atr 只取一次，供 B 与下面两条告警共用
-        #   （2026-09-15 评审修 · P3：原实现告警里又调了一次 self._atr()，
+        #   （评审修 · P3：原实现告警里又调了一次 self._atr()，
         #   同一次判定里重复计算）。
         B = 0.0
         atr = self._atr() if self.use_atr else None
@@ -235,7 +235,7 @@ class LayeredExitPolicy:
                 signal.fractal_low, signal.fractal_high, atr, B,
                 getattr(signal, "key", "?"))
         R = max(A, B)
-        # 观测告警 [2]：R 归零（2026-09-15 评审补 · 用户要求）。
+        # 观测告警 [2]：R 归零（评审补 · 用户要求）。
         #   用户判断「R 不可能为 0」→ 本函数不兜底、不钳下限，也不给 tp 加对称防护；
         #   只在真发生时出声，便于事后捞样本分析成因。
         if R <= 0.0:
@@ -332,7 +332,7 @@ class LayeredExitPolicy:
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出
-        #   （2026-09-15 评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
+        #   （评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
         #   里被静默吞掉；显式化后行为不变，但把「R=0 则 L3 不跑」这条写在明处
         #   （R=0 是否发生由 _initial_r 的 [R 归零] 观测点负责；本行只负责不跑 L3）。
         if self.use_trailing and R is not None and R > 0:

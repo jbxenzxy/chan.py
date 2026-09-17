@@ -53,13 +53,13 @@ _stock_names_cache = app_data.names_cache
 
 # 扫描跳过记录（收集后统一打印）
 #
-# 演进说明（P1-5 → X3）：
-#   P1-5 阶段：列表是**模块级全局**，且整个逃出 AppOrch.SHARED_RESOURCE_
+# 演进说明：
+#   阶段：列表是**模块级全局**，且整个逃出 AppOrch.SHARED_RESOURCE_
 #   REGISTRY，既没登记也没加锁。两个执行体在碰它（收割线程追加、REST 线程
 #   清空/遍历/计数），`.clear()` 与 `len()`/遍历不是原子的组合操作，清空
 #   发生在遍历中途会让汇总明细整批丢失或串批次——不抛异常，一直没人发现。
 #   当时的修法是加 _scan_skip_log_lock 并收敛出四个加锁访问器。
-#   X3 阶段：加锁解决了崩溃与丢失，但没解决**跨页串批**——它仍是进程级
+#   阶段：加锁解决了崩溃与丢失，但没解决**跨页串批**——它仍是进程级
 #   单例，两个页面同时扫描时，A 页的开始会清空 B 页的记录，B 页结束时会
 #   打印 A 页的明细。故本列表进一步下沉为**每次扫描私有**
 #   （_ScanSession.skip_log，见下方会话区），此处不再保留全局副本。
@@ -70,7 +70,7 @@ _stock_names_cache = app_data.names_cache
 def append_scan_skip(msg, scan_token=None):
     """加锁追加一条跳过记录（扫描线程 / 收割线程调用）
 
-    审计 X3：按 scan_token 归属到**发起它的那一次扫描**，不同页面的扫描
+    按 scan_token 归属到**发起它的那一次扫描**，不同页面的扫描
     各写各的，不会互相串批。未提供 token（旧调用方）时回退到最近一次会话。
     """
     sess = get_scan_session(scan_token)
@@ -106,7 +106,6 @@ def scan_skip_count(scan_token=None):
     with sess.lock:
         return len(sess.skip_log)
 
-# 【已删除】_scan_lock
 # 它从未真正生效：① API 进程没有任何路由调用 scan_one（FrontAPI 只有
 # submit / status / cancel 三个批量入口）；② 批量路径的 scan_one 跑在
 # ProcessPool worker 内，每个 worker 串行取任务、且每个进程各持一份
@@ -115,7 +114,7 @@ def scan_skip_count(scan_token=None):
 # 每请求数据注入。
 
 # ═══════════════════════════════════════════════════════════════════════
-# 扫描会话上下文（审计 X3：任务级状态不得放在进程级）
+# 扫描会话上下文（任务级状态不得放在进程级）
 # ═══════════════════════════════════════════════════════════════════════
 # 原实现用模块级全局承载「当前这一次扫描」的上下文：
 #     _scan_start_time（开始时间）、_page_index_code（板块指数代码）
@@ -355,7 +354,7 @@ def update_float_mc_cache(mv_dict):
 def _debug_read_page_index_stocks(sector_code):
     """获取当前页面指数的成分股（网络抓取限时保护）
 
-    P1-5：删除扫描中断标志（abort_check）传递——遗留中止链路
+    删除扫描中断标志（abort_check）传递——遗留中止链路
     （Scanner.abort / _scan_aborted）已随前端 task cancel 语义删除，
     成分抓取限时由 TdxAPI._run_with_timeout 兜底。
     """
@@ -503,7 +502,7 @@ class Scanner:
     def stock_list(self, source="zxg", page_index_code=None, scan_token=None):
         """返回股票列表（支持逗号分隔多来源）
 
-        审计 X3：page_index 来源的板块指数代码**由请求参数传入**，不再读
+        page_index 来源的板块指数代码**由请求参数传入**，不再读
         进程级全局。原实现读全局 _page_index_code，多网页下 A 页选沪深300、
         B 页选中证500 时，两页都会按最后设置的那个扫——静默扫错一整批
         成分股，且不报错。
@@ -580,7 +579,7 @@ class Scanner:
         if _need_float_mc:
             app_data.load_float_mc_cache()
             if app_data.float_mc_loaded:
-                # 审计 P2：原为 `len(app_data.float_mc_cache)` —— 裸读共享容器。
+                # 原为 `len(app_data.float_mc_cache)` —— 裸读共享容器。
                 # 改走 app_data 加锁取数口，与写者（update_float_mc_cache）
                 # 共用 _user_store_lock，也给后来人留一个正确的样板。
                 # 注意：这是**全局累积缓存**（跨次扫描 dict.update 合并、只增不减），
@@ -688,7 +687,7 @@ class Scanner:
             # （AppScanPool.destroy_pool），实现「即用即弃」、状态可恢复。
             # include_extra=False：扫描只消费 K 线/缠论结果（meta 仅用 name），
             # 跳过 PE-TTM/归属/股东增减持 展示性取数——后者逐票打 7615 网关，
-            # 1000 只扫描就是 1000 次 HTTP，纯浪费（2026-09-12 用户定版）。
+            # 1000 只扫描就是 1000 次 HTTP，纯浪费（用户定版）。
             result = _m.analyze_stock(qualified_code, freq=freq, cache_chan=False, include_extra=False)
 
             t_analyze = time.time() - t0
@@ -877,7 +876,7 @@ class Scanner:
     def start(self, page_index_code=None):
         """新一轮扫描开始 → {"ok": True, "scan_token": ...}
 
-        审计 X3：为本次扫描建一个**私有会话**，返回 scan_token。后续
+        为本次扫描建一个**私有会话**，返回 scan_token。后续
         end(scan_token) / 扫描期间的跳过记录都归属到这个 token，
         两个页面同时扫描各用各的上下文，不会互相覆盖。
         """
@@ -905,7 +904,7 @@ class Scanner:
         seconds = int(elapsed % 60)
         time_str = f"{minutes}分{seconds}秒" if minutes > 0 else f"{seconds}秒"
 
-        # 审计 P1-5 + X3：整段基于**同一次快照**（且只取本会话的），
+        # 整段基于**同一次快照**（且只取本会话的），
         # 避免「判空 → 遍历 → 计数」之间被收割线程的追加 / 别页的清空插队。
         _skip_snapshot = scan_skip_snapshot(token)
         if _skip_snapshot:
@@ -928,7 +927,7 @@ class Scanner:
 
     def clear_cache(self):
         """关闭扫描面板：不再清空共享股票分析缓存。
-        P0-3 收敛：批量扫描与单票分析共享同一分析缓存（LRU 上限 50），
+        收敛：批量扫描与单票分析共享同一分析缓存（LRU 上限 50），
         关闭面板时清空会误伤用户正在查看的图表缓存，故关闭不再清空
         （原下载完成回调已随「盘后下载」功能移除）。
         返回 cleared=0 保持前端兼容（前端仅 POST 不读响应）。"""
@@ -949,7 +948,7 @@ class Scanner:
 
         scan_token：本次扫描的会话标识（由 start() 返回）。池的收割线程
         只拿得到 task_id，故在此绑定 task_id → scan_token，让它能把跳过
-        记录写回**发起它的那一次扫描**而非全局（审计 X3）。
+        记录写回**发起它的那一次扫描**而非全局。
         """
         from App.AppScanPool import submit_batch_scan as _submit
         result = _submit(stocks, freq=freq, mode=mode, recent=recent, source=source)
