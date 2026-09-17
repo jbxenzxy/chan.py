@@ -704,7 +704,7 @@
                 }
                 // 复盘模式下不支持双击选点（在K线检测之后判断，确保只对K线上的双击弹提示）
                 if (chartData.meta && chartData.meta.is_replay && clickedOnKline) {
-                    showDualToast("复盘模式，不支持选点");
+                    showToast("复盘模式，不支持选点");
                     return;
                 }
                 // 双窗选点规则（股票/期货一致）：仅上窗可选点，下窗只对齐展示。
@@ -855,7 +855,7 @@
                         renderBottom();
                     } else {
                         // startIdx === -1（下面窗口无对应K线数据）
-                        showDualToast("请加载更多K线...");
+                        showToast("请加载更多K线...");
                     }
                     return;
                 }
@@ -2717,12 +2717,12 @@
                         startSymbol: chartData.meta.symbol
                     };
                     const startDate = chartData.klines[_currentGlobalIdx].date.split(' ')[0];
-                    showDualToast("区间起点: " + startDate + "，点击另一根K线完成选择");
+                    showToast("区间起点: " + startDate + "，点击另一根K线完成选择");
                     render();
                 } else {
                     // Ctrl+再次点击：取消选择
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("区间选择已取消");
+                    showToast("区间选择已取消");
                     render();
                 }
                 return;
@@ -2733,7 +2733,7 @@
                 // 验证：同一股票、同一周期
                 if (_rangeSelect.startFreq !== currentFreq || _rangeSelect.startSymbol !== chartData.meta.symbol) {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("股票或周期已变更，区间选择已取消");
+                    showToast("股票或周期已变更，区间选择已取消");
                     return;
                 }
                 const a = Math.min(_rangeSelect.startIdx, _currentGlobalIdx);
@@ -2752,7 +2752,7 @@
                     lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
-                showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
+                showToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
                 _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
                 render();
                 return;
@@ -2766,19 +2766,44 @@
 
         function onMouseLeave() { isDragging = false; mouseX = -1; mouseY = -1; canvas.style.cursor = "crosshair"; if (isDualWindow) { dualOffscreenState = false; dualHighlightRange = null; dualRedRange = null; dualNewZsData = null; dualShowNewZs = false; renderTop(); } else { render(); } }
 
-        // 双窗口toast提示
-        function showDualToast(msg) {
-            let toast = document.getElementById("dual-toast");
-            if (!toast) {
-                toast = document.createElement("div");
-                toast.id = "dual-toast";
-                toast.style.cssText = "position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);color:#fff;padding:12px 28px;border-radius:8px;font-size:14px;z-index:9999;pointer-events:none;opacity:0;transition:opacity 0.3s;";
-                document.body.appendChild(toast);
+        // ══════════════════════════════════════════════════════════
+        // 轻提示（K线交互反馈 / 自动下单告警共用）
+        //   · 时长 5s：正文是整句中文（告警最长约 72 字），1s 读不完；
+        //     不等它自己淡出也可以 —— 点一下就立刻关。
+        //   · 多条堆叠：调用方会一次连发多条（告警在 for 循环里逐条发），
+        //     单例 div 会把先发的直接覆盖 → 5 条只看到最后 1 条，等于没提示。
+        //   · 限宽换行 / 可选中：样式在 app.css 的 #toast-stack 与 .toast-item。
+        // ══════════════════════════════════════════════════════════
+        const TOAST_MS = 5000;      // 自动淡出时长
+        const TOAST_MAX = 5;        // 同屏上限：再多也只是刷屏，丢掉最早的
+
+        function showToast(msg) {
+            let stack = document.getElementById("toast-stack");
+            if (!stack) {
+                stack = document.createElement("div");
+                stack.id = "toast-stack";
+                document.body.appendChild(stack);
             }
-            toast.textContent = msg;
-            toast.style.opacity = "1";
-            clearTimeout(toast._timer);
-            toast._timer = setTimeout(() => { toast.style.opacity = "0"; }, 1000);
+            while (stack.children.length >= TOAST_MAX) {
+                stack.removeChild(stack.firstChild);
+            }
+            const item = document.createElement("div");
+            item.className = "toast-item";
+            item.textContent = msg;
+            item.title = "点击关闭";
+            stack.appendChild(item);
+            // 下一帧再置 opacity：新建节点在同一帧里从 0 置 1 不触发 transition，
+            // 等于没有淡入（旧实现只有"已存在节点"那条路径才有淡入）。
+            requestAnimationFrame(function () { item.style.opacity = "1"; });
+            const timer = setTimeout(close, TOAST_MS);
+            item.addEventListener("click", close);
+            function close() {
+                clearTimeout(timer);
+                item.style.opacity = "0";
+                setTimeout(function () {
+                    if (item.parentNode) item.parentNode.removeChild(item);
+                }, 320);
+            }
         }
 
         // 更新双窗口激活状态视觉提示
@@ -2962,11 +2987,11 @@
                     // 仅允许在上窗双击选点，前端限制下窗选点操作。
                     if (clickedOnKline) {
                         if (_savedChartData && _savedChartData.meta && _savedChartData.meta.is_replay) {
-                            showDualToast("复盘模式，不支持选点");
+                            showToast("复盘模式，不支持选点");
                             return;
                         }
                         // 股票/期货双窗统一：仅上窗可选点，下窗只对齐展示
-                        showDualToast("双窗口模式下仅支持在上窗选点");
+                        showToast("双窗口模式下仅支持在上窗选点");
                         return;
                     }
                     } finally {
@@ -2991,7 +3016,7 @@
                             dualRedRange = dualHighlightRange ? dualHighlightRange.redRange : null;
                             dualOffscreenState = dualHighlightRange && !dualHighlightRange.isVisible;
                         } else {
-                            showDualToast("请加载更多K线...");
+                            showToast("请加载更多K线...");
                         }
                         renderBottom();
                         return;
@@ -3173,11 +3198,11 @@
                         startSymbol: dualSubData.meta.symbol
                     };
                     const startDate = dualSubData.klines[_subCurrentGlobalIdx].date.split(' ')[0];
-                    showDualToast("区间起点: " + startDate + "，点击另一根K线完成选择");
+                    showToast("区间起点: " + startDate + "，点击另一根K线完成选择");
                     renderBottom();
                 } else {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("区间选择已取消");
+                    showToast("区间选择已取消");
                     renderBottom();
                 }
                 return;
@@ -3188,7 +3213,7 @@
                 // 验证：同一股票、同一周期
                 if (_rangeSelect.startFreq !== dualSubFreq || _rangeSelect.startSymbol !== dualSubData.meta.symbol) {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("股票或周期已变更，区间选择已取消");
+                    showToast("股票或周期已变更，区间选择已取消");
                     return;
                 }
                 const a = Math.min(_rangeSelect.startIdx, _subCurrentGlobalIdx);
@@ -3207,7 +3232,7 @@
                     lines.push(`${k.date} ${wd} 开:${k.open.toFixed(2)} 高:${k.high.toFixed(2)} 低:${k.low.toFixed(2)} 收:${k.close.toFixed(2)}`);
                 }
                 navigator.clipboard.writeText(lines.join("\n")).catch(() => {});
-                showDualToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
+                showToast("已复制 " + (b - a + 1) + " 根K线数据到剪贴板");
                 _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
                 renderBottom();
                 return;
@@ -3266,8 +3291,8 @@
             document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
             // 双窗口模式和复盘模式不允许重置
-            if (isDualWindow) { showDualToast("双窗口模式，不支持重置"); return; }
-            if (chartData.meta.is_replay) { showDualToast("复盘模式，不支持重置"); return; }
+            if (isDualWindow) { showToast("双窗口模式，不支持重置"); return; }
+            if (chartData.meta.is_replay) { showToast("复盘模式，不支持重置"); return; }
             const code = chartData.meta.symbol;
             const freq = currentFreq;
             const isFutures = chartData.meta.market === 'futures';
@@ -7415,7 +7440,7 @@
                 }
                 if (_rangeSelect.mode === 'SELECTED_A') {
                     _rangeSelect = { mode: 'IDLE', startIdx: null, startFreq: null, startSymbol: null };
-                    showDualToast("区间选择已取消");
+                    showToast("区间选择已取消");
                     render();
                 }
             }
@@ -7779,7 +7804,7 @@
         // 介入的事件写成 alerts 队列（严重告警落盘，重启不丢），随状态轮询下发。
         // 本函数只做三件事：
         //   ① 按 ts 水位挑出新告警（同 code 5 分钟冷却，防一次故障连弹几十个框）
-        //   ② severe → alert() 阻塞弹窗；warn → showDualToast 轻提示
+        //   ② severe → alert() 阻塞弹窗；warn → showToast 轻提示
         //   ③ 回 ack 把水位写回 state.db —— 不 ack 的话后端队列不清理，
         //      同一批告警每次轮询都会重来
         // ⚠️ alert() 会卡住浏览器 JS 线程，但引擎跑在独立子进程里，不会被卡住；
@@ -7814,7 +7839,7 @@
                 }
                 for (let i = 0; i < warn.length; i++) {
                     console.warn('[auto-order] 告警(' + warn[i].code + '): ' + warn[i].msg);
-                    showDualToast('自动下单提醒：' + warn[i].msg);
+                    showToast('自动下单提醒：' + warn[i].msg);
                 }
                 if (severe.length) {
                     console.error('[auto-order] 严重告警: ' + JSON.stringify(severe));

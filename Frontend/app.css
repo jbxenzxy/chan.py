@@ -184,6 +184,30 @@
             border: 1px solid #0f3460;
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         }
+        /* ── 轻提示（K线交互反馈 / 自动下单告警共用）──
+           放屏幕中央：告警要求"看得见"，中央最不容易被忽略。
+           容器 pointer-events:none —— 不挡画布拖拽/选点；单条 auto —— 可点掉、
+           可选中文字（72 字的告警要能复制出去查）。
+           限宽 + 换行：不限宽的长句会被拉成一条横带，超出窗口就看不到端点。 */
+        #toast-stack {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex; flex-direction: column; align-items: center; gap: 10px;
+            z-index: 9999; pointer-events: none;
+            max-width: min(640px, 88vw);
+        }
+        .toast-item {
+            pointer-events: auto; cursor: pointer; user-select: text;
+            max-width: 100%; box-sizing: border-box;
+            padding: 12px 20px; border-radius: 8px;
+            background: rgba(22, 33, 62, 0.96);
+            border: 1px solid #0f3460;
+            color: #e0e0e0; font-size: 14px; line-height: 1.6;
+            text-align: left; white-space: pre-wrap; word-break: break-word;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+            opacity: 0; transition: opacity 0.3s;
+        }
+        .toast-item:hover { border-color: #e94560; }
         .legend {
             position: fixed; bottom: 16px; left: 20px;
             display: flex; gap: 16px; padding: 8px 16px;
