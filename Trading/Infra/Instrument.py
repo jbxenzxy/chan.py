@@ -7,7 +7,7 @@
 ----------------------------------------------------
 `Instrument` = 被交易的那张**具体合约**（IF2509 / AU2512），名字借自 CTP
 柜台协议 `InstrumentField`（price_tick / multiplier / last_trade_date 一一对应；
-其 exchange 一项起在本仓**不再对应任何字段**）—— 不是自造词。
+其 exchange 一项在本仓**不再对应任何字段**）—— 不是自造词。
 与相邻轴的分工：
   · `Product`（Infra/Product.py）：品种族档案（IF 全族一份），per-product；
   · `symbol`（signal_symbol / trade_symbol）：只是代码字符串，不是粒度概念；
@@ -366,7 +366,7 @@ class Instrument:
         """返回实际报单用的 advanced 属性（FOK / FAK）。
 
         2026-09-16 起**唯一口径 = 品种执行策略表第 2 列**（`EXEC_POLICY`），
-        取代原的「CZCE 强制 FAK」交易所分支 —— 用户明令：代码里不得
+        取代原「CZCE 强制 FAK」交易所分支 —— 用户明令：代码里不得
         出现按交易所名字判断走向的逻辑，只看品种、只看表。
 
         未标定品种（无档案 / 档案无策略行）→ 回落部署配置 `order_advanced`

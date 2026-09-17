@@ -11,10 +11,10 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ③ signal_k_tol_bars 越界 fail-fast
     ④ 未知 freq 容错（不 fail-fast，交给 main.py）
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
-    ⑥ Product 品种档案：起 Instrument 构造时直接取
-       档案（播种桥 for_product 已删除，的注入副作用更早删除）+
+    ⑥ Product 品种档案：Instrument 构造时直接取
+       档案（播种桥 for_product 已删除，注入副作用更早删除）+
        exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并
-    ⑦ 播种语义（起，**取代**原"注入双档"锚点）：
+    ⑦ 播种语义（**取代**原"注入双档"锚点）：
        档案是 price_tick / multiplier 的**唯一真值来源** —— 用户显式写的值
        在播种时同样被档案覆盖（D1：放弃配置覆盖品种参数的能力）；
        初始加载与换品种走**同一个** `main._seed_instrument()`，无 force 双语义。
@@ -71,7 +71,7 @@ def check(name, got, expected):
 def seeded(signal_symbol: str) -> TradingConfig:
     """构造配置（播种桥 _seed_instrument 已删）。
 
-    的"显式播种"是启动路径上的一次调用；起该桥
+    "显式播种"是启动路径上的一次调用；该桥
     消亡 —— 配置不再携带 tick/乘数，Instrument 构造时直接取品种档案
     （档案→运行时单向取值，结构上保证一致）。本 helper 保留名字只为改动
     最小；下方档案真值断言改读 product_profile。
@@ -146,7 +146,7 @@ def main():
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.product_profile.multiplier, 200.0)
 
-    # 未知品种：档案缺失（product_profile=None）。后 exit_params 上没有
+    # 未知品种：档案缺失（product_profile=None）。此后 exit_params 上没有
     # 品种相关出场参数（现只剩 r_multiple_tp） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
     # 把「品种参数没标定」拦在启动期，与周期 fail-fast 同一纪律）。
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})

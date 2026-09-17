@@ -18,7 +18,7 @@ Popen 拉 main.py 子进程，再真实触发停止，断言落盘结果。
         [3] events.jsonl 含 auto_order_off（shutdown 真实执行过）
         [4] gateway.log 含「收到停止请求」（flag 协议确实被观测到）
 
-这 4 条在 Windows 上均会失败（SIGTERM=TerminateProcess），是的回归防线。
+这 4 条在 Windows 上均会失败（SIGTERM=TerminateProcess），是回归防线。
 
 （CLI 路径守护）：
     停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删，由

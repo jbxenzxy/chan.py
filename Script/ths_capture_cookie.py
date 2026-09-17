@@ -6,7 +6,7 @@
     python Script/ths_capture_cookie.py         # 默认：有人值守登录（PyCharm 直接运行即此），
                                                 #       在真实浏览器窗口完成登录/滑块后抓取会话
     python Script/ths_capture_cookie.py --auto  # 旧版：自动提取浏览器 Cookie（无手动粘贴兜底）
-    （起本工具位于 Script/，Cookie 文件 Script/ths_captured_cookie.txt 随之自动跟随）
+    （本工具位于 Script/，Cookie 文件 Script/ths_captured_cookie.txt 随之自动跟随）
 
 说明：
     默认(有人值守登录)采用浏览器自动化(Playwright)，页面原生完成账号密码加密与滑块校验，

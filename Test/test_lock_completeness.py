@@ -470,7 +470,7 @@ def _check_bare_property_contract():
 def _check_scan_skip_session():
     """跳过记录必须每次扫描私有，且只能经 token 感知的访问器碰
 
-    v6 版断言的是「_scan_skip_log 只能经加锁访问器碰」。之后该列表已
+    v6 版断言的是「_scan_skip_log 只能经加锁访问器碰」。此后该列表已
     下沉为 `_ScanSession.skip_log`（每次扫描私有），故断言升级为：
       ① 模块级 `_scan_skip_log` 全局**不得**复活（复活 = 跨页串批）；
       ② `.skip_log` 只能由四个访问器内部触碰，其他任何地方直接碰即失败。

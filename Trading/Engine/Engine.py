@@ -1003,7 +1003,7 @@ class TradingEngine(ReconcileMixin):
         """一笔报单挂几手 —— **开仓手数的唯一来源**。
 
         2026-09-16 起唯一口径 = `lots_per_order`（品种执行策略表第 3 列），取代
-        原的「CZCE 钉 1 手」交易所分支 —— 代码不看交易所名字，只读表
+        原「CZCE 钉 1 手」交易所分支 —— 代码不看交易所名字，只读表
         （用户第 3 轮 ⑵ 明令）；也不再与任何风控上限取小（同日起 `risk.max_volume`
         删除，见 `lots_per_order` docstring）。
 

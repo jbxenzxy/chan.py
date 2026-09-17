@@ -672,7 +672,7 @@ def _datasource_imports(rel):
 
 def test_datasource_import_gate(failures):
     bad = []
-    # ── 消费侧三文件：任何层级禁止 import DataAPI.*（后为零）──
+    # ── 消费侧三文件：任何层级禁止 import DataAPI.*（此后为零）──
     for rel in ("FrontAPI.py",
                 os.path.join("App", "AppChart.py"),
                 os.path.join("App", "AppOrch.py")):

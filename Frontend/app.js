@@ -4569,7 +4569,7 @@
             html += '<div class="stats-hero">';
             html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + yuan(d.total_net) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">盈亏比</span><span class="stats-value">' + num(d.pl_ratio) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">盈亏比(赔率)</span><span class="stats-value">' + num(d.pl_ratio) + '</span></div>';
             html += '</div>';
             // ③ 明细行
             html += '<div class="stats-rows">';

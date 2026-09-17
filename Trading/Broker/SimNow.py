@@ -81,7 +81,6 @@ import datetime as _dt
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
-from ..Config import BrokerConfig
 from ..Infra.Instrument import Instrument
 from ..Infra.Records import Order, OrderIntent, Side
 from ..Infra.Clock import now_cn
@@ -528,7 +527,7 @@ class SimNowBroker(Broker):
             self._capture_initial_account_state()
 
     def _cred(self, param_key: str, env_key: str) -> str:
-        # 凭据只走环境变量。起配置里不再有账号密码字段（若将来
+        # 凭据只走环境变量。配置里不再有账号密码字段（若将来
         # 残留明文密码，会反客为主覆盖开发者想用 LIVE_PASSWORD 等环境变量注入
         # 的凭据（与"密码不落盘"的意图相反）。env 有值用 env；env 为空才回落
         # 又在配置里加回明文密码，会反客为主覆盖环境变量，与"密码不落盘"相悖）。

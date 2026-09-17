@@ -3,8 +3,11 @@
 
 用户拍板的口径（2026-09-17）
 ------------------------------------------------------------
-    平均每笔盈利 ÷ 平均每笔亏损  →  中文「盈亏比」    字段 `pl_ratio`
-    总盈 ÷ 总亏                  →  中文「盈利因子」  字段 `profit_factor`
+    平均每笔盈利 ÷ 平均每笔亏损  →  中文「盈亏比(赔率)」  字段 `pl_ratio`
+    总盈 ÷ 总亏                  →  中文「盈利因子」      字段 `profit_factor`
+
+面板标签上的「(赔率)」是用户 2026-09-17 追加的限定词：这两个指标都常被
+叫作「盈亏比」，不加限定词就分不出来 —— 所以 [5c2] 会拦住"退回裸标签"的改动。
 
 这两个口径**必须可区分**：它们名字相近、数值量级可能差一倍以上，
 一旦有人的实现或文案把两者混起来（历史真事：`Analyze.py` 里叫
@@ -61,6 +64,10 @@ _FAIL = 0
 # 旧名 —— 只在本文件里作为「检测器样本」出现，生产代码里必须为零。
 _LEGACY_FIELD = "avg_pl_ratio"
 _LEGACY_LABEL = "盈亏比 PF"
+
+# 面板标签（核心三格）。裸「盈亏比」已废弃 —— 见头部说明。
+_PL_LABEL = "盈亏比(赔率)"
+_PL_LABEL_BARE = "盈亏比"
 
 # 新名（带词边界：pl_ratio 是 avg_pl_ratio 的子串，不加边界会误判为"新名还在"）
 _RE_NEW_PL = re.compile(r"(?<![A-Za-z0-9_])pl_ratio(?![A-Za-z0-9_])")
@@ -260,8 +267,10 @@ print("\n[5] 前端契约：字段名 + 中文标签")
 _js = open(os.path.join(_REPO, "Frontend", "app.js"), encoding="utf-8").read()
 check_true("[5a] 前端读的是 d.pl_ratio", "d.pl_ratio" in _js)
 check_true("[5b] 前端仍读 profit_factor", "d.profit_factor" in _js)
-check_true("[5c] 面板有「盈亏比」标签（核心三格）",
-           '<span class="stats-label">盈亏比</span>' in _js)
+check_true("[5c] 面板有「%s」标签（核心三格）" % _PL_LABEL,
+           '<span class="stats-label">%s</span>' % _PL_LABEL in _js)
+check_true("[5c2] ★ 面板不再有裸「%s」标签（限定词不许被退回）" % _PL_LABEL_BARE,
+           '<span class="stats-label">%s</span>' % _PL_LABEL_BARE not in _js)
 check_true("[5d] 面板有「盈利因子」标签（明细行）",
            '<span class="stats-label">盈利因子</span>' in _js)
 check_true("[5e] ★ 旧标签「%s」已不存在" % _LEGACY_LABEL, _LEGACY_LABEL not in _js)

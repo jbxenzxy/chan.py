@@ -16,8 +16,8 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       拍板）收口在 Infra/Product.py，品种无关项（breakeven_* / ATR / trailing）
       在本文件 ExitConfig 调；
       经本文件 resolved_exit_params() 合并成 LayeredExitPolicy 的完整参数。
-    · 本文件**不含任何"构造后改字段"的副作用**（
-      起配置类 frozen=True）：
+    · 本文件**不含任何"构造后改字段"的副作用**（所有模型 model_config 一律
+      `extra="forbid"`）：
       品种播种机制已消亡（删 for_product/_seed_instrument）—— tick/乘数/
       费率的真值源 = 品种档案 Product（exchange 删除），
       运行时对象 `Instrument`
@@ -32,10 +32,10 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
 ------------------------------------------------------------------
     · 顶层根配置类 `TradingConfig`（模块由 trade_gateway/ 更名为 Trading/ 后同步改名）。
     · 引擎类 `TradingEngine`（同步改名）。
-    · ⑥ 层配置类原名 `BrokerConfig` —— 与 ① 层 `SourceConfig` / ④ 层 `RiskConfig`
+    · ⑥ 层配置类原名 `BrokerParamsConfig` —— 与 ① 层 `SourceConfig` / ④ 层 `RiskConfig`
       的命名习惯不一致（那两层都叫 `*Config` 而不是 `*ParamsConfig`），故改为 `BrokerConfig`，
       与六层架构的「每层一个 *Config」约定对齐。字段名 `broker_params` 不变。
-    · 凡引用处一律更新；旧名 `Gateway*` / `BrokerConfig` 不再存在于代码中。
+    · 凡引用处一律更新；旧名 `Gateway*` / `BrokerParamsConfig` 不再存在于代码中。
 
 策略层（精简：取消策略选择器抽象）
 ------------------------------------------------------------------
@@ -194,7 +194,7 @@ class TradingConfig(BaseSettings):
         """当前 source.freq 对应的周期档案（只读视图；未知 freq 返回 None）。"""
         return PERIOD_PROFILES.get(self.source.freq)
 
-    # ── 品种档案：只读视图（起不再有任何注入机制）──
+    # ── 品种档案：只读视图（不再有任何注入机制）──
     # 之前这里是一整套"注入"逻辑（model_validator + _apply_product_profile_values
     #   + apply_product_profile，含 model_fields_set 的 user-explicit-wins 判据与
     #   --symbol 换品种的 force 双语义）。它的副作用是：TradingConfig 一构造就会
@@ -512,7 +512,7 @@ class ChannelTimingConfig(BaseModel):
 # ════════════════════════════════════════════════════════════════════
 # ⑥ Broker 适配器层（Broker，可替换）配置
 #    下单/成交复核/撤单（未成交按对手价重报追价）。账号/密码不在此处。
-#    （类名由 BrokerConfig 改为 BrokerConfig，与「每层一个 *Config」约定对齐；
+#    （类名由 BrokerParamsConfig 改为 BrokerConfig，与「每层一个 *Config」约定对齐；
 #      字段名 broker_params 不变。）
 # ════════════════════════════════════════════════════════════════════
 class BrokerConfig(BaseModel):

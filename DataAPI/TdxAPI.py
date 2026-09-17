@@ -1549,7 +1549,7 @@ def _run_with_timeout(fn, timeout):
     不可打断）。扫描「成分股」来源在 API 线程池线程里解析股票清单，若阻塞则
     「中断扫描」也结束不了（见 App/app 单组来源 page_index 卡死历史）。本函数：
       守护线程执行，主线程 join 分片轮询——超过 timeout 直接放弃，返回 None。
-    （后 abort_check 中止链路已随任务级 cancel 语义下线，参数随之删除。）
+    （abort_check 中止链路已随任务级 cancel 语义下线，参数随之删除。）
     返回 fn 结果；超时返回 None；fn 内部异常原样透出（调用方捕获）。
     """
     import threading

@@ -410,7 +410,7 @@ def _exec_kw(code: str) -> Dict[str, object]:
 #   费率区块 OVERRIDES 已收录 AU/AG 的 6、12 合约档并填入 `fee_overrides`，
 #   但 `fee_pair()` 一律读基准档 —— 启用方式与量化后果
 #   见 `Product.fee_overrides` 字段注释。
-#   ⚠️ 决策侧（走不走平今）起**根本不读费率**，只读 `EXEC_POLICY`。
+#   ⚠️ 决策侧（走不走平今）**根本不读费率**，只读 `EXEC_POLICY`。
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", r_multiple_tp=2.0,

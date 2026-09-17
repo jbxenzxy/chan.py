@@ -57,7 +57,7 @@ Trading/                                  # 自动下单网关（独立 Python �
 ├── Broker/                 ⑥ 执行通道
 │   ├── Base.py             370 行   Broker 接口 + 注册表 + 拒单分类器
 │   ├── DryRun.py           100 行   离线模拟撮合
-│   └── SimNow.py          1755 行   SimNow 仿真 + live 实盘（tqsdk/TqAccount）
+│   └── SimNow.py          1754 行   SimNow 仿真 + live 实盘（tqsdk/TqAccount）
 ├── Infra/                  横切·基础设施
 │   ├── Records.py          407 行   Signal/Bar/Order/Position/Trade/ExitPlan + 四个枚举
 │   ├── Clock.py            186 行   墙钟 / 交易日归属 / 时间戳单位 / SESSION_SECS
@@ -100,7 +100,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 5m --out ./run_live
 ### 3.3 接 SimNow 仿真
 
 ```bash
-# 凭据只走环境变量，不落盘、不进 Config.py（Broker/SimNow.py:530）
+# 凭据只走环境变量，不落盘、不进 Config.py（Broker/SimNow.py:529）
 # Windows CMD：set SN_ACCOUNT=... & set SN_PASSWORD=... & set TQ_ACCOUNT=... & set TQ_PASSWORD=...
 python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 1m \
     --broker simnow --out ./run_sim
@@ -108,7 +108,7 @@ python main.py --source sse --symbol "KQ.m@CFFEX.IF" --freq 1m \
 
 `--broker simnow` 与 `dry_run` 的差异只有两处：**真实撮合**（成交价由仿真撮合决定，不做滑点让价）
 与**主连自动映射**（`KQ.m@...` 连接后用 `underlying_symbol` 解析出真实月份合约，
-不用手改 `trade_symbol`，`Broker/SimNow.py:706`）。
+不用手改 `trade_symbol`，`Broker/SimNow.py:705`）。
 
 上号前建议先跑通道探针（`Tool/SimNow/SimNowProbe.py`，只查不下单）：
 
@@ -409,7 +409,7 @@ SimNow 不支持市价单：下单瞬间取实时对手价（买 = ask / 卖 = b
 ### 7.3 A′ fail-closed 闸门
 
 在线通道（simnow/live）必须**从行情取到并通过校验** `price_tick` / `volume_multiple` /
-涨跌停区间，置 `Instrument.verified=True`（`Broker/SimNow.py:726`）；否则
+涨跌停区间，置 `Instrument.verified=True`（`Broker/SimNow.py:725`）；否则
 `Engine._pre_trade_check` 拒单 + 严重告警（`Engine/Engine.py:1277`）。
 **代码里不存在"取不到就回退配置值下单"的分支。**
 
@@ -450,7 +450,7 @@ SimNow 不支持市价单：下单瞬间取实时对手价（买 = ask / 卖 = b
 None，对账**跳过该侧**而非误清。
 
 > 已知盲区：该陈旧判据按"绝对时钟差"算，夜盘静默段会被恒判陈旧 → 夜盘对账被静默跳过
-> （`Broker/SimNow.py:107` 有完整记录）。日盘 IF 无碍。
+> （`Broker/SimNow.py:106` 有完整记录）。日盘 IF 无碍。
 
 ### 7.6 实盘安全闸门
 
@@ -493,11 +493,11 @@ DB 路径可传多个做 union，账户无关（`trades` 表无账户列）。
 归一后同键 → 合并统计。归一**只有一份实现**：`Product.product_key_of`（`Infra/Product.py:551`），
 写入侧落在 `trades.product_key` 列（`Infra/StateDB.py:184`），查询侧比**列相等**。
 
-口径（两个都出现，别混）：
+口径（两个都出现，别混；面板上 `pl_ratio` 的标签写作「盈亏比(赔率)」以免读串）：
 
 | 指标 | 中文 | 算法 |
 |---|---|---|
-| `pl_ratio` | **盈亏比** | 平均每笔盈利 ÷ \|平均每笔亏损\|；无亏损 → None |
+| `pl_ratio` | **盈亏比(赔率)** | 平均每笔盈利 ÷ \|平均每笔亏损\|；无亏损 → None |
 | `profit_factor` | **盈利因子** | 总盈利 ÷ \|总亏损\|；无亏损 → None（无定义，非 0） |
 
 其余字段：`count` / `wins` / `losses` / `flat` / `win_rate` / `avg_win` / `avg_loss` /
@@ -554,7 +554,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 ## 十一、已知限制与再次交接时的注意事项
 
 1. **换月移仓**：主连自动映射只解决"下单落到当前主力"，跨月移仓（平旧月开新月）**没有自动实现**。
-   `trade_symbol` 只在连接后解析一次（`Broker/SimNow.py:628`），若主力换月且引擎重启，
+   `trade_symbol` 只在连接后解析一次（`Broker/SimNow.py:627`），若主力换月且引擎重启，
    旧月份持仓不会被加载进簿（`_restore` 只加载 `symbol == trade_symbol` 的持仓）。
 2. **钱层面的兜底闸门缺失**：风控层现在只有交割月护栏。资金不足靠柜台拒单兜底
    （`REJECT_FUNDS` 会立即停追），没有事前保证金校验。实盘前需要一次性决策。
@@ -580,16 +580,27 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 | 「Risk/ 风控层（手数/持仓上限）」+ `Risk.py` 内容 | `Trading/Risk/` 只剩 docstring，无代码（`Risk/__init__.py:2`） |
 | `Infra/` 清单含 `Config.py`、不含 `TradeStats.py` | 实为 8 个模块，含 `TradeStats.py`（见 §二） |
 | 「Test/ 下 test_p5 ~ test_p23 共 20 个回归测试」 | 实为 **58 个**（57 `test_*.py` + 1 `smoke_*.py`） |
-| 「未做：创元实盘」 | `live` 通道**已实现**（`Broker/SimNow.py:1747` 的 `LiveCTPBroker`，`tq_market` 填期货公司名 + `confirm_live_trading=true`） |
+| 「未做：创元实盘」 | `live` 通道**已实现**（`Broker/SimNow.py:1746` 的 `LiveCTPBroker`，`tq_market` 填期货公司名 + `confirm_live_trading=true`） |
 | 「当前用 `CLOSE` 让交易所自动处理」平今 | 平今走 `CLOSETODAY`，是否启用 = 执行策略表第 1 列（`Infra/Records.py:59`） |
 | 「出场策略：注册表 / @register / 换类名」 | 策略选择器抽象**已删**，入场固定 `EntryPolicy`、出场固定 `LayeredExitPolicy`（`Strategy/__init__.py:2`） |
 | 「Reconcile：F1 解锁卡单监控」 | "解锁"概念已删；该文件现在是**持仓对账 + CLOSE 卡单复核**（`Engine/Reconcile.py:3`） |
-| 统计面板「平均盈亏比」 | 改名「**盈亏比**」= `pl_ratio`；另有「**盈利因子**」= `profit_factor`（两者算法不同，见 §9.1） |
+| 统计面板「平均盈亏比」 | 改名「**盈亏比(赔率)**」= `pl_ratio`；另有「**盈利因子**」= `profit_factor`（两者算法不同，见 §9.1） |
 | 工具清单只列 4 个 | 实为 11 个脚本（见 §9.2） |
 
-**顺带发现（未动，供你决定）** —— 都是注释层问题，不影响运行：
+**同批修掉的注释层缺陷** —— 本节成稿后已改代码，下面的行号按**修后**的树：
 
-1. `Trading/__init__.py:8` 的包 docstring 过时：仍写着 "`Strategy/` ③ 策略层 Entry 入场过滤 / Exit 出场策略（可插拔注册）"、`Trading/__init__.py:9` 写着 "`Risk/` ④ 风控层 开仓手数 / 持仓笔数 / 补开开关"，与 §二 / §5.3 的事实不符；同段 `Infra/` 清单还列着已迁走的 `Config`、漏了 `TradeStats`。
-2. 改名残留两处：`Trading/Config.py:36` 与 `Trading/Config.py:515` 都写着"原名 `BrokerConfig` … 故改为 `BrokerConfig`"（`BrokerParamsConfig` → `BrokerConfig`
-   的那次改名把注释里的旧名一起改掉了，句子自我循环）。
-3. 重复 import：`Broker/SimNow.py:83-84` 连着两行 `from ..Config import BrokerConfig`。
+1. `Trading/__init__.py:8-13` 包 docstring 层表过时：已改成 `EntryPolicy` / `LayeredExitPolicy`（L1-L3）、
+   `Risk/` 标为「只余交割月护栏」、`Infra/` 清单去掉已迁走的 `Config` 并补上 `TradeStats`。
+   同段 `:15` 的依赖规则也从「Engine import 全部模块」改成实测口径（Infra 不 import 上层；生产代码无一处
+   反向 import Engine，装配只在 `main.py`）。
+2. 改名残留两处：`Trading/Config.py:35` / `:38` 与 `:515` 写成了自我循环的「原名 `BrokerConfig` … 故改为
+   `BrokerConfig`」；旧名已还原为 `BrokerParamsConfig` —— 这样「与 `SourceConfig` / `RiskConfig` 的命名习惯
+   不一致」那句话才讲得通（`BrokerParamsConfig` 在代码里现为 0 命中，只作沿革留档）。
+3. 重复 import：`Broker/SimNow.py:83` 只留一行 `from ..Config import BrokerConfig`（删掉多余的第 84 行）。
+   这是本文唯一一处**行号位移**：该文件 1755 行 → **1754 行**，全文 `SimNow.py:` 引用已同步。
+4. `Trading/Config.py:19-20` 残句 + 一个已被证伪的陈述：原文「（…起配置类 frozen=True）」，但这 9 个模型
+   实测 `frozen=None`（一律只有 `extra="forbid"`），已改成可核验的写法。
+5. 上一轮注释清理留下的**残句 30 处**：删「阶段号 / 工单号 / 日期戳」时把句子的主语或虚词一起删掉了
+   （典型：`（的根因之一）`、`出场策略起**只有**`、`（起本工具位于 Script/…）`、`价格反复报`）。已按
+   「只补语法、不添新事实」逐个改回。其中 2 处是**误删语义词**：`Test/test_p37_fok_fullcancel_partial.py`
+   的「第一轮的价格」指首次报单价（不是评审轮次），已恢复。

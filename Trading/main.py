@@ -66,7 +66,7 @@ ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
 _STOP_REQUEST = ".stop_request"
 
 
-# 删除 `_seed_instrument`（的播种桥）：
+# 删除 `_seed_instrument`（播种桥）：
 #   `InstrumentSpec.for_product()` + `cfg.instrument.model_dump(exclude={...})` 的
 #   躲闪随双类合并一并消亡 —— tick/乘数/exchange/费率真值源 = 品种档案
 #   Product，运行时对象 Instrument 构造时直接取档案初值，不再有
