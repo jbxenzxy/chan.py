@@ -63,7 +63,7 @@ print("=" * 60)
 
 # ═══ [1] 2.0/2.0.1/2.0.2 六层配置模型 ═══
 print("\n[1] 六层配置模型（2.0/2.0.1/2.0.2）：TradingConfig 七个子模型 + extra=forbid")
-from Trading.Config import (BrokerConfig, ChannelTimingConfig, EngineConfig,
+from Trading.Config import (BrokerConfig, ChannelTimingConfig,
                             EntryConfig, ExitConfig, RiskConfig,
                             SourceConfig, TradingConfig)
 
@@ -73,7 +73,6 @@ check("cfg.entry_params -> EntryConfig", type(cfg.entry_params), EntryConfig)
 check("cfg.exit_params -> ExitConfig", type(cfg.exit_params), ExitConfig)
 check("cfg.risk -> RiskConfig", type(cfg.risk), RiskConfig)
 check("cfg.broker_params -> BrokerConfig", type(cfg.broker_params), BrokerConfig)
-check("cfg.engine -> EngineConfig", type(cfg.engine), EngineConfig)
 # （SizingConfig / cfg.sizing 已随仓位管理删除，不再有该子模型）
 check("根模型拒未知键（extra=forbid）",
       _raises(lambda: TradingConfig(**{"not_a_field": 1})), True)
@@ -122,7 +121,7 @@ check("main.py 经 cfg.exit_params 构造出场策略",
 # ═══ [4] SSOT：每个模型只定义一次 ═══
 print("\n[4] SSOT：每个 *Config 在 Config.py 只定义一次")
 for _m in ("TradingConfig", "SourceConfig", "EntryConfig", "ExitConfig",
-           "RiskConfig", "BrokerConfig", "EngineConfig",
+           "RiskConfig", "BrokerConfig",
            "ChannelTimingConfig"):
     _n = len(re.findall(r"^class {}\b".format(_m), _CFG_TXT, re.M))
     check("class {} 定义次数 == 1".format(_m), _n, 1)

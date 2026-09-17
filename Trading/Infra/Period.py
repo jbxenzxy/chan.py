@@ -39,7 +39,7 @@ SESSION_SECS） P-C 迁往 Infra/Clock.py，本模块不再定义。
 Trading 原实现里有多处「周期耦合」逻辑是隐式或错误的：
 Bar.timestamp 单位不统一（SSE 源毫秒 / 回放源可能秒）被当秒比、
 max_hold_bars=30 在 30m 与 15s 下语义漂移 120 倍、
-_close_retry_bars 拿毫秒差比阈值、收盘判定取不到 14:55 ——
+旧冷却参数拿毫秒差比阈值、收盘判定取不到 14:55 ——
 本轴把上述语义集中、显式化，供 Exit/Engine/Source 共用。
 """
 from __future__ import annotations

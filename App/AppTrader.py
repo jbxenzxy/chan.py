@@ -966,15 +966,12 @@ class AppTrader:
             # "用户确认过的告警立刻不再下发"，不依赖子进程醒来。
             raw_alerts = s.get_json("alerts") or []
             ack_ts = float(s.get_json("alerts_ack_ts", 0.0) or 0.0)
-            # 补：前端 tooltip 会读 `auto_order.run`（本段风控锚/
-            # 止损/止盈）与 `auto_order.close_cooldown`（平仓冷却剩余），而这两个
-            # 字段此前**没有出现在任何 API 返回里** —— 引擎的 `auto_order_status()`
-            # 虽然有，但子进程架构下它只被测试调用，API 链路走的是本函数。
-            # 结果就是前端那两行 tooltip 永远是死数据（"止损在哪"看不到）。
-            # 两个字段都由引擎 `_persist` 落 kv（`run` 早就有，`close_cooldown`
-            # 是本轮新增），这里**只做投影**，不 import 引擎、不判三态。
+            # 补：前端 tooltip 会读 `auto_order.run`（本段风控锚/止损/止盈），
+            # 该字段此前**没有出现在任何 API 返回里** —— 引擎的 `auto_order_status()`
+            # 虽然有，但子进程架构下它只被测试调用，API 链路走的是本函数，
+            # 前端的 tooltip 永远是死数据（"止损在哪"看不到）。由引擎 `_persist`
+            # 落 kv（`run`），这里**只做投影**，不 import 引擎、不判三态。
             raw_run = s.get_json("run")
-            raw_cool = s.get_json("close_cooldown")
             s.close()
             alerts = [a for a in raw_alerts
                       if isinstance(a, dict)
@@ -1006,8 +1003,6 @@ class AppTrader:
                         "tp": plan.get("tp_price"),
                         "name": plan.get("name") or "",
                     }
-            cool_view = (raw_cool if isinstance(raw_cool, dict)
-                         else {"active": False, "bars_left": 0, "streak": 0})
             return {
                 "enabled": enabled,
                 "account_state": state,
@@ -1016,7 +1011,6 @@ class AppTrader:
                 "positions": positions,
                 "alerts": alerts,
                 "run": run_view,
-                "close_cooldown": cool_view,
             }
         except Exception:
             return None

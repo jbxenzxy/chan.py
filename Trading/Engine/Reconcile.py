@@ -1,14 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-对账与卡单监控（ReconcileMixin）
+对账（ReconcileMixin）
 ================================
 从 Engine.py 拆出的运维职能，以 Mixin 形式挂回 TradingEngine（方法仍通过 self 调用）：
 
     _reconcile_position / _reconcile_positions / _reconcile_side
         持仓对账（增强 B）：账本 vs 真实持仓逐边比对，发现漂移时落事件并修正。
-    _check_close_stuck
-        CLOSE 卡单监控。on_bar 每根 K 线调用一次，
-        超窗口期未确认成交则按 broker 回报重建/清理 _close_in_flight。
 
 设计约束：本文件只依赖 Infra 数据结构与 self 注入的引擎上下文
 （positions/broker/store/ev/cfg 等），不反向 import 引擎主体，维持单向依赖。
@@ -17,9 +14,8 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from ..Infra.Records import AccountState, Bar, Order, OrderIntent, Position, Side, Trade
+from ..Infra.Records import AccountState, Bar, Order, Position, Side, Trade
 from ..Infra.Clock import now_cn
-from .PositionBook import PositionBookError
 
 class ReconcileMixin:
     # ---------------- 持仓对账（增强 B） ----------------
@@ -37,7 +33,6 @@ class ReconcileMixin:
           · on_bar（默认）：用户在快期3等外部终端手工平仓 / 幽灵持仓 / 账户被改
           · restore（新增）：引擎启动 _restore 后立刻拉一次真实持仓，
             防止"本地 store 有持仓但真实账户已平"造成重启后第一根 bar 误判
-          · close_stuck：CLOSE 卡单 N bars 后复核走这里
 
         对账策略（每侧独立）：
           · real_vol < 0 或 None → skip（broker 不支持对账，如 dry_run）
@@ -104,10 +99,6 @@ class ReconcileMixin:
         if not self.positions.is_empty():
             all_cleared = False
         if all_cleared:
-            # Step 1：cooldown 改按根数（序号差）判定，这里同步清序号
-            # （原 `_last_close_failed_bar_ts = 0` 是旧 ts 口径冷却的
-            #  漏迁死代码 —— 全仓仅此一处赋值，无声明、无读取方，已删。）
-            self._last_close_failed_bar_seq = 0
             self._persist()
             self._sync_state()
         # ══════════════════════════════════════════════════════════════
@@ -152,7 +143,18 @@ class ReconcileMixin:
         调用方汇总两侧返回值决定是否 state→IDLE。
         """
         if real_vol > engine_vol:
-            # 真实持仓 > 引擎：告警不接管（用户可能在外部手动加仓）
+            # 真实持仓 > 引擎：告警不接管（用户可能在外部手动加仓）。
+            # 【2026-09-17 拍板】发现账实不一致 → 弹窗说清、由用户干预；
+            # 引擎不接管多出的持仓，只告知事实。
+            self.alert(
+                self.ALERT_SEVERE, "position_mismatch",
+                "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本只有 {ev} 手"
+                "（多 {diff} 手）。多出的持仓不是交易引擎开的，引擎不接管，"
+                "请人工核对处理。".format(
+                    side=str(side), rv=real_vol, ev=engine_vol,
+                    diff=real_vol - engine_vol),
+                side=str(side), engine_vol=engine_vol, real_vol=real_vol,
+                source=source)
             self.ev.write("position_mismatch", side=str(side),
                           engine_vol=engine_vol, real_vol=real_vol,
                           n_engine_positions=len(side_positions),
@@ -191,6 +193,18 @@ class ReconcileMixin:
                               note="E3.3 不支持仓位内拆分，整笔平代替")
 
         # 生成 trade + 从 book remove（不实际下单）
+        # 【2026-09-17 拍板】柜台持仓比账本少 = 账实不一致（多为手工平仓）。
+        # 弹窗先入队（内容如实写"已同步"），删除与补记盈亏随即执行 —— 同轮完成，
+        # 不做"等用户确认才同步"的挂起机制。明细见事件流 position_externally_closed。
+        self.alert(
+            self.ALERT_SEVERE, "reconcile_externally_closed",
+            "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本记 {ev} 手（少 {n} 手，"
+            "多为柜台手工平仓）。引擎已按 FIFO 从账本删除 {k} 笔、按参考价补记平仓盈亏，"
+            "账本已同步为与柜台一致；请知悉，如有异议请人工核对柜台。".format(
+                side=str(side), rv=real_vol, ev=engine_vol,
+                n=n_to_close, k=len(close_list)),
+            side=str(side), engine_vol=engine_vol, real_vol=real_vol,
+            n_positions_closed=len(close_list), source=source)
         for idx, pos in enumerate(close_list):
             # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供 trade 记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)
@@ -261,122 +275,3 @@ class ReconcileMixin:
 
         # 全部清空判定：real_vol==0 ⇒ 该侧 0 持仓 ⇒ True（让 state 走 IDLE）
         return real_vol == 0
-
-    # ════════════════════════════════════════════════════════════════
-    # CLOSE 卡单监控（原 UNLOCK 卡单监控，随 UNLOCK 概念改名）
-    #   on_bar 入口每根 bar 调一次 _check_close_stuck(bar)
-    #   · _close_in_flight 为空 → skip（无卡单监控中）
-    #   · bars_elapsed < _close_stuck_bars → skip（窗口期内不打扰）
-    #   · 已达窗口 → 调 broker.trade_confirmed(CLOSE, sig.key)：
-    #       True  → 真成交（CTP 已收到回报）→ 清 in-flight
-    #       False → 查 broker.real_position(target.side)：
-    #           · > 0  → 卡单确认 → 把 target 重建回簿（真实账户仍在）
-    #           · == 0 → 卡单恢复（CTP 已平但引擎端已删 target）→ 清 in-flight
-    #           · None → broker 不支持对账 → 默认按"恢复"清 in-flight
-    #
-    #   设计要点：
-    #     · 落账时快照 target → _close_in_flight["target_snapshot"]，
-    #       卡单时用快照重建 Position（真实账户还在，引擎必须重新跟踪）
-    #     · 先撤在途单再重建，防"重建后挂单又成交"的双重平仓
-    #     · dry_run 的 trade_confirmed=True → 不触发，行为零变化
-    # ════════════════════════════════════════════════════════════════
-    def _check_close_stuck(self, bar: Bar) -> None:
-        if self._close_in_flight is None:
-            return
-        rec = self._close_in_flight
-        bars_elapsed = self.bars_seen - rec["submit_bar_seq"]
-        if bars_elapsed < self._close_stuck_bars:
-            return  # 窗口期内：先信 submit 返回，不打扰
-
-        # 窗口期已过：调 broker.trade_confirmed 复核
-        fn_tc = getattr(self.broker, "trade_confirmed", None)
-        confirmed = True
-        if callable(fn_tc):
-            try:
-                confirmed = bool(fn_tc(OrderIntent.CLOSE, rec["signal_key"]))
-            except Exception:
-                # broker 查询异常 → 保守按未确认走 reconcile
-                confirmed = False
-
-        if confirmed:
-            self.ev.write("close_confirmed",
-                          signal_key=rec["signal_key"],
-                          target_signal_key=rec.get("target_signal_key", ""),
-                          bars_elapsed=bars_elapsed)
-            self._close_in_flight = None
-            return
-
-        # 未确认：先撤掉该 signal_key 的在途委托。
-        # 若不撤，重建持仓后挂单仍可能成交 → 双重平仓。
-        # base/dry_run 的 cancel_pending 返回 0（无在途单），零行为影响。
-        fn_cp = getattr(self.broker, "cancel_pending", None)
-        if callable(fn_cp):
-            try:
-                n_cancelled = int(fn_cp(rec["signal_key"]))
-                if n_cancelled > 0:
-                    self.ev.write("close_pending_cancelled",
-                                  signal_key=rec["signal_key"],
-                                  target_signal_key=rec.get("target_signal_key", ""),
-                                  cancelled=n_cancelled,
-                                  bars_elapsed=bars_elapsed)
-            except Exception:
-                pass  # 撤单异常不阻断后续 real_position 对账
-
-        # 查 broker.real_position(target.side) 判定卡单 vs 恢复
-        target_side_str = rec.get("target_side", "")
-        fn_rp = getattr(self.broker, "real_position", None)
-        real_vol: Optional[int] = None
-        if callable(fn_rp):
-            try:
-                target_side = (Side.LONG if target_side_str == "LONG"
-                               else Side.SHORT if target_side_str == "SHORT"
-                               else None)
-                if target_side is not None:
-                    real_vol = fn_rp(target_side)
-            except Exception:
-                real_vol = None
-
-        if real_vol is not None and real_vol > 0:
-            # 卡单确认：真实账户仍有持仓 → 把 target 重建回簿
-            snap = rec.get("target_snapshot")
-            if snap is not None:
-                restored_pos = Position.from_dict(snap)
-                try:
-                    self.positions.add(restored_pos)
-                except PositionBookError as e:
-                    self.ev.write("close_stuck_restore_failed",
-                                  signal_key=rec["signal_key"],
-                                  reason="{}".format(e))
-                    self._close_in_flight = None
-                    return
-                self.ev.write("close_stuck_confirmed",
-                              signal_key=rec["signal_key"],
-                              target_signal_key=rec.get("target_signal_key", ""),
-                              reason="real_position_still_held_after_stuck_window",
-                              target_side=target_side_str,
-                              real_vol=real_vol,
-                              bars_elapsed=bars_elapsed)
-            else:
-                # 没有快照（理论上落账时必须存了）→ 告警
-                self.ev.write("close_stuck_confirmed",
-                              signal_key=rec["signal_key"],
-                              target_signal_key=rec.get("target_signal_key", ""),
-                              reason="real_position_still_held_no_snapshot",
-                              target_side=target_side_str,
-                              real_vol=real_vol,
-                              bars_elapsed=bars_elapsed)
-            self._close_in_flight = None
-            self._sync_state()
-            return
-
-        # 卡单恢复（real_vol == 0 / None）：清 in-flight，写恢复事件
-        self.ev.write("close_stuck_recovered",
-                      signal_key=rec["signal_key"],
-                      target_signal_key=rec.get("target_signal_key", ""),
-                      reason=("real_position_zero_after_stuck_window"
-                              if real_vol is not None
-                              else "real_position_unknown_conservative"),
-                      target_side=target_side_str,
-                      real_vol=real_vol,
-                      bars_elapsed=bars_elapsed)
-        self._close_in_flight = None

@@ -1,50 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-卡单复核
-=============================
-背景
-    解决两类幽灵/错配风险：
-      · F1：CLOSE 卡单 —— broker.submit 返回 filled 但 CTP 通道异常时真实未成交，
-        引擎若直接信 filled 删 portfolio，次日同向信号进来时 has_opposite=False
-        走正常开仓路径 → 真实账户持仓仍在 → 错配。
-        解决：报单成功后记 _close_in_flight，5 bars 后调 broker.trade_confirmed 复核：
-          · True  → 真成交（CTP 已收到回报）→ 清 in-flight
-          · False → 调 _reconcile_positions 兜底（按真实持仓修正）
-      · F2：_restore 末尾首拉真实持仓 —— 防止"本地 store 有持仓但真实账户已平"
-        造成重启后第一根 bar 误判。
+对账 + 卡单复核拆除后的形态（原 Phase F）
+=============================================
+2026-09-17 拍板：例外 → 弹窗 → 用户干预，引擎不自动兜底。
+原 F1 卡单复核（_close_in_flight / _check_close_stuck / _validate_close_in_flight）
+整体删除 —— FOK/FAK 笔笔有终态，"无终态挂死"场景按设计不存在；
+终态万一丢失由对账同步 + broker 终态看门狗兜住。
 
-硬性要求（本测试锁死）
-    ① broker.trade_confirmed(intent, signal_key) 接口：
-        · base 默认 True（兜底）
-        · dry_run 重写 True（同步撮合，submit 返回 filled 即确认）
-        · 自定义 broker 可重写返回 False
-    ② engine._check_close_stuck(bar)：
-        · _close_in_flight 空 → skip
-        · bars_elapsed < _close_stuck_bars → skip（不调 broker）
-        · bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 close_confirmed
-        · bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0
-              → 写 close_stuck_recovered
-        · bars_elapsed = 5 + trade_confirmed=False + 真实持仓 > 0
-              → 写 close_stuck_confirmed（卡单确认）
-        · broker.trade_confirmed 抛异常 → 保守走 reconcile
-        · CLOSE 拒单不设 in-flight
-    ③ engine._restore 末尾首拉真实持仓（source="restore"）：
-        · 无持仓 → 不报错
-        · broker 无 real_position → skip
-        · real_vol == engine_vol → skip
-        · real_vol < engine_vol → FIFO 部分平（trade reason=reconcile_external_partial）
-        · real_vol == 0 → 全平
-        · real_vol > engine_vol → 告警不接管（写 position_mismatch，source="restore"）
-        · broker.real_position 抛异常 → 写 restore_reconcile_failed，不阻断启动
-        · source="restore" 事件带 source="restore" 字段
-        · source="restore" 不拦截 bars_held < 1（与 on_bar 路径差异）
-    ④ 兼容现有行为：dry_run broker 默认 trade_confirmed=True → 不触发 reconcile
-       （保证现有 P13 UNLOCK 路径零行为变化）
-    ⑤ 集成：F2 _restore 末尾清残留 + F1 CLOSE 卡单 5 bars 后 reconcile 兜底
-
-不需要真实 tqsdk / 网络；纯单测 + ControlledTradeConfirmedBroker / RealPositionBroker mock。
-跑法：python tests/test_p16_phase_f.py
-"""
+本测试现在锁死：
+  ① broker.trade_confirmed(intent, signal_key) 接口保留（诊断用途）：
+      base 默认 True / dry_run 重写 True / 自定义 broker 可重写返回 False
+  ② 卡单复核已删除 —— 引擎无 _check_close_stuck / _close_in_flight /
+      _validate_close_in_flight，无 close_confirmed / close_stuck_* 事件；
+      store 里遗留的 _close_in_flight kv 被忽略（不致命）。
+  ③ F2（_restore 末尾首拉真实持仓，source="restore"）保留不变：
+      · 无持仓 → 不报错；broker 无 real_position → skip
+      · real_vol == engine_vol → skip
+      · real_vol < engine_vol → FIFO 部分平（reason=reconcile_external_partial）
+      · real_vol == 0 → 全平；real_vol > engine_vol → 告警不接管
+      · broker.real_position 抛异常 → 写 restore_reconcile_failed，不阻断启动
+      · restore 路径不拦 bars_held < 1"""
 from __future__ import annotations
 
 import json
@@ -363,173 +338,17 @@ check("1.5b 记录 intent=OPEN 调用",
 # ════════════════════════════════════════════════════════════════
 # [2] F1 _check_close_stuck 直接调用
 # ════════════════════════════════════════════════════════════════
-print("\n[2] F1 _check_close_stuck 直接调用")
-
-# 2.1 _close_in_flight 空 → skip
+# [2] F1 卡单复核已整体删除（2026-09-17 拍板）—— 漂移护栏
+# ════════════════════════════════════════════════════════════════
+print("\n[2] 卡单复核 _check_close_stuck 已整体删除")
 with tmp_dir() as td:
     eng = make_engine(td)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 10
-    before = eng._close_in_flight
-    eng._check_close_stuck(eng.last_bar)
-    check("2.1 in-flight 空 → 不变", eng._close_in_flight, before)
-
-# 2.2 bars_elapsed < 5 → skip（不调 broker）
-with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
-                                           trade_confirmed_value=False)
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 5  # 报单 bar_seq = 1，bars_elapsed = 4 < 5
-    eng._close_in_flight = {
-        "signal_key": "sig-2-2", "target_signal_key": "tgt-2-2",
-        "target_side": "SHORT", "target_snapshot": None,
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_close_stuck(eng.last_bar)
-    check("2.2 bars_elapsed<5 → in-flight 保留", eng._close_in_flight is not None, True)
-    check("2.2b 不调 broker.trade_confirmed", len(ctl_b.tc_calls), 0)
-
-# 2.3 bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 close_confirmed
-with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
-                                           trade_confirmed_value=True)
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 6  # bars_elapsed = 5
-    eng._close_in_flight = {
-        "signal_key": "sig-2-3", "target_signal_key": "tgt-2-3",
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_close_stuck(eng.last_bar)
-    check("2.3a trade_confirmed=True → 清 in-flight", eng._close_in_flight, None)
-    check("2.3b 调了 broker.trade_confirmed", len(ctl_b.tc_calls), 1)
-    evs = read_events(eng, kinds={"close_confirmed"})
-    check("2.3c 写 close_confirmed 事件", len(evs) >= 1, True)
-    if evs:
-        check("2.3d 事件 signal_key 正确", evs[0].get("signal_key"), "sig-2-3")
-        check("2.3e 事件 bars_elapsed 正确", evs[0].get("bars_elapsed"), 5)
-
-# 2.4 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0 → 写 close_stuck_recovered
-with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
-                                           trade_confirmed_value=False,
-                                           real_longs=0, real_shorts=0)
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 6
-    # 设 portfolio 已空（UNLOCK 已删 target）
-    eng._close_in_flight = {
-        "signal_key": "sig-2-4", "target_signal_key": "tgt-2-4",
-        "target_side": "SHORT", "target_snapshot": None,
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_close_stuck(eng.last_bar)
-    check("2.4a 清 in-flight", eng._close_in_flight, None)
-    evs = read_events(eng, kinds={"close_stuck_recovered"})
-    check("2.4b 写 close_stuck_recovered", len(evs) >= 1, True)
-    if evs:
-        check("2.4c 事件 reason 正确",
-              evs[0].get("reason"), "real_position_zero_after_stuck_window")
-
-# 2.5 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 > 0 → 写 close_stuck_confirmed
-#     并用 target_snapshot 重建 portfolio
-with tmp_dir() as td:
-    # target 是 SHORT 仓（UNLOCK 平昨仓 SHORT）→ 真实 SHORT 仍有持仓 → 卡单确认
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
-                                           trade_confirmed_value=False,
-                                           real_longs=0, real_shorts=2)
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 6
-    # 模拟 UNLOCK 卡单：engine 已删 target，但真实账户仍有反向持仓 2 手
-    # 引擎 portfolio 应为空 → 用 target_snapshot 重建 target 回去
-    target_snapshot = make_position(Side.SHORT, 2, 4545.0, 1,
-                                    signal_key="yesterday-target-2-5").to_dict()
-    eng._close_in_flight = {
-        "signal_key": "sig-2-5", "target_signal_key": "yesterday-target-2-5",
-        "target_side": "SHORT", "target_snapshot": target_snapshot,
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_close_stuck(eng.last_bar)
-    check("2.5a 清 in-flight", eng._close_in_flight, None)
-    evs = read_events(eng, kinds={"close_stuck_confirmed"})
-    check("2.5b 写 close_stuck_confirmed", len(evs) >= 1, True)
-    if evs:
-        check("2.5c 事件 reason 正确",
-              evs[0].get("reason"), "real_position_still_held_after_stuck_window")
-    check("2.5d 用 snapshot 重建 portfolio",
-          len(eng.positions), 1)
-    if len(eng.positions) == 1:
-        check("2.5e 重建仓位 signal_key 正确",
-              eng.positions.positions[0].signal_key, "yesterday-target-2-5")
-        check("2.5f 重建仓位 side 正确",
-              eng.positions.positions[0].side, Side.SHORT)
-        check("2.5g 重建仓位 volume 正确",
-              eng.positions.positions[0].volume, 2)
-
-# 2.6 broker.trade_confirmed 抛异常 → 保守走 reconcile（视作未确认）
-with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
-                                           raise_on_trade_confirmed=True,
-                                           real_longs=0, real_shorts=0)
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 6
-    eng._close_in_flight = {
-        "signal_key": "sig-2-6", "target_signal_key": "tgt-2-6",
-        "target_side": "SHORT", "target_snapshot": None,
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._check_close_stuck(eng.last_bar)
-    check("2.6a 异常被吞掉，不阻断", eng._close_in_flight, None)
-    # 写 close_stuck_recovered 事件（保守按恢复处理：trade_confirmed 抛异常 → False，
-    # broker.real_position(SHORT) 也保守按 None 处理 → reason 带 unknown）
-    evs_recovered = read_events(eng, kinds={"close_stuck_recovered"})
-    check("2.6b 保守按恢复处理（写 recovered 事件）", len(evs_recovered) >= 1, True)
-
-# 2.7 多次提交 in-flight 替换（每次新报单覆盖）
-with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
-    eng = make_engine(td, broker=ctl_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 10   # bars_elapsed = 10 - 3 = 7 >= 5
-    eng._close_in_flight = {
-        "signal_key": "old-sig", "target_signal_key": "old-tgt",
-        "target_side": "SHORT", "target_snapshot": None,
-        "submit_bar_ts": 4000, "submit_bar_seq": 1}
-    eng._close_in_flight = {
-        "signal_key": "new-sig", "target_signal_key": "new-tgt",
-        "target_side": "SHORT", "target_snapshot": None,
-        "submit_bar_ts": 5000, "submit_bar_seq": 3}
-    eng._check_close_stuck(eng.last_bar)
-    # 调了 broker 一次（new-sig），signal_key 应是 new
-    check("2.7 in-flight 被替换 → broker 收到新 sig",
-          ctl_b.tc_calls[0][1] if ctl_b.tc_calls else None, "new-sig")
-
-# 2.8 CLOSE 拒单不设 in-flight（拆锁被拒：继续锁着，账户安全）
-#     ⚠️ 新版口径：三态只看净敞口 —— 单笔 SOFT_EXIT_LOCK 已是带敞口的运行态
-#     （运行态不响应信号），所以**必须构造双向持仓**（net==0）才是锁仓态。
-with tmp_dir() as td:
-    rej_b = RejectDryBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
-    eng = make_engine(td, broker=rej_b)
-    eng.last_bar = make_bar()
-    eng.bars_seen = 5
-    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-pos",
-                        entry_date="2026-08-31")
-    eng.positions.add(pos)
-    eng.positions.add(make_position(Side.SHORT, 1, 4549.0, 2,
-                                    signal_key="yesterday-pos-b",
-                                    entry_date="2026-08-31"))
-    check("2.8a 前置：LOCKED（net==0 且非空）",
-          eng.account_state(), AccountState.LOCKED)
-    sig = make_signal("close-sig", Side.SHORT)
-    eng.on_signal(sig)
-    check("2.8b 拆锁被拒 → 两笔仓单都还在", len(eng.positions), 2)
-    check("2.8c 对冲目标（多头）未被删",
-          sorted(p.signal_key for p in eng.positions.positions),
-          ["yesterday-pos", "yesterday-pos-b"])
-    check("2.8d CLOSE 拒单 → in-flight 未设", eng._close_in_flight, None)
-    check("2.8e state 回 IDLE", eng._state, EngineState.IDLE)
-
-
-# ════════════════════════════════════════════════════════════════
-# [3] F2 _restore 末尾首拉真实持仓（source="restore"）
+    check("2.1 引擎无 _check_close_stuck", hasattr(eng, "_check_close_stuck"), False)
+    check("2.2 引擎无 _close_in_flight", hasattr(eng, "_close_in_flight"), False)
+    check("2.3 引擎无 _validate_close_in_flight",
+          hasattr(eng, "_validate_close_in_flight"), False)
+    check("2.4 broker 接口 trade_confirmed 仍保留（诊断用途）",
+          callable(getattr(eng.broker, "trade_confirmed", None)), True)
 # ════════════════════════════════════════════════════════════════
 print("\n[3] F2 _restore 末尾首拉真实持仓")
 
@@ -673,11 +492,13 @@ with tmp_dir() as td:
 # ════════════════════════════════════════════════════════════════
 # [4] F1+F2 集成
 # ════════════════════════════════════════════════════════════════
-print("\n[4] F1+F2 集成")
+# [4] F1 删除后的兼容回归
+# ════════════════════════════════════════════════════════════════
+print("\n[4] F1 删除后的兼容回归")
 
-# 4.1 兼容回归：dry_run broker 默认 trade_confirmed=True → 拆锁成交后 5 bars 复核直接通过
+# 4.1 拆锁成交（dry_run 同步撮合）→ 目标仓被平；不再挂 in-flight、不再写复核事件
 with tmp_dir() as td:
-    eng = make_engine(td)  # 默认 DryRunBroker → trade_confirmed=True
+    eng = make_engine(td)
     pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="yesterday-4-1",
                         entry_date="2026-08-31")
     eng.positions.add(pos)
@@ -690,21 +511,14 @@ with tmp_dir() as td:
     eng.on_signal(sig)
     check("4.1a 拆锁成交 → 目标多头被平（只剩那笔空头）",
           [p.signal_key for p in eng.positions.positions], ["yesterday-4-1-b"])
-    check("4.1b 设了 _close_in_flight", eng._close_in_flight is not None, True)
-    # 跑 5 根 bar（每根 bars_seen+1，bars_elapsed 累计 1,2,3,4,5）
-    for i in range(5):
-        eng.bars_seen += 1
-        eng._check_close_stuck(eng.last_bar)
-    # 第 5 次调（bars_elapsed=5）→ trade_confirmed=True → 清 in-flight
-    check("4.1c 5 bars 后 in-flight 清掉", eng._close_in_flight, None)
-    evs = read_events(eng, kinds={"close_confirmed"})
-    check("4.1d 写 close_confirmed 事件", len(evs) >= 1, True)
+    check("4.1b 引擎无 _close_in_flight（复核机制已删）",
+          hasattr(eng, "_close_in_flight"), False)
+    evs = read_events(eng, kinds={"close_confirmed", "close_stuck_recovered",
+                                  "close_stuck_confirmed"})
+    check("4.1c 无卡单复核类事件", len(evs), 0)
 
-# 4.2 F2+F1 联动：_restore 末尾清残留 → 拆锁不再被卡
-#     （场景：上轮 CLOSE 卡单 + 真实持仓已平 → 重启后 F2 清掉残留仓，
-#      F1 看不到 in-flight（已清），新信号走正常开仓路径）
+# 4.2 F2 清幽灵 + 新信号正常开仓（不依赖 F1，保留）
 with tmp_dir() as td:
-    # 准备：store 写一个残留多仓（模拟上轮卡单留下的幽灵）
     pos_dict = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-pos").to_dict()
     pre_store = Store(os.path.join(td, "state.db"))
     pre_store.set_json("positions", [pos_dict])
@@ -713,10 +527,8 @@ with tmp_dir() as td:
     pre_store.close()
     ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
-    # F2 已把幽灵清掉
     check("4.2a F2 清掉幽灵后 portfolio 空", len(eng.positions), 0)
     check("4.2b F2 清掉幽灵后 state IDLE", eng._state, EngineState.IDLE)
-    # 新信号进来（反向 SHORT）→ IDLE + portfolio 空 → 走正常开仓路径（不是 UNLOCK）
     eng.last_bar = make_bar()
     sig = make_signal("new-sig-4-2", Side.SHORT)
     eng.on_signal(sig)
@@ -724,65 +536,15 @@ with tmp_dir() as td:
     check("4.2d 开空仓 side 正确",
           eng.positions.positions[0].side, Side.SHORT)
 
-# 4.3 F1 持久化 + 重启：CLOSE 报单 + 进程崩 + _restore 读出 in_flight + 5 bars 后复核
-#     场景：CLOSE 报单成功 → 引擎进程崩（broker 返回 filled 但真实未成交，
-#              真实账户仍持仓）→ 重启：
-#       · _restore 末尾读出 in_flight（持久化生效）
-#       · 第 (5+1)=6 根 bar 调 _check_close_stuck → trade_confirmed=False
-#       · reconcile 检查 real_position=0（broker 真实未成交） → 写 close_stuck_recovered
-#       · _close_in_flight 清掉
-#     这是 F1 卡单检测在"持久化 + 重启"链路下的真正价值：
-#     若不持久化，引擎崩后 in_flight 丢了，5 bar 复核永远不会触发，
-#     F1 卡单检测在重启场景下形同虚设。
+# 4.3 旧 kv 残留不致命：store 里遗留 _close_in_flight 时，重启引擎直接忽略
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0,
-                                           trade_confirmed_value=False)
-    eng = make_engine(td, broker=ctl_b)
-    # 预置双向持仓（跨日锁，net==0），拆锁把它里的多头清掉
-    pos = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-4-3",
-                        entry_date="2026-08-31")
-    eng.positions.add(pos)
-    eng.positions.add(make_position(Side.SHORT, 1, 4549.0, 2,
-                                    signal_key="ghost-4-3-b",
-                                    entry_date="2026-08-31"))
-    eng.last_bar = make_bar()
-    eng.bars_seen = 5
-    sig = make_signal("close-sig-4-3", Side.SHORT)
-    eng.on_signal(sig)
-    # CLOSE 报单成功（dry_run 同步撮合 → 目标仓单立即移除），
-    # 但 ControlledTradeConfirmedBroker.tc_value=False → _check_close_stuck 后续复核时
-    #   trade_confirmed=False → 走卡单兜底
-    check("4.3a 拆锁成交 → 目标多头被平（只剩那笔空头）",
-          [p.signal_key for p in eng.positions.positions], ["ghost-4-3-b"])
-    check("4.3b 设了 _close_in_flight（含 submit_bar_seq）",
-          eng._close_in_flight is not None, True)
-    # _persist 已把 in_flight 写入 store（_book_close 落账即挂 in-flight，末尾统一 _persist）
-    persisted = eng.store.get_json("_close_in_flight")
-    check("4.3c store 已存 _close_in_flight（含目标仓 signal_key='ghost-4-3'）",
-          isinstance(persisted, dict) and persisted.get("target_signal_key") == "ghost-4-3",
-          True)
-
-    # ── 模拟引擎进程崩溃 + 重启 ──
-    eng2 = make_engine(td, broker=ctl_b)
-    check("4.3d 重启后 _restore 读出 _close_in_flight",
-          eng2._close_in_flight is not None, True)
-    check("4.3e 重启后簿内为空（F2 按真实持仓把残留的空头也清掉了）",
-          [p.signal_key for p in eng2.positions.positions], [])
-
-    # 跑 5 根 bar（bars_elapsed 累计到 5）→ 触发 _check_close_stuck 复核
-    eng2.last_bar = make_bar()
-    for i in range(5):
-        eng2.bars_seen += 1
-        eng2._check_close_stuck(eng2.last_bar)
-    check("4.3f 5 bars 后 _check_close_stuck → 清 in-flight",
-          eng2._close_in_flight, None)
-    evs = read_events(eng2, kinds={"close_stuck_recovered"})
-    check("4.3g 写 close_stuck_recovered（trade_confirmed=False + real_position=0）",
-          len(evs) >= 1, True)
-
-
-# ════════════════════════════════════════════════════════════════
-# 结果汇总
+    pre_store = Store(os.path.join(td, "state.db"))
+    pre_store.set_json("_close_in_flight", {"signal_key": "legacy"})
+    pre_store.close()
+    eng = make_engine(td)
+    check("4.3a 重启后不加载遗留 in-flight（属性已不存在）",
+          hasattr(eng, "_close_in_flight"), False)
+    check("4.3b 引擎正常可用", eng.bars_seen >= 0, True)
 # ════════════════════════════════════════════════════════════════
 print("\n" + "=" * 60)
 print("P16 Phase F 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

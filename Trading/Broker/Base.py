@@ -113,7 +113,7 @@ _CTP_CODE_POSITION = ("30", "50", "51")
 # 为什么这三码必须单独一类：
 #   `not_tradable` 与 `position` 对**追价**的判断一致（都停追），但对**引擎记账**
 #   的语义完全不同 —— 只有「柜台说没有这个仓」才是"幻影仓"的判据，
-#   `Engine._note_close_rejected` 的"清幻影仓"兜底**只能**在这一类上触发。
+#   柜台明确说"没有这笔可平仓"的信号（引擎不做自动清簿）。
 #   混在一起会让"资金不足"这种拒单也被当成幻影仓清掉（真仓被误删 = 账实不符）。
 
 # 非交易时段**没有稳定的数字码**，各期货公司文本还不一样 → 只能关键字兜底。
@@ -315,10 +315,9 @@ class Broker(ABC):
     def trade_confirmed(self, intent: "OrderIntent", signal_key: str = "") -> bool:
         """真实成交是否到位（报单卡单复核）。
 
-        用于引擎在 submit 返回未成交后隔若干根 K 线复核：CTP broker 可能在
-        submit 返回 filled 后实际并未成交（tqsdk 持仓缓存是**乐观**的，
-        CTP 拒单也不回滚 —— 已两次因此误判，见用户级记忆）。这里要求 broker
-        给出基于真实成交明细（``order.trade_records``）的二次判定。
+        基于**真实成交明细**（``order.trade_records``）二次判定成交是否到位：
+        tqsdk 持仓缓存是**乐观**的，CTP 拒单也不回滚 —— 已两次因此误判
+        （见用户级记忆）。诊断/工具用途（引擎主链路不再复核）。
 
         默认 True（基类兜底：撮合同步的 broker 直接信 submit 返回）。
         dry_run 重写显式 True；SimNow 重写查 tqsdk order.trade_records 累计成交 ≥ volume。
@@ -328,8 +327,7 @@ class Broker(ABC):
     def cancel_pending(self, signal_key: str = "") -> int:
         """撤掉该 signal_key 的在途委托，返回撤单请求数。
 
-        引擎在卡单复核未确认时调用：先撤在途单再按真实持仓修正，
-        防止「重建 portfolio 后挂单又成交」的双重平仓。
+        撤掉该 signal_key 的在途委托（工具用途；引擎主链路不再自动撤单）。
         默认 0（基类兜底：dry_run 同步撮合无在途单，继承即可）。
         SimNow 重写按 signal_key → raw_order_id 索引逐笔撤单。
         """

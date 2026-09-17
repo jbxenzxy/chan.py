@@ -4,10 +4,8 @@ P43 一期审计修复回归（契约测试，2026-09-12）
 =============================================
 钉死《一期重构代码评审报告 v3》里落地的 5 项修复，防止回潮：
 
-  [1] 成功 CLOSE 后 `_close_fail_streak` 归零
-      —— 配置语义是"**连续**被拒 N 次清幻影仓"。此前只有"达上限"才清零，
-         成功平仓不清零 → 变成"累计"：一次拒单 + 中间若干笔正常成交 + 再一次
-         拒单会跨 run 累积到阈值，把引擎自己刚开出来的**真仓**当幻影清掉。
+  [1] CLOSE 被拒 → 簿不动、留痕；成功 CLOSE → 正常平仓
+      —— 2026-09-17 拍板：连拒计数/清幻影仓兜底整体拆除，不再有 streak 概念。
 
   [2] 部分平仓被 `close_volume_below_target` 拒绝
       —— `_book_close` 是按 `pos.volume` **整笔**记 Trade 并整笔 remove 的，
@@ -15,20 +13,20 @@ P43 一期审计修复回归（契约测试，2026-09-12）
          簿面与柜台就对不上（账实不符）。与既有 `close_volume_exceeds_target` 对称。
 
   [3] 运行期"净敞口 ≠ 0 但没有风控锚（run）"必须显性化
-      —— 对账 / 卡单复核 / 连拒清仓三条路径都能让净敞口 0→非 0 却绕过
-         `_run_start`。此前 `_settle_positions` 静默 return，L1-L3 失效且
+      —— 对账删仓这条路径能让净敞口 0→非 0 却绕过 `_run_start`
+         （卡单复核/连拒清仓已随 2026-09-17 兜底拆除）。此前
+         `_settle_positions` 静默 return，L1-L3 失效且
          **不写事件不发告警**。现在写 `run_state_missing_runtime` 事件 +
          发 severe 告警 `run_missing_anchor`（只告警、不猜锚建 run）。
          同一次异常只报一次（不刷屏），状态恢复正常后通知锁复位。
 
-  [4] CLOSE 冷却拦截写 `close_retry_skipped` 事件
-      —— 原先直接 return、事件日志里完全看不见"这根 bar 为什么没补单"。
-         注意它**不是** `order_rejected`：冷却期内没有向柜台发过任何委托，
-         混进去会让拒单统计与 R13 报撤单计数失真。
+  [4] CLOSE 冷却已整体删除（2026-09-17 拍板）
+      —— 被拒后无冷却拦截，次根 K 线照常再报；每次被拒都写 order_rejected
+         留痕，引擎不做任何自动兜底。
 
-  [5]：`_read_engine_switch` 必须返回 `run` / `close_cooldown`
-      —— 前端 `app.js:7458-7459` 读这两个字段拼 tooltip（本段风控锚/止损/止盈、
-         平仓冷却剩余），而 API 链路走的是本函数，不返回就是永久死数据。
+  [5]：`_read_engine_switch` 必须返回 `run`
+      —— 前端 tooltip 读该字段拼本段风控锚/止损/止盈；API 链路走本函数，
+         不返回就是永久死数据。（close_cooldown 已随冷却机制拆除。）
 
   [6] 已删符号不得有任何「活引用」（AST 级）
       —— 一期漏改的形态就是"代码删了符号、某个角落还在引用它"，语法上不报错、
@@ -145,14 +143,13 @@ def make_pos(side, volume, price, key, entry_date):
         entry_bar_seq=1, entry_date=entry_date)
 
 
-def make_cfg(**engine_over):
+def make_cfg(**_legacy_engine_over):
     c = copy.deepcopy(DEFAULT_CONFIG)
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     c["exit_params"].update({"use_atr": False,
                              "use_trailing": False})
-    c["engine"]["close_retry_bars"] = 1
-    c["engine"]["close_max_streak"] = 2
-    c["engine"].update(engine_over)
+    # 2026-09-17 拍板：EngineConfig（冷却/连拒时序）整体删除，
+    # 旧的 engine 覆盖参数一并废弃（保留 **kwargs 兼容旧调用点签名）。
     return TradingConfig.from_dict(c)
 
 
@@ -216,7 +213,7 @@ def ev_count(eng, kind):
 
 
 # ════════════════════════════════════════════════════════════════
-print("\n[1] 成功 CLOSE 后 _close_fail_streak 必须归零（语义是「连续」不是「累计」）")
+print("\n[1] CLOSE 被拒 → 簿不动留痕；成功 CLOSE → 正常平仓（无连拒计数）")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("streak") as tmp:
     spec = Instrument(None, _IF)
@@ -226,13 +223,12 @@ with tmp_dir("streak") as tmp:
     eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
     check("[1a] 开仓后 RUNNING", eng.account_state(), AccountState.RUNNING)
     eng.on_bar(adverse(3000, D2))                     # CLOSE#1 → 被拒
-    check("[1b] 首次被拒后 streak=1", eng._close_fail_streak, 1)
+    check("[1b] 被拒后簿仍 1 笔（引擎不偷偷兜底）", len(eng.positions), 1)
+    # 【2026-09-17 拍板】连拒计数/冷却随自动兜底拆除，不再有 streak 概念
+    check("[1c] 引擎已无连拒计数属性", hasattr(eng, "_close_fail_streak"), False)
     eng.on_bar(adverse(4000, D2))                     # CLOSE#2 → 成交
-    check("[1c] 平仓成交后净敞口归零", eng.positions.net_volume(), 0)
-    check("[1d] ★ 成功 CLOSE 后 streak 归零（否则会跨 run 累积误清真仓）",
-          eng._close_fail_streak, 0)
-    check("[1e] status.close_cooldown.streak 同步可见",
-          eng.auto_order_status()["close_cooldown"]["streak"], 0)
+    check("[1d] 平仓成交后净敞口归零", eng.positions.net_volume(), 0)
+    check("[1e] account_state FLAT", eng.account_state(), AccountState.FLAT)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -320,28 +316,24 @@ with tmp_dir("runanchor") as tmp:
 
 
 # ════════════════════════════════════════════════════════════════
-print("\n[4] CLOSE 冷却拦截必须写事件（且不算拒单）")
+print("\n[4] CLOSE 冷却已删除 —— 被拒后无拦截，次根 K 线照常再报")
 # ════════════════════════════════════════════════════════════════
 with tmp_dir("cooldown") as tmp:
     spec = Instrument(None, _IF)
-    eng, evp = build(tmp, AlwaysRejectCloseBroker(spec, {"sim_equity": 1_000_000.0}),
-                     close_retry_bars=2, close_max_streak=5)
+    eng, evp = build(tmp, AlwaysRejectCloseBroker(spec, {"sim_equity": 1_000_000.0}))
     eng.on_bar(bar(1000, D1 + " 09:40", P0))
     eng.on_signal(sig("X|buy|1", D1 + " 09:40", 1000, P0, True))
-    eng.on_bar(adverse(3000, D2))            # CLOSE#1 → 被拒 → 进入冷却
-    check_true("[4a] 进入 CLOSE 冷却", eng._in_close_cooldown())
-    n_rej = ev_count(eng, "order_rejected")
-    # 修正：原写法是 `check(..., eng.broker.order_seq(), eng.broker.order_seq())`
-    # —— 同一次调用的返回值自己比自己，**恒通过**，根本护不住"冷却期内没发单"。
-    # 现在先取快照，再过 bar，再比。
+    eng.on_bar(adverse(3000, D2))            # CLOSE#1 → 被拒（无冷却概念）
+    check("[4a] 引擎已无冷却机制", hasattr(eng, "_in_close_cooldown"), False)
+    # 先取快照，再过 bar，再比（沿用原段防恒通过写法的教训）。
     seq_before = eng.broker.order_seq()
-    eng.on_bar(adverse(4000, D2))            # 冷却期内 → 跳过报单
-    check_true("[4b] ★ 冷却拦截写了 close_retry_skipped 事件",
-               ev_count(eng, "close_retry_skipped") >= 1)
-    check("[4c] 冷却拦截不算拒单（order_rejected 条数不变）",
-          ev_count(eng, "order_rejected"), n_rej)
-    check("[4d] 冷却期内未向柜台发单（报单序号未变）",
-          eng.broker.order_seq(), seq_before)
+    eng.on_bar(adverse(4000, D2))            # 次根 K 线 → 照常再报（被再拒）
+    check_true("[4b] 不写 close_retry_skipped 事件（机制已删）",
+               ev_count(eng, "close_retry_skipped") == 0)
+    check("[4c] 次根 K 线确实再次向柜台发单（报单序号前进）",
+          eng.broker.order_seq() > seq_before, True)
+    check("[4d] 簿仍 1 笔（每次被拒如实留痕、引擎不偷偷兜底）",
+          len(eng.positions), 1)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -366,11 +358,10 @@ with tmp_dir("apifields") as tmp:
                    type(res).__name__)
         check_true("[5b] ★ 返回含 run（前端 tooltip 的风控锚/止损/止盈）",
                    "run" in res, sorted(res.keys()) if res else None)
-        check_true("[5c] ★ 返回含 close_cooldown（平仓冷却剩余）",
-                   "close_cooldown" in res, sorted(res.keys()) if res else None)
-        cool = (res or {}).get("close_cooldown") or {}
-        check_true("[5d] close_cooldown 结构与前端读取一致（active/bars_left）",
-                   "active" in cool and "bars_left" in cool, cool)
+        # 【2026-09-17 拍板】close_cooldown 字段已随冷却机制拆除，不再返回
+        check_true("[5c] 返回已不含 close_cooldown（冷却已删）",
+                   "close_cooldown" not in (res or {}),
+                   sorted(res.keys()) if res else None)
         run_v = (res or {}).get("run")
         check_true("[5e] 有净敞口时 run 非空且含 anchor/stop/tp",
                    isinstance(run_v, dict)

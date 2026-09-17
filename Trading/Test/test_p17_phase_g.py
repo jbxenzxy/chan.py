@@ -307,161 +307,57 @@ check("3.4 meta.intent 记录 close", o.meta.get("intent"), "close")
 # ════════════════════════════════════════════════════════════════
 # [4] engine._check_close_stuck G2 集成
 # ════════════════════════════════════════════════════════════════
-print("── [4] engine._check_close_stuck G2 集成 ──")
+# [4] 卡单复核已删除（2026-09-17 拍板）—— 漂移护栏
+# ════════════════════════════════════════════════════════════════
+print("── [4] 卡单复核 _check_close_stuck 已整体删除 ──")
 
 
 class GMockBroker(DryRunBroker):
-    """可注入 trade_confirmed / real_position / cancel_pending 的 mock。"""
+    """原 [4] 段的受控 broker：可指定 trade_confirmed 返回值与 cancel_pending 调用记录。"""
 
     def __init__(self, spec, tc_value=False, real_longs=0, real_shorts=0,
                  cp_return=0):
         super().__init__(spec, {"sim_equity": 1_000_000.0})
         self._tc_value = tc_value
-        self.real_longs = real_longs
-        self.real_shorts = real_shorts
+        self._real_longs = real_longs
+        self._real_shorts = real_shorts
         self.cp_return = cp_return
         self.cp_calls = []
-        self.name = "gmock"
 
     def trade_confirmed(self, intent, signal_key: str = "") -> bool:
         return self._tc_value
 
     def real_position(self, side):
-        return self.real_longs if side is Side.LONG else self.real_shorts
+        from Trading.Infra.Records import Side as _Side
+        return self._real_longs if side is _Side.LONG else self._real_shorts
 
     def cancel_pending(self, signal_key: str = "") -> int:
         self.cp_calls.append(signal_key)
         return self.cp_return
 
 
-def make_engine(tmpdir, *, broker=None):
+def make_engine(td, broker=None):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    # 同向笔数上限已在删除（D2）：簿容器不限容量，同向可叠加
     spec = Instrument(None, _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
-    entry = EntryPolicy({"reverse_on_opposite_signal": False})
+    entry = EntryPolicy({})
     exitp = LayeredExitPolicy()
-    store = Store(os.path.join(tmpdir, "state.db"))
-    ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
+    store = Store(os.path.join(td, "state.db"))
+    ev = EventLog(os.path.join(td, "events.jsonl"), echo=False, echo_kinds=None)
     return TradingEngine(cfg, broker, entry, exitp, store, ev)
 
-
-def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
-    return Bar(date=date, open=close, high=close, low=close, close=close,
-               timestamp=ts, vol=0)
-
-
-def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST"):
-    from Trading.Infra.Records import ExitPlan
-    from Trading.Infra.Clock import now_cn
-    if side is Side.LONG:
-        tp = entry_price + 5.0
-        stop = entry_price - 10.0
-    else:
-        tp = entry_price - 5.0
-        stop = entry_price + 10.0
-    return Position(
-        symbol="KQ.m@CFFEX.IF", side=side, volume=vol,
-        entry_price=entry_price, entry_at=now_cn(),
-        entry_bar_ts=4000 + entry_bar_seq * 100,
-        entry_bar_seq=entry_bar_seq,
-        signal_key=signal_key, open_order_id="manual",
-        exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
-                           params={"take_profit_points": 5.0,
-                                   "stop_loss_points": 10.0}),
-        )
-
-
-def read_events(eng, kinds=None, tail_n=200):
-    eng.ev.flush()
-    out = []
-    try:
-        with open(eng.ev.path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-        for line in lines[-tail_n:]:
-            try:
-                rec = json.loads(line)
-                if kinds is None or rec.get("kind") in kinds:
-                    out.append(rec)
-            except Exception:
-                continue
-    except FileNotFoundError:
-        pass
-    return out
 
 with tmp_dir() as td:
     mb = GMockBroker(Instrument(None, _IF), tc_value=False, real_longs=0, cp_return=2)
     eng = make_engine(td, broker=mb)
-    snap = make_position(Side.LONG, 1, 4545.0, 1, signal_key="ghost-g2").to_dict()
-    eng._close_in_flight = {
-        "signal_key": "g2-sig",
-        "target_signal_key": "ghost-g2",
-        "target_side": "LONG",
-        "target_snapshot": snap,
-        "submit_bar_ts": 0,
-        "submit_bar_seq": eng.bars_seen - 5,
-    }
-    eng._check_close_stuck(make_bar())
-    check("4.1 confirmed=False → 调了 cancel_pending", mb.cp_calls, ["g2-sig"])
-    evs = read_events(eng, kinds={"close_pending_cancelled"})
-    check("4.2 cancelled>0 → 写 close_pending_cancelled", len(evs), 1)
-    check("4.3 事件带 cancelled=2", evs[0].get("cancelled") if evs else None, 2)
-    check("4.4 撤单后仍走 real_position 对账（real=0 → recovered）",
-          eng._close_in_flight, None)
-    evs2 = read_events(eng, kinds={"close_stuck_recovered"})
-    check("4.5 写 close_stuck_recovered", len(evs2), 1)
-
-with tmp_dir() as td:
-    mb = GMockBroker(Instrument(None, _IF), tc_value=False, real_longs=0, cp_return=0)
-    eng = make_engine(td, broker=mb)
-    eng._close_in_flight = {
-        "signal_key": "g2-sig-b", "target_signal_key": "t",
-        "target_side": "LONG", "target_snapshot": None,
-        "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
-    }
-    eng._check_close_stuck(make_bar())
-    check("4.6 cancelled=0 → 不写 close_pending_cancelled",
-          len(read_events(eng, kinds={"close_pending_cancelled"})), 0)
-
-with tmp_dir() as td:
-    mb = GMockBroker(Instrument(None, _IF), tc_value=True, cp_return=2)
-    eng = make_engine(td, broker=mb)
-    eng._close_in_flight = {
-        "signal_key": "g2-sig-c", "target_signal_key": "t",
-        "target_side": "LONG", "target_snapshot": None,
-        "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
-    }
-    eng._check_close_stuck(make_bar())
-    check("4.7 confirmed=True → 不调 cancel_pending", mb.cp_calls, [])
-    check("4.8 confirmed=True → 清 in-flight", eng._close_in_flight, None)
-
-with tmp_dir() as td:
-    # broker 无 cancel_pending（老式 broker）→ 不炸，走原 F1 逻辑
-    # （BareBroker 不继承 DryRunBroker，getattr(cancel_pending) 为 None）
-    class BareBroker:
-        name = "bare"
-
-        def trade_confirmed(self, intent, signal_key: str = "") -> bool:
-            return False
-
-        def real_position(self, side):
-            return 0
-        # 故意不定义 cancel_pending
-
-    eng = make_engine(td, broker=BareBroker())
-    eng._close_in_flight = {
-        "signal_key": "g2-sig-d", "target_signal_key": "t",
-        "target_side": "LONG", "target_snapshot": None,
-        "submit_bar_ts": 0, "submit_bar_seq": eng.bars_seen - 5,
-    }
-    eng._check_close_stuck(make_bar())  # 不应抛异常
-    check("4.9 无 cancel_pending → 不炸", True, True)
-    check("4.10 仍走 F1 recovered", eng._close_in_flight, None)
-
-
-# ════════════════════════════════════════════════════════════════
-# [5] base / dry_run 接口默认值
+    check("4.1 引擎无 _check_close_stuck", hasattr(eng, "_check_close_stuck"), False)
+    check("4.2 引擎无 _close_in_flight", hasattr(eng, "_close_in_flight"), False)
+    check("4.3 引擎无 _validate_close_in_flight",
+          hasattr(eng, "_validate_close_in_flight"), False)
+    # 机制虽删，broker 侧 cancel_pending / trade_confirmed 接口保留（诊断用途）
+    check("4.4 broker.cancel_pending 接口保留", callable(mb.cancel_pending), True)
+    check("4.5 broker.trade_confirmed 接口保留", callable(mb.trade_confirmed), True)
 # ════════════════════════════════════════════════════════════════
 print("── [5] base / dry_run cancel_pending 默认值 ──")
 

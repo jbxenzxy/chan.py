@@ -1,11 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-test_engine_config.py — Step 2.2：引擎时序常量归一到 EngineConfig
+test_engine_config.py — 引擎时序配置：自动兜底拆除后的形态
 ====================================================================
-验证点（对应可行性分析拍板结论 E1 + F1 + G2）：
-  [1] EngineConfig 字段与默认值（5 / 20 / 5，SSOT 唯一声明处）
-  [2] TradingConfig.engine 默认工厂 + 显式覆盖 + extra="forbid" 拒未知字段
-  [3] 引擎接线：Engine.__init__ 从 cfg.engine 读值，属性名不变
+背景（2026-09-17 拍板：例外 → 弹窗 → 用户干预，引擎不自动兜底）：
+  冷却重试 / 连拒清幻影仓 / 卡单复核三套机制整体删除，原 EngineConfig
+  （close_retry_bars / close_max_streak / close_stuck_bars）随之删除。
+
+验证点：
+  [1] EngineConfig 已删除（类 + __all__ 导出 + TradingConfig.engine 字段）
+  [2] 未知键仍被拒（extra="forbid" 语义不受影响）
+  [3] 引擎不再持有旧时序属性（_close_retry_bars / _close_max_streak /
+      _close_stuck_bars 均不存在）
   [4] PositionBook 容量（D2：笔数上限已删除）+ 旧配置键丢弃（D17）
   [5] Period.SESSION_SECS 收口（原 main.py 硬编码 4.5h）
   [6] bars_per_day(SESSION_SECS) 与四周期对账
@@ -18,8 +23,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from Trading.Config import (DEFAULT_CONFIG, EngineConfig, TradingConfig,
-                            default_config)
+from Trading.Config import DEFAULT_CONFIG, TradingConfig, default_config
 
 _checks = {"pass": 0, "fail": 0}
 
@@ -31,40 +35,27 @@ def check(name, got, expected):
         "PASS" if ok else "FAIL", name, got, expected))
 
 
-# ═══ [1] EngineConfig 字段与默认值 ═══
-print("\n[1] EngineConfig 默认值（SSOT：Engine/Reconcile 不再自带兜底数字）")
-e = EngineConfig()
-check("close_retry_bars 默认 5", e.close_retry_bars, 5)
-check("close_max_streak 默认 20", e.close_max_streak, 20)
-check("close_stuck_bars 默认 5", e.close_stuck_bars, 5)
-try:
-    EngineConfig(unknown_field=1)
-    check("extra='forbid' 拒未知字段", "no_raise", "raise")
-except Exception:
-    check("extra='forbid' 拒未知字段", "raise", "raise")
+# ═══ [1] EngineConfig 已整体删除 ═══
+print("\n[1] EngineConfig 已删除（冷却/连拒/卡单三套兜底随之移除）")
+import Trading.Config as _cfgmod
+check("Config 模块已无 EngineConfig 类",
+      hasattr(_cfgmod, "EngineConfig"), False)
+check("TradingConfig 已无 engine 字段",
+      "engine" in TradingConfig.model_fields, False)
+check("default_config() 已无 engine 键",
+      hasattr(default_config(), "engine"), False)
 
-# ═══ [2] TradingConfig.engine 接线 ═══
-print("\n[2] TradingConfig.engine 字段")
-cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-check("默认工厂产出 EngineConfig",
-      type(cfg.engine).__name__, "EngineConfig")
-check("默认值透传", cfg.engine.close_retry_bars, 5)
-cfg2 = TradingConfig.from_dict(dict(
-    DEFAULT_CONFIG, engine={"close_retry_bars": 9}))
-check("显式覆盖 close_retry_bars=9", cfg2.engine.close_retry_bars, 9)
-check("覆盖后其余字段保持默认", cfg2.engine.close_max_streak, 20)
-check("覆盖后 close_max_streak 与 unlock 独立",
-      cfg2.engine.close_stuck_bars, 5)
+# ═══ [2] extra="forbid" 语义不受影响 ═══
+print("\n[2] 未知键仍被拒（extra='forbid'）")
 try:
-    TradingConfig.from_dict(dict(DEFAULT_CONFIG, engine={"bogus": 1}))
-    check("engine 未知键报错（extra=forbid）", "no_raise", "raise")
+    TradingConfig.from_dict(dict(
+        DEFAULT_CONFIG, engine={"close_retry_bars": 9}))
+    check("engine 键已被删，作为未知键应报错", "no_raise", "raise")
 except Exception:
-    check("engine 未知键报错（extra=forbid）", "raise", "raise")
-check("default_config() 也含 engine",
-      type(default_config().engine).__name__, "EngineConfig")
+    check("engine 键已被删，作为未知键应报错", "raise", "raise")
 
-# ═══ [3] 引擎接线（照 test_p12 的 build_engine 模式，dry_run 不起网络）═══
-print("\n[3] Engine.__init__ 从 cfg.engine 读值，属性名不变")
+# ═══ [3] 引擎不再持有旧时序属性 ═══
+print("\n[3] 引擎实例不持有旧时序属性")
 import tempfile
 from Trading import Broker  # noqa: F401,E402  注册 dry_run
 from Trading.Broker.DryRun import DryRunBroker
@@ -90,25 +81,14 @@ def build_engine(cfg):
 
 
 eng = build_engine(TradingConfig.from_dict(DEFAULT_CONFIG))
-check("engine._close_retry_bars == cfg.engine.close_retry_bars",
-      eng._close_retry_bars, 5)
-check("engine._close_max_streak == cfg.engine.close_max_streak",
-      eng._close_max_streak, 20)
-check("engine._close_stuck_bars == cfg.engine.close_stuck_bars",
-      eng._close_stuck_bars, 5)
-cfg9 = TradingConfig.from_dict(dict(
-    DEFAULT_CONFIG, engine={"close_retry_bars": 9,
-                            "close_max_streak": 40,
-                            "close_stuck_bars": 7}))
-eng9 = build_engine(cfg9)
-check("覆盖后引擎读到 9/40/7",
-      (eng9._close_retry_bars, eng9._close_max_streak,
-       eng9._close_stuck_bars), (9, 40, 7))
+for _attr in ("_close_retry_bars", "_close_max_streak", "_close_stuck_bars",
+              "_close_fail_streak", "_close_in_flight", "_last_close_failed_bar_seq"):
+    check("engine 已无 {}".format(_attr), hasattr(eng, _attr), False)
 
 # ═══ [4] PositionBook 容量 + 旧配置键丢弃（D2 / D17）═══
 print("\n[4] PositionBook 容量（D2：max_open_positions 已删）+ 旧配置键丢弃（D17）")
-from Trading.Engine.PositionBook import PositionBook, PositionBookError
-from Trading.Config import RiskConfig
+from Trading.Engine.PositionBook import PositionBook, PositionBookError  # noqa: F401,E402
+from Trading.Config import RiskConfig  # noqa: E402
 check("PositionBook.DEFAULT_MAX 为 None（D2 后容器不限容量）",
       PositionBook.DEFAULT_MAX, None)
 check("无参构造 → max_positions=None", PositionBook().max_positions, None)
@@ -131,13 +111,13 @@ check("已删键被记录进 dropped_legacy_keys（D17，含 max_volume）",
 
 # ═══ [5] SESSION_SECS 收口 ═══
 print("\n[5] Period.SESSION_SECS（原 main.py 硬编码 4.5h）")
-from Trading.Infra.Period import bars_per_day
-from Trading.Infra.Clock import SESSION_SECS
+from Trading.Infra.Period import bars_per_day  # noqa: E402
+from Trading.Infra.Clock import SESSION_SECS  # noqa: E402
 check("SESSION_SECS == 4.5h", SESSION_SECS, 4.5 * 3600)
 
 # ═══ [6] bars_per_day 四周期对账 ═══
 print("\n[6] bars_per_day(SESSION_SECS) 四周期")
-from Trading.Infra.Period import FREQ_SEC
+from Trading.Infra.Period import FREQ_SEC  # noqa: E402
 for freq, secs in FREQ_SEC.items():
     expect = int(SESSION_SECS // secs)
     check("freq={} → {} 根/交易日".format(freq, expect),

@@ -7741,7 +7741,6 @@
                 const aoAlerts = (data.auto_order && Array.isArray(data.auto_order.alerts))
                     ? data.auto_order.alerts : [];
                 const aoRun = (data.auto_order && data.auto_order.run) || null;
-                const aoCool = (data.auto_order && data.auto_order.close_cooldown) || null;
                 const wrap = document.getElementById('auto-order-wrap');
                 if (wrap && !wrap.classList.contains('disabled')) {
                     // 置灰时保留"该品种不支持自动下单"的悬停说明，
@@ -7764,11 +7763,6 @@
                             + '，止损 ' + fmtPx(aoRun.stop)
                             + '，止盈 ' + fmtPx(aoRun.tp)
                             + '（' + aoRun.name + '）';
-                    }
-                    // CLOSE 冷却：被拒后 N 根 bar 内不补单 —— 不显示的话前端只能看到
-                    // "点了没动静"，会被误判成引擎卡死。
-                    if (aoCool && aoCool.active) {
-                        tip += '；平仓冷却中（剩 ' + aoCool.bars_left + ' 根 bar 后重试）';
                     }
                     if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';
                     if (data.broker) tip += '，broker=' + data.broker;

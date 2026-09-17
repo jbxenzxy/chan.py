@@ -408,18 +408,27 @@ with tmp_dir() as tmp:
 
     engine.shutdown_and_lock_all()
     check("[5c] 昨仓离场被拒：簿仍 1 笔", len(engine.positions), 1)
-    check("[5c2] 进入 CLOSE 冷却", engine._in_close_cooldown(), True)
+    # 【2026-09-17 拍板】被拒 → 分类弹窗 + 引擎停手，不再有冷却重试兜底
+    check("[5c2] 关闭终局结论弹窗已入队（仍有残留，severe）",
+          any(a.get("code") == "shutdown_result_residual"
+              for a in engine.auto_order_status()["alerts"]), True)
+    check("[5c3] 引擎已无冷却机制（自动兜底拆除）",
+          hasattr(engine, "_in_close_cooldown"), False)
 
-    engine.on_bar(make_bar(2000))          # 仅 1 根 → 仍在冷却
-    check("[5d] 冷却中：簿仍 1 笔（未重试）", len(engine.positions), 1)
-    check("[5d2] 冷却中离场报单仍只有首轮那 1 笔",
-          len([o for o in broker.orders if o.meta.get("is_exit")]), 1)
+    # 无冷却 → 下一根 K 线 auto_order_off_retry 正常离场路径立即补平
+    # （需求 ⑽：关闭触发的离场被拒后立即再次报单；追价 3 轮由 broker 负责）
+    engine.on_bar(make_bar(2000))
+    check("[5d] 无冷却：下一根 K 线即自动补平", len(engine.positions), 0)
+    check("[5d2] 补平后 account_state FLAT", engine.account_state().value, "flat")
+    check("[5d3] 首轮被拒 + 补平成功 → 共 2 笔离场报单",
+          len([o for o in broker.orders if o.meta.get("is_exit")]), 2)
+    check("[5d4] ⑤ 是 CLOSE → 兑现 1 笔 Trade", len(store.trades()), 1)
+    check("[5d5] 被拒有告警留痕（分类弹窗 / 追价跑满 / 终局结论）",
+          len(engine.auto_order_status()["alerts"]) >= 1, True)
 
-    for i in range(engine._close_retry_bars):
-        engine.on_bar(make_bar(3000 + i))
-    check("[5e] 冷却期满后补平：簿清空", len(engine.positions), 0)
-    check("[5e2] account_state FLAT", engine.account_state().value, "flat")
-    check("[5e3] ⑤ 是 CLOSE → 兑现 1 笔 Trade", len(store.trades()), 1)
+    engine.on_bar(make_bar(3000))
+    check("[5e] 平仓完成后不再新增离场报单",
+          len([o for o in broker.orders if o.meta.get("is_exit")]), 2)
 
 
 # ════════════════════════════════════════════════════════════════

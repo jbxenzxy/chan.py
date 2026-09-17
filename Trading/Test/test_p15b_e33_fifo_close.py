@@ -323,7 +323,7 @@ with tmp_dir() as td:
     check("[1.3c] 空簿：state IDLE", eng._state, EngineState.IDLE)
     check("[1.3d] 空簿：account_state FLAT", eng.account_state(), AccountState.FLAT)
 
-# 1.4 拒单：整段锁仓失败 → 簿不动、无 Trade、写 order_rejected 与冷却计数
+# 1.4 拒单：整段锁仓失败 → 簿不动、无 Trade、写 order_rejected
 with tmp_dir() as td:
     broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=(1,))
@@ -339,15 +339,13 @@ with tmp_dir() as td:
     check("[1.4c] 拒单：0 条 Trade", len(eng.store.trades()), 0)
     check_true("[1.4d] 拒单：写 order_rejected 事件",
                len(read_events(eng, kinds={"order_rejected"})) >= 1)
-    # ★ ④ 是 **OPEN**（反向开仓），不是 CLOSE → 不进入"CLOSE 冷却"记账。
-    #   冷却只约束 CLOSE，因为只有它会按 bar 反复重发（见 [3]）。
-    check("[1.4e] ④ 被拒属 OPEN → **不**进入 CLOSE 冷却",
-          eng._last_close_failed_bar_seq, 0)
-    check("[1.4f] ④ 被拒 → 连续被拒计数仍 0", eng._close_fail_streak, 0)
-    check("[1.4g] ④ 被拒 → _in_close_cooldown() False",
-          eng._in_close_cooldown(), False)
+    # 【2026-09-17 拍板】冷却记账随自动兜底整体拆除 —— 只留漂移护栏
+    check("[1.4e] 引擎已无冷却/连拒机制属性",
+          (hasattr(eng, "_in_close_cooldown")
+           or hasattr(eng, "_close_fail_streak")
+           or hasattr(eng, "_last_close_failed_bar_seq")), False)
 
-# 1.5 跨日仓离场被拒（⑤ CLOSE）→ **才**进入 CLOSE 冷却记账
+# 1.5 跨日仓离场被拒（⑤ CLOSE）→ 弹窗留痕、引擎停手（无冷却兜底）
 with tmp_dir() as td:
     broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
                           reject_calls=(1,))
@@ -363,13 +361,12 @@ with tmp_dir() as td:
 
     check("[1.5a] ⑤ CLOSE 被拒：簿仍 1 笔", len(eng.positions), 1)
     check("[1.5b] ⑤ CLOSE 被拒：0 条 Trade", len(eng.store.trades()), 0)
-    check("[1.5c] ⑤ CLOSE 被拒 → 进入冷却记账（_last_close_failed_bar_seq）",
-          eng._last_close_failed_bar_seq, 10)
-    check("[1.5d] ⑤ CLOSE 被拒 → 连续被拒计数 = 1", eng._close_fail_streak, 1)
-    check("[1.5e] ⑤ CLOSE 被拒 → _in_close_cooldown() True",
-          eng._in_close_cooldown(), True)
-    check_true("[1.5f] 写 close_retry_cooldown 事件",
-               len(read_events(eng, kinds={"close_retry_cooldown"})) == 1)
+    check("[1.5c] ⑤ CLOSE 被拒 → 不再进入冷却记账（机制已删）",
+          hasattr(eng, "_last_close_failed_bar_seq"), False)
+    check_true("[1.5d] 不写 close_retry_cooldown 事件",
+               len(read_events(eng, kinds={"close_retry_cooldown"})) == 0)
+    check_true("[1.5e] 写 order_rejected 事件（留痕）",
+               len(read_events(eng, kinds={"order_rejected"})) >= 1)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -462,11 +459,11 @@ with tmp_dir() as td:
 
 
 # ════════════════════════════════════════════════════════════════
-# [3] CLOSE 冷却 / 连续被拒兜底
+# [3] 冷却与连拒兜底已删除（2026-09-17 拍板）—— 漂移护栏
 # ════════════════════════════════════════════════════════════════
-print("\n[3] CLOSE 冷却与连续被拒兜底")
+print("\n[3] 冷却与连拒兜底已整体删除")
 
-# 3.1 冷却中：不发单、簿不动
+# 3.1 无冷却：CLOSE 动作每根 K 线都能正常报出（不再被冷却拦截）
 with tmp_dir() as td:
     eng = make_engine(td)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
@@ -475,53 +472,49 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(date="2026-09-01 09:40", close=4555.0)
     eng.bars_seen = 10
     seed_run(eng, side=Side.LONG, anchor=4545.0)
-    # 冷却按**根数**判定：10 - 7 = 3 < close_retry_bars(5) → 冷却中
-    eng._last_close_failed_bar_seq = 7
+    check("3.1a 引擎无 _in_close_cooldown", hasattr(eng, "_in_close_cooldown"), False)
+    check("3.1b 引擎无 _close_cooldown_bars_left",
+          hasattr(eng, "_close_cooldown_bars_left"), False)
+    check("3.1c 引擎无 _close_retry_bars", hasattr(eng, "_close_retry_bars"), False)
     _act = eng._decide_exit(eng.last_bar)
-    check("[3.1a] 冷却期 _decide_exit 仍产出 CLOSE 动作",
+    check("3.1d _decide_exit 产出 CLOSE 动作",
           (_act.intent if _act else None), OrderIntent.CLOSE)
     _o = eng._execute(_act, ref_price=4555.0, bar=eng.last_bar, reason="manual")
-    check("[3.1b] 冷却中 _execute 返回 None（未报单）", _o, None)
-    check("[3.1c] 拒绝原因 = close_cooldown", eng._last_reject, "close_cooldown")
-    check("[3.1d] 簿仍 1 笔", len(eng.positions), 1)
-    check("[3.1e] broker 0 单", len(eng.broker.orders), 0)
-    check("[3.1f] _in_close_cooldown() True", eng._in_close_cooldown(), True)
-    check("[3.1g] 剩余冷却根数 = 5 - 3 = 2", eng._close_cooldown_bars_left(), 2)
+    check("3.1e _execute 直接报单成功（无冷却拦截）", _o is not None, True)
+    check("3.1f 簿清空", eng.positions.is_empty(), True)
 
-# 3.2 force=True 绕过冷却（关闭自动下单的收尾路径用）
+# 3.2 连拒不再清幻影仓：反复 position 类拒单 → 簿不动、只留分类告警
 with tmp_dir() as td:
-    eng = make_engine(td)
+    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
+                          reject_calls=tuple(range(1, 25)),
+                          reject_class=REJECT_POSITION)
+    eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
                                     signal_key="P15B-3-2",
                                     entry_date="2026-08-28"))
     eng.last_bar = make_bar(date="2026-09-01 09:40", close=4555.0)
-    eng.bars_seen = 10
+    eng.bars_seen = 100
     seed_run(eng, side=Side.LONG, anchor=4545.0)
-    eng._last_close_failed_bar_seq = 7
-    _act = eng._decide_exit(eng.last_bar)
-    _o = eng._execute(_act, ref_price=4555.0, bar=eng.last_bar,
-                      reason="auto_order_off", force=True)
-    check("[3.2a] force=True 绕过冷却 → 报单成功", _o is not None, True)
-    check("[3.2b] 簿清空", eng.positions.is_empty(), True)
-    check("[3.2c] 1 条 Trade", len(eng.store.trades()), 1)
-
-def _drive_close_rejects(eng, n):
-    """推进 bar 并反复触发 CLOSE（每轮都绕开冷却），最多 n 轮。"""
-    for _i in range(n):
-        eng.bars_seen += eng._close_retry_bars + 1     # 绕开冷却
+    for _i in range(22):     # 连续 22 轮被拒（远超旧阈值 20）
         _a = eng._decide_exit(eng.last_bar)
         if _a is None:
             break
         eng._execute(_a, ref_price=4555.0, bar=eng.last_bar, reason="manual")
+    check("3.2a 连拒 22 轮 → 簿仍 1 笔（不自动清幻影仓）", len(eng.positions), 1)
+    check_true("3.2b 不写 position_drop 事件",
+               len(read_events(eng, kinds={"position_drop"})) == 0)
+    check_true("3.2c 被拒升级分类告警（ctp_reject_position）",
+               len([a for a in eng._alerts
+                    if a.get("code") == "ctp_reject_position"]) >= 1)
+    _pa = [a for a in eng._alerts if a.get("code") == "ctp_reject_position"]
+    check("3.2d 告警级别 = severe",
+          (_pa[-1].get("level") if _pa else None), "severe")
 
-
-# 3.3 连续被拒到上限（close_max_streak，默认 20）+ 类别=position → position_drop
-#     （只有"平仓量超过持仓量/平昨仓不足"这类拒单才能认定柜台没有该仓）
+# 3.3 price 类连拒同样不清仓（真仓只是价格报不进去）
 with tmp_dir() as td:
-    _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
     broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
-                          reject_calls=tuple(range(1, _streak + 5)),
-                          reject_class=REJECT_POSITION)
+                          reject_calls=tuple(range(1, 25)),
+                          reject_class=REJECT_PRICE)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
                                     signal_key="P15B-3-3",
@@ -529,53 +522,16 @@ with tmp_dir() as td:
     eng.last_bar = make_bar(date="2026-09-01 09:40", close=4555.0)
     eng.bars_seen = 100
     seed_run(eng, side=Side.LONG, anchor=4545.0)
-    check("[3.3a-0] close_max_streak 阈值 = 20", _streak, 20)
-    _drive_close_rejects(eng, _streak + 2)
-    check("[3.3a] 连续被拒达上限 → 该仓从簿中清除（判定为柜台不存在）",
-          len(eng.positions), 0)
-    check_true("[3.3b] 写 position_drop 事件",
-               len(read_events(eng, kinds={"position_drop"})) == 1)
-    _pd = read_events(eng, kinds={"position_drop"})
-    check("[3.3c] position_drop 原因 = close_repeatedly_rejected",
-          (_pd[-1].get("reason") if _pd else None), "close_repeatedly_rejected")
-    check_true("[3.3d] 升级为告警（D11）", len(eng._alerts) >= 1)
-    check("[3.3e] 告警码 = close_repeatedly_rejected",
-          (eng._alerts[-1].get("code") if eng._alerts else None),
-          "close_repeatedly_rejected")
+    for _i in range(22):
+        _a = eng._decide_exit(eng.last_bar)
+        if _a is None:
+            break
+        eng._execute(_a, ref_price=4555.0, bar=eng.last_bar, reason="manual")
+    check("3.3a price 类连拒 → 簿仍 1 笔", len(eng.positions), 1)
+    check_true("3.3b 不写 position_drop / close_streak_not_cleared 事件",
+               len(read_events(eng, kinds={"position_drop",
+                                           "close_streak_not_cleared"})) == 0)
 
-# 3.4 反例（补类别门槛）：连拒达上限但类别 = price（FOK 全撤/涨跌停）
-#     → **不得**清仓。仓是真的，只是价格报不进去；清掉就账实不符。
-#     引擎发 warn 级 `close_streak_not_phantom` + 事件 `close_streak_not_cleared`。
-with tmp_dir() as td:
-    _streak = TradingConfig.from_dict(DEFAULT_CONFIG).engine.close_max_streak
-    broker = RejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
-                          reject_calls=tuple(range(1, _streak + 5)),
-                          reject_class=REJECT_PRICE)
-    eng = make_engine(td, broker=broker)
-    eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
-                                    signal_key="P15B-3-4",
-                                    entry_date="2026-08-28"))
-    eng.last_bar = make_bar(date="2026-09-01 09:40", close=4555.0)
-    eng.bars_seen = 100
-    seed_run(eng, side=Side.LONG, anchor=4545.0)
-    _drive_close_rejects(eng, _streak)
-    check("[3.4a] 非 position 类连拒达上限 → 簿**仍 1 笔**（不误删真仓）",
-          len(eng.positions), 1)
-    check_true("[3.4b] **不**写 position_drop 事件",
-               len(read_events(eng, kinds={"position_drop"})) == 0)
-    check_true("[3.4c] 写 close_streak_not_cleared 事件（留痕）",
-               len(read_events(eng, kinds={"close_streak_not_cleared"})) >= 1)
-    _ns = read_events(eng, kinds={"close_streak_not_cleared"})
-    check("[3.4d] 事件 reason = reject_class_not_position",
-          (_ns[-1].get("reason") if _ns else None),
-          "reject_class_not_position")
-    check("[3.4e] 告警码 = close_streak_not_phantom（warn 级，非 severe）",
-          (eng._alerts[-1].get("code") if eng._alerts else None),
-          "close_streak_not_phantom")
-    check("[3.4f] 告警级别 = warn",
-          (eng._alerts[-1].get("level") if eng._alerts else None), "warn")
-    check_true("[3.4g] 连拒计数已归零（不污染下次 position 类判定）",
-               eng._close_fail_streak == 0)
 
 
 # ════════════════════════════════════════════════════════════════

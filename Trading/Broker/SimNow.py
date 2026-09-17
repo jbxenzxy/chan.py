@@ -1485,9 +1485,8 @@ class SimNowBroker(Broker):
     def cancel_pending(self, signal_key: str = "") -> int:
         """撤掉该 signal_key 下所有未终态的在途委托，返回撤单请求数。
 
-        引擎在 5-bar 卡单复核 trade_confirmed=False 时调用：先撤在途单，
-        再按真实持仓修正 —— 防止「重建 portfolio 后挂单又成交」的双重平仓。
-        已 FINISHED 的单跳过；api 不可用 / 无索引 / 全部已终态 → 0。
+        先撤在途单、供调用方按真实持仓修正 —— 防止「挂单后又成交」的
+        双重平仓。已 FINISHED 的单跳过；api 不可用 / 无索引 / 全部已终态 → 0。
         """
         if self._api is None or not signal_key:
             return 0
