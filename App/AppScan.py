@@ -106,6 +106,7 @@ def scan_skip_count(scan_token=None):
     with sess.lock:
         return len(sess.skip_log)
 
+# 已删 _scan_lock
 # 它从未真正生效：① API 进程没有任何路由调用 scan_one（FrontAPI 只有
 # submit / status / cancel 三个批量入口）；② 批量路径的 scan_one 跑在
 # ProcessPool worker 内，每个 worker 串行取任务、且每个进程各持一份

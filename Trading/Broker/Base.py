@@ -198,7 +198,7 @@ class Broker(ABC):
     #   （大量单测这么干）不必调 super().__init__ 也能拿到 state。
     _state: Optional["Instrument"] = None
 
-    # ──（O-2/O-3）：broker → Engine 告警回流 ──
+    # ── （O-2/O-3）：broker → Engine 告警回流 ──
     # broker 侧的 instrument 故障（行情超时 / nan / 与配置不一致）原来只写
     # logging，D11 前端完全看不到。现在 broker 用 notify() 暂存进本队列，
     # Engine 每根 bar 调 drain_alerts() 取走并转手 Engine.alert（D11 通道）。

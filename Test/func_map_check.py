@@ -67,7 +67,7 @@ TARGET_FUNCS = {
 
     # ── 消费侧：指标计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：周期/日期/代码工具（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：周期/日期/代码 工具（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 
     # ── 消费侧：缠论结构计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
 

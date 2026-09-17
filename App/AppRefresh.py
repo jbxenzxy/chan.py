@@ -35,6 +35,7 @@ log = get_logger(__name__)
 # 下是原子的；遍历一律走 app_data.names_snapshot()。
 _stock_names_cache = app_data.names_cache
 
+# 已删 _pe_ttm_cache = app_data.pe_cache
 #          _index_belong_cache = app_data.belong_cache
 # 两条都是死别名（本模块零引用）。把 PE/归属表的读写全部收进
 # app_data.update_pe_ttm() / pe_snapshot() / belong_snapshot() 之后，这两

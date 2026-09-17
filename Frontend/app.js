@@ -5179,7 +5179,7 @@
         }
 
         // 实际执行扫描（由对话框确认后调用）
-        // 辅助：市场分布摘要（上海/深圳/北京/香港计数），fx_d / fangliang / bsp 共用
+        // 辅助：市场分布摘要（上海/深圳/北京/香港 计数），fx_d / fangliang / bsp 共用
         function _scanMarketSummaryHtml(results) {
             var shCount = 0, szCount = 0, bjCount = 0, hkCount = 0;
             for (var i = 0; i < results.length; i++) {

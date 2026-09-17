@@ -539,7 +539,7 @@ class BrokerConfig(BaseModel):
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
-    # ──（D20 · A′）：合约参数自动获取开关──
+    # ── （D20 · A′）：合约参数自动获取开关──
     #   **没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
     #   需求方明确否决）：
     #     strict（默认）：实盘必须从行情取到并通过校验 price_tick / volume_multiple /

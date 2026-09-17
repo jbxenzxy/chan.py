@@ -142,7 +142,7 @@ COMPONENTS = [
     # 它扫得出问题，但没人跑它，等于没有（审计发现的覆盖面盲区之一）。
     ("lock_completeness",
      [sys.executable, os.path.join("Test", "test_lock_completeness.py")]),
-    # ──补注册（守护覆盖面补齐）──────────────
+    # ── 补注册（守护覆盖面补齐）──────────────
     # 这三个用例此前**写完却没进门禁**——与 lock_completeness 同款盲区：
     # 扫得出问题，但没人跑它，等于没有。三者当前均为「通过」态，可直接
     # 接入 CI；语义与门禁一致（失败非 0 退出）。
@@ -152,7 +152,7 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_user_store_rmw.py")]),
     ("repro_n3_scan_leak",
      [sys.executable, os.path.join("Test", "repro_n3_scan_session_leak.py")]),
-    # ──补注册 · P1 优先级三条守护（缺口）────
+    # ── 补注册 · P1 优先级三条守护（缺口）────
     # 这三条都经「变异测试」验证过有效性：把各自防范的缺陷人为塞回去后
     # 均会变红（G11 摘守卫→5 红、G5 丢文件锁→红、G1 去 LRU 上限→2 红），
     # 不是「跑得绿但拦不住」的摆设用例。

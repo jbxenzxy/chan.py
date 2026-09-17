@@ -697,7 +697,7 @@ with tmp_dir() as tmp:
         AT._STATE_FILE = orig_state_file
         AT.AppTrader._load_cfg = staticmethod(orig_load_cfg)
 
-# [9x] 品种**前置检查出口**（用户拍板「K线图 vs 自动下单解耦」配套）：
+# [9x] 品种**前置检查出口**（用户拍板「K线图 vs 自动下单 解耦」配套）：
 #   AppTrader.check_symbol_allowed 是前端开关的**前置提示出口**（前端拿到
 #   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
 #   **同源**（同一个 Product.assert_product_allowed）——否则会出现

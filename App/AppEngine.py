@@ -211,6 +211,7 @@ from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 # 区域 2 · 数据委托层
 # ═══════════════════════════════════════════════════════════════════════
 
+# 已删 _stock_names_cache = app_data.names_cache
 # 死别名——本模块零引用。它不是"无害的一行赋值"：它把**共享可变
 # 容器**挂在模块级名字上，任何人照着写一句 `_stock_names_cache.keys()` 就
 # 绕过 app_data 的锁直接全表遍历（指导书形态②）。已改为按需调用
@@ -234,6 +235,7 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 # ============================================================
 # PE-TTM / 指数归属缓存（实现位于 App/AppData.py）
 # ============================================================
+# 已删 _pe_ttm_cache = app_data.pe_cache
 #          _index_belong_cache = app_data.belong_cache
 # 两条都是死别名（本模块零引用）。删它们的理由同上面的
 # _stock_names_cache——不是清理无用代码，是**拆掉一个指向共享容器的公开
@@ -316,6 +318,7 @@ _stocks_cache_lock = app_data.stocks_cache_lock            # 保护缓存的并�
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
 # 扫描时：有买点才保留缓存，否则释放
 
+# 已删 _stock_analysis_lock（原 AppEngine.py:258）
 # 它唯一保护的是 CTdxAPI._tdx_data —— 一个由 set_data() classmethod 写入的
 # 进程级**类变量**。并发请求共用同一个类变量，必然互相覆盖，只能靠串行锁兜。
 # 现改为每请求线程局部注入（DataAPI/TdxAPI.py 的 tdx_data_context），
@@ -358,6 +361,7 @@ SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 FREQ_TO_COL = AppData_FREQ_TO_COL
 
 
+# 已删 _saved_point_times = app_data.saved_point_times
 # 死别名（本模块零引用）。选点时间一律经
 # app_data.get_saved_point_time() 读取。
 

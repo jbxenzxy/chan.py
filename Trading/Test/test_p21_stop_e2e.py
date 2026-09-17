@@ -235,7 +235,7 @@ def main() -> int:
         finally:
             _force_kill(proc)
 
-        # ─────────（CLI 路径守护）─────────
+        # ───────── （CLI 路径守护）─────────
         # 停止后 .stop_request 仍残留磁盘（AppTrader.stop 只写不删）。
         # 若 main.py 不自清，一启动即被看护线程误杀。此处断言：
         # 成功启动且存活 ≥10s（未被残留 flag 误杀），随后可被正常 flag 停止。
