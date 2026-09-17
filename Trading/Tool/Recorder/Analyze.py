@@ -194,7 +194,7 @@ def backtest(signals, klines, take_profit, slippage,
         "wins": len(wins), "losses": len(losses),
         "avg_win_points": round(avg_win, 3),
         "avg_loss_points": round(avg_loss, 3),
-        "profit_factor": (abs(avg_win / avg_loss) if avg_loss else 0.0),
+        "pl_ratio": (abs(avg_win / avg_loss) if avg_loss else 0.0),
         "expectancy_points": (net_sum / len(closed)) if closed else 0.0,
         "total_net_points": round(net_sum, 3),
         "total_net_yuan": round(net_sum * multiplier, 1),
@@ -214,7 +214,7 @@ def print_summary(summary, multiplier):
         summary["win_rate"], summary["wins"], summary["losses"]))
     print("  平均盈利    : {:+.2f} 点   平均亏损: {:+.2f} 点   盈亏比: {:.2f}".format(
         summary["avg_win_points"], summary["avg_loss_points"],
-        summary["profit_factor"]))
+        summary["pl_ratio"]))
     print("  单笔期望    : {:+.3f} 点  ({:+.1f} 元/手)".format(
         summary["expectancy_points"],
         summary["expectancy_points"] * multiplier))

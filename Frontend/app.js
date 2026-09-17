@@ -4569,7 +4569,7 @@
             html += '<div class="stats-hero">';
             html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + yuan(d.total_net) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">盈亏比</span><span class="stats-value">' + num(d.avg_pl_ratio) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">盈亏比</span><span class="stats-value">' + num(d.pl_ratio) + '</span></div>';
             html += '</div>';
             // ③ 明细行
             html += '<div class="stats-rows">';
@@ -4588,7 +4588,7 @@
                 }
                 html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + sub + '</span></div>';
             }
-            html += '<div class="stats-row"><span class="stats-label">盈亏比 PF</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">盈利因子</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">平均盈利 / 平均亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
             html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_win.exit_at + '</span>' : '') + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + (d.max_loss.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_loss.exit_at + '</span>' : '') + '</span></div>';

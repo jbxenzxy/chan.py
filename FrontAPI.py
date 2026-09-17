@@ -779,7 +779,7 @@ async def api_trader_trades(
     """按品种汇总历史成交统计（账户无关）。
 
     前端 K 线页「成交统计」面板数据源：已兑现往返的累计净值曲线、
-    实际胜率、平均盈亏比、最大单笔盈亏等。只读打开 state.db，不写库。
+    实际胜率、盈亏比、盈利因子、最大单笔盈亏等。只读打开 state.db，不写库。
     """
     try:
         result = await run_in_threadpool(orch.call_trader_trades, symbol, union)

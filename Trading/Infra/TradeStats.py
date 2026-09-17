@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """成交统计（账户无关的已兑现往返汇总）。
 
-供 K 线页「成交统计」面板：历史盈亏曲线 / 实际胜率 / 平均盈亏比 /
+供 K 线页「成交统计」面板：历史盈亏曲线 / 实际胜率 / 盈亏比 /
 最大单笔盈亏损 / 总净盈亏 / 期望值。
 
 设计要点：
@@ -158,8 +158,8 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
       count / wins / losses / flat   总笔数 / 净>0 / 净<0 / 净==0
       win_rate          实际胜率 = wins / count（平手计入分母、不计胜）
       avg_win / avg_loss   盈利笔均值 / 亏损笔均值（元）
-      profit_factor     总盈 / |总亏|；无亏损→None（无定义，非 0）
-      avg_pl_ratio      平均盈亏比 = avg_win / |avg_loss|；无亏损→None
+      pl_ratio          盈亏比 = avg_win / |avg_loss|；无亏损→None
+      profit_factor     盈利因子 = 总盈 / |总亏|；无亏损→None（无定义，非 0）
       total_net         总净盈亏（元）
       max_win / max_loss    最大单笔盈/亏（含 trade_id、exit_at、net_cash）
       expectancy        期望收益 = win_rate*avg_win + loss_rate*avg_loss（元/笔）
@@ -190,7 +190,7 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     abs_avg_loss = -avg_loss if avg_loss else 0.0
 
     profit_factor = (gross_win / abs_gross_loss) if abs_gross_loss > 0 else None
-    avg_pl_ratio = (avg_win / abs_avg_loss) if abs_avg_loss > 0 else None
+    pl_ratio = (avg_win / abs_avg_loss) if abs_avg_loss > 0 else None
 
     total_net = gross_win + gross_loss
 
@@ -231,8 +231,8 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_loss": round(avg_loss, 2),
         "profit_factor": (round(profit_factor, 4)
                           if profit_factor is not None else None),
-        "avg_pl_ratio": (round(avg_pl_ratio, 4)
-                         if avg_pl_ratio is not None else None),
+        "pl_ratio": (round(pl_ratio, 4)
+                     if pl_ratio is not None else None),
         "total_net": round(total_net, 2),
         "max_win": max_win,
         "max_loss": max_loss,
@@ -246,7 +246,7 @@ def _empty_stats() -> Dict[str, Any]:
     return {
         "count": 0, "wins": 0, "losses": 0, "flat": 0,
         "win_rate": 0.0, "avg_win": 0.0, "avg_loss": 0.0,
-        "profit_factor": None, "avg_pl_ratio": None,
+        "profit_factor": None, "pl_ratio": None,
         "total_net": 0.0,
         "max_win": {"trade_id": None, "exit_at": None, "net_cash": 0.0},
         "max_loss": {"trade_id": None, "exit_at": None, "net_cash": 0.0},
