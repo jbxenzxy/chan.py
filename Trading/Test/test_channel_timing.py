@@ -3,8 +3,8 @@
 test_channel_timing.py — Step 2.3：Broker/Channel 时序参数归一到 ChannelTimingConfig
 ====================================================================================
 验证点（对应可行性分析拍板结论 A1 + B1 + C1）：
-  [1] ChannelTimingConfig 11 字段默认值 == 原硬编码值（行为等价；第 11 字段
-      instrument_fetch_timeout 为新增），extra="forbid"
+  [1] ChannelTimingConfig 10 字段默认值 == 原硬编码值（行为等价；原第 11 字段
+      合约参数就绪独立超时已随 2026-09-17 行情取值通道删除），extra="forbid"
   [2] BrokerConfig.channel 嵌套挂载 + default_factory 向后兼容（旧配置无 channel 键）
   [3] SimNowBroker.__init__ 严格模式：params 含完整 channel（BrokerConfig 补齐）
   [4] _timing() 严格读取：缺 key 抛 KeyError（配置模型漏字段=代码 bug fail-fast）
@@ -54,8 +54,6 @@ check("underlying_map_timeout == 20.0（原主连映射）",
       ct.underlying_map_timeout, 20.0)
 check("cancel_settle_wait == 5.0（原撤单后等回报）",
       ct.cancel_settle_wait, 5.0)
-check("instrument_fetch_timeout == 30.0（Phase 8.1 · B-2 新增：合约参数就绪独立超时）",
-      ct.instrument_fetch_timeout, 30.0)
 try:
     ChannelTimingConfig(bogus=1)
     check("extra='forbid' 拒未知字段", "no_raise", "raise")
@@ -82,10 +80,8 @@ print("\n[3] SimNowBroker.params 含完整 channel")
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 b = SimNowBroker.__new__(SimNowBroker)
 b.params = BrokerConfig().model_dump()   # 与 test_simnow_guards._make 同一注入方式
-check("params['channel'] 存在且含 11 键（Phase 8.1 · B-2 加 instrument_fetch_timeout）",
-      len(b.params["channel"]), 11)
-check("_timing 读 instrument_fetch_timeout（B-2 新字段可严格读取）",
-      b._timing("instrument_fetch_timeout"), 30.0)
+check("params['channel'] 存在且含 10 键（2026-09-17 改造后）",
+      len(b.params["channel"]), 10)
 check("_timing 读 quote_stale_seconds", b._timing("quote_stale_seconds"), 30.0)
 check("_timing 读 probe_alive_timeout", b._timing("probe_alive_timeout"), 8.0)
 

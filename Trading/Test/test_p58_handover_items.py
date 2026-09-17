@@ -34,9 +34,9 @@ P58 交接待补清单第 1/4/5 条契约
 
 覆盖：
   [4a] `.env.example` 含交易网关段落标记
-  [4b] 六类键名都在（TRADING_BROKER / TQ_MARKET / CONFIRM_LIVE_TRADING /
-       INSTRUMENT_FETCH_POLICY / STATE_DIR / SOURCE__FREQ）
-  [4c] 六类键**实际都能被 TradingConfig 解析**（不只写了名字）
+  [4b] 五类键名都在（TRADING_BROKER / TQ_MARKET / CONFIRM_LIVE_TRADING /
+       STATE_DIR / SOURCE__FREQ）
+  [4c] 五类键**实际都能被 TradingConfig 解析**（不只写了名字）
   [4d] 明示凭据走环境变量、不进配置文件
   [4e] 明示手数不在配置里（旧的 max_volume 旋钮已删）
 
@@ -132,7 +132,7 @@ class _CountingLiveBroker(Broker):
     def __init__(self, state):
         self.state = state
         self.submit_calls = []
-        self.params = {"instrument_fetch_policy": "strict"}
+        self.params = {}
 
     def _param(self, key, default=None):
         return (self.params or {}).get(key, default)
@@ -347,28 +347,26 @@ check_true("[4a] 含交易网关注释段标记",
            "自动下单 / 交易网关" in _env, "缺失交易网关段")
 for _k in ("TRADING_BROKER=", "TRADING_BROKER_PARAMS__TQ_MARKET=",
            "TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING=",
-           "TRADING_BROKER_PARAMS__INSTRUMENT_FETCH_POLICY=",
            "TRADING_STATE_DIR=", "TRADING_SOURCE__FREQ="):
     check_true("[4b] 键名在样例中：{}".format(_k), _k in _env, _k)
 check_true("[4c] 明示凭据走环境变量、不进配置",
            "绝不写进本文件" in _env or "只走环境变量" in _env, "")
 check_true("[4d] 明示手数不在配置里（旧 max_volume 已删）",
            "max_volume" in _env and "已删除" in _env, "")
-# [4e] 六个键实际可被 TradingConfig 解析（真跑一遍，不只查名字）
+# [4e] 五个键实际可被 TradingConfig 解析（真跑一遍，不只查名字）
 _probe = (
     "import os,sys\n"
     "sys.path.insert(0,{repo!r})\n"
     "from Trading.Config import TradingConfig\n"
     "c=TradingConfig()\n"
     "print(c.broker, c.broker_params.tq_market, c.broker_params.confirm_live_trading,\n"
-    "      c.broker_params.instrument_fetch_policy, c.state_dir, c.source.freq)\n"
+    "      c.state_dir, c.source.freq)\n"
 ).format(repo=_REPO)
 _envv = dict(os.environ)
 _envv.update({
     "TRADING_BROKER": "simnow",
     "TRADING_BROKER_PARAMS__TQ_MARKET": "simnow",
     "TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING": "false",
-    "TRADING_BROKER_PARAMS__INSTRUMENT_FETCH_POLICY": "strict",
     "TRADING_STATE_DIR": "./State",
     "TRADING_SOURCE__FREQ": "5m",
     "PYTHONPATH": _REPO,
@@ -377,8 +375,8 @@ _envv.update({
 _r = subprocess.run([sys.executable, "-c", _probe], env=_envv,
                     capture_output=True, cwd=_REPO)
 _out = _r.stdout.decode("utf-8", "replace").strip()
-check("[4e] 六个键实际解析结果",
-      _out, "simnow simnow False strict ./State 5m")
+check("[4e] 五个键实际解析结果",
+      _out, "simnow simnow False ./State 5m")
 check_true("[4e] 解析无异常（rc=0）", _r.returncode == 0,
            _r.stderr.decode("utf-8", "replace")[-200:])
 

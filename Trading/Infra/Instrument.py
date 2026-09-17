@@ -37,8 +37,8 @@
         │   order_advanced / closetoday_first / price_band_points
         ├ 品种派生（product 转发只读）：exec_policy（执行策略表）
         ├ 运行时身份（行情回填可写）：trade_symbol / last_trade_date
-        ├ 有效值（行情回填可写）：price_tick / multiplier / 涨跌停区间 /
-        │   verified / source   ← 初值直接取 Product 档案（播种桥已消亡）
+        ├ 有效值（SSOT=品种档案，构造期播种后不再改写）：price_tick /
+        │   multiplier / verified / source
         └ 定价与成本：round_price / align_* / slip_price / cost_cash /
             points_to_cash（读有效 tick/乘数 × 档案 Fee 两档，属运行时语义）
 
@@ -52,8 +52,8 @@
 
   所有权规则（不变，务必遵守）：一次运行**只有一份** Instrument ——
   main.py 建好后同时交给 `Broker.build_broker(..., state=instr)` 与
-  `TradingEngine(..., state=instr)`。Broker 写（apply_quote / trade_symbol /
-  last_trade_date 回填），Engine 读（闸门 / 对账 / 成本）。
+  `TradingEngine(..., state=instr)`。Broker 写（trade_symbol 主连映射 /
+  last_trade_date 交割日回填 / verified 在线置位），Engine 读（闸门 / 对账 / 成本）。
 
 成本口径（改"元"，不变）
     - 费率真值源 = 品种档案 Product 的 Fee 两档（开仓 / 平今），静态；
@@ -66,7 +66,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, ClassVar, Dict, Optional
 
 from pydantic import BaseModel, ConfigDict
 
@@ -105,7 +105,9 @@ class InstrumentConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     signal_symbol: str = "KQ.m@CFFEX.IF"            # 缠论分析用的主连
-    trade_symbol: str = "CFFEX.IF2609"              # 初始月份合约（运行时由行情刷新）
+    trade_symbol: str = ""                          # 初始月份合约：空 = 必须由主连映射
+                                                    #   填充（SimNow._resolve_trade_symbol）；
+                                                    #   映射失败 fail-fast，不再有默认月份兜底
     slippage_ticks: float = 1.0                # 单边滑点（tick 数）
     # 报单 advanced 指令（A2，2026-09-11）：一处配置，供所有 insert_order 调用点读取。
     #   "FOK"  全成或全撤 —— 本系统默认依赖它（无部分成交幽灵）
@@ -126,8 +128,8 @@ class InstrumentConfig(BaseModel):
 
     # ── 档案位（字段位保留，**当前不消费**）──
     limit_up_pct: float = 0.0            # 涨跌停板幅度（%，如 10.0）。仅作档案记录：
-                                              #   区间真值是绝对价 upper/lower_limit（随日结算价变），
-                                              #   从行情取，写在 Instrument 上。
+                                              #   涨跌停绝对价已随 2026-09-17 改造整体删除
+                                              #   （报错价由交易所拒单 + 软件侧弹窗人工干预兜底）。
     limit_down_pct: float = 0.0
     night_session: bool = False               # 是否有夜盘。字段位保留但**不消费**：
                                               #   交易时段护栏（阻塞点 6 · Q5）
@@ -172,25 +174,20 @@ class InstrumentConfig(BaseModel):
 
 
 # ════════════════════════════════════════════════════════════════════
-# EffectiveSpec —— 行情回填后的**合约有效参数**（D-D · 2026-09-15）
+# EffectiveSpec —— 合约有效参数（SSOT = 品种档案，D-D · 2026-09-17 修订）
 # ════════════════════════════════════════════════════════════════════
 @dataclass(frozen=True)
 class EffectiveSpec:
-    """一张合约在**当前**的四个有效参数（行情口径），不可变值对象。
+    """一张合约的**有效参数**（tick / 乘数），不可变值对象。
 
-    为什么单独立一个类（D-D）：这四个值必须**同时**换新 —— 半新半旧的一组
-    参数（新 tick 配旧乘数）比全旧更危险。原实现靠"校验循环跑在赋值循环
-    之前"的代码顺序来保证这一点，任何一次重构都可能悄悄破坏它（而测试未必
-    覆盖得到）。改成"构造新值对象 → 一次赋值替换"后，原子性由**结构**保证：
-    `Instrument._effective` 要么指向完整旧值、要么指向完整新值，没有中间态。
-
-    归属：离线（dry_run/replay）初值取品种档案；在线由 `apply_quote` 从
-    真实月份合约行情整体替换。涨跌停 0 = 未知（离线未取到）→ 护栏不校验。
+    真值源 = 品种档案 `Product`（2026-09-17 拍板：最小变动价位与合约乘数从
+    档案获取，**没有任何信息需要从行情获取**）。构造期一次性播种进
+    `Instrument._effective`，运行期不再改写 —— 原子性诉求（半新半旧）
+    随行情回填通道一并消亡，保留 frozen 值对象只为维持"整体一份、只读
+    转发"的形状。
     """
     price_tick: float
     multiplier: float
-    upper_limit: float = 0.0
-    lower_limit: float = 0.0
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -210,31 +207,20 @@ class Instrument:
         None = 未标定品种（有效值取 0 → 定价/对齐 fail-closed；启动期会被
         白名单闸门拒绝，这里允许 None 只为离线探针/测试便利）。
 
-    有效值初值**直接取 Product 档案**（播种桥 for_product/_seed_instrument
-    已消亡）—— 离线（dry_run/replay）下这就是运行值；实盘由行情
-    `apply_quote()` 原子覆盖。
+    有效值**SSOT = Product 档案**（2026-09-17 拍板：没有任何信息需要从
+    行情获取）—— 构造期播种，在线 / 离线的运行值相同，运行期不再改写。
 
-    只有一条改写有效值的路径：apply_quote()（tick/乘数/涨跌停）+
-    mark_config_offline()（离线显式声明来源）。
+    改写运行时字段的路径只有三条：verified / source 由 SimNow._connect
+    （在线置位 source=CONFIG）或 mark_config_offline()（离线声明）写；
     trade_symbol / last_trade_date 由 SimNow 从**真实月份合约行情**回填。
     """
 
     # ── 参数来源标记的合法值 ──
-    # instrument 参数来源：apply_quote / mark_config_offline 维护，外部只读比较。
-    SOURCE_QUOTE: ClassVar[str] = "QUOTE"
+    # instrument 参数来源：SimNow._connect / mark_config_offline 置位，外部只读比较。
+    #   CONFIG：在线通道（simnow/live）连接成功即置位 —— 合约参数 SSOT=品种档案，
+    #   无任何信息需要从行情获取，verified 的语义即"在线通道已连通"。
+    SOURCE_CONFIG: ClassVar[str] = "CONFIG"
     SOURCE_CONFIG_OFFLINE: ClassVar[str] = "CONFIG_OFFLINE"
-    # quote_partial 档（自研/第三方在线通道逃生舱）的来源标记。
-    #   tick + 乘数来自行情，但**涨跌停区间缺失** → band 护栏已降级为不校验。
-    #   留这个独立标记是为了诊断时能一眼看出"verified 为真但护栏是降级的"。
-    SOURCE_QUOTE_PARTIAL: ClassVar[str] = "QUOTE_PARTIAL"
-
-    # apply_quote 回填的行情字段 → 本类字段映射（tqsdk quote 字段名 → 本类字段名）
-    _QUOTE_FIELD_MAP: ClassVar[Tuple[Tuple[str, str], ...]] = (
-        ("price_tick", "price_tick"),      # 最小变动单位
-        ("volume_multiple", "multiplier"), # 合约乘数
-        ("upper_limit", "upper_limit"),    # 涨停价
-        ("lower_limit", "lower_limit"),    # 跌停价
-    )
 
     def __init__(self, config: Optional[InstrumentConfig] = None,
                  product: Optional["Product"] = None):
@@ -247,24 +233,21 @@ class Instrument:
         #   last_trade_date：最后交易日 YYYY-MM-DD，SimNow 从行情回填；
         #   0 值（""）= 未知 → 交割月护栏对未知不校验（不校验未知的东西）。
         self.last_trade_date: str = ""
-        # —— 有效值：初值直接取品种档案（在线路径由行情原子覆盖）——
-        #   D-D：四个有效值收进**不可变** EffectiveSpec ——
-        #   改写路径 = 整体替换（apply_quote 校验通过后一次赋值），
-        #   "半新半旧"在类型层面不可能出现。下面四个同名 property 只读转发。
+        # —— 有效值：SSOT = 品种档案，构造期一次性播种 ——
+        #   2026-09-17 拍板：最小变动价位与合约乘数从品种档案获取，
+        #   **没有任何信息需要从行情获取**。EffectiveSpec 仍是不可变值对象
+        #   （整体一份、只读转发），构造后不再改写。同名 property 只读转发。
         self._effective: EffectiveSpec = EffectiveSpec(
             price_tick=float(product.price_tick) if product is not None else 0.0,
             multiplier=float(product.multiplier) if product is not None else 0.0,
-            upper_limit=0.0,   # 0 = 未知（离线未取到）→ 涨跌停护栏对未知不校验
-            lower_limit=0.0,
         )
-        # ── A′ fail-closed 闸门──
-        # verified: 行情参数（tick/乘数/涨跌停）已取到并通过校验。
-        #   实盘（非离线 broker）未置 True → Engine._pre_trade_check 拒单 + 严重告警。
-        #   **代码里不得存在"取不到就回退配置值下单"的分支**（p42 用例③ 钉死）。
+        # ── A′ 在线闸门──
+        # verified: 在线通道已连通（SimNow._connect 成功分支置 True）；
+        #   未置 True 的在线状态 → Engine._pre_trade_check 拒单 + 严重告警。
+        #   离线 broker（dry_run/replay）不置位，由 mark_config_offline 声明来源。
         self.verified: bool = False
-        # source: 当前参数来源标记 —— "QUOTE"（行情，实盘唯一合法来源）
-        #   / "QUOTE_PARTIAL"（tick+乘数来自行情，涨跌停护栏降级）
-        #   / "CONFIG_OFFLINE"（dry_run/replay 离线兜底）/ ""（尚未定）。
+        # source: 当前参数来源标记 —— "CONFIG"（在线连接成功）
+        #   / "CONFIG_OFFLINE"（dry_run/replay 离线声明）/ ""（尚未定）。
         self.source: str = ""
 
     # D-C：这里原有 `spec` 兼容 property（返回 self 自身），
@@ -280,9 +263,9 @@ class Instrument:
         """品种档案（Fee 两档 / exec_policy / 策略标定值的真值源）。"""
         return self._product
 
-    # —— 有效值转发（D-D：不可变 EffectiveSpec，只读）——
-    #   实盘由 apply_quote 整体替换；离线初值取品种档案。四个值同源同寿命，
-    #   刻意**不给逐个 setter** —— 那正是 D-D 要消掉的"半新半旧"来源。
+    # —— 有效值转发（不可变 EffectiveSpec，只读）——
+    #   SSOT=品种档案，构造期播种后不再改写。刻意**不给 setter** ——
+    #   有效值在运行期没有任何合法的改写路径。
     @property
     def price_tick(self) -> float:
         """有效最小变动价位（对齐 / 滑点口径都读它）。"""
@@ -292,16 +275,6 @@ class Instrument:
     def multiplier(self) -> float:
         """有效合约乘数（元/点；points_to_cash / cost_cash 读它）。"""
         return self._effective.multiplier
-
-    @property
-    def upper_limit(self) -> float:
-        """当日涨停价（绝对价）。0 = 未知（离线）→ 涨跌停护栏不校验。"""
-        return self._effective.upper_limit
-
-    @property
-    def lower_limit(self) -> float:
-        """当日跌停价（绝对价）。0 = 未知（离线）→ 涨跌停护栏不校验。"""
-        return self._effective.lower_limit
 
     # —— config 只读转发（替代旧 InstrumentSpec 的静态字段读点）——
     @property
@@ -356,10 +329,9 @@ class Instrument:
 
     def __repr__(self) -> str:
         return ("Instrument(trade_symbol={!r}, price_tick={!r}, "
-                "multiplier={!r}, band=({!r}, {!r}), verified={!r}, source={!r})"
+                "multiplier={!r}, verified={!r}, source={!r})"
                 .format(self.trade_symbol, self.price_tick,
-                        self.multiplier, self.lower_limit, self.upper_limit,
-                        self.verified, self.source))
+                        self.multiplier, self.verified, self.source))
 
     # ---------- 报单属性 / 交割护栏（原 InstrumentSpec 静态判定，迁入）----------
     def effective_order_advanced(self) -> str:
@@ -393,8 +365,8 @@ class Instrument:
             （IF2609→IF2610）时 trade_symbol 更新、判定随之解除；
           · 三态分发在 Engine._pre_trade_check：空仓态拦【开仓】、锁仓态拦【平仓/
             解锁】、运行态不拦；
-          · `last_trade_date` 未知（离线 dry_run / 行情未取到）→ 返回 False，
-            与涨跌停护栏同哲学（"不校验未知的东西"）。
+          · `last_trade_date` 未知（离线 dry_run / 行情未回填）→ 返回 False
+            （"不校验未知的东西"）。
 
         天数口径：只数工作日（Mon-Fri），不计法定节假日 —— 节假日需交易日历，
         未引入（一期不消费），文档已注明 N=1 ≈ 仅最后交易日当天拦。
@@ -406,84 +378,6 @@ class Instrument:
             return False
         rem = _weekdays_between(today, self.last_trade_date)
         return rem < int(threshold_days)
-
-    # ---------- ：行情参数回填（A′） ----------
-    def apply_quote(self, quote: Any, require_band: bool = True) -> List[str]:
-        """从行情 quote 回填合约参数（D20）。返回**值发生变化**的字段名列表。
-
-        纯数据方法：鸭子类型读 quote 的四个字段，**不 import tqsdk**（便于单测）。
-        原子性（D-D · 2026-09-15 升级为**结构保证**）：先对全部待填值校验，任一
-        不过 → 抛 ValueError 且**一个字段都不改**；通过后把四个值一次性装进新的
-        不可变 `EffectiveSpec` 整体替换 —— 不再是"逐字段 setattr、靠代码顺序保证"
-        （半新半旧的一组参数比全旧更危险）。
-
-        校验清单（任一不过即 fail）：
-          · price_tick / multiplier(volume_multiple)：isfinite 且 > 0
-            —— tqsdk 取不到的字段返回 **nan 而不是 None**，nan 是 truthy，
-            `if not v` 判空会漏过 nan → 必须 math.isfinite；
-          · upper_limit / lower_limit：isfinite 且 > 0，且 lower < upper（区间自洽）；
-          · 行情必须是**真实月份合约**的（订阅目标 trade_symbol）—— 由调用方
-            （SimNow）保证订阅对象，本方法只验数值。
-
-        require_band（默认 True = 既有语义不变）：
-          · True  —— 四字段全强制（strict 档）：涨跌停缺失/不自洽 → ValueError。
-          · False —— 只强制 price_tick + volume_multiple（quote_partial 档）：
-                    涨跌停**可用且自洽**就照样填；不可用（nan / 0 / 区间不自洽）
-                    则**跳过不填**（保留原值 0 = 未知），由 Engine 侧
-                    _ref_price_out_of_band 对未知区间自然降级为不校验。
-                    调用方（SimNow）必须就此回一条 warn 告警，降级不能静默。
-        """
-        vals = {}
-        for q_attr, s_field in self._QUOTE_FIELD_MAP:
-            if not require_band and s_field in ("upper_limit", "lower_limit"):
-                # 部分档：band 是"有就填、没有就不填"，先跳过，下面单独处理。
-                continue
-            try:
-                raw = getattr(quote, q_attr)
-            except AttributeError:
-                raise ValueError("行情缺少字段 {!r}（合约参数校验失败）".format(q_attr))
-            try:
-                v = float(raw)
-            except (TypeError, ValueError):
-                raise ValueError("行情字段 {}={!r} 不是数值（合约参数校验失败）".format(q_attr, raw))
-            if not math.isfinite(v) or v <= 0:
-                raise ValueError(
-                    "行情字段 {}={!r} 非法（要求 isfinite 且 > 0；tqsdk 取不到时是 nan）"
-                    .format(q_attr, raw))
-            vals[s_field] = v
-
-        if require_band:
-            if vals["lower_limit"] >= vals["upper_limit"]:
-                raise ValueError(
-                    "涨跌停区间不自洽: lower_limit={!r} >= upper_limit={!r}"
-                    .format(vals["lower_limit"], vals["upper_limit"]))
-        else:
-            # 部分档：band 单独取（允许取不到）。取到就用，取不到/不自洽就整个跳过
-            # —— 绝不允许只填 upper 不填 lower（半边区间会让护栏按错误的界校验）。
-            try:
-                hi = float(getattr(quote, "upper_limit"))
-                lo = float(getattr(quote, "lower_limit"))
-            except (TypeError, ValueError, AttributeError):
-                hi = lo = float("nan")
-            if (math.isfinite(hi) and math.isfinite(lo) and hi > 0 and lo > 0
-                    and hi > lo):
-                vals["upper_limit"], vals["lower_limit"] = hi, lo
-
-        # D-D：校验已**全部**通过 → **一次整体替换**（不可变值对象）。
-        #   原实现是"逐字段 setattr"，原子性依赖"校验循环跑在赋值循环之前"这一
-        #   代码顺序 —— 顺序被将来的重构打乱就会悄悄不原子，且未必有测试兜住。
-        #   换成整体替换后，原子性是**结构保证**：调用方看到的 _effective 要么
-        #   整个是旧值、要么整个是新值，不存在"改了 tick 还没改 multiplier"。
-        old = self._effective
-        self._effective = EffectiveSpec(
-            price_tick=vals.get("price_tick", old.price_tick),
-            multiplier=vals.get("multiplier", old.multiplier),
-            upper_limit=vals.get("upper_limit", old.upper_limit),
-            lower_limit=vals.get("lower_limit", old.lower_limit),
-        )
-        new = self._effective
-        return [f for f in ("price_tick", "multiplier", "upper_limit", "lower_limit")
-                if abs(getattr(old, f) - getattr(new, f)) > 1e-12]
 
     def mark_config_offline(self) -> None:
         """离线模式（dry_run/replay）显式降级标记。

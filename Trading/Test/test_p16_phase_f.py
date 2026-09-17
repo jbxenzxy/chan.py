@@ -99,7 +99,7 @@ from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Strategy.Entry import EntryPolicy
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.Instrument import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 from dataclasses import replace as _dc_replace  # noqa: E402
 
@@ -107,7 +107,7 @@ from dataclasses import replace as _dc_replace  # noqa: E402
 # 已删除）。本文件的场景按「一笔 1 手」构造（多笔叠加才是观察对象），故这里直接
 # 改**表值** —— 只把 IF 档案的执行策略第 3 列换成 1，"改表即生效"正是它的口径。
 # ⚠️ 引擎的有效档案来自 `broker.state`（合并），本文件所有
-#    `Instrument(None, _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
+#    `Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)` 都被这一处覆盖，不会出现"cfg 说 1 手、broker 说 2 手"。
 _IF = _dc_replace(PRODUCT_PROFILES["IF"],
                   exec_policy=_dc_replace(PRODUCT_PROFILES["IF"].exec_policy,
                                           lots_per_order=1))
@@ -233,7 +233,7 @@ def make_engine(tmpdir, *, split_positions=1,
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
     # 同向笔数上限已在删除（D2）：簿容器不限容量，同向可叠加
 
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
@@ -331,17 +331,17 @@ base_default = Broker.trade_confirmed(None, "")
 check("1.1 base.Broker 默认 trade_confirmed=True", base_default, True)
 
 # 1.2 dry_run.DryRunBroker 重写返回 True
-dry_b = DryRunBroker(Instrument(None, _IF))
+dry_b = DryRunBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
 check("1.2 dry_run.DryRunBroker trade_confirmed=True",
       dry_b.trade_confirmed(OrderIntent.CLOSE, "x"), True)
 
 # 1.3 自定义 broker 可重写返回 False
-ctl = ControlledTradeConfirmedBroker(Instrument(None, _IF), trade_confirmed_value=False)
+ctl = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), trade_confirmed_value=False)
 check("1.3 自定义 broker trade_confirmed=False",
       ctl.trade_confirmed(OrderIntent.CLOSE, "x"), False)
 
 # 1.4 自定义 broker 可抛异常
-ctl_raise = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+ctl_raise = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            raise_on_trade_confirmed=True)
 raised = False
 try:
@@ -376,7 +376,7 @@ with tmp_dir() as td:
 
 # 2.2 bars_elapsed < 5 → skip（不调 broker）
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            trade_confirmed_value=False)
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
@@ -391,7 +391,7 @@ with tmp_dir() as td:
 
 # 2.3 bars_elapsed = 5 + trade_confirmed=True → 清 in-flight + 写 close_confirmed
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            trade_confirmed_value=True)
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
@@ -410,7 +410,7 @@ with tmp_dir() as td:
 
 # 2.4 bars_elapsed = 5 + trade_confirmed=False + 真实持仓 0 → 写 close_stuck_recovered
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            trade_confirmed_value=False,
                                            real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -433,7 +433,7 @@ with tmp_dir() as td:
 #     并用 target_snapshot 重建 portfolio
 with tmp_dir() as td:
     # target 是 SHORT 仓（UNLOCK 平昨仓 SHORT）→ 真实 SHORT 仍有持仓 → 卡单确认
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            trade_confirmed_value=False,
                                            real_longs=0, real_shorts=2)
     eng = make_engine(td, broker=ctl_b)
@@ -466,7 +466,7 @@ with tmp_dir() as td:
 
 # 2.6 broker.trade_confirmed 抛异常 → 保守走 reconcile（视作未确认）
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF),
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
                                            raise_on_trade_confirmed=True,
                                            real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
@@ -485,7 +485,7 @@ with tmp_dir() as td:
 
 # 2.7 多次提交 in-flight 替换（每次新报单覆盖）
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF))
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
     eng = make_engine(td, broker=ctl_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 10   # bars_elapsed = 10 - 3 = 7 >= 5
@@ -506,7 +506,7 @@ with tmp_dir() as td:
 #     ⚠️ 新版口径：三态只看净敞口 —— 单笔 SOFT_EXIT_LOCK 已是带敞口的运行态
 #     （运行态不响应信号），所以**必须构造双向持仓**（net==0）才是锁仓态。
 with tmp_dir() as td:
-    rej_b = RejectDryBroker(Instrument(None, _IF))
+    rej_b = RejectDryBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
     eng = make_engine(td, broker=rej_b)
     eng.last_bar = make_bar()
     eng.bars_seen = 5
@@ -535,7 +535,7 @@ print("\n[3] F2 _restore 末尾首拉真实持仓")
 
 # 3.1 无持仓 → 不报错但不触发 reconcile
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=0, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0)
     # 注意：直接 make_engine 走 _restore 会调用 reconcile
     # 无持仓时不应触发任何 reconcile 事件
     eng = make_engine(td, broker=ctl_b)
@@ -546,7 +546,7 @@ with tmp_dir() as td:
 # 3.2 有持仓 + broker 无 real_position → skip（默认 DryRunBroker real_position=None）
 #     已经在 P14a 测试过；此处快速回归一下
 with tmp_dir() as td:
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     dry_b = DryRunBroker(spec)  # 默认 real_position=None
     # 手动构造 engine 前先把 store 写入持仓
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
@@ -571,7 +571,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=1, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=1, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)   # 触发 _restore
     check("3.3 一致 → portfolio 保留", len(eng.positions), 1)
     evs = read_events(eng, kinds={"position_externally_closed_summary",
@@ -588,7 +588,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=2, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=2, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
     check("3.4a 部分平后剩 1 仓", len(eng.positions), 1)
     check("3.4b 保留最晚建仓的 (entry_bar_seq=2，FIFO 平最早)",
@@ -612,7 +612,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=0, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
     check("3.5a real_vol==0 → 全平", len(eng.positions), 0)
     check("3.5b state IDLE", eng._state, EngineState.IDLE)
@@ -627,7 +627,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=5, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=5, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
     check("3.6a real_vol>engine_vol → portfolio 保留", len(eng.positions), 1)
     evs = read_events(eng, kinds={"position_mismatch"})
@@ -649,7 +649,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    rp_b = RaisingRealPosBroker(Instrument(None, _IF))
+    rp_b = RaisingRealPosBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF))
     eng = make_engine(td, broker=rp_b)
     check("3.7a 异常被吞 → 引擎能启动（portfolio 保留）", len(eng.positions), 1)
     evs = read_events(eng, kinds={"restore_reconcile_failed"})
@@ -664,7 +664,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 1)  # bars_held = 1 - 1 = 0
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=0, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
     # restore 路径不拦 → 应该全平
     check("3.8 restore 路径不拦 bars_held<1 → 全平", len(eng.positions), 0)
@@ -711,7 +711,7 @@ with tmp_dir() as td:
     pre_store.set_json("bars_seen", 5)
     seed_run(pre_store)
     pre_store.close()
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=0, real_shorts=0)
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0)
     eng = make_engine(td, broker=ctl_b)
     # F2 已把幽灵清掉
     check("4.2a F2 清掉幽灵后 portfolio 空", len(eng.positions), 0)
@@ -735,7 +735,7 @@ with tmp_dir() as td:
 #     若不持久化，引擎崩后 in_flight 丢了，5 bar 复核永远不会触发，
 #     F1 卡单检测在重启场景下形同虚设。
 with tmp_dir() as td:
-    ctl_b = ControlledTradeConfirmedBroker(Instrument(None, _IF), real_longs=0, real_shorts=0,
+    ctl_b = ControlledTradeConfirmedBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), real_longs=0, real_shorts=0,
                                            trade_confirmed_value=False)
     eng = make_engine(td, broker=ctl_b)
     # 预置双向持仓（跨日锁，net==0），拆锁把它里的多头清掉

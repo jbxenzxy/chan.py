@@ -3,22 +3,19 @@
 """
 P49 合约规格漂移校验（spec_drift）契约测试
 ==========================================
-背景（2026-09-13，用户拍板「保留 + 漂移校验」）：
-  · PRODUCT_PROFILES 的 multiplier / price_tick 语义 = **离线兜底**
-    （dry_run 模拟成交 / replay 回测没有行情来源，必须有个确定的数算钱）；
-    实盘真值 = 行情（SimNow.apply_quote 原子覆盖 + A′ fail-closed）。
-  · 双源风险：交易所改合约规格后档案值过期 → 实盘没事，但离线回测静默
-    用错数。处置：verified 首次为真时，引擎比对 **Instrument 的有效值
-    （行情值）** 与 product_profile（档案兜底值），不一致 → warn 告警
-    （D11 通道，前端 toast），**不拒单**（实盘本就以行情为准）。
-    →：对账右侧统一在 Instrument（双类
-    合并后 spec/state 同一对象，"行情值"只此一份，读错对象无从谈起）。
+背景（2026-09-17 改造后语义：防回潮护栏）：
+  · 有效 tick/乘数的 **SSOT = 品种档案 Product**（构造期播种进 Instrument，
+    运行期不再改写，无任何行情取值路径）—— state 与档案同源，
+    结构上恒无漂移。
+  · Engine._check_spec_drift 保留作**防回潮护栏**：若将来有人重新引入
+    "非档案来源写入 state"的通道而档案未同步，这里会把双源漂移从静默
+    变显性（warn 告警，D11 通道前端 toast），**不拒单**。
 
 本测试锁死的断言：
-  [1] verified=False（dry_run 离线兜底，无行情可比）→ 不告警、不置位
-  [2] verified=True 且 spec 与档案一致 → 不告警，但置位（查过即止）
+  [1] verified=False（离线兜底态）→ 不告警、不置位
+  [2] verified=True 且 state 与档案一致 → 不告警，但置位（查过即止）
   [3] verified=True 且 price_tick/multiplier 漂移 → 告警 level=warn、
-      code=spec_drift，msg 同时含档案值与行情值
+      code=spec_drift，msg 同时含档案值与 state 值
   [4] 一次性：漂移告警后再调 _check_spec_drift() → 不新增条目（同 code
       合并/置位防刷）
   [5] 挂点在 A3 校验链：_pre_trade_check 通过 A′ 闸门后触发漂移检查
@@ -60,7 +57,7 @@ from Trading.Broker.DryRun import DryRunBroker  # noqa: E402
 from Trading.Config import TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Instrument import Instrument  # noqa: E402
+from Trading.Infra.Instrument import EffectiveSpec, Instrument  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
@@ -127,26 +124,18 @@ def find_alert(engine, code):
     return next((a for a in engine._alerts if a.get("code") == code), None)
 
 
-class _Q:
-    """最小行情替身：只喂 tick / 乘数，涨跌停用自洽值（本测试不关心）。"""
-
-    def __init__(self, tick, mult, hi=1e9, lo=1e-9):
-        self.price_tick = tick
-        self.volume_multiple = mult
-        self.upper_limit = hi
-        self.lower_limit = lo
-
-
 def _drift(engine, tick=None, mult=None):
-    """把有效值"漂移"到指定 tick / 乘数。
+    """把有效值"漂移"到指定 tick / 乘数（模拟非档案来源的越权写入）。
 
-    D-D：Instrument 的有效值收进不可变 `EffectiveSpec`，
-    **唯一改写路径是 apply_quote**（四个值改成了只读 property，没有 setter）。
-    这里走真实路径 —— 比原"直接给属性赋值"更贴近行情覆盖的真实语义。
+    D-D：Instrument 的有效值收进不可变 `EffectiveSpec`（只读 property 转发，
+    没有 setter）。2026-09-17 改造后有效值 SSOT=品种档案，运行期没有任何
+    合法改写路径 —— 这里直接整体替换 `_effective` 值对象，正是"防回潮
+    护栏"要抓的那类写入（真发生时 _check_spec_drift 必须出声）。
     """
     st = engine.state
-    st.apply_quote(_Q(tick if tick is not None else st.price_tick,
-                      mult if mult is not None else st.multiplier))
+    st._effective = EffectiveSpec(
+        price_tick=tick if tick is not None else st.price_tick,
+        multiplier=mult if mult is not None else st.multiplier)
 
 
 def main():
@@ -176,7 +165,7 @@ def main():
     with tmp_dir() as td:
         eng = build_engine(td)
         eng.state.verified = True
-        _drift(eng, tick=0.5, mult=100.0)   # 模拟 apply_quote 覆盖后的行情值
+        _drift(eng, tick=0.5, mult=100.0)   # 越权写入：模拟非档案来源的漂移
         eng._check_spec_drift()
         a = find_alert(eng, "spec_drift")
         check_true("spec_drift 告警存在", a is not None)
@@ -186,8 +175,8 @@ def main():
             check("msg 含行情 tick", "0.5" in a.get("msg", ""), True)
             check("msg 含档案乘数", "300" in a.get("msg", ""), True)
             check("msg 含行情乘数", "100" in a.get("msg", ""), True)
-            check("msg 指明实盘不受影响", "不受影响" in a.get("msg", ""), True)
-            check("msg 指明离线兜底过期", "兜底已过期" in a.get("msg", ""), True)
+            check("msg 指明 SSOT=品种档案", "SSOT=品种档案" in a.get("msg", ""), True)
+            check("msg 指明防回潮护栏触发", "防回潮护栏触发" in a.get("msg", ""), True)
 
     print("\n[4] 一次性：告警后重复调用不新增条目")
     with tmp_dir() as td:

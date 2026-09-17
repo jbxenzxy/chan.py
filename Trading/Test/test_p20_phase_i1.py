@@ -101,7 +101,7 @@ from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
 from Trading.Infra.StateDB import Store  # noqa: E402
 
-from Trading.Infra.Instrument import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -212,7 +212,7 @@ def build_engine(tmpdir, exit_policy=None, broker=None, cfg=None,
                  store=None, ev=None):
     # 不再传 max_pos —— D2 删除该键后传它只会触发 D17 丢弃告警。
     cfg = cfg or make_cfg()
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     broker = broker or DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     from Trading.Strategy.Entry import EntryPolicy
     from Trading.Strategy.Exit import LayeredExitPolicy
@@ -370,7 +370,7 @@ print("\n[5] 关闭态 on_bar 补锁（首轮被拒 → 后续 bar 自动补）"
 
 # 5A 今仓（转移 ④ OPEN）被拒 → **下一根 bar 立即**补（OPEN 不受 CLOSE 冷却约束）
 with tmp_dir() as tmp:
-    broker = LockRejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
+    broker = LockRejectBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), {"sim_equity": 1_000_000.0},
                               reject_n=1)
     engine, store, broker, ev = build_engine(tmp, broker=broker)
     engine.on_bar(make_bar(1000))
@@ -398,7 +398,7 @@ with tmp_dir() as tmp:
 
 # 5B 昨仓（转移 ⑤ CLOSE）被拒 → 必须等满冷却根数才重试
 with tmp_dir() as tmp:
-    broker = LockRejectBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
+    broker = LockRejectBroker(Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF), {"sim_equity": 1_000_000.0},
                               reject_n=1)
     engine, store, broker, ev = build_engine(tmp, broker=broker)
     engine.on_bar(make_bar(1000))
@@ -515,7 +515,7 @@ if _HAS_APP:
 # [8] broker 路由：is_live 判定 + LiveCTPBroker 注册
 # ════════════════════════════════════════════════════════════════
 print("\n[8] broker 路由（SimNowBroker.is_live / LiveCTPBroker 注册）")
-spec = Instrument(None, _IF)
+spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
 
 _BP = dict(DEFAULT_CONFIG["broker_params"])   # 严格模式：params 必须完整
 b_sim = SimNowBroker(spec, dict(_BP, tq_market="simnow"))

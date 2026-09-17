@@ -8,8 +8,9 @@ P50 评审问题修复 契约测试
   [1] parse_product_key：真实月份合约写法（CFFEX.IF2609）能查到档案
   [2] assert_product_allowed：白名单单一事实源 + 引擎不再误杀
   [3] Product kw_only：位置构造硬失败（原会静默错位到 price_tick）
-  [4] pulse 重试节流：不再每根 bar 阻塞 30s
-  [5] quote_partial 逃生舱档：只强制 tick/乘数，涨跌停缺失时降级并出声
+  （原 [4] pulse 重试节流 / [5] quote_partial 逃生舱：随 2026-09-17
+    "合约参数 SSOT=品种档案、无任何信息需要从行情获取" 改造整体删除，
+    防回潮断言移至 test_instrument_spec_ssot.py）
   [6]离线模式规格漂移对账：dry_run/replay 用错规格不再静默
   [7]未知品种日志去重：Config 侧不再重复打 WARNING
   [8] 死字段清理：InstrumentConfig 不含从未被消费的 max_order_volume
@@ -33,7 +34,7 @@ if _RROOT not in sys.path:
     sys.path.insert(0, _RROOT)
 
 from Trading import main as _main                                      # noqa: E402
-from Trading.Config import BrokerConfig, TradingConfig                 # noqa: E402
+from Trading.Config import TradingConfig                               # noqa: E402
 from Trading.Infra.Instrument import (                             # noqa: E402
     Instrument, InstrumentConfig)
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
@@ -204,164 +205,6 @@ def t3_kw_only():
     check("PRODUCT_PROFILES 8 条全部可构造", len(PRODUCT_PROFILES), 8)
 
 
-# ══════════════════════════════════════════════════════════════════
-# [4]：pulse() 合约参数重试节流
-# ══════════════════════════════════════════════════════════════════
-def t4_pulse_throttle():
-    print("\n[4] P1-2 pulse 重试节流（原：每根 bar 阻塞 30s）")
-    from Trading.Broker.SimNow import SimNowBroker
-
-    class _StubApi:
-        def wait_update(self, deadline=None):
-            return True
-
-    def make_broker(start_tick=0):
-        b = SimNowBroker.__new__(SimNowBroker)     # 跳过 __init__，不连 CTP
-        b.params = BrokerConfig().model_dump()
-        b._api = _StubApi()
-        b._instrument_frozen = False
-        b._instrument_retry_tick = start_tick
-        b.calls = 0
-
-        def _stub():
-            b.calls += 1
-        b._apply_instrument_quote = _stub            # 屏蔽真实（阻塞）取值
-        return b
-
-    N = SimNowBroker.INSTRUMENT_RETRY_EVERY_BARS
-    check("节流间隔常量 = 20 根", N, 20)
-
-    # 触发点：tick ∈ {1, N, 2N, 3N, 4N} → 4N 根 bar 内共 5 次
-    b = make_broker(start_tick=0)                    # 启动期没试过
-    for _ in range(4 * N):
-        b.pulse()
-    check("4N 根 bar：取值次数 = 首根 + 每 N 根一次 = 5", b.calls, 5)
-
-    b2 = make_broker(start_tick=1)                   # _connect 已试过一次
-    for _ in range(N - 2):                           # tick 走到 N-1
-        b2.pulse()
-    check("启动期已试过：第 2..N-1 根不再阻塞（0 次）", b2.calls, 0)
-    b2.pulse()                                       # tick = N
-    check("启动期已试过：第 N 根重试 1 次", b2.calls, 1)
-    for _ in range(N - 1):
-        b2.pulse()
-    check("启动期已试过：再 N-1 根内不再重试（仍 1 次）", b2.calls, 1)
-
-    b3 = make_broker(start_tick=0)
-    b3._instrument_frozen = True                     # 取到即冻结
-    for _ in range(2 * N):
-        b3.pulse()
-    check("冻结后完全空转（0 次）", b3.calls, 0)
-
-
-# ══════════════════════════════════════════════════════════════════
-# [5]：quote_partial 逃生舱档
-# ══════════════════════════════════════════════════════════════════
-def t5_quote_partial():
-    print("\n[5] P1-3 quote_partial 逃生舱：只强制 tick/乘数，涨跌停缺失 → 降级并出声")
-    check("policy 默认仍为 strict", BrokerConfig().instrument_fetch_policy, "strict")
-    check("quote_partial 合法",
-          BrokerConfig(instrument_fetch_policy="quote_partial")
-          .instrument_fetch_policy, "quote_partial")
-    for bad in ("prefer", "whatever", ""):
-        err = None
-        try:
-            BrokerConfig(instrument_fetch_policy=bad)
-        except Exception as e:                       # noqa: BLE001
-            err = type(e).__name__
-        check_true("非法档 {!r} 仍被拒（p42 既有断言不回退）".format(bad), err)
-
-    nan = float("nan")
-
-    class _Q:
-        """tick/乘数就绪、涨跌停缺失（nan）—— 模拟不走 tqsdk 的自研通道。"""
-
-        def __init__(self, hi=nan, lo=nan, tick=0.5, mult=200.0):
-            # tick/乘数刻意与 InstrumentConfig 默认值（0.2 / 300）不同，
-            # 便于断言"行情值确实落进了 spec"。
-            self.symbol = "CFFEX.IF2609"
-            self.price_tick = tick
-            self.volume_multiple = mult
-            self.upper_limit = hi
-            self.lower_limit = lo
-
-    # 5a Instrument.apply_quote 的 require_band 开关
-    #   spec/state 合并 —— apply_quote 回填运行时有效值，
-    #   断言一律针对 Instrument（有效 tick/乘数初值取档案，行情可覆盖）。
-    s = Instrument(None, _IF)
-    ok = s.apply_quote(_Q(), require_band=False)
-    check("partial：tick 已从行情填入", s.price_tick, 0.5)
-    check("partial：乘数已从行情填入", s.multiplier, 200.0)
-    check("partial：band 缺失 → 不填（保持 0 = 未知）", s.upper_limit, 0.0)
-    check("partial：apply_quote 返回变更字段", sorted(ok), ["multiplier", "price_tick"])
-    s2 = Instrument(None, _IF)
-    err = None
-    try:
-        s2.apply_quote(_Q())                          # 默认 require_band=True
-    except ValueError as e:
-        err = str(e)
-    check_true("strict：band 缺失仍 fail-closed（抛 ValueError）", err)
-
-    # partial 档下 band 可用时照样填（不是"一律不填"）
-    s3 = Instrument(None, _IF)
-    s3.apply_quote(_Q(hi=5000.0, lo=4000.0), require_band=False)
-    check("partial：band 可用时照样填", (s3.lower_limit, s3.upper_limit),
-          (4000.0, 5000.0))
-
-    # 5b 谓词
-    from Trading.Broker.SimNow import _quote_params_ready
-    q = _Q()
-    check("ready(band 缺失, require_band=True) → False",
-          _quote_params_ready(q, "CFFEX.IF2609")(), False)
-    check("ready(band 缺失, require_band=False) → True",
-          _quote_params_ready(q, "CFFEX.IF2609", require_band=False)(), True)
-
-    # 5c 端到端：SimNow 走 partial 档 → verified 置位 + 降级告警出声
-    from Trading.Broker.SimNow import SimNowBroker
-
-    class _Api:
-        def __init__(self, quote):
-            self._q = quote
-
-        def get_quote(self, sym):
-            return self._q
-
-        def wait_update(self, deadline=None):
-            return True
-
-    def make(quote, policy):
-        b = SimNowBroker.__new__(SimNowBroker)
-        b.state = Instrument(None, _IF)
-        b.params = BrokerConfig(instrument_fetch_policy=policy).model_dump()
-        b.params["channel"]["instrument_fetch_timeout"] = 0.3
-        b._api = _Api(quote)
-        b._trade_symbol = "CFFEX.IF2609"
-        b._instrument_frozen = False
-        b._instrument_retry_tick = 0
-        b._pending_alerts = None
-        b._quote = None
-        return b
-
-    b = make(_Q(), "quote_partial")
-    b._apply_instrument_quote()
-    check("partial 档：verified 置位（不再永拒单）", b.state.verified, True)
-    check("partial 档：band 缺失 → 来源标 QUOTE_PARTIAL",
-          b.state.source, Instrument.SOURCE_QUOTE_PARTIAL)
-    codes = [a.get("code") for a in (b.drain_alerts() or [])]
-    check_true("partial 档：降级必须出声（instrument_band_degraded 告警）",
-               "instrument_band_degraded" in codes)
-
-    b2 = make(_Q(), "strict")
-    b2._apply_instrument_quote()
-    check("strict 档：band 缺失 → verified 保持 False（fail-closed 不回退）",
-          b2.state.verified, False)
-
-    b3 = make(_Q(hi=5000.0, lo=4000.0), "quote_partial")
-    b3._apply_instrument_quote()
-    check("partial 档：band 可用 → 来源标 QUOTE（不降级）",
-          b3.state.source, Instrument.SOURCE_QUOTE)
-
-
 # 删除 [6] 离线模式规格漂移对账（原 22 行）：
 #   Engine._check_spec_drift 的离线分支已删除 —— for_product 无条件播种
 #   → 离线 state ≡ 档案恒成立，分支结构性不可达（见交接文档 -D）。
@@ -451,12 +294,13 @@ def t8_dead_field_removed():
     for f in ("verified", "source", "trade_symbol", "last_trade_date"):
         check_true("Instrument 拥有运行时字段 {}".format(f),
                    f in vars(st))
-    # D-D：四个"有效参数"收进**不可变** EffectiveSpec，由同名
-    #   只读 property 转发 —— 故它们不再出现在 vars(st) 里。断言随之升级为
-    #   "可读 + 确实落在 _effective 值对象上 + 该值对象不可写"，既保住
-    #   "删了但没搬走"的防回潮意图，又把 D-D 的不可变性一并钉住。
+    # D-D：有效参数（tick/乘数，SSOT=品种档案）收进**不可变** EffectiveSpec，
+    #   由同名只读 property 转发 —— 故它们不再出现在 vars(st) 里。断言随之
+    #   升级为"可读 + 确实落在 _effective 值对象上 + 该值对象不可写"，既保住
+    #   "删了但没搬走"的防回潮意图，又把 D-D 的不可变性一并钉住
+    #   （2026-09-17 改造后涨跌停两项已随行情取值通道删除，值对象只剩两字段）。
     _eff = st._effective
-    for f in ("price_tick", "multiplier", "upper_limit", "lower_limit"):
+    for f in ("price_tick", "multiplier"):
         check_true("Instrument 有效参数可读 {}".format(f), hasattr(st, f))
         check_true("  └ 收在 EffectiveSpec 上 {}".format(f), f in vars(_eff))
     _blocked = False
@@ -502,8 +346,6 @@ def main():
     t1_parse_product_key()
     t2_assert_product_allowed()
     t3_kw_only()
-    t4_pulse_throttle()
-    t5_quote_partial()
     t7_log_dedup()
     t8_dead_field_removed()
     print("\n============================================================")

@@ -23,7 +23,8 @@
     禁止手改），费率数字在本文件的手写部分里**一个字面量都没有**（D-B · 2026-09-15）。
     对账测试：`Trading/Test/test_product_fee_table.py`（生成区块 ⇄ 档案 ⇄ xlsx 三方一致）。
   · 合约事实（price_tick / multiplier）：随交易所/券商公告人工同步
-    （实盘由行情 apply_quote 原子覆盖，档案值仅离线兜底）。
+    （2026-09-17 拍板：本档案即有效参数唯一真值源 SSOT，
+    没有任何信息需要从行情获取）。
 
 角色定位（2026-09-14 双轴声明）：本档案按**变异维度（随品种变）**分区，
 是领域注册表（凭交易经验标定的代码资产，git 评审 + 对账测试守护），
@@ -41,7 +42,7 @@ Period 承载周期的时间语义（freq / bar_secs）；参数里另有一类�
   · 保本/锁利层的"缓冲"已改为**全局比例** `breakeven_buffer_r`（在 Trading/Config.py
     的 ExitConfig，默认 0.5R，跨品种跨周期统一），不再随品种变 —— 故本档案不再含该字段。
   · `price_tick` / `multiplier`（最小变动价位 / 合约乘数）：IF/IH = 0.2 点 / 300 元/点，
-    IC/IM = 0.2 点 / 200 元/点 —— 合约事实，实盘以行情为准（详见类 docstring）。
+    IC/IM = 0.2 点 / 200 元/点 —— 合约事实，本档案即唯一真值源（详见类 docstring）。
 
 这些差异与周期无关（各品种在 4 个周期下都应保持各自的盈亏比/乘数），
 因此**不放 Period**，而单独成立本模块的 `Product`。
@@ -278,10 +279,9 @@ class Product:
       exec_policy              执行侧三件事（今仓离场 offset / 报单属性 / 一笔挂几手）。
                                唯一事实源 = 本模块上方 `EXEC_POLICY` 表 —— **代码只读不推**：
                                不读费率、不看交易所名字（用户拍板）。
-      【合约事实（交易所定，几乎不变；实盘以行情 apply_quote 为准，此处仅离线兜底）】
-      price_tick 最小变动价位 ——（D20）新增，**仅作离线模式
-                               （dry_run/replay）兜底**：实盘按 A′ 必须从行情取
-                               （apply_quote），配置值不会被采用。
+      【合约事实（交易所定，几乎不变；2026-09-17 拍板：本表即唯一真值源 SSOT）】
+      price_tick 最小变动价位 —— 有效参数唯一来源（构造期播种进 Instrument，
+                               运行期不再改写；无任何行情取值路径）。
       multiplier               合约乘数（元/点）
 
     注：下方**声明顺序**受 dataclass 规则约束（无默认值字段必须在前），
@@ -395,16 +395,14 @@ def _exec_kw(code: str) -> Dict[str, object]:
 #   改 xlsx（或生成器）后重跑，而非改本文件。
 #   对账守护：Trading/Test/test_product_fee_table.py（费率区块 ⇄ 档案 ⇄ xlsx 三方一致）。
 #
-# ⚠️ price_tick / multiplier 是**离线兜底值，无自动对账，需人工维护**
-#   —— 半句都不能省的背景：
-#     · 实盘（simnow/live）：由 SimNow._apply_instrument_quote 从**真实月份合约行情**
-#       原子覆盖这两个字段（`Instrument.apply_quote`，运行时有效值归
-#       Instrument），本表的取值**在实盘不被采用**；
-#     · 离线（dry_run/replay）：没有行情可比，有效值就是本表播种的配置值
-#       （播种桥已删，Instrument 构造时直接取档案初值）
-#       —— 本表过期 = 回测/模拟成交**静默用错规格**（tick 错 → 限价口径错；乘数错 → PnL 错）。
+# ⚠️ price_tick / multiplier 是**有效参数的唯一真值源（SSOT），无自动对账，需人工维护**
+#   —— 半句都不能省的背景（2026-09-17 拍板）：
+#     · 实盘（simnow/live）与离线（dry_run/replay）都直接用本表播种的值
+#       （Instrument 构造期取档案初值，运行期不再改写）——
+#       本表过期 = **所有模式**都用错规格（tick 错 → 限价口径错；乘数错 → PnL 错）；
+#     · 原行情覆盖通道（从真实月份合约行情原子覆盖有效值）已整体删除。
 #   维护口径：每次品种合约参数调整（交易所公告换月/改乘数）后，同步改本表并跑
-#   Trading/Test/test_p50_review_fixes.py 的对账用例。
+#   Trading/Test/test_instrument_spec_ssot.py 的对账用例。
 #
 # ⚠️ 覆盖档（合约月份差异化费率）**字段位已留但不消费**（R3 · 2026-09-15）：
 #   费率区块 OVERRIDES 已收录 AU/AG 的 6、12 合约档并填入 `fee_overrides`，

@@ -223,7 +223,7 @@ def make_broker(api, over=None):
     return b
 
 
-_FAST = {"close_max_chase": 1, "chase_interval": 0.0,
+_FAST = {"chase_max_number": 1,
          "fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
          "channel": {"position_ok_timeout": 0.15, "verify_delta_timeout": 0.08,
                      "baseline_settle_wait": 0.0}}

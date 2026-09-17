@@ -69,7 +69,7 @@ from Trading.Config import DEFAULT_CONFIG, TradingConfig  # noqa: E402
 from Trading.Engine.Engine import TradingEngine  # noqa: E402
 from Trading.Engine.Reconcile import ReconcileMixin  # noqa: E402
 from Trading.Infra.EventLog import EventLog  # noqa: E402
-from Trading.Infra.Instrument import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -140,7 +140,7 @@ def make_sig(key, is_buy=True, price=4500.0, ts=1001, date=TODAY + " 09:41"):
 
 
 def build_engine(tmpdir, tag="a"):
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     return TradingEngine(
         make_cfg(), DryRunBroker(spec, {"sim_equity": 1_000_000.0}),
         EntryPolicy({}), LayeredExitPolicy(),

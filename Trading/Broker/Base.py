@@ -48,7 +48,7 @@ def build_broker(name: str, instrument: "Instrument",
     """按名字构造 broker。
 
     `instrument` = **唯一一份运行时对象**（双类合并：
-    静态身份 + 有效 tick/乘数 + 涨跌停 + verified + 定价成本都在它上面）。
+    静态身份 + 有效 tick/乘数（SSOT=品种档案）+ verified + 定价成本都在它上面）。
     `state` 参数保留仅为调用点兼容：传入值必须与 instrument 同一对象
     （或 None），否则 ValueError —— 合并后"spec 与 state 两份对象"不存在了。
     生产路径 main.py 建好一份同时交给 Broker 与 Engine；漏传时 broker 会
@@ -98,7 +98,7 @@ INTENT_TO_OFFSET: Dict[OrderIntent, str] = {
 REJECT_FUNDS = "funds"              # 资金不足 → 立即停追，需人工加保证金
 REJECT_NOT_TRADABLE = "not_tradable"  # 非交易时段 / 集合竞价 / 无权限 → 立即停追
 REJECT_POSITION = "position"        # 平仓量超过持仓量 / 平今·平昨仓位不足 → 立即停追
-REJECT_PRICE = "price"              # 价格不可达（FOK 全撤 / 涨跌停）→ 继续追
+REJECT_PRICE = "price"              # 价格不可达（FOK 全撤）→ 继续追
 
 # 追价无用的三类：命中即 break
 NO_CHASE_REJECT_CLASSES = (REJECT_FUNDS, REJECT_NOT_TRADABLE, REJECT_POSITION)
@@ -173,24 +173,19 @@ def _code_hit(msg: str, code: str) -> bool:
 
 class Broker(ABC):
     name: str = "base"
-    # （A′）：是否离线通道（无行情连接，允许用配置参数）。
-    #   基类默认 False（保守）—— 未知/真实通道一律受 Engine 的 fail-closed 闸门
-    #   管束：合约参数必须从行情取到并校验通过才许下单。仅 dry_run 覆盖为 True。
+    # （A′，2026-09-17 改造）：是否离线通道。
+    #   基类默认 False（保守）—— 未知/真实通道受 Engine 的在线闸门管束：
+    #   连接成功（broker 侧置 `self.state.verified = True`，来源标 CONFIG）
+    #   才许下单。仅 dry_run 覆盖为 True。
     #
-    #   ⚠️ 新增 broker 通道必读（改为写 state）：
-    #   默认 False 意味着**不声明就 100% 拒单**（Engine._pre_trade_check 的
+    #   ⚠️ 新增 broker 通道必读：
+    #   默认 False 意味着**不声明就不放行**（Engine._pre_trade_check 的
     #   instrument_unverified 闸门，且拒得很安静 —— 只有 D11 告警）。接新通道时
-    #   必须**二选一**：
-    #     ① 自己实现合约参数取值 —— 从自家行情源填 `self.state` 的 price_tick /
-    #        multiplier / upper_limit / lower_limit 并置 `self.state.verified = True`
-    #        （照抄 SimNow._apply_instrument_quote 的契约：任一值非法就不能置位，
-    #        绝不回退配置值）；
-    #     ② 确实拿不到行情 → 显式 `is_offline = True`（配置值路径，来源会被标
-    #        CONFIG_OFFLINE，仅回测/模拟可接受）。
-    #   中间形态（拿得到 tick/乘数、拿不到涨跌停）：不要自欺欺人声明离线，
-    #   走 `instrument_fetch_policy="quote_partial"`（见 BrokerConfig）——
-    #   只强制 tick/乘数，涨跌停缺失时护栏降级为不校验并回一条
-    #   code=instrument_band_degraded 的 warn 告警。
+    #   **二选一**：
+    #     ① 在线通道 —— 连接建立成功后置 `self.state.verified = True`
+    #        （合约参数 SSOT=品种档案，无行情校验环节；参照 SimNow._connect）；
+    #     ② 拿不到在线连接 → 显式 `is_offline = True`（CONFIG_OFFLINE 路径，
+    #        仅回测/模拟可接受）。
     is_offline: bool = False
 
     # 运行时状态引用。类属性声明 + 惰性实例化

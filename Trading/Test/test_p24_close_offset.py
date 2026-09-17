@@ -178,7 +178,7 @@ def make_broker(api=None, params=None, spec=None):
 
 
 _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
-         "close_max_chase": 1, "chase_interval": 0.01}
+         "chase_max_number": 1}
 
 
 def _first_close_offset(entry_date: str, spec=None) -> str:

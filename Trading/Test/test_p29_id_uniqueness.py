@@ -84,7 +84,7 @@ from Trading.Config import (DEFAULT_CONFIG, TradingConfig,  # noqa: E402
                             resolved_exit_params)
 from Trading.Engine.Engine import TradingEngine           # noqa: E402
 from Trading.Infra.EventLog import EventLog               # noqa: E402
-from Trading.Infra.Instrument import Instrument   # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig   # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -137,7 +137,7 @@ def make_cfg():
 def build(tmp, tag="a"):
     """在 tmp 下用**固定文件名**建引擎 —— 同 tag 第二次调用 = 模拟进程重启。"""
     cfg = make_cfg()
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     broker = DryRunBroker(spec, {})
     store = Store(os.path.join(tmp, "state_%s.db" % tag))
     ev = EventLog(os.path.join(tmp, "events_%s.jsonl" % tag),

@@ -191,7 +191,7 @@ def _fake_broker(api):
     params["channel"].update({"position_ok_timeout": 0.2,
                               "verify_delta_timeout": 0.1,
                               "baseline_settle_wait": 0.0})
-    params.update({"close_max_chase": 1, "chase_interval": 0.0,
+    params.update({"chase_max_number": 1,
                    "fill_timeout_open": 0.05, "fill_timeout_close": 0.05})
     b.params = params
     b._api = api

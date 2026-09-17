@@ -265,7 +265,7 @@ def make_bar(date="2026-09-01 09:30", close=4550.0):
 
 
 _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
-         "close_max_chase": 2, "chase_interval": 0.01}
+         "chase_max_number": 2}
 
 
 # ════════════════════════════════════════════════════════════════

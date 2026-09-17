@@ -7620,7 +7620,7 @@
         // [COMPONENT] AutoOrderService —— 自动下单开关（期货实时页顶部）
         // 状态源：GET  /api/trader/auto-order/status（轮询 5s）
         //   开：POST  /api/trader/auto-order/on   → 拉起引擎子进程
-        //   关：POST  /api/trader/auto-order/off  → 停信号 + 锁全部未锁定持仓
+        //   关：POST  /api/trader/auto-order/off  → 停信号 + 运行态持仓离场（平今/平昨→空仓）、锁仓态保持
         // 仅在期货实时模式下显示（与"实时"徽标同步显隐）。
         // ══════════════════════════════════════════════════════════════
         let autoOrderBusy = false;        // 请求进行中（防连点）
@@ -7773,7 +7773,7 @@
                     if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';
                     if (data.broker) tip += '，broker=' + data.broker;
                     if (data.log_file) tip += '，日志=' + data.log_file;
-                    tip += '；关闭时停止接收买卖点信号并锁定全部未锁定持仓';
+                    tip += '；关闭时持仓会转为空仓或锁仓态';
                     wrap.title = tip;
                 }
                 handleAutoOrderAlerts(data);

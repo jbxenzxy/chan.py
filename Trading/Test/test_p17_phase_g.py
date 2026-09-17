@@ -563,15 +563,14 @@ print("── [7] D13：is_exit 决定追价轮数（同一 intent）──")
 
 bu2 = SimNowBroker(Instrument(None, _IF), params={"fill_timeout_open": 0.05,
                                             "fill_timeout_close": 0.01,
-                                            "overprice_ticks": 3,
-                                            "chase_interval": 0.0})
+                                            "overprice_ticks": 3})
 bu2._conn_error = None
-_cmc = int(DEFAULT_CONFIG["broker_params"]["close_max_chase"])
+_cmc = int(DEFAULT_CONFIG["broker_params"]["chase_max_number"])
 
 api_c = FakeInsertApi(long_pos=2, fill=False)
 bu2._api = api_c
 o_c = bu2.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "e-key-chase", is_exit=True)
-check("7.1 is_exit=True → 追价轮数 = close_max_chase", len(api_c.inserted), _cmc)
+check("7.1 is_exit=True → 追价轮数 = chase_max_number", len(api_c.inserted), _cmc)
 check("7.2 追价未成交 → rejected", o_c.status, "rejected")
 check("7.3 每轮报文都是 CLOSE + SELL（重报不改报文类型）",
       sorted({(m["offset"], m["direction"]) for m in api_c.inserted}),

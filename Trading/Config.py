@@ -22,8 +22,9 @@ Trading/Config.py —— 自动下单配置的**唯一总入口**（SSOT = Singl
       费率的真值源 = 品种档案 Product（exchange 删除），
       运行时对象 `Instrument`
       构造时直接取档案初值（见 Infra/Instrument.py）；
-      合约参数的运行时状态（有效 tick/乘数、涨跌停区间、A′ verified、
-      trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**。
+      合约参数的运行时状态（有效 tick/乘数、A′ verified、
+      trade_symbol/last_trade_date 回填）收口在 `Instrument`，**不在本配置树上**
+      （有效 tick/乘数 SSOT=品种档案 Product；涨跌停机制已整体删除，2026-09-17）。
 
 2026-09-07 配置层归一：删掉 config.json / config_example.json 这条配置路径，
 原来的 Trading/Infra/Config.py（dataclass + 裸 dict）上移并重写为本文件。
@@ -469,7 +470,7 @@ class EngineConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     close_retry_bars: int = 5    # CLOSE 被拒后冷却多少根 bar 再试（防每根 bar
-                                 #   重复报单 —— broker 内部每笔已追 close_max_chase 轮）
+                                 #   重复报单 —— broker 内部每笔已追 chase_max_number 轮）
     close_max_streak: int = 20   # CLOSE 连续被拒这么多次 → 认定幻影仓，从簿中清除
                                  #   并升级为严重告警（D11，弹窗叫人核对实盘）
     close_stuck_bars: int = 5    # CLOSE 报单后多少根 bar 触发二次确认复核（Reconcile 消费）
@@ -500,13 +501,6 @@ class ChannelTimingConfig(BaseModel):
     verify_delta_timeout: float = 5.0     # 持仓增量精确校验窗口秒数（_verify_position_delta 生产调用点）
     underlying_map_timeout: float = 20.0  # 主连→主力合约映射等待秒数（get_quote.underlying_symbol）
     cancel_settle_wait: float = 5.0       # 超时撤单后等最后一笔回报的窗口秒数
-    # 合约参数（tick/乘数/涨跌停）就绪等待**独立**秒数。
-    #   与 underlying_map_timeout 分开的原因：主连映射通常 <1s，而真实月份
-    #   合约的静态字段在非交易时段可能 10~30s 才推齐，两者超时期望不同。
-    #   默认 30s —— 取宽松端：超时不是终态（pulse 每根 bar 重试），宁可
-    #   多等一轮也别在开盘阶段误触发 fail-closed（外部评审建议 10s 与其
-    #   自己"10~30s 才到齐"的论证矛盾，不采纳）。
-    instrument_fetch_timeout: float = 30.0
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -532,51 +526,20 @@ class BrokerConfig(BaseModel):
     overprice_ticks: int = 5              # 超价 = overprice_ticks × 品种 tick（默认 5 tick；IF tick=0.2 → 1.0 点）。二期其它品种加载各自 price_tick 自动缩放。
     fill_timeout_open: float = 5.0   # 入场报单等待终态秒数（FOK 下退化为通道异常 watchdog）
     fill_timeout_close: float = 5.0  # 离场报单每轮等待终态秒数；未成交则立即重报追价
-    close_max_chase: int = 20             # 离场追价最大轮数（引擎还会跨 K 线继续重试，实际=直到成交）
+    chase_max_number: int = 3             # 离场追价最大轮数（默认 3：终态回报到手立即重报，
+                                          #   不 sleep；轮数用尽仍不成交 → severe 告警转人工，
+                                          #   引擎还会跨 K 线继续重试，实际=直到成交）
     close_chase_ticks: int = 2            # 离场追价兜底步长（仅在行情临时取不到时，在上一笔限价基础上推几跳）
-    chase_interval: float = 1.0      # 离场追价重报间隔秒数（防 CTP 高频报撤监控）
     connect_retries: int = 3              # 登录重试次数（CTP 对短连接敏感，"用户不活跃"时重试通常能连上）
     connect_backoff: float = 5.0     # 登录失败后首轮退避秒数（每轮 ×1.5）
     tq_market: str = "simnow"             # 天勤接入市场：simnow=仿真；实盘填期货公司名（如"创元期货"）
     confirm_live_trading: bool = False    # 实盘安全闸门：broker=live 或 tq_market≠simnow 时必须显式 true
-    # ── （D20 · A′）：合约参数自动获取开关──
-    #   **没有宽容档**（旧 A 案 prefer 已删除 —— 它就是"静默回退配置值"，
-    #   需求方明确否决）：
-    #     strict（默认）：实盘必须从行情取到并通过校验 price_tick / volume_multiple /
-    #                    涨跌停，否则 Engine._pre_trade_check 拒单 + 严重告警（fail-closed）。
-    #     off          ：只用配置值。**仅 dry_run/replay 离线模式生效** —— SimNow
-    #                    （在线通道）下永不标记 verified → 闸门照样拒单（规则 4：
-    #                    调试开关不得绕过 A′）。
-    #     quote_partial：新增的**逃生舱档**（面向不走 tqsdk 的
-    #                    自研/第三方在线通道，如 CTP 直连）。语义：
-    #                      · 只强制 price_tick + volume_multiple（缺一即 fail-closed，
-    #                        这两个错 = 限价口径和 PnL 全错，绝不让步）；
-    #                      · 涨跌停区间（upper/lower_limit）取不到时**允许放行**，
-    #                        但必须把 band 护栏显式降级为不校验，并回一条 warn 告警
-    #                        （code=instrument_band_degraded）让前端可见 —— 降级必须
-    #                        出声，不能静默。
-    #                    为什么需要这一档：Broker.is_offline 基类默认 False，
-    #                    任何新通道不显式声明离线就 100% 拒单，而它未必能提供
-    #                    tqsdk 那套涨跌停字段。没有中间档 = 新通道要么自欺欺人
-    #                    声明离线，要么根本接不进来。
-    instrument_fetch_policy: str = "strict"
+    # （A′ 2026-09-17 改造）：合约参数 SSOT = 品种档案 Product，**没有任何信息
+    #   需要从行情获取** —— 原三档行情取值开关与独立就绪超时随行情取值通道
+    #   整体删除；verified 由 SimNow._connect 连接成功即置位（source=CONFIG）。
+    #   旧配置/旧测试若仍传这些键，extra="forbid" 会直接报错（显式失败优于静默）。
     # —— 通道时序（Step 2.3 归一，见 ChannelTimingConfig docstring）——
     channel: ChannelTimingConfig = Field(default_factory=lambda: ChannelTimingConfig())
-
-    @field_validator("instrument_fetch_policy")
-    @classmethod
-    def _validate_fetch_policy(cls, v: str) -> str:
-        v = str(v).strip().lower()
-        # 新增 quote_partial 逃生舱档（valid 三档）。
-        #   'prefer' 依旧非法（宽容档已按需求方拍板删除），
-        #   故 test_p42 对 prefer / whatever 的断言仍然成立。
-        if v not in ("strict", "off", "quote_partial"):
-            raise ValueError(
-                "instrument_fetch_policy 只允许 'strict'（默认，实盘必须行情取值）"
-                " / 'off'（仅离线生效） / 'quote_partial'（只强制 tick+乘数，"
-                "涨跌停缺失时降级为不校验并告警），得到 {!r} —— 宽容档 prefer "
-                "已按需求方 2026-09-11 拍板删除".format(v))
-        return v
 
 
 # ════════════════════════════════════════════════════════════════════

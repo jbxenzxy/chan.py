@@ -9,7 +9,7 @@ P37 FOK 全撤 / 部分成交 契约测试（D12 盲区①，2026-09-13）
 "SimNow 全绿"对它们**零证据力**：
 
   ① 追价循环（`_submit_close` / `_submit_open(is_exit=True)` 的
-     close_max_chase 轮 + 每轮重取对手价重定价）；
+     chase_max_number 轮 + 每轮重取对手价重定价）；
   ② `_finalize` 的全撤分支（`status != FINISHED` → rejected）；
   ③ **部分成交**处理（`trade_records` 手数 < 委托手数 → 必须判未成交）。
 
@@ -19,8 +19,8 @@ P37 FOK 全撤 / 部分成交 契约测试（D12 盲区①，2026-09-13）
 
 本文件钉死的断言
 ------------------------------------------------
-  [1] 配置前置：close_max_chase / chase_interval / order_advanced 取值；
-  [2] ★ 离场单（CLOSE, is_exit=True）连续全撤 → 报单轮数 = close_max_chase，
+  [1] 配置前置：chase_max_number / order_advanced 取值；
+  [2] ★ 离场单（CLOSE, is_exit=True）连续全撤 → 报单轮数 = chase_max_number，
       且**每轮都按当期对手价重定价**（不是拿第一轮的价格反复报）；
   [3] 入场单（OPEN, is_exit=False）全撤 → **只报 1 次**，不追价（转移 ①②③ 语义）；
   [4] ★ **部分成交必须判未成交**：`status=FINISHED` + `volume_left=0` 但
@@ -209,31 +209,31 @@ def make_broker(api, over=None):
     return b
 
 
-# 快参数：3 轮追价、无间隔、watchdog 0.05s、持仓/增量校验窗口 0.05s
-_FAST = {"close_max_chase": 3, "chase_interval": 0.0,
+# 快参数：3 轮追价（终态回报到手立即重报，无 sleep）、watchdog 0.05s、
+# 持仓/增量校验窗口 0.05s
+_FAST = {"chase_max_number": 3,
          "fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
          "channel": {"position_ok_timeout": 0.05, "verify_delta_timeout": 0.05,
                      "baseline_settle_wait": 0.0}}
-_CAP = _FAST["close_max_chase"]
+_CAP = _FAST["chase_max_number"]
 
 
 print("\n[1] 配置前置（单一事实源 Trading/Config.py）")
 # ════════════════════════════════════════════════════════════════
 bp = DEFAULT_CONFIG["broker_params"]
-check("close_max_chase 默认 20 轮（实盘追价上限）", bp["close_max_chase"], 20)
-check("chase_interval 默认 1.0 秒（防报撤单频率超限 / FOK 撤单计数爆量）",
-      bp["chase_interval"], 1.0)
+check("chase_max_number 默认 3 轮（终态回报到手立即重报，不 sleep）",
+      bp["chase_max_number"], 3)
 check("order_advanced 默认 FOK（A2：值在 spec，不在 Broker 正文）",
       Instrument(None, _IF).order_advanced, "FOK")
 check("本用例实际使用的追价上限（快参数）", _CAP, 3)
 
 
-print("\n[2] ★ 离场单连续全撤 → 轮数 = close_max_chase，且每轮按当期对手价重定价")
+print("\n[2] ★ 离场单连续全撤 → 轮数 = chase_max_number，且每轮按当期对手价重定价")
 # ════════════════════════════════════════════════════════════════
 api = FakeApi(mode="cancel", ask=4565.0, bid=4560.0, step=10.0)
 b = make_broker(api, _FAST)
 o = b.submit(OrderIntent.CLOSE, Side.LONG, 2, 4550.0, "k-chase", is_exit=True)
-check("报单轮数 = close_max_chase", len(api.inserted), _CAP)
+check("报单轮数 = chase_max_number", len(api.inserted), _CAP)
 check("全部未成交 → rejected", o.status, "rejected")
 check("每轮都是 FOK", sorted({m["advanced"] for m in api.inserted}), ["FOK"])
 check("每轮都是平昨报文 offset=CLOSE / 方向 SELL",

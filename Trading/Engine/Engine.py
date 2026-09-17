@@ -49,7 +49,6 @@
 """
 from __future__ import annotations
 
-import math
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -57,7 +56,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
-from ..Infra.Period import bar_secs_for
 from ..Infra.Product import CLOSETODAY, ExecPolicy, Product, assert_product_allowed
 from .PositionBook import PositionBook, PositionBookError
 from .Reconcile import ReconcileMixin
@@ -104,8 +102,8 @@ class TradingEngine(ReconcileMixin):
         # ── 合约运行时对象（双类合并）──
         #   原 self.state（静态规格 cfg.instrument）与 self.state（运行时状态）
         #   现在是**同一个 Instrument**：静态身份经 config/product 转发只读，
-        #   有效值/回填字段（tick/乘数/涨跌停/verified/trade_symbol/last_trade_date）
-        #   是可变运行时字段。
+        #   有效值（SSOT=品种档案）/回填字段（verified/trade_symbol/last_trade_date）
+        #   是运行时字段。
         # D-C：原 spec 兼容别名**已删除** —— 本类只有
         #   `self.state` 一个名字（与 Broker / Source 同名），原 spec 点号引用
         #   全部改读 `self.state.xxx`，不再"三个名字指同一块内存"。
@@ -192,9 +190,9 @@ class TradingEngine(ReconcileMixin):
         #   ⚠️ 这两项在重写引擎核心时**漏迁**（配置项留着、判定没了），
         #      按新分层重新落地：判定挂在 `_execute` 这一唯一报单出口上。
         #
-        #   为什么必须冷却：broker 内部一笔 CLOSE 已按 `close_max_chase` 轮追价
-        #     （最坏 = 20 组报单/撤单）。引擎若每根 bar 再补一笔，15s 周期下就是
-        #     每分钟 80 组报撤单 —— 直接顶中金所「频繁报撤单」监管计数（风险 R13）。
+        #   为什么必须冷却：broker 内部一笔 CLOSE 已按 `chase_max_number` 轮追价
+        #     （默认 3 = 最坏 3 组报单/撤单）。引擎若每根 bar 再补一笔，15s 周期下
+        #     也会累积可观的报撤单量 —— 顶中金所「频繁报撤单」监管计数（风险 R13）。
         #   冷却口径是**根数**（bars_seen 序号差），与周期、与时间戳单位都无关
         #     （旧代码曾拿毫秒时间戳差值去比"5 根" → 实际 5 毫秒，冷却从未生效）。
         #   豁免：关闭自动下单（shutdown）路径不走冷却 —— 那是用户当面点下的收尾
@@ -256,22 +254,10 @@ class TradingEngine(ReconcileMixin):
         #   由前端开关经后端进程托管触发（App/AppTrader.py → main.py 的
         #   shutdown_and_lock_all），_restore/_persist 持久化，重启不漂移。
         # ════════════════════════════════════════════════════════════════
-        # ════════════════════════════════════════════════════════════════
-        # Step 1：周期 bar 秒数 —— 引擎按 source.freq 推导（用于追价窗口检查）。
-        #   （精简：原 L4 时间/收盘兜底的 set_bar_secs 注入已随功能删除。）
-        self.bar_secs: Optional[int] = bar_secs_for(cfg.source.freq, default=None)
-        # 离场追价窗口（close_max_chase × chase_interval）若长于一根 bar，
-        # 15s 下会出现"上一轮还没追完、下一根 bar 又发起新一轮"的叠加。
-        # 不阻断（引擎本来就跨 bar 重试），但必须可见——历史上这类问题
-        # 全靠"静默降级"被藏起来。
-        _bp = cfg.broker_params
-        chase_window = float(_bp.close_max_chase) * float(_bp.chase_interval)
-        if self.bar_secs and chase_window > self.bar_secs:
-            self.ev.write(
-                "chase_window_exceeds_bar", freq=cfg.source.freq,
-                bar_secs=self.bar_secs, chase_window_sec=round(chase_window, 2),
-                note="离场追价窗口长于一根 bar；短周期（15s）请把 "
-                     "close_max_chase × chase_interval 调到 bar_secs 以内")
+        # （2026-09-17 改造）：周期 bar 秒数与追价窗口检查已删 ——
+        #   追价改为"终态回报到手立即重报"（不 sleep），默认 3 轮追价单笔
+        #   在一根 bar 内必然完成，原"追价窗口长于一根 bar"的告警不再有
+        #   触发场景；bar 秒数缓存的唯一消费者就是该检查，随块一并移除。
 
         self.auto_order_enabled: bool = True
         self._restore()
@@ -1219,24 +1205,16 @@ class TradingEngine(ReconcileMixin):
                    where=where, positions_n=n)
 
     def _check_spec_drift(self) -> None:
-        """合约规格漂移校验（用户拍板「保留 + 漂移校验」）。
+        """合约规格漂移校验（防回潮护栏，2026-09-17 改造后语义）。
 
-        背景：PRODUCT_PROFILES 里的 multiplier / price_tick **不是实盘真值**
-        （实盘由 apply_quote 从行情原子覆盖，A′ fail-closed 兜底），而是
-        dry_run / replay 的离线兜底。行情值与档案值不一致 = 档案兜底值过期
-        —— 实盘不受影响，但离线回测/模拟成交会静默用错数。这里把双源漂移
-        从静默变显性：发 warn 轻提示（D11 通道，前端 toast），不拒单。
+        背景：有效 tick/乘数的 **SSOT = 品种档案 Product**（构造期播种，
+        无任何行情取值路径）—— state 与档案同源，结构上恒无漂移。
+        本校验保留作**防回潮护栏**：若将来有人重新引入"行情覆盖 state"
+        的写入通道而档案未同步，这里会把双源漂移从静默变显性
+        （warn 轻提示，D11 通道前端 toast，不拒单）。
 
         一次性：verified 首次为真时查一次即置位（合约规格会话内不变）。
         挂在 A3 校验链（_pre_trade_check）上，遵循"二期扩展往链上加"惯例。
-
-        删除离线分支（原补的
-        `_spec_drift_offline_checked` + `spec_drift_offline` 告警，24 行）：
-        之前 `for_product` 播种桥对 price_tick / multiplier **无条件强制取
-        档案值** → 离线 state ≡ 档案恒成立 → 离线分支结构性不可达。
-        播种桥整体消亡（for_product/_seed_instrument 删除），
-        Instrument 有效值初值**直接取档案**（构造期一次成型），单向取值结构
-        本身保证离线对账恒成立，无需运行时校验。
         """
         # 档案来源由 `cfg.product_profile`（**实时**按
         #   cfg.instrument.signal_symbol 查表）改为 `self.state.product`
@@ -1253,20 +1231,20 @@ class TradingEngine(ReconcileMixin):
             self._check_spec_drift_online(p)
 
     def _check_spec_drift_online(self, p: "Product") -> None:
-        """行情值 vs 档案兜底值（实盘路径，原 _check_spec_drift 主体）。"""
+        """state 有效值 vs 品种档案（防回潮护栏，正常恒一致）。"""
         diffs = []
         if self.state.price_tick != p.price_tick:
-            diffs.append("price_tick 档案={} / 行情={}".format(
+            diffs.append("price_tick 档案={} / state={}".format(
                 p.price_tick, self.state.price_tick))
         if self.state.multiplier != p.multiplier:
-            diffs.append("multiplier 档案={} / 行情={}".format(
+            diffs.append("multiplier 档案={} / state={}".format(
                 p.multiplier, self.state.multiplier))
         if diffs:
             self.alert(
                 self.ALERT_WARN, "spec_drift",
-                "行情合约规格与品种档案兜底值不一致（{}）。实盘以行情为准、"
-                "不受影响；但 dry_run / 回测的离线兜底已过期，请同步更新 "
-                "PRODUCT_PROFILES。".format("；".join(diffs)),
+                "state 合约规格与品种档案不一致（{}）。有效参数 SSOT=品种档案，"
+                "请同步更新 PRODUCT_PROFILES；若存在非档案来源的写入路径"
+                "（防回潮护栏触发），请排查。".format("；".join(diffs)),
                 signal_symbol=str(self.cfg.instrument.signal_symbol),
                 source=self.state.source)
 
@@ -1281,47 +1259,26 @@ class TradingEngine(ReconcileMixin):
 
         ⚠️ 二期（Q1 全品种 / Q2 平今开关 / Q3 交割月护栏）一律往这条链上加，
         不要去改 `_decide_action` / `_decide_exit` 的转移表结构。
-        （D20）在此链上加了两个 item（A3：不新增报单入口）：
-          · instrument_unverified —— A′ fail-closed 闸门；
-          · price_out_of_limit    —— 参考价出当日涨跌停区间的**粗检**（阻塞点 5；
-            broker 侧对最终限价还有一次精确校验，见 SimNow._price_out_of_band ——
-            最终限价（对手价±overprice）只有 broker 知道，引擎侧先拦参考价）。
+        （D20 → 2026-09-17 改造）此链上的 A′ item：
+          · instrument_unverified —— A′ 在线闸门（在线通道连接成功才放行；
+            合约参数 SSOT=品种档案，无行情校验环节）。涨跌停护栏
+            （引擎侧参考价粗检 + broker 侧最终限价精确校验）已整体删除：
+            报出必然被废的价格由交易所拒单、软件侧弹窗，用户手工干预即可。
         """
-        # ── A′ fail-closed 闸门──
-        #   在线通道（simnow/live）：合约参数（tick/乘数/涨跌停）必须已从行情
-        #   取到并通过校验，否则拒单 + 严重告警 —— 绝不静默回退配置值。
-        #   实盘配 instrument_fetch_policy="off" 时 verified 恒为 False →
-        #   同样被这里拦下（调试开关不得绕过 A′）。
-        #   离线通道（dry_run）放行：配置值来源已在 main.py 标记 CONFIG_OFFLINE。
+        # ── A′ 在线闸门（2026-09-17 改造）──
+        #   在线通道（simnow/live）：verified=True = 连接成功（SimNow._connect
+        #   置位，source=CONFIG）。未连通（或连接失败）→ 拒单 + 严重告警。
+        #   合约参数 SSOT=品种档案，无行情校验环节 —— 就一个逻辑。
+        #   离线通道（dry_run）放行：来源已在 main.py 标记 CONFIG_OFFLINE。
         #   verified / source 读自 **self.state**（与 broker 同一份）。
         if not (getattr(self.broker, "is_offline", False)
                 or self.state.verified):
-            # （O-4 收窄）：告警文案带上"为什么 unverified"——
-            # policy=off 时点名（调试开关在在线通道不生效），否则给行情侧
-            # 的通用原因。诊断细节（超时 / nan / 哪个字段冲突）由 broker 侧
-            # notify → _drain_broker_alerts 回流补充（O-2/O-3）。
-            policy = ""
-            _getp = getattr(self.broker, "_param", None)
-            if callable(_getp):
-                try:
-                    policy = str(_getp("instrument_fetch_policy") or "").strip().lower()
-                except Exception:
-                    policy = ""
-            if policy == "off":
-                why = "instrument_fetch_policy=off 在在线通道不生效（A′）"
-            elif policy == "quote_partial":
-                # partial 档只豁免涨跌停，tick/乘数仍强制。
-                #   文案要说清"这一档拒的不是涨跌停"，否则排障会往错的方向查。
-                why = ("quote_partial 档：price_tick / 乘数仍未从行情取到（该档"
-                       "只豁免涨跌停，这两项缺失照样 fail-closed）")
-            else:
-                why = "行情未就绪或校验未通过（超时 / nan / 区间不自洽）"
             self.alert(self.ALERT_SEVERE, "instrument_unverified",
-                       "合约参数未通过行情校验（{}），已拒单。".format(why) +
-                       "fail-closed：宁可不下单，也不用可能错的参数下单",
+                       "在线通道未连通（verified=False），已拒单。"
+                       "fail-closed：宁可不下单，也不带未确认的通道状态下单；"
+                       "连接恢复后自动放行。",
                        source=self.state.source,
-                       broker=getattr(self.broker, "name", ""),
-                       policy=policy)
+                       broker=getattr(self.broker, "name", ""))
             return "instrument_unverified"
         # 合约规格漂移校验（verified 首次为真后查一次；warn 不拒单）
         self._check_spec_drift()
@@ -1356,14 +1313,6 @@ class TradingEngine(ReconcileMixin):
             return "zero_volume"
         if not today:
             return "no_trading_day"
-        # ── 涨跌停护栏 · 粗检（阻塞点 5）──
-        #   参考价（信号 K 线收盘价 / 离场触发价）出当日区间 → 拦下。挡两类：
-        #   ① 行情/合约异常（最新价本身不在区间内 = 数据是坏的，用错数据交易不可逆）；
-        #   ② 停板边缘的必然废单（最终限价的精确校验在 broker 侧补刀）。
-        #   区间未知（0，离线模式）→ 不校验未知的东西；参考价恰等于涨跌停价放行。
-        why = self._ref_price_out_of_band(ref_price)
-        if why is not None:
-            return why
         if act.intent is OrderIntent.OPEN:
             # 建仓必须能确定"建仓所属交易日"：entry_date 是规则 ⑷⑸ 判
             # 「今仓 → 反向开仓 / 跨日 → 平仓」的唯一依据，空着就是非法状态。
@@ -1417,29 +1366,6 @@ class TradingEngine(ReconcileMixin):
             return "close_volume_below_target"
         return None
 
-    def _ref_price_out_of_band(self, ref_price: float) -> Optional[str]:
-        """涨跌停护栏 · 粗检。返回 None = 通过。
-
-        区间读自 **self.state**（与 broker 侧 _price_out_of_band 同源）。
-        """
-        lo = float(getattr(self.state, "lower_limit", 0.0) or 0.0)
-        hi = float(getattr(self.state, "upper_limit", 0.0) or 0.0)
-        if lo <= 0 or hi <= 0 or hi <= lo:
-            return None                          # 区间未知（离线/未取到）→ 不校验
-        p = float(ref_price or 0.0)
-        if p <= 0:
-            return None                          # 无参考价（历史调用点兼容）→ 不校验
-        if not math.isfinite(p):
-            # （引擎侧同源修复）：nan 是 truthy，`nan or 0.0` 仍是
-            # nan，`nan <= 0` / `nan < lo` / `nan > hi` 全为 False → 原版会放行。
-            # 区间已知时参考价非有限值一律 fail-closed（第 1 条 isfinite 守则）。
-            return ("price_invalid: 参考价 {!r} 非法（要求 isfinite）"
-                    .format(p))
-        if p < lo or p > hi:
-            return ("price_out_of_limit: 参考价 {!r} 超出当日涨跌停区间 [{!r}, {!r}]"
-                    .format(p, lo, hi))
-        return None
-
     def _open_time_anchor(self, sig: Optional[Signal]) -> "Tuple[int, str]":
         """OPEN 的建仓时间锚：（K 线毫秒时间戳，建仓交易日）。
 
@@ -1482,7 +1408,7 @@ class TradingEngine(ReconcileMixin):
             return None
 
         # CLOSE 冷却：同一笔平仓刚被拒过就先别再砸单 —— 免得每根
-        # bar 都往柜台发一笔（broker 内部每笔已经追过 close_max_chase 轮）。
+        # bar 都往柜台发一笔（broker 内部每笔已经追过 chase_max_number 轮）。
         if (act.intent is OrderIntent.CLOSE and not force
                 and self._in_close_cooldown()):
             self._last_reject = "close_cooldown"
@@ -1878,7 +1804,7 @@ class TradingEngine(ReconcileMixin):
     # D11 告警队列
     #   触发源三类（分析文档）：
     #     ① D10 判出的**不可挽救拒单** —— 资金不足 / 非交易时段 / 无权限 / 无此持仓
-    #     ② 离场追价跑满 `close_max_chase` 仍未成交（价格不可达，追不动了）
+    #     ② 离场追价跑满 `chase_max_number` 仍未成交（价格不可达，追不动了）
     #     ③ CLOSE 连续被拒达 `close_max_streak` —— 兜底清幻影仓，同时叫人核对实盘
     #   判定都不在这里：①②由 broker 的 D10 分类器给结论（写在 Order.meta），
     #   ③在 `_note_close_rejected`；本段只负责**怎么存、怎么给前端**。
@@ -1890,8 +1816,8 @@ class TradingEngine(ReconcileMixin):
     _ALERTS_KEEP = 20                # 队列上限：再多也只会淹没前端
 
     # CTP 拒单分类（D10）→ (告警码, 级别, 标题)
-    #   · price（FOK 全撤 / 涨跌停）**不进这张表**：那是"追了有用"的一类，引擎会
-    #     继续追；只有追满 close_max_chase 仍不成交才升级（见 `_alert_on_reject`）。
+    #   · price（FOK 全撤）**不进这张表**：那是"追了有用"的一类，引擎会
+    #     继续追；只有追满 chase_max_number 仍不成交才升级（见 `_alert_on_reject`）。
     #   · position（平仓量超过持仓量 / 平昨仓不足）2026-09-13 独立成项：它是
     #     `_note_close_rejected` 唯一允许触发"清幻影仓"兜底的类别（见该函数）。
     _REJECT_ALERTS = {
@@ -2052,13 +1978,11 @@ class TradingEngine(ReconcileMixin):
     # 报单前校验拒单 → 告警分级表
     #   键 = `_pre_trade_check` 返回的原因字符串；(告警码, 级别)。
     #
-    #   ⚠️ **只列"自己不会告警"的原因**。有三个原因在 `_pre_trade_check`
+    #   ⚠️ **只列"自己不会告警"的原因**。有两个原因在 `_pre_trade_check`
     #      自己的分支里**已经**发过告警，绝不能在这里重发一次，否则同一次拒单
     #      会弹两个框（本探针首版就踩了这个坑，实测 1 次拒单产生 2 条告警）：
-    #        · `instrument_unverified` —— L1303 已发 severe；
-    #        · `delivery_guard_blocked` —— L1343 已发 severe；
-    #        · `price_out_of_limit`     —— 由 `_ref_price_out_of_band` 的调用方
-    #          另行处理（见该分支注释），此处同样不重发。
+    #        · `instrument_unverified` —— 已发 severe；
+    #        · `delivery_guard_blocked` —— 已发 severe。
     #      这些"已告警"的原因**仍会**被 `_note_precheck_reject` 计数（见该函数
     #      `_PRECHECK_SELF_ALERTED`），只是不再重复发告警 —— 计数用于升级，
     #      但既然本来就 severe，升级无意义，故直接跳过。
@@ -2091,11 +2015,10 @@ class TradingEngine(ReconcileMixin):
         "zero_volume": ("precheck_zero_volume", "warn"),
     }
 
-    # 这三个原因在 `_pre_trade_check` 内**已经**发过告警（见上方注释），
+    # 这两个原因在 `_pre_trade_check` 内**已经**发过告警（见上方注释），
     #   `_note_precheck_reject` 遇到它们只计数、不重发。
     _PRECHECK_SELF_ALERTED = frozenset({
         "instrument_unverified", "delivery_guard_blocked",
-        "price_out_of_limit",
     })
 
     # 同一原因连续被拦多少次 → 升级为 severe（即便该原因本身只是 warn 档）。

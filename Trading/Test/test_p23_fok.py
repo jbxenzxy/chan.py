@@ -13,8 +13,8 @@ P23 全 FOK 报单 单元测试（2026-09-06 全量化改造 · 用户拍板版�
          （`Engine.py` 全部 `transition=` 赋值集合 = {1,2,3,4,5}）。转移 ③ 是
          CLOSE 但 `is_exit=False`，故归在"不追价"这一侧。
       · 离场语义（is_exit=True）：转移 ④（反向 OPEN 软离场）/ ⑤（CLOSE 硬离场）——
-        FOK 全撤 → 隔 chase_interval 秒按最新对手价 ± overprice 重新定价重报，
-        最多 close_max_chase 轮；轮数用尽由引擎跨 K 线继续重试
+        FOK 全撤 → 终态回报到手立即按最新对手价 ± overprice 重新定价重报
+        （不 sleep 等待），最多 chase_max_number 轮；轮数用尽由引擎跨 K 线继续重试
       · 不再有 open_advanced / overprice_points_fok 配置（旧版可回退 GFD 的
         参数已删除，恒定 FOK，杜绝配置漂移回旧路径）
       · fill_timeout_open/close 退化为通道异常兜底 watchdog（断线防挂死）
@@ -195,15 +195,15 @@ def make_broker(api=None, params=None):
 
 
 _FAST = {"fill_timeout_open": 0.05, "fill_timeout_close": 0.05,
-         "close_max_chase": 2, "chase_interval": 0.01}
+         "chase_max_number": 2}
 
 print("\n[1] 配置默认值（单一事实源 Trading/Config.py）")
 bp = DEFAULT_CONFIG["broker_params"]
 check("overprice_ticks 合并为 5（四类报单共用，IF=5×0.2=1.0 点）", bp["overprice_ticks"], 5)
 check("open_advanced 已删除（恒定 FOK，无 GFD 回退）", "open_advanced" in bp, False)
 check("overprice_points_fok 已删除（参数合并）", "overprice_points_fok" in bp, False)
-check("close_max_chase 默认 20 轮", bp["close_max_chase"], 20)
-check("chase_interval 默认 1.0 秒（追价重报间隔）", bp["chase_interval"], 1.0)
+check("chase_max_number 默认 3 轮（终态回报到手立即重报，不 sleep）",
+      bp["chase_max_number"], 3)
 check("fill_timeout_open 默认 5.0（watchdog 兜底）", bp["fill_timeout_open"], 5.0)
 check("fill_timeout_close 默认 5.0（watchdog 兜底）", bp["fill_timeout_close"], 5.0)
 
@@ -243,22 +243,22 @@ check("direction SELL（平多）", msg["direction"], "SELL")
 check("限价 = bid - 1.0 = 4559.0（卖方向向下取整）", msg["limit_price"], 4559.0)
 
 print("\n[5] 软离场 OPEN+is_exit=True（转移 ④）：FOK 全撤立即重报追价，"
-      "close_max_chase 轮全 FOK，offset=OPEN")
+      "chase_max_number 轮全 FOK，offset=OPEN")
 api = MockApi()
 b = make_broker(api=api, params=_FAST)
 b.submit(OrderIntent.OPEN, Side.SHORT, 1, 4550.0, "k-soft-exit", is_exit=True)
-check("软离场追价报单次数 = close_max_chase", len(api.inserted), 2)
+check("软离场追价报单次数 = chase_max_number", len(api.inserted), 2)
 check("所有软离场报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
 check("软离场超价用 overprice_ticks(5)×tick(0.2)=1.0（开空 bid-1.0=4559.0）",
       api.inserted[0]["limit_price"], 4559.0)
 check("软离场报文 offset=OPEN（反向开仓）", api.inserted[0]["offset"], "OPEN")
 
-print("\n[6] CLOSE 硬离场（is_exit=True）：FOK 全撤立即重报追价，close_max_chase 轮全 FOK")
+print("\n[6] CLOSE 硬离场（is_exit=True）：FOK 全撤立即重报追价，chase_max_number 轮全 FOK")
 api = MockApi(pos=MockPos())
 b = make_broker(api=api, params=_FAST)
 b.submit(OrderIntent.CLOSE, Side.LONG, 1, 4550.0, "k-close", is_exit=True)
-check("CLOSE 追价报单次数 = close_max_chase", len(api.inserted), 2)
+check("CLOSE 追价报单次数 = chase_max_number", len(api.inserted), 2)
 check("所有 CLOSE 报单 advanced 均为 FOK",
       all(m["advanced"] == "FOK" for m in api.inserted), True)
 # 修正：CLOSEANY 同样不在 tqsdk 白名单 → 白名单只剩 CLOSE / CLOSETODAY。

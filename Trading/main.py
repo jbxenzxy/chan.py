@@ -191,8 +191,8 @@ def build_runtime(args):
     sys.stdout = _log_fh
     sys.stderr = _log_fh
     # 唯一一份**运行时对象** —— 静态身份（config 转发）+
-    #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（初值直接取
-    #   品种档案，行情原子覆盖）+ 定价成本，合并于同一个 Instrument。
+    #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（SSOT=品种档案，
+    #   构造期播种）+ 定价成本，合并于同一个 Instrument。
     #   由本进程持有并同时交给 Broker（写）与 Engine（读）—— 必须同源，
     #   否则 SimNow 置的 verified 引擎看不见，A′ 闸门会恒拒单且看不出原因。
     instr = Instrument(cfg.instrument, cfg.product_profile)
@@ -200,30 +200,13 @@ def build_runtime(args):
     broker = Broker.build_broker(args.broker or cfg.broker, instr,
                                  cfg.broker_params.model_dump())
 
-    # （O-4 收窄）：off 只对离线生效 —— 在线通道配 off 时**启动期**
-    # 就明确告知（原版静默，运维要等第一笔报单被闸门拒了才从告警反推原因）。
-    # 不在此处阻断：闸门（Engine._pre_trade_check）本身会拒单 + 严重告警兜底，
-    # 这里只负责"让原因在启动日志里第一屏可见"。只打一次，不会刷屏。
-    if (str(cfg.broker_params.instrument_fetch_policy).strip().lower() == "off"
-            and not getattr(broker, "is_offline", False)):
-        print("[gw] ⚠ instrument_fetch_policy=off 在在线通道（{}）下不生效："
-              "合约参数仍必须从行情获取（A′ fail-closed），"
-              "未验证前所有报单将被拒单".format(broker.name))
-    # quote_partial 是给"不走 tqsdk 的自研/第三方在线通道"
-    # 的逃生舱（只强制 tick/乘数，涨跌停缺失时护栏降级）。降级必须在**启动横幅**
-    # 里声明一次 —— broker 侧的告警要等取值失败才发，运维在第一屏就该看到
-    # "本轮没有涨跌停保护"，而不是等事后从 events.jsonl 里翻。
-    if (str(cfg.broker_params.instrument_fetch_policy).strip().lower()
-            == "quote_partial" and not getattr(broker, "is_offline", False)):
-        print("[gw] ⚠ instrument_fetch_policy=quote_partial：只强制从行情取 "
-              "price_tick / 乘数（缺一即拒单）；涨跌停区间取不到时**护栏降级为"
-              "不校验**（来源会标 QUOTE_PARTIAL 并发 instrument_band_degraded 告警），"
-              "本通道不提供停板保护")
+    # （A′ 2026-09-17 改造）：原三档行情取值开关的启动警示块已删
+    #   —— 合约参数 SSOT=品种档案，无任何信息需要从行情获取，就一个逻辑。
 
     # （来源标记）：离线模式（dry_run，含 replay 数据源）
-    # 没有行情连接，合约参数用品种档案值 —— 但必须显式标记来源，让"回测口径"能自证。
-    # 在线通道（simnow/live）不走这里：来源由 SimNow 取到行情后标 QUOTE；
-    # 取不到则 verified=False → Engine 闸门拒单（fail-closed）。
+    # 没有行情连接 —— 但必须显式标记来源，让"回测口径"能自证。
+    # 在线通道（simnow/live）不走这里：SimNow._connect 连接成功即置
+    # verified=True（source=CONFIG）。
     if getattr(broker, "is_offline", False):
         instr.mark_config_offline()
         print("[gw] ⚠ 离线模式：tick/乘数取自品种档案（source=CONFIG_OFFLINE），"
@@ -354,8 +337,7 @@ def run(args) -> int:
                          "tick": _st.price_tick,
                          "multiplier": _st.multiplier,
                          "verified": _st.verified,
-                         "source": _st.source,
-                         "fetch_policy": cfg.broker_params.instrument_fetch_policy})
+                         "source": _st.source})
     # （原 engine.risk.roll_day("") 当日统计初始化已随 RiskGate 删除。）
 
     t0 = time.time()

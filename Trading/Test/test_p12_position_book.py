@@ -82,7 +82,7 @@ from Trading.Infra.StateDB import Store  # noqa: E402
 
 from Trading.Strategy.Entry import EntryPolicy  # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy  # noqa: E402
-from Trading.Infra.Instrument import Instrument  # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES  # noqa: E402
 
 _IF = PRODUCT_PROFILES["IF"]
@@ -167,7 +167,7 @@ def seed_run(store, side="LONG", anchor=4500.0, volume=1):
 
 def build_engine(tmpdir, *, store=None, ev_name="events.jsonl"):
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
-    spec = Instrument(None, _IF)
+    spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({})
     exitp = LayeredExitPolicy()
