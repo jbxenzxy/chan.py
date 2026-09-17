@@ -4739,26 +4739,62 @@
         //   通道：POST /api/trader/signal-filter → 写引擎 state.db，引擎每个信号
         //   现读 → 盘中改勾选即时生效，无需重启自动下单子进程、与账户三态无关。
         //   失败只告警：显示过滤是本地行为，不能因为下单侧接口故障就挡住看图。
-        function pushBspFilterToTrader() {
+        // 后端 state.db 是「哪几类会被自动下单执行」的唯一真值源：打开设置面板
+        // 时 GET 回填，换浏览器 / 多标签页 / 别处改过都能看到实际生效的那一份。
+        // bspFilterLocalVer：本地勾选变更计数 —— GET 是异步的，回填返回前用户
+        // 可能已经改了勾选，此时丢弃回填结果，绝不覆盖用户刚做的改动。
+        var bspFilterLocalVer = 0;
+
+        function applyBspFilterFromTrader(filt) {
+            var types = ["0", "1", "2", "3"];   // 与后端 BSP_TYPE_CHOICES 一一对应
+            for (var i = 0; i < types.length; i++) {
+                bspFilter[types[i]] = !!(filt && filt[types[i]]);
+            }
+            var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
+            for (var j = 0; j < cbs.length; j++) cbs[j].checked = !!bspFilter[cbs[j].value];
+            saveOverlaySettings();
+            render();
+        }
+
+        function syncBspFilterFromTrader() {
+            var v = bspFilterLocalVer;
             try {
-                fetch('/api/trader/signal-filter', {
-                    method: 'POST',
-                    cache: 'no-store',
-                    headers: { 'Content-Type': 'application/json' },
+                fetch("/api/trader/signal-filter", { cache: "no-store" })
+                    .then(function (resp) { return resp.ok ? resp.json() : null; })
+                    .then(function (data) {
+                        if (!data || bspFilterLocalVer !== v) return;
+                        // null = 引擎从未收到推送 = 全部放行 → 回填为全勾，
+                        // 让面板显示与引擎实际行为一致（而不是显示"未勾选"却照单全收）
+                        applyBspFilterFromTrader(data.bsp_type_filter ||
+                            { "0": true, "1": true, "2": true, "3": true });
+                    })
+                    .catch(function () {});
+            } catch (e) { /* 后端不可达：保留本地显示，不挡看图 */ }
+        }
+
+        function pushBspFilterToTrader() {
+            bspFilterLocalVer++;
+            try {
+                fetch("/api/trader/signal-filter", {
+                    method: "POST",
+                    cache: "no-store",
+                    headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ bsp_types: bspFilter })
                 }).then(function (resp) {
                     if (!resp.ok) {
-                        console.warn('[bsp-filter] 同步自动下单失败 HTTP ' + resp.status);
+                        showToast("买卖点过滤未同步到自动下单（HTTP " + resp.status + "）");
                     }
                 }).catch(function (e) {
-                    console.warn('[bsp-filter] 同步自动下单失败: ' + e.message);
+                    showToast("买卖点过滤未同步到自动下单：" + e.message);
                 });
             } catch (e) {
-                console.warn('[bsp-filter] 同步自动下单异常: ' + e.message);
+                showToast("买卖点过滤未同步到自动下单：" + e.message);
             }
         }
 
         window.openBspSettings = function() {
+            // 以自动下单侧为准回填一次（异步；期间用户已手动改过则丢弃回填）
+            syncBspFilterFromTrader();
             // 打开前同步当前过滤状态到复选框
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
             for (var i = 0; i < cbs.length; i++) {

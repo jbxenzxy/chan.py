@@ -37,6 +37,7 @@ from __future__ import annotations
 import inspect
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -70,9 +71,9 @@ from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                      # noqa: E402
 from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES               # noqa: E402
-from Trading.Infra.Records import (BSP_TYPE_FILTER_KEY,          # noqa: E402
-                                   AccountState, Bar, ExitPlan,
-                                   Position, Side, Signal)
+from Trading.Infra.Records import (BSP_TYPE_CHOICES,             # noqa: E402
+                                   BSP_TYPE_FILTER_KEY, AccountState, Bar,
+                                   ExitPlan, Position, Side, Signal)
 from Trading.Infra.StateDB import Store                          # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy                   # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy              # noqa: E402
@@ -296,6 +297,48 @@ check("[8c] _decide_exit 不含过滤常量",
       BSP_TYPE_FILTER_KEY in _src_exit, False)
 check("[8d] 过滤方法读取键 = 常量", TradingEngine.bsp_type_filter.__doc__
       is not None and "现读" in TradingEngine.bsp_type_filter.__doc__, True)
+
+# ════════════════════════════════════════════════════════════════
+# [9] 跨层 SSOT 漂移护栏：后端 BSP_TYPE_CHOICES ↔ 前端四个复选框
+#     （前端是静态资源无法 import Python，只能靠断言钉死两边一致）
+# ════════════════════════════════════════════════════════════════
+print("\n[9] 前后端「四类」集合一致（BSP_TYPE_CHOICES ↔ 前端复选框）")
+_REPO = os.path.abspath(os.path.join(_HERE, "..", ".."))
+with open(os.path.join(_REPO, "Frontend", "index.html"), encoding="utf-8") as _f:
+    _html = _f.read()
+_html_types = sorted(set(re.findall(r'name="bsp-filter"\s+value="([^"]+)"', _html)))
+check("[9a] 前端复选框集合 == BSP_TYPE_CHOICES",
+      _html_types, sorted(BSP_TYPE_CHOICES))
+with open(os.path.join(_REPO, "Frontend", "app.js"), encoding="utf-8") as _f:
+    _js = _f.read()
+check("[9b] 前端回推通道存在（POST /api/trader/signal-filter）",
+      "/api/trader/signal-filter" in _js, True)
+check("[9c] 前端以自动下单侧为准回填（同一路由 GET 回填）",
+      _js.count("/api/trader/signal-filter") >= 2, True)
+
+# ════════════════════════════════════════════════════════════════
+# [10] 分层 / 单向依赖（用户级铁律 11）：不新增反向依赖、不跨层直连
+# ════════════════════════════════════════════════════════════════
+print("\n[10] 分层与单向依赖（Trading 不反向依赖 App / FrontAPI 不直连 AppTrader）")
+_bad = []
+for _root, _dirs, _files in os.walk(os.path.join(_REPO, "Trading")):
+    if "Test" in os.path.relpath(_root, _REPO).split(os.sep):
+        continue            # 测试可以跨层装配，运行时源码不可以
+    for _fn in _files:
+        if not _fn.endswith(".py"):
+            continue
+        with open(os.path.join(_root, _fn), encoding="utf-8", errors="ignore") as _f:
+            _src = _f.read()
+        if re.search(r"^\s*(from|import)\s+App\b", _src, re.M):
+            _bad.append(os.path.relpath(os.path.join(_root, _fn), _REPO))
+check("[10a] Trading 运行时源码不反向依赖 App 层", _bad, [])
+with open(os.path.join(_REPO, "FrontAPI.py"), encoding="utf-8") as _f:
+    _api = _f.read()
+check("[10b] FrontAPI 不直连 AppTrader",
+      ("import AppTrader" in _api) or ("from App.AppTrader" in _api), False)
+check("[10c] 新路由经 AppOrch 漏斗",
+      ("orch.call_trader_set_bsp_filter" in _api
+       and "orch.call_trader_get_bsp_filter" in _api), True)
 
 print("")
 print("=" * 60)
