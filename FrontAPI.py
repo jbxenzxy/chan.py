@@ -747,6 +747,46 @@ async def api_trader_auto_order_status():
     return _json_response(result)
 
 
+@router.post("/api/trader/signal-filter", tags=["trader"])
+async def api_trader_signal_filter_set(body: dict = Body(default={})):
+    """写入「买卖点类型过滤」（K 线图「显示设置 → 买卖点类型（可多选）」）。
+
+    body：{"bsp_types": {"0": true, "1": false, "2": true, "3": true}}
+
+    语义：未勾选的买卖点类型，自动下单忽略其信号；四个全不勾 = 不再有新的
+    开仓 / 拆锁报单。运行态已有持仓的离场由 L1-L3 负责、不经信号通道，
+    故不受本过滤影响（不会让持仓失去止损止盈）。
+
+    写进自动下单子进程的 state.db（与 auto_order_enabled 同一条通道），
+    引擎每个信号现读 —— 盘中改勾选下一个信号即生效，无需重启子进程。
+    """
+    try:
+        result = await run_in_threadpool(
+            orch.call_trader_set_bsp_filter, body.get("bsp_types"))
+    except AppError:
+        raise  # 领域异常：交给统一异常处理器
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"写入买卖点类型过滤失败: {exc}")
+    return _json_response(result)
+
+
+@router.get("/api/trader/signal-filter", tags=["trader"])
+async def api_trader_signal_filter_get():
+    """读回自动下单当前生效的买卖点类型过滤。
+
+    null = 用户从未推送过勾选（新状态目录 / 升级前部署）→ 引擎全部放行。
+    """
+    try:
+        result = await run_in_threadpool(orch.call_trader_get_bsp_filter)
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"查询买卖点类型过滤失败: {exc}")
+    return _json_response(result)
+
+
 @router.get("/api/trader/product-check", tags=["trader"])
 async def api_trader_product_check(symbol: str = Query(
         default="", description="待检查的品种/合约代码，如 KQ.m@SHFE.rb 或 rb")):

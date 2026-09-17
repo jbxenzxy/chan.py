@@ -25,6 +25,22 @@ from .Clock import (
     trading_day_of_ms,
 )
 
+# ── 买卖点类型过滤（「显示设置 → 买卖点类型（可多选）」→ 自动下单信号门）──
+# 单一事实源：App/AppTrader.py 写 state.db、Trading/Engine/Engine.py 读，
+# 两端都 import 本组常量，别处不再写第二套键名 / 类型集合。
+#
+# 语义（2026-09-18 拍板）：
+#   · 只认 0/1/2/3 四类——与前端「买卖点类型（可多选）」的四个复选框一一对应；
+#   · 这四类之外的类型（缠论引擎侧 BSP_TYPE 枚举还有 11/11p/22/22s/33a/33b，
+#     由 ChanConfig.bs_type 决定会不会出现）一律按**未勾选**处理：不是放行，
+#     也不是报错——引擎写一条 signal_skip 事件，改动可见、不静默吞信号；
+#   · 只拦「由信号驱动的新报单」（空仓开仓 / 锁仓态拆锁），运行态已有持仓的
+#     离场由 L1-L3 负责、不经 on_signal，故不受本过滤影响。
+BSP_TYPE_FILTER_KEY = "bsp_type_filter"          # state.db kv 键：{"0": true, "1": false, ...}
+BSP_TYPE_CHOICES = ("0", "1", "2", "3")          # 前端四类买卖点，顺序与复选框一致
+BSP_TYPE_FILTER_DEFAULT = {t: True for t in BSP_TYPE_CHOICES}   # 全勾选（= 不过滤）
+
+
 class Side(Enum):
     """持仓/信号方向。value 即符号，可直接参与盈亏乘算。"""
     LONG = 1

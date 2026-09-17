@@ -612,6 +612,62 @@ class AppTrader:
             log.info("[AppTrader] 确认告警失败: %s: %s", type(e).__name__, e)
             return {"acked": 0, "reason": "{}: {}".format(type(e).__name__, e)}
 
+    # ---------------- 买卖点类型过滤（显示设置 → 自动下单信号门） ----------------
+    def _filter_out_dir(self) -> str:
+        """过滤勾选写到哪个状态目录：子进程在跑 → 它的 out_dir；否则默认目录。
+
+        子进程**没在跑**时也要写：用户可能先勾好再开自动下单。写进默认目录后，
+        子进程以同一目录启动（start 缺省 out_dir 就是 _DEFAULT_OUT），从第一根
+        K 线起就按这份勾选执行，不需要"启动后再勾一次"。
+        """
+        if self._handle is not None and self._handle.out_dir:
+            return self._handle.out_dir
+        return _DEFAULT_OUT
+
+    def set_bsp_filter(self, types: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """写入「买卖点类型过滤」勾选（前端「显示设置 → 买卖点类型（可多选）」）。
+
+        types：勾选表，如 {"0": true, "1": false, "2": true, "3": true}。
+        只认 0/1/2/3 四类（BSP_TYPE_CHOICES，唯一来源在 Trading/Infra/Records.py）；
+        缺的键按**未勾选**落 False —— 与引擎侧「未列出 = 忽略」同一口径，
+        避免"前端少传一个键 = 那一类照常开仓"这种静默反直觉。
+
+        写的是自动下单子进程的 state.db（与 auto_order_enabled 同一条通道），
+        引擎每个信号现读 → 盘中改动即时生效，不需要重启子进程。
+        """
+        from Trading.Infra.Records import (BSP_TYPE_CHOICES,
+                                           BSP_TYPE_FILTER_KEY)
+        src = types if isinstance(types, dict) else {}
+        filt = {t: bool(src.get(t)) for t in BSP_TYPE_CHOICES}
+        out_dir = self._filter_out_dir()
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            s = _engine_store(out_dir)
+            s.set_json(BSP_TYPE_FILTER_KEY, filt)
+            s.close()
+        except Exception as e:
+            raise AppError("写入买卖点类型过滤失败（{}）: {}: {}"
+                           .format(out_dir, type(e).__name__, e))
+        return {"bsp_type_filter": filt, "out_dir": out_dir}
+
+    def get_bsp_filter(self) -> Dict[str, Any]:
+        """读回「买卖点类型过滤」的实际生效值。
+
+        None = 用户从未推送过勾选（新状态目录 / 升级前部署）→ 引擎全部放行。
+        把它做成可查询，是为了让"自动下单现在认哪几类"有据可查，而不是靠猜。
+        """
+        from Trading.Infra.Records import BSP_TYPE_FILTER_KEY
+        out_dir = self._filter_out_dir()
+        try:
+            s = _engine_store(out_dir)
+            raw = s.get_json(BSP_TYPE_FILTER_KEY, None)
+            s.close()
+        except Exception as e:
+            log.info("[AppTrader] 读取买卖点类型过滤失败: %s: %s",
+                     type(e).__name__, e)
+            raw = None
+        return {"bsp_type_filter": raw, "out_dir": out_dir}
+
     def check_symbol_allowed(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """查询某品种是否**允许自动下单**（前端开关的前置提示出口，2026-09-14）。
 
@@ -972,6 +1028,10 @@ class AppTrader:
             # 前端的 tooltip 永远是死数据（"止损在哪"看不到）。由引擎 `_persist`
             # 落 kv（`run`），这里**只做投影**，不 import 引擎、不判三态。
             raw_run = s.get_json("run")
+            # 买卖点类型过滤的实际生效值（None = 从未推送，引擎全部放行）。
+            # 与上面的 run 一样只做投影 —— 前端据此显示"自动下单现在认哪几类"。
+            from Trading.Infra.Records import BSP_TYPE_FILTER_KEY
+            raw_bsp_filter = s.get_json(BSP_TYPE_FILTER_KEY, None)
             s.close()
             alerts = [a for a in raw_alerts
                       if isinstance(a, dict)
@@ -1005,6 +1065,7 @@ class AppTrader:
                     }
             return {
                 "enabled": enabled,
+                "bsp_type_filter": raw_bsp_filter,
                 "account_state": state,
                 "net_volume": net,
                 "positions_n": len(positions),

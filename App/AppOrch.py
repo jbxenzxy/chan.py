@@ -92,6 +92,21 @@ def call_trader_ack(ts=None):
     return trader.ack_alerts(ts=ts)
 
 
+def call_trader_set_bsp_filter(types=None):
+    """写入「买卖点类型过滤」勾选（显示设置 → 自动下单信号门）。
+
+    types：{"0": true, "1": false, "2": true, "3": true} 形态的勾选表，
+    与 K 线图「显示设置 → 买卖点类型（可多选）」同一份勾选。
+    写进自动下单子进程的 state.db，引擎每个信号现读 → 盘中改勾选即时生效。
+    """
+    return trader.set_bsp_filter(types=types)
+
+
+def call_trader_get_bsp_filter():
+    """读回「买卖点类型过滤」的实际生效值（None = 从未设置，全部放行）。"""
+    return trader.get_bsp_filter()
+
+
 def call_trader_check_symbol(symbol=None):
     """查询某品种是否允许自动下单（前端开关的前置提示出口，2026-09-14）。
 
@@ -301,4 +316,5 @@ __all__ = [
     "AppTrader", "trader",
     "call_trader_start", "call_trader_stop", "call_trader_status",
     "call_trader_ack", "call_trader_check_symbol", "call_trader_trades",
+    "call_trader_set_bsp_filter", "call_trader_get_bsp_filter",
 ]

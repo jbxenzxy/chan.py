@@ -62,7 +62,9 @@ from .Reconcile import ReconcileMixin
 from ..Infra.StateDB import Store
 from ..Strategy.Exit import ExitCheck
 from ..Infra.Instrument import Instrument
-from ..Infra.Records import AccountState, Bar, DecisionType, EngineState, ExitPlan, Order, OrderIntent, Position, Side, Signal, Trade
+from ..Infra.Records import (BSP_TYPE_FILTER_KEY, AccountState, Bar,
+                             DecisionType, EngineState, ExitPlan, Order,
+                             OrderIntent, Position, Side, Signal, Trade)
 from ..Infra.Clock import PLAUSIBLE_DATE_MIN, now_cn, now_ms, trading_day_from_clock, trading_day_of_ms
 
 
@@ -828,6 +830,19 @@ class TradingEngine(ReconcileMixin):
             self.ev.write("signal_skip", key=sig.key, reason="auto_order_off")
             return
 
+        # 买卖点类型过滤门：只放行用户在「显示设置 → 买卖点类型（可多选）」里
+        # 勾选的类型（与 K 线图上画哪些买卖点同一份勾选）。
+        #   · 每次信号现读 state.db（不缓存）—— 盘中改勾选即刻改变处理策略，
+        #     与账户三态无关：空仓态的开仓、锁仓态的拆锁都走这一道门；
+        #   · 运行态本就不响应信号（规则 ⑶），其离场走 L1-L3、不经此处，
+        #     故「过滤」不会让已有持仓失去止损止盈。
+        if not self._bsp_type_allowed(sig.bsp_type):
+            self.store.update_signal_action(sig.key, "skip", "bsp_type_filtered")
+            self.ev.write("signal_skip", key=sig.key,
+                          reason="bsp_type_filtered",
+                          type=sig.bsp_type, is_buy=sig.is_buy)
+            return
+
         # 下单瞬态（同步 broker 下不可达，留给二期异步 broker）
         if self._state in (EngineState.OPENING, EngineState.EXITING):
             self.store.update_signal_action(
@@ -865,6 +880,43 @@ class TradingEngine(ReconcileMixin):
         self.store.update_signal_action(
             sig.key, "opened" if act.intent is OrderIntent.OPEN else "closed",
             "transition={}/lots={}".format(act.transition, act.volume))
+
+    # ---------------- 买卖点类型过滤（用户勾选 → 信号门） ----------------
+    def bsp_type_filter(self) -> Optional[Dict[str, bool]]:
+        """**现读**「买卖点类型过滤」勾选表（每次调用都重读 state.db）。
+
+        返回 None = 用户从未推送过勾选（新状态目录 / 升级前部署）→ 调用方按
+        「全部放行」处理，绝不因"没有配置"就让自动下单静默停摆（与
+        `auto_order_enabled` 默认 True 同一保守方向）。
+
+        刻意不缓存：缓存会让「盘中改勾选立刻生效」这条需求直接失效。state.db
+        是 WAL 模式，单次 kv 读取是毫秒级，而信号到达频率是每根 K 线级别 ——
+        没有任何性能理由去换一个会过期的值。
+
+        写入方：App/AppTrader（前端设置面板 → POST /api/trader/signal-filter）。
+        读取方：只有本文件的 `_bsp_type_allowed`。
+        """
+        raw = self.store.get_json(BSP_TYPE_FILTER_KEY, None)
+        if not isinstance(raw, dict):
+            return None
+        return {str(k): bool(v) for k, v in raw.items()}
+
+    def _bsp_type_allowed(self, bsp_type: str) -> bool:
+        """该买卖点类型是否被用户勾选放行。
+
+        · 过滤表未设置 → 放行（见 `bsp_type_filter` 的说明）。
+        · 已设置 → 只有**显式勾选为真**的类型放行；未勾选的类型、以及四类之外
+          的类型（11p / 22s / 33a …，由 ChanConfig.bs_type 决定是否会出现）
+          一律忽略，并写 `signal_skip reason=bsp_type_filtered` 留痕。
+
+        ⚠️ 这不是 P44 禁止的「信号质量过滤」：那条禁令针对的是"信号值不值得开仓"
+        的自动判断（振幅 / 止损距离），属于缠论分析引擎的职责；本门是**用户显式
+        勾选**的表达，与 `auto_order_enabled` 同类，不做任何质量评价。
+        """
+        filt = self.bsp_type_filter()
+        if filt is None:
+            return True
+        return bool(filt.get(str(bsp_type)))
 
     # ════════════════════════════════════════════════════════════════
     # 决策 / 执行层（架构约束 A1 + A3）
@@ -1953,6 +2005,10 @@ class TradingEngine(ReconcileMixin):
         """自动下单状态快照（供后端进程托管 / API / 前端轮询）。"""
         return {
             "enabled": self.auto_order_enabled,
+            # 买卖点类型过滤的**实际生效值**（None = 用户从未推送，全部放行）。
+            # 与 K 线图「显示设置」的勾选同源；放在这里是为了让"自动下单现在
+            # 到底认哪几类"可被查询，而不是只能靠猜。
+            "bsp_type_filter": self.bsp_type_filter(),
             "state": self._state.value,
             # 需求 ⑴：对外暴露账户三态。此前只能拿到引擎过程态 EngineState
             # （IDLE 同时覆盖空仓与锁仓），"空仓 vs 锁仓"在前端不可见。

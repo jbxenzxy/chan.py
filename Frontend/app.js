@@ -4731,6 +4731,33 @@
 // ══════════════════════════════════════════════════════════════════
 
         // ── BSP买卖点类型过滤 + 均线周期设置 ──
+
+        // 把「买卖点类型」勾选同步给自动下单（交易引擎子进程）：
+        //   与图上画哪些买卖点是同一份勾选 —— 未勾选的类型，自动下单忽略其信号
+        //   （四个全不勾 = 不再有新的开仓 / 拆锁报单；运行态已有持仓的止损止盈
+        //    走 L1-L3、不经信号，不受影响）。
+        //   通道：POST /api/trader/signal-filter → 写引擎 state.db，引擎每个信号
+        //   现读 → 盘中改勾选即时生效，无需重启自动下单子进程、与账户三态无关。
+        //   失败只告警：显示过滤是本地行为，不能因为下单侧接口故障就挡住看图。
+        function pushBspFilterToTrader() {
+            try {
+                fetch('/api/trader/signal-filter', {
+                    method: 'POST',
+                    cache: 'no-store',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ bsp_types: bspFilter })
+                }).then(function (resp) {
+                    if (!resp.ok) {
+                        console.warn('[bsp-filter] 同步自动下单失败 HTTP ' + resp.status);
+                    }
+                }).catch(function (e) {
+                    console.warn('[bsp-filter] 同步自动下单失败: ' + e.message);
+                });
+            } catch (e) {
+                console.warn('[bsp-filter] 同步自动下单异常: ' + e.message);
+            }
+        }
+
         window.openBspSettings = function() {
             // 打开前同步当前过滤状态到复选框
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
@@ -4759,6 +4786,7 @@
         window.onBspFilterChange = function(cb) {
             bspFilter[cb.value] = cb.checked;
             saveOverlaySettings();
+            pushBspFilterToTrader();
             render();
         };
 
@@ -4783,6 +4811,7 @@
                 bspFilter[cbs[i].value] = true;
             }
             saveOverlaySettings();
+            pushBspFilterToTrader();
             render();
         };
 
@@ -4793,6 +4822,7 @@
                 bspFilter[cbs[i].value] = false;
             }
             saveOverlaySettings();
+            pushBspFilterToTrader();
             render();
         };
 
