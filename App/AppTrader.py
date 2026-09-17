@@ -311,17 +311,8 @@ class AppTrader:
             if out_dir:
                 out_dir = os.path.abspath(out_dir)
             else:
-                pre_cfg = None
-                try:
-                    pre_cfg = self._load_cfg()
-                except AppError:
-                    pre_cfg = None      # 配置读不出来也要先落盘日志再报错
-                raw = (str(pre_cfg.state_dir or "") if pre_cfg else ""
-                       ) or _DEFAULT_OUT
-                # 相对 state_dir（默认 "./State"）以 Trading/ 为基准，避免落到
-                # 后端进程 CWD 下造成"找不到 Trading/State"（原按配置文件所在
-                # 目录解析；config.json 取消后基准固定为 _TG_ROOT，语义等价）。
-                out_dir = os.path.abspath(os.path.join(_TG_ROOT, raw))
+                # 与「过滤勾选写入」同一解析来源（见 _cfg_out_dir）
+                out_dir = self._cfg_out_dir()
             try:
                 os.makedirs(out_dir, exist_ok=True)
             except OSError as e:
@@ -613,16 +604,32 @@ class AppTrader:
             return {"acked": 0, "reason": "{}: {}".format(type(e).__name__, e)}
 
     # ---------------- 买卖点类型过滤（显示设置 → 自动下单信号门） ----------------
-    def _filter_out_dir(self) -> str:
-        """过滤勾选写到哪个状态目录：子进程在跑 → 它的 out_dir；否则默认目录。
+    def _cfg_out_dir(self) -> str:
+        """配置给定的状态目录（`cfg.state_dir`，可被根 .env / TRADING_STATE_DIR 覆盖）。
 
-        子进程**没在跑**时也要写：用户可能先勾好再开自动下单。写进默认目录后，
-        子进程以同一目录启动（start 缺省 out_dir 就是 _DEFAULT_OUT），从第一根
-        K 线起就按这份勾选执行，不需要"启动后再勾一次"。
+        `start()` 与 `_filter_out_dir()` **必须共用这一个来源**：两边解析一旦
+        不一致，勾选会被写进引擎并不读取的那个 state.db，表现为"图上按勾选
+        显示、自动下单照单全收" —— 正是本功能要防的"页面看不到却触发下单"。
+        相对路径以 Trading/ 为基准（与子进程 main.py 的解析保持一致；原按配置
+        文件所在目录解析，config.json 取消后基准固定为 _TG_ROOT，语义等价）。
+        """
+        try:
+            cfg = self._load_cfg()
+        except AppError:
+            cfg = None      # 配置读不出来时退回默认目录，不因此挡住写入
+        raw = (str(cfg.state_dir or "") if cfg else "") or _DEFAULT_OUT
+        return os.path.abspath(os.path.join(_TG_ROOT, raw))
+
+    def _filter_out_dir(self) -> str:
+        """过滤勾选写到哪个状态目录：子进程在跑 → 它的 out_dir；否则配置目录。
+
+        子进程**没在跑**时也要写：用户可能先勾好再开自动下单。写的是
+        `_cfg_out_dir()` —— 与 start() 缺省启动目录同一来源，子进程起来后
+        读的就是这一份，不需要"启动后再勾一次"。
         """
         if self._handle is not None and self._handle.out_dir:
             return self._handle.out_dir
-        return _DEFAULT_OUT
+        return self._cfg_out_dir()
 
     def set_bsp_filter(self, types: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """写入「买卖点类型过滤」勾选（前端「显示设置 → 买卖点类型（可多选）」）。
@@ -637,8 +644,14 @@ class AppTrader:
         """
         from Trading.Infra.Records import (BSP_TYPE_CHOICES,
                                            BSP_TYPE_FILTER_KEY)
-        src = types if isinstance(types, dict) else {}
-        filt = {t: bool(src.get(t)) for t in BSP_TYPE_CHOICES}
+        if not isinstance(types, dict) or set(types) != set(BSP_TYPE_CHOICES):
+            # 空 body / 缺一个键一律拒绝（HTTP 4xx），不做"缺键补 False"：
+            # 那会让"少传一个字段"静默等价于"关掉这一类"，响应还是 200 ——
+            # 用户看到的就是"自动下单开着却一直不下单"。
+            # 「全不勾」必须由**显式四个 False** 表达。
+            raise AppError("买卖点类型过滤需给出完整的四类勾选（{}），缺一不可"
+                           .format(", ".join(BSP_TYPE_CHOICES)))
+        filt = {t: bool(types[t]) for t in BSP_TYPE_CHOICES}
         out_dir = self._filter_out_dir()
         try:
             os.makedirs(out_dir, exist_ok=True)
@@ -648,6 +661,9 @@ class AppTrader:
         except Exception as e:
             raise AppError("写入买卖点类型过滤失败（{}）: {}: {}"
                            .format(out_dir, type(e).__name__, e))
+        _allowed = ",".join([t for t in BSP_TYPE_CHOICES if filt[t]])
+        log.info("[AppTrader] 买卖点类型过滤生效 → 放行[%s] (out_dir=%s)",
+                 _allowed or "无：不再有信号驱动的新报单", out_dir)
         return {"bsp_type_filter": filt, "out_dir": out_dir}
 
     def get_bsp_filter(self) -> Dict[str, Any]:

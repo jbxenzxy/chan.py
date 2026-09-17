@@ -38,7 +38,6 @@ from .Clock import (
 #     离场由 L1-L3 负责、不经 on_signal，故不受本过滤影响。
 BSP_TYPE_FILTER_KEY = "bsp_type_filter"          # state.db kv 键：{"0": true, "1": false, ...}
 BSP_TYPE_CHOICES = ("0", "1", "2", "3")          # 前端四类买卖点，顺序与复选框一致
-BSP_TYPE_FILTER_DEFAULT = {t: True for t in BSP_TYPE_CHOICES}   # 全勾选（= 不过滤）
 
 
 class Side(Enum):

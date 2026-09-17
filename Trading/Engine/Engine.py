@@ -908,6 +908,7 @@ class TradingEngine(ReconcileMixin):
         · 已设置 → 只有**显式勾选为真**的类型放行；未勾选的类型、以及四类之外
           的类型（11p / 22s / 33a …，由 ChanConfig.bs_type 决定是否会出现）
           一律忽略，并写 `signal_skip reason=bsp_type_filtered` 留痕。
+        · 逗号串（"1,11" / "1,2"，同位置合并类型）按段拆，**任一段勾选即放行**。
 
         ⚠️ 这不是 P44 禁止的「信号质量过滤」：那条禁令针对的是"信号值不值得开仓"
         的自动判断（振幅 / 止损距离），属于缠论分析引擎的职责；本门是**用户显式
@@ -916,7 +917,15 @@ class TradingEngine(ReconcileMixin):
         filt = self.bsp_type_filter()
         if filt is None:
             return True
-        return bool(filt.get(str(bsp_type)))
+        # type2str() 可能是逗号串（同一笔同一右肩 K 上合并出的多个类型，见
+        # BuySellPoint/BSPointList.py 的 add_another_bsp_prop）→ 按逗号拆段，
+        # 任一段被勾选即放行；与前端 drawBspMarkers 的显示口径保持一致 ——
+        # 否则这类点会"图上不画 + 单也不下"，两边同时静默漏掉。
+        for seg in str(bsp_type).split(","):
+            seg = seg.strip()
+            if seg and filt.get(seg):
+                return True
+        return False
 
     # ════════════════════════════════════════════════════════════════
     # 决策 / 执行层（架构约束 A1 + A3）

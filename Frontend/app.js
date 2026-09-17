@@ -1903,7 +1903,14 @@
                 let idx = dateToGlobalIdx(bsp.date, map);
                 if (idx === undefined) return;
                 if (idx < globalStart || idx >= globalEnd) return;
-                if (bspFilter && !bspFilter[bsp.type]) return;  // 按用户设置过滤类型
+                // 与引擎口径一致：type2str() 可能是逗号串（同位置合并类型），
+                // 任一段被勾选就显示 —— 否则这类点会"图上不画"且"单也不下"，
+                // 两处同时静默漏掉，用户根本不知道有过这个买卖点。
+                let _bspSegHit = false;
+                String(bsp.type).split(",").forEach(function (seg) {
+                    if (bspFilter[seg.trim()]) _bspSegHit = true;
+                });
+                if (bspFilter && !_bspSegHit) return;
                 const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
                 const isBuy = bsp.is_buy;
                 // 用K线外侧价格定位：买点用low，卖点用high（锚点价格不随翻转改变）
@@ -4745,14 +4752,34 @@
         // 可能已经改了勾选，此时丢弃回填结果，绝不覆盖用户刚做的改动。
         var bspFilterLocalVer = 0;
 
+        function renderBspFilterEngineState(filt, unreachable) {
+            var el = document.getElementById("bsp-filter-engine-state");
+            if (!el) return;
+            if (unreachable) {
+                el.textContent = "自动下单状态未知（接口不可达）：以下勾选只影响图上显示";
+                return;
+            }
+            if (!filt) {
+                el.textContent = "自动下单：未设置类型过滤 → 当前全部放行";
+                return;
+            }
+            var on = ["0", "1", "2", "3"].filter(function (t) { return filt[t]; });
+            el.textContent = on.length
+                ? "自动下单当前认 " + on.join("/") + " 类（未勾选的类型不产生新的信号单）"
+                : "自动下单当前不认任何类型：不再有信号驱动的新报单；已有持仓的止损止盈仍会照常离场";
+        }
+
         function applyBspFilterFromTrader(filt) {
             var types = ["0", "1", "2", "3"];   // 与后端 BSP_TYPE_CHOICES 一一对应
             for (var i = 0; i < types.length; i++) {
-                bspFilter[types[i]] = !!(filt && filt[types[i]]);
+                // filt 为空 = 引擎侧从未设置过滤 = 全部放行 → 回填为全勾，
+                // 让面板显示与引擎真实行为一致
+                bspFilter[types[i]] = filt ? !!filt[types[i]] : true;
             }
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
             for (var j = 0; j < cbs.length; j++) cbs[j].checked = !!bspFilter[cbs[j].value];
             saveOverlaySettings();
+            renderBspFilterEngineState(filt);
             render();
         }
 
@@ -4763,12 +4790,12 @@
                     .then(function (resp) { return resp.ok ? resp.json() : null; })
                     .then(function (data) {
                         if (!data || bspFilterLocalVer !== v) return;
-                        // null = 引擎从未收到推送 = 全部放行 → 回填为全勾，
-                        // 让面板显示与引擎实际行为一致（而不是显示"未勾选"却照单全收）
-                        applyBspFilterFromTrader(data.bsp_type_filter ||
-                            { "0": true, "1": true, "2": true, "3": true });
+                        applyBspFilterFromTrader(data.bsp_type_filter);
                     })
-                    .catch(function () {});
+                    .catch(function () {
+                        if (bspFilterLocalVer !== v) return;
+                        renderBspFilterEngineState(null, true);
+                    });
             } catch (e) { /* 后端不可达：保留本地显示，不挡看图 */ }
         }
 
@@ -4794,6 +4821,8 @@
 
         window.openBspSettings = function() {
             // 以自动下单侧为准回填一次（异步；期间用户已手动改过则丢弃回填）
+            var _stEl = document.getElementById("bsp-filter-engine-state");
+            if (_stEl) _stEl.textContent = "自动下单状态读取中…";
             syncBspFilterFromTrader();
             // 打开前同步当前过滤状态到复选框
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
@@ -7493,6 +7522,9 @@
 
         // 启动时加载保存的设置
         loadOverlaySettings();
+        // 首屏即与自动下单侧的生效值对齐：GET 只读回填，**不推送**（打开页面不该
+        // 改动引擎策略）。缺失后端/接口不可达时保留本地显示，不阻断看图。
+        syncBspFilterFromTrader();
 
         initCoordSystemRadio();
 

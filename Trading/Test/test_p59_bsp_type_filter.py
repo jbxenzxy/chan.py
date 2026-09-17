@@ -340,6 +340,82 @@ check("[10c] 新路由经 AppOrch 漏斗",
       ("orch.call_trader_set_bsp_filter" in _api
        and "orch.call_trader_get_bsp_filter" in _api), True)
 
+# ════════════════════════════════════════════════════════════════
+# [11] 不完整的勾选一律拒绝（不许"缺键当未勾选"把信号门静默关死）
+# ════════════════════════════════════════════════════════════════
+print("\n[11] 空 / 缺键输入 → 拒绝写入（4xx，不是 HTTP 200 静默全关）")
+import App.AppTrader as _AT                                     # noqa: E402
+
+with tmp_dir() as tmp:
+    os.environ["TRADING_STATE_DIR"] = tmp       # 写入落点重定向到临时目录
+    try:
+        _at = _AT.AppTrader.__new__(_AT.AppTrader)   # 不跑 __init__：不碰运行中的状态文件
+        _at._handle = None
+        _rejected = 0
+        for _bad in (None, {}, {"0": True}, {"0": True, "1": True, "2": True},
+                     {"0": True, "1": True, "2": True, "3": True, "9": True}):
+            try:
+                _at.set_bsp_filter(_bad)
+            except Exception as _e:
+                if type(_e).__name__ == "AppError":
+                    _rejected += 1
+        check("[11a] 5 种不完整输入全部被拒", _rejected, 5)
+        check("[11b] 被拒后没有落库",
+              os.path.isfile(os.path.join(tmp, "state.db")), False)
+        _r = _at.set_bsp_filter({t: True for t in BSP_TYPE_CHOICES})
+        check("[11c] 完整四键 → 接受", sorted(_r["bsp_type_filter"]),
+              sorted(BSP_TYPE_CHOICES))
+        check("[11d] 全不勾必须显式四个 False → 接受",
+              _at.set_bsp_filter({t: False for t in BSP_TYPE_CHOICES})
+              ["bsp_type_filter"], {t: False for t in BSP_TYPE_CHOICES})
+    finally:
+        os.environ.pop("TRADING_STATE_DIR", None)
+
+# ════════════════════════════════════════════════════════════════
+# [12] 逗号串类型（同一笔同一右肩 K 合并出的多类型）按段匹配
+#     type2str() 会产出 "1,2" 这类串：整串精确匹配会让"图上不画 + 单也不下"
+# ════════════════════════════════════════════════════════════════
+print("\n[12] 逗号串类型按段匹配（任一段勾选即放行）")
+with tmp_dir() as tmp:
+    engine, store, broker, ev = build_engine(tmp)
+    engine.on_bar(make_bar(1000))
+    set_filter(store, {"0": False, "1": True, "2": False, "3": False})
+    engine.on_signal(make_signal(is_buy=True, bsp_type="1,2",
+                                date="2026-09-01 09:36"))
+    check("[12a] 勾着的那一段命中 → 放行开仓", len(broker.orders), 1)
+    set_filter(store, {"0": False, "1": False, "2": False, "3": True})
+    engine.on_signal(make_signal(is_buy=True, bsp_type="1,2",
+                                date="2026-09-01 09:37"))
+    check("[12b] 两段都没勾 → 忽略（报单数不变）", len(broker.orders), 1)
+    ev.flush()
+    check("[12c] 忽略有留痕", "bsp_type_filtered" in skip_reasons(
+        os.path.join(tmp, "events.jsonl")), True)
+
+# ════════════════════════════════════════════════════════════════
+# [13] 状态目录同源：写的一侧与子进程启动的一侧必须解析到同一个目录
+#     （不一致 = 勾选写进引擎不读的 state.db = 过滤静默失效）
+# ════════════════════════════════════════════════════════════════
+print("\n[13] 状态目录同源（_filter_out_dir 与 start 缺省目录）")
+_src_cfgres = inspect.getsource(_AT.AppTrader._cfg_out_dir)
+_src_filt = inspect.getsource(_AT.AppTrader._filter_out_dir)
+_src_start = inspect.getsource(_AT.AppTrader.start)
+check("[13a] _filter_out_dir 走统一解析", "_cfg_out_dir()" in _src_filt, True)
+check("[13b] start 缺省分支走同一解析", "_cfg_out_dir()" in _src_start, True)
+check("[13c] _filter_out_dir 不再硬编码默认目录",
+      "_DEFAULT_OUT" in _src_filt, False)
+check("[13d] 解析基准 = Trading/", "_TG_ROOT" in _src_cfgres, True)
+with tmp_dir() as tmp:
+    os.environ["TRADING_STATE_DIR"] = tmp
+    try:
+        _at = _AT.AppTrader.__new__(_AT.AppTrader)
+        _at._handle = None
+        check("[13e] 环境变量覆盖 state_dir 时写入目录随之改变",
+              os.path.normcase(os.path.abspath(
+                  _at.set_bsp_filter({t: True for t in BSP_TYPE_CHOICES})
+                  ["out_dir"])), os.path.normcase(os.path.abspath(tmp)))
+    finally:
+        os.environ.pop("TRADING_STATE_DIR", None)
+
 print("")
 print("=" * 60)
 print("P59 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
