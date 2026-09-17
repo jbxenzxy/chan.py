@@ -558,7 +558,7 @@ class AppTrader:
             #   只认关闭期间新增的 auto_order_off，防历史事件谎报）
             graceful = exited and _graceful_by_result(out_dir, off_before)
             if graceful:
-                log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓并持久化关闭态）",
+                log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓或空仓并持久化关闭态）",
                          pid)
             else:
                 log.warning(
