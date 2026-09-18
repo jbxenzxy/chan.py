@@ -1,0 +1,73 @@
+<svg viewBox="0 0 680 430" xmlns="http://www.w3.org/2000/svg" font-family="system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif">
+  <style>
+    .t{fill:#1f2328;font-size:14px;font-weight:600}
+    .s{fill:#57606a;font-size:12px}
+    .free{fill:#1a7f37;font-size:12px;font-weight:700}
+    .pay{fill:#cf222e;font-size:12px;font-weight:700}
+    .box{rx:8}
+  </style>
+  <rect width="680" height="430" fill="#f6f8fa"/>
+
+  <!-- ===== 上：TqCtp 路线 ===== -->
+  <text x="24" y="34" class="t">路线 B'：tqsdk TqCtp（省人力，交授权费）</text>
+  <rect x="24" y="50" width="130" height="52" class="box" fill="#dbeafe" stroke="#3b82f6"/>
+  <text x="89" y="72" text-anchor="middle" class="t" font-size="12">SimNowBroker</text>
+  <text x="89" y="90" text-anchor="middle" class="s">改 _connect ≈10 行</text>
+
+  <rect x="190" y="50" width="130" height="52" class="box" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="255" y="72" text-anchor="middle" class="t" font-size="12">TqSdk 企业版</text>
+  <text x="255" y="90" text-anchor="middle" class="pay">授权费（年付）</text>
+
+  <rect x="356" y="50" width="130" height="52" class="box" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="421" y="72" text-anchor="middle" class="t" font-size="12">本地适配进程</text>
+  <text x="421" y="90" text-anchor="middle" class="pay">随企业版授权</text>
+
+  <rect x="522" y="50" width="134" height="52" class="box" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="589" y="72" text-anchor="middle" class="t" font-size="12">期货公司 CTP 前置</text>
+  <text x="589" y="90" text-anchor="middle" class="free">免费（需外接审批）</text>
+
+  <line x1="154" y1="76" x2="190" y2="76" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="320" y1="76" x2="356" y2="76" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="486" y1="76" x2="522" y2="76" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+  <text x="330" y="124" class="s">免费装的 tqsdk_zq_otg 包，运行时被 TqAuth 鉴权挡在直连外</text>
+
+  <line x1="340" y1="140" x2="340" y2="168" stroke="#8c959f" stroke-width="2" stroke-dasharray="5 4"/>
+  <text x="350" y="160" class="s">两条路线最终殊途同归：都直连同一个 CTP 前置，不经任何云网关</text>
+
+  <!-- ===== 下：vnpy_ctp / ctp-python 路线 ===== -->
+  <text x="24" y="192" class="t">路线 B：vnpy_ctp / ctp-python（花人力，授权费 = 0）</text>
+
+  <rect x="24" y="208" width="150" height="56" class="box" fill="#fef9c3" stroke="#ca8a04"/>
+  <text x="99" y="230" text-anchor="middle" class="t" font-size="12">CtpDirectBroker</text>
+  <text x="99" y="248" text-anchor="middle" class="s">自写 ≈1000+ 行（18 人日）</text>
+
+  <rect x="214" y="208" width="150" height="56" class="box" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="289" y="230" text-anchor="middle" class="t" font-size="12">vnpy_ctp / ctp-python</text>
+  <text x="289" y="248" text-anchor="middle" class="free">开源免费（MIT 类协议）</text>
+
+  <rect x="404" y="208" width="150" height="56" class="box" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="479" y="230" text-anchor="middle" class="t" font-size="12">CTP 官方 API（C++）</text>
+  <text x="479" y="248" text-anchor="middle" class="free">上期技术免费提供</text>
+
+  <rect x="574" y="208" width="82" height="56" class="box" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="615" y="230" text-anchor="middle" class="t" font-size="11">CTP 前置</text>
+  <text x="615" y="248" text-anchor="middle" class="free">免费</text>
+
+  <line x1="174" y1="236" x2="214" y2="236" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="364" y1="236" x2="404" y2="236" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="554" y1="236" x2="574" y2="236" stroke="#57606a" stroke-width="2" marker-end="url(#a1)"/>
+
+  <!-- ===== 底部：为什么免费 ===== -->
+  <rect x="24" y="292" width="632" height="118" rx="8" fill="#ffffff" stroke="#d0d7de"/>
+  <text x="40" y="318" class="t" font-size="13">「免费直连」的三层拆解</text>
+  <text x="40" y="342" class="s">① CTP API 本身免费：上期技术向所有人公开 C++ 接口库与文档，SimNow 模拟环境免费用</text>
+  <text x="40" y="364" class="s">② 绑定库免费：vnpy_ctp / ctp-python 只是把 C++ 接口包成 Python 能调的模块，开源无授权费</text>
+  <text x="40" y="386" class="s">③ 付费墙是 tqsdk 自设的：它把「维护绑定 + 本地适配进程」打包成了企业版商品，绕开它 = 自己做这两层</text>
+  <text x="40" y="404" class="free">18 人日买的不是「直连资格」，是别人免费开源代码之上你仍要自己写的适配与保障逻辑</text>
+
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <path d="M0,0 L8,4 L0,8 z" fill="#57606a"/>
+    </marker>
+  </defs>
+</svg>
