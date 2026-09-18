@@ -163,7 +163,8 @@
         .auto-order-dot.on { background: #27ae60; }
         .auto-order-dot.off { background: #e74c3c; }
         /* ── 引擎账本面板（C，2026-09-18）：交易引擎持仓 + 最近成交 ──
-           账本口径 ≠ 柜台真值：镜像可能滞后/为空（见对账证据门），真值以快期3 为准 */
+           显隐由 app.js 直接切内联 style.display，默认 style="display:none"；
+           .hidden 类仅保留兼容，不再使用 */
         .auto-order-ledger-btn {
             display: inline-block; padding: 0 7px; border-radius: 9px;
             background: #3a3f5c; color: #a8b2d1; cursor: pointer;

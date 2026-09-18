@@ -7933,8 +7933,11 @@
             if (ev) ev.stopPropagation();
             const panel = document.getElementById('auto-order-ledger-panel');
             if (!panel) return;
-            panel.classList.toggle('hidden');
-            if (!panel.classList.contains('hidden')) {
+            // 用内联 style 切换显隐，不依赖 app.css —— 即使样式表没更新，
+            // 面板也绝不会以"漏出来的文字块"形式渲染在按钮旁边
+            const willShow = (panel.style.display === 'none');
+            panel.style.display = willShow ? 'block' : 'none';
+            if (willShow) {
                 renderAutoOrderLedger(autoOrderLedgerData);
             }
             if (!toggleAutoOrderLedger._outside) {
@@ -7943,7 +7946,7 @@
                     const p = document.getElementById('auto-order-ledger-panel');
                     const b = document.getElementById('auto-order-ledger-btn');
                     if (p && b && !p.contains(e.target) && !b.contains(e.target)) {
-                        p.classList.add('hidden');
+                        p.style.display = 'none';
                     }
                 });
             }
@@ -7955,7 +7958,7 @@
         function renderAutoOrderLedger(data) {
             autoOrderLedgerData = data;
             const panel = document.getElementById('auto-order-ledger-panel');
-            if (!panel || panel.classList.contains('hidden')) return;   // 关着不渲染
+            if (!panel || panel.style.display === 'none') return;   // 关着不渲染
             const ao = (data && data.auto_order) || null;
             const posEl = document.getElementById('aol-positions');
             if (posEl) {

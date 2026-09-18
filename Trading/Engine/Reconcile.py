@@ -191,7 +191,7 @@ class ReconcileMixin:
         self._mirror_note(str(side), real_vol, source)
         self.alert(
             self.ALERT_SEVERE, "position_mismatch",
-            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手，"
             "账本该侧无仓。"
             "多出的持仓不是交易引擎开的（常见成因：报单回报延迟被误判拒单、"
             "柜台已成交），引擎不接管，请人工核对处理。".format(
@@ -215,7 +215,7 @@ class ReconcileMixin:
             # 引擎不接管多出的持仓，只告知事实。
             self.alert(
                 self.ALERT_SEVERE, "position_mismatch",
-                "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+                "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手，"
                 "账本只有 {ev} 手（多 {diff} 手）。多出的持仓不是交易引擎开的，"
                 "引擎不接管，请人工核对处理。".format(
                     side=str(side), rv=real_vol, ev=engine_vol,
@@ -295,7 +295,7 @@ class ReconcileMixin:
         # 不做"等用户确认才同步"的挂起机制。明细见事件流 position_externally_closed。
         self.alert(
             self.ALERT_SEVERE, "reconcile_externally_closed",
-            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手，"
             "账本记 {ev} 手（少 {n} 手，多为柜台手工平仓）。"
             "引擎已按 FIFO 从账本删除 {k} 笔、按参考价补记平仓盈亏，"
             "账本已同步为与镜像一致；请知悉，如有异议请人工核对快期3。".format(

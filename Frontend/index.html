@@ -54,13 +54,13 @@
                 </label>
                 <span class="auto-order-ledger-btn" id="auto-order-ledger-btn"
                       onclick="toggleAutoOrderLedger(event)"
-                      title="交易引擎账本：持仓与最近成交（引擎记账口径，非柜台真值）">账本</span>
+                      title="交易引擎账本：持仓与最近成交">账本</span>
             </span>
             <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓 + 最近成交。
                  数据来自 /api/trader/status 的 auto_order.positions / trades_recent。
                  注意：这是**交易引擎账本**，不是柜台真值 —— 柜台以快期3 为准。 -->
-            <div class="auto-order-ledger-panel hidden" id="auto-order-ledger-panel"
-                 onclick="event.stopPropagation()">
+            <div class="auto-order-ledger-panel" id="auto-order-ledger-panel"
+                 style="display:none" onclick="event.stopPropagation()">
                 <div class="aol-sec">
                     <div class="aol-title">引擎账本持仓</div>
                     <div class="aol-body" id="aol-positions">（自动下单未运行）</div>
