@@ -661,13 +661,16 @@ with tmp_dir() as td:
 # 5.2 real < engine → FIFO 部分平最早一笔
 with tmp_dir() as td:
     broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
-                                real_longs=2, real_shorts=None)
+                                real_longs=3, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4547.0, 5, signal_key="P15B-5-2-C"))
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-2-A"))
     eng.positions.add(make_position(Side.LONG, 1, 4546.0, 3, signal_key="P15B-5-2-B"))
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
+    # 证据门（P64）前提：镜像先「见过」这笔仓（读到 ≥ 账本量）才有资格说它少了
+    eng._reconcile_positions()      # real=3 == engine=3 → 仅确认，不动簿
+    broker._real_longs = 2          # 之后镜像显示少 1 手
     eng._reconcile_positions()
     check("[5.2a] 部分平 FIFO：簿剩 2 笔", len(eng.positions), 2)
     check("[5.2b] 最早一笔 A 被平",
@@ -683,12 +686,15 @@ with tmp_dir() as td:
 # 5.3 real == 0 → 清空同侧全部 + summary 事件
 with tmp_dir() as td:
     broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
-                                real_longs=0, real_shorts=None)
+                                real_longs=2, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-3-A"))
     eng.positions.add(make_position(Side.LONG, 1, 4546.0, 3, signal_key="P15B-5-3-B"))
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
+    # 证据门（P64）前提：镜像先读到 ≥ 账本量（2）
+    eng._reconcile_positions()      # real=2 == engine=2 → 仅确认
+    broker._real_longs = 0
     eng._reconcile_positions()
     check("[5.3a] real=0：簿清空", len(eng.positions), 0)
     check("[5.3b] real=0：state IDLE", eng._state, EngineState.IDLE)
@@ -740,13 +746,16 @@ with tmp_dir() as td:
 # 5.7 G4：对账把净敞口判成 0 → 同步结束 run（防孤儿风控锚被持久化）
 with tmp_dir() as td:
     broker = RealPositionBroker(Instrument(None, _IF), {"sim_equity": 1_000_000.0},
-                                real_longs=0, real_shorts=None)
+                                real_longs=1, real_shorts=None)
     eng = make_engine(td, broker=broker)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1, signal_key="P15B-5-7-A"))
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
     seed_run(eng, side=Side.LONG, anchor=4545.0)
     check("[5.7a] 前置：run 已建立", eng._run_side, Side.LONG)
+    # 证据门（P64）前提：镜像先读到 ≥ 账本量（1）
+    eng._reconcile_positions()      # real=1 == engine=1 → 仅确认
+    broker._real_longs = 0
     eng._reconcile_positions()
     check("[5.7b] 对账清空 → run 被结束（_run_side 清空）", eng._run_side, None)
     check("[5.7c] run 计划也清空", eng._run_plan, None)

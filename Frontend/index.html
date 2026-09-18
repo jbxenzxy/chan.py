@@ -52,7 +52,24 @@
                     <input type="checkbox" id="auto-order-checkbox" onchange="onAutoOrderToggle(this)">
                     <span class="auto-order-slider"></span>
                 </label>
+                <span class="auto-order-ledger-btn" id="auto-order-ledger-btn"
+                      onclick="toggleAutoOrderLedger(event)"
+                      title="交易引擎账本：持仓与最近成交（引擎记账口径，非柜台真值）">账本</span>
             </span>
+            <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓 + 最近成交。
+                 数据来自 /api/trader/status 的 auto_order.positions / trades_recent。
+                 注意：这是**交易引擎账本**，不是柜台真值 —— 柜台以快期3 为准。 -->
+            <div class="auto-order-ledger-panel hidden" id="auto-order-ledger-panel"
+                 onclick="event.stopPropagation()">
+                <div class="aol-sec">
+                    <div class="aol-title">引擎账本持仓</div>
+                    <div class="aol-body" id="aol-positions">（自动下单未运行）</div>
+                </div>
+                <div class="aol-sec">
+                    <div class="aol-title">最近成交（引擎账本口径）</div>
+                    <div class="aol-body" id="aol-trades">（无）</div>
+                </div>
+            </div>
         </div>
         <div class="header-right">
             <div class="goto-date">
@@ -234,6 +251,8 @@
         </div>
         <div class="settings-drawer-body">
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">买卖点类型（可多选）</div>
+            <div id="bsp-filter-engine-state" style="margin:0 0 6px;font-size:11px;color:#5c6370;line-height:1.5;">自动下单状态读取中…</div>
+            <div style="margin:0 0 14px;font-size:11px;color:#4b5262;line-height:1.6;">同时决定 K 线图上画哪些买卖点、以及自动下单受理哪几类信号；已被忽略的信号不会因之后再勾选而补做。顶部「买卖点」按钮只开关图上标记，不影响自动下单。</div>
             <div class="bsp-filter-grid">
                 <label class="bsp-filter-label">
                     <input type="checkbox" name="bsp-filter" value="0" checked="" onchange="onBspFilterChange(this)">
@@ -284,17 +303,6 @@
                     对数坐标系 + 等比网格
                 </label>
             </div>
-            <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">成交额/量显示</div>
-            <div id="vol-display-mode-group" style="display:flex;flex-direction:column;gap:6px;margin-bottom:14px;">
-                <label class="bsp-filter-label">
-                    <input type="radio" name="vol-display-mode" value="bar">
-                    柱状图（默认）
-                </label>
-                <label class="bsp-filter-label">
-                    <input type="radio" name="vol-display-mode" value="macd">
-                    类MACD（用成交额/量替代收盘价）
-                </label>
-            </div>
             <div style="border-top:1px solid #2a2a3e;margin:16px 0 12px;"></div>
 
             <div style="margin-bottom:8px;font-size:12px;color:#8892b0;">其他</div>
@@ -306,6 +314,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=16"></script>
+    <script src="app.js?v=15"></script>
 
 </body></html>

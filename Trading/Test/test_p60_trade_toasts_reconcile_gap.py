@@ -32,6 +32,10 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
   [9] 跨会话清场：上一场次关闭收尾告警（shutdown_result_*/account_frozen）
       新会话启动不重播（内存队列 + kv 投影同步清），现状类告警保留
   [10] 护栏：关键符号必须存在（防回潮）
+  [11] 证据门（P64，14:46 事故）：镜像从未见过该仓（会话 max < 账本量）→
+      不采纳（不删仓/不补盈亏/不收 run），reconcile_mirror_untrusted 告警
+      + reconcile_gate_blocked 留痕；确认后（读到 ≥ 账本量）自动放行；
+      mirror_snapshot 读数变化留痕（otg 持仓通道测量）
 
 跑法：python Trading/Test/test_p60_trade_toasts_reconcile_gap.py
 """
@@ -478,8 +482,11 @@ with tmp_dir() as tmp:
                                  fractal_low=4500.0))
     check("[7a] 开仓成功（账本 1 笔）",
           len(engine.positions.positions), 1)
-    broker._real = {"LONG": 0, "SHORT": 0}   # 柜台已被（手工）平光
+    # 证据门前提（P64）：镜像先「见过」这笔仓（读到 ≥ 账本量），它后来说
+    # 「仓没了」才可信 —— 快期3 手工平仓前，镜像本来就看得到这笔仓。
+    broker._real = {"LONG": 2, "SHORT": 0}   # 镜像确认成交（同步正常）
     engine.on_bar(make_bar(2000))            # 越过「入场当根 K 线跳过」守卫
+    broker._real = {"LONG": 0, "SHORT": 0}   # 之后柜台被（手工）平光
     engine._reconcile_positions(source="on_bar")
     check("[7b] 账本已按柜台修正（簿空）",
           len(engine.positions.positions), 0)
@@ -522,6 +529,94 @@ with tmp_dir() as tmp:
     check("[9e] 清场留痕（alert_session_prune 事件）",
           "alert_session_prune" in ev_kinds(os.path.join(tmp, "events.jsonl")),
           True)
+
+# ── [9g/9h] API 侧清场：_reset_engine_switch 拉起前同步清（关竞态窗口）──
+#   状态轮询直接读 kv 投影；若只靠子进程起来再清，开启后头几秒旧告警会
+#   抢先弹出（2026-09-18 用户实录：开启自动下单却看到"已关闭"消息）。
+from App.AppTrader import AppTrader as _AppTrader             # noqa: E402
+
+with tmp_dir() as tmp:
+    seed = Store(os.path.join(tmp, "state.db"))
+    old = time.time() - 3600.0
+    seed.set_json("alerts", [
+        {"level": "warn", "code": "shutdown_result_flat",
+         "msg": "自动下单已关闭 —— 已清仓", "ts": old, "last_ts": old, "n": 1},
+        {"level": "severe", "code": "position_mismatch",
+         "msg": "柜台有量、账本无仓", "ts": old, "last_ts": old, "n": 2},
+    ])
+    seed.close()
+    _AppTrader._reset_engine_switch(tmp)
+    after = Store(os.path.join(tmp, "state.db"))
+    left = [str(a.get("code")) for a in (after.get_json("alerts") or [])]
+    check("[9g] API 侧拉起前清场：关闭收尾告警已清",
+          "shutdown_result_flat" in left, False)
+    check("[9h] API 侧清场不误伤现状类告警",
+          "position_mismatch" in left, True)
+    check("[9i] 开关照常恢复 True",
+          bool(after.get_json("auto_order_enabled")), True)
+    after.close()
+def _src_early(rel):
+    """[9] 段专用源码读取（_src 在 [10] 段才定义，此处不能引用）。"""
+    return io.open(os.path.join(os.path.dirname(_TG_ROOT),
+                                rel.replace("/", os.sep)),
+                   "r", encoding="utf-8").read()
+
+
+check("[9j] 清场规则唯一存放（AppTrader 引用 Records.is_closure_alert）",
+      "is_closure_alert" in _src_early("App/AppTrader.py")
+      and "is_closure_alert" in _src_early("Trading/Infra/Records.py"), True)
+
+# ════════════════════════════════════════════════════════════════
+# [11] 证据门（P64，2026-09-18 14:46 事故）：镜像从未见过该仓 → 不采纳
+# ════════════════════════════════════════════════════════════════
+print("\n[11] 证据门：镜像未确认过的仓不许「被手工平仓」")
+with tmp_dir() as tmp:
+    # 事故复现：otg 持仓通道整场未同步 → 镜像恒 0（连开仓确认读数都没有）
+    broker = RealPosBroker(Instrument(InstrumentConfig(trade_symbol=_SYM), _IF),
+                           {"sim_equity": 1_000_000.0})
+    engine, store, b2, ev = build_engine(tmp, broker=broker)
+    engine.on_bar(make_bar(1000))
+    engine.on_signal(make_signal(is_buy=True, bsp_type="1",
+                                 fractal_low=4500.0))
+    check("[11a] 开仓成功（账本 1 笔）",
+          len(engine.positions.positions), 1)
+    broker._real = {"LONG": 0, "SHORT": 0}   # 镜像从未确认过这笔仓
+    engine.on_bar(make_bar(2000))            # 越过「入场当根 K 线跳过」守卫
+    engine._reconcile_positions(source="on_bar")
+    check("[11b] 证据门拦截：账本不删",
+          len(engine.positions.positions), 1)
+    codes = [str(a.get("code")) for a in _alerts(engine)]
+    check("[11c] reconcile_mirror_untrusted 告警产生",
+          "reconcile_mirror_untrusted" in codes, True)
+    msgs = [t["msg"] for t in toasts_of(store)]
+    check("[11d] 无「账单已同步」toast（不补虚构盈亏）",
+          any("账单已同步" in m for m in msgs), False)
+    check("[11e] run 未被收掉（L1-L3 锚保留）",
+          engine._run_plan is not None, True)
+    ev.flush()
+    kinds = ev_kinds(os.path.join(tmp, "events.jsonl"))
+    check("[11f] reconcile_gate_blocked 留痕",
+          "reconcile_gate_blocked" in kinds, True)
+    check("[11g] mirror_snapshot 测量留痕",
+          "mirror_snapshot" in kinds, True)
+
+with tmp_dir() as tmp:
+    # 门自动放行：镜像同步出真实持仓（读到 ≥ 账本量）→ 后续「仓没了」照常采纳
+    broker = RealPosBroker(Instrument(InstrumentConfig(trade_symbol=_SYM), _IF),
+                           {"sim_equity": 1_000_000.0})
+    engine, store, b2, ev = build_engine(tmp, broker=broker)
+    engine.on_bar(make_bar(1000))
+    engine.on_signal(make_signal(is_buy=True, bsp_type="1",
+                                 fractal_low=4500.0))
+    broker._real = {"LONG": 2, "SHORT": 0}
+    engine.on_bar(make_bar(2000))            # 镜像确认（读到 2）
+    broker._real = {"LONG": 0, "SHORT": 0}
+    engine._reconcile_positions(source="on_bar")
+    check("[11h] 确认后采纳放行（簿空）",
+          len(engine.positions.positions), 0)
+    msgs = [t["msg"] for t in toasts_of(store)]
+    check("[11i] 账单已同步 toast 出现",
+          any("账单已同步" in m for m in msgs), True)
 
 # ════════════════════════════════════════════════════════════════
 # [10] 护栏：关键符号存在（防回潮）
@@ -569,6 +664,13 @@ check("[8n] 时间宽限已撤（Reconcile 无 _EMPTY_SIDE_GRACE_S / Engine 无 
       and "_last_fill_at" not in _src("Trading/Engine/Engine.py"), True)
 check("[10o] 跨会话清场存在（_load_alerts 内 alert_session_prune）",
       "alert_session_prune" in _src("Trading/Engine/Engine.py"), True)
+check("[10p] 证据门符号存在（防回潮）",
+      "reconcile_mirror_untrusted" in _src("Trading/Engine/Reconcile.py")
+      and "_mirror_note" in _src("Trading/Engine/Reconcile.py"), True)
+check("[10q] 对账告警文案不再单独称「柜台」（改本地柜台镜像）",
+      "对账发现不一致：柜台 " not in _src("Trading/Engine/Reconcile.py"), True)
+check("[10r] SimNow 登录持仓镜像初读存在（otg 通道测量）",
+      "持仓镜像初读" in _src("Trading/Broker/SimNow.py"), True)
 
 print("\n==== P60：{} passed, {} failed ====".format(_PASS, _FAIL))
 if _FAIL:

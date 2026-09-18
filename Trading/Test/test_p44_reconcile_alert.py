@@ -195,6 +195,12 @@ with tmp_dir() as td:
         make_position(Side.LONG, 2, 4545.0, 1, signal_key="P44-1-L")])
     check("[1a] 前置：账本 1 笔多头 2 手", eng.positions.net_volume(), 2)
 
+    # 证据门（P64）前提：镜像先「见过」这笔仓（读到 ≥ 账本量）——
+    # 手工平仓前，同步正常的镜像本就看得见它；先确认一轮（不动簿）。
+    broker._real_longs = 2
+    eng._reconcile_positions(source="test")
+    broker._real_longs = 0
+
     eng._reconcile_positions(source="test")
 
     alerts = [a for a in eng._alerts

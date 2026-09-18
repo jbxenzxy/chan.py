@@ -97,6 +97,7 @@ class ReconcileMixin:
                 continue
             if real_vol is None:
                 continue
+            self._mirror_note(str(side), real_vol, source)
 
             side_all_cleared = self._reconcile_side(
                 side, side_positions, engine_vol, real_vol, source)
@@ -142,6 +143,31 @@ class ReconcileMixin:
         # ══════════════════════════════════════════════════════════════
         self._check_run_anchor("持仓对账")
 
+    # ── 证据门 + 测量（P64，2026-09-18 14:46 事故）──────────────────
+    #   otg 持仓通道整场未同步时镜像恒为 0，旧「柜台少→采纳」把刚开 9 秒的仓
+    #   从账本删除、补记虚构盈亏、收掉风控 run（快期3 实际 4 空 2 多）。
+    #   规则：镜像**本会话曾读到过 ≥ 账本量**（见过这笔仓）才有资格说它消失；
+    #   从未见过 → 读数不可信 → 只告警不采纳。读数变化时落 mirror_snapshot
+    #   事件，为 otg 持仓通道的定量测量留数据（登录初读另见 SimNow）。
+    def _mirror_note(self, side_key: str, real_vol: int, source: str) -> None:
+        """记录本地柜台镜像读数：维护会话最大值 + 变化留痕（测量用）。"""
+        if real_vol is None or real_vol < 0:
+            return
+        seen = getattr(self, "_mirror_max_seen", None)
+        if seen is None:
+            seen = {}
+            self._mirror_max_seen = seen
+            self._mirror_last = {}
+        last = self._mirror_last
+        if real_vol > seen.get(side_key, -1):
+            seen[side_key] = real_vol
+        if last.get(side_key) != real_vol:
+            last[side_key] = real_vol
+            self.ev.write("mirror_snapshot", side=side_key,
+                          mirror_vol=real_vol, session_max=seen[side_key],
+                          source=source,
+                          note="本地柜台镜像持仓读数变化留痕（otg 持仓通道测量）")
+
     def _reconcile_empty_side(self, side: Side, source: str, fn) -> None:
         """账本该侧无仓时的对账（盲区补）：柜台该侧有量 → severe 告警不接管。
 
@@ -162,9 +188,11 @@ class ReconcileMixin:
             return
         if not real_vol:
             return
+        self._mirror_note(str(side), real_vol, source)
         self.alert(
             self.ALERT_SEVERE, "position_mismatch",
-            "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本该侧无仓。"
+            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+            "账本该侧无仓。"
             "多出的持仓不是交易引擎开的（常见成因：报单回报延迟被误判拒单、"
             "柜台已成交），引擎不接管，请人工核对处理。".format(
                 side=str(side), rv=real_vol),
@@ -187,9 +215,9 @@ class ReconcileMixin:
             # 引擎不接管多出的持仓，只告知事实。
             self.alert(
                 self.ALERT_SEVERE, "position_mismatch",
-                "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本只有 {ev} 手"
-                "（多 {diff} 手）。多出的持仓不是交易引擎开的，引擎不接管，"
-                "请人工核对处理。".format(
+                "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+                "账本只有 {ev} 手（多 {diff} 手）。多出的持仓不是交易引擎开的，"
+                "引擎不接管，请人工核对处理。".format(
                     side=str(side), rv=real_vol, ev=engine_vol,
                     diff=real_vol - engine_vol),
                 side=str(side), engine_vol=engine_vol, real_vol=real_vol,
@@ -202,6 +230,36 @@ class ReconcileMixin:
 
         if real_vol == engine_vol:
             # 一致：无需操作
+            return False
+
+        # ════════════════════════════════════════════════════════════
+        # 证据门（P64，2026-09-18 14:46 事故）：镜像说"仓少了"之前，
+        # 必须先证明它见过这笔仓 —— 本会话该侧镜像最大读数 ≥ 账本量。
+        # 事故里 otg 持仓通道整场未同步（镜像恒 0，连下单前账户既有的
+        # 2 手空都看不见），旧逻辑把 0 当权威，开仓 9 秒后把刚开的仓从账本
+        # 删除、按参考价补记虚构盈亏、收掉风控 run。现在：从未见过 → 读数
+        # 不可信 → 只告警不采纳。账本保留，L1-L3 照常按交易引擎账本管理；
+        # 镜像哪天同步出真实持仓（读到 ≥ 账本量），本门自动放行，恢复采纳。
+        # ════════════════════════════════════════════════════════════
+        seen_max = getattr(self, "_mirror_max_seen", {}).get(str(side), -1)
+        # restore 豁免：跨会话幽灵仓清理是启动对账的存在目的（见
+        # _reconcile_positions docstring）—— 账本仓来自上一会话，本会话
+        # 不可能积累"镜像曾见过"的证据；启动镜像读数即真值口径，且有
+        # SimNow 登录初读日志可审计。证据门只管**会话进行中**的采纳。
+        if source != "restore" and seen_max < engine_vol:
+            self.alert(
+                self.ALERT_SEVERE, "reconcile_mirror_untrusted",
+                "本地柜台镜像读数不可信：镜像 {side} 持仓 {rv} 手，账本记 {ev} 手，"
+                "但本会话镜像从未读到过 ≥ {ev} 手（otg 持仓通道可能未同步）。"
+                "引擎不改账本（不删仓、不补盈亏），持仓仍按交易引擎账本正常风控；"
+                "请以快期3 为准人工核对。".format(
+                    side=str(side), rv=real_vol, ev=engine_vol),
+                side=str(side), engine_vol=engine_vol, real_vol=real_vol,
+                mirror_session_max=seen_max, source=source)
+            self.ev.write("reconcile_gate_blocked", side=str(side),
+                          engine_vol=engine_vol, real_vol=real_vol,
+                          mirror_session_max=seen_max, source=source,
+                          note="镜像从未见过该仓，「柜台少」不采纳")
             return False
 
         # real_vol < engine_vol：部分平或全平（FIFO 顺序）
@@ -237,9 +295,10 @@ class ReconcileMixin:
         # 不做"等用户确认才同步"的挂起机制。明细见事件流 position_externally_closed。
         self.alert(
             self.ALERT_SEVERE, "reconcile_externally_closed",
-            "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本记 {ev} 手（少 {n} 手，"
-            "多为柜台手工平仓）。引擎已按 FIFO 从账本删除 {k} 笔、按参考价补记平仓盈亏，"
-            "账本已同步为与柜台一致；请知悉，如有异议请人工核对柜台。".format(
+            "对账发现不一致：本地柜台镜像 {side} 持仓 {rv} 手（真值以快期3 为准），"
+            "账本记 {ev} 手（少 {n} 手，多为柜台手工平仓）。"
+            "引擎已按 FIFO 从账本删除 {k} 笔、按参考价补记平仓盈亏，"
+            "账本已同步为与镜像一致；请知悉，如有异议请人工核对快期3。".format(
                 side=str(side), rv=real_vol, ev=engine_vol,
                 n=n_to_close, k=len(close_list)),
             side=str(side), engine_vol=engine_vol, real_vol=real_vol,
@@ -247,7 +306,7 @@ class ReconcileMixin:
         # 账单同步 toast（需求 ⑷(5)）：与上面的 severe 告警并存 —— 告警是
         # 「需人工核对」的持久提醒，这里是「账本已按柜台修正」的即时播报。
         self.notify(
-            "账单已同步：柜台 {side} 持仓 {rv} 手，账本已按柜台修正"
+            "账单已同步：本地柜台镜像 {side} 持仓 {rv} 手，账本已按镜像修正"
             "（删 {k} 笔，多为柜台手工平仓）".format(
                 side=str(side), rv=real_vol, k=len(close_list)),
             code="reconcile_sync")

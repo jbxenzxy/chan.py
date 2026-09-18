@@ -39,6 +39,23 @@ from .Clock import (
 BSP_TYPE_FILTER_KEY = "bsp_type_filter"          # state.db kv 键：{"0": true, "1": false, ...}
 BSP_TYPE_CHOICES = ("0", "1", "2", "3")          # 前端四类买卖点，顺序与复选框一致
 
+# ── 关闭收尾告警的「会话作用域」规则 ──────────────────────────────
+#   关闭收尾时引擎写 shutdown_result_*（已清仓 / 仍有净敞口）与
+#   account_frozen（锁仓）三类告警，观众是"关闭时刻"的用户。它们属于
+#   **上一场次**的结论：新场次启动时清场、不跨会话重播 —— 否则用户开启
+#   自动下单时反而弹"自动下单已关闭…"，误导（2026-09-18 用户实录）。
+#   规则唯一存放处：引擎 _load_alerts 与 API 侧 AppTrader 拉起子进程前
+#   都引用这里，两处口径不许漂移。历史记录在 events.jsonl 永久可查，
+#   清场不丢事实。
+CLOSURE_ALERT_PREFIX = "shutdown_result_"
+CLOSURE_ALERT_CODES = frozenset({"account_frozen"})
+
+
+def is_closure_alert(code) -> bool:
+    """是否为关闭收尾类告警（跨会话清场的对象）。"""
+    c = str(code or "")
+    return c.startswith(CLOSURE_ALERT_PREFIX) or c in CLOSURE_ALERT_CODES
+
 
 class Side(Enum):
     """持仓/信号方向。value 即符号，可直接参与盈亏乘算。"""

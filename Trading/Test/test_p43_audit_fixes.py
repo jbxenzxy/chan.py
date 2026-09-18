@@ -181,11 +181,15 @@ class AlwaysRejectCloseBroker(SeqCloseBroker):
 
 
 class RealShortMissingBroker(DryRunBroker):
-    """柜台真实持仓：多头 2 手存在、空头 0 手（模拟空侧被外部平掉 / 是幻影仓）。"""
+    """柜台真实持仓：confirmed 阶段多空各 2 手（证据门 P64 的确认读）；
+    armed 后多头 2 手存在、空头 0 手（模拟空侧被外部平掉 / 是幻影仓）。"""
 
     armed = False
+    confirmed = False
 
     def real_position(self, side):
+        if self.confirmed:
+            return 2                        # 证据门确认读：两侧各 2 手
         if not self.armed:
             return None                     # 未武装 → 引擎跳过对账
         return 2 if side is Side.LONG else 0
@@ -291,6 +295,11 @@ with tmp_dir("runanchor") as tmp:
     check("[3a] 开仓后 RUNNING 且有 run", eng._run_view() is not None, True)
     eng.on_bar(bar(2000, D1 + " 10:00", P0 - 60.0, lo=P0 - 80.0))
     check("[3b] 转移④ 后进入锁仓态", eng.account_state(), AccountState.LOCKED)
+    # 证据门（P64）前提：镜像先「见过」两侧仓位（读到 ≥ 账本量）——
+    # 空侧被外部平掉前，同步正常的镜像本就看得见它（D2 首根 bar 确认）。
+    broker.confirmed = True
+    eng.on_bar(bar(2900, D2 + " 09:35", P0 - 60.0))
+    broker.confirmed = False
     # D2：柜台空侧不存在 → 对账清掉空侧 → 净敞口 0 → +2（RUNNING）
     broker.armed = True
     eng.on_bar(bar(3000, D2 + " 09:40", P0 - 60.0))

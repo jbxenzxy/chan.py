@@ -1034,14 +1034,29 @@ class AppTrader:
 
     @staticmethod
     def _reset_engine_switch(out_dir: str) -> None:
-        """开启自动下单：把自动下单子进程 state.db 的 auto_order_enabled 置 True。
+        """开启自动下单：把自动下单子进程 state.db 的 auto_order_enabled 置 True，
+        并**同步清掉**上一场次的关闭收尾告警（shutdown_result_*/account_frozen）。
 
         上次关闭把 False 持久化了，直接重启自动下单子进程会保持关闭语义 ——
         这里在拉起前显式恢复为开启，子进程 _restore 读到 True 才正常收信号。
+        清场必须在本侧（API 进程）拉起前做：状态轮询直接读 kv 投影，若等
+        子进程起来再清（Engine._load_alerts），开启后的头几秒旧告警会抢先
+        弹出 —— "开启自动下单却看到已关闭消息"（2026-09-18 用户实录）。
+        清场规则唯一存放于 Records.is_closure_alert，与引擎侧同源。
         """
+        from Trading.Infra.Records import is_closure_alert
         try:
             s = _engine_store(out_dir)
             s.set_json("auto_order_enabled", True)
+            alerts = [a for a in (s.get_json("alerts") or [])
+                      if isinstance(a, dict)]
+            left = [a for a in alerts
+                    if not is_closure_alert(a.get("code"))]
+            if len(left) != len(alerts):
+                if left:
+                    s.set_json("alerts", left)
+                else:
+                    s.delete_key("alerts")
             s.close()
         except Exception as e:
             log.info("[AppTrader] 重置自动下单子进程开关失败（新状态目录可忽略）: %s: %s",
@@ -1073,6 +1088,14 @@ class AppTrader:
             raw_bsp_filter = s.get_json(BSP_TYPE_FILTER_KEY, None)
             # 轻提示队列（2026-09-18 需求 ⑷）：只投影，不判重 —— 前端按 ts 水位去重
             raw_toasts = s.get_json("toasts") or []
+            # 引擎账单（C，2026-09-18）：前端账本面板要看"最近成交"——直接读
+            # trades 表取尾部 10 条（库内 exit_at 升序，倒序截取即最新在前）。
+            # 只做投影，不 import 引擎、不判盈亏口径；旧 schema 读失败按空处理。
+            try:
+                _all_trades = s.trades()
+            except Exception:
+                _all_trades = []
+            trades_recent = list(reversed(_all_trades))[:10]
             s.close()
             alerts = [a for a in raw_alerts
                       if isinstance(a, dict)
@@ -1113,6 +1136,7 @@ class AppTrader:
                 "positions": positions,
                 "alerts": alerts,
                 "toasts": [t for t in raw_toasts if isinstance(t, dict)],
+                "trades_recent": trades_recent,
                 "run": run_view,
             }
         except Exception:

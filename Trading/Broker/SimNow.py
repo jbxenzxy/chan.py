@@ -610,6 +610,18 @@ class SimNowBroker(Broker):
             logging.getLogger("tg.brokers.simnow").info(
                 "在线通道已连接 → verified=True（source=CONFIG，合约参数 SSOT=品种档案；"
                 "交割月护栏 last_trade_date=%r）", self.state.last_trade_date)
+            # 持仓镜像初读（P64 测量）：探活与行情首帧已各泵过数秒，持仓快照若能
+            # 同步此时应已到位。读数 0 且快期3 显示有仓 = otg 持仓通道未同步的
+            # 直接证据（2026-09-18 14:46 事故：镜像整场为空 → 对账误删刚开仓，
+            # 引擎侧证据门见 Reconcile._mirror_note）。读数失败不阻断启动。
+            try:
+                _long0 = _position_total(self._api, self._trade_symbol, "LONG")
+                _short0 = _position_total(self._api, self._trade_symbol, "SHORT")
+                logging.getLogger("tg.brokers.simnow").info(
+                    "登录后持仓镜像初读: LONG=%s SHORT=%s（-1=读数失败；"
+                    "0 且快期3 显示有仓 = otg 持仓通道未同步）", _long0, _short0)
+            except Exception:
+                pass
             return
 
         self._conn_error = last_err or "CTP 登录失败（未知原因）"

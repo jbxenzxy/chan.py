@@ -64,7 +64,8 @@ from ..Strategy.Exit import ExitCheck
 from ..Infra.Instrument import Instrument
 from ..Infra.Records import (BSP_TYPE_FILTER_KEY, AccountState, Bar,
                              DecisionType, EngineState, ExitPlan, Order,
-                             OrderIntent, Position, Side, Signal, Trade)
+                             OrderIntent, Position, Side, Signal, Trade,
+                             is_closure_alert)
 from ..Infra.Clock import PLAUSIBLE_DATE_MIN, now_cn, now_ms, trading_day_from_clock, trading_day_of_ms
 
 
@@ -1981,7 +1982,8 @@ class TradingEngine(ReconcileMixin):
         自身重建（持仓恢复后状态面板可见，对账盲区另有 position_mismatch
         兜底），历史记录在 events.jsonl 永久可查。其余告警（如
         position_mismatch）照旧跨重启保留——它们描述的现状不随会话结束
-        而消失。
+        而消失。清场规则唯一存放于 Records.is_closure_alert（API 侧拉起前
+        也清，两处口径不许漂移）。
         """
         self._alerts_ack_ts = float(
             self.store.get_json(self._ALERTS_ACK_KV, 0.0) or 0.0)
@@ -1992,12 +1994,9 @@ class TradingEngine(ReconcileMixin):
             keep = [a for a in keep
                     if float(a.get("ts") or 0.0) > self._alerts_ack_ts]
 
-        def _is_stale_closure(a: Dict[str, Any]) -> bool:
-            c = str(a.get("code", ""))
-            return c.startswith("shutdown_result_") or c == "account_frozen"
-
-        dropped = sum(1 for a in keep if _is_stale_closure(a))
-        self._alerts = [a for a in keep if not _is_stale_closure(a)][
+        dropped = sum(1 for a in keep if is_closure_alert(a.get("code")))
+        self._alerts = [a for a in keep
+                        if not is_closure_alert(a.get("code"))][
             -self._ALERTS_KEEP:]
         if dropped:
             self.ev.write("alert_session_prune", removed=dropped,

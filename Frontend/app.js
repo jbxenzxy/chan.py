@@ -7908,6 +7908,7 @@
                 }
                 handleAutoOrderAlerts(data);
                 handleAutoOrderToasts(data);
+                renderAutoOrderLedger(data);   // 引擎账本面板（C）：开着才重渲染
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -7920,6 +7921,84 @@
                 autoOrderPrevRunning = running;
             } catch (e) {
                 console.warn('[auto-order] 轮询失败: ' + e.message);
+            }
+        }
+
+        // ── 引擎账本面板（C，2026-09-18）：持仓 + 最近成交，随轮询刷新 ──
+        // 数据 = /api/trader/status 的 auto_order.positions / trades_recent。
+        // 展示的是**交易引擎账本**（策略/止损止盈只认它），不是柜台真值 ——
+        // 镜像可能滞后甚至整场为空（对账证据门的由来），柜台以快期3 为准。
+        let autoOrderLedgerData = null;
+        function toggleAutoOrderLedger(ev) {
+            if (ev) ev.stopPropagation();
+            const panel = document.getElementById('auto-order-ledger-panel');
+            if (!panel) return;
+            panel.classList.toggle('hidden');
+            if (!panel.classList.contains('hidden')) {
+                renderAutoOrderLedger(autoOrderLedgerData);
+            }
+            if (!toggleAutoOrderLedger._outside) {
+                toggleAutoOrderLedger._outside = true;
+                document.addEventListener('click', function (e) {
+                    const p = document.getElementById('auto-order-ledger-panel');
+                    const b = document.getElementById('auto-order-ledger-btn');
+                    if (p && b && !p.contains(e.target) && !b.contains(e.target)) {
+                        p.classList.add('hidden');
+                    }
+                });
+            }
+        }
+        function fmtAolPx(v) {
+            const n = Number(v);
+            return (v === null || v === undefined || isNaN(n)) ? '--' : String(n);
+        }
+        function renderAutoOrderLedger(data) {
+            autoOrderLedgerData = data;
+            const panel = document.getElementById('auto-order-ledger-panel');
+            if (!panel || panel.classList.contains('hidden')) return;   // 关着不渲染
+            const ao = (data && data.auto_order) || null;
+            const posEl = document.getElementById('aol-positions');
+            if (posEl) {
+                const ps = (ao && Array.isArray(ao.positions)) ? ao.positions : [];
+                if (!ao) {
+                    posEl.textContent = '（自动下单未运行）';
+                } else if (!ps.length) {
+                    posEl.textContent = '空仓（账本无持仓）';
+                } else {
+                    posEl.innerHTML = ps.map(function (p) {
+                        const long = (p.side === 'LONG');
+                        const stop = p.exit_plan && p.exit_plan.stop_price;
+                        return '<div class="aol-row">'
+                            + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
+                            + (long ? '多' : '空') + ' ' + p.volume + '手</span>'
+                            + '<span>@ ' + fmtAolPx(p.entry_price) + '</span>'
+                            + '<span>止损 ' + fmtAolPx(stop) + '</span>'
+                            + '<span class="aol-dim">' + (p.entry_at || p.entry_date || '')
+                            + '</span></div>';
+                    }).join('');
+                }
+            }
+            const trEl = document.getElementById('aol-trades');
+            if (trEl) {
+                const ts = (ao && Array.isArray(ao.trades_recent)) ? ao.trades_recent : [];
+                if (!ts.length) {
+                    trEl.textContent = '（无成交）';
+                } else {
+                    trEl.innerHTML = ts.map(function (t) {
+                        const long = (t.side === 'LONG');
+                        const net = Number(t.net_cash);
+                        const netCls = net > 0 ? 'aol-pos' : (net < 0 ? 'aol-neg' : 'aol-dim');
+                        return '<div class="aol-row">'
+                            + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
+                            + (long ? '多' : '空') + t.volume + '手</span>'
+                            + '<span>' + fmtAolPx(t.entry_price) + ' → '
+                            + fmtAolPx(t.exit_price) + '</span>'
+                            + '<span class="' + netCls + '">净 '
+                            + (isNaN(net) ? '--' : net.toFixed(2)) + '</span>'
+                            + '<span class="aol-dim">' + (t.exit_at || '')
+                            + '</span></div>';
+                    }).join('');
+                }
             }
         }
 
