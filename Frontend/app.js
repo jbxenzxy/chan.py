@@ -8209,6 +8209,11 @@
         // 挂到全局后内联 onchange 才能触达。
         window.onAutoOrderToggle = onAutoOrderToggle;
 
+        // 同理：账本按钮用内联 onclick="toggleAutoOrderLedger(event)"，
+        // 内联事件在全局作用域执行 —— 不挂 window 的话点击直接抛
+        // ReferenceError，按钮看起来毫无反应（P65 复刻了上面开关的坑）。
+        window.toggleAutoOrderLedger = toggleAutoOrderLedger;
+
         // 轮询：实时模式下每 5s 刷新一次状态
         (function startAutoOrderPolling() {
             autoOrderPollTimer = setInterval(function() {
