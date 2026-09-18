@@ -297,11 +297,15 @@ class Broker(ABC):
             return OrderIntent.CLOSE
         raise ValueError("未知的 broker.submit intent/action: {!r}".format(intent))
 
-    def pulse(self) -> None:
-        """心跳（可选实现）。引擎每处理一根 K 线调一次。
+    def pulse(self, window: Optional[float] = None) -> None:
+        """心跳（可选实现）。bar 级保活由交易引擎每根 K 线调一次（on_bar）；
+        帧级空闲泵（pump_broker）传 window=0 做非阻塞排空。
 
-        真实 CTP 通道（如 SimNow）需要在长连接空闲期定期收发数据，否则会被
-        判为"用户不活跃"而断连。离线通道（dry_run）无需实现。
+        window=None（默认）→ 由实现通道自选窗口（SimNow 用 keepalive_wait=0.2s，
+        满足 CTP"用户不活跃"保活约束）；window=0 → wait_update(deadline=now)，
+        仍会先处理已到达的回报包、只是不再等新包（tqsdk api.py「先 _fetch_msg
+        再判断 deadline」+ baseApi._run_until_task_done 先 _run_once 再判超时）。
+        离线通道（dry_run）无需实现，继承本默认空实现。
         """
 
     def real_position(self, side: "Side") -> Optional[int]:

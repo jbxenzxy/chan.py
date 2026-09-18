@@ -172,12 +172,18 @@ class SseSource(Source):
                             return
                         # P68k：空闲泵挂点前移（原 P61 挂点排在 _on_frame 之后、
                         # 空帧丢弃 continue 与 json 解析之后）。上游心跳注释帧
-                        # （": heartbeat"，无 data 行）经 iter_sse 产出空 data，
-                        # 行情清淡时段只有心跳帧到达，原挂点收不到——泵停摆，
-                        # 两根 bar 之间到达的委托/持仓回报滞留 tqsdk 缓冲
-                        # （详见 SimNow._wait_finished / pulse 注释）。前移后
-                        # 每帧（含心跳帧）即驱动一次，回调由 main.py 注入
-                        # （engine.pump_broker），把回报处理收窄到帧级。
+                        # （": heartbeat"，无 data 行）每轮无条件发（AppSSE
+                        # 100ms 窗口一帧），经 iter_sse 产出空 data、随后被下面的
+                        # continue 丢弃——复盘越界/无K线/初始化/重复K线等只有
+                        # 心跳帧的状态（AppSSE:461-479、:563-568）原挂点收不到，
+                        # 泵停摆，两根 bar 之间到达的委托/持仓回报滞留 tqsdk
+                        # 缓冲（详见 SimNow._wait_finished / pulse 注释）。
+                        # 前移后每帧（含心跳帧）即驱动一次，回调由 main.py 注入
+                        # （engine.pump_broker → pulse(0) 非阻塞排空；不能用
+                        # 0.2s 保活窗口——心跳帧率 ≈10/s 高于其消费上限 5/s，
+                        # 积压会反灌本函数的 buf，见 Engine.pump_broker）。
+                        # 先泵后交帧是有意的：让本帧的出场判定读到更新的账户
+                        # 状态（pulse(0) 非阻塞，代价为事件循环一次迭代量级）。
                         # 回调异常绝不影响数据流。
                         _idle = getattr(self, "on_idle", None)
                         if _idle is not None:

@@ -627,12 +627,20 @@ class SimNowBroker(Broker):
         self._conn_error = last_err or "CTP 登录失败（未知原因）"
         self._api = None
 
-    def pulse(self) -> None:
+    def pulse(self, window: Optional[float] = None) -> None:
         """心跳：推一帧数据，保持连接活跃。
 
         SimNow 的 CTP 会话在空闲期会被标成"用户不活跃"并断连（实测短连接跑完
         立即退出，隔几分钟重连就报 `CTP:用户不活跃`）。SSE 实时模式两根 K 线之间
-        可能隔好几分钟，靠 submit 里的 wait_update 不够，所以引擎每根 bar 调一次。
+        可能隔好几分钟，靠 submit 里的 wait_update 不够，所以交易引擎每根 bar
+        调一次。
+
+        window=None（默认）→ keepalive_wait（Config.py，0.2s）保活窗口，bar 级用；
+        window=0 → 非阻塞排空：wait_update(deadline=now) 仍会先处理已到达的
+        回报包、只是不再等新包（tqsdk api.py:2105「先 _fetch_msg 再判断
+        deadline」+ baseApi.py:111 max(0,·) + 先 _run_once 再判超时）。帧级空闲泵
+        （Engine.pump_broker）用 0：心跳帧率（≈10/s，AppSSE 100ms 窗口）高于
+        0.2s 窗口的消费上限（5/s），沿用保活窗口会让积压反灌 SSE 的 buf。
 
         注意：tqsdk 的 wait_update **不是线程安全的**，必须由调用方在主线程驱动，
         这里不能起后台线程。
@@ -640,7 +648,8 @@ class SimNowBroker(Broker):
         if self._api is None:
             return
         try:
-            self._api.wait_update(deadline=time.time() + self._timing("keepalive_wait"))
+            wait = self._timing("keepalive_wait") if window is None else window
+            self._api.wait_update(deadline=time.time() + wait)
         except Exception:
             # 心跳失败不抛——下一根 bar 会再试，真断连了 submit 会自己报错
             pass

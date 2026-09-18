@@ -821,16 +821,19 @@ class TradingEngine(ReconcileMixin):
 
 
     def pump_broker(self) -> None:
-        """空闲泵：驱动一次 broker 的回报处理（P61，SSE 源每帧回调）。
+        """空闲泵：驱动一次 broker 的回报处理（P68k，SSE 源每帧·含心跳帧回调）。
 
         tqsdk wait_update 单线程，只在被驱动时消费网络帧（见 SimNow.pulse
-        注释）。引擎此前每根 bar 才 pump 一次（keepalive_wait=0.2s 窗口），
+        注释）。交易引擎此前每根 bar 才 pump 一次（keepalive_wait=0.2s 窗口），
         两根 bar 之间到达的委托/持仓回报滞留在缓冲里，gateway.log 的回报
         时刻因此被拉长、real_position 读数也偏旧。由 main.py 把本方法注入
-        SSE 源的 on_idle，回报处理收窄到帧级。pulse 内部已吞异常，这里
-        不再包裹 —— 单点语义，方便将来换 broker 时对齐行为。
+        SSE 源的 on_idle，回报处理收窄到帧级。传 window=0 非阻塞排空：帧率
+        （含心跳 ≈10/s）高于 0.2s 保活窗口的消费上限（5/s），沿用窗口会让
+        积压反灌 SSE 的 buf（P68k 评审 N1）；CTP 保活仍由 bar 级 pulse()
+        （on_bar）负责。pulse 内部已吞异常，这里不再包裹 —— 单点语义，
+        方便将来换 broker 时对齐行为。
         """
-        self.broker.pulse()
+        self.broker.pulse(0)
 
     # ---------------- signal 事件 ----------------
     def on_signal(self, sig: Signal) -> None:
