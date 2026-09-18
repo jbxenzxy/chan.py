@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>直连 CTP 改造设计文档（去 otg）· 2026-09-18</title>
+<title>tqsdk 直连 CTP 方案 · 2026-09-18</title>
 <style>
   body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color: #1f2333; margin: 0; background: #f7f8fa; }
   .wrap { max-width: 960px; margin: 0 auto; padding: 28px 36px 60px; background: #fff; }
@@ -23,17 +23,18 @@
 </head>
 <body><div class="wrap">
 
-<h1>去掉 otg、直连 CTP —— 改造设计与工作量评估</h1>
+<h1>tqsdk 直连 CTP 方案（去 otg）</h1>
 <p class="meta">2026-09-18 · 基于代码事实 · 只做设计不动代码 · 评审轮次 P67</p>
 
 <h2>0.1 需求原文（一字不改）与对照索引</h2>
 <div class="quote"><p>「如果最终测试发现otg延迟问题解决不了，那考虑去掉otg，选择直连CTP，现有代码需做哪些改动，你出一份设计文档，评估一下工作量」</p></div>
 <table>
 <tr><th>原文条目</th><th>对应章节</th></tr>
-<tr><td>otg 延迟问题解决不了（触发条件）</td><td>§1 结论摘要（触发判据）、§8 阶段计划</td></tr>
+<tr><td>otg 延迟问题解决不了（触发条件）</td><td>§1 结论摘要（触发判据）、§1.1 行动路线、§8 阶段计划</td></tr>
 <tr><td>去掉 otg，选择直连 CTP</td><td>§3 核心判断、§4 方案选型、§5 目标架构</td></tr>
 <tr><td>现有代码需做哪些改动</td><td>§2 现状触点清单、§6 改动面清单</td></tr>
 <tr><td>评估一下工作量</td><td>§8 工作量评估表</td></tr>
+<tr><td>①②③ 行动路线（09-18 二次拍板）</td><td>§1.1 行动路线</td></tr>
 </table>
 
 <h2>0.2 基线</h2>
@@ -49,10 +50,20 @@
 
 <h2>1. 结论摘要</h2>
 <div class="ok">
-<p><b>可行，且改动面被 Broker 层封住。</b>现有架构里 tqsdk 是 otg 的唯一载体：所有交易连接（含实盘 <code>TqAccount(期货公司名,…)</code>）都经快期云网关中转，开源 tqsdk 没有「本地直连 CTP 前置」的模式。因此「去 otg」必然等于「在 SimNowBroker 内部把 tqsdk 换成 CTP 原生绑定」，对外 <code>Broker</code> 接口不动，缠论核心、交易引擎、对账、前端全部零改动。</p>
-<p><b>总工作量 ≈ 18 人日</b>（全职约 2~2.5 周），不确定性 ±30%，最大风险是 CTP 绑定库与 Python 3.13 的兼容性（§7 R1）。有一个 ≈10 人日的「最小直连」降级版本可选（§8）。</p>
-<p><b>不要现在就动工。</b>P61 已埋 <code>otg_latency</code> 测量（SimNow.py:1193，用交易所侧纳秒时间戳分解滞后归属），先跑若干交易日拿数据：只有当「交易所→本地」滞后长期显著、且快期3 同时刻毫秒级（坐实滞后在 otg 段）时，本工程才值得启动。</p>
+<p><b>2026-09-18 二次调研修正</b>：GitHub 主流期货自动下单项目（vnpy_ctp、kungfu、wondertrader、openctp、PandoraTrader、redtorch、northstar 等）绝大多数<b>直连 CTP 前置</b>，经云网关中转的 tqsdk 属于便利性路线的少数派。同时发现 <b>tqsdk 开源版已提供直连类 <code>TqCtp</code></b>（源码 <code>tqsdk/tradeable/otg/tqctp.py</code>，装 <code>tqsdk_zq_otg</code> 包后由本地适配进程直连期货公司 CTP 前置，绕开信易云网关）——本文档初版「开源 tqsdk 无直连模式」的判断<b>已过时并修正</b>。</p>
+<p><b>推荐路线改为两级</b>：① <b>首选 TqCtp 直连</b>——改动只有 <code>SimNowBroker._connect</code> 换账户类 + 装包 + 配置外接参数，技术侧 ≈1.5 人日，瓶颈是非技术的「期货公司程序化外接申请」；② 若 TqCtp 在实环境暴露问题（如包版本锁死、柜台特性不支持），再走本文档的全量重写方案（≈18 人日，备选保留）。</p>
+<p><b>延迟归属的推理链（基于调研修正）</b>：otg 云中继的正常开销是毫秒~百毫秒级；本项目实测 25~55 秒的回报滞后远超中继固有延迟的量级，更可能是<b>「回报已到本地缓冲、但 wait_update 未被及时调用消费」</b>（tqsdk 官方文档明确：只有调用 wait_update 时才会收包并更新内存截面）。P61 的 on_idle 泵正是针对此，<code>otg_latency</code> 数据可分解两段归属后再决定是否动直连。</p>
 </div>
+
+<h2>1.1 行动路线（2026-09-18 用户拍板，原文）</h2>
+<div class="quote"><p>「① 先跑几个交易日 otg_latency 定延迟归属；② 同时用 SimNow 直连参数把 TqCtp 路线在沙盒验证通；③ 若消费段已收紧、残余滞后仍在，TqCtp 一刀切过去」</p></div>
+<table>
+<tr><th>步骤</th><th>内容</th><th>退出条件 / 判据</th></tr>
+<tr><td>① 定延迟归属</td><td>现状 otg 路径继续跑若干交易日，收 <code>otg_latency</code>（交易所时间戳→本地终判）日志，配合 P61 on_idle 泵观察消费段是否已收紧</td><td>得到「交易所→otg→本地缓冲」与「缓冲→消费」两段量级；若总滞后已收敛到秒级以内且无回报缺失 → <b>不切直连</b>，继续观察</td></tr>
+<tr><td>② 验证 TqCtp 路线（与①并行）</td><td><code>pip install -U tqsdk_zq_otg</code>；SimNow 直连公开参数直测：front_url=<code>tcp://180.168.146.187:10201</code>（交易时段备用 <code>tcp://180.168.146.187:10130</code>）、front_broker=<code>9999</code>、app_id=<code>simnow_client_test</code>、auth_code=<code>0000000000000000</code>；沙盒里 <code>SimNowBroker._connect</code> 换 <code>TqCtp</code>，走登录→报单→回报→持仓初读全链路</td><td>登录/认证/结算确认成功；报单回报与快期3 逐笔一致；持仓初读非空；<code>otg_latency</code>（直连下改名 <code>ctp_latency</code>）降到毫秒级</td></tr>
+<tr><td>③ 切换决策</td><td>①的归属结论 + ②的验证结果合并决策：消费段已收紧而总滞后仍大 → 换 <code>broker</code> 配置切 TqCtp；实盘直连参数向期货公司申请程序化外接（front_broker/front_url/app_id/auth_code，与代码工作并行）</td><td>切换后连续 5 个交易日无回报缺失、无证据门严重告警 → otg 路径转为兜底保留</td></tr>
+</table>
+<p class="meta">注：SimNow 前置地址以结算单/官网最新公告为准（上表为常见测试前置）；实盘外接审批周期各期货公司不同，建议尽早提交。</p>
 
 <h2>2. 现状：tqsdk / otg 的全部触点（代码事实）</h2>
 <table>
@@ -68,15 +79,17 @@
 <tr><td><code>Tool/SimNow/*</code>（6 个脚本）</td><td>诊断/探针脚本直接用 tqsdk</td><td>直连版重写或暂时保留 otg 版</td></tr>
 </table>
 
-<h2>3. 核心判断：去掉 otg = 去掉 tqsdk（在 Broker 内部）</h2>
-<p>tqsdk 的交易通道固定经快期自建网关（otg）转发到 CTP 柜台，无论仿真（<code>TqAccount("simnow",…)</code>）还是实盘（<code>TqAccount(期货公司名,…)</code>），开源版本不提供绕开网关的本地 CTP 连接。所以本设计不是「给 tqsdk 换个地址」，而是「把 SimNowBroker 的内核从 tqsdk 换成 CTP 原生绑定」，共 1647 行里需要重写的是与 tqsdk 数据面/控制面交互的部分；超价、追价、超时重试、拒单分类（<code>Base.py:130 classify_ctp_reject</code>）等<b>业务保障逻辑与传输层无关，原样保留</b>。</p>
-<p>同时明确：镜像的职责不因直连消失（CTP 异步回报 + 查询 1 秒流控决定了必须有本地缓存），只是镜像从「tqsdk 内部维护」变为「适配器自己维护」，且新鲜度从 25~55 秒级降到毫秒级。</p>
+<h2>3. 核心判断（按 09-18 调研修正）</h2>
+<p><b>3.1 业界项目怎么连</b>——GitHub 生态证据：vn.py（<code>vnpy_ctp</code> 网关直连期货公司 CTP 柜台，官网明确「直连期货公司的 CTP 期货柜台」）、kungfu（开源版仅提供 CTP/XTP <b>柜台直连</b>实现，主打低延迟）、wondertrader（C++ 底层直连 CTP/CTPMini/飞马）、openctp（CTPAPI 兼容接口直连各柜台 + TTS 模拟）、PandoraTrader、redtorch、northstar、ctpwrapper 等，均为<b>程序直连 CTP API</b>。经云网关中转的只有 tqsdk 系（信易 otg / openctp 的 relay 类方案），属便利性取舍，非延迟敏感项目的主流选择。</p>
+<p><b>3.2 延迟问题的归属</b>——用户假设「若主流都走中继则延迟不该是问题」：调研结论相反，主流是直连，中继确实多一跳。但量化级差很关键：otg 中继固有开销为毫秒~百毫秒级，本项目 25~55 秒的滞后比它大两个数量级以上，<b>不能用「otg 线路慢」解释</b>。tqsdk 官方文档对 wait_update 的定义是「每次调用时：实际发出网络数据包、尝试从服务器接收数据包并更新内存业务截面」——回报到达本地后若 wait_update 不被调用，数据就一直躺在缓冲区。因此滞后大头大概率在<b>消费节奏（我们代码的泵）</b>，P61 on_idle 泵即为此修；<code>otg_latency</code>（交易所时间戳→本地终判）跑出数据即可定论。</p>
+<p><b>3.3 去 otg 不必去 tqsdk（修正初版判断）</b>——tqsdk 开源版已提供 <code>TqCtp</code> 直连类：传入 <code>front_broker/front_url/app_id/auth_code</code>（向期货公司申请程序化外接取得；SimNow 有公开测试参数），底层由本地 <code>otg_adapter</code> 进程（<code>tqsdk_zq_otg</code> 包）直连 CTP 前置，绕开信易云网关。API 语义（wait_update/get_position/insert_order/trade_records）完全不变，即 <b>SimNowBroker 内 1647 行的保障逻辑一行不用重写</b>。全量重写方案降级为备选（仅当 TqCtp 实环境受阻时启用）。</p>
 
 <h2>4. 方案选型</h2>
 <table>
 <tr><th>方案</th><th>说明</th><th>优点</th><th>缺点</th><th>结论</th></tr>
 <tr><td>A. tqsdk 调参解决延迟</td><td>加大泵频率、调 keepalive</td><td>零改动</td><td>治不了网关中转的固有滞后；P61 数据已经能证伪/证实</td><td>仅作为等待数据期间的观察项</td></tr>
-<tr><td>B. CTP 原生绑定 + 自写薄适配（推荐）</td><td>用现成 Python 绑定（vnpy_ctp 或 ctp-python），上层自写 <code>CtpDirectBroker</code></td><td>改动面被 Broker 层封死；绑定层成熟（vnpy 生态在用）</td><td>绑定库需验证 Python 3.13 wheel；CTP 细节要自己处理</td><td><b>采用</b>，二选一在阶段 0 spike 定</td></tr>
+<tr><td>B'. tqsdk TqCtp 直连（<b>推荐首选</b>，09-18 调研新增）</td><td><code>TqCtp(front_broker, front_url, app_id, auth_code)</code> + <code>pip install tqsdk_zq_otg</code>，<code>_connect</code> 换账户类</td><td>1647 行保障逻辑零重写；API 语义不变；改动 ≈10 行 + 配置</td><td>需期货公司程序化外接审批（非技术耗时）；tqsdk_zq_otg 与 tqsdk 版本锁死；多一跳本地适配进程</td><td><b>首选</b>，技术侧 ≈1.5 人日</td></tr>
+<tr><td>B. CTP 原生绑定 + 自写薄适配（备选）</td><td>用现成 Python 绑定（vnpy_ctp 或 ctp-python），上层自写 <code>CtpDirectBroker</code></td><td>改动面被 Broker 层封死；绑定层成熟（vnpy 生态在用）；无任何中继</td><td>绑定库需验证 Python 3.13 wheel；CTP 细节要自己处理</td><td>仅当 B' 实环境受阻时启用</td></tr>
 <tr><td>C. 官方 CTP API + 自写绑定</td><td>ctypes/pybind 直接包 thost API</td><td>最可控</td><td>绑定层工作量大、易踩内存/回调生命周期坑</td><td>不采用（除非 B 两个库都不可用）</td></tr>
 </table>
 
@@ -172,7 +185,8 @@
 <tr><td>6 · 测试与联调</td><td>假 CTP 回放单测 2 + SimNow 实环境联调 2.5（柜台不稳缓冲）+ 全量回归 0.5</td><td class="num">5</td></tr>
 <tr><td>7 · 并行观察期</td><td>双 broker（simnow + ctp_direct）同品种不同账户同跑，收集延迟数据后切换</td><td class="num">1</td></tr>
 <tr><td>8 · 文档交接</td><td>对接记录、运维手册（前置地址、认证参数）</td><td class="num">0.5</td></tr>
-<tr><td><b>合计</b></td><td></td><td class="num"><b>≈ 18</b></td></tr>
+<tr><td><b>合计（方案 B 全量重写）</b></td><td></td><td class="num"><b>≈ 18</b></td></tr>
+<tr><td><b>方案 B'（TqCtp 直连，推荐）</b></td><td>装包 + _connect 换 TqCtp + 配置外接参数 + SimNow 直连参数联调 + otg_latency 复测 + 文档，≈1.5 人日；前置的期货公司外接审批为并行非技术耗时（SimNow 公开测试参数可先验证）</td><td class="num"><b>≈ 1.5</b></td></tr>
 </table>
 
 <h3>8.1 降级版本（最小直连）</h3>
