@@ -4610,33 +4610,25 @@
             html += '</div>';
             // ③ 明细行
             html += '<div class="stats-rows">';
-            html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
-            // 品种键 + 合约拆分：统计口径是「整个品种」（同品种多月份合并），
-            // 说明合了哪几个合约，避免把"多个合约的合计"误读成"单个合约"。
+            // 品种：统计口径是「整个品种」（同品种多月份合并），所以这里只给品种键
+            // （IF / IH / AU…）。不列合约名 —— 一旦列出 CFFEX.IF2612 这种写法，
+            // 「品种合计」就会被读成「某一个合约的战绩」。
             if (d.symbol_key) {
-                var syms = [];
-                for (var sk in (d.by_symbol || {})) { syms.push(sk); }
-                syms.sort();
-                var sub = "";
-                if (syms.length > 1) {
-                    sub = '（合并 ' + syms.length + ' 个合约：' + statsEsc(syms.join("　")) + '）';
-                } else if (syms.length === 1) {
-                    sub = '（合约 ' + statsEsc(syms[0]) + '）';
-                }
-                html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + sub + '</span></div>';
+                html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + '</span></div>';
             }
+            html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
             html += '<div class="stats-row"><span class="stats-label">盈利因子</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">平均盈利 / 平均亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + (d.max_win.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_win.exit_at + '</span>' : '') + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + (d.max_loss.exit_at ? ' <span style="color:#8892b0;font-size:11px">' + d.max_loss.exit_at + '</span>' : '') + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">期望值/笔</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuan(d.expectancy) + '</span></div>';
-            if (d.by_reason && Object.keys(d.by_reason).length) {
-                var rs = [];
-                for (var k in d.by_reason) { rs.push(k + " " + yuan(d.by_reason[k])); }
-                html += '<div class="stats-row"><span class="stats-label">按出场原因</span><span class="stats-value" style="font-size:11px;text-align:right">' + rs.join("　") + '</span></div>';
-            }
+            // 期望值 = win_rate*avg_win + loss_rate*avg_loss，本身就是"每笔"量纲，
+            // 再缀一个「/笔」是重复限定（标准表述里没有这种写法）。
+            html += '<div class="stats-row"><span class="stats-label">期望值</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuan(d.expectancy) + '</span></div>';
+            // 这两个数就是「盈亏比(赔率)」的两个分量（pl_ratio = avg_win / |avg_loss|），
+            // 标签必须写明「每笔」—— 光写「平均盈利」会被读成总量口径，与盈利因子混淆。
+            html += '<div class="stats-row"><span class="stats-label">平均每笔盈利 / 平均每笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
+            // 最大单笔只给金额、不给发生时间：这一格回答的是"最坏会到多少"，
+            // 时间是复盘表格里的事，挤在同一行只会让数字被截断。
+            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + '</span></div>';
             html += statsReadWarningHtml(d);
-            html += '<div class="stats-note">曲线口径：累计净值（平仓时间序，0 = 盈亏平衡）</div>';
             html += '</div>';
             if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);
         }

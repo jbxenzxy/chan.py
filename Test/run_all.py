@@ -63,6 +63,9 @@ CI / 迁移每阶段的验收门禁）。
  30. 成交额/量类MACD test_vol_macd_mode.py 设置项入抽屉/数值 ≡ 后端
                                                      calculate_macd/预览bar继承/
                                                      真渲染像素对照（浏览器不在位降级 SKIP）
+ 31. 统计面板字段     test_stats_panel_labels.py 品种只显品种键/平均每笔盈-亏/
+                                                     期望值/最大单笔不带时间/
+                                                     删出场原因与曲线口径/行序
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -219,6 +222,10 @@ COMPONENTS = [
     # + 真渲染对照（无头 Chrome 截图量像素，浏览器不在位时降级 SKIP）。
     ("vol_macd_mode",
      [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
+    # 统计面板字段：品种只显品种键 / 平均每笔盈-亏 / 期望值（无「/笔」）/
+    # 最大单笔不显示时间 / 删「按出场原因」与「曲线口径」/ 明细行行序。
+    ("stats_panel_labels",
+     [sys.executable, os.path.join("Test", "test_stats_panel_labels.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，
