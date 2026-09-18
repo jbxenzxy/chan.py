@@ -1,0 +1,90 @@
+<svg viewBox="0 0 680 600" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>账本与本地柜台镜像的职责分工，以及直连 CTP 后镜像仍然存在的理由</title>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="34" font-size="14" font-weight="500" fill="#26215C">两本账来源不同：账本 = 引擎自己写的，镜像 = 从柜台读回来的</text>
+
+  <g>
+    <rect x="60" y="58" width="180" height="56" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="150" y="78" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">交易引擎</text>
+    <text x="150" y="98" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#185FA5">报单方，只信账本</text>
+  </g>
+  <g>
+    <rect x="430" y="58" width="210" height="56" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text x="535" y="78" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#27500A">CTP 柜台（SimNow）</text>
+    <text x="535" y="98" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#3B6D11">持仓·成交的唯一真值</text>
+  </g>
+  <path d="M240 86 L424 86" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="332" y="74" text-anchor="middle" font-size="12" fill="#5F5E5A">报单 / 撤单</text>
+
+  <path d="M150 114 L150 186" fill="none" stroke="#534AB7" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="160" y="152" font-size="12" fill="#534AB7">引擎自己记账</text>
+  <g>
+    <rect x="60" y="190" width="180" height="64" rx="8" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+    <text x="150" y="212" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#3C3489">引擎账本</text>
+    <text x="150" y="232" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#534AB7">只记自己开的仓·止损·FIFO</text>
+  </g>
+
+  <path d="M535 114 L535 186" fill="none" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="545" y="152" font-size="12" fill="#0F6E56">查询 + 回报推送</text>
+  <g>
+    <rect x="430" y="190" width="210" height="64" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="535" y="212" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041">本地柜台镜像</text>
+    <text x="535" y="232" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56">柜台数据的本地副本</text>
+  </g>
+
+  <g>
+    <rect x="272" y="202" width="136" height="40" rx="8" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+    <text x="340" y="222" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="500" fill="#854F0B">对账（证据门）</text>
+  </g>
+  <path d="M240 222 L268 222" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M430 222 L412 222" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="60" y="284" font-size="12" fill="#712B13">镜像有账本无 → 回报延迟被误判拒单；账本有镜像无 → 手工平仓，需补记</text>
+
+  <text x="40" y="336" font-size="14" font-weight="500" fill="#26215C">镜像不是 otg 的产物，直连 CTP 也省不掉</text>
+
+  <text x="40" y="366" font-size="12" fill="#712B13">现状 · 经 otg 云网关</text>
+  <g>
+    <rect x="40" y="378" width="110" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="95" y="400" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0C447C">引擎</text>
+  </g>
+  <g>
+    <rect x="185" y="378" width="160" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="265" y="392" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#085041">tqsdk</text>
+    <text x="265" y="410" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56">内含本地镜像</text>
+  </g>
+  <g>
+    <rect x="380" y="378" width="130" height="44" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text x="445" y="400" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#444441">otg 云网关</text>
+  </g>
+  <g>
+    <rect x="545" y="378" width="95" height="44" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text x="592" y="400" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#27500A">CTP 柜台</text>
+  </g>
+  <path d="M150 400 L181 400" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M345 400 L376 400" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M510 400 L541 400" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="40" y="446" font-size="12" fill="#712B13">多一跳：回报滞后 25~55s，镜像可能整场为空（14:46 事故）</text>
+
+  <text x="40" y="490" font-size="12" fill="#085041">假想 · 直连 CTP</text>
+  <g>
+    <rect x="40" y="502" width="110" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="95" y="524" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0C447C">引擎</text>
+  </g>
+  <g>
+    <rect x="245" y="502" width="200" height="44" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="345" y="516" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#085041">自建 CTP 对接层</text>
+    <text x="345" y="534" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56">镜像仍要自己维护</text>
+  </g>
+  <g>
+    <rect x="545" y="502" width="95" height="44" rx="8" fill="#EAF3DE" stroke="#3B6D11" stroke-width="0.5"/>
+    <text x="592" y="524" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#27500A">CTP 柜台</text>
+  </g>
+  <path d="M150 524 L241 524" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <path d="M445 524 L541 524" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text x="40" y="572" font-size="12" fill="#085041">少一跳、镜像更新鲜（毫秒级）；但异步回报 + 查询流控仍在，副本职责不变</text>
+</svg>
