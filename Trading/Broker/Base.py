@@ -299,7 +299,7 @@ class Broker(ABC):
 
     def pulse(self, window: Optional[float] = None) -> None:
         """心跳（可选实现）。bar 级保活由交易引擎每根 K 线调一次（on_bar）；
-        帧级空闲泵（pump_broker）传 window=0 做非阻塞排空。
+        帧级空闲泵（pump_broker）传 window=0 做单轮推进（处理已到达的包、不等新包）。
 
         window=None（默认）→ 由实现通道自选窗口（SimNow 用 keepalive_wait=0.2s，
         满足 CTP"用户不活跃"保活约束）；window=0 → wait_update(deadline=now)，

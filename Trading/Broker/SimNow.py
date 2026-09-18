@@ -636,9 +636,9 @@ class SimNowBroker(Broker):
         调一次。
 
         window=None（默认）→ keepalive_wait（Config.py，0.2s）保活窗口，bar 级用；
-        window=0 → 非阻塞排空：wait_update(deadline=now) 仍会先处理已到达的
-        回报包、只是不再等新包（tqsdk api.py:2105「先 _fetch_msg 再判断
-        deadline」+ baseApi.py:111 max(0,·) + 先 _run_once 再判超时）。帧级空闲泵
+        window=0 → 单轮推进：wait_update(deadline=now) 仍会先处理已到达的
+        回报包、只是不再等新包（tqsdk api.py:2106-2108 先 _fetch_msg 再判
+        deadline；:2105 为其注释）+ baseApi.py:111 max(0,·) + 先 _run_once 再判超时）。帧级空闲泵
         （Engine.pump_broker）用 0：心跳帧率（≈10/s，AppSSE 100ms 窗口）高于
         0.2s 窗口的消费上限（5/s），沿用保活窗口会让积压反灌 SSE 的 buf。
 

@@ -179,7 +179,7 @@ class SseSource(Source):
                         # 泵停摆，两根 bar 之间到达的委托/持仓回报滞留 tqsdk
                         # 缓冲（详见 SimNow._wait_finished / pulse 注释）。
                         # 前移后每帧（含心跳帧）即驱动一次，回调由 main.py 注入
-                        # （engine.pump_broker → pulse(0) 非阻塞排空；不能用
+                        # （engine.pump_broker → pulse(0) 单轮推进，不等新包；不能用
                         # 0.2s 保活窗口——心跳帧率 ≈10/s 高于其消费上限 5/s，
                         # 积压会反灌本函数的 buf，见 Engine.pump_broker）。
                         # 先泵后交帧是有意的：让本帧的出场判定读到更新的账户
