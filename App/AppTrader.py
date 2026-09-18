@@ -1071,6 +1071,8 @@ class AppTrader:
             # 与上面的 run 一样只做投影 —— 前端据此显示"自动下单现在认哪几类"。
             from Trading.Infra.Records import BSP_TYPE_FILTER_KEY
             raw_bsp_filter = s.get_json(BSP_TYPE_FILTER_KEY, None)
+            # 轻提示队列（2026-09-18 需求 ⑷）：只投影，不判重 —— 前端按 ts 水位去重
+            raw_toasts = s.get_json("toasts") or []
             s.close()
             alerts = [a for a in raw_alerts
                       if isinstance(a, dict)
@@ -1110,6 +1112,7 @@ class AppTrader:
                 "positions_n": len(positions),
                 "positions": positions,
                 "alerts": alerts,
+                "toasts": [t for t in raw_toasts if isinstance(t, dict)],
                 "run": run_view,
             }
         except Exception:

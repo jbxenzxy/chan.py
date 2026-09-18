@@ -2789,7 +2789,7 @@
         const TOAST_MS = 5000;      // 自动淡出时长
         const TOAST_MAX = 5;        // 同屏上限：再多也只是刷屏，丢掉最早的
 
-        function showToast(msg) {
+        function showToast(msg, ms) {
             let stack = document.getElementById("toast-stack");
             if (!stack) {
                 stack = document.createElement("div");
@@ -2807,7 +2807,7 @@
             // 下一帧再置 opacity：新建节点在同一帧里从 0 置 1 不触发 transition，
             // 等于没有淡入（旧实现只有"已存在节点"那条路径才有淡入）。
             requestAnimationFrame(function () { item.style.opacity = "1"; });
-            const timer = setTimeout(close, TOAST_MS);
+            const timer = setTimeout(close, ms || TOAST_MS);
             item.addEventListener("click", close);
             function close() {
                 clearTimeout(timer);
@@ -7767,6 +7767,7 @@
         let autoOrderSeenAlertTs = 0;     // 告警本地水位：<= 它的一律不再弹（已处理过）
         const autoOrderAlertCool = {};    // code → 上次弹框时刻（同因告警防连弹）
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
+        let autoOrderSeenToastTs = 0;     // 轻提示本地水位：<= 它的一律不再弹
 
         // ══════════════════════════════════════════════════════════════
         // 未标定品种置灰（2026-09-14 第 6 批）
@@ -7906,6 +7907,7 @@
                     wrap.title = tip;
                 }
                 handleAutoOrderAlerts(data);
+                handleAutoOrderToasts(data);
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -7994,6 +7996,33 @@
             }).catch(function (e) {
                 console.warn('[auto-order] 告警 ack 失败: ' + e.message);
             });
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] 自动下单轻提示 toast（2026-09-18 需求 ⑷）
+        //   引擎把关键动作（开仓/平仓/保本/移动止盈/账单同步）写进 state.db 的
+        //   toasts 队列，随状态轮询下发。与告警的分界：轻提示是「刚才发生了什么」
+        //   —— 2 秒自动消失、不需要确认、不合并（两次开仓是两个独立事件都要弹）。
+        //   首次拉取只定水位不回放历史：页面晚开不该把半小时前的开仓弹一遍。
+        // ══════════════════════════════════════════════════════════════
+        function handleAutoOrderToasts(data) {
+            const toasts = (data.auto_order && Array.isArray(data.auto_order.toasts))
+                ? data.auto_order.toasts : [];
+            if (!toasts.length) return;
+            const prev = autoOrderSeenToastTs;
+            let maxTs = prev;
+            const fresh = [];
+            for (let i = 0; i < toasts.length; i++) {
+                const t = toasts[i] || {};
+                const ts = Number(t.ts) || 0;
+                if (!ts) continue;
+                if (ts > maxTs) maxTs = ts;
+                if (prev > 0 && ts > prev) fresh.push(String(t.msg || ''));
+            }
+            autoOrderSeenToastTs = maxTs;
+            for (let i = 0; i < fresh.length; i++) {
+                if (fresh[i]) showToast('自动下单：' + fresh[i], 2000);
+            }
         }
 
         // ══════════════════════════════════════════════════════════════

@@ -180,6 +180,18 @@ class SseSource(Source):
                             continue
                         for ev in self._on_frame(payload):
                             yield ev
+                        # P61：空闲泵挂点 —— tqsdk wait_update 单线程，只在被
+                        # 驱动时消费网络帧；引擎每根 bar 才 pump 一次，两根 bar
+                        # 之间到达的委托/持仓回报会滞留在缓冲里（详见
+                        # SimNow._wait_finished / pulse 注释）。SSE 每帧回到
+                        # 这里一次，回调由 main.py 注入（engine.pump_broker），
+                        # 把回报处理收窄到帧级。回调异常绝不影响数据流。
+                        _idle = getattr(self, "on_idle", None)
+                        if _idle is not None:
+                            try:
+                                _idle()
+                            except Exception:
+                                pass
             except GeneratorExit:
                 return
             except Exception as e:

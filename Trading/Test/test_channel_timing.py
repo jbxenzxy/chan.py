@@ -80,7 +80,7 @@ print("\n[3] SimNowBroker.params 含完整 channel")
 from Trading.Broker.SimNow import SimNowBroker  # noqa: E402
 b = SimNowBroker.__new__(SimNowBroker)
 b.params = BrokerConfig().model_dump()   # 与 test_simnow_guards._make 同一注入方式
-check("params['channel'] 存在且含 10 键（2026-09-17 改造后）",
+check("params['channel'] 存在且含 10 键（2026-09-18 撤 terminal_settle_wait）",
       len(b.params["channel"]), 10)
 check("_timing 读 quote_stale_seconds", b._timing("quote_stale_seconds"), 30.0)
 check("_timing 读 probe_alive_timeout", b._timing("probe_alive_timeout"), 8.0)

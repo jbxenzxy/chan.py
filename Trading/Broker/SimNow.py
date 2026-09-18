@@ -406,6 +406,10 @@ class SimNowBroker(Broker):
         # 字段存在，否则单测实例化（无凭据）后访问会 AttributeError。
         self._sig_orders: Dict[str, List[str]] = {}
         self._conn_error: Optional[str] = None
+        # P61：回报链路时延测量锚点 —— 本地报单时刻 / watchdog 撤单时刻（墙钟），
+        # _finalize 终判时据此落 otg_latency 日志（见 _otg_latency_fields）。
+        self._submit_t0: float = 0.0
+        self._watchdog_fired_at: Optional[float] = None
         # （A′ 2026-09-17 改造）：合约参数 SSOT = 品种档案 Product（构造期播种），
         #   无行情取值路径 —— 原"取值即冻结"开关与 pulse 重试计数器随行情
         #   取值通道一并删除；verified 由 _connect 成功即置位（source=CONFIG）。
@@ -781,6 +785,9 @@ class SimNowBroker(Broker):
             return self._rejected(signal_key, side, intent.value, volume, ref_price,
                                   note, "未连接")
 
+        # P61：记录本地报单时刻（otg_latency 测量的起点锚）
+        self._submit_t0 = time.time()
+
         if intent is OrderIntent.OPEN:
             return self._submit_open(intent, side, volume, ref_price, signal_key, note,
                                      is_exit=is_exit)
@@ -1133,6 +1140,23 @@ class SimNowBroker(Broker):
                   "reject_class": reject_class,
                   "attempt": attempt, "max_attempts": max_attempts},
         )
+        # P61：回报链路时延测量 —— 每次终判一行，落 gateway.log。下次再出现
+        # 「判拒后柜台成交」，一行日志即可分解滞后属于 otg 链路还是引擎泵间隙。
+        try:
+            _f = self._otg_latency_fields(order, self._submit_t0,
+                                          self._watchdog_fired_at)
+            import logging
+            logging.getLogger("tg.brokers.simnow").info(
+                "otg_latency: signal=%s action=%s status=%s submit→终判=%ss "
+                "watchdog→终判=%ss insert→终判=%ss 成交→终判=%ss "
+                "insert_dt=%s trade_dt=%s raw_order_id=%s",
+                signal_key or "-", action, status, _f["since_submit_s"],
+                _f["since_watchdog_s"], _f["insert_lag_s"], _f["trade_lag_s"],
+                _f["insert_dt"], _f["trade_dt"],
+                str(getattr(order, "order_id", "")))
+        except Exception:
+            pass
+
         self.orders.append(o)
         # 登记 signal_key → raw_order_id（trade_confirmed / cancel_pending
         # 复查用）。同一 signal_key 的追价重试会登记多条 raw 单，各自的
@@ -1153,6 +1177,48 @@ class SimNowBroker(Broker):
         """
         return o.meta.get("reject_class") in NO_CHASE_REJECT_CLASSES
 
+    @staticmethod
+    def _otg_latency_fields(order, submit_t0: float,
+                            watchdog_at: Optional[float]) -> Dict[str, Any]:
+        """回报链路时延测量（P61）：把「交易所侧时刻」与「本地处理时刻」对表。
+
+        tqsdk 的订单对象自带 CTP 侧时间戳（纳秒 epoch）：
+          · insert_date_time —— 交易所/CTP 受理委托的时刻；
+          · trade_records[*].trade_date_time —— 逐笔成交时刻。
+        本地处理时刻（now）减去它们 = 「回报从 otg 到我们进程」的端到端滞后。
+        空闲泵（SSE on_idle）生效后，回报在帧级被处理，该读数即逼近真实
+        网络滞后；若实测仍大，即坐实 otg-simnow 链路本身慢 —— 与快期3 直连
+        毫秒级的差距据此定量，不再靠 gateway.log 的「处理时刻」猜。
+
+        字段缺时间戳 / 未成交 → 对应项 None，绝不抛异常（测量不干扰交易）。
+        """
+        now = time.time()
+        ins_ns = 0.0
+        try:
+            ins_ns = float(getattr(order, "insert_date_time", 0) or 0)
+        except (TypeError, ValueError):
+            ins_ns = 0.0
+        trades = getattr(order, "trade_records", None) or {}
+        trade_ns = 0.0
+        try:
+            for _t in trades.values():
+                d = float(getattr(_t, "trade_date_time", 0) or 0)
+                if d > trade_ns:
+                    trade_ns = d
+        except Exception:
+            trade_ns = 0.0
+        ins_s = ins_ns / 1e9 if ins_ns > 0 else None
+        trade_s = trade_ns / 1e9 if trade_ns > 0 else None
+        return {
+            "now": round(now, 3),
+            "since_submit_s": round(now - submit_t0, 3) if submit_t0 else None,
+            "since_watchdog_s": round(now - watchdog_at, 3) if watchdog_at else None,
+            "insert_lag_s": round(now - ins_s, 3) if ins_s else None,
+            "trade_lag_s": round(now - trade_s, 3) if trade_s else None,
+            "insert_dt": round(ins_s, 3) if ins_s else None,
+            "trade_dt": round(trade_s, 3) if trade_s else None,
+        }
+
     def _trade_price(self, order) -> Optional[float]:
         tp = getattr(order, "trade_price", None)
         if tp is None:
@@ -1166,13 +1232,29 @@ class SimNowBroker(Broker):
         return f
 
     def _wait_finished(self, order, timeout_s: float) -> None:
-        """等待委托到达 FINISHED 终态；超时则尝试撤单（通道异常兜底 watchdog）。
+        """等待委托到达 FINISHED 真终态；超时撤单（watchdog）后只等
+        cancel_settle_wait 的撤单确认窗口即返回，不额外阻塞。
 
-        全部报单用 `Instrument.effective_order_advanced()`（品种执行策略表第 2 列），
-        交易所撮合引擎保证毫秒级
-          给出终态（全成/全撤）。本函数退化为通道异常兜底 watchdog——正常永不触发；
-          仅当断线/回报丢失导致订单永不到终态时，超时主动撤单防 submit 永久
-          阻塞挂死引擎线程（撤单多半也失败，Order 判 rejected 交引擎复核兜底）。
+        P61 修正（2026-09-18）：曾在此加「撤单后继续泵到真终态」的 60s 阻塞
+        兜底，被否决 —— 15s 周期图阻塞一分钟不可接受，且它建立在「回报链路
+        滞后数十秒是常态」的未证实假设上。把当天证据按代码事实重新分解：
+          ① submit 后 5s 等待窗口内 wait_update 连续被泵（行情 tick 持续驱动），
+            期间回报仍未到 → 「otg→我们进程」确有秒级以上滞后（交易所侧毫秒
+            级成交，撤单回报「不可撤」佐证）；
+          ② tqsdk wait_update 单线程、只在被驱动时消费网络帧，而引擎每根 bar
+            才 pump 一次（keepalive_wait=0.2s）→ gateway.log 里 tqsdk 的日志
+            时刻是「处理时刻」而非「到达时刻」，此前读出的「滞后 25~55s」
+            被引擎泵间隙污染，不能直接当网络滞后。
+        滞后究竟多大，由 _finalize 的 otg_latency 测量日志（交易所侧时间戳
+        vs 本地处理时刻）下次实测分解；引擎泵间隙已由 SSE 源的 on_idle 回调
+        （main.py 接线）收窄到帧级。若实测确认 otg 链路确实滞后数十秒，处理
+        方案（异步终判 / 换直连通道）再据此设计，不在报单路径里阻塞硬等。
+
+        watchdog 语义保留：防通道彻底失联时 submit 永久阻塞。撤单后若在
+        cancel_settle_wait 窗口内收到终态，_finalize 照常据真终态判定；窗口
+        外才到的终态 → Order 判 rejected，此时若柜台实际成交，由对账盲区
+        告警（Reconcile 空侧检查，无时间宽限）告知，otg_latency 留下精确
+        时延证据。
         """
         deadline = time.time() + timeout_s
         while time.time() < deadline:
@@ -1180,7 +1262,8 @@ class SimNowBroker(Broker):
             self._api.wait_update(deadline=deadline)
             if getattr(order, "status", "") == "FINISHED":
                 return
-        # 超时撤单
+        # 超时撤单（watchdog 语义保留）
+        self._watchdog_fired_at = time.time()
         try:
             self._api.cancel_order(order.order_id)
             self._api.wait_update(deadline=time.time() + self._timing("cancel_settle_wait"))

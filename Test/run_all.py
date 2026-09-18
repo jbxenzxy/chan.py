@@ -60,6 +60,9 @@ CI / 迁移每阶段的验收门禁）。
 29. 扫描候选归一化 test_scan_pageindex_normalize.py 候选路径 page_index 板块
                                                      代码须在进入成分取数层前归一化
                                                      （spy + 会话 + 静态回潮三防）
+ 30. 成交额/量类MACD test_vol_macd_mode.py 设置项入抽屉/数值 ≡ 后端
+                                                     calculate_macd/预览bar继承/
+                                                     真渲染像素对照（浏览器不在位降级 SKIP）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -211,6 +214,11 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_pe_ttm_live.py")]),
     ("sina_name_pairing",
      [sys.executable, os.path.join("Test", "test_sina_name_pairing.py")]),
+    # 成交额/量「类MACD」显示模式（2026-09-18）：设置项入抽屉 + 数值与后端
+    # calculate_macd 逐点对齐（node 抽真实代码段跑真实快照）+ 预览bar继承口径
+    # + 真渲染对照（无头 Chrome 截图量像素，浏览器不在位时降级 SKIP）。
+    ("vol_macd_mode",
+     [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

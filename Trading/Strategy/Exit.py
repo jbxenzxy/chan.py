@@ -373,9 +373,19 @@ class LayeredExitPolicy:
             #   b) 跟踪已启动且极值创新高 —— 补旧实现的缺口：原实现只在 new_stop 变化时
             #      回写 _trail_best，"极值新高但止损未变"（如 ATR 同步放大）时极值被丢弃，
             #      后续跟踪距离偏松。保本阶段（跟踪未启动）不回写，避免日志刷屏。
+            # 阶段标记（需求 ⑷(3)(4)，2026-09-18）：引擎据此在阶段跃迁时 toast。
+            # 策略层只负责标注当前风控阶段，通知职责在引擎。
+            if tracking_started:
+                phase = "trailing"
+            elif (self.breakeven_trigger_r > 0
+                    and fav_profit >= self.breakeven_trigger_r * R):
+                phase = "breakeven"
+            else:
+                phase = ""
             if new_stop != stop or (tracking_started and best != prev_best):
                 params = dict(plan.params)
                 params["_trail_best"] = best
+                params["_phase"] = phase
                 return ExitCheck("trailing", 0.0, only_update=True,
                                 plan=ExitPlan(self.name, new_stop, tp, params))
         return None

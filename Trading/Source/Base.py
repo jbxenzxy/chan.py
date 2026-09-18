@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, Optional, Tuple, Type
+from typing import Any, Callable, Dict, Iterator, Optional, Tuple, Type
 
 from ..Infra.Instrument import Instrument
 from ..Infra.Records import Bar, Signal
@@ -34,6 +34,11 @@ def build_source(name: str, params: Dict[str, Any], state: "Instrument") -> "Sou
 
 class Source(ABC):
     name: str = "base"
+
+    # P61：空闲回调（可选）。实时源每处理完一帧调用一次（若已注入），
+    # 用于驱动 broker 的回报泵（tqsdk wait_update 单线程，见 SimNow.pulse）。
+    # 由装配方（main.py）注入，Source 不感知 broker —— 维持单向依赖。
+    on_idle: Optional[Callable[[], None]] = None
 
     def __init__(self, params: Dict[str, Any], state: "Instrument"):
         # D-C：属性名统一为 state（原 self.spec 别名已删，

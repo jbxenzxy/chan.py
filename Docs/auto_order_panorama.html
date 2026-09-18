@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>自动下单全景图与报单等待方式（术语修订版）</title>
+<style>
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; color:#2C2C2A; background:#FFFFFF; margin:0; padding:32px 16px; }
+  .wrap { max-width:720px; margin:0 auto; }
+  h1 { font-size:18px; font-weight:500; margin:0 0 6px; }
+  h2 { font-size:15px; font-weight:500; margin:36px 0 4px; }
+  p.cap { font-size:13px; color:#5F5E5A; margin:4px 0 16px; line-height:1.6; }
+  table { border-collapse:collapse; width:100%; font-size:13px; margin:8px 0 20px; }
+  th, td { border:1px solid #D3D1C7; padding:7px 10px; text-align:left; vertical-align:top; line-height:1.5; }
+  th { background:#F1EFE8; font-weight:500; }
+  td.k { white-space:nowrap; font-weight:500; }
+  svg { width:100%; height:auto; display:block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>一、全景图：三个程序怎么配合</h1>
+  <p class="cap">浏览器请求进来 → 主进程的 Web 服务 → 调缠论引擎算K线、出买卖点信号 → 结果推回页面，同时经 SSE 推给下单子进程。两个进程之间不互相调用对方代码，靠 SSE 推流＋ state.db 留言板交换信息。</p>
+
+  <svg viewBox="0 0 680 668" role="img" xmlns="http://www.w3.org/2000/svg">
+    <title>自动下单全景图：三个程序的分工与交互</title>
+    <defs>
+      <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+    <rect x="230" y="40" width="220" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="340" y="62" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">你的浏览器（K线页面）</text>
+    <line x1="340" y1="88" x2="340" y2="124" stroke="#5F5E5A" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="352" y="106" font-size="12" fill="#5F5E5A">HTTP：看图、改设置、轮询状态</text>
+
+    <rect x="40" y="128" width="600" height="148" rx="20" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="60" y="152" font-size="14" font-weight="500" fill="#0C447C">主进程（父进程）· chan.py 分析服务（端口 18081）</text>
+    <rect x="60" y="170" width="178" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="149" y="190" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">Web 服务</text>
+    <text x="149" y="208" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">响应页面请求</text>
+    <line x1="238" y1="198" x2="254" y2="198" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="246" y="188" text-anchor="middle" font-size="11" fill="#5F5E5A">调用</text>
+    <rect x="254" y="170" width="178" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="343" y="190" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">缠论引擎</text>
+    <text x="343" y="208" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">算K线 · 出买卖点信号</text>
+    <line x1="432" y1="198" x2="448" y2="198" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="448" y="170" width="172" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="534" y="190" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">管家 AppTrader</text>
+    <text x="534" y="208" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">启动 · 看护下单子进程</text>
+
+    <line x1="140" y1="276" x2="140" y2="324" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="152" y="300" font-size="12" fill="#5F5E5A">SSE 推流：K线＋信号（单向广播）</text>
+    <text x="460" y="294" text-anchor="end" font-size="12" fill="#5F5E5A">两个进程不互相调用，</text>
+    <text x="460" y="310" text-anchor="end" font-size="12" fill="#5F5E5A">全靠这个共享文件留言</text>
+    <line x1="545" y1="280" x2="545" y2="320" stroke="#854F0B" stroke-width="1.5" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <rect x="470" y="286" width="150" height="32" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+    <text x="545" y="302" text-anchor="middle" dominant-baseline="central" font-size="12" font-weight="500" fill="#633806">state.db 留言板</text>
+
+    <rect x="40" y="324" width="600" height="152" rx="20" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="60" y="348" font-size="14" font-weight="500" fill="#085041">下单子进程 · Trading/main.py（自动下单；父 = 主进程）</text>
+    <rect x="60" y="366" width="160" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="140" y="386" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">SSE 收流客户端</text>
+    <text x="140" y="404" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">接收K线与信号</text>
+    <line x1="220" y1="394" x2="236" y2="394" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="236" y="366" width="200" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="336" y="386" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">交易引擎</text>
+    <text x="336" y="404" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">策略 · 账本 · 止损止盈</text>
+    <line x1="436" y1="394" x2="452" y2="394" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="452" y="366" width="168" height="56" rx="8" fill="#FFFFFF" stroke="#B4B2A9" stroke-width="0.5"/>
+    <text x="536" y="386" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">SimNowBroker＋tqsdk</text>
+    <text x="536" y="404" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">本地柜台镜像</text>
+
+    <line x1="536" y1="476" x2="536" y2="524" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <text x="544" y="498" font-size="12" fill="#5F5E5A">websocket 长连接</text>
+    <rect x="446" y="524" width="180" height="48" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text x="536" y="542" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">天勤 otg-simnow</text>
+    <text x="536" y="560" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">云端中转站</text>
+    <line x1="536" y1="572" x2="536" y2="604" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <rect x="436" y="604" width="200" height="48" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text x="536" y="622" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">SimNow 柜台</text>
+    <text x="536" y="640" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">CTP 仿真撮合</text>
+    <line x1="250" y1="628" x2="436" y2="628" stroke="#888780" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrow)"/>
+    <text x="343" y="616" text-anchor="middle" font-size="12" fill="#5F5E5A">直连柜台，回报毫秒级</text>
+    <rect x="60" y="604" width="190" height="48" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text x="155" y="622" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">快期3（对照）</text>
+    <text x="155" y="640" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#5F5E5A">自带直连 CTP 的通道</text>
+  </svg>
+
+  <h2>二、报单后是同步阻塞：等待时序</h2>
+  <p class="cap">报单拆两步：发指令（瞬间完成，不等）＋ 等结果（同步阻塞，交易引擎停在等待窗里反复泵事件，最多 5 秒）。平仓、追价同理。右下红框是 9-18 事故发生的那一步。</p>
+
+  <svg viewBox="0 0 680 552" role="img" xmlns="http://www.w3.org/2000/svg">
+    <title>报单后的等待方式：同步阻塞</title>
+    <defs>
+      <marker id="arrow2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M2 1L8 5L2 9" fill="none" stroke="#5F5E5A" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+    <rect x="190" y="40" width="300" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="340" y="62" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">交易引擎收到信号，决定报单</text>
+    <line x1="340" y1="84" x2="340" y2="120" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <rect x="160" y="120" width="360" height="44" rx="8" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+    <text x="340" y="142" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#0C447C">指令发出 —— 发送本身瞬间完成，不等</text>
+    <line x1="340" y1="164" x2="340" y2="200" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <rect x="130" y="200" width="420" height="64" rx="8" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+    <text x="340" y="222" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#712B13">交易引擎停下干等（最多 5 秒）</text>
+    <text x="340" y="242" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#993C1D">反复泵 wait_update；期间不收K线、不处理新信号、止损止盈也不检查</text>
+    <path d="M340 264 L340 284 L180 284 L180 316" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <path d="M340 264 L340 284 L500 284 L500 316" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <rect x="40" y="320" width="280" height="76" rx="8" fill="#E1F5EE" stroke="#0F6E56" stroke-width="0.5"/>
+    <text x="180" y="340" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#085041">等到了（回报进了镜像）</text>
+    <text x="180" y="360" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56">全成 → 记仓，止损止盈接管</text>
+    <text x="180" y="378" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#0F6E56">全撤 → 判失败</text>
+    <rect x="360" y="320" width="280" height="76" rx="8" fill="#FAEEDA" stroke="#854F0B" stroke-width="0.5"/>
+    <text x="500" y="340" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#633806">没等到（5 秒到）</text>
+    <text x="500" y="360" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B">发撤单 → 等撤单确认 →</text>
+    <text x="500" y="378" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#854F0B">拿当前镜像快照做终判</text>
+    <path d="M180 396 L180 440 L220 440" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <path d="M500 396 L500 440 L460 440" fill="none" stroke="#5F5E5A" stroke-width="1.5" marker-end="url(#arrow2)"/>
+    <rect x="220" y="420" width="240" height="44" rx="8" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+    <text x="340" y="442" text-anchor="middle" dominant-baseline="central" font-size="13" font-weight="500" fill="#2C2C2A">继续干活（处理下一根K线）</text>
+    <rect x="120" y="484" width="440" height="48" rx="8" fill="#FCEBEB" stroke="#A32D2D" stroke-width="0.5"/>
+    <text x="340" y="502" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#791F1F">9-18 事故点：撤单到达前订单早已成交，但回报还没进镜像，</text>
+    <text x="340" y="518" text-anchor="middle" dominant-baseline="central" font-size="12" fill="#791F1F">镜像快照上写着「未成交」→ 被误判为拒单</text>
+  </svg>
+</div>
+</body>
+</html>

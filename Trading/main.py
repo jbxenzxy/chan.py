@@ -327,6 +327,14 @@ def run(args) -> int:
               src.get("freq"), src.get("sse_base", ""), engine.broker.name,
               os.path.abspath(out), cfg.state_dir))
 
+    # P61：把空闲泵接进实时源 —— tqsdk wait_update 单线程，引擎每根 bar 才
+    # 驱动一次，两根 bar 之间到达的委托/持仓回报会滞留在缓冲里（详见
+    # SimNow._wait_finished / pulse 注释）。SSE 每帧回调 pump_broker，把回报
+    # 处理收窄到帧级；回放源无此需求，不注入。
+    _idle = getattr(engine, "pump_broker", None)
+    if _idle is not None and getattr(source, "name", "") == "sse":
+        source.on_idle = _idle
+
     # verified / source 现在读 **engine.state**（唯一运行时状态对象），
     #   不再从配置树的 instrument 上读 —— 启动横幅因此反映的是真实运行口径。
     _st = engine.state

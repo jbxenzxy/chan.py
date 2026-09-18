@@ -113,7 +113,7 @@ ins_src = inspect.getsource(_ins_mod)
 for gone in ("apply_quote", "_QUOTE_FIELD_MAP", "SOURCE_QUOTE"):
     check("Instrument 源码无 {}".format(gone), gone in ins_src, False)
 
-check("ChannelTimingConfig 字段数 == 10（改造后）",
+check("ChannelTimingConfig 字段数 == 10（2026-09-18 撤 terminal_settle_wait）",
       len(ChannelTimingConfig.model_fields), 10)
 check_true("channel 无合约参数就绪独立超时字段",
            "instrument_fetch_timeout" not in ChannelTimingConfig.model_fields)

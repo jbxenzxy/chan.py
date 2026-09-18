@@ -22,7 +22,7 @@
   ⑥ JS 语法校验：node --check（node 不在位时 SKIP 降级，不判 FAIL）。
   ⑧ 缓存击穿纪律：index.html 以 app.js?v=7+ 引用（版本号只增不减）。
   ⑨ 合并层完整（A 方案 AppState 访问层，双方案取长合并项）：
-     ChanApp.state 的 30 个 getter/setter 访问器 + 8 个方法别名在位，
+     ChanApp.state 的 31 个 getter/setter 访问器 + 8 个方法别名在位，
      访问器变量与 [STATE] 区块声明交叉一致，且不新增 window.* 绑定。
 
 运行：python Test/test_phase6_guards.py          # 校验（run_all 组件 13）
@@ -261,6 +261,7 @@ def test_cache_bust(failures):
 STATE_LAYER_VARS = [
     "chartData", "showBi", "showFx", "showZs", "showSeg", "showBsp", "showBiIdx",
     "bspFilter", "maPeriods", "_logScale", "_showVolume", "_subShowVolume",
+    "_volDisplayMode",
     "currentFreq", "lastStockFreq", "lastFuturesFreq", "isDualWindow",
     "dualSubData", "dualSubFreq", "viewOffset", "viewCount", "isRealtimeMode",
     "realtimeSymbol", "realtimeFreq", "realtimeStartTime", "realtimeConnected",

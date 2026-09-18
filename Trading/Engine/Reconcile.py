@@ -58,9 +58,17 @@ class ReconcileMixin:
         shorts = sorted(self.positions.same_side_positions(Side.SHORT),
                        key=lambda p: p.entry_bar_seq)
 
+        # ══════════════════════════════════════════════════════════════
+        # 盲区补（2026-09-18）：账本该侧为空 ≠ 柜台该侧无仓。
+        #   旧实现 `continue` 整侧跳过 —— 「柜台有量、账本无仓」这个方向
+        #   （典型成因：回报滞后被误判拒单、柜台已成交）既不告警也不留痕，
+        #   是当日 IF 孤儿仓无人过问的直接原因。现对空侧也拉 real_vol 比对：
+        #   real_vol > 0 → severe 告警不接管（延续 2026-09-17 拍板口径）。
+        # ══════════════════════════════════════════════════════════════
         all_cleared = True
         for side, side_positions in ((Side.LONG, longs), (Side.SHORT, shorts)):
             if not side_positions:
+                self._reconcile_empty_side(side, source, fn)
                 continue
             engine_vol = sum(p.volume for p in side_positions)
 
@@ -134,6 +142,37 @@ class ReconcileMixin:
         # ══════════════════════════════════════════════════════════════
         self._check_run_anchor("持仓对账")
 
+    def _reconcile_empty_side(self, side: Side, source: str, fn) -> None:
+        """账本该侧无仓时的对账（盲区补）：柜台该侧有量 → severe 告警不接管。
+
+        P61 撤销「刚成交 120s 时间宽限」（2026-09-18）：该宽限要防的场景
+        （自家平仓后持仓回报滞后被误报）拿不出代码/日志证据 —— 平仓路径本就
+        有 _verify_yesterday/today_delta 泵到持仓增量确认为止（成功即新鲜），
+        real_position 读数前又有 _channel_unstable 的 0.3s 泵兜底；而误报的
+        代价只是一次弹窗核对（告警不接管），漏报的代价是孤儿仓无人过问。
+        按「不空想防护」口径删除时间宽限：宁可偶尔误报，不可静默漏报。"""
+        try:
+            real_vol = fn(side)
+        except Exception as e:
+            if source == "restore":
+                self.ev.write("restore_reconcile_failed",
+                              reason="{}: {}".format(type(e).__name__, e),
+                              side=str(side),
+                              note="broker.real_position 抛异常，按本地 store 启动")
+            return
+        if not real_vol:
+            return
+        self.alert(
+            self.ALERT_SEVERE, "position_mismatch",
+            "对账发现不一致：柜台 {side} 持仓 {rv} 手，账本该侧无仓。"
+            "多出的持仓不是交易引擎开的（常见成因：报单回报延迟被误判拒单、"
+            "柜台已成交），引擎不接管，请人工核对处理。".format(
+                side=str(side), rv=real_vol),
+            side=str(side), engine_vol=0, real_vol=real_vol, source=source)
+        self.ev.write("position_mismatch", side=str(side),
+                      engine_vol=0, real_vol=real_vol,
+                      reason="real_gt_engine_empty_side", source=source)
+
     def _reconcile_side(self, side: Side, side_positions: List[Position],
                         engine_vol: int, real_vol: int, source: str) -> bool:
         """【】单侧对账（与 _reconcile_positions 解耦）。
@@ -205,6 +244,13 @@ class ReconcileMixin:
                 n=n_to_close, k=len(close_list)),
             side=str(side), engine_vol=engine_vol, real_vol=real_vol,
             n_positions_closed=len(close_list), source=source)
+        # 账单同步 toast（需求 ⑷(5)）：与上面的 severe 告警并存 —— 告警是
+        # 「需人工核对」的持久提醒，这里是「账本已按柜台修正」的即时播报。
+        self.notify(
+            "账单已同步：柜台 {side} 持仓 {rv} 手，账本已按柜台修正"
+            "（删 {k} 笔，多为柜台手工平仓）".format(
+                side=str(side), rv=real_vol, k=len(close_list)),
+            code="reconcile_sync")
         for idx, pos in enumerate(close_list):
             # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供 trade 记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)

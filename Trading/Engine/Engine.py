@@ -759,9 +759,10 @@ class TradingEngine(ReconcileMixin):
         # 持仓对账（增强 B）：与券商真实持仓比对。若发现持仓已被外部平掉
         # （如用户在快期3手工平仓）或属幽灵持仓，立即修正引擎账目，
         # 避免继续傻等平仓 / 误判新信号。dry_run 等无真实账户的通道返回 None，跳过。
-        # 判空用 not positions.is_empty()，不用 self.position（多仓下 legacy_single 会抛）
-        if not self.positions.is_empty():
-            self._reconcile_position()
+        # 盲区补（2026-09-18）：账本空 ≠ 柜台无仓（拒单误判会留下账外仓），
+        # 对账改为**无条件**执行；账本空侧的比对在 Reconcile 内部处理
+        # （账本空但柜台有量 → severe 告警不接管），全程空仓时静默返回。
+        self._reconcile_positions()
 
         # 只有运行态（净敞口 ≠ 0）才谈得上"离场"：
         #   空仓态无仓可平；锁仓态净敞口为 0、盈亏已锁定，等交易信号（规则 ⑶）。
@@ -797,10 +798,16 @@ class TradingEngine(ReconcileMixin):
         if check is None:
             return
 
+        prev_phase = (str(self._run_plan.params.get("_phase") or "")
+                      if self._run_plan is not None else "")
         if check.plan is not None:
             self._run_plan = check.plan
         if check.only_update:
-            # 只更新计划（保本 / 跟踪位移），不触发离场
+            # 只更新计划（保本 / 跟踪位移），不触发离场。
+            # 阶段跃迁（"" → breakeven → trailing）= 盈利达标时刻 → toast（需求 ⑷(3)(4)）
+            new_phase = str(self._run_plan.params.get("_phase") or "")
+            if new_phase and new_phase != prev_phase:
+                self._notify_run_phase(new_phase)
             self._persist()
             self.ev.write("exit_plan_update", reason=check.reason,
                           stop=self._run_plan.stop_price,
@@ -811,6 +818,18 @@ class TradingEngine(ReconcileMixin):
 
         self._force_exit(bar, reason=check.reason, trigger_price=check.price)
 
+
+    def pump_broker(self) -> None:
+        """空闲泵：驱动一次 broker 的回报处理（P61，SSE 源每帧回调）。
+
+        tqsdk wait_update 单线程，只在被驱动时消费网络帧（见 SimNow.pulse
+        注释）。引擎此前每根 bar 才 pump 一次（keepalive_wait=0.2s 窗口），
+        两根 bar 之间到达的委托/持仓回报滞留在缓冲里，gateway.log 的回报
+        时刻因此被拉长、real_position 读数也偏旧。由 main.py 把本方法注入
+        SSE 源的 on_idle，回报处理收窄到帧级。pulse 内部已吞异常，这里
+        不再包裹 —— 单点语义，方便将来换 broker 时对齐行为。
+        """
+        self.broker.pulse()
 
     # ---------------- signal 事件 ----------------
     def on_signal(self, sig: Signal) -> None:
@@ -1443,7 +1462,10 @@ class TradingEngine(ReconcileMixin):
         net_after = self.positions.net_volume()
         if net_before == 0 and net_after != 0:
             self._run_start(o.filled_price, bar, sig)
+            self._notify_open(o)
         elif net_before != 0 and net_after == 0:
+            # 阶段标记必须在 _run_end 清空前取（移动止盈/保本 → 平仓文案）
+            self._notify_close(o, act, reason)
             self._run_end()
 
         self._persist()
@@ -1528,6 +1550,70 @@ class TradingEngine(ReconcileMixin):
                       position_signal_key=pos.signal_key)
 
     # ---------------- 运行态（run）----------------
+    # ---------------- 关键动作轻提示（需求 ⑷，2026-09-18） ----------------
+    @staticmethod
+    def _fmt_px(v) -> str:
+        try:
+            return "{:g}".format(float(v))
+        except (TypeError, ValueError):
+            return "-"
+
+    def _notify_open(self, o: Order) -> None:
+        """开仓成交 toast：方向/手数/成交价 + 止损点（1R）（需求 ⑷(1)）。"""
+        plan = self._run_plan
+        stop = plan.stop_price if plan is not None else None
+        head = "开仓成交：{} {}手 @ {}".format(
+            str(o.side), o.volume, self._fmt_px(o.filled_price))
+        if stop:
+            self.notify(head + "｜止损(1R) = " + self._fmt_px(stop),
+                        code="open_filled")
+        else:
+            # 无计划（run_start_incomplete 已另有 severe 告警）：只报成交事实
+            self.notify(head, code="open_filled")
+
+    def _notify_close(self, o: Order, act: "_Action", reason: str) -> None:
+        """平仓/锁仓成交 toast：说明是止盈还是止损（需求 ⑷(2)）。"""
+        phase = ""
+        if self._run_plan is not None:
+            phase = str(self._run_plan.params.get("_phase") or "")
+        if reason == "tp":
+            label = "止盈"
+        elif reason == "sl":
+            if phase == "trailing":
+                label = "移动止盈（跟踪止损触发）"
+            elif phase == "breakeven":
+                label = "保本止损"
+            else:
+                label = "止损"
+        elif reason == "auto_order_off_retry":
+            label = "关闭自动下单离场"
+        else:
+            label = "离场"
+        body = "{} {}手 @ {}".format(str(o.side), o.volume,
+                                     self._fmt_px(o.filled_price))
+        if act.intent is OrderIntent.OPEN:
+            # 今仓离场 = 反向开仓锁仓（转移④）：o.side 是对冲方向
+            self.notify("锁仓离场·{}：反向开 {}".format(label, body),
+                        code="close_filled")
+        else:
+            self.notify("平仓成交·{}：{}".format(label, body),
+                        code="close_filled")
+
+    def _notify_run_phase(self, phase: str) -> None:
+        """盈利达标阶段 toast（需求 ⑷(3)(4)）：1R 保本 / r_multiple_tp·R 移动止盈。"""
+        pol = self.exit_policy
+        if phase == "breakeven":
+            trigger = getattr(pol, "breakeven_trigger_r", 1.0)
+            stop = self._run_plan.stop_price if self._run_plan else None
+            msg = "盈利达到 {:g}R，进入保本策略".format(trigger)
+            if stop:
+                msg += "：止损已移至 " + self._fmt_px(stop)
+            self.notify(msg, code="run_breakeven")
+        elif phase == "trailing":
+            trigger = getattr(pol, "r_multiple_tp", 2.0)
+            self.notify("盈利达到 {:g}R，进入移动止盈（跟踪止损启动）".format(trigger),
+                        code="run_trailing")
+
     def _run_start(self, anchor_price: float, bar: Optional[Bar],
                    sig: Optional[Signal]) -> None:
         """开启一段 run（净敞口 0 → 非 0）。**风控锚 = 本次成交价**（D1）。"""
@@ -1785,6 +1871,36 @@ class TradingEngine(ReconcileMixin):
                        str(a.get("code") or "broker_alert"),
                        str(a.get("msg") or ""),
                        **extra)
+
+    _TOASTS_KV = "toasts"
+    _TOASTS_KEEP = 30                # 轻提示队列上限：前端按 ts 水位去重，历史自然过期
+
+    def notify(self, msg: str, code: str = "", **extra) -> None:
+        """轻提示（需求 ⑷，2026-09-18）：关键动作即时 toast，前端 2 秒自动消失。
+
+        与 alert 的分工：alert 是「需要人工介入」的持久队列（同 code 合并计数
+        + ack 水位确认）；notify 是「刚才发生了什么」的瞬时播报 —— 开仓/平仓/
+        保本/移动止盈/账单同步。不合并、不需确认：同 code 的两次开仓是两个
+        独立事件，都要弹。列表有界（尾部 _TOASTS_KEEP 条落 kv），前端首次
+        拉取只定水位、不回放历史。
+        """
+        now = time.time()
+        rec: Dict[str, Any] = {"ts": now, "msg": msg}
+        if code:
+            rec["code"] = code
+        if extra:
+            rec.update(extra)
+        try:
+            items = self.store.get_json(self._TOASTS_KV) or []
+            if not isinstance(items, list):
+                items = []
+            items = [t for t in items if isinstance(t, dict)]
+            items.append(rec)
+            self.store.set_json(self._TOASTS_KV, items[-self._TOASTS_KEEP:])
+        except Exception as e:
+            self.ev.write("toast_persist_failed",
+                          reason="{}: {}".format(type(e).__name__, e))
+        self.ev.write("toast", msg=msg, code=code)
 
     def alert(self, level: str, code: str, msg: str, **extra) -> Dict[str, Any]:
         """登记一条告警（D11）。同 code 未确认 → **合并计数**，不新增条目。
