@@ -32,7 +32,8 @@ SSE 行情流）。
 
 实盘安全闸门：启动前预检配置（Trading/Config.py —— 自动下单配置的唯一
 入口）broker=live 或 broker_params.tq_market≠simnow 时必须显式
-confirm_live_trading=true，否则抛 AppError（前端提示，不拉起进程）。
+confirm_live_trading=true，否则抛 BadRequestError（400，前端提示，
+不拉起进程）—— 属于「参数没给全」的客户端输入问题，不是服务端故障。
 
 配置来源（归一）：不再有 config.json。本模块通过 _load_cfg()
 取一份 TradingConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
@@ -52,7 +53,7 @@ import threading
 import time
 from typing import Any, Dict, List, Optional
 
-from App.AppErrors import AppError
+from App.AppErrors import AppError, BadRequestError
 from App.AppLog import get_logger
 
 log = get_logger("AppTrader")
@@ -364,7 +365,7 @@ class AppTrader:
 
             # 品种白名单硬约束（用户拍板）：不在 PRODUCT_PROFILES
             # 的品种**不允许启动交易引擎**（R 下限等执行参数未标定，启动即错）。
-            # 在这里前置拒绝（AppError → 400 → 前端 alert 弹出原因），比 spawn
+            # 在这里前置拒绝（BadRequestError → 400 → 前端 alert 弹出原因），比 spawn
             # 后让引擎在 _restore 白名单闸门处自杀更快、反馈更明确；引擎侧
             # （Engine._restore）仍保留同一判定作为权威闸门（回放/CLI 直启拦）。
             #
@@ -381,7 +382,7 @@ class AppTrader:
                     assert_product_allowed(use_symbol)
                 except ValueError as e:
                     self._engine_log(log_file, "品种白名单拦截: {}".format(e))
-                    raise AppError(str(e))
+                    raise BadRequestError(str(e))
             except ImportError:  # pragma: no cover — Trading 缺失时交引擎闸门兜底
                 pass
 
@@ -645,20 +646,30 @@ class AppTrader:
         from Trading.Infra.Records import (BSP_TYPE_CHOICES,
                                            BSP_TYPE_FILTER_KEY)
         if not isinstance(types, dict) or set(types) != set(BSP_TYPE_CHOICES):
-            # 空 body / 缺一个键一律拒绝（HTTP 4xx），不做"缺键补 False"：
-            # 那会让"少传一个字段"静默等价于"关掉这一类"，响应还是 200 ——
-            # 用户看到的就是"自动下单开着却一直不下单"。
+            # 空 body / 缺一个键一律拒绝（BadRequestError → HTTP 400），
+            # 不做"缺键补 False"：那会让"少传一个字段"静默等价于"关掉这一类"，
+            # 响应还是 200 —— 用户看到的就是"自动下单开着却一直不下单"。
             # 「全不勾」必须由**显式四个 False** 表达。
-            raise AppError("买卖点类型过滤需给出完整的四类勾选（{}），缺一不可"
-                           .format(", ".join(BSP_TYPE_CHOICES)))
+            # 用 400 而非基类 500：这是**请求参数不全**，前端应提示"还差什么"，
+            # 监控也不该把它记成服务端故障（口径统一见 AppErrors.BadRequestError）。
+            raise BadRequestError("买卖点类型过滤需给出完整的四类勾选（{}），缺一不可"
+                                  .format(", ".join(BSP_TYPE_CHOICES)))
         filt = {t: bool(types[t]) for t in BSP_TYPE_CHOICES}
         out_dir = self._filter_out_dir()
         try:
             os.makedirs(out_dir, exist_ok=True)
+            # 本模块日志既要在终端可见、也要落进 out_dir/gateway.log。后端进程
+            # 从未 start/stop/status 过自动下单时（新部署第一次就是"先勾好、再
+            # 开自动下单"）tee 还没挂上，这条"谁在什么时候改了勾选"的留痕会只
+            # 进终端、事后无从复盘 —— 就地装一次，与 start()/stop()/status() 同一
+            # handler（换上它同时会摘掉旧的，路径始终跟着当前 out_dir）。
+            self._set_engine_log_handler(os.path.join(out_dir, "gateway.log"))
             s = _engine_store(out_dir)
             s.set_json(BSP_TYPE_FILTER_KEY, filt)
             s.close()
         except Exception as e:
+            # 与上面的参数校验区分：写不进去是本机状态目录 / 磁盘故障（服务端
+            # 问题），继续用基类 500 —— 用户该查权限/磁盘，而不是"改参数再试"。
             raise AppError("写入买卖点类型过滤失败（{}）: {}: {}"
                            .format(out_dir, type(e).__name__, e))
         _allowed = ",".join([t for t in BSP_TYPE_CHOICES if filt[t]])
@@ -669,11 +680,18 @@ class AppTrader:
     def get_bsp_filter(self) -> Dict[str, Any]:
         """读回「买卖点类型过滤」的实际生效值。
 
-        None = 用户从未推送过勾选（新状态目录 / 升级前部署）→ 引擎全部放行。
+        None = 用户从未推送过勾选（新状态目录 / 升级前部署 / 库还没建）
+        → 引擎全部放行。
         把它做成可查询，是为了让"自动下单现在认哪几类"有据可查，而不是靠猜。
+
+        只读不建库：库不存在时直接回 None，**不碰文件系统** —— Store() 构造即
+        建库，否则"打开行情页看一眼"就会在既有状态目录里凭空落一个空
+        state.db，被 _discover_state_dbs() 当账本扫进去。
         """
         from Trading.Infra.Records import BSP_TYPE_FILTER_KEY
         out_dir = self._filter_out_dir()
+        if not os.path.isfile(os.path.join(out_dir, "state.db")):
+            return {"bsp_type_filter": None, "out_dir": out_dir}
         try:
             s = _engine_store(out_dir)
             raw = s.get_json(BSP_TYPE_FILTER_KEY, None)
@@ -971,8 +989,9 @@ class AppTrader:
         刻意延迟 import：Trading/Config.py 在导入期就构造默认配置快照
         (DEFAULT_CONFIG)，配置写错时 import 直接抛。若放在本模块顶层
         import，一个 .env 笔误会让整个后端服务起不来（行情页一起挂）。
-        放在这里 → 只有点「开启自动下单」才失败，且是 AppError（前端 4xx
-        提示 + gateway.log 留痕），故障面收敛到自动下单功能本身。
+        放在这里 → 只有点「开启自动下单」才失败，且是 AppError（500：配置写
+        错属本机部署问题，不是请求参数问题，故不用 BadRequestError）+ 前端提示
+        + gateway.log 留痕，故障面收敛到自动下单功能本身。
         子进程侧 Trading/main.py 仍是启动期 fail-fast（它必须读配置）。
         """
         try:
@@ -991,6 +1010,10 @@ class AppTrader:
         非 simnow/live（如 dry_run 离线模拟）不经任何实盘路由，直接放行
         ——此前无此短路，用户设 broker=dry_run 但 tq_market 填了期货公司名时
         dry_run 会被实盘闸门误拦。
+
+        拒绝理由是**配置/入参问题**（市场没填对、确认开关没开），属于
+        "用户改一下就能过"的客户端输入问题 → BadRequestError(400)，
+        而不是基类 500（会让用户以为系统坏了，见 AppErrors.BadRequestError）。
         """
         if broker not in ("simnow", "live"):
             return
@@ -1000,11 +1023,11 @@ class AppTrader:
         if not is_live:
             return
         if market == "simnow":
-            raise AppError(
+            raise BadRequestError(
                 "实盘安全闸门：broker='{}' 但 broker_params.tq_market 仍为 "
                 "'simnow'，实盘请填期货公司名（如 '创元期货'）".format(broker))
         if not bool(bp.confirm_live_trading):
-            raise AppError(
+            raise BadRequestError(
                 "实盘安全闸门未开启：tq_market='{}' 非仿真市场，必须显式设置 "
                 "broker_params.confirm_live_trading=true 才能启动实盘自动下单。"
                 .format(bp.tq_market))

@@ -375,7 +375,7 @@ class TradingEngine(ReconcileMixin):
         #   → **拒绝启动引擎**（抛异常，子进程退出），不发告警、不带病运行。
         #   理由：告警应挂在交易引擎启动（用户确认的位置），而更严格的做法是
         #   未标定品种根本不允许启动——R 下限等执行参数未标定，启动即错。
-        #   实盘入口的提前拦截在 App/AppTrader.start（AppError → 400 → 前端
+        #   实盘入口的提前拦截在 App/AppTrader.start（BadRequestError → 400 → 前端
         #   alert 弹出原因）；这里是引擎侧的权威闸门（回放/CLI 直启同样拦）。
         #   注意大小写：前端别名表把 SHFE/DCE 解析成小写主连（KQ.m@SHFE.au），
         #   归一在 parse_product_key 内完成（档案键统一大写）。

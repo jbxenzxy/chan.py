@@ -29,6 +29,12 @@ P59 买卖点类型过滤 —— 「显示设置」勾选接入自动下单
   [7] 锁仓态同样生效：转移③ 拆锁被拦 / 勾选后放行（需求 ⑷ 的锁仓态）
   [8] 过滤门只挂在信号入口：出场路径（_settle_positions / _decide_exit）
       源码里不出现过滤常量 —— 运行态的 L1-L3 离场不受影响（需求方拍板口径）
+  [9] 前后端「四类」集合一致（SSOT 漂移护栏）+ 前端回推通道存在
+  [10] 分层与单向依赖：Trading 不反向依赖 App / FrontAPI 不直连 AppTrader
+  [11] 空 / 缺键输入一律拒绝且不落库；完整四键与显式全 False 接受
+  [12] 逗号串类型按段匹配（任一段命中即放行），两段都未勾则忽略并留痕
+  [13] 状态目录同源：写入落点 == 子进程 --out（含 TRADING_STATE_DIR 覆盖）
+  [14] 拒绝语义 400 / 留痕必落盘 / 只读不建库 / 推送后刷新（二轮评审 R1-R7 回归）
 
 跑法：python Trading/Test/test_p59_bsp_type_filter.py
 """
@@ -357,7 +363,9 @@ with tmp_dir() as tmp:
             try:
                 _at.set_bsp_filter(_bad)
             except Exception as _e:
-                if type(_e).__name__ == "AppError":
+                # 用 isinstance（不是类名相等）：400 语义落地后这里抛的是
+                # AppError 的子类 BadRequestError，类名相等的写法会把它漏掉
+                if isinstance(_e, _AT.AppError):
                     _rejected += 1
         check("[11a] 5 种不完整输入全部被拒", _rejected, 5)
         check("[11b] 被拒后没有落库",
@@ -415,6 +423,77 @@ with tmp_dir() as tmp:
                   ["out_dir"])), os.path.normcase(os.path.abspath(tmp)))
     finally:
         os.environ.pop("TRADING_STATE_DIR", None)
+
+
+# ════════════════════════════════════════════════════════════════
+# [14] 二轮评审遗留项回归（R1 400 语义 / R2 留痕落盘 / R7 只读不建库 /
+#      前端推送后刷新与在飞竞态）
+# ════════════════════════════════════════════════════════════════
+print("\n[14] 拒绝语义 400 + 留痕必落盘 + GET 不凭空建库 + 前端门刷新")
+with tmp_dir() as tmp:
+    os.environ["TRADING_STATE_DIR"] = tmp
+    try:
+        _at14 = _AT.AppTrader.__new__(_AT.AppTrader)   # 不跑 __init__：不碰运行中的状态文件
+        _at14._handle = None
+        _err = None
+        try:
+            _at14.set_bsp_filter({"0": True})
+        except Exception as _e:
+            _err = _e
+        check("[14a] 缺键 → BadRequestError（子类，统一处理器照样捕）",
+              type(_err).__name__, "BadRequestError")
+        check("[14b] 状态码 400（用户少传字段不该显示「服务器错误」）",
+              getattr(_err, "status_code", None), 400)
+        check("[14c] 仍是领域异常基类（except AppError 仍兜得住）",
+              isinstance(_err, _AT.AppError), True)
+
+        # R7：目录存在但库还没建 → 读回 None，且不创建文件
+        check("[14d] 无 state.db 时读回 None（= 从未推送 = 全部放行）",
+              _at14.get_bsp_filter()["bsp_type_filter"], None)
+        check("[14e] GET 不凭空创建 state.db（只读不建库）",
+              os.path.isfile(os.path.join(tmp, "state.db")), False)
+
+        # R2：留痕必须落到 out_dir/gateway.log —— 新部署"先勾好再开"时
+        #      子进程还没起过，tee 从未安装，这条日志以前只进终端
+        _r14 = _at14.set_bsp_filter({t: True for t in BSP_TYPE_CHOICES})
+        _gl14 = os.path.join(_r14["out_dir"], "gateway.log")
+        check("[14f] 首次推送也落 gateway.log（tee 就地安装）",
+              os.path.isfile(_gl14), True)
+        _txt14 = ""
+        if os.path.isfile(_gl14):
+            with open(_gl14, encoding="utf-8") as _f:
+                _txt14 = _f.read()
+        check("[14g] 日志内容含「买卖点类型过滤生效」（可复盘谁改的）",
+              "买卖点类型过滤生效" in _txt14, True)
+        check("[14h] 写盘后立刻读回同一份（写/读同一通道）",
+              _at14.get_bsp_filter()["bsp_type_filter"],
+              {t: True for t in BSP_TYPE_CHOICES})
+    finally:
+        os.environ.pop("TRADING_STATE_DIR", None)
+        _h14 = getattr(_AT, "_log_file_handler", None)   # 收尾：别留着指向临时目录的 handler
+        if _h14 is not None:
+            try:
+                _AT.log.removeHandler(_h14)
+                _h14.close()
+            except Exception:
+                pass
+            _AT._log_file_handler = None
+
+# 前端四处（推送后刷新 / 非 2xx 落"未同步" / 在飞期间丢弃回填 / 绘制门先判空）：
+# 前端是静态资源、无法 import，沿用 [9] 的读源码断言方式钉住不变量。
+_i_guard = _js.find("if (bspFilter) {")
+_i_access = _js.find("bspFilter[seg.trim()]")
+check("[14i] 绘制门先判空再按键取值（bspFilter 被置空不会中断整段绘制）",
+      0 <= _i_guard < _i_access, True)
+check("[14j] 推送成功后刷新状态行（盘中改完立刻可核对）",
+      "renderBspFilterEngineState(bspFilter);" in _js, True)
+check("[14k] 非 2xx 与网络失败走同一「未同步」分支（不永停「读取中…」）",
+      _js.count("renderBspFilterEngineState(null, true)") >= 3, True)
+check("[14l] 推送在飞期间丢弃回填（不把用户刚改的勾选回滚）",
+      "bspFilterPushInFlight" in _js, True)
+check("[14m] POST 固定发满四键（缺键责任在唯一生产者一侧）",
+      all(('"{}": !!bspFilter["{}"]'.format(_t, _t)) in _js
+          for _t in BSP_TYPE_CHOICES), True)
 
 print("")
 print("=" * 60)

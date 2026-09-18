@@ -1906,11 +1906,16 @@
                 // 与引擎口径一致：type2str() 可能是逗号串（同位置合并类型），
                 // 任一段被勾选就显示 —— 否则这类点会"图上不画"且"单也不下"，
                 // 两处同时静默漏掉，用户根本不知道有过这个买卖点。
-                let _bspSegHit = false;
-                String(bsp.type).split(",").forEach(function (seg) {
-                    if (bspFilter[seg.trim()]) _bspSegHit = true;
-                });
-                if (bspFilter && !_bspSegHit) return;
+                // 先判 bspFilter 是否在位：它被外部置空时按"全放行"处理
+                //（与引擎"kv 缺失 = 全部放行"同口径），而不是在循环里抛
+                // TypeError 把整段买卖点绘制打断（连不过滤的那些点也一起没了）。
+                if (bspFilter) {
+                    let _bspSegHit = false;
+                    String(bsp.type).split(",").forEach(function (seg) {
+                        if (bspFilter[seg.trim()]) _bspSegHit = true;
+                    });
+                    if (!_bspSegHit) return;
+                }
                 const x = globalIdxToX(idx, globalStart, area.x, barStep, subPixelOffset);
                 const isBuy = bsp.is_buy;
                 // 用K线外侧价格定位：买点用low，卖点用high（锚点价格不随翻转改变）
@@ -4749,14 +4754,22 @@
         // 后端 state.db 是「哪几类会被自动下单执行」的唯一真值源：打开设置面板
         // 时 GET 回填，换浏览器 / 多标签页 / 别处改过都能看到实际生效的那一份。
         // bspFilterLocalVer：本地勾选变更计数 —— GET 是异步的，回填返回前用户
-        // 可能已经改了勾选，此时丢弃回填结果，绝不覆盖用户刚做的改动。
+        // 可能已经改了勾选，此时丢弃回填结果，绝不覆盖用户刚做的改动；
+        // 推送成功时也自增一次，让"推送前发出、推送后才返回"的旧回填一并作废。
         var bspFilterLocalVer = 0;
+        // bspFilterPushInFlight：在飞的推送数 —— 推送还没落地时到达的回填必然是
+        // 改前的旧值，套用会把用户刚勾的改回去（显示与引擎再次相反）。
+        var bspFilterPushInFlight = 0;
+
+        function _bspPushDone() {
+            bspFilterPushInFlight = Math.max(0, bspFilterPushInFlight - 1);
+        }
 
         function renderBspFilterEngineState(filt, unreachable) {
             var el = document.getElementById("bsp-filter-engine-state");
             if (!el) return;
             if (unreachable) {
-                el.textContent = "自动下单状态未知（接口不可达）：以下勾选只影响图上显示";
+                el.textContent = "自动下单状态未同步（接口不可达或写入被拒）：勾选只影响图上显示";
                 return;
             }
             if (!filt) {
@@ -4787,9 +4800,15 @@
             var v = bspFilterLocalVer;
             try {
                 fetch("/api/trader/signal-filter", { cache: "no-store" })
-                    .then(function (resp) { return resp.ok ? resp.json() : null; })
+                    .then(function (resp) {
+                        // 非 2xx（老后端没这条路由 / 接口故障）也要落到"未同步"：
+                        // 直接 return null 会被下面当成"没数据"静默丢掉，状态行
+                        // 永久停在"读取中…"，比不显示还糟。
+                        return resp.ok ? resp.json() : null;
+                    })
                     .then(function (data) {
-                        if (!data || bspFilterLocalVer !== v) return;
+                        if (bspFilterLocalVer !== v || bspFilterPushInFlight > 0) return;
+                        if (!data) { renderBspFilterEngineState(null, true); return; }
                         applyBspFilterFromTrader(data.bsp_type_filter);
                     })
                     .catch(function () {
@@ -4801,20 +4820,38 @@
 
         function pushBspFilterToTrader() {
             bspFilterLocalVer++;
+            bspFilterPushInFlight++;
             try {
                 fetch("/api/trader/signal-filter", {
                     method: "POST",
                     cache: "no-store",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ bsp_types: bspFilter })
+                    // 固定发满四键：后端把"键不全"当参数错误拒掉（400），
+                    // 完整性责任放在**唯一生产者**这一侧，别让一份被手工改过的
+                    // localStorage 变成"少一个键 = 一次 400 提示"。
+                    body: JSON.stringify({ bsp_types: {
+                        "0": !!bspFilter["0"], "1": !!bspFilter["1"],
+                        "2": !!bspFilter["2"], "3": !!bspFilter["3"]
+                    } })
                 }).then(function (resp) {
+                    _bspPushDone();
                     if (!resp.ok) {
                         showToast("买卖点过滤未同步到自动下单（HTTP " + resp.status + "）");
+                        renderBspFilterEngineState(null, true);
+                        return;
                     }
+                    // 推送已落地：版本号再自增一次（作废"改前发出"的回填），
+                    // 并就地刷新状态行 —— 盘中改完立刻能核对"引擎现在认哪几类"，
+                    // 不必靠重开面板。
+                    bspFilterLocalVer++;
+                    renderBspFilterEngineState(bspFilter);
                 }).catch(function (e) {
+                    _bspPushDone();
                     showToast("买卖点过滤未同步到自动下单：" + e.message);
+                    renderBspFilterEngineState(null, true);
                 });
             } catch (e) {
+                _bspPushDone();
                 showToast("买卖点过滤未同步到自动下单：" + e.message);
             }
         }

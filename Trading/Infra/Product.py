@@ -613,7 +613,7 @@ def assert_product_allowed(signal_symbol: str) -> str:
     `if _product not in PRODUCT_PROFILES` —— 两处文案不同（"已拒绝" / "禁止"），
     且白名单一旦加档（如按交易所放宽）极易改一处漏一处 → 前端放行、引擎自杀
     的行为分叉。现在：
-      · App 侧：try: assert_product_allowed(...) except ValueError → AppError(400)；
+      · App 侧：try: assert_product_allowed(...) except ValueError → BadRequestError(400)；
       · 引擎侧：_restore 直接调，ValueError 冒泡 → 子进程退出。
     """
     key = parse_product_key(signal_symbol)

@@ -12,7 +12,7 @@ App/AppOrch.py —— 业务编排层（服务层）聚合入口
 标注归 AppChart（图表右键标注属图表交互域）。
 
 本文件持有：
-  - 领域异常层级 re-export（AppError 等 6 类，定义在 App/AppErrors.py；
+  - 领域异常层级 re-export（AppError 等 7 类，定义在 App/AppErrors.py；
     Test/test_phase2_guards.py 引用）
   - SHARED_RESOURCE_REGISTRY 共享资源登记表（按资源索引，取代原
     LOCK_POLICY；Test/test_phase3_guards.py 守护）
@@ -265,6 +265,7 @@ SHARED_RESOURCE_REGISTRY = {
 
 from App.AppErrors import (
     AppError,
+    BadRequestError,
     DataFetchError,
     AnalysisError,
     ConfigError,
@@ -282,8 +283,8 @@ ScannerService = Scanner
 
 __all__ = [
     # 异常
-    "AppError", "DataFetchError", "AnalysisError", "ConfigError",
-    "NotFoundError", "PersistenceError",
+    "AppError", "BadRequestError", "DataFetchError", "AnalysisError",
+    "ConfigError", "NotFoundError", "PersistenceError",
     # 共享资源登记表（按资源索引）
     "SHARED_RESOURCE_REGISTRY",
     # 分析漏斗（AppChart）
