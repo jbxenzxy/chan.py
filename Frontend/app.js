@@ -4602,11 +4602,14 @@
             var html = "";
             // ① 曲线在上（对齐「市场量能」的 amo-chart 位置）
             html += '<canvas id="trade-equity-canvas"></canvas>';
-            // ② 一行三格核心数（对齐「市场量能」的 amo-stats）
+            // ② 一行四格核心数（对齐「市场量能」的 amo-stats）
+            // 盈利因子（总盈 ÷ 总亏）与盈亏比同属「策略整体质量」口径，
+            // 提到核心区与总净盈亏 / 实际胜率 / 盈亏比并列；明细区不再重复这一行。
             html += '<div class="stats-hero">';
             html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + yuan(d.total_net) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">盈亏比(赔率)</span><span class="stats-value">' + num(d.pl_ratio) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">盈利因子</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
             html += '</div>';
             // ③ 明细行
             html += '<div class="stats-rows">';
@@ -4617,7 +4620,6 @@
                 html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + '</span></div>';
             }
             html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">盈利因子</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
             // 期望值 = win_rate*avg_win + loss_rate*avg_loss，本身就是"每笔"量纲，
             // 再缀一个「/笔」是重复限定（标准表述里没有这种写法）。
             html += '<div class="stats-row"><span class="stats-label">期望值</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuan(d.expectancy) + '</span></div>';

@@ -3,7 +3,7 @@
 统计面板（右上角「统计」弹窗）字段契约 —— 2026-09-19 用户拍板口径
 =====================================================================
 
-被守护的六条
+被守护的七条
 ---------------------------------------------------------------------
  ① 品种：只显示**品种键**（IF / IH / IC / IM / AU / AG / CU / TA…），
     不显示合约名（CFFEX.IF2612）。统计口径是「整个品种」—— 同品种的多个
@@ -18,8 +18,11 @@
  ④ 删除「按出场原因」与「曲线口径」两行。
  ⑤ 期望值/笔 → 期望值（没有「期望值/笔」这种表述；expectancy 本身
     = win_rate*avg_win + loss_rate*avg_loss，已经是每笔量纲）。
- ⑥ 明细行行序：品种 → 成交笔数 → 盈利因子 → 期望值 →
+ ⑥ 明细行行序：品种 → 成交笔数 → 期望值 →
     平均每笔盈利 / 平均每笔亏损 → 最大单笔盈利 → 最大单笔亏损
+ ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
+    盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
+    是两个不同的指标）。
 
 两层守护
 ---------------------------------------------------------------------
@@ -27,12 +30,12 @@
          不需要浏览器，任何环境都跑。
  [真渲染] 无头 Chrome 打开真实页面 → 打桩 /api/trader/trades 喂一份
          带合约名 / 带 exit_at / 带 by_reason 的响应 → 点「统计」按钮 →
-         读 #stats-content 的真实 innerHTML 复核上面六条。
+         读 #stats-content 的真实 innerHTML 复核上面七条。
          浏览器不在位时降级 SKIP（静态层已覆盖）。
 
 为什么真渲染层要喂「脏数据」：静态层只能证明源码里没有那段拼接；真渲染层
 证明的是**即使后端把合约名、exit_at、by_reason 全都发过来，面板也不会显示**
-—— 这才是这六条真正想要的保证。
+—— 这才是这七条真正想要的保证。
 
 跑法：python Test/test_stats_panel_labels.py
 """
@@ -66,8 +69,11 @@ def check(cond, name, extra=""):
 
 
 # 明细行的目标顺序（实现与本测试共用的唯一定义）
-EXPECT_ORDER = ["品种", "成交笔数", "盈利因子", "期望值",
+EXPECT_ORDER = ["品种", "成交笔数", "期望值",
                 "平均每笔盈利 / 平均每笔亏损", "最大单笔盈利", "最大单笔亏损"]
+
+# 核心区（stats-hero）四格的目标顺序（⑦）
+EXPECT_HERO = ["总净盈亏", "实际胜率", "盈亏比(赔率)", "盈利因子"]
 
 # 打桩响应里的「脏数据」—— 真渲染层要证明它们一个都上不了面板
 DIRTY_CONTRACT_A = "SHFE.rb2510"
@@ -118,14 +124,24 @@ if m is None:
 blk = m.group(1)
 check(len(blk) > 500, "区块规模合理（正则没只捞到半截）", len(blk))
 
-# 只取明细行：stats-hero 三格不在本次行序要求内；空态分支里也有一个
+# 只取明细行：stats-hero 四格单独校验（⑦）；空态分支里也有一个
 # stats-rows，故按带分号的整行写法切。
 detail = blk.split("'<div class=\"stats-rows\">';", 1)[1]
 labels = re.findall(r'class="stats-label">([^<]+)</span>', detail)
 check(labels == EXPECT_ORDER, "①⑥ 明细行标签序列 == 目标顺序", labels)
 check(labels.index("品种") < labels.index("成交笔数"), "⑥ 品种 在 成交笔数 之前")
-check(labels.index("期望值") == labels.index("盈利因子") + 1,
-      "⑥ 期望值 紧随 盈利因子 之后")
+check(labels.index("期望值") == labels.index("成交笔数") + 1,
+      "⑥ 期望值 紧随 成交笔数 之后")
+check("盈利因子" not in labels, "⑦ 明细区不再有盈利因子行（核心区已提上去）", labels)
+
+# ⑦ 核心区四格：从 stats-hero 起行切到它的收尾 '</div>'
+hero = blk.split("'<div class=\"stats-hero\">';", 1)[1].split("'</div>';", 1)[0]
+hero_labels = re.findall(r'class="stats-label">([^<]+)</span>', hero)
+check(hero_labels == EXPECT_HERO, "⑦ 核心区四格序列 == 目标顺序", hero_labels)
+check(hero.count("stats-cell") == 4, "⑦ 核心区正好四格（不多不少）",
+      hero.count("stats-cell"))
+check(hero.count("d.profit_factor") == 1,
+      "⑦ 盈利因子格取的是 d.profit_factor（与明细区同一字段）")
 
 check('class="stats-label">品种</span>' in blk, "① 有「品种」行")
 check("statsEsc(d.symbol_key)" in blk, "① 品种行取的是 symbol_key（品种键）")
@@ -247,11 +263,29 @@ else:
             check("成交笔数" in html, "面板真的渲染出统计明细（不是空态/失败态）",
                   html[:200])
             if html:
-                # 只取明细行（stats-hero 三格在上面，不属于行序要求）
+                # 只取明细行（stats-hero 四格在上面，单独校验）
                 detail_html = html.split('class="stats-rows"', 1)[1] \
                     if 'class="stats-rows"' in html else html
                 got = re.findall(r'class="stats-label">([^<]+)</span>', detail_html)
                 check(got == EXPECT_ORDER, "①⑥ 真渲染行序 == 目标顺序", got)
+
+                # ⑦ 真渲染：核心四格在位且顺序正确，明细区不再重复盈利因子
+                hero_html = ""
+                if 'class="stats-hero"' in html and 'class="stats-rows"' in html:
+                    hero_html = html.split('class="stats-hero"', 1)[1] \
+                                    .split('class="stats-rows"', 1)[0]
+                hero_got = re.findall(r'class="stats-label">([^<]+)</span>',
+                                      hero_html)
+                check(hero_got == EXPECT_HERO, "⑦ 真渲染核心四格 == 目标顺序",
+                      hero_got)
+                check(hero_html.count("stats-cell") == 4,
+                      "⑦ 真渲染核心区正好四格", hero_html.count("stats-cell"))
+                check("3.40" in hero_html,
+                      "⑦ 真渲染核心区有盈利因子数值（3.40）", hero_html[-200:])
+                check("盈利因子" not in detail_html,
+                      "⑦ 真渲染明细区无盈利因子行（不重复）",
+                      re.findall(r'class="stats-label">([^<]+)</span>',
+                                 detail_html))
 
                 # ① 品种格子里只有品种键
                 mrow = re.search(r'class="stats-label">品种</span>.*?'
