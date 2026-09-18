@@ -29,7 +29,9 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
       on_bar 两路）；无时间宽限（P61 撤销：宁误报不漏报）
   [7] 账单同步 toast：柜台比账本少 → 账本修正 + toast
   [8] on_bar 空账本 + 柜台无量 → 静默返回（无告警、无异常）
-  [9] 护栏：关键符号必须存在（防回潮）
+  [9] 跨会话清场：上一场次关闭收尾告警（shutdown_result_*/account_frozen）
+      新会话启动不重播（内存队列 + kv 投影同步清），现状类告警保留
+  [10] 护栏：关键符号必须存在（防回潮）
 
 跑法：python Trading/Test/test_p60_trade_toasts_reconcile_gap.py
 """
@@ -486,9 +488,45 @@ with tmp_dir() as tmp:
           any("账单已同步" in m for m in msgs), True)
 
 # ════════════════════════════════════════════════════════════════
-# [8] 护栏：关键符号存在（防回潮）
+# [9] 跨会话清场：上一场次关闭收尾告警不重播（2026-09-18 用户实录：
+#     开启自动下单却弹"自动下单已关闭"——上一场次的收尾结论跑错时间送达）
 # ════════════════════════════════════════════════════════════════
-print("\n[8] 护栏（关键符号防回潮）")
+print("\n[9] 跨会话清场：关闭收尾告警不重播")
+
+with tmp_dir() as tmp:
+    seed = Store(os.path.join(tmp, "state.db"))
+    old = time.time() - 3600.0
+    seed.set_json("alerts", [
+        {"level": "warn", "code": "shutdown_result_flat",
+         "msg": "自动下单已关闭 —— 已清仓，无残留持仓", "ts": old,
+         "last_ts": old, "n": 1},
+        {"level": "warn", "code": "account_frozen",
+         "msg": "自动下单已关闭，账户停在锁仓态", "ts": old,
+         "last_ts": old, "n": 1},
+        {"level": "severe", "code": "position_mismatch",
+         "msg": "柜台有量、账本无仓", "ts": old, "last_ts": old, "n": 2},
+    ])
+    seed.close()
+    engine, store, broker, ev = build_engine(tmp)
+    codes = sorted(str(a.get("code")) for a in engine._alerts)
+    check("[9a] shutdown_result_flat 已清场",
+          "shutdown_result_flat" in codes, False)
+    check("[9b] account_frozen 已清场",
+          "account_frozen" in codes, False)
+    check("[9c] 现状类告警保留（position_mismatch）",
+          "position_mismatch" in codes, True)
+    # API 侧直接读 kv 投影，光清内存没用 —— kv 必须同步清
+    left = [str(a.get("code")) for a in (store.get_json("alerts") or [])]
+    check("[9d] kv 投影同步清场（API 侧不再下发）",
+          "shutdown_result_flat" in left or "account_frozen" in left, False)
+    check("[9e] 清场留痕（alert_session_prune 事件）",
+          "alert_session_prune" in ev_kinds(os.path.join(tmp, "events.jsonl")),
+          True)
+
+# ════════════════════════════════════════════════════════════════
+# [10] 护栏：关键符号存在（防回潮）
+# ════════════════════════════════════════════════════════════════
+print("\n[10] 护栏（关键符号防回潮）")
 
 
 def _src(rel):
@@ -529,6 +567,8 @@ check("[8m] 空闲泵挂点存在（SSE on_idle + main.py 接线）",
 check("[8n] 时间宽限已撤（Reconcile 无 _EMPTY_SIDE_GRACE_S / Engine 无 _last_fill_at）",
       "_EMPTY_SIDE_GRACE_S" not in _src("Trading/Engine/Reconcile.py")
       and "_last_fill_at" not in _src("Trading/Engine/Engine.py"), True)
+check("[10o] 跨会话清场存在（_load_alerts 内 alert_session_prune）",
+      "alert_session_prune" in _src("Trading/Engine/Engine.py"), True)
 
 print("\n==== P60：{} passed, {} failed ====".format(_PASS, _FAIL))
 if _FAIL:

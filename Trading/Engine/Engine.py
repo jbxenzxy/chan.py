@@ -1750,7 +1750,8 @@ class TradingEngine(ReconcileMixin):
             · 已清仓（FLAT）→ **一声不响**，用户无法确认是否真的清干净了；
             · 离场失败（平仓被拒 / 没成交）→ 账户仍是运行态、带着仓过夜，
               而**没有任何提示** —— 这正是本条要消灭的"无人知"。
-          现在三种终局都发告警（`shutdown_result_*` 三个 code，永远可见）：
+          现在三种终局都发告警（关闭时刻必然可见：落库持久直到确认；
+          不跨会话重播 —— `_load_alerts` 启动清场）：
             · FLAT   → warn：已清仓，无残留（正向确认，不吓人）；
             · RUNNING→ severe：**仍有净敞口**，离场没成功，必须人工处理；
             · LOCKED → warn：停在锁仓态（原有的 account_frozen 语义，保留）。
@@ -1970,7 +1971,18 @@ class TradingEngine(ReconcileMixin):
         return removed
 
     def _load_alerts(self) -> None:
-        """恢复告警队列与 ack 水位（D11 落库的目的就是"重启后还在"）。"""
+        """恢复告警队列与 ack 水位（D11 落库的目的就是"重启后还在"）。
+
+        跨会话清场：上一场次的**关闭收尾告警**（`shutdown_result_*` 与
+        锁仓的 `account_frozen`）在本次启动时清掉，不重播。它们描述的是
+        "上一次关闭时账户的归宿"，观众是关闭时刻的用户；用户次日重新
+        开启自动下单时再弹"自动下单已关闭……"只会误导（眼前明明是开启
+        动作，2026-09-18 用户实录）。清场不丢事实：新会话的真实状态由
+        自身重建（持仓恢复后状态面板可见，对账盲区另有 position_mismatch
+        兜底），历史记录在 events.jsonl 永久可查。其余告警（如
+        position_mismatch）照旧跨重启保留——它们描述的现状不随会话结束
+        而消失。
+        """
         self._alerts_ack_ts = float(
             self.store.get_json(self._ALERTS_ACK_KV, 0.0) or 0.0)
         raw = self.store.get_json(self._ALERTS_KV)
@@ -1979,7 +1991,18 @@ class TradingEngine(ReconcileMixin):
         if self._alerts_ack_ts:
             keep = [a for a in keep
                     if float(a.get("ts") or 0.0) > self._alerts_ack_ts]
-        self._alerts = keep[-self._ALERTS_KEEP:]
+
+        def _is_stale_closure(a: Dict[str, Any]) -> bool:
+            c = str(a.get("code", ""))
+            return c.startswith("shutdown_result_") or c == "account_frozen"
+
+        dropped = sum(1 for a in keep if _is_stale_closure(a))
+        self._alerts = [a for a in keep if not _is_stale_closure(a)][
+            -self._ALERTS_KEEP:]
+        if dropped:
+            self.ev.write("alert_session_prune", removed=dropped,
+                          note="上一场次关闭收尾告警已清场，不跨会话重播")
+            self._persist_alerts()
 
     def _persist_alerts(self) -> None:
         """把队列与 ack 水位写回 state.db，顺便吃掉别处写进来的水位。
