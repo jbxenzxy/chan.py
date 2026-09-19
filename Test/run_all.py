@@ -83,7 +83,9 @@ CI / 迁移每阶段的验收门禁）。
  33. 统计指标口径     Trading/Test/test_trade_stats_formulas.py
                                                      胜率分母含平手/期望值恒等式/
                                                      盈亏比与盈利因子可区分/
-                                                     一侧为空→最大单笔报 0
+                                                     一侧为空→最大单笔报 0/
+                                                     金额口径 = net_cash（含双边
+                                                     手续费，毛盈净亏算亏损笔）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -256,6 +258,8 @@ COMPONENTS = [
     # 成交统计四项指标口径 + 最大单笔同侧取值（2026-09-19 复核）：
     # 胜率分母含平手 / 期望值 ≡ 总净盈亏÷总笔数 / 盈亏比与盈利因子两口径
     # 可区分 / 无亏损→None / 某侧为空→最大单笔报 0（不再报负数）。
+    # [H] 金额口径 = net_cash（**含双边手续费**）：造 gross 与 net 符号相反的
+    # 样本，钉「毛盈净亏算亏损笔」；含 AST 契约「_net() 只读 net_cash」。
     ("trade_stats_formulas",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_trade_stats_formulas.py")]),

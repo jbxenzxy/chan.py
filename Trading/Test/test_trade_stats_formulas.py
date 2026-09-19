@@ -27,6 +27,7 @@
 """
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import sys
@@ -284,6 +285,72 @@ check_true("[G2] 源码不含 min(trades, key=_net)",
            "min(trades, key=_net)" not in _src)
 check_true("[G3] 源码在 wins / losses 上取极值",
            "max(wins, key=_net)" in _src and "min(losses, key=_net)" in _src)
+
+
+# ══════════════════════════════════════════════════════════════
+print("\n[H] 净额口径：统计只认 net_cash（含手续费），不认毛盈亏")
+# ══════════════════════════════════════════════════════════════
+# 为什么单开一段：上面所有样本都出自 mk()，而 mk() 里
+# `gross_points == net_cash`、`cost_cash == 0.0` —— **两种口径在这些样本上恒等**，
+# "统计走毛额还是走净额"根本区分不出来。若哪天 _net() 改成读 gross_points，
+# 上面九十多条会全绿、而面板会静默变成**不含手续费**的毛额。
+# 这一段专造 gross 与 net **符号相反**的样本，把这个口径钉死。
+#
+# 口径链（真值在别处，这里只钉 TradeStats 侧的读取字段）：
+#   Engine._book_close: net_cash = gross×乘数×手数 − cost      （Engine.py:1532-1533）
+#   Instrument.cost_cash: cost = (开仓档 + 离场档) × 手数       （Instrument.py:456-459）
+#       ↳ 离场档按 closetoday 取平今档 / 平昨档（Engine.py:1528-1531）
+#   TradeStats: 一切统计量 + 最大单笔 + 曲线 ← net_cash        （本文件被测对象）
+def mk_pnl(net, gross_pts, cost, i, exit_at=None):
+    """一笔「毛利 / 成本 / 净额」三值可独立指定的成交（三值不必自洽）。"""
+    r = mk(net, i, exit_at)
+    r["gross_points"] = float(gross_pts)
+    r["cost_cash"] = float(cost)
+    r["net_cash"] = float(net)
+    r["reason"] = "tp" if net > 0 else ("sl" if net < 0 else "time")
+    return r
+
+
+# 三笔：① 毛盈净亏（手续费吃掉利润还倒亏）② 毛亏、净更亏 ③ 毛盈、净仍盈
+_M = [mk_pnl(-40.0, 1.0, 340.0, 0),      # 毛 +1 点、手续费 340 → 净 −40
+      mk_pnl(-640.0, -1.0, 340.0, 1),    # 毛 −1 点、手续费 340 → 净 −640
+      mk_pnl(8660.0, 30.0, 340.0, 2)]    # 毛 +30 点、手续费 340 → 净 +8660
+_h = compute_trade_stats(_M)
+check("[H1] 毛盈净亏的那笔算**亏损笔**（分类走 net_cash，不走毛利）",
+      (_h["wins"], _h["losses"]), (1, 2))
+check("[H2] 平均每笔盈利 = 净额均值（不是毛利均值）", _h["avg_win"], 8660.0)
+check("[H3] 平均每笔亏损 = 净额均值", _h["avg_loss"], -340.0)
+check("[H4] 最大单笔盈利 = 最大净额", _h["max_win"]["net_cash"], 8660.0)
+check("[H5] 最大单笔亏损 = 最小净额（费后更亏的那笔）",
+      _h["max_loss"]["net_cash"], -640.0)
+check("[H6] 总净盈亏 = Σnet_cash", _h["total_net"], 7980.0)
+check("[H7] 期望值 ≡ Σnet_cash ÷ 笔数", _h["expectancy"], 2660.0)
+check("[H8] 盈亏曲线末值 = Σnet_cash（曲线同样是净额口径）",
+      _h["equity_curve"][-1]["cumulative"], 7980.0)
+check("[H9] 曲线逐点 = net_cash 累加",
+      [p["net_cash"] for p in _h["equity_curve"]], [-40.0, -640.0, 8660.0])
+
+# 对照：同一批数据若按 gross_points 当净额算，结果必须**不同** ——
+# 这是 [H1]-[H9] 的「非恒真」证明（样本确实能区分两种口径）。
+_hg = compute_trade_stats([dict(t, net_cash=t["gross_points"]) for t in _M])
+check_true("[H10] 样本能区分两种口径（按毛利算胜率/总额都会变）",
+           (_hg["wins"], _hg["losses"], _hg["total_net"])
+           != (_h["wins"], _h["losses"], _h["total_net"]),
+           ("毛", _hg["wins"], _hg["losses"], _hg["total_net"],
+            "净", _h["wins"], _h["losses"], _h["total_net"]))
+
+# 源码契约（与 [G] 同法）：定"哪个字段是盈亏"的 _net() 必须读 net_cash。
+# 用 AST 取**内嵌函数本体**（外层 docstring 里就列着 gross_points / cost_cash
+# 这几个 schema 字段名，直接搜整段源码会假红）。
+_tree = ast.parse(_src)
+_netfn = [n for n in ast.walk(_tree)
+          if isinstance(n, ast.FunctionDef) and n.name == "_net"]
+check_true("[H11] 抽得到内嵌 _net()（覆盖面自检）", len(_netfn) == 1, len(_netfn))
+_net_src = ast.get_source_segment(_src, _netfn[0]) if _netfn else ""
+check_true("[H12] _net() 读的是 net_cash", 't.get("net_cash")' in _net_src,
+           _net_src.replace("\n", " ")[:90])
+check_true("[H13] _net() 不读 gross_points / cost_cash（毛额与成本不是统计口径）",
+           "gross_points" not in _net_src and "cost_cash" not in _net_src)
 
 
 print("\n" + "=" * 62)

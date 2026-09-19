@@ -150,6 +150,18 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     entry_at, exit_at, reason, gross_points, cost_cash, net_cash, bars_held,
     exit_plan_name, exit_plan_params。
 
+    ⚠️ **金额口径 = `net_cash`（净额，已扣双边手续费）** —— 本函数所有金额
+    （avg_win / avg_loss / total_net / max_win / max_loss / expectancy /
+    equity_curve / by_reason）以及"盈利笔 / 亏损笔"的**分类**，读的都是
+    `net_cash`；`gross_points` 与 `cost_cash` 只作原始记录，**不参与统计**。
+    所以"毛利为正、被手续费倒扣成净亏"的那一笔，在这里算**亏损笔**
+    👉 这是刻意的：口径与账户真实到账一致。
+    净额的形成在别处（本函数不重算）：`Engine._book_close` 里
+    `net_cash = gross×乘数×手数 − cost`，`cost = (开仓档 + 离场档) × 手数`
+    （见 `Instrument.cost_cash`；离场档按平今 / 平昨两档取）。
+    回归钉在 `Trading/Test/test_trade_stats_formulas.py [H]`（造 gross 与 net
+    符号相反的样本，防止哪天改读 `gross_points` 而全部断言仍绿）。
+
     ⚠️ 返回值里**没有 `symbol` 字段** 一行成交一个合约，而统计
     口径是**整个品种**（多合约月份合并），取任意一行的 symbol 都是误导。
     "统计的是哪个品种"由调用方用 `load_trades_report` 的 `symbol_key` 给出。
@@ -157,10 +169,10 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     返回（count==0 时见 _empty_stats）：
       count / wins / losses / flat   总笔数 / 净>0 / 净<0 / 净==0
       win_rate          实际胜率 = wins / count（平手计入分母、不计胜）
-      avg_win / avg_loss   盈利笔均值 / 亏损笔均值（元）
+      avg_win / avg_loss   盈利笔均值 / 亏损笔均值（元，净额口径）
       pl_ratio          盈亏比 = avg_win / |avg_loss|；无亏损→None
       profit_factor     盈利因子 = 总盈 / |总亏|；无亏损→None（无定义，非 0）
-      total_net         总净盈亏（元）
+      total_net         总净盈亏（元）= Σnet_cash
       max_win / max_loss    最大单笔盈/亏（含 trade_id、exit_at、net_cash）；
                             只在**同侧**成交里取：该侧一笔都没有时
                             net_cash=0.0、trade_id/exit_at=None
