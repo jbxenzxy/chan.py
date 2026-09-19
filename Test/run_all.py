@@ -230,6 +230,12 @@ COMPONENTS = [
     # 双窗口一致性等。原先漏登记，等于没有该回归（详见 15m 对比评审）。
     ("15m_period",
      [sys.executable, os.path.join("Test", "test_15m_period.py")]),
+    # 股票 K 线回看窗口截断：`_analyze_stock_internal` 的两条同型分支（复盘 /
+    # 冷启动）此前在门禁内零执行、零断言——快照与回放入口为隔离宿主机配置把
+    # STOCKS_LOOKBACK_CONFIG 置空（= 不截断），15m 用例只看 keys 不看条数。
+    # 本用例自带窗口值，断言「末 N 根」的条数与左右边界，不依赖 AppConfig 默认值。
+    ("lookback_truncation",
+     [sys.executable, os.path.join("Test", "test_lookback_truncation.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。

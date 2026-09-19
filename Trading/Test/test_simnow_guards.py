@@ -14,6 +14,11 @@ test_simnow_guards：SimNow broker 读仓守卫纯 mock 单测（不连网）
   [6] _position_total 跨品种收窄：dict 缺本合约但其他合约有仓 → 返回 0（修复前
       会把别的合约误当本合约读）
   [7] _position_total 精确匹配正常读数
+  [8] 帧级空闲泵积压观测（P3 可观测性，实现见 Broker/SimNow._observe_pump_backlog）
+      → api 缺 `_recv_chan` / 取值为 None / qsize 抛异常，三种取数失败一律不抛、
+        不计数；队列恒空 → 恒零告警；连续积压达阈值 → 恰好一条 WARNING 且计数归零
+        （按阈值节流不刷屏）；积压清零 → 计数归零；`__init__` 未跑的实例
+        （`__new__` 构造，本文件 _make 的造法）不因缺字段崩。
 
 运行方式（独立脚本，非 pytest）：
     /c/my_chan_project/.venv/Scripts/python.exe test_simnow_guards.py
@@ -23,6 +28,7 @@ test_simnow_guards：SimNow broker 读仓守卫纯 mock 单测（不连网）
 与被测文件同仓库），通过 exec 加载其源码、复用 Trading 包解析相对导入；
 注册装饰器临时 no-op，避免与仓库已注册的同名 broker 冲突。
 """
+import logging
 import os
 import sys
 import time
@@ -94,12 +100,20 @@ class FakePos:
 
 
 class FakeApi:
-    """模拟 tqsdk TqApi 的最小接口（wait_update / get_quote / get_position）。"""
+    """模拟 tqsdk TqApi 的最小接口（wait_update / get_quote / get_position）。
 
-    def __init__(self, quote, fail_wait=False, positions=None):
+    recv_chan / has_recv_chan 仅供 [8] 积压观测用：前者是 `_recv_chan` 的替身，
+    后者模拟「该属性压根不存在」的 api 实现（tqsdk 在 _setup_connection 之前
+    也没有可用队列）。
+    """
+
+    def __init__(self, quote, fail_wait=False, positions=None, recv_chan=None,
+                 has_recv_chan=True):
         self._quote = quote
         self._fail_wait = fail_wait
         self._positions = positions or {}
+        if has_recv_chan:
+            self._recv_chan = recv_chan
 
     def wait_update(self, deadline=None):
         if self._fail_wait:
@@ -113,6 +127,37 @@ class FakeApi:
         if symbol:
             return self._positions.get(symbol)
         return dict(self._positions)
+
+
+class FakeChan:
+    """`_recv_chan` 替身：真实现是 asyncio.Queue 的子类，qsize 即队列 len，O(1)。"""
+
+    def __init__(self, size=0):
+        self.size = size
+
+    def qsize(self):
+        return self.size
+
+
+class BadChan:
+    """qsize 抛异常的替身（内部状态被并发破坏等）——观测必须吞掉它。"""
+
+    def qsize(self):
+        raise RuntimeError("recv_chan qsize exploded")
+
+
+class _CapHandler(logging.Handler):
+    """捕获 tg.brokers.simnow 的日志记录，供 [8] 断言「恰好打了几条」。"""
+
+    def __init__(self):
+        super().__init__()
+        self.messages = []
+
+    def emit(self, record):
+        self.messages.append(record.getMessage())
+
+    def count(self, keyword):
+        return sum(1 for m in self.messages if keyword in m)
 
 
 def _make(api: FakeApi, quote) -> SimNowBroker:
@@ -177,6 +222,73 @@ def main() -> None:
     api = FakeApi(FRESH, positions={"CFFEX.IF2509": FakePos(lt=2, lh=1, st=0, sh=3)})
     check(_position_total(api, "CFFEX.IF2509", "LONG") == 3, "今+昨多仓 = 3")
     check(_position_total(api, "CFFEX.IF2509", "SHORT") == 3, "今+昨空仓 = 3")
+
+    print("[8] 帧级空闲泵积压观测（纯读：不改行为、不抛、按阈值节流）")
+    _STREAK = _mod._PUMP_BACKLOG_WARN_STREAK
+    _lg = logging.getLogger("tg.brokers.simnow")
+    _cap = _CapHandler()
+    _old_level, _old_propagate = _lg.level, _lg.propagate
+    _lg.addHandler(_cap)
+    _lg.setLevel(logging.WARNING)
+    _lg.propagate = False          # 断言期间不回灌 root，输出保持干净
+    try:
+        # (a) 取不到队列（属性缺失 / 值为 None）→ 不观测、不抛、不计数
+        b = _make(FakeApi(FRESH, has_recv_chan=False), FRESH)
+        b.pulse(0)
+        check(True, "api 无 _recv_chan → pulse 不抛")
+        b = _make(FakeApi(FRESH, recv_chan=None), FRESH)
+        b.pulse(0)
+        check(True, "_recv_chan=None → pulse 不抛")
+        check(getattr(b, "_pump_backlog_streak", 0) == 0, "取不到队列 → 不计入积压")
+
+        # (b) qsize 抛异常 → 吞掉（观测绝不允许反过来影响保活）
+        b = _make(FakeApi(FRESH, recv_chan=BadChan()), FRESH)
+        b.pulse(0)
+        b.pulse(0)
+        check(True, "qsize 抛异常 → pulse 不抛")
+        check(getattr(b, "_pump_backlog_streak", 0) == 0, "取数失败 → 不计入积压")
+
+        # (c) 队列恒空（日常态）→ 计数恒 0、零告警
+        b = _make(FakeApi(FRESH, recv_chan=FakeChan(0)), FRESH)
+        for _ in range(_STREAK * 2):
+            b.pulse(0)
+        check(getattr(b, "_pump_backlog_streak", 0) == 0, "队列恒空 → 计数恒 0")
+        check(_cap.count("回报泵") == 0, "队列恒空 → 零告警（不刷屏）")
+
+        # (d) 连续积压：阈值前静默 → 达阈值恰好一条 → 计数归零（节流）
+        b = _make(FakeApi(FRESH, recv_chan=FakeChan(3)), FRESH)
+        for _ in range(_STREAK - 1):
+            b.pulse(0)
+        check(_cap.count("回报泵") == 0,
+              "连续 {} 帧积压 → 尚未告警".format(_STREAK - 1))
+        check(b._pump_backlog_streak == _STREAK - 1,
+              "计数 = {}".format(_STREAK - 1))
+        b.pulse(0)
+        check(_cap.count("回报泵") == 1, "第 {} 帧 → 恰好一条 WARNING".format(_STREAK))
+        check(b._pump_backlog_streak == 0, "告警后计数归零")
+        b.pulse(0)
+        b.pulse(0)
+        check(_cap.count("回报泵") == 1, "后续 2 帧仍只有 1 条（节流，未刷屏）")
+
+        # (e) 积压清零 → 计数归零（不残留历史）
+        ch = FakeChan(5)
+        b = _make(FakeApi(FRESH, recv_chan=ch), FRESH)
+        for _ in range(3):
+            b.pulse(0)
+        check(b._pump_backlog_streak == 3, "积压 3 帧 → 计数 3")
+        ch.size = 0
+        b.pulse(0)
+        check(b._pump_backlog_streak == 0, "积压清零 → 计数归零")
+
+        # (f) __init__ 未跑的实例（本文件 _make 的造法）本就没有计数字段 → 兜底不抛
+        b = _make(FakeApi(FRESH, recv_chan=FakeChan(1)), FRESH)
+        check(not hasattr(b, "_pump_backlog_streak"), "前置：_make 实例无计数字段")
+        b.pulse(0)
+        check(getattr(b, "_pump_backlog_streak", None) == 1, "缺字段 → 兜底计为 1")
+    finally:
+        _lg.removeHandler(_cap)
+        _lg.setLevel(_old_level)
+        _lg.propagate = _old_propagate
 
     print("== {} pass / {} fail ==".format(_PASS, _FAIL))
     sys.exit(0 if _FAIL == 0 else 1)

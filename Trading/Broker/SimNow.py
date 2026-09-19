@@ -122,6 +122,10 @@ _CLOSE_DIRECTION = {Side.LONG: "SELL", Side.SHORT: "BUY"}
 #   0.1/0.2 的纯轮询节奏无实际调参价值，只消灭字面量、收口为命名常量。
 _POLL_INTERVAL_FAST = 0.1   # _verify_position_delta / _wait_position_ok 轮询
 _POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
+# 帧级空闲泵的积压告警阈值：连续多少帧 `_recv_chan` 非空才打一条 WARNING。
+# 心跳帧率 ≈ 10/s（AppSSE 100ms 窗口）→ 50 帧 ≈ 5s：日常回报率远达不到，
+# 只有回报洪峰真正追上帧率时才会命中（取一个远大于抖动、盘中又能及时暴露的值）。
+_PUMP_BACKLOG_WARN_STREAK = 50
 
 
 def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, int]]:
@@ -410,6 +414,10 @@ class SimNowBroker(Broker):
         # _finalize 终判时据此落 otg_latency 日志（见 _otg_latency_fields）。
         self._submit_t0: float = 0.0
         self._watchdog_fired_at: Optional[float] = None
+        # 帧级空闲泵的积压观测计数（见 _observe_pump_backlog）：连续非空帧数。
+        # 与 _sig_orders 同理，必须在凭据检查**之前**初始化 —— 缺凭据 early-return
+        # 的实例也要保证字段存在，否则单测实例化后调 pulse 会 AttributeError。
+        self._pump_backlog_streak: int = 0
         # （A′ 2026-09-17 改造）：合约参数 SSOT = 品种档案 Product（构造期播种），
         #   无行情取值路径 —— 原"取值即冻结"开关与 pulse 重试计数器随行情
         #   取值通道一并删除；verified 由 _connect 成功即置位（source=CONFIG）。
@@ -653,6 +661,51 @@ class SimNowBroker(Broker):
         except Exception:
             # 心跳失败不抛——下一根 bar 会再试，真断连了 submit 会自己报错
             pass
+        # 观测挂在 try 之外：本轮 wait_update 即使抛了，也照样记一次积压
+        self._observe_pump_backlog()
+
+    def _observe_pump_backlog(self) -> None:
+        """帧级空闲泵的积压观测：只读、O(1)、独立 try，绝不改行为、绝不抛。
+
+        为什么需要（P3 可观测性）：`pulse(0)` 每轮只放行 **1 个包** —— 这是 tqsdk
+        的固有节流而非本仓库的选择（baseApi.py:96-98：`_run_until_idle(async_run=True)`
+        单次只从 `_wait_idle_list` pop 一个 future），而 `_fetch_msg`
+        （api.py:4125-4132）只负责把 `_recv_chan` 里的 pack 搬进 `_pending_diffs`。
+        单帧处理不完的回报就留在 `_recv_chan` 排队等下一帧，即持续排空上限 = 帧率。
+        日常回报率远低于帧率，队列应恒空；**连续多帧非空**才说明回报洪峰已追上
+        帧率（此时唯一能连续排空的是下一根 bar 的窗口模式 pulse）。
+
+        指标取 `_recv_chan.qsize()`（`TqChan` 继承 `asyncio.Queue`，qsize 即队列
+        len，O(1)，不在热路径做扫描或分配）。全程 getattr 兜底：`_recv_chan` 在
+        tqsdk 里初值为 None（api.py:288-289），且会被逐级重指到链路末端
+        （api.py:3727/3737）—— 取不到就不观测，不报错、不重试。
+
+        告警按「每攒满阈值一次」节流（打一条后计数归零），不刷屏。
+        """
+        try:
+            chan = getattr(self._api, "_recv_chan", None)
+            qsize = getattr(chan, "qsize", None)
+            if qsize is None:
+                return
+            backlog = qsize()
+        except Exception:
+            # 观测绝不允许反过来影响心跳：宁可没有数据，也不能把保活打断
+            return
+        if backlog > 0:
+            # getattr 兜底：单测用 __new__ 跳过 __init__ 造实例（不连网、不查凭据），
+            # 那种路径下本字段不存在 —— 观测代码不允许因此把心跳弄崩。
+            streak = getattr(self, "_pump_backlog_streak", 0) + 1
+            self._pump_backlog_streak = streak
+            if streak >= _PUMP_BACKLOG_WARN_STREAK:
+                import logging
+                logging.getLogger("tg.brokers.simnow").warning(
+                    "[回报泵] 回报包积压：_recv_chan 连续 %d 帧非空（当前积压 %d 包）。"
+                    "帧级泵每轮只放行 1 个包（tqsdk 固有节流），持续积压说明回报洪峰"
+                    "已追上帧率，靠下一根 bar 的窗口模式兜底排空",
+                    streak, backlog)
+                self._pump_backlog_streak = 0
+        else:
+            self._pump_backlog_streak = 0
 
     def _probe_alive(self, timeout_s: Optional[float] = None) -> bool:
         """探活：拿一次行情/账户数据，确认连接不是"用户不活跃"的僵尸连接。

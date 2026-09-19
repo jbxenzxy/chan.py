@@ -15,6 +15,12 @@ Script/.sync_tdx_config
 # 运行时缓存（stock_names / stock_pettm_index / stock_float_mc / last_code_freq
 # 等联网刷新产生的易变 json，不入库，避免无意义 diff 与合并冲突）
 App/*.json
+# 门禁运行时产物：Test/run_all.py 每次跑完覆写 Test/report.json（组件结果汇总），
+# 与上方同属「易变 json 不入库」——入库会让每次回归都产生无意义 diff 与合并冲突。
+# 注意：该文件**已被跟踪**，新增本条目不会自动生效，须先执行
+#     git rm --cached Test/report.json
+# 并随下次提交落库。
+Test/report.json
 
 # ===== Trading 运行产物与本地配置 =====
 # 回放/实盘的输出目录（events.jsonl、summary 等）与 sqlite 状态目录
