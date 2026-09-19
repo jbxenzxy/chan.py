@@ -217,7 +217,12 @@ def load_records(path):
 
 def _write(name, obj):
     path = os.path.join(FIXTURE_DIR, name)
-    with open(path, "w", encoding="utf-8") as f:
+    # newline="\n" 必须显式指定：默认文本模式在 Windows 会把 json.dump 写出的
+    # \n 逐行翻成 \r\n，而仓库内冻结的 fixtures 是 LF（350KB 级文件的每一行都
+    # 不同）。后果不是「文件多了几个字节」——`--check` 用 filecmp 做**二进制**
+    # 比对，于是 Windows 上 6 条 CHECK-FAIL 恒红、真正的手改漂移被淹没在恒红
+    # 里看不出来（fixtures_integrity 组件在 Windows 上等于失效）。
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(obj, f, ensure_ascii=False, indent=1, sort_keys=True)
     return path
 

@@ -309,7 +309,11 @@
             margin-top: 8px; padding-top: 8px;
             border-top: 1px solid #0f3460;
         }
-        .stats-cell { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+        /* flex: 1 1 0 —— 核心区四格等宽。外层 .stats-hero 是
+           justify-content: space-between，不给 flex-basis 时每格按内容宽度
+           分配：3 格时观感尚可，加了「盈利因子」（值普遍比「总净盈亏」短）
+           变 4 格后就肉眼可见不均。0 基准 + 可伸缩 = 四格各占 1/4。 */
+        .stats-cell { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
         .stats-cell .stats-label { color: #8892b0; font-size: 11px; }
         .stats-cell .stats-value { color: #a8b2d1; font-weight: 600; font-size: 13px; }
         .stats-rows { margin-top: 8px; padding-top: 8px; border-top: 1px solid #0f3460; }

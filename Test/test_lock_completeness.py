@@ -561,13 +561,18 @@ def _iter_attrs_with_owner(tree):
     return out
 
 
-def _scan_raw_exit_refs():
+def _scan_raw_exit_refs(stats=None):
     """默认拒绝：除白名单外，全仓不得出现 `*_raw_unsafe` 出口引用。
 
     为什么扫**全仓**而不是那 9 个 SCAN_MODULES：新增模块（哪怕是新的服务层
     文件）拿到裸出口，正是 N2 要防的那种「新写的直觉代码」。漏一个目录就
     系统性失守，故覆盖面宁可大。
     排除两处：本文件（校验器自身要写这些名字）与 AppData.py（出口定义处）。
+
+    stats：可选 dict，收集「读不到 / 解析不了」而跳过的文件（(rel, 异常类名)）。
+    「扫不到」不等于「扫过且干净」——09181 上的 repro_n2_bare_property.py
+    就是活生生的语法坏文件，静默 continue 会让护栏假装全覆盖，故调用方须
+    把跳过数当一条独立断言（见 main ⑥）。
     """
     bad = []
     self_base = os.path.basename(__file__)
@@ -585,7 +590,11 @@ def _scan_raw_exit_refs():
                 continue
             try:
                 tree = ast.parse(open(path, encoding="utf-8").read())
-            except (SyntaxError, OSError):
+            except (SyntaxError, OSError, UnicodeDecodeError, ValueError) as e:
+                # 读不到 / 解析不了：记进 stats 让调用方报出来，不静默吞掉
+                # （ValueError 覆盖 ast.parse 对「含 null 字节」等畸形源的报错）
+                if stats is not None:
+                    stats.setdefault("skipped", []).append((rel, type(e).__name__))
                 continue
             for owner, node in _iter_attrs_with_owner(tree):
                 if node.attr not in RAW_EXIT_NAMES:
@@ -694,7 +703,21 @@ def main():
         results.append(f"[{'PASS' if ok else 'FAIL'}] 扫描器自证：{msg}")
 
     # ⑥ 裸出口默认拒用（N2 收口）
-    raw_bad = _scan_raw_exit_refs()
+    raw_stats = {}
+    raw_bad = _scan_raw_exit_refs(stats=raw_stats)
+    # ⑥-0 扫描覆盖面自检：跳过的文件数必须为 0。
+    # 「扫不到」不能被当成「扫过且干净」——语法坏掉的文件既不被扫也不被报，
+    # 扫描面会静默缩水而护栏仍全绿（09181 的 repro_n2_bare_property.py 就是
+    # 语法坏文件）。因此跳过数本身就是一条断言，不是可选项。
+    skipped = raw_stats.get("skipped", [])
+    if skipped:
+        results.append(
+            f"[FAIL] 裸出口扫描跳过 {len(skipped)} 个文件（语法坏/读不到，"
+            f"扫描面已缩水）: {skipped[:6]}"
+            f"{' …' if len(skipped) > 6 else ''}——请修好这些文件，"
+            f"或在 _scan_raw_exit_refs 中显式排除并写明理由")
+    else:
+        results.append("[PASS] 裸出口扫描覆盖面：全仓 .py 无跳过（0 个文件因语法坏/读不到被漏扫）")
     if len(RAW_EXIT_NAMES) != RAW_EXIT_EXPECTED_N:
         results.append(
             f"[FAIL] 裸出口数量 {len(RAW_EXIT_NAMES)} != 基线 {RAW_EXIT_EXPECTED_N}"

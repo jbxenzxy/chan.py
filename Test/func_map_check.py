@@ -96,6 +96,14 @@ TARGET_FUNCS = {
     "_get_index_belong":            ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     # P2：_load_float_mc_cache 兼容壳已随 AppRefresh 物理迁入删除，不再属 AppEngine 映射
 
+    # ── 取数实现（2026-09 新增，尚未归位，现址 AppEngine 装配点）──
+    # 二者都是「按市场/标的类型选源 → 调 DataAPI」的取数编排，同属获取侧
+    # （ORCH_F）。刻意留在 AppEngine 而非随 AppRefresh 迁走：AppData 不得
+    # import DataAPI（phase5 守卫 ④b），依赖倒置只经本装配点注入
+    # （_fetch_pe_ttm_live → app_data.set_pe_ttm_live_fetcher）。
+    "_fetch_pe_ttm_live":           ("ORCH_F", "PE-TTM 取数单一入口（A股个股 eltdx 7615 / 指数·港股 腾讯）"),
+    "_get_reduction_flag":          ("ORCH_F", "股东减持计划窗口标记取数（委托 ElTdxAPI F10；无当日/非A股/失败 → active=False）"),
+
     # ── AppData：统一缓存三件套 ──
     "_cache_put":                   ("DATA", "✓4 兼容壳 → app_data.cache_put（LRU）"),
     "_cache_get":                   ("DATA", "✓4 兼容壳 → app_data.cache_get"),

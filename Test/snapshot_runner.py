@@ -220,8 +220,11 @@ def isolate_side_effects():
     # 写 m.FUTURES_LOOKBACK_CONFIG 等于给模块挂一个无人读的属性。
     # 期货两个快照用例的窗口另有归属：full（end_time=None）不做「末 N 根」截断；
     # end_date 的「末 960 根」截断正是该用例要冻结的 C 模式行为
-    # （AppSSE.init_chan_symbol）。遗留耦合：若 FUTURES_LOOKBACK_CONFIG["15s"]
-    # 默认值调整，需同步刷 futures_15s_end_date 基线。
+    # （AppSSE.init_chan_symbol）。
+    # 这条耦合原先只是一句「若默认值调整需同步刷基线」的注释 —— 注释不会自己
+    # 红。现已升级为可执行断言：FUTURES_LOOKBACK_CONFIG 的默认值一改，期货两个
+    # 用例直接红在锚点那一行并点名要重冻哪个基线，见
+    # _futures_lookback_anchor_error（在 acquire 里前置校验）。
     saved_saved_points = app_data._saved_point_times
     app_data._saved_point_times = {}
 
@@ -460,6 +463,42 @@ def _c_edge_zero_vol():
         restore()
 
 
+# 期货回看条数锚点：冻结 futures_15s_* 基线时所依据的
+# AppConfig.FUTURES_LOOKBACK_CONFIG 默认值（(bars, label) 的 bars 位）。
+# 与股票侧不同，期货的「末 N 根」截断**是** end_date 用例要冻结的行为本身，
+# 不能像股票那样置空解耦；能做的就是把「默认值 ≠ 锚点」变成一次硬失败，
+# 让改默认值的人立刻看到「要重冻哪些基线」，而不是等某天跑回归撞见。
+_FUTURES_LOOKBACK_ANCHOR = {"15s": 960}
+
+
+def _futures_lookback_anchor_error(case_name):
+    """期货用例前置校验：回看默认值仍是冻结基线时的锚点值。
+
+    返回 None = 通过；否则返回可直接当失败原因的中文说明。
+    只读 AppConfig 的**默认 SSOT**（_FIELD_DEFAULTS），不读运行时实例值：
+    后者可被环境变量覆盖，一覆盖就假红，而我们要守的是「代码默认值变了」。
+    """
+    parts = case_name.split("_")
+    if len(parts) < 2 or parts[0] != "futures":
+        return None
+    freq = parts[1]
+    want = _FUTURES_LOOKBACK_ANCHOR.get(freq)
+    if want is None:
+        return None
+    try:
+        from App import AppConfig
+        cur = AppConfig._FIELD_DEFAULTS["FUTURES_LOOKBACK_CONFIG"][freq]
+    except (ImportError, KeyError, AttributeError) as e:
+        return (f"读不到 AppConfig._FIELD_DEFAULTS['FUTURES_LOOKBACK_CONFIG']"
+                f"[{freq!r}]（{type(e).__name__}）：锚点校验无法进行")
+    got = cur[0] if isinstance(cur, (tuple, list)) else cur
+    if got != want:
+        return (f"FUTURES_LOOKBACK_CONFIG[{freq!r}] 默认值 {got} != 冻结锚点 "
+                f"{want}：期货快照的「末 N 根」截断是该用例要冻结的行为本身，"
+                f"默认值一改 K 线窗口就变 —— 请确认后重冻")
+    return None
+
+
 def _run_futures_snapshot_case(freq="15s", freq_sec=15, end_time=None):
     """期货静态快照公共链路（D7 迁移后统一走 SSE 生产路径）：
     CTqSdkSession → init_chan_symbol（拉取+截断+建 chan）→
@@ -536,6 +575,11 @@ def acquire(name, update=False):
     """采集一个用例 → 契约校验 → 规范化 → 冻结或比对。返回 (ok, detail)"""
     from Test import comparator
     from Test.contracts import validate_result_structure, format_diffs
+
+    # 期货用例前置：回看默认值锚点校验（守「改了默认值却忘了重冻基线」）
+    anchor_err = _futures_lookback_anchor_error(name)
+    if anchor_err:
+        return False, f"回看锚点漂移 {name}: {anchor_err}"
 
     restore_iso = isolate_side_effects()
     restore_ref = _seed_reference()   # 注入确定性参考表（见 _seed_reference）
