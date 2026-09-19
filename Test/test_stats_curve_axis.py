@@ -17,8 +17,13 @@
 ---------------------------------------------------------------------
  [A] 纵轴：刻度值 ≥4 个、单调、互不重复、**"0" 恰好一个**、且首尾刻度
      必须把数据范围包住（曲线不会跑出可视区）。
- [B] 横轴：有轴线、有刻度线、有日期标签（取该笔的 exit_at → MM-DD），
-     首尾标签落在绘图区两端、互不重叠。
+ [B] 横轴：有轴线、有刻度线、有日期标签（取该笔的 exit_at）。
+     **标签条数恒为 3（首 / 中 / 尾），与笔数无关** —— 2026-09-19 用户提问
+     「以后有 1000 笔，横轴咋显示？是不是借鉴市场量能的横轴设计？」：
+     旧实现按可用宽度等分、上限 5 条，笔数一变落点就换一套、条数也跟着变；
+     现改为与「市场量能」面板同一条口径，1000 笔也只给 index 0 / 499 / 999
+     三个，永远不会挤。跨天给 YY-MM-DD（直接复用市场量能的 fmtAxisDate，
+     本文件会交叉比对两者输出是否一致），整条曲线落在同一天时降级为 HH:MM。
  [C] 任何一段文字（按真实 measureText 宽度算盒子）都不许越出画布 ——
      这是"负号被裁掉"的直接回归项。
  [D] 坏数据不静默：某笔 cumulative 为 NaN 时，曲线与坐标仍要画出来
@@ -36,6 +41,7 @@
 """
 from __future__ import annotations
 
+import datetime
 import functools
 import glob
 import http.server
@@ -68,12 +74,28 @@ def check(cond, name, extra=""):
 # ══════════════════════════════════════════════════════════════
 # 抽出真实代码段：eqAxisTicks / eqAxisNum / eqAxisDate / drawEquityCurve
 # ══════════════════════════════════════════════════════════════
+def extract_fmt_date():
+    """抽出「市场量能」面板的 fmtAxisDate。
+
+    eqAxisDate 跨天时直接调它 —— 两个面板的日期写法因此只有一个来源。
+    抽出来一起喂给 node 桩，否则桩里会 ReferenceError。
+    """
+    js = open(APP_JS, encoding="utf-8").read()
+    m = re.search(r"^        function fmtAxisDate\(d\) \{.*?\n        \}",
+                  js, re.S | re.M)
+    assert m, "抽不到 fmtAxisDate（市场量能的日期格式函数）"
+    return m.group(0)
+
+
 def extract_block():
     js = open(APP_JS, encoding="utf-8").read()
     s = js.index("        function eqAxisTicks(")
     e = js.index("function updateSlider()")
     blk = js[s:e]
     assert "function drawEquityCurve(curve) {" in blk, "抽出的段落里没有 drawEquityCurve"
+    # 横轴日期必须继续走市场量能那一套，不许自己再写一份格式
+    assert "return fmtAxisDate(" in blk, \
+        "eqAxisDate 跨天分支没有引用 fmtAxisDate（与市场量能同源已断）"
     # 只数「8 空格缩进的顶层声明」：drawEquityCurve 内部还有 yOf / xOf 两个内嵌函数，
     # 按 "function " 子串数会多出来。
     tops = re.findall(r"^        function (\w+)\(", blk, re.M)
@@ -127,6 +149,16 @@ def with_bad_value():  # [D] 坏值场景：某一笔的 cumulative 不是数
 
 
 SCENARIOS.append(("含坏值一笔", with_bad_value()))
+
+# 1000 笔 —— 用户直接问到的场景（「以后有 1000 笔，横轴咋显示？」）。
+# 日期按天铺开近 3 年，三条标签必然互不相同，能真正验出"只给首/中/尾"。
+_D0 = datetime.date(2026, 1, 1)
+SCENARIOS.append((
+    "千笔长序列",
+    curve_of([(220 if i % 3 else -310) for i in range(1000)],
+             dates=[(_D0 + datetime.timedelta(days=i)).isoformat()
+                    for i in range(1000)]),
+))
 
 
 # ══════════════════════════════════════════════════════════════
@@ -201,25 +233,34 @@ def audit(tag, rec, curve):
              "刻度 %s / 数据 %.0f~%.0f" % (nums, min(data), max(data)))
 
     # ── [B] 横轴 ────────────────────────────────────────────
+    # plotBottom == 绘图区底边：轴范围就是刻度边界，最低那条刻度必然落在底边上。
     plotBottom = max(t["y"] for t in ylab)
     vline = [s for s in segs if abs(s[0] - s[2]) < 0.6 and abs(s[3] - s[1]) > 30]
     need(len(vline) >= 1, "有纵轴线（不是只有浮空的数字）", len(vline))
-    ticks = [s for s in segs if abs(s[0] - s[2]) < 0.6 and 2 < abs(s[3] - s[1]) <= 8]
-    need(len(ticks) >= min(n, 2), "横轴有刻度线", len(ticks))
     hl = [s for s in segs if abs(s[0] - s[2]) > 30 and abs(s[3] - s[1]) < 0.6]
     need(len(hl) >= 4, "有网格线（≥4 条）", len(hl))
     need(any(abs(s[1] - plotBottom) < 1.0 for s in hl),
          "横轴线画在绘图区底部", [round(s[1], 1) for s in hl])
 
+    # 标签条数**与笔数无关**：恒为 3（首 / 中 / 尾），n<3 时有几笔给几笔。
+    # 刻度线只认「从绘图区底边往下伸 4px」那一段 —— 1000 笔时曲线每一步只有
+    # 零点几像素宽，拿「竖且短」当特征会把曲线段误判成刻度线。
+    want_n = min(3, n)
+    ticks = [s for s in segs if abs(s[0] - s[2]) < 0.6
+             and abs(s[1] - plotBottom) < 1.0 and abs(s[3] - (plotBottom + 4)) < 1.0]
+    need(len(ticks) == want_n,
+         "横轴刻度线恒为 %d 根（与笔数 %d 无关）" % (want_n, n), len(ticks))
+
     xlab = [t for t in texts if t["y"] > plotBottom + 2]
-    need(len(xlab) >= min(n, 3), "横轴有日期标签（≥3 个）", len(xlab))
+    need(len(xlab) == want_n,
+         "横轴日期标签恒为 %d 个（与笔数 %d 无关）" % (want_n, n), len(xlab))
     if xlab:
-        # 整条曲线同一天 → 给时刻 HH:MM（同日的三个 "09-18" 并排没有信息量）；
-        # 跨天 → 给 MM-DD。
+        # 整条曲线同一天 → 给时刻 HH:MM（同日的三个 "26-09-18" 并排没有信息量）；
+        # 跨天 → 给 YY-MM-DD（与市场量能的 fmtAxisDate 同源，见文件头 [B]）。
         same_day = curve[0]["exit_at"][:10] == curve[-1]["exit_at"][:10]
-        pat = r"\d{2}:\d{2}" if same_day else r"\d{2}-\d{2}"
+        pat = r"\d{2}:\d{2}" if same_day else r"\d{2}-\d{2}-\d{2}"
         need(all(re.fullmatch(pat, t["t"]) for t in xlab),
-             "横轴标签是 %s" % ("HH:MM（同日）" if same_day else "MM-DD"),
+             "横轴标签是 %s" % ("HH:MM（同日）" if same_day else "YY-MM-DD"),
              [t["t"] for t in xlab])
         xs = [t["x"] for t in xlab]
         need(xs == sorted(xs) and len(set(xs)) == len(xs),
@@ -229,6 +270,7 @@ def audit(tag, rec, curve):
         padL = gx + 6
         padR = 10
         ned = w - padR
+        plotW = ned - padL
         if n > 1:
             need(abs(xlab[0]["x"] - padL) < 1.5, "首个日期标签落在绘图区左端",
                  "%s vs %s" % (xlab[0]["x"], padL))
@@ -240,19 +282,19 @@ def audit(tag, rec, curve):
         else:
             need(xlab[0]["align"] == "center", "只有一笔时日期标签居中",
                  xlab[0]["align"])
-        # 标签内容必须来自那一笔的 exit_at（不是编出来的）
-        plotW = ned - padL
-        bad = []
+        # 落点必须是 首 / 中 / 尾 三个 index，标签内容取自那一笔的 exit_at（不是编的）
+        exp_idx = sorted(set([0, (n - 1) // 2, n - 1])) if n > 1 else [0]
+        bad, got_idx = [], []
         for t in xlab:
             idx = 0 if n <= 1 else round((t["x"] - padL) / plotW * (n - 1))
             idx = max(0, min(n - 1, idx))
+            got_idx.append(idx)
             want = curve[idx]["exit_at"][11:16] if same_day \
-                else curve[idx]["exit_at"][5:10]
+                else curve[idx]["exit_at"][2:10]
             if t["t"] != want:
                 bad.append((idx, t["t"], want))
+        need(got_idx == exp_idx, "落点是 首/中/尾 三个 index", (got_idx, exp_idx))
         need(not bad, "标签取的是该笔的 exit_at", bad)
-        if n > 1:
-            need(len(xlab) >= min(n, 3), "横轴日期标签条数够用", len(xlab))
 
     # ── 0 轴虚线：只在该轴的刻度跨 0 时出现 ─────────────────
     # 全正 / 全负行情里 0 就是最外侧那条网格线，不必再叠一条虚线 ——
@@ -331,6 +373,8 @@ function makeCanvas() {
 var document = { getElementById: function (id) { return canvases[id] || null; } };
 var window = { devicePixelRatio: 1 };
 
+/*__DEPS__*/
+
 /*__BLOCK__*/
 
 var scenarios = require(process.argv[2]);
@@ -343,7 +387,13 @@ scenarios.forEach(function (sc) {
              texts: cv._rec.texts, segs: cv._rec.segs,
              strokes: cv._rec.strokes, fills: cv._rec.fills });
 });
-console.log(JSON.stringify(out));
+// 跨面板交叉校验：曲线横轴的日期串必须与「市场量能」的 fmtAxisDate 逐字一致
+// （同一个日期，两个面板不许给出两种写法）。
+var cross = [];
+["2026-09-18", "2026-01-01", "2027-05-15", "2028-09-26"].forEach(function (d) {
+  cross.push([d, fmtAxisDate(d), eqAxisDate(d + " 10:00:00", false)]);
+});
+console.log(JSON.stringify({ scenarios: out, cross: cross }));
 """
 
 
@@ -363,6 +413,7 @@ def find_node():
 def run_static_layer():
     try:
         blk = extract_block()
+        dep = extract_fmt_date()
     except AssertionError as e:
         check(False, "抽得出现有曲线代码段（覆盖面自检）", e)
         return
@@ -375,7 +426,7 @@ def run_static_layer():
         drv = os.path.join(tmp, "drv.js")
         spec = os.path.join(tmp, "spec.js")
         open(drv, "w", encoding="utf-8").write(
-            NODE_DRIVER.replace("/*__BLOCK__*/", blk))
+            NODE_DRIVER.replace("/*__DEPS__*/", dep).replace("/*__BLOCK__*/", blk))
         # 用 module.exports 而不是 JSON 文件：坏值场景里可能有 NaN，
         # 那是合法 JS 但不是合法 JSON。
         open(spec, "w", encoding="utf-8").write(
@@ -384,13 +435,16 @@ def run_static_layer():
                          allow_nan=True)
             + ";\n")
         proc = subprocess.run([node, drv, spec], capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=120)
+                              encoding="utf-8", errors="replace", timeout=180)
         if proc.returncode != 0:
             check(False, "node 执行成功", (proc.stderr or "")[-400:])
             return
         check(True, "node 执行成功")
-        recs = json.loads(proc.stdout.strip().splitlines()[-1])
-    for (name, curve), rec in zip(SCENARIOS, recs):
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+    for d, want, got in payload["cross"]:
+        check(want == got, "跨面板一致：%s → 市场量能 '%s' / 曲线 '%s'"
+              % (d, want, got))
+    for (name, curve), rec in zip(SCENARIOS, payload["scenarios"]):
         audit("静态 " + name, rec, curve)
 
 
@@ -563,7 +617,8 @@ def run_render_layer():
                 check(False, "[真渲染 %s] 画布存在" % name)
                 continue
             audit("真渲染 " + name, info, curve)
-            if shot_dir and name in ("全正 6 笔", "全负 5 笔", "7 位数末端"):
+            if shot_dir and name in ("全正 6 笔", "全负 5 笔", "7 位数末端",
+                                     "千笔长序列"):
                 os.makedirs(shot_dir, exist_ok=True)
                 page.locator("#stats-panel").screenshot(
                     path=os.path.join(shot_dir, "after_%s.png" % name.replace(" ", "")))

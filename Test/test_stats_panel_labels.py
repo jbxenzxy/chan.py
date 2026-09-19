@@ -3,13 +3,14 @@
 统计面板（右上角「统计」弹窗）字段契约 —— 2026-09-19 用户拍板口径
 =====================================================================
 
-被守护的七条
+被守护的九条
 ---------------------------------------------------------------------
- ① 品种：只显示**品种键**（IF / IH / IC / IM / AU / AG / CU / TA…），
+ ① 期货品种：只显示**品种键**（IF / IH / IC / IM / AU / AG / CU / TA…），
     不显示合约名（CFFEX.IF2612）。统计口径是「整个品种」—— 同品种的多个
     月份合约是合并统计的（见 Trading/Infra/TradeStats.py 的
     `WHERE product_key = ?`），把合约名列出来会让「品种合计」被读成
-    「某一个合约的战绩」。
+    「某一个合约的战绩」。标签写全「期货品种」（2026-09-19 用户拍板：
+    数据源就是期货自动下单库，写「品种」看不出是股票还是期货）。
  ② 平均盈利 / 平均亏损 → 平均每笔盈利 / 平均每笔亏损。
     这两个数正是「盈亏比(赔率)」的两个分量：`pl_ratio = avg_win / |avg_loss|`
     （TradeStats.py:193）。不写「每笔」会被当成总量口径，与「盈利因子」
@@ -18,15 +19,22 @@
     这两个数本来就是一对（最好的单笔 / 最坏的单笔），合成一行后与
     「平均每笔盈利 / 平均每笔亏损」同构。
  ④ 删除「按出场原因」与「曲线口径」两行。
- ⑤ 期望值/笔 → 期望值（没有「期望值/笔」这种表述；expectancy 本身
-    = win_rate*avg_win + loss_rate*avg_loss，已经是每笔量纲）。
- ⑥ 明细行行序：品种 → 成交笔数 → 期望值 →
+ ⑤ 期望值那一行的**标签**是「期望值」，**数值带「 元/笔」**（2026-09-19 用户
+    拍板：= 总净盈亏 ÷ 总交易笔数，除完剩下的单位就是元/笔）。「期望值/笔」
+    这种把量纲缀进标签的写法仍然禁用。
+ ⑥ 明细行行序：期货品种 → 成交笔数 → 期望值 →
     平均每笔盈利 / 平均每笔亏损 → 最大单笔盈利 / 最大单笔亏损
  ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
     盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
     是两个不同的指标）。
  ⑧ 所有金额**不带正号**：0 与正数都直接写数字（"+1530.00 元" → "1530.00 元"）。
     只保留负数的 "-"。
+ ⑨ 总净盈亏**过万写「万元」、过百万写「百万元」**（2026-09-19 用户拍板）：
+    核心区一行四格、每格仅 ~100px 宽，"3400000.00 元" 会把格子撑破。
+    边界：|x| < 1 万 → 元；1 万 ≤ |x| < 100 万 → 万元；|x| ≥ 100 万 → 百万元。
+    负号保留（-34000 → "-3.40 万元"）。
+    其余金额字段（期望值 / 平均每笔 / 最大单笔）**维持「元」**——它们都是
+    「每笔」量级，把 5000 元写成 "0.50 万元" 反而读不出数。
 
 两层守护
 ---------------------------------------------------------------------
@@ -34,12 +42,13 @@
          不需要浏览器，任何环境都跑。
  [真渲染] 无头 Chrome 打开真实页面 → 打桩 /api/trader/trades 喂一份
          带合约名 / 带 exit_at / 带 by_reason 的响应 → 点「统计」按钮 →
-         读 #stats-content 的真实 innerHTML 复核上面七条。
+         读 #stats-content 的真实 innerHTML 复核上面九条；⑨ 另外换四档
+         量级（未过万 / 过万 / 过百万 / 负过万）重渲染，逐档核对字面值。
          浏览器不在位时降级 SKIP（静态层已覆盖）。
 
 为什么真渲染层要喂「脏数据」：静态层只能证明源码里没有那段拼接；真渲染层
 证明的是**即使后端把合约名、exit_at、by_reason 全都发过来，面板也不会显示**
-—— 这才是这七条真正想要的保证。
+—— 这才是这九条真正想要的保证。
 
 跑法：python Test/test_stats_panel_labels.py
 """
@@ -73,7 +82,7 @@ def check(cond, name, extra=""):
 
 
 # 明细行的目标顺序（实现与本测试共用的唯一定义）
-EXPECT_ORDER = ["品种", "成交笔数", "期望值",
+EXPECT_ORDER = ["期货品种", "成交笔数", "期望值",
                 "平均每笔盈利 / 平均每笔亏损", "最大单笔盈利 / 最大单笔亏损"]
 
 # 核心区（stats-hero）四格的目标顺序（⑦）
@@ -133,7 +142,7 @@ check(len(blk) > 500, "区块规模合理（正则没只捞到半截）", len(bl
 detail = blk.split("'<div class=\"stats-rows\">';", 1)[1]
 labels = re.findall(r'class="stats-label">([^<]+)</span>', detail)
 check(labels == EXPECT_ORDER, "①⑥ 明细行标签序列 == 目标顺序", labels)
-check(labels.index("品种") < labels.index("成交笔数"), "⑥ 品种 在 成交笔数 之前")
+check(labels.index("期货品种") < labels.index("成交笔数"), "⑥ 期货品种 在 成交笔数 之前")
 check(labels.index("期望值") == labels.index("成交笔数") + 1,
       "⑥ 期望值 紧随 成交笔数 之后")
 check("盈利因子" not in labels, "⑦ 明细区不再有盈利因子行（核心区已提上去）", labels)
@@ -147,7 +156,9 @@ check(hero.count("stats-cell") == 4, "⑦ 核心区正好四格（不多不少�
 check(hero.count("d.profit_factor") == 1,
       "⑦ 盈利因子格取的是 d.profit_factor（与明细区同一字段）")
 
-check('class="stats-label">品种</span>' in blk, "① 有「品种」行")
+check('class="stats-label">期货品种</span>' in blk, "① 有「期货品种」行")
+check(re.search(r'class="stats-label">品种</span>', blk) is None,
+      "① 旧标签「品种」无残留（已改「期货品种」）")
 check("statsEsc(d.symbol_key)" in blk, "① 品种行取的是 symbol_key（品种键）")
 check("d.by_symbol" not in blk, "① 品种行不再读 by_symbol（合约名来源已断）")
 check("+ sub +" not in blk, "① 品种行不再拼 sub 后缀（原「（合约 XXX）」）")
@@ -169,6 +180,23 @@ check("曲线口径" not in blk and "stats-note" not in blk, "④ 「曲线口�
 
 check('class="stats-label">期望值</span>' in blk, "⑤ 「期望值」标签在位")
 check("期望值/笔" not in blk, "⑤ 旧标签「期望值/笔」无残留")
+check("元/笔" in blk, "⑤ 期望值数值带「 元/笔」（量纲 = 总净盈亏 ÷ 总笔数）")
+check("yuanPer(d.expectancy)" in blk, "⑤ 期望值走 yuanPer()（元/笔 专用格式）")
+check("yuan(d.expectancy)" not in blk, "⑤ 期望值不再走 yuan()（那样量纲就丢了）")
+
+# ⑨ 总净盈亏缩位：过万→万元、过百万→百万元；其余金额字段维持「元」
+check("money(d.total_net)" in blk, "⑨ 核心区「总净盈亏」走 money() 缩位")
+mfn = re.search(r"var money = function \(x\) \{(.*?)\n            \};", blk, re.S)
+check(mfn is not None, "⑨ 抽得到 money() 缩位实现（覆盖面自检）")
+if mfn:
+    mbody = mfn.group(1)
+    check(mbody.index("1e6") < mbody.index("1e4"),
+          "⑨ 先判「过百万」再判「过万」（顺序反了 3.4e6 会写成 340.00 万元）")
+    for unit in ('" 元"', '" 万元"', '" 百万元"'):
+        check(unit in mbody, "⑨ 单位分支 %s 在位" % unit)
+for keep in ("yuan(d.avg_win)", "yuan(d.avg_loss)",
+             "yuan(d.max_win.net_cash)", "yuan(d.max_loss.net_cash)"):
+    check(keep in blk, "⑨ 每笔量级字段仍写「元」不缩位：%s" % keep)
 
 # ⑧ 金额一律不带正号：yuan() 里不许再出现任何形式的 '+"'
 check('x > 0 ? "+"' not in blk and 'x >= 0 ? "+"' not in blk,
@@ -222,7 +250,8 @@ elif not os.path.isfile(SNAP_FUTURES):
     print("  [SKIP] 缺快照 " + SNAP_FUTURES)
 else:
     snap_text = open(SNAP_FUTURES, encoding="utf-8").read()
-    fixture = json.dumps(stats_fixture())
+    # 用一层 list 兜住「当前 fixture」：⑨ 要换三档量级重渲染，路由闭包里得看得见
+    cur_fix = [json.dumps(stats_fixture())]
 
     class _Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
@@ -241,6 +270,9 @@ else:
         else:
             print("  （无头浏览器：%s）" % which)
             page = browser.new_page(viewport={"width": 1600, "height": 900})
+            # 截图只服务交付说明，不是门禁的一部分 —— 默认不落盘（跑测试不该在
+            # 仓库里留下产物），要图时用 STATS_SHOT_DIR 指定一个仓库外的目录。
+            shot_dir = os.environ.get("STATS_SHOT_DIR", "")
 
             def route_api(route):
                 url = route.request.url
@@ -249,7 +281,7 @@ else:
                 elif "analyze" in url:
                     body = snap_text
                 elif "trader/trades" in url:
-                    body = fixture          # 什么都带的脏数据
+                    body = cur_fix[0]        # 什么都带的脏数据
                 else:
                     body = "{}"
                 route.fulfill(status=200, content_type="application/json", body=body)
@@ -302,9 +334,9 @@ else:
                                  detail_html))
 
                 # ① 品种格子里只有品种键
-                mrow = re.search(r'class="stats-label">品种</span>.*?'
+                mrow = re.search(r'class="stats-label">期货品种</span>.*?'
                                  r'class="stats-value"[^>]*>(.*?)</span>', html, re.S)
-                check(mrow is not None, "① 真渲染有「品种」行")
+                check(mrow is not None, "① 真渲染有「期货品种」行")
                 if mrow:
                     val = re.sub(r"<[^>]+>", "", mrow.group(1)).strip()
                     check(val == "RB", "① 品种格 == RB（合约名一个都没带上）", val)
@@ -330,6 +362,9 @@ else:
                 check("曲线口径" not in html, "④ 真渲染无「曲线口径」")
 
                 check("期望值" in html and "期望值/笔" not in html, "⑤ 真渲染为「期望值」")
+                check("516.00 元/笔" in html,
+                      "⑤ 真渲染：期望值数值带「 元/笔」",
+                      re.findall(r"期望值</span>.{0,80}", html))
 
                 # ⑧ 真渲染层面的「无正号」：面板内不应有以 + 开头的文本节点
                 check(re.search(r">\+", html) is None,
@@ -337,8 +372,34 @@ else:
                       re.findall(r">\+[^<]{0,12}", html))
                 check("+3400.00" not in html and "+516.00" not in html,
                       "⑧ 真渲染：总净盈亏 / 期望值都不带 +")
-                check("3400.00 元" in html and "516.00 元" in html,
+                check("3400.00 元" in html and "516.00 元/笔" in html,
                       "⑧ 真渲染：金额本体还在（去掉的只是 +）")
+
+                # ⑨ 总净盈亏三档缩位：关面板 → 换 fixture → 再点开（打开时 force 刷新）
+                for tag, tot, want in (
+                        ("未过万", 3400.0, "3400.00 元"),
+                        ("过万", 34000.0, "3.40 万元"),
+                        ("过百万", 3400000.0, "3.40 百万元"),
+                        ("负过万", -34000.0, "-3.40 万元")):
+                    f = stats_fixture()
+                    f["total_net"] = tot
+                    f["expectancy"] = round(tot / f["count"], 2)
+                    cur_fix[0] = json.dumps(f)
+                    page.evaluate(
+                        "() => { const p = document.getElementById('stats-panel');"
+                        " if (p) p.classList.remove('show'); }")
+                    page.click("#btn-stats")
+                    page.wait_for_timeout(300)
+                    cell = page.evaluate(
+                        "() => { const c = document.querySelector("
+                        "'#stats-content .stats-hero .stats-cell');"
+                        " return c ? c.textContent : ''; }") or ""
+                    check(want in cell,
+                          "⑨ 真渲染 总净盈亏「%s」→ %s" % (tag, want), cell)
+                    if shot_dir:
+                        os.makedirs(shot_dir, exist_ok=True)
+                        page.locator("#stats-panel").screenshot(
+                            path=os.path.join(shot_dir, "panel_%s.png" % tag))
 
             page.unroute_all(behavior="ignore")
             browser.close()

@@ -4597,6 +4597,21 @@
             }
             var pct = function (x) { return (x * 100).toFixed(1) + "%"; };
             var yuan = function (x) { return Number(x).toFixed(2) + " 元"; };
+            // 期望值的量纲是「元/笔」：= 总净盈亏 ÷ 总交易笔数，除完剩下的就是
+            // 每笔。与 yuan() 分开写，是为了让「存量」与「每笔」两类字段在字面上
+            // 就能区分开 —— 光看 "516.00 元" 分不出是这一笔还是平均每笔。
+            var yuanPer = function (x) { return Number(x).toFixed(2) + " 元/笔"; };
+            // 总净盈亏是存量口径，能到 7 位数；核心区一行四格、每格只有 ~100px 宽，
+            // 直接排 "3400000.00 元" 会把格子撑破。过万进「万元」、过百万进
+            // 「百万元」，两级各缩 4 个数量级，最长也只 11 个字符。
+            // 只有总净盈亏走这套：期望值 / 平均每笔 / 最大单笔都是「每笔」量级，
+            // 把 5000 元写成 "0.50 万元" 反而读不出数。
+            var money = function (x) {
+                var v = Number(x), a = Math.abs(v);
+                if (a >= 1e6) return (v / 1e6).toFixed(2) + " 百万元";
+                if (a >= 1e4) return (v / 1e4).toFixed(2) + " 万元";
+                return v.toFixed(2) + " 元";
+            };
             var col = function (x) { return x >= 0 ? "#FF3C3C" : "#00F0F0"; };  // 涨红跌绿
             var num = function (x) { return x != null ? Number(x).toFixed(2) : "—"; };
             var html = "";
@@ -4606,23 +4621,24 @@
             // 盈利因子（总盈 ÷ 总亏）与盈亏比同属「策略整体质量」口径，
             // 提到核心区与总净盈亏 / 实际胜率 / 盈亏比并列；明细区不再重复这一行。
             html += '<div class="stats-hero">';
-            html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + yuan(d.total_net) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">总净盈亏</span><span class="stats-value" style="color:' + col(d.total_net) + '">' + money(d.total_net) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">' + pct(d.win_rate) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">盈亏比(赔率)</span><span class="stats-value">' + num(d.pl_ratio) + '</span></div>';
             html += '<div class="stats-cell"><span class="stats-label">盈利因子</span><span class="stats-value">' + num(d.profit_factor) + '</span></div>';
             html += '</div>';
             // ③ 明细行
             html += '<div class="stats-rows">';
-            // 品种：统计口径是「整个品种」（同品种多月份合并），所以这里只给品种键
-            // （IF / IH / AU…）。不列合约名 —— 一旦列出 CFFEX.IF2612 这种写法，
+            // 品种：统计口径是「整个期货品种」（同品种多月份合并），所以这里只给
+            // 品种键（IF / IH / AU…）。不列合约名 —— 一旦列出 CFFEX.IF2612 这种写法，
             // 「品种合计」就会被读成「某一个合约的战绩」。
             if (d.symbol_key) {
-                html += '<div class="stats-row"><span class="stats-label">品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + '</span></div>';
+                html += '<div class="stats-row"><span class="stats-label">期货品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + '</span></div>';
             }
             html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
-            // 期望值 = win_rate*avg_win + loss_rate*avg_loss，本身就是"每笔"量纲，
-            // 再缀一个「/笔」是重复限定（标准表述里没有这种写法）。
-            html += '<div class="stats-row"><span class="stats-label">期望值</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuan(d.expectancy) + '</span></div>';
+            // 期望值 = win_rate*avg_win + loss_rate*avg_loss = 总净盈亏 ÷ 总笔数，
+            // 量纲就是「元/笔」，所以数值后面必须缀上「/笔」—— 否则它与上面的
+            // 总净盈亏只差一个数字，读的人无从判断哪个是总量、哪个是每笔。
+            html += '<div class="stats-row"><span class="stats-label">期望值</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuanPer(d.expectancy) + '</span></div>';
             // 这两个数就是「盈亏比(赔率)」的两个分量（pl_ratio = avg_win / |avg_loss|），
             // 标签必须写明「每笔」—— 光写「平均盈利」会被读成总量口径，与盈利因子混淆。
             html += '<div class="stats-row"><span class="stats-label">平均每笔盈利 / 平均每笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
@@ -4675,9 +4691,10 @@
             return sign + (dec && rv % 1 === 0 ? rv.toFixed(0) : rv.toFixed(dec));
         }
 
-        // 横轴标签：exit_at（"YYYY-MM-DD HH:MM:SS"）→ "MM-DD"。
+        // 横轴标签：与「市场量能」面板同源 —— 日期串直接交给它的 fmtAxisDate
+        // （"YYYY-MM-DD" → "YY-MM-DD"），两个面板的日期写法因此不会各走各的。
         // wantTime=true（整条曲线都在同一天）时改给 "HH:MM" —— 同一天里并排
-        // 三个 "09-18" 位置是有了、信息量为零；日内数据真正能区分的是时刻。
+        // 三个 "26-09-18" 位置是有了、信息量为零；日内数据真正能区分的是时刻。
         // 解析不出来就返回空串 → 那根刻度只画线不画字（曲线本身照画，
         // 不能因为一行坏数据让整条轴变空白）。
         function eqAxisDate(s, wantTime) {
@@ -4685,7 +4702,7 @@
                 .exec(String(s == null ? "" : s));
             if (!m) return "";
             if (wantTime && m[4]) return m[4] + ":" + m[5];
-            return m[2] + "-" + m[3];
+            return fmtAxisDate(m[1] + "-" + m[2] + "-" + m[3]);
         }
 
         function drawEquityCurve(curve) {
@@ -4776,18 +4793,23 @@
             }
             ctx.strokeStyle = "#FFD700"; ctx.lineWidth = 1.5; ctx.stroke();
 
-            // ④ 横轴：轴线 + 刻度线 + 日期（首尾必给，中间按可用宽度等分）
+            // ④ 横轴：轴线 + 3 根刻度线 + 3 个日期（首 / 中 / 尾）
+            //    条数固定 3，与「市场量能」面板同一口径 —— 横轴是「第几笔」，
+            //    笔数只决定点与点的间距、不决定标签条数。1000 笔时落点仍是
+            //    index 0 / 499 / 999，与 5 笔时的 0 / 2 / 4 完全同构，
+            //    不会随笔数增长把横轴挤成一团。
             var baseY = padT + plotH;
             ctx.strokeStyle = "#2a3f6b"; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(padL, baseY); ctx.lineTo(w - padR, baseY); ctx.stroke();
-            var want = Math.max(2, Math.min(5, Math.floor((w - padL - padR) / 72)));
             // 整条曲线落在同一个自然日 → 横轴给时刻而不是日期
             var day0 = String(curve[0].exit_at || "").slice(0, 10);
             var sameDay = !!day0 && day0 === String(curve[n - 1].exit_at || "").slice(0, 10);
+            var mid = Math.floor((n - 1) / 2);
+            var marks = (n <= 1) ? [0] : [0, mid, n - 1];
             var seen = {}, lastTxt = null;
-            for (var li = 0; li < want; li++) {
-                var idx = Math.round((n - 1) * li / (want - 1));
-                if (seen[idx]) continue;
+            for (var li = 0; li < marks.length; li++) {
+                var idx = marks[li];
+                if (seen[idx]) continue;   // n=2 时 mid=0 与首刻度重合，去掉
                 seen[idx] = 1;
                 var lx = xOf(idx);
                 ctx.strokeStyle = "#2a3f6b";
