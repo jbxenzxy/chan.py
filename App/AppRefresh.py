@@ -29,14 +29,16 @@ from DataAPI.SinaAPI import fetch_a_names
 
 log = get_logger(__name__)
 
-# 股票名称缓存别名 = app_data 实例字段（共享同一对象）
+# 股票名称缓存别名 = app_data 实例字段**本体**（共享同一对象）
 # key: 股票代码(6位), value: {"name": "股票名称", "pinyin": "拼音首字母"}
-# 只用于**判空**（:360 的 `if _stock_names_cache:`）——真值测试在 CPython
-# 下是原子的；遍历一律走 app_data.names_snapshot()。
-_stock_names_cache = app_data.names_cache
+# 只用于**判空**（刷新流程步骤1 的 `if _stock_names_cache:`）——真值测试在
+# CPython 下是原子的；遍历一律走 app_data.names_snapshot()。
+# N2 收口：出口已改名 names_cache_raw_unsafe（命名自带告警）；本别名是
+# RAW_EXIT_ALLOWLIST 登记过的唯一 names 引用。
+_stock_names_cache = app_data.names_cache_raw_unsafe
 
-# 已删 _pe_ttm_cache = app_data.pe_cache
-#          _index_belong_cache = app_data.belong_cache
+# 已删 _pe_ttm_cache = app_data.pe_cache_raw_unsafe
+#          _index_belong_cache = app_data.belong_cache_raw_unsafe
 # 两条都是死别名（本模块零引用）。把 PE/归属表的读写全部收进
 # app_data.update_pe_ttm() / pe_snapshot() / belong_snapshot() 之后，这两
 # 个别名就没用了。留着等于给"绕开锁直接全表遍历"留一个现成入口。

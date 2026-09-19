@@ -6335,6 +6335,9 @@
   "pe_ttm": 20.0,
   "saved_selection_date": "",
   "seg_count": 3,
+  "shareholder_reduction": {
+   "active": false
+  },
   "symbol": "sh600519",
   "zs_count": 2
  },

@@ -614,8 +614,21 @@ class AppData:
         return app_config.float_mc_cache_file
 
     # ════════════════════════════════════════════════════════════════
-    # 状态只读出口（获取侧刷新函数经此共享同一对象）
+    # 状态出口
     # ════════════════════════════════════════════════════════════════
+    # 三把锁与标量旗 `float_mc_loaded` 按原名导出：锁自己就是共享物，
+    # 标量读在 CPython 下原子，都不存在「把可变容器本体递出去」的问题。
+    #
+    # 其余 8 个**可变容器**出口一律以 `_raw_unsafe` 结尾。它们返回的是
+    # 内部本体的活引用（不是快照），因为刷新侧靠「同对象 clear()+update()」
+    # 做到零漂移——改成返回快照会让下游别名永远读到旧表，**静默失效**。
+    # 代价是拿到它的人可以在无锁状态下改它、或边遍历边被改。故契约三条：
+    #   ① 只允许 Test/test_lock_completeness.py :: RAW_EXIT_ALLOWLIST 里
+    #      登记过的那几处引用（**默认拒绝**，机器校验，新增引用即失败）；
+    #   ② 引用方只许做原子点查（.get / `in` / 真值测试）；
+    #   ③ **遍历一律走加锁出口**：names_snapshot() / pe_snapshot() /
+    #      belong_snapshot() / get_annotated_codes() / get_saved_point_time()。
+    # 命名自带告警：看到 `_raw_unsafe` 就该知道「这不是给你随便读的」。
     @property
     def stocks_cache_lock(self):
         return self._stocks_cache_lock
@@ -629,27 +642,38 @@ class AppData:
         return self._user_store_lock
 
     @property
-    def stocks_analysis_cache(self):
+    def stocks_analysis_cache_raw_unsafe(self):
+        """分析结果 LRU 本体（活引用）。唯一引用方 AppEngine 的模块级别名，
+     且全部使用点都在 `with _stocks_cache_lock:` 内。"""
         return self._stocks_analysis_cache
 
     @property
-    def futures_analysis_cache(self):
+    def futures_analysis_cache_raw_unsafe(self):
+        """期货下窗 CChan 本体（活引用）。当前仓库零外部引用，
+     一律经 app_data.futures_cache_* 公共 API 访问。"""
         return self._futures_analysis_cache
 
     @property
-    def names_cache(self):
+    def names_cache_raw_unsafe(self):
+        """股票名称表本体（活引用）。AppRefresh 只做判空、AppScan 只做点查；
+     遍历必须走 names_snapshot()。"""
         return self._names
 
     @property
-    def pe_cache(self):
+    def pe_cache_raw_unsafe(self):
+        """PE-TTM 表本体（活引用）。遍历必须走 pe_snapshot()；
+     点查优先 get_pe_ttm()。"""
         return self._pe
 
     @property
-    def belong_cache(self):
+    def belong_cache_raw_unsafe(self):
+        """指数归属表本体（活引用）。遍历必须走 belong_snapshot()；
+     点查优先 get_index_belong()。"""
         return self._belong
 
     @property
-    def float_mc_cache(self):
+    def float_mc_cache_raw_unsafe(self):
+        """流通市值缓存本体（活引用）。点查优先 get_float_mc_from_cache()。"""
         return self._float_mc
 
     @property
@@ -657,11 +681,15 @@ class AppData:
         return self._float_mc_loaded
 
     @property
-    def saved_point_times(self):
+    def saved_point_times_raw_unsafe(self):
+        """选点表本体（活引用）。点查一律走 get_saved_point_time(code, col)
+     （加锁 + 返回 ""，不存在 check-then-act 窗口）。"""
         return self._saved_point_times
 
     @property
-    def annotations_cache(self):
+    def annotations_cache_raw_unsafe(self):
+        """标注表本体（活引用）。遍历必须走 get_annotated_codes()/
+     get_annotations_for()。"""
         return self._annotations
 
     def freq_to_col(self, freq):
@@ -1367,9 +1395,9 @@ class AppData:
         """缓存条数（持 _user_store_lock 读取）
 
         给调用方一个**不需要碰共享容器本体**的取数口。原写法是
-        `len(app_data.float_mc_cache)`——直接对共享 dict 取长度。虽然
+        `len(app_data.float_mc_cache_raw_unsafe)`——直接对共享 dict 取长度。虽然
         CPython 下 `len(dict)` 本身是原子的、不会抛异常，但它是「裸读共享
-        容器」的口子：一旦有人照着改成 `for k in app_data.float_mc_cache`
+        容器」的口子：一旦有人照着改成 `for k in app_data.float_mc_cache_raw_unsafe`
         就会踩到真正的竞态。宁可多一个方法，也别留这个样板。
         """
         with self._user_store_lock:
@@ -1506,7 +1534,7 @@ class AppData:
     def clear_saved_points_by_prefix(self, prefix):
         """加锁批量删除内存态中指定前缀的选点（如 KQ. 期货条目）。
 
-        修复：原 AppSSE 清理直接 del app_data.saved_point_times，绕开
+        修复：原 AppSSE 清理直接 del app_data.saved_point_times_raw_unsafe，绕开
         _saved_point_lock；改为加锁删内存态，与其它选点读-改-写串行。
         """
         removed = 0

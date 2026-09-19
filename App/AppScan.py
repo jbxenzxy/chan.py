@@ -48,8 +48,11 @@ log = get_logger(__name__)
 # 扫描态 + 预过滤 / 行业索引读取
 # ═══════════════════════════════════════════════════════════════════════
 
-# 股票名称缓存：别名 = app_data 实例字段（共享同一对象）
-_stock_names_cache = app_data.names_cache
+# 股票名称缓存：别名 = app_data 实例字段**本体**（共享同一对象）
+# N2 收口：出口已改名 names_cache_raw_unsafe。本别名是 RAW_EXIT_ALLOWLIST
+# 登记过的引用，**只做 .get() 点查**（CPython 下原子）；遍历须走
+# app_data.names_snapshot()。
+_stock_names_cache = app_data.names_cache_raw_unsafe
 
 # 扫描跳过记录（收集后统一打印）
 #
@@ -580,7 +583,7 @@ class Scanner:
         if _need_float_mc:
             app_data.load_float_mc_cache()
             if app_data.float_mc_loaded:
-                # 原为 `len(app_data.float_mc_cache)` —— 裸读共享容器。
+                # 原为 `len(app_data.float_mc_cache_raw_unsafe)` —— 裸读共享容器。
                 # 改走 app_data 加锁取数口，与写者（update_float_mc_cache）
                 # 共用 _user_store_lock，也给后来人留一个正确的样板。
                 # 注意：这是**全局累积缓存**（跨次扫描 dict.update 合并、只增不减），

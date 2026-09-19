@@ -14,6 +14,10 @@
  "GET /api/stocks/{code}/analyze",
  "GET /api/stocks/{code}/read/annotation",
  "GET /api/stocks/{code}/red-range",
+ "GET /api/trader/auto-order/status",
+ "GET /api/trader/product-check",
+ "GET /api/trader/signal-filter",
+ "GET /api/trader/trades",
  "POST /api/futures/cleanup",
  "POST /api/futures/{symbol}/select/point",
  "POST /api/stocks/refresh",
@@ -25,5 +29,9 @@
  "POST /api/stocks/scan/{task_id}/cancel",
  "POST /api/stocks/{code}/save/annotation",
  "POST /api/stocks/{code}/select/point",
+ "POST /api/trader/auto-order/ack",
+ "POST /api/trader/auto-order/off",
+ "POST /api/trader/auto-order/on",
+ "POST /api/trader/signal-filter",
  "PUT /api/stocks/scan/set/index"
 ]

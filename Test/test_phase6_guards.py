@@ -4,16 +4,19 @@
 =====================================================================
 守护阶段 6 的结构性成果（设计文档 V10 方案 8.9）：
 
-  ① 组件区块完备：Frontend/app.js 单文件内 9 个 [COMPONENT] 区块
-     （KLineChart / NavToolbar / SymbolSearch / StatsPanel /
-     BspSettingsPanel / ScanPanel / RealtimeService / AnnotationPanel /
-     Bootstrap）全部在位且非空；区块外不允许游离的业务函数声明。
+  ① 组件区块完备：Frontend/app.js 按 [COMPONENT] 横幅切出的区块（当前 11 个）
+     全部在位且非空；下列 9 个核心区块必须存在（KLineChart / NavToolbar /
+     SymbolSearch / StatsPanel / BspSettingsPanel / ScanPanel /
+     RealtimeService / AnnotationPanel / Bootstrap），区块外不允许游离的
+     业务函数声明。
   ② KLineChart 内容契约：渲染管线关键函数（render 族 / draw* 族 /
      priceToY 坐标系 / onWheel 交互）物理位于 KLineChart 区块内
      （阶段 8 拆 kline/ 子目录时按区块整体迁移）。
-  ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线 64 个
-     + window.ChanApp（阶段 6 组件化为纯代码搬移，对外 API 零漂移；
-     HTML onclick / 控制台调试依赖此面）。
+  ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线 61 个
+     + window.ChanApp + 3 个 HTML 内联事件桥（合计 65；阶段 6 组件化为纯
+     代码搬移，对既有 API 面零漂移，HTML onclick / 控制台调试依赖此面）。
+  ③b HTML 内联事件桥：登记的 3 个桥接必须既在 window 绑定、又被
+     index.html 引用（与 ④ 互为补集：既拦「摘绑定」也拦「僵尸条目」）。
   ④ index.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
      onchange/…）调用的标识符均可解析到 window 绑定。
   ⑤ 零构建约束：app.js 无 import/export/require（原生 JS 零依赖，
@@ -57,10 +60,11 @@ KLINE_PIPELINE = [
     "onWheel", "toggleOverlay", "toggleDualWindow",
 ]
 
-# ③ window API 冻结基线（阶段 6 前全量：64 个取自 4d0de89，另含 AMO 面板
-#    closeAmoPanel/toggleAmoPanel 两项既有登记，合计 66 个；随后「盘后下载」
-#    功能移除 4 个 window 函数（toggleDownloadPanel/closeDownloadPanel/
-#    startDownload/stopDownload），现回归为 62 个）
+# ③ window API 冻结基线：集合字面量现收 61 项（以本字面量为准，③ 处会打印实测数）。
+#    「盘后下载」功能下线时曾从中移除 4 个 window 函数
+#    （toggleDownloadPanel / closeDownloadPanel / startDownload / stopDownload）；
+#    另登记 3 个 HTML 内联事件桥（见 WINDOW_INLINE_BRIDGES），
+#    故 app.js 实际 window 绑定总数 = 61 + ChanApp + 3 = 65）
 WINDOW_BASELINE = {
     '_dualZsDebugCount', '_isRenderingBottom', '_lastCalcRedRangeError', '_lastGrayStatus',
     '_lastRedFrameStatus', 'annotationAdd', 'annotationDeleteAllGlobal', 'annotationDeleteAnnotation',
@@ -81,6 +85,20 @@ WINDOW_BASELINE = {
 }
 # 允许的登记性新增（组件注册表）
 WINDOW_ALLOWED_NEW = {"ChanApp"}
+# 允许的登记性新增（HTML 内联事件桥）
+# index.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
+# 闭包内 —— 不挂 window 时点击即抛 ReferenceError。两起真实故障（自动下单开关
+# 「视觉上开了又自动关、后端零日志」/ 账本按钮「点了毫无反应」）都是这么来的，
+# app.js 对应位置留着「P65 复刻了上面开关的坑」的注释留档。故这三项不是可选
+# 绑定，而是 index.html 的内联事件所必需：
+#   closeStatsPanel       <- index.html  onclick="closeStatsPanel()"
+#   onAutoOrderToggle     <- index.html  onchange="onAutoOrderToggle(this)"
+#   toggleAutoOrderLedger <- index.html  onclick="toggleAutoOrderLedger(event)"
+# 与 ④ 互为补集：④ 保证「html 引用 => 必有 window 绑定」，test_inline_bridges
+# 保证「登记 => 必被 html 引用」，合起来既拦摘绑定、也拦僵尸条目。
+WINDOW_INLINE_BRIDGES = {
+    "closeStatsPanel", "onAutoOrderToggle", "toggleAutoOrderLedger",
+}
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
 ALLOWED_STRAY = {"getLayoutParams",
                  # N1 图表请求序号守卫（指导书 v1.3 附录 N1 / 维度 3.3）：
@@ -178,7 +196,8 @@ def test_kline_contract(failures):
 def test_window_surface(failures):
     src = read(APP_JS)
     names = set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=", src))
-    expect = WINDOW_BASELINE | WINDOW_ALLOWED_NEW
+    expect = (WINDOW_BASELINE | WINDOW_ALLOWED_NEW
+              | WINDOW_INLINE_BRIDGES)
     only_old = sorted(WINDOW_BASELINE - names)
     only_new = sorted(names - expect)
     if only_old or only_new:
@@ -209,6 +228,31 @@ def test_html_handlers(failures):
     else:
         print(f"[PASS] ④ index.html 事件引用完整: {len(handlers)} 个内联事件标识符"
               f"全部解析到 window 绑定")
+
+
+def test_inline_bridges(failures):
+    """③b HTML 内联事件桥：登记的桥接必须真实在位，且在 index.html 里被引用。
+
+    与 ④ 方向相反、互为补集 —— ④ 只保证「html 引用的都有绑定」；若只做 ④，
+    谁把绑定摘掉、同时把 html 里的调用也删了，基线表就会留下永不失效的僵尸
+    条目（基线数字虚高、真实 API 面已缩水）。
+    """
+    html = read(INDEX_HTML)
+    src = read(APP_JS)
+    wins = set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=", src))
+    referenced = set()
+    for m in re.finditer(r'on[a-z]+="([^"]*)"', html):
+        for call in re.finditer(r"(?<![\w.$])([A-Za-z_$][\w$]*)\s*\(", m.group(1)):
+            referenced.add(call.group(1))
+    no_bind = sorted(n for n in WINDOW_INLINE_BRIDGES if n not in wins)
+    no_ref = sorted(n for n in WINDOW_INLINE_BRIDGES if n not in referenced)
+    if no_bind or no_ref:
+        failures.append("③b 内联事件桥: 缺 window 绑定 %s; 未被 html 引用 %s"
+                        % (no_bind, no_ref))
+        print(f"[FAIL] ③b 内联事件桥: 缺绑定 {len(no_bind)} / 未被引用 {len(no_ref)}")
+    else:
+        print(f"[PASS] ③b 内联事件桥: {len(WINDOW_INLINE_BRIDGES)} 个 HTML 内联事件"
+              f"处理器既在 window 绑定、又被 index.html 引用")
 
 
 def test_zero_build(failures):
@@ -356,6 +400,7 @@ def main():
     test_kline_contract(failures)
     test_window_surface(failures)
     test_html_handlers(failures)
+    test_inline_bridges(failures)
     test_zero_build(failures)
     test_node_syntax(failures)
     test_cache_bust(failures)
@@ -366,7 +411,7 @@ def main():
             print(f"[FAIL] {f}")
         print("===== 阶段 6 成果防护: 失败 =====")
         return 1
-    print("===== 阶段 6 成果防护: 全部通过（9 类守护） =====")
+    print("===== 阶段 6 成果防护: 全部通过（10 类守护） =====")
     return 0
 
 

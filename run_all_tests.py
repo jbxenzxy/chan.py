@@ -49,6 +49,28 @@ SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。真�
   5. Ctrl+C / 中断：**已完成的结果一条不丢**——照常打印逐条清单与汇总、
      照常落 `--json`，退出码 130。
 
+「慢」与「卡死」必须分得开（v3 新增）
+-------------------------------------
+子进程 stdout 是**管道**，Python 在管道上默认**块缓冲**（约 8KB）——这带来两个
+副作用，都会把「慢用例」伪装成「死掉了」：
+
+  · 用例正在跑时，它打印的进度**一条都传不上来**（攒在缓冲里）；
+  · 用例被强杀 / 超时时，缓冲区里那几 KB **直接丢失**，失败尾部可能是空的，
+    让人误以为"它什么都没打印就挂了"。
+
+所以 v3 四件事：
+  1. 子进程环境强制 `PYTHONUNBUFFERED=1` —— 打印即刻可见、被杀也不丢；
+  2. 心跳不再只说"运行中 Ns"，而是**附上它最后打印的一行**（没有则明确写
+     「尚无输出」）——一眼看出"跑到哪一步了"；
+  3. 超过 `--stall`（默认 20s）仍未结束，**自动把它目前的全部输出打出来一次**，
+     并提示下一步用 `--stream` / `--diag`；
+  4. `--diag` 让子进程带 `faulthandler` 跑：真卡住时按 `--stall` 的秒数**打印
+     所有线程的 Python 栈**（精确到哪一行在等）——这是唯一能证明"卡在哪"的办法。
+
+  ⚠ 别把 faulthandler 自己那行 `Timeout (0:00:08)!` 当成用例超时：它是**栈倾倒
+    计时器**到期（秒数 = `--stall`），此时用例还在跑。用例真超时的字样是
+    `[TIMEOUT] <文件> 超过 Ns 被终止（已强杀进程树）`，后面紧跟 `FAIL (TIMEOUT, …)`。
+
 用法（在仓库根目录执行）
 ------------------------
     python run_all_tests.py                        # 全量（Test/ + Trading/Test/）
@@ -60,7 +82,31 @@ SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。真�
     python run_all_tests.py --timeout 600          # 放宽单条超时（默认 300s）
     python run_all_tests.py --stream               # 实时回显每个用例的输出（排障用）
     python run_all_tests.py --heartbeat 30         # 长用例每 30s 打一次"仍在运行"（0=关）
+    python run_all_tests.py --stall 20             # 超 20s 自动倾倒其输出（0=关）
+    python run_all_tests.py --diag                 # 卡住时打印子进程 Python 栈
     python run_all_tests.py --json report.json     # 落盘机器可读报告
+
+怀疑某一条卡住时，最快的定位命令（单条 + 实时输出 + 10s 后打栈）：
+    python run_all_tests.py --only Test --filter <关键字> --stream --stall 10 --diag
+
+「幽灵 Ctrl+C」：不是你按的，也会中断整轮（v4 新增）
+-----------------------------------------------------
+Windows 上**任何进程**调用 `os.kill(pid, 0)` 或 `send_signal(signal.CTRL_C_EVENT)`
+都不是"探活"——`signal.CTRL_C_EVENT` 的值就是 0，会走 `GenerateConsoleCtrlEvent`，
+**给该 pid 所在的进程组投一次真实的 Ctrl+C**（pid=0 时是整个控制台）。
+
+于是常见的"存活探测"写法 `os.kill(pid, 0)` 会打到共享同一控制台的**宿主进程**：
+跑测试的本脚本（控制台里 Ctrl+C 处于启用态）当场收到 KeyboardInterrupt 被中断，
+而真正调用它的用例是在 `CREATE_NEW_PROCESS_GROUP` 下跑的（Ctrl+C 被禁用），
+**它自己毫发无伤、依然 PASS** —— 症状就是"跑到某一条，跑测试的窗口莫名中断，
+日志里连那条用例的输出都没有"。
+
+本脚本对此做两件事：
+  1. 收到信号立刻打印《幽灵 Ctrl+C 取证块》：第几次、发生在哪条用例、进入该条多久、
+     当前进程的 stdin/stdout/stderr 是否控制台、GetConsoleWindow 值，并给出排查方向；
+  2. `--on-sigint continue`：把它当作"跳过当前用例并继续"，让整轮跑完不被打断；
+     3 秒内再收到第二次才真正中止（保留"真 Ctrl+C 仍能停"的手感）。
+     默认仍是 `--on-sigint abort`（与旧行为一致）。
 
 退出码：全部通过 0；任一条失败 / 超时非 0；被 Ctrl+C 中断 130。
 
@@ -73,15 +119,17 @@ SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。真�
    新产生的工作区改动**列出来，便于判断是否需要清理。
    不需要就加 `--no-git-check`。
 3. 有若干用例是**诊断脚本**或**环境依赖型**，红/绿不能直接当作回归结论：
-   · `repro_n2_bare_property.py`  当前**语法错误**（文件内括号未闭合），必红；
+   · `repro_n2_bare_property.py`  退出码 1 = **命中**（N2 裸出口竞态仍在，
+     这是脚本头部自己规定的门禁语义）—— 它是"红的复现脚本"，不是坏用例；
    · `repro_n4_cleanup_race.py`   恒返 0，无拦截力；
    · `smoke_simnow_phase_g.py`    需要真实 SimNow 连接，凭据被隔离后必红
      （要用真连接请加 `--keep-credentials`）；
    · `test_p20_phase_i1.py` / `test_p60_trade_toasts_reconcile_gap.py`
      **不需要**联网，它们只是「凭据齐全时会真去登录」的那一类 —— 默认隔离下
      是绿的，**不要**为了它们加 `--keep-credentials`；
-   · `test_product_fee_table.py`  的 GENERATED 区块断言是**行尾敏感**的
-     （`^...$` + `re.M` 在 CRLF 工作区命中 0、LF 工作区命中 1）。
+   · `test_user_store_rmw.py`     是并发压测（N 线程 × M 次全量重写落盘），
+     **耗时随机器负载剧烈波动**：同一份代码实测过 5.5s / 54s / 62s。
+     它"慢"不等于"卡"——`--stall` 倒出来的输出会显示它仍在推进。
    请结合失败输出判断，别只看红点数。
 """
 from __future__ import annotations
@@ -105,6 +153,8 @@ COMPONENT_TIMEOUT_S = 300
 PIPE_EOF_GRACE_S = 3.0        # 子进程退出后，等 stdout 管道 EOF 的宽限期
 KILL_TREE_TIMEOUT_S = 20.0    # taskkill / killpg 自身的兜底超时
 HEARTBEAT_S = 15.0            # 长用例心跳间隔（0 = 关闭）
+STALL_DUMP_S = 20.0           # 超过这么多秒仍未结束 → 倾倒它当前的输出（0 = 关闭）
+SIGINT_DOUBLE_WINDOW_S = 3.0  # --on-sigint continue 下，两次信号间隔小于它则真中止
 
 # 会被 SimNow.py 当作登录凭据读走的环境变量（默认在子进程里清空）
 CREDENTIAL_ENV_KEYS = (
@@ -144,9 +194,16 @@ def discover(repo_root: str, roots=TEST_ROOTS, severity="all",
 
 
 def build_env(keep_credentials: bool):
-    """子进程环境：UTF-8 + 默认清空 SimNow/实盘 凭据（防意外真实登录）。"""
+    """子进程环境：UTF-8 + 无缓冲 + 默认清空 SimNow/实盘 凭据（防意外真实登录）。
+
+    `PYTHONUNBUFFERED=1` 是**为排障加的**：子进程 stdout 是管道，Python 默认块缓冲
+    （约 8KB），于是「跑得慢」和「卡死了」在控制台上长得一模一样，而且被强杀时
+    缓冲里那几 KB 会丢。设了它以后：打印即刻可读、被杀也不丢、`--stall`/`--stream`
+    才能真正反映进度。
+    """
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUNBUFFERED"] = "1"
     env.setdefault("PYTHONDONTWRITEBYTECODE", "1")
     if not keep_credentials:
         cleared = []
@@ -224,14 +281,103 @@ class _Drain(threading.Thread):
                 pass
 
 
+def _child_cmd(rel: str, diag: bool, stack_after: float):
+    """子进程命令行；`diag=True` 时把目标脚本跑在 faulthandler 之下。
+
+    faulthandler 必须在**子进程内部**武装：到点后它把所有线程的 Python 栈打到
+    stderr（已被主进程捕获），这是"真卡住时到底卡在哪一行"的唯一硬证据。
+    `sys.path` / `sys.argv` / `__main__` 都按"直接执行脚本"对齐，避免改变用例语义。
+    """
+    path = rel.replace("/", os.sep)
+    if not diag:
+        return [sys.executable, path]
+    boot = (
+        "import faulthandler, os, runpy, sys\n"
+        "sys.path.insert(0, os.path.dirname(os.path.abspath({p!r})))\n"
+        "sys.argv = [{p!r}]\n"
+        "faulthandler.enable()\n"
+        "faulthandler.dump_traceback_later({n!r}, repeat=True)\n"
+        "runpy.run_path({p!r}, run_name='__main__')\n"
+    ).format(p=path, n=float(stack_after))
+    return [sys.executable, "-u", "-c", boot]
+
+
+def _yield_output(chunks, limit=25):
+    """把已捕获的输出折成可读多行（"卡住时先倒出来看看"用）。"""
+    lines = ("".join(chunks).strip()).splitlines() if chunks else []
+    if len(lines) > limit:
+        lines = ["…（其中前 %d 行略）" % (len(lines) - limit)] + lines[-limit:]
+    return lines
+
+
+def _last_hint(chunks):
+    """心跳用：附上子进程最后打印的一行（没有就明说"尚无输出"）。"""
+    last = (chunks[-1].strip()[:70] if chunks else "")
+    return ("；最后一行：%s" % last) if last else "；尚无输出"
+
+
+def _dump_stall(rel: str, elapsed: float, chunks, diag: bool):
+    """超过 stall 秒仍未结束 → 把它目前的输出倒出来，并给出下一步排障动作。"""
+    print('    ── 已运行 %.0fs 仍未结束：以下是它目前的全部输出'
+          '（判断"卡在哪一步"用）──' % elapsed)
+    for ln in _yield_output(chunks):
+        print("      | " + ln)
+    print("      └ 到此为止；若之后一直没有新行，就是卡在**下一行代码**。"
+          + ("子进程带 faulthandler，接着会打印它的 Python 栈。"
+             if diag else
+             "要精确定位：加 --diag（打印子进程 Python 栈）或 --stream（实时看）。"))
+    sys.stdout.flush()
+
+
+def _console_env_desc() -> str:
+    """描述当前进程与控制台的关系（幽灵 Ctrl+C 取证用）。"""
+    if os.name != "nt":
+        return "stdin/out/err isatty = %s/%s/%s" % (
+            os.isatty(0), os.isatty(1), os.isatty(2))
+    try:
+        import ctypes
+        win = ctypes.windll.kernel32.GetConsoleWindow()
+    except Exception:                                          # noqa: BLE001
+        win = "?"
+    return ("stdin/out/err isatty = %s/%s/%s；GetConsoleWindow = %s"
+            % (os.isatty(0), os.isatty(1), os.isatty(2), win))
+
+
+def _sigint_banner(n: int, elapsed: float, rel: str, on_sigint: str,
+                   prev_gap: Optional[float] = None):
+    """收到中断信号时的取证块：把"是谁发的"这件事变得可推断。"""
+    print("\n" + "!" * 72)
+    print("！！第 %d 次收到 Ctrl+C / 中断信号：累计 %.1fs，发生在用例 %s"
+          % (n, elapsed, rel))
+    print("   当前进程: pid=%s  %s" % (os.getpid(), _console_env_desc()))
+    if prev_gap is not None:
+        print("   距上一次信号: %.1fs" % prev_gap)
+    print("   ── 如果你**并没有**按 Ctrl+C，这就不是键盘输入 ──")
+    print("   Windows 上任何进程调用 os.kill(pid, 0) / send_signal(CTRL_C_EVENT)")
+    print("   （signal.CTRL_C_EVENT 的值就是 0）都会走 GenerateConsoleCtrlEvent：")
+    print("   给该 pid 所在进程组投一次真实 Ctrl+C，pid=0 时是整个控制台。")
+    print("   本脚本是正常控制台进程（Ctrl+C 启用）→ 收到 KeyboardInterrupt；")
+    print("   而发起调用的用例在 CREATE_NEW_PROCESS_GROUP 下（Ctrl+C 禁用）→ 它没事。")
+    print("   排查方向：被测代码里所有 `os.kill(pid, 0)` 风格的\"存活探测\"。")
+    if on_sigint == "continue":
+        print("   策略 --on-sigint continue：本条记 [信号中断] 并继续；"
+              "%.0fs 内再来一次才真正中止。" % SIGINT_DOUBLE_WINDOW_S)
+    print("!" * 72)
+    sys.stdout.flush()
+
+
 def run_one(repo_root: str, rel: str, timeout: int, tail: int, env: dict,
-            stream: bool = False, heartbeat: float = HEARTBEAT_S):
+            stream: bool = False, heartbeat: float = HEARTBEAT_S,
+            stall: float = STALL_DUMP_S, diag: bool = False):
     """执行单个测试脚本，返回记录 dict。
 
     不会无限等待：子进程退出后管道若仍被孙进程持有，最多等 PIPE_EOF_GRACE_S，
     然后强杀该进程树并继续。超时同样按「强杀进程树 -> 记 FAIL」处理。
+
+    `stall`：超过这么多秒仍未结束，**自动倾倒它当前的输出一次**（0 = 关闭）。
+    `diag` ：让子进程带 faulthandler，卡住时按 `stall` 的秒数打印 Python 栈。
     """
-    cmd = [sys.executable, rel.replace("/", os.sep)]
+    cmd = _child_cmd(rel, diag, stall or STALL_DUMP_S)
     t0 = time.time()
     chunks = []
     proc = subprocess.Popen(cmd, cwd=repo_root, env=env,
@@ -244,6 +390,7 @@ def run_one(repo_root: str, rel: str, timeout: int, tail: int, env: dict,
 
     timed_out = False
     orphan_pipe = False
+    stalled = False
     next_beat = t0 + heartbeat if heartbeat else float("inf")
     try:
         deadline = t0 + timeout
@@ -253,14 +400,21 @@ def run_one(repo_root: str, rel: str, timeout: int, tail: int, env: dict,
                 timed_out = True
                 break
             step = left if heartbeat <= 0 else min(heartbeat, left)
+            if stall and not stalled:
+                # 即使心跳间隔很长，也要按时醒来做一次 stall 倾倒
+                step = min(step, max(0.2, t0 + stall - time.time()))
             try:
                 proc.wait(timeout=step)
                 break
             except subprocess.TimeoutExpired:
                 now = time.time()
-                if now >= next_beat and now < deadline:
-                    print("    … 运行中 %.0fs（长用例心跳；加 --stream 可实时看输出）"
-                          % (now - t0))
+                if stall and not stalled and now - t0 >= stall and now < deadline:
+                    stalled = True
+                    _dump_stall(rel, now - t0, chunks, diag)
+                    next_beat = now + heartbeat
+                elif now >= next_beat and now < deadline:
+                    print("    … 运行中 %.0fs%s（--stream 可实时看输出）"
+                          % (now - t0, _last_hint(chunks)))
                     sys.stdout.flush()
                     next_beat = now + heartbeat
     finally:
@@ -280,9 +434,13 @@ def run_one(repo_root: str, rel: str, timeout: int, tail: int, env: dict,
 
     elapsed = round(time.time() - t0, 2)
     out = "".join(chunks)
+    last_line = (chunks[-1].strip()[:120] if chunks else "")
     if timed_out:
         ok, code = False, None
-        out += ("\n[TIMEOUT] %s 超过 %ss 被终止（已强杀进程树）" % (rel, timeout))
+        out += ("\n[TIMEOUT] %s 超过 %ss 被终止（已强杀进程树）"
+                % (rel, timeout))
+        if not chunks:
+            out += "\n（该用例在被杀之前一行都没打印）"
     else:
         code = proc.returncode
         ok = code == 0
@@ -296,7 +454,9 @@ def run_one(repo_root: str, rel: str, timeout: int, tail: int, env: dict,
         "exit_code": code,
         "timed_out": timed_out,
         "orphan_pipe": orphan_pipe,
+        "stalled": stalled,
         "elapsed_s": elapsed,
+        "last_line": last_line,
         "tail": lines[-tail:] if tail else [],
     }
 
@@ -307,6 +467,7 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
     n_ok = sum(1 for r in records if r["ok"])
     n_to = sum(1 for r in records if r["timed_out"])
     n_orphan = sum(1 for r in records if r.get("orphan_pipe"))
+    n_stall = sum(1 for r in records if r.get("stalled"))
     n_all = len(records)
 
     print("\n" + "=" * 72)
@@ -315,7 +476,14 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
              if len(files) > n_all else ""))
     print("=" * 72)
     for r in records:
-        flag = "PASS" if r["ok"] else ("TIME" if r["timed_out"] else "FAIL")
+        if r["ok"]:
+            flag = "PASS"
+        elif r.get("killed_by_signal"):
+            flag = "SIG"
+        elif r["timed_out"]:
+            flag = "TIME"
+        else:
+            flag = "FAIL"
         extra = "  [管道被孙进程持有]" if r.get("orphan_pipe") else ""
         print("  [%s] %-56s %7ss%s" % (flag, r["file"], r["elapsed_s"], extra))
     print("=" * 72)
@@ -323,6 +491,13 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
           % (n_ok, n_all, n_all - n_ok, n_to, time.time() - t_start))
     if n_orphan:
         print("另有 %d 条出现「子进程退出后管道被孙进程持有」，已强杀进程树" % n_orphan)
+    if n_stall:
+        print("另有 %d 条曾超过 --stall 阈值（上方已倾倒其输出），对照耗时判断是慢还是卡："
+              % n_stall)
+        for r in records:
+            if r.get("stalled"):
+                print("  · %-56s %7ss  末行: %s"
+                      % (r["file"], r["elapsed_s"], r.get("last_line") or "<无输出>"))
     if interrupted is not None:
         print("⚠ 本轮被中断（%s）：已完成的结果如上，未执行 %d 条。"
               % (interrupted, len(files) - n_all))
@@ -333,8 +508,21 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
         print("\n未通过清单：")
         for r in records:
             if not r["ok"]:
-                reason = "TIMEOUT" if r["timed_out"] else "exit=%s" % r["exit_code"]
+                if r.get("killed_by_signal"):
+                    reason = "被中断信号打断"
+                elif r["timed_out"]:
+                    reason = "TIMEOUT"
+                else:
+                    reason = "exit=%s" % r["exit_code"]
                 print("  · %-56s %s" % (r["file"], reason))
+
+    sigint_events = getattr(args, "sigint_events", None)
+    if sigint_events:
+        print("\n收到 %d 次中断信号（幽灵 Ctrl+C 取证）：" % len(sigint_events))
+        for n, (el, rel, _ts) in enumerate(sigint_events, 1):
+            print("  #%d  累计 %6.1fs  用例 %s" % (n, el, rel))
+        print("  若你并没有按 Ctrl+C：那是别的进程用 os.kill(pid, 0)"
+              "（= CTRL_C_EVENT）投给本进程所在进程组的控制台事件。")
 
     if before is not None:
         after = git_status(repo_root)
@@ -353,6 +541,8 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
             "python": sys.version.split()[0],
             "repo_root": repo_root,
             "timeout_s": timeout,
+            "stall_after_s": getattr(args, "stall", None),
+            "diag": bool(getattr(args, "diag", False)),
             "credentials_cleared": args.cleared,
             "interrupted": interrupted,
             "discovered": n_files_total,
@@ -361,6 +551,11 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
             "failed": n_all - n_ok,
             "timed_out": n_to,
             "orphan_pipe": n_orphan,
+            "stalled_slow": n_stall,
+            "on_sigint": getattr(args, "on_sigint", "abort"),
+            "sigint_events": [{"at_s": el, "case": rel}
+                              for el, rel, _ts in
+                              (getattr(args, "sigint_events", None) or [])],
             "components": records,
         }
         try:
@@ -404,6 +599,17 @@ def main():
     ap.add_argument("--heartbeat", type=float, default=HEARTBEAT_S,
                     help="长用例每 N 秒打一次「仍在运行」（默认 %g，0=关闭）"
                          % HEARTBEAT_S)
+    ap.add_argument("--stall", type=float, default=STALL_DUMP_S,
+                    help="单条超过 N 秒仍未结束，自动倾倒它当前的输出一次"
+                         "（默认 %g，0=关闭）——用来区分「慢」和「卡」" % STALL_DUMP_S)
+    ap.add_argument("--diag", action="store_true",
+                    help="让子进程带 faulthandler 跑：真卡住时按 --stall 的秒数"
+                         "打印它的 Python 调用栈（定位卡在哪一行）")
+    ap.add_argument("--on-sigint", choices=["abort", "continue"], default="abort",
+                    help="收到 Ctrl+C/中断信号时的策略：abort=保留已完成结果并退出"
+                         "（默认，同旧行为）；continue=把当前用例记 [信号中断] 后继续跑完"
+                         "（用于排除「幽灵 Ctrl+C」；%g 秒内第二次才真中止）"
+                         % SIGINT_DOUBLE_WINDOW_S)
     args = ap.parse_args()
 
     repo_root = os.getcwd()
@@ -434,6 +640,14 @@ def main():
         print("凭据: 环境中本就没有 SimNow/实盘 凭据")
     print("时间: %s" % datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     print("中断安全: Ctrl+C 会终止当前用例并保留已完成结果（不再全部丢弃）")
+    print("慢/卡区分: 单条超 %gs 自动倾倒其当前输出%s；子进程 PYTHONUNBUFFERED=1"
+          % (args.stall,
+             "；--diag 已开（卡住会打印 Python 栈）" if args.diag else ""))
+    print("中断策略: --on-sigint %s%s"
+          % (args.on_sigint,
+             "（当前用例记 [SIG]、继续跑完；%g 秒内第二次才真中止）"
+             % SIGINT_DOUBLE_WINDOW_S if args.on_sigint == "continue"
+             else "（收到即保留结果并退出，同旧行为）"))
     print("=" * 72)
 
     if args.list:
@@ -447,22 +661,48 @@ def main():
         print("（未取到 git 状态：不是 git 仓库或 git 不可用，跳过工作区变化对比）")
 
     records = []
+    sigint_events = []           # [(累计秒, 用例)]：幽灵 Ctrl+C 取证
     interrupted = None
     t_start = time.time()
     try:
         for i, rel in enumerate(files, 1):
             print("\n──── [%d/%d] %s ────" % (i, len(files), rel))
             sys.stdout.flush()
-            # run_one 内部自己保证：异常 / 超时 / 中断都会先清进程树再抛出
-            rec = run_one(repo_root, rel, args.timeout, args.tail, env,
-                          stream=args.stream, heartbeat=args.heartbeat)
+            t_case = time.time()
+            try:
+                # run_one 内部自己保证：异常 / 超时 / 中断都会先清进程树再抛出
+                rec = run_one(repo_root, rel, args.timeout, args.tail, env,
+                              stream=args.stream, heartbeat=args.heartbeat,
+                              stall=args.stall, diag=args.diag)
+            except KeyboardInterrupt:
+                now = time.time()
+                gap = (now - sigint_events[-1][2]) if sigint_events else None
+                sigint_events.append((round(now - t_start, 1), rel, now))
+                _sigint_banner(len(sigint_events), now - t_start, rel,
+                               args.on_sigint, gap)
+                double_hit = (gap is not None
+                              and gap <= SIGINT_DOUBLE_WINDOW_S
+                              and args.on_sigint == "continue")
+                if args.on_sigint != "continue" or double_hit:
+                    raise
+                rec = {
+                    "file": rel, "ok": False, "exit_code": None,
+                    "timed_out": False, "orphan_pipe": False, "stalled": False,
+                    "elapsed_s": round(now - t_case, 2), "last_line": "",
+                    "tail": [], "killed_by_signal": True,
+                }
             records.append(rec)
             if rec["ok"]:
                 print("  PASS (%ss)" % rec["elapsed_s"])
                 if rec.get("orphan_pipe"):
                     print("  [WARN] 有孙进程持有 stdout 管道，已强杀进程树")
             else:
-                reason = "TIMEOUT" if rec["timed_out"] else "exit=%s" % rec["exit_code"]
+                if rec.get("killed_by_signal"):
+                    reason = "被中断信号打断"
+                elif rec["timed_out"]:
+                    reason = "TIMEOUT"
+                else:
+                    reason = "exit=%s" % rec["exit_code"]
                 if rec["tail"]:
                     print("\n".join(rec["tail"]))
                 print("  FAIL (%s, %ss)" % (reason, rec["elapsed_s"]))
@@ -471,6 +711,7 @@ def main():
         interrupted = files[len(records)] if len(records) < len(files) else "<结束前>"
         print("\n\n！！收到 Ctrl+C / 中断信号：已终止当前用例，"
               "下面照常汇总已完成的结果")
+    args.sigint_events = sigint_events
 
     return _print_report(records, files, args.timeout, interrupted, t_start,
                          repo_root, before, args, len(files))

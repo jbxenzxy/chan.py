@@ -108,6 +108,18 @@
 <p><b>3.2 延迟问题的归属</b>——用户假设「若主流都走中继则延迟不该是问题」：调研结论相反，主流是直连，中继确实多一跳。但量化级差很关键：otg 中继固有开销为毫秒~百毫秒级，本项目 25~55 秒的滞后比它大两个数量级以上，<b>不能用「otg 线路慢」解释</b>。tqsdk 官方文档对 wait_update 的定义是「每次调用时：实际发出网络数据包、尝试从服务器接收数据包并更新内存业务截面」——回报到达本地后若 wait_update 不被调用，数据就一直躺在缓冲区。因此<b>两个假设并列待验证、不预先加权</b>（<b>P68e 评审 N6 勘误：本句原写「大头大概率在消费节奏」系预先加权，且与 §1/§1.1 口径互斥，属旧版残留</b>）：假设甲 = 消费节奏（我们代码的泵），P61 on_idle 泵先消掉甲的可解释部分；假设乙 = 链路段本身。<code>otg_latency</code> 是合成值、只在下单终判落盘，<b>只能提供总滞后的量级、给不出两段分解</b>，定论靠 §1.1 步骤①的上界法（消费段上界 ≈0.2~0.3s 为已知量）。</p>
 <p><b>3.3 去 otg 不必去 tqsdk（修正初版判断）</b>——tqsdk 开源版已提供 <code>TqCtp</code> 直连类：传入 <code>front_broker/front_url/app_id/auth_code</code>（向期货公司申请程序化外接取得；SimNow 有公开测试参数），底层由本地 <code>otg_adapter</code> 进程（<code>tqsdk_zq_otg</code> 包）直连 CTP 前置，绕开信易云网关。API 语义（wait_update/get_position/insert_order/trade_records）完全不变，即 <b>SimNowBroker 内 1647 行的保障逻辑一行不用重写</b>。全量重写方案降级为备选（仅当 TqCtp 实环境受阻时启用）。</p>
 
+<h3>3.4 约束收敛与方案决策（2026-09-19 会话补充）</h3>
+<p><b>术语：绑定（binding）</b>——CTP 本身是中国期货市场提供的 <b>C++ 原生 API</b>（核心类 <code>CThostFtdcTraderApi</code> / <code>CThostFtdcMdApi</code> + 回调 <code>CThostFtdcTraderSpi</code>，随 C++ 头文件与 <code>.dll/.so</code> 发布）。Python 不能直接 <code>import</code> 一个 C++ 库，必须有一层把这套 C++ 类<b>暴露成 Python 可调用对象</b>——这层即「绑定」，通常由 SWIG / pybind11 / ctypes 生成。由此分两类：<b>纯绑定类</b>（openctp-ctp / ctp-python / ctpwrapper）只做 CTP C++ API → Python 的 1:1 映射，你拿到裸 API（<code>TdApi</code>/<code>MdApi</code>、自己子类化 SPI 实现 <code>OnRspUserLogin</code>/<code>OnRtnTrade</code>/<code>OnRtnOrder</code>、<code>RegisterFront()</code>/<code>ReqOrderInsert()</code>），事件循环 / 订单管理 / 持仓跟踪 / 策略框架全要自写——这「全自写」的部分即方案 B 的「自写薄适配」；<b>框架插件类</b>（vnpy_ctp）底层也封装同一套 C++ API，但额外捆进 vnpy 整套引擎（MainEngine + 事件引擎 + gateway 生命周期 + CtaTemplate 策略基类），<code>import vnpy_ctp</code> 即触发 <code>requires_dist=vnpy&gt;=3.0.0</code>、把整个 vnpy 拉起，无法当 <code>import ctp</code> 那样只取裸 API。</p>
+<p><b>约束收敛决策表</b>——本文档存在前提是「A 云中继治不了 otg 中转的固有滞后」（§1 原话：去掉 otg、选直连）。在用户已拍板<b>「不换交易引擎」</b>硬约束下，把方案空间按三维度（解决延迟 / 免费 / 不换引擎在范围内）收敛：</p>
+<table>
+<tr><th>方案</th><th>解决延迟？</th><th>免费？</th><th>在范围内（不换引擎）？</th><th>结论</th></tr>
+<tr><td>A. tqsdk 调参（云中继）</td><td>✗（失去直连意义）</td><td>✓</td><td>✓</td><td>出局</td></tr>
+<tr><td>B'. TqCtp 直连（天勤自带绑定）</td><td>✓</td><td>✗（企业版付费硬闸 <code>tq_direct</code>）</td><td>✓</td><td>你不用；但<b>付费即解锁</b>、改动面最小（仅抽 1 个账户构造钩子），属保留的最小改动直连路径</td></tr>
+<tr><td><b>B. 裸绑定 + 自写薄适配</b></td><td>✓</td><td>✓（绑定库均开源免费）</td><td>✓</td><td><b>在范围内且免费的唯一直连路</b></td></tr>
+<tr><td>vnpy_ctp（框架插件类，§9.13 N1）</td><td>✓</td><td>✓</td><td>✗（整包引入 vnpy 引擎，替掉 chan.py 自研引擎）</td><td>越界——范围/架构冲突，<b>非技术否决</b></td></tr>
+</table>
+<p class="meta">收敛结论：同时满足「不换引擎 / 免费 / A 无效」三约束时，<b>只有 B 留在桌面</b>。B 的「非主流」指「自写薄适配」这一层（§3.1 双层结论），是成熟度/生态风险定性，<b>非不可用</b>——openctp-ctp 是被广泛使用的成熟原生绑定，风险只在你自写那层适配，且 §9.13 N5 已把 vnpy_ctp 的 904 行 MIT 网关列为 B 适配层参考实现以压低风险。B' 与 vnpy_ctp 均非「永远没路」：B' 付费即解锁；vnpy_ctp 仅在放开「不换引擎」范围后才可考虑（届时本文档「引擎/对账/前端零改动」设计整体作废，工作量远不止 18 人日）。</p>
+<p><b>旁证：开源缠论库的实盘路线（czsc，GitHub waditu/czsc，master 分支源码核实）</b>——czsc 是 220+ 信号的缠论研究/回测库，其实盘下单走 <code>czsc/connectors/tq_connector.py</code>：<code>from tqsdk import BacktestFinished, TargetPosTask, TqAccount, TqApi, TqAuth, TqBacktest, TqKq, TqSim</code>，经 <code>create_symbol_trader()</code>（构造 <code>TargetPosTask</code>）+ <code>adjust_portfolio()</code>（<code>target_pos.set_target_volume(lots)</code> 后循环 <code>api.wait_update()</code>）下真单，<b>天勤后台再转发到 CTP</b>。其 <code>czsc/connectors/</code> 仅 4 个数据源文件（ccxt / local_data / tq / ts），<b>无 CTP 原生绑定</b>；<code>czsc/traders/</code> 仅有 <code>__init__.py</code>。即 czsc 的实盘 = 云中继（与方案 A 同源），且<b>刻意没做</b>「B. CTP 原生绑定 + 自写薄适配」——从另一个开源缠论库印证 §3.1 双层结论：开源量化库做实盘，主流是「框架网关（vnpy_ctp）」或「云中继（tqsdk）」，原生 CTP 绑定 + 自写薄适配（方案 B）确非主流；本项目因「不换引擎」约束，只能走 B 这支非主流但免费的直连。</p>
 <h2>4. 方案选型</h2>
 <table>
 <tr><th>方案</th><th>说明</th><th>优点</th><th>缺点</th><th>结论</th></tr>
@@ -465,6 +477,8 @@
 <tr><td class="num">N8</td><td>提示：接纳并已改</td><td>§9.13 N10 的 ctp-python BSD-2 出处改 GitHub raw LICENSE 文件（实测首行「BSD 2-Clause License, Copyright (c) 2019, Keli」；PyPI license 字段为空、classifier 无版本号，不能据此定 BSD-2）。</td></tr>
 </table>
 <p class="meta">本轮全部为文档层修订（无代码包）。<b>落地状态提醒（N1）</b>：v4 尚待应用到工作树——建议与 §1.1 步骤①上界法 + pulse(0)/pulse() 两档实测同场完成（评审下一步建议第 5 条），避免再次「文档说改了、实测没改」。</p>
+<h3>9.15 会话补充（2026-09-19）：约束收敛决策表 + 绑定定义 + czsc 旁证</h3>
+<p class="meta">本会话就「方案 B' 收费 / B 非主流 / 是否只剩 vnpy_ctp」连环质询，补三块内容（均文档层、无代码改动）：① §3.4 补「绑定（binding）」术语定义（CTP C++ 原生 API → Python 1:1 映射层；纯绑定类 vs 框架插件类）；② §3.4 新增「约束收敛决策表」——「不换交易引擎」硬约束下，A 出局 / B' 因付费出局（但付费即解锁）/ vnpy_ctp 因越界出局 / <b>仅 B 留桌</b>；③ §3.4 补 czsc（waditu/czsc，master 源码核实）旁证：其 220+ 信号缠论库实盘仅走 tqsdk 中继（<code>TargetPosTask</code>/<code>TqAccount</code>），无 CTP 原生绑定，印证 §3.1 双层结论。vnpy_ctp 与 A/B'/B 的归属关系 §9.13 N1 已落（框架插件类、不在三字母方案内），本节仅做收敛呈现。落地状态：设计文档补充，无交付包。</p>
 <h2>10. 验收标准与回退</h2>
 <table>
 <tr><th>项</th><th>标准</th></tr>

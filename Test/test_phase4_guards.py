@@ -177,16 +177,16 @@ ALIAS_PAIRS = [
     # (AppEngine 属性, app_data 内部字段属性)
     # _futures_analysis_cache 死别名已删除（AppEngine 不再持有），
     # 期货缓存仅经 app_data.futures_cache_* 公共 API 访问
-    ("_stocks_analysis_cache", "stocks_analysis_cache"),
+    ("_stocks_analysis_cache", "stocks_analysis_cache_raw_unsafe"),
     ("_stocks_cache_lock",            "stocks_cache_lock"),
     # P3：以下四条死别名已从 AppEngine 删除（本模块零引用），故一并从本
     # 清单移除。它们不是"无用赋值"，而是**指向共享可变容器的模块级入口**
     # ——留着等于给"绕开锁直接全表遍历"留现成把手（指导书形态②）。
     # 保留注释是为了防止有人照着旧条目把它们加回来。
-    #   _stock_names_cache   (names_cache)
-    #   _pe_ttm_cache        (pe_cache)
-    #   _index_belong_cache  (belong_cache)
-    #   _saved_point_times   (saved_point_times)
+    #   _stock_names_cache   (names_cache → names_cache_raw_unsafe)
+    #   _pe_ttm_cache        (pe_cache → pe_cache_raw_unsafe)
+    #   _index_belong_cache  (belong_cache → belong_cache_raw_unsafe)
+    #   _saved_point_times   (saved_point_times → saved_point_times_raw_unsafe)
     # AppRefresh._stock_names_cache 仍在用（仅判空），不受影响。
 ]
 
@@ -269,15 +269,16 @@ def test_no_state_bypass(failures):
 # 收尾：红框/期货选点路径对期货子窗缓存的读写全部经
 # futures_cache_get/put/pop（语义化 set/get/pop_futures_sub_chan）；
 # 股票分析缓存删除经 cache_remove（内部持锁）。本守护封禁服务层对
-# app_data.futures_analysis_cache / stocks_analysis_cache 的直改直读复活
+# app_data.futures_analysis_cache_raw_unsafe /
+# stocks_analysis_cache_raw_unsafe 的直改直读复活
 # （AppEngine 模块级别名与 AppData 自身实现不受限）。
 _DIRECT_CACHE_PATTERNS = [
-    "app_data.futures_analysis_cache[",
-    "app_data.futures_analysis_cache.get(",
-    "app_data.futures_analysis_cache.pop(",
-    "app_data.stocks_analysis_cache[",
-    "app_data.stocks_analysis_cache.get(",
-    "app_data.stocks_analysis_cache.pop(",
+    "app_data.futures_analysis_cache_raw_unsafe[",
+    "app_data.futures_analysis_cache_raw_unsafe.get(",
+    "app_data.futures_analysis_cache_raw_unsafe.pop(",
+    "app_data.stocks_analysis_cache_raw_unsafe[",
+    "app_data.stocks_analysis_cache_raw_unsafe.get(",
+    "app_data.stocks_analysis_cache_raw_unsafe.pop(",
     "app_data.stocks_cache_lock",  # 手工持锁直改 → 应经 cache_remove（内部持锁）
 ]
 _DIRECT_CACHE_FILES = [
@@ -451,7 +452,7 @@ def test_startup_and_lru(failures):
 
     # 启动加载：实例化即完成选点/标注加载（与原 import 期行为一致）
     from App import AppEngine as m
-    if not isinstance(app_data.saved_point_times, dict):
+    if not isinstance(app_data.saved_point_times_raw_unsafe, dict):
         bad.append("saved_point_times 启动加载缺失（非 dict）")
     if not app_data._annotations_loaded:
         bad.append("annotations 启动加载缺失（_annotations_loaded=False）")

@@ -211,7 +211,7 @@ from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 # 区域 2 · 数据委托层
 # ═══════════════════════════════════════════════════════════════════════
 
-# 已删 _stock_names_cache = app_data.names_cache
+# 已删 _stock_names_cache = app_data.names_cache_raw_unsafe
 # 死别名——本模块零引用。它不是"无害的一行赋值"：它把**共享可变
 # 容器**挂在模块级名字上，任何人照着写一句 `_stock_names_cache.keys()` 就
 # 绕过 app_data 的锁直接全表遍历（指导书形态②）。已改为按需调用
@@ -235,8 +235,8 @@ def _safe_write_json_file(path, data, *, ensure_ascii=False, indent=None):
 # ============================================================
 # PE-TTM / 指数归属缓存（实现位于 App/AppData.py）
 # ============================================================
-# 已删 _pe_ttm_cache = app_data.pe_cache
-#          _index_belong_cache = app_data.belong_cache
+# 已删 _pe_ttm_cache = app_data.pe_cache_raw_unsafe
+#          _index_belong_cache = app_data.belong_cache_raw_unsafe
 # 两条都是死别名（本模块零引用）。删它们的理由同上面的
 # _stock_names_cache——不是清理无用代码，是**拆掉一个指向共享容器的公开
 # 入口**。读取一律走 app_data.get_pe_ttm() / get_index_belong() 点查，
@@ -312,7 +312,10 @@ def _collect_codes_from_vipdoc(vipdoc_dir):
 
 
 # 统一缓存（实现与状态在 App/AppData.py；别名共享同一对象）
-_stocks_analysis_cache = app_data.stocks_analysis_cache   # 分析结果 LRU
+# N2 收口：本体出口已改名 `*_raw_unsafe`（AppData.py「状态出口」段）。本别名
+# 是 RAW_EXIT_ALLOWLIST 登记过的引用；全部使用点要么在 `with _stocks_cache_lock:`
+# 内，要么是无锁的原子点查（`in`）。
+_stocks_analysis_cache = app_data.stocks_analysis_cache_raw_unsafe   # 分析结果 LRU
 _stocks_cache_lock = app_data.stocks_cache_lock            # 保护缓存的并发读写（= app_data._stocks_cache_lock）
 
 # 扫描与冷启动共用同一个 _stocks_analysis_cache，由 LRU 50 条统一管理
@@ -361,7 +364,7 @@ SAVED_POINT_COLUMNS = AppData_SAVED_POINT_COLUMNS
 FREQ_TO_COL = AppData_FREQ_TO_COL
 
 
-# 已删 _saved_point_times = app_data.saved_point_times
+# 已删 _saved_point_times = app_data.saved_point_times_raw_unsafe
 # 死别名（本模块零引用）。选点时间一律经
 # app_data.get_saved_point_time() 读取。
 

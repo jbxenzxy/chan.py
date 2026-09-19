@@ -198,7 +198,12 @@ def _get_saved_point(code, freq):
     col = app_data.freq_to_col(freq)
     if not col:
         return ""
-    return app_data.saved_point_times.get(code, {}).get(col, "").strip()
+    # N2 收口：原为 `saved_point_times.get(code, {}).get(col, "")` 的**无锁
+    # 两步读**（get_saved_point_time 的 docstring 里记的 check-then-act 窗口
+    # 是同型缺陷），写者 save_point_time / clear_saved_point_time 持
+    # _user_store_lock，可在两步之间改表。get_saved_point_time 是加锁单步
+    # 出口、语义等价（无条目返回 ""），故此处不再引用裸出口。
+    return app_data.get_saved_point_time(code, col)
 
 
 def _sse_frame(event, payload) -> bytes:

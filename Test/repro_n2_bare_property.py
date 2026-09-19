@@ -1,21 +1,30 @@
 # -*- coding: utf-8 -*-
-"""N2 复现：AppData 8 个裸 @property 违反「快照契约」的确定性交错。
+"""N2 复现：AppData 裸 @property 违反「快照契约」的确定性交错。
 
 指导书「快照契约」/ 附录 N2。
-裸出口本身不是 bug，但它把「必须走 snapshot」的契约变成了纯口头约定——
-本脚本用一次确定性交错证明：任何一个下游照直觉写下 `for k in d`，
-竞态就立刻成立，且有两种后果（崩溃 / 静默串读）。
 
-按维度 8.4 要求，本脚本先自证能检出该已知问题（确定性命中，非靠运气）。
+【N2 已收口 —— 方案 b】8 个可变容器出口一律改名 `*_raw_unsafe`（命名自带
+告警），并由 `Test/test_lock_completeness.py` §⑥ **默认拒绝**任何未登记的
+引用（新增引用 = 立即失败）。故本脚本的职责从「报告缺陷」转为**钉死收口**：
+
+  ① 自证（故意走裸出口）：证明「裸出口 + 遍历」的竞态是真实存在的
+     —— 这是**为什么**要给它加 `_raw_unsafe` 后缀、为什么要默认拒绝的实证；
+     命中是**预期**的，不是失败。
+  ② 对照（走 names_snapshot()）：证明正门不受影响。
+  ③ 收口断言：旧名 `app_data.names_cache` 必须已消失，新名必须存在。
+
+为什么不做方案 a（property 返回快照）——已由实验否掉，见
+`Test/test_lock_completeness.py` 的 PROP_CONTRACT 段：「把某个 cache 出口改成
+`return dict(self._pe)` 后，本检查反而"通过"了」（自动推导判据失效）；
+且下游 `_stock_names_cache` 别名靠 `replace_names` 的「同对象 clear()+update()」
+拿零漂移，返回快照会让别名永远读到旧表——**静默失效，不报错**。
 
 运行：把本文件放在仓库 Test/ 下，在仓库根目录执行
     python Test/repro_n2_bare_property.py
 
 退出码（与 repro_n3 同一门禁语义）：
-    0 = 未命中（N2 已修复，可安全接入 CI）
-    1 = 命中（裸出口竞态仍在）
-⚠ 本脚本当前**命中**，故未注册进 Test/run_all.py 的强门禁——一旦 N2
-  收口完成（方案 a 或 b），退出码自然转 0，届时需补注册。
+    0 = N2 收口成立（旧名消失 + 快照对照安全 + 竞态自证仍可检出）
+    1 = 收口被破坏（旧名复活 / 快照对照失效 / 自证失效）
 """
 import sys
 import threading
@@ -26,6 +35,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from App.AppData import app_data  # noqa: E402
+
+# N2 收口后的出口名（自证用；本引用已在
+# Test/test_lock_completeness.py :: RAW_EXIT_ALLOWLIST 登记）
+RAW_EXIT = "names_cache_raw_unsafe"
+OLD_EXIT = "names_cache"
 
 
 def _make_names(n, tag):
@@ -46,7 +60,7 @@ def run_case(iterate_directly: bool):
     # 准备初始表：300 条
     with app_data._meta_cache_lock:
         app_data._names = _make_names(300, "A")
-    exposed = app_data.names_cache          # ← 裸出口：拿到的是共享本体
+    exposed = getattr(app_data, RAW_EXIT)   # ← 裸出口：拿到的是共享本体
 
     def writer():
         # 等读者已进入遍历，再在遍历中途 clear()+update()（与刷新线程
@@ -90,34 +104,47 @@ def run_case(iterate_directly: bool):
 
 def main():
     print("=" * 64)
-    print("N2 复现：裸 @property（names_cache）的遍历竞态（确定性交错）")
+    print("N2 复现：裸 @property 的遍历竞态 + 收口断言（出口已改名）")
     print("=" * 64)
 
     # ── 自证（维度 8.4）：先证明本脚本必然能检出该问题 ──
     errs = run_case(iterate_directly=True)
     hit = errs and errs[0] != "NO_HIT"
     print(f"\n[自证] 裸出口直接遍历：{errs[0] if errs else '(无输出)'}")
-    print(f"  → 竞态{'命中 ✅（脚本具备检出能力）' if hit else '未命中（提高迭代条数或重跑）'}")
+    print("  → 竞态" + ("命中 ✅（裸出口确实危险，故须 *_raw_unsafe + 默认拒绝）"
+                        if hit else "未命中（提高迭代条数或重跑）"))
 
     # ── 对照组：走 snapshot 的正门 ──
     errs2 = run_case(iterate_directly=False)
     safe = errs2 and errs2[0] == "NO_HIT"
     print(f"\n[对照] names_snapshot() 快照遍历：{'未受影响 ✅' if safe else errs2}")
 
-    # 门禁语义：命中（缺陷仍在）→ 1；未命中（已修复）→ 0
+    # ── 收口断言：旧名必须消失、新名必须在位 ──
+    old_gone = not hasattr(app_data, OLD_EXIT)
+    new_ok = hasattr(app_data, RAW_EXIT)
+    print(f"\n[收口] 旧名 app_data.{OLD_EXIT} 已消失："
+          f"{'✅' if old_gone else '❌（仍在——收口被回退）'}")
+    print(f"[收口] 新名 app_data.{RAW_EXIT} 在位："
+          f"{'✅' if new_ok else '❌（缺失）'}")
+
+    # ── 门禁语义：自证命中 + 对照安全 + 旧名消失 = 收口成立 ──
     print()
-    if hit:
-        print("结论：N2 裸出口竞态仍在 —— 8 个 @property（AppData.py "
-              "L1465-1500 区段）")
-        print("      仍把「必须经 snapshot 访问」的契约押在人的自觉上。")
-        print("      修复方向二选一：")
-        print("        a) property 改为返回快照/不可变视图")
-        print("           （需核对下游是否有就地写）；")
-        print("        b) 本体出口改名 xxx_raw_unsafe + AST 扫描禁止下游引用")
-        print("           （并入 test_lock_completeness 防回潮）。")
-        return 1
-    print("结论：N2 已收口（裸出口不再暴露本体 / 下游已禁止直引）。")
-    return 0
+    if hit and safe and old_gone and new_ok:
+        print("结论：N2 已收口 —— 8 个可变容器出口一律 `*_raw_unsafe`，契约由")
+        print("      Test/test_lock_completeness.py §⑥ 默认拒绝扫描兜底；")
+        print("      遍历的正门仍是 names_snapshot() / pe_snapshot() / "
+              "belong_snapshot()。")
+        return 0
+    print("结论：N2 收口被破坏 ——")
+    if not hit:
+        print("      · 自证未命中：本脚本已失去检出能力（迭代条数/时序需复核）")
+    if not safe:
+        print("      · 对照失效：names_snapshot() 被并发写影响（快照契约破了）")
+    if not old_gone:
+        print(f"      · 旧裸出口 app_data.{OLD_EXIT} 复活")
+    if not new_ok:
+        print(f"      · 收口后的出口 app_data.{RAW_EXIT} 缺失")
+    return 1
 
 
 if __name__ == "__main__":

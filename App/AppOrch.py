@@ -204,7 +204,7 @@ SHARED_RESOURCE_REGISTRY = {
         "与用户态文件写共用）。属「登记表挂名不实」——条目在，覆盖面不对。"
         "读侧 get_float_mc_from_cache / float_mc_cache_stale 为无锁点查，"
         "按本项目既定标准（点查在 CPython 下原子）可接受；但**遍历**须先"
-        "取快照，勿直接碰 float_mc_cache 裸出口。"),
+        "取快照，勿直接碰 float_mc_cache_raw_unsafe 裸出口。"),
     "scan_skip_log（已下沉为每次扫描私有）": (
         "每任务局部", "AppScan._ScanSession.lock（经 append/clear/snapshot/count 访问器，按 scan_token 定位）",
         "REST / 扫描收割线程",

@@ -19,7 +19,7 @@ v6 版只认形态 ①，另外两种整片在视野外——AppRefresh.py 那�
 不带 `self.`，形态 ① 的扫描器根本看不见。
 
   ① 实例字段      `self._names`                  + `with self._meta_cache_lock:`
-  ② 模块级别名    `_pe_ttm_cache = app_data.pe_cache`
+  ② 模块级别名    `_pe_ttm_cache = app_data.pe_cache_raw_unsafe`
                   之后全程不带 `self.`，绕开形态 ①
   ③ 跨模块守卫    `with app_data.stocks_sub_chan_guarded(...):`
                   锁由 AppData 侧的 @contextmanager 持有，本模块看不见
@@ -90,21 +90,22 @@ FIELD_LOCK = {
 ALLOWLIST = {
     "__init__": "单例构造，import 期单线程执行，不存在并发",
 
-    # 9 个「裸出口」property：下游已绑成模块级别名（AppEngine/AppRefresh/
-    # AppScan），**不能**改成返回快照——那会破坏刷新线程 replace_names
-    # 「同对象清空+灌入」的零漂移语义（别名将永远读到旧表）。
-    # 契约：点查（.get / `in`）在 CPython 下原子，允许；**遍历必须**改用
-    # names_snapshot() / pe_snapshot() / belong_snapshot() / annotations
-    # 快照。§根因一。
-    "stocks_analysis_cache": "裸出口 property：仅点查用，遍历须走快照方法",
-    "futures_analysis_cache": "裸出口 property：仅点查用，遍历须走快照方法",
-    "names_cache": "裸出口 property：仅点查用，遍历须走 names_snapshot()",
-    "pe_cache": "裸出口 property：仅点查用，遍历须走 pe_snapshot()",
-    "belong_cache": "裸出口 property：仅点查用，遍历须走 belong_snapshot()",
-    "float_mc_cache": "裸出口 property：仅点查用",
+    # 8 个「裸出口」property：N2 收口后一律以 `_raw_unsafe` 结尾（命名自带
+    # 告警），最新引用清单见本文件 §⑥ RAW_EXIT_ALLOWLIST。它们返回的是内部
+    # 本体**活引用**，**不能**改成返回快照——那会破坏刷新线程 replace_names
+    # 「同对象清空+灌入」的零漂移语义（别名将永远读到旧表，静默失效）。
+    # 契约：点查（.get / `in` / 真值测试）在 CPython 下原子，允许；**遍历
+    # 必须**改用 names_snapshot() / pe_snapshot() / belong_snapshot() /
+    # get_annotated_codes() / get_saved_point_time()。§根因一 + N2。
+    "stocks_analysis_cache_raw_unsafe": "裸出口 property：仅点查用，遍历须走快照方法",
+    "futures_analysis_cache_raw_unsafe": "裸出口 property：仅点查用，遍历须走快照方法",
+    "names_cache_raw_unsafe": "裸出口 property：仅点查用，遍历须走 names_snapshot()",
+    "pe_cache_raw_unsafe": "裸出口 property：仅点查用，遍历须走 pe_snapshot()",
+    "belong_cache_raw_unsafe": "裸出口 property：仅点查用，遍历须走 belong_snapshot()",
+    "float_mc_cache_raw_unsafe": "裸出口 property：仅点查用",
     "float_mc_loaded": "裸出口 property：标量读，CPython 下原子",
-    "saved_point_times": "裸出口 property：仅点查用（读走 get_saved_point_time）",
-    "annotations_cache": "裸出口 property：仅点查用，遍历走 get_annotated_codes",
+    "saved_point_times_raw_unsafe": "裸出口 property：仅点查用（读走 get_saved_point_time）",
+    "annotations_cache_raw_unsafe": "裸出口 property：仅点查用，遍历走 get_annotated_codes",
 
     # 点查（dict.get）在 CPython 下是原子的，无需加锁
     "get_stock_name": "self._names.get() 点查，原子",
@@ -193,7 +194,7 @@ def _shared_key(node, alias_names):
 
     两种写法都算：
       · 模块级别名               `_pe_ttm_cache`
-      · 直接点 app_data 的出口    `app_data.pe_cache`
+      · 直接点 app_data 的出口    `app_data.pe_cache_raw_unsafe`
     只认前者会漏掉「不绑别名、就地用」的写法。
     """
     if isinstance(node, ast.Name) and node.id in alias_names:
@@ -332,7 +333,7 @@ def _scan_module_aliases_abs(path):
                 alias_field[tg.id] = PROP_FIELD[val.attr]
             elif val.attr in LOCK_PROP:
                 lock_alias[tg.id] = LOCK_PROP[val.attr]
-    # 注意：**不能**因为本模块没绑别名就跳过——`app_data.pe_cache` 这类
+    # 注意：**不能**因为本模块没绑别名就跳过——`app_data.pe_cache_raw_unsafe` 这类
     # 「不绑别名、就地用」的写法同样要扫（_shared_key 认这两种形态）。
 
     alias_names = set(alias_field)
@@ -404,7 +405,8 @@ def _scan_module_aliases_abs(path):
 #   自动推导的判据是「函数体为 `return self._字段`」。一旦有人把某个出口
 #   改成返回副本，它就**不再满足判据、直接从被检查集合里消失**，检查结果
 #   只会从 12 条静默缩到 11 条——检查本身被绕过了。（这是自证用例实测出来
-#   的：把 pe_cache 改成 `return dict(self._pe)` 后，本检查反而"通过"了。）
+#   的：把某个 cache 出口改成 `return dict(self._pe)` 后，本检查反而
+#   "通过"了。）
 #   故这里钉死一份基线，双向比对：少一个、多一个、内容不对，都算失败。
 #
 # 语义：这些出口的存在理由见 ALLOWLIST——下游把它们绑成模块级别名，靠
@@ -412,15 +414,15 @@ def _scan_module_aliases_abs(path):
 # 旧表，而刷新线程 replace_names 的零漂移语义随之失效。这类改动不报错，
 # 只会让数据静默过期，属于最难查的那一类。
 PROP_CONTRACT = {
-    "stocks_analysis_cache": "_stocks_analysis_cache",
-    "futures_analysis_cache": "_futures_analysis_cache",
-    "names_cache": "_names",
-    "pe_cache": "_pe",
-    "belong_cache": "_belong",
-    "float_mc_cache": "_float_mc",
+    "stocks_analysis_cache_raw_unsafe": "_stocks_analysis_cache",
+    "futures_analysis_cache_raw_unsafe": "_futures_analysis_cache",
+    "names_cache_raw_unsafe": "_names",
+    "pe_cache_raw_unsafe": "_pe",
+    "belong_cache_raw_unsafe": "_belong",
+    "float_mc_cache_raw_unsafe": "_float_mc",
     "float_mc_loaded": "_float_mc_loaded",
-    "saved_point_times": "_saved_point_times",
-    "annotations_cache": "_annotations",
+    "saved_point_times_raw_unsafe": "_saved_point_times",
+    "annotations_cache_raw_unsafe": "_annotations",
     "stocks_cache_lock": "_stocks_cache_lock",
     "futures_cache_lock": "_futures_cache_lock",
     "user_store_lock": "_user_store_lock",
@@ -508,6 +510,121 @@ def _check_scan_skip_session():
     return sorted(set(bad))
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ⑥ 裸出口默认拒用（N2 收口：把「遍历走快照」的契约从注释升级为默认拒绝）
+# ══════════════════════════════════════════════════════════════════════
+# 背景：`AppData` 的 8 个可变容器出口返回的是**内部本体活引用**（不是快照），
+# 因为下游刷新侧靠「同对象 clear()+update()」拿零漂移；但这样一来，谁拿到它
+# 都能在无锁状态下改它、或边遍历边被改。原状态是「靠 ALLOWLIST 注释 + 形态②
+# 的启发式非原子判定」——拦不住「换个没用过的容器方法」「先转手再遍历」这类。
+#
+# 收口办法：出口名统一加 `_raw_unsafe` 后缀（命名自带告警），并在此**默认拒绝**
+# 任何引用——除白名单里登记的这 3 处，全仓（含新增模块）任何地方出现
+# `*_raw_unsafe` 都是失败。要新增引用，必须先在这里写下理由。
+_RAW_EXIT_SUFFIX = "_raw_unsafe"
+
+# 由 PROP_CONTRACT 派生，避免两处维护漂移（新增裸出口必须先进 PROP_CONTRACT，
+# 而 _check_bare_property_contract 的 `extra` 分支会强制这一点）
+RAW_EXIT_NAMES = {k for k in PROP_CONTRACT if k.endswith(_RAW_EXIT_SUFFIX)}
+RAW_EXIT_EXPECTED_N = 8
+
+# (模块文件名, 引用所在函数名 or "<module>") → 为什么这里可以引用
+RAW_EXIT_ALLOWLIST = {
+    ("AppEngine.py", "<module>"):
+        "分析结果 LRU 别名；全部使用点要么持 _stocks_cache_lock，要么是原子点查（in）",
+    ("AppRefresh.py", "<module>"):
+        "股名别名；只做判空（真值测试原子），遍历走 app_data.names_snapshot()",
+    ("AppScan.py", "<module>"):
+        "股名别名；只做 .get() 点查（CPython 下原子），不遍历",
+    ("repro_n2_bare_property.py", "<module>"):
+        "N2 自证用例：**故意**走裸出口，用来证明遍历竞态真实存在（对照组走快照）",
+    ("test_phase4_guards.py", "test_startup_and_lru"):
+        "启动加载断言：只对选点表做 isinstance(dict) 检查（原子），不遍历不修改",
+}
+
+
+def _iter_attrs_with_owner(tree):
+    """产出 (归属符号名, Attribute 节点)；归属 = 最近的函数名，顶层为 <module>"""
+    out = []
+
+    def walk(node, owner):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for ch in ast.iter_child_nodes(node):
+                walk(ch, node.name)
+            return
+        if isinstance(node, ast.Attribute):
+            out.append((owner, node))
+        for ch in ast.iter_child_nodes(node):
+            walk(ch, owner)
+
+    walk(tree, "<module>")
+    return out
+
+
+def _scan_raw_exit_refs():
+    """默认拒绝：除白名单外，全仓不得出现 `*_raw_unsafe` 出口引用。
+
+    为什么扫**全仓**而不是那 9 个 SCAN_MODULES：新增模块（哪怕是新的服务层
+    文件）拿到裸出口，正是 N2 要防的那种「新写的直觉代码」。漏一个目录就
+    系统性失守，故覆盖面宁可大。
+    排除两处：本文件（校验器自身要写这些名字）与 AppData.py（出口定义处）。
+    """
+    bad = []
+    self_base = os.path.basename(__file__)
+    appdata_rel = os.path.relpath(_APPDATA, _REPO_ROOT).replace(os.sep, "/")
+    for dp, dn, fn in os.walk(_REPO_ROOT):
+        dn[:] = [d for d in dn
+                 if d not in ("__pycache__", ".git", ".venv", "node_modules")]
+        for f in fn:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(dp, f)
+            rel = os.path.relpath(path, _REPO_ROOT).replace(os.sep, "/")
+            base = os.path.basename(path)
+            if base == self_base or rel == appdata_rel:
+                continue
+            try:
+                tree = ast.parse(open(path, encoding="utf-8").read())
+            except (SyntaxError, OSError):
+                continue
+            for owner, node in _iter_attrs_with_owner(tree):
+                if node.attr not in RAW_EXIT_NAMES:
+                    continue
+                if (base, owner) in RAW_EXIT_ALLOWLIST:
+                    continue
+                bad.append((rel, node.lineno, owner, node.attr))
+    return sorted(bad)
+
+
+def _selfcheck_raw_exit():
+    """§⑥ 扫描器自证：喂真实文件，证「该报的报、该放的放」"""
+    out = []
+    probe = os.path.join(_HERE, "_selftest_raw_exit_probe.py")
+    name = sorted(RAW_EXIT_NAMES)[0] if RAW_EXIT_NAMES else "names_cache_raw_unsafe"
+    src = ('# -*- coding: utf-8 -*-\n'
+           'from App.AppData import app_data\n'
+           '\n'
+           'def sneaky_iterate():\n'
+           '    return [k for k in app_data.%s]\n' % name)
+    try:
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write(src)
+        got = [(o, a) for _r, _l, o, a in _scan_raw_exit_refs()
+               if _r.endswith("_selftest_raw_exit_probe.py")]
+        out.append((got == [("sneaky_iterate", name)],
+                    f"§⑥ 端到端抓到未登记引用 {got}"
+                    f"（期望 [('sneaky_iterate', '{name}')]）"))
+    finally:
+        if os.path.exists(probe):
+            os.remove(probe)
+
+    # 白名单里的 3 处真实文件必须**不被**误报（否则护栏自身会假红）
+    real = _scan_raw_exit_refs()
+    out.append((not real, f"§⑥ 白名单内 {len(RAW_EXIT_ALLOWLIST)} 处引用零误报"
+                          f"（残留 {real}）"))
+    return out
+
+
 def main():
     results = []
 
@@ -576,6 +693,27 @@ def main():
     for ok, msg in selfcheck:
         results.append(f"[{'PASS' if ok else 'FAIL'}] 扫描器自证：{msg}")
 
+    # ⑥ 裸出口默认拒用（N2 收口）
+    raw_bad = _scan_raw_exit_refs()
+    if len(RAW_EXIT_NAMES) != RAW_EXIT_EXPECTED_N:
+        results.append(
+            f"[FAIL] 裸出口数量 {len(RAW_EXIT_NAMES)} != 基线 {RAW_EXIT_EXPECTED_N}"
+            f"：{sorted(RAW_EXIT_NAMES)}——出口被删/改名/去后缀都会让默认拒绝"
+            f"扫描静默缩水，必须同步 PROP_CONTRACT 与本基线")
+    if raw_bad:
+        for rel, lineno, owner, attr in raw_bad:
+            results.append(
+                f"[FAIL] 裸出口越权引用 {rel}:{lineno} {owner} → .{attr}"
+                f"（须先登记进 RAW_EXIT_ALLOWLIST 并写明理由；"
+                f"否则请改用加锁快照出口 names_snapshot() 等）")
+    elif len(RAW_EXIT_NAMES) == RAW_EXIT_EXPECTED_N:
+        results.append(
+            f"[PASS] 裸出口默认拒用：{len(RAW_EXIT_NAMES)} 个 `*_raw_unsafe` 出口"
+            f"仅被 {len(RAW_EXIT_ALLOWLIST)} 处登记引用，全仓无越权引用")
+
+    for ok, msg in _selfcheck_raw_exit():
+        results.append(f"[{'PASS' if ok else 'FAIL'}] 扫描器自证：{msg}")
+
     print("\n".join(results))
     failed = [r for r in results if r.startswith("[FAIL]")]
     print(f"\n合计: {len(results) - len(failed)} 通过 / {len(failed)} 失败")
@@ -605,7 +743,7 @@ def _selfcheck():
     out = []
     sample = """
 import app_data
-_A = app_data.names_cache          # 形态②：共享别名
+_A = app_data.names_cache_raw_unsafe    # 形态②：共享别名（N2 收口后就叫这个）
 
 def f_locked_ok():
     with app_data.stocks_sub_chan_guarded("a", "5m"):   # 形态③
@@ -639,9 +777,9 @@ def f_bare_iter():                  # 应被判违规
 """自证探针（临时文件，扫完即删）——故意放三种形态的违规与正例"""
 from App.AppData import app_data
 
-_pe_alias = app_data.pe_cache          # 形态②：共享别名
-_names_alias = app_data.names_cache
-_cache_alias = app_data.stocks_analysis_cache
+_pe_alias = app_data.pe_cache_raw_unsafe            # 形态②：共享别名
+_names_alias = app_data.names_cache_raw_unsafe
+_cache_alias = app_data.stocks_analysis_cache_raw_unsafe
 _ck_lock = app_data.stocks_cache_lock  # 锁别名
 
 

@@ -114,11 +114,9 @@ class _TraderProc:
     def running(self) -> bool:
         if self.proc is not None and self.proc.poll() is not None:
             return False
-        try:
-            os.kill(self.pid, 0)
-            return True
-        except OSError:
-            return False
+        # 必须走 _pid_alive：Windows 上 os.kill(pid, 0) 不是存活探测，
+        # 而是「向该 pid 所在进程组投递一次 Ctrl+C」（见 _pid_alive 注释）。
+        return _pid_alive(self.pid)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -1144,15 +1142,52 @@ class AppTrader:
 
 
 def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
+    """pid 是否仍在运行（只查询，绝不产生副作用）。
+
+    ⚠ Windows 上**不能**用 `os.kill(pid, 0)` 做存活探测：`signal.CTRL_C_EVENT`
+    的值就是 0，CPython 的 `os.kill` 在 Windows 上遇到 0/1 会走
+    `GenerateConsoleCtrlEvent` 分支 —— 于是这句"探测"实际是**给该 pid 所在的
+    进程组投递一次 Ctrl+C**：
+
+      · pid > 0：该进程若属于控制台的默认进程组，则**同组所有进程**（含父进程、
+        控制台里的宿主 shell）都收到 CTRL_C_EVENT，上层 Python 抛
+        KeyboardInterrupt 被打断；
+      · pid == 0：直接**广播给整个控制台**，宿主一起遭殃。
+
+    而调用方通常是 `CREATE_NEW_PROCESS_GROUP` 起的子进程（Ctrl+C 被禁用），
+    它自己毫发无伤 —— 症状就是"某个用例一跑，跑测试/跑服务的那个进程莫名收到
+    Ctrl+C 并中断"。故 Windows 一律走 OpenProcess 纯查询。
+    """
+    if pid <= 0:
         return False
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    SYNCHRONIZE = 0x00100000
+    WAIT_TIMEOUT = 0x00000102      # WaitForSingleObject 超时 = 进程还活着
+    kernel32 = ctypes.windll.kernel32
+    handle = kernel32.OpenProcess(SYNCHRONIZE, False, int(pid))
+    if not handle:
+        return False
+    try:
+        return kernel32.WaitForSingleObject(handle, 0) == WAIT_TIMEOUT
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _send_signal_best_effort(handle, sig) -> bool:
-    """对子进程发信号，尽力而为（Popen.send_signal 优先，失败退回 os.kill）。"""
+    """对子进程发信号，尽力而为（Popen.send_signal 优先，失败退回 os.kill）。
+
+    Windows 上 0/1 不是普通信号：`Popen.send_signal` → `os.kill` 会把它们变成
+    CTRL_C_EVENT / CTRL_BREAK_EVENT 投给目标进程组（0 更是整控制台广播），
+    这里直接拒绝，避免"想强杀却打断了自己"。
+    """
+    if os.name == "nt" and sig in (0, 1):
+        return False
     proc = getattr(handle, "proc", None)
     if proc is not None:
         try:

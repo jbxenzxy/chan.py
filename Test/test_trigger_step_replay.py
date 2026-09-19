@@ -28,6 +28,7 @@ if not hasattr(typing, "Self"):
 
 from Test.snapshot_runner import (
     install_data_source, isolate_side_effects, normalize, SNAPSHOT_DIR,
+    _seed_reference,
 )
 from Test import comparator
 from Test.gen_fixtures import load_records
@@ -37,42 +38,11 @@ FIXTURE = "stock_day.json"
 ANCHOR_OFFSET = 60          # 锚点：倒数第 60 根
 STEPS = [0, -1, -5, -20]    # 回放偏移序列（0=锚定当天）
 
-# 参考数据源（股票名称 / PE-TTM）由 app_data 从 *gitignored* 的本地缓存文件
-# （App/stock_names.json、App/stock_pettm_index.json）加载；干净检出下这些文件
-# 不存在，get_stock_name 退化为 market+code、get_pe_ttm 退化为 None，导致冻结
-# 基线（期望 贵州茅台 / 20.0）对比失败。为使快照在任意干净检出下可复现，这里
-# 注入与冻结基线一致的确定性参考表（属元数据，非 trigger_step 回放算法被测对象）。
-_REF_MARKET = "sh"
-_REF_CODE = "600519"
-_REF_COMPOUND = f"{_REF_MARKET}{_REF_CODE}"
-
-
-def _seed_reference():
-    """注入确定性 name / pe_ttm / index_belong 参考表，返回 restore_fn（隔离全局副作用）。"""
-    from App.AppData import app_data
-    saved = {
-        "_names": app_data._names,
-        "_pe": app_data._pe,
-        "_belong": app_data._belong,
-        "_names_loaded": app_data._names_loaded,
-        "_pe_loaded": app_data._pe_loaded,
-        "_belong_loaded": app_data._belong_loaded,
-    }
-    app_data._names = {_REF_COMPOUND: {"name": "贵州茅台", "market": _REF_MARKET}}
-    app_data._pe = {_REF_COMPOUND: 20.0}
-    app_data._belong = {_REF_COMPOUND: "沪深300"}
-    app_data._names_loaded = True
-    app_data._pe_loaded = True
-    app_data._belong_loaded = True
-
-    def restore():
-        app_data._names = saved["_names"]
-        app_data._pe = saved["_pe"]
-        app_data._belong = saved["_belong"]
-        app_data._names_loaded = saved["_names_loaded"]
-        app_data._pe_loaded = saved["_pe_loaded"]
-        app_data._belong_loaded = saved["_belong_loaded"]
-    return restore
+# 参考数据源注入统一由 Test/snapshot_runner._seed_reference 提供（**单一来源**）。
+# 这里原本复制了一份副本，两份分叉正是「AppEngine 同一个 include_extra 块产出的
+# 展示性 meta（name / pe_ttm / index_belong / reduction）在快照回归里刷了基线、
+# 在 trigger_step 回放里漏刷」这类假红的成因 —— 修复必须同时覆盖两个入口。
+# 改为 import 后打桩逻辑只有一处：以后再新增展示性字段，不会再只修一半。
 
 
 def _run(end_date=None, step=None):
@@ -81,13 +51,14 @@ def _run(end_date=None, step=None):
     # 隔离 STOCKS_LOOKBACK_CONFIG（K线回看窗口是 AppConfig 运行时配置，用户可
     # 随时放大/缩小，属可变基础设施而非本测试的被测对象）：
     # 本测试验证 trigger_step 回放算法的一致性，须在「不截断」口径下对比——
-    # 若窗口 bars 小于夹具长度（如 d=472 < 500 根夹具），全量基准会先丢掉最旧
+    # 若窗口 bars 小于夹具长度（如 d=488 < 500 根夹具），全量基准会先丢掉最旧
     # 的K线，而回放（≤锚点，仅 440 根）反而保留了它们，「回放⊆全量」的收敛
     # 契约会因数据左边界错位而结构性失效（与回放算法本身无关）。
-    # 窗口截断行为已由 snapshot_regression 的冻结基线覆盖，无需在此重复校验。
+    # 另见 snapshot_runner.isolate_side_effects：两个快照入口统一按「不截断」
+    # 口径采集，窗口由测试自己拥有，不随 AppConfig 默认值 / 环境变量漂移。
     saved_lookback = m.STOCKS_LOOKBACK_CONFIG
     m.STOCKS_LOOKBACK_CONFIG = {}
-    restore_ref = _seed_reference()   # 注入确定性参考表（详见 _seed_reference）
+    restore_ref = _seed_reference()   # 注入确定性参考表（实现见 snapshot_runner._seed_reference）
     try:
         return m._analyze_stock_internal(
             "600519", freq="d", end_date=end_date, cache_chan=False, step=step)
@@ -133,7 +104,7 @@ def main():
         norm = normalize(result)
         path = _os.path.join(SNAPSHOT_DIR, f"step_replay_s{step}.json")
         if force_update or not _os.path.exists(path):
-            with open(path, "w", encoding="utf-8") as f:
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
                 json.dump(norm, f, ensure_ascii=False, indent=1, sort_keys=True)
             print(f"[FROZEN] step={step}: 基线已冻结" if not force_update
                   else f"[UPDATED] step={step}: 基线已重冻结")

@@ -8,7 +8,7 @@
      + 冗余锁防回潮（_stock_analysis_lock / _ENGINE_LOCK / _scan_lock）
   ② 直连引擎清零（FrontAPI/api_server 不再绕过 AppOrch 漏斗调引擎，
      阶段 2 遗留问题：原 api_server 3 处直连绕锁）
-  ③ 路由收敛（api_server.py 已删除，31 条 REST/SSE 路由单源于 FrontAPI，
+  ③ 路由收敛（api_server.py 已删除，35 条 REST/SSE 路由单源于 FrontAPI，
      命名为 RESTful 整理后的冻结基线，见 snapshots/phase3_routes.json）
   ④ 墓碑化（ChartHandler.do_GET/do_POST 已 410；SSE 方法保留至 3b-2）
   ⑤ SSE 双实现（impl=legacy|native 灰度开关，默认 legacy 零漂移；
@@ -70,6 +70,16 @@ EXPECTED_ROUTES = {
     ("POST", "/api/futures/cleanup"),
     ("POST", "/api/futures/{symbol}/select/point"),
     ("DELETE", "/api/futures/{symbol}/delete/point"),
+    # 交易面板（/api/trader/*）：自动下单开关/确认、品种校验、信号过滤、
+    # 成交统计。基线外新增已确认属**有意新增**，故随本批重冻。
+    ("GET", "/api/trader/auto-order/status"),
+    ("POST", "/api/trader/auto-order/on"),
+    ("POST", "/api/trader/auto-order/off"),
+    ("POST", "/api/trader/auto-order/ack"),
+    ("GET", "/api/trader/product-check"),
+    ("GET", "/api/trader/signal-filter"),
+    ("POST", "/api/trader/signal-filter"),
+    ("GET", "/api/trader/trades"),
 }
 
 # REST 路由禁止直连的引擎原始入口
@@ -263,7 +273,10 @@ def test_route_convergence(failures, update=False):
     current = _collect_routes()
     os.makedirs(SNAPSHOTS, exist_ok=True)
     if update:
-        with io.open(ROUTES_SNAPSHOT, "w", encoding="utf-8") as f:
+        # newline="\n" 显式指定：默认文本模式在 Windows 会把 \n 翻成 \r\n，
+        # 而仓库内该快照是 LF——不加这一句，每次 --update 都会把整份文件
+        # 的行尾翻一遍，产出「27 条全变 + 新增几条」的假 diff。
+        with io.open(ROUTES_SNAPSHOT, "w", encoding="utf-8", newline="\n") as f:
             json.dump(sorted(f"{m} {p}" for m, p in current), f,
                       ensure_ascii=False, indent=1)
         print(f"[FREEZE] ③ 路由基线已重冻: {len(current)} 条 → snapshots/phase3_routes.json")

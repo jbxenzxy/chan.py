@@ -203,32 +203,66 @@ def isolate_side_effects():
     # 中保存的手动选点，并按选点时间过滤 K 线窗口（AppEngine:_analyze_stock_internal）。
     # 历史运行 / 其它测试组件残留的选点会污染同代码的股票用例，造成快照漂移
     # （笔起点整体后移）。快照采集必须跑在「无选点」的干净状态上。
+
+    # K 线回看窗口（股票）：STOCKS_LOOKBACK_CONFIG 是 AppConfig 的**运行时配置**
+    # —— 界面可随时放大/缩小、默认值随版本调整（d 曾为 472，现为 488：
+    # AppConfig.py:118），且可被环境变量覆盖（AppConfig.py:231 _env_lookback_dict）。
+    # 它按条数截断 K 线，直接改变笔 / 段的起点与相对索引；一旦采集时绑到宿主机
+    # 配置，同一份代码在不同默认值 / 不同环境变量下就会产出不同快照，与真正的
+    # 算法行为变更混在一起、无法区分（实测 d=472 与 d=488 会让 stock_d_full 的
+    # klines 区段出现 4717 处差异条目）。
+    # 口径：置空 = 不截断，快照恒定跑在夹具全量数据上。窗口由测试自己拥有，
+    # 与 trigger_step 回放入口（test_trigger_step_replay._run）同一口径。
+    saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+    m.STOCKS_LOOKBACK_CONFIG = {}
+    # 期货侧不在此处处置：FUTURES_LOOKBACK_CONFIG **不在** AppEngine 命名空间
+    # （AppEngine.py:168/171 经 DataAPI.TqSdkAPI.set_futures_lookback_config 注入），
+    # 写 m.FUTURES_LOOKBACK_CONFIG 等于给模块挂一个无人读的属性。
+    # 期货两个快照用例的窗口另有归属：full（end_time=None）不做「末 N 根」截断；
+    # end_date 的「末 960 根」截断正是该用例要冻结的 C 模式行为
+    # （AppSSE.init_chan_symbol）。遗留耦合：若 FUTURES_LOOKBACK_CONFIG["15s"]
+    # 默认值调整，需同步刷 futures_15s_end_date 基线。
     saved_saved_points = app_data._saved_point_times
     app_data._saved_point_times = {}
 
     def restore():
         for k, v in saved.items():
             setattr(m, k, v)
+        m.STOCKS_LOOKBACK_CONFIG = saved_lookback
         app_data._saved_point_times = saved_saved_points
     return restore
 
 
 # ─────────────────────────────────────────────────────────────
-# 2b. 参考数据源注入（与 test_trigger_step_replay 同源）
+# 2b. 参考数据源注入（快照的唯一入口；test_trigger_step_replay 直接复用）
 # ─────────────────────────────────────────────────────────────
-# 股票名称 / PE-TTM / 指数归属 由 app_data 从 *gitignored* 的本地缓存文件
-# （App/stock_names.json、App/stock_pettm_index.json）加载；干净检出下这些文件
-# 不存在，get_stock_name 退化为 market+code、get_pe_ttm 退化为 None、get_index_belong
-# 退化为 None，导致冻结基线（期望 贵州茅台 / 20.0 / 沪深300）对比失败。
-# 为使快照在任意干净检出下可复现，这里注入与冻结基线一致的确定性参考表
-# （属元数据，非笔/段/中枢/买卖点算法被测对象）。期货用例不消费该表，注入无副作用。
+# 快照 meta 里的「展示性字段」取自外部数据源，必须**在采集时打桩成确定值**，
+# 否则同一份代码在不同机器 / 不同日期会产出不同快照 —— 表现为「在我这绿、
+# 在你这红」的假红，且看不出是谁的错。共两类外部依赖：
+#   ① 股票名称 / PE-TTM / 指数归属：app_data 从 *gitignored* 的本地缓存文件
+#      （App/stock_names.json、App/stock_pettm_index.json）加载；干净检出下这些
+#      文件不存在，于是退化为 market+code / None / None，冻结基线（期望
+#      贵州茅台 / 20.0 / 沪深300）对比失败。
+#   ② 股东减持标记：AppEngine._get_reduction_flag 委托 ElTdxAPI 走 7615 网关
+#      HTTP（进程内缓存 1 天），并以「K 线最新一根日期」为判定基准。该值随外部
+#      数据漂移：新公告会让某个历史锚点重新落入减持窗口、窗口过期会让 active
+#      翻回 False、网关不可达则退化为 {'active': False}。同属展示性 meta，
+#      不是笔 / 段 / 中枢 / 买卖点算法的被测对象，故一并打桩。
+# 属元数据注入，不改动被测算法；期货用例不消费该表，注入无副作用。
 _REF_MARKET = "sh"
 _REF_CODE = "600519"
 _REF_COMPOUND = f"{_REF_MARKET}{_REF_CODE}"
+# 打桩值取「当日不落在任何减持窗口内」的默认态 —— 与 _get_reduction_flag 在
+# 非 A 股 / 日期不可解析时的返回值形状完全一致（{'active': False}，无 windows 键）。
+# 该字段的真实业务逻辑（窗口合并 / 进度过滤 / 熔断）在 DataAPI 侧自行覆盖，
+# 这里只负责让快照可复现。
+_REF_REDUCTION = {"active": False}
 
 
 def _seed_reference():
-    """注入确定性 name / pe_ttm / index_belong 参考表，返回 restore_fn（隔离全局副作用）。"""
+    """注入确定性 name / pe_ttm / index_belong / reduction 参考值，
+    返回 restore_fn（隔离全局副作用）。"""
+    from App import AppEngine as _engine
     from App.AppData import app_data
     saved = {
         "_names": app_data._names,
@@ -238,12 +272,17 @@ def _seed_reference():
         "_pe_loaded": app_data._pe_loaded,
         "_belong_loaded": app_data._belong_loaded,
     }
+    # 减持取数入口打桩：_get_reduction_flag 以**模块全局名**调用它（AppEngine 顶部
+    # `from DataAPI.ElTdxAPI import (... get_shareholder_reduction_flag ...)`），
+    # 故替换引擎模块属性即可生效，无需触碰 DataAPI 的模块级缓存 / 熔断状态。
+    saved_flag = _engine.get_shareholder_reduction_flag
     app_data._names = {_REF_COMPOUND: {"name": "贵州茅台", "market": _REF_MARKET}}
     app_data._pe = {_REF_COMPOUND: 20.0}
     app_data._belong = {_REF_COMPOUND: "沪深300"}
     app_data._names_loaded = True
     app_data._pe_loaded = True
     app_data._belong_loaded = True
+    _engine.get_shareholder_reduction_flag = lambda *a, **k: dict(_REF_REDUCTION)
 
     def restore():
         app_data._names = saved["_names"]
@@ -252,6 +291,7 @@ def _seed_reference():
         app_data._names_loaded = saved["_names_loaded"]
         app_data._pe_loaded = saved["_pe_loaded"]
         app_data._belong_loaded = saved["_belong_loaded"]
+        _engine.get_shareholder_reduction_flag = saved_flag
     return restore
 
 
@@ -516,7 +556,7 @@ def acquire(name, update=False):
     path = snapshot_path(name)
     if update or not os.path.exists(path):
         os.makedirs(SNAPSHOT_DIR, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
             json.dump(norm, f, ensure_ascii=False, indent=1, sort_keys=True)
         return True, "frozen" if not update else "updated"
 
