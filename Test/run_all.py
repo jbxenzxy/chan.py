@@ -64,8 +64,17 @@ CI / 迁移每阶段的验收门禁）。
                                                      calculate_macd/预览bar继承/
                                                      真渲染像素对照（浏览器不在位降级 SKIP）
  31. 统计面板字段     test_stats_panel_labels.py 品种只显品种键/平均每笔盈-亏/
-                                                     期望值/最大单笔不带时间/
-                                                     删出场原因与曲线口径/行序
+                                                     期望值/最大单笔盈-亏合一行
+                                                     不带时间/删出场原因与曲线口径/
+                                                     行序/金额不带正号
+ 32. 盈亏曲线坐标轴   test_stats_curve_axis.py  纵轴 1/2/5×10^k 刻度（0 只出现一次）/
+                                                     网格+纵轴线+横轴日期刻度/
+                                                     文字不越出画布/坏值不静默
+                                                     （node 桩 + 真渲染两层）
+ 33. 统计指标口径     Trading/Test/test_trade_stats_formulas.py
+                                                     胜率分母含平手/期望值恒等式/
+                                                     盈亏比与盈利因子可区分/
+                                                     一侧为空→最大单笔报 0
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
 
 用法（在仓库根目录）：
@@ -223,9 +232,22 @@ COMPONENTS = [
     ("vol_macd_mode",
      [sys.executable, os.path.join("Test", "test_vol_macd_mode.py")]),
     # 统计面板字段：品种只显品种键 / 平均每笔盈-亏 / 期望值（无「/笔」）/
-    # 最大单笔不显示时间 / 删「按出场原因」与「曲线口径」/ 明细行行序。
+    # 最大单笔盈-亏合成一行且不显示时间 / 删「按出场原因」与「曲线口径」/
+    # 明细行行序 / 金额一律不带正号。
     ("stats_panel_labels",
      [sys.executable, os.path.join("Test", "test_stats_panel_labels.py")]),
+    # 盈亏曲线坐标轴（2026-09-19）：纵轴 1/2/5×10^k 刻度（0 只出现一次、
+    # 刻度互不重复、首尾把数据包住）+ 网格/纵轴线 + 横轴日期刻度
+    # （取该笔 exit_at）+ 文字不许越出画布（修「7 位数负号被裁」）+
+    # 坏值不静默。node + canvas 桩跑真实代码段，另有真渲染层。
+    ("stats_curve_axis",
+     [sys.executable, os.path.join("Test", "test_stats_curve_axis.py")]),
+    # 成交统计四项指标口径 + 最大单笔同侧取值（2026-09-19 复核）：
+    # 胜率分母含平手 / 期望值 ≡ 总净盈亏÷总笔数 / 盈亏比与盈利因子两口径
+    # 可区分 / 无亏损→None / 某侧为空→最大单笔报 0（不再报负数）。
+    ("trade_stats_formulas",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_trade_stats_formulas.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

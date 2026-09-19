@@ -303,7 +303,7 @@
         }
         .stats-close:hover { color: #e94560; }
         .stats-body { flex: 1; overflow-y: auto; padding: 10px 14px; font-size: 12px; }
-        #trade-equity-canvas { width: 100%; height: 220px; display: block; }
+        #trade-equity-canvas { width: 100%; height: 240px; display: block; }
         .stats-hero {
             display: flex; justify-content: space-between;
             margin-top: 8px; padding-top: 8px;

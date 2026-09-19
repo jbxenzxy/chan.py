@@ -4596,7 +4596,7 @@
                 return;
             }
             var pct = function (x) { return (x * 100).toFixed(1) + "%"; };
-            var yuan = function (x) { return (x >= 0 ? "+" : "") + Number(x).toFixed(2) + " 元"; };
+            var yuan = function (x) { return Number(x).toFixed(2) + " 元"; };
             var col = function (x) { return x >= 0 ? "#FF3C3C" : "#00F0F0"; };  // 涨红跌绿
             var num = function (x) { return x != null ? Number(x).toFixed(2) : "—"; };
             var html = "";
@@ -4626,13 +4626,66 @@
             // 这两个数就是「盈亏比(赔率)」的两个分量（pl_ratio = avg_win / |avg_loss|），
             // 标签必须写明「每笔」—— 光写「平均盈利」会被读成总量口径，与盈利因子混淆。
             html += '<div class="stats-row"><span class="stats-label">平均每笔盈利 / 平均每笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
-            // 最大单笔只给金额、不给发生时间：这一格回答的是"最坏会到多少"，
-            // 时间是复盘表格里的事，挤在同一行只会让数字被截断。
-            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利</span><span class="stats-value" style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔亏损</span><span class="stats-value" style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + '</span></div>';
+            // 最大单笔盈亏合成一行：这两个数本来就是一对（最好的单笔 / 最坏的单笔），
+            // 合成一行后与上面「平均每笔盈利 / 平均每笔亏损」同构，也省下一行高度。
+            // 同样不给发生时间 —— 这一格回答的是"最好/最坏会到多少"，时间是复盘表格里的事。
+            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利 / 最大单笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + '</span> / <span style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + '</span></span></div>';
             html += statsReadWarningHtml(d);
             html += '</div>';
             if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);
+        }
+
+        // ── 盈亏曲线坐标：刻度 / 数字 / 日期 ──
+        // 纵轴"好看刻度"：步长取 1/2/5×10^k，一来刻度值都是整数好读，二来
+        // 0 必然落在刻度上 —— 0 是盈与亏的分界，必须能一眼对上。
+        // want = 期望条数；实际会多出 ≤2 条，因为首尾要凑到整步长上。
+        function eqAxisTicks(minV, maxV, want) {
+            var span = maxV - minV;
+            if (!(span > 0)) return [minV];
+            var raw = span / Math.max(2, want);
+            var mag = Math.pow(10, Math.floor(Math.log10(raw)));
+            var k = raw / mag;
+            var step = (k <= 1 ? 1 : k <= 2 ? 2 : k <= 5 ? 5 : 10) * mag;
+            var lo = Math.floor(minV / step) * step;
+            var hi = Math.ceil(maxV / step) * step;
+            var out = [];
+            // 上限 9 条兜底：want 与 span 都异常时也不至于把画布画满
+            for (var i = 0; i <= 9; i++) {
+                var v = lo + i * step;
+                if (v > hi + step * 1e-6) break;
+                out.push(Math.abs(v) < step * 1e-9 ? 0 : v);   // 消掉 -0
+            }
+            return out;
+        }
+
+        // 坐标数字（元）：与底部指标区的万/亿缩位同一套口径（见 formatVolume），
+        // 但这里带负号、且在 1 万以下保持原值 —— 千级刻度缩成"0.3万"反而难读。
+        // step = 该轴的刻度步长：小数位数跟着步长走。步长 0.1 时若还取整，
+        // 0/0.1/0.2/0.3 会被写成同一个 "0"（5 个刻度字面全一样）；
+        // 步长 ≥1 则只给整数。
+        function eqAxisNum(v, step) {
+            var a = Math.abs(v), sign = v < 0 ? "-" : "";
+            if (a >= 100000000) return sign + (a / 100000000).toFixed(2) + "亿";
+            if (a >= 10000) return sign + (a / 10000).toFixed(1).replace(/\.0$/, "") + "万";
+            var dec = (step && step < 1) ? Math.min(4, Math.ceil(-Math.log10(step))) : 0;
+            var p = Math.pow(10, dec);
+            var rv = Math.round(a * p) / p;
+            // 步长带小数时，取到的刻度仍可能是整数（0 / 0.5 / 1）——
+            // 整数就别拖 ".0"，否则 0 会写成 "0.0"。
+            return sign + (dec && rv % 1 === 0 ? rv.toFixed(0) : rv.toFixed(dec));
+        }
+
+        // 横轴标签：exit_at（"YYYY-MM-DD HH:MM:SS"）→ "MM-DD"。
+        // wantTime=true（整条曲线都在同一天）时改给 "HH:MM" —— 同一天里并排
+        // 三个 "09-18" 位置是有了、信息量为零；日内数据真正能区分的是时刻。
+        // 解析不出来就返回空串 → 那根刻度只画线不画字（曲线本身照画，
+        // 不能因为一行坏数据让整条轴变空白）。
+        function eqAxisDate(s, wantTime) {
+            var m = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?/
+                .exec(String(s == null ? "" : s));
+            if (!m) return "";
+            if (wantTime && m[4]) return m[4] + ":" + m[5];
+            return m[2] + "-" + m[3];
         }
 
         function drawEquityCurve(curve) {
@@ -4641,11 +4694,13 @@
             // 用 body（含 14px 左右内边距）反推可用宽度，避免 440px 卡片里出现横向滚动条。
             var box = cv.parentNode || document.getElementById("stats-panel");
             var w = Math.max(240, ((box ? box.clientWidth : 0) || 300) - 28);
-            var h = 220;
+            var h = 240;
             var dpr = window.devicePixelRatio || 1;
+            var n = curve.length;
             // 尺寸与数据都未变则跳过重绘：给 canvas.width 赋值会清空画布，重复调用会让曲线闪动。
             // key 存在 canvas 自身 dataset 上，故每次重建 DOM（新 canvas 无 key）仍会正常绘制一次。
-            var key = w + "x" + h + "@" + dpr + "#" + curve.length + ":" + curve[curve.length - 1].cumulative;
+            var key = w + "x" + h + "@" + dpr + "#" + n + ":"
+                + curve[0].cumulative + ">" + curve[n - 1].cumulative;
             if (cv.dataset && cv.dataset.drawnKey === key) return;
             if (cv.dataset) cv.dataset.drawnKey = key;
             cv.width = w * dpr; cv.height = h * dpr;
@@ -4653,35 +4708,119 @@
             var ctx = cv.getContext("2d");
             ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
             ctx.clearRect(0, 0, w, h);
-            var padL = 46, padR = 8, padT = 10, padB = 18;
-            var plotW = w - padL - padR, plotH = h - padT - padB;
-            var vals = curve.map(function (c) { return c.cumulative; }).concat([0]);
+
+            // 只收有限值：某一笔的 cumulative 若是 NaN/undefined，丢掉该点即可；
+            // 放它进 max/min 会把整条轴与曲线一起算成 NaN —— 那样画布全空白且不报错。
+            var seq = [];
+            for (var i = 0; i < n; i++) {
+                var v = Number(curve[i].cumulative);
+                if (isFinite(v)) seq.push({ i: i, v: v });
+            }
+            if (!seq.length) return;
+            var vals = seq.map(function (p) { return p.v; }).concat([0]);
             var maxV = Math.max.apply(null, vals), minV = Math.min.apply(null, vals);
             if (maxV === minV) { maxV += 1; minV -= 1; }
-            var range = maxV - minV;
-            function yOf(v) { return padT + plotH * (1 - (v - minV) / range); }
-            var n = curve.length;
-            function xOf(i) { return padL + (n <= 1 ? plotW / 2 : plotW * i / (n - 1)); }
+
+            // 纵轴刻度：轴范围直接用刻度边界（曲线因此永远贴轴走，不会顶出可视区）
+            ctx.font = "10px system-ui";
+            var ticks = eqAxisTicks(minV, maxV, 4);
+            var lo = ticks[0], hi = ticks[ticks.length - 1];
+            // 刻度步长：小数位数由它决定（ticks 至少两条，见 eqAxisTicks）
+            var step = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
+            var range = hi - lo;
+            // 左留白按最宽的那个刻度值**实测**宽度算：写死 46px 时
+            // 7 位数（"-1200000" 宽 45.4px，右对齐贴 x=42）会把负号切掉。
+            var labW = 0;
+            for (var t = 0; t < ticks.length; t++) {
+                labW = Math.max(labW, ctx.measureText(eqAxisNum(ticks[t], step)).width);
+            }
+            var padL = Math.ceil(labW) + 12, padR = 10, padT = 12, padB = 30;
+            var plotW = Math.max(40, w - padL - padR), plotH = h - padT - padB;
+            function yOf(v) { return padT + plotH * (1 - (v - lo) / range); }
+            function xOf(idx) { return padL + (n <= 1 ? plotW / 2 : plotW * idx / (n - 1)); }
             var y0 = yOf(0);
-            ctx.strokeStyle = "#888"; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
-            ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = "#a8b2d1"; ctx.font = "10px system-ui"; ctx.textAlign = "right";
-            ctx.fillText("0", padL - 4, y0 + 3);
-            ctx.fillText(maxV.toFixed(0), padL - 4, yOf(maxV) + 8);
-            ctx.fillText(minV.toFixed(0), padL - 4, yOf(minV) - 2);
+
+            // ① 网格 + 纵轴刻度值 + 纵轴线
+            ctx.lineWidth = 1; ctx.textBaseline = "middle"; ctx.textAlign = "right";
+            ctx.strokeStyle = "#122a52";
+            for (var g = 0; g < ticks.length; g++) {
+                var gy = yOf(ticks[g]);
+                ctx.beginPath(); ctx.moveTo(padL, gy); ctx.lineTo(w - padR, gy); ctx.stroke();
+            }
+            ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.stroke();
+            ctx.fillStyle = "#8892b0";
+            for (var g2 = 0; g2 < ticks.length; g2++) {
+                ctx.fillText(eqAxisNum(ticks[g2], step), padL - 6, yOf(ticks[g2]));
+            }
+
+            // ② 0 轴：曲线跨 0 时单独标出；单边行情下 0 就是最外侧那条网格线
+            //    （旧版无论何时都再画一条 0 虚线 + 一个"0"文字，于是 0 被画两遍）
+            if (lo < 0 && hi > 0) {
+                ctx.strokeStyle = "#888"; ctx.setLineDash([4, 3]);
+                ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // ③ 曲线与 0 轴之间的面积，再压曲线本身
+            var j;
             ctx.beginPath();
-            curve.forEach(function (c, i) {
-                var x = xOf(i), y = yOf(c.cumulative);
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.strokeStyle = "#FFD700"; ctx.lineWidth = 1.5; ctx.stroke();
-            ctx.lineTo(xOf(n - 1), y0); ctx.lineTo(xOf(0), y0); ctx.closePath();
+            ctx.moveTo(xOf(seq[0].i), y0);
+            for (j = 0; j < seq.length; j++) ctx.lineTo(xOf(seq[j].i), yOf(seq[j].v));
+            ctx.lineTo(xOf(seq[seq.length - 1].i), y0);
+            ctx.closePath();
             ctx.fillStyle = "rgba(255,215,0,0.10)"; ctx.fill();
-            var last = curve[n - 1];
-            ctx.fillStyle = last.cumulative >= 0 ? "#FF3C3C" : "#00F0F0";
-            ctx.textAlign = "left";
-            ctx.fillText(last.cumulative.toFixed(0), xOf(n - 1) - 30, yOf(last.cumulative) - 4);
+            ctx.beginPath();
+            for (j = 0; j < seq.length; j++) {
+                var cx = xOf(seq[j].i), cy = yOf(seq[j].v);
+                if (j === 0) ctx.moveTo(cx, cy); else ctx.lineTo(cx, cy);
+            }
+            ctx.strokeStyle = "#FFD700"; ctx.lineWidth = 1.5; ctx.stroke();
+
+            // ④ 横轴：轴线 + 刻度线 + 日期（首尾必给，中间按可用宽度等分）
+            var baseY = padT + plotH;
+            ctx.strokeStyle = "#2a3f6b"; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(padL, baseY); ctx.lineTo(w - padR, baseY); ctx.stroke();
+            var want = Math.max(2, Math.min(5, Math.floor((w - padL - padR) / 72)));
+            // 整条曲线落在同一个自然日 → 横轴给时刻而不是日期
+            var day0 = String(curve[0].exit_at || "").slice(0, 10);
+            var sameDay = !!day0 && day0 === String(curve[n - 1].exit_at || "").slice(0, 10);
+            var seen = {}, lastTxt = null;
+            for (var li = 0; li < want; li++) {
+                var idx = Math.round((n - 1) * li / (want - 1));
+                if (seen[idx]) continue;
+                seen[idx] = 1;
+                var lx = xOf(idx);
+                ctx.strokeStyle = "#2a3f6b";
+                ctx.beginPath(); ctx.moveTo(lx, baseY); ctx.lineTo(lx, baseY + 4); ctx.stroke();
+                var dTxt = eqAxisDate(curve[idx].exit_at, sameDay);
+                if (!dTxt) continue;
+                if (dTxt === lastTxt) continue;   // 与前一个刻度同字 → 不重复画
+                lastTxt = dTxt;
+                // 首标签左对齐、尾标签右对齐（贴着绘图区边缘走，因此不会越界），
+                // 中间的居中；只画一笔时居中。
+                ctx.textAlign = (n === 1) ? "center"
+                    : (idx === 0 ? "left" : (idx === n - 1 ? "right" : "center"));
+                ctx.fillStyle = "#8892b0";
+                ctx.fillText(dTxt, lx, baseY + 15);
+            }
+
+            // ⑤ 末端数值：回答"现在累计到多少"。靠右时就翻到点的左侧
+            //    —— 旧版固定向右排，7 位数会被画布右缘裁掉（实测裁 7.4px）。
+            var lastV = seq[seq.length - 1].v;
+            var lastX = xOf(seq[seq.length - 1].i), lastY = yOf(lastV);
+            // 末端标签给**精确值**：这是「现在累计多少」，比轴刻度更需要精确
+            // （轴刻度为了排得下才缩成万/亿，这里不必跟着缩）。
+            // 只在量级过大（≥1e7）时退回万/亿，避免标签比绘图区还宽。
+            var tag = (Math.abs(lastV) >= 1e7 ? eqAxisNum(lastV, step)
+                                              : Math.round(lastV).toString()) + " 元";
+            var tagW = ctx.measureText(tag).width;
+            var tagLeft = (lastX + 8 + tagW <= w - padR);
+            ctx.textAlign = tagLeft ? "left" : "right";
+            ctx.fillStyle = lastV >= 0 ? "#FF3C3C" : "#00F0F0";
+            ctx.beginPath(); ctx.arc(lastX, lastY, 2.5, 0, Math.PI * 2); ctx.fill();
+            ctx.fillText(tag, tagLeft ? lastX + 8 : lastX - 8,
+                Math.max(padT + 7, Math.min(padT + plotH - 7, lastY)));
+            ctx.textBaseline = "alphabetic";
         }
 
         function updateSlider() {

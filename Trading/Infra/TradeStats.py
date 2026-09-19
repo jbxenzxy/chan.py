@@ -161,7 +161,9 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
       pl_ratio          盈亏比 = avg_win / |avg_loss|；无亏损→None
       profit_factor     盈利因子 = 总盈 / |总亏|；无亏损→None（无定义，非 0）
       total_net         总净盈亏（元）
-      max_win / max_loss    最大单笔盈/亏（含 trade_id、exit_at、net_cash）
+      max_win / max_loss    最大单笔盈/亏（含 trade_id、exit_at、net_cash）；
+                            只在**同侧**成交里取：该侧一笔都没有时
+                            net_cash=0.0、trade_id/exit_at=None
       expectancy        期望收益 = win_rate*avg_win + loss_rate*avg_loss（元/笔）
       equity_curve      累计净值序列：[{exit_at, net_cash, cumulative}]
       by_reason         按出场原因（tp/sl/trailing/time…）拆分的净盈亏合计
@@ -194,14 +196,17 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     total_net = gross_win + gross_loss
 
-    best = max(trades, key=_net)
-    worst = min(trades, key=_net)
-    max_win = {"trade_id": best.get("trade_id"),
-               "exit_at": best.get("exit_at"),
-               "net_cash": round(_net(best), 2)}
-    max_loss = {"trade_id": worst.get("trade_id"),
-                "exit_at": worst.get("exit_at"),
-                "net_cash": round(_net(worst), 2)}
+    # 最大单笔只在**同一侧**的成交里取。取全样本极值时，全亏的品种会把
+    # "亏得最少的那一笔"当成最大盈利报出去（负的"盈利"自相矛盾）。某一侧
+    # 一笔都没有 → 这个数不存在，报 0（用户拍板 2026-09-19）。
+    best = max(wins, key=_net) if wins else None
+    worst = min(losses, key=_net) if losses else None
+    max_win = {"trade_id": best.get("trade_id") if best else None,
+               "exit_at": best.get("exit_at") if best else None,
+               "net_cash": round(_net(best), 2) if best else 0.0}
+    max_loss = {"trade_id": worst.get("trade_id") if worst else None,
+                "exit_at": worst.get("exit_at") if worst else None,
+                "net_cash": round(_net(worst), 2) if worst else 0.0}
 
     expectancy = win_rate * avg_win + loss_rate * avg_loss
 

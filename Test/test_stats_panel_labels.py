@@ -14,15 +14,19 @@
     这两个数正是「盈亏比(赔率)」的两个分量：`pl_ratio = avg_win / |avg_loss|`
     （TradeStats.py:193）。不写「每笔」会被当成总量口径，与「盈利因子」
     （总盈 ÷ 总亏）混淆 —— 而这两个比率名字相近、数值可能差一倍。
- ③ 最大单笔盈利 / 最大单笔亏损：**不显示时间**（exit_at 不再落到面板上）。
+ ③ 最大单笔盈利 / 最大单笔亏损：**合成一行**、只给金额、**不显示时间**。
+    这两个数本来就是一对（最好的单笔 / 最坏的单笔），合成一行后与
+    「平均每笔盈利 / 平均每笔亏损」同构。
  ④ 删除「按出场原因」与「曲线口径」两行。
  ⑤ 期望值/笔 → 期望值（没有「期望值/笔」这种表述；expectancy 本身
     = win_rate*avg_win + loss_rate*avg_loss，已经是每笔量纲）。
  ⑥ 明细行行序：品种 → 成交笔数 → 期望值 →
-    平均每笔盈利 / 平均每笔亏损 → 最大单笔盈利 → 最大单笔亏损
+    平均每笔盈利 / 平均每笔亏损 → 最大单笔盈利 / 最大单笔亏损
  ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
     盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
     是两个不同的指标）。
+ ⑧ 所有金额**不带正号**：0 与正数都直接写数字（"+1530.00 元" → "1530.00 元"）。
+    只保留负数的 "-"。
 
 两层守护
 ---------------------------------------------------------------------
@@ -70,7 +74,7 @@ def check(cond, name, extra=""):
 
 # 明细行的目标顺序（实现与本测试共用的唯一定义）
 EXPECT_ORDER = ["品种", "成交笔数", "期望值",
-                "平均每笔盈利 / 平均每笔亏损", "最大单笔盈利", "最大单笔亏损"]
+                "平均每笔盈利 / 平均每笔亏损", "最大单笔盈利 / 最大单笔亏损"]
 
 # 核心区（stats-hero）四格的目标顺序（⑦）
 EXPECT_HERO = ["总净盈亏", "实际胜率", "盈亏比(赔率)", "盈利因子"]
@@ -152,15 +156,25 @@ check("平均每笔盈利 / 平均每笔亏损" in blk, "② 平均每笔盈利 
 check("平均盈利 / 平均亏损" not in blk, "② 旧标签「平均盈利 / 平均亏损」无残留")
 
 check("exit_at" not in blk, "③ 明细行区块内 exit_at 零命中（最大单笔不带时间）")
-check(blk.count("最大单笔盈利") == 1 and blk.count("最大单笔亏损") == 1,
-      "③ 最大单笔盈/亏各一行且只剩金额")
-
+check(blk.count("最大单笔盈利 / 最大单笔亏损") == 1,
+      "③ 最大单笔盈/亏合成一行（不是两行）")
+# 「单独一行」判定要看整条标签，不能拿子串比 —— 合并后的标签里
+# 本来就含有「最大单笔亏损」四个字。
+check(re.search(r'class="stats-label">最大单笔盈利(?! /)', blk) is None
+      and re.search(r'class="stats-label">最大单笔亏损', blk) is None,
+      "③ 旧的两行标签无残留")
 check("按出场原因" not in blk, "④ 「按出场原因」已删除")
 check("d.by_reason" not in blk, "④ 不再读 by_reason")
 check("曲线口径" not in blk and "stats-note" not in blk, "④ 「曲线口径」注释行已删除")
 
 check('class="stats-label">期望值</span>' in blk, "⑤ 「期望值」标签在位")
 check("期望值/笔" not in blk, "⑤ 旧标签「期望值/笔」无残留")
+
+# ⑧ 金额一律不带正号：yuan() 里不许再出现任何形式的 '+"'
+check('x > 0 ? "+"' not in blk and 'x >= 0 ? "+"' not in blk,
+      "⑧ 金额拼接里已无「正数补 +」的分支")
+check('Number(x).toFixed(2) + " 元"' in blk,
+      "⑧ 金额格式就是「数字 + 空格 + 元」")
 
 # 全仓防回潮：这些串不该在前端任何地方再冒出来
 for bad in ("期望值/笔", "按出场原因", "曲线口径"):
@@ -300,14 +314,31 @@ else:
                 check("平均每笔盈利 / 平均每笔亏损" in html, "② 真渲染标签为「平均每笔盈利 / 平均每笔亏损」")
 
                 check(DIRTY_EXIT_AT_WIN not in html and DIRTY_EXIT_AT_LOSS not in html,
-                      "③ 最大单笔两行不带时间（exit_at 未渲染）")
-                check("+2100.00 元" in html, "③ 最大单笔盈利仍给金额", html[:300])
-                check("-880.00 元" in html, "③ 最大单笔亏损仍给金额")
+                      "③ 最大单笔那一行不带时间（exit_at 未渲染）")
+                # 两个金额各自套着自己的红/绿 span，故不能拿整串去比 ——
+                # 剥掉标签看这一格的**文本**。
+                mrow2 = re.search(
+                    r'class="stats-label">最大单笔盈利 / 最大单笔亏损</span>'
+                    r'<span class="stats-value">(.*?)</span></div>', html, re.S)
+                check(mrow2 is not None, "③ 真渲染有「最大单笔盈利 / 最大单笔亏损」行")
+                if mrow2:
+                    vals = re.sub(r"<[^>]+>", "", mrow2.group(1)).strip()
+                    check(vals == "2100.00 元 / -880.00 元",
+                          "③ 这一行同时给出盈利与亏损两个金额（无 + 号）", vals)
 
                 check("按出场原因" not in html, "④ 真渲染无「按出场原因」")
                 check("曲线口径" not in html, "④ 真渲染无「曲线口径」")
 
                 check("期望值" in html and "期望值/笔" not in html, "⑤ 真渲染为「期望值」")
+
+                # ⑧ 真渲染层面的「无正号」：面板内不应有以 + 开头的文本节点
+                check(re.search(r">\+", html) is None,
+                      "⑧ 真渲染：没有任何以 + 开头的数值",
+                      re.findall(r">\+[^<]{0,12}", html))
+                check("+3400.00" not in html and "+516.00" not in html,
+                      "⑧ 真渲染：总净盈亏 / 期望值都不带 +")
+                check("3400.00 元" in html and "516.00 元" in html,
+                      "⑧ 真渲染：金额本体还在（去掉的只是 +）")
 
             page.unroute_all(behavior="ignore")
             browser.close()
