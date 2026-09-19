@@ -4604,14 +4604,11 @@
             // 总净盈亏是存量口径，能到 7 位数；核心区一行四格、每格只有 ~100px 宽，
             // 直接排 "3400000.00 元" 会把格子撑破。过万进「万元」、过百万进
             // 「百万元」，两级各缩 4 个数量级，最长也只 11 个字符。
+            // 缩位规则**不在这里实现**：money() / moneyScale() 全局只有一份
+            // （见下方「金额缩位」一节），盈亏曲线纵轴调的是同一个 ——
+            // 各写一份必然漂移，同一个数会在面板与轴上各给一种单位。
             // 只有总净盈亏走这套：期望值 / 平均每笔 / 最大单笔都是「每笔」量级，
             // 把 5000 元写成 "0.50 万元" 反而读不出数。
-            var money = function (x) {
-                var v = Number(x), a = Math.abs(v);
-                if (a >= 1e6) return (v / 1e6).toFixed(2) + " 百万元";
-                if (a >= 1e4) return (v / 1e4).toFixed(2) + " 万元";
-                return v.toFixed(2) + " 元";
-            };
             var col = function (x) { return x >= 0 ? "#FF3C3C" : "#00F0F0"; };  // 涨红跌绿
             var num = function (x) { return x != null ? Number(x).toFixed(2) : "—"; };
             var html = "";
@@ -4651,6 +4648,26 @@
             if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);
         }
 
+        // ── 金额缩位：不过万 → 元，过万 → 万元，过百万 → 百万元 ──
+        // 唯一实现。统计面板的「总净盈亏」与盈亏曲线**纵轴刻度**都调这里：
+        // 两处各写一份必然漂移，同一个数会在面板写"3.40 万元"、在轴上写"340万"，
+        // 读的人会当成两个口径。
+        function moneyScale(v) {
+            var a = Math.abs(Number(v));
+            if (!isFinite(a)) a = 0;
+            if (a >= 1e6) return { div: 1e6, unit: "百万元" };
+            if (a >= 1e4) return { div: 1e4, unit: "万元" };
+            return { div: 1, unit: "元" };
+        }
+
+        // 单个金额 → 字面量（固定 2 位小数），面板字段用。
+        // 纵轴刻度**不用**它：轴的小数位数要跟着刻度步长走 —— 步长 5000 时
+        // "0.00 / 0.50 / 1.00 万元"多出来的那两位是纯噪声，见 eqAxisNum。
+        function money(x) {
+            var v = Number(x), sc = moneyScale(v);
+            return (v / sc.div).toFixed(2) + " " + sc.unit;
+        }
+
         // ── 盈亏曲线坐标：刻度 / 数字 / 日期 ──
         // 纵轴"好看刻度"：步长取 1/2/5×10^k，一来刻度值都是整数好读，二来
         // 0 必然落在刻度上 —— 0 是盈与亏的分界，必须能一眼对上。
@@ -4674,21 +4691,26 @@
             return out;
         }
 
-        // 坐标数字（元）：与底部指标区的万/亿缩位同一套口径（见 formatVolume），
-        // 但这里带负号、且在 1 万以下保持原值 —— 千级刻度缩成"0.3万"反而难读。
-        // step = 该轴的刻度步长：小数位数跟着步长走。步长 0.1 时若还取整，
-        // 0/0.1/0.2/0.3 会被写成同一个 "0"（5 个刻度字面全一样）；
-        // 步长 ≥1 则只给整数。
-        function eqAxisNum(v, step) {
-            var a = Math.abs(v), sign = v < 0 ? "-" : "";
-            if (a >= 100000000) return sign + (a / 100000000).toFixed(2) + "亿";
-            if (a >= 10000) return sign + (a / 10000).toFixed(1).replace(/\.0$/, "") + "万";
-            var dec = (step && step < 1) ? Math.min(4, Math.ceil(-Math.log10(step))) : 0;
-            var p = Math.pow(10, dec);
-            var rv = Math.round(a * p) / p;
-            // 步长带小数时，取到的刻度仍可能是整数（0 / 0.5 / 1）——
-            // 整数就别拖 ".0"，否则 0 会写成 "0.0"。
-            return sign + (dec && rv % 1 === 0 ? rv.toFixed(0) : rv.toFixed(dec));
+        // 纵轴刻度数字：带单位，单位与「总净盈亏」同一套缩位（元 → 万元 →
+        // 百万元，见 moneyScale）。sc 由**整条轴的量级**选定、全轴共用一个单位 ——
+        // 若逐条各自判档，一条轴上会出现"0 元 / 50.00 万元 / 1.00 百万元"
+        // 这种同轴混单位，刻度之间反而没法直接比大小。
+        // step 决定小数位数：位数按"能把这个步长写准"来定 —— 步长 0.25 百万元
+        // 若只给 1 位小数，0.25/0.5/0.75 会被写成 0.3/0.5/0.8（刻度值全是错的）。
+        function eqAxisNum(v, step, sc) {
+            var div = (sc && sc.div) || 1, unit = (sc && sc.unit) || "元";
+            var q = Math.abs(step || 0) / div, dec = 0;
+            while (dec < 6
+                   && Math.abs(q * Math.pow(10, dec) - Math.round(q * Math.pow(10, dec))) > 1e-6) {
+                dec++;
+            }
+            var nv = v / div;
+            if (Math.abs(nv) < 1e-9) nv = 0;   // 消掉 -0（"-0 元"）
+            var s = nv.toFixed(dec);
+            // 步长带小数时取到的刻度仍可能是整数（0 / 0.5 / 1）—— 整数别拖
+            // ".0"，否则 0 会写成 "0.0"。
+            if (dec > 0) s = s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+            return s + " " + unit;
         }
 
         // 横轴标签：与「市场量能」面板同源 —— 日期串直接交给它的 fmtAxisDate
@@ -4745,11 +4767,16 @@
             // 刻度步长：小数位数由它决定（ticks 至少两条，见 eqAxisTicks）
             var step = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
             var range = hi - lo;
+            // 纵轴单位：按**整条轴的量级**选一档（元 / 万元 / 百万元），全轴统一。
+            // 取首尾刻度的绝对值里大的那个 —— 刻度边界已经把数据包住了，
+            // 所以这就是这条轴上会出现的最大的数。
+            var sc = moneyScale(Math.max(Math.abs(lo), Math.abs(hi)));
             // 左留白按最宽的那个刻度值**实测**宽度算：写死 46px 时
             // 7 位数（"-1200000" 宽 45.4px，右对齐贴 x=42）会把负号切掉。
+            // 现在标签还带单位（"3.40 百万元"约 60px），更得实测。
             var labW = 0;
             for (var t = 0; t < ticks.length; t++) {
-                labW = Math.max(labW, ctx.measureText(eqAxisNum(ticks[t], step)).width);
+                labW = Math.max(labW, ctx.measureText(eqAxisNum(ticks[t], step, sc)).width);
             }
             var padL = Math.ceil(labW) + 12, padR = 10, padT = 12, padB = 30;
             var plotW = Math.max(40, w - padL - padR), plotH = h - padT - padB;
@@ -4767,7 +4794,7 @@
             ctx.beginPath(); ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.stroke();
             ctx.fillStyle = "#8892b0";
             for (var g2 = 0; g2 < ticks.length; g2++) {
-                ctx.fillText(eqAxisNum(ticks[g2], step), padL - 6, yOf(ticks[g2]));
+                ctx.fillText(eqAxisNum(ticks[g2], step, sc), padL - 6, yOf(ticks[g2]));
             }
 
             // ② 0 轴：曲线跨 0 时单独标出；单边行情下 0 就是最外侧那条网格线
@@ -4830,11 +4857,11 @@
             //    —— 旧版固定向右排，7 位数会被画布右缘裁掉（实测裁 7.4px）。
             var lastV = seq[seq.length - 1].v;
             var lastX = xOf(seq[seq.length - 1].i), lastY = yOf(lastV);
-            // 末端标签给**精确值**：这是「现在累计多少」，比轴刻度更需要精确
-            // （轴刻度为了排得下才缩成万/亿，这里不必跟着缩）。
-            // 只在量级过大（≥1e7）时退回万/亿，避免标签比绘图区还宽。
-            var tag = (Math.abs(lastV) >= 1e7 ? eqAxisNum(lastV, step)
-                                              : Math.round(lastV).toString()) + " 元";
+            // 末端值就是当前的累计净盈亏，与面板「总净盈亏」是同一个数
+            // （TradeStats.py:197 total_net = Σ净盈亏；:213-222 cumulative 逐笔累加
+            // 全部成交）—— 所以这里调的就是面板那个 money()，两处字面必然一致：
+            // 曲线末端写"3.40 百万元"、面板也写"3.40 百万元"，不会一边缩位一边不缩。
+            var tag = money(lastV);
             var tagW = ctx.measureText(tag).width;
             var tagLeft = (lastX + 8 + tagW <= w - padR);
             ctx.textAlign = tagLeft ? "left" : "right";

@@ -17,6 +17,15 @@
 ---------------------------------------------------------------------
  [A] 纵轴：刻度值 ≥4 个、单调、互不重复、**"0" 恰好一个**、且首尾刻度
      必须把数据范围包住（曲线不会跑出可视区）。
+ [E] 纵轴**每根刻度都带单位**（元 / 万元 / 百万元），且**整条轴只用一档**
+     （2026-09-19 用户：「纵坐标需要添加单位，也不过万→元、过万→万元、
+     过百万→百万元」）。逐条各自判档会得到"0 元 / 50.00 万元 / 1.00 百万元"
+     这种同轴混单位 —— 刻度之间反而不能直接比大小，所以按**整条轴的量级**
+     选一档。档位规则与统计面板「总净盈亏」共用同一个 moneyScale()：本文件
+     把轴标签的数值反解回元，逐场景核对它落在哪一档、并与面板字面比对。
+     小数位数跟步长走，且必须**能把这个步长写准**：步长 0.25 百万元时只给
+     1 位小数会把 0.25/0.5/0.75 写成 0.3/0.5/0.8（等于刻度值全是错的）。
+     末端标签与面板同源（money()）—— 曲线末端就是总净盈亏那个数。
  [B] 横轴：有轴线、有刻度线、有日期标签（取该笔的 exit_at）。
      **标签条数恒为 3（首 / 中 / 尾），与笔数无关** —— 2026-09-19 用户提问
      「以后有 1000 笔，横轴咋显示？是不是借鉴市场量能的横轴设计？」：
@@ -72,7 +81,10 @@ def check(cond, name, extra=""):
 
 
 # ══════════════════════════════════════════════════════════════
-# 抽出真实代码段：eqAxisTicks / eqAxisNum / eqAxisDate / drawEquityCurve
+# 抽出真实代码段：moneyScale / money / eqAxisTicks / eqAxisNum /
+#                eqAxisDate / drawEquityCurve
+# money / moneyScale 一起抽：纵轴单位与面板金额共用这一份实现，
+# 抽进来才能证明「轴上的"3.40 百万元"与面板的"3.40 百万元"是同一个函数算的」。
 # ══════════════════════════════════════════════════════════════
 def extract_fmt_date():
     """抽出「市场量能」面板的 fmtAxisDate。
@@ -89,7 +101,7 @@ def extract_fmt_date():
 
 def extract_block():
     js = open(APP_JS, encoding="utf-8").read()
-    s = js.index("        function eqAxisTicks(")
+    s = js.index("        function moneyScale(")
     e = js.index("function updateSlider()")
     blk = js[s:e]
     assert "function drawEquityCurve(curve) {" in blk, "抽出的段落里没有 drawEquityCurve"
@@ -99,10 +111,38 @@ def extract_block():
     # 只数「8 空格缩进的顶层声明」：drawEquityCurve 内部还有 yOf / xOf 两个内嵌函数，
     # 按 "function " 子串数会多出来。
     tops = re.findall(r"^        function (\w+)\(", blk, re.M)
-    assert tops == ["eqAxisTicks", "eqAxisNum", "eqAxisDate", "drawEquityCurve"], \
-        "顶层函数不是预期的 4 个：%s" % tops
+    assert tops == ["moneyScale", "money", "eqAxisTicks", "eqAxisNum",
+                    "eqAxisDate", "drawEquityCurve"], \
+        "顶层函数不是预期的 6 个：%s" % tops
     assert blk.count("{") == blk.count("}"), "大括号不配对"
     return blk
+
+
+# ══════════════════════════════════════════════════════════════
+# [E] 缩位规则的「唯一实现」静态检查
+# 纵轴单位与面板总净盈亏必须是**同一个函数**算出来的：只要有人在别处再抄
+# 一份 if (a >= 1e4) "万元" 的分支，下面第一条就会红。
+# ══════════════════════════════════════════════════════════════
+def static_source_checks():
+    src = open(APP_JS, encoding="utf-8").read()
+    blk = extract_block()
+    check(src.count('"万元"') == 1 and src.count('"百万元"') == 1,
+          "[E] 档位字面全仓只出现一次（缩位规则只有 moneyScale 一份）",
+          (src.count('"万元"'), src.count('"百万元"')))
+    check(src.count("function moneyScale(") == 1 and src.count("function money(") == 1,
+          "[E] moneyScale / money 各只有一处定义",
+          (src.count("function moneyScale("), src.count("function money(")))
+    check("var sc = moneyScale(" in blk,
+          "[E] 纵轴单位取自 moneyScale（与面板同源，不是轴自己判档）")
+    check("var tag = money(lastV);" in blk,
+          "[E] 末端标签调 money()（与面板总净盈亏同一格式）")
+    m = re.search(r"^        function eqAxisNum\(v, step, sc\) \{\n(.*?)\n        \}\n",
+                  blk, re.S | re.M)
+    check(m is not None, "[E] eqAxisNum 接收单位参数 sc")
+    body = m.group(1) if m else ""
+    check("1e4" not in body and "1e6" not in body and "1e8" not in body,
+          "[E] eqAxisNum 内没有自己写死的档位阈值（档位只在 moneyScale）")
+    check('+ " " + unit' in body, "[E] eqAxisNum 输出的每根刻度都带单位")
 
 
 # ══════════════════════════════════════════════════════════════
@@ -128,6 +168,9 @@ SCENARIOS = [
     ("单笔 +666", curve_of([666])),
     ("长序列 60 笔", curve_of([(220 if i % 3 else -310) for i in range(60)])),
     ("7 位数末端", curve_of([300000, -900000, -600000])),
+    # [E] 过万 → 轴切「万元」档（不过万的那几场景用「元」档；同一个函数、
+    # 同一个面板，档位跟着轴的量级走）
+    ("过万 6 笔", curve_of([4000, 3000, -1500, 5000, 2000, 6500])),
     ("全平 3 笔", curve_of([0, 0, 0])),
     ("跨 0 轴 4 笔", curve_of([600, -1200, 700, -100])),
     ("跨月日期", curve_of([100, 200, 300, 400],
@@ -198,28 +241,53 @@ def audit(tag, rec, curve):
     need(not oob, "所有文字都在画布内（含 7 位数）", oob)
 
     # ── [A] 纵轴刻度 ────────────────────────────────────────
+    # 三家单位与 app.js moneyScale 的三档一一对应（元 / 万元 / 百万元）
+    UNIT = {"元": 1.0, "万元": 1e4, "百万元": 1e6}
+
+    def num(s):
+        # [E] 刻度一律是「<数值> <单位>」；单位只允许这三档，别的一律解析不出
+        m = re.fullmatch(r"(-?)(\d+(?:\.\d+)?) (元|万元|百万元)", s)
+        if not m:
+            return None
+        v = float(m.group(2)) * UNIT[m.group(3)]
+        return -v if m.group(1) else v
+
+    def unit_of(s):
+        m = re.fullmatch(r"-?\d+(?:\.\d+)? (元|万元|百万元)", s)
+        return m.group(1) if m else None
+
     gx = min(t["x"] for t in texts)
     ylab = [t for t in texts if abs(t["x"] - gx) < 0.6]
     # 条数只保证"不止 max/min 两个"（3~7）—— 具体几条由数据跨度决定；
-    # 真正把旧实现拦下来的是下面两条：值不重复（旧版 0 画两遍）与有网格线。
+    # 真正把旧实现拦下来的是下面几条：值不重复（旧版 0 画两遍）、有网格线、
+    # 每根刻度都带单位。
     need(3 <= len(ylab) <= 7, "纵轴刻度值 3~7 个（不是只有 max/min 两个）", len(ylab))
     vals = [t["t"] for t in ylab]
     need(len(set(vals)) == len(vals), "纵轴刻度值互不重复（0 不再被画两遍）", vals)
-    need(vals.count("0") == 1, "纵轴恰好一个 0", vals)
-
-    def num(s):
-        m = re.fullmatch(r"(-?)(\d+(?:\.\d+)?)(万|亿)?", s)
-        if not m:
-            return None
-        v = float(m.group(2))
-        v *= {"万": 1e4, "亿": 1e8}.get(m.group(3), 1)
-        return -v if m.group(1) else v
 
     nums = [num(v) for v in vals]
     need(all(x is not None for x in nums), "纵轴刻度都是可解析的数值", vals)
     if all(x is not None for x in nums):
+        # ── [E] 纵轴单位（2026-09-19）─────────────────────────
+        units = [unit_of(v) for v in vals]
+        need(all(u is not None for u in units),
+             "每根纵轴刻度都带单位（元 / 万元 / 百万元）", vals)
+        need(len(set(units)) == 1, "整条轴只用一档单位（不混档）", units)
+        need(sum(1 for x in nums if x == 0) == 1, "纵轴恰好一个 0", vals)
+        # 档位由**整条轴的量级**决定，规则与 moneyScale 逐字一致
+        big = max(abs(x) for x in nums)
+        want_unit = "百万元" if big >= 1e6 else ("万元" if big >= 1e4 else "元")
+        need(units[0] == want_unit,
+             "单位档位 = 轴量级（不过万→元 / 过万→万元 / 过百万→百万元）",
+             "轴最大 %.0f / 用了 %s / 应为 %s" % (big, units[0], want_unit))
         need(nums == sorted(nums) and len(set(nums)) == len(nums),
              "纵轴刻度单调递增", nums)
+        # 小数位够不够：真实刻度是等距的，位数不足被四舍五入（0.25→0.3）时
+        # 解析回来的间距就会不齐 —— 这条专抓"刻度值被写错"。
+        gaps = [round(nums[i + 1] - nums[i], 6) for i in range(len(nums) - 1)]
+        tol = max(1e-3, abs(nums[-1]) * 1e-9)
+        need(bool(gaps) and (max(gaps) - min(gaps)) <= tol,
+             "相邻刻度等距（小数位数足够写准该步长）", gaps)
         # 刻度按 y 从小到大 == 数值从大到小
         by_y = sorted(ylab, key=lambda t: t["y"])
         need([t["t"] for t in by_y] == list(reversed(vals)),
@@ -307,8 +375,31 @@ def audit(tag, rec, curve):
          "刻度 %s / 虚线 %d 条" % (vals, len(dashed)))
 
     # ── 末端数值标签 ────────────────────────────────────────
-    tail = [t for t in texts if t["t"].endswith(" 元")]
-    need(len(tail) == 1, "末端有且只有一个「累计 xx 元」标签", [t["t"] for t in tail])
+    # 特征不能再取"以 元 结尾"：纵轴刻度现在也带单位、也以这些单位结尾。
+    # 末端标签既不在纵轴槽（x == gx）里、也不在横轴下方，取补集即可。
+    tail = [t for t in texts if t not in ylab and t not in xlab]
+    need(len(tail) == 1, "末端有且只有一个「累计 …」标签", [t["t"] for t in tail])
+    if len(tail) == 1:
+        finite = [c["cumulative"] for c in curve
+                  if isinstance(c["cumulative"], (int, float))
+                  and c["cumulative"] == c["cumulative"]]
+        lastv = float(finite[-1]) if finite else 0.0
+        # 末端值就是总净盈亏（TradeStats.py:197 / :213-222），面板与曲线该给同一串；
+        # 这里把 money() 的规则在 Python 侧重写一遍再逐字比对，防两处各写各的。
+        a = abs(lastv)
+        div, unit = ((1e6, "百万元") if a >= 1e6
+                     else (1e4, "万元") if a >= 1e4 else (1.0, "元"))
+        mt = re.fullmatch(r"-?\d+\.\d{2} (元|万元|百万元)", tail[0]["t"])
+        need(mt is not None,
+             "末端标签 = 两位小数金额 + 单位（与面板 money() 同构）", tail[0]["t"])
+        if mt:
+            need(mt.group(1) == unit, "末端标签单位档位 = 自身量级",
+                 "%s vs %s（末端累计 %.2f）" % (mt.group(1), unit, lastv))
+            tv = num(tail[0]["t"])
+            need(tv is not None
+                 and abs(tv - round(lastv / div, 2) * div) <= div * 0.005 + 1e-6,
+                 "末端标签数值 = 末端累计值按该档缩位到 2 位小数",
+                 "%s vs %.2f" % (tail[0]["t"], lastv))
     # ── 曲线本体 ────────────────────────────────────────────
     need(rec["strokes"] >= 2 and rec["fills"] >= 1, "曲线与面积都画了",
          (rec["strokes"], rec["fills"]))
@@ -393,7 +484,16 @@ var cross = [];
 ["2026-09-18", "2026-01-01", "2027-05-15", "2028-09-26"].forEach(function (d) {
   cross.push([d, fmtAxisDate(d), eqAxisDate(d + " 10:00:00", false)]);
 });
-console.log(JSON.stringify({ scenarios: out, cross: cross }));
+// 金额缩位交叉校验：纵轴刻度与面板「总净盈亏」共用 moneyScale / money ——
+// 把两者对同一批量级的结果都带出来，跟 Python 侧重写的规则逐字比对。
+// （同一份实现 + 两侧独立重算 = "改了一处忘另一处"会被立刻发现。）
+var money_cases = [];
+[0, 1, 9999, 10000, 999999, 1000000, 3400, 34000, 3400000, -34000,
+ -3400000, 1234567.89, -1234567.89, 99999999].forEach(function (v) {
+  var sc = moneyScale(v);
+  money_cases.push([v, money(v), sc.div, sc.unit]);
+});
+console.log(JSON.stringify({ scenarios: out, cross: cross, money: money_cases }));
 """
 
 
@@ -444,6 +544,17 @@ def run_static_layer():
     for d, want, got in payload["cross"]:
         check(want == got, "跨面板一致：%s → 市场量能 '%s' / 曲线 '%s'"
               % (d, want, got))
+    # 金额缩位：JS 的 money()/moneyScale() 与 Python 侧重写的规则逐条比对。
+    # 这是"纵轴单位与面板「总净盈亏」同一档"的实证 —— 两边同时对才可能全绿。
+    for v, text, div, unit in payload["money"]:
+        a = abs(float(v))
+        w_div, w_unit = ((1e6, "百万元") if a >= 1e6
+                         else (1e4, "万元") if a >= 1e4 else (1.0, "元"))
+        check(w_div == div and w_unit == unit,
+              "缩位档位一致：%g → %s" % (v, unit), (unit, w_unit))
+        want = "%.2f %s" % (float(v) / w_div, w_unit)
+        check(text == want, "缩位字面一致：%g → JS '%s' / 规则 '%s'"
+              % (v, text, want))
     for (name, curve), rec in zip(SCENARIOS, payload["scenarios"]):
         audit("静态 " + name, rec, curve)
 
@@ -618,7 +729,7 @@ def run_render_layer():
                 continue
             audit("真渲染 " + name, info, curve)
             if shot_dir and name in ("全正 6 笔", "全负 5 笔", "7 位数末端",
-                                     "千笔长序列"):
+                                     "千笔长序列", "过万 6 笔"):
                 os.makedirs(shot_dir, exist_ok=True)
                 page.locator("#stats-panel").screenshot(
                     path=os.path.join(shot_dir, "after_%s.png" % name.replace(" ", "")))
@@ -628,7 +739,9 @@ def run_render_layer():
 
 
 # ══════════════════════════════════════════════════════════════
-print("[静态] node + canvas 桩：抽出 app.js 真实代码段跑逐场景几何审计")
+print("[静态源码] 金额缩位（元 / 万元 / 百万元）只有一处实现")
+static_source_checks()
+print("\n[静态] node + canvas 桩：抽出 app.js 真实代码段跑逐场景几何审计")
 run_static_layer()
 print("\n[真渲染] 无头 Chrome + 真实 measureText")
 run_render_layer()

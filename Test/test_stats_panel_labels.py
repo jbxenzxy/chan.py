@@ -184,16 +184,25 @@ check("元/笔" in blk, "⑤ 期望值数值带「 元/笔」（量纲 = 总净�
 check("yuanPer(d.expectancy)" in blk, "⑤ 期望值走 yuanPer()（元/笔 专用格式）")
 check("yuan(d.expectancy)" not in blk, "⑤ 期望值不再走 yuan()（那样量纲就丢了）")
 
-# ⑨ 总净盈亏缩位：过万→万元、过百万→百万元；其余金额字段维持「元」
+# ⑨ 总净盈亏缩位：过万→万元、过百万→百万元；其余金额字段维持「元」。
+#    缩位实现已从面板里提出来、单独成一节（面板「总净盈亏」与盈亏曲线**纵轴
+#    刻度**共用同一份），所以这里从**全仓**抽它，而不是从面板那一段里抽。
 check("money(d.total_net)" in blk, "⑨ 核心区「总净盈亏」走 money() 缩位")
-mfn = re.search(r"var money = function \(x\) \{(.*?)\n            \};", blk, re.S)
-check(mfn is not None, "⑨ 抽得到 money() 缩位实现（覆盖面自检）")
+mfn = re.search(r"^        function moneyScale\(v\) \{(.*?)\n        \}", js, re.S | re.M)
+check(mfn is not None, "⑨ 抽得到 moneyScale() 缩位实现（覆盖面自检）")
 if mfn:
     mbody = mfn.group(1)
     check(mbody.index("1e6") < mbody.index("1e4"),
           "⑨ 先判「过百万」再判「过万」（顺序反了 3.4e6 会写成 340.00 万元）")
-    for unit in ('" 元"', '" 万元"', '" 百万元"'):
+    for unit in ('"元"', '"万元"', '"百万元"'):
         check(unit in mbody, "⑨ 单位分支 %s 在位" % unit)
+check(js.count("function moneyScale(") == 1 and js.count("function money(") == 1,
+      "⑨ 缩位规则全仓只有一份（面板与纵轴同源，不是各抄一份）",
+      (js.count("function moneyScale("), js.count("function money(")))
+check("var money = function" not in js,
+      "⑨ 旧的局部 money() 已删除（留着就是第二份实现）")
+check("var sc = moneyScale(" in js,
+      "⑨ 盈亏曲线纵轴的单位也取自 moneyScale（两处同一个档位函数）")
 for keep in ("yuan(d.avg_win)", "yuan(d.avg_loss)",
              "yuan(d.max_win.net_cash)", "yuan(d.max_loss.net_cash)"):
     check(keep in blk, "⑨ 每笔量级字段仍写「元」不缩位：%s" % keep)
