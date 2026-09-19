@@ -4638,11 +4638,13 @@
             html += '<div class="stats-row"><span class="stats-label">期望值</span><span class="stats-value" style="color:' + col(d.expectancy) + '">' + yuanPer(d.expectancy) + '</span></div>';
             // 这两个数就是「盈亏比(赔率)」的两个分量（pl_ratio = avg_win / |avg_loss|），
             // 标签必须写明「每笔」—— 光写「平均盈利」会被读成总量口径，与盈利因子混淆。
-            html += '<div class="stats-row"><span class="stats-label">平均每笔盈利 / 平均每笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
+            // 后半截只写「亏损」不重复「平均每笔」：主语已由前半截给出，再写一遍
+            // 只是把标签撑长 —— 明细区一格放不下就折行，右侧的值会被挤走。
+            html += '<div class="stats-row"><span class="stats-label">平均每笔盈利/亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.avg_win) + '</span> / <span style="color:#00F0F0">' + yuan(d.avg_loss) + '</span></span></div>';
             // 最大单笔盈亏合成一行：这两个数本来就是一对（最好的单笔 / 最坏的单笔），
-            // 合成一行后与上面「平均每笔盈利 / 平均每笔亏损」同构，也省下一行高度。
+            // 合成一行后与上面「平均每笔盈利/亏损」同构，也省下一行高度。
             // 同样不给发生时间 —— 这一格回答的是"最好/最坏会到多少"，时间是复盘表格里的事。
-            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利 / 最大单笔亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + '</span> / <span style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + '</span></span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔盈利/亏损</span><span class="stats-value"><span style="color:#FF3C3C">' + yuan(d.max_win.net_cash) + '</span> / <span style="color:#00F0F0">' + yuan(d.max_loss.net_cash) + '</span></span></div>';
             html += statsReadWarningHtml(d);
             html += '</div>';
             if (_writeStatsHtml(html)) drawEquityCurve(d.equity_curve || []);
