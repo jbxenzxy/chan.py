@@ -241,8 +241,11 @@ def render_block(tables: Dict[str, object], nl: str = "\n") -> str:
 
 
 # 标记行匹配（允许行首尾空白；必须整行命中）
-_BEGIN_RE = re.compile(r"^[ \t]*" + re.escape(BLOCK_BEGIN) + r"[ \t]*$", re.M)
-_END_RE = re.compile(r"^[ \t]*" + re.escape(BLOCK_END) + r"[ \t]*$", re.M)
+# ⚠️ 收尾用 (?=\r?$) 而非 $：_read() 以 newline="" 读盘、原样保留换行，
+#    CRLF 文件里 "$" 会落在 "\r" 之后 → 整行失配、区块报"找不到"。前瞻不吞
+#    "\r"（m1.end()/m2.start() 偏移不变，替换后文件仍是 CRLF），LF 文件照旧。
+_BEGIN_RE = re.compile(r"^[ \t]*" + re.escape(BLOCK_BEGIN) + r"[ \t]*(?=\r?$)", re.M)
+_END_RE = re.compile(r"^[ \t]*" + re.escape(BLOCK_END) + r"[ \t]*(?=\r?$)", re.M)
 
 
 def detect_nl(text: str) -> str:

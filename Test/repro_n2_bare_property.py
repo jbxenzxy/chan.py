@@ -111,7 +111,7 @@ def main():
               "L1465-1500 区段）")
         print("      仍把「必须经 snapshot 访问」的契约押在人的自觉上。")
         print("      修复方向二选一：")
-        print("        a) property 改为返回快照/不可变视图"
+        print("        a) property 改为返回快照/不可变视图")
         print("           （需核对下游是否有就地写）；")
         print("        b) 本体出口改名 xxx_raw_unsafe + AST 扫描禁止下游引用")
         print("           （并入 test_lock_completeness 防回潮）。")

@@ -52,6 +52,8 @@ import tokenize
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(os.path.dirname(_HERE))
+if _REPO not in sys.path:          # 同目录其余 59 个用例都有这步引导
+    sys.path.insert(0, _REPO)
 
 _PASS = 0
 _FAIL = 0
