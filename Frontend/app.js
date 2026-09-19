@@ -44,6 +44,12 @@
 
         let _subShowVolume = false; // 双窗口下窗 底部区域显示模式（独立，不与上窗联动）
 
+        // 成交额/量的显示模式：'bar'=柱状图（默认，与既有行为一致）；
+        // 'macd'=类MACD（把成交额/量代入传统 MACD(12,26,9)，替代收盘价）。
+        // 由右上角「显示设置」抽屉的单选项切换；双击底部指标区仍然只在
+        // 「价格MACD ↔ 成交额/量」之间切换，不改变本模式。
+        let _volDisplayMode = 'bar';
+
         // 频率→秒数映射（后端单一事实源 /api/health 下发，本地常量仅作离线兜底）
         let FREQ_SEC_MAP_JS = { 'w': 604800, 'd': 86400, '30m': 1800, '15m': 900, '5m': 300, '1m': 60, '15s': 15 };
 
@@ -318,6 +324,7 @@
                 if (typeof s.showBiIdx === 'boolean') showBiIdx = s.showBiIdx;
                 if (typeof s.showVolume === 'boolean') _showVolume = s.showVolume;
                 if (typeof s.showSubVolume === 'boolean') _subShowVolume = s.showSubVolume;
+                if (s.volDisplayMode === 'bar' || s.volDisplayMode === 'macd') _volDisplayMode = s.volDisplayMode;
                 if (s.bspFilter && typeof s.bspFilter === 'object') {
                     for (var k in s.bspFilter) { bspFilter[k] = s.bspFilter[k]; }
                 }
@@ -336,6 +343,7 @@
                     showZs: showZs, showSeg: showSeg, showBsp: showBsp, showBiIdx: showBiIdx,
                     showVolume: _showVolume,
                     showSubVolume: _subShowVolume,
+                    volDisplayMode: _volDisplayMode,
                     bspFilter: bspFilter,
                     maPeriods: maPeriods,
                     logScale: _logScale
@@ -1013,6 +1021,95 @@
             return { min: 0, max: max * 1.05 };
         }
 
+        // ══ 成交额/量 的类MACD（只在前端算，不动后端 SSE 快照）══════════════
+        // 需求：底部指标区的「成交额/量」除柱状图外，可切换为「类MACD」——
+        // 借用传统 MACD(12,26,9) 算法，把收盘价换成成交额（股票）/成交量（期货），
+        // 算出黄白线（DIF/DEA）与红绿柱（BAR）。
+        // 为什么放在前端算：后端只下发「价格 MACD」的 dif/dea/macd，那条链路围着
+        // AppSSE 的增量 EMA 状态机与「预览bar继承」口径转；把成交额/量也塞进去，
+        // 改的是实时流热路径。类MACD 只是一种显示模式，前端算波及面最小，
+        // 且实时刷新天然跟随每次 render（无需重连 SSE、无需落盘）。
+        // 算法逐字对齐后端 App/utils.py 的 ema() / calculate_macd()：
+        //   ema 以首个样本为种子（不做 SMA 预热），k = 2/(N+1)；
+        //   样本不足 26 根时全 0（与后端同规则）。
+        // 后端把结果 round 到 4 位小数后再下发；本模式不走那条链路，保留全精度，
+        // 显示端再按成交额/量的单位格式化（见 formatVolMacdVal）。
+        // >>> VOL_MACD_CORE（Test/test_vol_macd_mode.py 按此标记抽取本段到 node 做数值对齐）
+        const VOL_MACD_PARAMS = { fast: 12, slow: 26, signal: 9 };
+
+        const ZERO_MACD_VALS = { dif: 0, dea: 0, macd: 0 };
+
+        function _volMacdEma(values, period) {
+            const k = 2.0 / (period + 1);
+            const out = new Array(values.length);
+            for (let i = 0; i < values.length; i++) {
+                out[i] = (i === 0) ? values[i] : values[i] * k + out[i - 1] * (1 - k);
+            }
+            return out;
+        }
+
+        // 成交额/量 类MACD —— 返回 Map<K线对象, {dif, dea, macd}>
+        // 尾部占位K线（未形成的预览bar：成交量/成交额恒为 0，只有 OHLC 被填入）
+        // **不参与 EMA**：0 会把 EMA 一路拉向 0，末根出现假的深坑；与后端
+        // _inherit_macd_for_preview_bar 同口径，末根继承前一根已算出的结果。
+        function calcVolMacdMap(klines, isFutures) {
+            const out = new Map();
+            if (!klines || !klines.length) return out;
+            const metricOf = isFutures
+                ? function(k) { return k.vol || 0; }
+                : function(k) { return k.amount || 0; };
+            let realN = klines.length;
+            while (realN > 0 && metricOf(klines[realN - 1]) <= 0) realN--;
+            if (realN < VOL_MACD_PARAMS.slow) {
+                for (let i = 0; i < klines.length; i++) out.set(klines[i], ZERO_MACD_VALS);
+                return out;
+            }
+            const vals = [];
+            for (let i = 0; i < realN; i++) vals.push(metricOf(klines[i]));
+            const emaFast = _volMacdEma(vals, VOL_MACD_PARAMS.fast);
+            const emaSlow = _volMacdEma(vals, VOL_MACD_PARAMS.slow);
+            const dif = [], dea = [];
+            for (let i = 0; i < realN; i++) dif.push(emaFast[i] - emaSlow[i]);
+            const deaRaw = _volMacdEma(dif, VOL_MACD_PARAMS.signal);
+            for (let i = 0; i < realN; i++) dea.push(deaRaw[i]);
+            let last = ZERO_MACD_VALS;
+            for (let i = 0; i < realN; i++) {
+                last = { dif: dif[i], dea: dea[i], macd: 2 * (dif[i] - dea[i]) };
+                out.set(klines[i], last);
+            }
+            for (let i = realN; i < klines.length; i++) out.set(klines[i], last);
+            return out;
+        }
+        // <<< VOL_MACD_CORE
+
+        // 最近一次渲染算出的成交额/量类MACD：键=K线对象（视口切片与全序列共享同一批
+        // 对象），绘制 / 标签 / 纵轴三处都从这里取值，保证同源、不会各算各的。
+        let _volMacdMap = null;
+
+        // 取某根K线的成交额/量类MACD值；未算（非本显示模式）时按 0 处理
+        function volMacdOf(k) {
+            return (_volMacdMap && _volMacdMap.get(k)) || ZERO_MACD_VALS;
+        }
+
+        // 成交额/量 类MACD 的纵轴取值范围（口径与 getMacdRange 一致：
+        // dif/dea/macd 三者同域，全 0 时兜底 ±1 避免除以零）
+        function getVolumeMacdRange(klines) {
+            if (!klines.length) return { min: -1, max: 1 };
+            let min = Infinity, max = -Infinity;
+            klines.forEach(k => {
+                const v = volMacdOf(k);
+                if (v.macd < min) min = v.macd;
+                if (v.macd > max) max = v.macd;
+                if (v.dif < min) min = v.dif;
+                if (v.dif > max) max = v.dif;
+                if (v.dea < min) min = v.dea;
+                if (v.dea > max) max = v.dea;
+            });
+            if (min === 0 && max === 0) return { min: -1, max: 1 };
+            const margin = Math.max(Math.abs(max), Math.abs(min)) * 0.1;
+            return { min: min - margin, max: max + margin };
+        }
+
         // _mirrorChartData 已废弃：翻转视图改为纯视图变换（priceToY 翻转Y轴），
         // 不再对数据取负，前复权负价原样保留显示。颜色/MACD/方向翻转由各 draw 函数显式处理。
 
@@ -1159,6 +1256,12 @@
             const area = getChartArea(), volArea = getVolArea();
             const macdTextArea = getMacdTextArea();
             const priceRange = getPriceRange(klines), macdRange = getMacdRange(klines), volRange = getVolumeRange(klines);
+            // 成交额/量 类MACD：仅在启用该显示模式时计算（全序列参与 EMA 预热），
+            // 结果按K线对象索引，供底部绘制 / 标签 / 纵轴同源取值。
+            _volMacdMap = (_showVolume && _volDisplayMode === 'macd')
+                ? calcVolMacdMap(data.klines, !!(data.meta && data.meta.market === 'futures'))
+                : null;
+            const volMacdRange = _volMacdMap ? getVolumeMacdRange(klines) : { min: -1, max: 1 };
             const effectiveCount = klines.length < viewCount ? klines.length : viewCount;
             const barWidth = Math.max(1, (area.w / effectiveCount) * 0.7);
             const barStep = area.w / effectiveCount;
@@ -1245,7 +1348,11 @@
             const klinesToDraw = klines.slice(0, viewCount);
             drawMacdLabel(macdTextArea, klinesToDraw, barStep, subPixelOffset);
             if (_showVolume) {
-                drawVolume(klinesToDraw, volArea, volRange, barStep, barWidth, subPixelOffset);
+                if (_volDisplayMode === 'macd') {
+                    drawVolumeMacd(klinesToDraw, volArea, volMacdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);
+                } else {
+                    drawVolume(klinesToDraw, volArea, volRange, barStep, barWidth, subPixelOffset);
+                }
             } else {
                 drawMacd(klinesToDraw, volArea, macdRange, barStep, MACD_BAR_WIDTH, subPixelOffset);
             }
@@ -1296,7 +1403,11 @@
             drawCrosshair(klinesToDraw, area, priceRange, volArea, _showVolume ? volRange : macdRange, barStep, macdTextArea, subPixelOffset);
             drawPriceAxis(area, priceRange);
             if (_showVolume) {
-                drawVolumeAxis(volArea, volRange);
+                if (_volDisplayMode === 'macd') {
+                    drawVolMacdAxis(volArea, volMacdRange);
+                } else {
+                    drawVolumeAxis(volArea, volRange);
+                }
             } else {
                 drawMacdAxis(volArea, macdRange);
             }
@@ -1633,7 +1744,11 @@
             });
         }
 
-        function drawMacd(klines, macdArea, macdRange, barStep, barWidth, subPixelOffset) {
+        function drawMacd(klines, macdArea, macdRange, barStep, barWidth, subPixelOffset, valOf) {
+            // valOf（可选）：返回该K线的 {dif, dea, macd}；缺省用K线自身的价格MACD字段。
+            // 传入取值函数即复用同一套画法绘制「成交额/量 类MACD」（见 drawVolumeMacd）——
+            // 翻转视图/零线/柱宽等口径天然一致，不会出现两套画法各自漂移。
+            const getVals = valOf || function(k) { return k; };
             // 翻转视图：MACD柱绕零线翻转（正柱→零线下方），颜色对调；dif/dea线Y轴翻转
             const range = macdRange.max - macdRange.min;
             const macdToY = (v) => _isMirrorMode
@@ -1643,9 +1758,10 @@
             const zeroY = macdToY(0);
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const isUp = k.macd >= 0;
+                const v = getVals(k) || ZERO_MACD_VALS;
+                const isUp = v.macd >= 0;
                 ctx.fillStyle = (_isMirrorMode ? !isUp : isUp) ? COLORS.macdUp : COLORS.macdDown;
-                const macdH = Math.abs(k.macd) / range * macdArea.h;
+                const macdH = Math.abs(v.macd) / range * macdArea.h;
                 const y = isUp ? (_isMirrorMode ? zeroY : zeroY - macdH)
                                : (_isMirrorMode ? zeroY - macdH : zeroY);
                 ctx.fillRect(x - barWidth / 2, y, barWidth, macdH);
@@ -1654,7 +1770,7 @@
             ctx.beginPath();
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const y = macdToY(k.dif);
+                const y = macdToY((getVals(k) || ZERO_MACD_VALS).dif);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             });
             ctx.stroke();
@@ -1662,12 +1778,17 @@
             ctx.beginPath();
             klines.forEach((k, i) => {
                 const x = macdArea.x + barStep * i + barStep / 2 - subPixelOffset;
-                const y = macdToY(k.dea);
+                const y = macdToY((getVals(k) || ZERO_MACD_VALS).dea);
                 if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             });
             ctx.stroke();
             ctx.strokeStyle = "rgba(255,255,255,0.2)"; ctx.lineWidth = 1;
             ctx.beginPath(); ctx.moveTo(macdArea.x, zeroY); ctx.lineTo(macdArea.x + macdArea.w, zeroY); ctx.stroke();
+        }
+
+        // 成交额/量 的类MACD绘制：画法完全复用 drawMacd，只换取值来源
+        function drawVolumeMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset) {
+            drawMacd(klines, volArea, macdRange, barStep, barWidth, subPixelOffset, volMacdOf);
         }
 
         function drawVolume(klines, volArea, volRange, barStep, barWidth, subPixelOffset) {
@@ -1748,7 +1869,26 @@
             if (targetK) {
                 ctx.font = "11px monospace"; ctx.textAlign = "left";
                 const lineY = textArea.y + 11;
-                if (_showVolume) {
+                if (_showVolume && _volDisplayMode === 'macd') {
+                    // 成交额/量 类MACD：标签与价格MACD同构（黄白线 + 红绿柱）。
+                    // 前缀按品种写「成交额MACD」/「成交量MACD」，与价格MACD一眼区分；
+                    // 数值单位随成交额/量。
+                    const vmacd = volMacdOf(targetK);
+                    const vlabel = (isFuturesMode() ? "成交量MACD" : "成交额MACD") + "(12,26,9)";
+                    ctx.fillStyle = COLORS.textLight;
+                    ctx.fillText(vlabel, textArea.x + 4, lineY);
+                    let vxPos = textArea.x + 4 + ctx.measureText(vlabel + " ").width;
+                    ctx.fillStyle = COLORS.dif;
+                    ctx.fillText("DIF:" + formatVolMacdVal(vmacd.dif), vxPos, lineY);
+                    vxPos += ctx.measureText("DIF:" + formatVolMacdVal(vmacd.dif) + " ").width;
+                    ctx.fillStyle = COLORS.dea;
+                    ctx.fillText("DEA:" + formatVolMacdVal(vmacd.dea), vxPos, lineY);
+                    vxPos += ctx.measureText("DEA:" + formatVolMacdVal(vmacd.dea) + " ").width;
+                    // 翻转视图：BAR颜色对调，与翻转后的类MACD柱一致
+                    const vBarIsUp = _isMirrorMode ? (vmacd.macd < 0) : (vmacd.macd >= 0);
+                    ctx.fillStyle = vBarIsUp ? "#FF3C3C" : "#00F0F0";
+                    ctx.fillText("BAR:" + formatVolMacdVal(vmacd.macd), vxPos, lineY);
+                } else if (_showVolume) {
                     // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
                     // 翻转视图：颜色对调，与翻转后的成交量柱一致
                     const volIsRise = _isMirrorMode ? (targetK.close < targetK.open) : (targetK.close > targetK.open);
@@ -2390,6 +2530,21 @@
             ctx.fillText(botVal.toFixed(2), macdArea.x + macdArea.w + 6, macdArea.y + macdArea.h - 4);
         }
 
+        // 成交额/量 类MACD 的纵轴：数值带符号（DIF/DEA/BAR 可正可负），
+        // 单位跟随成交额/量（股票 万/亿，期货 手/万），与柱状模式纵轴同源格式化。
+        function drawVolMacdAxis(volArea, macdRange) {
+            ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
+            const range = macdRange.max - macdRange.min;
+            const zeroY = _isMirrorMode
+                ? volArea.y + (0 - macdRange.min) / range * volArea.h
+                : volArea.y + volArea.h * (macdRange.max / range);
+            const topVal = _isMirrorMode ? macdRange.min : macdRange.max;
+            const botVal = _isMirrorMode ? macdRange.max : macdRange.min;
+            ctx.fillText(formatVolMacdVal(topVal), volArea.x + volArea.w + 6, volArea.y + 12);
+            ctx.fillText("0", volArea.x + volArea.w + 6, zeroY + 4);
+            ctx.fillText(formatVolMacdVal(botVal), volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
+        }
+
         function drawVolumeAxis(volArea, volRange) {
             ctx.fillStyle = COLORS.text; ctx.font = "11px monospace"; ctx.textBaseline = "alphabetic"; ctx.textAlign = "left";
             // 成交量(额)恒为正值，轴标签不随翻转视图改变（0在底部、max在顶部）
@@ -2398,6 +2553,13 @@
             const midLabel = formatVolume(volRange.max / 2);
             ctx.fillText(midLabel, volArea.x + volArea.w + 6, volArea.y + volArea.h / 2 + 4);
             ctx.fillText("0", volArea.x + volArea.w + 6, volArea.y + volArea.h - 4);
+        }
+
+        // 成交额/量 类MACD 的数值格式化：带符号，绝对值交给 formatVolume
+        // （股票 万/亿、期货 手/万），与柱状模式的纵轴/标签同一套单位口径。
+        function formatVolMacdVal(v) {
+            if (!isFinite(v)) return "-";
+            return (v < 0 ? "-" : "") + formatVolume(Math.abs(v));
         }
 
         // 格式化底部柱状指标数字（股票成交额：万/亿；期货成交量：手，万级用万）
@@ -4949,6 +5111,9 @@
             bspFilterPushInFlight = Math.max(0, bspFilterPushInFlight - 1);
         }
 
+        // 写入抽屉内的「自动下单状态」提示行。抽屉中现在不提供该元素，
+        // 这里判空即返回；保留函数与全部调用点，是为了让「接口不可达 / 写入被拒 /
+        // 推送完成」三条判定路径的调用位置保持完整，静态护栏可直接引用这些文本。
         function renderBspFilterEngineState(filt, unreachable) {
             var el = document.getElementById("bsp-filter-engine-state");
             if (!el) return;
@@ -5059,6 +5224,7 @@
             var biIdxCb = document.querySelector('#bsp-filter-dialog input[name="show-bi-idx"]');
             if (biIdxCb) biIdxCb.checked = showBiIdx;
             initCoordSystemRadio();
+            initVolDisplayModeRadio();
             document.getElementById("bsp-filter-dialog").classList.add("show");
             document.getElementById("bsp-filter-overlay").classList.add("show");
         };
@@ -5089,6 +5255,29 @@
             saveOverlaySettings();
             render();
         };
+
+        // 成交额/量显示模式（柱状图 / 类MACD）：即时生效，无需重开页面或重连。
+        // 刻意**不用内联 onchange** —— 内联处理器必须挂到 window.*，而 window API 面
+        // 已冻结（Test/test_phase6_guards.py ③ 逐名比对冻结基线），故改挂 addEventListener。
+        function onVolDisplayModeRadioChange(ev) {
+            var el = ev && ev.target ? ev.target : ev;
+            if (!el || !el.value) return;
+            _volDisplayMode = (el.value === 'macd') ? 'macd' : 'bar';
+            saveOverlaySettings();
+            render();
+        }
+
+        // 打开抽屉时调用：同步选中态 + 首次挂监听（data-bound 幂等，重复打开不叠加）
+        function initVolDisplayModeRadio() {
+            var radios = document.querySelectorAll('#bsp-filter-dialog input[name="vol-display-mode"]');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (radios[i].value === _volDisplayMode);
+                if (!radios[i].getAttribute('data-bound')) {
+                    radios[i].setAttribute('data-bound', '1');
+                    radios[i].addEventListener('change', onVolDisplayModeRadioChange);
+                }
+            }
+        }
 
         window.bspFilterSelectAll = function() {
             var cbs = document.querySelectorAll('#bsp-filter-dialog input[name="bsp-filter"]');
@@ -7685,7 +7874,7 @@
 
 // ══════════════════════════════════════════════════════════════════
         // [MERGED] AppState 状态访问层
-        // 30 个共享状态变量的 getter/setter 访问器 + 8 个引导方法别名。
+        // 31 个共享状态变量的 getter/setter 访问器 + 8 个引导方法别名。
         // 闭包变量仍为唯一数据源（访问器同源读写，行为零漂移）；本层不新增
         // 任何 window.* 绑定（window API 面冻结），
         // 仅供控制台调试（ChanApp.state.<变量>）。
@@ -7704,6 +7893,7 @@
                 maPeriods: { get: function(){ return maPeriods; }, set: function(v){ maPeriods = v; } },
                 _logScale: { get: function(){ return _logScale; }, set: function(v){ _logScale = v; } },
                 _showVolume: { get: function(){ return _showVolume; }, set: function(v){ _showVolume = v; } },
+                _volDisplayMode: { get: function(){ return _volDisplayMode; }, set: function(v){ _volDisplayMode = v; } },
                 _subShowVolume: { get: function(){ return _subShowVolume; }, set: function(v){ _subShowVolume = v; } },
                 currentFreq: { get: function(){ return currentFreq; }, set: function(v){ currentFreq = v; } },
                 lastStockFreq: { get: function(){ return lastStockFreq; }, set: function(v){ lastStockFreq = v; } },
