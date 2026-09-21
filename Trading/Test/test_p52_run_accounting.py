@@ -26,6 +26,8 @@ P52 run 级配对会计护栏（设计文档 v3.1 §6：[S1]-[S10] + [S7b]）
   [S5] run 中重启：entry_offset / entry_at 从 state.db 恢复，离场后 Trade 完整
   [S6] 对账强平：run 对应仓单被删 → 以 ref_price 就地结算（触发点 = 删除
        那一刻）；部分删除 run 仍在途；锁仓侧删除不触 run（零 Trade）。
+       [S6-d] 判别用例：同侧多笔不同价 + anchor ≠ 被删仓单 entry，
+       钉死 Reconcile 路径 Trade.entry = run 锚（复核报告唯一实质漏项）。
        镜像走两阶段（先"见过"再"消失"），过 P64 证据门
   [S7] shutdown_and_lock_all → Trade reason=auto_order_off
   [S7b] auto_order_off_retry 单列（首拒 + 下一根 K 线补平），
@@ -633,6 +635,39 @@ with tmp_dir("rec3") as tmp:
     check_true("[S6-c3] 锁仓侧删除事件 net_cash 有值（不回退为缺字段）",
                all(isinstance(d.get("net_cash"), (int, float)) for d in _evs),
                [d.get("net_cash") for d in _evs])
+    store.close()
+
+with tmp_dir("rec4") as tmp:
+    # 场景 D（[S6-d]，复核报告 ⑵ 唯一实质漏项）：部分强平 × 同侧多笔不同价，
+    # 且 run 锚 ≠ 被删仓单 entry —— 判别用例。FIFO 删最早一笔（4500），
+    # run 锚取 4510（= 簿内另一笔的 entry）：若把 Reconcile 路径的
+    # Trade.entry 改成被删仓单 entry（P0-1 候选补丁口径），[S6-d2] 立即翻红。
+    # 分层口径（与 Reconcile.py 事件注释同源）：删除事件 gross = 被删仓单
+    # 身份，Trade gross = run 身份（run 锚口径），两者并存不是矛盾。
+    eng, store, broker, ev, _ = build(tmp, "a")
+    broker = eng.broker = TwoPhaseRealBroker(eng.state, {"sim_equity": 1_000_000.0})
+    eng.on_bar(make_bar(D1, "09:40", 4520, 4530, 4510, ms(2026, 9, 2, 9, 40)))
+    eng.positions.add(make_pos(eng, Side.LONG, 1, 4500.0, D1, 100))
+    eng.positions.add(make_pos(eng, Side.LONG, 1, 4510.0, D1, 101))
+    inject_run(eng, Side.LONG, anchor=4510.0)
+    broker.set_real("LONG", 2)          # prime
+    eng._reconcile_positions("probe")
+    broker.set_real("LONG", 1)          # act：柜台少 1 手 → FIFO 删 4500 仓单
+    eng._reconcile_positions("probe")
+    trades = store.trades()
+    check("[S6-d1] 部分删除 → 结算被删手数（1 手，FIFO 最早 4500 笔）",
+          [(t["reason"], t["volume"]) for t in trades],
+          [("reconcile_external_partial", 1)])
+    check("[S6-d2] Trade.entry = run 锚 4510（≠ 被删仓单 4500）、exit = ref 4520",
+          (round(trades[0]["entry_price"], 3), trades[0]["exit_price"]),
+          (4510.0, 4520.0))
+    check("[S6-d3] run 仍在途（净敞口 1，继续管剩余）",
+          (eng._run_side.name, eng.account_state().value), ("LONG", "running"))
+    _evd = [d for d in event_dicts(eng, tmp, "a")
+            if d.get("kind") == "position_externally_closed"]
+    check("[S6-d4] 分层：事件 gross = 被删仓单段盈亏 20 点（4500→4520），"
+          "Trade gross = run 锚段盈亏 10 点（4510→4520）",
+          (_evd[0]["gross_points"], trades[0]["gross_points"]), (20.0, 10.0))
     store.close()
 
 # ════════════════════════════════════════════════════════════════════
