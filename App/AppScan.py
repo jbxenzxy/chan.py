@@ -529,7 +529,7 @@ class Scanner:
         # 落入中证 csindex 兜底拼出不存在的 "sh000852cons.xls"，返回非 Excel 内容，
         # 抛 "Excel file format cannot be determined"，成分为空、扫描池为 0。
         if _idx_code:
-            from App import utils as _u
+            from App import AppUtils as _u
             _mkt, _bare = _u._get_stock_market_code(_idx_code)
             if _mkt:
                 _idx_code = _bare
@@ -986,7 +986,7 @@ class Scanner:
         代码失配 `.startswith("88"/"399")` 判定。
         """
         global _page_index_code
-        from App import utils as _u
+        from App import AppUtils as _u
         code = code.strip()
         if code:
             mkt, bare = _u._get_stock_market_code(code)

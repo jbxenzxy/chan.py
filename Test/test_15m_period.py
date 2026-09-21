@@ -144,8 +144,8 @@ def test_freq_single_source():
     assert "SUBSECOND_FREQS = {" not in fu_src, "func_util 仍内联 SUBSECOND_FREQS"
     assert "from .CEnum import" in fu_src and "INTRADAY_FREQS" in fu_src, \
         "func_util 未从 CEnum 导入周期分类"
-    # 高层：不复制周期分类，仅从 Common 导入（App/utils 的 _get_date_fmt 来自 func_util 再导出）
-    for rel in ("BuySellPoint/BSPointList.py", "App/utils.py"):
+    # 高层：不复制周期分类，仅从 Common 导入（App/AppUtils 的 _get_date_fmt 来自 func_util 再导出）
+    for rel in ("BuySellPoint/BSPointList.py", "App/AppUtils.py"):
         with open(os.path.join(ROOT, rel), encoding="utf-8") as f:
             src = f.read()
         assert "INTRADAY_FREQS = {" not in src, f"{rel} 仍存在 INTRADAY_FREQS 内联副本"

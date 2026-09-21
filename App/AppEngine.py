@@ -56,9 +56,9 @@ from App.AppLog import get_logger
 log = get_logger(__name__)
 
 # 引擎纯函数/常量 + 证券代码解析公共工具（MACD/EMA、周期映射、日期格式、
-# 左肩定位、中枢确认、代码解析等，实现位于 App/utils.py；AppSSE/FrontAPI
-# 直接从 App.utils 导入；此处仅 import 引擎自身消费的符号）
-from App.utils import (
+# 左肩定位、中枢确认、代码解析等，实现位于 App/AppUtils.py；AppSSE/FrontAPI
+# 直接从 App.AppUtils 导入；此处仅 import 引擎自身消费的符号）
+from App.AppUtils import (
     _get_stock_name, _get_stock_market_code, _get_market_code,
     _infer_bare_code_market, is_index,
     _get_kl_type, _get_freq_label,
@@ -201,7 +201,7 @@ from DataAPI.TdxAPI import collect_codes_from_vipdoc as _collect_from_vipdoc
 
 
 # ============================================================
-# 获取股票名称（实现位于 App/utils.py，顶部统一 re-import）
+# 获取股票名称（实现位于 App/AppUtils.py，顶部统一 re-import）
 # ============================================================
 
 

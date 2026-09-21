@@ -272,7 +272,7 @@ def _code_to_zxg_line(code_str):
         return None
     # ① 应用层标准/别名经唯一事实源解析（market(小写)+数字代码 / 字母速记）
     try:
-        from App import utils as _u
+        from App import AppUtils as _u
         mkt, bare = _u._get_stock_market_code(c)
     except Exception:
         mkt, bare = None, None
@@ -1546,7 +1546,7 @@ class AppData:
 
     def clear_saved_point(self, code, freq="d"):
         """清除选点并同步清理分析缓存（对应 /api/clear_saved_point）"""
-        from App import utils as _u
+        from App import AppUtils as _u
         market, normalized_code = _u._get_stock_market_code(code)
         if not market:
             # 统一解析拒掉旧写法/未知代码，不再在内部维护一套 SH/SZ 前后缀规则
@@ -1744,7 +1744,7 @@ class AppData:
                 continue
 
             # 解析代码：键内代码已是标准 market(小写)+code，或期货等非股票键原样
-            from App import utils as _u
+            from App import AppUtils as _u
             mkt, bcode = _u._get_stock_market_code(code_with_suffix)
             if mkt:
                 market = mkt

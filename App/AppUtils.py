@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-App/utils.py —— App 层公共工具（代码解析 + 引擎纯函数/常量）
+App/AppUtils.py —— App 层公共工具（代码解析 + 引擎纯函数/常量）
 =========================================================================
 本模块收纳两类无业务状态的公共工具，供 AppEngine / AppSSE 等统一导入：
 
@@ -49,7 +49,7 @@ _SSE_DEBUG = app_config.sse_debug
 
 # 港股指数 HZ 文件代码 → 字母代码（与 DataAPI/TdxAPI.py 的 _HK_INDEX_HZ_MAP
 # 互为镜像：数据层持正向表换算 27#HZxxxx 文件路径，应用层持反向表做代码归一。
-# App/utils 不 import 数据源（数据源门禁：仅 TqSdkAPI），故此处自含小表。）
+# App/AppUtils 不 import 数据源（数据源门禁：仅 TqSdkAPI），故此处自含小表。）
 _HK_HZ_TO_LETTER = {
     "HZ5017": "HSTECH",  # 恒生科技指数（Hang Seng TECH）
     "HZ5489": "HSIDI",   # 恒生创新药指数（Hang Seng Innovative Drug）

@@ -18,7 +18,7 @@
      访问器在位（刷新后仍生效）。
   ③ 数值对齐（真跑）：把 app.js 里 VOL_MACD_CORE 标记区间的**真实代码**
      抽到 node 执行，用真实快照（股票 amount / 期货 vol）与后端
-     App/utils.calculate_macd 逐点比对——不是"看起来像 MACD"，是逐值相同。
+     App/AppUtils.calculate_macd 逐点比对——不是"看起来像 MACD"，是逐值相同。
      附：尾部占位K线（未形成预览bar，量恒为 0）必须**不参与 EMA**（否则末根
      出现假的深坑），与后端 _inherit_macd_for_preview_bar 同口径继承。
   ④ 真渲染对照（无头 Chrome，浏览器不在位时降级 SKIP）：起本地静态服务 +
@@ -193,7 +193,7 @@ process.stdout.write(JSON.stringify(out));
 
 def test_numeric_alignment(failures):
     print("\n③ 数值对齐：前端类MACD ≡ 后端 calculate_macd（真实快照，逐点）")
-    from App.utils import calculate_macd
+    from App.AppUtils import calculate_macd
 
     js = read(APP_JS)
     begin = js.find(CORE_BEGIN)
@@ -655,7 +655,7 @@ def test_real_render(failures):
                    and not any("(12, 26, 9)" in t for t in macd_texts), ""))
 
     # ── 标签数值 ≡ Python 侧 calculate_macd（同源比对，跨语言闭环） ──
-    from App.utils import calculate_macd
+    from App.AppUtils import calculate_macd
     klines = snap["klines"]
     total = len(klines)
     start = max(0, int(view["off"]))

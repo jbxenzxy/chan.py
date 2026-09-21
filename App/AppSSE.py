@@ -9,8 +9,8 @@ App/AppSSE.py —— SSE 实时流功能域
 文件内按 5 区域划分（见各区域分隔头）：SSE 实时流 / 期货分析 / 期货选点 /
 市场/代码/周期查询 / 期货退出清理。
 
-依赖方向：AppSSE → AppEngine / App/utils / AppData / DataAPI（单向）；
-纯函数/常量与 AppEngine 统一从 App/utils 导入；共享状态（选点/期货缓存）
+依赖方向：AppSSE → AppEngine / App/AppUtils / AppData / DataAPI（单向）；
+纯函数/常量与 AppEngine 统一从 App/AppUtils 导入；共享状态（选点/期货缓存）
 一律经 app_data.* 公共 API（同一对象，零漂移）。
 锁：SSE 路径每连接独立 TqApi + CChan + 记录缓存（session_context 绑定），
 CChan 构建免锁。但 SSE 线程与 REST 线程共享 app_data —— 期货下窗 CChan
@@ -30,8 +30,8 @@ from App.AppEngine import (
 from DataAPI.TqSdkAPI import session_context, session_set, session_clear
 # 领域异常（期货路径使用领域异常，定义于 App/AppErrors.py）
 from App.AppErrors import AppError, DataFetchError, AnalysisError
-# 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/utils 导入）
-from App.utils import (
+# 引擎纯函数/常量公共工具（与 AppEngine 统一从 App/AppUtils 导入）
+from App.AppUtils import (
     _make_chan_config, _get_kl_type, _get_kl_type_by_sec, _get_freq_label, _get_date_fmt,
     ema,
     _calc_zs_confirm_edt_from_bis, _find_left_shoulder_time,

@@ -35,7 +35,7 @@
      CTqSdkAPI 主体经 AppEngine 显式名）、
      AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属
       + ElTdxAPI A股PE-TTM + TxAPI 港股名称/指数·港股PE-TTM + SinaAPI A股名称）、
-     AppScan（TdxAPI.get_index_stocks + ElTdxAPI 流通市值）、App/utils（仅 TqSdkAPI 纯函数依赖）
+     AppScan（TdxAPI.get_index_stocks + ElTdxAPI 流通市值）、App/AppUtils（仅 TqSdkAPI 纯函数依赖）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -69,7 +69,7 @@ def read_src(rel):
 # ═══════════════════════════════════════════════════════════════════════
 # 12 个 DATA 族函数：AppEngine 同名实现必须退化为兼容壳。
 # 允许的函数体形态：docstring + （from App.AppData import ...）+ 单条 return
-# （阶段 8：_get_stock_name 已下沉 App/utils.py，不再属于 AppEngine 壳面；
+# （阶段 8：_get_stock_name 已下沉 App/AppUtils.py，不再属于 AppEngine 壳面；
 #  阶段 8 瘦身：选点/标注/上次代码等 13 个兼容壳已随功能域迁移删除；
 #  P2：_load_pe_ttm_cache/_update_float_mc_cache/_get_float_mc_from_cache/
 #  _cache_remove/_save_point_time 等已无人消费的引擎委托壳随 P2 删除）
@@ -710,10 +710,10 @@ def test_datasource_import_gate(failures):
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
     if scan_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
         bad.append(f"App/AppScan.py 的 DataAPI import 应仅为 TdxAPI/ElTdxAPI，实测: {sorted(scan_mods)}")
-    # App/utils：仅 TqSdkAPI（引擎纯函数的 FREQ_SEC_MAP/期货代码解析依赖）
-    utils_mods = set(_datasource_imports(os.path.join("App", "utils.py")))
+    # App/AppUtils：仅 TqSdkAPI（引擎纯函数的 FREQ_SEC_MAP/期货代码解析依赖）
+    utils_mods = set(_datasource_imports(os.path.join("App", "AppUtils.py")))
     if utils_mods != {"DataAPI.TqSdkAPI"}:
-        bad.append(f"App/utils.py 的 DataAPI import 应仅为 TqSdkAPI，实测: {sorted(utils_mods)}")
+        bad.append(f"App/AppUtils.py 的 DataAPI import 应仅为 TqSdkAPI，实测: {sorted(utils_mods)}")
 
     if bad:
         failures.extend(f"数据源门禁: {b}" for b in bad)

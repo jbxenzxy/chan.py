@@ -45,7 +45,7 @@ if not hasattr(typing, "Self"):
 
 def _get_common(TC, patch, tmp, cases, label):
     """跑一组 (输入, 期望(market,code)) 断言，逐项冻结；任一失败即收集。"""
-    from App import utils as u
+    from App import AppUtils as u
     from App import AppEngine as m
     n_fail = 0
     for inp, expected in cases:
@@ -82,7 +82,7 @@ def test_resolve_old_forms_rejected(TC):
         # 非法复合
         ("SH000001.SH", None),
     ]
-    from App import utils as u
+    from App import AppUtils as u
     n = 0
     for inp, _ in cases:
         got = u._get_stock_market_code(inp)
@@ -137,7 +137,7 @@ def test_resolve_bare_hk(TC):
 # ═══════════════════════════════════════════════════════════════════
 def test_resolve_aliases(TC):
     """④ 别名与字母代码速记不得回归；带点/后缀字母缩写一律拒绝。"""
-    from App import utils as u
+    from App import AppUtils as u
     n = 0
     def check(inp, expected, label="④别名"):
         got = u._get_stock_market_code(inp)
@@ -183,7 +183,7 @@ def test_resolve_aliases(TC):
 # ═══════════════════════════════════════════════════════════════════
 def test_only_standard_writes(TC):
     """②b 唯一标准 market(小写)+code 必须解析成功；其余写法一律 (None, 原样)。"""
-    from App import utils as u
+    from App import AppUtils as u
     pass_cases = [
         ("sh000001", ("sh", "000001")),
         ("sz000001", ("sz", "000001")),
@@ -225,7 +225,7 @@ def test_public_entry_lowercase(TC):
 
     标准写法唯一 = market(小写)+code：全小写、无点、market 在前。
     """
-    from App import utils as u
+    from App import AppUtils as u
 
     def check(label, fn, cases):
         n = 0
@@ -353,7 +353,7 @@ def test_frontend_input_guard(TC, patch, tmp):
     # 硬编码在 analyze 请求里的默认代码字面量必须能被严格解析器识别为标准格式
     # （大小写/点号旧写法会 404/400 → 首屏 initDefault"默认加载失败"崩屏）。
     # 历史血泪：initDefault 曾遗漏大写 "SH000001"，后端拒绝后直接抛"默认加载失败"。
-    from App import utils as _u
+    from App import AppUtils as _u
     default_codes = re.findall(r'encodeURIComponent\("([^"]+)"\)\s*\+\s*"/analyze', src)
     for code in default_codes:
         mkt, _bare = _u._get_stock_market_code(code)
@@ -462,12 +462,12 @@ def test_scan_index_source(TC):
     """⑪ 打开指数，「扫描来源→成分股」置灰与否 = 当前打开的是不是指数。
 
     判定本质是「当前打开的是不是指数」，由后端权威给出 meta.is_index（与引擎
-    同源，见 App/utils.is_index），前端只读它，不再靠 code 正则自行推断。
+    同源，见 App/AppUtils.is_index），前端只读它，不再靠 code 正则自行推断。
     本用例守护：① is_index 对沪深同号(000001)按 market 区分（sh000001 指数可用 /
 sz000001 平安银行股票灰化）；② meta 注入该字段；③ 前端只读 meta.is_index，无任何正则兜底。
     """
     # ── ① 单一事实源 is_index(market, code) 的判定表 ──
-    from App.utils import is_index
+    from App.AppUtils import is_index
     index_cases = {
         ("sh", "000001"): True, ("sz", "000001"): False,   # 沪深同号：上证指数≠平安银行
         ("sh", "000300"): True, ("sh", "880491"): True, ("sh", "881319"): True,
