@@ -176,6 +176,25 @@ def make_pos(symbol="CFFEX.IF2609", side=Side.LONG, vol=1, entry_price=4500.0,
         entry_date=entry_date)
 
 
+def seed_run(eng, *, side=Side.LONG, anchor=4500.0, volume=1, bar_ts=1000,
+             bar_seq=1, signal_key="P20-run"):
+    """注入仓单的场景必须同步立 run（v3.1 run 级会计）。
+
+    结算读内存 `_run_*`；只 `positions.add` 不立 run 时，`_settle_run`
+    会静默跳过 → 离场成交了却 0 笔 Trade（验收报告 P1-3）。真实路径里
+    run 由 `_book_open` 建立，这里手工补齐等价元数据（与 p15b seed_run 同法）。
+    """
+    eng._run_side = side
+    eng._run_anchor = anchor
+    eng._run_volume = volume
+    eng._run_bar_ts = bar_ts
+    eng._run_bar_seq = bar_seq
+    eng._run_signal_key = signal_key
+    eng._run_plan = ExitPlan(name="x", stop_price=anchor - 10.0)
+    eng._run_entry_offset = "OPEN"
+    eng._run_entry_at = "2026-09-03 09:00"
+
+
 class LockRejectBroker(DryRunBroker):
     """前 reject_n 次**离场向**报单拒绝（模拟锁仓/平仓拒单），之后放行。
 
@@ -277,6 +296,7 @@ with tmp_dir() as tmp:
     engine.on_bar(make_bar(1000))
     engine.positions.add(make_pos(signal_key="P20-2A", entry_bar_seq=1))
     engine.positions.add(make_pos(signal_key="P20-2B", entry_bar_seq=2))
+    seed_run(engine, anchor=4500.0, volume=2, signal_key="P20-2A")  # v3.1：结算读内存 run
 
     engine.shutdown_and_lock_all()
     check("[2a] enabled=False", engine.auto_order_enabled, False)
@@ -301,8 +321,10 @@ with tmp_dir() as tmp:
           lock_orders(broker)[0].meta.get("intent"), "open")
     check("[2e4] 该单 transition=4",
           lock_orders(broker)[0].meta.get("transition"), 4)
-    check("[2f] 锁仓不兑现 PnL → 0 笔 Trade（④ 不记 Trade）",
-          len(store.trades()), 0)
+    check("[2f] 今仓离场即 run 结算点 → 1 笔 Trade（v3.1 §5.1）",
+          len(store.trades()), 1)
+    check("[2f2] Trade.reason = auto_order_off（强平 reason 单列，[S7]）",
+          store.trades()[0]["reason"], "auto_order_off")
     check("[2g] enabled=False 已持久化",
           store.get_json("auto_order_enabled", True), False)
     ev.flush()
@@ -323,6 +345,7 @@ with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
     engine.positions.add(make_pos(signal_key="P20-3A", entry_bar_seq=1))
+    seed_run(engine, anchor=4500.0, volume=1, signal_key="P20-3A")  # v3.1：结算读内存 run
     engine.shutdown_and_lock_all()
     n_orders = len(broker.orders)
     n_trades = len(store.trades())
@@ -347,6 +370,7 @@ with tmp_dir() as tmp:
     engine1, store1, broker1, ev1 = build_engine(tmp)
     engine1.on_bar(make_bar(1000))
     engine1.positions.add(make_pos(signal_key="P20-4A", entry_bar_seq=1))
+    seed_run(engine1, anchor=4500.0, volume=1, signal_key="P20-4A")  # v3.1：结算读内存 run
     engine1.shutdown_and_lock_all()
     check("[4a0] 关闭后 1 原仓 + 1 反向仓 = 2 笔", len(engine1.positions), 2)
 
@@ -375,6 +399,7 @@ with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp, broker=broker)
     engine.on_bar(make_bar(1000))
     engine.positions.add(make_pos(signal_key="P20-5A", entry_bar_seq=1))
+    seed_run(engine, anchor=4500.0, volume=1, signal_key="P20-5A")  # v3.1：结算读内存 run
 
     engine.shutdown_and_lock_all()
     check("[5a] 首轮锁仓被拒：持仓未锁（净敞口仍 +1）",
@@ -394,7 +419,10 @@ with tmp_dir() as tmp:
     check("[5b4] 补锁报单 reason=auto_order_off_retry",
           [o.note for o in broker.orders if o.meta.get("is_exit")][-1],
           "auto_order_off_retry")
-    check("[5b5] 补锁不兑现 PnL → 0 笔 Trade", len(store.trades()), 0)
+    check("[5b5] 补锁即 run 结算点 → 1 笔 Trade（v3.1）",
+          len(store.trades()), 1)
+    check("[5b6] Trade.reason = auto_order_off_retry（不落 sl/tp 桶，[S7b]）",
+          store.trades()[0]["reason"], "auto_order_off_retry")
 
 # 5B 昨仓（转移 ⑤ CLOSE）被拒 → 必须等满冷却根数才重试
 with tmp_dir() as tmp:
@@ -405,6 +433,7 @@ with tmp_dir() as tmp:
     # entry_date 早于 bar 日 → 昨仓 → 转移 ⑤ CLOSE
     engine.positions.add(make_pos(signal_key="P20-5B", entry_bar_seq=1,
                                   entry_date="2026-09-02"))
+    seed_run(engine, anchor=4500.0, volume=1, signal_key="P20-5B")  # v3.1：结算读内存 run
 
     engine.shutdown_and_lock_all()
     check("[5c] 昨仓离场被拒：簿仍 1 笔", len(engine.positions), 1)
@@ -422,7 +451,10 @@ with tmp_dir() as tmp:
     check("[5d2] 补平后 account_state FLAT", engine.account_state().value, "flat")
     check("[5d3] 首轮被拒 + 补平成功 → 共 2 笔离场报单",
           len([o for o in broker.orders if o.meta.get("is_exit")]), 2)
-    check("[5d4] ⑤ 是 CLOSE → 兑现 1 笔 Trade", len(store.trades()), 1)
+    check("[5d4] ⑤ 是 CLOSE → 兑现 1 笔 Trade（v3.1：离场即 run 结算点）",
+          len(store.trades()), 1)
+    check("[5d6] Trade.reason = auto_order_off_retry（retry 路径单列，[S7b]）",
+          store.trades()[0]["reason"], "auto_order_off_retry")
     check("[5d5] 被拒有告警留痕（分类弹窗 / 追价跑满 / 终局结论）",
           len(engine.auto_order_status()["alerts"]) >= 1, True)
 

@@ -376,6 +376,13 @@ with tmp_dir("four") as tmp:
                         and d.get("trade_id") == ""]
     check_true("[S10-h3] 拆锁入场 close 事件 trade_id 留空（无结算可回填）",
                len(empty_close_tids) == 2, len(empty_close_tids))
+    # P1-2 护栏（验收报告）：close 事件必须在 _run_end() 之前写，此时
+    # `_run_plan` 未清，exit_policy 取 run 真实计划名；若回归到
+    # `_run_reset` 之后写，会退化成占位名 'run_managed'。
+    close_evs = [d for d in evs if d.get("kind") == "close"]
+    check("[S10-h4] close 事件 exit_policy = run 真实计划名（非 run_managed）",
+          sorted({d.get("exit_policy") for d in close_evs}),
+          ["LayeredExitPolicy"])
     store.close()
 
 # ════════════════════════════════════════════════════════════════════

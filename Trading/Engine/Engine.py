@@ -1507,13 +1507,23 @@ class TradingEngine(ReconcileMixin):
                 exit_offset=INTENT_TO_OFFSET[act.intent],
                 reason=reason, at=now_cn(), volume=o.volume)
             self._notify_close(o, act, reason)
+            if act.intent is not OrderIntent.OPEN and act.target is not None:
+                # close 事件（仓单级 gross 口径保留供对账/回放）；run 结算先行，
+                # 此处回填其 trade_id，杜绝 events 里的悬空引用（[S10]）。
+                # ⚠️ 必须在 `_run_end()` **之前**写：`_run_reset` 会清 `_run_plan`，
+                # 而 `_write_close_event` 的 exit_policy 取
+                # `self._run_plan or pos.exit_plan` —— 挪到 _run_end 之后会
+                # 退化为占位名 run_managed（验收报告 P1-2，2026-09-21）。
+                self._write_close_event(
+                    act, o, reason,
+                    trade_id=(settled.trade_id if settled is not None else ""))
             self._run_end()
-        if act.intent is not OrderIntent.OPEN and act.target is not None:
-            # close 事件（仓单级 gross 口径保留供对账/回放）；run 结算先行，
-            # 此处回填其 trade_id，杜绝 events 里的悬空引用（[S10]）。
-            self._write_close_event(
-                act, o, reason,
-                trade_id=(settled.trade_id if settled is not None else ""))
+        if (act.intent is not OrderIntent.OPEN and act.target is not None
+                and net_after != 0):
+            # 未收口的 close（净敞口仍非 0，如部分离场）：无 run 结算，
+            # trade_id 留空（无悬空引用，[S10]）；run 仍在途、`_run_plan`
+            # 未清，exit_policy 仍取 run 的真实计划名。
+            self._write_close_event(act, o, reason, trade_id="")
 
         self._persist()
         self._sync_state()
