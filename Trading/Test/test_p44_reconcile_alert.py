@@ -128,6 +128,7 @@ def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run")
     store.set_json("run", {
         "side": side, "anchor": anchor, "volume": volume,
         "bar_ts": 4100, "bar_seq": 1, "signal_key": signal_key,
+        "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "seed_plan", "stop_price": anchor - 10.0,
                  "tp_price": anchor + 10.0, "params": {}},
     })
@@ -186,6 +187,18 @@ def build(tmpd, broker, *, positions=(), bars_seen=10):
         net = eng.positions.net_volume()
         side = "LONG" if net > 0 else "SHORT"
         seed_run(eng.store, side=side, volume=abs(net))
+        # run 级会计（v3.1 §5.1-5）：对账结算读**内存** _run_*；engine 构造期
+        # _restore 已跑过（当时 kv 还没种），这里把内存字段与 kv 对齐，
+        # 否则删除路径不会触发 run 结算（_run_side is None → 零 Trade）。
+        eng._run_side = Side[side]
+        eng._run_anchor = 4545.0
+        eng._run_volume = abs(net)
+        eng._run_bar_ts = 4100
+        eng._run_bar_seq = 1
+        eng._run_signal_key = "seed-run"
+        eng._run_plan = ExitPlan(name="seed_plan", stop_price=4535.0)
+        eng._run_entry_offset = "OPEN"
+        eng._run_entry_at = "2026-09-01 09:00"
     return eng
 
 

@@ -196,6 +196,7 @@ def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run")
     store.set_json("run", {
         "side": side, "anchor": anchor, "volume": volume,
         "bar_ts": 4100, "bar_seq": 1, "signal_key": signal_key,
+        "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "seed_plan", "stop_price": anchor - 10.0,
                  "tp_price": anchor + 10.0, "params": {}},
     })
@@ -415,7 +416,9 @@ with tmp_dir() as td:
     trades = eng.store.trades()
     check("3.4c 1 条 reconcile_external_partial trade", len(trades), 1)
     if trades:
-        check("3.4d 平的是第 1 仓 (A)", trades[0]["signal_key"], "restore-3-4-A")
+        check("3.4d Trade.signal_key = run 的 key（v3.1 run 级会计，"
+              "被平仓单身份看 position_externally_closed 事件）",
+              trades[0]["signal_key"], "seed-run")
         check("3.4e trade reason", trades[0]["reason"], "reconcile_external_partial")
     evs = read_events(eng, kinds={"position_externally_closed_summary"})
     check("3.4f 写 reconcile_partial summary", len(evs) >= 1, True)

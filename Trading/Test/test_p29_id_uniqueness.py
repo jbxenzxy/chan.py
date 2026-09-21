@@ -237,15 +237,15 @@ with tmp_dir() as tmp:
           len(eng_a.positions.positions), 2)
     check("[1g2] 净敞口归零 → LOCKED（无 lock_pair_id，不记配对）",
           eng_a.account_state().value, "locked")
-    check("[1h] ④ 不记 Trade（PnL 未兑现）",
-          len(eng_a.store.trades()), 1)
-    check("[1i] 进程 A 结束时 _trade_seq=1", eng_a._trade_seq, 1)
+    check("[1h] ④ 是 run 结算点 → 2 笔（T2 跨日止损 + T4 当日止损，v3.1）",
+          len(eng_a.store.trades()), 2)
+    check("[1i] 进程 A 结束时 _trade_seq=2", eng_a._trade_seq, 2)
     orders_a = db_rows(eng_a.store, "SELECT order_id FROM orders")
     eng_a.store.close()
 
     # ── ↻ 重启（同一 state.db）────────────────────────────────────
     eng_b, brk_b = build(tmp, "e2e")
-    check("[1j] 重启后 _trade_seq 保持 1（R1）", eng_b._trade_seq, 1)
+    check("[1j] 重启后 _trade_seq 保持 2（R1）", eng_b._trade_seq, 2)
     check("[1k] 重启后持仓 2 笔（双向持仓跨重启保持）",
           len(eng_b.positions.positions), 2)
     check("[1k2] 重启后 account_state 仍 LOCKED",
@@ -254,7 +254,7 @@ with tmp_dir() as tmp:
     # ── T5：反向信号 → 转移 ③ 拆锁平仓 ──────────────────────────
     eng_b.on_bar(make_bar(T5[0], T5[1], 4500, 4510, 4490, 4505))
     eng_b.on_signal(make_sig("B|sell|1", T5[1], T5[0], 4505.0, False))
-    check("[1m] T5 拆锁 → 新成交号是 T00002（**不是 T00001**）",
+    check("[1m] T5 拆锁（run3 入场）不记 Trade → 仍是 T2/T4 结算的两笔",
           sorted(t["trade_id"] for t in eng_b.store.trades()),
           ["T00001", "T00002"])
     check("[1n] 拆锁后簿内 1 笔（多头那笔被平掉，只剩空头）",
@@ -348,6 +348,7 @@ with tmp_dir() as tmp:
     store.set_json("run", {
         "side": "LONG", "anchor": 4500.0, "volume": 2,
         "bar_ts": ms(2026, 9, 1, 9, 35), "bar_seq": 1, "signal_key": "LK",
+        "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "x", "stop_price": 0.0, "tp_price": None, "params": {}}})
     eng3, brk3 = build(tmp, "heal")
     check("[3d] kv=0 时 _trade_seq 从 trades 表自愈", eng3._trade_seq, 12)
@@ -436,6 +437,7 @@ def _pos(side, key, entry_date="2026-09-01", seq=1):
 _RUN_KV = {
     "side": "LONG", "anchor": 4500.0, "volume": 2,
     "bar_ts": ms(2026, 9, 1, 9, 35), "bar_seq": 1, "signal_key": "A",
+    "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
     "plan": {"name": "x", "stop_price": 0.0, "tp_price": None, "params": {}}}
 
 

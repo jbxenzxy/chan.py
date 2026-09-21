@@ -53,7 +53,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
-from ..Broker.Base import REJECT_POSITION, REJECT_PRICE, Broker
+from ..Broker.Base import (INTENT_TO_OFFSET, REJECT_POSITION,
+                           REJECT_PRICE, Broker)
 from ..Config import TradingConfig
 from ..Infra.EventLog import EventLog
 from ..Infra.Product import CLOSETODAY, ExecPolicy, Product, assert_product_allowed
@@ -160,8 +161,9 @@ class TradingEngine(ReconcileMixin):
         #   「空仓做多」与「锁仓做多」的风控表现天然一致（场景 X / Y 等价）。
         #   净敞口回到 0（转移 ④⑤）时 run 结束。
         #
-        #   ⚠️ run_anchor 是**风控锚**，不是会计锚：Trade 的盈亏仍按被平仓单
-        #      自己的 entry_price 计（锁仓期间盈亏挂原仓不兑现，两者本就不等）。
+        #   ⚠️ run_anchor 兼任**会计锚**（run 级配对会计，设计文档 v3.1 §5.1）：
+        #      Trade 的 entry = 本段 run 的入场 fill 价 —— 不是被平仓单自己的
+        #      entry_price（拆锁场景下二者不同，那正是仓单级口径错误的根源）。
         # ════════════════════════════════════════════════════════════════
         self._run_side: Optional[Side] = None
         self._run_anchor: float = 0.0
@@ -169,6 +171,11 @@ class TradingEngine(ReconcileMixin):
         self._run_bar_ts: int = 0
         self._run_bar_seq: int = 0
         self._run_signal_key: str = ""
+        # run 级会计元数据：入场 fill 的 offset 档与成交时点。
+        # entry_offset ∈ INTENT_TO_OFFSET 值域（SSOT @ Broker/Base.py），
+        # 决定 Trade 入场费率档 —— 拆锁入场是平昨/平今档，不是开仓档。
+        self._run_entry_offset: str = ""
+        self._run_entry_at: str = ""
         self._run_plan: Optional[ExitPlan] = None
         # 上一次报单被拒的原因（供调用方写 signal_action）。每次 _execute 开头清空。
         self._last_reject: str = ""
@@ -644,6 +651,8 @@ class TradingEngine(ReconcileMixin):
             "bar_ts": self._run_bar_ts,
             "bar_seq": self._run_bar_seq,
             "signal_key": self._run_signal_key,
+            "entry_offset": self._run_entry_offset,
+            "entry_at": self._run_entry_at,
             "plan": self._run_plan.to_dict(),
         })
 
@@ -692,6 +701,18 @@ class TradingEngine(ReconcileMixin):
             self._run_bar_ts = int(d.get("bar_ts") or 0)
             self._run_bar_seq = int(d.get("bar_seq") or 0)
             self._run_signal_key = str(d.get("signal_key") or "")
+            # run 级会计元数据（v3.1 §5.1-2）：缺失 = 旧版写入的库。
+            # 结算要用 entry_offset 选入场费率档，取错档会静默算错成本，
+            # 故与"方向矛盾"同款 fail-fast：启动时拒绝，不留到结算时炸。
+            _eo = str(d.get("entry_offset") or "")
+            if _eo not in INTENT_TO_OFFSET.values():
+                raise RuntimeError(
+                    "state.db 的运行态（run）记录缺 entry_offset（旧版写入），\n"
+                    "拒绝启动。run 级会计需要它选入场费率档，缺失时无法保证\n"
+                    "成本口径正确。\n"
+                    "  处理：确认账户无未了结持仓后，删除 Trading/State/state.db 再启动。")
+            self._run_entry_offset = _eo
+            self._run_entry_at = str(d.get("entry_at") or "")
             self._run_plan = ExitPlan.from_dict(d.get("plan") or {})
             return
         if st is not AccountState.RUNNING:
@@ -1386,9 +1407,10 @@ class TradingEngine(ReconcileMixin):
                动作不值得为省报撤单额度等冷却）。
 
         一次信号 / 一次离场 = 一笔报单（需求 ⑷）。成交后按 intent 分两条落账路径：
-          OPEN  → 簿内新增一笔仓单
-          CLOSE → 记一笔 Trade + 移除被对冲的那笔仓单
+          OPEN  → 簿内新增一笔仓单（含 ④ 反向开仓锁仓离场）
+          CLOSE → 移除被对冲的那笔仓单
         落账后按**净敞口变化**开启 / 结束 run（风控锚 = 本次成交价，D1）。
+        Trade 由 run 结束点的 `_settle_run` 统一写（run 级会计，v3.1 §5.1）。
         """
         self._last_reject = ""
         today = self._current_trading_day(bar)
@@ -1458,19 +1480,40 @@ class TradingEngine(ReconcileMixin):
         self._reject_streak = 0
         self._reject_streak_code = ""
         # ── 成交落账：净敞口的变化决定 run 的开启 / 结束 ──
+        # run 级会计（v3.1 §5.1）：Trade 一律由 `_settle_run` 在 run 结束点写，
+        # `_book_close` 只负责移除仓单；close 事件在结算后写入并回填 trade_id。
         net_before = self.positions.net_volume()
         if act.intent is OrderIntent.OPEN:
             self._book_open(act, o, sig)
         else:
             self._book_close(act, o, reason)
         net_after = self.positions.net_volume()
+        settled: Optional[Trade] = None
         if net_before == 0 and net_after != 0:
-            self._run_start(o.filled_price, bar, sig)
+            # 本次成交是 run 的**入场**：空仓开仓（OPEN 档）或锁仓拆锁
+            # （CLOSE / CLOSETODAY 档）。offset 直接取 intent 映射，
+            # 不读任何 broker meta —— SimNow 的 meta["offset"] 是动作标签，
+            # 与 CTP 档位语义不等价（设计文档 v3.1 §8）。
+            self._run_start(o.filled_price, bar, sig,
+                            entry_offset=INTENT_TO_OFFSET[act.intent])
             self._notify_open(o)
         elif net_before != 0 and net_after == 0:
-            # 阶段标记必须在 _run_end 清空前取（移动止盈/保本 → 平仓文案）
+            # run 结束 —— 今仓反向开 / 昨仓平 / shutdown 强平 / on_bar retry
+            # 四条路径在此收敛 → 结算唯一出口 `_settle_run`（防双写，[S9]）。
+            # 阶段标记必须在 _run_end 清空前取（移动止盈/保本 → 平仓文案；
+            # 结算同样要读 _run_plan）。
+            settled = self._settle_run(
+                exit_price=o.filled_price,
+                exit_offset=INTENT_TO_OFFSET[act.intent],
+                reason=reason, at=now_cn(), volume=o.volume)
             self._notify_close(o, act, reason)
             self._run_end()
+        if act.intent is not OrderIntent.OPEN and act.target is not None:
+            # close 事件（仓单级 gross 口径保留供对账/回放）；run 结算先行，
+            # 此处回填其 trade_id，杜绝 events 里的悬空引用（[S10]）。
+            self._write_close_event(
+                act, o, reason,
+                trade_id=(settled.trade_id if settled is not None else ""))
 
         self._persist()
         self._sync_state()
@@ -1501,10 +1544,77 @@ class TradingEngine(ReconcileMixin):
         self._check_two_state_invariant("book_open")
 
     def _book_close(self, act: "_Action", o: Order, reason: str) -> None:
-        """CLOSE 成交 → 记一笔 Trade + 移除被对冲的那笔仓单。
+        """CLOSE 成交 → 移除被对冲的那笔仓单。
 
-        盈亏按**被平仓单自己的 entry_price** 计（会计锚），与 run 的风控锚
-        （`_run_anchor`）是两回事 —— 锁仓期间盈亏挂原仓不兑现，两者本就不相等。
+        run 级会计（设计文档 v3.1 §5.1）后本方法**不再写 Trade**：盈亏按 run
+        结算（`_settle_run`，entry 取 run 入场 fill，不是被平仓单自己的
+        entry_price —— 拆锁场景下二者不同，那正是仓单级口径错误的根源）。
+        close 事件由 `_write_close_event` 在结算后统一写入（trade_id 回填）。
+        """
+        pos = act.target
+        if pos is None:
+            return
+        self.positions.remove(pos)
+
+    def _settle_run(self, exit_price: float, exit_offset: str,
+                    reason: str, at: str,
+                    volume: Optional[int] = None) -> Optional[Trade]:
+        """run 结算**唯一出口**（run 级配对会计，设计文档 v3.1 §5.1）。
+
+        一笔 Trade = 一次 run = 恰好一对成交：
+          entry = 本段 run 的入场 fill（`_run_anchor`，风控锚兼任会计锚）；
+          exit  = 本次离场 fill；费率各按自己成交的 offset 档
+          （入场档 `_run_entry_offset`、离场档 `exit_offset`，
+          单边费 SSOT 仍在品种档案 Fee，`Instrument.single_fee` 只做档位选择）。
+
+        离场路径全部收敛到这里，防双写（[S9]）：
+          ① 今仓反向开仓（R-OPEN，开仓档）；② 昨仓/两态机平仓（平昨/平今档）；
+          ③ shutdown_and_lock_all 强制锁仓（reason=auto_order_off）；
+          ④ on_bar 补做 retry（reason=auto_order_off_retry）；
+          ⑤ 对账强平（Reconcile，reason=reconcile_external_partial）。
+        强制离场时 reason 取强平 reason，不回落到 run 计划名（§7-④）。
+
+        volume：结算手数。正常离场 = 离场委托手数；对账部分强平 = 被删
+        仓单手数（run 仍在途、继续管剩余净敞口）。缺省 = 簿内净敞口。
+
+        run 不在途（`_run_side` 为空）→ 返回 None，调用方自行处理。
+        """
+        if self._run_side is None or self._run_plan is None:
+            return None
+        vol = int(volume if volume is not None
+                  else abs(self.positions.net_volume()))
+        if vol <= 0:
+            return None
+        entry_price = float(self._run_anchor)
+        gross = (exit_price - entry_price) * self._run_side.sign
+        cost = (self.state.single_fee(entry_price, self._run_entry_offset, vol)
+                + self.state.single_fee(exit_price, exit_offset, vol))
+        gross_cash = gross * self.state.multiplier * vol
+        net_cash = gross_cash - cost
+        bars_held = max(0, self.bars_seen - self._run_bar_seq)
+        self._trade_seq += 1
+        t = Trade(
+            trade_id="T{:05d}".format(self._trade_seq),
+            symbol=self.state.trade_symbol, side=self._run_side,
+            volume=vol, entry_price=entry_price, exit_price=exit_price,
+            entry_at=self._run_entry_at or now_cn(), exit_at=at,
+            reason=reason, gross_points=round(gross, 4),
+            cost_cash=round(cost, 4), net_cash=round(net_cash, 2),
+            bars_held=bars_held,
+            signal_key=self._run_signal_key,
+            exit_plan_name=self._run_plan.name,
+            exit_plan_params=self._run_plan.params)
+        self.store.save_trade(t)
+        return t
+
+    def _write_close_event(self, act: "_Action", o: Order, reason: str,
+                           trade_id: str = "") -> None:
+        """close 事件（仓单级口径，供对账/回放）。
+
+        事件里的 entry/gross/cost/net 沿用**被平仓单自己的**仓单级口径
+        （与 run 级 Trade 口径不同 —— 拆锁场景下被平仓单的 entry 是前一天的
+        价）；`trade_id` 由调用方回填 run 结算产出的 ID。拆锁入场不是离场、
+        无 run 结算 → 留空，不产生悬空引用（[S10]）。
         """
         pos = act.target
         if pos is None:
@@ -1513,18 +1623,11 @@ class TradingEngine(ReconcileMixin):
         gross = pos.pnl_points(exit_price)
         # CLOSE 恒作用于跨日仓（`_pre_trade_check` 已断言）→ 恒按平昨档计。
         # 这里仍按 entry_date 动态判定，是为"未来其它调用方"保留防御。
-        # 成本改读**品种档案 Fee 两档**（元口径，state 提供
-        #   有效乘数）；closetoday_first 是静态开关，留 spec。
-        #   净值口径：毛利（点）× 有效乘数 × 手数 = 毛利（元），减成本（元）
-        #   —— 全程在元上做，不再有"点减元"的口径混算点。
-        #
-        # **品种档案来源 = `self.state.product`**。
-        #   原写法 `p = self.cfg.product_profile` 是**实时**按
-        #   `cfg.instrument.signal_symbol` 查表，而状态机 / 手数 / 报单属性读的是
-        #   `Instrument` 构造期冻结的那份 —— 两者不等 = 「按 AU 决策、按 IF 记账」
-        #   （成本与乘数口径全错且完全静默）。现在**连入参都不再传**：
-        #   `cost_cash` 已去掉 product 形参、内部读 `self._product`，
-        #   于是"传进来的档案 ≠ 决策用的档案"在结构上不可能发生。
+        # 成本读**品种档案 Fee 两档**（元口径，state 提供有效乘数）——
+        # 仅用于事件流的仓单级口径，与 run 级 Trade 无关。
+        # **品种档案来源 = `self.state.product`**（构造期冻结的那份），
+        # `cost_cash` 连入参都不收 —— "传进来的档案 ≠ 决策用的档案"
+        # 在结构上不可能发生。
         closetoday = bool(self.state.closetoday_first
                           and pos.entry_date >= self._current_trading_day())
         cost = self.state.cost_cash(pos.entry_price, exit_price,
@@ -1533,23 +1636,12 @@ class TradingEngine(ReconcileMixin):
         net_cash = gross_cash - cost
         bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
         plan = self._run_plan or pos.exit_plan
-        self._trade_seq += 1
-        t = Trade(
-            trade_id="T{:05d}".format(self._trade_seq), symbol=pos.symbol,
-            side=pos.side, volume=pos.volume, entry_price=pos.entry_price,
-            exit_price=exit_price, entry_at=pos.entry_at, exit_at=now_cn(),
-            reason=reason, gross_points=round(gross, 4),
-            cost_cash=round(cost, 4), net_cash=round(net_cash, 2),
-            bars_held=bars_held,
-            signal_key=pos.signal_key, exit_plan_name=plan.name,
-            exit_plan_params=plan.params)
-        self.store.save_trade(t)
-        self.positions.remove(pos)
-        self.ev.write("close", symbol=t.symbol, side=str(t.side), reason=reason,
-                      entry=t.entry_price, exit=t.exit_price,
-                      gross=t.gross_points, cost_cash=t.cost_cash,
-                      net_cash=t.net_cash, bars_held=bars_held,
-                      trade_id=t.trade_id, exit_policy=t.exit_plan_name,
+        self.ev.write("close", symbol=pos.symbol, side=str(pos.side),
+                      reason=reason,
+                      entry=pos.entry_price, exit=exit_price,
+                      gross=round(gross, 4), cost_cash=round(cost, 4),
+                      net_cash=round(net_cash, 2), bars_held=bars_held,
+                      trade_id=trade_id, exit_policy=plan.name,
                       transition=act.transition,
                       position_signal_key=pos.signal_key)
 
@@ -1619,8 +1711,13 @@ class TradingEngine(ReconcileMixin):
                         code="run_trailing")
 
     def _run_start(self, anchor_price: float, bar: Optional[Bar],
-                   sig: Optional[Signal]) -> None:
-        """开启一段 run（净敞口 0 → 非 0）。**风控锚 = 本次成交价**（D1）。"""
+                   sig: Optional[Signal],
+                   entry_offset: str = "") -> None:
+        """开启一段 run（净敞口 0 → 非 0）。**风控锚 = 本次成交价**（D1）。
+
+        entry_offset：入场 fill 的 offset 档（INTENT_TO_OFFSET 值域），
+        供 run 结算取入场费率档（拆锁入场是平昨/平今档，v3.1 §5.1-2）。
+        """
         net = self.positions.net_volume()
         if net == 0 or sig is None:
             # sig 缺失时无法生成出场计划（plan() 需要信号的形态数据）。
@@ -1650,11 +1747,14 @@ class TradingEngine(ReconcileMixin):
                             else (self.last_bar.timestamp if self.last_bar else 0))
         self._run_bar_seq = self.bars_seen
         self._run_signal_key = sig.key
+        self._run_entry_offset = entry_offset
+        self._run_entry_at = now_cn()
         self._run_plan = plan
         self.ev.write("run_start", side=str(side), volume=self._run_volume,
                       anchor=anchor_price, stop=plan.stop_price,
                       tp=plan.tp_price, exit_policy=plan.name,
-                      signal_key=sig.key, entry_date=self._current_trading_day(bar))
+                      signal_key=sig.key, entry_date=self._current_trading_day(bar),
+                      entry_offset=entry_offset)
 
     def _run_end(self) -> None:
         """结束一段 run（净敞口 → 0）。转移 ④⑤ 的收尾。"""
@@ -1676,6 +1776,8 @@ class TradingEngine(ReconcileMixin):
         self._run_bar_ts = 0
         self._run_bar_seq = 0
         self._run_signal_key = ""
+        self._run_entry_offset = ""
+        self._run_entry_at = ""
         self._run_plan = None
 
     def _run_view(self) -> Optional[Position]:

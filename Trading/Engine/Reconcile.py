@@ -335,53 +335,36 @@ class ReconcileMixin:
                 side=str(side), rv=real_vol, k=len(close_list)),
             code="reconcile_sync")
         for idx, pos in enumerate(close_list):
-            # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供 trade 记账）
+            # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)
-            gross = pos.pnl_points(ref_price)
-            # 成本口径与 Engine 的 hard-exit 路径对齐（规则 ⑸）。
-            #   原写法直接传全局开关 self.state.closetoday_first（默认 True）→ 恒按
-            #   "平今"费率（0.0345%）计，对**跨日单**高估 15 倍；而 Engine.py 那边
-            #   是按 entry_date 动态判定 —— 两处成本口径不一致。现改为与 Engine 同源。
-            #   二次修正：today 也统一走 engine._current_trading_day()
-            #   （交易日口径，含夜盘归属次日），不再自行解析 last_bar.date 自然日 ——
-            #   否则夜盘品种上会和 Engine 的判定差一天，成本口径再次分叉。
-            _today = self._current_trading_day(self.last_bar)
-            _is_today_pos = pos.entry_date >= _today
-            # 成本改读**品种档案 Fee 两档**（元口径，state 提供
-            #   有效乘数），与 Engine._book_close 同源；closetoday_first 留 spec。
-            #   净值 = 毛利（点）× 有效乘数 × 手数 − 成本（元），全程元口径。
-            #
-            # 档案来源 = `self.state.product`（唯一运行时
-            #   对象），不再读 `cfg.product_profile`（**实时**按 cfg 的 symbol 查表）
-            #   —— 与 `Engine._book_close` 同源；且 `cost_cash` 已去掉 product 入参，
-            #   结构上不可能出现"按 A 品种决策、按 B 品种记账"。
-            _closetoday = bool(_is_today_pos and self.state.closetoday_first)
-            cost = self.state.cost_cash(pos.entry_price, ref_price,
-                                        closetoday=_closetoday, volume=pos.volume)
-            net_cash = (gross * self.state.multiplier * pos.volume) - cost
-            bars_held = max(0, self.bars_seen - pos.entry_bar_seq)
-
-            self._trade_seq += 1
-            t = Trade(
-                trade_id="T{:05d}".format(self._trade_seq), symbol=pos.symbol,
-                side=pos.side, volume=pos.volume, entry_price=pos.entry_price,
-                exit_price=ref_price, entry_at=pos.entry_at, exit_at=now_cn(),
-                reason="reconcile_external_partial", gross_points=round(gross, 4),
-                cost_cash=round(cost, 4), net_cash=round(net_cash, 2),
-                bars_held=bars_held,
-                signal_key=pos.signal_key, exit_plan_name=pos.exit_plan.name,
-                exit_plan_params=pos.exit_plan.params)
-            self.store.save_trade(t)
-            # （原 RiskGate.on_trade_closed 当日统计已随五道硬闸门删除。）
-
+            # run 级结算（设计文档 v3.1 §5.1-5）：被删仓单属于在途 run（与 run
+            # 同向）→ 以对账参考价**就地**强制结算该 run —— 触发点 = 删除那一刻，
+            # 不是两侧循环收尾（两侧同清时先删的可能是 run 侧仓单，延后结算会错
+            # 时点/参考价）。锁仓侧仓单删除不触 run（LOCKED 态 run 已随锁仓 fill
+            # 收口）。不再保留独立的仓单级补记行（§7-② 拍板）。
+            trade_id = ""
+            if (self._run_side is not None and pos.side is self._run_side
+                    and self.account_state() is AccountState.RUNNING):
+                # 离场档按被删仓单自己的建仓日判（与 hard-exit 的
+                # today 判定同源：交易日口径，含夜盘归属次日）。
+                _today = self._current_trading_day(self.last_bar)
+                _exit_offset = ("CLOSETODAY"
+                                if (pos.entry_date >= _today
+                                    and self.state.closetoday_first)
+                                else "CLOSE")
+                _t = self._settle_run(exit_price=ref_price,
+                                      exit_offset=_exit_offset,
+                                      reason="reconcile_external_partial",
+                                      at=now_cn(), volume=pos.volume)
+                if _t is not None:
+                    trade_id = _t.trade_id
             self.positions.remove(pos)
             self.ev.write("position_externally_closed",
                           reason="reconcile_external_partial",
                           side=str(pos.side), symbol=pos.symbol,
                           signal_key=pos.signal_key,
                           exit_price=ref_price,
-                          gross_points=t.gross_points,
-                          net_cash=t.net_cash,
+                          trade_id=trade_id,
                           fifo_index=idx, pos_count=len(close_list),
                           source=source)
 

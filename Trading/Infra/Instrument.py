@@ -458,6 +458,33 @@ class Instrument:
         return (open_fee.cash(entry_price, self.multiplier)
                 + exit_fee.cash(exit_price, self.multiplier)) * volume
 
+    def single_fee(self, price: float, offset: str, volume: int = 1) -> float:
+        """**单边**手续费（元）：一笔成交的费，档位由 CTP offset 决定。
+
+        run 级配对会计（设计文档 v3.1 §5.1-3）的费率口径：
+        成本 = 单边(入场 fill, 入场档) + 单边(离场 fill, 离场档)。
+        档位映射（与 `cost_cash` 同源）：
+          OPEN        → 开仓档
+          CLOSE       → 平昨档 ≡ 开仓档（xlsx 全表没有单独"平昨"行）
+          CLOSETODAY  → 平今档
+        费率 SSOT 仍在品种档案 Fee 两档（`fee_pair`），本方法只做**档位选择**，
+        不引入第二处费率表。offset 非法 → ValueError（档位取错会静默算错
+        成本，宁可 fail-fast）。
+        """
+        p = self._product
+        if p is None:
+            return 0.0
+        open_fee, ct_fee = p.fee_pair()
+        if offset == "CLOSETODAY":
+            fee = ct_fee
+        elif offset in ("OPEN", "CLOSE"):
+            fee = open_fee
+        else:
+            raise ValueError(
+                "single_fee: 非法 offset={!r}（合法值 = INTENT_TO_OFFSET "
+                "的值域 OPEN / CLOSE / CLOSETODAY）".format(offset))
+        return fee.cash(price, self.multiplier) * volume
+
     def points_to_cash(self, points: float, volume: int = 1) -> float:
         return points * self.multiplier * volume
 

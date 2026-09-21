@@ -160,6 +160,7 @@ def seed_run(store, side="LONG", anchor=4500.0, volume=1):
     store.set_json("run", {
         "side": side, "anchor": anchor, "volume": volume,
         "bar_ts": 4000, "bar_seq": 10, "signal_key": "SEED",
+        "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "run_managed", "stop_price": 0.0,
                  "tp_price": None, "params": {}},
     })
@@ -626,6 +627,10 @@ with tmp_dir() as tmp:
     engine._run_volume = 2
     engine._run_plan = ExitPlan(name="run_managed", stop_price=0.0)
     engine._run_signal_key = "U1"
+    # run 级会计元数据（v3.1 §5.1-2）：_persist 会把内存 run 写进 kv，
+    # 缺 entry_offset 的库重启会撞 fail-fast（_restore_run）。
+    engine._run_entry_offset = "OPEN"
+    engine._run_entry_at = "2026-09-01 09:00"
     engine._persist()
     engine._sync_state()
 

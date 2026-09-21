@@ -167,6 +167,7 @@ def seed_run(store, side="LONG", anchor=4550.0, volume=1):
     store.set_json("run", {
         "side": side, "anchor": anchor, "volume": volume,
         "bar_ts": 4000, "bar_seq": 10, "signal_key": "SEED",
+        "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "run_managed", "stop_price": 0.0,
                  "tp_price": None, "params": {}},
     })
@@ -343,7 +344,8 @@ with tmp_dir() as tmp:
     check("[6A-5] 净敞口归零", engine.positions.net_volume(), 0)
     check("[6A-6] account_state LOCKED", engine.account_state(), AccountState.LOCKED)
     check("[6A-7] _state 回 IDLE", engine._state, EngineState.IDLE)
-    check("[6A-8] trades 仍 0（锁仓不兑现 PnL）", len(store.trades()), 0)
+    check("[6A-8] 今仓离场即 run 结算点 → 1 笔 Trade（v3.1 run 级会计）",
+          len(store.trades()), 1)
     engine.ev.flush()
     import json as _j
     _evs_a = [_j.loads(l) for l in open(engine.ev.path, encoding="utf-8") if l.strip()]

@@ -221,11 +221,12 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
 
 
 def seed_run(eng, *, side=Side.LONG, anchor=4550.0, bar_ts=4000, bar_seq=1,
-             plan=None, signal_key="RUN"):
+             plan=None, signal_key="RUN", entry_offset="OPEN"):
     """直接立起一段 run（风控锚 + 出场计划）。
 
     绕开真实开仓路径就必须补这一步：`_settle_positions` 只认 run，
     没有 run 就等于"这段敞口没有风控锚" → 不做任何 L1-L3 判定。
+    entry_offset（v3.1 §5.1-2）：结算选入场费率档用；拆锁入场的场景传 "CLOSE"。
     """
     eng._run_side = side
     eng._run_anchor = anchor
@@ -234,6 +235,8 @@ def seed_run(eng, *, side=Side.LONG, anchor=4550.0, bar_ts=4000, bar_seq=1,
     eng._run_bar_seq = bar_seq
     eng._run_signal_key = signal_key
     eng._run_plan = plan or ExitPlan(name="manual", stop_price=0.0)
+    eng._run_entry_offset = entry_offset
+    eng._run_entry_at = "2026-09-01 09:00"
 
 
 def read_events(eng, kinds=None, tail_n=400):
@@ -282,7 +285,8 @@ with tmp_dir() as td:
     check("[1.1e] account_state LOCKED", eng.account_state(), AccountState.LOCKED)
     check("[1.1f] _state IDLE", eng._state, EngineState.IDLE)
     check("[1.1g] broker 1 单", len(eng.broker.orders), 1)
-    check("[1.1h] 0 条 Trade（锁仓不兑现 PnL）", len(eng.store.trades()), 0)
+    check("[1.1h] 今仓离场即 run 结算点 → 1 条 Trade（v3.1 run 级会计）",
+          len(eng.store.trades()), 1)
     _o = order_events(eng)
     check("[1.1i] order 事件 transition=4",
           (_o[-1].get("transition") if _o else None), 4)
@@ -313,7 +317,8 @@ with tmp_dir() as td:
     check("[1.2d] **broker 只 1 单**（旧口径是 3 单）", len(eng.broker.orders), 1)
     check("[1.2e] 该单 3 手", eng.broker.orders[0].volume, 3)
     check("[1.2f] 净敞口归零", eng.positions.net_volume(), 0)
-    check("[1.2g] 0 条 Trade", len(eng.store.trades()), 0)
+    check("[1.2g] 今仓离场即 run 结算点 → 1 条 Trade（整段一笔，v3.1）",
+          len(eng.store.trades()), 1)
 
 # 1.3 空仓离场：无事发生
 with tmp_dir() as td:
@@ -394,8 +399,8 @@ with tmp_dir() as td:
     check("[2.1c] account_state FLAT", eng.account_state(), AccountState.FLAT)
     check("[2.1d] _state IDLE", eng._state, EngineState.IDLE)
     check("[2.1c2] 记 1 笔 Trade", len(eng.store.trades()), 1)
-    check("[2.1e] Trade.signal_key = 被平那笔",
-          eng.store.trades()[0]["signal_key"], "P15B-2-1")
+    check("[2.1e] Trade.signal_key = run 的 key（v3.1 run 级会计）",
+          eng.store.trades()[0]["signal_key"], "RUN")
     _o = order_events(eng)
     check("[2.1f] order 事件 transition=5",
           (_o[-1].get("transition") if _o else None), 5)
@@ -430,9 +435,11 @@ with tmp_dir() as td:
           sorted(p.signal_key for p in eng.positions.positions),
           ["P15B-2-2-B", "P15B-2-2-C"])
     check("[2.2c] 净敞口从 +3 → +2", eng.positions.net_volume(), 2)
-    check("[2.2d] 1 条 Trade", len(eng.store.trades()), 1)
-    check("[2.2e] Trade 记的是 A",
-          eng.store.trades()[0]["signal_key"], "P15B-2-2-A")
+    check("[2.2d] 部分离场不收口 run → 0 条 Trade（v3.1：净敞口 +3→+2，run 在途）",
+          len(eng.store.trades()), 0)
+    _o22 = order_events(eng)
+    check("[2.2e] 被平的是 A（可观测出口 = order 事件 target_signal_key）",
+          (_o22[-1].get("target_signal_key") if _o22 else None), "P15B-2-2-A")
     check("[2.2f] broker 只 1 单（一次离场 = 一笔报单）", len(eng.broker.orders), 1)
     check("[2.2g] 该单 1 手（不是 3 手 —— ⑤ 逐笔平）", eng.broker.orders[0].volume, 1)
     check("[2.2h] 仍有净敞口 → account_state RUNNING",
@@ -591,7 +598,8 @@ with tmp_dir() as td:
     check("[4.4a] 今日仓止损 → 转移 ④ 锁仓（簿 2 笔）", len(eng.positions), 2)
     check("[4.4b] 净敞口归零", eng.positions.net_volume(), 0)
     check("[4.4c] account_state LOCKED", eng.account_state(), AccountState.LOCKED)
-    check("[4.4d] 0 条 Trade（④ 不兑现）", len(eng.store.trades()), 0)
+    check("[4.4d] 今仓止损即 run 结算点 → 1 条 Trade（reason=sl，v3.1）",
+          len(eng.store.trades()), 1)
     _o = order_events(eng)
     check("[4.4e] 报单 transition=4 / is_exit=True",
           ((_o[-1].get("transition"), _o[-1].get("is_exit")) if _o else None),
@@ -668,6 +676,7 @@ with tmp_dir() as td:
     eng.positions.add(make_position(Side.LONG, 1, 4546.0, 3, signal_key="P15B-5-2-B"))
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
+    seed_run(eng, side=Side.LONG, anchor=4545.0)   # v3.1：对账结算读内存 run，必须立起
     # 证据门（P64）前提：镜像先「见过」这笔仓（读到 ≥ 账本量）才有资格说它少了
     eng._reconcile_positions()      # real=3 == engine=3 → 仅确认，不动簿
     broker._real_longs = 2          # 之后镜像显示少 1 手
@@ -679,8 +688,8 @@ with tmp_dir() as td:
     check("[5.2c] 1 条 Trade", len(eng.store.trades()), 1)
     check("[5.2d] Trade.reason = reconcile_external_partial",
           eng.store.trades()[0]["reason"], "reconcile_external_partial")
-    check("[5.2e] Trade.signal_key = A",
-          eng.store.trades()[0]["signal_key"], "P15B-5-2-A")
+    check("[5.2e] Trade.signal_key = run 的 key（v3.1 run 级会计）",
+          eng.store.trades()[0]["signal_key"], "RUN")
     check("[5.2f] 对账不下单：broker 0 单", len(eng.broker.orders), 0)
 
 # 5.3 real == 0 → 清空同侧全部 + summary 事件
@@ -692,15 +701,19 @@ with tmp_dir() as td:
     eng.positions.add(make_position(Side.LONG, 1, 4546.0, 3, signal_key="P15B-5-3-B"))
     eng.last_bar = make_bar(close=4555.0)
     eng.bars_seen = 10
+    seed_run(eng, side=Side.LONG, anchor=4545.0)   # v3.1：对账结算读内存 run，必须立起
     # 证据门（P64）前提：镜像先读到 ≥ 账本量（2）
     eng._reconcile_positions()      # real=2 == engine=2 → 仅确认
     broker._real_longs = 0
     eng._reconcile_positions()
     check("[5.3a] real=0：簿清空", len(eng.positions), 0)
     check("[5.3b] real=0：state IDLE", eng._state, EngineState.IDLE)
-    check("[5.3c] real=0：2 条 Trade", len(eng.store.trades()), 2)
-    check("[5.3d] real=0：FIFO 顺序 A→B",
-          sorted(t["signal_key"] for t in eng.store.trades()),
+    check("[5.3c] real=0：逐仓就地结算 → 2 条 Trade（v3.1 §5.1-5）",
+          len(eng.store.trades()), 2)
+    _ev53 = read_events(eng, kinds={"position_externally_closed"})
+    check("[5.3d] real=0：FIFO 顺序 A→B（可观测出口 = 删除事件 signal_key；"
+          "两笔 Trade 的 entry 均 = run 锚 4545，[S3] FIFO 无关性）",
+          [d.get("signal_key") for d in _ev53],
           ["P15B-5-3-A", "P15B-5-3-B"])
     check_true("[5.3e] real=0：写 position_externally_closed_summary",
                len(read_events(eng, kinds={"position_externally_closed_summary"})) >= 1)

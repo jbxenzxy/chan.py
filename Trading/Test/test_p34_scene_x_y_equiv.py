@@ -284,11 +284,14 @@ with tmp_dir("y") as tmp:
     check("[2h] 跨日不利 K 线 → ⑤ CLOSE / 成交价 = L1 止损价",
           ord_y, [("close", "CLOSE", 5, snap_y["stop"])])
     check("[2i] Y 终态 FLAT", eng.account_state(), AccountState.FLAT)
-    check("[2j] Y 共 2 笔成交（锁仓持仓 + 敞口持仓）", len(tr_y), 2)
+    check("[2j] Y 共 2 笔成交（run1 结算 + run2 结算，v3.1）", len(tr_y), 2)
 
-# 提前抽出两场景的"止损离场持仓"与"锁仓持仓"，供 [5]/[7] 对账使用
+# 提前抽出两场景的 run 结算 Trade，供 [5]/[7] 对账使用（v3.1 语义）：
+# Y 有 2 笔 sl —— ty1 = run1 结算（④ 今仓离场，entry = run 锚 4500）、
+# ty2 = run2 结算（⑤ 敞口段平仓，entry = 拆锁成交价 4520）。
+# ly 取敞口段（run2，列表末笔），lock_pos 即 run1 结算 Trade（原"锁仓段"的会计载体）。
 lx = [t for t in tr_x if t["reason"] == "sl"][0]
-ly = [t for t in tr_y if t["reason"] == "sl"][0]
+ly = [t for t in tr_y if t["reason"] == "sl"][-1]
 lock_pos = [t for t in tr_y if t is not ly][0]
 
 
@@ -298,8 +301,8 @@ print("\n[3] 必然不同：报单 / 转移号 / Trade 会计锚")
 check("[3a] 报单必然不同：X = ① open/OPEN ‖ Y = ③ close/CLOSE",
       (snap_x["orders"], snap_y["orders"]),
       ([("open", "OPEN", False, 1)], [("close", "CLOSE", False, 3)]))
-check("[3b] Trade 数必然不同：X 入场不记 Trade ‖ Y 记 1 笔（平掉锁仓持仓）",
-      (snap_x["trades"], snap_y["trades"]), (0, 1))
+check("[3b] Trade 数相同（都为 0）：①/③ 都是 run 入场，不记 Trade（v3.1）",
+      (snap_x["trades"], snap_y["trades"]), (0, 0))
 
 # ══════════════════════════════════════════════════════════════
 print("\n[4] 必须相同：风控层逐字段一致（D1 的构造性保证）")
@@ -365,19 +368,19 @@ check_true("[6b] 都是 ⑤ CLOSE 且成交价都是 L1 止损价（同一触发
 # ══════════════════════════════════════════════════════════════
 print("\n[7] 差额对账：Σ_Y − Σ_X = 锁仓持仓 + 会计锚差（两项分别量化）")
 # ══════════════════════════════════════════════════════════════
-check("[7a] 锁仓持仓方向 = SHORT（④ 反向开仓的产物）", lock_pos["side"], "SHORT")
-check("[7b] 锁仓持仓 signal_key = 原信号键 + #lock（④ 的审计命名）",
-      lock_pos["signal_key"], "Y|buy|1#lock")
+check("[7a] run1 结算 Trade 方向 = LONG（Trade.side = run 的方向，即被 ④ 离场的那段）",
+      lock_pos["side"], "LONG")
+check("[7b] run1 结算 Trade 的 signal_key = run 的信号键（v3.1）",
+      lock_pos["signal_key"], "Y|buy|1")
 check("[7c] 敞口持仓出场价一致（同一止损价 → 同价）",
       lx["exit_price"], ly["exit_price"])
-check_true("[7d] 会计锚差 = 20 点：X 的敞口持仓入场 4520 ‖ Y 的 4500",
-           lx["entry_price"] - ly["entry_price"] == P_ANCHOR - P_Y_ENTRY,
-           "%s - %s" % (lx["entry_price"], ly["entry_price"]))
-check_true("[7e] 该差额**只**体现在会计层：敞口持仓 gross 之差的绝对值 = 20",
-           abs(round(lx["gross_points"] - ly["gross_points"], 6))
-           == abs(P_ANCHOR - P_Y_ENTRY),
+check_true("[7d] run1（锁仓段）结算 Trade 的 entry = run 锚 4500（v3.1：Trade.entry = run 锚）",
+           abs(lock_pos["entry_price"] - P_Y_ENTRY) < 1e-9,
+           "lock_entry=%s" % lock_pos["entry_price"])
+check_true("[7e] 对应段（敞口段）等额：lx 与 ly（run2）的 gross 完全相等（锚差只体现在 Y 独有的 run1）",
+           abs(lx["gross_points"] - ly["gross_points"]) < 1e-9,
            "%.4f vs %.4f" % (lx["gross_points"], ly["gross_points"]))
-check_true("[7f] 对账：Σ_Y − Σ_X = 锁仓持仓 net_cash + 敞口持仓 net_cash 之差（P-A 元口径）",
+check_true("[7f] 对账：Σ_Y − Σ_X = run1 结算 net_cash + 敞口段（run2−X）net_cash 之差（P-A 元口径）",
            abs((sum(t["net_cash"] for t in tr_y)
                 - sum(t["net_cash"] for t in tr_x))
                - (lock_pos["net_cash"] + (ly["net_cash"] - lx["net_cash"]))
@@ -386,10 +389,13 @@ check_true("[7f] 对账：Σ_Y − Σ_X = 锁仓持仓 net_cash + 敞口持仓 n
                sum(t["net_cash"] for t in tr_y),
                sum(t["net_cash"] for t in tr_x), lock_pos["net_cash"],
                ly["net_cash"] - lx["net_cash"]))
-check_true("[7g] 锁仓持仓在 ③ 拆锁时以成交价 4520 平仓了结（与敞口持仓分离的独立一段）",
-           abs(lock_pos["exit_price"] - P_ANCHOR) < 1e-9,
-           "lock_exit=%.4f anchor=%.4f net=%.4f"
-           % (lock_pos["exit_price"], P_ANCHOR, lock_pos["net_cash"]))
+check_true("[7g] run2 的 entry = 拆锁成交价 4520（run 锚）；run1 的 exit = ④ 成交价 = run1 止损触发价 4500−R（v3.1：Trade.entry = run 锚）",
+           abs(ly["entry_price"] - P_ANCHOR) < 1e-9
+           and abs(lock_pos["exit_price"]
+                   - (P_Y_ENTRY - (P_ANCHOR - snap_y["stop"]))) < 1e-9,
+           "run2_entry=%.4f run1_exit=%.4f expected_run1_exit=%.4f"
+           % (ly["entry_price"], lock_pos["exit_price"],
+              P_Y_ENTRY - (P_ANCHOR - snap_y["stop"])))
 check_true("[7h] 风控层等价是本文件的断言结论（止损价与离场报单全等由 [4][6] 钉死）",
            snap_x["plan"] == snap_y["plan"] and ord_x == ord_y, "")
 

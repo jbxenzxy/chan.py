@@ -245,7 +245,7 @@ with tmp_dir() as tmp:
     check("[3e] 簿内只剩多头一笔",
           [(p.side.name, p.signal_key) for p in eng.positions.positions],
           [("LONG", "OLD-LONG")])
-    check("[3f] 记了 1 笔成交", len(eng.store.trades()) - n0, 1)
+    check("[3f] 拆锁（run 入场）不记 Trade（v3.1）", len(eng.store.trades()) - n0, 0)
     check("[3g] net=+2 → RUNNING",
           (eng.positions.net_volume(), eng.account_state()),
           (2, AccountState.RUNNING))
@@ -286,6 +286,16 @@ with tmp_dir() as tmp:
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(Side.LONG, key="TODAY-L", entry_date=TODAY))
     eng._sync_state()
+    # v3.1：结算读内存 run 元数据（engine 构造期 _restore 已跑过，事后补内存字段）
+    eng._run_side = Side.LONG
+    eng._run_anchor = 4500.0
+    eng._run_volume = 2
+    eng._run_bar_ts = 1000
+    eng._run_bar_seq = 1
+    eng._run_signal_key = "seed-run"
+    eng._run_plan = ExitPlan(name="seed_plan", stop_price=4490.0)
+    eng._run_entry_offset = "OPEN"
+    eng._run_entry_at = "2026-09-01 09:00"
     check("[5a] 前置 RUNNING + IN_TRADE",
           (eng.account_state(), eng._state.name),
           (AccountState.RUNNING, "IN_TRADE"))
@@ -296,8 +306,8 @@ with tmp_dir() as tmp:
     check("[5c] 簿内 2 笔（多空互锁，双向持仓）", len(eng.positions.positions), 2)
     check("[5d] `_state` 回 IDLE", eng._state.name, "IDLE")
     _ev = kinds(eng)
-    check_true("[5e] 未记 Trade（锁定不兑现盈亏）",
-               eng.store.trades() == [])
+    check_true("[5e] 今仓离场即 run 结算点，记 1 笔 Trade（v3.1）",
+               len(eng.store.trades()) == 1)
     check_true("[5f] 写了 run_end（净敞口归零收尾）", "run_end" in _ev)
 
 # [5] 跨日仓 → 转移 ⑤ CLOSE → 净敞口 0 → FLAT
@@ -306,6 +316,16 @@ with tmp_dir() as tmp:
     eng.on_bar(make_bar(1000))
     eng.positions.add(make_pos(Side.LONG, key="OLD-L", entry_date=YESTERDAY))
     eng._sync_state()
+    # v3.1：结算读内存 run 元数据（同 c5）
+    eng._run_side = Side.LONG
+    eng._run_anchor = 4500.0
+    eng._run_volume = 2
+    eng._run_bar_ts = 1000
+    eng._run_bar_seq = 1
+    eng._run_signal_key = "seed-run"
+    eng._run_plan = ExitPlan(name="seed_plan", stop_price=4490.0)
+    eng._run_entry_offset = "OPEN"
+    eng._run_entry_at = "2026-09-01 09:00"
     eng._force_exit(make_bar(1001), reason="p27_exit", trigger_price=4500.0)
     check("[5g] 跨日仓 → CLOSE → 簿空 → FLAT",
           (eng.account_state(), len(eng.positions)), (AccountState.FLAT, 0))

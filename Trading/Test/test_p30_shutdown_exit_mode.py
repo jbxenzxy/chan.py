@@ -252,7 +252,8 @@ with tmp_dir("cur") as tmp:
     check("[1e] 净敞口归零", net_exposure(eng), 0)
     check("[1e2] 账户态 = LOCKED（净敞口 0 且簿非空）",
           eng.account_state().value, "locked")
-    check("[1f] 软离场不兑现 PnL → 0 笔 Trade", len(store.trades()), 0)
+    check("[1f] 软离场即 run 结算点 → 1 笔 Trade（v3.1 run 级会计）",
+          len(store.trades()), 1)
     check("[1g] enabled=False 已持久化",
           store.get_json("auto_order_enabled", True), False)
     ev.flush()
