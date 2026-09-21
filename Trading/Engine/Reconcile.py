@@ -96,11 +96,13 @@ class ReconcileMixin:
                 all_cleared = False
                 continue
             # 读数不可信 → 整侧跳过（不采纳、不动账本）：
-            #   None = 通道不稳定（`real_position` 自身的判据）；
-            #   < 0  = 读数失败（broker 用 -1 表达"读不到"，见 SimNow._position_total）。
-            #   负数**必须**在这里挡掉：往下走会被 `_reconcile_side` 当成
-            #   "柜台比账本少"，算出 n_to_close = engine_vol + 1 → 把账本该侧
-            #   整笔删除并补记虚构平仓盈亏（与证据门要防的破坏同源，只是入口不同）。
+            #   None = **唯一**的不可信信号（`Base.real_position` 契约：未连接 /
+            #          通道不稳 / 读数失败 / 形态或取值不可识别，四个成因同值）。
+            #   < 0  = 畸形读数（契约只允许"非负 int 或 None"；负数是实现违约，
+            #          与 None 同处置）。本层消费的是 Base 级接口，所以边界上仍
+            #          逐条挡：往下走会被 `_reconcile_side` 当成"柜台比账本少"，
+            #          算出 n_to_close > engine_vol → 把账本该侧整笔删除并补记
+            #          虚构平仓盈亏（与证据门要防的破坏同源，只是入口不同）。
             if real_vol is None or real_vol < 0:
                 continue
             self._mirror_note(str(side), real_vol, source)
@@ -156,7 +158,12 @@ class ReconcileMixin:
     #   从未见过 → 读数不可信 → 只告警不采纳。读数变化时落 mirror_snapshot
     #   事件，为 otg 持仓通道的定量测量留数据（登录初读另见 SimNow）。
     def _mirror_note(self, side_key: str, real_vol: int, source: str) -> None:
-        """记录本地柜台镜像读数：维护会话最大值 + 变化留痕（测量用）。"""
+        """记录本地柜台镜像读数：维护会话最大值 + 变化留痕（测量用）。
+
+        只接受**可信读数**（非负 int）：None = 不可信、负数 = 畸形，两者都不是
+        "读数"（0 才是有效的"该侧无仓"）。放进去会污染会话最大值，进而污染
+        证据门（`_mirror_max_seen` 是本会话"镜像见过这笔仓"的唯一凭据）。
+        """
         if real_vol is None or real_vol < 0:
             return
         seen = getattr(self, "_mirror_max_seen", None)
@@ -193,8 +200,8 @@ class ReconcileMixin:
                               note="broker.real_position 抛异常，按本地 store 启动")
             return
         # 0 = 该侧柜台确实无仓（空侧对账的正常路径，什么都不用做）；
-        # None / < 0 = 读数不可信 → 同样直接返回：否则会弹出一条
-        # "本地柜台镜像 -1 手、账本该侧无仓"的假告警（负数曾从这里漏进告警文案）。
+        # None = 读数不可信（唯一信号）、< 0 = 畸形读数 → 同样直接返回：否则会
+        # 弹出一条"本地柜台镜像 None/-1 手、账本该侧无仓"的假告警。
         if real_vol is None or real_vol <= 0:
             return
         self._mirror_note(str(side), real_vol, source)
@@ -212,15 +219,16 @@ class ReconcileMixin:
 
     def _reconcile_side(self, side: Side, side_positions: List[Position],
                         engine_vol: int, real_vol: int, source: str) -> bool:
-        """【】单侧对账（与 _reconcile_positions 解耦）。
+        """单侧对账（与 _reconcile_positions 解耦）。
 
         返回 True 表示该侧已全部清空（real_vol == 0）。
         返回 False 表示：一致 / 部分平后仍有残留 / 告警不接管。
         调用方汇总两侧返回值决定是否 state→IDLE。
         """
-        # 自守：本函数会**改账本**（删仓 + 补记盈亏），所以不把"读数非负"
-        # 只交给调用方保证 —— 负数一旦漏进来，`engine_vol - real_vol` 会大于
-        # engine_vol，被当成"柜台比账本少"，整侧仓单被删并补记虚构盈亏。
+        # 自守：本函数会**改账本**（删仓 + 补记盈亏），所以不把"读数可信"
+        # 只交给调用方保证 —— 契约是"非负 int，不可信 = None"，负数属实现违约的
+        # 畸形读数；一旦漏进来，`engine_vol - real_vol` 会大于 engine_vol，
+        # 被当成"柜台比账本少"，整侧仓单被删并补记虚构盈亏。
         # 调用方 `_reconcile_positions` 有同名守卫，这里只是纵深防御。
         if real_vol is None or real_vol < 0:
             return False

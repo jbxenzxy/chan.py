@@ -8,7 +8,8 @@ P5 修复验证脚本（不需要真 tqsdk，用 mock 验证逻辑）
   ② _verify_position_delta 兼容 ±1 帧同步漂移：cur=target±1 通过
   ③ _verify_position_delta close 方向：cur 减到 baseline-volume 通过；cur 减到
      baseline-volume-2 拒为 False
-  ④ baseline<0 立即返回 False
+  ④ baseline<0 / baseline=None（读数不可信）立即返回 False
+  ⑤ 读数不可信时 _position_total 返回 None（不是 -1 这种数字哨兵）
 """
 import sys
 import os
@@ -117,22 +118,56 @@ def test_close_exact_match():
 
 
 def test_close_ghost_rejected():
-    """close 1 手但被重发污染到 cur=-1（反向减仓）：应拒为 False"""
+    """position 被污染成负手数：畸形读数 → 不可信 → 不判通过（P5 关键修复点）"""
     api = FakeApi()
     api.set_position("CFFEX.IF2609", "LONG", -1)
     ok = _verify_position_delta(api, "CFFEX.IF2609", "LONG",
                                  baseline=2, expected_delta=-1, timeout_s=2.0)
-    assert ok is False, "baseline=2, cur=-1（幽灵 -1）应被 P5 拒"
+    assert ok is False, "cur=-1（畸形读数）应被拒为不通过"
     print("✓ test_close_ghost_rejected passed (P5 关键修复点)")
 
 
 def test_baseline_negative():
-    """baseline<0 立即返回 False（_position_total 读失败时）"""
+    """baseline<0（畸形读数）立即返回 False —— 不猜、不放行。
+
+    收敛后 `_position_total` 不再产出负数（不可信一律 None），这里钉的是
+    **接口边界上的自守**：直接调用方塞进负数也必须被判掉。
+    """
     api = FakeApi()
     ok = _verify_position_delta(api, "CFFEX.IF2609", "LONG",
                                  baseline=-1, expected_delta=1, timeout_s=2.0)
     assert ok is False, "baseline<0 应立即返回 False"
     print("✓ test_baseline_negative passed")
+
+
+def test_baseline_none():
+    """baseline=None（下单前读数不可信）→ 立即 False（不猜、不放行）"""
+    api = FakeApi()
+    api.set_position("CFFEX.IF2609", "LONG", 1)
+    ok = _verify_position_delta(api, "CFFEX.IF2609", "LONG",
+                                 baseline=None, expected_delta=1, timeout_s=2.0)
+    assert ok is False, "baseline=None 应立即返回 False"
+    print("✓ test_baseline_none passed")
+
+
+def test_position_total_untrusted_is_none():
+    """读数不可信 → _position_total 返回 None，**不是** -1 这种数字哨兵。
+
+    数字哨兵的危险在于漏挡的调用方会把它当手数算下去（`baseline + delta` /
+    `engine_vol - real_vol`），算出错误手数还一路静默；None 会直接 TypeError。
+    """
+    api = FakeApi()
+    # 形态认不出（既无持仓字段、也不是 Mapping）
+    api._position["CFFEX.IF2609"] = object()
+    assert _position_total(api, "CFFEX.IF2609", "LONG") is None, "形态认不出应返回 None"
+    assert _position_total(None, "CFFEX.IF2609", "LONG") is None, "api 异常应返回 None"
+    # 值域畸形（负手数）
+    api.set_position("CFFEX.IF2609", "LONG", -1)
+    assert _position_total(api, "CFFEX.IF2609", "LONG") is None, "负手数应判不可信"
+    # 对照：可信的 0 仍是 0（不是 None），"无仓"与"读不到"必须能分开
+    api.set_position("CFFEX.IF2609", "LONG", 0)
+    assert _position_total(api, "CFFEX.IF2609", "LONG") == 0, "可信的 0 必须是 0"
+    print("✓ test_position_total_untrusted_is_none passed")
 
 
 def test_position_total_zero():
@@ -165,9 +200,11 @@ if __name__ == "__main__":
     test_close_exact_match()
     test_close_ghost_rejected()
     test_baseline_negative()
+    test_baseline_none()
+    test_position_total_untrusted_is_none()
     test_position_total_zero()
     test_position_total_reads()
     print()
     print("=" * 60)
-    print("✓ P5 修复全部 9 个单元测试通过")
+    print("✓ P5 修复全部 11 个单元测试通过")
     print("=" * 60)

@@ -26,6 +26,11 @@ test_simnow_guards：SimNow broker 读仓守卫纯 mock 单测（不连网）
       里不得出现 `real_position(...) or 0` —— `None` 是 falsy，会被抹成 0，
       于是"开仓前读失败"与"平仓后读失败"互相抵消，断言退化成空断言，
       冒烟打绿而实际一手指仓都没读到。必须走 `_read_real_position` 带上"可信"标志。
+  [11] 读数不可信的**唯一出口** = None（2026-09-21 收敛）：`real_position` 的
+      四个失败成因（未连接 / 通道不稳 / 读数抛异常 / 形态或取值不可识别）
+      必须全部返回 None，且 `_position_total` / `_take_baseline` /
+      `_take_baseline_split` 不得再返回 -1 / 0 / (-1,-1) 这类数字哨兵
+      （数字哨兵会被漏挡的调用方当手数算下去）。
 
 运行方式（独立脚本，非 pytest）：
     /c/my_chan_project/.venv/Scripts/python.exe test_simnow_guards.py
@@ -219,8 +224,8 @@ def main() -> None:
 
     print("[6] _position_total 跨品种收窄")
     cross = {"CFFEX.IM2509": FakePos(lt=5)}          # 只有别的品种有仓
-    check(_position_total(None, "CFFEX.IF2509", "LONG") == -1,
-          "api 异常 → -1")
+    check(_position_total(None, "CFFEX.IF2509", "LONG") is None,
+          "api 异常 → None（不可信，不是 -1）")
     api = FakeApi(FRESH, positions=cross)
     check(_position_total(api, "CFFEX.IF2509", "LONG") == 0,
           "dict 缺本合约（其他品种有仓）→ 返回 0，不跨品种误读")
@@ -370,6 +375,124 @@ def main() -> None:
     check("_read_real_position" in _defs,
           "冒烟脚本定义了 `_read_real_position`（把「读数是否可信」带出来）")
     check("_read_real_position" in _called, "并且 --trade 路径真的调用了它")
+
+    print("[11] 读数不可信的**唯一**出口 = None（收敛掉 -1 数字哨兵）")
+    # 病根：同一个概念"读数不可信"曾有两种表示 —— None（未连接/通道不稳/抛异常）
+    #   与 -1（形态或取值认不出）。只挡 None 的调用方把 -1 当数字算
+    #   （`engine_vol - (-1)` = 比账本多平一手 → 整侧仓单被删 + 补记虚构盈亏）；
+    #   只挡 <0 的调用方把 None 放进算术（TypeError 或静默跳过）。
+    #   本组把"非负 int = 可信 / None = 不可信"钉成契约，并禁止数字哨兵回流。
+    class _BadShape:
+        """形态认不出：既没有持仓字段，也不是 Mapping（真异常形态的替身）。"""
+
+    class RaiseApi(FakeApi):
+        def get_position(self, symbol=None):
+            raise RuntimeError("get_position exploded")
+
+    class ShapeApi(FakeApi):
+        def __init__(self, bad):
+            super().__init__(FRESH)
+            self._bad = bad
+
+        def get_position(self, symbol=None):
+            return self._bad
+
+    # (a) _position_total：三种不可信 → 一律 None
+    check(_position_total(None, "CFFEX.IF2509", "LONG") is None,
+          "api 异常 → None")
+    check(_position_total(RaiseApi(FRESH), "CFFEX.IF2509", "LONG") is None,
+          "get_position 抛异常 → None")
+    check(_position_total(ShapeApi(_BadShape()), "CFFEX.IF2509", "LONG") is None,
+          "返回值形态认不出 → None")
+    check(_position_total(ShapeApi({"CFFEX.IF2509": FakePos(lt=-1)}),
+                          "CFFEX.IF2509", "LONG") is None,
+          "取值畸形（负手数）→ None")
+    # 对照：可信读数必须原样给数字，且"无仓"的 0 不能被混成 None
+    check(_position_total(FakeApi(FRESH, positions={"CFFEX.IF2509": FakePos(lt=2)}),
+                          "CFFEX.IF2509", "LONG") == 2, "可信读数 → 原样 2")
+    check(_position_total(FakeApi(FRESH, positions={}), "CFFEX.IF2509", "LONG") == 0,
+          "缺本合约（可信的『无仓』）→ 0，不是 None")
+
+    # (b) real_position：四个失败成因 → 全 None（同一个信号）
+    check(_make(None, None).real_position(Side.LONG) is None,
+          "成因①未连接 → None")
+    check(_make(FakeApi(STALE, positions={"CFFEX.IF2509": FakePos(lt=2)}),
+                STALE).real_position(Side.LONG) is None,
+          "成因②通道不稳（行情停滞）→ None")
+    check(_make(RaiseApi(FRESH), FRESH).real_position(Side.LONG) is None,
+          "成因③读数抛异常 → None")
+    check(_make(ShapeApi(_BadShape()), FRESH).real_position(Side.LONG) is None,
+          "成因④形态或取值认不出 → None（旧实现这里是 -1）")
+    _rb = _make(FakeApi(FRESH, positions={"CFFEX.IF2509": FakePos(lt=2, lh=1)}), FRESH)
+    check(_rb.real_position(Side.LONG) == 3, "★ 可信读数不受影响")
+    check(_rb.real_position(Side.LONG) >= 0, "★ 非 None 的返回值恒为非负")
+
+    # (c) 基线出口：异常时必须是 None，不能是 0（0 是"该侧确实无仓"的可信语义）
+    _bb = _make(FakeApi(FRESH, fail_wait=True), FRESH)
+    check(_bb._take_baseline("LONG") is None,
+          "★ _take_baseline 异常 → None（旧实现返回 0，等于断言『该侧 0 手』）")
+    check(_bb._take_baseline_split("LONG") is None,
+          "★ _take_baseline_split 异常 → None（旧实现返回 (-1, -1)）")
+    _ok_api = FakeApi(FRESH, positions={"CFFEX.IF2509": FakePos(lt=2, lh=1)})
+    _okb = _make(_ok_api, FRESH)
+    check(_okb._take_baseline("LONG") == 3, "_take_baseline 正常路径 = 3")
+    check(_okb._take_baseline_split("LONG") == (2, 1),
+          "_take_baseline_split 正常路径 = (2, 1)")
+
+    # (d) 防回流（AST 静态护栏）：持仓取数路径不得再出现数字哨兵返回值。
+    #     走 AST 而不是正则 —— 注释/docstring 里提到 "-1" 不算违规。
+    import ast
+    _sn_tree = ast.parse(_src, _SN_PATH)
+
+    def _sentinel_returns(tree):
+        hits = []
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Return) or n.value is None:
+                continue
+            v = n.value
+            neg = (isinstance(v, ast.UnaryOp) and isinstance(v.op, ast.USub)
+                   and isinstance(v.operand, ast.Constant) and v.operand.value == 1)
+            neg_tuple = (isinstance(v, ast.Tuple) and v.elts and all(
+                isinstance(e, ast.UnaryOp) and isinstance(e.op, ast.USub)
+                and isinstance(e.operand, ast.Constant) and e.operand.value == 1
+                for e in v.elts))
+            if neg or neg_tuple:
+                hits.append(n.lineno)
+        return hits
+
+    _sentinels = _sentinel_returns(_sn_tree)
+    check(_sentinels == [],
+          "SimNow.py 无 `return -1` / `return (-1, ...)` 数字哨兵（命中行 {}）"
+          .format(_sentinels))
+    # 正向对照：这条检测对老写法必须命中，否则只是摆设
+    check(len(_sentinel_returns(ast.parse("def f():\n    return -1\n"))) == 1,
+          "护栏有判别力（命中 `return -1`）")
+    check(_sentinel_returns(ast.parse("def f():\n    return None\n")) == [],
+          "对 `return None` 不误伤")
+
+    # (e) 同源入口（Tool 脚本）：负数不得被当成"持仓已归零"。
+    #     `SimNowForceClose` 的成交校验原是 `cur == 0 or (cur is not None and
+    #     cur <= 0)`，恒等于 `cur == 0 or cur < 0` —— 负读数被当成"归零成功"，
+    #     工具会报"成交+持仓校验通过"。本护栏禁止该比较再次出现。
+    _fc = os.path.join(_PKG_DIR, "Tool", "SimNow", "SimNowForceClose.py")
+    with open(_fc, encoding="utf-8") as f:
+        _fc_tree = ast.parse(f.read(), _fc)
+
+    def _lt_zero_on_cur(tree):
+        hits = []
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Compare) or len(n.ops) != 1:
+                continue
+            if not isinstance(n.ops[0], (ast.Lt, ast.LtE)):
+                continue
+            if isinstance(n.left, ast.Name) and n.left.id == "cur":
+                hits.append(n.lineno)
+        return hits
+
+    check(_lt_zero_on_cur(_fc_tree) == [],
+          "ForceClose 无 `cur < 0` / `cur <= 0`（负数不得当『归零成功』）")
+    check(len(_lt_zero_on_cur(ast.parse("if cur <= 0:\n    pass\n"))) == 1,
+          "护栏有判别力（命中 `cur <= 0`）")
 
     print("== {} pass / {} fail ==".format(_PASS, _FAIL))
     sys.exit(0 if _FAIL == 0 else 1)

@@ -11,10 +11,11 @@ P44 对账同步弹窗（2026-09-17 拍板新增，正向用例）
   [2] 柜台多仓（多为手工加仓）→ severe 弹窗 `position_mismatch`
       + 引擎不接管、账本不动
   [3] 柜台与账本一致 → 不弹窗、不动簿（安静路径不受影响）
-  [4] ★ 读数失败（`real_position` 返回 -1）→ 不采纳、不动账本、不补盈亏、
+  [4] ★ 读数失败（畸形负数，如 `-1`）→ 不采纳、不动账本、不补盈亏、
       不弹对账类告警（2026-09-21：旧逻辑只挡 None，负数会被当成"柜台少仓"
-      → 整侧仓单被删 + 补记虚构盈亏）
-  [5] ★ 账本空 + 读数 -1 → 走空侧对账分支也不弹假告警
+      → 整侧仓单被删 + 补记虚构盈亏）。本组钉的是**接口边界上的自守**。
+  [5] ★ 账本空 + 畸形负数 → 走空侧对账分支也不弹假告警
+  [6] ★ 读数不可信的**唯一信号** None → 与 [4] 同一处置（2026-09-21 收敛）
 
 跑法：python Trading/Test/test_p44_reconcile_alert.py
 """
@@ -332,6 +333,55 @@ with tmp_dir() as td:
     check_true("[5b] 无 position_mismatch 事件",
                len(read_events(eng, kinds={"position_mismatch"})) == 0)
     check("[5c] 账本仍为空", eng.positions.is_empty(), True)
+
+# ════════════════════════════════════════════════════════════════
+print("\n[6] ★ 读数不可信的**唯一信号** None → 与 [4] 同一处置")
+# 2026-09-21 收敛：`real_position` 的四个失败成因（未连接 / 通道不稳 / 读数异常 /
+#   形态或取值不可识别）统一返回 None，不再有 `-1` 同时表达"读不到"。本组钉的是
+#   **主信号** None 走同一处置：跳过该侧、不动账本、不补盈亏、不弹假告警。
+#   [4]/[5] 钉的是"畸形负数也不采纳"，两者是同一件事的两侧。
+# ════════════════════════════════════════════════════════════════
+with tmp_dir() as td:
+    broker = RealPositionBroker(
+        Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
+        real_longs=None, real_shorts=None)
+    eng = build(td, broker, positions=[
+        make_position(Side.LONG, 2, 4545.0, 1, signal_key="P44-6-L")])
+
+    # 先让镜像"见过"这笔仓（读到 ≥ 账本量）→ 证据门放行，只剩"读数不可信"这一关
+    broker._real_longs = 2
+    eng._reconcile_positions(source="test")
+    check("[6a] 前置：镜像见过这笔仓后账本仍是 2 手",
+          eng.positions.net_volume(), 2)
+
+    broker._real_longs = None          # 契约里的"不可信"
+    eng._reconcile_positions(source="test")
+
+    _untrusted_codes = {"reconcile_externally_closed", "position_mismatch",
+                        "reconcile_mirror_untrusted", "reconcile_sync"}
+    check_true("[6b] ★ None → 无任何对账类弹窗（既不采纳、也不弹假告警）",
+               len([a for a in eng._alerts
+                    if a.get("code") in _untrusted_codes]) == 0)
+    check("[6c] ★ 账本不动（2 手仍在）", eng.positions.net_volume(), 2)
+    check_true("[6d] ★ 没有补记任何平仓盈亏", len(eng.store.trades()) == 0)
+    check_true("[6e] 没写删除类事件",
+               len(read_events(eng, kinds={"position_externally_closed",
+                                           "position_externally_closed_summary"})) == 0)
+    check("[6f] 状态仍 RUNNING（持仓仍在，风控锚没被收掉）",
+          eng.account_state(), AccountState.RUNNING)
+
+with tmp_dir() as td:
+    broker = RealPositionBroker(
+        Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF),
+        real_longs=None, real_shorts=None)
+    eng = build(td, broker)
+
+    eng._reconcile_positions(source="test")
+
+    check_true("[6g] ★ 空侧 + 读数 None → 不弹假 position_mismatch",
+               len([a for a in eng._alerts
+                    if a.get("code") == "position_mismatch"]) == 0)
+    check("[6h] 账本仍为空", eng.positions.is_empty(), True)
 
 # ════════════════════════════════════════════════════════════════
 print("\n结果: {} 通过 / {} 失败".format(_PASS, _FAIL))

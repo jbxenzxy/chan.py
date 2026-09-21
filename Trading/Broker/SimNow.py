@@ -151,8 +151,14 @@ def _is_position_like(obj) -> bool:
 
     用"持仓专有字段存在与否"判形态 —— 这是唯一能把 `Position`（Mapping 但自身
     就是持仓）与"账户视图 Mapping"分开的判据。
+    字段可能落在两处，**两处都要认**：① 属性（真实 `Entity` 把字段放进
+    `__dict__`）；② 键空间（把"值"写成普通 dict 的桩 / 未来版本）。只认属性会让
+    「dict 形态的值」被判成"认不出"，而认不出在 `_position_split` 里等于不可信。
     """
-    return any(hasattr(obj, _field) for _field in _POSITION_FIELDS)
+    if any(hasattr(obj, _field) for _field in _POSITION_FIELDS):
+        return True
+    return (isinstance(obj, Mapping)
+            and any(_field in obj for _field in _POSITION_FIELDS))
 
 
 def _position_pairs(pos, fallback_symbol: str = "") -> List[Tuple[str, Any]]:
@@ -198,7 +204,9 @@ def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, in
       **同时有今仓和昨仓时默认先平今**，所以"总量够"并不等于"平昨能成"：
       今仓 2 手 + 昨仓 0 手时，总量判据会放行，CTP 却会用今仓去平（平今费率
       是平昨的 15 倍）或直接拒单。要挡住这件事，必须能分别看到今 / 昨。
-    取不到（api 异常）返回 None，调用方按"不可信"处理。
+    返回契约：``(今, 昨)`` 两个**非负** int；读数不可信返回 None（调用方按
+    "不可信"跳过，不得当成 (0, 0) —— 0 是"柜台确实无仓"的可信语义）。
+    不可信 = api 异常 / 返回值形态认不出 / 取值畸形（手数为负）。
     """
     try:
         pos = api.get_position()
@@ -215,19 +223,40 @@ def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, in
         item = pos.get(trade_symbol)
         if item is None:
             return (0, 0)
+        if not _is_position_like(item):
+            # 该合约的**值**形态也认不出 → 与"容器形态认不出"同判不可信。
+            # 不能读成 0：`_pos_field` 对认不出的值一律给 0，而 0 是"柜台确实
+            # 无仓"的可信语义 —— 放过去等于用一个假的"无仓"覆盖掉真仓（本次
+            # 事故的同一形态，只是发生在内层）。
+            return None
     else:
         # 形态无法识别 → 判"读不到"（返回 None = 不可信），**不**静默读成 0：
         # 一个假的 0 会被对账当成"柜台确实无仓"采纳（本次事故的形态）。
         return None
     if side == "LONG":
-        return (_pos_field(item, "pos_long_today"),
-                _pos_field(item, "pos_long_his"))
-    return (_pos_field(item, "pos_short_today"),
-            _pos_field(item, "pos_short_his"))
+        today, his = (_pos_field(item, "pos_long_today"),
+                      _pos_field(item, "pos_long_his"))
+    else:
+        today, his = (_pos_field(item, "pos_short_today"),
+                      _pos_field(item, "pos_short_his"))
+    # 值域校验（与"形态认不出"同判不可信）：持仓手数不可能是负数，出现负数说明
+    # 这读数已经不是"手数"了（畸形数据 / 被下游改坏的缓存）。挡在这里的收益是让
+    # 本函数的不变量成立 —— **返回值非 None ⇒ 一定是可信的非负分解**；有了这条，
+    # `_position_total` / `_take_baseline*` / `real_position` 的"不可信"出口才能
+    # 收敛成 None 一个（旧实现用 -1 表达，而负数是能被当数字算下去的）。
+    if today < 0 or his < 0:
+        return None
+    return (today, his)
 
 
-def _position_total(api, trade_symbol: str, side: str) -> int:
-    """读 tqsdk 当前持仓总数（今+昨），失败返回 -1。
+def _position_total(api, trade_symbol: str, side: str) -> Optional[int]:
+    """读 tqsdk 当前持仓总数（今+昨）。
+
+    返回契约与 `Base.real_position` 同源（全模块唯一出口口径）：
+      非负 int = 可信读数；None = 不可信（api 异常 / 形态或取值不可识别）。
+    旧实现在不可信时返回 -1 —— 数字形态的哨兵会被漏挡的调用方当手数算下去
+    （`baseline + expected_delta`、`engine_vol - real_vol` 都会因此算出错误手数），
+    故收敛为 None：漏挡时是 TypeError，不是静默的错误结果。
 
     用于 P4 修复的成交后二次校验。注意：不传 symbol 时 tqsdk 返回的是
     整个账户的**映射** `{合约代码: 持仓}`（实测是 `Entity`，**不是 dict**）；
@@ -236,12 +265,13 @@ def _position_total(api, trade_symbol: str, side: str) -> int:
     """
     sp = _position_split(api, trade_symbol, side)
     if sp is None:
-        return -1
+        return None
     return sp[0] + sp[1]
 
 
 def _verify_yesterday_delta(api, trade_symbol: str, side: str,
-                            today_baseline: int, his_baseline: int,
+                            today_baseline: Optional[int],
+                            his_baseline: Optional[int],
                             volume: int, timeout_s: float = 5.0) -> bool:
     """等 **昨仓** 精确减少 `volume`、且 **今仓一分不动**（D12 / p38 不变量的成交后半段）。
 
@@ -259,7 +289,11 @@ def _verify_yesterday_delta(api, trade_symbol: str, side: str,
     返回 True/False；调用方只用于**诊断告警**（成交权威判据仍是 P6 `trade_records`），
     不据此推翻已成交事实 —— 与 P4/P5 降级后的口径一致。
     """
-    if today_baseline < 0 or his_baseline < 0:
+    # 基线不可读（None）或畸形（负数）→ 无从判断"昨仓有没有按预期减少"，
+    # 直接判不成立（不猜、不放行）。正常路径下基线由 `_take_baseline_split`
+    # 保证是"非负 (今, 昨) 或 None"，这里同时兜住直接调用方传进来的坏值。
+    if today_baseline is None or today_baseline < 0 \
+            or his_baseline is None or his_baseline < 0:
         return False
     his_target = his_baseline - int(volume)
     deadline = time.time() + timeout_s
@@ -278,7 +312,8 @@ def _verify_yesterday_delta(api, trade_symbol: str, side: str,
 
 
 def _verify_today_delta(api, trade_symbol: str, side: str,
-                        today_baseline: int, his_baseline: int,
+                        today_baseline: Optional[int],
+                        his_baseline: Optional[int],
                         volume: int, timeout_s: float = 5.0) -> bool:
     """等 **今仓** 精确减少 `volume`、且 **昨仓一分不动**（p51 的成交后半段）。
 
@@ -293,7 +328,9 @@ def _verify_today_delta(api, trade_symbol: str, side: str,
     返回 True/False；调用方只用于**诊断告警**（成交权威判据仍是 P6 `trade_records`），
     不据此推翻已成交事实 —— 与 P4/P5 降级后的口径一致。
     """
-    if today_baseline < 0 or his_baseline < 0:
+    # 基线不可读（None）或畸形（负数）→ 同 `_verify_yesterday_delta`：不成立。
+    if today_baseline is None or today_baseline < 0 \
+            or his_baseline is None or his_baseline < 0:
         return False
     today_target = today_baseline - int(volume)
     deadline = time.time() + timeout_s
@@ -312,7 +349,7 @@ def _verify_today_delta(api, trade_symbol: str, side: str,
 
 
 def _verify_position_delta(api, trade_symbol: str, side: str,
-                            baseline: int, expected_delta: int,
+                            baseline: Optional[int], expected_delta: int,
                             timeout_s: float = 5.0) -> bool:
     """等 tqsdk 持仓从 baseline 出发、按 expected_delta 精确变化。
 
@@ -325,14 +362,16 @@ def _verify_position_delta(api, trade_symbol: str, side: str,
       - 调用方必须在 insert_order 之前用 _position_total 读一次"下单前快照"作为 baseline，
         这里只负责监控后续变化，避免"等同步期间又被改"的串扰。
     """
-    if baseline < 0:
+    # 基线不可信（None：下单前读数失败）或畸形（负数）→ 不知道"变化了多少"，
+    # 直接判 False（不猜、不放行）。0 是**可信**基线，不在此列。
+    if baseline is None or baseline < 0:
         return False
     target = baseline + expected_delta
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         api.wait_update(deadline=deadline)
         cur = _position_total(api, trade_symbol, side)
-        if cur < 0:
+        if cur is None:
             continue
         # 精确容差匹配：cur 应在 [target-1, target+1] 区间内
         if abs(cur - target) <= 1:
@@ -741,7 +780,7 @@ class SimNowBroker(Broker):
                 _long0 = _position_total(self._api, self._trade_symbol, "LONG")
                 _short0 = _position_total(self._api, self._trade_symbol, "SHORT")
                 logging.getLogger("tg.brokers.simnow").info(
-                    "登录后持仓镜像初读: LONG=%s SHORT=%s（-1=读数失败；"
+                    "登录后持仓镜像初读: LONG=%s SHORT=%s（None=读数不可信；"
                     "0 且快期3 显示有仓 = otg 持仓通道未同步）", _long0, _short0)
             except Exception:
                 pass
@@ -1042,28 +1081,36 @@ class SimNowBroker(Broker):
                 else st.align_exit(ref_price, side.sign)
         return limit
 
-    def _take_baseline(self, side_key: str) -> int:
-        """P4/P5 下单前持仓快照（等待 CTP 延迟回报同步完毕）。"""
+    def _take_baseline(self, side_key: str) -> Optional[int]:
+        """P4/P5 下单前持仓快照（等待 CTP 延迟回报同步完毕）。
+
+        返回契约：非负 int = 可信基线；None = 基线不可读（与 `_position_total` 同）。
+        旧实现在异常时 `return 0` —— 那等于**断言"该侧 0 手"**，而 0 是可信读数的
+        语义；于是"基线不知道"被下游当成"基线是 0"参与 `abs(cur - target) <= 1`
+        比对，凭空造出一个可被满足的目标值。改为 None 后 `_verify_position_delta`
+        直接判 False 并把"本次未做校验"如实记进诊断日志。
+        """
         try:
             self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
             self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
             return _position_total(self._api, self._trade_symbol, side_key)
         except Exception:
-            return 0
+            return None
 
-    def _take_baseline_split(self, side_key: str) -> Tuple[int, int]:
+    def _take_baseline_split(self, side_key: str) -> Optional[Tuple[int, int]]:
         """下单前的 **(今仓, 昨仓)** 快照，供 CLOSE 的平昨校验使用。
 
-        失败返回 (-1, -1) —— 与 `_take_baseline` 失败返回 -1 同口径，
-        `_verify_yesterday_delta` 见到负基线会直接判 False（不猜、不放行）。
+        返回契约：非负 `(今, 昨)` = 可信基线；None = 基线不可读 —— 与
+        `_take_baseline` / `_position_total` / `real_position` 同一个口径
+        （旧实现用 `(-1, -1)` 表达，是同一批"数字哨兵"里的一员）。
+        调用方见到 None 必须**跳过校验**（不猜、不放行），不得当成 (0, 0)。
         """
         try:
             self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
             self._api.wait_update(deadline=time.time() + self._timing("baseline_settle_wait"))
-            sp = _position_split(self._api, self._trade_symbol, side_key)
+            return _position_split(self._api, self._trade_symbol, side_key)
         except Exception:
-            return (-1, -1)
-        return (-1, -1) if sp is None else sp
+            return None
 
     def _submit_open(self, intent: OrderIntent, side: Side, volume: int, ref_price: float,
                      signal_key: str, note: str, is_exit: bool = False) -> Order:
@@ -1203,8 +1250,8 @@ class SimNowBroker(Broker):
             # p38：平仓的基线要**分今/昨**取 —— 成交后要断言"平昨→昨仓降、今仓不动"
             # / "平今→今仓降、昨仓不动"，一个总量基线做不到这件事
             # （见 `_verify_yesterday_delta` / `_verify_today_delta`）。
-            base_today, base_his = self._take_baseline_split(side_key)
-            baseline = base_today + base_his if base_today >= 0 else -1
+            base_split = self._take_baseline_split(side_key)
+            baseline = None if base_split is None else sum(base_split)
             expected_delta = -int(volume)
             try:
                 order = self._api.insert_order(symbol=self._trade_symbol,
@@ -1219,7 +1266,7 @@ class SimNowBroker(Broker):
             o = self._finalize(order, intent.value, "close", side, volume, ref_price, signal_key,
                               note, baseline, expected_delta, limit,
                               attempt=attempt, max_attempts=max_attempts,
-                              baseline_split=(base_today, base_his))
+                              baseline_split=base_split)
             last = o
             if o.status == "filled":
                 return o
@@ -1230,7 +1277,7 @@ class SimNowBroker(Broker):
             signal_key, side, intent.value, volume, ref_price, note, "平仓未成交")
 
     def _finalize(self, order, intent_str: str, action: str, side: Side, volume: int, ref_price: float,
-                  signal_key: str, note: str, baseline: int, expected_delta: int,
+                  signal_key: str, note: str, baseline: Optional[int], expected_delta: int,
                   limit: float, attempt: int = 1, max_attempts: int = 1,
                   baseline_split: Optional[Tuple[int, int]] = None) -> Order:
         # ===== P3：必须 status=="FINISHED" 且 volume_left==0 才是真成交 =====
@@ -1291,6 +1338,14 @@ class SimNowBroker(Broker):
                     if not verified:
                         self._note_yesterday_lag(signal_key, side_key,
                                                  today_b, his_b, int(volume))
+            elif baseline is None:
+                # 下单前基线不可读（`_take_baseline` / `_take_baseline_split` 返回
+                # None）→ 本次**无从比对**"position 有没有按预期变化"。旧实现这里
+                # 拿到的是 0 / -1 这类数字哨兵，于是①`baseline=0` 会凭空造出可满足的
+                # 目标值；②`baseline=-1` 会走 `_note_position_lag` 报成"未按预期变化"。
+                # 两种都是把"没读到"当成事实。现在只留一条明确的"本次未校验"。
+                self._note_position_lag(signal_key, action, side_key,
+                                        baseline, expected_delta)
             else:
                 verified = _verify_position_delta(self._api, self._trade_symbol, side_key,
                                                  baseline=baseline,
@@ -1548,12 +1603,21 @@ class SimNowBroker(Broker):
 
         真成交的权威判定已交给 P6 的 trade_records。这里记录的是"position 端
         与 order 端不同步"的现象，用于事后审计（比如 CTP 同步慢、有历史遗留仓）。
+        `baseline is None`（下单前基线不可读）是**另一回事**：那次根本没做校验，
+        不能报成"未按预期变化"——那会把"没读到"说成"读数没动"，同属假信息。
         """
+        import logging
+        if baseline is None:
+            logging.getLogger("tg.brokers.simnow").warning(
+                "P4/P5 诊断（不影响成交判定）: %s %s 本次**未做**持仓变化校验 —— "
+                "下单前基线不可读（读数不可信，baseline=None）。"
+                "(expected_delta=%s, signal=%s)",
+                action, side_key, expected_delta, signal_key or "-")
+            return
         try:
             cur = _position_total(self._api, self._trade_symbol, side_key)
         except Exception:
-            cur = -1
-        import logging
+            cur = None
         logging.getLogger("tg.brokers.simnow").warning(
             "P4/P5 诊断（不影响成交判定）: %s %s 后 position 端未按预期变化 "
             "(baseline=%s, expected_delta=%s, target=%s, cur=%s, signal=%s)",
@@ -1575,11 +1639,18 @@ class SimNowBroker(Broker):
             sp = _position_split(self._api, self._trade_symbol, side_key)
         except Exception:
             sp = None
-        today_cur, his_cur = sp if sp is not None else (-1, -1)
-        if 0 <= today_cur < today_baseline:
-            why = "today_dropped（CLOSE 被撮合到了今仓 → 平今费率，须人工核对）"
+        if sp is None:
+            # 当前读数不可信 → **不猜成因**。旧实现在这里用 (-1, -1) 顶替，条件
+            # `0 <= today_cur` 为假 → 落到 "his_unchanged"，把"没读到"报成
+            # "昨仓没减"，是同一类假信息（哨兵值被当成事实）。
+            why = "read_failed（当前持仓读数不可信，无法与基线比较）"
+            today_cur = his_cur = None
         else:
-            why = "his_unchanged（昨仓未按预期减少；CTP 延迟或簿实不一致）"
+            today_cur, his_cur = sp
+            if today_cur < today_baseline:
+                why = "today_dropped（CLOSE 被撮合到了今仓 → 平今费率，须人工核对）"
+            else:
+                why = "his_unchanged（昨仓未按预期减少；CTP 延迟或簿实不一致）"
         import logging
         logging.getLogger("tg.brokers.simnow").warning(
             "P4/P5 诊断（不影响成交判定）: close %s 平昨校验未成立 [%s] "
@@ -1602,11 +1673,17 @@ class SimNowBroker(Broker):
             sp = _position_split(self._api, self._trade_symbol, side_key)
         except Exception:
             sp = None
-        today_cur, his_cur = sp if sp is not None else (-1, -1)
-        if 0 <= his_cur < his_baseline:
-            why = "his_dropped（CLOSETODAY 被撮合到了昨仓 → 账实错位，须人工核对）"
+        if sp is None:
+            # 同 `_note_yesterday_lag`：读数不可信时不猜成因（旧写法会用
+            # (-1, -1) 落到 "today_unchanged"，把"没读到"报成"今仓没减"）。
+            why = "read_failed（当前持仓读数不可信，无法与基线比较）"
+            today_cur = his_cur = None
         else:
-            why = "today_unchanged（今仓未按预期减少；CTP 延迟或簿实不一致）"
+            today_cur, his_cur = sp
+            if his_cur < his_baseline:
+                why = "his_dropped（CLOSETODAY 被撮合到了昨仓 → 账实错位，须人工核对）"
+            else:
+                why = "today_unchanged（今仓未按预期减少；CTP 延迟或簿实不一致）"
         import logging
         logging.getLogger("tg.brokers.simnow").warning(
             "P4/P5 诊断（不影响成交判定）: closetoday %s 平今校验未成立 [%s] "
@@ -1690,14 +1767,17 @@ class SimNowBroker(Broker):
         return self._quote_stale()
 
     def real_position(self, side: Side) -> Optional[int]:
-        """查询 SimNow 真实持仓（引擎对账用）。未连接 / 通道不稳定 / 行情陈旧
-        返回 None，引擎对账对应跳过该侧，避免用不可靠读数误清真实持仓。
+        """查询 SimNow 真实持仓（引擎对账用）。
 
-        加固：新增行情新鲜度守卫（见 _channel_unstable docstring）——
-        断连/重连/假死窗口内行情停滞，读数不可信，宁可让对账跳过也不冒误清风险。
-
-        返回该方向当前净持仓手数；供 engine 的持仓对账（增强 B）检测
-        「用户在快期3手工平仓 / 幽灵持仓」并修正引擎账目。
+        返回契约（与 `Base.real_position` 同源，**只有一个不可信信号**）：
+          · 非负 int —— 可信读数（0 = 柜台该侧确实无仓，对账可以采纳）；
+          · None     —— 不可信，引擎对账跳过该侧，不采纳、不动账本。
+        四种失败成因统一收敛为 None：未连接 / 通道不稳定（行情停滞或
+        wait_update 异常）/ 读数抛异常 / 持仓返回值形态或取值不可识别。
+        （历史：形态不可识别曾单独返回 -1，与 None 混用成两种"不可信"——
+        只挡 None 的调用方会把 -1 当数字算，算出 `engine_vol + 1` 的平仓量，
+        把账本该侧仓单整笔删掉并补记虚构盈亏。单一信号后，漏挡会直接
+        TypeError 暴露，而不是静默算出错误手数。）
         """
         if self._api is None or self._channel_unstable():
             return None
@@ -1706,16 +1786,15 @@ class SimNowBroker(Broker):
                                 "LONG" if side is Side.LONG else "SHORT")
         except Exception:
             return None
-        if n < 0:
-            # 读数为负 = 读数失败（`_position_total` 的 -1 约定：`get_position`
-            # 抛异常，或返回值形态无法识别）。**必须留痕**：这条路径下引擎会把
-            # 该侧判为"不可信"而跳过对账（Reconcile._reconcile_positions），
-            # 不留痕 = 对账静默失效 —— 2026-09-21 的"镜像恒读 0"就是这样被
-            # 误当成"柜台确实无仓"的。调用频次 = 每根 K 线一次，不会刷屏。
+        if n is None:
+            # 读数不可信 → **必须留痕**：这条路径下引擎会跳过该侧对账
+            # （Reconcile._reconcile_positions），不留痕 = 对账静默失效 ——
+            # 2026-09-21 的"镜像恒读 0"就是这样被误当成"柜台确实无仓"的。
+            # 调用频次 = 每根 K 线一次，不会刷屏。
             logging.getLogger("tg.brokers.simnow").warning(
-                "本地柜台镜像读数失败: side=%s trade_symbol=%s → -1"
-                "（get_position 异常，或返回值形态无法识别）；"
-                "引擎对账将按『不可信』跳过该侧，不改账本。",
+                "本地柜台镜像读数不可信: side=%s trade_symbol=%s → None"
+                "（get_position 异常，或返回值形态/取值无法识别）；"
+                "引擎对账将跳过该侧，不改账本。",
                 side, self._trade_symbol)
         return n
 

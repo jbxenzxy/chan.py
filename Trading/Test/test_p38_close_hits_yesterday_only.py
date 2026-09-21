@@ -281,9 +281,15 @@ check("★ 今仓被平掉（今 2→0）→ False（成交打到了今仓 = 平
 check("昨仓未动 → False（超时）",
       _verify_yesterday_delta(SeqApi([(0, 2)]),
                               "X", "LONG", 0, 2, 2, timeout_s=0.1), False)
-check("负基线（读仓失败）→ False（不猜、不放行）",
+check("负基线（畸形读数）→ False（不猜、不放行）",
       _verify_yesterday_delta(SeqApi([(0, 2)]),
                               "X", "LONG", -1, -1, 2, timeout_s=0.1), False)
+check("None 基线（读数不可信）→ False（与负基线同处置）",
+      _verify_yesterday_delta(SeqApi([(0, 2)]),
+                              "X", "LONG", None, None, 2, timeout_s=0.1), False)
+check("只有一侧基线为 None → 同样 False",
+      _verify_yesterday_delta(SeqApi([(0, 2)]),
+                              "X", "LONG", 0, None, 2, timeout_s=0.1), False)
 
 
 print("\n[4] 端到端：昨仓够 → filled；若实际平掉今仓 → 只发诊断，不推翻成交")
@@ -369,7 +375,8 @@ check("short 侧同样分拆",
       _position_split(DictApi({"CFFEX.IF2609": P(st=3, sh=4)}),
                       "CFFEX.IF2609", "SHORT"), (3, 4))
 check("api 异常 → None（不可信）", _position_split(None, "X", "LONG"), None)
-check("api 异常 → total = -1", _position_total(None, "X", "LONG"), -1)
+check("api 异常 → total = None（不可信；不再是 -1 这种数字哨兵）",
+      _position_total(None, "X", "LONG"), None)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -460,6 +467,25 @@ check("★ 单合约持仓（同时是 Mapping）→ (2, 0)，不退化成 0",
       _position_split(ObjApi(PosLike(lt=2, st=2)), "CFFEX.IF2609", "LONG"), (2, 0))
 check("单合约持仓 short 侧 → (2, 0)",
       _position_split(ObjApi(PosLike(lt=2, st=2)), "CFFEX.IF2609", "SHORT"), (2, 0))
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[6c] 值域护栏：负手数 = 畸形读数 → 不可信（None），不伪造成数字")
+# ════════════════════════════════════════════════════════════════
+# 2026-09-21 收敛：`_position_split` 现在保证"非 None ⇒ 非负 (今, 昨)"。
+# 负手数不是"持仓"，是坏数据；旧实现会把它原样返回（于是 total 是个负数），
+# 让"不可信"以数字形态流到下游。本组钉死"坏值一律 None"。
+check("对象形态 today=-1 → None（旧实现返回 -1 这个数字）",
+      _position_split(StaticApi(lt=-1, lh=2), "X", "LONG"), None)
+check("对象形态 his=-1 → None",
+      _position_split(StaticApi(lt=0, lh=-1), "X", "LONG"), None)
+check("账户视图里的负值同样判不可信",
+      _position_split(DictApi({"CFFEX.IF2609": P(lt=-1)}),
+                      "CFFEX.IF2609", "LONG"), None)
+check("total 随之返回 None（不是负数）",
+      _position_total(StaticApi(lt=-1), "X", "LONG"), None)
+check("对照：0 手（可信的『无仓』）仍返回 (0, 0)，没被误判成不可信",
+      _position_split(StaticApi(lt=0, lh=0), "X", "LONG"), (0, 0))
 
 
 print("\n" + "=" * 60)

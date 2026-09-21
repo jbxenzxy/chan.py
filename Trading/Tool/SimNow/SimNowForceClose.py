@@ -92,6 +92,10 @@ def _read_position(api, symbol):
         return 0, 0
     long_total = _pos_field(pos, "pos_long_today") + _pos_field(pos, "pos_long_his")
     short_total = _pos_field(pos, "pos_short_today") + _pos_field(pos, "pos_short_his")
+    if long_total < 0 or short_total < 0:
+        # 手数不可能为负 → 畸形读数，按"读不到"（None, None）处理，不参与后面的
+        # "是否已归零"判定（旧实现会让负数一路走到判据里）。
+        return None, None
     return long_total, short_total
 
 
@@ -197,7 +201,13 @@ def _force_close_one(api, symbol, side_to_close, volume, tick, log, max_retry=3)
             api.wait_update(deadline=deadline)
             long_total, short_total = _read_position(api, symbol)
             cur = long_total if side_to_close == "LONG" else short_total
-            if cur == 0 or (cur is not None and cur <= 0):
+            # 只有**读到 0**（柜台该侧确实无仓）才算"持仓校验通过"。
+            # 旧写法 `cur == 0 or (cur is not None and cur <= 0)` 恒等于
+            # `cur == 0 or cur < 0` —— 后一个分支把负读数当成了"归零成功"。
+            # 读不到（None）也不再给"校验通过"：循环耗尽后走下面的
+            # "成交但 position 校验延迟"，那是成交事实（order 已到终态），
+            # 与"持仓已归零"是两件事，文案本来就分开了。
+            if cur == 0:
                 return True, volume, "成交+持仓校验通过"
             time.sleep(0.1)
         # 成交但持仓没归零（不应该发生），记录
