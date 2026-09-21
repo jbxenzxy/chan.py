@@ -19,6 +19,13 @@ test_simnow_guards：SimNow broker 读仓守卫纯 mock 单测（不连网）
         不计数；队列恒空 → 恒零告警；连续积压达阈值 → 恰好一条 WARNING 且计数归零
         （按阈值节流不刷屏）；积压清零 → 计数归零；`__init__` 未跑的实例
         （`__new__` 构造，本文件 _make 的造法）不因缺字段崩。
+  [9] gateway 日志配置（`Trading/main._setup_logging`）：配好之后 `tg` 必须放行
+      INFO、handler 只装一份（幂等）、且 INFO 埋点真的写进当前 stdout
+      （子进程里即 gateway.log）。此前全树无 logging 配置，"仪器没通电"。
+  [10] 冒烟脚本的读数纪律（静态护栏）：`Trading/Test/smoke_simnow_phase_g.py`
+      里不得出现 `real_position(...) or 0` —— `None` 是 falsy，会被抹成 0，
+      于是"开仓前读失败"与"平仓后读失败"互相抵消，断言退化成空断言，
+      冒烟打绿而实际一手指仓都没读到。必须走 `_read_real_position` 带上"可信"标志。
 
 运行方式（独立脚本，非 pytest）：
     /c/my_chan_project/.venv/Scripts/python.exe test_simnow_guards.py
@@ -315,6 +322,54 @@ def main() -> None:
         logging.getLogger("tg.brokers.simnow").info("otg_latency: probe 探针")
     check("otg_latency: probe 探针" in _buf.getvalue(),
           "INFO 埋点确实写进当前 stdout（子进程里 = gateway.log）")
+
+    print("[10] 冒烟脚本读数纪律：失败值不得被抹成 0（AST 静态护栏）")
+    # 事故形态（2026-09-21）：`real_position` 失败时返回 None（未连接 / 通道不稳）
+    # 或 -1（形态认不出）。`None or 0` → 0 —— 于是 --trade 路径里 149/150 与
+    # 170/171 两侧四次读数全失败时互相抵消，172 行断言 `(lp2,sp2)==(bl_l,bl_s)`
+    # 恒成立（实测两种失败都过），冒烟报绿而实际一手指仓都没读到。
+    #
+    # 护栏走 **AST** 而不是正则：注释与 docstring 对 AST 不可见，所以
+    #   ① 解释性文字（包括本护栏自己的说明）不会误伤；
+    #   ② 只有真正会被执行的 `... or 0` 才算违规 —— 与「注释不算证据」同一口径。
+    import ast
+    _smoke = os.path.join(_PKG_DIR, "Test", "smoke_simnow_phase_g.py")
+    with open(_smoke, encoding="utf-8") as f:
+        _smoke_tree = ast.parse(f.read(), _smoke)
+
+    def _masked_calls(tree):
+        """返回 `SomeObj.real_position(...) or 0` 这类表达式的行号列表。"""
+        hits = []
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.BoolOp) or not isinstance(n.op, ast.Or):
+                continue
+            if len(n.values) != 2:
+                continue
+            left, right = n.values
+            if not (isinstance(left, ast.Call)
+                    and isinstance(left.func, ast.Attribute)
+                    and left.func.attr == "real_position"):
+                continue
+            if isinstance(right, ast.Constant) and right.value == 0:
+                hits.append(n.lineno)
+        return hits
+
+    check(_masked_calls(_smoke_tree) == [],
+          "冒烟脚本没有可执行代码把 real_position 的失败值抹成 0")
+    # 正向对照：同一条检测对事故写法必须命中，否则这条护栏只是恒真的摆设
+    check(_masked_calls(ast.parse("lp = b.real_position(Side.LONG) or 0")) == [1],
+          "护栏有判别力（命中 `real_position(...) or 0`）")
+    check(_masked_calls(ast.parse(
+        '"""说明：real_position(Side.LONG) or 0 会抹掉 None"""\nx = 1')) == [],
+          "注释/docstring 不算证据（AST 看不见，不误伤）")
+
+    _defs = {n.name for n in ast.walk(_smoke_tree)
+             if isinstance(n, ast.FunctionDef)}
+    _called = {n.func.id for n in ast.walk(_smoke_tree)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+    check("_read_real_position" in _defs,
+          "冒烟脚本定义了 `_read_real_position`（把「读数是否可信」带出来）")
+    check("_read_real_position" in _called, "并且 --trade 路径真的调用了它")
 
     print("== {} pass / {} fail ==".format(_PASS, _FAIL))
     sys.exit(0 if _FAIL == 0 else 1)

@@ -76,6 +76,26 @@ def check(name, ok, detail=""):
         _FAIL += 1
 
 
+def _read_real_position(b):
+    """读多空两侧持仓，返回 **(读数是否可信, LONG, SHORT)**。
+
+    为什么必须把"可信"单独带出来（而不是各处写 `real_position(...) or 0`）：
+      `real_position` 失败时返回 `None`（未连接 / 行情停滞的通道不稳窗口）或
+      `-1`（返回值形态认不出）。`None` 是 falsy，`... or 0` 会把它**抹成 0** ——
+      于是"开仓前读失败"与"平仓后读失败"两边都变成 0，`(0, 0) == (0, 0)` 恒成立：
+      断言退化成空断言，冒烟照样打绿，实际一手指仓都没读到。
+      （`-1` 是 truthy，`or 0` 留得住它，但同样无法区分"读失败"与"真无仓"。）
+    这里统一按"两侧都必须是可信非负数"判定，把失败显式暴露给调用方。
+    """
+    lp = b.real_position(Side.LONG)
+    sp = b.real_position(Side.SHORT)
+    ok = lp is not None and sp is not None and lp >= 0 and sp >= 0
+    return ok, lp, sp
+
+
+_READ_HINT = "（None=未连接/通道不稳；-1=读数失败）"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Phase G SimNow 真连冒烟（默认只读）")
     ap.add_argument("--trade", action="store_true",
@@ -107,7 +127,7 @@ def main() -> int:
         lp = b.real_position(Side.LONG)
         sp = b.real_position(Side.SHORT)
         check("real_position 查询不炸", True,
-              "LONG={} SHORT={}（None=查询失败）".format(lp, sp))
+              "LONG={} SHORT={}{}".format(lp, sp, _READ_HINT))
     except Exception as e:
         check("real_position 查询不炸", False, "{}: {}".format(type(e).__name__, e))
 
@@ -146,9 +166,8 @@ def main() -> int:
             # OrderIntent 已在模块顶层 import；此处不再局部 import（否则会在全函数内
             # 把 OrderIntent 遮蔽成局部名，导致非 --trade 路径先使用时 UnboundLocalError）
             # 记录 baseline，随后真开 1 手
-            bl_l = b.real_position(Side.LONG) or 0
-            bl_s = b.real_position(Side.SHORT) or 0
-            print("  baseline: LONG={} SHORT={}".format(bl_l, bl_s))
+            ok_bl, bl_l, bl_s = _read_real_position(b)
+            print("  baseline: LONG={} SHORT={}{}".format(bl_l, bl_s, _READ_HINT))
             # 上期所/中金所 id 规则交给 broker；这里用一次 OPEN 一次 CLOSE
             o_open = b.submit(OrderIntent.OPEN, Side.LONG, 1, 0.0, "smoke-trade-open",
                               note="冒烟真单-开")
@@ -167,10 +186,13 @@ def main() -> int:
             check("trade_confirmed(真单 close) 与 status 一致",
                   confirmed_close == (o_close.status == "filled"),
                   "confirmed={} status={}".format(confirmed_close, o_close.status))
-            lp2 = b.real_position(Side.LONG) or 0
-            sp2 = b.real_position(Side.SHORT) or 0
-            check("平仓后持仓回到 baseline", (lp2, sp2) == (bl_l, bl_s),
-                  "now LONG={} SHORT={}".format(lp2, sp2))
+            ok_now, lp2, sp2 = _read_real_position(b)
+            check("平仓后持仓回到 baseline",
+                  ok_bl and ok_now and (lp2, sp2) == (bl_l, bl_s),
+                  "baseline LONG={} SHORT={} / now LONG={} SHORT={}{}"
+                  .format(bl_l, bl_s, lp2, sp2,
+                          "" if (ok_bl and ok_now) else
+                          "  ← 两侧读数都失败时该断言恒成立（空断言），已改为判失败"))
         except Exception as e:
             check("--trade 流程", False, "{}: {}".format(type(e).__name__, e))
 

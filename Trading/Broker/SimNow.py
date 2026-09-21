@@ -341,6 +341,48 @@ def _verify_position_delta(api, trade_symbol: str, side: str,
     return False
 
 
+# ── 成交明细（trade_records）的形态判据与取值 ──────────────────────────────
+#   与上方持仓读数的 `_POSITION_FIELDS` / `_pos_field` 是**同一类病**，故同一套写法：
+#   容器形态先认，再取值；形态认不出就明说，不静默当成 0。
+#
+#   为什么 `isinstance(recs, dict)` 不能用来判形态：
+#     tqsdk 的容器类（`Entity`）继承 `MutableMapping` 而**不是 dict 子类**。
+#     对非 dict 的 Mapping 走 `list(recs)` 会**把 Mapping 当序列迭代**，拿到的是
+#     **键**（字符串）而不是值 → 每个字段都取不到 → 静默累计出 0。
+#     这条路径在 P6 里不是"无害的保守方向"：`_finalize` 见到
+#     `traded_volume < volume` 会把一笔**真成交降级成未成交**并记一条拒单，
+#     引擎据此以为没成交 —— 与"持仓读数恒 0"是同源破坏，只是入口不同。
+#     tqsdk 3.10.2 的 `Order.trade_records` 目前确实是真 dict
+#     （`tqsdk/objs.py:516` / `:891` 的字典推导），但判据不该依赖"碰巧是 dict"。
+def _iter_trade_records(recs) -> Optional[List[Any]]:
+    """把 `order.trade_records` 归一成 `[成交明细, ...]`；形态认不出返回 None。
+
+    支持三种形态：
+      · Mapping（真 dict / tqsdk `Entity`）→ `values()`；
+      · 序列（list / tuple）→ 原样（`Trading/Test/test_p6_fix.py:126` 就喂 list）；
+      · 认不出 → None（调用方据此留痕，而不是静默当成 0 手）。
+
+    "没成交"（None / 空容器）由调用方先判 —— 那是正常路径，不该告警。
+    """
+    if isinstance(recs, Mapping):
+        return list(recs.values())
+    if isinstance(recs, (list, tuple)):
+        return list(recs)
+    return None
+
+
+def _rec_field(item, name: str, default: Any = 0) -> Any:
+    """读一条成交明细的字段；属性优先、Mapping 键兜底、取不到返回 default。
+
+    真 `Trade` 是 `Entity`（字段在 `__dict__` 里，属性访问可用）；把值写成普通
+    dict 的桩也存在 → 属性取不到时再按 Mapping 取键。与 `_pos_field` 同序。
+    """
+    value = getattr(item, name, None)
+    if value is None and isinstance(item, Mapping):
+        value = item.get(name)
+    return default if value is None else value
+
+
 def _traded_volume_from_records(order) -> int:
     """P6 权威成交判定：从 tqsdk 的 CTP 真实成交明细里累计成交量。
 
@@ -359,51 +401,58 @@ def _traded_volume_from_records(order) -> int:
     recs = getattr(order, "trade_records", None)
     if not recs:
         return 0
-    total = 0
-    try:
-        items = recs.values() if isinstance(recs, dict) else list(recs)
-        for r in items:
-            if r is None:
-                continue
-            vol = r.get("volume", 0) if isinstance(r, dict) \
-                else getattr(r, "volume", 0)
-            if vol:
-                total += int(vol)
-    except Exception:
+    items = _iter_trade_records(recs)
+    if items is None:
+        # 形态认不出 ≠ 没成交：必须留痕，否则"静默 0 手"会把真成交降级成未成交
+        logging.getLogger("tg.brokers.simnow").warning(
+            "order.trade_records 形态无法识别（type=%s）→ P6 成交量按 0 手处理；"
+            "若同时 status=FINISHED/volume_left=0，本次真成交会被判成未成交。",
+            type(recs).__name__)
         return 0
+    total = 0
+    for r in items:
+        if r is None:
+            continue
+        try:
+            vol = int(_rec_field(r, "volume") or 0)
+        except (TypeError, ValueError):
+            # 单条明细读不出手数 → 只跳过该条。**不**让一条坏明细清零已累加总量
+            # （旧写法把整个循环包在 try 里，一条脏数据会把前面数到的全丢掉）。
+            continue
+        if vol > 0:
+            total += vol
     return total
 
 
 def _traded_price_from_records(order) -> Optional[float]:
     """P6：从 CTP 真实成交明细里取成交均价（按 volume 加权）。
 
-    返回 None 表示没有任何真实成交明细。
+    返回 None 表示没有任何真实成交明细；明细容器形态认不出时同样返回 None 并留痕
+    （"取不到价"与"没有成交"对调用方的含义不同，见 `_iter_trade_records`）。
     """
     recs = getattr(order, "trade_records", None)
     if not recs:
         return None
+    items = _iter_trade_records(recs)
+    if items is None:
+        logging.getLogger("tg.brokers.simnow").warning(
+            "order.trade_records 形态无法识别（type=%s）→ P6 成交均价按『取不到』处理。",
+            type(recs).__name__)
+        return None
     total_vol = 0
     total_amt = 0.0
-    try:
-        items = recs.values() if isinstance(recs, dict) else list(recs)
-        for r in items:
-            if r is None:
-                continue
-            vol = r.get("volume", 0) if isinstance(r, dict) \
-                else getattr(r, "volume", 0)
-            prc = r.get("price", 0) if isinstance(r, dict) \
-                else getattr(r, "price", 0)
-            try:
-                vol = int(vol)
-                prc = float(prc)
-            except (TypeError, ValueError):
-                continue
-            if vol <= 0 or prc <= 0 or math.isnan(prc):
-                continue
-            total_vol += vol
-            total_amt += prc * vol
-    except Exception:
-        return None
+    for r in items:
+        if r is None:
+            continue
+        try:
+            vol = int(_rec_field(r, "volume") or 0)
+            prc = float(_rec_field(r, "price") or 0)
+        except (TypeError, ValueError):
+            continue
+        if vol <= 0 or prc <= 0 or math.isnan(prc):
+            continue
+        total_vol += vol
+        total_amt += prc * vol
     if total_vol <= 0:
         return None
     return total_amt / total_vol
@@ -1342,11 +1391,15 @@ class SimNowBroker(Broker):
             ins_ns = float(getattr(order, "insert_date_time", 0) or 0)
         except (TypeError, ValueError):
             ins_ns = 0.0
-        trades = getattr(order, "trade_records", None) or {}
         trade_ns = 0.0
         try:
-            for _t in trades.values():
-                d = float(getattr(_t, "trade_date_time", 0) or 0)
+            # 与 P6 同一套形态判据（`_iter_trade_records`）：原写法直接 `.values()`，
+            # 遇到 list 形态会抛（虽被下面的兜底吃掉），口径与另两处读取点不一致。
+            for _t in (_iter_trade_records(getattr(order, "trade_records", None)) or []):
+                try:
+                    d = float(_rec_field(_t, "trade_date_time", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
                 if d > trade_ns:
                     trade_ns = d
         except Exception:

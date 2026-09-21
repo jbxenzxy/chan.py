@@ -12,6 +12,10 @@ P6 修复单元测试：CTP 真实成交明细（trade_records）权威判定
     P6 改用 order.trade_records：CTP 真正确认的成交回报明细，只有交易所撮合成功
     才会写入，不受本地缓存乐观更新影响。
 
+    [5] 另加一组**容器形态**护栏：上面各例喂的都是原生 dict，恰好落进
+    `isinstance(recs, dict)` 认得的那条分支；tqsdk 的容器类不是 dict 子类，
+    真形态一旦变化，旧判据会静默累计出 0 手 → 真成交被判成未成交。
+
 本测试用 mock order 对象验证，不需要真实 tqsdk / 网络。
 跑法：python test_p6_fix.py
 """
@@ -220,6 +224,96 @@ def test_p4_downgraded_to_diagnostic() -> None:
           p6_is_filled(p4_ok_but_p6_fail, 1), False)
 
 
+def test_record_container_shape() -> None:
+    """成交明细容器的**形态**护栏（2026-09-21）。
+
+    为什么单列一组：上面 [1]~[4] 喂的都是**原生 dict**，恰好落进
+    `isinstance(recs, dict)` 认得的那条分支 —— 桩的形态 ≠ 生产形态，等于没覆盖。
+    tqsdk 的容器类（`Entity`）继承 `MutableMapping` 而**不是 dict 子类**；一旦
+    `trade_records` 变成那种容器，旧判据会走 `list(recs)` → 把 Mapping **当序列
+    迭代** → 拿到的是**键**（字符串）→ 每个字段都取不到 → 静默累计出 0。
+
+    这条路径**不是无害的保守方向**：`_finalize` 的 P6 降级分支（`status=FINISHED`
+    且 `volume_left=0` 但成交明细手数不足）会把一笔**真成交降级成未成交**并记一条
+    拒单，引擎据此以为没成交。故本组不用 dict，专测非 dict 的 Mapping。
+    """
+    from collections.abc import MutableMapping
+
+    print("\n[5] 成交明细容器形态护栏：非 dict 的 Mapping 也必须读对")
+
+    class EntityLike(MutableMapping):
+        """tqsdk `Entity` 的最小替身：是 Mapping，但**不是 dict 子类**。
+
+        与 `tqsdk/entity.py` 的 `Entity` 同构：键存在实例字典里，**缺键抛
+        KeyError**（`MutableMapping.get` 据此才返回 None 而不是崩）。
+        """
+
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+        def __getitem__(self, k):
+            return self.__dict__[k]
+
+        def __setitem__(self, k, v):
+            self.__dict__[k] = v
+
+        def __delitem__(self, k):
+            del self.__dict__[k]
+
+        def __iter__(self):
+            return iter(self.__dict__)
+
+        def __len__(self):
+            return len(self.__dict__)
+
+    class RecLike:
+        """明细替身：字段是**属性**（真 tqsdk `Trade` 就是这样）。"""
+
+        def __init__(self, volume, price):
+            self.volume, self.price = volume, price
+
+    # ① 容器不是 dict、值是 dict
+    c1 = EntityLike(t1={"volume": 2, "price": 4500.0})
+    check("非 dict 的 Mapping 容器（值为 dict）-> 2",
+          _traded_volume_from_records(MockOrder(trade_records=c1)), 2)
+    check("非 dict 的 Mapping 容器（值为 dict）-> 均价 4500.0",
+          _traded_price_from_records(MockOrder(trade_records=c1)), 4500.0)
+
+    # ② 容器不是 dict、值也是对象（真 Trade 形态）
+    c2 = EntityLike(t1=RecLike(1, 4540.0), t2=RecLike(1, 4560.0))
+    check("非 dict 容器 + 对象值明细 -> 2",
+          _traded_volume_from_records(MockOrder(trade_records=c2)), 2)
+    check("非 dict 容器 + 对象值明细 -> 加权均价 4550.0",
+          _traded_price_from_records(MockOrder(trade_records=c2)), 4550.0)
+
+    # ③ 空容器（不是"没成交"以外的含义）
+    check("空非 dict 容器 -> 0",
+          _traded_volume_from_records(MockOrder(trade_records=EntityLike())), 0)
+    check("空非 dict 容器 -> 均价 None",
+          _traded_price_from_records(MockOrder(trade_records=EntityLike())), None)
+
+    # ④ 形态完全认不出（truthy 的意外对象）-> 0 / None，且不崩
+    check("形态认不出（int）-> 0 不崩",
+          _traded_volume_from_records(MockOrder(trade_records=42)), 0)
+    check("形态认不出（int）-> 均价 None",
+          _traded_price_from_records(MockOrder(trade_records=42)), None)
+
+    # ⑤ 一条坏明细**不得**清零已累加总量（旧写法整段包在 try 里会清零）
+    check("一条坏明细不清零已累加总量（2 + 脏数据 -> 2）",
+          _traded_volume_from_records(MockOrder(
+              trade_records={"t1": {"volume": 2, "price": 4500.0},
+                             "t2": {"volume": "abc", "price": 4500.0}})), 2)
+    check("一条坏明细不清零已累加总量（对象值版）",
+          _traded_volume_from_records(MockOrder(
+              trade_records=EntityLike(t1=RecLike(2, 4500.0),
+                                       t2=RecLike("abc", 4500.0)))), 2)
+
+    # ⑥ 回归保护：序列形态（list）必须继续可用 —— test_p6_fix.py:126 依赖它
+    check("序列形态仍支持（list -> 2）",
+          _traded_volume_from_records(MockOrder(
+              trade_records=[{"volume": 2, "price": 4550.0}])), 2)
+
+
 def main() -> int:
     print("=" * 64)
     print("P6 修复单元测试：CTP 真实成交明细权威判定")
@@ -228,6 +322,7 @@ def main() -> int:
     test_p6_price_extraction()
     test_p6_core_judgement()
     test_p4_downgraded_to_diagnostic()
+    test_record_container_shape()
     print("\n" + "=" * 64)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("=" * 64)
