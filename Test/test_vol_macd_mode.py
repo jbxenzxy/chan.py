@@ -283,8 +283,11 @@ def test_render_dispatch(failures):
           and "const getVals = valOf || function(k) { return k; };" in js,
           "drawMacd 支持可选取值函数，缺省仍取价格MACD（价格MACD行为不变）")
     check(failures, "if (_showVolume && _volDisplayMode === 'macd') {" in js
-          and '(isFuturesMode() ? "成交量MACD" : "成交额MACD") + "(12,26,9)"' in js,
-          "标签行按模式切换，且前缀按品种分派：股票「成交额MACD(12,26,9)」/ 期货「成交量MACD(12,26,9)」")
+          and '"MACD(12,26,9)"' in js
+          and 'isFuturesMode() ? "成交量" : "成交额"' in js
+          and '(isFuturesMode() ? "成交量MACD" : "成交额MACD")' not in js,
+          "类MACD左标签为 MACD(12,26,9)（与价格MACD同构、去掉成交额/量前缀）；"
+          "前缀成交额/成交量改在指标区右上角绘制，原「成交额MACD」左标签已移除")
     # 参数写法与「价格MACD」逐字同构（本轮明确要求：两处 12 26 9 的间隔一致）
     check(failures, 'MACD(12,26,9)' in js and '(12, 26, 9)' not in js,
           "参数写法统一为「12,26,9」（逗号后无空格），无带空格旧写法残留")
@@ -640,16 +643,16 @@ def test_real_render(failures):
     checks.append(("柱状图模式标签为「成交额: …」（数值随成交额）",
                    bool(has("成交额:", bar_texts)) or bool(has("成交量(手):", bar_texts)),
                    str([t for t in bar_texts if ":" in t][:6])))
-    exp_vlabel = ("成交量MACD" if is_futures else "成交额MACD") + "(12,26,9)"
+    exp_vlabel = "MACD(12,26,9)"
     vmacd_label = has(exp_vlabel, macd_texts)
-    checks.append((f"类MACD模式标签为「{exp_vlabel}」+ DIF/DEA/BAR",
+    checks.append((f"类MACD模式左标签为「{exp_vlabel}」+ DIF/DEA/BAR（前缀已移至右上角）",
                    len(vmacd_label) == 1
                    and len(has("DIF:", macd_texts)) == 1
                    and len(has("DEA:", macd_texts)) == 1
                    and len(has("BAR:", macd_texts)) == 1,
                    str([t for t in macd_texts if ":" in t or "MACD" in t][:8])))
-    checks.append(("类MACD模式下不再出现价格MACD 标签（同一行不混两种口径）",
-                   not has("MACD(12,26,9)", macd_texts), ""))
+    checks.append(("类MACD模式：前缀「成交额/成交量」置于指标区（与左标签 MACD(12,26,9) 分离，保留品种口径区分）",
+                   bool(has("成交额", macd_texts)) or bool(has("成交量", macd_texts)), ""))
     checks.append(("类MACD 标签的参数写法与价格MACD 逐字同构（12,26,9，逗号后无空格）",
                    bool(vmacd_label) and all("(12,26,9)" in t for t in vmacd_label)
                    and not any("(12, 26, 9)" in t for t in macd_texts), ""))

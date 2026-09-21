@@ -1871,10 +1871,11 @@
                 const lineY = textArea.y + 11;
                 if (_showVolume && _volDisplayMode === 'macd') {
                     // 成交额/量 类MACD：标签与价格MACD同构（黄白线 + 红绿柱）。
-                    // 前缀按品种写「成交额MACD」/「成交量MACD」，与价格MACD一眼区分；
+                    // 左标签去掉「成交额MACD/成交量MACD」前缀，只留 MACD(12,26,9)（与价格MACD同构）；
+                    // 品种口径「成交额/成交量」改置指标区右上角（见下方右对齐绘制）。
                     // 数值单位随成交额/量。
                     const vmacd = volMacdOf(targetK);
-                    const vlabel = (isFuturesMode() ? "成交量MACD" : "成交额MACD") + "(12,26,9)";
+                    const vlabel = "MACD(12,26,9)";
                     ctx.fillStyle = COLORS.textLight;
                     ctx.fillText(vlabel, textArea.x + 4, lineY);
                     let vxPos = textArea.x + 4 + ctx.measureText(vlabel + " ").width;
@@ -1888,6 +1889,11 @@
                     const vBarIsUp = _isMirrorMode ? (vmacd.macd < 0) : (vmacd.macd >= 0);
                     ctx.fillStyle = vBarIsUp ? "#FF3C3C" : "#00F0F0";
                     ctx.fillText("BAR:" + formatVolMacdVal(vmacd.macd), vxPos, lineY);
+                    // 指标区右上角：成交额/成交量 前缀（从原左标签移除，保留品种口径区分）
+                    ctx.textAlign = "right";
+                    ctx.fillStyle = COLORS.textLight;
+                    ctx.fillText(isFuturesMode() ? "成交量" : "成交额", textArea.x + textArea.w - 4, lineY);
+                    ctx.textAlign = "left";
                 } else if (_showVolume) {
                     // 底部柱状指标模式：股票显示成交额，期货显示成交量（文字灰色，数字红/绿）
                     // 翻转视图：颜色对调，与翻转后的成交量柱一致
