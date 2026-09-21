@@ -36,6 +36,9 @@ P38 CLOSE 命中昨仓 契约测试（D12 第 4 项，2026-09-13）
       **不推翻已成交事实**（权威判据仍是 P6 `trade_records`）。
   [5] ★ D10 分类器新增第 4 类 `position`：错误码 30/50/51 与中文关键字
       （"平仓量超过持仓量" 等）都归它；且它属于"追价无用"（NO_CHASE）。
+  [6b] ★ 持仓视图形态护栏（2026-09-21 事故）：`get_position()`（无参）返回的是
+      tqsdk `Entity`（Mapping，**不是 dict**）；单合约 `Position` 同样是 Mapping。
+      两者都必须读对 —— [6] 各例只喂原生 dict，覆盖不到生产形态。
 
 跑法：python Trading/Test/test_p38_close_hits_yesterday_only.py
 """
@@ -367,6 +370,96 @@ check("short 侧同样分拆",
                       "CFFEX.IF2609", "SHORT"), (3, 4))
 check("api 异常 → None（不可信）", _position_split(None, "X", "LONG"), None)
 check("api 异常 → total = -1", _position_total(None, "X", "LONG"), -1)
+
+
+# ════════════════════════════════════════════════════════════════
+print("\n[6b] 生产形态护栏（2026-09-21 事故）：账户视图**不是 dict**")
+# ════════════════════════════════════════════════════════════════
+# 事故形态：`api.get_position()`（不传 symbol）返回 tqsdk `Entity` ——
+# 继承 `MutableMapping`，**不是** dict 子类。旧判据 `isinstance(pos, dict)`
+# 对它恒为 False → 整个账户集合被当成"单笔持仓对象"读 → 每个字段都落到
+# `getattr(..., 0)` → 本会话镜像恒读 0 手（对账据此误判"柜台无仓"）。
+# 上面 [6] 各例喂的都是**原生 dict**，恰好命中旧判据认得的那条分支 ——
+# 这就是"单测全绿而线上恒 0"的全部原因。故本组**故意不用 dict**。
+# 本用例不依赖 tqsdk：形态差异只需一个 MutableMapping 子类即可复现。
+from collections.abc import MutableMapping  # noqa: E402
+
+
+class EntityLike(MutableMapping):
+    """tqsdk `Entity` 的最小替身：是 Mapping，但**不是 dict 子类**。
+
+    与 `tqsdk/entity.py` 的 `Entity` 同构：键存在实例字典里（`__setitem__`
+    直接写 `__dict__`），**缺键抛 KeyError** —— `MutableMapping.get` 据此才
+    返回 None（若抛 AttributeError，`.get` 不会吞，会直接冒泡成崩溃）。
+    """
+
+    def __setitem__(self, k, v):
+        self.__dict__[k] = v
+
+    def __getitem__(self, k):
+        return self.__dict__[k]
+
+    def __delitem__(self, k):
+        del self.__dict__[k]
+
+    def __iter__(self):
+        return iter([k for k in self.__dict__ if not k.startswith("_")])
+
+    def __len__(self):
+        return len([k for k in self.__dict__ if not k.startswith("_")])
+
+
+class ObjApi:
+    """`get_position()` 恒返回给定对象（形态由用例自己指定）。"""
+
+    def __init__(self, obj):
+        self._o = obj
+
+    def get_position(self, symbol=None):
+        return self._o
+
+
+class PosLike(EntityLike):
+    """单合约持仓：**既是 Mapping 又有持仓字段**（真 tqsdk `Position` 同构）。
+
+    `Position` 继承 `Entity` —— 所以"是 Mapping"不能当作"是账户视图"的判据：
+    对它调 `.get("<合约代码>")` 会返回 None（字段不在键空间里）→ 若判据顺序写反，
+    一个持仓对象会被读成 0 手。本类就是用来钉死这个顺序的。
+    """
+
+    def __init__(self, lt=0, lh=0, st=0, sh=0):
+        self.pos_long_today, self.pos_long_his = lt, lh
+        self.pos_short_today, self.pos_short_his = st, sh
+
+
+_acc = EntityLike()
+_acc["CFFEX.IF2609"] = EntityLike()   # 账户视图：键 = 合约代码
+_acc["CFFEX.IF2609"]["pos_long_today"] = 1
+_acc["CFFEX.IF2609"]["pos_long_his"] = 2
+
+check_true("EntityLike 不是 dict（旧判据恒 False 的根因）",
+           not isinstance(_acc, dict))
+check_true("EntityLike 是 Mapping（新判据认它）",
+           isinstance(_acc, MutableMapping))
+check("★ 非 dict 的账户视图 → 正确读到 (1, 2)（旧实现此处读 (0, 0)）",
+      _position_split(ObjApi(_acc), "CFFEX.IF2609", "LONG"), (1, 2))
+check("非 dict 账户视图 → total = 3",
+      _position_total(ObjApi(_acc), "CFFEX.IF2609", "LONG"), 3)
+check("非 dict 账户视图 + 缺本合约 → (0, 0)（不跨品种误读）",
+      _position_split(ObjApi(_acc), "CFFEX.IM2509", "LONG"), (0, 0))
+
+# 值的形态也可能不同：值是普通 dict 时属性取不到，要按 Mapping 取键。
+_acc_d = EntityLike()
+_acc_d["CFFEX.IF2609"] = {"pos_long_today": 3, "pos_long_his": 1,
+                          "pos_short_today": 0, "pos_short_his": 0}
+check("账户视图的『值』是普通 dict → 同样读到 (3, 1)",
+      _position_split(ObjApi(_acc_d), "CFFEX.IF2609", "LONG"), (3, 1))
+
+# 判据顺序：单合约持仓对象**也**是 Mapping —— 必须先认"持仓对象"再取键。
+check("★ 单合约持仓（同时是 Mapping）→ (2, 0)，不退化成 0",
+      _position_split(ObjApi(PosLike(lt=2, st=2)), "CFFEX.IF2609", "LONG"), (2, 0))
+check("单合约持仓 short 侧 → (2, 0)",
+      _position_split(ObjApi(PosLike(lt=2, st=2)), "CFFEX.IF2609", "SHORT"), (2, 0))
 
 
 print("\n" + "=" * 60)

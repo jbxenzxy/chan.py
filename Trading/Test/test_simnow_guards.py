@@ -290,6 +290,32 @@ def main() -> None:
         _lg.setLevel(_old_level)
         _lg.propagate = _old_propagate
 
+    print("[9] gateway 日志配置：INFO 埋点必须真的落盘（2026-09-21）")
+    # 事故：交易子进程**全树没有 logging 配置** → root 停在 WARNING、handlers
+    # 为空 → 所有 `logger.info(...)` 被静默丢弃。专为诊断写的埋点一行都没出现过
+    # （`otg_latency:` 回报链路时延 / `在线通道已连接` / `登录后持仓镜像初读`），
+    # 「回报滞后 25~55s 还在不在」因此一直拿不出数据收口。
+    # 本组把"埋点落盘"变成可执行断言：配好之后 INFO 必须真的写进当前 stdout
+    # （子进程里 = {out}/gateway.log）。
+    import io
+    from contextlib import redirect_stdout
+    from Trading import main as _gw_main
+
+    _gw_main._setup_logging()
+    _tg = logging.getLogger("tg")
+    check(_tg.isEnabledFor(logging.INFO) is True, "配置后 tg 放行 INFO")
+    check(any(getattr(h, "_gw_log_handler", False) for h in _tg.handlers) is True,
+          "tg 已装落盘 handler")
+    _n_handlers = len(_tg.handlers)
+    _gw_main._setup_logging()                      # 幂等：不叠加（build_runtime 会多次调）
+    check(len(_tg.handlers) == _n_handlers, "重复调用不叠加 handler")
+
+    _buf = io.StringIO()
+    with redirect_stdout(_buf):
+        logging.getLogger("tg.brokers.simnow").info("otg_latency: probe 探针")
+    check("otg_latency: probe 探针" in _buf.getvalue(),
+          "INFO 埋点确实写进当前 stdout（子进程里 = gateway.log）")
+
     print("== {} pass / {} fail ==".format(_PASS, _FAIL))
     sys.exit(0 if _FAIL == 0 else 1)
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import signal
 import sys
@@ -72,6 +73,64 @@ _STOP_REQUEST = ".stop_request"
 #   Product，运行时对象 Instrument 构造时直接取档案初值，不再有
 #   "先构造 spec 再播种"的两段式。换品种 = 构造期重建 InstrumentConfig
 #   （frozen=True 下不能就地改 signal_symbol，见 build_runtime）。
+
+
+class _GwStdoutHandler(logging.StreamHandler):
+    """始终写**当前** `sys.stdout` 的 handler。
+
+    本进程会在 `build_runtime` 里把 `sys.stdout/stderr` 重定向到
+    `{out}/gateway.log`（见该函数里 `_log_fh` 一段）。若用
+    `logging.StreamHandler(sys.stdout)`，绑定的是**创建时**那个对象 ——
+    重定向前创建的 handler 会一直写旧流，日志落点与 `print` 分叉。
+    这里让 `stream` 每次 emit 时现取，落盘位置永远与 `print` 一致。
+    """
+
+    @property
+    def stream(self):
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value):
+        # `StreamHandler.__init__` 会 `self.stream = stream`；本类不用传入的流，
+        # 故 setter 故意留空（真实流由上面的 property 每次现取）。
+        pass
+
+
+def _setup_logging() -> None:
+    """让交易子进程的 `logging` 埋点真正落盘（2026-09-21 修复）。
+
+    背景：此前 `Trading/` **全树没有任何 logging 配置** —— root 停在 WARNING、
+    handlers 为空 → 所有 `logger.info(...)` 被静默丢弃。于是专为诊断写的埋点
+    一行都没出现过：
+
+      · `otg_latency:`（回报链路时延：submit→终判 / insert_lag / trade_lag）——
+        「回报滞后 25~55s 还在不在」因此一直拿不出数据收口；
+      · `在线通道已连接`、`登录后持仓镜像初读`（后者是判断"otg 持仓通道是否同步"
+        的唯一直接证据）。
+
+    能看见的只有 WARNING 级 —— 那是 `logging.lastResort`（level=WARNING）兜到
+    stderr，再被 AppTrader 的 PIPE 收进 gateway.log。
+
+    只配置本仓库自己的两棵日志树（`tg.*` = broker 侧埋点，`Trading.*` =
+    策略/配置），**不动 root**：避免把 tqsdk 等第三方的 INFO 灌进 gateway.log。
+    幂等：重复调用不叠加 handler（`build_runtime` 可能在同一进程里被多次调用，
+    见 `Trading/Test/test_step2_smoke_freq.py`）。
+    """
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s", "%H:%M:%S")
+    for name in ("tg", "Trading"):
+        lg = logging.getLogger(name)
+        if any(getattr(h, "_gw_log_handler", False) for h in lg.handlers):
+            continue
+        handler = _GwStdoutHandler()
+        handler._gw_log_handler = True          # 幂等标记（也是本函数的"已装载"戳）
+        handler.setLevel(logging.INFO)
+        handler.setFormatter(fmt)
+        lg.addHandler(handler)
+        lg.setLevel(logging.INFO)
+        # 不向 root 传播：本 handler 已经把记录写进 gateway.log（= 子进程 stdout），
+        # 再冒泡只会给"宿主机恰好配了 root handler"的场景留下重复行。
+        lg.propagate = False
 
 
 def _fee_banner(cfg: TradingConfig) -> None:
@@ -190,6 +249,11 @@ def build_runtime(args):
                    encoding="utf-8", buffering=1)
     sys.stdout = _log_fh
     sys.stderr = _log_fh
+    # 装 logging 的时机很关键：必须在**重定向之后**（handler 才能真正落进
+    # gateway.log）、且必须在 `Broker.build_broker`（下方 200 行附近）**之前** ——
+    # 通道连接类埋点（`在线通道已连接` / `登录后持仓镜像初读`）发生在
+    # `SimNow.__init__ → _connect` 里，装晚了就抓不到。
+    _setup_logging()
     # 唯一一份**运行时对象** —— 静态身份（config 转发）+
     #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（SSOT=品种档案，
     #   构造期播种）+ 定价成本，合并于同一个 Instrument。

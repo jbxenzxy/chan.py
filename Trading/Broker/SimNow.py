@@ -78,6 +78,7 @@ import math
 import os
 import time
 import datetime as _dt
+from collections.abc import Mapping
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..Config import BrokerConfig
@@ -128,6 +129,66 @@ _POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
 _PUMP_BACKLOG_WARN_STREAK = 50
 
 
+# ── 持仓读数的"形态判据"（2026-09-21 修复）──────────────────────────────────
+#   `api.get_position()`（不传 symbol）返回的是**账户视图**：一个 `Entity`，
+#   键 = 合约代码。而 `Entity` 继承的是 `MutableMapping`，**不是 dict 子类**
+#   （实测 `isinstance(Entity(), dict)` 为 False）。旧代码用 `isinstance(pos, dict)`
+#   判形态 → 恒为 False → 走 else 分支，把**整个账户集合**当成"单合约持仓对象"
+#   去读 `pos_long_today` → 每个字段都落到 `getattr(..., 0)` 的默认值 0。
+#   后果：本会话持仓镜像恒读 0 手（2026-09-21 事故：IF 开多 2 手后镜像仍 0 →
+#   对账证据门判"读数不可信"、弹出人工核对告警）。
+#   为什么单测没发现：测试桩一律喂**原生 dict / 裸对象**，恰好落进两条分支里
+#   "对"的那一条 —— 桩的形态 ≠ 生产形态，等于没覆盖。
+#   ⚠️ 单合约 `Position` 同样继承 `Entity`（也是 Mapping），且对它调
+#   `.get("<合约代码>")` 返回 None → **不能**只靠 isinstance 分流：
+#   必须先认"持仓对象"，再按账户视图取键。
+_POSITION_FIELDS = ("pos_long_today", "pos_short_today",
+                    "pos_long_his", "pos_short_his")
+
+
+def _is_position_like(obj) -> bool:
+    """是不是**单合约持仓对象**（tqsdk `Position` / 测试桩 / 裸对象）。
+
+    用"持仓专有字段存在与否"判形态 —— 这是唯一能把 `Position`（Mapping 但自身
+    就是持仓）与"账户视图 Mapping"分开的判据。
+    """
+    return any(hasattr(obj, _field) for _field in _POSITION_FIELDS)
+
+
+def _position_pairs(pos, fallback_symbol: str = "") -> List[Tuple[str, Any]]:
+    """把 `api.get_position()` 的返回值归一成 [(合约代码, 持仓对象), ...]。
+
+    供"扫全账户"的调用方使用（P5 启动账户基线、独立强制平仓工具）。形态判据
+    见上方 `_POSITION_FIELDS` 说明；单合约形态取 `fallback_symbol` 作键
+    （对象自身不携带代码）。
+    """
+    if pos is None:
+        return []
+    if _is_position_like(pos):
+        return [(fallback_symbol, pos)]
+    if isinstance(pos, Mapping):
+        return [(str(k), v) for k, v in pos.items()]
+    return []
+
+
+def _pos_field(item, name: str) -> int:
+    """读一个持仓字段（今/昨 × 多/空）；两种容器形态都认，取不到一律 0。
+
+    真实 tqsdk 持仓是 `Entity` —— 字段存在 `__dict__` 里，属性访问可用；
+    但把"值"写成普通 dict 的桩（以及可能的未来版本）也存在 → 属性取不到时
+    再按 Mapping 取键。**两者都取不到才判 0**：这是唯一允许把"读不到"当成
+    0 的地方（容器形态本身认不出时在 `_position_split` 里判"不可信"）。
+    tqsdk 对取不到的数值字段返回 nan（不是 None），`int(nan)` 会抛 → 归一为 0。
+    """
+    value = getattr(item, name, None)
+    if value is None and isinstance(item, Mapping):
+        value = item.get(name)
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, int]]:
     """读 tqsdk 持仓的 **(今仓, 昨仓)** 分解，失败返回 None。
 
@@ -143,30 +204,35 @@ def _position_split(api, trade_symbol: str, side: str) -> Optional[Tuple[int, in
         pos = api.get_position()
     except Exception:
         return None
-    item = None
-    if isinstance(pos, dict):
-        # 只认 trade_symbol 精确匹配；找不到 = 该合约当前无持仓（返回 0）。
-        # 收窄：删除旧的"取第一条多/空非零持仓"兜底——账户同时持有
-        # 其他品种时会把别的合约误当本合约读（跨品种误判，污染 P4/P5 校验）。
-        # 陈旧缓存 dict 缺键的场景由 real_position 的新鲜度守卫前置拦截。
-        item = pos.get(trade_symbol)
-    else:
+    if _is_position_like(pos):
+        # 单合约形态：对象自身就是持仓（`get_position(symbol)` / 测试桩）。
         item = pos
-    if item is None:
-        return (0, 0)
+    elif isinstance(pos, Mapping):
+        # 账户视图形态（生产路径）：按合约代码精确取键。
+        # 只认精确匹配 —— 不做"取第一条多/空非零持仓"的兜底：账户同时持有
+        # 其他品种时会把别的合约误当本合约读（跨品种误判，污染 P4/P5 校验）。
+        # 缺键 = 该合约当前无持仓 → (0, 0)。
+        item = pos.get(trade_symbol)
+        if item is None:
+            return (0, 0)
+    else:
+        # 形态无法识别 → 判"读不到"（返回 None = 不可信），**不**静默读成 0：
+        # 一个假的 0 会被对账当成"柜台确实无仓"采纳（本次事故的形态）。
+        return None
     if side == "LONG":
-        return (int(getattr(item, "pos_long_today", 0) or 0),
-                int(getattr(item, "pos_long_his", 0) or 0))
-    return (int(getattr(item, "pos_short_today", 0) or 0),
-            int(getattr(item, "pos_short_his", 0) or 0))
+        return (_pos_field(item, "pos_long_today"),
+                _pos_field(item, "pos_long_his"))
+    return (_pos_field(item, "pos_short_today"),
+            _pos_field(item, "pos_short_his"))
 
 
 def _position_total(api, trade_symbol: str, side: str) -> int:
     """读 tqsdk 当前持仓总数（今+昨），失败返回 -1。
 
-    用于 P4 修复的成交后二次校验。注意：传 symbol 也不传时，tqsdk 返回的是
-    整个账户的 dict[symbol, Position]；这里取与 trade_symbol 匹配的那一条。
-    改为 `_position_split` 求和，避免"今/昨字段名"在两处各写一遍。
+    用于 P4 修复的成交后二次校验。注意：不传 symbol 时 tqsdk 返回的是
+    整个账户的**映射** `{合约代码: 持仓}`（实测是 `Entity`，**不是 dict**）；
+    这里取与 trade_symbol 匹配的那一条。形态判据与取值统一走 `_position_split`，
+    避免"今/昨字段名 + 容器形态"在两处各写一遍。
     """
     sp = _position_split(api, trade_symbol, side)
     if sp is None:
@@ -796,16 +862,20 @@ class SimNowBroker(Broker):
             self._api.wait_update(deadline=time.time() + self._timing("recover_settle_wait"))
             self._api.wait_update(deadline=time.time() + self._timing("recover_settle_wait"))
             pos = self._api.get_position()
-            items = pos.values() if isinstance(pos, dict) else [pos]
-            for v in items:
+            # 形态归一收口在 `_position_pairs`：`get_position()`（无参）返回的是
+            # tqsdk `Entity` —— 是 Mapping 但**不是 dict**。旧写法
+            # `isinstance(pos, dict)` 对它恒为 False，会把整个账户集合当成
+            # "单笔持仓"读 → 每侧都读成 0 手 → 启动账户基线恒为空，
+            # P5 的"启动时账户已有非零持仓"告警永远不可能触发。
+            for _sym, v in _position_pairs(pos, self._trade_symbol):
                 if v is None:
                     continue
                 sym = getattr(v, "exchange_symbol", None) or getattr(v, "symbol", None) \
-                      or self._trade_symbol
-                long_total = (getattr(v, "pos_long_today", 0) or 0) \
-                           + (getattr(v, "pos_long_his", 0) or 0)
-                short_total = (getattr(v, "pos_short_today", 0) or 0) \
-                            + (getattr(v, "pos_short_his", 0) or 0)
+                      or _sym
+                long_total = (_pos_field(v, "pos_long_today")
+                              + _pos_field(v, "pos_long_his"))
+                short_total = (_pos_field(v, "pos_short_today")
+                               + _pos_field(v, "pos_short_his"))
                 self._initial_account_state[sym] = (long_total, short_total)
             # 启动时账户基线检查（如果非 0，发出警告日志）
             non_zero = {k: v for k, v in self._initial_account_state.items()
@@ -1579,10 +1649,22 @@ class SimNowBroker(Broker):
         if self._api is None or self._channel_unstable():
             return None
         try:
-            return _position_total(self._api, self._trade_symbol,
-                                  "LONG" if side is Side.LONG else "SHORT")
+            n = _position_total(self._api, self._trade_symbol,
+                                "LONG" if side is Side.LONG else "SHORT")
         except Exception:
             return None
+        if n < 0:
+            # 读数为负 = 读数失败（`_position_total` 的 -1 约定：`get_position`
+            # 抛异常，或返回值形态无法识别）。**必须留痕**：这条路径下引擎会把
+            # 该侧判为"不可信"而跳过对账（Reconcile._reconcile_positions），
+            # 不留痕 = 对账静默失效 —— 2026-09-21 的"镜像恒读 0"就是这样被
+            # 误当成"柜台确实无仓"的。调用频次 = 每根 K 线一次，不会刷屏。
+            logging.getLogger("tg.brokers.simnow").warning(
+                "本地柜台镜像读数失败: side=%s trade_symbol=%s → -1"
+                "（get_position 异常，或返回值形态无法识别）；"
+                "引擎对账将按『不可信』跳过该侧，不改账本。",
+                side, self._trade_symbol)
+        return n
 
     def trade_confirmed(self, intent, signal_key: str = "") -> bool:
         """UNLOCK 卡单 5 bars 后复核 —— 查 CTP 真实成交明细。

@@ -36,6 +36,32 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
+def _locate_root() -> str:
+    """向上找仓库根（含 `Trading/__init__.py` 的那一层）；与 CrossDayProbe 同款。"""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(6):
+        if os.path.isdir(os.path.join(d, "Trading")) and \
+                os.path.isfile(os.path.join(d, "Trading", "__init__.py")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return ""
+
+
+_ROOT = os.environ.get("TRADER_GATEWAY_HOME", "") or _locate_root()
+if not _ROOT:
+    print("[X] 找不到仓库根目录（应含 Trading/__init__.py）。")
+    raise SystemExit(2)
+sys.path.insert(0, _ROOT)
+
+# 账户持仓的形态归一与字段读取与 gateway 同源（`get_position()` 无参返回的是
+# tqsdk `Entity` —— Mapping 但**不是 dict**；本工具原先按 dict 判形态，会把整个
+# 账户集合当成单笔持仓读出 0 手 → 扫描不到任何持仓 → 误报"无需平仓"）。
+from Trading.Broker.SimNow import _pos_field, _position_pairs  # noqa: E402
+
+
 def _setup_logger() -> logging.Logger:
     log = logging.getLogger("force_close")
     if not log.handlers:
@@ -64,10 +90,8 @@ def _read_position(api, symbol):
         return None, None
     if pos is None:
         return 0, 0
-    long_total = (getattr(pos, "pos_long_today", 0) or 0) \
-               + (getattr(pos, "pos_long_his", 0) or 0)
-    short_total = (getattr(pos, "pos_short_today", 0) or 0) \
-                + (getattr(pos, "pos_short_his", 0) or 0)
+    long_total = _pos_field(pos, "pos_long_today") + _pos_field(pos, "pos_long_his")
+    short_total = _pos_field(pos, "pos_short_today") + _pos_field(pos, "pos_short_his")
     return long_total, short_total
 
 
@@ -228,19 +252,13 @@ def main():
         return 1
 
     plan = []  # [(symbol, side_to_close, volume)]
-    if isinstance(all_pos, dict):
-        items = all_pos.items()
-    else:
-        items = [(args.symbol or "?", all_pos)]
-    for sym, v in items:
+    for sym, v in _position_pairs(all_pos, args.symbol or "?"):
         if v is None:
             continue
         if args.symbol and sym != args.symbol:
             continue
-        long_total = (getattr(v, "pos_long_today", 0) or 0) \
-                   + (getattr(v, "pos_long_his", 0) or 0)
-        short_total = (getattr(v, "pos_short_today", 0) or 0) \
-                    + (getattr(v, "pos_short_his", 0) or 0)
+        long_total = _pos_field(v, "pos_long_today") + _pos_field(v, "pos_long_his")
+        short_total = _pos_field(v, "pos_short_today") + _pos_field(v, "pos_short_his")
         if long_total > 0:
             plan.append((sym, "LONG", long_total))
         if short_total > 0:

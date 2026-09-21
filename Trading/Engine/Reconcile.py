@@ -95,7 +95,13 @@ class ReconcileMixin:
                                   note="broker.real_position 抛异常，按本地 store 启动")
                 all_cleared = False
                 continue
-            if real_vol is None:
+            # 读数不可信 → 整侧跳过（不采纳、不动账本）：
+            #   None = 通道不稳定（`real_position` 自身的判据）；
+            #   < 0  = 读数失败（broker 用 -1 表达"读不到"，见 SimNow._position_total）。
+            #   负数**必须**在这里挡掉：往下走会被 `_reconcile_side` 当成
+            #   "柜台比账本少"，算出 n_to_close = engine_vol + 1 → 把账本该侧
+            #   整笔删除并补记虚构平仓盈亏（与证据门要防的破坏同源，只是入口不同）。
+            if real_vol is None or real_vol < 0:
                 continue
             self._mirror_note(str(side), real_vol, source)
 
@@ -186,7 +192,10 @@ class ReconcileMixin:
                               side=str(side),
                               note="broker.real_position 抛异常，按本地 store 启动")
             return
-        if not real_vol:
+        # 0 = 该侧柜台确实无仓（空侧对账的正常路径，什么都不用做）；
+        # None / < 0 = 读数不可信 → 同样直接返回：否则会弹出一条
+        # "本地柜台镜像 -1 手、账本该侧无仓"的假告警（负数曾从这里漏进告警文案）。
+        if real_vol is None or real_vol <= 0:
             return
         self._mirror_note(str(side), real_vol, source)
         self.alert(
@@ -209,6 +218,13 @@ class ReconcileMixin:
         返回 False 表示：一致 / 部分平后仍有残留 / 告警不接管。
         调用方汇总两侧返回值决定是否 state→IDLE。
         """
+        # 自守：本函数会**改账本**（删仓 + 补记盈亏），所以不把"读数非负"
+        # 只交给调用方保证 —— 负数一旦漏进来，`engine_vol - real_vol` 会大于
+        # engine_vol，被当成"柜台比账本少"，整侧仓单被删并补记虚构盈亏。
+        # 调用方 `_reconcile_positions` 有同名守卫，这里只是纵深防御。
+        if real_vol is None or real_vol < 0:
+            return False
+
         if real_vol > engine_vol:
             # 真实持仓 > 引擎：告警不接管（用户可能在外部手动加仓）。
             # 【2026-09-17 拍板】发现账实不一致 → 弹窗说清、由用户干预；
