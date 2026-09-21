@@ -39,7 +39,7 @@ confirm_live_trading=true，否则抛 BadRequestError（400，前端提示，
 取一份 TradingConfig = Trading/Config.py 模型默认值 ← 环境变量/仓库根 .env。
 改参数去 .env 或 Trading/Config.py，改运行时参数用本 start() 的入参。
 
-状态持久化：App/auto_trader_state.json 记录最后一次启动参数
+状态持久化：App/trader_launch_record.json 记录最后一次启动参数
 （pid/out_dir/started_at/broker），服务重启后可查可停。
 """
 import glob
@@ -73,7 +73,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.append(_REPO_ROOT)
 
 _STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "auto_trader_state.json")
+                           "trader_launch_record.json")
 
 _DEFAULT_OUT = os.path.join(_TG_ROOT, "State")
 

@@ -626,7 +626,7 @@ def _read_json(path):
 
 with tmp_dir() as tmp:
     out_dir = os.path.join(tmp, "state")
-    state_file = os.path.join(tmp, "auto_trader_state.json")
+    state_file = os.path.join(tmp, "trader_launch_record.json")
 
     captured = {}
     orig_popen = AT.subprocess.Popen
@@ -681,7 +681,7 @@ with tmp_dir() as tmp:
     orig_load_cfg = AT.AppTrader._load_cfg
     _spawned = {"n": 0}
     try:
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         AT.AppTrader._load_cfg = staticmethod(
             lambda: TradingConfig(broker="dry_run", state_dir=out_dir))
         def _count_popen(cmd, **kw):
@@ -752,7 +752,7 @@ with tmp_dir() as tmp:
     orig_state_file = AT._STATE_FILE
     orig_load_cfg = AT.AppTrader._load_cfg
     try:
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         AT.AppTrader._load_cfg = staticmethod(
             lambda: TradingConfig(broker="dry_run", state_dir=out_dir))
         AT.subprocess.Popen = (lambda cmd, **kw: _FakeProc(cmd))
@@ -809,7 +809,7 @@ with tmp_dir() as tmp:
     orig_state_file = AT._STATE_FILE
     orig_load_cfg = AT.AppTrader._load_cfg
     try:
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         AT.AppTrader._load_cfg = staticmethod(lambda: TradingConfig(
             broker="dry_run", state_dir=os.path.join(tmp, "State"),
             source={"symbol": "KQ.m@CFFEX.IC", "freq": "15m"}))
@@ -850,7 +850,7 @@ with tmp_dir() as tmp:
 
     orig_state_file = AT._STATE_FILE
     try:
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         t = AT.AppTrader()
         t._handle = AT._TraderProc(
             _ExitedProc(), out_dir=out_dir, started_at="2026-09-06 10:00:00",
@@ -891,7 +891,7 @@ with tmp_dir() as tmp:
     orig_state_file = AT._STATE_FILE
     _env_bak = os.environ.get("TRADING_RISK__DELIVERY_GUARD_DAYS")
     try:
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         # 真实失败路径：.env / 环境变量写错 → Trading/Config.py 严格校验抛错。
         # 不再有"配置文件不存在"这种失败 —— 配置本来就不是文件了。
         # ⚠️ 2026-09-16 换键：原用 `TRADING_RISK__MAX_VOLUME=abc` 当"非法值"触发器，
@@ -945,7 +945,7 @@ with tmp_dir() as tmp:
         os.makedirs(AT._TG_ROOT, exist_ok=True)
         AT.AppTrader._load_cfg = staticmethod(
             lambda: TradingConfig(broker="dry_run", state_dir="./State"))
-        AT._STATE_FILE = os.path.join(tmp, "auto_trader_state.json")
+        AT._STATE_FILE = os.path.join(tmp, "trader_launch_record.json")
         captured = {}
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
