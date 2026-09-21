@@ -43,7 +43,7 @@ def _parse_inf(v):
 # ═══════════════════════════════════════════════════════════════════
 # 周期分类：INTRADAY_FREQS / SUBSECOND_FREQS 的单一事实源是 Common.CEnum
 # 的 FREQ_TABLE（见 CEnum.py，顶部 import），此处仅是再导出，供
-# _get_date_fmt 与本仓既有消费方（App/utils、BSPointList、AppEngine）沿用，
+# _get_date_fmt 与本仓既有消费方（App/AppUtils、BSPointList、AppEngine）沿用，
 # 不再内联复制。
 # ═══════════════════════════════════════════════════════════════════
 

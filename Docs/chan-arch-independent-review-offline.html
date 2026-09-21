@@ -282,7 +282,7 @@
   ORCH --&gt; SSE["AppSSE · 1845 行（P1-3）"]
   ORCH --&gt; DL["AppDownload"]
   ENG["AppEngine · 1448 行<br>纯分析编排"]
-  UTIL["App/utils · 350 行"]
+  UTIL["App/AppUtils · 350 行"]
   DATA["AppData"]
 
   subgraph DAPI["DataAPI/ · 外部 SDK 唯一可见点"]
@@ -326,7 +326,7 @@
         <tbody>
           <tr><td><code>CommonStockAPI.py</code> 72 行</td><td>抽象基类</td><td><code>CCommonStockApi</code>：统一 K 线取数接口（<code>get_kl_data</code>）+ 数据源元数据接口（频率映射 / 别名 / 支持列表）——「面向业务的稳定契约」</td><td>其余四个成员全部继承/对齐它</td></tr>
           <tr><td><code>TdxAPI.py</code> 2326 行</td><td>通达信<b>静态</b>数据源</td><td>.day 二进制读取、周期合成、前复权（xdxr）、文件级 API（<code>refresh_block_files</code> / <code>get_index_stocks</code> / <code>set_tdx_config</code>）</td><td>AppEngine（K 线装配）、AppRefresh（block 刷新）、AppScan（板块成分）</td></tr>
-          <tr><td><code>TqSdkAPI.py</code> 477 行</td><td>天勤期货<b>静态</b>数据源</td><td>期货元数据表（<code>FUTURES_ALIASES</code> 83 个别名 / <code>SUPPORTED_FREQS</code> / <code>FREQ_SEC_MAP</code> / <code>FREQ_LABEL_CN</code>）、<code>fetch_kline</code> 一次性拉历史、共享 K 线缓存（<code>clear_all_cache</code>）、账户加载</td><td>AppEngine（tqsdk 探测）、App/utils（周期换算）、AppSSE（经 AppEngine 显式名 <code>CTqSdkAPI</code>）</td></tr>
+          <tr><td><code>TqSdkAPI.py</code> 477 行</td><td>天勤期货<b>静态</b>数据源</td><td>期货元数据表（<code>FUTURES_ALIASES</code> 83 个别名 / <code>SUPPORTED_FREQS</code> / <code>FREQ_SEC_MAP</code> / <code>FREQ_LABEL_CN</code>）、<code>fetch_kline</code> 一次性拉历史、共享 K 线缓存（<code>clear_all_cache</code>）、账户加载</td><td>AppEngine（tqsdk 探测）、App/AppUtils（周期换算）、AppSSE（经 AppEngine 显式名 <code>CTqSdkAPI</code>）</td></tr>
           <tr><td><code>TqSdkCSSESource.py</code> 299 行</td><td>天勤期货<b>实时流</b>数据源（SSE 专用）</td><td><code>CSSESource</code> 流协议（<code>connect / get_kline_serial / wait_update / append_bar / close</code>）+ <code>CTqSdkSession</code>（每连接独立 TqApi 生命周期）+ <code>close_all</code> 应用级回收注册表</td><td>AppSSE（SSE 生成器消费 <code>src.*</code> 协议）；FrontAPI 经 AppSSE re-export 取四符号</td></tr>
           <tr><td><code>ElTdxAPI.py</code> 739 行</td><td>盘后下载引擎</td><td>通达信盘后数据下载、<code>collect_codes_from_vipdoc</code> 代码收集</td><td>AppDownload（下载委托）、AppRefresh（vipdoc 代码收集）</td></tr>
         </tbody>
@@ -432,7 +432,7 @@
     <div class="prob p1">
       <div class="head"><span class="id">P1-3</span><b>AppSSE 单文件 1940 行：职责已按 5 区域重组，未物理拆分</b><span class="pill warn">中</span></div>
       <ul>
-        <li><b>现状</b>：AppSSE 对引擎的依赖已收敛为 3 个显式名（<code>TQ_AVAILABLE/CTqSdkAPI/_get_futures_name</code>，<code>AppSSE.py:42-44</code>）+ <code>App/utils.py</code> 公共纯函数，文件头已按 5 区域标注分区：<b>区域 1 · SSE 实时流</b>（<code>AppSSE.py:69-1029</code>：init_chan_symbol:74 / _drain_chan:120 / sse_futures_stream_single:184 / sse_futures_stream_dual:566）、<b>区域 2 · 期货分析/复盘</b>（<code>AppSSE.py:1030-1740</code>：_build_futures_chan:1032 / _analyze_futures_internal:1061 / _extract_chan_structure:1331 / _extract_realtime_snapshot:1494 / _calc_futures_white_hline:1600 / MACD 增量三函数）、<b>区域 3 · 期货选点</b>（<code>AppSSE.py:1741-1862</code>：futures_manual_select_point:1743）、<b>区域 4 · 市场/代码/周期查询</b>（<code>AppSSE.py:1863-1906</code>：get_futures_aliases:1865 / get_futures_name:1872 / tq_available:1879 / get_futures_freqs:1886 / get_futures_freq_sec_map:1895）、<b>区域 5 · 退出清理</b>（<code>AppSSE.py:1907-1940</code>：_cleanup_all_futures_data:1909 / futures_cleanup:1932）。</li>
+        <li><b>现状</b>：AppSSE 对引擎的依赖已收敛为 3 个显式名（<code>TQ_AVAILABLE/CTqSdkAPI/_get_futures_name</code>，<code>AppSSE.py:42-44</code>）+ <code>App/AppUtils.py</code> 公共纯函数，文件头已按 5 区域标注分区：<b>区域 1 · SSE 实时流</b>（<code>AppSSE.py:69-1029</code>：init_chan_symbol:74 / _drain_chan:120 / sse_futures_stream_single:184 / sse_futures_stream_dual:566）、<b>区域 2 · 期货分析/复盘</b>（<code>AppSSE.py:1030-1740</code>：_build_futures_chan:1032 / _analyze_futures_internal:1061 / _extract_chan_structure:1331 / _extract_realtime_snapshot:1494 / _calc_futures_white_hline:1600 / MACD 增量三函数）、<b>区域 3 · 期货选点</b>（<code>AppSSE.py:1741-1862</code>：futures_manual_select_point:1743）、<b>区域 4 · 市场/代码/周期查询</b>（<code>AppSSE.py:1863-1906</code>：get_futures_aliases:1865 / get_futures_name:1872 / tq_available:1879 / get_futures_freqs:1886 / get_futures_freq_sec_map:1895）、<b>区域 5 · 退出清理</b>（<code>AppSSE.py:1907-1940</code>：_cleanup_all_futures_data:1909 / futures_cleanup:1932）。</li>
         <li><b>为什么仍是问题</b>：区域标注只是「逻辑分区」，五个职责仍共享一个命名空间与一份 1940 行文件；区域 3 的选点入口在 AppChart（功能域横跨），只有物理拆分才能让「期货复盘」「期货选点」各自成域。</li>
         <li><b>随时可拆</b>：依赖已单向、暗接口已消除，拆分前置条件全部满足。</li>
       </ul>

@@ -11,7 +11,7 @@ App/AppChart.py —— 图表交互功能域
   - 市场/代码/周期查询漏斗（futures_cleanup / get_futures_aliases 等，
     实现在 App/AppSSE.py，此处为图表交互入口的薄封装）
   - 股票代码解析（get_stock_names_cache_file；标准解析唯一事实源
-    在 App/utils.py 的 _get_stock_market_code / _get_market_code /
+    在 App/AppUtils.py 的 _get_stock_market_code / _get_market_code /
     _get_stock_name，AppChart 不再持有漏斗壳）
 
 依赖方向：AppChart.py → AppEngine / AppSSE / AppData（单向；

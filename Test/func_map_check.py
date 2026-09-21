@@ -65,11 +65,11 @@ TARGET_FUNCS = {
     # DataAPI/TdxAPI.py；AppEngine 兼容壳仍转发之）
     "_collect_codes_from_vipdoc": ("DAPI", "✓5 兼容壳 → DataAPI/TdxAPI.collect_codes_from_vipdoc"),
 
-    # ── 消费侧：指标计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：指标计算（已物理迁入 App/AppUtils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：周期/日期/代码 工具（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：周期/日期/代码 工具（已物理迁入 App/AppUtils.py，不再属 AppEngine 映射）──
 
-    # ── 消费侧：缠论结构计算（已物理迁入 App/utils.py，不再属 AppEngine 映射）──
+    # ── 消费侧：缠论结构计算（已物理迁入 App/AppUtils.py，不再属 AppEngine 映射）──
 
     # ── 消费侧：核心分析链 ──
     "_analyze_stock_internal":    ("ORCH_E", "股票分析核心（440 行：拉取→注入→CChan→提取）"),
@@ -154,7 +154,7 @@ TARGET_STATES = {
     "FREQ_TO_COL":     ("ORCH_E", "freq→选点列（6 读）→ 消费侧常量"),
     "_SUB_FREQ_MAP":   ("ORCH_E", "子级别映射（2 读）"),
     # INTRADAY_FREQS / SUBSECOND_FREQS / _FREQ_SEC_TO_KL / _FUTURES_DUAL_FREQ_MAP
-    # （已物理迁入 App/utils.py，不再属 AppEngine 映射）
+    # （已物理迁入 App/AppUtils.py，不再属 AppEngine 映射）
     "STOCKS_LOOKBACK_CONFIG": ("ORCH_E", "股票K线回看条数配置（→ ChanConfig/参数化）"),
     "FULL_DATA_MODE":  ("ORCH_E", "全量模式开关（→ ChanConfig）"),
     "FORWARD_ADJUST_ENABLED": ("ORCH_E", "前复权开关（ChartHandler 2 处；→ ChanConfig）"),
@@ -174,7 +174,7 @@ TARGET_STATES = {
     "engine_section":       ("RETIRE", "✓2026-08 已删除：随 _ENGINE_LOCK 一并移除"),
     "_scan_lock":           ("RETIRE", "✓2026-08 已删除：API 进程无调用，worker 内不竞争"),
 
-    # SSE 调试旗（已物理迁入 App/utils.py，不再属 AppEngine 映射）
+    # SSE 调试旗（已物理迁入 App/AppUtils.py，不再属 AppEngine 映射）
 
     # 启动基础设施（活状态，P2 由 RETIRE 更正为活登记）
     "SCRIPT_DIR":    ("CFG", "引擎目录 sys.path 引导（AppEngine 顶部 import 前置），活状态"),

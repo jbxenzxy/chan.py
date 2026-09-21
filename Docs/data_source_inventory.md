@@ -201,7 +201,7 @@ chan.py 当前指数归属走 AKShare `fetch_index_cons`（权威、已归一化
 | --- | --- | --- | --- | --- |
 | `CommonStockAPI.py` | 72 | — | `CCommonStockApi` 数据源抽象基类（承载频率映射 / 别名等元数据接口） | 全部适配器 + `Chan.py:14` |
 | `TdxAPI.py` | **2067** | 通达信本地 vipdoc + 多源板块/指数 | K 线主源、前复权流水线、成分股、板块文件刷新（经 eltdx）、vipdoc 代码收集 | `AppEngine`、`AppRefresh`、`AppScan`、`DataAPI/__init__` 工厂 |
-| `TqSdkAPI.py` | 584 | 天勤 tqsdk | 期货/期指 K 线（`CTqSdkAPI`）、历史拉取、名称解析、账户加载、回看根数配置 | `DataAPI/__init__` 工厂、`AppEngine:147`、`AppSSE:30`、`App/utils:35`、`BSPointList:822` |
+| `TqSdkAPI.py` | 584 | 天勤 tqsdk | 期货/期指 K 线（`CTqSdkAPI`）、历史拉取、名称解析、账户加载、回看根数配置 | `DataAPI/__init__` 工厂、`AppEngine:147`、`AppSSE:30`、`App/AppUtils:35`、`BSPointList:822` |
 | `TqSdkCSSESource.py` | 360 | 天勤 tqsdk（SSE 流） | SSE 流数据源抽象：`connect` / `get_kline_serial` / `wait_update` / `close_all` | `AppSSE:49`、`FrontAPI` re-export、`TqSdkAPI:263` |
 | `ElTdxAPI.py` | **569** | eltdx（通达信网络行情，7709） | 四条链路：除权除息（`0x000f`）、板块文件下载（`0x06B9`）、PE-TTM（`resources.read_stats` → `zhb.zip` 内 `tdxstat.cfg`）、流通市值（`0x0010` 流通股本 × `0x054c` 最新价） | `TdxAPI:672`（XDXR + 板块下载）、`AppRefresh`（PE 全量）、`AppScan`（市值，`:41` 直连） |
 | `AkshareAPI.py` | 213 | AKShare | 指数成分股 `fetch_index_cons`、指数归属映射常量、`CAkshare` K 线适配 | `AppRefresh:28`、`TdxAPI:674`、`Chan.py:189` |

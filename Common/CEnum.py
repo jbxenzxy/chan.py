@@ -39,7 +39,7 @@ class KL_TYPE(Enum):
 # 消费方（均在顶部 import 本文件派生视图）：
 #   - Common/func_util   INTRADAY_FREQS / SUBSECOND_FREQS（_get_date_fmt 用）
 #   - BuySellPoint/BSPointList  KL_TYPE_TO_FREQ / FREQ_TO_KL_TYPE
-#   - App/utils          FREQ_SEC_TO_KL / FREQ_TABLE（标签）
+#   - App/AppUtils          FREQ_SEC_TO_KL / FREQ_TABLE（标签）
 #   - DataAPI/TqSdkAPI   FREQ_SEC_MAP
 #   - App/AppEngine      _STOCKS_MAIN_PERIOD
 # ═══════════════════════════════════════════════════════════════════
