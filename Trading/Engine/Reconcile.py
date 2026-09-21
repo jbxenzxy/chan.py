@@ -337,6 +337,9 @@ class ReconcileMixin:
         for idx, pos in enumerate(close_list):
             # 用最新 bar.close 作为参考 exit_price（无真实成交，仅供记账）
             ref_price = (self.last_bar.close if self.last_bar else pos.entry_price)
+            # 交易日口径（含夜盘归属次日）：run 结算的离场档判定与
+            # 下方仓单级成本的平今判定共用一次取值。
+            _today = self._current_trading_day(self.last_bar)
             # run 级结算（设计文档 v3.1 §5.1-5）：被删仓单属于在途 run（与 run
             # 同向）→ 以对账参考价**就地**强制结算该 run —— 触发点 = 删除那一刻，
             # 不是两侧循环收尾（两侧同清时先删的可能是 run 侧仓单，延后结算会错
@@ -347,7 +350,6 @@ class ReconcileMixin:
                     and self.account_state() is AccountState.RUNNING):
                 # 离场档按被删仓单自己的建仓日判（与 hard-exit 的
                 # today 判定同源：交易日口径，含夜盘归属次日）。
-                _today = self._current_trading_day(self.last_bar)
                 _exit_offset = ("CLOSETODAY"
                                 if (pos.entry_date >= _today
                                     and self.state.closetoday_first)
@@ -359,11 +361,26 @@ class ReconcileMixin:
                 if _t is not None:
                     trade_id = _t.trade_id
             self.positions.remove(pos)
+            # 仓单级盈亏快照（审计底稿，§5.1-4）：与 close 事件同源同口径
+            # （Engine._write_close_event：pnl_points + cost_cash 动态平今），
+            # 回答"被删的这笔仓单自身"的段盈亏 —— 锁仓侧仓单被删时它是
+            # 唯一载体（trades 表无行）。与 trade_id 指向的 run 级 Trade
+            # （run 锚口径）分层：事件 = 仓单身份，Trade = run 身份，
+            # 两者并存不是矛盾。
+            _gross = pos.pnl_points(ref_price)
+            _closetoday = bool(self.state.closetoday_first
+                               and pos.entry_date >= _today)
+            _cost = self.state.cost_cash(pos.entry_price, ref_price,
+                                         closetoday=_closetoday,
+                                         volume=pos.volume)
+            _net_cash = (_gross * self.state.multiplier * pos.volume) - _cost
             self.ev.write("position_externally_closed",
                           reason="reconcile_external_partial",
                           side=str(pos.side), symbol=pos.symbol,
                           signal_key=pos.signal_key,
                           exit_price=ref_price,
+                          gross_points=round(_gross, 4),
+                          net_cash=round(_net_cash, 2),
                           trade_id=trade_id,
                           fifo_index=idx, pos_count=len(close_list),
                           source=source)

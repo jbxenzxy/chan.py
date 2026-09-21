@@ -575,6 +575,15 @@ with tmp_dir("rec1") as tmp:
                any(d.get("kind") == "position_externally_closed"
                    and d.get("trade_id") in {x["trade_id"] for x in trades}
                    for d in event_dicts(eng, tmp, "a")))
+    # 仓单级盈亏快照（自查新发现修复护栏）：删除事件必须携带被删仓单
+    # 自身的段盈亏 —— 单笔场景下仓单级 == run 级（entry 即 run 锚）。
+    _ev = [d for d in event_dicts(eng, tmp, "a")
+           if d.get("kind") == "position_externally_closed"][0]
+    check("[S6-a6] 删除事件带仓单级 gross_points（4520−4500=20 点）",
+          _ev["gross_points"], 20.0)
+    check_true("[S6-a7] 事件 net_cash 与 run 级 Trade 成本口径同源",
+               abs(_ev["net_cash"] - t["net_cash"]) < 1e-6,
+               (_ev["net_cash"], t["net_cash"]))
     store.close()
 
 with tmp_dir("rec2") as tmp:
@@ -614,6 +623,16 @@ with tmp_dir("rec3") as tmp:
     check("[S6-c1] 双侧同清、锁仓侧删除不触 run → 零 Trade",
           (len(store.trades()), len(eng.positions), eng.account_state().value),
           (0, 0, "flat"))
+    # 锁仓侧删除的可见性护栏（自查新发现修复）：该场景 trades 零行，
+    # 删除事件的仓单级盈亏是唯一载体 —— 修复前双层不可见。
+    _evs = [d for d in event_dicts(eng, tmp, "a")
+            if d.get("kind") == "position_externally_closed"]
+    check("[S6-c2] 锁仓侧删除事件带仓单级 gross（LONG +20 / SHORT −10 点）",
+          sorted((d["side"], d["gross_points"]) for d in _evs),
+          sorted([(str(Side.LONG), 20.0), (str(Side.SHORT), -10.0)]))
+    check_true("[S6-c3] 锁仓侧删除事件 net_cash 有值（不回退为缺字段）",
+               all(isinstance(d.get("net_cash"), (int, float)) for d in _evs),
+               [d.get("net_cash") for d in _evs])
     store.close()
 
 # ════════════════════════════════════════════════════════════════════
