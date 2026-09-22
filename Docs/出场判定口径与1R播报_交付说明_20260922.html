@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>出场判定口径与播报量值 · 交付说明 2026-09-22</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#f7f8fa; --line:#e3e6ec; --ink:#1f2430; --ink2:#4b5565;
+    --dim:#7b8494; --red:#c62828; --green:#1b7f4b; --blue:#1a5fb4; --amber:#8a5a00;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:32px 28px 64px;background:var(--bg);color:var(--ink);
+       font:14px/1.75 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1080px;margin:0 auto}
+  h1{font-size:22px;margin:0 0 6px;letter-spacing:.2px}
+  h2{font-size:16px;margin:34px 0 12px;padding-left:10px;border-left:3px solid var(--blue)}
+  h3{font-size:14px;margin:22px 0 8px;color:var(--ink2)}
+  .meta{color:var(--dim);font-size:12.5px;margin-bottom:6px}
+  .meta code{background:var(--panel);padding:1px 5px;border-radius:3px;color:var(--ink2)}
+  table{border-collapse:collapse;width:100%;margin:10px 0 6px;font-size:13px}
+  th,td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+  th{background:var(--panel);font-weight:600;color:var(--ink2);white-space:nowrap}
+  td.c{text-align:center;white-space:nowrap}
+  code{font-family:Consolas,Menlo,monospace;font-size:12.5px;background:var(--panel);
+       padding:1px 5px;border-radius:3px;color:#0b3d91}
+  .old{color:var(--red)}
+  .new{color:var(--green)}
+  .dimtxt{color:var(--dim)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px 18px;margin:12px 0}
+  .card.ok{border-left:4px solid var(--green)}
+  .card.warn{border-left:4px solid var(--amber)}
+  .card.info{border-left:4px solid var(--blue)}
+  ul{margin:8px 0 8px 20px;padding:0}
+  li{margin:3px 0}
+  .msg{font-family:Consolas,Menlo,monospace;font-size:12.5px;background:#f4f7fb;
+       border:1px solid var(--line);border-radius:4px;padding:6px 9px;display:block;
+       white-space:pre-wrap;word-break:break-word;color:#22303f;margin:3px 0}
+  .msg.bad{background:#fdf3f3;border-color:#f0cfcf;color:#7a2020}
+  .msg.good{background:#eef7f1;border-color:#c9e2d4;color:#14512f}
+  .tag{display:inline-block;font-size:11.5px;padding:1px 7px;border-radius:10px;margin-right:4px}
+  .tag.fix{background:#e8f3ec;color:var(--green)}
+  .tag.chg{background:#e8eefb;color:var(--blue)}
+  .tag.no{background:#fdf3e3;color:var(--amber)}
+  .foot{margin-top:36px;padding-top:14px;border-top:1px solid var(--line);color:var(--dim);font-size:12px}
+  .n{text-align:center;white-space:nowrap;color:var(--dim);width:34px}
+  figure{margin:14px 0 8px;padding:0}
+  figcaption{color:var(--dim);font-size:12px;margin-top:6px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>出场判定口径与播报量值 · 交付说明</h1>
+<div class="meta">
+  基线：<code>jbxenzxy/chan.py</code> @ <code>custom-dev</code> HEAD
+  <code>58680f67d98a7659ea744ca8fa583d72f2f509af</code>（2026-09-22 02:31:16Z）<br>
+  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code>（10 个文件 · 133,953 bytes）<br>
+  <span class="dimtxt">承接第 1–4 轮「自动下单弹窗与文案」交付（那几轮的文件用户已全部合并入库，
+  本次改动是在<b>合并后的远端基线上</b>另起的一组改动，互不重叠）。</span>
+</div>
+
+<div class="card info">
+<b>这一轮改了什么（三句话）</b>
+<ul>
+  <li><b>⑴ 触发判据</b>：出场策略 <code>LayeredExitPolicy</code> 整层 L1–L3 的价格判定，
+      从「本根 K 线的 <code>bar.low</code> / <code>bar.high</code>」改成「本根 K 线的
+      <code>bar.close</code>」。<span class="dimtxt">（唯一例外：ATR 的 TR 定义式仍用 high/low，它不算"是否触发"。）</span></li>
+  <li><b>⑵ 播报量值</b>：保本 / 移动止盈播报里的「1R / 2R / 3R」补上<b>具体量值与报价单位</b>
+      —— 由 <code>1R</code> 变成 <code>1R（= 5 点）</code>／<code>2R（= 100 元/吨）</code>。</li>
+  <li><b>⑶ 开仓文案纠错</b>：<code>止损(1R) = 4010</code> 这行把<b>距离</b>（1R）标成了<b>价格</b>，
+      改为 <code>止损 = 4010（距入场 1R = 5 点）</code>。</li>
+</ul>
+</div>
+
+<!-- ══════════════════════ 二 ══════════════════════ -->
+<h2>一、改动清单（10 个文件）</h2>
+
+<table>
+  <tr>
+    <th class="n">#</th><th style="width:290px">文件</th><th>改什么</th><th style="width:74px">字节</th>
+  </tr>
+  <tr>
+    <td class="n">1</td>
+    <td><code>Trading/Strategy/Exit.py</code></td>
+    <td><b>核心</b>：<code>check()</code> 的止损线 / 止盈线判定与 L3 浮盈基准全部改读 <code>bar.close</code>；
+        模块 docstring 增「价格输入口径（2026-09-22）」段；「保守设定」由 3 条收敛为 2 条；
+        <code>plan()</code> 里「硬止盈单」→「固定止盈单」</td>
+    <td class="c">23,553<br>→ 25,698</td>
+  </tr>
+  <tr>
+    <td class="n">2</td>
+    <td><code>Trading/Engine/Engine.py</code></td>
+    <td>新增 <code>_quote_unit</code>（property）/ <code>_run_R()</code> / <code>_r_value_text()</code> /
+        <code>_r_label()</code> 四个渲染入口；<code>_notify_open</code> 与 <code>_notify_run_phase</code>
+        三条文案改为带量值 + 单位</td>
+    <td class="c">146,094<br>→ 148,750</td>
+  </tr>
+  <tr>
+    <td class="n">3</td>
+    <td><code>Trading/Infra/Product.py</code></td>
+    <td><code>Product</code> 新增 <code>quote_unit: str</code> 字段（<b>只进文案不进计算</b>）；
+        8 个品种按交易所标准合约文本逐一标定；档案区块上方附来源 URL 与维护口径</td>
+    <td class="c">36,999<br>→ 39,799</td>
+  </tr>
+  <tr>
+    <td class="n">4</td>
+    <td><code>Trading/Infra/Records.py</code></td>
+    <td><b>注释错误收口</b>：<code>Bar</code> 的 docstring 原文写「出场判定只信任 high/low 极值」，
+        新口径下已失真，改写为「价格输入只取 close」并说明 high/low 的两个合法用途</td>
+    <td class="c">21,351<br>→ 21,715</td>
+  </tr>
+  <tr>
+    <td class="n">5</td>
+    <td><code>Trading/Config.py</code></td>
+    <td>术语：<code>:311</code>「不生成硬止盈单」→「不生成固定止盈单」；
+        <code>:328/:343</code> 两条报错文案里的「硬止损打掉 / 硬止损出场」→「触发止损离场」</td>
+    <td class="c">38,778<br>→ 38,781</td>
+  </tr>
+  <tr>
+    <td class="n">6</td>
+    <td><code>Trading/Tool/GenReplayData.py</code></td>
+    <td><b>注释错误收口</b>：replay 造数工具里 7 处「<code>lo=… &lt;= SL 触发</code>」式的触发标注
+        改按收盘价重述；数据区顶部加一段口径说明，把行内 <code>hi=</code>/<code>lo=</code>
+        明确为「仅描述该根极值区间，不是触发依据」<span class="dimtxt">（纯注释，数据一字未动）</span></td>
+    <td class="c">12,276<br>→ 12,607</td>
+  </tr>
+  <tr>
+    <td class="n">7</td>
+    <td><code>Trading/Test/test_p8_layered_exit.py</code></td>
+    <td>[4] 节由「同根双破取止损（悲观）」改写为「触发判定只看收盘价」；
+        <b>删除 [12]/[12b]（66 行）</b>——它们刻意把 L3 浮盈钉在根内极值上，与新口径方向相反；
+        原地留 11 行墓碑注明删因与守护去向</td>
+    <td class="c">25,443<br>→ 22,302</td>
+  </tr>
+  <tr>
+    <td class="n">8</td>
+    <td><code>Trading/Test/test_p61_exit_close_only.py</code><br><span class="tag chg">新增</span></td>
+    <td><b>防回潮护栏</b>：AST 源码级断言（<code>check()</code> 内不得出现 <code>.high</code>/<code>.low</code>）
+        ＋ 行为样本（插针不触发、收盘打穿才触发、空仓镜像、L3 启动阈值边界），共 25 项</td>
+    <td class="c">新增<br>14,550</td>
+  </tr>
+  <tr>
+    <td class="n">9</td>
+    <td><code>Trading/Test/test_p60_trade_toasts_reconcile_gap.py</code></td>
+    <td>[3] 断言从「含 <code>止损(1R)</code>」改为「<b>不再</b>写旧措辞」＋「含『止损 = 』与『距入场 1R = 』」
+        ＋「1R 量值 == 计划 R」；[5] 术语 3 处</td>
+    <td class="c">34,914<br>→ 35,486</td>
+  </tr>
+  <tr>
+    <td class="n">10</td>
+    <td><code>Trading/Test/test_p15b_e33_fifo_close.py</code></td>
+    <td>术语 2 处（「硬止损触发」→「止损触发」）＋ [4.3] 注释里「low=4530 本会触发」改按收盘价重述</td>
+    <td class="c">44,055<br>→ 44,159</td>
+  </tr>
+</table>
+
+<div class="card warn">
+<b>刻意不进包的 3 个文件（运行期缓存，不是代码）</b>：<code>App/double_click_dt.csv</code>、
+<code>App/stock_float_mc.json</code>、<code>App/scan_tasks.db</code>。
+它们在前端跑过一次之后内容就变了，包里没有它们，覆盖时<b>也不会动你本机的这几份</b>。
+</div>
+
+<!-- ══════════════════════ 三 ══════════════════════ -->
+<h2>二、⑴ 触发判据：根内极值 → 收盘价</h2>
+
+<h3>2.1 为什么改：判定的「依据」要和判定的「时刻」是同一个东西</h3>
+
+<p>引擎只在每根 K 线<b>闭合之后</b>才调出场判定（<code>on_bar</code> → <code>check()</code>）。
+判定时刻既然是「这根走完了」，那么依据若回头去看「这根盘中最小到过多少」，
+就等于<b>拿一个已经消失的价格去触发一笔按当时盘口成交的单</b>——依据和时刻错位。
+统一到收盘价后，两者都是「这根 K 线结束时的那个价」。</p>
+
+<figure>
+<svg viewBox="0 0 680 250" width="100%" height="250" xmlns="http://www.w3.org/2000/svg" role="img"
+     aria-label="同一根 K 线在两种口径下的判定差异">
+  <rect x="0" y="0" width="680" height="250" fill="#ffffff"/>
+  <text x="40" y="26" font-family="-apple-system,Segoe UI,Microsoft YaHei" font-size="13"
+        font-weight="600" fill="#1f2430">同一根 K 线 · 同一段持仓 · 两种口径两个结论</text>
+
+  <!-- 止损线（价格 3995 → y=180.4） -->
+  <line x1="118" y1="180.4" x2="390" y2="180.4" stroke="#c62828" stroke-width="1.6" stroke-dasharray="7 4"/>
+
+  <!-- K 线：上影 4012(y63) 实体 4006(y104)→3997(y167) 下影 3993(y194)，下跌根按绿 -->
+  <line x1="250" y1="62.7" x2="250" y2="194.2" stroke="#1b7f4b" stroke-width="1.5"/>
+  <rect x="236" y="104.2" width="28" height="62.3" fill="#e3f2e8" stroke="#1b7f4b" stroke-width="1.5"/>
+
+  <!-- 左侧价格轴（右对齐到 x=112） -->
+  <g font-family="Consolas,Menlo,monospace" font-size="12" text-anchor="end">
+    <text x="112" y="66.7" fill="#1b7f4b">最高 4012</text>
+    <text x="112" y="108.2" fill="#4b5565">开盘 4006</text>
+    <text x="112" y="170.5" fill="#1b7f4b">收盘 3997</text>
+    <text x="112" y="184.4" fill="#c62828">止损 3995</text>
+    <text x="112" y="198.2" fill="#c62828">最低 3993</text>
+  </g>
+
+  <!-- 两个关键价打点 -->
+  <circle cx="250" cy="166.5" r="3.6" fill="#1b7f4b"/>
+  <circle cx="250" cy="194.2" r="3.6" fill="#c62828"/>
+  <g font-family="Consolas,Menlo,monospace" font-size="11.5">
+    <text x="274" y="163" fill="#1b7f4b">close（收盘在线之上）</text>
+    <text x="274" y="200" fill="#c62828">low（插针，穿线 2 点）</text>
+  </g>
+
+  <!-- 右栏结论 -->
+  <line x1="410" y1="56" x2="410" y2="196" stroke="#e3e6ec" stroke-width="1"/>
+  <g font-family="-apple-system,Segoe UI,Microsoft YaHei" font-size="12.5">
+    <text x="426" y="88" font-weight="600" fill="#c62828">旧口径（bar.low）</text>
+    <text x="426" y="108" fill="#c62828">3993 ≤ 3995 → 触发止损</text>
+    <text x="426" y="146" font-weight="600" fill="#1b7f4b">新口径（bar.close）</text>
+    <text x="426" y="166" fill="#1b7f4b">3997 &gt; 3995 → 不触发</text>
+    <text x="426" y="192" font-size="11.5" fill="#7b8494">（下一根收盘 3994 才触发）</text>
+  </g>
+
+  <text x="40" y="230" font-family="-apple-system,Segoe UI,Microsoft YaHei" font-size="12"
+        fill="#7b8494">样本取自本轮护栏 <tspan font-family="Consolas,Menlo,monospace">test_p61_exit_close_only.py</tspan>：4000 开多 · 止损 3995 · 插针到 3993 · 收盘 3997。</text>
+</svg>
+<figcaption>换口径不改变「止损在哪」，只改变「什么样的价格算碰到了止损」。</figcaption>
+</figure>
+
+<h3>2.2 改到哪一层：整层 L1–L3 都改，只豁免 ATR</h3>
+
+<table>
+  <tr><th style="width:132px">层</th><th>改前的价格输入</th><th>改后</th><th style="width:150px">说明</th></tr>
+  <tr>
+    <td><b>① 止损线判定</b></td>
+    <td class="old">多：<code>bar.low &lt;= stop</code>／空：<code>bar.high &gt;= stop</code></td>
+    <td class="new">多：<code>close &lt;= stop</code>／空：<code>close &gt;= stop</code></td>
+    <td>止损线本身的值一字未动</td>
+  </tr>
+  <tr>
+    <td><b>① 止盈线判定</b></td>
+    <td class="old">多：<code>bar.high &gt;= tp</code>／空：<code>bar.low &lt;= tp</code></td>
+    <td class="new">多：<code>close &gt;= tp</code>／空：<code>close &lt;= tp</code></td>
+    <td>只对固定止盈单模式 / 旧库存量持仓生效（跟踪止盈模式下 <code>tp is None</code>）</td>
+  </tr>
+  <tr>
+    <td><b>③ L3 浮盈基准</b></td>
+    <td class="old"><code>best = max(best, bar.high)</code><br>（根内有利极值）</td>
+    <td class="new"><code>best = max(best, close)</code><br>（收盘价序列的单调最好值）</td>
+    <td>同时决定「保本止损抬升」与「跟踪止盈启动」两个动作</td>
+  </tr>
+  <tr>
+    <td><span class="tag no">豁免</span><code>_atr()</code></td>
+    <td colspan="2" class="c">继续用 <code>high</code> / <code>low</code> / 前收 —— <b>不改</b></td>
+    <td>TR 是波动率<b>度量</b>（喂 L2 的距离标定），不参与「是否触发」</td>
+  </tr>
+</table>
+
+<h3>2.3 连带作废的一条旧规则：「同根 K 线双破 → 按止损计（悲观）」</h3>
+
+<p>该规则的前提是「一个 low 能破止损、同时一个 high 能破止盈」。收盘价口径下，
+<b>一个 close 不可能既 ≥ 止盈线又 ≤ 止损线</b>，这条分支<b>已不可达</b>，规则随口径一并删除。
+代码里 sl 仍写在 tp 前面，但那只是对畸形计划（例如手工塞进一个 stop &gt; tp 的计划）的确定性兜底，
+<b>不再是</b>「悲观优先」规则。护栏 <code>test_p61</code> 里也重新断言了这一点。</p>
+
+<h3>2.4 代价与收益</h3>
+
+<table>
+  <tr><th style="width:150px">维度</th><th>换口径前</th><th>换口径后</th></tr>
+  <tr>
+    <td>止损会怎样</td>
+    <td>盘中一碰就走，<b>容易被插针扫掉</b></td>
+    <td class="new">认收盘，止损更晚、更深一档，<b>不被插针扫</b>；换来的是"确认"</td>
+  </tr>
+  <tr>
+    <td>止盈 / 抬止损会怎样</td>
+    <td>盘中冲高即算达标（哪怕收盘全回落），抬损偏激进</td>
+    <td class="new">冲高回落的那根不再算达标，<b>抬损迟一根</b>，但依据是"真的收在那里"</td>
+  </tr>
+  <tr>
+    <td>与成交价的关系</td>
+    <td>触发价是"盘中出现过但已消失"的价</td>
+    <td class="new">触发价是"刚刚收盘的价"，与判定的时刻同源</td>
+  </tr>
+  <tr>
+    <td>滑点 / 成交价</td>
+    <td colspan="2" class="c">不变 —— 触发价只是判据，<b>最终成交价始终由 broker 决定</b>（<code>ExitCheck.price</code> 的既有语义）</td>
+  </tr>
+</table>
+
+<h3>2.5 对「已经在跑的持仓」有什么影响</h3>
+
+<div class="card">
+<p style="margin:0 0 6px"><b>结论：方向是安全的，不会变得更松。</b></p>
+<p style="margin:0">跟踪状态 <code>_trail_best</code> 是<b>落盘在出场计划里的单调值</b>，改口径后第一根 K 线的
+<code>best = max(旧 best, 当天 close)</code> —— 旧值若因盘中冲高而更高，会被保留下来，
+于是止损只会停在（或高于）它原来抬到的位置，<b>不可能因为换口径反而下移</b>。
+若希望完全按新口径重新开始累计，把该段 run 结掉重开即可（<code>State/</code> 下的运行态数据）。</p>
+</div>
+
+<!-- ══════════════════════ 四 ══════════════════════ -->
+<h2>三、⑵⑶ 播报：1R 带出量值与报价单位</h2>
+
+<h3>3.1 三条文案的改前 / 改后（下面是照真实函数渲染出来的，不是手抄格式）</h3>
+
+<p><b>开仓成交</b>（<code>_notify_open</code>）：</p>
+<span class="msg bad">开仓成交：BUY 1手 @ 4015｜止损(1R) = 4010</span>
+<span class="msg good">开仓成交：BUY 1手 @ 4015｜止损 = 4010（距入场 1R = 5 点）</span>
+
+<p><b>进入保本策略</b>（<code>_notify_run_phase</code>，phase=breakeven）：</p>
+<span class="msg bad">盈利达到 1R，进入保本策略：止损已移至 4010</span>
+<span class="msg good">盈利达到 1R（= 5 点），进入保本策略：止损已移至 4010</span>
+
+<p><b>进入移动止盈</b>（<code>_notify_run_phase</code>，phase=trailing）：</p>
+<span class="msg bad">盈利达到 2R，进入移动止盈（跟踪止损启动）</span>
+<span class="msg good">盈利达到 2R（= 10 点），进入移动止盈（跟踪止损启动）</span>
+
+<p>换品种自动换单位（同样是真实渲染）：</p>
+<span class="msg">品种 CU：开仓成交：BUY 1手 @ 79900｜止损 = 79800（距入场 1R = 100 元/吨）</span>
+<span class="msg">品种 CU：盈利达到 1R（= 100 元/吨），进入保本策略：止损已移至 79800</span>
+<span class="msg">品种 AU：开仓成交：BUY 1手 @ 605｜止损 = 602.5（距入场 1R = 2.5 元/克）</span>
+<span class="msg">品种 AG：盈利达到 1R（= 30 元/千克），进入保本策略：止损已移至 7300</span>
+
+<div class="card warn">
+<b>一个必须说清的口径</b>：R 是<b>这一段 run（一段持仓）的 R 快照</b>，
+定义 <code>R = max(分型极值距离, atr_sl_multiple × ATR)</code> ——
+<b>它随每一段的入场位置与当时 ATR 变化，不是品种常量</b>。
+所以「1R = 5 点」是<i>这一段</i>的 1R；同一品种换一段 run，这个数会变。
+文案里的数字取自该段计划落盘的 <code>params["R"]</code>，与止损线同源。
+</div>
+
+<h3>3.2 8 个品种的报价单位（<code>quote_unit</code>）</h3>
+
+<table>
+  <tr><th style="width:96px">品种</th><th style="width:110px">报价单位</th><th style="width:120px">L3 启动阈值</th><th>来源（官方）</th></tr>
+  <tr><td><code>IF</code> <code>IH</code></td><td>点</td><td class="c">2R</td>
+      <td rowspan="2">中金所合约表「报价单位：指数点」（文案写「点」）<br>
+          <span class="dimtxt" style="font-size:12px">www.cffex.com.cn/hs300/</span></td></tr>
+  <tr><td><code>IC</code> <code>IM</code></td><td>点</td><td class="c">3R</td></tr>
+  <tr><td><code>AU</code></td><td>元/克</td><td class="c">2R</td>
+      <td rowspan="2">上期所《黄金期货合约(修订版)》《阴极铜期货合约(修订版)》「报价单位」行<br>
+          <span class="dimtxt" style="font-size:12px">www.shfe.com.cn/upload/20200818/1597741793284.doc</span></td></tr>
+  <tr><td><code>CU</code></td><td>元/吨</td><td class="c">2R</td></tr>
+  <tr><td><code>AG</code></td><td>元/千克</td><td class="c">2R</td>
+      <td>上期所行情数据页报价单位注：「黄金为元/克;白银为元/千克;原油为元(人民币)/桶」<br>
+          <span class="dimtxt" style="font-size:12px">www.shfe.com.cn/reports/tradedata/dailyandweeklydata/</span></td></tr>
+  <tr><td><code>TA</code></td><td>元/吨</td><td class="c">2R</td>
+      <td>郑商所 PTA 期货合约<br>
+          <span class="dimtxt" style="font-size:12px">www.czce.com.cn/cn/sspz/pta/bzhy/qhhy/H077002005001001index_1.htm</span></td></tr>
+</table>
+
+<p class="dimtxt" style="font-size:12.5px">每一条 URL 都写进了 <code>Product.py</code> 档案区块上方的来源注释里；
+新增品种的做法也是同样三步：查该交易所标准合约文本「报价单位」行 → 填 <code>quote_unit</code> → 补 URL。</p>
+
+<h3>3.3 两种退化路径（宁可不给数字，也不编一个）</h3>
+
+<table>
+  <tr><th style="width:230px">情形</th><th>渲染结果</th><th>为什么</th></tr>
+  <tr>
+    <td>R 拿不到<br><span class="dimtxt" style="font-size:12px">旧版本 state.db 恢复的持仓 / <code>run_start_incomplete</code></span></td>
+    <td><span class="msg" style="margin:0">盈利达到 1R，进入保本策略：止损已移至 4010</span></td>
+    <td>退回只写倍数，不猜一个 R</td>
+  </tr>
+  <tr>
+    <td>R 拿不到（开仓文案）</td>
+    <td><span class="msg" style="margin:0">开仓成交：BUY 1手 @ 4010｜止损 = 4010</span></td>
+    <td>只报止损价，不写「距入场 1R = 」</td>
+  </tr>
+  <tr>
+    <td>品种未标定 <code>quote_unit</code><br><span class="dimtxt" style="font-size:12px">当前 8 个之外的新品种</span></td>
+    <td><span class="msg" style="margin:0">1R（= 5）</span></td>
+    <td>数值照给，单位留空，<b>不猜</b>（<code>_quote_unit</code> 取不到 → 空串）</td>
+  </tr>
+  <tr>
+    <td>R 是非数值</td>
+    <td><span class="msg" style="margin:0">1R</span></td>
+    <td>同上，退回只写倍数</td>
+  </tr>
+</table>
+
+<h3>3.4 <code>止损(1R) = 4010</code> 这行为什么是错的</h3>
+
+<p><b>止损</b>是<b>价格</b>（4010 点），<b>1R</b> 是<b>距离</b>（入场到止损的点数差，5 点）。
+旧写法把括号里的「1R」直接套在止损价旁边，读起来像是「等于 1R」或「1R 这个价格」，
+两回事被写成了一个。新写法把两个量<b>分开各自带自己的单位与位置</b>：
+<code>止损 = 4010</code>（价格）／<code>距入场 1R = 5 点</code>（距离）。</p>
+
+<!-- ══════════════════════ 五 ══════════════════════ -->
+<h2>四、顺手收口的 3 处注释错误</h2>
+
+<p>口径一改，仓库里「描述触发依据」的注释就会集体失真。本轮按<b>只看实代码、注释只当线索</b>的方法排查，
+把确已失真的 3 处改掉（纯注释，零行为变化）：</p>
+
+<table>
+  <tr><th style="width:290px">位置</th><th>原文（已失真）</th><th>改为</th></tr>
+  <tr>
+    <td><code>Trading/Infra/Records.py</code><br><code>Bar</code> docstring</td>
+    <td class="old">「已闭合的 K 线。出场判定只信任 high/low 极值，不猜盘中路径。」</td>
+    <td class="new">「价格输入只取 <code>close</code>；<code>high</code>/<code>low</code> 只服务
+        TR 定义式与事件留痕，都不参与是否触发的判断。」</td>
+  </tr>
+  <tr>
+    <td><code>Trading/Tool/GenReplayData.py</code><br>7 处 fixture 触发标注</td>
+    <td class="old">如「<code># lo=4550.0 &lt;= SL(4553.0) 触发 SL</code>」、
+        「<code>让 stop=4565 不会被 09:45 K 线 (low=4566) 触发</code>」</td>
+    <td class="new">同位置的收盘价重述（<code>close=4551.5 &lt;= SL</code>、
+        <code>(close=4567)</code> 等）；<b>7 根已逐根核对，触发结论与改前一致</b>，
+        只是依据换了说法</td>
+  </tr>
+  <tr>
+    <td><code>Trading/Test/test_p15b_e33_fifo_close.py</code><br>[4.3] 注释</td>
+    <td class="old">「「止损 4540；<code>bar.low=4530</code> 本会触发……」</td>
+    <td class="new">「<code>close=4532</code> 本会触发（2026-09-22 起触发判据 = 收盘价，不看根内 low）」</td>
+  </tr>
+</table>
+
+<div class="card">
+<b>另记一处「不是本轮引入」的小瑕疵</b>（背景先说清，不夸大）：<code>GenReplayData.py</code> 文件头
+「场景映射」写 S5 是「Day2 13:30 SELL → <b>13:45</b> TP 触发」，而数据行上的标注挂在 <b>13:50</b> 那根。
+两根按任一口径<b>都会</b>触发（13:45 close=4543.0 ≤ TP 4544；13:50 close=4543.5 ≤ TP 4544），
+所以只是<b>标注挂错了行</b>，不影响任何行为；这个工具是手工造 replay 数据用的，没有测试或生产代码消费它。
+本轮<b>未动这一处</b>（改它等于替别人重写注释口径，需要你确认原意），留给你决定。
+</div>
+
+<!-- ══════════════════════ 六 ══════════════════════ -->
+<h2>五、测试与验收</h2>
+
+<h3>5.1 新增护栏 <code>test_p61_exit_close_only.py</code>：为什么写成源码级断言</h3>
+
+<p>光写行为样本挡不住回潮 —— 样本只能证明「我构造的这几根 bar 走对了」，
+挡不住别人在<b>另一个分支</b>里把 <code>bar.low</code> 写回来。所以 <code>p61</code> 直接用
+<code>ast.walk</code> 扫 <code>Exit.py</code> 的源码：</p>
+
+<table>
+  <tr><th style="width:64px">类</th><th>断言</th></tr>
+  <tr><td class="c">禁项</td><td><code>check()</code> 函数体内出现 <code>.high</code> / <code>.low</code> 属性访问 → <b>变红</b></td></tr>
+  <tr><td class="c">白名单</td><td>全文件出现 <code>.high</code>/<code>.low</code> 的函数只能有 <code>_atr()</code> 一个</td></tr>
+  <tr><td class="c">必现项</td><td><code>check()</code> 内确实在比 <code>bar.close</code>；且 <code>_atr()</code>
+      <b>仍然</b>在读 high/low（否则"豁免"会退化成"悄悄换口径也没人知道"）</td></tr>
+  <tr><td class="c">行为</td><td>4000 开多 / 止损 3995：插针到 3993 不触发、收盘 3994 触发；空仓镜像；
+      L3 用收盘价抬损与启动；L3 启动阈值 2.99R 不启动、3.0R 恰好启动（用收盘价重述，high 故意设超阈值以保判别力）</td></tr>
+</table>
+
+<div class="card ok">
+<b>判别力自证（做过一次，结论留档）</b>：把 <code>p61</code> 拿到<b>改动前</b>的代码上跑，
+结果是 <b>8 passed / 11 failed</b> —— 说明它确实会对着旧口径变红，不是一条恒真的空断言。
+验证完即把那份旧代码副本删掉，交付树里只有一套版本。
+</div>
+
+<h3>5.2 <code>test_p8</code> 的 [12]/[12b] 为什么删掉</h3>
+
+<p>这两节是<b>旧口径的守护</b>：它刻意把 L3 的浮盈钉在根内极值上（<code>_l3_started(pol, high, ts)</code>
+就是把 high 抬多高当浮盈），再用它去断言 IC=3R / IF=2R 的启动边界 ——
+<b>方向与「整层用 close」正好相反</b>，留着必然打架。按你拍板的「无需兼容」删除，原地留 11 行墓碑
+（写清删因、旧实现见 git 历史、等价守护已搬到 <code>p61</code>），避免后来人以为"这里本来没测过"。</p>
+
+<h3>5.3 全量回归（<code>run_all_tests.py</code> 全量发现入口，逐文件子进程）</h3>
+
+<table>
+  <tr><th style="width:210px">版本</th><th class="c" style="width:100px">组件数</th>
+      <th class="c" style="width:80px">通过</th><th class="c" style="width:80px">失败</th><th>失败清单</th></tr>
+  <tr>
+    <td>改前基线 <code>58680f67</code></td>
+    <td class="c">115</td><td class="c">109</td><td class="c">6</td>
+    <td rowspan="2" style="vertical-align:middle">
+      两份清单<b>完全一致</b>（6 条预存失败，与本次改动无关）：
+      <code>Test/test_determinism.py</code>、<code>Test/test_lookback_truncation.py</code>、
+      <code>Test/test_phase2_guards.py</code>、<code>Test/test_trigger_step_replay.py</code>、
+      <code>Test/test_vol_macd_mode.py</code>、<code>Trading/Test/smoke_simnow_phase_g.py</code>
+    </td>
+  </tr>
+  <tr>
+    <td>本轮交付树</td>
+    <td class="c">116</td><td class="c"><b>110</b></td><td class="c"><b>6</b></td>
+  </tr>
+</table>
+
+<p><b>净结果</b>：新增失败 <b>0</b>；转绿 <b>0</b>（没有"顺手修好了别的"这种意外）；
+新增组件 1 个 = <code>test_p61_exit_close_only.py</code>（<b>通过</b>）。
+本轮动过的 5 个测试文件（p8 / p61 / p60 / p15b / p20_phase_i1）<b>全部通过</b>。</p>
+
+<p class="dimtxt" style="font-size:12.5px">
+那 6 条预存失败的成因（都是环境 / 仓库自身，非代码缺陷）：4 条是缺 fixture 数据
+（<code>Test/fixtures/stock_day.json</code>、<code>futures_15s.json</code> 不在仓库里，需先跑
+<code>gen_fixtures</code>）；<code>test_vol_macd_mode</code> 自身有 <code>UnboundLocalError</code>（用例 bug）；
+<code>smoke_simnow_phase_g</code> 需要 SimNow 凭据（按纪律跑测时已清凭据）。</p>
+
+<h3>5.4 交付包本身的 4 道复验</h3>
+
+<table>
+  <tr><th style="width:170px">检查</th><th>做法</th><th class="c" style="width:70px">结果</th></tr>
+  <tr><td>md5 往返</td><td>解压到干净目录，逐文件与"跑过测试的那棵树"比 md5</td><td class="c">10/10 全等</td></tr>
+  <tr><td>新标记必现</td><td>在<b>解压出来的交付树</b>上 grep：<code>close &lt;= stop</code>、
+      <code>best = max(best, close)</code>、<code>_r_label</code>、<code>距入场 1R = </code>、
+      <code>quote_unit="点"/"元/克"/"元/千克"/"元/吨"</code>、<code>固定止盈单</code> 等</td><td class="c">全中</td></tr>
+  <tr><td>旧措辞必无</td><td>先<b>剥掉 docstring / 字符串 / 注释</b>再扫实代码与真文案
+      （否则「文案原为『止损(1R) = 4010』」这类<b>说明性引用</b>会误报）：
+      <code>硬止损|硬止盈|硬出场</code>、<code>止损(1R)</code>、
+      <code>只信任 high/low 极值</code>、旧的 <code>lo=… 触发</code> 标注</td><td class="c">实代码 0 命中</td></tr>
+  <tr><td>口径纯净</td><td>独立于 <code>p61</code> 再跑一遍 AST：<code>check()</code> 内 <code>.high/.low</code>
+      = 0；<code>_atr()</code> 内 = 2（豁免且必须仍在）</td><td class="c">符合</td></tr>
+</table>
+
+<!-- ══════════════════════ 七 ══════════════════════ -->
+<h2>六、边界与未改项</h2>
+
+<table>
+  <tr><th style="width:230px">范围</th><th>状态</th></tr>
+  <tr><td>核心缠论模块<br><span class="dimtxt" style="font-size:12px">Bi / BuySellPoint / Combiner / Common /
+      KLine / Math / Plot / Seg / ZS</span></td>
+      <td class="new">本轮<b>零改动</b>（diff 逐文件核对：改动全部落在 <code>Trading/</code> 下）</td></tr>
+  <tr><td>前端 <code>Frontend/*</code>、<code>FrontAPI.py</code></td>
+      <td>本轮<b>未改</b> —— 三条播报文案由引擎侧生成、前端只负责显示，无需改动；
+          前端里也没有描述出场触发依据的文字</td></tr>
+  <tr><td>止损线 / 止盈线 / R 的<b>算法</b></td>
+      <td>未改（<code>R = max(分型极值距离, atr_sl_multiple × ATR)</code>、L2 的 ATR 定宽、
+          价格对齐方向都保持原样）—— 本轮只换「用哪个价去比」</td></tr>
+  <tr><td>出场策略套数</td>
+      <td>仍只有 <code>LayeredExitPolicy</code> 一套（L1–L3）；「硬止损 / 硬止盈 / 硬出场」
+          这套说法在本轮<b>清零</b>（<code>Exit.py</code> docstring 里保留的那一句是
+          <i>特意写「不存在这套说法」</i>的术语沿革说明，不是残留）</td></tr>
+</table>
+
+<!-- ══════════════════════ 八 ══════════════════════ -->
+<h2>七、落地步骤</h2>
+
+<ol>
+  <li>把 <code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code> 解压到项目根目录直接覆盖
+      （包内就是 <code>Trading/…</code> 原层级，无需调整）。</li>
+  <li><b>不需要手动删任何文件</b> —— 本轮没有"文件级删除"，只删了 <code>test_p8</code> 内部的两节用例；
+      新增文件 <code>Trading/Test/test_p61_exit_close_only.py</code> 会随解压出现。</li>
+  <li>解压后建议跑一次：
+      <code>python run_all_tests.py</code>，预期与本轮一致：新增 1 个组件、6 条预存失败不变。</li>
+  <li>若想观察新文案：用 <code>dry_run</code> 或 replay 跑一段，收到的开仓 / 保本 / 移动止盈 toast
+      应带「（= N 单位）」后缀。</li>
+  <li>想要按新口径重新累计跟踪状态的存量持仓，结掉该段 run 重开（见 2.5）。</li>
+</ol>
+
+<div class="foot">
+  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code> · 10 个文件（<code>Trading/</code> 层级）<br>
+  基线：<code>custom-dev</code> @ <code>58680f67d98a7659ea744ca8fa583d72f2f509af</code> ·
+  全量回归 110/116（6 条预存失败不变，新增失败 0）<br>
+  生成时间：2026-09-22
+</div>
+
+</div>
+</body>
+</html>
