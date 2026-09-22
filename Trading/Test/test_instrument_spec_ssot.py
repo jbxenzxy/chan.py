@@ -18,12 +18,15 @@ test_instrument_spec_ssot.py — 合约参数 SSOT 与 A′ 在线闸门（2026-
   [4] BrokerConfig：chase_max_number 默认 3；旧键残留 → 构造期显式报错（extra=forbid）
   [5] _resolve_trade_symbol 映射失败（异常 / 超时 / 空月份）→ RuntimeError（fail-fast）
   [6] 防回潮护栏仍在：_check_spec_drift / _check_spec_drift_online
+  [7] 品种档案的三字段**书写顺序**（格式约定，非语义）：
+      quote_unit → price_tick → multiplier（用户定序，2026-09-22）
 
 不需要真实 tqsdk / 网络。
 跑法：python Trading/Test/test_instrument_spec_ssot.py
 """
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import sys
@@ -226,6 +229,58 @@ check_true("Engine._check_spec_drift 保留",
            callable(getattr(TradingEngine, "_check_spec_drift", None)))
 check_true("Engine._check_spec_drift_online 保留",
            callable(getattr(TradingEngine, "_check_spec_drift_online", None)))
+
+# ═══ [7] 品种档案三字段书写顺序（格式约定，防回潮）═══
+print("\n[7] 档案实参书写顺序：quote_unit → price_tick → multiplier")
+
+_TRIPLET = ("quote_unit", "price_tick", "multiplier")
+_PRODUCT_SRC = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "Infra", "Product.py")
+
+
+def _triplet_order(src):
+    """从源码取出 PRODUCT_PROFILES 里每个档案的三个关键字**书写顺序**。
+
+    返回 {品种代码: 实际顺序元组}。用 ast 而非正则：关键字顺序正是语法事实
+    （`ast.Call.keywords` 按源码先后排列），正则会被缩进/折行/注释干扰。
+    只收集本三元组内的字段 —— 其余实参（product/r_multiple_tp/note/…）不参与。
+    """
+    out = {}
+    for node in ast.walk(ast.parse(src)):
+        # 真值是**带注解**赋值（`PRODUCT_PROFILES: Dict[str, Product] = {...}`）→ AnnAssign；
+        # 无注解写法才是 Assign —— 两种都要收，否则本判定会因为"没扫到"而恒真。
+        if isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        elif isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        else:
+            continue
+        if not isinstance(value, ast.Dict):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "PRODUCT_PROFILES"
+                   for t in targets):
+            continue
+        for key, val in zip(value.keys, value.values):
+            if not (isinstance(val, ast.Call)
+                    and getattr(val.func, "id", "") == "Product"):
+                continue
+            out[key.value] = tuple(kw.arg for kw in val.keywords
+                                   if kw.arg in _TRIPLET)
+    return out
+
+
+with open(_PRODUCT_SRC, encoding="utf-8") as _f:
+    _orders = _triplet_order(_f.read())
+
+check("解析到 8 个档案条目", len(_orders), 8)
+check("每个档案三字段书写顺序 == quote_unit → price_tick → multiplier",
+      {c: o for c, o in _orders.items() if o != _TRIPLET}, {})
+check_true("判别力自证：顺序写反时本判定会红（非恒真）",
+           _triplet_order(
+               'PRODUCT_PROFILES = {"XX": Product(product="XX", price_tick=0.2,'
+               ' multiplier=1.0, quote_unit="点")}'
+           ).get("XX") != _TRIPLET)
 
 # ═══ 汇总 ═══
 print("\n结果: {} 通过 / {} 失败".format(_checks["pass"], _checks["fail"]))
