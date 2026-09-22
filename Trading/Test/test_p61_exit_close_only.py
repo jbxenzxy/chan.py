@@ -204,8 +204,7 @@ def main():
     pol3 = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0,
-                              "r_multiple_tp": 99.0,
-                              "trailing_distance_points": 0.0})
+                              "r_multiple_tp": 99.0})
     # R=10、入场 4000 → 保本阈值 4010。high 冲到 4015 但收盘 4005 → 不算达标
     p1 = _pos()
     p1.exit_plan = ExitPlan(name="LayeredExitPolicy", stop_price=3990.0,
@@ -236,12 +235,10 @@ def main():
     # **无关**的守护不该跟着一起消失，故在此用收盘价重述。
     pol_ic = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                                 "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0,
-                                "trailing_distance_points": 1.0})
+                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0})
     pol_if = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                                 "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
-                                "trailing_distance_points": 1.0})
+                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0})
 
     def _l3_started(pol, close, ts):
         """R=10、入场 100 的单根 bar：收盘价抬到 close → L3 是否启动。

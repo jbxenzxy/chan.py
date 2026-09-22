@@ -306,13 +306,12 @@ class ExitConfig(BaseModel):
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 1R 时，启动保本策略
     breakeven_buffer_r: float = 0.5        # 保本策略落点 = 入场价 ± 0.5R（=0.5 锁定半R；=0 真正保本）
-    trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
-    trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
+    trailing_trigger_r: float = 0.5        # 跟踪缓冲 = trailing_trigger_r × R（R 倍数口径，与 breakeven_*_r 同单位；
+                                        #   R = max(分型距离, 2×ATR)，R=2×ATR 时 0.5R 恰等于旧口径 1×ATR）
                                                 #   注：跟踪止盈模式（use_trailing=True）下**不生成固定止盈单**，止盈完全交给
-                                                #   L3 的 ATR 跟踪兑现；L3 启动阈值 = r_multiple_tp（品种档案，IC/IM=3R、
+                                                #   L3 的跟踪兑现（trail_dist = trailing_trigger_r × R）；L3 启动阈值 = r_multiple_tp（品种档案，IC/IM=3R、
                                                 #   其余=2R），即"盈利到 r_multiple_tp×R 时进 L3"——r_multiple_tp 由此从
-                                                #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，不再有全局
-                                                #   trailing_trigger_r）。
+                                                #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，全局无独立启动阈值参数）。
 
     @model_validator(mode="after")
     def _check_exit_param_order(self) -> "ExitConfig":

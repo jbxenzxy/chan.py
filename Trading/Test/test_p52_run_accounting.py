@@ -168,7 +168,6 @@ def build(tmpdir, tag="a", profile=None, trade_symbol="CFFEX.IF2609",
     cfg.exit_params.use_atr = False
     cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
-    cfg.exit_params.trailing_distance_points = 10.0
     spec = Instrument(InstrumentConfig(trade_symbol=trade_symbol,
                                        signal_symbol=sig),
                       profile or PRODUCT_PROFILES["IF"])

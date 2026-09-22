@@ -229,8 +229,7 @@ def main():
     print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
     pol6 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 99.0,
-                              "trailing_distance_points": 0.0})
+                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 99.0})
     pos6 = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     # close=111 → 浮盈 11 ≥ 1R(10) → 保本位=100 > 90 → 更新
     chk6 = pol6.check(pos6, make_bar(2100, 100, 111, 100, 111), state, 5)
@@ -240,7 +239,7 @@ def main():
     pol6b = LayeredExitPolicy({"use_atr": False,
                                "use_trailing": True,
                                "breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5,
-                               "r_multiple_tp": 99.0, "trailing_distance_points": 0.0})
+                               "r_multiple_tp": 99.0})
     pos6b = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
     check("保本缓冲 0.5R → 止损=105（入场价之上 0.5R=5）",
@@ -251,18 +250,17 @@ def main():
     #   配置层默认值另由 [8] 钉住 → 双保险：改默认值这里红，改落点公式这里也红。
     pol6c = LayeredExitPolicy({"use_atr": False,
                                "use_trailing": True, "breakeven_trigger_r": 1.0,
-                               "r_multiple_tp": 99.0, "trailing_distance_points": 0.0})
+                               "r_multiple_tp": 99.0})
     pos6c = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6c = pol6c.check(pos6c, make_bar(2102, 100, 111, 100, 111), state, 5)
     check("缓冲默认值（未显式传）= 0.5R → 止损 = 入场价 + 0.5×10 = 105",
           chk6c.plan.stop_price if chk6c else None, 105.0)
 
-    print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（用 trailing_distance_points 兜底）")
+    print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
     pol7 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
-                              "trailing_distance_points": 5.0})
-    # 已先保本到 100；本根 close=130（浮盈30≥2R=20），最高 131 → 跟踪=131-5=126
+                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0})
+    # 已先保本到 100；本根 close=130（浮盈30≥2R=20），跟踪距离 = 0.5R = 5 → 跟踪=131-5=126
     # 用 tp=9999 排除止盈线干扰，low=101>保本止损100 排除止损线干扰，只验跟踪
     pos7 = make_position(Side.LONG, 100.0, 100.0, 9999.0, params={"R": 10.0, "_trail_best": 131.0})
     chk7 = pol7.check(pos7, make_bar(2200, 100, 131, 101, 130), state, 5)
@@ -281,7 +279,7 @@ def main():
     pol12 = LayeredExitPolicy()
     check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
-    check("trailing_atr_multiple 默认 = config 1.0", pol12.trailing_atr_multiple, 1.0)
+    check("trailing_trigger_r 默认 = config 0.5", pol12.trailing_trigger_r, 0.5)
     check("use_trailing 默认 = True（跟踪止盈模式）", pol12.use_trailing, True)
     # 评审补 · 用户要求：把"保本缓冲 = 0.5R"钉死，避免后续被顺手改掉。
     #   三层钉子：① 配置层默认值（此处）② 行为层落点（[5]）③ 跨品种 resolved

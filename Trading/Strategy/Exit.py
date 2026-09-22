@@ -113,8 +113,7 @@ class LayeredExitPolicy:
         self.use_trailing = p.use_trailing
         self.breakeven_trigger_r = float(p.breakeven_trigger_r)
         self.breakeven_buffer_r = float(p.breakeven_buffer_r)
-        self.trailing_atr_multiple = float(p.trailing_atr_multiple)
-        self.trailing_distance_points = float(p.trailing_distance_points or 0.0)
+        self.trailing_trigger_r = float(p.trailing_trigger_r)
         # 跨日清空 ATR 缓冲用
         self._last_day: str = ""
 
@@ -386,10 +385,10 @@ class LayeredExitPolicy:
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be
 
-            # 跟踪：浮盈 ≥ r_multiple_tp·R → ATR 跟踪止损（只朝有利方向移动）
+            # 跟踪：浮盈 ≥ r_multiple_tp·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
+            #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）
             if self.r_multiple_tp > 0 and fav_profit >= self.r_multiple_tp * R:
-                trail_dist = (self.trailing_atr_multiple * atr) if (atr and self.trailing_atr_multiple > 0) \
-                    else self.trailing_distance_points
+                trail_dist = self.trailing_trigger_r * R
                 if trail_dist and trail_dist > 0:
                     tgt = (best - trail_dist) if is_long else (best + trail_dist)
                     tgt = state.round_price(tgt, "up" if is_long else "down")

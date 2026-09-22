@@ -158,7 +158,6 @@ def build(tmpdir, tag="a", store_path=None):
     cfg.exit_params.use_atr = False
     cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
-    cfg.exit_params.trailing_distance_points = 10.0
     spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     db = store_path or os.path.join(tmpdir, "state_%s.db" % tag)
