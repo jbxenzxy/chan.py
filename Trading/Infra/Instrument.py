@@ -115,11 +115,10 @@ class InstrumentConfig(BaseModel):
     #   ⚠️：**已标定品种的实际生效值 = 品种执行策略表第 2 列**
     #   （见 Instrument.effective_order_advanced）；本字段只服务未标定品种的兜底。
     order_advanced: str = "FOK"
-    closetoday_first: bool = True                   # 今仓成本开关（2026-09-10 更正注释：**不是**
-                                                    #   "平仓优先平今"）。实际语义 = 是否允许按持仓
-                                                    #   entry_date 把"今仓"判成平今费率；规则 ⑸ 下
-                                                    #   OrderIntent.CLOSE 只用于跨日单，正常流程
-                                                    #   恒走平昨费率，置 False 可整体关闭今仓判定。
+    closetoday_first: bool = True                   # 今仓成本开关：不是"平仓优先平今"）。
+                                                    # 实际语义 = 是否允许按持仓 entry_date 把"今仓"判成平今费率；
+                                                    # 规则 ⑸ 下 OrderIntent.CLOSE 只用于跨日单，
+                                                    # 正常流程 恒走平昨费率，置 False 可整体关闭今仓判定。
     # 价格笼子band（D12 落地项，补字段位）。
     #   含义：限价单相对最新价的**最大偏离点数**；超出即被交易所拒。
     #   ⚠️ **一期不消费** —— 只是把字段位占住，避免二期加价格笼子护栏时又去
