@@ -576,7 +576,8 @@ with tmp_dir() as td:
     eng = make_engine(td)
     eng.positions.add(make_position(Side.LONG, 1, 4545.0, 1,
                                     signal_key="P15B-4-3"))
-    # 止损 4540；bar.low=4530 本会触发，但时间戳等于 run.entry_bar_ts → 跳过
+    # 止损 4540；close=4532 本会触发（2026-09-22 起触发判据 = 收盘价，不看根内 low），
+    # 但时间戳等于 run.entry_bar_ts → 入场那根 K 线不参与出场判定，跳过
     eng.last_bar = make_bar(close=4532.0, high=4540.0, low=4530.0, ts=4000)
     eng.bars_seen = 10
     seed_run(eng, side=Side.LONG, anchor=4545.0, bar_ts=4000,
@@ -585,7 +586,7 @@ with tmp_dir() as td:
     check("[4.3a] 入场 K 线 → broker 0 单", len(eng.broker.orders), 0)
     check("[4.3b] 入场 K 线 → 簿仍 1 笔", len(eng.positions), 1)
 
-# 4.4 硬止损触发 + 今日仓 → 转移 ④（锁仓）
+# 4.4 止损触发 + 今日仓 → 转移 ④（锁仓）
 with tmp_dir() as td:
     eng = make_engine(td)
     eng.positions.add(make_position(Side.LONG, 2, 4545.0, 1,
@@ -605,7 +606,7 @@ with tmp_dir() as td:
           ((_o[-1].get("transition"), _o[-1].get("is_exit")) if _o else None),
           (4, True))
 
-# 4.5 硬止损触发 + 跨日仓 → 转移 ⑤（CLOSE）
+# 4.5 止损触发 + 跨日仓 → 转移 ⑤（CLOSE）
 with tmp_dir() as td:
     eng = make_engine(td)
     eng.positions.add(make_position(Side.LONG, 2, 4545.0, 1,

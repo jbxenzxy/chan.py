@@ -248,7 +248,13 @@ class Signal:
 
 @dataclass
 class Bar:
-    """已闭合的 K 线。出场判定只信任 high/low 极值，不猜盘中路径。"""
+    """已闭合的 K 线。
+
+    出场判定（LayeredExitPolicy）的**价格输入只取 `close`**（2026-09-22 口径，见
+    Strategy/Exit.py 模块 docstring）：判定的时刻是"这根闭合之后"，依据也用"这根结束
+    时的那个价"。`high`/`low` 只服务两处 —— 真实波幅 TR 的定义式（`Exit._atr()`）
+    与事件留痕（`ev.write("bar", high=…, low=…)`），都不参与"是否触发"的判断。
+    """
     timestamp: int
     date: str
     open: float

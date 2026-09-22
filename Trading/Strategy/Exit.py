@@ -5,12 +5,22 @@
 精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场），
 原可选的 `DefaultExitPolicy`（简单固定点数出场）与 L4 时间/收盘兜底均已删除。
 
-三个刻意保留的保守设定（LayeredExitPolicy）
-    ① 同根 K 线同时触及止盈与止损 → 按止损计（不猜盘中先后顺序）
-    ② 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
-    ③ 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
+价格输入口径（2026-09-22 · 用户拍板）：**整层 L1-L3 的价格判定只读本根 K 线的收盘价
+`bar.close`**，一律不读 `bar.high` / `bar.low`。理由：判定**时刻**本来就是"这根 K 线闭合
+之后"，若判定**依据**回头去看"盘中最小到过多少"，等于拿一个已经消失的价格去触发一笔
+按当时盘口成交的单 —— 依据与时刻不是同一个东西。统一到收盘价后，依据与时刻都是
+"这根 K 线结束时的那个价"。
+    ⚠️ 唯一例外是 `_atr()`：真实波幅 TR 的**定义式**必须用 high/low/前收（这是波动率
+    度量，喂 L2 的距离标定），它不参与"是否触发"的判断。引擎侧 `ev.write("bar",
+    high=…, low=…)` 只是事件留痕，同样不参与判断。
+    由此，「同根 K 线同时触及止盈与止损 → 按止损计（悲观）」这条旧兜底规则**已不可达**
+    （一个收盘价不可能既 ≥ 止盈线又 ≤ 止损线）—— 规则随口径一并删除。
 
-跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落硬止盈单
+两个刻意保留的保守设定（LayeredExitPolicy）
+    ① 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
+    ② 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
+
+跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落固定止盈单
     `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
     的 ATR 跟踪止损兑现；L3 启动阈值（= r_multiple_tp×R）直接取品种档案的 `r_multiple_tp`
     （IC/IM=3R、其余=2R），故"盈利到 r_multiple_tp×R 时进 L3 跟踪锁利"，不同品种进 L3
@@ -18,12 +28,14 @@
     历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 r_multiple_tp 解耦），
     合并：删 trailing_trigger_r，L3 触发统一走品种级 r_multiple_tp
     （消除"r_multiple_tp=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
-    硬止盈模式（`use_trailing=False`）：落固定止盈单（= r_multiple_tp×R），无保本、无跟踪。
+    固定止盈单模式（`use_trailing=False`）：落固定止盈单（= r_multiple_tp×R），无保本、无跟踪。
 
-    ⚠️ 术语沿革（2026-09-15 清理）：出场策略**只有 LayeredExitPolicy
-    一套（L1-L3）**，不存在两套可选的出场策略；旧文档/旧注释里的「A 方案 / B 方案」只是
-    本策略 `use_trailing` 两种取值的遗留叫法（B = 跟踪止盈模式、A = 硬止盈模式），已废弃 ——
-    新写的代码 / 日志 / 报告一律用模式名，不要再出现 A/B 方案。
+    ⚠️ 术语沿革（2026-09-15 清理，2026-09-22 续）：出场策略**只有 LayeredExitPolicy
+    一套（L1-L3）**，不存在两套可选的出场策略；L1-L3 里也**不存在"硬止损 / 硬止盈"这套
+    说法** —— 止损线由 L1（结构 R）+ L2（ATR 定宽）给出，止盈由 L3（保本 / 跟踪）或
+    固定止盈单给出，"硬"字没有对应实体，一律不要再用。旧文档 / 旧注释里的「A 方案 /
+    B 方案」是本策略 `use_trailing` 两种取值的遗留叫法（B = 跟踪止盈模式、
+    A = 固定止盈单模式），同样废弃；新写的代码 / 日志 / 报告一律用 L1-L3 与模式名。
 """
 
 from __future__ import annotations
@@ -276,10 +288,10 @@ class LayeredExitPolicy:
             stop = state.round_price(raw_stop, "down")
             nominal_tp = state.round_price(raw_tp, "up")
 
-        # 跟踪止盈模式（use_trailing=True，默认）：**不落硬止盈单**，止盈交给 L3 的
+        # 跟踪止盈模式（use_trailing=True，默认）：**不落固定止盈单**，止盈交给 L3 的
         #   ATR 跟踪兑现。L3 启动阈值 = r_multiple_tp×R（品种档案，IC/IM=3R、其余=2R），
         #   故不同品种的"进 L3 时机"天然不同；名义止盈价（= r_multiple_tp×R）仍写入
-        #   params，供事后对照分析。硬止盈模式（use_trailing=False）则落固定止盈单。
+        #   params，供事后对照分析。固定止盈单模式（use_trailing=False）则落固定止盈单。
         tp = None if self.use_trailing else nominal_tp
 
         # P2 防护：止损必须严格在风控锚的"不利侧"且至少 1 tick 间距，
@@ -311,23 +323,30 @@ class LayeredExitPolicy:
         ra = plan.params.get("risk_anchor")
         entry = ra if ra else position.entry_price
         # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
-        #   R 未知时激进触发反而危险；硬止损/止盈均不依赖 R，不受影响
+        #   R 未知时激进触发反而危险；止损线 / 止盈线均不依赖 R，不受影响
         R = plan.params.get("R")
         R = float(R) if R is not None else None
         atr = self._atr()
-        # ① 硬出场：同根 K 线同时触及止盈与止损 → 按止损计（悲观）
-        #   跟踪止盈模式（use_trailing=True）下 plan 不生成止盈单（tp is None），
-        #   故此处的止盈分支只对硬止盈模式（use_trailing=False）与旧 state.db
-        #   恢复的存量持仓生效；硬止损任何情况下都保留。
+        # ① 止损线 / 止盈线判定（L1 结构 R + L2 ATR 定宽给出的止损线；止盈线由固定止盈单
+        #   模式提供，跟踪止盈模式下 tp is None）。
+        #   **价格输入 = 本根 K 线的收盘价 `bar.close`**（2026-09-22 口径，见模块 docstring）：
+        #   不再用 `bar.low` / `bar.high` —— 判定的时刻是"这根闭合之后"，依据也用"这根结束时
+        #   的那个价"，两者才是同一个东西。代价是止损更晚更深（收盘才认），换来的是不被
+        #   插针 / 瞬间打穿扫掉。
+        #   顺序上 sl 先判、tp 后判：**不是**"同根双破取悲观"那条旧规则（收盘价口径下
+        #   "同根既破止损又破止盈"已不可达），只是对畸形计划的确定性兜底。
+        #   跟踪止盈模式（use_trailing=True）下 plan 不生成止盈单（tp is None），故 tp 分支
+        #   只对固定止盈单模式（use_trailing=False）与旧 state.db 恢复的存量持仓生效。
+        close = bar.close
         if is_long:
-            if stop and bar.low <= stop:
+            if stop and close <= stop:
                 return ExitCheck("sl", stop)
-            if tp is not None and bar.high >= tp:
+            if tp is not None and close >= tp:
                 return ExitCheck("tp", tp)
         else:
-            if stop and bar.high >= stop:
+            if stop and close >= stop:
                 return ExitCheck("sl", stop)
-            if tp is not None and bar.low <= tp:
+            if tp is not None and close <= tp:
                 return ExitCheck("tp", tp)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
@@ -338,11 +357,13 @@ class LayeredExitPolicy:
         if self.use_trailing and R is not None and R > 0:
             best = float(plan.params.get("_trail_best", entry))
             prev_best = best
-            # fav_profit 用"根内有利极值 best"而非收盘价衡量：
-            #   r_multiple_tp 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）——
-            #   盘中冲高（如到 r_multiple_tp×R）即便收盘回落，只要有意义浮盈达标仍会
-            #   触发保本/跟踪，避免"盘中到过阈值却因只看收盘而漏检"。
-            best = max(best, bar.high) if is_long else min(best, bar.low)
+            # fav_profit 用**收盘价**衡量（与 L1/L2 的触发判定同一口径，2026-09-22）：
+            #   best = 至今见过的最好收盘价（单调），浮盈 = (best − 风控锚)·sign。
+            #   与旧的"根内有利极值"口径的差别：盘中冲高到 r_multiple_tp×R 而收盘又回落的
+            #   那根 K 线，不再算作"达标" —— 进 L3 / 抬保本都会晚一根。这是刻意的：
+            #   依据与时刻统一到收盘价，不用一个已经不存在的极值去抬止损。
+            #   r_multiple_tp 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）。
+            best = max(best, close) if is_long else min(best, close)
             fav_profit = (best - entry) * position.side.sign  # (best−风控锚)·sign
             # 跟踪是否已启动（best 单调，故启动后恒为 True，不随回落下线）
             tracking_started = (self.r_multiple_tp > 0
@@ -370,8 +391,8 @@ class LayeredExitPolicy:
 
             # 回写条件（二选一，避免每根 bar 都刷事件日志）：
             #   a) 止损真的动了；
-            #   b) 跟踪已启动且极值创新高 —— 补旧实现的缺口：原实现只在 new_stop 变化时
-            #      回写 _trail_best，"极值新高但止损未变"（如 ATR 同步放大）时极值被丢弃，
+            #   b) 跟踪已启动且"最好收盘价"创新高 —— 补旧实现的缺口：原实现只在 new_stop
+            #      变化时回写 _trail_best，"新高但止损未变"（如 ATR 同步放大）时该值被丢弃，
             #      后续跟踪距离偏松。保本阶段（跟踪未启动）不回写，避免日志刷屏。
             # 阶段标记（需求 ⑷(3)(4)，2026-09-18）：引擎据此在阶段跃迁时 toast。
             # 策略层只负责标注当前风控阶段，通知职责在引擎。

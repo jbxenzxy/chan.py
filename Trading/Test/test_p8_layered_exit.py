@@ -3,8 +3,10 @@
 P8 标准分层组合出场策略（LayeredExitPolicy）单元测试
 ====================================================
 验证三层行为：L1 R 倍数基线、L2 ATR 宽窄、L3 保本+跟踪。
-以及二者交互：同根 K 线 SL 优先于 TP、P2 防护、_trail_best 落盘；
-[12] 钉住 L3 best 极值口径（解耦参数 + 盘中冲高回落，旧收盘口径应红）。
+以及二者交互：P2 防护、_trail_best 落盘。
+价格输入口径（2026-09-22 用户拍板）：L1-L3 的价格判定**只读 bar.close**，
+不读 bar.high / bar.low —— 旧「同根 K 线 SL 优先于 TP」的悲观兜底规则随口径
+删除（该场景已不可达）；等价护栏见 Trading/Test/test_p61_exit_close_only.py。
 
 不需要真实 tqsdk / 网络，全部用本地构造的 Bar/Signal/Position。
 跑法：python test_p8_layered_exit.py
@@ -211,11 +213,18 @@ def main():
     _lg.setLevel(_old_lvl)
     _lg.propagate = _old_prop
 
-    print("\n[4] 同根 K 线同时触止盈止损 → 按止损计（悲观）")
+    print("\n[4] 触发判定只看收盘价（同根 low/high 双破 ≠ 触发）")
+    # 旧口径：bar.low=89（破止损 90）+ bar.high=111（破止盈 110）→ 取 sl（悲观兜底）。
+    # 2026-09-22 新口径：价格输入只有 bar.close —— 本根 close=100 两侧都没穿 → **不触发**；
+    #   "同根双破取悲观"在收盘价口径下不可达，规则已随口径删除（见 Exit.py 模块 docstring）。
     pos = make_position(Side.LONG, 100.0, 90.0, 110.0)
-    # bar.low=89（破止损）<=90 且 bar.high=111（破止盈）>=110 → 取 sl
     chk = LayeredExitPolicy({}).check(pos, make_bar(2000, 100, 111, 89, 100), state, 5)
-    check("同根 K 线优先 sl", chk.reason if chk else None, "sl")
+    check("low/high 双穿但收盘在区间内 → 不触发", chk, None)
+    chk_sl = LayeredExitPolicy({}).check(pos, make_bar(2001, 100, 111, 89, 89), state, 5)
+    check("同一根若收盘 89 ≤ 止损 90 → 触发 sl",
+          chk_sl.reason if chk_sl else None, "sl")
+    check("触发价 = 止损线（不是收盘价）",
+          chk_sl.price if chk_sl else None, 90.0)
 
     print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
     pol6 = LayeredExitPolicy({"use_atr": False,
@@ -254,19 +263,19 @@ def main():
                               "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
                               "trailing_distance_points": 5.0})
     # 已先保本到 100；本根 close=130（浮盈30≥2R=20），最高 131 → 跟踪=131-5=126
-    # 用 tp=9999 排除"硬止盈"干扰，low=101>保本止损100 排除"硬止损"干扰，只验跟踪
+    # 用 tp=9999 排除止盈线干扰，low=101>保本止损100 排除止损线干扰，只验跟踪
     pos7 = make_position(Side.LONG, 100.0, 100.0, 9999.0, params={"R": 10.0, "_trail_best": 131.0})
     chk7 = pol7.check(pos7, make_bar(2200, 100, 131, 101, 130), state, 5)
     check("跟踪触发 only_update", chk7.only_update if chk7 else None, True)
     check("跟踪新止损 = 126", chk7.plan.stop_price if chk7 else None, 126.0)
     check("跟踪极值 _trail_best 落盘", chk7.plan.params.get("_trail_best"), 131.0)
 
-    print("\n[7] 全部关闭时（use_atr/use_trailing 均 False）只判硬出场")
+    print("\n[7] 全部关闭时（use_atr/use_trailing 均 False）只判止损线 / 止盈线")
     pol10 = LayeredExitPolicy({"use_atr": False,
                                "use_trailing": False})
     pos10 = make_position(Side.LONG, 100.0, 90.0, 120.0)
     chk10 = pol10.check(pos10, make_bar(2500, 100, 105, 95, 100), state, 100)
-    check("仅硬出场、无触发返回 None", chk10 is None, True)
+    check("止损线 / 止盈线均未触发 → 返回 None", chk10 is None, True)
 
     print("\n[8] T4: 裸构造默认值 = config.py 单一事实源")
     pol12 = LayeredExitPolicy()
@@ -284,79 +293,24 @@ def main():
     check("r_alert_a_floor 默认 = 3.0（A 告警灵敏度，取自被删 min_r_points 原值）",
           pol12.r_alert_a_floor, 3.0)
 
-    print("\n[8b] 跟踪止盈模式（use_trailing=True 默认）：不设硬止盈，止盈交给 L3 跟踪")
+    print("\n[8b] 跟踪止盈模式（use_trailing=True 默认）：不落固定止盈单，止盈交给 L3 跟踪")
     polB = LayeredExitPolicy({"use_atr": False,
                               "r_multiple_tp": 2.0})
     planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
-    check("跟踪止盈模式 tp_price = None（不硬止盈）", planB.tp_price is None, True)
+    check("跟踪止盈模式 tp_price = None（不落固定止盈单）", planB.tp_price is None, True)
     check("跟踪止盈模式 止损仍照常 = 98", planB.stop_price, 98.0)
 
-    print("\n[12] L3 口径统一（best 极值）：L3 触发 = r_multiple_tp，盘中冲高回落也抬损（钉住 P8-A 场景）")
-    # 配置：r_multiple_tp=1.5（L3 启动阈值=1.5R）、保本层用 breakeven_trigger_r=99 屏蔽隔离
-    pol13 = LayeredExitPolicy({"use_atr": False,
-                               "use_trailing": True, "breakeven_trigger_r": 99.0,
-                               "breakeven_buffer_r": 0.0, "r_multiple_tp": 1.5,
-                               "trailing_atr_multiple": 0.0, "trailing_distance_points": 1.0})
-    # A 场景（R=10）：盘中冲 2R（high=120，未到 3R 止盈 130）、收盘回落 1.2R（112）
-    #   旧口径（fav 看收盘 1.2R=12 点 < 1.5R=15 点）漏检；
-    #   新口径（best=120，20 点 ≥ 15 点）抬损 = best-1 = 119
-    pos13 = make_position(Side.LONG, 100.0, 90.0, 130.0, params={"R": 10.0, "_trail_best": 100.0})
-    chk13 = pol13.check(pos13, make_bar(2600, 110.0, 120.0, 105.0, 112.0), state, 5)
-    check("A 冲高回落触发跟踪 only_update", chk13.only_update if chk13 else None, True)
-    check("A 新止损 = best-1 = 119", chk13.plan.stop_price if chk13 else None, 119.0)
-    check("A 极值 _trail_best = 120 落盘",
-          chk13.plan.params.get("_trail_best") if chk13 else None, 120.0)
-    # A' 对照：未达阈值（1.4R=14 点 < 15 点）不得误触发
-    pos13b = make_position(Side.LONG, 100.0, 90.0, 130.0, params={"R": 10.0, "_trail_best": 100.0})
-    chk13b = pol13.check(pos13b, make_bar(2601, 108.0, 114.0, 106.0, 113.0), state, 5)
-    check("A' 1.4R 未达阈值不触发", chk13b is None, True)
-    # A'' 跨 bar 极值记忆：用 A 返回的计划续喂新高 bar（low=119.5>新止损 避开硬 SL），跟踪续抬
-    if chk13 is not None:
-        pos13.exit_plan = chk13.plan
-    chk13c = pol13.check(pos13, make_bar(2602, 122.0, 125.0, 119.5, 122.0), state, 6)
-    check("A'' 跨 bar 极值续抬损 = 125-1 = 124",
-          chk13c.plan.stop_price if chk13c else None, 124.0)
-    check("A'' 极值续记 _trail_best = 125",
-          chk13c.plan.params.get("_trail_best") if chk13c else None, 125.0)
-    # 空单镜像：盘中下探 2R（low=80，2R=20 点 ≥ 15 点）、收盘收回 1.2R（88）
-    pos14 = make_position(Side.SHORT, 100.0, 110.0, 70.0, params={"R": 10.0, "_trail_best": 100.0})
-    chk14 = pol13.check(pos14, make_bar(2600, 90.0, 95.0, 80.0, 88.0), state, 5)
-    check("空单镜像 only_update", chk14.only_update if chk14 else None, True)
-    check("空单镜像新止损 = best+1 = 81", chk14.plan.stop_price if chk14 else None, 81.0)
-
-    print("\n[12b] L3 触发阈值 = 品种级 r_multiple_tp（IC/IM=3R、IF/IH=2R），"
-          "边界精确到 R")
-    # 评审修：**本节的采样网格改细**。原实现只在 2.5R / 3.5R 两点取样，
-    #   于是"IC 在 3.5R 启动"这个说法其实没被钉住 —— 粗网格（2.5R 未启动 + 3.5R 已启动）
-    #   会被读成"阈值在 3.5R"，而代码里的判定是 `fav_profit >= r_multiple_tp × R`，
-    #   阈值就是**精确的 3.0R**（3.5R 只是我上一轮探针的采样点，不是语义）。
-    #   现补 2.99R / 3.0R 边界点：等于阈值必须启动（严格 ≥）。
-    pol_ic = LayeredExitPolicy({"use_atr": False,
-                                "use_trailing": True, "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0,
-                                "trailing_distance_points": 1.0})
-    pol_if = LayeredExitPolicy({"use_atr": False,
-                                "use_trailing": True, "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0,
-                                "trailing_distance_points": 1.0})
-
-    def _l3_started(pol, high, ts):
-        """R=10、_trail_best=100 的单根 bar：high 抬高到 100+fav → 返回 L3 是否启动。"""
-        pos = make_position(Side.LONG, 100.0, 90.0, 9999.0,
-                            params={"R": 10.0, "_trail_best": 100.0})
-        chk = pol.check(pos, make_bar(ts, 100, high, 105, high - 5), state, 5)
-        return bool(chk is not None and chk.only_update)
-
-    # 边界（fav 单位 = 点，R=10）：2.99R=29.9 点 < 3R=30 点 → 不启动；3.0R=30 点 → 启动
-    check("IC(3R) 在 2.99R 不启动 L3（阈值严格 ≥ 的下侧）",
-          _l3_started(pol_ic, 129.9, 2710), False)
-    check("IC(3R) 在 3.0R **恰好**启动 L3（fav = 3R 即触发，不是 3.5R）",
-          _l3_started(pol_ic, 130.0, 2711), True)
-    check("IF(2R) 在 1.99R 不启动 L3", _l3_started(pol_if, 119.9, 2712), False)
-    check("IF(2R) 在 2.0R **恰好**启动 L3", _l3_started(pol_if, 120.0, 2713), True)
-    # 同一根 2.5R bar 上 IC 与 IF 必须分野：IC 不动、IF 已启动
-    check("同一 2.5R bar：IC(3R) 不启动 L3", _l3_started(pol_ic, 125.0, 2714), False)
-    check("同一 2.5R bar：IF(2R) 已启动 L3", _l3_started(pol_if, 125.0, 2715), True)
+    # [12] / [12b] 旧用例已删（2026-09-22 · 用户拍板）
+    # ────────────────────────────────────────────────────────────────
+    # 原两节把 L3 的浮盈口径钉在**根内极值**上（`best = max(best, bar.high)`），
+    # 且显式声明"旧收盘口径应红"：[12] 用"盘中冲高 2R、收盘回落 1.2R 也抬损"钉口径，
+    # [12b] 用 `_l3_started(pol, high, ts)` 把"high 抬多高"当浮盈，再断言 IC=3R / IF=2R
+    # 的启动阈值边界。
+    # 2026-09-22 口径统一为"整层 L1-L3 只读 bar.close"（用户拍板）→ 两节整体作废并删除。
+    # 等价守护搬到了 `Trading/Test/test_p61_exit_close_only.py`：
+    #   · L3 浮盈只看收盘价（冲高回落不算达标）；
+    #   · L3 启动阈值仍严格 = r_multiple_tp（2.99R 不启动 / 3.0R 恰好启动，用收盘价重述）。
+    # 旧实现与旧断言见 git 历史（本次改动前的版本）。
 
     print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)"
           "（min_r_points 地板已删，且不再补任何下限）")
@@ -391,7 +345,7 @@ def main():
     print("\n[10] 构造期参数校验（2026-09-15 评审补 · Config.ExitConfig._check_exit_param_order）")
     # ① breakeven_buffer_r < breakeven_trigger_r：
     #    缓冲 ≥ 触发时，保本位会落在**当前浮盈之上**（浮盈 1.1R 却把止损抬到 1.5R），
-    #    下一根 bar 立刻被硬止损打掉 —— 旧实现用 tick 计量，天然越不过 trigger。
+    #    下一根 bar 立刻触发止损离场 —— 旧实现用 tick 计量，天然越不过 trigger。
     _be_err = ""
     try:
         LayeredExitPolicy({"breakeven_trigger_r": 1.0, "breakeven_buffer_r": 1.5})

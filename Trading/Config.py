@@ -308,7 +308,7 @@ class ExitConfig(BaseModel):
     breakeven_buffer_r: float = 0.5       # 保本/锁利层落点 = 入场价 ± 此倍数×R（=0.5 即锁定半 R；=0 为真正保本）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
-                                                #   注：跟踪止盈模式（use_trailing=True）下**不生成硬止盈单**，止盈完全交给
+                                                #   注：跟踪止盈模式（use_trailing=True）下**不生成固定止盈单**，止盈完全交给
                                                 #   L3 的 ATR 跟踪兑现；L3 启动阈值 = r_multiple_tp（品种档案，IC/IM=3R、
                                                 #   其余=2R），即"盈利到 r_multiple_tp×R 时进 L3"——r_multiple_tp 由此从
                                                 #   "名义盈亏比/死配置"变为 L3 触发的唯一真值源（品种级，不再有全局
@@ -325,7 +325,7 @@ class ExitConfig(BaseModel):
             breakeven_buffer_r×R」。改成 R 的倍数之后，这两个参数第一次有了**可比较性**，
             但代码没做比较：buffer ≥ trigger 时保本位会落在**当前浮盈之上**（实测
             trigger=1.0 / buffer=1.5、R=10、浮盈 1.1R 时抬到入场价之上 15 点，市价
-            4011 → 新止损 4015），下一根 bar 立刻被硬止损打掉。
+            4011 → 新止损 4015），下一根 bar 立刻触发止损离场。
             旧实现用 tick 计量（IF=2 tick=0.4 点），天然越不过 trigger，才一直没暴露。
             trigger=0（关闭保本层）时不校验 —— 那一层根本不跑。
 
@@ -340,7 +340,7 @@ class ExitConfig(BaseModel):
                 self.breakeven_buffer_r >= self.breakeven_trigger_r:
             raise ValueError(
                 "exit_params: breakeven_buffer_r({}) 必须 < breakeven_trigger_r({}) —— "
-                "缓冲 ≥ 触发时，保本止损会被抬到市价之上，下一根 bar 立刻被硬止损出场。"
+                "缓冲 ≥ 触发时，保本止损会被抬到市价之上，下一根 bar 立刻触发止损离场。"
                 "（若确要「浮盈即锁利」，把 breakeven_trigger_r 设 0 关掉该层，"
                 "或让 buffer 小于 trigger）".format(
                     self.breakeven_buffer_r, self.breakeven_trigger_r))

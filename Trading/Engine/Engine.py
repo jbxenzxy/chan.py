@@ -1664,15 +1664,60 @@ class TradingEngine(ReconcileMixin):
         except (TypeError, ValueError):
             return "-"
 
+    @property
+    def _quote_unit(self) -> str:
+        """本品种的报价单位（展示用，只进文案；见 Product.quote_unit）。
+
+        取不到档案（鸭子类型 cfg / 未知品种 / 未标定）→ 空串：**不猜单位**，
+        文案侧只给数值。用 getattr 兜底是为了测试替身 cfg（没有 product_profile
+        属性）—— property 内部抛 AttributeError 同样会被 getattr 的默认值接住。
+        """
+        prof = getattr(self.cfg, "product_profile", None)
+        return str(getattr(prof, "quote_unit", "") or "")
+
+    def _run_R(self):
+        """本段 run 的 R 快照（出场计划 params["R"]）。无计划 / 旧库缺失 → None。"""
+        if self._run_plan is None:
+            return None
+        return self._run_plan.params.get("R")
+
+    def _r_value_text(self, r_multiple: float, R) -> str:
+        """R 的绝对量值文案：`5 点` / `15 元/吨`（末缀本品种报价单位）。
+
+        R 缺失或非数值（旧 state.db 恢复的持仓 / run_start_incomplete）→ 空串，
+        由调用方退化成"只写倍数"：宁可不给数字，也不编一个。
+        """
+        try:
+            val = abs(float(R)) * abs(float(r_multiple))
+        except (TypeError, ValueError):
+            return ""
+        return ("{:g} {}".format(val, self._quote_unit)).strip()
+
+    def _r_label(self, r_multiple: float, R) -> str:
+        """把「N R」渲染成带具体量值的文案：`1R（= 5 点）`（需求 ⑶，2026-09-22）。
+
+        只写「1R」用户没法与盘面对齐，故补「= 多少」。两种退化：
+        R 缺失 → `1R`；报价单位未标定 → `1R（= 5）`（数值照给，不编单位）。
+        """
+        mult = "{:g}R".format(float(r_multiple))
+        val = self._r_value_text(r_multiple, R)
+        return "{}（= {}）".format(mult, val) if val else mult
+
     def _notify_open(self, o: Order) -> None:
-        """开仓成交 toast：方向/手数/成交价 + 止损点（1R）（需求 ⑷(1)）。"""
+        """开仓成交 toast：方向/手数/成交价 + 止损价与 1R 距离（需求 ⑷(1)、⑶）。
+
+        ⚠️ 文案原为「止损(1R) = 4010」—— 把**距离**（1R）标成了**价格**，是两回事；
+        改为「止损 = 4010（距入场 1R = 5 点）」。
+        """
         plan = self._run_plan
         stop = plan.stop_price if plan is not None else None
         head = "开仓成交：{} {}手 @ {}".format(
             str(o.side), o.volume, self._fmt_px(o.filled_price))
         if stop:
-            self.notify(head + "｜止损(1R) = " + self._fmt_px(stop),
-                        code="open_filled")
+            r_txt = self._r_value_text(1.0, self._run_R())
+            head += ("｜止损 = {}（距入场 1R = {}）".format(self._fmt_px(stop), r_txt)
+                     if r_txt else "｜止损 = " + self._fmt_px(stop))
+            self.notify(head, code="open_filled")
         else:
             # 无计划（run_start_incomplete 已另有 severe 告警）：只报成交事实
             self.notify(head, code="open_filled")
@@ -1706,19 +1751,26 @@ class TradingEngine(ReconcileMixin):
                         code="close_filled")
 
     def _notify_run_phase(self, phase: str) -> None:
-        """盈利达标阶段 toast（需求 ⑷(3)(4)）：1R 保本 / r_multiple_tp·R 移动止盈。"""
+        """盈利达标阶段 toast（需求 ⑷(3)(4)）：breakeven_trigger_r·R 保本 /
+        r_multiple_tp·R 移动止盈。
+
+        文案带 R 的**绝对量值 + 本品种报价单位**（需求 ⑶，2026-09-22）：R 的单位是
+        "报价点数"（IF 是点、CU 是元/吨），只写「1R」用户无法与盘面对齐，故渲染成
+        「1R（= 5 点）」。R 拿不到时退化为只写倍数（不编数字）。
+        """
         pol = self.exit_policy
+        R = self._run_R()
         if phase == "breakeven":
             trigger = getattr(pol, "breakeven_trigger_r", 1.0)
             stop = self._run_plan.stop_price if self._run_plan else None
-            msg = "盈利达到 {:g}R，进入保本策略".format(trigger)
+            msg = "盈利达到 {}，进入保本策略".format(self._r_label(trigger, R))
             if stop:
                 msg += "：止损已移至 " + self._fmt_px(stop)
             self.notify(msg, code="run_breakeven")
         elif phase == "trailing":
             trigger = getattr(pol, "r_multiple_tp", 2.0)
-            self.notify("盈利达到 {:g}R，进入移动止盈（跟踪止损启动）".format(trigger),
-                        code="run_trailing")
+            self.notify("盈利达到 {}，进入移动止盈（跟踪止损启动）".format(
+                self._r_label(trigger, R)), code="run_trailing")
 
     def _run_start(self, anchor_price: float, bar: Optional[Bar],
                    sig: Optional[Signal],

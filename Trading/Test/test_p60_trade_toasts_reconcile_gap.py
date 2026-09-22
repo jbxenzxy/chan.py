@@ -24,7 +24,7 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
   [2] Engine.notify：落 kv `toasts`、有界（尾部 30 条）、写 toast 事件
   [3] 开仓成交 toast：含方向/手数/成交价/止损(1R) 点位
   [4] 盈利达 1R → 保本 toast；达 2R → 移动止盈 toast（阶段跃迁只弹一次）
-  [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 硬止盈 / 锁仓离场
+  [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 固定止盈 / 锁仓离场
   [6] 对账盲区：账本空 + 柜台有量 → position_mismatch severe（restore 与
       on_bar 两路）；无时间宽限（P61 撤销：宁误报不漏报）
   [7] 账单同步 toast：柜台比账本少 → 账本修正 + toast
@@ -283,9 +283,9 @@ with tmp_dir() as tmp:
         os.path.join(tmp, "events.jsonl")), True)
 
 # ════════════════════════════════════════════════════════════════
-# [3] 开仓成交 toast：含止损(1R) 点位（需求 ⑷(1)）
+# [3] 开仓成交 toast：含止损价 + 1R 量值（需求 ⑷(1)、⑶）
 # ════════════════════════════════════════════════════════════════
-print("\n[3] 开仓成交 toast（含止损 1R 点位）")
+print("\n[3] 开仓成交 toast（含止损价 + 1R 量值）")
 with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
@@ -294,11 +294,18 @@ with tmp_dir() as tmp:
                                  fractal_low=4500.0))
     check("[3a] 已开仓", len(engine.positions.positions), 1)
     stop = engine._run_plan.stop_price
+    r_plan = engine._run_plan.params["R"]
     msg = last_toast_msg(store)
     check("[3b] toast 报开仓成交", "开仓成交" in msg, True)
-    check("[3c] toast 含止损(1R)字样", "止损(1R)" in msg, True)
-    check("[3d] toast 止损点位 == 计划止损 {:g}".format(stop),
+    # 文案曾是「止损(1R) = 4010」——把**距离**标成**价格**。2026-09-22 改为
+    # 「止损 = <价>（距入场 1R = <R> 点）」，本组断言钉住新措辞 + 1R 量值。
+    check("[3c] toast 不再写「止损(1R)」旧措辞", "止损(1R)" in msg, False)
+    check("[3d] toast 含「止损 = 」与「距入场 1R = 」",
+          ("止损 = " in msg and "距入场 1R = " in msg), True)
+    check("[3e] toast 止损点位 == 计划止损 {:g}".format(stop),
           "{:g}".format(stop) in msg, True)
+    check("[3f] 1R 量值 == 计划 R {:g} 点（带品种报价单位）".format(r_plan),
+          "距入场 1R = {:g} 点".format(r_plan) in msg, True)
 
 # ════════════════════════════════════════════════════════════════
 # [4] 盈利达 1R → 保本 toast；达 2R → 移动止盈 toast（需求 ⑷(3)(4)）
@@ -384,7 +391,7 @@ with tmp_dir() as tmp:
           any("锁仓离场" in m and "移动止盈" in m for m in msgs), True)
 
 with tmp_dir() as tmp:
-    # 5c 硬止盈模式（use_trailing=False）触发 tp → 文案「止盈」
+    # 5c 固定止盈单模式（use_trailing=False）触发 tp → 文案「止盈」
     engine, store, broker, ev = build_engine(
         tmp, exit_policy=LayeredExitPolicy({"use_trailing": False}))
     engine.on_bar(make_bar(1000))
@@ -397,7 +404,7 @@ with tmp_dir() as tmp:
     engine.on_bar(make_bar(2000, h=max(tp + 2.0, 4560.0), l=4548.0,
                            c=tp if tp else 4560.0))
     msgs = [t["msg"] for t in toasts_of(store)]
-    check("[5c] 硬止盈文案出现",
+    check("[5c] 固定止盈文案出现",
           any("锁仓离场" in m and "止盈" in m and "保本" not in m
               for m in msgs), True)
 

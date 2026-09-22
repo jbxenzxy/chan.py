@@ -282,7 +282,13 @@ class Product:
       【合约事实（交易所定，几乎不变；2026-09-17 拍板：本表即唯一真值源 SSOT）】
       price_tick 最小变动价位 —— 有效参数唯一来源（构造期播种进 Instrument，
                                运行期不再改写；无任何行情取值路径）。
-      multiplier               合约乘数（元/点）
+      multiplier               合约乘数（"一份报价单位对应多少元"）
+      quote_unit               报价单位（**只进文案，不进计算**）：用户可见文案里给价格量值
+                               附单位用（如「1R = 5 点」/「1R = 15 元/吨」）。⚠️ 它不是有效
+                               参数 —— 计算一律在"报价点数"上做，价格量值的精度由 price_tick
+                               决定、金额折算由 multiplier 决定，本字段不参与任何运算。
+                               来源 = 各交易所标准合约文本的「报价单位」字段（URL 见本模块
+                               PRODUCT_PROFILES 上方的来源块）。
 
     注：下方**声明顺序**受 dataclass 规则约束（无默认值字段必须在前），
     与上述概念分组不同属有意为之；书写/阅读以各档案条目的实参顺序为准。
@@ -305,6 +311,8 @@ class Product:
     exec_policy: ExecPolicy                 # 执行策略表行（今仓离场/报单属性/每笔手数）
     closetoday_fee: Optional[Fee] = None    # None = 同开仓档（xlsx 无独立平今行）
     price_tick: float = 0.2            # 最小变动价位（离线兜底；中金所四品种均 0.2）
+    quote_unit: str = ""                    # 报价单位（展示用，只进文案不进计算；见类 docstring）
+                                            #   空串 = 未标定 → 文案侧不附单位，不猜
     note: str = ""                          # 调参记录 / 数据来源 / 标定状态
     # 覆盖档字段位（R3 · 2026-09-15，交接文档 -b 明令"字段位必须留"）。
     #   ⚠️ **当前不消费**：`fee_pair()` 一律读基准档。
@@ -381,6 +389,24 @@ def _exec_kw(code: str) -> Dict[str, object]:
     return {"exec_policy": EXEC_POLICY[code]}
 
 
+# ══════════════════════════════════════════════════════════════════
+# quote_unit（报价单位）来源 —— 各交易所**标准合约文本**，逐条附官方 URL
+#   2026-09-22 标定。只进用户可见文案的单位后缀，**不参与任何计算**（见 Product docstring）。
+#     · 股指 IF/IH/IC/IM = 指数点（文案写「点」）：
+#       https://www.cffex.com.cn/hs300/   → 合约表「报价单位：指数点」
+#       （IH/IC/IM 合约表同字段，乘数 300/300/200/200 与档案 multiplier 一致）
+#     · 黄金 AU = 元/克、铜 CU = 元/吨：
+#       https://www.shfe.com.cn/upload/20200818/1597741793284.doc
+#       （《上海期货交易所黄金期货合约(修订版)》《阴极铜期货合约(修订版)》「报价单位」行）
+#     · 白银 AG = 元/千克（上期所该批次合约文档未含 AG，取交易所行情数据页的报价单位注）：
+#       https://www.shfe.com.cn/reports/tradedata/dailyandweeklydata/
+#       →「黄金为元/克;白银为元/千克;原油为元(人民币)/桶」
+#     · PTA TA = 元/吨：
+#       https://www.czce.com.cn/cn/sspz/pta/bzhy/qhhy/H077002005001001index_1.htm
+#   ⚠️ 未标定品种（当前 8 个之外）quote_unit 留空 → 文案侧不附单位，不猜。
+#   新增品种 = 查该交易所标准合约文本「报价单位」行 → 填本表 → 补 URL 到本块。
+# ══════════════════════════════════════════════════════════════════
+#
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
 # 条目实参顺序：策略标定值在前（r_multiple_tp），费率与合约事实在后；
 # note 同序。显式给真值；note 标定状态。
@@ -412,7 +438,7 @@ def _exec_kw(code: str) -> Dict[str, object]:
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", r_multiple_tp=2.0,
-        price_tick=0.2, multiplier=300.0,
+        price_tick=0.2, multiplier=300.0, quote_unit="点",
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
              "今仓离场 = R-OPEN（反向锁仓）",
@@ -421,21 +447,21 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "IH": Product(
         product="IH", r_multiple_tp=2.0,
-        price_tick=0.2, multiplier=300.0,
+        price_tick=0.2, multiplier=300.0, quote_unit="点",
         note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）",
         **_fee_kw("IH"),
         **_exec_kw("IH"),
     ),
     "IC": Product(
         product="IC", r_multiple_tp=3.0,
-        price_tick=0.2, multiplier=200.0,
+        price_tick=0.2, multiplier=200.0, quote_unit="点",
         note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IC"),
         **_exec_kw("IC"),
     ),
     "IM": Product(
         product="IM", r_multiple_tp=3.0,
-        price_tick=0.2, multiplier=200.0,
+        price_tick=0.2, multiplier=200.0, quote_unit="点",
         note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IM"),
         **_exec_kw("IM"),
@@ -445,7 +471,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", r_multiple_tp=2.0,
-        price_tick=0.02, multiplier=1000.0,
+        price_tick=0.02, multiplier=1000.0, quote_unit="元/克",
         note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
              "（覆盖档：6、12 合约 & 2607-2610 = 20 元/手，字段位已留未消费）；"
@@ -455,7 +481,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "AG": Product(
         product="AG", r_multiple_tp=2.0,
-        price_tick=1.0, multiplier=15.0,
+        price_tick=1.0, multiplier=15.0, quote_unit="元/千克",
         note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 15(元/kg)、tick 1；费率 xlsx：交易万0.1（xlsx 基准档，2026-09-15 用户确认），"
              "无独立平今行 → 平今=开仓（closetoday_fee=None）"
@@ -466,7 +492,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     ),
     "CU": Product(
         product="CU", r_multiple_tp=2.0,
-        price_tick=10.0, multiplier=5.0,
+        price_tick=10.0, multiplier=5.0, quote_unit="元/吨",
         note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 10；费率 xlsx：开/平昨万0.5 / 平今万1.0；"
              "今仓离场 = CLOSETODAY（用户按费率算定：平今万1.0 < 锁仓路径 4 笔共万2.0）",
@@ -479,7 +505,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     #   由 `**_exec_kw("TA")` 注入 —— 不再由交易所名字推导。
     "TA": Product(
         product="TA", r_multiple_tp=2.0,
-        price_tick=2.0, multiplier=5.0,
+        price_tick=2.0, multiplier=5.0, quote_unit="元/吨",
         note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"
              "报单 FAK + 一笔 1 手；今仓离场 = R-OPEN（反向锁仓）；"
