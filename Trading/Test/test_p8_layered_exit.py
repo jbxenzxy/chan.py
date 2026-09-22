@@ -224,17 +224,17 @@ def main():
     chk = LayeredExitPolicy({}).check(pos, make_bar(2000, 100, 111, 89, 100), state, 5)
     check("low/high 双穿但收盘在区间内 → 不触发", chk, None)
     chk_sl = LayeredExitPolicy({}).check(pos, make_bar(2001, 100, 111, 89, 89), state, 5)
-    check("同一根若收盘 89 ≤ 止损 90 → 触发 sl",
+    check("同一根若收盘 89 < 止损 90 → 触发 sl",
           chk_sl.reason if chk_sl else None, "sl")
     check("触发价 = 止损线（不是收盘价）",
           chk_sl.price if chk_sl else None, 90.0)
 
-    print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
+    print("\n[5] L3 保本：浮盈 > 1R 抬止损至保本（only_update；严格不等，恰好 1R 不抬）")
     pol6 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0, "win_loss_ratio": 99.0})
     pos6 = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
-    # close=111 → 浮盈 11 ≥ 1R(10) → 保本位=100 > 90 → 更新
+    # close=111 → 浮盈 11 > 1R(10) → 保本位=100 > 90 → 更新
     chk6 = pol6.check(pos6, make_bar(2100, 100, 111, 100, 111), state, 5)
     check("保本触发 only_update", chk6.only_update if chk6 else None, True)
     check("保本新止损 = 100", chk6.plan.stop_price if chk6 else None, 100.0)
@@ -259,11 +259,12 @@ def main():
     check("缓冲默认值（未显式传）= 0.5R → 止损 = 入场价 + 0.5×10 = 105",
           chk6c.plan.stop_price if chk6c else None, 105.0)
 
-    print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
+    print("\n[6] L3 跟踪：浮盈 > 2R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
     pol7 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
-    # 已先保本到 100；本根 close=130（浮盈30≥2R=20），跟踪距离 = 0.5R = 5 → 跟踪=131-5=126
+    # 已先保本到 100；本根 close=130、high 抬到 131（浮盈 31 > 2R=20），
+    # 跟踪距离 = 0.5R = 5 → 跟踪=131-5=126
     # 用 tp=9999 排除止盈线干扰，low=101>保本止损100 排除止损线干扰，只验跟踪
     pos7 = make_position(Side.LONG, 100.0, 100.0, 9999.0, params={"R": 10.0, "_trail_best": 131.0})
     chk7 = pol7.check(pos7, make_bar(2200, 100, 131, 101, 130), state, 5)

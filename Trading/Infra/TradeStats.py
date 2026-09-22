@@ -178,7 +178,15 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
                             net_cash=0.0、trade_id/exit_at=None
       expectancy        期望收益 = win_rate*avg_win + loss_rate*avg_loss（元/笔）
       equity_curve      累计净值序列：[{exit_at, net_cash, cumulative}]
-      by_reason         按出场原因（tp/sl/trailing/time…）拆分的净盈亏合计
+      by_reason         按出场**规则身份**（reason）分组：{key: {n, wins, losses,
+                        flat, net}}。**刻意不按「止盈 / 止损」分**：reason 只回答
+                        "哪条规则触发的离场"（tp 固定止盈线 / breakeven 保本层保护价 /
+                        trailing 跟踪层保护价 / sl 初始止损线 / auto_order_off* /
+                        reconcile_* …），而"这笔赚没赚"是**成交结果** —— 保本离场
+                        名义上是止盈、被滑点打成净亏的也有，跟踪离场同理；把 reason
+                        映射成止盈/止损必然要在"愿望"和"实际"之间二选一，两边都不对。
+                        要看盈亏就读组内的 wins / losses / net（与本函数顶层同一套
+                        net_cash 三分口径），"保本这一组到底赚没赚"因此可直接读出。
     """
     if not trades:
         return _empty_stats()
@@ -233,10 +241,19 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
             "cumulative": round(cum, 2),
         })
 
-    by_reason: Dict[str, float] = {}
+    # by_reason：按出场**规则身份**（reason）分组，每组给笔数 + 该组内的胜 / 负 / 平笔数
+    #   + 净额合计。分组键是规则，不是盈亏 —— 理由见 summarize 的 docstring「为什么
+    #   by_reason 不按止盈/止损分」，组内 wins / losses 用的就是本函数顶层的同一套
+    #   net_cash 三分口径（> 0 / < 0 / == 0），刻意不另立第二套标准。
+    by_reason: Dict[str, Dict[str, Any]] = {}
     for t in trades:
         r = t.get("reason") or "unknown"
-        by_reason[r] = by_reason.get(r, 0.0) + _net(t)
+        b = by_reason.setdefault(r, {"n": 0, "wins": 0, "losses": 0,
+                                     "flat": 0, "net": 0.0})
+        nc = _net(t)
+        b["n"] += 1
+        b["net"] = round(b["net"] + nc, 2)
+        b["wins" if nc > 0 else "losses" if nc < 0 else "flat"] += 1
 
     return {
         "count": count,
@@ -255,7 +272,7 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         "max_loss": max_loss,
         "expectancy": round(expectancy, 2),
         "equity_curve": equity_curve,
-        "by_reason": {k: round(v, 2) for k, v in by_reason.items()},
+        "by_reason": by_reason,
     }
 
 

@@ -353,6 +353,53 @@ check_true("[H13] _net() 不读 gross_points / cost_cash（毛额与成本不是
            "gross_points" not in _net_src and "cost_cash" not in _net_src)
 
 
+# ══════════════════════════════════════════════════════════════
+print("\n[I] by_reason：按**离场规则身份**分组，组内再分胜 / 负 / 平")
+# ══════════════════════════════════════════════════════════════
+# 为什么单开一段：2026-09-22 的原始疑问正是「保本愿望是止盈，但被滑点打成净亏之后，
+# 统计里该算止盈还是止损」。结论是**两个维度都要，但不能塞进同一个字段**：
+#   · 分组键 = 规则身份（breakeven / trailing / sl / tp …）—— 代码 100% 可判定；
+#   · 组内 wins / losses / flat = 成交结果 —— 只有 net_cash 说得清。
+# 本段造一组「同一规则、盈亏两个方向都有」的样本，把这两个维度同时钉住；若有人把
+# by_reason 改回"按 net 符号派生键"（那就只剩止盈/止损两桶，规则信息全丢），[I1] 必红。
+def mk_reason(reason, net, i):
+    r = mk(net, i)
+    r["reason"] = reason
+    return r
+
+
+# 保本组 3 笔：2 笔净盈、1 笔被滑点打成净亏（正是"愿望是止盈、实际可能亏"的形态）；
+# 跟踪组 2 笔：1 盈 1 平（净额恰好 0 → 既不算胜也不算负）；初始止损组 1 笔：净亏。
+_RB = [mk_reason("breakeven", 120.0, 0), mk_reason("breakeven", 80.0, 1),
+       mk_reason("breakeven", -60.0, 2), mk_reason("trailing", 400.0, 3),
+       mk_reason("trailing", 0.0, 4), mk_reason("sl", -500.0, 5)]
+_sb = compute_trade_stats(_RB)
+check("[I1] 分组键 = 规则身份（3 组；不是按盈亏拆成 2 桶）",
+      sorted(_sb["by_reason"].keys()), ["breakeven", "sl", "trailing"])
+check("[I2] 保本组 n/胜/负/平：同组内正负笔并存（没被硬贴成'止盈'）",
+      (_sb["by_reason"]["breakeven"]["n"], _sb["by_reason"]["breakeven"]["wins"],
+       _sb["by_reason"]["breakeven"]["losses"], _sb["by_reason"]["breakeven"]["flat"]),
+      (3, 2, 1, 0))
+check("[I3] 保本组净额合计 = 120+80−60", _sb["by_reason"]["breakeven"]["net"], 140.0)
+check("[I4] 跟踪组：净额恰好 0 的那笔记 flat（既不算胜也不算负）",
+      (_sb["by_reason"]["trailing"]["wins"], _sb["by_reason"]["trailing"]["losses"],
+       _sb["by_reason"]["trailing"]["flat"]), (1, 0, 1))
+check("[I5] 初始止损组 n=1、全负",
+      (_sb["by_reason"]["sl"]["n"], _sb["by_reason"]["sl"]["losses"]), (1, 1))
+check("[I6] 各组笔数之和 ≡ count",
+      sum(v["n"] for v in _sb["by_reason"].values()), _sb["count"])
+check("[I7] 各组净额之和 ≡ total_net",
+      round(sum(v["net"] for v in _sb["by_reason"].values()), 2), _sb["total_net"])
+check("[I8] 各组 wins/losses 之和 ≡ 顶层 wins/losses",
+      (sum(v["wins"] for v in _sb["by_reason"].values()),
+       sum(v["losses"] for v in _sb["by_reason"].values())),
+      (_sb["wins"], _sb["losses"]))
+check("[I9] 无成交 → by_reason = {}（不是 None，报表按 dict 用）",
+      compute_trade_stats([])["by_reason"], {})
+check_true('[I10] 分组键取自 t.get("reason")（不许改成按净额符号派生）',
+           't.get("reason") or "unknown"' in _src)
+
+
 print("\n" + "=" * 62)
 print("成交统计指标口径 结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
 print("=" * 62)

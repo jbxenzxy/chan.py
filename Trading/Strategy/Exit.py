@@ -12,7 +12,7 @@
       **时刻**是"这根 K 线闭合之后"，依据就必须是"这根结束时的那个价"；拿一个盘中到过、
       现在已经消失的价去触发一笔按当时盘口成交的单，依据与时刻不是同一个东西。
       由此，「同根 K 线同时触及止盈与止损 → 按止损计（悲观）」这条旧兜底规则**已不可达**
-      （一个收盘价不可能既 ≥ 止盈线又 ≤ 止损线）—— 规则随口径一并删除。
+      （一个收盘价不可能既 > 止盈线又 < 止损线）—— 规则随口径一并删除。
     · **达标判据**（浮盈是否够 1R 进保本 / 够 win_loss_ratio×R 进跟踪，以及跟踪锚
       "至今最好价"）读本根 K 线的**有利侧极值**：做多 `bar.high`、做空 `bar.low`。
       理由：它衡量的不是"能否成交"，而是"这一段行情最远走到过哪里"。用收盘价衡量会把
@@ -33,6 +33,23 @@
       **定义式**，只做波动率度量、不参与任何判定）两处读，别处一律不得出现 ——
       由 `Trading/Test/test_p61_exit_close_only.py` 用 AST 钉死：`check()` 函数体内
       出现 `.high` / `.low` 即变红，全文件读 high/low 的函数只能是上面这两个。
+
+    · **止损侧边界一律严格不等**（2026-09-22 · 用户拍板「改为需求原文口径 ＜ / ＞」）：
+      止损线 / 保本价 / 跟踪价（后两者在本实现里都是**改写 `stop_price`**，见下方 ③）
+      用 `close < stop`（多）/ `close > stop`（空）；两个"浮盈达标"阈值（进保本 / 进跟踪）
+      用 `fav_profit > 阈值`。**一律不用 `<=` / `>=`** —— 即"收盘价恰好等于保护价"与
+      "有利极值恰好等于 k×R"都**不算**触发 / 达标。
+      为什么值得单列：价格离散到 tick，"恰好相等"是**可达状态**，不是概率为零的理论
+      差异 —— 旧闭区间口径下这类行情会提前一格离场。改后方向一致：离场更晚一点。
+      由 `test_p61_exit_close_only.py` 的 [3c] / [3e]（收盘 == 止损线 → 不离场）、
+      [4b2]（有利极值 == 入场+1R → 不进保本）与 [5]（== 2R / 3R → 不启动跟踪）钉死。
+      ⚠️ **固定止盈单（`use_trailing=False`，非默认模式）不在此列，仍是闭区间
+      `close >= tp`**：需求原文只描述跟踪模式（原文 ⑶ 的"理论止盈价"= 保本价 / 跟踪价，
+      在本实现里就是 `stop_price`，已被上面两行覆盖），固定止盈单是原文未定义的另一种
+      模式，语义是"目标价触及即走"，且既有护栏
+      `Trading/Test/test_p60_trade_toasts_reconcile_gap.py` 的 [5c] 正是用
+      `close == tp` 断言"触发止盈"。刻意保留、不随本口径一起改 —— 若要统一，那是一次
+      独立的拍板（连同 p60 [5c] 的样本一起改）。
 
 两个刻意保留的保守设定（LayeredExitPolicy）
     ① 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
@@ -83,7 +100,10 @@ class ExitCheck:
     only_update=True 表示"只更新出场计划、不登场"——移动止损 / 跟踪止盈走这条路。
     此时 plan 必须给，price 无意义（也不给 fill_price）。
     """
-    reason: str                       # tp / sl / time / trailing / custom
+    reason: str                       # 规则身份（**不表达盈亏**，见 check() 的 reason 口径）：
+                                      #   tp（固定止盈线）/ breakeven（保本层保护价）/
+                                      #   trailing（跟踪层保护价）/ sl（初始止损线）/
+                                      #   time / custom（其它调用方自定）
     price: float
     fill_price: Optional[float] = None  # 建议成交参考价 = 触发那根 K 线收盘价
     plan: Optional[ExitPlan] = None   # 非空则替换持仓的出场计划
@@ -372,19 +392,41 @@ class LayeredExitPolicy:
         #   的是不被插针 / 瞬间打穿扫掉。
         #   （与 L3 的**达标判据**刻意不同：那一层衡量"行情最远走到过哪里"，读
         #   `_fav_extreme()` 的根内极值。两层口径不同是设计，不要"顺手统一"。）
-        #   顺序上 sl 先判、tp 后判：**不是**"同根双破取悲观"那条旧规则（收盘价口径下
-        #   "同根既破止损又破止盈"已不可达），只是对畸形计划的确定性兜底。
+        #   顺序上 sl 先判、tp 后判：**不是**"同根双破取悲观"那条旧规则（收盘价口径 +
+        #   严格不等下"同根既破止损又破止盈"已不可达），只是对畸形计划的确定性兜底。
         #   跟踪止盈模式（use_trailing=True）下 plan 不生成止盈单（tp is None），故 tp 分支
         #   只对固定止盈单模式（use_trailing=False）与旧 state.db 恢复的存量持仓生效。
+        #   ⚠️ **止损侧三处一律严格不等**（2026-09-22 · 用户拍板"改为需求原文口径 ＜ / ＞"，
+        #   见模块 docstring）：收盘价恰好等于止损/保本/跟踪价 → 本根不动。保本价、跟踪价的
+        #   离场也走上面这两行 —— L3 是**改写 stop_price**、不另立字段（见下方 ③），故
+        #   ⑵ 止损与 ⑶ 保本 / 跟踪的触发口径天然是同一条，不存在"只改一半"的可能。
+        #   ⚠️ **固定止盈单（`tp`，仅 `use_trailing=False` 非默认模式或旧 state.db 存量持仓
+        #   才有）刻意保持闭区间 `>=` / `<=`**：需求原文只描述跟踪模式（原文 ⑶ 的"理论止盈价"
+        #   = 保本价 / 跟踪价，在本实现里就是 `stop_price`，已被上面两行覆盖），固定止盈单是
+        #   原文未定义的另一种模式，其语义是"目标价触及即走"，且既有护栏
+        #   `Trading/Test/test_p60_trade_toasts_reconcile_gap.py` 的 [5c] 就用
+        #   `close == tp` 断言"触发止盈"。故不随本口径一起改 —— 要统一成严格需另行拍板。
+        #   ✏️ reason 记的是**哪一层保护价被跌破**（2026-09-22 拍板：reason 只表达"规则身份"，
+        #   **不表达盈亏**）：`_phase` 由 L3 在保护价真的被抬高时写入（见下方 ③），取它即可 ——
+        #      "breakeven" → 保本层保护价被跌破 → reason = "breakeven"
+        #      "trailing"  → 跟踪层保护价被跌破 → reason = "trailing"
+        #      其余（未进 L3 的初始段 / 旧 state.db 恢复的、缺 `_phase` 的持仓）→ "sl"
+        #   为什么不按"止盈 / 止损"写：保本离场也可能因滑点净亏、跟踪离场也可能只小赚 ——
+        #   那是**成交结果**，只有 net_cash 说得清（统计侧的 wins / losses 正是按它分的）。
+        #   `_phase` 与"最后把保护价抬上去的那一层"恒同源：保本与跟踪都只改 `stop_price`，
+        #   且跟踪层算出的价若没高过现有保护价就整个计划不写（下方 ③ 的回写条件），
+        #   故 `_phase` 标的必然就是被跌破的那条线。
+        _phase = str(plan.params.get("_phase") or "")
+        stop_reason = _phase if _phase in ("breakeven", "trailing") else "sl"
         close = bar.close
         if is_long:
-            if stop and close <= stop:
-                return ExitCheck("sl", stop, fill_price=close)
+            if stop and close < stop:
+                return ExitCheck(stop_reason, stop, fill_price=close)
             if tp is not None and close >= tp:
                 return ExitCheck("tp", tp, fill_price=close)
         else:
-            if stop and close >= stop:
-                return ExitCheck("sl", stop, fill_price=close)
+            if stop and close > stop:
+                return ExitCheck(stop_reason, stop, fill_price=close)
             if tp is not None and close <= tp:
                 return ExitCheck("tp", tp, fill_price=close)
 
@@ -413,22 +455,25 @@ class LayeredExitPolicy:
             best = max(best, _ext) if is_long else min(best, _ext)
             fav_profit = (best - entry) * position.side.sign  # (best−风控锚)·sign
             # 跟踪是否已启动（best 单调，故启动后恒为 True，不随回落下线）
+            #   ⚠️ 阈值比较取**严格大于**：有利极值恰好 == win_loss_ratio×R 不算启动
+            #   （2026-09-22 边界口径，见模块 docstring）。
             tracking_started = (self.win_loss_ratio > 0
-                                and fav_profit >= self.win_loss_ratio * R)
+                                and fav_profit > self.win_loss_ratio * R)
             new_stop = stop
 
-            # 保本/锁利：浮盈 ≥ breakeven_trigger_r·R → 止损抬至 入场价 ± breakeven_buffer_r·R
+            # 保本/锁利：浮盈 **>** breakeven_trigger_r·R → 止损抬至 入场价 ± breakeven_buffer_r·R
             #   breakeven_buffer_r=0 → 真正保本（止损=入场价）；=0.5 → 锁定 0.5R（与品种/周期解耦）
-            if self.breakeven_trigger_r > 0 and fav_profit >= self.breakeven_trigger_r * R:
+            #   恰好等值那根不抬（严格不等；与该阈值同为"严格"的还有上面的 tracking_started）。
+            if self.breakeven_trigger_r > 0 and fav_profit > self.breakeven_trigger_r * R:
                 be = (entry + self.breakeven_buffer_r * R) if is_long \
                     else (entry - self.breakeven_buffer_r * R)
                 be = state.round_price(be, "up" if is_long else "down")
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be
 
-            # 跟踪：浮盈 ≥ win_loss_ratio·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
+            # 跟踪：浮盈 **>** win_loss_ratio·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
             #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）
-            if self.win_loss_ratio > 0 and fav_profit >= self.win_loss_ratio * R:
+            if self.win_loss_ratio > 0 and fav_profit > self.win_loss_ratio * R:
                 trail_dist = self.trailing_trigger_r * R
                 if trail_dist and trail_dist > 0:
                     tgt = (best - trail_dist) if is_long else (best + trail_dist)
@@ -446,7 +491,7 @@ class LayeredExitPolicy:
             if tracking_started:
                 phase = "trailing"
             elif (self.breakeven_trigger_r > 0
-                    and fav_profit >= self.breakeven_trigger_r * R):
+                    and fav_profit > self.breakeven_trigger_r * R):
                 phase = "breakeven"
             else:
                 phase = ""

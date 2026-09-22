@@ -371,6 +371,11 @@ with tmp_dir() as tmp:
     msgs = [t["msg"] for t in toasts_of(store)]
     check("[5a] 保本止损文案出现",
           any("锁仓离场" in m and "保本止损" in m for m in msgs), True)
+    #  2026-09-22：文案与落盘记录同源（引擎 _notify_close 只按 reason 路由），故同时钉
+    #  落盘的 reason —— 它记的是"哪一层保护价被跌破"，与这笔实际赚没赚无关。
+    _tr5a = store.trades()
+    check("[5a-2] 落盘 Trade.reason = breakeven（保本层保护价被跌破）",
+          _tr5a[0]["reason"] if _tr5a else None, "breakeven")
 
 with tmp_dir() as tmp:
     # 5b 移动止盈阶段触发止损 → 文案「锁仓离场·移动止盈」
@@ -389,6 +394,9 @@ with tmp_dir() as tmp:
     msgs = [t["msg"] for t in toasts_of(store)]
     check("[5b] 移动止盈触发文案出现",
           any("锁仓离场" in m and "移动止盈" in m for m in msgs), True)
+    _tr5b = store.trades()
+    check("[5b-2] 落盘 Trade.reason = trailing（跟踪层保护价被跌破）",
+          _tr5b[0]["reason"] if _tr5b else None, "trailing")
 
 with tmp_dir() as tmp:
     # 5c 固定止盈单模式（use_trailing=False）触发 tp → 文案「止盈」
@@ -419,6 +427,10 @@ with tmp_dir() as tmp:
     msgs = [t["msg"] for t in toasts_of(store)]
     check("[5d] 锁仓离场文案出现",
           any("锁仓离场" in m and "止损" in m for m in msgs), True)
+    #  未进 L3 的初始止损段：reason 仍是 "sl"（细分没有把"止损"这个默认值改掉）。
+    _tr5d = store.trades()
+    check("[5d-2] 落盘 Trade.reason = sl（初始止损，未进 L3）",
+          _tr5d[0]["reason"] if _tr5d else None, "sl")
 
 with tmp_dir() as tmp:
     # 5e CLOSE intent（跨日仓转移⑤）→ 前缀「平仓成交」（_notify_close 单测）

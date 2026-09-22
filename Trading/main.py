@@ -332,8 +332,8 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
         print("信号是否被入场策略/风控过滤（signal_skip / signal_dup），"
               "或报单是否被拒（见 events.jsonl 的 order_rejected）。")
     else:
-        print("成交笔数  : {}   (胜 {} / 负 {})   胜率 {:.1%}".format(
-            s["trades"], s["wins"], s["losses"], s["win_rate"]))
+        print("成交笔数  : {}   (胜 {} / 负 {} / 平 {})   胜率 {:.1%}".format(
+            s["trades"], s["wins"], s["losses"], s["flat"], s["win_rate"]))
         # 净统计口径改元（net_cash）—— per_lot 费率档
         # 无法在点数口径无损表达，净盈亏只有元是自洽的。
         print("平均盈利  : {:+.2f} 元    平均亏损: {:+.2f} 元".format(
@@ -341,8 +341,12 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
         print("净盈亏    : {:+.2f} 元".format(s["net_cash"]))
         print("单笔期望  : {:+.2f} 元".format(s["expectancy_cash"]))
         if s["by_reason"]:
-            seg = "  ".join("{}: n={} net={:+.2f}".format(k, v["n"], v["net"])
-                            for k, v in s["by_reason"].items())
+            # 分组键是**离场规则身份**（sl / breakeven / trailing / tp …），不是"止盈/止损"；
+            # 组内的 胜/负/平 才是盈亏结果（保本离场也可能被滑点打成净亏）。
+            seg = "  ".join(
+                "{}: n={} (胜{}负{}平{}) net={:+.2f}".format(
+                    k, v["n"], v["wins"], v["losses"], v["flat"], v["net"])
+                for k, v in s["by_reason"].items())
             print("按出场    : {}".format(seg))
     # 修复：Engine.summary()["open_position"] 是**持仓 dict 的列表**
     #   （Engine.py 明确 `[p.to_dict() ...] or None`），原代码当成单个 dict 取下标

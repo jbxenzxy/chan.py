@@ -416,8 +416,11 @@ class Trade:
     exit_price: float
     entry_at: str
     exit_at: str
-    reason: str                 # 离场原因：tp / sl（L1-L3 触发）、settle_exit（兜底）、
-                                #   auto_order_off（关闭托管时锁仓）、manual（调用方自定）
+    reason: str                 # 离场**规则身份**（**不表达盈亏**，见 Strategy/Exit.py
+                                #   的 reason 口径）：tp 固定止盈线 / breakeven 保本层
+                                #   保护价 / trailing 跟踪层保护价 / sl 初始止损线；
+                                #   另 settle_exit（兜底）、auto_order_off（关闭托管时锁仓）、
+                                #   reconcile_*（对账）、manual（调用方自定）
     gross_points: float
     cost_cash: float            # 往返手续费（**元**；由 cost_points 改元口径并更名
                                 #   —— per_lot 档（黄金 10 元/手）无法在点数口径下无损表达）

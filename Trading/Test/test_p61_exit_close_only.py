@@ -11,7 +11,21 @@ P61 出场判定「触发看收盘价 / 达标看根内极值」防回潮护栏�
     理由：判定**时刻**是"这根 K 线闭合之后"，依据就必须是"这根结束时的那个价"，
     两者才是同一个东西；盘中到过的价此刻已经消失，用它去触发一笔按当时盘口成交的单
     是自欺。由此**顺带作废**了一条旧规则：「同根 K 线同时触及止盈与止损 → 按止损计
-    （悲观）」—— 一个收盘价不可能既 ≥ 止盈线又 ≤ 止损线，该场景不可达（用例已删）。
+    （悲观）」—— 一个收盘价不可能既 > 止盈线又 < 止损线，该场景不可达（用例已删）。
+
+  · **止损侧边界一律严格不等**（2026-09-22 · 用户拍板"改为需求原文口径 ＜ / ＞"）——
+    上面两层判据的**比较符号**取严格不等，不用 `<=` / `>=`：
+      触发侧：多 `close < stop` / 空 `close > stop`（保本价 / 跟踪价同样走这两行 ——
+              L3 是改写 `stop_price`，不另立字段）；
+      达标侧：`fav_profit > breakeven_trigger_r×R`、`fav_profit > win_loss_ratio×R`。
+    即"收盘价恰好等于保护价"与"有利极值恰好等于 k×R"都**不算**触发 / 达标。
+    为什么不是无所谓的细节：价格离散到 tick，"恰好相等"是**可达状态**，
+    旧闭区间口径会在这类行情上提前一格离场（多等一根即可）。本文件 [3c] / [3e] /
+    [4b2] / [5] 钉死。
+    ⚠️ **固定止盈单（`use_trailing=False` 非默认模式）例外，仍是闭区间**：需求原文只描述
+    跟踪模式，该模式原文未定义、语义是"目标价触及即走"，其守卫在
+    `test_p60_trade_toasts_reconcile_gap.py` 的 [5c]（`close == tp` → 触发止盈）。
+    本文件不管那一处，也不得顺手把它改严 —— 要改得连 p60 [5c] 一起改。
 
   · **达标判据** —— 浮盈是否够 `breakeven_trigger_r×R` 进保本、够 `win_loss_ratio×R`
     进跟踪，以及跟踪锚"至今最好价"—— 读本根 K 线的**有利侧极值**：
@@ -225,16 +239,23 @@ def main():
     check("[3a] low 穿止损但收盘在线上 → 不触发（插针不再被扫）",
           chk_wick, None)
 
-    # 3b 同一根若收盘 3994（≤ 3995）→ 触发 sl，触发价 = 止损线
+    # 3b 同一根若收盘 3994（< 3995）→ 触发 sl，触发价 = 止损线
     chk_close = pol.check(_pos(), _bar(3997.0, 3993.0, 3994.0), st)
-    check("[3b] 收盘 3994 ≤ 止损 3995 → 触发 sl",
+    check("[3b] 收盘 3994 < 止损 3995 → 触发 sl",
           (chk_close.reason, chk_close.price) if chk_close else None,
           ("sl", 3995.0))
 
-    # 3c 收盘恰好等于止损线 → 触发（≤ 是闭区间，边界不丢）
+    # 3c **边界（严格不等 · 2026-09-22 用户拍板）**：收盘恰好等于止损线 → **不触发**，
+    #    要等下一根收盘再低一格才走。旧闭区间口径（`<=`）下这里判"触发"，本断言就是
+    #    那条差异的钉子 —— 若哪天被改回 `<=`，[3c] 立刻变红。
     chk_edge = pol.check(_pos(), _bar(3997.0, 3993.0, 3995.0), st)
-    check("[3c] 收盘 == 止损线 → 触发（边界闭区间）",
-          chk_edge.reason if chk_edge else None, "sl")
+    check("[3c] 收盘 == 止损线 → **不触发**（严格不等）", chk_edge, None)
+    # 3c' 再低 1 tick（IF tick = 0.2）→ 触发。用来证明 [3c] 的 None 是"卡在边界上"，
+    #     而不是整段失灵（否则把 check() 改成永远返回 None 也能让 [3c] 变绿）。
+    chk_edge2 = pol.check(_pos(), _bar(3997.0, 3993.0, 3994.8), st)
+    check("[3c'] 收盘 3994.8（再低 1 tick）→ 触发 sl（边界只差一格）",
+          (chk_edge2.reason, chk_edge2.price) if chk_edge2 else None,
+          ("sl", 3995.0))
 
     # 3d 空仓镜像：high 穿止损但收盘在线上 → 不触发
     chk_short = pol.check(_pos(Side.SHORT, 4000.0, 4005.0),
@@ -242,6 +263,21 @@ def main():
                               open=4003.0, high=4007.0, low=4003.0,
                               close=4003.0, vol=1), st)
     check("[3d] 空仓 high 穿止损、收盘未穿 → 不触发", chk_short, None)
+
+    # 3e 空仓边界镜像：收盘恰好等于止损线 → 不触发；再高 1 tick → 触发。
+    #    多空两侧必须同口径 —— 只改一边（多严格 / 空闭区间）是很容易犯的漏改。
+    chk_s_edge = pol.check(_pos(Side.SHORT, 4000.0, 4005.0),
+                          Bar(timestamp=2001, date="2026-09-01 09:41",
+                              open=4003.0, high=4005.2, low=4003.0,
+                              close=4005.0, vol=1), st)
+    check("[3e] 空仓 收盘 == 止损线 → **不触发**（严格不等）", chk_s_edge, None)
+    chk_s_edge2 = pol.check(_pos(Side.SHORT, 4000.0, 4005.0),
+                            Bar(timestamp=2002, date="2026-09-01 09:41",
+                                open=4003.0, high=4005.4, low=4003.0,
+                                close=4005.2, vol=1), st)
+    check("[3e'] 空仓 收盘 4005.2（再高 1 tick）→ 触发 sl",
+          (chk_s_edge2.reason, chk_s_edge2.price) if chk_s_edge2 else None,
+          ("sl", 4005.0))
 
     print("\n[4] 达标侧行为级：L3 浮盈看**根内极值**（做多 high / 做空 low）")
     # R=10、入场 4000 → 保本阈值 4010（+1R）。win_loss_ratio=99 关掉跟踪，只验保本层；
@@ -269,6 +305,22 @@ def main():
             high=4008.0, low=3999.0, close=4005.0, vol=1), st)
     check("[4b] high 只到 4008（< 1R）→ L3 不动", chk_l3_none, None)
 
+    # 4b2 / 4b3 **达标边界（严格不等 · 2026-09-22 拍板）**：high 恰好 == 入场+1R 不达标，
+    #    再高 1 tick 才达标。需求原文 ⑶ 情况一写的是「最高价 − 入场价 **＞** 1R」。
+    chk_l3_eq = pol3.check(
+        _pos(params={"R": 10.0, "_trail_best": 4000.0}),
+        Bar(timestamp=2002, date="2026-09-01 09:40", open=4000.0,
+            high=4010.0, low=3999.0, close=4005.0, vol=1), st)
+    check("[4b2] high == 入场+1R（4010）→ **不达标**（严格不等）",
+          chk_l3_eq, None)
+    chk_l3_gt = pol3.check(
+        _pos(params={"R": 10.0, "_trail_best": 4000.0}),
+        Bar(timestamp=2003, date="2026-09-01 09:40", open=4000.0,
+            high=4010.2, low=3999.0, close=4005.0, vol=1), st)
+    check("[4b3] high 4010.2（再高 1 tick）→ 达标，保本抬到 4000",
+          (chk_l3_gt.only_update, chk_l3_gt.plan.stop_price)
+          if chk_l3_gt else None, (True, 4000.0))
+
     # 4c 空仓镜像：low 到过 3985（≥1R）而收盘 3995（<1R）→ 达标，保本压到 4000
     chk_l3_short = pol3.check(
         _pos(Side.SHORT, 4000.0, 4010.0, params={"R": 10.0, "_trail_best": 4000.0}),
@@ -279,9 +331,10 @@ def main():
           if chk_l3_short else None,
           (True, 4000.0))
 
-    print("\n[5] L3 启动阈值仍严格 = win_loss_ratio（IC=3R / IF=2R 边界）")
+    print("\n[5] L3 启动阈值仍严格 = win_loss_ratio（IC=3R / IF=2R 边界，比较取严格 >）")
     # ⚠️ 本组把**收盘价固定在入场价**、只让 high 抬到指定倍数 —— 于是"能不能启动"
-    #    完全由极值口径决定。若实现回头只看收盘价，2.99R 与 3.0R 这两条都会失真。
+    #    完全由极值口径决定。若实现回头只看收盘价，2.99R / 3.0R / 3.01R 三条都会失真；
+    #    若实现把比较改回 `>=`，则"恰好 3.0R 不启动"那条（严格不等）立刻变红。
     pol_ic = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                                 "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 3.0})
@@ -303,14 +356,18 @@ def main():
         chk = pol.check(p, bar, st)
         return bool(chk is not None and chk.only_update)
 
-    check("IC(3R) high 2.99R 不启动 L3（阈值严格 ≥ 的下侧）",
+    check("IC(3R) high 2.99R 不启动 L3（阈值严格 > 的下侧）",
           _l3_started(pol_ic, 129.9, 2710), False)
-    check("IC(3R) high 3.0R **恰好**启动（不是 3.5R）",
-          _l3_started(pol_ic, 130.0, 2711), True)
-    check("IF(2R) high 1.99R 不启动 L3", _l3_started(pol_if, 119.9, 2712), False)
-    check("IF(2R) high 2.0R **恰好**启动", _l3_started(pol_if, 120.0, 2713), True)
-    check("同一 2.5R：IC(3R) 不启动", _l3_started(pol_ic, 125.0, 2714), False)
-    check("同一 2.5R：IF(2R) 已启动", _l3_started(pol_if, 125.0, 2715), True)
+    check("IC(3R) high 3.0R **恰好不启动**（严格不等：> 3R 才算）",
+          _l3_started(pol_ic, 130.0, 2711), False)
+    check("IC(3R) high 3.01R 启动（越过阈值 1 tick 即算）",
+          _l3_started(pol_ic, 130.1, 2712), True)
+    check("IF(2R) high 1.99R 不启动 L3", _l3_started(pol_if, 119.9, 2713), False)
+    check("IF(2R) high 2.0R **恰好不启动**（严格不等）",
+          _l3_started(pol_if, 120.0, 2714), False)
+    check("IF(2R) high 2.01R 启动", _l3_started(pol_if, 120.1, 2715), True)
+    check("同一 2.5R：IC(3R) 不启动", _l3_started(pol_ic, 125.0, 2716), False)
+    check("同一 2.5R：IF(2R) 已启动", _l3_started(pol_if, 125.0, 2717), True)
 
     print("\n[6] 两层判据的优先级：同一根 K 线上「收盘打穿止损」优先于「极值达标」")
     # 触发判据在 check() 里排在 L3 之前：一根 high 冲到 2R、收盘却砸穿 −1R 止损的巨阴
@@ -372,6 +429,31 @@ def main():
           (chk_s0.reason, chk_s0.only_update,
            chk_s0.plan.stop_price if chk_s0.plan is not None else None)
           if chk_s0 else None, ("trailing", True, 3995.0))
+
+    print("\n[8] reason 细分：保护价被跌破时标的是**哪一层**（2026-09-22 拍板）")
+    # reason 只表达"哪条规则触发的离场"，**不表达盈亏**（保本离场也可能被滑点打成净亏，
+    #   盈亏一律由 net_cash 符号在统计侧分 —— 见 Infra/TradeStats.py 的 by_reason 说明）。
+    #   判定依据 = `plan.params["_phase"]`（L3 在保护价真被抬高时写入），它与"最后把保护价
+    #   抬上去的那一层"恒同源 → 标的必然就是被跌破的那条线。
+    #   本组用的策略对象是 use_trailing=False（L3 不跑）、`_phase` 直接注入计划参数 ——
+    #   这恰好也在证明"reason 路由只读计划快照"：既与 L3 是否启用无关，也覆盖旧 state.db
+    #   恢复的、缺 `_phase` 的持仓（退回 "sl"）。
+    for _ph, _want, _name in (("", "sl", "未进 L3（无 _phase）"),
+                              ("breakeven", "breakeven", "已进保本"),
+                              ("trailing", "trailing", "已进跟踪")):
+        _p = {"R": 5.0}
+        if _ph:
+            _p["_phase"] = _ph
+        _chk_r = pol.check(_pos(params=_p), _bar(3997.0, 3993.0, 3994.0), st)
+        check("[8] 多仓 {} → reason = {}".format(_name, _want),
+              _chk_r.reason if _chk_r else None, _want)
+    _chk_s = pol.check(_pos(Side.SHORT, 4000.0, 4005.0,
+                            params={"R": 5.0, "_phase": "trailing"}),
+                       _bar(4007.0, 4003.0, 4006.0), st)
+    check("[8] 空仓镜像（跟踪层）→ reason = trailing",
+          _chk_s.reason if _chk_s else None, "trailing")
+    check("[8] reason 细分不改变 price 语义（触发价仍是保护价）",
+          _chk_s.price if _chk_s else None, 4005.0)
 
     print("\n" + "=" * 60)
     print("P61 结果: {} passed, {} failed".format(_PASS, _FAIL))

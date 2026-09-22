@@ -1728,19 +1728,22 @@ class TradingEngine(ReconcileMixin):
             self.notify(head, code="open_filled")
 
     def _notify_close(self, o: Order, act: "_Action", reason: str) -> None:
-        """平仓/锁仓成交 toast：说明是止盈还是止损（需求 ⑷(2)）。"""
-        phase = ""
-        if self._run_plan is not None:
-            phase = str(self._run_plan.params.get("_phase") or "")
+        """平仓/锁仓成交 toast：说明是止盈还是止损（需求 ⑷(2)）。
+
+        ⚠️ 文案只按 `reason` 路由（2026-09-22 改）：`reason` 本身已细分到**哪一层保护价被
+        跌破**（`breakeven` / `trailing`，见 `Strategy/Exit.py` 的 reason 口径），不再回读
+        `_run_plan.params["_phase"]` —— 那本来是同一件事的第二份副本，两处判断迟早分叉。
+        文案说的是"哪条规则说的"，与"这笔实际赚没赚"无关：保本离场也可能被滑点打成净亏，
+        那是成交结果，统计侧按 net_cash 分（见 `Infra/TradeStats.py`）。
+        """
         if reason == "tp":
             label = "止盈"
+        elif reason == "breakeven":
+            label = "保本止损"
+        elif reason == "trailing":
+            label = "移动止盈（跟踪止损触发）"
         elif reason == "sl":
-            if phase == "trailing":
-                label = "移动止盈（跟踪止损触发）"
-            elif phase == "breakeven":
-                label = "保本止损"
-            else:
-                label = "止损"
+            label = "止损"
         elif reason == "auto_order_off_retry":
             label = "关闭自动下单离场"
         else:
@@ -2362,18 +2365,30 @@ class TradingEngine(ReconcileMixin):
         # （gross_points），净统计一律 net_cash。
         trades = self.store.trades()
         n = len(trades)
+        # 胜 / 负 / 平三分类，口径与 Infra/TradeStats.summarize() **一致**：
+        #   net_cash > 0 = 胜、< 0 = 负、== 0 = 平（"平"计入分母、不计胜，也不算亏损）。
+        #   原实现把 `<= 0` 全算负 —— 净额恰为 0 的那笔（手续费吃光毛利）会被报成亏损，
+        #   与统计侧的三分口径分叉；2026-09-22 对齐（本项目内两处同名统计只留一个口径）。
         wins = [t for t in trades if t["net_cash"] > 0]
-        losses = [t for t in trades if t["net_cash"] <= 0]
+        losses = [t for t in trades if t["net_cash"] < 0]
+        flats = [t for t in trades if t["net_cash"] == 0]
         cash = sum(t["net_cash"] for t in trades)
+        # 按出场规则（reason）分组 —— 分的是**规则身份**，每组再给净额与胜 / 负 / 平笔数。
+        #   这样"保本这一组到底赚没赚"可以直接读出来（保本的名义愿望是止盈，但滑点后可能
+        #   净亏），不需要让 reason 本身去表达盈亏 —— 那是把规则和结果塞进同一个字段。
+        #   形状与 TradeStats.summarize()["by_reason"] 保持一致（n / wins / losses / flat / net）。
         by_reason: Dict[str, Any] = {}
         for t in trades:
             r = t["reason"]
-            by_reason.setdefault(r, {"n": 0, "net": 0.0})
-            by_reason[r]["n"] += 1
-            by_reason[r]["net"] = round(by_reason[r]["net"] + t["net_cash"], 2)
+            b = by_reason.setdefault(r, {"n": 0, "wins": 0, "losses": 0,
+                                         "flat": 0, "net": 0.0})
+            nc = t["net_cash"]
+            b["n"] += 1
+            b["net"] = round(b["net"] + nc, 2)
+            b["wins" if nc > 0 else "losses" if nc < 0 else "flat"] += 1
         return {
             "trades": n,
-            "wins": len(wins), "losses": len(losses),
+            "wins": len(wins), "losses": len(losses), "flat": len(flats),
             "win_rate": round(len(wins) / n, 4) if n else 0.0,
             "avg_win": round(sum(t["net_cash"] for t in wins) / len(wins), 2) if wins else 0.0,
             "avg_loss": round(sum(t["net_cash"] for t in losses) / len(losses), 2) if losses else 0.0,
