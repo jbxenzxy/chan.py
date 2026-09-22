@@ -269,6 +269,10 @@ COMPONENTS = [
     ("trade_stats_formulas",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_trade_stats_formulas.py")]),
+    # 账本面板展示契约（2026-09-22）：两节标题「持仓」「成交」、
+    # 持仓行去止损列、时间 YY/MM/DD HH:MM:SS、成交列表最新排在最后。
+    ("aol_ledger_display",
+     [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

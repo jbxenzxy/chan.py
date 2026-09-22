@@ -1087,13 +1087,13 @@ class AppTrader:
             # 轻提示队列（2026-09-18 需求 ⑷）：只投影，不判重 —— 前端按 ts 水位去重
             raw_toasts = s.get_json("toasts") or []
             # 引擎账单（C，2026-09-18）：前端账本面板要看"最近成交"——直接读
-            # trades 表取尾部 10 条（库内 exit_at 升序，倒序截取即最新在前）。
+            # trades 表取尾部 10 条（库内 exit_at 升序，原序截取，最新一条排在最后，2026-09-22 用户拍板）。
             # 只做投影，不 import 引擎、不判盈亏口径；旧 schema 读失败按空处理。
             try:
                 _all_trades = s.trades()
             except Exception:
                 _all_trades = []
-            trades_recent = list(reversed(_all_trades))[:10]
+            trades_recent = _all_trades[-10:]
             s.close()
             alerts = [a for a in raw_alerts
                       if isinstance(a, dict)

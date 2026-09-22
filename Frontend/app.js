@@ -8340,6 +8340,16 @@
             const n = Number(v);
             return (v === null || v === undefined || isNaN(n)) ? '--' : String(n);
         }
+
+        // 账本面板时间：ISO（2026-09-22T13:32:03+08:00）→ 26/09/22 13:32:03；
+        // 纯日期（2026-09-22）→ 26/09/22；解析不动就原样返回，不猜。
+        function fmtAolTime(s) {
+            const str = String(s || '');
+            let m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}:\d{2}:\d{2})/.exec(str);
+            if (m) return m[1].slice(2) + '/' + m[2] + '/' + m[3] + ' ' + m[4];
+            m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str);
+            return m ? m[1].slice(2) + '/' + m[2] + '/' + m[3] : str;
+        }
         function renderAutoOrderLedger(data) {
             autoOrderLedgerData = data;
             const panel = document.getElementById('auto-order-ledger-panel');
@@ -8355,13 +8365,11 @@
                 } else {
                     posEl.innerHTML = ps.map(function (p) {
                         const long = (p.side === 'LONG');
-                        const stop = p.exit_plan && p.exit_plan.stop_price;
                         return '<div class="aol-row">'
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + ' ' + p.volume + '手</span>'
                             + '<span>@ ' + fmtAolPx(p.entry_price) + '</span>'
-                            + '<span>止损 ' + fmtAolPx(stop) + '</span>'
-                            + '<span class="aol-dim">' + (p.entry_at || p.entry_date || '')
+                            + '<span class="aol-dim">' + fmtAolTime(p.entry_at || p.entry_date || '')
                             + '</span></div>';
                     }).join('');
                 }
@@ -8383,7 +8391,7 @@
                             + fmtAolPx(t.exit_price) + '</span>'
                             + '<span class="' + netCls + '">净 '
                             + (isNaN(net) ? '--' : net.toFixed(2)) + '</span>'
-                            + '<span class="aol-dim">' + (t.exit_at || '')
+                            + '<span class="aol-dim">' + fmtAolTime(t.exit_at || '')
                             + '</span></div>';
                     }).join('');
                 }
