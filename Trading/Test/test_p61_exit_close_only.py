@@ -28,13 +28,18 @@ P61 出场判定「触发看收盘价 / 达标看根内极值」防回潮护栏�
     做多 `bar.high`、做空 `bar.low`。
     理由：它衡量的不是"能否成交"，而是"这一段行情最远走到过哪里"。用收盘价衡量会把
     「盘中冲高 1.5R、收盘回落到 0.3R」那根判成不达标，利润继续裸奔到 −1R。
-    代价（已知并接受）：达标那根的**收盘价**可能落在**新设的保护价**的不利侧
-    （high 到 +1.2R、收盘回到 +0.1R，保本价设 +0.5R）。
-    ⚠️ 但代价的形态**不是**"同一根内设定即失效" —— 同一根绝不二次判定：
-    ① 触发判据在 `check()` 里排得更早、用的是进入本根时的**旧**保护价；达标命中后立即
-    `only_update=True` 返回（只更新计划、不报单），引擎随即 return，同一根不再做任何
-    触发判定 → 新保护价最快只能在**下一根**生效。代价的真实形态是"下一根只要收盘仍在
-    保护价不利侧就立刻离场"，即"常在设定后的下一根即走"。由本文件 [7] 组钉死该时序。
+
+  · **两步的顺序 = 先按极值抬保护价，再用本根收盘价判触发**（2026-09-22 · 用户拍板改版；
+    旧顺序"触发判据在前、达标命中即 `only_update` 返回"已废弃）。理由：一根 K 线闭合时，
+    "最远走到过哪里"与"收在哪里"都已成定局，没有理由把已经回落的区间拖到下一根 ——
+    一根振幅过大的 K 线因此**当根**就能离场。
+    ⚠️ 由此产生的**当根离场**是刻意接受的代价：达标用的极值可能远优于收盘价，而新保护价
+    正是按极值算出来的 → 本根收盘若已落在**新**保护价的不利侧（high 到 +3R、跟踪价设在
+    +2.5R、收盘回到 +2R），本根即判离场、以该根收盘价成交。代价是"冲高回落"形态里下车
+    更早、更容易被一根长上影打掉；收益是不再承担"达标根收盘 → 下一根收盘"之间的漂移。
+    两边优劣取决于达标根之后那根的收盘分布，**不是"更早锁利"这么单向**。
+    本文件 [6]/[7] 两组钉死它：抬价后的保护价恒参与本根触发判定；达标根收盘落在新价
+    **有利侧**时才走 `only_update`；两段判据的**先后**另由 [1] 组的 AST 行号断言钉死。
 
 为什么写成源码级 AST 断言，而不是只写行为样本
 ----------------------------------------------
@@ -68,6 +73,9 @@ P61 出场判定「触发看收盘价 / 达标看根内极值」防回潮护栏�
 2026-09-22 首次改口径时被整体删除、等价守护搬到这里；同日二次拍板把达标侧改回极值后，
 本文件 [5] 恢复为"用 high 抬多高当浮盈"的原形状，并额外钉住**触发侧仍只看收盘价**
 （[3] 与 [1] 的 AST 断言）。
+[5] 判"L3 是否启动"用的是计划里的阶段身份 `plan.params["_phase"]`，**不是** `only_update`
+—— 时序改版后同一根可以"先抬价、再判出跌破"，启动的那几根本根就离场了
+（`only_update=False`），拿 `only_update` 当启动判据会在新时序下整片假红。
 
 跑法：python Trading/Test/test_p61_exit_close_only.py
 """
@@ -152,6 +160,41 @@ def _high_low_owners(tree):
     return owners
 
 
+def _line_of(fn_node, pred):
+    """fn_node 内满足 pred 的节点里**最小**行号（找不到 → None）。
+
+    用于"两段代码谁在前"的先后断言：AST 行号是 1-based、且随文件整体移动，
+    所以比"绝对行号等于多少"稳健得多 —— 这里要钉的正是**相对顺序**本身。
+    """
+    if fn_node is None:
+        return None
+    lns = [getattr(n, "lineno", None) for n in ast.walk(fn_node) if pred(n)]
+    lns = [x for x in lns if x is not None]
+    return min(lns) if lns else None
+
+
+def _close_trigger_line(fn_node):
+    """触发比较（`close < stop` / `close > stop`）所在 If 的行号（找不到 → None）。
+
+    识别方式 = If 的 test 里有一个 Compare，其操作数含名为 `close` 的局部变量 ——
+    这正是"触发判据只读本根收盘价"在源码里的形状。
+    """
+    if fn_node is None:
+        return None
+    lns = []
+    for node in ast.walk(fn_node):
+        if not isinstance(node, ast.If):
+            continue
+        for sub in ast.walk(node.test):
+            if not isinstance(sub, ast.Compare):
+                continue
+            operands = [sub.left] + list(sub.comparators)
+            if any(isinstance(x, ast.Name) and x.id == "close" for x in operands):
+                lns.append(node.lineno)
+    return min(lns) if lns else None
+
+
+
 def main():
     print("\n[1] 源码级：check() 的价格输入只有 bar.close；达标极值只经 _fav_extreme()")
     with io.open(_SRC, "r", encoding="utf-8") as f:
@@ -199,6 +242,18 @@ def main():
     ext_attrs = _attrs_in(ext) if ext is not None else set()
     check("[必现] _fav_extreme() 仍读 .high（做多有利侧）", "high" in ext_attrs, True)
     check("[必现] _fav_extreme() 仍读 .low（做空有利侧）", "low" in ext_attrs, True)
+
+    # 两段判据的**先后**（2026-09-22 用户拍板改版）：L3 达标判定必须排在触发判定**之前**
+    #   —— 顺序一反，"本根抬价后的保护价立即参与本根触发判定"就断了（当根离场失效）。
+    #   行为样本只能证明"我构造的这几根走对了"，挡不住有人把两段调回去 → 这里比 AST 行号。
+    _ln_ext = _line_of(chk, lambda n: isinstance(n, ast.Call)
+                       and isinstance(n.func, ast.Attribute)
+                       and n.func.attr == "_fav_extreme")
+    _ln_trig = _close_trigger_line(chk)
+    check("[必现] 找得到 _fav_extreme() 调用行与触发比较行（先后断言的判据）",
+          (isinstance(_ln_ext, int), isinstance(_ln_trig, int)), (True, True))
+    check("[时序] L3 达标判定（_fav_extreme）排在触发判定（close 比较）之前",
+          (_ln_ext is not None and _ln_trig is not None and _ln_ext < _ln_trig), True)
 
     print("\n[2] 源码级：已作废的「同根双破取悲观」规则不得回潮")
     check("保守设定表里不再有「① 同根…按止损计」这一条",
@@ -339,7 +394,14 @@ def main():
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
 
     def _l3_started(pol, high, ts):
-        """R=10、入场 100 的单根 bar：high 抬到 high → L3 是否启动。"""
+        """R=10、入场 100 的单根 bar：high 抬到 high → L3 是否启动。
+
+        ⚠️ 判据是**计划里的阶段身份** `_phase`，不是 `only_update`：2026-09-22 时序改版后
+        同一根可以"先按极值抬价、再按收盘价判出跌破"。本组把收盘价固定在入场价 100，而
+        跟踪价（= high − trailing_trigger_r×R ≈ 125）必然在它上方 → "启动"的那几根本根
+        就离场了（`only_update=False`）。用 `_phase` 判"这根有没有把保护价抬进 L3"，
+        与"这根是否离场"解耦 —— 阈值边界才是本组真正要钉的东西。
+        """
         p = Position(symbol="CFFEX.IF", side=Side.LONG, volume=1,
                      entry_price=100.0, entry_at="2026-09-01 09:40",
                      entry_bar_ts=1000, signal_key="k2", open_order_id="o2",
@@ -349,7 +411,8 @@ def main():
         bar = Bar(timestamp=ts, date="2026-09-01 09:40", open=100.0,
                   high=high, low=95.0, close=100.0, vol=1)
         chk = pol.check(p, bar, st)
-        return bool(chk is not None and chk.only_update)
+        return bool(chk is not None and chk.plan is not None
+                    and chk.plan.params.get("_phase") == "trailing")
 
     check("IC(3R) high 2.99R 不启动 L3（阈值严格 > 的下侧）",
           _l3_started(pol_ic, 129.9, 2710), False)
@@ -364,66 +427,93 @@ def main():
     check("同一 2.5R：IC(3R) 不启动", _l3_started(pol_ic, 125.0, 2716), False)
     check("同一 2.5R：IF(2R) 已启动", _l3_started(pol_if, 125.0, 2717), True)
 
-    print("\n[6] 两层判据的优先级：同一根 K 线上「收盘打穿止损」优先于「极值达标」")
-    # 触发判据在 check() 里排在 L3 之前：一根 high 冲到 2R、收盘却砸穿 −1R 止损的巨阴
-    # → 必须先离场（返回 sl），不能因为极值达标而去抬损、把仓留着。
+    print("\n[6] 同一根：极值达标抬价 → 收盘跌破新价 → **当根离场**")
+    # 一根 high 冲到 2R、收盘又砸回 −1R 之外的巨阴：新时序下先按极值把保护价抬到跟踪位
+    #   （3995 → 保本 4005 → 跟踪 4020），再用本根收盘 3988 判出跌破 → 当根离场。
+    #   ⚠️ 这条**替换**了旧的"触发优先（判 sl、不抬损）"语义：旧语义只成立于"触发判据排在
+    #   达标之前"的时序，该时序已废弃（2026-09-22 拍板）。离场原因从此记的是"哪一层保护价
+    #   被跌破"，而不是"本根极值最高到过哪、收盘又跌回哪里"。
     chk_both = LayeredExitPolicy(
         {"use_atr": False, "breakeven_trigger_r": 1.0,
          "breakeven_buffer_r": 0.5, "win_loss_ratio": 2.0}).check(
         _pos(params={"R": 10.0, "_trail_best": 4000.0}),
         Bar(timestamp=2000, date="2026-09-01 09:40", open=4000.0,
             high=4025.0, low=3985.0, close=3988.0, vol=1), st)
-    check("[6a] 同根 high 达标 + 收盘破止损 → 判 sl（触发优先，不抬损）",
-          (chk_both.reason, chk_both.price) if chk_both else None,
-          ("sl", 3995.0))
+    check("[6a] 同根达标 + 收盘跌破新保护价 → 当根离场，触发价 = 抬价后的保护价",
+          (chk_both.reason, chk_both.price, chk_both.fill_price) if chk_both else None,
+          ("trailing", 4020.0, 3988.0))
     check("[6b] 该结果不是 only_update（确实登场离场）",
           chk_both.only_update if chk_both else None, False)
+    # [6c] 登场离场时 **plan 也必须带出**：引擎靠它落盘"保护价已抬到 4020"并补发阶段
+    #      通知。若实现只在 only_update 路径给 plan，这条立即变红
+    #      （引擎侧的"因进跟踪而离场"因果链会断）。
+    check("[6c] 登场离场同时带出计划（新保护价 + 新层身份）",
+          (chk_both.plan.stop_price,
+           chk_both.plan.params.get("_phase")) if chk_both and chk_both.plan else None,
+          (4020.0, "trailing"))
 
-    print("\n[7] 时序：达标当根**不登场**，新保护价最快下一根才生效")
-    # 针对一个易被误读的点：极值口径下"达标那根的 close 落在新保护价不利侧"，
-    #   形似"保护价一设定就已失效"。代码事实是**同一根绝不二次判定**：
-    #     · ① 触发判据用**旧**保护价（3990）判本根 close —— 没穿，故不返回；
-    #     · ② L3 用 high 达标 → 只更新计划（only_update=True），随即 return；
-    #       Trading/Engine/Engine.py 收到 only_update 后也只 `_persist()` 就 return。
-    #   → 离场最快只能发生在**下一根**。若有人把 L3 挪到 ① 之前，或让 L3 命中后继续
-    #     往下判触发（改成 same-bar 二次判定），[7a]/[7b] 必红。
-    pol4 = LayeredExitPolicy({"use_atr": False, 
+    print("\n[7] 时序：达标根**当根**即用新保护价判触发（先抬价、再判跌破）")
+    # 2026-09-22 用户拍板改版：同一根 K 线先按有利侧极值抬高保护价，再用同一根收盘价判
+    #   它有没有被跌破 —— 振幅过大的一根因此**当根**就能离场。旧实现（达标即 return、
+    #   新保护价下一根才生效）已废弃；本组两条即那条时序的钉子：
+    #     · 若有人把 L3 挪到触发判定之后 → [7a] 退回"只更新计划"（变红）；
+    #     · 若有人让 L3 命中后仍只有**旧**保护价参与触发（新价本根不生效）→
+    #       [7a] 的 price 会变成旧保护价 3990，断言变红。
+    pol4 = LayeredExitPolicy({"use_atr": False,
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.5,
                               "win_loss_ratio": 99.0})
-    # 7a 达标根：high=4015（≥1R）→ 保本价从 3990 抬到 4005；而这根 close=4001 **低于** 4005
-    #    （即"新保护价不利侧"）；low=3991 未穿旧止损 3990。
+    # 7a 达标根 close 落在**新**保护价不利侧：high=4015（> 1R）→ 保本价 3990 → 4005；
+    #    本根 close=4001 < 4005 → **当根离场**，reason = 被跌破的那一层（breakeven）。
     chk_d0 = pol4.check(
         _pos(stop=3990.0, params={"R": 10.0, "_trail_best": 4000.0}),
         Bar(timestamp=2000, date="2026-09-01 09:40", open=4000.0,
             high=4015.0, low=3991.0, close=4001.0, vol=1), st)
-    check("[7a] 达标根：close 落在**新**保本价不利侧 → 仍只更新计划、保本抬到 4005",
-          # plan 可能为 None（若实现被改成"同根直接登场"）→ 必须先判空，
-          # 否则负控树里会崩成 rc=2，证据从"红"退化成"崩"。
-          (chk_d0.reason, chk_d0.only_update,
-           chk_d0.plan.stop_price if chk_d0.plan is not None else None)
-          if chk_d0 else None, ("trailing", True, 4005.0))
-    check("[7b] 该根**没有**被新保护价触发离场（only_update 路径不带成交参考价）",
-          chk_d0.fill_price if chk_d0 else None, None)
+    check("[7a] 达标根 close 落在**新**保本价不利侧 → 当根离场（reason = 抬价后的层）",
+          (chk_d0.reason, chk_d0.price, chk_d0.fill_price, chk_d0.only_update,
+           chk_d0.plan.stop_price if chk_d0 and chk_d0.plan is not None else None)
+          if chk_d0 else None, ("breakeven", 4005.0, 4001.0, False, 4005.0))
 
-    # 7c 下一根：close=4002 仍 < 4005 → 这时才以新保护价判 sl（fill 以收盘成交价为准）
+    # 7b 达标根 close 落在**新**保护价有利侧（4008 > 4005）→ 只更新计划、不离场。
+    #    与 [7a] 成对：证明新时序**不是**"一达标就离场" —— 离场仍只由"收盘跌破保护价"决定。
+    chk_d0b = pol4.check(
+        _pos(stop=3990.0, params={"R": 10.0, "_trail_best": 4000.0}),
+        Bar(timestamp=2001, date="2026-09-01 09:41", open=4000.0,
+            high=4015.0, low=3991.0, close=4008.0, vol=1), st)
+    check("[7b] 达标但 close 在新保本价有利侧 → 只更新计划、当根不离场",
+          (chk_d0b.reason, chk_d0b.only_update,
+           chk_d0b.plan.stop_price if chk_d0b and chk_d0b.plan is not None else None)
+          if chk_d0b else None, ("breakeven", True, 4005.0))
+    check("[7b'] only_update 路径不带成交参考价（不得凭空给 fill_price）",
+          chk_d0b.fill_price if chk_d0b else None, None)
+
+    # 7c 未达标根（high 只到 4008 < 4010）→ 计划不动、也不触发（本根无任何返回）
+    chk_none = pol4.check(
+        _pos(stop=3990.0, params={"R": 10.0, "_trail_best": 4000.0}),
+        Bar(timestamp=2002, date="2026-09-01 09:42", open=4000.0,
+            high=4008.0, low=3991.0, close=4001.0, vol=1), st)
+    check("[7c] 未达标根：close 未破旧保护价 → 返回 None（既不抬价也不离场）",
+          chk_none, None)
+
+    # 7d 跨根路径未变：保护价已是 4005、本根未再抬价，close=4002 < 4005 → 照常离场。
+    #    （reason 走计划快照：plan 无 `_phase` → "sl"，与本根是否抬价无关）
     chk_d1 = pol4.check(
         _pos(stop=4005.0, params={"R": 10.0, "_trail_best": 4015.0}),
-        Bar(timestamp=2001, date="2026-09-01 09:41", open=4002.0,
+        Bar(timestamp=2003, date="2026-09-01 09:43", open=4002.0,
             high=4006.0, low=3998.0, close=4002.0, vol=1), st)
-    check("[7c] 下一根 close 4002 < 新保护价 4005 → 这时才离场",
+    check("[7d] 后续根照常按既有保护价触发（跨根路径未变）",
           (chk_d1.reason, chk_d1.price, chk_d1.fill_price, chk_d1.only_update)
           if chk_d1 else None, ("sl", 4005.0, 4002.0, False))
 
-    # 7d 空仓镜像：low 达标 → 保本压到 3995，而该根 close=3999 在不利侧 → 仍不登场
+    # 7e 空仓镜像：low=3985 达标 → 保本价 4010 → 3995；本根 close=3999 > 3995（不利侧）
+    #    → 当根离场。多空两侧必须同口径（只改多不改空是最容易犯的漏改）。
     chk_s0 = pol4.check(
         _pos(Side.SHORT, 4000.0, 4010.0, params={"R": 10.0, "_trail_best": 4000.0}),
-        Bar(timestamp=2002, date="2026-09-01 09:40", open=4000.0,
+        Bar(timestamp=2004, date="2026-09-01 09:44", open=4000.0,
             high=4009.0, low=3985.0, close=3999.0, vol=1), st)
-    check("[7d] 空仓镜像：close 落在**新**保本价不利侧 → 仍只更新计划、保本压到 3995",
-          (chk_s0.reason, chk_s0.only_update,
-           chk_s0.plan.stop_price if chk_s0.plan is not None else None)
-          if chk_s0 else None, ("trailing", True, 3995.0))
+    check("[7e] 空仓镜像：达标根 close 在新保本价不利侧 → 当根离场（压到 3995）",
+          (chk_s0.reason, chk_s0.price, chk_s0.fill_price, chk_s0.only_update)
+          if chk_s0 else None, ("breakeven", 3995.0, 3999.0, False))
 
     print("\n[8] reason 细分：保护价被跌破时标的是**哪一层**（2026-09-22 拍板）")
     # reason 只表达"哪条规则触发的离场"，**不表达盈亏**（保本离场也可能被滑点打成净亏，

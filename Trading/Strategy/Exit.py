@@ -20,17 +20,22 @@ L1-L3 一套，止盈只有 L3 跟踪一种。
       理由：它衡量的不是"能否成交"，而是"这一段行情最远走到过哪里"。用收盘价衡量会把
       "盘中冲高 1.5R、收盘回落到 0.3R"的那根判成**不达标**，于是本可锁住的利润继续裸奔
       到 −1R。极值口径下那根即进保本。代价见下一条。
-      ⚠️ 代价（**已知并接受**）：达标那根的**收盘价**可能落在新设的保本 / 跟踪价的
-      不利侧（例：high 到 +1.2R、收盘回到 +0.1R，而保本价设 +0.5R）。
-      **注意代价的确切形态不是"同一根内设定即失效"** —— 同一根 K 线绝不会二次判定：
-      触发判据在 `check()` 里排得更早、用的是本根入场时的**旧**保护价，而达标命中后
-      立即以 `only_update=True` 返回（只更新计划、不报单），本根不再做任何触发判定。
-      故离场只能发生在**下一根及以后**。代价的真实形态是：**下一根只要收盘仍在保护价
-      不利侧，就立刻以该名义离场** —— 表现为"保护价常在设定后的下一根即走"，锁利更早、
-      也更容易被紧接着的一次小回落打掉。收盘价口径则不可能出现此形态（保本：达标阈值
+      ⚠️ 由此产生**当根离场**（2026-09-22 · 用户拍板"先抬价、再判触发"，本段同步改写）：
+      达标用的极值可能远优于收盘价，而新保护价是按极值算出来的 —— 于是同一个极值既会把
+      保护价上抬，也会让"当前收盘"看起来已经跌破它。若本根收盘确实落在**新**保护价的
+      不利侧（例：high 冲到 +3R、跟踪价设在 +2.5R，而收盘回到 +2R），**本根即判离场**，
+      以该根收盘价作成交参考价（`fill_price`）。
+      这是刻意的：极值与收盘在"这根闭合之后"都已是定局，没有理由把已经回落的区间拖到
+      下一根才处理 —— 一根振幅过大的 K 线因此**当根**就能离场。旧实现（触发判据排在
+      达标之前、达标命中即 `only_update=True` 返回）把新保护价的生效推迟到下一根，已废弃。
+      代价是"冲高回落"形态里下车更早，也更容易被一根长上影线打掉；换来的是不再承担
+      "达标根收盘 → 下一根收盘"之间的漂移。两边优劣取决于达标根之后那根的收盘分布，
+      **不是"更早锁利"这么单向**。
+      本条由 `test_p61` 的 [6]/[7] 两组钉死（抬价后的保护价恒参与本根触发判定；
+      达标根收盘落在新价有利侧时才走 `only_update`）。
+      对照：**收盘价达标口径**（历史口径，已废弃）下该形态不可能出现 —— 保本阈值
       1R > 保本缓冲 0.5R ⇒ 达标那根 close ≥ entry+1R 必然在 +0.5R 保护价的**有利侧**；
-      跟踪同理：`stop = best − 0.5R` 而 best 取自 close ⇒ stop 恒在 close 不利侧之外）。
-      本条由 `test_p61` 的 [7] 组钉死（同根不登场 / 下一根才登场）。
+      跟踪同理：`stop = best − 0.5R` 且 best 取自 close ⇒ stop 恒在 close 的不利侧之外。
     · high/low 只允许经 `_fav_extreme()`（达标极值）与 `_atr()`（真实波幅 TR 的
       **定义式**，只做波动率度量、不参与任何判定）两处读，别处一律不得出现 ——
       由 `Trading/Test/test_p61_exit_close_only.py` 用 AST 钉死：`check()` 函数体内
@@ -95,6 +100,11 @@ class ExitCheck:
 
     only_update=True 表示"只更新出场计划、不登场"——移动止损 / 跟踪止盈走这条路。
     此时 plan 必须给，price 无意义（也不给 fill_price）。
+
+    ⚠️ 反过来不成立：`only_update=False`（登场离场）时 **plan 也可能非空** —— 同一根
+    K 线可以"先按有利侧极值抬保护价、再按收盘价判出跌破"（2026-09-22 时序，见 check()）。
+    调用方（Engine._settle_positions）遇到这种结果，要**先**把 plan 落盘 / 发阶段通知、
+    **再**走离场 —— 否则"因进保本 / 进跟踪而离场"的因果链会在事件流里断掉。
     """
     reason: str                       # 规则身份（**不表达盈亏**，见 check() 的 reason 口径）：
                                       #   breakeven（保本层保护价）/ trailing（跟踪层保护价）/
@@ -207,6 +217,22 @@ class LayeredExitPolicy:
         —— 谁在 `check()` 里直接写 `bar.high`，护栏立刻变红。
         """
         return float(bar.high if is_long else bar.low)
+
+    # ---------- 保护价的"层身份" → reason ----------
+    @staticmethod
+    def _phase_reason(plan: ExitPlan) -> str:
+        """保护价当前属于哪一层，即"被跌破时该记哪个 reason"（口径见 check()）。
+
+        层身份来自计划快照 `params["_phase"]`（L3 在保护价真的被抬高时写入）。只有两种
+        L3 层有名字；其余（未进 L3 的初始段 / 旧 state.db 恢复的、缺 `_phase` 的持仓）
+        一律回落 "sl" —— 那正是"还没被抬过的初始保护价"。
+
+        单独成函数是为了让"层身份"只有**一个**读取点：check() 读它、抬价后覆盖它。
+        若两处各写一份 `params.get("_phase")` 的映射，早晚会出现"抬价处认了 breakeven、
+        触发处仍按旧值记 sl"这类只坏一半的漏改。
+        """
+        phase = str(plan.params.get("_phase") or "")
+        return phase if phase in ("breakeven", "trailing") else "sl"
 
     # ---------- R 计算（L1 结构 + L2 波动率，取最大） ----------
     def _initial_r(self, signal, entry_price: float, state: "Instrument") -> float:
@@ -371,45 +397,40 @@ class LayeredExitPolicy:
         ra = plan.params.get("risk_anchor")
         entry = ra if ra else position.entry_price
         # R 快照缺失（旧版本 state.db 恢复的持仓）→ L3 跳过：保本/跟踪是 R 倍数语义，
-        #   R 未知时激进触发反而危险；止损线 / 止盈线均不依赖 R，不受影响
+        #   R 未知时激进触发反而危险；保护价本身不依赖 R，不受影响
         R = plan.params.get("R")
         R = float(R) if R is not None else None
         atr = self._atr()
-        # ① 止损线判定（L1 结构 R + L2 ATR 定宽给出）。价格线只有这一条 —— 止盈没有
-        #   独立的线：L3 的保本 / 跟踪都是**改写 stop_price**（见下方 ③）。
-        #   **触发判据的价格输入 = 本根 K 线的收盘价 `bar.close`**（2026-09-22 口径，见模块
+        # 触发判据的价格输入 = 本根 K 线的**收盘价** `bar.close`（2026-09-22 口径，见模块
         #   docstring）：不用 `bar.low` / `bar.high` —— 判定的时刻是"这根闭合之后"，依据也用
         #   "这根结束时的那个价"，两者才是同一个东西。代价是止损更晚更深（收盘才认），换来
         #   的是不被插针 / 瞬间打穿扫掉。
         #   （与 L3 的**达标判据**刻意不同：那一层衡量"行情最远走到过哪里"，读
         #   `_fav_extreme()` 的根内极值。两层口径不同是设计，不要"顺手统一"。）
         #   （“同根双破取悲观”那条旧规则已随固定止盈单一并删除：收盘价口径 + 严格
-        #   不等下本就不可达，且现在只有止损一条线，更无从“双破”。）
+        #   不等下本就不可达，且现在只有保护价一条线，更无从“双破”。）
         #   ⚠️ **止损侧三处一律严格不等**（2026-09-22 · 用户拍板"改为需求原文口径 ＜ / ＞"，
-        #   见模块 docstring）：收盘价恰好等于止损/保本/跟踪价 → 本根不动。保本价、跟踪价的
-        #   离场也走上面这两行 —— L3 是**改写 stop_price**、不另立字段（见下方 ③），故
-        #   ⑵ 止损与 ⑶ 保本 / 跟踪的触发口径天然是同一条，不存在"只改一半"的可能。
+        #   见模块 docstring）：收盘价恰好等于保护价 → 本根不动。保本价、跟踪价的离场也走
+        #   下面这两行 —— L3 是**改写 stop_price**、不另立字段（见 ① 末尾），故触发口径天然
+        #   是同一条，不存在"只改一半"的可能。
         #   ✏️ reason 记的是**哪一层保护价被跌破**（2026-09-22 拍板：reason 只表达"规则身份"，
-        #   **不表达盈亏**）：`_phase` 由 L3 在保护价真的被抬高时写入（见下方 ③），取它即可 ——
-        #      "breakeven" → 保本层保护价被跌破 → reason = "breakeven"
-        #      "trailing"  → 跟踪层保护价被跌破 → reason = "trailing"
-        #      其余（未进 L3 的初始段 / 旧 state.db 恢复的、缺 `_phase` 的持仓）→ "sl"
-        #   为什么不按"止盈 / 止损"写：保本离场也可能因滑点净亏、跟踪离场也可能只小赚 ——
-        #   那是**成交结果**，只有 net_cash 说得清（统计侧的 wins / losses 正是按它分的）。
-        #   `_phase` 与"最后把保护价抬上去的那一层"恒同源：保本与跟踪都只改 `stop_price`，
-        #   且跟踪层算出的价若没高过现有保护价就整个计划不写（下方 ③ 的回写条件），
-        #   故 `_phase` 标的必然就是被跌破的那条线。
-        _phase = str(plan.params.get("_phase") or "")
-        stop_reason = _phase if _phase in ("breakeven", "trailing") else "sl"
+        #   **不表达盈亏**）：层身份取 `_phase_reason(plan)`，本根若抬了价则用**新**层覆盖它
+        #   （见 ① 末尾）—— 保本离场也可能因滑点净亏、跟踪离场也可能只小赚，那是**成交结果**，
+        #   只有 net_cash 说得清（统计侧的 wins / losses 正是按它分的）。
         close = bar.close
-        if is_long:
-            if stop and close < stop:
-                return ExitCheck(stop_reason, stop, fill_price=close)
-        else:
-            if stop and close > stop:
-                return ExitCheck(stop_reason, stop, fill_price=close)
+        stop_reason = self._phase_reason(plan)
+        # 本根抬价后的新计划（None = 计划不动）。非空时 ② 用它的新保护价判定；且无论最终
+        #   是"登场离场"还是"只更新计划"，都要把它交给调用方落盘 / 发阶段通知。
+        updated: Optional[ExitPlan] = None
 
-        # ③ L3 移动/保本锁利（只更新计划、不登场）
+        # ① L3 达标判定：读本根**有利侧极值**升保护价 —— **必须排在触发判定之前**
+        #   （2026-09-22 · 用户拍板改版；旧顺序"触发在前、达标命中即 return"已废弃）。
+        #   为什么这个顺序才对：一根 K 线闭合时，"这段行情最远走到过哪里"（极值）与
+        #   "这根收在哪里"（收盘）**都已经成为定局**。先按极值定出本根立即生效的保护价，
+        #   再由 ② 用收盘价判它有没有被跌破 —— 振幅过大的那根因此**当根**就能离场，不必把
+        #   已经回落的区间拖到下一根才处理（旧顺序下新保护价最快下一根才生效）。
+        #   本块的 `_fav_extreme()` 调用行必须早于 ② 的触发比较行 —— 由 test_p61 的 [1] 组
+        #   用 AST 行号钉死：只靠行为样本挡不住"有人把两段调回去"。
         #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出
         #   （评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
         #   里被静默吞掉；显式化后行为不变，但把「R=0 则 L3 不跑」这条写在明处
@@ -421,12 +442,9 @@ class LayeredExitPolicy:
             #   与触发判据刻意分开，见模块 docstring）：
             #   best = 至今见过的最好极值（单调），浮盈 = (best − 风控锚)·sign。
             #   为什么用极值而不是收盘价：达标衡量的是"行情最远走到过哪里"，不是"能否成交"。
-            #   盘中冲高到 win_loss_ratio×R 而收盘回落的那根，即算达标 → 更早锁利；
-            #   代价是达标那根的收盘价可能落在新保护价的不利侧（见模块 docstring 的 ⚠️）。
-            #   **本块绝不会"设定即失效"**：上面的 ① 触发判据已用**旧**保护价判过本根并按
-            #   `close` 返回；本块命中后一律 `only_update=True`（只更新计划、不报单），
-            #   引擎在 check_with 之后立即 return，同一根不再做任何触发判定 →
-            #   新保护价最快只能在**下一根**生效（test_p61 [7] 组钉死这条时序）。
+            #   盘中冲高到 win_loss_ratio×R 而收盘回落的那根，即算达标 → 保护价当根就抬；
+            #   而那根收盘若已落在**新**保护价的不利侧，紧接着的 ② 就当根判离场（代价见
+            #   模块 docstring）。
             #   本文件里为"是否达标"读 high/low 的**唯一**决策点 = `_fav_extreme()`
             #   （护栏 test_p61 钉死：check() 里直接写 bar.high 立刻变红）。
             #   win_loss_ratio 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）。
@@ -440,8 +458,8 @@ class LayeredExitPolicy:
                                 and fav_profit > self.win_loss_ratio * R)
             new_stop = stop
 
-            # 保本/锁利：浮盈 **>** breakeven_trigger_r·R → 止损抬至 入场价 ± breakeven_buffer_r·R
-            #   breakeven_buffer_r=0 → 真正保本（止损=入场价）；=0.5 → 锁定 0.5R（与品种/周期解耦）
+            # 保本/锁利：浮盈 **>** breakeven_trigger_r·R → 保护价抬至 风控锚 ± breakeven_buffer_r·R
+            #   breakeven_buffer_r=0 → 真正保本（保护价 = 风控锚）；=0.5 → 锁定 0.5R（与品种/周期解耦）
             #   恰好等值那根不抬（严格不等；与该阈值同为"严格"的还有上面的 tracking_started）。
             if self.breakeven_trigger_r > 0 and fav_profit > self.breakeven_trigger_r * R:
                 be = (entry + self.breakeven_buffer_r * R) if is_long \
@@ -450,9 +468,9 @@ class LayeredExitPolicy:
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be
 
-            # 跟踪：浮盈 **>** win_loss_ratio·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
+            # 跟踪：浮盈 **>** win_loss_ratio·R → 跟踪保护价（trail_dist = trailing_trigger_r × R，
             #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）
-            if self.win_loss_ratio > 0 and fav_profit > self.win_loss_ratio * R:
+            if tracking_started:
                 trail_dist = self.trailing_trigger_r * R
                 if trail_dist and trail_dist > 0:
                     tgt = (best - trail_dist) if is_long else (best + trail_dist)
@@ -460,11 +478,6 @@ class LayeredExitPolicy:
                     if (is_long and tgt > new_stop) or (not is_long and tgt < new_stop):
                         new_stop = tgt
 
-            # 回写条件（二选一，避免每根 bar 都刷事件日志）：
-            #   a) 止损真的动了；
-            #   b) 跟踪已启动且"最好极值"创新高 —— 补旧实现的缺口：原实现只在 new_stop
-            #      变化时回写 _trail_best，"新高但止损未变"（如 ATR 同步放大）时该值被丢弃，
-            #      后续跟踪距离偏松。保本阶段（跟踪未启动）不回写，避免日志刷屏。
             # 阶段标记（需求 ⑷(3)(4)，2026-09-18）：引擎据此在阶段跃迁时 toast。
             # 策略层只负责标注当前风控阶段，通知职责在引擎。
             if tracking_started:
@@ -474,12 +487,32 @@ class LayeredExitPolicy:
                 phase = "breakeven"
             else:
                 phase = ""
+            # 回写条件（二选一，避免每根 bar 都刷事件日志）：
+            #   a) 保护价真的动了；
+            #   b) 跟踪已启动且"最好极值"创新高 —— 补旧实现的缺口：原实现只在 new_stop
+            #      变化时回写 _trail_best，"新高但保护价未变"（如 ATR 同步放大）时该值被丢弃，
+            #      后续跟踪距离偏松。保本阶段（跟踪未启动）不回写，避免日志刷屏。
+            #   两个条件都蕴含 phase 非空（抬价 ⇐ 对应层达标），故 reason 一定能跟上新层。
             if new_stop != stop or (tracking_started and best != prev_best):
                 params = dict(plan.params)
                 params["_trail_best"] = best
                 params["_phase"] = phase
-                return ExitCheck("trailing", 0.0, only_update=True,
-                                plan=ExitPlan(self.name, new_stop, params=params))
+                updated = ExitPlan(self.name, new_stop, params=params)
+                stop = new_stop                       # 本根起生效：② 判的就是这条**新**保护价
+                if phase in ("breakeven", "trailing"):
+                    stop_reason = phase               # reason 跟着"最后抬价的那一层"
+
+        # ② 触发判定（只读本根收盘价；比的是**本根生效**的保护价 —— ① 抬过就是新价）
+        if is_long:
+            if stop and close < stop:
+                return ExitCheck(stop_reason, stop, fill_price=close, plan=updated)
+        else:
+            if stop and close > stop:
+                return ExitCheck(stop_reason, stop, fill_price=close, plan=updated)
+
+        # ③ 只更新计划、不报单（保本 / 跟踪位移）：计划已动，交给调用方落盘 + 发阶段通知
+        if updated is not None:
+            return ExitCheck(stop_reason, 0.0, only_update=True, plan=updated)
         return None
 
 

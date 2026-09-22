@@ -803,8 +803,13 @@ class TradingEngine(ReconcileMixin):
           · 风控锚 = 净敞口从 0 变非 0 那次的成交价（`_run_anchor`）；
           · 出场计划挂在引擎上（`_run_plan`），不挂在某笔仓单上。
         这样"空仓做多"与"锁仓平空后转多"用的是同一份计划 —— 场景 X / Y 等价。
-
         触发后交给 `_force_exit`（转移 ④ 或 ⑤，按最近一笔仓单的建仓交易日决定）。
+
+        ⚠️ 同一根 K 线可以**既更新计划又离场**（2026-09-22 时序改版）：策略先按有利侧
+        极值把保护价抬到新层，再用本根收盘价判出跌破。故"计划更新"的三件副效应（落盘 /
+        阶段 toast / `exit_plan_update` 事件）由下面的**公共路径**处理，不绑在
+        `only_update` 上 —— 否则这种根只剩一条离场事件，"因进保本 / 进跟踪而离场"
+        的因果链在事件流里断掉。
         """
         if self.account_state() is not AccountState.RUNNING:
             return
@@ -826,10 +831,13 @@ class TradingEngine(ReconcileMixin):
 
         prev_phase = (str(self._run_plan.params.get("_phase") or "")
                       if self._run_plan is not None else "")
+        # 计划更新是**公共副效应**，与"这一根是否离场"无关：2026-09-22 时序改版后，同一根
+        #   K 线可以"先按有利侧极值抬保护价、紧接着按收盘价判出跌破"（Exit.check 的 ①→②），
+        #   这种根**既登场离场、也已经把计划抬到了新层**。若仍把计划副效应关在 `only_update`
+        #   分支里，它就只会留下一条离场事件 —— 事后（含 state.db 的 exit_plan_params）看不到
+        #   这笔单为何在当前价就走。
         if check.plan is not None:
             self._run_plan = check.plan
-        if check.only_update:
-            # 只更新计划（保本 / 跟踪位移），不触发离场。
             # 阶段跃迁（"" → breakeven → trailing）= 盈利达标时刻 → toast（需求 ⑷(3)(4)）
             new_phase = str(self._run_plan.params.get("_phase") or "")
             if new_phase and new_phase != prev_phase:
@@ -839,6 +847,8 @@ class TradingEngine(ReconcileMixin):
                           stop=self._run_plan.stop_price,
                           symbol=run.symbol,
                           position_signal_key=run.signal_key)
+        if check.only_update:
+            # 只更新计划（保本 / 跟踪位移），不触发离场。
             return
 
         self._force_exit(bar, reason=check.reason, trigger_price=check.price,

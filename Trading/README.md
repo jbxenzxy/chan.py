@@ -350,7 +350,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 「今仓 / 跨日」判据 = 最近一笔的 `entry_date` 是否等于当前交易日。运行/锁仓态下簿内仓单
 要么全是今仓、要么全是跨日仓，不可能混合（模块 docstring，`Engine/Engine.py:29`）。
-表实现：`_decide_action` `Engine/Engine.py:1024`、`_decide_exit` `Engine/Engine.py:1064`。
+表实现：`_decide_action` `Engine/Engine.py:1034`、`_decide_exit` `Engine/Engine.py:1074`。
 
 **CTP 报文层只认三种 offset**：`OPEN` / `CLOSE`（恒平昨）/ `CLOSETODAY`（按执行策略表第 1 列），
 见 `OrderIntent` `Infra/Records.py:91` 与 `INTENT_TO_OFFSET` `Broker/Base.py:84`。
@@ -365,8 +365,8 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 ### 6.4 每根 K 线的处理顺序
 
-1. **先结算已有持仓** —— 用刚闭合 K 线的 high/low 判止盈止损（`_settle_positions` `Engine/Engine.py:799`）
-2. **再处理落在这根 K 线上的信号** —— 决定开仓（`on_signal` `Engine/Engine.py:864`）
+1. **先结算已有持仓** —— 用刚闭合 K 线判出场：**收盘价判触发、有利侧极值判达标**（`_settle_positions` `Engine/Engine.py:799`）
+2. **再处理落在这根 K 线上的信号** —— 决定开仓（`on_signal` `Engine/Engine.py:874`）
 
 反过来会变成"同一根 K 线内既开仓又平仓"，是回测里最常见的作弊来源。
 
@@ -375,7 +375,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 - **入场那根 K 线不参与出场判定** —— 结算时跳过 `bar.timestamp <= run.entry_bar_ts` 的 K 线
 - **重复 / 回退的 bar 直接丢弃** —— SSE 重发或断线重连补发历史帧
 
-### 6.5 出场：L1-L3 分层（`Strategy/Exit.py:117`）
+### 6.5 出场：L1-L3 分层（`Strategy/Exit.py:127`）
 
 | 层 | 干什么 | 参数 |
 |---|---|---|
@@ -384,16 +384,25 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 | L3 | 保本 + 跟踪锁利 | 浮盈 **>** `breakeven_trigger_r`×R 时把止损抬到入场价 ± `breakeven_buffer_r`×R；跟踪缓冲 = `trailing_trigger_r`×R |
 
 价格线**只有一条 `stop_price`**（初始止损 → 保本 → 跟踪，逐级改写它），所以不存在
-"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:361`），
+"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:387`），
 止盈完全交给 L3 的跟踪兑现。两个"浮盈达标"阈值（进保本 / 进跟踪）与止损线一律**严格不等**
 （`>` / `<`，"恰好相等"不算触发）—— 离场因此晚一格、不会提前打掉。
 
+**每根 K 线内的判定顺序 = 先按有利侧极值抬保护价，再用本根收盘价判触发**
+（`LayeredExitPolicy.check()` `Strategy/Exit.py:390`）：`check()` 先读根内极值（做多 `high` /
+做空 `low`）定出**本根立即生效**的保护价，再拿本根收盘价比它 —— 达标那根若收盘已落在**新**
+保护价的不利侧，**当根即离场**（成交参考价 = 该根收盘价，`fill_price`）。旧顺序（触发判据在
+前、达标命中即只更新计划、新保护价最快下一根生效）已废弃。代价是"冲高回落"形态里下车更早、
+更容易被一根长上影打掉；收益是不再承担"达标根收盘 → 下一根收盘"之间的漂移 —— 两边优劣
+取决于达标根之后那根的收盘分布，不是"更早锁利"这么单向。两段判据的**先后**由护栏
+`Test/test_p61_exit_close_only.py` 用 AST 行号钉死（`_fav_extreme()` 调用必须早于触发比较）。
+
 L3 启动阈值 = 品种级 `win_loss_ratio`（IC/IM = 3R、其余 = 2R），故不同品种进 L3 的时机
-天然不同（`Strategy/Exit.py:439-440`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
+天然不同（`Strategy/Exit.py:457-458`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
 `stop_at_signal_extreme` 开关均已删除。**`trailing_trigger_r` 仍在**（`Config.py:310`），
 但角色已从"L3 触发阈值"换成"跟踪缓冲倍数"（× R，与 `breakeven_*_r` 同单位）。
 
-两个刻意保留的保守设定（docstring 两条，`Strategy/Exit.py:51`）：价格对齐一律往**对自己不利**方向取整；
+两个刻意保留的保守设定（docstring 两条，`Strategy/Exit.py:56`）：价格对齐一律往**对自己不利**方向取整；
 出场计划带参数快照落盘。（原第三项「同根 K 线同时触及止盈与止损按止损计」已随
 "触发判据只读收盘价"的口径**变得不可达** —— 一个收盘价不可能既 > 止盈线又 < 止损线 ——
 规则一并删除。）
@@ -401,11 +410,11 @@ L3 启动阈值 = 品种级 `win_loss_ratio`（IC/IM = 3R、其余 = 2R），故
 CLOSE 侧**没有自动兜底**（2026-09-17 拍板：例外 → 弹窗 → 用户干预）：
 
 - 离场追价跑满 `chase_max_number`（默认 3）轮仍未成交 → **severe 告警**（前端阻塞弹窗）
-  转人工；引擎还会跨 K 线持续重试，实际效果是"直到成交"（`Engine/Engine.py:2218-2221`）
+  转人工；引擎还会跨 K 线持续重试，实际效果是"直到成交"（`Engine/Engine.py:2228-2231`）
 - 原「冷却重试 `close_retry_bars` / 连拒清幻影仓 `close_max_streak` / 卡单二次确认
   `close_stuck_bars`」三套自动兜底**已整体删除**，原 `EngineConfig` 随之删除
 - 唯一还在的"连续"计数是 `_reject_streak`（连续被前置校验拦下、同一原因口径），
-  它只负责把告警级别从 warn 提到 severe，**不触发任何清仓动作**（`Engine/Engine.py:2310-2312`）
+  它只负责把告警级别从 warn 提到 severe，**不触发任何清仓动作**（`Engine/Engine.py:2319-2322`）
 
 ---
 
@@ -432,7 +441,7 @@ SimNow 不支持市价单：下单瞬间取实时对手价（买 = ask / 卖 = b
 
 在线通道（simnow/live）必须**连接成功**才放行：`SimNow._connect` 成功即置
 `Instrument.verified=True`（`Broker/SimNow.py:767`，`source=CONFIG`）；否则
-`Engine._pre_trade_check` 拒单 + 严重告警（`Engine/Engine.py:1278`）。
+`Engine._pre_trade_check` 拒单 + 严重告警（`Engine/Engine.py:1288`）。
 **闸门只有一个判据**（在线通道连通与否）—— 因为**合约参数 SSOT = 品种档案**：
 tick / 乘数构造期从 `Product` 播种，没有任何信息需要从行情取，所以
 "取不到就回退配置值下单"这种分支根本不存在。
@@ -664,7 +673,23 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 
 术语护栏 `Test/test_p26_terminology_guard.py` 复跑通过（新增字符串无禁用词）。
 
-终态（本文 + 追补全部引用）：①②③⑤ 失配 **0**（共 167 条）；④ 的启发式提示已逐条人工核对，**全部为误报** —— README 行内写的是取值/语义，不是被引行定义的名字。
+### 追补（时序改版）：出场判定改为「先抬价、再判触发」
+
+2026-09-22 用户拍板改 `LayeredExitPolicy.check()` 的判定顺序：先按根内有利侧极值抬高保护价，
+再用**本根**收盘价判它有没有被跌破 —— 达标那根若收盘已落在新保护价的不利侧，**当根即离场**
+（原来要等下一根）。同轮连带：
+
+- `Engine/Engine.py:839` 把"计划落盘 / 阶段 toast / `exit_plan_update` 事件"从 `only_update`
+  分支提为**公共路径**（当根既抬价又离场时，"因进保本 / 进跟踪而离场"的因果链不能断）。
+- 护栏 `Test/test_p61_exit_close_only.py` 整轮反转：新增 AST 行号断言（`_fav_extreme` 调用行
+  必须早于触发比较行）、[6]/[7] 两组改为"当根离场"期望、[5] 的启动判据从 `only_update`
+  换成计划里的 `_phase`（新时序下"启动"的那几根本根就离场，`only_update` 会整片假红）。
+- 本文随之改动：§6.5 新增「判定顺序」段；§三 时序第 1 步的"用刚闭合 K 线的 `high`/`low`
+  判止盈止损"改为"收盘价判触发、有利侧极值判达标"（旧写法是"触发只读收盘价"口径落地前的
+  残留）；`Engine/Engine.py` 的 6 处引用因该文件 **+18 行**整体重取，`Strategy/Exit.py` 的
+  4 处引用因该文件 **+33 行**整体重取。
+
+终态（本文 + 追补全部引用）：①②③⑤ 失配 **0**（共 169 条）；④ 的启发式提示已逐条人工核对，**全部为误报** —— README 行内写的是取值/语义，不是被引行定义的名字。
 
 **已知残余（未动，均属 Docs 层，需另行裁决）**：
 

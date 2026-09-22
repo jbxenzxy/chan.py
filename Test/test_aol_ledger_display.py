@@ -18,7 +18,7 @@
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
      status() 回退 上次运行目录 → 默认目录；进程不在时 alerts/toasts 置空；
   ⑦ DryRun 离场按触发 K 线收盘价落账（2026-09-22 拍板）：ExitCheck 有
-     fill_price 字段、sl/tp 四分支带 fill_price=close、Engine 透传并优先作
+     fill_price 字段、触发两分支（多 / 空）都带 fill_price=close、Engine 透传并优先作
      ref_price；
   ⑧ 持仓行/成交行都显示合约（p.symbol / t.symbol，2026-09-22 三次拍板：
      多合约并行时行内必须能看出是哪个合约，如 IM2612）。
@@ -144,13 +144,20 @@ if os.path.exists(_ex_path) and os.path.exists(_en_path):
     EN = open(_en_path, encoding="utf-8").read().replace("\r\n", "\n")
     check("ExitCheck 新增 fill_price 字段",
           "fill_price: Optional[float] = None" in EX, True)
-    check("触发价语义不变（price 仍是止损线）",
-          'ExitCheck(stop_reason, stop, fill_price=close)' in EX, True)
-    check("止损两分支全部带 fill_price=close", EX.count("fill_price=close"), 2)
-    # 2026-09-22：止损侧 reason 不再是字面量 "sl"，改走 stop_reason（按 _phase 细分出
-    #   breakeven / trailing / sl —— 离场原因细分，统计按规则身份分组）。多空各一处。
-    check("止损侧 reason 走 stop_reason（规则身份细分，多空各一处）",
-          EX.count("ExitCheck(stop_reason, stop, fill_price=close)"), 2)
+    # ⚠️ 2026-09-22 时序改版后，触发返回多带一个 `plan=updated`（同一根可以先按极值抬
+    #   保护价、再按收盘价判出跌破，计划要随离场一并交回引擎）—— 故断言用**前缀正则**计数，
+    #   而不是整条字面量：将来再追加关键字参数不会假红，但"把 fill_price=close 拿掉"或
+    #   "只改多 / 空一侧"仍会变红。
+    check("触发价仍是保护价本身（stop，**不被收盘价替换**）",
+          len(re.findall(r"ExitCheck\(stop_reason, stop, fill_price=close", EX)), 2)
+    check("触发两分支（多 / 空）全部带 fill_price=close", EX.count("fill_price=close"), 2)
+    # 2026-09-22：止损侧 reason 不再是字面量 "sl"，改走 stop_reason（按 `_phase` 细分出
+    #   breakeven / trailing / sl —— 离场原因细分，统计按规则身份分组）。
+    #   新时序下 ExitCheck 返回共 3 处：触发两支（多 / 空）+ only_update 支（只抬价不离场），
+    #   三处都复用同一变量 —— 故断言"全部走变量"（== 3）且"无一写死字面量"（== 0）。
+    check("止损侧 reason 全走变量 stop_reason（多 / 空 / 只更新计划共 3 处），无一写死字面量",
+          (len(re.findall(r"ExitCheck\(stop_reason,", EX)) == 3
+           and len(re.findall(r'ExitCheck\(\s*"sl"', EX)) == 0), True)
     check("Engine 透传 fill_price", "fill_price=check.fill_price" in EN, True)
     check("_force_exit 优先用 fill_price 作成交参考价",
           "ref = float(fill_price) if fill_price else float(price or 0.0)" in EN, True)
