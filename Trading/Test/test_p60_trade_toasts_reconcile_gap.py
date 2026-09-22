@@ -15,7 +15,7 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
       的「告警」此前对该方向不可达）；账本完全为空时也照常对账。
   [C] 关键动作轻提示（需求 ⑷）：开仓（含止损 1R 点位）/ 平仓（说明止盈还是
       止损）/ 盈利达 1R 进保本 / 盈利达 2R 进移动止盈 / 账单同步 —— 引擎
-      notify() 落 state.db kv `toasts`，AppTrader.status 投影，前端 2 秒 toast。
+      notify() 落 state.db kv `toasts`，AppTrader.status 投影，前端 5 秒 toast。
 
 覆盖清单：
   [1] _wait_finished：开跑即终态不撤单 / 撤单确认窗口内终态晚到能等到 /
@@ -649,7 +649,7 @@ check("[8h] AppTrader.status 投影 toasts",
       '"toasts"' in _src("App/AppTrader.py"), True)
 check("[8i] 前端轻提示处理存在",
       "handleAutoOrderToasts" in _src("Frontend/app.js"), True)
-check("[8j] 前端 toast 时长可指定（2 秒）",
+check("[8j] 前端 toast 时长可指定（缺省 5 秒）",
       "ms || TOAST_MS" in _src("Frontend/app.js"), True)
 check("[8k] 分层：Reconcile 不 import 引擎主体",
       "from ..Engine" not in _src("Trading/Engine/Reconcile.py")

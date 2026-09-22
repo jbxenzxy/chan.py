@@ -740,7 +740,7 @@ with tmp_dir() as tmp:
 
 # [9x] 品种**前置检查出口**（用户拍板「K线图 vs 自动下单 解耦」配套）：
 #   AppTrader.check_symbol_allowed 是前端开关的**前置提示出口**（前端拿到
-#   allowed=False 就弹「不支持交易」且不发启动请求），它必须与 start() 的启动拦截
+#   allowed=False 就弹「不支持自动下单」且不发启动请求），它必须与 start() 的启动拦截
 #   **同源**（同一个 Product.assert_product_allowed）——否则会出现
 #   "前端说能开、引擎却自杀"的分叉，正是要防的那种漂移。
 #   解耦口径：看行情侧走 `TqSdkAPI.FUTURES_ALIASES`（

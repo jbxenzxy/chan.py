@@ -792,7 +792,7 @@ async def api_trader_product_check(symbol: str = Query(
         default="", description="待检查的品种/合约代码，如 KQ.m@SHFE.rb 或 rb")):
     """查询某品种是否允许自动下单（2026-09-14「K线图 vs 自动下单」解耦配套）。
 
-    前端在**开启自动下单前**调用：allowed=False 时弹「不支持交易」并回弹开关，
+    前端在**开启自动下单前**调用：allowed=False 时弹「不支持自动下单」并回弹开关，
     **不发起启动请求**（避免"点一下就报错"）。查询本身无副作用，故用 GET。
 
     闸门实现与 `/auto-order/on` 的启动前置拦截同源

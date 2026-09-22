@@ -7369,12 +7369,16 @@
         };
 
         // 删除当前股票/周期全部标注
+        //   确认走 showConfirm（自实现模态，与全站同一个框）：点框外 / Esc 都＝取消，
+        //   与原生 confirm 的语义一致 —— 换自实现只改观感与样式，不改「怎样才算删」。
         window.annotationDeleteAllGlobal = function() {
             document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
             const code = chartData.meta.symbol;
             const freq = currentFreq;
-            if (confirm("确定删除当前股票 (" + code + ") " + freq + " 周期下的全部标注吗？")) {
+            showConfirm("确定删除当前股票 (" + code + ") " + freq + " 周期下的全部标注吗？")
+            .then(function(ok) {
+                if (!ok) return;
                 fetch("/api/stocks/" + encodeURIComponent(code) + "/save/annotation", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
@@ -7392,7 +7396,7 @@
                     }
                 })
                 .catch(function(err) { console.error("删除全部标注失败:", err); });
-            }
+            });
         };
 
         // 标注对话框键盘事件
@@ -8393,69 +8397,98 @@
         }
 
         // ══════════════════════════════════════════════════════════════
-        // [COMPONENT] AlertDialog —— 模态提示框（替代原生 alert）
+        // [COMPONENT] AlertDialog —— 模态提示框（替代原生 alert / confirm）
         //   全站「看完点确定」的提示统一走这里（原来是各调用点直接敲原生 alert）。
-        //   不用原生 alert 的原因：
+        //   不用原生弹窗的原因：
         //     ① 出口只有一个 —— 必须先点「确定」才能继续操作页面；
         //     ② 点框外区域关不掉（原生 alert 压根没有遮罩层可点）。
-        //   本实现的关闭出口有三个，语义都等同于「确定」：
-        //     点「确定」按钮 / 点遮罩（框之外的区域）/ 按 Esc 或 Enter。
-        //   一次只弹一个：原生 alert 会排队串行，这里用队列复刻同一语义 —— 后到的
+        //   关闭出口：
+        //     alert（只有确定）—— 点「确定」/ 点遮罩 / 按 Esc / 按 Enter 都关；
+        //     confirm（取消 + 确定，破坏性操作前用）—— 点「取消」/ 点遮罩 / 按 Esc
+        //       都表示「不执行」，只有点「确定」或按 Enter 才返回 true。
+        //   点遮罩与按 Esc 同义（照抄浏览器原生的这条）：alert 关掉即「确定」，
+        //   confirm 关掉即「取消」—— 破坏性操作不该被一次误点框外触发。
+        //   一次只弹一个：原生弹窗会排队串行，这里用队列复刻同一语义 —— 后到的
         //   消息等前一个关掉再出现，不会几层叠起来分不清哪条是哪条。
-        //   返回值是 Promise，在关掉那一刻 resolve：需要「人已看到才往下走」的调用方
-        //   （如严重告警的 ack 回执，见 ackIfAlertsSeen）挂 .then() 即可。
+        //   返回值是 Promise，在关掉那一刻 resolve（alert 恒 true；confirm 真/假）：
+        //   需要「人已看到才往下走」的调用方（如严重告警的 ack 回执，见
+        //   ackIfAlertsSeen）挂 .then() 即可。
         // ══════════════════════════════════════════════════════════════
         const _alertQueue = [];       // 待弹消息（各带自己的 resolve）
         let _alertShowing = false;    // 当前屏幕上是否有框
 
-        function showAlert(msg) {
+        // kind: "alert"（只有确定）| "confirm"（取消 + 确定）
+        function _pushDialog(msg, kind) {
             return new Promise(function (resolve) {
                 _alertQueue.push({
                     msg: String(msg === null || msg === undefined ? "" : msg),
+                    kind: kind,
                     resolve: resolve
                 });
                 if (!_alertShowing) _pumpAlertQueue();
             });
         }
 
+        function showAlert(msg) { return _pushDialog(msg, "alert"); }
+
+        // 破坏性操作前的二次确认 —— 返回值 Promise<boolean>，替代原生 confirm。
+        function showConfirm(msg) { return _pushDialog(msg, "confirm"); }
+
         function _pumpAlertQueue() {
             const job = _alertQueue.shift();
             if (!job) { _alertShowing = false; return; }
             _alertShowing = true;
-            const overlay = document.getElementById("alert-dialog") || _createAlertDialog();
+            const stale = document.getElementById("alert-dialog");
+            if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
+            const overlay = _createAlertDialog(job.kind);   // 按钮数随 kind 变，故每次重建
+            const isConfirm = (job.kind === "confirm");
+            // 点遮罩（框之外的区域）：alert ＝确定；confirm ＝取消（防误删）
+            const outsideResult = !isConfirm;
             const msgEl = overlay.querySelector(".alert-dialog-msg");
-            const okBtn = overlay.querySelector(".annotation-dialog-btn.primary");
+            const okBtn = overlay.querySelector('[data-act="ok"]');
+            const cancelBtn = overlay.querySelector('[data-act="cancel"]');
             msgEl.textContent = job.msg;
             msgEl.scrollTop = 0;
             let closed = false;
-            const close = function () {
-                if (closed) return;      // 「确定」/遮罩/Esc 三条出口可能同时到达
+            const close = function (result) {
+                if (closed) return;      // 「确定」/「取消」/遮罩/Esc 几条出口可能同时到达
                 closed = true;
                 overlay.classList.remove("show");
                 document.removeEventListener("keydown", onKey, true);
-                job.resolve();
+                job.resolve(result);
                 _pumpAlertQueue();       // resolve 是微任务，此刻队列已推进完
             };
+            // Esc 与点遮罩同义；Enter 只认「确定」—— 确认框里回车是「我要执行」，
+            // 不该被当成取消（原生 confirm 的 Enter 也是「确定」）。
             const onKey = function (e) {
-                if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); close(); }
+                if (e.key === "Escape") { e.preventDefault(); close(outsideResult); }
+                else if (e.key === "Enter") { e.preventDefault(); close(true); }
             };
-            // 点遮罩（框之外的区域）＝点「确定」；点框内不关
-            overlay.onclick = function (e) { if (e.target === overlay) close(); };
-            okBtn.onclick = close;
+            // 点框内不关（只有点遮罩才走 outsideResult）
+            overlay.onclick = function (e) {
+                if (e.target === overlay) close(outsideResult);
+            };
+            okBtn.onclick = function () { close(true); };
+            if (cancelBtn) cancelBtn.onclick = function () { close(false); };
             document.addEventListener("keydown", onKey, true);
             overlay.classList.add("show");
-            okBtn.focus();
+            okBtn.focus();               // 焦点给「确定」，与原生 confirm 同一默认键
         }
 
-        function _createAlertDialog() {
+        function _createAlertDialog(kind) {
             const overlay = document.createElement("div");
             overlay.id = "alert-dialog";
             overlay.className = "alert-dialog";
-            // 按钮沿用既有弹层的按钮样式（与标注/扫描弹窗同一套观感）
+            // 按钮沿用既有弹层的按钮样式与排列：index.html 里两个问答弹窗
+            // （文字标注 / 股票扫描）都是「确定在左、取消在右」，这里照抄同一顺序，
+            // 不给用户两套肌肉记忆。
             overlay.innerHTML = '<div class="alert-dialog-box">'
                 + '<div class="alert-dialog-msg"></div>'
                 + '<div class="annotation-dialog-btns">'
-                + '<button class="annotation-dialog-btn primary" type="button">确定</button>'
+                + '<button class="annotation-dialog-btn primary" type="button" data-act="ok">确定</button>'
+                + (kind === "confirm"
+                    ? '<button class="annotation-dialog-btn" type="button" data-act="cancel">取消</button>'
+                    : '')
                 + '</div></div>';
             document.body.appendChild(overlay);
             return overlay;

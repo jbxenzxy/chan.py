@@ -1946,7 +1946,7 @@ class TradingEngine(ReconcileMixin):
     #   判定都不在这里：由 broker 的 D10 分类器给结论（写在 Order.meta）；
     #   本段只负责**怎么存、怎么给前端**。
     # ════════════════════════════════════════════════════════════════
-    ALERT_SEVERE = "severe"          # 前端 alert() 阻塞弹窗
+    ALERT_SEVERE = "severe"          # 前端 showAlert 阻塞弹窗
     ALERT_WARN = "warn"              # 前端 toast 轻提示
     _ALERTS_KV = "alerts"
     _ALERTS_ACK_KV = "alerts_ack_ts"
@@ -1993,7 +1993,7 @@ class TradingEngine(ReconcileMixin):
     _TOASTS_KEEP = 30                # 轻提示队列上限：前端按 ts 水位去重，历史自然过期
 
     def notify(self, msg: str, code: str = "", **extra) -> None:
-        """轻提示（需求 ⑷，2026-09-18）：关键动作即时 toast，前端 2 秒自动消失。
+        """轻提示（需求 ⑷，2026-09-18）：关键动作即时 toast，前端 5 秒自动消失。
 
         与 alert 的分工：alert 是「需要人工介入」的持久队列（同 code 合并计数
         + ack 水位确认）；notify 是「刚才发生了什么」的瞬时播报 —— 开仓/平仓/
@@ -2175,7 +2175,7 @@ class TradingEngine(ReconcileMixin):
     #      但既然本来就 severe，升级无意义，故直接跳过。
     #
     #   分级依据："这件事会不会自己好？"
-    #     · 自己不会好、且必须有人处理 → severe（前端 alert 阻塞弹窗）；
+    #     · 自己不会好、且必须有人处理 → severe（前端 showAlert 阻塞弹窗）；
     #     · 一过性、行情/状态一到就恢复     → warn（前端 toast 轻提示）。
     #
     #   ⚠️ 这张表**只管可见性**，不改任何判定 —— 拒单与否仍由 `_pre_trade_check`

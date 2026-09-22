@@ -4,7 +4,7 @@
 =====================================================================
 守护阶段 6 的结构性成果（设计文档 V10 方案 8.9）：
 
-  ① 组件区块完备：Frontend/app.js 按 [COMPONENT] 横幅切出的区块（当前 11 个）
+  ① 组件区块完备：Frontend/app.js 按 [COMPONENT] 横幅切出的区块（当前 12 个）
      全部在位且非空；下列 9 个核心区块必须存在（KLineChart / NavToolbar /
      SymbolSearch / StatsPanel / BspSettingsPanel / ScanPanel /
      RealtimeService / AnnotationPanel / Bootstrap），区块外不允许游离的
