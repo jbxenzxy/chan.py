@@ -9,10 +9,11 @@
      标题）全文件零残留；
   ② 持仓行：多/空 + 手数 + @ 入场价 + 时间，**无止损列**（renderAutoOrderLedger
      持仓分支内「止损」零命中；时间戳走 fmtAolTime）；
-  ③ 成交行：时间走 fmtAolTime（YY/MM/DD HH:MM:SS）；
+  ③ 成交行：@ 入场价 → 出场价，价格统一一位小数（fmtAolPx1），
+     **不带尾部日期时间**（2026-09-22 四次拍板）；
   ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
      升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：index.html 引 app.js?v=28（改前端必须抬版本号，防缓存假象）；
+  ⑤ 资源版本号：index.html 引 app.js?v=29（改前端必须抬版本号，防缓存假象）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
      status() 回退 上次运行目录 → 默认目录；进程不在时 alerts/toasts 置空；
@@ -82,10 +83,13 @@ BLOCK = JS[i0:i1]
 check("renderAutoOrderLedger 区块长度 > 800（防锚点抓半截）",
       len(BLOCK) > 800, True)
 check("持仓/成交分支内「止损」零命中", BLOCK.count("止损"), 0)
-check("时间统一走 fmtAolTime（两处）", BLOCK.count("fmtAolTime("), 2)
-check("持仓行保留 @ 入场价", BLOCK.count("fmtAolPx(p.entry_price)"), 1)
-check("成交行保留 入场→出场 与 净额",
-      ("fmtAolPx(t.entry_price) + ' → '" in BLOCK) and ('净 ' in BLOCK), True)
+check("时间只剩持仓行走 fmtAolTime", BLOCK.count("fmtAolTime("), 1)
+check("持仓行保留 @ 入场价（一位小数）", BLOCK.count("fmtAolPx1(p.entry_price)"), 1)
+check("成交行 @ 入场价 → 出场价（一位小数）与 净额",
+      ("@ ' + fmtAolPx1(t.entry_price) + ' → '" in BLOCK)
+      and ("fmtAolPx1(t.exit_price)" in BLOCK) and ('净 ' in BLOCK), True)
+check("成交行不带时间（t.exit_at 零命中）",
+      "fmtAolTime(t.exit_at" in BLOCK, False)
 check("持仓行显示合约（p.symbol）",
       BLOCK.count("(p.symbol ? '<span class=\"aol-dim\">' + p.symbol + '</span>' : '')"), 1)
 check("成交行显示合约（t.symbol）",
@@ -93,8 +97,8 @@ check("成交行显示合约（t.symbol）",
 
 # ═══ ③ fmtAolTime 存在且被 index.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-check("index.html 引 app.js?v=28", 'app.js?v=28' in HTML, True)
-check("旧版本号 v=27 零残留", 'app.js?v=27' in HTML, False)
+check("index.html 引 app.js?v=29", 'app.js?v=29' in HTML, True)
+check("旧版本号 v=28 零残留", 'app.js?v=28' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后")
@@ -184,6 +188,42 @@ if m:
                       got, [want for _, want in cases])
         finally:
             os.remove(tmp)
+
+
+# ═══ 行为层：fmtAolPx1 真函数逐样本比对（node） ═══
+print("\n[6] fmtAolPx1 行为层（node 真函数）")
+m1 = re.search(r"(        function fmtAolPx1\(v\) \{[\s\S]*?\n        \})", JS)
+check("fmtAolPx1 函数源码可抽取", m1 is not None, True)
+if m1:
+    node = shutil.which("node")
+    if not node:
+        print("  [SKIP] node 不在位，只跑静态层")
+    else:
+        fn1 = re.sub(r"^        ", "", m1.group(1), flags=re.M)
+        cases1 = [
+            (7618, "7618.0"),
+            (7594.2, "7594.2"),
+            (7580, "7580.0"),
+            ("7568.6", "7568.6"),
+            (None, "--"),
+        ]
+        script1 = (fn1
+                   + "\nconst cases = " + json.dumps(cases1)
+                   + ";\nconsole.log(JSON.stringify(cases.map(([s]) => fmtAolPx1(s))));")
+        tmp1 = os.path.join(TEST_DIR, "_aol_px1_tmp.js")
+        with open(tmp1, "w", encoding="utf-8") as f:
+            f.write(script1)
+        try:
+            r1 = subprocess.run([node, tmp1], capture_output=True,
+                                text=True, timeout=30)
+            if r1.returncode != 0:
+                check("node 执行 fmtAolPx1", r1.stderr.strip()[-120:], "")
+            else:
+                got1 = __import__("json").loads(r1.stdout.strip())
+                check("fmtAolPx1 五样本输出逐字一致",
+                      got1, [want for _, want in cases1])
+        finally:
+            os.remove(tmp1)
 
 print("\n" + "=" * 60)
 print("aol_ledger_display: {} passed, {} failed".format(_PASS, _FAIL))

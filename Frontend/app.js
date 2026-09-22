@@ -8341,6 +8341,13 @@
             return (v === null || v === undefined || isNaN(n)) ? '--' : String(n);
         }
 
+        // 账本面板价格（统一一位小数）：7618 → 7618.0；7594.2 → 7594.2。
+        // 仅展示层格式化，不做品种 tick 推断（2026-09-22 四次拍板）。
+        function fmtAolPx1(v) {
+            const n = Number(v);
+            return (v === null || v === undefined || isNaN(n)) ? '--' : n.toFixed(1);
+        }
+
         // 账本面板时间：ISO（2026-09-22T13:32:03+08:00）→ 26/09/22 13:32:03；
         // 纯日期（2026-09-22）→ 26/09/22；解析不动就原样返回，不猜。
         function fmtAolTime(s) {
@@ -8369,7 +8376,7 @@
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + ' ' + p.volume + '手</span>'
                             + (p.symbol ? '<span class="aol-dim">' + p.symbol + '</span>' : '')
-                            + '<span>@ ' + fmtAolPx(p.entry_price) + '</span>'
+                            + '<span>@ ' + fmtAolPx1(p.entry_price) + '</span>'
                             + '<span class="aol-dim">' + fmtAolTime(p.entry_at || p.entry_date || '')
                             + '</span></div>';
                     }).join('');
@@ -8389,12 +8396,11 @@
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + t.volume + '手</span>'
                             + (t.symbol ? '<span class="aol-dim">' + t.symbol + '</span>' : '')
-                            + '<span>' + fmtAolPx(t.entry_price) + ' → '
-                            + fmtAolPx(t.exit_price) + '</span>'
+                            + '<span>@ ' + fmtAolPx1(t.entry_price) + ' → '
+                            + fmtAolPx1(t.exit_price) + '</span>'
                             + '<span class="' + netCls + '">净 '
                             + (isNaN(net) ? '--' : net.toFixed(2)) + '</span>'
-                            + '<span class="aol-dim">' + fmtAolTime(t.exit_at || '')
-                            + '</span></div>';
+                            + '</div>';
                     }).join('');
                 }
             }
