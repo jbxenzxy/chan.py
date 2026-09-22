@@ -8368,6 +8368,7 @@
                         return '<div class="aol-row">'
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + ' ' + p.volume + '手</span>'
+                            + (p.symbol ? '<span class="aol-dim">' + p.symbol + '</span>' : '')
                             + '<span>@ ' + fmtAolPx(p.entry_price) + '</span>'
                             + '<span class="aol-dim">' + fmtAolTime(p.entry_at || p.entry_date || '')
                             + '</span></div>';
@@ -8387,6 +8388,7 @@
                         return '<div class="aol-row">'
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + t.volume + '手</span>'
+                            + (t.symbol ? '<span class="aol-dim">' + t.symbol + '</span>' : '')
                             + '<span>' + fmtAolPx(t.entry_price) + ' → '
                             + fmtAolPx(t.exit_price) + '</span>'
                             + '<span class="' + netCls + '">净 '

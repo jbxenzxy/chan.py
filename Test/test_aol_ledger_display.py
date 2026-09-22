@@ -12,13 +12,15 @@
   ③ 成交行：时间走 fmtAolTime（YY/MM/DD HH:MM:SS）；
   ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
      升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：index.html 引 app.js?v=27（改前端必须抬版本号，防缓存假象）；
+  ⑤ 资源版本号：index.html 引 app.js?v=28（改前端必须抬版本号，防缓存假象）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
      status() 回退 上次运行目录 → 默认目录；进程不在时 alerts/toasts 置空；
   ⑦ DryRun 离场按触发 K 线收盘价落账（2026-09-22 拍板）：ExitCheck 有
      fill_price 字段、sl/tp 四分支带 fill_price=close、Engine 透传并优先作
-     ref_price。
+     ref_price；
+  ⑧ 持仓行/成交行都显示合约（p.symbol / t.symbol，2026-09-22 三次拍板：
+     多合约并行时行内必须能看出是哪个合约，如 IM2612）。
 
 行为层：fmtAolTime 抽到 node 里跑真函数，逐样本比对输出（node 不在位
 则 SKIP，只跑静态层）。判别力自证（护栏不恒真）：把 AppTrader.py 的
@@ -84,11 +86,15 @@ check("时间统一走 fmtAolTime（两处）", BLOCK.count("fmtAolTime("), 2)
 check("持仓行保留 @ 入场价", BLOCK.count("fmtAolPx(p.entry_price)"), 1)
 check("成交行保留 入场→出场 与 净额",
       ("fmtAolPx(t.entry_price) + ' → '" in BLOCK) and ('净 ' in BLOCK), True)
+check("持仓行显示合约（p.symbol）",
+      BLOCK.count("(p.symbol ? '<span class=\"aol-dim\">' + p.symbol + '</span>' : '')"), 1)
+check("成交行显示合约（t.symbol）",
+      BLOCK.count("(t.symbol ? '<span class=\"aol-dim\">' + t.symbol + '</span>' : '')"), 1)
 
 # ═══ ③ fmtAolTime 存在且被 index.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-check("index.html 引 app.js?v=27", 'app.js?v=27' in HTML, True)
-check("旧版本号 v=26 零残留", 'app.js?v=26' in HTML, False)
+check("index.html 引 app.js?v=28", 'app.js?v=28' in HTML, True)
+check("旧版本号 v=27 零残留", 'app.js?v=27' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后")
