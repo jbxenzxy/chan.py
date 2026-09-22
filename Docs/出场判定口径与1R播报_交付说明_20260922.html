@@ -54,7 +54,7 @@
 <div class="meta">
   基线：<code>jbxenzxy/chan.py</code> @ <code>custom-dev</code> HEAD
   <code>58680f67d98a7659ea744ca8fa583d72f2f509af</code>（2026-09-22 02:31:16Z）<br>
-  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code>（10 个文件 · 133,953 bytes）<br>
+  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code>（11 个文件 · 138,789 bytes）<br>
   <span class="dimtxt">承接第 1–4 轮「自动下单弹窗与文案」交付（那几轮的文件用户已全部合并入库，
   本次改动是在<b>合并后的远端基线上</b>另起的一组改动，互不重叠）。</span>
 </div>
@@ -73,7 +73,7 @@
 </div>
 
 <!-- ══════════════════════ 二 ══════════════════════ -->
-<h2>一、改动清单（10 个文件）</h2>
+<h2>一、改动清单（11 个文件）</h2>
 
 <table>
   <tr>
@@ -92,14 +92,17 @@
     <td><code>Trading/Engine/Engine.py</code></td>
     <td>新增 <code>_quote_unit</code>（property）/ <code>_run_R()</code> / <code>_r_value_text()</code> /
         <code>_r_label()</code> 四个渲染入口；<code>_notify_open</code> 与 <code>_notify_run_phase</code>
-        三条文案改为带量值 + 单位</td>
-    <td class="c">146,094<br>→ 148,750</td>
+        三条文案改为带量值 + 单位；<b>另收口 2 处注释错误</b>（:40 / :45+:814
+        写"用 K 线的 <code>high/low</code> 结算""若结算也用 T 的高低点"，均按收盘价口径重述）</td>
+    <td class="c">146,094<br>→ 149,198</td>
   </tr>
   <tr>
     <td class="n">3</td>
     <td><code>Trading/Infra/Product.py</code></td>
     <td><code>Product</code> 新增 <code>quote_unit: str</code> 字段（<b>只进文案不进计算</b>）；
-        8 个品种按交易所标准合约文本逐一标定；档案区块上方附来源 URL 与维护口径</td>
+        8 个品种按交易所标准合约文本逐一标定；档案区块上方附来源 URL 与维护口径。<br>
+        档案实参书写顺序统一为 <code>quote_unit</code> → <code>price_tick</code> → <code>multiplier</code>
+        （用户定序，关键字实参，语义不变）</td>
     <td class="c">36,999<br>→ 39,799</td>
   </tr>
   <tr>
@@ -151,6 +154,18 @@
     <td><code>Trading/Test/test_p15b_e33_fifo_close.py</code></td>
     <td>术语 2 处（「硬止损触发」→「止损触发」）＋ [4.3] 注释里「low=4530 本会触发」改按收盘价重述</td>
     <td class="c">44,055<br>→ 44,159</td>
+  </tr>
+  <tr>
+    <td class="n">11</td>
+    <td><code>Trading/Test/test_instrument_spec_ssot.py</code></td>
+    <td><b>档案书写顺序护栏</b>（新增 [7] 节）：用 <code>ast</code> 取
+        <code>PRODUCT_PROFILES</code> 每个档案里三字段的<b>书写顺序</b>，断言全部为
+        <code>quote_unit</code> → <code>price_tick</code> → <code>multiplier</code>；
+        另带一条判别力自证（顺序写反时本判定会红）。<br>
+        <span class="dimtxt">用 ast 不用正则：关键字顺序正是语法事实；且必须同时收
+        <code>AnnAssign</code>（真值是带注解的 <code>PRODUCT_PROFILES: Dict[str, Product] = {…}</code>），
+        否则会因"没扫到"而恒真。</span></td>
+    <td class="c">9,959<br>→ 12,518</td>
   </tr>
 </table>
 
@@ -376,10 +391,10 @@
 <code>止损 = 4010</code>（价格）／<code>距入场 1R = 5 点</code>（距离）。</p>
 
 <!-- ══════════════════════ 五 ══════════════════════ -->
-<h2>四、顺手收口的 3 处注释错误</h2>
+<h2>四、顺手收口的 5 处注释错误</h2>
 
 <p>口径一改，仓库里「描述触发依据」的注释就会集体失真。本轮按<b>只看实代码、注释只当线索</b>的方法排查，
-把确已失真的 3 处改掉（纯注释，零行为变化）：</p>
+把确已失真的 5 处改掉（纯注释，零行为变化）：</p>
 
 <table>
   <tr><th style="width:290px">位置</th><th>原文（已失真）</th><th>改为</th></tr>
@@ -401,6 +416,20 @@
     <td><code>Trading/Test/test_p15b_e33_fifo_close.py</code><br>[4.3] 注释</td>
     <td class="old">「「止损 4540；<code>bar.low=4530</code> 本会触发……」</td>
     <td class="new">「<code>close=4532</code> 本会触发（2026-09-22 起触发判据 = 收盘价，不看根内 low）」</td>
+  </tr>
+  <tr>
+    <td><code>Trading/Engine/Engine.py</code><br>:40 模块 docstring</td>
+    <td class="old">「① 结算已有持仓 —— 用**刚闭合**的 K 线的 <code>high/low</code> 判止盈止损 L1-L3」</td>
+    <td class="new">「…用**刚闭合**的 K 线的 <code>close</code> 判止盈止损 L1-L3」</td>
+  </tr>
+  <tr>
+    <td><code>Trading/Engine/Engine.py</code><br>:45 / :814 入场那根不判的理由</td>
+    <td class="old">「…按 T 的收盘价开仓，<b>若结算也用 T 的高低点</b>，等于开仓瞬间就可能"被止损"」
+        （两处同文：模块 docstring 与 <code>on_bar</code> 内注释）</td>
+    <td class="new">「判定依据现在<b>也是收盘价</b> ⇒ 在 T 上判等于拿开仓价自己去比止损/止盈线，
+        没有信息量；且 <code>_run_plan</code> 可能是 state.db <b>原样恢复</b>的计划
+        （不重跑 <code>plan()</code> 的 P2 边界守卫），止损线若落在入场价内侧就会瞬间误触发」
+        <span class="dimtxt">（守卫本身<b>保留不动</b>，只把理由改写成现行口径 —— 原理由描述的"用 high/low 结算"已不存在）</span></td>
   </tr>
 </table>
 
@@ -505,6 +534,25 @@
   <tr><td>止损线 / 止盈线 / R 的<b>算法</b></td>
       <td>未改（<code>R = max(分型极值距离, atr_sl_multiple × ATR)</code>、L2 的 ATR 定宽、
           价格对齐方向都保持原样）—— 本轮只换「用哪个价去比」</td></tr>
+  <tr><td>close 口径的<b>改动范围</b><br><span class="dimtxt" style="font-size:12px">逐行剥注释后数出来的</span></td>
+      <td>可执行行净变 <b>6 行，全部落在 <code>check()</code></b>，正好是三处判据 + 1 行取价：
+          <code>:340</code> 取价 <code>close = bar.close</code>｜
+          <code>:342</code> / <code>:347</code> <b>止损判据</b>（多/空）｜
+          <code>:344</code> / <code>:349</code> <b>止盈判据</b>（多/空）｜
+          <code>:366</code> <b>浮盈是否达 1R / 2R / 3R 的判据</b>（<code>best = max(best, close)</code>）。
+          <br>AST 去 docstring 比对 <code>Exit.py</code> 全部 9 个函数：<b>只有 <code>check()</code> 的可执行语义变了</b>，
+          <code>_initial_r()</code> / <code>plan()</code> / <code>_atr()</code> / <code>on_bar()</code> / <code>check_with()</code>
+          逐一比对全等（其余 diff 全是 docstring / 注释）。</td></tr>
+  <tr><td><b>结构止损点仍取分型极值</b><br><span class="dimtxt" style="font-size:12px">本轮没有跟着换成收盘价</span></td>
+      <td><code>A = entry − signal.fractal_low</code>（<code>Exit.py:215</code>，空仓镜像 <code>:220</code>），
+          分型值的<b>唯一生产者</b> = <code>App/AppSSE.py:1405-1406</code> →
+          <code>f_klu.low</code> / <code>f_klu.high</code>（<code>f_klu = bsp.bi.get_end_klu()</code>）——
+          读的是该分型 K 线的<b>极值（最低价 / 最高价）</b>，<b>不是它的 <code>close</code></b>；
+          <code>App/AppSSE.py</code> 本轮<b>零改动</b>。
+          <br>更硬的一条：<code>plan()</code> 签名是 <code>(signal, entry_price, state, anchor)</code>，
+          <b>没有 <code>Bar</code> 入参</b> ⇒ 止损生成路径在物理上读不到任何 K 线收盘价；
+          长仓止损价 = <code>min(分型极值价, 入场 − 2×ATR)</code>，<code>R = max(A, B)</code> 的<b>取大关系</b>本身也没动，
+          B 只是可能把这根止损线推得比分型更远。</td></tr>
   <tr><td>出场策略套数</td>
       <td>仍只有 <code>LayeredExitPolicy</code> 一套（L1–L3）；「硬止损 / 硬止盈 / 硬出场」
           这套说法在本轮<b>清零</b>（<code>Exit.py</code> docstring 里保留的那一句是
@@ -527,7 +575,7 @@
 </ol>
 
 <div class="foot">
-  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code> · 10 个文件（<code>Trading/</code> 层级）<br>
+  交付包：<code>chanpy_exit_close_basis_and_1r_label_20260922.zip</code> · 11 个文件（<code>Trading/</code> 层级）<br>
   基线：<code>custom-dev</code> @ <code>58680f67d98a7659ea744ca8fa583d72f2f509af</code> ·
   全量回归 110/116（6 条预存失败不变，新增失败 0）<br>
   生成时间：2026-09-22
