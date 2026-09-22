@@ -187,10 +187,10 @@ python Tool/SimNow/SimNowProbe.py
 | **变异维度** | `Infra/Period.py`（随周期变）<br>`Infra/Product.py`（随品种变） | **改文件 = 改代码资产**，走 git 评审 + 对账测试 | 跨层横切的**领域注册表** |
 
 两轴正交，所以两张档案表**不按消费层挪进 Config.py**：以 `Product` 为例，一行供策略层
-（`r_multiple_tp`）、一行供执行层（`exec_policy`）、一行供 broker 层（`price_tick`/`multiplier`），
+（`win_loss_ratio`）、一行供执行层（`exec_policy`）、一行供 broker 层（`price_tick`/`multiplier`），
 整表没有唯一归属层（`Trading/Config.py:56`）。
 
-**推论（调参前必读）**：品种相关项（`price_tick` / `multiplier` / `r_multiple_tp`）的真值
+**推论（调参前必读）**：品种相关项（`price_tick` / `multiplier` / `win_loss_ratio`）的真值
 **只在档案里**。在 `Config.py` 或 `.env` 里写同名字段不再生效；改品种参数 = 改
 `Infra/Product.py`。品种无关的出场参数（ATR / 跟踪 / `breakeven_buffer_r`）在 `Config.py`
 的 `ExitConfig` 调。
@@ -247,8 +247,8 @@ main.py 构造一份后**同时**交给 `Broker.build_broker(..., state=instr)` 
 `Trading/Config.py:320`）。
 
 组装 `LayeredExitPolicy` 的完整参数一律经 `resolved_exit_params(cfg)`
-（品种无关项 + 档案的 `r_multiple_tp` 合并，`Trading/Config.py:593`）—— 直接传
-`cfg.exit_params.model_dump()` 会缺 `r_multiple_tp`，构造期 AttributeError。
+（品种无关项 + 档案的 `win_loss_ratio` 合并，`Trading/Config.py:593`）—— 直接传
+`cfg.exit_params.model_dump()` 会缺 `win_loss_ratio`，构造期 AttributeError。
 
 ### 5.3 被删掉的配置键：三种处理方式（别当成一种）
 
@@ -278,7 +278,7 @@ main.py 构造一份后**同时**交给 `Broker.build_broker(..., state=instr)` 
 > 所以**决策侧零费率引用**，代码里也禁止用交易所名字判断任何走向
 > （第 4 列只是注释，`Infra/Product.py:190`）。
 
-品种档案含策略标定值 `r_multiple_tp`（IF/IH/AU/AG/CU/TA = 2.0，IC/IM = 3.0）、
+品种档案含策略标定值 `win_loss_ratio`（IF/IH/AU/AG/CU/TA = 2.0，IC/IM = 3.0）、
 `price_tick` / `multiplier`（离线兜底，实盘以行情为准）、费率两档（由生成区块注入）。
 入口 `Infra/Product.py:414`，逐品种 note 里有来源说明。
 
@@ -369,7 +369,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 | L3 | 保本 + 跟踪锁利 | 浮盈 ≥ `breakeven_trigger_r`×R 时把止损抬到入场价 ± `breakeven_buffer_r`×R；跟踪缓冲 = `trailing_atr_multiple`×ATR |
 
 `use_trailing=True`（默认）时**不落硬止盈单**，止盈完全交给 L3 的跟踪兑现；L3 启动阈值 =
-品种级 `r_multiple_tp`（IC/IM = 3R、其余 = 2R），故不同品种进 L3 的时机天然不同
+品种级 `win_loss_ratio`（IC/IM = 3R、其余 = 2R），故不同品种进 L3 的时机天然不同
 （`Strategy/Exit.py:13`）。原 L4 时间/收盘兜底、`min_r_points` 地板、全局
 `trailing_trigger_r`、`stop_at_signal_extreme` 开关均已删除。
 
@@ -575,7 +575,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 | `Infra/Config.py`（JSON 配置加载） | **已删除**；配置入口只剩 `Trading/Config.py`，且**没有 `config.json` / `--config`**（`Trading/main.py:458`） |
 | 配置示例里 `price_tick` / `multiplier` / `open_fee_rate` / `closetoday_fee_rate` / `close_fee_rate` / `slippage_ticks` / `closetoday_first` 全放在 `instrument` 段 | 前两项与三档费率键**已归位到 `Product` 档案**；写进 `instrument` 会构造期 ValueError（`Infra/Instrument.py:80`） |
 | 配置示例里 `risk.max_volume` | **已删除**；手数唯一来源 = 执行策略表第 3 列（`Infra/Product.py:240`） |
-| 配置示例里 `stop_at_signal_extreme` / `trailing_trigger_r` | **均删除**；R = max(A, 2×ATR) 口径唯一，L3 触发 = 品种级 `r_multiple_tp` |
+| 配置示例里 `stop_at_signal_extreme` / `trailing_trigger_r` | **均删除**；R = max(A, 2×ATR) 口径唯一，L3 触发 = 品种级 `win_loss_ratio` |
 | 「④ 风控层：手数/持仓上限全收敛在 RiskConfig」 | 本层现在**没有任何手数旋钮**，`max_open_positions` 也已删（`Trading/Config.py:366`） |
 | 「Risk/ 风控层（手数/持仓上限）」+ `Risk.py` 内容 | `Trading/Risk/` 只剩 docstring，无代码（`Risk/__init__.py:2`） |
 | `Infra/` 清单含 `Config.py`、不含 `TradeStats.py` | 实为 8 个模块，含 `TradeStats.py`（见 §二） |
