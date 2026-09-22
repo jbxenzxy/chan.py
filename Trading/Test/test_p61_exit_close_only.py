@@ -157,7 +157,9 @@ def main():
     chk = _method(tree, "LayeredExitPolicy", "check")
     check("方法 check() 存在", chk is not None, True)
 
-    chk_attrs = _attrs_in(chk)
+    # 扫不到（函数被删/改名）时不能让 _attrs_in / _calls_in 崩掉 ——
+    # 负控树（把 Exit.py 回退成原版）正是这种情况：必须是可引用的 ✗，不是 Traceback。
+    chk_attrs = _attrs_in(chk) if chk is not None else set()
     # 必现项：先证明"确实扫到了这个函数里该有的东西"，再断言禁项
     check("[必现] check() 内出现 bar.close 属性访问",
           "close" in chk_attrs, True)
@@ -167,7 +169,7 @@ def main():
           "low" in chk_attrs, False)
     # 达标侧必须是"经 _fav_extreme 读极值"，不能改成别的写法
     check("[必现] check() 内调用了 _fav_extreme（达标极值入口）",
-          "_fav_extreme" in _calls_in(chk), True)
+          "_fav_extreme" in (_calls_in(chk) if chk is not None else set()), True)
 
     # 文件级：.high / .low 只允许出现在白名单那两个函数里，且它们必须还在读
     owners = _high_low_owners(tree)
@@ -178,13 +180,13 @@ def main():
 
     atr = _method(tree, "LayeredExitPolicy", "_atr")
     check("方法 _atr() 存在（豁免对象在）", atr is not None, True)
-    atr_attrs = _attrs_in(atr)
+    atr_attrs = _attrs_in(atr) if atr is not None else set()
     check("[必现] _atr() 仍读 .high（TR 定义式要求）", "high" in atr_attrs, True)
     check("[必现] _atr() 仍读 .low（TR 定义式要求）", "low" in atr_attrs, True)
 
     ext = _method(tree, "LayeredExitPolicy", "_fav_extreme")
     check("方法 _fav_extreme() 存在（L3 达标极值入口在）", ext is not None, True)
-    ext_attrs = _attrs_in(ext)
+    ext_attrs = _attrs_in(ext) if ext is not None else set()
     check("[必现] _fav_extreme() 仍读 .high（做多有利侧）", "high" in ext_attrs, True)
     check("[必现] _fav_extreme() 仍读 .low（做空有利侧）", "low" in ext_attrs, True)
 
