@@ -8282,7 +8282,6 @@
                     if (aoRun) {
                         tip += '；本段风控锚 ' + fmtPx(aoRun.anchor)
                             + '，止损 ' + fmtPx(aoRun.stop)
-                            + '，止盈 ' + fmtPx(aoRun.tp)
                             + '（' + aoRun.name + '）';
                     }
                     if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';

@@ -126,7 +126,7 @@ def make_pos(side, entry_price=4500.0, vol=1, signal_key="test_key", seq=10):
         entry_bar_seq=seq, entry_bar_ts=4000,
         signal_key=signal_key, open_order_id="dry_run-test",
         exit_plan=ExitPlan(name="x", stop_price=entry_price - 5.0,
-                           tp_price=None, params={}),
+                           params={}),
     )
 
 

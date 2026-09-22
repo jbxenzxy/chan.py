@@ -1131,8 +1131,8 @@ class AppTrader:
                 state = "running"
             else:
                 state = "locked"
-            # run 快照（kv 形态）→ 前端 tooltip 只认 anchor/stop/tp/name/side。
-            # plan 里没有 stop/tp 就整段置 None，避免前端显示半截的空锚。
+            # run 快照（kv 形态）→ 前端 tooltip 只认 anchor/stop/name/side。
+            # plan 里没有 stop 就整段置 None，避免前端显示半截的空锚。
             run_view = None
             if isinstance(raw_run, dict) and raw_run.get("side") in ("LONG", "SHORT"):
                 plan = raw_run.get("plan") or {}
@@ -1142,7 +1142,6 @@ class AppTrader:
                         "anchor": raw_run.get("anchor"),
                         "volume": raw_run.get("volume"),
                         "stop": plan.get("stop_price"),
-                        "tp": plan.get("tp_price"),
                         "name": plan.get("name") or "",
                     }
             return {

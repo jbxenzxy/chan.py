@@ -22,10 +22,6 @@ P61 出场判定「触发看收盘价 / 达标看根内极值」防回潮护栏�
     为什么不是无所谓的细节：价格离散到 tick，"恰好相等"是**可达状态**，
     旧闭区间口径会在这类行情上提前一格离场（多等一根即可）。本文件 [3c] / [3e] /
     [4b2] / [5] 钉死。
-    ⚠️ **固定止盈单（`use_trailing=False` 非默认模式）例外，仍是闭区间**：需求原文只描述
-    跟踪模式，该模式原文未定义、语义是"目标价触及即走"，其守卫在
-    `test_p60_trade_toasts_reconcile_gap.py` 的 [5c]（`close == tp` → 触发止盈）。
-    本文件不管那一处，也不得顺手把它改严 —— 要改得连 p60 [5c] 一起改。
 
   · **达标判据** —— 浮盈是否够 `breakeven_trigger_r×R` 进保本、够 `win_loss_ratio×R`
     进跟踪，以及跟踪锚"至今最好价"—— 读本根 K 线的**有利侧极值**：
@@ -228,10 +224,10 @@ def main():
                         entry_bar_ts=1000, signal_key="k1",
                         open_order_id="o1", entry_bar_seq=1,
                         exit_plan=ExitPlan(name="LayeredExitPolicy",
-                                           stop_price=stop, tp_price=None,
+                                           stop_price=stop,
                                            params=params or {"R": 5.0}))
 
-    pol = LayeredExitPolicy({"use_trailing": False})
+    pol = LayeredExitPolicy()
     st = Instrument(None, _IF)
 
     # 3a 插针：low 打到 3993（穿止损），收盘 3997 → 触发侧口径下**不触发**
@@ -282,7 +278,7 @@ def main():
     print("\n[4] 达标侧行为级：L3 浮盈看**根内极值**（做多 high / 做空 low）")
     # R=10、入场 4000 → 保本阈值 4010（+1R）。win_loss_ratio=99 关掉跟踪，只验保本层；
     # breakeven_buffer_r=0.0 → 保本落点 = 入场价本身，断言值好读。
-    pol3 = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
+    pol3 = LayeredExitPolicy({"use_atr": False, 
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0,
                               "win_loss_ratio": 99.0})
@@ -335,10 +331,10 @@ def main():
     # ⚠️ 本组把**收盘价固定在入场价**、只让 high 抬到指定倍数 —— 于是"能不能启动"
     #    完全由极值口径决定。若实现回头只看收盘价，2.99R / 3.0R / 3.01R 三条都会失真；
     #    若实现把比较改回 `>=`，则"恰好 3.0R 不启动"那条（严格不等）立刻变红。
-    pol_ic = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
+    pol_ic = LayeredExitPolicy({"use_atr": False, 
                                 "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 3.0})
-    pol_if = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
+    pol_if = LayeredExitPolicy({"use_atr": False, 
                                 "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
 
@@ -349,7 +345,6 @@ def main():
                      entry_bar_ts=1000, signal_key="k2", open_order_id="o2",
                      entry_bar_seq=1,
                      exit_plan=ExitPlan(name="LayeredExitPolicy", stop_price=90.0,
-                                        tp_price=None,
                                         params={"R": 10.0, "_trail_best": 100.0}))
         bar = Bar(timestamp=ts, date="2026-09-01 09:40", open=100.0,
                   high=high, low=95.0, close=100.0, vol=1)
@@ -373,7 +368,7 @@ def main():
     # 触发判据在 check() 里排在 L3 之前：一根 high 冲到 2R、收盘却砸穿 −1R 止损的巨阴
     # → 必须先离场（返回 sl），不能因为极值达标而去抬损、把仓留着。
     chk_both = LayeredExitPolicy(
-        {"use_atr": False, "use_trailing": True, "breakeven_trigger_r": 1.0,
+        {"use_atr": False, "breakeven_trigger_r": 1.0,
          "breakeven_buffer_r": 0.5, "win_loss_ratio": 2.0}).check(
         _pos(params={"R": 10.0, "_trail_best": 4000.0}),
         Bar(timestamp=2000, date="2026-09-01 09:40", open=4000.0,
@@ -392,7 +387,7 @@ def main():
     #       Trading/Engine/Engine.py 收到 only_update 后也只 `_persist()` 就 return。
     #   → 离场最快只能发生在**下一根**。若有人把 L3 挪到 ① 之前，或让 L3 命中后继续
     #     往下判触发（改成 same-bar 二次判定），[7a]/[7b] 必红。
-    pol4 = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
+    pol4 = LayeredExitPolicy({"use_atr": False, 
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.5,
                               "win_loss_ratio": 99.0})
@@ -408,8 +403,8 @@ def main():
           (chk_d0.reason, chk_d0.only_update,
            chk_d0.plan.stop_price if chk_d0.plan is not None else None)
           if chk_d0 else None, ("trailing", True, 4005.0))
-    check("[7b] 该根**没有**被新保护价触发离场（reason 不是 sl/tp）",
-          (chk_d0.reason in ("sl", "tp")) if chk_d0 else None, False)
+    check("[7b] 该根**没有**被新保护价触发离场（only_update 路径不带成交参考价）",
+          chk_d0.fill_price if chk_d0 else None, None)
 
     # 7c 下一根：close=4002 仍 < 4005 → 这时才以新保护价判 sl（fill 以收盘成交价为准）
     chk_d1 = pol4.check(
@@ -435,8 +430,8 @@ def main():
     #   盈亏一律由 net_cash 符号在统计侧分 —— 见 Infra/TradeStats.py 的 by_reason 说明）。
     #   判定依据 = `plan.params["_phase"]`（L3 在保护价真被抬高时写入），它与"最后把保护价
     #   抬上去的那一层"恒同源 → 标的必然就是被跌破的那条线。
-    #   本组用的策略对象是 use_trailing=False（L3 不跑）、`_phase` 直接注入计划参数 ——
-    #   这恰好也在证明"reason 路由只读计划快照"：既与 L3 是否启用无关，也覆盖旧 state.db
+    #   本组把 `_phase` **直接注入计划参数**（不靠 L3 真跑出来）——
+    #   这恰好也在证明"reason 路由只读计划快照"：也覆盖旧 state.db
     #   恢复的、缺 `_phase` 的持仓（退回 "sl"）。
     for _ph, _want, _name in (("", "sl", "未进 L3（无 _phase）"),
                               ("breakeven", "breakeven", "已进保本"),

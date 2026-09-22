@@ -120,8 +120,7 @@ def tmp_dir(tag):
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
-    base["exit_params"].update({"use_atr": False,
-                                 "use_trailing": False})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 

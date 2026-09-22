@@ -130,7 +130,7 @@ def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run")
         "bar_ts": 4100, "bar_seq": 1, "signal_key": signal_key,
         "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "seed_plan", "stop_price": anchor - 10.0,
-                 "tp_price": anchor + 10.0, "params": {}},
+                 "params": {}},
     })
 
 
@@ -168,7 +168,7 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         entry_price=entry_price,
         entry_at=entry_date + " 09:30", entry_bar_ts=4100,
         signal_key=signal_key, open_order_id="p44-" + signal_key,
-        exit_plan=ExitPlan(name="x", stop_price=stop, tp_price=tp),
+        exit_plan=ExitPlan(name="x", stop_price=stop),
         entry_bar_seq=entry_bar_seq, entry_date=entry_date)
 
 

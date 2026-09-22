@@ -162,7 +162,7 @@ def seed_run(store, side="LONG", anchor=4500.0, volume=1):
         "bar_ts": 4000, "bar_seq": 10, "signal_key": "SEED",
         "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "run_managed", "stop_price": 0.0,
-                 "tp_price": None, "params": {}},
+                 "params": {}},
     })
 
 
@@ -188,7 +188,7 @@ def pos_dict(side="LONG", volume=1, entry_price=4500.0, signal_key="K",
         "entry_bar_ts": entry_bar_ts, "entry_bar_seq": entry_bar_seq,
         "signal_key": signal_key, "open_order_id": "o-" + signal_key,
         "exit_plan": {"name": "x", "stop_price": entry_price - 10.0,
-                      "tp_price": None, "params": {}},
+                      "params": {}},
         "entry_date": entry_date,
     }
 

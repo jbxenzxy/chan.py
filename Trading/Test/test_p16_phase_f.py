@@ -198,12 +198,11 @@ def seed_run(store, side="LONG", volume=1, anchor=4545.0, signal_key="seed-run")
         "bar_ts": 4100, "bar_seq": 1, "signal_key": signal_key,
         "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "seed_plan", "stop_price": anchor - 10.0,
-                 "tp_price": anchor + 10.0, "params": {}},
+                 "params": {}},
     })
 
 
 def make_engine(tmpdir, *, split_positions=1,
-                tp_points=5.0, stop_points=10.0,
                 close_before_session_end=False, broker=None):
     """构造引擎：每笔手数 = 1（= 品种执行策略表第 3 列，见 `_IF` 改写说明）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
@@ -213,8 +212,6 @@ def make_engine(tmpdir, *, split_positions=1,
     if broker is None:
         broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     entry = EntryPolicy({"reverse_on_opposite_signal": False})
-    # 注：旧代码传的 stop_loss_points 是错键（策略实际读 stop_points），
-    #    此前被静默忽略；严格模式下会被拒绝，故移除以保持行为不变。
     exitp = LayeredExitPolicy()
     store = Store(os.path.join(tmpdir, "state.db"))
     ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
@@ -229,14 +226,12 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 
 
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
-                  tp_offset=5.0, sl_offset=10.0, entry_date=""):
+                  sl_offset=10.0, entry_date=""):
     """构造手动 Position（不走 _open_positions），用于直接构造 portfolio 状态。"""
     from Trading.Infra.Clock import now_cn
     if side is Side.LONG:
-        tp = entry_price + tp_offset
         stop = entry_price - sl_offset
     else:
-        tp = entry_price - tp_offset
         stop = entry_price + sl_offset
     return Position(
         symbol="CFFEX.IF2609", side=side, volume=vol,
@@ -244,9 +239,8 @@ def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
         entry_bar_ts=4000 + entry_bar_seq * 100,
         entry_bar_seq=entry_bar_seq,
         signal_key=signal_key, open_order_id="manual",
-        exit_plan=ExitPlan(name="tp_sl", stop_price=stop, tp_price=tp,
-                            params={"take_profit_points": tp_offset,
-                                    "stop_loss_points": sl_offset}),
+        exit_plan=ExitPlan(name="tp_sl", stop_price=stop,
+                            params={"stop_loss_points": sl_offset}),
         entry_date=entry_date)
 
 

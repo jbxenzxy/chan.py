@@ -144,10 +144,9 @@ if os.path.exists(_ex_path) and os.path.exists(_en_path):
     EN = open(_en_path, encoding="utf-8").read().replace("\r\n", "\n")
     check("ExitCheck 新增 fill_price 字段",
           "fill_price: Optional[float] = None" in EX, True)
-    check("触发价语义不变（price 仍是止损/止盈线）",
-          'ExitCheck(stop_reason, stop, fill_price=close)' in EX
-          and 'ExitCheck("tp", tp, fill_price=close)' in EX, True)
-    check("sl/tp 四分支全部带 fill_price=close", EX.count("fill_price=close"), 4)
+    check("触发价语义不变（price 仍是止损线）",
+          'ExitCheck(stop_reason, stop, fill_price=close)' in EX, True)
+    check("止损两分支全部带 fill_price=close", EX.count("fill_price=close"), 2)
     # 2026-09-22：止损侧 reason 不再是字面量 "sl"，改走 stop_reason（按 _phase 细分出
     #   breakeven / trailing / sl —— 离场原因细分，统计按规则身份分组）。多空各一处。
     check("止损侧 reason 走 stop_reason（规则身份细分，多空各一处）",

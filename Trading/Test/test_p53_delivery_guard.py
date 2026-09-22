@@ -149,8 +149,7 @@ def make_cfg(guard_days=1):
     #   注释备案），写旧键仍会触发 _check_removed_keys 指路
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
     base["risk"]["delivery_guard_days"] = guard_days
-    base["exit_params"].update({"use_atr": False,
-                                "use_trailing": False})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 

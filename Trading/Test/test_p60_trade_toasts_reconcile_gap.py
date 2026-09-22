@@ -24,7 +24,7 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
   [2] Engine.notify：落 kv `toasts`、有界（尾部 30 条）、写 toast 事件
   [3] 开仓成交 toast：含方向/手数/成交价/止损(1R) 点位
   [4] 盈利达 1R → 保本 toast；达 2R → 移动止盈 toast（阶段跃迁只弹一次）
-  [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 固定止盈 / 锁仓离场
+  [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 初始止损 / 锁仓离场
   [6] 对账盲区：账本空 + 柜台有量 → position_mismatch severe（restore 与
       on_bar 两路）；无时间宽限（P61 撤销：宁误报不漏报）
   [7] 账单同步 toast：柜台比账本少 → 账本修正 + toast
@@ -339,7 +339,7 @@ with tmp_dir() as tmp:
     check("[4e] 移动止盈 toast 只弹一次", n_tr, 1)
 
 # ════════════════════════════════════════════════════════════════
-# [5] 平仓 toast 文案（需求 ⑷(2)）：止盈 / 保本止损 / 移动止盈触发
+# [5] 平仓 toast 文案（需求 ⑷(2)）：保本止损 / 移动止盈触发 / 初始止损
 # ════════════════════════════════════════════════════════════════
 print("\n[5] 平仓 toast 说明止盈还是止损")
 # 说明：本测试里所有持仓都是**当日仓** → 引擎的今仓离场 = 反向开仓锁仓
@@ -399,24 +399,6 @@ with tmp_dir() as tmp:
           _tr5b[0]["reason"] if _tr5b else None, "trailing")
 
 with tmp_dir() as tmp:
-    # 5c 固定止盈单模式（use_trailing=False）触发 tp → 文案「止盈」
-    engine, store, broker, ev = build_engine(
-        tmp, exit_policy=LayeredExitPolicy({"use_trailing": False}))
-    engine.on_bar(make_bar(1000))
-    engine.on_signal(make_signal(is_buy=True, bsp_type="1",
-                                 fractal_low=4500.0))
-    r_mult = engine.exit_policy.win_loss_ratio
-    entry = engine._run_anchor
-    r = engine._run_plan.params["R"]
-    tp = engine._run_plan.tp_price
-    engine.on_bar(make_bar(2000, h=max(tp + 2.0, 4560.0), l=4548.0,
-                           c=tp if tp else 4560.0))
-    msgs = [t["msg"] for t in toasts_of(store)]
-    check("[5c] 固定止盈文案出现",
-          any("锁仓离场" in m and "止盈" in m and "保本" not in m
-              for m in msgs), True)
-
-with tmp_dir() as tmp:
     # 5d 今仓止损离场 = 反向开仓锁仓 → 文案「锁仓离场」
     engine, store, broker, ev = build_engine(tmp)
     engine.on_bar(make_bar(1000))
@@ -439,9 +421,9 @@ with tmp_dir() as tmp:
     engine, store, broker, ev = build_engine(tmp)
     act = SimpleNamespace(intent=OrderIntent.CLOSE)
     o = SimpleNamespace(side=Side.SHORT, volume=2, filled_price=4525.0)
-    engine._notify_close(o, act, "tp")
-    check("[5e] CLOSE intent 前缀为 平仓成交·止盈",
-          "平仓成交·止盈" in last_toast_msg(store), True)
+    engine._notify_close(o, act, "trailing")
+    check("[5e] CLOSE intent 前缀为 平仓成交·移动止盈",
+          "平仓成交·移动止盈" in last_toast_msg(store), True)
 
 # ════════════════════════════════════════════════════════════════
 # [6] 对账盲区：账本空 + 柜台有量 → severe 告警（restore / on_bar / 宽限）

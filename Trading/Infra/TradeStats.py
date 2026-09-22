@@ -180,8 +180,8 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
       equity_curve      累计净值序列：[{exit_at, net_cash, cumulative}]
       by_reason         按出场**规则身份**（reason）分组：{key: {n, wins, losses,
                         flat, net}}。**刻意不按「止盈 / 止损」分**：reason 只回答
-                        "哪条规则触发的离场"（tp 固定止盈线 / breakeven 保本层保护价 /
-                        trailing 跟踪层保护价 / sl 初始止损线 / auto_order_off* /
+                        "哪条规则触发的离场"（breakeven 保本层保护价 / trailing
+                        跟踪层保护价 / sl 初始止损线 / auto_order_off* /
                         reconcile_* …），而"这笔赚没赚"是**成交结果** —— 保本离场
                         名义上是止盈、被滑点打成净亏的也有，跟踪离场同理；把 reason
                         映射成止盈/止损必然要在"愿望"和"实际"之间二选一，两边都不对。

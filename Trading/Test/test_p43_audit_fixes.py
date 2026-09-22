@@ -146,8 +146,7 @@ def make_pos(side, volume, price, key, entry_date):
 def make_cfg(**_legacy_engine_over):
     c = copy.deepcopy(DEFAULT_CONFIG)
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
-    c["exit_params"].update({"use_atr": False,
-                             "use_trailing": False})
+    c["exit_params"].update({"use_atr": False})
     # 2026-09-17 拍板：EngineConfig（冷却/连拒时序）整体删除，
     # 旧的 engine 覆盖参数一并废弃（保留 **kwargs 兼容旧调用点签名）。
     return TradingConfig.from_dict(c)
@@ -374,7 +373,7 @@ with tmp_dir("apifields") as tmp:
         run_v = (res or {}).get("run")
         check_true("[5e] 有净敞口时 run 非空且含 anchor/stop/tp",
                    isinstance(run_v, dict)
-                   and {"anchor", "stop", "tp"} <= set(run_v), run_v)
+                   and {"anchor", "stop"} <= set(run_v), run_v)
     except Exception as e:                    # App 层不可导入时不算失败
         print("  ⚠ 跳过 [5]：App 层不可导入（{}: {}）".format(
             type(e).__name__, e))

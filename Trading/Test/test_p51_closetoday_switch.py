@@ -162,8 +162,7 @@ def make_cfg(signal_symbol: str = "KQ.m@CFFEX.IF"):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
-    base["exit_params"].update({"use_atr": False,
-                                "use_trailing": False})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 

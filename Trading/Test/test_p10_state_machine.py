@@ -169,7 +169,7 @@ def seed_run(store, side="LONG", anchor=4550.0, volume=1):
         "bar_ts": 4000, "bar_seq": 10, "signal_key": "SEED",
         "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
         "plan": {"name": "run_managed", "stop_price": 0.0,
-                 "tp_price": None, "params": {}},
+                 "params": {}},
     })
 
 

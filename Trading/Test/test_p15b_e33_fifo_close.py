@@ -639,7 +639,7 @@ with tmp_dir() as td:
     eng.last_bar = _bar
     eng.bars_seen = 10
     seed_run(eng, side=Side.LONG, anchor=4500.0, bar_ts=4000,
-             plan=ExitPlan(name="manual", stop_price=4480.0, tp_price=None,
+             plan=ExitPlan(name="manual", stop_price=4480.0,
                            params={"R": 10.0}))
     eng._settle_positions(_bar)
     _upd = read_events(eng, kinds={"exit_plan_update"})

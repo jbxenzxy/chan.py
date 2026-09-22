@@ -166,7 +166,6 @@ def build(tmpdir, tag="a", profile=None, trade_symbol="CFFEX.IF2609",
         cfg = cfg.model_copy(update={"instrument": cfg.instrument.model_copy(
             update={"signal_symbol": sig})})
     cfg.exit_params.use_atr = False
-    cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
     spec = Instrument(InstrumentConfig(trade_symbol=trade_symbol,
                                        signal_symbol=sig),

@@ -349,7 +349,7 @@ with tmp_dir() as tmp:
         "side": "LONG", "anchor": 4500.0, "volume": 2,
         "bar_ts": ms(2026, 9, 1, 9, 35), "bar_seq": 1, "signal_key": "LK",
         "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
-        "plan": {"name": "x", "stop_price": 0.0, "tp_price": None, "params": {}}})
+        "plan": {"name": "x", "stop_price": 0.0, "params": {}}})
     eng3, brk3 = build(tmp, "heal")
     check("[3d] kv=0 时 _trade_seq 从 trades 表自愈", eng3._trade_seq, 12)
     check("[3e] kv=0 时 broker 序号从 orders 表自愈", _oseq(brk3), 20)
@@ -438,7 +438,7 @@ _RUN_KV = {
     "side": "LONG", "anchor": 4500.0, "volume": 2,
     "bar_ts": ms(2026, 9, 1, 9, 35), "bar_seq": 1, "signal_key": "A",
     "entry_offset": "OPEN", "entry_at": "2026-09-01 09:00",
-    "plan": {"name": "x", "stop_price": 0.0, "tp_price": None, "params": {}}}
+    "plan": {"name": "x", "stop_price": 0.0, "params": {}}}
 
 
 def _seed_positions(tmp, tag, recs, kv_extra=None):

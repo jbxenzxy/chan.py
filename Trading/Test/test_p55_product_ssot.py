@@ -124,7 +124,7 @@ def tmp_dir(tag):
 def make_cfg(signal_symbol="KQ.m@CFFEX.IF"):
     base = copy.deepcopy(DEFAULT_CONFIG)
     base["instrument"]["signal_symbol"] = signal_symbol
-    base["exit_params"].update({"use_atr": False, "use_trailing": False})
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 

@@ -136,9 +136,7 @@ def tmp_dir(tag):
 def make_cfg():
     base = copy.deepcopy(DEFAULT_CONFIG)
     # 手数 = 品种执行策略表第 3 列（IF → 2 手）；原 risk.max_volume 删除
-    base["exit_params"].update({
-        "use_atr": False, "use_trailing": False,
-    })
+    base["exit_params"].update({"use_atr": False})
     return TradingConfig.from_dict(base)
 
 
@@ -188,7 +186,6 @@ def plan_key(plan):
     if plan is None:
         return None
     return (plan.name, round(float(plan.stop_price), 6),
-            (None if plan.tp_price is None else round(float(plan.tp_price), 6)),
             tuple(sorted((str(k), str(v)) for k, v in (plan.params or {}).items())))
 
 
@@ -205,7 +202,6 @@ def snapshot(eng, since_order=0, since_trade=0):
         "run": (eng._run_side.name, eng._run_volume, eng._run_anchor),
         "plan": plan_key(eng._run_plan),
         "stop": eng._run_plan.stop_price,
-        "tp": eng._run_plan.tp_price,
         "risk_anchor": eng._run_plan.params.get("risk_anchor"),
     }
 
@@ -318,10 +314,9 @@ check("[4c] run_side / run_volume / run_anchor 逐项相等", snap_x["run"],
 check_true("[4d] 两边的风控锚都 = 4520（新敞口的成交价）",
            snap_x["run"][2] == P_ANCHOR and snap_y["run"][2] == P_ANCHOR,
            "%s / %s" % (snap_x["run"][2], snap_y["run"][2]))
-check("[4e] **出场计划完全一致**（name / stop / tp / params 全等）",
+check("[4e] **出场计划完全一致**（name / stop / params 全等）",
       snap_x["plan"], snap_y["plan"])
 check("[4f] L1 止损价一致（= 4520 − R）", snap_x["stop"], snap_y["stop"])
-check("[4g] 止盈价一致", snap_x["tp"], snap_y["tp"])
 check("[4h] 计划内风控锚一致", snap_x["risk_anchor"], snap_y["risk_anchor"])
 check_true("[4i] 出场计划确实带了 risk_anchor（可审计）",
            snap_x["risk_anchor"] is not None

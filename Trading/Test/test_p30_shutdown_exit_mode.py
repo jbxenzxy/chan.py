@@ -156,7 +156,6 @@ def build(tmpdir, tag="a", store_path=None):
     # max_open_positions / unlock_no_new_open 已删除（D2）：前者是同向笔数门，
     # 后者在 D1（风控锚改挂在 run 上）后失去意义。
     cfg.exit_params.use_atr = False
-    cfg.exit_params.use_trailing = True
     cfg.exit_params.breakeven_trigger_r = 1.0
     spec = Instrument(InstrumentConfig(trade_symbol="CFFEX.IF2609"), _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})

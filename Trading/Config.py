@@ -305,7 +305,6 @@ class ExitConfig(BaseModel):
     atr_sl_multiple: float = 2.0           # 初始止损距离 = 2 × ATR
 
     # ---- L3 移动/保本锁利 ----
-    use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 > 1R 时，启动保本策略（严格不等：恰好 1R 不启动）
     breakeven_buffer_r: float = 0.5        # 保本落点 = 入场价 ± 0.5R
     trailing_trigger_r: float = 0.5        # 跟踪缓冲 = 0.5 × R
@@ -350,7 +349,7 @@ class ExitConfig(BaseModel):
 class ExitPolicyParams(ExitConfig):
     """LayeredExitPolicy 的运行时参数模型（拆分）。
 
-    继承 ExitConfig 的品种无关项（ATR / trailing / breakeven_*），另持品种相关参数 win_loss_ratio（它同时是 L3 启动阈值，品种级）。
+    继承 ExitConfig 的品种无关项（ATR / breakeven_*），另持品种相关参数 win_loss_ratio（它同时是 L3 启动阈值，品种级）。
     win_loss_ratio 的**权威默认值在 Product 档案**（生产路径经 resolved_exit_params()
     合并喂入，见 Exit.py 用法）；此处的默认值仅作无档案直连场景的兜底 ——
     如 test_p8 直接构造 policy、LayeredExitPolicy() 无参取默认等（= IF 档案基线）。

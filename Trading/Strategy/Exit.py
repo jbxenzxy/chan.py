@@ -2,8 +2,10 @@
 """
 出场策略（Exit.py）
 ====================
-精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场），
-原可选的 `DefaultExitPolicy`（简单固定点数出场）与 L4 时间/收盘兜底均已删除。
+精简：出场只有一个策略 `LayeredExitPolicy`（L1-L3 分层出场）。原可选的
+`DefaultExitPolicy`（简单固定点数出场）、L4 时间/收盘兜底早已删除；“固定止盈单”
+那套（`use_trailing=False` 开关 + `ExitPlan.tp_price`）也已整条删除 —— 出场只有
+L1-L3 一套，止盈只有 L3 跟踪一种。
 
 价格输入口径（2026-09-22 · 用户拍板 → 同日二次拍板修正）：**触发判据与达标判据用不同
 的价，这是刻意的，不要"顺手统一"它们。**
@@ -43,34 +45,28 @@
       差异 —— 旧闭区间口径下这类行情会提前一格离场。改后方向一致：离场更晚一点。
       由 `test_p61_exit_close_only.py` 的 [3c] / [3e]（收盘 == 止损线 → 不离场）、
       [4b2]（有利极值 == 入场+1R → 不进保本）与 [5]（== 2R / 3R → 不启动跟踪）钉死。
-      ⚠️ **固定止盈单（`use_trailing=False`，非默认模式）不在此列，仍是闭区间
-      `close >= tp`**：需求原文只描述跟踪模式（原文 ⑶ 的"理论止盈价"= 保本价 / 跟踪价，
-      在本实现里就是 `stop_price`，已被上面两行覆盖），固定止盈单是原文未定义的另一种
-      模式，语义是"目标价触及即走"，且既有护栏
-      `Trading/Test/test_p60_trade_toasts_reconcile_gap.py` 的 [5c] 正是用
-      `close == tp` 断言"触发止盈"。刻意保留、不随本口径一起改 —— 若要统一，那是一次
-      独立的拍板（连同 p60 [5c] 的样本一起改）。
+      价格线**只有一条** `stop_price`（初始止损 → 保本 → 跟踪，逐级改写它），
+      所以不存在“只改了止损、漏改止盈”的可能。
 
 两个刻意保留的保守设定（LayeredExitPolicy）
     ① 价格对齐一律往"对自己不利"的方向取整（止损更易触发、止盈更晚更少）
     ② 出场计划里带上参数快照，落盘后可做事后参数敏感性分析
 
-跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落固定止盈单
-    `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
-    的 ATR 跟踪止损兑现；L3 启动阈值（= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`
-    （IC/IM=3R、其余=2R），故"盈利到 win_loss_ratio×R 时进 L3 跟踪锁利"，不同品种进 L3
-    时机天然不同。名义止盈价（= win_loss_ratio×R）仍写入 params["_tp_nominal"] 供事后对照。
+止盈一律交给 L3 跟踪
+    plan() 生成**零个止盈单**；浮盈完全由 L3 的跟踪止损兑现。L3 启动阈值
+    （= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`（IC/IM=3R、其余=2R），
+    故“盈利到 win_loss_ratio×R 时进 L3 跟踪锁利”，不同品种进 L3 时机天然不同。
+    名义止盈价（= win_loss_ratio×R）仍写入 params["_tp_nominal"] 供事后对照（只落盘）。
     历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 win_loss_ratio 解耦），
     合并：删 trailing_trigger_r，L3 触发统一走品种级 win_loss_ratio
-    （消除"win_loss_ratio=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
-    固定止盈单模式（`use_trailing=False`）：落固定止盈单（= win_loss_ratio×R），无保本、无跟踪。
+    （消除“win_loss_ratio=3 是死配置”问题，IC/IM 真正按 3R 进 L3）。
 
     ⚠️ 术语沿革（2026-09-15 清理，2026-09-22 续）：出场策略**只有 LayeredExitPolicy
     一套（L1-L3）**，不存在两套可选的出场策略；L1-L3 里也**不存在"硬止损 / 硬止盈"这套
-    说法** —— 止损线由 L1（结构 R）+ L2（ATR 定宽）给出，止盈由 L3（保本 / 跟踪）或
-    固定止盈单给出，"硬"字没有对应实体，一律不要再用。旧文档 / 旧注释里的「A 方案 /
-    B 方案」是本策略 `use_trailing` 两种取值的遗留叫法（B = 跟踪止盈模式、
-    A = 固定止盈单模式），同样废弃；新写的代码 / 日志 / 报告一律用 L1-L3 与模式名。
+    说法** —— 止损线由 L1（结构 R）+ L2（ATR 定宽）给出，止盈由 L3（保本 / 跟踪）给出，
+    “硬”字没有对应实体，一律不要再用。旧文档 / 旧注释里的「A 方案 / B 方案」是本策略
+    历史上两套取值的遗留叫法（跟踪止盈 / 固定止盈单），同样废弃 —— 其中“固定止盈单”
+    那套已连开关一起删除（见上），出场只有 L1-L3 一套，新写的代码 / 日志 / 报告一律用 L1-L3。
 """
 
 from __future__ import annotations
@@ -101,9 +97,8 @@ class ExitCheck:
     此时 plan 必须给，price 无意义（也不给 fill_price）。
     """
     reason: str                       # 规则身份（**不表达盈亏**，见 check() 的 reason 口径）：
-                                      #   tp（固定止盈线）/ breakeven（保本层保护价）/
-                                      #   trailing（跟踪层保护价）/ sl（初始止损线）/
-                                      #   time / custom（其它调用方自定）
+                                      #   breakeven（保本层保护价）/ trailing（跟踪层保护价）/
+                                      #   sl（初始止损线）/ time / custom（其它调用方自定）
     price: float
     fill_price: Optional[float] = None  # 建议成交参考价 = 触发那根 K 线收盘价
     plan: Optional[ExitPlan] = None   # 非空则替换持仓的出场计划
@@ -148,7 +143,6 @@ class LayeredExitPolicy:
         self.atr_period = int(p.atr_period)
         self.atr_sl_multiple = float(p.atr_sl_multiple)
         # L3 移动/保本锁利
-        self.use_trailing = p.use_trailing
         self.breakeven_trigger_r = float(p.breakeven_trigger_r)
         self.breakeven_buffer_r = float(p.breakeven_buffer_r)
         self.trailing_trigger_r = float(p.trailing_trigger_r)
@@ -345,11 +339,9 @@ class LayeredExitPolicy:
             stop = state.round_price(raw_stop, "down")
             nominal_tp = state.round_price(raw_tp, "up")
 
-        # 跟踪止盈模式（use_trailing=True，默认）：**不落固定止盈单**，止盈交给 L3 的
-        #   ATR 跟踪兑现。L3 启动阈值 = win_loss_ratio×R（品种档案，IC/IM=3R、其余=2R），
-        #   故不同品种的"进 L3 时机"天然不同；名义止盈价（= win_loss_ratio×R）仍写入
-        #   params，供事后对照分析。固定止盈单模式（use_trailing=False）则落固定止盈单。
-        tp = None if self.use_trailing else nominal_tp
+        # 不落任何止盈单：止盈交给 L3 的跟踪兑现。L3 启动阈值 = win_loss_ratio×R
+        #   （品种档案，IC/IM=3R、其余=2R），故不同品种的“进 L3 时机”天然不同；
+        #   名义止盈价（= win_loss_ratio×R）仍写入 params，供事后对照分析（只落盘）。
 
         # P2 防护：止损必须严格在风控锚的"不利侧"且至少 1 tick 间距，
         # 否则遇到陈旧信号（行情已走远）会变成"开仓即触发止盈"的反向单。
@@ -362,18 +354,17 @@ class LayeredExitPolicy:
 
         params = dict(self.params)
         params["R"] = R
-        params["_tp_nominal"] = nominal_tp  # 名义止盈价（跟踪止盈模式下不落单，仅供事后对照）
+        params["_tp_nominal"] = nominal_tp  # 名义止盈价（不落单，仅供事后对照）
         params["_trail_best"] = base              # 跟踪极值初值 = 风控锚（或入场价）
         if anchor is not None:
             params["risk_anchor"] = anchor        # 风控锚（解锁重算时 = P₂）
-        return ExitPlan(name=self.name, stop_price=stop, tp_price=tp, params=params)
+        return ExitPlan(name=self.name, stop_price=stop, params=params)
 
     # ---------- 每根 bar 闭合后判定 ----------
     def check(self, position: Position, bar: Bar, state: "Instrument",
               bars_held: int = 0) -> Optional[ExitCheck]:
         plan = position.exit_plan
         stop = plan.stop_price
-        tp = plan.tp_price
         is_long = position.side is Side.LONG
         # 风控基准：解锁重算的持仓用 risk_anchor（P₂），否则用会计锚 entry_price（P₀）。
         #   会计锚 entry_price 只用于 pnl_points 对账；风控（保本/跟踪/止损比较）一律用本基准。
@@ -384,28 +375,20 @@ class LayeredExitPolicy:
         R = plan.params.get("R")
         R = float(R) if R is not None else None
         atr = self._atr()
-        # ① 止损线 / 止盈线判定（L1 结构 R + L2 ATR 定宽给出的止损线；止盈线由固定止盈单
-        #   模式提供，跟踪止盈模式下 tp is None）。
+        # ① 止损线判定（L1 结构 R + L2 ATR 定宽给出）。价格线只有这一条 —— 止盈没有
+        #   独立的线：L3 的保本 / 跟踪都是**改写 stop_price**（见下方 ③）。
         #   **触发判据的价格输入 = 本根 K 线的收盘价 `bar.close`**（2026-09-22 口径，见模块
         #   docstring）：不用 `bar.low` / `bar.high` —— 判定的时刻是"这根闭合之后"，依据也用
         #   "这根结束时的那个价"，两者才是同一个东西。代价是止损更晚更深（收盘才认），换来
         #   的是不被插针 / 瞬间打穿扫掉。
         #   （与 L3 的**达标判据**刻意不同：那一层衡量"行情最远走到过哪里"，读
         #   `_fav_extreme()` 的根内极值。两层口径不同是设计，不要"顺手统一"。）
-        #   顺序上 sl 先判、tp 后判：**不是**"同根双破取悲观"那条旧规则（收盘价口径 +
-        #   严格不等下"同根既破止损又破止盈"已不可达），只是对畸形计划的确定性兜底。
-        #   跟踪止盈模式（use_trailing=True）下 plan 不生成止盈单（tp is None），故 tp 分支
-        #   只对固定止盈单模式（use_trailing=False）与旧 state.db 恢复的存量持仓生效。
+        #   （“同根双破取悲观”那条旧规则已随固定止盈单一并删除：收盘价口径 + 严格
+        #   不等下本就不可达，且现在只有止损一条线，更无从“双破”。）
         #   ⚠️ **止损侧三处一律严格不等**（2026-09-22 · 用户拍板"改为需求原文口径 ＜ / ＞"，
         #   见模块 docstring）：收盘价恰好等于止损/保本/跟踪价 → 本根不动。保本价、跟踪价的
         #   离场也走上面这两行 —— L3 是**改写 stop_price**、不另立字段（见下方 ③），故
         #   ⑵ 止损与 ⑶ 保本 / 跟踪的触发口径天然是同一条，不存在"只改一半"的可能。
-        #   ⚠️ **固定止盈单（`tp`，仅 `use_trailing=False` 非默认模式或旧 state.db 存量持仓
-        #   才有）刻意保持闭区间 `>=` / `<=`**：需求原文只描述跟踪模式（原文 ⑶ 的"理论止盈价"
-        #   = 保本价 / 跟踪价，在本实现里就是 `stop_price`，已被上面两行覆盖），固定止盈单是
-        #   原文未定义的另一种模式，其语义是"目标价触及即走"，且既有护栏
-        #   `Trading/Test/test_p60_trade_toasts_reconcile_gap.py` 的 [5c] 就用
-        #   `close == tp` 断言"触发止盈"。故不随本口径一起改 —— 要统一成严格需另行拍板。
         #   ✏️ reason 记的是**哪一层保护价被跌破**（2026-09-22 拍板：reason 只表达"规则身份"，
         #   **不表达盈亏**）：`_phase` 由 L3 在保护价真的被抬高时写入（见下方 ③），取它即可 ——
         #      "breakeven" → 保本层保护价被跌破 → reason = "breakeven"
@@ -422,20 +405,16 @@ class LayeredExitPolicy:
         if is_long:
             if stop and close < stop:
                 return ExitCheck(stop_reason, stop, fill_price=close)
-            if tp is not None and close >= tp:
-                return ExitCheck("tp", tp, fill_price=close)
         else:
             if stop and close > stop:
                 return ExitCheck(stop_reason, stop, fill_price=close)
-            if tp is not None and close <= tp:
-                return ExitCheck("tp", tp, fill_price=close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出
         #   （评审补）：原先只靠 `and R` 的真值判定，R=0 与 R 缺失混在同一支
         #   里被静默吞掉；显式化后行为不变，但把「R=0 则 L3 不跑」这条写在明处
         #   （R=0 是否发生由 _initial_r 的 [R 归零] 观测点负责；本行只负责不跑 L3）。
-        if self.use_trailing and R is not None and R > 0:
+        if R is not None and R > 0:
             best = float(plan.params.get("_trail_best", entry))
             prev_best = best
             # fav_profit 用**根内有利侧极值**衡量（做多 high / 做空 low，2026-09-22 二次口径，
@@ -500,7 +479,7 @@ class LayeredExitPolicy:
                 params["_trail_best"] = best
                 params["_phase"] = phase
                 return ExitCheck("trailing", 0.0, only_update=True,
-                                plan=ExitPlan(self.name, new_stop, tp, params))
+                                plan=ExitPlan(self.name, new_stop, params=params))
         return None
 
 

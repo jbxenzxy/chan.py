@@ -837,7 +837,6 @@ class TradingEngine(ReconcileMixin):
             self._persist()
             self.ev.write("exit_plan_update", reason=check.reason,
                           stop=self._run_plan.stop_price,
-                          tp=self._run_plan.tp_price,
                           symbol=run.symbol,
                           position_signal_key=run.signal_key)
             return
@@ -1736,9 +1735,7 @@ class TradingEngine(ReconcileMixin):
         文案说的是"哪条规则说的"，与"这笔实际赚没赚"无关：保本离场也可能被滑点打成净亏，
         那是成交结果，统计侧按 net_cash 分（见 `Infra/TradeStats.py`）。
         """
-        if reason == "tp":
-            label = "止盈"
-        elif reason == "breakeven":
+        if reason == "breakeven":
             label = "保本止损"
         elif reason == "trailing":
             label = "移动止盈（跟踪止损触发）"
@@ -1822,7 +1819,7 @@ class TradingEngine(ReconcileMixin):
         self._run_plan = plan
         self.ev.write("run_start", side=str(side), volume=self._run_volume,
                       anchor=anchor_price, stop=plan.stop_price,
-                      tp=plan.tp_price, exit_policy=plan.name,
+                      exit_policy=plan.name,
                       signal_key=sig.key, entry_date=self._current_trading_day(bar),
                       entry_offset=entry_offset)
 
@@ -2349,7 +2346,6 @@ class TradingEngine(ReconcileMixin):
                         "anchor": self._run_anchor,
                         "volume": self._run_volume,
                         "stop": self._run_plan.stop_price,
-                        "tp": self._run_plan.tp_price,
                         "name": self._run_plan.name,
                     }),
             "positions": [p.to_dict() for p in self.positions.positions],

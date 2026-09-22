@@ -307,7 +307,6 @@ class ExitPlan:
     """
     name: str
     stop_price: float
-    tp_price: Optional[float] = None
     params: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -317,7 +316,6 @@ class ExitPlan:
     def from_dict(cls, d: Dict[str, Any]) -> "ExitPlan":
         return cls(name=d.get("name", "unknown"),
                    stop_price=float(d.get("stop_price") or 0.0),
-                   tp_price=d.get("tp_price"),
                    params=d.get("params") or {})
 
 
@@ -417,7 +415,7 @@ class Trade:
     entry_at: str
     exit_at: str
     reason: str                 # 离场**规则身份**（**不表达盈亏**，见 Strategy/Exit.py
-                                #   的 reason 口径）：tp 固定止盈线 / breakeven 保本层
+                                #   的 reason 口径）：breakeven 保本层
                                 #   保护价 / trailing 跟踪层保护价 / sl 初始止损线；
                                 #   另 settle_exit（兜底）、auto_order_off（关闭托管时锁仓）、
                                 #   reconcile_*（对账）、manual（调用方自定）

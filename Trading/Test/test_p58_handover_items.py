@@ -220,8 +220,7 @@ def _mkpos(side, vol, price, seq, key):
     return Position(symbol="CFFEX.IF2609", side=side, volume=vol,
                     entry_price=price, entry_at="2026-09-01 09:30:00",
                     entry_bar_ts=0, signal_key=key, open_order_id="",
-                    exit_plan=ExitPlan(name="t", stop_price=price - 20.0,
-                                       tp_price=price + 40.0),
+                    exit_plan=ExitPlan(name="t", stop_price=price - 20.0),
                     entry_bar_seq=seq, entry_date="2026-09-01")
 
 
