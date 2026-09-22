@@ -655,6 +655,28 @@
             background: #e94560; border-color: #e94560; color: #fff;
         }
         .annotation-dialog-btn.primary:hover { background: #d63850; }
+        /* 模态提示框（替代原生 alert）──
+           原生 alert 只有「确定」一个出口；本组件补上点框外区域 / 按 Esc 两条等价出口。
+           正文可能很长（交易引擎日志尾部、一批严重告警合并），故限宽 + 限高 + 内部滚动，
+           不像 annotation-dialog 那样会被长文把窗口撑破。
+           按钮沿用 .annotation-dialog-btn —— 与标注/扫描弹窗同一套观感，不另造一套。 */
+        .alert-dialog {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 10001;
+            display: none; align-items: center; justify-content: center;
+        }
+        .alert-dialog.show { display: flex; }
+        .alert-dialog-box {
+            background: #16213e; border: 1px solid #0f3460; border-radius: 8px;
+            padding: 18px 22px; width: 620px; max-width: 90vw; max-height: 80vh;
+            display: flex; flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+        .alert-dialog-msg {
+            flex: 1 1 auto; min-height: 0; overflow-y: auto; margin-bottom: 14px;
+            font-size: 13px; line-height: 1.6; color: #e0e0e0;
+            white-space: pre-wrap; word-break: break-word; user-select: text;
+        }
         /* BSP过滤设置对话框 */
         .bsp-filter-grid {
             display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px;

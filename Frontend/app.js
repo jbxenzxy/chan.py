@@ -833,7 +833,7 @@
                             document.getElementById("loading").classList.add("hidden");
                             document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                             setTimeout(() => {
-                                alert(err.message);
+                                showAlert(err.message);
                             }, 50);
                         });
                     return;
@@ -3257,7 +3257,7 @@
                         })
                         .catch(err => {
                             if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得回滚当前状态
-                            alert("加载下面窗口数据失败: " + err.message);
+                            showAlert("加载下面窗口数据失败: " + err.message);
                             isDualWindow = false;
                             activeDualWindow = 'main';
                             dualSubData = null;
@@ -3495,7 +3495,7 @@
                         if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                         document.getElementById("loading").classList.add("hidden");
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                        alert("重置失败: " + err.message);
+                        showAlert("重置失败: " + err.message);
                     });
                 return;
             }
@@ -3566,7 +3566,7 @@
                     if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
                     document.getElementById("loading").classList.add("hidden");
                     document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                    alert("重置失败: " + err.message);
+                    showAlert("重置失败: " + err.message);
                 });
         };
 
@@ -3741,10 +3741,10 @@
 
         window.switchFreq = function(freq) {
             if (!chartData) return;
-            // 自动下单引擎运行中禁止切换周期：运行中的引擎绑定旧周期的 SSE 流，
+            // 交易引擎运行中禁止切换周期：运行中的引擎绑定旧周期的 SSE 流，
             // 直接切换会与引擎状态错配，须先关闭自动下单。
             if (autoOrderRunning) {
-                alert('自动下单引擎运行中，请先关闭自动下单，再切换周期。');
+                showAlert('交易引擎运行中，请先关闭，再切周期');
                 return;
             }
             const isFutures = chartData && chartData.meta && chartData.meta.market === 'futures';
@@ -3753,7 +3753,7 @@
                 if (dualSubFreq === freq) return;
                 // 校验：下窗周期必须严格小于上窗周期，否则弹窗提示并取消
                 if (freqLevel(freq) >= freqLevel(currentFreq)) {
-                    alert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
+                    showAlert("下窗周期必须小于上窗周期，当前上窗周期为" + freqLabel(currentFreq)
                         + "，无法切换到" + freqLabel(freq));
                     return;
                 }
@@ -3780,7 +3780,7 @@
                 // 校验：新下窗周期须在当前上窗的配对空间内（P2：3对 → 6对）
                 if (!isValidStockDualPair(currentFreq, freq)) {
                     const subs = (STOCKS_DUAL_PAIRS_JS[currentFreq] || []).map(freqLabel).join("、");
-                    alert("下窗周期配对无效: " + freqLabel(currentFreq) + "+" + freqLabel(freq)
+                    showAlert("下窗周期配对无效: " + freqLabel(currentFreq) + "+" + freqLabel(freq)
                         + (subs ? "（" + freqLabel(currentFreq) + " 可选 " + subs + "）" : "（当前上窗无下窗可选）"));
                     return;
                 }
@@ -3823,7 +3823,7 @@
                         })
                         .catch(err => {
                             if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
-                            alert("切换下窗周期失败: " + err.message);
+                            showAlert("切换下窗周期失败: " + err.message);
                             document.getElementById("loading").classList.add("hidden");
                         });
                 }
@@ -3832,7 +3832,7 @@
             if (currentFreq === freq) return;
             // 期货双窗口校验：上窗周期必须严格大于下窗周期，否则弹窗提示并取消
             if (isDualWindow && isFutures && freqLevel(freq) <= freqLevel(dualSubFreq)) {
-                alert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
+                showAlert("上窗周期必须大于下窗周期，当前下窗周期为" + freqLabel(dualSubFreq)
                     + "，无法切换到" + freqLabel(freq));
                 return;
             }
@@ -3840,7 +3840,7 @@
             // （5m 为股票最小周期）；当前下窗仍为合法配对则保持，否则回退默认配对
             if (isDualWindow && !isFutures) {
                 if (!STOCKS_DUAL_PAIRS_JS[freq]) {
-                    alert("上窗周期必须大于下窗周期，" + freqLabel(freq) + "为股票最小周期，双窗口下不可选");
+                    showAlert("上窗周期必须大于下窗周期，" + freqLabel(freq) + "为股票最小周期，双窗口下不可选");
                     return;
                 }
                 if (!isValidStockDualPair(freq, dualSubFreq)) {
@@ -3932,7 +3932,7 @@
                     })
                     .catch(err => {
                         if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
-                        alert("切换周期失败: " + err.message);
+                        showAlert("切换周期失败: " + err.message);
                         document.getElementById("loading").classList.add("hidden");
                     });
             }
@@ -4057,7 +4057,7 @@
                 })
                 .catch(err => {
                     if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
-                    alert("跳转失败: " + err.message);
+                    showAlert("跳转失败: " + err.message);
                 })
                 .finally(() => {
                     document.getElementById("loading").classList.add("hidden");
@@ -4402,10 +4402,10 @@
         window.loadStock = function() {
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
-            // 自动下单引擎运行中禁止切换合约：运行中的引擎绑定旧合约的持仓/SSE 流，
+            // 交易引擎运行中禁止切换合约：运行中的引擎绑定旧合约的持仓/SSE 流，
             // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
             if (autoOrderRunning) {
-                alert('自动下单引擎运行中，请先关闭自动下单，再切换合约。');
+                showAlert('交易引擎运行中，请先关闭，再切合约');
                 return;
             }
             // 切换股票时取消区间选择
@@ -4612,7 +4612,7 @@
                 })
                 .catch(err => {
                     if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
-                    alert("查询失败: " + err.message);
+                    showAlert("查询失败: " + err.message);
                     document.getElementById("loading").classList.add("hidden");
                 });
         };
@@ -6151,7 +6151,7 @@
                     btn.classList.remove("active");
                     btn.querySelector("svg").style.animation = "";
                     status.style.display = "none";
-                    alert("启动刷新失败: " + err.message);
+                    showAlert("启动刷新失败: " + err.message);
                 });
         };
 
@@ -6168,7 +6168,7 @@
                         btn.querySelector("svg").style.animation = "";
                         if (data.error) {
                             status.textContent = "刷新失败";
-                            alert("刷新失败: " + data.error);
+                            showAlert("刷新失败: " + data.error);
                         } else {
                             status.textContent = "刷新完成";
                             setTimeout(function() { status.style.display = "none"; }, 2000);
@@ -7190,7 +7190,7 @@
                     // 重新加载以同步本地状态，并提示用户
                     console.warn("[标注] 后端未找到匹配标注(code=" + code + ", freq=" + freq + ")，重新加载标注数据");
                     loadAnnotations();
-                    alert("未找到该标注，可能标注存在于其他周期下。\n当前周期: " + freq + "\n请切换到添加标注时使用的周期再试。");
+                    showAlert("未找到该标注，可能标注存在于其他周期下。\n当前周期: " + freq + "\n请切换到添加标注时使用的周期再试。");
                 }
             })
             .catch(function(err) { console.error("删除标注失败:", err); });
@@ -7310,7 +7310,7 @@
                 // 日K/周K：只取日期部分
                 dateStr = _annotationTargetDate.slice(0, 10).replace(/\//g, "-");
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
-                    alert("无法识别该K线日期: " + _annotationTargetDate);
+                    showAlert("无法识别该K线日期: " + _annotationTargetDate);
                     return;
                 }
             }
@@ -7408,7 +7408,7 @@
         window.annotationDialogConfirm = function() {
             const text = document.getElementById("annotation-dialog-input").value.trim();
             if (!text) {
-                alert("请输入标注文字");
+                showAlert("请输入标注文字");
                 return;
             }
             document.getElementById("annotation-dialog").classList.remove("show");
@@ -8147,6 +8147,7 @@
         let autoOrderSeenAlertTs = 0;     // 告警本地水位：<= 它的一律不再弹（已处理过）
         const autoOrderAlertCool = {};    // code → 上次弹框时刻（同因告警防连弹）
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
+        let autoOrderAlertAckHold = 0;    // 未确认的严重告警水位：>0 = 弹框还没关，暂缓 ack
         let autoOrderSeenToastTs = 0;     // 轻提示本地水位：<= 它的一律不再弹
 
         // ══════════════════════════════════════════════════════════════
@@ -8293,7 +8294,7 @@
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
                     console.warn('[auto-order] 引擎已退出，日志尾部:\n' + tail);
-                    alert('自动下单引擎已退出！\n\n引擎日志尾部（前 12 行）：\n'
+                    showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
                         + (tail || '（日志文件不存在或为空）')
                         + '\n\n完整日志：' + (data.log_file || '（未知）'));
                 }
@@ -8392,15 +8393,85 @@
         }
 
         // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] AlertDialog —— 模态提示框（替代原生 alert）
+        //   全站「看完点确定」的提示统一走这里（原来是各调用点直接敲原生 alert）。
+        //   不用原生 alert 的原因：
+        //     ① 出口只有一个 —— 必须先点「确定」才能继续操作页面；
+        //     ② 点框外区域关不掉（原生 alert 压根没有遮罩层可点）。
+        //   本实现的关闭出口有三个，语义都等同于「确定」：
+        //     点「确定」按钮 / 点遮罩（框之外的区域）/ 按 Esc 或 Enter。
+        //   一次只弹一个：原生 alert 会排队串行，这里用队列复刻同一语义 —— 后到的
+        //   消息等前一个关掉再出现，不会几层叠起来分不清哪条是哪条。
+        //   返回值是 Promise，在关掉那一刻 resolve：需要「人已看到才往下走」的调用方
+        //   （如严重告警的 ack 回执，见 ackIfAlertsSeen）挂 .then() 即可。
+        // ══════════════════════════════════════════════════════════════
+        const _alertQueue = [];       // 待弹消息（各带自己的 resolve）
+        let _alertShowing = false;    // 当前屏幕上是否有框
+
+        function showAlert(msg) {
+            return new Promise(function (resolve) {
+                _alertQueue.push({
+                    msg: String(msg === null || msg === undefined ? "" : msg),
+                    resolve: resolve
+                });
+                if (!_alertShowing) _pumpAlertQueue();
+            });
+        }
+
+        function _pumpAlertQueue() {
+            const job = _alertQueue.shift();
+            if (!job) { _alertShowing = false; return; }
+            _alertShowing = true;
+            const overlay = document.getElementById("alert-dialog") || _createAlertDialog();
+            const msgEl = overlay.querySelector(".alert-dialog-msg");
+            const okBtn = overlay.querySelector(".annotation-dialog-btn.primary");
+            msgEl.textContent = job.msg;
+            msgEl.scrollTop = 0;
+            let closed = false;
+            const close = function () {
+                if (closed) return;      // 「确定」/遮罩/Esc 三条出口可能同时到达
+                closed = true;
+                overlay.classList.remove("show");
+                document.removeEventListener("keydown", onKey, true);
+                job.resolve();
+                _pumpAlertQueue();       // resolve 是微任务，此刻队列已推进完
+            };
+            const onKey = function (e) {
+                if (e.key === "Escape" || e.key === "Enter") { e.preventDefault(); close(); }
+            };
+            // 点遮罩（框之外的区域）＝点「确定」；点框内不关
+            overlay.onclick = function (e) { if (e.target === overlay) close(); };
+            okBtn.onclick = close;
+            document.addEventListener("keydown", onKey, true);
+            overlay.classList.add("show");
+            okBtn.focus();
+        }
+
+        function _createAlertDialog() {
+            const overlay = document.createElement("div");
+            overlay.id = "alert-dialog";
+            overlay.className = "alert-dialog";
+            // 按钮沿用既有弹层的按钮样式（与标注/扫描弹窗同一套观感）
+            overlay.innerHTML = '<div class="alert-dialog-box">'
+                + '<div class="alert-dialog-msg"></div>'
+                + '<div class="annotation-dialog-btns">'
+                + '<button class="annotation-dialog-btn primary" type="button">确定</button>'
+                + '</div></div>';
+            document.body.appendChild(overlay);
+            return overlay;
+        }
+
+        // ══════════════════════════════════════════════════════════════
         // [COMPONENT] 自动下单告警弹窗（D11）
         // 后端把「资金不足 / 非交易时段 / 追价跑满 / 平仓连续被拒」这类需要人工
         // 介入的事件写成 alerts 队列（严重告警落盘，重启不丢），随状态轮询下发。
         // 本函数只做三件事：
         //   ① 按 ts 水位挑出新告警（同 code 5 分钟冷却，防一次故障连弹几十个框）
-        //   ② severe → alert() 阻塞弹窗；warn → showToast 轻提示
+        //   ② severe → showAlert 模态框（点确定 / 点框外 / 按 Esc 都关）；warn → showToast 轻提示
         //   ③ 回 ack 把水位写回 state.db —— 不 ack 的话后端队列不清理，
-        //      同一批告警每次轮询都会重来
-        // ⚠️ alert() 会卡住浏览器 JS 线程，但引擎跑在独立子进程里，不会被卡住；
+        //      同一批告警每次轮询都会重来；ack 挂在弹框关掉之后（确认＝人已看到）
+        // ⚠️ 弹框不阻塞交易引擎：交易引擎跑在独立子进程、行情走自己的 SSE 连接，
+        //    页面这边弹框关不关得掉都影响不到它下单；
         //    真正要防的是"一次弹几十个" —— 所以冷却与"合并成一条"缺一不可。
         // ══════════════════════════════════════════════════════════════
         function handleAutoOrderAlerts(data) {
@@ -8436,14 +8507,29 @@
                 }
                 if (severe.length) {
                     console.error('[auto-order] 严重告警: ' + JSON.stringify(severe));
-                    alert('自动下单需要人工介入！\n\n'
+                    // 水位不在这里写回：确认＝人已看到，等弹框关掉再 ack
+                    autoOrderAlertAckHold = Math.max(autoOrderAlertAckHold, maxTs);
+                    showAlert('需人工介入！\n\n'
                         + severe.map(function (a, i) {
                             return (i + 1) + '. ' + a.msg
                                 + (a.n > 1 ? '（已重复 ' + a.n + ' 次）' : '');
-                        }).join('\n\n'));
+                        }).join('\n\n')).then(function () {
+                            ackIfAlertsSeen();
+                        });
+                    return;                      // 本轮 ack 交给 ackIfAlertsSeen
                 }
             }
+            if (autoOrderAlertAckHold) return;   // 严重告警框还没关 → 水位先不写回
             ackAutoOrderAlerts(maxTs);
+        }
+
+        // 严重告警框关掉之后才回 ack：还有框在排队（含后续轮询新弹的）就继续等，
+        // 避免「人还没看完、后端队列已被清空」。水位取见过的最大值。
+        function ackIfAlertsSeen() {
+            if (_alertShowing || _alertQueue.length) return;
+            const ts = autoOrderAlertAckHold;
+            autoOrderAlertAckHold = 0;
+            ackAutoOrderAlerts(ts);
         }
 
         function ackAutoOrderAlerts(ts) {
@@ -8464,7 +8550,7 @@
         // [COMPONENT] 自动下单轻提示 toast（2026-09-18 需求 ⑷）
         //   引擎把关键动作（开仓/平仓/保本/移动止盈/账单同步）写进 state.db 的
         //   toasts 队列，随状态轮询下发。与告警的分界：轻提示是「刚才发生了什么」
-        //   —— 2 秒自动消失、不需要确认、不合并（两次开仓是两个独立事件都要弹）。
+        //   —— 5 秒自动消失、不需要确认、不合并（两次开仓是两个独立事件都要弹）。
         //   首次拉取只定水位不回放历史：页面晚开不该把半小时前的开仓弹一遍。
         // ══════════════════════════════════════════════════════════════
         function handleAutoOrderToasts(data) {
@@ -8483,7 +8569,7 @@
             }
             autoOrderSeenToastTs = maxTs;
             for (let i = 0; i < fresh.length; i++) {
-                if (fresh[i]) showToast('自动下单：' + fresh[i], 2000);
+                if (fresh[i]) showToast('自动下单：' + fresh[i]);
             }
         }
 
@@ -8532,7 +8618,7 @@
                     checkbox.checked = false;   // 回弹开关，且**不发启动请求**
                     console.warn('[auto-order] 品种不支持交易，已取消开启: '
                         + realtimeSymbol + '  ' + chk.message);
-                    alert('不支持交易\n\n' + chk.message);
+                    showAlert('不支持自动下单\n\n' + chk.message);
                     return;
                 }
             }
@@ -8572,7 +8658,7 @@
                 checkbox.checked = !on;
                 console.error('[auto-order] ' + (on ? '开启' : '关闭') + '失败: '
                     + (err && err.message ? err.message : err));
-                alert('自动下单' + (on ? '开启' : '关闭') + '失败：' + (err && err.message ? err.message : err));
+                showAlert('交易引擎' + (on ? '开启' : '关闭') + '失败：' + (err && err.message ? err.message : err));
             } finally {
                 autoOrderBusy = false;
                 // 用置灰态重算 disabled，而不是无脑置 false ——
