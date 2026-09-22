@@ -361,7 +361,7 @@ print("\n[5] R3 护栏：fee_overrides 字段位存在")
 check("[5a] fee_overrides 是 dataclass 字段（字段位已留）",
       "fee_overrides" in [f.name for f in dataclasses.fields(Product)], True)
 check("[5b] 默认值 = 空元组（未消费 → 行为零变化）",
-      Product(product="X", r_multiple_tp=1.0, multiplier=1.0,
+      Product(product="X", win_loss_ratio=1.0, multiplier=1.0,
               open_fee=Fee("rate", 1.0),
               exec_policy=PRODUCT_PROFILES["IF"].exec_policy).fee_overrides, ())
 check("[5c] AU 覆盖档已由生成区块填入字段位",

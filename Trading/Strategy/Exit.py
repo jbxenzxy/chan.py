@@ -22,13 +22,13 @@
 
 跟踪止盈模式（use_trailing=True，默认）：止盈交给跟踪，不落固定止盈单
     `use_trailing=True`（默认）时 plan() 不生成止盈单（tp_price=None），浮盈完全由 L3
-    的 ATR 跟踪止损兑现；L3 启动阈值（= r_multiple_tp×R）直接取品种档案的 `r_multiple_tp`
-    （IC/IM=3R、其余=2R），故"盈利到 r_multiple_tp×R 时进 L3 跟踪锁利"，不同品种进 L3
-    时机天然不同。名义止盈价（= r_multiple_tp×R）仍写入 params["_tp_nominal"] 供事后对照。
-    历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 r_multiple_tp 解耦），
-    合并：删 trailing_trigger_r，L3 触发统一走品种级 r_multiple_tp
-    （消除"r_multiple_tp=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
-    固定止盈单模式（`use_trailing=False`）：落固定止盈单（= r_multiple_tp×R），无保本、无跟踪。
+    的 ATR 跟踪止损兑现；L3 启动阈值（= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`
+    （IC/IM=3R、其余=2R），故"盈利到 win_loss_ratio×R 时进 L3 跟踪锁利"，不同品种进 L3
+    时机天然不同。名义止盈价（= win_loss_ratio×R）仍写入 params["_tp_nominal"] 供事后对照。
+    历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 win_loss_ratio 解耦），
+    合并：删 trailing_trigger_r，L3 触发统一走品种级 win_loss_ratio
+    （消除"win_loss_ratio=3 是死配置"问题，IC/IM 真正按 3R 进 L3）。
+    固定止盈单模式（`use_trailing=False`）：落固定止盈单（= win_loss_ratio×R），无保本、无跟踪。
 
     ⚠️ 术语沿革（2026-09-15 清理，2026-09-22 续）：出场策略**只有 LayeredExitPolicy
     一套（L1-L3）**，不存在两套可选的出场策略；L1-L3 里也**不存在"硬止损 / 硬止盈"这套
@@ -77,8 +77,8 @@ class ExitCheck:
 #   的参数模型校验 —— 缺省键用模型字段的默认值，拼错的键（extra="forbid"）立即报错。
 #   校验模型用 ExitPolicyParams（继承 ExitConfig + 品种相关出场参数）：ExitConfig 是
 #   **部署配置**（品种无关项），本 policy 的入参是 resolved_exit_params() 合并后的
-#   完整参数（含品种相关项 r_multiple_tp —— 2026-09-14 前档案提供 min_r_points /
-#   r_multiple_tp / breakeven_buffer_ticks 三者，现只剩这一个），
+#   完整参数（含品种相关项 win_loss_ratio —— 2026-09-14 前档案提供 min_r_points /
+#   win_loss_ratio / breakeven_buffer_ticks 三者，现只剩这一个），
 #   故校验/持有模型必须两样都有。
 
 class LayeredExitPolicy:
@@ -101,7 +101,7 @@ class LayeredExitPolicy:
         self.p = p
         # L1 R 倍数定基线
         self.stop_buffer_ticks = float(p.stop_buffer_ticks or 0.0)
-        self.r_multiple_tp = float(p.r_multiple_tp)
+        self.win_loss_ratio = float(p.win_loss_ratio)
         # 注：已删除 stop_at_signal_extreme 开关 —— R 的口径唯一：
         #     R = max(分型极值距离 A, atr_sl_multiple × ATR)。信号未带分型时 A 自然为 0，
         #     不需要开关去表达「只靠 ATR」。
@@ -281,7 +281,7 @@ class LayeredExitPolicy:
         min_gap = state.price_tick
         R = self._initial_r(signal, base, state)
         stop_dist = R
-        tp_dist = self.r_multiple_tp * R
+        tp_dist = self.win_loss_ratio * R
 
         if is_long:
             raw_stop = base - stop_dist - self.stop_buffer_ticks * state.price_tick
@@ -295,8 +295,8 @@ class LayeredExitPolicy:
             nominal_tp = state.round_price(raw_tp, "up")
 
         # 跟踪止盈模式（use_trailing=True，默认）：**不落固定止盈单**，止盈交给 L3 的
-        #   ATR 跟踪兑现。L3 启动阈值 = r_multiple_tp×R（品种档案，IC/IM=3R、其余=2R），
-        #   故不同品种的"进 L3 时机"天然不同；名义止盈价（= r_multiple_tp×R）仍写入
+        #   ATR 跟踪兑现。L3 启动阈值 = win_loss_ratio×R（品种档案，IC/IM=3R、其余=2R），
+        #   故不同品种的"进 L3 时机"天然不同；名义止盈价（= win_loss_ratio×R）仍写入
         #   params，供事后对照分析。固定止盈单模式（use_trailing=False）则落固定止盈单。
         tp = None if self.use_trailing else nominal_tp
 
@@ -365,15 +365,15 @@ class LayeredExitPolicy:
             prev_best = best
             # fav_profit 用**收盘价**衡量（与 L1/L2 的触发判定同一口径，2026-09-22）：
             #   best = 至今见过的最好收盘价（单调），浮盈 = (best − 风控锚)·sign。
-            #   与旧的"根内有利极值"口径的差别：盘中冲高到 r_multiple_tp×R 而收盘又回落的
+            #   与旧的"根内有利极值"口径的差别：盘中冲高到 win_loss_ratio×R 而收盘又回落的
             #   那根 K 线，不再算作"达标" —— 进 L3 / 抬保本都会晚一根。这是刻意的：
             #   依据与时刻统一到收盘价，不用一个已经不存在的极值去抬止损。
-            #   r_multiple_tp 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）。
+            #   win_loss_ratio 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）。
             best = max(best, close) if is_long else min(best, close)
             fav_profit = (best - entry) * position.side.sign  # (best−风控锚)·sign
             # 跟踪是否已启动（best 单调，故启动后恒为 True，不随回落下线）
-            tracking_started = (self.r_multiple_tp > 0
-                                and fav_profit >= self.r_multiple_tp * R)
+            tracking_started = (self.win_loss_ratio > 0
+                                and fav_profit >= self.win_loss_ratio * R)
             new_stop = stop
 
             # 保本/锁利：浮盈 ≥ breakeven_trigger_r·R → 止损抬至 入场价 ± breakeven_buffer_r·R
@@ -385,9 +385,9 @@ class LayeredExitPolicy:
                 if (is_long and be > new_stop) or (not is_long and be < new_stop):
                     new_stop = be
 
-            # 跟踪：浮盈 ≥ r_multiple_tp·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
+            # 跟踪：浮盈 ≥ win_loss_ratio·R → 跟踪止损（trail_dist = trailing_trigger_r × R，
             #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）
-            if self.r_multiple_tp > 0 and fav_profit >= self.r_multiple_tp * R:
+            if self.win_loss_ratio > 0 and fav_profit >= self.win_loss_ratio * R:
                 trail_dist = self.trailing_trigger_r * R
                 if trail_dist and trail_dist > 0:
                     tgt = (best - trail_dist) if is_long else (best + trail_dist)

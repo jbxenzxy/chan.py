@@ -1757,7 +1757,7 @@ class TradingEngine(ReconcileMixin):
 
     def _notify_run_phase(self, phase: str) -> None:
         """盈利达标阶段 toast（需求 ⑷(3)(4)）：breakeven_trigger_r·R 保本 /
-        r_multiple_tp·R 移动止盈。
+        win_loss_ratio·R 移动止盈。
 
         文案带 R 的**绝对量值 + 本品种报价单位**（需求 ⑶，2026-09-22）：R 的单位是
         "报价点数"（IF 是点、CU 是元/吨），只写「1R」用户无法与盘面对齐，故渲染成
@@ -1773,7 +1773,7 @@ class TradingEngine(ReconcileMixin):
                 msg += "：止损已移至 " + self._fmt_px(stop)
             self.notify(msg, code="run_breakeven")
         elif phase == "trailing":
-            trigger = getattr(pol, "r_multiple_tp", 2.0)
+            trigger = getattr(pol, "win_loss_ratio", 2.0)
             self.notify("盈利达到 {}，进入移动止盈（跟踪止损启动）".format(
                 self._r_label(trigger, R)), code="run_trailing")
 

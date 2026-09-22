@@ -244,7 +244,7 @@ def _triplet_order(src):
 
     返回 {品种代码: 实际顺序元组}。用 ast 而非正则：关键字顺序正是语法事实
     （`ast.Call.keywords` 按源码先后排列），正则会被缩进/折行/注释干扰。
-    只收集本三元组内的字段 —— 其余实参（product/r_multiple_tp/note/…）不参与。
+    只收集本三元组内的字段 —— 其余实参（product/win_loss_ratio/note/…）不参与。
     """
     out = {}
     for node in ast.walk(ast.parse(src)):

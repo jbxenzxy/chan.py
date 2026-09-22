@@ -38,7 +38,7 @@ P61 出场判定「只用收盘价」防回潮护栏（2026-09-22）
 （插针）而收盘 3997 → **不触发**；同一根若收盘 3994 → 触发 sl。
 
 本文件同时接管一条从 p8 搬来的守护：p8 的 [12]/[12b] 是"L3 浮盈用根内极值"的旧用例，
-随口径统一已整体删除；其中「L3 启动阈值严格 = r_multiple_tp（2.99R 不启动 /
+随口径统一已整体删除；其中「L3 启动阈值严格 = win_loss_ratio（2.99R 不启动 /
 3.0R 恰好启动）」这条**与价格字段无关**的边界守护不该跟着消失，见本文件 [5]（用收盘价重述，
 且 high 故意设成远超阈值 —— 实现一旦回头读 high，该组立刻变红）。
 
@@ -204,7 +204,7 @@ def main():
     pol3 = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0,
-                              "r_multiple_tp": 99.0})
+                              "win_loss_ratio": 99.0})
     # R=10、入场 4000 → 保本阈值 4010。high 冲到 4015 但收盘 4005 → 不算达标
     p1 = _pos()
     p1.exit_plan = ExitPlan(name="LayeredExitPolicy", stop_price=3990.0,
@@ -228,17 +228,17 @@ def main():
            chk_l3_close.plan.stop_price) if chk_l3_close else None,
           (True, 4000.0))
 
-    print("\n[5] L3 启动阈值仍严格 = r_multiple_tp（从 p8[12b] 搬来，用收盘价重述）")
+    print("\n[5] L3 启动阈值仍严格 = win_loss_ratio（从 p8[12b] 搬来，用收盘价重述）")
     # 来历：p8 的 [12b] 是 `_l3_started(pol, high, ts)`——把"high 抬多高"当浮盈来钉
     # IC=3R / IF=2R 的启动边界。那两节（[12]/[12b]）随口径统一被整体删除，
-    # 但"阈值严格 = r_multiple_tp（2.99R 不启动 / 3.0R 恰好启动）"这条与价格字段
+    # 但"阈值严格 = win_loss_ratio（2.99R 不启动 / 3.0R 恰好启动）"这条与价格字段
     # **无关**的守护不该跟着一起消失，故在此用收盘价重述。
     pol_ic = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                                 "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 3.0})
+                                "breakeven_buffer_r": 0.0, "win_loss_ratio": 3.0})
     pol_if = LayeredExitPolicy({"use_atr": False, "use_trailing": True,
                                 "breakeven_trigger_r": 99.0,
-                                "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0})
+                                "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
 
     def _l3_started(pol, close, ts):
         """R=10、入场 100 的单根 bar：收盘价抬到 close → L3 是否启动。

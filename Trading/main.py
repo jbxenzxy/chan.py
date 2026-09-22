@@ -16,7 +16,7 @@ M1 交易网关 · CLI 入口
     · 账户密码        → 只走环境变量（SN_ACCOUNT / LIVE_ACCOUNT / TQ_ACCOUNT ...），不落盘
 
 换止盈止损：品种无关参数（ATR / trailing / 触发倍数 / breakeven_buffer_r）改 Trading/Config.py 的
-    ExitConfig；品种相关参数（r_multiple_tp，单源化）改
+    ExitConfig；品种相关参数（win_loss_ratio，单源化）改
     Trading/Infra/Product.py 的品种档案。
     引擎 / 信号源 / broker 都不需要动。出场策略固定为 LayeredExitPolicy，不再有策略选择。
 
@@ -277,7 +277,7 @@ def build_runtime(args):
               "可能与交易所口径不符，回测结果不可直接外推实盘")
 
     entry = EntryPolicy(cfg.entry_params.model_dump())
-    # 品种相关出场参数（r_multiple_tp）的唯一来源是 Product
+    # 品种相关出场参数（win_loss_ratio）的唯一来源是 Product
     #   档案 —— 经 resolved_exit_params 合并成完整参数；直接用 exit_params.model_dump()
     #   会缺品种参数（LayeredExitPolicy 构造期 AttributeError）。
     exitp = LayeredExitPolicy(resolved_exit_params(cfg))

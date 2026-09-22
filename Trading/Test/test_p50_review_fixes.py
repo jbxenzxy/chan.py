@@ -194,7 +194,7 @@ def t3_kw_only():
         err = str(e)
     check_true("位置构造 Product(...) 抛 TypeError", err)
     # 关键字构造不受影响（open_fee 为必填字段，须一并给出）
-    p = Product(product="IF", r_multiple_tp=2.0,
+    p = Product(product="IF", win_loss_ratio=2.0,
                        open_fee=Fee("rate", 0.23), multiplier=300.0,
                        price_tick=0.2, note="x",
                        exec_policy=PRODUCT_PROFILES["IF"].exec_policy)

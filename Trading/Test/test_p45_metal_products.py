@@ -8,7 +8,7 @@ Step 2.1 补充：上期所金属品种档案（AU/AG/CU）注入契约
     ② PRODUCT_PROFILES 含 AU/AG/CU，且 multiplier/price_tick 为合约真值
     ③ TradingConfig 品种档案（为**显式播种**）：
        multiplier / price_tick 真值源 = 品种档案（播种桥已删，Instrument 构造时取档案，原 `InstrumentSpec.
-       for_product(profile)`）播种；r_multiple_tp 经 resolved_exit_params() 合并
+       for_product(profile)`）播种；win_loss_ratio 经 resolved_exit_params() 合并
        （品种档案是唯一默认值来源；min_r_points / breakeven_buffer_ticks 已于
        删除，保本缓冲改为全局比例 breakeven_buffer_r）
     ④ Instrument.effective_order_advanced 对 AU/AG/CU 返回 FOK（
@@ -93,7 +93,7 @@ def main():
     c_au = seeded("KQ.m@SHFE.AU")
     _res_au = resolved_exit_params(c_au)
     check("AU resolved 已无 min_r_points（2026-09-14 删除）", "min_r_points" in _res_au, False)
-    check("AU resolved r_multiple_tp=2.0", _res_au["r_multiple_tp"], 2.0)
+    check("AU resolved win_loss_ratio=2.0", _res_au["win_loss_ratio"], 2.0)
     check("AU multiplier=1000.0", c_au.product_profile.multiplier, 1000.0)
     check("AU resolved 已无 breakeven_buffer_ticks（改为全局比例）",
           "breakeven_buffer_ticks" in _res_au, False)

@@ -13,7 +13,7 @@ PERIOD_PROFILES；止盈止损等盈利参数随品种变，收口在 Infra/Prod
     ⑤ period_profile 随 freq 动态跟随（只读视图，无影子覆盖）
     ⑥ Product 品种档案：Instrument 构造时直接取
        档案（播种桥 for_product 已删除，注入副作用更早删除）+
-       exit 品种相关参数（现只剩 r_multiple_tp）经 resolved_exit_params() 合并
+       exit 品种相关参数（现只剩 win_loss_ratio）经 resolved_exit_params() 合并
     ⑦ 播种语义（**取代**原"注入双档"锚点）：
        档案是 price_tick / multiplier 的**唯一真值来源** —— 用户显式写的值
        在播种时同样被档案覆盖（D1：放弃配置覆盖品种参数的能力）；
@@ -131,7 +131,7 @@ def main():
     _res_if = resolved_exit_params(c_if)
     check("IF resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_if, False)
-    check("IF resolved r_multiple_tp=2.0", _res_if["r_multiple_tp"], 2.0)
+    check("IF resolved win_loss_ratio=2.0", _res_if["win_loss_ratio"], 2.0)
     check("IF 播种后 multiplier=300.0（与模型默认同值，此处不作强断言）",
           c_if.product_profile.multiplier, 300.0)
     check("IF 生效的品种档案 product=IF", c_if.product_profile.product, "IF")
@@ -142,12 +142,12 @@ def main():
     _res_ic = resolved_exit_params(c_ic)
     check("IC resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_ic, False)
-    check("IC resolved r_multiple_tp=3.0", _res_ic["r_multiple_tp"], 3.0)
+    check("IC resolved win_loss_ratio=3.0", _res_ic["win_loss_ratio"], 3.0)
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.product_profile.multiplier, 200.0)
 
     # 未知品种：档案缺失（product_profile=None）。此后 exit_params 上没有
-    # 品种相关出场参数（现只剩 r_multiple_tp） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
+    # 品种相关出场参数（现只剩 win_loss_ratio） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
     # 把「品种参数没标定」拦在启动期，与周期 fail-fast 同一纪律）。
     c_unk = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.XX"})
     check("未知品种 product_profile=None", c_unk.product_profile, None)
@@ -176,28 +176,28 @@ def main():
           "multiplier" in _err999, True)
 
     # 出场品种参数：保持 —— 显式写品种相关键直接 ValidationError（extra=forbid）。
-    #   ⚠️ 探针键由 min_r_points 换成 r_multiple_tp（评审修）：
+    #   ⚠️ 探针键由 min_r_points 换成 win_loss_ratio（评审修）：
     #   min_r_points 在 2026-09-14 被删除，用它当探针只能证明「extra=forbid 拒绝未知键」，
     #   **证明不了「品种参数不能写进 ExitConfig」** —— 守卫失去了判别力。
-    #   r_multiple_tp 是今天真实存在的品种级键；将来若有人把它加回 ExitConfig
+    #   win_loss_ratio 是今天真实存在的品种级键；将来若有人把它加回 ExitConfig
     #   （双源回潮），本条会立刻变红。
     try:
         TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IC"},
-                      exit_params={"r_multiple_tp": 7.0})
+                      exit_params={"win_loss_ratio": 7.0})
         _old_key_err = ""
     except Exception as e:  # pydantic ValidationError（extra=forbid）
         _old_key_err = str(e)
-    check("ExitConfig 显式写品种参数（r_multiple_tp）直接报错（D1 放弃 env 覆盖）",
-          "r_multiple_tp" in _old_key_err, True)
+    check("ExitConfig 显式写品种参数（win_loss_ratio）直接报错（D1 放弃 env 覆盖）",
+          "win_loss_ratio" in _old_key_err, True)
 
     # (b) 换品种 = 重建配置（frozen，与 main.py --symbol 路径同款）：
     #     signal_symbol 变 → cfg.product_profile 跟随新品种档案；
-    #     r_multiple_tp 经 resolved_exit_params 跟随新品种（IC 3.0 → IF 2.0）。
+    #     win_loss_ratio 经 resolved_exit_params 跟随新品种（IC 3.0 → IF 2.0）。
     c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF"})
-    check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0",
-          resolved_exit_params(c_exp)["r_multiple_tp"], 2.0)
+    check("换品种后 resolved win_loss_ratio 跟随 IF 档案 2.0",
+          resolved_exit_params(c_exp)["win_loss_ratio"], 2.0)
     _res_exp = resolved_exit_params(c_exp)
-    check("换品种后 resolved r_multiple_tp 跟随 IF 档案 2.0", _res_exp["r_multiple_tp"], 2.0)
+    check("换品种后 resolved win_loss_ratio 跟随 IF 档案 2.0", _res_exp["win_loss_ratio"], 2.0)
     check("换品种后 resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_exp["breakeven_buffer_r"], 0.5)
 

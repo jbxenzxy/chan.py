@@ -316,7 +316,7 @@ with tmp_dir() as tmp:
     engine.on_bar(make_bar(1000))
     engine.on_signal(make_signal(is_buy=True, bsp_type="1",
                                  fractal_low=4500.0))
-    r_mult = engine.exit_policy.r_multiple_tp
+    r_mult = engine.exit_policy.win_loss_ratio
     be_trig = engine.exit_policy.breakeven_trigger_r
     entry = engine._run_anchor
     r = engine._run_plan.params["R"]
@@ -327,7 +327,7 @@ with tmp_dir() as tmp:
     check("[4a] 保本 toast 出现", any("保本" in m for m in msgs), True)
     check("[4b] 移动止盈 toast 尚未出现",
           any("移动止盈" in m and "平仓" not in m for m in msgs), False)
-    # 冲到 ≥ 2R（r_multiple_tp）
+    # 冲到 ≥ 2R（win_loss_ratio）
     h2 = entry + r_mult * r + 10.0
     engine.on_bar(make_bar(3000, h=h2, l=h1 - 5.0, c=h2 - 5.0))
     msgs = [t["msg"] for t in toasts_of(store)]
@@ -352,7 +352,7 @@ def _drive_to_breakeven(engine):
     engine.on_bar(make_bar(1000))
     engine.on_signal(make_signal(is_buy=True, bsp_type="1",
                                  fractal_low=4500.0))
-    r_mult = engine.exit_policy.r_multiple_tp
+    r_mult = engine.exit_policy.win_loss_ratio
     entry = engine._run_anchor
     r = engine._run_plan.params["R"]
     stop = engine._run_plan.stop_price
@@ -378,7 +378,7 @@ with tmp_dir() as tmp:
     engine.on_bar(make_bar(1000))
     engine.on_signal(make_signal(is_buy=True, bsp_type="1",
                                  fractal_low=4500.0))
-    r_mult = engine.exit_policy.r_multiple_tp
+    r_mult = engine.exit_policy.win_loss_ratio
     entry = engine._run_anchor
     r = engine._run_plan.params["R"]
     engine.on_bar(make_bar(2000, h=entry + r_mult * r + 10.0,
@@ -397,7 +397,7 @@ with tmp_dir() as tmp:
     engine.on_bar(make_bar(1000))
     engine.on_signal(make_signal(is_buy=True, bsp_type="1",
                                  fractal_low=4500.0))
-    r_mult = engine.exit_policy.r_multiple_tp
+    r_mult = engine.exit_policy.win_loss_ratio
     entry = engine._run_anchor
     r = engine._run_plan.params["R"]
     tp = engine._run_plan.tp_price

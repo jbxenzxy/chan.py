@@ -108,7 +108,7 @@ def main():
     print("\n[1] L1 R 倍数基线（分型极值 A=2）：多/空方向与 1:2 比例 + P2 防护")
     # 多单：A = entry−fractal_low = 100−98 = 2 → R=2，止损=入场-2，止盈=入场+4
     pol = LayeredExitPolicy({"use_atr": False,
-                             "r_multiple_tp": 2.0,
+                             "win_loss_ratio": 2.0,
                              "use_trailing": False})
     plan = pol.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
     check("多单 止损 = 98（向上取整）", plan.stop_price, 98.0)
@@ -117,7 +117,7 @@ def main():
           approx((plan.tp_price - 100.0), 2 * (100.0 - plan.stop_price)), True)
     # 空单镜像
     pol2 = LayeredExitPolicy({"use_atr": False,
-                              "r_multiple_tp": 2.0,
+                              "win_loss_ratio": 2.0,
                               "use_trailing": False})
     plan2 = pol2.plan(make_signal(Side.SHORT, 100.0, 101.0, 99.0, fractal_high=102.0), 100.0, state)
     check("空单 止损 = 102（向下取整）", plan2.stop_price, 102.0)
@@ -130,7 +130,7 @@ def main():
 
     print("\n[2] L2 ATR 自适应宽窄（use_atr=True，喂 15 根 TR=2 的 K 线 → ATR=2）")
     pol4 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
-                              "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
+                              "atr_sl_multiple": 2.0, "win_loss_ratio": 2.0,
                               "use_trailing": False})
     feed(pol4, 15)  # 每根 h=101,l=99,c=100 → TR=2 → ATR≈2 → R=4
     plan4 = pol4.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
@@ -140,7 +140,7 @@ def main():
 
     print("\n[3] ATR 不可用（首根未喂）+ 无结构 → R=0 → P2 边界保护（止损压在入场价 1 tick 外）")
     pol5 = LayeredExitPolicy({"use_atr": True,
-                              "r_multiple_tp": 2.0})
+                              "win_loss_ratio": 2.0})
     plan5 = pol5.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0), 100.0, state)
     check("无 ATR/无结构 R=0 → 止损 = 99.8（P2 边界保护）", plan5.stop_price, 99.8)
 
@@ -166,7 +166,7 @@ def main():
     _lg.setLevel(_logging.WARNING)
     # ① 分型贴身（fractal_low == entry）→ A=0 → 打「归零」告警
     pol5w = LayeredExitPolicy({"use_atr": False,
-                               "r_multiple_tp": 2.0})
+                               "win_loss_ratio": 2.0})
     plan5w = pol5w.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=100.0), 100.0, state)
     check("A=0（分型贴身）→ R=0，止损仍走 P2 = 99.8（口径不变）",
@@ -229,7 +229,7 @@ def main():
     print("\n[5] L3 保本：浮盈 ≥ 1R 抬止损至保本（only_update）")
     pol6 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 99.0})
+                              "breakeven_buffer_r": 0.0, "win_loss_ratio": 99.0})
     pos6 = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     # close=111 → 浮盈 11 ≥ 1R(10) → 保本位=100 > 90 → 更新
     chk6 = pol6.check(pos6, make_bar(2100, 100, 111, 100, 111), state, 5)
@@ -239,7 +239,7 @@ def main():
     pol6b = LayeredExitPolicy({"use_atr": False,
                                "use_trailing": True,
                                "breakeven_trigger_r": 1.0, "breakeven_buffer_r": 0.5,
-                               "r_multiple_tp": 99.0})
+                               "win_loss_ratio": 99.0})
     pos6b = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6b = pol6b.check(pos6b, make_bar(2101, 100, 111, 100, 111), state, 5)
     check("保本缓冲 0.5R → 止损=105（入场价之上 0.5R=5）",
@@ -250,7 +250,7 @@ def main():
     #   配置层默认值另由 [8] 钉住 → 双保险：改默认值这里红，改落点公式这里也红。
     pol6c = LayeredExitPolicy({"use_atr": False,
                                "use_trailing": True, "breakeven_trigger_r": 1.0,
-                               "r_multiple_tp": 99.0})
+                               "win_loss_ratio": 99.0})
     pos6c = make_position(Side.LONG, 100.0, 90.0, 120.0, params={"R": 10.0, "_trail_best": 100.0})
     chk6c = pol6c.check(pos6c, make_bar(2102, 100, 111, 100, 111), state, 5)
     check("缓冲默认值（未显式传）= 0.5R → 止损 = 入场价 + 0.5×10 = 105",
@@ -259,7 +259,7 @@ def main():
     print("\n[6] L3 跟踪：浮盈 ≥ 2R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
     pol7 = LayeredExitPolicy({"use_atr": False,
                               "use_trailing": True, "breakeven_trigger_r": 1.0,
-                              "breakeven_buffer_r": 0.0, "r_multiple_tp": 2.0})
+                              "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
     # 已先保本到 100；本根 close=130（浮盈30≥2R=20），跟踪距离 = 0.5R = 5 → 跟踪=131-5=126
     # 用 tp=9999 排除止盈线干扰，low=101>保本止损100 排除止损线干扰，只验跟踪
     pos7 = make_position(Side.LONG, 100.0, 100.0, 9999.0, params={"R": 10.0, "_trail_best": 131.0})
@@ -277,7 +277,7 @@ def main():
 
     print("\n[8] T4: 裸构造默认值 = config.py 单一事实源")
     pol12 = LayeredExitPolicy()
-    check("r_multiple_tp 默认 = config 2.0", pol12.r_multiple_tp, 2.0)
+    check("win_loss_ratio 默认 = config 2.0", pol12.win_loss_ratio, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
     check("trailing_trigger_r 默认 = config 0.5", pol12.trailing_trigger_r, 0.5)
     check("use_trailing 默认 = True（跟踪止盈模式）", pol12.use_trailing, True)
@@ -293,7 +293,7 @@ def main():
 
     print("\n[8b] 跟踪止盈模式（use_trailing=True 默认）：不落固定止盈单，止盈交给 L3 跟踪")
     polB = LayeredExitPolicy({"use_atr": False,
-                              "r_multiple_tp": 2.0})
+                              "win_loss_ratio": 2.0})
     planB = polB.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0, fractal_low=98.0), 100.0, state)
     check("跟踪止盈模式 tp_price = None（不落固定止盈单）", planB.tp_price is None, True)
     check("跟踪止盈模式 止损仍照常 = 98", planB.stop_price, 98.0)
@@ -307,14 +307,14 @@ def main():
     # 2026-09-22 口径统一为"整层 L1-L3 只读 bar.close"（用户拍板）→ 两节整体作废并删除。
     # 等价守护搬到了 `Trading/Test/test_p61_exit_close_only.py`：
     #   · L3 浮盈只看收盘价（冲高回落不算达标）；
-    #   · L3 启动阈值仍严格 = r_multiple_tp（2.99R 不启动 / 3.0R 恰好启动，用收盘价重述）。
+    #   · L3 启动阈值仍严格 = win_loss_ratio（2.99R 不启动 / 3.0R 恰好启动，用收盘价重述）。
     # 旧实现与旧断言见 git 历史（本次改动前的版本）。
 
     print("\n[9] A=分型极值结构止损：R = max(A, 2×ATR)"
           "（min_r_points 地板已删，且不再补任何下限）")
     # 做多：fractal_low=97（底分型最低点），entry=100，use_atr=False → A=3
     pol20 = LayeredExitPolicy({"use_atr": False,
-                               "r_multiple_tp": 2.0,
+                               "win_loss_ratio": 2.0,
                                "use_trailing": False})
     plan20 = pol20.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,
                                     fractal_low=97.0), 100.0, state)
@@ -327,7 +327,7 @@ def main():
     check("做空 止盈 = entry−2R = 94", plan21.tp_price, 94.0)
     # max(A, 2×ATR)：A=3、2×ATR=4 → R=4（2×ATR 更大）
     pol22 = LayeredExitPolicy({"use_atr": True, "atr_period": 14,
-                               "atr_sl_multiple": 2.0, "r_multiple_tp": 2.0,
+                               "atr_sl_multiple": 2.0, "win_loss_ratio": 2.0,
                                })
     feed(pol22, 15)  # TR=2 → ATR≈2 → 2×ATR=4
     plan22 = pol22.plan(make_signal(Side.LONG, 100.0, 101.0, 99.0,

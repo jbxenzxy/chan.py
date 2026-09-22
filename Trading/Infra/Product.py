@@ -17,7 +17,7 @@
 变更纪律（取代旧「Profile=标定 / Spec=事实」后缀规则）
 ----------------------------------------------------
 文件名只回答「这是 per-product 粒度的东西」；「该不该走 git 评审」用两个正交手段表达：
-  · 标定值（r_multiple_tp）：改 = 改代码资产，走 git 评审 + 对账测试（test_p50）；
+  · 标定值（win_loss_ratio）：改 = 改代码资产，走 git 评审 + 对账测试（test_p50）；
   · **费率：不再是手抄值** —— 真值源 = 券商费率表 `Docs/手续费标准-.xlsx`，
     经 `Tool/GenFeeTable.py` 刷新**本文件内的 GENERATED 标记区块**（机器生成、
     禁止手改），费率数字在本文件的手写部分里**一个字面量都没有**（D-B · 2026-09-15）。
@@ -37,7 +37,7 @@ App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向�
 Period 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
 **不随周期变化、而随合约品种变化**：
 
-  · `r_multiple_tp`（止盈盈亏比 / L3 启动阈值）：IF/IH 惯用 1:2（L3 在 2R 启动）；
+  · `win_loss_ratio`（止盈盈亏比 / L3 启动阈值）：IF/IH 惯用 1:2（L3 在 2R 启动）；
     IC/IM 波动大、趋势性弱，1:3 的盈亏比更合适（L3 在 3R 启动）；
   · 保本/锁利层的"缓冲"已改为**全局比例** `breakeven_buffer_r`（在 Trading/Config.py
     的 ExitConfig，默认 0.5R，跨品种跨周期统一），不再随品种变 —— 故本档案不再含该字段。
@@ -264,7 +264,7 @@ class Product:
 
     字段分三组（用户定序 + 费率归位）——
       【策略标定值（随经验调，放前面）】
-      r_multiple_tp            止盈盈亏比（r_multiple_tp × R），同时是 L3 启动阈值（品种级）
+      win_loss_ratio            止盈盈亏比（win_loss_ratio × R），同时是 L3 启动阈值（品种级）
                                （保本/锁利缓冲 breakeven_buffer_r 已改为全局比例，见 ExitConfig）
       【费率（静态化 · D-B 生成式）：真值源 = 券商费率表
         （Docs/手续费标准-.xlsx → Tool/GenFeeTable.py → 本文件 GENERATED 区块）】
@@ -305,7 +305,7 @@ class Product:
       本批删的是最后一份"可被读的副本"。
     """
     product: str
-    r_multiple_tp: float
+    win_loss_ratio: float
     multiplier: float
     open_fee: Fee
     exec_policy: ExecPolicy                 # 执行策略表行（今仓离场/报单属性/每笔手数）
@@ -347,7 +347,7 @@ class Product:
     def exit_overrides(self) -> Dict[str, float]:
         """品种相关的出场参数（策略参数单源化）。
 
-        仅 r_multiple_tp **只存在于本档案**（它同时是 L3 启动阈值，品种级；
+        仅 win_loss_ratio **只存在于本档案**（它同时是 L3 启动阈值，品种级；
         D1 拍板：放弃 .env 覆盖能力，调参 = 改档案 = git 评审 + 对账测试守护）。
         min_r_points（R 下限）、breakeven_buffer_ticks 删除：
         R 改为纯自适应 max(A, 2×ATR)，保本缓冲改为全局比例 breakeven_buffer_r（ExitConfig）。
@@ -355,7 +355,7 @@ class Product:
         合到品种无关的 ExitConfig 上，组装出 LayeredExitPolicy 的完整参数。
         """
         return {
-            "r_multiple_tp": self.r_multiple_tp,
+            "win_loss_ratio": self.win_loss_ratio,
         }
 
 
@@ -408,7 +408,7 @@ def _exec_kw(code: str) -> Dict[str, object]:
 # ══════════════════════════════════════════════════════════════════
 #
 # 8 个品种的档案（中金所股指期货 IF/IH/IC/IM + 上期所金属 AU/AG/CU + 郑商所 PTA）。
-# 条目实参顺序：策略标定值在前（r_multiple_tp），费率与合约事实在后；
+# 条目实参顺序：策略标定值在前（win_loss_ratio），费率与合约事实在后；
 # note 同序。显式给真值；note 标定状态。
 #
 # ⚠️ 手续费（D-B · 2026-09-15 生成式）：本段**不再手写任何费率数字** ——
@@ -437,7 +437,7 @@ def _exec_kw(code: str) -> Dict[str, object]:
 #   ⚠️ 决策侧（走不走平今）**根本不读费率**，只读 `EXEC_POLICY`。
 PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
-        product="IF", r_multiple_tp=2.0,
+        product="IF", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
@@ -446,21 +446,21 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         **_exec_kw("IF"),
     ),
     "IH": Product(
-        product="IH", r_multiple_tp=2.0,
+        product="IH", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=300.0,
         note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）",
         **_fee_kw("IH"),
         **_exec_kw("IH"),
     ),
     "IC": Product(
-        product="IC", r_multiple_tp=3.0,
+        product="IC", win_loss_ratio=3.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
         note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IC"),
         **_exec_kw("IC"),
     ),
     "IM": Product(
-        product="IM", r_multiple_tp=3.0,
+        product="IM", win_loss_ratio=3.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
         note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IM"),
@@ -470,7 +470,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     # 商品档盈亏比暂统一 1:2（L3 在 2R 启动），与 IF/IH 一致；IC/IM 因波动大、趋势性弱
     #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
-        product="AU", r_multiple_tp=2.0,
+        product="AU", win_loss_ratio=2.0,
         quote_unit="元/克", price_tick=0.02, multiplier=1000.0,
         note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
@@ -480,7 +480,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         **_exec_kw("AU"),
     ),
     "AG": Product(
-        product="AG", r_multiple_tp=2.0,
+        product="AG", win_loss_ratio=2.0,
         quote_unit="元/千克", price_tick=1.0, multiplier=15.0,
         note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 15(元/kg)、tick 1；费率 xlsx：交易万0.1（xlsx 基准档，2026-09-15 用户确认），"
@@ -491,7 +491,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         **_exec_kw("AG"),
     ),
     "CU": Product(
-        product="CU", r_multiple_tp=2.0,
+        product="CU", win_loss_ratio=2.0,
         quote_unit="元/吨", price_tick=10.0, multiplier=5.0,
         note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 10；费率 xlsx：开/平昨万0.5 / 平今万1.0；"
@@ -504,7 +504,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     #   符号代码是 TA）。报单属性与每笔手数 = `EXEC_POLICY["TA"]`（FAK + 1 手），
     #   由 `**_exec_kw("TA")` 注入 —— 不再由交易所名字推导。
     "TA": Product(
-        product="TA", r_multiple_tp=2.0,
+        product="TA", win_loss_ratio=2.0,
         quote_unit="元/吨", price_tick=2.0, multiplier=5.0,
         note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"
