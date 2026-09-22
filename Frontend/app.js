@@ -6732,7 +6732,7 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.error) {
-                            console.warn('引擎未就绪:', data.error);
+                            console.warn('缠论引擎未就绪:', data.error);
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
                             return;
@@ -8297,7 +8297,7 @@
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
-                    console.warn('[auto-order] 引擎已退出，日志尾部:\n' + tail);
+                    console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
                     showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
                         + (tail || '（日志文件不存在或为空）')
                         + '\n\n完整日志：' + (data.log_file || '（未知）'));
