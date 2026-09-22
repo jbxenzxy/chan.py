@@ -38,18 +38,31 @@
   .tag.fix{background:#e8f3ec;color:var(--green)}
   .tag.chg{background:#e8eefb;color:var(--blue)}
   .tag.no{background:#fdf3e3;color:var(--amber)}
+  .msg{font-family:Consolas,Menlo,monospace;font-size:12px;background:#f4f7fb;
+       border:1px solid var(--line);border-radius:4px;padding:5px 8px;display:block;
+       white-space:pre-wrap;word-break:break-word;color:#22303f;margin-top:2px}
+  .pill{display:inline-block;font-size:11.5px;padding:1px 8px;border-radius:10px;
+        white-space:nowrap;border:1px solid transparent}
+  .pill.modal{background:#fdecec;color:var(--red);border-color:#f3c7c7}
+  .pill.toast{background:#e8f3ec;color:var(--green);border-color:#bfe0cd}
+  .pill.panel{background:#eef2f8;color:var(--ink2);border-color:var(--line)}
+  td.n{text-align:center;white-space:nowrap;color:var(--dim);width:34px}
 </style>
 </head>
 <body>
 <div class="wrap">
 
-<h1>自动下单弹窗改动交付说明</h1>
+<h1>自动下单弹窗与文案改动交付说明（第 1–4 轮）</h1>
 <div class="meta">
   基线：<code>jbxenzxy/chan.py</code> @ <code>custom-dev</code>，HEAD <code>ba5abfb8fc6cc172b9b52a663f97ef4a97eda9af</code>（2026-09-22 00:37:20Z）<br>
   第 1 轮交付包：<code>chanpy_frontend_alert_dialog_20260922.zip</code>（3 个文件）· 125,051 bytes<br>
   第 2 轮交付包：<code>chanpy_alert_confirm_and_text_sync_20260922.zip</code>（11 个文件，含第 1 轮的 3 个）· 259,309 bytes<br>
-  <span class="dimtxt">本文所有 <code>app.js:N</code> 行号均为<b>第 2 轮交付包基线</b>（第 2 轮在 <code>annotationDeleteAllGlobal</code> 与 AlertDialog 段落有过增行，第 1 轮的行号已整体漂移）。</span><br>
-  <span class="dimtxt">第 2 轮内容：Python 侧注释/docstring 同步 11 处 ＋ 全仓唯一的原生 <code>confirm()</code> 收编（见第六节）。</span>
+  <b>第 3 轮交付包</b>：<code>chanpy_alert_tooltip_and_term_sync_20260922.zip</code>（11 个文件）· 259,293 bytes<br>
+  <b>第 4 轮交付包（本轮最新）</b>：<code>chanpy_engine_fullname_sync_20260922.zip</code>（11 个文件，<b>累计包</b> —— 含四轮改过的全部文件的最新版）· 259,295 bytes<br>
+  <span class="dimtxt">本文所有行号均为<b>第 4 轮交付包基线</b>；第 3、4 两轮都是纯行内字面量替换、<b>未增删任何一行</b>，故行号与第 2 轮基线一致。</span><br>
+  <span class="dimtxt">第 2 轮内容：Python 侧注释/docstring 同步 11 处 ＋ 全仓唯一的原生 <code>confirm()</code> 收编（见第六节）。<br>
+  第 3 轮内容：术语全称「交易引擎」3 处 ＋ 控制台日志 1 处 ＋ 悬停提示文案 1 处（含动态 tip 同口径）。<br>
+  第 4 轮内容：可见文字 ＋ 控制台日志里裸写「引擎」的<b>全称化 4 处</b>（含一处口径已用代码定死的「缠论引擎」），明细见第三节末。</span>
 </div>
 
 <!-- ══════════════════ 一 ══════════════════ -->
@@ -255,19 +268,84 @@
 <p class="dimtxt">「2 秒」之所以是错的：前端的 <code>const TOAST_MS = 5000;</code>（<code>app.js:2957</code>），引擎事件 toast 在第 1 轮已去掉显式 <code>2000</code>，实际就是 5 秒 ——
 注释里的「2 秒」是改动前的历史值，留着会误导下一个读代码的人。</p>
 
+<h3>第 3 轮补做：术语全称 + 关闭行为说法（共 5 处，3 个文件）</h3>
+<p>下面这批是第 2 轮报告里列成「待你拍板」的项目，你已点头，本轮一并改掉。
+<b>全部是行内字面量替换，未增删一行</b>，所以本文引用的行号没有漂移。</p>
+<table>
+  <tr><th style="width:44px">#</th><th style="width:250px">出现位置 / 触发</th><th>改前</th><th>改后</th></tr>
+  <tr><td class="c">8</td><td>开关容器悬停提示首段（动态，<code>app.js:8275</code>）</td><td class="old">自动下单引擎：运行中 / 已停止</td><td class="new">交易引擎：运行中 / 已停止</td></tr>
+  <tr><td class="c">9</td><td>同一容器静止兜底 title（<code>index.html:45</code>）</td><td class="old">title="自动下单引擎"</td><td class="new">title="交易引擎"</td></tr>
+  <tr><td class="c">10</td><td>兜底闸门控制台日志（<code>app.js:8652</code>）</td><td class="old">[auto-order] 品种不支持交易，已取消开启: …</td><td class="new">[auto-order] 品种不支持自动下单，已取消开启: …</td></tr>
+  <tr><td class="c">11</td><td><code>call_trader_start</code> docstring（<code>App/AppOrch.py:62</code>）<br><span class="dimtxt">同一字面量「自动下单引擎」的第 3 处，一并扫掉</span></td><td class="old">启动自动下单引擎子进程（实盘安全闸门…）</td><td class="new">启动交易引擎子进程（实盘安全闸门…）</td></tr>
+  <tr><td class="c">12</td><td><b>你本轮点名的这条</b>：鼠标指向开关时的提示（<code>index.html:51</code>）</td><td class="old">开关自动下单：关闭时持仓转为空仓或锁仓态</td><td class="new">关闭时，锁仓或平仓（平今/昨）</td></tr>
+  <tr><td class="c">13</td><td>同一句话在动态 tip 末段的副本（<code>app.js:8291</code>）<br><span class="dimtxt">两处必须同口径，见下方说明</span></td><td class="old">；关闭时持仓会转为空仓或锁仓态</td><td class="new">；关闭时，锁仓或平仓（平今/昨）</td></tr>
+</table>
+
+<div class="card ok">
+  <b>第 12 条按「整句替换」处理</b>：你给的新文案是「关闭时，锁仓或平仓（平今/昨）」，
+  我把 <b>「开关自动下单：」这个前缀也去掉了</b> —— 悬停对象本身就是那个开关，前缀是冗余的（你的新文案里也没带它）。
+  若你想保留前缀，说一声，一处一行就能改回来。
+</div>
+
+<div class="card">
+  <b>第 13 条为什么必须一起改（不是顺手多改）</b>：同一个自动下单容器上有<b>两个</b>悬停提示书写口 ——
+  <code>label.auto-order-switch</code> 的静止 title（鼠标指到开关本体时浏览器取它，就是你看到的那条），
+  与 <code>#auto-order-wrap</code> 的 title（<code>app.js</code> 每 5s 轮询时整句覆写）。
+  两处原本都写着「关闭时……空仓或锁仓态」，只改一处会让同一个控件出现两种说法。
+  验证脚本里为此钉了一条断言：<b>两处去掉分号后必须逐字相同</b>，以后只改一处就会变红。
+</div>
+
+<div class="card">
+  <b>「平今/昨」按你原文照录</b>：括号内保持你写的 <code>平今/昨</code>（未展开成「平今/平昨」）；
+  括号用了全角 <code>（）</code>，与该容器其它提示（如「持仓 N 手（已锁仓 M）」）的排版一致。两处都照此处理。
+</div>
+
+<h3>第 4 轮补做：可见文字 + 控制台日志里的「引擎」全称化（共 4 处，2 个文件）</h3>
+<p>按你给的口径「都按可见文字一样改」。术语规则（2026-09-17 拍板）：
+<b>交易引擎</b> = <code>Trading/</code> 目录（自动下单功能）；<b>缠论引擎</b> = <code>Trading/</code> 之外的部分（K线/笔段/买卖点）。
+<b>全部是行内字面量替换，未增删一行</b>，行号无漂移。</p>
+<table>
+  <tr><th style="width:44px">#</th><th style="width:250px">出现位置</th><th>改前</th><th>改后</th></tr>
+  <tr><td class="c">14</td><td>账本面板标题（<code>index.html:65</code>）<br><span class="dimtxt">用户直接看得到</span></td><td class="old">引擎账本持仓</td><td class="new">交易引擎账本持仓</td></tr>
+  <tr><td class="c">15</td><td>账本面板副标题（<code>index.html:69</code>）<br><span class="dimtxt">用户直接看得到</span></td><td class="old">最近成交（引擎账本口径）</td><td class="new">最近成交（交易引擎账本口径）</td></tr>
+  <tr><td class="c">16</td><td>自动下单异常退出日志（<code>app.js:8300</code>）</td><td class="old">[auto-order] 引擎已退出，日志尾部: …</td><td class="new">[auto-order] 交易引擎已退出，日志尾部: …</td></tr>
+  <tr><td class="c">17</td><td>SSE <code>init</code> 失败日志（<code>app.js:6735</code>）<br><span class="dimtxt">口径已核实＝缠论引擎，见下</span></td><td class="old">引擎未就绪: …</td><td class="new">缠论引擎未就绪: …</td></tr>
+</table>
+
+<div class="card ok">
+  <b>第 17 条的口径不是猜的 —— 证据链（只认可执行代码）</b>：<code>init</code> 事件里的 <code>error</code> 字段
+  在<b>全仓只有 4 个产出点</b>，全在 <code>App/AppSSE.py</code>：
+  <code>:377</code>「初始化失败（无数据或网络异常）」/ <code>:415</code>「快照提取失败」/
+  <code>:791</code>·<code>:818</code>「下窗·上窗初始化失败」。
+  上游调用是 <code>init_chan_symbol(...)</code> 与 <code>_extract_realtime_snapshot(...)</code> ——
+  <b>K线拉取 + 缠论分析</b>，与 <code>Trading/</code> 侧<b>零调用关系</b>。
+  故口径 = <b>缠论引擎</b>（<code>Trading/</code> 之外），不是交易引擎。
+  <span class="dimtxt">（上一轮我标它「无法唯一确定、需先定口径」；本轮按上面的产出点把它定死了。）</span>
+</div>
+
+<div class="card">
+  <b>顺带对齐的地方</b>：同一面板的入口按钮（<code>index.html:57</code>）原本已写全称
+  <code>title="交易引擎账本：持仓与最近成交"</code>，本轮把面板内部两处标题也对齐成同一口径；
+  验证脚本为此加了一条断言 —— <b>入口按钮 title 与面板标题必须同为「交易引擎账本」口径</b>，以后只改一处会变红。
+</div>
+
 <h2>四、改动文件（交付包内容）</h2>
-<p>第 2 轮包共 <b>11 个文件</b>，含第 1 轮的 3 个前端文件（它们本轮又改过，以本包为准）：</p>
+<p>第 4 轮包共 <b>11 个文件</b>，是<b>累计包</b>：含四轮改动过的全部文件的最新版。本轮实际只动了其中 <b>2 个</b>（<code>Frontend/app.js</code>、<code>Frontend/index.html</code>），另外 9 个内容与第 3 轮一致，一并带上省得你叠包：</p>
 <table>
   <tr><th style="width:250px">路径</th><th style="width:110px">md5(前 12)</th><th>本轮改了什么</th></tr>
-  <tr><td><code>Frontend/app.js</code></td><td class="c">721b37e40bbc</td>
+  <tr><td><code>Frontend/app.js</code></td><td class="c">5b52cd7ed7f8</td>
       <td>AlertDialog 泛化为两种形态：新增 <code>_pushDialog(msg, kind)</code> / <code>showConfirm(msg)</code>
           （返回 <code>Promise&lt;boolean&gt;</code>），<code>_createAlertDialog(kind)</code> 按形态出按钮、每次弹框重建 DOM；
-          删除标注的原生 <code>confirm()</code> → <code>showConfirm()</code></td></tr>
+          删除标注的原生 <code>confirm()</code> → <code>showConfirm()</code>；
+          <b>第 3 轮</b>：悬停提示首段改「交易引擎：」、动态 tip 末段改「关闭时，锁仓或平仓（平今/昨）」、
+          控制台日志改「品种不支持自动下单」；
+          <b>第 4 轮</b>：<code>:8300</code> 异常退出日志改「[auto-order] 交易引擎已退出」、
+          <code>:6735</code> 改「缠论引擎未就绪」</td></tr>
   <tr><td><code>Frontend/app.css</code></td><td class="c">a72b3f4bc02c</td><td>样式块注释同步（该样式现在也服务 confirm）</td></tr>
-  <tr><td><code>Frontend/index.html</code></td><td class="c">29f2298c544e</td><td>缓存击穿纪律：<code>app.js?v=22 → v=23</code></td></tr>
+  <tr><td><code>Frontend/index.html</code></td><td class="c">95bc5843f6bf</td><td>缓存击穿纪律：<code>app.js?v=22 → v=23 → v=24</code>（第 3 轮）；容器静止 title 改「交易引擎」；开关 label 悬停提示改「关闭时，锁仓或平仓（平今/昨）」；<b>第 4 轮</b>：<code>v=24 → v=25</code>、账本面板两个标题改「交易引擎账本…」</td></tr>
   <tr><td><code>FrontAPI.py</code></td><td class="c">943f2803ab77</td><td>docstring 旧文案同步（见第三节表）</td></tr>
   <tr><td><code>App/AppChart.py</code></td><td class="c">6027543bdd86</td><td>注释同上</td></tr>
-  <tr><td><code>App/AppOrch.py</code></td><td class="c">723239b09ed1</td><td>docstring 同上</td></tr>
+  <tr><td><code>App/AppOrch.py</code></td><td class="c">55fcfec5d8f3</td><td>docstring 同上；第 3 轮：<code>call_trader_start</code> docstring「启动自动下单引擎子进程」→「启动交易引擎子进程」</td></tr>
   <tr><td><code>App/AppTrader.py</code></td><td class="c">89fdbbe01eb4</td><td>docstring 同上</td></tr>
   <tr><td><code>Trading/Engine/Engine.py</code></td><td class="c">cca6bce4c077</td><td>toast「2 秒」→「5 秒」；两处 <code>前端 alert() 阻塞弹窗</code> → <code>前端 showAlert 阻塞弹窗</code></td></tr>
   <tr><td><code>Trading/Test/test_p20_phase_i1.py</code></td><td class="c">c2671885ad2d</td><td>注释同上</td></tr>
@@ -275,21 +353,23 @@
   <tr><td><code>Test/test_phase6_guards.py</code></td><td class="c">0d746698a8de</td><td>docstring：区块「当前 11 个」→「12 个」</td></tr>
 </table>
 <p class="dimtxt">包内只有这 11 个文件，保持仓库原始目录层级，解压覆盖即可；md5 已做「解压到独立临时目录」往返校验（解压树 == 跑过测试的那棵树），
-并断言包内无 <code>.md</code> / 无 <code>patch</code>·<code>diff</code> / 无 <code>__pycache__</code> 与运行时产物。</p>
+并断言包内无 <code>.md</code> / 无 <code>patch</code>·<code>diff</code> / 无 <code>__pycache__</code> 与运行时产物。
+本轮 2 个变更文件的新 md5 已在表中标注（<code>app.js 5b52cd7ed7f8</code> / <code>index.html 95bc5843f6bf</code>）。</p>
 
 <h2>五、回归</h2>
 <table>
   <tr><th style="width:350px">项目</th><th style="width:150px">结果</th><th>说明</th></tr>
   <tr><td><code>node --check Frontend/app.js</code></td><td class="c new">通过</td><td>零构建白屏守护</td></tr>
-  <tr><td><code>Test/test_phase6_guards.py</code></td><td class="c new">EXIT 0</td><td>10 类守护；区块数 <b>12</b>（与 docstring 现在一致），<code>window.*</code> 面仍 65 个零漂移，缓存版本 <code>v=23</code></td></tr>
+  <tr><td><code>Test/test_phase6_guards.py</code></td><td class="c new">EXIT 0</td><td>10 类守护；区块数 <b>12</b>（与 docstring 一致），<code>window.*</code> 面仍 65 个零漂移，缓存版本 <code>v=25</code></td></tr>
   <tr><td><code>Test/test_frontend_smoke.py</code></td><td class="c new">EXIT 0</td><td>HTML 骨架 / JS 语法 / 事件引用全绿</td></tr>
-  <tr><td><code>Test/test_phase7_guards.py</code></td><td class="c new">EXIT 0</td><td>8 类守护（含端到端扫描冒烟、前端轮询契约 <code>v=23</code>）</td></tr>
+  <tr><td><code>Test/test_phase7_guards.py</code></td><td class="c new">EXIT 0</td><td>8 类守护（含端到端扫描冒烟、前端轮询契约 <code>v=25</code>）</td></tr>
   <tr><td><code>Test/test_code_resolution_guards.py</code></td><td class="c new">EXIT 0</td><td>代码输入链路守护</td></tr>
   <tr><td><code>Trading/Test/test_p60_trade_toasts_reconcile_gap.py</code></td><td class="c new">76 passed / 0 failed</td><td>EXIT 0（本轮改了它的两处文案）</td></tr>
   <tr><td><code>Trading/Test/test_p20_phase_i1.py</code></td><td class="c new">129 通过 / 0 失败</td><td>EXIT 0（本轮改了它的注释）</td></tr>
-  <tr><td><code>Trading/Test/test_p26_terminology_guard.py</code></td><td class="c new">24 passed / 0 failed</td><td>术语护栏零回潮（本轮新增的中文串全部先过它）</td></tr>
-  <tr><td>本机模态框行为矩阵（node + 最小 DOM 桩）</td><td class="c new">101 passed / 0 failed</td><td>alert 8 组 + confirm 6 组 + 删除标注「未点确定前绝不发请求」+ 与既有约定一致性</td></tr>
-  <tr><td>真浏览器验收（playwright + Chromium）</td><td class="c new">59 passed / 0 failed</td><td>两形态真鼠标点框外 / 点框内 / 按钮 / Esc / Enter；两形态交替排队；toast 时长实测</td></tr>
+  <tr><td><code>Trading/Test/test_p26_terminology_guard.py</code></td><td class="c new">24 passed / 0 failed</td><td>术语护栏零回潮（第 1–3 轮新增的中文串全部先过它）</td></tr>
+  <tr><td><code>Trading/Test/test_p47_product_case_whitelist.py</code></td><td class="c new">83 通过 / 0 失败</td><td>白名单硬约束 ＋ 它会读 <code>index.html</code> / <code>app.css</code> 校验置灰提示位（本轮改过 index.html）</td></tr>
+  <tr><td>本机模态框行为矩阵（node + 最小 DOM 桩）</td><td class="c new">123 passed / 0 failed</td><td>alert 8 组 + confirm 6 组 + 删除标注「未点确定前绝不发请求」+ 与既有约定一致性 + 第 3 轮文案源文本契约（含「两处悬停提示必须逐字同口径」）+ <b>第 4 轮引擎全称化 10 条</b>（含「可见文字 / <code>console.*</code> 中无裸写『引擎』」的反向扫描）</td></tr>
+  <tr><td>真浏览器验收（playwright + Chromium）</td><td class="c new">74 passed / 0 failed</td><td>两形态真鼠标点框外 / 点框内 / 按钮 / Esc / Enter；两形态交替排队；toast 时长实测；真页面悬停提示取值（静止 title ＋ 轮询改写后的动态 tip）；<b>第 4 轮新增</b>：真页面账本面板两个标题的文本与真实盒模型</td></tr>
 </table>
 
 <h2>六、你问的那个问题：到底哪个功能是「点框外＝取消」</h2>
@@ -343,24 +423,531 @@
   <tr><td>混排排队</td><td>先 alert 后 confirm：屏上一次只一个，关掉前一个才出现后一个，各自 resolve 正确</td></tr>
   <tr><td>toast 时长</td><td>按绝对时刻采样 0.4 / 1.2 / 4.6 / 6.2s：4.6s 仍在屏、6.2s 已消失 → 时长落在 (4.6, 6.2]s，与 <code>TOAST_MS=5000</code> 一致</td></tr>
   <tr><td>真页面里删除入口</td><td><code>typeof window.annotationDeleteAllGlobal === "function"</code>；入口内调用 <code>showConfirm</code>、无原生 <code>confirm(</code>；无数据时调用不抛错也不弹框</td></tr>
+  <tr><td>悬停提示的实际取值（第 3 轮新增）</td><td>真 <code>index.html</code> 里读 <code>label.auto-order-switch</code> 的 title ＝ 新说法；容器静止 title ＝ <code>交易引擎</code>；再补上 <code>.visible</code> 让真 5s 轮询自己跑一轮，实测被改写为
+    <code>交易引擎：已停止，账户状态：空仓；关闭时，锁仓或平仓（平今/昨）</code>（断言其以「交易引擎：」开头、不含「自动下单引擎」、不含「空仓或锁仓」、末段＝新说法且账户状态段仍在）</td></tr>
+  <tr><td>账本面板可见文字（第 4 轮新增）</td><td>真 <code>index.html</code> 里读 <code>#auto-order-ledger-panel .aol-title</code> 两个标题的 <code>textContent</code> ＝
+    <code>["交易引擎账本持仓", "最近成交（交易引擎账本口径）"]</code>；再把面板展开量<b>真实盒模型</b>：面板非零尺寸、两个标题
+    <b>无横向溢出</b>（<code>scrollWidth - clientWidth ≤ 0</code>）且<b>仍为单行</b>（改全称没把标题撑破）；顺带核对实际加载的 <code>&lt;script src&gt;</code> 版本号 ＝ <code>25</code></td></tr>
 </table>
 
-<h2>八、这轮仍然没动的地方 <span class="tag no">待你拍板</span></h2>
-<h3>A. <code>app.js</code> / <code>index.html</code> 里的「自动下单引擎」字样</h3>
+<h2>八、本轮清掉的 & 仍然挂着的地方</h2>
+
+<h3>A. 已清掉（逐轮累计）</h3>
 <ul>
-  <li><code>app.js:8275</code>：悬停提示 <code>'自动下单引擎：运行中/已停止'</code>（赋给 <code>wrap.title</code>）；</li>
-  <li><code>index.html:45</code>：静态兜底 <code>title="自动下单引擎"</code>（运行时会被上面那行覆盖，基本看不到）；</li>
-  <li>按你的术语铁律「引擎要写全称」，「自动下单引擎」应改成<b>交易引擎</b>。但你两轮的清单里都没点它，我没擅自动 —— 要改说一声。</li>
+  <li><b>第 3 轮</b>：<code>app.js:8275</code> 悬停提示 ＋ <code>index.html:45</code> 静止 title 里的「自动下单引擎」→ <b>交易引擎</b> ✔</li>
+  <li><b>第 3 轮</b>：<code>app.js:8652</code> 控制台日志「品种不支持交易」→ <b>不支持自动下单</b> ✔</li>
+  <li><b>第 3 轮</b>：顺带扫掉同一字面量的第 3 处 <code>App/AppOrch.py:62</code> docstring ✔
+      —— 改完 <code>自动下单引擎</code> 这个串在<b>全仓（排除 <code>Docs/</code> 历史快照与运行时目录）已归零</b>。</li>
+  <li><b>第 4 轮</b>：<code>index.html:65</code>·<code>:69</code> 账本面板两个标题 → <b>交易引擎账本持仓</b> / <b>最近成交（交易引擎账本口径）</b> ✔</li>
+  <li><b>第 4 轮</b>：<code>app.js:8300</code> 控制台日志 → <b>[auto-order] 交易引擎已退出，日志尾部: …</b> ✔</li>
+  <li><b>第 4 轮</b>：<code>app.js:6735</code>「引擎未就绪」→ <b>缠论引擎未就绪</b> ✔
+      —— 上一轮标它「口径无法唯一确定」，本轮用产出点把它定死（证据见第三节末第 17 条）。</li>
 </ul>
-<h3>B. <code>console.warn</code> 里的「品种不支持交易」（<code>app.js:8652</code>）</h3>
-<p>这是<b>控制台日志</b>（不是弹窗、用户看不到），第 1 轮第 5 条你改的是弹窗文案。要统一的话也一并说。</p>
-<h3>C. toast 前缀 <code>'自动下单提醒：'</code> / <code>'自动下单：'</code></h3>
-<p>你之前明确说保留，继续保持原样。</p>
+
+<h3>B. 仍然没动</h3>
+<table>
+  <tr><th style="width:290px">位置</th><th>现状 / 为什么没动</th></tr>
+  <tr><td>toast 前缀 <code>'自动下单提醒：'</code> / <code>'自动下单：'</code></td>
+      <td>你之前明确说保留，继续保持原样。</td></tr>
+  <tr><td><code>Frontend/*.js</code> 的 <code>//</code> 注释<br><code>index.html</code> 的 <code>&lt;!-- --&gt;</code> 注释</td>
+      <td>里面的「引擎」本轮<b>未动</b>：那是内部指代（全仓 <code>Trading/**</code> 的注释也是同样写法），不属用户可见文字。
+          本轮统一的两类是<b>用户可见文字 ＋ 控制台日志</b>；注释里的写法要收进来，单独说一声即可（纯字面量，零代码风险）。</td></tr>
+</table>
+<p class="dimtxt">本轮改完，<b>用户可见文字 ＋ 控制台日志</b>这两类里已<b>没有裸写「引擎」</b>——
+验证脚本里有一条反向扫描断言钉住它（命中即变红）。</p>
 
 <div class="foot">
-  验证脚本（<code>_edit.py</code> 改动用 / <code>_verify_alert.js</code> node 行为验证 / <code>_pw_verify.py</code> 真浏览器验收 / <code>_pw_shot.py</code> 截图 / <code>_pack.py</code> 打包复验）留在沙盒
+  验证脚本（<code>_edit5.py</code> 第 4 轮改动用 / <code>_edit4.py</code>·<code>_edit3.py</code>·<code>_edit2.py</code> 前三轮 /
+  <code>_verify_alert2.js</code> node 行为验证（123 条）/ <code>_pw_verify2.py</code> 真浏览器验收（74 条）/
+  <code>_pack4.py</code> 打包复验）留在沙盒
   <code>…\2026-09-22-08-41-15\sandbox\</code>，按惯例不进包、不作为附件；需要随时说。
 </div>
+
+
+<h2>九、自动下单运行中的弹窗全表（按最新代码逐条核实）</h2>
+
+<div class="meta">
+代码基线：<code>jbxenzxy/chan.py</code> 分支 <code>custom-dev</code>，HEAD
+<code>58680f67d98a7659ea744ca8fa583d72f2f509af</code>（2026-09-22 02:31:16Z）。本轮重新拉取远端，<b>254 个文件与本交付工作树逐字节一致、0 处差异</b>
+—— 即下表描述的就是<b>你仓库当前的实际行为</b>，其中已包含第 1–4 轮的全部改动。
+每条结论都回落到可执行代码行，不用注释推断。
+</div>
+
+<div class="card">
+<b>先定「运行中」的口径。</b>前端 <code>autoOrderRunning</code>（<code>app.js:8150</code>，
+由 <code>app.js:8241</code> 每次轮询同步）；轮询本身只在
+<code>#auto-order-wrap</code> 带 <code>.visible</code>（= 实时模式 ＋ 已选实时品种，
+<code>app.js:8205-8209</code>）时才启动，<b>每 5 秒一次</b>（<code>app.js:8717-8723</code>），
+打的是 <code>/api/trader/status</code>。<br>
+<b>弹窗全部由浏览器页面弹</b>：交易引擎跑在独立子进程（<code>Trading/</code>）里，自己不弹任何窗口；
+弹框关不关都影响不到它下单（<code>app.js:8506-8508</code>）。<br>
+原生 <code>alert()</code> / <code>confirm()</code> 已在第 1–2 轮全部退场，仓里现在<b>没有原生弹窗</b>。<br>
+全站共 <b>45 个弹窗调用点</b>（23 个模态提示 ＋ 1 个问答 ＋ 21 个 toast），
+其中与自动下单直接相关的 <b>11 个</b>列在表 2–4，其余 <b>34 个</b>归纳在表 8。
+</div>
+
+<h3>表 1 · 五种弹层形态 —— 「怎么消失」的判定基准</h3>
+<table>
+  <tr>
+    <th style="width:34px">#</th><th style="width:150px">形态</th><th style="width:170px">实现位置</th>
+    <th style="width:190px">出现样式</th><th>消失方式（全部出口）</th><th style="width:96px">会自动消失吗</th>
+  </tr>
+  <tr>
+    <td class="n">1</td>
+    <td><span class="pill modal">模态框</span><br>提示式 <code>showAlert</code></td>
+    <td><code>app.js:8432</code><br>调度 <code>8437-8476</code><br>建框 <code>8478-8495</code></td>
+    <td>全屏遮罩 <code>inset:0</code>、<code>z-index:10001</code>；居中卡片 620px（上限 90vw）、正文限高 80vh 内部滚动</td>
+    <td>① 点「确定」　② 点<b>框外</b>　③ <span class="kbd">Esc</span>　④ <span class="kbd">Enter</span>
+        <br><span class="dimtxt">②③ 都等于「确定」（<code>outsideResult = !isConfirm</code>，<code>app.js:8446</code>）；点框内不关（<code>8468-8470</code>）</span></td>
+    <td class="c"><span class="old">不会</span></td>
+  </tr>
+  <tr>
+    <td class="n">2</td>
+    <td><span class="pill modal">模态框</span><br>问答式 <code>showConfirm</code></td>
+    <td><code>app.js:8435</code><br>同上一套调度</td>
+    <td>同上</td>
+    <td>① 「确定」　② 「取消」　③ 点<b>框外</b>＝<b>取消</b>　④ <span class="kbd">Esc</span>＝取消　⑤ <span class="kbd">Enter</span>＝确定
+        <br><span class="dimtxt">按钮顺序「确定在左、取消在右」，与 <code>index.html</code> 既有两个问答弹窗一致</span></td>
+    <td class="c"><span class="old">不会</span></td>
+  </tr>
+  <tr>
+    <td class="n">3</td>
+    <td><span class="pill toast">轻提示</span><br>toast</td>
+    <td><code>app.js:2960-2987</code><br>样式 <code>app.css:226-244</code></td>
+    <td>屏幕正中堆叠（<code>top/left:50%</code>），<code>z-index:9999</code>，限宽 640px</td>
+    <td><b>5 秒自动淡出</b>（<code>TOAST_MS = 5000</code>，<code>app.js:2957</code>，淡出过渡 0.3s）；
+        或<b>点一下立刻关</b>（<code>app.js:2979</code>）；
+        同屏上限 5 条，第 6 条挤掉最早的一条（<code>TOAST_MAX</code>，<code>app.js:2958/2967-2969</code>）</td>
+    <td class="c"><span class="new">会，5 秒</span></td>
+  </tr>
+  <tr>
+    <td class="n">4</td>
+    <td><span class="pill panel">既有问答框</span><br>文字标注</td>
+    <td><code>index.html:175</code></td>
+    <td>遮罩层</td>
+    <td>确定 / 取消 / 点框外＝取消（<code>onclick="if(event.target===this)annotationDialogCancel()"</code>）；
+        焦点在输入框时 <span class="kbd">Enter</span>＝确定、<span class="kbd">Esc</span>＝取消（<code>app.js:7403-7409</code>）</td>
+    <td class="c"><span class="old">不会</span></td>
+  </tr>
+  <tr>
+    <td class="n">5</td>
+    <td><span class="pill panel">既有问答框</span><br>股票扫描</td>
+    <td><code>index.html:188</code></td>
+    <td>遮罩层</td>
+    <td>确认 / 取消 / 点框外＝取消（<code>onclick="if(event.target===this)scanModeDialogCancel()"</code>）；
+        <b>无键盘绑定</b></td>
+    <td class="c"><span class="old">不会</span></td>
+  </tr>
+</table>
+<p class="dimtxt">点框外的判定统一是 <code>e.target === overlay</code> —— 点框内不关、也不会穿到底层页面（第 1 轮真浏览器验收已实测底层元素收到 0 次点击）。</p>
+
+<h3>表 2 · 运行中<b>由轮询自动弹</b>出来的（4 条）</h3>
+<table>
+  <tr>
+    <th style="width:34px">#</th><th style="width:106px">形态</th>
+    <th style="width:250px">何时触发（代码条件）</th><th>弹窗内容</th><th style="width:210px">消失方式</th>
+  </tr>
+  <tr>
+    <td class="n">1</td>
+    <td><span class="pill modal">模态框</span><br>提示式</td>
+    <td>每次轮询（5s）读 <code>auto_order.alerts</code>，挑出 <code>level=severe</code>、
+        <code>ts</code> 高于本地水位、且同 <code>code</code> 距上次弹框 ≥ 5 分钟的条目
+        <br><span class="dimtxt"><code>app.js:8517-8529</code>、<code>8541-8551</code></span></td>
+    <td>标题固定：
+        <span class="msg">需人工介入！</span>
+        正文＝逐条编号的告警正文，重复的补「（已重复 N 次）」，条目间空行分隔
+        <br><span class="dimtxt">正文可能很长（一批告警合并）→ 限高 80vh 内部滚动，可选中复制</span></td>
+    <td>点确定 / 点框外 / <span class="kbd">Esc</span> / <span class="kbd">Enter</span>
+        <br><b class="old">不会自动消失</b>，必须有人操作
+        <br><span class="dimtxt">关掉之后才把 ack 水位写回后端 —— 「确认＝人已看到」（<code>app.js:8549-8552</code>、<code>8561-8566</code>）</span></td>
+  </tr>
+  <tr>
+    <td class="n">2</td>
+    <td><span class="pill toast">toast</span></td>
+    <td>同一次轮询里 <code>level=warn</code> 的告警（<code>app.js:8537-8540</code>）</td>
+    <td>前缀固定 <code>自动下单提醒：</code>，后面接告警正文
+        <span class="msg">自动下单提醒：&lt;告警正文&gt;</span>
+        <span class="dimtxt">正文清单见<b>表 6</b></span></td>
+    <td><b>5 秒自动消失</b>；点一下立刻关</td>
+  </tr>
+  <tr>
+    <td class="n">3</td>
+    <td><span class="pill toast">toast</span></td>
+    <td>轮询发现 <code>auto_order.toasts</code> 里出现 <code>ts</code> 大于上次水位的新条目
+        <br><span class="dimtxt">首次拉取只定水位、<b>不回放历史</b>（页面晚开不会把半小时前的开仓重弹一遍）；<code>app.js:8589-8606</code></span></td>
+    <td>前缀固定 <code>自动下单：</code>，后面接事件正文
+        <span class="msg">自动下单：&lt;事件正文&gt;</span>
+        <span class="dimtxt">正文清单见<b>表 7</b></span></td>
+    <td><b>5 秒自动消失</b>；点一下立刻关</td>
+  </tr>
+  <tr>
+    <td class="n">4</td>
+    <td><span class="pill modal">模态框</span><br>提示式</td>
+    <td>上一次轮询还是「运行中」、这次变成「已停止」，且<b>不是</b>用户自己在关闭
+        <br><span class="msg">autoOrderPrevRunning === true &amp;&amp; !running &amp;&amp; !autoOrderBusy</span>
+        <span class="dimtxt"><code>app.js:8298-8304</code></span></td>
+    <td><span class="msg">交易引擎已退出！
+
+交易引擎日志尾部（前 12 行）：
+&lt;日志尾部&gt;
+
+完整日志：&lt;日志文件路径&gt;</span>
+        <span class="dimtxt">日志取不到时显示「（日志文件不存在或为空）」/「（未知）」</span></td>
+    <td>点确定 / 点框外 / <span class="kbd">Esc</span> / <span class="kbd">Enter</span>
+        <br><b class="old">不会自动消失</b></td>
+  </tr>
+</table>
+
+<div class="card warn">
+<b>表 2 的四条为什么不会刷屏（三层闸门，缺一不可）：</b>
+<ul>
+  <li><b>后端同 code 合并计数</b> —— 同一种原因连报 100 次，队列里仍只有 1 条、<code>n=100</code>；且级别<b>只升不降</b>（warn 升 severe 生效，severe 不会被后续抖动降级）。<code>Trading/Engine/Engine.py:2030-2062</code>，队列上限 20 条（<code>:1953</code>）。</li>
+  <li><b>前端同 code 5 分钟冷却</b> —— <code>AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000</code>（<code>app.js:8153</code>、<code>:8524</code>）。</li>
+  <li><b>水位去重</b> —— 告警按 <code>ts</code> 水位（<code>app.js:8516-8530</code>）；toast 同样按 <code>ts</code> 水位且首次不回放（<code>:8593-8603</code>）。</li>
+</ul>
+另：<b>严重告警落盘，引擎重启不丢</b>（<code>Engine.py:511</code>）；toast 队列上限 30 条（<code>Engine.py:1993</code>）；toast 同屏上限 5 条（<code>app.js:2958</code>）。
+</div>
+
+<h3>表 3 · 运行中<b>才成立</b>的拦截（引擎在跑就得先关，2 条）</h3>
+<table>
+  <tr><th style="width:34px">#</th><th style="width:250px">何时触发</th><th>弹窗内容</th><th style="width:190px">消失方式</th></tr>
+  <tr>
+    <td class="n">1</td>
+    <td>引擎运行中点周期按钮（周K/日K/30分/…）→ <code>switchFreq</code>
+        <br><span class="dimtxt"><code>if (autoOrderRunning)</code> 提前 return，<code>app.js:3742-3749</code></span></td>
+    <td><span class="msg">交易引擎运行中，请先关闭，再切周期</span>
+        <span class="dimtxt">成因：运行中的引擎绑定旧周期的 SSE 流，直接切换会与引擎状态错配</span></td>
+    <td>点确定 / 点框外 / <span class="kbd">Esc</span> / <span class="kbd">Enter</span>，不自动消失</td>
+  </tr>
+  <tr>
+    <td class="n">2</td>
+    <td>引擎运行中点「查询」换合约 → <code>loadStock</code>
+        <br><span class="dimtxt"><code>if (autoOrderRunning)</code> 提前 return，<code>app.js:4402-4410</code></span></td>
+    <td><span class="msg">交易引擎运行中，请先关闭，再切合约</span>
+        <span class="dimtxt">成因：运行中的引擎绑定旧合约的持仓 / SSE 流，切合约要对账</span></td>
+    <td>同上</td>
+  </tr>
+</table>
+
+<h3>表 4 · 用户操作触发（开关 / 过滤同步，3 条）</h3>
+<table>
+  <tr><th style="width:34px">#</th><th style="width:250px">何时触发</th><th>弹窗内容</th><th style="width:190px">消失方式</th></tr>
+  <tr>
+    <td class="n">1</td>
+    <td>点开关往「开」拨时，先 GET <code>/api/trader/product-check</code>，返回
+        <code>allowed=false</code> → <code>onAutoOrderToggle</code>
+        <br><span class="dimtxt"><code>app.js:8649-8656</code>。品种不在下单白名单时，开关本身已置灰（<code>applyAutoOrderTradableUI</code>，<code>app.js:8171-8187</code>），这条是兜底</span></td>
+    <td><span class="msg">不支持自动下单
+
+&lt;后端说明&gt;</span>
+        <span class="dimtxt">后端原文（单一事实源 <code>Trading/Infra/Product.py:583-603</code>）：品种 … 不在自动下单支持清单（…）中：执行参数未标定，<b>已拒绝启动交易引擎</b>（清单外品种禁止启动）。请更换品种，或在 <code>Trading/Infra/Product.py</code> 的 <code>PRODUCT_PROFILES</code> 中标定后再试。</span></td>
+    <td>四个出口，不自动消失
+        <br><span class="dimtxt">同时<b>开关回弹、不发启动请求</b>（不会「点一下就报错」）</span></td>
+  </tr>
+  <tr>
+    <td class="n">2</td>
+    <td>POST <code>/api/trader/auto-order/on</code>（或 <code>/off</code>）返回非 2xx 或抛异常
+        <br><span class="dimtxt"><code>app.js:8684-8694</code>，<code>detail</code> 取自后端 <code>AppError</code>（实盘安全闸门 / 配置缺失等）</span></td>
+    <td><span class="msg">交易引擎开启失败：&lt;原因&gt;
+交易引擎关闭失败：&lt;原因&gt;</span></td>
+    <td>四个出口，不自动消失；<b>开关回弹</b></td>
+  </tr>
+  <tr>
+    <td class="n">3</td>
+    <td>在设置里改买卖点过滤，推送到 <code>/api/trader/signal-filter</code> 失败
+        <br><span class="dimtxt"><code>pushBspFilterToTrader</code>，<code>app.js:5191-5211</code></span></td>
+    <td><span class="pill toast">toast</span>
+        <span class="msg">买卖点过滤未同步到自动下单（HTTP &lt;状态码&gt;）
+买卖点过滤未同步到自动下单：&lt;错误信息&gt;</span></td>
+    <td><b>5 秒自动消失</b>；点一下立刻关</td>
+  </tr>
+</table>
+
+<h3>表 5 · 「需人工介入！」框正文里可能出现哪些告警 —— 引擎侧 severe 产出点全表</h3>
+<p class="dimtxt">共 <b>21 类具名告警码</b> ＋ 1 类 broker 诊断透传。下表每一行都是引擎里真实会写进 <code>alerts</code> 队列、且级别为 <code>severe</code> 的产出点（级别定义 <code>ALERT_SEVERE = "severe"</code>，<code>Engine.py:1949</code>）。</p>
+<table>
+  <tr><th style="width:230px">告警码</th><th style="width:250px">何时触发</th><th>正文模板</th><th style="width:118px">出处</th></tr>
+  <tr>
+    <td><code>run_missing_anchor</code></td>
+    <td>检测到净敞口 ≠ 0，但<b>没有风控锚</b>（run）—— L1–L3 止损止盈已失效</td>
+    <td><span class="msg">检测到净敞口 {:+} 手但没有风控锚（run），L1-L3 止损止盈已失效。成因：… 使净敞口从 0 变成非 0，而 run 只在报单成交时开启。当前敞口处于**无止损**状态，请人工核对柜台持仓并考虑手动平仓；重启引擎会被启动闸门（G2）拒绝，直到该问题解决。</span></td>
+    <td><code>Engine.py:589</code></td>
+  </tr>
+  <tr>
+    <td><code>two_state_invariant_broken</code></td>
+    <td>账本 / 柜台镜像「双态不变量」被打破（<code>_check_two_state_invariant</code>）</td>
+    <td><span class="dimtxt">正文由检查处给出（msg 变量），带 positions_n / where 附加字段</span></td>
+    <td><code>Engine.py:1223</code></td>
+  </tr>
+  <tr>
+    <td><code>instrument_unverified</code></td>
+    <td>在线通道未连通（<code>verified=False</code>）时的报单前校验 —— <b>fail-closed 拒单</b></td>
+    <td><span class="msg">在线通道未连通（verified=False），已拒单。fail-closed：宁可不下单，也不带未确认的通道状态下单；连接恢复后自动放行。</span></td>
+    <td><code>Engine.py:1295</code></td>
+  </tr>
+  <tr>
+    <td><code>delivery_guard_blocked</code></td>
+    <td>距最后交易日不足 N 个交易日（交割月护栏），且「空仓态要开新仓 / 锁仓态要平仓解锁」</td>
+    <td><span class="msg">距最后交易日 &lt;日期&gt; 不足 &lt;N&gt; 个交易日（交割月护栏）—— 已拒绝&lt;开新仓/平仓解锁&gt;：&lt;空仓态不进裸仓/锁仓态不放开成裸仓&gt;。当前主力换月后自动解除（运行态仓位不受影响）。</span></td>
+    <td><code>Engine.py:1319</code></td>
+  </tr>
+  <tr>
+    <td><code>run_start_incomplete</code></td>
+    <td>净敞口已非 0，但本段 run 没建立风控锚（缺成交价 / 信号）</td>
+    <td><span class="msg">净敞口已为 {:+} 手，但本段运行没有建立风控锚（缺成交价/信号），L1-L3 止盈止损对本段失效。请人工盯盘或手工处理。</span></td>
+    <td><code>Engine.py:1739</code></td>
+  </tr>
+  <tr>
+    <td><code>shutdown_result_residual</code></td>
+    <td>关闭自动下单，但账户<b>仍有净敞口</b>（离场被拒 / 未成交）</td>
+    <td><span class="msg">自动下单已关闭，但**账户仍有净敞口 &lt;net&gt;（&lt;n&gt; 笔仓单）** —— 离场未成功（平仓被拒 / 未成交）。继续持有将带入下一交易日并承担跳空风险，请在柜台人工平仓或重启引擎后重新关闭。</span></td>
+    <td><code>Engine.py:1916</code></td>
+  </tr>
+  <tr>
+    <td><code>ctp_reject_funds</code></td>
+    <td>柜台拒单分类 = <code>funds</code>（资金 / 保证金不足）</td>
+    <td><span class="msg">柜台拒单：资金 / 保证金不足 —— &lt;代码&gt; &lt;意图&gt; &lt;方向&gt; &lt;手数&gt; 手被拒：&lt;柜台原因&gt;</span></td>
+    <td><code>Engine.py:1961</code><br>→ <code>:2148</code></td>
+  </tr>
+  <tr>
+    <td><code>ctp_reject_not_tradable</code></td>
+    <td>柜台拒单分类 = <code>not_tradable</code></td>
+    <td><span class="msg">柜台拒单：当前不可报单（非交易时段 / 无权限）—— … 手被拒：…</span></td>
+    <td><code>Engine.py:1963</code></td>
+  </tr>
+  <tr>
+    <td><code>ctp_reject_position</code></td>
+    <td>柜台拒单分类 = <code>position</code>（可平持仓不足，柜台很可能没有这笔仓）</td>
+    <td><span class="msg">柜台拒单：可平持仓不足（柜台很可能没有这笔仓）—— … 手被拒：…</span></td>
+    <td><code>Engine.py:1965</code></td>
+  </tr>
+  <tr>
+    <td><code>close_chase_exhausted</code></td>
+    <td>价格不可达 ＋ <b>离场追价轮数跑满</b>（<code>attempt &gt;= max_attempts</code>）仍未成交</td>
+    <td><span class="msg">离场追价跑满 &lt;N&gt; 轮仍未成交 —— &lt;代码&gt; &lt;意图&gt; &lt;方向&gt; &lt;手数&gt; 手，净敞口没有变动，请在柜台人工处理。</span></td>
+    <td><code>Engine.py:2158</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_close_volume_mismatch</code></td>
+    <td>报单前校验：平仓量<b>超过 / 低于</b>目标（簿面与柜台对不上）</td>
+    <td rowspan="5"><span class="msg">报单前校验未通过，已拒单（原因：&lt;原因键&gt;）—— &lt;标的&gt; &lt;意图&gt; &lt;方向&gt; &lt;手数&gt; 手，未向柜台发出任何委托。&lt;连续第 N 次 / 已连续被拒 N 次，请人工介入（行情/配置可能有问题）。&gt;</span>
+        <span class="dimtxt">同一个模板，原因键不同；级别见 <code>Engine.py:2183-2203</code></span></td>
+    <td><code>Engine.py:2185/2187</code><br>→ <code>:2253</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_close_no_target</code></td>
+    <td>平仓没有对应目标</td>
+    <td><code>Engine.py:2189</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_close_no_entry_date</code></td>
+    <td>平仓目标缺开仓日期</td>
+    <td><code>Engine.py:2190</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_date_mismatch</code></td>
+    <td>平今 / 平昨<b>日期口径错位</b>（可能错收费率或被柜台拒）</td>
+    <td><code>Engine.py:2193/2195</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_closetoday_unsupported</code></td>
+    <td>品种不支持平今（动作与品种能力不符）</td>
+    <td><code>Engine.py:2197</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_no_time_anchor</code><br><code>precheck_no_trading_day</code><br><code>precheck_zero_volume</code></td>
+    <td>这 3 个原因本身是 <b>warn 档</b>（一过性），但<b>同一原因连续被拒 ≥ 3 次</b> → 升级为 severe，于是也弹模态框
+        <br><span class="dimtxt"><code>_PRECHECK_ESCALATE_AT = 3</code>（<code>Engine.py:2215</code>）—— 取 3 是因为 15s 周期下一根 bar 一笔，约 45 秒还没好基本可断定不是抖动</span></td>
+    <td><span class="dimtxt">同上模板，末尾补「已连续被拒 N 次，请人工介入（行情/配置可能有问题）。」</span></td>
+    <td><code>Engine.py:2200-2202</code><br><code>:2253</code></td>
+  </tr>
+  <tr>
+    <td><code>position_mismatch</code></td>
+    <td>对账：柜台镜像某侧有持仓，而账本该侧<b>无仓 / 少于镜像</b>（多出的持仓不是引擎开的 → 引擎不接管）</td>
+    <td><span class="msg">对账发现不一致：本地柜台镜像 &lt;side&gt; 持仓 &lt;rv&gt; 手，账本该侧无仓。多出的持仓不是交易引擎开的（常见成因：报单回报延迟被误判拒单、柜台已成交），引擎不接管，请人工核对处理。</span>
+        <span class="dimtxt">对照变体：账本只有 &lt;ev&gt; 手（多 &lt;diff&gt; 手）。…</span></td>
+    <td><code>Reconcile.py:208</code><br><code>:240</code></td>
+  </tr>
+  <tr>
+    <td><code>reconcile_mirror_untrusted</code></td>
+    <td>镜像读数<b>不可信</b>（本会话镜像从未读到过 ≥ 账本的手数，otg 持仓通道可能未同步）</td>
+    <td><span class="msg">本地柜台镜像读数不可信：镜像 &lt;side&gt; 持仓 &lt;rv&gt; 手，账本记 &lt;ev&gt; 手，但本会话镜像从未读到过 ≥ &lt;ev&gt; 手（otg 持仓通道可能未同步）。引擎不改账本（不删仓、不补盈亏），持仓仍按交易引擎账本正常风控；请以快期3 为准人工核对。</span></td>
+    <td><code>Reconcile.py:274</code></td>
+  </tr>
+  <tr>
+    <td><code>reconcile_externally_closed</code></td>
+    <td>柜台被<b>手工平仓</b>，镜像少于账本 —— 引擎已按 FIFO 改账本、按参考价补记盈亏</td>
+    <td><span class="msg">对账发现不一致：本地柜台镜像 &lt;side&gt; 持仓 &lt;rv&gt; 手，账本记 &lt;ev&gt; 手（少 &lt;n&gt; 手，多为柜台手工平仓）。引擎已按 FIFO 从账本删除 &lt;k&gt; 笔、按参考价补记平仓盈亏，账本已同步为与镜像一致；请知悉，如有异议请人工核对快期3。</span></td>
+    <td><code>Reconcile.py:320</code></td>
+  </tr>
+  <tr>
+    <td><code>&lt;broker 诊断码&gt;</code></td>
+    <td>Broker 侧 <code>drain_alerts()</code> 暂存的诊断（合约参数超时 / nan / 与配置不一致等）逐条转手 D11 通道，级别由 broker 给出（可为 severe）</td>
+    <td><span class="dimtxt">正文由 broker 给出（<code>_drain_broker_alerts</code>，<code>Engine.py:1969-1990</code>）</span></td>
+    <td><code>Engine.py:1987</code></td>
+  </tr>
+</table>
+
+<h3>表 6 · 「自动下单提醒：」toast 的可能内容 —— 引擎侧 warn 产出点</h3>
+<table>
+  <tr><th style="width:230px">告警码</th><th style="width:250px">何时触发</th><th>正文模板</th><th style="width:118px">出处</th></tr>
+  <tr>
+    <td><code>spec_drift</code></td>
+    <td><code>state</code> 合约规格与品种档案不一致（防回潮护栏触发；只在 <code>verified</code> 首次为真后查一次，<b>不拒单</b>）</td>
+    <td><span class="msg">state 合约规格与品种档案不一致（&lt;差异&gt;）。有效参数 SSOT=品种档案，请同步更新 PRODUCT_PROFILES；若存在非档案来源的写入路径（防回潮护栏触发），请排查。</span></td>
+    <td><code>Engine.py:1262</code></td>
+  </tr>
+  <tr>
+    <td><code>shutdown_result_flat</code></td>
+    <td>关闭自动下单，且<b>已清仓、无残留</b>（净敞口 0、账本空）</td>
+    <td><span class="msg">自动下单已关闭 —— **已清仓，无残留持仓**（净敞口 0，账本空）。可以放心离场。</span></td>
+    <td><code>Engine.py:1904</code></td>
+  </tr>
+  <tr>
+    <td><code>account_frozen</code></td>
+    <td>关闭自动下单，账户<b>停在锁仓态</b>（净敞口 0，但仍持有仓单、盈亏不再变动）</td>
+    <td><span class="msg">自动下单已关闭，账户停在锁仓态（净敞口 0，持有 &lt;n&gt; 笔仓单、盈亏不再变动）。引擎无自动清仓路径：需人工平仓，或重新开启自动下单后由对向信号拆锁。</span></td>
+    <td><code>Engine.py:1934</code></td>
+  </tr>
+  <tr>
+    <td><code>precheck_no_time_anchor</code><br><code>precheck_no_trading_day</code><br><code>precheck_zero_volume</code></td>
+    <td>报单前校验因「缺时间锚 / 缺交易日 / 手数为 0」被拒（<b>连续少于 3 次</b>时保持 warn）</td>
+    <td><span class="dimtxt">用同一个「报单前校验未通过…」模板，末尾是「连续第 N 次。」</span></td>
+    <td><code>Engine.py:2200-2202</code></td>
+  </tr>
+  <tr>
+    <td><code>&lt;broker 诊断码&gt;</code></td>
+    <td>同上，broker 侧暂存的诊断</td>
+    <td><span class="dimtxt">正文由 broker 给出</span></td>
+    <td><code>Engine.py:1987</code></td>
+  </tr>
+</table>
+
+<h3>表 7 · 「自动下单：」toast 的可能内容 —— 引擎侧轻提示产出点</h3>
+<p class="dimtxt">轻提示走 <code>Engine.notify()</code>（<code>Engine.py:1995-2020</code>），与告警的分工是：告警 =「需要人工介入」的持久队列（同 code 合并 ＋ ack 水位）；轻提示 =「刚才发生了什么」的瞬时播报（<b>不合并</b>，同 code 的两次开仓是两个独立事件都要弹）。</p>
+<table>
+  <tr><th style="width:200px">事件码</th><th style="width:250px">何时触发</th><th>正文模板</th><th style="width:118px">出处</th></tr>
+  <tr>
+    <td><code>open_filled</code></td>
+    <td>开仓成交</td>
+    <td><span class="msg">开仓成交：&lt;方向&gt; &lt;手数&gt;手 @ &lt;成交价&gt;｜止损(1R) = &lt;止损价&gt;</span>
+        <span class="dimtxt">无风控计划时只报成交事实（「… 已另有 run_start_incomplete 严重告警」）</span></td>
+    <td><code>Engine.py:1671-1678</code></td>
+  </tr>
+  <tr>
+    <td><code>close_filled</code></td>
+    <td>平仓 / 锁仓成交</td>
+    <td><span class="msg">平仓成交·&lt;止盈|止损|保本止损|移动止盈（跟踪止损触发）|关闭自动下单离场|离场&gt;：&lt;方向&gt; &lt;手数&gt;手 @ &lt;成交价&gt;
+锁仓离场·&lt;同上&gt;：反向开 &lt;方向&gt; &lt;手数&gt;手 @ &lt;成交价&gt;</span>
+        <span class="dimtxt">今仓离场＝反向开仓锁仓，用「锁仓离场·…：反向开 …」；标签由离场原因（tp/sl）＋ 当前阶段（trailing/breakeven）共同决定</span></td>
+    <td><code>Engine.py:1685-1706</code></td>
+  </tr>
+  <tr>
+    <td><code>run_breakeven</code></td>
+    <td>盈利达到 <code>breakeven_trigger_r</code>（默认 1R），进入保本策略</td>
+    <td><span class="msg">盈利达到 &lt;N&gt;R，进入保本策略：止损已移至 &lt;止损价&gt;</span></td>
+    <td><code>Engine.py:1714-1717</code></td>
+  </tr>
+  <tr>
+    <td><code>run_trailing</code></td>
+    <td>盈利达到 <code>r_multiple_tp</code>（默认 2R），进入移动止盈</td>
+    <td><span class="msg">盈利达到 &lt;N&gt;R，进入移动止盈（跟踪止损启动）</span></td>
+    <td><code>Engine.py:1720</code></td>
+  </tr>
+  <tr>
+    <td><code>reconcile_sync</code></td>
+    <td>对账把账本按柜台镜像修正（与上面的 <code>reconcile_externally_closed</code> 严重告警<b>并存</b>：告警是「需人工核对」的持久提醒，本条是「账本已修正」的即时播报）</td>
+    <td><span class="msg">账单已同步：本地柜台镜像 &lt;side&gt; 持仓 &lt;rv&gt; 手，账本已按镜像修正（删 &lt;k&gt; 笔，多为柜台手工平仓）</span></td>
+    <td><code>Reconcile.py:332</code></td>
+  </tr>
+</table>
+
+<h3>表 8 · 与自动下单无关、但引擎跑着时也可能同屏弹的（其余 34 个调用点）</h3>
+<p class="dimtxt">这些不看引擎状态，任何时刻都能弹；引擎在跑时同样会出现，所以一并列出，避免「运行中还会弹什么」有盲区。</p>
+<table>
+  <tr><th style="width:200px">所属函数</th><th style="width:78px">形态</th><th>触发 / 内容</th><th style="width:96px">消失方式</th></tr>
+  <tr>
+    <td><code>initCanvas</code><br><span class="dimtxt">双击K线</span></td>
+    <td><span class="pill modal">模态</span></td>
+    <td>双击K线触发的加载失败 → <code>&lt;错误信息&gt;</code>（<code>app.js:836</code>，过期请求的失败会被丢弃、不弹窗打断新状态）</td>
+    <td>四个出口</td>
+  </tr>
+  <tr>
+    <td><code>switchFreq</code><br><span class="dimtxt">双窗口周期校验</span></td>
+    <td><span class="pill modal">模态</span></td>
+    <td>下窗周期必须小于上窗周期（<code>:3756</code>）/ 下窗周期配对无效（<code>:3783</code>）/ 上窗周期必须大于下窗周期（<code>:3835</code>）/ 上窗周期必须大于下窗周期、X 为股票最小周期（<code>:3843</code>）/ 切换周期失败（<code>:3935</code>）/ 切换下窗周期失败（<code>:3826</code>）</td>
+    <td>四个出口</td>
+  </tr>
+  <tr>
+    <td><code>loadStock</code> / <code>gotoDate</code></td>
+    <td><span class="pill modal">模态</span></td>
+    <td>查询失败：<code>&lt;错误信息&gt;</code>（<code>:4615</code>）；跳转失败：<code>&lt;错误信息&gt;</code>（<code>:4060</code>）</td>
+    <td>四个出口</td>
+  </tr>
+  <tr>
+    <td><code>toggleDualWindow</code></td>
+    <td><span class="pill modal">模态</span>＋<span class="pill toast">toast</span></td>
+    <td>模态：加载下面窗口数据失败：<code>&lt;错误信息&gt;</code>（<code>:3260</code>）<br>
+        toast：复盘模式，不支持选点（<code>:3170</code>）/ 双窗口模式下仅支持在上窗选点（<code>:3174</code>）/ 请加载更多K线...（<code>:3199</code>）</td>
+    <td>模态四个出口<br>toast 5 秒</td>
+  </tr>
+  <tr>
+    <td><code>cancelSelectedPoint</code></td>
+    <td><span class="pill modal">模态</span>＋<span class="pill toast">toast</span></td>
+    <td>模态：重置失败：<code>&lt;错误信息&gt;</code>（<code>:3498</code>/<code>:3569</code>）<br>
+        toast：双窗口模式，不支持重置（<code>:3474</code>）/ 复盘模式，不支持重置（<code>:3475</code>）</td>
+    <td>模态四个出口<br>toast 5 秒</td>
+  </tr>
+  <tr>
+    <td><code>onMouseUp</code> / <code>onSubMouseUp</code><br><span class="dimtxt">区间选择（上窗 / 下窗）</span></td>
+    <td><span class="pill toast">toast</span></td>
+    <td>区间起点: <code>&lt;日期&gt;</code>，点击另一根K线完成选择（<code>:2900</code>/<code>:3381</code>）/ 区间选择已取消 / 股票或周期已变更，区间选择已取消 / 已复制 N 根K线数据到剪贴板（<code>:2935</code>/<code>:3415</code>）</td>
+    <td>5 秒</td>
+  </tr>
+  <tr>
+    <td><code>initCanvas</code> / <code>initDefault</code></td>
+    <td><span class="pill toast">toast</span></td>
+    <td>复盘模式，不支持选点（<code>:715</code>）/ 请加载更多K线...（<code>:866</code>）<br>
+        全局 <span class="kbd">Esc</span> 取消区间选择：区间选择已取消（<code>:7962</code>）</td>
+    <td>5 秒</td>
+  </tr>
+  <tr>
+    <td><code>refreshStockNames</code> / <code>pollRefreshStatus</code></td>
+    <td><span class="pill modal">模态</span></td>
+    <td>启动刷新失败：<code>&lt;错误信息&gt;</code>（<code>:6154</code>）/ 刷新失败：<code>&lt;错误&gt;</code>（<code>:6171</code>）</td>
+    <td>四个出口</td>
+  </tr>
+  <tr>
+    <td>标注四件套</td>
+    <td><span class="pill modal">模态</span></td>
+    <td>未找到该标注，可能标注存在于其他周期下…（<code>:7193</code>）/ 无法识别该K线日期：<code>&lt;日期&gt;</code>（<code>:7313</code>）/ 请输入标注文字（<code>:7415</code>）<br>
+        <b>唯一的问答框</b>：确定删除当前股票 (…) … 周期下的全部标注吗？（<code>showConfirm</code>，<code>:7379</code>）</td>
+    <td>四个出口<br><span class="dimtxt">问答框点框外＝<b>取消</b></span></td>
+  </tr>
+  <tr>
+    <td>文字标注 / 股票扫描</td>
+    <td><span class="pill panel">既有问答框</span></td>
+    <td>见<b>表 1</b> 第 4、5 行（<code>index.html:175</code> / <code>:188</code>）</td>
+    <td>确定 / 取消 / 点框外＝取消</td>
+  </tr>
+</table>
+
+<div class="card ok">
+<b>一句话结论。</b>自动下单运行中，<b>真正需要人动手的只有 3 类模态框</b>：
+<code>需人工介入！</code>（严重告警）、<code>交易引擎已退出！</code>（异常退出）、
+<code>交易引擎运行中，请先关闭，再切周期 / 再切合约</code>（运行期拦截）。
+其余全部是 <b>5 秒自动淡出的 toast</b>；
+另有 <code>不支持自动下单</code> 与 <code>交易引擎开启/关闭失败</code>（操作触发）、以及 <code>交易引擎运行中…</code>（运行期拦截）也是模态框，同样需要点掉。
+这些模态框<b>都不自动消失、也都不阻塞交易引擎</b>（引擎在独立子进程里跑自己的行情流）；
+它们唯一的作用是「把需要人判断的事摆到你面前」。
+</div>
+
+<p class="dimtxt">
+口径备注：<br>
+· 表 2 的严重告警框「关掉之后才 ack」是第 1 轮刻意保留的语义 —— 原生 <code>alert()</code> 的阻塞原本保证了「确认＝人已看到」，换成自实现模态框后改用
+<code>showAlert(...).then(ackIfAlertsSeen)</code> ＋ 模块级 <code>autoOrderAlertAckHold</code> 水位暂缓来等价实现（<code>app.js:8544-8552</code>、<code>:8561-8566</code>）。<br>
+· 表 5/6 的正文模板里 <code>{…}</code> / <code>&lt;…&gt;</code> 为占位符；括号内的「重复 N 次」由前端拼接（<code>app.js:8546-8548</code>），其余由引擎 <code>.format()</code> 填好。
+</p>
 
 </div>
 </body>
