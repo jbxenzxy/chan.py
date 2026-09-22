@@ -298,10 +298,12 @@ class ExitConfig(BaseModel):
     #     信号未携带分型时 fractal ≤ 0（哨兵）→ A = 0 → R 自动退化为 2×ATR，
     #     「只靠 ATR」由数据缺失表达，无需配置项。
     stop_buffer_ticks: float = 0.0         # 止损位额外让出的 tick 缓冲
+
     # ---- L2 波动率(ATR)定宽窄 ----
     use_atr: bool = True                        # 用 ATR 自适应止损/止盈宽度
     atr_period: int = 14                        # ATR 计算周期
     atr_sl_multiple: float = 2.0           # 初始止损距离 = 2 × ATR
+
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 1R 时，启动保本策略
