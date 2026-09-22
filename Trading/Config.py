@@ -310,7 +310,7 @@ class ExitConfig(BaseModel):
                                                 #   R = max(分型距离, 2×ATR)
                                                 #   L3 的跟踪兑现（trail_dist = trailing_trigger_r × R）
                                                 #   L3 启动阈值 = win_loss_ratio（品种档案，IC/IM=3R、其余=2R）
-                                                #   即"盈利 到 win_loss_ratio×R 时进 L3
+                                                #   即 盈利 到 win_loss_ratio × R 时进 L3
 
     @model_validator(mode="after")
     def _check_exit_param_order(self) -> "ExitConfig":
