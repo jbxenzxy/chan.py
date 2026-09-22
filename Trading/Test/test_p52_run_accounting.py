@@ -31,7 +31,7 @@ P52 run 级配对会计护栏（设计文档 v3.1 §6：[S1]-[S10] + [S7b]）
        镜像走两阶段（先"见过"再"消失"），过 P64 证据门
   [S7] shutdown_and_lock_all → Trade reason=auto_order_off
   [S7b] auto_order_off_retry 单列（首拒 + 下一根 K 线补平），
-        不落入 sl/tp 桶
+        不落入 sl / trailing 桶
   [S9] 在途 run 零写入：开仓后不触发离场 → trades 表 0 行；离场 → 恰 1 行
   [S10] events.jsonl 中每个非空 trade_id 都能在 trades 表命中；
         拆锁入场的 close 事件 trade_id 留空（无 run 结算，不悬空）
@@ -264,12 +264,12 @@ with tmp_dir("four") as tmp:
           (len(eng.positions.positions), eng._run_entry_offset), (1, "OPEN"))
     entry_at_a = eng._run_entry_at
     check_true("[T1-a2] run 元数据 entry_at 已记（≠空）", bool(entry_at_a))
-    # ── ② D1 触发 tp：今仓 → 反向 OPEN（R-OPEN 锁仓，T1 结算）──
+    # ── ② D1 触发离场（reason=trailing）：今仓 → 反向 OPEN（R-OPEN 锁仓，T1 结算）──
     eng.on_bar(make_bar(D1, "09:45", 4512, 4514, 4502, ms(2026, 9, 2, 9, 45)))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     trades = store.trades()
-    check("[T1-a3] T1 已收口（1 笔 Trade，reason=tp）",
-          [(t["reason"], t["volume"]) for t in trades], [("tp", 2)])
+    check("[T1-a3] T1 已收口（1 笔 Trade，reason=trailing）",
+          [(t["reason"], t["volume"]) for t in trades], [("trailing", 2)])
     check("[T1-a4] R-OPEN 后停在锁仓态",
           eng.account_state().value, "locked")
     # ── ③ D2 信号：跨日锁 → 转移③ 拆锁平空 B（T2 入场，CLOSE 档）──
@@ -280,18 +280,18 @@ with tmp_dir("four") as tmp:
     check("[T1-b1b] 拆锁只平反向最早一笔（B），A 仍在 → 净敞口 +2",
           [(p.side.name, p.volume) for p in eng.positions.positions],
           [("LONG", 2)])
-    # ── ④ D2 触发 tp：A 已跨日 → 转移⑤ CLOSE 平昨（T2 结算）→ FLAT ──
+    # ── ④ D2 触发离场（reason=trailing）：A 已跨日 → 转移⑤ CLOSE 平昨（T2 结算）→ FLAT ──
     eng.on_bar(make_bar(D2, "09:45", 4525, 4528, 4518, ms(2026, 9, 3, 9, 45)))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     check("[T1-b2] T2 已收口（2 笔）且账户 FLAT",
           (len(store.trades()), eng.account_state().value), (2, "flat"))
     # ── ⑤ D2 信号2：空仓开空 C（T3 入场，OPEN 档）──
     eng.on_signal(make_sig(D2, "10:20", False, 4480.0, ms(2026, 9, 3, 10, 20)))
     check("[T1-c1] 空开 → run3 入场（OPEN 档，side=SHORT）",
           (eng._run_side.name, eng._run_entry_offset), ("SHORT", "OPEN"))
-    # ── ⑥ D2 触发 tp：今仓 → R-OPEN 多 D（T3 结算，OPEN 档）→ 当日锁 ──
+    # ── ⑥ D2 触发离场（reason=trailing）：今仓 → R-OPEN 多 D（T3 结算，OPEN 档）→ 当日锁 ──
     eng.on_bar(make_bar(D2, "10:25", 4475, 4485, 4470, ms(2026, 9, 3, 10, 25)))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     check("[T1-c2] T3 已收口（3 笔）且停在锁仓态",
           (len(store.trades()), eng.account_state().value), (3, "locked"))
     # ── ⑦ D3 信号：跨日锁 → 转移③ 拆锁平多 D（T4 入场，CLOSE 档）──
@@ -299,9 +299,9 @@ with tmp_dir("four") as tmp:
     eng.on_signal(make_sig(D3, "09:40", False, 4465.0, ms(2026, 9, 4, 9, 40)))
     check("[T1-d1] 拆锁平多 → run4 入场（CLOSE 档，side=SHORT）",
           (eng._run_side.name, eng._run_entry_offset), ("SHORT", "CLOSE"))
-    # ── ⑧ D3 触发 tp：C 已跨日 → 转移⑤ CLOSE 平昨 C（T4 结算）→ FLAT ──
+    # ── ⑧ D3 触发离场（reason=trailing）：C 已跨日 → 转移⑤ CLOSE 平昨 C（T4 结算）→ FLAT ──
     eng.on_bar(make_bar(D3, "09:45", 4452, 4458, 4448, ms(2026, 9, 4, 9, 45)))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     trades = store.trades()
     check("[T1-d2] 四步剧本结束：4 笔 Trade、账户 FLAT、簿空",
           ([t["trade_id"] for t in trades], eng.account_state().value,
@@ -354,8 +354,8 @@ with tmp_dir("four") as tmp:
                [t["gross_points"] for t in trades])
     check("[S1-f3] equity_curve 末值 cumulative == total_net",
           rep["equity_curve"][-1]["cumulative"], rep["total_net"])
-    check("[S1-f4] by_reason 只含 tp（不污染）",
-          sorted(rep["by_reason"].keys()), ["tp"])
+    check("[S1-f4] by_reason 只含 trailing（不污染）",
+          sorted(rep["by_reason"].keys()), ["trailing"])
 
     # [S2] 恒等式：Σ run.net_cash ≡ Σ 全部成交现金流（独立 FIFO 重放）
     check_close("[S2-g1] Σrun.net_cash ≡ 重放现金流（全平仓）",
@@ -397,7 +397,7 @@ with tmp_dir("inflight") as tmp:
     check("[S9-a] 开仓 + 2 根 bar（未触发离场）→ trades 0 行",
           len(store.trades()), 0)
     check_true("[S9-b] 持仓非空（run 在途）", len(eng.positions) == 1)
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     check("[S9-c] 触发离场 → 恰好新增 1 笔", len(store.trades()), 1)
     store.close()
 
@@ -416,7 +416,7 @@ with tmp_dir("shutdown") as tmp:
           trades[0]["exit_price"] == broker.orders[-1].filled_price
           and broker.orders[-1].meta["offset"], "OPEN")
     check_true("[S7-c] 强平不回落 run 计划名（reason 单列）",
-               trades[0]["reason"] not in ("tp", "sl", "trailing"))
+               trades[0]["reason"] not in ("sl", "trailing"))
     store.close()
 
 # ════════════════════════════════════════════════════════════════════
@@ -463,7 +463,7 @@ with tmp_dir("retry") as tmp:
           [(t["reason"], t["volume"]) for t in trades],
           [("auto_order_off_retry", 2)])
     rep = compute_trade_stats(trades)
-    check_true("[S7b-c] retry 不落入 sl/tp 桶（by_reason 单列）",
+    check_true("[S7b-c] retry 不落入 sl / trailing 桶（by_reason 单列）",
                set(rep["by_reason"].keys()) == {"auto_order_off_retry"},
                rep["by_reason"])
     store.close()
@@ -496,7 +496,7 @@ with tmp_dir("restart") as tmp:
            eng2._run_entry_at == ea0),
           (round(anchor0, 3), "OPEN", True))
     eng2.on_bar(make_bar(D1, "09:45", 4502, 4512, 4492, ms(2026, 9, 2, 9, 45)))
-    eng2._force_exit(eng2.last_bar, reason="tp")
+    eng2._force_exit(eng2.last_bar, reason="trailing")
     trades = store2.trades()
     check("[S5-b] 重启后离场 → Trade 完整（entry=重启前锚，entry_at=恢复值）",
           (len(trades), round(trades[0]["entry_price"], 3),
@@ -678,7 +678,7 @@ with tmp_dir("ta") as tmp:
     eng.on_signal(make_sig(D1, "09:40", True, 5195.0, ms(2026, 9, 2, 9, 40)))
     check("[T7-a] TA FAK 1 手成交", (len(eng.positions), eng.positions.positions[0].volume),
           (1, 1))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     trades = store.trades()
     eo = [d for d in event_dicts(eng, tmp, "a")
           if d.get("kind") == "run_start"][0]["entry_offset"]
@@ -687,7 +687,7 @@ with tmp_dir("ta") as tmp:
             + eng.state.single_fee(trades[0]["exit_price"], xo, 1))
     check("[T7-b] TA cost = 单边(入场,%s) + 单边(离场,%s)" % (eo, xo),
           [(t["reason"], round(t["cost_cash"], 2)) for t in trades],
-          [("tp", round(want, 2))])
+          [("trailing", round(want, 2))])
     store.close()
 
 # ════════════════════════════════════════════════════════════════════
@@ -698,7 +698,7 @@ with tmp_dir("au") as tmp:
                                       trade_symbol="SHFE.AU2602")
     eng.on_bar(make_bar(D1, "09:40", 780, 782, 778, ms(2026, 9, 2, 9, 40)))
     eng.on_signal(make_sig(D1, "09:40", True, 779.0, ms(2026, 9, 2, 9, 40)))
-    eng._force_exit(eng.last_bar, reason="tp")
+    eng._force_exit(eng.last_bar, reason="trailing")
     trades = store.trades()
     xo = broker.orders[-1].meta["offset"]
     check("[S8-a] AU 今仓离场 → CLOSETODAY 意图（两态机）", xo, "CLOSETODAY")
@@ -706,9 +706,9 @@ with tmp_dir("au") as tmp:
             + eng.state.single_fee(trades[0]["exit_price"], "CLOSETODAY", 2))
     check_close("[S8-b] cost = 单边(入场,OPEN) + 单边(离场,CLOSETODAY 平今档)",
                 trades[0]["cost_cash"], want, tol=0.02)
-    check("[S8-c] 两态机回归等价：1 笔 run Trade、reason=tp",
+    check("[S8-c] 两态机回归等价：1 笔 run Trade、reason=trailing",
           (len(trades), trades[0]["reason"], trades[0]["volume"]),
-          (1, "tp", 2))
+          (1, "trailing", 2))
     store.close()
 
 print("\n══════════════════════════════")

@@ -10,7 +10,7 @@ P34 场景 X vs 场景 Y：同一成交价下"新敞口"的风控层等价性
 
 结论（文档已推演，本文件把它**跑成代码**）：
     **成立** —— 除「报单 offset」「Trade 会计锚」两项必然不同外，**风控层完全一致**：
-    `run_side` / `run_volume` / `run_anchor` / `run_plan`（stop / tp / params）
+    `run_side` / `run_volume` / `run_anchor` / `run_plan`（stop / params）
     / L1 触发价，全部逐字段相同。这不是巧合，是 **D1** 的设计目标：
     **净敞口从 0 变非 0 的那一刻，用该次成交价作锚** —— X 用开仓价 P₀、Y 用拆锁
     成交价 P₂，两者进的是同一个 `_run_start(anchor_price=...)`。
@@ -182,7 +182,7 @@ def build_engine(tmpdir, tag):
 
 
 def plan_key(plan):
-    """出场计划的**可比指纹**（name / stop / tp / params 全字段）。"""
+    """出场计划的**可比指纹**（name / stop / params 全字段）。"""
     if plan is None:
         return None
     return (plan.name, round(float(plan.stop_price), 6),

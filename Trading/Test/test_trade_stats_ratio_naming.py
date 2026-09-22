@@ -126,7 +126,7 @@ def mk(net_cash, i):
         "trade_id": "T%d" % i, "symbol": "CFFEX.IF2609", "side": "long",
         "volume": 1, "entry_price": 4500.0, "exit_price": 4500.0,
         "entry_at": "2026-09-01 09:00", "exit_at": "2026-09-0%d 10:00" % (i % 9 + 1),
-        "reason": "tp" if net_cash > 0 else "sl",
+        "reason": "trailing" if net_cash > 0 else "sl",
         "gross_points": float(net_cash), "cost_cash": 0.0,
         "net_cash": float(net_cash), "bars_held": 3,
         "exit_plan_name": "run_managed", "exit_plan_params": "{}",

@@ -88,7 +88,7 @@ def mk(net_cash, i, exit_at=None):
         "volume": 1, "entry_price": 4500.0, "exit_price": 4500.0,
         "entry_at": "2026-09-01 09:00",
         "exit_at": exit_at or ("2026-09-%02d 10:00" % (i % 9 + 1)),
-        "reason": "tp" if net_cash > 0 else ("sl" if net_cash < 0 else "time"),
+        "reason": "trailing" if net_cash > 0 else ("sl" if net_cash < 0 else "time"),
         "gross_points": float(net_cash), "cost_cash": 0.0,
         "net_cash": float(net_cash), "bars_held": 3,
         "exit_plan_name": "run_managed", "exit_plan_params": "{}",
@@ -307,7 +307,7 @@ def mk_pnl(net, gross_pts, cost, i, exit_at=None):
     r["gross_points"] = float(gross_pts)
     r["cost_cash"] = float(cost)
     r["net_cash"] = float(net)
-    r["reason"] = "tp" if net > 0 else ("sl" if net < 0 else "time")
+    r["reason"] = "trailing" if net > 0 else ("sl" if net < 0 else "time")
     return r
 
 
@@ -358,7 +358,7 @@ print("\n[I] by_reason：按**离场规则身份**分组，组内再分胜 / 负
 # ══════════════════════════════════════════════════════════════
 # 为什么单开一段：2026-09-22 的原始疑问正是「保本愿望是止盈，但被滑点打成净亏之后，
 # 统计里该算止盈还是止损」。结论是**两个维度都要，但不能塞进同一个字段**：
-#   · 分组键 = 规则身份（breakeven / trailing / sl / tp …）—— 代码 100% 可判定；
+#   · 分组键 = 规则身份（breakeven / trailing / sl …）—— 代码 100% 可判定；
 #   · 组内 wins / losses / flat = 成交结果 —— 只有 net_cash 说得清。
 # 本段造一组「同一规则、盈亏两个方向都有」的样本，把这两个维度同时钉住；若有人把
 # by_reason 改回"按 net 符号派生键"（那就只剩止盈/止损两桶，规则信息全丢），[I1] 必红。

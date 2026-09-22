@@ -158,10 +158,8 @@ def make_bar(date="2026-09-01 09:30", close=4550.0, ts=5000):
 def make_position(side, vol, entry_price, entry_bar_seq, signal_key="TEST",
                   entry_date="2026-08-31"):
     if side is Side.LONG:
-        tp = entry_price + 5.0
         stop = entry_price - 10.0
     else:
-        tp = entry_price - 5.0
         stop = entry_price + 10.0
     return Position(
         symbol="CFFEX.IF2609", side=side, volume=vol,

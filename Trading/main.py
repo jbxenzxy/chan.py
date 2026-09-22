@@ -341,7 +341,7 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
         print("净盈亏    : {:+.2f} 元".format(s["net_cash"]))
         print("单笔期望  : {:+.2f} 元".format(s["expectancy_cash"]))
         if s["by_reason"]:
-            # 分组键是**离场规则身份**（sl / breakeven / trailing / tp …），不是"止盈/止损"；
+            # 分组键是**离场规则身份**（sl / breakeven / trailing …），不是"止盈/止损"；
             # 组内的 胜/负/平 才是盈亏结果（保本离场也可能被滑点打成净亏）。
             seg = "  ".join(
                 "{}: n={} (胜{}负{}平{}) net={:+.2f}".format(

@@ -111,7 +111,7 @@ def tmp_dir(tag):
         shutil.rmtree(d, ignore_errors=True)
 
 
-def mk_trade(tid, symbol, net_cash, exit_at, reason="tp", volume=1):
+def mk_trade(tid, symbol, net_cash, exit_at, reason="trailing", volume=1):
     return Trade(
         trade_id=tid, symbol=symbol, side=Side.LONG, volume=volume,
         entry_price=4500.0, exit_price=4500.0 + net_cash,

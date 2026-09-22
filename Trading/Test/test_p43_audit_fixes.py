@@ -371,7 +371,7 @@ with tmp_dir("apifields") as tmp:
                    "close_cooldown" not in (res or {}),
                    sorted(res.keys()) if res else None)
         run_v = (res or {}).get("run")
-        check_true("[5e] 有净敞口时 run 非空且含 anchor/stop/tp",
+        check_true("[5e] 有净敞口时 run 非空且含 anchor/stop",
                    isinstance(run_v, dict)
                    and {"anchor", "stop"} <= set(run_v), run_v)
     except Exception as e:                    # App 层不可导入时不算失败

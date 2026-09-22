@@ -105,7 +105,7 @@ def mk_trade(tid, symbol, exit_at, net=10.0, volume=1):
     return Trade(
         trade_id=tid, symbol=symbol, side=Side.LONG, volume=volume,
         entry_price=4500.0, exit_price=4500.0 + net,
-        entry_at="2026-09-01 09:00", exit_at=exit_at, reason="tp",
+        entry_at="2026-09-01 09:00", exit_at=exit_at, reason="trailing",
         gross_points=net, cost_cash=0.0, net_cash=net, bars_held=3,
         signal_key="p57|" + tid, exit_plan_name="x")
 
@@ -310,7 +310,7 @@ with tmp_dir("legacy2") as tmp:
         " bars_held INTEGER, exit_plan_name TEXT, exit_plan_params TEXT);")
     conn.execute(
         "INSERT INTO trades VALUES ('T00001','k','CFFEX.IF2609','LONG',1,"
-        "4500.0,4510.0,'2026-09-01 09:00','2026-09-02 10:00','tp',10.0,1.0,"
+        "4500.0,4510.0,'2026-09-01 09:00','2026-09-02 10:00','trailing',10.0,1.0,"
         "11.0,3,'x','{}')")
     conn.commit()
     conn.close()

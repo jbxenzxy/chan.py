@@ -421,7 +421,7 @@ with tmp_dir() as tmp:
           "auto_order_off_retry")
     check("[5b5] 补锁即 run 结算点 → 1 笔 Trade（v3.1）",
           len(store.trades()), 1)
-    check("[5b6] Trade.reason = auto_order_off_retry（不落 sl/tp 桶，[S7b]）",
+    check("[5b6] Trade.reason = auto_order_off_retry（不落 sl / trailing 桶，[S7b]）",
           store.trades()[0]["reason"], "auto_order_off_retry")
 
 # 5B 昨仓（转移 ⑤ CLOSE）被拒 → 必须等满冷却根数才重试
