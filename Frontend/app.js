@@ -8272,7 +8272,7 @@
                         || '未知';
                     const netV = (data.auto_order && typeof data.auto_order.net_volume === 'number')
                         ? data.auto_order.net_volume : 0;
-                    let tip = '自动下单引擎：' + (running ? '运行中' : '已停止');
+                    let tip = '交易引擎：' + (running ? '运行中' : '已停止');
                     tip += '，账户状态：' + stateLabel
                         + (aoState === 'running' ? '（净敞口 ' + (netV > 0 ? '+' : '') + netV + ' 手）' : '');
                     if (data.symbol) tip += '，' + data.symbol + '/' + (data.freq || '5m');
@@ -8288,7 +8288,7 @@
                     if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';
                     if (data.broker) tip += '，broker=' + data.broker;
                     if (data.log_file) tip += '，日志=' + data.log_file;
-                    tip += '；关闭时持仓会转为空仓或锁仓态';
+                    tip += '；关闭时，锁仓或平仓（平今/昨）';
                     wrap.title = tip;
                 }
                 handleAutoOrderAlerts(data);
@@ -8649,7 +8649,7 @@
                 const chk = await checkSymbolTradable(realtimeSymbol);
                 if (!chk.allowed) {
                     checkbox.checked = false;   // 回弹开关，且**不发启动请求**
-                    console.warn('[auto-order] 品种不支持交易，已取消开启: '
+                    console.warn('[auto-order] 品种不支持自动下单，已取消开启: '
                         + realtimeSymbol + '  ' + chk.message);
                     showAlert('不支持自动下单\n\n' + chk.message);
                     return;

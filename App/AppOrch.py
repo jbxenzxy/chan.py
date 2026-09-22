@@ -59,7 +59,7 @@ from App.AppTrader import AppTrader, trader  # noqa: E402
 
 
 def call_trader_start(out_dir=None, symbol=None, freq=None, sse_base=None):
-    """启动自动下单引擎子进程（实盘安全闸门在 AppTrader.start 内预检）。
+    """启动交易引擎子进程（实盘安全闸门在 AppTrader.start 内预检）。
 
     配置统一来自 Trading/Config.py（无 config.json）。
     symbol/freq/sse_base：前端开关传当前页面品种/周期/服务地址，

@@ -42,13 +42,13 @@
                 <button class="btn" id="btn-dual" onclick="toggleDualWindow()">双窗口</button>
             </span>
             <span class="realtime-badge" id="realtime-badge" title="实时推送中">● 实时</span>
-            <span class="auto-order-wrap" id="auto-order-wrap" title="自动下单引擎">
+            <span class="auto-order-wrap" id="auto-order-wrap" title="交易引擎">
                 <span class="auto-order-dot off" id="auto-order-dot"></span>
                 <span class="auto-order-label" id="auto-order-label">自动下单</span>
                 <!-- 未标定品种提示（2026-09-14 第 6 批）：不在下单白名单时显示，
                      由 app.js 的 applyAutoOrderTradableUI() 填充文案并给外层加 .disabled -->
                 <span class="auto-order-hint" id="auto-order-hint"></span>
-                <label class="auto-order-switch" title="开关自动下单：关闭时持仓转为空仓或锁仓态">
+                <label class="auto-order-switch" title="关闭时，锁仓或平仓（平今/昨）">
                     <input type="checkbox" id="auto-order-checkbox" onchange="onAutoOrderToggle(this)">
                     <span class="auto-order-slider"></span>
                 </label>
@@ -323,6 +323,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=23"></script>
+    <script src="app.js?v=24"></script>
 
 </body></html>
