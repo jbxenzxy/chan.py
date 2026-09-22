@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>设计文档：Trade 统计改「run 级配对会计」v3.5</title>
+<title>设计文档：Trade 统计改「run 级配对会计」v3.6</title>
 <style>
   :root{
     --bg:#ffffff; --fg:#1f2328; --muted:#57606a; --border:#d8dee4;
@@ -57,10 +57,10 @@
 
 <h1>设计文档：Trade 统计改「run 级配对会计」</h1>
 <div class="meta">
-  <b>版本</b>：<b>v3.5</b>（v3.1 = 评审 8 条 + 复审 R1/R2；v3.2 = 已实施；v3.3 = 文档刷新；v3.4 = 并入第二轮复核新增发现 N1–N3 + 新增 §11 / §12；<b>v3.5 = 按需求方裁定移出 B1 / B2，§12 只保留 B4-1 / B4-2</b>）　·　<b>日期</b>：2026-09-21（v3 吸收评审 15:32；v3.1 吸收复审 16:09；v3.2 实施完成 18:15；v3.3 文档刷新 2026-09-22；v3.4 = 2026-09-22 第二轮复核并入；<b>v3.5 = 2026-09-22 按裁定移出 B1 / B2</b>）<br>
+  <b>版本</b>：<b>v3.6</b>（v3.1 = 评审 8 条 + 复审 R1/R2；v3.2 = 已实施；v3.3 = 文档刷新；v3.4 = 并入第二轮复核新增发现 N1–N3 + 新增 §11 / §12；v3.5 = 按需求方裁定移出 B1 / B2；<b>v3.6 = 按需求方裁定移出 B4-1 / B4-2，§12 整节撤销</b>）　·　<b>日期</b>：2026-09-21（v3 吸收评审 15:32；v3.1 吸收复审 16:09；v3.2 实施完成 18:15；v3.3 文档刷新 2026-09-22；v3.4 = 2026-09-22 第二轮复核并入；v3.5 = 2026-09-22 按裁定移出 B1 / B2；<b>v3.6 = 2026-09-22 按裁定移出 B4-1 / B4-2</b>）<br>
   <b>行号口径（v3.3 新增）</b>：§1.1 的行号 = <b>实施前基线</b>（v3.1 评审基线 <code>b4880c6fdb</code>），描述的是 v3.2 实施<b>前</b>的旧口径，不可按当前代码查；其余章节的行号已按 <b>v3.2 实施后 HEAD <code>87b850d12b9fc2af18386a92c11073e602bb6814</code></b>（2026-09-21 20:58 CST）刷新，逐条 old→new 对照见 <b>§10</b><br>
-  <b>作者</b>：WorkBuddy（与用户逐例对齐后成文；v3 吸收《评审报告_run级配对会计方案_20260921》；v3.1 吸收《复审报告_v3_run级配对会计_20260921》；v3.3 吸收《评审报告_run级配对会计_实现审核_20260922》B5；v3.4 吸收《复核报告_run级配对会计_v3.3实现核验_20260922》N1–N3；<b>v3.5 = 按需求方裁定移出 B1 / B2</b>）<br>
-  <b>状态</b>：<b>已实施并交付</b>（2026-09-21 晚，用户授权后）。交付包 = <code>chanpy_run_accounting_2026-09-21.zip</code>（13 文件按仓库原目录层级覆盖：<code>Engine.py</code> / <code>Instrument.py</code> / <code>Reconcile.py</code> + 新增 <code>test_p52_run_accounting.py</code> + 9 个旧测试对齐新语义）。回归：全量 110 测试 post 失败集 == base 失败集（12 个全为环境性/既有，<b>零补丁新增红</b>）；p52 新测试 <b>63/63</b>（v3.3 更正：原文 54/54 是实施当次计数，实施后又补了 [S6-d] 等用例）、p27 63/0、p34 40/0、p26 术语守卫 24/0；交付包解压复验（md5 往返 13/13 + py_compile + 新旧标记 grep + 覆盖树冒烟）全过。<b>v3.3 只动文档、不动代码</b>：行号刷新（§10 对照表）+ §1.1 旁证更正 + p52 计数更正。（原记的 2 个「漏记缺口」B1 / B2 已于 <b>v3.5</b> 按需求方裁定移出 §10.4 / §12，依据见 §10.4 表下注。）<b>v3.4 补记（N3）</b>：交付包 <code>ba7926c</code>（09-21 18:20 CST）之后、HEAD <code>87b850d</code>（20:58 CST）之前，分支上另有 <b>3 次提交</b> —— <code>e9a533d</code>（19:58）/ <code>0b50307</code>（20:29）<b>含生产代码</b>，<code>87b850d</code>（= HEAD）<b>仅改测试</b>；故「交付 = 13 文件」与「行号基线 = HEAD」分属<b>两个时点</b>，逐条见 §11.3<br>
+  <b>作者</b>：WorkBuddy（与用户逐例对齐后成文；v3 吸收《评审报告_run级配对会计方案_20260921》；v3.1 吸收《复审报告_v3_run级配对会计_20260921》；v3.3 吸收《评审报告_run级配对会计_实现审核_20260922》B5；v3.4 吸收《复核报告_run级配对会计_v3.3实现核验_20260922》N1–N3；v3.5 = 按需求方裁定移出 B1 / B2；<b>v3.6 = 按需求方裁定移出 B4-1 / B4-2</b>）<br>
+  <b>状态</b>：<b>已实施并交付</b>（2026-09-21 晚，用户授权后）。交付包 = <code>chanpy_run_accounting_2026-09-21.zip</code>（13 文件按仓库原目录层级覆盖：<code>Engine.py</code> / <code>Instrument.py</code> / <code>Reconcile.py</code> + 新增 <code>test_p52_run_accounting.py</code> + 9 个旧测试对齐新语义）。回归：全量 110 测试 post 失败集 == base 失败集（12 个全为环境性/既有，<b>零补丁新增红</b>）；p52 新测试 <b>63/63</b>（v3.3 更正：原文 54/54 是实施当次计数，实施后又补了 [S6-d] 等用例）、p27 63/0、p34 40/0、p26 术语守卫 24/0；交付包解压复验（md5 往返 13/13 + py_compile + 新旧标记 grep + 覆盖树冒烟）全过。<b>v3.3 只动文档、不动代码</b>：行号刷新（§10 对照表）+ §1.1 旁证更正 + p52 计数更正。（原记的 2 个「漏记缺口」B1 / B2 已于 <b>v3.5</b> 按需求方裁定移出；另两条 B4-1 / B4-2 于 <b>v3.6</b> 同样移出，且 <b>§12 整节撤销</b> —— 四条的可达性结论与实证见 §10.4 表下注。）<b>v3.4 补记（N3）</b>：交付包 <code>ba7926c</code>（09-21 18:20 CST）之后、HEAD <code>87b850d</code>（20:58 CST）之前，分支上另有 <b>3 次提交</b> —— <code>e9a533d</code>（19:58）/ <code>0b50307</code>（20:29）<b>含生产代码</b>，<code>87b850d</code>（= HEAD）<b>仅改测试</b>；故「交付 = 13 文件」与「行号基线 = HEAD」分属<b>两个时点</b>，逐条见 §11.2<br>
   <b>关联</b>：<code>Trading/Engine/Engine.py</code>（_book_close / _run_start / _run_end）、<code>Trading/Infra/TradeStats.py</code>、<code>Trading/Infra/StateDB.py</code>（trades 表）、<code>Trading/Infra/Records.py</code>（OrderIntent / AccountState）<br>
   <b>评审基线核对</b>：26/26 代码断言一致（评审报告 §1）；对账恒等式经独立复演 5 个已收口场景三账全等（评审报告 §2）；复审补下载 SimNow.py 后断言全量命中、恒等式复演 7 场景（4 收口全等 + 3 在途部分和）
 </div>
@@ -329,14 +329,18 @@
 <li>补记实施后新增落点（<code>_settle_run</code> / <code>single_fee</code> / <code>_persist_run</code> / trade_id 回填点 / 对账收口）。</li>
 </ol>
 
-<h3>10.4 未决项（v3.3 建立；<b>v3.4 拆细 B4 → B4-1 / B4-2，并补可达条件</b>）</h3>
+<h3>10.4 未决项（v3.3 建立；<b>v3.6 起 B1 / B2 / B4-1 / B4-2 四条全部移出，表内只剩已撤回的 B3</b>）</h3>
 <table>
 <tr><th>编号</th><th>内容</th><th>状态</th></tr>
 <tr><td>B3（原 P2）</td><td>带在途 run 的旧 state.db 升级后拒绝启动（<code>Engine.py:707-714</code>）</td><td><b>撤回，不计为缺陷</b>：§7-① 已拍板"零清理、零兼容步骤"，fail-fast 属设计口径内（v3.4 复核：<code>entry_offset</code> 校验在 <code>:707-714</code>，维持撤回）</td></tr>
-<tr><td>B4-1 · P3</td><td>对账强制结算选<b>离场费率档</b>用的是 <code>state.closetoday_first</code> + 仓单建仓日（<code>Reconcile.py:353-356</code>），而<b>离场决策</b>用的是品种执行策略表<b>第 1 列</b>（<code>Engine._today_exit:1185-1186</code> → <code>EXEC_POLICY[code].today_exit</code>，<code>Product.py:241-250</code>）→ 两者分叉时对账那一笔的费率档 ≠ 真实离场档</td><td>未修（条件可达：<code>closetoday_first</code> 显式设 <code>False</code> 才咬人；默认 <code>True</code>，<code>Instrument.py:118</code>）；场景见 §12.1</td></tr>
-<tr><td>B4-2 · P3</td><td><code>entry_at</code>（run 入场时点）缺失时静默回落 <code>now_cn()</code>（<code>Engine.py:1610</code>）→ Trade 的入场时点被记成结算时刻；同一次恢复里 <code>entry_offset</code> 走<b>启动期 fail-fast</b>（<code>:707-714</code>），<code>entry_at</code> 没有（<code>:715</code> 恢复为空串即静默）</td><td>未修；场景见 §12.2</td></tr>
 </table>
-<p><b>B1 / B2 已于 2026-09-22 移出本表（需求方裁定为非缺陷）</b>：两条路径都需要「簿面被外部改动」才可达 —— ① 在快期3 等外部终端手工改仓；② 改品种执行策略表第 3 列（<code>lots_per_order</code>）时簿面非空。在「不手工改仓、簿面非空不改表」的既定运维口径下，净敞口恒 ∈ {0, ±N}（<code>Engine.py:259-263</code> 三态判定 → <code>:1023-1024</code> 运行态不加仓 → <code>:1004-1005</code> 手数会话内恒定）⇒ <code>min(|净|, 目标笔手数)</code> 恒等于目标笔手数 ⇒ <b>平仓恒平满</b>，两条零记账分支均不可达。原 GAP-1 / GAP-2 复现脚本与结论留在两份报告中作历史取证，不再作为未决项跟踪。</p>
+<p><b>B1 / B2（v3.5）与 B4-1 / B4-2（v3.6）四条均已移出本表 —— 需求方裁定为非缺陷。</b></p>
+<ul>
+<li><b>B1 / B2</b>：需要「簿面被外部改动」才可达 —— ① 在快期3 等外部终端手工改仓；② 改品种执行策略表第 3 列（<code>lots_per_order</code>）时簿面非空。在「不手工改仓、簿面非空不改表」的既定运维口径下，净敞口恒 ∈ {0, ±N}（<code>Engine.py:259-263</code> 三态判定 → <code>:1023-1024</code> 运行态不加仓 → <code>:1004-1005</code> 手数会话内恒定）⇒ <code>min(|净|, 目标笔手数)</code> 恒等于目标笔手数 ⇒ <b>平仓恒平满</b>，两条零记账分支均不可达。</li>
+<li><b>B4-1（费率档）</b>：需要把部署字段 <code>closetoday_first</code> <b>显式改成 <code>False</code></b> 才咬人；生产恒为默认 <code>True</code>（<code>Instrument.py:118-122</code> 自述语义 =「是否允许按持仓 entry_date 把今仓判成平今费率」，置 <code>False</code> 可整体关闭今仓判定；生产唯一构造点 <code>Trading/main.py:195</code> 走 <code>Trading/Config.py:172</code> 的 pydantic 默认，仓内无 config.json、无库表可改它；全仓唯一显式置 <code>False</code> 的是 <code>test_p24:201</code>）。默认口径下会计侧按「今仓 → 平今档」判（<code>Reconcile.py:353-356</code> / <code>Engine.py:1641-1642</code>），即 <code>closetoday_first</code> 的字面语义，不存在取错档的记账。</li>
+<li><b>B4-2（入场时点）</b>：需要「在途 run 的落盘记录里 <code>entry_at</code> 为空」才可达，而该状态<b>结构性不存在</b>：<code>_persist_run</code>（<code>Engine.py:643-657</code>）只在 <code>_run_plan</code> / <code>_run_side</code> 非空时写盘，而这两者与 <code>entry_at</code> 在 <code>_run_start</code>（<code>:1753</code> / <code>:1761</code>）与 <code>_restore_run</code>（<code>:698</code> / <code>:715</code>）里恒<b>成对赋值</b>；<code>entry_offset</code> 与 <code>entry_at</code> 是<b>同一个提交（<code>ba7926c</code>）同时进入 <code>_persist_run</code></b> 的（逐提交枚举 <code>Trading/Engine/Engine.py</code> 12 个历史版本：<code>ba7926c</code> 及之前两者全无、之后两者全有），故「有 <code>entry_offset</code> 而无 <code>entry_at</code>」的库存不存在；更早的库两者皆缺 → <code>:707-714</code> 启动期 fail-fast 直接拒启动，空串永远读不到。<code>Engine.py:1610</code> 的 <code>or now_cn()</code> 属防御性兜底（正常路径不可达）。</li>
+</ul>
+<p>唯一残留入口 = <b>手工 / 第三方改写 state.db</b>（与 B1 / B2 同类，属既定运维口径之外）。原 GAP-1 / GAP-2 复现脚本与结论留在两份报告（《评审报告_run级配对会计_实现审核_20260922》§2 / §4、《复核报告_run级配对会计_v3.3实现核验_20260922》§3 / §5）中作历史取证；B4-1 / B4-2 的可达性实证脚本 = <code>verify_b4.py</code>（本轮新增）。四条均不再作为未决项跟踪。</p>
 
 <h2>11. 复核新增发现（<b>v3.4 新增</b>）</h2>
 <ul>
@@ -352,7 +356,7 @@
 <li>处置：§3 与 §10.2 的证据锚已换为 <code>Engine.py:1022-1024</code>，<code>Records.py:37-38</code> 降级为旁证。<b>结论不变</b>（不变量成立），只是证据从「注释」换成「可执行分支」。</li>
 </ul>
 
-<h3>11.3 N3 · 交付包之后还有 3 次提交（交付面与行号基线分属两个时点）</h3>
+<h3>11.2 N3 · 交付包之后还有 3 次提交（交付面与行号基线分属两个时点）</h3>
 <table>
 <tr><th>提交</th><th>时间（CST）</th><th>文件（+/-）</th><th>改了什么（以 diff 为准）</th></tr>
 <tr><td><code>ba7926c</code></td><td>09-21 <b>18:20</b></td><td>13 文件</td><td><b>= 交付包 <code>chanpy_run_accounting_2026-09-21.zip</code> 的内容面</b>（3 生产 + 新增 p52 + 9 旧测试）</td></tr>
@@ -367,31 +371,8 @@
 <li>声明：上述两处提交的<b>提交内注释</b>引用了「验收报告 P1-2 / P1-3」（提交方自述），本表只陈述 <b>diff 里可见的改动</b>；该验收报告不在本次取证范围内。</li>
 </ul>
 
-<h2>12. 缺口场景说明（大白话 · <b>v3.4 新增</b>；<b>v3.5 起仅含 B4</b>）</h2>
-<div class="callout blue">回答「这几个编号到底在什么场景下咬人」。本节只收录 <b>B4-1 / B4-2</b> 两条（原 B1 / B2 两个场景已随 2026-09-22 的裁定移出，见 §10.4 表下注）。两条的共同前提 = <b>部署配置与执行策略表分叉 / 恢复数据缺字段</b>，默认部署下都不触发。</div>
-
-<h3>12.1 B4-1 —— 对账强平该收哪一档手续费，可能取错</h3>
-<ul>
-<li>两个「档」的来源不同：
-  <ul>
-  <li><b>离场决策（走哪条路）</b>：品种执行策略表<b>第 1 列</b> <code>today_exit</code> —— <code>EXEC_POLICY</code>（<code>Product.py:241-250</code>）里 IF / IH / IC / IM / TA 是 <code>R-OPEN</code>（今仓离场 = <b>反向开仓，开仓档</b>）、AU / AG / CU 是 <code>CLOSETODAY</code>（今仓离场 = <b>平今档</b>）；读取点 <code>Engine._today_exit:1185-1186</code>。</li>
-  <li><b>会计侧取档</b>：<code>state.closetoday_first</code>（今仓成本开关）+ 仓单建仓日 —— <code>Reconcile.py:353-356</code>。</li>
-  </ul></li>
-<li>出问题的样子：配置里把 <code>closetoday_first</code> 显式设 <code>False</code> → 对账强制结算<b>一律按平昨档</b>计费，而该品种真实离场本该按 <b>开仓档（<code>R-OPEN</code>）</b> 或 <b>平今档（<code>CLOSETODAY</code>）</b> → 对账那一笔的<b>费率档与真实离场不同</b>，表现为金额小幅对不上（不易发现）。</li>
-<li>可达条件：<code>closetoday_first</code> 是部署字段（<code>Instrument.py:118</code>，默认 <code>True</code>；生产唯一构造点 <code>Trading/main.py:195</code>）；<b>全仓唯一显式置 <code>False</code> 的是 <code>test_p24:201</code></b> → 默认部署下不触发。</li>
-<li>注：不是 v3.2 新引入 —— <code>_write_close_event:1641</code> 早就是同一套判定，新代码只是继承。</li>
-</ul>
-
-<h3>12.2 B4-2 —— 入场时点缺失时被「顶替」成结算时刻</h3>
-<ul>
-<li>正常：<code>_run_start</code> 记下入场成交时点（<code>_run_entry_at</code>），结算时写进 Trade 的 <code>entry_at</code>（<code>Engine.py:1610</code>）。</li>
-<li>出问题：从 state.db 恢复的 run 记录里 <code>entry_at</code> 缺失 → <code>:715</code> 恢复成空串 → <code>:1610</code> 的 <code>entry_at=self._run_entry_at or now_cn()</code> <b>静默</b>把「结算那一刻」当成入场时刻。</li>
-<li>后果：Trade 的<b>入场时点</b>错（可能跨日），事后人工核对「这笔拿了多久」会误读；<b>不影响金额</b>（<code>bars_held</code> 由 bar 序号算，不走 <code>entry_at</code>）。</li>
-<li>对照：同一次 <code>_restore_run</code> 里 <code>entry_offset</code> 走<b>启动期 fail-fast</b>（<code>:707-714</code>，缺字段即拒绝启动并提示删库），<code>entry_at</code> 没有同等待遇 → 建议改同口径（本次未改）。</li>
-</ul>
-
 <div class="foot">
-设计文档 v3.5 · 2026-09-21 成文 / 2026-09-22 刷新三次（v3.3 = 行号·旁证·计数；v3.4 = 并入复核 N1–N3 + 新增 §11 / §12；v3.5 = 按裁定移出 B1 / B2，§12 只留 B4）· v3.2 已实施并交付；v3.3 / v3.4 / v3.5 均只动文档、未改任何代码 · 自包含 HTML（内联 SVG，离线可开）
+设计文档 v3.6 · 2026-09-21 成文 / 2026-09-22 刷新四次（v3.3 = 行号·旁证·计数；v3.4 = 并入复核 N1–N3 + 新增 §11 / §12；v3.5 = 按裁定移出 B1 / B2；v3.6 = 按裁定移出 B4-1 / B4-2、撤销 §12）· v3.2 已实施并交付；v3.3 ~ v3.6 均只动文档、未改任何代码 · 自包含 HTML（内联 SVG，离线可开）
 </div>
 
 </div>

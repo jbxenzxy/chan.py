@@ -115,7 +115,7 @@ class InstrumentConfig(BaseModel):
     #   ⚠️：**已标定品种的实际生效值 = 品种执行策略表第 2 列**
     #   （见 Instrument.effective_order_advanced）；本字段只服务未标定品种的兜底。
     order_advanced: str = "FOK"
-    closetoday_first: bool = True                   # 今仓成本开关：不是"平仓优先平今"）。
+    closetoday_first: bool = True                   # 今仓成本开关：不是"平仓优先平今"。
                                                     # 实际语义 = 是否允许按持仓 entry_date 把"今仓"判成平今费率；
                                                     # 规则 ⑸ 下 OrderIntent.CLOSE 只用于跨日单，
                                                     # 正常流程 恒走平昨费率，置 False 可整体关闭今仓判定。
