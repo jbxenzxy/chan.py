@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>设计文档：Trade 统计改「run 级配对会计」v3.6</title>
+<title>设计文档：Trade 统计改「run 级配对会计」v3.7</title>
 <style>
   :root{
     --bg:#ffffff; --fg:#1f2328; --muted:#57606a; --border:#d8dee4;
@@ -57,10 +57,10 @@
 
 <h1>设计文档：Trade 统计改「run 级配对会计」</h1>
 <div class="meta">
-  <b>版本</b>：<b>v3.6</b>（v3.1 = 评审 8 条 + 复审 R1/R2；v3.2 = 已实施；v3.3 = 文档刷新；v3.4 = 并入第二轮复核新增发现 N1–N3 + 新增 §11 / §12；v3.5 = 按需求方裁定移出 B1 / B2；<b>v3.6 = 按需求方裁定移出 B4-1 / B4-2，§12 整节撤销</b>）　·　<b>日期</b>：2026-09-21（v3 吸收评审 15:32；v3.1 吸收复审 16:09；v3.2 实施完成 18:15；v3.3 文档刷新 2026-09-22；v3.4 = 2026-09-22 第二轮复核并入；v3.5 = 2026-09-22 按裁定移出 B1 / B2；<b>v3.6 = 2026-09-22 按裁定移出 B4-1 / B4-2</b>）<br>
-  <b>行号口径（v3.3 新增）</b>：§1.1 的行号 = <b>实施前基线</b>（v3.1 评审基线 <code>b4880c6fdb</code>），描述的是 v3.2 实施<b>前</b>的旧口径，不可按当前代码查；其余章节的行号已按 <b>v3.2 实施后 HEAD <code>87b850d12b9fc2af18386a92c11073e602bb6814</code></b>（2026-09-21 20:58 CST）刷新，逐条 old→new 对照见 <b>§10</b><br>
-  <b>作者</b>：WorkBuddy（与用户逐例对齐后成文；v3 吸收《评审报告_run级配对会计方案_20260921》；v3.1 吸收《复审报告_v3_run级配对会计_20260921》；v3.3 吸收《评审报告_run级配对会计_实现审核_20260922》B5；v3.4 吸收《复核报告_run级配对会计_v3.3实现核验_20260922》N1–N3；v3.5 = 按需求方裁定移出 B1 / B2；<b>v3.6 = 按需求方裁定移出 B4-1 / B4-2</b>）<br>
-  <b>状态</b>：<b>已实施并交付</b>（2026-09-21 晚，用户授权后）。交付包 = <code>chanpy_run_accounting_2026-09-21.zip</code>（13 文件按仓库原目录层级覆盖：<code>Engine.py</code> / <code>Instrument.py</code> / <code>Reconcile.py</code> + 新增 <code>test_p52_run_accounting.py</code> + 9 个旧测试对齐新语义）。回归：全量 110 测试 post 失败集 == base 失败集（12 个全为环境性/既有，<b>零补丁新增红</b>）；p52 新测试 <b>63/63</b>（v3.3 更正：原文 54/54 是实施当次计数，实施后又补了 [S6-d] 等用例）、p27 63/0、p34 40/0、p26 术语守卫 24/0；交付包解压复验（md5 往返 13/13 + py_compile + 新旧标记 grep + 覆盖树冒烟）全过。<b>v3.3 只动文档、不动代码</b>：行号刷新（§10 对照表）+ §1.1 旁证更正 + p52 计数更正。（原记的 2 个「漏记缺口」B1 / B2 已于 <b>v3.5</b> 按需求方裁定移出；另两条 B4-1 / B4-2 于 <b>v3.6</b> 同样移出，且 <b>§12 整节撤销</b> —— 四条的可达性结论与实证见 §10.4 表下注。）<b>v3.4 补记（N3）</b>：交付包 <code>ba7926c</code>（09-21 18:20 CST）之后、HEAD <code>87b850d</code>（20:58 CST）之前，分支上另有 <b>3 次提交</b> —— <code>e9a533d</code>（19:58）/ <code>0b50307</code>（20:29）<b>含生产代码</b>，<code>87b850d</code>（= HEAD）<b>仅改测试</b>；故「交付 = 13 文件」与「行号基线 = HEAD」分属<b>两个时点</b>，逐条见 §11.2<br>
+  <b>版本</b>：<b>v3.7</b>（v3.1 = 评审 8 条 + 复审 R1/R2；v3.2 = 已实施；v3.3 = 文档刷新；v3.4 = 并入第二轮复核新增发现 N1–N3 + 新增 §11 / §12；v3.5 = 按需求方裁定移出 B1 / B2；v3.6 = 按需求方裁定移出 B4-1 / B4-2，§12 整节撤销；<b>v3.7 = 行号再刷新至新 HEAD <code>8bbcba0e</code>（源：<code>Instrument.py</code> 注释压行 -1 行）</b>）　·　<b>日期</b>：2026-09-21（v3 吸收评审 15:32；v3.1 吸收复审 16:09；v3.2 实施完成 18:15；v3.3 文档刷新 2026-09-22；v3.4 = 2026-09-22 第二轮复核并入；v3.5 = 2026-09-22 按裁定移出 B1 / B2；v3.6 = 2026-09-22 按裁定移出 B4-1 / B4-2；<b>v3.7 = 2026-09-22 行号再刷新至新 HEAD <code>8bbcba0e</code></b>）<br>
+  <b>行号口径（v3.3 新增）</b>：§1.1 的行号 = <b>实施前基线</b>（v3.1 评审基线 <code>b4880c6fdb</code>），描述的是 v3.2 实施<b>前</b>的旧口径，不可按当前代码查；其余章节的行号已按 <b>HEAD <code>8bbcba0e208c1ca322ad0940b2fe97ff45c13c7d</code></b>（2026-09-22 08:28 CST；v3.3 首次刷新时的基线是 <code>87b850d12b9fc2af18386a92c11073e602bb6814</code>，<code>8bbcba0e</code> 相对它只有 <code>Instrument.py</code> 注释压行 → 该文件行号 -1，见 §10.5）刷新，逐条 old→new 对照见 <b>§10</b><br>
+  <b>作者</b>：WorkBuddy（与用户逐例对齐后成文；v3 吸收《评审报告_run级配对会计方案_20260921》；v3.1 吸收《复审报告_v3_run级配对会计_20260921》；v3.3 吸收《评审报告_run级配对会计_实现审核_20260922》B5；v3.4 吸收《复核报告_run级配对会计_v3.3实现核验_20260922》N1–N3；v3.5 = 按需求方裁定移出 B1 / B2；v3.6 = 按需求方裁定移出 B4-1 / B4-2；<b>v3.7 = 行号再刷新至新 HEAD</b>）<br>
+  <b>状态</b>：<b>已实施并交付</b>（2026-09-21 晚，用户授权后）。交付包 = <code>chanpy_run_accounting_2026-09-21.zip</code>（13 文件按仓库原目录层级覆盖：<code>Engine.py</code> / <code>Instrument.py</code> / <code>Reconcile.py</code> + 新增 <code>test_p52_run_accounting.py</code> + 9 个旧测试对齐新语义）。回归：全量 110 测试 post 失败集 == base 失败集（12 个全为环境性/既有，<b>零补丁新增红</b>）；p52 新测试 <b>63/63</b>（v3.3 更正：原文 54/54 是实施当次计数，实施后又补了 [S6-d] 等用例）、p27 63/0、p34 40/0、p26 术语守卫 24/0；交付包解压复验（md5 往返 13/13 + py_compile + 新旧标记 grep + 覆盖树冒烟）全过。<b>v3.3 只动文档、不动代码</b>：行号刷新（§10 对照表）+ §1.1 旁证更正 + p52 计数更正。（原记的 2 个「漏记缺口」B1 / B2 已于 <b>v3.5</b> 按需求方裁定移出；另两条 B4-1 / B4-2 于 <b>v3.6</b> 同样移出，且 <b>§12 整节撤销</b> —— 四条的可达性结论与实证见 §10.4 表下注。）<b>v3.4 补记（N3）</b>：交付包 <code>ba7926c</code>（09-21 18:20 CST）之后、HEAD <code>87b850d</code>（20:58 CST）之前，分支上另有 <b>3 次提交</b> —— <code>e9a533d</code>（19:58）/ <code>0b50307</code>（20:29）<b>含生产代码</b>，<code>87b850d</code>（= HEAD）<b>仅改测试</b>；故「交付 = 13 文件」与「行号基线 = HEAD」分属<b>两个时点</b>，逐条见 §11.2。<b>v3.7 补记</b>：HEAD 再前进 2 次提交至 <code>8bbcba0e</code>（2026-09-22 08:28 CST），其中生产代码<b>只有 <code>Instrument.py</code> 注释压行</b>（该文件行号 -1）、<code>Engine.py</code> / <code>Reconcile.py</code> 与基线逐字节相等 → <b>代码无需任何修改</b>（逐条见 §10.5）<br>
   <b>关联</b>：<code>Trading/Engine/Engine.py</code>（_book_close / _run_start / _run_end）、<code>Trading/Infra/TradeStats.py</code>、<code>Trading/Infra/StateDB.py</code>（trades 表）、<code>Trading/Infra/Records.py</code>（OrderIntent / AccountState）<br>
   <b>评审基线核对</b>：26/26 代码断言一致（评审报告 §1）；对账恒等式经独立复演 5 个已收口场景三账全等（评审报告 §2）；复审补下载 SimNow.py 后断言全量命中、恒等式复演 7 场景（4 收口全等 + 3 在途部分和）
 </div>
@@ -150,7 +150,7 @@
   <li><b>四个离场路径收敛到一个结算函数 <code>_settle_run(exit_price, offset, reason, at)</code>，防双写</b>（评审 P0；run 结算只在此唯一出口发生）。</li>
   </ul></li>
 <li><b>run 元数据扩充</b>（<code>_run_start</code>）：现 anchor=fill 已够价；补记 entry 成交的 <b>offset 档</b>与 entry fill 时点。<b>offset 取值无需新增采集</b>（v3，评审 §3.3）：<code>_execute</code> 作用域内已有 <code>act.intent</code>（实施后 <code>:1486-1526</code>；OPEN/CLOSE 分派 <code>:1486-1489</code>，实施前 :1462-1473），<code>offset = INTENT_TO_OFFSET[act.intent]</code> 直接可得。旁证修正（v3.1，复审 R1）：DryRun.py:70/:83 确写 <code>meta["offset"] = INTENT_TO_OFFSET[intent]</code>；<b>SimNow.py:1381 写的 <code>meta["offset"]</code> 实为 action 标签</b>（:1161/:1266 硬编码传 <code>open</code>/<code>close</code>，不含 <code>CLOSETODAY</code>，与 CTP offset 档语义不同），不可当 offset 档旁证。⚠️ 本设计一律以 <code>INTENT_TO_OFFSET[act.intent]</code> 为准、<b>不依赖任何 broker meta</b>；<b>禁止在 Engine 里复制第二份 INTENT_TO_OFFSET 映射</b>（SSOT 仍在 Broker/Base.py:84）；[S5] 对应缩小为"<code>_persist_run</code> 新增字段恢复"。</li>
-<li><b>Fee 计算</b>：cost = 单边费(入场 fill, 入场档) + 单边费(离场 fill, 离场档)。现 <code>state.cost_cash(entry, exit, closetoday)</code> 是双边语义（Instrument.py:424 / :458-459），需拆为单边 ×2 或加参；<b>费率档 SSOT 仍在 Instrument/Fee 品种档案，不得出现第二处费率表</b>。（已落地：<code>Instrument.single_fee(price, offset, volume)</code> @ <code>Instrument.py:461-486</code> —— OPEN/CLOSE→开/平昨档、CLOSETODAY→平今档、非法 offset <code>ValueError</code>；<code>_settle_run</code> 在 <code>Engine.py:1600-1601</code> 对入场/离场各调一次）</li>
+<li><b>Fee 计算</b>：cost = 单边费(入场 fill, 入场档) + 单边费(离场 fill, 离场档)。现 <code>state.cost_cash(entry, exit, closetoday)</code> 是双边语义（Instrument.py:423 / :457-458），需拆为单边 ×2 或加参；<b>费率档 SSOT 仍在 Instrument/Fee 品种档案，不得出现第二处费率表</b>。（已落地：<code>Instrument.single_fee(price, offset, volume)</code> @ <code>Instrument.py:460-485</code> —— OPEN/CLOSE→开/平昨档、CLOSETODAY→平今档、非法 offset <code>ValueError</code>；<code>_settle_run</code> 在 <code>Engine.py:1600-1601</code> 对入场/离场各调一次）</li>
 <li><b><code>_book_close</code> 的仓单级 gross 事件字段保留</b>（events.jsonl 供对账/回放），但 trades 表不再由它写入。⚠️ <b>close 事件的 <code>trade_id</code> 字段必须一并处理</b>（v3，评审 §3.4）：现状 <code>ev.write("close", ..., trade_id=t.trade_id)</code>（实施前 :1552）——run 级后 <code>_book_close</code> 不产 Trade，落点为"<b>run 结算先行、拿到 trade_id 再写 close 事件</b>"（回填），不得留下悬空引用；[S10] 护栏断言 events.jsonl 中每个非空 <code>trade_id</code> 都能在 trades 表命中。<b>实施后落点</b>：<code>_book_close</code> 只剩"移除仓单"（<code>Engine.py:1556-1567</code>）；回填点 <code>Engine.py:1517-1519</code>（刻意在 <code>_run_end()</code> 之前写，防 <code>_run_plan</code> 被清导致 exit_policy 退化为 <code>run_managed</code>）；<code>_write_close_event</code> 定义 <code>Engine.py:1620</code>；未收口分支写 <code>trade_id=""</code> @ <code>Engine.py:1521-1526</code></li>
 <li><b>对账补记</b>（实施后 <code>Reconcile.py:357-386</code>，实施前 :361-374）：<b>并入 run 结算（已拍板，§7-②）</b>——删的是 run 对应仓单 → 以对账参考价（<code>ref_price</code> = last_bar.close or pos.entry_price，:339，未漂移）对该 run 强制结算；删的是锁仓侧仓单 → 不影响 run。不再保留独立的仓单级补记行。⚠️ <b>结算触发点 = run 对应仓单被删除的那一刻（:337 循环体内），不是两侧循环收尾</b>（v3，评审 §3.5）：对账按 side 逐侧跑，两侧同时被清零时先删的可能是 run 对应仓单，延后统一结算会把时点/参考价算错；[S6] 补"两侧同时清零"用例。（已落地：判定条件 <code>Reconcile.py:349-350</code>（<code>pos.side is self._run_side</code> 且 <code>account_state() is RUNNING</code>）；<code>_settle_run</code> 调用 <code>:357-360</code>（<code>volume=pos.volume</code>）；仓单级盈亏快照 <code>:370-376</code>；<code>position_externally_closed</code> 事件 <code>:377-386</code> 带回填 <code>trade_id</code>；清仓后收口 <code>Reconcile.py:131-143</code>）</li>
 <li><b>Frontend / main.py 日终打印 / TradeStats 公式</b>：零改动（继续读 trades 表，公式已被 test_trade_stats_formulas 钉住；评审已核实 compute_trade_stats 只读 net_cash）。</li>
@@ -290,16 +290,17 @@
 </table>
 <div class="callout blue"><b>净结论</b>：方案方向维持不变；v3.1 已吸收评审 8 条 + 复审 R1/R2，拒绝项仅复审的"改名留存"建议（与你已执行的物理删除拍板冲突）；全部口径已定、零待确认项，待你授权实施。</div>
 
-<h2>10. 实施后坐标对照（<b>v3.3 新增</b>，2026-09-22 刷新）</h2>
+<h2>10. 实施后坐标对照（<b>v3.3 新增</b>，2026-09-22 刷新；<b>v3.7 再刷新至 <code>8bbcba0e</code>，见 §10.5</b>）</h2>
 <ul>
-<li>刷新基线：远端 <code>jbxenzxy/chan.py</code> 分支 <code>custom-dev</code> HEAD = <b><code>87b850d12b9fc2af18386a92c11073e602bb6814</code></b>（2026-09-21 20:58 CST，晚于 v3.2"实施完成 18:15"）</li>
+<li>刷新基线（v3.7）：远端 <code>jbxenzxy/chan.py</code> 分支 <code>custom-dev</code> HEAD = <b><code>8bbcba0e208c1ca322ad0940b2fe97ff45c13c7d</code></b>（2026-09-22 08:28 CST；v3.3 首次刷新时的基线为 <code>87b850d…</code>，两版之间只有 <code>Instrument.py</code> 注释压行 → 行号 -1，见 §10.5）</li>
+<li>v3.3 原刷新基线：HEAD = <b><code>87b850d12b9fc2af18386a92c11073e602bb6814</code></b>（2026-09-21 20:58 CST，晚于 v3.2"实施完成 18:15"）</li>
 <li>落地核验：<code>C:\my_chan_project</code> 工作树 5 个承重文件与该 HEAD <b>md5 逐一相等</b>（CRLF 归一化后）→ v3.2 已落地且已 push，行号刷新有真实代码为据</li>
 <li>来源：《评审报告_run级配对会计_实现审核_20260922.md》B5 条</li>
 </ul>
 
 <h3>10.1 漂移项（实施前 → 实施后）</h3>
 <table>
-<tr><th>#</th><th>文档原引用（实施前基线）</th><th>实施后坐标（HEAD 87b850d）</th><th>影响章节</th></tr>
+<tr><th>#</th><th>文档原引用（实施前基线）</th><th>实施后坐标（HEAD 87b850d；8bbcba0e 下仅 Instrument.py 漂移 -1，见 §10.5）</th><th>影响章节</th></tr>
 <tr><td>1</td><td><code>Engine.py:1462-1465</code>（OPEN/CLOSE 分派）</td><td><b>1486-1489</b></td><td>§1.1</td></tr>
 <tr><td>2</td><td><code>Engine.py:1470-1473</code>（net→0 分支）</td><td><b>1500-1508</b>（结算 <code>:1505-1508</code>、<code>_run_end</code> <code>:1520</code>）</td><td>§1.1 / §3.1 / §5.1-1 / §9.1-R2</td></tr>
 <tr><td>3</td><td><code>Engine.py:1468</code>（<code>_run_start(o.filled_price, …)</code>）</td><td><b>1497-1498</b>（多了 <code>entry_offset</code> 参数）</td><td>§3</td></tr>
@@ -313,10 +314,10 @@
 <tr><td>11</td><td><code>main.py:343-346</code>（收尾打印）</td><td><b><code>Trading/main.py:343-346</code></b>（仓库根另有 88 行的 <code>main.py</code>，不是它）</td><td>§7-④</td></tr>
 <tr><td>12</td><td><code>:1462-1473</code>（<code>act.intent</code> 作用域，§5.1-2）</td><td><b>1486-1526</b></td><td>§5.1-2</td></tr>
 </table>
-<p><b>实施后新增、文档原先没有的落点</b>：<code>_settle_run</code> 定义 <code>Engine.py:1569-1618</code>（<code>save_trade</code> <code>:1617</code>）；<code>Instrument.single_fee</code> <code>Instrument.py:461-486</code>；<code>_persist_run</code> <code>Engine.py:643-657</code>；<code>entry_offset</code> 启动期 fail-fast <code>:707-714</code>；<code>_write_close_event</code> <code>:1620</code>；对账清仓收口 <code>Reconcile.py:131-143</code>。</p>
+<p><b>实施后新增、文档原先没有的落点</b>：<code>_settle_run</code> 定义 <code>Engine.py:1569-1618</code>（<code>save_trade</code> <code>:1617</code>）；<code>Instrument.single_fee</code> <code>Instrument.py:460-485</code>；<code>_persist_run</code> <code>Engine.py:643-657</code>；<code>entry_offset</code> 启动期 fail-fast <code>:707-714</code>；<code>_write_close_event</code> <code>:1620</code>；对账清仓收口 <code>Reconcile.py:131-143</code>。</p>
 
 <h3>10.2 未漂移（v3.3 逐条复核仍准确）</h3>
-<p><code>Records.py:125</code>、<code>Records.py:37</code>、<code>PositionBook.py:207-217</code>、<code>Instrument.py:424</code>、<code>:458-459</code>、<code>StateDB.py:95-100</code>（含 <code>:100</code> 改名先例）、<code>Product.py:232-236</code>（<code>:249</code> TA = FAK/1 手）、<code>Base.py:84</code>（<code>INTENT_TO_OFFSET</code> SSOT）、<code>Engine.py:244-246</code>、<code>TradeStats.py:40+</code>、<code>:258</code>、<code>Reconcile.py:337</code> / <code>:339</code> / <code>:337-386</code>、<code>test_p30:163/192/245/306</code>、<code>test_p34:157/198/229/281</code>、<code>test_p51:337/341</code>。</p>
+<p><code>Records.py:125</code>、<code>Records.py:37</code>、<code>PositionBook.py:207-217</code>、<code>Instrument.py:423</code>、<code>:457-458</code>、<code>StateDB.py:95-100</code>（含 <code>:100</code> 改名先例）、<code>Product.py:232-236</code>（<code>:249</code> TA = FAK/1 手）、<code>Base.py:84</code>（<code>INTENT_TO_OFFSET</code> SSOT）、<code>Engine.py:244-246</code>、<code>TradeStats.py:40+</code>、<code>:258</code>、<code>Reconcile.py:337</code> / <code>:339</code> / <code>:337-386</code>、<code>test_p30:163/192/245/306</code>、<code>test_p34:157/198/229/281</code>、<code>test_p51:337/341</code>。</p>
 <div class="callout"><b>⚠️ v3.4 更正（N1）</b>：清单里 <code>Records.py:37</code> 的<b>行文位置未漂移</b>（行号本身仍准确），但它是 <code>Records.py:28-40</code>「买卖点类型过滤门」（可执行部分在 <code>:39-40</code>：<code>BSP_TYPE_FILTER_KEY</code> / <code>BSP_TYPE_CHOICES</code>）的<b>注释行</b>，按「只认可执行语句」口径不构成证据 → 承重不变量「运行态不加仓」的判据改引 <code>Engine.py:1022-1024</code>（详见 §11.1）。</div>
 <div class="callout blue">§1.1 的引用<b>不在此列</b>：按定义它就是实施前快照（问题陈述），故保留实施前坐标并已加警示，改按 §10.1 查实施后落点。</div>
 
@@ -337,11 +338,27 @@
 <p><b>B1 / B2（v3.5）与 B4-1 / B4-2（v3.6）四条均已移出本表 —— 需求方裁定为非缺陷。</b></p>
 <ul>
 <li><b>B1 / B2</b>：需要「簿面被外部改动」才可达 —— ① 在快期3 等外部终端手工改仓；② 改品种执行策略表第 3 列（<code>lots_per_order</code>）时簿面非空。在「不手工改仓、簿面非空不改表」的既定运维口径下，净敞口恒 ∈ {0, ±N}（<code>Engine.py:259-263</code> 三态判定 → <code>:1023-1024</code> 运行态不加仓 → <code>:1004-1005</code> 手数会话内恒定）⇒ <code>min(|净|, 目标笔手数)</code> 恒等于目标笔手数 ⇒ <b>平仓恒平满</b>，两条零记账分支均不可达。</li>
-<li><b>B4-1（费率档）</b>：需要把部署字段 <code>closetoday_first</code> <b>显式改成 <code>False</code></b> 才咬人；生产恒为默认 <code>True</code>（<code>Instrument.py:118-122</code> 自述语义 =「是否允许按持仓 entry_date 把今仓判成平今费率」，置 <code>False</code> 可整体关闭今仓判定；生产唯一构造点 <code>Trading/main.py:195</code> 走 <code>Trading/Config.py:172</code> 的 pydantic 默认，仓内无 config.json、无库表可改它；全仓唯一显式置 <code>False</code> 的是 <code>test_p24:201</code>）。默认口径下会计侧按「今仓 → 平今档」判（<code>Reconcile.py:353-356</code> / <code>Engine.py:1641-1642</code>），即 <code>closetoday_first</code> 的字面语义，不存在取错档的记账。</li>
+<li><b>B4-1（费率档）</b>：需要把部署字段 <code>closetoday_first</code> <b>显式改成 <code>False</code></b> 才咬人；生产恒为默认 <code>True</code>（判据 = 字段默认值 <code>closetoday_first: bool = True</code> @ <code>Instrument.py:118</code>（可执行行）+ <code>Trading/Config.py:172</code> 的 pydantic 默认；字段注释 <code>:118-121</code> 仅作语义旁证 =「是否允许按持仓 entry_date 把今仓判成平今费率」，置 <code>False</code> 可整体关闭今仓判定；生产唯一构造点 <code>Trading/main.py:195</code> 走 <code>Trading/Config.py:172</code> 的 pydantic 默认，仓内无 config.json、无库表可改它；全仓唯一显式置 <code>False</code> 的是 <code>test_p24:201</code>）。默认口径下会计侧按「今仓 → 平今档」判（<code>Reconcile.py:353-356</code> / <code>Engine.py:1641-1642</code>），即 <code>closetoday_first</code> 的字面语义，不存在取错档的记账。</li>
 <li><b>B4-2（入场时点）</b>：需要「在途 run 的落盘记录里 <code>entry_at</code> 为空」才可达，而该状态<b>结构性不存在</b>：<code>_persist_run</code>（<code>Engine.py:643-657</code>）只在 <code>_run_plan</code> / <code>_run_side</code> 非空时写盘，而这两者与 <code>entry_at</code> 在 <code>_run_start</code>（<code>:1753</code> / <code>:1761</code>）与 <code>_restore_run</code>（<code>:698</code> / <code>:715</code>）里恒<b>成对赋值</b>；<code>entry_offset</code> 与 <code>entry_at</code> 是<b>同一个提交（<code>ba7926c</code>）同时进入 <code>_persist_run</code></b> 的（逐提交枚举 <code>Trading/Engine/Engine.py</code> 12 个历史版本：<code>ba7926c</code> 及之前两者全无、之后两者全有），故「有 <code>entry_offset</code> 而无 <code>entry_at</code>」的库存不存在；更早的库两者皆缺 → <code>:707-714</code> 启动期 fail-fast 直接拒启动，空串永远读不到。<code>Engine.py:1610</code> 的 <code>or now_cn()</code> 属防御性兜底（正常路径不可达）。</li>
 </ul>
 <p>唯一残留入口 = <b>手工 / 第三方改写 state.db</b>（与 B1 / B2 同类，属既定运维口径之外）。原 GAP-1 / GAP-2 复现脚本与结论留在两份报告（《评审报告_run级配对会计_实现审核_20260922》§2 / §4、《复核报告_run级配对会计_v3.3实现核验_20260922》§3 / §5）中作历史取证；B4-1 / B4-2 的可达性实证脚本 = <code>verify_b4.py</code>（本轮新增）。四条均不再作为未决项跟踪。</p>
 
+<h3>10.5 v3.7 再刷新（新 HEAD <code>8bbcba0e</code>，2026-09-22 08:28 CST）</h3>
+<ul>
+<li><b>新 HEAD</b> = <code>8bbcba0e208c1ca322ad0940b2fe97ff45c13c7d</code>，较 v3.3 的刷新基线 <code>87b850d</code> 新增 <b>2 次提交</b>：<code>bfb70bc1</code>（09-22 08:14 CST）+ <code>8bbcba0e</code>（09-22 08:28 CST）。</li>
+<li><b>这两次提交只碰到 3 个文件</b>：<code>Docs/设计文档_run级配对会计_20260921.{md,html}</code>（= 本文件 v3.5 → v3.6）+ <code>Trading/Infra/Instrument.py</code>。</li>
+<li><b>生产代码唯一改动 = 注释压行</b>：<code>closetoday_first</code> 字段那 5 行注释压成 4 行（删掉「（2026-09-10 更正注释：<b>不是</b>…」这个开发日期戳，语义句全部保留）→ 该文件 <b>517 → 516 行</b>，<b>0 条可执行语句变化</b>（<code>closetoday_first: bool = True</code> 的默认值未动）。<code>Engine.py</code>（md5 <code>0c1fee0a</code>）/ <code>Reconcile.py</code>（md5 <code>cfd41fa5</code>）与基线<b>逐字节相等</b>，测试文件 <b>0 改动</b>。</li>
+<li><b>漂移</b>：<code>Instrument.py</code> 中 ≥118 的行号全体 <b>-1</b> —— §10.2「未漂移」清单里的 <code>Instrument.py:424</code> / <code>:458-459</code> 因此不再是"未漂移"，已就地改为 <code>:423</code> / <code>:457-458</code>，逐条如下：
+<table>
+<tr><th>引用内容</th><th>原坐标（HEAD 87b850d）</th><th>现坐标（HEAD 8bbcba0e）</th><th>影响章节</th></tr>
+<tr><td><code>closetoday_first</code> 字段注释块</td><td><code>Instrument.py:118-122</code></td><td><b>118-121</b></td><td>§10.4 B4-1</td></tr>
+<tr><td><code>Instrument.cost_cash</code>（双边费）</td><td><code>Instrument.py:424</code> / <code>:458-459</code></td><td><b>423</b> / <b>457-458</b></td><td>§5.1-3 / §10.2</td></tr>
+<tr><td><code>Instrument.single_fee</code>（单边费）</td><td><code>Instrument.py:461-486</code></td><td><b>460-485</b></td><td>§5.1-3 / §10.1</td></tr>
+</table>
+</li>
+<li><b>回归实测</b>（本轮在 HEAD 树 <code>sandbox/_tmp/head_tree</code> 上实跑）：p26 术语守卫 <b>24/24</b>、p52 run 会计 <b>63/63</b>、p24 平今档 <b>37/37</b>、p51 今仓开关 <b>36/36</b>、p27 三态 SSOT <b>63/63</b> —— 全绿；即注释压行<b>不触发</b>术语守卫。</li>
+<li><b>结论</b>：v3.2 的交付口径、§5 改动点、§6 十条护栏、§10.4 的裁定（B1 / B2 / B4-1 / B4-2 移出 + B3 撤回）<b>全部不受影响</b>；v3.7 只维护"文件:行号"引用的可解析性，<b>代码零改动、无需任何修改</b>。</li>
+</ul>
 <h2>11. 复核新增发现（<b>v3.4 新增</b>）</h2>
 <ul>
 <li>来源：《复核报告_run级配对会计_v3.3实现核验_20260922》（第二轮复核，独立编写 <code>verify_gaps.py</code>，<b>不复用</b>《实现审核》的 <code>repro_run_accounting_gaps.py</code>）</li>
@@ -372,7 +389,7 @@
 </ul>
 
 <div class="foot">
-设计文档 v3.6 · 2026-09-21 成文 / 2026-09-22 刷新四次（v3.3 = 行号·旁证·计数；v3.4 = 并入复核 N1–N3 + 新增 §11 / §12；v3.5 = 按裁定移出 B1 / B2；v3.6 = 按裁定移出 B4-1 / B4-2、撤销 §12）· v3.2 已实施并交付；v3.3 ~ v3.6 均只动文档、未改任何代码 · 自包含 HTML（内联 SVG，离线可开）
+设计文档 v3.7 · 2026-09-21 成文 / 2026-09-22 刷新五次（v3.3 = 行号·旁证·计数；v3.4 = 并入复核 N1–N3 + 新增 §11 / §12；v3.5 = 按裁定移出 B1 / B2；v3.6 = 按裁定移出 B4-1 / B4-2、撤销 §12；v3.7 = 行号再刷新至新 HEAD 8bbcba0e）· v3.2 已实施并交付；v3.3 ~ v3.7 均只动文档、未改任何代码 · 自包含 HTML（内联 SVG，离线可开）
 </div>
 
 </div>
