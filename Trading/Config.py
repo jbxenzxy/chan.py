@@ -305,7 +305,7 @@ class ExitConfig(BaseModel):
     # ---- L3 移动/保本锁利 ----
     use_trailing: bool = True                   # 启用保本 + 跟踪止损
     breakeven_trigger_r: float = 1.0       # 浮盈 ≥ 此倍数×R 时，启动保本/锁利层
-    breakeven_buffer_r: float = 0.5       # 保本/锁利层落点 = 入场价 ± 此倍数×R（=0.5 即锁定半 R；=0 为真正保本）
+    breakeven_buffer_r: float = 0.5        # 保本/锁利层落点 = 入场价 ± 此倍数×R（=0.5 即锁定半 R；=0 为真正保本）
     trailing_atr_multiple: float = 1.0     # 跟踪缓冲 = trailing_atr_multiple × ATR（R 含 2×ATR，最坏回吐 = 此值/2 × R = 0.5R）
     trailing_distance_points: float = 0.0  # ATR 不可用时的跟踪兜底距离（点数），0=不做跟踪
                                                 #   注：跟踪止盈模式（use_trailing=True）下**不生成固定止盈单**，止盈完全交给

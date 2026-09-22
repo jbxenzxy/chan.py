@@ -842,7 +842,8 @@ class TradingEngine(ReconcileMixin):
                           position_signal_key=run.signal_key)
             return
 
-        self._force_exit(bar, reason=check.reason, trigger_price=check.price)
+        self._force_exit(bar, reason=check.reason, trigger_price=check.price,
+                         fill_price=check.fill_price)
 
 
     def pump_broker(self) -> None:
@@ -1869,10 +1870,13 @@ class TradingEngine(ReconcileMixin):
     # ---------------- 离场执行（转移 ④⑤ 的执行体）----------------
     def _force_exit(self, bar: Optional[Bar], reason: str,
                     trigger_price: Optional[float] = None,
+                    fill_price: Optional[float] = None,
                     force: bool = False) -> Optional[Order]:
         """无条件离场。两个调用方走**同一张转移表**（规则 ⑹）：
 
           · `_settle_positions` —— L1-L3 触发，trigger_price = 触发价
+          · fill_price = 建议成交参考价（收盘触发的离场 = 触发那根 K 线收盘价，
+            2026-09-22 拍板：DryRun 离场按它落账；缺省回退 trigger_price）
           · 自动下单关闭       —— 无触发价，用最新收盘价
 
         今仓 → 反向 OPEN（转移 ④）；跨日仓 → CLOSE（转移 ⑤）。
@@ -1895,7 +1899,10 @@ class TradingEngine(ReconcileMixin):
                 if anchor is not None and getattr(anchor, "close", 0):
                     price = float(anchor.close)
                     break
-        return self._execute(act, ref_price=float(price or 0.0), bar=bar,
+        # 成交参考价：优先用策略给出的 fill_price（触发那根 K 线收盘价，
+        # 2026-09-22 拍板）；没有（如关闭收尾路径）回退 trigger_price / 最新收盘。
+        ref = float(fill_price) if fill_price else float(price or 0.0)
+        return self._execute(act, ref_price=ref, bar=bar,
                              reason=reason, force=force)
 
     # ════════════════════════════════════════════════════════════════

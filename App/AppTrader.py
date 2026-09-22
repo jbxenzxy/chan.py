@@ -803,7 +803,14 @@ class AppTrader:
         return stats
 
     def status(self) -> Dict[str, Any]:
-        """自动下单状态（进程 + 自动下单子进程开关 + 持仓快照）。"""
+        """自动下单状态（进程 + 引擎开关 + 持仓快照）。
+
+        账本数据（positions / trades_recent）全部是 state.db 投影，与自动下单
+        是否开启无关（2026-09-22 用户拍板）：子进程不在时依次回退 状态文件里
+        的上次运行目录 → 默认目录，引擎关着也能点账本看持仓/成交。运行时
+        队列（alerts / toasts）只属于运行中的进程，进程不在（handle 为空）时
+        置空，避免陈旧告警在重装浏览器后重放。
+        """
         with self._lock:
             handle = self._handle
             running = bool(handle is not None and handle.running)
@@ -870,7 +877,20 @@ class AppTrader:
                         "检测到自动下单子进程 pid={} 已退出 rc={}（详情见日志上文）".format(
                             handle.pid, rc))
             # 自动下单子进程内部状态：尽力读 state.db（自动下单子进程写 WAL，并发只读安全）
-            base["auto_order"] = self._read_engine_switch(handle)
+            # 账本与开关解耦（2026-09-22 用户拍板）：进程不在也照常投影
+            # state.db；目录依次回退 上次运行目录（状态文件）→ 默认目录。
+            _ao_dir = handle.out_dir if handle is not None else None
+            if _ao_dir is None:
+                _sf = _read_state_file().get("out_dir")
+                if _sf and os.path.isdir(str(_sf)):
+                    _ao_dir = str(_sf)
+                elif os.path.isfile(os.path.join(_DEFAULT_OUT, "state.db")):
+                    _ao_dir = _DEFAULT_OUT
+            _ao = self._read_engine_switch(_ao_dir)
+            if _ao is not None and handle is None:
+                _ao["alerts"] = []
+                _ao["toasts"] = []
+            base["auto_order"] = _ao
             return base
 
     # ---------------- 内部工具 ----------------
@@ -1061,11 +1081,11 @@ class AppTrader:
                      type(e).__name__, e)
 
     @staticmethod
-    def _read_engine_switch(handle: Optional[_TraderProc]) -> Optional[Dict[str, Any]]:
-        if handle is None or not os.path.isdir(handle.out_dir):
+    def _read_engine_switch(out_dir: Optional[str]) -> Optional[Dict[str, Any]]:
+        if not out_dir or not os.path.isdir(out_dir):
             return None
         try:
-            s = _engine_store(handle.out_dir)
+            s = _engine_store(out_dir)
             enabled = bool(s.get_json("auto_order_enabled", True))
             positions = s.get_json("positions") or []
             # D11 告警：引擎子进程（生产者）把队列写进 state.db，本函数（API 侧）

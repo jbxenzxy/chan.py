@@ -229,10 +229,10 @@ with tmp_dir("x") as tmp:
     ord_x = [(o.meta.get("intent"), o.meta.get("offset"), o.meta.get("transition"),
               o.price) for o in eng.broker.orders[-1:]]
     tr_x = [dict(t) for t in eng.store.trades()]
-    # ⑤ 的成交价 = **L1 触发价**（止损价 4520−R），不是 K 线收盘价 ——
-    # 这正是"止盈止损触发价一致"这一结论的直接落点，故直接拿计划里的止损价对齐。
-    check("[1d] 跨日不利 K 线 → ⑤ CLOSE / 成交价 = L1 止损价",
-          ord_x, [("close", "CLOSE", 5, snap_x["stop"])])
+    # ⑤ 的成交价 = **触发那根 K 线的收盘价**（2026-09-22 拍板：触发价只负责
+    # 触发报单，DryRun 离场按触发 K 线收盘价落账；触发价本身 = 止损线，由 [4f] 钉住）。
+    check("[1d] 跨日不利 K 线 → ⑤ CLOSE / 成交价 = 触发 K 线收盘价",
+          ord_x, [("close", "CLOSE", 5, P_EXIT_BAR)])
     check("[1e] X 终态 FLAT", eng.account_state(), AccountState.FLAT)
     check("[1f] X 只有 1 笔成交（敞口持仓）", len(tr_x), 1)
 
@@ -281,8 +281,8 @@ with tmp_dir("y") as tmp:
     ord_y = [(o.meta.get("intent"), o.meta.get("offset"), o.meta.get("transition"),
               o.price) for o in eng.broker.orders[-1:]]
     tr_y = [dict(t) for t in eng.store.trades()]
-    check("[2h] 跨日不利 K 线 → ⑤ CLOSE / 成交价 = L1 止损价",
-          ord_y, [("close", "CLOSE", 5, snap_y["stop"])])
+    check("[2h] 跨日不利 K 线 → ⑤ CLOSE / 成交价 = 触发 K 线收盘价",
+          ord_y, [("close", "CLOSE", 5, P_EXIT_BAR)])
     check("[2i] Y 终态 FLAT", eng.account_state(), AccountState.FLAT)
     check("[2j] Y 共 2 笔成交（run1 结算 + run2 结算，v3.1）", len(tr_y), 2)
 
@@ -361,8 +361,8 @@ print("\n[6] 离场报单逐字段相同（同一个 ⑤、同一触发价）")
 # ══════════════════════════════════════════════════════════════
 check("[6a] 两场景的离场报单完全相同（intent/offset/transition/价格）",
       ord_x, ord_y)
-check_true("[6b] 都是 ⑤ CLOSE 且成交价都是 L1 止损价（同一触发价）",
-           ord_x == ord_y and ord_x[0][3] == snap_x["stop"] == snap_y["stop"],
+check_true("[6b] 都是 ⑤ CLOSE 且成交价都是触发 K 线收盘价（同一触发依据）",
+           ord_x == ord_y and ord_x[0][3] == P_EXIT_BAR,
            ord_x)
 
 # ══════════════════════════════════════════════════════════════
@@ -389,13 +389,11 @@ check_true("[7f] 对账：Σ_Y − Σ_X = run1 结算 net_cash + 敞口段（run
                sum(t["net_cash"] for t in tr_y),
                sum(t["net_cash"] for t in tr_x), lock_pos["net_cash"],
                ly["net_cash"] - lx["net_cash"]))
-check_true("[7g] run2 的 entry = 拆锁成交价 4520（run 锚）；run1 的 exit = ④ 成交价 = run1 止损触发价 4500−R（v3.1：Trade.entry = run 锚）",
+check_true("[7g] run2 的 entry = 拆锁成交价 4520（run 锚）；run1 的 exit = ④ 成交价 = 触发 K 线收盘价（2026-09-22 拍板）",
            abs(ly["entry_price"] - P_ANCHOR) < 1e-9
-           and abs(lock_pos["exit_price"]
-                   - (P_Y_ENTRY - (P_ANCHOR - snap_y["stop"]))) < 1e-9,
+           and abs(lock_pos["exit_price"] - P_EXIT_BAR) < 1e-9,
            "run2_entry=%.4f run1_exit=%.4f expected_run1_exit=%.4f"
-           % (ly["entry_price"], lock_pos["exit_price"],
-              P_Y_ENTRY - (P_ANCHOR - snap_y["stop"])))
+           % (ly["entry_price"], lock_pos["exit_price"], P_EXIT_BAR))
 check_true("[7h] 风控层等价是本文件的断言结论（止损价与离场报单全等由 [4][6] 钉死）",
            snap_x["plan"] == snap_y["plan"] and ord_x == ord_y, "")
 

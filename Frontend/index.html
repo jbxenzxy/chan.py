@@ -57,13 +57,14 @@
                       title="交易引擎账本：持仓与最近成交">账本</span>
             </span>
             <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓 + 最近成交。
-                 数据来自 /api/trader/status 的 auto_order.positions / trades_recent。
+                 数据来自 /api/trader/status 的 auto_order.positions / trades_recent；
+                 全部是 state.db 投影 —— 引擎关着也能看（2026-09-22 用户拍板）。
                  注意：这是**交易引擎账本**，不是柜台真值 —— 柜台以快期3 为准。 -->
             <div class="auto-order-ledger-panel" id="auto-order-ledger-panel"
                  style="display:none" onclick="event.stopPropagation()">
                 <div class="aol-sec">
                     <div class="aol-title">持仓</div>
-                    <div class="aol-body" id="aol-positions">（自动下单未运行）</div>
+                    <div class="aol-body" id="aol-positions">（暂无账本数据）</div>
                 </div>
                 <div class="aol-sec">
                     <div class="aol-title">成交</div>
@@ -323,6 +324,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=27"></script>
 
 </body></html>

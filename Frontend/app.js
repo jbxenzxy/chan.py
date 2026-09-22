@@ -8293,7 +8293,7 @@
                 }
                 handleAutoOrderAlerts(data);
                 handleAutoOrderToasts(data);
-                renderAutoOrderLedger(data);   // 引擎账本面板（C）：开着才重渲染
+                renderAutoOrderLedger(data);   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -8359,7 +8359,7 @@
             if (posEl) {
                 const ps = (ao && Array.isArray(ao.positions)) ? ao.positions : [];
                 if (!ao) {
-                    posEl.textContent = '（自动下单未运行）';
+                    posEl.textContent = '（暂无账本数据）';
                 } else if (!ps.length) {
                     posEl.textContent = '空仓（账本无持仓）';
                 } else {

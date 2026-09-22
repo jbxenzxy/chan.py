@@ -56,11 +56,18 @@ _log = logging.getLogger(__name__)
 class ExitCheck:
     """出场判定结果。price 是"触发价"，不是最终成交价（成交价由 broker 决定）。
 
+    fill_price 是"建议成交参考价" = 触发判定用的那根 K 线收盘价（2026-09-22
+    回测语义拍板）：触发价只负责触发报单；DryRun 等纸面 broker 的离场成交价
+    按触发那根 K 线的收盘价落账 —— 收盘才认的口径下，触发时刻真实可实现的
+    价就在收盘价附近，仍记止损/止盈线会系统性偏一格。实盘 / SimNow 的成交价
+    以柜台回报为准，不消费本字段。
+
     only_update=True 表示"只更新出场计划、不登场"——移动止损 / 跟踪止盈走这条路。
-    此时 plan 必须给，price 无意义。
+    此时 plan 必须给，price 无意义（也不给 fill_price）。
     """
     reason: str                       # tp / sl / time / trailing / custom
     price: float
+    fill_price: Optional[float] = None  # 建议成交参考价 = 触发那根 K 线收盘价
     plan: Optional[ExitPlan] = None   # 非空则替换持仓的出场计划
     only_update: bool = False
 
@@ -340,14 +347,14 @@ class LayeredExitPolicy:
         close = bar.close
         if is_long:
             if stop and close <= stop:
-                return ExitCheck("sl", stop)
+                return ExitCheck("sl", stop, fill_price=close)
             if tp is not None and close >= tp:
-                return ExitCheck("tp", tp)
+                return ExitCheck("tp", tp, fill_price=close)
         else:
             if stop and close >= stop:
-                return ExitCheck("sl", stop)
+                return ExitCheck("sl", stop, fill_price=close)
             if tp is not None and close <= tp:
-                return ExitCheck("tp", tp)
+                return ExitCheck("tp", tp, fill_price=close)
 
         # ③ L3 移动/保本锁利（只更新计划、不登场）
         #   R 缺失（旧版本 state.db 恢复的持仓）或 R ≤ 0 → 整层跳过。把 ">0" 显式写出

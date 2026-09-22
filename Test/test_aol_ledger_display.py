@@ -12,7 +12,13 @@
   ③ 成交行：时间走 fmtAolTime（YY/MM/DD HH:MM:SS）；
   ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
      升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：index.html 引 app.js?v=26（改前端必须抬版本号，防缓存假象）。
+  ⑤ 资源版本号：index.html 引 app.js?v=27（改前端必须抬版本号，防缓存假象）；
+  ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
+     「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
+     status() 回退 上次运行目录 → 默认目录；进程不在时 alerts/toasts 置空；
+  ⑦ DryRun 离场按触发 K 线收盘价落账（2026-09-22 拍板）：ExitCheck 有
+     fill_price 字段、sl/tp 四分支带 fill_price=close、Engine 透传并优先作
+     ref_price。
 
 行为层：fmtAolTime 抽到 node 里跑真函数，逐样本比对输出（node 不在位
 则 SKIP，只跑静态层）。判别力自证（护栏不恒真）：把 AppTrader.py 的
@@ -81,8 +87,8 @@ check("成交行保留 入场→出场 与 净额",
 
 # ═══ ③ fmtAolTime 存在且被 index.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-check("index.html 引 app.js?v=26", 'app.js?v=26' in HTML, True)
-check("旧版本号 v=25 零残留", 'app.js?v=25' in HTML, False)
+check("index.html 引 app.js?v=27", 'app.js?v=27' in HTML, True)
+check("旧版本号 v=26 零残留", 'app.js?v=26' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后")
@@ -103,6 +109,40 @@ else:
 _all = list(range(12))                     # 模拟升序 trades（数字大 = 时间晚）
 _recent = _all[-10:]
 check("尾部 10 条原序 = 升序且含最新", (_recent[0], _recent[-1]), (2, 11))
+
+# ═══ [6] 账本与自动下单开关解耦（2026-09-22 二次拍板）═══
+print("\n[6] 账本与开关解耦：关着引擎也能看，数据全来自 state.db")
+check("旧空态「（自动下单未运行）」零残留",
+      ('（自动下单未运行）' in HTML) or ('（自动下单未运行）' in JS), False)
+check("新空态「（暂无账本数据）」两处就位",
+      (HTML.count('（暂无账本数据）') >= 1) and (JS.count('（暂无账本数据）') >= 1), True)
+check("_read_engine_switch 签名改为收 out_dir",
+      "def _read_engine_switch(out_dir: Optional[str])" in PY, True)
+check("status() 回退上次运行目录（状态文件）",
+      '_read_state_file().get("out_dir")' in PY, True)
+check("回退默认目录（Trading/State）",
+      'os.path.join(_DEFAULT_OUT, "state.db")' in PY, True)
+check("进程不在时置空运行时队列（防陈旧告警重放）",
+      ('_ao["alerts"] = []' in PY) and ('_ao["toasts"] = []' in PY), True)
+
+# ═══ [7] DryRun 离场按触发 K 线收盘价落账（2026-09-22 拍板）═══
+print("\n[7] 离场成交参考价 = 触发那根 K 线收盘价")
+_ex_path = os.path.join(REPO, "Trading", "Strategy", "Exit.py")
+_en_path = os.path.join(REPO, "Trading", "Engine", "Engine.py")
+if os.path.exists(_ex_path) and os.path.exists(_en_path):
+    EX = open(_ex_path, encoding="utf-8").read().replace("\r\n", "\n")
+    EN = open(_en_path, encoding="utf-8").read().replace("\r\n", "\n")
+    check("ExitCheck 新增 fill_price 字段",
+          "fill_price: Optional[float] = None" in EX, True)
+    check("触发价语义不变（price 仍是止损/止盈线）",
+          'ExitCheck("sl", stop, fill_price=close)' in EX
+          and 'ExitCheck("tp", tp, fill_price=close)' in EX, True)
+    check("sl/tp 四分支全部带 fill_price=close", EX.count("fill_price=close"), 4)
+    check("Engine 透传 fill_price", "fill_price=check.fill_price" in EN, True)
+    check("_force_exit 优先用 fill_price 作成交参考价",
+          "ref = float(fill_price) if fill_price else float(price or 0.0)" in EN, True)
+else:
+    print("  [SKIP] Exit.py / Engine.py 不在场（部分树），跳过离场价护栏")
 
 # ═══ 行为层：fmtAolTime 真函数逐样本比对（node） ═══
 print("\n[5] fmtAolTime 行为层（node 真函数）")
