@@ -419,12 +419,23 @@ def _write_ready_flag(out_dir: str) -> None:
             f.write("pid={} ts={}\n".format(
                 os.getpid(), time.strftime("%H:%M:%S")))
         os.replace(tmp, dst)
-    except OSError:
+    except OSError as e:
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)
         except OSError:
             pass
+        # 降级方向**不能**是「静默当未就绪」：父进程 stop() 见不到 .ready 就
+        # 按未就绪走 15s 短宽限强杀 —— 而此刻子进程其实已跑完启动链、随时
+        # 可能持仓，被快杀 = 锁仓收尾被打断（比"停得晚一点"危险得多）。
+        # 状态目录写不进去是部署错误，events.jsonl 记账会一起失效，继续跑
+        # 只会留下无法追溯的成交 —— 故 fail fast，不静默吞掉。
+        # 子进程带非零码退出后 AppTrader.stop() 走 exited 路径立即返回（不会
+        # 干等宽限），这段日志经 gateway.log 尾部回传前端定位。
+        print("[gw][ERROR] 就绪标志写入失败（{}）：{} —— 状态目录不可写，"
+              "拒绝在父进程会以「未就绪」快杀本进程的条件下继续交易"
+              .format(dst, e))
+        raise
 
 
 def run(args) -> int:

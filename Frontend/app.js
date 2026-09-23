@@ -8903,6 +8903,15 @@
         // 2026-09-23「右下角系统通知延迟一分钟」的根因。Worker 创建失败
         //（无 Worker 环境 / 老浏览器）回退主线程 setInterval（旧行为，含
         // 实时页可见性判断；后台节流的延迟边界在该回退路径下仍然存在）。
+        //
+        // 可见性门控的取舍（与旧版**唯一**的行为差异，刻意保留，勿"对齐"回去）：
+        //   旧版两条路径都有 `wrap.visible` 门控 —— 只有实时页可见才拉 status。
+        //   Worker 路径必须去掉它，因为 p64 后台系统通知正是"页面隐藏时也要
+        //   及时弹"的需求本身：加回门控 = 后台标签永不轮询 = 本次改动动机归零。
+        //   代价只是页面不在实时页时仍每 5s 一次轻量 GET（status 是纯内存读）。
+        //   回退路径保留门控：那条路径本就跑在老浏览器上、且已被节流到分钟级，
+        //   它拿不到及时通知，留门控只为少发无谓请求 —— 两条路径的语义差是
+        //   能力差导致的，不是漏写。
         (function startAutoOrderPolling() {
             let fellBack = false;
             function fallback() {
@@ -8926,6 +8935,15 @@
                 };
                 w.onerror = function() { fallback(); };
                 autoOrderWorker = w;
+                // 启动轮询：Worker 侧定时器只在收到 {type:'start'} 时才建立
+                //（协议见 AO_WORKER_SRC 注释）。少了这一行 = Worker 建了却
+                // 永不轮询，而 fallback 只在「无 Worker / 构造抛错 / onerror」
+                // 三条路径触发 —— Blob Worker 语法正确不会走 onerror，于是
+                // 新旧两条轮询路径同时归零：开关态、账户三态、未确认告警、
+                // p64 系统通知、引擎账本、保护价徽标全部停摆，且页面无任何
+                // 报错（静默失效）。接线由 test_p66 [4] 组用 node 跑真片段
+                // 守卫：删掉这一行该组必红。
+                w.postMessage({ type: 'start' });
             } catch (e) { fallback(); }
         })();
 

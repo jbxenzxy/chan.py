@@ -852,7 +852,17 @@ if not os.path.isdir(_frontend_dir):
 # 会被它吞掉、永远匹配不到）。
 @app.get("/", include_in_schema=False)
 async def _frontend_entry():
-    return FileResponse(os.path.join(_frontend_dir, "app.html"))
+    # app.html 缺失 = 前后端版本不同步（r8 改名后只更新了 .py 没同步
+    # Frontend/）。FileResponse 在这种情形下抛的是裸 500，运维只能看到空白页。
+    # 与 Frontend/ 目录缺失同一口径：显式 fail fast，把缺失路径与处置写进 detail。
+    _entry = os.path.join(_frontend_dir, "app.html")
+    if not os.path.isfile(_entry):
+        raise HTTPException(
+            status_code=500,
+            detail=(f"[错误] 入口页缺失（{_entry}）：Frontend/ 下没有 app.html，"
+                    f"前后端版本不同步 —— 请同步部署 Frontend/ 目录"
+                    f"（r8 起入口页由 index.html 改名为 app.html）"))
+    return FileResponse(_entry)
 
 app.mount("/", StaticFiles(directory=_frontend_dir), name="frontend")
 

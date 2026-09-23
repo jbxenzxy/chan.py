@@ -15,7 +15,7 @@ Worker 每 5s 拉一次 status 并 postMessage
 回主线程，主线程收到消息**立即**应用（消息任务是普通任务，不被节流）。
 Worker 创建失败（老浏览器）回退主线程 setInterval（旧行为）。
 
-本测试钉死三件事：
+本测试钉死四件事：
   [1] Worker 源码段：5s 周期唯一来源（POLL_MS）、status 端点 + no-store、
       start/stop 消息协议（start 启动即拉一次；stop 清定时器）、postMessage
       消息形状（type:'status' + data）；
@@ -25,13 +25,19 @@ Worker 创建失败（老浏览器）回退主线程 setInterval（旧行为）�
       主线程周期 setInterval 只存在于 fallback 分支；
   [3] 行为矩阵：从 app.js 抽出 Worker 源码段，用 **node 跑真代码**（模拟
       self/定时器/fetch）—— start 后立即拉一次 + 周期 5000 + 每 tick 一次
-      fetch → 一条 status 消息 + stop 清定时器 + 根相对 URL + no-store。
+      fetch → 一条 status 消息 + stop 清定时器 + 根相对 URL + no-store；
+  [4] **接线级**探针：抽出 startAutoOrderPolling IIFE 真片段用 node 跑，
+      断言主线程**真的** postMessage({type:'start'}) —— 创建侧与驱动侧
+      分离，只审创建侧的静态判据对「建了 Worker 却从没发 start」恒绿。
 
 判别力（护栏不恒真）：
-  Worker 回退成主线程定时器     → [2a]/[3-*]（周期行为变）
+  Worker 回退成主线程定时器     → [2a]/[3-*]/[4-U2]（周期行为变）
   删掉「启动即拉一次」          → [3-T1]
   周期改大/写死第二处           → [1a]/[3-T2]
   消息形状变化（丢 data）       → [1d]/[3-T4]/[2b]
+  建了 Worker 但没发 start      → [4-U1]（[1][2][3] 全绿，只有 [4] 能抓：
+                                  2026-09-24 实测，缺这一行时前三组
+                                  20 passed / 0 failed 而轮询归零）
 
 资源版本号不在本文件断言 —— 由 Test/test_aol_ledger_display.py ⑤ 组独占守卫。
 
@@ -120,6 +126,8 @@ check("[2f] 主线程周期 setInterval 只剩 fallback 分支一处",
       JS.count("autoOrderPollTimer = setInterval") == 1
       and JS.index("autoOrderPollTimer = setInterval")
       > JS.index("function fallback()"), True)
+check("[2g] 创建 Worker 后立即发 start（静态形态；行为由 [4] 组探针钉死）",
+      JS.count("w.postMessage({ type: 'start' });") == 1, True)
 
 # ════════════════════════════════════════════════════════════════
 # [3] node 跑真 Worker 代码（模拟 self / 定时器 / fetch）
@@ -209,6 +217,112 @@ try:
 finally:
     if os.path.isfile(_tmp_js):
         os.remove(_tmp_js)
+
+# ════════════════════════════════════════════════════════════════
+# [4] 接线级探针：node 跑真 startAutoOrderPolling 片段
+#
+#     为什么必须加这一组：创建侧与驱动侧是分离的 —— Worker 侧的定时器只
+#     在收到 {type:'start'} 时才建立。只审创建侧的静态判据（[1][2][3]）
+#     对「建了 Worker 但从没发 start」恒绿：2026-09-24 实测，把缺的那一行
+#     补上前后，[1][2][3] 三组都是 20 passed / 0 failed，而运行时两条轮询
+#     路径同时归零（新的 Worker 定时器没建、旧的主线程 setInterval 已删，
+#     fallback 只在无 Worker / 构造抛错 / onerror 三条路径触发）。
+#     故这里抽出 IIFE 真片段注入桩执行，断言「消息真的发出去了」。
+# ════════════════════════════════════════════════════════════════
+print("\n[4] 接线级探针（node 跑真 startAutoOrderPolling）")
+
+_m2 = re.search(r"\(function startAutoOrderPolling\(\) \{.*?\n        \}\)\(\);",
+                JS, re.S)
+if not _m2:
+    print("✗ app.js 中找不到 startAutoOrderPolling IIFE")
+    sys.exit(2)
+WIRE = _m2.group(0)
+
+_WIRE_PROBE = """
+function run(opts) {
+    let pollCalls = 0;
+    const workers = [];
+    const timers = [];
+    const posted = [];
+    const ctx = {
+        // 片段里引用的外层常量：不注入会在 new Worker 那一行 ReferenceError
+        // → 落进 catch → 静默回退主线程（正是 [4] 组要防的"看着建了其实没建"）
+        AO_WORKER_SRC: 'probe-worker-src',
+        autoOrderPollTimer: null,
+        autoOrderWorker: null,
+        pollAutoOrderStatus: function () { pollCalls += 1; },
+        Worker: opts.noWorker ? undefined : function (url) {
+            this.url = url;
+            this.postMessage = function (m) { posted.push(m); };
+            workers.push(this);
+        },
+        Blob: function (parts, o) { this.parts = parts; this.type = o && o.type; },
+        URL: { createObjectURL: function () { return 'blob:probe'; } },
+        document: {
+            getElementById: function () {
+                return { classList: { contains: function () {
+                    return opts.visible !== false;
+                } } };
+            }
+        },
+        setInterval: function (fn, ms) { timers.push({ fn: fn, ms: ms }); return timers.length; },
+        clearInterval: function () {},
+        console: console
+    };
+    // with：让片段里对 autoOrderPollTimer / autoOrderWorker 的赋值落到 ctx 上
+    const fn = new Function('ctx', 'with (ctx) {' + WIRE_SRC + '}');
+    fn(ctx);
+    return {
+        ctx: ctx, workers: workers, timers: timers, posted: posted,
+        getPollCalls: function () { return pollCalls; }
+    };
+}
+
+// 主路径：Worker 可用
+const a = run({});
+console.log('U1=' + (a.posted.length === 1 && a.posted[0].type === 'start'
+    ? 'ok' : 'FAIL') + ' start_msg_sent_to_worker');
+console.log('U2=' + (a.workers.length === 1 ? 'ok' : 'FAIL') + ' worker_created');
+console.log('U3=' + (a.timers.length === 0 && a.ctx.autoOrderPollTimer === null
+    ? 'ok' : 'FAIL') + ' no_main_thread_timer_when_worker_ok');
+console.log('U4=' + (a.ctx.autoOrderWorker !== null ? 'ok' : 'FAIL')
+    + ' worker_handle_kept');
+
+// 回退路径：无 Worker 环境 → 主线程 5s 定时器（旧行为健在）
+const b = run({ noWorker: true });
+console.log('U5=' + (b.timers.length === 1 && b.timers[0].ms === 5000
+    ? 'ok' : 'FAIL') + ' fallback_timer_5000_without_worker');
+b.timers[0].fn();
+console.log('U6=' + (b.getPollCalls() === 1 ? 'ok' : 'FAIL')
+    + ' fallback_polls_when_visible');
+
+// 回退路径的可见性门控仍在（非实时页不发无谓请求）
+const c = run({ noWorker: true, visible: false });
+c.timers[0].fn();
+console.log('U7=' + (c.getPollCalls() === 0 ? 'ok' : 'FAIL')
+    + ' fallback_gated_by_visibility');
+"""
+
+_probe2_js = ("const WIRE_SRC = " + json.dumps(WIRE) + ";\n" + _WIRE_PROBE)
+_tmp_js2 = os.path.join(_HERE, "_p66_wire_probe.js")
+io.open(_tmp_js2, "w", encoding="utf-8").write(_probe2_js)
+try:
+    r2 = subprocess.run(["node", _tmp_js2], capture_output=True, text=True,
+                        errors="replace", timeout=60)
+    out2 = r2.stdout + r2.stderr
+    for tag in ("U1", "U2", "U3", "U4", "U5", "U6", "U7"):
+        check("[4-{}] {}".format(tag, {
+            "U1": "主线程真的向 Worker 发了 {type:'start'}（不发 = 轮询永不建立）",
+            "U2": "Worker 真的被创建",
+            "U3": "Worker 可用时不建主线程定时器（无双轮询）",
+            "U4": "Worker 句柄被保存（供后续 stop/回收）",
+            "U5": "无 Worker 环境回退主线程 5s 定时器",
+            "U6": "回退定时器在可见时真的调 pollAutoOrderStatus",
+            "U7": "回退定时器保留 wrap.visible 门控"}[tag]),
+            tag + "=ok" in out2, True)
+finally:
+    if os.path.isfile(_tmp_js2):
+        os.remove(_tmp_js2)
 
 print("\n==== P66：{} passed, {} failed ====".format(_PASS, _FAIL))
 sys.exit(0 if _FAIL == 0 else 1)

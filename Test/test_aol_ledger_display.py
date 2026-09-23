@@ -102,7 +102,7 @@ print("\n[3] 资源版本号")
 #   已抬到 v=33（r8：Worker 源码内嵌 app.js，入口页改名 app.html）。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("app.html 引 app.js?v=32", 'app.js?v=33' in HTML, True)
+check("app.html 引 app.js?v=33", 'app.js?v=33' in HTML, True)
 check("旧版本号 v=32 零残留", 'app.js?v=32' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══

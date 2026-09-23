@@ -36,7 +36,11 @@ start 秒进同一把 threading.Lock → 用户等不及重启了后端。
   [8] 源码：AppTrader 常量 _READY_FLAG / _STARTING_STOP_TIMEOUT；
   [9] 源码：AppTrader.start 的 Popen 前清 .ready（唯一清点不回退）；
   [10] 源码：stop() 分档引用 _STARTING_STOP_TIMEOUT + 就绪切换行；
-  [11] 源码：r9 判据不回退（--managed 传参 + 父侧 .stop_request 清点）。
+  [11] 源码：r9 判据不回退（--managed 传参 + 父侧 .stop_request 清点）；
+  [12] 源码：_write_ready_flag 的**调用点顺序** —— 必须在 build_runtime
+       之后（此刻才配称"启动链完成"）、停止看护线程注册之前（先有就绪
+       标志、再有消费停止 flag 的能力，否则父进程会快杀一个其实已经
+       能优雅退出的进程）。
 
 判别力（护栏不恒真）：
   删 main.py 写 .ready            → [1][6] 红（AppTrader 永判未就绪，
@@ -48,6 +52,9 @@ start 秒进同一把 threading.Lock → 用户等不及重启了后端。
   stop 恒用短宽限（分档删就绪档）→ [3] 红（就绪子进程锁仓收尾被打断）
   删就绪切换逻辑                  → [4] 红（15s 内登录完成的优雅收尾被误杀）
   删 exited 提前返回              → [5] 红（正常退出也要等满宽限）
+  .ready 挪到 build_runtime 之前  → [12] 红（登录卡死时也被判"已就绪"
+                                     → 短宽限失效回 150s 干等，正是 r10
+                                     要修的现象；[6] 只验"有调用"，抓不到）
 
 跑法：python Trading/Test/test_p70_stop_ready_flex.py
 """
@@ -261,6 +268,19 @@ def main() -> int:
     check("[11] r9 判据不回退（--managed 传参 + 父侧 .stop_request 清点）",
           '"--managed"]' in src_at
           and "已清除上一轮遗留停止 flag" in src_at)
+    # [12] 调用点顺序：只验"有调用"的 [6] 抓不到"挪到 build_runtime 之前"
+    # ——那种写法会让登录卡死的子进程也被判已就绪 → 短宽限失效（回 150s
+    # 干等 = r10 要修的现象本身）。故把顺序钉成区间：build_runtime 之后、
+    # 停止看护线程注册之前（先有就绪标志、再有消费 flag 的能力）。
+    # 用赋值形态定位**调用点**（`def build_runtime(args)` 也含子串
+    # "build_runtime(args)"，find 会命中定义处 → 判据恒真，务必带 "= "）
+    _i_build = src_main.find("= build_runtime(args)")
+    _i_ready = src_main.find("    _write_ready_flag(out)")
+    _i_mon = src_main.find("_monitor_stop_flag")
+    check("[12] _write_ready_flag 位于 build_runtime 之后、看护线程之前",
+          _i_build >= 0 and _i_ready >= 0 and _i_mon >= 0
+          and _i_build < _i_ready < _i_mon,
+          "build@{} ready@{} monitor@{}".format(_i_build, _i_ready, _i_mon))
 
     print()
     print("P70：{} passed / {} failed".format(_PASS, _FAIL))
