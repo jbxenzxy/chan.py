@@ -62,9 +62,22 @@ L1-L3 一套，止盈只有 L3 跟踪一种。
     （= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`（IC/IM=3R、其余=2R），
     故“盈利到 win_loss_ratio×R 时进 L3 跟踪锁利”，不同品种进 L3 时机天然不同。
     名义止盈价（= win_loss_ratio×R）仍写入 params["_tp_nominal"] 供事后对照（只落盘）。
-    历史上曾用独立全局 `trailing_trigger_r` 作 L3 触发（与 win_loss_ratio 解耦），
-    合并：删 trailing_trigger_r，L3 触发统一走品种级 win_loss_ratio
-    （消除“win_loss_ratio=3 是死配置”问题，IC/IM 真正按 3R 进 L3）。
+    ⚠️ 两个「×R」字段的分工（2026-09-14 / 2026-09-22 两次改口径，极易记反）：
+      · **进 L3 的触发阈值** = 品种档案的 `win_loss_ratio`（IC/IM=3R、其余=2R）。
+        判据：浮盈 **>** win_loss_ratio×R（浮盈按根内有利极值算，见 check() ①）。
+      · **L3 的跟踪缓冲距离** = `trailing_trigger_r`（`Config.py:310`，默认 0.5）× R，
+        只决定「保护价挂在最好极值下方多远」（check() 里的 `trail_dist`），
+        **不参与**"要不要进 L3"的判定。
+
+    沿革（为什么名字与语义对不上）：2026-09-14 前进 L3 用的是**独立的全局**
+    `trailing_trigger_r`，与 win_loss_ratio 完全解耦 —— 结果是品种档案里的
+    win_loss_ratio=3 成了无人读取的死配置（IC/IM 实际按那个全局值进 L3）。
+    2026-09-14 起 L3 触发改走品种级 win_loss_ratio，IC/IM 才真正按 3R 进 L3。
+    2026-09-22 又把**跟踪距离**的单位从 ATR 换成 R：删掉 `trailing_atr_multiple`
+    （1.0×ATR），把这个**名字**复用为新距离的载体（0.5×R）。
+    ⇒ `trailing_trigger_r` **没有被删**（`Config.py:310` 仍在、`check()` 仍在读），
+      只是语义从「L3 触发阈值」变成了「跟踪距离」；名字里的 trigger 是历史遗留，
+      读代码时按"跟踪距离 R 倍数"理解，别按名字理解。
 
     ⚠️ 术语沿革（2026-09-15 清理，2026-09-22 续）：出场策略**只有 LayeredExitPolicy
     一套（L1-L3）**，不存在两套可选的出场策略；L1-L3 里也**不存在"硬止损 / 硬止盈"这套
@@ -92,11 +105,18 @@ _log = logging.getLogger(__name__)
 class ExitCheck:
     """出场判定结果。price 是"触发价"，不是最终成交价（成交价由 broker 决定）。
 
-    fill_price 是"建议成交参考价" = 触发判定用的那根 K 线收盘价（2026-09-22
-    回测语义拍板）：触发价只负责触发报单；DryRun 等纸面 broker 的离场成交价
-    按触发那根 K 线的收盘价落账 —— 收盘才认的口径下，触发时刻真实可实现的
-    价就在收盘价附近，仍记止损/止盈线会系统性偏一格。实盘 / SimNow 的成交价
-    以柜台回报为准，不消费本字段。
+    fill_price = **建议成交参考价** = 触发判定用的那根 K 线收盘价（2026-09-22
+    回测语义拍板）。⚠️ 它被消费，而且消费了几层要分清：
+      · **作报单参考价 —— 三个通道都消费**：`Engine._force_exit` 取
+        `ref = fill_price or 触发价`（Engine.py 的 `ref = float(fill_price) if
+        fill_price else float(price or 0.0)`），再交给 `_execute(ref_price=ref)`；
+        `_execute` 把它原样传给 `broker.submit(ref_price=...)`。DryRun 按它加滑点
+        算成交价，SimNow 按它 `_build_limit_price()` 算限价（超价 / 对齐），
+        实盘同理 —— 所以**不是**"只有纸面 broker 看它"。
+      · **作成交价 —— 只有 DryRun**：纸面通道直接按它落账；SimNow / 实盘的
+        实际成交价仍以柜台回报为准，本字段只影响报单价，**不覆盖**回报价。
+    为什么要有它：收盘才认的口径下，触发时刻真实可实现的价就在收盘价附近，
+    仍拿止损 / 保护价当成交价会系统性偏一格（触发价只负责"要不要报单"）。
 
     only_update=True 表示"只更新出场计划、不登场"——移动止损 / 跟踪止盈走这条路。
     此时 plan 必须给，price 无意义（也不给 fill_price）。
@@ -447,7 +467,8 @@ class LayeredExitPolicy:
             #   模块 docstring）。
             #   本文件里为"是否达标"读 high/low 的**唯一**决策点 = `_fav_extreme()`
             #   （护栏 test_p61 钉死：check() 里直接写 bar.high 立刻变红）。
-            #   win_loss_ratio 即 L3 触发阈值（品种级，不再有独立的 trailing_trigger_r）。
+            #   win_loss_ratio 即 L3 触发阈值（品种级；`trailing_trigger_r` 不再是
+            #   触发阈值、只是跟踪距离，分工见模块 docstring）。
             _ext = self._fav_extreme(bar, is_long)
             best = max(best, _ext) if is_long else min(best, _ext)
             fav_profit = (best - entry) * position.side.sign  # (best−风控锚)·sign

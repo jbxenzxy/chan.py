@@ -273,6 +273,14 @@ COMPONENTS = [
     # 持仓行去止损列、时间 YY/MM/DD HH:MM:SS、成交列表最新排在最后。
     ("aol_ledger_display",
      [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
+    # 出场判定只读收盘价（2026-09-22 口径，p61）：
+    #   触发判据不再读本根 high/low（AST 钉死 check() 函数体内不得出现
+    #   .high / .low）；"是否达标"只读根内有利极值且必经 `_fav_extreme()`；
+    #   止损侧边界一律严格不等（收盘价 == 保护价 → 不离场）；同根内**先抬保护价
+    #   再判触发**（故达标根可当根离场）；`only_update` 路径不得带 fill_price。
+    ("p61_exit_close_only",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p61_exit_close_only.py")]),
     # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
     #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
     #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，

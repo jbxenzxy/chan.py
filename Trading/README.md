@@ -375,7 +375,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 - **入场那根 K 线不参与出场判定** —— 结算时跳过 `bar.timestamp <= run.entry_bar_ts` 的 K 线
 - **重复 / 回退的 bar 直接丢弃** —— SSE 重发或断线重连补发历史帧
 
-### 6.5 出场：L1-L3 分层（`Strategy/Exit.py:127`）
+### 6.5 出场：L1-L3 分层（`Strategy/Exit.py:147`）
 
 | 层 | 干什么 | 参数 |
 |---|---|---|
@@ -384,12 +384,12 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 | L3 | 保本 + 跟踪锁利 | 浮盈 **>** `breakeven_trigger_r`×R 时把止损抬到入场价 ± `breakeven_buffer_r`×R；跟踪缓冲 = `trailing_trigger_r`×R |
 
 价格线**只有一条 `stop_price`**（初始止损 → 保本 → 跟踪，逐级改写它），所以不存在
-"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:387`），
+"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:407`），
 止盈完全交给 L3 的跟踪兑现。两个"浮盈达标"阈值（进保本 / 进跟踪）与止损线一律**严格不等**
 （`>` / `<`，"恰好相等"不算触发）—— 离场因此晚一格、不会提前打掉。
 
 **每根 K 线内的判定顺序 = 先按有利侧极值抬保护价，再用本根收盘价判触发**
-（`LayeredExitPolicy.check()` `Strategy/Exit.py:390`）：`check()` 先读根内极值（做多 `high` /
+（`LayeredExitPolicy.check()` `Strategy/Exit.py:410`）：`check()` 先读根内极值（做多 `high` /
 做空 `low`）定出**本根立即生效**的保护价，再拿本根收盘价比它 —— 达标那根若收盘已落在**新**
 保护价的不利侧，**当根即离场**（成交参考价 = 该根收盘价，`fill_price`）。旧顺序（触发判据在
 前、达标命中即只更新计划、新保护价最快下一根生效）已废弃。代价是"冲高回落"形态里下车更早、
@@ -398,7 +398,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 `Test/test_p61_exit_close_only.py` 用 AST 行号钉死（`_fav_extreme()` 调用必须早于触发比较）。
 
 L3 启动阈值 = 品种级 `win_loss_ratio`（IC/IM = 3R、其余 = 2R），故不同品种进 L3 的时机
-天然不同（`Strategy/Exit.py:457-458`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
+天然不同（`Strategy/Exit.py:478-479`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
 `stop_at_signal_extreme` 开关均已删除。**`trailing_trigger_r` 仍在**（`Config.py:310`），
 但角色已从"L3 触发阈值"换成"跟踪缓冲倍数"（× R，与 `breakeven_*_r` 同单位）。
 
