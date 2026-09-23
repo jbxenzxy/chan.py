@@ -8601,18 +8601,20 @@
                 for (let i = 0; i < warn.length; i++) {
                     console.warn('[auto-order] 告警(' + warn[i].code + '): ' + warn[i].msg);
                     showToast('自动下单提醒：' + warn[i].msg);
+                    aoSysNotify('自动下单提醒', warn[i].msg, 'ao-warn');
                 }
                 if (severe.length) {
                     console.error('[auto-order] 严重告警: ' + JSON.stringify(severe));
                     // 水位不在这里写回：确认＝人已看到，等弹框关掉再 ack
                     autoOrderAlertAckHold = Math.max(autoOrderAlertAckHold, maxTs);
-                    showAlert('需人工介入！\n\n'
-                        + severe.map(function (a, i) {
-                            return (i + 1) + '. ' + a.msg
-                                + (a.n > 1 ? '（已重复 ' + a.n + ' 次）' : '');
-                        }).join('\n\n')).then(function () {
-                            ackIfAlertsSeen();
-                        });
+                    const severeMsg = severe.map(function (a, i) {
+                        return (i + 1) + '. ' + a.msg
+                            + (a.n > 1 ? '（已重复 ' + a.n + ' 次）' : '');
+                    }).join('\n\n');
+                    aoSysNotify('自动下单：需人工介入', severeMsg, 'ao-alert');
+                    showAlert('需人工介入！\n\n' + severeMsg).then(function () {
+                        ackIfAlertsSeen();
+                    });
                     return;                      // 本轮 ack 交给 ackIfAlertsSeen
                 }
             }
@@ -8644,6 +8646,59 @@
         }
 
         // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] 自动下单后台系统通知（2026-09-23 需求 ⑶）
+        //   弹窗 / toast 都是页面内的 DOM：页面切到后台（用户去干别的）就看不见
+        //   —— 严重告警回前台还能补看（没 ack 就一直挂着），轻提示 5 秒自动消失、
+        //   错过即丢失。这里用浏览器 Notification API 补一条 Win11 右下角系统
+        //   通知。与股票扫描那条 winotify 是两条独立通道：那条由 App 进程发、
+        //   分不清用户此刻在不在看页面；本条由页面自己发 —— 「页面在不在前台」
+        //   只有页面自己知道，这正是"只在后台时才提醒"的判定来源。
+        //   三条纪律：
+        //     ① 只在页面不在前台时发（hidden = 切了标签页/最小化；!focused =
+        //        被别的程序盖住）。前台时弹窗本来就看得见，再发系统通知是噪音；
+        //     ② 权限只在用户手势里要（开启自动下单那一刻），平时不搞授权弹窗；
+        //     ③ 同 tag 通知互相覆盖（Action Center 不堆一摞），点击把页面拉回前台。
+        //   已知边界：浏览器整个关掉就没有这条通道（页面都退了没人发）—— 服务端
+        //     通道（winotify）是另一个待决项，见交付说明。非安全上下文（如用
+        //     http://局域网IP 访问）无 Notification API，同样静默降级为只弹页内层。
+        // ══════════════════════════════════════════════════════════════
+        // 纯判据函数（不碰 DOM / Notification，可抽到 node 单测）：
+        // supported=环境有无 Notification；permission=授权态；hidden=document.hidden；
+        // focused=document.hasFocus()。授权且不在前台才提醒。
+        function aoNotifyEligible(supported, permission, hidden, focused) {
+            if (!supported || permission !== 'granted') return false;
+            return hidden || !focused;
+        }
+
+        function aoSysNotify(title, body, tag) {
+            const supported = (typeof Notification !== 'undefined');
+            const perm = supported ? Notification.permission : 'denied';
+            if (!aoNotifyEligible(supported, perm, document.hidden,
+                                  document.hasFocus())) return;
+            try {
+                const n = new Notification(title, {
+                    body: String(body || ''),
+                    tag: String(tag || 'ao-notify')
+                });
+                n.onclick = function () { window.focus(); n.close(); };
+            } catch (e) {
+                console.warn('[auto-order] 系统通知失败: ' + e.message);
+            }
+        }
+
+        // 只在「开启自动下单」的用户手势里调用（浏览器要求授权请求挂在手势上，
+        // 放到 await 之后手势上下文就丢了）。已授权/已拒绝都不再打扰。
+        function requestAoNotifyPermission() {
+            if (typeof Notification === 'undefined') return;
+            if (Notification.permission !== 'default') return;
+            Notification.requestPermission().then(function (p) {
+                if (p !== 'granted') {
+                    showToast('浏览器未授权系统通知：页面在后台时将收不到自动下单提醒');
+                }
+            }).catch(function () { /* 老式回调实现：静默 */ });
+        }
+
+        // ══════════════════════════════════════════════════════════════
         // [COMPONENT] 自动下单轻提示 toast（2026-09-18 需求 ⑷）
         //   引擎把关键动作（开仓/平仓/保本/移动止盈/账单同步）写进 state.db 的
         //   toasts 队列，随状态轮询下发。与告警的分界：轻提示是「刚才发生了什么」
@@ -8666,7 +8721,12 @@
             }
             autoOrderSeenToastTs = maxTs;
             for (let i = 0; i < fresh.length; i++) {
-                if (fresh[i]) showToast('自动下单：' + fresh[i]);
+                if (fresh[i]) {
+                    showToast('自动下单：' + fresh[i]);
+                    // toast 5 秒即逝，页面在后台时用户根本看不见 —— 同步补一条
+                    // 系统通知（同 tag 覆盖，多条合并成 Action Center 里一条）
+                    aoSysNotify('自动下单', fresh[i], 'ao-toast');
+                }
             }
         }
 
@@ -8706,6 +8766,7 @@
         async function onAutoOrderToggle(checkbox) {
             const on = checkbox.checked;
             if (autoOrderBusy) { checkbox.checked = !on; return; } // 防连点
+            if (on) requestAoNotifyPermission();  // 权限要挂在用户手势上，须在 await 之前
             if (on && realtimeSymbol) {
                 // 只在"开启"路径检查；"关闭"永远允许 —— 不能因为页面品种变了就关不掉。
                 // 置灰已把这条挡在"点之前"，这里保留为**兜底**（接口降级为放行时，

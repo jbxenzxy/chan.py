@@ -13,7 +13,7 @@
      **不带尾部日期时间**（2026-09-22 四次拍板）；
   ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
      升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：index.html 引 app.js?v=30（改前端必须抬版本号，防缓存假象；
+  ⑤ 资源版本号：index.html 引 app.js?v=31（改前端必须抬版本号，防缓存假象；
      版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
@@ -98,11 +98,11 @@ check("成交行显示合约（t.symbol）",
 
 # ═══ ③ fmtAolTime 存在且被 index.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（新增保护价徽标）已抬到 v=30。
+# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（后台系统通知）已抬到 v=31。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("index.html 引 app.js?v=30", 'app.js?v=30' in HTML, True)
-check("旧版本号 v=29 零残留", 'app.js?v=29' in HTML, False)
+check("index.html 引 app.js?v=31", 'app.js?v=31' in HTML, True)
+check("旧版本号 v=30 零残留", 'app.js?v=30' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后")

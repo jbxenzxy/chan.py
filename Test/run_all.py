@@ -300,6 +300,13 @@ COMPONENTS = [
     ("p63_wlr_doc_guard",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p63_wlr_doc_guard.py")]),
+    # p64：自动下单后台系统通知（页面不在前台 → Win11 右下角 Notification）。
+    #   钉三件事：判据函数四纪律（授权态 / hidden||!focused / 点击回前台 /
+    #   try/catch）、三通道接线（warn / severe / 成交 toast）+ 权限请求挂在
+    #   开启手势上、行为矩阵抽 node 跑真函数（前台+已授权必须 False）。
+    ("p64_ao_bg_notify",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p64_ao_bg_notify.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
