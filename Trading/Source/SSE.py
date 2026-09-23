@@ -105,6 +105,12 @@ class SseSource(Source):
         self._prev_bar: Optional[Bar] = None
         self._last_ts: Optional[int] = None
         self._frame_keys: Set[str] = set()
+        # 当前 SSE 响应对象（events() 线程持有；stop() 从看护线程跨线程关闭）。
+        # 盘后行情停流时 App SSE 无帧到达，events() 阻塞在 read1(timeout=None)
+        # 上，只置 _running 标志永远等不到检查点 —— stop 必须主动关连接打断
+        # （2026-09-23 15:02 实盘：锁仓态收盘后点关闭，子进程卡在「收尾中...」，
+        # 主循环退不出、finally 收尾不执行，App 侧等满 150s 仍等不到退出）。
+        self._resp = None
 
     def url(self) -> str:
         return "{}/api/futures/read/stream?symbol={}&freq={}".format(
@@ -113,7 +119,18 @@ class SseSource(Source):
             urllib.request.quote(self.freq))
 
     def stop(self) -> None:
+        # 只置标志不够：events() 的 _running 检查点在「下一帧到达」处，盘后
+        # 行情停流时永远等不到那一帧 —— 必须同时关掉底层连接，让阻塞中的
+        # read1 立即返回 EOF（close 后 http.client 的 read1 返回空）或抛异常
+        # （events 的 except 分支同样会因 _running=False 直接退出）。盘中路径
+        # 不受影响：本来也要等下一帧才检查，主动关闭只是把它变成立即返回。
         self._running = False
+        resp = self._resp
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 
     def _on_frame(self, payload: Dict[str, Any]) -> Iterator[Event]:
         klines = payload.get("klines") or []
@@ -166,6 +183,7 @@ class SseSource(Source):
             try:
                 req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
                 with urllib.request.urlopen(req, timeout=None) as resp:
+                    self._resp = resp
                     fail = 0
                     for _event, data in iter_sse(resp):
                         if not self._running:
@@ -201,9 +219,12 @@ class SseSource(Source):
                             continue
                         for ev in self._on_frame(payload):
                             yield ev
+                    self._resp = None
             except GeneratorExit:
+                self._resp = None
                 return
             except Exception as e:
+                self._resp = None
                 if not self._running:
                     return
                 fail += 1

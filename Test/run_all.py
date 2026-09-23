@@ -307,6 +307,13 @@ COMPONENTS = [
     ("p64_ao_bg_notify",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p64_ao_bg_notify.py")]),
+    # p65：SSE 源停止中断（盘后静默流卡死修复，2026-09-23）。
+    #   钉三件事：stop 必须真正调 close（行为级，删 close 段即红）、close 打断
+    #   后 read1 的两条收敛路径（返回 EOF / 抛 OSError）都让 events() 秒级退出、
+    #   _running=False 结构性不重连。用户态 FakeResp 实现（环境注记见测试 docstring）。
+    ("p65_sse_stop_interrupt",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p65_sse_stop_interrupt.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
