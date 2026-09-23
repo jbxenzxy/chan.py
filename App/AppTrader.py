@@ -391,7 +391,12 @@ class AppTrader:
                    "--source", "sse",
                    "--symbol", use_symbol,
                    "--freq", use_freq,
-                   "--sse-base", use_base]
+                   "--sse-base", use_base,
+                   # 托管标记：子进程跳过"启动清残留停止 flag"（本方法 L329 起
+                   # 已在 Popen 前清过）。缺了它，盘后登录慢（build_runtime 数十秒）
+                   # 期间本进程写入的 .stop_request 会被子进程当残留删掉，
+                   # 停止请求永久丢失 → 等 150s 强杀（r9 修复）。
+                   "--managed"]
             log.info("[AppTrader] 启动自动下单子进程: %s", " ".join(cmd))
             log.info("[AppTrader] 信号源: source=sse symbol=%s freq=%s "
                      "sse_base=%s broker=%s out=%s",

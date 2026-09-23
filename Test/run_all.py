@@ -322,6 +322,14 @@ COMPONENTS = [
     ("p66_ao_poll_worker",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p66_ao_poll_worker.py")]),
+    # p69：托管模式停止 flag 竞态（盘后关闭 150s 强杀修复，2026-09-23）。
+    #   钉三件事：托管模式（--managed）子进程跳过清残留 .stop_request
+    #   （build_runtime 登录慢窗口内父进程写的是真停止请求）、CLI 直启
+    #   保留清残留（防残留 flag 秒退）、AppTrader 命令行传 --managed +
+    #   父进程 Popen 前清点不回退。行为级跑真函数 + 源码判据防回潮。
+    ("p69_stop_flag_managed",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p69_stop_flag_managed.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。

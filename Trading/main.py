@@ -366,19 +366,37 @@ def print_summary(engine: TradingEngine, out: str, src: Dict[str, Any],
     return s
 
 
-def run(args) -> int:
-    cfg, engine, source, store, ev, out, src = build_runtime(args)
+def _clear_leftover_stop_flag(out_dir: str, managed: bool) -> None:
+    """启动即清掉上次停止可能遗留的 .stop_request（**仅 CLI 直启模式**）。
 
-    # 防御：启动即清掉上次停止可能遗留的 .stop_request。否则任何"不走
-    # AppTrader.start() 的直启/重启路径"（进程崩溃后手动重启、CI 复跑、直接
-    # CLI 拉起）一启动就会被残留 flag 看护线程立刻关停。AppTrader.start() 也会
-    # 清，这里双保险，让 CLI 直启同样健壮。幂等：文件不存在即跳过。
-    _leftover_flag = os.path.join(out, _STOP_REQUEST)
+    否则任何"不走 AppTrader.start() 的直启/重启路径"（进程崩溃后手动重启、
+    CI 复跑、直接 CLI 拉起）一启动就会被残留 flag 看护线程立刻关停。
+    幂等：文件不存在即跳过。
+
+    托管模式（--managed，AppTrader 拉起）**必须跳过**：父进程已在 Popen
+    前清过残留（AppTrader.start 持锁内删，先于子进程存在，无竞态）；而
+    build_runtime（TqApi 构造 + SimNow 登录 + 持仓查询）在盘后登录慢时
+    可达数十秒——此窗口内父进程写入的 .stop_request 是**真停止请求**，
+    若被这里当残留清掉，看护线程随后启动时 flag 已不存在，请求永久丢失，
+    AppTrader 只能等满 150s 宽限后强杀（2026-09-23 18:35/18:42 IM 实盘
+    两次复现，rc=1、graceful=False）。
+    """
+    if managed:
+        return
+    _leftover_flag = os.path.join(out_dir, _STOP_REQUEST)
     if os.path.exists(_leftover_flag):
         try:
             os.remove(_leftover_flag)
         except OSError:
             pass
+
+
+def run(args) -> int:
+    cfg, engine, source, store, ev, out, src = build_runtime(args)
+
+    # 清残留停止 flag：仅 CLI 直启；托管模式跳过（理由见函数 docstring——
+    # build_runtime 期间父进程写的 .stop_request 是真请求，不能当残留删）。
+    _clear_leftover_stop_flag(out, bool(getattr(args, "managed", False)))
 
     if hasattr(source, "info"):
         try:
@@ -535,6 +553,10 @@ def main() -> None:
     ap.add_argument("--max-bars", type=int, help="最多处理多少根 K 线后停止")
     ap.add_argument("--quiet", action="store_true", help="不打印事件流水")
     ap.add_argument("--echo-all", action="store_true", help="连同 bar/order 一起打印")
+    ap.add_argument("--managed", action="store_true",
+                    help="由 AppTrader 托管启动：跳过清残留停止 flag"
+                         "（父进程 Popen 前已清；build_runtime 期间父进程写入"
+                         "的 .stop_request 是真停止请求，须留给看护线程消费）")
     args = ap.parse_args()
     sys.exit(run(args))
 

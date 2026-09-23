@@ -5,7 +5,7 @@ Test/ 与 Trading/Test/ 全量测试统一执行入口
 与 `Test/run_all.py` 的分工（两者不重复、互为补充）：
 
   · `Test/run_all.py`         —— **门禁入口**：只跑「已注册进 COMPONENTS 的
-                                120 个组件」，带冻结基线比对、按依赖排序、
+                                126 个组件」，带冻结基线比对、按依赖排序、
                                 单组件 300s 超时，是验收 / CI 用的那一条命令。
   · 本文件 `run_all_tests.py` —— **全量发现入口**：把 `Test/` 与
                                 `Trading/Test/` 下**所有** test_*/repro_*/smoke_*
