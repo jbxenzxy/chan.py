@@ -382,14 +382,16 @@ def main():
           if chk_l3_short else None,
           (True, 4000.0))
 
-    print("\n[5] L3 启动阈值仍严格 = win_loss_ratio（IC=3R / IF=2R 边界，比较取严格 >）")
+    print("\n[5] L3 启动阈值仍严格 = win_loss_ratio（3R / 2R 两档边界，比较取严格 >）")
     # ⚠️ 本组把**收盘价固定在入场价**、只让 high 抬到指定倍数 —— 于是"能不能启动"
     #    完全由极值口径决定。若实现回头只看收盘价，2.99R / 3.0R / 3.01R 三条都会失真；
     #    若实现把比较改回 `>=`，则"恰好 3.0R 不启动"那条（严格不等）立刻变红。
-    pol_ic = LayeredExitPolicy({"use_atr": False, 
+    # ⚠️ 两个探针只代表**两个不同阈值档**，不绑定品种：IC/IM 自 2026-09-23 起也标 2R。
+    #    保留 3R 一档纯粹为"两个阈值各验一遍"（判别力来自阈值本身，不来自品种）。
+    pol_r3 = LayeredExitPolicy({"use_atr": False, 
                                 "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 3.0})
-    pol_if = LayeredExitPolicy({"use_atr": False, 
+    pol_r2 = LayeredExitPolicy({"use_atr": False, 
                                 "breakeven_trigger_r": 99.0,
                                 "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
 
@@ -414,18 +416,18 @@ def main():
         return bool(chk is not None and chk.plan is not None
                     and chk.plan.params.get("_phase") == "trailing")
 
-    check("IC(3R) high 2.99R 不启动 L3（阈值严格 > 的下侧）",
-          _l3_started(pol_ic, 129.9, 2710), False)
-    check("IC(3R) high 3.0R **恰好不启动**（严格不等：> 3R 才算）",
-          _l3_started(pol_ic, 130.0, 2711), False)
-    check("IC(3R) high 3.01R 启动（越过阈值 1 tick 即算）",
-          _l3_started(pol_ic, 130.1, 2712), True)
-    check("IF(2R) high 1.99R 不启动 L3", _l3_started(pol_if, 119.9, 2713), False)
-    check("IF(2R) high 2.0R **恰好不启动**（严格不等）",
-          _l3_started(pol_if, 120.0, 2714), False)
-    check("IF(2R) high 2.01R 启动", _l3_started(pol_if, 120.1, 2715), True)
-    check("同一 2.5R：IC(3R) 不启动", _l3_started(pol_ic, 125.0, 2716), False)
-    check("同一 2.5R：IF(2R) 已启动", _l3_started(pol_if, 125.0, 2717), True)
+    check("阈值3R high 2.99R 不启动 L3（阈值严格 > 的下侧）",
+          _l3_started(pol_r3, 129.9, 2710), False)
+    check("阈值3R high 3.0R **恰好不启动**（严格不等：> 3R 才算）",
+          _l3_started(pol_r3, 130.0, 2711), False)
+    check("阈值3R high 3.01R 启动（越过阈值 1 tick 即算）",
+          _l3_started(pol_r3, 130.1, 2712), True)
+    check("阈值2R high 1.99R 不启动 L3", _l3_started(pol_r2, 119.9, 2713), False)
+    check("阈值2R high 2.0R **恰好不启动**（严格不等）",
+          _l3_started(pol_r2, 120.0, 2714), False)
+    check("阈值2R high 2.01R 启动", _l3_started(pol_r2, 120.1, 2715), True)
+    check("同一 2.5R：阈值3R 不启动", _l3_started(pol_r3, 125.0, 2716), False)
+    check("同一 2.5R：阈值2R 已启动", _l3_started(pol_r2, 125.0, 2717), True)
 
     print("\n[6] 同一根：极值达标抬价 → 收盘跌破新价 → **当根离场**")
     # 一根 high 冲到 2R、收盘又砸回 −1R 之外的巨阴：新时序下先按极值把保护价抬到跟踪位

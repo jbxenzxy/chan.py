@@ -142,9 +142,19 @@ def main():
     _res_ic = resolved_exit_params(c_ic)
     check("IC resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_ic, False)
-    check("IC resolved win_loss_ratio=3.0", _res_ic["win_loss_ratio"], 3.0)
+    check("IC resolved win_loss_ratio=2.0（2026-09-23 起与其余品种同口径；"
+          "播种见证交给 multiplier：IC=200 ≠ 模型默认 300）",
+          _res_ic["win_loss_ratio"], 2.0)
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.product_profile.multiplier, 200.0)
+
+    # ⚠️ 口径一致性（2026-09-23 用户拍板）：8 品种 win_loss_ratio **全为 2.0**，
+    #   此前 IC/IM 单标 3.0 的分档已取消。这条比"逐品种各钉一次"多拦两类错：
+    #   ① 有人把某个品种改回 3.0（含新增品种时漏配成 2 以外）；
+    #   ② 新增品种时 win_loss_ratio 写错档。判据是**集合**而非"逐项相等"，
+    #   故意不绑定品种个数 —— 增减品种不必改这条（改口径必须改）。
+    check("8 品种 win_loss_ratio 集合 == {2.0}（统一口径，无品种分档）",
+          sorted({p.win_loss_ratio for p in PRODUCT_PROFILES.values()}), [2.0])
 
     # 未知品种：档案缺失（product_profile=None）。此后 exit_params 上没有
     # 品种相关出场参数（现只剩 win_loss_ratio） —— resolved_exit_params 启动期即抛（与白名单闸门同文案，
@@ -192,7 +202,7 @@ def main():
 
     # (b) 换品种 = 重建配置（frozen，与 main.py --symbol 路径同款）：
     #     signal_symbol 变 → cfg.product_profile 跟随新品种档案；
-    #     win_loss_ratio 经 resolved_exit_params 跟随新品种（IC 3.0 → IF 2.0）。
+    #     win_loss_ratio 经 resolved_exit_params 跟随品种档案（8 品种当前同为 2.0）。
     c_exp = TradingConfig(instrument={"signal_symbol": "KQ.m@CFFEX.IF"})
     check("换品种后 resolved win_loss_ratio 跟随 IF 档案 2.0",
           resolved_exit_params(c_exp)["win_loss_ratio"], 2.0)

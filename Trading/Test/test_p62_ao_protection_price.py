@@ -24,7 +24,8 @@ P62 运行态保护价：后端投影 + 前端常驻显示
   [5] 跨重启：_persist → 新引擎 _restore_run → 投影四项与恢复前逐个相等
   [6] 无运行段：空仓 / 锁仓 → run 为 None（前端据此隐藏，不留 "--" 占位）
   [7] toast：移动止盈 toast 与保本 toast 一样带出保护价（2026-09-23 对称化）
-  [8] 前端静态层：元素 / 消费点 / 三项字段名 / 隐式隐藏
+  [8] 前端静态层：元素 / 消费点 / 三项字段名 / 隐式隐藏 / **元素顺序**
+      （2026-09-23 用户拍板：保护价徽标排在「账本」之后、整组最右）
   [9] 源码护栏：run 字典键必需项齐全，三项取值来源是 _run_plan.params，
       且 stop 必须来自引擎级实时计划（不得读仓单快照）
   [10] 前端行为层：`renderAutoOrderPrice` 抽到 node 里跑真函数 ——
@@ -33,12 +34,13 @@ P62 运行态保护价：后端投影 + 前端常驻显示
       API 侧 `AppTrader._read_engine_switch()["run"]` **逐字段相等**；
       静态层另钉住两处键集合一致、取值来源一致
 
-判别力（护栏不恒真，2026-09-23 五条变异各有对应检查点变红）：
+判别力（护栏不恒真，2026-09-23 六条变异各有对应检查点变红）：
   删 `Engine.py` run 里 phase 一行      → [1c] / [2a] / [3a] / [4a] / [9b] / [9c] / [9d]
   stop 改读仓单 exit_plan（开仓冻结）   → [1b] / [2b] / [3b] / [4b] / [4c] / [9f]
   移动止盈 toast 去掉价位               → [7d] / [7e]
   前端层文案改短（保本层→保本）         → [10b] / [10c] / [10e] / [10i]
   隐藏分支不置 display:none             → [8h] / [10f] / [10g] / [10h]
+  保护价元素挪回账本之前（顺序回归）    → [8b] / [8b2]
 
 投影字段一律用 `g()` / `num()` 读：缺键时报红而不是 KeyError 中断用例 ——
 否则删掉一个键只会让这条用例在第 3 行崩掉，后面 40 项一条都看不到。
@@ -359,6 +361,21 @@ else:
     # 资源版本号不在这里断言 —— 它由 Test/test_aol_ledger_display.py 的 ⑤ 组
     #   独占守卫（那条契约的存在意义就是"改前端必须抬版本号"）。两处各写一份
     #   只会让抬版本号时要改两个文件，且不增加任何拦截力。
+    # ── 位置契约（2026-09-23 用户拍板：徽标挪到「账本」之后、本组最右）──
+    #   ⚠️ [8a] 只断言元素存在 —— 把它挪到哪都照样绿。而"挪到账本后面"是用户
+    #   明确要求的**展示顺序**（不是存在性），故单独钉：抽 auto-order 容器内的
+    #   子元素 id 序列，与受控清单**逐项**比对（不是"包含"）。序列一变 ⇒ 有人
+    #   动过展示顺序，必须回来改这条。
+    _wrap_seg = HTML[HTML.index('id="auto-order-wrap"'):
+                     HTML.index('id="auto-order-ledger-panel"')]
+    check("[8b] auto-order 一组子元素顺序 = 受控清单（保护价在最右）",
+          re.findall(r'id="([\w-]+)"', _wrap_seg),
+          ["auto-order-wrap", "auto-order-dot", "auto-order-label",
+           "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn",
+           "auto-order-px"])
+    check("[8b2] 保护价元素排在「账本」之后（独立于上面清单的位置比较）",
+          HTML.index('id="auto-order-px"')
+          > HTML.index('id="auto-order-ledger-btn"'), True)
     check("[8d] app.js 定义了渲染函数", "function renderAutoOrderPrice(" in JS,
           True)
     check("[8e] 轮询回调里真的调用了它",

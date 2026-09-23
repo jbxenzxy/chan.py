@@ -293,7 +293,7 @@ main.py 构造一份后**同时**交给 `Broker.build_broker(..., state=instr)` 
 > 所以**决策侧零费率引用**，代码里也禁止用交易所名字判断任何走向
 > （第 4 列只是注释，`Infra/Product.py:191`）。
 
-品种档案含策略标定值 `win_loss_ratio`（IF/IH/AU/AG/CU/TA = 2.0，IC/IM = 3.0）、
+品种档案含策略标定值 `win_loss_ratio`（**8 品种统一 2.0**）、
 `price_tick` / `multiplier`（离线兜底，实盘以行情为准）、费率两档（由生成区块注入）。
 入口 `Infra/Product.py:438`，逐品种 note 里有来源说明。
 
@@ -397,8 +397,8 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 取决于达标根之后那根的收盘分布，不是"更早锁利"这么单向。两段判据的**先后**由护栏
 `Test/test_p61_exit_close_only.py` 用 AST 行号钉死（`_fav_extreme()` 调用必须早于触发比较）。
 
-L3 启动阈值 = 品种级 `win_loss_ratio`（IC/IM = 3R、其余 = 2R），故不同品种进 L3 的时机
-天然不同（`Strategy/Exit.py:478-479`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
+L3 启动阈值 = 品种级 `win_loss_ratio`（8 品种统一 2R），故各品种同在 2R 达标、点数距离
+随各自 R 变（`Strategy/Exit.py:478-479`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
 `stop_at_signal_extreme` 开关均已删除。**`trailing_trigger_r` 仍在**（`Config.py:310`），
 但角色已从"L3 触发阈值"换成"跟踪缓冲倍数"（× R，与 `breakeven_*_r` 同单位）。
 

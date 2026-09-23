@@ -37,8 +37,8 @@ App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向�
 Period 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
 **不随周期变化、而随合约品种变化**：
 
-  · `win_loss_ratio`（止盈盈亏比 / L3 启动阈值）：IF/IH 惯用 1:2（L3 在 2R 启动）；
-    IC/IM 波动大、趋势性弱，1:3 的盈亏比更合适（L3 在 3R 启动）；
+  · `win_loss_ratio`（止盈盈亏比 / L3 启动阈值）：**8 个品种统一 1:2**（L3 在 2R 启动）；
+    字段仍按 per-product 存放，2026-09-23 起 IC/IM 的 1:3 分档取消、与其余品种同口径。
   · 保本/锁利层的"缓冲"已改为**全局比例** `breakeven_buffer_r`（在 Trading/Config.py
     的 ExitConfig，默认 0.5R，跨品种跨周期统一），不再随品种变 —— 故本档案不再含该字段。
   · `price_tick` / `multiplier`（最小变动价位 / 合约乘数）：IF/IH = 0.2 点 / 300 元/点，
@@ -453,22 +453,22 @@ PRODUCT_PROFILES: Dict[str, Product] = {
         **_exec_kw("IH"),
     ),
     "IC": Product(
-        product="IC", win_loss_ratio=3.0,
+        product="IC", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IC：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
+        note="中金所 CFFEX IC：盈亏比 1:2（L3 在 2R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IC"),
         **_exec_kw("IC"),
     ),
     "IM": Product(
-        product="IM", win_loss_ratio=3.0,
+        product="IM", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IM：盈亏比 1:3（L3 在 3R 启动）、乘数 200 元/点；费率同 IF",
+        note="中金所 CFFEX IM：盈亏比 1:2（L3 在 2R 启动）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IM"),
         **_exec_kw("IM"),
     ),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
-    # 商品档盈亏比暂统一 1:2（L3 在 2R 启动），与 IF/IH 一致；IC/IM 因波动大、趋势性弱
-    #   用 1:3。R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
+    # 全部 8 品种盈亏比统一 1:2（L3 在 2R 启动）—— 2026-09-23 起取消 IC/IM 的 1:3 分档。
+    #   R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", win_loss_ratio=2.0,
         quote_unit="元/克", price_tick=0.02, multiplier=1000.0,

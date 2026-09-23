@@ -310,7 +310,7 @@ class ExitConfig(BaseModel):
     trailing_trigger_r: float = 0.5        # 跟踪缓冲 = 0.5 × R
                                                 #   R = max(分型距离, 2×ATR)
                                                 #   L3 的跟踪兑现（trail_dist = trailing_trigger_r × R）
-                                                #   L3 启动阈值 = win_loss_ratio（品种档案，IC/IM=3R、其余=2R）
+                                                #   L3 启动阈值 = win_loss_ratio（品种档案；8 品种统一 2R）
                                                 #   即 浮盈 **>** win_loss_ratio × R 时进 L3（严格不等）
 
     @model_validator(mode="after")
