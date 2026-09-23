@@ -27,7 +27,7 @@ P47 品种代码大小写归一 + 白名单硬约束 契约测试
         —— 否则会出现"能下单却画不出 K 线"的死角；
       · 已裁掉的品种（T/TF/NI/SR/PP/Y/A50…）确实不在表内（负向断言）。
   [5] 【2026-09-14 第 6 批新增】「未标定品种置灰」契约（防"置灰越界去限制搜索"回潮）：
-      · 开关容器有置灰类名 + 提示位（index.html / app.css / app.js 三处齐备）；
+      · 开关容器有置灰类名 + 提示位（app.html / app.css / app.js 三处齐备）；
       · 置灰判定**复用** /api/trader/product-check（与开启路径同一来源，不另写白名单）；
       · 引擎运行中**不置灰**（否则用户关不掉正在跑的引擎）；
       · 接口失败 = **放行**（置灰不能把开关卡死在灰态）；
@@ -216,7 +216,7 @@ def main():
                    gone not in FUTURES_ALIASES)
 
     print("\n[5] 未标定品种置灰契约（只置灰下单开关，不限制行情搜索）")
-    _html_p = os.path.join(_RROOT, "Frontend", "index.html")
+    _html_p = os.path.join(_RROOT, "Frontend", "app.html")
     _css_p = os.path.join(_RROOT, "Frontend", "app.css")
     with open(_html_p, encoding="utf-8") as fh:
         html = fh.read()
@@ -224,7 +224,7 @@ def main():
         css = fh.read()
 
     # 5a 三处落点齐备（缺一处 = 置灰不生效或看不到原因）
-    check_true("index.html 有置灰提示位 auto-order-hint",
+    check_true("app.html 有置灰提示位 auto-order-hint",
                'id="auto-order-hint"' in html)
     check_true("提示位在 auto-order-wrap 容器内",
                re.search(r'id="auto-order-wrap".*?id="auto-order-hint"', html, re.S)

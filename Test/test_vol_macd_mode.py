@@ -47,7 +47,7 @@ REPO_ROOT = os.path.dirname(TEST_DIR)
 sys.path.insert(0, REPO_ROOT)
 
 APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
-INDEX_HTML = os.path.join(REPO_ROOT, "Frontend", "index.html")
+ENTRY_HTML = os.path.join(REPO_ROOT, "Frontend", "app.html")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 SNAP_STOCK = os.path.join(TEST_DIR, "snapshots", "stock_d_full.json")
 SNAP_FUTURES = os.path.join(TEST_DIR, "snapshots", "futures_15s_full.json")
@@ -96,11 +96,11 @@ def find_playwright():
 
 
 # ═══════════════════════════════════════════════════════════════════
-# ① 设置项契约（index.html）
+# ① 设置项契约（app.html）
 # ═══════════════════════════════════════════════════════════════════
 def test_setting_ui(failures):
     print("\n① 设置项契约（抽屉：成交额/量显示）")
-    html = read(INDEX_HTML)
+    html = read(ENTRY_HTML)
     group = re.search(r'<div id="vol-display-mode-group"[\s\S]*?</div>', html)
     check(failures, group is not None,
           "抽屉内存在 #vol-display-mode-group 分组")
@@ -124,7 +124,7 @@ def test_setting_ui(failures):
     # 缓存击穿（改了 app.js 必须抬版本号）
     m = re.search(r'app\.js\?v=(\d+)', html)
     check(failures, bool(m) and int(m.group(1)) >= 16,
-          "index.html 以 app.js?v=16+ 引用", f"实际 {m.group(1) if m else '无'}")
+          "app.html 以 app.js?v=16+ 引用", f"实际 {m.group(1) if m else '无'}")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -156,7 +156,7 @@ def test_state_and_persist(failures):
           is not None,
           "openBspSettings 里随抽屉打开同步选中态")
     # 快捷键之外的入口：默认值必须与"未设置"一致
-    check(failures, "volDisplayMode" not in read(INDEX_HTML).split("vol-display-mode-group")[0],
+    check(failures, "volDisplayMode" not in read(ENTRY_HTML).split("vol-display-mode-group")[0],
           "HTML 未预置 checked（选中态由 JS 依 _volDisplayMode 同步，单一事实源）")
 
 
@@ -495,7 +495,7 @@ def test_real_render(failures):
             route.fulfill(status=200, content_type="application/json", body=body)
 
         page.route("**/api/**", route_api)
-        page.goto(f"http://127.0.0.1:{port}/index.html", wait_until="load")
+        page.goto(f"http://127.0.0.1:{port}/app.html", wait_until="load")
         page.wait_for_function(
             "() => { const s = window.ChanApp && window.ChanApp.state;"
             " return !!(s && s.chartData && s.chartData.klines && s.chartData.klines.length > 0); }",

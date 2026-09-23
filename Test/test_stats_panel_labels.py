@@ -303,7 +303,7 @@ else:
                 route.fulfill(status=200, content_type="application/json", body=body)
 
             page.route("**/api/**", route_api)
-            page.goto("http://127.0.0.1:%d/index.html" % port, wait_until="load")
+            page.goto("http://127.0.0.1:%d/app.html" % port, wait_until="load")
             page.wait_for_function(
                 "() => { const s = window.ChanApp && window.ChanApp.state;"
                 " return !!(s && s.chartData && s.chartData.klines"

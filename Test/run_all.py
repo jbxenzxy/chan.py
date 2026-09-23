@@ -287,7 +287,7 @@ COMPONENTS = [
                                    "test_p61_exit_close_only.py")]),
     # 运行态保护价：后端投影 + 前端常驻显示（2026-09-23，p62）：
     #   `auto_order_status()["run"]` 除实时 stop 外给出它的解释（phase / r / tp，
-    #   取值来源钉死 `_run_plan.params`）；前端 index.html 有常驻元素、app.js 消费
+    #   取值来源钉死 `_run_plan.params`）；前端 app.html 有常驻元素、app.js 消费
     #   三项、无运行段时隐藏；移动止盈 toast 与保本 toast 一样带出保护价。
     #   起因：2026-09-23 实盘 2.6R 浮盈回撤到 0.77R，保护价全程只有悬停 tooltip 一个出口。
     ("p62_ao_protection_price",
@@ -314,6 +314,14 @@ COMPONENTS = [
     ("p65_sse_stop_interrupt",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p65_sse_stop_interrupt.py")]),
+    # p66：自动下单轮询移 Web Worker（后台通知延迟修复，2026-09-23）。
+    #   钉三件事：Worker 源码协议（5s 周期唯一来源 / start 启动即拉一次 /
+    #   stop 清定时器 / postMessage 形状）、app.js 接线（Worker + onmessage
+    #   → applyAutoOrderStatus + onerror 回退）、行为矩阵抽 node 跑真
+    #   Worker 代码（start 即拉 / 周期 5000 / 每 fetch 一条 status / no-store）。
+    ("p66_ao_poll_worker",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p66_ao_poll_worker.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。

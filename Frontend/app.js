@@ -8144,6 +8144,7 @@
         // ══════════════════════════════════════════════════════════════
         let autoOrderBusy = false;        // 请求进行中（防连点）
         let autoOrderPollTimer = null;
+        let autoOrderWorker = null;       // 轮询 Worker（后台标签不被节流；创建失败回退主线程定时器）
         let autoOrderPrevRunning = null;  // 上次轮询的进程状态（用于探测异常退出）
         let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
         let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
@@ -8226,16 +8227,27 @@
         }
 
         async function pollAutoOrderStatus() {
-            const checkbox = document.getElementById('auto-order-checkbox');
-            if (!checkbox) return;
             try {
                 const resp = await fetch('/api/trader/auto-order/status', { cache: 'no-store' });
                 if (!resp.ok) {
                     console.warn('[auto-order] status HTTP ' + resp.status);
                     return;
                 }
-                const data = await resp.json();
-                const running = !!data.running;
+                applyAutoOrderStatus(await resp.json());
+            } catch (e) {
+                console.warn('[auto-order] 轮询失败: ' + e.message);
+            }
+        }
+
+        // 状态应用（poll 与后台 Worker 共用）。轮询本体已移到 Web Worker
+        // （ao-poll-worker.js）：后台标签的主线程 setInterval 会被 Chrome
+        // intensive throttling 节流到 ~1 次/分钟（页面隐藏 ≥5 分钟），Worker
+        // 内定时器不受该节流，收到的消息任务也不被节流 —— 右下角系统通知
+        // 因此恢复秒级（2026-09-23）。
+        function applyAutoOrderStatus(data) {
+            const checkbox = document.getElementById('auto-order-checkbox');
+            if (!checkbox) return;
+            const running = !!data.running;
                 const enabled = !!(data.auto_order && data.auto_order.enabled);
                 const on = running && enabled;
                 autoOrderRunning = running;   // 同步进程运行态给切换 guard 用
@@ -8308,9 +8320,6 @@
                 }
                 if (running) autoOrderLastLog = data.log_file || null;
                 autoOrderPrevRunning = running;
-            } catch (e) {
-                console.warn('[auto-order] 轮询失败: ' + e.message);
-            }
         }
 
         // ── 引擎账本面板（C，2026-09-18）：持仓 + 最近成交，随轮询刷新 ──
@@ -8543,7 +8552,7 @@
             const overlay = document.createElement("div");
             overlay.id = "alert-dialog";
             overlay.className = "alert-dialog";
-            // 按钮沿用既有弹层的按钮样式与排列：index.html 里两个问答弹窗
+            // 按钮沿用既有弹层的按钮样式与排列：app.html 里两个问答弹窗
             // （文字标注 / 股票扫描）都是「确定在左、取消在右」，这里照抄同一顺序，
             // 不给用户两套肌肉记忆。
             overlay.innerHTML = '<div class="alert-dialog-box">'
@@ -8838,14 +8847,86 @@
         // ReferenceError，按钮看起来毫无反应（P65 复刻了上面开关的坑）。
         window.toggleAutoOrderLedger = toggleAutoOrderLedger;
 
-        // 轮询：实时模式下每 5s 刷新一次状态
+        // 自动下单轮询 Worker 源码（r8 由独立文件 ao-poll-worker.js 合并内嵌：
+        // 用户不想多一个文件。用 Blob URL 创建 —— Worker 独立事件循环的定时器
+        // 不受 Chrome intensive throttling 节流，这与 Worker 的创建方式无关，
+        // 源码内嵌不影响该性质。注意：本模板字符串内不得出现反引号与 ${。
+        const AO_WORKER_SRC = `        // -*- coding: utf-8 -*-
+        // 自动下单状态轮询 Worker
+        // =======================
+        // 为什么轮询要在 Worker 里跑：后台标签页的主线程 setInterval 会被 Chrome
+        // intensive throttling 节流到 ~1 次/分钟（页面隐藏 ≥5 分钟后生效），自动下单
+        // 的系统通知（Notification）因此延迟可达 60s+ —— 2026-09-23 实盘：快期3
+        // 秒级显示仓单，右下角通知一分钟级别才出，而 events.jsonl 证明交易引擎在同一秒
+        // 就写好了 toast，延迟全部在「前端轮询」这一环。Worker 内的全局作用域独立，
+        // 定时器不受该节流；每 5s 拉一次状态 postMessage 回主线程，主线程收到消息
+        // 立即应用（消息任务是普通任务，同样不被节流）。
+        //
+        // 协议：
+        //   主线程 → Worker：{type: 'start'}  开始轮询（启动即拉一次，不等首周期）
+        //                    {type: 'stop'}   停止轮询
+        //   Worker → 主线程：{type: 'status', data: <status 响应 JSON>}
+        //
+        // fetch 用根相对路径 '/api/...'（以站点 origin 为根），与本页面同源。
+
+        var _timer = null;
+        var POLL_MS = 5000;
+
+        function _poll() {
+            fetch('/api/trader/auto-order/status', { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) return null;      // HTTP 4xx/5xx：本轮放弃，下轮再试
+                    return r.json();
+                })
+                .then(function (j) {
+                    if (j) self.postMessage({ type: 'status', data: j });
+                })
+                .catch(function () { /* 网络/服务瞬时不可用：静默，下轮再试 */ });
+        }
+
+        self.onmessage = function (e) {
+            var d = e.data || {};
+            if (d.type === 'start') {
+                if (_timer) clearInterval(_timer);
+                _timer = setInterval(_poll, POLL_MS);
+                _poll();
+            } else if (d.type === 'stop') {
+                if (_timer) { clearInterval(_timer); _timer = null; }
+            }
+        };
+`;
+
+        // 轮询：实时模式下每 5s 刷新一次状态。
+        // 轮询本体在上方 AO_WORKER_SRC（Web Worker）：后台标签的主线程
+        // setInterval 会被 Chrome intensive throttling 节流到 ~1 次/分钟
+        //（页面隐藏 ≥5 分钟后生效），Worker 内定时器不受该节流 —— 这正是
+        // 2026-09-23「右下角系统通知延迟一分钟」的根因。Worker 创建失败
+        //（无 Worker 环境 / 老浏览器）回退主线程 setInterval（旧行为，含
+        // 实时页可见性判断；后台节流的延迟边界在该回退路径下仍然存在）。
         (function startAutoOrderPolling() {
-            autoOrderPollTimer = setInterval(function() {
-                const wrap = document.getElementById('auto-order-wrap');
-                if (wrap && wrap.classList.contains('visible')) {
-                    pollAutoOrderStatus();
-                }
-            }, 5000);
+            let fellBack = false;
+            function fallback() {
+                if (fellBack) return;
+                fellBack = true;
+                autoOrderPollTimer = setInterval(function() {
+                    const wrap = document.getElementById('auto-order-wrap');
+                    if (wrap && wrap.classList.contains('visible')) {
+                        pollAutoOrderStatus();
+                    }
+                }, 5000);
+            }
+            try {
+                if (typeof Worker === 'undefined') { fallback(); return; }
+                const _wblob = new Blob([AO_WORKER_SRC],
+                    { type: 'application/javascript' });
+                const w = new Worker(URL.createObjectURL(_wblob));
+                w.onmessage = function(e) {
+                    const d = e.data || {};
+                    if (d.type === 'status' && d.data) applyAutoOrderStatus(d.data);
+                };
+                w.onerror = function() { fallback(); };
+                autoOrderWorker = w;
+            } catch (e) { fallback(); }
         })();
 
         init();

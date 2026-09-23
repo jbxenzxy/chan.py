@@ -310,7 +310,7 @@ check("[8d] 过滤方法读取键 = 常量", TradingEngine.bsp_type_filter.__doc
 # ════════════════════════════════════════════════════════════════
 print("\n[9] 前后端「四类」集合一致（BSP_TYPE_CHOICES ↔ 前端复选框）")
 _REPO = os.path.abspath(os.path.join(_HERE, "..", ".."))
-with open(os.path.join(_REPO, "Frontend", "index.html"), encoding="utf-8") as _f:
+with open(os.path.join(_REPO, "Frontend", "app.html"), encoding="utf-8") as _f:
     _html = _f.read()
 _html_types = sorted(set(re.findall(r'name="bsp-filter"\s+value="([^"]+)"', _html)))
 check("[9a] 前端复选框集合 == BSP_TYPE_CHOICES",

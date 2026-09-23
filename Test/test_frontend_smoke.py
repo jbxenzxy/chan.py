@@ -6,7 +6,7 @@
 重构（阶段 6 组件化）后缺少「前端可加载、关键入口存在」的冒烟守护。
 本用例做静态冒烟（不依赖真实浏览器/后端）：
 
-  ① HTML 骨架：index.html 引用 app.js / app.css；关键 DOM 元素存在
+  ① HTML 骨架：app.html 引用 app.js / app.css；关键 DOM 元素存在
      （stock-code-input / chart-container / freq-selector / scan-panel）
   ② JS 语法：node --check app.js 通过（零构建下语法错误会直接白屏）
   ③ 全局入口：window 级函数存在（switchFreq / toggleDualWindow /
@@ -27,7 +27,7 @@ import sys
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
 FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
-INDEX_HTML = os.path.join(FRONTEND_DIR, "index.html")
+ENTRY_HTML = os.path.join(FRONTEND_DIR, "app.html")
 APP_JS = os.path.join(FRONTEND_DIR, "app.js")
 APP_CSS = os.path.join(FRONTEND_DIR, "app.css")
 
@@ -56,18 +56,18 @@ REQUIRED_WINDOW_FUNCS = [
 
 def test_html_skeleton(failures):
     """① HTML 骨架：引用 app.js/app.css + 关键 DOM 元素"""
-    if not os.path.exists(INDEX_HTML):
-        failures.append("① index.html 不存在")
-        print("[FAIL] ① index.html 不存在")
+    if not os.path.exists(ENTRY_HTML):
+        failures.append("① app.html 不存在")
+        print("[FAIL] ① app.html 不存在")
         return
-    with open(INDEX_HTML, encoding="utf-8") as f:
+    with open(ENTRY_HTML, encoding="utf-8") as f:
         html = f.read()
     if 'src="app.js' not in html:
-        failures.append("① index.html 未引用 app.js")
+        failures.append("① app.html 未引用 app.js")
         print("[FAIL] ① 未引用 app.js")
         return
     if 'href="app.css"' not in html:
-        failures.append("① index.html 未引用 app.css")
+        failures.append("① app.html 未引用 app.css")
         print("[FAIL] ① 未引用 app.css")
         return
     missing = [i for i in REQUIRED_DOM_IDS if f'id="{i}"' not in html]
@@ -127,11 +127,11 @@ def test_window_api_surface(failures):
 
 def test_inline_event_refs(failures):
     """⑤ 事件引用：HTML onclick/onchange 内联引用与 window 函数一一对应"""
-    if not os.path.exists(INDEX_HTML) or not os.path.exists(APP_JS):
-        failures.append("⑤ index.html/app.js 缺失")
-        print("[FAIL] ⑤ index.html/app.js 缺失")
+    if not os.path.exists(ENTRY_HTML) or not os.path.exists(APP_JS):
+        failures.append("⑤ app.html/app.js 缺失")
+        print("[FAIL] ⑤ app.html/app.js 缺失")
         return
-    with open(INDEX_HTML, encoding="utf-8") as f:
+    with open(ENTRY_HTML, encoding="utf-8") as f:
         html = f.read()
     with open(APP_JS, encoding="utf-8") as f:
         js = f.read()

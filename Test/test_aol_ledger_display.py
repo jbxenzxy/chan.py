@@ -2,7 +2,7 @@
 """
 账本面板展示契约护栏（2026-09-22 用户拍板）
 ====================================================================
-钉住 Frontend/index.html + app.js renderAutoOrderLedger + App/AppTrader.py
+钉住 Frontend/app.html + app.js renderAutoOrderLedger + App/AppTrader.py
 投影三处的展示契约：
 
   ① 面板两节标题：「持仓」「成交」——旧长标题（含「账本」字样的两节
@@ -13,7 +13,7 @@
      **不带尾部日期时间**（2026-09-22 四次拍板）；
   ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
      升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：index.html 引 app.js?v=31（改前端必须抬版本号，防缓存假象；
+  ⑤ 资源版本号：app.html 引 app.js?v=33（改前端必须抬版本号，防缓存假象；
      版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
@@ -27,7 +27,7 @@
 行为层：fmtAolTime 抽到 node 里跑真函数，逐样本比对输出（node 不在位
 则 SKIP，只跑静态层）。判别力自证（护栏不恒真）：把 AppTrader.py 的
 `_all_trades[-10:]` 临时变异回 `list(reversed(_all_trades))[:10]` → 本用例
-必须变红（变异记录见交付说明）；index.html 标题改名 / app.js 恢复「止损」
+必须变红（变异记录见交付说明）；app.html 标题改名 / app.js 恢复「止损」
 列同理。
 
 跑法：python Test/test_aol_ledger_display.py
@@ -59,7 +59,7 @@ def check(name, got, want):
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(TEST_DIR)
 
-with open(os.path.join(REPO, "Frontend", "index.html"), encoding="utf-8") as f:
+with open(os.path.join(REPO, "Frontend", "app.html"), encoding="utf-8") as f:
     HTML = f.read()
 with open(os.path.join(REPO, "Frontend", "app.js"), encoding="utf-8") as f:
     JS = f.read()
@@ -96,13 +96,14 @@ check("持仓行显示合约（p.symbol）",
 check("成交行显示合约（t.symbol）",
       BLOCK.count("(t.symbol ? '<span class=\"aol-dim\">' + t.symbol + '</span>' : '')"), 1)
 
-# ═══ ③ fmtAolTime 存在且被 index.html 版本号护栏配套 ═══
+# ═══ ③ fmtAolTime 存在且被 app.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（后台系统通知）已抬到 v=31。
+# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（轮询移 Web Worker）
+#   已抬到 v=33（r8：Worker 源码内嵌 app.js，入口页改名 app.html）。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("index.html 引 app.js?v=31", 'app.js?v=31' in HTML, True)
-check("旧版本号 v=30 零残留", 'app.js?v=30' in HTML, False)
+check("app.html 引 app.js?v=32", 'app.js?v=33' in HTML, True)
+check("旧版本号 v=32 零残留", 'app.js?v=32' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后")

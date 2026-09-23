@@ -16,14 +16,16 @@
      + window.ChanApp + 3 个 HTML 内联事件桥（合计 65；阶段 6 组件化为纯
      代码搬移，对既有 API 面零漂移，HTML onclick / 控制台调试依赖此面）。
   ③b HTML 内联事件桥：登记的 3 个桥接必须既在 window 绑定、又被
-     index.html 引用（与 ④ 互为补集：既拦「摘绑定」也拦「僵尸条目」）。
-  ④ index.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
+     app.html 引用（与 ④ 互为补集：既拦「摘绑定」也拦「僵尸条目」）。
+  ④ app.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
      onchange/…）调用的标识符均可解析到 window 绑定。
   ⑤ 零构建约束：app.js 无 import/export/require（原生 JS 零依赖，
      设计 3.5）；Frontend/ 保持 3 文件不拆子目录（设计 8.9：kline/、
-     panels/ 留待阶段 8）。
+     panels/ 留待阶段 8）。沿革：r7 曾新增第 4 文件 ao-poll-worker.js
+    （轮询 Worker），r8 应用户要求把 Worker 源码内嵌回 app.js（Blob
+     URL）并把入口页改名 app.html —— 文件面回到 3 文件。
   ⑥ JS 语法校验：node --check（node 不在位时 SKIP 降级，不判 FAIL）。
-  ⑧ 缓存击穿纪律：index.html 以 app.js?v=7+ 引用（版本号只增不减）。
+  ⑧ 缓存击穿纪律：app.html 以 app.js?v=7+ 引用（版本号只增不减）。
   ⑨ 合并层完整（A 方案 AppState 访问层，双方案取长合并项）：
      ChanApp.state 的 31 个 getter/setter 访问器 + 8 个方法别名在位，
      访问器变量与 [STATE] 区块声明交叉一致，且不新增 window.* 绑定。
@@ -40,7 +42,7 @@ import sys
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
 APP_JS = os.path.join(REPO_ROOT, "Frontend", "app.js")
-INDEX_HTML = os.path.join(REPO_ROOT, "Frontend", "index.html")
+ENTRY_HTML = os.path.join(REPO_ROOT, "Frontend", "app.html")
 FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -86,14 +88,14 @@ WINDOW_BASELINE = {
 # 允许的登记性新增（组件注册表）
 WINDOW_ALLOWED_NEW = {"ChanApp"}
 # 允许的登记性新增（HTML 内联事件桥）
-# index.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
+# app.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
 # 闭包内 —— 不挂 window 时点击即抛 ReferenceError。两起真实故障（自动下单开关
 # 「视觉上开了又自动关、后端零日志」/ 账本按钮「点了毫无反应」）都是这么来的，
 # app.js 对应位置留着「P65 复刻了上面开关的坑」的注释留档。故这三项不是可选
-# 绑定，而是 index.html 的内联事件所必需：
-#   closeStatsPanel       <- index.html  onclick="closeStatsPanel()"
-#   onAutoOrderToggle     <- index.html  onchange="onAutoOrderToggle(this)"
-#   toggleAutoOrderLedger <- index.html  onclick="toggleAutoOrderLedger(event)"
+# 绑定，而是 app.html 的内联事件所必需：
+#   closeStatsPanel       <- app.html  onclick="closeStatsPanel()"
+#   onAutoOrderToggle     <- app.html  onchange="onAutoOrderToggle(this)"
+#   toggleAutoOrderLedger <- app.html  onclick="toggleAutoOrderLedger(event)"
 # 与 ④ 互为补集：④ 保证「html 引用 => 必有 window 绑定」，test_inline_bridges
 # 保证「登记 => 必被 html 引用」，合起来既拦摘绑定、也拦僵尸条目。
 WINDOW_INLINE_BRIDGES = {
@@ -210,7 +212,7 @@ def test_window_surface(failures):
 
 
 def test_html_handlers(failures):
-    html = read(INDEX_HTML)
+    html = read(ENTRY_HTML)
     src = read(APP_JS)
     wins = set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=", src))
     handlers = set()
@@ -222,22 +224,22 @@ def test_html_handlers(failures):
     miss = sorted(h for h in handlers if h not in wins)
     if miss:
         failures.append("④ HTML 事件引用: " + ",".join(miss))
-        print(f"[FAIL] ④ index.html 事件引用完整: {len(miss)} 个处理器无 window 绑定")
+        print(f"[FAIL] ④ app.html 事件引用完整: {len(miss)} 个处理器无 window 绑定")
         for h in miss:
             print("      -", h)
     else:
-        print(f"[PASS] ④ index.html 事件引用完整: {len(handlers)} 个内联事件标识符"
+        print(f"[PASS] ④ app.html 事件引用完整: {len(handlers)} 个内联事件标识符"
               f"全部解析到 window 绑定")
 
 
 def test_inline_bridges(failures):
-    """③b HTML 内联事件桥：登记的桥接必须真实在位，且在 index.html 里被引用。
+    """③b HTML 内联事件桥：登记的桥接必须真实在位，且在 app.html 里被引用。
 
     与 ④ 方向相反、互为补集 —— ④ 只保证「html 引用的都有绑定」；若只做 ④，
     谁把绑定摘掉、同时把 html 里的调用也删了，基线表就会留下永不失效的僵尸
     条目（基线数字虚高、真实 API 面已缩水）。
     """
-    html = read(INDEX_HTML)
+    html = read(ENTRY_HTML)
     src = read(APP_JS)
     wins = set(re.findall(r"window\.([A-Za-z_$][\w$]*)\s*=", src))
     referenced = set()
@@ -252,7 +254,7 @@ def test_inline_bridges(failures):
         print(f"[FAIL] ③b 内联事件桥: 缺绑定 {len(no_bind)} / 未被引用 {len(no_ref)}")
     else:
         print(f"[PASS] ③b 内联事件桥: {len(WINDOW_INLINE_BRIDGES)} 个 HTML 内联事件"
-              f"处理器既在 window 绑定、又被 index.html 引用")
+              f"处理器既在 window 绑定、又被 app.html 引用")
 
 
 def test_zero_build(failures):
@@ -261,14 +263,16 @@ def test_zero_build(failures):
     if re.search(r"^\s*(import\s|export\s|require\()", src, re.M):
         bad.append("出现 import/export/require（违反零构建约束）")
     files = sorted(os.listdir(FRONTEND_DIR))
-    if files != ["app.css", "app.js", "index.html"]:
-        bad.append(f"Frontend/ 文件面漂移: {files}（应恰为 3 文件，子目录拆分留待阶段 8）")
+    if files != ["app.css", "app.html", "app.js"]:
+        bad.append(f"Frontend/ 文件面漂移: {files}"
+                   f"（应恰为 3 文件，子目录拆分留待阶段 8）")
     if bad:
         failures.append("⑤ 零构建约束: " + "; ".join(bad))
         print(f"[FAIL] ⑤ 零构建/单文件约束: {'; '.join(bad)}")
     else:
         print("[PASS] ⑤ 零构建/单文件约束: 无 import/export/require；"
-              "Frontend/ 保持 3 文件（原生 JS 零依赖，设计 3.5/8.9）")
+              "Frontend/ 保持 3 文件（原生 JS 零依赖，设计 3.5/8.9；"
+              "r7 的轮询 Worker 已于 r8 内嵌回 app.js，入口页改名 app.html）")
 
 
 def test_node_syntax(failures):
@@ -287,10 +291,10 @@ def test_node_syntax(failures):
 
 
 def test_cache_bust(failures):
-    html = read(INDEX_HTML)
+    html = read(ENTRY_HTML)
     m = re.search(r"app\.js\?v=(\d+)", html)
     if not m:
-        failures.append("⑧ 缓存击穿: index.html 未以 ?v=N 引用 app.js")
+        failures.append("⑧ 缓存击穿: app.html 未以 ?v=N 引用 app.js")
         print("[FAIL] ⑧ 缓存击穿纪律: 未找到 app.js?v=N 引用")
     elif int(m.group(1)) < 7:
         failures.append(f"⑧ 缓存击穿: 版本号 v={m.group(1)} < 7（阶段 6 交付应为 v7+）")

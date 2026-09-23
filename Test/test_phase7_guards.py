@@ -34,7 +34,7 @@
      保留旧回调形状 onData(单票)/onDone(err, interrupted)（渲染零漂移）；
      四分支合一：runScan 单一漏斗单点调用 _asyncScanAll（四种模式全走异步径），
      旧 /api/scan_one 并发循环清零；
-     index.html 缓存版本 v>=8（阶段 7 前端改动的缓存击穿）。
+     app.html 缓存版本 v>=8（阶段 7 前端改动的缓存击穿）。
   ⑦ 功能冒烟（存储层）：ScanStore CRUD + since 增量语义 + 同 seq 幂等 +
      completed 派生收敛 + 错误行汇总 + 历史清理；空清单报错；不存在任务
      报错；SCAN_TASK_DB 环境变量隔离生效。
@@ -46,7 +46,7 @@
   · worker SIGINT 屏蔽（③：Windows Ctrl+C 进程组传播实测问题）；
   · scan_pool_workers <= 0 按 CPU 自适应（③：仍钳制 [1,16]）；
   · collector 任务级 error 终态（⑤：worker 崩溃≠静默 done）；
-  · index.html app.js?v=8 缓存击穿（⑥）；
+  · app.html app.js?v=8 缓存击穿（⑥）；
   · Test/smoke_phase7.py 独立冒烟工具（③：工具面存在且 spawn 安全）。
 
 运行：python Test/test_phase7_guards.py          # 校验（run_all 组件 14）
@@ -387,13 +387,13 @@ def test_frontend_polling(failures):
     # 中止立即传播：点击中止必须同步调用 /api/stocks/scan/{task_id}/cancel
     if '"/cancel", { method: "POST" }' not in src:
         bad.append("缺少 scan/tasks/{id}/cancel 调用（中止无法传播到 worker）")
-    # 缓存击穿（合并自对方交付）：index.html 版本号必须 ≥8
-    html = read("Frontend/index.html")
+    # 缓存击穿（合并自对方交付）：app.html 版本号必须 ≥8
+    html = read("Frontend/app.html")
     m = re.search(r"app\.js\?v=(\d+)", html)
     if not m:
-        bad.append("index.html 缺少 app.js?v=N 引用")
+        bad.append("app.html 缺少 app.js?v=N 引用")
     elif int(m.group(1)) < 8:
-        bad.append(f"index.html app.js?v={m.group(1)}（阶段 7 前端已改，版本号应 ≥8）")
+        bad.append(f"app.html app.js?v={m.group(1)}（阶段 7 前端已改，版本号应 ≥8）")
     if bad:
         failures.extend(f"前端轮询: {b}" for b in bad)
         for b in bad:
@@ -401,7 +401,7 @@ def test_frontend_polling(failures):
     else:
         print(f"[PASS] ⑥ 前端轮询契约: 提交 + 增量轮询（seq+1 推进）+ 三态终判 + "
               f"3 次熔断 + onData/onDone 回调；{n_calls} 处调用点全异步，旧 scan_one "
-              f"并发循环清零；index.html 缓存版本 v={m.group(1)}（击穿在位）")
+              f"并发循环清零；app.html 缓存版本 v={m.group(1)}（击穿在位）")
 
 
 # ═══════════════════════════════════════════════════════════════════════

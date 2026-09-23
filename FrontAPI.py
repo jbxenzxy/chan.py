@@ -49,7 +49,7 @@ if not hasattr(typing, "Self"):
 from fastapi import FastAPI, Query, HTTPException, Body, APIRouter, Request, Path
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.concurrency import run_in_threadpool
 
 from App.AppConfig import app_config
@@ -844,7 +844,17 @@ if not os.path.isdir(_frontend_dir):
     raise RuntimeError(
         f"[错误] Frontend/ 目录不存在 ({_frontend_dir})：前端静态资源缺失，"
         f"请检查部署（原回退分支引用不存在的 AppEngine.OUTPUT_DIR）")
-app.mount("/", StaticFiles(directory=_frontend_dir, html=True), name="frontend")
+
+# 入口页：app.html（r8 由 index.html 改名，与 app.css / app.js 命名统一）。
+# 原挂载用 StaticFiles(html=True)，其「目录 → index.html」约定是文件名必须
+# 叫 index.html 的唯一原因 —— 改名后入口改由显式根路由返回，html=True 随之
+# 去掉。显式路由必须注册在 mount 之前（mount("/") 是 catch-all，注册在后
+# 会被它吞掉、永远匹配不到）。
+@app.get("/", include_in_schema=False)
+async def _frontend_entry():
+    return FileResponse(os.path.join(_frontend_dir, "app.html"))
+
+app.mount("/", StaticFiles(directory=_frontend_dir), name="frontend")
 
 
 # ═══════════════════════════════════════════════════════════════════════

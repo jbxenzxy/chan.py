@@ -13,7 +13,7 @@ P62 运行态保护价：后端投影 + 前端常驻显示
 本测试钉死两件事：
   [A] 后端投影：`auto_order_status()["run"]` 除 stop 外还给出它的**解释**
       （phase / r / tp），且三项与 `_run_plan` 实时一致、跨重启一致；
-  [B] 前端出口：`Frontend/index.html` 有常驻元素、`app.js` 消费上述三项、
+  [B] 前端出口：`Frontend/app.html` 有常驻元素、`app.js` 消费上述三项、
       且"无运行段时不显示"（资源版本号由 Test/test_aol_ledger_display.py ⑤ 组独占守卫）。
 
 覆盖清单：
@@ -346,7 +346,7 @@ with tmp_dir() as tmp:
 # [8] 前端静态层
 # ════════════════════════════════════════════════════════════════
 print("\n[8] 前端：常驻元素 + 消费三项 + 无运行段隐藏")
-_html_p = os.path.join(_REPO, "Frontend", "index.html")
+_html_p = os.path.join(_REPO, "Frontend", "app.html")
 _js_p = os.path.join(_REPO, "Frontend", "app.js")
 _css_p = os.path.join(_REPO, "Frontend", "app.css")
 if not (os.path.exists(_html_p) and os.path.exists(_js_p)):
@@ -355,7 +355,7 @@ else:
     HTML = io.open(_html_p, encoding="utf-8").read()
     JS = io.open(_js_p, encoding="utf-8").read()
     CSS = io.open(_css_p, encoding="utf-8").read()
-    check("[8a] index.html 有常驻保护价元素（默认隐藏、且是完整标签）",
+    check("[8a] app.html 有常驻保护价元素（默认隐藏、且是完整标签）",
           '<span class="auto-order-px" id="auto-order-px" '
           'style="display:none"></span>' in HTML, True)
     # 资源版本号不在这里断言 —— 它由 Test/test_aol_ledger_display.py 的 ⑤ 组
