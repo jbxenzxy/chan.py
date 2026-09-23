@@ -131,7 +131,7 @@ def main():
     _res_if = resolved_exit_params(c_if)
     check("IF resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_if, False)
-    check("IF resolved win_loss_ratio=2.0", _res_if["win_loss_ratio"], 2.0)
+    check("IF resolved win_loss_ratio 跟随档案", _res_if["win_loss_ratio"], 2.0)
     check("IF 播种后 multiplier=300.0（与模型默认同值，此处不作强断言）",
           c_if.product_profile.multiplier, 300.0)
     check("IF 生效的品种档案 product=IF", c_if.product_profile.product, "IF")
@@ -142,18 +142,18 @@ def main():
     _res_ic = resolved_exit_params(c_ic)
     check("IC resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_ic, False)
-    check("IC resolved win_loss_ratio=2.0（2026-09-23 起与其余品种同口径；"
+    check("IC resolved win_loss_ratio（与其余品种同口径；"
           "播种见证交给 multiplier：IC=200 ≠ 模型默认 300）",
           _res_ic["win_loss_ratio"], 2.0)
     check("IC 播种后 multiplier=200.0（≠ 模型默认 300 → 播种生效）",
           c_ic.product_profile.multiplier, 200.0)
 
-    # ⚠️ 口径一致性（2026-09-23 用户拍板）：8 品种 win_loss_ratio **全为 2.0**，
-    #   此前 IC/IM 单标 3.0 的分档已取消。这条比"逐品种各钉一次"多拦两类错：
-    #   ① 有人把某个品种改回 3.0（含新增品种时漏配成 2 以外）；
-    #   ② 新增品种时 win_loss_ratio 写错档。判据是**集合**而非"逐项相等"，
-    #   故意不绑定品种个数 —— 增减品种不必改这条（改口径必须改）。
-    check("8 品种 win_loss_ratio 集合 == {2.0}（统一口径，无品种分档）",
+    # ⚠️ 口径一致性（2026-09-23 用户拍板）：8 品种 win_loss_ratio **同值**（无品种分档）。
+    #   这条比"逐品种各钉一次"多拦两类错：
+    #   ① 有人把某个品种改成与其它品种不同的值（含新增品种时漏配）；
+    #   ② 判据是**集合**而非"逐项相等"，故意不绑定品种个数 —— 增减品种不必改这条；
+    #      **改档位则必须同步改下面那条期望值**（数字只在期望值里出现一次）。
+    check("8 品种 win_loss_ratio 集合（统一口径，无品种分档）",
           sorted({p.win_loss_ratio for p in PRODUCT_PROFILES.values()}), [2.0])
 
     # 未知品种：档案缺失（product_profile=None）。此后 exit_params 上没有

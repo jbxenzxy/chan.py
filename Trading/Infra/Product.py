@@ -37,8 +37,8 @@ App/AppTrader 只 import 本模块纯函数（白名单闸门），不得反向�
 Period 承载周期的时间语义（freq / bar_secs）；参数里另有一类差异
 **不随周期变化、而随合约品种变化**：
 
-  · `win_loss_ratio`（止盈盈亏比 / L3 启动阈值）：**8 个品种统一 1:2**（L3 在 2R 启动）；
-    字段仍按 per-product 存放，2026-09-23 起 IC/IM 的 1:3 分档取消、与其余品种同口径。
+  · `win_loss_ratio`（止盈盈亏比 / L3 启动阈值）：**倍数只写在各品种条目上**，本文档
+    与代码注释一律不再复述具体取值（改档案值不必同步改注释）；当前无品种分档。
   · 保本/锁利层的"缓冲"已改为**全局比例** `breakeven_buffer_r`（在 Trading/Config.py
     的 ExitConfig，默认 0.5R，跨品种跨周期统一），不再随品种变 —— 故本档案不再含该字段。
   · `price_tick` / `multiplier`（最小变动价位 / 合约乘数）：IF/IH = 0.2 点 / 300 元/点，
@@ -439,7 +439,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "IF": Product(
         product="IF", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=300.0,
-        note="中金所 CFFEX IF：盈亏比 1:2（L3 在 2R 启动）；"
+        note="中金所 CFFEX IF：盈亏比见 win_loss_ratio（L3 启动阈值）；"
              "费率 xlsx：交易万0.23 / 平今万2.3（另有交割万0.5，本系统不参与交割不消费）；"
              "今仓离场 = R-OPEN（反向锁仓）",
         **_fee_kw("IF"),
@@ -448,31 +448,31 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "IH": Product(
         product="IH", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=300.0,
-        note="中金所 CFFEX IH：盈亏比 1:2（L3 在 2R 启动）；费率同 IF（交易万0.23/平今万2.3）",
+        note="中金所 CFFEX IH：盈亏比见 win_loss_ratio（L3 启动阈值）；费率同 IF（交易万0.23/平今万2.3）",
         **_fee_kw("IH"),
         **_exec_kw("IH"),
     ),
     "IC": Product(
         product="IC", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IC：盈亏比 1:2（L3 在 2R 启动）、乘数 200 元/点；费率同 IF",
+        note="中金所 CFFEX IC：盈亏比见 win_loss_ratio（L3 启动阈值）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IC"),
         **_exec_kw("IC"),
     ),
     "IM": Product(
         product="IM", win_loss_ratio=2.0,
         quote_unit="点", price_tick=0.2, multiplier=200.0,
-        note="中金所 CFFEX IM：盈亏比 1:2（L3 在 2R 启动）、乘数 200 元/点；费率同 IF",
+        note="中金所 CFFEX IM：盈亏比见 win_loss_ratio（L3 启动阈值）、乘数 200 元/点；费率同 IF",
         **_fee_kw("IM"),
         **_exec_kw("IM"),
     ),
     # ── 上期所金属（Tier 1 商品：流动性 + 趋势 + 形态干净，缠论画段体验好）──
-    # 全部 8 品种盈亏比统一 1:2（L3 在 2R 启动）—— 2026-09-23 起取消 IC/IM 的 1:3 分档。
+    # 盈亏比（L3 启动阈值）逐品种写在各自条目上，本表不再复述具体倍数。
     #   R 下限已删除（R = max(A, 2×ATR) 纯自适应），不再有"点数地板"。
     "AU": Product(
         product="AU", win_loss_ratio=2.0,
         quote_unit="元/克", price_tick=0.02, multiplier=1000.0,
-        note="上期所 SHFE 沪金：盈亏比 1:2（L3 在 2R 启动）、趋势强可上探 1:3；"
+        note="上期所 SHFE 沪金：盈亏比见 win_loss_ratio（L3 启动阈值）；"
              "乘数 1000(元/克)、tick 0.02；费率 xlsx：开仓 10 元/手 / 平今免收"
              "（覆盖档：6、12 合约 & 2607-2610 = 20 元/手，字段位已留未消费）；"
              "今仓离场 = CLOSETODAY（直接平今，两态机）",
@@ -482,7 +482,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "AG": Product(
         product="AG", win_loss_ratio=2.0,
         quote_unit="元/千克", price_tick=1.0, multiplier=15.0,
-        note="上期所 SHFE 沪银：盈亏比 1:2（L3 在 2R 启动）；"
+        note="上期所 SHFE 沪银：盈亏比见 win_loss_ratio（L3 启动阈值）；"
              "乘数 15(元/kg)、tick 1；费率 xlsx：交易万0.1（xlsx 基准档，2026-09-15 用户确认），"
              "无独立平今行 → 平今=开仓（closetoday_fee=None）"
              "（覆盖档：6、12 合约 & 2607-2610 = 万0.5，字段位已留未消费）；"
@@ -493,7 +493,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "CU": Product(
         product="CU", win_loss_ratio=2.0,
         quote_unit="元/吨", price_tick=10.0, multiplier=5.0,
-        note="上期所 SHFE 沪铜：盈亏比 1:2（L3 在 2R 启动）；"
+        note="上期所 SHFE 沪铜：盈亏比见 win_loss_ratio（L3 启动阈值）；"
              "乘数 5(元/吨)、tick 10；费率 xlsx：开/平昨万0.5 / 平今万1.0；"
              "今仓离场 = CLOSETODAY（用户按费率算定：平今万1.0 < 锁仓路径 4 笔共万2.0）",
         **_fee_kw("CU"),
@@ -506,7 +506,7 @@ PRODUCT_PROFILES: Dict[str, Product] = {
     "TA": Product(
         product="TA", win_loss_ratio=2.0,
         quote_unit="元/吨", price_tick=2.0, multiplier=5.0,
-        note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比 1:2（L3 在 2R 启动）；"
+        note="郑商所 CZCE PTA(精对苯二甲酸)：盈亏比见 win_loss_ratio（L3 启动阈值）；"
              "乘数 5(元/吨)、tick 2；费率 xlsx：开仓 3 元/手 / 平今免收；"
              "报单 FAK + 一笔 1 手；今仓离场 = R-OPEN（反向锁仓）；"
              "偶发装置/政策消息急拉急跌",

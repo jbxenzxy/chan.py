@@ -93,7 +93,7 @@ def main():
     c_au = seeded("KQ.m@SHFE.AU")
     _res_au = resolved_exit_params(c_au)
     check("AU resolved 已无 min_r_points（2026-09-14 删除）", "min_r_points" in _res_au, False)
-    check("AU resolved win_loss_ratio=2.0", _res_au["win_loss_ratio"], 2.0)
+    check("AU resolved win_loss_ratio 跟随档案", _res_au["win_loss_ratio"], 2.0)
     check("AU multiplier=1000.0", c_au.product_profile.multiplier, 1000.0)
     check("AU resolved 已无 breakeven_buffer_ticks（改为全局比例）",
           "breakeven_buffer_ticks" in _res_au, False)

@@ -14,7 +14,7 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
   [B] 对账盲区：账本空侧但柜台有量 → severe 告警不接管（2026-09-17 拍板口径
       的「告警」此前对该方向不可达）；账本完全为空时也照常对账。
   [C] 关键动作轻提示（需求 ⑷）：开仓（含止损 1R 点位）/ 平仓（说明止盈还是
-      止损）/ 盈利达 1R 进保本 / 盈利达 2R 进移动止盈 / 账单同步 —— 引擎
+      止损）/ 盈利达 1R 进保本 / 盈利达盈亏比阈值进移动止盈 / 账单同步 —— 引擎
       notify() 落 state.db kv `toasts`，AppTrader.status 投影，前端 5 秒 toast。
 
 覆盖清单：
@@ -23,7 +23,7 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
       otg_latency 时延测量（交易所侧时间戳 vs 本地处理时刻）
   [2] Engine.notify：落 kv `toasts`、有界（尾部 30 条）、写 toast 事件
   [3] 开仓成交 toast：含方向/手数/成交价/止损(1R) 点位
-  [4] 盈利达 1R → 保本 toast；达 2R → 移动止盈 toast（阶段跃迁只弹一次）
+  [4] 盈利达 1R → 保本 toast；达盈亏比阈值 → 移动止盈 toast（阶段跃迁只弹一次）
   [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 初始止损 / 锁仓离场
   [6] 对账盲区：账本空 + 柜台有量 → position_mismatch severe（restore 与
       on_bar 两路）；无时间宽限（P61 撤销：宁误报不漏报）
@@ -308,7 +308,7 @@ with tmp_dir() as tmp:
           "距入场 1R = {:g} 点".format(r_plan) in msg, True)
 
 # ════════════════════════════════════════════════════════════════
-# [4] 盈利达 1R → 保本 toast；达 2R → 移动止盈 toast（需求 ⑷(3)(4)）
+# [4] 盈利达 1R → 保本 toast；达盈亏比阈值 → 移动止盈 toast（需求 ⑷(3)(4)）
 # ════════════════════════════════════════════════════════════════
 print("\n[4] 保本 / 移动止盈阶段 toast（阶段跃迁各弹一次）")
 with tmp_dir() as tmp:
@@ -320,14 +320,14 @@ with tmp_dir() as tmp:
     be_trig = engine.exit_policy.breakeven_trigger_r
     entry = engine._run_anchor
     r = engine._run_plan.params["R"]
-    # 冲到 ≥ 1R（未到 2R）
+    # 冲到 ≥ 1R（未到进跟踪层的阈值）
     h1 = entry + be_trig * r + 10.0
     engine.on_bar(make_bar(2000, h=h1, l=4548.0, c=h1 - 5.0))
     msgs = [t["msg"] for t in toasts_of(store)]
     check("[4a] 保本 toast 出现", any("保本" in m for m in msgs), True)
     check("[4b] 移动止盈 toast 尚未出现",
           any("移动止盈" in m and "平仓" not in m for m in msgs), False)
-    # 冲到 ≥ 2R（win_loss_ratio）
+    # 冲到 ≥ win_loss_ratio×R（进跟踪层阈值）
     h2 = entry + r_mult * r + 10.0
     engine.on_bar(make_bar(3000, h=h2, l=h1 - 5.0, c=h2 - 5.0))
     msgs = [t["msg"] for t in toasts_of(store)]

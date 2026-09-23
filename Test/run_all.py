@@ -293,6 +293,13 @@ COMPONENTS = [
     ("p62_ao_protection_price",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p62_ao_protection_price.py")]),
+    # 盈亏比「文档不复述取值」护栏（2026-09-23，p63）：
+    #   改某品种盈亏比时不该被迫同步改一堆注释 / README / 测试描述 —— 具体倍数只许写在
+    #   档案条目上。判据 = 注释与字符串常量里「语境词（win_loss_ratio / 盈亏比 / L3）
+    #   + 档位形态」同行同现；判据是**形态**而非绑死数值 ⇒ 改档位不必改该测试。
+    ("p63_wlr_doc_guard",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p63_wlr_doc_guard.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。

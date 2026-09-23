@@ -59,11 +59,11 @@ L1-L3 一套，止盈只有 L3 跟踪一种。
 
 止盈一律交给 L3 跟踪
     plan() 生成**零个止盈单**；浮盈完全由 L3 的跟踪止损兑现。L3 启动阈值
-    （= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`（8 品种统一 2R），
+    （= win_loss_ratio×R）直接取品种档案的 `win_loss_ratio`（倍数见档案条目），
     故“盈利到 win_loss_ratio×R 时进 L3 跟踪锁利”的倍数全品种一致、点数随 R 变。
     名义止盈价（= win_loss_ratio×R）仍写入 params["_tp_nominal"] 供事后对照（只落盘）。
     ⚠️ 两个「×R」字段的分工（2026-09-14 / 2026-09-22 两次改口径，极易记反）：
-      · **进 L3 的触发阈值** = 品种档案的 `win_loss_ratio`（8 品种统一 2R）。
+      · **进 L3 的触发阈值** = 品种档案的 `win_loss_ratio`（倍数见档案条目）。
         判据：浮盈 **>** win_loss_ratio×R（浮盈按根内有利极值算，见 check() ①）。
       · **L3 的跟踪缓冲距离** = `trailing_trigger_r`（`Config.py:310`，默认 0.5）× R，
         只决定「保护价挂在最好极值下方多远」（check() 里的 `trail_dist`），
@@ -72,7 +72,7 @@ L1-L3 一套，止盈只有 L3 跟踪一种。
     沿革（为什么名字与语义对不上）：2026-09-14 前进 L3 用的是**独立的全局**
     `trailing_trigger_r`，与 win_loss_ratio 完全解耦 —— 结果是品种档案里的
     win_loss_ratio 成了无人读取的死配置（各品种都按那个全局值进 L3）。2026-09-14
-    起改走品种级 win_loss_ratio，档案值才生效；2026-09-23 起 8 品种统一 2R。
+    起改走品种级 win_loss_ratio，档案值才生效（倍数只写在档案条目上）。
     2026-09-22 又把**跟踪距离**的单位从 ATR 换成 R：删掉 `trailing_atr_multiple`
     （1.0×ATR），把这个**名字**复用为新距离的载体（0.5×R）。
     ⇒ `trailing_trigger_r` **没有被删**（`Config.py:310` 仍在、`check()` 仍在读），
@@ -386,7 +386,7 @@ class LayeredExitPolicy:
             nominal_tp = state.round_price(raw_tp, "up")
 
         # 不落任何止盈单：止盈交给 L3 的跟踪兑现。L3 启动阈值 = win_loss_ratio×R
-        #   （品种档案，8 品种统一 2R），各品种同在 2R 达标、点数距离随各自 R 变；
+        #   （品种档案），各品种同样按该倍数达标、点数距离随各自 R 变；
         #   名义止盈价（= win_loss_ratio×R）仍写入 params，供事后对照分析（只落盘）。
 
         # P2 防护：止损必须严格在风控锚的"不利侧"且至少 1 tick 间距，

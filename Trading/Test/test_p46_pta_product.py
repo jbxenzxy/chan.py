@@ -145,7 +145,7 @@ def main():
         check("TA product=TA", p.product, "TA")
         check("TA multiplier=5.0（5 吨/手）", p.multiplier, 5.0)
         check("TA price_tick=2.0", p.price_tick, 2.0)
-        check("TA win_loss_ratio=2.0", p.win_loss_ratio, 2.0)
+        check("TA win_loss_ratio 跟随档案", p.win_loss_ratio, 2.0)
         check("TA 档案已无 min_r_points（2026-09-14 删除）",
               hasattr(p, "min_r_points"), False)
         check("TA 档案已无 breakeven_buffer_ticks（改为全局比例）",
@@ -156,7 +156,7 @@ def main():
     _res_ta = resolved_exit_params(c_ta)
     check("TA resolved 已无 min_r_points（2026-09-14 删除）",
           "min_r_points" in _res_ta, False)
-    check("TA resolved win_loss_ratio=2.0", _res_ta["win_loss_ratio"], 2.0)
+    check("TA resolved win_loss_ratio 跟随档案", _res_ta["win_loss_ratio"], 2.0)
     check("TA resolved breakeven_buffer_r=0.5（全局，不随品种）",
           _res_ta["breakeven_buffer_r"], 0.5)
     check("TA multiplier=5.0（档案真值，P-B 无播种动作）",

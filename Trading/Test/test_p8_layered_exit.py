@@ -258,7 +258,7 @@ def main():
     check("缓冲默认值（未显式传）= 0.5R → 止损 = 入场价 + 0.5×10 = 105",
           chk6c.plan.stop_price if chk6c else None, 105.0)
 
-    print("\n[6] L3 跟踪：浮盈 > 2R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
+    print("\n[6] L3 跟踪：浮盈 > win_loss_ratio×R 启动跟踪（trail_dist = trailing_trigger_r × R = 0.5×10 = 5）")
     pol7 = LayeredExitPolicy({"use_atr": False,
                               "breakeven_trigger_r": 1.0,
                               "breakeven_buffer_r": 0.0, "win_loss_ratio": 2.0})
@@ -279,7 +279,7 @@ def main():
 
     print("\n[8] T4: 裸构造默认值 = config.py 单一事实源")
     pol12 = LayeredExitPolicy()
-    check("win_loss_ratio 默认 = config 2.0", pol12.win_loss_ratio, 2.0)
+    check("win_loss_ratio 默认取 config 字段值", pol12.win_loss_ratio, 2.0)
     check("atr_period 默认 = config 14", pol12.atr_period, 14)
     check("trailing_trigger_r 默认 = config 0.5", pol12.trailing_trigger_r, 0.5)
     # 评审补 · 用户要求：把"保本缓冲 = 0.5R"钉死，避免后续被顺手改掉。
