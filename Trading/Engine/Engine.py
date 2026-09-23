@@ -1784,8 +1784,16 @@ class TradingEngine(ReconcileMixin):
             self.notify(msg, code="run_breakeven")
         elif phase == "trailing":
             trigger = getattr(pol, "win_loss_ratio", 2.0)
-            self.notify("盈利达到 {}，进入移动止盈（跟踪止损启动）".format(
-                self._r_label(trigger, R)), code="run_trailing")
+            msg = "盈利达到 {}，进入移动止盈（跟踪止损启动）".format(
+                self._r_label(trigger, R))
+            # 与保本分支同款：带上本次抬价后的保护价（2026-09-23）。
+            #   跟踪层是**唯一会逐根抬价**的层，启动那一刻的价位既是后续比较的基线、
+            #   也是"回撤到哪才会离场"的答案 —— 缺了它，这条 toast 只能告诉用户
+            #   "开始了"，说不出"开始在哪"。
+            stop = self._run_plan.stop_price if self._run_plan else None
+            if stop:
+                msg += "：止损已移至 " + self._fmt_px(stop)
+            self.notify(msg, code="run_trailing")
 
     def _run_start(self, anchor_price: float, bar: Optional[Bar],
                    sig: Optional[Signal],
@@ -2350,6 +2358,15 @@ class TradingEngine(ReconcileMixin):
             "account_state": self.account_state().value,
             "net_volume": self.positions.net_volume(),
             "positions_n": len(self.positions),
+            # stop 是**实时**保护价（`_run_plan` 在抬价那一根被整体换新，见
+            #   `_settle_positions`），下面三项是它的**解释** —— 光有 stop 说不出
+            #   "这条线现在锁在哪一层、离下一层还差多远"，而那正是持仓期间唯一需要看的东西：
+            #     · phase = 计划快照 `_phase`（"" 初始 / breakeven 保本 / trailing 跟踪），
+            #       SSOT 在 `Strategy/Exit.py` 的 `check()`，这里只做投影、不重判；
+            #     · r = 本段 1R 的点数（R 缺失时为 None —— 旧版 state.db 恢复的持仓）；
+            #     · tp = 名义止盈价（= 风控锚 ± win_loss_ratio×R），即**转入跟踪层的那个价**；
+            #       它不落单（见 `Exit.py:plan()`），但在"还没进跟踪"的长回撤里，
+            #       它是"还差多远才开始锁利"的唯一答案。
             "run": (None if (self._run_plan is None or self._run_side is None)
                     else {
                         "side": self._run_side.name,
@@ -2357,6 +2374,9 @@ class TradingEngine(ReconcileMixin):
                         "volume": self._run_volume,
                         "stop": self._run_plan.stop_price,
                         "name": self._run_plan.name,
+                        "phase": str(self._run_plan.params.get("_phase") or ""),
+                        "r": self._run_plan.params.get("R"),
+                        "tp": self._run_plan.params.get("_tp_nominal"),
                     }),
             "positions": [p.to_dict() for p in self.positions.positions],
             # D11：未确认告警（前端按 code 去重 + 5 分钟冷却后弹窗，确认后回 ack）

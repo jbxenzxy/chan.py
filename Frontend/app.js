@@ -8293,6 +8293,11 @@
                 handleAutoOrderAlerts(data);
                 handleAutoOrderToasts(data);
                 renderAutoOrderLedger(data);   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
+                // 运行态保护价徽标（2026-09-23）：与账本、告警并列的第三个出口。
+                //   为什么不塞进上面 wrap.title：[保护价是持仓期间**最需要盯着**的数，
+                //   而 tooltip 要悬停才看得见 —— 2026-09-23 实盘就是这样漏掉的：
+                //   多仓浮盈 2.6R 回撤到 0.77R，全程看不到保护价在哪，只能干看着。
+                renderAutoOrderPrice(aoRun);
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -8409,6 +8414,50 @@
         function fmtPx(v) {
             if (typeof v !== 'number' || !isFinite(v)) return '-';
             return String(Math.round(v * 1000) / 1000);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // [COMPONENT] 运行态保护价徽标（2026-09-23）
+        //   常驻显示「本段当前生效的保护价」，悬停给出它的完整解释。
+        //   数据源 = /api/trader/auto-order/status → auto_order.run（引擎实时投影）：
+        //     run.stop 随保本 / 跟踪两层逐根抬价而变，**不是**开仓时的一份快照
+        //     （后端 = `_run_plan.stop_price`，抬价那一根整体换新计划）。
+        //   三项解释字段（与后端 run 里同名）：
+        //     phase = "" 初始止损 / "breakeven" 保本层 / "trailing" 跟踪层；
+        //     r     = 本段 1R 的点数（缺 = 旧版 state.db 恢复的持仓，不显示）；
+        //     tp    = 名义止盈价 = **转入跟踪层的那个价**（浮盈到它才开始逐根抬价）。
+        //   无运行段 / 保护价缺失（0）→ 整块隐藏：不留 "--" 占位，
+        //     否则会被读成「保护价就是 --」，比不显示更糟。
+        // ══════════════════════════════════════════════════════════════
+        function renderAutoOrderPrice(aoRun) {
+            const el = document.getElementById('auto-order-px');
+            if (!el) return;
+            const stop = aoRun ? Number(aoRun.stop) : NaN;
+            if (!aoRun || !isFinite(stop) || stop === 0) {
+                el.style.display = 'none';
+                el.textContent = '';
+                el.removeAttribute('title');
+                return;
+            }
+            const long = (aoRun.side === 'LONG');
+            // 与后端 `_phase` 一一对应；空 = 尚未触发任何抬价条件（仍是初始止损）。
+            const phaseLabel = { breakeven: '保本层', trailing: '跟踪层' }[aoRun.phase]
+                || '初始止损';
+            el.textContent = '保护价 ' + fmtPx(stop);
+            el.className = 'auto-order-px ' + (long ? 'long' : 'short');
+            el.style.display = 'inline';
+            let tip = '本段' + (long ? '多' : '空') + '仓当前保护价（' + phaseLabel + '）：'
+                + fmtPx(stop) + '；风控锚 ' + fmtPx(Number(aoRun.anchor));
+            const R = Number(aoRun.r);
+            if (isFinite(R) && R > 0) tip += '；1R = ' + fmtPx(R) + ' 点';
+            const tp = Number(aoRun.tp);
+            if (isFinite(tp) && tp !== 0) {
+                tip += '；止盈启动价 ' + fmtPx(tp)
+                    + '（浮盈达到该价即转入跟踪层，此后逐根抬高保护价）';
+            }
+            tip += '。离场判据 = 收盘价跌破保护价（盘中触及不算）。'
+                + '口径与阈值参数见 Strategy/Exit.py。';
+            el.title = tip;
         }
 
         // ══════════════════════════════════════════════════════════════

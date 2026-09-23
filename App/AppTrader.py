@@ -1131,18 +1131,26 @@ class AppTrader:
                 state = "running"
             else:
                 state = "locked"
-            # run 快照（kv 形态）→ 前端 tooltip 只认 anchor/stop/name/side。
+            # run 快照（kv 形态）→ 前端常驻保护价徽标读 anchor/stop/side/phase/r/tp。
             # plan 里没有 stop 就整段置 None，避免前端显示半截的空锚。
+            # phase / r / tp 三项**解释**字段与引擎 `auto_order_status()` 的投影
+            #   同名同源（都从 plan 的 params 取 `_phase` / `R` / `_tp_nominal`）：
+            #   前端只认一种形状，两处各造一套键名的话，徽标会停在"初始止损"、
+            #   悬停里也永远没有"还差多远进跟踪层"——而看不到保护价正是这次要解决的。
             run_view = None
             if isinstance(raw_run, dict) and raw_run.get("side") in ("LONG", "SHORT"):
                 plan = raw_run.get("plan") or {}
                 if isinstance(plan, dict) and plan.get("stop_price") is not None:
+                    prm = plan.get("params") or {}
                     run_view = {
                         "side": raw_run.get("side"),
                         "anchor": raw_run.get("anchor"),
                         "volume": raw_run.get("volume"),
                         "stop": plan.get("stop_price"),
                         "name": plan.get("name") or "",
+                        "phase": str(prm.get("_phase") or ""),
+                        "r": prm.get("R"),
+                        "tp": prm.get("_tp_nominal"),
                     }
             return {
                 "enabled": enabled,

@@ -285,6 +285,14 @@ COMPONENTS = [
     ("p61_exit_close_only",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p61_exit_close_only.py")]),
+    # 运行态保护价：后端投影 + 前端常驻显示（2026-09-23，p62）：
+    #   `auto_order_status()["run"]` 除实时 stop 外给出它的解释（phase / r / tp，
+    #   取值来源钉死 `_run_plan.params`）；前端 index.html 有常驻元素、app.js 消费
+    #   三项、无运行段时隐藏；移动止盈 toast 与保本 toast 一样带出保护价。
+    #   起因：2026-09-23 实盘 2.6R 浮盈回撤到 0.77R，保护价全程只有悬停 tooltip 一个出口。
+    ("p62_ao_protection_price",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p62_ao_protection_price.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。

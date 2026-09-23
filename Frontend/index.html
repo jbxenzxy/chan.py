@@ -45,6 +45,11 @@
             <span class="auto-order-wrap" id="auto-order-wrap" title="交易引擎">
                 <span class="auto-order-dot off" id="auto-order-dot"></span>
                 <span class="auto-order-label" id="auto-order-label">自动下单</span>
+                <!-- 运行态保护价（2026-09-23）：本段当前生效的那条线 + 止盈启动价。
+                     数据源 = /api/trader/auto-order/status 的 auto_order.run（引擎实时投影）
+                     —— 保护价只存在于后端 `_run_plan.stop_price`，此前唯一的出口是
+                     auto-order-wrap 的悬停 tooltip，等于"看不到"。无运行段时不占位。 -->
+                <span class="auto-order-px" id="auto-order-px" style="display:none"></span>
                 <!-- 未标定品种提示（2026-09-14 第 6 批）：不在下单白名单时显示，
                      由 app.js 的 applyAutoOrderTradableUI() 填充文案并给外层加 .disabled -->
                 <span class="auto-order-hint" id="auto-order-hint"></span>
@@ -324,6 +329,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=29"></script>
+    <script src="app.js?v=30"></script>
 
 </body></html>
