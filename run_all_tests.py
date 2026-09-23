@@ -5,7 +5,7 @@ Test/ 与 Trading/Test/ 全量测试统一执行入口
 与 `Test/run_all.py` 的分工（两者不重复、互为补充）：
 
   · `Test/run_all.py`         —— **门禁入口**：只跑「已注册进 COMPONENTS 的
-                                55 个组件」，带冻结基线比对、按依赖排序、
+                                119 个组件」，带冻结基线比对、按依赖排序、
                                 单组件 300s 超时，是验收 / CI 用的那一条命令。
   · 本文件 `run_all_tests.py` —— **全量发现入口**：把 `Test/` 与
                                 `Trading/Test/` 下**所有** test_*/repro_*/smoke_*
@@ -30,6 +30,11 @@ monkeypatch 模块属性、注册 broker 装饰器。同一进程里连跑两个
 因此本入口默认在子进程里**清空这些凭据类环境变量**，让需要连接的用例走
 SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。真要走连接路径
 请显式加 `--keep-credentials`（需要网络与有效账号，慎用）。
+
+门禁 `Test/run_all.py` 清的是**同一份键名**，但只对登记在它
+`CLEAN_CREDENTIALS_COMPONENTS` 里的组件生效（当前为 p20 / p60 两条）—— 门禁要
+保留其余组件的原环境（有些用例读本机配置），所以不能像本入口这样全局清。
+两份常量的一致性由 `Test/test_gate_credential_isolation.py` 断言钉住。
 
 健壮性（为什么不用一句 subprocess.run）
 ---------------------------------------

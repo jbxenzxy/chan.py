@@ -6,7 +6,7 @@
 （monkeypatch 互不干扰），任一失败即整体退出码非 0（可直接接入
 CI / 迁移每阶段的验收门禁）。
 
-组件（按依赖顺序）：
+组件（按依赖顺序；1~33 为历史阶段组件，其后的分组见 COMPONENTS 内联注释）：
   1. fixtures 完整性   gen_fixtures.py --check      冻结输入未被手改
   2. 核心快照回归      snapshot_runner.py --all     笔/段/中枢/买卖点 7 维度（股票+期货）
   3. trigger_step 回放 test_trigger_step_replay.py  逐步回放收敛一致性
@@ -87,6 +87,10 @@ CI / 迁移每阶段的验收门禁）。
                                                      金额口径 = net_cash（含双边
                                                      手续费，毛盈净亏算亏损笔）
 每组件独立子进程执行，超时 300s 按失败终止（防死循环挂死）。
+
+登记在 `CLEAN_CREDENTIALS_COMPONENTS` 的组件（当前 p20 / p60）额外**清空凭据
+环境变量后执行** —— 它们只需构造 broker 注入 FakeApi，凭据齐全时却会真的去连
+CTP（慢 2.5~6 倍、带真实登录、偶发网络尖峰）。原因与边界见该常量处注释。
 
 用法（在仓库根目录）：
     python Test/run_all.py             # 全量回归（比对冻结基线）
@@ -281,21 +285,213 @@ COMPONENTS = [
     ("p61_exit_close_only",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p61_exit_close_only.py")]),
-    # ── 暂不注册（缺陷未修，注册即恒红）─────────────────────────────
-    #   repro_n2_bare_property.py  N2 裸 @property 未收口 → 当前退出 1
-    #   repro_n4_cleanup_race.py   N4 未修，且脚本 return 0（恒通过，
-    #                             无门禁能力，属纯诊断脚本）
-    # 二者修复后：n2 退出码自动转 0，需补注册；n4 须先改为「命中即非 0」
-    # 再注册，否则门禁形同虚设。
+    # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
+    #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
+    #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
+    ("apptrader_pid_alive_guards",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_apptrader_pid_alive_guards.py")]),
+    ("channel_timing",
+     [sys.executable, os.path.join("Trading", "Test", "test_channel_timing.py")]),
+    ("engine_config",
+     [sys.executable, os.path.join("Trading", "Test", "test_engine_config.py")]),
+    ("instrument_spec_ssot",
+     [sys.executable, os.path.join("Trading", "Test", "test_instrument_spec_ssot.py")]),
+    ("p5_fix",
+     [sys.executable, os.path.join("Trading", "Test", "test_p5_fix.py")]),
+    ("p6_fix",
+     [sys.executable, os.path.join("Trading", "Test", "test_p6_fix.py")]),
+    ("p7_pricing",
+     [sys.executable, os.path.join("Trading", "Test", "test_p7_pricing.py")]),
+    ("p8_layered_exit",
+     [sys.executable, os.path.join("Trading", "Test", "test_p8_layered_exit.py")]),
+    ("p9_czce_fak",
+     [sys.executable, os.path.join("Trading", "Test", "test_p9_czce_fak.py")]),
+    ("p10_state_machine",
+     [sys.executable, os.path.join("Trading", "Test", "test_p10_state_machine.py")]),
+    ("p12_position_book",
+     [sys.executable, os.path.join("Trading", "Test", "test_p12_position_book.py")]),
+    ("p14a_posbook_cfg",
+     [sys.executable, os.path.join("Trading", "Test", "test_p14a_posbook_cfg.py")]),
+    ("p15a_open_lots",
+     [sys.executable, os.path.join("Trading", "Test", "test_p15a_open_lots.py")]),
+    ("p15b_e33_fifo_close",
+     [sys.executable, os.path.join("Trading", "Test", "test_p15b_e33_fifo_close.py")]),
+    ("p16_phase_f",
+     [sys.executable, os.path.join("Trading", "Test", "test_p16_phase_f.py")]),
+    ("p17_phase_g",
+     [sys.executable, os.path.join("Trading", "Test", "test_p17_phase_g.py")]),
+    ("p20_phase_i1",
+     [sys.executable, os.path.join("Trading", "Test", "test_p20_phase_i1.py")]),
+    ("p21_stop_e2e",
+     [sys.executable, os.path.join("Trading", "Test", "test_p21_stop_e2e.py")]),
+    ("p23_fok",
+     [sys.executable, os.path.join("Trading", "Test", "test_p23_fok.py")]),
+    ("p24_close_offset",
+     [sys.executable, os.path.join("Trading", "Test", "test_p24_close_offset.py")]),
+    ("p26_terminology_guard",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p26_terminology_guard.py")]),
+    ("p27_account_state_ssot",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p27_account_state_ssot.py")]),
+    ("p28_entry_date_invariant",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p28_entry_date_invariant.py")]),
+    ("p29_id_uniqueness",
+     [sys.executable, os.path.join("Trading", "Test", "test_p29_id_uniqueness.py")]),
+    ("p30_shutdown_exit_mode",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p30_shutdown_exit_mode.py")]),
+    ("p32_net_exposure_ssot",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p32_net_exposure_ssot.py")]),
+    ("p33_state_machine_table",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p33_state_machine_table.py")]),
+    ("p34_scene_x_y_equiv",
+     [sys.executable, os.path.join("Trading", "Test", "test_p34_scene_x_y_equiv.py")]),
+    ("p35_today_never_close",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p35_today_never_close.py")]),
+    ("p36_state_db_no_legacy",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p36_state_db_no_legacy.py")]),
+    ("p37_fok_fullcancel_partial",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p37_fok_fullcancel_partial.py")]),
+    ("p38_close_hits_yesterday_only",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p38_close_hits_yesterday_only.py")]),
+    ("p39_alert_queue_ack",
+     [sys.executable, os.path.join("Trading", "Test", "test_p39_alert_queue_ack.py")]),
+    ("p41_intent_offset_two",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p41_intent_offset_two.py")]),
+    ("p43_audit_fixes",
+     [sys.executable, os.path.join("Trading", "Test", "test_p43_audit_fixes.py")]),
+    ("p44_no_signal_filter",
+     [sys.executable, os.path.join("Trading", "Test", "test_p44_no_signal_filter.py")]),
+    ("p44_reconcile_alert",
+     [sys.executable, os.path.join("Trading", "Test", "test_p44_reconcile_alert.py")]),
+    ("p45_metal_products",
+     [sys.executable, os.path.join("Trading", "Test", "test_p45_metal_products.py")]),
+    ("p46_pta_product",
+     [sys.executable, os.path.join("Trading", "Test", "test_p46_pta_product.py")]),
+    ("p47_product_case_whitelist",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p47_product_case_whitelist.py")]),
+    ("p49_spec_drift",
+     [sys.executable, os.path.join("Trading", "Test", "test_p49_spec_drift.py")]),
+    ("p50_review_fixes",
+     [sys.executable, os.path.join("Trading", "Test", "test_p50_review_fixes.py")]),
+    ("p51_closetoday_switch",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p51_closetoday_switch.py")]),
+    ("p52_run_accounting",
+     [sys.executable, os.path.join("Trading", "Test", "test_p52_run_accounting.py")]),
+    ("p53_delivery_guard",
+     [sys.executable, os.path.join("Trading", "Test", "test_p53_delivery_guard.py")]),
+    ("p54_trade_stats_merge",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p54_trade_stats_merge.py")]),
+    ("p55_product_ssot",
+     [sys.executable, os.path.join("Trading", "Test", "test_p55_product_ssot.py")]),
+    ("p56_exchange_today_exit",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p56_exchange_today_exit.py")]),
+    ("p57_trades_product_key",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p57_trades_product_key.py")]),
+    ("p58_handover_items",
+     [sys.executable, os.path.join("Trading", "Test", "test_p58_handover_items.py")]),
+    ("p59_bsp_type_filter",
+     [sys.executable, os.path.join("Trading", "Test", "test_p59_bsp_type_filter.py")]),
+    ("p60_trade_toasts_reconcile_gap",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p60_trade_toasts_reconcile_gap.py")]),
+    ("period_consistency",
+     [sys.executable, os.path.join("Trading", "Test", "test_period_consistency.py")]),
+    ("period_matrix",
+     [sys.executable, os.path.join("Trading", "Test", "test_period_matrix.py")]),
+    ("period_profile",
+     [sys.executable, os.path.join("Trading", "Test", "test_period_profile.py")]),
+    ("product_fee_table",
+     [sys.executable, os.path.join("Trading", "Test", "test_product_fee_table.py")]),
+    ("simnow_guards",
+     [sys.executable, os.path.join("Trading", "Test", "test_simnow_guards.py")]),
+    ("source_reconnect",
+     [sys.executable, os.path.join("Trading", "Test", "test_source_reconnect.py")]),
+    ("step2_config_ssot",
+     [sys.executable, os.path.join("Trading", "Test", "test_step2_config_ssot.py")]),
+    ("step2_smoke_freq",
+     [sys.executable, os.path.join("Trading", "Test", "test_step2_smoke_freq.py")]),
+    ("trade_stats_ratio_naming",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_trade_stats_ratio_naming.py")]),
+
+    # ── Test/ 下的补充用例 ──────────────────────────────────────────
+    ("repro_n2_bare_property",
+     [sys.executable, os.path.join("Test", "repro_n2_bare_property.py")]),
+    ("lock_v6_fixes",
+     [sys.executable, os.path.join("Test", "test_lock_v6_fixes.py")]),
+    # 守护本入口自身的「按组件清凭据」机制：两份 CREDENTIAL_ENV_KEYS 不许漂移、
+    # 登记表里的名字必须真实存在于 COMPONENTS、清凭据只作用于登记组件。
+    ("gate_credential_isolation",
+     [sys.executable, os.path.join("Test",
+                                   "test_gate_credential_isolation.py")]),
+    # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
+    #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
+    #                                          （恒通过、无拦截力，须先改成
+    #                                          「命中即非 0」再注册）
+    #   Test/smoke_phase7.py                   脚本自述「不注册进 run_all」：
+    #                                          端到端冒烟已内置于
+    #                                          test_phase7_guards ⑧，本工具供
+    #                                          交付后手工复核（ProcessPool 端到端）
+    #   Trading/Test/smoke_simnow_phase_g.py   需要真实 SimNow 连接，凭据隔离后必红
+    # 注：Test/repro_n2_bare_property.py 已于 N2 收口（方案 b）后退出码转 0，
+    #     与已注册的 repro_n3 同语义，本次一并注册。
 ]
 
 # 单组件超时（秒）：防阶段 3 重构引入死循环/长阻塞挂死整个 CI
 COMPONENT_TIMEOUT_S = 300
 
+# 会被 Trading/Broker/SimNow.py 当作登录凭据读走的环境变量。
+# 与发现式 run_all_tests.py 的同名常量是**同源的两份定义**（两入口互不 import），
+# 改动时须两份同步；Test/test_gate_credential_isolation.py 有断言钉住一致性。
+CREDENTIAL_ENV_KEYS = (
+    "SN_ACCOUNT", "SN_PASSWORD",
+    "TQ_ACCOUNT", "TQ_PASSWORD",
+    "LIVE_ACCOUNT", "LIVE_PASSWORD",
+)
+
+# 「跑本组件前先清空凭据」的组件名集合。
+#
+# 为什么需要：SimNow.py 的 __init__ 在凭据齐全时会真的 _connect() 登录 CTP。
+# 下面这两个用例只想构造 broker 注入 FakeApi、本不需要凭据，但在本机凭据齐全
+# 的环境里会走联机分支 —— 实测 (2026-09-23)：p60 4.1s → 21.7s、p20 6.7s → 16.5s，
+# 输出尾部多出 tqsdk 的 "task: <Task cancelling ...>"，偶发网络抖动还会把它顶到 173s。
+# 清空后走 SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。
+#
+# 与发现式的差别：发现式是**全局**清空（面向全量盘点的默认策略，另有
+# --keep-credentials 可关）；门禁只对本表登记的组件清，其余组件保留原环境
+# （有些用例要读本机配置）。需要真实凭据的用例不要登记 ——
+# 如 Trading/Test/smoke_simnow_phase_g.py，凭据被清必红，它本就不在门禁内。
+CLEAN_CREDENTIALS_COMPONENTS = {
+    "p20_phase_i1",
+    "p60_trade_toasts_reconcile_gap",
+}
+
 
 def run_component(name, cmd, update=False, env=None):
-    """执行单个组件，返回记录 dict。超时按失败处理（不无限等待）。"""
+    """执行单个组件，返回记录 dict。超时按失败处理（不无限等待）。
+
+    `name` 在 CLEAN_CREDENTIALS_COMPONENTS 里时，用一份**剔除了凭据键的环境副本**
+    执行该组件；调用方那份 env 不做就地修改，后续组件不受影响。
+    """
     real_cmd = list(cmd)
+    if env is not None and name in CLEAN_CREDENTIALS_COMPONENTS:
+        env = {k: v for k, v in env.items() if k not in CREDENTIAL_ENV_KEYS}
     if update and name in ("snapshot_regression", "trigger_step_replay",
                            "phase2_guards", "industry_mapping", "sse_sequence",
                            "func_map_sync", "phase3_guards", "phase4_guards",
@@ -348,6 +544,8 @@ def main():
     records = []
     for name, cmd in COMPONENTS:
         print(f"\n──── [{len(records) + 1}/{len(COMPONENTS)}] {name} ────")
+        if name in CLEAN_CREDENTIALS_COMPONENTS:
+            print("(本组件已清空 " + "/".join(CREDENTIAL_ENV_KEYS) + "，走离线快路径)")
         rec = run_component(name, cmd, update=args.update, env=env)
         records.append(rec)
         print("\n".join(rec["output_tail"]))
