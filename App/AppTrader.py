@@ -82,6 +82,14 @@ _DEFAULT_OUT = os.path.join(_TG_ROOT, "State")
 # SIGTERM=TerminateProcess（handler 不跑）与 venv pid 是 shim 两类平台陷阱。
 _STOP_REQUEST = ".stop_request"
 
+# 就绪标志（r10）：子进程 main.py 完成 build_runtime（TqApi 构造 + SimNow
+# 登录 + 持仓锚点，即将进主循环）时原子写。stop() 以它判定分档宽限：
+# 未就绪（启动链仍卡在 tqsdk 同步登录里）→ 短宽限快速强杀（启动链中
+# 交易引擎未进主循环、无成交能力，强杀不产生锁仓风险）；就绪 → 完整
+# 宽限覆盖最坏锁仓。上一轮残留由 start() 在 Popen 前清（唯一清点）。
+# 与 Trading/main.py _READY_FLAG 保持一致。
+_READY_FLAG = ".ready"
+
 # 后端（AppTrader）日志 tee 进 gateway.log 的 handler，路径随每次启停更新
 _log_file_handler: Optional[logging.Handler] = None
 
@@ -90,6 +98,15 @@ _log_file_handler: Optional[logging.Handler] = None
 # ~100s），stop() 需等子进程主循环完成收尾，故宽限必须覆盖最坏锁仓耗时，
 # 超时再强杀兜底。20s 会被 SIGKILL 锁仓半途而废。
 _STOP_TIMEOUT = 150.0
+
+# 启动链未就绪时的短宽限（秒）（r10）。build_runtime 内部是 tqsdk 同步
+# 阻塞调用（SimNow 登录），盘后登录慢/卡时可达数十秒乃至无限期——此窗口
+# 内看护线程未启动、停止 flag 无人消费，等满 _STOP_TIMEOUT 毫无意义
+# （2026-09-23 19:19 IM 盘后会话实测：登录 59s+ 无 [gw] 启动横幅）。
+# 15s 覆盖「flag 写入 → 看护线程 0.2s 轮询消费」的极限延迟与「登录在
+# 15s 内恰好完成转为就绪」的可能（18:35 会话实测登录完成在关闭请求后
+# ~8s）；等待期间就绪标志出现则切换为完整宽限。就绪前强杀无锁仓风险。
+_STARTING_STOP_TIMEOUT = 15.0
 
 
 class _TraderProc:
@@ -339,6 +356,21 @@ class AppTrader:
                 self._engine_log(log_file, "清除停止 flag 失败: {}: {}".format(
                     type(e).__name__, e))
 
+            # r10：同时清上一轮遗留的就绪标志 .ready。本子进程尚未完成
+            # 启动链时 stop() 读到上一轮的 .ready 会误判「已就绪」而用
+            # 完整宽限——短宽限快杀失效，启动链卡死场景又回 150s 干等。
+            # .ready 只有子进程侧写（父进程从不写），此处清无 .stop_request
+            # 那样的"删掉真请求"竞态。
+            ready_flag = os.path.join(out_dir, _READY_FLAG)
+            try:
+                if os.path.exists(ready_flag):
+                    os.remove(ready_flag)
+                    self._engine_log(log_file, "已清除上一轮遗留就绪标志: {}"
+                                     .format(_READY_FLAG))
+            except OSError as e:
+                self._engine_log(log_file, "清除就绪标志失败: {}: {}".format(
+                    type(e).__name__, e))
+
             try:
                 cfg = self._load_cfg()
             except AppError as e:
@@ -453,12 +485,22 @@ class AppTrader:
     def stop(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """关闭自动下单：跨平台 flag 文件停止协议 → 子进程收尾锁仓 → 退出。
 
-        timeout：None 用默认宽限 _STOP_TIMEOUT（150s，覆盖最坏锁仓 ~100s）；
-        传入短超时（如服务退出 lifespan 场景 30s）则按传入值等待，到期
-        强杀兜底——避免关服务等满 150s 或撞 uvicorn graceful-shutdown 阈值。
+        timeout：None 用分档宽限（r10）：
+          · 子进程已就绪（{out_dir}/.ready 存在 = build_runtime 已完成、
+            交易主循环在跑）→ 完整宽限 _STOP_TIMEOUT（150s，覆盖最坏
+            锁仓 ~100s）；
+          · 未就绪（启动链仍卡在 tqsdk 同步阻塞的 SimNow 登录里，盘后
+            实测可达数十秒乃至无限期）→ 短宽限 _STARTING_STOP_TIMEOUT
+            （15s）——此窗口看护线程未启动、停止 flag 无人消费，等满
+            150s 毫无意义；且启动链中交易引擎未进主循环、无成交能力，
+            短宽限到时强杀不产生锁仓风险。等待期间就绪标志出现（登录
+            恰好完成）则从该时刻起切换为完整宽限（之后可能有锁仓收尾）。
+          传入短超时（如服务退出 lifespan 场景 30s）则按传入值等待、
+          分档不生效——到期强杀兜底，避免关服务等满 150s 或撞 uvicorn
+          graceful-shutdown 阈值。
 
-        ① 写 {out_dir}/.stop_request —— 子进程 main.py 主循环/看护线程观测到
-           即 shutdown_and_lock_all 并退出（跨平台，不依赖 pid 与信号语义）；
+        ① 写 {out_dir}/.stop_request —— 子进程唯一的跨平台停止触发
+           （跨平台，不依赖 pid 与信号语义）；
         ② 非 Windows 再补发 SIGTERM 促活（Linux/macOS handler 会转置停止事件），
            Windows **不发** —— SIGTERM 在 Windows 上是 TerminateProcess，会抢在
            flag 被消费前强杀，反而破坏优雅；
@@ -495,9 +537,26 @@ class AppTrader:
             # 历史锁仓事件让本轮超时强杀被误判为优雅收尾（谎报成功）。
             off_before = _count_off_events(out_dir)
 
-            # timeout=None → 用户主动点关闭，用默认宽限（覆盖最坏锁仓）；
-            # 传入短超时（lifespan 服务退出）按传入值等待。
-            wait_secs = _STOP_TIMEOUT if timeout is None else timeout
+            # timeout=None → 用户主动点关闭，按就绪状态分档（r10）：
+            #   就绪（.ready 存在）→ 完整宽限（覆盖最坏锁仓）；
+            #   未就绪（启动链卡住）→ 短宽限（干等 150s 毫无意义，见
+            #   _STARTING_STOP_TIMEOUT 注释）。等待中就绪标志出现则切换。
+            # 传入 timeout（lifespan 服务退出）按传入值等待，分档不生效。
+            ready_flag = os.path.join(out_dir, _READY_FLAG)
+            ready_seen = os.path.exists(ready_flag)
+            if timeout is not None:
+                wait_secs = timeout
+            elif ready_seen:
+                wait_secs = _STOP_TIMEOUT
+            else:
+                wait_secs = _STARTING_STOP_TIMEOUT
+            self._engine_log(
+                log_file,
+                "关闭宽限: wait={}s ready={}（{}）".format(
+                    wait_secs, ready_seen,
+                    "按传入 timeout" if timeout is not None
+                    else ("启动链已就绪" if ready_seen
+                          else "启动链未就绪（短宽限，就绪后自动切完整宽限）")))
 
             # ① 写停止 flag —— 子进程唯一的跨平台停止触发
             stop_flag = os.path.join(out_dir, _STOP_REQUEST)
@@ -513,20 +572,37 @@ class AppTrader:
             if os.name != "nt":
                 _send_signal_best_effort(handle, signal.SIGTERM)
 
-            # ③ 等退出
+            # ③ 等退出（r10 分档：未就绪等待中若就绪标志出现——build_runtime
+            #    恰好在本宽限内完成——从该时刻起切换为完整宽限，给随后的
+            #    锁仓收尾留足时间；就绪档与传入 timeout 档不重置）
             deadline = time.time() + wait_secs
             exited = False
             while time.time() < deadline:
                 if not handle.running:
                     exited = True
                     break
+                if (timeout is None and not ready_seen
+                        and os.path.exists(ready_flag)):
+                    ready_seen = True
+                    deadline = time.time() + _STOP_TIMEOUT
+                    self._engine_log(
+                        log_file,
+                        "就绪标志出现（启动链完成），宽限切换为 {:.0f}s"
+                        .format(_STOP_TIMEOUT))
                 time.sleep(0.3)
 
-            # 兜底强杀
+            # 兜底强杀（文案分档：未就绪强杀 ≠ 锁仓风险场景，避免误导排查）
             if not exited:
-                log.warning(
-                    "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，强杀兜底",
-                    pid, wait_secs)
+                if ready_seen or timeout is not None:
+                    log.warning(
+                        "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，"
+                        "强杀兜底", pid, wait_secs)
+                else:
+                    log.warning(
+                        "[AppTrader] 自动下单子进程 pid=%s 启动链未就绪"
+                        "（未完成登录/持仓锚点），%.0fs 短宽限到时强杀"
+                        "（启动链中无成交能力，不存在锁仓风险）",
+                        pid, wait_secs)
                 # P0：signal.SIGKILL 在 Windows 不存在——若直接写
                 # _send_signal_best_effort(handle, signal.SIGKILL)，参数求值
                 # 阶段就抛 AttributeError，try/except 不生效，后面的
@@ -555,6 +631,12 @@ class AppTrader:
             if graceful:
                 log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓或空仓并持久化关闭态）",
                          pid)
+            elif not exited and not ready_seen and timeout is None:
+                # r10：启动链未就绪被短宽限强杀——交易引擎未进主循环，
+                # 无持仓操作，"需核查是否真的锁仓"的通用文案在此误导排查。
+                log.warning(
+                    "[AppTrader] 自动下单 pid=%s 启动链未就绪时被短宽限强杀"
+                    "（未进入交易主循环，无持仓操作，rc=%s）", pid, rc)
             else:
                 log.warning(
                     "[AppTrader] 自动下单 pid=%s 已退出但未检测到收尾结果"

@@ -66,6 +66,12 @@ ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
 # venv shim pid 两处平台陷阱。与 App/AppTrader._STOP_REQUEST 保持一致。
 _STOP_REQUEST = ".stop_request"
 
+# 就绪标志：本模块完成 build_runtime（TqApi 构造 + SimNow 登录 + 持仓锚点，
+# 即将进主循环）时原子写。AppTrader.stop() 以它判定分档宽限——未就绪
+# （启动链仍卡在 tqsdk 同步登录里）时用短宽限快速强杀，就绪后用完整宽限
+# 覆盖最坏锁仓。与 App/AppTrader._READY_FLAG 保持一致。
+_READY_FLAG = ".ready"
+
 
 # 删除 `_seed_instrument`（播种桥）：
 #   `InstrumentSpec.for_product()` + `cfg.instrument.model_dump(exclude={...})` 的
@@ -391,6 +397,36 @@ def _clear_leftover_stop_flag(out_dir: str, managed: bool) -> None:
             pass
 
 
+def _write_ready_flag(out_dir: str) -> None:
+    """启动链完成（build_runtime 返回、即将进主循环）时原子写 .ready 就绪标志。
+
+    AppTrader.stop() 以该文件判定分档宽限：未就绪（本函数尚未执行——
+    build_runtime 仍卡在 tqsdk 同步阻塞的 SimNow 登录里，盘后实测可达
+    数十秒乃至无限期）时用短宽限快速强杀；就绪后用完整宽限覆盖最坏
+    锁仓收尾。build_runtime 卡住期间子进程是"聋哑"的——看护线程与
+    signal handler 都在本函数之后的 run() 里才启动，停止 flag 无人
+    消费，唯一可靠的处置就是父进程侧强杀（启动链中交易引擎尚未进入
+    主循环、无任何成交能力，强杀不产生锁仓风险；2026-09-23 19:19
+    IM 盘后会话实测：登录 59s+ 无横幅，150s 全宽限只让用户干等）。
+
+    上一轮残留由 AppTrader.start() 在 Popen 前清（唯一清点）；本函数
+    原子写（tmp + os.replace），保证父进程读到的要么不存在要么完整。
+    """
+    tmp = os.path.join(out_dir, _READY_FLAG + ".tmp")
+    dst = os.path.join(out_dir, _READY_FLAG)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("pid={} ts={}\n".format(
+                os.getpid(), time.strftime("%H:%M:%S")))
+        os.replace(tmp, dst)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
 def run(args) -> int:
     cfg, engine, source, store, ev, out, src = build_runtime(args)
 
@@ -412,6 +448,11 @@ def run(args) -> int:
               os.getpid(), src.get("type"), src.get("symbol"),
               src.get("freq"), src.get("sse_base", ""), engine.broker.name,
               os.path.abspath(out), cfg.state_dir))
+
+    # 就绪标志（r10）：走到这里 = build_runtime 已返回、启动链完成。
+    # AppTrader.stop() 未见该标志时用短宽限快杀（启动链卡死场景），
+    # 见 _write_ready_flag docstring。
+    _write_ready_flag(out)
 
     # P61：把空闲泵接进实时源 —— tqsdk wait_update 单线程，引擎每根 bar 才
     # 驱动一次，两根 bar 之间到达的委托/持仓回报会滞留在缓冲里（详见

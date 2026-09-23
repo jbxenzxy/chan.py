@@ -330,6 +330,16 @@ COMPONENTS = [
     ("p69_stop_flag_managed",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p69_stop_flag_managed.py")]),
+    # p70：停止分档宽限（启动链未就绪短宽限快杀，2026-09-23）。
+    #   钉五件事：main.py 完成 build_runtime 原子写 .ready 就绪标志、
+    #   AppTrader.stop 未就绪（启动链卡在 tqsdk 同步登录，盘后实测 59s+
+    #   无横幅）用短宽限 15s 快杀（启动链中无成交能力，无锁仓风险）、
+    #   就绪用完整宽限 150s（覆盖最坏锁仓）、等待中就绪标志出现自动
+    #   切换完整宽限、start Popen 前清上一轮遗留 .ready（不清会让
+    #   stop 误判已就绪，短宽限失效回 150s）。行为级真 Popen + 源码判据。
+    ("p70_stop_ready_flex",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p70_stop_ready_flex.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
