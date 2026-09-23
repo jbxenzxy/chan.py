@@ -17,7 +17,9 @@ App/AppScanStore.py —— 批量扫描结果共享存储（SQLite，跨进程�
 单一事实源：
   - completed 不落列，由 scan_results 行数 COUNT 派生（单事务单源，
     无漂移）；结果表主键为 (task_id, seq)，写入用 INSERT OR IGNORE
-    （重复 seq 幂等，崩溃兜底由收割线程补写错误行，completed 单调收敛）。
+    （重复 seq 幂等）。收敛靠「补齐行」而非换计数来源：崩溃 future 与
+    落库缺口都由收割线程按 seq 比对后补写（见
+    AppScanPool._monitor_task），故 completed 单调收敛至 total。
   - 增量读取：get_results(task_id, since) 按
     seq >= since 游标返回，前端按 row.seq + 1 推进，避免全量回传 O(n²)。
 
@@ -299,6 +301,17 @@ class ScanStore:
                 data = {}
             out.append({"code": code, "status": status, "data": data})
         return out
+
+    def existing_seqs(self, task_id):
+        """已落库的 seq 集合（收割线程比对缺口用：缺哪票就补哪票）。
+
+        只读查询，不改变存储语义。收割线程拿 futures 里登记的全部 seq 减去
+        本集合，即为「worker 没能落库的票」，用于补写错误行让 completed
+        收敛 total（补齐行，而不是把 completed 换成另一来源）。
+        """
+        rows = self._query_all(
+            "SELECT seq FROM scan_results WHERE task_id=?", (task_id,))
+        return {r[0] for r in rows}
 
     # ── 维护 ─────────────────────────────────────────────────────────
     def cleanup_old(self, keep_seconds=7 * 86400):

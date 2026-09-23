@@ -33,7 +33,9 @@ App/AppScanPool.py —— 批量扫描 ProcessPool 编排
     is_aborted），不依赖进程内 _scan_aborted 标志。
   - 收割：collector 把 worker 错误行合并进**发起该任务的扫描会话**
     （经 task_id → scan_token 反查，不再写全局 _scan_skip_log；
-    /api/scan_end 汇总口径一致，中止行不计入）。
+    /api/scan_end 汇总口径一致，中止行不计入）；并在置终态前按 futures
+    登记的 seq 补齐**未落库的票**（worker 吞掉写库失败时 future 不抛异常，
+    只靠 future 异常兜底会让 completed 停在 total 之下、该票静默消失）。
   - 生命周期：提交入口 best-effort 清理过期任务；
     atexit 注册显式关池（shutdown(wait=False, cancel_futures=True)）。
 """
@@ -163,6 +165,10 @@ def _worker_scan_one(task_id, code, freq, prefix, recent, source, mode, seq):
     try:
         store.put_result(task_id, seq, code, status, result)
     except Exception as _e:  # noqa: BLE001 —— 结果落库失败不阻断扫描，但记录缺口
+        # 此处**有意**吞掉异常：单票落库失败不该让整批扫描失败（业务结果照常
+        # 返回，故本 future 不以异常收场）。代价是本票没有结果行、completed
+        # 不收敛 —— 缺口由收割线程按 futures 登记的 seq 比对后补齐
+        # （见 _monitor_task「缺口补齐」段），它只看 futures、不看本处日志。
         _line = f"[扫描池落库失败] task={task_id} seq={seq} {code} {type(_e).__name__}: {_e}"
         log.info(_line)
     return result
@@ -173,6 +179,14 @@ def _monitor_task(task_id, futures):
 
     - future 异常（worker 崩溃/序列化失败）时兜底写错误行，保证
       completed 收敛到 total（前端进度不悬挂）；
+    - **缺口补齐**：worker 侧 put_result 抛异常时（SQLite readonly/locked 等）
+      异常被 worker 吞掉并只记日志，故 future **不以异常收场**，上面那条
+      future 异常分支不会触发；该票于是永远没有结果行 → completed 停在
+      total 之下（前端进度悬挂），且该票既不在结果列表、也不在跳过汇总里
+      （**静默少一只**，比进度数字更严重）。故此处不再只依赖 future 异常，
+      而是拿 futures 登记的全部 seq 与已落库 seq 比对，缺哪票补哪票。
+      completed 仍由行数派生（单一事实源不变），收敛靠补齐行达成；
+      补出的行 status=error 会经 iter_error_rows 进跳过汇总，失败因此可见。
     - 错误明细合并进发起本次任务的**扫描会话**（按 scan_token 归属，
       /api/scan_end 的汇总打印口径一致；中止行不计入）；
     - 终态：done / aborted / error（任一 future 以异常收场＝基础设施级
@@ -198,6 +212,34 @@ def _monitor_task(task_id, futures):
                                       "error": f"{type(exc).__name__}: {exc}"})
                 except Exception:  # noqa: BLE001
                     pass
+
+        # ── 缺口补齐：futures 登记过、但库里没有结果行的票 ──────────────
+        # 必须在「错误明细并入跳过记录」之前：补出的行要能进 iter_error_rows
+        # 的那次汇总，失败才对用户可见（只补进度不报失败＝换了种静默）。
+        # 补写状态按任务是否处于中止语义分流，避免中止行的既有口径被破坏
+        # （worker 侧中止行是 status=aborted + data.aborted，汇总时排除）。
+        try:
+            lack = [(seq, code) for _fut, seq, code in futures
+                    if seq not in store.existing_seqs(task_id)]
+            if lack:
+                _task = store.get_task(task_id)
+                aborting = bool(_task and (_task.get("abort_requested")
+                                           or _task["status"] == "aborted"))
+                for seq, code in lack:
+                    try:
+                        store.put_result(
+                            task_id, seq, code,
+                            "aborted" if aborting else "error",
+                            {"code": code, "error": "扫描已终止", "aborted": True}
+                            if aborting else
+                            {"code": code, "error": "结果未落库（写库失败或 worker 未回写）"})
+                    except Exception as _e:  # noqa: BLE001 —— 补写再失败只记日志，不阻断终态
+                        log.info(f"[扫描池缺口补写失败] task={task_id} seq={seq} "
+                                 f"{code} {type(_e).__name__}: {_e}")
+                log.info(f"[扫描池结果缺口] task={task_id} 有 {len(lack)} 票未落库，"
+                         f"已补记为 {'aborted' if aborting else 'error'}")
+        except Exception:  # noqa: BLE001 —— 比对/读取失败不阻断终态与引用归还
+            pass
 
         # 错误明细并入**发起本次任务的那一次扫描**的跳过记录（中止行不计入）
         try:
