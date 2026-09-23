@@ -1725,8 +1725,15 @@ class TradingEngine(ReconcileMixin):
         """
         plan = self._run_plan
         stop = plan.stop_price if plan is not None else None
+        # 方向取 run 侧（`_run_start` 刚按净敞口符号钉下），不取 `o.side`：
+        #   翻仓/拆锁的入场是 CLOSE 档成交，订单 side 记的是**被平掉的旧仓
+        #   方向**，与新 run 相反（2026-09-23 14:42 实盘：卖平昨多翻转开空，
+        #   toast 却显示「开仓成交：多 2手」，系统通知同文案）。run 未建立
+        #   （run_start_incomplete）时回退订单 side，只报成交事实。
+        side_txt = (str(self._run_side) if self._run_side is not None
+                    else str(o.side))
         head = "开仓成交：{} {}手 @ {}".format(
-            str(o.side), o.volume, self._fmt_px(o.filled_price))
+            side_txt, o.volume, self._fmt_px(o.filled_price))
         if stop:
             r_txt = self._r_value_text(1.0, self._run_R())
             head += ("｜止损 = {}（距入场 1R = {}）".format(self._fmt_px(stop), r_txt)

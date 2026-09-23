@@ -22,7 +22,8 @@ P60 关键动作轻提示 + 对账盲区 + 报单终态兜底泵
       永不到终态带 ALIVE 返回（只等 cancel_settle_wait，无 60s 阻塞兜底）+
       otg_latency 时延测量（交易所侧时间戳 vs 本地处理时刻）
   [2] Engine.notify：落 kv `toasts`、有界（尾部 30 条）、写 toast 事件
-  [3] 开仓成交 toast：含方向/手数/成交价/止损(1R) 点位
+  [3] 开仓成交 toast：含方向/手数/成交价/止损(1R) 点位；翻仓/拆锁入场
+      方向取 run 侧而非订单 side（2026-09-23 14:42 实盘 bug）
   [4] 盈利达 1R → 保本 toast；达盈亏比阈值 → 移动止盈 toast（阶段跃迁只弹一次）
   [5] 平仓 toast 文案：保本止损 / 移动止盈触发 / 初始止损 / 锁仓离场
   [6] 对账盲区：账本空 + 柜台有量 → position_mismatch severe（restore 与
@@ -81,8 +82,8 @@ from Trading.Engine.Engine import TradingEngine                  # noqa: E402
 from Trading.Infra.EventLog import EventLog                      # noqa: E402
 from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
 from Trading.Infra.Product import PRODUCT_PROFILES               # noqa: E402
-from Trading.Infra.Records import (AccountState, Bar, ExitPlan,   # noqa: E402
-                                   Position, Side, Signal)
+from Trading.Infra.Records import (AccountState, Bar, ExitPlan, Order,
+                                   Position, Side, Signal)  # noqa: E402
 from Trading.Infra.StateDB import Store                          # noqa: E402
 from Trading.Strategy.Entry import EntryPolicy                   # noqa: E402
 from Trading.Strategy.Exit import LayeredExitPolicy              # noqa: E402
@@ -306,6 +307,30 @@ with tmp_dir() as tmp:
           "{:g}".format(stop) in msg, True)
     check("[3f] 1R 量值 == 计划 R {:g} 点（带品种报价单位）".format(r_plan),
           "距入场 1R = {:g} 点".format(r_plan) in msg, True)
+
+    # ── 翻仓/拆锁入场：方向取 run 侧，不取订单 side（2026-09-23 实盘 bug）──
+    #   入场是 CLOSE 档成交时，订单 side 记的是**被平掉的旧仓方向**，与新
+    #   run 相反 —— 14:42 卖平昨多后开空 run，toast 却显示「开仓成交：
+    #   多 2手」并被系统通知原样带出（用户看到的「多2手」即此）。
+    #   `_notify_open` 在 `_run_start` 之后调用，`_run_side` 恒为新 run 方向；
+    #   run 未建立（incomplete）时回退订单 side，只报成交事实。
+    _flip_o = Order(order_id="t-flip", signal_key="k", symbol="CFFEX.IM2612",
+                    side=Side.LONG, action="close", volume=2, price=4550.0,
+                    filled_price=4550.0)
+    engine._run_side = Side.SHORT          # 模拟：旧多被平、新 run 是空
+    engine._notify_open(_flip_o)
+    _m = last_toast_msg(store)
+    check("[3g] 翻仓入场 toast 方向 = run 侧（空）",
+          "开仓成交：空 2手" in _m, True)
+    check("[3h] 翻仓入场 toast 不再显示旧仓方向（多）",
+          "开仓成交：多 2手" in _m, False)
+    engine._run_side = None                # run 未建立 → 回退订单 side
+    engine._notify_open(_flip_o)
+    _m = last_toast_msg(store)
+    check("[3i] run 缺失时回退订单 side（只报成交事实）",
+          "开仓成交：多 2手" in _m, True)
+    check("[3j] 正常开仓路径方向不变（run side == 订单 side）",
+          "开仓成交：多" in msg, True)
 
 # ════════════════════════════════════════════════════════════════
 # [4] 盈利达 1R → 保本 toast；达盈亏比阈值 → 移动止盈 toast（需求 ⑷(3)(4)）
