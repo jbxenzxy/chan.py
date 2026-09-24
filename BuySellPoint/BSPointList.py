@@ -646,7 +646,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     # ── 入口 ──
     def cal(self, bi_list: LINE_LIST_TYPE, zs_list=None):
-        # ① 中枢/实笔/分型 前置检查
+        # ① 前置检查：中枢存在 + 实笔 + 强势分型
         result = self.cal_bsp_precondition(bi_list, zs_list)
         if result is None:
             return
@@ -664,7 +664,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     @classmethod
     def cal_bsp_precondition(cls, bi_list, zs_list):
-        """买卖点前置检查：中枢存在 + 实笔 + 强势分型，缺一即返回 None"""
+        """前置检查：中枢存在 + 实笔 + 强势分型，缺一即返回 None"""
         # ⑴ 中枢检查
         if zs_list is None or len(zs_list) == 0:
             return None
@@ -1286,7 +1286,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         return None
 
     # ═══════════════════════════════════════════════════════════
-    # ── 1类买卖点 ──
+    # ── 1类买卖点(趋势反转) ──
     # ═══════════════════════════════════════════════════════════
     # ── 模式→c段起点偏移量映射 ──
     # A: N,N-1不重叠,                 N-2重叠 → c段起点 = N-2, 偏移2
@@ -1420,7 +1420,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     is_target_bsp=True, feature_dict=feature_dict)
 
     # ═══════════════════════════════════════════════════════════
-    # ── 2类买卖点 ──
+    # ── 2类买卖点(趋势反转) ──
     # ═══════════════════════════════════════════════════════════
     def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs2('cal_bs2point', '进入......', bi_idx=len(bi_list)-1)
@@ -1473,7 +1473,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     is_target_bsp=True, feature_dict=feature_dict)
 
     # ═══════════════════════════════════════════════════════════
-    # ── 3类买卖点 ──
+    # ── 3类买卖点(趋势追踪) ──
     # ═══════════════════════════════════════════════════════════
     def cal_bs3point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs3('cal_bs3point', '进入......', bi_idx=len(bi_list)-1)
