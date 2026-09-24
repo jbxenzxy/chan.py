@@ -107,6 +107,11 @@
         .realtime-badge {
             display: none; align-items: center; gap: 4px; padding: 2px 8px;
             min-height: var(--hdr-chip-h);                      /* ← 统一高度 */
+            /* nowrap：头部被挤时本徽标是**唯一**没有 line-height 的 chip，
+               一旦折行就长到 34px（2 行）/49px（3 行），与旁边 19px 的两件套
+               明显不同高（2026-09-24 实测 vw≤1700）。现在禁止折行 ——
+               flex item 的自动最小尺寸 = min-content，nowrap 后它不会被压窄。 */
+            white-space: nowrap;
             border-radius: 10px; background: #27ae60; color: #fff; font-size: 11px;
             font-weight: bold; margin-left: 8px; animation: pulse-badge 2s infinite;
         }
@@ -129,6 +134,7 @@
             display: inline-block; padding: 0 7px; border-radius: 9px;
             background: #3a3f5c; color: #a8b2d1;
             font-size: 10px; line-height: var(--hdr-chip-h);    /* ← 与账本同规格 */
+            white-space: nowrap;    /* ← 防折行撑到 38px（与徽标/账本同高度） */
         }
         .auto-order-wrap.disabled .auto-order-label { color: #8b93a7; }
         /* ── 未标定品种置灰（2026-09-14 第 6 批）──
@@ -146,10 +152,16 @@
         /* ── 运行态保护价徽标已删除（2026-09-24 改版）──
            改为 K线主图上的橙色横虚线（app.js drawProtectionLine），
            样式随画布绘制走，不再有 DOM 徽标。 */
-        /* 开关本体：宽度保持 40px，高度跟徽标一致（19 → 圆角钳到 9.5，观感与徽标同档）。
-           几何自洽：上下各留 3px，13 + 3 + 3 = 19；滑块开到右侧时右边距同样 3px。 */
+        /* 开关本体：宽度 = 账本 chip 宽度（34px），高度跟徽标一致
+           （19 → 圆角钳到 9.5，观感与徽标同档）。
+           34px 的来路（实测值，不是估的）：账本 chip = 2 个汉字 × 10px + 左右
+           各 7px padding = 34px —— 用户 2026-09-24 二次拍板"开关宽度跟账本按钮
+           同宽"，故这里写死 34px 与之对齐（改账本文案/字号时必须同步改这里，
+           守卫见 Test/test_aol_ledger_display.py ⑨ 组）。
+           滑块几何随宽度重算：上下各留 3px，13 + 3 + 3 = 19；开到右侧时右边距
+           同样是 3px → 位移 = 34 - 13 - 3 - 3 = 15px（原 40px 宽时是 21px）。 */
         .auto-order-switch {
-            position: relative; display: inline-block; width: 40px;
+            position: relative; display: inline-block; width: 34px;
             height: var(--hdr-chip-h);                          /* ← 与徽标同高 */
         }
         .auto-order-switch input { opacity: 0; width: 0; height: 0; }
@@ -163,7 +175,7 @@
         }
         .auto-order-switch input:checked + .auto-order-slider { background: #e94560; }
         .auto-order-switch input:checked + .auto-order-slider::before {
-            transform: translateX(21px); background: #fff;
+            transform: translateX(15px); background: #fff;   /* 34 - 13 - 3 - 3 */
         }
         .auto-order-switch input:disabled + .auto-order-slider { opacity: 0.4; cursor: not-allowed; }
         .auto-order-dot {
@@ -180,6 +192,7 @@
             display: inline-block; padding: 0 7px; border-radius: 9px;
             background: #3a3f5c; color: #a8b2d1; cursor: pointer;
             font-size: 10px; line-height: var(--hdr-chip-h); user-select: none;
+            white-space: nowrap;    /* ← 防折行撑到 38px（与徽标/自动下单同高度） */
         }
         .auto-order-ledger-btn:hover { color: #fff; background: #4a5078; }
         .auto-order-ledger-panel.hidden { display: none; }
@@ -201,6 +214,12 @@
             display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap;
         }
         .auto-order-ledger-panel .aol-side { font-weight: 600; }
+        /* 持仓序号（2026-09-24 二次拍板）：1. / 2. / … 定宽右对齐，
+           手数/价格各列在不同序号位数下仍齐平（min-width 覆盖到 3 位数） */
+        .auto-order-ledger-panel .aol-idx {
+            color: #7f8a9f; font-size: 11px; min-width: 18px; text-align: right;
+            flex: none;
+        }
         /* 中国市场惯例：多/盈 = 红，空/亏 = 绿 */
         .auto-order-ledger-panel .aol-side.long { color: #e74c3c; }
         .auto-order-ledger-panel .aol-side.short { color: #2ecc71; }

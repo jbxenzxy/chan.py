@@ -8249,8 +8249,10 @@
         // 单次请求超时（主线程版；Worker 源码字符串内另有一份同名实现 ——
         // 两个作用域无法共享代码，只能各写一份，改时必须同步）。
         // 为什么必须有：fetch 默认**永不超时**，服务端万一 hang 住，上一轮
-        // fetch 永远 pending 也不会自己结束 —— 轮询活着但永远没有下一拍，
-        // 弹窗/账本全部静默停摆（2026-09-24 实盘教训的对症防线之一）。
+        // fetch 永远 pending 也不会自己结束 —— 轮询活着但永远没有下一拍。
+        // ⚠️ 它只治"请求挂起"这一种失效，对 2026-09-24 那个"弹窗不弹/账本不刷"
+        // **无效**：那次的根因在 Worker 里的相对 URL（见 AO_WORKER_SRC._statusUrl），
+        // 请求根本没发出去，超时器永远等不到要等的东西。
         function _timeoutedFetch(url) {
             if (typeof AbortController === 'undefined') {
                 return fetch(url, { cache: 'no-store' });
@@ -8277,8 +8279,12 @@
         // 单段隔离执行器（2026-09-24）：状态应用里的每一段（开关 / 提示 /
         // 账本 / 保护价线）各自独立 —— 一段抛错只丢那一段，**不再连环停摆**。
         // 背景：原来各段裸跑在同一个回调里，任何一段抛异常，排在后面的段
-        // 全部不执行且页面无提示（静默失效，实盘表现即"弹窗不弹、账本不刷"）；
-        // 分段 + console.error 后，谁挂了一眼可见，其余段照常工作。
+        // 全部不执行且页面无提示（静默失效）；分段 + console.error 后，谁挂了
+        // 一眼可见，其余段照常工作。
+        // ⚠️ 定位边界：它保证的是「拿到数据之后」各段不互相拖累，属**可观测性**
+        // 改造；「弹窗不弹 / 账本不刷」那次的根因在更上游 —— Worker 里的相对
+        // URL 让轮询根本拿不到数据（见 AO_WORKER_SRC._statusUrl）。分段隔离
+        // 对拿不到数据这一层无能为力，别把它当那次问题的修复。
         function _aoSafe(segName, fn) {
             try {
                 fn();
@@ -8394,7 +8400,8 @@
         // 展示的是**交易引擎账本**（策略/止损止盈只认它），不是柜台真值 ——
         // 镜像可能滞后甚至整场为空（对账证据门的由来），柜台以快期3 为准。
         // 2026-09-24 用户拍板：成交节删除，面板只保留持仓（后端 trades_recent
-        // 投影保留不动，只是前端不再消费）。
+        // 投影保留不动，只是前端不再消费）；同日二次拍板：持仓行加序号
+        // （1. 空 2 手 … / 2. 多 2 手 …），按后端 positions 原序编号。
         let autoOrderLedgerData = null;
         function toggleAutoOrderLedger(ev) {
             if (ev) ev.stopPropagation();
@@ -8452,9 +8459,16 @@
                 } else if (!ps.length) {
                     posEl.textContent = '空仓（账本无持仓）';
                 } else {
-                    posEl.innerHTML = ps.map(function (p) {
+                    // 序号（2026-09-24 用户拍板：1. 空 2 手 … 2. 多 2 手 …）：
+                    //   直接按后端 positions 的**原序**编号，不在前端重排 ——
+                    //   该列表由引擎按建仓先后 append（PositionBook._positions，
+                    //   to_dict 原序输出；AppTrader.status 只做投影），序号即
+                    //   "第几笔建仓"，刷新前后稳定、可指代（"1 号仓"）。
+                    //   前端若按价格/时间重排，刷新一次序号就跳一次，反而没法指代。
+                    posEl.innerHTML = ps.map(function (p, i) {
                         const long = (p.side === 'LONG');
                         return '<div class="aol-row">'
+                            + '<span class="aol-idx">' + (i + 1) + '.</span>'
                             + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
                             + (long ? '多' : '空') + ' ' + p.volume + '手</span>'
                             + (p.symbol ? '<span class="aol-dim">' + p.symbol + '</span>' : '')
@@ -8935,21 +8949,45 @@
         // 立即应用（消息任务是普通任务，同样不被节流）。
         //
         // 协议：
-        //   主线程 → Worker：{type: 'start'}  开始轮询（启动即拉一次，不等首周期）
+        //   主线程 → Worker：{type: 'start', base}  开始轮询（启动即拉一次，不等首周期）
+        //                    base = location.origin（**必带**：Worker 的 base 是
+        //                    blob: URL，根相对路径解析不出来，见 _statusUrl）
         //                    {type: 'stop'}   停止轮询
         //   Worker → 主线程：{type: 'status', data: <status 响应 JSON>}
+        //                    {type: 'poll-error', message}  本轮拉取失败（不再静默）
         //
-        // fetch 用根相对路径 '/api/...'（以站点 origin 为根），与本页面同源。
+        // fetch 走 _statusUrl() 拼出的**绝对** URL（base + '/api/...'），与本页面同源。
 
         var _timer = null;
         var POLL_MS = 5000;
+        var API_BASE = '';        // 主线程 {type:'start', base} 下发，见 _statusUrl
+
+        // ⚠️ status 必须拼成**绝对 URL**（origin + 路径）：根相对路径 '/api/...'
+        // 在本 Worker 里**永远解析不出来** —— 这是 2026-09-24 定位到的根因。
+        //   Worker 由 Blob URL 创建 → self.location.href = blob:http://host/<uuid>；
+        //   blob: 是 cannot-be-a-base scheme（没有可解析的基路径），实测（无头
+        //   Edge/Chromium，同源码对照）：
+        //     new URL('/ping', self.location.href)  → throw Invalid URL
+        //     fetch('/ping')                        → TypeError: Failed to parse
+        //                                             URL from /ping
+        //     fetch(location.origin + '/ping')      → HTTP 200 ✅
+        //   于是 2026-09-23 把轮询搬进 Worker 后，每一次 _poll 都在这一行抛
+        //   TypeError 并被 .catch 静默吞掉 —— 轮询"活着"但永远没有数据：
+        //   开平仓弹窗不弹、账本不刷、保护价线不画、后台通知延迟，只有手动
+        //   开关自动下单（onAutoOrderToggle 里那一次主线程 poll）才刷新一拍
+        //   —— 实盘表现即"重开后连弹 5 条积压 + 账本同时刷新"。
+        //   主线程下发的 base 优先，self.location.origin 只作兜底（Worker 的
+        //   origin 与页面同源，blob: 继承之）。
+        function _statusUrl() {
+            return (API_BASE || self.location.origin || '')
+                + '/api/trader/auto-order/status';
+        }
 
         // 单次请求超时（AbortController 手写版，不用 AbortSignal.timeout ——
         // 那是 Chrome 103+ 才有）。为什么必须有：fetch 默认**永不超时**，
         // 服务端万一 hang 住（线程池占满 / 锁等待），上一轮 fetch 永远 pending
-        // 也不会自己结束 —— 表现就是"轮询活着但永远没有下一拍"，弹窗/账本
-        // 全部静默停摆（2026-09-24 实盘"开仓后弹窗账本全停、重开自动下单
-        // 一次性弹出积压"的对症防线之一）。8s = 2 倍正常轮询间隔。
+        // 也不会自己结束 —— 表现就是"轮询活着但永远没有下一拍"。8s = 2 倍
+        // 正常轮询间隔。
         function _timeoutedFetch(url) {
             if (typeof AbortController === 'undefined') {
                 return fetch(url, { cache: 'no-store' });
@@ -8961,7 +8999,7 @@
         }
 
         function _poll() {
-            _timeoutedFetch('/api/trader/auto-order/status')
+            _timeoutedFetch(_statusUrl())
                 .then(function (r) {
                     if (!r.ok) return null;      // HTTP 4xx/5xx：本轮放弃，下轮再试
                     return r.json();
@@ -8969,12 +9007,19 @@
                 .then(function (j) {
                     if (j) self.postMessage({ type: 'status', data: j });
                 })
-                .catch(function () { /* 网络/服务瞬时不可用：静默，下轮再试 */ });
+                .catch(function (e) {
+                    // 不再静默：把失败回传主线程打 console.error。
+                    //   静默 catch 正是这次根因潜伏一整天的直接原因 —— 同样的
+                    //   失败若再发生，F12 里能立刻看到，而不是靠"现象猜"。
+                    self.postMessage({ type: 'poll-error',
+                        message: String((e && e.message) || e) });
+                });
         }
 
         self.onmessage = function (e) {
             var d = e.data || {};
             if (d.type === 'start') {
+                if (d.base) API_BASE = d.base;
                 if (_timer) clearInterval(_timer);
                 _timer = setInterval(_poll, POLL_MS);
                 _poll();
@@ -9020,6 +9065,7 @@
                 w.onmessage = function(e) {
                     const d = e.data || {};
                     if (d.type === 'status' && d.data) applyAutoOrderStatus(d.data);
+                    else if (d.type === 'poll-error') console.error('[auto-order] Worker 轮询失败: ' + d.message);
                 };
                 w.onerror = function() { fallback(); };
                 autoOrderWorker = w;
@@ -9031,7 +9077,13 @@
                 // p64 系统通知、引擎账本、保护价徽标全部停摆，且页面无任何
                 // 报错（静默失效）。接线由 test_p66 [4] 组用 node 跑真片段
                 // 守卫：删掉这一行该组必红。
-                w.postMessage({ type: 'start' });
+                //
+                // base: location.origin —— **必带**。Worker 的 base 是 blob: URL
+                // （cannot-be-a-base），根相对路径在那里解析不出来（2026-09-24
+                // 根因，实测 fetch('/api/...') 抛 TypeError: Failed to parse URL
+                // from /api/...），status 必须由主线程把 origin 送进去拼成绝对
+                // URL。接线同样由 test_p66 [4-U8] 守卫：把 base 去掉该组必红。
+                w.postMessage({ type: 'start', base: location.origin });
             } catch (e) { fallback(); }
         })();
 
