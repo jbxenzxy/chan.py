@@ -433,7 +433,6 @@ class AppTrader:
             log.info("[AppTrader] 信号源: source=sse symbol=%s freq=%s "
                      "sse_base=%s broker=%s out=%s",
                      use_symbol, use_freq, use_base, broker, out_dir)
-            log.info("[AppTrader] 自动下单子进程日志: %s", log_file)
             self._engine_log(
                 log_file,
                 "启动子进程: source=sse symbol={} freq={} sse_base={} "
@@ -478,7 +477,6 @@ class AppTrader:
             # 新一轮自动下单子进程：清零退出上报集合（避免历史 pid 干扰本次退出上报）
             self._exit_logged.discard(handle.pid)
             _write_state_file(handle.to_dict())
-            log.info("[AppTrader] 自动下单子进程已启动 pid=%s", handle.pid)
             self._engine_log(log_file, "子进程已启动 pid={}".format(handle.pid))
             return handle.to_dict()
 
