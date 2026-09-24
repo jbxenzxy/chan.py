@@ -95,8 +95,9 @@ check("[1a] 周期唯一来源 POLL_MS = 5000", "var POLL_MS = 5000;" in WK, Tru
 check("[1b] setInterval 用 POLL_MS 变量（不写死第二处）",
       WK.count("setInterval(_poll, POLL_MS)") == 1
       and "setInterval(_poll, 5000)" not in WK, True)
-check("[1c] status 端点 + no-store",
-      "fetch('/api/trader/auto-order/status', { cache: 'no-store' })" in WK, True)
+check("[1c] status 端点 + no-store（fetch 走 _timeoutedFetch，no-store 在 helper 内）",
+      "_timeoutedFetch('/api/trader/auto-order/status')" in WK
+      and "cache: 'no-store'" in WK, True)
 check("[1d] 消息形状 type:'status' + data",
       "postMessage({ type: 'status', data: j })" in WK, True)
 check("[1e] start 协议：建定时器 + 启动即拉一次",

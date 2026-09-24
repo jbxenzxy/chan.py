@@ -8246,9 +8246,24 @@
             }
         }
 
+        // 单次请求超时（主线程版；Worker 源码字符串内另有一份同名实现 ——
+        // 两个作用域无法共享代码，只能各写一份，改时必须同步）。
+        // 为什么必须有：fetch 默认**永不超时**，服务端万一 hang 住，上一轮
+        // fetch 永远 pending 也不会自己结束 —— 轮询活着但永远没有下一拍，
+        // 弹窗/账本全部静默停摆（2026-09-24 实盘教训的对症防线之一）。
+        function _timeoutedFetch(url) {
+            if (typeof AbortController === 'undefined') {
+                return fetch(url, { cache: 'no-store' });
+            }
+            const ctl = new AbortController();
+            const killer = setTimeout(function () { ctl.abort(); }, 8000);
+            return fetch(url, { cache: 'no-store', signal: ctl.signal })
+                .finally(function () { clearTimeout(killer); });
+        }
+
         async function pollAutoOrderStatus() {
             try {
-                const resp = await fetch('/api/trader/auto-order/status', { cache: 'no-store' });
+                const resp = await _timeoutedFetch('/api/trader/auto-order/status');
                 if (!resp.ok) {
                     console.warn('[auto-order] status HTTP ' + resp.status);
                     return;
@@ -8256,6 +8271,19 @@
                 applyAutoOrderStatus(await resp.json());
             } catch (e) {
                 console.warn('[auto-order] 轮询失败: ' + e.message);
+            }
+        }
+
+        // 单段隔离执行器（2026-09-24）：状态应用里的每一段（开关 / 提示 /
+        // 账本 / 保护价线）各自独立 —— 一段抛错只丢那一段，**不再连环停摆**。
+        // 背景：原来各段裸跑在同一个回调里，任何一段抛异常，排在后面的段
+        // 全部不执行且页面无提示（静默失效，实盘表现即"弹窗不弹、账本不刷"）；
+        // 分段 + console.error 后，谁挂了一眼可见，其余段照常工作。
+        function _aoSafe(segName, fn) {
+            try {
+                fn();
+            } catch (e) {
+                console.error('[auto-order] ' + segName + ' 段执行失败: ', e);
             }
         }
 
@@ -8322,19 +8350,33 @@
                     tip += '；关闭时，锁仓或平仓（平今/昨）';
                     wrap.title = tip;
                 }
-                handleAutoOrderAlerts(data);
-                handleAutoOrderToasts(data);
-                renderAutoOrderLedger(data);   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
+                // 半残数据防线（2026-09-24）：进程在跑但 auto_order 投影缺失
+                //   （后端 _read_engine_switch 读库瞬时失败被吞成 null）时，
+                //   enabled=false 会把**用户开关重置成关**、账本被刷成空态 ——
+                //   比跳过这一轮糟糕得多。判据：running=true 且 auto_order 缺失
+                //   = 投影异常（引擎真停时 running=false，不受影响）。
+                //   打 warn 跳过本轮，下轮轮询自然重试。
+                if (running && !data.auto_order) {
+                    console.warn('[auto-order] 本轮 auto_order 投影缺失（后端读库瞬时失败？），跳过本轮状态应用');
+                    return;
+                }
+                // 四段各自隔离（_aoSafe）：一段抛错不再连环停摆（弹窗/账本/画线
+                // 全停且无提示的静默失效，2026-09-24 实盘教训），谁挂 console 可见。
+                _aoSafe('告警', function () { handleAutoOrderAlerts(data); });
+                _aoSafe('轻提示', function () { handleAutoOrderToasts(data); });
+                _aoSafe('账本', function () { renderAutoOrderLedger(data); });   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
                 // 运行态保护价线（2026-09-24）：K线横虚线出口。为什么放主图：
                 //   保护价是持仓期间**最需要盯着**的数，tooltip/徽标都要"找"才看得见
                 //   —— 2026-09-23 实盘多仓浮盈 2.6R 回撤到 0.77R，全程不知道会在哪离场。
                 //   画在价格轴上 = 目光扫图时顺带看到；抬价（保本/跟踪）后线跟着跳。
                 //   changed 才赋值 + 整图重绘（轮询 5s 一次，值没变别白画）。
-                const _pl = calcProtectionLine(aoRun, protectionLine);
-                if (_pl.changed) {
-                    protectionLine = _pl.line;
-                    render();
-                }
+                _aoSafe('保护价线', function () {
+                    const _pl = calcProtectionLine(aoRun, protectionLine);
+                    if (_pl.changed) {
+                        protectionLine = _pl.line;
+                        render();
+                    }
+                });
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -8347,10 +8389,12 @@
                 autoOrderPrevRunning = running;
         }
 
-        // ── 引擎账本面板（C，2026-09-18）：持仓 + 最近成交，随轮询刷新 ──
-        // 数据 = /api/trader/status 的 auto_order.positions / trades_recent。
+        // ── 引擎账本面板（C，2026-09-18）：持仓，随轮询刷新 ──
+        // 数据 = /api/trader/status 的 auto_order.positions。
         // 展示的是**交易引擎账本**（策略/止损止盈只认它），不是柜台真值 ——
         // 镜像可能滞后甚至整场为空（对账证据门的由来），柜台以快期3 为准。
+        // 2026-09-24 用户拍板：成交节删除，面板只保留持仓（后端 trades_recent
+        // 投影保留不动，只是前端不再消费）。
         let autoOrderLedgerData = null;
         function toggleAutoOrderLedger(ev) {
             if (ev) ev.stopPropagation();
@@ -8421,27 +8465,9 @@
                 }
             }
             const trEl = document.getElementById('aol-trades');
-            if (trEl) {
-                const ts = (ao && Array.isArray(ao.trades_recent)) ? ao.trades_recent : [];
-                if (!ts.length) {
-                    trEl.textContent = '（无成交）';
-                } else {
-                    trEl.innerHTML = ts.map(function (t) {
-                        const long = (t.side === 'LONG');
-                        const net = Number(t.net_cash);
-                        const netCls = net > 0 ? 'aol-pos' : (net < 0 ? 'aol-neg' : 'aol-dim');
-                        return '<div class="aol-row">'
-                            + '<span class="aol-side ' + (long ? 'long' : 'short') + '">'
-                            + (long ? '多' : '空') + t.volume + '手</span>'
-                            + (t.symbol ? '<span class="aol-dim">' + t.symbol + '</span>' : '')
-                            + '<span>@ ' + fmtAolPx1(t.entry_price) + ' → '
-                            + fmtAolPx1(t.exit_price) + '</span>'
-                            + '<span class="' + netCls + '">净 '
-                            + (isNaN(net) ? '--' : net.toFixed(2)) + '</span>'
-                            + '</div>';
-                    }).join('');
-                }
-            }
+            // 成交节已删（2026-09-24 用户拍板）：元素不在场直接跳过 ——
+            // 保留 getElementById 兜底是为了旧缓存页面（HTML 还是旧版）不抛错。
+            if (trEl) trEl.textContent = '';
         }
 
         // 价格显示：只去掉浮点尾巴，不做品种 tick 推断（tick 是后端的事）
@@ -8918,8 +8944,24 @@
         var _timer = null;
         var POLL_MS = 5000;
 
+        // 单次请求超时（AbortController 手写版，不用 AbortSignal.timeout ——
+        // 那是 Chrome 103+ 才有）。为什么必须有：fetch 默认**永不超时**，
+        // 服务端万一 hang 住（线程池占满 / 锁等待），上一轮 fetch 永远 pending
+        // 也不会自己结束 —— 表现就是"轮询活着但永远没有下一拍"，弹窗/账本
+        // 全部静默停摆（2026-09-24 实盘"开仓后弹窗账本全停、重开自动下单
+        // 一次性弹出积压"的对症防线之一）。8s = 2 倍正常轮询间隔。
+        function _timeoutedFetch(url) {
+            if (typeof AbortController === 'undefined') {
+                return fetch(url, { cache: 'no-store' });
+            }
+            var ctl = new AbortController();
+            var killer = setTimeout(function () { ctl.abort(); }, 8000);
+            return fetch(url, { cache: 'no-store', signal: ctl.signal })
+                .finally(function () { clearTimeout(killer); });
+        }
+
         function _poll() {
-            fetch('/api/trader/auto-order/status', { cache: 'no-store' })
+            _timeoutedFetch('/api/trader/auto-order/status')
                 .then(function (r) {
                     if (!r.ok) return null;      // HTTP 4xx/5xx：本轮放弃，下轮再试
                     return r.json();

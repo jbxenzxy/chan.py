@@ -54,26 +54,23 @@
                 </label>
                 <span class="auto-order-ledger-btn" id="auto-order-ledger-btn"
                       onclick="toggleAutoOrderLedger(event)"
-                      title="交易引擎账本：持仓与最近成交">账本</span>
+                      title="交易引擎账本：持仓">账本</span>
                 <!-- 运行态保护价（2026-09-24 改版）：原「账本」后的徽标已删除，
                      改为 K线主图上的橙色横虚线（drawProtectionLine）—— 保护价
                      是价格，画在价格轴上目光扫图即可见，不再挤占账本旁空间。
                      数据源不变 = /api/trader/auto-order/status 的 auto_order.run；
                      契约见 Trading/Test/test_p62_ao_protection_price.py [8] 组 -->
             </span>
-            <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓 + 最近成交。
-                 数据来自 /api/trader/status 的 auto_order.positions / trades_recent；
+            <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓。
+                 数据来自 /api/trader/status 的 auto_order.positions；
                  全部是 state.db 投影 —— 引擎关着也能看（2026-09-22 用户拍板）。
+                 2026-09-24 用户拍板：成交节删除，面板只保留持仓。
                  注意：这是**交易引擎账本**，不是柜台真值 —— 柜台以快期3 为准。 -->
             <div class="auto-order-ledger-panel" id="auto-order-ledger-panel"
                  style="display:none" onclick="event.stopPropagation()">
                 <div class="aol-sec">
                     <div class="aol-title">持仓</div>
                     <div class="aol-body" id="aol-positions">（暂无账本数据）</div>
-                </div>
-                <div class="aol-sec">
-                    <div class="aol-title">成交</div>
-                    <div class="aol-body" id="aol-trades">（无）</div>
                 </div>
             </div>
         </div>
@@ -329,6 +326,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=34"></script>
+    <script src="app.js?v=35"></script>
 
 </body></html>

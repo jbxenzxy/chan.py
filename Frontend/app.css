@@ -116,18 +116,25 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.6; }
         }
-        /* ── 自动下单开关（期货实时徽标右侧，2026-09-06）── */
+        /* ── 自动下单开关（期货实时徽标右侧，2026-09-06）──
+           2026-09-24 对齐顶栏三件套观感：「自动下单」文字 chip 化（与「账本」
+           同背景/圆角/字号/行高，视觉高度一致），组内 gap 收窄。 */
         .auto-order-wrap {
-            display: none; align-items: center; gap: 6px; margin-left: 10px;
+            display: none; align-items: center; gap: 4px; margin-left: 10px;
             min-height: var(--hdr-chip-h);                      /* ← 与徽标同高 */
             font-size: 11px; color: #a8b2d1; user-select: none;
         }
         .auto-order-wrap.visible { display: flex; }
+        .auto-order-label {
+            display: inline-block; padding: 0 7px; border-radius: 9px;
+            background: #3a3f5c; color: #a8b2d1;
+            font-size: 10px; line-height: var(--hdr-chip-h);    /* ← 与账本同规格 */
+        }
+        .auto-order-wrap.disabled .auto-order-label { color: #8b93a7; }
         /* ── 未标定品种置灰（2026-09-14 第 6 批）──
            只作用于**下单开关**：不在下单白名单的品种开关变灰不可点 + 旁边给一行说明。
            ⚠️ 不要用这里去限制行情搜索 —— 那会退回"消费端加过滤"的旧做法（有 4 条绕过点）。 */
         .auto-order-wrap.disabled { opacity: 0.55; cursor: not-allowed; }
-        .auto-order-wrap.disabled .auto-order-label { color: #8b93a7; }
         .auto-order-wrap.disabled .auto-order-dot { background: #5a6172; }
         .auto-order-wrap.disabled .auto-order-slider {
             cursor: not-allowed; background: #2f3346;
@@ -165,7 +172,8 @@
         }
         .auto-order-dot.on { background: #27ae60; }
         .auto-order-dot.off { background: #e74c3c; }
-        /* ── 引擎账本面板（C，2026-09-18）：交易引擎持仓 + 最近成交 ──
+        /* ── 引擎账本面板（C，2026-09-18）：交易引擎持仓（2026-09-24 改版：
+           成交节已按用户拍板删除，面板只剩持仓一节）──
            显隐由 app.js 直接切内联 style.display，默认 style="display:none"；
            .hidden 类仅保留兼容，不再使用 */
         .auto-order-ledger-btn {
@@ -197,8 +205,6 @@
         .auto-order-ledger-panel .aol-side.long { color: #e74c3c; }
         .auto-order-ledger-panel .aol-side.short { color: #2ecc71; }
         .auto-order-ledger-panel .aol-dim { color: #7f8a9f; font-size: 11px; }
-        .auto-order-ledger-panel .aol-pos { color: #e74c3c; }
-        .auto-order-ledger-panel .aol-neg { color: #2ecc71; }
         #chart-container {
             width: 100%; height: calc(100vh - 80px);
             position: relative; cursor: crosshair;

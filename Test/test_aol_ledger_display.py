@@ -1,19 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-账本面板展示契约护栏（2026-09-22 用户拍板）
+账本面板展示契约护栏（2026-09-22 用户拍板；2026-09-24 成交节删除改版）
 ====================================================================
 钉住 Frontend/app.html + app.js renderAutoOrderLedger + App/AppTrader.py
 投影三处的展示契约：
 
-  ① 面板两节标题：「持仓」「成交」——旧长标题（含「账本」字样的两节
-     标题）全文件零残留；
+  ① 面板节标题：只剩「持仓」一节（2026-09-24 用户拍板：成交节删除）——
+     旧长标题（含「账本」字样）与「成交」节全文件零残留；
   ② 持仓行：多/空 + 手数 + @ 入场价 + 时间，**无止损列**（renderAutoOrderLedger
      持仓分支内「止损」零命中；时间戳走 fmtAolTime）；
-  ③ 成交行：@ 入场价 → 出场价，价格统一一位小数（fmtAolPx1），
-     **不带尾部日期时间**（2026-09-22 四次拍板）；
-  ④ 成交列表排序：App/AppTrader.py 用 `_all_trades[-10:]`（库内 exit_at
-     升序原序截尾），最新一条排在**最后**；`reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：app.html 引 app.js?v=34（改前端必须抬版本号，防缓存假象；
+  ③ 成交行（2026-09-24 删除）：前端成交分支 / t.symbol / 净额 / aol-trades
+     消费全部零残留；AppTrader.py 的 trades_recent 投影**保留**（API 数据
+     完整性不受展示删减影响，只是前端不再消费）；
+  ④ 成交列表排序（后端投影保留，契约随之保留）：App/AppTrader.py 用
+     `_all_trades[-10:]`（库内 exit_at 升序原序截尾），最新一条排在**最后**；
+     `reversed(_all_trades)` 不得回潮；
+  ⑤ 资源版本号：app.html 引 app.js?v=35（改前端必须抬版本号，防缓存假象；
      版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
@@ -21,7 +23,7 @@
   ⑦ DryRun 离场按触发 K 线收盘价落账（2026-09-22 拍板）：ExitCheck 有
      fill_price 字段、触发两分支（多 / 空）都带 fill_price=close、Engine 透传并优先作
      ref_price；
-  ⑧ 持仓行/成交行都显示合约（p.symbol / t.symbol，2026-09-22 三次拍板：
+  ⑧ 持仓行显示合约（p.symbol，2026-09-22 三次拍板：
      多合约并行时行内必须能看出是哪个合约，如 IM2612）。
 
 行为层：fmtAolTime 抽到 node 里跑真函数，逐样本比对输出（node 不在位
@@ -67,46 +69,49 @@ with open(os.path.join(REPO, "App", "AppTrader.py"), encoding="utf-8") as f:
     PY = f.read()
 
 # ═══ ① 标题 ═══
-print("\n[1] 面板两节标题")
+print("\n[1] 面板节标题（2026-09-24：只剩「持仓」，成交节已删）")
 titles = re.findall(r'class="aol-title">([^<]+)</div>', HTML)
-check("标题序列 == ['持仓', '成交']", titles, ["持仓", "成交"])
+check("标题序列 == ['持仓']（成交节删除）", titles, ["持仓"])
 check("旧标题「交易引擎账本持仓」零残留", HTML.count("交易引擎账本持仓"), 0)
 check("旧标题「最近成交（交易引擎账本口径）」零残留（整串）",
       HTML.count("最近成交（交易引擎账本口径）"), 0)
-check("两节标题内不再含「账本」字样",
+check("标题内不再含「账本」字样",
       any("账本" in t for t in titles), False)
+check("成交节容器 aol-trades 已从 app.html 删除", "aol-trades" in HTML, False)
 
 # ═══ ② 持仓行：无止损列 ═══
 print("\n[2] 持仓行去止损列 + 时间格式化")
 i0 = JS.index("function renderAutoOrderLedger(data) {")
 i1 = JS.index("// 价格显示", i0)          # 下一区块横幅 = 区块结束锚
 BLOCK = JS[i0:i1]
-check("renderAutoOrderLedger 区块长度 > 800（防锚点抓半截）",
-      len(BLOCK) > 800, True)
-check("持仓/成交分支内「止损」零命中", BLOCK.count("止损"), 0)
+check("renderAutoOrderLedger 区块长度 > 300（防锚点抓半截）",
+      len(BLOCK) > 300, True)
+check("区块内「止损」零命中", BLOCK.count("止损"), 0)
 check("时间只剩持仓行走 fmtAolTime", BLOCK.count("fmtAolTime("), 1)
 check("持仓行保留 @ 入场价（一位小数）", BLOCK.count("fmtAolPx1(p.entry_price)"), 1)
-check("成交行 @ 入场价 → 出场价（一位小数）与 净额",
-      ("@ ' + fmtAolPx1(t.entry_price) + ' → '" in BLOCK)
-      and ("fmtAolPx1(t.exit_price)" in BLOCK) and ('净 ' in BLOCK), True)
-check("成交行不带时间（t.exit_at 零命中）",
-      "fmtAolTime(t.exit_at" in BLOCK, False)
 check("持仓行显示合约（p.symbol）",
       BLOCK.count("(p.symbol ? '<span class=\"aol-dim\">' + p.symbol + '</span>' : '')"), 1)
-check("成交行显示合约（t.symbol）",
-      BLOCK.count("(t.symbol ? '<span class=\"aol-dim\">' + t.symbol + '</span>' : '')"), 1)
+# ── ③ 前端成交消费零残留（2026-09-24 删除；AppTrader 投影保留见 [4]）──
+check("成交行拼接（t.entry_price/exit_price/净额）零残留",
+      (("fmtAolPx1(t.entry_price)" in BLOCK)
+       or ("fmtAolPx1(t.exit_price)" in BLOCK) or ("'净 '" in BLOCK)), False)
+check("成交行合约（t.symbol）零残留",
+      "(t.symbol ? '<span class=\"aol-dim\">' + t.symbol + '</span>' : '')" in BLOCK,
+      False)
+check("空态「（无成交）」零残留",
+      ("（无成交）" in JS) or ("（无成交）" in HTML), False)
 
 # ═══ ③ fmtAolTime 存在且被 app.html 版本号护栏配套 ═══
 print("\n[3] 资源版本号")
-# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（保护价徽标 → K线
-#   横虚线，2026-09-24）已抬到 v=34。
+# 版本号是**单调递增**的守卫（防缓存假象）：本次改前端（账本成交节删除 +
+# 顶栏三件套对齐 + 轮询分段隔离，2026-09-24）已抬到 v=35。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("app.html 引 app.js?v=34", 'app.js?v=34' in HTML, True)
-check("旧版本号 v=33 零残留", 'app.js?v=33' in HTML, False)
+check("app.html 引 app.js?v=35", 'app.js?v=35' in HTML, True)
+check("旧版本号 v=34 零残留", 'app.js?v=34' in HTML, False)
 
-# ═══ ④ 成交列表排序（后端投影） ═══
-print("\n[4] 成交列表：升序原序截尾，最新在最后")
+# ═══ ④ 成交列表排序（后端投影保留：展示删减不动数据完整性） ═══
+print("\n[4] 成交列表：升序原序截尾，最新在最后（投影保留，前端不消费）")
 check("AppTrader.py 用 _all_trades[-10:]",
       "_all_trades[-10:]" in PY, True)
 check("reversed(_all_trades) 零残留", "reversed(_all_trades)" in PY, False)
