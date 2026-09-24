@@ -187,6 +187,14 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
                         映射成止盈/止损必然要在"愿望"和"实际"之间二选一，两边都不对。
                         要看盈亏就读组内的 wins / losses / net（与本函数顶层同一套
                         net_cash 三分口径），"保本这一组到底赚没赚"因此可直接读出。
+      by_bsp_type       按买卖点类型（0/1/2/3 类）分组：{type: {n, wins, losses}}。
+                       类型取自每条成交的 `signal_key` 中段 —— `Records.make_key`
+                       的格式是 `date|bsp_type|is_buy`（见 Records.py:186），自动下单
+                       成交的 signal_key 即该格式（引擎 `_run_signal_key = sig.key`，
+                       sig.key 对 BSP 信号就是 make_key）。非 0-3 的类型（人工单 /
+                       回放 RUN 等）不入桶；组内只计胜/亏，平手（net_cash==0）既不入
+                       胜也不入亏，与面板「类胜负（胜/亏）」展示口径一致。用途：面板在
+                       "成交笔数"之后加一行"类型胜负"，一眼看出每类买卖点的胜/亏笔数。
     """
     if not trades:
         return _empty_stats()
@@ -255,6 +263,27 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         b["net"] = round(b["net"] + nc, 2)
         b["wins" if nc > 0 else "losses" if nc < 0 else "flat"] += 1
 
+    # by_bsp_type：按买卖点类型（0/1/2/3 类）分组，每组给胜/亏笔数。
+    #   类型取自 signal_key 中段（Records.make_key 的 `date|bsp_type|is_buy`），
+    #   自动下单成交的 signal_key 即该格式；非 0-3 的类型（人工/回放 RUN 等）
+    #   不入桶。组内只计胜/亏，平手既不入胜也不入亏（与「类胜负（胜/亏）」一致）。
+    #   命中口径刻意窄：只答"每类买卖点的胜/亏数量"，不掺金额/净额（那两件事
+    #   顶层 count/wins/losses 与 by_reason 已经覆盖）。
+    by_bsp_type: Dict[str, Dict[str, Any]] = {}
+    for t in trades:
+        sk = t.get("signal_key") or ""
+        parts = sk.split("|")
+        bt = parts[1] if len(parts) >= 2 else ""
+        if bt not in ("0", "1", "2", "3"):
+            continue
+        g = by_bsp_type.setdefault(bt, {"n": 0, "wins": 0, "losses": 0})
+        nc = _net(t)
+        g["n"] += 1
+        if nc > 0:
+            g["wins"] += 1
+        elif nc < 0:
+            g["losses"] += 1
+
     return {
         "count": count,
         "wins": len(wins),
@@ -273,6 +302,7 @@ def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         "expectancy": round(expectancy, 2),
         "equity_curve": equity_curve,
         "by_reason": by_reason,
+        "by_bsp_type": by_bsp_type,
     }
 
 
@@ -287,4 +317,5 @@ def _empty_stats() -> Dict[str, Any]:
         "expectancy": 0.0,
         "equity_curve": [],
         "by_reason": {},
+        "by_bsp_type": {},
     }

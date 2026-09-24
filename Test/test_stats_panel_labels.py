@@ -23,8 +23,10 @@
  ⑤ 期望值那一行的**标签**是「期望值」，**数值带「 元/笔」**（2026-09-19 用户
     拍板：= 总净盈亏 ÷ 总交易笔数，除完剩下的单位就是元/笔）。「期望值/笔」
     这种把量纲缀进标签的写法仍然禁用。
- ⑥ 明细行行序：期货品种 → 成交笔数 → 期望值 →
+ ⑥ 明细行行序：期货品种 → 成交笔数 → 类型胜负 → 期望值 →
     平均每笔盈利/亏损 → 最大单笔盈利/亏损
+    （类型胜负 = 按买卖点类型 0/1/2/3 类拆胜/亏笔数，用户拍板插在
+    成交笔数之后、期望值之前）
  ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
     盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
     是两个不同的指标）。
@@ -83,7 +85,7 @@ def check(cond, name, extra=""):
 
 
 # 明细行的目标顺序（实现与本测试共用的唯一定义）
-EXPECT_ORDER = ["期货品种", "成交笔数", "期望值",
+EXPECT_ORDER = ["期货品种", "成交笔数", "类型胜负", "期望值",
                 "平均每笔盈利/亏损", "最大单笔盈利/亏损"]
 
 # 核心区（stats-hero）四格的目标顺序（⑦）
@@ -119,6 +121,8 @@ def stats_fixture():
         "symbol_raw": "KQ.m@SHFE.rb",
         "symbol_key": "RB",
         "by_symbol": {DIRTY_CONTRACT_A: 3, DIRTY_CONTRACT_B: 2},
+        "by_bsp_type": {"1": {"n": 3, "wins": 2, "losses": 1},
+                        "3": {"n": 2, "wins": 1, "losses": 1}},
         "read_errors": [],
         "dbs_scanned": 1,
     }
@@ -144,8 +148,10 @@ detail = blk.split("'<div class=\"stats-rows\">';", 1)[1]
 labels = re.findall(r'class="stats-label">([^<]+)</span>', detail)
 check(labels == EXPECT_ORDER, "①⑥ 明细行标签序列 == 目标顺序", labels)
 check(labels.index("期货品种") < labels.index("成交笔数"), "⑥ 期货品种 在 成交笔数 之前")
-check(labels.index("期望值") == labels.index("成交笔数") + 1,
-      "⑥ 期望值 紧随 成交笔数 之后")
+check(labels.index("类型胜负") == labels.index("成交笔数") + 1,
+      "⑥ 类型胜负 紧随 成交笔数 之后（用户拍板：成交笔数后插入）")
+check(labels.index("期望值") == labels.index("类型胜负") + 1,
+      "⑥ 期望值 紧随 类型胜负 之后")
 check("盈利因子" not in labels, "⑦ 明细区不再有盈利因子行（核心区已提上去）", labels)
 
 # ⑦ 核心区四格：从 stats-hero 起行切到它的收尾 '</div>'
