@@ -4803,17 +4803,17 @@
             // 类型胜负：按买卖点类型（0/1/2/3 类）拆胜/亏笔数，紧跟「成交笔数」之后、
             // 期望值之前（用户拍板：一眼看出每类买卖点的盈亏数量分布）。类型取自后端
             // compute_trade_stats 算好的 by_bsp_type（signal_key 中段=类型）；组里只有
-            // 胜/亏（平手不计入）。整条强制单行不折行（stats-bsp-line → white-space:nowrap），
-            // 弹窗宽度已同步加宽（app.css .stats-panel width:700px）。净方向标：胜>亏 标「正」、
-            // 亏>胜 标「负」、持平不标 —— 方便一眼看出哪类是净亏来源。
+            // 胜/亏（平手不计入）。净方向标：胜>亏 标「正」、亏>胜 标「负」、持平不标。
+            // 布局：四段拆成独立的 stats-bsp-seg，父行用 flex + justify-content:space-between
+            // —— 0类贴左、3类贴右、中间 1类/2类 等间距分布（用户拍板：不要挤在左边）。
             var bbs = d.by_bsp_type || {};
-            var bspParts = [];
+            html += '<div class="stats-row stats-bsp-row">';
             for (var bt = 0; bt <= 3; bt++) {
                 var bg = bbs[String(bt)] || {wins: 0, losses: 0};
                 var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "");
-                bspParts.push(bt + "类" + btag + "(胜" + bg.wins + "/亏" + bg.losses + ")");
+                html += '<span class="stats-bsp-seg">' + bt + '类' + btag + '(胜' + bg.wins + '/亏' + bg.losses + ')</span>';
             }
-            html += '<div class="stats-row"><span class="stats-value stats-bsp-line">' + bspParts.join(" ") + '</span></div>';
+            html += '</div>';
             // 期望值 = win_rate*avg_win + loss_rate*avg_loss = 总净盈亏 ÷ 总笔数，
             // 量纲就是「元/笔」，所以数值后面必须缀上「/笔」—— 否则它与上面的
             // 总净盈亏只差一个数字，读的人无从判断哪个是总量、哪个是每笔。

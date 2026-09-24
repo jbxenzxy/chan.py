@@ -374,14 +374,6 @@
    "low": 17.63,
    "price": 17.84,
    "type": "1"
-  },
-  {
-   "date": "2024/02/01",
-   "high": 49.02,
-   "is_buy": true,
-   "low": 48.09,
-   "price": 48.73,
-   "type": "3"
   }
  ],
  "fxs": [
@@ -7223,7 +7215,7 @@
  ],
  "meta": {
   "bi_count": 17,
-  "bsp_count": 3,
+  "bsp_count": 2,
   "chan_version": "chan.py",
   "date_range": "2023/01/03 ~ 2024/12/02",
   "forward_adjust": true,

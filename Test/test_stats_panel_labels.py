@@ -156,15 +156,16 @@ check("盈利因子" not in labels, "⑦ 明细区不再有盈利因子行（核
 
 # ⑥-b 类型胜负单行：无独立标签、四段紧凑、净方向标 正/负、强制不折行。
 #       这一段是 2026-09-24 用户拍板从「带标签的折行行」改成「成交笔数之后、
-#       期望值之前的一行紧凑四段」，并加宽弹窗避免折行。
-check("stats-bsp-line" in blk, "⑥-b 类型胜负行带 stats-bsp-line 类（前端 CSS nowrap 锚点）")
+#       期望值之前的一行紧凑四段」；布局用 flex space-between 让 0类左/3类右/
+#       中间均分，弹窗保持原宽 440px（空间足够，不加宽）。
+check("stats-bsp-row" in blk, "⑥-b 类型胜负行带 stats-bsp-row 类（flex + space-between 锚点）")
 check('class="stats-label">类型胜负</span>' not in blk,
       "⑥-b 旧标签元素「类型胜负」已移除（并入单行，仅注释可提）")
-check('"类" + btag + "(胜"' in blk,
+check("'类' + btag + '(胜'" in blk,
       "⑥-b 段格式为紧凑半角括号：(胜X/亏Y)（无内空格、无全角括号）")
 check('var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "")' in blk,
       "⑥-b 净方向标逻辑：胜>亏→正、亏>胜→负、持平不标")
-check("bspParts.join(\" \")" in blk, "⑥-b 四段用单空格拼接成一行（不折行）")
+check('class="stats-bsp-seg"' in blk, "⑥-b 四段拆成独立 stats-bsp-seg 子元素（非单文本拼接）")
 
 # ⑦ 核心区四格：从 stats-hero 起行切到它的收尾 '</div>'
 hero = blk.split("'<div class=\"stats-hero\">';", 1)[1].split("'</div>';", 1)[0]
@@ -349,14 +350,25 @@ else:
                 got = re.findall(r'class="stats-label">([^<]+)</span>', detail_html)
                 check(got == EXPECT_ORDER, "①⑥ 真渲染行序 == 目标顺序", got)
 
-                # ⑥-b 类型胜负单行：真渲染出紧凑四段 + 净方向标，整行不折行，
-                # 且弹窗已加宽到 700px 容纳四段。
-                bsp_html = re.search(
-                    r'class="stats-value stats-bsp-line"[^>]*>(.*?)</span>', html, re.S)
-                check(bsp_html is not None, "⑥-b 真渲染有类型胜负单行（stats-bsp-line）")
-                if bsp_html:
-                    bsp_txt = re.sub(r"<[^>]+>", "", bsp_html.group(1)).strip()
-                    # 用同一份 fixture 推算期望串，避免硬编码与实现漂移
+                # ⑥-b 类型胜负单行：真渲染出紧凑四段 + 净方向标，四段等间距分布
+                #（0类贴左 / 3类贴右），整行不折行，且弹窗已加宽到 700px 容纳四段。
+                row = page.evaluate("""() => {
+                    const r = document.querySelector('#stats-content .stats-bsp-row');
+                    if (!r) return null;
+                    const cs = getComputedStyle(r);
+                    const segs = [...r.querySelectorAll('.stats-bsp-seg')];
+                    const rb = r.getBoundingClientRect();
+                    const info = segs.map(s => {
+                        const b = s.getBoundingClientRect();
+                        return { txt: s.textContent, wn: getComputedStyle(s).whiteSpace,
+                                 left: b.left, right: b.right };
+                    });
+                    return { jc: cs.justifyContent, rbLeft: rb.left, rbRight: rb.right,
+                             segs: info };
+                }""")
+                check(row is not None, "⑥-b 真渲染有类型胜负行（stats-bsp-row）")
+                if row:
+                    # 文案 == 期望（四段无内空格拼接）
                     f = json.loads(cur_fix[0])
                     parts = []
                     for t in range(4):
@@ -364,21 +376,41 @@ else:
                         tag = "正" if g["wins"] > g["losses"] else (
                             "负" if g["losses"] > g["wins"] else "")
                         parts.append("%d类%s(胜%d/亏%d)" % (t, tag, g["wins"], g["losses"]))
-                    want = " ".join(parts)
-                    check(bsp_txt == want,
-                          "⑥-b 真渲染类型胜负文案 == 期望（含净方向标）", bsp_txt)
-                    check("（" not in bsp_txt, "⑥-b 真渲染无全角括号（紧凑半角）", bsp_txt)
-                    # 整行不折行：computed white-space == nowrap
-                    wn = page.evaluate(
-                        "() => { const el = document.querySelector("
-                        "'#stats-content .stats-bsp-line');"
-                        " return el ? getComputedStyle(el).whiteSpace : ''; }")
-                    check(wn == "nowrap", "⑥-b 真渲染类型胜负行 whiterap=nowrap（不折行）", wn)
-                # 弹窗已加宽：panel 计算宽度 >= 680px（容纳四段单行不挤）
+                    want = "".join(parts)
+                    got_txt = "".join(s["txt"] for s in row["segs"])
+                    check(got_txt == want,
+                          "⑥-b 真渲染类型胜负文案 == 期望（含净方向标）", got_txt)
+                    check("（" not in got_txt, "⑥-b 真渲染无全角括号（紧凑半角）", got_txt)
+                    # 四段等间距分布：容器 flex space-between
+                    check(row["jc"] == "space-between",
+                          "⑥-b 真渲染父行 justify-content=space-between（0类左/3类右）",
+                          row["jc"])
+                    # 0类贴左、3类贴右、中间两段落在容器内（不挤在左边）
+                    segs = row["segs"]
+                    check(len(segs) == 4, "⑥-b 真渲染正好四段", len(segs))
+                    if len(segs) == 4:
+                        tol = 4  # px 容差
+                        check(abs(segs[0]["left"] - row["rbLeft"]) <= tol,
+                              "⑥-b 第1段(0类) 贴左", (segs[0]["left"], row["rbLeft"]))
+                        check(abs(segs[3]["right"] - row["rbRight"]) <= tol,
+                              "⑥-b 第4段(3类) 贴右", (segs[3]["right"], row["rbRight"]))
+                        # 中间两段严格落在首尾的内侧（证明不是全挤左边）：
+                        # 段1/段2 的左缘应明显大于容器左缘，段2/段3 的右缘明显小于容器右缘
+                        check(segs[1]["left"] > row["rbLeft"] + tol,
+                              "⑥-b 第2段(1类) 不在最左（已向右分布）",
+                              (segs[1]["left"], row["rbLeft"]))
+                        check(segs[2]["right"] < row["rbRight"] - tol,
+                              "⑥-b 第3段(2类) 不在最右（已向左分布）",
+                              (segs[2]["right"], row["rbRight"]))
+                    # 每段不折行
+                    check(all(s["wn"] == "nowrap" for s in row["segs"]),
+                          "⑥-b 真渲染各段 white-space=nowrap（不折行）",
+                          [s["wn"] for s in row["segs"]])
+                # 弹窗保持原宽：不再是 700px 撑开，收窄到 ≤500（space-between 自动均分）
                 pw = page.evaluate(
                     "() => { const p = document.getElementById('stats-panel');"
                     " return p ? p.getBoundingClientRect().width : 0; }")
-                check(pw >= 680, "⑥-b 统计弹窗宽度 >= 680px（四段单行不挤）", pw)
+                check(380 <= pw <= 500, "⑥-b 统计弹窗宽度已收窄（≤500，不再 700 撑开）", pw)
 
                 # ⑦ 真渲染：核心四格在位且顺序正确，明细区不再重复盈利因子
                 hero_html = ""
