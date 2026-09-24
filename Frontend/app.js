@@ -4800,17 +4800,20 @@
                 html += '<div class="stats-row"><span class="stats-label">期货品种</span><span class="stats-value" style="font-size:11px;text-align:right">' + statsEsc(d.symbol_key) + '</span></div>';
             }
             html += '<div class="stats-row"><span class="stats-label">成交笔数</span><span class="stats-value">' + count + '（胜 ' + d.wins + ' / 亏 ' + d.losses + (d.flat ? ' / 平 ' + d.flat : '') + '）</span></div>';
-            // 类型胜负：按买卖点类型（0/1/2/3 类）拆胜/亏笔数，放在成交笔数之后、
-            // 期望值之前，方便一眼看出每类买卖点的盈亏数量分布。类型取自后端
-            // compute_trade_stats 算好的 by_bsp_type（signal_key 中段=类型）；
-            // 组里只有胜/亏（平手不计入，与「类胜负（胜/亏）」口径一致）。
+            // 类型胜负：按买卖点类型（0/1/2/3 类）拆胜/亏笔数，紧跟「成交笔数」之后、
+            // 期望值之前（用户拍板：一眼看出每类买卖点的盈亏数量分布）。类型取自后端
+            // compute_trade_stats 算好的 by_bsp_type（signal_key 中段=类型）；组里只有
+            // 胜/亏（平手不计入）。整条强制单行不折行（stats-bsp-line → white-space:nowrap），
+            // 弹窗宽度已同步加宽（app.css .stats-panel width:700px）。净方向标：胜>亏 标「正」、
+            // 亏>胜 标「负」、持平不标 —— 方便一眼看出哪类是净亏来源。
             var bbs = d.by_bsp_type || {};
             var bspParts = [];
             for (var bt = 0; bt <= 3; bt++) {
                 var bg = bbs[String(bt)] || {wins: 0, losses: 0};
-                bspParts.push(bt + '类（胜 ' + bg.wins + ' / 亏 ' + bg.losses + '）');
+                var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "");
+                bspParts.push(bt + "类" + btag + "(胜" + bg.wins + "/亏" + bg.losses + ")");
             }
-            html += '<div class="stats-row"><span class="stats-label">类型胜负</span><span class="stats-value">' + bspParts.join('　') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-value stats-bsp-line">' + bspParts.join(" ") + '</span></div>';
             // 期望值 = win_rate*avg_win + loss_rate*avg_loss = 总净盈亏 ÷ 总笔数，
             // 量纲就是「元/笔」，所以数值后面必须缀上「/笔」—— 否则它与上面的
             // 总净盈亏只差一个数字，读的人无从判断哪个是总量、哪个是每笔。

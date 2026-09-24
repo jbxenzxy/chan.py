@@ -295,7 +295,7 @@
         /* 成交统计面板（与「市场量能」面板同款：右下浮动卡片 + header/× + 可滚动 body） */
         .stats-panel {
             position: fixed; bottom: 40px; right: 10px;
-            width: 440px; max-height: calc(100vh - 120px);
+            width: 700px; max-width: calc(100vw - 20px); max-height: calc(100vh - 120px);
             background: rgba(22, 33, 62, 0.97);
             border: 1px solid #0f3460; border-radius: 8px;
             z-index: 200; display: none;
@@ -332,6 +332,10 @@
         .stats-row { display: flex; justify-content: space-between; padding: 3px 0; gap: 10px; }
         .stats-label { color: #8892b0; }
         .stats-value { color: #a8b2d1; font-weight: 500; }
+        /* 类型胜负单行：强制不折行（弹窗已加宽到 700px 容纳四段）。
+           否则「0类(胜1/亏1) 1类(胜3/亏3) 2类(胜0/亏0) 3类负(胜3/亏4)」
+           在窄面板里会被挤成两行。 */
+        .stats-bsp-line { white-space: nowrap; }
         .stats-empty { text-align: center; color: #555; padding: 40px 0; }
         .stats-note { margin-top: 6px; color: #8892b0; font-size: 11px; text-align: center; }
         .goto-date {

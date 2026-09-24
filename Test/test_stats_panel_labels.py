@@ -23,10 +23,11 @@
  ⑤ 期望值那一行的**标签**是「期望值」，**数值带「 元/笔」**（2026-09-19 用户
     拍板：= 总净盈亏 ÷ 总交易笔数，除完剩下的单位就是元/笔）。「期望值/笔」
     这种把量纲缀进标签的写法仍然禁用。
- ⑥ 明细行行序：期货品种 → 成交笔数 → 类型胜负 → 期望值 →
+ ⑥ 明细行行序：期货品种 → 成交笔数 → 期望值 →
     平均每笔盈利/亏损 → 最大单笔盈利/亏损
-    （类型胜负 = 按买卖点类型 0/1/2/3 类拆胜/亏笔数，用户拍板插在
-    成交笔数之后、期望值之前）
+    （类型胜负拆胜/亏已并入「成交笔数」之后的一行：无独立标签、
+    四段 0/1/2/3 类紧凑单行、净方向标 正/负，弹窗加宽到 700px 不折行；
+    用户拍板插在成交笔数之后、期望值之前）
  ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
     盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
     是两个不同的指标）。
@@ -85,7 +86,8 @@ def check(cond, name, extra=""):
 
 
 # 明细行的目标顺序（实现与本测试共用的唯一定义）
-EXPECT_ORDER = ["期货品种", "成交笔数", "类型胜负", "期望值",
+# 类型胜负已无独立标签（并入「成交笔数」之后的一行，见 ⑥-b）
+EXPECT_ORDER = ["期货品种", "成交笔数", "期望值",
                 "平均每笔盈利/亏损", "最大单笔盈利/亏损"]
 
 # 核心区（stats-hero）四格的目标顺序（⑦）
@@ -148,11 +150,21 @@ detail = blk.split("'<div class=\"stats-rows\">';", 1)[1]
 labels = re.findall(r'class="stats-label">([^<]+)</span>', detail)
 check(labels == EXPECT_ORDER, "①⑥ 明细行标签序列 == 目标顺序", labels)
 check(labels.index("期货品种") < labels.index("成交笔数"), "⑥ 期货品种 在 成交笔数 之前")
-check(labels.index("类型胜负") == labels.index("成交笔数") + 1,
-      "⑥ 类型胜负 紧随 成交笔数 之后（用户拍板：成交笔数后插入）")
-check(labels.index("期望值") == labels.index("类型胜负") + 1,
-      "⑥ 期望值 紧随 类型胜负 之后")
+check(labels.index("期望值") == labels.index("成交笔数") + 1,
+      "⑥ 期望值 紧随 成交笔数 之后（类型胜负行已无标签、并入单行）")
 check("盈利因子" not in labels, "⑦ 明细区不再有盈利因子行（核心区已提上去）", labels)
+
+# ⑥-b 类型胜负单行：无独立标签、四段紧凑、净方向标 正/负、强制不折行。
+#       这一段是 2026-09-24 用户拍板从「带标签的折行行」改成「成交笔数之后、
+#       期望值之前的一行紧凑四段」，并加宽弹窗避免折行。
+check("stats-bsp-line" in blk, "⑥-b 类型胜负行带 stats-bsp-line 类（前端 CSS nowrap 锚点）")
+check('class="stats-label">类型胜负</span>' not in blk,
+      "⑥-b 旧标签元素「类型胜负」已移除（并入单行，仅注释可提）")
+check('"类" + btag + "(胜"' in blk,
+      "⑥-b 段格式为紧凑半角括号：(胜X/亏Y)（无内空格、无全角括号）")
+check('var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "")' in blk,
+      "⑥-b 净方向标逻辑：胜>亏→正、亏>胜→负、持平不标")
+check("bspParts.join(\" \")" in blk, "⑥-b 四段用单空格拼接成一行（不折行）")
 
 # ⑦ 核心区四格：从 stats-hero 起行切到它的收尾 '</div>'
 hero = blk.split("'<div class=\"stats-hero\">';", 1)[1].split("'</div>';", 1)[0]
@@ -336,6 +348,37 @@ else:
                     if 'class="stats-rows"' in html else html
                 got = re.findall(r'class="stats-label">([^<]+)</span>', detail_html)
                 check(got == EXPECT_ORDER, "①⑥ 真渲染行序 == 目标顺序", got)
+
+                # ⑥-b 类型胜负单行：真渲染出紧凑四段 + 净方向标，整行不折行，
+                # 且弹窗已加宽到 700px 容纳四段。
+                bsp_html = re.search(
+                    r'class="stats-value stats-bsp-line"[^>]*>(.*?)</span>', html, re.S)
+                check(bsp_html is not None, "⑥-b 真渲染有类型胜负单行（stats-bsp-line）")
+                if bsp_html:
+                    bsp_txt = re.sub(r"<[^>]+>", "", bsp_html.group(1)).strip()
+                    # 用同一份 fixture 推算期望串，避免硬编码与实现漂移
+                    f = json.loads(cur_fix[0])
+                    parts = []
+                    for t in range(4):
+                        g = f.get("by_bsp_type", {}).get(str(t), {"wins": 0, "losses": 0})
+                        tag = "正" if g["wins"] > g["losses"] else (
+                            "负" if g["losses"] > g["wins"] else "")
+                        parts.append("%d类%s(胜%d/亏%d)" % (t, tag, g["wins"], g["losses"]))
+                    want = " ".join(parts)
+                    check(bsp_txt == want,
+                          "⑥-b 真渲染类型胜负文案 == 期望（含净方向标）", bsp_txt)
+                    check("（" not in bsp_txt, "⑥-b 真渲染无全角括号（紧凑半角）", bsp_txt)
+                    # 整行不折行：computed white-space == nowrap
+                    wn = page.evaluate(
+                        "() => { const el = document.querySelector("
+                        "'#stats-content .stats-bsp-line');"
+                        " return el ? getComputedStyle(el).whiteSpace : ''; }")
+                    check(wn == "nowrap", "⑥-b 真渲染类型胜负行 whiterap=nowrap（不折行）", wn)
+                # 弹窗已加宽：panel 计算宽度 >= 680px（容纳四段单行不挤）
+                pw = page.evaluate(
+                    "() => { const p = document.getElementById('stats-panel');"
+                    " return p ? p.getBoundingClientRect().width : 0; }")
+                check(pw >= 680, "⑥-b 统计弹窗宽度 >= 680px（四段单行不挤）", pw)
 
                 # ⑦ 真渲染：核心四格在位且顺序正确，明细区不再重复盈利因子
                 hero_html = ""
