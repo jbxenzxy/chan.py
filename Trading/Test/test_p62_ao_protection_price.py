@@ -13,8 +13,11 @@ P62 运行态保护价：后端投影 + 前端常驻显示
 本测试钉死两件事：
   [A] 后端投影：`auto_order_status()["run"]` 除 stop 外还给出它的**解释**
       （phase / r / tp），且三项与 `_run_plan` 实时一致、跨重启一致；
-  [B] 前端出口：`Frontend/app.html` 有常驻元素、`app.js` 消费上述三项、
-      且"无运行段时不显示"（资源版本号由 Test/test_aol_ledger_display.py ⑤ 组独占守卫）。
+  [B] 前端出口（2026-09-24 改版：账本旁徽标 → K线主图横虚线）：
+      `Frontend/app.js` 的 `calcProtectionLine` 消费 run 的 stop / side / phase
+      构造画线状态（无运行段 → 不画），`drawProtectionLine` 在主图渲染管线里
+      画橙色横虚线 + 右端「保护 价·层」标签；
+      （资源版本号由 Test/test_aol_ledger_display.py ⑤ 组独占守卫）。
 
 覆盖清单：
   [1] 初始层：投影 stop == 计划真值（非 0 = 有保护价）；phase 空；r / tp 就位
@@ -22,25 +25,28 @@ P62 运行态保护价：后端投影 + 前端常驻显示
   [3] 跟踪层：浮盈过 win_loss_ratio·R → phase=trailing、stop = best − 0.5R
   [4] 实时性：跟踪层内再创新高 → stop 继续抬（杀掉"开仓快照"式实现）
   [5] 跨重启：_persist → 新引擎 _restore_run → 投影四项与恢复前逐个相等
-  [6] 无运行段：空仓 / 锁仓 → run 为 None（前端据此隐藏，不留 "--" 占位）
+  [6] 无运行段：空仓 / 锁仓 → run 为 None（前端据此不画线）
   [7] toast：移动止盈 toast 与保本 toast 一样带出保护价（2026-09-23 对称化）
-  [8] 前端静态层：元素 / 消费点 / 三项字段名 / 隐式隐藏 / **元素顺序**
-      （2026-09-23 用户拍板：保护价徽标排在「账本」之后、整组最右）
+  [8] 前端静态层：徽标元素与样式已删 / 画线组件就位 / 消费字段 / 只挂主图 /
+      无运行段默认不画
   [9] 源码护栏：run 字典键必需项齐全，三项取值来源是 _run_plan.params，
       且 stop 必须来自引擎级实时计划（不得读仓单快照）
-  [10] 前端行为层：`renderAutoOrderPrice` 抽到 node 里跑真函数 ——
-      文本 / 层文案 / 类别 / 隐藏分支逐样本比对（node 不在位则跳过）
+  [10] 前端行为层：`calcProtectionLine` 抽到 node 里跑真函数 ——
+      三态（运行 / 空仓 / 非法值）、变化判定（价 / 层 / 向任一变 = 变）
+      逐样本比对（node 不在位则跳过）
   [11] 两条投影同构：真实 `state.db` 上，引擎 `auto_order_status()["run"]` 与
       API 侧 `AppTrader._read_engine_switch()["run"]` **逐字段相等**；
       静态层另钉住两处键集合一致、取值来源一致
 
-判别力（护栏不恒真，2026-09-23 六条变异各有对应检查点变红）：
+判别力（护栏不恒真）：
   删 `Engine.py` run 里 phase 一行      → [1c] / [2a] / [3a] / [4a] / [9b] / [9c] / [9d]
   stop 改读仓单 exit_plan（开仓冻结）   → [1b] / [2b] / [3b] / [4b] / [4c] / [9f]
   移动止盈 toast 去掉价位               → [7d] / [7e]
-  前端层文案改短（保本层→保本）         → [10b] / [10c] / [10e] / [10i]
-  隐藏分支不置 display:none             → [8h] / [10f] / [10g] / [10h]
-  保护价元素挪回账本之前（顺序回归）    → [8b] / [8b2]
+  徽标元素加回 app.html / 样式加回 css  → [8a] / [8i]
+  画线组件改名或删掉                    → [8d] / [8e] / [10a]
+  副图也画线                            → [8i2]
+  空仓不撤线（changed 恒 False）        → [10g]
+  phase 变价不变判为"没变"（不重绘）    → [10d]
 
 投影字段一律用 `g()` / `num()` 读：缺键时报红而不是 KeyError 中断用例 ——
 否则删掉一个键只会让这条用例在第 3 行崩掉，后面 40 项一条都看不到。
@@ -343,9 +349,9 @@ with tmp_dir() as tmp:
           bool(tr) and "{:g}".format(engine._run_plan.stop_price) in tr[-1], True)
 
 # ════════════════════════════════════════════════════════════════
-# [8] 前端静态层
+# [8] 前端静态层（2026-09-24 改版：账本旁徽标 → K线主图横虚线）
 # ════════════════════════════════════════════════════════════════
-print("\n[8] 前端：常驻元素 + 消费三项 + 无运行段隐藏")
+print("\n[8] 前端：徽标已删 + 画线组件就位 + 无运行段不画")
 _html_p = os.path.join(_REPO, "Frontend", "app.html")
 _js_p = os.path.join(_REPO, "Frontend", "app.js")
 _css_p = os.path.join(_REPO, "Frontend", "app.css")
@@ -355,39 +361,43 @@ else:
     HTML = io.open(_html_p, encoding="utf-8").read()
     JS = io.open(_js_p, encoding="utf-8").read()
     CSS = io.open(_css_p, encoding="utf-8").read()
-    check("[8a] app.html 有常驻保护价元素（默认隐藏、且是完整标签）",
-          '<span class="auto-order-px" id="auto-order-px" '
-          'style="display:none"></span>' in HTML, True)
+    # ── 徽标退场（2026-09-24 用户拍板：账本后面没空间，改画 K线横虚线）──
+    check("[8a] app.html 徽标元素已删除（auto-order-px 零残留）",
+          "auto-order-px" in HTML, False)
     # 资源版本号不在这里断言 —— 它由 Test/test_aol_ledger_display.py 的 ⑤ 组
     #   独占守卫（那条契约的存在意义就是"改前端必须抬版本号"）。两处各写一份
     #   只会让抬版本号时要改两个文件，且不增加任何拦截力。
-    # ── 位置契约（2026-09-23 用户拍板：徽标挪到「账本」之后、本组最右）──
-    #   ⚠️ [8a] 只断言元素存在 —— 把它挪到哪都照样绿。而"挪到账本后面"是用户
-    #   明确要求的**展示顺序**（不是存在性），故单独钉：抽 auto-order 容器内的
-    #   子元素 id 序列，与受控清单**逐项**比对（不是"包含"）。序列一变 ⇒ 有人
-    #   动过展示顺序，必须回来改这条。
+    # ── 位置契约：徽标删掉后 auto-order 一组子元素清单同步收缩 ──
+    #   ⚠️ 断言形态仍是"全等"（不是"包含"）：序列一变 ⇒ 有人动过展示顺序，
+    #   必须回来改这条。
     _wrap_seg = HTML[HTML.index('id="auto-order-wrap"'):
                      HTML.index('id="auto-order-ledger-panel"')]
-    check("[8b] auto-order 一组子元素顺序 = 受控清单（保护价在最右）",
+    check("[8b] auto-order 一组子元素顺序 = 受控清单（徽标已从清单移除）",
           re.findall(r'id="([\w-]+)"', _wrap_seg),
           ["auto-order-wrap", "auto-order-dot", "auto-order-label",
-           "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn",
-           "auto-order-px"])
-    check("[8b2] 保护价元素排在「账本」之后（独立于上面清单的位置比较）",
-          HTML.index('id="auto-order-px"')
-          > HTML.index('id="auto-order-ledger-btn"'), True)
-    check("[8d] app.js 定义了渲染函数", "function renderAutoOrderPrice(" in JS,
+           "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn"])
+    check("[8b2] 旧渲染函数 renderAutoOrderPrice 在 app.js 零残留",
+          "renderAutoOrderPrice" in JS, False)
+    # ── 画线组件就位 ──
+    check("[8d] app.js 定义了纯函数 calcProtectionLine 与绘制函数 drawProtectionLine",
+          ("function calcProtectionLine(" in JS
+           and "function drawProtectionLine(" in JS), True)
+    check("[8e] 轮询回调里真的调用了它（changed 才赋值 + 重绘）",
+          ("calcProtectionLine(aoRun, protectionLine)" in JS
+           and "protectionLine = _pl.line" in JS), True)
+    check("[8f] 画线消费 run.stop / run.side / run.phase（三态的三个来源）",
+          ("aoRun.stop" in JS and "aoRun.side" in JS and "aoRun.phase" in JS),
           True)
-    check("[8e] 轮询回调里真的调用了它",
-          "renderAutoOrderPrice(aoRun)" in JS, True)
-    check("[8f] 消费后端 run.side / phase（层文案来源）",
-          ("aoRun.side ===" in JS and "aoRun.phase" in JS), True)
-    check("[8g] 消费 run.r / run.tp（1R 与止盈启动价）",
-          ("aoRun.r" in JS and "aoRun.tp" in JS), True)
-    check("[8h] 无运行段 / 保护价为 0 → 隐藏（不留 -- 占位）",
-          "el.style.display = 'none'" in JS, True)
-    check("[8i] app.css 有 .auto-order-px 样式（默认 display:none）",
-          ".auto-order-px {" in CSS and "display: none;" in CSS, True)
+    check("[8g] 徽标专属解释字段 r / tp 前端零残留（画线只认价格与层）",
+          ("aoRun.r" in JS or "aoRun.tp" in JS), False)
+    check("[8h] 无运行段默认不画：protectionLine 初始 null + 绘制函数开头早退",
+          ("let protectionLine = null;" in JS
+           and "if (!protectionLine || !isFinite(protectionLine.price)) return;" in JS),
+          True)
+    check("[8i] app.css 徽标样式已删除（.auto-order-px 零残留）",
+          ".auto-order-px" in CSS, False)
+    check("[8i2] 画线只挂主图（dualSubData 副图不画）",
+          "if (data !== dualSubData) drawProtectionLine(" in JS, True)
     check("[8j] 账本面板「持仓行无止损列」契约未被破坏"
           "（renderAutoOrderLedger 区块仍零命中）",
           JS[JS.index("function renderAutoOrderLedger(data) {"):
@@ -443,28 +453,24 @@ if _run_dict is not None:
            and ".exit_plan" not in _stop_src), True)
 
 # ════════════════════════════════════════════════════════════════
-# [10] 前端行为层：renderAutoOrderPrice 抽到 node 里跑真函数
+# [10] 前端行为层：calcProtectionLine 抽到 node 里跑真函数
 # ════════════════════════════════════════════════════════════════
-print("\n[10] 前端行为层（node 真函数）：文本 / 类别 / 显隐 / 层文案")
+print("\n[10] 前端行为层（node 真函数）：画线状态机 / 三态 / 变化判定")
 if not (os.path.exists(_html_p) and os.path.exists(_js_p)):
     print("  [SKIP] Frontend 不在场（部分树），跳过行为层")
 else:
     _js = io.open(_js_p, encoding="utf-8").read()
     _m_fn = re.search(
-        r"(        function renderAutoOrderPrice\(aoRun\) \{[\s\S]*?\n        \})",
+        r"(        function calcProtectionLine\(aoRun, prev\) \{[\s\S]*?\n        \})",
         _js)
-    # fmtPx 一并抽真的：断言"文本长什么样"不能靠打桩喂一个假的格式化函数
-    _m_px = re.search(r"(        function fmtPx\(v\) \{[\s\S]*?\n        \})", _js)
-    check("[10a] 两个函数源码都可抽取（防抓空）",
-          (_m_fn is not None and _m_px is not None), True)
+    check("[10a] 函数源码可抽取（防抓空）", _m_fn is not None, True)
     _node = shutil.which("node")
-    if _m_fn is None or _m_px is None:
+    if _m_fn is None:
         pass
     elif not _node:
         print("  [SKIP] node 不在位，只跑静态层")
     else:
         _fn_src = re.sub(r"^        ", "", _m_fn.group(1), flags=re.M)
-        _px_src = re.sub(r"^        ", "", _m_px.group(1), flags=re.M)
         _base = {"side": "LONG", "anchor": 7584.6, "volume": 2,
                  "name": "run_managed", "stop": 7588.6, "phase": "breakeven",
                  "r": 7.8, "tp": 7608}
@@ -474,97 +480,70 @@ else:
             d.update(kw)
             return d
 
-        _tail = "。离场判据 = 收盘价跌破保护价（盘中触及不算）。口径与阈值参数见 Strategy/Exit.py。"
-        _tip_full = ("本段多仓当前保护价（保本层）：7588.6；风控锚 7584.6；"
-                     "1R = 7.8 点；止盈启动价 7608（浮盈达到该价即转入跟踪层，"
-                     "此后逐根抬高保护价）" + _tail)
-        _tip_nort = ("本段多仓当前保护价（保本层）：7588.6；风控锚 7584.6" + _tail)
+        def _line(price, side="LONG", phase="breakeven"):
+            return {"price": price, "side": side, "phase": phase}
+
         _cases = [
-            {"id": "[10b]", "what": "保本层多仓（整条 tooltip 逐字钉死）",
-             "run": _case(), "want": ("保护价 7588.6", "auto-order-px long",
-                                      "inline"), "tip": _tip_full, "exact": True},
-            {"id": "[10c]", "what": "跟踪层：层文案切到「跟踪层」",
+            {"id": "[10b]", "what": "运行态（保本层）→ 画出该价",
+             "prev": None, "run": _case(),
+             "want_line": _line(7588.6), "want_changed": True},
+            {"id": "[10c]", "what": "phase 抬到跟踪层（价也变）→ 变化",
+             "prev": _line(7588.6), "run": _case(phase="trailing", stop=7608.2),
+             "want_line": _line(7608.2, phase="trailing"), "want_changed": True},
+            {"id": "[10d]", "what": "同价不同层（phase 变）→ 也算变化（标签要跟着跳）",
+             "prev": _line(7608.2, phase="breakeven"),
              "run": _case(phase="trailing", stop=7608.2),
-             "want": ("保护价 7608.2", "auto-order-px long", "inline"),
-             "tip": "（跟踪层）：7608.2"},
-            {"id": "[10d]", "what": "phase 空 = 初始止损",
-             "run": _case(phase="", stop=7576.8),
-             "want": ("保护价 7576.8", "auto-order-px long", "inline"),
-             "tip": "（初始止损）：7576.8"},
-            {"id": "[10e]", "what": "空仓：short 类别 + 「本段空仓」文案",
-             "run": _case(side="SHORT", stop=7577.2, anchor=7584.6, tp=7561.2),
-             "want": ("保护价 7577.2", "auto-order-px short", "inline"),
-             "tip": "本段空仓当前保护价（保本层）：7577.2"},
-            {"id": "[10f]", "what": "无运行段 → 隐藏且清文本 / 清 tooltip",
-             "run": None, "want": ("", "", "none"), "tip": None},
-            {"id": "[10g]", "what": "保护价为 0 → 隐藏（不留 -- 占位）",
-             "run": _case(stop=0), "want": ("", "", "none"), "tip": None},
-            {"id": "[10h]", "what": "stop 非数值 → 隐藏",
-             "run": _case(stop="abc"), "want": ("", "", "none"), "tip": None},
-            {"id": "[10i]", "what": "r / tp 缺失（旧 state.db 恢复的持仓）→ 不编数字",
-             "run": _case(r=None, tp=None),
-             "want": ("保护价 7588.6", "auto-order-px long", "inline"),
-             "tip": _tip_nort, "exact": True,
-             "absent": ["1R", "止盈启动价"]},
-            {"id": "[10j]", "what": "元素不在场 → 早退不抛", "run": _case(),
-             "no_el": True},
+             "want_line": _line(7608.2, phase="trailing"), "want_changed": True},
+            {"id": "[10e]", "what": "方向反转（多转空）→ 变化",
+             "prev": _line(7577.2, side="SHORT"),
+             "run": _case(side="LONG", stop=7577.2),
+             "want_line": _line(7577.2), "want_changed": True},
+            {"id": "[10f]", "what": "轮询值完全没变 → 不重绘（5s 一次别白画）",
+             "prev": _line(7588.6), "run": _case(),
+             "want_line": _line(7588.6), "want_changed": False},
+            {"id": "[10g]", "what": "空仓（run=None）→ 撤线",
+             "prev": _line(7588.6), "run": None,
+             "want_line": None, "want_changed": True},
+            {"id": "[10h]", "what": "连续空仓（None→None）→ 不重绘",
+             "prev": None, "run": None,
+             "want_line": None, "want_changed": False},
+            {"id": "[10i]", "what": "保护价为 0 且本就无线 → 不画、也不重绘（没线→没线视觉零变化）",
+             "prev": None, "run": _case(stop=0),
+             "want_line": None, "want_changed": False},
+            {"id": "[10j]", "what": "stop 非数值且本就无线 → 不画、也不重绘",
+             "prev": None, "run": _case(stop="abc"),
+             "want_line": None, "want_changed": False},
         ]
         _harness = """
-let EL = null;
-global.document = { getElementById: (id) => (id === 'auto-order-px' ? EL : null) };
-function makeEl() {
-    return { style: {}, textContent: '', className: '', title: 'STALE',
-             removeAttribute: function (k) { delete this[k]; } };
-}
 const cases = __CASES__;
 const out = cases.map(function (c) {
-    EL = c.no_el ? null : makeEl();
     let err = '';
-    try { renderAutoOrderPrice(c.run); } catch (e) { err = String(e); }
-    if (!EL) return { err: err, no_el: true };
-    return { err: err, no_el: false, text: EL.textContent, cls: EL.className,
-             disp: (EL.style.display === undefined ? null : EL.style.display),
-             title: (EL.title === undefined ? null : EL.title) };
+    let r = null;
+    try { r = calcProtectionLine(c.run, c.prev); } catch (e) { err = String(e); }
+    if (err) return { err: err };
+    return { err: err, line: r.line, changed: r.changed };
 });
 console.log(JSON.stringify(out));
 """
         with tempfile.TemporaryDirectory(prefix="tg_p62_js_") as _td:
             _jsp = os.path.join(_td, "probe.js")
             io.open(_jsp, "w", encoding="utf-8").write(
-                _px_src + "\n" + _fn_src + "\n"
-                + _harness.replace("__CASES__", json.dumps(
-                    [{"run": c.get("run"), "no_el": bool(c.get("no_el"))}
+                _fn_src + "\n" + _harness.replace("__CASES__", json.dumps(
+                    [{"run": c.get("run"), "prev": c.get("prev")}
                      for c in _cases], ensure_ascii=False)))
             r = subprocess.run([_node, _jsp], capture_output=True,
                                encoding="utf-8", errors="replace", timeout=30)
             if r.returncode != 0:
-                check("[10b..] node 执行渲染函数", r.stderr.strip()[-200:], "")
+                check("[10b..] node 执行状态机", r.stderr.strip()[-200:], "")
             else:
                 got = json.loads(r.stdout.strip())
-                check("[10b..] 九个样本全部无异常（含元素不在场）",
+                check("[10b..] 九个样本全部无异常",
                       [o["err"] for o in got], [""] * len(_cases))
                 for c, o in zip(_cases, got):
                     tag = "{} {}".format(c["id"], c["what"])
-                    if c.get("no_el"):
-                        check(tag + " → 元素不在场时早退", o.get("no_el"), True)
-                        continue
-                    check(tag + " → 文本 / 类别 / 显隐",
-                          (o.get("text"), o.get("cls"), o.get("disp")),
-                          c["want"])
-                    if c.get("exact"):
-                        check(tag + " → tooltip 逐字", o["title"], c["tip"])
-                    elif c["tip"] is None:
-                        check(tag + " → tooltip 已清除（不留旧价）",
-                              o["title"], None)
-                    else:
-                        check(tag + " → tooltip 含层文案与价位",
-                              c["tip"] in (o["title"] or ""), True)
-                    for _bad in c.get("absent", []):
-                        check(tag + " → tooltip 不含「{}」".format(_bad),
-                              _bad in (o["title"] or ""), False)
-                    check(tag + " → tooltip 无 undefined / NaN 残留",
-                          ("undefined" in (o["title"] or "")
-                           or "NaN" in (o["title"] or "")), False)
+                    check(tag + " → line / changed",
+                          (o.get("line"), o.get("changed")),
+                          (c["want_line"], c["want_changed"]))
 
 # ════════════════════════════════════════════════════════════════
 # [11] 两条投影同构：引擎侧 vs API 侧（前端只认一种形状）

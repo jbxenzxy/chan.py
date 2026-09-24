@@ -1397,6 +1397,8 @@
             if (showBsp && !isSubNewZs) drawBspMarkers(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             if (isSubNewZs) drawDualNewZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawWhiteHLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            // 保护价线只画主图（dualSubData 是双窗副图；单窗模式它为 null，恒不等 → 恒画）
+            if (data !== dualSubData) drawProtectionLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
@@ -4803,17 +4805,17 @@
             // 类型胜负：按买卖点类型（0/1/2/3 类）拆胜/亏笔数，紧跟「成交笔数」之后、
             // 期望值之前（用户拍板：一眼看出每类买卖点的盈亏数量分布）。类型取自后端
             // compute_trade_stats 算好的 by_bsp_type（signal_key 中段=类型）；组里只有
-            // 胜/亏（平手不计入）。净方向标：胜>亏 标「正」、亏>胜 标「负」、持平不标。
-            // 布局：四段拆成独立的 stats-bsp-seg，父行用 flex + justify-content:space-between
-            // —— 0类贴左、3类贴右、中间 1类/2类 等间距分布（用户拍板：不要挤在左边）。
+            // 胜/亏（平手不计入）。整条强制单行不折行（stats-bsp-line → white-space:nowrap），
+            // 弹窗宽度已同步加宽（app.css .stats-panel width:700px）。净方向标：胜>亏 标「正」、
+            // 亏>胜 标「负」、持平不标 —— 方便一眼看出哪类是净亏来源。
             var bbs = d.by_bsp_type || {};
-            html += '<div class="stats-row stats-bsp-row">';
+            var bspParts = [];
             for (var bt = 0; bt <= 3; bt++) {
                 var bg = bbs[String(bt)] || {wins: 0, losses: 0};
                 var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "");
-                html += '<span class="stats-bsp-seg">' + bt + '类' + btag + '(胜' + bg.wins + '/亏' + bg.losses + ')</span>';
+                bspParts.push(bt + "类" + btag + "(胜" + bg.wins + "/亏" + bg.losses + ")");
             }
-            html += '</div>';
+            html += '<div class="stats-row"><span class="stats-value stats-bsp-line">' + bspParts.join(" ") + '</span></div>';
             // 期望值 = win_rate*avg_win + loss_rate*avg_loss = 总净盈亏 ÷ 总笔数，
             // 量纲就是「元/笔」，所以数值后面必须缀上「/笔」—— 否则它与上面的
             // 总净盈亏只差一个数字，读的人无从判断哪个是总量、哪个是每笔。
@@ -8168,6 +8170,10 @@
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
         let autoOrderAlertAckHold = 0;    // 未确认的严重告警水位：>0 = 弹框还没关，暂缓 ack
         let autoOrderSeenToastTs = 0;     // 轻提示本地水位：<= 它的一律不再弹
+        // 运行态保护价线（2026-09-24 改版：徽标 → K线横虚线）：
+        //   null = 空仓/锁仓/无有效保护价 → 不画；非空 = {price, side, phase}，
+        //   每次轮询由 calcProtectionLine 重算，值变化才触发整图重绘。
+        let protectionLine = null;
 
         // ══════════════════════════════════════════════════════════════
         // 未标定品种置灰（2026-09-14 第 6 批）
@@ -8319,11 +8325,16 @@
                 handleAutoOrderAlerts(data);
                 handleAutoOrderToasts(data);
                 renderAutoOrderLedger(data);   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
-                // 运行态保护价徽标（2026-09-23）：与账本、告警并列的第三个出口。
-                //   为什么不塞进上面 wrap.title：[保护价是持仓期间**最需要盯着**的数，
-                //   而 tooltip 要悬停才看得见 —— 2026-09-23 实盘就是这样漏掉的：
-                //   多仓浮盈 2.6R 回撤到 0.77R，全程看不到保护价在哪，只能干看着。
-                renderAutoOrderPrice(aoRun);
+                // 运行态保护价线（2026-09-24）：K线横虚线出口。为什么放主图：
+                //   保护价是持仓期间**最需要盯着**的数，tooltip/徽标都要"找"才看得见
+                //   —— 2026-09-23 实盘多仓浮盈 2.6R 回撤到 0.77R，全程不知道会在哪离场。
+                //   画在价格轴上 = 目光扫图时顺带看到；抬价（保本/跟踪）后线跟着跳。
+                //   changed 才赋值 + 整图重绘（轮询 5s 一次，值没变别白画）。
+                const _pl = calcProtectionLine(aoRun, protectionLine);
+                if (_pl.changed) {
+                    protectionLine = _pl.line;
+                    render();
+                }
                 // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
                 if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
                     const tail = data.log_tail || '';
@@ -8440,47 +8451,68 @@
         }
 
         // ══════════════════════════════════════════════════════════════
-        // [COMPONENT] 运行态保护价徽标（2026-09-23）
-        //   常驻显示「本段当前生效的保护价」，悬停给出它的完整解释。
-        //   数据源 = /api/trader/auto-order/status → auto_order.run（引擎实时投影）：
-        //     run.stop 随保本 / 跟踪两层逐根抬价而变，**不是**开仓时的一份快照
-        //     （后端 = `_run_plan.stop_price`，抬价那一根整体换新计划）。
-        //   三项解释字段（与后端 run 里同名）：
-        //     phase = "" 初始止损 / "breakeven" 保本层 / "trailing" 跟踪层；
-        //     r     = 本段 1R 的点数（缺 = 旧版 state.db 恢复的持仓，不显示）；
-        //     tp    = 名义止盈价 = **转入跟踪层的那个价**（浮盈到它才开始逐根抬价）。
-        //   无运行段 / 保护价缺失（0）→ 整块隐藏：不留 "--" 占位，
-        //     否则会被读成「保护价就是 --」，比不显示更糟。
+        // [COMPONENT] 运行态保护价线（2026-09-24 改版：账本旁徽标 → K线横虚线）
+        //   原徽标挤在「账本」后面，宽度受限还要悬停才看得见解释；
+        //   保护价本质是一个价格，画在 K线图价格轴上 = 目光扫图顺带看到。
+        //   数据源不变 = /api/trader/auto-order/status → auto_order.run
+        //   （交易引擎实时投影；run.stop 随保本/跟踪两层逐根抬价而变）。
+        //   三态语义（用户拍板 2026-09-24）：
+        //     空仓 / 锁仓 → run 为 None → 线不画；
+        //     运行态 → 按当前保护价画横虚线，抬价后线跟着跳。
+        //   结构（逻辑与绘制分离，calcProtectionLine 是纯函数、可在 node 里单测）：
+        //     calcProtectionLine(aoRun, prev) → {line, changed}
+        //     drawProtectionLine(...)          → 主图渲染管线里的横虚线 + 右端标签
         // ══════════════════════════════════════════════════════════════
-        function renderAutoOrderPrice(aoRun) {
-            const el = document.getElementById('auto-order-px');
-            if (!el) return;
+        function calcProtectionLine(aoRun, prev) {
             const stop = aoRun ? Number(aoRun.stop) : NaN;
-            if (!aoRun || !isFinite(stop) || stop === 0) {
-                el.style.display = 'none';
-                el.textContent = '';
-                el.removeAttribute('title');
-                return;
+            let line = null;
+            if (aoRun && isFinite(stop) && stop !== 0) {
+                line = { price: stop,
+                         side: String(aoRun.side || ""),
+                         phase: String(aoRun.phase || "") };
             }
-            const long = (aoRun.side === 'LONG');
-            // 与后端 `_phase` 一一对应；空 = 尚未触发任何抬价条件（仍是初始止损）。
-            const phaseLabel = { breakeven: '保本层', trailing: '跟踪层' }[aoRun.phase]
-                || '初始止损';
-            el.textContent = '保护价 ' + fmtPx(stop);
-            el.className = 'auto-order-px ' + (long ? 'long' : 'short');
-            el.style.display = 'inline';
-            let tip = '本段' + (long ? '多' : '空') + '仓当前保护价（' + phaseLabel + '）：'
-                + fmtPx(stop) + '；风控锚 ' + fmtPx(Number(aoRun.anchor));
-            const R = Number(aoRun.r);
-            if (isFinite(R) && R > 0) tip += '；1R = ' + fmtPx(R) + ' 点';
-            const tp = Number(aoRun.tp);
-            if (isFinite(tp) && tp !== 0) {
-                tip += '；止盈启动价 ' + fmtPx(tp)
-                    + '（浮盈达到该价即转入跟踪层，此后逐根抬高保护价）';
+            let changed;
+            if (line === null || prev === null) {
+                changed = (line === null) !== (prev === null);
+            } else {
+                changed = (line.price !== prev.price
+                    || line.side !== prev.side
+                    || line.phase !== prev.phase);
             }
-            tip += '。离场判据 = 收盘价跌破保护价（盘中触及不算）。'
-                + '口径与阈值参数见 Strategy/Exit.py。';
-            el.title = tip;
+            return { line: line, changed: changed };
+        }
+
+        // 主图绘制管线里的保护价线：橙色横虚线 + 右端「保护 价·层」标签。
+        //   颜色：白（white_hline）/ 红 绿（涨跌与买卖点）都已被占用，
+        //   橙色是图上唯一没有语义冲突的醒目色；多空不换色 —— 防御线统一口径。
+        //   线本体用 clip 裁进主图区（保护价跳出视野时不会画进 MACD 副图区）；
+        //   标签画在 clip 外（与 white_hline 同一位置约定：右边界外 4px 的价格轴留白），
+        //   y 超出主图区时不画标签 —— 线都看不见了标签就是悬空的。
+        function drawProtectionLine(klines, area, priceRange, barStep, subPixelOffset) {
+            if (!protectionLine || !isFinite(protectionLine.price)) return;
+            const y = priceToY(protectionLine.price, area, priceRange);
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(area.x, area.y, area.w, area.h);
+            ctx.clip();
+            ctx.strokeStyle = "#FF9800";
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 4]);
+            ctx.beginPath();
+            ctx.moveTo(area.x, y);
+            ctx.lineTo(area.x + area.w, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.restore();
+            if (y < area.y || y > area.y + area.h) return;
+            // 层文案与交易引擎 _phase 一一对应："" 初始止损 / breakeven 保本 / trailing 跟踪
+            const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[protectionLine.phase]
+                || "止损";
+            ctx.fillStyle = "#FF9800";
+            ctx.font = "bold 11px monospace";
+            ctx.textAlign = "left";
+            ctx.fillText("保护 " + _fmtPrice(protectionLine.price) + "·" + phaseLabel,
+                         area.x + area.w + 4, y + 4);
         }
 
         // ══════════════════════════════════════════════════════════════
