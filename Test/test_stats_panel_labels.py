@@ -26,8 +26,11 @@
  ⑥ 明细行行序：期货品种 → 成交笔数 → 期望值 →
     平均每笔盈利/亏损 → 最大单笔盈利/亏损
     （类型胜负拆胜/亏已并入「成交笔数」之后的一行：无独立标签、
-    四段 0/1/2/3 类紧凑单行、净方向标 正/负，弹窗加宽到 700px 不折行；
-    用户拍板插在成交笔数之后、期望值之前）
+    四段 0/1/2/3 类紧凑单行、净方向标 正/负，间距由父行 flex
+    space-between 均分（0类贴左 / 3类贴右 / 中间均分）；弹窗**不加宽**，
+    保持原宽 440px；用户拍板插在成交笔数之后、期望值之前。
+    2026-09-24 曾因交付包覆盖回退成「一个 span + 段间空格、弹窗加宽到
+    700px」，四段在窄面板里连成一串读不出来 —— 已修复并加静态防回潮断言）
  ⑦ 盈利因子提到核心区：一行四格 = 总净盈亏 / 实际胜率 / 盈亏比(赔率) /
     盈利因子；明细区不再重复这一行（同一字段上下各出现一次会让人以为
     是两个不同的指标）。
@@ -71,6 +74,7 @@ import threading
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO = os.path.dirname(_HERE)
 APP_JS = os.path.join(_REPO, "Frontend", "app.js")
+APP_CSS = os.path.join(_REPO, "Frontend", "app.css")
 FRONTEND_DIR = os.path.join(_REPO, "Frontend")
 SNAP_FUTURES = os.path.join(_HERE, "snapshots", "futures_15s_full.json")
 
@@ -166,6 +170,25 @@ check("'类' + btag + '(胜'" in blk,
 check('var btag = bg.wins > bg.losses ? "正" : (bg.losses > bg.wins ? "负" : "")' in blk,
       "⑥-b 净方向标逻辑：胜>亏→正、亏>胜→负、持平不标")
 check('class="stats-bsp-seg"' in blk, "⑥-b 四段拆成独立 stats-bsp-seg 子元素（非单文本拼接）")
+
+# ⑥-b 防回潮（2026-09-24）：交付包覆盖曾把这一段退回「一个 span + 段间
+#       空格 + 弹窗加宽到 700px」的老写法 —— 面板一窄，段间空格就撑不住间距，
+#       四段连成一串（"0类负(胜1/亏3)1类负(胜4/亏5)…"）读不出来。这三条把
+#       「四段各自成元素、间距靠 flex、弹窗不加宽」钉死在源码与样式里。
+css = open(APP_CSS, encoding="utf-8").read()
+check("stats-bsp-line" not in js and "stats-bsp-line" not in css,
+      "⑥-b 防回潮：旧写法 stats-bsp-line（单 span + 空格拼接）零残留")
+check("bspParts" not in js,
+      "⑥-b 防回潮：拼接数组 bspParts 零残留（四段必须各自是一个元素）")
+_panel_w = re.search(r"\.stats-panel\s*\{[^}]*?width:\s*(\d+)px", css, re.S)
+check(_panel_w is not None and int(_panel_w.group(1)) <= 500,
+      "⑥-b 统计弹窗宽度 = 440px（不加宽到 700px；均分由 flex 做）",
+      _panel_w.group(1) if _panel_w else "抽不到 .stats-panel width")
+check(re.search(r"\.stats-bsp-row\s*\{[^}]*justify-content:\s*space-between", css)
+      is not None,
+      "⑥-b .stats-bsp-row 是 flex + space-between（0类左/3类右/中间均分）")
+check(re.search(r"\.stats-bsp-seg\s*\{[^}]*white-space:\s*nowrap", css) is not None,
+      "⑥-b .stats-bsp-seg 强制 nowrap（每段自身不折行）")
 
 # ⑦ 核心区四格：从 stats-hero 起行切到它的收尾 '</div>'
 hero = blk.split("'<div class=\"stats-hero\">';", 1)[1].split("'</div>';", 1)[0]
@@ -351,7 +374,7 @@ else:
                 check(got == EXPECT_ORDER, "①⑥ 真渲染行序 == 目标顺序", got)
 
                 # ⑥-b 类型胜负单行：真渲染出紧凑四段 + 净方向标，四段等间距分布
-                #（0类贴左 / 3类贴右），整行不折行，且弹窗已加宽到 700px 容纳四段。
+                #（0类贴左 / 3类贴右），整行不折行；弹窗保持原宽 440px 不加宽。
                 row = page.evaluate("""() => {
                     const r = document.querySelector('#stats-content .stats-bsp-row');
                     if (!r) return null;
