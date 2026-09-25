@@ -972,7 +972,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         stroke_a = bi_list[pivot_a.begin_bi.idx]
-        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_a, config)
+        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs0('_cal_bs0point_3rd', '跳过: 最近同向，MACD峰值未背驰',
@@ -1344,11 +1344,20 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # ㈣ 笔N 与 笔N-2 MACD DIF背驰
-
+        # ㈣ 笔N 与 笔N-2 DIF峰值(PEAK)背驰（补充确认，与柱子版同为必要闸门）
+        is_dif_diver, n_dif_metric, nm2_dif_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
+        dif_divergence_rate = n_dif_metric / (nm2_dif_metric + 1e-7)
+        if not is_dif_diver:
+            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，DIF峰值未背驰',
+                          c1_idx=stroke_nm2.idx,
+                          c2_idx=stroke_n.idx,
+                          nm2_metric=nm2_dif_metric, n_metric=n_dif_metric,
+                          divergence_rate=dif_divergence_rate,
+                          threshold=config.divergence_rate)
+            return
 
         # ㈤ 笔N 与 笔N-2 MACD BAR背驰
-        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_nm2, config)
+        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
             self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD峰值未背驰',
@@ -1730,7 +1739,18 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return zs_range + (peak_range - zs_range) * weight, ratio, False
 
     @staticmethod
-    def _is_nearest_same_direction_diver(n, nm2, config):
+    def _is_nearest_same_direction_dif_diver(n, nm2, config):
+        """
+        最近同向笔MACD背驰比较（DIF版）
+        比较当下笔N与其最近同向笔N-2的DIF峰值(PEAK)，判断当下笔力度是否不足
+        """
+        n_metric = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False)
+        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
+        is_diver = n_metric < config.divergence_rate * nm2_metric
+        return is_diver, n_metric, nm2_metric
+
+    @staticmethod
+    def _is_nearest_same_direction_bar_diver(n, nm2, config):
         """
         最近同向笔MACD背驰比较
         比较当下笔N与其最近同向笔N-2的MACD峰值(PEAK)，判断当下笔力度是否不足
