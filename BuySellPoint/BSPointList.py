@@ -541,11 +541,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     DEBUG_BS3 = True               # 3类调试总开关
     DEBUG_BS = True                # 区间套背驰调试总开关
     # REPLAY_MODE 已移除：原为进程级类变量，现由模块级线程局部函数
-    # set_replay_mode() / in_replay_mode() 承担（见本文件顶部）。
+    # set_replay_mode() / in_replay_mode() 承担（见本文件顶部）
     BS0_ZS_BREAK_RATIO = 0.8       # 离开笔有效突破中枢的比例阈值
-    BS0_OUT_IN_RATIO = 0.8         # 离开笔振幅 >= 进入笔振幅的比例阈值
-    NESTED_MACD_DIVER_RATIO = 0.8  # 次级别单笔或多笔，MACD背驰判断阈值
     ZS_ENTRY_AMP_RATIO = 1.2       # 中枢进入笔振幅比例阈值（进入笔振幅 >= 构成中枢第三笔振幅 × 该比例）
+    NESTED_MACD_DIVER_RATIO = 0.8  # 次级别单笔或多笔，MACD背驰判断阈值
 
     def __init__(self, bs_point_config):
         super().__init__(bs_point_config)
@@ -1017,14 +1016,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # 离开笔4振幅不足(相比进入笔)，直接跳过
-        if not self._is_valid_out_in_amp(stroke_n, entry_bi):
-            self._dbg_bs0('_cal_bs0point_4th', '跳过: 离开笔振幅不足',
-                          stroke_n_amp=round(stroke_n.amp(), 2),
-                          entry_bi_amp=round(entry_bi.amp(), 2),
-                          threshold=round(entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
-            return
-
         # 离开笔4和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
@@ -1114,14 +1105,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return False
 
-        # 离开笔振幅不足(相比进入笔)，直接跳过
-        if not self._is_valid_out_in_amp(stroke_n, entry_bi):
-            self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: 离开笔振幅不足',
-                          stroke_n_amp=round(stroke_n.amp(), 2),
-                          entry_bi_amp=round(entry_bi.amp(), 2),
-                          threshold=round(entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
-            return False
-
         # 离开笔和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
@@ -1181,14 +1164,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           base_range=round(base_range, 2),
                           threshold=round(threshold, 2), actual=actual,
                           condition=cond)
-            return
-
-        # 离开笔6/8振幅不足(相比进入笔)，直接跳过
-        if not self._is_valid_out_in_amp(stroke_n, entry_bi):
-            self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: 离开笔振幅不足',
-                          stroke_n_amp=round(stroke_n.amp(), 2),
-                          entry_bi_amp=round(entry_bi.amp(), 2),
-                          threshold=round(entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
             return
 
         # 离开笔6/8和进入笔，MACD面积背驰
@@ -1662,14 +1637,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return stroke_n._high() >= zs.low + base_range * r
         else:
             return stroke_n._low() <= zs.high - base_range * r
-
-    @staticmethod
-    def _is_valid_out_in_amp(stroke_n, entry_bi):
-        """
-        检查离开笔振幅是否达到进入笔振幅的比例阈值
-        离开笔振幅 >= 进入笔振幅 × BS0_OUT_IN_RATIO
-        """
-        return stroke_n.amp() >= entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO
 
     @staticmethod
     def _compute_base_range(zs):
