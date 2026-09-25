@@ -174,18 +174,25 @@ class SEG_TYPE(Enum):
 
 
 class MACD_ALGO(Enum):
-    AREA = auto()
-    # 2026-09-25 重命名：原 MACD_ALGO.PEAK → MACD_ALGO.BAR
+    # ===== MACD 面积族：三者均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
+    # 2026-09-25 由 AREA/FULL_AREA/FULL_AREA_EXT 改名，统一为 AREA_* 前缀，函数名对齐 Cal_MACD_area_*：
+    # - AREA_HALF：仅取笔首/尾连续同向柱的"半段"面积（遇第一根反向柱即停），受 is_reverse 控制取首还是尾；
+    #   原 Cal_MACD_half，改名为 area_half 以表达"半段/边界段"，不再误导为整笔面积。
+    # - AREA_FULL：整笔所有同向柱 |macd| 之和，反向柱直接忽略（不计也不减）；原 Cal_MACD_area。
+    # - AREA_FULL_EXT：AREA_FULL + 反向柱峰值修正(X−Y)；无反向柱时退化为 AREA_FULL；原 Cal_MACD_area_ext。
+    AREA_HALF = auto()        # 2026-09-25 由 AREA 改名（原 Cal_MACD_half）
+    AREA_FULL = auto()        # 2026-09-25 由 FULL_AREA 改名（原 Cal_MACD_area）
+    AREA_FULL_EXT = auto()    # 2026-09-25 由 FULL_AREA_EXT 改名（原 Cal_MACD_area_ext）
+    # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值 =====
+    # 2026-09-25 重命名：原 MACD_ALGO.PEAK → MACD_ALGO.BAR（与 DIF/DEA 对齐，统一用「指标名」）。
     # 改名原因：原命名用「操作名」(PEAK=峰值) 而非「指标名」，与 MACD_ALGO.DIF/Cal_MACD_dif()、
     # MACD_ALGO.DEA/Cal_MACD_dea() 的「指标名」风格不一致，极易误解为「这是一个峰值模式/开关」。
     # 语义未变：本成员计算的是整笔(BAR = MACD 柱/直方图)的峰值(极值)，只是把名称统一为「指标名」。
     # 配置关键字：唯一规范名为 "bar"。"peak" 历史别名已移除，旧配置须改为 "bar"。
     BAR = auto()
-    FULL_AREA = auto()
-    FULL_AREA_EXT = auto()
     DIF = auto()
     DEA = auto()
-    DIFF = auto()
+    DIFF = auto()             # MACD 柱最大−最小之差（与 DIF 不同，注意区分）
     SLOPE = auto()
     AMP = auto()
     VOLUMN = auto()

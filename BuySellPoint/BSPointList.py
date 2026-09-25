@@ -1026,7 +1026,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # 中枢A，离开笔和进入笔，MACD面积背驰
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
@@ -1124,7 +1124,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         '''
         # ⑶ 中枢B，离开笔和进入笔，MACD DIF背驰
-        in_dif = entry_bi.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        in_dif = entry_bi.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_dif = stroke_n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
         if out_dif >= in_dif:
             self._dbg_bs0('_cal_bs0point_nth_nzs', '跳过: MACD DIF未背驰',
@@ -1133,7 +1133,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         '''
 
         # 中枢B，离开笔和进入笔，MACD面积背驰
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
@@ -1203,7 +1203,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         '''
         # 中枢A，离开笔6/8和进入笔，MACD DIF背驰
-        in_dif = entry_bi.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        in_dif = entry_bi.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_dif = stroke_n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
         if out_dif >= in_dif:
             self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: MACD DIF未背驰',
@@ -1212,7 +1212,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         '''
 
         # 中枢A，离开笔6/8和进入笔，MACD面积背驰
-        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
@@ -1727,7 +1727,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         最近同向笔MACD DIF背驰比较
         比较当下笔N与其最近同向笔N-2的DIF值，判断当下笔力度是否不足
         """
-        n_metric = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
+        n_metric = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         nm2_metric = nm2.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
         is_diver = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
@@ -1738,7 +1738,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         最近同向笔MACD BAR背驰比较
         比较当下笔N与其最近同向笔N-2的BAR值，判断当下笔力度是否不足
         """
-        n_metric = n.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA 有意义
+        n_metric = n.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         nm2_metric = nm2.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
         is_diver = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
@@ -2299,7 +2299,7 @@ def _red_range_multi_bi_diver(bi_list):
     if prev_same_dir is None:
         return {"diverged": False, "detail": "未找到前一个同向笔"}
 
-    prev_bar = prev_same_dir.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA 有意义
+    prev_bar = prev_same_dir.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
     curr_bar = last_bi.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
     is_diver = curr_bar <= prev_bar * CMyBSPointList.NESTED_MACD_DIVER_RATIO
     detail = (

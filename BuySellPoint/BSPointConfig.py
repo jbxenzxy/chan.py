@@ -60,12 +60,14 @@ class CPointConfig:
 
     def SetMacdAlgo(self, macd_algo):
         _d = {
-            "area": MACD_ALGO.AREA,
-            # 2026-09-25 重命名：MACD_ALGO.PEAK → MACD_ALGO.BAR（与 DIF/DEA 对齐，统一用「指标名」）。
-            # 配置关键字唯一为 "bar"；"peak" 历史别名已彻底移除，旧配置须改为 "bar"。
+            # ===== MACD 面积族（2026-09-25 由 area/full_area/full_area_ext 改名，统一 AREA_* 前缀，函数 Cal_MACD_area_* 对齐）=====
+            "area_half": MACD_ALGO.AREA_HALF,        # 原 AREA / Cal_MACD_half：笔首(尾)连续同向柱"半段"面积
+            "area_full": MACD_ALGO.AREA_FULL,        # 原 FULL_AREA / Cal_MACD_area：整笔同向柱面积之和
+            "area_full_ext": MACD_ALGO.AREA_FULL_EXT, # 原 FULL_AREA_EXT / Cal_MACD_area_ext：area_full + 反向柱峰值修正
+            # ===== MACD 指标族 =====
+            # 2026-09-25 重命名：MACD_ALGO.PEAK → MACD_ALGO.BAR（与 DIF/DEA 对齐，统一用「指标名」）；
+            # 配置关键字唯一为 "bar"，"peak" 历史别名已彻底移除，旧配置须改为 "bar"。
             "bar": MACD_ALGO.BAR,           # 规范名（对齐 DIF/DEA）
-            "full_area": MACD_ALGO.FULL_AREA,
-            "full_area_ext": MACD_ALGO.FULL_AREA_EXT,
             "diff": MACD_ALGO.DIFF,
             "slope": MACD_ALGO.SLOPE,
             "amp": MACD_ALGO.AMP,
@@ -77,7 +79,8 @@ class CPointConfig:
             "rsi": MACD_ALGO.RSI,
         }
         if macd_algo not in _d:
-            _hint = '；注意："peak" 已于 2026-09-25 更名为 "bar"，请更新你的配置' if macd_algo == "peak" else ""
+            _legacy = {"peak": "bar", "area": "area_half", "full_area": "area_full", "full_area_ext": "area_full_ext"}
+            _hint = f'；注意："{macd_algo}" 已于 2026-09-25 更名为 "{_legacy[macd_algo]}"，请更新你的配置' if macd_algo in _legacy else ""
             raise CChanException(
                 f"unsupport macd_algo={macd_algo!r}, valid: {sorted(_d)}{_hint}",
                 ErrCode.PARA_ERROR)

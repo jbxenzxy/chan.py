@@ -187,19 +187,21 @@ class CBi:
         self.clean_cache()
 
     def cal_macd_metric(self, macd_algo, is_reverse):
-        if macd_algo == MACD_ALGO.AREA:
-            return self.Cal_MACD_half(is_reverse)
+        # ===== MACD 面积族：三者均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
+        if macd_algo == MACD_ALGO.AREA_HALF:      # 2026-09-25 由 AREA 改名：仅取笔首/尾连续同向柱的"半段"面积
+            return self.Cal_MACD_area_half(is_reverse)
+        elif macd_algo == MACD_ALGO.AREA_FULL:    # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
+            return self.Cal_MACD_area_full()
+        elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-25 由 FULL_AREA_EXT 改名：AREA_FULL + 反向柱峰值修正
+            return self.Cal_MACD_area_full_ext()
+        # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值（命名对齐，见 Common/CEnum MACD_ALGO）=====
         elif macd_algo == MACD_ALGO.BAR:   # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
             return self.Cal_MACD_bar()
-        elif macd_algo == MACD_ALGO.FULL_AREA:
-            return self.Cal_MACD_area()
-        elif macd_algo == MACD_ALGO.FULL_AREA_EXT:
-            return self.Cal_MACD_area_ext()
         elif macd_algo == MACD_ALGO.DIF:
             return self.Cal_MACD_dif()
         elif macd_algo == MACD_ALGO.DEA:
             return self.Cal_MACD_dea()
-        elif macd_algo == MACD_ALGO.DIFF:
+        elif macd_algo == MACD_ALGO.DIFF:   # MACD 柱最大−最小之差（与 DIF 不同）
             return self.Cal_MACD_diff()
         elif macd_algo == MACD_ALGO.SLOPE:
             return self.Cal_MACD_slope()
@@ -218,7 +220,7 @@ class CBi:
         elif macd_algo == MACD_ALGO.RSI:
             return self.Cal_Rsi()
         else:
-            raise CChanException(f"unsupport macd_algo={macd_algo}, should be one of area/full_area/bar/diff/slope/amp", ErrCode.PARA_ERROR)
+            raise CChanException(f"unsupport macd_algo={macd_algo}, should be one of area_half/area_full/area_full_ext/bar/dif/dea/diff/slope/amp", ErrCode.PARA_ERROR)
 
     @make_cache
     def Cal_Rsi(self):
@@ -228,7 +230,7 @@ class CBi:
         return 10000.0/(min(rsi_lst)+1e-7) if self.is_down() else max(rsi_lst)
 
     @make_cache
-    def Cal_MACD_area(self):
+    def Cal_MACD_area_full(self):
         _s = 1e-7
         begin_klu = self.get_begin_klu()
         end_klu = self.get_end_klu()
@@ -241,12 +243,12 @@ class CBi:
         return _s
 
     @make_cache
-    def Cal_MACD_area_ext(self):
+    def Cal_MACD_area_full_ext(self):
         """
         扩展的 MACD 全程面积算法：
         - 向下笔：G(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
         - 向上笔：G(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
-        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area。
+        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area_full。
         """
         _s = 1e-7
         begin_klu = self.get_begin_klu()
@@ -327,14 +329,14 @@ class CBi:
                         peak = abs(klu.macd.DEA)
         return peak
 
-    def Cal_MACD_half(self, is_reverse):
+    def Cal_MACD_area_half(self, is_reverse):
         if is_reverse:
-            return self.Cal_MACD_half_reverse()
+            return self.Cal_MACD_area_half_reverse()
         else:
-            return self.Cal_MACD_half_obverse()
+            return self.Cal_MACD_area_half_obverse()
 
     @make_cache
-    def Cal_MACD_half_obverse(self):
+    def Cal_MACD_area_half_obverse(self):
         _s = 1e-7
         begin_klu = self.get_begin_klu()
         peak_macd = begin_klu.macd.macd
@@ -352,7 +354,7 @@ class CBi:
         return _s
 
     @make_cache
-    def Cal_MACD_half_reverse(self):
+    def Cal_MACD_area_half_reverse(self):
         _s = 1e-7
         begin_klu = self.get_end_klu()
         peak_macd = begin_klu.macd.macd
