@@ -1726,39 +1726,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             weight = t * t * (3 - 2 * t)
             return zs_range + (peak_range - zs_range) * weight, ratio, False
 
-    '''
-    @staticmethod
-    def _is_macd_diver(stroke_n):
-        """
-        MACD模拟背驰判断
-          向上笔(卖点)：右肩 macd < 当前这笔 macd 峰值(红柱最大值)
-          向下笔(买点)：右肩 macd > 当前这笔 macd 峰值(绿柱最小值)
-        """
-        # 计算当前笔MACD柱子峰值
-        # 向上笔取最大红柱，向下笔取最小绿柱(最负)
-        peak_macd = 1e-7
-        for klc in stroke_n.klc_lst:
-            for klu in klc.lst:
-                if stroke_n.is_up():
-                    # peak_macd 要么是某个正值，要么是 1e-7（笔内全是负柱的极端情况）
-                    if klu.macd.macd > peak_macd:
-                        peak_macd = klu.macd.macd
-                else:
-                    # peak_macd 要么是某个负值，要么是 1e-7（笔内全是正柱的极端情况）
-                    if klu.macd.macd < peak_macd:
-                        peak_macd = klu.macd.macd
-
-        end_klc = stroke_n.end_klc
-        right_klc = getattr(end_klc, 'next', None)
-        if right_klc is None:
-            return False
-        right_macd = right_klc.lst[-1].macd.macd
-        if stroke_n.is_up():
-            return right_macd < peak_macd
-        else:
-            return right_macd > peak_macd
-    '''
-
     @staticmethod
     def _is_nearest_same_direction_diver(n, nm2, config):
         """
@@ -1770,54 +1737,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         is_diver = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
 
-    '''
-    @staticmethod
-    def _is_return_zero_axis(bi_list, pivot_a, stroke_n, dbg_func=None):
-        """判断中枢内C笔相对于A笔的MACD黄白线(DIF)是否回0轴。
-        - C笔末端DIF < 0：直接视为回0轴
-        - C笔末端DIF >= 0：使用衰减率判断，dif / dif_peak < 0.1 视为回0轴
-        """
-        stroke_a = bi_list[pivot_a.begin_bi.idx]
-        stroke_c = stroke_n
-        def _get_dif_peak(stroke):
-            """取笔内所有K线DIF绝对值的峰值"""
-            peak = 1e-7
-            for klc in stroke.klc_lst:
-                for klu in klc.lst:
-                    if abs(klu.macd.DIF) > peak:
-                        peak = abs(klu.macd.DIF)
-            return peak
-
-        # C笔DIF在0轴下，认为回0轴了
-        dif = stroke_c.get_end_klu().macd.DIF
-        if dif < 0:
-            if dbg_func:
-                dbg_func('_is_return_zero_axis', 'DIF回0轴: DIF在0轴下',
-                         dif=round(dif, 2))
-            return True
-
-        dif_peak = _get_dif_peak(stroke_a)
-        # A笔DIF峰值 < A笔振幅的1%，视为无力度
-        if dif_peak < stroke_a.amp() * 0.01:
-            if dbg_func:
-                dbg_func('_is_return_zero_axis', 'A笔无力度',
-                         dif_peak=round(dif_peak, 2), amp=round(stroke_a.amp(), 2))
-            return False
-
-        dif_ratio = dif / (dif_peak + 1e-7)
-        if dif_ratio >= 0.1:
-            if dbg_func:
-                dbg_func('_is_return_zero_axis', 'DIF未回0轴: 偏离度不足',
-                         dif_peak=round(dif_peak, 2), dif=round(dif, 2),
-                         dif_ratio=round(dif_ratio, 2))
-            return False
-
-        if dbg_func:
-            dbg_func('_is_return_zero_axis', 'DIF回0轴',
-                     dif_peak=round(dif_peak, 2), dif=round(dif, 2),
-                     dif_ratio=round(dif_ratio, 2))
-        return True
-    '''
 
 # ═══════════════════════════════════════════════════════════
 # 区间套辅助函数
