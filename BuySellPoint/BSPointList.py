@@ -680,6 +680,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return None
 
         # ㈢ 分型检查（过滤弱分型/中继）
+        '''
+        注：26/09/25 暂时关闭，看看效果！！！
         fx_strength = self._is_strong_fx(stroke_n)
         if fx_strength == 0:
             self._dbg_bs('cal_bsp_precondition', '前置检查跳过: 弱分型',
@@ -687,6 +689,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                          bi_dir='up' if stroke_n.is_up() else 'down',
                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
             return None
+        '''
 
         return (pivot_a, stroke_n)
 
