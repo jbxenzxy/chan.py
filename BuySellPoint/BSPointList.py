@@ -1344,7 +1344,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # 笔N 与 笔N-2 MACD峰值(PEAK)背驰
+        # 笔N 与 笔N-2 MACD DIF背驰
+        
+
+        # 笔N 与 笔N-2 MACD BAR背驰
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
