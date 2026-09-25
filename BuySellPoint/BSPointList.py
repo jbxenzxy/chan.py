@@ -1025,7 +1025,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
             return
 
-        # 离开笔和进入笔，MACD面积背驰
+        # 离开笔4和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1183,7 +1183,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # 离开笔振幅不足(相比进入笔)，直接跳过
+        # 离开笔6/8振幅不足(相比进入笔)，直接跳过
         if not self._is_valid_out_in_amp(stroke_n, entry_bi):
             self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: 离开笔振幅不足',
                           stroke_n_amp=round(stroke_n.amp(), 2),
@@ -1453,7 +1453,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     def cal_bs3point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs3('cal_bs3point', '进入......', bi_idx=len(bi_list)-1)
 
-        # 笔N不跟最后一个中枢重叠，但笔N-1重叠
+        # N不重叠，N-1重叠
         stroke_nm1 = bi_list[stroke_n.idx - 1]  # 前一笔N-1
         n_overlap = has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high)
         nm1_overlap = has_overlap(stroke_nm1._low(), stroke_nm1._high(), pivot_a.low, pivot_a.high)
@@ -1468,7 +1468,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           zs_high=pivot_a.high, zs_low=pivot_a.low)
             return
 
-        # ── MACD 白线（DIF）幅度过滤（2026-09-24 拍板）──
+        # ── MACD DIF 幅度过滤 ──
         # 笔N 的分型极值 K 线（get_peak_klu）：向下笔 起点=顶分型极值、终点=底分型极值；向上笔反之。
         # 三买（笔N 向下）：⑴ 底分型极值 DIF 在 0 轴上；⑵ A = 该 DIF（到 0 轴距离，正值即本身）；
         #   ⑶ B = 顶分型极值 DIF 绝对值（到 0 轴距离）；⑷ (B-A)/B > 0.618。
