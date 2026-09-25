@@ -661,10 +661,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self.cal_bs2point(bi_list, zs_list, pivot_a, stroke_n)
         self.cal_bs3point(bi_list, zs_list, pivot_a, stroke_n)
 
-    @classmethod
-    def cal_bsp_precondition(cls, bi_list, zs_list):
+    def cal_bsp_precondition(self, bi_list, zs_list):
         """前置检查：中枢存在 + 实笔 + 强势分型，缺一即返回 None"""
-        # ⑴ 中枢检查
+        # ㈠ 中枢检查
         if zs_list is None or len(zs_list) == 0:
             return None
         pivot_a = None
@@ -675,13 +674,18 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if pivot_a is None:
             return None
 
-        # ⑵ 实笔检查（过滤虚笔）
+        # ㈡ 实笔检查（过滤虚笔）
         stroke_n = bi_list[-1]
-        if cls._is_virtual_bi(bi_list):
+        if self._is_virtual_bi(bi_list):
             return None
 
-        # ⑶ 分型检查（过滤弱分型/中继）
-        if cls._is_strong_fx(stroke_n) == 0:
+        # ㈢ 分型检查（过滤弱分型/中继）
+        fx_strength = self._is_strong_fx(stroke_n)
+        if fx_strength == 0:
+            self._dbg_bs('cal_bsp_precondition', '前置检查跳过: 弱分型',
+                         stroke_n_idx=stroke_n.idx,
+                         bi_dir='up' if stroke_n.is_up() else 'down',
+                         stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
             return None
 
         return (pivot_a, stroke_n)
