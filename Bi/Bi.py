@@ -188,20 +188,20 @@ class CBi:
 
     def cal_macd_metric(self, macd_algo, is_reverse):
         # ===== MACD 面积族：三者均基于 MACD 柱(|macd|)的面积累加，区别在覆盖区间与反向柱处理 =====
-        if macd_algo == MACD_ALGO.AREA_HALF:      # 2026-09-25 由 AREA 改名：仅取笔首/尾连续同向柱的"半段"面积
+        if macd_algo == MACD_ALGO.AREA_HALF:        # 2026-09-25 由 AREA 改名：仅取笔首/尾连续同向柱的"半段"面积
             return self.Cal_MACD_area_half(is_reverse)
-        elif macd_algo == MACD_ALGO.AREA_FULL:    # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
+        elif macd_algo == MACD_ALGO.AREA_FULL:      # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
             return self.Cal_MACD_area_full()
         elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-25 由 FULL_AREA_EXT 改名：AREA_FULL + 反向柱峰值修正
             return self.Cal_MACD_area_full_ext()
         # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值（命名对齐，见 Common/CEnum MACD_ALGO）=====
-        elif macd_algo == MACD_ALGO.BAR:   # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
+        elif macd_algo == MACD_ALGO.BAR:            # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
             return self.Cal_MACD_bar()
         elif macd_algo == MACD_ALGO.DIF:
             return self.Cal_MACD_dif()
         elif macd_algo == MACD_ALGO.DEA:
             return self.Cal_MACD_dea()
-        elif macd_algo == MACD_ALGO.DIFF:   # MACD 柱最大−最小之差（与 DIF 不同）
+        elif macd_algo == MACD_ALGO.DIFF:           # MACD 柱最大−最小之差（与 DIF 不同）
             return self.Cal_MACD_diff()
         elif macd_algo == MACD_ALGO.SLOPE:
             return self.Cal_MACD_slope()
