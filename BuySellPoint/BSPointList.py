@@ -1017,23 +1017,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # 离开笔振幅不足(相比进入笔)，直接跳过
+        # 离开笔4振幅不足(相比进入笔)，直接跳过
         if not self._is_valid_out_in_amp(stroke_n, entry_bi):
             self._dbg_bs0('_cal_bs0point_4th', '跳过: 离开笔振幅不足',
                           stroke_n_amp=round(stroke_n.amp(), 2),
                           entry_bi_amp=round(entry_bi.amp(), 2),
                           threshold=round(entry_bi.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
             return
-
-        '''
-        # 中枢A，离开笔和进入笔，MACD DIF背驰
-        in_dif = entry_bi.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
-        out_dif = stroke_n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
-        if out_dif >= in_dif:
-            self._dbg_bs0('_cal_bs0point_4th', '跳过: MACD DIF未背驰',
-                          in_dif=round(in_dif, 2), out_dif=round(out_dif, 2))
-            return
-        '''
 
         # 中枢A，离开笔和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
