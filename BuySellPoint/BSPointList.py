@@ -968,7 +968,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           macd_bar=round(end_klu.macd.macd, 4))
             return
 
-        # 笔C与笔A的MACD峰值(PEAK)背驰
+        # 笔C 与 笔A MACD BAR背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         stroke_a = bi_list[pivot_a.begin_bi.idx]
@@ -1345,14 +1345,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈣ 笔N 与 笔N-2 MACD DIF背驰
-        is_dif_diver, n_dif_metric, nm2_dif_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
-        dif_divergence_rate = n_dif_metric / (nm2_dif_metric + 1e-7)
-        if not is_dif_diver:
+        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
+        divergence_rate = n_metric / (nm2_metric + 1e-7)
+        if not is_diver:
             self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD DIF未背驰',
                           c1_idx=stroke_nm2.idx,
                           c2_idx=stroke_n.idx,
-                          nm2_metric=nm2_dif_metric, n_metric=n_dif_metric,
-                          divergence_rate=dif_divergence_rate,
+                          nm2_metric=nm2_metric, n_metric=n_metric,
+                          divergence_rate=divergence_rate,
                           threshold=config.divergence_rate)
             return
 
@@ -1437,7 +1437,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     def cal_bs2point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
         self._dbg_bs2('cal_bs2point', '进入......', bi_idx=len(bi_list)-1)
 
-        # 重叠条件: 仅 B/C 两种模式
+        # ㈠ 重叠条件: 仅 B/C 两种模式
         # B: N,N-1,N-2,N-3不重叠,         N-4重叠
         # C: N,N-1,N-2,N-3,N-4,N-5不重叠, N-6重叠
         matched_pattern = self._check_bs1_overlap(bi_list, stroke_n, pivot_a)
@@ -1449,7 +1449,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs2('cal_bs2point', f'重叠模式匹配: {matched_pattern}',
                       stroke_n_idx=stroke_n.idx)
 
-        # 笔N不创新低/不创新高（与1类相反，2类核心特征）
+        # ㈡ 笔N不创新低/不创新高（与1类相反，2类核心特征）
         # 向下笔(二买)：笔N低点 >= 笔N-2低点
         # 向上笔(二卖)：笔N高点 <= 笔N-2高点
         stroke_nm2 = bi_list[stroke_n.idx - 2]
@@ -1465,8 +1465,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_2_idx=stroke_nm2.idx,
                           n_high=stroke_n._high(), nm2_high=stroke_nm2._high())
             return
-
-        # 笔N-2上需有买/卖点(一买确认后才有二买)
+        
+        # ㈢ 笔N-2上需有买/卖点(一买确认后才有二买)
         if not self._has_bsp_for_bi(stroke_nm2.idx):
             self._dbg_bs2('cal_bs2point', '跳过: 笔N-2上没有买/卖点',
                           n_2_idx=stroke_nm2.idx)
