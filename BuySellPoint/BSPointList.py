@@ -1301,7 +1301,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         config = self.config.GetBSConfig(is_buy)
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
 
-        # 重叠条件: A/B/C 三种模式任一满足即可
+        # ㈠ 重叠条件: A/B/C 三种模式任一满足即可
         # A: N,N-1不重叠,                 N-2重叠(三买卖点后，走一笔)
         # B: N,N-1,N-2,N-3不重叠,         N-4重叠(三买卖点后，走ABC)
         # C: N,N-1,N-2,N-3,N-4,N-5不重叠, N-6重叠(三买卖点后，走ABCDE)
@@ -1313,7 +1313,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs1('cal_bs1point', f'重叠条件匹配: {matched_pattern}',
                       stroke_n_idx=stroke_n.idx)
 
-        # 笔N的极值，必须突破笔N-2的极值
+        # ㈡ 笔N的极值，必须突破笔N-2的极值
         # 向下笔(买点)：笔N低点 < 笔N-2低点(创新低)
         # 向上笔(卖点)：笔N高点 > 笔N-2高点(创新高)
         stroke_nm2 = bi_list[stroke_n.idx - 2]
@@ -1330,7 +1330,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), nm2_high=stroke_nm2._high())
             return
 
-        # 笔N的极值，必须突破中枢A的波动区间
+        # ㈢ 笔N的极值，必须突破中枢A的波动区间
         # 向下笔(买点)：笔N低点 < 中枢A波动区间最低点(peak_low)
         # 向上笔(卖点)：笔N高点 > 中枢A波动区间最高点(peak_high)
         if stroke_n.is_down() and stroke_n._low() >= pivot_a.peak_low:
@@ -1344,10 +1344,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # 笔N 与 笔N-2 MACD DIF背驰
-        
+        # ㈣ 笔N 与 笔N-2 MACD DIF背驰
 
-        # 笔N 与 笔N-2 MACD BAR背驰
+
+        # ㈤ 笔N 与 笔N-2 MACD BAR背驰
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
