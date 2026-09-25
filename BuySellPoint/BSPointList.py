@@ -906,35 +906,26 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs0('_cal_bs0point_3rd', '进入', stroke_n_idx=stroke_n.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # 笔C振幅不足(相比笔A)，直接跳过
-        # stroke_1 = bi_list[pivot_a.begin_bi.idx]
-        # if not self._is_valid_out_in_amp(stroke_n, stroke_1):
-        #     self._dbg_bs0('_cal_bs0point_3rd', '跳过: C笔振幅不足',
-        #                   stroke_n_amp=round(stroke_n.amp(), 2),
-        #                   stroke_1_amp=round(stroke_1.amp(), 2),
-        #                   threshold=round(stroke_1.amp() * CMyBSPointList.BS0_OUT_IN_RATIO, 2))
-        #     return
-
-        # 笔C的极值，必须突破笔A的极值
-        # 向下笔(买点)：笔C低点 < 笔A低点(创新低)
-        # 向上笔(卖点)：笔C高点 > 笔A高点(创新高)
+        # ㈠ 笔C的极值，必须突破笔A的极值
+        # 向下笔C(买点)：笔C低点 < 笔A低点(创新低)
+        # 向上笔C(卖点)：笔C高点 > 笔A高点(创新高)
         stroke_a = bi_list[pivot_a.begin_bi.idx]
         if stroke_n.is_down() and stroke_n._low() >= stroke_a._low():
-            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 笔C未创新低(相比笔A)',
+            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 笔C未创新低(相较笔A)',
                           c_idx=stroke_n.idx,
                           a_idx=stroke_a.idx,
                           c_low=stroke_n._low(), a_low=stroke_a._low())
             return
         if stroke_n.is_up() and stroke_n._high() <= stroke_a._high():
-            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 笔C未创新高(相比笔A)',
+            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 笔C未创新高(相较笔A)',
                           c_idx=stroke_n.idx,
                           a_idx=stroke_a.idx,
                           c_high=stroke_n._high(), a_high=stroke_a._high())
             return
 
-        # 确保A、B、C三笔为标准🗲走势
-        # 向下笔C(买点)：笔B(向上)的高点 < 笔A的高点
-        # 向上笔C(卖点)：笔B(向下)的低点 > 笔A的低点
+        # ㈡ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长中，创新高/低，重新起算
+        # 向下笔C(买点)：笔B高点 < 笔A高点
+        # 向上笔C(卖点)：笔B低点 > 笔A低点
         stroke_b = bi_list[stroke_n.idx - 1]
         if stroke_n.is_down() and stroke_b._high() >= stroke_a._high():
             self._dbg_bs0('_cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
@@ -949,9 +940,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           b_low=stroke_b._low(), a_low=stroke_a._low())
             return
 
+        '''
         # 笔C结束K线，MACD黄白线 与 柱子值 的关系
-        # 向下笔(买点)：DIF和DEA要同时 ≥ 柱子值(黄白线在柱子上方)
-        # 向上笔(卖点)：DIF和DEA要同时 ≤ 柱子值(黄白线在柱子下方)
+        # 向下笔C(买点)：DIF和DEA要同时 ≥ 柱子值(黄白线在柱子上方)
+        # 向上笔C(卖点)：DIF和DEA要同时 ≤ 柱子值(黄白线在柱子下方)
         end_klu = stroke_n.get_end_klu()
         if stroke_n.is_down() and (end_klu.macd.DIF < end_klu.macd.macd or end_klu.macd.DEA < end_klu.macd.macd):
             self._dbg_bs0('_cal_bs0point_3rd', '跳过: 向下笔C，黄白线未同时≥柱子值',
@@ -967,8 +959,9 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dea=round(end_klu.macd.DEA, 4),
                           macd_bar=round(end_klu.macd.macd, 4))
             return
+        '''
 
-        # 笔C 与 笔A MACD BAR背驰
+        # ㈢ 笔C 与 笔A MACD BAR背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         stroke_a = bi_list[pivot_a.begin_bi.idx]
@@ -1465,7 +1458,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_2_idx=stroke_nm2.idx,
                           n_high=stroke_n._high(), nm2_high=stroke_nm2._high())
             return
-        
+
         # ㈢ 笔N-2上需有买/卖点(一买确认后才有二买)
         if not self._has_bsp_for_bi(stroke_nm2.idx):
             self._dbg_bs2('cal_bs2point', '跳过: 笔N-2上没有买/卖点',
