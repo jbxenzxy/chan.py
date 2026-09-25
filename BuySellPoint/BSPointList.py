@@ -1344,11 +1344,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # ㈣ 笔N 与 笔N-2 DIF峰值(PEAK)背驰（补充确认，与柱子版同为必要闸门）
+        # ㈣ 笔N 与 笔N-2 MACD DIF背驰
         is_dif_diver, n_dif_metric, nm2_dif_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
         dif_divergence_rate = n_dif_metric / (nm2_dif_metric + 1e-7)
         if not is_dif_diver:
-            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，DIF峰值未背驰',
+            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD DIF未背驰',
                           c1_idx=stroke_nm2.idx,
                           c2_idx=stroke_n.idx,
                           nm2_metric=nm2_dif_metric, n_metric=n_dif_metric,
@@ -1360,7 +1360,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
-            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD峰值未背驰',
+            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD BAR未背驰',
                           c1_idx=stroke_nm2.idx,
                           c2_idx=stroke_n.idx,
                           nm2_metric=nm2_metric, n_metric=n_metric,
@@ -1741,10 +1741,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     @staticmethod
     def _is_nearest_same_direction_dif_diver(n, nm2, config):
         """
-        最近同向笔MACD背驰比较（DIF版）
-        比较当下笔N与其最近同向笔N-2的DIF峰值(PEAK)，判断当下笔力度是否不足
+        最近同向笔MACD DIF背驰比较
+        比较当下笔N与其最近同向笔N-2的DIF值，判断当下笔力度是否不足
         """
-        n_metric = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False)
+        n_metric = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
         nm2_metric = nm2.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
         is_diver = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
@@ -1752,8 +1752,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     @staticmethod
     def _is_nearest_same_direction_bar_diver(n, nm2, config):
         """
-        最近同向笔MACD背驰比较
-        比较当下笔N与其最近同向笔N-2的MACD峰值(PEAK)，判断当下笔力度是否不足
+        最近同向笔MACD BAR背驰比较
+        比较当下笔N与其最近同向笔N-2的BAR值，判断当下笔力度是否不足
         """
         n_metric = n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
         nm2_metric = nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
