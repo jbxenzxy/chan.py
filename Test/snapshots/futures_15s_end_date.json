@@ -851,6 +851,16 @@
    "low": 4777.616,
    "price": 4780.76,
    "type": "3"
+  },
+  {
+   "date": "2024/06/03 21:43:45",
+   "fractal_high": 4818.596,
+   "fractal_low": 4813.215,
+   "high": 4862.181,
+   "is_buy": true,
+   "low": 4850.973,
+   "price": 4859.396,
+   "type": "0"
   }
  ],
  "fxs": [
@@ -14050,7 +14060,7 @@
    "ema26": 3841.3099298447
   },
   "bi_count": 40,
-  "bsp_count": 5,
+  "bsp_count": 6,
   "chan_version": "chan.py",
   "date_range": "2024/06/03 21:35:00 ~ 2024/06/04 13:49:45",
   "forward_adjust": false,
