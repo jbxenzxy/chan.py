@@ -175,7 +175,12 @@ class SEG_TYPE(Enum):
 
 class MACD_ALGO(Enum):
     AREA = auto()
-    PEAK = auto()
+    # 2026-09-25 重命名：原 MACD_ALGO.PEAK → MACD_ALGO.BAR
+    # 改名原因：原命名用「操作名」(PEAK=峰值) 而非「指标名」，与 MACD_ALGO.DIF/Cal_MACD_dif()、
+    # MACD_ALGO.DEA/Cal_MACD_dea() 的「指标名」风格不一致，极易误解为「这是一个峰值模式/开关」。
+    # 语义未变：本成员计算的是整笔(BAR = MACD 柱/直方图)的峰值(极值)，只是把名称统一为「指标名」。
+    # 配置关键字：唯一规范名为 "bar"。"peak" 历史别名已移除，旧配置须改为 "bar"。
+    BAR = auto()
     FULL_AREA = auto()
     FULL_AREA_EXT = auto()
     DIF = auto()

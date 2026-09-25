@@ -1738,8 +1738,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         最近同向笔MACD BAR背驰比较
         比较当下笔N与其最近同向笔N-2的BAR值，判断当下笔力度是否不足
         """
-        n_metric = n.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
-        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
+        n_metric = n.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA 有意义
+        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
         is_diver = n_metric < config.divergence_rate * nm2_metric
         return is_diver, n_metric, nm2_metric
 
@@ -2299,11 +2299,11 @@ def _red_range_multi_bi_diver(bi_list):
     if prev_same_dir is None:
         return {"diverged": False, "detail": "未找到前一个同向笔"}
 
-    prev_peak = prev_same_dir.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA 有意义
-    curr_peak = last_bi.cal_macd_metric(MACD_ALGO.PEAK, is_reverse=True)
-    is_diver = curr_peak <= prev_peak * CMyBSPointList.NESTED_MACD_DIVER_RATIO
+    prev_bar = prev_same_dir.cal_macd_metric(MACD_ALGO.BAR, is_reverse=False) # 2026-09-25 PEAK→BAR；is_reverse 仅对 MACD_ALGO.AREA 有意义
+    curr_bar = last_bi.cal_macd_metric(MACD_ALGO.BAR, is_reverse=True)
+    is_diver = curr_bar <= prev_bar * CMyBSPointList.NESTED_MACD_DIVER_RATIO
     detail = (
         f"多笔无中枢，{'MACD背驰' if is_diver else '未背驰'}"
-        f"（前笔峰值={prev_peak:.2f}，后笔峰值={curr_peak:.2f}）"
+        f"（前笔峰值={prev_bar:.2f}，后笔峰值={curr_bar:.2f}）"
     )
     return {"diverged": is_diver, "detail": detail}

@@ -189,8 +189,8 @@ class CBi:
     def cal_macd_metric(self, macd_algo, is_reverse):
         if macd_algo == MACD_ALGO.AREA:
             return self.Cal_MACD_half(is_reverse)
-        elif macd_algo == MACD_ALGO.PEAK:
-            return self.Cal_MACD_peak()
+        elif macd_algo == MACD_ALGO.BAR:   # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
+            return self.Cal_MACD_bar()
         elif macd_algo == MACD_ALGO.FULL_AREA:
             return self.Cal_MACD_area()
         elif macd_algo == MACD_ALGO.FULL_AREA_EXT:
@@ -218,7 +218,7 @@ class CBi:
         elif macd_algo == MACD_ALGO.RSI:
             return self.Cal_Rsi()
         else:
-            raise CChanException(f"unsupport macd_algo={macd_algo}, should be one of area/full_area/peak/diff/slope/amp", ErrCode.PARA_ERROR)
+            raise CChanException(f"unsupport macd_algo={macd_algo}, should be one of area/full_area/bar/diff/slope/amp", ErrCode.PARA_ERROR)
 
     @make_cache
     def Cal_Rsi(self):
@@ -290,7 +290,9 @@ class CBi:
         return same_dir_sum + (X - Y) + _s
 
     @make_cache
-    def Cal_MACD_peak(self):
+    def Cal_MACD_bar(self):
+        # 2026-09-25 由 Cal_MACD_peak 改名（详见 Common/CEnum MACD_ALGO.BAR 注释）。
+        # 语义未变：仍扫描整笔 klc_lst，取方向侧 MACD 柱(|macd|)峰值；仅命名与 DIF/DEA 统一。
         peak = 1e-7
         for klc in self.klc_lst:
             for klu in klc.lst:

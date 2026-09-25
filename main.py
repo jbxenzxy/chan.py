@@ -20,7 +20,7 @@ if __name__ == "__main__":
         "bsp3_follow_1": False,
         "min_zs_cnt": 0,
         "bs1_peak": False,
-        "macd_algo": "peak",
+        "macd_algo": "bar",   # 2026-09-25 由 "peak" 改为规范名 "bar"（MACD_ALGO.BAR）；"peak" 仍作别名兼容
         "bs_type": '1,2,3a,1p,2s,3b',
         "print_warning": True,
         "zs_algo": "normal",

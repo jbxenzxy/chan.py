@@ -1,6 +1,7 @@
 from typing import Dict, List, Optional
 
 from Common.CEnum import BSP_TYPE, MACD_ALGO
+from Common.ChanException import CChanException, ErrCode
 from Common.func_util import _parse_inf
 
 
@@ -60,7 +61,9 @@ class CPointConfig:
     def SetMacdAlgo(self, macd_algo):
         _d = {
             "area": MACD_ALGO.AREA,
-            "peak": MACD_ALGO.PEAK,
+            # 2026-09-25 重命名：MACD_ALGO.PEAK → MACD_ALGO.BAR（与 DIF/DEA 对齐，统一用「指标名」）。
+            # 配置关键字唯一为 "bar"；"peak" 历史别名已彻底移除，旧配置须改为 "bar"。
+            "bar": MACD_ALGO.BAR,           # 规范名（对齐 DIF/DEA）
             "full_area": MACD_ALGO.FULL_AREA,
             "full_area_ext": MACD_ALGO.FULL_AREA_EXT,
             "diff": MACD_ALGO.DIFF,
@@ -73,6 +76,11 @@ class CPointConfig:
             "turnrate_avg": MACD_ALGO.AMOUNT_AVG,
             "rsi": MACD_ALGO.RSI,
         }
+        if macd_algo not in _d:
+            _hint = '；注意："peak" 已于 2026-09-25 更名为 "bar"，请更新你的配置' if macd_algo == "peak" else ""
+            raise CChanException(
+                f"unsupport macd_algo={macd_algo!r}, valid: {sorted(_d)}{_hint}",
+                ErrCode.PARA_ERROR)
         self.macd_algo = _d[macd_algo]
 
     def set(self, k, v):
