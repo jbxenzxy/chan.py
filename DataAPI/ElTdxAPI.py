@@ -506,6 +506,13 @@ def fetch_pe_ttm_single(market, code):
     market = (market or "").lower()
     if market not in ELTDX_MARKETS:
         return {}
+    # eltdx 仅服务 A 股个股 + 指数；ETF/基金/债券/B股 会被 eltdx 内部
+    # infer_market 抛错。取数前预筛，避免无谓的异常与告警（与搜索缓存同一套
+    # 前缀判定，搜索框据此不收录 ETF/基金/债券/B股，但指数照常收录并取数）。
+    from DataAPI.TdxAPI import is_pe_ttm_target as _is_target
+    if not _is_target(market, code):
+        log.debug("[PE-TTM] 跳过非个股/指数标的(%s%s): eltdx 不支持", market, code)
+        return {}
     global _PE_CB_FAILS, _PE_CB_OPEN_UNTIL
     key = market + code
     now = time.time()
@@ -653,6 +660,12 @@ def get_shareholder_reduction_plans(market, code):
     不做旧版回退——依赖以 requirements 明确，避免双路径难排查）。
     """
     if market.lower() not in ('sh', 'sz', 'bj'):
+        return []
+    # 股东增减持仅服务 A 股个股；ETF/基金/债券/B股/指数 都会被 eltdx 内部
+    # infer_market 抛错或无意义。取数前预筛，避免无谓的异常与告警（与搜索缓存
+    # 同一套前缀判定，且指数段在本路径显式剔除——指数无股东）。
+    from DataAPI.TdxAPI import is_shareholder_reduction_target as _is_target
+    if not _is_target(market, code):
         return []
     global _REDUCTION_CB_FAILS, _REDUCTION_CB_OPEN_UNTIL
     key = market.lower() + code

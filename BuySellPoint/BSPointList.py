@@ -900,7 +900,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           nth_in_pivot=nth_in_pivot, zs_high=pivot_a.high, zs_low=pivot_a.low)
             self._cal_bs0point_4th(bi_list, pivot_a, stroke_n)
         else:
-            self._dbg_bs0('cal_bs0point', '走第n笔分支', stroke_n_idx=stroke_n.idx,
+            self._dbg_bs0('cal_bs0point', '走第4+笔分支', stroke_n_idx=stroke_n.idx,
                           nth_in_pivot=nth_in_pivot, zs_high=pivot_a.high, zs_low=pivot_a.low)
             self._cal_bs0point_nth(bi_list, pivot_a, stroke_n)
 
@@ -1053,11 +1053,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         bsp_found = self._cal_bs0point_nth_nzs(bi_list, pivot_a, stroke_n)
         if not bsp_found:
             if nth_in_pivot == 6 or nth_in_pivot == 8:
-                self._dbg_bs0(' _cal_bs0point_nth', '主分析未找到, 走第2次分析',
+                self._dbg_bs0(' _cal_bs0point_nth', '第1次分析未通过, 走第2次分析',
                               nth_in_pivot=nth_in_pivot)
                 self._cal_bs0point_nth_ozs(bi_list, pivot_a, stroke_n)
             else:
-                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 主分析未找到，且n不是6或8',
+                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次分析未通过，且非笔6或8',
                               nth_in_pivot=nth_in_pivot)
 
     # ── 第n笔主分析逻辑（返回是否找到买卖点）──
@@ -1600,23 +1600,21 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         2. 进入笔有效：不被下一反向笔吃掉
            - 向上进入笔：起始端低点 < 下一反向笔末端低点
            - 向下进入笔：起始端高点 > 下一反向笔末端高点
-
-        Args:
-            entry_bi: 进入笔
-            bi3, bi2, bi1: 构成中枢的三笔（按顺序）
-
-        Returns:
+        返回值:
             (True, zs_obj): 有效中枢，zs_obj 有 .high 和 .low 属性
             (False, None): 无效中枢
         """
+
         zs_low = max(bi1._low(), bi2._low(), bi3._low())
         zs_high = min(bi1._high(), bi2._high(), bi3._high())
         if zs_low > zs_high:
             return False, None
 
+        '''
         # 进入笔振幅需 >= bi3振幅 × ZS_ENTRY_AMP_RATIO
         if entry_bi.amp() < bi3.amp() * CMyBSPointList.ZS_ENTRY_AMP_RATIO:
             return False, None
+        '''
 
         # peak_high/peak_low：中枢内所有笔（bi1/bi2/bi3）的极值，即波动区间
         zs_peak_high = max(bi1._high(), bi2._high(), bi3._high())

@@ -246,9 +246,9 @@ class CBi:
     def Cal_MACD_area_full_ext(self):
         """
         扩展的 MACD 全程面积算法：
-        - 向下笔：G(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
-        - 向上笔：G(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
-        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area_full。
+        - 向上笔：(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
+        - 向下笔：(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
+        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area_full
         """
         _s = 1e-7
         begin_klu = self.get_begin_klu()
@@ -264,12 +264,12 @@ class CBi:
                 if self.is_down():
                     if klu.macd.macd < 0:       # 绿柱，同向
                         same_dir_sum += abs(klu.macd.macd)
-                    else:                         # 红柱，反向
+                    else:                       # 红柱，反向
                         counter_bars.append(klu.macd.macd)
                 else:  # 向上笔
-                    if klu.macd.macd > 0:        # 红柱，同向
+                    if klu.macd.macd > 0:       # 红柱，同向
                         same_dir_sum += abs(klu.macd.macd)
-                    else:                         # 绿柱，反向
+                    else:                       # 绿柱，反向
                         counter_bars.append(klu.macd.macd)
 
         if not counter_bars:

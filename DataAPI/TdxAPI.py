@@ -37,6 +37,97 @@ _TDXHY_X_TO_881 = {}
 _TDXHY_881_TO_X = {}
 
 
+# ── A 股代码段（单一事实源：collect_codes_from_vipdoc 收录 / eltdx 取数预筛共用）──
+SH_INDEX_PREFIXES = ("000", "95", "99")   # 上证系列指数（000xxx / 95xxxx / 99xxxx）；900xxx 沪B 不在此列
+SH_INCLUDE_PREFIXES = ("60", "68")        # 沪市主板 / 科创板
+SH_EXCLUDE_PREFIXES = ("11", "12", "13", "50", "51", "52", "53", "54", "55",
+                       "56", "57", "58", "59", "588", "90", "91", "92", "93",
+                       "94", "95", "96", "97", "98", "10", "00", "09")
+SZ_INDEX_PREFIXES = ("399",)              # 深市指数（399xxx）
+SZ_INCLUDE_PREFIXES = ("00", "30", "39")  # 深市主板 / 创业板 / 390-398
+SZ_EXCLUDE_PREFIXES = ("10", "11", "12", "13", "14", "15", "16", "17", "18", "20", "395")
+BJ_STOCK_PREFIXES = ("8", "4", "92")       # 北交所个股（8xxxxx / 4xxxxx / 92xxxx）
+
+
+def is_a_share_stock(market, code):
+    """是否在 eltdx 取数（PE-TTM / 股东增减持）时视作「可询价标的」。
+
+    与 collect_codes_from_vipdoc._is_a_stock_code 共用上方前缀常量（同一判定），
+    返回 True 表示「应当照常取数」：
+      True  = A股个股 + 指数（eltdx 能 infer_market，照常取数）
+      False = ETF / 基金 / 债券 / B股 / 可转债（eltdx 无法 infer_market，预筛跳过）
+
+    关键点：**指数与个股同样需要取数**，故不在本函数排除；仅排除 eltdx 无法识别
+    的 ETF / 基金 / 债券 / B股 等代码段，从源头避免 `unable to infer market`
+    异常与告警日志。「搜索框不显示 ETF」正是同一套前缀判定（搜索缓存只收录
+    个股 + 指数，天然就过滤掉了 ETF/基金/债券/B股）。
+    """
+    if not isinstance(code, str) or not code.isdigit() or len(code) != 6:
+        return False
+    market = (market or "").lower()
+    if market == "sh":
+        if code.startswith(SH_INDEX_PREFIXES):
+            return True
+        if code.startswith(SH_INCLUDE_PREFIXES):
+            return True
+        if code.startswith(SH_EXCLUDE_PREFIXES):
+            return False
+        return False
+    if market == "sz":
+        if code.startswith(SZ_INDEX_PREFIXES):
+            return True
+        if code.startswith(SZ_INCLUDE_PREFIXES):
+            return True
+        if code.startswith(SZ_EXCLUDE_PREFIXES):
+            return False
+        return False
+    if market == "bj":
+        return code.startswith(BJ_STOCK_PREFIXES)
+    return False
+
+
+def _is_b_share(market, code):
+    """沪B(900xxx) / 深B(200xxx)。
+
+    双保险：SH_INDEX_PREFIXES 已收窄为 ('000','95','99')，900xxx 不再被视为指数、
+    会落入 SH_EXCLUDE_PREFIXES('90') 被排除；深B 200xxx 也已在 SZ_EXCLUDE_PREFIXES
+    内。故 eltdx 取数预筛与搜索缓存 collect_codes_from_vipdoc 现已通过同一套前缀表
+    一致地排除沪B/深B，本函数仅作显式可读兜底（与前缀表判定结果一致）。"""
+    if not isinstance(code, str) or len(code) != 6:
+        return False
+    market = (market or "").lower()
+    if market == "sh":
+        return code.startswith("90")
+    if market == "sz":
+        return code.startswith("20")
+    return False
+
+
+def is_pe_ttm_target(market, code):
+    """PE-TTM 取数标的：A 股个股 + 指数（指数有市盈率，须照常取数）。
+    排除 ETF / 基金 / 债券 / 可转债 / B股（eltdx 无法 infer_market）。
+    复用 is_a_share_stock（= 搜索 wheel 的个股+指数判定）。"""
+    if not is_a_share_stock(market, code):
+        return False
+    return not _is_b_share(market, code)
+
+
+def is_shareholder_reduction_target(market, code):
+    """股东增减持取数标的：仅 A 股个股。指数不是上市公司、无股东增减持概念须排除；
+    排除 ETF / 基金 / 债券 / 可转债 / B股 / 指数。在 is_a_share_stock（个股+指数）
+    基础上剔除 B股 与 指数段，仅留个股。"""
+    if not is_a_share_stock(market, code):
+        return False
+    if _is_b_share(market, code):
+        return False
+    market = (market or "").lower()
+    if market == "sh" and code.startswith(SH_INDEX_PREFIXES):
+        return False
+    if market == "sz" and code.startswith(SZ_INDEX_PREFIXES):
+        return False
+    return True
+
+
 def collect_codes_from_vipdoc(vipdoc_dir):
     """
     从 vipdoc 目录下的 .day 文件名收集所有股票代码。
@@ -56,53 +147,26 @@ def collect_codes_from_vipdoc(vipdoc_dir):
     """
     result = {}
 
-    # === A股代码过滤规则 ===
-    # 上海市场(sh)：包含
-    sh_include_prefixes = ("60", "68")  # 主板60, 科创板68
-    # 上海市场(sh)：排除（债券、基金、ETF等）
-    sh_exclude_prefixes = ("11", "12", "13", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "588", "90", "91", "92", "93", "94", "95", "96", "97", "98", "10", "00", "09")
-    # 上海指数：000xxx 和 9xxxxx 是上证系列指数
-    sh_index_prefixes = ("000", "9")
-
-    # 深圳市场(sz)：包含
-    sz_include_prefixes = ("00", "30", "39")  # 主板00, 创业板30, 指数39
-    # 深圳市场(sz)：排除（债券、基金、ETF等）
-    sz_exclude_prefixes = ("10", "11", "12", "13", "14", "15", "16", "17", "18", "20", "395")
-
-    # 深圳指数：399xxx 是深市指数（如399001深成指、399006创业板指）
-    sz_index_prefixes = ("399",)
-
     def _is_a_stock_code(code, mkt_dir):
-        """判断是否为需要包含的A股代码"""
+        """判断是否为需要包含的 A 股代码（含指数；前缀规则走模块级单一事实源）。"""
         if not code.isdigit() or len(code) != 6:
             return False
-
         if mkt_dir == "sh":
-            # 上海指数：000xxx（上证系列指数）、9xxxxx
-            if code.startswith(sh_index_prefixes):
+            if code.startswith(SH_INDEX_PREFIXES):
                 return True
-            # 上海包含：主板60、科创板68、ETF 51/56/58/59/588
-            if code.startswith(sh_include_prefixes):
+            if code.startswith(SH_INCLUDE_PREFIXES):
                 return True
-            # 上海排除：债券、基金等
-            if code.startswith(sh_exclude_prefixes):
+            if code.startswith(SH_EXCLUDE_PREFIXES):
                 return False
-            # 其他上海代码默认排除
             return False
-
         elif mkt_dir == "sz":
-            # 深圳指数：399xxx
-            if code.startswith(sz_index_prefixes):
+            if code.startswith(SZ_INDEX_PREFIXES):
                 return True
-            # 深圳包含：主板00、创业板30、ETF 15/16/18
-            if code.startswith(sz_include_prefixes):
+            if code.startswith(SZ_INCLUDE_PREFIXES):
                 return True
-            # 深圳排除：债券、基金、通达信内部板块等
-            if code.startswith(sz_exclude_prefixes):
+            if code.startswith(SZ_EXCLUDE_PREFIXES):
                 return False
-            # 其他深圳代码默认排除
             return False
-
         return False
 
     # === 收集A股代码 ===
