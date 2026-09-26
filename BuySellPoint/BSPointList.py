@@ -929,14 +929,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈡ 笔C是否破笔A极值 —— 两种情况
-        #   情况一：笔C破笔A极值 → 直接走 X（MACD 背离判断）
-        #   情况二：笔C未破笔A极值 → 先过 DIF 回0轴 过滤，再过 X（MACD 背离判断）
-        # X（情况一的 MACD 背离 判断）为两分支共有：情况二即便满足自身条件，仍需通过 X 才生成点
+        #   情况一：笔C破了笔A极值 → 直接 MACD BAR 背离判定
+        #   情况二：笔C未破笔A极值 → 先过 DIF 回0轴 过滤，再过 MACD BAR 背离判定
         dif_ratio = None
         is_2nd = False
         if (stroke_n.is_down() and stroke_n._low() < stroke_a._low()) or \
                 (stroke_n.is_up() and stroke_n._high() > stroke_a._high()):
-            # 情况一：笔C破笔A极值（无额外过滤，直接进入 X）
+            # 情况一：笔C破了笔A极值（无额外过滤）
             is_2nd = False
         else:
             # 情况二：笔C未破笔A极值 → 需先满足 MACD DIF 回0轴
@@ -961,7 +960,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 return
             dif_ratio = (a_dist - c_dist) / a_dist
 
-        # X（情况一与情况二共有）：MACD 背离 判断
+        # MACD BAR 背离判定
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
