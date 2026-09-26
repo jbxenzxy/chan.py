@@ -215,7 +215,7 @@ class CChanConfig:
             left_method=conf.get("left_seg_method", "peak"),
         )
         self.zs_conf = CZSConfig(
-            need_combine=conf.get("zs_combine", False),            # 是否中枢合并，默认为 True
+            need_combine=conf.get("zs_combine", False),            # 是否中枢合并，默认为 False
             zs_combine_mode=conf.get("zs_combine_mode", "zs"),
             one_bi_zs=conf.get("one_bi_zs", False),
             zs_algo=conf.get("zs_algo", "over_seg"),               # 中枢算法：跨段
@@ -286,20 +286,21 @@ class CChanConfig:
 
     def set_bsp_config(self, conf):
         para_dict = {
-            "divergence_rate": 1,           # 11类（和11p类）买卖点MACD背驰力度（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 1 × 进中枢笔(前笔)MACD面积）
-            "min_zs_cnt": 1,                # 11类（和11p类）买卖点至少要经历几个中枢，默认为 1
+            "divergence_rate": 1,               # 11类（和11p类）买卖点MACD背驰力度（1：出中枢笔 vs 进中枢笔；1p：相邻同向笔；出中枢笔(后笔)MACD面积 ≤ 1 × 进中枢笔(前笔)MACD面积）
+            "min_zs_cnt": 1,                    # 11类（和11p类）买卖点至少要经历几个中枢，默认为 1
             "bsp11_only_multibi_zs": True,
-            "max_bs22_rate": 0.9,           # 22类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到11类买卖点的位置
-            "macd_algo": "area_full_ext",   # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）；2026-09-25 配置关键字由 full_area_ext 更名为 area_full_ext
-            "bs11_peak": False,             # 11类（非11p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
-            "bs_type": "0,1,2,3",           # 买卖点类型：0震荡；11趋背/盘背；11p段背；22回踩/回抽；22s类22；33a中枢在11类后面；33b中枢在11类前面；1一类买卖点；2待实现；3三类买卖点
-            "bsp22_follow_11": True,        # 22类买卖点是否必须跟在11类买卖点后面（用于小转大时11类买卖点因为背驰度不足没生成），默认为 True
-            "bsp33_follow_11": False,       # 33类买卖点是否必须跟在11类买卖点后面，默认为 True（没有11类点就不算33类点，忽视了有"小转大"的可能）
-            "bsp33_peak": False,            # 33类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
-            "bsp22s_follow_22": False,      # 类22买卖点是否必须跟在22类买卖点后面（22类买卖点可能由于不满足 max_bs22_rate），默认为 False
-            "max_bsp22s_lv": None,          # 类22买卖点最大层级（距离22类买卖点的笔的距离/2），默认为None，不做限制
-            "strict_bsp33": False,          # 33类买卖点对应的中枢，是否要求中枢进入笔"紧邻"11类点笔，默认为 False（允许11类点笔后走个ABC，ABC是后面中枢的进入段）
-            "bsp33a_max_zs_cnt": 2,         # 33类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离11类点最近的那个中枢回拉产生的33a类点，越远的中枢越不可靠
+            "max_bs22_rate": 0.9,               # 22类买卖点那一笔回撤最大比例，默认为 0.9999；如果是 1.0，相当于允许回测到11类买卖点的位置
+            "macd_algo": "area_full_ext",       # MACD背驰计算；整根笔对应的MACD同向面积累加（上涨笔取正柱，下跌笔取负柱）；2026-09-25 配置关键字由 full_area_ext 更名为 area_full_ext
+            "bs11_peak": False,                 # 11类（非11p类）买卖点位置是否必须是整个中枢范围内所有笔中的最高点(上涨)或最低点(下跌)，默认为 True
+            "bs_type": "0,1,2,3",               # 买卖点类型：0震荡；11趋背/盘背；11p段背；22回踩/回抽；22s类22；33a中枢在11类后面；33b中枢在11类前面；1一类买卖点；2待实现；3三类买卖点
+            "bsp22_follow_11": True,            # 22类买卖点是否必须跟在11类买卖点后面（用于小转大时11类买卖点因为背驰度不足没生成），默认为 True
+            "bsp33_follow_11": False,           # 33类买卖点是否必须跟在11类买卖点后面，默认为 True（没有11类点就不算33类点，忽视了有"小转大"的可能）
+            "bsp33_peak": False,                # 33类买卖点突破笔是不是必须突破中枢里面最高/最低的，默认为 False
+            "bsp22s_follow_22": False,          # 类22买卖点是否必须跟在22类买卖点后面（22类买卖点可能由于不满足 max_bs22_rate），默认为 False
+            "max_bsp22s_lv": None,              # 类22买卖点最大层级（距离22类买卖点的笔的距离/2），默认为None，不做限制
+            "strict_bsp33": False,              # 33类买卖点对应的中枢，是否要求中枢进入笔"紧邻"11类点笔，默认为 False（允许11类点笔后走个ABC，ABC是后面中枢的进入段）
+            "bsp33a_max_zs_cnt": 2,             # 33类买卖点最多可以跨越多少个中枢，默认为1的设计意图：只关注离11类点最近的那个中枢回拉产生的33a类点，越远的中枢越不可靠
+            "retrace_zero_axis_ratio": 0.618,   # MACD DIF回0轴幅度阈值：_cal_bs0point_3rd 使用
         }
         args = {para: conf.get(para, default_value) for para, default_value in para_dict.items()}
         self.bs_point_conf = CBSPointConfig(**args)
