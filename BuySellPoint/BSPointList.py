@@ -943,27 +943,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           b_low=stroke_b._low(), a_low=stroke_a._low())
             return
 
-        '''
-        # 笔C结束K线，MACD黄白线 与 柱子值 的关系
-        # 向下笔C(买点)：DIF和DEA要同时 ≥ 柱子值(黄白线在柱子上方)
-        # 向上笔C(卖点)：DIF和DEA要同时 ≤ 柱子值(黄白线在柱子下方)
-        end_klu = stroke_n.get_end_klu()
-        if stroke_n.is_down() and (end_klu.macd.DIF < end_klu.macd.macd or end_klu.macd.DEA < end_klu.macd.macd):
-            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 向下笔C，黄白线未同时≥柱子值',
-                          c_idx=stroke_n.idx,
-                          dif=round(end_klu.macd.DIF, 4),
-                          dea=round(end_klu.macd.DEA, 4),
-                          macd_bar=round(end_klu.macd.macd, 4))
-            return
-        if stroke_n.is_up() and (end_klu.macd.DIF > end_klu.macd.macd or end_klu.macd.DEA > end_klu.macd.macd):
-            self._dbg_bs0('_cal_bs0point_3rd', '跳过: 向上笔C，黄白线未同时≤柱子值',
-                          c_idx=stroke_n.idx,
-                          dif=round(end_klu.macd.DIF, 4),
-                          dea=round(end_klu.macd.DEA, 4),
-                          macd_bar=round(end_klu.macd.macd, 4))
-            return
-        '''
-
         # ㈢ 笔C 与 笔A MACD BAR背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
