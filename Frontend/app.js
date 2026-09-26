@@ -4734,6 +4734,26 @@
                 + errs.length + ' 个库读取失败，汇总不完整</span></div>';
         }
 
+        // 统计口径标识：统计与自动下单共用同一份「买卖点类型过滤」勾选，
+        // 用户取消勾选的某类其历史成交不计入统计。这里显式标出当前汇总数字
+        // 是基于哪几类算的，避免「勾一下就把历史胜率静默重算」而无人察觉。
+        function statsCaliberHtml(d) {
+            var incl = d.bsp_types_included || ["0", "1", "2", "3"];
+            var excluded = ["0", "1", "2", "3"].filter(function (t) {
+                return incl.indexOf(t) < 0;
+            });
+            if (excluded.length === 0) {
+                return '<div class="stats-row" style="font-size:11px;color:#a8b2d1;'
+                    + 'padding-left:2px;">统计口径：全部 0/1/2/3 类'
+                    + '（未启用买卖点类型过滤）</div>';
+            }
+            return '<div class="stats-row" style="background:rgba(255,176,32,0.10);'
+                + 'border-left:3px solid #FFB020;padding:4px 6px;margin-bottom:6px;'
+                + 'font-size:11px;color:#FFB020;">统计口径：'
+                + incl.join("/") + ' 类（已按「买卖点类型」过滤排除 '
+                + excluded.join("/") + ' 类，其历史成交不计入以上汇总）</div>';
+        }
+
         function renderTradeStats(d) {
             var count = (d && d.count) || 0;
             var readErrs = statsReadErrors(d);
@@ -4762,7 +4782,8 @@
                     _writeStatsHtml('<div class="stats-empty">未找到 state.db（尚无自动下单记录）</div>');
                     return;
                 }
-                _writeStatsHtml('<div class="stats-empty">该品种暂无历史成交</div>');
+                _writeStatsHtml(statsCaliberHtml(d)
+                    + '<div class="stats-empty">该品种暂无历史成交</div>');
                 return;
             }
             var pct = function (x) { return (x * 100).toFixed(1) + "%"; };
@@ -4782,6 +4803,9 @@
             var col = function (x) { return x >= 0 ? "#FF3C3C" : "#00F0F0"; };  // 涨红跌绿
             var num = function (x) { return x != null ? Number(x).toFixed(2) : "—"; };
             var html = "";
+            // 统计口径标识（置于最顶，先于曲线与核心数）：一眼看出当前汇总数字
+            // 是基于哪几类买卖点算的（用户取消勾选的某类其历史成交已被排除）。
+            html += statsCaliberHtml(d);
             // ① 曲线在上（对齐「市场量能」的 amo-chart 位置）
             html += '<canvas id="trade-equity-canvas"></canvas>';
             // ② 一行四格核心数（对齐「市场量能」的 amo-stats）

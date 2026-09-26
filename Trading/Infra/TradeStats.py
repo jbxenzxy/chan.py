@@ -143,6 +143,39 @@ def load_trades_report(db_paths: List[str],
     }
 
 
+def filter_trades_by_bsp_type(trades: List[Dict[str, Any]],
+                             allowed_types: Optional[Any]) -> List[Dict[str, Any]]:
+    """按允许的买卖点类型过滤成交行（统计侧对「买卖点类型过滤」SSOT 的落地）。
+
+    与自动下单共用同一份勾选（`state.db` 的 `bsp_type_filter`）：用户取消勾选的
+    某类，其历史成交不计入统计（总净盈亏 / 胜率 / 盈亏比 … 一并重算）。
+
+    allowed_types 为 None → 不过滤（全部放行，等价于「用户从未设置过滤」）。
+    allowed_types 为可迭代的 str → 只保留「signal_key 中段（逗号拆段后）至少有一段
+    落在允许集合内」的成交。
+
+    ⚠️ 放行口径刻意与 `Trading/Engine/Engine._bsp_type_allowed` **完全一致**：
+    signal_key 格式 `date|bsp_type|is_buy`（`Records.make_key`），中段可能是逗号串
+    （同一右肩 K 合并出的多类型，如 "1,11"）—— 任一段被允许即保留，避免把
+    「引擎当初放行过」的成交在统计侧误排除，保证「显示 / 下单 / 统计」三处口径一致。
+    signal_key 中段完全不含 0/1/2/3（人工单 / 回放 RUN 等）的成交：allowed_types
+    为 None 时保留（无过滤）；已设过滤时因没有任何 0-3 段命中允许集 → 排除
+    （与引擎对「非勾选类型一律忽略」同一保守方向）。
+    """
+    if allowed_types is None:
+        return list(trades)
+    allowed = set(str(t) for t in allowed_types)
+    out: List[Dict[str, Any]] = []
+    for t in trades:
+        sk = t.get("signal_key") or ""
+        parts = sk.split("|")
+        bt = parts[1] if len(parts) >= 2 else ""
+        segs = [s.strip() for s in bt.split(",") if s.strip()]
+        if any(s in allowed for s in segs):
+            out.append(t)
+    return out
+
+
 def compute_trade_stats(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
     """对一组已合并、按 exit_at 升序的成交记录，算统计摘要。
 

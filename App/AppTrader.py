@@ -863,7 +863,8 @@ class AppTrader:
         几百笔。失败必须可见（服务端同时打 warning，见下）。
         """
         from Trading.Infra.TradeStats import (
-            load_trades_report, compute_trade_stats)
+            load_trades_report, compute_trade_stats, filter_trades_by_bsp_type)
+        from Trading.Infra.Records import BSP_TYPE_CHOICES
         dbs = (_discover_state_dbs() if union else
                ([os.path.join(_DEFAULT_OUT, "state.db")]
                 if os.path.isfile(os.path.join(_DEFAULT_OUT, "state.db")) else []))
@@ -873,7 +874,24 @@ class AppTrader:
                 log.warning(
                     "[AppTrader] 成交统计读库失败 db=%s status=%s error=%s",
                     s["path"], s["status"], s["error"])
-        stats = compute_trade_stats(rep["rows"])
+        # 统计与自动下单共用同一份「买卖点类型过滤」SSOT（state.db bsp_type_filter）：
+        # 用户在「显示设置 → 买卖点类型」取消勾选的某类，其历史成交不计入统计，
+        # 总净盈亏 / 实际胜率 / 盈亏比 / 盈利因子 / 成交笔数 / 期望值 / 平均每笔 /
+        # 最大单笔等汇总指标全部据此重算；by_bsp_type 分组也不会出现被排除的类型。
+        # None = 用户从未推送过勾选 → 不过滤（全部放行），与引擎「未设置 = 全部放行」
+        # 同一口径。allowed 只取 BSP_TYPE_CHOICES 内的键，过滤表里的其它键忽略。
+        raw_filt = self.get_bsp_filter().get("bsp_type_filter")
+        allowed = None
+        if isinstance(raw_filt, dict):
+            allowed = {t for t in BSP_TYPE_CHOICES if raw_filt.get(t)}
+        filtered_rows = filter_trades_by_bsp_type(rep["rows"], allowed)
+        stats = compute_trade_stats(filtered_rows)
+        # 回传「统计口径」：前端据 bsp_types_included 显式标出当前汇总数字是基于
+        # 哪几类算的，避免「勾一下就把历史胜率静默重算」而用户毫无察觉。
+        stats["bsp_type_filter"] = raw_filt
+        stats["bsp_types_included"] = (sorted(allowed)
+                                       if allowed is not None
+                                       else list(BSP_TYPE_CHOICES))
         stats["dbs_scanned"] = rep["dbs_total"]
         stats["dbs_ok"] = rep["dbs_ok"]
         stats["sources"] = rep["sources"]
