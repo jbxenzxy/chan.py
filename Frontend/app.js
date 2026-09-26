@@ -4750,8 +4750,7 @@
             return '<div class="stats-row" style="background:rgba(255,176,32,0.10);'
                 + 'border-left:3px solid #FFB020;padding:4px 6px;margin-bottom:6px;'
                 + 'font-size:11px;color:#FFB020;">统计口径：'
-                + incl.join("/") + ' 类（已按「买卖点类型」过滤排除 '
-                + excluded.join("/") + ' 类，其历史成交不计入以上汇总）</div>';
+                + incl.join("/") + '类</div>';
         }
 
         function renderTradeStats(d) {
