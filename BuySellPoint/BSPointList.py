@@ -909,27 +909,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         self._dbg_bs0(' _cal_bs0point_3rd', '进入', stroke_n_idx=stroke_n.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # ㈠ 笔C的极值，必须突破笔A的极值
-        # 向下笔C(买点)：笔C低点 < 笔A低点(创新低)
-        # 向上笔C(卖点)：笔C高点 > 笔A高点(创新高)
         stroke_a = bi_list[pivot_a.begin_bi.idx]
-        if stroke_n.is_down() and stroke_n._low() >= stroke_a._low():
-            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔C未创新低(相较笔A)',
-                          c_idx=stroke_n.idx,
-                          a_idx=stroke_a.idx,
-                          c_low=stroke_n._low(), a_low=stroke_a._low())
-            return
-        if stroke_n.is_up() and stroke_n._high() <= stroke_a._high():
-            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔C未创新高(相较笔A)',
-                          c_idx=stroke_n.idx,
-                          a_idx=stroke_a.idx,
-                          c_high=stroke_n._high(), a_high=stroke_a._high())
-            return
+        stroke_b = bi_list[stroke_n.idx - 1]
 
-        # ㈡ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
+        # ㈠ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
         # 向下笔C(买点)：笔B高点 < 笔A高点
         # 向上笔C(卖点)：笔B低点 > 笔A低点
-        stroke_b = bi_list[stroke_n.idx - 1]
         if stroke_n.is_down() and stroke_b._high() >= stroke_a._high():
             self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
                           b_idx=stroke_b.idx,
@@ -943,10 +928,25 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           b_low=stroke_b._low(), a_low=stroke_a._low())
             return
 
+        # ㈡ 笔C的极值，必须突破笔A的极值
+        # 向下笔C(买点)：笔C低点 < 笔A低点(创新低)
+        # 向上笔C(卖点)：笔C高点 > 笔A高点(创新高)
+        if stroke_n.is_down() and stroke_n._low() >= stroke_a._low():
+            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔C未创新低(相较笔A)',
+                          c_idx=stroke_n.idx,
+                          a_idx=stroke_a.idx,
+                          c_low=stroke_n._low(), a_low=stroke_a._low())
+            return
+        if stroke_n.is_up() and stroke_n._high() <= stroke_a._high():
+            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔C未创新高(相较笔A)',
+                          c_idx=stroke_n.idx,
+                          a_idx=stroke_a.idx,
+                          c_high=stroke_n._high(), a_high=stroke_a._high())
+            return
+
         # ㈢ 笔C 与 笔A MACD BAR背驰
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
-        stroke_a = bi_list[pivot_a.begin_bi.idx]
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
