@@ -941,6 +941,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 情况二：笔C未破笔A极值 → 需先满足 MACD DIF 回0轴
             is_2nd = True
             is_buy = stroke_n.is_down()
+            config = self.config.GetBSConfig(is_buy)
             A_dif = stroke_a.get_begin_klu().macd.DIF
             C_dif = stroke_n.get_end_klu().macd.DIF
             if is_buy:
@@ -951,7 +952,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 c_dist = abs(C_dif)  # 笔C高点 DIF（应在0轴下，绝对值即距离）
             # 两笔极值都须在正确侧：买→0轴上(A_dif>0且C_dif>0)，卖→0轴下(A_dif<0且C_dif<0)
             sign_ok = (A_dif > 0 and C_dif > 0) if is_buy else (A_dif < 0 and C_dif < 0)
-            ratio_ok = a_dist != 0 and (a_dist - c_dist) / a_dist > 0.618
+            ratio_ok = a_dist != 0 and (a_dist - c_dist) / a_dist > config.retrace_zero_axis_ratio
             if not (sign_ok and ratio_ok):
                 self._dbg_bs0(' _cal_bs0point_3rd', '情况二: 跳过。MACD DIF 未回0轴',
                               stroke_n_idx=stroke_n.idx, is_buy=is_buy,
@@ -1452,11 +1453,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ── MACD DIF 幅度过滤 ──
         # 笔N 的分型极值 K 线（get_peak_klu）：向下笔 起点=顶分型极值、终点=底分型极值；向上笔反之。
         # 三买（笔N 向下）：⑴ 底分型极值 DIF 在 0 轴上；⑵ A = 该 DIF（到 0 轴距离，正值即本身）；
-        #   ⑶ B = 顶分型极值 DIF 绝对值（到 0 轴距离）；⑷ (B-A)/B > 0.618。
+        #   ⑶ B = 顶分型极值 DIF 绝对值（到 0 轴距离）；⑷ (B-A)/B > config.retrace_zero_axis_ratio。
         # 三卖（笔N 向上）：⑴ 顶分型极值 DIF 在 0 轴下；⑵ A = 该 DIF 绝对值（到 0 轴距离）；
-        #   ⑶ B = 底分型极值 DIF 绝对值；⑷ (B-A)/B > 0.618。
-        # B 为分母：B==0（DIF 恰在 0 轴）时比值无定义，视为不满足过滤。
+        #   ⑶ B = 底分型极值 DIF 绝对值；⑷ (B-A)/B > config.retrace_zero_axis_ratio。
+        # B 为分母：B==0（DIF 恰在 0 轴）时比值无定义，视为不满足过滤。阈值见 CPointConfig.retrace_zero_axis_ratio（SSOT，默认 0.618）。
         is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
         begin_dif = stroke_n.get_begin_klu().macd.DIF
         end_dif = stroke_n.get_end_klu().macd.DIF
         if is_buy:
@@ -1466,7 +1468,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             macd_a = abs(end_dif)    # ⑵ 顶分型极值 DIF 到 0 轴的距离
             macd_b = abs(begin_dif)  # ⑶ 底分型极值 DIF 到 0 轴的距离
         sign_ok = end_dif > 0 if is_buy else end_dif < 0  # ⑴
-        ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > 0.618  # ⑷
+        ratio_ok = macd_b != 0 and (macd_b - macd_a) / macd_b > config.retrace_zero_axis_ratio  # ⑷
         if not (sign_ok and ratio_ok):
             self._dbg_bs3('cal_bs3point', '跳过: MACD白线幅度过滤不满足',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,

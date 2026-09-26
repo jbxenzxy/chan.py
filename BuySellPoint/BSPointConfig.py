@@ -30,6 +30,7 @@ class CPointConfig:
                  max_bsp22s_lv,
                  strict_bsp33,
                  bsp33a_max_zs_cnt,
+                 retrace_zero_axis_ratio=0.618,
                  ):
         self.divergence_rate = divergence_rate
         self.min_zs_cnt = min_zs_cnt
@@ -48,6 +49,8 @@ class CPointConfig:
         self.strict_bsp33 = strict_bsp33
         self.bsp33a_max_zs_cnt = bsp33a_max_zs_cnt
         assert self.bsp33a_max_zs_cnt >= 1
+        # MACD DIF 回0轴幅度阈值：_cal_bs0point_3rd 情况二 使用
+        self.retrace_zero_axis_ratio = retrace_zero_axis_ratio
 
     def parse_target_type(self):
         _d: Dict[str, BSP_TYPE] = {x.value: x for x in BSP_TYPE}
