@@ -928,9 +928,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           b_low=stroke_b._low(), a_low=stroke_a._low())
             return
 
-        # ㈡ 笔C 的极值，是否突破笔A 的极值 —— 分两种情况
-        #   情况一：笔C突破笔A极值 → 走 MACD 背离处理（原 947~957 及生成点）
-        #   情况二：笔C未突破笔A极值 → 采用 cal_bs3point 1427~1450 的 MACD DIF 幅度过滤
+        # ㈡ 笔C是否破笔A极值 —— 两种情况
         if (stroke_n.is_down() and stroke_n._low() < stroke_a._low()) or \
                 (stroke_n.is_up() and stroke_n._high() > stroke_a._high()):
             # 情况一：笔C破笔A极值
@@ -939,7 +937,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
             divergence_rate = n_metric / (nm2_metric + 1e-7)
             if not is_diver:
-                self._dbg_bs0(' _cal_bs0point_3rd', '情况一：跳过 最近同向，MACD BAR 未背驰',
+                self._dbg_bs0(' _cal_bs0point_3rd', '情况一：跳过。最近同向，MACD BAR 未背驰',
                               nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
                               divergence_rate=round(divergence_rate, 2),
                               threshold=round(config.divergence_rate, 2))
@@ -953,8 +951,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             self._dbg_bs0(' _cal_bs0point_3rd', '情况一: OK 生成0类买/卖点',
                           is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
         else:
-            # 情况二：笔C未破笔A极值
-            # 模拟MACD DIF 回 0轴
+            # 情况二：笔C未破笔A极值 —— 需满足MACD DIF回0轴
             is_buy = stroke_n.is_down()
             A_dif = stroke_a.get_begin_klu().macd.DIF
             C_dif = stroke_n.get_end_klu().macd.DIF
@@ -962,13 +959,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 a_dist = A_dif       # 笔A高点 DIF（应在0轴上，正值即距离）
                 c_dist = C_dif       # 笔C低点 DIF（应在0轴上，正值即距离）
             else:
-                a_dist = abs(A_dif)  # 笔A低点 DIF 到0轴距离（应在0轴下）
-                c_dist = abs(C_dif)  # 笔C高点 DIF 到0轴距离（应在0轴下）
+                a_dist = abs(A_dif)  # 笔A低点 DIF（应在0轴下，绝对值即距离）
+                c_dist = abs(C_dif)  # 笔C高点 DIF（应在0轴下，绝对值即距离）
             # 两笔极值都须在正确侧：买→0轴上(A_dif>0且C_dif>0)，卖→0轴下(A_dif<0且C_dif<0)
             sign_ok = (A_dif > 0 and C_dif > 0) if is_buy else (A_dif < 0 and C_dif < 0)
             ratio_ok = a_dist != 0 and (a_dist - c_dist) / a_dist > 0.618
             if not (sign_ok and ratio_ok):
-                self._dbg_bs0(' _cal_bs0point_3rd', '情况二: 跳过 MACD DIF 未回0轴',
+                self._dbg_bs0(' _cal_bs0point_3rd', '情况二: 跳过。MACD DIF 未回0轴',
                               stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                               A_dif=round(A_dif, 4), C_dif=round(C_dif, 4),
                               a_dist=round(a_dist, 4), c_dist=round(c_dist, 4))
