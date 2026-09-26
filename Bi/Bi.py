@@ -192,7 +192,7 @@ class CBi:
             return self.Cal_MACD_area_half(is_reverse)
         elif macd_algo == MACD_ALGO.AREA_FULL:      # 2026-09-25 由 FULL_AREA 改名：整笔同向柱面积之和（忽略反向柱）
             return self.Cal_MACD_area_full()
-        elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-25 由 FULL_AREA_EXT 改名：AREA_FULL + 反向柱峰值修正
+        elif macd_algo == MACD_ALGO.AREA_FULL_EXT:  # 2026-09-26 语义变更：first-to-peak（第一根同向柱→最长峰值同向柱区间面积；见 Cal_MACD_area_full_ext）
             return self.Cal_MACD_area_full_ext()
         # ===== MACD 指标族：BAR/DIF/DEA 均为 MACD 衍生指标的整笔峰值（命名对齐，见 Common/CEnum MACD_ALGO）=====
         elif macd_algo == MACD_ALGO.BAR:            # 2026-09-25 由 PEAK 改名：BAR=MACD柱(直方图)峰值，与 DIF/DEA 对齐
@@ -244,52 +244,82 @@ class CBi:
 
     @make_cache
     def Cal_MACD_area_full_ext(self):
-        """
-        扩展的 MACD 全程面积算法：
-        - 向上笔：(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
-        - 向下笔：(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
-        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area_full
-        """
+        # 2026-09-26 语义变更: 不再使用原「整笔同向柱 + 反向柱峰值修正」实现(见下方整段注释, 未删)。
+        # 新语义(first-to-peak): 只累加「第一根同向柱 -> 笔内最长(全局最大)峰值同向柱」区间内同向柱 |macd|;
+        #   最长同向柱之后的所有柱子(同向/反向)均不计入。
+        #   向上笔: 第一根红柱 -> 最长红柱; 向下笔: 第一根绿柱 -> 最长绿柱。
+        # 峰值取笔内 |macd| 全局最大者; 多个相等峰值取第一个(冲量峰值); 笔内无同向柱时返回 _s(epsilon)。
         _s = 1e-7
         begin_klu = self.get_begin_klu()
         end_klu = self.get_end_klu()
 
-        same_dir_sum = 0.0             # G: 同向柱子绝对值之和
-        counter_bars: List[float] = []  # 反向柱子，按时间顺序排列
-
+        # 只抽取笔内方向侧的柱子(按 idx 有序); 反向柱与"最长柱之后"的柱子都不参与
+        same_dir = []
         for klc in self.klc_lst:
             for klu in klc.lst:
                 if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
                     continue
-                if self.is_down():
-                    if klu.macd.macd < 0:       # 绿柱，同向
-                        same_dir_sum += abs(klu.macd.macd)
-                    else:                       # 红柱，反向
-                        counter_bars.append(klu.macd.macd)
-                else:  # 向上笔
-                    if klu.macd.macd > 0:       # 红柱，同向
-                        same_dir_sum += abs(klu.macd.macd)
-                    else:                       # 绿柱，反向
-                        counter_bars.append(klu.macd.macd)
+                if (self.is_down() and klu.macd.macd < 0) or (self.is_up() and klu.macd.macd > 0):
+                    same_dir.append(klu.macd.macd)
 
-        if not counter_bars:
-            return same_dir_sum + _s
+        if not same_dir:
+            return _s
 
-        # 找峰值：向下笔取最大值，向上笔取最小值（绝对值最大）
-        peak_val = max(counter_bars) if self.is_down() else min(counter_bars)
+        # 峰值: |macd| 全局最大者(第一根->峰, 即 first-to-peak); 多个相等时取第一个(冲量峰值)
+        peak_abs = max(abs(v) for v in same_dir)
+        peak_idx = next(i for i, v in enumerate(same_dir) if abs(v) == peak_abs)
 
-        # 从后往前找最后一个等于峰值的索引
-        peak_idx = len(counter_bars) - 1
-        for i in range(len(counter_bars) - 1, -1, -1):
-            if counter_bars[i] == peak_val:
-                peak_idx = i
-                break
+        # 累加 第 0 根(第一根同向柱) -> 第 peak_idx 根(最长同向柱), 含端点
+        _s += sum(abs(same_dir[i]) for i in range(peak_idx + 1))
+        return _s
 
-        count = len(counter_bars) - peak_idx   # 峰到末尾的柱子数
-        Y = sum(abs(counter_bars[j]) for j in range(peak_idx, len(counter_bars)))
-        X = abs(peak_val) * count
+# ===== 原实现(2026-09-26 注释停用, 未删): AREA_FULL_EXT = 整笔同向柱 + 反向柱峰值修正(X-Y) =====
+#        """
+#        扩展的 MACD 全程面积算法：
+#        - 向上笔：(红柱面积) + (绿柱最低峰至末尾的矩形面积 - 绿柱峰到末尾的实际面积)
+#        - 向下笔：(绿柱面积) + (红柱最高峰至末尾的矩形面积 - 红柱峰到末尾的实际面积)
+#        多个相等峰值时取最后一个。无反向柱子时退化为 Cal_MACD_area_full
+#        """
+#        _s = 1e-7
+#        begin_klu = self.get_begin_klu()
+#        end_klu = self.get_end_klu()
 
-        return same_dir_sum + (X - Y) + _s
+#        same_dir_sum = 0.0             # G: 同向柱子绝对值之和
+#        counter_bars: List[float] = []  # 反向柱子，按时间顺序排列
+
+#        for klc in self.klc_lst:
+#            for klu in klc.lst:
+#                if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
+#                    continue
+#                if self.is_down():
+#                    if klu.macd.macd < 0:       # 绿柱，同向
+#                        same_dir_sum += abs(klu.macd.macd)
+#                    else:                       # 红柱，反向
+#                        counter_bars.append(klu.macd.macd)
+#                else:  # 向上笔
+#                    if klu.macd.macd > 0:       # 红柱，同向
+#                        same_dir_sum += abs(klu.macd.macd)
+#                    else:                       # 绿柱，反向
+#                        counter_bars.append(klu.macd.macd)
+
+#        if not counter_bars:
+#            return same_dir_sum + _s
+
+#        # 找峰值：向下笔取最大值，向上笔取最小值（绝对值最大）
+#        peak_val = max(counter_bars) if self.is_down() else min(counter_bars)
+
+#        # 从后往前找最后一个等于峰值的索引
+#        peak_idx = len(counter_bars) - 1
+#        for i in range(len(counter_bars) - 1, -1, -1):
+#            if counter_bars[i] == peak_val:
+#                peak_idx = i
+#                break
+
+#        count = len(counter_bars) - peak_idx   # 峰到末尾的柱子数
+#        Y = sum(abs(counter_bars[j]) for j in range(peak_idx, len(counter_bars)))
+#        X = abs(peak_val) * count
+
+#        return same_dir_sum + (X - Y) + _s
 
     @make_cache
     def Cal_MACD_bar(self):

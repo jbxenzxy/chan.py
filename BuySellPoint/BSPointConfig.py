@@ -66,7 +66,7 @@ class CPointConfig:
             # ===== MACD 面积族（2026-09-25 由 area/full_area/full_area_ext 改名，统一 AREA_* 前缀，函数 Cal_MACD_area_* 对齐）=====
             "area_half": MACD_ALGO.AREA_HALF,        # 原 AREA / Cal_MACD_half：笔首(尾)连续同向柱"半段"面积
             "area_full": MACD_ALGO.AREA_FULL,        # 原 FULL_AREA / Cal_MACD_area：整笔同向柱面积之和
-            "area_full_ext": MACD_ALGO.AREA_FULL_EXT, # 原 FULL_AREA_EXT / Cal_MACD_area_ext：area_full + 反向柱峰值修正
+            "area_full_ext": MACD_ALGO.AREA_FULL_EXT, # 原 FULL_AREA_EXT / Cal_MACD_area_ext：2026-09-26 改为 first-to-peak（第一根同向柱→最长峰值同向柱区间面积）
             # ===== MACD 指标族 =====
             # 2026-09-25 重命名：MACD_ALGO.PEAK → MACD_ALGO.BAR（与 DIF/DEA 对齐，统一用「指标名」）；
             # 配置关键字唯一为 "bar"，"peak" 历史别名已彻底移除，旧配置须改为 "bar"。

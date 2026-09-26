@@ -179,7 +179,7 @@ class MACD_ALGO(Enum):
     # - AREA_HALF：仅取笔首/尾连续同向柱的"半段"面积（遇第一根反向柱即停），受 is_reverse 控制取首还是尾；
     #   原 Cal_MACD_half，改名为 area_half 以表达"半段/边界段"，不再误导为整笔面积。
     # - AREA_FULL：整笔所有同向柱 |macd| 之和，反向柱直接忽略（不计也不减）；原 Cal_MACD_area。
-    # - AREA_FULL_EXT：AREA_FULL + 反向柱峰值修正(X−Y)；无反向柱时退化为 AREA_FULL；原 Cal_MACD_area_ext。
+    # - AREA_FULL_EXT：2026-09-26 语义变更 → first-to-peak（第一根同向柱→笔内最长(全局最大)峰值同向柱区间 |macd| 之和，峰值之后不计）；原 Cal_MACD_area_ext 实现已注释停用(见 Bi.Bi.Cal_MACD_area_full_ext)。
     AREA_HALF = auto()        # 2026-09-25 由 AREA 改名（原 Cal_MACD_half）
     AREA_FULL = auto()        # 2026-09-25 由 FULL_AREA 改名（原 Cal_MACD_area）
     AREA_FULL_EXT = auto()    # 2026-09-25 由 FULL_AREA_EXT 改名（原 Cal_MACD_area_ext）
