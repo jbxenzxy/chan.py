@@ -959,20 +959,21 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             A_dif = stroke_a.get_begin_klu().macd.DIF
             C_dif = stroke_n.get_end_klu().macd.DIF
             if is_buy:
-                macd_c = C_dif       # 底分型极值 DIF 到 0 轴的距离
-                macd_a = abs(A_dif)  # 顶分型极值 DIF 到 0 轴的距离
+                a_dist = A_dif       # 笔A高点 DIF（应在0轴上，正值即距离）
+                c_dist = C_dif       # 笔C低点 DIF（应在0轴上，正值即距离）
             else:
-                macd_c = abs(C_dif)  # 顶分型极值 DIF 到 0 轴的距离
-                macd_a = abs(A_dif)  # 底分型极值 DIF 到 0 轴的距离
-            sign_ok = C_dif > 0 if is_buy else C_dif < 0
-            ratio_ok = macd_a != 0 and (macd_a - macd_c) / macd_a > 0.618
+                a_dist = abs(A_dif)  # 笔A低点 DIF 到0轴距离（应在0轴下）
+                c_dist = abs(C_dif)  # 笔C高点 DIF 到0轴距离（应在0轴下）
+            # 两笔极值都须在正确侧：买→0轴上(A_dif>0且C_dif>0)，卖→0轴下(A_dif<0且C_dif<0)
+            sign_ok = (A_dif > 0 and C_dif > 0) if is_buy else (A_dif < 0 and C_dif < 0)
+            ratio_ok = a_dist != 0 and (a_dist - c_dist) / a_dist > 0.618
             if not (sign_ok and ratio_ok):
                 self._dbg_bs0(' _cal_bs0point_3rd', '情况二: 跳过 MACD DIF 未回0轴',
                               stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                               A_dif=round(A_dif, 4), C_dif=round(C_dif, 4),
-                              a_dist=round(macd_c, 4), b_dist=round(macd_a, 4))
+                              a_dist=round(a_dist, 4), c_dist=round(c_dist, 4))
                 return
-            dif_ratio = (macd_a - macd_c) / macd_a
+            dif_ratio = (a_dist - c_dist) / a_dist
             feature_dict = {
                 'dif_ratio': dif_ratio,
                 'bsp0_bi_amp': stroke_n.amp(),
