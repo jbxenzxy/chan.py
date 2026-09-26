@@ -933,7 +933,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         #   情况二：笔C未突破笔A极值 → 采用 cal_bs3point 1427~1450 的 MACD DIF 幅度过滤
         if (stroke_n.is_down() and stroke_n._low() < stroke_a._low()) or \
                 (stroke_n.is_up() and stroke_n._high() > stroke_a._high()):
-            # 情况一：笔C突破笔A极值
+            # 情况一：笔C破笔A极值
             is_buy = stroke_n.is_down()
             config = self.config.GetBSConfig(is_buy)
             is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
@@ -953,7 +953,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             self._dbg_bs0(' _cal_bs0point_3rd', '情况一: OK 生成0类买/卖点',
                           is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
         else:
-            # 情况二：笔C未突破笔A极值
+            # 情况二：笔C未破笔A极值
             # 模拟MACD DIF 回 0轴
             is_buy = stroke_n.is_down()
             A_dif = stroke_a.get_begin_klu().macd.DIF
