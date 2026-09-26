@@ -929,29 +929,18 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # ㈡ 笔C是否破笔A极值 —— 两种情况
+        #   情况一：笔C破笔A极值 → 直接走 X（MACD 背离判断）
+        #   情况二：笔C未破笔A极值 → 先过 DIF 回0轴 过滤，再过 X（MACD 背离判断）
+        # X（情况一的 MACD 背离 判断）为两分支共有：情况二即便满足自身条件，仍需通过 X 才生成点
+        dif_ratio = None
+        is_2nd = False
         if (stroke_n.is_down() and stroke_n._low() < stroke_a._low()) or \
                 (stroke_n.is_up() and stroke_n._high() > stroke_a._high()):
-            # 情况一：笔C破笔A极值
-            is_buy = stroke_n.is_down()
-            config = self.config.GetBSConfig(is_buy)
-            is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
-            divergence_rate = n_metric / (nm2_metric + 1e-7)
-            if not is_diver:
-                self._dbg_bs0(' _cal_bs0point_3rd', '情况一：跳过。最近同向，MACD BAR 未背驰',
-                              nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
-                              divergence_rate=round(divergence_rate, 2),
-                              threshold=round(config.divergence_rate, 2))
-                return
-            feature_dict = {
-                'divergence_rate': divergence_rate,
-                'bsp0_bi_amp': stroke_n.amp(),
-            }
-            self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
-                        is_target_bsp=True, feature_dict=feature_dict)
-            self._dbg_bs0(' _cal_bs0point_3rd', '情况一: OK 生成0类买/卖点',
-                          is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
+            # 情况一：笔C破笔A极值（无额外过滤，直接进入 X）
+            is_2nd = False
         else:
-            # 情况二：笔C未破笔A极值 —— 需满足MACD DIF回0轴
+            # 情况二：笔C未破笔A极值 → 需先满足 MACD DIF 回0轴
+            is_2nd = True
             is_buy = stroke_n.is_down()
             A_dif = stroke_a.get_begin_klu().macd.DIF
             C_dif = stroke_n.get_end_klu().macd.DIF
@@ -971,14 +960,32 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                               a_dist=round(a_dist, 4), c_dist=round(c_dist, 4))
                 return
             dif_ratio = (a_dist - c_dist) / a_dist
-            feature_dict = {
-                'dif_ratio': dif_ratio,
-                'bsp0_bi_amp': stroke_n.amp(),
-            }
-            self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
-                        is_target_bsp=True, feature_dict=feature_dict)
-            self._dbg_bs0(' _cal_bs0point_3rd', '情况二: OK 生成0类买/卖点',
-                          is_buy=is_buy, dif_ratio=round(dif_ratio, 4))
+
+        # X（情况一与情况二共有）：MACD 背离 判断
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
+        divergence_rate = n_metric / (nm2_metric + 1e-7)
+        if not is_diver:
+            self._dbg_bs0(' _cal_bs0point_3rd',
+                          '情况一: 跳过。最近同向，MACD BAR 未背驰' if not is_2nd
+                          else '情况二: 跳过。最近同向，MACD BAR 未背驰',
+                          nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
+                          divergence_rate=round(divergence_rate, 2),
+                          threshold=round(config.divergence_rate, 2))
+            return
+        feature_dict = {
+            'divergence_rate': divergence_rate,
+            'bsp0_bi_amp': stroke_n.amp(),
+        }
+        if dif_ratio is not None:
+            feature_dict['dif_ratio'] = dif_ratio
+        self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
+        self._dbg_bs0(' _cal_bs0point_3rd',
+                      '情况一: OK 生成0类买/卖点' if not is_2nd
+                      else '情况二: OK 生成0类买/卖点',
+                      is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
 
     # ── 第4笔 ──
     def _cal_bs0point_4th(self, bi_list, pivot_a, stroke_n):
