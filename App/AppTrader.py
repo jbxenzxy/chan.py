@@ -90,6 +90,24 @@ _STOP_REQUEST = ".stop_request"
 # 与 Trading/main.py _READY_FLAG 保持一致。
 _READY_FLAG = ".ready"
 
+# ════════════════════════════════════════════════════════════════════
+# 登录链路（SimNow 仿真 / 实盘 CTP）
+#   前端「自动下单」开关开启时先弹选择框，用户选一条链路再启动子进程 ——
+#   免掉"切换一次要手改三个配置键"（broker / tq_market / confirm_live_trading）。
+#   本模块不新增配置字段：选中的链路以**环境变量**注入子进程 env，子进程
+#   Trading/Config.py 照旧从 env 读（env 优先级高于 .env），Trading/ 零改动。
+#   三项对应关系（与 Trading/Broker/SimNow.py:594 的判定式对齐）：
+#     simnow → broker=simnow、tq_market=simnow、confirm=false
+#     live   → broker=live、tq_market=<配置的期货公司名>、confirm=true
+# ════════════════════════════════════════════════════════════════════
+LINK_SIMNOW = "simnow"
+LINK_LIVE = "live"
+LINK_CHOICES = (LINK_SIMNOW, LINK_LIVE)
+
+# 上次选择的链路，持久化在自动下单子进程 state.db 的 kv（与 auto_order_enabled
+# 同一条通道）—— 换浏览器/清缓存不丢，且随 status 接口下发为下次默认项。
+LINK_STATE_KEY = "ao_link"
+
 # 后端（AppTrader）日志 tee 进 gateway.log 的 handler，路径随每次启停更新
 _log_file_handler: Optional[logging.Handler] = None
 
@@ -113,11 +131,12 @@ class _TraderProc:
     """子进程 + 启动参数的内存态（AppTrader 单例持有）。"""
 
     __slots__ = ("proc", "pid", "out_dir", "started_at", "broker",
-                 "symbol", "freq", "sse_base")
+                 "symbol", "freq", "sse_base", "link")
 
     def __init__(self, proc: subprocess.Popen, out_dir: str,
                  started_at: str, broker: str, symbol: Optional[str] = None,
-                 freq: Optional[str] = None, sse_base: Optional[str] = None):
+                 freq: Optional[str] = None, sse_base: Optional[str] = None,
+                 link: str = ""):
         self.proc = proc
         self.pid = proc.pid if proc is not None else 0
         self.out_dir = out_dir
@@ -126,6 +145,8 @@ class _TraderProc:
         self.symbol = symbol or ""
         self.freq = freq or ""
         self.sse_base = sse_base or ""
+        # 本次启动用的登录链路（空串 = 未指定，沿用配置文件）
+        self.link = link or ""
 
     @property
     def running(self) -> bool:
@@ -145,6 +166,7 @@ class _TraderProc:
             "symbol": self.symbol,
             "freq": self.freq,
             "sse_base": self.sse_base,
+            "link": self.link,
         }
 
 
@@ -289,7 +311,8 @@ class AppTrader:
     def start(self, out_dir: Optional[str] = None,
               symbol: Optional[str] = None,
               freq: Optional[str] = None,
-              sse_base: Optional[str] = None) -> Dict[str, Any]:
+              sse_base: Optional[str] = None,
+              link: Optional[str] = None) -> Dict[str, Any]:
         """启动自动下单自动下单子进程（SSE 实时源，订阅 chan.py 行情流）。
 
         配置来源：Trading/Config.py（唯一总入口 = 模型默认值 ← 环境变量/仓库根
@@ -300,7 +323,10 @@ class AppTrader:
         symbol / freq：订阅的合约与周期（前端开关传当前页面品种；缺省读
             cfg.source，再缺省 KQ.m@CFFEX.IF / 5m）；
         sse_base：行情流地址（前端传 location.origin；缺省读 cfg.source，
-            再缺省 http://127.0.0.1:18081）。
+            再缺省 http://127.0.0.1:18081）；
+        link：登录链路（simnow / live），前端选择框的选中值。指定后以环境变量
+            注入子进程覆盖 broker 三件套，并持久化为下次默认项；不指定（None）
+            则完全沿用配置 —— 切换登录方式不再需要手改 .env。
         启动前预检：配置可加载 + 实盘安全闸门（live 必须 confirm_live_trading）。
         自动下单子进程 stdout/stderr 落盘 {out_dir}/gateway.log（异常可查，不再吞掉）。
         """
@@ -376,15 +402,29 @@ class AppTrader:
             except AppError as e:
                 self._engine_log(log_file, "读取配置失败: {}".format(e))
                 raise
-            broker = str(cfg.broker or "dry_run")
+            # 登录链路：选择框给定 → 覆盖配置的 broker 三件套（子进程 env 注入）；
+            # 未给定（None，CLI/其它调用方）→ 完全沿用配置，行为与改造前一致。
+            resolved = self._resolve_link(cfg, link)
+            broker = resolved["broker"] if resolved else str(cfg.broker or "dry_run")
             try:
-                self._check_live_gate(cfg, broker)
+                self._check_live_gate(
+                    cfg, broker,
+                    market=(resolved["tq_market"] if resolved else None),
+                    confirm=(resolved["confirm"] if resolved else None))
             except AppError as e:
                 self._engine_log(log_file, "实盘安全闸门拦截: {}".format(e))
                 raise
+            if resolved:
+                self._engine_log(
+                    log_file,
+                    "登录链路: {}（broker={} tq_market={} confirm={}）".format(
+                        resolved["link"], resolved["broker"],
+                        resolved["tq_market"], resolved["confirm"]))
 
             # 开启 = 显式恢复自动下单开关（上次关闭已把 False 持久化）
             self._reset_engine_switch(out_dir)
+            if resolved:
+                self._write_link_choice(out_dir, resolved["link"])
 
             # 信号源参数：前端开关优先（当前页面品种/周期），其次 cfg.source
             # （默认值只在 SourceConfig 里定义一份，这里不再写第二套兜底）。
@@ -440,6 +480,10 @@ class AppTrader:
                     use_symbol, use_freq, use_base, broker, " ".join(cmd)))
             try:
                 env = dict(os.environ)
+                # 登录链路以环境变量下发（优先级高于 .env）：子进程 Trading/Config.py
+                # 照旧从 env 读，Trading/ 一侧零改动。
+                if resolved:
+                    env.update(self._link_env(resolved))
                 env["PYTHONUNBUFFERED"] = "1"   # 自动下单子进程 stdout 逐行落盘，异常/退出可即查
                 # 用 PIPE + 读取线程接管子进程 stdout，而不用把 text-mode 文件
                 # 对象塞给 Popen（Windows 句柄继承脆弱，导入期 traceback 会丢）。
@@ -472,7 +516,8 @@ class AppTrader:
             handle = _TraderProc(proc, out_dir,
                                  time.strftime("%Y-%m-%d %H:%M:%S"), broker,
                                  symbol=use_symbol, freq=use_freq,
-                                 sse_base=use_base)
+                                 sse_base=use_base,
+                                 link=(resolved["link"] if resolved else ""))
             self._handle = handle
             # 新一轮自动下单子进程：清零退出上报集合（避免历史 pid 干扰本次退出上报）
             self._exit_logged.discard(handle.pid)
@@ -926,6 +971,7 @@ class AppTrader:
                 "symbol": handle.symbol if handle else None,
                 "freq": handle.freq if handle else None,
                 "sse_base": handle.sse_base if handle else None,
+                "link": handle.link if handle else "",
                 "log_file": (os.path.join(handle.out_dir, "gateway.log")
                              if handle is not None else None),
             }
@@ -940,9 +986,11 @@ class AppTrader:
                     base["symbol"] = data.get("symbol")
                     base["freq"] = data.get("freq")
                     base["sse_base"] = data.get("sse_base")
+                    base["link"] = data.get("link") or ""
                     if data.get("out_dir"):
                         base["log_file"] = os.path.join(
                             str(data["out_dir"]), "gateway.log")
+            base["link_view"] = self._link_view(handle, base.get("out_dir"))
             log_file = base.get("log_file")
             if log_file:
                 self._set_engine_log_handler(str(log_file))
@@ -1123,7 +1171,8 @@ class AppTrader:
                            .format(type(e).__name__, e))
 
     @staticmethod
-    def _check_live_gate(cfg: Any, broker: str) -> None:
+    def _check_live_gate(cfg: Any, broker: str, market: Optional[str] = None,
+                         confirm: Optional[bool] = None) -> None:
         """实盘安全闸门预检（与 tg/brokers/simnow.py 内部判定同口径）。
 
         broker=live 或 broker_params.tq_market≠simnow → 实盘意图，
@@ -1132,6 +1181,12 @@ class AppTrader:
         ——此前无此短路，用户设 broker=dry_run 但 tq_market 填了期货公司名时
         dry_run 会被实盘闸门误拦。
 
+        market / confirm：登录链路选定后的**实际生效值**（见 _resolve_link）。
+        给了就按它们判，不给才回落配置。必须如此：用户 .env 里填了期货公司名
+        （tq_market≠simnow）却在界面上选了 SimNow 时，若仍按配置判 is_live，
+        闸门会把这条明明白白的仿真启动当成实盘拦下（且要求打开实盘资格开关
+        才放行 —— 与用户意图完全相反）。链路既已显式选定，判据就该是选定值。
+
         拒绝理由是**配置/入参问题**（市场没填对、确认开关没开），属于
         "用户改一下就能过"的客户端输入问题 → BadRequestError(400)，
         而不是基类 500（会让用户以为系统坏了，见 AppErrors.BadRequestError）。
@@ -1139,7 +1194,8 @@ class AppTrader:
         if broker not in ("simnow", "live"):
             return
         bp = cfg.broker_params
-        market = str(bp.tq_market or "simnow").strip().lower()
+        market = str(market if market is not None
+                     else (bp.tq_market or "simnow")).strip().lower()
         is_live = broker == "live" or market != "simnow"
         if not is_live:
             return
@@ -1147,11 +1203,164 @@ class AppTrader:
             raise BadRequestError(
                 "实盘安全闸门：broker='{}' 但 broker_params.tq_market 仍为 "
                 "'simnow'，实盘请填期货公司名（如 '创元期货'）".format(broker))
-        if not bool(bp.confirm_live_trading):
+        if not bool(confirm if confirm is not None else bp.confirm_live_trading):
             raise BadRequestError(
                 "实盘安全闸门未开启：tq_market='{}' 非仿真市场，必须显式设置 "
                 "broker_params.confirm_live_trading=true 才能启动实盘自动下单。"
                 .format(bp.tq_market))
+
+    # ---------------- 登录链路（SimNow 仿真 / 实盘 CTP） ----------------
+    @staticmethod
+    def _live_market(cfg: Any) -> str:
+        """配置里的接入市场（实盘即期货公司名；"simnow" = 仍停在仿真）。"""
+        return str(getattr(cfg.broker_params, "tq_market", "") or "").strip()
+
+    @classmethod
+    def link_options(cls, cfg: Any) -> Dict[str, Any]:
+        """选择框的两个选项及其可用性（前端据此置灰并取默认项）。
+
+        实盘选项的双重前置（用户 2026-09-28 拍板「保留双层」）：
+          ① 期货公司名已配（tq_market≠simnow）—— 缺它 brofer=live 会被
+             SimNow.py 判成"配置矛盾"直接拒绝，必须先配；
+          ② confirm_live_trading=true —— 保留为「我有实盘资格」的总开关，
+             界面上的选择只是第二层确认，不取代它。
+        两项缺任一 → 实盘选项 enabled=false 且带上原因文案（前端置灰展示），
+        而不是让用户点了才报错。
+        """
+        market = cls._live_market(cfg)
+        has_market = bool(market) and market.lower() != "simnow"
+        confirm = bool(getattr(cfg.broker_params, "confirm_live_trading", False))
+        if not has_market:
+            reason = ("未配置期货公司：请先在 .env 设置 "
+                      "TRADING_BROKER_PARAMS__TQ_MARKET=<期货公司名>")
+        elif not confirm:
+            reason = ("实盘资格开关未开启：请先在 .env 设置 "
+                      "TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING=true")
+        else:
+            reason = ""
+        return {
+            "options": [
+                {"value": LINK_SIMNOW, "label": "SimNow", "enabled": True,
+                 "hint": "仿真环境：资金与成交均为模拟，不会真实扣款",
+                 "reason": ""},
+                {"value": LINK_LIVE, "label": "实盘", "enabled": not reason,
+                 "hint": ("实盘 · {}".format(market) if has_market
+                          else "实盘（未配置期货公司）"),
+                 "reason": reason},
+            ],
+        }
+
+    @classmethod
+    def _resolve_link(cls, cfg: Any,
+                      link: Optional[str]) -> Optional[Dict[str, Any]]:
+        """把前端选的链路解析成子进程 env 覆盖；None = 未指定，沿用配置。
+
+        与 link_options 同源同判据：那边负责"能不能选"，这边负责"选了怎么落"。
+        两边各写一份判据会漂移（白名单教训），故实盘的两个前置都走
+        _live_market / confirm_live_trading 这两个唯一取值点。
+        """
+        if link in (None, ""):
+            return None
+        key = str(link).strip().lower()
+        if key not in LINK_CHOICES:
+            raise BadRequestError("未知的登录链路: {}（可选: {}）".format(
+                link, " / ".join(LINK_CHOICES)))
+        if key == LINK_SIMNOW:
+            return {"link": LINK_SIMNOW, "broker": LINK_SIMNOW,
+                    "tq_market": "simnow", "confirm": False}
+        market = cls._live_market(cfg)
+        if not market or market.lower() == "simnow":
+            raise BadRequestError(
+                "实盘需要先配置期货公司：请在 .env 设置 "
+                "TRADING_BROKER_PARAMS__TQ_MARKET=<期货公司名>"
+                "（当前为 '{}'）".format(market or "空"))
+        if not bool(getattr(cfg.broker_params, "confirm_live_trading", False)):
+            raise BadRequestError(
+                "实盘资格开关未开启：请在 .env 设置 "
+                "TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING=true 后，"
+                "才能以实盘链路启动自动下单。")
+        return {"link": LINK_LIVE, "broker": LINK_LIVE,
+                "tq_market": market, "confirm": True}
+
+    @staticmethod
+    def _link_env(resolved: Dict[str, Any]) -> Dict[str, str]:
+        """链路 → 子进程环境变量覆盖（Trading/Config.py：env_prefix=TRADING_、
+        嵌套分隔 `__`；环境变量优先级高于 .env，注入即生效）。
+
+        走 env 而不是给子进程加命令行参数：Config 是配置的唯一入口，加参数
+        等于开出第二条配置通道（且 main.py 已有 --broker，再来一套会分叉）。
+        """
+        return {
+            "TRADING_BROKER": resolved["broker"],
+            "TRADING_BROKER_PARAMS__TQ_MARKET": resolved["tq_market"],
+            "TRADING_BROKER_PARAMS__CONFIRM_LIVE_TRADING":
+                "true" if resolved["confirm"] else "false",
+        }
+
+    @staticmethod
+    def _write_link_choice(out_dir: str, link: str) -> None:
+        """把本次选择持久化到自动下单子进程 state.db（下次默认项）。
+
+        与 auto_order_enabled 同一条通道（_engine_store）：选择属于交易侧状态，
+        不该跟着浏览器走 —— 换浏览器/清缓存后仍拿得到上次的选择。
+        写失败不阻断启动（持久化只是默认项，本次已用入参生效）。
+        """
+        try:
+            s = _engine_store(out_dir)
+            try:
+                s.set_json(LINK_STATE_KEY, link)
+            finally:
+                s.close()
+        except Exception as e:
+            log.info("[AppTrader] 持久化登录链路失败（不影响本次启动）: %s: %s",
+                     type(e).__name__, e)
+
+    @staticmethod
+    def _read_link_choice(out_dir: Optional[str]) -> Optional[str]:
+        if not out_dir or not os.path.isdir(out_dir):
+            return None
+        try:
+            s = _engine_store(out_dir)
+            try:
+                v = s.get_json(LINK_STATE_KEY)
+            finally:
+                s.close()
+        except Exception:
+            return None
+        return str(v) if v in LINK_CHOICES else None
+
+    @staticmethod
+    def _link_from_broker(broker: Optional[str]) -> Optional[str]:
+        """未显式选链路的启动（沿用配置）→ 由 broker 名反推当前链路。
+
+        dry_run 等离线通道两不属，返回 None（界面上不显示链路标记）。
+        """
+        b = str(broker or "").strip().lower()
+        return b if b in LINK_CHOICES else None
+
+    def _link_view(self, handle: Any, out_dir: Optional[str]) -> Dict[str, Any]:
+        """状态接口下的链路投影：当前链路 + 上次选择 + 两个选项的可用性。
+
+        current：本次启动实际用的链路（显式选择优先，否则由 broker 名反推）；
+        last：state.db 里持久化的上次选择 —— 前端用它当默认项；
+        options：见 link_options（含实盘选项的置灰原因）。
+        """
+        cur = self._link_from_broker(handle.broker) if handle is not None else None
+        if handle is not None and handle.link:
+            cur = handle.link
+        view: Dict[str, Any] = {
+            "current": cur,
+            "last": self._read_link_choice(out_dir) or cur,
+        }
+        try:
+            view.update(self.link_options(self._load_cfg()))
+        except Exception as e:
+            # 配置读不出来时不下发选项（前端提示），而不是给一份"都可选"的
+            # 假清单 —— 那样用户点了实盘才在启动时被闸门拦，反馈晚一拍。
+            view["options"] = []
+            view["error"] = "读取交易网关配置失败: {}: {}".format(
+                type(e).__name__, e)
+        return view
 
     @staticmethod
     def _reset_engine_switch(out_dir: str) -> None:

@@ -277,6 +277,13 @@ COMPONENTS = [
     # 持仓行去止损列、时间 YY/MM/DD HH:MM:SS、成交列表最新排在最后。
     ("aol_ledger_display",
      [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
+    # 登录链路选择（2026-09-28）：开关先弹「SimNow / 实盘」选择框，选定值以
+    #   环境变量注入子进程（三个键名逐键钉死并对 TradingConfig 做真消费验证）；
+    #   实盘两个前置（期货公司名 / confirm_live_trading）缺任一即拒绝；
+    #   选 SimNow 时闸门判据取**选定值**、不得按配置里的期货公司名误拦；
+    #   选项持久化在 state.db（kv ao_link）；点框外 / Esc / 取消 = 不启动。
+    ("trade_link_choice",
+     [sys.executable, os.path.join("Test", "test_trade_link_choice.py")]),
     # 出场判定只读收盘价（2026-09-22 口径，p61）：
     #   触发判据不再读本根 high/low（AST 钉死 check() 函数体内不得出现
     #   .high / .low）；"是否达标"只读根内有利极值且必经 `_fav_extreme()`；

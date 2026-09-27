@@ -8346,10 +8346,34 @@
         // intensive throttling 节流到 ~1 次/分钟（页面隐藏 ≥5 分钟），Worker
         // 内定时器不受该节流，收到的消息任务也不被节流 —— 右下角系统通知
         // 因此恢复秒级（2026-09-23）。
+        // 顶部「当前登录方式」徽标（2026-09-28）：跑起来之后一眼能看出连的是
+        //   SimNow 还是实盘。此前完全看不出来 —— 只能翻 gateway.log 或去猜 .env，
+        //   比"切换不方便"更容易出事（以为在仿真，其实在真钱上跑）。
+        function renderAutoOrderLink(view, running) {
+            const el = document.getElementById('auto-order-link');
+            if (!el) return;
+            const cur = (view && view.current) ? String(view.current) : '';
+            if (!cur || !running) {
+                el.style.display = 'none';
+                el.textContent = '';
+                return;
+            }
+            const isLive = (cur === 'live');
+            el.style.display = '';
+            el.textContent = isLive ? '实盘' : 'SimNow';
+            el.className = 'auto-order-link ' + (isLive ? 'live' : 'simnow');
+            el.title = isLive
+                ? '当前登录方式：实盘 —— 真实资金，成交即扣款'
+                : '当前登录方式：SimNow 仿真 —— 资金与成交均为模拟';
+        }
+
         function applyAutoOrderStatus(data) {
             const checkbox = document.getElementById('auto-order-checkbox');
             if (!checkbox) return;
             const running = !!data.running;
+            // 链路视图顺手缓存：开关点击时不必为拿选项再发一次状态请求
+            if (data.link_view) autoOrderLinkInfo = data.link_view;
+            renderAutoOrderLink(data.link_view, running);
                 const enabled = !!(data.auto_order && data.auto_order.enabled);
                 const on = running && enabled;
                 autoOrderRunning = running;   // 同步进程运行态给切换 guard 用
@@ -8817,12 +8841,15 @@
         const _alertQueue = [];       // 待弹消息（各带自己的 resolve）
         let _alertShowing = false;    // 当前屏幕上是否有框
 
-        // kind: "alert"（只有确定）| "confirm"（取消 + 确定）
-        function _pushDialog(msg, kind) {
+        // kind: "alert"（只有确定）| "confirm"（取消 + 确定）| "choice"（选项 + 取消 + 确定）
+        //   choice 的 opts = {options: [{value,label,hint,enabled,reason}], default: <value>}
+        //   resolve 值：确定 → 选中项的 value；取消 / 点框外 / Esc → null
+        function _pushDialog(msg, kind, opts) {
             return new Promise(function (resolve) {
                 _alertQueue.push({
                     msg: String(msg === null || msg === undefined ? "" : msg),
                     kind: kind,
+                    opts: opts || null,
                     resolve: resolve
                 });
                 if (!_alertShowing) _pumpAlertQueue();
@@ -8834,16 +8861,28 @@
         // 破坏性操作前的二次确认 —— 返回值 Promise<boolean>，替代原生 confirm。
         function showConfirm(msg) { return _pushDialog(msg, "confirm"); }
 
+        // 单选式确认（自动下单的登录链路选择）：返回值是选中项的 value，取消为 null。
+        function showChoice(msg, opts) { return _pushDialog(msg, "choice", opts); }
+
+        function _escHtml(s) {
+            return String(s === null || s === undefined ? "" : s)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+        function _escAttr(s) {
+            return _escHtml(s).replace(/"/g, "&quot;");
+        }
+
         function _pumpAlertQueue() {
             const job = _alertQueue.shift();
             if (!job) { _alertShowing = false; return; }
             _alertShowing = true;
             const stale = document.getElementById("alert-dialog");
             if (stale && stale.parentNode) stale.parentNode.removeChild(stale);
-            const overlay = _createAlertDialog(job.kind);   // 按钮数随 kind 变，故每次重建
+            const overlay = _createAlertDialog(job.kind, job.opts);   // 按钮数随 kind 变，故每次重建
             const isConfirm = (job.kind === "confirm");
-            // 点遮罩（框之外的区域）：alert ＝确定；confirm ＝取消（防误删）
-            const outsideResult = !isConfirm;
+            const isChoice = (job.kind === "choice");
+            // 点遮罩（框之外的区域）：alert ＝确定；confirm / choice ＝取消（防误删、防误选）
+            const outsideResult = !isConfirm && !isChoice;
             const msgEl = overlay.querySelector(".alert-dialog-msg");
             const okBtn = overlay.querySelector('[data-act="ok"]');
             const cancelBtn = overlay.querySelector('[data-act="cancel"]');
@@ -8855,7 +8894,8 @@
                 closed = true;
                 overlay.classList.remove("show");
                 document.removeEventListener("keydown", onKey, true);
-                job.resolve(result);
+                // choice：确定 → 选中项的 value；取消 → null（调用方据此不启动）
+                job.resolve(isChoice ? _choiceValue(overlay, result) : result);
                 _pumpAlertQueue();       // resolve 是微任务，此刻队列已推进完
             };
             // Esc 与点遮罩同义；Enter 只认「确定」—— 确认框里回车是「我要执行」，
@@ -8875,7 +8915,7 @@
             okBtn.focus();               // 焦点给「确定」，与原生 confirm 同一默认键
         }
 
-        function _createAlertDialog(kind) {
+        function _createAlertDialog(kind, opts) {
             const overlay = document.createElement("div");
             overlay.id = "alert-dialog";
             overlay.className = "alert-dialog";
@@ -8884,14 +8924,52 @@
             // 不给用户两套肌肉记忆。
             overlay.innerHTML = '<div class="alert-dialog-box">'
                 + '<div class="alert-dialog-msg"></div>'
+                + (kind === "choice" ? _buildChoiceOpts(opts) : "")
                 + '<div class="annotation-dialog-btns">'
                 + '<button class="annotation-dialog-btn primary" type="button" data-act="ok">确定</button>'
-                + (kind === "confirm"
+                + (kind === "confirm" || kind === "choice"
                     ? '<button class="annotation-dialog-btn" type="button" data-act="cancel">取消</button>'
                     : '')
                 + '</div></div>';
             document.body.appendChild(overlay);
             return overlay;
+        }
+
+        // 选项区（登录链路选择）：不可用项**保留可见**并给出原因，而不是隐藏 ——
+        // 用户该知道"为什么点不了实盘"，而不是看着只有一项发懵。
+        function _buildChoiceOpts(opts) {
+            const list = (opts && Array.isArray(opts.options)) ? opts.options : [];
+            let firstOn = "";
+            list.forEach(function (o) {
+                if (o && o.enabled !== false && !firstOn) firstOn = String(o.value || "");
+            });
+            const def = String((opts && opts.default) || "");
+            // 默认项（上次选择）不可用或压根没有 → 退到第一个可用项，
+            // 绝不让一个禁用的单选框成为默认选中（那样"确定"会传出一个被拒的值）。
+            const usable = list.some(function (o) {
+                return o && String(o.value || "") === def && o.enabled !== false;
+            });
+            const want = usable ? def : firstOn;
+            const rows = list.map(function (o) {
+                const v = String((o && o.value) || "");
+                const on = !!(o && o.enabled !== false);
+                const sub = on ? String((o && o.hint) || "") : String((o && o.reason) || "");
+                return '<label class="alert-dialog-opt' + (on ? '' : ' disabled') + '"'
+                    + ' title="' + _escAttr(sub) + '">'
+                    + '<input type="radio" name="alert-dialog-opt" value="' + _escAttr(v) + '"'
+                    + (on && v === want ? ' checked' : '') + (on ? '' : ' disabled') + '>'
+                    + '<span><span class="alert-dialog-opt-name">'
+                    + _escHtml((o && o.label) || v) + '</span>'
+                    + '<span class="alert-dialog-opt-hint">' + _escHtml(sub) + '</span>'
+                    + '</span></label>';
+            }).join("");
+            return '<div class="alert-dialog-opts">' + rows + '</div>';
+        }
+
+        function _choiceValue(overlay, result) {
+            if (!result) return null;
+            const el = overlay.querySelector('input[name="alert-dialog-opt"]:checked');
+            return el ? el.value : null;
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -9099,28 +9177,65 @@
             }
         }
 
+        // ── 登录链路选择（2026-09-28）：点开自动下单 → 先选 SimNow / 实盘 ──
+        //   后端把选项与可用性随状态接口下发（link_view），这里不做任何本地判断：
+        //   "实盘能不能选"只有一个判据来源（AppTrader.link_options），前端复制
+        //   一份判据必然漂移（品种白名单一度两处各写一遍的教训）。
+        let autoOrderLinkInfo = null;   // 最近一次轮询拿到的 link_view
+
+        async function ensureAutoOrderLinkInfo() {
+            if (autoOrderLinkInfo) return autoOrderLinkInfo;
+            try {
+                const resp = await _timeoutedFetch('/api/trader/auto-order/status');
+                if (resp.ok) autoOrderLinkInfo = (await resp.json()).link_view || null;
+            } catch (e) {
+                console.warn('[auto-order] 读取登录链路失败: ' + e.message);
+            }
+            return autoOrderLinkInfo;
+        }
+
+        async function pickTradeLink() {
+            const info = await ensureAutoOrderLinkInfo();
+            const opts = (info && Array.isArray(info.options)) ? info.options : null;
+            if (!opts || !opts.length) {
+                showAlert('无法获取登录方式：'
+                    + ((info && info.error) || '状态接口未返回选项，请检查交易网关配置'));
+                return null;
+            }
+            const picked = await showChoice(
+                '选择自动下单的登录方式\n（取消或点击对话框外区域＝不启动）',
+                { options: opts, default: String((info && info.last) || '') });
+            return picked || null;
+        }
+
         async function onAutoOrderToggle(checkbox) {
             const on = checkbox.checked;
             if (autoOrderBusy) { checkbox.checked = !on; return; } // 防连点
             if (on) requestAoNotifyPermission();  // 权限要挂在用户手势上，须在 await 之前
-            if (on && realtimeSymbol) {
-                // 只在"开启"路径检查；"关闭"永远允许 —— 不能因为页面品种变了就关不掉。
-                // 置灰已把这条挡在"点之前"，这里保留为**兜底**（接口降级为放行时，
-                // 用户仍可能点到；且升级/多标签页场景下前端状态可能过期）。
-                const chk = await checkSymbolTradable(realtimeSymbol);
-                if (!chk.allowed) {
-                    checkbox.checked = false;   // 回弹开关，且**不发启动请求**
-                    console.warn('[auto-order] 品种不支持自动下单，已取消开启: '
-                        + realtimeSymbol + '  ' + chk.message);
-                    showAlert('不支持自动下单\n\n' + chk.message);
-                    return;
-                }
-            }
-            autoOrderBusy = true;
+            autoOrderBusy = true;      // 选择期间就上锁：否则弹框期间再点会叠出第二个框
             checkbox.disabled = true;
+            let link = null;
             const label = document.getElementById('auto-order-label');
-            if (label) label.textContent = on ? '启动中…' : '关闭中…';
             try {
+                if (on && realtimeSymbol) {
+                    // 只在"开启"路径检查；"关闭"永远允许 —— 不能因为页面品种变了就关不掉。
+                    // 置灰已把这条挡在"点之前"，这里保留为**兜底**（接口降级为放行时，
+                    // 用户仍可能点到；且升级/多标签页场景下前端状态可能过期）。
+                    const chk = await checkSymbolTradable(realtimeSymbol);
+                    if (!chk.allowed) {
+                        checkbox.checked = false;   // 回弹开关，且**不发启动请求**
+                        console.warn('[auto-order] 品种不支持自动下单，已取消开启: '
+                            + realtimeSymbol + '  ' + chk.message);
+                        showAlert('不支持自动下单\n\n' + chk.message);
+                        return;
+                    }
+                }
+                if (on) {
+                    // 登录链路：确认 → 选中值；取消 / 点框外 / Esc → null = 不启动
+                    link = await pickTradeLink();
+                    if (!link) { checkbox.checked = false; return; }
+                }
+                if (label) label.textContent = on ? '启动中…' : '关闭中…';
                 const opts = { method: 'POST', cache: 'no-store' };
                 if (on) {
                     // 把当前页面品种/周期/服务地址带给引擎（--source sse 订阅该行情流）
@@ -9128,7 +9243,8 @@
                     opts.body = JSON.stringify({
                         symbol: realtimeSymbol || null,
                         freq: currentFreq || null,
-                        sse_base: location.origin
+                        sse_base: location.origin,
+                        link: link            // 登录链路（simnow / live）
                     });
                 }
                 console.info('[auto-order] ' + (on ? '开启' : '关闭') + ' 请求: '

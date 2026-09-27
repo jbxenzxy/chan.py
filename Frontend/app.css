@@ -715,6 +715,36 @@
             font-size: 13px; line-height: 1.6; color: #e0e0e0;
             white-space: pre-wrap; word-break: break-word; user-select: text;
         }
+        /* 登录链路选择（自动下单开启前置，2026-09-28）—— 单选两项：SimNow / 实盘。
+           不可用项保留可见并给出原因（置灰 + 红字原因），不隐藏：用户该知道
+           "为什么点不了实盘"，而不是看着只有一项发懵。 */
+        .alert-dialog-opts {
+            display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px;
+            flex: 0 0 auto;
+        }
+        .alert-dialog-opt {
+            display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px;
+            border-radius: 6px; background: #1a1a2e; border: 1px solid #0f3460;
+            font-size: 13px; color: #e0e0e0; cursor: pointer;
+        }
+        .alert-dialog-opt:hover { background: #0f3460; }
+        .alert-dialog-opt.disabled { opacity: 0.5; cursor: not-allowed; }
+        .alert-dialog-opt.disabled:hover { background: #1a1a2e; }
+        .alert-dialog-opt input[type="radio"] { accent-color: #e94560; margin-top: 2px; }
+        .alert-dialog-opt-name { font-weight: 600; }
+        .alert-dialog-opt-hint {
+            display: block; font-size: 12px; color: #a8b2d1; margin-top: 3px;
+            line-height: 1.5; white-space: normal;
+        }
+        .alert-dialog-opt.disabled .alert-dialog-opt-hint { color: #e94560; }
+        /* 当前登录方式徽标 */
+        .auto-order-link {
+            font-size: 11px; padding: 1px 6px; border-radius: 3px;
+            background: #1a1a2e; border: 1px solid #0f3460; color: #a8b2d1;
+            white-space: nowrap; user-select: none;
+        }
+        .auto-order-link.simnow { color: #4ecca3; border-color: #4ecca3; }
+        .auto-order-link.live { color: #e94560; border-color: #e94560; font-weight: 600; }
         /* BSP过滤设置对话框 */
         .bsp-filter-grid {
             display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px;

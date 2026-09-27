@@ -694,14 +694,17 @@ async def api_trader_auto_order_on(body: dict = Body(default={})):
     """开启自动下单（启动交易引擎子进程，SSE 订阅当前页面品种）。
 
     body（可选）：{"symbol": "KQ.m@CFFEX.IF", "freq": "5m",
-                   "sse_base": "http://127.0.0.1:18081"}
-    不传时走 Trading/Config.py 的 source 段，再缺省 KQ.m@CFFEX.IF / 5m。
+                   "sse_base": "http://127.0.0.1:18081",
+                   "link": "simnow"}
+    symbol/freq/sse_base 不传时走 Trading/Config.py 的 source 段，再缺省
+    KQ.m@CFFEX.IF / 5m；link 为登录链路（simnow / live），由开关弹出的选择框
+    给出，不传则沿用配置（等价改造前的行为）。
     """
     try:
         result = await run_in_threadpool(
             orch.call_trader_start,
             symbol=body.get("symbol"), freq=body.get("freq"),
-            sse_base=body.get("sse_base"))
+            sse_base=body.get("sse_base"), link=body.get("link"))
     except AppError:
         raise  # 领域异常：交给统一异常处理器（安全闸门/配置缺失 → 4xx）
     except Exception as exc:

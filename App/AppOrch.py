@@ -58,15 +58,18 @@ from App.AppAMO import call_amo
 from App.AppTrader import AppTrader, trader  # noqa: E402
 
 
-def call_trader_start(out_dir=None, symbol=None, freq=None, sse_base=None):
+def call_trader_start(out_dir=None, symbol=None, freq=None, sse_base=None,
+                      link=None):
     """启动交易引擎子进程（实盘安全闸门在 AppTrader.start 内预检）。
 
     配置统一来自 Trading/Config.py（无 config.json）。
     symbol/freq/sse_base：前端开关传当前页面品种/周期/服务地址，
     引擎以 --source sse 订阅 chan.py 行情流（缺省走 cfg.source / 内置默认）。
+    link：登录链路（simnow / live），前端选择框的选中值；指定后以环境变量
+    注入子进程覆盖 broker 三件套，免掉"切换登录方式要手改 .env"。
     """
     return trader.start(out_dir=out_dir, symbol=symbol, freq=freq,
-                        sse_base=sse_base)
+                        sse_base=sse_base, link=link)
 
 
 def call_trader_stop(timeout=None):
