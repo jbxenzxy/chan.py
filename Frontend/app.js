@@ -8731,11 +8731,17 @@
                 const g2 = dateToGlobalIdx(seg.end_date, map);
                 if (g2 !== undefined && g2 < globalStart) return;
                 if (g1 >= globalEnd) return;
-                const x1 = (g1 < globalStart) ? area.x
-                    : globalIdxToX(g1, globalStart, area.x, barStep, subPixelOffset);
-                const x2 = (g2 === undefined || g2 >= globalEnd)
+                // 段线按 bar 边缘衔接（X(g)±barStep/2）：跟踪段每根新高 bar 一段
+                //   （起=止=同一天），按中心点画会得到零长度线段而不可见 —— 阶梯
+                //   上升线靠边缘衔接才能逐级显示（2026-09-27 潍柴日K 实测修复）。
+                let x1 = (g1 < globalStart) ? area.x
+                    : globalIdxToX(g1, globalStart, area.x, barStep, subPixelOffset) - barStep / 2;
+                let x2 = (g2 === undefined || g2 >= globalEnd)
                     ? area.x + area.w
-                    : globalIdxToX(g2, globalStart, area.x, barStep, subPixelOffset);
+                    : globalIdxToX(g2, globalStart, area.x, barStep, subPixelOffset) + barStep / 2;
+                x1 = Math.max(x1, area.x);
+                x2 = Math.min(x2, area.x + area.w);
+                if (x2 - x1 < 0.5) return;
                 const y = priceToY(seg.price, area, priceRange);
                 ctx.save();
                 ctx.beginPath();
@@ -8749,18 +8755,17 @@
                 ctx.lineTo(x2, y);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                ctx.restore();
-                // ⑴ 标签画进图内右对齐（段右端；末段=图右缘），不再画到轴留白
+                // ⑴ 标签画进图内右对齐（段右端；末段=图右缘），不再画到轴留白。
+                //   非末段宽度放得下才画（跟踪段每根 bar 一段，逐段标注会糊成一片）；
+                //   末段恒画 —— 它是当前保护位。文字不加粗（2026-09-27 用户要求）。
                 if (y < area.y + 12 || y > area.y + area.h - 4) return;
                 const label = tpslSegLabel(seg, _tpslPlan);
+                ctx.font = "11px monospace";
+                const tw = ctx.measureText(label).width;
                 const tx = Math.min(x2, area.x + area.w) - 6;
+                if (!isLast && tx - tw < x1) return;
                 const ty = (y - 6 < area.y + 12) ? y + 15 : y - 6;
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(area.x, area.y, area.w, area.h);
-                ctx.clip();
                 ctx.fillStyle = "#FF9800";
-                ctx.font = "bold 11px monospace";
                 ctx.textAlign = "right";
                 ctx.fillText(label, tx, ty);
                 ctx.restore();
