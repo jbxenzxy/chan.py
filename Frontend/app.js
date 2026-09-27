@@ -8685,6 +8685,33 @@
             _tpslReset();
             render();
         };
+        // 分段标签（纯函数，可在 node 里单测；2026-09-27 用户三改+四改：
+        //   ⑴ 标签画进图内右对齐（不再画到右侧价格轴留白——长标签会超出视口）；
+        //   ⑵ 各段层名前置、空格分隔：止损/保本段显示 R 点数，跟踪段显示 2R 点数
+        //     （win_loss_ratio×R）；终态段追加 已止损/已止盈(±盈亏R)，无「保护」前缀）
+        function tpslSegLabel(seg, plan) {
+            const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[seg.phase] || "止损";
+            let label = phaseLabel + " " + _fmtPrice(seg.price);
+            if (!plan) return label;
+            const r = isFinite(plan.r) ? Math.round(plan.r * 100) / 100 : null;
+            const wlr = plan.params ? Number(plan.params.win_loss_ratio) : NaN;
+            if (r && seg.phase !== "trailing") {
+                label += " R=" + r;
+            }
+            if (seg.phase === "trailing" && r && isFinite(wlr) && wlr > 0) {
+                label += " " + wlr + "R=" + Math.round(wlr * r * 100) / 100;
+            }
+            const term = plan.terminal;
+            if (seg.terminal && term && term.outcome) {
+                label += " " + ({ sl_exit: "已止损", be_exit: "已止盈",
+                    trail_exit: "已止盈" }[term.outcome] || "");
+                const rm = plan.exit && isFinite(plan.exit.r_multiple) ? plan.exit.r_multiple : null;
+                if (rm !== null) {
+                    label += "(" + (rm > 0 ? "+" : "") + Math.round(rm * 100) / 100 + "R)";
+                }
+            }
+            return label;
+        }
         // 分段横虚线（v1.5 §4.6-⑤）：照抄 drawProtectionLine 的橙虚线与右端标签口径；
         //   segments 分段、末段（含 terminal）画到图最右、标签加「已」与实际 R 数（含负，Q11）。
         function drawTpslLines(klines, area, priceRange, barStep, subPixelOffset) {
@@ -8723,23 +8750,20 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
                 ctx.restore();
-                if (!isLast) return;
-                if (y < area.y || y > area.y + area.h) return;
-                const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[seg.phase] || "止损";
-                let label = "保护 " + _fmtPrice(seg.price) + "·" + phaseLabel;
-                if (term && term.outcome) {
-                    const ol = { sl_exit: "已止损", be_exit: "已止盈", trail_exit: "已止盈" }[term.outcome] || "";
-                    const rm = (_tpslPlan.exit && isFinite(_tpslPlan.exit.r_multiple))
-                        ? " (R " + (_tpslPlan.exit.r_multiple > 0 ? "+" : "") + _tpslPlan.exit.r_multiple + ")"
-                        : "";
-                    label += "·" + ol + rm;
-                } else if (isFinite(_tpslPlan.r)) {
-                    label += "·R " + _tpslPlan.r;
-                }
+                // ⑴ 标签画进图内右对齐（段右端；末段=图右缘），不再画到轴留白
+                if (y < area.y + 12 || y > area.y + area.h - 4) return;
+                const label = tpslSegLabel(seg, _tpslPlan);
+                const tx = Math.min(x2, area.x + area.w) - 6;
+                const ty = (y - 6 < area.y + 12) ? y + 15 : y - 6;
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(area.x, area.y, area.w, area.h);
+                ctx.clip();
                 ctx.fillStyle = "#FF9800";
                 ctx.font = "bold 11px monospace";
-                ctx.textAlign = "left";
-                ctx.fillText(label, area.x + area.w + 4, y + 4);
+                ctx.textAlign = "right";
+                ctx.fillText(label, tx, ty);
+                ctx.restore();
             });
         }
 

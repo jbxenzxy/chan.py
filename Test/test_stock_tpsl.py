@@ -14,7 +14,11 @@
   ⑦ 卖点对称（side=short，零分支）；
   ⑧ 校验 4xx：非股票 / 空 klines / 缺字段 / 纯变体 type（"11"）/ date 不在 klines；
   ⑨ 跨日 ATR 连续（P2-4，Q5）：跨多日 bar 序列 ATR 累计不断档 —— 钉死
-     「移除 Exit.on_bar 跨日清空」的新口径，防将来被"顺手恢复"而无红灯。
+     「移除 Exit.on_bar 跨日清空」的新口径，防将来被"顺手恢复"而无红灯；
+  ⑩ 前端分段标签口径（2026-09-27 用户三改+四改）：从 Frontend/app.js 抽真函数
+     tpslSegLabel 到 node 里跑 —— 层名前置（止损 9.00 / 保本 10.50 / 跟踪 11.55），
+     止损/保本段显示 R 点数、跟踪段显示 2R 点数，终态段带 已止损/已止盈 与
+     实际盈亏 R 数（含负）；node 不在位则 SKIP。
 
 跑法：python Test/test_stock_tpsl.py（退出码 0/1 即判决；已注册进
 Test/run_all.py 的 COMPONENTS）
@@ -22,7 +26,8 @@ Test/run_all.py 的 COMPONENTS）
 import os
 import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
 
 from App.AppErrors import BadRequestError
 from App.AppTPSL import compute_stock_tpsl
@@ -166,9 +171,64 @@ def main():
     seq = [_kl(i, 5 + i, 10.0, 10.5, 9.5, 10.0) for i in range(25)]
     entry3 = seq[-1]
     bsp3 = _bsp(entry3, fractal_low=9.99)  # A = 0.01（刻意极小，逼 R 只能来自 B）
-    r7 = compute_stock_tpsl("sh600519", _payload(seq, bsp3))
-    check("跨日连续：ATR = 1.0（未被跨日清空打断）", r7["atr"] == 1.0, r7["atr"])
-    check("跨日连续：R = 2×ATR = 2.0（而非退化为 A=0.01）", r7["r"] == 2.0, r7["r"])
+    r9 = compute_stock_tpsl("sh600519", _payload(seq, bsp3))
+    check("跨日连续：ATR = 1.0（未被跨日清空打断）", r9["atr"] == 1.0, r9["atr"])
+    check("跨日连续：R = 2×ATR = 2.0（而非退化为 A=0.01）", r9["r"] == 2.0, r9["r"])
+
+    print("══ ⑩ 前端分段标签口径（node 抽真函数 tpslSegLabel；node 不在位则 SKIP）══")
+    import io as _io
+    import re as _re
+    import shutil as _shutil
+    import subprocess as _subprocess
+    import tempfile as _tempfile
+    node = _shutil.which("node")
+    if not node:
+        check("node 不在位，标签口径静态层 SKIP", True)
+    else:
+        appjs = _io.open(os.path.join(ROOT, "Frontend", "app.js"),
+                         encoding="utf-8").read()
+
+        def _extract(fn_name):
+            pat = ("        function " + fn_name +
+                   r"\([^)]*\) \{[\s\S]*?\n        \}")
+            m = _re.search(pat, appjs)
+            assert m, "app.js 抽取失败: " + fn_name
+            return m.group(0)
+
+        harness = _extract("_fmtPrice") + "\n" + _extract("tpslSegLabel") + "\n" + (
+            "const P = (o) => Object.assign({ params: { win_loss_ratio: 2.0 } }, o);\n"
+            "const out = [];\n"
+            "out.push(tpslSegLabel({ phase: 'sl', price: 9.0 }, P({})));\n"
+            "out.push(tpslSegLabel({ phase: 'sl', price: 9.0, terminal: true },\n"
+            "    P({ r: 1.0, exit: { r_multiple: -1.1 }, terminal: { outcome: 'sl_exit' } })));\n"
+            "out.push(tpslSegLabel({ phase: 'breakeven', price: 10.5, terminal: true },\n"
+            "    P({ r: 0.5, exit: { r_multiple: -0.1 }, terminal: { outcome: 'be_exit' } })));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 11.55 }, P({ r: 0.5 })));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 11.55, terminal: true },\n"
+            "    P({ r: 0.5, exit: { r_multiple: 1.5 }, terminal: { outcome: 'trail_exit' } })));\n"
+            "console.log(out.join('\\n'));\n")
+        jf = _tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
+        jf.write(harness)
+        jf.close()
+        try:
+            proc = _subprocess.run([node, jf.name], capture_output=True, text=True,
+                                   encoding="utf-8", timeout=30)
+            lines = [x for x in proc.stdout.splitlines() if x.strip()]
+        finally:
+            os.unlink(jf.name)
+        check("node 执行成功且输出 5 条",
+              proc.returncode == 0 and len(lines) == 5,
+              proc.stderr[:160] or proc.stdout[:160])
+        if proc.returncode == 0 and len(lines) == 5:
+            check("止损段（无终态、无 r）：止损 9.00", lines[0] == "止损 9.00", lines[0])
+            check("止损终态：止损 9.00 R=1 已止损(-1.1R)",
+                  lines[1] == "止损 9.00 R=1 已止损(-1.1R)", lines[1])
+            check("保本线：保本 10.50 R=0.5 已止盈(-0.1R)（⑵）",
+                  lines[2] == "保本 10.50 R=0.5 已止盈(-0.1R)", lines[2])
+            check("跟踪线：跟踪 11.55 2R=1（⑶，win_loss_ratio×R）",
+                  lines[3] == "跟踪 11.55 2R=1", lines[3])
+            check("跟踪终态：跟踪 11.55 2R=1 已止盈(+1.5R)",
+                  lines[4] == "跟踪 11.55 2R=1 已止盈(+1.5R)", lines[4])
 
     n_pass = sum(1 for x in _ok if x)
     print("\n合计: {} 通过 / {} 失败".format(n_pass, len(_ok) - n_pass))
