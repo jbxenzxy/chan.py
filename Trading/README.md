@@ -263,7 +263,8 @@ main.py 构造一份后**同时**交给 `Broker.build_broker(..., state=instr)` 
 
 组装 `LayeredExitPolicy` 的完整参数一律经 `resolved_exit_params(cfg)`
 （品种无关项 + 档案的 `win_loss_ratio` 合并，`Trading/Config.py:532`）—— 直接传
-`cfg.exit_params.model_dump()` 会缺 `win_loss_ratio`，构造期 AttributeError。
+`cfg.exit_params.model_dump()` 会缺 `win_loss_ratio`；但 `ExitPolicyParams.win_loss_ratio`
+默认 2.0（`:359`），不报错、静默回落默认而非档案值。
 
 ### 5.3 被删掉的配置键：三种处理方式（别当成一种）
 

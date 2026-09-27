@@ -285,7 +285,7 @@ def build_runtime(args):
     entry = EntryPolicy(cfg.entry_params.model_dump())
     # 品种相关出场参数（win_loss_ratio）的唯一来源是 Product
     #   档案 —— 经 resolved_exit_params 合并成完整参数；直接用 exit_params.model_dump()
-    #   会缺品种参数（LayeredExitPolicy 构造期 AttributeError）。
+    #   会缺品种参数 win_loss_ratio，但 ExitPolicyParams 有默认 2.0，不报错、静默回落默认而非档案值。
     exitp = LayeredExitPolicy(resolved_exit_params(cfg))
     store_path = os.path.join(out, "state.db")
     store = Store(store_path)

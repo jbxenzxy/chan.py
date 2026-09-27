@@ -535,8 +535,10 @@ def resolved_exit_params(cfg: TradingConfig) -> Dict[str, Any]:
     合并两个来源：
       · 品种无关项 —— cfg.exit_params（ATR / trailing / 触发倍数等）
       · 品种相关项 —— cfg.product_profile.exit_overrides()（win_loss_ratio，唯一默认值来源是品种档案）
-    档案值整块生效：本函数产出的 dict 才是 LayeredExitPolicy 的合法入参，
-    直接传 cfg.exit_params.model_dump() 会缺品种参数 win_loss_ratio（构造期 AttributeError）。
+    档案值整块生效：本函数产出的 dict 才是 LayeredExitPolicy 的合法入参；
+    直接传 cfg.exit_params.model_dump() 会缺品种参数 win_loss_ratio —— 但 ExitPolicyParams.win_loss_ratio
+    有默认值 2.0（Config.py:359），故**不报错**、只是静默回落到默认 2.0 而非品种档案值；
+    若要按品种盈亏比进 L3，必须经本函数合并 product_profile.exit_overrides()。
     （2026-09-14 前档案提供 min_r_points / win_loss_ratio / breakeven_buffer_ticks 三个品种参数，
      现只剩 win_loss_ratio 一个 —— 另两个已分别删除 / 上移为全局比例。）
 
