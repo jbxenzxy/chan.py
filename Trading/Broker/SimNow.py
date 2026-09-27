@@ -639,7 +639,7 @@ class SimNowBroker(Broker):
         # P0/P3/P4 都看不见。
         #
         # P5 在 _connect 后强制等 5 秒，让 CTP 把所有"未确认回报"全推过来，建立
-        # 显式的"启动时账户基线" _initial_account_state；如果非 0，立刻在日志里
+        # 显式的"启动时本合约基线" _initial_account_state；如果非 0，立刻在日志里
         # 警告（提醒用户这是历史遗留，不是本轮信号造成的）。
         self._initial_account_state: Dict[str, int] = {}
         self._connect()
@@ -941,9 +941,9 @@ class SimNowBroker(Broker):
     def _capture_initial_account_state(self) -> None:
         """P5: 在 _connect 后强制等 5 秒，让 CTP 推送所有未确认回报，建立启动时账户快照。
 
-        如果 _initial_account_state 非 0（即账户在启动时已经有非零持仓），
+        如果 _initial_account_state 非 0（即本合约在启动时已经有非零持仓），
         说明这是历史遗留仓（上轮 SSE 实时成交留下的），不是本轮 gateway 信号造成的。
-        把这个信息写入 _initial_account_state 供后续 submit 做交叉校验用。
+        只收本合约键（_sym 与 _trade_symbol 精确比对，同账号其它合约不收）；写入仅作启动日志/diagnostics 展示（无交易路径消费）。
         """
         try:
             # 给 CTP 5 秒推完所有未确认回报
@@ -956,7 +956,7 @@ class SimNowBroker(Broker):
             # "单笔持仓"读 → 每侧都读成 0 手 → 启动账户基线恒为空，
             # P5 的"启动时账户已有非零持仓"告警永远不可能触发。
             for _sym, v in _position_pairs(pos, self._trade_symbol):
-                if v is None:
+                if v is None or _sym != self._trade_symbol:
                     continue
                 sym = getattr(v, "exchange_symbol", None) or getattr(v, "symbol", None) \
                       or _sym
@@ -972,8 +972,8 @@ class SimNowBroker(Broker):
                 import logging
                 log = logging.getLogger("tg.brokers.simnow")
                 log.warning(
-                    "⚠️  P5: gateway 启动时账户已有非零持仓（疑似上轮遗留仓）: %s。"
-                    "  本轮 gateway 信号产生的成交，将按 P5 严格以 _initial_account_state 为锚点做精确校验。",
+                    "⚠️  P5: gateway 启动时本合约已有非零持仓（疑似上轮遗留仓）: %s。"
+                    "  _initial_account_state 仅作启动可见性与 diagnostics 展示，不参与任何交易判定。",
                     non_zero,
                 )
         except Exception as e:
