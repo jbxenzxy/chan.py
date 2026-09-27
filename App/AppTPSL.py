@@ -39,6 +39,11 @@ _WARMUP_BARS = 60
 # 买卖点类型 → 终态业务名（reason 三值穷举，v1.5 §3.8）
 _OUTCOME_MAP = {"sl": "sl_exit", "breakeven": "be_exit", "trailing": "trail_exit"}
 
+# 股票侧出场参数显式覆盖（2026-09-27 用户拍板的股票口径 —— 只影响股票推演；
+#   期货路径经 resolved_exit_params（品种档案）与全局默认，不经过本模块）。
+#   数值即下方 dict 字面量；改口径 = 改此 dict + 同步 Test/test_stock_tpsl.py ⑩ 节。
+_STOCK_EXIT_OVERRIDES = {"win_loss_ratio": 3.0, "trailing_trigger_r": 1.0}
+
 
 def _exit_policy_cls():
     """惰性取 LayeredExitPolicy（R3：Trading 导入失败是服务端故障 → AppError 500）。"""
@@ -83,7 +88,8 @@ def compute_stock_tpsl(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     body: {code, freq, klines, bsp}（路由已把 path 上的 code 注入 body）。
     校验失败抛 ``BadRequestError``（FrontAPI 统一映射 400，不静默 200）；
     成功返回 §4.2 的响应结构（entry / r / a / b / atr / segments / current /
-    exit / terminal / params）。
+    exit / terminal / params）。出场参数用 ``_STOCK_EXIT_OVERRIDES`` 显式覆盖
+    （股票侧口径，2026-09-27 拍板），不走模型默认/品种档案/.env。
     """
     from Trading.Infra.Instrument import Instrument
     from Trading.Infra.Records import Position, Signal
@@ -124,7 +130,7 @@ def compute_stock_tpsl(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     LayeredExitPolicy = _exit_policy_cls()
     sig = Signal.from_bsp(bsp, symbol=code, freq=freq)
     inst = Instrument(product=None)  # 无品种档案 ⇒ round_price 原样返回，Q6 不做 tick 对齐
-    pol = LayeredExitPolicy({})      # 空 dict ⇒ ExitPolicyParams 模型默认（win_loss_ratio 走模型默认，Q8 不跟 .env）
+    pol = LayeredExitPolicy(dict(_STOCK_EXIT_OVERRIDES))  # 股票侧显式口径（见 _STOCK_EXIT_OVERRIDES），Q8 不跟 .env/品种档案
 
     entry_price = float(bsp["price"])
     if abs(float(klines[entry_idx].get("close") or 0.0) - entry_price) > 1e-9:

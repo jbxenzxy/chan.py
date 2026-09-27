@@ -8685,10 +8685,11 @@
             _tpslReset();
             render();
         };
-        // 分段标签（纯函数，可在 node 里单测；2026-09-27 用户三改+四改：
+        // 分段标签（纯函数，可在 node 里单测；2026-09-27 用户三改+四改+五改：
         //   ⑴ 标签画进图内右对齐（不再画到右侧价格轴留白——长标签会超出视口）；
-        //   ⑵ 各段层名前置、空格分隔：止损/保本段显示 R 点数，跟踪段显示 2R 点数
-        //     （win_loss_ratio×R）；终态段追加 已止损/已止盈(±盈亏R)，无「保护」前缀）
+        //   ⑵ 各段层名前置、空格分隔、无「保护」前缀；数值用全角括号 R（…）：
+        //     止损/保本段显示 R 点数，跟踪段显示 3R 点数（win_loss_ratio×R，
+        //     前缀动态取 params.win_loss_ratio）；终态段追加 已止损/已止盈(±盈亏R)）
         function tpslSegLabel(seg, plan) {
             const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[seg.phase] || "止损";
             let label = phaseLabel + " " + _fmtPrice(seg.price);
@@ -8696,10 +8697,10 @@
             const r = isFinite(plan.r) ? Math.round(plan.r * 100) / 100 : null;
             const wlr = plan.params ? Number(plan.params.win_loss_ratio) : NaN;
             if (r && seg.phase !== "trailing") {
-                label += " R=" + r;
+                label += " R（" + r + "）";
             }
             if (seg.phase === "trailing" && r && isFinite(wlr) && wlr > 0) {
-                label += " " + wlr + "R=" + Math.round(wlr * r * 100) / 100;
+                label += " " + wlr + "R（" + Math.round(wlr * r * 100) / 100 + "）";
             }
             const term = plan.terminal;
             if (seg.terminal && term && term.outcome) {

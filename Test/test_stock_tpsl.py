@@ -6,7 +6,8 @@
 
   ① 入场价 = 买卖点 K 线收盘价（需求⑴）；bsp.price 与收盘不一致 → 400；
   ② R = max(A, 2×ATR)（ATR 就绪时 b=2×atr）；
-  ③ 保本落点 = 入场 ± 0.5R；跟踪缓冲 = 0.5R；
+  ③ 保本落点 = 入场 ± 0.5R；跟踪缓冲走股票侧覆盖口径
+     （AppTPSL._STOCK_EXIT_OVERRIDES，2026-09-27 拍板，只影响股票推演）；
   ④ 边界一律严格不等（达标 / 触发恰好等于阈值都不算）；
   ⑤ 三种终态 = `ExitCheck.reason` 三值穷举：outcome 映射、画线价位=触发价、
      末段 end_date = 序列末根（§3.8 T1/T2/T3 直接搬为用例）；
@@ -15,7 +16,7 @@
   ⑧ 校验 4xx：非股票 / 空 klines / 缺字段 / 纯变体 type（"11"）/ date 不在 klines；
   ⑨ 跨日 ATR 连续（P2-4，Q5）：跨多日 bar 序列 ATR 累计不断档 —— 钉死
      「移除 Exit.on_bar 跨日清空」的新口径，防将来被"顺手恢复"而无红灯；
-  ⑩ 前端分段标签口径（2026-09-27 用户三改+四改）：从 Frontend/app.js 抽真函数
+  ⑩ 前端分段标签口径（2026-09-27 用户三改+四改+五改）：从 Frontend/app.js 抽真函数
      tpslSegLabel 到 node 里跑 —— 层名前置（止损 9.00 / 保本 10.50 / 跟踪 11.55），
      止损/保本段显示 R 点数、跟踪段显示 2R 点数，终态段带 已止损/已止盈 与
      实际盈亏 R 数（含负）；node 不在位则 SKIP。
@@ -30,7 +31,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from App.AppErrors import BadRequestError
-from App.AppTPSL import compute_stock_tpsl
+from App.AppTPSL import _STOCK_EXIT_OVERRIDES, compute_stock_tpsl
 
 _ok = []
 
@@ -86,6 +87,10 @@ def main():
     check("atr = 1.0（恒 TR=1）", r2["atr"] == 1.0, r2["atr"])
     check("b = 2×ATR = 2.0", r2["b"] == 2.0, r2["b"])
     check("R = max(A=1, B=2) = 2.0", r2["r"] == 2.0, r2["r"])
+    check("股票侧覆盖生效：params 与 _STOCK_EXIT_OVERRIDES 一致（⑴）",
+          r2["params"]["win_loss_ratio"] == _STOCK_EXIT_OVERRIDES["win_loss_ratio"]
+          and r2["params"]["trailing_trigger_r"] == _STOCK_EXIT_OVERRIDES["trailing_trigger_r"],
+          r2["params"])
 
     print("══ ③④⑤⑥ 三种终态（§3.8 T1/T2/T3）+ 严格不等 ══")
     # T1 已止损：有利极值仅 +0.2R，收盘 8.9 < 止损 9.0
@@ -112,12 +117,14 @@ def main():
           r2t["segments"][0]["phase"] == "sl" and r2t["segments"][0]["end_date"] == "2026-01-05"
           and r2t["segments"][1]["phase"] == "breakeven"
           and r2t["segments"][1]["start_date"] == "2026-01-06", r2t["segments"])
-    # T3 跟踪止盈：第 1 根进跟踪（11.6，only_update），第 2 根跌破
-    k3 = [_ENTRY, _kl(1, 6, 10.0, 12.1, 10.0, 11.8), _kl(2, 7, 11.8, 11.9, 11.4, 11.5)]
+    # T3 跟踪止盈（3:1 + 缓冲 1R）：第 1 根 high 13.2 → fav=3.2R > 3R 进跟踪
+    #   （跟踪位 = 13.2 − 1×R = 12.2，only_update；当根收盘 12.5 在新保护价上方 → 存活），
+    #   第 2 根收 12.1 < 12.2 判破 → fill 12.1，r_multiple = +2.1
+    k3 = [_ENTRY, _kl(1, 6, 10.0, 13.2, 10.0, 12.5), _kl(2, 7, 12.5, 12.8, 12.1, 12.1)]
     r3 = compute_stock_tpsl("sh600519", _payload(k3, bsp))
-    check("T3 reason=trailing / outcome=trail_exit / 画线 11.6 / fill 11.5",
-          r3["exit"]["reason"] == "trailing" and r3["exit"]["price"] == 11.6
-          and r3["exit"]["fill"] == 11.5 and r3["exit"]["r_multiple"] == 1.5, r3["exit"])
+    check("T3 reason=trailing / outcome=trail_exit / 画线 12.2 / fill 12.1",
+          r3["exit"]["reason"] == "trailing" and r3["exit"]["price"] == 12.2
+          and r3["exit"]["fill"] == 12.1 and r3["exit"]["r_multiple"] == 2.1, r3["exit"])
     check("T3 未离场时 current 为 null", r3["current"] is None)
     # 严格不等：达标恰好 1R 不进保本；触发恰好等于保护价不判破
     k4 = [_ENTRY, _kl(1, 6, 10.0, 11.0, 9.5, 10.2)]  # high=11.0 → fav 恰 1R
@@ -131,6 +138,11 @@ def main():
     k5 = [_ENTRY, _kl(1, 6, 10.0, 10.2, 8.9, 9.0)]  # close 恰 = 止损 9.0
     r5 = compute_stock_tpsl("sh600519", _payload(k5, bsp))
     check("收盘恰好等于保护价不判破（严格不等）", r5["exit"] is None, r5.get("exit"))
+    k5b = [_ENTRY, _kl(1, 6, 10.0, 13.0, 9.5, 12.5)]  # high 13.0 → fav 恰 3R
+    r5b = compute_stock_tpsl("sh600519", _payload(k5b, bsp))
+    check("有利极值恰好 3R 不进跟踪（严格不等）",
+          r5b["exit"] is None and all(s["phase"] != "trailing" for s in r5b["segments"]),
+          r5b["segments"])
 
     print("══ ⑦ 卖点对称（side=short，零分支）══")
     bsp_s = _bsp(_ENTRY, is_buy=False, fractal_high=11.0)  # A = 1.0 → R = 1，止损 11.0
@@ -139,13 +151,13 @@ def main():
     check("卖点：止损位 = 入场 + R = 11.0", r6["segments"][0]["price"] == 11.0, r6["segments"])
     check("卖点：reason=sl / r_multiple = −1.10（short 被止损在入场价上方 = 亏损，符号经 Side 枚举）",
           r6["exit"]["reason"] == "sl" and r6["exit"]["r_multiple"] == -1.1, r6["exit"])
-    # short 的盈利出场走跟踪层：先跌 3R（fav=3R > 2R 进跟踪，跟踪位 = low 7.9 + 0.5R = 8.4），
-    # 再收 8.5 > 8.4 判破 → fill 8.5，r_multiple = (8.5−10)×(−1) = +1.50（盈利为正）
-    k7 = [_ENTRY, _kl(1, 6, 10.0, 10.1, 7.9, 8.0), _kl(2, 7, 8.0, 8.6, 8.4, 8.5)]
+    # short 的盈利出场走跟踪层：先跌 3.1R（fav > 3R 进跟踪，跟踪位 = low 6.9 + 1R = 7.9），
+    # 再收 8.0 > 7.9 判破 → fill 8.0，r_multiple = (8.0−10)×(−1) = +2.00（盈利为正）
+    k7 = [_ENTRY, _kl(1, 6, 10.0, 10.1, 6.9, 7.0), _kl(2, 7, 7.0, 8.1, 7.8, 8.0)]
     r7s = compute_stock_tpsl("sh600519", _payload(k7, bsp_s))
-    check("卖点：reason=trailing / 画线 8.4 / r_multiple = +1.50（(fill−entry)×SHORT.value，盈利为正）",
-          r7s["exit"]["reason"] == "trailing" and r7s["exit"]["r_multiple"] == 1.5
-          and r7s["exit"]["price"] == 8.4, r7s["exit"])
+    check("卖点：reason=trailing / 画线 7.9 / r_multiple = +2.00（(fill−entry)×SHORT.value，盈利为正）",
+          r7s["exit"]["reason"] == "trailing" and r7s["exit"]["r_multiple"] == 2.0
+          and r7s["exit"]["price"] == 7.9, r7s["exit"])
 
     print("══ ⑧ 校验 4xx ══")
     cases = [
@@ -196,7 +208,7 @@ def main():
             return m.group(0)
 
         harness = _extract("_fmtPrice") + "\n" + _extract("tpslSegLabel") + "\n" + (
-            "const P = (o) => Object.assign({ params: { win_loss_ratio: 2.0 } }, o);\n"
+            "const P = (o) => Object.assign({ params: { win_loss_ratio: 3.0 } }, o);\n"
             "const out = [];\n"
             "out.push(tpslSegLabel({ phase: 'sl', price: 9.0 }, P({})));\n"
             "out.push(tpslSegLabel({ phase: 'sl', price: 9.0, terminal: true },\n"
@@ -221,14 +233,14 @@ def main():
               proc.stderr[:160] or proc.stdout[:160])
         if proc.returncode == 0 and len(lines) == 5:
             check("止损段（无终态、无 r）：止损 9.00", lines[0] == "止损 9.00", lines[0])
-            check("止损终态：止损 9.00 R=1 已止损(-1.1R)",
-                  lines[1] == "止损 9.00 R=1 已止损(-1.1R)", lines[1])
-            check("保本线：保本 10.50 R=0.5 已止盈(-0.1R)（⑵）",
-                  lines[2] == "保本 10.50 R=0.5 已止盈(-0.1R)", lines[2])
-            check("跟踪线：跟踪 11.55 2R=1（⑶，win_loss_ratio×R）",
-                  lines[3] == "跟踪 11.55 2R=1", lines[3])
-            check("跟踪终态：跟踪 11.55 2R=1 已止盈(+1.5R)",
-                  lines[4] == "跟踪 11.55 2R=1 已止盈(+1.5R)", lines[4])
+            check("止损终态：止损 9.00 R（1）已止损(-1.1R)（⑸ 括号格式）",
+                  lines[1] == "止损 9.00 R（1） 已止损(-1.1R)", lines[1])
+            check("保本线：保本 10.50 R（0.5）已止盈(-0.1R)（⑸ 括号格式）",
+                  lines[2] == "保本 10.50 R（0.5） 已止盈(-0.1R)", lines[2])
+            check("跟踪线：跟踪 11.55 3R（1.5）（⑷+⑴，win_loss_ratio×R）",
+                  lines[3] == "跟踪 11.55 3R（1.5）", lines[3])
+            check("跟踪终态：跟踪 11.55 3R（1.5）已止盈(+1.5R)",
+                  lines[4] == "跟踪 11.55 3R（1.5） 已止盈(+1.5R)", lines[4])
 
     n_pass = sum(1 for x in _ok if x)
     print("\n合计: {} 通过 / {} 失败".format(n_pass, len(_ok) - n_pass))
