@@ -8741,7 +8741,8 @@
                 // 每层只在「该层最后一段」画标签（层名+R/2R+终态）；段宽不够也画，
                 //   文字在保护线上方向左延伸（2026-09-27 实测：宽度门槛会把止损/保本
                 //   标签整段吞掉）。逐段标注会糊成一片，故按层取末段。
-                const isLayerLast = (i === segs.length - 1) ||
+                const isLast = (i === segs.length - 1);
+                const isLayerLast = isLast ||
                     (segs[i + 1] && segs[i + 1].phase !== seg.phase);
                 const g1 = dateToGlobalIdx(seg.start_date, map);
                 if (g1 === undefined) return;
@@ -8758,6 +8759,9 @@
                     : globalIdxToX(g2, globalStart, area.x, barStep, subPixelOffset) + barStep / 2;
                 x1 = Math.max(x1, area.x);
                 x2 = Math.min(x2, area.x + area.w);
+                // 末段且未离场（仍在监控）：延伸到图右缘 —— 保护价当前仍在生效；
+                //   已离场的段右端=触发 bar（六改⑴），历史段右端=下一段衔接处。
+                if (isLast && !term) x2 = area.x + area.w;
                 if (x2 - x1 < 0.5) return;
                 const y = priceToY(seg.price, area, priceRange);
                 ctx.save();
