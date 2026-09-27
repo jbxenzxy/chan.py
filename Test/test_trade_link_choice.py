@@ -257,6 +257,15 @@ check("⑥ 默认项取上次选择（info.last）",
       "default: String((info && info.last) || '')" in JS, True)
 check("⑥ 选项只认后端下发的 link_view（前端不复制判据）",
       "autoOrderLinkInfo = data.link_view" in JS, True)
+# 文案契约（2026-09-28 用户拍板）：标题就三个字「登录方式」，不带操作说明行。
+# 早先写的是「选择自动下单的登录方式\n（取消或点击对话框外区域＝不启动）」——
+# 既啰嗦又把"怎么取消"当成免责声明印在框里。行为（Esc / 点框外 / 取消按钮）
+# 由 choice 形态本身保证，不靠这行字，删掉不损失任何东西。
+_choice_msg = re.search(r"await showChoice\(\s*'([^']*)'", JS)
+_msg = _choice_msg.group(1) if _choice_msg else "\n"   # 找不到时故意给脏值，让下面两条都红
+check("⑥ 选择框标题恰为「登录方式」", _msg, "登录方式")
+check("⑥ 标题是单行（不掺操作说明行、不带括注）",
+      (chr(10) in _msg) or ("\\n" in _msg) or ("（" in _msg), False)
 
 # ═══ ⑦ 前端行为层：真函数跑在 node 上 ═══
 print("\n[7] 前端行为层（node 真函数）")

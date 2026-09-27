@@ -9203,7 +9203,7 @@
                 return null;
             }
             const picked = await showChoice(
-                '选择自动下单的登录方式\n（取消或点击对话框外区域＝不启动）',
+                '登录方式',
                 { options: opts, default: String((info && info.last) || '') });
             return picked || null;
         }
