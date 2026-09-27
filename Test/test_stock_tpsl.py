@@ -6,7 +6,7 @@
 
   ① 入场价 = 买卖点 K 线收盘价（需求⑴）；bsp.price 与收盘不一致 → 400；
   ② R = max(A, 2×ATR)（ATR 就绪时 b=2×atr）；
-  ③ 保本落点 = 入场 ± 0.5R；跟踪缓冲走股票侧覆盖口径
+  ③ 保本落点 = 入场 ± 0.5R；跟踪缓冲与盈亏比走股票侧覆盖口径
      （AppTPSL._STOCK_EXIT_OVERRIDES，2026-09-27 拍板，只影响股票推演）；
   ④ 边界一律严格不等（达标 / 触发恰好等于阈值都不算）；
   ⑤ 三种终态 = `ExitCheck.reason` 三值穷举：outcome 映射、画线价位=触发价、
@@ -16,10 +16,14 @@
   ⑧ 校验 4xx：非股票 / 空 klines / 缺字段 / 纯变体 type（"11"）/ date 不在 klines；
   ⑨ 跨日 ATR 连续（P2-4，Q5）：跨多日 bar 序列 ATR 累计不断档 —— 钉死
      「移除 Exit.on_bar 跨日清空」的新口径，防将来被"顺手恢复"而无红灯；
-  ⑩ 前端分段标签口径（2026-09-27 用户三改+四改+五改）：从 Frontend/app.js 抽真函数
-     tpslSegLabel 到 node 里跑 —— 层名前置（止损 9.00 / 保本 10.50 / 跟踪 11.55），
-     止损/保本段显示 R 点数、跟踪段显示 2R 点数，终态段带 已止损/已止盈 与
-     实际盈亏 R 数（含负）；node 不在位则 SKIP。
+  ⑩ 前端分段标签口径（2026-09-27 用户三/四/五/六改）：从 Frontend/app.js 抽
+     真函数 tpslSegLabel 到 node 里跑 —— 止损/保本段 `止损 9.00 R（…）` /
+     `保本 10.50 R（…）`；跟踪段区分 初始跟踪（3R 阈值线，`初始跟踪 21.63
+     3R（2.64）`）与 移动跟踪（逐级上移线，`移动跟踪 23.21 4.78R（4.21）`，
+     4.78R = 锁盈 R 数、4.21 = 对应点数）；终态段追加 已止损/已止盈；
+     node 不在位则 SKIP。
+  ⑪ 终态段右端 = 触发止损止盈的那根 K 线（2026-09-27 用户六改⑴）：
+     不再延伸到序列末根，否则看不出止盈/止损发生在哪根。
 
 跑法：python Test/test_stock_tpsl.py（退出码 0/1 即判决；已注册进
 Test/run_all.py 的 COMPONENTS）
@@ -101,7 +105,7 @@ def main():
     check("T1 画线价位 = 触发价 9.0（初始止损位）", r1["exit"]["price"] == 9.0, r1["exit"])
     check("T1 fill = 收盘 8.9", r1["exit"]["fill"] == 8.9)
     check("T1 r_multiple = −1.10（含负）", r1["exit"]["r_multiple"] == -1.1, r1["exit"])
-    check("T1 末段 end_date = 序列末根（线画到最右）",
+    check("T1 末段 end_date = 序列末根（离场即末根场景）",
           r1["segments"][-1]["end_date"] == "2026-01-06" and
           r1["terminal"]["end_date"] == "2026-01-06", r1["segments"])
     # T2 保本止盈·净亏：同根先抬价（10.5）再跌破（9.9）
@@ -126,7 +130,7 @@ def main():
           r3["exit"]["reason"] == "trailing" and r3["exit"]["price"] == 12.2
           and r3["exit"]["fill"] == 12.1 and r3["exit"]["r_multiple"] == 2.1, r3["exit"])
     check("T3 未离场时 current 为 null", r3["current"] is None)
-    # 严格不等：达标恰好 1R 不进保本；触发恰好等于保护价不判破
+    # 严格不等：达标恰好 1R 不进保本；触发恰好等于保护价不判破；fav 恰 3R 不进跟踪
     k4 = [_ENTRY, _kl(1, 6, 10.0, 11.0, 9.5, 10.2)]  # high=11.0 → fav 恰 1R
     r4 = compute_stock_tpsl("sh600519", _payload(k4, bsp))
     check("达标恰好 1R 不进保本（严格不等）",
@@ -208,16 +212,24 @@ def main():
             return m.group(0)
 
         harness = _extract("_fmtPrice") + "\n" + _extract("tpslSegLabel") + "\n" + (
-            "const P = (o) => Object.assign({ params: { win_loss_ratio: 3.0 } }, o);\n"
+            "const P = (o) => Object.assign({ params: { win_loss_ratio: 3.0 },"
+            " entry: { price: 19.0, side: 'long' } }, o);\n"
             "const out = [];\n"
-            "out.push(tpslSegLabel({ phase: 'sl', price: 9.0 }, P({})));\n"
+            "out.push(tpslSegLabel({ phase: 'sl', price: 9.0 }, P({}), null));\n"
             "out.push(tpslSegLabel({ phase: 'sl', price: 9.0, terminal: true },\n"
-            "    P({ r: 1.0, exit: { r_multiple: -1.1 }, terminal: { outcome: 'sl_exit' } })));\n"
+            "    P({ r: 1.0, exit: { r_multiple: -1.1 },"
+            " terminal: { outcome: 'sl_exit' } }), null));\n"
             "out.push(tpslSegLabel({ phase: 'breakeven', price: 10.5, terminal: true },\n"
-            "    P({ r: 0.5, exit: { r_multiple: -0.1 }, terminal: { outcome: 'be_exit' } })));\n"
-            "out.push(tpslSegLabel({ phase: 'trailing', price: 11.55 }, P({ r: 0.5 })));\n"
-            "out.push(tpslSegLabel({ phase: 'trailing', price: 11.55, terminal: true },\n"
-            "    P({ r: 0.5, exit: { r_multiple: 1.5 }, terminal: { outcome: 'trail_exit' } })));\n"
+            "    P({ r: 0.5, exit: { r_multiple: -0.1 },"
+            " terminal: { outcome: 'be_exit' } }), null));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 21.63 },"
+            " P({ r: 0.88 }), 'initial'));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 21.63, terminal: true },\n"
+            "    P({ r: 0.88, terminal: { outcome: 'trail_exit' } }), 'initial'));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 23.21 },"
+            " P({ r: 0.88 }), 'moved'));\n"
+            "out.push(tpslSegLabel({ phase: 'trailing', price: 23.21, terminal: true },\n"
+            "    P({ r: 0.88, terminal: { outcome: 'trail_exit' } }), 'moved'));\n"
             "console.log(out.join('\\n'));\n")
         jf = _tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8")
         jf.write(harness)
@@ -228,19 +240,33 @@ def main():
             lines = [x for x in proc.stdout.splitlines() if x.strip()]
         finally:
             os.unlink(jf.name)
-        check("node 执行成功且输出 5 条",
-              proc.returncode == 0 and len(lines) == 5,
+        check("node 执行成功且输出 7 条",
+              proc.returncode == 0 and len(lines) == 7,
               proc.stderr[:160] or proc.stdout[:160])
-        if proc.returncode == 0 and len(lines) == 5:
+        if proc.returncode == 0 and len(lines) == 7:
             check("止损段（无终态、无 r）：止损 9.00", lines[0] == "止损 9.00", lines[0])
-            check("止损终态：止损 9.00 R（1）已止损(-1.1R)（⑸ 括号格式）",
-                  lines[1] == "止损 9.00 R（1） 已止损(-1.1R)", lines[1])
-            check("保本线：保本 10.50 R（0.5）已止盈(-0.1R)（⑸ 括号格式）",
-                  lines[2] == "保本 10.50 R（0.5） 已止盈(-0.1R)", lines[2])
-            check("跟踪线：跟踪 11.55 3R（1.5）（⑷+⑴，win_loss_ratio×R）",
-                  lines[3] == "跟踪 11.55 3R（1.5）", lines[3])
-            check("跟踪终态：跟踪 11.55 3R（1.5）已止盈(+1.5R)",
-                  lines[4] == "跟踪 11.55 3R（1.5） 已止盈(+1.5R)", lines[4])
+            check("止损终态：止损 9.00 R（1） 已止损",
+                  lines[1] == "止损 9.00 R（1） 已止损", lines[1])
+            check("保本终态：保本 10.50 R（0.5） 已止盈",
+                  lines[2] == "保本 10.50 R（0.5） 已止盈", lines[2])
+            check("初始跟踪（非终态）：初始跟踪 21.63 3R（2.64）（⑸，3×R）",
+                  lines[3] == "初始跟踪 21.63 3R（2.64）", lines[3])
+            check("初始跟踪终态：… 已止盈",
+                  lines[4] == "初始跟踪 21.63 3R（2.64） 已止盈", lines[4])
+            check("移动跟踪（非终态）：移动跟踪 23.21 4.78R（4.21）（⑹，锁盈 R 与点数）",
+                  lines[5] == "移动跟踪 23.21 4.78R（4.21）", lines[5])
+            check("移动跟踪终态：… 已止盈",
+                  lines[6] == "移动跟踪 23.21 4.78R（4.21） 已止盈", lines[6])
+
+    print("══ ⑪ 终态段右端 = 触发止损止盈的那根 K 线（2026-09-27 用户六改⑴）══")
+    k8 = [_ENTRY, _kl(1, 6, 10.0, 10.2, 8.85, 8.9),   # bar1 收 8.9 < 止损 9.0 → 触发离场
+          _kl(2, 7, 9.0, 9.6, 8.8, 9.4)]              # bar2 在离场之后，不应被终态段覆盖
+    r8 = compute_stock_tpsl("sh600519", _payload(k8, bsp))
+    check("终态段 end_date = 触发 bar（2026-01-06）",
+          r8["terminal"]["end_date"] == "2026-01-06"
+          and r8["segments"][-1]["end_date"] == "2026-01-06", r8["terminal"])
+    check("终态段不再延伸到序列末根（2026-01-07）",
+          r8["terminal"]["end_date"] != k8[-1]["date"], r8["terminal"])
 
     n_pass = sum(1 for x in _ok if x)
     print("\n合计: {} 通过 / {} 失败".format(n_pass, len(_ok) - n_pass))

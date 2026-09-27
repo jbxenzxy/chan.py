@@ -188,10 +188,13 @@ def compute_stock_tpsl(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
                          "fill": chk.fill_price, "reason": reason, "outcome": outcome,
                          "r_multiple": (round((chk.fill_price - entry_price) * sig.side.value / R, 4)
                                         if R > 0 else None)}
-            segments[-1]["end_date"] = last_date
+            # 终态段右端 = 触发 bar（2026-09-27 用户六改⑴：不再延到序列末根，
+            #   否则看不出止盈/止损发生在哪根 K 线）
+            segments[-1]["end_date"] = str(k["date"])
             segments[-1]["terminal"] = True
             terminal = {"phase": _phase_of({"_phase": reason}), "price": chk.price,
-                        "outcome": outcome, "exit_date": str(k["date"]), "end_date": last_date}
+                        "outcome": outcome, "exit_date": str(k["date"]),
+                        "end_date": str(k["date"])}
             break
         pos.exit_plan = chk.plan
         prev_date = str(k["date"])

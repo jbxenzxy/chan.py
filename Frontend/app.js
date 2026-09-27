@@ -8690,26 +8690,34 @@
         //   ⑵ 各段层名前置、空格分隔、无「保护」前缀；数值用全角括号 R（…）：
         //     止损/保本段显示 R 点数，跟踪段显示 3R 点数（win_loss_ratio×R，
         //     前缀动态取 params.win_loss_ratio）；终态段追加 已止损/已止盈(±盈亏R)）
-        function tpslSegLabel(seg, plan) {
+        // kind：trailing 段用 —— "initial"=初次达盈亏比阈值的那段（3R 阈值线），
+        //   "moved"=其后逐级上移的段（标签带锁盈 R 数与点数）；sl/breakeven 段忽略。
+        function tpslSegLabel(seg, plan, kind) {
             const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[seg.phase] || "止损";
             let label = phaseLabel + " " + _fmtPrice(seg.price);
             if (!plan) return label;
             const r = isFinite(plan.r) ? Math.round(plan.r * 100) / 100 : null;
             const wlr = plan.params ? Number(plan.params.win_loss_ratio) : NaN;
-            if (r && seg.phase !== "trailing") {
-                label += " R（" + r + "）";
-            }
-            if (seg.phase === "trailing" && r && isFinite(wlr) && wlr > 0) {
-                label += " " + wlr + "R（" + Math.round(wlr * r * 100) / 100 + "）";
+            const sign = (plan.entry && plan.entry.side === "short") ? -1 : 1;
+            if (seg.phase === "trailing" && kind === "initial") {
+                label = "初始跟踪 " + _fmtPrice(seg.price);
+                if (r && isFinite(wlr) && wlr > 0) {
+                    label += " " + wlr + "R（" + Math.round(wlr * r * 100) / 100 + "）";
+                }
+            } else if (seg.phase === "trailing" && kind === "moved" && r && r > 0) {
+                const locked = Math.round((seg.price - plan.entry.price) * sign
+                    / plan.r * 100) / 100;
+                label = "移动跟踪 " + _fmtPrice(seg.price) + " " + locked
+                    + "R（" + Math.round(locked * plan.r * 100) / 100 + "）";
+            } else {
+                if (r && seg.phase !== "trailing") {
+                    label += " R（" + r + "）";
+                }
             }
             const term = plan.terminal;
             if (seg.terminal && term && term.outcome) {
                 label += " " + ({ sl_exit: "已止损", be_exit: "已止盈",
                     trail_exit: "已止盈" }[term.outcome] || "");
-                const rm = plan.exit && isFinite(plan.exit.r_multiple) ? plan.exit.r_multiple : null;
-                if (rm !== null) {
-                    label += "(" + (rm > 0 ? "+" : "") + Math.round(rm * 100) / 100 + "R)";
-                }
             }
             return label;
         }
@@ -8725,6 +8733,10 @@
             const globalEnd = globalStart + viewCount;
             const segs = _tpslPlan.segments || [];
             const term = _tpslPlan.terminal;
+            let firstTrailing = -1;
+            segs.forEach(function (seg, i) {
+                if (firstTrailing < 0 && seg.phase === "trailing") firstTrailing = i;
+            });
             segs.forEach(function (seg, i) {
                 // 每层只在「该层最后一段」画标签（层名+R/2R+终态）；段宽不够也画，
                 //   文字在保护线上方向左延伸（2026-09-27 实测：宽度门槛会把止损/保本
@@ -8764,7 +8776,9 @@
                 //   左缘兜底不越出图区（完整可见）。文字不加粗（2026-09-27 用户要求）。
                 if (!isLayerLast) return;
                 if (y < area.y + 12 || y > area.y + area.h - 4) return;
-                const label = tpslSegLabel(seg, _tpslPlan);
+                const kind = (seg.phase === "trailing")
+                    ? (i === firstTrailing ? "initial" : "moved") : null;
+                const label = tpslSegLabel(seg, _tpslPlan, kind);
                 ctx.font = "11px monospace";
                 const tw = ctx.measureText(label).width;
                 let tx = Math.min(x2, area.x + area.w) - 6;
