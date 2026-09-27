@@ -8725,7 +8725,11 @@
             const segs = _tpslPlan.segments || [];
             const term = _tpslPlan.terminal;
             segs.forEach(function (seg, i) {
-                const isLast = (i === segs.length - 1);
+                // 每层只在「该层最后一段」画标签（层名+R/2R+终态）；段宽不够也画，
+                //   文字在保护线上方向左延伸（2026-09-27 实测：宽度门槛会把止损/保本
+                //   标签整段吞掉）。逐段标注会糊成一片，故按层取末段。
+                const isLayerLast = (i === segs.length - 1) ||
+                    (segs[i + 1] && segs[i + 1].phase !== seg.phase);
                 const g1 = dateToGlobalIdx(seg.start_date, map);
                 if (g1 === undefined) return;
                 const g2 = dateToGlobalIdx(seg.end_date, map);
@@ -8755,15 +8759,16 @@
                 ctx.lineTo(x2, y);
                 ctx.stroke();
                 ctx.setLineDash([]);
-                // ⑴ 标签画进图内右对齐（段右端；末段=图右缘），不再画到轴留白。
-                //   非末段宽度放得下才画（跟踪段每根 bar 一段，逐段标注会糊成一片）；
-                //   末段恒画 —— 它是当前保护位。文字不加粗（2026-09-27 用户要求）。
+                // ⑴ 标签画进图内右对齐（层末段=通常也是图右缘），不再画到轴留白；
+                //   左缘兜底不越出图区（完整可见）。文字不加粗（2026-09-27 用户要求）。
+                if (!isLayerLast) return;
                 if (y < area.y + 12 || y > area.y + area.h - 4) return;
                 const label = tpslSegLabel(seg, _tpslPlan);
                 ctx.font = "11px monospace";
                 const tw = ctx.measureText(label).width;
-                const tx = Math.min(x2, area.x + area.w) - 6;
-                if (!isLast && tx - tw < x1) return;
+                let tx = Math.min(x2, area.x + area.w) - 6;
+                tx = Math.max(tx, area.x + tw + 4);
+                tx = Math.min(tx, area.x + area.w - 4);
                 const ty = (y - 6 < area.y + 12) ? y + 15 : y - 6;
                 ctx.fillStyle = "#FF9800";
                 ctx.textAlign = "right";
