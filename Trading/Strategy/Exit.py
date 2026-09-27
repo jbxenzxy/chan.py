@@ -176,10 +176,9 @@ class LayeredExitPolicy:
         self.breakeven_trigger_r = float(p.breakeven_trigger_r)
         self.breakeven_buffer_r = float(p.breakeven_buffer_r)
         self.trailing_trigger_r = float(p.trailing_trigger_r)
-        # 跨日清空 ATR 缓冲用
-        self._last_day: str = ""
-
-        # ATR 历史缓冲（on_bar 维护，平着也收）
+        # ATR 历史缓冲（on_bar 维护，平着也收）；跨日连续（Q5，2026-09-27）——
+        # 隔夜/周末跳空本就该进 True Range（日线/周线/30m 下的 2×ATR 因此可用），
+        # 恢复跨日清空会被 Test/test_stock_tpsl.py 的「跨日 ATR 连续」断言拦下。
         self._bars: "deque" = deque(maxlen=self.atr_period + 2)
 
     # ---------- 基类折叠进来的共享方法（本层仅单一实现，无需抽象基类） ----------
@@ -193,15 +192,8 @@ class LayeredExitPolicy:
 
     # ---------- 钩子：每根 K 线（无论持仓与否）都会调用 ----------
     def on_bar(self, bar: Bar, state: "Instrument") -> None:
-        # 跨日清空 ATR 缓冲：昨收 → 今开的隔夜跳空会造出一个巨大 TR。
-        # 30m 下一天只有 8 根 bar、缓冲要 atr_period+1=15 根，
-        # 一个跳空能把近两天的 ATR 都顶高 → 止损/跟踪距离被系统性放大。
-        day = (bar.date or "")[:10]
-        if self._last_day and day and day != self._last_day:
-            self._bars.clear()
-        if day:
-            self._last_day = day
-
+        # 跨日清空已移除（Q5，2026-09-27）：ATR 缓冲跨日连续，隔夜/周末跳空
+        # 本就该进 True Range —— 日线/周线/30m 下的 2×ATR 依赖这份连续缓冲。
         self._bars.append(bar)
 
     # ---------- ATR ----------
@@ -279,8 +271,8 @@ class LayeredExitPolicy:
 
             [1] `A < r_alert_a_floor`（默认 3.0）——评审后**放宽**
                 原实现只在 `A == 0` 出声，恰好把真正会出问题的区间吞掉了。
-                风险窗口是 `0 < A < 地板`：B 未就绪时（on_bar 每交易日 `_bars.clear()`，
-                atr_period=14 → 开盘后前 15 根 bar 的 ATR 必然未就绪）R 只由 A 决定，
+                风险窗口是 `0 < A < 地板`：B 未就绪时（Q5 后 ATR 缓冲跨日连续，
+                B 未就绪只剩「新进程前 atr_period+1 根 bar」这一个窗口）R 只由 A 决定，
                 A=0.1 时止损距离从 3.0 点塌到 1 tick —— 实测同一根普通 bar 下
                 旧版持仓存活、新版第一根就判 sl。三支文案便于 grep 区分成因：
                   `[R 结构距离缺失]` = 信号压根没带分型（fractal ≤ 0 哨兵）；

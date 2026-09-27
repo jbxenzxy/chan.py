@@ -668,6 +668,13 @@ async def api_stocks_save_annotation(code: str = Path(...), body: dict = Body(..
     return _json_response(data, status)
 
 
+@router.post("/api/stocks/{code}/tpsl")
+async def api_stocks_tpsl(code: str = Path(...), body: dict = Body(...)):
+    """股票页「止盈止损」图上推演（v1.5 §4；纯推演零副作用）"""
+    data = await run_in_threadpool(orch.call_stock_tpsl, dict(body or {}, code=code))
+    return _json_response(data)
+
+
 @router.get("/api/stocks/scan/annotation")
 async def api_stocks_scan_annotation(freq: str = Query("")):
     """自选扫描：返回有标注的股票列表"""

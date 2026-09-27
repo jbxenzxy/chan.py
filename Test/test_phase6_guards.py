@@ -86,7 +86,7 @@ WINDOW_BASELINE = {
     'updateScanRecentDisabled', 'updateScanSaveBtn', 'updateSearchSelection', 'updateWeekday',
 }
 # 允许的登记性新增（组件注册表）
-WINDOW_ALLOWED_NEW = {"ChanApp"}
+WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel"}
 # 允许的登记性新增（HTML 内联事件桥）
 # app.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
 # 闭包内 —— 不挂 window 时点击即抛 ReferenceError。两起真实故障（自动下单开关

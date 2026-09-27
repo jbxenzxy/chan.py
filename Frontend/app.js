@@ -118,6 +118,10 @@
         // 翻转视图模式：将上涨行情反转为下跌、下跌反转为上涨（缠论做空视角）
         let _isMirrorMode = false;
 
+        // 股票「止盈止损」图上推演（v1.5 §4）：激活标志 + 后端推演计划
+        let _tpslActive = false;
+        let _tpslPlan = null;
+
         // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
         let _restartEnabled = false;
 
@@ -1399,6 +1403,8 @@
             drawWhiteHLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             // 保护价线只画主图（dualSubData 是双窗副图；单窗模式它为 null，恒不等 → 恒画）
             if (data !== dualSubData) drawProtectionLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            // 股票「止盈止损」分段横虚线：只画主图（与保护价线同一约定）
+            if (data !== dualSubData) drawTpslLines(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawViewportHighLow(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             _overlayData = null;
@@ -3003,6 +3009,7 @@
             if (isDualWindow) {
                 // 关闭双窗口
                 isDualWindow = false;
+                _tpslReset();  // S3：关双窗清空止盈止损推演
                 activeDualWindow = 'main';
                 dualSubData = null;
                 dualSubFreq = '';
@@ -4404,6 +4411,7 @@
         window.loadStock = function() {
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
+            _tpslReset();  // S3：切代码/切周期/复盘/市场切换清空止盈止损推演
             // 交易引擎运行中禁止切换合约：运行中的引擎绑定旧合约的持仓/SSE 流，
             // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
             if (autoOrderRunning) {
@@ -7300,6 +7308,9 @@
             const menuDelAll = document.getElementById("annotation-menu-del-all");
             const menuDivider2 = document.getElementById("annotation-menu-divider2");
             const menuMirror = document.getElementById("annotation-menu-mirror");
+            const menuTpsl = document.getElementById("annotation-menu-tpsl");
+            const menuTpslCancel = document.getElementById("annotation-menu-tpsl-cancel");
+            const menuDivider3 = document.getElementById("annotation-menu-divider3");
             // 更新翻转视图菜单项文字（显示当前状态）
             menuMirror.textContent = _isMirrorMode ? "取消翻转" : "翻转视图";
             if (_annotationClickTarget) {
@@ -7322,6 +7333,15 @@
             // 翻转视图始终显示（与标注操作无关，是全局视图模式）
             menuDivider2.style.display = "block";
             menuMirror.style.display = "block";
+
+            // 「止盈止损」仅股票页 + 命中 0123 类买卖点的 K 线显示（P2-1）；
+            // 激活期间同根右键换成「取消盈损」（N1 方案 b：归一/取首/warn 在前端）
+            const _tpslHit = !isFuturesMode() &&
+                _tpslBspCandidates(_annotationTargetDate).length > 0;
+            menuDivider3.style.display = _tpslHit ? "block" : "none";
+            menuTpsl.style.display = (!_tpslActive && _tpslHit) ? "block" : "none";
+            menuTpslCancel.style.display = (_tpslActive && _tpslHit) ? "block" : "none";
+            if (_tpslHit) menuTpsl.textContent = _tpslActive ? "取消盈损" : "止盈止损";
 
             menu.style.left = e.clientX + "px";
             menu.style.top = e.clientY + "px";
@@ -8579,8 +8599,148 @@
             ctx.fillStyle = "#FF9800";
             ctx.font = "bold 11px monospace";
             ctx.textAlign = "left";
-            ctx.fillText("保护 " + _fmtPrice(protectionLine.price) + "·" + phaseLabel,
-                         area.x + area.w + 4, y + 4);
+                ctx.fillText("保护 " + _fmtPrice(protectionLine.price) + "·" + phaseLabel,
+                             area.x + area.w + 4, y + 4);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // 股票页「止盈止损」图上推演（v1.5 §4）
+        //   归一 + 同根取首 + console.warn 全在前端（N1 方案 b）；
+        //   后端 /api/stocks/{code}/tpsl 只校验送去的单个 bsp。
+        // ══════════════════════════════════════════════════════════════
+        // type 复合串归一：任一分量去尾部 psab 变体后 ∈ {0,1,2,3} 即命中
+        //（与后端 AppTPSL._type_hits_0123 / CEnum.BSP_TYPE.main_type 同口径）
+        function _tpslTypeHit(typeStr) {
+            return String(typeStr || "").split(",").some(function (seg) {
+                return ["0", "1", "2", "3"].indexOf(seg.trim().replace(/[psab]+$/, "")) >= 0;
+            });
+        }
+        // 同根候选（不在此处判市场：调用方已用 isFuturesMode 拦截）
+        function _tpslBspCandidates(date) {
+            if (!chartData || !chartData.bsps) return [];
+            return chartData.bsps.filter(function (b) {
+                return b.date === date && _tpslTypeHit(b.type);
+            });
+        }
+        // 取首 + 可观测告警（N1：多于一个时 console.warn，不静默）
+        function _tpslBspPick(date) {
+            const cands = _tpslBspCandidates(date);
+            if (!cands.length) return null;
+            if (cands.length > 1) {
+                console.warn("[止盈止损] 同根多个买卖点，取首个:", date,
+                    cands.map(function (b) { return b.type; }).join(" / "));
+            }
+            return cands[0];
+        }
+        function _tpslReset() {
+            if (!_tpslActive && !_tpslPlan) return;
+            _tpslActive = false;
+            _tpslPlan = null;
+        }
+        // 右键菜单 → 组装 payload → 后端推演 → 存计划 → 重绘
+        window.stockTpslFromMenu = function () {
+            document.getElementById("annotation-menu").classList.remove("show");
+            if (_tpslActive || isFuturesMode() || !chartData || !chartData.klines) return;
+            const bsp = _tpslBspPick(_annotationTargetDate);
+            if (!bsp) return;
+            const klines = chartData.klines;
+            const entryIdx = klines.findIndex(function (k) { return k.date === bsp.date; });
+            if (entryIdx < 0) return;
+            const code = chartData.meta && chartData.meta.symbol ? chartData.meta.symbol : "";
+            if (!code) return;
+            const payload = {
+                code: code,
+                freq: currentFreq,
+                klines: klines.slice(Math.max(0, entryIdx - 60)),   // 预热 60 根 + 推演到末根
+                bsp: bsp
+            };
+            fetch("/api/stocks/" + encodeURIComponent(code) + "/tpsl", {
+                method: "POST",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }).then(function (resp) {
+                if (!resp.ok) {
+                    resp.json().catch(function () { return {}; }).then(function (err) {
+                        showToast("止盈止损推演失败（HTTP " + resp.status + "）" +
+                            (err && err.detail ? "：" + err.detail : ""));
+                    });
+                    return null;
+                }
+                return resp.json();
+            }).then(function (data) {
+                if (!data) return;
+                _tpslPlan = data;
+                _tpslPlan.code = code;
+                _tpslPlan.freq = currentFreq;
+                _tpslActive = true;
+                render();
+            }).catch(function (e) {
+                showToast("止盈止损推演请求异常：" + e);
+            });
+        };
+        // 取消盈损：清计划 + 重绘（Q4：无提示、无结束弹窗）
+        window.stockTpslCancel = function () {
+            document.getElementById("annotation-menu").classList.remove("show");
+            _tpslReset();
+            render();
+        };
+        // 分段横虚线（v1.5 §4.6-⑤）：照抄 drawProtectionLine 的橙虚线与右端标签口径；
+        //   segments 分段、末段（含 terminal）画到图最右、标签加「已」与实际 R 数（含负，Q11）。
+        function drawTpslLines(klines, area, priceRange, barStep, subPixelOffset) {
+            if (!_tpslActive || !_tpslPlan) return;
+            // 代码/周期不匹配（切视图后未显式取消）→ 不画（防旧线残留误导，S3）
+            const meta = chartData && chartData.meta ? chartData.meta : null;
+            if (!meta || _tpslPlan.code !== meta.symbol || _tpslPlan.freq !== currentFreq) return;
+            const map = buildGlobalDateMap();
+            const globalStart = Math.max(0, Math.floor(viewOffset));
+            const globalEnd = globalStart + viewCount;
+            const segs = _tpslPlan.segments || [];
+            const term = _tpslPlan.terminal;
+            segs.forEach(function (seg, i) {
+                const isLast = (i === segs.length - 1);
+                const g1 = dateToGlobalIdx(seg.start_date, map);
+                if (g1 === undefined) return;
+                const g2 = dateToGlobalIdx(seg.end_date, map);
+                if (g2 !== undefined && g2 < globalStart) return;
+                if (g1 >= globalEnd) return;
+                const x1 = (g1 < globalStart) ? area.x
+                    : globalIdxToX(g1, globalStart, area.x, barStep, subPixelOffset);
+                const x2 = (g2 === undefined || g2 >= globalEnd)
+                    ? area.x + area.w
+                    : globalIdxToX(g2, globalStart, area.x, barStep, subPixelOffset);
+                const y = priceToY(seg.price, area, priceRange);
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(area.x, area.y, area.w, area.h);
+                ctx.clip();
+                ctx.strokeStyle = "#FF9800";
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x1, y);
+                ctx.lineTo(x2, y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+                if (!isLast) return;
+                if (y < area.y || y > area.y + area.h) return;
+                const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[seg.phase] || "止损";
+                let label = "保护 " + _fmtPrice(seg.price) + "·" + phaseLabel;
+                if (term && term.outcome) {
+                    const ol = { sl_exit: "已止损", be_exit: "已止盈", trail_exit: "已止盈" }[term.outcome] || "";
+                    const rm = (_tpslPlan.exit && isFinite(_tpslPlan.exit.r_multiple))
+                        ? " (R " + (_tpslPlan.exit.r_multiple > 0 ? "+" : "") + _tpslPlan.exit.r_multiple + ")"
+                        : "";
+                    label += "·" + ol + rm;
+                } else if (isFinite(_tpslPlan.r)) {
+                    label += "·R " + _tpslPlan.r;
+                }
+                ctx.fillStyle = "#FF9800";
+                ctx.font = "bold 11px monospace";
+                ctx.textAlign = "left";
+                ctx.fillText(label, area.x + area.w + 4, y + 4);
+            });
         }
 
         // ══════════════════════════════════════════════════════════════

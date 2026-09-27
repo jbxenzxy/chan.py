@@ -1188,6 +1188,9 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
                 bsp_ts = int(bsp_dt.timestamp()) * 1000
             except:
                 bsp_ts = 0
+            # 结构止损参考（v1.5 坑 1 修）：终结该买卖点那笔的端点分型极值，
+            #   口径与期货侧 AppSSE 一致；R 的 A 分量（分型极值距离）依赖它。
+            f_klu = bsp.bi.get_end_klu()
             bsp_data.append({
                 "date": bsp_date, "timestamp": bsp_ts,
                 "type": bsp.type2str(),
@@ -1195,6 +1198,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
                 "price": klu.close,
                 "high": klu.high,
                 "low": klu.low,
+                "fractal_low": round(f_klu.low, 3),
+                "fractal_high": round(f_klu.high, 3),
             })
     except Exception as e:
         log.info(f"[调试] 获取买卖点失败: {e}")
@@ -1510,6 +1515,9 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
                 bsp_ts = int(bsp_dt.timestamp()) * 1000
             except:
                 bsp_ts = 0
+            # 结构止损参考（v1.5 坑 1 修）：终结该买卖点那笔的端点分型极值，
+            #   口径与期货侧 AppSSE 一致；R 的 A 分量（分型极值距离）依赖它。
+            f_klu = bsp.bi.get_end_klu()
             bsp_data.append({
                 "date": bsp_date, "timestamp": bsp_ts,
                 "type": bsp.type2str(),
@@ -1517,6 +1525,8 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
                 "price": klu.close,
                 "high": klu.high,
                 "low": klu.low,
+                "fractal_low": round(f_klu.low, 3),
+                "fractal_high": round(f_klu.high, 3),
             })
     except Exception as e:
         log.info(f"[调试] 子级别获取买卖点失败: {e}")

@@ -30,6 +30,7 @@
  "POST /api/stocks/scan/{task_id}/cancel",
  "POST /api/stocks/{code}/save/annotation",
  "POST /api/stocks/{code}/select/point",
+ "POST /api/stocks/{code}/tpsl",
  "POST /api/trader/auto-order/ack",
  "POST /api/trader/auto-order/off",
  "POST /api/trader/auto-order/on",

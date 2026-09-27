@@ -501,6 +501,8 @@ COMPONENTS = [
     # 连跳过汇总都不进（静默少一只）。故障注入驱动（假 future + 真实临时库）。
     ("scanpool_result_gap",
      [sys.executable, os.path.join("Test", "test_scanpool_result_gap.py")]),
+    ("stock_tpsl",
+     [sys.executable, os.path.join("Test", "test_stock_tpsl.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

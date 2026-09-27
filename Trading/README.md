@@ -187,6 +187,12 @@ python Tool/SimNow/SimNowProbe.py
                                                       StateDB/TradeStats/EventLog）──┘
 ```
 
+仓库根的股票后端（App/）以**库方式**调用本目录的纯计算入口
+（既有：Infra / Config；新增：App/AppTPSL.py 惰性 import
+Strategy.LayeredExitPolicy 做股票页「止盈止损」图上推演）——只调
+plan()/check() 两个纯计算入口，不 import Engine/Broker/StateDB，
+不触碰状态机与装配约束。
+
 依赖方向严格单向：`Infra` 层零跨层 import；下层零反向 import。`Engine` 是唯一枢纽。
 `Reconcile.py` 以 Mixin 形式挂回引擎，只依赖 Infra 数据结构与 `self` 注入的上下文
 （`Engine/Reconcile.py:20`）。
@@ -385,12 +391,12 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 | L3 | 保本 + 跟踪锁利 | 浮盈 **>** `breakeven_trigger_r`×R 时把止损抬到入场价 ± `breakeven_buffer_r`×R；跟踪缓冲 = `trailing_trigger_r`×R |
 
 价格线**只有一条 `stop_price`**（初始止损 → 保本 → 跟踪，逐级改写它），所以不存在
-"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:407`），
+"只改了止损、漏改止盈"的可能；`plan()` 生成**零个止盈单**（返回的 `ExitPlan` 只有 `stop_price`，无止盈字段 `Strategy/Exit.py:399`），
 止盈完全交给 L3 的跟踪兑现。两个"浮盈达标"阈值（进保本 / 进跟踪）与止损线一律**严格不等**
 （`>` / `<`，"恰好相等"不算触发）—— 离场因此晚一格、不会提前打掉。
 
 **每根 K 线内的判定顺序 = 先按有利侧极值抬保护价，再用本根收盘价判触发**
-（`LayeredExitPolicy.check()` `Strategy/Exit.py:410`）：`check()` 先读根内极值（做多 `high` /
+（`LayeredExitPolicy.check()` `Strategy/Exit.py:402`）：`check()` 先读根内极值（做多 `high` /
 做空 `low`）定出**本根立即生效**的保护价，再拿本根收盘价比它 —— 达标那根若收盘已落在**新**
 保护价的不利侧，**当根即离场**（成交参考价 = 该根收盘价，`fill_price`）。旧顺序（触发判据在
 前、达标命中即只更新计划、新保护价最快下一根生效）已废弃。代价是"冲高回落"形态里下车更早、
@@ -399,7 +405,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 `Test/test_p61_exit_close_only.py` 用 AST 行号钉死（`_fav_extreme()` 调用必须早于触发比较）。
 
 L3 启动阈值 = 品种级 `win_loss_ratio`（数值见 `Infra/Product.py` 各品种条目），各品种
-按同一倍数达标、点数距离随各自 R 变（`Strategy/Exit.py:478-479`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
+按同一倍数达标、点数距离随各自 R 变（`Strategy/Exit.py:470-471`）。原 L4 时间/收盘兜底、`min_r_points` 地板、
 `stop_at_signal_extreme` 开关均已删除。**`trailing_trigger_r` 仍在**（`Config.py:310`），
 但角色已从"L3 触发阈值"换成"跟踪缓冲倍数"（× R，与 `breakeven_*_r` 同单位）。
 
@@ -654,7 +660,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 | 行号漂移 | 60 余处 `文件:行` | 全部按现行代码重取；`Config` 章因 `use_trailing` 字段删除整体 −1 |
 | 已删机制（语义） | 5 段 | `EngineConfig` 三套自动兜底、§7.3 的 A′ 三档取值、§7.4 涨跌停、§4.3 的 `apply_quote` 通道、§6.5 的"三道防护" |
 | 数值 / 计数 | 20 处 | §二 目录行数（13 个文件变了）、测试脚本数 58 → **64**、§3.4「四个端点」→ **五个** |
-| 引用证据性 | 30 处引用 | 原引用有相当一部分落在**注释 / docstring** 上（注释不能当证据）。其中 **17 处**改指真实可执行行（如 `Exit.py:342` 注释 → `:361` 的 `return`、`SSE.py:19` 注释 → `:154` 的 `if dist_bars > …`），**13 处**目标确实只能是说明文字的，在正文写明「docstring」或「注释」 |
+| 引用证据性 | 30 处引用 | 原引用有相当一部分落在**注释 / docstring** 上（注释不能当证据）。其中 **17 处**改指真实可执行行（如 `Exit.py:334` 注释 → `:361` 的 `return`、`SSE.py:19` 注释 → `:154` 的 `if dist_bars > …`），**13 处**目标确实只能是说明文字的，在正文写明「docstring」或「注释」 |
 
 **核实方法**（可复跑，三个脚本都在沙盒 `internal/`）：
 

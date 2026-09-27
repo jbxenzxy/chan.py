@@ -153,6 +153,16 @@ def handle_annotation_action(body):
         return {"error": f"未知action: {action}"}, 400
 
 
+def call_stock_tpsl(body):
+    """股票页「止盈止损」图上推演（/api/stocks/{code}/tpsl，v1.5 §4）
+
+    图表交互域漏斗壳：实现全部下沉 App/AppTPSL.py（对 Trading 惰性 import，
+    校验失败抛 BadRequestError → FrontAPI 统一映射 400）。纯推演零副作用。
+    """
+    from App.AppTPSL import compute_stock_tpsl
+    return compute_stock_tpsl((body or {}).get("code", ""), body or {})
+
+
 def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
     """股票手动选点（REST 唯一入口，无锁）
 
