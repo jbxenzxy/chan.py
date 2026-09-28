@@ -311,7 +311,7 @@ class ExitConfig(BaseModel):
                                                 #   R = max(分型距离, 2×ATR)
                                                 #   L3 的跟踪兑现（trail_dist = trailing_trigger_r × R）
                                                 #   L3 启动阈值 = win_loss_ratio（品种档案；具体倍数见档案条目）
-                                                #   即 浮盈 > win_loss_ratio × R 时进 L3（严格不等）
+                                                #   即 浮盈 **>** win_loss_ratio × R 时进 L3（严格不等）
 
     @model_validator(mode="after")
     def _check_exit_param_order(self) -> "ExitConfig":
@@ -343,6 +343,13 @@ class ExitConfig(BaseModel):
                 "（若确要「浮盈即锁利」，把 breakeven_trigger_r 设 0 关掉该层，"
                 "或让 buffer 小于 trigger）".format(
                     self.breakeven_buffer_r, self.breakeven_trigger_r))
+        if self.trailing_trigger_r < 0:
+            raise ValueError(
+                "exit_params: trailing_trigger_r({}) 必须 ≥ 0 —— 负距离会把跟踪保护价"
+                "放到最好极值的**不利侧之外**（比创新高还高），下一根 bar 即触发离场，"
+                "语义荒谬。0 是合法档：跟踪线贴着最好极值（越过启动阈值后的任意回落"
+                "即离场），与正值同一公式、无特例分支。".format(
+                    self.trailing_trigger_r))
         return self
 
 

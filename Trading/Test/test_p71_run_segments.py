@@ -26,6 +26,8 @@
 """
 from __future__ import annotations
 
+import io
+import json
 import os
 import sys
 from contextlib import contextmanager
@@ -211,6 +213,73 @@ def main():
         all_prices = [s["price"] for s in segs]
         check("[8] tick 对齐", all(abs(p / _TICK - round(p / _TICK)) < 1e-6
                                    for p in all_prices), True)
+
+        print("\n[9] trailing_trigger_r=0：与正值同一公式（跟踪线贴最好极值）")
+        with tmp_dir() as tmp:
+            cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+            spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
+            store = Store(os.path.join(tmp, "state.db"))
+            ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False,
+                          echo_kinds=None)
+            engine = TradingEngine(cfg, DryRunBroker(spec, {"sim_equity": 1e6}),
+                                   EntryPolicy({}),
+                                   LayeredExitPolicy({"win_loss_ratio": 2.0,
+                                                      "trailing_trigger_r": 0.0}),
+                                   store, ev)
+            engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
+            engine.on_signal(make_signal())
+            anchor = engine._run_anchor
+            R = engine._run_plan.params["R"]
+            # 越阈根： favorable 极值越过盈亏比阈值，且**收盘 == 高点**（收盘
+            # 恰在跟踪线上 → 严格不等 → 存活），观察段阶梯。
+            _h3 = anchor + _RESOLVED_WLR * R + 0.8
+            engine.on_bar(make_bar(2000, "2026-09-01 09:45",
+                                   o=4550.0, h=_h3, l=4548.0, c=_h3))
+            segs = run_view(engine)["segments"]
+            # t=0 下保本抬价与跟踪抬价同根发生、保护价一步到极值 —— 保本位从未
+            # 生效过，段历史如实记 sl → trailing（不虚构一个保本段）。
+            check("[9a] 段序列 = sl → trailing（保本位被跟踪位同根超越，不虚构段）",
+                  [s["phase"] for s in segs], ["sl", "trailing"])
+            check("[9a2] 收盘恰在跟踪线上不触发（严格不等，run 仍在）",
+                  run_view(engine) is not None, True)
+            check("[9b] 初始跟踪位 = 最好极值本身（距离 0 贴极值，tick 对齐）",
+                  segs[1]["price"], _INST.round_price(_h3, "up"))
+            # 次根回落 → 任意回落即离场（保护价贴着极值）
+            engine.on_bar(make_bar(3000, "2026-09-01 09:50",
+                                   o=_h3, h=_h3 + 0.2, l=4548.0,
+                                   c=_h3 - 5 * _TICK))
+            check("[9c] 回落即离场（run 清空，与正值配置同语义）",
+                  (run_view(engine), engine._run_segments), (None, []))
+
+        # 同根先抬价再离场：越阈根收盘明显低于极值 → 当根离场，reason=trailing
+        with tmp_dir() as tmp:
+            cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+            spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
+            store = Store(os.path.join(tmp, "state.db"))
+            ev = EventLog(os.path.join(tmp, "events.jsonl"), echo=False,
+                          echo_kinds=None)
+            engine = TradingEngine(cfg, DryRunBroker(spec, {"sim_equity": 1e6}),
+                                   EntryPolicy({}),
+                                   LayeredExitPolicy({"win_loss_ratio": 2.0,
+                                                      "trailing_trigger_r": 0.0}),
+                                   store, ev)
+            engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
+            engine.on_signal(make_signal())
+            anchor = engine._run_anchor
+            R = engine._run_plan.params["R"]
+            engine.on_bar(make_bar(2000, "2026-09-01 09:45",
+                                   o=4550.0, h=anchor + _RESOLVED_WLR * R + 0.8,
+                                   l=4548.0, c=4595.0))
+            check("[9d] 越阈根收盘低于极值 → 先抬价到极值、当根即离场",
+                  (run_view(engine), engine._run_segments), (None, []))
+            engine.ev.flush()
+            _upd = [r for r in (json.loads(l) for l in io.open(
+                os.path.join(tmp, "events.jsonl"), encoding="utf-8"))
+                if r.get("kind") == "exit_plan_update"]
+            check("[9e] 抬价事件 reason=trailing、stop=极值（标签与画线价位一致）",
+                  [(u.get("reason"), u.get("stop")) for u in _upd],
+                  [("trailing", _INST.round_price(
+                      anchor + _RESOLVED_WLR * R + 0.8, "up"))])
 
     print("\n" + "=" * 60)
     print("p71_run_segments: {} passed, {} failed".format(_PASS, _FAIL))

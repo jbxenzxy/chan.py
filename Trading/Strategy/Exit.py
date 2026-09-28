@@ -482,14 +482,17 @@ class LayeredExitPolicy:
                     new_stop = be
 
             # 跟踪：浮盈 **>** win_loss_ratio·R → 跟踪保护价（trail_dist = trailing_trigger_r × R，
-            #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）
+            #   R 倍数口径，与 breakeven_*_r 同单位；只朝有利方向移动）。
+            #   trailing_trigger_r 取 0 与任意正值**同一公式**、无特例分支（2026-09-28
+            #   用户拍板「[0, 盈亏比] 全域逻辑一致」）：距离 0 ⇒ 跟踪线贴着最好极值，
+            #   越过阈值后的任意回落当根即离场；负值由 Config._check_exit_param_order
+            #   启动期拒绝（负距离 = 保护价越过极值的不利侧，语义荒谬）。
             if tracking_started:
                 trail_dist = self.trailing_trigger_r * R
-                if trail_dist and trail_dist > 0:
-                    tgt = (best - trail_dist) if is_long else (best + trail_dist)
-                    tgt = state.round_price(tgt, "up" if is_long else "down")
-                    if (is_long and tgt > new_stop) or (not is_long and tgt < new_stop):
-                        new_stop = tgt
+                tgt = (best - trail_dist) if is_long else (best + trail_dist)
+                tgt = state.round_price(tgt, "up" if is_long else "down")
+                if (is_long and tgt > new_stop) or (not is_long and tgt < new_stop):
+                    new_stop = tgt
 
             # 阶段标记（需求 ⑷(3)(4)，2026-09-18）：引擎据此在阶段跃迁时 toast。
             # 策略层只负责标注当前风控阶段，通知职责在引擎。

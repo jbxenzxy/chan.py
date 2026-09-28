@@ -2380,8 +2380,15 @@ class TradingEngine(ReconcileMixin):
         """把计划的一次生效记为一段（phase / price / 左端 bar 日期）。
 
         phase 归一：初始计划没有 `_phase` 键 → "sl"（与股票推演 _phase_of 同口径）。
+        同层同价**不开新段**：段的语义是"保护价的一次生效区间"，价格与层都没变
+        就没有新区间（典型场景：`trailing_trigger_r=0` 时跟踪层不抬价，但跟踪
+        启动后每根新高 bar 都会出一份新计划 —— 不去重会把同一价位切成几十段）。
         """
         phase = str(plan.params.get("_phase") or "") or "sl"
+        if (self._run_segments
+                and self._run_segments[-1]["phase"] == phase
+                and self._run_segments[-1]["price"] == plan.stop_price):
+            return
         seg_date = (bar.date if bar is not None
                     else (self.last_bar.date if self.last_bar is not None else ""))
         self._run_segments.append({"phase": phase, "price": plan.stop_price,
