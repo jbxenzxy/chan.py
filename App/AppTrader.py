@@ -404,7 +404,14 @@ class AppTrader:
                 raise
             # 登录链路：选择框给定 → 覆盖配置的 broker 三件套（子进程 env 注入）；
             # 未给定（None，CLI/其它调用方）→ 完全沿用配置，行为与改造前一致。
-            resolved = self._resolve_link(cfg, link)
+            try:
+                resolved = self._resolve_link(cfg, link)
+            except AppError as e:
+                # 与实盘闸门（下方 _check_live_gate）同口径：拒绝原因落 gateway.log，
+                # 日志足迹一致（未知链路 / 实盘前置缺失等 BadRequestError → 400 文案，
+                # 此处留痕便于排查，响应文案仍由 API 层带出）。
+                self._engine_log(log_file, "登录链路解析失败: {}".format(e))
+                raise
             broker = resolved["broker"] if resolved else str(cfg.broker or "dry_run")
             try:
                 self._check_live_gate(
@@ -1220,7 +1227,7 @@ class AppTrader:
         """选择框的两个选项及其可用性（前端据此置灰并取默认项）。
 
         实盘选项的双重前置（用户 2026-09-28 拍板「保留双层」）：
-          ① 期货公司名已配（tq_market≠simnow）—— 缺它 broker=live 会被
+          ① 期货公司名已配（tq_market≠simnow）—— 缺它 brofer=live 会被
              SimNow.py 判成"配置矛盾"直接拒绝，必须先配；
           ② confirm_live_trading=true —— 保留为「我有实盘资格」的总开关，
              界面上的选择只是第二层确认，不取代它。
@@ -1344,17 +1351,22 @@ class AppTrader:
         current：本次启动实际用的链路（显式选择优先，否则由 broker 名反推）；
         last：state.db 里持久化的上次选择 —— 前端用它当默认项；
         options：见 link_options（含实盘选项的置灰原因）。
+
+        ⚠️ _load_cfg() 必须落在下方 try 内：配置损坏（.env 未知键 / 类型错 →
+        pydantic 拒绝 → AppError）时，异常要走 options=[] + error 降级路径，
+        而不是穿透 _link_view 让状态轮询每 5s 抛一次。此前 _load_cfg() 在
+        try 外，注释承诺的降级不可达（except 只包了几乎不抛的 link_options）。
         """
-        cfg_for_view = self._load_cfg()
         cur = self._link_from_broker(handle.broker) if handle is not None else None
         if handle is not None and handle.link:
             cur = handle.link
         view: Dict[str, Any] = {
             "current": cur,
             "last": self._read_link_choice(out_dir) or cur,
-            "market": self._live_market(cfg_for_view),
         }
         try:
+            cfg_for_view = self._load_cfg()
+            view["market"] = self._live_market(cfg_for_view)
             view.update(self.link_options(cfg_for_view))
         except Exception as e:
             # 配置读不出来时不下发选项（前端提示），而不是给一份"都可选"的

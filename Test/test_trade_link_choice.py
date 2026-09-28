@@ -261,7 +261,9 @@ check("⑥ 默认项取上次选择（info.last）",
 check("⑥ 选项只认后端下发的 link_view（前端不复制判据）",
       "autoOrderLinkInfo = data.link_view" in JS, True)
 check("⑥ link_view 携带 market（实盘显示期货公司名，不靠硬编码）",
-      '"market": self._live_market(cfg_for_view)' in _APPTRADER_SRC, True)
+      'view["market"] = self._live_market(cfg_for_view)' in _APPTRADER_SRC
+      and '_load_cfg()' in _APPTRADER_SRC.split('_link_view')[1].split('return view')[0],
+      True)
 # 文案契约（2026-09-28 用户拍板）：标题就三个字「登录方式」，不带操作说明行。
 # 早先写的是「选择自动下单的登录方式\n（取消或点击对话框外区域＝不启动）」——
 # 既啰嗦又把"怎么取消"当成免责声明印在框里。行为（Esc / 点框外 / 取消按钮）

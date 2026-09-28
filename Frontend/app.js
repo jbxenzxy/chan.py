@@ -9279,7 +9279,14 @@
                 // 用置灰态重算 disabled，而不是无脑置 false ——
                 // 否则一次开启/关闭请求就会把"未标定品种"的灰态解除
                 applyAutoOrderTradableUI();
-                if (label) { label.textContent = '自动下单'; label.className = 'auto-order-label'; }
+                // 仅在未成功起停时复位标签：开启成功路径已在 pollAutoOrderStatus()
+                // 里把标签渲染成彩色链路（SimNow / 期货公司名），若这里无脑复位会
+                // 让标签闪一下"自动下单"再等下一轮 5s 轮询才恢复（纯视觉瑕疵）。
+                // 成功起停后 autoOrderRunning 已是目标态，跳过复位即可保持彩色标签。
+                if (label && !autoOrderRunning) {
+                    label.textContent = '自动下单';
+                    label.className = 'auto-order-label';
+                }
             }
         }
 

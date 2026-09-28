@@ -286,6 +286,11 @@ COMPONENTS = [
     #   选项持久化在 state.db（kv ao_link）；点框外 / Esc / 取消 = 不启动。
     ("trade_link_choice",
      [sys.executable, os.path.join("Test", "test_trade_link_choice.py")]),
+    # _link_view 配置损坏降级路径（P2 修复：_load_cfg 移入 try，异常走
+    # options=[] + error 而非穿透状态轮询）。对照实验：钉死 _load_cfg 抛错，
+    # 断言不抛异常且返回降级视图。
+    ("link_view_downgrade",
+     [sys.executable, os.path.join("Test", "test_link_view_downgrade.py")]),
     # 出场判定只读收盘价（2026-09-22 口径，p61）：
     #   触发判据不再读本根 high/low（AST 钉死 check() 函数体内不得出现
     #   .high / .low）；"是否达标"只读根内有利极值且必经 `_fav_extreme()`；
