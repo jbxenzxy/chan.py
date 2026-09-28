@@ -283,6 +283,8 @@ COMPONENTS = [
     #   钉住「零行号 / 锚点可 grep / 反引号配对 / 表格结构」四项，防行号回潮。
     ("readme_anchor_refs",
      [sys.executable, os.path.join("Test", "test_readme_anchor_refs.py")]),
+    ("docs_line_refs",
+     [sys.executable, os.path.join("Test", "test_docs_line_refs.py")]),
     # 登录链路选择（2026-09-28）：开关先弹「SimNow / 实盘」选择框，选定值以
     #   环境变量注入子进程（三个键名逐键钉死并对 TradingConfig 做真消费验证）；
     #   实盘两个前置（期货公司名 / confirm_live_trading）缺任一即拒绝；
