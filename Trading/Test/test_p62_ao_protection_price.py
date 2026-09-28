@@ -372,13 +372,13 @@ else:
     #   必须回来改这条。
     _wrap_seg = HTML[HTML.index('id="auto-order-wrap"'):
                      HTML.index('id="auto-order-ledger-panel"')]
-    #   2026-09-28 追加末位 `auto-order-link`（当前登录方式徽标，位于「账本」之后）：
-    #   清单仍是全等断言，加一项 = 有人动过展示顺序，必须回来确认。
-    check("[8b] auto-order 一组子元素顺序 = 受控清单（徽标已从清单移除）",
+    #   2026-09-28 第三轮：当前登录方式改为复用 `auto-order-label`（运行中直接显示
+    #   链路，关着显示「自动下单」），不再单独占一个徽标 —— 故清单末位无 auto-order-link。
+    #   清单仍是全等断言，顺序一变 = 有人动过展示顺序，必须回来确认。
+    check("[8b] auto-order 一组子元素顺序 = 受控清单（登录方式复用 auto-order-label，无独立徽标）",
           re.findall(r'id="([\w-]+)"', _wrap_seg),
           ["auto-order-wrap", "auto-order-dot", "auto-order-label",
-           "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn",
-           "auto-order-link"])
+           "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn"])
     check("[8b2] 旧渲染函数 renderAutoOrderPrice 在 app.js 零残留",
           "renderAutoOrderPrice" in JS, False)
     # ── 画线组件就位 ──

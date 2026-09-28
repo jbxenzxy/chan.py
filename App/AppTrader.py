@@ -1345,15 +1345,17 @@ class AppTrader:
         last：state.db 里持久化的上次选择 —— 前端用它当默认项；
         options：见 link_options（含实盘选项的置灰原因）。
         """
+        cfg_for_view = self._load_cfg()
         cur = self._link_from_broker(handle.broker) if handle is not None else None
         if handle is not None and handle.link:
             cur = handle.link
         view: Dict[str, Any] = {
             "current": cur,
             "last": self._read_link_choice(out_dir) or cur,
+            "market": self._live_market(cfg_for_view),
         }
         try:
-            view.update(self.link_options(self._load_cfg()))
+            view.update(self.link_options(cfg_for_view))
         except Exception as e:
             # 配置读不出来时不下发选项（前端提示），而不是给一份"都可选"的
             # 假清单 —— 那样用户点了实盘才在启动时被闸门拦，反馈晚一拍。

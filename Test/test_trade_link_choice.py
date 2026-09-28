@@ -64,6 +64,8 @@ with open(os.path.join(REPO, "Frontend", "app.html"), encoding="utf-8") as f:
     HTML = f.read()
 with open(os.path.join(REPO, "Frontend", "app.js"), encoding="utf-8") as f:
     JS = f.read()
+with open(os.path.join(REPO, "App", "AppTrader.py"), encoding="utf-8") as f:
+    _APPTRADER_SRC = f.read()
 
 from App.AppErrors import BadRequestError                      # noqa: E402
 from App.AppTrader import (                                    # noqa: E402
@@ -232,9 +234,10 @@ finally:
 
 # ═══ ⑥ 前端静态（元素 / 函数 / 取消语义）═══
 print("\n[6] 前端静态层")
-check("⑥ 顶栏有登录方式徽标元素", 'id="auto-order-link"' in HTML, True)
-check("⑥ 徽标排在账本之后（不破坏既有顺序契约）",
-      HTML.index('id="auto-order-ledger-btn"') < HTML.index('id="auto-order-link"'),
+check("⑥ 登录方式复用「自动下单」标签（无独立徽标，省顶栏空间）",
+      'id="auto-order-label"' in HTML, True)
+check("⑥ 标签处于账本之前（链路状态写在开关旁，不再另占账本后位置）",
+      HTML.index('id="auto-order-label"') < HTML.index('id="auto-order-ledger-btn"'),
       True)
 check("⑥ choice 形态对话框已落地（_pushDialog 收 opts）",
       'function _pushDialog(msg, kind, opts)' in JS, True)
@@ -257,6 +260,8 @@ check("⑥ 默认项取上次选择（info.last）",
       "default: String((info && info.last) || '')" in JS, True)
 check("⑥ 选项只认后端下发的 link_view（前端不复制判据）",
       "autoOrderLinkInfo = data.link_view" in JS, True)
+check("⑥ link_view 携带 market（实盘显示期货公司名，不靠硬编码）",
+      '"market": self._live_market(cfg_for_view)' in _APPTRADER_SRC, True)
 # 文案契约（2026-09-28 用户拍板）：标题就三个字「登录方式」，不带操作说明行。
 # 早先写的是「选择自动下单的登录方式\n（取消或点击对话框外区域＝不启动）」——
 # 既啰嗦又把"怎么取消"当成免责声明印在框里。行为（Esc / 点框外 / 取消按钮）
@@ -312,19 +317,19 @@ else:
             "return {value:'simnow'};}}, false);\n"
             "out.val_ok = _choiceValue({querySelector: function(){"
             "return {value:'live'};}}, true);\n"
-            "let e1 = mk(); _els['auto-order-link'] = e1;\n"
-            "renderAutoOrderLink({current:'live'}, true);\n"
+            "let e1 = mk(); _els['auto-order-label'] = e1;\n"
+            "renderAutoOrderLink({current:'live', market:'创元期货'}, true);\n"
             "out.live_txt = e1.textContent; out.live_cls = e1.className;"
             " out.live_disp = e1.style.display;\n"
-            "let e2 = mk(); _els['auto-order-link'] = e2;\n"
+            "let e2 = mk(); _els['auto-order-label'] = e2;\n"
             "renderAutoOrderLink({current:'simnow'}, true);\n"
             "out.sn_txt = e2.textContent; out.sn_cls = e2.className;\n"
-            "let e3 = mk(); _els['auto-order-link'] = e3;\n"
+            "let e3 = mk(); _els['auto-order-label'] = e3;\n"
             "renderAutoOrderLink({current:'live'}, false);\n"
             "out.off_disp = e3.style.display; out.off_txt = e3.textContent;\n"
-            "let e4 = mk(); _els['auto-order-link'] = e4;\n"
+            "let e4 = mk(); _els['auto-order-label'] = e4;\n"
             "renderAutoOrderLink(null, true);\n"
-            "out.null_disp = e4.style.display;\n"
+            "out.null_disp = e4.style.display; out.null_txt = e4.textContent;\n"
             "console.log(JSON.stringify(out));\n")
         tmp = os.path.join(TEST_DIR, "_link_choice_tmp.js")
         with open(tmp, "w", encoding="utf-8") as f:
@@ -352,14 +357,14 @@ else:
                 check("⑦ 取消 → null（点框外/Esc 同义）",
                       o["val_cancel"], None)
                 check("⑦ 确定 → 返回选中值", o["val_ok"], "live")
-                check("⑦ 徽标：实盘运行中 → 文本「实盘」+ live 类",
-                      [o["live_txt"], "live" in o["live_cls"]], ["实盘", True])
-                check("⑦ 徽标：仿真运行中 → 文本「SimNow」+ simnow 类",
+                check("⑦ 标签：实盘运行中 → 文本为期货公司名「创元期货」+ live 类",
+                      [o["live_txt"], "live" in o["live_cls"]], ["创元期货", True])
+                check("⑦ 标签：仿真运行中 → 文本「SimNow」+ simnow 类",
                       [o["sn_txt"], "simnow" in o["sn_cls"]], ["SimNow", True])
-                check("⑦ 徽标：运行中才显示（实盘链路但进程未跑 → 隐藏且清空）",
-                      [o["off_disp"], o["off_txt"]], ["none", ""])
-                check("⑦ 徽标：无链路视图 → 隐藏（不给假标记）",
-                      o["null_disp"], "none")
+                check("⑦ 标签：未运行中 → 显示「自动下单」且始终可见（不隐藏）",
+                      [o["off_disp"], o["off_txt"]], ["", "自动下单"])
+                check("⑦ 标签：无链路视图 → 显示「自动下单」（不隐藏、不给假标记）",
+                      [o["null_disp"], o["null_txt"]], ["", "自动下单"])
         finally:
             os.remove(tmp)
 

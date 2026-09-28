@@ -55,11 +55,11 @@
                 <span class="auto-order-ledger-btn" id="auto-order-ledger-btn"
                       onclick="toggleAutoOrderLedger(event)"
                       title="交易引擎账本：持仓">账本</span>
-                <!-- 当前登录方式（2026-09-28）：SimNow 仿真 / 实盘。子进程运行中才显示
-                     （renderAutoOrderLink），数据来自状态接口的 link_view.current；
-                     关闭期间隐藏且不占位 —— 没有"当前链路"这回事时不给假标记。
-                     位置契约见 Trading/Test/test_p62_ao_protection_price.py [8b] -->
-                <span class="auto-order-link" id="auto-order-link" style="display:none"></span>
+                <!-- 当前登录方式（2026-09-28）：运行中直接在「自动下单」标签上显示链路——
+                     SimNow 仿真 / 创元期货（实盘），由 renderAutoOrderLink 写入 auto-order-label，
+                     数据来自状态接口 link_view（current + market）。关着显示「自动下单」。
+                     不再单独占一个徽标，省顶栏横向空间。位置契约见
+                     Trading/Test/test_p62_ao_protection_price.py [8b] -->
                 <!-- 运行态保护价（2026-09-24 改版）：原「账本」后的徽标已删除，
                      改为 K线主图上的橙色横虚线（drawProtectionLine）—— 保护价
                      是价格，画在价格轴上目光扫图即可见，不再挤占账本旁空间。
@@ -334,6 +334,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=40"></script>
+    <script src="app.js?v=41"></script>
 
 </body></html>

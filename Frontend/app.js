@@ -8350,21 +8350,26 @@
         //   SimNow 还是实盘。此前完全看不出来 —— 只能翻 gateway.log 或去猜 .env，
         //   比"切换不方便"更容易出事（以为在仿真，其实在真钱上跑）。
         function renderAutoOrderLink(view, running) {
-            const el = document.getElementById('auto-order-link');
+            const el = document.getElementById('auto-order-label');
             if (!el) return;
             const cur = (view && view.current) ? String(view.current) : '';
+            const mkt = (view && view.market) ? String(view.market) : '';
             if (!cur || !running) {
-                el.style.display = 'none';
-                el.textContent = '';
+                el.textContent = '自动下单';
+                el.className = 'auto-order-label';
+                el.title = '';
                 return;
             }
             const isLive = (cur === 'live');
-            el.style.display = '';
-            el.textContent = isLive ? '实盘' : 'SimNow';
-            el.className = 'auto-order-link ' + (isLive ? 'live' : 'simnow');
-            el.title = isLive
-                ? '当前登录方式：实盘 —— 真实资金，成交即扣款'
-                : '当前登录方式：SimNow 仿真 —— 资金与成交均为模拟';
+            if (isLive) {
+                el.textContent = mkt || '实盘';
+                el.className = 'auto-order-label live';
+                el.title = '当前登录方式：' + (mkt || '实盘') + ' 实盘 —— 真实资金，成交即扣款';
+            } else {
+                el.textContent = 'SimNow';
+                el.className = 'auto-order-label simnow';
+                el.title = '当前登录方式：SimNow 仿真 —— 资金与成交均为模拟';
+            }
         }
 
         function applyAutoOrderStatus(data) {
@@ -9274,7 +9279,7 @@
                 // 用置灰态重算 disabled，而不是无脑置 false ——
                 // 否则一次开启/关闭请求就会把"未标定品种"的灰态解除
                 applyAutoOrderTradableUI();
-                if (label) label.textContent = '自动下单';
+                if (label) { label.textContent = '自动下单'; label.className = 'auto-order-label'; }
             }
         }
 

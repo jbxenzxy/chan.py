@@ -737,14 +737,9 @@
             line-height: 1.5; white-space: normal;
         }
         .alert-dialog-opt.disabled .alert-dialog-opt-hint { color: #e94560; }
-        /* 当前登录方式徽标 */
-        .auto-order-link {
-            font-size: 11px; padding: 1px 6px; border-radius: 3px;
-            background: #1a1a2e; border: 1px solid #0f3460; color: #a8b2d1;
-            white-space: nowrap; user-select: none;
-        }
-        .auto-order-link.simnow { color: #4ecca3; border-color: #4ecca3; }
-        .auto-order-link.live { color: #e94560; border-color: #e94560; font-weight: 600; }
+        /* 当前登录方式：复用「自动下单」标签（运行中直接显示链路，关着显示「自动下单」） */
+        .auto-order-label.simnow { color: #4ecca3; }
+        .auto-order-label.live { color: #e94560; font-weight: 600; }
         /* BSP过滤设置对话框 */
         .bsp-filter-grid {
             display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 14px;
