@@ -150,7 +150,7 @@
         }
         .auto-order-wrap.disabled .auto-order-hint { display: inline; }
         /* ── 运行态保护价徽标已删除（2026-09-24 改版）──
-           改为 K线主图上的橙色横虚线（app.js drawProtectionLine），
+           改为 K线主图上的橙色分段阶梯虚线（app.js drawRunSegments），
            样式随画布绘制走，不再有 DOM 徽标。 */
         /* 开关本体：宽度 = 账本 chip 宽度（34px），高度跟徽标一致
            （19 → 圆角钳到 9.5，观感与徽标同档）。

@@ -8632,6 +8632,15 @@
             segs.forEach(function (seg, i) {
                 if (firstTrailing < 0 && seg.phase === "trailing") firstTrailing = i;
             });
+            // 裁剪区就是同一个 area —— save/clip 提到循环外，一次配对到底。
+            //   旧写法把 save 放在循环内、restore 放在循环末：循环里的早退
+            //   （`!isLayerLast` / 标签越界）会跳过 restore，同层多段时每帧
+            //   泄漏一次状态栈 + clip 残留，把同帧后续绘制裁进主图矩形。
+            //   提到循环外后，循环内的 return（= continue）不可能绕过 restore。
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(area.x, area.y, area.w, area.h);
+            ctx.clip();
             segs.forEach(function (seg, i) {
                 const isLast = (i === segs.length - 1);
                 const isLayerLast = isLast ||
@@ -8652,10 +8661,6 @@
                 if (isLast) x2 = area.x + area.w;
                 if (x2 - x1 < 0.5) return;
                 const y = priceToY(seg.price, area, priceRange);
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(area.x, area.y, area.w, area.h);
-                ctx.clip();
                 ctx.strokeStyle = "#FF9800";
                 ctx.lineWidth = 1.5;
                 ctx.setLineDash([6, 4]);
@@ -8678,8 +8683,8 @@
                 ctx.fillStyle = "#FF9800";
                 ctx.textAlign = "right";
                 ctx.fillText(label, tx, ty);
-                ctx.restore();
             });
+            ctx.restore();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -8818,6 +8823,12 @@
             segs.forEach(function (seg, i) {
                 if (firstTrailing < 0 && seg.phase === "trailing") firstTrailing = i;
             });
+            // 与 drawRunSegments 同款：save/clip 提到循环外一次配对（循环内
+            //   的早退跳过 restore 会漏状态栈 + 留 clip，两函数互为镜像，同修）。
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(area.x, area.y, area.w, area.h);
+            ctx.clip();
             segs.forEach(function (seg, i) {
                 // 每层只在「该层最后一段」画标签（层名+R/2R+终态）；段宽不够也画，
                 //   文字在保护线上方向左延伸（2026-09-27 实测：宽度门槛会把止损/保本
@@ -8845,10 +8856,6 @@
                 if (isLast && !term) x2 = area.x + area.w;
                 if (x2 - x1 < 0.5) return;
                 const y = priceToY(seg.price, area, priceRange);
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(area.x, area.y, area.w, area.h);
-                ctx.clip();
                 ctx.strokeStyle = "#FF9800";
                 ctx.lineWidth = 1.5;
                 ctx.setLineDash([6, 4]);
@@ -8873,8 +8880,8 @@
                 ctx.fillStyle = "#FF9800";
                 ctx.textAlign = "right";
                 ctx.fillText(label, tx, ty);
-                ctx.restore();
             });
+            ctx.restore();
         }
 
         // ══════════════════════════════════════════════════════════════

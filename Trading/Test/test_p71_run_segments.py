@@ -18,7 +18,13 @@
     run.wlr = plan.params 的盈亏比 —— 与 API 侧投影同名同源（p62 [11]）；
   · [6] 段历史随 run kv 持久化：重启恢复后分段不丢；
   · [7] 同根先抬价再离场：段落了但 run 结束整体清空（run=None → 线消失，
-    与单线时代同语义）；段价位全部对齐品种 tick。
+    与单线时代同语义）；段价位全部对齐品种 tick；
+  · [10] 同层同价去重：跟踪层启动后每根新高 bar 都会出一份新计划，价位没
+    变就不开新段（trailing_trigger_r=0 的常态 —— 不去重会把同一价位切
+    成几十段）；
+  · [11] 旧库升级（kv 无 segments 键）：恢复出来的 run 有计划没有段历史，
+    而前端只认 segments —— 首根 bar 用那份计划补一段并落盘（否则升级后
+    保护价线整条消失到下次抬价，旧版一直显示单线）。
 
 数值说明：DryRun 成交价带一个 tick 滑点（信号 4550.0 → 成交 4550.2），
 锚/R/阈值全部由引擎实际值经策略参数推出（不写死档位数值）。
@@ -280,6 +286,59 @@ def main():
                   [(u.get("reason"), u.get("stop")) for u in _upd],
                   [("trailing", _INST.round_price(
                       anchor + _RESOLVED_WLR * R + 0.8, "up"))])
+
+        print("\n[10] 同层同价去重：跟踪层不抬价时不开新段")
+        with tmp_dir() as tmp:
+            engine, store, broker, ev = build_engine(tmp)
+            engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
+            engine.on_signal(make_signal())
+            _plan = engine._run_plan
+            _n0 = len(engine._run_segments)
+            # 模拟跟踪层启动后每根新高 bar 都出一份新计划（价位未变）：
+            #   trailing_trigger_r=0（贴极值）时这就是常态。
+            _plan.params["_phase"] = "trailing"
+            engine._record_run_segment(_plan, make_bar(2000, "2026-09-01 09:45"))
+            _n1 = len(engine._run_segments)
+            engine._record_run_segment(_plan, make_bar(3000, "2026-09-01 09:50"))
+            _n2 = len(engine._run_segments)
+            check("[10a] 开仓 1 段 + 跟踪层首记 1 段", (_n0, _n1), (1, 2))
+            check("[10b] 同层同价再记 → 不开新段（去重）", _n2, 2)
+            check("[10c] 去重保留首次记录那根 bar 作左端",
+                  engine._run_segments[-1]["start_date"], "2026-09-01 09:45")
+            _plan.stop_price = _INST.round_price(_plan.stop_price + _TICK, "up")
+            engine._record_run_segment(_plan, make_bar(4000, "2026-09-01 09:55"))
+            check("[10d] 同层但价位变了 → 开新段", len(engine._run_segments), 3)
+            check("[10e] 新段左端 = 变价那根 bar",
+                  engine._run_segments[-1]["start_date"], "2026-09-01 09:55")
+
+        print("\n[11] 旧库升级（kv 无 segments）：首根 bar 补一段并落盘")
+        with tmp_dir() as tmp:
+            engine, store, broker, ev = build_engine(tmp)
+            engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
+            engine.on_signal(make_signal())
+            engine._persist()
+            _stop0 = engine._run_plan.stop_price
+            _phase0 = str(engine._run_plan.params.get("_phase") or "") or "sl"
+            # 抹掉 segments 键 → 等价于旧版引擎写入的库（有 run、有 plan、无段历史）
+            _raw = store.get_json("run")
+            check("[11a] 新库落盘带 segments 键（对照）", "segments" in _raw, True)
+            _raw.pop("segments", None)
+            store.set_json("run", _raw)
+            engine2, store2, _, _ = build_engine(tmp, out_name="state.db")
+            check("[11b] 旧库恢复：段表为空（前端会整条不画）",
+                  len(engine2._run_segments), 0)
+            engine2.on_bar(make_bar(2000, "2026-09-01 09:45"))
+            _segs = run_view(engine2)["segments"]
+            check("[11c] 首根 bar 即补一段（保护价线恢复显示）", len(_segs), 1)
+            check("[11d] 补的段 = 恢复出来的计划（价位 / 层，不虚构历史）",
+                  (_segs[0]["price"], _segs[0]["phase"]), (_stop0, _phase0))
+            check("[11e] 补的段左端 = 这根 bar（库里没有可对齐的更早日期）",
+                  _segs[0]["start_date"], "2026-09-01 09:45")
+            check("[11f] 补段已随 run kv 落盘（API 侧投影立即可见）",
+                  len(engine2.store.get_json("run").get("segments") or []), 1)
+            engine2.on_bar(make_bar(3000, "2026-09-01 09:50"))
+            check("[11g] 只补一次（后续 bar 不再追加同层同价段）",
+                  len(run_view(engine2)["segments"]), 1)
 
     print("\n" + "=" * 60)
     print("p71_run_segments: {} passed, {} failed".format(_PASS, _FAIL))

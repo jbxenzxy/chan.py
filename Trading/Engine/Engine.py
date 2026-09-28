@@ -839,6 +839,17 @@ class TradingEngine(ReconcileMixin):
         if bar.timestamp <= run.entry_bar_ts:
             return
 
+        # 旧库升级（kv 里没有 segments 键）→ 恢复出来的 run 带计划却不带分段
+        # 历史，而前端只认 segments —— 不补的话，升级后到下一次抬价之前，
+        # 运行态的保护价线是**整条消失**的（旧版一直显示单线）。这里用恢复
+        # 出来的那份计划补一段：段的语义是"保护价的一次生效区间"，这份计划
+        # 当下正在生效，补它不虚构历史（左端 = 这根 bar，是它能被确证的最早
+        # 时刻；库里只有 bar_ts / entry_at，没有可用于对齐 K 线的 bar 日期）。
+        # 只补一次：补完 _run_segments 非空，后续 bar 不再进入。
+        if not self._run_segments and self._run_plan is not None:
+            self._record_run_segment(self._run_plan, bar)
+            self._persist_run()
+
         bars_held = max(0, self.bars_seen - run.entry_bar_seq)
         check: Optional[ExitCheck] = self.exit_policy.check_with(
             run, bar, self.state, bars_held=bars_held)

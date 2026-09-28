@@ -14,9 +14,9 @@ P62 运行态保护价：后端投影 + 前端常驻显示
   [A] 后端投影：`auto_order_status()["run"]` 除 stop 外还给出它的**解释**
       （phase / r / tp），且三项与 `_run_plan` 实时一致、跨重启一致；
   [B] 前端出口（2026-09-24 改版：账本旁徽标 → K线主图横虚线）：
-      `Frontend/app.js` 的 `calcProtectionLine` 消费 run 的 stop / side / phase
-      构造画线状态（无运行段 → 不画），`drawProtectionLine` 在主图渲染管线里
-      画橙色横虚线 + 右端「保护 价·层」标签；
+      `Frontend/app.js` 的 `calcRunSegments` 消费 run 的 segments / side
+      构造画线状态（无运行段 → 不画），`drawRunSegments` 在主图渲染管线里
+      画橙色分段阶梯虚线 + 层末段标签（tpslSegLabel）；
       （资源版本号由 Test/test_aol_ledger_display.py ⑤ 组独占守卫）。
 
 覆盖清单：
@@ -31,8 +31,8 @@ P62 运行态保护价：后端投影 + 前端常驻显示
       无运行段默认不画
   [9] 源码护栏：run 字典键必需项齐全，三项取值来源是 _run_plan.params，
       且 stop 必须来自引擎级实时计划（不得读仓单快照）
-  [10] 前端行为层：`calcProtectionLine` 抽到 node 里跑真函数 ——
-      三态（运行 / 空仓 / 非法值）、变化判定（价 / 层 / 向任一变 = 变）
+  [10] 前端行为层：`calcRunSegments` 抽到 node 里跑真函数 ——
+      分段状态机（有段 / 无段 / 空仓）、变化判定（段值 / 方向任一变 = 变）
       逐样本比对（node 不在位则跳过）
   [11] 两条投影同构：真实 `state.db` 上，引擎 `auto_order_status()["run"]` 与
       API 侧 `AppTrader._read_engine_switch()["run"]` **逐字段相等**；

@@ -258,25 +258,25 @@ main.py 构造一份后**同时**交给 `Broker.build_broker(..., state=instr)` 
 | ① 信号源 | `SourceConfig` `Config.py:226` | `type="replay"` `:230`；`sse_base="http://127.0.0.1:18081"` `:232`；`symbol="KQ.m@CFFEX.IF"` `:233`；`freq="5m"` `:234`；`bar_mode="confirmed"` `:236`；`signal_k_tol_bars=1` `:245`；重连三参数 `:259-261` |
 | ③ 入场 | `EntryConfig` `Config.py:269` | `reverse_on_opposite_signal=False` `:273` |
 | ③ 出场 | `ExitConfig` `Config.py:276` | `stop_buffer_ticks=0.0` `:300`；`use_atr=True` `:303`；`atr_period=14` `:304`；`atr_sl_multiple=2.0` `:305`；`breakeven_trigger_r=1.0` `:308`；`breakeven_buffer_r=0.5` `:309`；`trailing_trigger_r=0.5` `:310`（= 跟踪缓冲倍数 ×R） |
-| ④ 风控 | `RiskConfig` `Config.py:380` | `delivery_guard_days=1` `:397`（**本层没有手数旋钮**） |
+| ④ 风控 | `RiskConfig` `Config.py:387` | `delivery_guard_days=1` `:404`（**本层没有手数旋钮**） |
 | ⑥ 引擎时序 | **本层已整体删除** | 2026-09-17 拍板「例外 → 弹窗 → 用户干预，引擎不自动兜底」：冷却重试 / 连拒清幻影仓 / 卡单复核三套机制拆除，`EngineConfig`（`close_retry_bars` / `close_max_streak` / `close_stuck_bars`）与 `TradingConfig.engine` 一并删除 |
-| ⑥ Broker | `BrokerConfig` `Config.py:488` | `overprice_ticks=5` `:502`；`fill_timeout_open=5.0` `:503`；`fill_timeout_close=5.0` `:504`；`chase_max_number=3` `:505`；`close_chase_ticks=2` `:508`；`connect_retries=3` `:509`；`tq_market="simnow"` `:511`；`confirm_live_trading=False` `:512`；`channel` `:518` |
-| ⑥a 通道时序 | `ChannelTimingConfig` `Config.py:460` | `quote_stale_seconds=30.0` `:470`（其余 9 项即 `Config.py:471-479`） |
+| ⑥ Broker | `BrokerConfig` `Config.py:495` | `overprice_ticks=5` `:509`；`fill_timeout_open=5.0` `:510`；`fill_timeout_close=5.0` `:511`；`chase_max_number=3` `:512`；`close_chase_ticks=2` `:515`；`connect_retries=3` `:516`；`tq_market="simnow"` `:518`；`confirm_live_trading=False` `:519`；`channel` `:525` |
+| ⑥a 通道时序 | `ChannelTimingConfig` `Config.py:467` | `quote_stale_seconds=30.0` `:477`（其余 9 项即 `Config.py:478-486`） |
 
 出场参数有一条**构造期不变式**：`breakeven_buffer_r < breakeven_trigger_r`，
 违反即抛错（缓冲 ≥ 触发时保本止损会被抬到市价之上，下一根 bar 立刻被打掉，
 `Trading/Config.py:317`）。
 
 组装 `LayeredExitPolicy` 的完整参数一律经 `resolved_exit_params(cfg)`
-（品种无关项 + 档案的 `win_loss_ratio` 合并，`Trading/Config.py:532`）—— 直接传
+（品种无关项 + 档案的 `win_loss_ratio` 合并，`Trading/Config.py:539`）—— 直接传
 `cfg.exit_params.model_dump()` 会缺 `win_loss_ratio`；但 `ExitPolicyParams.win_loss_ratio`
-默认 2.0（`:359`），不报错、静默回落默认而非档案值。
+默认 2.0（`:366`），不报错、静默回落默认而非档案值。
 
 ### 5.3 被删掉的配置键：三种处理方式（别当成一种）
 
 | 键 | 处理 | 位置 |
 |---|---|---|
-| `risk.max_volume` / `max_open_positions` / `unlock_no_new_open` | **丢弃 + WARNING**，不阻断启动 | 清单 `Trading/Config.py:405`，判定 `:417` |
+| `risk.max_volume` / `max_open_positions` / `unlock_no_new_open` | **丢弃 + WARNING**，不阻断启动 | 清单 `Trading/Config.py:412`，判定 `:424` |
 | `instrument.price_tick` / `multiplier` / `exchange` / `last_trade_date` / 三档费率键 / `instrument_verified` / `instrument_source` | **构造期 ValueError 并指路**（显式报错，不静默忽略） | `Infra/Instrument.py:80`，校验 `:160` |
 | `sizing` 整节 / `RiskGate` 五道硬闸门 / `PositionSizing` | **在代码里不存在**，配置里写它同样报错 | 见附录 A |
 
@@ -342,7 +342,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 | 枚举 | 值 | 判据 |
 |---|---|---|
-| `AccountState` `Infra/Records.py:130` | `FLAT` / `LOCKED` / `RUNNING` | **唯一判据是净敞口**：净 0 且簿空 → FLAT；净 0 且簿非空 → LOCKED；净非 0 → RUNNING。判定收口在 `Engine.account_state()`（`Engine/Engine.py:259`），除它之外不得再写第二处三态判定 |
+| `AccountState` `Infra/Records.py:130` | `FLAT` / `LOCKED` / `RUNNING` | **唯一判据是净敞口**：净 0 且簿空 → FLAT；净 0 且簿非空 → LOCKED；净非 0 → RUNNING。判定收口在 `Engine.account_state()`（`Engine/Engine.py:266`），除它之外不得再写第二处三态判定 |
 | `EngineState` `Infra/Records.py:156` | `IDLE` / `OPENING` / `IN_TRADE` / `EXITING` | 引擎**过程**状态机（含两个下单瞬态）。`IDLE` 同时覆盖 FLAT 与 LOCKED |
 
 ### 6.2 转移表（全部集中在 `_decide_action` / `_decide_exit`）
@@ -357,7 +357,7 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 「今仓 / 跨日」判据 = 最近一笔的 `entry_date` 是否等于当前交易日。运行/锁仓态下簿内仓单
 要么全是今仓、要么全是跨日仓，不可能混合（模块 docstring，`Engine/Engine.py:29`）。
-表实现：`_decide_action` `Engine/Engine.py:1034`、`_decide_exit` `Engine/Engine.py:1074`。
+表实现：`_decide_action` `Engine/Engine.py:1065`、`_decide_exit` `Engine/Engine.py:1105`。
 
 **CTP 报文层只认三种 offset**：`OPEN` / `CLOSE`（恒平昨）/ `CLOSETODAY`（按执行策略表第 1 列），
 见 `OrderIntent` `Infra/Records.py:91` 与 `INTENT_TO_OFFSET` `Broker/Base.py:84`。
@@ -372,8 +372,8 @@ Product.open_fee / closetoday_fee → Fee.cash() → Instrument.cost_cash()（�
 
 ### 6.4 每根 K 线的处理顺序
 
-1. **先结算已有持仓** —— 用刚闭合 K 线判出场：**收盘价判触发、有利侧极值判达标**（`_settle_positions` `Engine/Engine.py:799`）
-2. **再处理落在这根 K 线上的信号** —— 决定开仓（`on_signal` `Engine/Engine.py:874`）
+1. **先结算已有持仓** —— 用刚闭合 K 线判出场：**收盘价判触发、有利侧极值判达标**（`_settle_positions` `Engine/Engine.py:815`）
+2. **再处理落在这根 K 线上的信号** —— 决定开仓（`on_signal` `Engine/Engine.py:905`）
 
 反过来会变成"同一根 K 线内既开仓又平仓"，是回测里最常见的作弊来源。
 
@@ -417,11 +417,11 @@ L3 启动阈值 = 品种级 `win_loss_ratio`（数值见 `Infra/Product.py` 各�
 CLOSE 侧**没有自动兜底**（2026-09-17 拍板：例外 → 弹窗 → 用户干预）：
 
 - 离场追价跑满 `chase_max_number`（默认 3）轮仍未成交 → **severe 告警**（前端阻塞弹窗）
-  转人工；引擎还会跨 K 线持续重试，实际效果是"直到成交"（`Engine/Engine.py:2228-2231`）
+  转人工；引擎还会跨 K 线持续重试，实际效果是"直到成交"（`Engine/Engine.py:2263-2266`）
 - 原「冷却重试 `close_retry_bars` / 连拒清幻影仓 `close_max_streak` / 卡单二次确认
   `close_stuck_bars`」三套自动兜底**已整体删除**，原 `EngineConfig` 随之删除
 - 唯一还在的"连续"计数是 `_reject_streak`（连续被前置校验拦下、同一原因口径），
-  它只负责把告警级别从 warn 提到 severe，**不触发任何清仓动作**（`Engine/Engine.py:2319-2322`）
+  它只负责把告警级别从 warn 提到 severe，**不触发任何清仓动作**（`Engine/Engine.py:2354-2357`）
 
 ---
 
@@ -448,7 +448,7 @@ SimNow 不支持市价单：下单瞬间取实时对手价（买 = ask / 卖 = b
 
 在线通道（simnow/live）必须**连接成功**才放行：`SimNow._connect` 成功即置
 `Instrument.verified=True`（`Broker/SimNow.py:767`，`source=CONFIG`）；否则
-`Engine._pre_trade_check` 拒单 + 严重告警（`Engine/Engine.py:1288`）。
+`Engine._pre_trade_check` 拒单 + 严重告警（`Engine/Engine.py:1319`）。
 **闸门只有一个判据**（在线通道连通与否）—— 因为**合约参数 SSOT = 品种档案**：
 tick / 乘数构造期从 `Product` 播种，没有任何信息需要从行情取，所以
 "取不到就回退配置值下单"这种分支根本不存在。
@@ -496,7 +496,7 @@ None，对账**跳过该侧**而非误清。
 ### 7.6 实盘安全闸门
 
 `broker=live` 或 `tq_market != "simnow"` 时，必须显式 `confirm_live_trading=true`
-（`Trading/Config.py:512`），否则启动期报错 —— 防"以为在仿真、其实在实盘"。
+（`Trading/Config.py:519`），否则启动期报错 —— 防"以为在仿真、其实在实盘"。
 
 ---
 
@@ -617,7 +617,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 | 配置示例里 `price_tick` / `multiplier` / `open_fee_rate` / `closetoday_fee_rate` / `close_fee_rate` / `slippage_ticks` / `closetoday_first` 全放在 `instrument` 段 | 前两项与三档费率键**已归位到 `Product` 档案**；写进 `instrument` 会构造期 ValueError（`Infra/Instrument.py:80`） |
 | 配置示例里 `risk.max_volume` | **已删除**；手数唯一来源 = 执行策略表第 3 列（`Infra/Product.py:241`） |
 | 配置示例里 `stop_at_signal_extreme` | **已删除**；R = max(A, 2×ATR) 口径唯一，L3 触发 = 品种级 `win_loss_ratio`。⚠️ `trailing_trigger_r` **没删**（`Config.py:310`），它改了角色：跟踪缓冲倍数（×R），不再是 L3 触发阈值 |
-| 「④ 风控层：手数/持仓上限全收敛在 RiskConfig」 | 本层现在**没有任何手数旋钮**，`max_open_positions` 也已删（已删键清单 `Trading/Config.py:405`） |
+| 「④ 风控层：手数/持仓上限全收敛在 RiskConfig」 | 本层现在**没有任何手数旋钮**，`max_open_positions` 也已删（已删键清单 `Trading/Config.py:412`） |
 | 「Risk/ 风控层（手数/持仓上限）」+ `Risk.py` 内容 | `Trading/Risk/` 只剩 docstring，无代码（`Risk/__init__.py:2`） |
 | `Infra/` 清单含 `Config.py`、不含 `TradeStats.py` | 实为 8 个模块，含 `TradeStats.py`（见 §二） |
 | 「Test/ 下 test_p5 ~ test_p23 共 20 个回归测试」 | 实为 **64 个**（63 `test_*.py` + 1 `smoke_*.py`） |
@@ -636,7 +636,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
    反向 import Engine，装配只在 `main.py`）。
    ⚠️ 当时该 docstring 里还留着两处「已删机制的词」未清（`:8` 的「入场过滤」指信号质量过滤、
    `:10` 的「对账+F1」指 F1 解锁卡单复核）；**两处均已在附录 B「追补」一节清掉**，同段 docstring 现已与代码一致。
-2. 改名残留两处（均在 docstring）：`Trading/Config.py:36-38` 与 `:485` 写成了自我循环的「原名 `BrokerConfig` … 故改为
+2. 改名残留两处（均在 docstring）：`Trading/Config.py:36-38` 与 `:492` 写成了自我循环的「原名 `BrokerConfig` … 故改为
    `BrokerConfig`」；旧名已还原为 `BrokerParamsConfig` —— 这样「与 `SourceConfig` / `RiskConfig` 的命名习惯
    不一致」那句话才讲得通（`BrokerParamsConfig` 在代码里现为 0 命中，只作沿革留档）。
 3. 重复 import：`Broker/SimNow.py:84` 只留一行 `from ..Config import BrokerConfig`。
@@ -686,7 +686,7 @@ python Trading/Test/smoke_simnow_phase_g.py       # 需要真实 SimNow 凭据 +
 再用**本根**收盘价判它有没有被跌破 —— 达标那根若收盘已落在新保护价的不利侧，**当根即离场**
 （原来要等下一根）。同轮连带：
 
-- `Engine/Engine.py:839` 把"计划落盘 / 阶段 toast / `exit_plan_update` 事件"从 `only_update`
+- `Engine/Engine.py:866` 把"计划落盘 / 阶段 toast / `exit_plan_update` 事件"从 `only_update`
   分支提为**公共路径**（当根既抬价又离场时，"因进保本 / 进跟踪而离场"的因果链不能断）。
 - 护栏 `Test/test_p61_exit_close_only.py` 整轮反转：新增 AST 行号断言（`_fav_extreme` 调用行
   必须早于触发比较行）、[6]/[7] 两组改为"当根离场"期望、[5] 的启动判据从 `only_update`
