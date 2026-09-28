@@ -275,6 +275,8 @@ COMPONENTS = [
                                    "test_trade_stats_formulas.py")]),
     # 账本面板展示契约（2026-09-22）：两节标题「持仓」「成交」、
     # 持仓行去止损列、时间 YY/MM/DD HH:MM:SS、成交列表最新排在最后。
+    ("docs_anchor_refs",
+     [sys.executable, os.path.join("Test", "test_docs_anchor_refs.py")]),
     ("aol_ledger_display",
      [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
     # 登录链路选择（2026-09-28）：开关先弹「SimNow / 实盘」选择框，选定值以
