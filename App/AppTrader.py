@@ -1227,7 +1227,7 @@ class AppTrader:
         """选择框的两个选项及其可用性（前端据此置灰并取默认项）。
 
         实盘选项的双重前置（用户 2026-09-28 拍板「保留双层」）：
-          ① 期货公司名已配（tq_market≠simnow）—— 缺它 brofer=live 会被
+          ① 期货公司名已配（tq_market≠simnow）—— 缺它 broker=live 会被
              SimNow.py 判成"配置矛盾"直接拒绝，必须先配；
           ② confirm_live_trading=true —— 保留为「我有实盘资格」的总开关，
              界面上的选择只是第二层确认，不取代它。
