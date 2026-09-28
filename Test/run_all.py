@@ -291,6 +291,12 @@ COMPONENTS = [
     # 断言不抛异常且返回降级视图。
     ("link_view_downgrade",
      [sys.executable, os.path.join("Test", "test_link_view_downgrade.py")]),
+    # 收尾硬退出看护（2026-09-28）：盘后关闭自动下单时收尾链任一步卡住
+    # （主循环退出 / 连接关闭）不再滞留到父进程 150s 强杀 —— 子进程按账户态
+    # 分档兜底硬退（RUNNING 长宽限覆盖最坏柜台追价；空仓/锁仓收尾零柜台
+    # 交互，主循环退出后短宽限）。钉死分档顺序（在途委托安全）与门控接线。
+    ("shutdown_watchdog",
+     [sys.executable, os.path.join("Test", "test_shutdown_watchdog.py")]),
     # 出场判定只读收盘价（2026-09-22 口径，p61）：
     #   触发判据不再读本根 high/low（AST 钉死 check() 函数体内不得出现
     #   .high / .low）；"是否达标"只读根内有利极值且必经 `_fav_extreme()`；

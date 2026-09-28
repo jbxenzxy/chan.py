@@ -53,6 +53,7 @@ from Trading.Infra.Period import SUPPORTED_FREQS, bar_secs_for, bars_per_day
 from Trading.Infra.Clock import SESSION_SECS
 from Trading.Infra.StateDB import Store  # noqa: E402
 from Trading.Infra.Product import CLOSETODAY  # noqa: E402
+from Trading.Infra.Records import AccountState  # noqa: E402
 
 from Trading.Infra.Clock import now_cn  # noqa: E402
 
@@ -71,6 +72,63 @@ _STOP_REQUEST = ".stop_request"
 # （启动链仍卡在 tqsdk 同步登录里）时用短宽限快速强杀，就绪后用完整宽限
 # 覆盖最坏锁仓。与 App/AppTrader._READY_FLAG 保持一致。
 _READY_FLAG = ".ready"
+
+# ── 收尾硬退出看护 ──────────────────────────────────────────────
+# 停止请求到达后的正常路径：主循环退出 → finally 收尾 → 进程自然退出。
+# 但收尾链上任何一步卡住（盘后极端情况下 tqsdk api.close() 不返回、
+# SSE 读阻塞等）都会让进程滞留到父进程 150s 强杀——rc=1、已写盘的
+# 收尾事件被判成不优雅。看护在 stop_event 置位后按账户态分档兜底硬退出：
+#   · RUNNING（净敞口≠0）：收尾要经柜台下离场单（最坏追价 ~100s），长宽限
+#     —— 早于父进程 150s 强杀，事件来得及写盘，父进程可判优雅；
+#   · FLAT / LOCKED：收尾**零柜台交互**（_decide_exit 首行 net==0 即 None；
+#     锁仓态按 2026-09-10 拍板冻结不拆），只剩本地写盘 + 连接关闭，秒级应退；
+#     仍卡住 = 退出链有缺陷，短宽限后硬退，用户点关闭十几秒内即见"已关闭"。
+# 安静档不得在主循环退出前开火：broker.submit 同步阻塞在主线程，主循环未
+# 退出 = 可能有在途委托，此刻硬退会把未终态的委托留成柜台幽灵仓。
+_WATCHDOG_GRACE_RUNNING_S = 130.0   # < 父进程 _STOP_TIMEOUT(150s)，留 20s 余量
+_WATCHDOG_GRACE_QUIET_S = 15.0      # 本地收尾（写盘/事件/连接关闭）正常 <2s
+_WATCHDOG_LINGER_S = 2.0            # 收尾完成后解释器应即刻退出；再滞留即硬退
+
+
+def _watchdog_body(stop_event, state_fn, main_loop_exited, main_done,
+                   sleep=time.sleep, exit_fn=os._exit, echo=print) -> None:
+    """硬退出看护主体（独立成函数便于离线测试；先等 stop_event 置位）。
+
+    分档：
+      RUNNING → sleep(长宽限) 后仍存活即硬退（收尾在途也可能已写盘，rc=0
+      比被父进程强杀 rc=1 好）；
+      FLAT/LOCKED → 先等主循环退出（上限=长宽限，覆盖在途委托的超时+撤单
+      窗口），再等收尾完成（短宽限）；收尾完成后若进程仍滞留（异常的
+      非守护线程残留）也兜底硬退。
+    sleep/exit_fn/echo 可注入 —— 测试不发真退出、不真睡。
+    """
+    stop_event.wait()
+    try:
+        running = state_fn() is AccountState.RUNNING
+    except Exception:
+        running = True          # 账户态读不出来按最坏情况给长宽限
+    if running:
+        echo("[gw] 停止看护：运行态收尾需经柜台离场，硬退出宽限 {:.0f}s"
+             .format(_WATCHDOG_GRACE_RUNNING_S))
+        sleep(_WATCHDOG_GRACE_RUNNING_S)
+        echo("[gw] 停止看护：{:.0f}s 未完成退出，硬退出兜底"
+             .format(_WATCHDOG_GRACE_RUNNING_S))
+        exit_fn(0)
+        return
+    echo("[gw] 停止看护：账户安静（空仓/锁仓，收尾零柜台交互）")
+    if not main_loop_exited.wait(_WATCHDOG_GRACE_RUNNING_S):
+        echo("[gw] 停止看护：主循环 {:.0f}s 未退出，硬退出兜底"
+             .format(_WATCHDOG_GRACE_RUNNING_S))
+        exit_fn(0)
+        return
+    if not main_done.wait(_WATCHDOG_GRACE_QUIET_S):
+        echo("[gw] 停止看护：主循环已退出但收尾 {:.0f}s 未完成，硬退出兜底"
+             .format(_WATCHDOG_GRACE_QUIET_S))
+        exit_fn(0)
+        return
+    sleep(_WATCHDOG_LINGER_S)
+    echo("[gw] 停止看护：收尾已完成但进程仍滞留，硬退出兜底")
+    exit_fn(0)
 
 
 # 删除 `_seed_instrument`（播种桥）：
@@ -535,6 +593,17 @@ def run(args) -> int:
     threading.Thread(target=_monitor_stop_flag, name="gw-stop-monitor",
                      daemon=True).start()
 
+    # 收尾硬退出看护（见 _watchdog_body 注释）：daemon 线程，stop_event 置位
+    # 后按账户态分档兜底；进程自然退出时它随进程消亡，零开销。两个门控事件
+    # 由下方 finally 在"主循环退出"与"收尾全部完成"两个时点置位。
+    _main_loop_exited = threading.Event()
+    _main_done = threading.Event()
+    threading.Thread(
+        target=_watchdog_body,
+        args=(stop_event, lambda: engine.account_state(),
+              _main_loop_exited, _main_done),
+        name="gw-hard-exit-watchdog", daemon=True).start()
+
     try:
         for kind, obj in source.events():
             if stop_event.is_set():
@@ -555,6 +624,9 @@ def run(args) -> int:
         ev.write("error", where="main_loop", err="{}: {}".format(type(e).__name__, e))
         raise
     finally:
+        # 硬退出看护（安静档）门控①：主循环已退出 —— broker.submit 同步阻塞
+        # 在主线程，退出即"无在途委托"，安静档短宽限自此起算才安全。
+        _main_loop_exited.set()
         # 主循环已退出 → 若确有停止请求，执行真正的收尾（停信号门 + 锁仓 +
         # 持久化）。仅在停止请求时锁仓；正常数据流跑完（max_bars / 源自然
         # 结束）不锁。收尾放 finally 而非 signal handler。
@@ -576,6 +648,9 @@ def run(args) -> int:
         source.close()
         store.close()
         ev.close()
+        # 硬退出看护门控②：收尾（含各路 close）全部完成 —— 此后进程应自然
+        # 退出；若仍滞留（异常的非守护线程残留），看护短暂宽限后兜底硬退。
+        _main_done.set()
     return 0
 
 

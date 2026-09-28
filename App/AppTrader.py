@@ -643,10 +643,14 @@ class AppTrader:
 
             # 兜底强杀（文案分档：未就绪强杀 ≠ 锁仓风险场景，避免误导排查）
             if not exited:
+                # 强杀即失去现场 —— 把 gateway.log 尾部随告警带回控制台，
+                # 卡在收尾链哪一步（登录/收尾/连接关闭）当场可见，不用再翻文件。
+                _kill_tail = self._read_log_tail(str(log_file), 3)
                 if ready_seen or timeout is not None:
                     log.warning(
                         "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，"
-                        "强杀兜底", pid, wait_secs)
+                        "强杀兜底（gateway.log 尾部：%s）", pid, wait_secs,
+                        (_kill_tail or "空").replace("\n", " | "))
                 else:
                     log.warning(
                         "[AppTrader] 自动下单子进程 pid=%s 启动链未就绪"
