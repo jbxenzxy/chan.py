@@ -307,13 +307,21 @@ COMPONENTS = [
                                    "test_p61_exit_close_only.py")]),
     # 运行态保护价：后端投影 + 前端 K线画线（2026-09-23 p62 / 2026-09-24 改版）：
     #   `auto_order_status()["run"]` 除实时 stop 外给出它的解释（phase / r / tp，
-    #   取值来源钉死 `_run_plan.params`）；前端 app.js 的 calcProtectionLine 消费
-    #   stop / side / phase 构造画线状态（徽标已删），drawProtectionLine 在主图
-    #   画橙色横虚线，无运行段不画；移动止盈 toast 与保本 toast 一样带出保护价。
+    #   取值来源钉死 `_run_plan.params`）；前端 app.js 的 calcRunSegments 消费
+    #   run.segments 构造分段画线状态（2026-09-28 单线升级为分段阶梯线），
+    #   drawRunSegments 在主图画分段橙虚线，无运行段不画；移动止盈 toast 与
+    #   保本 toast 一样带出保护价。
     #   起因：2026-09-23 实盘 2.6R 浮盈回撤到 0.77R，保护价全程只有悬停 tooltip 一个出口。
     ("p62_ao_protection_price",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p62_ao_protection_price.py")]),
+    # 运行态保护价分段历史（2026-09-28）：引擎把本段 run 的每次保护价生效
+    # 区间记成一段（初始止损 → 保本 → 初始跟踪 → 每根新高 bar 的移动跟踪），
+    # 随 run kv 持久化、投影 run.segments/wlr 下发前端画分段阶梯线 —— 数据源
+    # 是引擎实际抬价（入场价=实际成交价），非右键推演的假设口径。
+    ("p71_run_segments",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p71_run_segments.py")]),
     # 盈亏比「文档不复述取值」护栏（2026-09-23，p63）：
     #   改某品种盈亏比时不该被迫同步改一堆注释 / README / 测试描述 —— 具体倍数只许写在
     #   档案条目上。判据 = 注释与字符串常量里「语境词（win_loss_ratio / 盈亏比 / L3）

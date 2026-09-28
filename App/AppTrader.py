@@ -1481,6 +1481,12 @@ class AppTrader:
                         "phase": str(prm.get("_phase") or ""),
                         "r": prm.get("R"),
                         "tp": prm.get("_tp_nominal"),
+                        # 盈亏比 + 保护价分段历史：与引擎 auto_order_status()
+                        # 同名同源（kv `run` 里引擎已落盘的 plan.params / segments）。
+                        "wlr": prm.get("win_loss_ratio"),
+                        "segments": (raw_run.get("segments")
+                                     if isinstance(raw_run.get("segments"), list)
+                                     else []),
                     }
             return {
                 "enabled": enabled,

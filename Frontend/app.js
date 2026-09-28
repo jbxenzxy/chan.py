@@ -1402,7 +1402,7 @@
             if (isSubNewZs) drawDualNewZs(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawWhiteHLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             // 保护价线只画主图（dualSubData 是双窗副图；单窗模式它为 null，恒不等 → 恒画）
-            if (data !== dualSubData) drawProtectionLine(klinesToDraw, area, priceRange, barStep, subPixelOffset);
+            if (data !== dualSubData) drawRunSegments(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             // 股票「止盈止损」分段横虚线：只画主图（与保护价线同一约定）
             if (data !== dualSubData) drawTpslLines(klinesToDraw, area, priceRange, barStep, subPixelOffset);
             drawAnnotations(klinesToDraw, area, priceRange, barStep, subPixelOffset);
@@ -8218,10 +8218,14 @@
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
         let autoOrderAlertAckHold = 0;    // 未确认的严重告警水位：>0 = 弹框还没关，暂缓 ack
         let autoOrderSeenToastTs = 0;     // 轻提示本地水位：<= 它的一律不再弹
-        // 运行态保护价线（2026-09-24 改版：徽标 → K线横虚线）：
-        //   null = 空仓/锁仓/无有效保护价 → 不画；非空 = {price, side, phase}，
-        //   每次轮询由 calcProtectionLine 重算，值变化才触发整图重绘。
-        let protectionLine = null;
+        // 运行态保护价分段线（2026-09-28 改版：单线 → 分段阶梯）：
+        //   runSegs = null（空仓/锁仓/引擎未下发段）→ 不画；非空 = segments 数组
+        //   （每段 {phase, price, start_date, end_date}），每次轮询由 calcRunSegments
+        //   重算，签名变化才触发整图重绘；aoRunSnap 缓存标签所需的 run 字段
+        //   （r / anchor / side / wlr），与段列表同帧更新防错位。
+        let runSegs = null;
+        let runSegSig = null;
+        let aoRunSnap = null;
 
         // ══════════════════════════════════════════════════════════════
         // 未标定品种置灰（2026-09-14 第 6 批）
@@ -8448,15 +8452,19 @@
                 _aoSafe('告警', function () { handleAutoOrderAlerts(data); });
                 _aoSafe('轻提示', function () { handleAutoOrderToasts(data); });
                 _aoSafe('账本', function () { renderAutoOrderLedger(data); });   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
-                // 运行态保护价线（2026-09-24）：K线横虚线出口。为什么放主图：
+                // 运行态保护价分段线（2026-09-28：单线 → 分段阶梯）。为什么放主图：
                 //   保护价是持仓期间**最需要盯着**的数，tooltip/徽标都要"找"才看得见
                 //   —— 2026-09-23 实盘多仓浮盈 2.6R 回撤到 0.77R，全程不知道会在哪离场。
-                //   画在价格轴上 = 目光扫图时顺带看到；抬价（保本/跟踪）后线跟着跳。
-                //   changed 才赋值 + 整图重绘（轮询 5s 一次，值没变别白画）。
+                //   分段阶梯把"现在在哪层、从哪根 bar 起生效、锁了多少 R"直接画在
+                //   价格轴上；引擎每次抬价/新高都出新段，段签名变化才整图重绘
+                //   （轮询 5s 一次，值没变别白画）。
                 _aoSafe('保护价线', function () {
-                    const _pl = calcProtectionLine(aoRun, protectionLine);
-                    if (_pl.changed) {
-                        protectionLine = _pl.line;
+                    const _rs = calcRunSegments(aoRun, runSegSig);
+                    if (_rs.changed) {
+                        runSegs = _rs.segs;
+                        runSegSig = _rs.sig;
+                        aoRunSnap = aoRun ? { r: aoRun.r, anchor: aoRun.anchor,
+                                              side: aoRun.side, wlr: aoRun.wlr } : null;
                         render();
                     }
                 });
@@ -8568,68 +8576,110 @@
         }
 
         // ══════════════════════════════════════════════════════════════
-        // [COMPONENT] 运行态保护价线（2026-09-24 改版：账本旁徽标 → K线横虚线）
-        //   原徽标挤在「账本」后面，宽度受限还要悬停才看得见解释；
-        //   保护价本质是一个价格，画在 K线图价格轴上 = 目光扫图顺带看到。
-        //   数据源不变 = /api/trader/auto-order/status → auto_order.run
-        //   （交易引擎实时投影；run.stop 随保本/跟踪两层逐根抬价而变）。
-        //   三态语义（用户拍板 2026-09-24）：
-        //     空仓 / 锁仓 → run 为 None → 线不画；
-        //     运行态 → 按当前保护价画横虚线，抬价后线跟着跳。
-        //   结构（逻辑与绘制分离，calcProtectionLine 是纯函数、可在 node 里单测）：
-        //     calcProtectionLine(aoRun, prev) → {line, changed}
-        //     drawProtectionLine(...)          → 主图渲染管线里的横虚线 + 右端标签
+        // [COMPONENT] 运行态保护价**分段**线（2026-09-28 改版：单线 → 分段阶梯）
+        //   数据源 = /api/trader/auto-order/status → auto_order.run.segments
+        //   （交易引擎把本段 run 的每次保护价生效区间记成一段：初始止损段自
+        //   开仓 bar 起；浮盈过保本阈值 → 保本段；浮盈过盈亏比阈值 → 初始
+        //   跟踪段；此后每根新高 bar → 移动跟踪段。引擎记录**实际发生**的
+        //   抬价，入场价 = 实际成交价 —— 与股票页右键推演（信号 K 线收盘价
+        //   的假设口径）本质不同；分段/标签口径照 v1.7 文档对齐）。
+        //   三态语义（沿 2026-09-24 拍板）：空仓 / 锁仓 → run 为 None → 线不画；
+        //   运行态 → 分段阶梯橙虚线，抬价/新高即出新段（左端=那根 bar）。
+        //   结构（逻辑与绘制分离，纯函数可在 node 里单测）：
+        //     calcRunSegments(aoRun, prevSig) → {segs, sig, changed}
+        //     drawRunSegments(...)             → 主图渲染管线里的分段阶梯线 + 层标签
         // ══════════════════════════════════════════════════════════════
-        function calcProtectionLine(aoRun, prev) {
-            const stop = aoRun ? Number(aoRun.stop) : NaN;
-            let line = null;
-            if (aoRun && isFinite(stop) && stop !== 0) {
-                line = { price: stop,
-                         side: String(aoRun.side || ""),
-                         phase: String(aoRun.phase || "") };
-            }
+        function calcRunSegments(aoRun, prevSig) {
+            const segs = (aoRun && Array.isArray(aoRun.segments)
+                          && aoRun.segments.length) ? aoRun.segments : null;
+            // 签名含 side：方向翻转必然开新 run，即使段值巧合相同也要重画。
+            // 无段时签名归一为 null —— 空仓 → 空仓的连续轮询不误判"变化"。
+            const sig = segs === null ? null : JSON.stringify({
+                side: String(aoRun.side || ""),
+                segs: segs
+            });
             let changed;
-            if (line === null || prev === null) {
-                changed = (line === null) !== (prev === null);
+            if (segs === null || prevSig === null) {
+                changed = (segs === null) !== (prevSig === null);
             } else {
-                changed = (line.price !== prev.price
-                    || line.side !== prev.side
-                    || line.phase !== prev.phase);
+                changed = sig !== prevSig;
             }
-            return { line: line, changed: changed };
+            return { segs: segs, sig: sig, changed: changed };
         }
 
-        // 主图绘制管线里的保护价线：橙色横虚线 + 右端「保护 价·层」标签。
-        //   颜色：白（white_hline）/ 红 绿（涨跌与买卖点）都已被占用，
-        //   橙色是图上唯一没有语义冲突的醒目色；多空不换色 —— 防御线统一口径。
-        //   线本体用 clip 裁进主图区（保护价跳出视野时不会画进 MACD 副图区）；
-        //   标签画在 clip 外（与 white_hline 同一位置约定：右边界外 4px 的价格轴留白），
-        //   y 超出主图区时不画标签 —— 线都看不见了标签就是悬空的。
-        function drawProtectionLine(klines, area, priceRange, barStep, subPixelOffset) {
-            if (!protectionLine || !isFinite(protectionLine.price)) return;
-            const y = priceToY(protectionLine.price, area, priceRange);
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(area.x, area.y, area.w, area.h);
-            ctx.clip();
-            ctx.strokeStyle = "#FF9800";
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([6, 4]);
-            ctx.beginPath();
-            ctx.moveTo(area.x, y);
-            ctx.lineTo(area.x + area.w, y);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.restore();
-            if (y < area.y || y > area.y + area.h) return;
-            // 层文案与交易引擎 _phase 一一对应："" 初始止损 / breakeven 保本 / trailing 跟踪
-            const phaseLabel = { breakeven: "保本", trailing: "跟踪" }[protectionLine.phase]
-                || "止损";
-            ctx.fillStyle = "#FF9800";
-            ctx.font = "bold 11px monospace";
-            ctx.textAlign = "left";
-                ctx.fillText("保护 " + _fmtPrice(protectionLine.price) + "·" + phaseLabel,
-                             area.x + area.w + 4, y + 4);
+        // 主图绘制管线里的保护价分段线：橙色横虚线阶梯 + 层末段标签。
+        //   画法照股票页推演 drawTpslLines 的 v1.7 口径（同一份 tpslSegLabel 标签）：
+        //   分段线按 bar 边缘衔接（起止同日的段靠边缘衔接才可见）；每层只在
+        //   「该层最后一段」画标签；末段（仍在持仓）延伸到图右缘。
+        //   颜色沿用橙（图上唯一无语义冲突的醒目色），多空不换色。
+        //   非末段的右端 = 下一段左端（end_date 由引擎投影：下一段 start_date）。
+        function drawRunSegments(klines, area, priceRange, barStep, subPixelOffset) {
+            if (!runSegs || !runSegs.length) return;
+            // 伪 plan：tpslSegLabel 只读 r / entry.price / entry.side /
+            //   params.win_loss_ratio —— 期货 run 投影按同名字段下发
+            //   （anchor = 实际成交价 = 风控锚；wlr 缺失时标签退化为不带倍数）。
+            const plan = {
+                r: aoRunSnap ? aoRunSnap.r : null,
+                entry: { price: aoRunSnap ? aoRunSnap.anchor : null,
+                         side: aoRunSnap ? String(aoRunSnap.side || "").toLowerCase() : "" },
+                params: { win_loss_ratio: aoRunSnap ? aoRunSnap.wlr : null }
+            };
+            const map = buildGlobalDateMap();
+            const globalStart = Math.max(0, Math.floor(viewOffset));
+            const globalEnd = globalStart + viewCount;
+            const segs = runSegs;
+            let firstTrailing = -1;
+            segs.forEach(function (seg, i) {
+                if (firstTrailing < 0 && seg.phase === "trailing") firstTrailing = i;
+            });
+            segs.forEach(function (seg, i) {
+                const isLast = (i === segs.length - 1);
+                const isLayerLast = isLast ||
+                    (segs[i + 1] && segs[i + 1].phase !== seg.phase);
+                const g1 = dateToGlobalIdx(seg.start_date, map);
+                if (g1 === undefined) return;
+                const g2 = dateToGlobalIdx(seg.end_date, map);
+                if (g2 !== undefined && g2 < globalStart) return;
+                if (g1 >= globalEnd) return;
+                let x1 = (g1 < globalStart) ? area.x
+                    : globalIdxToX(g1, globalStart, area.x, barStep, subPixelOffset) - barStep / 2;
+                let x2 = (g2 === undefined || g2 >= globalEnd)
+                    ? area.x + area.w
+                    : globalIdxToX(g2, globalStart, area.x, barStep, subPixelOffset) + barStep / 2;
+                x1 = Math.max(x1, area.x);
+                x2 = Math.min(x2, area.x + area.w);
+                // 末段且仍在持仓：保护价当前仍在生效 → 延伸到图右缘。
+                if (isLast) x2 = area.x + area.w;
+                if (x2 - x1 < 0.5) return;
+                const y = priceToY(seg.price, area, priceRange);
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(area.x, area.y, area.w, area.h);
+                ctx.clip();
+                ctx.strokeStyle = "#FF9800";
+                ctx.lineWidth = 1.5;
+                ctx.setLineDash([6, 4]);
+                ctx.beginPath();
+                ctx.moveTo(x1, y);
+                ctx.lineTo(x2, y);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                if (!isLayerLast) return;
+                if (y < area.y + 12 || y > area.y + area.h - 4) return;
+                const kind = (seg.phase === "trailing")
+                    ? (i === firstTrailing ? "initial" : "moved") : null;
+                const label = tpslSegLabel(seg, plan, kind);
+                ctx.font = "11px monospace";
+                const tw = ctx.measureText(label).width;
+                let tx = Math.min(x2, area.x + area.w) - 6;
+                tx = Math.max(tx, area.x + tw + 4);
+                tx = Math.min(tx, area.x + area.w - 4);
+                const ty = (y - 6 < area.y + 12) ? y + 15 : y - 6;
+                ctx.fillStyle = "#FF9800";
+                ctx.textAlign = "right";
+                ctx.fillText(label, tx, ty);
+                ctx.restore();
+            });
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -8750,7 +8800,9 @@
             }
             return label;
         }
-        // 分段横虚线（v1.5 §4.6-⑤）：照抄 drawProtectionLine 的橙虚线与右端标签口径；
+        // 分段横虚线（v1.5 §4.6-⑤）：橙虚线与层标签口径与期货运行态分段线
+        //   （drawRunSegments）同源同款（v1.7 标签/边缘衔接，2026-09-28 起
+        //   期货侧单线已升级为分段线，两者互为镜像）；
         //   segments 分段、末段（含 terminal）画到图最右、标签加「已」与实际 R 数（含负，Q11）。
         function drawTpslLines(klines, area, priceRange, barStep, subPixelOffset) {
             if (!_tpslActive || !_tpslPlan) return;

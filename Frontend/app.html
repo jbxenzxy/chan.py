@@ -60,11 +60,11 @@
                      数据来自状态接口 link_view（current + market）。关着显示「自动下单」。
                      不再单独占一个徽标，省顶栏横向空间。位置契约见
                      Trading/Test/test_p62_ao_protection_price.py [8b] -->
-                <!-- 运行态保护价（2026-09-24 改版）：原「账本」后的徽标已删除，
-                     改为 K线主图上的橙色横虚线（drawProtectionLine）—— 保护价
-                     是价格，画在价格轴上目光扫图即可见，不再挤占账本旁空间。
-                     数据源不变 = /api/trader/auto-order/status 的 auto_order.run；
-                     契约见 Trading/Test/test_p62_ao_protection_price.py [8] 组 -->
+                <!-- 运行态保护价（2026-09-24 改版：徽标删除；2026-09-28 单线升级为
+                     分段阶梯线 drawRunSegments）—— 止损/保本/初始跟踪/移动跟踪
+                     每层一段橙虚线画在 K线主图价格轴上，目光扫图即可见，不再挤占
+                     账本旁空间。数据源 = /api/trader/auto-order/status 的
+                     auto_order.run.segments；契约见 Trading/Test/test_p62_ao_protection_price.py [8] 组 -->
             </span>
             <!-- 引擎账本面板（C，2026-09-18）：账本口径的持仓。
                  数据来自 /api/trader/status 的 auto_order.positions；
@@ -334,6 +334,6 @@
             </div>
         </div>
     </aside>
-    <script src="app.js?v=42"></script>
+    <script src="app.js?v=43"></script>
 
 </body></html>

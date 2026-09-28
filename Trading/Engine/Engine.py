@@ -179,6 +179,13 @@ class TradingEngine(ReconcileMixin):
         self._run_entry_offset: str = ""
         self._run_entry_at: str = ""
         self._run_plan: Optional[ExitPlan] = None
+        # 本段 run 的保护价**分段历史**（2026-09-28）：每段 {phase, price,
+        # start_date}。段 = 保护价的一次生效区间 —— 初始止损段自开仓 bar 起，
+        # 此后每次抬价（保本 / 初始跟踪 / 每根新高 bar 的移动跟踪）新起一段，
+        # 左端 = 触发抬价的那根 bar（分段口径与股票页推演 v1.7 一致，但数据源
+        # 是引擎**实际发生**的抬价，入场价 = 实际成交价）。随 run kv 持久化，
+        # 重启恢复后分段不丢。
+        self._run_segments: List[Dict[str, Any]] = []
         # 上一次报单被拒的原因（供调用方写 signal_action）。每次 _execute 开头清空。
         self._last_reject: str = ""
         # ════════════════════════════════════════════════════════════════
@@ -656,6 +663,10 @@ class TradingEngine(ReconcileMixin):
             "entry_offset": self._run_entry_offset,
             "entry_at": self._run_entry_at,
             "plan": self._run_plan.to_dict(),
+            # 分段历史随 run kv 持久化（**投影形态**，带 end_date）：生产链路
+            # 前端读的是 API 侧对 kv 的投影，end_date 必须库里就有，不能让
+            # API 侧重算第二份。恢复后 _segments_view 会按 start_date 链重算。
+            "segments": self._segments_view(),
         })
 
     def _restore_run(self) -> None:
@@ -716,6 +727,11 @@ class TradingEngine(ReconcileMixin):
             self._run_entry_offset = _eo
             self._run_entry_at = str(d.get("entry_at") or "")
             self._run_plan = ExitPlan.from_dict(d.get("plan") or {})
+            # 分段历史恢复（2026-09-28 起随 run kv 持久化；旧版库无此键 → 空表，
+            # 前端退化为不画历史段， protection 单线语义不受影响）。
+            _raw_segs = d.get("segments")
+            self._run_segments = [dict(x) for x in (_raw_segs or [])
+                                  if isinstance(x, dict)]
             return
         if st is not AccountState.RUNNING:
             return          # 空仓态 / 锁仓态不需要 run
@@ -838,6 +854,10 @@ class TradingEngine(ReconcileMixin):
         #   这笔单为何在当前价就走。
         if check.plan is not None:
             self._run_plan = check.plan
+            # 分段历史：抬价即新段（保本 / 初始跟踪 / 每根新高 bar 的移动跟踪），
+            # 左端 = 触发抬价的这根 bar。「先抬价再判触发」的根：段先落、
+            # 离场后 run 整体清空（终态段随 run 消失，与单线时代同语义）。
+            self._record_run_segment(check.plan, bar)
             # 阶段跃迁（"" → breakeven → trailing）= 盈利达标时刻 → toast（需求 ⑷(3)(4)）
             new_phase = str(self._run_plan.params.get("_phase") or "")
             if new_phase and new_phase != prev_phase:
@@ -1842,6 +1862,9 @@ class TradingEngine(ReconcileMixin):
         self._run_entry_offset = entry_offset
         self._run_entry_at = now_cn()
         self._run_plan = plan
+        # 分段历史第 1 段：初始止损段，左端 = 开仓那根 bar。
+        self._run_segments = []
+        self._record_run_segment(plan, bar)
         self.ev.write("run_start", side=str(side), volume=self._run_volume,
                       anchor=anchor_price, stop=plan.stop_price,
                       exit_policy=plan.name,
@@ -1871,6 +1894,7 @@ class TradingEngine(ReconcileMixin):
         self._run_entry_offset = ""
         self._run_entry_at = ""
         self._run_plan = None
+        self._run_segments = []
 
     def _run_view(self) -> Optional[Position]:
         """把当前 run 合成一笔"虚拟仓单"供 L1-L3 判定（**不进簿**）。
@@ -2351,6 +2375,34 @@ class TradingEngine(ReconcileMixin):
             signal_key=(sig.key if sig is not None else ""),
             transition=act.transition, escalated=escalated)
 
+    # ---------------- 运行态保护价分段（前端分段阶梯线数据源） ----------------
+    def _record_run_segment(self, plan: ExitPlan, bar: Optional[Bar]) -> None:
+        """把计划的一次生效记为一段（phase / price / 左端 bar 日期）。
+
+        phase 归一：初始计划没有 `_phase` 键 → "sl"（与股票推演 _phase_of 同口径）。
+        """
+        phase = str(plan.params.get("_phase") or "") or "sl"
+        seg_date = (bar.date if bar is not None
+                    else (self.last_bar.date if self.last_bar is not None else ""))
+        self._run_segments.append({"phase": phase, "price": plan.stop_price,
+                                   "start_date": seg_date})
+
+    def _segments_view(self) -> List[Dict[str, Any]]:
+        """分段投影：补 end_date（= 下一段左端；末段 = 最近一根 bar 的日期）。
+
+        末段是否延伸到图右缘由前端决定（仍在持仓 ⇒ 末段延伸；离场后 run
+        整体为 None，线消失 —— 与单线时代同语义）。
+        """
+        n = len(self._run_segments)
+        last_date = (self.last_bar.date if self.last_bar is not None else "")
+        out: List[Dict[str, Any]] = []
+        for i, seg in enumerate(self._run_segments):
+            d = dict(seg)
+            d["end_date"] = (self._run_segments[i + 1]["start_date"]
+                             if i + 1 < n else (last_date or seg["start_date"]))
+            out.append(d)
+        return out
+
     def auto_order_status(self) -> Dict[str, Any]:
         """自动下单状态快照（供后端进程托管 / API / 前端轮询）。"""
         return {
@@ -2384,6 +2436,12 @@ class TradingEngine(ReconcileMixin):
                         "phase": str(self._run_plan.params.get("_phase") or ""),
                         "r": self._run_plan.params.get("R"),
                         "tp": self._run_plan.params.get("_tp_nominal"),
+                        # 盈亏比（进跟踪层的阈值倍数）：标签「初始跟踪 <价> N R」
+                        # 里的 N。plan.params 自带（引擎策略按 resolved_exit_params
+                        # 组装），旧 kv 恢复的 plan 缺失时为 None（标签退化为不带倍数）。
+                        "wlr": self._run_plan.params.get("win_loss_ratio"),
+                        # 保护价分段历史（含 end_date 投影）：前端画分段阶梯线。
+                        "segments": self._segments_view(),
                     }),
             "positions": [p.to_dict() for p in self.positions.positions],
             # D11：未确认告警（前端按 code 去重 + 5 分钟冷却后弹窗，确认后回 ack）

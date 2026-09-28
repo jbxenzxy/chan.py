@@ -63,8 +63,8 @@ check("\u2461 表格列数总量未被改动",
 
 print("\n[3] 锚点真的能 grep 到（错锚点比行号更糟）")
 ANCHORS = [
-    ("Frontend/app.js", "calcProtectionLine"),
-    ("Frontend/app.js", "drawProtectionLine"),
+    ("Frontend/app.js", "calcRunSegments"),
+    ("Frontend/app.js", "drawRunSegments"),
     ("Frontend/app.js", "drawTpslLines"),
     ("Frontend/app.js", "tpslSegLabel"),
     ("Frontend/app.js", "_tpslTypeHit"),

@@ -1,0 +1,222 @@
+# -*- coding: utf-8 -*-
+"""运行态保护价**分段历史**（run segments）—— 行为护栏（2026-09-28）。
+
+需求（用户 2026-09-28）：期货开仓后先画止损线；触发 1R 画保本线；触发 2R
+（盈亏比跟品种档案）画初始跟踪线；创新高后画移动跟踪线 —— 画的是引擎
+**实际发生**的分层过程（入场价 = 实际成交价），不是右键推演的假设口径。
+分段/标签口径照《股票页「止盈止损」v1.7》：每段左端 = 开仓 / 触发抬价 /
+创新高那根 bar；末段延伸图右缘（前端）。
+
+各断言防什么：
+  · [1] 开仓即记初始止损段（phase=sl、价位=计划保护价、左端=开仓 bar）；
+  · [2] 未触发抬价的 bar 不出新段（段数不膨胀）；
+  · [3] 浮盈 > 1R（严格不等）→ breakeven 段（价位 = 锚 ± 缓冲×R 经 tick
+    对齐，左端 = 触发根）；
+  · [4] 浮盈 > 盈亏比×R → trailing 段（初始跟踪）；此后每根新高 bar 一段
+    （移动跟踪，左端 = 新高根）；
+  · [5] 投影 run.segments 带 end_date 链（= 下一段左端；末段 = 最近 bar），
+    run.wlr = plan.params 的盈亏比 —— 与 API 侧投影同名同源（p62 [11]）；
+  · [6] 段历史随 run kv 持久化：重启恢复后分段不丢；
+  · [7] 同根先抬价再离场：段落了但 run 结束整体清空（run=None → 线消失，
+    与单线时代同语义）；段价位全部对齐品种 tick。
+
+数值说明：DryRun 成交价带一个 tick 滑点（信号 4550.0 → 成交 4550.2），
+锚/R/阈值全部由引擎实际值经策略参数推出（不写死档位数值）。
+跑法：python Trading/Test/test_p71_run_segments.py
+"""
+from __future__ import annotations
+
+import os
+import sys
+from contextlib import contextmanager
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _locate_tg_root() -> str:
+    d = _HERE
+    for _ in range(5):
+        if os.path.basename(d) == "Trading" and os.path.isfile(
+                os.path.join(d, "__init__.py")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return ""
+
+
+_TG_ROOT = os.environ.get("TRADER_GATEWAY_HOME", "") or _locate_tg_root()
+if not _TG_ROOT:
+    print("✗ 找不到 Trading 包。")
+    raise SystemExit(2)
+_REPO = os.path.dirname(_TG_ROOT)
+sys.path.insert(0, _REPO)
+
+from Trading.Broker.DryRun import DryRunBroker                   # noqa: E402
+from Trading.Config import DEFAULT_CONFIG, TradingConfig         # noqa: E402
+from Trading.Engine.Engine import TradingEngine                  # noqa: E402
+from Trading.Infra.EventLog import EventLog                      # noqa: E402
+from Trading.Infra.Instrument import Instrument, InstrumentConfig  # noqa: E402
+from Trading.Infra.Product import PRODUCT_PROFILES               # noqa: E402
+from Trading.Infra.Records import Bar, Signal                    # noqa: E402
+from Trading.Infra.StateDB import Store                          # noqa: E402
+from Trading.Strategy.Entry import EntryPolicy                   # noqa: E402
+from Trading.Strategy.Exit import LayeredExitPolicy              # noqa: E402
+
+_IF = PRODUCT_PROFILES["IF"]
+_SYM = "CFFEX.IF2609"
+_TICK = float(_IF.price_tick)
+_INST = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)  # 与引擎同构造：round_price 作期望值
+_RESOLVED_WLR = 2.0   # 本用例策略显式口径（与 build_engine 的构造一致）
+_PASS = 0
+_FAIL = 0
+
+
+def check(name, got, want):
+    global _PASS, _FAIL
+    ok = got == want
+    if ok:
+        _PASS += 1
+        print("  ✓ {}".format(name))
+    else:
+        _FAIL += 1
+        print("  ✗ {} -> got {!r}, want {!r}".format(name, got, want))
+
+
+@contextmanager
+def tmp_dir():
+    import tempfile
+    d = tempfile.mkdtemp(prefix="p71_")
+    try:
+        yield d
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def build_engine(tmpdir, out_name="state.db"):
+    """与 test_p62 同款离线引擎；策略显式带盈亏比（贴近生产 resolved 口径）。"""
+    cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
+    broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
+    store = Store(os.path.join(tmpdir, out_name))
+    ev = EventLog(os.path.join(tmpdir, "events.jsonl"), echo=False, echo_kinds=None)
+    engine = TradingEngine(cfg, broker, EntryPolicy({}),
+                           LayeredExitPolicy({"win_loss_ratio": 2.0}),
+                           store, ev)
+    return engine, store, broker, ev
+
+
+def make_signal(price=4550.0, fractal_low=4500.0):
+    return Signal(key=Signal.make_key("2026-09-01 09:35", "1", True),
+                  symbol=_SYM, freq="5m", date="2026-09-01 09:35",
+                  timestamp=900, bsp_type="1", is_buy=True, price=price,
+                  high=price + 2.0, low=price - 2.0,
+                  fractal_low=fractal_low, fractal_high=4560.0)
+
+
+def make_bar(ts, date, o=4550.0, h=4552.0, l=4548.0, c=4551.0):
+    return Bar(timestamp=ts, date=date, open=o, high=h, low=l, close=c, vol=1)
+
+
+def run_view(engine):
+    return engine.auto_order_status().get("run")
+
+
+def main():
+    print("\n[1] 开仓 → 初始止损段（左端 = 开仓 bar）")
+    with tmp_dir() as tmp:
+        engine, store, broker, ev = build_engine(tmp)
+        engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
+        engine.on_signal(make_signal())
+        rv = run_view(engine)
+        segs = rv["segments"]
+        _anchor = engine._run_anchor                    # 实际成交价（含滑点）
+        _R = engine._run_plan.params["R"]               # R 快照（锚 − 分型低点）
+        _pol = engine.exit_policy
+        check("[1a] 恰 1 段", len(segs), 1)
+        check("[1b] phase=sl / price=计划保护价（锚 − R 经 tick 对齐）/ 左端=开仓 bar",
+              (segs[0]["phase"], segs[0]["price"], segs[0]["start_date"]),
+              ("sl", _INST.round_price(_anchor - _R, "up"), "2026-09-01 09:40"))
+        check("[1c] 末段 end_date = 最近 bar（右端由前端延伸）",
+              segs[0]["end_date"], "2026-09-01 09:40")
+        check("[1d] run.wlr = plan.params 的盈亏比", rv["wlr"], 2.0)
+
+        print("\n[2] 未触发抬价的 bar 不出新段")
+        engine.on_bar(make_bar(2000, "2026-09-01 09:45"))
+        check("[2] 段数仍为 1", len(run_view(engine)["segments"]), 1)
+
+        print("\n[3] 浮盈 > 1R（严格不等）→ breakeven 段（左端 = 触发根）")
+        # 触发根的高点 = 锚 + 1R + 0.8（严格大于阈值且避开浮点噪声）
+        _h3 = _anchor + _pol.breakeven_trigger_r * _R + 0.8
+        engine.on_bar(make_bar(3000, "2026-09-01 09:50",
+                               o=4550.0, h=_h3, l=4548.0, c=4590.0))
+        segs = run_view(engine)["segments"]
+        _be_exp = _INST.round_price(
+            _anchor + _pol.breakeven_buffer_r * _R, "up")
+        check("[3a] 恰 2 段，第二段 phase=breakeven",
+              [s["phase"] for s in segs], ["sl", "breakeven"])
+        check("[3b] 保本位 = round_up(锚 ± 缓冲×R)（tick 对齐）", segs[1]["price"],
+              _be_exp)
+        check("[3c] 左端 = 触发抬价那根 bar", segs[1]["start_date"],
+              "2026-09-01 09:50")
+
+        print("\n[4] 浮盈 > 盈亏比×R → 初始跟踪段；创新高 → 移动跟踪段")
+        _h4 = _anchor + _RESOLVED_WLR * _R + 0.8         # 越过跟踪阈值
+        _tr1_exp = _INST.round_price(
+            _h4 - _pol.trailing_trigger_r * _R, "up")
+        engine.on_bar(make_bar(4000, "2026-09-01 09:55",
+                               o=4590.0, h=_h4, l=4548.0,
+                               c=_tr1_exp + 2 * _TICK))  # 收盘在新保护价上方 → 存活
+        _h5 = _h4 + 30.0                                 # 再创新高 → 移动跟踪
+        _tr2_exp = _INST.round_price(
+            _h5 - _pol.trailing_trigger_r * _R, "up")
+        engine.on_bar(make_bar(5000, "2026-09-01 10:00",
+                               o=_tr1_exp + 2 * _TICK, h=_h5,
+                               l=4548.0, c=_tr2_exp + 2 * _TICK))
+        segs = run_view(engine)["segments"]
+        check("[4a] 段序列 = sl → breakeven → trailing → trailing",
+              [s["phase"] for s in segs],
+              ["sl", "breakeven", "trailing", "trailing"])
+        check("[4b] 初始跟踪位 = round_up(新高 − 跟踪距离)（tick 对齐）",
+              segs[2]["price"], _tr1_exp)
+        check("[4c] 移动跟踪位（创新高 bar 新起一段）/ 左端 = 新高根",
+              (segs[3]["price"], segs[3]["start_date"]),
+              (_tr2_exp, "2026-09-01 10:00"))
+
+        print("\n[5] 投影 end_date 链 = 下一段左端；末段 = 最近 bar")
+        check("[5] end_date 链",
+              [s["end_date"] for s in segs],
+              ["2026-09-01 09:50", "2026-09-01 09:55", "2026-09-01 10:00",
+               "2026-09-01 10:00"])
+
+        print("\n[6] 段历史随 run kv 持久化：重启恢复不丢")
+        engine._persist()
+        engine2, _, _, _ = build_engine(tmp, out_name="state.db")
+        rv2 = run_view(engine2)
+        check("[6a] 恢复后段数与内容一致", rv2["segments"], segs)
+        check("[6b] 恢复后 wlr 一致", rv2["wlr"], 2.0)
+
+        print("\n[7] 同根先抬价再离场：段落了、run 结束整体清空")
+        engine.on_bar(make_bar(6000, "2026-09-01 10:05",
+                               o=_tr2_exp + 2 * _TICK, h=_tr2_exp + 40.0,
+                               l=4548.0, c=_tr2_exp - 5 * _TICK))
+        check("[7a] 离场后 run 投影为 None（线消失，与单线时代同语义）",
+              run_view(engine), None)
+        check("[7b] run 段缓存与计划一并清空",
+              (engine._run_segments, engine._run_plan), ([], None))
+
+        print("\n[8] 段价位全部对齐品种 tick（{}）".format(_TICK))
+        all_prices = [s["price"] for s in segs]
+        check("[8] tick 对齐", all(abs(p / _TICK - round(p / _TICK)) < 1e-6
+                                   for p in all_prices), True)
+
+    print("\n" + "=" * 60)
+    print("p71_run_segments: {} passed, {} failed".format(_PASS, _FAIL))
+    print("=" * 60)
+    sys.exit(1 if _FAIL else 0)
+
+
+if __name__ == "__main__":
+    main()

@@ -381,26 +381,27 @@ else:
            "auto-order-hint", "auto-order-checkbox", "auto-order-ledger-btn"])
     check("[8b2] 旧渲染函数 renderAutoOrderPrice 在 app.js 零残留",
           "renderAutoOrderPrice" in JS, False)
-    # ── 画线组件就位 ──
-    check("[8d] app.js 定义了纯函数 calcProtectionLine 与绘制函数 drawProtectionLine",
-          ("function calcProtectionLine(" in JS
-           and "function drawProtectionLine(" in JS), True)
+    # ── 画线组件就位（2026-09-28 分段化：单线 → 分段阶梯）──
+    check("[8d] app.js 定义了纯函数 calcRunSegments 与绘制函数 drawRunSegments",
+          ("function calcRunSegments(" in JS
+           and "function drawRunSegments(" in JS), True)
     check("[8e] 轮询回调里真的调用了它（changed 才赋值 + 重绘）",
-          ("calcProtectionLine(aoRun, protectionLine)" in JS
-           and "protectionLine = _pl.line" in JS), True)
-    check("[8f] 画线消费 run.stop / run.side / run.phase（三态的三个来源）",
-          ("aoRun.stop" in JS and "aoRun.side" in JS and "aoRun.phase" in JS),
-          True)
-    check("[8g] 徽标专属解释字段 r / tp 前端零残留（画线只认价格与层）",
-          ("aoRun.r" in JS or "aoRun.tp" in JS), False)
-    check("[8h] 无运行段默认不画：protectionLine 初始 null + 绘制函数开头早退",
-          ("let protectionLine = null;" in JS
-           and "if (!protectionLine || !isFinite(protectionLine.price)) return;" in JS),
+          ("calcRunSegments(aoRun, runSegSig)" in JS
+           and "runSegs = _rs.segs" in JS), True)
+    check("[8f] 画线消费 run.segments / run.side（分段与方向的来源）",
+          ("aoRun.segments" in JS and "aoRun.side" in JS), True)
+    check("[8g] 标签消费 run.r / run.wlr / run.anchor（分段标注的合法来源，"
+          "画线价位只认 segments 的 price）",
+          ("aoRun.r" in JS and "aoRun.wlr" in JS and "aoRun.anchor" in JS)
+          and "aoRun.tp" not in JS, True)
+    check("[8h] 无运行段默认不画：runSegs 初始 null + 绘制函数开头早退",
+          ("let runSegs = null;" in JS
+           and "if (!runSegs || !runSegs.length) return;" in JS),
           True)
     check("[8i] app.css 徽标样式已删除（.auto-order-px 零残留）",
           ".auto-order-px" in CSS, False)
     check("[8i2] 画线只挂主图（dualSubData 副图不画）",
-          "if (data !== dualSubData) drawProtectionLine(" in JS, True)
+          "if (data !== dualSubData) drawRunSegments(" in JS, True)
     check("[8j] 账本面板「持仓行无止损列」契约未被破坏"
           "（renderAutoOrderLedger 区块仍零命中）",
           JS[JS.index("function renderAutoOrderLedger(data) {"):
@@ -428,7 +429,8 @@ if _run_dict is not None:
     check("[9b] 键集合含 stop/phase/r/tp",
           _need.issubset(set(_keys)), True)
     check("[9c] 键集合即受控清单（新增须同步本行）", _keys,
-          ["anchor", "name", "phase", "r", "side", "stop", "tp", "volume"])
+          ["anchor", "name", "phase", "r", "segments", "side", "stop", "tp",
+           "volume", "wlr"])
     # 三项新字段必须取自 self._run_plan.params（stop 是计划的顶层字段，见 [9e]）
     _need_params = {"phase", "r", "tp"}
     _from_params = set()
@@ -456,15 +458,15 @@ if _run_dict is not None:
            and ".exit_plan" not in _stop_src), True)
 
 # ════════════════════════════════════════════════════════════════
-# [10] 前端行为层：calcProtectionLine 抽到 node 里跑真函数
+# [10] 前端行为层：calcRunSegments 抽到 node 里跑真函数（2026-09-28 分段化）
 # ════════════════════════════════════════════════════════════════
-print("\n[10] 前端行为层（node 真函数）：画线状态机 / 三态 / 变化判定")
+print("\n[10] 前端行为层（node 真函数）：分段线状态机 / 变化判定")
 if not (os.path.exists(_html_p) and os.path.exists(_js_p)):
     print("  [SKIP] Frontend 不在场（部分树），跳过行为层")
 else:
     _js = io.open(_js_p, encoding="utf-8").read()
     _m_fn = re.search(
-        r"(        function calcProtectionLine\(aoRun, prev\) \{[\s\S]*?\n        \})",
+        r"(        function calcRunSegments\(aoRun, prevSig\) \{[\s\S]*?\n        \})",
         _js)
     check("[10a] 函数源码可抽取（防抓空）", _m_fn is not None, True)
     _node = shutil.which("node")
@@ -474,57 +476,67 @@ else:
         print("  [SKIP] node 不在位，只跑静态层")
     else:
         _fn_src = re.sub(r"^        ", "", _m_fn.group(1), flags=re.M)
+        _seg1 = {"phase": "sl", "price": 7576.8,
+                 "start_date": "2026-09-01 09:40", "end_date": "2026-09-01 09:45"}
+        _seg2 = {"phase": "breakeven", "price": 7588.5,
+                 "start_date": "2026-09-01 09:45", "end_date": "2026-09-01 10:00"}
         _base = {"side": "LONG", "anchor": 7584.6, "volume": 2,
-                 "name": "run_managed", "stop": 7588.6, "phase": "breakeven",
-                 "r": 7.8, "tp": 7608}
+                 "name": "run_managed", "stop": 7588.5, "phase": "breakeven",
+                 "r": 7.8, "tp": 7600.2, "wlr": 2.0,
+                 "segments": [_seg1, _seg2]}
 
         def _case(**kw):
             d = dict(_base)
             d.update(kw)
             return d
 
-        def _line(price, side="LONG", phase="breakeven"):
-            return {"price": price, "side": side, "phase": phase}
+        _more = dict(_base, segments=_base["segments"] + [
+            {"phase": "trailing", "price": 7601.3,
+             "start_date": "2026-09-01 10:00", "end_date": "2026-09-01 10:05"}])
+        _short = dict(_base, side="SHORT")   # 段值巧合相同的反向 run
 
         _cases = [
-            {"id": "[10b]", "what": "运行态（保本层）→ 画出该价",
-             "prev": None, "run": _case(),
-             "want_line": _line(7588.6), "want_changed": True},
-            {"id": "[10c]", "what": "phase 抬到跟踪层（价也变）→ 变化",
-             "prev": _line(7588.6), "run": _case(phase="trailing", stop=7608.2),
-             "want_line": _line(7608.2, phase="trailing"), "want_changed": True},
-            {"id": "[10d]", "what": "同价不同层（phase 变）→ 也算变化（标签要跟着跳）",
-             "prev": _line(7608.2, phase="breakeven"),
-             "run": _case(phase="trailing", stop=7608.2),
-             "want_line": _line(7608.2, phase="trailing"), "want_changed": True},
-            {"id": "[10e]", "what": "方向反转（多转空）→ 变化",
-             "prev": _line(7577.2, side="SHORT"),
-             "run": _case(side="LONG", stop=7577.2),
-             "want_line": _line(7577.2), "want_changed": True},
-            {"id": "[10f]", "what": "轮询值完全没变 → 不重绘（5s 一次别白画）",
-             "prev": _line(7588.6), "run": _case(),
-             "want_line": _line(7588.6), "want_changed": False},
-            {"id": "[10g]", "what": "空仓（run=None）→ 撤线",
-             "prev": _line(7588.6), "run": None,
-             "want_line": None, "want_changed": True},
-            {"id": "[10h]", "what": "连续空仓（None→None）→ 不重绘",
-             "prev": None, "run": None,
-             "want_line": None, "want_changed": False},
-            {"id": "[10i]", "what": "保护价为 0 且本就无线 → 不画、也不重绘（没线→没线视觉零变化）",
-             "prev": None, "run": _case(stop=0),
-             "want_line": None, "want_changed": False},
-            {"id": "[10j]", "what": "stop 非数值且本就无线 → 不画、也不重绘",
-             "prev": None, "run": _case(stop="abc"),
-             "want_line": None, "want_changed": False},
+            {"id": "[10b]", "what": "运行态有分段 → 画出段列表",
+             "runPrev": None, "run": _case(), "recheck": False,
+             "want_segs": _base["segments"], "want_changed": True},
+            {"id": "[10c]", "what": "轮询值完全没变 → 不重绘（5s 一次别白画）",
+             "runPrev": _case(), "run": _case(), "recheck": True,
+             "want_segs": _base["segments"], "want_changed": False,
+             "want_changed2": False},
+            {"id": "[10d]", "what": "创新高出新段（trailing 追加）→ 变化",
+             "runPrev": _base, "run": _more, "recheck": False,
+             "want_segs": _more["segments"], "want_changed": True},
+            {"id": "[10e]", "what": "方向反转（段值巧合相同）→ 也算变化（标签方向要跟着跳）",
+             "runPrev": _base, "run": _short, "recheck": False,
+             "want_segs": _short["segments"], "want_changed": True},
+            {"id": "[10f]", "what": "空仓（run=None）→ 撤线",
+             "runPrev": _base, "run": None, "recheck": False,
+             "want_segs": None, "want_changed": True},
+            {"id": "[10g]", "what": "连续空仓（None→None）→ 不重绘",
+             "runPrev": None, "run": None, "recheck": True,
+             "want_segs": None, "want_changed": False, "want_changed2": False},
+            {"id": "[10h]", "what": "旧后端不下发 segments → 不画（不崩）",
+             "runPrev": _base, "run": {k: v for k, v in _base.items()
+                                       if k != "segments"},
+             "recheck": False, "want_segs": None, "want_changed": True},
+            {"id": "[10i]", "what": "segments 空表（初始即无段）→ 不画、不重绘",
+             "runPrev": None, "run": dict(_base, segments=[]),
+             "recheck": True, "want_segs": None, "want_changed": False,
+             "want_changed2": False},
         ]
         _harness = """
 const cases = __CASES__;
 const out = cases.map(function (c) {
     let err = '';
-    let r = null;
-    try { r = calcProtectionLine(c.run, c.prev); } catch (e) { err = String(e); }
-    if (err) return { err: err };
-    return { err: err, line: r.line, changed: r.changed };
+    let segs = null; let changed = null; let changed2 = null;
+    try {
+        let prevSig = (c.prevSig === undefined) ? null : c.prevSig;
+        if (c.runPrev) prevSig = calcRunSegments(c.runPrev, null).sig;
+        const r = calcRunSegments(c.run, prevSig);
+        segs = r.segs; changed = r.changed;
+        if (c.recheck) changed2 = calcRunSegments(c.run, r.sig).changed;
+    } catch (e) { err = String(e); }
+    return { err: err, segs: segs, changed: changed, changed2: changed2 };
 });
 console.log(JSON.stringify(out));
 """
@@ -532,21 +544,25 @@ console.log(JSON.stringify(out));
             _jsp = os.path.join(_td, "probe.js")
             io.open(_jsp, "w", encoding="utf-8").write(
                 _fn_src + "\n" + _harness.replace("__CASES__", json.dumps(
-                    [{"run": c.get("run"), "prev": c.get("prev")}
-                     for c in _cases], ensure_ascii=False)))
+                    [{"run": c.get("run"), "runPrev": c.get("runPrev"),
+                      "recheck": c.get("recheck", False)} for c in _cases],
+                    ensure_ascii=False)))
             r = subprocess.run([_node, _jsp], capture_output=True,
                                encoding="utf-8", errors="replace", timeout=30)
             if r.returncode != 0:
                 check("[10b..] node 执行状态机", r.stderr.strip()[-200:], "")
             else:
                 got = json.loads(r.stdout.strip())
-                check("[10b..] 九个样本全部无异常",
+                check("[10b..] 八个样本全部无异常",
                       [o["err"] for o in got], [""] * len(_cases))
                 for c, o in zip(_cases, got):
                     tag = "{} {}".format(c["id"], c["what"])
-                    check(tag + " → line / changed",
-                          (o.get("line"), o.get("changed")),
-                          (c["want_line"], c["want_changed"]))
+                    check(tag + " → segs / changed",
+                          (o.get("segs"), o.get("changed")),
+                          (c["want_segs"], c["want_changed"]))
+                    if c.get("recheck"):
+                        check(tag + " → 二次判定不重绘",
+                              o.get("changed2"), c["want_changed2"])
 
 # ════════════════════════════════════════════════════════════════
 # [11] 两条投影同构：引擎侧 vs API 侧（前端只认一种形状）
