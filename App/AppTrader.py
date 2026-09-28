@@ -1241,7 +1241,7 @@ class AppTrader:
         return {
             "options": [
                 {"value": LINK_SIMNOW, "label": "SimNow", "enabled": True,
-                 "hint": "仿真环境：资金与成交均为模拟，不会真实扣款",
+                 "hint": "仿真环境：上海期货交易所",
                  "reason": ""},
                 {"value": LINK_LIVE, "label": "实盘", "enabled": not reason,
                  "hint": ("实盘 · {}".format(market) if has_market
