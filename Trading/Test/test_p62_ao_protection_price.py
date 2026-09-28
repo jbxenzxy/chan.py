@@ -402,6 +402,22 @@ else:
           ".auto-order-px" in CSS, False)
     check("[8i2] 画线只挂主图（dualSubData 副图不画）",
           "if (data !== dualSubData) drawRunSegments(" in JS, True)
+    check("[8k] 分段线做品种 / 周期校验（切了合约或周期不画旧线，"
+          "与 drawTpslLines 同口径）",
+          ("aoRunSnap.symbol !== meta.symbol" in JS
+           and "aoRunSnap.freq !== currentFreq" in JS), True)
+    # 降级分支已删：run kv 唯一写入点必带 symbol / freq（见引擎 `_persist_run`），
+    # "有 run 却没两键"不可达 —— 命中即投影链路断了，必须不画而不是放行掩盖。
+    check("[8l] 校验无降级分支：快照缺 symbol / freq 同样不画"
+          "（缺失即异常，不放行）",
+          "aoRunSnap.symbol && aoRunSnap.freq" in JS, False)
+    # 开关悬停提示（wrap.title）里的"本段风控锚 / 止损"与图上保护价线同源同判：
+    # 切了品种 / 周期后线不画，文字也必须在 —— 否则"线没了、字还在"，读到的
+    # 是另一个品种的止损价。
+    check("[8m] 悬停提示的风控锚 / 止损与保护价线同口径"
+          "（切了品种或周期不再报旧 run 的止损）",
+          ("aoRun.symbol === _tipMeta.symbol" in JS
+           and "aoRun.freq === currentFreq" in JS), True)
     check("[8j] 账本面板「持仓行无止损列」契约未被破坏"
           "（renderAutoOrderLedger 区块仍零命中）",
           JS[JS.index("function renderAutoOrderLedger(data) {"):
@@ -429,8 +445,20 @@ if _run_dict is not None:
     check("[9b] 键集合含 stop/phase/r/tp",
           _need.issubset(set(_keys)), True)
     check("[9c] 键集合即受控清单（新增须同步本行）", _keys,
-          ["anchor", "name", "phase", "r", "segments", "side", "stop", "tp",
-           "volume", "wlr"])
+          ["anchor", "freq", "name", "phase", "r", "segments", "side", "stop",
+           "symbol", "tp", "volume", "wlr"])
+    # symbol / freq：前端判定"这段 run 属于哪张图"的唯一依据。缺了它，切合约
+    #   / 切周期后线照画（价位与当前图无关）→ 比不画更误导。
+    _sym_src = [ast.unparse(_v) for _k, _v in zip(_run_dict.keys,
+                                                  _run_dict.values)
+                if isinstance(_k, ast.Constant) and _k.value == "symbol"]
+    _freq_src = [ast.unparse(_v) for _k, _v in zip(_run_dict.keys,
+                                                   _run_dict.values)
+                 if isinstance(_k, ast.Constant) and _k.value == "freq"]
+    check("[9g] symbol 取自引擎品种身份、freq 取自信号源周期"
+          "（不读仓单 / 不读行情 —— 那会随换月漂移）",
+          (_sym_src[0] if _sym_src else "", _freq_src[0] if _freq_src else ""),
+          ("self.state.signal_symbol", "self.cfg.source.freq"))
     # 三项新字段必须取自 self._run_plan.params（stop 是计划的顶层字段，见 [9e]）
     _need_params = {"phase", "r", "tp"}
     _from_params = set()

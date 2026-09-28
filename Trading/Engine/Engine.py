@@ -655,6 +655,13 @@ class TradingEngine(ReconcileMixin):
             return
         self.store.set_json(self._RUN_KV, {
             "side": self._run_side.name,
+            # 品种 / 周期 = 这段 run 属于哪张图。前端画线要拿它跟当前图表比对
+            #   （切了合约或周期，上一段 run 的保护价线不能留在新图上，见
+            #   app.js drawRunSegments）。落进 run kv 而不是让 API 侧另取一份：
+            #   kv run 是 AppTrader._read_engine_switch 投影的**唯一输入**，
+            #   两处各造一份（一边读 kv、一边读启动参数）必然漂移。
+            "symbol": self.state.signal_symbol,
+            "freq": self.cfg.source.freq,
             "anchor": self._run_anchor,
             "volume": self._run_volume,
             "bar_ts": self._run_bar_ts,
@@ -838,17 +845,6 @@ class TradingEngine(ReconcileMixin):
         # 止损线若落在入场价内侧就会瞬间误触发。
         if bar.timestamp <= run.entry_bar_ts:
             return
-
-        # 旧库升级（kv 里没有 segments 键）→ 恢复出来的 run 带计划却不带分段
-        # 历史，而前端只认 segments —— 不补的话，升级后到下一次抬价之前，
-        # 运行态的保护价线是**整条消失**的（旧版一直显示单线）。这里用恢复
-        # 出来的那份计划补一段：段的语义是"保护价的一次生效区间"，这份计划
-        # 当下正在生效，补它不虚构历史（左端 = 这根 bar，是它能被确证的最早
-        # 时刻；库里只有 bar_ts / entry_at，没有可用于对齐 K 线的 bar 日期）。
-        # 只补一次：补完 _run_segments 非空，后续 bar 不再进入。
-        if not self._run_segments and self._run_plan is not None:
-            self._record_run_segment(self._run_plan, bar)
-            self._persist_run()
 
         bars_held = max(0, self.bars_seen - run.entry_bar_seq)
         check: Optional[ExitCheck] = self.exit_policy.check_with(
@@ -2447,6 +2443,11 @@ class TradingEngine(ReconcileMixin):
             "run": (None if (self._run_plan is None or self._run_side is None)
                     else {
                         "side": self._run_side.name,
+                        # 品种 / 周期：与 `_persist_run` 落盘的 kv 同名同源
+                        #   （前端据此判这段 run 属于哪张图；API 侧投影读的是
+                        #   同一份 kv，故两处取值必然一致）。
+                        "symbol": self.state.signal_symbol,
+                        "freq": self.cfg.source.freq,
                         "anchor": self._run_anchor,
                         "volume": self._run_volume,
                         "stop": self._run_plan.stop_price,

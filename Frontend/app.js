@@ -8426,7 +8426,12 @@
                     if (posN) tip += '，持仓 ' + posN + ' 手（已锁仓 ' + lockedN + '）';
                     // run = 当前这段敞口的风控锚与出场计划（后端 auto_order.run）：
                     // 没有它就只能看到"有仓"，看不到"止损在哪"。
-                    if (aoRun) {
+                    // 与图上保护价线**同口径**：run 属于另一张图（切了品种 / 周期）
+                    // 时，这些价对当前品种毫无意义 —— 线上不画，文字也不该报，
+                    // 否则就是"线没了、字还在"的自相矛盾（2026-09-29 用户拍板）。
+                    const _tipMeta = chartData && chartData.meta ? chartData.meta : null;
+                    if (aoRun && _tipMeta && aoRun.symbol === _tipMeta.symbol
+                        && aoRun.freq === currentFreq) {
                         tip += '；本段风控锚 ' + fmtPx(aoRun.anchor)
                             + '，止损 ' + fmtPx(aoRun.stop)
                             + '（' + aoRun.name + '）';
@@ -8464,7 +8469,9 @@
                         runSegs = _rs.segs;
                         runSegSig = _rs.sig;
                         aoRunSnap = aoRun ? { r: aoRun.r, anchor: aoRun.anchor,
-                                              side: aoRun.side, wlr: aoRun.wlr } : null;
+                                              side: aoRun.side, wlr: aoRun.wlr,
+                                              symbol: aoRun.symbol,
+                                              freq: aoRun.freq } : null;
                         render();
                     }
                 });
@@ -8593,9 +8600,14 @@
             const segs = (aoRun && Array.isArray(aoRun.segments)
                           && aoRun.segments.length) ? aoRun.segments : null;
             // 签名含 side：方向翻转必然开新 run，即使段值巧合相同也要重画。
+            // symbol / freq 一并进签名：切合约 / 切周期时即便段值巧合相同，
+            //   快照也要跟着换 —— 否则 {symbol, freq} 还停在上一段 run 上，
+            //   绘制函数的品种校验拿旧值比新图，判定结果不可预期。
             // 无段时签名归一为 null —— 空仓 → 空仓的连续轮询不误判"变化"。
             const sig = segs === null ? null : JSON.stringify({
                 side: String(aoRun.side || ""),
+                symbol: String(aoRun.symbol || ""),
+                freq: String(aoRun.freq || ""),
                 segs: segs
             });
             let changed;
@@ -8615,6 +8627,16 @@
         //   非末段的右端 = 下一段左端（end_date 由引擎投影：下一段 start_date）。
         function drawRunSegments(klines, area, priceRange, barStep, subPixelOffset) {
             if (!runSegs || !runSegs.length) return;
+            // 品种 / 周期不匹配（这段 run 属于另一张图）→ 不画，与股票页推演
+            //   drawTpslLines 同口径：切了合约或周期，上一段 run 的保护价线
+            //   留在新图上就是一条**价位完全无关**的橙线，比没有更误导。
+            //   没有降级分支：kv run 的**唯一写入点**是引擎 `_persist_run`
+            //   （必带 symbol / freq），run 结束即 `delete_key`、恢复时净敞口为
+            //   0 也删 —— "有 run 却没品种周期"不可达。放行分支只会把真的缺
+            //   失掩盖成"正常画线"，反而看不出投影链路断了。
+            const meta = chartData && chartData.meta ? chartData.meta : null;
+            if (aoRunSnap && (!meta || aoRunSnap.symbol !== meta.symbol
+                              || aoRunSnap.freq !== currentFreq)) return;
             // 伪 plan：tpslSegLabel 只读 r / entry.price / entry.side /
             //   params.win_loss_ratio —— 期货 run 投影按同名字段下发
             //   （anchor = 实际成交价 = 风控锚；wlr 缺失时标签退化为不带倍数）。

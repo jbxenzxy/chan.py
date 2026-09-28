@@ -1474,6 +1474,14 @@ class AppTrader:
                     prm = plan.get("params") or {}
                     run_view = {
                         "side": raw_run.get("side"),
+                        # 品种 / 周期：kv run 里引擎已落盘（`_persist_run`）。
+                        #   前端画线据此判"这段 run 属于哪张图"——切了合约/周期
+                        #   就不画旧线（与股票页推演 drawTpslLines 同口径）。
+                        #   旧库（本次改动前落盘）没有这两个键 → 取到 None →
+                        #   前端与 symbol / freq 都判为不匹配 → 不画（无降级分支：
+                        #   见 app.js drawRunSegments 与文档 v1.7 §1.4）。
+                        "symbol": raw_run.get("symbol"),
+                        "freq": raw_run.get("freq"),
                         "anchor": raw_run.get("anchor"),
                         "volume": raw_run.get("volume"),
                         "stop": plan.get("stop_price"),

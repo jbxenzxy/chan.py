@@ -22,9 +22,9 @@
   · [10] 同层同价去重：跟踪层启动后每根新高 bar 都会出一份新计划，价位没
     变就不开新段（trailing_trigger_r=0 的常态 —— 不去重会把同一价位切
     成几十段）；
-  · [11] 旧库升级（kv 无 segments 键）：恢复出来的 run 有计划没有段历史，
-    而前端只认 segments —— 首根 bar 用那份计划补一段并落盘（否则升级后
-    保护价线整条消失到下次抬价，旧版一直显示单线）。
+  · [11] run 投影带 symbol / freq（段所属品种与周期）：前端画线据此判
+    "这段 run 属于哪张图"，切品种/周期后不画旧线（与股票页推演
+    drawTpslLines 同口径）。kv 与引擎投影同名同源，恢复后不丢；
 
 数值说明：DryRun 成交价带一个 tick 滑点（信号 4550.0 → 成交 4550.2），
 锚/R/阈值全部由引擎实际值经策略参数推出（不写死档位数值）。
@@ -103,9 +103,11 @@ def tmp_dir():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def build_engine(tmpdir, out_name="state.db"):
+def build_engine(tmpdir, out_name="state.db", freq=None):
     """与 test_p62 同款离线引擎；策略显式带盈亏比（贴近生产 resolved 口径）。"""
     cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+    if freq:
+        cfg.source.freq = freq
     spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
     broker = DryRunBroker(spec, {"sim_equity": 1_000_000.0})
     store = Store(os.path.join(tmpdir, out_name))
@@ -311,34 +313,36 @@ def main():
             check("[10e] 新段左端 = 变价那根 bar",
                   engine._run_segments[-1]["start_date"], "2026-09-01 09:55")
 
-        print("\n[11] 旧库升级（kv 无 segments）：首根 bar 补一段并落盘")
+        print("\n[11] run 投影带 symbol / freq（前端品种/周期校验的来源）")
         with tmp_dir() as tmp:
             engine, store, broker, ev = build_engine(tmp)
             engine.on_bar(make_bar(1000, "2026-09-01 09:40"))
             engine.on_signal(make_signal())
+            rv = run_view(engine)
+            check("[11a] run.symbol = 引擎品种身份（signal_symbol，前端开引擎时传的那个）",
+                  rv["symbol"], engine.state.signal_symbol)
+            check("[11b] run.freq = 引擎周期（cfg.source.freq）",
+                  rv["freq"], engine.cfg.source.freq)
             engine._persist()
-            _stop0 = engine._run_plan.stop_price
-            _phase0 = str(engine._run_plan.params.get("_phase") or "") or "sl"
-            # 抹掉 segments 键 → 等价于旧版引擎写入的库（有 run、有 plan、无段历史）
             _raw = store.get_json("run")
-            check("[11a] 新库落盘带 segments 键（对照）", "segments" in _raw, True)
-            _raw.pop("segments", None)
-            store.set_json("run", _raw)
-            engine2, store2, _, _ = build_engine(tmp, out_name="state.db")
-            check("[11b] 旧库恢复：段表为空（前端会整条不画）",
-                  len(engine2._run_segments), 0)
-            engine2.on_bar(make_bar(2000, "2026-09-01 09:45"))
-            _segs = run_view(engine2)["segments"]
-            check("[11c] 首根 bar 即补一段（保护价线恢复显示）", len(_segs), 1)
-            check("[11d] 补的段 = 恢复出来的计划（价位 / 层，不虚构历史）",
-                  (_segs[0]["price"], _segs[0]["phase"]), (_stop0, _phase0))
-            check("[11e] 补的段左端 = 这根 bar（库里没有可对齐的更早日期）",
-                  _segs[0]["start_date"], "2026-09-01 09:45")
-            check("[11f] 补段已随 run kv 落盘（API 侧投影立即可见）",
-                  len(engine2.store.get_json("run").get("segments") or []), 1)
-            engine2.on_bar(make_bar(3000, "2026-09-01 09:50"))
-            check("[11g] 只补一次（后续 bar 不再追加同层同价段）",
-                  len(run_view(engine2)["segments"]), 1)
+            check("[11c] kv run 落盘带 symbol / freq（API 侧投影的唯一输入）",
+                  (_raw.get("symbol"), _raw.get("freq")),
+                  (engine.state.signal_symbol, engine.cfg.source.freq))
+            engine3, _, _, _ = build_engine(tmp, out_name="state.db")
+            rv3 = run_view(engine3)
+            check("[11d] 重启恢复后 symbol / freq 仍随 run 投影下发",
+                  (rv3["symbol"], rv3["freq"]),
+                  (engine.state.signal_symbol, engine.cfg.source.freq))
+            # freq 必须**读配置**：用非默认周期再建一台 —— 默认配置恰好是
+            #   "5m"，只测默认的话"freq 写成字面量 '5m'"的变异测不出来。
+            with tmp_dir() as tmp2:
+                engine4, store4, _, _ = build_engine(tmp2, freq="30m")
+                engine4.on_bar(make_bar(1000, "2026-09-01 09:40"))
+                engine4.on_signal(make_signal())
+                engine4._persist()
+                check("[11e] freq 随配置走（非默认周期 30m，不是写死的默认值）",
+                      (run_view(engine4)["freq"],
+                       store4.get_json("run").get("freq")), ("30m", "30m"))
 
     print("\n" + "=" * 60)
     print("p71_run_segments: {} passed, {} failed".format(_PASS, _FAIL))
