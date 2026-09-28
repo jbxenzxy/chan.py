@@ -361,6 +361,8 @@
  "bsps": [
   {
    "date": "2024/11/20",
+   "fractal_high": 18.27,
+   "fractal_low": 18.0,
    "high": 18.32,
    "is_buy": true,
    "low": 18.09,
@@ -369,6 +371,8 @@
   },
   {
    "date": "2024/07/29",
+   "fractal_high": 14.7,
+   "fractal_low": 13.72,
    "high": 17.86,
    "is_buy": true,
    "low": 17.63,
