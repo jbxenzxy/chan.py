@@ -9,7 +9,10 @@ OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
 # 阶段 2：配置中心化（V10 方案 7.3 凭据安全）；P2-2 同花顺工具链迁入 Script/
+# 凭据只放系统环境变量（.env 文件头有说明），仓库根 .env 不含账户/密码，允许入库；
+# 其余目录下的 .env 仍一律忽略。
 .env
+!/.env
 Script/ths_captured_cookie.txt
 Script/.sync_tdx_config
 # 运行时缓存（stock_names / stock_pettm_index / stock_float_mc / last_code_freq
@@ -25,7 +28,7 @@ Test/report.json
 # ===== Trading 运行产物与本地配置 =====
 # 回放/实盘的输出目录（events.jsonl、summary 等）与 sqlite 状态目录
 Trading/State/
-# 本地个性化配置已改为：Trading/Config.py（入库默认值）+ 环境变量/仓库根 .env（不入库）
+# 本地个性化配置已改为：Trading/Config.py（入库默认值）+ 系统环境变量（凭据）/仓库根 .env（无凭据，已入库）
 # SQLite WAL/SHM 附加文件（与上方 *.db 配套；*.db 已 ignore 但 WAL/SHM 需单独忽略）
 *.db-wal
 *.db-shm
