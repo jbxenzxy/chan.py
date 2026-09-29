@@ -524,14 +524,18 @@ if _HAS_APP:
 
 
     # [7a] broker=live 但 tq_market 仍 simnow → 配置矛盾拒绝
+    #  （分支判据显式给值：仓库根出现 .env 后，DEFAULT_CONFIG 是导入期从
+    #    env 构建的快照，隐含默认值会被它改写——测试不能再依赖"无 .env"）
     raises_apperror(
-        lambda: AppTrader._check_live_gate(cfg_with("live", {}), "live"),
+        lambda: AppTrader._check_live_gate(
+            cfg_with("live", {"tq_market": "simnow"}), "live"),
         "[7a] broker=live + tq_market=simnow → 拒绝")
 
     # [7b] tq_market≠simnow 但未开 confirm_live_trading → 拒绝
     raises_apperror(
         lambda: AppTrader._check_live_gate(
-            cfg_with("simnow", {"tq_market": "创元期货"}), "simnow"),
+            cfg_with("simnow", {"tq_market": "创元期货",
+                                "confirm_live_trading": False}), "simnow"),
         "[7b] tq_market=创元期货 未确认实盘 → 拒绝")
 
     # [7c] tq_market≠simnow + confirm_live_trading=true → 放行
