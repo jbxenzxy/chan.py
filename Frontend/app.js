@@ -4349,6 +4349,7 @@
                     const el = document.getElementById("stock-history");
                     if (data.need_refresh) {
                         el.innerHTML = '<div class="stock-history-item" style="color:#e94560;cursor:default;padding:10px;">' + (data.msg || '') + '</div>';
+                        positionStockHistory();
                         el.classList.add("show");
                         return;
                     }
@@ -4367,6 +4368,7 @@
                         const typeLabel = typeMap[item.type] || item.type;
                         return `<div class="stock-history-item" data-idx="${idx}"><span onclick="selectHistory('${fullCode}')" style="flex:1;display:block">${displayCode} - ${item.name} (${item.pinyin}) <span style="color:#888;font-size:11px;margin-left:8px">${typeLabel}</span></span></div>`;
                     }).join("");
+                    positionStockHistory();
                     el.classList.add("show");
                     // 焦点自动移到第一个候选
                     selectedIndex = 0;
@@ -4381,6 +4383,22 @@
         };
 
         window.removeHistory = removeHistory;
+
+        // 搜索历史/搜索结果下拉：改为 fixed 后必须按输入框视口坐标定位，
+        // 否则 .header 的 overflow 会裁掉它（见 app.css .stock-history 注释）。
+        function positionStockHistory() {
+            const input = document.getElementById("stock-code-input");
+            const el = document.getElementById("stock-history");
+            if (!input || !el) return;
+            const r = input.getBoundingClientRect();
+            el.style.left = r.left + "px";
+            el.style.top = (r.bottom + 2) + "px";   // 紧贴输入框下方
+        }
+        // 窗口尺寸变化（含窄屏响应式断点切换）时，若下拉已展开则重新对齐
+        window.addEventListener("resize", function() {
+            const el = document.getElementById("stock-history");
+            if (el && el.classList.contains("show")) positionStockHistory();
+        });
 
         window.showHistory = function() {
             const list = getHistory();
@@ -4405,6 +4423,7 @@
                 html += `<div class="stock-history-clear" onclick="event.stopPropagation();clearHistory()">清除全部</div>`;
             }
             el.innerHTML = html;
+            positionStockHistory();
             el.classList.add("show");
         };
 
