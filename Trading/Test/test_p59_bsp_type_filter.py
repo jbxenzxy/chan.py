@@ -458,13 +458,18 @@ with tmp_dir() as tmp:
         # R2：留痕必须落到 out_dir/gateway.log —— 新部署"先勾好再开"时
         #      子进程还没起过，tee 从未安装，这条日志以前只进终端
         _r14 = _at14.set_bsp_filter({t: True for t in BSP_TYPE_CHOICES})
-        # 多实例（§3.10.3）：勾选广播到全部已发现实例目录；主目录的
-        # state.db 必有本值；留痕经 log.info（"买卖点类型过滤生效"）进主日志。
-        check("[14f] 过滤广播写 ≥1 个实例目录（written_dirs）",
-              (_r14.get("written_dirs") or 0) >= 1, True)
-        check("[14g] log.info 留痕「买卖点类型过滤生效」（可复盘谁改的）",
-              "买卖点类型过滤生效" in
-              inspect.getsource(_AT.AppTrader.set_bsp_filter), True)
+        # 多实例（§3.10.3）：勾选广播到全部已发现实例目录（written_dirs）；
+        # 留痕必须**落盘**主目录 gateway.log——行为断言（源码断言在日志完全不
+        # 落盘时依然恒绿，会掩盖留痕回归，评审 P1-2）。
+        _gl14 = os.path.join(_r14["out_dir"], "gateway.log")
+        check("[14f] 首次推送也落 gateway.log（_engine_log 显式留痕）",
+              os.path.isfile(_gl14), True)
+        _txt14 = ""
+        if os.path.isfile(_gl14):
+            with open(_gl14, encoding="utf-8") as _f:
+                _txt14 = _f.read()
+        check("[14g] 日志内容含「买卖点类型过滤生效」（可复盘谁改的）",
+              "买卖点类型过滤生效" in _txt14, True)
         check("[14h] 写盘后立刻读回同一份（写/读同一通道）",
               _at14.get_bsp_filter()["bsp_type_filter"],
               {t: True for t in BSP_TYPE_CHOICES})

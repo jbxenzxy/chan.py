@@ -528,6 +528,24 @@ class AppTrader:
                 log_file,
                 "收到开启请求: out={} symbol={} freq={} sse_base={} link={}".format(
                     out_dir, use_symbol, use_freq, sse_base, link_used))
+            # 多 worker 可见性（评审 P3-4b）：多实例后单一 _handle 不再能判定
+            # "别处是否也在托管"——扫描全部叶子目录的 gateway.pid，发现存活
+            # 且不属于本注册表的 pid 就告警（多 worker 部署问题的唯一可见性）。
+            _my_pids = {h.pid for h in self._instances.values()}
+            for _d in self._all_state_dirs():
+                try:
+                    _raw = open(os.path.join(_d, "gateway.pid"),
+                                "r", encoding="utf-8").read().strip()
+                    _other = int(_raw)
+                except (OSError, ValueError):
+                    continue
+                if _other in _my_pids or _other == os.getpid():
+                    continue
+                if _pid_alive(_other):
+                    log.warning(
+                        "[AppTrader] 检测到其它托管的自动下单进程 pid=%s（%s）仍在运行"
+                        "——疑似多个后端 worker 同时调度自动下单，请确认部署上只有一个"
+                        "后端在管自动下单", _other, _d)
             if resolved:
                 self._engine_log(
                     log_file,
@@ -692,6 +710,12 @@ class AppTrader:
             self._exit_logged.discard(handle.pid)
             self._sync_state_file()
             self._inherit_bsp_filter(out_dir)
+            try:
+                with open(os.path.join(out_dir, "gateway.pid"), "w",
+                          encoding="utf-8") as f:
+                    f.write(str(handle.pid))
+            except OSError:
+                pass
             self._engine_log(log_file, "子进程已启动 pid={}".format(handle.pid))
             return handle.to_dict()
 
@@ -776,131 +800,136 @@ class AppTrader:
     def _stop_one_locked(self, handle: _TraderProc,
                          timeout: Optional[float]) -> Dict[str, Any]:
         """停单个实例（调用方持锁）。返回该实例的关闭结果投影。"""
-        if True:
-            pid = handle.pid
-            out_dir = handle.out_dir
-            log_file = os.path.join(out_dir, "gateway.log")
-            self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
+        pid = handle.pid
+        out_dir = handle.out_dir
+        log_file = os.path.join(out_dir, "gateway.log")
+        self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
 
-            # 记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
-            # 历史锁仓事件让本轮超时强杀被误判为优雅收尾（谎报成功）。
-            off_before = _count_off_events(out_dir)
+        # 记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
+        # 历史锁仓事件让本轮超时强杀被误判为优雅收尾（谎报成功）。
+        off_before = _count_off_events(out_dir)
 
-            # timeout=None → 用户主动点关闭，按就绪状态分档（r10）：
-            #   就绪（.ready 存在）→ 完整宽限（覆盖最坏锁仓）；
-            #   未就绪（启动链卡住）→ 短宽限（干等 150s 毫无意义，见
-            #   _STARTING_STOP_TIMEOUT 注释）。等待中就绪标志出现则切换。
-            # 传入 timeout（lifespan 服务退出）按传入值等待，分档不生效。
-            ready_flag = os.path.join(out_dir, _READY_FLAG)
-            ready_seen = os.path.exists(ready_flag)
-            if timeout is not None:
-                wait_secs = timeout
-            elif ready_seen:
-                wait_secs = _STOP_TIMEOUT
+        # timeout=None → 用户主动点关闭，按就绪状态分档（r10）：
+        #   就绪（.ready 存在）→ 完整宽限（覆盖最坏锁仓）；
+        #   未就绪（启动链卡住）→ 短宽限（干等 150s 毫无意义，见
+        #   _STARTING_STOP_TIMEOUT 注释）。等待中就绪标志出现则切换。
+        # 传入 timeout（lifespan 服务退出）按传入值等待，分档不生效。
+        ready_flag = os.path.join(out_dir, _READY_FLAG)
+        ready_seen = os.path.exists(ready_flag)
+        if timeout is not None:
+            wait_secs = timeout
+        elif ready_seen:
+            wait_secs = _STOP_TIMEOUT
+        else:
+            wait_secs = _STARTING_STOP_TIMEOUT
+        self._engine_log(
+            log_file,
+            "关闭宽限: wait={}s ready={}（{}）".format(
+                wait_secs, ready_seen,
+                "按传入 timeout" if timeout is not None
+                else ("启动链已就绪" if ready_seen
+                      else "启动链未就绪（短宽限，就绪后自动切完整宽限）")))
+
+        # ① 写停止 flag —— 子进程唯一的跨平台停止触发
+        stop_flag = os.path.join(out_dir, _STOP_REQUEST)
+        try:
+            with open(stop_flag, "w", encoding="utf-8") as f:
+                f.write("requested_by=apptrader ts={}\n".format(
+                    time.strftime("%Y-%m-%d %H:%M:%S")))
+        except OSError as e:
+            self._engine_log(log_file, "写停止flag失败: {}: {}".format(
+                type(e).__name__, e))
+
+        # ② 非 Windows 补发 SIGTERM 促活；Windows 不发（见 docstring）
+        if os.name != "nt":
+            _send_signal_best_effort(handle, signal.SIGTERM)
+
+        # ③ 等退出（r10 分档：未就绪等待中若就绪标志出现——build_runtime
+        #    恰好在本宽限内完成——从该时刻起切换为完整宽限，给随后的
+        #    锁仓收尾留足时间；就绪档与传入 timeout 档不重置）
+        deadline = time.time() + wait_secs
+        exited = False
+        while time.time() < deadline:
+            if not handle.running:
+                exited = True
+                break
+            if (timeout is None and not ready_seen
+                    and os.path.exists(ready_flag)):
+                ready_seen = True
+                deadline = time.time() + _STOP_TIMEOUT
+                self._engine_log(
+                    log_file,
+                    "就绪标志出现（启动链完成），宽限切换为 {:.0f}s"
+                    .format(_STOP_TIMEOUT))
+            time.sleep(0.3)
+
+        # 兜底强杀（文案分档：未就绪强杀 ≠ 锁仓风险场景，避免误导排查）
+        if not exited:
+            # 强杀即失去现场 —— 把 gateway.log 尾部随告警带回控制台，
+            # 卡在收尾链哪一步（登录/收尾/连接关闭）当场可见，不用再翻文件。
+            _kill_tail = self._read_log_tail(str(log_file), 3)
+            if ready_seen or timeout is not None:
+                log.warning(
+                    "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，"
+                    "强杀兜底（gateway.log 尾部：%s）", pid, wait_secs,
+                    (_kill_tail or "空").replace("\n", " | "))
             else:
-                wait_secs = _STARTING_STOP_TIMEOUT
-            self._engine_log(
-                log_file,
-                "关闭宽限: wait={}s ready={}（{}）".format(
-                    wait_secs, ready_seen,
-                    "按传入 timeout" if timeout is not None
-                    else ("启动链已就绪" if ready_seen
-                          else "启动链未就绪（短宽限，就绪后自动切完整宽限）")))
-
-            # ① 写停止 flag —— 子进程唯一的跨平台停止触发
-            stop_flag = os.path.join(out_dir, _STOP_REQUEST)
+                log.warning(
+                    "[AppTrader] 自动下单子进程 pid=%s 启动链未就绪"
+                    "（未完成登录/持仓锚点），%.0fs 短宽限到时强杀"
+                    "（启动链中无成交能力，不存在锁仓风险）",
+                    pid, wait_secs)
+            # P0：signal.SIGKILL 在 Windows 不存在——若直接写
+            # _send_signal_best_effort(handle, signal.SIGKILL)，参数求值
+            # 阶段就抛 AttributeError，try/except 不生效，后面的
+            # _taskkill(pid) 变死代码、真进程成孤儿。必须先择出平台安全信号。
+            kill_sig = getattr(
+                signal, "SIGKILL", getattr(signal, "SIGTERM", None))
+            if kill_sig is not None:
+                _send_signal_best_effort(handle, kill_sig)
             try:
-                with open(stop_flag, "w", encoding="utf-8") as f:
-                    f.write("requested_by=apptrader ts={}\n".format(
-                        time.strftime("%Y-%m-%d %H:%M:%S")))
-            except OSError as e:
-                self._engine_log(log_file, "写停止flag失败: {}: {}".format(
-                    type(e).__name__, e))
-
-            # ② 非 Windows 补发 SIGTERM 促活；Windows 不发（见 docstring）
-            if os.name != "nt":
-                _send_signal_best_effort(handle, signal.SIGTERM)
-
-            # ③ 等退出（r10 分档：未就绪等待中若就绪标志出现——build_runtime
-            #    恰好在本宽限内完成——从该时刻起切换为完整宽限，给随后的
-            #    锁仓收尾留足时间；就绪档与传入 timeout 档不重置）
-            deadline = time.time() + wait_secs
-            exited = False
-            while time.time() < deadline:
-                if not handle.running:
-                    exited = True
-                    break
-                if (timeout is None and not ready_seen
-                        and os.path.exists(ready_flag)):
-                    ready_seen = True
-                    deadline = time.time() + _STOP_TIMEOUT
-                    self._engine_log(
-                        log_file,
-                        "就绪标志出现（启动链完成），宽限切换为 {:.0f}s"
-                        .format(_STOP_TIMEOUT))
-                time.sleep(0.3)
-
-            # 兜底强杀（文案分档：未就绪强杀 ≠ 锁仓风险场景，避免误导排查）
-            if not exited:
-                # 强杀即失去现场 —— 把 gateway.log 尾部随告警带回控制台，
-                # 卡在收尾链哪一步（登录/收尾/连接关闭）当场可见，不用再翻文件。
-                _kill_tail = self._read_log_tail(str(log_file), 3)
-                if ready_seen or timeout is not None:
-                    log.warning(
-                        "[AppTrader] 自动下单子进程 pid=%s 未在 %.0fs 内退出，"
-                        "强杀兜底（gateway.log 尾部：%s）", pid, wait_secs,
-                        (_kill_tail or "空").replace("\n", " | "))
-                else:
-                    log.warning(
-                        "[AppTrader] 自动下单子进程 pid=%s 启动链未就绪"
-                        "（未完成登录/持仓锚点），%.0fs 短宽限到时强杀"
-                        "（启动链中无成交能力，不存在锁仓风险）",
-                        pid, wait_secs)
-                # P0：signal.SIGKILL 在 Windows 不存在——若直接写
-                # _send_signal_best_effort(handle, signal.SIGKILL)，参数求值
-                # 阶段就抛 AttributeError，try/except 不生效，后面的
-                # _taskkill(pid) 变死代码、真进程成孤儿。必须先择出平台安全信号。
-                kill_sig = getattr(
-                    signal, "SIGKILL", getattr(signal, "SIGTERM", None))
-                if kill_sig is not None:
-                    _send_signal_best_effort(handle, kill_sig)
-                try:
-                    handle.proc.wait(timeout=5)
-                except Exception:
-                    pass
-                if os.name == "nt":
-                    _taskkill(pid)
-
-            # 拿退出码（定位"自动退出"问题：非 0 说明自动下单子进程主循环抛异常）
-            rc = None
-            try:
-                rc = handle.proc.wait(timeout=0)
+                handle.proc.wait(timeout=5)
             except Exception:
                 pass
+            if os.name == "nt":
+                _taskkill(pid)
 
-            # ④ graceful 按结果校验（不再信任"退出来即优雅"；
-            #   只认关闭期间新增的 auto_order_off，防历史事件谎报）
-            graceful = exited and _graceful_by_result(out_dir, off_before)
-            if graceful:
-                log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓或空仓并持久化关闭态）",
-                         pid)
-            elif not exited and not ready_seen and timeout is None:
-                # r10：启动链未就绪被短宽限强杀——交易引擎未进主循环，
-                # 无持仓操作，"需核查是否真的锁仓"的通用文案在此误导排查。
-                log.warning(
-                    "[AppTrader] 自动下单 pid=%s 启动链未就绪时被短宽限强杀"
-                    "（未进入交易主循环，无持仓操作，rc=%s）", pid, rc)
-            else:
-                log.warning(
-                    "[AppTrader] 自动下单 pid=%s 已退出但未检测到收尾结果"
-                    "(graceful=False, rc=%s) —— 需核查是否真的锁仓", pid, rc)
+        # 拿退出码（定位"自动退出"问题：非 0 说明自动下单子进程主循环抛异常）
+        rc = None
+        try:
+            rc = handle.proc.wait(timeout=0)
+        except Exception:
+            pass
 
-            log.info("[AppTrader] 自动下单已关闭（pid=%s，graceful=%s，rc=%s）",
-                     pid, graceful, rc)
-            self._engine_log(
-                log_file,
-                "已关闭 pid={} graceful={} rc={}".format(pid, graceful, rc))
-            return {"running": False, "pid": pid, "graceful": graceful, "rc": rc}
+        # ④ graceful 按结果校验（不再信任"退出来即优雅"；
+        #   只认关闭期间新增的 auto_order_off，防历史事件谎报）
+        graceful = exited and _graceful_by_result(out_dir, off_before)
+        if graceful:
+            log.info("[AppTrader] 自动下单已优雅关闭 pid=%s（已锁仓或空仓并持久化关闭态）",
+                     pid)
+        elif not exited and not ready_seen and timeout is None:
+            # r10：启动链未就绪被短宽限强杀——交易引擎未进主循环，
+            # 无持仓操作，"需核查是否真的锁仓"的通用文案在此误导排查。
+            log.warning(
+                "[AppTrader] 自动下单 pid=%s 启动链未就绪时被短宽限强杀"
+                "（未进入交易主循环，无持仓操作，rc=%s）", pid, rc)
+        else:
+            log.warning(
+                "[AppTrader] 自动下单 pid=%s 已退出但未检测到收尾结果"
+                "(graceful=False, rc=%s) —— 需核查是否真的锁仓", pid, rc)
+
+        log.info("[AppTrader] 自动下单已关闭（pid=%s，graceful=%s，rc=%s）",
+                 pid, graceful, rc)
+        try:
+            _pf = os.path.join(out_dir, "gateway.pid")
+            if os.path.exists(_pf):
+                os.remove(_pf)
+        except OSError:
+            pass
+        self._engine_log(
+            log_file,
+            "已关闭 pid={} graceful={} rc={}".format(pid, graceful, rc))
+        return {"running": False, "pid": pid, "graceful": graceful, "rc": rc}
 
     def ack_alerts(self, ts: Optional[float] = None) -> Dict[str, Any]:
         """确认告警（D11）：把 ack 水位写进自动下单子进程的 state.db。
@@ -1031,6 +1060,11 @@ class AppTrader:
         _allowed = ",".join([t for t in BSP_TYPE_CHOICES if filt[t]])
         log.info("[AppTrader] 买卖点类型过滤生效 → 放行[%s] (主=%s 广播=%d 目录)",
                  _allowed or "无：不再有信号驱动的新报单", primary, written)
+        # 留痕必须落实例 gateway.log（评审 P1-1）："交易引擎没在跑时先改勾选"
+        # 的场景下 tee 从未安装，只剩这条显式写文件——事后可复盘谁改的。
+        self._engine_log(os.path.join(primary, "gateway.log"),
+                         "买卖点类型过滤生效 → 放行[{}]（广播 {} 目录）".format(
+                             _allowed or "无：不再有信号驱动的新报单", written))
         return {"bsp_type_filter": filt, "out_dir": primary,
                 "written_dirs": written}
 

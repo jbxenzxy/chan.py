@@ -73,6 +73,37 @@ class _FakeProc:
         return b"", b""
 
 
+class _ExitOnFlagProc:
+    """见 {out_dir}/.stop_request 出现即退出的伪进程（graceful 路径覆盖）。"""
+
+    def __init__(self, cmd, out_dir):
+        self.cmd = cmd
+        self.pid = os.getpid()
+        self.returncode = None
+        self._flag = os.path.join(out_dir, ".stop_request")
+
+    def poll(self):
+        return 0 if os.path.exists(self._flag) else None
+
+    def send_signal(self, sig):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def communicate(self, input=None, timeout=None):
+        return b"", b""
+
+
 class _Store:
     """_engine_store 的桩：内存 kv，按目录隔离（替代真实 sqlite）。"""
 
@@ -121,9 +152,11 @@ def main():
         try:
             AT._STATE_FILE = state_file
             AT.AppTrader._load_cfg = staticmethod(lambda: _cfg())
-            AT.subprocess.Popen = (lambda cmd, **kw:
-                                   _Store.data.setdefault("__cmd__", [])
-                                   .append(cmd) or _FakeProc(cmd))
+            def _popen(cmd, **kw):
+                _Store.data.setdefault("__cmd__", []).append(cmd)
+                out_dir = cmd[cmd.index("--out") + 1]                     if "--out" in cmd else tmp
+                return _ExitOnFlagProc(cmd, out_dir)
+            AT.subprocess.Popen = _popen
             AT._engine_store = _Store
             AT._scan_state_dirs = staticmethod(
                 lambda: sorted(
@@ -230,7 +263,7 @@ def main():
                   by_pk.get("IF", {}).get("running"), False)
             check("[10d] AU 为运行中实例",
                   by_pk.get("AU", {}).get("running"), True)
-            check("[10e] 已停止实例的告警队列置空",
+            check("[10e] 已停止实例的持仓投影保留（账本停机可见）",
                   by_pk.get("IF", {}).get("positions"),
                   [{"side": "LONG", "volume": 2, "entry_price": 3856.2}])
 
@@ -242,7 +275,7 @@ def main():
             check("[11b] 落 State/Live/IF",
                   os.path.normpath(res3.get("out_dir")),
                   os.path.normpath(out_if_live))
-            check("[11c] 注册表 3 个实例（IF@live、AU、IF@simnow 已出表）",
+            check("[11c] 注册表 2 个实例（IF@live、AU；IF@simnow 已出表）",
                   sorted(t._instances), ["AU", "IF"])
 
             # ── [12] 过滤启动继承：Live/IF 无过滤值 → 从既有库继承 ──
@@ -254,7 +287,20 @@ def main():
             r = t.stop(timeout=0.1)
             check("[13a] 停全部返回 results", "results" in r, True)
             check("[13b] 注册表清空", t._instances, {})
-            check("[13c] _handle 兼容镜像清空", at is not None and True, True)
+            check("[13c] _handle 兼容镜像清空", t._handle is None, True)
+
+            # ── [15] 优雅退出路径覆盖（评审 P3-1）：伪进程观测到停止旗标
+            #    即退出（poll 返回 0），store 预置 auto_order_enabled=False →
+            #    graceful 按结果判定为 True（不再走强杀分支）。──
+            out_im = os.path.join(root, "SimNow", "IM")
+            t.start(out_dir=out_im, symbol="KQ.m@CFFEX.IM",
+                    freq="5m", sse_base="http://x", link="simnow")
+            _Store.data[out_im]["auto_order_enabled"] = False
+            r15 = t.stop(symbol="KQ.m@CFFEX.IM", timeout=2)
+            check("[15a] 观测到停止旗标后退出 → graceful=True",
+                  r15.get("graceful"), True)
+            check("[15b] pid 文件已摘除",
+                  os.path.exists(os.path.join(out_im, "gateway.pid")), False)
 
             # ── [14] status()：无实例时 running=False ──
             st2 = new_trader_and_status(new_trader)

@@ -8674,7 +8674,7 @@
             if (!panel || panel.style.display === 'none') return;
             if (_ledgerInFlight) return;
             _ledgerInFlight = true;
-            fetch('/api/trader/auto-order/ledger', { cache: 'no-store' })
+            _timeoutedFetch('/api/trader/auto-order/ledger')
                 .then(function (r) {
                     return r.ok ? r.json()
                                 : Promise.reject(new Error('HTTP ' + r.status));
@@ -9434,15 +9434,19 @@
                 }
                 if (label) label.textContent = on ? '启动中…' : '关闭中…';
                 const opts = { method: 'POST', cache: 'no-store' };
+                opts.headers = { 'Content-Type': 'application/json' };
                 if (on) {
                     // 把当前页面品种/周期/服务地址带给引擎（--source sse 订阅该行情流）
-                    opts.headers = { 'Content-Type': 'application/json' };
                     opts.body = JSON.stringify({
                         symbol: realtimeSymbol || null,
                         freq: currentFreq || null,
                         sse_base: location.origin,
                         link: link            // 登录链路（simnow / live）
                     });
+                } else {
+                    // 关闭也带品种（§3.10.2）：只停本页品种的运行中实例——
+                    // 多实例下不带 symbol 会走「停全部」，把别的品种一起停掉
+                    opts.body = JSON.stringify({ symbol: realtimeSymbol || null });
                 }
                 console.info('[auto-order] ' + (on ? '开启' : '关闭') + ' 请求: '
                     + (opts.body || '(无 body)') + '  url=/api/trader/auto-order/'
