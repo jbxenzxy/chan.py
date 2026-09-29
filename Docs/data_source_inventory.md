@@ -39,15 +39,15 @@
 
 | 信息 | 收口模块 | 取数函数 | 底层真实数据源 | 消费方 |
 | --- | --- | --- | --- | --- |
-| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` () | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** · **按需逐只取数**（`capital_changes` 是按代码查询的协议命令，非一次性全市场文件，故不与 PE-TTM 同样做成全量预取） | `TdxAPI` 前复权流水线（`TdxAPI.py` `_resample_day_to_week` 导入） |
+| 除息除权 (XDXR) | `DataAPI/ElTdxAPI.py` | `get_xdxr_data(market, code)` (`DataAPI/ElTdxAPI.py` `get_xdxr_data`) | **eltdx**（通达信网络行情，7709 协议 / `0x000f` 命令）· **单一数据源** · **按需逐只取数**（`capital_changes` 是按代码查询的协议命令，非一次性全市场文件，故不与 PE-TTM 同样做成全量预取） | `TdxAPI` 前复权流水线（`TdxAPI.py` `_resample_day_to_week` 导入） |
 | 重要股东买卖（减持计划） | `DataAPI/ElTdxAPI.py` | `get_shareholder_reduction_flag(market, code, today)`（）+ `get_shareholder_reduction_plans`（`_REDUCTION_TIMEOUT`）+ `_fetch_plan_rows`（`fetch_float_mc`） | **eltdx ≥ 3.2.0 官方 `F10Client.shareholder_change_plans`**：通达信 F10 7615 网关 `CWServ.tdxf10_gg_gdyj` + section `gdzjcjh`（股东增减持计划）· **按代码查询**（非全市场文件，与 xdxr 同类）· 进程缓存 1 天、不落盘 · 仅覆盖 sh/sz/bj · 若当前交易日 ∈ 某条「拟减持」计划的**公告日~变动截止日**（`N001`~`N010`，`N001` 缺失回退 `N009`）→ 命中（进度 `N011` 仅「进行中」计入，「完成」/「停止实施」已释放/取消的抛压剔除，未知状态保留）；所有命中窗口**合并为一个最大连续区间**（最早起始~最晚截止，因命中窗口均含当日、并集无空洞）→ `windows` 恒 1 条，徽标展示「`减持:√ 07-14~11-03`」 | **网络层 eltdx ≥ 3.2.0 官方客户端**（3.2.0 起 F10 默认 IPv4-first：`f10/_http._connect_ipv4_first` 对 getaddrinfo 结果稳定排序 AF_INET 优先、逐地址回落，保留代理/Host/SNI/证书校验——上游已修复「本机 IPv6 出口不通时裸 urlopen 每次卡 8~12s」的地址序问题；直连实测 113~133ms、走代理 ~310~360ms）。**硬性依赖 eltdx>=3.2.0，无旧版回退**（`requirements.txt` 已锁 `eltdx>=3.2.0`；曾短暂内置自实现 `_f10_tqlex_post` 强制 IPv4 直连作回退，2026-09-12 用户定版删除，避免双路径难排查）。取数带 **1 次重试 + 连续失败 3 次熔断 10 分钟**。AppEngine `_get_reduction_flag` **同步**调用注入 `meta.shareholder_reduction`（`include_extra=True` 时）→ `Frontend/app.js` 徽标（置于「归属」之后）。**批量扫描传 `include_extra=False` 跳过本取数**（扫描只消费 K 线/缠论结果，展示性 meta 不参与过滤——逐票 7615 HTTP 纯浪费，2026-09-12 用户定版）。曾有版本把取数拆成独立 `/reduction` 端点 + 前端异步补取，**已废弃**（用户要求同步、易排查） |
 | PE-TTM（A股个股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `_eltdx_fetch_pe_ttm_all` → `ElTdxAPI.fetch_pe_ttm_all` | **eltdx**：`0x06B9` 服务器文件读取 → `zhb.zip` 内 `tdxstat.cfg` 第 3 列（滚动市盈率）· **单请求覆盖全市场**（取单只与取全市场耗时相同，实测 1.2~1.4s）→ 故做成**进程级全量缓存**：进程内首次取数拉全 A 股并落盘 `App/stock_pettm.json`，之后一律命中内存 · **缓存构建已由首个请求路径挪到启动阶段**：`FrontAPI.lifespan` → `orch.prime_pe_ttm_cache()`（`AppRefresh.py`，幂等 single-flight、失败不阻断启动）在服务接客前完成预热，消除「启动后第一次加载多等 ~8s 全表下载」（2026-09-12 用户实测后定版） | `AppRefresh` 注入 `AppData`（PE 实时层） |
 | PE-TTM（指数 / 港股） | `App/AppRefresh.py` | `_fetch_pe_ttm_live(market, code)` → `TxAPI.fetch_pe_ttm` | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[39]`（实测为 **TTM / 滚动**口径）。**指数必须走腾讯**：eltdx 统计文件只含 A 股个股，指数走 eltdx 必然取空（2026-09 修复「输入指数不显示 PE-TTM」） | 同上 |
 | PE-TTM（A股批量入口） | `DataAPI/ElTdxAPI.py` | `fetch_pe_ttm_all()` (`_pe_value_from_valuation_rows`) | 返回 `{mkt+code: pe}`，**不做市场分流**（分流属 App 层编排） | `AppRefresh.py` `_fetch_names_from_sina_once`（进程级全量缓存的唯一取数点） |
 | 流通市值（A股） | `App/AppScan.py` | `fetch_float_mc_all(stock_list)` (`_fetch_float_mc_all`) → `ElTdxAPI.fetch_float_mc` (`Scanner`) | **eltdx**：`0x0010` 流通股本 × `0x054c` 最新价，单位由「元」换算为「亿元」 | `AppScan.py` `Scanner` 扫描前置取数 → `AppScan.py` `_min_float_mc` 阈值判定 |
-| 股票名字（A股） | `DataAPI/SinaAPI.py` | `fetch_a_names(mkt_code_pairs)` () | **新浪财经** `http://hq.sinajs.cn/list=`（`SinaAPI.py` `_SINA_BASE`），字段 `[0]`（GBK） | `AppRefresh.py` `_fetch_names_from_sina_once`（第一轮） |
-| 股票名字（港股） | `DataAPI/TxAPI.py` | `fetch_hk_names(hk_codes)` () | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[1]`（GBK） | `AppRefresh.py` `_fetch_names_from_sina_once`（第二轮） |
-| 指数归属 | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)` () | **AKShare `index_stock_cons_csindex`**（中证指数公司 csindex） | `AppRefresh.py` `_fetch_index_belong_from_akshare`（线程池，每指数 30s 限时）；落盘 `stock_index_belong.json`（`AppData.save_index_belong_cache` `DataAPI/AkshareAPI.py`） |
+| 股票名字（A股） | `DataAPI/SinaAPI.py` | `fetch_a_names(mkt_code_pairs)` (`DataAPI/SinaAPI.py` `fetch_a_names`) | **新浪财经** `http://hq.sinajs.cn/list=`（`SinaAPI.py` `_SINA_BASE`），字段 `[0]`（GBK） | `AppRefresh.py` `_fetch_names_from_sina_once`（第一轮） |
+| 股票名字（港股） | `DataAPI/TxAPI.py` | `fetch_hk_names(hk_codes)` (`DataAPI/TxAPI.py` `fetch_hk_names`) | **腾讯行情** `qt.gtimg.cn/q=`，字段 `[1]`（GBK） | `AppRefresh.py` `_fetch_names_from_sina_once`（第二轮） |
+| 指数归属 | `DataAPI/AkshareAPI.py` | `fetch_index_cons(index_code)` (`DataAPI/AkshareAPI.py` `fetch_index_cons`) | **AKShare `index_stock_cons_csindex`**（中证指数公司 csindex） | `AppRefresh.py` `_fetch_index_belong_from_akshare`（线程池，每指数 30s 限时）；落盘 `stock_index_belong.json`（`AppData.save_index_belong_cache` `DataAPI/AkshareAPI.py`） |
 
 说明：
 
@@ -99,26 +99,26 @@
 
 ## 二、股票扫描 · 成分股的获取方式
 
-入口：`TdxAPI.get_index_stocks(sector_code)`，**定义于 `DataAPI/TdxAPI.py` `_parse_infoharbor_block`**。
+入口：`TdxAPI.get_index_stocks(sector_code)`，**定义于 `DataAPI/TdxAPI.py` `get_index_stocks`**。
 上游：`AppScan.py` `_page_index_code`（`Scanner.stock_list` 的 `page_index` 来源，`AppScan.py` 注册）→ `FrontAPI.py` `api_stocks_scan_read_candidates` `GET /api/stocks/scan/read/candidates`。
 
 | 板块代码类型 | 取数方式 | 底层真实数据源 | 代码位置 | spblock.dat 能否取得（本地离线，本机实测） |
 | --- | --- | --- | --- | --- |
-| `881xxx` 研究行业（新版） | `_read_tdxhy_sector_stocks` | 通达信本地行业配置 `T0002/hq_cache/tdxhy.cfg`（经 App 层注入的 `X↔881` 映射，映射源 `tdxzs3.cfg`） | 分派 `FrontAPI.py` / 读取 `FrontAPI.py` / 解析 `_parse_tdxhy_cfg` `FrontAPI.py` | **否** — spblock.dat 只含交易所／指数公司宽基 + ETF + 债券，不含研究行业分类 |
-| 港股指数 `HSTECH` / `HSIDI` | `_read_hk_index_stocks` | 恒生指数公司官网 `hsi.com.hk` Factsheet **PDF** | 分派 `FrontAPI.py` / 读取 `FrontAPI.py` | **否** — A股本地文件，不含港股指数 |
-| `000001` 上证指数 | `_read_sh_index_stocks_exchange` | 上交所官网 `query.sse.com.cn/sseQuery/commonQuery.do`（主板A `STOCK_TYPE=1` + 科创板 `8` 两段合并） | 分派 `FrontAPI.py` / 读取 `FrontAPI.py` | **否** — spblock.dat 无 上证指数（其成分股＝全部沪市，走专用接口） |
-| 中证指数 `000300/000905/000852/000688` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons` | AKShare / csindex（中证指数公司） | 分派 `FrontAPI.py`（`CSI_INDICES` `FrontAPI.py`）/ 读取 `FrontAPI.py` | **部分** — 中证500(000905)／中证1000(000852) **是**（各 500／1000 只）；沪深300(000300)／科创50(000688)／中证800(000906) **否**（走 infoharbor_block.dat 的 ZS 段） |
-| `399xxx` 深交所指数 | `_read_standard_index_stocks` **内联**（深交所官网 XLS 直连） | `www.szse.cn/api/report/ShowReport`（`CATALOGID=1747_zs`，`SHOWTYPE=xls`） | `FrontAPI.py` ～ `FrontAPI.py` | **部分** — 深证成指(399001)／国证2000(399303) **是**（各 500／2000 只）；创业板指(399006)／深证100(399004) 等其余 399xxx **否** |
-| 其他指数（`000xxx` 非中证 / `932xxx` / `000510` 等） | `_fetch_csi_index_stocks`（末尾兜底） | AKShare / csindex（中证指数公司） | `FrontAPI.py` | **个别** — 仅超大盘／超小盘宽基：中证2000(932000)／中证A500(000510) **是**（各 2000／500 只）；上证50(000016)／上证180(000010)／上证380(000380) 等其余 **否** |
-| `880xxx` 概念 / 风格板块 | `_read_infoharbor_sector_stocks` | 本地 `T0002/hq_cache/infoharbor_block.dat` | 分派 `FrontAPI.py` / 读取 `FrontAPI.py` / 解析 `_parse_infoharbor_block` `FrontAPI.py` | **否** — spblock.dat 不含概念／风格板块 |
+| `881xxx` 研究行业（新版） | `_read_tdxhy_sector_stocks` | 通达信本地行业配置 `T0002/hq_cache/tdxhy.cfg`（经 App 层注入的 `X↔881` 映射，映射源 `tdxzs3.cfg`） | 分派 `DataAPI/TdxAPI.py` `_read_tdxhy_sector_stocks` / 读取 `DataAPI/TdxAPI.py` `_read_tdxhy_sector_stocks` / 解析 `DataAPI/TdxAPI.py` `_parse_tdxhy_cfg` | **否** — spblock.dat 只含交易所／指数公司宽基 + ETF + 债券，不含研究行业分类 |
+| 港股指数 `HSTECH` / `HSIDI` | `_read_hk_index_stocks` | 恒生指数公司官网 `hsi.com.hk` Factsheet **PDF** | 分派 `DataAPI/TdxAPI.py` `_read_hk_index_stocks` / 读取 `DataAPI/TdxAPI.py` `_read_hk_index_stocks` | **否** — A股本地文件，不含港股指数 |
+| `000001` 上证指数 | `_read_sh_index_stocks_exchange` | 上交所官网 `query.sse.com.cn/sseQuery/commonQuery.do`（主板A `STOCK_TYPE=1` + 科创板 `8` 两段合并） | 分派 `DataAPI/TdxAPI.py` `_read_sh_index_stocks_exchange` / 读取 `DataAPI/TdxAPI.py` `_read_sh_index_stocks_exchange` | **否** — spblock.dat 无 上证指数（其成分股＝全部沪市，走专用接口） |
+| 中证指数 `000300/000905/000852/000688` | `_fetch_csi_index_stocks` → `AkshareAPI.fetch_index_cons` | AKShare / csindex（中证指数公司） | 分派 `DataAPI/TdxAPI.py` `_fetch_csi_index_stocks`（`CSI_INDICES` `DataAPI/TdxAPI.py`）/ 读取 `DataAPI/TdxAPI.py` `_fetch_csi_index_stocks` | **部分** — 中证500(000905)／中证1000(000852) **是**（各 500／1000 只）；沪深300(000300)／科创50(000688)／中证800(000906) **否**（走 infoharbor_block.dat 的 ZS 段） |
+| `399xxx` 深交所指数 | `_read_standard_index_stocks` **内联**（深交所官网 XLS 直连） | `www.szse.cn/api/report/ShowReport`（`CATALOGID=1747_zs`，`SHOWTYPE=xls`） | `DataAPI/TdxAPI.py` `_read_standard_index_stocks` ～ `DataAPI/TdxAPI.py` `_read_standard_index_stocks` | **部分** — 深证成指(399001)／国证2000(399303) **是**（各 500／2000 只）；创业板指(399006)／深证100(399004) 等其余 399xxx **否** |
+| 其他指数（`000xxx` 非中证 / `932xxx` / `000510` 等） | `_fetch_csi_index_stocks`（末尾兜底） | AKShare / csindex（中证指数公司） | `DataAPI/TdxAPI.py` `_fetch_csi_index_stocks` | **个别** — 仅超大盘／超小盘宽基：中证2000(932000)／中证A500(000510) **是**（各 2000／500 只）；上证50(000016)／上证180(000010)／上证380(000380) 等其余 **否** |
+| `880xxx` 概念 / 风格板块 | `_read_infoharbor_sector_stocks` | 本地 `T0002/hq_cache/infoharbor_block.dat` | 分派 `DataAPI/TdxAPI.py` `_read_infoharbor_sector_stocks` / 读取 `DataAPI/TdxAPI.py` `_read_infoharbor_sector_stocks` / 解析 `DataAPI/TdxAPI.py` `_parse_infoharbor_block` | **否** — spblock.dat 不含概念／风格板块 |
 | `8803xx` / `8804xx` 旧版行业 | **已无专门分支** —— 落入 `880xxx` 路径；本机 `tdxzs.cfg` 有 132 个此类代码，infoharbor 未命中 → 警告 + 返回空 | （无成分股数据） | 跳过逻辑移至册名阶段（`AppRefresh.py` `_refresh_stock_names`） | **否** |
 
-路由顺序（`get_index_stocks` `AppRefresh.py`，**3 步 + 末尾兜底，无任何联网下载成分股的路径**）：
+路由顺序（`get_index_stocks` `DataAPI/TdxAPI.py`，**3 步 + 末尾兜底，无任何联网下载成分股的路径**）：
 
-1. `881xxx` → `_read_tdxhy_sector_stocks`（`AppRefresh.py`）；
-2. 港股指数（判定用 `_HK_INDEX_CODES` `count`）→ `_read_hk_index_stocks`（`AppRefresh.py`）。**必须早于第 3 步**——源码注释指出：否则 `HSTECH` 之类字母代码会落入中证接口 `index_stock_cons_csindex`，返回非 Excel 内容抛 `Excel file format cannot be determined`；
-3. 非 `88` 开头 → `_read_standard_index_stocks`（`AppRefresh.py`）；其内部再分派 `000001` / `CSI_INDICES` / `399xxx` / 兜底（`AppRefresh.py`～`AppRefresh.py`）；
-4. `880xxx` → `_read_infoharbor_sector_stocks`（`AppRefresh.py`）；未命中即 `log.warning` + 返回 `[]`（`AppRefresh.py`），提示点「刷新」重下 `infoharbor_block.dat`。
+1. `881xxx` → `_read_tdxhy_sector_stocks`（`DataAPI/TdxAPI.py`）；
+2. 港股指数（判定用 `_HK_INDEX_CODES` `count`）→ `_read_hk_index_stocks`（`DataAPI/TdxAPI.py`）。**必须早于第 3 步**——源码注释指出：否则 `HSTECH` 之类字母代码会落入中证接口 `index_stock_cons_csindex`，返回非 Excel 内容抛 `Excel file format cannot be determined`；
+3. 非 `88` 开头 → `_read_standard_index_stocks`（`DataAPI/TdxAPI.py`）；其内部再分派 `000001` / `CSI_INDICES` / `399xxx` / 兜底（`DataAPI/TdxAPI.py`～`DataAPI/TdxAPI.py`）；
+4. `880xxx` → `_read_infoharbor_sector_stocks`（`DataAPI/TdxAPI.py`）；未命中即 `log.warning` + 返回 `[]`（`DataAPI/TdxAPI.py`），提示点「刷新」重下 `infoharbor_block.dat`。
 
 说明：
 
