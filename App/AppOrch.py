@@ -72,14 +72,16 @@ def call_trader_start(out_dir=None, symbol=None, freq=None, sse_base=None,
                         sse_base=sse_base, link=link)
 
 
-def call_trader_stop(timeout=None):
+def call_trader_stop(timeout=None, symbol=None):
     """关闭自动下单：写 .stop_request → 引擎锁全部未锁定持仓 → 优雅退出。
 
     timeout：可选覆盖优雅退出宽限（秒）。服务退出（lifespan）场景建议传短
     超时，避免关服务等满 150s 或与 uvicorn graceful-shutdown 阈值
     冲突被强杀；用户主动点关闭则用默认宽限。
+    symbol：带品种 → 只停该品种的运行中实例（品种互斥保证至多一个，§3.10.2）；
+    不带 → 停全部（兼容旧前端调用与 lifespan 服务退出）。
     """
-    return trader.stop(timeout=timeout)
+    return trader.stop(timeout=timeout, symbol=symbol)
 
 
 def call_trader_status():
@@ -108,6 +110,15 @@ def call_trader_set_bsp_filter(types=None):
 def call_trader_get_bsp_filter():
     """读回「买卖点类型过滤」的实际生效值（None = 从未设置，全部放行）。"""
     return trader.get_bsp_filter()
+
+
+def call_trader_ledger():
+    """账本面板聚合投影（§3.10.1）：全部实例按 登录方式 → 品种 分组。
+
+    数据 = 运行中实例（内存注册表）∪ 全部实例目录（State/<登录方式>/<品种键>
+    两层扫描）；已停止实例读其 state.db 持久投影（引擎关着也能看账本）。
+    """
+    return trader.ledger()
 
 
 def call_trader_check_symbol(symbol=None):
@@ -319,6 +330,7 @@ __all__ = [
     # 自动下单（AppTrader）
     "AppTrader", "trader",
     "call_trader_start", "call_trader_stop", "call_trader_status",
+    "call_trader_ledger",
     "call_trader_ack", "call_trader_check_symbol", "call_trader_trades",
     "call_trader_set_bsp_filter", "call_trader_get_bsp_filter",
 ]

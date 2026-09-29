@@ -714,10 +714,15 @@ async def api_trader_auto_order_on(body: dict = Body(default={})):
 
 
 @router.post("/api/trader/auto-order/off", tags=["trader"])
-async def api_trader_auto_order_off():
-    """关闭自动下单（停止接收信号 + 锁全部未锁定持仓后退出引擎）"""
+async def api_trader_auto_order_off(body: dict = Body(default={})):
+    """关闭自动下单（停止接收信号 + 锁全部未锁定持仓后退出引擎）。
+
+    body 可选：{"symbol": "<页面品种>"} —— 带品种只停该品种的运行中实例
+    （品种互斥保证至多一个）；缺省停全部（兼容旧前端调用与 lifespan）。
+    """
     try:
-        result = await run_in_threadpool(orch.call_trader_stop)
+        result = await run_in_threadpool(
+            orch.call_trader_stop, symbol=(body or {}).get("symbol"))
     except AppError:
         raise
     except Exception as exc:
@@ -754,6 +759,23 @@ async def api_trader_auto_order_status():
     except Exception as exc:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"查询自动下单状态失败: {exc}")
+    return _json_response(result)
+
+
+@router.get("/api/trader/auto-order/ledger", tags=["trader"])
+async def api_trader_auto_order_ledger():
+    """账本面板聚合投影：全部实例按 登录方式 → 品种 分组。
+
+    数据 = 运行中实例（内存注册表）∪ 全部实例目录持久投影；已停止实例的
+    alerts/toasts 置空（运行时队列只属于活进程）。无参数、只读。
+    """
+    try:
+        result = await run_in_threadpool(orch.call_trader_ledger)
+    except AppError:
+        raise
+    except Exception as exc:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"查询账本聚合失败: {exc}")
     return _json_response(result)
 
 

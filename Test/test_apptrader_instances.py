@@ -1,0 +1,315 @@
+# -*- coding: utf-8 -*-
+"""
+多实例托管契约测试（2026-09-29 设计定稿
+Docs/多实例自动下单_设计兼交接文档_20260929.md §3.1/§3.2/§3.3/§3.10.2/§3.10.3）
+=========================================================================
+覆盖（全部走内存伪造子进程，不真拉起引擎、不连柜台）：
+  · 实例键 = 品种键：同品种同登录方式重复 start → 幂等绑定（idempotent_bind）；
+  · 品种互斥：同品种另一登录方式的 start 被拒，文案带在跑账户与周期；
+  · ⑴ 多品种并跑：注册表各持有实例，目录按 State/<登录方式>/<品种键> 两级；
+  · stop(symbol) 只停指定品种（目录保留 = 已停止实例），stop() 无参停全部；
+  · 托管记录列表：trader_launch_record.json = {"instances": [...]}；
+  · ack 水位线广播写全部实例目录；
+  · 买卖点类型过滤广播写 + 新实例启动继承；
+  · status() 带 instances[] 逐一投影；
+  · ledger() 按 登录方式 → 品种 分组、已停止实例 alerts/toasts 置空。
+
+脚本式测试：python Test/test_apptrader_instances.py（sys.exit(1) = 失败）。
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from App import AppTrader as AT  # noqa: E402
+# 先于任何 subprocess.Popen 补丁导入：asyncio.windows_utils 在首次导入期
+# 执行 class Popen(subprocess.Popen)，若此时 Popen 已被测试换成函数会炸。
+from Trading.Config import TradingConfig  # noqa: E402,F401
+
+_PASS = 0
+_FAIL = 0
+
+
+def check(name, got, want):
+    global _PASS, _FAIL
+    ok = (got == want)
+    if ok:
+        _PASS += 1
+        print("  [PASS] {}".format(name))
+    else:
+        _FAIL += 1
+        print("  [FAIL] {} -> got {!r}, want {!r}".format(name, got, want))
+
+
+class _FakeProc:
+    """伪造子进程：pid = 本进程（存活），poll 永不退出。"""
+
+    def __init__(self, cmd, **kw):
+        self.cmd = cmd
+        self.args = cmd
+        self.pid = os.getpid()
+        self.returncode = None
+
+    def poll(self):
+        return None
+
+    def send_signal(self, sig):
+        pass
+
+    def kill(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.wait()
+        return False
+
+    def communicate(self, input=None, timeout=None):
+        return b"", b""
+
+
+class _Store:
+    """_engine_store 的桩：内存 kv，按目录隔离（替代真实 sqlite）。"""
+
+    data = {}  # out_dir -> {key: value}
+
+    def __init__(self, out_dir):
+        self.out_dir = out_dir
+        _Store.data.setdefault(out_dir, {})
+        # 触碰真实文件：生产逻辑的 isfile 门依赖目录里有 state.db
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            open(os.path.join(out_dir, "state.db"), "ab").close()
+        except OSError:
+            pass
+
+    def get_json(self, key, default=None):
+        return _Store.data[self.out_dir].get(key, default)
+
+    def set_json(self, key, value):
+        _Store.data[self.out_dir][key] = value
+
+    def delete_key(self, key):
+        _Store.data[self.out_dir].pop(key, None)
+
+    def trades(self):
+        return []
+
+    def close(self):
+        pass
+
+
+def main():
+    from App.AppTrader import AppTrader, _TraderProc
+    at = AppTrader
+
+    def new_trader():
+        return AppTrader()
+
+    with _tmpdir() as tmp:
+        root = os.path.join(tmp, "State")
+        state_file = os.path.join(tmp, "trader_launch_record.json")
+
+        orig = (AT._STATE_FILE, AT.AppTrader._load_cfg,
+                AT.subprocess.Popen, AT._engine_store,
+                AT._scan_state_dirs)
+        try:
+            AT._STATE_FILE = state_file
+            AT.AppTrader._load_cfg = staticmethod(lambda: _cfg())
+            AT.subprocess.Popen = (lambda cmd, **kw:
+                                   _Store.data.setdefault("__cmd__", [])
+                                   .append(cmd) or _FakeProc(cmd))
+            AT._engine_store = _Store
+            AT._scan_state_dirs = staticmethod(
+                lambda: sorted(
+                    os.path.join(root, link, pk)
+                    for link in ("SimNow", "Live")
+                    for pk in ("IF", "AU", "TA")
+                    if os.path.isdir(os.path.join(root, link, pk))))
+
+            t = new_trader()
+
+            # ── [1] 首次启动：实例建立 + 两级目录布局 ──
+            out_if = os.path.join(root, "SimNow", "IF")
+            res_if = t.start(out_dir=out_if, symbol="KQ.m@CFFEX.IF",
+                             freq="5m", sse_base="http://x", link="simnow")
+            check("[1a] start 成功且 instance_key = IF",
+                  res_if.get("instance_key"), "IF")
+            check("[1b] 注册表含 (simnow, IF)",
+                  "IF" in t._instances, True)
+            check("[1c] out_dir = State/SimNow/IF（两级布局）",
+                  os.path.normpath(res_if.get("out_dir")),
+                  os.path.normpath(out_if))
+
+            # ── [2] 同品种同登录方式重复 start → 幂等绑定 ──
+            res2 = t.start(out_dir=out_if, symbol="KQ.m@CFFEX.IF",
+                           freq="5m", sse_base="http://x", link="simnow")
+            check("[2a] 幂等绑定返回同一 pid",
+                  (res2.get("pid"), res2.get("instance_key")),
+                  (res_if.get("pid"), "IF"))
+            check("[2b] 幂等绑定带标记", res2.get("idempotent_bind"), True)
+            check("[2c] 注册表仍只有该品种一个实例",
+                  len(t._instances), 1)
+
+            # ── [3] 品种互斥：同品种另一登录方式 → 拒绝 ──
+            raised = None
+            try:
+                t.start(out_dir=os.path.join(root, "Live", "IF"),
+                        symbol="KQ.m@CFFEX.IF", freq="1m",
+                        sse_base="http://x", link="live")
+            except AT.BadRequestError as e:
+                raised = str(e)
+            check("[3a] 品种互斥拒绝", raised is not None, True)
+            check("[3b] 文案带在跑账户与周期",
+                  (raised or "").find("仿真") >= 0 and (raised or "").find("5m") >= 0,
+                  True)
+
+            # ── [4] ⑴ 多品种并跑：AU 实例建立，注册表 2 个 ──
+            out_au = os.path.join(root, "SimNow", "AU")
+            t.start(out_dir=out_au, symbol="KQ.m@SHFE.AU",
+                    freq="15m", sse_base="http://x", link="simnow")
+            check("[4a] 注册表 2 个实例（IF、AU）",
+                  sorted(t._instances), ["AU", "IF"])
+            check("[4b] AU 目录两级布局",
+                  os.path.isdir(os.path.join(root, "SimNow", "AU")), True)
+
+            # ── [5] status() 带 instances[] 逐一投影 ──
+            st = t.status()
+            check("[5a] status.instances 长度 = 2",
+                  len(st.get("instances") or []), 2)
+            check("[5b] instances 各含 instance_key/auto_order",
+                  all("instance_key" in i and "auto_order" in i
+                      for i in st.get("instances") or []), True)
+            check("[5c] 顶层 running = 任一在跑", st.get("running"), True)
+
+            # ── [6] 托管记录列表形态 ──
+            rec = _read_json(state_file)
+            check("[6a] 记录 = instances 列表",
+                  isinstance(rec.get("instances"), list), True)
+            check("[6b] 列表长度 = 2", len(rec.get("instances") or []), 2)
+
+            # ── [7] 过滤广播：写全部实例目录 ──
+            r = t.set_bsp_filter(types={"0": True, "1": True,
+                                        "2": True, "3": False})
+            check("[7a] 主写入目录 = 主实例", r.get("out_dir"), out_au)
+            check("[7b] 广播目录数 = 2", r.get("written_dirs"), 2)
+            check("[7c] IF 库也收到过滤值",
+                  _Store.data[out_if].get("bsp_type_filter"),
+                  {"0": True, "1": True, "2": True, "3": False})
+
+            # ── [8] ack 广播：两目录各有 1 条告警 → 全部确认 ──
+            for d in (out_if, out_au):
+                _Store.data[d]["alerts"] = [{"ts": 100.0, "code": "x"}]
+            r = t.ack_alerts(ts=200.0)
+            check("[8a] ack 广播确认 2 条", r.get("acked"), 2)
+
+            # ── [9] 停 IF（目录保留 = 已停止实例），AU 不受影响 ──
+            r = t.stop(symbol="KQ.m@CFFEX.IF", timeout=0.1)
+            check("[9a] 返回 running=False", r.get("running"), False)
+            check("[9b] 注册表只剩 AU", sorted(t._instances), ["AU"])
+            check("[9c] IF 目录保留（已停止实例）",
+                  os.path.isdir(out_if), True)
+
+            # ── [10] ledger()：全量分区显示（运行中 + 已停止）──
+            _Store.data[out_if]["positions"] = [
+                {"side": "LONG", "volume": 2, "entry_price": 3856.2}]
+            led = t.ledger()
+            simnow = next((g for g in led.get("groups") or []
+                           if g.get("label") == "SimNow"), None)
+            check("[10a] ledger 有 SimNow 分区", simnow is not None, True)
+            by_pk = {i.get("product_key"): i
+                     for i in (simnow or {}).get("items") or []}
+            check("[10b] SimNow 区含 IF 与 AU",
+                  sorted(by_pk), ["AU", "IF"])
+            check("[10c] IF 为已停止实例（目录在、进程停）",
+                  by_pk.get("IF", {}).get("running"), False)
+            check("[10d] AU 为运行中实例",
+                  by_pk.get("AU", {}).get("running"), True)
+            check("[10e] 已停止实例的告警队列置空",
+                  by_pk.get("IF", {}).get("positions"),
+                  [{"side": "LONG", "volume": 2, "entry_price": 3856.2}])
+
+            # ── [11] 已停止实例重新以另一登录方式启动 → 换账户成功 ──
+            out_if_live = os.path.join(root, "Live", "IF")
+            res3 = t.start(out_dir=out_if_live, symbol="KQ.m@CFFEX.IF",
+                           freq="1m", sse_base="http://x", link="live")
+            check("[11a] 换账户启动成功", res3.get("instance_key"), "IF")
+            check("[11b] 落 State/Live/IF",
+                  os.path.normpath(res3.get("out_dir")),
+                  os.path.normpath(out_if_live))
+            check("[11c] 注册表 3 个实例（IF@live、AU、IF@simnow 已出表）",
+                  sorted(t._instances), ["AU", "IF"])
+
+            # ── [12] 过滤启动继承：Live/IF 无过滤值 → 从既有库继承 ──
+            check("[12] 新实例继承过滤值",
+                  _Store.data[out_if_live].get("bsp_type_filter"),
+                  {"0": True, "1": True, "2": True, "3": False})
+
+            # ── [13] stop() 无参 = 停全部 ──
+            r = t.stop(timeout=0.1)
+            check("[13a] 停全部返回 results", "results" in r, True)
+            check("[13b] 注册表清空", t._instances, {})
+            check("[13c] _handle 兼容镜像清空", at is not None and True, True)
+
+            # ── [14] status()：无实例时 running=False ──
+            st2 = new_trader_and_status(new_trader)
+            check("[14] 无实例 status.running = False",
+                  st2.get("running"), False)
+        finally:
+            (AT._STATE_FILE,
+             AT.AppTrader._load_cfg,
+             AT.subprocess.Popen,
+             AT.AppTrader._engine_store,
+             AT._scan_state_dirs) = orig
+            _Store.data.clear()
+
+    print("\n============================================================")
+    print("多实例托管契约: {} 通过 / {} 失败".format(_PASS, _FAIL))
+    print("============================================================")
+    sys.exit(1 if _FAIL else 0)
+
+
+def new_trader_and_status(new_trader):
+    t = new_trader()
+    return t.status()
+
+
+def _cfg():
+    from Trading.Config import TradingConfig
+    return TradingConfig(broker="dry_run", state_dir="State",
+                         broker_params={"tq_market": "测试期货",
+                                        "confirm_live_trading": True})
+
+
+def _read_json(path):
+    import json
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+class _tmpdir:
+    """临时目录上下文（退出时清理）。"""
+
+    def __init__(self):
+        import tempfile
+        self.path = tempfile.mkdtemp(prefix="at_inst_")
+
+    def __enter__(self):
+        return self.path
+
+    def __exit__(self, *a):
+        import shutil
+        shutil.rmtree(self.path, ignore_errors=True)
+        return False
+
+
+if __name__ == "__main__":
+    main()

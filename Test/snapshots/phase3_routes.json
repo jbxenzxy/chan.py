@@ -15,6 +15,7 @@
  "GET /api/stocks/{code}/analyze",
  "GET /api/stocks/{code}/read/annotation",
  "GET /api/stocks/{code}/red-range",
+ "GET /api/trader/auto-order/ledger",
  "GET /api/trader/auto-order/status",
  "GET /api/trader/product-check",
  "GET /api/trader/signal-filter",

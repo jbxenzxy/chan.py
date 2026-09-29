@@ -16,7 +16,7 @@
   ④ 成交列表排序（后端投影保留，契约随之保留）：App/AppTrader.py 用
      `_all_trades[-10:]`（库内 exit_at 升序原序截尾），最新一条排在**最后**；
      `reversed(_all_trades)` 不得回潮；
-  ⑤ 资源版本号：app.html 引 app.js?v=45（改前端必须抬版本号，防缓存假象；
+  ⑤ 资源版本号：app.html 引 app.js?v=46（改前端必须抬版本号，防缓存假象；
      版本号是**单调递增**的，每次改前端都要同时抬这里的期望值与残留断言）；
   ⑥ 账本与开关解耦（2026-09-22 二次拍板）：空态文案「（暂无账本数据）」，
      「（自动下单未运行）」零残留；AppTrader._read_engine_switch 收 out_dir、
@@ -86,7 +86,7 @@ check("成交节容器 aol-trades 已从 app.html 删除", "aol-trades" in HTML,
 
 # ═══ ② 持仓行：无止损列 ═══
 print("\n[2] 持仓行去止损列 + 时间格式化")
-i0 = JS.index("function renderAutoOrderLedger(data) {")
+i0 = JS.index("function renderAutoOrderLedger(led) {")
 i1 = JS.index("// 价格显示", i0)          # 下一区块横幅 = 区块结束锚
 BLOCK = JS[i0:i1]
 check("renderAutoOrderLedger 区块长度 > 300（防锚点抓半截）",
@@ -125,11 +125,11 @@ print("\n[3] 资源版本号")
 # 「自动下单」标签（不再单独占一个徽标），2026-09-28 第三轮；保护价单线
 # 升级为分段阶梯线（止损/保本/初始跟踪/移动跟踪），2026-09-28 第四轮；
 # 股票页解除「交易引擎运行中」切换限制（守卫收窄到期货页），2026-09-29）
-# 已抬到 v=45。
+# 已抬到 v=46。
 #   本组断言刻意保留"写死当前值"的形态 —— 它的作用正是强迫每次改前端的人意识到
 #   要抬版本号；放宽成"任意 v=\d+"就等于把这条守卫拆掉。
-check("app.html 引 app.js?v=45", 'app.js?v=45' in HTML, True)
-check("旧版本号 v=44 零残留", 'app.js?v=44' in HTML, False)
+check("app.html 引 app.js?v=46", 'app.js?v=46' in HTML, True)
+check("旧版本号 v=45 零残留", 'app.js?v=45' in HTML, False)
 
 # ═══ ④ 成交列表排序（后端投影保留：展示删减不动数据完整性） ═══
 print("\n[4] 成交列表：升序原序截尾，最新在最后（投影保留，前端不消费）")

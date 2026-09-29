@@ -420,7 +420,7 @@ else:
            and "aoRun.freq === currentFreq" in JS), True)
     check("[8j] 账本面板「持仓行无止损列」契约未被破坏"
           "（renderAutoOrderLedger 区块仍零命中）",
-          JS[JS.index("function renderAutoOrderLedger(data) {"):
+          JS[JS.index("function renderAutoOrderLedger(led) {"):
              JS.index("// 价格显示")].count("止损"), 0)
 
 # ════════════════════════════════════════════════════════════════

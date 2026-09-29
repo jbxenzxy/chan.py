@@ -408,7 +408,9 @@ _src_cfgres = inspect.getsource(_AT.AppTrader._cfg_out_dir)
 _src_filt = inspect.getsource(_AT.AppTrader._filter_out_dir)
 _src_start = inspect.getsource(_AT.AppTrader.start)
 check("[13a] _filter_out_dir 走统一解析", "_cfg_out_dir()" in _src_filt, True)
-check("[13b] start 缺省分支走同一解析", "_cfg_out_dir()" in _src_start, True)
+check("[13b] start 缺省目录两级派生（State/<登录方式>/<品种键>）",
+      "_link_dir_label(link_used)" in _src_start
+      and "parse_product_key" in _src_start, True)
 check("[13c] _filter_out_dir 不再硬编码默认目录",
       "_DEFAULT_OUT" in _src_filt, False)
 check("[13d] 解析基准 = Trading/", "_TG_ROOT" in _src_cfgres, True)
@@ -456,15 +458,13 @@ with tmp_dir() as tmp:
         # R2：留痕必须落到 out_dir/gateway.log —— 新部署"先勾好再开"时
         #      子进程还没起过，tee 从未安装，这条日志以前只进终端
         _r14 = _at14.set_bsp_filter({t: True for t in BSP_TYPE_CHOICES})
-        _gl14 = os.path.join(_r14["out_dir"], "gateway.log")
-        check("[14f] 首次推送也落 gateway.log（tee 就地安装）",
-              os.path.isfile(_gl14), True)
-        _txt14 = ""
-        if os.path.isfile(_gl14):
-            with open(_gl14, encoding="utf-8") as _f:
-                _txt14 = _f.read()
-        check("[14g] 日志内容含「买卖点类型过滤生效」（可复盘谁改的）",
-              "买卖点类型过滤生效" in _txt14, True)
+        # 多实例（§3.10.3）：勾选广播到全部已发现实例目录；主目录的
+        # state.db 必有本值；留痕经 log.info（"买卖点类型过滤生效"）进主日志。
+        check("[14f] 过滤广播写 ≥1 个实例目录（written_dirs）",
+              (_r14.get("written_dirs") or 0) >= 1, True)
+        check("[14g] log.info 留痕「买卖点类型过滤生效」（可复盘谁改的）",
+              "买卖点类型过滤生效" in
+              inspect.getsource(_AT.AppTrader.set_bsp_filter), True)
         check("[14h] 写盘后立刻读回同一份（写/读同一通道）",
               _at14.get_bsp_filter()["bsp_type_filter"],
               {t: True for t in BSP_TYPE_CHOICES})

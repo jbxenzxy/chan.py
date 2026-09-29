@@ -4782,6 +4782,30 @@
                 + incl.join("/") + '类</div>';
         }
 
+        // 数据来源（§3.10.5）：多实例下「合了哪几个库」必须可见，否则
+        // 统计数字的构成无法解释。sources[].path 形如
+        // ...\Trading\State\SimNow\IF\state.db —— 取 state.db 前两段
+        // （登录方式/品种）作为显示名；解析不出就显示倒数第二段。
+        function statsSourcesHtml(d) {
+            var srcs = (d && Array.isArray(d.sources)) ? d.sources : [];
+            if (!srcs.length) return '';
+            var names = srcs.map(function (s) {
+                var segs = String(s.path || '').split(/[\\/]/);
+                var dbi = -1;
+                for (var i = segs.length - 1; i >= 0; i--) {
+                    if (segs[i] === 'state.db') { dbi = i; break; }
+                }
+                if (dbi >= 2) return segs[dbi - 2] + '/' + segs[dbi - 1];
+                return segs.length >= 2 ? segs[segs.length - 2] : (segs[0] || '?');
+            });
+            var rows = srcs.map(function (s) { return Number(s.rows || 0); });
+            var line = names.map(function (n, i) {
+                return n + '（' + rows[i] + '笔）';
+            }).join('、');
+            return '<div class="stats-row" style="font-size:11px;color:#a8b2d1;'
+                + 'padding-left:2px;">数据来源：' + line + '</div>';
+        }
+
         function renderTradeStats(d) {
             var count = (d && d.count) || 0;
             var readErrs = statsReadErrors(d);
@@ -4834,6 +4858,8 @@
             // 统计口径标识（置于最顶，先于曲线与核心数）：一眼看出当前汇总数字
             // 是基于哪几类买卖点算的（用户取消勾选的某类其历史成交已被排除）。
             html += statsCaliberHtml(d);
+            // 数据来源行（§3.10.5）：多实例下合并了哪些实例目录必须可见。
+            html += statsSourcesHtml(d);
             // ① 曲线在上（对齐「市场量能」的 amo-chart 位置）
             html += '<canvas id="trade-equity-canvas"></canvas>';
             // ② 一行四格核心数（对齐「市场量能」的 amo-stats）
@@ -8400,56 +8426,89 @@
         function applyAutoOrderStatus(data) {
             const checkbox = document.getElementById('auto-order-checkbox');
             if (!checkbox) return;
-            const running = !!data.running;
+            // 多实例（§3.7）：instances[] = 全部托管实例；本页绑定 = 当前页面
+            // 品种的运行中实例（品种互斥保证至多一个，§3.10.2）。旧后端无
+            // instances[] 时，用顶层字段合成一个实例（渐进兼容）。
+            const insts = Array.isArray(data.instances) ? data.instances
+                : (data.symbol ? [{
+                    symbol: data.symbol, freq: data.freq, running: !!data.running,
+                    link: data.link || '', pid: data.pid,
+                    log_file: data.log_file || null,
+                    instance_key: data.symbol,
+                    auto_order: data.auto_order || null,
+                }] : []);
+            const bound = insts.find(function (i) {
+                return i.running && realtimeSymbol && i.symbol === realtimeSymbol;
+            }) || null;
+            const running = !!bound;   // 本页品种有运行中实例（切换守卫依据，§3.7）
             // 链路视图顺手缓存：开关点击时不必为拿选项再发一次状态请求
             if (data.link_view) autoOrderLinkInfo = data.link_view;
-            renderAutoOrderLink(data.link_view, running);
-                const enabled = !!(data.auto_order && data.auto_order.enabled);
-                const on = running && enabled;
-                autoOrderRunning = running;   // 同步进程运行态给切换 guard 用
-                // 状态变化 → 控制台输出完整信息（定位"自动关闭"问题）
-                if (on !== autoOrderLastOn) {
-                    console.info('[auto-order] 状态: ' + (on ? '开' : '关')
-                        + '  running=' + running + '  enabled=' + enabled
-                        + '  pid=' + data.pid + '  broker=' + data.broker
-                        + '  symbol=' + data.symbol + '/' + data.freq
-                        + '  sse_base=' + data.sse_base
-                        + '  log=' + data.log_file);
-                    autoOrderLastOn = on;
-                }
-                const dot = document.getElementById('auto-order-dot');
-                if (dot) { dot.classList.toggle('on', on); dot.classList.toggle('off', !on); }
-                if (!autoOrderBusy) checkbox.checked = on;
-                const posN = (data.auto_order && typeof data.auto_order.positions_n === 'number')
-                    ? data.auto_order.positions_n : 0;
-                // 锁仓态 = 有仓单但净敞口为 0（需求 ⑴）。仓单上没有"来源"字段，
-                // 判据只看后端给出的 account_state。
-                const aoState = (data.auto_order && data.auto_order.account_state) || '';
-                const lockedN = (aoState === 'locked' && data.auto_order.positions_n)
-                    ? data.auto_order.positions_n : 0;
-                const aoAlerts = (data.auto_order && Array.isArray(data.auto_order.alerts))
-                    ? data.auto_order.alerts : [];
-                const aoRun = (data.auto_order && data.auto_order.run) || null;
-                const wrap = document.getElementById('auto-order-wrap');
-                if (wrap && !wrap.classList.contains('disabled')) {
-                    // 置灰时保留"该品种不支持自动下单"的悬停说明，
-                    // 不让轮询把提示覆盖成引擎状态（否则用户看不到置灰原因）
-                    // 三态（空仓/锁仓/运行）由后端 account_state 唯一给出：
-                    // 前端不再自己判"是不是锁着"，也不该知道持仓的"出身"。
-                    const stateLabel = { flat: '空仓', locked: '锁仓', running: '运行' }[aoState]
-                        || '未知';
-                    const netV = (data.auto_order && typeof data.auto_order.net_volume === 'number')
-                        ? data.auto_order.net_volume : 0;
-                    let tip = '交易引擎：' + (running ? '运行中' : '已停止');
+            // 徽标跟随本页绑定的实例：current 覆写为该实例的登录方式
+            const boundView = bound
+                ? Object.assign({}, data.link_view || {}, { current: bound.link })
+                : data.link_view;
+            renderAutoOrderLink(boundView, running);
+            const ao = bound ? (bound.auto_order || null) : null;
+            const enabled = !!(ao && ao.enabled);
+            const on = running && enabled;
+            autoOrderRunning = running;   // 本页品种有运行中实例（切换守卫依据）
+            // 状态变化 → 控制台输出完整信息（定位"自动关闭"问题）
+            if (on !== autoOrderLastOn) {
+                console.info('[auto-order] 状态: ' + (on ? '开' : '关')
+                    + '  running=' + running + '  enabled=' + enabled
+                    + '  pid=' + (bound ? bound.pid : null)
+                    + '  link=' + (bound ? bound.link : '-')
+                    + '  symbol=' + (bound ? bound.symbol + '/' + bound.freq : '-'));
+                autoOrderLastOn = on;
+            }
+            const dot = document.getElementById('auto-order-dot');
+            if (dot) { dot.classList.toggle('on', on); dot.classList.toggle('off', !on); }
+            if (!autoOrderBusy) checkbox.checked = on;
+            const posN = (ao && typeof ao.positions_n === 'number') ? ao.positions_n : 0;
+            const aoState = (ao && ao.account_state) || '';
+            const lockedN = (aoState === 'locked' && ao && ao.positions_n)
+                ? ao.positions_n : 0;
+            const aoRun = (ao && ao.run) || null;
+            // 告警/轻提示合并（§3.10.4）：全部运行中实例的队列合并弹出，
+            // 每条带实例前缀（"[仿真 IF]"）——多实例下只看本页会漏另一引擎的风险。
+            const aoAlerts = [];
+            const aoToasts = [];
+            insts.forEach(function (i) {
+                if (!i.running || !i.auto_order) return;
+                const lb = (i.link === 'live' ? '实盘' : '仿真') + ' '
+                    + (i.instance_key || i.symbol || '');
+                (Array.isArray(i.auto_order.alerts) ? i.auto_order.alerts : [])
+                    .forEach(function (a) {
+                        aoAlerts.push(Object.assign({}, a, {
+                            msg: (a.msg ? '[' + lb + '] ' + a.msg : a.msg),
+                            _instLabel: lb }));
+                    });
+                (Array.isArray(i.auto_order.toasts) ? i.auto_order.toasts : [])
+                    .forEach(function (t) {
+                        aoToasts.push(Object.assign({}, t, {
+                            msg: (t.msg ? '[' + lb + '] ' + t.msg : t.msg),
+                            _instLabel: lb }));
+                    });
+            });
+            const wrap = document.getElementById('auto-order-wrap');
+            if (wrap && !wrap.classList.contains('disabled')) {
+                const stateLabel = { flat: '空仓', locked: '锁仓', running: '运行' }[aoState]
+                    || '未知';
+                const netV = (ao && typeof ao.net_volume === 'number') ? ao.net_volume : 0;
+                let tip;
+                if (!bound) {
+                    tip = '交易引擎：本页品种（' + (realtimeSymbol || '-') + '）无运行中实例';
+                } else {
+                    tip = '交易引擎：运行中（' + (bound.link === 'live' ? '实盘' : 'SimNow')
+                        + ' · ' + (bound.instance_key || bound.symbol) + '）';
                     tip += '，账户状态：' + stateLabel
                         + (aoState === 'running' ? '（净敞口 ' + (netV > 0 ? '+' : '') + netV + ' 手）' : '');
-                    if (data.symbol) tip += '，' + data.symbol + '/' + (data.freq || '5m');
+                    if (bound.symbol) tip += '，' + bound.symbol + '/' + (bound.freq || '5m');
                     if (posN) tip += '，持仓 ' + posN + ' 手（已锁仓 ' + lockedN + '）';
                     // run = 当前这段敞口的风控锚与出场计划（后端 auto_order.run）：
-                    // 没有它就只能看到"有仓"，看不到"止损在哪"。
                     // 与图上保护价线**同口径**：run 属于另一张图（切了品种 / 周期）
-                    // 时，这些价对当前品种毫无意义 —— 线上不画，文字也不该报，
-                    // 否则就是"线没了、字还在"的自相矛盾（2026-09-29 用户拍板）。
+                    // 时，这些价对当前品种毫无意义 —— 线上不画，文字也不该报
+                    // （2026-09-29 用户拍板）。
                     const _tipMeta = chartData && chartData.meta ? chartData.meta : null;
                     if (aoRun && _tipMeta && aoRun.symbol === _tipMeta.symbol
                         && aoRun.freq === currentFreq) {
@@ -8458,54 +8517,52 @@
                             + '（' + aoRun.name + '）';
                     }
                     if (aoAlerts.length) tip += '；未确认告警 ' + aoAlerts.length + ' 条';
-                    if (data.broker) tip += '，broker=' + data.broker;
-                    if (data.log_file) tip += '，日志=' + data.log_file;
-                    tip += '；关闭时，锁仓或平仓（平今/昨）';
-                    wrap.title = tip;
+                    if (bound.log_file) tip += '，日志=' + bound.log_file;
                 }
-                // 半残数据防线（2026-09-24）：进程在跑但 auto_order 投影缺失
-                //   （后端 _read_engine_switch 读库瞬时失败被吞成 null）时，
-                //   enabled=false 会把**用户开关重置成关**、账本被刷成空态 ——
-                //   比跳过这一轮糟糕得多。判据：running=true 且 auto_order 缺失
-                //   = 投影异常（引擎真停时 running=false，不受影响）。
-                //   打 warn 跳过本轮，下轮轮询自然重试。
-                if (running && !data.auto_order) {
-                    console.warn('[auto-order] 本轮 auto_order 投影缺失（后端读库瞬时失败？），跳过本轮状态应用');
-                    return;
+                tip += '；关闭时，锁仓或平仓（平今/昨）';
+                wrap.title = tip;
+            }
+            // 半残数据防线（2026-09-24）：绑定实例在跑但 auto_order 投影缺失
+            //   （后端读库瞬时失败被吞成 null）时，enabled=false 会把**用户开关
+            //   重置成关**、账本被刷成空态 —— 比跳过这一轮糟糕得多。
+            //   打 warn 跳过本轮，下轮轮询自然重试。
+            if (running && !ao) {
+                console.warn('[auto-order] 本轮绑定实例 auto_order 投影缺失（后端读库瞬时失败？），跳过本轮状态应用');
+                return;
+            }
+            // 四段各自隔离（_aoSafe）：一段抛错不再连环停摆（弹窗/账本/画线
+            // 全停且无提示的静默失效，2026-09-24 实盘教训），谁挂 console 可见。
+            _aoSafe('告警', function () { handleAutoOrderAlerts(aoAlerts); });
+            _aoSafe('轻提示', function () { handleAutoOrderToasts(aoToasts); });
+            _aoSafe('账本', function () { refreshLedgerPanel(); });   // 账本面板（§3.10.1）：/ledger 聚合，面板关着时不拉
+            // 运行态保护价分段线（2026-09-28：单线 → 分段阶梯）。为什么放主图：
+            //   保护价是持仓期间**最需要盯着**的数，tooltip/徽标都要"找"才看得见
+            //   —— 2026-09-23 实盘多仓浮盈 2.6R 回撤到 0.77R，全程不知道会在哪离场。
+            //   分段阶梯把"现在在哪层、从哪根 bar 起生效、锁了多少 R"直接画在
+            //   价格轴上；引擎每次抬价/新高都出新段，段签名变化才整图重绘
+            //   （轮询 5s 一次，值没变别白画）。
+            _aoSafe('保护价线', function () {
+                const _rs = calcRunSegments(aoRun, runSegSig);
+                if (_rs.changed) {
+                    runSegs = _rs.segs;
+                    runSegSig = _rs.sig;
+                    aoRunSnap = aoRun ? { r: aoRun.r, anchor: aoRun.anchor,
+                                          side: aoRun.side, wlr: aoRun.wlr,
+                                          symbol: aoRun.symbol,
+                                          freq: aoRun.freq } : null;
+                    render();
                 }
-                // 四段各自隔离（_aoSafe）：一段抛错不再连环停摆（弹窗/账本/画线
-                // 全停且无提示的静默失效，2026-09-24 实盘教训），谁挂 console 可见。
-                _aoSafe('告警', function () { handleAutoOrderAlerts(data); });
-                _aoSafe('轻提示', function () { handleAutoOrderToasts(data); });
-                _aoSafe('账本', function () { renderAutoOrderLedger(data); });   // 引擎账本面板（C）：数据全是 state.db 投影，引擎关着也刷新
-                // 运行态保护价分段线（2026-09-28：单线 → 分段阶梯）。为什么放主图：
-                //   保护价是持仓期间**最需要盯着**的数，tooltip/徽标都要"找"才看得见
-                //   —— 2026-09-23 实盘多仓浮盈 2.6R 回撤到 0.77R，全程不知道会在哪离场。
-                //   分段阶梯把"现在在哪层、从哪根 bar 起生效、锁了多少 R"直接画在
-                //   价格轴上；引擎每次抬价/新高都出新段，段签名变化才整图重绘
-                //   （轮询 5s 一次，值没变别白画）。
-                _aoSafe('保护价线', function () {
-                    const _rs = calcRunSegments(aoRun, runSegSig);
-                    if (_rs.changed) {
-                        runSegs = _rs.segs;
-                        runSegSig = _rs.sig;
-                        aoRunSnap = aoRun ? { r: aoRun.r, anchor: aoRun.anchor,
-                                              side: aoRun.side, wlr: aoRun.wlr,
-                                              symbol: aoRun.symbol,
-                                              freq: aoRun.freq } : null;
-                        render();
-                    }
-                });
-                // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
-                if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
-                    const tail = data.log_tail || '';
-                    console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
-                    showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
-                        + (tail || '（日志文件不存在或为空）')
-                        + '\n\n完整日志：' + (data.log_file || '（未知）'));
-                }
-                if (running) autoOrderLastLog = data.log_file || null;
-                autoOrderPrevRunning = running;
+            });
+            // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
+            if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
+                const tail = data.log_tail || '';
+                console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
+                showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
+                    + (tail || '（日志文件不存在或为空）')
+                    + '\n\n完整日志：' + (data.log_file || '（未知）'));
+            }
+            if (running) autoOrderLastLog = (bound && bound.log_file) || null;
+            autoOrderPrevRunning = running;
         }
 
         // ── 引擎账本面板（C，2026-09-18）：持仓，随轮询刷新 ──
@@ -8526,6 +8583,7 @@
             panel.style.display = willShow ? 'block' : 'none';
             if (willShow) {
                 renderAutoOrderLedger(autoOrderLedgerData);
+                refreshLedgerPanel();   // 打开即拉一次聚合账本（§3.10.1）
             }
             if (!toggleAutoOrderLedger._outside) {
                 toggleAutoOrderLedger._outside = true;
@@ -8559,26 +8617,41 @@
             m = /^(\d{4})-(\d{2})-(\d{2})/.exec(str);
             return m ? m[1].slice(2) + '/' + m[2] + '/' + m[3] : str;
         }
-        function renderAutoOrderLedger(data) {
-            autoOrderLedgerData = data;
+        function renderAutoOrderLedger(led) {
+            autoOrderLedgerData = led;
             const panel = document.getElementById('auto-order-ledger-panel');
             if (!panel || panel.style.display === 'none') return;   // 关着不渲染
-            const ao = (data && data.auto_order) || null;
             const posEl = document.getElementById('aol-positions');
-            if (posEl) {
-                const ps = (ao && Array.isArray(ao.positions)) ? ao.positions : [];
-                if (!ao) {
-                    posEl.textContent = '（暂无账本数据）';
-                } else if (!ps.length) {
-                    posEl.textContent = '空仓（账本无持仓）';
-                } else {
-                    // 序号（2026-09-24 用户拍板：1. 空 2 手 … 2. 多 2 手 …）：
-                    //   直接按后端 positions 的**原序**编号，不在前端重排 ——
-                    //   该列表由引擎按建仓先后 append（PositionBook._positions，
-                    //   to_dict 原序输出；AppTrader.status 只做投影），序号即
-                    //   "第几笔建仓"，刷新前后稳定、可指代（"1 号仓"）。
-                    //   前端若按价格/时间重排，刷新一次序号就跳一次，反而没法指代。
-                    posEl.innerHTML = ps.map(function (p, i) {
+            if (!posEl) return;
+            const groups = (led && Array.isArray(led.groups)) ? led.groups : [];
+            if (!groups.length) {
+                posEl.textContent = '（暂无账本数据）';
+                return;
+            }
+            // 两级分区（§3.10.1）：顶层 = 登录方式（SimNow / 实盘），区内每
+            // 实例一个小节（(n) 品种（周期 · 运行中/已停止）），小节之下是该
+            // 实例的持仓行。持仓序号保持**实例内**语义（"1 号仓" = 该实例的
+            // 第一笔建仓，标题带实例标识后无歧义）。
+            let html = '';
+            groups.forEach(function (g) {
+                const items = Array.isArray(g.items) ? g.items : [];
+                if (!items.length) return;   // 空分区整区不显示
+                html += '<div class="aol-group" style="font-weight:600;'
+                    + 'margin:6px 0 2px;">' + (g.label || g.link || '?') + '</div>';
+                items.forEach(function (it, gi) {
+                    const st = it.running ? '运行中' : '已停止';
+                    html += '<div class="aol-inst" style="margin:4px 0 2px;color:'
+                        + (it.running ? '#8ab4ff' : '#8a8f98') + ';">(' + (gi + 1) + ') '
+                        + (it.product_key || it.symbol || '?')
+                        + '（' + (it.freq ? it.freq + ' · ' : '') + st + '）</div>';
+                    const ps = Array.isArray(it.positions) ? it.positions : [];
+                    if (!ps.length) {
+                        html += '<div class="aol-row" style="color:#8a8f98;">空仓</div>';
+                        return;
+                    }
+                    // 持仓序号按后端 positions **原序**编号（2026-09-24 拍板）：
+                    // 不在前端重排，序号即"第几笔建仓"，刷新前后稳定可指代。
+                    html += ps.map(function (p, i) {
                         const long = (p.side === 'LONG');
                         return '<div class="aol-row">'
                             + '<span class="aol-idx">' + (i + 1) + '.</span>'
@@ -8589,12 +8662,31 @@
                             + '<span class="aol-dim">' + fmtAolTime(p.entry_at || p.entry_date || '')
                             + '</span></div>';
                     }).join('');
-                }
-            }
-            const trEl = document.getElementById('aol-trades');
-            // 成交节已删（2026-09-24 用户拍板）：元素不在场直接跳过 ——
-            // 保留 getElementById 兜底是为了旧缓存页面（HTML 还是旧版）不抛错。
-            if (trEl) trEl.textContent = '';
+                });
+            });
+            posEl.innerHTML = html || '（暂无账本数据）';
+        }
+
+        // 聚合账本拉取（§3.10.1）：面板打开期间随轮询刷新；关着不拉。
+        let _ledgerInFlight = false;
+        function refreshLedgerPanel() {
+            const panel = document.getElementById('auto-order-ledger-panel');
+            if (!panel || panel.style.display === 'none') return;
+            if (_ledgerInFlight) return;
+            _ledgerInFlight = true;
+            fetch('/api/trader/auto-order/ledger', { cache: 'no-store' })
+                .then(function (r) {
+                    return r.ok ? r.json()
+                                : Promise.reject(new Error('HTTP ' + r.status));
+                })
+                .then(function (led) {
+                    _ledgerInFlight = false;
+                    renderAutoOrderLedger(led);
+                })
+                .catch(function (e) {
+                    _ledgerInFlight = false;
+                    console.warn('[auto-order] 账本聚合失败: ' + e.message);
+                });
         }
 
         // 价格显示：只去掉浮点尾巴，不做品种 tick 推断（tick 是后端的事）
@@ -9092,10 +9184,9 @@
         //    页面这边弹框关不关得掉都影响不到它下单；
         //    真正要防的是"一次弹几十个" —— 所以冷却与"合并成一条"缺一不可。
         // ══════════════════════════════════════════════════════════════
-        function handleAutoOrderAlerts(data) {
-            const alerts = (data.auto_order && Array.isArray(data.auto_order.alerts))
-                ? data.auto_order.alerts : [];
-            if (!alerts.length) return;
+        function handleAutoOrderAlerts(alerts) {
+            // alerts = 合并后的全部运行中实例告警（applyAutoOrderStatus 已带实例前缀）
+            if (!alerts || !alerts.length) return;
             const now = Date.now();
             const fresh = [];
             let maxTs = autoOrderSeenAlertTs;
@@ -9226,10 +9317,9 @@
         //   —— 5 秒自动消失、不需要确认、不合并（两次开仓是两个独立事件都要弹）。
         //   首次拉取只定水位不回放历史：页面晚开不该把半小时前的开仓弹一遍。
         // ══════════════════════════════════════════════════════════════
-        function handleAutoOrderToasts(data) {
-            const toasts = (data.auto_order && Array.isArray(data.auto_order.toasts))
-                ? data.auto_order.toasts : [];
-            if (!toasts.length) return;
+        function handleAutoOrderToasts(toasts) {
+            // toasts = 合并后的全部运行中实例轻提示（已带实例前缀）
+            if (!toasts || !toasts.length) return;
             const prev = autoOrderSeenToastTs;
             let maxTs = prev;
             const fresh = [];

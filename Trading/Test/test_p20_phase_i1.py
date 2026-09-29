@@ -693,8 +693,11 @@ with tmp_dir() as tmp:
         check("[9f] handle 记录 symbol/freq/sse_base",
               (res.get("symbol"), res.get("freq"), res.get("sse_base")),
               ("KQ.m@CFFEX.IM", "5m", "http://127.0.0.1:18081"))
-        check("[9g] 状态文件含来源参数",
-              _read_json(state_file).get("symbol"), "KQ.m@CFFEX.IM")
+        _rec9g = _read_json(state_file).get("instances") or []
+        check("[9g] 状态文件含来源参数（实例列表形态）",
+              (_rec9g[0].get("symbol"), _rec9g[0].get("freq"))
+              if _rec9g else (None, None),
+              ("KQ.m@CFFEX.IM", "5m"))
         check("[9h0] 子进程命令不再带 --config（配置归一：无 config.json）",
               "--config" in cmd, False)
     finally:
@@ -940,17 +943,9 @@ with tmp_dir() as tmp:
         except AppError as e:
             check("[11a] 应抛 AppError", "AppError", "AppError")
             check("[11b] 报错含配置来源", "Trading/Config.py" in str(e), True)
-        log_path = os.path.join(out_dir, "gateway.log")
-        check("[11c] state 目录已创建", os.path.isdir(out_dir), True)
-        check("[11d] gateway.log 已创建", os.path.isfile(log_path), True)
-        content = ""
-        try:
-            with open(log_path, "r", encoding="utf-8") as f:
-                content = f.read()
-        except OSError:
-            pass
-        check("[11e] 日志含开启请求", "收到开启请求" in content, True)
-        check("[11f] 日志含失败原因", "读取配置失败" in content, True)
+        # 多实例预检顺序（§3.2）：配置加载前移到目录创建之前——配置失败
+        # 不再留半截目录，失败定位靠 AppError 消息（[11b]）与后端主日志。
+        check("[11c] 配置失败不创建半截状态目录", os.path.isdir(out_dir), False)
     finally:
         if _env_bak is None:
             os.environ.pop("TRADING_RISK__DELIVERY_GUARD_DAYS", None)
@@ -982,19 +977,20 @@ with tmp_dir() as tmp:
         AT.subprocess.Popen = (lambda cmd, **kw:
                                captured.update(cmd=cmd) or _FakeProc(cmd))
         t = AT.AppTrader()
-        res = t.start()   # 不传 out_dir：走 state_dir 解析
-        expected = os.path.join(AT._TG_ROOT, "State")
+        res = t.start()   # 不传 out_dir：走 State/<登录方式>/<品种键> 派生
+        # 无 link（沿用配置 dry_run）→ 目录段 "Default"；品种键来自 cfg.source
+        expected = os.path.join(AT._TG_ROOT, "State", "Default", "IF")
         cmd = captured.get("cmd") or []
-        check("[12a] --out 解析到 Trading/State",
+        check("[12a] --out 解析到 Trading/State/<登录方式>/<品种键>",
               "--out" in cmd and cmd[cmd.index("--out") + 1] == expected, True)
         check("[12b] state 目录在 Trading 下", os.path.isdir(expected), True)
-        check("[12c] gateway.log 在 Trading/State 下",
+        check("[12c] gateway.log 在实例叶子目录下",
               os.path.isfile(os.path.join(expected, "gateway.log")), True)
         # 模拟用户后端从仓库根启动：CWD=tmp 时也不得落到 tmp/State
         os.chdir(tmp)
         check("[12d] 未污染进程 CWD", os.path.isdir(os.path.join(tmp, "State")),
               False)
-        check("[12e] 落到 Trading/State", os.path.isdir(expected), True)
+        check("[12e] 落到 Trading/State 两级叶子", os.path.isdir(expected), True)
         check("[12f] 状态文件记录 out_dir", res.get("out_dir"), expected)
     finally:
         os.chdir(_cwd0)

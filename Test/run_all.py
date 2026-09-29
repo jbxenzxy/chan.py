@@ -378,6 +378,8 @@ COMPONENTS = [
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
+    ("apptrader_instances",
+     [sys.executable, os.path.join("Test", "test_apptrader_instances.py")]),
     ("apptrader_pid_alive_guards",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_apptrader_pid_alive_guards.py")]),

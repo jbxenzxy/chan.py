@@ -46,6 +46,7 @@ import glob
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -108,6 +109,82 @@ LINK_CHOICES = (LINK_SIMNOW, LINK_LIVE)
 # 同一条通道）—— 换浏览器/清缓存不丢，且随 status 接口下发为下次默认项。
 LINK_STATE_KEY = "ao_link"
 
+# ════════════════════════════════════════════════════════════════════
+# 多实例（2026-09-29 定稿 Docs/多实例自动下单_设计兼交接文档_20260929.md）：
+#   · 实例键 = 品种键（parse_product_key 归一）：本机一个品种至多一个运行中
+#     实例，与登录方式无关（品种互斥，用户拍板）；
+#   · 实例目录 = Trading/State/<登录方式>/<品种键>/（State/SimNow/IF、
+#     State/Live/IF）——Trading/ 根只保留一个 State 根目录；每个叶子目录 =
+#     一个实例的一套文件（state.db / events.jsonl / gateway.log / 停止旗标），
+#     是「Trading/ 零改动 + 实例间无共享可变状态」的隔离边界；
+#   · 同品种换账户 = 先关闭（优雅离场）再以另一登录方式开启；
+#   · 托管记录 trader_launch_record.json 为实例列表 {"instances": [...]}。
+# ══════════════════════════════════════════════════════════════════════
+_LINK_DIR_LABEL = {LINK_SIMNOW: "SimNow", LINK_LIVE: "Live"}
+_LINK_BY_LABEL = {v: k for k, v in _LINK_DIR_LABEL.items()}
+_LINK_CN = {LINK_SIMNOW: "仿真", LINK_LIVE: "实盘"}
+
+
+def _link_dir_label(link: Optional[str]) -> str:
+    """登录方式 → 实例目录段名（Trading/State/<登录方式>/<品种键> 中段）。"""
+    return _LINK_DIR_LABEL.get(str(link or "").strip().lower(), "Default")
+
+
+def _parse_product_key(symbol: Optional[str]) -> str:
+    """品种键（parse_product_key 归一）：实例互斥键。
+
+    解析不出（裸品种码/空串/无法识别）→ 返回空串，**不抛异常**——
+    调用方据此跳过品种互斥查重，交由品种白名单以权威文案拒绝。
+    """
+    s = str(symbol or "").strip()
+    if not s:
+        return ""
+    try:
+        from Trading.Infra.Product import parse_product_key
+        return str(parse_product_key(s) or "")
+    except Exception:
+        return ""
+
+
+def _dir_slot(out_dir: str) -> tuple:
+    """实例目录 → (登录方式目录段, 品种键)。
+
+    新布局按路径解析（Trading/State/<登录方式>/<品种键>）；旧布局
+    （Trading/State_<label>_<pk>）按目录名正则解析；解析不出 → ("", "")。
+    """
+    try:
+        abspath = os.path.abspath(out_dir)
+        parent = os.path.basename(os.path.dirname(abspath))
+        base = os.path.basename(abspath)
+        if parent in _LINK_DIR_LABEL.values():
+            return parent, base
+        rel = os.path.relpath(abspath, _TG_ROOT)
+        parts = [p for p in rel.replace("\\", "/").split("/") if p]
+        if len(parts) == 3 and parts[0] == "State":
+            return parts[1], parts[2]
+        m = re.match(r"State_([A-Za-z]+)_(.+)$", base)
+        if m:
+            return m.group(1), m.group(2)
+    except Exception:
+        pass
+    return "", ""
+
+
+def _scan_state_dirs() -> List[str]:
+    """磁盘扫描全部实例目录（新布局两层叶子 + 旧布局目录），去重排序。
+
+    实例 = 目录（含运行中与已停止）；Trading/State 根目录本身不算实例。
+    """
+    state_root = os.path.join(_TG_ROOT, "State")
+    dirs: List[str] = []
+    for d in glob.glob(os.path.join(state_root, "*", "*")):
+        if os.path.isdir(d):
+            dirs.append(d)
+    for d in glob.glob(os.path.join(_TG_ROOT, "State*")):
+        if os.path.isdir(d) and os.path.abspath(d) != os.path.abspath(state_root):
+            dirs.append(d)
+    return sorted(set(dirs))
+
 # 后端（AppTrader）日志 tee 进 gateway.log 的 handler，路径随每次启停更新
 _log_file_handler: Optional[logging.Handler] = None
 
@@ -131,12 +208,12 @@ class _TraderProc:
     """子进程 + 启动参数的内存态（AppTrader 单例持有）。"""
 
     __slots__ = ("proc", "pid", "out_dir", "started_at", "broker",
-                 "symbol", "freq", "sse_base", "link")
+                 "symbol", "freq", "sse_base", "link", "product_key")
 
     def __init__(self, proc: subprocess.Popen, out_dir: str,
                  started_at: str, broker: str, symbol: Optional[str] = None,
                  freq: Optional[str] = None, sse_base: Optional[str] = None,
-                 link: str = ""):
+                 link: str = "", product_key: str = ""):
         self.proc = proc
         self.pid = proc.pid if proc is not None else 0
         self.out_dir = out_dir
@@ -147,6 +224,8 @@ class _TraderProc:
         self.sse_base = sse_base or ""
         # 本次启动用的登录链路（空串 = 未指定，沿用配置文件）
         self.link = link or ""
+        # 实例键 = 品种键（运行互斥键，§3.1；空串 = 未能归一，白名单会拒）
+        self.product_key = product_key or ""
 
     @property
     def running(self) -> bool:
@@ -167,6 +246,7 @@ class _TraderProc:
             "freq": self.freq,
             "sse_base": self.sse_base,
             "link": self.link,
+            "instance_key": self.product_key,
         }
 
 
@@ -203,15 +283,19 @@ def _engine_store(out_dir: str):
 
 
 def _discover_state_dbs() -> List[str]:
-    """发现全部 state.db（simnow + 实盘合并统计用）。
+    """发现全部 state.db（仿真 + 实盘合并统计用；两层布局，§3.3）。
 
-    默认 out_dir = Trading/State/state.db；另扫描 Trading/ 下名为 State* 的目录
-    （如 State_simnow / State_live）内的 state.db，全部纳入 union。无则仅默认。
+    新布局：Trading/State/<登录方式>/<品种键>/state.db（两层 glob）；
+    旧布局（Trading/State/state.db、Trading/State*/state.db）保留兜底扫描
+    ——升级清理后自然为空，避免老目录里的账本被漏统。
     """
     found: List[str] = []
     default_db = os.path.join(_DEFAULT_OUT, "state.db")
     if os.path.isfile(default_db):
         found.append(default_db)
+    for p in glob.glob(os.path.join(_TG_ROOT, "State", "*", "*", "state.db")):
+        if p not in found:
+            found.append(p)
     for d in glob.glob(os.path.join(_TG_ROOT, "State*")):
         if not os.path.isdir(d):
             continue
@@ -271,6 +355,10 @@ class AppTrader:
 
     def __init__(self):
         self._lock = threading.Lock()
+        # 多实例注册表：品种键 → 实例句柄（实例键 = 品种键，§3.1）。
+        # _handle 为兼容镜像 = 最近一次启动/操作的句柄（旧测试与旧调用方
+        # 直接读写该属性，保持可用；不变量：_handle ∈ 注册表值 ∪ {None}）。
+        self._instances: Dict[str, _TraderProc] = {}
         self._handle: Optional[_TraderProc] = None
         # 已上报过「自动下单子进程退出」的 pid 集合：status() 前台轮询频繁，必须只
         # 上报一次，否则每次轮询都把日志尾部再写回 gateway.log，造成
@@ -285,27 +373,55 @@ class AppTrader:
 
     # ---------------- 内部 ----------------
     def _restore_from_file(self) -> None:
-        """服务重启后恢复上一次的启动参数（pid 已失效则视为未运行）。"""
+        """服务重启后恢复托管记录（实例列表形态；pid 已失效的条目清理）。
+
+        旧单记录格式不读（用户拍板：升级时删除该文件）——读到非列表一律
+        清空重建。pid 存活的条目恢复进注册表（可 status 观察/可 stop）。
+        """
         data = _read_state_file()
-        pid = int(data.get("pid") or 0)
-        if pid <= 0:
+        recs = data.get("instances")
+        if not isinstance(recs, list):
+            if data:
+                log.info("[AppTrader] 托管记录为旧单实例格式，按拍板清空"
+                         "（升级时该文件本应删除）")
+                _write_state_file({})
             return
-        if not _pid_alive(pid):
-            # 上次进程已不在（服务重启/自动下单子进程退出）：清掉残留状态文件
-            log.info("[AppTrader] 上次自动下单子进程已退出，清理状态（pid=%s）", pid)
-            _write_state_file({})
-            return
-        # pid 活着但这不是我们 spawn 的句柄 —— 只能记录参数，stop 时按 pid 发信号
-        self._handle = _TraderProc(
-            proc=None,
-            out_dir=str(data.get("out_dir") or ""),
-            started_at=str(data.get("started_at") or ""),
-            broker=str(data.get("broker") or ""),
-            symbol=str(data.get("symbol") or ""),
-            freq=str(data.get("freq") or ""),
-            sse_base=str(data.get("sse_base") or ""),
-        )
-        self._handle.pid = pid
+        alive_recs: List[Dict[str, Any]] = []
+        for rec in recs:
+            if not isinstance(rec, dict):
+                continue
+            pid = int(rec.get("pid") or 0)
+            if not (pid > 0 and _pid_alive(pid)):
+                if pid > 0:
+                    log.info("[AppTrader] 托管记录 pid=%s 已退出，清理该条目", pid)
+                continue
+            h = _TraderProc(
+                proc=None,
+                out_dir=str(rec.get("out_dir") or ""),
+                started_at=str(rec.get("started_at") or ""),
+                broker=str(rec.get("broker") or ""),
+                symbol=str(rec.get("symbol") or ""),
+                freq=str(rec.get("freq") or ""),
+                sse_base=str(rec.get("sse_base") or ""),
+                link=str(rec.get("link") or ""),
+                product_key=str(rec.get("instance_key")
+                                or rec.get("product_key") or ""),
+            )
+            h.pid = pid
+            key = h.product_key or _parse_product_key(h.symbol)
+            if not key:
+                log.info("[AppTrader] 托管记录 pid=%s 品种键无法归一，清理该条目",
+                         pid)
+                continue
+            h.product_key = key
+            self._instances[key] = h
+            alive_recs.append(rec)
+            log.info("[AppTrader] 恢复托管实例: %s pid=%s out=%s",
+                     key, pid, h.out_dir)
+        self._handle = (list(self._instances.values())[-1]
+                        if self._instances else None)
+        if len(alive_recs) != len(recs):
+            self._sync_state_file()
 
     # ---------------- 对外操作 ----------------
     def start(self, out_dir: Optional[str] = None,
@@ -331,30 +447,76 @@ class AppTrader:
         自动下单子进程 stdout/stderr 落盘 {out_dir}/gateway.log（异常可查，不再吞掉）。
         """
         with self._lock:
-            if self._handle is not None and self._handle.running:
-                return self._handle.to_dict()
+            # ── 预检 ①：配置可加载（唯一来源 Trading/Config.py）──
+            try:
+                cfg = self._load_cfg()
+            except AppError as e:
+                log.warning("[AppTrader] 启动被拒（配置不可加载）: %s", e)
+                raise
+            # 信号源参数：前端开关优先（当前页面品种/周期），其次 cfg.source
+            # （默认值只在 SourceConfig 里定义一份，这里不再写第二套兜底）。
+            src_cfg = cfg.source
+            use_symbol = symbol or src_cfg.symbol
+            use_freq = freq or src_cfg.freq
+            use_base = sse_base or src_cfg.sse_base
 
-            # 防御：本地无 handle 但状态文件里记录了"仍存活"的旧 pid →
-            # 疑似多 worker/多实例同时托管自动下单（单个例失效）。不主动去杀
-            # （避免误伤他 worker 的进程），只记录告警，让部署问题第一时间暴露，
-            # 而不是两个 worker 各拉起一条自动下单子进程静默双开。
-            prev = _read_state_file()
-            prev_pid = int(prev.get("pid") or 0)
-            if prev_pid > 0 and _pid_alive(prev_pid):
-                log.warning(
-                    "[AppTrader] 状态文件记录 pid=%s 仍在运行，而本实例 handle"
-                    "为空 —— 疑似多个 worker/实例同时托管自动下单"
-                    "（AppTrader 单实例失效，P3-2）。请确保只用一个 worker 调度"
-                    "自动下单", prev_pid)
+            # ── 预检 ②：品种互斥查重（实例键 = 品种键，§3.1/§3.10.2）──
+            # 实例键 = parse_product_key 归一（主连/月份 → IF）。解析不出
+            # （裸品种码等）→ 互斥查重跳过，交由下方品种白名单以权威文案拒绝。
+            try:
+                from Trading.Infra.Product import parse_product_key
+                product_key = parse_product_key(use_symbol)
+            except Exception:
+                product_key = ""
+            existing = self._instances.get(product_key) if product_key else None
+            if existing is not None and existing.running:
+                req_link = str(link or "").strip().lower() or None
+                cur_link = existing.link or None
+                if req_link is None or cur_link is None or req_link == cur_link:
+                    # 同账户同品种重复 start → 幂等绑定（不静默吞参数：
+                    # 返回值带 idempotent_bind，前端据此提示"已绑定现有实例"）
+                    res = existing.to_dict()
+                    res["idempotent_bind"] = True
+                    return res
+                raise BadRequestError(
+                    "{} 已在{}账户以 {} 周期运行中——同一品种不允许并跑；"
+                    "换账户请先关闭自动下单再重新开启".format(
+                        product_key, _LINK_CN.get(cur_link, cur_link or "未知"),
+                        existing.freq or "?"))
+            if existing is not None:
+                # 同品种旧实例已退出：清掉残留句柄，按新参数重建（同目录）
+                self._instances.pop(product_key, None)
+                self._exit_logged.discard(existing.pid)
+                self._readers.pop(existing.pid, None)
+                if self._handle is existing:
+                    self._handle = None
 
-            # ── 先定状态目录并创建日志文件：无论后续校验是否通过，都留下
-            #    可查的 gateway.log（曾有"执行后什么都没有"——根因是校验
-            #    失败在 makedirs 之前就 raise，目录/日志从未创建）。
+            # ── 预检 ③：登录链路解析 + 实盘安全闸门（选定值判据）──
+            try:
+                resolved = self._resolve_link(cfg, link)
+            except AppError as e:
+                log.warning("[AppTrader] 启动被拒（登录链路解析失败）: %s", e)
+                raise
+            broker = resolved["broker"] if resolved else str(cfg.broker or "dry_run")
+            try:
+                self._check_live_gate(
+                    cfg, broker,
+                    market=(resolved["tq_market"] if resolved else None),
+                    confirm=(resolved["confirm"] if resolved else None))
+            except AppError as e:
+                log.warning("[AppTrader] 启动被拒（实盘安全闸门）: %s", e)
+                raise
+
+            # ── 状态目录：Trading/State/<登录方式>/<品种键>/（两级布局，§3.3）。
+            #    out_dir 入参保留为内部/测试覆盖口（生产路由不传）。
+            link_used = (resolved["link"] if resolved
+                         else self._link_from_broker(broker)) or ""
             if out_dir:
                 out_dir = os.path.abspath(out_dir)
             else:
-                # 与「过滤勾选写入」同一解析来源（见 _cfg_out_dir）
-                out_dir = self._cfg_out_dir()
+                out_dir = os.path.join(_TG_ROOT, "State",
+                                       _link_dir_label(link_used),
+                                       product_key or "Default")
             try:
                 os.makedirs(out_dir, exist_ok=True)
             except OSError as e:
@@ -362,12 +524,16 @@ class AppTrader:
                     "无法创建自动下单子进程状态目录 {}: {}: {}".format(
                         out_dir, type(e).__name__, e))
             log_file = os.path.join(out_dir, "gateway.log")
-            # 后端（本模块）日志也 tee 进 gateway.log，与自动下单子进程日志同一文件
-            self._set_engine_log_handler(log_file)
             self._engine_log(
                 log_file,
-                "收到开启请求: out={} symbol={} freq={} sse_base={}".format(
-                    out_dir, symbol, freq, sse_base))
+                "收到开启请求: out={} symbol={} freq={} sse_base={} link={}".format(
+                    out_dir, use_symbol, use_freq, sse_base, link_used))
+            if resolved:
+                self._engine_log(
+                    log_file,
+                    "登录链路: {}（broker={} tq_market={} confirm={}）".format(
+                        resolved["link"], resolved["broker"],
+                        resolved["tq_market"], resolved["confirm"]))
 
             # 清除上一轮遗留的 .stop_request flag。看护线程在子进程
             # 启动后立刻轮询，flag 不清会触发"第二次开机关不掉也开不起来——
@@ -432,13 +598,6 @@ class AppTrader:
             self._reset_engine_switch(out_dir)
             if resolved:
                 self._write_link_choice(out_dir, resolved["link"])
-
-            # 信号源参数：前端开关优先（当前页面品种/周期），其次 cfg.source
-            # （默认值只在 SourceConfig 里定义一份，这里不再写第二套兜底）。
-            src_cfg = cfg.source
-            use_symbol = symbol or src_cfg.symbol
-            use_freq = freq or src_cfg.freq
-            use_base = sse_base or src_cfg.sse_base
 
             # 品种白名单硬约束（用户拍板）：不在 PRODUCT_PROFILES
             # 的品种**不允许启动交易引擎**（R 下限等执行参数未标定，启动即错）。
@@ -524,16 +683,24 @@ class AppTrader:
                                  time.strftime("%Y-%m-%d %H:%M:%S"), broker,
                                  symbol=use_symbol, freq=use_freq,
                                  sse_base=use_base,
-                                 link=(resolved["link"] if resolved else ""))
+                                 link=(resolved["link"] if resolved else ""),
+                                 product_key=product_key)
+            # 多实例注册表：品种键 → 句柄；_handle 兼容镜像 = 最近启动的实例
+            self._instances[product_key or out_dir] = handle
             self._handle = handle
             # 新一轮自动下单子进程：清零退出上报集合（避免历史 pid 干扰本次退出上报）
             self._exit_logged.discard(handle.pid)
-            _write_state_file(handle.to_dict())
+            self._sync_state_file()
+            self._inherit_bsp_filter(out_dir)
             self._engine_log(log_file, "子进程已启动 pid={}".format(handle.pid))
             return handle.to_dict()
 
-    def stop(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+    def stop(self, timeout: Optional[float] = None,
+             symbol: Optional[str] = None) -> Dict[str, Any]:
         """关闭自动下单：跨平台 flag 文件停止协议 → 子进程收尾锁仓 → 退出。
+
+        symbol：带品种 → 只停该品种的运行中实例（品种互斥保证至多一个）；
+        不带 → 停全部（兼容旧前端调用与 lifespan 服务退出）。
 
         timeout：None 用分档宽限（r10）：
           · 子进程已就绪（{out_dir}/.ready 存在 = build_runtime 已完成、
@@ -560,27 +727,59 @@ class AppTrader:
            auto_order_enabled==False），而不是"退出来即优雅"（修谎报成功）。
         """
         with self._lock:
-            handle = self._handle
-            if handle is None or not handle.running:
+            # 目标选择：带 symbol → 该品种的唯一实例；不带 → 全部实例
+            # （兼容旧前端调用与 lifespan 服务退出）。测试可直接赋 _handle
+            # （不在注册表），一并纳入目标集合。
+            candidates = list(self._instances.values())
+            if self._handle is not None and all(
+                    h is not self._handle for h in candidates):
+                candidates.append(self._handle)
+            if symbol:
+                pk = _parse_product_key(symbol)
+                targets = [h for h in candidates
+                           if (h.product_key and h.product_key == pk)
+                           or (h.symbol and h.symbol == symbol)]
+            else:
+                targets = candidates
+            running_targets = [h for h in targets if h.running]
+            if not running_targets:
                 # 没有在跑的子进程：仍确保开关落盘为关闭态（防状态漂移）
-                if handle is not None and os.path.isdir(handle.out_dir):
-                    lf = os.path.join(handle.out_dir, "gateway.log")
-                    self._set_engine_log_handler(lf)
-                    try:
-                        s = _engine_store(handle.out_dir)
-                        s.set_json("auto_order_enabled", False)
-                        s.close()
-                    except Exception:
-                        pass
-                    self._engine_log(lf, "收到关闭请求（未在运行）")
-                _write_state_file({})
-                self._handle = None
+                for h in targets:
+                    if os.path.isdir(h.out_dir):
+                        lf = os.path.join(h.out_dir, "gateway.log")
+                        try:
+                            s = _engine_store(h.out_dir)
+                            s.set_json("auto_order_enabled", False)
+                            s.close()
+                        except Exception:
+                            pass
+                        self._engine_log(lf, "收到关闭请求（未在运行）")
+                for h in targets:
+                    self._instances.pop(h.product_key, None)
+                if self._handle is not None and not self._handle.running:
+                    self._handle = None
+                self._sync_state_file()
                 return {"running": False, "pid": None, "note": "未在运行"}
+            results = []
+            for h in running_targets:
+                results.append(self._stop_one_locked(h, timeout))
+            for h in running_targets:
+                self._instances.pop(h.product_key, None)
+            if self._handle is not None and not self._handle.running:
+                self._handle = None
+            self._sync_state_file()
+            if symbol:
+                return results[0]
+            return {"results": results,
+                    "running": any(h.running for h in self._instances.values())}
 
+    def _stop_one_locked(self, handle: _TraderProc,
+                         timeout: Optional[float]) -> Dict[str, Any]:
+        """停单个实例（调用方持锁）。返回该实例的关闭结果投影。"""
+        if True:
             pid = handle.pid
             out_dir = handle.out_dir
             log_file = os.path.join(out_dir, "gateway.log")
-            self._set_engine_log_handler(log_file)
             self._engine_log(log_file, "收到关闭请求 pid={}".format(pid))
 
             # 记录关闭起点 auto_order_off 基线条数，收尾只认"新增"条，避免
@@ -696,8 +895,6 @@ class AppTrader:
                     "[AppTrader] 自动下单 pid=%s 已退出但未检测到收尾结果"
                     "(graceful=False, rc=%s) —— 需核查是否真的锁仓", pid, rc)
 
-            self._handle = None
-            _write_state_file({})
             log.info("[AppTrader] 自动下单已关闭（pid=%s，graceful=%s，rc=%s）",
                      pid, graceful, rc)
             self._engine_log(
@@ -719,29 +916,39 @@ class AppTrader:
         if want <= 0:
             return {"acked": 0, "reason": "no_ts"}
         with self._lock:
-            handle = self._handle
-        if handle is None or not os.path.isdir(handle.out_dir):
+            dirs = self._all_state_dirs()
+        if not dirs:
             return {"acked": 0, "reason": "not_running"}
-        try:
-            s = _engine_store(handle.out_dir)
+        # 广播（§3.10.4）：ack 水位线写进全部实例目录的 state.db——
+        # 弹窗一次显示全部实例的告警，全局确认无过认风险。
+        acked_total = 0
+        left_total = 0
+        ack_ts_max = 0.0
+        for out_dir in dirs:
             try:
-                before = [a for a in (s.get_json("alerts") or [])
-                          if isinstance(a, dict)]
-                ack = max(float(s.get_json("alerts_ack_ts", 0.0) or 0.0), want)
-                left = [a for a in before
-                        if float(a.get("ts") or 0.0) > ack]
-                s.set_json("alerts_ack_ts", ack)
-                if left:
-                    s.set_json("alerts", left)
-                else:
-                    s.delete_key("alerts")
-                return {"acked": len(before) - len(left), "left": len(left),
-                        "ack_ts": ack}
-            finally:
-                s.close()
-        except Exception as e:
-            log.info("[AppTrader] 确认告警失败: %s: %s", type(e).__name__, e)
-            return {"acked": 0, "reason": "{}: {}".format(type(e).__name__, e)}
+                s = _engine_store(out_dir)
+                try:
+                    before = [a for a in (s.get_json("alerts") or [])
+                              if isinstance(a, dict)]
+                    if not before:
+                        continue
+                    ack = max(float(s.get_json("alerts_ack_ts", 0.0) or 0.0), want)
+                    left = [a for a in before
+                            if float(a.get("ts") or 0.0) > ack]
+                    s.set_json("alerts_ack_ts", ack)
+                    if left:
+                        s.set_json("alerts", left)
+                    else:
+                        s.delete_key("alerts")
+                    acked_total += len(before) - len(left)
+                    left_total += len(left)
+                    ack_ts_max = max(ack_ts_max, ack)
+                finally:
+                    s.close()
+            except Exception as e:
+                log.info("[AppTrader] 确认告警失败(%s): %s: %s",
+                         out_dir, type(e).__name__, e)
+        return {"acked": acked_total, "left": left_total, "ack_ts": ack_ts_max}
 
     # ---------------- 买卖点类型过滤（显示设置 → 自动下单信号门） ----------------
     def _cfg_out_dir(self) -> str:
@@ -761,14 +968,20 @@ class AppTrader:
         return os.path.abspath(os.path.join(_TG_ROOT, raw))
 
     def _filter_out_dir(self) -> str:
-        """过滤勾选写到哪个状态目录：子进程在跑 → 它的 out_dir；否则配置目录。
+        """过滤勾选的读取口径目录：主实例在跑 → 它的 out_dir；否则第一个
+        已发现的实例目录；否则配置目录（兜底，兼旧测试语义）。
 
-        子进程**没在跑**时也要写：用户可能先勾好再开自动下单。写的是
-        `_cfg_out_dir()` —— 与 start() 缺省启动目录同一来源，子进程起来后
-        读的就是这一份，不需要"启动后再勾一次"。
+        写入（set_bsp_filter）会**广播**到全部已发现实例目录（§3.10.3），
+        本函数返回的是 GET 回填与统计口径读取的目录（全局口径任取其一，
+        广播保证一致）。
         """
-        if self._handle is not None and self._handle.out_dir:
-            return self._handle.out_dir
+        running = [h for h in getattr(self, "_instances", {}).values()
+                   if h.running]
+        if running:
+            return running[-1].out_dir
+        dirs = self._all_state_dirs()
+        if dirs:
+            return dirs[0]
         return self._cfg_out_dir()
 
     def set_bsp_filter(self, types: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -794,27 +1007,32 @@ class AppTrader:
             raise BadRequestError("买卖点类型过滤需给出完整的四类勾选（{}），缺一不可"
                                   .format(", ".join(BSP_TYPE_CHOICES)))
         filt = {t: bool(types[t]) for t in BSP_TYPE_CHOICES}
-        out_dir = self._filter_out_dir()
-        try:
-            os.makedirs(out_dir, exist_ok=True)
-            # 本模块日志既要在终端可见、也要落进 out_dir/gateway.log。后端进程
-            # 从未 start/stop/status 过自动下单时（新部署第一次就是"先勾好、再
-            # 开自动下单"）tee 还没挂上，这条"谁在什么时候改了勾选"的留痕会只
-            # 进终端、事后无从复盘 —— 就地装一次，与 start()/stop()/status() 同一
-            # handler（换上它同时会摘掉旧的，路径始终跟着当前 out_dir）。
-            self._set_engine_log_handler(os.path.join(out_dir, "gateway.log"))
-            s = _engine_store(out_dir)
-            s.set_json(BSP_TYPE_FILTER_KEY, filt)
-            s.close()
-        except Exception as e:
-            # 与上面的参数校验区分：写不进去是本机状态目录 / 磁盘故障（服务端
-            # 问题），继续用基类 500 —— 用户该查权限/磁盘，而不是"改参数再试"。
-            raise AppError("写入买卖点类型过滤失败（{}）: {}: {}"
-                           .format(out_dir, type(e).__name__, e))
+        # 广播写（§3.10.3）：勾选是页面级全局偏好 → 写进全部已发现实例目录；
+        # 主写入目录（读取口径）失败 → AppError；其余目录失败记日志不阻断。
+        primary = self._filter_out_dir()
+        targets = [primary] + [d for d in self._all_state_dirs()
+                               if d != primary]
+        written = 0
+        for out_dir in targets:
+            try:
+                os.makedirs(out_dir, exist_ok=True)
+                s = _engine_store(out_dir)
+                s.set_json(BSP_TYPE_FILTER_KEY, filt)
+                s.close()
+                written += 1
+            except Exception as e:
+                if out_dir == primary:
+                    # 与上面的参数校验区分：写不进去是本机状态目录 / 磁盘故障（服务端
+                    # 问题），继续用基类 500 —— 用户该查权限/磁盘，而不是"改参数再试"。
+                    raise AppError("写入买卖点类型过滤失败（{}）: {}: {}"
+                                   .format(out_dir, type(e).__name__, e))
+                log.info("[AppTrader] 过滤广播跳过 %s: %s: %s",
+                         out_dir, type(e).__name__, e)
         _allowed = ",".join([t for t in BSP_TYPE_CHOICES if filt[t]])
-        log.info("[AppTrader] 买卖点类型过滤生效 → 放行[%s] (out_dir=%s)",
-                 _allowed or "无：不再有信号驱动的新报单", out_dir)
-        return {"bsp_type_filter": filt, "out_dir": out_dir}
+        log.info("[AppTrader] 买卖点类型过滤生效 → 放行[%s] (主=%s 广播=%d 目录)",
+                 _allowed or "无：不再有信号驱动的新报单", primary, written)
+        return {"bsp_type_filter": filt, "out_dir": primary,
+                "written_dirs": written}
 
     def get_bsp_filter(self) -> Dict[str, Any]:
         """读回「买卖点类型过滤」的实际生效值。
@@ -840,6 +1058,118 @@ class AppTrader:
                      type(e).__name__, e)
             raw = None
         return {"bsp_type_filter": raw, "out_dir": out_dir}
+
+    # ---------------- 多实例（实例表 / 记录 / 聚合账本） ----------------
+    def _all_state_dirs(self) -> List[str]:
+        """全部实例目录 = 磁盘扫描 ∪ 注册表 out_dir（覆盖 out_dir 测试/内部口）。"""
+        dirs = set(_scan_state_dirs())
+        for h in getattr(self, "_instances", {}).values():
+            if h.out_dir:
+                dirs.add(h.out_dir)
+        return sorted(dirs)
+
+    def _sync_state_file(self) -> None:
+        """托管记录落盘（实例列表形态，§3.3）：注册表 → {"instances": [...]}。"""
+        _write_state_file({"instances": [h.to_dict()
+                                         for h in self._instances.values()]})
+
+    def _inherit_bsp_filter(self, out_dir: str) -> None:
+        """启动继承（§3.10.3）：新实例目录尚无过滤值时，把当前全局口径写进去。
+
+        源 = 任一既有实例库（第一个带过滤值的目录）；全都没有 = 未设置
+        （引擎全部放行），跳过。消除"后建实例缺过滤值"的分歧。失败不阻断启动。
+        """
+        from Trading.Infra.Records import BSP_TYPE_FILTER_KEY
+        try:
+            if os.path.isfile(os.path.join(out_dir, "state.db")):
+                s0 = _engine_store(out_dir)
+                try:
+                    if s0.get_json(BSP_TYPE_FILTER_KEY, None) is not None:
+                        return  # 复用目录：库里已有自己的值（广播通道维护一致性）
+                finally:
+                    s0.close()
+            for d in self._all_state_dirs():
+                if d == out_dir or not os.path.isfile(
+                        os.path.join(d, "state.db")):
+                    continue
+                s = _engine_store(d)
+                try:
+                    v = s.get_json(BSP_TYPE_FILTER_KEY, None)
+                finally:
+                    s.close()
+                if v is None:
+                    continue
+                s2 = _engine_store(out_dir)
+                try:
+                    s2.set_json(BSP_TYPE_FILTER_KEY, v)
+                finally:
+                    s2.close()
+                log.info("[AppTrader] 新实例继承买卖点类型过滤 ← %s", d)
+                return
+        except Exception as e:
+            log.info("[AppTrader] 新实例继承过滤值失败（不阻断启动）: %s: %s",
+                     type(e).__name__, e)
+
+    def ledger(self) -> Dict[str, Any]:
+        """账本面板聚合投影（§3.10.1）：全部实例（运行中 + 已停止），
+        按 登录方式 → 品种 两级分组。
+
+        数据 = 运行中实例（内存注册表）∪ 全部实例目录（两层扫描）。一个
+        叶子目录 = 一个实例；同一品种在 SimNow/Live 下可各有一套（历史运行
+        可并存），运行中的至多其一（§3.1 品种互斥）。已停止实例的 alerts /
+        toasts 置空（运行时队列只属于活进程）。
+        """
+        with self._lock:
+            handles = {h.out_dir: h for h in self._instances.values()}
+        buckets: Dict[str, List[Dict[str, Any]]] = {}
+        for out_dir in self._all_state_dirs():
+            label, pk = _dir_slot(out_dir)
+            if not pk:
+                continue
+            h = handles.get(out_dir)
+            running = bool(h is not None and h.running)
+            ao = self._read_engine_switch(out_dir)
+            if ao is None:
+                ao = {"enabled": True, "account_state": "flat",
+                      "net_volume": 0, "positions_n": 0, "positions": [],
+                      "run": None}
+            if not running:
+                ao["alerts"] = []
+                ao["toasts"] = []
+            run = ao.get("run") or {}
+            item = {
+                "instance_key": pk,
+                "product_key": pk,
+                "symbol": ((h.symbol if h is not None else "")
+                           or str(run.get("symbol") or "")),
+                "freq": ((h.freq if h is not None else "")
+                         or str(run.get("freq") or "")),
+                "running": running,
+                "pid": h.pid if h is not None else None,
+                "out_dir": out_dir,
+                "enabled": ao.get("enabled"),
+                "account_state": ao.get("account_state"),
+                "net_volume": ao.get("net_volume"),
+                "positions_n": ao.get("positions_n"),
+                "positions": ao.get("positions") or [],
+            }
+            buckets.setdefault(label or "Default", []).append(item)
+        groups = []
+        for label in ["SimNow", "Live"]:
+            items = buckets.pop(label, None)
+            if items is None:
+                continue
+            link = _LINK_BY_LABEL.get(label, "")
+            groups.append({"link": link, "label": label,
+                           "items": sorted(items,
+                                           key=lambda x: x["product_key"])})
+        for label in sorted(buckets):
+            groups.append({"link": "", "label": label,
+                           "items": sorted(buckets[label],
+                                           key=lambda x: x["product_key"])})
+        return {"groups": groups,
+                "running": any(g for grp in groups for g in
+                               [i for i in grp["items"] if i["running"]])}
 
     def check_symbol_allowed(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """查询某品种是否**允许自动下单**（前端开关的前置提示出口，2026-09-14）。
@@ -1003,8 +1333,6 @@ class AppTrader:
                             str(data["out_dir"]), "gateway.log")
             base["link_view"] = self._link_view(handle, base.get("out_dir"))
             log_file = base.get("log_file")
-            if log_file:
-                self._set_engine_log_handler(str(log_file))
             # 进程曾启动但已退出：附带 gateway.log 尾部，直接回答"为什么关掉了"。
             # 退出只上报一次（_exit_logged 记 pid），且不把尾部 Echo 回
             # gateway.log —— 否则前台每次轮询 status() 都把上一轮写入的尾部
@@ -1053,6 +1381,18 @@ class AppTrader:
                 _ao["alerts"] = []
                 _ao["toasts"] = []
             base["auto_order"] = _ao
+            # 多实例投影（§3.2）：全部托管实例（运行中/刚退出）的逐一投影；
+            # 已停止实例（仅剩目录）由 /ledger 聚合接口呈现（§3.10.1）。
+            insts = []
+            for h in self._instances.values():
+                v = h.to_dict()
+                ao_i = self._read_engine_switch(h.out_dir)
+                if ao_i is not None and not h.running:
+                    ao_i["alerts"] = []
+                    ao_i["toasts"] = []
+                v["auto_order"] = ao_i
+                insts.append(v)
+            base["instances"] = insts
             return base
 
     # ---------------- 内部工具 ----------------
