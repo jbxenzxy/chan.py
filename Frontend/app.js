@@ -3750,9 +3750,10 @@
 
         window.switchFreq = function(freq) {
             if (!chartData) return;
-            // 交易引擎运行中禁止切换周期：运行中的引擎绑定旧周期的 SSE 流，
+            // 交易引擎运行中禁止切换周期（仅期货页）：运行中的引擎绑定旧周期的 SSE 流，
             // 直接切换会与引擎状态错配，须先关闭自动下单。
-            if (autoOrderRunning) {
+            // 交易引擎是期货域功能，股票页切周期与引擎无关，不受此限制。
+            if (autoOrderRunning && isFuturesMode()) {
                 showAlert('交易引擎运行中，请先关闭，再切周期');
                 return;
             }
@@ -4431,9 +4432,10 @@
             const code = document.getElementById("stock-code-input").value.trim();
             if (!code) return;
             _tpslReset();  // S3：切代码/切周期/复盘/市场切换清空止盈止损推演
-            // 交易引擎运行中禁止切换合约：运行中的引擎绑定旧合约的持仓/SSE 流，
+            // 交易引擎运行中禁止切换合约（仅期货页）：运行中的引擎绑定旧合约的持仓/SSE 流，
             // 直接切换会与引擎状态错配（切合约对账），须先关闭自动下单。
-            if (autoOrderRunning) {
+            // 交易引擎是期货域功能，股票页切合约与引擎无关，不受此限制。
+            if (autoOrderRunning && isFuturesMode()) {
                 showAlert('交易引擎运行中，请先关闭，再切合约');
                 return;
             }
