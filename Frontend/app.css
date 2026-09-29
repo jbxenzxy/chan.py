@@ -17,8 +17,14 @@
             display: flex; align-items: center; justify-content: space-between;
             padding: 8px 20px; background: #16213e;
             border-bottom: 1px solid #0f3460; height: 48px;
+            /* 窄屏（如 13.9" 笔记本逻辑宽不足）时，顶栏内容总宽超出视口宽度：
+               改由本行自身横向滚动，右侧控件（日历/分型/笔/线段/中枢/买卖点/
+               市场量能/股票扫描/统计/设置/刷新）始终可达，不再被 body{overflow:hidden}
+               裁掉。高度保持 48px 固定，故 #chart-container 的 calc(100vh - 80px) 不受影响。 */
+            overflow-x: auto; overflow-y: hidden; white-space: nowrap;
+            scrollbar-width: thin;
         }
-        .header-left { display: flex; align-items: center; gap: 16px; }
+        .header-left { display: flex; align-items: center; gap: 16px; flex: 0 0 auto; }
         .stock-input {
             display: flex; align-items: center; gap: 6px;
             position: relative;
@@ -72,7 +78,7 @@
         .stock-history-clear:hover { color: #e94560; }
         .stock-name { font-size: 18px; font-weight: 700; color: #e94560; }
         .stock-code { font-size: 11px; color: #8892b0; }
-        .header-right { display: flex; align-items: center; gap: 12px; }
+        .header-right { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
         .btn-icon {
             display: inline-flex; align-items: center; justify-content: center;
             width: 28px; height: 28px; border-radius: 4px;
@@ -104,6 +110,23 @@
         .freq-btn:disabled { opacity: 0.35; cursor: not-allowed; }
         .freq-btn:disabled:hover { background: #1a1a2e; color: #a8b2d1; }
         #btn-dual { margin-left: 4px; }
+
+        /* ── 响应式瘦身（D）：中等窄屏（如 13.9" 笔记本）按断点收紧顶栏间距/输入框/字号，
+           多数场景可免去横向滚动；极端窄屏仍由 .header 的 overflow-x:auto 兜底。
+           只缩 chrome，不动控件本身的可点区域语义（按钮/开关尺寸不变）。 */
+        @media (max-width: 1600px) {
+            .header-left { gap: 10px; }
+            .header-right { gap: 8px; }
+            .stock-input input { width: 120px; }
+        }
+        @media (max-width: 1366px) {
+            .header-left { gap: 6px; }
+            .header-right { gap: 6px; }
+            .stock-input input { width: 104px; }
+            .stock-name { font-size: 16px; }
+            .freq-btn { padding: 2px 6px; }
+            .btn { padding: 4px 9px; }
+        }
         .realtime-badge {
             display: none; align-items: center; gap: 4px; padding: 2px 8px;
             min-height: var(--hdr-chip-h);                      /* ← 统一高度 */
