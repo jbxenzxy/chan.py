@@ -30,16 +30,25 @@ PAT_FULL = re.compile(r"([A-Za-z_][\w/]*\.py):(\d+)(?:-(\d+))?")
 PAT_BARE = re.compile(r"`:\d+(?:-\d+)?`")
 
 # 基线（2026-09-29 实测）。改造某文档后把对应值调低；调到 0 即永久锁死。
+# 2026-09-29 第二轮：5 份 Docs 存量 317 处行号引用已按 README 那套锚点化完毕，
+# 基线全部归 0（与 ZERO_FILES 双重锁死，回潮即红）。
 BASELINE = {
-    "Docs/data_source_inventory.md": 122,
-    "Docs/互斥锁设计指导书_v1.3.md": 2,
-    "Docs/登录链路选择_交付说明_20260928.md": 28,
-    "Docs/自动下单功能审核报告_2026-09-17.md": 11,
-    "Docs/设计文档_run级配对会计_20260921.md": 154,
+    "Docs/data_source_inventory.md": 0,
+    "Docs/互斥锁设计指导书_v1.3.md": 0,
+    "Docs/登录链路选择_交付说明_20260928.md": 0,
+    "Docs/自动下单功能审核报告_2026-09-17.md": 0,
+    "Docs/设计文档_run级配对会计_20260921.md": 0,
 }
 
 # 已锚点化、不许回潮
-ZERO_FILES = ["Trading/README.md"]
+ZERO_FILES = [
+    "Trading/README.md",
+    "Docs/data_source_inventory.md",
+    "Docs/互斥锁设计指导书_v1.3.md",
+    "Docs/登录链路选择_交付说明_20260928.md",
+    "Docs/自动下单功能审核报告_2026-09-17.md",
+    "Docs/设计文档_run级配对会计_20260921.md",
+]
 
 EXCLUDE_DIRS = (".git", "__pycache__", "node_modules", "WorkBuddy")
 
