@@ -128,6 +128,13 @@ _POLL_INTERVAL_SLOW = 0.2   # _wait 通用谓词轮询
 # 只有回报洪峰真正追上帧率时才会命中（取一个远大于抖动、盘中又能及时暴露的值）。
 _PUMP_BACKLOG_WARN_STREAK = 50
 
+# 委托终态文案里"全部成交"的稳定子串（P6 成交放行的**正向证据**，2026-09-30 事故根修）。
+# CTP 的 `StatusMsg` 与各中继（otg-simnow）文案不同，但"全部成交"是共同子串 ——
+# IM 实盘事故现场即 `last_msg=全部成交报单已提交`。
+# ⚠️ 不要拿 `Broker/Base.classify_ctp_reject` 当"是不是拒单"的判据：那个函数是
+#    给**已判拒**的委托分类拒因用的，**认不出来一律归 `price`**，恒为真值。
+_CTP_ALL_TRADED_HINTS = ("全部成交",)
+
 
 # ── 持仓读数的"形态判据"（2026-09-21 修复）──────────────────────────────────
 #   `api.get_position()`（不传 symbol）返回的是**账户视图**：一个 `Entity`，
@@ -495,6 +502,61 @@ def _traded_price_from_records(order) -> Optional[float]:
     if total_vol <= 0:
         return None
     return total_amt / total_vol
+
+
+def _is_all_traded_msg(last_msg: Any) -> bool:
+    """委托终态文案是否**正向宣告全部成交**（P6 唯一的"提前放行"证据）。
+
+    为什么需要它（2026-09-30 IM 实盘事故根修）：
+      `status` / `volume_left` / `last_msg` 都来自 **orders 回报流**；
+      而 `order.trade_records` 在 tqsdk 3.10.2 里是**现算属性**（`@property`，
+      从账户级成交流 `api._data["trade"][账户]["trades"]` 过滤合成）——
+      即**另一条独立到达的入流**。两条流经 otg-simnow 中继分别投递，
+      "状态包已宣告全部成交、明细包尚在途中"是一个**必然存在的瞬态**。
+
+      旧判据只凭明细手数不足就翻转成交事实，等于用一条滞后流否决一条已到达的
+      终态流 —— 在瞬态里**必然**错杀（现场判词："CTP 成交明细只有 0 手…判定为
+      未成交"，而 2 秒后柜台回报 2 手成交）。
+
+      本函数提供的是**与状态同一路到达的正向证据**：终态文案自己说了"全部成交"。
+      有它就不必等明细；没有它时仍按明细判（幻影防护不降级）。
+    """
+    msg = str(last_msg or "")
+    return any(k in msg for k in _CTP_ALL_TRADED_HINTS)
+
+
+def _p6_is_filled(order, volume: int, traded_volume: Optional[int] = None) -> bool:
+    """P6 成交裁决（纯函数、无副作用；判据 SSOT —— `_finalize` 与测试同调它）。
+
+    两层缺一不可：
+      · P3（orders 回报流）：`status == "FINISHED"` 且 `volume_left == 0`；
+      · P6：`last_msg` **正向宣告全部成交**，或 CTP 成交明细手数 ≥ 委托量。
+
+    为什么 P6 的两条证据是"或"而不是"与"（2026-09-30 事故根修）：
+      `volume_left` 是 CTP 的**未成交余量计数器**，`FINISHED + volume_left == 0`
+      在柜台语义下唯一来源就是"全部成交"；而成交明细走的是另一条入流、可能滞后。
+      把"明细未到"当成"未成交"的证据，是把**缺失**当**否证** —— 裁决方向反了。
+
+    那 09-04 幻影事故（CTP 拒单却被判成交）还防不防？防，而且判据更明确：
+      · 拒单的正常形态是 `volume_left == volume_orign`（什么都没成交）→ P3 层直接挡掉；
+      · 真正的幻影形态是"拒单回报未携带成交余量、`volume_left` 残留 0"，而它的
+        `last_msg` 是**拒单文案**（资金不足 / 已撤单…）—— 不命中本函数的成交文案，
+        于是仍走明细判据 → 明细为空 → 判未成交。
+
+    即：成交必须由**正向证据**宣告，绝不因**证据缺失**被否证。两处都在本函数里。
+
+    `traded_volume`：调用方已解析过明细手数时传入（`_traded_volume_from_records`
+    对认不出的容器会告警，重复解析会重复告警）。
+    """
+    if getattr(order, "status", "") != "FINISHED":
+        return False
+    if getattr(order, "volume_left", None) != 0:
+        return False
+    if _is_all_traded_msg(getattr(order, "last_msg", "")):
+        return True
+    if traded_volume is None:
+        traded_volume = _traded_volume_from_records(order)
+    return traded_volume >= int(volume)
 
 
 def _extract_last_trade_date(quote: Any) -> str:
@@ -1280,30 +1342,59 @@ class SimNowBroker(Broker):
                   signal_key: str, note: str, baseline: Optional[int], expected_delta: int,
                   limit: float, attempt: int = 1, max_attempts: int = 1,
                   baseline_split: Optional[Tuple[int, int]] = None) -> Order:
-        # ===== P3：必须 status=="FINISHED" 且 volume_left==0 才是真成交 =====
-        is_fully_filled = (getattr(order, "status", "") == "FINISHED"
-                           and getattr(order, "volume_left", None) == 0)
+        # ===== P3 + P6：成交裁决（判据 SSOT = 模块级 `_p6_is_filled`）=====
+        # 两层缺一不可：
+        #   · P3（orders 回报流）：status == "FINISHED" 且 volume_left == 0；
+        #   · P6（同流文案 / 异流明细）：终态文案**正向宣告全部成交**，
+        #     或 CTP 成交明细手数 ≥ 委托量。
+        # 2026-09-30 根修（IM 实盘 10:29 事故）：旧实现把 P6 写成「明细不足 ⇒
+        # 否决」的**单方向否决权**，而明细（trades 流）与状态（orders 流）是两条
+        # 独立到达的回报流。状态流已宣告全部成交、明细流尚在途中时，旧实现**必然**
+        # 把一笔 CTP 已终态确认的成交翻转成拒单 —— 把"还没到"读成了"没有"，
+        # 于是不落账本、留下无风控锚的孤儿仓。判据方向已归还委托终态，详见
+        # `_p6_is_filled` 与 `Trading/Test/test_p6_finalize_wiring.py`。
+        traded_volume = _traded_volume_from_records(order)
+        is_fully_filled = _p6_is_filled(order, volume, traded_volume)
         filled = self._trade_price(order) if is_fully_filled else None
 
-        # ===== P6 权威层：用 CTP 真实成交明细判定 =====
-        # 真成交必须三层同时成立：① status==FINISHED ② volume_left==0
-        # ③ sum(trade_records[*].volume) >= volume。P4/P5 仅作辅助诊断。
-        traded_volume = _traded_volume_from_records(order)
         traded_price = _traded_price_from_records(order)
         reject_reason: Optional[str] = None
-        if is_fully_filled and traded_volume < int(volume):
+        if (not is_fully_filled
+                and getattr(order, "status", "") == "FINISHED"
+                and getattr(order, "volume_left", None) == 0):
+            # 唯一落这里的形态 = 09-04 幻影事故（CTP 拒单回报未携带成交余量、
+            # volume_left 残留 0，last_msg 是拒单文案而非成交宣告）。判定权在
+            # P6 手里，且必须由**正向文案**承担 —— 见 `_p6_is_filled`。
             last_msg = getattr(order, "last_msg", "")
             reject_reason = (
-                "P6: CTP 成交明细只有 {} 手，不足委托 {} 手 (status=FINISHED, "
-                "volume_left=0, trade_price={}, last_msg={})，判定为未成交".format(
-                    traded_volume, int(volume),
-                    getattr(order, "trade_price", None), last_msg))
+                "P6: status=FINISHED/volume_left=0 但 last_msg 未宣告成交({!r})、"
+                "且 CTP 成交明细只有 {} 手、不足委托 {} 手 (trade_price={})，"
+                "判定为未成交".format(
+                    last_msg, traded_volume, int(volume),
+                    getattr(order, "trade_price", None)))
             self._note_reject(signal_key, note, order, reject_reason)
-            is_fully_filled = False
-            filled = None
-        # P6 权威成交价：优先取 CTP 成交明细的加权均价
-        if is_fully_filled and traded_price:
-            filled = traded_price
+
+        # ===== 成交价：明细加权价 → 委托对象均价 → 本次委托请求价（回落链）=====
+        # 明细价**只在明细完整时**采用（`traded_volume >= volume`）：不全的明细价
+        # 只反映了部分成交，而 `order.trade_price` 是 CTP 对该委托全量的加权均价。
+        # ⚠️ 回落链**必须有底**：`filled_price is None` 会让引擎在 `Engine._book_order`
+        #    里把一笔**已判定成交**的委托重新当成 rejected（判据 `o.filled_price is None`），
+        #    账本照样不落 —— "判成交"就白判了。事故现场 `trade_price=nan` 正是这种情形
+        #    （`_trade_price` 对 nan 返回 None）。
+        #    价格是"晚到"，不是"成交晚到"：终态一旦宣告成交就用请求价先落账并留痕，
+        #    明细到达后的真实均价可按 raw_order_id 事后回溯。
+        price_source = ""
+        if is_fully_filled:
+            if traded_price and traded_volume >= int(volume):
+                filled, price_source = traded_price, "trade_records"
+            elif filled:
+                price_source = "order.trade_price"
+            else:
+                filled, price_source = float(ref_price), "ref_price"
+                logging.getLogger("tg.brokers.simnow").warning(
+                    "P6 成交价回落: signal=%s 明细与委托均价均未到 → 暂用请求价 %s 落账"
+                    "（raw_order_id=%s）。成交事实已由委托终态确认，价格晚到不影响成交成立。",
+                    signal_key or "-", filled, str(getattr(order, "order_id", "-")))
 
         # ===== P4/P5 降级为辅助层：只记录诊断，不再据此 reject =====
         # D12/p38：平仓与 OPEN 的
@@ -1361,7 +1452,14 @@ class SimNowBroker(Broker):
         reject_class = ""
         if status == "rejected":
             reject_class = classify_ctp_reject(getattr(order, "last_msg", ""))
-        if status == "rejected" and getattr(order, "status", "") != "FINISHED":
+        # 判拒但判词尚未落 → 补一条"未真正成交"原因（P3 层挡下的路径）。
+        # ⚠️ 旧判据是 `getattr(order, "status", "") != "FINISHED"`，它把**全撤 /
+        #   拒单的典型形态**（终态 `FINISHED` 且 `volume_left = volume_orign`）漏在
+        #   判词之外：这类委托判了 rejected，`reject_reason` 却为空，引擎只能写
+        #   `reason="rejected"`，事后复盘看不到任何柜台侧线索（`probe` 实测：
+        #   拒单形态的 `reject_reason` 为空、只剩 `reject_class`）。
+        #   改为"判拒且尚未有原因" → 与上面的 P6 分支互补，覆盖**全部**否决路径。
+        if status == "rejected" and not reject_reason:
             last_msg = getattr(order, "last_msg", "")
             reject_reason = (
                 "未真正成交: status={}, volume_left={}, trade_price={}, last_msg={}".format(
@@ -1382,6 +1480,9 @@ class SimNowBroker(Broker):
                   # action 仍是 "open"/"close"（兼容旧调用方），intent 表达开/平语义
                   "intent": intent_str,
                   "trade_price": filled,
+                  # 成交价来源（成交单才有值）：trade_records / order.trade_price /
+                  #   ref_price —— 事故复盘时一眼分辨"这次用的是回退价"，见 _finalize。
+                  "price_source": price_source,
                   "volume_left": getattr(order, "volume_left", None),
                   "last_msg": getattr(order, "last_msg", ""),
                   "reject_reason": reject_reason,
@@ -1393,7 +1494,6 @@ class SimNowBroker(Broker):
         try:
             _f = self._otg_latency_fields(order, self._submit_t0,
                                           self._watchdog_fired_at)
-            import logging
             logging.getLogger("tg.brokers.simnow").info(
                 "otg_latency: signal=%s action=%s status=%s submit→终判=%ss "
                 "watchdog→终判=%ss insert→终判=%ss 成交→终判=%ss "

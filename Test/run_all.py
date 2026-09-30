@@ -388,6 +388,22 @@ COMPONENTS = [
     ("p70_stop_ready_flex",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p70_stop_ready_flex.py")]),
+    # p6-wiring：P6 成交裁决的**接线级**护栏（2026-09-30 IM 实盘事故根修）。
+    #   事故：状态回报流（orders）已宣告全部成交（FINISHED + volume_left=0 +
+    #   last_msg=全部成交报单已提交），成交明细流（trades）2 秒后才到，引擎的
+    #   同步终判恰好落在两包之间 → 旧 _finalize 把"还没到"读成"没有"，判成
+    #   rejected、不落账本，留下无风控锚的孤儿仓（快期3 里却是成交的）。
+    #   与 test_p6_fix.py 的分工：那个测**判据函数**，不经过 _finalize；
+    #   本组件直接调真实 _finalize，钉住三件事 ——
+    #     ① 成交只由**正向证据**宣告（终态文案宣告成交，或明细手数足够），
+    #        绝不因**证据缺失**被否证；
+    #     ② 判成 filled 的单子 filled_price 必为有限正数（否则引擎
+    #        `Engine._book_order` 按 `o.filled_price is None` 又把它当 rejected）；
+    #     ③ 09-04 幻影防护不降级（拒单文案 + 残留余量 0 → 仍判未成交）。
+    #   真 import 生产代码、零网络、无需凭据。
+    ("p6_finalize_wiring",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p6_finalize_wiring.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。

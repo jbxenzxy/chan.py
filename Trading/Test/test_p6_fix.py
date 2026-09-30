@@ -16,6 +16,16 @@ P6 修复单元测试：CTP 真实成交明细（trade_records）权威判定
     `isinstance(recs, dict)` 认得的那条分支；tqsdk 的容器类不是 dict 子类，
     真形态一旦变化，旧判据会静默累计出 0 手 → 真成交被判成未成交。
 
+    [6] 与 2026-09-30 事故根修（IM 实盘 10:29）：P6 的裁决权已归还**委托终态**
+    （`status` / `volume_left` / `last_msg` 同属 orders 回报流），`trade_records`
+    （trades 回报流，独立到达）降级为**成交价来源 + 诊断**，不再拥有对成交事实
+    的否决权。于是原 [3]A 的用例被**一分为二**：
+      · A1 = 终态文案宣告全部成交 + 明细未到 → **判成交**（事故现场，旧实现判反了）；
+      · A2 = 拒单文案 + 明细未到        → 判未成交（09-04 幻影防护，不降级）。
+    两者输入只差 `last_msg`，正是"成交必须由**正向证据**宣告、绝不因**证据缺失**
+    被否证"这条规格的两个方向。判据本体已收口到生产侧的 `_p6_is_filled`
+    （本文件**真 import**，不再自带副本 —— 副本测的是规格，不是生产代码）。
+
 本测试用 mock order 对象验证，不需要真实 tqsdk / 网络。
 跑法：python test_p6_fix.py
 """
@@ -25,14 +35,19 @@ import sys
 
 
 class MockOrder:
-    """模拟 tqsdk Order 对象（只需 status / volume_left / trade_records）。"""
+    """模拟 tqsdk Order 对象（只需 status / volume_left / last_msg / trade_records）。
+
+    `last_msg` 默认空串 = "回报没带文案"，落在"认不出"那一侧（不放行），
+    这是 09-04 幻影防护的保守方向。
+    """
 
     def __init__(self, status="FINISHED", volume_left=0, trade_records=None,
-                 trade_price=None):
+                 trade_price=None, last_msg=""):
         self.status = status
         self.volume_left = volume_left
         self.trade_records = trade_records
         self.trade_price = trade_price
+        self.last_msg = last_msg
 
 
 # ---- import simnow.py 里的【真实】函数 ----
@@ -74,25 +89,20 @@ if not _TG_ROOT:
 sys.path.insert(0, os.path.dirname(_TG_ROOT))
 
 try:
+    # `_p6_is_filled` = 生产侧的裁决本体（`_finalize` 与测试**同调它**）——
+    # 本文件不再自带判定式副本：副本测的是"规格"，生产代码被改坏了照样绿。
     from Trading.Broker.SimNow import (  # noqa: E402
+        _p6_is_filled as p6_is_filled,
         _traded_volume_from_records,
         _traded_price_from_records,
     )
 except Exception as e:  # pragma: no cover
-    print("✗ 无法从 tg.brokers.simnow 导入被测函数: {}: {}".format(type(e).__name__, e))
+    print("✗ 无法从 Trading/Broker/SimNow.py 导入被测函数: {}: {}".format(
+        type(e).__name__, e))
     print("  Trading 根目录解析为: {}".format(_TG_ROOT))
     raise SystemExit(2)
 
-print("[import] 被测函数来自: {}/tg/brokers/simnow.py（真实代码，非副本）".format(_TG_ROOT))
-
-
-def p6_is_filled(order, volume: int) -> bool:
-    """P6 判定逻辑：P3 两层 + trade_records 成交量 >= 委托量。"""
-    p3 = (getattr(order, "status", "") == "FINISHED"
-          and getattr(order, "volume_left", None) == 0)
-    if not p3:
-        return False
-    return _traded_volume_from_records(order) >= int(volume)
+print("[import] 被测函数来自: {}/Broker/SimNow.py（真实代码，非副本）".format(_TG_ROOT))
 
 
 # ---------------- 测试用例 ----------------
@@ -155,13 +165,26 @@ def test_p6_price_extraction() -> None:
 
 
 def test_p6_core_judgement() -> None:
-    print("\n[3] P6 权威判定（这是挡住 v5 幻象的关键）")
+    print("\n[3] P6 裁决（成交事实只由正向证据宣告）")
 
-    # 场景 A：CTP 拒单但 position 缓存被乐观 +1（v5 的 4 笔幻象 filled）
-    #         status=FINISHED, volume_left=0，但 trade_records 空
+    # 场景 A1（2026-09-30 IM 实盘 10:29 事故现场）：委托终态**文案已宣告全部成交**，
+    #   而成交明细包（另一条回报流）**尚未到达**。
+    #   ⚠️ 这一条与下面的 A2 只差 `last_msg`，而**旧实现把两者判成同一个结果**
+    #   （都判未成交）—— 那正是事故的根因：用"明细还没到"否决了"CTP 已宣告的成交"，
+    #   于是不落账本、留下无风控锚的孤儿仓（快期3 里却是成交的）。
+    accident = MockOrder(status="FINISHED", volume_left=0, trade_records={},
+                         trade_price=float("nan"), last_msg="全部成交报单已提交")
+    check("A1 终态宣告全部成交 + 明细未到 -> 判成交（2026-09-30 事故根修）",
+          p6_is_filled(accident, 2), True)
+
+    # 场景 A2：CTP 拒单但 position 缓存被乐观 +1（v5 的 4 笔幻象 filled）。
+    #   形态与 A1 同（FINISHED + volume_left=0 + 明细空），差别在 `last_msg` ——
+    #   拒单文案**不宣告成交**，于是仍走明细判据 → 判未成交。
+    #   09-04 幻影防护改由"正向文案"承担，防护力不降级。
     ghost = MockOrder(status="FINISHED", volume_left=0,
-                      trade_records={}, trade_price=4547.4)
-    check("A 幻象成交（拒单但缓存+1）-> 判未成交",
+                      trade_records={}, trade_price=4547.4,
+                      last_msg="资金不足，报单被拒绝")
+    check("A2 幻象成交（拒单文案 + 缓存+1）-> 判未成交",
           p6_is_filled(ghost, 1), False)
 
     # 场景 B：真成交，CTP 回报了 1 手明细
@@ -217,9 +240,12 @@ def test_p4_downgraded_to_diagnostic() -> None:
     final = p6_result
     check("P4 滞后但 P6 通过 -> 仍判成交（不再误拒）", final, True)
 
-    # 反向：P4 通过（缓存被乐观 +1）但 P6 失败（无成交明细）-> 必须判未成交
+    # 反向：P4 通过（缓存被乐观 +1）但 P6 失败（无成交明细 + **拒单文案**）
+    #   -> 必须判未成交。`last_msg` 是这条例的判别关键：拒单文案不宣告成交，
+    #   于是不会命中"不等明细"的放行口（若这里留空串同样走明细判据，结论一致）。
     p4_ok_but_p6_fail = MockOrder(status="FINISHED", volume_left=0,
-                                  trade_records={}, trade_price=4547.4)
+                                  trade_records={}, trade_price=4547.4,
+                                  last_msg="资金不足，报单被拒绝")
     check("P4 通过但 P6 失败 -> 必须判未成交（挡住幻象）",
           p6_is_filled(p4_ok_but_p6_fail, 1), False)
 
@@ -314,6 +340,36 @@ def test_record_container_shape() -> None:
               trade_records=[{"volume": 2, "price": 4550.0}])), 2)
 
 
+def test_all_traded_msg_gate() -> None:
+    """终态文案闸门：只认「全部成交」（2026-09-30 事故根修）。
+
+    为什么单列一组：这是 P6 唯一一个"不等成交明细就放行"的口子，口子必须开得**窄**。
+    任何"认不出也放行"的写法都会把 09-04 幻影形态（拒单文案 + 余量残留 0）一起放进来
+    —— 那才是真正的资损方向（账本有、实盘没有）。故本组同时钉住两侧：
+      · 宣告成交 → 放行（哪怕明细为空）；
+      · 拒/撤/未成交/认不出/空/None → 一律不放行。
+    """
+
+    print("\n[6] 终态文案闸门：只认『全部成交』，认不出不放行")
+
+    def verdict(msg, volume=2):
+        return p6_is_filled(
+            MockOrder(status="FINISHED", volume_left=0, trade_records={},
+                      trade_price=7192.40, last_msg=msg), volume)
+
+    check("事故现场文案（全部成交报单已提交）-> 放行",
+          verdict("全部成交报单已提交"), True)
+    check("CTP 原生文案（全部成交）-> 放行", verdict("全部成交"), True)
+    check("拒单文案（资金不足）-> 不放行", verdict("资金不足，报单被拒绝"), False)
+    check("撤单文案（已撤单报单已提交）-> 不放行", verdict("已撤单报单已提交"), False)
+    check("未成交文案（未成交报单已提交）-> 不放行", verdict("未成交报单已提交"), False)
+    check("部分成交文案（部分成交报单已提交）-> 不放行",
+          verdict("部分成交报单已提交"), False)
+    check("空文案（回报未携带）-> 不放行", verdict(""), False)
+    check("None 文案 -> 不放行", verdict(None), False)
+    check("认不出的文案（中继换文案）-> 不放行", verdict("Some unknown message"), False)
+
+
 def main() -> int:
     print("=" * 64)
     print("P6 修复单元测试：CTP 真实成交明细权威判定")
@@ -323,6 +379,7 @@ def main() -> int:
     test_p6_core_judgement()
     test_p4_downgraded_to_diagnostic()
     test_record_container_shape()
+    test_all_traded_msg_gate()
     print("\n" + "=" * 64)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("=" * 64)

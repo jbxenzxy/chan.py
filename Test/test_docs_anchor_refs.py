@@ -76,6 +76,9 @@ ANCHORS = [
     ("FrontAPI.py", "api_stocks_save_annotation"),
     ("App/AppChart.py", "call_stock_tpsl"),
     ("Trading/Broker/SimNow.py", "_traded_price_from_records"),
+    # 成交裁决的判据本体（2026-09-30 事故根修后成为 README §7.5 的引用锚点）：
+    # 它的"裁决方向"是那条链上最容易被人改回去的地方，锚点必须能 grep 到。
+    ("Trading/Broker/SimNow.py", "_p6_is_filled"),
     ("Trading/Engine/Engine.py", "_run_start"),
     ("Trading/Engine/Engine.py", "_settle_positions"),
     ("Trading/Strategy/Exit.py", "_phase_reason"),
