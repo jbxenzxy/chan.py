@@ -396,6 +396,15 @@ COMPONENTS = [
     # 前端「关闭自动下单」请求契约（静态）：不带 symbol 会退化成停全部
     ("frontend_ao_off_symbol",
      [sys.executable, os.path.join("Test", "test_frontend_ao_off_symbol.py")]),
+    # 前端多实例契约（源码抽取 + node 真执行；2026-09-30 评审 P2-1/P2-3/P3-5）：
+    #   ① 本页绑定按**品种键**（另一标签页把同品种写成 IF2609/小写主连时不再
+    #      丢绑定 → 切合约/切周期守卫不放行）；② 告警与轻提示的水位/冷却
+    #      **per 实例**（低 ts 新事件不被高 ts 掩盖后又被 ack 清库）；
+    #   ③ 退出弹窗取本页实例的逐实例 log_tail/exit_rc。
+    #   不做子串断言（这些词在注释里也有，会恒绿）；node 不在位时自动 SKIP。
+    ("ao_multi_instance_frontend",
+     [sys.executable, os.path.join("Test",
+                                   "test_ao_multi_instance_frontend.py")]),
     ("apptrader_pid_alive_guards",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_apptrader_pid_alive_guards.py")]),

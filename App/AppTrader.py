@@ -145,6 +145,31 @@ def _parse_product_key(symbol: Optional[str]) -> str:
         return ""
 
 
+def _proc_returncode(handle: Any) -> Optional[int]:
+    """子进程退出码（判别"零输出同秒退出"的机器级原因）。
+
+    · 0           干净返回（我们的 run() 总会 print_summary，不可能静默 0）
+    · 0xC0000005  访问违例（硬崩溃，Traceback 都没机会写）
+    · 0xC0000135  DLL 加载失败（Python/依赖启动即挂）
+
+    进程还在跑（returncode 为 None 且 poll() 为 None）→ 返回 None。
+    任何异常都吞成 None：这是观测字段，绝不允许把状态轮询打断。
+    """
+    try:
+        proc = getattr(handle, "proc", None)
+        if proc is None:
+            return None
+        rc = getattr(proc, "returncode", None)
+        if rc is None:
+            try:
+                rc = proc.poll()
+            except Exception:
+                rc = None
+        return rc
+    except Exception:
+        return None
+
+
 def _dir_slot(out_dir: str) -> tuple:
     """实例目录 → (登录方式目录段, 品种键)。
 
@@ -353,7 +378,12 @@ class AppTrader:
         self._lock = threading.Lock()
         # 多实例注册表：品种键 → 实例句柄（实例键 = 品种键，§3.1）。
         # _handle 为兼容镜像 = 最近一次启动/操作的句柄（旧测试与旧调用方
-        # 直接读写该属性，保持可用；不变量：_handle ∈ 注册表值 ∪ {None}）。
+        # 直接读写该属性，保持可用）。
+        # 清除时机**只有一处**：stop() 把注册表清空时。停掉的恰好是镜像自己、
+        # 但还有别的实例在跑时**故意保留不清** —— 顶层投影（pid/out_dir/symbol/
+        # log_tail/exit_rc）与 link_view 要继续回答"刚停掉的是谁"，否则旧消费方
+        # （异常退出弹窗、登录方式默认项）拿到的是空值（评审 P1-1 连带后果）。
+        # 由此 _handle 可以是"已出注册表的那个刚停实例"，status() 只读它、不重入表。
         self._instances: Dict[str, _TraderProc] = {}
         self._handle: Optional[_TraderProc] = None
         # 已上报过「自动下单子进程退出」的 pid 集合：status() 前台轮询频繁，必须只
@@ -786,7 +816,13 @@ class AppTrader:
                             pass
                 for h in targets:
                     self._instances.pop(h.product_key, None)
-                if self._handle is not None and not self._handle.running:
+                    # 同上分支：用户主动点关闭 = 已知原因的退出，不再当异常上报。
+                    self._exit_logged.add(h.pid)
+                # 镜像只在**注册表清空**时才清（评审 P1-1）：停掉的恰好是镜像
+                # 自己、但还有别的实例在跑时**必须保留** —— 否则顶层投影
+                # （pid/out_dir/symbol/log_tail/exit_rc 与 link_view）全变空值，
+                # 旧消费方（退出弹窗、登录方式默认项）随之拿不到东西。
+                if not self._instances:
                     self._handle = None
                 self._sync_state_file()
                 return {"running": False, "pid": None, "note": "未在运行"}
@@ -795,7 +831,14 @@ class AppTrader:
                 results.append(self._stop_one_locked(h, timeout))
             for h in running_targets:
                 self._instances.pop(h.product_key, None)
-            if self._handle is not None and not self._handle.running:
+                # 主动关闭 = 退出原因已由 stop() 自己落进 gateway.log
+                # （"自动下单已关闭 pid=..."），记入"已上报"集合。否则多实例下
+                # 被停的恰好是镜像（保留下来的那个）时，下一轮 status() 会把
+                # 这次**有意关闭**当异常退出再 warning 一次（谎报 + 日志噪声）。
+                self._exit_logged.add(h.pid)
+            # 同上一分支：只在注册表清空时清镜像（评审 P1-1），停掉的不是
+            # 最后一个实例时保留它，顶层投影继续指向"刚停掉的那个"。
+            if not self._instances:
                 self._handle = None
             self._sync_state_file()
             if symbol:
@@ -1342,7 +1385,17 @@ class AppTrader:
         """
         with self._lock:
             handle = self._handle
-            running = bool(handle is not None and handle.running)
+            # 顶层 running 的语义 = **任一实例在跑**（§3.2「status 返回
+            # {instances: [...], running: 任一在跑}」、§3.6「顶层保留 running
+            # （任一实例在跑）以兼容渐进改造期的旧消费方」）。
+            # 不得用 self._handle 代算 —— 那是"最近一次操作实例"的兼容镜像，
+            # 逐个实例的镜像生命周期与"是否还有实例在跑"无关；用它代算会在
+            # 「停掉最后操作的那个实例、但还有别的实例在跑」时报 False，
+            # 旧消费方（前端异常退出探测、登录方式默认项）随之误判。
+            running = any(h.running for h in self._instances.values())
+            # 镜像**自身**的运行态：退出信息（日志尾部 / 退出码 / 上报一次）只对
+            # 已退出的那个实例有意义，故与上面的顶层 running 分开算。
+            handle_running = bool(handle is not None and handle.running)
             base: Dict[str, Any] = {
                 "running": running,
                 "pid": handle.pid if handle else None,
@@ -1377,25 +1430,14 @@ class AppTrader:
             # 退出只上报一次（_exit_logged 记 pid），且不把尾部 Echo 回
             # gateway.log —— 否则前台每次轮询 status() 都把上一轮写入的尾部
             # 再写一遍，日志自嵌套无限膨胀（雪崩），掩盖真实退出原因。
-            if handle is not None and not running and log_file:
+            if handle is not None and not handle_running and log_file:
                 tail = self._read_log_tail(str(log_file))
                 base["log_tail"] = tail or None
                 # 取子进程退出码（判别"零输出同秒退出"的机器级原因）：
                 #   0           干净返回（我们的 run() 总会 print_summary，不可能静默 0）
                 #   0xC0000005  访问违例（硬崩溃，Traceback 都没机会写）
                 #   0xC0000135  DLL 加载失败（Python/依赖启动即挂）
-                rc = None
-                try:
-                    proc = handle.proc
-                    if proc is not None:
-                        rc = getattr(proc, "returncode", None)
-                        if rc is None:
-                            try:
-                                rc = proc.poll()
-                            except Exception:
-                                rc = None
-                except Exception:
-                    rc = None
+                rc = _proc_returncode(handle)
                 base["exit_rc"] = rc
                 if handle.pid not in self._exit_logged:
                     self._exit_logged.add(handle.pid)
@@ -1417,12 +1459,15 @@ class AppTrader:
                 elif os.path.isfile(os.path.join(_DEFAULT_OUT, "state.db")):
                     _ao_dir = _DEFAULT_OUT
             _ao = self._read_engine_switch(_ao_dir)
-            if _ao is not None and handle is None:
+            if _ao is not None and not handle_running:
                 _ao["alerts"] = []
                 _ao["toasts"] = []
             base["auto_order"] = _ao
             # 多实例投影（§3.2）：全部托管实例（运行中/刚退出）的逐一投影；
             # 已停止实例（仅剩目录）由 /ledger 聚合接口呈现（§3.10.1）。
+            # 退出信息（log_file / log_tail / exit_rc）**逐实例**带上：前端按
+            # 「本页绑定实例」取日志尾部，不再消费顶层 log_tail —— 顶层那份只
+            # 覆盖兼容镜像那一个实例，退出的不是它时弹窗会退化成"（未知）"。
             insts = []
             for h in self._instances.values():
                 v = h.to_dict()
@@ -1431,6 +1476,11 @@ class AppTrader:
                     ao_i["alerts"] = []
                     ao_i["toasts"] = []
                 v["auto_order"] = ao_i
+                lf_i = os.path.join(h.out_dir, "gateway.log")
+                v["log_file"] = lf_i if os.path.isfile(lf_i) else None
+                if not h.running:
+                    v["log_tail"] = self._read_log_tail(lf_i) or None
+                    v["exit_rc"] = _proc_returncode(h)
                 insts.append(v)
             base["instances"] = insts
             return base

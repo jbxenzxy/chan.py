@@ -16,6 +16,7 @@
   ④ 行为：登记组件的子进程 env 无凭据键，且其余变量原样保留
   ⑤ 行为：未登记组件不受影响（凭据原样带入）
   ⑥ 行为：清凭据不改调用方那份 env（后续组件不被污染）
+  ⑦ 发现式 docstring 的组件数 == len(COMPONENTS)（评审 P2-2：已陈旧三次）
 """
 import importlib.util
 import os
@@ -123,6 +124,19 @@ rec("⑤", f"未登记组件 {other} 不受影响（凭据原样带入）", inta
 mutated = [k for k in CREDS if k not in caller_after]
 rec("⑥", "清凭据不就地修改调用方 env（后续组件不被污染）", not mutated,
     f"调用方 env 被改掉的键: {mutated or '无'}")
+
+
+# ── ⑦ 发现式 docstring 的组件数 == len(COMPONENTS)（评审 P2-2） ────
+#     文档 §5 自己点名的教训「新测试手加 COMPONENTS 行，并同步 run_all_tests.py
+#     docstring 的组件数」，2026-09-28/29 漏了两次，本次是第三次（136 vs 137）
+#     —— 两次都靠人肉发现，因为**没有任何断言钉它**。这里钉死：数字从
+#     COMPONENTS 现算，不在断言里硬编码，所以加/删组件时它会立刻变红。
+with open(DISCOVER_PATH, encoding="utf-8") as _f:
+    _discover_src = _f.read()
+_n_comp = len(gate.COMPONENTS)
+rec("⑦", f"发现式 docstring 的组件数 == len(COMPONENTS)（{_n_comp}）",
+    f"{_n_comp} 个组件" in _discover_src,
+    f"run_all_tests.py 顶部须写「{_n_comp} 个组件」（加/删 COMPONENTS 时同步）")
 
 
 def main():

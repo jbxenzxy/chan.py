@@ -16,7 +16,9 @@ G3 · 标注跨进程文件锁 —— 并发守护（对应审计矩阵 G3，P3�
      写出 JSON 始终合法
   ② 并发保存期间读者（同进程/另一进程）读取标注文件永不读到半截/截断 JSON
   ③ 跨进程 OS 文件锁真正串行化：N 个独立子进程对同一计数文件做「读-改-写」，
-     拿锁后计数 == N（无丢失更新）；无锁则必然丢失 → 暴露 G3 缺口
+     拿锁后计数 == N（无丢失更新）；无锁则必然丢失 → 暴露 G3 缺口。
+     ⚠️ 与 ② 同口径：Windows 上并发 `open(.lock)` 的瞬时 `Errno 13` 不计失败
+     （整轮重试，最多 3 轮）；"子进程全 0 退出却丢更新" 仍然一轮即判失败。
 
 退出码语义：发现缺陷 → 非 0；全绿 → 0（可直接接入 CI）。
 """
@@ -262,16 +264,10 @@ print("child-done")
 '''
 
 
-def test_cross_process_file_lock_serializes():
-    """③ 跨进程 OS 文件锁真正串行化：N 子进程对计数文件 RMW，终值 == N。"""
-    tmp = tempfile.mkdtemp(prefix="g3_flock_")
-    lock_path = os.path.join(tmp, "counter.lock")
-    counter_path = os.path.join(tmp, "counter.txt")
+def _rmw_round(n_procs, iters, lock_path, counter_path):
+    """跑一轮 N 子进程「读-改-写」。返回 (rc 列表, 终值, 各子进程 stderr, children)。"""
     with open(counter_path, "w") as f:
         f.write("0")
-
-    n_procs = 8
-    iters = 25
     children = []
     for _ in range(n_procs):
         p = subprocess.Popen(
@@ -285,25 +281,68 @@ def test_cross_process_file_lock_serializes():
         _out, _err = p.communicate(timeout=120)
         rc.append(p.returncode)
         child_errs.append(_err.strip())
-
     final = 0
     try:
         with open(counter_path, "r") as f:
             final = int(f.read().strip())
     except Exception:   # noqa: BLE001
         pass
+    return rc, final, child_errs, children
+
+
+# ③ 的整轮重试次数（只对"已知瞬时冲突"重试，见函数 docstring）
+_RMW_ATTEMPTS = 3
+
+
+def test_cross_process_file_lock_serializes():
+    """③ 跨进程 OS 文件锁真正串行化：N 子进程对计数文件 RMW，终值 == N。
+
+    ⚠️ 口径与 ② 统一（2026-09-30 评审 P3-8）：Windows 上 8 个进程同时
+    `open(lock_path, "a+")` 创建同一个 .lock 会偶发 `PermissionError: [Errno 13]`
+    （杀软首扫 / 共享语义，非代码缺陷）→ 恰有一两路子进程在**首轮**就崩，
+    终值 = 200 − 25×崩溃进程数。② 早已明写「瞬时 OSError 不计失败」，③ 此前却把
+    同源的 Errno 13 当硬失败 → 本机实测 24 轮里 25%（A）/ 21%（B）随机报红，
+    门禁在 Windows 上长期不可信。
+
+    处理：**整轮重试**（最多 _RMW_ATTEMPTS 轮，每轮全新临时目录 + 计数文件），
+    且只对"崩溃子进程的 stderr 里确实是 Errno 13"这一种情形重试；一旦出现
+    「子进程全部正常退出、终值却短缺」= **真的丢更新（锁没起作用）**，立即判失败
+    —— 那正是 `G3_FILELOCK_MUTATE` 注入的确定性回归形态，必须一轮就红。
+    """
+    n_procs = 8
+    iters = 25
     expected = n_procs * iters
+    last = None
+    for attempt in range(1, _RMW_ATTEMPTS + 1):
+        tmp = tempfile.mkdtemp(prefix="g3_flock_")
+        lock_path = os.path.join(tmp, "counter.lock")
+        counter_path = os.path.join(tmp, "counter.txt")
+        rc, final, child_errs, children = _rmw_round(
+            n_procs, iters, lock_path, counter_path)
+        last = (attempt, rc, final, child_errs, children)
+        if all(r == 0 for r in rc) and final == expected:
+            break
+        crashed = [i for i in range(len(rc)) if rc[i] != 0]
+        err13 = bool(crashed) and all(
+            "[Errno 13]" in (child_errs[i] or "") for i in crashed)
+        if not err13:
+            break    # 丢更新 / 别的崩溃：不是已知瞬时冲突，不重试
+
+    attempt, rc, final, child_errs, children = last
     ok = (all(r == 0 for r in rc)) and (final == expected)
-    detail = f"procs_rc={rc} final={final} expected={expected}"
-    if not all(r == 0 for r in rc):
-        # 子进程崩溃：此前 procs_rc=[0,1,1,...] 却看不到根因（stderr 被 pipe 吞掉）。
-        # 现在把崩溃子进程的 stderr 末 3 行透出，根因不再被掩盖。
+    detail = (f"尝试 {attempt}/{_RMW_ATTEMPTS} 轮 procs_rc={rc} "
+              f"final={final} expected={expected}")
+    if ok and attempt > 1:
+        detail = (f"前 {attempt - 1} 轮命中瞬时 Errno 13（与 ② 同口径，不计失败），"
+                  f"本轮达标 | " + detail)
+    crashed = [i for i in range(len(rc)) if rc[i] != 0]
+    if crashed:
+        # 崩溃子进程的 stderr 末 3 行透出（此前被 pipe 吞掉，根因不可见）
         failed = []
-        for i in range(len(rc)):
-            if rc[i] != 0:
-                lines = (child_errs[i].splitlines() or ["<无 stderr>"])[-3:]
-                failed.append(f"[child{i} pid={children[i].pid} rc={rc[i]}] "
-                              f"{' / '.join(lines)}")
+        for i in crashed:
+            lines = (child_errs[i].splitlines() or ["<无 stderr>"])[-3:]
+            failed.append(f"[child{i} pid={children[i].pid} rc={rc[i]}] "
+                          f"{' / '.join(lines)}")
         detail += "\n           └─ 子进程崩溃根因: " + " | ".join(failed)
     rec("③", f"跨进程文件锁串行化：{n_procs} 进程 × {iters} 次 RMW，终值 {final}=={expected}",
         ok, detail)

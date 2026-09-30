@@ -34,8 +34,6 @@ import sys
 import tempfile
 import threading
 import time
-from ctypes import wintypes
-
 # 跨进程文件锁：POSIX 用 fcntl.flock，Windows 用 msvcrt.locking（见 file_lock）
 try:
     import fcntl
@@ -48,7 +46,12 @@ except ImportError:                      # pragma: no cover - POSIX
 
 # Windows 原子替换：ReplaceFileW 专为「目标被读线程持句柄」设计，成功率远高于
 # os.replace（= MoveFileExW REPLACE_EXISTING）。详见 _atomic_replace。
+# `wintypes` 的 import 放在平台守卫**内**：它在非 Windows 上曾被 ctypes 拒收
+# （`ValueError: _type_ 'v' not supported`，直到 bpo-16396 / 3.9 才修好），
+# 仓库其余三处同类写法（`App/AppConfig.py`、`App/AppTrader.py`）也都做平台守卫
+# —— 这里对齐惯例，顺带免掉"某天回退到旧解释器就 import 期炸"的隐患（零风险）。
 if sys.platform == "win32":
+    from ctypes import wintypes
     _kernel32 = ctypes.windll.kernel32
     _kernel32.ReplaceFileW.argtypes = [
         wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR,

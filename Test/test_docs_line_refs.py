@@ -12,6 +12,8 @@
      一次改完（改完把基线调到 0 就永久锁死），但**新增任何一处行号引用都会红** ——
      包括新建的文档（不在基线表里 ⇒ 基线为 0 ⇒ 有行号即红）。
   ② 已改造完的 `Trading/README.md` 严格 = 0：它是这次的样板，回潮即红。
+  ③ 临时豁免不许长期化：豁免生效的前提是文档里**留着那句临时声明**；声明一旦不在，
+     基线必须已经是 0（否则豁免靠删一句话就能无限期续命）。
 
 不纳入：`Docs/WorkBuddy/` —— 那是 ~/.workbuddy 记忆文件在仓库里的一份副本，属个人
   记忆资产而非项目交付文档，不受铁律 17（约束"交付/长期文档"）管辖。
@@ -110,6 +112,27 @@ check("无基线外文档含行号引用", new_bad, [])
 print("\n[4] 已锚点化的文档不许回潮")
 for rel in ZERO_FILES:
     check("%s 行号引用 = 0" % rel, count(rel), 0)
+
+print("\n[5] 临时豁免不许长期化（评审 P3-7）")
+# 多实例文档那 55 处行号是**临时豁免**：§8.4 自陈「实施前坐标快照……实施后一并
+# 锚点化，基线降回 0」。方向与铁律 17（行号只减不增）相反 —— 不钉一条，"临时"
+# 就会变成永久。判据取**文档自己那句声明**：
+#   声明还在  → 豁免仍有效，基线允许 > 0；
+#   声明没了  → 要么已实施完（基线就该是 0），要么有人悄悄撤了声明换个说法 ——
+#               两种都必须红，否则豁免凭"删一句话"就无限期续命。
+TEMPORARY = {
+    "Docs/多实例自动下单_设计兼交接文档_20260929.md": "实施前坐标快照",
+}
+for rel in sorted(TEMPORARY):
+    p = os.path.join(ROOT, rel)
+    txt = (io.open(p, encoding="utf-8", errors="ignore").read()
+           if os.path.isfile(p) else "")
+    if TEMPORARY[rel] in txt:
+        check("%s 仍有临时豁免声明 → 基线可 > 0（当前 %d）"
+              % (rel, BASELINE.get(rel, 0)), BASELINE.get(rel, 0) > 0, True)
+    else:
+        check("%s 豁免声明已不在 → 基线必须归 0" % rel,
+              BASELINE.get(rel, 0), 0)
 
 print("\n" + "=" * 60)
 print("docs_line_refs: {} passed, {} failed".format(_passed, _failed))

@@ -9,8 +9,8 @@
 # ── 一、运行必需（API 服务 + 分析引擎 + 通达信本地数据）──────────────
 fastapi>=0.100.0            # REST/SSE API 框架（api_server.py / FrontAPI.py）
 httpx>=0.27.0               # FastAPI TestClient 的硬依赖（test_api_integration.py 用
-                            #   TestClient 起 FrontAPI.app 打端点）；starlette 1.x 优先
-                            #   httpx2、回退 httpx，二者缺一则 TestClient 直接无法 import
+                            #   TestClient 起 FrontAPI.app 打端点）；starlette 的
+                            #   TestClient 直接 `import httpx`，缺则无法 import
 uvicorn[standard]>=0.23.0   # ASGI 服务器（python FrontAPI.py）
 pydantic>=2.0.0             # 数据校验（fastapi 内核依赖）
 pydantic-settings>=2.0.0    # 配置中心化（App/AppConfig.py / ChanConfig.py，.env 加载）

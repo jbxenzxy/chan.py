@@ -8,6 +8,7 @@ Docs/多实例自动下单_设计兼交接文档_20260929.md §3.1/§3.2/§3.3/�
   · 品种互斥：同品种另一登录方式的 start 被拒，文案带在跑账户与周期；
   · ⑴ 多品种并跑：注册表各持有实例，目录按 State/<登录方式>/<品种键> 两级；
   · stop(symbol) 只停指定品种（目录保留 = 已停止实例），stop() 无参停全部；
+  · 顶层 running = 任一在跑 + 停"最后加入的那个"时镜像保留（兼容投影不塌）；
   · 托管记录列表：trader_launch_record.json = {"instances": [...]}；
   · ack 水位线广播写全部实例目录；
   · 买卖点类型过滤广播写 + 新实例启动继承；
@@ -16,6 +17,7 @@ Docs/多实例自动下单_设计兼交接文档_20260929.md §3.1/§3.2/§3.3/�
 
 脚本式测试：python Test/test_apptrader_instances.py（sys.exit(1) = 失败）。
 """
+import logging as _logging
 import os
 import sys
 
@@ -318,6 +320,56 @@ def main():
             check("[16b] 走「未在运行」分支", r16.get("note"), "未在运行")
             check("[16c] 「未在运行」分支也摘除 pid 文件",
                   os.path.exists(os.path.join(out_ic, "gateway.pid")), False)
+
+            # ── [17] 停"最后加入的那个实例"：顶层 running 仍须 = 任一在跑，
+            #    镜像保留（评审 P1-1 的可复现反例）。此前 stop() 只判镜像自己
+            #    的 running 就清 _handle → 顶层 running 假 false，且 pid/out_dir/
+            #    symbol/log_tail/exit_rc 全变 null，旧消费方（异常退出弹窗、
+            #    登录方式默认项）随之误判。旧用例里"最后加入的实例恰好就是在跑
+            #    的那个"（先 IF 后 AU，再停 IF），本分支从未被覆盖 → 假绿。
+            out_if17 = os.path.join(root, "SimNow", "IF")
+            out_au17 = os.path.join(root, "SimNow", "AU")
+            t.start(out_dir=out_if17, symbol="KQ.m@CFFEX.IF",
+                    freq="5m", sse_base="http://x", link="simnow")
+            t.start(out_dir=out_au17, symbol="KQ.m@SHFE.AU",
+                    freq="15m", sse_base="http://x", link="simnow")
+            check("[17a] 镜像 = 最后加入的 AU（IF 同时在跑）",
+                  (t._handle.product_key, sorted(t._instances)),
+                  ("AU", ["AU", "IF"]))
+            # 伪进程 pid 恒 = 本进程（见 _ExitOnFlagProc），前面几组 stop 已把该
+            # pid 记进"已上报"集合 —— 不清空就测不出"这一次 stop 有没有登记"，
+            # 会让下面 [17h] 变成假绿。
+            t._exit_logged.clear()
+            t.stop(symbol="KQ.m@SHFE.AU", timeout=0.1)
+            check("[17b] 停 AU 后注册表只剩 IF", sorted(t._instances), ["IF"])
+            check("[17c] 停的是镜像自己 → 镜像**保留**（顶层投影要答'刚停的是谁'）",
+                  t._handle is not None and t._handle.product_key, "AU")
+            # 停 AU 后的**第一次**轮询才是"本该上报退出"的那一次，必须整段捕获；
+            # 只捕获第二拍会假绿（第一拍已把 pid 记进 _exit_logged）。
+            _recs = []
+            _lh = _logging.Handler()
+            _lh.emit = lambda r: _recs.append(r.getMessage())
+            AT.log.addHandler(_lh)
+            try:
+                st17 = t.status()
+                st17b = t.status()
+            finally:
+                AT.log.removeHandler(_lh)
+            check("[17d] 顶层 running = 任一在跑（IF 还在跑）",
+                  st17.get("running"), True)
+            check("[17e] 顶层 symbol = 刚停的 AU（不再退化成 null）",
+                  st17.get("symbol"), "KQ.m@SHFE.AU")
+            check("[17f] 顶层带出退出码（刚停实例的机器级退出原因）",
+                  st17.get("exit_rc"), 0)
+            # 主动关闭 ≠ 异常退出：镜像被停后仍保留 → 会命中 status() 的"退出上报"
+            # 分支，不登记 _exit_logged 就会 warning 一次"已退出"（谎报 + 噪声）。
+            check("[17h] 主动关闭后 status() 不误报'子进程已退出'（含首拍）",
+                  [m for m in _recs if "已退出" in m], [])
+            check("[17i] 二次轮询仍带回退出信息（观测字段不受一次性上报影响）",
+                  st17b.get("exit_rc"), 0)
+            t.stop(symbol="KQ.m@CFFEX.IF", timeout=0.1)
+            check("[17g] 注册表清空 → 镜像才清",
+                  (t._handle, t._instances), (None, {}))
 
             # ── [14] status()：无实例时 running=False ──
             st2 = new_trader_and_status(new_trader)

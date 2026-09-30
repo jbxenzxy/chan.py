@@ -8260,11 +8260,18 @@
         let autoOrderLastLog = null;      // 引擎日志路径（异常退出提示用）
         let autoOrderLastOn = null;       // 上次轮询的开关态（状态变化时打控制台）
         let autoOrderRunning = false;     // 引擎进程是否运行中（切换合约/周期的 guard 依据）
-        let autoOrderSeenAlertTs = 0;     // 告警本地水位：<= 它的一律不再弹（已处理过）
-        const autoOrderAlertCool = {};    // code → 上次弹框时刻（同因告警防连弹）
+        // 水位 / 冷却**按实例键控**（§3.10.4；实例键 = 登录方式 + 品种键，
+        // 由 applyAutoOrderStatus 打进合并元素的 _instLabel，品种互斥 ⇒ 唯一）。
+        // 为什么不能是单值：合并队列会把 A、B 两实例的告警按 ts 混在一起，单值
+        // 水位一旦被 A 的高 ts 推到 100，B 实例稍后（后端瞬时读库失败那一轮没被
+        // 读到）才出现的低 ts 新告警就被判成"旧闻"→ 既不弹框，又被随后的
+        // ack 广播从库里清掉，**不可恢复**。冷却同理：键只带 code 会让"同 code
+        // 的另一个实例"在 5 分钟内被静默 continue（连 console 都没有）。
+        const autoOrderSeenAlertTs = {};  // 实例键 → 告警水位（<= 它的一律不再弹）
+        const autoOrderSeenToastTs = {};  // 实例键 → 轻提示水位
+        const autoOrderAlertCool = {};    // "实例键|code" → 上次弹框时刻（同因防连弹）
         const AUTO_ORDER_ALERT_COOL_MS = 5 * 60 * 1000;
         let autoOrderAlertAckHold = 0;    // 未确认的严重告警水位：>0 = 弹框还没关，暂缓 ack
-        let autoOrderSeenToastTs = 0;     // 轻提示本地水位：<= 它的一律不再弹
         // 运行态保护价分段线（2026-09-28 改版：单线 → 分段阶梯）：
         //   runSegs = null（空仓/锁仓/引擎未下发段）→ 不画；非空 = segments 数组
         //   （每段 {phase, price, start_date, end_date}），每次轮询由 calcRunSegments
@@ -8315,6 +8322,11 @@
             autoOrderTradable = chk;
             autoOrderTradableFor = sym;
             applyAutoOrderTradableUI();
+            // 品种键到位 → 立刻补一拍状态。本页绑定按品种键匹配
+            // （matchAutoOrderInstance），而换品种后的首拍 status 轮询可能早于
+            // 本次解析返回 —— 不补这一拍就会出现一个轮询周期（5s）的 bound=null，
+            // autoOrderRunning 假 false → 切合约/切周期的守卫放行。
+            pollAutoOrderStatus();
             if (!chk.allowed) {
                 console.info('[auto-order] 品种未标定，开关已置灰: ' + sym
                     + '  ' + chk.message);
@@ -8423,6 +8435,56 @@
             }
         }
 
+        // 子进程退出码 → 一句人话。只解释能一眼定性的机器级原因，其余原样给码：
+        //   0xC0000005 访问违例（硬崩溃，Traceback 都来不及写）→ 日志尾部为空时
+        //              这正是"为什么连日志都没有"的答案；
+        //   0xC0000135 DLL 加载失败（Python / 依赖启动即挂）。
+        // 后端逐实例带出 exit_rc（§3.2）；取不到就返回空串，不猜。
+        function _rcHint(rc) {
+            if (rc === null || rc === undefined || rc === '') return '';
+            const n = Number(rc);
+            if (isNaN(n)) return '';
+            const u = n >>> 0;
+            if (u === 0xC0000005) return '0xC0000005（访问违例：硬崩溃，异常栈都来不及写）';
+            if (u === 0xC0000135) return '0xC0000135（DLL 加载失败：Python / 依赖启动即挂）';
+            return (n === 0) ? '0（干净返回，非崩溃）'
+                : ('0x' + u.toString(16).toUpperCase());
+        }
+
+        // 本页品种键（"KQ.m@CFFEX.IF" / "IF2609" / 别名 → "IF"）。
+        // 前端**不复制**归一规则（剥合约月份、大小写）：那份规则的唯一来源是
+        // Trading/Infra/Product.parse_product_key，出口是 /api/trader/product-check
+        // 回带的 product（与"开启自动下单"的启动闸门同一实现）。前端再写一份
+        // 必然与后端漂移 —— 品种白名单两处各写一遍就是这么出的事。
+        // 取不到时返回 ''（首次轮询早于该请求返回 / 非白名单品种 → 后端给空串），
+        // 调用方退回"合约全等"的老口径，绝不因为拿不到键而丢掉绑定。
+        function autoOrderPageKey() {
+            if (autoOrderTradableFor !== realtimeSymbol) return '';
+            return (autoOrderTradable && autoOrderTradable.product) || '';
+        }
+
+        // 本页品种对应的实例（品种键优先、合约全等兜底）。
+        // runningOnly=true → 本页绑定实例（开关/守卫依据，§3.7）；
+        // runningOnly=false → 本页品种那个实例，不论在跑（退出弹窗要取它自己的
+        //   逐实例投影 log_tail / exit_rc，见 §3.2 instances[]）。
+        // 为什么必须按**品种键**绑：实例键就是品种键，而本页代码是"合约写法"。
+        // 另一标签页把同一品种写成 CFFEX.IF2609 / IF2609 / 小写主连时，
+        // 合约全等找不着实例 → bound=null → running 假 false → 切合约/切周期
+        // 守卫放行（引擎还在跑，保护失效）；开关也会显示"关"、accepted 被丢弃。
+        function matchAutoOrderInstance(insts, runningOnly) {
+            const list = insts || [];
+            const key = autoOrderPageKey();
+            for (let i = 0; i < list.length; i++) {
+                const it = list[i] || {};
+                if (runningOnly && !it.running) continue;
+                if (key && it.instance_key === key) return it;
+                // 兜底：品种键未知（旧后端 / 本轮 product-check 未回 / 解析不出），
+                // 或后端合成的实例键就是原样 symbol（旧后端无 instances[] 时）。
+                if (realtimeSymbol && it.symbol === realtimeSymbol) return it;
+            }
+            return null;
+        }
+
         function applyAutoOrderStatus(data) {
             const checkbox = document.getElementById('auto-order-checkbox');
             if (!checkbox) return;
@@ -8437,9 +8499,9 @@
                     instance_key: data.symbol,
                     auto_order: data.auto_order || null,
                 }] : []);
-            const bound = insts.find(function (i) {
-                return i.running && realtimeSymbol && i.symbol === realtimeSymbol;
-            }) || null;
+            const bound = matchAutoOrderInstance(insts, true);
+            // 本页品种那个实例（含已退出的）：退出弹窗按它取日志尾部/退出码
+            const pageInst = bound || matchAutoOrderInstance(insts, false);
             const running = !!bound;   // 本页品种有运行中实例（切换守卫依据，§3.7）
             // 链路视图顺手缓存：开关点击时不必为拿选项再发一次状态请求
             if (data.link_view) autoOrderLinkInfo = data.link_view;
@@ -8555,11 +8617,19 @@
             });
             // 异常退出探测：上次在跑、这次停了、且不是用户主动关闭 → 提示 + 日志尾部
             if (autoOrderPrevRunning === true && !running && !autoOrderBusy) {
-                const tail = data.log_tail || '';
+                // 日志来源 = **本页品种那个实例**自己的逐实例投影（§3.2 instances[]）。
+                // 不能只用顶层 log_tail：顶层那份只覆盖"最近一次操作"的那个实例，
+                // 退出的不是它时（多实例：后启的 AU 在跑、IF 崩了）正文会退化成
+                // "（日志文件不存在或为空）"+"完整日志：（未知）"，等于没提示。
+                const _pi = pageInst || bound || null;
+                const tail = (_pi && _pi.log_tail) || data.log_tail || '';
+                const lf = (_pi && _pi.log_file) || data.log_file || null;
+                const rcTxt = _rcHint(_pi ? _pi.exit_rc : undefined);
                 console.warn('[auto-order] 交易引擎已退出，日志尾部:\n' + tail);
                 showAlert('交易引擎已退出！\n\n交易引擎日志尾部（前 12 行）：\n'
                     + (tail || '（日志文件不存在或为空）')
-                    + '\n\n完整日志：' + (data.log_file || '（未知）'));
+                    + (rcTxt ? '\n\n子进程退出码：' + rcTxt : '')
+                    + '\n\n完整日志：' + (lf || '（未知）'));
             }
             if (running) autoOrderLastLog = (bound && bound.log_file) || null;
             autoOrderPrevRunning = running;
@@ -9185,25 +9255,38 @@
         //    真正要防的是"一次弹几十个" —— 所以冷却与"合并成一条"缺一不可。
         // ══════════════════════════════════════════════════════════════
         function handleAutoOrderAlerts(alerts) {
-            // alerts = 合并后的全部运行中实例告警（applyAutoOrderStatus 已带实例前缀）
+            // alerts = 合并后的全部运行中实例告警（applyAutoOrderStatus 已带实例
+            // 前缀 _instLabel）。水位与冷却都按**实例键**分开记（§3.10.4）：
+            // 单值水位会被另一实例的高 ts 推高，把本实例（上一轮后端读库瞬时失败
+            // 没被读到）较低 ts 的新告警判成"旧闻"—— 既不弹框，又被随后的 ack
+            // 广播清出库，**不可恢复**。冷却键不带实例则"同 code 的另一个实例"
+            // 会在 5 分钟内被静默 continue（原来连 console 都没有）。
             if (!alerts || !alerts.length) return;
             const now = Date.now();
             const fresh = [];
-            let maxTs = autoOrderSeenAlertTs;
+            const edges = {};      // 实例键 → 本批见到的最大 ts（循环后并入各实例水位）
+            let maxTs = 0;         // ack 水位：后端是全局水位（广播写全部实例库）
             for (let i = 0; i < alerts.length; i++) {
                 const a = alerts[i] || {};
                 const ts = Number(a.ts) || 0;
                 if (!ts) continue;
+                const ik = String(a._instLabel || '');
+                if (ts > (edges[ik] || 0)) edges[ik] = ts;
                 if (ts > maxTs) maxTs = ts;
-                if (ts <= autoOrderSeenAlertTs) continue;    // 本轮之前已处理过
-                const code = String(a.code || 'unknown');
-                if (now - (autoOrderAlertCool[code] || 0) < AUTO_ORDER_ALERT_COOL_MS) {
-                    continue;                                // 同 code 冷却中，跳过弹框
+                if (ts <= (autoOrderSeenAlertTs[ik] || 0)) continue;  // 本实例已处理过
+                const ck = ik + '|' + String(a.code || 'unknown');
+                if (now - (autoOrderAlertCool[ck] || 0) < AUTO_ORDER_ALERT_COOL_MS) {
+                    continue;                     // 同实例同 code 冷却中，跳过弹框
                 }
-                autoOrderAlertCool[code] = now;
+                autoOrderAlertCool[ck] = now;
                 fresh.push(a);
             }
-            autoOrderSeenAlertTs = maxTs;
+            // 水位推进：只推进到"本实例本批见过"的位置，实例之间互不掩盖
+            Object.keys(edges).forEach(function (ik) {
+                if (edges[ik] > (autoOrderSeenAlertTs[ik] || 0)) {
+                    autoOrderSeenAlertTs[ik] = edges[ik];
+                }
+            });
             if (fresh.length) {
                 const severe = [];
                 const warn = [];
@@ -9318,19 +9401,28 @@
         //   首次拉取只定水位不回放历史：页面晚开不该把半小时前的开仓弹一遍。
         // ══════════════════════════════════════════════════════════════
         function handleAutoOrderToasts(toasts) {
-            // toasts = 合并后的全部运行中实例轻提示（已带实例前缀）
+            // toasts = 合并后的全部运行中实例轻提示（已带实例前缀 _instLabel）。
+            // 水位同样按实例键控（§3.10.4）：单值水位下 A 实例的高 ts 会把
+            // B 实例（本轮才被读到）较低 ts 的新提示一并判成"历史"，直接吞掉。
             if (!toasts || !toasts.length) return;
-            const prev = autoOrderSeenToastTs;
-            let maxTs = prev;
             const fresh = [];
+            const edges = {};
             for (let i = 0; i < toasts.length; i++) {
                 const t = toasts[i] || {};
                 const ts = Number(t.ts) || 0;
                 if (!ts) continue;
-                if (ts > maxTs) maxTs = ts;
+                const ik = String(t._instLabel || '');
+                if (ts > (edges[ik] || 0)) edges[ik] = ts;
+                const prev = autoOrderSeenToastTs[ik] || 0;
+                // 首次拉到该实例的队列只定水位、不回放历史（页面晚开不该把
+                // 半小时前的开仓弹一遍）—— 与原 prev>0 门同语义，只是逐实例。
                 if (prev > 0 && ts > prev) fresh.push(String(t.msg || ''));
             }
-            autoOrderSeenToastTs = maxTs;
+            Object.keys(edges).forEach(function (ik) {
+                if (edges[ik] > (autoOrderSeenToastTs[ik] || 0)) {
+                    autoOrderSeenToastTs[ik] = edges[ik];
+                }
+            });
             for (let i = 0; i < fresh.length; i++) {
                 if (fresh[i]) {
                     showToast('自动下单：' + fresh[i]);
