@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>常驻服务进程与两引擎交互图(消费方模型)· 2026-09-30</title>
+<style>
+  body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; background: #f5f6fa; margin: 0; padding: 16px; }
+  h1 { font-size: 18px; color: #1a2b4a; margin: 4px 0 10px; }
+  svg { background: #ffffff; border: 1px solid #d7dce6; border-radius: 8px; display: block; }
+  .box { fill: #eef2fb; stroke: #5b79b4; stroke-width: 1.5; rx: 8; }
+  .subbox { fill: #ffffff; stroke: #8ea3cc; stroke-width: 1; rx: 6; }
+  .ctplib { fill: #fdf3e7; stroke: #c88a3a; stroke-width: 1.5; }
+  .notebox { fill: #fdf0f0; stroke: #c05a5a; stroke-width: 1.2; }
+  .title { font-size: 15px; font-weight: bold; fill: #1a2b4a; }
+  .sub { font-size: 12.5px; font-weight: bold; fill: #243a63; }
+  .line { font-size: 12px; fill: #3a4661; }
+  .small { font-size: 11px; fill: #6a768e; }
+  .lbl { font-size: 11.5px; fill: #1f4e8c; }
+  .lblw { font-size: 11.5px; fill: #8a5a12; }
+  .arrow { stroke: #4a6da8; stroke-width: 1.6; fill: none; marker-end: url(#ah); }
+  .arrowd { stroke: #b08a3e; stroke-width: 1.4; stroke-dasharray: 6 4; fill: none; marker-end: url(#ah2); }
+  .legend { font-size: 12px; fill: #3a4661; }
+</style>
+</head>
+<body>
+<h1>常驻服务进程与两引擎交互图(消费方模型)· 2026-09-30 · SSOT:两引擎交互图_20260930.json</h1>
+<svg width="1160" height="745" viewBox="0 0 1160 745" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#4a6da8"/>
+    </marker>
+    <marker id="ah2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#b08a3e"/>
+    </marker>
+  </defs>
+
+  <!-- 常驻服务进程 -->
+  <rect class="box" x="140" y="30" width="880" height="170" rx="8"/>
+  <text class="title" x="160" y="56">常驻服务进程(FrontAPI · uvicorn · 端口 18081)—— 缠论引擎的宿主 + 交易引擎的托管者,本身不是引擎</text>
+  <rect class="subbox" x="170" y="72" width="400" height="112" rx="6"/>
+  <text class="sub" x="186" y="94">缠论引擎(Trading/ 之外)</text>
+  <text class="line" x="186" y="114">行情接入 → K线 → 分型/笔/段/中枢/买卖点</text>
+  <text class="line" x="186" y="132">页面图表与 SSE 广播的数据都来自这里</text>
+  <text class="small" x="186" y="150">每条 SSE 连接各自创建独立 TqApi 会话</text>
+  <text class="small" x="186" y="166">(扇出复制,非共享多路复用;内容按连接参数)</text>
+  <rect class="subbox" x="600" y="72" width="390" height="112" rx="6"/>
+  <text class="sub" x="616" y="94">托管层(AppTrader)</text>
+  <text class="line" x="616" y="114">交易引擎启停 / 看护(.stop_request 协议)</text>
+  <text class="line" x="616" y="132">读落盘(state.db / events.jsonl / gateway.log)</text>
+  <text class="small" x="616" y="158">引擎的账本/告警/开关状态从这里转出给页面</text>
+
+  <!-- 交易引擎 -->
+  <rect class="box" x="70" y="380" width="420" height="150" rx="8" style="fill:#eaf3ec; stroke:#3f8a5a;"/>
+  <text class="title" x="90" y="406">交易引擎(Trading/main.py 子进程)</text>
+  <text class="line" x="90" y="430">IF 实例 + IM 实例(每品种一个)</text>
+  <text class="line" x="90" y="450">消费缠论买卖点 → 风控 → FOK 报单</text>
+  <text class="line" x="90" y="470">离场(L1-L3)/ 锁仓 / 对账</text>
+  <text class="line" x="90" y="490">结果落盘:state.db · events.jsonl</text>
+  <text class="small" x="90" y="512">启停唯一触发 = .stop_request(与浏览器无关)</text>
+
+  <!-- Edge 页面 -->
+  <rect class="box" x="670" y="380" width="420" height="150" rx="8" style="fill:#eef2fb;"/>
+  <text class="title" x="690" y="406">Edge 页面 ×2(纯仪表盘,不是引擎)</text>
+  <text class="line" x="690" y="430">画图 = 缠论推流(SSE 连接②)</text>
+  <text class="line" x="690" y="450">自动下单动态 = Worker 每 5s 轮询(不受后台节流)</text>
+  <text class="line" x="690" y="470">页内 toast(轻提示 5s / 严重告警挂到 ack)</text>
+  <text class="line" x="690" y="490">页面不在前台且已授权 → 浏览器 Notification</text>
+  <text class="small" x="690" y="512">(Win11 右下角通知由页面 JS 发出,活在页面里)</text>
+
+  <!-- CTP 与 快期3 -->
+  <rect class="box ctplib" x="70" y="600" width="400" height="80" rx="8"/>
+  <text class="sub" x="90" y="626">CTP 柜台(otg-simnow 中继)</text>
+  <text class="line" x="90" y="648">委托 / 成交终态 / 持仓 —— 交易终态的权威层</text>
+  <rect class="box ctplib" x="510" y="600" width="250" height="80" rx="8"/>
+  <text class="sub" x="530" y="626">快期3 终端</text>
+  <text class="line" x="530" y="648">同一柜台的独立观察端</text>
+
+  <!-- 说明框 -->
+  <rect class="notebox" x="800" y="555" width="330" height="170" rx="8"/>
+  <text class="sub" x="816" y="580" style="fill:#8a2f2f;">Edge 休眠标签页(若未被例外豁免)</text>
+  <text class="line" x="816" y="602">· SSE 连接②断、Worker 轮询停</text>
+  <text class="line" x="816" y="620">  → 页面弹窗与 Win11 通知全停</text>
+  <text class="line" x="816" y="636">· 交易引擎不受影响(连接①独立、</text>
+  <text class="line" x="816" y="654">  启停与浏览器无关)</text>
+  <text class="line" x="816" y="672">· 引擎侧队列照写,回 F5 后积压补弹</text>
+  <text class="line" x="816" y="690">· 本机 Edge 已配 127.0.0.1 / localhost</text>
+  <text class="line" x="816" y="708">  永不休眠例外 → 实际不会被休眠</text>
+
+  <!-- 边:缠论引擎 → 交易引擎(SSE①) -->
+  <path class="arrow" d="M 330 184 L 290 376"/>
+  <text class="lbl" x="96" y="290">SSE 连接①</text>
+  <text class="lbl" x="96" y="306">K线 + 买卖点推流</text>
+  <text class="small" x="96" y="322">(独立连接,累计推)</text>
+
+  <!-- 边:缠论引擎 → Edge(SSE②) -->
+  <path class="arrow" d="M 545 184 L 850 376"/>
+  <text class="lbl" x="520" y="290">SSE 连接②</text>
+  <text class="lbl" x="520" y="306">同份推流(画图)</text>
+
+  <!-- 边:托管层 → 交易引擎(拉起/看护) -->
+  <path class="arrow" d="M 180 202 L 110 376"/>
+  <text class="small" x="30" y="300">拉起 / 看护</text>
+
+  <!-- 边:Edge → 托管层(启停请求) -->
+  <path class="arrowd" d="M 905 376 L 850 206"/>
+  <text class="lblw" x="920" y="290">开启/停止请求</text>
+  <text class="lblw" x="920" y="306">(.stop_request)</text>
+
+  <!-- 边:交易引擎 → Edge(落盘转动态,虚线) -->
+  <path class="arrowd" d="M 494 470 L 666 470"/>
+  <text class="lblw" x="500" y="458">落盘 → 托管层读取 → 页面动态(Worker 轮询)</text>
+
+  <!-- 边:交易引擎 → CTP -->
+  <path class="arrow" d="M 280 534 L 280 596"/>
+  <text class="lbl" x="60" y="566">FOK 报单 / 成交回报 / 持仓镜像</text>
+
+  <!-- 边:CTP ↔ 快期3 -->
+  <path class="arrow" d="M 474 640 L 506 640"/>
+  <text class="small" x="478" y="630">同一柜台</text>
+
+  <!-- 图例 -->
+  <text class="legend" x="140" y="725">实线 = 数据/控制流(常驻)　虚线(棕) = 经落盘/用户操作的间接流　两个消费方并列、互相不依赖;共同上游 = 常驻服务进程(单点)</text>
+</svg>
+</body>
+</html>

@@ -1,0 +1,37 @@
+{
+  "title": "常驻服务进程与两引擎交互图(消费方模型)",
+  "date": "2026-09-30",
+  "terms": {
+    "交易引擎": "Trading/ 自动下单(每品种一个 Trading/main.py 子进程:IF 实例、IM 实例)",
+    "缠论引擎": "Trading/ 之外的部分(K线/分型/笔/段/中枢/买卖点),宿主在常驻服务进程里",
+    "常驻服务进程": "FrontAPI · uvicorn · 端口 18081——缠论引擎的宿主 + 交易引擎的托管者,本身不是引擎"
+  },
+  "nodes": [
+    {"id": "svc", "label": "常驻服务进程(FrontAPI · uvicorn · :18081)", "x": 140, "y": 30, "w": 880, "h": 170},
+    {"id": "chan", "label": "缠论引擎", "sub": ["行情接入 → K线 → 分型/笔/段/中枢/买卖点", "页面图表与 SSE 广播的数据都来自这里"], "parent": "svc", "x": 170, "y": 85, "w": 400, "h": 95},
+    {"id": "mgt", "label": "托管层(AppTrader)", "sub": ["交易引擎启停/看护(.stop_request 协议)", "读落盘(state.db / events.jsonl / gateway.log)"], "parent": "svc", "x": 600, "y": 85, "w": 390, "h": 95},
+    {"id": "engine", "label": "交易引擎(Trading/main.py 子进程)", "sub": ["IF 实例 + IM 实例(每品种一个)", "消费缠论买卖点 → 风控 → FOK 报单 → 离场/锁仓/对账", "结果落盘:state.db · events.jsonl"], "x": 70, "y": 380, "w": 420, "h": 150},
+    {"id": "edge", "label": "Edge 页面 ×2(纯仪表盘,不是引擎)", "sub": ["画图 = 缠论推流(SSE 连接②)", "自动下单动态 = Worker 每 5s 轮询 /api/trader/auto-order/status", "页内 toast;页面不在前台且已授权 → 浏览器 Notification(Win11 右下角)"], "x": 670, "y": 380, "w": 420, "h": 150},
+    {"id": "ctp", "label": "CTP 柜台(otg-simnow 中继)", "sub": ["委托/成交终态/持仓"], "x": 70, "y": 600, "w": 400, "h": 80},
+    {"id": "kq", "label": "快期3 终端", "sub": ["同一柜台的独立观察端,与页面互不相干"], "x": 510, "y": 600, "w": 250, "h": 80},
+    {"id": "note", "label": "Edge 休眠标签页(若未被例外豁免)", "sub": ["SSE 连接②断、Worker 轮询停 → 页面弹窗与 Win11 通知全停", "交易引擎不受影响(连接①独立、启停与浏览器无关)", "引擎侧 toasts/alerts 队列照写,回 F5 后积压补弹、严重告警未 ack 一直挂", "本机 Edge 已配 http://127.0.0.1 与 http://localhost 永不休眠例外 → 这两个页面实际不会被休眠"], "x": 800, "y": 555, "w": 330, "h": 165}
+  ],
+  "edges": [
+    {"from": "chan", "to": "engine", "label": "SSE 连接①:K线 + 买卖点推流(独立连接)", "style": "solid"},
+    {"from": "chan", "to": "edge", "label": "SSE 连接②:同份推流(画图)", "style": "solid"},
+    {"from": "engine", "to": "ctp", "label": "FOK 报单 / 成交回报 / 持仓镜像", "style": "solid"},
+    {"from": "ctp", "to": "kq", "label": "同一柜台", "style": "solid"},
+    {"from": "engine", "to": "edge", "label": "落盘 → 托管层读取 → 页面动态(轮询)", "style": "dashed"},
+    {"from": "edge", "to": "mgt", "label": "开启/停止请求(.stop_request)", "style": "dashed"},
+    {"from": "mgt", "to": "engine", "label": "拉起 / 看护", "style": "solid"}
+  ],
+  "notes": [
+    "两个消费方(交易引擎、Edge)并列,互相不依赖;共同上游 = 常驻服务进程(单点)。",
+    "Edge 的自动下单动态不经缠论推流,而是交易引擎落盘 → 托管层读 → 页面轮询。",
+    "上游天勤侧同样是每连接独立:每条 SSE 线程各自创建 TqApi 会话(连接①②各一份,扇出复制),",
+    "不是共享多路复用;一条会话以连接参数为界(单窗=1合约1周期;双窗=同1合约主/副2周期)。",
+    "页面关闭 = 该连接的线程与会话整体退出(少一份上游拉数);引擎连接不受影响。",
+    "浏览器 Notification 与页内 toast 都活在页面 JS 里:标签页休眠/浏览器关闭即全停;",
+    "交易事件的服务端系统通知(winotify)在代码里登记为待决项,现有 winotify 仅用于股票扫描完成提示。"
+  ]
+}
