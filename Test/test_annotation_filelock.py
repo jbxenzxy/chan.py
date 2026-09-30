@@ -279,7 +279,12 @@ def test_cross_process_file_lock_serializes():
              counter_path, str(iters), str(n_procs)],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         children.append(p)
-    rc = [p.wait(timeout=120) for p in children]
+    rc = []
+    child_errs = []
+    for p in children:
+        _out, _err = p.communicate(timeout=120)
+        rc.append(p.returncode)
+        child_errs.append(_err.strip())
 
     final = 0
     try:
@@ -289,9 +294,19 @@ def test_cross_process_file_lock_serializes():
         pass
     expected = n_procs * iters
     ok = (all(r == 0 for r in rc)) and (final == expected)
+    detail = f"procs_rc={rc} final={final} expected={expected}"
+    if not all(r == 0 for r in rc):
+        # 子进程崩溃：此前 procs_rc=[0,1,1,...] 却看不到根因（stderr 被 pipe 吞掉）。
+        # 现在把崩溃子进程的 stderr 末 3 行透出，根因不再被掩盖。
+        failed = []
+        for i in range(len(rc)):
+            if rc[i] != 0:
+                lines = (child_errs[i].splitlines() or ["<无 stderr>"])[-3:]
+                failed.append(f"[child{i} pid={children[i].pid} rc={rc[i]}] "
+                              f"{' / '.join(lines)}")
+        detail += "\n           └─ 子进程崩溃根因: " + " | ".join(failed)
     rec("③", f"跨进程文件锁串行化：{n_procs} 进程 × {iters} 次 RMW，终值 {final}=={expected}",
-        ok,
-        f"procs_rc={rc} final={final} expected={expected}")
+        ok, detail)
 
 
 def main():

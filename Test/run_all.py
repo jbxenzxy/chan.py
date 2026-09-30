@@ -108,6 +108,19 @@ from datetime import datetime
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(TEST_DIR)
 
+
+def _safe_relpath(path, base):
+    """os.path.relpath 在 Windows 跨盘（venv 在 D:、仓库在 C:）时抛 ValueError。
+
+    门禁报告里只是「显示命令」用，跨盘时退回绝对路径即可，不让整个门禁崩在
+    排版阶段（此前 venv 与仓库不同盘时 run_all 直接崩溃）。
+    """
+    try:
+        return os.path.relpath(path, base)
+    except ValueError:
+        return os.path.abspath(path)
+
+
 # (组件名, 命令) —— 顺序即执行顺序
 COMPONENTS = [
     ("fixtures_integrity",
@@ -614,7 +627,7 @@ def run_component(name, cmd, update=False, env=None):
     elapsed = time.time() - t0
     rec = {
         "name": name,
-        "cmd": " ".join(os.path.relpath(c, REPO_ROOT) if os.path.isabs(c) else c
+        "cmd": " ".join(_safe_relpath(c, REPO_ROOT) if os.path.isabs(c) else c
                         for c in real_cmd),
         "ok": ok,
         "exit_code": exit_code,
@@ -674,7 +687,7 @@ def main():
     for r in records:
         print(f"  [{'PASS' if r['ok'] else 'FAIL'}] {r['name']:<24} {r['elapsed_s']:>6}s")
     print("=" * 64)
-    print(f"结果: {n_ok}/{n_all} 通过 | 报告: {os.path.relpath(report_path, REPO_ROOT)}")
+    print(f"结果: {n_ok}/{n_all} 通过 | 报告: {_safe_relpath(report_path, REPO_ROOT)}")
     if args.update:
         print("注意: 基线已重新冻结，请 git diff Test/snapshots/ 逐项审查后提交。")
     return n_ok == n_all
