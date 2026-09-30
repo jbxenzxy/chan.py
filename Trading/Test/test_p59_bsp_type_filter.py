@@ -475,14 +475,8 @@ with tmp_dir() as tmp:
               {t: True for t in BSP_TYPE_CHOICES})
     finally:
         os.environ.pop("TRADING_STATE_DIR", None)
-        _h14 = getattr(_AT, "_log_file_handler", None)   # 收尾：别留着指向临时目录的 handler
-        if _h14 is not None:
-            try:
-                _AT.log.removeHandler(_h14)
-                _h14.close()
-            except Exception:
-                pass
-            _AT._log_file_handler = None
+        # 收尾不用摘 handler：留痕走 `_engine_log` 直接写文件，没有进程级 tee，
+        # 也就不存在"handler 仍指着已删临时目录"这回事。
 
 # 前端四处（推送后刷新 / 非 2xx 落"未同步" / 在飞期间丢弃回填 / 绘制门先判空）：
 # 前端是静态资源、无法 import，沿用 [9] 的读源码断言方式钉住不变量。

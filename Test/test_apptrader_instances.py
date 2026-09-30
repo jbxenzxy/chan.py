@@ -302,6 +302,23 @@ def main():
             check("[15b] pid 文件已摘除",
                   os.path.exists(os.path.join(out_im, "gateway.pid")), False)
 
+            # ── [16] 子进程已不在（崩溃 / 被外力杀）时点关闭：仍摘掉 pid 文件 ──
+            #    走的是 stop() 的「未在运行」分支。残留 gateway.pid 会被下
+            #    一次 start() 的"多 worker 可见性"扫描读到，pid 一旦被系统
+            #    复用给无关进程，就会误报「疑似多个后端 worker 同时调度」。
+            out_ic = os.path.join(root, "SimNow", "IC")
+            t.start(out_dir=out_ic, symbol="KQ.m@CFFEX.IC",
+                    freq="5m", sse_base="http://x", link="simnow")
+            check("[16a] 启动时写了 pid 文件",
+                  os.path.exists(os.path.join(out_ic, "gateway.pid")), True)
+            # 伪进程 pid 就是本进程（必存活）；换成几乎不存在的 pid，制造
+            # "子进程已经不在了"，让 stop() 落到「未在运行」分支
+            t._instances["IC"].pid = 999997
+            r16 = t.stop(symbol="KQ.m@CFFEX.IC", timeout=2)
+            check("[16b] 走「未在运行」分支", r16.get("note"), "未在运行")
+            check("[16c] 「未在运行」分支也摘除 pid 文件",
+                  os.path.exists(os.path.join(out_ic, "gateway.pid")), False)
+
             # ── [14] status()：无实例时 running=False ──
             st2 = new_trader_and_status(new_trader)
             check("[14] 无实例 status.running = False",

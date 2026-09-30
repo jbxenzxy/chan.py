@@ -44,7 +44,6 @@ confirm_live_trading=true，否则抛 BadRequestError（400，前端提示，
 """
 import glob
 import json
-import logging
 import os
 import re
 import signal
@@ -184,9 +183,6 @@ def _scan_state_dirs() -> List[str]:
         if os.path.isdir(d) and os.path.abspath(d) != os.path.abspath(state_root):
             dirs.append(d)
     return sorted(set(dirs))
-
-# 后端（AppTrader）日志 tee 进 gateway.log 的 handler，路径随每次启停更新
-_log_file_handler: Optional[logging.Handler] = None
 
 # 关闭时给子进程的优雅退出宽限（秒）。
 # 锁仓每笔 submit 是同步阻塞的（平仓每轮 5s × 最多 20 轮追价 → 单笔最坏
@@ -778,6 +774,16 @@ class AppTrader:
                         except Exception:
                             pass
                         self._engine_log(lf, "收到关闭请求（未在运行）")
+                        # 摘掉 pid 文件：子进程早已不在（崩溃 / 被外力杀掉），
+                        # 但 gateway.pid 还留着。start() 的"多 worker 可见性"
+                        # 扫描会读到它，pid 一旦被系统复用给无关进程，就会
+                        # 误报"疑似多个后端 worker 同时调度自动下单"。
+                        try:
+                            _pf = os.path.join(h.out_dir, "gateway.pid")
+                            if os.path.exists(_pf):
+                                os.remove(_pf)
+                        except OSError:
+                            pass
                 for h in targets:
                     self._instances.pop(h.product_key, None)
                 if self._handle is not None and not self._handle.running:
@@ -1430,30 +1436,16 @@ class AppTrader:
             return base
 
     # ---------------- 内部工具 ----------------
-    @classmethod
-    def _set_engine_log_handler(cls, log_file: str) -> None:
-        """把后端（AppTrader logger）的输出 tee 进 gateway.log（路径随启停更新）。
-
-        根 logger 仍按 AppLog 配置打后端终端；本 handler 只让 trader 相关的
-        后端日志同时落盘 gateway.log，与自动下单子进程日志同一文件定位。
-        """
-        global _log_file_handler
-        try:
-            if _log_file_handler is not None:
-                log.removeHandler(_log_file_handler)
-                try:
-                    _log_file_handler.close()
-                except Exception:
-                    pass
-                _log_file_handler = None
-            h = logging.FileHandler(log_file, encoding="utf-8", delay=True)
-            h.setFormatter(logging.Formatter(
-                "%(asctime)s [AppTrader] %(levelname)-5s %(message)s",
-                datefmt="%H:%M:%S"))
-            log.addHandler(h)
-            _log_file_handler = h
-        except OSError:
-            pass
+    # 说明：这里原本有一个 `_set_engine_log_handler`（把 AppTrader logger 的输出
+    # tee 进 gateway.log）。它是**进程级全局** handler，路径跟着"最后一次
+    # 启停的实例"走 —— 单实例时代成立，多实例下会把 A 实例的后端日志写进
+    # B 实例的 gateway.log（串号），故不再恢复 tee：需要落盘的节点一律用
+    # `_engine_log` **显式**写到自己那个实例的目录（start/stop/set_bsp_filter
+    # 已如此）；启动链早期就失败（配置不可加载 / 未知链路 / 实盘闸门未满足）
+    # 时**刻意不留** gateway.log —— 那两级目录要等链路与品种键解析出来才定得
+    # 下，提前建会在账本面板里多出一个"从未启动成功"的实例（§3.2 有意语义，
+    # 由 test_p20 [11c]「配置失败不创建半截状态目录」钉住），失败定位走
+    # AppError 消息（前端弹窗）与后端主日志。
 
     @staticmethod
     def _engine_log(log_file: str, line: str) -> None:

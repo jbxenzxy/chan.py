@@ -380,6 +380,9 @@ COMPONENTS = [
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
     ("apptrader_instances",
      [sys.executable, os.path.join("Test", "test_apptrader_instances.py")]),
+    # 前端「关闭自动下单」请求契约（静态）：不带 symbol 会退化成停全部
+    ("frontend_ao_off_symbol",
+     [sys.executable, os.path.join("Test", "test_frontend_ao_off_symbol.py")]),
     ("apptrader_pid_alive_guards",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_apptrader_pid_alive_guards.py")]),
