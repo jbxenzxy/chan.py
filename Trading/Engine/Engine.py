@@ -1520,6 +1520,19 @@ class TradingEngine(ReconcileMixin):
         # 否则偶发几次跨天累积到阈值会误升级成严重告警）。
         self._reject_streak = 0
         self._reject_streak_code = ""
+        # P6 成交价回落消费点（2026-10-01 复核 §4.2）：price_source 此前全仓
+        # 零消费点，回落价会无人纠正地留到平仓结算。判 filled 且来源是回落价时
+        # 落一条独立事件供对账/复盘检索 —— 入场价是限价回填的**保守边界**
+        # （买 ≤ limit / 卖 ≥ limit），不是明细真实均价；真实均价仍以成交明细
+        # 为准（是否回填修正 R/保护价属风控决策，未拍板前不动账）。
+        # "ref_price" 是 2026-09-30 版回落价的历史残留值，一并纳入检索。
+        _psrc = o.meta.get("price_source", "")
+        if _psrc == "limit" or _psrc == "ref_price":
+            self.ev.write("order_price_fallback",
+                          order_id=o.order_id, price_source=_psrc,
+                          fill_price=o.filled_price, limit=o.price,
+                          req_price=o.req_price, volume=o.volume,
+                          signal_key=(sig.key if sig is not None else ""))
         # ── 成交落账：净敞口的变化决定 run 的开启 / 结束 ──
         # run 级会计（v3.1 §5.1）：Trade 一律由 `_settle_run` 在 run 结束点写，
         # `_book_close` 只负责移除仓单；close 事件在结算后写入并回填 trade_id。

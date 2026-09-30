@@ -59,7 +59,7 @@ from Trading.Infra.Clock import now_cn  # noqa: E402
 
 
 ECHO_DEFAULT = {"start", "signal", "signal_dup", "signal_skip", "open", "close",
-                "error", "stop"}
+                "error", "stop", "order_price_fallback"}
 
 # 跨平台停止协议：父进程（AppTrader.stop）在 out_dir 写该文件 → 本模块
 # 看护线程观测到 → 请求优雅收尾（lock_all + 持久化 + 退出 0）。
@@ -318,6 +318,11 @@ def build_runtime(args):
     # 通道连接类埋点（`在线通道已连接` / `登录后持仓镜像初读`）发生在
     # `SimNow.__init__ → _connect` 里，装晚了就抓不到。
     _setup_logging()
+    # 观察项 A 探针（2026-10-01 复核）：实机曾出现整场无 tg.* 前缀行、只剩
+    # lastResort 裸行（成因未明，静态排查重定向/幂等/调用时序均无异常）。
+    # 本行是「树是否装载」的二值判据：gateway.log 里没有它 = 本进程未走到
+    # 装载（或装载被跳过）；有它 = 树正常，问题在别处（如下游重配 logging）。
+    logging.getLogger("tg").info("tg 日志树已装载（handler → gateway.log）")
     # 唯一一份**运行时对象** —— 静态身份（config 转发）+
     #   运行时身份（trade_symbol/last_trade_date 回填）+ 有效值（SSOT=品种档案，
     #   构造期播种）+ 定价成本，合并于同一个 Instrument。

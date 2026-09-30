@@ -20,7 +20,7 @@ P6 成交裁决 · `_finalize` **接线级**护栏（2026-09-30 事故根修）
     1. 成交必须由**正向证据**宣告（终态文案宣告成交，或明细手数足够）；
        绝不因**证据缺失**（明细未到）被否证；
     2. 判成 filled 的 `Order`，其 `filled_price` 必然是一个有限正数 ——
-       否则引擎 `Engine._book_order` 的 `o.filled_price is None` 会把成交单
+       否则引擎 `Engine._execute` 的 `o.filled_price is None` 会把成交单
        重新当成 rejected，账本照样不落（"判成交"白判）；
     3. 09-04 幻影防护不降级：拒单文案 + 残留余量 0 → 仍判未成交。
 
@@ -103,8 +103,12 @@ def make_broker() -> SimNowBroker:
     return b
 
 
-def finalize(order, volume=2, ref_price=7193.60):
-    """调真实 `_finalize`，并把 `tg.brokers.simnow` 的日志整段捕获回来。"""
+def finalize(order, volume=2, ref_price=7193.60, limit=None):
+    """调真实 `_finalize`，并把 `tg.brokers.simnow` 的日志整段捕获回来。
+
+    limit=None 时与 ref_price 同值（既有用例语义不变）；事故用例显式传
+    ref_price=7191.0 / limit=7193.60（现场实数），让「回落取哪个价」可判别。
+    """
     b = make_broker()
     recs = []
     h = logging.Handler()
@@ -116,7 +120,8 @@ def finalize(order, volume=2, ref_price=7193.60):
             order, intent_str="open", action="open", side=Side.LONG,
             volume=volume, ref_price=ref_price,
             signal_key="2026/09/30 10:29:00|0|B", note="signal",
-            baseline=None, expected_delta=volume, limit=ref_price)
+            baseline=None, expected_delta=volume,
+            limit=ref_price if limit is None else limit)
     finally:
         lg.removeHandler(h)
     return o, recs
@@ -148,13 +153,14 @@ def test_accident_shape() -> None:
     o, recs = finalize(
         MockTqOrder(status="FINISHED", volume_left=0, trade_records={},
                     last_msg="全部成交报单已提交", trade_price=float("nan")),
-        volume=2, ref_price=7193.60)
+        volume=2, ref_price=7191.0, limit=7193.60)
     check("[1a] 判成交（明细未到不得翻转成交事实）", o.status, "filled")
     check_true("[1b] filled_price 是有限正数（nan/None 都不可接受）",
                o.filled_price is not None and math.isfinite(o.filled_price)
                and o.filled_price > 0)
-    check("[1c] 成交价回落链落到请求价", o.filled_price, 7193.60)
-    check("[1d] meta 标注成交价来源", o.meta.get("price_source"), "ref_price")
+    check("[1c] 成交价回落链落到委托限价（不是信号价 ref_price）",
+          o.filled_price, 7193.60)
+    check("[1d] meta 标注成交价来源", o.meta.get("price_source"), "limit")
     check("[1e] **不写**「委托被拒」日志（现场正是这一行把事故写进 events）",
           [m for m in recs if "委托被拒" in m], [])
     check("[1f] 不留 reject_reason", o.meta.get("reject_reason"), None)
@@ -230,6 +236,13 @@ def test_ghost_shape() -> None:
         volume=2, ref_price=7193.60)
     check("[5e] 判未成交", o2.status, "rejected")
 
+    print("\n[5f] 幻影形态的否定式文案（未全部成交，已撤单）同样判未成交")
+    o3, _ = finalize(
+        MockTqOrder(status="FINISHED", volume_left=0, trade_records={},
+                    last_msg="未全部成交，已撤单", trade_price=7192.40),
+        volume=2, ref_price=7193.60)
+    check("[5f] 判未成交（否定语境护栏生效）", o3.status, "rejected")
+
 
 def test_non_terminal_and_cancel() -> None:
     """非终态 / 撤单余量未清零：P3 层直接挡（本修复未改这几条）。"""
@@ -246,7 +259,7 @@ def test_non_terminal_and_cancel() -> None:
 def test_filled_price_never_none() -> None:
     """不变量 2 的直证：判成 filled 的单子绝不能带 None 价。
 
-    引擎 `Engine._book_order` 的落账判据是 `o.status != "filled" or o.filled_price is None`
+    引擎 `Engine._execute` 的落账判据是 `o.status != "filled" or o.filled_price is None`
     —— 价格缺失会让"判成交"在引擎侧退化成"判拒单"，账本照样不落。
     """
     print("\n[7] filled ⇒ filled_price 有限正数（引擎落账的必要条件）")

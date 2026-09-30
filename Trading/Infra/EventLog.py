@@ -23,6 +23,7 @@ _KIND_LABEL = {
     "signal_dup": "重复信号", "signal_skip": "信号跳过", "order": "委托",
     "fill": "成交", "open": "开仓", "close": "平仓",
     "order_rejected": "委托被拒", "exit_plan_update": "更新出场计划",
+    "order_price_fallback": "成交价回落",
     "error": "错误",
 }
 

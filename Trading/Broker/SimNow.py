@@ -134,6 +134,10 @@ _PUMP_BACKLOG_WARN_STREAK = 50
 # ⚠️ 不要拿 `Broker/Base.classify_ctp_reject` 当"是不是拒单"的判据：那个函数是
 #    给**已判拒**的委托分类拒因用的，**认不出来一律归 `price`**，恒为真值。
 _CTP_ALL_TRADED_HINTS = ("全部成交",)
+# 否定语境护栏（2026-10-01 复核 §4.3）：终态文案含「全部成交」子串但语义是否定的
+# 形态（如「未全部成交，已撤单」），任一命中即不放行 —— 宁可退回明细判据，
+# 也不能把「未全部成交」的幻影放成真成交（资损方向：账本有、实盘没有）。
+_CTP_NEGATIVE_HINTS = ("未全部成交", "未能全部成交", "未成交")
 
 
 # ── 持仓读数的"形态判据"（2026-09-21 修复）──────────────────────────────────
@@ -520,8 +524,14 @@ def _is_all_traded_msg(last_msg: Any) -> bool:
 
       本函数提供的是**与状态同一路到达的正向证据**：终态文案自己说了"全部成交"。
       有它就不必等明细；没有它时仍按明细判（幻影防护不降级）。
+
+      否定语境护栏（2026-10-01 复核 §4.3）：子串匹配会把否定式一起命中 ——
+      「未全部成交，已撤单」「未能全部成交，报单已撤销」都含「全部成交」子串，
+      放行前先过 _CTP_NEGATIVE_HINTS，任一命中即不放行。
     """
     msg = str(last_msg or "")
+    if any(k in msg for k in _CTP_NEGATIVE_HINTS):
+        return False
     return any(k in msg for k in _CTP_ALL_TRADED_HINTS)
 
 
@@ -1374,15 +1384,21 @@ class SimNowBroker(Broker):
                     getattr(order, "trade_price", None)))
             self._note_reject(signal_key, note, order, reject_reason)
 
-        # ===== 成交价：明细加权价 → 委托对象均价 → 本次委托请求价（回落链）=====
+        # ===== 成交价：明细加权价 → 委托对象均价 → 本次委托限价（回落链）=====
         # 明细价**只在明细完整时**采用（`traded_volume >= volume`）：不全的明细价
         # 只反映了部分成交，而 `order.trade_price` 是 CTP 对该委托全量的加权均价。
-        # ⚠️ 回落链**必须有底**：`filled_price is None` 会让引擎在 `Engine._book_order`
+        # ⚠️ 回落链**必须有底**：`filled_price is None` 会让引擎在 `Engine._execute`
         #    里把一笔**已判定成交**的委托重新当成 rejected（判据 `o.filled_price is None`），
         #    账本照样不落 —— "判成交"就白判了。事故现场 `trade_price=nan` 正是这种情形
         #    （`_trade_price` 对 nan 返回 None）。
-        #    价格是"晚到"，不是"成交晚到"：终态一旦宣告成交就用请求价先落账并留痕，
+        #    价格是"晚到"，不是"成交晚到"：终态一旦宣告成交就用限价先落账并留痕，
         #    明细到达后的真实均价可按 raw_order_id 事后回溯。
+        #    回落价用**委托限价**（limit），不用 ref_price（2026-10-01 复核 §4.1）：
+        #    ref_price 是策略原始信号价（Records.req_price 的注释即「未对齐」），
+        #    不是报单请求价；真实成交价有确定边界 —— 买 fill ≤ limit、
+        #    卖 fill ≥ limit，限价即**最坏情形**（保守方向）。用信号价回落会
+        #    双向记「好」：买开记便宜、卖出记贵（同一 filled_price 兼作
+        #    风控锚与会计锚，偏差会传导进 R / 保护价 / 平仓盈亏）。
         price_source = ""
         if is_fully_filled:
             if traded_price and traded_volume >= int(volume):
@@ -1390,9 +1406,9 @@ class SimNowBroker(Broker):
             elif filled:
                 price_source = "order.trade_price"
             else:
-                filled, price_source = float(ref_price), "ref_price"
+                filled, price_source = float(limit), "limit"
                 logging.getLogger("tg.brokers.simnow").warning(
-                    "P6 成交价回落: signal=%s 明细与委托均价均未到 → 暂用请求价 %s 落账"
+                    "P6 成交价回落: signal=%s 明细与委托均价均未到 → 暂用委托限价 %s 落账"
                     "（raw_order_id=%s）。成交事实已由委托终态确认，价格晚到不影响成交成立。",
                     signal_key or "-", filled, str(getattr(order, "order_id", "-")))
 
@@ -1481,8 +1497,8 @@ class SimNowBroker(Broker):
                   "intent": intent_str,
                   "trade_price": filled,
                   # 成交价来源（成交单才有值）：trade_records / order.trade_price /
-                  #   ref_price —— 事故复盘时一眼分辨"这次用的是回退价"，见 _finalize。
-                  "price_source": price_source,
+                  #   limit —— 事故复盘时一眼分辨"这次用的是回退价"，见 _finalize。
+                  "price_source": price_source,   # 消费点：Engine._execute 读它落 order_price_fallback 事件
                   "volume_left": getattr(order, "volume_left", None),
                   "last_msg": getattr(order, "last_msg", ""),
                   "reject_reason": reject_reason,
