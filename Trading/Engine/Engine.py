@@ -1525,9 +1525,11 @@ class TradingEngine(ReconcileMixin):
         # 落一条独立事件供对账/复盘检索 —— 入场价是限价回填的**保守边界**
         # （买 ≤ limit / 卖 ≥ limit），不是明细真实均价；真实均价仍以成交明细
         # 为准（是否回填修正 R/保护价属风控决策，未拍板前不动账）。
-        # "ref_price" 是 2026-09-30 版回落价的历史残留值，一并纳入检索。
+        # 只收当期唯一回落来源 `"limit"`；历史值 `"ref_price"` 已无生产者
+        #   （2026-10-01 起 `_finalize` 不再用信号价回落），停收并由本组件
+        #   `Trading/Test/test_p6_fallback_consumer.py` [6] 钉死。
         _psrc = o.meta.get("price_source", "")
-        if _psrc == "limit" or _psrc == "ref_price":
+        if _psrc == "limit":
             self.ev.write("order_price_fallback",
                           order_id=o.order_id, price_source=_psrc,
                           fill_price=o.filled_price, limit=o.price,

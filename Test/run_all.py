@@ -404,6 +404,19 @@ COMPONENTS = [
     ("p6_finalize_wiring",
      [sys.executable, os.path.join("Trading", "Test",
                                    "test_p6_finalize_wiring.py")]),
+    # p6-fallback-consumer：成交价回落的**引擎侧消费点**护栏（2026-10-01 补）。
+    #   起因：`meta["price_source"]` 在 2026-09-30 版全仓零消费点 —— 明细晚到时
+    #   `_finalize` 用委托限价先落成成交，这笔"限价回填的入场价"无人回头纠正。
+    #   补的写入当时**没有任何测试盯着**：把 `if _psrc == "limit":` 改成
+    #   `if False:` 跑全套门禁，结果项与基线一字不差（137/139 全同）。
+    #   本组件用 dry_run 引擎 + 伪造 Order 走真实 `_execute`，回读 events.jsonl，
+    #   钉五件事：① 判成交 + 回落来源 ⇒ 恰一条且字段可对账；② 明细真实价 /
+    #   未标来源 ⇒ 零条；③ 拒单 ⇒ 零条（消费点在 rejected 早退之后）；
+    #   ④ 历史来源值 `"ref_price"` 已停收；⑤ 事件字典有中文标签。
+    #   零网络、无需凭据。
+    ("p6_fallback_consumer",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_p6_fallback_consumer.py")]),
     # ── 交易域用例（Trading/Test）：引擎 / 品种 / 周期 / 出场 / 统计 ────────
     #    p5~p60 全套 + 引擎与数据源契约。注册前的实测口径见各条目自身
     #    docstring（全部为「0=通过 / 非 0=真坏了」，打桩为主、不联网）。
