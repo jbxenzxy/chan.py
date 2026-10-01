@@ -1021,6 +1021,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
+        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        fence_dominant = entry_bi.is_macd_same_side_dominant()
+        fence_lines = entry_bi.is_macd_lines_same_side()
+        if not (fence_dominant and fence_lines):
+            self._dbg_bs0(' _cal_bs0point_4th', '跳过: 进入笔MACD同侧围栏未通过',
+                          entry_bi_idx=entry_bi.idx,
+                          dominant=fence_dominant, lines=fence_lines)
+            return
+
         # 离开笔4和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
@@ -1110,6 +1119,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return False
 
+        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        fence_dominant = entry_bi.is_macd_same_side_dominant()
+        fence_lines = entry_bi.is_macd_lines_same_side()
+        if not (fence_dominant and fence_lines):
+            self._dbg_bs0(' _cal_bs0point_nth_nzs', '跳过: 进入笔MACD同侧围栏未通过',
+                          entry_bi_idx=entry_bi.idx,
+                          dominant=fence_dominant, lines=fence_lines)
+            return False
+
         # 离开笔和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
@@ -1169,6 +1187,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           base_range=round(base_range, 2),
                           threshold=round(threshold, 2), actual=actual,
                           condition=cond)
+            return
+
+        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        fence_dominant = entry_bi.is_macd_same_side_dominant()
+        fence_lines = entry_bi.is_macd_lines_same_side()
+        if not (fence_dominant and fence_lines):
+            self._dbg_bs0(' _cal_bs0point_nth_ozs', '跳过: 进入笔MACD同侧围栏未通过',
+                          entry_bi_idx=entry_bi.idx,
+                          dominant=fence_dominant, lines=fence_lines)
             return
 
         # 离开笔6/8和进入笔，MACD面积背驰
