@@ -1,0 +1,5 @@
+# 冻结的回归基准数据：落盘形态必须逐字节可复现。
+# core.autocrlf=true 的机器在 checkout 时把它们翻成 CRLF，会让门禁里任何
+# 「字节级」比对随机器而变（fixtures_integrity 曾因此 6 条 CHECK-FAIL 恒红）。
+# 钉成 eol=lf：谁 checkout 都是 LF，与仓库里的 blob 一致。
+Test/fixtures/*.json text eol=lf

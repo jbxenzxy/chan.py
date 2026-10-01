@@ -125,6 +125,12 @@ def _safe_relpath(path, base):
 COMPONENTS = [
     ("fixtures_integrity",
      [sys.executable, os.path.join("Test", "gen_fixtures.py"), "--check"]),
+    # 换行卫生（2026-10-01）：仓库内 .py 不得出现 \r\r\n（读 CRLF 用 newline=""
+    #   保留 + 默认文本写回，会让已是 CRLF 的内容再翻一次 → 孤立 \r 被 Python 当
+    #   行终止符 → import 时 SyntaxError: expected ':'）；不得 LF/CRLF 混用；
+    #   端到端兜底每个 .py 都能 compile 通过。零网络、秒级。
+    ("newline_hygiene",
+     [sys.executable, os.path.join("Test", "test_newline_hygiene.py")]),
     ("snapshot_regression",
      [sys.executable, os.path.join("Test", "snapshot_runner.py")]),
     ("trigger_step_replay",
