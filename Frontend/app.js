@@ -96,11 +96,11 @@
 
         let initialized = false;
 
-        let currentFreq = 'd'; // 当前周期: d=日K, 30m=30分钟
+        let currentFreq = 'd';       // 当前周期: d=日K, 30m=30分钟
 
         let lastStockFreq = 'd';     // 股票上下文上次使用的周期（同类切换继承）
 
-        let lastFuturesFreq = '5m'; // 期货上下文上次使用的周期（同类切换继承）
+        let lastFuturesFreq = '1m';  // 期货上下文上次使用的周期（同类切换继承）；默认 1m
 
         // 双窗口状态
         let isDualWindow = false;
