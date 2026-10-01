@@ -682,12 +682,17 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ㈢ 分型检查（过滤弱分型/中继）
         fx_strength = self._is_strong_fx(stroke_n)
         if fx_strength == 0:
-            self._dbg_bs('cal_bsp_precondition', '前置检查跳过: 弱分型............',
+            self._dbg_bs('cal_bsp_precondition', '前置检查「跳过」: 弱分型............',
                          stroke_n_idx=stroke_n.idx,
                          bi_dir='up' if stroke_n.is_up() else 'down',
                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
             return None
 
+        fx_label = '最强分型' if fx_strength == 2 else '强分型'
+        self._dbg_bs('cal_bsp_precondition', f'前置检查「通过」: {fx_label}............',
+                     stroke_n_idx=stroke_n.idx,
+                     bi_dir='up' if stroke_n.is_up() else 'down',
+                     stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
         return (pivot_a, stroke_n)
 
     def check_nesting_divergence(self, bi_list, zs_list):
@@ -880,7 +885,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # ── 0类买卖点(中枢震荡) ──
     # ═══════════════════════════════════════════════════════════
     def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
-        self._dbg_bs0('cal_bs0point', '进入............', bi_idx=len(bi_list)-1)
+        self._dbg_bs0('cal_bs0point', '进入......', bi_idx=len(bi_list)-1)
 
         # 笔N与中枢A要有重叠
         if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
@@ -1530,7 +1535,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
           - 忽略第二根K线形态（长上/下影、长阴/阳）的判断，降低参数复杂度
           - 第三根K线"区间"指整根K线的最高~最低（high~low），非实体部分
         返回:
-            int: 0=弱分型（中继概率大）, 1=强势分型, 2=最强分型
+            int: 0=弱分型（中继概率大）, 1=强分型, 2=最强分型
         """
 
         # 虚笔无右肩，直接返回弱分型
@@ -1602,7 +1607,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 第82课镜像：第三根最高价突破第一根最高价，且收盘收在第一根区间一半之上，且收盘价站上MA5
             if k3_h > k1_h and k3_c > k1_mid and cond2:
                 return 2  # 最强分型
-            return 1      # 强势分型
+            return 1      # 强分型
 
         else:
             # ── 顶分型 ──
@@ -1617,7 +1622,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 第82课原文：第三根跌破第一根低点，且不能高收到第一根区间一半之上，且收盘价跌破MA5
             if k3_l < k1_l and k3_c < k1_mid and cond2:
                 return 2  # 最强分型
-            return 1      # 强势分型
+            return 1      # 强分型
 
     @staticmethod
     def _is_valid_zs(entry_bi, bi3, bi2, bi1):
