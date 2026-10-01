@@ -6,6 +6,10 @@ from Common.ChanException import CChanException, ErrCode
 from KLine.KLine import CKLine
 from KLine.KLine_Unit import CKLine_Unit
 
+# MACD 同侧（红绿柱）占比阈值：
+# 0.9 = 整笔 MACD 同侧面积占比 ≥ 90%
+# 1.0 = 严格（零反向面积）
+MACD_CONFINE_RATIO = 0.9
 
 class CBi:
     def __init__(self, begin_klc: CKLine, end_klc: CKLine, idx: int, is_sure: bool):
@@ -418,6 +422,17 @@ class CBi:
 
     @make_cache
     def Cal_MACD_slope(self):
+        """
+        数值例子（同一根上涨笔）
+        设 begin_klu.low=10.0、end_klu.high=12.0、跨越 5 根 K 线（idx 100→104）：
+        amp（涨）= (12.0−10.0) / 10.0 = 0.20（20%） → 这笔整体相对摆幅
+        slope（涨）= (12.0−10.0) / 12.0 / 5 = 0.1667 / 5 = 0.0333（每根 K 线 3.33%）
+        现在假设同样的涨幅、但用了 10 根 K 线走完：
+        amp = 仍是 20%（跟时间无关，只看起点到终点的总幅度）
+        slope = 0.1667 / 10 = 1.67%/bar（速率减半，因为磨了更久）
+        这就是本质差别：amp 量的是"摆了多大"，slope 量的是"摆得多急"
+        两者都没用 MACD（名字都误导）
+        """
         begin_klu = self.get_begin_klu()
         end_klu = self.get_end_klu()
         if self.is_up():
@@ -427,12 +442,66 @@ class CBi:
 
     @make_cache
     def Cal_MACD_amp(self):
+        """
+        数值例子（同一根上涨笔）
+        设 begin_klu.low=10.0、end_klu.high=12.0、跨越 5 根 K 线（idx 100→104）：
+        amp（涨）= (12.0−10.0) / 10.0 = 0.20（20%） → 这笔整体相对摆幅
+        slope（涨）= (12.0−10.0) / 12.0 / 5 = 0.1667 / 5 = 0.0333（每根 K 线 3.33%）
+        现在假设同样的涨幅、但用了 10 根 K 线走完：
+        amp = 仍是 20%（跟时间无关，只看起点到终点的总幅度）
+        slope = 0.1667 / 10 = 1.67%/bar（速率减半，因为磨了更久）
+        这就是本质差别：amp 量的是"摆了多大"，slope 量的是"摆得多急"
+        两者都没用 MACD（名字都误导）
+        """
         begin_klu = self.get_begin_klu()
         end_klu = self.get_end_klu()
         if self.is_down():
             return (begin_klu.high-end_klu.low)/begin_klu.high
         else:
             return (end_klu.high-begin_klu.low)/begin_klu.low
+
+    @make_cache
+    def is_macd_confined(self):
+        """
+        整笔区间内 MACD 红绿柱与笔方向「同侧面积占比」达到 MACD_CONFINE_RATIO 即满足
+          - 向下笔: 期望绿柱(macd<0)；向上笔: 期望红柱(macd>0)
+          - MACD_CONFINE_RATIO=1.0 -> 严格(零反向面积)
+        面积加权: 同侧面积=Σ|macd|(同侧)，总面积=Σ|macd|(全部≠0)，ratio=同侧/总面积
+        macd==0 视为中性，既不进分子也不进分母。空笔返回 False
+        """
+        klus = [k for klc in self.klc_lst for k in klc.lst]
+        if not klus:
+            return False
+        expected = -1 if self.is_down() else 1
+        same_area = total_area = 0.0
+        for k in klus:
+            m = k.macd.macd
+            if m == 0:
+                continue
+            total_area += abs(m)
+            if m * expected > 0:
+                same_area += abs(m)
+        ratio = same_area / total_area if total_area > 0 else 0.0
+        # 用面积直接比较并留 1e-9 容差：浮点下 0.9 可能算成 0.89999999，
+        # 需保证阈值闭区间可命中（0.9 满足、1.0=严格 100%）
+        return same_area >= MACD_CONFINE_RATIO * total_area - 1e-9
+
+    @make_cache
+    def is_macd_lines_below_zero(self):
+        """
+        整笔区间内黄白线(DIF/DEA)与笔方向同侧且均在 0 轴下(上)。
+          - 向下笔: 要求 DIF<0 且 DEA<0（整笔每一根）
+          - 向上笔: 要求 DIF>0 且 DEA>0（整笔每一根）
+        任一 K 线不满足即返回 False。空笔返回 False。
+        """
+        klus = [k for klc in self.klc_lst for k in klc.lst]
+        if not klus:
+            return False
+        expected = -1 if self.is_down() else 1
+        for k in klus:
+            if k.macd.DIF * expected <= 0 or k.macd.DEA * expected <= 0:
+                return False
+        return True
 
     def Cal_MACD_trade_metric(self, metric: str, cal_avg=False) -> float:
         _s = 0
