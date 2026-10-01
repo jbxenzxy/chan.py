@@ -932,15 +932,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         stroke_b = bi_list[stroke_n.idx - 1]
 
         # ㈠ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
-        # 向下笔C(买点)：笔B高点 < 笔A高点
-        # 向上笔C(卖点)：笔B低点 > 笔A低点
-        if stroke_n.is_down() and stroke_b._high() >= stroke_a._high():
+        # 向下笔C(买点)：笔B高点 <= 笔A高点
+        # 向上笔C(卖点)：笔B低点 >= 笔A低点
+        if stroke_n.is_down() and stroke_b._high() > stroke_a._high():
             self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
                           b_idx=stroke_b.idx,
                           a_idx=stroke_a.idx,
                           b_high=stroke_b._high(), a_high=stroke_a._high())
             return
-        if stroke_n.is_up() and stroke_b._low() <= stroke_a._low():
+        if stroke_n.is_up() and stroke_b._low() < stroke_a._low():
             self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
                           b_idx=stroke_b.idx,
                           a_idx=stroke_a.idx,
