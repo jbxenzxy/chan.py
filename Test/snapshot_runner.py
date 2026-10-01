@@ -429,7 +429,7 @@ def _c_multilevel_indep():
       · 红框边界改数学换算 _stocks_red_range_algo（日期型主级别
         d/w 取当日 00:00~23:59:59，语义=覆盖当日全部下窗K线，
         与 legacy 联立真实首末根边界不同属预期差异）；
-      · 区间套 check_nested_diver 改读独立下窗缓存（P1）。
+      · 区间套 check_nesting_divergence 改读独立下窗缓存（P1）。
     """
     from App import AppEngine as m
     restore_env = _force_dual_impl("independent")

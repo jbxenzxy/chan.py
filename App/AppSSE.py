@@ -800,7 +800,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
         # 循环每根K线 _drain_chan → step_load → do_init 会就地清空重建
         # kl_datas，而 REST 侧读取方拿到指针后在锁外遍历 bi_list。容器锁只
         # 护「取指针」护不住对象图，故取一把按 key 稳定的锁，让重建与遍历
-        # 互斥（读取方见 BSPointList.check_nested_diver）。
+        # 互斥（读取方见 BSPointList.check_nesting_divergence）。
         _sub_chan_lock = app_data.futures_sub_chan_lock(symbol, sub_freq)
         if _SSE_DEBUG:
             log.info(f"[{display_key}] 下窗({sub_freq}) chan.py: 合并K线={len(sub_chan[sub_kl_type].lst)}, "
@@ -1895,7 +1895,7 @@ def _cleanup_all_futures_data():
         log.info(f"[清理] 已清除 {removed} 条期货选点记录")
 
     # 3. 清空期货分析缓存（双窗下窗 chan 残留：不清空则切回后
-    #    check_nested_diver 经 futures_cache_get 读到过期中间状态）
+    #    check_nesting_divergence 经 futures_cache_get 读到过期中间状态）
     app_data.futures_cache_clear()
     log.info("[清理] 已清空期货分析缓存")
     return True, 0

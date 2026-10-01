@@ -2,11 +2,11 @@
 """
 回归：期货双窗区间套缓存 key 一致性断言测试
 =====================================================================
-背景：期货双窗区间套（check_nested_diver）读写下窗缓存的 key 曾不一致——
+背景：期货双窗区间套（check_nesting_divergence）读写下窗缓存的 key 曾不一致——
 
   写侧：AppSSE.sse_futures_stream_dual → app_data.set_futures_sub_chan(symbol, sub_freq)
         经 make_futures_sub_key → "SYMBOL:sub_freq"（如 "KQ.M@CFFEX.IM:1m"）
-  读侧：BSPointList.check_nested_diver 曾直接以 parent.code（CChan.code，形如
+  读侧：BSPointList.check_nesting_divergence 曾直接以 parent.code（CChan.code，形如
         "SYMBOL:freq_sec"，带周期后缀）拼接得 "SYMBOL:freq_sec:sub_freq"，
         与写侧 key 永不相等 → 区间套 100% 静默失效（恒按子级别背驰处理）。
 

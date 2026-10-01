@@ -742,7 +742,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         if dual and sub_freq and dual_impl == "independent":
             # ── 独立双窗：先下后上 ──────────────────────────
             # ① 先建下窗独立 CChan 并整读入运行时缓存——上窗 bsp 计算的
-            #    区间套（check_nested_diver）从缓存读完整下窗笔结构，
+            #    区间套（check_nesting_divergence）从缓存读完整下窗笔结构，
             #    消除联立模式下「主K线先到、子级别笔未跟上」的时序退化
             #    （对齐期货 SSE 双窗时序约定）。
             with tdx_data_context(sub_records):

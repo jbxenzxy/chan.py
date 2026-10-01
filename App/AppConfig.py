@@ -166,7 +166,7 @@ _FIELD_DEFAULTS = {
     #   · dual_main/dual_sub（结构化缓存）：键=(kind,市场,代码,周期,日期,实现)，
     #     消费方=API 层缓存命中（重复请求免重算），MAX_DUAL_CACHE_KEYS 管它；
     #   · stocks_sub_cache（运行时缓存）：键=代码:下窗周期（无日期/实现维度），
-    #     消费方=区间套 check_nested_diver / 红框中枢重算 / 双窗选点重建——
+    #     消费方=区间套 check_nesting_divergence / 红框中枢重算 / 双窗选点重建——
     #     这些消费方只知道「代码+下窗周期」，构不出结构化键，故必须有独立缓存。
     # 两个 dict 各存各的引用（同一个下窗 CChan 会被两处同时引用）：
     # 只限额 dual_* 键管不到本缓存，反之亦然——两个上限合起来才框住双窗内存。

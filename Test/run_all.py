@@ -298,6 +298,12 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_readme_anchor_refs.py")]),
     ("docs_line_refs",
      [sys.executable, os.path.join("Test", "test_docs_line_refs.py")]),
+    # 区间套判据改名护栏（2026-10-01）：`check_nested_diver` → `check_nesting_divergence`
+    #   （34 处纯标识符替换、零行数漂移）。钉四类契约 —— 类上有新名且形参不变、
+    #   定义与调用点同用新名、全仓两个旧拼写零残留（`Docs/` 带版本号的历史快照
+    #   刻意豁免但计数可见）、扫描范围没被改窄。写回旧名即红。
+    ("nested_divergence_rename",
+     [sys.executable, os.path.join("Test", "test_nested_divergence_rename.py")]),
     # 登录链路选择（2026-09-28）：开关先弹「SimNow / 实盘」选择框，选定值以
     #   环境变量注入子进程（三个键名逐键钉死并对 TradingConfig 做真消费验证）；
     #   实盘两个前置（期货公司名 / confirm_live_trading）缺任一即拒绝；

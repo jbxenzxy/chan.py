@@ -512,7 +512,7 @@ def _get_kl_type(freq):
 # 混入股票不用的周期，可读性差且易误改。拆成两份后，每个市场的配对独立
 # 演进，变更互不牵连。
 # ── 为什么定义在 BSPointList 而非 AppEngine 或 CEnum ──────────
-# 本表在「区间套/红框」路径（check_nested_diver / _stocks_red_range 等）
+# 本表在「区间套/红框」路径（check_nesting_divergence / _stocks_red_range 等）
 # 中使用，与 AppEngine 的 _STOCKS_DUAL_PAIRS（前端双窗配对空间校验）和
 # _SUB_FREQ_MAP（缺省兜底）语义不同——_STOCKS_DUAL_PAIRS 是「上窗可选的
 # 下窗集合」（多对多），本表是「区间套时取子级别的一对一映射」。
@@ -652,7 +652,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         pivot_a, stroke_n = result
 
         # ② 区间套不背 → 静默返回
-        is_diver = self.check_nested_diver(bi_list, zs_list)
+        is_diver = self.check_nesting_divergence(bi_list, zs_list)
         if not is_diver:
             return
         
@@ -690,7 +690,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         return (pivot_a, stroke_n)
 
-    def check_nested_diver(self, bi_list, zs_list):
+    def check_nesting_divergence(self, bi_list, zs_list):
         """
         区间套背驰判断：分析主级别一笔在子级别是否段背(无中枢) 或 有买/卖点(有中枢)
         code、freq 从 self.parent 获取(CKLine_List 创建时就有的固有属性)
@@ -699,17 +699,17 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
         parent = self.parent # 指向 CKLine_List
         if parent is None:
-            raise RuntimeError("[check_nested_diver] 严重Bug：指向 CKLine_List 的指针未设置！")
+            raise RuntimeError("[check_nesting_divergence] 严重Bug：指向 CKLine_List 的指针未设置！")
 
         kl_type = parent.kl_type  # KL_TYPE 枚举
         main_freq = _KL_TYPE_TO_FREQ.get(kl_type)
         if main_freq is None:
-            raise RuntimeError("[check_nested_diver] 严重Bug：主级别映射缺失")
+            raise RuntimeError("[check_nesting_divergence] 严重Bug：主级别映射缺失")
 
         # 获取 market_type
         market_type = getattr(parent, 'market_type', None)
         if market_type is None:
-            raise RuntimeError("[check_nested_diver] 严重Bug：market_type 未设置！")
+            raise RuntimeError("[check_nesting_divergence] 严重Bug：market_type 未设置！")
 
         is_stocks = (market_type == "stock")
         # 双窗口 freq 配对：上窗 main_freq 确定下窗 sub_freq
@@ -738,7 +738,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     if sub_chan is None:
                         # 先下后上时序下不应发生（下窗先建缓存再建上窗）；
                         # 仅服务重启/缓存被清等异常态，语义=初始化竞态而非配置错误
-                        self._dbg_bs('check_nested_diver', '独立双窗-下窗运行时缓存缺失'
+                        self._dbg_bs('check_nesting_divergence', '独立双窗-下窗运行时缓存缺失'
                                      '（先下后上时序被破坏或缓存被清理）→ 按子级别背驰处理',
                                      code=parent.code, sub_freq=sub_freq)
                         return True  # 按子级别背驰处理
@@ -754,10 +754,10 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 #   单窗、独立双窗下窗 lv_list 仅本级 → None → 按子级别背驰处理；
                 #   legacy 联立上窗 lv_list 两级 → 取到联立子级别，走区间套。
                 if parent.chan is None:
-                    raise RuntimeError("[check_nested_diver] 严重Bug：CChan 指针未设置！")
+                    raise RuntimeError("[check_nesting_divergence] 严重Bug：CChan 指针未设置！")
                 sub_kl_list = parent.chan.kl_datas.get(sub_kl_type)
                 if sub_kl_list is None:
-                    self._dbg_bs('check_nested_diver', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
+                    self._dbg_bs('check_nesting_divergence', '单窗口无子 or 双窗口无孙 → 按子级别背驰处理',
                                  sub_kl_type=sub_kl_type)
                     return True  # 按子级别背驰处理
                 # parent.chan 为本次分析自有的 CChan（不跨连接共享，风险低于
@@ -785,7 +785,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 回填之前就会读到空列表。故取对象与遍历须在同一把对象图锁内。
             with app_data.futures_sub_chan_guarded_by_key(cache_key) as sub_chan:
                 if sub_chan is None:
-                    self._dbg_bs('check_nested_diver', '期货下窗暂无缓存 → 按子级别背驰处理',
+                    self._dbg_bs('check_nesting_divergence', '期货下窗暂无缓存 → 按子级别背驰处理',
                                  cache_key=cache_key, sub_freq=sub_freq) # 上/下窗分开加载，必然有前有后，所以存在“上窗有，下窗无”的情况
                     return True # 按子级别背驰处理
                 sub_kl_list = sub_chan[sub_kl_type]
@@ -799,7 +799,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 「锁外取指针后遍历」的窗口（审计 U2 / P0-2 双侧闭合）。
         if len(sub_bi_list) == 0:
             # 上/下窗，历史K线不对齐(如：日K加载多于30分)
-            self._dbg_bs('check_nested_diver', '双窗口-无子级别 → 按子级别背驰处理')
+            self._dbg_bs('check_nesting_divergence', '双窗口-无子级别 → 按子级别背驰处理')
             return True  # 按子级别背驰处理
         
         # 1. 确定主级别一笔的左右边界 [A,B]
@@ -807,7 +807,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         main_date_fmt = _get_date_fmt(main_freq)
         shoulder_result = _main_bi_range(main_bi, main_date_fmt)
         if shoulder_result is None:
-            raise RuntimeError(f"[check_nested_diver] 严重Bug：无法确定主级别[A,B]: main_bi.idx={main_bi.idx}")
+            raise RuntimeError(f"[check_nesting_divergence] 严重Bug：无法确定主级别[A,B]: main_bi.idx={main_bi.idx}")
         fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu = shoulder_result
 
         # 2. 确定子级别红框边界 [C,D]
@@ -831,7 +831,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             fx_b_sub_dt = snapshot['bis'][0].get('fx_b_sub_dt', '')
 
         if not fx_a_sub_dt or not fx_b_sub_dt:
-            self._dbg_bs('check_nested_diver', '无法确定子级别[C,D] → 可能子级别K线不够',
+            self._dbg_bs('check_nesting_divergence', '无法确定子级别[C,D] → 可能子级别K线不够',
                          fx_a=fx_a_sub_dt, fx_b=fx_b_sub_dt)
             return True  # 按子级别背驰处理
 
@@ -841,13 +841,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             # 2026-09-02 一致性决策：红框内无完整覆盖笔时，与盘后红框中枢显示
             # （compute_red_range_zs 报"红框内无完整笔"）保持一致——不判背驰、
             # 不放行买卖点（原 return True 默认判背驰=放行，属评审 P1 假阳性）。
-            self._dbg_bs('check_nested_diver', '找不到被红框[C,D]完全覆盖的笔',
+            self._dbg_bs('check_nesting_divergence', '找不到被红框[C,D]完全覆盖的笔',
                          fx_a=fx_a_sub_dt, fx_b=fx_b_sub_dt)
             return False  # 不背驰（无完整笔即无买卖点，与盘后中枢显示一致）
 
         sub_bi_sliced = list(sub_bi_list[start_bi_idx:end_bi_idx + 1])
         bi_count = len(sub_bi_sliced)
-        self._dbg_bs('check_nested_diver', '子级别笔范围',
+        self._dbg_bs('check_nesting_divergence', '子级别笔范围',
                      start_bi_idx=start_bi_idx, end_bi_idx=end_bi_idx,
                      bi_count=bi_count)
 
@@ -858,7 +858,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # 场景一：笔序列形成中枢(1个或多个)
         if has_zs:
             result = _red_range_zs_diver(sub_bi_sliced, main_bi, zs_data)
-            self._dbg_bs('check_nested_diver', '有中枢背驰判断',
+            self._dbg_bs('check_nesting_divergence', '有中枢背驰判断',
                          detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
 
@@ -866,13 +866,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         if bi_count == 1:
             # 子场景⑴：仅一笔
             result = _red_range_single_bi_diver(sub_bi_sliced[0])
-            self._dbg_bs('check_nested_diver', '无中枢单笔背驰判断',
+            self._dbg_bs('check_nesting_divergence', '无中枢单笔背驰判断',
                          detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
         else:
             # 子场景⑵：有多笔
             result = _red_range_multi_bi_diver(sub_bi_sliced)
-            self._dbg_bs('check_nested_diver', '无中枢多笔背驰判断',
+            self._dbg_bs('check_nesting_divergence', '无中枢多笔背驰判断',
                          detail=result['detail'], diverged=result['diverged'])
             return result['diverged']
 
@@ -1699,7 +1699,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
 # ═══════════════════════════════════════════════════════════
 # 区间套辅助函数
-# 主要用于 check_nested_diver 计算背驰，
+# 主要用于 check_nesting_divergence 计算背驰，
 # 红框功能（App 引擎层）通过 import 复用
 # ═══════════════════════════════════════════════════════════
 
@@ -1973,7 +1973,7 @@ def _red_range_bi_sequence(fx_a_sub_dt, fx_b_sub_dt, sub_bi_list, sub_freq):
 
     2026-09-02 由「有交叠即纳入」回退为「完全覆盖」（一致性决策）：
       · 完全覆盖：bi 的 sdt >= fx_a_sub_dt 且 bi 的 edt <= fx_b_sub_dt（完全框住）。
-        实时区间套买卖点判断（check_nested_diver）与盘后红框中枢显示
+        实时区间套买卖点判断（check_nesting_divergence）与盘后红框中枢显示
         （compute_red_range_zs / 前端 updateDualNewZs）共用本函数，必须保持
         同一选笔语义，否则两者结果不一致。前端 updateDualNewZs 调后端
         /red-range 接口、无独立选笔逻辑，故只需后端统一。

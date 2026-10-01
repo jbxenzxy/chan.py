@@ -215,13 +215,53 @@ def load_records(path):
     return rows
 
 
+def _read_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _first_diff(a, b):
+    """两份字节串首个不同处的下标（把漂移定位到具体位置，方便排查）"""
+    n = min(len(a), len(b))
+    for i in range(n):
+        if a[i] != b[i]:
+            return i
+    return n
+
+
+def _same_content(a_path, b_path):
+    """比对两份 fixtures，返回 (是否等价, 原因)。
+
+    为什么不能直接用 filecmp 做二进制比对：`core.autocrlf=true`（Windows 常见配置）
+    会在 checkout 时把工作树文本逐行翻成 CRLF，而生成器写出来的是 LF（见 `_write`）。
+    字节比对于是把「检出形态差异」判成了「数据漂移」——Windows 上 6 条 CHECK-FAIL
+    恒红、真正的手改漂移被淹没在恒红里（fixtures_integrity 组件等于失效）。
+    故改成分级比对，只有最后一级才判漂移：
+      ① 字节相同；
+      ② 换行归一（CRLF→LF）后相同 → 只是检出形态不同；
+      ③ JSON 解析后对象相同 → 只是缩进/键序不同；
+      ④ 其余 → 真漂移，并给出首个不同字节的位置。
+    """
+    ba, bb = _read_bytes(a_path), _read_bytes(b_path)
+    if ba == bb:
+        return True, "字节一致"
+    na, nb = ba.replace(b"\r\n", b"\n"), bb.replace(b"\r\n", b"\n")
+    if na == nb:
+        return True, "仅换行差异（CRLF 检出），非数据漂移"
+    try:
+        if json.loads(ba.decode("utf-8")) == json.loads(bb.decode("utf-8")):
+            return True, "语义一致（缩进/键序不同），非数据漂移"
+    except Exception:                                          # noqa: BLE001
+        pass
+    return False, "数据漂移，首个不同字节 #%d" % _first_diff(na, nb)
+
+
 def _write(name, obj):
     path = os.path.join(FIXTURE_DIR, name)
     # newline="\n" 必须显式指定：默认文本模式在 Windows 会把 json.dump 写出的
-    # \n 逐行翻成 \r\n，而仓库内冻结的 fixtures 是 LF（350KB 级文件的每一行都
-    # 不同）。后果不是「文件多了几个字节」——`--check` 用 filecmp 做**二进制**
-    # 比对，于是 Windows 上 6 条 CHECK-FAIL 恒红、真正的手改漂移被淹没在恒红
-    # 里看不出来（fixtures_integrity 组件在 Windows 上等于失效）。
+    # \n 逐行翻成 \r\n，让冻结文件随「在哪台机器上生成」而变形。
+    # 注意这不能反过来要求工作树必须是 LF —— checkout 形态由 git 的
+    # core.autocrlf 决定，判据要能容忍它（见 `_same_content`）。
     with open(path, "w", encoding="utf-8", newline="\n") as f:
         json.dump(obj, f, ensure_ascii=False, indent=1, sort_keys=True)
     return path
@@ -251,16 +291,19 @@ if __name__ == "__main__":
     if "--check" in sys.argv:
         # 校验现有 fixtures 未被手改（重生成到临时目录并比对）
         import tempfile
-        import filecmp
         with tempfile.TemporaryDirectory() as td:
             FIXTURE_DIR = td
             generate_all()
             real = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
             ok = True
-            for f in os.listdir(td):
-                if not filecmp.cmp(os.path.join(td, f), os.path.join(real, f), shallow=False):
-                    print(f"[CHECK-FAIL] {f} 与生成器输出不一致")
+            for f in sorted(os.listdir(td)):
+                same, why = _same_content(os.path.join(td, f),
+                                          os.path.join(real, f))
+                if not same:
+                    print(f"[CHECK-FAIL] {f} 与生成器输出不一致（{why}）")
                     ok = False
+                elif why != "字节一致":
+                    print(f"[CHECK-NOTE] {f}：{why}")
         print("[CHECK] 全部一致" if ok else "[CHECK] 存在漂移，请重新生成并重冻结快照")
         sys.exit(0 if ok else 1)
     generate_all()

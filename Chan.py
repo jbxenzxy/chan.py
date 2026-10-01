@@ -32,7 +32,7 @@ class CChan:
             lv_list = [KL_TYPE.K_DAY, KL_TYPE.K_60M]
         check_kltype_order(lv_list)  # lv_list顺序从高到低
         self.code = code
-        self.market_type = market_type  # "stock" / "futures" 等，传递到 CKLine_List → check_nested_divergence
+        self.market_type = market_type  # "stock" / "futures" 等，传递到 CKLine_List → check_nesting_divergence
         self.begin_time = str(begin_time) if isinstance(begin_time, datetime.date) else begin_time
         self.end_time = str(end_time) if isinstance(end_time, datetime.date) else end_time
         self.autype = autype

@@ -949,7 +949,7 @@ class AppData:
         """清空全部期货分析缓存（持 _futures_cache_lock，线程安全）
 
         期货切股票时由 _cleanup_all_futures_data 调用：双窗下窗 chan
-        若残留，后续区间套 check_nested_diver / compute_red_range_zs
+        若残留，后续区间套 check_nesting_divergence / compute_red_range_zs
         经 futures_cache_get 会读到过期中间状态，必须整池清空。
 
         注：清理只对「当前无 SSE 连接写入」成立；正在推送的连接在下一
@@ -1049,8 +1049,8 @@ class AppData:
     # ── 股票双窗独立化 ──────────────────────────────────────────
     #    仿期货子窗缓存建「股票下窗 CChan 运行时缓存」：
     #      · 写入方：_analyze_stock_internal 独立双窗路径（先建下窗再建上窗，
-    #        保证上窗 bsp 计算的区间套 check_nested_diver 能整读到完整下窗）；
-    #      · 读取方：check_nested_diver（区间套）与 compute_red_range_zs
+    #        保证上窗 bsp 计算的区间套 check_nesting_divergence 能整读到完整下窗）；
+    #      · 读取方：check_nesting_divergence（区间套）与 compute_red_range_zs
     #        （红框中枢，读独立下窗；miss 抛错，对齐期货语义）。
     #    键不带复盘日期后缀（运行时态，随每次双窗重建覆盖），
     #    与 dual_sub 结构化缓存（带 date_suffix，存 result/records）职责分离。
