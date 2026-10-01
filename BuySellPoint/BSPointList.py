@@ -934,17 +934,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ㈠ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
         # 向下笔C(买点)：笔B高点 <= 笔A高点
         # 向上笔C(卖点)：笔B低点 >= 笔A低点
-        if stroke_n.is_down() and stroke_b._high() > stroke_a._high():
+        if stroke_n.is_down():
+            b_ext, a_ext = stroke_b._high(), stroke_a._high()
+            is_lightning = b_ext <= a_ext
+        else:
+            b_ext, a_ext = stroke_b._low(), stroke_a._low()
+            is_lightning = b_ext >= a_ext
+        if not is_lightning:
             self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
-                          b_idx=stroke_b.idx,
-                          a_idx=stroke_a.idx,
-                          b_high=stroke_b._high(), a_high=stroke_a._high())
-            return
-        if stroke_n.is_up() and stroke_b._low() < stroke_a._low():
-            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
-                          b_idx=stroke_b.idx,
-                          a_idx=stroke_a.idx,
-                          b_low=stroke_b._low(), a_low=stroke_a._low())
+                          b_idx=stroke_b.idx, a_idx=stroke_a.idx, b_ext=b_ext, a_ext=a_ext)
             return
 
         # ㈡ 笔C是否破笔A极值 —— 两种情况（占位：两情况当前处理一致，留待后续分化）
@@ -965,7 +963,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         c_dif_ok = self._dif_all_same_side(stroke_n, dif_positive)
         a_dif_ok = self._dif_all_same_side(stroke_a, dif_positive)
 
-        # ⑶ 回0轴回抽比例
+        # ⑶ 回抽0轴比例
         config = self.config.GetBSConfig(is_buy)
         A_dif = stroke_a.get_begin_klu().macd.DIF
         C_dif = stroke_n.get_end_klu().macd.DIF
@@ -974,7 +972,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not (c_dif_ok and a_dif_ok and ratio_ok):
-            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。DIF 未整笔站在趋势侧 或 回0轴不足',
+            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           c_dif_ok=c_dif_ok, a_dif_ok=a_dif_ok, ratio_ok=ratio_ok,
                           c_dif_min=round(min(k.macd.DIF for klc in stroke_n.klc_lst for k in klc.lst), 4),
@@ -989,7 +987,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_bar_diver(stroke_n, stroke_a, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
-            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。最近同向，MACD BAR 未背驰',
+            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。最近同向笔 MACD BAR 未背驰',
                           nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
                           divergence_rate=round(divergence_rate, 2),
                           threshold=round(config.divergence_rate, 2))
