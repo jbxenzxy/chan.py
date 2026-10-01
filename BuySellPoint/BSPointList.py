@@ -952,14 +952,16 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 c_dist = abs(C_dif)  # 笔C高点 DIF（应在0轴下，绝对值即距离）
             # 两笔极值都须在正确侧：买→0轴上(A_dif>0且C_dif>0)，卖→0轴下(A_dif<0且C_dif<0)
             sign_ok = (A_dif > 0 and C_dif > 0) if is_buy else (A_dif < 0 and C_dif < 0)
-            ratio_ok = a_dist != 0 and (a_dist - c_dist) / a_dist > config.retrace_zero_axis_ratio
+            dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
+            ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
             if not (sign_ok and ratio_ok):
                 self._dbg_bs0(' _cal_bs0point_3rd', '情况二: 跳过。MACD DIF 未回0轴',
                               stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                               A_dif=round(A_dif, 4), C_dif=round(C_dif, 4),
-                              a_dist=round(a_dist, 4), c_dist=round(c_dist, 4))
+                              sign_ok=sign_ok, ratio_ok=ratio_ok,
+                              dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
+                              threshold=round(config.retrace_zero_axis_ratio, 4))
                 return
-            dif_ratio = (a_dist - c_dist) / a_dist
 
         # MACD BAR 背离判定
         is_buy = stroke_n.is_down()
