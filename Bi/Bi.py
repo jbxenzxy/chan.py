@@ -6,10 +6,10 @@ from Common.ChanException import CChanException, ErrCode
 from KLine.KLine import CKLine
 from KLine.KLine_Unit import CKLine_Unit
 
-# MACD 同侧（红绿柱）占比阈值：
+# MACD 同侧（红绿柱）面积占比阈值（is_macd_same_side_dominant 判定用）：
 # 0.9 = 整笔 MACD 同侧面积占比 ≥ 90%
 # 1.0 = 严格（零反向面积）
-MACD_CONFINE_RATIO = 0.9
+MACD_SAME_SIDE_RATIO = 0.9
 
 class CBi:
     def __init__(self, begin_klc: CKLine, end_klc: CKLine, idx: int, is_sure: bool):
@@ -461,13 +461,13 @@ class CBi:
             return (end_klu.high-begin_klu.low)/begin_klu.low
 
     @make_cache
-    def is_macd_confined(self):
+    def is_macd_same_side_dominant(self):
         """
-        整笔区间内 MACD 红绿柱与笔方向「同侧面积占比」达到 MACD_CONFINE_RATIO 即满足
+        整笔区间内 MACD 红绿柱与笔方向「同侧面积占比」达到 MACD_SAME_SIDE_RATIO 即满足
           - 向下笔: 期望绿柱(macd<0)；向上笔: 期望红柱(macd>0)
-          - MACD_CONFINE_RATIO=1.0 -> 严格(零反向面积)
+          - MACD_SAME_SIDE_RATIO=1.0 -> 严格(零反向面积)
         面积加权: 同侧面积=Σ|macd|(同侧)，总面积=Σ|macd|(全部≠0)，ratio=同侧/总面积
-        macd==0 视为中性，既不进分子也不进分母。空笔返回 False
+        macd==0 视为中性，既不进分子也不进分母。空笔或整笔全中性柱返回 False
         """
         klus = [k for klc in self.klc_lst for k in klc.lst]
         if not klus:
@@ -481,13 +481,14 @@ class CBi:
             total_area += abs(m)
             if m * expected > 0:
                 same_area += abs(m)
-        ratio = same_area / total_area if total_area > 0 else 0.0
+        if total_area <= 0:  # 整笔全中性柱：无同侧证据，保守 False（与空笔口径一致）
+            return False
         # 用面积直接比较并留 1e-9 容差：浮点下 0.9 可能算成 0.89999999，
         # 需保证阈值闭区间可命中（0.9 满足、1.0=严格 100%）
-        return same_area >= MACD_CONFINE_RATIO * total_area - 1e-9
+        return same_area >= MACD_SAME_SIDE_RATIO * total_area - 1e-9
 
     @make_cache
-    def is_macd_lines_below_zero(self):
+    def is_macd_lines_same_side(self):
         """
         整笔区间内黄白线(DIF/DEA)与笔方向同侧且均在 0 轴下(上)。
           - 向下笔: 要求 DIF<0 且 DEA<0（整笔每一根）
