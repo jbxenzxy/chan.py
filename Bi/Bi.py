@@ -404,7 +404,7 @@ class CBi:
     @make_cache
     def Cal_MACD_diff(self):
         """
-        macd红绿柱最大值最小值之差
+        返回值：最大红柱值 - 最小绿柱值
         """
         _max, _min = float("-inf"), float("inf")
         for klc in self.klc_lst:
