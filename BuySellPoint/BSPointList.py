@@ -687,12 +687,13 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                          bi_dir='up' if stroke_n.is_up() else 'down',
                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
             return None
-
+        
         fx_label = '最强分型' if fx_strength == 2 else '强分型'
         self._dbg_bs('cal_bsp_precondition', f'前置检查「通过」: {fx_label}............',
                      stroke_n_idx=stroke_n.idx,
                      bi_dir='up' if stroke_n.is_up() else 'down',
                      stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
+
         return (pivot_a, stroke_n)
 
     def check_nesting_divergence(self, bi_list, zs_list):
