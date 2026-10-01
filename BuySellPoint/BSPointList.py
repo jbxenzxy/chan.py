@@ -136,9 +136,21 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
     def __len__(self):
         return len(self.bsp_store_flat_dict)
 
-    def _has_bsp_for_bi(self, bi_idx: int) -> bool:
-        """检查是否存在以 bi_idx 为键的买卖点（flat_dict 键为 (bi.idx, klu.idx)）。"""
-        return any(k[0] == bi_idx for k in self.bsp_store_flat_dict)
+    @staticmethod
+    def _cur_anchor_klu(bi):
+        """笔的当前右肩锚定K线：延伸后随端点移动（add_bs 挂载与 _has_bsp_for_bi 查询共用）。"""
+        end_klc = getattr(bi, 'end_klc', None)
+        right_klc = getattr(end_klc, 'next', None) if end_klc else None
+        return right_klc.lst[-1] if right_klc and right_klc.lst else bi.get_end_klu()
+
+    def _has_bsp_for_bi(self, bi) -> bool:
+        """检查笔的「当前端点分型处」是否存在买卖点（传入笔对象，非索引）。
+
+        匹配键与 add_bs 挂载键同源：(bi.idx, 当前右肩klu.idx)。笔延伸后端点/右肩
+        随之移动，旧分型位置的信号不再命中——即笔A延伸为A'后，A旧分型处产生的
+        信号不算数，须 A' 当前分型处产生了信号才返回 True（2026-10-01 拍板）。
+        """
+        return (bi.idx, self._cur_anchor_klu(bi).idx) in self.bsp_store_flat_dict
 
     def cal(self, bi_list: LINE_LIST_TYPE, seg_list: CSegListComm[LINE_TYPE]):
         self.clear_store_end()
@@ -173,10 +185,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
         feature_dict=None,
     ):
         is_buy = bi.is_down()
-        # 计算当前右肩K线位置，作为查找键的一部分
-        end_klc = getattr(bi, 'end_klc', None)
-        right_klc = getattr(end_klc, 'next', None) if end_klc else None
-        cur_klu = right_klc.lst[-1] if right_klc and right_klc.lst else bi.get_end_klu()
+        cur_klu = self._cur_anchor_klu(bi)
         # 按 (bi.idx, klu.idx) 查找：同一笔同一K线位置 → 追加类型；否则 → 新建
         if exist_bsp := self.bsp_store_flat_dict.get((bi.idx, cur_klu.idx)):
             assert exist_bsp.is_buy == is_buy
@@ -285,7 +294,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
                 return
             bsp22_bi = bi_list[1]
             break_bi = bi_list[0]
-        if BSP_CONF.bsp22_follow_11 and (not bsp11_bi or not self._has_bsp_for_bi(bsp11_bi.idx)):
+        if BSP_CONF.bsp22_follow_11 and (not bsp11_bi or not self._has_bsp_for_bi(bsp11_bi)):
             return
         retrace_rate = bsp22_bi.amp()/break_bi.amp()
         bsp22_flag = retrace_rate <= BSP_CONF.max_bs22_rate
@@ -362,7 +371,7 @@ class CBSPointList(Generic[LINE_TYPE, LINE_LIST_TYPE]):
                 bsp11_bi, real_bsp11 = None, None
                 bsp11_bi_idx = -1
                 BSP_CONF = self.config.GetBSConfig(seg.is_up())
-            if BSP_CONF.bsp33_follow_11 and (not bsp11_bi or not self._has_bsp_for_bi(bsp11_bi.idx)):
+            if BSP_CONF.bsp33_follow_11 and (not bsp11_bi or not self._has_bsp_for_bi(bsp11_bi)):
                 continue
             if next_seg:
                 self.treat_bsp33_after(seg_list, next_seg, BSP_CONF, bi_list, real_bsp11, bsp11_bi_idx, next_seg_idx)
@@ -1453,7 +1462,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             return
 
         # 笔N-2上需有买/卖点(一买确认后才有二买)
-        if not self._has_bsp_for_bi(stroke_nm2.idx):
+        if not self._has_bsp_for_bi(stroke_nm2):
             self._dbg_bs2('cal_bs2point', '跳过: 笔N-2上没有买/卖点',
                           n_2_idx=stroke_nm2.idx)
             return
