@@ -682,7 +682,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ㈢ 分型检查（过滤弱分型/中继）
         fx_strength = self._is_strong_fx(stroke_n)
         if fx_strength == 0:
-            self._dbg_bs('cal_bsp_precondition', '前置检查跳过: 弱分型',
+            self._dbg_bs('cal_bsp_precondition', '前置检查跳过: 弱分型............',
                          stroke_n_idx=stroke_n.idx,
                          bi_dir='up' if stroke_n.is_up() else 'down',
                          stroke_high=stroke_n._high(), stroke_low=stroke_n._low())
@@ -880,7 +880,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     # ── 0类买卖点(中枢震荡) ──
     # ═══════════════════════════════════════════════════════════
     def cal_bs0point(self, bi_list: LINE_LIST_TYPE, zs_list=None, pivot_a=None, stroke_n=None):
-        self._dbg_bs0('cal_bs0point', '进入..................', bi_idx=len(bi_list)-1)
+        self._dbg_bs0('cal_bs0point', '进入............', bi_idx=len(bi_list)-1)
 
         # 笔N与中枢A要有重叠
         if not has_overlap(stroke_n._low(), stroke_n._high(), pivot_a.low, pivot_a.high):
