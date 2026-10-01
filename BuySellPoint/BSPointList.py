@@ -960,7 +960,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         case_no = 2 if broke_a else 1
         case_str = '情况一' if case_no == 1 else '情况二'
 
-        # ⑴ ⑵ 整笔 DIF 侧别
+        # ⑴ ⑵ 整笔 DIF 是否全在趋势侧
         dif_positive = is_buy
         c_dif_ok = self._dif_all_same_side(stroke_n, dif_positive)
         a_dif_ok = self._dif_all_same_side(stroke_a, dif_positive)
@@ -974,7 +974,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not (c_dif_ok and a_dif_ok and ratio_ok):
-            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。DIF 整笔侧别/回0轴 未达标',
+            self._dbg_bs0(' _cal_bs0point_3rd', f'{case_str}: 跳过。DIF 未整笔站在趋势侧 或 回0轴不足',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           c_dif_ok=c_dif_ok, a_dif_ok=a_dif_ok, ratio_ok=ratio_ok,
                           c_dif_min=round(min(k.macd.DIF for klc in stroke_n.klc_lst for k in klc.lst), 4),
