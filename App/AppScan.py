@@ -301,7 +301,8 @@ def _quick_prefilter_pass(market, code, check_st=True, min_float_mc=None):
       - pass_filter=False 表示应跳过
       - skip_reason 为跳过原因字符串（如 "ST" / "流通市值<50亿"）
     参数:
-      check_st: 是否做 ST/*ST/退市过滤（历史口径仅成分股来源启用）
+      check_st: 是否做 ST/*ST/退市过滤（2026-10-02 起自选股/成分股/全A股
+                统一启用；板块指数2/3 来源不走预过滤）
       min_float_mc: 流通市值下限（亿）；None=用配置默认 app_config.scan_min_float_mc；
                     <=0=关闭市值过滤（阈值由前端设置抽屉配置，随请求传入）
     """
@@ -309,7 +310,11 @@ def _quick_prefilter_pass(market, code, check_st=True, min_float_mc=None):
         # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断）
         if check_st:
             try:
-                compound_key = ("sh" if market == "1" else "sz" if market == "0" else "bj") + code
+                # market 兼容两种编码：字母（stock_list 预过滤现传 sh/sz/bj）与
+                # 数字（1/0/2，历史编码）。此前只认数字 → compound_key 恒拼成
+                # "bj"+code，sh/sz 名称永远查不到，ST 过滤事实失效（2026-10-02 修复）。
+                compound_key = (market if market in ("sh", "sz", "bj") else
+                                ("sh" if market == "1" else "sz" if market == "0" else "bj")) + code
                 info = _stock_names_cache.get(compound_key, {})
                 name = info.get("name", "") if isinstance(info, dict) else str(info) if info else ""
                 if name and (name.startswith("*ST") or name.startswith("ST") or "退" in name):
@@ -388,33 +393,40 @@ def read_tdxhy_l3_indices():
     return app_data.tdxhy_l3_indices()
 
 
-def read_all_a_stocks():
+def read_all_a_stocks(freq="d"):
     """全A股候选（沪市+深市，不含北交所）：本地 vipdoc 已有 K 线的 A 股个股。
 
-    数据源 = 通达信本地 vipdoc（与 K 线主源同源，Docs/数据源.md §〇）——
-    逐文件名扫 {vipdoc}/{sh|sz}/lday/*.day，按 TdxAPI 前缀常量单一事实源
-    过滤出个股段（sh: 60/68 主板+科创；sz: 00/30 主板+创业，剔除 399 指数段，
-    判定与 is_shareholder_reduction_target 的「仅个股」同构），bj 目录不收
-    = 天然不含北交所。列表 = 本地已有日线的票：vipdoc 没有的票扫描时
-    analyze 本就取不到 K 线，保持「候选即可扫」。前缀编码对齐 zxg.blk
+    数据源 = 通达信本地 vipdoc（与 K 线主源同源，Docs/数据源.md §〇），
+    **目录随扫描周期**：
+      周/日K → {sh|sz}/lday/*.day（周线由日线合成）；
+      5m/15m/30m → {sh|sz}/fzline/*.lc5（5分钟线文件，15m/30m 由 5m 合成）——
+      分钟周期候选 = 本地已下载过 5 分钟线的票：vipdoc 没有的票 analyze
+      取不到分钟 K 线，扫了也白扫。
+    逐文件名按 TdxAPI 前缀常量单一事实源过滤个股段（sh: 60/68 主板+科创；
+    sz: 00/30 主板+创业，剔除 399 指数段，判定与 is_shareholder_reduction_target
+    的「仅个股」同构），bj 目录不收 = 天然不含北交所。前缀编码对齐 zxg.blk
     （0=深 / 1=沪，见 _read_zxg_blk_file）。
     """
     from DataAPI.TdxAPI import (
-        collect_codes_from_vipdoc,
         SH_INCLUDE_PREFIXES, SH_INDEX_PREFIXES,
         SZ_INCLUDE_PREFIXES, SZ_INDEX_PREFIXES,
     )
-    codes = collect_codes_from_vipdoc(app_config.vipdoc_dir)
+    use_minute = freq in ("5m", "15m", "30m")
+    sub, ext = ("fzline", ".lc5") if use_minute else ("lday", ".day")
     stocks = []
-    for compound_key, info in codes.items():
-        market = info.get("market", "")
-        code = compound_key[len(market):]
-        if market == "sh":
-            if code.startswith(SH_INCLUDE_PREFIXES) and not code.startswith(SH_INDEX_PREFIXES):
-                stocks.append({"prefix": "1", "code": code})
-        elif market == "sz":
-            if code.startswith(SZ_INCLUDE_PREFIXES) and not code.startswith(SZ_INDEX_PREFIXES):
-                stocks.append({"prefix": "0", "code": code})
+    for mkt, prefix_num in (("sh", "1"), ("sz", "0")):
+        line_dir = os.path.join(app_config.vipdoc_dir, mkt, sub)
+        if not os.path.isdir(line_dir):
+            continue
+        for fname in os.listdir(line_dir):
+            if not (fname.startswith(mkt) and fname.endswith(ext)):
+                continue
+            code = fname[len(mkt):-len(ext)]
+            if mkt == "sh":
+                if code.startswith(SH_INCLUDE_PREFIXES) and not code.startswith(SH_INDEX_PREFIXES):
+                    stocks.append({"prefix": prefix_num, "code": code})
+            elif code.startswith(SZ_INCLUDE_PREFIXES) and not code.startswith(SZ_INDEX_PREFIXES):
+                stocks.append({"prefix": prefix_num, "code": code})
     return stocks
 
 
@@ -541,12 +553,14 @@ class Scanner:
 
     # ── 股票列表 ─────────────────────────────────────────────────────
     def stock_list(self, source="zxg", page_index_code=None, scan_token=None,
-                   min_float_mc=None):
+                   min_float_mc=None, freq="d"):
         """返回股票列表（支持逗号分隔多来源）
 
         min_float_mc：流通市值过滤下限（亿），随本请求传入（前端设置抽屉
         配置、localStorage 持久化）。None=用配置默认 app_config.scan_min_float_mc；
         <=0=关闭市值过滤，且**不做**市值批量取数（省一次 eltdx 全表）。
+        freq：扫描周期（w/d/30m/15m/5m），全A股候选目录随它切换
+        （周/日→lday，分钟→fzline），随本请求传入。
 
         page_index 来源的板块指数代码**由请求参数传入**，不再读
         进程级全局。原实现读全局 _page_index_code，多网页下 A 页选沪深300、
@@ -576,12 +590,14 @@ class Scanner:
             if _mkt:
                 _idx_code = _bare
 
+        # 全A股候选目录随扫描周期切换（周/日→lday，分钟→fzline）
+        _freq = freq if freq in ("w", "d", "30m", "15m", "5m") else "d"
         _SOURCE_READERS = {
             "zxg": (read_zxg_stocks, "自选股"),
             "page_index": (lambda: _debug_read_page_index_stocks(_idx_code), "成分股"),
             "tdxhy2": (read_tdxhy_l2_indices, "板块指数2"),
             "tdxhy3": (read_tdxhy_l3_indices, "板块指数3"),
-            "all_a": (read_all_a_stocks, "全A股"),
+            "all_a": (lambda: read_all_a_stocks(_freq), "全A股"),
         }
 
         src_stocks = {}
@@ -685,10 +701,10 @@ class Scanner:
                     filtered.append(stk)
                     continue
                 # 市值过滤：自选股/成分股/全A股统一启用（阈值<=0 时函数内跳过）；
-                # ST/退市过滤维持历史口径（仅成分股来源启用，本参数即该开关）。
+                # ST/退市过滤：2026-10-02 用户拍板，自选股/成分股/全A股统一启用
+                # （check_st 缺省 True；板块指数2/3 不走预过滤，不受影响）。
                 pass_ok, pre_mc, skip_reason = _quick_prefilter_pass(
                     market, code,
-                    check_st=(src == "page_index"),
                     min_float_mc=(_threshold if _mc_enabled else 0))
                 if not pass_ok:
                     pre_skip_count += 1

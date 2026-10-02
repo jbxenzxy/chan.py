@@ -63,7 +63,7 @@ def test_all_a_prefix_filter(failures):
         ])
         stub_cfg = types.SimpleNamespace(vipdoc_dir=tmp)
         with mock.patch.object(_scan_mod, "app_config", stub_cfg):
-            got = _scan_mod.read_all_a_stocks()
+            got = _scan_mod.read_all_a_stocks("d")
         expected = {("1", "600519"), ("1", "688001"),
                     ("0", "000001"), ("0", "300750")}
         actual = {(s["prefix"], s["code"]) for s in got}
@@ -101,6 +101,32 @@ def _run_stock_list(source="zxg", min_float_mc=None, mc_value=None):
     return result, calls["n"]
 
 
+def test_minute_period_uses_fzline(failures):
+    """[1b] 5m/15m/30m 读 fzline/*.lc5：lday 独有的票不进分钟候选。"""
+    tmp = tempfile.mkdtemp(prefix="scan_all_a_m_")
+    try:
+        _make_vipdoc(tmp, [
+            ("sh/lday", "sh600519.day"),    # 仅日线存在
+            ("sh/fzline", "sh688001.lc5"),  # 仅5分钟线存在
+            ("sz/fzline", "sz000001.lc5"),  # 深市分钟 ✓
+            ("sz/fzline", "sz399001.lc5"),  # 深成指分钟：指数段剔除
+            ("bj/fzline", "bj830799.lc5"),  # 北交所：不收
+        ])
+        stub_cfg = types.SimpleNamespace(vipdoc_dir=tmp)
+        with mock.patch.object(_scan_mod, "app_config", stub_cfg):
+            got_5m = _scan_mod.read_all_a_stocks("5m")
+            got_30m = _scan_mod.read_all_a_stocks("30m")
+        expected = {("1", "688001"), ("0", "000001")}
+        actual = {(s["prefix"], s["code"]) for s in got_5m}
+        if actual != expected or got_30m != got_5m:
+            failures.append(f"[1b] 分钟候选不符: 5m={sorted(actual)} 30m==5m:{got_30m == got_5m}")
+            print(f"[FAIL] [1b] 分钟周期: {sorted(actual)}")
+        else:
+            print("[PASS] [1b] 分钟周期: fzline/*.lc5 个股段（lday 独有票不进、指数剔除、30m 同 5m）")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_threshold_zero_disables(failures):
     """[2] 阈值 0：不取市值、候选全保留。"""
     result, n = _run_stock_list(min_float_mc=0)
@@ -130,11 +156,28 @@ def test_zxg_filtered_by_threshold(failures):
         print("[PASS] [3b] 高于阈值: 自选股 80亿 >= 50亿 保留")
 
 
+def test_st_filter_applies_to_zxg(failures):
+    """[5] ST/退市过滤扩展到自选股（名称缓存命中 ST 名 → 跳过）。"""
+    cache = _scan_mod._stock_names_cache
+    cache["sh600519"] = {"name": "ST测试"}
+    try:
+        result, _ = _run_stock_list(min_float_mc=50, mc_value=80.0)
+        total = result.get("total")
+        skipped = result.get("pre_skipped")
+        if total != 0 or skipped != 1:
+            failures.append(f"[5] ST 票应被跳过: total={total} pre_skipped={skipped}")
+            print("[FAIL] [5] ST 过滤未作用于自选股")
+        else:
+            print("[PASS] [5] ST/退市过滤已扩展到自选股（非成分股来源同样生效）")
+    finally:
+        cache.pop("sh600519", None)
+
+
 def test_all_a_registered(failures):
     """[4] _SOURCE_READERS 登记 all_a →「全A股」。"""
     code = open(os.path.join(REPO_ROOT, "App", "AppScan.py"), encoding="utf-8").read()
-    if '"all_a": (read_all_a_stocks, "全A股")' not in code:
-        failures.append("[4] _SOURCE_READERS 未登记 all_a 来源")
+    if '"all_a": (lambda: read_all_a_stocks(_freq), "全A股")' not in code:
+        failures.append("[4] _SOURCE_READERS 未登记 all_a 来源（或未随周期传参）")
         print("[FAIL] [4] all_a 未登记")
     else:
         print("[PASS] [4] _SOURCE_READERS 已登记 all_a → 全A股")
@@ -143,8 +186,10 @@ def test_all_a_registered(failures):
 def main():
     failures = []
     test_all_a_prefix_filter(failures)
+    test_minute_period_uses_fzline(failures)
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)
+    test_st_filter_applies_to_zxg(failures)
     test_all_a_registered(failures)
     print("=" * 60)
     if failures:
