@@ -75,6 +75,18 @@ from typing import Dict, List, Optional, Tuple
 _HERE = os.path.dirname(os.path.abspath(__file__))          # <root>/Trading/Tool
 _ROOT = os.path.dirname(os.path.dirname(_HERE))             # <root>
 
+
+def _force_utf8_stdio() -> None:
+    """管道/重定向场景下，Windows 的 Python 默认用系统区域（GBK）编 stdout，
+    而本工具的输出带 ✓/✗（U+2713/U+2717，GBK 无法编码）—— 打印"✓ 一致"时
+    直接 UnicodeEncodeError 崩掉，退出码变 1，调用方（product_fee 测试 [3g]、
+    CI）会把"校验通过"误判成失败。仅在**非交互**（stdout 是管道/文件）时
+    强制 UTF-8；真实控制台保持系统行为（终端有独立的 Unicode 写入通道）。"""
+    for _stream in (sys.stdout, sys.stderr):
+        if _stream is not None and hasattr(_stream, "reconfigure") \
+                and not _stream.isatty():
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+
 XLSX_REL = "Docs/手续费标准-.xlsx"
 TARGET_REL = "Trading/Infra/Product.py"
 SHEET = "Sheet1"
@@ -277,6 +289,7 @@ def _read(path: str) -> str:
 
 
 def main(argv=None) -> int:
+    _force_utf8_stdio()
     ap = argparse.ArgumentParser(
         description="从券商费率表刷新 {} 内的 GENERATED 费率区块".format(TARGET_REL))
     ap.add_argument("--check", action="store_true",
