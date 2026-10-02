@@ -306,8 +306,9 @@ def _quick_prefilter_pass(market, code, check_st=True, min_float_mc=None):
       min_float_mc: 流通市值下限（亿）；None=用配置默认 app_config.scan_min_float_mc；
                     <=0=关闭市值过滤（阈值由前端设置抽屉配置，随请求传入）
     """
+    from App.AppUtils import is_st_like_name as _is_st_like_name
     try:
-        # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断）
+        # 1. 过滤 ST/*ST/退市股票（通过名称缓存判断；判定谓词 = App.AppUtils 单一事实源）
         if check_st:
             try:
                 # market 兼容两种编码：字母（stock_list 预过滤现传 sh/sz/bj）与
@@ -317,7 +318,7 @@ def _quick_prefilter_pass(market, code, check_st=True, min_float_mc=None):
                                 ("sh" if market == "1" else "sz" if market == "0" else "bj")) + code
                 info = _stock_names_cache.get(compound_key, {})
                 name = info.get("name", "") if isinstance(info, dict) else str(info) if info else ""
-                if name and (name.startswith("*ST") or name.startswith("ST") or "退" in name):
+                if name and _is_st_like_name(name):
                     return (False, None, "ST")
             except Exception:
                 pass  # 名称查找失败不跳过

@@ -43,6 +43,7 @@ from App.AppErrors import DataFetchError, AnalysisError
 # 区间套辅助（红框中枢重算：compute_red_range_zs 使用，与 AppEngine 同源）
 from BuySellPoint.BSPointList import _red_range_bi_sequence, _red_range_amp
 from App.AppLog import get_logger
+from App.AppUtils import is_st_like_name
 log = get_logger(__name__)
 
 
@@ -551,6 +552,10 @@ def search_stocks(q):
         name = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in name)
         pinyin = "".join(chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in pinyin)
         if not name:
+            continue
+        # ST/*ST/退市整理股不在搜索结果中显示（2026-10-02 起名称表保留这些股，
+        # 隐藏改由消费端执行；判定单一事实源 = App.AppUtils.is_st_like_name）
+        if is_st_like_name(name):
             continue
 
         if market and compound_key.startswith(market):

@@ -173,6 +173,32 @@ def test_st_filter_applies_to_zxg(failures):
         cache.pop("sh600519", None)
 
 
+def test_st_predicate_wiring(failures):
+    """[6] ST 判定单点化：谓词正确 + 刷新不再删 ST + 搜索端接线。"""
+    from App.AppUtils import is_st_like_name
+    for n in ("*ST西旅", "ST沈化", "顺利退"):
+        if not is_st_like_name(n):
+            failures.append(f"[6] 谓词漏判 {n!r}")
+            print(f"[FAIL] [6] 谓词漏判: {n!r}")
+            return
+    for n in ("平安银行", "贵州茅台", ""):
+        if is_st_like_name(n):
+            failures.append(f"[6] 谓词误判 {n!r}")
+            print(f"[FAIL] [6] 谓词误判: {n!r}")
+            return
+    rf = open(os.path.join(REPO_ROOT, "App", "AppRefresh.py"), encoding="utf-8").read()
+    if "filtered_st" in rf:
+        failures.append("[6] 名称刷新仍在删除 ST 股（filtered_st 残留）")
+        print("[FAIL] [6] AppRefresh 仍删 ST")
+        return
+    ch = open(os.path.join(REPO_ROOT, "App", "AppChart.py"), encoding="utf-8").read()
+    if "is_st_like_name" not in ch:
+        failures.append("[6] search_stocks 未接 ST 过滤")
+        print("[FAIL] [6] 搜索端未接线")
+        return
+    print("[PASS] [6] ST 判定单点化：谓词 6 例 + 刷新保留 + 搜索端过滤在位")
+
+
 def test_all_a_registered(failures):
     """[4] _SOURCE_READERS 登记 all_a →「全A股」。"""
     code = open(os.path.join(REPO_ROOT, "App", "AppScan.py"), encoding="utf-8").read()
@@ -190,6 +216,7 @@ def main():
     test_threshold_zero_disables(failures)
     test_zxg_filtered_by_threshold(failures)
     test_st_filter_applies_to_zxg(failures)
+    test_st_predicate_wiring(failures)
     test_all_a_registered(failures)
     print("=" * 60)
     if failures:

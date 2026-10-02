@@ -461,25 +461,18 @@ def _refresh_stock_names():
                 market = ""
             all_names[code] = {"name": name, "pinyin": "", "market": market}
 
-    # === 过滤 ST、*ST、退市股票，不写入缓存 ===
+    # === 过滤空名条目（vipdoc 有文件而新浪也无名的退市/僵尸代码），不写入缓存 ===
+    # 2026-10-02 用户裁定：ST/*ST/退市整理股**保留**在名称表中——扫描预过滤
+    # 的 ST 判定（AppScan._quick_prefilter_pass）依赖本表查名，此前「落盘前删
+    # ST」让判定查空放行、ST 股漏进扫描结果；搜索框的 ST 隐藏改由消费端
+    # search_stocks 自行过滤（判定单一事实源 = App.AppUtils.is_st_like_name）。
     filtered_count = 0
     filtered_empty = 0
-    filtered_st = 0
-    filtered_delist = 0
     for _code in list(all_names.keys()):
-        name = all_names[_code].get("name", "")
-        if not name:
+        if not all_names[_code].get("name", ""):
             del all_names[_code]
             filtered_count += 1
             filtered_empty += 1
-        elif name.startswith("*ST") or name.startswith("ST"):
-            del all_names[_code]
-            filtered_count += 1
-            filtered_st += 1
-        elif "退" in name:
-            del all_names[_code]
-            filtered_count += 1
-            filtered_delist += 1
     # === 步骤5 落盘前的质量门槛（见 _REFRESH_NAMES_MIN_KEEP_RATIO 注释）===
     _old_count = len(app_data.names_snapshot())
     _new_count = len(all_names)
@@ -499,8 +492,6 @@ def _refresh_stock_names():
         hk_count = sum(1 for c in all_names if all_names[c].get("market") == "hk")
         if filtered_count > 0:
             parts = []
-            if filtered_st: parts.append(f"ST/*ST {filtered_st}只")
-            if filtered_delist: parts.append(f"退市 {filtered_delist}只")
             if filtered_empty: parts.append(f"无名 {filtered_empty}只")
             log.info(f"[股名刷新] 步骤5/5 过滤保存: 过滤 {filtered_count} 只 ({', '.join(parts)}), 最终 {len(all_names)} 只 (上海{sh_count}, 深圳{sz_count}, 港股{hk_count})")
         else:

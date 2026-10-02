@@ -369,6 +369,17 @@ def _find_left_shoulder_time(kl_list, bi_list, bi_idx, freq):
     return first_klu.time.toFmtStr(_get_date_fmt(freq))
 
 
+# ── 证券名称判定（ST/*ST/退市整理）──
+# 单一事实源：扫描预过滤（AppScan._quick_prefilter_pass 跳过 ST 股）与
+# 搜索框（AppChart.search_stocks 不显示 ST 股）共用同一判定，防两端漂移。
+# 语义沿用原名称刷新的落盘过滤口径：*ST / ST 前缀 / 名含「退」。
+def is_st_like_name(name):
+    """名称是否为 ST/*ST/退市整理股（空名返回 False）。"""
+    if not name:
+        return False
+    return name.startswith("*ST") or name.startswith("ST") or "退" in name
+
+
 # ── 期货双窗口周期映射（上窗周期 → 下窗周期）──
 _FUTURES_DUAL_FREQ_MAP = {
     "30m": "5m",
