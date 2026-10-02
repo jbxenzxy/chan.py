@@ -76,6 +76,17 @@ _HERE = os.path.dirname(os.path.abspath(__file__))          # <root>/Trading/Too
 _ROOT = os.path.dirname(os.path.dirname(_HERE))             # <root>
 
 
+def _rel(path: str) -> str:
+    """相对 _ROOT 的展示路径。target 可能来自别的盘符（如测试把副本放
+    %TEMP%（C:）而仓库在 D:）—— os.path.relpath 跨盘符直接抛
+    ValueError: path is on mount 'C:', start on mount 'D:'，会把**成功的
+    校验**炸成 rc=1（product_fee 测试 [3g] 的第二次假红）。此时退回绝对路径。"""
+    try:
+        return os.path.relpath(path, _ROOT).replace("\\", "/")
+    except ValueError:
+        return os.path.abspath(path).replace("\\", "/")
+
+
 def _force_utf8_stdio() -> None:
     """管道/重定向场景下，Windows 的 Python 默认用系统区域（GBK）编 stdout，
     而本工具的输出带 ✓/✗（U+2713/U+2717，GBK 无法编码）—— 打印"✓ 一致"时
@@ -333,25 +344,25 @@ def main(argv=None) -> int:
     if args.check:
         if new_text == text:
             print("[GenFeeTable] ✓ 一致：{} 的费率区块与 {} 同步".format(
-                os.path.relpath(target, _ROOT).replace("\\", "/"), XLSX_REL))
+                _rel(target), XLSX_REL))
             return 0
         print("[GenFeeTable] ✗ {} 的费率区块与 {} **不一致** —— "
               "请重跑生成器（或区块被手改过，请还原）".format(
-                  os.path.relpath(target, _ROOT).replace("\\", "/"), XLSX_REL))
+                  _rel(target), XLSX_REL))
         return 1
 
     if new_text != text:
         with open(target, "w", encoding="utf-8", newline="") as f:
             f.write(new_text)
         print("[GenFeeTable] ✓ 已刷新 {} 的费率区块（{} 个基准档，{} 个带覆盖档）".format(
-            os.path.relpath(target, _ROOT).replace("\\", "/"),
+            _rel(target),
             len(tables["base"]), len(tables["overrides"])))
         for code in sorted(tables["base"]):
             o, ct = tables["base"][code]
             print("    {:<3s} 开仓 {} | 平今 {}".format(code, _fmt_fee(o), _fmt_fee(ct)))
     else:
         print("[GenFeeTable] ✓ {} 的费率区块已是最新（无改动）".format(
-            os.path.relpath(target, _ROOT).replace("\\", "/")))
+            _rel(target)))
     return 0
 
 
