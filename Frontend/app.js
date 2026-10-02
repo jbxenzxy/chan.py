@@ -220,6 +220,8 @@
 
         let _scanFreq = "d"; // 扫描周期，默认日K
 
+        let _scanMinFloatMc = 50; // 流通市值过滤下限（亿）；0 = 不过滤（设置抽屉可改，localStorage 持久化）
+
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false;
 
         let _dateInputTriggered = false;   // input 已触发 gotoDate，change 跳过
@@ -5486,7 +5488,7 @@
 
         // 扫描来源→中文标签（多选时用顿号连接）
         function _scanSourceLabel() {
-            var map = {"zxg": "自选股", "page_index": "成分股", "tdxhy2": "板块指数2", "tdxhy3": "板块指数3"};
+            var map = {"zxg": "自选股", "page_index": "成分股", "tdxhy2": "板块指数2", "tdxhy3": "板块指数3", "all_a": "全A股"};
             var labels = [];
             for (var i = 0; i < _scanSources.length; i++) {
                 labels.push(map[_scanSources[i]] || _scanSources[i]);
@@ -5648,7 +5650,7 @@
                     var valid = [];
                     for (var i = 0; i < arr.length; i++) {
                         var v = arr[i].trim();
-                        if (v === "zxg" || v === "page_index" || v === "tdxhy2" || v === "tdxhy3") {
+                        if (v === "zxg" || v === "page_index" || v === "tdxhy2" || v === "tdxhy3" || v === "all_a") {
                             valid.push(v);
                         }
                     }
@@ -5669,6 +5671,10 @@
                     var radio = document.querySelector('input[name="scan-freq"][value="' + savedFreq + '"]');
                     if (radio) radio.checked = true;
                 }
+                var savedMc = parseFloat(localStorage.getItem("scan_min_float_mc"));
+                if (!isNaN(savedMc) && savedMc >= 0) _scanMinFloatMc = savedMc;
+                var mcInput = document.getElementById("scan-min-float-mc");
+                if (mcInput) mcInput.value = String(_scanMinFloatMc);
             } catch(e) {}
             // "成分股"选项一直可见：当前页面是可获取成分股的指数时可用，否则灰化禁用
             var pageIndexLabel = document.getElementById("label-page-index");
@@ -5702,6 +5708,8 @@
             if (freq) url += "&freq=" + freq;
             if (pageIndexCode) url += "&page_index_code=" + encodeURIComponent(pageIndexCode);
             if (scanToken) url += "&scan_token=" + encodeURIComponent(scanToken);
+            // 流通市值过滤阈值随请求走（与 page_index_code 同一多页契约）；0 = 后端关闭过滤且不取市值
+            url += "&scan_min_float_mc=" + _scanMinFloatMc;
             return fetch(url)
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -8060,6 +8068,19 @@
         syncBspFilterFromTrader();
 
         initCoordSystemRadio();
+
+        // 流通市值过滤输入框（设置抽屉）：change 即持久化，不设 window 绑定（window 面冻结）
+        (function() {
+            var mcInput = document.getElementById("scan-min-float-mc");
+            if (!mcInput) return;
+            if (!mcInput.value) mcInput.value = String(_scanMinFloatMc);
+            mcInput.addEventListener("change", function() {
+                var v = parseFloat(mcInput.value);
+                if (isNaN(v) || v < 0) v = 0;
+                _scanMinFloatMc = v;
+                try { localStorage.setItem("scan_min_float_mc", String(v)); } catch(e) {}
+            });
+        })();
 
         // Esc键取消区间选择 / 关闭设置抽屉
         document.addEventListener('keydown', function(e) {

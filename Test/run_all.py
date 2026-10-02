@@ -607,6 +607,10 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_scanpool_result_gap.py")]),
     ("stock_tpsl",
      [sys.executable, os.path.join("Test", "test_stock_tpsl.py")]),
+    # 全A股扫描来源 + 流通市值过滤阈值随请求传入（2026-10-02）：
+    # vipdoc 个股段过滤 / 阈值 0 关闭取数 / 自选股纳入过滤，全程打桩不联网。
+    ("scan_all_a_source",
+     [sys.executable, os.path.join("Test", "test_scan_all_a_source.py")]),
     # 成交统计「买卖点类型过滤联动」契约（2026-09-26 需求③）：纯单元/集成，
     # 无凭据无网络，此前漏登记（discover 能扫到、门禁没跑）——补登，消除孤儿。
     ("trade_stats_bsp_filter",

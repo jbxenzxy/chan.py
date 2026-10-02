@@ -358,16 +358,23 @@ async def api_search(q: str = Query(...)):
 @router.get("/api/stocks/scan/read/candidates")
 async def api_stocks_scan_read_candidates(source: str = Query("zxg"),
                                           page_index_code: str = Query(""),
-                                          scan_token: str = Query("")):
+                                          scan_token: str = Query(""),
+                                          scan_min_float_mc: float = Query(None)):
     """返回股票列表（支持逗号分隔多来源；orch.Scanner.stock_list）
 
     page_index_code：**本次请求**要用的板块指数代码（成分股来源）。
     必须随请求传入，不能让后端去读进程级全局——多网页下
     A 页选沪深300、B 页选中证500 时，读全局会让两页都按最后设置的
     那个扫，静默扫错一整批成分股。
+    scan_min_float_mc：流通市值过滤下限（亿），随本请求传入（前端设置
+    抽屉配置、localStorage 持久化）；None=后端配置默认；<=0=关闭过滤
+    且不做市值取数。
     """
+    if scan_min_float_mc is not None and scan_min_float_mc < 0:
+        scan_min_float_mc = 0.0
     result = await run_in_threadpool(orch.scanner.stock_list, source,
-                                     page_index_code or None, scan_token or None)
+                                     page_index_code or None, scan_token or None,
+                                     scan_min_float_mc)
     return _json_response(result)
 
 
