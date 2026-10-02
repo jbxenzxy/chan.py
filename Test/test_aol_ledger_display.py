@@ -252,7 +252,7 @@ if m:
             f.write(script)
         try:
             r = subprocess.run([node, tmp], capture_output=True,
-                               text=True, timeout=30)
+                               text=True, encoding="utf-8", timeout=30)
             if r.returncode != 0:
                 check("node 执行 fmtAolTime", r.stderr.strip()[-120:], "")
             else:
@@ -288,7 +288,7 @@ if m1:
             f.write(script1)
         try:
             r1 = subprocess.run([node, tmp1], capture_output=True,
-                                text=True, timeout=30)
+                                text=True, encoding="utf-8", timeout=30)
             if r1.returncode != 0:
                 check("node 执行 fmtAolPx1", r1.stderr.strip()[-120:], "")
             else:

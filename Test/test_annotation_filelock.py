@@ -273,7 +273,8 @@ def _rmw_round(n_procs, iters, lock_path, counter_path):
         p = subprocess.Popen(
             [sys.executable, "-c", _CHILD_RMW, _REPO_ROOT, lock_path,
              counter_path, str(iters), str(n_procs)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8")
         children.append(p)
     rc = []
     child_errs = []

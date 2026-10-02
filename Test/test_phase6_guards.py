@@ -278,7 +278,7 @@ def test_zero_build(failures):
 def test_node_syntax(failures):
     try:
         r = subprocess.run(["node", "--check", APP_JS], capture_output=True,
-                           text=True, timeout=60)
+                           text=True, encoding="utf-8", timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         print("[SKIP] ⑥ JS 语法校验: node 不在位（CI 环境降级跳过）")
         return

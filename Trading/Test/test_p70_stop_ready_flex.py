@@ -225,7 +225,7 @@ def main() -> int:
         f.write(_DRIVER_STOP)
     proc = subprocess.run(
         [sys.executable, driver2, _REPO, "4.0", "1.0"],
-        capture_output=True, text=True, timeout=180, env=env)
+        capture_output=True, text=True, encoding="utf-8", timeout=180, env=env)
     if proc.returncode != 0:
         check("[2-5] driver 子进程执行", False,
               "rc={} stderr={}".format(proc.returncode,

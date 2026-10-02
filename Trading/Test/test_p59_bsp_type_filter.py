@@ -352,7 +352,24 @@ check("[10c] 新路由经 AppOrch 漏斗",
 print("\n[11] 空 / 缺键输入 → 拒绝写入（4xx，不是 HTTP 200 静默全关）")
 import App.AppTrader as _AT                                     # noqa: E402
 
-with tmp_dir() as tmp:
+
+@contextmanager
+def _no_state_dirs():
+    """隔离机器上的真实实例运行态（Trading/State/... 为 gitignored 目录，
+    实盘/仿真跑过就存在）。本文件 [11]/[13e]/[14] 各块已用 TRADING_STATE_DIR
+    把写入落点重定向到临时目录 —— 但 `_filter_out_dir` 的解析顺序是
+    「运行中实例 → 已发现实例目录 → 配置目录」，机器上一旦存在真实实例
+    目录，前两级直接命中，永远走不到受环境变量影响的 `_cfg_out_dir()`，
+    断言就会读到/写进真实 state.db（假红）。这里把实例发现打桩为空，
+    让各块回到它真正要测的「配置/env 解析」路径。"""
+    _orig = _AT.AppTrader._all_state_dirs
+    _AT.AppTrader._all_state_dirs = lambda self: []
+    try:
+        yield
+    finally:
+        _AT.AppTrader._all_state_dirs = _orig
+
+with _no_state_dirs(), tmp_dir() as tmp:
     os.environ["TRADING_STATE_DIR"] = tmp       # 写入落点重定向到临时目录
     try:
         _at = _AT.AppTrader.__new__(_AT.AppTrader)   # 不跑 __init__：不碰运行中的状态文件
@@ -414,7 +431,7 @@ check("[13b] start 缺省目录两级派生（State/<登录方式>/<品种键>�
 check("[13c] _filter_out_dir 不再硬编码默认目录",
       "_DEFAULT_OUT" in _src_filt, False)
 check("[13d] 解析基准 = Trading/", "_TG_ROOT" in _src_cfgres, True)
-with tmp_dir() as tmp:
+with _no_state_dirs(), tmp_dir() as tmp:
     os.environ["TRADING_STATE_DIR"] = tmp
     try:
         _at = _AT.AppTrader.__new__(_AT.AppTrader)
@@ -432,7 +449,7 @@ with tmp_dir() as tmp:
 #      前端推送后刷新与在飞竞态）
 # ════════════════════════════════════════════════════════════════
 print("\n[14] 拒绝语义 400 + 留痕必落盘 + GET 不凭空建库 + 前端门刷新")
-with tmp_dir() as tmp:
+with _no_state_dirs(), tmp_dir() as tmp:
     os.environ["TRADING_STATE_DIR"] = tmp
     try:
         _at14 = _AT.AppTrader.__new__(_AT.AppTrader)   # 不跑 __init__：不碰运行中的状态文件

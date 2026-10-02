@@ -368,7 +368,7 @@ def test_cross_process_file_lock_serializes():
 
         proc = subprocess.run(
             [sys.executable, child_py, REPO_ROOT, tmp, str(per_round), str(rounds)],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True, encoding="utf-8", timeout=300)
 
         for t in ts:
             t.join(300)
