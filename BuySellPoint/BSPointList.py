@@ -989,7 +989,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.retrace_zero_axis_ratio, 4))
             return
 
-        # ⑶ MACD BAR 背离判定
+        # ⑶ MACD BAR 背驰判定
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_a, config)
@@ -1338,7 +1338,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # ㈣ 笔N 与 笔N-2 MACD DIF背驰
+        # ㈣ 笔N 与 笔N-2 MACD DIF 背驰判定
         is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
@@ -1350,7 +1350,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=config.divergence_rate)
             return
 
-        # ㈤ 笔N 与 笔N-2 MACD BAR背驰
+        # ㈤ 笔N 与 笔N-2 MACD BAR 背驰判定
         is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
