@@ -1338,22 +1338,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           n_high=stroke_n._high(), peak_high=pivot_a.peak_high)
             return
 
-        # ㈣ 笔N 与 笔N-2 MACD DIF 背驰判定
-        is_diver, n_metric, nm2_metric = self._is_nearest_same_direction_dif_diver(stroke_n, stroke_nm2, config)
-        divergence_rate = n_metric / (nm2_metric + 1e-7)
-        if not is_diver:
-            self._dbg_bs1('cal_bs1point', '跳过: 最近同向，MACD DIF未背驰',
-                          c1_idx=stroke_nm2.idx,
-                          c2_idx=stroke_n.idx,
-                          nm2_metric=nm2_metric, n_metric=n_metric,
-                          divergence_rate=divergence_rate,
-                          threshold=config.divergence_rate)
-            return
-
-        # 加严过滤：分型极值 DIF 到 0 轴距离比例。A = 笔N-2 分型极值 DIF 绝对值，B = 笔N 分型极值 DIF 绝对值
-        # （买点笔N/笔N-2 均向下，取底分型极值；卖点均向上，取顶分型极值——统一即笔末端分型极值K线 get_end_klu()）。
-        # 要求 (A-B)/A >= config.retrace_zero_axis_ratio（SSOT，默认 0.618）才放行；
-        # A==0（笔N-2 极值 DIF 恰在 0 轴）时比值无定义，视为不满足。
+        # ㈣ 笔N 与 笔N-2 MACD DIF 背驰判定：分型极值 DIF 到 0 轴距离比例
+        # 买点（笔N/笔N-2 均向下）：A = 笔N-2 底分型极值 DIF 绝对值（到 0 轴距离），B = 笔N 底分型极值 DIF 绝对值
+        # 卖点（笔N/笔N-2 均向上）：A = 笔N-2 顶分型极值 DIF 绝对值（到 0 轴距离），B = 笔N 顶分型极值 DIF 绝对值
+        # 两方向统一取笔末端分型极值K线（get_end_klu：向下笔=底分型极值、向上笔=顶分型极值）
+        # 要求 (A-B)/A >= config.retrace_zero_axis_ratio（默认 0.618）才算背驰
+        # 笔N-2 极值 DIF 恰在 0 轴时，比值无定义，视为不满足
         nm2_dist = abs(stroke_nm2.get_end_klu().macd.DIF)
         n_dist = abs(stroke_n.get_end_klu().macd.DIF)
         dif_ratio = (nm2_dist - n_dist) / nm2_dist if nm2_dist != 0 else None
@@ -1740,17 +1730,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             t = ratio - 1.0          # 将 [1.0, 2.0] 映射到 [0, 1]
             weight = t * t * (3 - 2 * t)
             return zs_range + (peak_range - zs_range) * weight, ratio, False
-
-    @staticmethod
-    def _is_nearest_same_direction_dif_diver(n, nm2, config):
-        """
-        最近同向笔MACD DIF背驰比较
-        比较当下笔N与其最近同向笔N-2的DIF值，判断当下笔力度是否不足
-        """
-        n_metric   = n.cal_macd_metric(MACD_ALGO.DIF, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
-        nm2_metric = nm2.cal_macd_metric(MACD_ALGO.DIF, is_reverse=True)
-        is_diver   = n_metric < config.divergence_rate * nm2_metric
-        return is_diver, n_metric, nm2_metric
 
     @staticmethod
     def _is_stroke_divergence(n, nm2, config):
