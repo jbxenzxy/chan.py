@@ -607,6 +607,14 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_scanpool_result_gap.py")]),
     ("stock_tpsl",
      [sys.executable, os.path.join("Test", "test_stock_tpsl.py")]),
+    # 成交统计「买卖点类型过滤联动」契约（2026-09-26 需求③）：纯单元/集成，
+    # 无凭据无网络，此前漏登记（discover 能扫到、门禁没跑）——补登，消除孤儿。
+    ("trade_stats_bsp_filter",
+     [sys.executable, os.path.join("Trading", "Test",
+                                   "test_trade_stats_bsp_filter.py")]),
+    # Gate ⑦ (2026-10-02)：两测试入口覆盖一致性钉死（无孤儿、无悬空登记）。
+    ("gate_component_count",
+     [sys.executable, os.path.join("Test", "test_gate_component_count.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成
