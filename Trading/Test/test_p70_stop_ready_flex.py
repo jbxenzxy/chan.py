@@ -120,6 +120,10 @@ STOP_LONG = float(sys.argv[2])    # 覆盖 _STOP_TIMEOUT
 STOP_SHORT = float(sys.argv[3])   # 覆盖 _STARTING_STOP_TIMEOUT
 M._STOP_TIMEOUT = STOP_LONG
 M._STARTING_STOP_TIMEOUT = STOP_SHORT
+# 托管记录重定向到临时目录：否则 stop() 的 _sync_state_file 会写真实
+# App/trader_launch_record.json（2026-10-02 门禁污染审计实锤）。
+M._STATE_FILE = os.path.join(tempfile.mkdtemp(prefix="p70_state_"),
+                             "trader_launch_record.json")
 
 out = tempfile.mkdtemp(prefix="p70s_")
 

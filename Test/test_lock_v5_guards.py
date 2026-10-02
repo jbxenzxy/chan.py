@@ -213,6 +213,18 @@ def test_appdata_locks():
         app_data._stocks_cache_lock = real_c
 
     # 用户数据：标注 / 选点 / last_code_freq 都进入 _user_store_lock
+    # 持久化隔离（2026-10-02）：选点/标注/last_code_freq 三个用户数据文件
+    # 重定向到临时目录（类属性替换手法对齐 test_lock_v6_fixes ③），否则
+    # 本节会把测试条目合并进真实 App/double_click_dt.csv 等生产数据。
+    import tempfile
+    _ud = tempfile.mkdtemp(prefix="lock_v5_userdata_")
+    _saved_props = {}
+    for _name, _fname in (("saved_point_file", "double_click_dt.csv"),
+                          ("last_code_freq_file", "last_code_freq.json"),
+                          ("annotations_file", "text_annotation.json")):
+        _saved_props[_name] = getattr(type(app_data), _name)
+        setattr(type(app_data), _name,
+                property(lambda self, _f=_fname: os.path.join(_ud, _f)))
     real_u = app_data._user_store_lock
     app_data._user_store_lock = _CountingLock(real_u)
     try:
@@ -227,6 +239,8 @@ def test_appdata_locks():
               n1 >= 1 and n2 >= 1 and n3 >= 1, f"{n1}/{n2}/{n3}")
     finally:
         app_data._user_store_lock = real_u
+        for _name, _prop in _saved_props.items():
+            setattr(type(app_data), _name, _prop)
 
     # 原子写底座存在
     from App.AppData import _atomic_write_text, safe_write_json_file  # noqa: E402

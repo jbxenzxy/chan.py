@@ -41,6 +41,14 @@ def test_annotated_codes():
     # 锁外遍历」。故本用例走**公开入口**并发压测——原实现在无锁状态下直接
     # 遍历 self._annotations，与持锁写者 add_annotation 并发即抛
     # 「dictionary changed size during iteration」。
+    # 持久化隔离（2026-10-02）：本节 clear() 内存标注表后高频并发落盘，
+    # 若直写真实 App/text_annotation.json 会把用户真实标注整体覆盖成
+    # 压测数据——重定向到临时目录（类属性替换手法 = 本文件 ③ 节先例）。
+    import tempfile
+    _prop_orig = type(app_data).annotations_file
+    _ud = tempfile.mkdtemp(prefix="lock_v6_anno_")
+    type(app_data).annotations_file = property(
+        lambda self: os.path.join(_ud, "text_annotation.json"))
     err = []
     stop = threading.Event()
     calls = [0, 0]
@@ -84,6 +92,8 @@ def test_annotated_codes():
     # 清理压测写入
     for i in range(3):
         app_data.delete_all_annotations(f"sh{900000 + i}", "d")
+    # 还原标注文件属性（压测全程写入的是临时目录副本）
+    type(app_data).annotations_file = _prop_orig
 
 
 # ── ② replace_names 并发快照遍历────────────────────────────

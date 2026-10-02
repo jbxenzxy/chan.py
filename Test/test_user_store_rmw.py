@@ -52,9 +52,10 @@ def _mk_code(i):
 def _purge_test_range():
     """清扫 sh9xxxxx 压测专用区间（含历史残留），并回写落盘。
 
-    本用例直接使用全局 app_data，add_annotation 会原子落盘到真实
-    annotations 文件；压测前先清区间保证计数基线干净，压测后清理
-    避免污染真实数据。
+    annotations 文件已由 main() 重定向到临时目录（2026-10-02）：压测
+    全程不触碰真实 App/text_annotation.json，中途崩溃也不会把 sh9*
+    压测条目留在真实文件里；本函数照旧在压测前清 sh9* 区间保证计数
+    基线干净，压测后由 _cleanup() 收尾。
     """
     junk = [k for k in list(app_data._annotations) if k.startswith("sh9")]
     for k in junk:
@@ -181,14 +182,24 @@ def main():
     print("=" * 60)
     print("user_store 并发 RMW 守护（审计 v1.3 §四 选点/删点/标注行）")
     print("=" * 60)
-    _purge_test_range()          # 压测前清 sh9* 基线（含历史残留）
+    # 持久化隔离（2026-10-02）：标注文件重定向到临时目录（类属性替换
+    # 手法对齐 test_lock_v6_fixes ③）。
+    import tempfile
+    _prop_orig = type(app_data).annotations_file
+    _ud = tempfile.mkdtemp(prefix="rmw_anno_")
+    type(app_data).annotations_file = property(
+        lambda self: os.path.join(_ud, "text_annotation.json"))
     try:
-        test_add_distinct_keys()
-        test_add_same_key_distinct_text()
-        test_add_same_key_dedup()
-        test_concurrent_delete()
+        _purge_test_range()          # 压测前清 sh9* 基线（含历史残留）
+        try:
+            test_add_distinct_keys()
+            test_add_same_key_distinct_text()
+            test_add_same_key_dedup()
+            test_concurrent_delete()
+        finally:
+            _cleanup()
     finally:
-        _cleanup()
+        type(app_data).annotations_file = _prop_orig
 
     print()
     bad = [r for r in results if not r[0]]

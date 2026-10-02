@@ -72,8 +72,14 @@ class _CfgProxy:
 
 
 def _redirect_saved_point(tmp_path):
-    """把 app_data 的选点文件重定向到临时路径（不改真实数据）。"""
-    import AppData as _ad
+    """把 app_data 的选点文件重定向到临时路径（不改真实数据）。
+
+    ⚠️ 必须用 `App.AppData` 模块对象：AppEngine 把 App/ 目录塞进了
+    sys.path（AppEngine.py 的 SCRIPT_DIR 注入），裸 `import AppData` 会把
+    App/AppData.py 当顶层模块二次加载成副本，补丁打在副本上落空——
+    2026-10-02 实证：压测行因此全部落进真实 App/double_click_dt.csv。
+    """
+    from App import AppData as _ad
     _ad.app_config = _CfgProxy(_ad.app_config, saved_point_file=tmp_path)
 
 

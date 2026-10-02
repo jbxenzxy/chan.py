@@ -38,6 +38,22 @@ from fastapi.testclient import TestClient
 import FrontAPI
 from App import AppOrch as orch
 
+# ── 持久化隔离（2026-10-02）：本用例起真实 FrontAPI.app 打端点，扫描
+#    候选/提交链路会真实驱动 eltdx 取数并落盘流通市值缓存、分析端点会
+#    写 last_code_freq——把会被端点触发的生产数据文件重定向到临时目录
+#    （类属性替换手法对齐 test_lock_v6_fixes ③；SCAN_TASK_DB 环境变量
+#    隔离对齐 test_phase7_guards），避免污染真实 App/ 数据。
+import tempfile
+
+_UD = tempfile.mkdtemp(prefix="api_integration_")
+os.environ.setdefault("SCAN_TASK_DB", os.path.join(_UD, "scan_tasks.db"))
+from App.AppData import app_data as _app_data  # noqa: E402
+
+for _prop, _fname in {"last_code_freq_file": "last_code_freq.json",
+                      "float_mc_cache_file": "stock_float_mc.json"}.items():
+    setattr(type(_app_data), _prop,
+            property(lambda self, _f=_fname: os.path.join(_UD, _f)))
+
 client = TestClient(FrontAPI.app)
 
 
