@@ -607,11 +607,6 @@ class AppTrader:
                 self._engine_log(log_file, "清除就绪标志失败: {}: {}".format(
                     type(e).__name__, e))
 
-            try:
-                cfg = self._load_cfg()
-            except AppError as e:
-                self._engine_log(log_file, "读取配置失败: {}".format(e))
-                raise
             # 登录链路：选择框给定 → 覆盖配置的 broker 三件套（子进程 env 注入）；
             # 未给定（None，CLI/其它调用方）→ 完全沿用配置，行为与改造前一致。
             try:
@@ -815,7 +810,7 @@ class AppTrader:
                         except OSError:
                             pass
                 for h in targets:
-                    self._instances.pop(h.product_key, None)
+                    self._instances.pop(h.product_key or h.out_dir, None)
                     # 同上分支：用户主动点关闭 = 已知原因的退出，不再当异常上报。
                     self._exit_logged.add(h.pid)
                 # 镜像只在**注册表清空**时才清（评审 P1-1）：停掉的恰好是镜像
@@ -830,7 +825,7 @@ class AppTrader:
             for h in running_targets:
                 results.append(self._stop_one_locked(h, timeout))
             for h in running_targets:
-                self._instances.pop(h.product_key, None)
+                self._instances.pop(h.product_key or h.out_dir, None)
                 # 主动关闭 = 退出原因已由 stop() 自己落进 gateway.log
                 # （"自动下单已关闭 pid=..."），记入"已上报"集合。否则多实例下
                 # 被停的恰好是镜像（保留下来的那个）时，下一轮 status() 会把

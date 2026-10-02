@@ -188,6 +188,74 @@ def execute_once(price_source, *, filled=True):
     return events
 
 
+def execute_once_with_alerts(price_source, *, filled=True):
+    """同 execute_once，但额外回传 engine（读 _alerts 验证告警护栏）。
+
+    保险项（2026-10-02）：回落价落账应同时推一条 warn 级前端告警
+    （code=price_fallback_limit），让用户不必翻 events.jsonl 也能看到偏差。
+    """
+    d = tempfile.mkdtemp(prefix="tg_p6fb_alert_")
+    events = []
+    engine = None
+    try:
+        cfg = TradingConfig.from_dict(DEFAULT_CONFIG)
+        spec = Instrument(InstrumentConfig(trade_symbol=_SYM), _IF)
+        broker = DryRunBroker(spec, {"sim_equity": 1000000.0})
+        entry = EntryPolicy({})
+        exitp = LayeredExitPolicy()
+        store = Store(os.path.join(d, "state.db"))
+        ev = EventLog(os.path.join(d, "events.jsonl"), echo=False, echo_kinds=None)
+        engine = TradingEngine(cfg, broker, entry, exitp, store, ev)
+
+        broker.submit = lambda *a, **k: _make_order(price_source, filled=filled)
+        sig = Signal(key=_SIG_KEY, symbol=_SYM, freq="5m", date="2026-09-01 09:35",
+                     timestamp=0, bsp_type="1", is_buy=True,
+                     price=_REQ, high=_REQ + 2.0, low=_REQ - 2.0)
+        act = _Action(intent=OrderIntent.OPEN, side=Side.LONG, volume=_VOLUME,
+                      target=None, is_exit=False, transition=1)
+        _saved = logging.root.manager.disable
+        logging.disable(logging.WARNING)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                engine._execute(act, _REQ, None, sig, reason="probe", force=True)
+        finally:
+            logging.disable(_saved)
+        ev.flush()
+        store.close()
+
+        path = os.path.join(d, "events.jsonl")
+        if os.path.isfile(path):
+            with io.open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        events.append(json.loads(line))
+                    except ValueError:
+                        pass
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return events, engine
+
+
+def test_fallback_emits_ui_alert() -> None:
+    """保险项（2026-10-02）：price_source='limit' 落账 ⇒ 推一条 price_fallback_limit
+    告警（warn 级，非阻塞）；真实明细价 ⇒ 零条（否则每笔成交都弹）。"""
+    print("\n[6] price_source='limit' ⇒ 推一条 price_fallback_limit 告警（warn 级）")
+    _, engine = execute_once_with_alerts("limit")
+    alerts = [a for a in (engine._alerts or [])
+              if a.get("code") == "price_fallback_limit"]
+    check("[6a] 恰好 1 条 price_fallback_limit 告警", len(alerts), 1)
+    if alerts:
+        check("[6b] 级别为 warn（前端 toast，非阻塞）",
+              alerts[0].get("level"), "warn")
+    _, engine2 = execute_once_with_alerts("trade_records")
+    alerts2 = [a for a in (engine2._alerts or [])
+               if a.get("code") == "price_fallback_limit"]
+    check("[6c] 真实明细价 ⇒ 零条 price_fallback_limit", len(alerts2), 0)
+
+
 def kinds_of(events):
     return [r.get("kind") for r in events]
 
@@ -270,6 +338,7 @@ def main() -> int:
     test_rejected_never_falls_back()
     test_legacy_ref_price_source_is_retired()
     test_event_label_registered()
+    test_fallback_emits_ui_alert()
     print("\n" + "=" * 72)
     print("结果: {} 通过 / {} 失败".format(_PASS, _FAIL))
     print("=" * 72)

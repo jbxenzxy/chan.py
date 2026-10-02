@@ -1535,6 +1535,17 @@ class TradingEngine(ReconcileMixin):
                           fill_price=o.filled_price, limit=o.price,
                           req_price=o.req_price, volume=o.volume,
                           signal_key=(sig.key if sig is not None else ""))
+            # ① 保险（用户 2026-10-02 要求）：把"保护价基于回落价"显式推成前端告警。
+            #    limit 是成交价最坏边界，R/保护价按保守边界计算（非明细真实均价）；
+            #    warn 级 = 前端 toast + 后台系统通知（非阻塞），让用户一眼看到这层
+            #    偏差，不必事后翻 events.jsonl。同 code 合并计数，不会刷屏。
+            self.alert(
+                self.ALERT_WARN, "price_fallback_limit",
+                "⚠ 保护价基于回落价（委托限价）落账：成交明细未到，"
+                "R/保护价按保守边界计算（非明细真实均价）。order_id={}".format(
+                    o.order_id),
+                order_id=o.order_id, price_source=_psrc,
+                fill_price=o.filled_price, limit=o.price)
         # ── 成交落账：净敞口的变化决定 run 的开启 / 结束 ──
         # run 级会计（v3.1 §5.1）：Trade 一律由 `_settle_run` 在 run 结束点写，
         # `_book_close` 只负责移除仓单；close 事件在结算后写入并回填 trade_id。

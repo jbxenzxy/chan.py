@@ -131,6 +131,8 @@ COMPONENTS = [
     #   端到端兜底每个 .py 都能 compile 通过。零网络、秒级。
     ("newline_hygiene",
      [sys.executable, os.path.join("Test", "test_newline_hygiene.py")]),
+    ("dotenv_secrets_guard",
+     [sys.executable, os.path.join("Test", "test_dotenv_secrets_guard.py")]),
     ("snapshot_regression",
      [sys.executable, os.path.join("Test", "snapshot_runner.py")]),
     ("trigger_step_replay",

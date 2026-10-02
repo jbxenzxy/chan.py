@@ -163,7 +163,7 @@ python Tool/SimNow/SimNowProbe.py
 
 ### 3.6 落盘产物
 
-运行目录（`--out`，默认 `Trading/State/`）下：
+运行目录（`--out`，默认 `Config.state_dir` = `Trading/State/`）下；多实例自动下单进一步按 `Trading/State/<登录方式>/<品种键>/` 两级存放（注册表键归一逻辑见 `AppTrader.start`）：
 
 | 文件 | 内容 | 何时写 |
 |---|---|---|
