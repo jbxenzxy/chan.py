@@ -685,6 +685,10 @@ def run_component(name, cmd, update=False, env=None):
         ok, exit_code, timed_out = False, None, True
         out = (e.stdout or "") + f"\n[TIMEOUT] 组件 {name} 超过 {COMPONENT_TIMEOUT_S}s 被终止"
     elapsed = time.time() - t0
+    # 失败组件保留完整输出（上限 2000 行防失控），成功组件仍只留尾部 12 行。
+    # ✗ 断言行常出现在输出中部而非结尾，只留尾部会把关键证据截掉
+    # （product_fee [3g]、p59 [13e] 都为此多花一轮才定位）。
+    _lines = (out or "").strip().splitlines()
     rec = {
         "name": name,
         "cmd": " ".join(_safe_relpath(c, REPO_ROOT) if os.path.isabs(c) else c
@@ -693,7 +697,7 @@ def run_component(name, cmd, update=False, env=None):
         "exit_code": exit_code,
         "timed_out": timed_out,
         "elapsed_s": round(elapsed, 2),
-        "output_tail": (out or "").strip().splitlines()[-12:],
+        "output_tail": _lines[-12:] if ok else _lines[-2000:],
     }
     return rec
 
