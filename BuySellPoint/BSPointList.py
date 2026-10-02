@@ -989,7 +989,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=round(config.retrace_zero_axis_ratio, 4))
             return
 
-        # MACD BAR 背离判定
+        # ⑶ MACD BAR 背离判定
         is_buy = stroke_n.is_down()
         config = self.config.GetBSConfig(is_buy)
         is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_a, config)
@@ -1022,7 +1022,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         config = self.config.GetBSConfig(is_buy)
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
 
-        # 离开笔4有效突破(中枢A)
+        # ㈠ 离开笔4有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
             base_range, ratio, _ = self._compute_base_range(pivot_a)
             r = self.BS0_ZS_BREAK_RATIO
@@ -1045,7 +1045,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈡ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1054,7 +1054,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return
 
-        # 离开笔4和进入笔，MACD面积背驰
+        # ㈢ 离开笔4和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1113,14 +1113,14 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         config = self.config.GetBSConfig(is_buy)
         entry_bi = s_nm4
 
-        # 中枢B有效(三笔重叠 + 进入笔有效)
+        # ㈠ 中枢B有效(三笔重叠 + 进入笔有效)
         is_valid, zs_b = self._is_valid_zs(s_nm4, s_nm3, s_nm2, s_nm1)
         if not is_valid:
             self._dbg_bs0(' _cal_bs0point_nth_nzs', '跳过: 中枢B无效')
             return False
         # self._dbg_bs0('_cal_bs0point_nth_nzs', '中枢B有效', zs_b_high=zs_b.high, zs_b_low=zs_b.low)
 
-        # 离开笔有效突破(中枢B)
+        # ㈡ 离开笔有效突破(中枢B)
         if not self._is_valid_out_bi(stroke_n, zs_b):
             base_range, ratio, _ = self._compute_base_range(zs_b)
             r = self.BS0_ZS_BREAK_RATIO
@@ -1143,7 +1143,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return False
 
-        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈢ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1152,7 +1152,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return False
 
-        # 离开笔和进入笔，MACD面积背驰
+        # ㈣ 离开笔和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
@@ -1190,7 +1190,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       entry_bi_idx=entry_bi.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # 离开笔6/8有效突破(中枢A)
+        # ㈠ 离开笔6/8有效突破(中枢A)
         if not self._is_valid_out_bi(stroke_n, pivot_a):
             base_range, ratio, _ = self._compute_base_range(pivot_a)
             r = self.BS0_ZS_BREAK_RATIO
@@ -1213,7 +1213,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           condition=cond)
             return
 
-        # 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
+        # ㈡ 进入笔MACD同侧围栏（柱面积主导 + 黄白线同侧，二者都通过才继续）
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
@@ -1222,7 +1222,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           dominant=fence_dominant, lines=fence_lines)
             return
 
-        # 离开笔6/8和进入笔，MACD面积背驰
+        # ㈢ 离开笔6/8和进入笔，MACD面积背驰
         in_metric = entry_bi.cal_macd_metric(config.macd_algo, is_reverse=False) # is_reverse 仅对 MACD_ALGO.AREA_HALF 有意义
         out_metric = stroke_n.cal_macd_metric(config.macd_algo, is_reverse=True)
         divergence_rate = out_metric / (in_metric + 1e-7)
