@@ -338,7 +338,7 @@ else:
             f.write(script)
         try:
             r = subprocess.run([node, tmp], capture_output=True,
-                               text=True, timeout=30)
+                               text=True, encoding="utf-8", timeout=30)
             if r.returncode != 0:
                 check("⑦ node 执行真函数", r.stderr.strip()[-160:], "")
             else:

@@ -261,7 +261,7 @@ _tmp_js = os.path.join(_HERE, "_p66_worker_probe.js")
 io.open(_tmp_js, "w", encoding="utf-8").write(_probe_js)
 try:
     r = subprocess.run(["node", _tmp_js], capture_output=True, text=True,
-                       errors="replace", timeout=60)
+                       encoding="utf-8", errors="replace", timeout=60)
     out = r.stdout + r.stderr
     for tag in ("T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8"):
         want_line = tag + "=ok"
@@ -379,7 +379,7 @@ _tmp_js2 = os.path.join(_HERE, "_p66_wire_probe.js")
 io.open(_tmp_js2, "w", encoding="utf-8").write(_probe2_js)
 try:
     r2 = subprocess.run(["node", _tmp_js2], capture_output=True, text=True,
-                        errors="replace", timeout=60)
+                        encoding="utf-8", errors="replace", timeout=60)
     out2 = r2.stdout + r2.stderr
     for tag in ("U1", "U2", "U3", "U4", "U5", "U6", "U7", "U8"):
         check("[4-{}] {}".format(tag, {

@@ -146,7 +146,7 @@ else:
     try:
         io.open(_tmp, "w", encoding="utf-8", newline="\n").write(_probe)
         _r = subprocess.run([_node, _tmp], capture_output=True, text=True,
-                            timeout=30)
+                            encoding="utf-8", timeout=30)
         _out = (_r.stdout or "").strip()
         m = re.search(r'\{"bad":\s*(\d+),\s*"total":\s*(\d+)\}', _out)
         check("[3a] node 探针正常退出", _r.returncode, 0)
