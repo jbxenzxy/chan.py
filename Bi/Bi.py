@@ -242,8 +242,8 @@ class CBi:
             for klu in klc.lst:
                 if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
                     continue
-                if (self.is_down() and klu.macd.macd < 0) or (self.is_up() and klu.macd.macd > 0):
-                    _s += abs(klu.macd.macd)
+                if (self.is_down() and klu.macd.BAR < 0) or (self.is_up() and klu.macd.BAR > 0):
+                    _s += abs(klu.macd.BAR)
         return _s
 
     @make_cache
@@ -263,8 +263,8 @@ class CBi:
             for klu in klc.lst:
                 if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
                     continue
-                if (self.is_down() and klu.macd.macd < 0) or (self.is_up() and klu.macd.macd > 0):
-                    same_dir.append(klu.macd.macd)
+                if (self.is_down() and klu.macd.BAR < 0) or (self.is_up() and klu.macd.BAR > 0):
+                    same_dir.append(klu.macd.BAR)
 
         if not same_dir:
             return _s
@@ -296,15 +296,15 @@ class CBi:
 #                if klu.idx < begin_klu.idx or klu.idx > end_klu.idx:
 #                    continue
 #                if self.is_down():
-#                    if klu.macd.macd < 0:       # 绿柱，同向
-#                        same_dir_sum += abs(klu.macd.macd)
+#                    if klu.macd.BAR < 0:       # 绿柱，同向
+#                        same_dir_sum += abs(klu.macd.BAR)
 #                    else:                       # 红柱，反向
-#                        counter_bars.append(klu.macd.macd)
+#                        counter_bars.append(klu.macd.BAR)
 #                else:  # 向上笔
-#                    if klu.macd.macd > 0:       # 红柱，同向
-#                        same_dir_sum += abs(klu.macd.macd)
+#                    if klu.macd.BAR > 0:       # 红柱，同向
+#                        same_dir_sum += abs(klu.macd.BAR)
 #                    else:                       # 绿柱，反向
-#                        counter_bars.append(klu.macd.macd)
+#                        counter_bars.append(klu.macd.BAR)
 
 #        if not counter_bars:
 #            return same_dir_sum + _s
@@ -332,11 +332,11 @@ class CBi:
         peak = 1e-7
         for klc in self.klc_lst:
             for klu in klc.lst:
-                if abs(klu.macd.macd) > peak:
-                    if self.is_down() and klu.macd.macd < 0:
-                        peak = abs(klu.macd.macd)
-                    elif self.is_up() and klu.macd.macd > 0:
-                        peak = abs(klu.macd.macd)
+                if abs(klu.macd.BAR) > peak:
+                    if self.is_down() and klu.macd.BAR < 0:
+                        peak = abs(klu.macd.BAR)
+                    elif self.is_up() and klu.macd.BAR > 0:
+                        peak = abs(klu.macd.BAR)
         return peak
 
     @make_cache
@@ -373,13 +373,13 @@ class CBi:
     def Cal_MACD_area_half_obverse(self):
         _s = 1e-7
         begin_klu = self.get_begin_klu()
-        peak_macd = begin_klu.macd.macd
+        peak_macd = begin_klu.macd.BAR
         for klc in self.klc_lst:
             for klu in klc.lst:
                 if klu.idx < begin_klu.idx:
                     continue
-                if klu.macd.macd*peak_macd > 0:
-                    _s += abs(klu.macd.macd)
+                if klu.macd.BAR*peak_macd > 0:
+                    _s += abs(klu.macd.BAR)
                 else:
                     break
             else:  # 没有被break，继续找写一个KLC
@@ -391,13 +391,13 @@ class CBi:
     def Cal_MACD_area_half_reverse(self):
         _s = 1e-7
         begin_klu = self.get_end_klu()
-        peak_macd = begin_klu.macd.macd
+        peak_macd = begin_klu.macd.BAR
         for klc in self.klc_lst_re:
             for klu in klc[::-1]:
                 if klu.idx > begin_klu.idx:
                     continue
-                if klu.macd.macd*peak_macd > 0:
-                    _s += abs(klu.macd.macd)
+                if klu.macd.BAR*peak_macd > 0:
+                    _s += abs(klu.macd.BAR)
                 else:
                     break
             else:  # 没有被break，继续找写一个KLC
@@ -413,7 +413,7 @@ class CBi:
         _max, _min = float("-inf"), float("inf")
         for klc in self.klc_lst:
             for klu in klc.lst:
-                macd = klu.macd.macd
+                macd = klu.macd.BAR
                 if macd > _max:
                     _max = macd
                 if macd < _min:
@@ -475,7 +475,7 @@ class CBi:
         expected = -1 if self.is_down() else 1
         same_area = total_area = 0.0
         for k in klus:
-            m = k.macd.macd
+            m = k.macd.BAR
             if m == 0:
                 continue
             total_area += abs(m)

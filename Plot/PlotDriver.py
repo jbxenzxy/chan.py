@@ -542,7 +542,7 @@ class CPlotDriver:
         x_idx = range(len(macd_lst))[x_begin:]
         dif_line = [macd.DIF for macd in macd_lst[x_begin:]]
         dea_line = [macd.DEA for macd in macd_lst[x_begin:]]
-        macd_bar = [macd.macd for macd in macd_lst[x_begin:]]
+        macd_bar = [macd.BAR for macd in macd_lst[x_begin:]]
         y_min = min([min(dif_line), min(dea_line), min(macd_bar)])
         y_max = max([max(dif_line), max(dea_line), max(macd_bar)])
         ax.plot(x_idx, dif_line, "#FFA500")

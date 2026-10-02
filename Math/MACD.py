@@ -7,7 +7,7 @@ class CMACD_item:
         self.slow_ema = slow_ema
         self.DIF = DIF
         self.DEA = DEA
-        self.macd = 2 * (DIF - DEA)
+        self.BAR = 2 * (DIF - DEA)
 
 
 class CMACD:

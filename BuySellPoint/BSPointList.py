@@ -957,22 +957,21 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         # ㈡ 笔C是否破笔A极值 —— 两种情况（占位：两情况当前处理一致，留待后续分化）
         # 情况一：笔C未破笔A极值
         # 情况二：笔C破了笔A极值
-        # 无论哪种情况，均走 ⑴⑵⑶ 三道判断后，再进 MACD BAR 背离判定：
-        # ⑴ 笔C整笔 DIF 全在趋势侧（买→DIF>=0，卖→DIF<=0；DIF=0 视为在 0 轴上）
-        # ⑵ 笔A整笔 DIF 全在趋势侧（同上口径）
-        # ⑶ MACD DIF 回0轴：笔A起点极值→笔C终点极值 的 DIF 回抽幅度超过阈值
+        # 无论哪种情况，均走 ⑴⑵ 两道判断后，再进 MACD BAR 背离判定：
+        # ⑴ 笔C/A 整笔 DIF 全在趋势侧（买→DIF>=0，卖→DIF<=0）
+        # ⑵ MACD DIF 回0轴：笔A起点极值→笔C终点极值 的 DIF 回抽幅度超过阈值
         is_buy = stroke_n.is_down()
         broke_a = (stroke_n.is_down() and stroke_n._low() < stroke_a._low()) or \
                   (stroke_n.is_up() and stroke_n._high() > stroke_a._high())
         case_no = 2 if broke_a else 1
         case_str = '情况一' if case_no == 1 else '情况二'
 
-        # ⑴ ⑵ 整笔 DIF 是否全在趋势侧
+        # ⑴ 笔C/A 整笔 DIF 是否全在趋势侧
         dif_positive = is_buy
         c_dif_ok = self._dif_all_same_side(stroke_n, dif_positive)
         a_dif_ok = self._dif_all_same_side(stroke_a, dif_positive)
 
-        # ⑶ 回抽0轴比例
+        # ⑵ 回抽0轴比例
         config = self.config.GetBSConfig(is_buy)
         A_dif = stroke_a.get_begin_klu().macd.DIF
         C_dif = stroke_n.get_end_klu().macd.DIF
@@ -2270,14 +2269,14 @@ def _red_range_single_bi_diver(bi):
     for klc in bi.klc_lst:
         for klu in klc.lst:
             if bi.is_up():
-                if klu.macd.macd > peak_macd:
-                    peak_macd = klu.macd.macd
+                if klu.macd.BAR > peak_macd:
+                    peak_macd = klu.macd.BAR
             else:
-                if klu.macd.macd < peak_macd:
-                    peak_macd = klu.macd.macd
+                if klu.macd.BAR < peak_macd:
+                    peak_macd = klu.macd.BAR
 
     end_klu = bi.get_end_klu()
-    end_macd = end_klu.macd.macd
+    end_macd = end_klu.macd.BAR
     if bi.is_up():
         is_diver = end_macd < peak_macd * CMyBSPointList.NESTED_MACD_DIVER_RATIO
     else:
