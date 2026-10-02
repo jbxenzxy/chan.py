@@ -1350,6 +1350,22 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                           threshold=config.divergence_rate)
             return
 
+        # 加严过滤：分型极值 DIF 到 0 轴距离比例。A = 笔N-2 分型极值 DIF 绝对值，B = 笔N 分型极值 DIF 绝对值
+        # （买点笔N/笔N-2 均向下，取底分型极值；卖点均向上，取顶分型极值——统一即笔末端分型极值K线 get_end_klu()）。
+        # 要求 (A-B)/A >= config.retrace_zero_axis_ratio（SSOT，默认 0.618）才放行；
+        # A==0（笔N-2 极值 DIF 恰在 0 轴）时比值无定义，视为不满足。
+        nm2_dist = abs(stroke_nm2.get_end_klu().macd.DIF)
+        n_dist = abs(stroke_n.get_end_klu().macd.DIF)
+        dif_ratio = (nm2_dist - n_dist) / nm2_dist if nm2_dist != 0 else None
+        ratio_ok = dif_ratio is not None and dif_ratio >= config.retrace_zero_axis_ratio
+        if not ratio_ok:
+            self._dbg_bs1('cal_bs1point', '跳过: 分型极值DIF回0轴比例不足',
+                          n_idx=stroke_n.idx, nm2_idx=stroke_nm2.idx,
+                          nm2_dist=round(nm2_dist, 4), n_dist=round(n_dist, 4),
+                          dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
+                          threshold=round(config.retrace_zero_axis_ratio, 4))
+            return
+
         # ㈤ 笔N 与 笔N-2 MACD BAR 背驰判定
         is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
@@ -1422,6 +1438,8 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             'c_divergence_rate': c_divergence_rate,
             'pattern': matched_pattern,
         }
+        if dif_ratio is not None:
+            feature_dict['dif_ratio'] = dif_ratio
         self.add_bs(bs_type=BSP_TYPE.T1, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)
 
