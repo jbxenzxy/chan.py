@@ -8,7 +8,14 @@
   ② 流通市值过滤从「仅成分股、阈值写死配置」改为「自选股/成分股/全A股
      任一来源都过滤、阈值随请求传入（前端设置抽屉配置，localStorage 持久化）；
      阈值 <=0 = 关闭过滤且不做市值批量取数」；
-  ③ ST/退市过滤维持历史口径（仅成分股来源启用，check_st 参数即该开关）。
+  ③ ST/退市过滤：此前名义上「仅成分股来源启用、check_st 即该开关」，实际两处
+     漏洞使其全来源失效——market 只认数字编码（1/0/2）而调用方传 sh/sz/bj，
+     名称键恒拼成 "bj"+code 查不到；且名称刷新在落盘前就删掉 ST 股。
+     修复后判定谓词单点化（App.AppUtils.is_st_like_name）+ 名称表保留 ST 名，
+     过滤对自选股/成分股/全A股统一生效（check_st 形参保留为开关，当前无调用方
+     传 False；板块指数 2/3 来源不走预过滤）。
+  ④ 阈值事实源收敛到后端：前端不再写死 50，未配置时不带参，由后端
+     app_config.SCAN_MIN_FLOAT_MC 兜底（此前前端每次都带参，后端配置被架空）。
 
 锁定契约：
   [1] read_all_a_stocks：vipdoc 合成目录下只收个股段（60/68/00/30），
@@ -16,6 +23,11 @@
   [2] 阈值 0：不调 fetch_float_mc_all（省一次 eltdx 全表）、候选全保留。
   [3] 阈值 >0：自选股来源也按阈值过滤（低于跳过、高于保留）。
   [4] _SOURCE_READERS 登记 all_a →「全A股」。
+  [5] ST/退市过滤对自选股同样生效（与成分股口径一致，不再是成分股独有）。
+  [6] is_st_like_name 为唯一判定谓词；名称刷新不再删 ST；搜索端已接线。
+  [7] 阈值单一事实源在后端：前端 _scanMinFloatMc 初值为 null（不写死数字），
+      且仅在非 null 时才拼 &scan_min_float_mc=。
+  [8] 后端经 /api/health 下发 config.scan_min_float_mc（as_dict 含该键）。
 
 全程打桩，不联网、不触碰 App/ 生产数据（app_data 以 stub 替换）。
 运行：python Test/test_scan_all_a_source.py
@@ -199,6 +211,46 @@ def test_st_predicate_wiring(failures):
     print("[PASS] [6] ST 判定单点化：谓词 6 例 + 刷新保留 + 搜索端过滤在位")
 
 
+def test_threshold_ssot(failures):
+    """[7] 阈值单一事实源在后端：前端不写死默认值，未配置时不带参。"""
+    js = open(os.path.join(REPO_ROOT, "Frontend", "app.js"), encoding="utf-8").read()
+    if "_scanMinFloatMc = 50" in js or "_scanMinFloatMc=50" in js:
+        failures.append("[7] 前端仍写死阈值默认值 50（后端 SCAN_MIN_FLOAT_MC 被架空）")
+        print("[FAIL] [7] 前端写死阈值 50")
+        return
+    import re
+    # 行首即拼参（前面没有 if 守卫）= 无条件带参，未配置时仍覆盖后端配置
+    if re.search(r'(?m)^\s*url \+= "&scan_min_float_mc=" \+ _scanMinFloatMc;', js):
+        failures.append("[7] 阈值参数无条件拼参：未配置时仍以 0/旧值覆盖后端配置")
+        print("[FAIL] [7] 阈值无条件拼参")
+        return
+    if not re.search(r'if \(_scanMinFloatMc !== null\) url \+= "&scan_min_float_mc=" \+ _scanMinFloatMc;', js):
+        failures.append("[7] 缺少「非 null 才带参」守卫（后端默认无法生效）")
+        print("[FAIL] [7] 缺少 null 守卫")
+        return
+    print("[PASS] [7] 阈值 SSOT：前端初值 null + 非 null 才带参")
+
+
+def test_threshold_published_by_backend(failures):
+    """[8] 后端经 /api/health 下发 config.scan_min_float_mc，前端接该默认。"""
+    api = open(os.path.join(REPO_ROOT, "FrontAPI.py"), encoding="utf-8").read()
+    if '"config": app_config.as_dict(redact=True)' not in api:
+        failures.append("[8] /api/health 未下发 config 摘要")
+        print("[FAIL] [8] /api/health 未下发 config")
+        return
+    from App.AppConfig import app_config
+    if "scan_min_float_mc" not in app_config.as_dict(redact=True):
+        failures.append("[8] as_dict 未包含 scan_min_float_mc")
+        print("[FAIL] [8] as_dict 缺 scan_min_float_mc")
+        return
+    js = open(os.path.join(REPO_ROOT, "Frontend", "app.js"), encoding="utf-8").read()
+    if "data.config.scan_min_float_mc" not in js:
+        failures.append("[8] 前端未消费后端下发的阈值默认")
+        print("[FAIL] [8] 前端未接后端默认")
+        return
+    print("[PASS] [8] 阈值默认经 /api/health 下发且前端已消费")
+
+
 def test_all_a_registered(failures):
     """[4] _SOURCE_READERS 登记 all_a →「全A股」。"""
     code = open(os.path.join(REPO_ROOT, "App", "AppScan.py"), encoding="utf-8").read()
@@ -217,6 +269,8 @@ def main():
     test_zxg_filtered_by_threshold(failures)
     test_st_filter_applies_to_zxg(failures)
     test_st_predicate_wiring(failures)
+    test_threshold_ssot(failures)
+    test_threshold_published_by_backend(failures)
     test_all_a_registered(failures)
     print("=" * 60)
     if failures:

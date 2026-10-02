@@ -220,7 +220,13 @@
 
         let _scanFreq = "d"; // 扫描周期，默认日K
 
-        let _scanMinFloatMc = 50; // 流通市值过滤下限（亿）；0 = 不过滤（设置抽屉可改，localStorage 持久化）
+        // 流通市值过滤下限（亿）。null = 未配置：请求不带该参数，阈值由后端
+        // app_config.SCAN_MIN_FLOAT_MC 兜底（单一事实源在后端，前端不再写死默认值）；
+        // 0 = 不过滤。用户在设置抽屉显式设置后存 localStorage 并随请求传入。
+        let _scanMinFloatMc = null;
+        // /api/health 下发的后端默认值（SCAN_MIN_FLOAT_MC），仅作输入框 placeholder 与「未配置」语义，
+        // 不覆盖用户显式设置值。
+        let _scanMinFloatMcServer = null;
 
         let _dateKeyArrow = false, _dateKeyEnter = false, _dateManualTyping = false;
 
@@ -5671,10 +5677,15 @@
                     var radio = document.querySelector('input[name="scan-freq"][value="' + savedFreq + '"]');
                     if (radio) radio.checked = true;
                 }
+                // 未显式配置过 → 保持 null（请求不带参，后端用 app_config 默认）；
+                // 输入框留空，placeholder 展示后端下发的默认值。
                 var savedMc = parseFloat(localStorage.getItem("scan_min_float_mc"));
                 if (!isNaN(savedMc) && savedMc >= 0) _scanMinFloatMc = savedMc;
                 var mcInput = document.getElementById("scan-min-float-mc");
-                if (mcInput) mcInput.value = String(_scanMinFloatMc);
+                if (mcInput) {
+                    mcInput.value = _scanMinFloatMc === null ? "" : String(_scanMinFloatMc);
+                    if (_scanMinFloatMcServer !== null) mcInput.placeholder = String(_scanMinFloatMcServer);
+                }
             } catch(e) {}
             // "成分股"选项一直可见：当前页面是可获取成分股的指数时可用，否则灰化禁用
             var pageIndexLabel = document.getElementById("label-page-index");
@@ -5708,8 +5719,10 @@
             if (freq) url += "&freq=" + freq;
             if (pageIndexCode) url += "&page_index_code=" + encodeURIComponent(pageIndexCode);
             if (scanToken) url += "&scan_token=" + encodeURIComponent(scanToken);
-            // 流通市值过滤阈值随请求走（与 page_index_code 同一多页契约）；0 = 后端关闭过滤且不取市值
-            url += "&scan_min_float_mc=" + _scanMinFloatMc;
+            // 流通市值过滤阈值随请求走（与 page_index_code 同一多页契约）；0 = 后端关闭过滤且不取市值。
+            // 未配置（null）时**不带参**：后端回退 app_config.scan_min_float_mc
+            // ——前端一旦写死默认值，后端配置改动就被架空（2026-10-02 修复）。
+            if (_scanMinFloatMc !== null) url += "&scan_min_float_mc=" + _scanMinFloatMc;
             return fetch(url)
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
@@ -8073,9 +8086,17 @@
         (function() {
             var mcInput = document.getElementById("scan-min-float-mc");
             if (!mcInput) return;
-            if (!mcInput.value) mcInput.value = String(_scanMinFloatMc);
+            if (_scanMinFloatMcServer !== null) mcInput.placeholder = String(_scanMinFloatMcServer);
+            if (!mcInput.value && _scanMinFloatMc !== null) mcInput.value = String(_scanMinFloatMc);
             mcInput.addEventListener("change", function() {
-                var v = parseFloat(mcInput.value);
+                // 清空输入框 = 回到「未配置」：删掉持久值，后续请求不带参（后端默认值生效）
+                var raw = (mcInput.value || "").trim();
+                if (raw === "") {
+                    _scanMinFloatMc = null;
+                    try { localStorage.removeItem("scan_min_float_mc"); } catch(e) {}
+                    return;
+                }
+                var v = parseFloat(raw);
                 if (isNaN(v) || v < 0) v = 0;
                 _scanMinFloatMc = v;
                 try { localStorage.setItem("scan_min_float_mc", String(v)); } catch(e) {}
@@ -9781,6 +9802,14 @@
                 if (data && data.config && typeof data.config.view_count === 'number'
                     && data.config.view_count > 0) {
                     VIEW_COUNT = data.config.view_count;
+                }
+                // 流通市值过滤下限：后端 SCAN_MIN_FLOAT_MC 为单一事实源，仅用于输入框
+                // placeholder 与「未配置」语义，不覆盖用户显式设置值。
+                if (data && data.config && typeof data.config.scan_min_float_mc === 'number'
+                    && data.config.scan_min_float_mc >= 0) {
+                    _scanMinFloatMcServer = data.config.scan_min_float_mc;
+                    var _mcInput2 = document.getElementById("scan-min-float-mc");
+                    if (_mcInput2) _mcInput2.placeholder = String(_scanMinFloatMcServer);
                 }
             } catch (e) { /* 离线兜底：保留本地常量 */ }
         })();

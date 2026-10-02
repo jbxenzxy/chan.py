@@ -295,18 +295,7 @@
    "sdt_ts": 0
   }
  ],
- "bsps": [
-  {
-   "date": "2024/07/29",
-   "fractal_high": 15.57,
-   "fractal_low": 15.02,
-   "high": 17.86,
-   "is_buy": true,
-   "low": 17.63,
-   "price": 17.84,
-   "type": "1"
-  }
- ],
+ "bsps": [],
  "fxs": [
   {
    "date": "2023/02/06",
@@ -6004,7 +5993,7 @@
  ],
  "meta": {
   "bi_count": 14,
-  "bsp_count": 1,
+  "bsp_count": 0,
   "chan_version": "chan.py",
   "date_range": "2023/01/03 ~ 2024/08/12",
   "forward_adjust": true,
