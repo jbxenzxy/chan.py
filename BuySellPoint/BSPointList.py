@@ -1087,11 +1087,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             if nth_in_pivot == 5 or nth_in_pivot == 7:
                 self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢判定未通过, 笔5/7走第2次原中枢分析',
                               nth_in_pivot=nth_in_pivot)
-                self._cal_bs0point_57rd(bi_list, pivot_a, stroke_n)
+                self._cal_bs0point_nth_ozs_57th(bi_list, pivot_a, stroke_n)
             elif nth_in_pivot == 6 or nth_in_pivot == 8:
                 self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢判定未通过, 笔6/8走第2次原中枢分析',
                               nth_in_pivot=nth_in_pivot)
-                self._cal_bs0point_nth_ozs(bi_list, pivot_a, stroke_n)
+                self._cal_bs0point_nth_ozs_68th(bi_list, pivot_a, stroke_n)
             else:
                 self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次新中枢判定未通过，且非5/6/7/8笔',
                               nth_in_pivot=nth_in_pivot)
@@ -1179,7 +1179,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         return True
 
     # ── 第5/7笔：nzs 未通过后的同向笔递进分析 ──
-    def _cal_bs0point_57rd(self, bi_list, pivot_a, stroke_n):
+    def _cal_bs0point_nth_ozs_57th(self, bi_list, pivot_a, stroke_n):
         """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）
         奇数笔（1,3,5,7）同向、与趋势方向相反（多头中的回调、空头中的反弹，统称回调笔），偶数笔（2,4,6）为趋势笔：
         ㈠ 闪电走势：回调笔极值逐级收窄（买：笔n 高点 ≤ 笔(n-2) 高点 ≤ … ≤ 笔1 高点；卖反向）
@@ -1195,7 +1195,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         stroke_1 = odd_bis[0]
         stroke_nm2 = odd_bis[-2]  # 笔(n-2)：最近同向笔
 
-        self._dbg_bs0(' _cal_bs0point_57rd', '进入', stroke_n_idx=stroke_n.idx,
+        self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '进入', stroke_n_idx=stroke_n.idx,
                       nth_in_pivot=nth_in_pivot, is_buy=is_buy,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
@@ -1213,7 +1213,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 cur_ext, prev_ext = cur._low(), prev._low()
                 chain_ok = cur_ext >= prev_ext
             if not chain_ok:
-                self._dbg_bs0(' _cal_bs0point_57rd', '跳过: 非闪电走势（回调笔未逐级收窄）',
+                self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔未逐级收窄）',
                               cur_idx=cur.idx, prev_idx=prev.idx,
                               cur_ext=cur_ext, prev_ext=prev_ext)
                 return
@@ -1228,7 +1228,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
         ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
         if not (all(dif_ok_list) and ratio_ok):
-            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
+            self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
                           stroke_n_idx=stroke_n.idx, is_buy=is_buy,
                           dif_ok_list=dif_ok_list, ratio_ok=ratio_ok,
                           dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
@@ -1239,7 +1239,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
         divergence_rate = n_metric / (nm2_metric + 1e-7)
         if not is_diver:
-            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。最近同向笔 MACD BAR 未背驰',
+            self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过。最近同向笔 MACD BAR 未背驰',
                           nm2_idx=stroke_nm2.idx,
                           nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
                           divergence_rate=round(divergence_rate, 2),
@@ -1254,12 +1254,12 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             feature_dict['dif_ratio'] = dif_ratio
         self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)
-        self._dbg_bs0(' _cal_bs0point_57rd', 'OK 生成0类买/卖点',
+        self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', 'OK 生成0类买/卖点',
                       is_buy=is_buy, nth_in_pivot=nth_in_pivot,
                       divergence_rate=round(divergence_rate, 2))
 
     # ── 第n笔再次分析：MACD全面积比较（中枢A进入段 vs 笔n）──
-    def _cal_bs0point_nth_ozs(self, bi_list, pivot_a, stroke_n):
+    def _cal_bs0point_nth_ozs_68th(self, bi_list, pivot_a, stroke_n):
         """
         分析逻辑：当n=6或8时，主分析未找到买卖点，改用中枢A进入段与笔n做MACD全面积比较
         进入段为 pivot_a.begin_bi 的前一笔，离开段为 stroke_n
@@ -1269,7 +1269,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         config = self.config.GetBSConfig(is_buy)
         entry_bi = bi_list[pivot_a.begin_bi.idx - 1]
 
-        self._dbg_bs0(' _cal_bs0point_nth_ozs', '进入', stroke_n_idx=stroke_n.idx,
+        self._dbg_bs0(' _cal_bs0point_nth_ozs_68th', '进入', stroke_n_idx=stroke_n.idx,
                       entry_bi_idx=entry_bi.idx,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
@@ -1285,7 +1285,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                 threshold = pivot_a.high - base_range * r
                 actual = stroke_n._low()
                 cond = f'need low(={actual:.2f}) <= zs_high - base_range*{r}(={threshold:.2f})'
-            self._dbg_bs0('_cal_bs0point_nth_ozs', '跳过: 离开笔未有效突破中枢A',
+            self._dbg_bs0('_cal_bs0point_nth_ozs_68th', '跳过: 离开笔未有效突破中枢A',
                           stroke_high=stroke_n._high(), stroke_low=stroke_n._low(),
                           zs_high=pivot_a.high, zs_low=pivot_a.low,
                           zs_range=round(pivot_a.high - pivot_a.low, 2),
@@ -1300,7 +1300,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         fence_dominant = entry_bi.is_macd_same_side_dominant()
         fence_lines = entry_bi.is_macd_lines_same_side()
         if not (fence_dominant and fence_lines):
-            self._dbg_bs0(' _cal_bs0point_nth_ozs', '跳过: 进入笔MACD同侧围栏未通过',
+            self._dbg_bs0(' _cal_bs0point_nth_ozs_68th', '跳过: 进入笔MACD同侧围栏未通过',
                           entry_bi_idx=entry_bi.idx,
                           dominant=fence_dominant, lines=fence_lines)
             return
@@ -1311,7 +1311,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         divergence_rate = out_metric / (in_metric + 1e-7)
         is_diver = out_metric < config.divergence_rate * in_metric
         if not is_diver:
-            self._dbg_bs0(' _cal_bs0point_nth_ozs', '跳过: MACD面积未背驰',
+            self._dbg_bs0(' _cal_bs0point_nth_ozs_68th', '跳过: MACD面积未背驰',
                           in_metric=round(in_metric, 2), out_metric=round(out_metric, 2),
                           divergence_rate=round(divergence_rate, 2),
                           threshold=round(config.divergence_rate, 2))
@@ -1324,7 +1324,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         }
         self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
                     is_target_bsp=True, feature_dict=feature_dict)
-        self._dbg_bs0(' _cal_bs0point_nth_ozs', 'OK 生成0类买/卖点',
+        self._dbg_bs0(' _cal_bs0point_nth_ozs_68th', 'OK 生成0类买/卖点',
                       is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
 
     # ═══════════════════════════════════════════════════════════
