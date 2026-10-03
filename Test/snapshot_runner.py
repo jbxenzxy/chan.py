@@ -228,11 +228,32 @@ def isolate_side_effects():
     saved_saved_points = app_data._saved_point_times
     app_data._saved_point_times = {}
 
+    # 用户数据文件路径重定向（2026-10-03，铁律「测试不改写生产环境」）：
+    # 内存态置空只保证「读」的干净；「写」（save_point_time /
+    # save_annotations / save_last_code_freq → _atomic_write_text）仍会落
+    # 真实 App/ 下的选点 CSV（double_click_dt.csv）/ last_code_freq.json /
+    # text_annotation.json——实证：复盘窗口两个用例把测试选点写进了生产
+    # 选点 CSV。手法 = 类 property 替换（对齐 test_lock_v5_guards ②），
+    # 三件套一并隔离；restore 恢复 property 并清理临时目录。
+    import shutil as _shutil
+    import tempfile as _tempfile
+    _ud = _tempfile.mkdtemp(prefix="isolate_userdata_")
+    _saved_props = {}
+    for _name, _fname in (("saved_point_file", "double_click_dt.csv"),
+                          ("last_code_freq_file", "last_code_freq.json"),
+                          ("annotations_file", "text_annotation.json")):
+        _saved_props[_name] = getattr(type(app_data), _name)
+        setattr(type(app_data), _name,
+                property(lambda self, _f=_fname: os.path.join(_ud, _f)))
+
     def restore():
         for k, v in saved.items():
             setattr(m, k, v)
         m.STOCKS_LOOKBACK_CONFIG = saved_lookback
         app_data._saved_point_times = saved_saved_points
+        for _name, _prop in _saved_props.items():
+            setattr(type(app_data), _name, _prop)
+        _shutil.rmtree(_ud, ignore_errors=True)
     return restore
 
 
