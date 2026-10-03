@@ -1218,7 +1218,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                               cur_ext=cur_ext, prev_ext=prev_ext)
                 return
 
-        # ㈡ 全部奇数笔整笔 DIF 在趋势侧 + ㈢ 回抽0轴比例（笔n 终点 vs 笔1 起点）
+        # ㈡ 全部奇数笔整笔 DIF 在趋势侧 + ㈢ 回抽0轴比例（笔n终点 vs 笔1起点）
         dif_positive = is_buy
         dif_ok_list = [self._dif_all_same_side(bi, dif_positive) for bi in odd_bis]
         a_dif = stroke_1.get_begin_klu().macd.DIF
