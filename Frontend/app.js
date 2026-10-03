@@ -773,11 +773,12 @@
                                 // 下窗由后端自动对齐 [T, 最新]（下窗对齐上窗语义），
                                 // 初始快照（含上下窗）由 SSE init 事件统一推送，
                                 // 不在此处用单窗响应覆盖 chartData/dualSubData
-                                if (isDualWindow && dualSubFreq) {
-                                    document.querySelector(".loading-text").textContent = "正在加载双窗口数据...";
-                                    connectRealtimeDual(code, freq, dualSubFreq, null, savedDate);
-                                    return;
-                                }
+                            if (isDualWindow && dualSubFreq) {
+                                document.querySelector(".loading-text").textContent = "正在加载双窗口数据...";
+                                // 四期：重连不带 start——后端从 CSV 恢复两窗选点（单双窗同构）
+                                connectRealtimeDual(code, freq, dualSubFreq);
+                                return;
+                            }
                                 chartData = data;
                                 adjustViewForSavedPoint();
                                 document.getElementById("stock-name").textContent = chartData.meta.name;
@@ -3220,12 +3221,20 @@
                         const _subCode = chartData.meta.symbol;
                         const _subFreq = dualSubFreq;
                         const _mainFreq = currentFreq;
+                        const _subIsFutures = chartData.meta.market === 'futures';
+                        // 引擎运行中拦截（期货域）：选点写 CSV，影响引擎窗口
+                        if (_subIsFutures && autoOrderRunning && isFuturesMode()) {
+                            showAlert('交易引擎运行中，请先关闭，再选点');
+                            return;
+                        }
                         document.getElementById("loading").classList.remove("hidden");
                         document.querySelector(".loading-text").textContent = "正在手选进入段...";
                         const _seq = _bumpChartActionSeq();
-                        fetch("/api/stocks/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq
-                            + "&bi_idx=" + subBiIdx + "&dual=1&main_freq=" + _mainFreq + "&sub_freq=" + _subFreq,
-                            { method: "POST" })
+                        const _selectUrl = _subIsFutures
+                            ? "/api/futures/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq + "&bi_idx=" + subBiIdx
+                            : "/api/stocks/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq
+                              + "&bi_idx=" + subBiIdx + "&dual=1&main_freq=" + _mainFreq + "&sub_freq=" + _subFreq;
+                        fetch(_selectUrl, { method: "POST" })
                             .then(resp => {
                                 if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
                                 return resp.json();
@@ -3233,6 +3242,14 @@
                             .then(data => {
                                 if (_isChartActionStale(_seq)) return;
                                 if (data.error) throw new Error(data.error);
+                                if (_subIsFutures) {
+                                    // 期货下窗选点：响应为下窗单窗快照（校验用），
+                                    // 双窗数据靠重连拉取（后端 CSV 恢复两窗选点）。
+                                    // 注意：本块处于下窗替换态（chartData=dualSubData、
+                                    // currentFreq=下窗周期），上窗周期用捕获的 _savedFreq
+                                    connectRealtimeDual(_subCode, _savedFreq, dualSubFreq);
+                                    return;
+                                }
                                 chartData = data;                      // 上窗新数据（区间套基于新下窗重算）
                                 if (data.sub) { dualSubData = data.sub; }  // 下窗 = [新选点, 最新]
                                 adjustViewForSavedPoint();
@@ -3559,10 +3576,10 @@
         window.cancelSelectedPoint = function() {
             document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
-            // 双窗取消选点（三期独立选点）：股票双窗清焦点窗周期列（对齐单窗语义）；
-            // 期货双窗与双窗复盘态未纳入（四期/后续）
+            // 双窗取消选点（三期/四期独立选点）：清焦点窗周期列（对齐单窗语义）；
+            // 双窗复盘态未纳入（后续）
             const isFutures = chartData.meta.market === 'futures';
-            if (isDualWindow && (isFutures || chartData.meta.is_replay)) {
+            if (isDualWindow && (isFutures && chartData.meta.is_replay)) {
                 showToast("双窗口模式，不支持重置");
                 return;
             }
@@ -3580,7 +3597,7 @@
                     showAlert('交易引擎运行中，请先关闭，再取消选点');
                     return;
                 }
-                fetch("/api/futures/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
+                fetch("/api/futures/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })  // 四期：双窗下 freq=焦点窗周期
                     .then(resp => resp.json())
                     .then(() => {
                         if (_isChartActionStale(_seq)) return; // [N1] 过期重置不得重连SSE（会掐断新操作的实时流）
@@ -4131,15 +4148,18 @@
                     return;
                 }
                 // 复盘越界：日历输入早于窗口左边界 L → 弹窗（右键复盘至此天然在区间内）
-                if (!isDualCtx && apiFirst && min15(apiDate) < min15(apiFirst)) {
-                    showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + apiFirst + "，请扩大数据范围。");
+                // 双窗（四期）：两窗 L 各自冻结，任一窗越界即拦——判定基准 = max(L_main, L_sub)
+                const _futReplayFloor = (isDualWindow && apiFirstSub && apiFirstSub > apiFirst) ? apiFirstSub : apiFirst;
+                if (apiFirst && min15(apiDate) < min15(_futReplayFloor)) {
+                    showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + _futReplayFloor + "，请扩大数据范围。");
                     return;
                 }
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
                 if (isDualWindow && dualSubFreq) {
-                    connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq, apiDate);
+                    // 双窗复盘：两窗 L 各自冻结（双 start），R 共享=复盘点
+                    connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq, apiDate, apiFirst, apiFirstSub);
                 } else {
                     // 复盘继承选点：start=当前窗口首根（左边界L），后端 CSV 恢复兜底
                     connectRealtimeInit(chartData.meta.symbol, freq, apiFirst || realtimeStartTime, apiDate);
@@ -7068,7 +7088,7 @@
         // 期货双窗口SSE连接（独立于 connectRealtimeInit，与股票双窗口解耦）
         // startTime: 上窗选点时间 T（B 操作双窗：上窗 [T, 最新]、下窗自动对齐同一区间）
         // endTime: 复盘终点（软断开；复盘模式下后端忽略 startTime——复盘不加载选点）
-        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime) {
+        function connectRealtimeDual(symbol, mainFreq, subFreq, endTime, startTime, subStartTime) {
             disconnectRealtime();
             realtimeSymbol = symbol;
             realtimeFreq = mainFreq;
@@ -7086,8 +7106,11 @@
                 let sseUrl = '/api/futures/read/stream?symbol=' + encodeURIComponent(symbol)
                     + '&freq=' + mainFreq + '&dual=1&sub_freq=' + subFreq;
                 if (startTime) {
-                    // B 操作双窗选点：上窗从 T 加载到最新，下窗由后端对齐同一区间
+                    // B 操作双窗选点（四期独立选点）：上窗/下窗各自的窗口左边界
                     sseUrl += '&start_time=' + encodeURIComponent(startTime);
+                }
+                if (subStartTime) {
+                    sseUrl += '&sub_start_time=' + encodeURIComponent(subStartTime);
                 }
                 if (endTime) {
                     sseUrl += '&end_time=' + encodeURIComponent(endTime);

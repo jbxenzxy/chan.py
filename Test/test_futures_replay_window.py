@@ -20,6 +20,11 @@ Test/test_futures_replay_window.py —— 期货单窗复盘窗口 [L, R]（二�
 真实天勤数据源用 MockSource（CSSESource 子类）替代，全程离线。
 
 运行：python Test/test_futures_replay_window.py
+
+四期追加（dual gen 窗口解耦）：`_sse_dual_gen` 的 start/sub_start_time 独立——
+两窗各自继承各自周期列的选点（CSV 恢复）、显式 sub_start_time 优先、
+无选点方式A 交由 init_chan_symbol 按 FUTURES_LOOKBACK_CONFIG[sub_freq] 自算
+（折算机制废除）；meta 双字段（main/sub 快照各自回显各自列）。
 """
 import os
 import sys
@@ -284,6 +289,94 @@ def test_replay_meta_shows_csv_point():
     print(f"[PASS] 复盘 meta 回显 CSV 选点: {captured['extract'][0]['saved']}")
 
 
+def test_dual_gen_independent_starts():
+    """dual gen 双 start 解耦（四期）：上窗/下窗各自继承各自周期列的选点。"""
+    captured = {"init": [], "extract": []}
+
+    def _run_dual(csv_main, csv_sub, kw_start=None, kw_sub_start=None):
+        restore_iso = isolate_side_effects()
+        try:
+            if csv_main:
+                _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "1m", csv_main)
+            if csv_sub:
+                _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "15s", csv_sub)
+
+            def stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
+                          end_time=None, num_bars=None):
+                captured["init"].append({"freq": freq_label, "start": start_time,
+                                         "end": end_time, "num_bars": num_bars})
+                chan = MockChan()
+                return chan, api.klines, ("kl",), None
+
+            def stub_extract(chan, kl_type, symbol, name, freq_label,
+                             saved_selection_date="", lightweight=False, klines=None,
+                             prev_klines=None, prev_ema_state=None, is_replay=False):
+                captured["extract"].append({"freq": freq_label, "saved": saved_selection_date})
+                return {"klines": [], "meta": {"kline_count": 0, "bi_count": 0,
+                                               "zs_count": 0, "bss": []}, "bis": []}
+
+            def stub_white(kl_list, freq, date_fmt):
+                return None
+
+            def stub_drain(chan):
+                pass
+
+            originals = {}
+            for name, stub in (("init_chan_symbol", stub_init),
+                               ("_extract_realtime_snapshot", stub_extract),
+                               ("_calc_futures_white_hline", stub_white),
+                               ("_drain_chan", stub_drain)):
+                originals[name] = getattr(_sse_mod, name)
+                setattr(_sse_mod, name, stub)
+            try:
+                src = MockSource()
+                gen = FrontAPI.sse_futures_stream_dual(
+                    SYMBOL, "1m", "15s", start_time=kw_start,
+                    sub_start_time=kw_sub_start, end_time=None, source=src)
+                for _frame in gen:
+                    pass
+            finally:
+                for name, orig in originals.items():
+                    setattr(_sse_mod, name, orig)
+        finally:
+            restore_iso()
+
+    # 场景 1：两列均有选点、入口无显式 start → 各自继承
+    captured = {"init": [], "extract": []}
+    _run_dual("2025/05/01 09:30:00", "2025/06/01 09:30:00")
+    by_freq = {c["freq"]: c for c in captured["init"]}
+    assert by_freq["1m"]["start"] == "2025/05/01 09:30:00", \
+        f"上窗应继承 1m 列选点，实为 {by_freq['1m']['start']!r}"
+    assert by_freq["15s"]["start"] == "2025/06/01 09:30:00", \
+        f"下窗应继承 15s 列选点，实为 {by_freq['15s']['start']!r}"
+    assert by_freq["1m"]["num_bars"] is None and by_freq["15s"]["num_bars"] is None, \
+        "选点路径 num_bars 应为 None（init 内按墙钟估算）"
+    # meta 双字段：两窗快照各自回显各自列
+    by_ext = {c["freq"]: c for c in captured["extract"]}
+    assert by_ext["1m"]["saved"] == "2025/05/01 09:30:00"
+    assert by_ext["15s"]["saved"] == "2025/06/01 09:30:00"
+    print("[PASS] dual 双 start 解耦: 两窗各自继承各自周期列选点 + meta 双字段")
+
+    # 场景 2：显式 sub_start_time 优先于 CSV
+    captured = {"init": [], "extract": []}
+    _run_dual("2025/05/01 09:30:00", "2025/06/01 09:30:00",
+              kw_sub_start="2025/07/01 09:30:00")
+    by_freq = {c["freq"]: c for c in captured["init"]}
+    assert by_freq["15s"]["start"] == "2025/07/01 09:30:00", \
+        f"显式 sub_start_time 应优先于 CSV，实为 {by_freq['15s']['start']!r}"
+    print("[PASS] dual 显式 sub_start 优先")
+
+    # 场景 3：两列均空 → 双 start 均 None（方式A，各自配置根数由 init 自算）
+    captured = {"init": [], "extract": []}
+    _run_dual(None, None)
+    by_freq = {c["freq"]: c for c in captured["init"]}
+    assert by_freq["1m"]["start"] is None and by_freq["15s"]["start"] is None, \
+        "无选点时双 start 应为 None（方式A）"
+    assert by_freq["1m"]["num_bars"] is None and by_freq["15s"]["num_bars"] is None, \
+        "方式A num_bars 应为 None（init 内按 FUTURES_LOOKBACK_CONFIG[sub_freq] 自算）"
+    print("[PASS] dual 无选点方式A: 双 start=None，根数交由 init 自算")
+
+
 def main():
     test_fetch_bars_branches()
     test_replay_inherits_csv_point()
@@ -292,6 +385,7 @@ def main():
     test_live_csv_restore_regression()
     test_replay_inverted_start_falls_back()
     test_replay_meta_shows_csv_point()
+    test_dual_gen_independent_starts()
     print("ALL 期货单窗复盘窗口 TESTS PASS")
 
 

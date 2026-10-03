@@ -744,29 +744,17 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
                     log.info(f"[信息] 子级别({sub_freq})独立选点筛选: 从 {sub_start_time} 起，"
                              f"{sub_before}条 -> {len(sub_records)}条")
             else:
-                # 方式A（无下窗选点）：跟随上窗区间——结束时间语义精确截断：
-                #   left_dt < sub_dt <= right_dt 恰为「完全落入上窗范围」的下窗K线
-                left_dt, right_dt = _stocks_sub_dt_algo(main_start, main_end, freq, sub_freq)
-                if left_dt is not None:
+                # 方式A（无下窗选点，四期一致性原则）：下窗自己的配置根数——
+                # R 往前 N_sub 根（STOCKS_LOOKBACK_CONFIG[sub_freq]），与单窗
+                # 方式A同构；原「跟随上窗区间精确截断 + 对齐不足降全量」废除
+                # （[-N_sub:] 本身截到文件起点，天然就是兜底）。
+                _sub_cfg = STOCKS_LOOKBACK_CONFIG.get(sub_freq)
+                _sub_n = _sub_cfg[0] if _sub_cfg else 0
+                if not FULL_DATA_MODE and _sub_n and _sub_n > 0 and len(sub_records) > _sub_n:
                     sub_before = len(sub_records)
-                    sub_records = [r for r in sub_records if left_dt < r["dt"] <= right_dt]
-                    if sub_before != len(sub_records):
-                        if sub_records:
-                            log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> {len(sub_records)}条 "
-                                     f"[{sub_records[0]['dt']} ~ {sub_records[-1]['dt']}]")
-                        else:
-                            log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> 0条")
-                else:
-                    log.warning(f"[警告] 子级别({sub_freq})无法计算截断边界(主级别={freq})，保留全量")
-
-            # 对齐不足降全量（用户逻辑⑵⓵）：仅方式A分支适用（独立选点路径
-            # 「从选点起全量」本身就是最宽窗口，降全量会使选点失效）。
-            if _sub_start_dt is None and len(sub_records) < DUAL_SUB_FALLBACK_MIN \
-                    and len(sub_full_backup) > len(sub_records):
-                log.warning(f"[信息] 子级别({sub_freq})对齐区间[{main_start.strftime('%Y/%m/%d')} ~ "
-                            f"{main_end.strftime('%Y/%m/%d')}]内仅{len(sub_records)}条"
-                            f"(< {DUAL_SUB_FALLBACK_MIN})，降为全量{len(sub_full_backup)}条")
-                sub_records = sub_full_backup
+                    sub_records = sub_records[-_sub_n:]
+                    log.info(f"[信息] 子级别({sub_freq})方式A截断: 保留最近{_sub_n}根, "
+                             f"{sub_before}条 -> {len(sub_records)}条")
         else:
             # legacy：±1 天 padding（联立路径基线，行为冻结）
             sub_before = len(sub_records)

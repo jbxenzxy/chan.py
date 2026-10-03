@@ -693,7 +693,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         session_clear()
 
 
-def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
+def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None):
     """期货 SSE 双窗口 · 建会话并返回「逐帧重绑定会话」的生成器。
 
     与 sse_futures_stream_single 同构：普通函数（非生成器），会话提前建好
@@ -701,10 +701,10 @@ def sse_futures_stream_dual(symbol, main_freq="1m", sub_freq=None, start_time=No
     """
     src = source if source is not None else CTqSdkSession()
     return _per_frame_session(
-        _sse_dual_gen(symbol, main_freq, sub_freq, start_time, end_time, src), src)
+        _sse_dual_gen(symbol, main_freq, sub_freq, start_time, sub_start_time, end_time, src), src)
 
 
-def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_time=None, source=None):
+def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_start_time=None, end_time=None, source=None):
     """期货 SSE 双窗口 · 同步生成器（本体；对外经 _per_frame_session 包装）
 
     事件协议：
@@ -757,50 +757,40 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
                     continue
 
         # 1. 查询选点状态（选点经 app_data 公共 API 读取）
-        # 对齐股票双窗语义（下窗对齐上窗 + C 复盘规则）：
-        #   · 双窗只认上窗选点：下窗不读自己周期的选点，跟随上窗区间对齐取数；
-        #   · C 复盘不加载选点（对齐股票）：end_time 模式下忽略 start_time 与 CSV 选点，
-        #     复盘窗口固定 [end-N, end]；回到最新时不带 start_time 重连，此处再恢复。
+        # 四期（2026-10-03，对齐股票双窗 §4/§5 一致性原则）：上下窗选点独立——
+        #   · 上窗 L = 显式 start_time > CSV(main_freq 列) > 方式A（自身配置根数）；
+        #   · 下窗 L = 显式 sub_start_time > CSV(sub_freq 列) > 方式A（自身配置根数）；
+        #   · 复盘（end_time）：两窗 L 同规则（前端复盘显式传双 start=各自冻结，
+        #     缺失时 CSV 恢复=继承选点，与期货单窗 gen 同构）；
+        #   · meta 双字段恒回显 CSV 真值：main_snapshot.saved_selection_date=
+        #     CSV(main 列)、sub_snapshot.saved_selection_date=CSV(sub 列)。
         saved_selection_date = ""
+        sub_saved_selection_date = ""
         main_start_time = start_time
-        if end_time:
-            if main_start_time:
-                log.info(f"[{display_key}] 复盘模式：忽略选点 start_time={main_start_time}（复盘不加载选点）")
-            main_start_time = None
-        else:
-            try:
-                qualified_code = symbol
-                col_meta = app_data.freq_to_col(main_freq) or ""
-                if col_meta:
-                    saved_selection_date = _get_saved_point(qualified_code, main_freq)
-                    # 如果外部没传start_time，从CSV读取选点
-                    if main_start_time is None and saved_selection_date:
-                        main_start_time = saved_selection_date
-                        log.info(f"[{display_key}] 检测到保存选点: {saved_selection_date}")
-            except Exception as _e:
-                log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
+        try:
+            qualified_code = symbol
+            col_main = app_data.freq_to_col(main_freq) or ""
+            if col_main:
+                saved_selection_date = _get_saved_point(qualified_code, main_freq)
+            col_sub = app_data.freq_to_col(sub_freq) or ""
+            if col_sub:
+                sub_saved_selection_date = _get_saved_point(qualified_code, sub_freq)
+            if main_start_time is None and saved_selection_date:
+                main_start_time = saved_selection_date
+                log.info(f"[{display_key}] 上窗恢复选点: {saved_selection_date}")
+            if sub_start_time is None and sub_saved_selection_date:
+                sub_start_time = sub_saved_selection_date
+                log.info(f"[{display_key}] 下窗恢复选点: {sub_saved_selection_date}")
+        except Exception as _e:
+            log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
-        # 下窗取数根数：对齐上窗实际加载区间（股票双窗「下窗对齐上窗」的期货对齐实现）
-        #   · A（无选点/非复盘）：上窗配置 N_main 根 → 下窗 = N_main×(上窗周期/下窗周期)+余量
-        #     （K线根数按交易时长等比折算：N_main 根上窗K线的交易时长 = N_main×主周期 秒，
-        #       对应下窗 N_main×(主周期/次周期) 根；余量覆盖会话边界的不完整K线）
-        #   · B（上窗选点 T）：跟随上窗 [T, 最新]，按墙钟估算下窗根数（init_chan_symbol 内处理）
-        #   · C（复盘）：跟随上窗 [end-N_main, end]，下窗折算根数 + end→now 流逝根数
-        #   · 全部封顶天勤上限 10000；超限自然降级「对齐不足 → 全量（最近10000根）」
-        _main_base_bars = resolve_lookback_bars(main_freq_sec)
-        _sub_align_ratio = main_freq_sec / sub_freq_sec if sub_freq_sec > 0 else 1.0
-        _sub_aligned_bars = min(int(_main_base_bars * _sub_align_ratio) + _BAR_ESTIMATE_MARGIN, _TQ_MAX_BARS)
-        if main_start_time:
-            # B 模式：下窗跟随上窗选点 T，按墙钟估算（fetch_kline 内再按 T 过滤）
-            sub_start_time = main_start_time
-            sub_num_bars = None
-        else:
-            # A/C 模式：下窗按上窗区间折算根数对齐（C 的流逝根数由 init_chan_symbol 补充）
-            sub_start_time = None
-            sub_num_bars = _sub_aligned_bars
+        # 下窗取数（四期一致性原则）：下窗窗口独立，方式A = 下窗自己的配置根数
+        # （FUTURES_LOOKBACK_CONFIG[sub_freq]，原「上窗配置 N_main 折算」废除）。
+        # 下窗 L 已在上方选点状态段解析（显式 > CSV > None=方式A），num_bars
+        # 交由 init_chan_symbol 按窗口分支自算（B=墙钟估算[start→now]、A=自身配置），
+        # 本层不再传折算基准。
         if _SSE_DEBUG:
-            log.info(f"[{display_key}] 下窗对齐: 上窗基准={_main_base_bars}根, 折算比={_sub_align_ratio:.1f}, "
-                     f"下窗对齐={_sub_aligned_bars}根 (start={sub_start_time}, replay={bool(end_time)})")
+            log.info(f"[{display_key}] 下窗独立窗口: start={sub_start_time}, replay={bool(end_time)}")
 
         # 2. 拉取下窗历史 + chan分析（次级别优先：区间套分析需先分析次级别）
         if _SSE_DEBUG:
@@ -808,8 +798,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
         # 复盘软断开：end_time 模式下建 chan 前启用买卖点调试，建后复原
         _replay_prev = set_replay_mode(bool(end_time))
         try:
-            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time,
-                                          num_bars=sub_num_bars)
+            sub_result = init_chan_symbol(src, symbol, name, sub_freq_sec, sub_freq_label, sub_start_time, end_time)
         finally:
             set_replay_mode(_replay_prev)
         if sub_result is None:
@@ -856,6 +845,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, end_ti
                                                  saved_selection_date=saved_selection_date,
                                                  is_replay=bool(end_time))
         sub_snapshot = _extract_realtime_snapshot(sub_chan, sub_kl_type, symbol, name, sub_freq_label,
+                                                       saved_selection_date=sub_saved_selection_date,
                                                        klines=None,
                                                        is_replay=bool(end_time))
         # 期货双窗口：上窗 bis 的 fx_a_raw_dt/fx_b_raw_dt 是上层K线时间，
