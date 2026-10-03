@@ -1238,19 +1238,18 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     log.info(f"[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: {time.time()-t0:.3f}s")
 
     # 获取当前周期的保存选点日期（meta.saved_selection_date 回显规则）：
-    #   · 复盘（end_date）不回显（复盘不加载/不支持选点）；
-    #   · 显式选点（B 操作重建，start_time 传入）直接回显——单窗选点已落
-    #     CSV（内存同步），双窗选点不落 CSV、仅会话内回显供前端全量显示；
-    #   · 其余：单窗 A 操作回显 CSV 保存的选点（重启加载选点）；双窗
-    #     不读 CSV（单窗选点不与双窗混用，用户逻辑⑵注）。
+    #   · 单窗恒回显 CSV 真值（含复盘态）：复盘态选点/取消选点依赖 meta
+    #     反映当前选点状态；复盘窗口左边界由显式 start_time 控制、与 meta
+    #     回显解耦（A 复盘的 start=A左 不会冒充选点——CSV 空则 meta 空）；
+    #   · 双窗不读 CSV（单窗选点不与双窗混用）：双窗选点不落 CSV，仅
+    #     会话内按显式 start_time 回显（非复盘 B 操作）。
     _col_meta = FREQ_TO_COL.get(freq, "")
     _saved_sdt_for_meta = ""
-    if not end_date:
-        if start_time:
-            _saved_sdt_for_meta = start_time
-        elif not dual and _col_meta:
-            # 加锁读取（原为无锁 check-then-act）
-            _saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _col_meta)
+    if not dual and _col_meta:
+        # 加锁读取（原为无锁 check-then-act）
+        _saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _col_meta)
+    elif start_time and not end_date:
+        _saved_sdt_for_meta = start_time
 
     # 7. 计算最新笔的白色横虚线数据
     white_hline = None

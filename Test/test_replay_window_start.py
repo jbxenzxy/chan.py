@@ -16,10 +16,9 @@ Test/test_replay_window_start.py —— 股票复盘窗口 [L, R] 的 start_time
   2. start_time > end_date → 返回 error（兜底改严：原「不筛也不截」静默
      放行已删除）；
   3. start_time 无法解析 → 返回 error（同上）；
-  4. 复盘 + start_time → meta.saved_selection_date 为空（复盘窗口左边界
-     不回写选点 meta——否则前端「取消选点」菜单会误亮）；
-  5. 非复盘 + `start_time` → `meta.saved_selection_date` 回写（B 操作选点
-     回显的现状回归保护）；
+  4. 复盘 + start_time → meta.saved_selection_date 回显 CSV 真值
+     （隔离环境 CSV 空 → meta 空；A 复盘的 start=A左 不会冒充选点）；
+  5. 非复盘 B 操作（先落 CSV 再重建）→ meta 回显 CSV 选点；
   6. 复盘态选点端到端（股票单窗，2026-10-03 放开）：选点=改L、R保持
      复盘点，选点落 CSV、meta 不回写、保持复盘态；
   7. 双窗 + end_date → 防御性拒绝。
@@ -135,7 +134,7 @@ def test_replay_start_unparsable_errors():
 
 
 def test_replay_start_time_no_meta_writeback():
-    """复盘 + start_time：meta.saved_selection_date 为空（左边界不冒充选点）。"""
+    """复盘 + start_time：meta 回显 CSV 真值（隔离下 CSV 空 → meta 空，start 不冒充选点）。"""
     rows = _fixture_rows()
     anchor = _ymd(rows[-1 - REPLAY_ANCHOR_OFFSET]["dt"])
     start = _ymd(rows[-1 - START_OFFSET]["dt"])
@@ -147,15 +146,33 @@ def test_replay_start_time_no_meta_writeback():
 
 
 def test_live_start_time_meta_writeback_kept():
-    """非复盘 + start_time：meta.saved_selection_date 回写（B 操作现状保护）。"""
-    rows = _fixture_rows()
-    start = _ymd(rows[-1 - START_OFFSET]["dt"])
-    result, _ = collect({"d": (TRUNC_BARS, "用例窗口")}, start_time=start)
-    dates = kline_dates(result)
-    saved = (result.get("meta") or {}).get("saved_selection_date")
-    assert saved == start, f"非复盘选点 meta 应回写 {start!r}，实际 {saved!r}"
-    assert dates[0] == start, f"选点筛选失效：首根 {dates[0]} != {start}"
-    print(f"[PASS] 非复盘选点 meta 回写: {saved}，首根 {dates[0]}")
+    """非复盘 B 操作（先落 CSV 再重建）：meta 回显 CSV 选点（现状保护）。"""
+    from App import AppEngine as m
+
+    restore_iso = isolate_side_effects()
+    restore_src, _rows2 = install_data_source(FIXTURE)
+    restore_ref = _seed_reference()
+    saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+    saved_full_mode = m.FULL_DATA_MODE
+    m.STOCKS_LOOKBACK_CONFIG = {"d": (TRUNC_BARS, "用例窗口")}
+    m.FULL_DATA_MODE = False
+    try:
+        rows = _fixture_rows()
+        start = _ymd(rows[-1 - START_OFFSET]["dt"])
+        # 模拟真实 B 操作时序：save_point_time（选点 Step 2）先于重建（Step 4）
+        m.app_data.save_point_time("sh" + CODE, "用例", "d", start)
+        result = m._analyze_stock_internal(CODE, freq="d", cache_chan=False, start_time=start)
+        dates = kline_dates(result)
+        saved = (result.get("meta") or {}).get("saved_selection_date")
+        assert saved == start, f"非复盘选点 meta 应回显 CSV 选点 {start!r}，实际 {saved!r}"
+        assert dates[0] == start, f"选点筛选失效：首根 {dates[0]} != {start}"
+        print(f"[PASS] 非复盘选点 meta 回显 CSV: {saved}，首根 {dates[0]}")
+    finally:
+        m.FULL_DATA_MODE = saved_full_mode
+        m.STOCKS_LOOKBACK_CONFIG = saved_lookback
+        restore_ref()
+        restore_src()
+        restore_iso()
 
 
 def test_replay_select_point_rebuild_window():
@@ -189,12 +206,15 @@ def test_replay_select_point_rebuild_window():
         assert dates, "选点重建未返回K线"
         assert dates[-1] == anchor, f"R 应保持复盘点 {anchor}，实为 {dates[-1]}"
         assert result["meta"]["is_replay"] is True, "选点后应保持复盘态"
-        assert not (result["meta"].get("saved_selection_date")), \
-            "复盘响应不应回写选点 meta（选点已落 CSV，由回最新后的冷启动恢复）"
         assert len(dates) > 300, \
             f"选点+复盘路径疑似被套根数截断：{len(dates)} 条（若误走截断应 <= 120）"
         saved_csv = m.app_data.get_saved_point_time("sh" + CODE, "d")
         assert saved_csv, "选点未落 CSV（回最新后无法恢复 [选点, 最新]）"
+        # meta 恒回显 CSV 真值：复盘态选点后 meta 带选点 → 前端「取消选点」
+        # 菜单点亮（取消选点已放开：改L回方式A，R保持复盘点）
+        meta_saved = (result.get("meta") or {}).get("saved_selection_date")
+        assert meta_saved == saved_csv, \
+            f"复盘响应 meta 应回显 CSV 选点 {saved_csv!r}，实际 {meta_saved!r}"
         # 改L语义核心：重建首根必须 == 选点左肩（选点 T 落在窗口左边界）。
         # 回归警示：曾因 rebuild_start_time 在单窗下误为 None（freq==main_freq
         # 恒 False）而丢失左边界，窗口退化为 [锚点-500, 锚点]，此断言即防回潮。

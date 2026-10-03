@@ -123,7 +123,7 @@
         let _tpslActive = false;
         let _tpslPlan = null;
 
-        // 取消选点菜单项是否可用（有选点且非双窗口/非复盘模式）
+        // 取消选点菜单项是否可用（有选点且非双窗口；股票复盘态已放开——改L，R保持复盘点）
         let _restartEnabled = false;
 
         // K线倒计时进度条（快期3风格：右上角红色进度条+剩余时间）
@@ -3466,10 +3466,11 @@
         };
 
         // 辅助：根据chartData中的saved_selection_date恢复「取消选点」菜单项状态
+        // （复盘态已放开：meta 恒回显 CSV 真值，复盘态选点后菜单点亮；
+        //   取消 = 改L回方式A左边界，R保持复盘点——请求带 end_date）
         function updateRestartBtn() {
             var hasPoint = chartData && chartData.meta && chartData.meta.saved_selection_date;
-            var isReplay = chartData && chartData.meta && chartData.meta.is_replay;
-            _restartEnabled = hasPoint && !isDualWindow && !isReplay;
+            _restartEnabled = hasPoint && !isDualWindow;
         }
 
         function updateDualBtn() {
@@ -3494,9 +3495,9 @@
         window.cancelSelectedPoint = function() {
             document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
-            // 双窗口模式和复盘模式不允许重置
+            // 双窗不允许重置；复盘态仅期货拦截（股票复盘态取消选点=改L回方式A，R保持复盘点）
             if (isDualWindow) { showToast("双窗口模式，不支持重置"); return; }
-            if (chartData.meta.is_replay) { showToast("复盘模式，不支持重置"); return; }
+            if (chartData.meta.is_replay && chartData.meta.market === 'futures') { showToast("复盘模式，不支持重置"); return; }
             const code = chartData.meta.symbol;
             const freq = currentFreq;
             const isFutures = chartData.meta.market === 'futures';
@@ -3524,14 +3525,17 @@
                 return;
             }
 
-            // 股票：清除选点 + 冷启动HTTP
+            // 股票：清除选点 + 冷启动HTTP（复盘态：带 end_date 保持复盘态，R=复盘点不变）
             // Step 1: 调用后端清除CSV中该周期选点
             // （_seq 已在期货分支前声明，两分支共用）
             fetch("/api/stocks/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                 .then(resp => resp.json())
                 .then(() => {
                     // Step 2: 冷启动重新加载（P2：股票双窗也显式透传 sub_freq）
-                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""));
+                    const replayEndQuery = (chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                        ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
+                        : "";
+                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + replayEndQuery + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
