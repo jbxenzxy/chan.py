@@ -7382,13 +7382,18 @@
             const menuDivider3 = document.getElementById("annotation-menu-divider3");
             // 更新翻转视图菜单项文字（显示当前状态）
             menuMirror.textContent = _isMirrorMode ? "取消翻转" : "翻转视图";
+            // 更新复盘菜单项文字：复盘激活期间变「取消复盘」（meta.is_replay：
+            // 股票=请求带 end_date，期货=SSE end_time 软断开，两种复盘入场共用）
+            const _replayActive = !!(chartData && chartData.meta && chartData.meta.is_replay);
+            menuReplay.textContent = _replayActive ? "取消复盘" : "复盘至此";
             if (_annotationClickTarget) {
                 menuDeleteOne.style.display = "block";
                 menuEditOne.style.display = "block";
                 menuAdd.style.display = "none";
                 menuRestart.style.display = "none";
                 menuReplay.style.display = "none";
-                menuDivider.style.display = "none";
+                // 复盘组已移到菜单末尾：div1 下面恒接翻转视图，恒显示（不再与 div2 相邻成双线）
+                menuDivider.style.display = "block";
                 menuDelAll.style.display = "none";
             } else {
                 menuDeleteOne.style.display = "none";
@@ -7399,15 +7404,20 @@
                 menuDivider.style.display = "block";
                 menuDelAll.style.display = "block";
             }
-            // 翻转视图始终显示（与标注操作无关，是全局视图模式）
-            menuDivider2.style.display = "block";
+            // 翻转视图始终显示（与标注操作无关，是全局视图模式）；
+            // 复盘激活时「取消复盘」同样始终显示（全局状态，点中标注也要能退出复盘）
             menuMirror.style.display = "block";
+            if (_replayActive) menuReplay.style.display = "block";
 
             // 「止盈止损」仅股票页 + 命中 0123 类买卖点的 K 线显示（P2-1）；
             // 激活期间同根右键换成「取消盈损」（N1 方案 b：归一/取首/warn 在前端）
             const _tpslHit = !isFuturesMode() &&
                 _tpslBspCandidates(_annotationTargetDate).length > 0;
-            menuDivider3.style.display = _tpslHit ? "block" : "none";
+            const _replayShown = menuReplay.style.display !== "none";
+            // 菜单序（复盘组在末尾）：… 翻转视图 |div2| 止盈止损 |div3| 复盘组；
+            // 分隔线只在两侧都有可见项时显示，避免悬空线
+            menuDivider2.style.display = (_tpslHit || _replayShown) ? "block" : "none";
+            menuDivider3.style.display = (_tpslHit && _replayShown) ? "block" : "none";
             menuTpsl.style.display = (!_tpslActive && _tpslHit) ? "block" : "none";
             menuTpslCancel.style.display = (_tpslActive && _tpslHit) ? "block" : "none";
             if (_tpslHit) menuTpsl.textContent = _tpslActive ? "取消盈损" : "止盈止损";
@@ -7431,8 +7441,22 @@
         };
 
         // 复盘到右键点击的K线日期（等价于在复盘日期输入框中输入该日期）
+        // 复盘激活期间（meta.is_replay）本项显示为「取消复盘」：填今天走 gotoDate 回到
+        // 正常状态（股票=isToday 冷启动不带 end_date；期货=wantLive 恢复实时SSE），
+        // 与日历选「今天」同一条路径
         window.annotationReplayToHere = function() {
             document.getElementById("annotation-menu").classList.remove("show");
+            if (chartData && chartData.meta && chartData.meta.is_replay) {
+                var nowC = new Date();
+                var todayC = nowC.getFullYear() + '-' + String(nowC.getMonth()+1).padStart(2,'0') + '-' + String(nowC.getDate()).padStart(2,'0');
+                var isFutC = chartData.meta.market === 'futures';
+                var inpC = document.getElementById("goto-date-input");
+                // datetime-local 补时间：期货 23:59 保证 wantLive（与 handleDateBlur「今天」兜底同款），股票 15:59 为盘中上限
+                inpC.value = isIntradayFreq(currentFreq) ? (todayC + (isFutC ? 'T23:59' : 'T15:59')) : todayC;
+                if (typeof updateWeekday === "function") updateWeekday();
+                gotoDate();  // 不设 _dateKeyEnter：让 isToday/wantLive 判定走「回最新」分支
+                return;
+            }
             if (!_annotationTargetDate) return;
             var input = document.getElementById("goto-date-input");
             var dateStr;
