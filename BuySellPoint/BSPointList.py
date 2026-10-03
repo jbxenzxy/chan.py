@@ -1086,11 +1086,11 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         bsp_found = self._cal_bs0point_nth_nzs(bi_list, pivot_a, stroke_n)
         if not bsp_found:
             if nth_in_pivot == 6 or nth_in_pivot == 8:
-                self._dbg_bs0(' _cal_bs0point_nth', '第1次分析未通过, 走第2次分析',
+                self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢分析未通过, 走第2次原中枢分析',
                               nth_in_pivot=nth_in_pivot)
                 self._cal_bs0point_nth_ozs(bi_list, pivot_a, stroke_n)
             else:
-                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次分析未通过，且非笔5/6/7/8',
+                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次新中枢分析未通过，且非5/6/7/8笔',
                               nth_in_pivot=nth_in_pivot)
 
     # ── 第n笔主分析逻辑（返回是否找到买卖点）──
