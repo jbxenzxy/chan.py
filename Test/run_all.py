@@ -278,6 +278,11 @@ COMPONENTS = [
     # isolate 三件套重定向回归（选点写入落临时目录，生产 App/ 零残留）。
     ("stock_dual_window",
      [sys.executable, os.path.join("Test", "test_stock_dual_window.py")]),
+    # 漏斗壳形参一致性护栏（2026-10-03 评审 P0-1 防回潮）：AppChart 的
+    # call_*/RAW 壳形参 ⊆ 委托实现形参（期货选点 RAW 壳漏 end_date 曾致
+    # 期货手动选点 100% 500）；RAW 壳转发断言 + 检测器自证。
+    ("funnel_signature",
+     [sys.executable, os.path.join("Test", "test_funnel_signature.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。
