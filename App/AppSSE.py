@@ -1697,6 +1697,7 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
     freq_label = freq
     freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
     display_key = f"{symbol}:{freq_cn}"
+    name = _get_futures_name(symbol)
     target_bi_idx = int(bi_idx)
 
     src = None
@@ -1707,14 +1708,19 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
         src.connect()
         log.info(f"[{display_key}] ⓪ 临时连接天勤(选点): 耗时 {time.time()-t_conn:.1f}s")
 
-        records = src.fetch_kline(symbol, freq_sec=freq_sec, display_key=display_key)
-        if len(records) < 5:
-            raise DataFetchError(f"K线数据不足: 仅{len(records)}条")
-
-        # 注入数据源 + 创建 CChan（统一走 _build_futures_chan；config 供 chan2 复用）
-        # 数据注入经 src.set_data（Session 协议），不落类级缓存
-        config = _make_chan_config()
-        chan, kl_type = _build_futures_chan(records, symbol, freq_sec, config=config, src=src)
+        # 定位窗口与前端复盘视图同源（2026-10-03 四期复盘态选点）：end_date 有值
+        # 时按 [CSV(freq 列) 旧选点, end_date] 拉取建 chan——笔列表与前端复盘视图
+        # 的 bis 同源，bi_idx 才能对位（全量拉取的笔列表与复盘窗口笔列表不同，
+        # bi_idx 会指错笔）。start 传 CSV 值时 init 内部按墙钟估算拉取。
+        locate_start = None
+        if end_date:
+            _col_loc = app_data.freq_to_col(freq) or ""
+            if _col_loc:
+                locate_start = _get_saved_point(symbol, freq) or None
+        loc_result = init_chan_symbol(src, symbol, name, freq_sec, freq_label, locate_start, end_date)
+        if loc_result is None:
+            raise DataFetchError("选点定位失败（无数据或网络异常）")
+        chan, kl_type = loc_result[0], loc_result[2]
 
         kl_list = chan[kl_type]
         bi_list = kl_list.bi_list
@@ -1736,7 +1742,6 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
 
         # Step 3: 保存选点到CSV（save_point_time 内部已在 _saved_point_lock 内
         # 同步更新内存态与落盘，调用方不再锁外直写内存态）
-        name = _get_futures_name(symbol)
         app_data.save_point_time(symbol, name, freq, start_time)
 
         # Step 4: 关闭旧TqApi，创建新TqApi，从T重新拉取

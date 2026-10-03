@@ -289,7 +289,9 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
         if "chan" not in cached:
             # 扫描缓存只有result没有chan，重新分析以获取完整数据
             log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {freq}")
-            analyze_stock(normalized_code, freq=freq, cache_chan=True)
+            # 复盘态选点：回退重算带 end_date（窗口右界与复盘视图对位）；
+            # 左界为方式A（target-N）——与双窗选点视图仅在上窗有选点时完全对位
+            analyze_stock(normalized_code, freq=freq, cache_chan=True, end_date=end_date)
             cached = app_data.cache_get(cache_key)
             if cached is None or "chan" not in cached:
                 return None, ""
