@@ -97,7 +97,7 @@ _FIELD_DEFAULTS = {
     # bars 只决定「后端加载多少根K线」，取值完全由用户按需权衡，随时可调：
     #     缩小 → 后端加载更快、可回看区间更短；放大 → 可回看区间更长；0 → 不限制。
     # 下游全部按「后端实际加载的K线范围/根数」自适应，不依赖本配置的具体数值：
-    #     双窗下窗对齐用主级别实际加载区间、对齐不足降全量看实际根数、
+    #     双窗下窗对齐用主级别实际加载区间、
     #     前端视口 VIEW_COUNT 与后端加载根数比较后取小、缠论分析按实际数据计算。
     # 因此调整 bars（无论缩小还是放大）都不需要改任何代码，改本配置即可。
     # ── 股票 STOCKS_LOOKBACK_CONFIG ─────────────────────────────
@@ -138,23 +138,10 @@ _FIELD_DEFAULTS = {
     #   经 /api/health 下发命令前端 app.js。
     #   例外：双击选点（B操作）后端已按「选点→最新」过滤，前端全量显示，
     #   不受 VIEW_COUNT 限制（单窗上窗、双窗上窗、双窗下窗同此规则）。
-    # 【与 DUAL_SUB_FALLBACK_MIN 的关系】两者相互独立，互不联动：
-    #   双窗下窗「降全量」只看 DUAL_SUB_FALLBACK_MIN（默认100），与本值无关——
-    #   它保护的是后端缠论分析所需最小K线数（下窗笔结构），不是视口填充数。
-    #   故本值【不建议】配置为小于 DUAL_SUB_FALLBACK_MIN 的值：如本值配 50，
-    #   下窗对齐后不足 100 仍会降全量（不会等到不足 50 才降），视口却只显示
-    #   50 根——功能可用（可滚动查看），但容易误解为「不足视口数才降全量」。
     "VIEW_COUNT": 233,
-    # ── 双窗口下窗「对齐不足降全量」阈值 DUAL_SUB_FALLBACK_MIN ─────
-    # 双窗下窗加载与上窗时间区间对齐（上窗区间=上窗后端实际加载的K线范围）。
-    # 当按对齐区间截断后下窗K线根数 < DUAL_SUB_FALLBACK_MIN 时（下窗数据源
-    # 覆盖不足，如上市较晚、分时文件只存近期），下窗降为全量加载，保证下窗
-    # 笔结构可支撑缠论分析（区间套/红框中枢依赖完整下窗笔）。
-    # 全量仍 < 5 根时按既有逻辑退化为单级别（双窗降级提示）。
-    # 建议值 >= 下窗缠论分析所需最小K线数（几笔结构），过小起不到兜底作用。
-    # 注意：本阈值与 VIEW_COUNT（前端视口显示根数）无关——即使 VIEW_COUNT
-    # 配置为 50，仍按本阈值（<100）降全量，不会随 VIEW_COUNT 缩小。
-    "DUAL_SUB_FALLBACK_MIN": 100,
+    # （原「双窗口下窗对齐不足降全量」阈值 DUAL_SUB_FALLBACK_MIN 已删除：
+    #  独立双窗按下窗独立选点起点取数，不再有「对齐截断后不足 N 根降全量」
+    #  的分支，该键与 AppEngine 同名常量一并移除，勿照旧条目加回。）
     # ── 双窗口缓存限额（与单窗口共用同一 LRU 池，但单独限额）──────
     # 单窗口是常用操作，缓存条目（single 键）用满 LRU 池（MAX_CACHE_SIZE=50）；
     # 双窗口非常用且条目更重（dual_main + dual_sub 两键，各含 CChan），
@@ -218,7 +205,6 @@ _FIELD_TYPES = {
     "SCAN_MIN_FLOAT_MC": float,
     "SCAN_FANGLIANG_WINDOW_BARS": int,
     "VIEW_COUNT": int,
-    "DUAL_SUB_FALLBACK_MIN": int,
     "MAX_DUAL_CACHE_KEYS": int,
     "MAX_STOCKS_SUB_CHAN": int,
     "DEBUG_COLD_START_START_DATE": str,
@@ -409,7 +395,6 @@ if _HAVE_PYDANTIC_SETTINGS:
         stocks_lookback_config: dict = _FIELD_DEFAULTS["STOCKS_LOOKBACK_CONFIG"]  # 股票K线回看条数配置
         futures_lookback_config: dict = _FIELD_DEFAULTS["FUTURES_LOOKBACK_CONFIG"]  # 期货K线回看条数配置
         view_count: int = _FIELD_DEFAULTS["VIEW_COUNT"]                           # 前端视口默认显示K线根数（所有周期相同）
-        dual_sub_fallback_min: int = _FIELD_DEFAULTS["DUAL_SUB_FALLBACK_MIN"]     # 双窗下窗对齐截断后不足此数→降全量
         max_dual_cache_keys: int = _FIELD_DEFAULTS["MAX_DUAL_CACHE_KEYS"]         # 双窗结构化缓存键上限（共享池内单独限额）
         max_stocks_sub_chan: int = _FIELD_DEFAULTS["MAX_STOCKS_SUB_CHAN"]         # 双窗运行时下窗 CChan 缓存上限
         debug_cold_start_start_date: str | None = _FIELD_DEFAULTS["DEBUG_COLD_START_START_DATE"]

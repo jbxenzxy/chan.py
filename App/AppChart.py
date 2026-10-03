@@ -375,13 +375,15 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
     return result
 
 
-def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
+def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
     """期货手动选点 · RAW（无锁原始入口）
 
     ⚠ 内部读写期货共享缓存，非线程安全。REST 调用方必须走
     call_futures_manual_select_point。实现在 App/AppSSE.py。
+    end_date：复盘态选点的当前复盘点，必须透传给 _sse —— 漏斗层
+    call_futures_manual_select_point 恒以关键字传入，本壳漏收即 TypeError。
     """
-    return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+    return _sse.futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx, end_date=end_date)
 
 
 def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):

@@ -10,6 +10,8 @@ Test/test_stock_dual_window.py —— 股票双窗（三期）选点/复盘语�
      _analyze_stock_internal 四处签名与两处调用行都携带 sub_start_time；
   3. meta 双字段：`_analyze_stock_internal` 响应 meta 含
      sub_saved_selection_date 键（双窗下窗选点回显的载体；单窗路径恒空串）；
+  3b. 下窗 sub.meta 含 saved_selection_date 键且恒回显 CSV(sub 列) 真值
+     （双窗缓存失配校验 / 前端下窗全量显示 / 取消选点点亮 三处依赖）；
   4. isolate 三件套重定向回归：isolate_side_effects() 期间 save_point_time
      落临时目录（不写生产 App/double_click_dt.csv）。
 
@@ -103,6 +105,50 @@ def test_meta_has_sub_saved_field():
         restore_iso()
 
 
+def test_sub_meta_saved_selection_date():
+    """下窗 meta.saved_selection_date：恒回显 CSV(sub 列) 真值（缺键即 P1 回归）。
+
+    三个消费方依赖它：① 双窗缓存失配校验（读 sub 缓存 meta 的同名字段，
+    缺键 ⇒ 下窗一有选点就恒失配、每次全量重建）；② 前端「下窗有选点时
+    全量显示」（读 dualSubData.meta 的同名字段）；③ 前端取消选点点亮。
+    """
+    from Test.snapshot_runner import install_data_source, _seed_reference
+    from App import AppEngine as m
+
+    restore_iso = isolate_side_effects()
+    restore_src = None
+    try:
+        restore_src, rows = install_data_source("stock_day.json", "stock_day.json")
+        restore_ref = _seed_reference()
+        saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+        m.STOCKS_LOOKBACK_CONFIG = {}
+        try:
+            r0 = m._analyze_stock_internal(CODE, freq="w", dual=True, sub_freq="d", cache_chan=False)
+            assert "error" not in r0, f"双窗分析失败: {r0.get('error')}"
+            sub0 = (r0.get("sub") or {}).get("meta") or {}
+            assert "saved_selection_date" in sub0, \
+                f"下窗 meta 缺 saved_selection_date 键: {sorted(sub0)[:12]}"
+            assert sub0["saved_selection_date"] == "", \
+                f"无下窗选点时该键应为空串，实为 {sub0['saved_selection_date']!r}"
+
+            sym = (r0.get("meta") or {}).get("symbol") or ("sh" + CODE)
+            _dt = rows[min(50, max(0, len(rows) // 4))]["dt"]
+            sel = _dt.strftime("%Y/%m/%d") if hasattr(_dt, "strftime") else str(_dt)[:10]
+            m.app_data.save_point_time(sym, "", "d", sel)
+            r1 = m._analyze_stock_internal(CODE, freq="w", dual=True, sub_freq="d", cache_chan=False)
+            sub1 = (r1.get("sub") or {}).get("meta") or {}
+            assert sub1.get("saved_selection_date") == sel, \
+                f"下窗 meta 应回显 CSV 真值 {sel!r}，实为 {sub1.get('saved_selection_date')!r}"
+            print(f"[PASS] 下窗 meta.saved_selection_date: 键存在且回显 CSV 真值 {sel!r}")
+        finally:
+            m.STOCKS_LOOKBACK_CONFIG = saved_lookback
+            restore_ref()
+    finally:
+        if restore_src:
+            restore_src()
+        restore_iso()
+
+
 def test_isolate_redirects_user_store_files():
     """isolate 三件套重定向回归：isolate 期间写选点 → 落临时目录，不碰生产 App/。"""
     from Test.snapshot_runner import install_data_source, _seed_reference
@@ -132,6 +178,7 @@ def main():
     test_validate_stock_dual_pair()
     test_sub_start_time_plumbing()
     test_meta_has_sub_saved_field()
+    test_sub_meta_saved_selection_date()
     test_isolate_redirects_user_store_files()
     print("ALL 股票双窗选点语义 TESTS PASS")
 

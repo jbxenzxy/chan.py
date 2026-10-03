@@ -14,7 +14,9 @@ Test/test_futures_replay_window.py —— 期货单窗复盘窗口 [L, R]（二�
      - start ≥ end（倒挂）→ 丢弃 start 回退默认窗口（SSE init 事件无弹窗通道，
        回退比报错平滑，前端弹窗已拦用户输入路径）；
   3. meta.saved_selection_date 恒回显 CSV 真值：A 复盘（start=A左 显式传入、
-     CSV 空）→ 快照收到空串，start 不冒充选点。
+     CSV 空）→ 快照收到空串，start 不冒充选点；
+  4. 期货选点 end_date 透传链（P0 回归）：漏斗层 → RAW 薄壳 → AppSSE 三段
+     贯通（薄壳漏收 end_date 会让每次选点 TypeError → REST 500）。
 
 隔离：snapshot_runner.isolate_side_effects 重定向选点 CSV（不碰生产 App/）；
 真实天勤数据源用 MockSource（CSSESource 子类）替代，全程离线。
@@ -377,6 +379,40 @@ def test_dual_gen_independent_starts():
     print("[PASS] dual 无选点方式A: 双 start=None，根数交由 init 自算")
 
 
+def test_select_point_end_date_plumbing():
+    """期货选点 end_date 透传链（P0 回归）：漏斗层 → RAW 薄壳 → AppSSE。
+
+    缺陷原型：AppChart.call_futures_manual_select_point 恒以关键字传 end_date，
+    而同模块的 RAW 薄壳 futures_manual_select_point 形参只有
+    (symbol, freq, bi_idx) ⇒ 每次选点 TypeError → REST 500「手选失败」。
+    只断言「签名里有 end_date」不够（漏透传同样 500），故两处都钉。
+    """
+    import inspect
+    from App import AppChart as chart
+    from App import AppSSE as sse
+
+    params = inspect.signature(chart.futures_manual_select_point).parameters
+    assert "end_date" in params, \
+        f"RAW 薄壳 futures_manual_select_point 缺 end_date 形参（漏斗层恒以关键字传入 → TypeError）: {list(params)}"
+
+    orig = sse.futures_manual_select_point
+    seen = {}
+
+    def _stub(symbol, freq="15s", bi_idx="0", end_date=None):
+        seen.update(symbol=symbol, freq=freq, bi_idx=bi_idx, end_date=end_date)
+        return {"ok": True}
+
+    sse.futures_manual_select_point = _stub
+    try:
+        chart.call_futures_manual_select_point("KQ.m@SHFE.rb", freq="15s",
+                                               bi_idx="0", end_date="2026/09/01")
+    finally:
+        sse.futures_manual_select_point = orig
+    assert seen.get("end_date") == "2026/09/01", \
+        f"end_date 未透传到 AppSSE（复盘态选点窗口左边界失效）: {seen!r}"
+    print("[PASS] 期货选点 end_date 透传: 漏斗层 → RAW 薄壳 → AppSSE 全链贯通")
+
+
 def main():
     test_fetch_bars_branches()
     test_replay_inherits_csv_point()
@@ -386,6 +422,7 @@ def main():
     test_replay_inverted_start_falls_back()
     test_replay_meta_shows_csv_point()
     test_dual_gen_independent_starts()
+    test_select_point_end_date_plumbing()
     print("ALL 期货单窗复盘窗口 TESTS PASS")
 
 

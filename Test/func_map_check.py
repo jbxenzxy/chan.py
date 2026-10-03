@@ -162,7 +162,8 @@ TARGET_STATES = {
     "DEBUG_COLD_START_END_DATE":   ("ORCH_E", "调试冷启动止（→ ChanConfig 调试参数）"),
     # P2：HK_CODE_PREFIX / DS_CODE_PREFIX / TDX_MARKET_MAP 死状态已删除
     #     （市场代码统一由 App/AppData.get_market_code 判定，不再属 AppEngine）
-    "DUAL_SUB_FALLBACK_MIN": ("ORCH_E", "双窗下窗对齐不足降全量阈值（= app_config.dual_sub_fallback_min）"),
+    # DUAL_SUB_FALLBACK_MIN 死状态已删除（2026-10-04）：随「下窗对齐不足降全量」
+    # 兜底一并移除，配置键与 AppEngine 模块常量同步删除；注释保留，防止照旧加回。
     "_STOCKS_DUAL_IMPL_ENV": ("ORCH_E", "双窗 A/B 实现开关环境变量名"),
     "_STOCKS_DUAL_PAIRS":    ("ORCH_E", "股票双窗配对空间（上窗周期→可选下窗周期集合）"),
     "_STOCKS_MAIN_PERIOD":   ("ORCH_E", "主级别单根K线覆盖时长映射"),

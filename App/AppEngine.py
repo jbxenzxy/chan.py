@@ -143,10 +143,9 @@ FULL_DATA_MODE = app_config.full_data_mode
 # 读取配置中心 AppConfig（单一事实源 app_config.stocks_lookback_config）。
 STOCKS_LOOKBACK_CONFIG = app_config.stocks_lookback_config
 
-# 双窗下窗「对齐不足降全量」阈值：下窗按上窗时间区间对齐截断后，
-# K线根数低于此值时降为全量（数据源覆盖不足的兜底，见 AppConfig 注释）。
-# 单一事实源在 app_config.dual_sub_fallback_min。
-DUAL_SUB_FALLBACK_MIN = app_config.dual_sub_fallback_min
+# （原 DUAL_SUB_FALLBACK_MIN「下窗对齐不足降全量」阈值已随该兜底行为一并删除：
+#  独立双窗按下窗独立选点起点取数，不再有「对齐截断后不足 N 根降全量」的分支。
+#  配置键与模块常量同步移除，避免留下无人读取却仍在描述已删行为的死配置。）
 
 # 期货回看根数纯函数（不依赖 tqsdk 安装，单独导入保证恒可用）：
 # TqSdkAPI 模块顶层无硬 import tqsdk，resolve_lookback_bars 读取 AppEngine
@@ -381,10 +380,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
     start_time: end_date 有值时 = 复盘窗口左边界（截 [start_time, end_date]，
                 不做根数截断；解析失败或晚于复盘点直接报错）；
                 无 end_date 时 = 选点起始时间（B 操作，不设数量限制）
-    sub_start_time: 双窗下窗独立选点起始时间（三期）：下窗窗口 =
-                [sub_start_time, R]，不跟随上窗区间；缺失时非复盘从
-                CSV(sub_freq 列) 恢复，仍无则下窗方式A（对齐上窗区间，
-                现状语义）；仅 dual 路径消费
     sub_start_time: 双窗下窗独立选点起始时间（三期）：下窗窗口 =
                 [sub_start_time, R]，不跟随上窗区间；缺失时非复盘从
                 CSV(sub_freq 列) 恢复，仍无则下窗方式A（对齐上窗区间，
@@ -714,7 +709,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
     if dual and sub_freq and sub_records is not None and len(records) > 0:
         main_start = records[0]["dt"]
         main_end = records[-1]["dt"]
-        sub_full_backup = list(sub_records)  # 对齐不足降全量的回退基准
         if dual_impl == "independent":
             # ── 独立双窗选点（2026-10-03 三期）：下窗 L 独立 ──
             # 下窗 L（sub_start_time）优先级：显式传入（前端/选点重建）>
@@ -1616,6 +1610,13 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
         })
 
     # 10. 组装结果
+    # 下窗选点回显（meta.saved_selection_date）：恒取 CSV(sub_freq 列) 真值，
+    # 与主级别 meta 同规则。三个消费方依赖它：① 双窗缓存失配校验（读
+    # sub 缓存 meta 的同名字段，缺键 ⇒ 下窗一有选点就恒失配、每次全量重建）；
+    # ② 前端「下窗有选点时下窗全量显示」（读 dualSubData.meta 的同名字段）；
+    # ③ 前端「取消选点」菜单点亮（双窗下窗分支）。
+    _sub_col_meta = FREQ_TO_COL.get(sub_freq, "")
+    _sub_saved_sdt = app_data.get_saved_point_time(market + code, _sub_col_meta) if _sub_col_meta else ""
     sub_result = {
         "meta": {
             "symbol": market + code,
@@ -1631,6 +1632,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
             "bsp_count": len(bsp_data),
             "date_range": f"{kline_data[0]['date']} ~ {kline_data[-1]['date']}" if kline_data else "",
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "saved_selection_date": _sub_saved_sdt,
         },
         "klines": kline_data,
         "bis": bi_data,

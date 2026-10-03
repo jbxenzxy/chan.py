@@ -729,6 +729,10 @@
                 // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
                 if (clickedBiIdx >= 0) {
+                    // 焦点窗跟随双击所在窗（与下窗分支对称）：上窗选点即以
+                    // 上窗为焦点，供「取消选点」按焦点窗清列——焦点与选点不
+                    // 同源时会清错列（选了下窗列却清上窗列）。
+                    if (isDualWindow) { activeDualWindow = 'main'; updateActiveWindowClass(); }
                     // 引擎运行中拦截：选点写 CSV，影响引擎下次重连的行情窗口（四类拦截之一）
                     if (autoOrderRunning && isFuturesMode()) {
                         showAlert('交易引擎运行中，请先关闭，再选点');
@@ -3196,6 +3200,11 @@
                     // （freq=下窗周期，后端按焦点窗落列并双窗重建；响应含 data.sub，
                     //  上窗重载=区间套基于新下窗笔重算，见方案 §4.4）
                     if (clickedOnKline) {
+                        // 焦点窗跟随双击所在窗（与上窗分支对称）：下窗双击选点
+                        // 即以下窗为焦点，供「取消选点」按焦点窗清列——此前只有
+                        // 滚轮/拖拽会置焦点，双击下窗选点后直接取消会清上窗列。
+                        activeDualWindow = 'sub';
+                        updateActiveWindowClass();
                         // 复盘态选点四场景全放开：下窗选点=改下窗 L，R 保持复盘点
                         // 笔定位：双击K线日期 == 某笔edt == 下一笔sdt（与上窗同款匹配）
                         const subKline = (clickedGlobalIdx >= 0 && chartData.klines && clickedGlobalIdx < chartData.klines.length)
@@ -3581,8 +3590,12 @@
             // 复盘态全放开（重载后端按 CSV 恢复各窗 L，焦点列已清=方式A）
             const isFutures = chartData.meta.market === 'futures';
             const code = chartData.meta.symbol;
-            // 焦点窗周期：双窗下窗焦点=下窗周期，其余=上窗周期
+            // 焦点窗周期：双窗下窗焦点=下窗周期，其余=上窗周期（只用于清列）
             const freq = (isDualWindow && activeDualWindow === 'sub' && dualSubFreq) ? dualSubFreq : currentFreq;
+            // 重载周期：双窗恒用上窗周期——清列与重载是两个动作，重载若按焦点窗
+            // 周期（下窗周期）请求，analyze 会返回下窗单窗快照、currentFreq 被改写
+            // 成下窗周期，双窗整体降一级（getDualSubFreq(下窗周期) 无配对可取）。
+            const _loadFreq = isDualWindow ? currentFreq : freq;
             document.getElementById("loading").classList.remove("hidden");
             document.querySelector(".loading-text").textContent = "正在重置...";
 
@@ -3603,10 +3616,18 @@
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
                         // 复盘态取消选点：保持复盘态（无选点窗口 [复盘点-N, 复盘点]）；
                         // 实时态：冷启动重连（原语义）
+                        // 复盘点取上窗末根（chartData 恒为上窗数据）：按下窗周期
+                        // 换算会把上窗日期截断成错粒度。
                         const replayEnd3 = (chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
-                            ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq)
+                            ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, _loadFreq), _loadFreq)
                             : null;
-                        connectRealtimeInit(code, freq, null, replayEnd3);
+                        // 双窗：重连双窗 SSE（主窗周期 + 下窗周期），焦点列已清由后端
+                        // 从 CSV 恢复；按焦点窗周期重连会把双窗降成下窗单窗。
+                        if (isDualWindow && dualSubFreq) {
+                            connectRealtimeDual(code, _loadFreq, dualSubFreq, replayEnd3);
+                        } else {
+                            connectRealtimeInit(code, _loadFreq, null, replayEnd3);
+                        }
                     })
                     .catch(err => {
                         if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
@@ -3625,9 +3646,9 @@
                 .then(() => {
                     // Step 2: 冷启动重新加载（P2：股票双窗也显式透传 sub_freq）
                     const replayEndQuery = (chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
-                        ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
+                        ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, _loadFreq), _loadFreq))
                         : "";
-                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq + replayEndQuery + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "") + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""));
+                    return fetch("/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + _loadFreq + replayEndQuery + (isDualWindow && getDualSubFreq(_loadFreq) ? "&dual=1" : "") + (isDualWindow && dualSubFreq && freqLevel(_loadFreq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : ""));
                 })
                 .then(resp => {
                     if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "重置失败"); });
