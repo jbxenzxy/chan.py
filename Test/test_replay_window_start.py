@@ -231,16 +231,19 @@ def test_replay_select_point_rebuild_window():
         restore_iso()
 
 
-def test_select_point_dual_with_end_date_rejected():
-    """双窗 + end_date：防御性拒绝（双窗复盘态选点随双窗期放开）。"""
+def test_select_point_dual_with_end_date_no_defense():
+    """双窗 + end_date：防御已移除（2026-10-03 四场景放开——不再返回专属拒绝）。"""
     from App.AppChart import stock_manual_select_point
 
     result = stock_manual_select_point(CODE, freq="d", bi_idx=0,
                                        end_date="2024/10/21",
                                        dual=True, main_freq="d", sub_freq="30m")
-    assert "error" in result, f"双窗+end_date 应被拒绝，实际返回: {list(result)[:5]}"
-    assert "双窗口不支持复盘态选点" in result["error"], f"文案不符: {result['error']}"
-    print(f"[PASS] 双窗复盘态选点防御: {result['error']}")
+    # 无双窗夹具，重建会因缓存缺失报"请先加载"类错误——但绝不应再出现
+    # 已删除的防御文案（防回潮断言）
+    err = result.get("error", "")
+    assert "双窗口不支持复盘态选点" not in err, \
+        f"防御文案复潮（四场景已放开）: {err}"
+    print("[PASS] 双窗复盘态选点防御已移除（无专属拒绝文案）")
 
 
 def main():
@@ -250,7 +253,7 @@ def main():
     test_replay_start_time_no_meta_writeback()
     test_live_start_time_meta_writeback_kept()
     test_replay_select_point_rebuild_window()
-    test_select_point_dual_with_end_date_rejected()
+    test_select_point_dual_with_end_date_no_defense()
     print("ALL 复盘窗口 start_time 语义 TESTS PASS")
 
 

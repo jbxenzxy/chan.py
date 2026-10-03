@@ -628,9 +628,13 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
         if len(records) < 5:
             return {"error": f"截断后K线数据不足: 仅{len(records)}条，请选择更晚的日期"}
 
-        # 复盘（C 操作）不加载双击选点：不读取 CSV 保存的选点。
-        # 左边界按 AppConfig 从「复盘结束时间」往前保留最近 N 根K线——日K/周K 不限量，
-        # 30m/5m 按 STOCKS_LOOKBACK_CONFIG（仅当显式传入 start_time 才应用选点）。
+        # 左边界优先级（2026-10-03 三期后统一）：显式 start_time（前端窗口左
+        # 边界，L 冻结）> CSV 选点（取消选点重载场景：焦点列已清=方式A、
+        # 另一窗列在=L 冻结）> 方式A（复盘点往前 N 根）。
+        if start_time is None:
+            _col_rep = FREQ_TO_COL.get(freq, "")
+            if _col_rep:
+                start_time = app_data.get_saved_point_time(qualified_code, _col_rep) or None
         if start_time is not None:
             start_dt = None
             for fmt in ["%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"]:
@@ -725,7 +729,7 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
                         break
                     except ValueError:
                         continue
-            if _sub_start_dt is None and not end_date:
+            if _sub_start_dt is None:
                 _sub_col = FREQ_TO_COL.get(sub_freq, "")
                 if _sub_col:
                     _saved_sub = app_data.get_saved_point_time(qualified_code, _sub_col) or None

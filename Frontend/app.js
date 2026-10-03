@@ -723,12 +723,8 @@
                         break;
                     }
                 }
-                // 复盘态选点：股票/期货单窗已放开（选点=改L，R保持复盘点，请求带 end_date）；
-                // 双窗仍禁用（三期放开）
-                if (chartData.meta && chartData.meta.is_replay && clickedOnKline && isDualWindow) {
-                    showToast("复盘模式，不支持选点");
-                    return;
-                }
+                // 复盘态选点：四场景全放开（股票/期货 × 单窗/双窗，一致原则）——
+                // 选点=改焦点窗 L，R 保持复盘点（请求带 end_date）
                 // 双窗选点规则（股票/期货一致）：仅上窗可选点，下窗只对齐展示。
                 // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
@@ -747,7 +743,7 @@
                     // 后端销毁双窗两键缓存并按双窗路径重建（响应含 data.sub）
                     const dualQuery = (isDualWindow && !isFutures)
                         ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
-                    // 复盘态选点（股票/期货单窗）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
+                    // 复盘态选点（四场景全放开）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
                     const replayEndQuery = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
                         ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
                         : "";
@@ -3200,10 +3196,7 @@
                     // （freq=下窗周期，后端按焦点窗落列并双窗重建；响应含 data.sub，
                     //  上窗重载=区间套基于新下窗笔重算，见方案 §4.4）
                     if (clickedOnKline) {
-                        if (_savedChartData && _savedChartData.meta && _savedChartData.meta.is_replay) {
-                            showToast("复盘模式，不支持选点");
-                            return;
-                        }
+                        // 复盘态选点四场景全放开：下窗选点=改下窗 L，R 保持复盘点
                         // 笔定位：双击K线日期 == 某笔edt == 下一笔sdt（与上窗同款匹配）
                         const subKline = (clickedGlobalIdx >= 0 && chartData.klines && clickedGlobalIdx < chartData.klines.length)
                             ? chartData.klines[clickedGlobalIdx] : null;
@@ -3230,10 +3223,14 @@
                         document.getElementById("loading").classList.remove("hidden");
                         document.querySelector(".loading-text").textContent = "正在手选进入段...";
                         const _seq = _bumpChartActionSeq();
+                        // 复盘态选点：带当前复盘点（重建窗口 [新选点, 复盘点]，R 不变）
+                        const _subReplayEnd = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                            ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, _subFreq), _subFreq))
+                            : "";
                         const _selectUrl = _subIsFutures
-                            ? "/api/futures/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq + "&bi_idx=" + subBiIdx
+                            ? "/api/futures/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq + "&bi_idx=" + subBiIdx + _subReplayEnd
                             : "/api/stocks/" + encodeURIComponent(_subCode) + "/select/point?freq=" + _subFreq
-                              + "&bi_idx=" + subBiIdx + "&dual=1&main_freq=" + _mainFreq + "&sub_freq=" + _subFreq;
+                              + "&bi_idx=" + subBiIdx + _subReplayEnd + "&dual=1&main_freq=" + _mainFreq + "&sub_freq=" + _subFreq;
                         fetch(_selectUrl, { method: "POST" })
                             .then(resp => {
                                 if (!resp.ok) return resp.json().then(e => { throw new Error(e.error || "手选失败"); });
@@ -3246,8 +3243,12 @@
                                     // 期货下窗选点：响应为下窗单窗快照（校验用），
                                     // 双窗数据靠重连拉取（后端 CSV 恢复两窗选点）。
                                     // 注意：本块处于下窗替换态（chartData=dualSubData、
-                                    // currentFreq=下窗周期），上窗周期用捕获的 _savedFreq
-                                    connectRealtimeDual(_subCode, _savedFreq, dualSubFreq);
+                                    // currentFreq=下窗周期），上窗周期用捕获的 _savedFreq；
+                                    // 复盘态重连带 end_time（R 保持复盘点）
+                                    const _subReplayEnd2 = (chartData.meta && chartData.meta.is_replay)
+                                        ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, _subFreq), _subFreq)
+                                        : null;
+                                    connectRealtimeDual(_subCode, _savedFreq, dualSubFreq, _subReplayEnd2);
                                     return;
                                 }
                                 chartData = data;                      // 上窗新数据（区间套基于新下窗重算）
@@ -3577,12 +3578,8 @@
             document.getElementById("annotation-menu").classList.remove("show");
             if (!chartData || !chartData.meta) return;
             // 双窗取消选点（三期/四期独立选点）：清焦点窗周期列（对齐单窗语义）；
-            // 双窗复盘态未纳入（后续）
+            // 复盘态全放开（重载后端按 CSV 恢复各窗 L，焦点列已清=方式A）
             const isFutures = chartData.meta.market === 'futures';
-            if (isDualWindow && (isFutures && chartData.meta.is_replay)) {
-                showToast("双窗口模式，不支持重置");
-                return;
-            }
             const code = chartData.meta.symbol;
             // 焦点窗周期：双窗下窗焦点=下窗周期，其余=上窗周期
             const freq = (isDualWindow && activeDualWindow === 'sub' && dualSubFreq) ? dualSubFreq : currentFreq;

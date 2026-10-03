@@ -226,12 +226,11 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
     """
     import re
     import gc
-    # 复盘态选点（2026-10-03 放开，单窗限定）：end_date=当前复盘点。
+    # 复盘态选点（2026-10-03 放开，四场景一致——含双窗）：end_date=当前复盘点。
     # 选点定位读 end_date 后缀的复盘缓存（CChan 与前端复盘视图同源，
-    # 笔索引对位）；重建走 [选点, end_date]（改L不改R，与 gotoDate
-    # 复盘窗口同语义）；选点照常落 CSV，回最新后冷启动恢复 [选点, 最新]。
-    if dual and end_date:
-        return {"error": "双窗口不支持复盘态选点"}
+    # 笔索引对位）；重建走 [焦点窗选点, end_date]（改L不改R，与 gotoDate
+    # 复盘窗口同语义；另一窗 L 按 CSV/方式A 冻结）；选点照常落 CSV，
+    # 回最新后冷启动恢复 [选点, 最新]。
     # 标准化代码（统一走唯一事实源 _get_stock_market_code，兼容前后缀/带点/大小写）
     market, normalized_code = _m._get_stock_market_code(code)
     date_suffix = end_date if end_date else "live"
@@ -368,7 +367,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
         freq=(main_freq if dual else freq),
         start_time=rebuild_start_time,
         sub_start_time=rebuild_sub_start,
-        end_date=(end_date if not dual else None),
+        end_date=end_date,
         dual=dual,
         sub_freq=(sub_freq if dual else None))
     return result
