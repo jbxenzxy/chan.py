@@ -179,14 +179,16 @@ def call_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fals
                                      sub_freq=sub_freq, main_freq=main_freq)
 
 
-def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
+def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
     """期货手动选点（REST 唯一入口，无锁）
 
     内部自建链路（CTqSdkSession + _build_futures_chan +
     _extract_realtime_snapshot，期货生产链路统一走 SSE）：每请求独立
     TqApi 会话，选点落盘走 user_store_lock。
+    end_date：复盘态选点传当前复盘点（重建窗口 [选点, 复盘点]，保持复盘态）。
     """
-    return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx)
+    return futures_manual_select_point(symbol, freq=freq, bi_idx=bi_idx,
+                                       end_date=end_date)
 
 
 def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_date=None):

@@ -267,6 +267,12 @@ COMPONENTS = [
     # 选点 meta、非复盘回写（B 操作现状保护）。
     ("replay_window_start",
      [sys.executable, os.path.join("Test", "test_replay_window_start.py")]),
+    # 期货单窗复盘窗口 [L,R]（2026-10-03 二期）：_futures_window_fetch_bars
+    # 四分支（默认/选点/复盘/组合=复盘继承选点不做根数截断）；_sse_single_gen
+    # start_time 继承（显式/CSV 恢复/倒挂回退）与 meta 恒回显 CSV 真值。
+    # MockSource + 业务桩驱动（参考 test_sse_concurrent），全程离线。
+    ("futures_replay_window",
+     [sys.executable, os.path.join("Test", "test_futures_replay_window.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。

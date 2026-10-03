@@ -723,10 +723,9 @@
                         break;
                     }
                 }
-                // 复盘态选点：股票单窗已放开（选点=改L，R保持复盘点，请求带 end_date）；
-                // 期货单窗与双窗（上窗路径）仍禁用，分别随期货期/双窗期放开
-                if (chartData.meta && chartData.meta.is_replay && clickedOnKline &&
-                    (chartData.meta.market === "futures" || isDualWindow)) {
+                // 复盘态选点：股票/期货单窗已放开（选点=改L，R保持复盘点，请求带 end_date）；
+                // 双窗仍禁用（三期放开）
+                if (chartData.meta && chartData.meta.is_replay && clickedOnKline && isDualWindow) {
                     showToast("复盘模式，不支持选点");
                     return;
                 }
@@ -734,6 +733,11 @@
                 // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
                 if (clickedBiIdx >= 0) {
+                    // 引擎运行中拦截：选点写 CSV，影响引擎下次重连的行情窗口（四类拦截之一）
+                    if (autoOrderRunning && isFuturesMode()) {
+                        showAlert('交易引擎运行中，请先关闭，再选点');
+                        return;
+                    }
                     const code = chartData.meta.symbol;
                     const freq = currentFreq;
                     const isFutures = chartData.meta.market === 'futures';
@@ -743,12 +747,12 @@
                     // 后端销毁双窗两键缓存并按双窗路径重建（响应含 data.sub）
                     const dualQuery = (isDualWindow && !isFutures)
                         ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
-                    // 复盘态选点（股票单窗）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
-                    const replayEndQuery = (!isFutures && chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                    // 复盘态选点（股票/期货单窗）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
+                    const replayEndQuery = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
                         ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
                         : "";
                     const apiPath = isFutures
-                        ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx
+                        ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery
                 : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery + dualQuery;
                     const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch(apiPath, { method: "POST" })
@@ -792,8 +796,12 @@
                                 render();
                                 generateStats();
                                 loadAnnotations();
-                                // 重连SSE，带上选点时间（savedDate 已在上方取自 data.meta）
-                                connectRealtimeInit(code, freq, savedDate);
+                                // 重连SSE，带上选点时间（savedDate 已在上方取自 data.meta）；
+                                // 复盘态选点：同时带复盘点，保持 [选点, 复盘点] 复盘窗口
+                                const replayEnd2 = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                                    ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, currentFreq), currentFreq)
+                                    : null;
+                                connectRealtimeInit(code, freq, savedDate, replayEnd2);
                                 return;
                             }
                             // data 现在是完整的 chartData JSON（CChanB 从T重新计算的结果）
@@ -3497,7 +3505,6 @@
             if (!chartData || !chartData.meta) return;
             // 双窗不允许重置；复盘态仅期货拦截（股票复盘态取消选点=改L回方式A，R保持复盘点）
             if (isDualWindow) { showToast("双窗口模式，不支持重置"); return; }
-            if (chartData.meta.is_replay && chartData.meta.market === 'futures') { showToast("复盘模式，不支持重置"); return; }
             const code = chartData.meta.symbol;
             const freq = currentFreq;
             const isFutures = chartData.meta.market === 'futures';
@@ -3507,6 +3514,11 @@
             // 期货：清除选点 + 冷启动重连SSE（无start_time）
             const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号（期货/股票两分支共用）
             if (isFutures) {
+                // 引擎运行中拦截：取消选点清 CSV，影响引擎下次重连的行情窗口（四类拦截之一）
+                if (autoOrderRunning && isFuturesMode()) {
+                    showAlert('交易引擎运行中，请先关闭，再取消选点');
+                    return;
+                }
                 fetch("/api/futures/" + encodeURIComponent(code) + "/delete/point?freq=" + freq, { method: "DELETE" })
                     .then(resp => resp.json())
                     .then(() => {
@@ -3514,7 +3526,12 @@
                         // 不隐藏loading，交给connectRealtimeInit的init事件来隐藏
                         // 如果提前隐藏loading，会导致SSE重连失败时没有任何加载反馈
                         document.querySelector(".loading-text").textContent = "正在加载K线数据...";
-                        connectRealtimeInit(code, freq);  // 冷启动，不带start_time
+                        // 复盘态取消选点：保持复盘态（无选点窗口 [复盘点-N, 复盘点]）；
+                        // 实时态：冷启动重连（原语义）
+                        const replayEnd3 = (chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                            ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq)
+                            : null;
+                        connectRealtimeInit(code, freq, null, replayEnd3);
                     })
                     .catch(err => {
                         if (_isChartActionStale(_seq)) return; // [N1] 过期请求的失败不得弹窗打断新状态
@@ -4003,8 +4020,24 @@
             const lastKlineInput = (chartData.klines && chartData.klines.length > 0)
                 ? klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq)
                 : "";
-            const wantLive = isFutures && dateStr >= lastKlineInput;
+            // ═══ 复盘窗口 [L, R] 锚点（期货/股票共用，2026-10-03 二期扩展到期货）═══
+            const isDualCtx = isDualWindow && getDualSubFreq(freq);
+            const hasKlines = chartData.klines && chartData.klines.length > 0;
+            const replayMode = !!(chartData.meta && chartData.meta.is_replay);
+            const apiFirst = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[0].date, freq), freq) : "";
+            const apiLast = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq) : "";
+            const min15 = function(s) { return s.slice(0, 16); }; // 分钟粒度：15s周期首根含秒，避免秒位差异误判
+            const isFutureDate = dateStr.slice(0, 10) > todayStr; // 输入框格式YYYY-MM-DD前缀，字典序即时间序
+            // 回实时/回最新钳位：非复盘态末根=数据源最新，≥末根即回；
+            // 复盘态末根=复盘点<最新，只拦今天/未来（回实时），(复盘点,最新) 内放行往右复盘
+            const wantLive = isFutures && (!replayMode ? dateStr >= lastKlineInput
+                : (isToday || isFutureDate));
             if (wantLive) {
+                // 复盘态回实时 = 取消复盘：引擎运行中拦截（四类拦截之一）
+                if (autoOrderRunning && isFuturesMode()) {
+                    showAlert('交易引擎运行中，请先关闭，再取消复盘');
+                    return;
+                }
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在恢复实时行情...";
@@ -4026,29 +4059,30 @@
             // end_time 软断开承载期货复盘：连接保持存活、K线冻结在边界。
             // 复盘选日期/复盘至此统一由 gotoDate 并入 SSE，不走股票路由。
             if (isFutures) {
+                // 引擎运行中拦截：复盘态选点/取消选点写 CSV，影响引擎窗口（四类拦截之一）
+                if (autoOrderRunning && isFuturesMode()) {
+                    showAlert('交易引擎运行中，请先关闭，再复盘');
+                    return;
+                }
+                // 复盘越界：日历输入早于窗口左边界 L → 弹窗（右键复盘至此天然在区间内）
+                if (!isDualCtx && apiFirst && min15(apiDate) < min15(apiFirst)) {
+                    showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + apiFirst + "，请扩大数据范围。");
+                    return;
+                }
                 document.getElementById("goto-date-input").disabled = true;
                 document.getElementById("loading").classList.remove("hidden");
                 document.querySelector(".loading-text").textContent = "正在复盘计算，请稍候...";
                 if (isDualWindow && dualSubFreq) {
                     connectRealtimeDual(chartData.meta.symbol, freq, dualSubFreq, apiDate);
                 } else {
-                    connectRealtimeInit(chartData.meta.symbol, freq, realtimeStartTime, apiDate);
+                    // 复盘继承选点：start=当前窗口首根（左边界L），后端 CSV 恢复兜底
+                    connectRealtimeInit(chartData.meta.symbol, freq, apiFirst || realtimeStartTime, apiDate);
                 }
                 return;
             }
             // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
             // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
-            // ═══ 复盘窗口 [L, R]（股票单窗）═══
-            // L=配置回看或选点，R=数据源最新或复盘点；复盘只改R不改L：请求带
-            // start_time=当前首根K线，后端截 [start_time, end_date] 不做根数截断。
-            // 双窗(dual=1)一期不启用新语义，保持现状行为。
-            const isDualCtx = isDualWindow && getDualSubFreq(freq);
-            const hasKlines = chartData.klines && chartData.klines.length > 0;
-            const replayMode = !!(chartData.meta && chartData.meta.is_replay);
-            const apiFirst = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[0].date, freq), freq) : "";
-            const apiLast = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq) : "";
-            const min15 = function(s) { return s.slice(0, 16); }; // 分钟粒度：15s周期首根含秒，避免秒位差异误判
-            const isFutureDate = dateStr.slice(0, 10) > todayStr; // 输入框格式YYYY-MM-DD前缀，字典序即时间序
+            // ═══ 股票复盘窗口：atLatest 钳位（锚点已提前，期货/股票共用）═══
             // ≥最新K线（非复盘态末根=数据源最新）或今天/未来 → 钳到「回最新」：不带end_date冷启动，
             // 与「选今天」同路；复盘态末根=复盘点<最新，往右复盘必须放行走end_date
             const atLatest = hasKlines && (isToday || isFutureDate

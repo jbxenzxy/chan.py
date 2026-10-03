@@ -111,6 +111,16 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
     if end_time:
         _end_dt = _parse_flex_time(end_time)
         if _end_dt is not None:
+            if start_time:
+                # 组合窗口（复盘继承选点，2026-10-03 二期）：[start, end] 全量——
+                # 墙钟估算(start→now) 覆盖选点起全部K线（含 end→now 流逝部分，
+                # 拉回后由 init_chan_symbol 的 end 截断去掉），base_bars_out=None
+                # → 调用方跳过「末 N 根」截断（对齐股票选点路径不做根数截断）。
+                # start ≥ end（倒挂）不应到达此处（调用方已回退），防御性走默认。
+                _start_dt = _parse_flex_time(start_time)
+                if _start_dt is not None and _start_dt < _end_dt:
+                    fetch = _estimate_bars_between(_start_dt, now, freq_sec)
+                    return (min(fetch, _TQ_MAX_BARS), None)
             fetch = n + _estimate_bars_between(_end_dt, now, freq_sec)
             return (min(fetch, _TQ_MAX_BARS), n)
     elif start_time:
@@ -124,10 +134,12 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
 def init_chan_symbol(src, symbol, _name, freq_sec, freq_label, start_time=None, end_time=None, num_bars=None):
     """拉取历史K线 + 运行 chan.py 分析，返回 (chan, klines, kl_type, records) 或 None。
     由 SSE handler 调用，每个 SSE 连接自包含。
-    start_time: 选点起始时间，有值时只拉取该时间之后的K线（B 操作：左边界=T，全量到最新）
+    start_time: 选点起始时间，有值时只拉取该时间之后的K线（B 操作：左边界=T，全量到最新）；
+                与 end_time 同传时为组合窗口（复盘继承选点，左边界=T 不做根数截断）
     end_time: 复盘终点（软断开边界）：有值时只截取该时间之前（含）的K线建 chan，
               且取数为 N+复盘点到当前的流逝根数、建 chan 前截断到末 N 根
-              （C 操作：左边界=从 end 往前推 N 根，与股票复盘语义一致），
+              （C 操作：左边界=从 end 往前推 N 根）；
+              与 start_time 同传时窗口 = [start, end]（复盘继承选点）；
               update 循环停在此边界，不被实时拉新。None 为实时流。
     num_bars: 显式取数根数（双窗下窗传「上窗区间折算根数」实现对齐；None=按窗口语义计算）。
     首参为数据源对象 src（CTqSdkSession），服务层只消费
@@ -326,15 +338,28 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         freq_cn = CTqSdkAPI.FREQ_LABEL_CN.get(freq_label, freq_label)
         display_key = f"{symbol}:{freq_cn}"
 
-        # 如果没有传入 start_time，查询CSV中是否有保存的选点
-        # （选点经 app_data 公共 API 读取，不直连引擎内部状态）
-        # C 复盘对齐股票语义「复盘不加载选点」：end_time 模式下跳过选点加载，
-        # 同时忽略传入的 start_time（复盘窗口固定为 [end-N, end]，与选点无关；
-        # 回到最新时前端不带 start_time 重连，此处再从 CSV 恢复选点）。
+        # 选点继承（2026-10-03 二期，对齐股票复盘窗口 X 语义）：
+        #   · 复盘（end_time）继承选点：显式 start_time 优先生效（前端带
+        #     当前窗口首根 = 窗口左边界 L），缺失时从 CSV 恢复（F5 刷新后
+        #     前端内存丢失，CSV 是 SSOT）→ 窗口 = [start, end]（组合模式，
+        #     不做根数截断）；start ≥ end 倒挂时丢弃 start 回退默认窗口
+        #     [end-N, end]（前端弹窗已拦用户输入路径，倒挂仅剩理论场景，
+        #     且 SSE init 事件无弹窗通道，回退比报错平滑）；
+        #   · 非复盘：start_time 缺失时从 CSV 恢复（B 操作/冷启动，原语义）。
+        # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
+        # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
         if end_time:
+            if start_time is None:
+                _saved = _get_saved_point(symbol, freq) or None
+                if _saved:
+                    start_time = _saved
+                    log.info(f"[{display_key}] 复盘恢复选点: {start_time}")
             if start_time:
-                log.info(f"[{display_key}] 复盘模式：忽略选点 start_time={start_time}（复盘不加载选点）")
-            start_time = None
+                _s_dt = _parse_flex_time(start_time)
+                _e_dt = _parse_flex_time(end_time)
+                if _s_dt is not None and _e_dt is not None and _s_dt >= _e_dt:
+                    log.info(f"[{display_key}] 复盘起点 {start_time} 不早于终点 {end_time}，回退默认窗口")
+                    start_time = None
         elif start_time is None:
             col = app_data.freq_to_col(freq) or ""
             if col:
@@ -343,7 +368,7 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                     start_time = _saved
                     log.info(f"[{display_key}] 检测到保存选点: {start_time}")
 
-        saved_selection_date = start_time or ""
+        saved_selection_date = _get_saved_point(symbol, freq) or ""
 
         t_conn = time.time()
         src.connect()
@@ -1662,11 +1687,14 @@ def _incremental_klines(prev_klines, kl_list, date_fmt):
 # 区域 3 · 期货选点
 # ═══════════════════════════════════════════════════════════════════════
 
-def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
+def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
     """
     期货期指手选进入段：与股票 stock_manual_select_point 逻辑一致。
     创建临时 TqApi → 拉取全量历史 → 找到左肩时间T → 保存CSV →
     创建新 TqApi → 从T重新拉取 → 创建新CChan → 返回完整快照。
+
+    end_date（复盘态选点，2026-10-03 二期）：当前复盘点——重建拉取按
+    [T, end_date] 截断（改L不改R），响应 is_replay=True 保持复盘态。
     """
     import time
 
@@ -1737,6 +1765,9 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
 
         records2 = src2.fetch_kline(symbol, freq_sec=freq_sec,
                                     display_key=display_key, start_time=start_time)
+        if end_date:
+            # 复盘态选点：R 保持复盘点——截去 end_date 之后的K线（改L不改R）
+            records2 = _truncate_records_by_end(records2, end_date, freq_sec)
         if len(records2) < 5:
             raise DataFetchError(f"选点后K线数据不足: 仅{len(records2)}条")
 
@@ -1744,9 +1775,10 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
         # 数据注入经 src2.set_data（Session 协议），不落类级缓存
         chan2, _ = _build_futures_chan(records2, symbol, freq_sec, config=config, src=src2)
 
-        # Step 5: 提取快照并返回
+        # Step 5: 提取快照并返回（复盘态选点 is_replay=True，前端保持复盘 UI）
         result = _extract_realtime_snapshot(chan2, kl_type, symbol, name, freq_label,
-                                            saved_selection_date=start_time)
+                                            saved_selection_date=start_time,
+                                            is_replay=bool(end_date))
         # 计算白色横虚线
         _kl_list = chan2[kl_type]
         _date_fmt = _get_date_fmt(freq)
