@@ -4046,7 +4046,7 @@
             const needEndDate = (!isToday || keyEnter) && !atLatest;
             // 复盘日期早于窗口左边界 → 弹窗拦截（右键只能命中可见K线，此拦截只对日历输入可达）
             if (needEndDate && !isDualCtx && apiFirst && min15(apiDate) < min15(apiFirst)) {
-                showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + apiFirst + "，请选择更晚的日期，或切换更大周期扩大数据范围。");
+                showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + apiFirst + "，请扩大数据范围。");
                 return;
             }
             const url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
