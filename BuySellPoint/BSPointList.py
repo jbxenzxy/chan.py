@@ -938,20 +938,19 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
         stroke_a = bi_list[pivot_a.begin_bi.idx]
-        stroke_b = bi_list[stroke_n.idx - 1]
 
         # ㈠ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
-        # 向下笔C(买点)：笔B高点 <= 笔A高点
-        # 向上笔C(卖点)：笔B低点 >= 笔A低点
+        # 向下笔C(买点)：笔C高点 <= 笔A高点（笔C起点=笔B终点为共用端点分型，与「笔B高点」旧口径等效）
+        # 向上笔C(卖点)：笔C低点 >= 笔A低点
         if stroke_n.is_down():
-            b_ext, a_ext = stroke_b._high(), stroke_a._high()
-            is_lightning = b_ext <= a_ext
+            c_ext, a_ext = stroke_n._high(), stroke_a._high()
+            is_lightning = c_ext <= a_ext
         else:
-            b_ext, a_ext = stroke_b._low(), stroke_a._low()
-            is_lightning = b_ext >= a_ext
+            c_ext, a_ext = stroke_n._low(), stroke_a._low()
+            is_lightning = c_ext >= a_ext
         if not is_lightning:
             self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
-                          b_idx=stroke_b.idx, a_idx=stroke_a.idx, b_ext=b_ext, a_ext=a_ext)
+                          c_idx=stroke_n.idx, a_idx=stroke_a.idx, c_ext=c_ext, a_ext=a_ext)
             return
 
         # ㈡ 笔C是否破笔A极值 —— 两种情况（占位：两情况当前处理一致，留待后续分化）
@@ -1179,6 +1178,86 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
         return True
 
+    # ── 第5/7笔：nzs 未通过后的同向笔递进分析 ──
+    def _cal_bs0point_57rd(self, bi_list, pivot_a, stroke_n):
+        """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）。
+        奇数笔（1,3,5,7）同向为趋势笔，偶数笔（2,4,6）为回调笔：
+        ㈠ 闪电走势：趋势笔极值逐级收窄（买：笔n 高点 ≤ 笔(n-2) 高点 ≤ … ≤ 笔1 高点；卖反向）
+        ㈡ 全部奇数笔整笔 DIF 在趋势侧（买→DIF≥0，卖→DIF≤0）
+        ㈢ 回抽0轴比例：笔n 终点 vs 笔1 起点（同 3rd 的 C/A 口径）
+        ㈣ MACD BAR 背驰：笔n vs 笔(n-2)（最近同向笔）
+        """
+        nth_in_pivot = stroke_n.idx - pivot_a.begin_bi.idx + 1
+        is_buy = stroke_n.is_down()
+        config = self.config.GetBSConfig(is_buy)
+        begin_idx = pivot_a.begin_bi.idx
+        odd_bis = [bi_list[begin_idx + i] for i in range(0, nth_in_pivot, 2)]  # 笔1,3,5(,7)
+        stroke_1 = odd_bis[0]
+        stroke_nm2 = odd_bis[-2]  # 笔(n-2)：最近同向笔
+
+        self._dbg_bs0(' _cal_bs0point_57rd', '进入', stroke_n_idx=stroke_n.idx,
+                      nth_in_pivot=nth_in_pivot, is_buy=is_buy,
+                      stroke_dir='up' if stroke_n.is_up() else 'down')
+
+        # ㈠ 闪电走势判定（趋势笔极值逐级收窄）
+        # 向下笔5(买点)：笔5高点 <= 笔3高点 and 笔3高点 <= 笔1高点
+        # 向上笔5(卖点)：笔5低点 >= 笔3低点 and 笔3低点 >= 笔1低点
+        # 向下笔7(买点)：笔7高点 <= 笔5高点 and 笔5高点 <= 笔3高点 and 笔3高点 <= 笔1高点
+        # 向上笔7(卖点)：笔7低点 >= 笔5低点 and 笔5低点 >= 笔3低点 and 笔3低点 >= 笔1低点
+        for j in range(1, len(odd_bis)):
+            cur, prev = odd_bis[j], odd_bis[j - 1]
+            if stroke_n.is_down():
+                cur_ext, prev_ext = cur._high(), prev._high()
+                chain_ok = cur_ext <= prev_ext
+            else:
+                cur_ext, prev_ext = cur._low(), prev._low()
+                chain_ok = cur_ext >= prev_ext
+            if not chain_ok:
+                self._dbg_bs0(' _cal_bs0point_57rd', '跳过: 非闪电走势（趋势笔未逐级收窄）',
+                              cur_idx=cur.idx, prev_idx=prev.idx,
+                              cur_ext=cur_ext, prev_ext=prev_ext)
+                return
+
+        # ㈡ 全部奇数笔整笔 DIF 在趋势侧 + ㈢ 回抽0轴比例（笔n 终点 vs 笔1 起点）
+        dif_positive = is_buy
+        dif_ok_list = [self._dif_all_same_side(bi, dif_positive) for bi in odd_bis]
+        a_dif = stroke_1.get_begin_klu().macd.DIF
+        c_dif = stroke_n.get_end_klu().macd.DIF
+        a_dist = a_dif if is_buy else abs(a_dif)
+        c_dist = c_dif if is_buy else abs(c_dif)
+        dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
+        ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
+        if not (all(dif_ok_list) and ratio_ok):
+            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
+                          stroke_n_idx=stroke_n.idx, is_buy=is_buy,
+                          dif_ok_list=dif_ok_list, ratio_ok=ratio_ok,
+                          dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
+                          threshold=round(config.retrace_zero_axis_ratio, 4))
+            return
+
+        # ㈣ MACD BAR 背驰判定（笔n vs 笔(n-2)，最近同向笔）
+        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
+        divergence_rate = n_metric / (nm2_metric + 1e-7)
+        if not is_diver:
+            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。最近同向笔 MACD BAR 未背驰',
+                          nm2_idx=stroke_nm2.idx,
+                          nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
+                          divergence_rate=round(divergence_rate, 2),
+                          threshold=round(config.divergence_rate, 2))
+            return
+
+        feature_dict = {
+            'divergence_rate': divergence_rate,
+            'bsp0_bi_amp': stroke_n.amp(),
+        }
+        if dif_ratio is not None:
+            feature_dict['dif_ratio'] = dif_ratio
+        self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
+                    is_target_bsp=True, feature_dict=feature_dict)
+        self._dbg_bs0(' _cal_bs0point_57rd', 'OK 生成0类买/卖点',
+                      is_buy=is_buy, nth_in_pivot=nth_in_pivot,
+                      divergence_rate=round(divergence_rate, 2))
+
     # ── 第n笔再次分析：MACD全面积比较（中枢A进入段 vs 笔n）──
     def _cal_bs0point_nth_ozs(self, bi_list, pivot_a, stroke_n):
         """
@@ -1247,88 +1326,6 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                     is_target_bsp=True, feature_dict=feature_dict)
         self._dbg_bs0(' _cal_bs0point_nth_ozs', 'OK 生成0类买/卖点',
                       is_buy=is_buy, divergence_rate=round(divergence_rate, 2))
-
-    # ── 第5/7笔：nzs 未通过后的同向笔递进分析 ──
-    def _cal_bs0point_57rd(self, bi_list, pivot_a, stroke_n):
-        """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）。
-        奇数笔（1,3,5,7）同向为趋势笔，偶数笔（2,4,6）为回调笔：
-        ㈠ 闪电走势：回调笔极值逐级收窄（买：笔2i 高点 ≤ 前一高点，锚定笔1；卖反向）
-        ㈡ 全部奇数笔整笔 DIF 在趋势侧（买→DIF≥0，卖→DIF≤0）
-        ㈢ 回抽0轴比例：笔n 终点 vs 笔1 起点（同 3rd 的 C/A 口径）
-        ㈣ MACD BAR 背驰：笔n vs 笔(n-2)（最近同向笔）
-        """
-        nth_in_pivot = stroke_n.idx - pivot_a.begin_bi.idx + 1
-        is_buy = stroke_n.is_down()
-        config = self.config.GetBSConfig(is_buy)
-        begin_idx = pivot_a.begin_bi.idx
-        odd_bis = [bi_list[begin_idx + i] for i in range(0, nth_in_pivot, 2)]  # 笔1,3,5(,7)
-        stroke_1 = odd_bis[0]
-        stroke_nm2 = odd_bis[-2]  # 笔(n-2)：最近同向笔
-
-        self._dbg_bs0(' _cal_bs0point_57rd', '进入', stroke_n_idx=stroke_n.idx,
-                      nth_in_pivot=nth_in_pivot, is_buy=is_buy,
-                      stroke_dir='up' if stroke_n.is_up() else 'down')
-
-        # ㈠ 闪电走势判定（回调笔极值逐级收窄）
-        # 向下笔5(买点)：笔4高点 <= 笔2高点 and 笔2高点 <= 笔1高点
-        # 向上笔5(卖点)：笔4低点 >= 笔2低点 and 笔2低点 >= 笔1低点
-        # 向下笔7(买点)：笔6高点 <= 笔4高点 and 笔4高点 <= 笔2高点 and 笔2高点 <= 笔1高点
-        # 向上笔7(卖点)：笔6低点 >= 笔4低点 and 笔4低点 >= 笔2低点 and 笔2低点 >= 笔1低点
-        chain_bis = [stroke_1, bi_list[begin_idx + 1]]  # 笔1、笔2 起步
-        chain_bis += [bi_list[begin_idx + i] for i in range(3, nth_in_pivot, 2)]  # 笔4、笔6
-        for j in range(1, len(chain_bis)):
-            cur, prev = chain_bis[j], chain_bis[j - 1]
-            if stroke_n.is_down():
-                cur_ext, prev_ext = cur._high(), prev._high()
-                chain_ok = cur_ext <= prev_ext
-            else:
-                cur_ext, prev_ext = cur._low(), prev._low()
-                chain_ok = cur_ext >= prev_ext
-            if not chain_ok:
-                self._dbg_bs0(' _cal_bs0point_57rd', '跳过: 非闪电走势（回调笔未逐级收窄）',
-                              cur_idx=cur.idx, prev_idx=prev.idx,
-                              cur_ext=cur_ext, prev_ext=prev_ext)
-                return
-
-        # ㈡ 全部奇数笔整笔 DIF 在趋势侧 + ㈢ 回抽0轴比例（笔n 终点 vs 笔1 起点）
-        dif_positive = is_buy
-        dif_ok_list = [self._dif_all_same_side(bi, dif_positive) for bi in odd_bis]
-        a_dif = stroke_1.get_begin_klu().macd.DIF
-        c_dif = stroke_n.get_end_klu().macd.DIF
-        a_dist = a_dif if is_buy else abs(a_dif)
-        c_dist = c_dif if is_buy else abs(c_dif)
-        dif_ratio = (a_dist - c_dist) / a_dist if a_dist != 0 else None
-        ratio_ok = dif_ratio is not None and dif_ratio > config.retrace_zero_axis_ratio
-        if not (all(dif_ok_list) and ratio_ok):
-            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。DIF 未整笔在趋势侧 或 回抽0轴不足',
-                          stroke_n_idx=stroke_n.idx, is_buy=is_buy,
-                          dif_ok_list=dif_ok_list, ratio_ok=ratio_ok,
-                          dif_ratio=None if dif_ratio is None else round(dif_ratio, 4),
-                          threshold=round(config.retrace_zero_axis_ratio, 4))
-            return
-
-        # ㈣ MACD BAR 背驰判定（笔n vs 笔(n-2)，最近同向笔）
-        is_diver, n_metric, nm2_metric = self._is_stroke_divergence(stroke_n, stroke_nm2, config)
-        divergence_rate = n_metric / (nm2_metric + 1e-7)
-        if not is_diver:
-            self._dbg_bs0(' _cal_bs0point_57rd', '跳过。最近同向笔 MACD BAR 未背驰',
-                          nm2_idx=stroke_nm2.idx,
-                          nm2_metric=round(nm2_metric, 2), n_metric=round(n_metric, 2),
-                          divergence_rate=round(divergence_rate, 2),
-                          threshold=round(config.divergence_rate, 2))
-            return
-
-        feature_dict = {
-            'divergence_rate': divergence_rate,
-            'bsp0_bi_amp': stroke_n.amp(),
-        }
-        if dif_ratio is not None:
-            feature_dict['dif_ratio'] = dif_ratio
-        self.add_bs(bs_type=BSP_TYPE.T0, bi=stroke_n, relate_bsp11=None,
-                    is_target_bsp=True, feature_dict=feature_dict)
-        self._dbg_bs0(' _cal_bs0point_57rd', 'OK 生成0类买/卖点',
-                      is_buy=is_buy, nth_in_pivot=nth_in_pivot,
-                      divergence_rate=round(divergence_rate, 2))
 
     # ═══════════════════════════════════════════════════════════
     # ── 1类买卖点 ──
