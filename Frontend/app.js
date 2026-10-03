@@ -723,8 +723,10 @@
                         break;
                     }
                 }
-                // 复盘模式下不支持双击选点（在K线检测之后判断，确保只对K线上的双击弹提示）
-                if (chartData.meta && chartData.meta.is_replay && clickedOnKline) {
+                // 复盘态选点：股票单窗已放开（选点=改L，R保持复盘点，请求带 end_date）；
+                // 期货单窗与双窗（上窗路径）仍禁用，分别随期货期/双窗期放开
+                if (chartData.meta && chartData.meta.is_replay && clickedOnKline &&
+                    (chartData.meta.market === "futures" || isDualWindow)) {
                     showToast("复盘模式，不支持选点");
                     return;
                 }
@@ -741,9 +743,13 @@
                     // 后端销毁双窗两键缓存并按双窗路径重建（响应含 data.sub）
                     const dualQuery = (isDualWindow && !isFutures)
                         ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
+                    // 复盘态选点（股票单窗）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
+                    const replayEndQuery = (!isFutures && chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                        ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
+                        : "";
                     const apiPath = isFutures
                         ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx
-                : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + dualQuery;
+                : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery + dualQuery;
                     const _seq = _bumpChartActionSeq(); // [N1] 捕获本次操作序号
                     fetch(apiPath, { method: "POST" })
                         .then(resp => {

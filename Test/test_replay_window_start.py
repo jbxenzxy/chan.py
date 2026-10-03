@@ -18,8 +18,11 @@ Test/test_replay_window_start.py —— 股票复盘窗口 [L, R] 的 start_time
   3. start_time 无法解析 → 返回 error（同上）；
   4. 复盘 + start_time → meta.saved_selection_date 为空（复盘窗口左边界
      不回写选点 meta——否则前端「取消选点」菜单会误亮）；
-  5. 非复盘 + start_time → meta.saved_selection_date 回写（B 操作选点
-     回显的现状回归保护）。
+  5. 非复盘 + `start_time` → `meta.saved_selection_date` 回写（B 操作选点
+     回显的现状回归保护）；
+  6. 复盘态选点端到端（股票单窗，2026-10-03 放开）：选点=改L、R保持
+     复盘点，选点落 CSV、meta 不回写、保持复盘态；
+  7. 双窗 + end_date → 防御性拒绝。
 
 只测 freq="d"：与 test_lookback_truncation 同理，30m/5m 共用同一实现。
 
@@ -155,12 +158,79 @@ def test_live_start_time_meta_writeback_kept():
     print(f"[PASS] 非复盘选点 meta 回写: {saved}，首根 {dates[0]}")
 
 
+def test_replay_select_point_rebuild_window():
+    """复盘态选点端到端（股票单窗）：选点=改L、R保持复盘点。
+
+    链路：先以 end_date=锚点 填复盘缓存（含 chan，与前端复盘视图同源）→
+    stock_manual_select_point(bi_idx=0, end_date=锚点) 定位左肩 T →
+    选点落 CSV → 重建 [T, 锚点]（不做根数截断）→ is_replay 保持、
+    meta 选点不回写（但 CSV 已保存，回最新后冷启动恢复 [选点, 最新]）。
+    """
+    from App import AppEngine as m
+    from App.AppChart import stock_manual_select_point
+
+    restore_iso = isolate_side_effects()
+    restore_src, _rows = install_data_source(FIXTURE)
+    restore_ref = _seed_reference()
+    saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+    saved_full_mode = m.FULL_DATA_MODE
+    m.STOCKS_LOOKBACK_CONFIG = {"d": (500, "用例窗口")}
+    m.FULL_DATA_MODE = False
+    try:
+        rows = _fixture_rows()
+        anchor = _ymd(rows[-1 - REPLAY_ANCHOR_OFFSET]["dt"])
+        first = m._analyze_stock_internal(CODE, freq="d", cache_chan=True, end_date=anchor)
+        assert "error" not in first, f"复盘缓存填充失败: {first.get('error')}"
+        assert len(first.get("bis") or []) >= 5, "夹具笔数不足 5，端到端用例失去前提"
+
+        result = stock_manual_select_point(CODE, freq="d", bi_idx=0, end_date=anchor)
+        assert "error" not in result, f"复盘态选点失败: {result.get('error')}"
+        dates = [k.get("date") for k in result.get("klines") or []]
+        assert dates, "选点重建未返回K线"
+        assert dates[-1] == anchor, f"R 应保持复盘点 {anchor}，实为 {dates[-1]}"
+        assert result["meta"]["is_replay"] is True, "选点后应保持复盘态"
+        assert not (result["meta"].get("saved_selection_date")), \
+            "复盘响应不应回写选点 meta（选点已落 CSV，由回最新后的冷启动恢复）"
+        assert len(dates) > 300, \
+            f"选点+复盘路径疑似被套根数截断：{len(dates)} 条（若误走截断应 <= 120）"
+        saved_csv = m.app_data.get_saved_point_time("sh" + CODE, "d")
+        assert saved_csv, "选点未落 CSV（回最新后无法恢复 [选点, 最新]）"
+        # 改L语义核心：重建首根必须 == 选点左肩（选点 T 落在窗口左边界）。
+        # 回归警示：曾因 rebuild_start_time 在单窗下误为 None（freq==main_freq
+        # 恒 False）而丢失左边界，窗口退化为 [锚点-500, 锚点]，此断言即防回潮。
+        first_date = dates[0].replace("-", "/")[:len(saved_csv)]
+        assert first_date == saved_csv[:len(first_date)], \
+            f"重建首根 {dates[0]} 未从选点 {saved_csv} 开始——窗口左边界丢失"
+        print(f"[PASS] 复盘态选点: 重建 {len(dates)} 条 {dates[0]} ~ {dates[-1]}，"
+              f"CSV选点 {saved_csv}，首根==选点")
+    finally:
+        m.FULL_DATA_MODE = saved_full_mode
+        m.STOCKS_LOOKBACK_CONFIG = saved_lookback
+        restore_ref()
+        restore_src()
+        restore_iso()
+
+
+def test_select_point_dual_with_end_date_rejected():
+    """双窗 + end_date：防御性拒绝（双窗复盘态选点随双窗期放开）。"""
+    from App.AppChart import stock_manual_select_point
+
+    result = stock_manual_select_point(CODE, freq="d", bi_idx=0,
+                                       end_date="2024/10/21",
+                                       dual=True, main_freq="d", sub_freq="30m")
+    assert "error" in result, f"双窗+end_date 应被拒绝，实际返回: {list(result)[:5]}"
+    assert "双窗口不支持复盘态选点" in result["error"], f"文案不符: {result['error']}"
+    print(f"[PASS] 双窗复盘态选点防御: {result['error']}")
+
+
 def main():
     test_replay_window_start_short_not_truncated()
     test_replay_start_after_target_errors()
     test_replay_start_unparsable_errors()
     test_replay_start_time_no_meta_writeback()
     test_live_start_time_meta_writeback_kept()
+    test_replay_select_point_rebuild_window()
+    test_select_point_dual_with_end_date_rejected()
     print("ALL 复盘窗口 start_time 语义 TESTS PASS")
 
 

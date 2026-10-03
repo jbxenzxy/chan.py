@@ -164,18 +164,19 @@ def call_stock_tpsl(body):
     return compute_stock_tpsl((body or {}).get("code", ""), body or {})
 
 
-def call_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
+def call_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=False, sub_freq=None, main_freq=None):
     """股票手动选点（REST 唯一入口，无锁）
 
     统一走本漏斗：内部链路复用 analyze_stock 引擎与共享缓存。
     透传双窗上下文（dual/sub_freq/main_freq），支持双窗选点。
+    end_date：复盘态选点（单窗）传当前复盘点，双窗不支持。
 
     并发安全由各共享资源自身的锁保证：CChan 构建免锁（每请求数据注入），
     选点 CSV 走 user_store_lock，分析缓存/下窗缓存走 stocks_cache_lock。
     """
     return stock_manual_select_point(code, freq=freq, bi_idx=bi_idx,
-                                     dual=dual, sub_freq=sub_freq,
-                                     main_freq=main_freq)
+                                     end_date=end_date, dual=dual,
+                                     sub_freq=sub_freq, main_freq=main_freq)
 
 
 def call_futures_manual_select_point(symbol, freq="15s", bi_idx="0"):
@@ -199,7 +200,7 @@ def call_compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", e
                                 end_date=end_date)
 
 
-def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=None, main_freq=None):
+def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=False, sub_freq=None, main_freq=None):
     """股票手动选点 · 原始入口（无锁，供内部路径复用）
 
     ⚠ 与 analyze_stock 同理并非无状态：内部走 analyze_stock 引擎链路与
@@ -222,9 +223,15 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     """
     import re
     import gc
+    # 复盘态选点（2026-10-03 放开，单窗限定）：end_date=当前复盘点。
+    # 选点定位读 end_date 后缀的复盘缓存（CChan 与前端复盘视图同源，
+    # 笔索引对位）；重建走 [选点, end_date]（改L不改R，与 gotoDate
+    # 复盘窗口同语义）；选点照常落 CSV，回最新后冷启动恢复 [选点, 最新]。
+    if dual and end_date:
+        return {"error": "双窗口不支持复盘态选点"}
     # 标准化代码（统一走唯一事实源 _get_stock_market_code，兼容前后缀/带点/大小写）
     market, normalized_code = _m._get_stock_market_code(code)
-    date_suffix = "live"
+    date_suffix = end_date if end_date else "live"
     cache_key = make_single_key(market, normalized_code, freq, date_suffix)
     qualified_code = market + normalized_code  # 标准标识 market(小写)+code，无连接符（区分沪市深市同号股票）
 
@@ -337,11 +344,15 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, dual=False, sub_freq=No
     #   前端限制下窗选点，freq!=main_freq 分支为防御路径）；
     #   下窗无选点概念（双窗选点不保存、不读 CSV），纯对齐上窗
     #   [T, 最新] 区间加载（对齐不足时引擎降全量兜底）。
-    rebuild_start_time = start_time if freq == main_freq else None
+    # 单窗恒传选点：复盘路径不读 CSV（引擎内 642 的 CSV 恢复只在非复盘
+    # 分支），显式传参是复盘态选点窗口左边界的唯一来源；双窗保持原语义
+    # （仅上窗选点作用上窗，下窗纯对齐不带 start_time）。
+    rebuild_start_time = start_time if (not dual or freq == main_freq) else None
     result = _m._analyze_stock_internal(
         f"{market}{normalized_code}",
         freq=(main_freq if dual else freq),
         start_time=rebuild_start_time,
+        end_date=(end_date if not dual else None),
         dual=dual,
         sub_freq=(sub_freq if dual else None))
     return result

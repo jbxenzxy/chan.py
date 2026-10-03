@@ -292,6 +292,7 @@ async def api_stocks_select_point(
     code: str = Path(...),
     freq: str = Query("d"),
     bi_idx: str = Query("-1"),
+    end_date: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
     main_freq: str = Query(None),
@@ -300,14 +301,16 @@ async def api_stocks_select_point(
 
     双窗选点：dual=1 时 freq=双击所在窗口周期，
     main_freq=上窗周期（下窗选点必传），sub_freq=下窗周期。
+    end_date：复盘态选点（单窗）传当前复盘点——定位与重建都按
+    复盘窗口 [选点, end_date] 承载（改L不改R）；双窗不支持。
     """
     if not code or bi_idx == "-1":
         raise HTTPException(status_code=400, detail="缺少必要参数 code 或 bi_idx")
     try:
         result = await run_in_threadpool(orch.call_manual_select_point, code,
                                          freq=freq, bi_idx=bi_idx,
-                                         dual=dual, sub_freq=sub_freq,
-                                         main_freq=main_freq)
+                                         end_date=end_date, dual=dual,
+                                         sub_freq=sub_freq, main_freq=main_freq)
     except AppError:
         raise
     except Exception as exc:
