@@ -248,17 +248,20 @@ async def api_stocks_analyze(
     freq: str = Query("d"),
     end_date: str = Query(None),
     start_time: str = Query(None),
+    sub_start_time: str = Query(None),
     step: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
 ):
-    """获取股票缠论分析数据（orch.call_analysis）"""
+    """获取股票缠论分析数据（orch.call_analysis）
+    sub_start_time：双窗下窗独立选点起点（dual=1 时消费）"""
     if not code:
         raise HTTPException(status_code=400, detail="请输入股票代码")
     try:
         result = await run_in_threadpool(orch.call_analysis, code, freq=freq,
                                          end_date=end_date, start_time=start_time,
-                                         dual=dual, step=step, sub_freq=sub_freq)
+                                         sub_start_time=sub_start_time, dual=dual,
+                                         step=step, sub_freq=sub_freq)
     except AppError:
         raise  # 领域异常：交给统一异常处理器
     except Exception as exc:

@@ -57,7 +57,7 @@ log = get_logger(__name__)
 # futures_cache_lock / user_store_lock），登记表见 AppOrch 的
 # SHARED_RESOURCE_REGISTRY —— 它按「资源」索引，而不是按「入口」索引。
 
-def call_analysis(code, freq="d", end_date=None, start_time=None, dual=False, step=None, sub_freq=None):
+def call_analysis(code, freq="d", end_date=None, start_time=None, sub_start_time=None, dual=False, step=None, sub_freq=None):
     """单标的缠论分析（同步入口，REST 路由唯一入口）
 
     CChan 构建已免锁（数据每请求线程局部注入），共享的分析/选点/标注缓存
@@ -69,12 +69,12 @@ def call_analysis(code, freq="d", end_date=None, start_time=None, dual=False, st
           f"end_date={end_date!r} start_time={start_time!r} dual={dual}")
     t0 = time.time()
     result = _m.analyze_stock(code, freq=freq, end_date=end_date, start_time=start_time,
-                              dual=dual, step=step, sub_freq=sub_freq)
+                              sub_start_time=sub_start_time, dual=dual, step=step, sub_freq=sub_freq)
     log.info(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
     return result
 
 
-def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None):
+def analyze_stock(code, freq="d", end_date=None, start_time=None, sub_start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None):
     """股票/指数分析公开入口（引擎 analyze_stock 的薄封装）· 原始入口（无锁）
 
     ⚠ 并非引擎的唯一入口：stock_manual_select_point（手动选点重建）直调
@@ -90,8 +90,9 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
         独立缓存，跨进程隔离）；
       - SSE 期货路径 → 独立 CChan 会话。
     """
-    return _m.analyze_stock(code, freq=freq, end_date=end_date,
-                            cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq)
+    return _m.analyze_stock(code, freq=freq, end_date=end_date, start_time=start_time,
+                            sub_start_time=sub_start_time, cache_chan=cache_chan,
+                            dual=dual, step=step, sub_freq=sub_freq)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -324,10 +325,11 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
     if not stock_name:
         single_cached = app_data.cache_get(cache_key)
         stock_name = (single_cached or {}).get("result", {}).get("meta", {}).get("name", "")
-    if not dual:
-        # save_point_time 内部已在 _saved_point_lock 内同步更新内存态与落盘，
-        # 调用方不再锁外直写内存态（修复：CSV 与内存态锁内原子）
-        app_data.save_point_time(qualified_code, stock_name, freq, start_time)
+    # 三期废除「双窗选点不落 CSV」拍板：双窗选点按焦点窗 freq 落各自
+    # 周期列（上窗选点=main_freq 列、下窗选点=sub_freq 列），单双窗同
+    # 周期共享选点状态；save_point_time 内部已在 _saved_point_lock 内
+    # 同步更新内存态与落盘，调用方不再锁外直写内存态。
+    app_data.save_point_time(qualified_code, stock_name, freq, start_time)
 
     # Step 3: 销毁旧CChanA及所有中间状态，回到冷启动前的干净状态
     # 缓存删除统一经 app_data.cache_remove（内部持锁）
@@ -341,19 +343,31 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
     gc.collect()
 
     # Step 4: 从T开始重新加载K线，创建CChanB，返回完整chartData
-    # 双窗：重建走双窗路径（响应含 data.sub）——
-    #   上窗选点 start_time=T 作用于上窗（freq==main_freq 时双击发生在上窗，
-    #   前端限制下窗选点，freq!=main_freq 分支为防御路径）；
-    #   下窗无选点概念（双窗选点不保存、不读 CSV），纯对齐上窗
-    #   [T, 最新] 区间加载（对齐不足时引擎降全量兜底）。
-    # 单窗恒传选点：复盘路径不读 CSV（引擎内 642 的 CSV 恢复只在非复盘
-    # 分支），显式传参是复盘态选点窗口左边界的唯一来源；双窗保持原语义
-    # （仅上窗选点作用上窗，下窗纯对齐不带 start_time）。
-    rebuild_start_time = start_time if (not dual or freq == main_freq) else None
+    # 双窗（三期独立选点）：焦点窗按新选点重建，另一窗按 CSV 现状恢复——
+    #   上窗选点（freq==main_freq）：start_time=T_main，下窗 sub_start_time
+    #   = CSV(sub_freq 列)（下窗选点状态不被上窗选点牵动）；
+    #   下窗选点（freq==sub_freq）：sub_start_time=T_sub，上窗 start_time
+    #   = CSV(main_freq 列)——上窗重载（L/R 不变重算结构），区间套基于
+    #   新下窗笔（§4.4 下窗变动→上窗重载联动）；
+    #   单窗恒传选点：复盘路径不读 CSV（引擎内 CSV 恢复只在非复盘分支），
+    #   显式传参是复盘态选点窗口左边界的唯一来源。
+    if dual:
+        _col_main = app_data.freq_to_col(main_freq) or ""
+        _col_sub = (app_data.freq_to_col(sub_freq) or "") if sub_freq else ""
+        if freq == main_freq:
+            rebuild_start_time = start_time
+            rebuild_sub_start = (app_data.get_saved_point_time(qualified_code, _col_sub) or None) if _col_sub else None
+        else:
+            rebuild_start_time = (app_data.get_saved_point_time(qualified_code, _col_main) or None) if _col_main else None
+            rebuild_sub_start = start_time
+    else:
+        rebuild_start_time = start_time
+        rebuild_sub_start = None
     result = _m._analyze_stock_internal(
         f"{market}{normalized_code}",
         freq=(main_freq if dual else freq),
         start_time=rebuild_start_time,
+        sub_start_time=rebuild_sub_start,
         end_date=(end_date if not dual else None),
         dual=dual,
         sub_freq=(sub_freq if dual else None))

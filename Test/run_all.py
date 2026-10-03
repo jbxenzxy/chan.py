@@ -273,6 +273,11 @@ COMPONENTS = [
     # MockSource + 业务桩驱动（参考 test_sse_concurrent），全程离线。
     ("futures_replay_window",
      [sys.executable, os.path.join("Test", "test_futures_replay_window.py")]),
+    # 股票双窗选点语义（2026-10-03 三期）：配对严格大于校验、sub_start_time
+    # 透传链完整性（文本断言）、meta 双字段（sub_saved_selection_date）、
+    # isolate 三件套重定向回归（选点写入落临时目录，生产 App/ 零残留）。
+    ("stock_dual_window",
+     [sys.executable, os.path.join("Test", "test_stock_dual_window.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。

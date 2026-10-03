@@ -373,7 +373,7 @@ FREQ_TO_COL = AppData_FREQ_TO_COL
 # 区域 3 · 股票分析
 # ═══════════════════════════════════════════════════════════════════════
 
-def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
+def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
     """
     使用通达信数据源 + chan.py 进行股票/指数缠论分析（内部实现，不处理期货分流）
     返回与 czsc 版本兼容的 JSON 数据结构
@@ -381,6 +381,14 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     start_time: end_date 有值时 = 复盘窗口左边界（截 [start_time, end_date]，
                 不做根数截断；解析失败或晚于复盘点直接报错）；
                 无 end_date 时 = 选点起始时间（B 操作，不设数量限制）
+    sub_start_time: 双窗下窗独立选点起始时间（三期）：下窗窗口 =
+                [sub_start_time, R]，不跟随上窗区间；缺失时非复盘从
+                CSV(sub_freq 列) 恢复，仍无则下窗方式A（对齐上窗区间，
+                现状语义）；仅 dual 路径消费
+    sub_start_time: 双窗下窗独立选点起始时间（三期）：下窗窗口 =
+                [sub_start_time, R]，不跟随上窗区间；缺失时非复盘从
+                CSV(sub_freq 列) 恢复，仍无则下窗方式A（对齐上窗区间，
+                现状语义）；仅 dual 路径消费
     step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期
     cache_chan: 是否缓存CChan对象。扫描模式设为False以节省内存。
     sub_freq: 双窗口下窗周期（显式透传；缺省按 _SUB_FREQ_MAP 回退）。
@@ -430,6 +438,21 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         # 复盘模式(end_date)不命中缓存，强制重新加载
         main_cached = _cache_get(main_cache_key)
         sub_cached = _cache_get(sub_cache_key)
+        if not end_date and main_cached is not None and sub_cached is not None \
+                and "result" in main_cached and "result" in sub_cached:
+            # 双窗缓存命中校验（2026-10-03 三期）：双窗选点落 CSV 后，缓存的
+            # 窗口可能陈旧——比对 CSV(main+sub 两列) 与缓存 meta 的回显值，
+            # 失配跳过缓存走重建（与单窗段 460 的比对同机制）。
+            _col_main_ck = FREQ_TO_COL.get(freq, "")
+            _col_sub_ck = FREQ_TO_COL.get(sub_freq, "") if sub_freq else ""
+            _csv_main = app_data.get_saved_point_time(qualified_code, _col_main_ck) if _col_main_ck else ""
+            _csv_sub = app_data.get_saved_point_time(qualified_code, _col_sub_ck) if _col_sub_ck else ""
+            _m_saved = main_cached["result"].get("meta", {}).get("saved_selection_date", "")
+            _s_saved = sub_cached["result"].get("meta", {}).get("saved_selection_date", "")
+            if _m_saved != _csv_main or (_col_sub_ck and _s_saved != _csv_sub):
+                log.info(f"[信息] 双窗缓存选点失配(main 缓存{_m_saved!r}/CSV{_csv_main!r}，"
+                         f"sub 缓存{_s_saved!r}/CSV{_csv_sub!r})，跳过缓存重建")
+                main_cached = sub_cached = None
         if not end_date and main_cached is not None and sub_cached is not None \
                 and "result" in main_cached and "result" in sub_cached:
             # （读者写共享缓存）：main_cached["result"] 是**缓存里的
@@ -644,10 +667,10 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     else:
         records = full_records
         # 确定起始时间：优先使用传入的start_time，其次使用CSV保存的选点
-        # 双窗例外（用户逻辑⑵）：双窗口不加载 CSV 保存的选点——CSV 里只有
-        # 单窗口的选点，不与双窗混用（双窗 A 操作上窗按周期配置加载，
-        # 下窗对齐上窗区间；双窗选点本身不保存，见 AppChart）。
-        if start_time is None and not dual:
+        # （2026-10-03 三期：双窗废除「不读 CSV」拍板——上窗按 main_freq 列
+        # 恢复选点，与单窗同构；下窗按 sub_start_time/CSV(sub_freq 列) 独立恢复，
+        # 见下方子级别独立筛选段）。
+        if start_time is None:
             col = FREQ_TO_COL.get(freq, "")
             if col:
                 # 加锁读取（原为无锁 check-then-act）
@@ -689,36 +712,67 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
         main_end = records[-1]["dt"]
         sub_full_backup = list(sub_records)  # 对齐不足降全量的回退基准
         if dual_impl == "independent":
-            # 结束时间语义精确截断：
-            #   left_dt < sub_dt <= right_dt 恰为「完全落入上窗范围」的下窗K线
-            left_dt, right_dt = _stocks_sub_dt_algo(main_start, main_end, freq, sub_freq)
-            if left_dt is not None:
+            # ── 独立双窗选点（2026-10-03 三期）：下窗 L 独立 ──
+            # 下窗 L（sub_start_time）优先级：显式传入（前端/选点重建）>
+            # CSV(sub_freq 列，非复盘恢复) > 方式A（跟随上窗区间，现状语义）。
+            # 有值时下窗 = [L_sub, R]（不跟随上窗；读取阶段 sub_records 已是
+            # 文件起点到 R 的全量，L_sub 早于上窗筛选起点也有数据）。
+            _sub_start_dt = None
+            if sub_start_time:
+                for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                    try:
+                        _sub_start_dt = datetime.strptime(sub_start_time, _fmt)
+                        break
+                    except ValueError:
+                        continue
+            if _sub_start_dt is None and not end_date:
+                _sub_col = FREQ_TO_COL.get(sub_freq, "")
+                if _sub_col:
+                    _saved_sub = app_data.get_saved_point_time(qualified_code, _sub_col) or None
+                    if _saved_sub:
+                        sub_start_time = _saved_sub
+                        for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                            try:
+                                _sub_start_dt = datetime.strptime(_saved_sub, _fmt)
+                                break
+                            except ValueError:
+                                continue
+            if _sub_start_dt is not None:
                 sub_before = len(sub_records)
-                sub_records = [r for r in sub_records if left_dt < r["dt"] <= right_dt]
+                sub_records = [r for r in sub_records if r["dt"] >= _sub_start_dt]
                 if sub_before != len(sub_records):
-                    if sub_records:
-                        log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> {len(sub_records)}条 "
-                                 f"[{sub_records[0]['dt']} ~ {sub_records[-1]['dt']}]")
-                    else:
-                        log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> 0条")
+                    log.info(f"[信息] 子级别({sub_freq})独立选点筛选: 从 {sub_start_time} 起，"
+                             f"{sub_before}条 -> {len(sub_records)}条")
             else:
-                log.warning(f"[警告] 子级别({sub_freq})无法计算截断边界(主级别={freq})，保留全量")
+                # 方式A（无下窗选点）：跟随上窗区间——结束时间语义精确截断：
+                #   left_dt < sub_dt <= right_dt 恰为「完全落入上窗范围」的下窗K线
+                left_dt, right_dt = _stocks_sub_dt_algo(main_start, main_end, freq, sub_freq)
+                if left_dt is not None:
+                    sub_before = len(sub_records)
+                    sub_records = [r for r in sub_records if left_dt < r["dt"] <= right_dt]
+                    if sub_before != len(sub_records):
+                        if sub_records:
+                            log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> {len(sub_records)}条 "
+                                     f"[{sub_records[0]['dt']} ~ {sub_records[-1]['dt']}]")
+                        else:
+                            log.info(f"[信息] 子级别({sub_freq})精确截断(P0): {sub_before}条 -> 0条")
+                else:
+                    log.warning(f"[警告] 子级别({sub_freq})无法计算截断边界(主级别={freq})，保留全量")
+
+            # 对齐不足降全量（用户逻辑⑵⓵）：仅方式A分支适用（独立选点路径
+            # 「从选点起全量」本身就是最宽窗口，降全量会使选点失效）。
+            if _sub_start_dt is None and len(sub_records) < DUAL_SUB_FALLBACK_MIN \
+                    and len(sub_full_backup) > len(sub_records):
+                log.warning(f"[信息] 子级别({sub_freq})对齐区间[{main_start.strftime('%Y/%m/%d')} ~ "
+                            f"{main_end.strftime('%Y/%m/%d')}]内仅{len(sub_records)}条"
+                            f"(< {DUAL_SUB_FALLBACK_MIN})，降为全量{len(sub_full_backup)}条")
+                sub_records = sub_full_backup
         else:
             # legacy：±1 天 padding（联立路径基线，行为冻结）
             sub_before = len(sub_records)
             sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
             if sub_before != len(sub_records):
                 log.info(f"[信息] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_records)}条")
-
-        # 对齐不足降全量（用户逻辑⑵⓵）：按对齐区间截断后下窗K线过少
-        # （下窗数据源覆盖不足，如上市较晚、分时文件只存近期）时，
-        # 降为全量加载兜底——下窗笔结构要撑得起区间套/红框中枢分析。
-        # 全量本身也不足时维持现状（后续 <5 检查退化为单级别提示）。
-        if len(sub_records) < DUAL_SUB_FALLBACK_MIN and len(sub_full_backup) > len(sub_records):
-            log.warning(f"[信息] 子级别({sub_freq})对齐区间[{main_start.strftime('%Y/%m/%d')} ~ "
-                        f"{main_end.strftime('%Y/%m/%d')}]内仅{len(sub_records)}条"
-                        f"(< {DUAL_SUB_FALLBACK_MIN})，降为全量{len(sub_full_backup)}条")
-            sub_records = sub_full_backup
 
     # 2. 使用 chan.py 进行缠论分析
     # 复盘时：清空缓存恢复原始状态，再重新加载（与选点逻辑一致）
@@ -1238,18 +1292,25 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     log.info(f"[耗时] 分析结果转JSON(K线/分型/笔/线段/中枢/买卖点）: {time.time()-t0:.3f}s")
 
     # 获取当前周期的保存选点日期（meta.saved_selection_date 回显规则）：
-    #   · 单窗恒回显 CSV 真值（含复盘态）：复盘态选点/取消选点依赖 meta
-    #     反映当前选点状态；复盘窗口左边界由显式 start_time 控制、与 meta
-    #     回显解耦（A 复盘的 start=A左 不会冒充选点——CSV 空则 meta 空）；
-    #   · 双窗不读 CSV（单窗选点不与双窗混用）：双窗选点不落 CSV，仅
-    #     会话内按显式 start_time 回显（非复盘 B 操作）。
+    #   · 恒回显 CSV 真值（含复盘态，单双窗同规则——三期废除「双窗不读
+    #     CSV」拍板，选点状态按 (code, 周期列) 全局唯一）：复盘态选点/取消
+    #     选点依赖 meta 反映当前选点状态；复盘窗口左边界由显式 start_time
+    #     控制、与 meta 回显解耦（A 复盘的 start=A左 不会冒充选点——CSV
+    #     空则 meta 空）；
+    #   · 双窗另回显 sub_saved_selection_date（下窗 sub_freq 列），前端
+    #     「取消选点」按焦点窗清列。
     _col_meta = FREQ_TO_COL.get(freq, "")
     _saved_sdt_for_meta = ""
-    if not dual and _col_meta:
+    if _col_meta:
         # 加锁读取（原为无锁 check-then-act）
         _saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _col_meta)
-    elif start_time and not end_date:
+    elif start_time and not end_date and not dual:
         _saved_sdt_for_meta = start_time
+    _sub_saved_sdt_for_meta = ""
+    if dual and sub_freq:
+        _sub_col = FREQ_TO_COL.get(sub_freq, "")
+        if _sub_col:
+            _sub_saved_sdt_for_meta = app_data.get_saved_point_time(qualified_code, _sub_col)
 
     # 7. 计算最新笔的白色横虚线数据
     white_hline = None
@@ -1307,6 +1368,7 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "date_range": date_range,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "saved_selection_date": _saved_sdt_for_meta,
+            "sub_saved_selection_date": _sub_saved_sdt_for_meta,
             "is_replay": bool(end_date),
             "forward_adjust": forward_adjust_done,
             # 展示性 meta（PE-TTM/归属/减持）仅 K 线页需要；扫描路径
@@ -1743,7 +1805,7 @@ def _build_sub_kl_times(main_records, sub_records, main_freq, sub_freq):
     return times
 
 
-def analyze_stock(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
+def analyze_stock(code, freq="d", end_date=None, start_time=None, sub_start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
     """公开分析入口：仅处理股票/指数（通达信数据源），支持 cache_chan 和 dual 双窗口。
 
     期货的一切拉流（实时/选点/复盘软断开）统一走 AppSSE 的 SSE 通道
@@ -1765,7 +1827,8 @@ def analyze_stock(code, freq="d", end_date=None, start_time=None, cache_chan=Tru
     # 器重建数据源标识符，此处绝不再拼点号/大写（旧格式会被严格解析拒掉）。
     stock_code = f"{market}{normalized_code}"
     return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, start_time=start_time,
-                                   cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq,
+                                   sub_start_time=sub_start_time, cache_chan=cache_chan,
+                                   dual=dual, step=step, sub_freq=sub_freq,
                                    include_extra=include_extra)
 
 
