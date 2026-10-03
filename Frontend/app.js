@@ -4028,9 +4028,30 @@
             }
             // 股票：isToday安全网只给日历"今天"用（Edge时间未变时兜底）
             // 键盘Enter/右键复盘至此有精确日期 → 跳过isToday安全网，始终传end_date
-            const needEndDate = (!isToday || keyEnter);
+            // ═══ 复盘窗口 [L, R]（股票单窗）═══
+            // L=配置回看或选点，R=数据源最新或复盘点；复盘只改R不改L：请求带
+            // start_time=当前首根K线，后端截 [start_time, end_date] 不做根数截断。
+            // 双窗(dual=1)一期不启用新语义，保持现状行为。
+            const isDualCtx = isDualWindow && getDualSubFreq(freq);
+            const hasKlines = chartData.klines && chartData.klines.length > 0;
+            const replayMode = !!(chartData.meta && chartData.meta.is_replay);
+            const apiFirst = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[0].date, freq), freq) : "";
+            const apiLast = hasKlines ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq) : "";
+            const min15 = function(s) { return s.slice(0, 16); }; // 分钟粒度：15s周期首根含秒，避免秒位差异误判
+            const isFutureDate = dateStr.slice(0, 10) > todayStr; // 输入框格式YYYY-MM-DD前缀，字典序即时间序
+            // ≥最新K线（非复盘态末根=数据源最新）或今天/未来 → 钳到「回最新」：不带end_date冷启动，
+            // 与「选今天」同路；复盘态末根=复盘点<最新，往右复盘必须放行走end_date
+            const atLatest = hasKlines && (isToday || isFutureDate
+                || (!replayMode && min15(apiDate) >= min15(apiLast)));
+            const needEndDate = (!isToday || keyEnter) && !atLatest;
+            // 复盘日期早于窗口左边界 → 弹窗拦截（右键只能命中可见K线，此拦截只对日历输入可达）
+            if (needEndDate && !isDualCtx && apiFirst && min15(apiDate) < min15(apiFirst)) {
+                showAlert("复盘日期 " + apiDate + " 早于已加载数据起点 " + apiFirst + "，请选择更晚的日期，或切换更大周期扩大数据范围。");
+                return;
+            }
             const url = "/api/stocks/" + encodeURIComponent(code) + "/analyze?freq=" + freq
                 + (needEndDate ? "&end_date=" + encodeURIComponent(apiDate) : "")
+                + (needEndDate && !isDualCtx && apiFirst ? "&start_time=" + encodeURIComponent(apiFirst) : "")
                 + (isDualWindow && getDualSubFreq(freq) ? "&dual=1" : "")
                 + (isDualWindow && dualSubFreq && freqLevel(freq) > freqLevel(dualSubFreq) ? "&sub_freq=" + dualSubFreq : "");
             document.getElementById("goto-date-input").disabled = true;

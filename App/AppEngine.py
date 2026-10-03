@@ -378,7 +378,9 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
     使用通达信数据源 + chan.py 进行股票/指数缠论分析（内部实现，不处理期货分流）
     返回与 czsc 版本兼容的 JSON 数据结构
     end_date: 复盘截止日期，有值时以该日期为"最新行情"
-    start_time: 选点起始时间，有值时只加载该时间之后的K线（不设数量限制）
+    start_time: end_date 有值时 = 复盘窗口左边界（截 [start_time, end_date]，
+                不做根数截断；解析失败或晚于复盘点直接报错）；
+                无 end_date 时 = 选点起始时间（B 操作，不设数量限制）
     step: 箭头步进，在 full_records 中从 end_date 位置偏移 step 根K线作为新的截断日期
     cache_chan: 是否缓存CChan对象。扫描模式设为False以节省内存。
     sub_freq: 双窗口下窗周期（显式透传；缺省按 _SUB_FREQ_MAP 回退）。
@@ -614,10 +616,16 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, cach
                     break
                 except ValueError:
                     continue
-            if start_dt is not None and start_dt <= target_dt:
-                before_count = len(records)
-                records = [r for r in records if r["dt"] >= start_dt]
-                log.info(f"[信息] 复盘选点: 从选点时间 {start_time} 开始，筛选后 {before_count}条 -> {len(records)}条")
+            # 兜底改严（复盘窗口X语义）：解析失败或晚于复盘点都视为调用方错误——
+            # 前端 gotoDate 已拦截「早于窗口左边界」的输入，此处静默放行会退化成
+            # 「不筛也不截」的全量窗口，行为不可预期，故直接报错。
+            if start_dt is None:
+                return {"error": f"复盘起始时间无法解析: {start_time}"}
+            if start_dt > target_dt:
+                return {"error": f"复盘起始时间 {start_time} 晚于复盘截止时间 {end_date}"}
+            before_count = len(records)
+            records = [r for r in records if r["dt"] >= start_dt]
+            log.info(f"[信息] 复盘窗口: 从 {start_time} 到 {end_date}，筛选后 {before_count}条 -> {len(records)}条")
         else:
             # 与冷启动一致，对30分/5分做根数截断，日K/周K不截断
             if not FULL_DATA_MODE and len(records) > 0 and freq in STOCKS_LOOKBACK_CONFIG:
@@ -1736,7 +1744,7 @@ def _build_sub_kl_times(main_records, sub_records, main_freq, sub_freq):
     return times
 
 
-def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
+def analyze_stock(code, freq="d", end_date=None, start_time=None, cache_chan=True, dual=False, step=None, sub_freq=None, include_extra=True):
     """公开分析入口：仅处理股票/指数（通达信数据源），支持 cache_chan 和 dual 双窗口。
 
     期货的一切拉流（实时/选点/复盘软断开）统一走 AppSSE 的 SSE 通道
@@ -1744,6 +1752,9 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     防止误传落到股票路径产生静默错误。
     sub_freq: 双窗口下窗周期（全链路显式透传：FrontAPI → 本入口 →
     _analyze_stock_internal；未传时按 _SUB_FREQ_MAP 缺省配对回退）。
+    start_time: 复盘窗口左边界（仅 end_date 有值时消费）：复盘截
+    [start_time, end_date] 且不做根数截断；非复盘路径的选点由选点端点
+    与 CSV 承载，不经此参数。
     include_extra: 是否获取展示性 meta（PE-TTM/归属/减持）。批量扫描传 False。
     """
     market, normalized_code = _get_market_code(code)
@@ -1754,7 +1765,8 @@ def analyze_stock(code, freq="d", end_date=None, cache_chan=True, dual=False, st
     # 标准写法契约：market(小写)+code，无连接符；内部 _analyze_stock_internal 会再按同一解析
     # 器重建数据源标识符，此处绝不再拼点号/大写（旧格式会被严格解析拒掉）。
     stock_code = f"{market}{normalized_code}"
-    return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, cache_chan=cache_chan,
-                                   dual=dual, step=step, sub_freq=sub_freq, include_extra=include_extra)
+    return _analyze_stock_internal(stock_code, freq=freq, end_date=end_date, start_time=start_time,
+                                   cache_chan=cache_chan, dual=dual, step=step, sub_freq=sub_freq,
+                                   include_extra=include_extra)
 
 

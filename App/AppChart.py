@@ -57,7 +57,7 @@ log = get_logger(__name__)
 # futures_cache_lock / user_store_lock），登记表见 AppOrch 的
 # SHARED_RESOURCE_REGISTRY —— 它按「资源」索引，而不是按「入口」索引。
 
-def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq=None):
+def call_analysis(code, freq="d", end_date=None, start_time=None, dual=False, step=None, sub_freq=None):
     """单标的缠论分析（同步入口，REST 路由唯一入口）
 
     CChan 构建已免锁（数据每请求线程局部注入），共享的分析/选点/标注缓存
@@ -66,9 +66,9 @@ def call_analysis(code, freq="d", end_date=None, dual=False, step=None, sub_freq
     此日志是排障第一现场。
     """
     log.info(f"[api] /api/stock 开始分析: code={code!r} freq={freq!r} "
-          f"end_date={end_date!r} dual={dual}")
+          f"end_date={end_date!r} start_time={start_time!r} dual={dual}")
     t0 = time.time()
-    result = _m.analyze_stock(code, freq=freq, end_date=end_date,
+    result = _m.analyze_stock(code, freq=freq, end_date=end_date, start_time=start_time,
                               dual=dual, step=step, sub_freq=sub_freq)
     log.info(f"[api] /api/stock 完成: code={code!r} 耗时 {time.time() - t0:.2f}s")
     return result

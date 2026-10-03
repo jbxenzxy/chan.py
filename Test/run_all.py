@@ -261,6 +261,12 @@ COMPONENTS = [
     # 本用例自带窗口值，断言「末 N 根」的条数与左右边界，不依赖 AppConfig 默认值。
     ("lookback_truncation",
      [sys.executable, os.path.join("Test", "test_lookback_truncation.py")]),
+    # 股票复盘窗口 [L,R] start_time 语义（2026-10-03）：复盘截 [start_time,
+    # end_date] 不做根数截断（短窗口不补 / 长区间不截与 lookback_truncation
+    # 用例 7 互补）；start>target 与不可解析报错（兜底改严）；复盘不回写
+    # 选点 meta、非复盘回写（B 操作现状保护）。
+    ("replay_window_start",
+     [sys.executable, os.path.join("Test", "test_replay_window_start.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。
