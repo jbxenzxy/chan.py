@@ -940,7 +940,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         stroke_a = bi_list[pivot_a.begin_bi.idx]
 
         # ㈠ 确保A、B、C三笔为标准🗲走势 —— 约等于：快闪慢长，创新高/低，重新起算
-        # 向下笔C(买点)：笔C高点 <= 笔A高点（笔C起点=笔B终点为共用端点分型，与「笔B高点」旧口径等效）
+        # 向下笔C(买点)：笔C高点 <= 笔A高点
         # 向上笔C(卖点)：笔C低点 >= 笔A低点
         if stroke_n.is_down():
             c_ext, a_ext = stroke_n._high(), stroke_a._high()
@@ -1085,15 +1085,15 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         bsp_found = self._cal_bs0point_nth_nzs(bi_list, pivot_a, stroke_n)
         if not bsp_found:
             if nth_in_pivot == 5 or nth_in_pivot == 7:
-                self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢分析未通过, 笔5/7走第2次原中枢分析',
+                self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢判定未通过, 笔5/7走第2次原中枢分析',
                               nth_in_pivot=nth_in_pivot)
                 self._cal_bs0point_57rd(bi_list, pivot_a, stroke_n)
             elif nth_in_pivot == 6 or nth_in_pivot == 8:
-                self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢分析未通过, 笔6/8走第2次原中枢分析',
+                self._dbg_bs0(' _cal_bs0point_nth', '第1次新中枢判定未通过, 笔6/8走第2次原中枢分析',
                               nth_in_pivot=nth_in_pivot)
                 self._cal_bs0point_nth_ozs(bi_list, pivot_a, stroke_n)
             else:
-                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次新中枢分析未通过，且非5/6/7/8笔',
+                self._dbg_bs0(' _cal_bs0point_nth', '跳过: 第1次新中枢判定未通过，且非5/6/7/8笔',
                               nth_in_pivot=nth_in_pivot)
 
     # ── 第n笔主分析逻辑（返回是否找到买卖点）──
@@ -1180,7 +1180,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
 
     # ── 第5/7笔：nzs 未通过后的同向笔递进分析 ──
     def _cal_bs0point_57rd(self, bi_list, pivot_a, stroke_n):
-        """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）。
+        """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）
         奇数笔（1,3,5,7）同向为趋势笔，偶数笔（2,4,6）为回调笔：
         ㈠ 闪电走势：趋势笔极值逐级收窄（买：笔n 高点 ≤ 笔(n-2) 高点 ≤ … ≤ 笔1 高点；卖反向）
         ㈡ 全部奇数笔整笔 DIF 在趋势侧（买→DIF≥0，卖→DIF≤0）
