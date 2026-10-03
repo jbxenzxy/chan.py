@@ -1184,7 +1184,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         奇数笔（1,3,5,7）同向、与趋势方向相反（多头中的回调、空头中的反弹，统称回调笔），偶数笔（2,4,6）为趋势笔：
         ㈠ 闪电走势：回调笔极值逐级收窄（买：笔n 高点 ≤ 笔(n-2) 高点 ≤ … ≤ 笔1 高点；卖反向）
         ㈡ 全部奇数笔整笔 DIF 在趋势侧（买→DIF≥0，卖→DIF≤0）
-        ㈢ 回抽0轴比例：笔n 终点 vs 笔1 起点（同 3rd 的 C/A 口径）
+        ㈢ 回抽0轴比例：笔n终点 vs 笔1起点（同 3rd 的 C/A 口径）
         ㈣ MACD BAR 背驰：笔n vs 笔(n-2)（最近同向笔）
         """
         nth_in_pivot = stroke_n.idx - pivot_a.begin_bi.idx + 1
