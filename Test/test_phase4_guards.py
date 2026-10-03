@@ -30,12 +30,17 @@
      _m._STOCK_NAMES_CACHE_FILE）
   ⑩ 数据源 import 门禁（数据源抽象单轨化）：
      FrontAPI / AppChart / AppOrch 任何层级禁止 import DataAPI.*；
-     装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测）、
+     装配点白名单精确固化——AppEngine（TdxAPI 装配 + tqsdk 探测 +
+     ThsCloudZxgAPI 同花顺云端自选股 + ElTdxAPI A股个股PE-TTM
+     （_fetch_pe_ttm_live）+ TxAPI 指数·港股PE-TTM（_fetch_pe_ttm_live 腾讯分支））、
      AppSSE（TqSdkCSSESource 流协议 + TqSdkAPI 会话上下文；
      CTqSdkAPI 主体经 AppEngine 显式名）、
-     AppRefresh（TdxAPI.refresh_block_files + AkshareAPI 指数归属
-      + ElTdxAPI A股PE-TTM + TxAPI 港股名称/指数·港股PE-TTM + SinaAPI A股名称）、
+     AppRefresh（TdxAPI.refresh_block_files + collect_codes_from_vipdoc
+      + AkshareAPI 指数归属 + TxAPI 港股名称 + SinaAPI A股名称）、
      AppScan（TdxAPI.get_index_stocks + ElTdxAPI 流通市值）、App/AppUtils（仅 TqSdkAPI 纯函数依赖）
+     （注：A 股个股 / 港股 PE-TTM 的 ElTdxAPI / TxAPI 装配点已随「PE-TTM 不属于刷新
+      功能」迁到 AppEngine::_fetch_pe_ttm_live，AppRefresh 不再持有 PE-TTM；实判见文件
+      末尾 engine_allow / refresh_mods 白名单）
 
 运行：python Test/test_phase4_guards.py          # 校验（run_all 组件 11）
       python Test/test_phase4_guards.py --update  # 保留参数（本守护无冻结基线，等价校验）
@@ -705,7 +710,7 @@ def test_datasource_import_gate(failures):
     refresh_mods = set(_datasource_imports(os.path.join("App", "AppRefresh.py")))
     if refresh_mods != {"DataAPI.TdxAPI", "DataAPI.AkshareAPI",
                         "DataAPI.TxAPI", "DataAPI.SinaAPI"}:
-        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/ElTdxAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
+        bad.append(f"App/AppRefresh.py 的 DataAPI import 应仅为 TdxAPI/AkshareAPI/TxAPI/SinaAPI，实测: {sorted(refresh_mods)}")
     # AppScan：TdxAPI.get_index_stocks（板块成分读取）+ ElTdxAPI 流通市值（A股）
     scan_mods = set(_datasource_imports(os.path.join("App", "AppScan.py")))
     if scan_mods != {"DataAPI.TdxAPI", "DataAPI.ElTdxAPI"}:
