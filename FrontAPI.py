@@ -249,7 +249,6 @@ async def api_stocks_analyze(
     end_date: str = Query(None),
     start_time: str = Query(None),
     sub_start_time: str = Query(None),
-    step: str = Query(None),
     dual: bool = Query(False),
     sub_freq: str = Query(None),
 ):
@@ -261,7 +260,7 @@ async def api_stocks_analyze(
         result = await run_in_threadpool(orch.call_analysis, code, freq=freq,
                                          end_date=end_date, start_time=start_time,
                                          sub_start_time=sub_start_time, dual=dual,
-                                         step=step, sub_freq=sub_freq)
+                                         sub_freq=sub_freq)
     except AppError:
         raise  # 领域异常：交给统一异常处理器
     except Exception as exc:

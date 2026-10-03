@@ -174,11 +174,67 @@ def test_isolate_redirects_user_store_files():
     print("[PASS] isolate 三件套重定向: 写选点落临时目录，生产 App/ 零残留")
 
 
+def _to_dt(s):
+    from datetime import datetime
+    for _f in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d",
+               "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, _f)
+        except ValueError:
+            continue
+    return None
+
+
+def test_dual_sub_left_boundary_independent():
+    """双窗下窗 L 独立：上窗选点不牵动下窗 L（评审 #7 行为用例）。
+
+    下窗 L 优先级 = 显式 sub_start_time > CSV(sub_freq 列) > 方式A。
+    本例只显式传上窗 start_time，下窗必须落到 CSV(30m 列) 上的自身选点——
+    若仍「跟随上窗区间」，下窗首根会等于上窗选点，独立性即破。
+    """
+    from Test.snapshot_runner import install_data_source, _seed_reference
+    from App import AppEngine as m
+    from App import AppData
+
+    _SUB_POINT = "2024/03/01 10:30:00"
+    _MAIN_POINT = "2024/02/01"
+    restore_iso = isolate_side_effects()
+    try:
+        AppData.app_data.save_point_time("sh" + CODE, "测试", "30m", _SUB_POINT)
+        restore_src, _rows = install_data_source("stock_day.json", "stock_60m.json")
+        restore_ref = _seed_reference()
+        try:
+            saved_lookback = m.STOCKS_LOOKBACK_CONFIG
+            m.STOCKS_LOOKBACK_CONFIG = {}  # 关掉方式A截断，纯看 L 来源
+            try:
+                res = m._analyze_stock_internal(CODE, freq="d", dual=True,
+                                                sub_freq="30m", start_time=_MAIN_POINT,
+                                                cache_chan=False)
+            finally:
+                m.STOCKS_LOOKBACK_CONFIG = saved_lookback
+            assert "error" not in res, f"双窗分析失败: {res.get('error')}"
+            sub_kl = (res.get("sub") or {}).get("klines") or []
+            main_kl = res.get("klines") or []
+            assert sub_kl and main_kl, "双窗无K线（fixture 未生效？）"
+            assert _to_dt(sub_kl[0]["date"]) >= _to_dt(_SUB_POINT), \
+                f"下窗 L 未取 CSV(30m 列) 选点（被上窗牵动）: 首根 {sub_kl[0]['date']}"
+            assert _to_dt(main_kl[0]["date"]) >= _to_dt(_MAIN_POINT), \
+                f"上窗 L 未取显式 start_time: 首根 {main_kl[0]['date']}"
+            print("[PASS] 双窗下窗 L 独立: 上窗取显式 start、下窗取 CSV(sub 列)")
+        finally:
+            restore_ref()
+            if restore_src:
+                restore_src()
+    finally:
+        restore_iso()
+
+
 def main():
     test_validate_stock_dual_pair()
     test_sub_start_time_plumbing()
     test_meta_has_sub_saved_field()
     test_sub_meta_saved_selection_date()
+    test_dual_sub_left_boundary_independent()
     test_isolate_redirects_user_store_files()
     print("ALL 股票双窗选点语义 TESTS PASS")
 

@@ -781,6 +781,21 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             if sub_start_time is None and sub_saved_selection_date:
                 sub_start_time = sub_saved_selection_date
                 log.info(f"[{display_key}] 下窗恢复选点: {sub_saved_selection_date}")
+            # 复盘倒挂兜底（对齐 _sse_single_gen）：两窗各自判定，start ≥ end 时
+            # 丢弃该窗 start 回退默认窗口 [end-N, end]。前端弹窗已拦用户输入路径，
+            # 倒挂仅剩理论场景，且 SSE init 事件无弹窗通道，回退比报错平滑。
+            # 上/下窗独立判定：只回退倒挂那一窗，另一窗保留自己的选点 L。
+            if end_time:
+                _e_dt2 = _parse_flex_time(end_time)
+                if _e_dt2 is not None:
+                    _m_dt = _parse_flex_time(main_start_time) if main_start_time else None
+                    if _m_dt is not None and _m_dt >= _e_dt2:
+                        log.info(f"[{display_key}] 上窗起点 {main_start_time} 不早于终点 {end_time}，回退默认窗口")
+                        main_start_time = None
+                    _sb_dt = _parse_flex_time(sub_start_time) if sub_start_time else None
+                    if _sb_dt is not None and _sb_dt >= _e_dt2:
+                        log.info(f"[{display_key}] 下窗起点 {sub_start_time} 不早于终点 {end_time}，回退默认窗口")
+                        sub_start_time = None
         except Exception as _e:
             log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
 
@@ -1758,11 +1773,20 @@ def futures_manual_select_point(symbol, freq="15s", bi_idx="0", end_date=None):
         src2.connect()
         log.info(f"[{display_key}] ⓪ 重新连接天勤(选点后): 耗时 {time.time()-t_conn2:.1f}s")
 
+        # 选点后重建走窗口根数计算（对齐单窗 gen）：B 模式 [T, 最新] 全量不截断、
+        # 复盘态组合模式 [T, end] 亦不截断。不传 num_bars 会退回默认配置根数并在
+        # fetch_kline 内被截成末 N 根，与「选点不截断」语义相反。
+        _sel_fetch, _sel_base = _futures_window_fetch_bars(
+            freq_sec, start_time=start_time, end_time=end_date)
         records2 = src2.fetch_kline(symbol, freq_sec=freq_sec,
-                                    display_key=display_key, start_time=start_time)
+                                    display_key=display_key, start_time=start_time,
+                                    num_bars=_sel_fetch)
         if end_date:
             # 复盘态选点：R 保持复盘点——截去 end_date 之后的K线（改L不改R）
             records2 = _truncate_records_by_end(records2, end_date, freq_sec)
+            # 组合模式 base_bars=None（不做根数截断）；base_bars 有值时才截末 N 根。
+            if _sel_base and len(records2) > _sel_base:
+                records2 = records2[-_sel_base:]
         if len(records2) < 5:
             raise DataFetchError(f"选点后K线数据不足: 仅{len(records2)}条")
 

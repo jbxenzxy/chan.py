@@ -283,6 +283,11 @@ COMPONENTS = [
     # 期货手动选点 100% 500）；RAW 壳转发断言 + 检测器自证。
     ("funnel_signature",
      [sys.executable, os.path.join("Test", "test_funnel_signature.py")]),
+    # 双窗选点/复盘一致性静态护栏（2026-10-04 评审 #2/#4/#11 防回潮）：
+    # 期货双窗取消选点豁免已删、上窗选点重连带复盘点 end、路由层删死参数
+    # step（引擎内部 step 保留——trigger_step_replay 快照回放依赖）。
+    ("dual_window_point_guards",
+     [sys.executable, os.path.join("Test", "test_dual_window_point_guards.py")]),
     # PE-TTM 实时层（2026-09 改造）：打开 K 线页面即取数 / single-flight /
     # 失败降级 / 冻结态不联网 / json 只存指数归属 / 旧文件迁移 / 分流单一源。
     # 全程打桩，**不联网**。

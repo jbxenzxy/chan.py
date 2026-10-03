@@ -725,8 +725,10 @@
                 }
                 // 复盘态选点：四场景全放开（股票/期货 × 单窗/双窗，一致原则）——
                 // 选点=改焦点窗 L，R 保持复盘点（请求带 end_date）
-                // 双窗选点规则（股票/期货一致）：仅上窗可选点，下窗只对齐展示。
-                // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗自动对齐 [T, 最新]）
+                // 双窗选点规则（股票/期货一致）：上下窗各自可选点，按各自周期列
+                // 存 CSV；选点 = 改焦点窗 L，另一窗 L 不受牵动（各自冻结）。
+                // 上窗选点 → 后端保存T → 重连双窗SSE带 start_time=T（下窗 L 取
+                // CSV(sub 列)，不跟随上窗）
                 // 4. 如果双击落在分型K线上且找到对应笔，手选进入段
                 if (clickedBiIdx >= 0) {
                     // 焦点窗跟随双击所在窗（与下窗分支对称）：上窗选点即以
@@ -748,9 +750,10 @@
                     const dualQuery = (isDualWindow && !isFutures)
                         ? "&dual=1&main_freq=" + currentFreq + "&sub_freq=" + dualSubFreq : "";
                     // 复盘态选点（四场景全放开）：带当前复盘点，后端重建 [选点, 复盘点]（改L不改R）
-                    const replayEndQuery = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
-                        ? "&end_date=" + encodeURIComponent(inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq))
-                        : "";
+                    const _replayEndMain = (chartData.meta && chartData.meta.is_replay && chartData.klines && chartData.klines.length > 0)
+                        ? inputDateToApi(klineDateToInput(chartData.klines[chartData.klines.length - 1].date, freq), freq)
+                        : null;
+                    const replayEndQuery = _replayEndMain ? "&end_date=" + encodeURIComponent(_replayEndMain) : "";
                     const apiPath = isFutures
                         ? "/api/futures/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery
                 : "/api/stocks/" + encodeURIComponent(code) + "/select/point?freq=" + freq + "&bi_idx=" + clickedBiIdx + replayEndQuery + dualQuery;
@@ -775,8 +778,10 @@
                                 // 不在此处用单窗响应覆盖 chartData/dualSubData
                             if (isDualWindow && dualSubFreq) {
                                 document.querySelector(".loading-text").textContent = "正在加载双窗口数据...";
-                                // 四期：重连不带 start——后端从 CSV 恢复两窗选点（单双窗同构）
-                                connectRealtimeDual(code, freq, dualSubFreq);
+                                // 四期：重连不带 start——后端从 CSV 恢复两窗选点（单双窗同构）；
+                                // 复盘态必须带 end（R 保持复盘点）：漏传会让上窗从复盘态
+                                // 掉回实时态（下窗 :3260 / 取消选点 :3627 均已带 end）。
+                                connectRealtimeDual(code, freq, dualSubFreq, _replayEndMain);
                                 return;
                             }
                                 chartData = data;
@@ -829,11 +834,12 @@
                             document.getElementById("btn-5m").classList.toggle("active", currentFreq === "5m");
                             // 重置视图：选点后klines只含选点之后的K线，直接全部显示
                             adjustViewForSavedPoint();
-                            // 双窗（用户逻辑⑵⓶）：同步下窗数据与视图——
-                            // 下窗对齐上窗 [选点, 最新] 区间加载，视口无 VIEW_COUNT
-                            // 限制：下窗后端加载多少根，前端视口就显示多少根
-                            // （与上窗 adjustViewForSavedPoint 全量显示规则一致；
-                            //   A/C 操作的下窗仍走 VIEW_COUNT 视口，见别处）
+                            // 双窗：同步下窗数据与视图。四期语义——下窗 L 不受上窗
+                            // 选点牵动（后端按 CSV(sub 列)/方式A 自算），本次响应里的
+                            // 下窗即其自身窗口，前端全量显示（视口无 VIEW_COUNT 限制：
+                            // 后端加载多少根就显示多少根，与上窗
+                            // adjustViewForSavedPoint 规则一致）。
+                            // A/C 操作的下窗仍走 VIEW_COUNT 视口，见别处。
                             if (isDualWindow && data.sub) {
                                 dualSubData = data.sub;
                                 dualSubViewCount = dualSubData.klines.length;
@@ -3561,7 +3567,7 @@
         function updateRestartBtn() {
             var hasPoint = chartData && chartData.meta &&
                 (chartData.meta.saved_selection_date || chartData.meta.sub_saved_selection_date);
-            _restartEnabled = hasPoint && !(isDualWindow && chartData.meta.market === 'futures');
+            _restartEnabled = hasPoint;
         }
 
         function updateDualBtn() {

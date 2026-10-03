@@ -413,6 +413,103 @@ def test_select_point_end_date_plumbing():
     print("[PASS] 期货选点 end_date 透传: 漏斗层 → RAW 薄壳 → AppSSE 全链贯通")
 
 
+def test_dual_gen_inverted_start_falls_back():
+    """dual gen 复盘倒挂兜底（评审 #5）：start ≥ end 的那一窗回退默认窗口。
+
+    对齐 `_sse_single_gen` 既有语义——SSE init 事件无弹窗通道，倒挂时丢弃该窗
+    start（回退 [end-N, end]）比报错平滑。两窗**独立**判定：只回退倒挂那一窗，
+    另一窗保留自己的选点 L（双窗 [L, R] 各自冻结）。
+    """
+    def _run(end_time, csv_main, csv_sub):
+        captured = []
+        restore_iso = isolate_side_effects()
+        try:
+            if csv_main:
+                _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "1m", csv_main)
+            if csv_sub:
+                _sse_mod.app_data.save_point_time(SYMBOL, "测试品种", "15s", csv_sub)
+
+            def stub_init(api, symbol, name, freq_sec, freq_label, start_time=None,
+                          end_time=None, num_bars=None):
+                captured.append({"freq": freq_label, "start": start_time})
+                return MockChan(), api.klines, ("kl",), None
+
+            def stub_extract(chan, kl_type, symbol, name, freq_label,
+                             saved_selection_date="", lightweight=False, klines=None,
+                             prev_klines=None, prev_ema_state=None, is_replay=False):
+                return {"klines": [], "meta": {"kline_count": 0, "bi_count": 0,
+                                               "zs_count": 0, "bss": []}, "bis": []}
+
+            def stub_white(kl_list, freq, date_fmt):
+                return None
+
+            def stub_drain(chan):
+                pass
+
+            originals = {}
+            for _n, _s in (("init_chan_symbol", stub_init),
+                           ("_extract_realtime_snapshot", stub_extract),
+                           ("_calc_futures_white_hline", stub_white),
+                           ("_drain_chan", stub_drain)):
+                originals[_n] = getattr(_sse_mod, _n)
+                setattr(_sse_mod, _n, _s)
+            try:
+                src = MockSource()
+                gen = FrontAPI.sse_futures_stream_dual(
+                    SYMBOL, "1m", "15s", start_time=None,
+                    sub_start_time=None, end_time=end_time, source=src)
+                for _frame in gen:
+                    pass
+            finally:
+                for _n, _o in originals.items():
+                    setattr(_sse_mod, _n, _o)
+        finally:
+            restore_iso()
+        return {c["freq"]: c for c in captured}
+
+    # 场景 1：上窗倒挂（选点晚于复盘点）→ 上窗回退；下窗未倒挂 → 保留自己的 L
+    by_freq = _run("2025/07/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
+    assert by_freq.get("1m", {}).get("start") is None, \
+        f"上窗 start ≥ end 应回退默认窗口，实为 {by_freq.get('1m', {}).get('start')!r}"
+    assert by_freq["15s"]["start"] == "2025/06/01 09:30:00", \
+        f"下窗未倒挂应保留自己的选点 L，实为 {by_freq['15s']['start']!r}"
+    print("[PASS] dual 复盘倒挂兜底: 上窗回退、下窗保留（两窗独立判定）")
+
+    # 场景 2：两窗均倒挂 → 双双回退默认窗口
+    by_freq = _run("2025/05/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
+    assert by_freq["1m"]["start"] is None and by_freq["15s"]["start"] is None, \
+        f"两窗均倒挂应双双回退，实为 {by_freq!r}"
+    print("[PASS] dual 复盘倒挂兜底: 两窗均倒挂时双双回退")
+
+
+def test_select_point_rebuild_passes_num_bars():
+    """选点重建取数必须显式算根数（评审 #9，防回潮）。
+
+    `fetch_kline` 不传 num_bars 会退回默认配置根数，并在内部被截成末 N 根——
+    与「选点后 [T, 最新] 全量不截断」语义相反。该路径在 P0（end_date 形参缺失）
+    修复前根本走不到，修好后才成为真实缺陷。
+    """
+    import ast as _ast
+    with open(os.path.join(REPO_ROOT, "App", "AppSSE.py"), encoding="utf-8") as _f:
+        _tree = _ast.parse(_f.read())
+    _target = None
+    for _node in _ast.walk(_tree):
+        if isinstance(_node, _ast.FunctionDef) and _node.name == "futures_manual_select_point":
+            _target = _node
+            break
+    assert _target is not None, "未找到 futures_manual_select_point"
+    _calls = []
+    for _node in _ast.walk(_target):
+        if isinstance(_node, _ast.Call) and isinstance(_node.func, _ast.Attribute) \
+                and _node.func.attr == "fetch_kline":
+            _calls.append([_kw.arg for _kw in _node.keywords])
+    assert _calls, "futures_manual_select_point 内未找到 fetch_kline 调用"
+    for _kwargs in _calls:
+        assert "num_bars" in _kwargs, \
+            f"选点重建 fetch_kline 未传 num_bars（会被截成末 N 根）: kwargs={_kwargs}"
+    print("[PASS] 期货选点重建 fetch_kline 显式传 num_bars（不截断）")
+
+
 def main():
     test_fetch_bars_branches()
     test_replay_inherits_csv_point()
@@ -422,7 +519,9 @@ def main():
     test_replay_inverted_start_falls_back()
     test_replay_meta_shows_csv_point()
     test_dual_gen_independent_starts()
+    test_dual_gen_inverted_start_falls_back()
     test_select_point_end_date_plumbing()
+    test_select_point_rebuild_passes_num_bars()
     print("ALL 期货单窗复盘窗口 TESTS PASS")
 
 
