@@ -644,13 +644,16 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
                     break
                 except ValueError:
                     continue
-            # 兜底改严（复盘窗口X语义）：解析失败或晚于复盘点都视为调用方错误——
-            # 前端 gotoDate 已拦截「早于窗口左边界」的输入，此处静默放行会退化成
+            # 兜底改严（复盘窗口X语义）：解析失败、或起点不早于复盘点，都视为调用方
+            # 错误——前端 gotoDate 已拦截「早于窗口左边界」的输入，此处静默放行会退化成
             # 「不筛也不截」的全量窗口，行为不可预期，故直接报错。
+            # 判据取 `>=`（含相等）：相等时窗口退化为单根，任何周期都建不出结构；
+            # 该判据与期货侧逐字一致（需求⑼/⑽ 的倒挂兜底归一，见
+            # Docs/选点&复盘方案v1.15.md §3.5）。
             if start_dt is None:
                 return {"error": f"复盘起始时间无法解析: {start_time}"}
-            if start_dt > target_dt:
-                return {"error": f"复盘起始时间 {start_time} 晚于复盘截止时间 {end_date}"}
+            if start_dt >= target_dt:
+                return {"error": f"复盘起始时间 {start_time} 不早于复盘截止时间 {end_date}"}
             before_count = len(records)
             records = [r for r in records if r["dt"] >= start_dt]
             log.info(f"[信息] 复盘窗口: 从 {start_time} 到 {end_date}，筛选后 {before_count}条 -> {len(records)}条")

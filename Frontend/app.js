@@ -7033,9 +7033,12 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.error) {
-                            console.warn('缠论引擎未就绪:', data.error);
+                            // 后端 init 错误必须让用户看见：如「复盘起始时间…不早于
+                            // 复盘截止时间」与股票同款弹窗（原 console.warn 只让
+                            // loading 消失，用户看不出发生了什么）
                             disconnectRealtime();
                             document.getElementById("loading").classList.add("hidden");
+                            showAlert(data.error);
                             return;
                         }
                         // 全量初始数据
@@ -7145,6 +7148,13 @@
                 realtimeEventSource.addEventListener('init', function(event) {
                     try {
                         const data = JSON.parse(event.data);
+                        if (data.error) {
+                            // 双窗同单窗：init 错误（含任一窗复盘起止倒挂）必须弹窗
+                            disconnectRealtime();
+                            document.getElementById("loading").classList.add("hidden");
+                            showAlert(data.error);
+                            return;
+                        }
                         if (data.main) {
                             chartData = data.main;
                             const resolvedSymbol = chartData.meta.symbol || symbol;

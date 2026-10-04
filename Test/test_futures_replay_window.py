@@ -11,8 +11,9 @@ Test/test_futures_replay_window.py —— 期货单窗复盘窗口 [L, R]（二�
      - end_time + start_time 显式 → 原样传递（一期旧语义「忽略选点」已删除）；
      - end_time + CSV 空 → start_time=None（默认窗口 [end-N, end]）；
      - 无 end_time + CSV 有 → start_time=CSV（B 操作/冷启动恢复，现状回归保护）；
-     - start ≥ end（倒挂）→ 丢弃 start 回退默认窗口（SSE init 事件无弹窗通道，
-       回退比报错平滑，前端弹窗已拦用户输入路径）；
+     - start ≥ end（倒挂）→ **报错中止**本次连接（init 错误帧 → 前端 showAlert），
+       不再静默回退；与股票 `_analyze_stock_internal` 同判据 `>=`、同文案，见
+       Docs/选点&复盘方案v1.15.md §3.5；
   3. meta.saved_selection_date 恒回显 CSV 真值：A 复盘（start=A左 显式传入、
      CSV 空）→ 快照收到空串，start 不冒充选点；
   4. 期货选点 end_date 透传链（P0 回归）：漏斗层 → RAW 薄壳 → AppSSE 三段
@@ -71,10 +72,11 @@ def test_fetch_bars_branches():
     fetch, base = f(15, start_time=EXPLICIT_START, end_time=END_TIME, base_bars=n)
     assert base is None, f"组合分支 base_bars_out 应为 None，实为 {base}"
     assert fetch > 0, f"组合分支 fetch 异常: {fetch}"
-    # 组合倒挂（start≥end）：防御性回退 C 分支
+    # 组合倒挂（start≥end）：纯函数无处报错，防御性走 C 分支。gen 层已在更早
+    # 处报错中止（见 test_replay_inverted_start_errors），故此分支正常流程不可达。
     fetch, base = f(15, start_time=END_TIME, end_time=EXPLICIT_START, base_bars=n)
     assert base == n and fetch > n, f"倒挂回退异常: fetch={fetch}, base={base}"
-    print(f"[PASS] fetch_bars 四分支: C fetch={fetch}（倒挂回退）、组合 base=None")
+    print(f"[PASS] fetch_bars 四分支: C fetch={fetch}（纯函数倒挂防御）、组合 base=None")
 
 
 # ═══════════════════════ _sse_single_gen 继承逻辑 ═════════════════════
@@ -214,7 +216,7 @@ def _run_gen(start_time, end_time, csv_point, captured):
             gen = FrontAPI.sse_futures_stream_single(
                 SYMBOL, freq=FREQ, start_time=start_time, end_time=end_time, source=src)
             for _frame in gen:
-                pass  # 耗尽（MockSource 两次 wait_update 后正常关闭）
+                captured.setdefault("frames", []).append(_frame)  # 耗尽；倒挂时提前 return
         finally:
             for name, orig in originals.items():
                 setattr(_sse_mod, name, orig)
@@ -271,15 +273,26 @@ def test_live_csv_restore_regression():
     print(f"[PASS] 实时路径 CSV 恢复: start={got['start_time']}")
 
 
-def test_replay_inverted_start_falls_back():
-    """start ≥ end（倒挂）→ 丢弃 start 回退默认窗口。"""
-    captured = {"init": [], "extract": []}
-    _run_gen(END_TIME, EXPLICIT_START, None, captured)  # start=END > end=EXPLICIT
-    got = captured["init"][0]
-    assert got["start_time"] is None, \
-        f"倒挂 start 应回退为 None，实为 {got['start_time']!r}"
-    assert got["end_time"] == EXPLICIT_START
-    print("[PASS] 倒挂回退默认窗口: start=None")
+def test_replay_inverted_start_errors():
+    """start ≥ end（倒挂）→ 报错中止，不静默回退（需求⑼ 兜底归一）。
+
+    断言三件：① 首帧 init 载荷带 error（前端据此 showAlert 告知用户）；
+    ② 文案与股票 `_analyze_stock_internal` 同形（「复盘起始时间 … 不早于
+    复盘截止时间 …」）；③ `init_chan_symbol` **一次都没被调用** —— 证明
+    没有偷偷按默认窗口加载（旧「回退默认窗口」行为已删除）。
+    """
+    for _label, _start in (("start>end", END_TIME), ("start==end", EXPLICIT_START)):
+        captured = {"init": [], "extract": []}
+        _run_gen(_start, EXPLICIT_START, None, captured)
+        frames = captured.get("frames") or []
+        assert frames, f"[{_label}] 生成器未产出任何帧"
+        assert b'"error"' in frames[0], f"[{_label}] 倒挂应报 init 错误帧，实为 {frames[0]!r}"
+        text = frames[0].decode("utf-8")
+        assert "不早于" in text and "复盘起始时间" in text, \
+            f"[{_label}] 文案与股票不归一: {text!r}"
+        assert not captured["init"], \
+            f"[{_label}] 倒挂已报错却仍按默认窗口加载: {captured['init']!r}"
+    print("[PASS] 倒挂报错中止: init 错误帧 + 未加载默认窗口（start>end 与 start==end）")
 
 
 def test_replay_meta_shows_csv_point():
@@ -413,15 +426,17 @@ def test_select_point_end_date_plumbing():
     print("[PASS] 期货选点 end_date 透传: 漏斗层 → RAW 薄壳 → AppSSE 全链贯通")
 
 
-def test_dual_gen_inverted_start_falls_back():
-    """dual gen 复盘倒挂兜底（评审 #5）：start ≥ end 的那一窗回退默认窗口。
+def test_dual_gen_inverted_start_errors():
+    """dual gen 复盘倒挂归一（评审 #5）：**任一窗** start ≥ end 即报错中止。
 
-    对齐 `_sse_single_gen` 既有语义——SSE init 事件无弹窗通道，倒挂时丢弃该窗
-    start（回退 [end-N, end]）比报错平滑。两窗**独立**判定：只回退倒挂那一窗，
-    另一窗保留自己的选点 L（双窗 [L, R] 各自冻结）。
+    对齐双窗越界判定口径「任一窗越界即拦/回」——两窗在同一次连接里落地，
+    无法只对一窗报错，故不再「只回退倒挂那一窗」，而是整体中止并给出带
+    「上窗 / 下窗」定位的同一文案（前端 showAlert）。断言：init 错误帧 +
+    文案定位 + 两窗 `init_chan_symbol` 均未被调用（没有偷偷按默认窗口加载）。
     """
     def _run(end_time, csv_main, csv_sub):
         captured = []
+        frames = []
         restore_iso = isolate_side_effects()
         try:
             if csv_main:
@@ -459,27 +474,28 @@ def test_dual_gen_inverted_start_falls_back():
                     SYMBOL, "1m", "15s", start_time=None,
                     sub_start_time=None, end_time=end_time, source=src)
                 for _frame in gen:
-                    pass
+                    frames.append(_frame)
             finally:
                 for _n, _o in originals.items():
                     setattr(_sse_mod, _n, _o)
         finally:
             restore_iso()
-        return {c["freq"]: c for c in captured}
+        return {c["freq"]: c for c in captured}, frames
 
-    # 场景 1：上窗倒挂（选点晚于复盘点）→ 上窗回退；下窗未倒挂 → 保留自己的 L
-    by_freq = _run("2025/07/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
-    assert by_freq.get("1m", {}).get("start") is None, \
-        f"上窗 start ≥ end 应回退默认窗口，实为 {by_freq.get('1m', {}).get('start')!r}"
-    assert by_freq["15s"]["start"] == "2025/06/01 09:30:00", \
-        f"下窗未倒挂应保留自己的选点 L，实为 {by_freq['15s']['start']!r}"
-    print("[PASS] dual 复盘倒挂兜底: 上窗回退、下窗保留（两窗独立判定）")
+    # 场景 1：上窗倒挂（选点晚于复盘点）→ 整体中止，两窗都不加载
+    by_freq, frames = _run("2025/07/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
+    assert frames and b'"error"' in frames[0], f"上窗倒挂应报 init 错误帧，实为 {frames[:1]!r}"
+    assert "上窗复盘起始时间" in frames[0].decode("utf-8"), \
+        f"文案未定位到上窗: {frames[0]!r}"
+    assert not by_freq, f"倒挂已报错却仍加载了窗: {by_freq!r}"
+    print("[PASS] dual 复盘倒挂: 上窗倒挂 → 整体中止（两窗均未加载）")
 
-    # 场景 2：两窗均倒挂 → 双双回退默认窗口
-    by_freq = _run("2025/05/01 09:30:00", "2025/08/01 09:30:00", "2025/06/01 09:30:00")
-    assert by_freq["1m"]["start"] is None and by_freq["15s"]["start"] is None, \
-        f"两窗均倒挂应双双回退，实为 {by_freq!r}"
-    print("[PASS] dual 复盘倒挂兜底: 两窗均倒挂时双双回退")
+    # 场景 2：只下窗倒挂 → 同样整体中止，文案定位「下窗」
+    by_freq, frames = _run("2025/07/01 09:30:00", "2025/06/01 09:30:00", "2025/08/01 09:30:00")
+    assert frames and "下窗复盘起始时间" in frames[0].decode("utf-8"), \
+        f"文案未定位到下窗: {frames[:1]!r}"
+    assert not by_freq, f"下窗倒挂已报错却仍加载了窗: {by_freq!r}"
+    print("[PASS] dual 复盘倒挂: 下窗倒挂 → 整体中止（两窗均未加载）")
 
 
 def test_select_point_rebuild_passes_num_bars():
@@ -516,10 +532,10 @@ def main():
     test_replay_explicit_start_kept()
     test_replay_no_csv_default_window()
     test_live_csv_restore_regression()
-    test_replay_inverted_start_falls_back()
+    test_replay_inverted_start_errors()
     test_replay_meta_shows_csv_point()
     test_dual_gen_independent_starts()
-    test_dual_gen_inverted_start_falls_back()
+    test_dual_gen_inverted_start_errors()
     test_select_point_end_date_plumbing()
     test_select_point_rebuild_passes_num_bars()
     print("ALL 期货单窗复盘窗口 TESTS PASS")

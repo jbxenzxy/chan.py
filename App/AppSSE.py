@@ -116,7 +116,8 @@ def _futures_window_fetch_bars(freq_sec, start_time=None, end_time=None, base_ba
                 # 墙钟估算(start→now) 覆盖选点起全部K线（含 end→now 流逝部分，
                 # 拉回后由 init_chan_symbol 的 end 截断去掉），base_bars_out=None
                 # → 调用方跳过「末 N 根」截断（对齐股票选点路径不做根数截断）。
-                # start ≥ end（倒挂）不应到达此处（调用方已回退），防御性走默认。
+                # start ≥ end（倒挂）不应到达此处（两个调用方均已报错中止）；
+                # 纯函数无处报错，防御性走 C 分支（默认窗口）保底。
                 _start_dt = _parse_flex_time(start_time)
                 if _start_dt is not None and _start_dt < _end_dt:
                     fetch = _estimate_bars_between(_start_dt, now, freq_sec)
@@ -342,9 +343,11 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
         #   · 复盘（end_time）继承选点：显式 start_time 优先生效（前端带
         #     当前窗口首根 = 窗口左边界 L），缺失时从 CSV 恢复（F5 刷新后
         #     前端内存丢失，CSV 是 SSOT）→ 窗口 = [start, end]（组合模式，
-        #     不做根数截断）；start ≥ end 倒挂时丢弃 start 回退默认窗口
-        #     [end-N, end]（前端弹窗已拦用户输入路径，倒挂仅剩理论场景，
-        #     且 SSE init 事件无弹窗通道，回退比报错平滑）；
+        #     不做根数截断）；
+        #   · 起止倒挂（start ≥ end）→ 报错中止本次连接，**不静默回退**：
+        #     与股票 `_analyze_stock_internal` 同判据（`>=`）、同文案，前端
+        #     收到 init 错误帧后弹窗告知用户（需求⑼/⑽ 的兜底归一，见
+        #     Docs/选点&复盘方案v1.15.md §3.5）；
         #   · 非复盘：start_time 缺失时从 CSV 恢复（B 操作/冷启动，原语义）。
         # meta.saved_selection_date 恒回显 CSV 真值（与股票同规则）：
         # A 复盘的 start=A左 不会冒充选点，复盘态选点/取消选点驱动前端菜单。
@@ -358,8 +361,12 @@ def _sse_single_gen(symbol, freq="15s", start_time=None, end_time=None, source=N
                 _s_dt = _parse_flex_time(start_time)
                 _e_dt = _parse_flex_time(end_time)
                 if _s_dt is not None and _e_dt is not None and _s_dt >= _e_dt:
-                    log.info(f"[{display_key}] 复盘起点 {start_time} 不早于终点 {end_time}，回退默认窗口")
-                    start_time = None
+                    # 倒挂不再静默回退：报错帧 + 中止本次连接，用户可见
+                    # （与股票同判据同文案，见本段顶部注释）
+                    _msg = f"复盘起始时间 {start_time} 不早于复盘截止时间 {end_time}"
+                    log.info(f"[{display_key}] {_msg}")
+                    yield _sse_frame("init", {"error": _msg, "symbol": symbol})
+                    return
         elif start_time is None:
             col = app_data.freq_to_col(freq) or ""
             if col:
@@ -767,6 +774,7 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
         saved_selection_date = ""
         sub_saved_selection_date = ""
         main_start_time = start_time
+        _inv_msg = None   # 起止倒挂错误文案（非 None ⇒ 报错中止本次连接，见下）
         try:
             qualified_code = symbol
             col_main = app_data.freq_to_col(main_freq) or ""
@@ -781,23 +789,27 @@ def _sse_dual_gen(symbol, main_freq="1m", sub_freq=None, start_time=None, sub_st
             if sub_start_time is None and sub_saved_selection_date:
                 sub_start_time = sub_saved_selection_date
                 log.info(f"[{display_key}] 下窗恢复选点: {sub_saved_selection_date}")
-            # 复盘倒挂兜底（对齐 _sse_single_gen）：两窗各自判定，start ≥ end 时
-            # 丢弃该窗 start 回退默认窗口 [end-N, end]。前端弹窗已拦用户输入路径，
-            # 倒挂仅剩理论场景，且 SSE init 事件无弹窗通道，回退比报错平滑。
-            # 上/下窗独立判定：只回退倒挂那一窗，另一窗保留自己的选点 L。
+            # 复盘起止倒挂（start ≥ end）→ 记错误文案，稍后报错中止本次连接：
+            # **任一窗倒挂即中止**（对齐越界判定口径「任一窗越界即拦/回」），不再
+            # 静默丢弃该窗 start、回退默认窗口——与 `_sse_single_gen`、股票
+            # `_analyze_stock_internal` 同判据（`>=`）、同文案前缀
+            # （需求⑼/⑽ 的兜底归一，见 Docs/选点&复盘方案v1.15.md §3.5）。
             if end_time:
                 _e_dt2 = _parse_flex_time(end_time)
                 if _e_dt2 is not None:
                     _m_dt = _parse_flex_time(main_start_time) if main_start_time else None
                     if _m_dt is not None and _m_dt >= _e_dt2:
-                        log.info(f"[{display_key}] 上窗起点 {main_start_time} 不早于终点 {end_time}，回退默认窗口")
-                        main_start_time = None
-                    _sb_dt = _parse_flex_time(sub_start_time) if sub_start_time else None
-                    if _sb_dt is not None and _sb_dt >= _e_dt2:
-                        log.info(f"[{display_key}] 下窗起点 {sub_start_time} 不早于终点 {end_time}，回退默认窗口")
-                        sub_start_time = None
+                        _inv_msg = f"上窗复盘起始时间 {main_start_time} 不早于复盘截止时间 {end_time}"
+                    else:
+                        _sb_dt = _parse_flex_time(sub_start_time) if sub_start_time else None
+                        if _sb_dt is not None and _sb_dt >= _e_dt2:
+                            _inv_msg = f"下窗复盘起始时间 {sub_start_time} 不早于复盘截止时间 {end_time}"
         except Exception as _e:
             log.warning(f"[警告] 异常: {type(_e).__name__}: {_e}")
+        if _inv_msg:
+            log.info(f"[{display_key}] {_inv_msg}")
+            yield _sse_frame("init", {"error": _inv_msg, "symbol": symbol})
+            return
 
         # 下窗取数（四期一致性原则）：下窗窗口独立，方式A = 下窗自己的配置根数
         # （FUTURES_LOOKBACK_CONFIG[sub_freq]，原「上窗配置 N_main 折算」废除）。

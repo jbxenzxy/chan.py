@@ -13,8 +13,10 @@ Test/test_replay_window_start.py —— 股票复盘窗口 [L, R] 的 start_time
   1. 复盘 + start_time 距复盘点近于窗口值 → 条数 == 区间实际根数
      （短窗口**不补截断**；与 test_lookback_truncation 用例 7「长区间不截」
      互补——两条共同钉死「start_time 路径与根数截断互斥」）；
-  2. start_time > end_date → 返回 error（兜底改严：原「不筛也不截」静默
-     放行已删除）；
+  2. start_time ≥ end_date → 返回 error（兜底改严：原「不筛也不截」静默
+     放行已删除）。判据**含相等**——相等时窗口退化为单根、任何周期都建不出
+     结构；该判据与期货侧（`_sse_single_gen` / `_sse_dual_gen` 报错帧）
+     逐字一致，见 Docs/选点&复盘方案v1.15.md §3.5；
   3. start_time 无法解析 → 返回 error（同上）；
   4. 复盘 + start_time → meta.saved_selection_date 回显 CSV 真值
      （隔离环境 CSV 空 → meta 空；A 复盘的 start=A左 不会冒充选点）；
@@ -119,7 +121,24 @@ def test_replay_start_after_target_errors():
     result, _ = collect({"d": (TRUNC_BARS, "用例窗口")}, end_date=anchor, start_time=later)
     assert "error" in result, f"start_time 晚于复盘点应报错，实际返回: {list(result)[:5]}"
     assert "复盘起始时间" in result["error"], f"报错文案不含锚定子串: {result['error']}"
+    assert "不早于" in result["error"], f"归一后文案应为「不早于」: {result['error']}"
     print(f"[PASS] 复盘 start>target 报错: {result['error']}")
+
+
+def test_replay_start_equal_target_errors():
+    """复盘 + start_time == 复盘点（窗口退化为单根）：报 error。
+
+    这是需求⑼ 兜底分支里**唯一可达**的形态：选点只命中可见K线，落点 ∈ (L, R]，
+    落在 R 上即与复盘点同根。判据取 `>=` 而非 `>` —— 相等时窗口只剩一根，任何
+    周期都建不出结构，报错可发现；期货侧同判据、同文案前缀（归一，见 §3.5）。
+    """
+    rows = _fixture_rows()
+    anchor = _ymd(rows[-1 - REPLAY_ANCHOR_OFFSET]["dt"])
+    result, _ = collect({"d": (TRUNC_BARS, "用例窗口")}, end_date=anchor, start_time=anchor)
+    assert "error" in result, f"start_time == 复盘点应报错，实际返回: {list(result)[:5]}"
+    assert "复盘起始时间" in result["error"] and "不早于" in result["error"], \
+        f"报错文案与归一后口径不符: {result['error']}"
+    print(f"[PASS] 复盘 start==target 报错: {result['error']}")
 
 
 def test_replay_start_unparsable_errors():
@@ -249,6 +268,7 @@ def test_select_point_dual_with_end_date_no_defense():
 def main():
     test_replay_window_start_short_not_truncated()
     test_replay_start_after_target_errors()
+    test_replay_start_equal_target_errors()
     test_replay_start_unparsable_errors()
     test_replay_start_time_no_meta_writeback()
     test_live_start_time_meta_writeback_kept()
