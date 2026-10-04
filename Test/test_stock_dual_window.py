@@ -2,7 +2,7 @@
 """
 Test/test_stock_dual_window.py —— 股票双窗（三期）选点/复盘语义守护
 =====================================================================
-被测与口径（设计见《选点&复盘方案v1.8》§4）：
+被测与口径（设计见《选点&复盘方案v1.15》§4）：
   1. 配对校验（`_validate_stock_dual_pair` 纯函数）：上窗周期必须**严格大于**
      下窗——相等/反向/未知周期均拒绝，合法配对放行；
   2. sub_start_time 透传链完整性（文本级断言，防「改了函数忘了透传」）：
@@ -13,9 +13,15 @@ Test/test_stock_dual_window.py —— 股票双窗（三期）选点/复盘语�
   3b. 下窗 sub.meta 含 saved_selection_date 键且恒回显 CSV(sub 列) 真值
      （双窗缓存失配校验 / 前端下窗全量显示 / 取消选点点亮 三处依赖）；
   4. isolate 三件套重定向回归：isolate_side_effects() 期间 save_point_time
-     落临时目录（不写生产 App/double_click_dt.csv）。
+     落临时目录（不写生产 App/double_click_dt.csv）；
+  5. §4.4 下窗变动 → 上窗重载：静态契约（选点 URL 带上窗周期 / 响应同时替换两窗 /
+     下窗双击入口在位）+ 无头 Chrome 真双击下窗，断言「恰好一次 select/point →
+     上窗整体重载且首根不变（L 不变）→ 下窗 = 新选点 → 无二次加载」；
+     浏览器不在位降级 SKIP。
 
-夹具：stock_day.json（snapshot_runner 注入，全程离线）。
+夹具：stock_day.json（snapshot_runner 注入，全程离线）；第 5 项另用
+Test/snapshots/multilevel_d_30m.json 裁出双窗打桩数据（本地 http.server +
+playwright 拦截 /api/**，不联网）。
 运行：python Test/test_stock_dual_window.py
 """
 import os
@@ -229,12 +235,314 @@ def test_dual_sub_left_boundary_independent():
         restore_iso()
 
 
+# ══════════════════════════════════════════════════════════════════
+# 下窗变动 → 上窗重载：端到端（无头 Chrome，真双击下窗选点）
+# ══════════════════════════════════════════════════════════════════
+FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
+SNAP_DUAL = os.path.join(TEST_DIR, "snapshots", "multilevel_d_30m.json")
+E2E_MAIN_FREQ = "d"        # 上窗 d → 下窗 30m：前端缺省配对（`_SUB_FREQ_MAP`）
+E2E_SUB_FREQ = "30m"
+E2E_SUB_TAIL = 80          # 下窗只取末尾 80 根：短窗口 ⇒ 坐标可算、实体够宽易命中
+E2E_VIEW_COUNT = 233       # 与 AppConfig.VIEW_COUNT 同源（打桩 /api/health 下发）
+
+DUAL_E2E_INIT_JS = r"""
+// 不建实时流（EventSource）：用例只验交互链路，长连接会挂住收尾
+window.EventSource = function () {
+  this.readyState = 0; this.url = ''; this.withCredentials = false;
+  this.close = function () {};
+  this.addEventListener = function () {};
+  this.removeEventListener = function () {};
+  this.dispatchEvent = function () { return false; };
+};
+// 固定冷启动股票/周期，不吃上一次会话残留（否则用例不确定）
+try {
+  localStorage.setItem('lastCodeFreq',
+    JSON.stringify({code: 'sh600519', freq: 'd', name: '贵州茅台'}));
+} catch (e) {}
+"""
+
+# 前端「下窗选点 → 上窗重载」的源码契约（浏览器不在位时的兜底层）
+E2E_SRC_CONTRACTS = [
+    # ① 下窗选点请求必须带上窗周期（dual=1&main_freq=<上窗>&sub_freq=<下窗>）
+    (r'&dual=1&main_freq=" \+ _mainFreq \+ "&sub_freq=" \+ _subFreq',
+     "下窗选点 URL 未带 dual=1&main_freq=<上窗周期>（上窗重载契约）"),
+    # ② 响应落地 = 上窗整体替换 + 下窗替换（同一次响应两窗一起落地）
+    (r"chartData = data;[^\n]*\n\s*if \(data\.sub\) \{ dualSubData = data\.sub; \}",
+     "选点响应未同时替换上窗 chartData 与下窗 dualSubData"),
+    # ③ 下窗双击分支必须仍挂在 subCanvas（真入口）
+    (r'subCanvas\.addEventListener\("dblclick"',
+     "下窗 canvas 缺 dblclick 监听（选点入口丢失）"),
+]
+
+
+def _e2e_find_playwright():
+    """(可用?, 原因)。不可用时原因非空 —— 沿 test_vol_macd_mode 的降级手法。"""
+    try:
+        import playwright           # noqa: F401
+        import playwright.sync_api  # noqa: F401
+        return True, ""
+    except Exception as e:
+        return False, "无 playwright（%s）" % str(e).splitlines()[0][:70]
+
+
+def _e2e_launch(pw):
+    """本机 Chrome → 捆绑 chromium → ms-playwright 缓存（同 test_vol_macd_mode）。"""
+    import glob as _glob
+    notes = []
+    try:
+        return pw.chromium.launch(channel="chrome"), "本机 Chrome", notes
+    except Exception as e:
+        notes.append("channel=chrome: " + str(e).splitlines()[0][:90])
+    try:
+        return pw.chromium.launch(), "捆绑 chromium", notes
+    except Exception as e:
+        notes.append("捆绑 chromium: " + str(e).splitlines()[0][:90])
+    for pat in ("~/AppData/Local/ms-playwright/chromium-*/chrome-win64/chrome.exe",
+                "~/.cache/ms-playwright/chromium-*/chrome-linux/chrome"):
+        for cand in _glob.glob(os.path.expanduser(pat)):
+            try:
+                return (pw.chromium.launch(executable_path=cand),
+                        os.path.basename(cand), notes)
+            except Exception as e:
+                notes.append(os.path.basename(cand) + ": " + str(e).splitlines()[0][:90])
+    return None, "", notes
+
+
+def _e2e_dual_fixture():
+    """从冻结双窗快照裁出打桩数据，挑出「下窗笔边界」K 线作为双击目标。
+
+    返回 (resp_enter, resp_select, target_i, target_date)：
+      resp_enter  —— 进双窗（GET analyze?dual=1）响应：上窗全量 + 下窗末 80 根；
+      resp_select —— 选点（POST select/point）响应：上窗**按自身 [L,R] 重算**
+                     （窗口语义不变 ⇒ 首末根不变，但是**新的一份数据**）+ 下窗 [选点, 末根]；
+      target_i    —— 目标根在下窗可见序列里的索引（下窗 80 根 < VIEW_COUNT ⇒ offset=0，
+                     故可见索引 == 全局索引）；
+      target_date —— 其日期（= 选点日期）。
+    """
+    import json
+    with open(SNAP_DUAL, encoding="utf-8") as f:
+        snap = json.load(f)
+    sub_all = snap["sub"]
+
+    def _blk(src, klines, bis):
+        out = {"meta": src.get("meta"), "klines": klines, "bis": bis}
+        for k in ("segs", "zs", "bsps", "fxs", "white_hline", "zs_stars"):
+            if k in src:
+                out[k] = src[k]
+        return out
+
+    sub_kl = sub_all["klines"][-E2E_SUB_TAIL:]
+    sub_bis = [b for b in sub_all["bis"]
+               if b.get("edt") and b["edt"] >= sub_kl[0]["date"]]
+    # 与前端 dblclick 分支**逐字同判据**：bis[j].edt == d 且 bis[j+1].sdt == d
+    cand = [i for i, k in enumerate(sub_kl)
+            if any(sub_bis[j]["edt"] == k["date"] and sub_bis[j + 1]["sdt"] == k["date"]
+                   for j in range(len(sub_bis) - 1))]
+    assert cand, "夹具里没有下窗笔边界 K 线（双击选点无法命中）"
+    # 取振幅最大的那根：high-low 越大，价格区里越容易命中（减少坐标试探次数）
+    target_i = max(cand, key=lambda i: sub_kl[i]["high"] - sub_kl[i]["low"])
+    target_date = sub_kl[target_i]["date"]
+
+    resp_enter = _blk(snap, snap["klines"], snap["bis"])
+    resp_enter["sub"] = _blk(sub_all, sub_kl, sub_bis)
+
+    sub_kl2 = sub_kl[target_i:]
+    sub_bis2 = [b for b in sub_bis if b.get("edt") and b["edt"] >= target_date]
+    sub_meta2 = dict(sub_all.get("meta") or {})
+    sub_meta2["saved_selection_date"] = target_date
+    meta2 = dict(snap.get("meta") or {})
+    meta2["sub_saved_selection_date"] = target_date
+    resp_select = _blk(snap, snap["klines"], snap["bis"])
+    resp_select["meta"] = meta2
+    resp_select["sub"] = _blk(sub_all, sub_kl2, sub_bis2)
+    resp_select["sub"]["meta"] = sub_meta2
+    return resp_enter, resp_select, target_i, target_date
+
+
+def test_dual_sub_change_reloads_main():
+    """§4.4 下窗变动 → 上窗重载：源码契约（浏览器不在位也跑）+ 真交互端到端。
+
+    断言链（缺一环即红）：
+      ① 下窗双击命中笔边界 → 发出**恰好一次** POST select/point，URL 带
+         `dual=1&main_freq=<上窗周期>&sub_freq=<下窗周期>`（上窗按**自身周期**重载）；
+      ② 上窗 chartData 被**整体替换**（对象引用变化 ⇒ 真重载，而不是"不动"）；
+      ③ 替换后上窗**首根日期不变**（改L不改R：上窗用自身 [L, R] 重算，不随下窗选点平移）；
+      ④ currentFreq 仍 = 上窗周期（下窗替换态未污染上窗周期）；
+      ⑤ 下窗 dualSubData 首根 = 新选点（选点真落地）；
+      ⑥ 全程 select/point 只发一次（联动是同一次请求落地，不产生二次加载）。
+    浏览器不在位 → 打印 SKIP 并返回（静态层已覆盖 URL / 响应处理契约）。
+    """
+    import re
+    print("\n[§4.4] 下窗变动 → 上窗重载：源码契约 + 无头 Chrome 真双击")
+
+    # ── 静态层：前端源码契约（与浏览器无关，任何环境都跑）────────────────
+    with open(os.path.join(FRONTEND_DIR, "app.js"), encoding="utf-8") as f:
+        js = f.read().replace("\r\n", "\n")
+    for pat, desc in E2E_SRC_CONTRACTS:
+        assert re.search(pat, js), "下窗→上窗重载契约丢失：" + desc
+    print("[PASS] 静态层：下窗选点 URL 带上窗周期 / 响应同时替换两窗 / 双击入口在位")
+
+    ok, why = _e2e_find_playwright()
+    if not ok:
+        print("  [SKIP] " + why + "（静态层已覆盖契约）")
+        return
+    if not os.path.isfile(SNAP_DUAL):
+        print("  [SKIP] 缺双窗快照 " + SNAP_DUAL)
+        return
+    import functools
+    import http.server
+    import json as _json
+    import threading
+    from playwright.sync_api import sync_playwright
+
+    resp_enter, resp_select, target_i, target_date = _e2e_dual_fixture()
+    sub_len = len(resp_enter["sub"]["klines"])
+    print("  夹具：下窗 %d 根（目标根索引 %d = %s），上窗 %d 根"
+          % (sub_len, target_i, target_date, len(resp_enter["klines"])))
+
+    class _Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    httpd = http.server.ThreadingHTTPServer(
+        ("127.0.0.1", 0), functools.partial(_Quiet, directory=FRONTEND_DIR))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+
+    select_reqs = []
+    analyze_reqs = []
+    page_errors = []
+    browser = None
+    try:
+        with sync_playwright() as pw:
+            browser, which, notes = _e2e_launch(pw)
+            if browser is None:
+                print("  [SKIP] 无可用无头浏览器：" + " / ".join(notes[:3]))
+                return
+            print("  （无头浏览器：%s）" % which)
+            page = browser.new_page(viewport={"width": 1600, "height": 900})
+            page.add_init_script(DUAL_E2E_INIT_JS)
+            page.on("pageerror", lambda e: page_errors.append(str(e).splitlines()[0][:120]))
+
+            def route_api(route):
+                url = route.request.url
+                if "select/point" in url:
+                    select_reqs.append(url)
+                    body = _json.dumps(resp_select)
+                elif "analyze" in url:
+                    analyze_reqs.append(url)
+                    body = _json.dumps(resp_enter)
+                elif "/api/health" in url:
+                    body = _json.dumps({"config": {"view_count": E2E_VIEW_COUNT}})
+                else:
+                    body = "{}"
+                route.fulfill(status=200, content_type="application/json", body=body)
+
+            page.route("**/api/**", route_api)
+            page.goto("http://127.0.0.1:%d/app.html" % port, wait_until="load")
+            page.wait_for_function(
+                "() => { const s = window.ChanApp && window.ChanApp.state;"
+                " return !!(s && s.chartData && s.chartData.klines"
+                " && s.chartData.klines.length > 0); }", timeout=20000)
+
+            # ── 进双窗（真实按钮，走 toggleDualWindow 生产路径）────────────
+            page.click("#btn-dual")
+            page.wait_for_function(
+                "() => { const s = window.ChanApp.state;"
+                " return !!(s.isDualWindow && s.dualSubData && s.dualSubData.klines"
+                " && s.dualSubData.klines.length > 0); }", timeout=20000)
+            page.wait_for_timeout(300)
+            before = page.evaluate(
+                "() => { const s = window.ChanApp.state;"
+                " window.__e2eRefMain = s.chartData;"
+                " window.__e2eMainFirst = s.chartData.klines[0].date;"
+                " return {freq: s.currentFreq, subFreq: s.dualSubFreq,"
+                "         mainFirst: s.chartData.klines[0].date,"
+                "         subLen: s.dualSubData.klines.length}; }")
+            assert before["mainFirst"] == resp_enter["klines"][0]["date"], \
+                "进双窗后上窗首根与打桩数据不符：%r" % before
+            assert before["subLen"] == sub_len, \
+                "进双窗后下窗根数与打桩不符：%r != %d" % (before["subLen"], sub_len)
+            assert not select_reqs, "进双窗阶段不应出现 select/point 请求"
+
+            # ── 真双击下窗目标 K 线 ───────────────────────────────────────
+            # 坐标与前端 getChartArea() 同源：x = PADDING.left，
+            # w = clientWidth - PADDING.left - PADDING.right - rightGap(55)
+            sub_box = page.locator("#chart-sub canvas").first.bounding_box()
+            assert sub_box and sub_box["width"] > 200, "下窗画布未渲染：%r" % (sub_box,)
+            area_w = sub_box["width"] - 10 - 22 - 55
+            bar_step = area_w / sub_len
+            click_x = sub_box["x"] + 10 + bar_step * (target_i + 0.5)
+
+            hit_frac = None
+            # 价格区在上部（底部是量 / MACD 区）：0.15H~0.60H 扫 y，
+            # 命中（发出 select/point）即停；未命中不会产生任何副作用。
+            for k in range(6, 25):
+                frac = k / 40.0
+                page.mouse.dblclick(click_x, sub_box["y"] + sub_box["height"] * frac)
+                page.wait_for_timeout(160)
+                if select_reqs:
+                    hit_frac = frac
+                    break
+            assert select_reqs, ("下窗双击未触发选点请求（坐标未命中笔边界 K 线）："
+                                 "x=%.1f box=%r target_i=%d" % (click_x, sub_box, target_i))
+            print("  （真双击命中：y 比例 %.3f）" % hit_frac)
+
+            page.wait_for_function(
+                "() => { const s = window.ChanApp.state;"
+                " return !!(s.dualSubData && s.dualSubData.klines"
+                " && s.dualSubData.klines[0].date === '%s'); }" % target_date,
+                timeout=20000)
+            page.wait_for_timeout(250)
+            after = page.evaluate(
+                "() => { const s = window.ChanApp.state;"
+                " return {replaced: s.chartData !== window.__e2eRefMain,"
+                "         mainFirst: s.chartData.klines[0].date,"
+                "         subFirst: s.dualSubData.klines[0].date,"
+                "         freq: s.currentFreq, isDual: s.isDualWindow}; }")
+
+            url = select_reqs[0]
+            assert "dual=1" in url, "下窗选点 URL 缺 dual=1：" + url
+            assert "main_freq=" + E2E_MAIN_FREQ + "&" in url, \
+                "下窗选点 URL 的上窗周期不是 %s（上窗重载必须用自身周期）：%s" % (E2E_MAIN_FREQ, url)
+            assert "sub_freq=" + E2E_SUB_FREQ in url, \
+                "下窗选点 URL 缺 sub_freq=%s：%s" % (E2E_SUB_FREQ, url)
+            assert "freq=" + E2E_SUB_FREQ in url, \
+                "下窗选点 URL 的 freq 不是下窗周期：%s" % url
+            assert after["replaced"] is True, \
+                "下窗选点后上窗 chartData 未被替换（未按 §4.4 重载）"
+            assert after["mainFirst"] == before["mainFirst"], \
+                ("上窗首根被下窗选点牵动（应保持自身 L）：%r -> %r"
+                 % (before["mainFirst"], after["mainFirst"]))
+            assert after["freq"] == E2E_MAIN_FREQ, \
+                "上窗周期被下窗替换态污染：%r" % after["freq"]
+            assert after["subFirst"] == target_date, \
+                "下窗未落到新选点：%r != %r" % (after["subFirst"], target_date)
+            assert len(select_reqs) == 1, \
+                "select/point 发了 %d 次（同一响应两窗落地，不应二次加载）" % len(select_reqs)
+            print("[PASS] 端到端：双击下窗 → 一次 select/point（dual=1&main_freq=%s）"
+                  "→ 上窗整体重载且 L 不变、下窗=新选点" % E2E_MAIN_FREQ)
+            if page_errors:
+                # 打桩的 {}（stats / annotations 等非被测接口）会让前端打印错误：
+                # 与本次被测链路无关，只回报不判红。
+                print("  注：页面内非致命 JS 报错 %d 条（打桩接口返回 {} 所致）：%s"
+                      % (len(page_errors), page_errors[0]))
+    finally:
+        try:
+            if browser is not None:
+                browser.close()
+        except Exception:
+            pass
+        httpd.shutdown()
+
+
 def main():
     test_validate_stock_dual_pair()
     test_sub_start_time_plumbing()
     test_meta_has_sub_saved_field()
     test_sub_meta_saved_selection_date()
     test_dual_sub_left_boundary_independent()
+    test_dual_sub_change_reloads_main()
     test_isolate_redirects_user_store_files()
     print("ALL 股票双窗选点语义 TESTS PASS")
 

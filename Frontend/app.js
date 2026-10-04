@@ -3228,7 +3228,11 @@
                         if (subBiIdx < 0) return;  // 非笔边界K线：无效双击，静默
                         const _subCode = chartData.meta.symbol;
                         const _subFreq = dualSubFreq;
-                        const _mainFreq = currentFreq;
+                        // 上窗周期必须取 _savedFreq：本块处于「下窗替换态」
+                        // （chartData=dualSubData、currentFreq=下窗周期），取 currentFreq
+                        // 会把下窗周期当上窗周期传给后端；后端按 main_freq 重建上窗，
+                        // 同周期配对会被 _validate_stock_dual_pair 拒绝 ⇒ 选点必失败
+                        const _mainFreq = _savedFreq;
                         const _subIsFutures = chartData.meta.market === 'futures';
                         // 引擎运行中拦截（期货域）：选点写 CSV，影响引擎窗口
                         if (_subIsFutures && autoOrderRunning && isFuturesMode()) {
