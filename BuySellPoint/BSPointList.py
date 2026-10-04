@@ -1182,7 +1182,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
     def _cal_bs0point_nth_ozs_57th(self, bi_list, pivot_a, stroke_n):
         """第5/7笔0类买卖点（类比 _cal_bs0point_3rd 的 C/A 口径，nzs 未通过后启用）
         奇数笔（1,3,5,7）同向、与趋势方向相反（多头中的回调、空头中的反弹，统称回调笔），偶数笔（2,4,6）为趋势笔：
-        ㈠ 闪电走势：回调笔极值逐级收窄（买：笔n 高点 ≤ 笔(n-2) 高点 ≤ … ≤ 笔1 高点；卖反向）
+        ㈠ 闪电走势：回调笔极值均不越过笔1（买：各回调笔高点 ≤ 笔1高点；卖反向）
         ㈡ 全部奇数笔整笔 DIF 在趋势侧（买→DIF≥0，卖→DIF≤0）
         ㈢ 回抽0轴比例：笔n终点 vs 笔1起点（同 3rd 的 C/A 口径）
         ㈣ MACD BAR 背驰：笔n vs 笔(n-2)（最近同向笔）
@@ -1199,24 +1199,40 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
                       nth_in_pivot=nth_in_pivot, is_buy=is_buy,
                       stroke_dir='up' if stroke_n.is_up() else 'down')
 
-        # ㈠ 闪电走势判定（回调笔极值逐级收窄）
-        # 向下笔5(买点)：笔5高点 <= 笔3高点 and 笔3高点 <= 笔1高点
-        # 向上笔5(卖点)：笔5低点 >= 笔3低点 and 笔3低点 >= 笔1低点
-        # 向下笔7(买点)：笔7高点 <= 笔5高点 and 笔5高点 <= 笔3高点 and 笔3高点 <= 笔1高点
-        # 向上笔7(卖点)：笔7低点 >= 笔5低点 and 笔5低点 >= 笔3低点 and 笔3低点 >= 笔1低点
-        for j in range(1, len(odd_bis)):
-            cur, prev = odd_bis[j], odd_bis[j - 1]
+        # ㈠ 闪电走势判定（回调笔极值均不越过笔1）—— 宽松口径
+        # 向下笔5(买点)：笔5高点 <= 笔1高点 and 笔3高点 <= 笔1高点
+        # 向上笔5(卖点)：笔5低点 >= 笔1低点 and 笔3低点 >= 笔1低点
+        # 向下笔7(买点)：笔7高点 <= 笔1高点 and 笔5高点 <= 笔1高点 and 笔3高点 <= 笔1高点
+        # 向上笔7(卖点)：笔7低点 >= 笔1低点 and 笔5低点 >= 笔1低点 and 笔3低点 >= 笔1低点
+        # 以笔1（odd_bis[0]）为唯一参照逐笔比较，不要求相邻回调笔逐级收窄
+        # （与 _cal_bs0point_3rd 的 ㈠「仅与起点笔比较」口径对齐）
+        ref_ext = stroke_1._high() if stroke_n.is_down() else stroke_1._low()
+        for cur in odd_bis[1:]:
+            cur_ext = cur._high() if stroke_n.is_down() else cur._low()
             if stroke_n.is_down():
-                cur_ext, prev_ext = cur._high(), prev._high()
-                chain_ok = cur_ext <= prev_ext
+                crossed = cur_ext > ref_ext
             else:
-                cur_ext, prev_ext = cur._low(), prev._low()
-                chain_ok = cur_ext >= prev_ext
-            if not chain_ok:
-                self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔未逐级收窄）',
-                              cur_idx=cur.idx, prev_idx=prev.idx,
-                              cur_ext=cur_ext, prev_ext=prev_ext)
+                crossed = cur_ext < ref_ext
+            if crossed:
+                self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔越过笔1极值）',
+                              cur_idx=cur.idx, ref_idx=stroke_1.idx,
+                              cur_ext=cur_ext, ref_ext=ref_ext)
                 return
+
+        # ── 严格口径（已停用，保留备查）：回调笔极值逐级收窄 ──
+        # for j in range(1, len(odd_bis)):
+        #     cur, prev = odd_bis[j], odd_bis[j - 1]
+        #     if stroke_n.is_down():
+        #         cur_ext, prev_ext = cur._high(), prev._high()
+        #         chain_ok = cur_ext <= prev_ext
+        #     else:
+        #         cur_ext, prev_ext = cur._low(), prev._low()
+        #         chain_ok = cur_ext >= prev_ext
+        #     if not chain_ok:
+        #         self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔未逐级收窄）',
+        #                       cur_idx=cur.idx, prev_idx=prev.idx,
+        #                       cur_ext=cur_ext, prev_ext=prev_ext)
+        #         return
 
         # ㈡ 全部奇数笔整笔 DIF 在趋势侧 + ㈢ 回抽0轴比例（笔n终点 vs 笔1起点）
         dif_positive = is_buy

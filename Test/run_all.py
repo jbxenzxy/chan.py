@@ -327,6 +327,13 @@ COMPONENTS = [
      [sys.executable, os.path.join("Test", "test_docs_anchor_refs.py")]),
     ("aol_ledger_display",
      [sys.executable, os.path.join("Test", "test_aol_ledger_display.py")]),
+    # 0 类买卖点「第5/7笔」㈠ 闪电走势判据（2026-10-04 放宽）：由「相邻回调笔
+    # 逐级收窄」改为「各回调笔只与笔1比较」。该分支在 8 个快照回归样本里**零触及**
+    # ⇒ 快照全绿证不了这次改动，故用逻辑层护栏补齐判别力：从真实源码抽段 +
+    # stub 笔枚举 640 组，钉「宽松 ⊇ 严格」超集不变量 + 放宽面非空；两种回退
+    # 形态（语义回退 / 方向反转）均已变异自证会被拦下。
+    ("bs0_ozs57_lightning",
+     [sys.executable, os.path.join("Test", "test_bs0_ozs57_lightning.py")]),
     # Trading/README.md 锚点护栏（2026-09-29）：174 处行号引用全量改成稳定锚点，
     #   钉住「零行号 / 锚点可 grep / 反引号配对 / 表格结构」四项，防行号回潮。
     ("readme_anchor_refs",
