@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-阶段 3：成果防护守护用例（3a REST 迁移 / 3b-1 SSE 双实现）
+阶段 3：成果防护守护用例（3a REST 迁移 / 3b SSE 单实现）
 =====================================================================
 守护阶段 3 的六类结构性成果（设计文档 V10 方案 8.6）：
 
@@ -10,9 +10,9 @@
      阶段 2 遗留问题：原 api_server 3 处直连绕锁）
   ③ 路由收敛（api_server.py 已删除，35 条 REST/SSE 路由单源于 FrontAPI，
      命名为 RESTful 整理后的冻结基线，见 snapshots/phase3_routes.json）
-  ④ 墓碑化（ChartHandler.do_GET/do_POST 已 410；SSE 方法保留至 3b-2）
-  ⑤ SSE 双实现（impl=legacy|native 灰度开关，默认 legacy 零漂移；
-     原生生成器 + CSSESource 数据源抽象就位）
+  ④ 墓碑化（ChartHandler 已随 10.1 整体下线；SSE 旧方法已随 3b-2 拆除）
+  ⑤ SSE 单实现（3b-1 的 impl=legacy|native 灰度开关已随 3b-2 连同
+     legacy 桥接一并拆除；仅保留原生生成器 + CSSESource 数据源抽象）
   ⑥ 分层方向（FrontAPI → AppOrch → AppData 单向，禁止反向/跨层）
 
 运行：python Test/test_phase3_guards.py           # 校验
@@ -339,7 +339,7 @@ def test_tombstone(failures):
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# ⑤ SSE 双实现（3b-1 灰度开关）
+# ⑤ SSE 单实现（3b-1 灰度 → 3b-2 拆除 legacy）
 # ═══════════════════════════════════════════════════════════════════════
 def test_sse_dual_impl(failures):
     """/api/futures_stream 仅保留方案A 同步生成器 + 数据源抽象（3b-2 已拆除 legacy）。"""
