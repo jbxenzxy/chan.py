@@ -13,11 +13,11 @@ CI / 迁移每阶段的验收门禁）。
   4. 阶段 2 成果防护   test_phase2_guards.py        配置一致性/异常链路/引擎边界/日期契约
   5. 确定性测试        test_determinism.py          重复调用/跨路径污染/双窗口语义
   6. 行业映射完整性    test_industry_mapping.py     双路径加载不静默降级 + 条目质量
-  7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭（legacy 桥接）
+  7. SSE 事件序列      test_sse_sequence.py         首事件/序列/正常关闭（native 生成器）
   8. 函数映射同步      func_map_check.py            阶段 2.6：74 函数/57 状态归属
                                                      完备·无幽灵·行号无漂移
   9. 阶段 3 成果防护   test_phase3_guards.py        锁分类/直连清零/路由收敛/墓碑/
-                                                     SSE 双实现/分层方向
+                                                     SSE 单实现/分层方向
  10. 阶段 4 成果防护   test_phase4_guards.py        委托壳+目标存在/状态别名同一性/
                                                      配置别名清零/自选股收敛/语义子窗/
                                                      分层方向/LRU 语义/数据源 import 门禁

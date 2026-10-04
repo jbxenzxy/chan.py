@@ -95,7 +95,7 @@ TARGET_FUNCS = {
     "_get_index_belong":            ("DATA", "✓4 兼容壳 → app_data（AppOrch 已直连）"),
     # P2：_load_float_mc_cache 兼容壳已随 AppRefresh 物理迁入删除，不再属 AppEngine 映射
 
-    # ── 取数实现（2026-09 新增，尚未归位，现址 AppEngine 装配点）──
+    # ── 取数实现（2026-09 新增，现址 AppEngine 装配点）──
     # 二者都是「按市场/标的类型选源 → 调 DataAPI」的取数编排，同属获取侧
     # （ORCH_F）。刻意留在 AppEngine 而非随 AppRefresh 迁走：AppData 不得
     # import DataAPI（phase5 守卫 ④b），依赖倒置只经本装配点注入
