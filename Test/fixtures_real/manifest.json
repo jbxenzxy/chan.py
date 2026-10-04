@@ -1,0 +1,21 @@
+{
+ "entries": [
+  {
+   "bars": 1393,
+   "date_from": "2021-01-04 00:00:00",
+   "date_to": "2026-09-30 00:00:00",
+   "file": "sz002190_d.json",
+   "freq": "d",
+   "note": "判别力最强：宽松 6 个 57th-T0 / 严格 0 个",
+   "sha256": "b88ede2ffc50361b5ef0ae38ada3bc3980d75492ad17feb26c945cda72e63ab4",
+   "symbol": "sz002190"
+  }
+ ],
+ "kind": "real-market-slice",
+ "note": "来源：本机通达信 vipdoc 日线（经 TdxAPI.read_main_level_records 前复权读取）的真实行情切片，冻结为离线 JSON。与 fixtures/ 不同 —— fixtures/ 为 gen_fixtures.py 合成且受 fixtures_integrity 校验，本目录为一次性冻结的真实样本，只由本脚本 / --check 校验 sha256。",
+ "read_config": {
+  "forward_adjust_enabled": true,
+  "vipdoc_dir": "D:\\new_tdx_hd_test\\vipdoc"
+ },
+ "version": 1
+}
