@@ -1654,8 +1654,8 @@ def _build_sub_kl_times(main_records, sub_records, main_freq, sub_freq):
     """灰框对照表合成：每根上窗 K 线 → 其覆盖的下窗 K 线时间列表。
 
     独立实现下上窗 KLU 不携带 sub_kl_list（联立数据），按时间分桶合成：
-    每根上窗 K 线的覆盖区间与 _stocks_sub_dt_algo 同口径。输出与联立
-    取数（_get_sub_klus 过滤后逐根格式化）一致，灰框行为不变。
+    每根上窗 K 线的覆盖区间与 _stocks_sub_dt_algo 同口径，
+    输出即区间内下窗 K 线的时间列表。
 
     双指针 O(n+m)：主级别桶按时间递增且互不重叠，下窗记录升序消费。
     """
