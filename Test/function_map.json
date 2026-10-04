@@ -54,16 +54,17 @@
   }
  },
  "summary": {
-  "n_funcs": 16,
-  "n_states": 18,
+  "n_funcs": 17,
+  "n_states": 16,
   "n_classes": 0,
   "by_layer": {
-   "ORCH_E": 8,
    "DATA": 7,
+   "ORCH_E": 7,
+   "ORCH_F": 2,
    "DAPI": 1
   },
   "states_by_layer": {
-   "ORCH_E": 13,
+   "ORCH_E": 11,
    "CFG": 2,
    "DATA": 2,
    "ORCH_C": 1
@@ -72,27 +73,6 @@
  "migration_order": [
   {
    "order": 1,
-   "name": "_stocks_sub_dt_algo",
-   "wave": 1,
-   "target": "ORCH_E",
-   "depended_by": [
-    "_analyze_stock_internal",
-    "_build_sub_kl_times"
-   ],
-   "calls": [],
-   "reads": [
-    "_STOCKS_EOD",
-    "_STOCKS_MAIN_PERIOD"
-   ],
-   "writes": [],
-   "pure": false,
-   "line_start": 1577,
-   "line_end": 1600,
-   "n_lines": 24,
-   "note": "独立下窗截断边界（结束时间语义纯函数）"
-  },
-  {
-   "order": 2,
    "name": "_cache_get",
    "wave": 1,
    "target": "DATA",
@@ -103,13 +83,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 279,
-   "line_end": 281,
+   "line_start": 340,
+   "line_end": 342,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data.cache_get"
   },
   {
-   "order": 3,
+   "order": 2,
    "name": "_cache_update",
    "wave": 1,
    "target": "DATA",
@@ -120,13 +100,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 284,
-   "line_end": 292,
+   "line_start": 345,
+   "line_end": 353,
    "n_lines": 9,
    "note": "✓4 兼容壳 → app_data.cache_update（原子读改写，替代锁外逐字段改，审计 P0-3）"
   },
   {
-   "order": 4,
+   "order": 3,
    "name": "_extract_sub_level_data",
    "wave": 1,
    "target": "ORCH_E",
@@ -135,17 +115,18 @@
    ],
    "calls": [],
    "reads": [
+    "FREQ_TO_COL",
     "log"
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1244,
-   "line_end": 1497,
-   "n_lines": 254,
+   "line_start": 1280,
+   "line_end": 1546,
+   "n_lines": 267,
    "note": "子级别结果提取（254 行）"
   },
   {
-   "order": 5,
+   "order": 4,
    "name": "_get_index_belong",
    "wave": 1,
    "target": "DATA",
@@ -156,13 +137,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 237,
-   "line_end": 239,
+   "line_start": 295,
+   "line_end": 297,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 6,
+   "order": 5,
    "name": "_get_pe_ttm",
    "wave": 1,
    "target": "DATA",
@@ -173,29 +154,47 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 232,
-   "line_end": 234,
+   "line_start": 271,
+   "line_end": 273,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
+   "order": 6,
+   "name": "_get_reduction_flag",
+   "wave": 1,
+   "target": "ORCH_F",
+   "depended_by": [
+    "_extract_main_level_data"
+   ],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 276,
+   "line_end": 292,
+   "n_lines": 17,
+   "note": "股东减持计划窗口标记取数（委托 ElTdxAPI F10；无当日/非A股/失败 → active=False）"
+  },
+  {
    "order": 7,
-   "name": "_stock_dual_impl",
+   "name": "_stocks_sub_dt_algo",
    "wave": 1,
    "target": "ORCH_E",
    "depended_by": [
-    "_analyze_stock_internal"
+    "_build_sub_kl_times"
    ],
    "calls": [],
    "reads": [
-    "_STOCKS_DUAL_IMPL_ENV"
+    "_STOCKS_EOD",
+    "_STOCKS_MAIN_PERIOD"
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1530,
-   "line_end": 1538,
-   "n_lines": 9,
-   "note": "双窗 A/B 实现开关（环境变量，默认 independent）"
+   "line_start": 1627,
+   "line_end": 1650,
+   "n_lines": 24,
+   "note": "独立下窗截断边界（结束时间语义纯函数）"
   },
   {
    "order": 8,
@@ -211,8 +210,8 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 1550,
-   "line_end": 1562,
+   "line_start": 1600,
+   "line_end": 1612,
    "n_lines": 13,
    "note": "双窗周期配对校验（非法返回错误串，调用方 4xx 拒绝）"
   },
@@ -226,8 +225,8 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 272,
-   "line_end": 276,
+   "line_start": 333,
+   "line_end": 337,
    "n_lines": 5,
    "note": "✓4 兼容壳 → app_data.cache_put（LRU）"
   },
@@ -241,13 +240,28 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 242,
-   "line_end": 244,
+   "line_start": 300,
+   "line_end": 302,
    "n_lines": 3,
    "note": "✓5 兼容壳 → DataAPI/TdxAPI.collect_codes_from_vipdoc"
   },
   {
    "order": 11,
+   "name": "_fetch_pe_ttm_live",
+   "wave": 1,
+   "target": "ORCH_F",
+   "depended_by": [],
+   "calls": [],
+   "reads": [],
+   "writes": [],
+   "pure": true,
+   "line_start": 257,
+   "line_end": 263,
+   "n_lines": 7,
+   "note": "PE-TTM 取数单一入口（A股个股 eltdx 7615 / 指数·港股 腾讯）"
+  },
+  {
+   "order": 12,
    "name": "_load_stock_names_from_cache_file",
    "wave": 1,
    "target": "DATA",
@@ -256,13 +270,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 206,
-   "line_end": 208,
+   "line_start": 221,
+   "line_end": 223,
    "n_lines": 3,
    "note": "✓4 兼容壳 → app_data（AppOrch 已直连）"
   },
   {
-   "order": 12,
+   "order": 13,
    "name": "_safe_write_json_file",
    "wave": 1,
    "target": "DATA",
@@ -271,13 +285,13 @@
    "reads": [],
    "writes": [],
    "pure": true,
-   "line_start": 215,
-   "line_end": 218,
+   "line_start": 230,
+   "line_end": 233,
    "n_lines": 4,
    "note": "✓4 兼容壳 → App/AppData.safe_write_json_file"
   },
   {
-   "order": 13,
+   "order": 14,
    "name": "_build_sub_kl_times",
    "wave": 2,
    "target": "ORCH_E",
@@ -290,13 +304,13 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1603,
-   "line_end": 1631,
+   "line_start": 1653,
+   "line_end": 1681,
    "n_lines": 29,
    "note": "灰框对照表合成（上窗K线→下窗K线时间分桶，双指针）"
   },
   {
-   "order": 14,
+   "order": 15,
    "name": "_extract_main_level_data",
    "wave": 3,
    "target": "ORCH_E",
@@ -306,7 +320,8 @@
    "calls": [
     "_build_sub_kl_times",
     "_get_index_belong",
-    "_get_pe_ttm"
+    "_get_pe_ttm",
+    "_get_reduction_flag"
    ],
    "reads": [
     "FREQ_TO_COL",
@@ -314,13 +329,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 850,
-   "line_end": 1241,
-   "n_lines": 392,
+   "line_start": 928,
+   "line_end": 1277,
+   "n_lines": 350,
    "note": "主级别结果提取（357 行）"
   },
   {
-   "order": 15,
+   "order": 16,
    "name": "_analyze_stock_internal",
    "wave": 4,
    "target": "ORCH_E",
@@ -332,14 +347,11 @@
     "_cache_update",
     "_extract_main_level_data",
     "_extract_sub_level_data",
-    "_stock_dual_impl",
-    "_stocks_sub_dt_algo",
     "_validate_stock_dual_pair"
    ],
    "reads": [
     "DEBUG_COLD_START_END_DATE",
     "DEBUG_COLD_START_START_DATE",
-    "DUAL_SUB_FALLBACK_MIN",
     "FREQ_TO_COL",
     "FULL_DATA_MODE",
     "STOCKS_LOOKBACK_CONFIG",
@@ -350,13 +362,13 @@
    ],
    "writes": [],
    "pure": false,
-   "line_start": 316,
-   "line_end": 840,
-   "n_lines": 525,
+   "line_start": 377,
+   "line_end": 918,
+   "n_lines": 542,
    "note": "股票分析核心（440 行：拉取→注入→CChan→提取）"
   },
   {
-   "order": 16,
+   "order": 17,
    "name": "analyze_stock",
    "wave": 5,
    "target": "ORCH_E",
@@ -367,15 +379,15 @@
    "reads": [],
    "writes": [],
    "pure": false,
-   "line_start": 1634,
-   "line_end": 1652,
-   "n_lines": 19,
+   "line_start": 1684,
+   "line_end": 1708,
+   "n_lines": 25,
    "note": "统一分析入口（AppOrch 已有壳；无状态可双通道复用）"
   }
  ],
  "states": {
   "SYMBOL_CODE": {
-   "line": 53,
+   "line": 52,
    "kind": "init",
    "value_hint": "get_symbol_code()",
    "target": "ORCH_E",
@@ -384,7 +396,7 @@
    "writers": []
   },
   "log": {
-   "line": 56,
+   "line": 55,
    "kind": "init",
    "value_hint": "get_logger(__name__)",
    "target": "ORCH_C",
@@ -397,7 +409,7 @@
    "writers": []
   },
   "SCRIPT_DIR": {
-   "line": 80,
+   "line": 79,
    "kind": "init",
    "value_hint": "os.path.dirname(os.path.abspath(__file__))",
    "target": "CFG",
@@ -406,7 +418,7 @@
    "writers": []
   },
   "FORWARD_ADJUST_ENABLED": {
-   "line": 106,
+   "line": 105,
    "kind": "init",
    "value_hint": "app_config.forward_adjust_enabled",
    "target": "ORCH_E",
@@ -415,7 +427,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_START_DATE": {
-   "line": 109,
+   "line": 108,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_start_date",
    "target": "ORCH_E",
@@ -426,7 +438,7 @@
    "writers": []
   },
   "DEBUG_COLD_START_END_DATE": {
-   "line": 112,
+   "line": 111,
    "kind": "init",
    "value_hint": "app_config.debug_cold_start_end_date",
    "target": "ORCH_E",
@@ -437,7 +449,7 @@
    "writers": []
   },
   "FULL_DATA_MODE": {
-   "line": 131,
+   "line": 138,
    "kind": "init",
    "value_hint": "app_config.full_data_mode",
    "target": "ORCH_E",
@@ -448,7 +460,7 @@
    "writers": []
   },
   "STOCKS_LOOKBACK_CONFIG": {
-   "line": 136,
+   "line": 143,
    "kind": "init",
    "value_hint": "app_config.stocks_lookback_config",
    "target": "ORCH_E",
@@ -458,21 +470,10 @@
    ],
    "writers": []
   },
-  "DUAL_SUB_FALLBACK_MIN": {
-   "line": 141,
-   "kind": "init",
-   "value_hint": "app_config.dual_sub_fallback_min",
-   "target": "ORCH_E",
-   "note": "双窗下窗对齐不足降全量阈值（= app_config.dual_sub_fallback_min）",
-   "readers": [
-    "_analyze_stock_internal"
-   ],
-   "writers": []
-  },
   "_stocks_analysis_cache": {
-   "line": 258,
+   "line": 319,
    "kind": "init",
-   "value_hint": "app_data.stocks_analysis_cache",
+   "value_hint": "app_data.stocks_analysis_cache_raw_unsafe",
    "target": "DATA",
    "note": "✓4 分析结果 LRU（= app_data._stocks_analysis_cache）",
    "readers": [
@@ -481,7 +482,7 @@
    "writers": []
   },
   "_stocks_cache_lock": {
-   "line": 259,
+   "line": 320,
    "kind": "init",
    "value_hint": "app_data.stocks_cache_lock",
    "target": "DATA",
@@ -492,7 +493,7 @@
    "writers": []
   },
   "SAVED_POINT_COLUMNS": {
-   "line": 302,
+   "line": 363,
    "kind": "init",
    "value_hint": "AppData_SAVED_POINT_COLUMNS",
    "target": "CFG",
@@ -501,21 +502,22 @@
    "writers": []
   },
   "FREQ_TO_COL": {
-   "line": 304,
+   "line": 365,
    "kind": "init",
    "value_hint": "AppData_FREQ_TO_COL",
    "target": "ORCH_E",
    "note": "freq→选点列（6 读）→ 消费侧常量",
    "readers": [
     "_analyze_stock_internal",
-    "_extract_main_level_data"
+    "_extract_main_level_data",
+    "_extract_sub_level_data"
    ],
    "writers": []
   },
   "_SUB_FREQ_MAP": {
-   "line": 1509,
+   "line": 1568,
    "kind": "init",
-   "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m'}",
+   "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}",
    "target": "ORCH_E",
    "note": "子级别映射（2 读）",
    "readers": [
@@ -523,21 +525,10 @@
    ],
    "writers": []
   },
-  "_STOCKS_DUAL_IMPL_ENV": {
-   "line": 1527,
-   "kind": "init",
-   "value_hint": "'CHAN_STOCK_DUAL_IMPL'",
-   "target": "ORCH_E",
-   "note": "双窗 A/B 实现开关环境变量名",
-   "readers": [
-    "_stock_dual_impl"
-   ],
-   "writers": []
-  },
   "_STOCKS_DUAL_PAIRS": {
-   "line": 1542,
+   "line": 1591,
    "kind": "init",
-   "value_hint": "{'w': {'d', '30m', '5m'}, 'd': {'30m', '5m'}, '30m': {'5m'}}",
+   "value_hint": "{'w': {'d', '30m', '15m', '5m'}, 'd': {'30m', '15m', '5m'}, …",
    "target": "ORCH_E",
    "note": "股票双窗配对空间（上窗周期→可选下窗周期集合）",
    "readers": [
@@ -546,9 +537,9 @@
    "writers": []
   },
   "_STOCKS_MAIN_PERIOD": {
-   "line": 1567,
+   "line": 1619,
    "kind": "init",
-   "value_hint": "{'w': timedelta(days=7), 'd': timedelta(days=1), '30m': time…",
+   "value_hint": "{f: timedelta(seconds=FREQ_SEC_MAP[f]) for f in ('w', 'd', '…",
    "target": "ORCH_E",
    "note": "主级别单根K线覆盖时长映射",
    "readers": [
@@ -557,7 +548,7 @@
    "writers": []
   },
   "_STOCKS_EOD": {
-   "line": 1574,
+   "line": 1624,
    "kind": "init",
    "value_hint": "timedelta(hours=23, minutes=59, seconds=59, microseconds=999…",
    "target": "ORCH_E",

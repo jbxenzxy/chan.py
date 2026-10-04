@@ -29,9 +29,8 @@ import sys, os, time, threading, gc
 from datetime import datetime, timedelta
 
 # 区间套辅助函数（实现位于 BSPointList.py）：_main_bi_range（选点左肩定位，
-# _analyze_stock_internal/_extract_sub_level_data 使用）与 _stocks_red_range
-# （股票双窗口红框，_extract_main_level_data 使用）
-from BuySellPoint.BSPointList import _main_bi_range, _stocks_red_range
+# _analyze_stock_internal/_extract_sub_level_data 使用）
+from BuySellPoint.BSPointList import _main_bi_range
 
 # ============================================================
 # 配置区域 —— 中心化于配置层
@@ -144,14 +143,11 @@ FULL_DATA_MODE = app_config.full_data_mode
 STOCKS_LOOKBACK_CONFIG = app_config.stocks_lookback_config
 
 # （原 DUAL_SUB_FALLBACK_MIN「下窗对齐不足降全量」阈值已随该兜底行为一并删除：
-#  ① 独立双窗（默认）：已废除「跟随上窗区间精确截断」。无下窗选点时按下窗自身
-#     配置根数取最近 N_sub 根 —— 文件不足 N_sub 时 [-N_sub:] 即文件全量，
-#     天然就是兜底，「过少」场景不存在；有下窗选点时按 [L_sub, R]，属用户显式
-#     选窄，与单窗「选点→最新」同构，不是本阈值兜底的对象。
-#  ② legacy 联立路径（CHAN_STOCK_DUAL_IMPL=legacy，A/B 回滚基线）：仍按上窗
-#     区间 ±1 天对齐截断，但同样不再降全量。该路径若要严格「行为冻结」，
-#     是否加回属另行裁决项 —— 加回前请勿照旧条目恢复本配置键。
-#  配置键与模块常量同步移除，避免留下无人读取却仍在描述已删行为的死配置。）
+#  双窗已废除「跟随上窗区间精确截断」。无下窗选点时按下窗自身配置根数取最近
+#  N_sub 根 —— 文件不足 N_sub 时 [-N_sub:] 即文件全量，天然就是兜底，「过少」
+#  场景不存在；有下窗选点时按 [L_sub, R]，属用户显式选窄，与单窗「选点→最新」
+#  同构，不是本阈值兜底的对象。配置键与模块常量同步移除，避免留下无人读取却
+#  仍在描述已删行为的死配置。）
 
 # 期货回看根数纯函数（不依赖 tqsdk 安装，单独导入保证恒可用）：
 # TqSdkAPI 模块顶层无硬 import tqsdk，resolve_lookback_bars 读取 AppEngine
@@ -422,10 +418,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
         pair_err = _validate_stock_dual_pair(freq, sub_freq)
         if pair_err:
             return {"error": pair_err}
-        # 实现开关（CHAN_STOCK_DUAL_IMPL）：
-        #   independent = 独立下窗路径（默认）
-        #   legacy      = 多级别联立路径（快照基线/回滚通道）
-        dual_impl = _stock_dual_impl()
         # 缓存 key 约定（结构化键，见 AppData.make_*_key）：
         #   dual_main  — 主级别缓存（含 CChan 对象）
         #   dual_sub   — 子级别缓存（独立存储）
@@ -716,58 +708,49 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
     # C 操作复盘结束时间往前推，主级别 records 已先按各操作规则截断）。
     # 下窗不读取 CSV 保存的选点卡界（单窗选点不与双窗混用，双窗选点不保存）。
     if dual and sub_freq and sub_records is not None and len(records) > 0:
-        main_start = records[0]["dt"]
-        main_end = records[-1]["dt"]
-        if dual_impl == "independent":
-            # ── 独立双窗选点（2026-10-03 三期）：下窗 L 独立 ──
-            # 下窗 L（sub_start_time）优先级：显式传入（前端/选点重建）>
-            # CSV(sub_freq 列，非复盘恢复) > 方式A（跟随上窗区间，现状语义）。
-            # 有值时下窗 = [L_sub, R]（不跟随上窗；读取阶段 sub_records 已是
-            # 文件起点到 R 的全量，L_sub 早于上窗筛选起点也有数据）。
-            _sub_start_dt = None
-            if sub_start_time:
-                for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
-                    try:
-                        _sub_start_dt = datetime.strptime(sub_start_time, _fmt)
-                        break
-                    except ValueError:
-                        continue
-            if _sub_start_dt is None:
-                _sub_col = FREQ_TO_COL.get(sub_freq, "")
-                if _sub_col:
-                    _saved_sub = app_data.get_saved_point_time(qualified_code, _sub_col) or None
-                    if _saved_sub:
-                        sub_start_time = _saved_sub
-                        for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
-                            try:
-                                _sub_start_dt = datetime.strptime(_saved_sub, _fmt)
-                                break
-                            except ValueError:
-                                continue
-            if _sub_start_dt is not None:
-                sub_before = len(sub_records)
-                sub_records = [r for r in sub_records if r["dt"] >= _sub_start_dt]
-                if sub_before != len(sub_records):
-                    log.info(f"[信息] 子级别({sub_freq})独立选点筛选: 从 {sub_start_time} 起，"
-                             f"{sub_before}条 -> {len(sub_records)}条")
-            else:
-                # 方式A（无下窗选点，四期一致性原则）：下窗自己的配置根数——
-                # R 往前 N_sub 根（STOCKS_LOOKBACK_CONFIG[sub_freq]），与单窗
-                # 方式A同构；原「跟随上窗区间精确截断 + 对齐不足降全量」废除
-                # （[-N_sub:] 本身截到文件起点，天然就是兜底）。
-                _sub_cfg = STOCKS_LOOKBACK_CONFIG.get(sub_freq)
-                _sub_n = _sub_cfg[0] if _sub_cfg else 0
-                if not FULL_DATA_MODE and _sub_n and _sub_n > 0 and len(sub_records) > _sub_n:
-                    sub_before = len(sub_records)
-                    sub_records = sub_records[-_sub_n:]
-                    log.info(f"[信息] 子级别({sub_freq})方式A截断: 保留最近{_sub_n}根, "
-                             f"{sub_before}条 -> {len(sub_records)}条")
-        else:
-            # legacy：±1 天 padding（联立路径基线，行为冻结）
+        # ── 双窗选点：下窗 L 独立 ──
+        # 下窗 L（sub_start_time）优先级：显式传入（前端/选点重建）>
+        # CSV(sub_freq 列，非复盘恢复) > 方式A（跟随上窗区间，现状语义）。
+        # 有值时下窗 = [L_sub, R]（不跟随上窗；读取阶段 sub_records 已是
+        # 文件起点到 R 的全量，L_sub 早于上窗筛选起点也有数据）。
+        _sub_start_dt = None
+        if sub_start_time:
+            for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                try:
+                    _sub_start_dt = datetime.strptime(sub_start_time, _fmt)
+                    break
+                except ValueError:
+                    continue
+        if _sub_start_dt is None:
+            _sub_col = FREQ_TO_COL.get(sub_freq, "")
+            if _sub_col:
+                _saved_sub = app_data.get_saved_point_time(qualified_code, _sub_col) or None
+                if _saved_sub:
+                    sub_start_time = _saved_sub
+                    for _fmt in ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y/%m/%d"):
+                        try:
+                            _sub_start_dt = datetime.strptime(_saved_sub, _fmt)
+                            break
+                        except ValueError:
+                            continue
+        if _sub_start_dt is not None:
             sub_before = len(sub_records)
-            sub_records = [r for r in sub_records if main_start - timedelta(days=1) <= r["dt"] <= main_end + timedelta(days=1)]
+            sub_records = [r for r in sub_records if r["dt"] >= _sub_start_dt]
             if sub_before != len(sub_records):
-                log.info(f"[信息] 子级别({sub_freq})同步截断: {sub_before}条 -> {len(sub_records)}条")
+                log.info(f"[信息] 子级别({sub_freq})独立选点筛选: 从 {sub_start_time} 起，"
+                         f"{sub_before}条 -> {len(sub_records)}条")
+        else:
+            # 方式A（无下窗选点，四期一致性原则）：下窗自己的配置根数——
+            # R 往前 N_sub 根（STOCKS_LOOKBACK_CONFIG[sub_freq]），与单窗
+            # 方式A同构；原「跟随上窗区间精确截断 + 对齐不足降全量」废除
+            # （[-N_sub:] 本身截到文件起点，天然就是兜底）。
+            _sub_cfg = STOCKS_LOOKBACK_CONFIG.get(sub_freq)
+            _sub_n = _sub_cfg[0] if _sub_cfg else 0
+            if not FULL_DATA_MODE and _sub_n and _sub_n > 0 and len(sub_records) > _sub_n:
+                sub_before = len(sub_records)
+                sub_records = sub_records[-_sub_n:]
+                log.info(f"[信息] 子级别({sub_freq})方式A截断: 保留最近{_sub_n}根, "
+                         f"{sub_before}条 -> {len(sub_records)}条")
 
     # 2. 使用 chan.py 进行缠论分析
     # 复盘时：清空缓存恢复原始状态，再重新加载（与选点逻辑一致）
@@ -789,14 +772,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
         # CChan 创建：数据加载已在前面完成，此处只做数据注入和缠论分析。
         # 数据经 tdx_data_context 每请求线程局部注入，step_load 消费必须
         # 在 with 内完成（数据源实例在 step_load 内部惰性创建）。
-        _DUAL_LV_LIST = {
-            'w': [KL_TYPE.K_WEEK, KL_TYPE.K_DAY],
-            'd': [KL_TYPE.K_DAY, KL_TYPE.K_30M],
-            '30m': [KL_TYPE.K_30M, KL_TYPE.K_5M],
-            '15m': [KL_TYPE.K_15M, KL_TYPE.K_5M],
-        }
         sub_chan = None
-        if dual and sub_freq and dual_impl == "independent":
+        if dual and sub_freq:
             # ── 独立双窗：先下后上 ──────────────────────────
             # ① 先建下窗独立 CChan 并整读入运行时缓存——上窗 bsp 计算的
             #    区间套（check_nesting_divergence）从缓存读完整下窗笔结构，
@@ -837,26 +814,6 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
                 chan._stocks_dual_sub_freq = sub_freq
                 for _snapshot in chan.step_load():
                     pass
-        elif dual and sub_freq:
-            # legacy：多级别联立注入（基线路径，行为冻结）
-            lv_list = _DUAL_LV_LIST[freq]
-            with tdx_data_context({
-                _get_kl_type(freq): records,
-                _get_kl_type(sub_freq): sub_records,
-            }):
-                config.kl_data_check = False
-                chan = CChan(
-                    code=chan_code,
-                    begin_time=None,
-                    end_time=None,
-                    data_src="custom:TdxAPI.CTdxAPI",
-                    lv_list=lv_list,
-                    config=config,
-                    autype=AUTYPE.NONE,
-                    market_type="stock",
-                )
-                for _snapshot in chan.step_load():
-                    pass
         else:
             # 单窗口（或双窗口降级）：只注入主级别数据
             lv_list = [_get_kl_type(freq)]
@@ -889,25 +846,23 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
     log.info(f"[耗时] chan.py 缠论分析: {time.time()-t0:.3f}s")
 
     # 4. 提取主级别结果
-    # 独立双窗的灰框 sub_kl_times 由时间分桶合成（sub_records），
-    # legacy 联立路径走 KLU.sub_kl_list 取数（sub_records=None 区分）
+    # 双窗的灰框 sub_kl_times 由时间分桶合成（sub_records）
     result = _extract_main_level_data(chan, freq, records, market, code,
                                        dual=dual, sub_freq=sub_freq,
                                        qualified_code=qualified_code,
                                        end_date=end_date,
                                        forward_adjust_done=forward_adjust_done,
-                                       sub_records=(sub_records if (dual and sub_freq and dual_impl == "independent") else None),
+                                       sub_records=(sub_records if (dual and sub_freq) else None),
                                        start_time=start_time,
                                        include_extra=include_extra)
 
-    # 双窗口模式：提取子级别数据
-    # 独立双窗从下窗独立 CChan 提取；legacy 从联立 CChan 提取
+    # 双窗口模式：提取子级别数据（下窗独立 CChan）
     sub_result = None
     if dual and sub_freq:
-        log.info(f"[调试] 双窗口模式: dual={dual}, sub_freq={sub_freq}, impl={dual_impl}, "
+        log.info(f"[调试] 双窗口模式: dual={dual}, sub_freq={sub_freq}, "
                  f"chan类型={type(chan).__name__}")
         try:
-            sub_src_chan = sub_chan if (dual_impl == "independent" and sub_chan is not None) else chan
+            sub_src_chan = sub_chan if sub_chan is not None else chan
             sub_result = _extract_sub_level_data(sub_src_chan, sub_freq, code, market)
         except Exception as e:
             import traceback
@@ -939,8 +894,8 @@ def _analyze_stock_internal(code, freq="d", end_date=None, start_time=None, sub_
         sub_fields = {"result": sub_result}
         if cache_chan:
             sub_fields["records"] = sub_records
-            if dual_impl == "independent" and sub_chan is not None:
-                # 独立双窗下窗 CChan 一并落 dual_sub 缓存（供排查/离线整读）
+            if sub_chan is not None:
+                # 双窗下窗 CChan 一并落 dual_sub 缓存（供排查/离线整读）
                 sub_fields["chan"] = sub_chan
         _cache_update(sub_cache_key, **sub_fields)
     elif dual:
@@ -976,9 +931,8 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
     """
     从 CChan 中提取主级别的 K线、笔、分型、中枢、线段、买卖点数据。
     返回与 czsc 版本兼容的 JSON 数据结构（不含 sub 字段）。
-    sub_records: 独立双窗传入下窗记录列表——灰框 sub_kl_times 按
-    时间分桶合成（行为与联立取数一致）；None 时走联立
-    KLU.sub_kl_list 取数（legacy/单窗口）。
+    sub_records: 双窗传入下窗记录列表——灰框 sub_kl_times 按时间分桶
+    合成；None 时（单窗口）不产出 sub_kl_times。
     start_time: 显式选点时间（B 操作重建传入）。meta.saved_selection_date
     回显规则：显式选点直接回显（双窗选点不落 CSV，仅会话内回显供前端
     全量显示）；否则单窗回显 CSV 保存的选点，双窗不读 CSV（不混用）。
@@ -1006,69 +960,11 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
             "macd": round(macd["macd"], 4),
         })
 
-    def _parse_klu_dt(klu):
-        """将 KLU 的时间转为 datetime 对象，用于范围比较。"""
-        return datetime.fromtimestamp(klu.time.ts)
-
-    def _format_klu_dt(klu, out_freq):
-        """将 KLU 的时间格式化为目标频率对应的日期字符串。"""
-        out_fmt = _get_date_fmt(out_freq)
-        return klu.time.toFmtStr(out_fmt)
-
-    def _get_sub_klus(main_klu, main_freq):
-        """获取一根主级别K线真正覆盖的子级别K线序列。"""
-        if not main_klu or not hasattr(main_klu, 'sub_kl_list') or not main_klu.sub_kl_list:
-            return []
-        main_dt = _parse_klu_dt(main_klu)
-        if main_dt is None:
-            return []
-
-        if main_freq == 'w':
-            start = main_dt - timedelta(days=main_dt.weekday())
-            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
-            end = start + timedelta(days=6, hours=23, minutes=59, seconds=59, microseconds=999999)
-        elif main_freq == 'd':
-            start = main_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-            end = main_dt.replace(hour=23, minute=59, second=59, microsecond=999999)
-        elif main_freq == '30m':
-            end = main_dt
-            start = main_dt - timedelta(minutes=30) + timedelta(microseconds=1)
-        elif main_freq == '15m':
-            end = main_dt
-            start = main_dt - timedelta(minutes=15) + timedelta(microseconds=1)
-        else:
-            return list(main_klu.sub_kl_list)
-
-        valid = []
-        for sub_klu in main_klu.sub_kl_list:
-            sub_dt = _parse_klu_dt(sub_klu)
-            if sub_dt is not None and start <= sub_dt <= end:
-                valid.append(sub_klu)
-        return valid
-
-    # 双窗口模式：为每根K线添加 sub_kl_times（灰框定位用）
-    if dual and sub_freq:
-        if sub_records is not None:
-            # 独立双窗——时间分桶合成（上窗KLU无 sub_kl_list）
-            binned = _build_sub_kl_times(records, sub_records, freq, sub_freq)
-            for k, sub_times in zip(kline_data, binned):
-                k["sub_kl_times"] = sub_times
-        else:
-            # legacy 联立：从 KLU.sub_kl_list 取数（行为冻结）
-            date_to_klu = {}
-            for klc in kl_list.lst:
-                for klu in klc.lst:
-                    key = klu.time.toFmtStr(date_fmt)
-                    date_to_klu[key] = klu
-            for k in kline_data:
-                klu = date_to_klu.get(k["date"])
-                if klu and klu.sub_kl_list:
-                    sub_times = []
-                    for sub_klu in _get_sub_klus(klu, freq):
-                        sub_times.append(_format_klu_dt(sub_klu, sub_freq))
-                    k["sub_kl_times"] = sub_times
-                else:
-                    k["sub_kl_times"] = []
+    # 双窗口模式：为每根K线添加 sub_kl_times（灰框定位用，时间分桶合成）
+    if dual and sub_freq and sub_records is not None:
+        binned = _build_sub_kl_times(records, sub_records, freq, sub_freq)
+        for k, sub_times in zip(kline_data, binned):
+            k["sub_kl_times"] = sub_times
 
     # 2. 笔数据
     bi_data = []
@@ -1110,26 +1006,20 @@ def _extract_main_level_data(chan, freq, records, market, code, dual=False, sub_
                     break
         fx_a_raw_dt = ""
         fx_b_raw_dt = ""
-        a_klu = None
-        b_klu = None
         date_fmt = _get_date_fmt(freq)
         shoulder_times = _main_bi_range(bi, date_fmt)
         if shoulder_times:
-            fx_a_raw_dt, fx_b_raw_dt, a_klu, b_klu = shoulder_times
+            fx_a_raw_dt, fx_b_raw_dt, _a_klu, _b_klu = shoulder_times
 
         if not fx_a_raw_dt or not fx_b_raw_dt:
             _fx_empty_count += 1
 
-        # 红框边界（双窗口）：独立双窗用数学换算（主KLU 无联立 sub_kl_list，
-        # 以 sub_records 非空为独立实现标志）；legacy 联立路径从边界 KLU（峰/谷）的
-        # sub_kl_list 取真实子级别边界
+        # 红框边界（双窗口）：数学换算（主KLU 无联立 sub_kl_list，
+        # 日期型主级别取当日 00:00~23:59:59）
         if dual and sub_freq:
-            if sub_records is not None:
-                from BuySellPoint.BSPointList import _stocks_red_range_algo
-                fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range_algo(
-                    fx_a_raw_dt, fx_b_raw_dt, freq, sub_freq)
-            else:
-                fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range(a_klu, b_klu, sub_freq, bi)
+            from BuySellPoint.BSPointList import _stocks_red_range_algo
+            fx_a_sub_dt, fx_b_sub_dt = _stocks_red_range_algo(
+                fx_a_raw_dt, fx_b_raw_dt, freq, sub_freq)
         else:
             fx_a_sub_dt, fx_b_sub_dt = "", ""
 
@@ -1666,8 +1556,7 @@ def _extract_sub_level_data(chan, sub_freq, code, market):
 # 高级别→低级别周期映射（缺省配对；独立双窗显式配对共 6 对，
 # 未显式传 sub_freq 时按此缺省回退，保证不传参调用行为不变）
 # 缺省下窗兜底表（前端未显式传 sub_freq 时按此补默认下窗）：
-# w→d、d→30m、30m→5m 为既有默认配对；15m→5m 供 legacy 红框子级别笔优先判定
-# （AppChart.py 依据本表 values 回退取 dual_main 子级别笔）与同口径兜底使用。
+# w→d、d→30m、30m→5m、15m→5m 为既有默认配对，亦供同口径兜底使用。
 #
 # ── 为什么只针对股票、不在此拆「期货版」──────────────────────────
 # 本表是「股票」双窗口/区间套的缺省配对（股票上窗只能取 w/d/30m/15m，见
@@ -1690,23 +1579,7 @@ _SUB_FREQ_MAP = {'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}
 #   · 配对空间 6 对，sub_freq 全链路显式透传；
 #   · 灰框 sub_kl_times 后端时间分桶合成；
 #   · 红框中枢读独立下窗，缓存 miss 抛错；
-#   · 实现开关 CHAN_STOCK_DUAL_IMPL=independent|legacy。
 # ============================================================
-
-# A/B 实现开关（读取时机=每次分析，便于运行期切换与测试打桩）
-_STOCKS_DUAL_IMPL_ENV = "CHAN_STOCK_DUAL_IMPL"
-
-
-def _stock_dual_impl():
-    """股票双窗实现选择（A/B 开关）。
-
-    返回 "independent"（默认，独立下窗路径）或 "legacy"
-    （多级别联立路径，快照基线与回滚通道）。
-    非法取值一律回退 independent。
-    """
-    v = os.environ.get(_STOCKS_DUAL_IMPL_ENV, "independent").strip().lower()
-    return v if v in ("independent", "legacy") else "independent"
-
 
 # 股票周期种类（w/d/30m/15m/5m），双窗配对空间（上窗须严格大于下窗）
 # ── 为什么只针对股票、不在此拆「期货版」──────────────────────────

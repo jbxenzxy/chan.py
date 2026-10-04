@@ -4,11 +4,9 @@
   "_analyze_stock_internal": {
    "calls": [
     "_cache_get",
-    "_cache_put",
+    "_cache_update",
     "_extract_main_level_data",
     "_extract_sub_level_data",
-    "_stock_dual_impl",
-    "_stocks_sub_dt_algo",
     "_validate_stock_dual_pair"
    ],
    "depended_by": [
@@ -16,29 +14,29 @@
    ],
    "doc": "使用通达信数据源 + chan.py 进行股票/指数缠论分析（内部实现，不处理期货分流）",
    "global_decl": [],
-   "line_end": 819,
-   "line_start": 300,
-   "n_lines": 520,
+   "line_end": 918,
+   "line_start": 377,
+   "n_lines": 542,
    "params": [
     "code",
     "freq='d'",
     "end_date=None",
     "start_time=None",
+    "sub_start_time=None",
     "cache_chan=True",
     "dual=False",
     "step=None",
-    "sub_freq=None"
+    "sub_freq=None",
+    "include_extra=True"
    ],
    "pure": false,
    "reads": [
     "DEBUG_COLD_START_END_DATE",
     "DEBUG_COLD_START_START_DATE",
-    "DUAL_SUB_FALLBACK_MIN",
     "FREQ_TO_COL",
     "FULL_DATA_MODE",
     "STOCKS_LOOKBACK_CONFIG",
     "_SUB_FREQ_MAP",
-    "_saved_point_times",
     "_stocks_analysis_cache",
     "_stocks_cache_lock",
     "log"
@@ -54,8 +52,8 @@
    ],
    "doc": "灰框对照表合成：每根上窗 K 线 → 其覆盖的下窗 K 线时间列表。",
    "global_decl": [],
-   "line_end": 1609,
-   "line_start": 1581,
+   "line_end": 1681,
+   "line_start": 1653,
    "n_lines": 29,
    "params": [
     "main_records",
@@ -74,8 +72,8 @@
    ],
    "doc": "读取缓存，命中时移到末尾（LRU语义；委托 app_data）",
    "global_decl": [],
-   "line_end": 276,
-   "line_start": 274,
+   "line_end": 342,
+   "line_start": 340,
    "n_lines": 3,
    "params": [
     "key"
@@ -86,17 +84,33 @@
   },
   "_cache_put": {
    "calls": [],
-   "depended_by": [
-    "_analyze_stock_internal"
-   ],
+   "depended_by": [],
    "doc": "写入缓存，超出上限时淘汰最旧的条目（LRU语义；委托 app_data）。",
    "global_decl": [],
-   "line_end": 271,
-   "line_start": 267,
+   "line_end": 337,
+   "line_start": 333,
    "n_lines": 5,
    "params": [
     "key",
     "value"
+   ],
+   "pure": true,
+   "reads": [],
+   "writes": []
+  },
+  "_cache_update": {
+   "calls": [],
+   "depended_by": [
+    "_analyze_stock_internal"
+   ],
+   "doc": "在**同一把锁内**完成缓存条目的读-改-写（委托 app_data.cache_update）。",
+   "global_decl": [],
+   "line_end": 353,
+   "line_start": 345,
+   "n_lines": 9,
+   "params": [
+    "key",
+    "**fields"
    ],
    "pure": true,
    "reads": [],
@@ -107,8 +121,8 @@
    "depended_by": [],
    "doc": "委托 DataAPI/TdxAPI 收集 vipdoc 目录证券代码（vipdoc_dir 由调用方注入）",
    "global_decl": [],
-   "line_end": 239,
-   "line_start": 237,
+   "line_end": 302,
+   "line_start": 300,
    "n_lines": 3,
    "params": [
     "vipdoc_dir"
@@ -121,16 +135,17 @@
    "calls": [
     "_build_sub_kl_times",
     "_get_index_belong",
-    "_get_pe_ttm"
+    "_get_pe_ttm",
+    "_get_reduction_flag"
    ],
    "depended_by": [
     "_analyze_stock_internal"
    ],
    "doc": "从 CChan 中提取主级别的 K线、笔、分型、中枢、线段、买卖点数据。",
    "global_decl": [],
-   "line_end": 1219,
-   "line_start": 829,
-   "n_lines": 391,
+   "line_end": 1277,
+   "line_start": 928,
+   "n_lines": 350,
    "params": [
     "chan",
     "freq",
@@ -143,12 +158,12 @@
     "end_date=None",
     "forward_adjust_done=False",
     "sub_records=None",
-    "start_time=None"
+    "start_time=None",
+    "include_extra=True"
    ],
    "pure": false,
    "reads": [
     "FREQ_TO_COL",
-    "_saved_point_times",
     "log"
    ],
    "writes": []
@@ -160,9 +175,9 @@
    ],
    "doc": "从多级别 CChan 中提取子级别的 K线、笔、分型、中枢、线段、买卖点数据。",
    "global_decl": [],
-   "line_end": 1475,
-   "line_start": 1222,
-   "n_lines": 254,
+   "line_end": 1546,
+   "line_start": 1280,
+   "n_lines": 267,
    "params": [
     "chan",
     "sub_freq",
@@ -171,8 +186,25 @@
    ],
    "pure": false,
    "reads": [
+    "FREQ_TO_COL",
     "log"
    ],
+   "writes": []
+  },
+  "_fetch_pe_ttm_live": {
+   "calls": [],
+   "depended_by": [],
+   "doc": "PE-TTM 取数单一入口（注入 AppData，供 K 线页面打开标的时调用）。",
+   "global_decl": [],
+   "line_end": 263,
+   "line_start": 257,
+   "n_lines": 7,
+   "params": [
+    "market",
+    "code"
+   ],
+   "pure": true,
+   "reads": [],
    "writes": []
   },
   "_get_index_belong": {
@@ -182,8 +214,8 @@
    ],
    "doc": "获取单只股票的指数归属（委托 app_data）",
    "global_decl": [],
-   "line_end": 234,
-   "line_start": 232,
+   "line_end": 297,
+   "line_start": 295,
    "n_lines": 3,
    "params": [
     "market",
@@ -200,12 +232,31 @@
    ],
    "doc": "获取单只股票的 PE-TTM 值（委托 app_data）",
    "global_decl": [],
-   "line_end": 229,
-   "line_start": 227,
+   "line_end": 273,
+   "line_start": 271,
    "n_lines": 3,
    "params": [
     "market",
     "code"
+   ],
+   "pure": true,
+   "reads": [],
+   "writes": []
+  },
+  "_get_reduction_flag": {
+   "calls": [],
+   "depended_by": [
+    "_extract_main_level_data"
+   ],
+   "doc": "获取「重要股东买卖」减持标记（委托 ElTdxAPI，读通达信 F10 股东增减持计划）。",
+   "global_decl": [],
+   "line_end": 292,
+   "line_start": 276,
+   "n_lines": 17,
+   "params": [
+    "market",
+    "code",
+    "today"
    ],
    "pure": true,
    "reads": [],
@@ -216,8 +267,8 @@
    "depended_by": [],
    "doc": "从 stock_names.json 加载股票名称到内存（委托 app_data）",
    "global_decl": [],
-   "line_end": 204,
-   "line_start": 202,
+   "line_end": 223,
+   "line_start": 221,
    "n_lines": 3,
    "params": [],
    "pure": true,
@@ -229,8 +280,8 @@
    "depended_by": [],
    "doc": "先写临时文件并校验 JSON 可读，再原子覆盖（委托 app_data）",
    "global_decl": [],
-   "line_end": 214,
-   "line_start": 211,
+   "line_end": 233,
+   "line_start": 230,
    "n_lines": 4,
    "params": [
     "path",
@@ -242,33 +293,15 @@
    "reads": [],
    "writes": []
   },
-  "_stock_dual_impl": {
-   "calls": [],
-   "depended_by": [
-    "_analyze_stock_internal"
-   ],
-   "doc": "股票双窗实现选择（A/B 开关）。",
-   "global_decl": [],
-   "line_end": 1516,
-   "line_start": 1508,
-   "n_lines": 9,
-   "params": [],
-   "pure": false,
-   "reads": [
-    "_STOCKS_DUAL_IMPL_ENV"
-   ],
-   "writes": []
-  },
   "_stocks_sub_dt_algo": {
    "calls": [],
    "depended_by": [
-    "_analyze_stock_internal",
     "_build_sub_kl_times"
    ],
    "doc": "股票双窗独立下窗截断边界 —— 结束时间语义纯函数。",
    "global_decl": [],
-   "line_end": 1578,
-   "line_start": 1555,
+   "line_end": 1650,
+   "line_start": 1627,
    "n_lines": 24,
    "params": [
     "main_first_dt",
@@ -290,8 +323,8 @@
    ],
    "doc": "校验股票双窗配对（显式守卫，不做静默降级）。",
    "global_decl": [],
-   "line_end": 1540,
-   "line_start": 1528,
+   "line_end": 1612,
+   "line_start": 1600,
    "n_lines": 13,
    "params": [
     "freq",
@@ -310,134 +343,107 @@
    "depended_by": [],
    "doc": "公开分析入口：仅处理股票/指数（通达信数据源），支持 cache_chan 和 dual 双窗口。",
    "global_decl": [],
-   "line_end": 1630,
-   "line_start": 1612,
-   "n_lines": 19,
+   "line_end": 1708,
+   "line_start": 1684,
+   "n_lines": 25,
    "params": [
     "code",
     "freq='d'",
     "end_date=None",
+    "start_time=None",
+    "sub_start_time=None",
     "cache_chan=True",
     "dual=False",
     "step=None",
-    "sub_freq=None"
+    "sub_freq=None",
+    "include_extra=True"
    ],
    "pure": false,
    "reads": [],
    "writes": []
   }
  },
- "n_funcs": 15,
- "n_states": 22,
+ "n_funcs": 17,
+ "n_states": 16,
  "states": {
   "DEBUG_COLD_START_END_DATE": {
    "kind": "init",
-   "line": 112,
+   "line": 111,
    "value_hint": "app_config.debug_cold_start_end_date"
   },
   "DEBUG_COLD_START_START_DATE": {
    "kind": "init",
-   "line": 109,
+   "line": 108,
    "value_hint": "app_config.debug_cold_start_start_date"
-  },
-  "DUAL_SUB_FALLBACK_MIN": {
-   "kind": "init",
-   "line": 141,
-   "value_hint": "app_config.dual_sub_fallback_min"
   },
   "FORWARD_ADJUST_ENABLED": {
    "kind": "init",
-   "line": 106,
+   "line": 105,
    "value_hint": "app_config.forward_adjust_enabled"
   },
   "FREQ_TO_COL": {
    "kind": "init",
-   "line": 288,
+   "line": 365,
    "value_hint": "AppData_FREQ_TO_COL"
   },
   "FULL_DATA_MODE": {
    "kind": "init",
-   "line": 131,
+   "line": 138,
    "value_hint": "app_config.full_data_mode"
   },
   "SAVED_POINT_COLUMNS": {
    "kind": "init",
-   "line": 286,
+   "line": 363,
    "value_hint": "AppData_SAVED_POINT_COLUMNS"
   },
   "SCRIPT_DIR": {
    "kind": "init",
-   "line": 80,
+   "line": 79,
    "value_hint": "os.path.dirname(os.path.abspath(__file__))"
   },
   "STOCKS_LOOKBACK_CONFIG": {
    "kind": "init",
-   "line": 136,
+   "line": 143,
    "value_hint": "app_config.stocks_lookback_config"
   },
   "SYMBOL_CODE": {
    "kind": "init",
-   "line": 53,
+   "line": 52,
    "value_hint": "get_symbol_code()"
-  },
-  "_STOCKS_DUAL_IMPL_ENV": {
-   "kind": "init",
-   "line": 1505,
-   "value_hint": "'CHAN_STOCK_DUAL_IMPL'"
   },
   "_STOCKS_DUAL_PAIRS": {
    "kind": "init",
-   "line": 1520,
-   "value_hint": "{'w': {'d', '30m', '5m'}, 'd': {'30m', '5m'}, '30m': {'5m'}}"
+   "line": 1591,
+   "value_hint": "{'w': {'d', '30m', '15m', '5m'}, 'd': {'30m', '15m', '5m'}, …"
   },
   "_STOCKS_EOD": {
    "kind": "init",
-   "line": 1552,
+   "line": 1624,
    "value_hint": "timedelta(hours=23, minutes=59, seconds=59, microseconds=999…"
   },
   "_STOCKS_MAIN_PERIOD": {
    "kind": "init",
-   "line": 1545,
-   "value_hint": "{'w': timedelta(days=7), 'd': timedelta(days=1), '30m': time…"
+   "line": 1619,
+   "value_hint": "{f: timedelta(seconds=FREQ_SEC_MAP[f]) for f in ('w', 'd', '…"
   },
   "_SUB_FREQ_MAP": {
    "kind": "init",
-   "line": 1487,
-   "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m'}"
-  },
-  "_index_belong_cache": {
-   "kind": "init",
-   "line": 224,
-   "value_hint": "app_data.belong_cache"
-  },
-  "_pe_ttm_cache": {
-   "kind": "init",
-   "line": 220,
-   "value_hint": "app_data.pe_cache"
-  },
-  "_saved_point_times": {
-   "kind": "init",
-   "line": 293,
-   "value_hint": "app_data.saved_point_times"
-  },
-  "_stock_names_cache": {
-   "kind": "init",
-   "line": 200,
-   "value_hint": "app_data.names_cache"
+   "line": 1568,
+   "value_hint": "{'w': 'd', 'd': '30m', '30m': '5m', '15m': '5m'}"
   },
   "_stocks_analysis_cache": {
    "kind": "init",
-   "line": 253,
-   "value_hint": "app_data.stocks_analysis_cache"
+   "line": 319,
+   "value_hint": "app_data.stocks_analysis_cache_raw_unsafe"
   },
   "_stocks_cache_lock": {
    "kind": "init",
-   "line": 254,
+   "line": 320,
    "value_hint": "app_data.stocks_cache_lock"
   },
   "log": {
    "kind": "init",
-   "line": 56,
+   "line": 55,
    "value_hint": "get_logger(__name__)"
   }
  }

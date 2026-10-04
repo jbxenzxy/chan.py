@@ -140,9 +140,8 @@ _FIELD_DEFAULTS = {
     #   不受 VIEW_COUNT 限制（单窗上窗、双窗上窗、双窗下窗同此规则）。
     "VIEW_COUNT": 233,
     # （原「双窗口下窗对齐不足降全量」阈值 DUAL_SUB_FALLBACK_MIN 已删除：
-    #  独立双窗不再有「对齐截断后不足 N 根降全量」的分支，该键与 AppEngine
-    #  同名常量一并移除，勿照旧条目加回。注意 legacy 联立路径仍按上窗区间
-    #  ±1 天对齐（只是同样不再降全量），完整口径见 AppEngine 同注释。）
+    #  双窗不再有「对齐截断后不足 N 根降全量」的分支，该键与 AppEngine
+    #  同名常量一并移除，勿照旧条目加回。）
     # ── 双窗口缓存限额（与单窗口共用同一 LRU 池，但单独限额）──────
     # 单窗口是常用操作，缓存条目（single 键）用满 LRU 池（MAX_CACHE_SIZE=50）；
     # 双窗口非常用且条目更重（dual_main + dual_sub 两键，各含 CChan），
@@ -151,7 +150,7 @@ _FIELD_DEFAULTS = {
     "MAX_DUAL_CACHE_KEYS": 10,   # 双窗结构化缓存键上限（10键 = 5组双窗）
     # 双窗运行时下窗 CChan 缓存（stocks_sub_cache）：与上面的 dual_*
     # 结构化缓存【不是同一个缓存】——是两个独立的 dict，各有各的键和消费方：
-    #   · dual_main/dual_sub（结构化缓存）：键=(kind,市场,代码,周期,日期,实现)，
+    #   · dual_main/dual_sub（结构化缓存）：键=(kind,市场,代码,周期,日期)，
     #     消费方=API 层缓存命中（重复请求免重算），MAX_DUAL_CACHE_KEYS 管它；
     #   · stocks_sub_cache（运行时缓存）：键=代码:下窗周期（无日期/实现维度），
     #     消费方=区间套 check_nesting_divergence / 红框中枢重算 / 双窗选点重建——

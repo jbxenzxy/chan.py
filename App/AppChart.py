@@ -218,8 +218,7 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
       · dual=True 时 freq 为「双击所在窗口」周期（上窗或下窗），
         main_freq 为上窗周期（下窗选点时必传），sub_freq 为下窗周期；
       · CChan 取数按窗口定位：上窗选点读 dual_main 缓存；下窗选点读
-        独立下窗运行时缓存/dual_sub 缓存（independent）或 dual_main
-        多级别联立（legacy），miss 时回退单窗口缓存链；
+        独立下窗运行时缓存/dual_sub 缓存，miss 时回退单窗口缓存链；
       · 选点保存后同步销毁 dual_main+dual_sub 两键（双窗缓存命中不比对
         saved_selection_date，必须显式失效），重建走双窗路径（响应含
         data.sub），下窗重建半径自选点起算（CSV sub 列 → sub_saved_dt）。
@@ -257,31 +256,21 @@ def stock_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=Fal
         if dual:
             dual_main_cached = app_data.cache_get(dual_main_cache_key)
             if freq == main_freq:
-                # 上窗选点：主级别 CChan（legacy 联立含多级别，取主级别同源）
+                # 上窗选点：主级别 CChan
                 if dual_main_cached is not None and "chan" in dual_main_cached:
                     name = dual_main_cached.get("result", {}).get("meta", {}).get("name", "")
                     return dual_main_cached["chan"], name
             else:
-                # 下窗选点：independent 读独立下窗（运行时缓存 → dual_sub），
-                # legacy 读 dual_main 多级别联立的子级别
-                if _m._stock_dual_impl() == "independent":
-                    chan_obj = app_data.stocks_sub_cache_get(market + normalized_code, freq)
-                    name = ""
-                    if chan_obj is None:
-                        dual_sub_cached = app_data.cache_get(dual_sub_cache_key)
-                        if dual_sub_cached is not None:
-                            chan_obj = dual_sub_cached.get("chan")
-                            name = dual_sub_cached.get("result", {}).get("meta", {}).get("name", "")
-                    if chan_obj is not None:
-                        return chan_obj, name
-                elif dual_main_cached is not None and "chan" in dual_main_cached:
-                    try:
-                        main_chan = dual_main_cached["chan"]
-                        _ = main_chan[_m._get_kl_type(sub_freq)]
-                        name = dual_main_cached.get("result", {}).get("meta", {}).get("name", "")
-                        return main_chan, name
-                    except Exception as e:
-                        log.warning(f"[选点] legacy 联立取下窗失败: {type(e).__name__}: {e}")
+                # 下窗选点：读独立下窗（运行时缓存 → dual_sub）
+                chan_obj = app_data.stocks_sub_cache_get(market + normalized_code, freq)
+                name = ""
+                if chan_obj is None:
+                    dual_sub_cached = app_data.cache_get(dual_sub_cache_key)
+                    if dual_sub_cached is not None:
+                        chan_obj = dual_sub_cached.get("chan")
+                        name = dual_sub_cached.get("result", {}).get("meta", {}).get("name", "")
+                if chan_obj is not None:
+                    return chan_obj, name
         # 单窗口（或双窗缓存缺失回退）：单窗缓存链
         cached = app_data.cache_get(cache_key)
         if cached is None:
@@ -396,11 +385,8 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
     后端内部调用 _red_range_bi_sequence 找到被红框完全覆盖的子级别笔，再
     用 _red_range_amp 重新计算中枢，返回给前端绘制。
 
-    股票双窗实现（A/B 开关 CHAN_STOCK_DUAL_IMPL）：
-      · independent（默认）：读独立下窗 CChan（运行时缓存 → dual_sub
-        结构化缓存），miss 抛 DataFetchError（对齐期货语义）；
-      · legacy：联立缓存回退链（single → dual_main → single 主级别，
-        miss 时回退重算），行为冻结作 A/B 基线。
+    股票双窗实现：读独立下窗 CChan（运行时缓存 → dual_sub 结构化缓存），
+    miss 抛 DataFetchError（对齐期货语义）。
     """
     import re
     normalized_code = code.strip().upper()
@@ -436,90 +422,33 @@ def compute_red_range_zs(code, sub_freq="d", left_date="", right_date="", end_da
 
     date_suffix = end_date if end_date else "live"
 
-    # ── 独立双窗实现：红框中枢读「独立下窗 CChan」──
+    # ── 红框中枢读「独立下窗 CChan」──
     # 读取顺序：运行时缓存（stocks_sub_cache，双窗分析先下后上写入，最新鲜）
-    #         → dual_sub 结构化缓存（独立实现随分析落 chan，复盘态亦可整读）。
+    #         → dual_sub 结构化缓存（随分析落 chan，复盘态亦可整读）。
     # 两者皆 miss 抛领域异常（对齐期货语义：红框依赖下窗笔结构，
     # 服务重启/双窗重建间隙等异常态不静默回退，交前端提示重开双窗口）。
-    if _m._stock_dual_impl() == "independent":
-        chan_code = market + normalized_code
-        # 缓存里存的是**活着的 CChan**。`stocks_sub_cache_get`
-        # 只在「取指针」这一瞬间持锁，随后 `kl_list.bi_list` 的遍历完全在
-        # 锁外——写侧（分析线程）整条替换缓存条目时，读者可能正遍历到一半。
-        # 改为锁内取对象 + 锁内浅拷贝成快照，出锁后再遍历（do_init/整条替换
-        # 都不会就地改写旧的 CBi，故浅拷贝即等价于不可变快照）。
-        with app_data.stocks_sub_chan_guarded(chan_code, sub_freq) as chan_obj:
-            if chan_obj is None:
-                dual_sub_cached = app_data.cache_get(
-                    make_dual_sub_key(market, normalized_code, sub_freq, date_suffix))
-                if dual_sub_cached is not None:
-                    chan_obj = dual_sub_cached.get("chan")
-            if chan_obj is None:
-                log.warning(f"[red_range_zs] 独立双窗下窗缓存缺失: {chan_code} {sub_freq} "
-                            f"(date_suffix={date_suffix})")
-                raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
-            kl_list = chan_obj[_m._get_kl_type(sub_freq)]
-            bi_list = list(kl_list.bi_list)
-        date_fmt = _m._get_date_fmt(sub_freq)
-        start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
-        if start_bi is None:
-            raise AnalysisError(f"红框内无完整笔: [{left_date}, {right_date}]")
-        sliced_bis = bi_list[start_bi:end_bi + 1]
-        zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
-        return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}
-
-    # ── legacy 联立实现（A/B 基线，行为冻结）：缓存回退链 ──
-    cache_key = make_single_key(market, normalized_code, sub_freq, date_suffix)
-    cached = app_data.cache_get(cache_key)
-
-    # 双窗口：当前 sub_freq 通常是下面窗口频率，优先从 dual_main 主级别缓存中的多级别 CChan 取子级别笔列表。
-    # dual_sub 缓存只存 result/records，不存 chan；真正可用于重算中枢的 CChan 在 dual_main 缓存里。
-    if (cached is None or "chan" not in cached) and sub_freq in _m._SUB_FREQ_MAP.values():
-        for main_freq, _sub in _m._SUB_FREQ_MAP.items():
-            if _sub == sub_freq:
-                dual_main_cache_key = make_dual_main_key(market, normalized_code, main_freq, date_suffix)
-                main_cached = app_data.cache_get(dual_main_cache_key)
-                if main_cached and "chan" in main_cached:
-                    main_chan = main_cached["chan"]
-                    try:
-                        _ = main_chan[_m._get_kl_type(sub_freq)]
-                        cached = {"chan": main_chan}
-                        break
-                    except Exception as e:
-                        log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
-                if cached is None or "chan" not in cached:
-                    single_main_cache_key = make_single_key(market, normalized_code, main_freq, date_suffix)
-                    main_cached = app_data.cache_get(single_main_cache_key)
-                    if main_cached and "chan" in main_cached:
-                        main_chan = main_cached["chan"]
-                        try:
-                            _ = main_chan[_m._get_kl_type(sub_freq)]
-                            cached = {"chan": main_chan}
-                            log.info(f"[信息] compute_red_range_zs 从单窗口主级别缓存({main_freq})获取子级别({sub_freq})数据")
-                            break
-                        except Exception as e:
-                            log.warning(f"[警告] 异常: {type(e).__name__}: {e}")
-
-    if cached is None:
-        return {"error": "请先在该周期下加载K线数据"}
-    if "chan" not in cached:
-        log.info(f"[信息] 缓存中无chan对象，重新分析 {normalized_code} {sub_freq}")
-        analyze_stock(f"{market}{normalized_code}", freq=sub_freq, cache_chan=True)
-        cached = app_data.cache_get(cache_key)
-        if cached is None or "chan" not in cached:
-            return {"error": "缓存中无分析数据，请重新查询"}
-
-    chan = cached["chan"]
-    kl_list = chan[_m._get_kl_type(sub_freq)]
-    bi_list = kl_list.bi_list
-
+    chan_code = market + normalized_code
+    # 缓存里存的是**活着的 CChan**。`stocks_sub_cache_get`
+    # 只在「取指针」这一瞬间持锁，随后 `kl_list.bi_list` 的遍历完全在
+    # 锁外——写侧（分析线程）整条替换缓存条目时，读者可能正遍历到一半。
+    # 改为锁内取对象 + 锁内浅拷贝成快照，出锁后再遍历（do_init/整条替换
+    # 都不会就地改写旧的 CBi，故浅拷贝即等价于不可变快照）。
+    with app_data.stocks_sub_chan_guarded(chan_code, sub_freq) as chan_obj:
+        if chan_obj is None:
+            dual_sub_cached = app_data.cache_get(
+                make_dual_sub_key(market, normalized_code, sub_freq, date_suffix))
+            if dual_sub_cached is not None:
+                chan_obj = dual_sub_cached.get("chan")
+        if chan_obj is None:
+            log.warning(f"[red_range_zs] 双窗下窗缓存缺失: {chan_code} {sub_freq} "
+                        f"(date_suffix={date_suffix})")
+            raise DataFetchError("双窗口下窗缓存已过期，请重新打开双窗口")
+        kl_list = chan_obj[_m._get_kl_type(sub_freq)]
+        bi_list = list(kl_list.bi_list)
     date_fmt = _m._get_date_fmt(sub_freq)
-
-    # ── 步骤③：后端找被红框完全覆盖的笔 ──
     start_bi, end_bi = _red_range_bi_sequence(left_date, right_date, bi_list, sub_freq)
     if start_bi is None:
-        return {"error": f"红框内无完整笔: [{left_date}, {right_date}]"}
-
+        raise AnalysisError(f"红框内无完整笔: [{left_date}, {right_date}]")
     sliced_bis = bi_list[start_bi:end_bi + 1]
     zs_data = _red_range_amp(sliced_bis, bi_list, date_fmt)
     return {"zs": zs_data, "start_bi": start_bi, "end_bi": end_bi}

@@ -386,8 +386,6 @@ def _read_preserved_zxg_lines(path):
 # ════════════════════════════════════════════════════════════════
 # 股票分析缓存（_stocks_analysis_cache）使用结构化元组键：
 #   (kind, market, code, freq, date)
-# 双窗口键（dual_main/dual_sub）追加第 6 维 impl（independent/legacy，
-# 见 _dual_impl_tag），隔离 A/B 两种实现的缓存，防切换开关后串用。
 # 天然 hashable、可比较、无分隔符歧义（代码/周期/日期含 "_" / ":" 也不会碰撞）。
 # 期货子窗缓存（_futures_analysis_cache）使用字符串键，统一经
 # make_futures_sub_key 规范化（symbol 大写入键），消除 AppSSE/AppChart/
@@ -399,34 +397,19 @@ def make_analysis_key(kind, market, code, freq, date):
     return (kind, str(market), str(code), str(freq), str(date))
 
 
-def _dual_impl_tag():
-    """股票双窗 A/B 实现标签（dual 缓存 key 的第 6 维）。
-
-    独立(independent)与联立(legacy)两种实现的红框边界语义不同
-    （独立=数学换算，联立=KLU.sub_kl_list 真实边界），dual 缓存若
-    不区分实现，切换 A/B 开关后会串用另一实现的缓存结果（例：
-    legacy 先写缓存，independent 复跑直接命中返回联立输出）。
-    语义事实源为 AppEngine._stock_dual_impl（读
-    CHAN_STOCK_DUAL_IMPL，非法值回退 independent）；此处仅重复读同
-    一环境变量做 key 归一，不 import 引擎，避免循环依赖。
-    """
-    impl = os.environ.get("CHAN_STOCK_DUAL_IMPL", "independent").strip().lower()
-    return impl if impl in ("independent", "legacy") else "independent"
-
-
 def make_single_key(market, code, freq, date):
     """单窗口分析缓存键（date: 复盘日期 或 "live"）"""
     return make_analysis_key("single", market, code, freq, date)
 
 
 def make_dual_main_key(market, code, freq, date):
-    """双窗口主级别缓存键（追加 A/B 实现维度，independent/legacy 隔离）"""
-    return make_analysis_key("dual_main", market, code, freq, date) + (_dual_impl_tag(),)
+    """双窗口主级别缓存键"""
+    return make_analysis_key("dual_main", market, code, freq, date)
 
 
 def make_dual_sub_key(market, code, freq, date):
-    """双窗口子级别缓存键（追加 A/B 实现维度，independent/legacy 隔离）"""
-    return make_analysis_key("dual_sub", market, code, freq, date) + (_dual_impl_tag(),)
+    """双窗口子级别缓存键"""
+    return make_analysis_key("dual_sub", market, code, freq, date)
 
 
 def make_live_key(market, code, freq):

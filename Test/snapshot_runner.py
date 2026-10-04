@@ -369,25 +369,6 @@ def case(name):
     return deco
 
 
-def _force_dual_impl(value):
-    """强制股票双窗 A/B 开关（CHAN_STOCK_DUAL_IMPL），返回 restore_fn。
-
-    用途：multilevel_d_30m（legacy 基线，冻结不改）与
-    multilevel_d_30m_indep（独立实现新基线）分别锁定两种实现，
-    保证 A/B 两条路径的快照互不漂移、同时受回归守护。
-    """
-    key = "CHAN_STOCK_DUAL_IMPL"
-    orig = os.environ.get(key)
-    os.environ[key] = value
-
-    def restore():
-        if orig is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = orig
-    return restore
-
-
 @case("stock_d_full")
 def _c_stock_d_full():
     """日线全量分析：笔/段/中枢/买卖点基线（核心快照）"""
@@ -427,39 +408,19 @@ def _c_stock_d_step_m5():
 
 @case("multilevel_d_30m")
 def _c_multilevel():
-    """多级别联立（legacy 基线）：A/B 开关强制 legacy，走原联立路径
-    （dual=True 时子级别由 _SUB_FREQ_MAP 自动映射，子级别数据经
-    read_sub_level_records 通道注入，红框边界取主笔边界（峰/谷）KLU 联立
-    sub_kl_list 真实子级边界）。快照冻结于联立实现，不随独立改造漂移。"""
-    from App import AppEngine as m
-    restore_env = _force_dual_impl("legacy")
-    restore, _ = install_data_source("stock_day.json", sub_fixture="stock_60m.json")
-    try:
-        return m._analyze_stock_internal("600519", freq="d", cache_chan=False, dual=True)
-    finally:
-        restore()
-        restore_env()
-
-
-@case("multilevel_d_30m_indep")
-def _c_multilevel_indep():
-    """多级别双窗（independent 新基线）：A/B 开关强制
-    independent，下窗独立拉取独立建 CChan（先下后上）：
+    """多级别双窗基线：下窗独立拉取独立建 CChan（先下后上）：
       · 下窗按「结束时间语义」精确截断（P0）；
       · 灰框 sub_kl_times 后端时间分桶合成（P3 · D2=A）；
-      · 红框边界改数学换算 _stocks_red_range_algo（日期型主级别
-        d/w 取当日 00:00~23:59:59，语义=覆盖当日全部下窗K线，
-        与 legacy 联立真实首末根边界不同属预期差异）；
-      · 区间套 check_nesting_divergence 改读独立下窗缓存（P1）。
+      · 红框边界用数学换算 _stocks_red_range_algo（日期型主级别
+        d/w 取当日 00:00~23:59:59，语义=覆盖当日全部下窗K线）；
+      · 区间套 check_nesting_divergence 读独立下窗缓存（P1）。
     """
     from App import AppEngine as m
-    restore_env = _force_dual_impl("independent")
     restore, _ = install_data_source("stock_day.json", sub_fixture="stock_60m.json")
     try:
         return m._analyze_stock_internal("600519", freq="d", cache_chan=False, dual=True)
     finally:
         restore()
-        restore_env()
 
 
 @case("edge_gap")
