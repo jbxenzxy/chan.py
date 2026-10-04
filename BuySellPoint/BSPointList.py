@@ -949,7 +949,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             c_ext, a_ext = stroke_n._low(), stroke_a._low()
             is_lightning = c_ext >= a_ext
         if not is_lightning:
-            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 笔A、B、C 非闪电走势',
+            self._dbg_bs0(' _cal_bs0point_3rd', '跳过: 创新高/低，需重新起算',
                           c_idx=stroke_n.idx, a_idx=stroke_a.idx, c_ext=c_ext, a_ext=a_ext)
             return
 
@@ -1214,7 +1214,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
             else:
                 crossed = cur_ext < ref_ext
             if crossed:
-                self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔越过笔1极值）',
+                self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 创新高/低，需重新起算',
                               cur_idx=cur.idx, ref_idx=stroke_1.idx,
                               cur_ext=cur_ext, ref_ext=ref_ext)
                 return
@@ -1229,7 +1229,7 @@ class CMyBSPointList(CBSPointList[LINE_TYPE, LINE_LIST_TYPE]):
         #         cur_ext, prev_ext = cur._low(), prev._low()
         #         chain_ok = cur_ext >= prev_ext
         #     if not chain_ok:
-        #         self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 非闪电走势（回调笔未逐级收窄）',
+        #         self._dbg_bs0(' _cal_bs0point_nth_ozs_57th', '跳过: 创新高/低，需重新起算（回调笔未逐级收窄）',
         #                       cur_idx=cur.idx, prev_idx=prev.idx,
         #                       cur_ext=cur_ext, prev_ext=prev_ext)
         #         return
