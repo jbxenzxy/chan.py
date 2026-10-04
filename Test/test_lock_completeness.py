@@ -54,9 +54,15 @@ v6 版只认形态 ①，另外两种整片在视野外——AppRefresh.py 那�
 import ast
 import os
 import sys
+import tempfile
 
 _HERE = os.path.dirname(os.path.abspath(__file__))            # .../Test
 _REPO_ROOT = os.path.dirname(_HERE)                            # 仓库根
+
+# 自证探针文件名前缀。探针落点**必须在仓库外**的临时目录（理由见
+# `_scan_raw_exit_refs` 的 docstring）；main ⑦ 用本前缀检测仓库里是否
+# 有历史残留——残留会被 §⑥ 全仓扫描当成真实越权引用而报一条假红。
+_PROBE_PREFIX = "_selftest_"
 
 _APPDATA = os.path.join(_REPO_ROOT, "App", "AppData.py")
 
@@ -561,7 +567,7 @@ def _iter_attrs_with_owner(tree):
     return out
 
 
-def _scan_raw_exit_refs(stats=None):
+def _scan_raw_exit_refs(stats=None, root=None):
     """默认拒绝：除白名单外，全仓不得出现 `*_raw_unsafe` 出口引用。
 
     为什么扫**全仓**而不是那 9 个 SCAN_MODULES：新增模块（哪怕是新的服务层
@@ -569,22 +575,38 @@ def _scan_raw_exit_refs(stats=None):
     系统性失守，故覆盖面宁可大。
     排除两处：本文件（校验器自身要写这些名字）与 AppData.py（出口定义处）。
 
+    root：扫描根，默认仓库根。**自证必须传仓库外的临时目录**——自证要喂
+    「真实文件」走完整扫描链路（否则自证只是空转，判别力为零），但探针的
+    落点**绝不能**在仓库内：本函数扫的是全仓，探针一旦写进仓库，进程被
+    Ctrl+C / 超时强杀时 `finally` 不执行、残片留盘，**下一次全量门禁就会把
+    残片当成真实越权引用报红**（2026-10-04 实测复现过这条假红）。
+    故此处开 root 口子，自证把探针写进 `tempfile.TemporaryDirectory()`：
+    真实文件链路照走，被测树零写入。
+
     stats：可选 dict，收集「读不到 / 解析不了」而跳过的文件（(rel, 异常类名)）。
     「扫不到」不等于「扫过且干净」——09181 上的 repro_n2_bare_property.py
     就是活生生的语法坏文件，静默 continue 会让护栏假装全覆盖，故调用方须
     把跳过数当一条独立断言（见 main ⑥）。
     """
     bad = []
+    root = root or _REPO_ROOT
     self_base = os.path.basename(__file__)
-    appdata_rel = os.path.relpath(_APPDATA, _REPO_ROOT).replace(os.sep, "/")
-    for dp, dn, fn in os.walk(_REPO_ROOT):
+    try:
+        # 自证用的临时 root 可能与仓库**不同盘**（temp 在 C:、仓库在 D:），
+        # 跨盘 relpath 抛 ValueError——兜底为 None（该 root 下本就没有
+        # AppData.py，无需排除；下面的 `rel == appdata_rel` 永不成立）。
+        # 注意 `rel` 的基准也随之换成 root，两者必须同源。
+        appdata_rel = os.path.relpath(_APPDATA, root).replace(os.sep, "/")
+    except ValueError:
+        appdata_rel = None
+    for dp, dn, fn in os.walk(root):
         dn[:] = [d for d in dn
                  if d not in ("__pycache__", ".git", ".venv", "node_modules")]
         for f in fn:
             if not f.endswith(".py"):
                 continue
             path = os.path.join(dp, f)
-            rel = os.path.relpath(path, _REPO_ROOT).replace(os.sep, "/")
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
             base = os.path.basename(path)
             if base == self_base or rel == appdata_rel:
                 continue
@@ -608,24 +630,23 @@ def _scan_raw_exit_refs(stats=None):
 def _selfcheck_raw_exit():
     """§⑥ 扫描器自证：喂真实文件，证「该报的报、该放的放」"""
     out = []
-    probe = os.path.join(_HERE, "_selftest_raw_exit_probe.py")
     name = sorted(RAW_EXIT_NAMES)[0] if RAW_EXIT_NAMES else "names_cache_raw_unsafe"
     src = ('# -*- coding: utf-8 -*-\n'
            'from App.AppData import app_data\n'
            '\n'
            'def sneaky_iterate():\n'
            '    return [k for k in app_data.%s]\n' % name)
-    try:
-        with open(probe, "w", encoding="utf-8") as fh:
+    probe_name = _PROBE_PREFIX + "raw_exit_probe.py"
+    # 探针写在**仓库外**的临时目录（理由见 _scan_raw_exit_refs docstring）：
+    # 真实文件链路照走，被测树零写入，进程被强杀也不留残片。
+    with tempfile.TemporaryDirectory(prefix="lock_selfcheck_") as tmp:
+        with open(os.path.join(tmp, probe_name), "w", encoding="utf-8") as fh:
             fh.write(src)
-        got = [(o, a) for _r, _l, o, a in _scan_raw_exit_refs()
-               if _r.endswith("_selftest_raw_exit_probe.py")]
+        got = [(o, a) for _r, _l, o, a in _scan_raw_exit_refs(root=tmp)
+               if _r.endswith(probe_name)]
         out.append((got == [("sneaky_iterate", name)],
                     f"§⑥ 端到端抓到未登记引用 {got}"
                     f"（期望 [('sneaky_iterate', '{name}')]）"))
-    finally:
-        if os.path.exists(probe):
-            os.remove(probe)
 
     # 白名单里的 3 处真实文件必须**不被**误报（否则护栏自身会假红）
     real = _scan_raw_exit_refs()
@@ -728,7 +749,9 @@ def main():
             results.append(
                 f"[FAIL] 裸出口越权引用 {rel}:{lineno} {owner} → .{attr}"
                 f"（须先登记进 RAW_EXIT_ALLOWLIST 并写明理由；"
-                f"否则请改用加锁快照出口 names_snapshot() 等）")
+                f"否则请改用加锁快照出口 names_snapshot() 等。"
+                f"若路径形如 Test/{_PROBE_PREFIX}*.py，说明那是**自证探针残留**"
+                f"（不是真实缺陷），删掉该文件即可——见 ⑦）")
     elif len(RAW_EXIT_NAMES) == RAW_EXIT_EXPECTED_N:
         results.append(
             f"[PASS] 裸出口默认拒用：{len(RAW_EXIT_NAMES)} 个 `*_raw_unsafe` 出口"
@@ -736,6 +759,25 @@ def main():
 
     for ok, msg in _selfcheck_raw_exit():
         results.append(f"[{'PASS' if ok else 'FAIL'}] 扫描器自证：{msg}")
+
+    # ⑦ 自证探针不得残留进仓库。
+    # 本用例的自证要「喂真实文件」走完整链路，历史版本把探针写在 Test/ 下；
+    # 进程被 Ctrl+C / 超时强杀时 finally 不执行 ⇒ 残片留盘 ⇒ 下一次全量门禁
+    # 的 §⑥ 全仓扫描把残片当成真实越权引用而报红（一条与改动无关的假红）。
+    # 现在探针落点已移到仓库外 temp，本断言负责兜住：① 历史遗留；② 日后
+    # 有人把探针又写回仓库（那时本断言会直接点名，不必再去猜 §⑥ 的红是什么）。
+    residue = sorted(f for f in os.listdir(_HERE)
+                     if f.startswith(_PROBE_PREFIX) and f.endswith(".py"))
+    if residue:
+        results.append(
+            f"[FAIL] 仓库内残留自证探针 {residue}——探针含裸出口/别名引用，"
+            f"会被 §⑥ 全仓扫描当成真实越权引用报红。直接删除即可；"
+            f"若反复出现，说明自证又写回了仓库（落点应是 "
+            f"tempfile.TemporaryDirectory()）")
+    else:
+        results.append(
+            f"[PASS] 仓库内无自证探针残留（{_PROBE_PREFIX}*.py 计数 0；"
+            f"自证落点在仓库外临时目录）")
 
     print("\n".join(results))
     failed = [r for r in results if r.startswith("[FAIL]")]
@@ -795,7 +837,10 @@ def f_bare_iter():                  # 应被判违规
     # 形态① + ②③ 端到端自证：写一个**真实文件**走完整扫描链路。
     # 只测「扫出问题」不够，还要证「问题摆在面前时真能扫出来」——
     # 否则扫描器一旦失灵，产出的是永假的 PASS（指导书）。
-    probe = os.path.join(_HERE, "_selftest_probe.py")
+    # 同上：探针落点在**仓库外**的临时目录（见 _scan_raw_exit_refs docstring），
+    # 这样即便进程被强杀、清理没跑到，残片也留在系统 temp 而非被测树里。
+    probe_dir = tempfile.TemporaryDirectory(prefix="lock_selfcheck_")
+    probe = os.path.join(probe_dir.name, _PROBE_PREFIX + "probe.py")
     src = '''# -*- coding: utf-8 -*-
 """自证探针（临时文件，扫完即删）——故意放三种形态的违规与正例"""
 from App.AppData import app_data
@@ -865,6 +910,7 @@ class Probe:
     finally:
         if os.path.exists(probe):
             os.remove(probe)
+        probe_dir.cleanup()          # 临时目录整体回收（在仓库外，残留无害）
     return out
 
 
