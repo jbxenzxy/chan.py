@@ -85,7 +85,7 @@ if SCRIPT_DIR not in sys.path:
 # ============================================================
 try:
     from Chan import CChan
-    from Common.CEnum import AUTYPE, FREQ_SEC_MAP, KL_TYPE, FX_TYPE
+    from Common.CEnum import AUTYPE, FREQ_SEC_MAP, FX_TYPE
 except ImportError as e:
     log.error(f"\n[错误] chan.py 导入失败: {e}")
     log.info(f"[提示] 请确保 CHAN_PATH = r'{app_config.chan_path}' 指向正确的 chan.py 仓库目录")
