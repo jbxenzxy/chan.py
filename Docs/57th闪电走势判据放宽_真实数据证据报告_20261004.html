@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<title>57th 闪电走势判据放宽 —— 真实数据证据报告</title>
+<style>
+:root{--fg:#1f2328;--muted:#6a737d;--line:#e3e6ea;--bg:#ffffff;--soft:#f7f8fa;
+      --red:#c0392b;--gray:#8c8c8c;--ok:#1a7f37}
+*{box-sizing:border-box}
+body{margin:0;padding:32px 20px 64px;background:#fff;color:var(--fg);
+  font:14px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+.wrap{max-width:920px;margin:0 auto}
+h1{font-size:23px;margin:0 0 6px}
+h2{font-size:17px;margin:34px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+h3{font-size:14px;margin:20px 0 8px;color:#333}
+sub{color:var(--muted);display:block;font-size:13px}
+code{background:var(--soft);padding:1px 5px;border-radius:4px;
+  font-family:Consolas,Menlo,monospace;font-size:12.5px}
+table{border-collapse:collapse;width:100%;margin:8px 0 4px;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:middle}
+th{background:var(--soft);font-weight:600}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi{display:flex;gap:12px;flex-wrap:wrap;margin:14px 0}
+.card{flex:1 1 190px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;background:#fff}
+.card .v{font-size:22px;font-weight:700;letter-spacing:-.3px}
+.card .k{color:var(--muted);font-size:12.5px}
+.note{background:var(--soft);border-left:3px solid #d0d7de;padding:10px 14px;border-radius:0 6px 6px 0;margin:12px 0}
+.ok{color:var(--ok);font-weight:600}
+ul{margin:6px 0 6px 20px;padding:0}
+li{margin:2px 0}
+.cols{display:flex;gap:24px;flex-wrap:wrap}
+.cols>div{flex:1 1 220px}
+.cap{color:var(--muted);font-size:12.5px;margin:2px 0 0}
+</style></head><body><div class="wrap">
+
+<h1>57th 闪电走势判据放宽 —— 真实数据证据报告</h1>
+<sub>口径：本机通达信 vipdoc 全 A 股**日线**，同一份代码跑两遍（只差 ㈠ 段口径）·
+12/16 进程 · 零网络 · 生成于 2026-10-04</sub>
+
+<h2>1. 结论先说</h2>
+<div class="kpi">
+  <div class="card"><div class="v">5,224 / 5,224</div><div class="k">扫描股票数 / 错误数 0</div></div>
+  <div class="card"><div class="v">102,854</div><div class="k">57th 分支进入次数（覆盖 5,176 只）</div></div>
+  <div class="card"><div class="v">725</div><div class="k">放宽后新增的 57th 0 类点</div></div>
+  <div class="card"><div class="v" style="color:#1a7f37">0</div><div class="k">「仅严格有」的 0 类点（超集违例）</div></div>
+</div>
+<div class="note">
+<b>悬案结论</b>：57th 分支在真实行情里<b>不是走不到</b> —— 全 A 股日线中被进入
+<b>102,854</b> 次、覆盖 <b>5,176</b> 只（占 5224 只的 99.1%）。
+此前「零覆盖」的准确含义是：<b>门禁里 8 个快照回归样本全是合成 K 线，不含该形态</b>，
+所以快照全绿证不了这次改动 —— 与「代码不可达」是两回事。
+</div>
+
+<h2>2. 两口径全量对照（逐只、逐日期）</h2>
+<table>
+<tr><th>口径</th><th class="n">扫描</th><th class="n">错误</th><th class="n">耗时</th>
+    <th class="n">0 类点总数</th><th class="n">57th 进入</th></tr>
+<tr><td>宽松（改后）</td><td class="n">5,224</td><td class="n">0</td>
+    <td class="n">294.5s</td><td class="n">10,402</td><td class="n">102,854</td></tr>
+<tr><td>严格（改前）</td><td class="n">5,224</td><td class="n">0</td>
+    <td class="n">289.0s</td><td class="n">9,677</td><td class="n">102,854</td></tr>
+</table>
+<p class="cap">「57th 进入」两口径<b>完全相同</b> —— 放宽的是进入之后的㈠段闸门，
+不改变该分支的可达性。这正是「只在 57th 内部生效」的第一层证据。</p>
+
+<h2>3. 0 类点按分支归属：只有 57th 变了</h2>
+<table>
+<tr><th>分支</th><th class="n">进入次数</th><th class="n">产出 T0 宽松</th>
+    <th class="n">产出 T0 严格</th><th class="n">放宽新增</th><th>对比</th></tr>
+<tr><td><code>3rd</code></td><td class='n'>87,809</td><td class='n'>4,902</td><td class='n'>4,902</td><td class='n'><b>0</b></td><td><span style="display:inline-block;height:14px;width:260px;background:#c0392b;border-radius:3px;vertical-align:middle"></span><span style='color:#b08968'>宽松</span><br><span style="display:inline-block;height:14px;width:260px;background:#8c8c8c;border-radius:3px;vertical-align:middle"></span><span style='color:#7a7a7a'>严格</span></td></tr>
+<tr><td><code>4th</code></td><td class='n'>74,066</td><td class='n'>1,948</td><td class='n'>1,948</td><td class='n'><b>0</b></td><td><span style="display:inline-block;height:14px;width:103px;background:#c0392b;border-radius:3px;vertical-align:middle"></span><span style='color:#b08968'>宽松</span><br><span style="display:inline-block;height:14px;width:103px;background:#8c8c8c;border-radius:3px;vertical-align:middle"></span><span style='color:#7a7a7a'>严格</span></td></tr>
+<tr><td><code>nzs</code></td><td class='n'>325,265</td><td class='n'>990</td><td class='n'>990</td><td class='n'><b>0</b></td><td><span style="display:inline-block;height:14px;width:53px;background:#c0392b;border-radius:3px;vertical-align:middle"></span><span style='color:#b08968'>宽松</span><br><span style="display:inline-block;height:14px;width:53px;background:#8c8c8c;border-radius:3px;vertical-align:middle"></span><span style='color:#7a7a7a'>严格</span></td></tr>
+<tr style="background:#fff7e6"><td><code>57th</code></td><td class='n'>102,854</td><td class='n'>1,190</td><td class='n'>465</td><td class='n'><b>+725</b></td><td><span style="display:inline-block;height:14px;width:63px;background:#c0392b;border-radius:3px;vertical-align:middle"></span><span style='color:#b08968'>宽松</span><br><span style="display:inline-block;height:14px;width:25px;background:#8c8c8c;border-radius:3px;vertical-align:middle"></span><span style='color:#7a7a7a'>严格</span></td></tr>
+<tr><td><code>68th</code></td><td class='n'>80,874</td><td class='n'>1,372</td><td class='n'>1,372</td><td class='n'><b>0</b></td><td><span style="display:inline-block;height:14px;width:73px;background:#c0392b;border-radius:3px;vertical-align:middle"></span><span style='color:#b08968'>宽松</span><br><span style="display:inline-block;height:14px;width:73px;background:#8c8c8c;border-radius:3px;vertical-align:middle"></span><span style='color:#7a7a7a'>严格</span></td></tr>
+</table>
+<p class="cap">3rd / 4th / nzs / 68th 四条分支两口径<b>逐项一致</b>（新增全为 0）
+⇒ 改动的边界严格落在 57th 内部，没有外溢到其它 0 类点判据。</p>
+
+<h2>4. 超集不变量（端到端实证，不只是逻辑层）</h2>
+<table>
+<tr><th>指标</th><th class="n">宽松</th><th class="n">严格</th><th class="n">差值</th></tr>
+<tr><td>0 类点总数</td><td class="n">10,402</td><td class="n">9,677</td><td class="n">+725</td></tr>
+<tr><td>其中 57th 分支贡献</td><td class="n">1190</td><td class="n">465</td><td class="n">+725</td></tr>
+<tr><td>「仅宽松有」的 0 类点（日期级）</td><td class="n">725</td><td class="n">—</td><td class="n">—</td></tr>
+<tr style="background:#fff7e6"><td><b>「仅严格有」的 0 类点（日期级）</b></td>
+    <td class="n">—</td><td class="n"><b>0</b></td>
+    <td class="n"><b>0（严格 ⊆ 宽松）</b></td></tr>
+</table>
+<p class="cap">5224 只 × 逐日期逐项比对：放宽只增不减，<code>严格通过 ⊄ 宽松通过</code> 的反例为 <b>0</b>。
+逻辑层 640 组枚举给出的超集不变量，在真实数据上得到同向印证。</p>
+
+<h3>放宽影响面</h3>
+<table>
+<tr><th class="n">多产出 T0 的股票数</th><th class="n">少产出 T0 的股票数</th>
+    <th class="n">新增 T0 合计</th><th class="n">占全市场 0 类点</th></tr>
+<tr><td class="n">496 / 5,224</td><td class="n">0</td>
+    <td class="n">+725</td><td class="n">+725 / 10,402 = 7.0%</td></tr>
+</table>
+
+<h3>新增最多的样本（按「多产出的 T0 数」排）</h3>
+<table>
+<tr><th>股票</th><th class="n">新增 T0</th><th class="n">57th 进入</th>
+    <th class="n">57th T0 宽松</th><th class="n">57th T0 严格</th></tr>
+<tr><td><code>sz002190</code></td><td class='n'>6</td><td class='n'>30</td><td class='n'>6</td><td class='n'>0</td></tr>
+<tr><td><code>sz002278</code></td><td class='n'>5</td><td class='n'>27</td><td class='n'>5</td><td class='n'>0</td></tr>
+<tr><td><code>sz000691</code></td><td class='n'>5</td><td class='n'>26</td><td class='n'>5</td><td class='n'>0</td></tr>
+<tr><td><code>sh688353</code></td><td class='n'>5</td><td class='n'>16</td><td class='n'>6</td><td class='n'>1</td></tr>
+<tr><td><code>sz301079</code></td><td class='n'>4</td><td class='n'>28</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sz301066</code></td><td class='n'>4</td><td class='n'>25</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sz301063</code></td><td class='n'>4</td><td class='n'>38</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sz300522</code></td><td class='n'>4</td><td class='n'>17</td><td class='n'>5</td><td class='n'>1</td></tr>
+<tr><td><code>sz300329</code></td><td class='n'>4</td><td class='n'>29</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sz300106</code></td><td class='n'>4</td><td class='n'>41</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sh688708</code></td><td class='n'>4</td><td class='n'>13</td><td class='n'>4</td><td class='n'>0</td></tr>
+<tr><td><code>sh688296</code></td><td class='n'>4</td><td class='n'>19</td><td class='n'>4</td><td class='n'>0</td></tr>
+</table>
+
+<h2>5. 冻成端到端红线的天然样本：sz002190</h2>
+<p>取判别力最强的一只 —— 严格口径下 57th 的 T0 产出<b>归零</b>，宽松 6 个，
+一刀切得最干净。已冻结为 <code>Test/fixtures_real/sz002190_d.json</code>
+（1393 根日线，2021-01-04 ~ 2026-09-30，sha256 写进 manifest）。</p>
+<table>
+<tr><th></th><th class="n">57th 进入</th><th class="n">57th 产出 T0</th><th class="n">0 类点落点</th></tr>
+<tr><td>宽松（当前源码）</td><td class="n">30</td><td class="n">6</td>
+    <td class="n">8 个</td></tr>
+<tr><td>严格（同一样本换口径）</td><td class="n">30</td><td class="n">0</td>
+    <td class="n">2 个</td></tr>
+</table>
+<div class="cols">
+  <div><h3>宽松：8 个 0 类点</h3><ul><li><code>2023/04/27</code></li><li><code>2023/04/28</code></li><li><code>2025/07/17</code></li><li><code>2025/07/18</code></li><li><code>2025/07/21</code></li><li><code>2025/07/22</code></li><li><code>2025/08/18</code></li><li><code>2025/08/19</code></li></ul></div>
+  <div><h3>严格：2 个 0 类点</h3><ul><li><code>2023/04/27</code></li><li><code>2023/04/28</code></li></ul>
+    <p class="cap">严格下 57th 一个都不产出。</p></div>
+</div>
+
+<h2>6. 新增护栏与门禁状态</h2>
+<table>
+<tr><th>护栏</th><th>层次</th><th>钉什么</th></tr>
+<tr><td><code>test_bs0_ozs57_lightning.py</code></td><td>逻辑层</td>
+    <td>源码抽段 + stub 枚举 640 组：超集不变量 + 放宽面非空（不依赖任何样本）</td></tr>
+<tr><td><code>test_bs0_ozs57_realdata.py</code></td><td>端到端</td>
+    <td>真实行情冻结切片：可达（进入 30 次）→ 产出与冻结基线一致 → 换回严格口径即归零，
+    且其它 4 条分支产出逐项不变</td></tr>
+</table>
+<p>变异自证：把㈠段<b>临时换回严格实现</b>后，端到端用例变红（<code>0 类点落点日期</code>、
+<code>57th T0 数</code> 两条断言 FAIL，RC=1）；逐字节还原后重跑转绿。</p>
+<div class="note">
+全量门禁 <b class="ok">153 / 153 通过</b>（GATE_RC=0）；两测试入口覆盖自证
+（<code>gate_component_count</code>）通过：发现 152 支 / 登记 153 条 / 无孤儿无悬空。
+</div>
+
+<p class="cap" style="margin-top:28px">
+原始数据：<code>scan_all_d.json</code>（宽松）/ <code>scan_strict_d.json</code>（严格），
+每只保留 0 类点日期、分支进入/产出增量与 57th/68th 命中明细。
+</p>
+</div></body></html>
