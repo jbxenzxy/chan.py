@@ -27,6 +27,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from App.AppErrors import AppError, BadRequestError
+from App.AppUtils import STOCK_MARKETS
 
 # 0123 类买卖点（Q3）：BSP_TYPE 的字面值（CEnum.T0/T1/T2/T3）
 _TPSL_MAIN_TYPES = ("0", "1", "2", "3")
@@ -99,7 +100,9 @@ def compute_stock_tpsl(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     bsp: Dict[str, Any] = body.get("bsp") or {}
 
     # ── 校验（客户端输入问题 → 400）─────────────────────────────────
-    if not code or "." in code or code[:2].lower() not in ("sh", "sz", "bj", "hk"):
+    #    市场前缀取自 `App.AppUtils.STOCK_MARKETS`（单一事实源，与回测入口
+    #    `AppBacktest._split_code` 同一份）：页面能打开的标的，两个入口都必须放行。
+    if not code or "." in code or code[:2].lower() not in STOCK_MARKETS:
         raise BadRequestError("非股票代码: {!r}".format(code))
     if not isinstance(klines, list) or not klines:
         raise BadRequestError("klines 为空")

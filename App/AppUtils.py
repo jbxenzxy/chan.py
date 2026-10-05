@@ -55,6 +55,18 @@ _HK_HZ_TO_LETTER = {
     "HZ5489": "HSIDI",   # 恒生创新药指数（Hang Seng Innovative Drug）
 }
 
+# 股票页（非期货）可选中的市场前缀 —— **单一事实源**。
+#   判定「是不是股票页标的」的三处都从这里取，不许各抄一份：
+#     ① 本模块 `_get_market_code` 的标准写法解析（`market+code`）；
+#     ② `App/AppBacktest.py::_split_code`（回测入口的入参校验）；
+#     ③ `App/AppTPSL.py::build_plan`（止盈止损入口的入参校验）。
+#   漏一个市场的后果：那个市场的标的在该按钮上**必 400**，而 `is_index` 却认识它
+#   （页面「成分股」已按指数置灰）—— 两处自相矛盾，且报错只写"未知市场前缀"，
+#   从错误信息看不出是白名单漏了（ds 就是这么漏掉的：2026-10-05 审核发现）。
+#   `ds` = 通达信扩展/中证指数段（如 ds932000 中证2000，`AppChart` 预设列表里有）。
+#   本元组的市场集合必须与 `is_index` 的覆盖一致：sh / sz / bj / hk / ds。
+STOCK_MARKETS = ("sh", "sz", "bj", "hk", "ds")
+
 
 def _get_stock_name(market, code):
     """获取股票名称（委托 app_data.get_stock_name）"""
@@ -110,7 +122,7 @@ def _get_stock_market_code(code):
 
     # ── 唯一标准数字写法：market(小写) + code(4~6位数字)，无连接符 ──
     m = re.match(r'^([a-z]{2})(\d{4,6})$', code)
-    if m and m.group(1) in ('sh', 'sz', 'hk', 'bj', 'ds'):
+    if m and m.group(1) in STOCK_MARKETS:
         mkt, c = m.group(1), m.group(2)
         if mkt == 'hk' and len(c) == 4:
             return mkt, '0' + c   # 港股 4 位补零（通达信文件统一 5 位）
@@ -179,6 +191,9 @@ def is_index(market, code):
       - hk: hk+指数名（HSTECH/HSI/HSCEI/HSCCI 等字母代码；数字代码为个股）
       - bj: 北交所股票，非指数
     前端灰化「成分股」只认此结果，不再靠 code 正则自行推断。
+
+    市场集合与 `STOCK_MARKETS` 必须一致（股票页可选中的市场）—— 改这里就要一起看
+    那里，否则又会出现「入口白名单拒绝、本函数却认识」的自相矛盾（ds 的旧账）。
     """
     if not market or not isinstance(code, str):
         return False

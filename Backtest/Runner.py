@@ -39,7 +39,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .ExitParams import STOCK_EXIT_PARAMS, TARGET_AMOUNT, round_trip_cost, shares_for
 from .Filter import bsp_type_allowed
-from .State import State
+from .State import State, next_state
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -381,7 +381,11 @@ def run(
                     if not chk.only_update:
                         _close_trade(result, pos, chk, bar.date, frame)
                         pos = None
-                        state = State.FLAT
+                        # 状态转移一律经 `next_state()`（状态机的**唯一**改写点，
+                        # 由 `Test/test_bt10_state_machine.py` 的 AST 断言钉死）。
+                        # 此处必为 IN_TRADE（外层 `state is State.IN_TRADE` 已保证）⇒ exit_ 合法；
+                        # 万一后来有人把这段挪到 FLAT 分支下，这里立刻抛错而不是静默变四态机。
+                        state = next_state(state, exit_=True)
                         # ★ 不 continue（Q11）：同根允许再开新仓
 
             # 2️⃣ 再看本帧新出现的信号（PRE 过滤 → 状态机）
@@ -414,7 +418,9 @@ def run(
                     shares=shares_for(entry, full_code, tgt),
                     entry_frame=frame,
                 ))
-                state = State.IN_TRADE
+                # 此处必为 FLAT（上面的 `if state is State.IN_TRADE: … continue`
+                # 已把持仓态挡掉）⇒ entry 合法；非法态会当场抛错（同 exit_ 那条）。
+                state = next_state(state, entry=True)
                 break                                  # 一帧最多开一笔
 
     # 3️⃣ 收尾：给跑到末根仍未平仓的笔打上**估值**（截止最后一根 K 线收盘价）。

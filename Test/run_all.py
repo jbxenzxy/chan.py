@@ -725,6 +725,13 @@ COMPONENTS = [
     ("bt09_display_labels",
      [sys.executable, os.path.join("Backtest", "Test",
                                    "test_bt09_display_labels.py")]),
+    # 两态状态机 + 「唯一改写点」护栏（v1.19）：`State.next_state()` 的真值表穷举
+    # （4 合法 + 4 非法）、`Runner.py` 的状态**只能**经它改（AST 断言 `state = State.X`
+    # 仅 1 处、`next_state(` 恰 2 处）+ 判别力自证。起因见 v1.18 审核结论 §4.2：
+    # docstring 写"唯一改写点"而实际零调用 = 三个 fail-fast 分支从没跑过。
+    ("bt10_state_machine",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt10_state_machine.py")]),
     # 股票页「回测」端到端契约（设计文档 §4）：**App 边界**能不能把页面格式的
     # klines（斜杠日期、无 dt）还原成 records —— 与 bt06 共用同一批冻结切片，
     # 故引擎侧与页面侧是**同一份样本**。覆盖响应形状 / 口径披露三项自洽 /

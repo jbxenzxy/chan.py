@@ -60,7 +60,7 @@ from App.AppErrors import AppError, BadRequestError
 # 页面级「是不是指数」的单一事实源（同时驱动 meta.is_index 与前端「成分股」置灰）。
 # 回测面板的指数徽标必须与它同源 —— 否则会出现「成分股按钮已置灰、回测面板却仍在
 # 报成本倍率」的自相矛盾。别名 `_app_is_index` 避免与响应字段 `is_index` 撞名。
-from App.AppUtils import is_index as _app_is_index
+from App.AppUtils import STOCK_MARKETS, is_index as _app_is_index
 
 # K 线条数上限：页面加载序列的上界 —— 股票侧 `STOCKS_LOOKBACK_CONFIG` 最大
 # 960（5m/15m）、周线不限量（全历史 ≈ 300），留足余量即可。
@@ -75,12 +75,18 @@ def _stock_freqs() -> set:
 
 
 def _split_code(code: str):
-    """`sz002190` → `('sz', '002190')`；校验失败抛 BadRequestError。"""
+    """`sz002190` → `('sz', '002190')`；校验失败抛 BadRequestError。
+
+    可接受的市场前缀 = `App.AppUtils.STOCK_MARKETS`（单一事实源，本模块不另抄一份）
+    —— 它与指数判定 `App.AppUtils.is_index` 覆盖同一批市场。前端送来的就是页面
+    标的（`chartData.meta.symbol` = `market + code`），凡页面能打开的标的都必须放行：
+    少了 `ds` 那段时间，扩展指数（中证2000）一点「回测」就 400。
+    """
     c = str(code or "").strip()
     if not c or "." in c or len(c) < 3:
         raise BadRequestError("非股票代码: {!r}".format(code))
     market, num = c[:2].lower(), c[2:]
-    if market not in ("sh", "sz", "bj", "hk"):
+    if market not in STOCK_MARKETS:
         raise BadRequestError("未知市场前缀: {!r}".format(code))
     return market, num
 

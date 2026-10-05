@@ -343,6 +343,30 @@ def part6(kl):
         except BadRequestError:
             check("{} → 400".format(tag), True)
 
+    # ⑥b **正向**白名单。只钉「坏代码被拒」会漏掉「白名单被缩小」这一类回归：
+    #     把它缩成 ("sh",) 上面十条照样全绿。而 ds 扩展指数（中证2000 ds932000）
+    #     正是这么漏掉的 —— 页面能打开它、`AppUtils.is_index` 也认它（→「成分股」
+    #     已置灰），回测入口却回「未知市场前缀」400，且错误信息完全看不出是白名单漏项。
+    #     故：① 白名单本体 == `App.AppUtils.STOCK_MARKETS`（单一事实源，不许各抄一份）；
+    #         ② 五个市场各拆一次码；③ ds 端到端真跑一遍（含 is_index 分流）。
+    print("══ ⑥b 市场前缀白名单（正向；SSOT = App.AppUtils.STOCK_MARKETS）══")
+    from App.AppUtils import STOCK_MARKETS
+    from App.AppBacktest import _split_code
+    check("白名单 = ('sh','sz','bj','hk','ds')（含 ds 扩展指数）",
+          tuple(STOCK_MARKETS) == ("sh", "sz", "bj", "hk", "ds"), repr(STOCK_MARKETS))
+    for _code, _mkt in (("sh600519", "sh"), ("sz002190", "sz"), ("bj430047", "bj"),
+                        ("hk00700", "hk"), ("ds932000", "ds")):
+        try:
+            check("{} 拆解为 ({}, …)".format(_code, _mkt),
+                  _split_code(_code)[0] == _mkt, repr(_split_code(_code)))
+        except BadRequestError as e:
+            check("{} 拆解为 ({}, …)".format(_code, _mkt), False, str(e))
+    d_ds = _call("ds932000", "d", kl)
+    check("ds932000 端到端跑通且判为指数（is_index=True ⇒ 金额族置 null）",
+          d_ds.get("ok") is True and d_ds["target"]["is_index"] is True
+          and d_ds["trades"] and all(t["net_return_pct"] is None for t in d_ds["trades"]),
+          "ok=%r is_index=%r" % (d_ds.get("ok"), d_ds["target"].get("is_index")))
+
 
 # ══════════════════════════════════════════════════════════════════════
 # ⑦ AST 契约：Q8「不落盘 / 不联网」

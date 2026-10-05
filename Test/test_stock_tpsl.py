@@ -181,6 +181,23 @@ def main():
         except BadRequestError:
             check("{} → 400".format(tag), True)
 
+    # ⑧b **正向**白名单：只钉「坏代码被拒」是不够的 —— 把白名单缩成 ("sh",)
+    #     照样全绿，而 ds 扩展指数（中证2000）就是被这么漏掉的：页面能打开它、
+    #     `AppUtils.is_index` 也认它，入口却回「未知市场前缀」。故页面可选中的
+    #     市场必须整体放行，且白名单来源 = `App.AppUtils.STOCK_MARKETS`（单一事实源，
+    #     回测入口 `AppBacktest._split_code` 用同一份）。
+    print("══ ⑧b 市场前缀白名单（正向，SSOT = App.AppUtils.STOCK_MARKETS）══")
+    from App.AppUtils import STOCK_MARKETS as _mk
+    check("白名单 = ('sh','sz','bj','hk','ds')（含 ds 扩展指数）",
+          tuple(_mk) == ("sh", "sz", "bj", "hk", "ds"), repr(_mk))
+    for _code in ("sh600519", "sz002190", "bj430047", "hk00700", "ds932000"):
+        _body = dict(_payload(k7, bsp_s), code=_code)
+        try:
+            compute_stock_tpsl(_code, _body)
+            check("{} 被放行（页面可选市场）".format(_code), True)
+        except BadRequestError as _e:
+            check("{} 被放行（页面可选市场）".format(_code), False, str(_e))
+
     print("══ ⑨ 跨日 ATR 连续（P2-4，Q5：移除 Exit.on_bar 跨日清空）══")
     # 25 根 bar 各自独立日期（每根都"跨日"）：若跨日清空回潮，入场时缓冲只剩 1 根
     # → ATR 未就绪 → R 退化到 A=0.01；连续口径下 ATR=1.0 → R = 2×ATR = 2.0。

@@ -40,6 +40,12 @@ def next_state(cur: State, *, entry: bool = False, exit_: bool = False) -> State
 
     非法组合（同时 entry 与 exit_、或方向与当前态不匹配）直接抛错 ——
     两态机的全部价值就在"不可能的状态转移不可能表达"，静默兜底会把它变成四态机。
+
+    ⚠ **"唯一"是被钉住的，不靠自觉**：`Runner` 的两个转移点都必须调本函数，由
+    `Backtest/Test/test_bt10_state_machine.py` 用 AST 断言 —— 「`state = State.X`
+    的直接赋值在 `Runner.py` 里只许出现一次（循环前的初始化）、`next_state(` 至少
+    两处」。v1.18 及以前 Runner 是**直接赋值**、本函数全仓零调用：docstring 写着
+    "唯一改写点"，实际是死代码，三个 fail-fast 分支一次都没跑过。
     """
     if entry and exit_:
         raise ValueError("State: 同一根既开又平（entry 与 exit_ 互斥）")

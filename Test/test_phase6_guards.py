@@ -63,11 +63,14 @@ KLINE_PIPELINE = [
     "onWheel", "toggleOverlay", "toggleDualWindow",
 ]
 
-# ③ window API 冻结基线：集合字面量现收 61 项（以本字面量为准，③ 处会打印实测数）。
+# ③ window API 冻结基线：集合字面量即 SSOT，项数不在此写死（③ 处运行时打印实测数；旧数字留档于设计文档 v1.19 修订说明 §五）。
 #    「盘后下载」功能下线时曾从中移除 4 个 window 函数
-#    （toggleDownloadPanel / closeDownloadPanel / startDownload / stopDownload）；
-#    另登记 3 个 HTML 内联事件桥（见 WINDOW_INLINE_BRIDGES），
-#    故 app.js 实际 window 绑定总数 = 61 + ChanApp + 3 = 65）
+#    （toggleDownloadPanel / closeDownloadPanel / startDownload / stopDownload）。
+#    **总数不在这里手算**：③ 的期望集 = WINDOW_BASELINE | WINDOW_ALLOWED_NEW
+#    | WINDOW_INLINE_BRIDGES（三份字面量的并集），③ 处直接打印实测个数。
+#    （旧注释曾把一份手算合计写死在此 —— 此后 ALLOWED_NEW 与 BRIDGES 各自
+#      又加过项，这个手算数字没跟着走，反而成了误导源。凡"两份以上字面量的合计"
+#      都不许写死在此，否则每加一项都要来改注释 —— 而漏改不会有任何东西报红。）
 WINDOW_BASELINE = {
     '_dualZsDebugCount', '_isRenderingBottom', '_lastCalcRedRangeError', '_lastGrayStatus',
     '_lastRedFrameStatus', 'annotationAdd', 'annotationDeleteAllGlobal', 'annotationDeleteAnnotation',

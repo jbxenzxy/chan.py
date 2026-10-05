@@ -5536,8 +5536,10 @@
             }
 
             // ①b 指数标识：指数不可交易 ⇒ 股数 / 成本 / 净收益率整族「不适用」。
-            //     判定不在前端做（前端只看后端 `is_index`）—— 前缀规则是取数层 SSOT
-            //     （`DataAPI.TdxAPI.is_index_code`），前端复制一份必然漂移。
+            //     判定不在前端做（前端只看后端 `is_index`）—— 页面级 SSOT 是
+            //     `App.AppUtils.is_index`（含 88xx 板块指数 / ds 扩展指数 / hk 字母
+            //     代码），**不是**取数层的 `DataAPI.TdxAPI._is_index_code`（那只认
+            //     A 股指数段，漏 88xxxx）。前端复制一份必然漂移。
             var isIndex = !!(tgt.is_index || cal.is_index);
             if (isIndex) {
                 html += '<div class="stats-row" style="background:rgba(0,240,240,0.10);'
