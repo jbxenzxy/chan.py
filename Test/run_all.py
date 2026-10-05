@@ -732,6 +732,14 @@ COMPONENTS = [
     ("bt10_state_machine",
      [sys.executable, os.path.join("Backtest", "Test",
                                    "test_bt10_state_machine.py")]),
+    # `[L, R]` 区间裁切的**粒度**（v1.20）：端点只给日期 ⇒ 含整天（L 补 00:00:00 /
+    #   R 补 23:59:59）；给时刻 ⇒ 精确到该时刻。`_slice_records` 旧实现两端都 `[:10]`
+    #   截到日 ⇒ `--to 2026-09-29 10:00:00` 与 `--to 2026-09-29` 同样本，而报告
+    #   口径行照传入值印 ⇒ 自述区间 ≠ 真实样本（静默）。含变异自证（换回按日截断
+    #   的旧写法，判据必须转红且含「裁切」类失败）。
+    ("bt11_slice_boundary",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt11_slice_boundary.py")]),
     # 股票页「回测」端到端契约（设计文档 §4）：**App 边界**能不能把页面格式的
     # klines（斜杠日期、无 dt）还原成 records —— 与 bt06 共用同一批冻结切片，
     # 故引擎侧与页面侧是**同一份样本**。覆盖响应形状 / 口径披露三项自洽 /

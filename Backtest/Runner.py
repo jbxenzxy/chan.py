@@ -243,9 +243,43 @@ class RunResult:
 # ════════════════════════════════════════════════════════════════════
 # 内核
 # ════════════════════════════════════════════════════════════════════
-def _norm_day(x) -> str:
-    """任意日期表示 → `YYYY-MM-DD`（`datetime` / `2021/08/23 00:00` 都收）。"""
-    return str(x).replace("/", "-").strip()[:10]
+def _split_dt(x) -> Tuple[str, str]:
+    """任意日期表示 → `(YYYY-MM-DD, HH:MM:SS)`（`datetime` / `2021/08/23 00:00` 都收）。
+
+    时刻段**保留原样**（可为空）—— "是不是整天"由端点侧决定（见 `_boundary_key`），
+    本层只负责切开，不替调用方猜粒度。
+    """
+    s = str(x).replace("/", "-").replace("T", " ").strip()
+    day, _sep, tm = s.partition(" ")
+    return day[:10], tm.strip()
+
+
+def _canon_dt(x) -> str:
+    """`dt` → `YYYY-MM-DD HH:MM:SS`（缺时刻补 `00:00:00`）。
+
+    ★ 为什么补齐到秒、而不是按 `[:10]` 截到日
+    ----------------------------------------------------------------
+      旧写法两端都 `[:10]` ⇒ 端点的时间部分被**静默丢弃**：`--to 2026-09-29 10:00:00`
+      与 `--to 2026-09-29` 跑出**同一份样本**（当日 15:00 那根照样进），而
+      `RunResult.target_dt` 原样保存用户传入值、`Report.caliber_lines` 的
+      `lo / hi` 两行照它印口径行 ⇒ **报告自述的区间 ≠ 真实样本**，且无任何告警。
+      补齐到秒后双方在**同一粒度**上比较：给时刻就按时刻裁，只给日期就是整天。
+    """
+    day, tm = _split_dt(x)
+    hh, mm, ss = (tm.split(":") + ["0", "0", "0"])[:3]
+    return "{} {:0>2}:{:0>2}:{:0>2}".format(day, hh or "0", mm or "0", ss or "0")
+
+
+def _boundary_key(x, *, upper: bool) -> str:
+    """`[L, R]` 端点 → 与 `_canon_dt` 同粒度的可比键。
+
+    只给日期 ⇒ 端点覆盖**整天**：`L` 补 `00:00:00`、`R` 补 `23:59:59`
+    （`[L, R]` 含端点，日粒度端点必须把当天最后一根 K 线包进来）。
+    """
+    day, tm = _split_dt(x)
+    if not tm:
+        tm = "23:59:59" if upper else "00:00:00"
+    return _canon_dt("{} {}".format(day, tm))
 
 
 def _slice_records(records: Sequence[Dict[str, Any]],
@@ -254,14 +288,22 @@ def _slice_records(records: Sequence[Dict[str, Any]],
 
     这是入口对 `[L, R]` 参数的**唯一**使用点 —— 本函数不解析窗口规则，
     只做"给我什么区间就测什么区间"的机械裁切（P0-2 方案 B 的边界）。
+
+    ⚠ **端点粒度 = 传入粒度**（护栏：`Backtest/Test/test_bt11_slice_boundary.py`）：
+      只给日期 ⇒ 含整天（`L` 补 `00:00:00` / `R` 补 `23:59:59`）；带时刻 ⇒ 精确
+      到该时刻（含端点）。旧实现两端都 `[:10]` 截到日 ⇒ `--to 2026-09-29 10:00:00`
+      与 `--to 2026-09-29` 跑出同一份样本，而报告口径行照传入值印 ⇒ 自述区间
+      与真实样本不符（静默）。
     """
     if start_dt is None and target_dt is None:
         return list(records)
-    lo = _norm_day(start_dt) if start_dt is not None else None
-    hi = _norm_day(target_dt) if target_dt is not None else None
+    lo = _boundary_key(start_dt, upper=False) if start_dt is not None else None
+    hi = _boundary_key(target_dt, upper=True) if target_dt is not None else None
     out = []
     for r in records:
-        d = _norm_day(r.get("dt"))
+        # 记录侧一律补齐到秒，与端点同粒度：日线的 `dt` 只到日，补 `00:00:00`
+        # 后仍落在「R 补 23:59:59」的整天之内 ⇒ 日线样本不受本次改动影响。
+        d = _canon_dt(r.get("dt"))
         if lo is not None and d < lo:
             continue
         if hi is not None and d > hi:
@@ -291,7 +333,9 @@ def run(
     ----
     market / code / freq   标的（`market` = "sh"/"sz"/"bj"，`code` = 6 位代码）
     start_dt / target_dt   `[L, R]`（含端点）。`None` = 不限；records 按此裁切
-                           —— **由调用方按 App 侧口径解析好**（§4.4 / P0-2 方案 B）
+                           —— **由调用方按 App 侧口径解析好**（§4.4 / P0-2 方案 B）。
+                           端点粒度随传入值：只给日期 = 含整天；带时刻 = 精确到
+                           该时刻（详见 `_slice_records`）
     records                已加载的 K 线序列（`dt` 为 `datetime`，与
                            `Test/gen_fixtures.load_records` 输出同构）
     bsp_filter             类型过滤表 `{"0": True, ...}`；`None` = 全放行
@@ -517,8 +561,8 @@ def _main(argv=None) -> int:
     ap.add_argument("--market", default=None, help="sh / sz / bj（默认从 code 前缀推断）")
     ap.add_argument("--code", required=True, help="6 位代码，如 002190")
     ap.add_argument("--freq", default="d", help="w / d / 30m / 15m / 5m")
-    ap.add_argument("--from", dest="start_dt", default=None, help="区间左端 [L]（YYYY-MM-DD）")
-    ap.add_argument("--to", dest="target_dt", default=None, help="区间右端 [R]（YYYY-MM-DD）")
+    ap.add_argument("--from", dest="start_dt", default=None, help="区间左端 [L]（YYYY-MM-DD 或 'YYYY-MM-DD HH:MM:SS'；只给日期 = 含当天全部 K 线）")
+    ap.add_argument("--to", dest="target_dt", default=None, help="区间右端 [R]（YYYY-MM-DD 或 'YYYY-MM-DD HH:MM:SS'；只给日期 = 含当天全部 K 线）")
     ap.add_argument("--bsp-types", default=None,
                     help="只放行这些类型，逗号分隔，如 0,3（默认全放行）")
     ap.add_argument("--is-index", dest="is_index", action="store_true",
