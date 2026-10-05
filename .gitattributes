@@ -6,3 +6,7 @@ Test/fixtures/*.json text eol=lf
 # 真实行情冻结切片（Test/fixtures_real/）同理：sha256 写进 manifest，字节漂移
 # 会被 test_bs0_ozs57_realdata.py 判红，故同样钉成 LF。
 Test/fixtures_real/*.json text eol=lf
+# 回测冻结基线（Backtest/Test/snapshots/）：test_bt01_p0_fixture.py 的比对物，
+# 读侧走 json（EOL 无关），但重冻（--freeze）落盘是 LF ⇒ 钉 LF 免得
+# core.autocrlf=true 的机器上"改一下再冻"产出满屏无意义 diff。
+Backtest/Test/snapshots/*.json text eol=lf

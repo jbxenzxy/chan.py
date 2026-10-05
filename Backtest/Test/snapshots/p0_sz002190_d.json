@@ -1,0 +1,221 @@
+{
+ "filter_scenarios": [
+  {
+   "bsp_types": "0",
+   "expectancy_r": 1.8015,
+   "n": 3,
+   "name": "only-0",
+   "trade_ids": [
+    1,
+    2,
+    3
+   ],
+   "trades": 3
+  },
+  {
+   "bsp_types": "3",
+   "expectancy_r": -0.64986667,
+   "n": 3,
+   "name": "only-3",
+   "trade_ids": [
+    1,
+    2,
+    3
+   ],
+   "trades": 3
+  }
+ ],
+ "fixture": {
+  "bars": 1393,
+  "dir": "Test/fixtures_real",
+  "file": "sz002190_d.json",
+  "sha256": "b88ede2ffc50361b5ef0ae38ada3bc3980d75492ad17feb26c945cda72e63ab4"
+ },
+ "kind": "backtest-p0-freeze",
+ "metrics": {
+  "avg_bars_held": 10.83333333,
+  "avg_net_return": 0.0467522059,
+  "bars_total": 1393,
+  "by_bsp_type": {
+   "0": {
+    "avg_net_return": 0.1459373722,
+    "e": 0,
+    "expectancy_r": 1.8015,
+    "l": 0,
+    "n": 3,
+    "w": 3
+   },
+   "3": {
+    "avg_net_return": -0.0524329605,
+    "e": 0,
+    "expectancy_r": -0.64986667,
+    "l": 2,
+    "n": 3,
+    "w": 1
+   }
+  },
+  "by_reason": {
+   "breakeven": {
+    "avg_net_return": 0.0244783199,
+    "e": 0,
+    "expectancy_r": 0.3157,
+    "l": 0,
+    "n": 3,
+    "w": 3
+   },
+   "sl": {
+    "avg_net_return": -0.0938888738,
+    "e": 0,
+    "expectancy_r": -1.12375,
+    "l": 2,
+    "n": 2,
+    "w": 0
+   },
+   "trailing": {
+    "avg_net_return": 0.3948560229,
+    "e": 0,
+    "expectancy_r": 4.7553,
+    "l": 0,
+    "n": 1,
+    "w": 1
+   }
+  },
+  "e": 0,
+  "expectancy_r": 0.57581667,
+  "filtered": 0,
+  "l": 2,
+  "max_loss_r": -1.164,
+  "max_win_r": 4.7553,
+  "n": 6,
+  "profit_factor": 2.49385771,
+  "profit_loss_ratio": 1.24692885,
+  "rej": 5,
+  "u": 0,
+  "w": 4,
+  "win_rate": 0.6666666667
+ },
+ "note": "Backtest/ 的 P0 冻结基线。来源 = 冻结真实行情切片 Test/fixtures_real/sz002190_d.json；逐笔口径见本文件对应测试的 docstring。改了内核要刷新时跑 test_bt01_p0_fixture.py --freeze。",
+ "run": {
+  "bars_total": 1393,
+  "signals_filtered": 0,
+  "signals_rejected": 5,
+  "signals_seen": 11,
+  "type_appended_after_freeze": 0
+ },
+ "target": {
+  "code": "002190",
+  "freq": "d",
+  "market": "sz"
+ },
+ "trades": [
+  {
+   "bars_held": 16,
+   "bsp_type": "3",
+   "cost_cash": 33.237,
+   "entry_date": "2021-08-23",
+   "entry_price": 30.0,
+   "exit_date": "2021-09-14",
+   "exit_price": 27.22,
+   "exit_reason": "sl",
+   "gross_return": -0.0926666667,
+   "net_return": -0.0933183725,
+   "open": false,
+   "r_distance": 2.565714,
+   "r_multiple": -1.0835,
+   "shares": 1700,
+   "side": "long",
+   "trade_id": 1
+  },
+  {
+   "bars_held": 15,
+   "bsp_type": "3",
+   "cost_cash": 36.4225,
+   "entry_date": "2021-12-22",
+   "entry_price": 29.81,
+   "exit_date": "2022-01-13",
+   "exit_price": 30.74,
+   "exit_reason": "breakeven",
+   "gross_return": 0.0311975847,
+   "net_return": 0.0304788662,
+   "open": false,
+   "r_distance": 3.121429,
+   "r_multiple": 0.2979,
+   "shares": 1700,
+   "side": "long",
+   "trade_id": 2
+  },
+  {
+   "bars_held": 3,
+   "bsp_type": "3",
+   "cost_cash": 36.4562,
+   "entry_date": "2022-05-24",
+   "entry_price": 23.36,
+   "exit_date": "2022-05-27",
+   "exit_price": 25.55,
+   "exit_reason": "sl",
+   "gross_return": -0.09375,
+   "net_return": -0.094459375,
+   "open": false,
+   "r_distance": 1.881429,
+   "r_multiple": -1.164,
+   "shares": 2200,
+   "side": "short",
+   "trade_id": 3
+  },
+  {
+   "bars_held": 8,
+   "bsp_type": "0",
+   "cost_cash": 35.4131,
+   "entry_date": "2023-04-27",
+   "entry_price": 21.85,
+   "exit_date": "2023-05-12",
+   "exit_price": 22.02,
+   "exit_reason": "breakeven",
+   "gross_return": 0.0077803204,
+   "net_return": 0.0070756522,
+   "open": false,
+   "r_distance": 0.961429,
+   "r_multiple": 0.1768,
+   "shares": 2300,
+   "side": "long",
+   "trade_id": 4
+  },
+  {
+   "bars_held": 16,
+   "bsp_type": "0",
+   "cost_cash": 36.1746,
+   "entry_date": "2025-07-17",
+   "entry_price": 35.79,
+   "exit_date": "2025-08-08",
+   "exit_price": 37.1,
+   "exit_reason": "breakeven",
+   "gross_return": 0.0366024029,
+   "net_return": 0.0358804415,
+   "open": false,
+   "r_distance": 2.772857,
+   "r_multiple": 0.4724,
+   "shares": 1400,
+   "side": "long",
+   "trade_id": 5
+  },
+  {
+   "bars_held": 7,
+   "bsp_type": "0",
+   "cost_cash": 48.0494,
+   "entry_date": "2025-08-18",
+   "entry_price": 36.61,
+   "exit_date": "2025-08-27",
+   "exit_price": 51.1,
+   "exit_reason": "trailing",
+   "gross_return": 0.395793499,
+   "net_return": 0.3948560229,
+   "open": false,
+   "r_distance": 3.047143,
+   "r_multiple": 4.7553,
+   "shares": 1400,
+   "side": "long",
+   "trade_id": 6
+  }
+ ],
+ "version": 1
+}

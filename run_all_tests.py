@@ -1,20 +1,21 @@
 # -*- coding: utf-8 -*-
 """
-Test/ 与 Trading/Test/ 全量测试统一执行入口
+Test/、Trading/Test/ 与 Backtest/Test/ 全量测试统一执行入口
 =====================================================================
 与 `Test/run_all.py` 的分工（两者不重复、互为补充）：
 
   · `Test/run_all.py`         —— **门禁入口**：只跑「已注册进 COMPONENTS 的
-                                153 个组件」，带冻结基线比对、按依赖排序、
+                                158 个组件」，带冻结基线比对、按依赖排序、
                                 单组件 300s 超时，是验收 / CI 用的那一条命令。
-  · 本文件 `run_all_tests.py` —— **全量发现入口**：把 `Test/` 与
-                                `Trading/Test/` 下**所有** test_*/repro_*/smoke_*
-                                脚本扫出来逐个跑一遍，**不管它有没有被注册**。
+  · 本文件 `run_all_tests.py` —— **全量发现入口**：把 `Test/`、`Trading/Test/`
+                                与 `Backtest/Test/` 下**所有**
+                                test_*/repro_*/smoke_* 脚本扫出来逐个跑一遍，
+                                **不管它有没有被注册**。
                                 用来回答「有没有测试写了却从来没人跑」。
 
 为什么必须「每个文件一个独立子进程」
 --------------------------------------
-两目录下的用例一律是**独立脚本风格**（文件末尾 `sys.exit(1 if _FAIL else 0)`，
+两目录（`Test/` `Trading/Test/` `Backtest/Test/`）下的用例一律是**独立脚本风格**（文件末尾 `sys.exit(1 if _FAIL else 0)`，
 不是 pytest 用例），且大量用例在文件顶层就改 `sys.path` / `sys.stdout`、
 monkeypatch 模块属性、注册 broker 装饰器。同一进程里连跑两个会互相污染，
 所以逐文件起新进程执行，**退出码 0 = 通过**。
@@ -78,7 +79,7 @@ SimNow.py 自带的「缺少凭据」快路径（不联网、秒返回）。真�
 
 用法（在仓库根目录执行）
 ------------------------
-    python run_all_tests.py                        # 全量（Test/ + Trading/Test/）
+    python run_all_tests.py                        # 全量（Test/ + Trading/Test/ + Backtest/Test/）
     python run_all_tests.py --only Trading/Test    # 只跑一个目录
     python run_all_tests.py --filter stats         # 文件名含关键字的
     python run_all_tests.py --exclude simnow       # 排除文件名含关键字的
@@ -150,7 +151,10 @@ import time
 from datetime import datetime
 
 # ── 扫描范围与文件名前缀 ────────────────────────────────────────────────
-TEST_ROOTS = ("Test", "Trading/Test")
+# `Backtest/Test` 已加入：Backtest/ 的回测契约用例（test_btNN_*）必须与
+# `Test/run_all.py` 的 COMPONENTS 登记一致，由 Test/test_gate_component_count.py
+# 的 [C1]/[C2] 断言两头夹（漏登记 = 回归裸奔；登记悬空 = 门禁跑空气）。
+TEST_ROOTS = ("Test", "Trading/Test", "Backtest/Test")
 NAME_PREFIXES = ("test_", "repro_", "smoke_")
 SKIP_DIRS = {"__pycache__", ".pytest_cache", "fixtures", "snapshots"}
 
@@ -578,7 +582,7 @@ def _print_report(records, files, timeout, interrupted, t_start, repo_root,
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Test/ 与 Trading/Test/ 全量测试统一执行入口",
+        description="Test/、Trading/Test/ 与 Backtest/Test/ 全量测试统一执行入口",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--only", action="append", metavar="DIR",
                     help="只跑指定目录（可重复；默认 %s）" % ", ".join(TEST_ROOTS))

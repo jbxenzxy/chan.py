@@ -662,6 +662,38 @@ COMPONENTS = [
     # Gate ⑦ (2026-10-02)：两测试入口覆盖一致性钉死（无孤儿、无悬空登记）。
     ("gate_component_count",
      [sys.executable, os.path.join("Test", "test_gate_component_count.py")]),
+
+    # ── Backtest/ 回测包（P0）──────────────────────────────────────
+    # 裸眼可读的因果：下面是「回测内核的端到端冻结快照」
+    #   → 「它依赖的两个口径源（缠论配置 / 出场参数）与页面不等」
+    #   → 「它不许依赖上层（App / Frontend / Test/）」
+    #   → 「它与页面在 bsp 组装上的投影必须同键同值」。
+    # 顺序即依赖顺序：先证内核自己稳，再证它与页面的接缝。
+    #
+    # 端到端冻结快照（P0 判据①②③）：sz002190 日线 1393 根，逐笔 + 汇总
+    # + 类型过滤两场景（only-0 / only-3）与 Backtest/Test/snapshots/ 基线一致。
+    ("bt01_p0_fixture",
+     [sys.executable, os.path.join("Backtest", "Test", "test_bt01_p0_fixture.py")]),
+    # 缠论配置契约（P0-2 方案 B）：default_chan_config() ≡ App.AppUtils._make_chan_config()
+    # 逐字段，外加 kl_type_of / date_fmt_of 与 Common 侧 SSOT 同源。
+    ("bt02_config_contract",
+     [sys.executable, os.path.join("Backtest", "Test", "test_bt02_config_contract.py")]),
+    # 迁移期双源护栏（§5.9 #1，v1.15 裁定"护栏式"）：
+    # App.AppTPSL._STOCK_EXIT_OVERRIDES ≡ Backtest.ExitParams.STOCK_EXIT_PARAMS。
+    # TPSL 删除后该用例自动 SKIP 退役（模块不在 = 预期终态；符号被改名 = 判红）。
+    ("bt03_exit_params_contract",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt03_exit_params_contract.py")]),
+    # 分层单向依赖（§5.1 / §5.9 R31）：Backtest/ **生产代码**零 App / Frontend /
+    # Test/ 依赖 + 全部本地依赖 ∈ 层表白名单（AST 扫描，Backtest/Test/ 豁免）。
+    ("bt04_no_app_import",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt04_no_app_import.py")]),
+    # bsp 组装常驻护栏（§4.5 / §5.9 P1-3）：App 侧 3 处投影（AppEngine ×2 /
+    # AppSSE ×1）键集 ≡ Backtest.bsp_to_dict；股票侧两处**当场 eval 页面表达式**
+    # 做逐键值比对（改页面表达式护栏自动跟着变，不需要人同步）。
+    ("bt05_bsp_dict",
+     [sys.executable, os.path.join("Backtest", "Test", "test_bt05_bsp_dict.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成
