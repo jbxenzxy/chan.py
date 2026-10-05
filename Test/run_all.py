@@ -694,6 +694,37 @@ COMPONENTS = [
     # 做逐键值比对（改页面表达式护栏自动跟着变，不需要人同步）。
     ("bt05_bsp_dict",
      [sys.executable, os.path.join("Backtest", "Test", "test_bt05_bsp_dict.py")]),
+    # 逐周期冻结快照（P0 判据④）：Test/fixtures_real/ 五份切片（d/w/30m/15m/5m）
+    # 各跑一遍，钉「每份切片的 sha256 ≡ manifest」+「逐周期 bars/信号/逐笔/汇总
+    # ≡ 基线」+「放行信号数 == 开仓笔数」+「signals_seen == 引擎侧 bsp_iter() 总数」
+    # （独立交叉验证）+「周线 0 笔的判别力自证」。切片重冻用 `--freeze`。
+    ("bt06_periods_fixture",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt06_periods_fixture.py")]),
+    # P4 漂移巡检常驻化（设计文档 §2.6 / §6 P4）：两个一次性探针（`sb/probe_repaint.py`
+    # / `sb/probe_r_drift.py`）转正 —— 逐帧推进 d/30m 两份切片，钉「零重绘（信号出现
+    # 后不消失/不复活）」「笔指纹改写清单」「R 漂移清单（ΔA 单向 >0）」「回测 signals_seen
+    # == 引擎侧 ever_seen」「漂移笔与回测笔同日同类型对齐」+ 判别力自证（0 < 漂移数 < 总数）。
+    # 基线 `Backtest/Test/snapshots/p4_repaint_drift.json`，重冻用 `--freeze`。
+    ("bt07_repaint_drift",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt07_repaint_drift.py")]),
+    # P1 A/B 对照（设计文档 §2.7 / §6 P1）：0 类点 57th ㈠ 段「严格闸（相邻回调笔
+    # 逐级收窄）vs 放宽（各回调笔极值不越过笔1）」在**交易层**（状态机去重后）的差异
+    # —— 比**交易笔数与期望 R**，不是比信号数（§2.7：8 信号只对应 3 笔，按信号数会高估）。
+    # 含判别力对照臂（只放行 3 类时两臂逐笔全等 ⇒ 改动边界只落 0 类）。
+    # 基线 `Backtest/Test/snapshots/p1_ab_57th.json`，重冻用 `--freeze`。
+    ("bt08_ab_57th",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt08_ab_57th.py")]),
+    # 股票页「回测」端到端契约（设计文档 §4）：**App 边界**能不能把页面格式的
+    # klines（斜杠日期、无 dt）还原成 records —— 与 bt06 共用同一批冻结切片，
+    # 故引擎侧与页面侧是**同一份样本**。覆盖响应形状 / 口径披露三项自洽 /
+    # bsp_types 四态（None 全放行 vs "" 全过滤）/ *_pct ×100 / signals 三分解
+    # 不变量 / 400 穷举 / AST「不落盘不联网」(Q8) / 前端抽真函数（按钮文案三态、
+    # 双窗禁用、市场态切换收面板、首同步不关、toggleStats 分流）。
+    ("stock_backtest",
+     [sys.executable, os.path.join("Test", "test_stock_backtest.py")]),
     # ── 暂不注册（注册即恒红 / 无拦截力，注册了门禁形同虚设）──────────
     #   Test/repro_n4_cleanup_race.py          N4 未修，且脚本只有 return 0
     #                                          （恒通过、无拦截力，须先改成

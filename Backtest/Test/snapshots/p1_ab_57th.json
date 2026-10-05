@@ -1,0 +1,176 @@
+{
+ "arms": {
+  "A_strict": {
+   "gate": "strict-chain",
+   "scenarios": {
+    "all": {
+     "bars_total": 1393,
+     "bps": [
+      "3",
+      "3",
+      "3",
+      "0"
+     ],
+     "closed": 4,
+     "e": 0,
+     "entries": [
+      "2021-08-23",
+      "2021-12-22",
+      "2022-05-24",
+      "2023-04-27"
+     ],
+     "expectancy_r": -0.4443,
+     "filled": 4,
+     "l": 2,
+     "signals_filtered": 0,
+     "signals_seen": 5,
+     "still_open": 0,
+     "sum_r": -1.7772,
+     "w": 2,
+     "win_rate": 0.5
+    },
+    "only0": {
+     "bars_total": 1393,
+     "bps": [
+      "0"
+     ],
+     "closed": 1,
+     "e": 0,
+     "entries": [
+      "2023-04-27"
+     ],
+     "expectancy_r": 0.1768,
+     "filled": 1,
+     "l": 0,
+     "signals_filtered": 3,
+     "signals_seen": 5,
+     "still_open": 0,
+     "sum_r": 0.1768,
+     "w": 1,
+     "win_rate": 1.0
+    },
+    "only3": {
+     "bars_total": 1393,
+     "bps": [
+      "3",
+      "3",
+      "3"
+     ],
+     "closed": 3,
+     "e": 0,
+     "entries": [
+      "2021-08-23",
+      "2021-12-22",
+      "2022-05-24"
+     ],
+     "expectancy_r": -0.651333,
+     "filled": 3,
+     "l": 2,
+     "signals_filtered": 2,
+     "signals_seen": 5,
+     "still_open": 0,
+     "sum_r": -1.954,
+     "w": 1,
+     "win_rate": 0.333333
+    }
+   }
+  },
+  "B_lax": {
+   "gate": "lax-single-ref",
+   "scenarios": {
+    "all": {
+     "bars_total": 1393,
+     "bps": [
+      "3",
+      "3",
+      "3",
+      "0",
+      "0",
+      "0"
+     ],
+     "closed": 6,
+     "e": 0,
+     "entries": [
+      "2021-08-23",
+      "2021-12-22",
+      "2022-05-24",
+      "2023-04-27",
+      "2025-07-17",
+      "2025-08-18"
+     ],
+     "expectancy_r": 0.575083,
+     "filled": 6,
+     "l": 2,
+     "signals_filtered": 0,
+     "signals_seen": 11,
+     "still_open": 0,
+     "sum_r": 3.4505,
+     "w": 4,
+     "win_rate": 0.666667
+    },
+    "only0": {
+     "bars_total": 1393,
+     "bps": [
+      "0",
+      "0",
+      "0"
+     ],
+     "closed": 3,
+     "e": 0,
+     "entries": [
+      "2023-04-27",
+      "2025-07-17",
+      "2025-08-18"
+     ],
+     "expectancy_r": 1.8015,
+     "filled": 3,
+     "l": 0,
+     "signals_filtered": 3,
+     "signals_seen": 11,
+     "still_open": 0,
+     "sum_r": 5.4045,
+     "w": 3,
+     "win_rate": 1.0
+    },
+    "only3": {
+     "bars_total": 1393,
+     "bps": [
+      "3",
+      "3",
+      "3"
+     ],
+     "closed": 3,
+     "e": 0,
+     "entries": [
+      "2021-08-23",
+      "2021-12-22",
+      "2022-05-24"
+     ],
+     "expectancy_r": -0.651333,
+     "filled": 3,
+     "l": 2,
+     "signals_filtered": 8,
+     "signals_seen": 11,
+     "still_open": 0,
+     "sum_r": -1.954,
+     "w": 1,
+     "win_rate": 0.333333
+    }
+   }
+  }
+ },
+ "fixture": {
+  "bars": 1393,
+  "dir": "Test/fixtures_real",
+  "file": "sz002190_d.json",
+  "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0"
+ },
+ "kind": "backtest-p1-ab57",
+ "note": "P1 A/B 对照冻结基线：0 类点 57th ㈠ 段「严格闸 vs 放宽判据」在**交易层**（状态机去重后）的差异。来源 = 冻结切片 Test/fixtures_real/sz002190_d.json。改了内核或改了出场参数要刷新时跑 test_bt08_ab_57th.py --freeze。",
+ "target": {
+  "code": "002190",
+  "freq": "d",
+  "market": "sz"
+ },
+ "version": 1
+}

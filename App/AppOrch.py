@@ -35,7 +35,7 @@ from App.AppChart import (
     call_compute_red_range_zs,
     stock_manual_select_point, futures_manual_select_point, compute_red_range_zs,
     search_stocks,
-    get_annotations, handle_annotation_action, call_stock_tpsl,
+    get_annotations, handle_annotation_action, call_stock_tpsl, call_stock_backtest,
     clear_saved_point, futures_clear_saved_point,
     save_last_code_freq, load_last_code_freq,
     futures_cleanup, get_futures_aliases, get_futures_name,
@@ -302,7 +302,7 @@ __all__ = [
     # 共享资源登记表（按资源索引）
     "SHARED_RESOURCE_REGISTRY",
     # 分析漏斗（AppChart）
-    "call_analysis", "analyze_stock", "call_stock_tpsl",
+    "call_analysis", "analyze_stock", "call_stock_tpsl", "call_stock_backtest",
     "call_manual_select_point", "call_futures_manual_select_point",
     "call_compute_red_range_zs",
     "stock_manual_select_point", "futures_manual_select_point",

@@ -129,6 +129,19 @@
             <div class="stats-empty">点击上方「统计」按钮加载</div>
         </div>
     </div>
+
+    <!-- 回测面板（股票态专用；复用「成交统计」面板的版式类 .stats-*）
+         与 #stats-panel 互斥：股票态显示本面板，期货态显示成交统计（见 app.js
+         的 syncStatsButtonLabel / toggleStats）。 -->
+    <div class="stats-panel" id="bt-panel">
+        <div class="stats-header">
+            <span class="stats-title">回测</span>
+            <span class="stats-close" onclick="closeBacktestPanel()" title="关闭面板">×</span>
+        </div>
+        <div class="stats-body" id="bt-content">
+            <div class="stats-empty">点击上方「回测」按钮开始（当前页面标的与周期）</div>
+        </div>
+    </div>
     <div class="scan-panel" id="scan-panel">
         <div class="scan-header">
             <span class="scan-title" id="scan-title">买卖点扫描</span>

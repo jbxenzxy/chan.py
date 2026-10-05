@@ -86,6 +86,38 @@ def is_a_share_stock(market, code):
     return False
 
 
+def _is_index_code(market, code):
+    """**取数层**的指数代码段判定（前缀规则 = 上方模块级单一事实源）。
+
+      上证系列：`000xxx`（上证指数 000001 / 沪深300 000300 …）/ `95xxxx` / `99xxxx`
+      深市系列：`399xxx`（深证成指 399001 / 创业板指 399006 …）
+
+    ⚠ **这不是「当前页面是不是指数」的 SSOT**。页面级判定是
+      `App/AppUtils.is_index`（额外覆盖 `88xxxx` 板块指数、`ds` 中证扩展指数、
+      `hk` 字母代码港股指数，并驱动 `meta.is_index` / 前端「成分股」置灰）。
+      两者**故意不合并**：本函数只回答"这个代码段在通达信/eltdx 取数里算不算
+      A 股指数"，范围严格限定在本模块前缀表能表达的段。
+      ⇒ 任何面向页面的分流（如回测「元口径不适用」）必须走 `AppUtils.is_index`，
+        用本函数会漏掉 `sh880491` 这类板块指数，与 `meta.is_index` 自相矛盾。
+
+    ⚠ **必须带 market 一起判**：同一 6 位代码在两个市场含义不同 ——
+      `sh000001` = 上证指数，而 `sz000001` = 平安银行 ⇒ 只看代码判不出来。
+
+    ⚠ 北交所指数（`899xxx`，如北证50）**不在本判定内**：`BJ_STOCK_PREFIXES`
+      把 `8xxxxx` 归为个股，现有前缀表未定义北交所指数段。要支持须先补前缀表。
+
+    用途：`is_shareholder_reduction_target` 剔除指数段（股东增减持只对上市公司）。
+    """
+    if not isinstance(code, str) or not code.isdigit() or len(code) != 6:
+        return False
+    m = (market or "").lower()
+    if m == "sh":
+        return code.startswith(SH_INDEX_PREFIXES)
+    if m == "sz":
+        return code.startswith(SZ_INDEX_PREFIXES)
+    return False
+
+
 def _is_b_share(market, code):
     """沪B(900xxx) / 深B(200xxx)。
 
@@ -120,10 +152,7 @@ def is_shareholder_reduction_target(market, code):
         return False
     if _is_b_share(market, code):
         return False
-    market = (market or "").lower()
-    if market == "sh" and code.startswith(SH_INDEX_PREFIXES):
-        return False
-    if market == "sz" and code.startswith(SZ_INDEX_PREFIXES):
+    if _is_index_code(market, code):
         return False
     return True
 

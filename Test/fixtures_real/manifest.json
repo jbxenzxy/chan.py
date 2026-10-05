@@ -6,16 +6,56 @@
    "date_to": "2026-09-30 00:00:00",
    "file": "sz002190_d.json",
    "freq": "d",
-   "note": "判别力最强：宽松 6 个 57th-T0 / 严格 0 个",
-   "sha256": "b88ede2ffc50361b5ef0ae38ada3bc3980d75492ad17feb26c945cda72e63ab4",
+   "note": "日线 5.7 年。判别力最强：宽松 6 个 57th-T0 / 严格 0 个",
+   "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0",
+   "symbol": "sz002190"
+  },
+  {
+   "bars": 294,
+   "date_from": "2021-01-08 00:00:00",
+   "date_to": "2026-09-30 00:00:00",
+   "file": "sz002190_w.json",
+   "freq": "w",
+   "note": "周线；由前复权日线合成（TdxAPI._resample_day_to_week）",
+   "sha256": "0c78d3f8bc866abf4a2af80600cc47d73b34ac9d928669326693a37ef2e4aab9",
+   "symbol": "sz002190"
+  },
+  {
+   "bars": 1936,
+   "date_from": "2025-09-30 10:00:00",
+   "date_to": "2026-09-30 15:00:00",
+   "file": "sz002190_30m.json",
+   "freq": "30m",
+   "note": "30m；由前复权 5m 合成（_resample_5m_to_30m）",
+   "sha256": "2a0849cee6c2d28e4e5166570caedbf2473c678bbae0ab7cac673f2439ee9f56",
+   "symbol": "sz002190"
+  },
+  {
+   "bars": 3872,
+   "date_from": "2025-09-30 09:45:00",
+   "date_to": "2026-09-30 15:00:00",
+   "file": "sz002190_15m.json",
+   "freq": "15m",
+   "note": "15m；由前复权 5m 合成（_resample_5m_to_15m）",
+   "sha256": "9e8d3d43d61ea27a6a1bb1b0b66555937a7d771dc30a579d4431db715ce4fd7f",
+   "symbol": "sz002190"
+  },
+  {
+   "bars": 11616,
+   "date_from": "2025-09-30 09:35:00",
+   "date_to": "2026-09-30 15:00:00",
+   "file": "sz002190_5m.json",
+   "freq": "5m",
+   "note": "5m；vipdoc fzline 原始周期（lc5 仅保留约 1 年）",
+   "sha256": "fc4f7ae44f53e31cc777214d0a4398dccf58e2c47108240b31980e865c61a95f",
    "symbol": "sz002190"
   }
  ],
  "kind": "real-market-slice",
- "note": "来源：本机通达信 vipdoc 日线（经 TdxAPI.read_main_level_records 前复权读取）的真实行情切片，冻结为离线 JSON。与 fixtures/ 不同 —— fixtures/ 为 gen_fixtures.py 合成且受 fixtures_integrity 校验，本目录为一次性冻结的真实样本，只由本脚本 / --check 校验 sha256。",
+ "note": "来源：本机通达信 vipdoc（经 TdxAPI.read_main_level_records 前复权读取）的真实行情切片，冻结为离线 JSON。与 fixtures/ 不同 —— fixtures/ 为 gen_fixtures.py 合成且受 fixtures_integrity 校验，本目录为真实样本，由 Test/gen_fixtures_real.py 生成、并由其 --check 校验 sha256。",
  "read_config": {
   "forward_adjust_enabled": true,
-  "vipdoc_dir": "D:\\new_tdx_hd_test\\vipdoc"
+  "vipdoc_dir": "D:/new_tdx_hd_test/vipdoc"
  },
  "version": 1
 }

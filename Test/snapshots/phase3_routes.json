@@ -29,6 +29,7 @@
  "POST /api/stocks/scan/start",
  "POST /api/stocks/scan/submit",
  "POST /api/stocks/scan/{task_id}/cancel",
+ "POST /api/stocks/{code}/backtest",
  "POST /api/stocks/{code}/save/annotation",
  "POST /api/stocks/{code}/select/point",
  "POST /api/stocks/{code}/tpsl",

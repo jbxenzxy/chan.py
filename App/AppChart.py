@@ -165,6 +165,17 @@ def call_stock_tpsl(body):
     return compute_stock_tpsl((body or {}).get("code", ""), body or {})
 
 
+def call_stock_backtest(body):
+    """股票页「回测」（/api/stocks/{code}/backtest，设计文档 §4.3）
+
+    图表交互域漏斗壳：实现全部下沉 App/AppBacktest.py。数据由前端送来的
+    `klines`（= 页面加载序列，非视口）提供 ⇒ 回测区间**所见即所测**，
+    不落盘、不做持久化（Q8）；校验失败抛 BadRequestError → 400。
+    """
+    from App.AppBacktest import compute_stock_backtest
+    return compute_stock_backtest((body or {}).get("code", ""), body or {})
+
+
 def call_manual_select_point(code, freq="d", bi_idx=-1, end_date=None, dual=False, sub_freq=None, main_freq=None):
     """股票手动选点（REST 唯一入口，无锁）
 

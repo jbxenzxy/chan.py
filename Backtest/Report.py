@@ -71,11 +71,19 @@ def write_csv(result: RunResult, path: str) -> str:
 
 
 def caliber_lines(result: RunResult) -> List[str]:
-    """口径行（区间 / 周期 / 出场参数 / 费率 / 三条偏离）。"""
+    """口径行（区间 / 周期 / 出场参数 / 费率 / 三条偏离）。
+
+    指数标的（`result.is_index`）额外追加一条**不适用**声明：指数不可交易
+    ⇒ 费率 / `target_amount` / 股数 / 成本那一整套「元口径」全是虚构的数字，
+    必须在口径行里点名，否则摘要上会印出一串看着像真的成本与倍率
+    （实测上证指数 `max_notional` 达 `target_amount` 的 7.9 倍 —— 那是因为
+    指数点位高、`target_amount/price` 落到了 `min_lot` 上，与"买不买得起"无关）。
+    纯**价格**口径（区间 / 周期 / 出场参数 / 三条偏离）对指数依然成立，故保留。
+    """
     from .ExitParams import STOCK_EXIT_PARAMS
     lo = result.start_dt or "(不限)"
     hi = result.target_dt or "(不限)"
-    return [
+    lines = [
         "标的 {}  周期 {}  区间 [{}, {}]".format(
             "{}{}".format(result.market, result.code), result.freq, lo, hi),
         "出场参数 win_loss_ratio={} / trailing_trigger_r={}（毛 R 不扣成本，§5.4c）".format(
@@ -86,6 +94,13 @@ def caliber_lines(result: RunResult) -> List[str]:
             NOMINAL_COST_RATE, TARGET_AMOUNT),
         "偏离披露：① 不套 T+1（按 T+0）；② 不建模涨跌停 / 停牌；③ 前复权价（非真实成交价）",
     ]
+    if result.is_index:
+        lines.append(
+            "⚠ 指数标的（不可交易）：上方「费率 / target_amount」与股数、成本、净收益率"
+            "均不适用（该套数字在指数上没有对应标的物）；"
+            "本次结果中仅区间 / 周期 / 出场参数 / 三类偏离以及价格侧指标"
+            "（胜率、毛 R、盈亏比、持仓根数）有效。")
+    return lines
 
 
 def summary_text(result: RunResult, metrics: Metrics | None = None) -> str:
@@ -102,9 +117,12 @@ def summary_text(result: RunResult, metrics: Metrics | None = None) -> str:
         L.append("胜/亏/平 = {}/{}/{}   胜率 {}".format(
             m.w, m.l, m.e,
             "-" if m.win_rate is None else "%.1f%%" % (m.win_rate * 100)))
+        # 指数不可交易 ⇒ 净收益率（成本口径）标「不适用」，不印一个虚构数字。
+        # 期望 R 是**毛**口径（纯价格），指数与个股同样成立，照常印。
         L.append("期望 R（毛）= {}   平均净收益率 = {}".format(
             "-" if m.expectancy_r is None else "%.4f" % m.expectancy_r,
-            "-" if m.avg_net_return is None else "%.4f%%" % (m.avg_net_return * 100)))
+            "(不适用·指数)" if result.is_index else
+            ("-" if m.avg_net_return is None else "%.4f%%" % (m.avg_net_return * 100))))
         L.append("盈亏比 = {}   盈利因子 = {}   平均持仓根数 = {}".format(
             "-" if m.profit_loss_ratio is None else "%.4f" % m.profit_loss_ratio,
             "-" if m.profit_factor is None else "%.4f" % m.profit_factor,

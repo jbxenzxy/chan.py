@@ -694,6 +694,18 @@ async def api_stocks_tpsl(code: str = Path(...), body: dict = Body(...)):
     return _json_response(data)
 
 
+@router.post("/api/stocks/{code}/backtest")
+async def api_stocks_backtest(code: str = Path(...), body: dict = Body(...)):
+    """股票页「回测」（设计文档 §4.3；同步返回、不落盘 —— Q8）
+
+    body: {code, freq, klines, bsp_types?}
+    `klines` = 当前页面**加载序列**（`chartData.klines`，非视口）⇒ 区间所见即所测。
+    单标的单周期，实测秒级 ⇒ 不需要任务队列 / 进度轮询（那留给 CLI 全市场批跑）。
+    """
+    data = await run_in_threadpool(orch.call_stock_backtest, dict(body or {}, code=code))
+    return _json_response(data)
+
+
 @router.get("/api/stocks/scan/annotation")
 async def api_stocks_scan_annotation(freq: str = Query("")):
     """自选扫描：返回有标注的股票列表"""

@@ -1,0 +1,251 @@
+{
+ "kind": "backtest-p4-repaint-drift",
+ "note": "Backtest/ 的 P4 漂移巡检基线。来源 = 冻结真实行情切片 Test/fixtures_real/sz002190_{d,30m}.json。「首见冻结」的代价（零重绘 + 3/11 条 R 漂移）在此量化冻结；改了内核要刷新时跑 test_bt07_repaint_drift.py --freeze。",
+ "samples": [
+  {
+   "alert_a_floor": 3.0,
+   "alert_first_below": 3,
+   "alert_last_below": 1,
+   "disappeared_ever": 0,
+   "drift": [
+    {
+     "A_first": 1.61,
+     "A_last": 3.61,
+     "bi_end_first": "2021-08-20",
+     "bi_end_last": "2021-09-17",
+     "dA": 2.0,
+     "date": "2021-08-23",
+     "dpct": 124.2,
+     "entry": 29.888,
+     "f_high_first": 29.218,
+     "f_high_last": 26.908,
+     "f_low_first": 28.278,
+     "f_low_last": 26.278,
+     "is_buy": true,
+     "signal": "2021-08-23 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 0.71,
+     "A_last": 1.06,
+     "bi_end_first": "2021-12-21",
+     "bi_end_last": "2021-12-27",
+     "dA": 0.35,
+     "date": "2021-12-22",
+     "dpct": 49.3,
+     "entry": 29.698,
+     "f_high_first": 29.508,
+     "f_high_last": 30.568,
+     "f_low_first": 28.988,
+     "f_low_last": 28.638,
+     "is_buy": true,
+     "signal": "2021-12-22 type=3 buy=True",
+     "type": "3"
+    },
+    {
+     "A_first": 1.7,
+     "A_last": 5.61,
+     "bi_end_first": "2022-05-18",
+     "bi_end_last": "2022-06-24",
+     "dA": 3.91,
+     "date": "2022-05-24",
+     "dpct": 230.0,
+     "entry": 23.298,
+     "f_high_first": 24.998,
+     "f_high_last": 28.908,
+     "f_low_first": 23.168,
+     "f_low_last": 27.858,
+     "is_buy": false,
+     "signal": "2022-05-24 type=3 buy=False",
+     "type": "3"
+    }
+   ],
+   "drift_count": 3,
+   "ever_but_not_final": [],
+   "ever_seen": 11,
+   "field_revision_signals": [
+    "2021-08-23 type=3 buy=True",
+    "2021-12-22 type=3 buy=True",
+    "2022-05-24 type=3 buy=False"
+   ],
+   "final_alive": 11,
+   "fixture": {
+    "bars": 1393,
+    "file": "sz002190_d.json",
+    "sha256": "56083668fff052dbfc5edceda3f7c7ae46e7a99f31db094c9e46d0727583fdc0"
+   },
+   "frames": 1393,
+   "freq": "d",
+   "max_dA": 3.91,
+   "reappeared": 0,
+   "revisions": {
+    "2021-08-23 type=3 buy=True": 5,
+    "2021-12-22 type=3 buy=True": 1,
+    "2022-05-24 type=3 buy=False": 4
+   },
+   "signals_total": 11,
+   "xcheck": {
+    "drift_trade_rows": [
+     {
+      "A_first": 1.61,
+      "A_last": 3.61,
+      "bsp_type": "3",
+      "r_distance": 2.565714,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2021-08-23",
+      "type_match": true
+     },
+     {
+      "A_first": 0.71,
+      "A_last": 1.06,
+      "bsp_type": "3",
+      "r_distance": 3.121429,
+      "r_lt_A_last": false,
+      "side": "long",
+      "trade_entry_date": "2021-12-22",
+      "type_match": true
+     },
+     {
+      "A_first": 1.7,
+      "A_last": 5.61,
+      "bsp_type": "3",
+      "r_distance": 1.874286,
+      "r_lt_A_last": true,
+      "side": "short",
+      "trade_entry_date": "2022-05-24",
+      "type_match": true
+     }
+    ],
+    "r_lt_A_last_count": 2,
+    "signals_seen": 11,
+    "trades": 6
+   }
+  },
+  {
+   "alert_a_floor": 3.0,
+   "alert_first_below": 3,
+   "alert_last_below": 3,
+   "disappeared_ever": 0,
+   "drift": [
+    {
+     "A_first": 0.14,
+     "A_last": 0.55,
+     "bi_end_first": "2026-02-13 14:30",
+     "bi_end_last": "2026-02-24 14:30",
+     "dA": 0.41,
+     "date": "2026-02-13 15:00",
+     "dpct": 292.9,
+     "entry": 36.09,
+     "f_high_first": 36.23,
+     "f_high_last": 36.64,
+     "f_low_first": 36.11,
+     "f_low_last": 36.59,
+     "is_buy": false,
+     "signal": "2026-02-13 15:00 type=3 buy=False",
+     "type": "3"
+    },
+    {
+     "A_first": 0.15,
+     "A_last": 0.74,
+     "bi_end_first": "2026-05-06 10:30",
+     "bi_end_last": "2026-05-08 14:00",
+     "dA": 0.59,
+     "date": "2026-05-06 14:00",
+     "dpct": 393.3,
+     "entry": 29.91,
+     "f_high_first": 30.06,
+     "f_high_last": 30.65,
+     "f_low_first": 29.92,
+     "f_low_last": 30.42,
+     "is_buy": false,
+     "signal": "2026-05-06 14:00 type=3 buy=False",
+     "type": "3"
+    },
+    {
+     "A_first": 0.22,
+     "A_last": 0.53,
+     "bi_end_first": "2026-06-16 11:00",
+     "bi_end_last": "2026-06-17 11:30",
+     "dA": 0.31,
+     "date": "2026-06-16 11:30",
+     "dpct": 140.9,
+     "entry": 26.39,
+     "f_high_first": 26.36,
+     "f_high_last": 25.98,
+     "f_low_first": 26.17,
+     "f_low_last": 25.86,
+     "is_buy": true,
+     "signal": "2026-06-16 11:30 type=3 buy=True",
+     "type": "3"
+    }
+   ],
+   "drift_count": 3,
+   "ever_but_not_final": [],
+   "ever_seen": 10,
+   "field_revision_signals": [
+    "2026-02-13 15:00 type=3 buy=False",
+    "2026-05-06 14:00 type=3 buy=False",
+    "2026-06-16 11:30 type=3 buy=True"
+   ],
+   "final_alive": 10,
+   "fixture": {
+    "bars": 1936,
+    "file": "sz002190_30m.json",
+    "sha256": "2a0849cee6c2d28e4e5166570caedbf2473c678bbae0ab7cac673f2439ee9f56"
+   },
+   "frames": 1936,
+   "freq": "30m",
+   "max_dA": 0.59,
+   "reappeared": 0,
+   "revisions": {
+    "2026-02-13 15:00 type=3 buy=False": 4,
+    "2026-05-06 14:00 type=3 buy=False": 4,
+    "2026-06-16 11:30 type=3 buy=True": 4
+   },
+   "signals_total": 10,
+   "xcheck": {
+    "drift_trade_rows": [
+     {
+      "A_first": 0.14,
+      "A_last": 0.55,
+      "bsp_type": "3",
+      "r_distance": 0.282857,
+      "r_lt_A_last": true,
+      "side": "short",
+      "trade_entry_date": "2026-02-13 15:00",
+      "type_match": true
+     },
+     {
+      "A_first": 0.15,
+      "A_last": 0.74,
+      "bsp_type": "3",
+      "r_distance": 0.274286,
+      "r_lt_A_last": true,
+      "side": "short",
+      "trade_entry_date": "2026-05-06 14:00",
+      "type_match": true
+     },
+     {
+      "A_first": 0.22,
+      "A_last": 0.53,
+      "bsp_type": "3",
+      "r_distance": 0.45,
+      "r_lt_A_last": true,
+      "side": "long",
+      "trade_entry_date": "2026-06-16 11:30",
+      "type_match": true
+     }
+    ],
+    "r_lt_A_last_count": 3,
+    "signals_seen": 10,
+    "trades": 8
+   }
+  }
+ ],
+ "target": {
+  "code": "002190",
+  "market": "sz"
+ },
+ "version": 1
+}

@@ -1222,6 +1222,10 @@
 
         function render() {
             if (!chartData) return;
+            // 顶栏「统计」按钮：股票态文案改成「回测」+ 双窗态禁用（§4.1 / §4.4）。
+            // 放这里而不是各加载回调里：市场态随标的/周期/复盘切换而变，散在多个
+            // 调用点必漏；render() 是这些路径的公共下游。内部有文案缓存，改动为零。
+            syncStatsButtonLabel();
             if (isDualWindow) {
                 alignDualSubViewport(); // 双窗：下窗视口对齐上窗当前视口时间范围
                 renderTop(); // renderTop内部会调用updateDualHighlight -> renderBottom
@@ -4854,8 +4858,10 @@
         // [COMPONENT] StatsPanel —— 统计面板组件（左侧信息 / 复盘滑块联动）
 
 // ══════════════════════════════════════════════════════════════════
-
         window.toggleStats = function() {
+            // 股票态：同一颗按钮的语义是「回测」（§4.1）—— 统计面板读的是期货自动
+            // 下单的成交账本（state.db），股票态本就没有可看的东西（§4.2 / Q7）。
+            if (!isFuturesMode()) { toggleBacktestPanel(); return; }
             var panel = document.getElementById("stats-panel");
             if (!panel) return;
             if (panel.classList.contains("show")) {
@@ -4872,13 +4878,18 @@
         };
 
         // 打开面板后点击面板之外区域 → 自动关闭（与「市场量能」面板同款 mousedown 语义）
+        // 两个面板共用同一条监听：它们占同一屏位、且同一时刻只可能有一个是 show
+        // （市场态一变 syncStatsButtonLabel 就把另一个收掉）。
         document.addEventListener("mousedown", function(e) {
-            var panel = document.getElementById("stats-panel");
-            if (!panel || !panel.classList.contains("show")) return;
-            if (panel.contains(e.target)) return;        // 点击面板内部 → 不关闭
             var btn = document.getElementById("btn-stats");
-            if (btn && btn.contains(e.target)) return;   // 点击「统计」按钮本身 → 交给 toggleStats 处理
-            closeStatsPanel();
+            if (btn && btn.contains(e.target)) return;   // 点击按钮本身 → 交给 toggleStats 处理
+            var pairs = [["stats-panel", closeStatsPanel], ["bt-panel", closeBacktestPanel]];
+            for (var i = 0; i < pairs.length; i++) {
+                var panel = document.getElementById(pairs[i][0]);
+                if (!panel || !panel.classList.contains("show")) continue;
+                if (panel.contains(e.target)) continue;  // 点击面板内部 → 不关闭
+                pairs[i][1]();
+            }
         });
 
         // ── 成交统计：与图表重绘解耦 ────────────────────────────────────
@@ -5378,6 +5389,261 @@
             label.textContent = winLabel + startDate + " - " + endDate + "   [K线]: " + displayCount + "/" + totalKlines + "   [分型]: " + visFxs.length + "/" + data.fxs.length + "   [笔]: " + visBis.length + "/" + data.bis.length + "   [中枢]: " + visZs.length + "/" + data.zs.length;
         }
 
+
+
+
+// ══════════════════════════════════════════════════════════════════
+        // [COMPONENT] BacktestPanel —— 股票态「回测」面板（设计文档 §4）
+//   · 按钮复用 #btn-stats：股票态文案「回测」、期货态「统计」（§4.1 —— 股票/期货
+//     是**同一个按钮的两种市场态**，不是两个 DOM）。统计面板的数据源是期货自动下单
+//     的成交账本（state.db），股票态本来就没有可看的东西 ⇒ 改名零功能损失（§4.2/Q7）。
+//   · 数据来源 = 当前页面**加载序列** chartData.klines（**不是**视口
+//     getVisibleKlines()）：后端按它跑一遍 ⇒ 区间天然「所见即所测」，
+//     不需要另传 [L, R]（§4.4）。
+//   · 不落盘（Q8 定案）：纯请求-响应；报告 / CSV 导出留给 CLI 批跑。
+//   · 双窗态护栏（§4.4 前端护栏 ①）：回测只复刻**单窗口径**，双窗时禁用按钮并说明
+//     原因 —— 不加护栏的话，用户会拿到与图上不一致的数字，且没有任何东西告诉他
+//     那是「本次未启用区间套」的配置差异。
+// ══════════════════════════════════════════════════════════════════
+
+        var _btSeq = 0;          // 过期响应丢弃：切标的/周期后，在途的旧结果不得覆盖新结果
+        var _btBtnLabel = null;  // 按钮文案缓存：render() 是热路径，文案未变就不碰 DOM
+
+        window.toggleBacktestPanel = function() {
+            var panel = document.getElementById("bt-panel");
+            if (!panel) return;
+            if (panel.classList.contains("show")) { closeBacktestPanel(); return; }
+            panel.classList.add("show");
+            runBacktest();
+        };
+
+        window.closeBacktestPanel = function() {
+            var panel = document.getElementById("bt-panel");
+            if (panel) panel.classList.remove("show");
+        };
+
+        // 按钮文案 + 双窗护栏同步（在 render() 里调；文案未变则不写 DOM）。
+        // 放在 render() 而不是"加载完成回调"：市场态还随 freq 切换 / 复盘进出而变，
+        // 散在多个调用点必然漏一处，而 render() 是所有这些路径的公共下游。
+        function syncStatsButtonLabel() {
+            var btn = document.getElementById("btn-stats");
+            if (!btn || typeof chartData === "undefined" || !chartData || !chartData.meta) return;
+            var futures = isFuturesMode();
+            var label = futures ? "统计" : "回测";
+            if (_btBtnLabel !== label) {
+                // 市场态切换：两面板占同一屏位，同时 show 会叠在一起 ⇒ 收掉不适用的那个。
+                // 首次同步（_btBtnLabel === null）跳过关闭动作：此时两面板本来就是初始
+                // 隐藏态，且首屏 render() 可能早于 window.close*Panel 的赋值执行。
+                if (_btBtnLabel !== null) {
+                    if (futures) closeBacktestPanel(); else closeStatsPanel();
+                }
+                btn.textContent = label;
+                _btBtnLabel = label;
+            }
+            var dual = (!futures && isDualWindow);
+            btn.disabled = dual;
+            btn.title = dual ? "当前为双窗态，回测只支持单窗口径 —— 请先切回单窗"
+                             : (futures ? "" : "回测当前页面标的与周期（区间所见即所测）");
+        }
+
+        // 买卖点类型勾选（与自动下单 / 成交统计共用同一份 bspFilter，§4.7.3）：
+        //   全勾 = 未启用过滤 → 不传 bsp_types（后端 None = 全放行）；
+        //   四类全不勾 → 传空串（后端 "" = 全部过滤掉）。二者是**不同语义**，
+        //   合并会让"全不勾"静默变成"全放行"，恰好相反。
+        function _btBspTypes() {
+            var on = ["0", "1", "2", "3"].filter(function (t) { return !!bspFilter[t]; });
+            return on.length === 4 ? null : on.join(",");
+        }
+
+        function _btWrite(html) {
+            var box = document.getElementById("bt-content");
+            if (box) box.innerHTML = html;
+        }
+
+        function _btCol(x) { return Number(x) >= 0 ? "#FF3C3C" : "#00F0F0"; }   // 涨红跌绿（与统计面板同款）
+        // 指数页专用：金额/成本族字段在指数上没有对应标的物，标「不适用」而不是「—」。
+        //   「—」= 无样本（数据缺失）；「不适用」= 口径在标的上不存在 —— 两者必须分开，
+        //   否则指数页会显示一串像真数字的成本与倍率，或把"口径不存在"误读成"没数据"。
+        function _btNA() { return '<span style="color:#8b93a7;font-size:11px;">不适用</span>'; }
+        function _btPct(x, nd) {
+            if (x === null || x === undefined) return "—";
+            var v = Number(x);
+            return (v > 0 ? "+" : "") + v.toFixed(nd === undefined ? 2 : nd) + "%";
+        }
+        function _btNum(x, nd) {
+            if (x === null || x === undefined) return "—";
+            var v = Number(x);
+            return (v > 0 ? "+" : "") + v.toFixed(nd === undefined ? 3 : nd);
+        }
+
+        function runBacktest() {
+            if (!chartData || !chartData.meta || !chartData.meta.symbol) {
+                _btWrite('<div class="stats-row"><span class="stats-value">无标的上下文</span></div>');
+                return;
+            }
+            var klines = chartData.klines || [];
+            if (!klines.length) {
+                _btWrite('<div class="stats-row"><span class="stats-value">当前页面无 K 线数据</span></div>');
+                return;
+            }
+            var symbol = chartData.meta.symbol;
+            var body = { code: symbol, freq: currentFreq, klines: klines };
+            var types = _btBspTypes();
+            if (types !== null) body.bsp_types = types;
+
+            var seq = ++_btSeq;
+            _btWrite('<div class="stats-loading" style="padding:8px;color:#a8b2d1;">回测中…（'
+                + klines.length + ' 根 ' + statsEsc(String(currentFreq)) + '）</div>');
+            fetch("/api/stocks/" + encodeURIComponent(symbol) + "/backtest", {
+                method: "POST",
+                cache: "no-store",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(body)
+            })
+                .then(function (r) {
+                    return r.json().then(function (d) {
+                        if (!r.ok) throw new Error((d && d.detail) || ("HTTP " + r.status));
+                        return d;
+                    });
+                })
+                .then(function (d) {
+                    if (seq !== _btSeq) return;      // 过期响应丢弃
+                    renderBacktest(d);
+                })
+                .catch(function (err) {
+                    if (seq !== _btSeq) return;
+                    _btWrite('<div class="stats-row"><span class="stats-value">回测失败：'
+                        + statsEsc(err && err.message ? err.message : String(err)) + '</span></div>');
+                });
+        }
+
+        function renderBacktest(d) {
+            var s = d.summary || {}, run = d.run || {}, cal = d.caliber || {}, tgt = d.target || {};
+            var html = "";
+
+            // ① 口径标识置顶（口径先行：先说清这几个数字是在什么口径下算的）
+            if (cal.bsp_types !== null && cal.bsp_types !== undefined) {
+                html += '<div class="stats-row" style="background:rgba(255,176,32,0.10);'
+                    + 'border-left:3px solid #FFB020;padding:4px 6px;margin-bottom:6px;'
+                    + 'font-size:11px;color:#FFB020;">已按「买卖点类型」勾选做事前过滤：'
+                    + statsEsc(cal.bsp_types || "（全不勾）") + ' 类</div>';
+            }
+
+            // ①b 指数标识：指数不可交易 ⇒ 股数 / 成本 / 净收益率整族「不适用」。
+            //     判定不在前端做（前端只看后端 `is_index`）—— 前缀规则是取数层 SSOT
+            //     （`DataAPI.TdxAPI.is_index_code`），前端复制一份必然漂移。
+            var isIndex = !!(tgt.is_index || cal.is_index);
+            if (isIndex) {
+                html += '<div class="stats-row" style="background:rgba(0,240,240,0.10);'
+                    + 'border-left:3px solid #00F0F0;padding:4px 6px;margin-bottom:6px;'
+                    + 'font-size:11px;color:#5fd7de;">指数标的（不可交易）：股数 / 成本 / 净收益率'
+                    + '口径不适用；下列仅价格侧指标（胜率、毛 R、盈亏比、持仓根数）有效</div>';
+            }
+
+            // ② 核心区：一行四格（对齐「成交统计」面板的 .stats-hero）
+            html += '<div class="stats-hero">';
+            html += '<div class="stats-cell"><span class="stats-label">交易笔数</span><span class="stats-value">'
+                + run.filled + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">'
+                + (s.win_rate === null || s.win_rate === undefined
+                    ? "—" : (Number(s.win_rate) * 100).toFixed(1) + "%") + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">期望 R</span><span class="stats-value" style="color:'
+                + _btCol(s.expectancy_r) + '">' + _btNum(s.expectancy_r, 3) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">平均净收益率</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : '<span style="color:' + _btCol(s.avg_net_return_pct) + '">'
+                      + _btPct(s.avg_net_return_pct) + '</span>') + '</span></div>';
+            html += '</div>';
+
+            // ③ 明细行
+            html += '<div class="stats-rows">';
+            html += '<div class="stats-row"><span class="stats-label">标的 / 周期</span><span class="stats-value">'
+                + statsEsc(tgt.code || "") + ' · ' + statsEsc(tgt.freq_label || "") + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">区间 / K线</span><span class="stats-value">'
+                + statsEsc((tgt.date_from || "") + " ~ " + (tgt.date_to || "")) + '（' + tgt.bars + ' 根）</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">胜负平</span><span class="stats-value">'
+                + '胜 ' + s.w + ' / 亏 ' + s.l + ' / 平 ' + s.e + (s.u ? ' / 未平 ' + s.u : '') + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">盈亏比 / 盈利因子</span><span class="stats-value">'
+                + _btNum(s.profit_loss_ratio, 3) + ' / ' + _btNum(s.profit_factor, 3) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">平均持仓 / 最好·最差 R</span><span class="stats-value">'
+                + (s.avg_bars_held === null || s.avg_bars_held === undefined
+                    ? "—" : Number(s.avg_bars_held).toFixed(1)) + ' 根 / '
+                + '<span style="color:#FF3C3C">' + _btNum(s.max_win_r, 2) + '</span> / '
+                + '<span style="color:#00F0F0">' + _btNum(s.max_loss_r, 2) + '</span></span></div>';
+            html += '<div class="stats-row"><span class="stats-label">首见信号 / 拒收 / 过滤</span><span class="stats-value">'
+                + run.signals_seen + ' / ' + run.signals_rejected + ' / ' + run.signals_filtered + '</span></div>';
+
+            // 类型拆解（0/1/2/3 类各自的笔数与期望 R）
+            var byType = d.by_bsp_type || {};
+            var typeKeys = Object.keys(byType).sort();
+            if (typeKeys.length) {
+                html += '<div class="stats-row stats-bsp-row">';
+                typeKeys.forEach(function (k) {
+                    var g = byType[k] || {};
+                    html += '<span class="stats-bsp-seg">' + statsEsc(k) + '类(n' + (g.n || 0) + '/R'
+                        + (g.expectancy_r === null || g.expectancy_r === undefined
+                            ? "—" : Number(g.expectancy_r).toFixed(2)) + ')</span>';
+                });
+                html += '</div>';
+            }
+
+            // 出场原因拆解
+            var byReason = d.by_reason || {};
+            var reasonKeys = Object.keys(byReason).sort();
+            if (reasonKeys.length) {
+                var reasonTxt = reasonKeys.map(function (k) {
+                    return statsEsc(k) + ":" + (byReason[k] || {}).n;
+                }).join("  ");
+                html += '<div class="stats-row"><span class="stats-label">出场原因</span><span class="stats-value" style="font-size:11px">'
+                    + reasonTxt + '</span></div>';
+            }
+
+            // 仓位口径三项（§5.4d-quater：报告必须披露放大倍数与 min_lot 借道）
+            //   指数不可交易 ⇒ 整块「不适用」（后端已把这三个字段置 null）
+            html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : (cal.target_amount === undefined || cal.target_amount === null
+                        ? "—" : Number(cal.target_amount).toFixed(0) + " 元")) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最小申报 / 借道笔数</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : ((cal.min_lot || "—") + ' 股 / ' + (cal.min_lot_derived_trades || 0) + ' 笔')) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔放大</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
+                        ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
+                       + '（' + Number(cal.max_notional || 0).toFixed(0) + ' 元）')) + '</span></div>';
+            html += '</div>';
+
+            // ④ 逐笔明细
+            var trades = d.trades || [];
+            html += '<div class="stats-rows" style="margin-top:6px;">';
+            html += '<div class="stats-row"><span class="stats-label">逐笔明细</span>'
+                + '<span class="stats-value" style="font-size:11px;color:#a8b2d1;">' + trades.length + ' 笔</span></div>';
+            html += trades.map(function (t) {
+                var side = t.side === "long" ? "多" : "空";
+                // 净收益率缺失（指数）时只留 R —— 顶部徽标已说明原因，逐行不再重复
+                var metric = (t.net_return_pct === null || t.net_return_pct === undefined)
+                    ? '<span style="color:' + _btCol(t.r_multiple) + '">'
+                      + _btNum(t.r_multiple, 2) + 'R</span>'
+                    : '<span style="color:' + _btCol(t.net_return_pct) + '">'
+                      + _btPct(t.net_return_pct) + ' (' + _btNum(t.r_multiple, 2) + 'R)</span>';
+                return '<div class="stats-row" style="font-size:11px;">'
+                    + '<span class="stats-label">#' + t.trade_id + ' ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
+                    + statsEsc(t.entry_date) + ' → ' + statsEsc(t.exit_date || "持仓中")
+                    + ' ' + statsEsc(t.exit_reason || "") + '</span>'
+                    + '<span class="stats-value">' + metric + '</span></div>';
+            }).join("");
+            html += '</div>';
+
+            // ⑤ 口径披露（三条偏离，与「止盈止损」推演同款）
+            html += '<div class="stats-rows" style="margin-top:6px;">';
+            html += '<div class="stats-row"><span class="stats-label" style="font-size:11px;color:#a8b2d1;">口径披露</span>'
+                + '<span class="stats-value" style="font-size:11px;color:#a8b2d1;text-align:right;">'
+                + statsEsc((d.disclosures || []).join("；")) + '</span></div>';
+            html += '</div>';
+
+            _btWrite(html);
+        }
 
 
 

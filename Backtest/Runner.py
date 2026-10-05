@@ -202,6 +202,7 @@ class RunResult:
     freq: str
     start_dt: Optional[str] = None
     target_dt: Optional[str] = None
+    is_index: bool = False               # 标的是指数（不可交易）⇒ 金额/成本口径不适用
     bars_total: int = 0
     signals_seen: int = 0                # 首见信号总数（= 放行开仓 + 被过滤 + 被拒收）
     signals_filtered: int = 0            # 因**类型过滤**未放行（PRE，§4.7.3）
@@ -261,6 +262,7 @@ def run(
     exit_params: Optional[Dict[str, Any]] = None,
     target_amount: Optional[float] = None,
     max_bars: Optional[int] = None,
+    is_index: bool = False,
 ) -> RunResult:
     """跑一只票的一个周期（设计文档 §5.2）。
 
@@ -276,6 +278,22 @@ def run(
     exit_params            出场参数；`None` = `STOCK_EXIT_PARAMS`
     target_amount          目标成交额；`None` = `m / k`（= 50 000）
     max_bars               调试用：最多跑多少帧
+    is_index               标的是否指数，**由调用方判定后注入**（默认 False）。
+
+    ★ 为什么 `is_index` 是注入而非本层判定（§5.9 R31 层表 + 单一事实源）
+    ----------------------------------------------------------------
+      `Backtest/` **禁 import `App`**（`Backtest/Test/test_bt04_no_app_import.py`
+      用 AST 钉死）⇒ 本层看不到 `App/AppUtils.is_index`（页面级 SSOT：它额外覆盖
+      `88xxxx` 板块指数 / `ds` 中证扩展指数 / `hk` 字母代码，并驱动 `meta.is_index`
+      与前端「成分股」置灰）。
+      若本层自己按 code 段判一份，就会出现 `sh880491` 这种：`meta.is_index=True`
+      （成分股按钮置灰）而回测面板不显示「不适用」的**自相矛盾**。
+      ⇒ 判定归调用方（App 层），本层只消费。
+      代价：`python -m Backtest.Runner` 单跑指数时要显式加 `--is-index`
+      （CLI 无法自行判定，同上理由）。
+
+    该标记**只标注、不参与任何计算** —— 引擎侧对指数与个股走的是同一套价格序列与
+    同一套状态机，保证"同一份 K 线在两侧跑出的形态信号逐字段相同"。
     """
     import Chan
     from DataAPI import TdxAPI
@@ -289,12 +307,14 @@ def run(
     cfg = chan_config if chan_config is not None else default_chan_config()
     params = dict(exit_params if exit_params is not None else STOCK_EXIT_PARAMS)
     tgt = float(target_amount) if target_amount is not None else TARGET_AMOUNT
+    is_idx = bool(is_index)
 
     recs = _slice_records(records or [], start_dt, target_dt)
     result = RunResult(
         market=str(market).lower(), code=str(code), freq=str(freq),
         start_dt=(None if start_dt is None else str(start_dt)),
         target_dt=(None if target_dt is None else str(target_dt)),
+        is_index=is_idx,
     )
 
     # ★ 全程唯一实例：ATR 从头连续累积（`deque(maxlen=atr_period+2)` 只留末 16 根，
@@ -416,7 +436,7 @@ def _main(argv=None) -> int:
 
         python -m Backtest.Runner --records Test/fixtures_real/sz002190_d.json \\
             --market sz --code 002190 --freq d [--from 2021-01-01] [--to 2026-09-30] \\
-            [--bsp-types 0,3] [--csv out.csv]
+            [--bsp-types 0,3] [--is-index] [--csv out.csv]
     """
     import argparse
     import json
@@ -434,6 +454,9 @@ def _main(argv=None) -> int:
     ap.add_argument("--to", dest="target_dt", default=None, help="区间右端 [R]（YYYY-MM-DD）")
     ap.add_argument("--bsp-types", default=None,
                     help="只放行这些类型，逗号分隔，如 0,3（默认全放行）")
+    ap.add_argument("--is-index", dest="is_index", action="store_true",
+                    help="标的是指数（不可交易）⇒ 报告里金额/成本口径标「不适用」。"
+                         "CLI 无法自行判定，须显式给（页面侧由 App/AppBacktest 注入）")
     ap.add_argument("--csv", default=None, help="把逐笔清单写到该 CSV")
     args = ap.parse_args(argv)
 
@@ -449,7 +472,7 @@ def _main(argv=None) -> int:
         bsp_filter = filter_from_choices(args.bsp_types)
 
     result = run(market, code, args.freq, args.start_dt, args.target_dt,
-                 records=records, bsp_filter=bsp_filter)
+                 records=records, bsp_filter=bsp_filter, is_index=args.is_index)
 
     from .Metrics import compute
     from .Report import summary_text, trades_table, write_csv

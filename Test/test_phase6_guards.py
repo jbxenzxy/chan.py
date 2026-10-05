@@ -4,18 +4,19 @@
 =====================================================================
 守护阶段 6 的结构性成果（设计文档 V10 方案 8.9）：
 
-  ① 组件区块完备：Frontend/app.js 按 [COMPONENT] 横幅切出的区块（当前 12 个）
-     全部在位且非空；下列 9 个核心区块必须存在（KLineChart / NavToolbar /
-     SymbolSearch / StatsPanel / BspSettingsPanel / ScanPanel /
+  ① 组件区块完备：Frontend/app.js 按 [COMPONENT] 横幅切出的区块（当前 13 个）
+     全部在位且非空；下列 10 个核心区块必须存在（KLineChart / NavToolbar /
+     SymbolSearch / StatsPanel / BacktestPanel / BspSettingsPanel / ScanPanel /
      RealtimeService / AnnotationPanel / Bootstrap），区块外不允许游离的
      业务函数声明。
   ② KLineChart 内容契约：渲染管线关键函数（render 族 / draw* 族 /
      priceToY 坐标系 / onWheel 交互）物理位于 KLineChart 区块内
      （阶段 8 拆 kline/ 子目录时按区块整体迁移）。
   ③ window API 面冻结：app.js 全文件 window.* 赋值名集合 == 基线 61 个
-     + window.ChanApp + 3 个 HTML 内联事件桥（合计 65；阶段 6 组件化为纯
+     + 4 个登记性新增（ChanApp / stockTpslFromMenu / stockTpslCancel /
+     toggleBacktestPanel）+ 4 个 HTML 内联事件桥（合计 69；阶段 6 组件化为纯
      代码搬移，对既有 API 面零漂移，HTML onclick / 控制台调试依赖此面）。
-  ③b HTML 内联事件桥：登记的 3 个桥接必须既在 window 绑定、又被
+  ③b HTML 内联事件桥：登记的 4 个桥接必须既在 window 绑定、又被
      app.html 引用（与 ④ 互为补集：既拦「摘绑定」也拦「僵尸条目」）。
   ④ app.html 事件引用完整：全部内联事件（onclick/oninput/onkeydown/
      onchange/…）调用的标识符均可解析到 window 绑定。
@@ -49,7 +50,7 @@ FRONTEND_DIR = os.path.join(REPO_ROOT, "Frontend")
 # ①② 组件区块
 # ═══════════════════════════════════════════════════════════════════════
 COMPONENTS = [
-    "KLineChart", "NavToolbar", "SymbolSearch", "StatsPanel",
+    "KLineChart", "NavToolbar", "SymbolSearch", "StatsPanel", "BacktestPanel",
     "BspSettingsPanel", "ScanPanel", "RealtimeService", "AnnotationPanel",
     "Bootstrap",
 ]
@@ -86,20 +87,26 @@ WINDOW_BASELINE = {
     'updateScanRecentDisabled', 'updateScanSaveBtn', 'updateSearchSelection', 'updateWeekday',
 }
 # 允许的登记性新增（组件注册表）
-WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel"}
+#   toggleBacktestPanel <- 股票页「回测」面板开合入口。与 toggleStats / closeStatsPanel
+#     同一范式（两个面板占同一屏位、由市场态二选一），故同样挂 window 供控制台调试；
+#     app.html 不直接引用它（HTML 那颗按钮走 toggleStats 分流），因此**不算** ③b 桥。
+WINDOW_ALLOWED_NEW = {"ChanApp", "stockTpslFromMenu", "stockTpslCancel",
+                      "toggleBacktestPanel"}
 # 允许的登记性新增（HTML 内联事件桥）
 # app.html 的 on* 属性在**全局作用域**执行，而 app.js 的业务函数都在 IIFE
 # 闭包内 —— 不挂 window 时点击即抛 ReferenceError。两起真实故障（自动下单开关
 # 「视觉上开了又自动关、后端零日志」/ 账本按钮「点了毫无反应」）都是这么来的，
-# app.js 对应位置留着「P65 复刻了上面开关的坑」的注释留档。故这三项不是可选
+# app.js 对应位置留着「P65 复刻了上面开关的坑」的注释留档。故这几项不是可选
 # 绑定，而是 app.html 的内联事件所必需：
 #   closeStatsPanel       <- app.html  onclick="closeStatsPanel()"
 #   onAutoOrderToggle     <- app.html  onchange="onAutoOrderToggle(this)"
 #   toggleAutoOrderLedger <- app.html  onclick="toggleAutoOrderLedger(event)"
+#   closeBacktestPanel    <- app.html  onclick="closeBacktestPanel()"（#bt-panel 关闭键）
 # 与 ④ 互为补集：④ 保证「html 引用 => 必有 window 绑定」，test_inline_bridges
 # 保证「登记 => 必被 html 引用」，合起来既拦摘绑定、也拦僵尸条目。
 WINDOW_INLINE_BRIDGES = {
     "closeStatsPanel", "onAutoOrderToggle", "toggleAutoOrderLedger",
+    "closeBacktestPanel",
 }
 # 允许的区块外顶层辅助函数（既有基线即存在的必要工具，非业务组件）
 ALLOWED_STRAY = {"getLayoutParams",
