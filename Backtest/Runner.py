@@ -17,6 +17,8 @@
     0️⃣ `pol.on_bar(bar, inst)`   —— **无条件**（持仓与否都收），ATR 从头连续
     1️⃣ 先结算已有持仓           —— 用刚闭合这根的 close 判 L1-L3
     2️⃣ 再看本帧新出现的信号      —— 只有 FLAT 态接收；一帧最多开一笔
+    3️⃣ 循环结束后收尾            —— 未平仓笔按**末根收盘价**打浮动估值
+                                    （`unrealized_*`；已实现字段一律不碰，见 `_mark_open_positions`）
 
     · ① 在 ② 之前 ⇒ **自动满足"入场那根不判出场"**，无需额外判断。
     · ① 触发平仓后**不 continue** ⇒ 同一根可以平了又开（Q11 定案）。
@@ -174,7 +176,17 @@ def load_records(path: str) -> List[Dict[str, Any]]:
 # ════════════════════════════════════════════════════════════════════
 @dataclass
 class BtTrade:
-    """一笔往返（开 + 平）。`open_` 为真表示跑到末根仍未平仓。"""
+    """一笔往返（开 + 平）。`open_` 为真表示跑到末根仍未平仓。
+
+    ★ "已实现"与"浮动"两族字段**不共用槽位**（v1.18）
+    ----------------------------------------------------------------
+      · `r_multiple` / `gross_return` / `net_return` / `cost_cash` / `exit_reason` /
+        `exit_date` / `bars_held` = **已实现**（成交结果）⇒ 未平仓笔一律 `None`。
+      · `unrealized_*` = **浮动**（截止最后一根 K 线收盘价的估值）⇒ 未平仓笔才填。
+      为什么不复用同一槽位：`Metrics` 只吃 `closed`，判据又是 `net_return` 的符号 ——
+      把估值填进 `net_return` 就等于"一笔没平的仓位先算进胜率分母"，
+      而且符号会随最后一根 K 线跳来跳去（今天胜、明天负）。两族字段是**故意的**。
+    """
     trade_id: int
     side: str                    # long / short
     bsp_type: str                # 信号类型串（type2str，可为 "1,11"）
@@ -191,6 +203,10 @@ class BtTrade:
     gross_return: Optional[float] = None    # 毛收益率（纯价格比）
     net_return: Optional[float] = None      # 净收益率（扣双边成本）
     cost_cash: Optional[float] = None       # 双边成本（元）
+    # ── 浮动估值（**仅未平仓笔**；见类 docstring）──────────────────────
+    unrealized_price: Optional[float] = None        # 估值用的收盘价 = 最后一根 K 线
+    unrealized_r: Optional[float] = None            # 毛 R 倍数（按估值价）
+    unrealized_net_return: Optional[float] = None   # 净收益率（按估值价平仓估算）
     open_: bool = True
 
 
@@ -203,6 +219,11 @@ class RunResult:
     start_dt: Optional[str] = None
     target_dt: Optional[str] = None
     is_index: bool = False               # 标的是指数（不可交易）⇒ 金额/成本口径不适用
+    # 本轮**实际使用**的出场参数（`run()` 写入，含调用方覆盖）⇒ 报告/文案据此自述口径。
+    # `None` = 未指定（手搓的 RunResult）⇒ 报告层回落 `STOCK_EXIT_PARAMS`。
+    # 为什么必须带着走：口径行与「保本(1R)」里的那个数都从这里取，否则
+    # 调用方换了参数、报告仍印常量，正是"报告与结果不符"而又没人看得见。
+    exit_params: Optional[Dict[str, Any]] = None
     bars_total: int = 0
     signals_seen: int = 0                # 首见信号总数（= 放行开仓 + 被过滤 + 被拒收）
     signals_filtered: int = 0            # 因**类型过滤**未放行（PRE，§4.7.3）
@@ -315,6 +336,9 @@ def run(
         start_dt=(None if start_dt is None else str(start_dt)),
         target_dt=(None if target_dt is None else str(target_dt)),
         is_index=is_idx,
+        # `params` 就是交给 `LayeredExitPolicy` 的那一份（含调用方覆盖）——
+        # 带着走，报告层的口径行 / 「保本(1R)」文案才能自述"这次用的是哪套参数"。
+        exit_params=dict(params),
     )
 
     # ★ 全程唯一实例：ATR 从头连续累积（`deque(maxlen=atr_period+2)` 只留末 16 根，
@@ -328,6 +352,7 @@ def run(
     frozen_types: Dict[Tuple[str, bool], str] = {}   # 冻结键 → 首见时的 type2str
     trade_seq = 0
     frame = 0
+    last_bar = None                                  # 末根已处理的 K 线（给未平仓笔估值）
 
     with TdxAPI.tdx_data_context(recs):
         chan = Chan.CChan(
@@ -342,6 +367,7 @@ def run(
             cur_klu = chan[0][-1][-1]      # 本帧刚加入的原始 K 线（最高级别）
             bar = bar_from_klu(cur_klu, date_fmt)
             result.bars_total = frame
+            last_bar = bar
 
             # 0️⃣ 无条件收 bar（`Exit.py:on_bar` 的契约：每根 K 线都调用）
             pol.on_bar(bar, inst)
@@ -391,7 +417,42 @@ def run(
                 state = State.IN_TRADE
                 break                                  # 一帧最多开一笔
 
+    # 3️⃣ 收尾：给跑到末根仍未平仓的笔打上**估值**（截止最后一根 K 线收盘价）。
+    #    放在循环之外：中途 `max_bars` break 时 `last_bar` 就是停下的那一根，
+    #    估值口径与"跑完整个区间"完全一致（不会因为提前停就估到别的价）。
+    _mark_open_positions(result, last_bar)
     return result
+
+
+def _mark_open_positions(result: RunResult, last_bar) -> None:
+    """未平仓笔 → 截止最后一根 K 线收盘价的**浮动**估值（只填 `unrealized_*`）。
+
+    ⚠ 这是"假如以最后一根收盘价平掉"的假设值，**不是成交结果**：
+      · 净收益率按 `round_trip_cost(entry, last_close, sign, shares)` 估 —— 与已平仓笔
+        用**同一个**成本函数、同一个"按现价平仓"假设 ⇒ 两族数字可比，不出现
+        "已平的扣成本、没平的按毛"这种口径差。
+      · 真实成本要等实际平仓腿的成交价（前复权价本身也不是真实成交价，见口径披露）。
+      · 已实现字段（`r_multiple` / `net_return` / `exit_reason` / `exit_date` /
+        `bars_held` / `cost_cash`）**一律不碰**：`Metrics` 只吃 `closed` 且按
+        `net_return` 符号判胜负，填了就是把没平的仓位先算进胜率。
+      · 指数标的的净收益率同样"不适用"，但那是 App 层的分流（`_amt`）——
+        本层照常算（与 `is_index` 只标注不计算的原则一致）。
+    """
+    if last_bar is None:
+        return
+    px = float(last_bar.close)
+    for t in result.still_open:
+        sign = 1 if str(t.side) == "long" else -1
+        entry = float(t.entry_price or 0.0)
+        R = float(t.r_distance or 0.0)
+        t.unrealized_price = px
+        t.unrealized_r = round((px - entry) * sign / R, 4) if R > 0 else None
+        notional = float(t.shares) * entry
+        if notional:
+            gross = ((px - entry) * sign / entry) if entry else None
+            cost = round_trip_cost(entry, px, sign, t.shares)
+            t.unrealized_net_return = ((gross - cost / notional)
+                                       if gross is not None else None)
 
 
 def _new_signals_this_frame(chan, cur_klu, frozen_types: Dict, result: RunResult,

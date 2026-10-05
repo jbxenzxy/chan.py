@@ -32,7 +32,12 @@
      （同一份 K 线只换代码题头 ⇒ 判别力来自实验设计）+ 口径行/披露只追加不改写
      + `Report.caliber_lines` / `summary_text` 直连（Backtest 层不依赖 App）
      + 前端 `renderBacktest` 真渲染：指数页 6 处「不适用」且只剩胜率一个 `%`
-     （node 不在位时 ⑧⑨⑩⑪ SKIP）
+  ⑫ 出场原因**三选一**（止损 / 保本(1R) / 跟踪止盈，v1.18）：映射随响应下发
+     （`exit_reason_labels` / `exit_reason_legend`）+ 逐笔 `exit_reason` 仍是引擎原值
+     + 三种原因在日线切片里都真实出现 + **未平仓浮动估值**三字段（价 / R / 净收益率）
+     与已实现字段**互不越界**（两族槽位隔离）+ 指数侧浮动百分比置 null
+     + 前端真渲染：中文原因、持仓中「浮」、分类型桶可读化、`n==1` 标注「最好＝最差」
+     （node 不在位时 ⑧⑨⑩⑪⑫ SKIP）
 
 跑法：`python Test/test_stock_backtest.py`（退出码 0/1 即判决；
 已注册进 `Test/run_all.py` 的 COMPONENTS）
@@ -67,13 +72,19 @@ def check(name, cond, detail=""):
     return cond
 
 
-def _page_klines(fixture_name, minute=False):
+def _page_klines(fixture_name, minute=False, lo=None, hi=None):
     """冻结切片（`dt` 连字符、带 `00:00:00`）→ 页面 `chartData.klines` 格式。
 
     页面日期格式 SSOT = `Common.func_util._get_date_fmt`：
       日线 `%Y/%m/%d`；分钟级 `%Y/%m/%d %H:%M`。
+
+    `lo` / `hi` 截一段**真区间**（页面送什么区间就测什么区间，§4.4）——
+    ⑫ 需要一个"恰好 1 笔已平仓"的样本去覆盖 `n==1` 的显示分支，
+    用真区间比手搓一份假响应可信（假响应只能证明前端读得对，证明不了后端给得对）。
     """
     recs = json.load(io.open(os.path.join(FIXTURES, fixture_name), encoding="utf-8"))
+    if lo is not None or hi is not None:
+        recs = recs[lo or 0:hi]
     out = []
     for r in recs:
         dt = r["dt"]                       # "2021-01-04 00:00:00"
@@ -448,8 +459,8 @@ def _extract_any_fn(appjs, fn_name):
     raise AssertionError("app.js 花括号不配平: " + fn_name)
 
 
-def part8_9_10_11(d_idx, d_stock):
-    print("══ ⑧⑨⑩⑪ 前端真函数（node 抽段；node 不在位则 SKIP）══")
+def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
+    print("══ ⑧⑨⑩⑪⑫ 前端真函数（node 抽段；node 不在位则 SKIP）══")
     node = shutil.which("node")
     if not node:
         check("node 不在位，前端契约层 SKIP", True)
@@ -527,6 +538,20 @@ def part8_9_10_11(d_idx, d_stock):
         "out.push('R1=' + _btSnap());\n"
         "BT_HTML = ''; renderBacktest(" + json.dumps(d_stock) + ");\n"
         "out.push('R2=' + _btSnap());\n"
+        # ── ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应）──
+        "function _tSnap() { return JSON.stringify({"
+        " stop: BT_HTML.indexOf('止损') >= 0,"
+        " be: BT_HTML.indexOf('保本(1R)') >= 0,"
+        " trail: BT_HTML.indexOf('跟踪止盈') >= 0,"
+        " rawReason: /\\b(sl|breakeven|trailing)\\b/.test(BT_HTML),"
+        " float: BT_HTML.indexOf('浮') >= 0,"
+        " plainBucket: BT_HTML.indexOf('(n1/R') >= 0 || BT_HTML.indexOf('/R2.') >= 0,"
+        " bucket: BT_HTML.indexOf('笔 · 均R') >= 0,"
+        " solo: BT_HTML.indexOf('最好＝最差') >= 0 }); }\n"
+        "BT_HTML = ''; renderBacktest(" + json.dumps(d30) + ");\n"
+        "out.push('F1=' + _tSnap());\n"
+        "BT_HTML = ''; renderBacktest(" + json.dumps(d1) + ");\n"
+        "out.push('F2=' + _tSnap());\n"
         "console.log(out.join('\\n'));\n"
     )
 
@@ -551,11 +576,11 @@ def part8_9_10_11(d_idx, d_stock):
     finally:
         os.unlink(jf.name)
 
-    if proc.returncode != 0 or len(lines) != 12:
-        check("node 执行成功且输出 12 条", False,
+    if proc.returncode != 0 or len(lines) != 14:
+        check("node 执行成功且输出 14 条", False,
               (proc.stderr or proc.stdout)[:400])
         return
-    check("node 执行成功且输出 12 条", True)
+    check("node 执行成功且输出 14 条", True)
     kv = dict(x.split("=", 1) for x in lines)
 
     # ⑧
@@ -609,6 +634,21 @@ def part8_9_10_11(d_idx, d_stock):
           r2["pct"] > r1["pct"], kv["R2"])
     check("⑪ 两侧都渲染「目标成交额」行（指数只是值变「不适用」，不是删行）",
           r1["calRow"] is True and r2["calRow"] is True, kv["R1"] + " / " + kv["R2"])
+
+    # ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应渲染）
+    f1, f2 = json.loads(kv["F1"]), json.loads(kv["F2"])
+    check("⑫ 个股 30m 页渲染出三种中文原因（止损 / 保本(1R) / 跟踪止盈）",
+          f1["stop"] and f1["be"] and f1["trail"], kv["F1"])
+    check("⑫ HTML 里**不再出现**英文 reason（sl / breakeven / trailing）",
+          f1["rawReason"] is False, kv["F1"])
+    check("⑫ 持仓中那笔渲染出浮动标记「浮」",
+          f1["float"] is True, kv["F1"])
+    check("⑫ 分类型桶改成可读写法（`笔 · 均R`），旧写法 `(n1/R…)` 不再出现",
+          f1["bucket"] is True and f1["plainBucket"] is False, kv["F1"])
+    check("⑫ n==1 页渲染「最好＝最差」说明（不再给一个看着像坏了的数字）",
+          f2["solo"] is True, kv["F2"])
+    check("⑫ n>=2 页**不**渲染该说明（说明只在样本 1 笔时出现）",
+          f1["solo"] is False, kv["F1"])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -778,6 +818,103 @@ def part11(kl, d_stock):
     return d_idx
 
 
+# ══════════════════════════════════════════════════════════════════════
+# ⑫ 出场原因三选一 + 未平仓浮动估值（v1.18，2026-10-05 用户裁定）
+# ══════════════════════════════════════════════════════════════════════
+def part12():
+    """出场面板的两条显示契约在 **App 边界**上是否自洽。
+
+    分工：`Backtest/Test/test_bt09_display_labels.py` 钉的是 `Backtest/` 层
+    （文案 SSOT + 估值槽位隔离）；本段钉的是**过界之后**：映射有没有随响应下发、
+    指数分流有没有漏到浮动的百分比上、以及 `n==1` 这种"看着像坏了"的边界。
+    """
+    print("══ ⑫ 出场原因三选一 / 未平仓浮动估值 ══")
+
+    # ── 日线：三选一映射随响应下发，且三种原因都真实出现过 ──
+    d = _call("sz002190", "d", _page_klines("sz002190_d.json"))
+    lab = d.get("exit_reason_labels") or {}
+    check("⑫ 响应带 exit_reason_labels（三选一，键序稳定 = sl/breakeven/trailing）",
+          list(lab) == ["sl", "breakeven", "trailing"]
+          and lab == {"sl": "止损", "breakeven": "保本(1R)", "trailing": "跟踪止盈"},
+          "labels=%r" % lab)
+    check("⑫ 响应带 exit_reason_legend（与标签同键、逐条非空）",
+          set(d.get("exit_reason_legend") or {}) == set(lab)
+          and all(str(v).strip() for v in (d.get("exit_reason_legend") or {}).values()),
+          "legend=%r" % d.get("exit_reason_legend"))
+    reasons = {t["exit_reason"] for t in d["trades"]}
+    check("⑫ 日线 6 笔覆盖三种原因（映射每个键都有真实样本，不是死配置）",
+          reasons == set(lab), "reasons=%r" % sorted(reasons))
+    check("⑫ by_reason 的键全部可被 labels 翻译（前端不会漏出英文标识符）",
+          set(d["by_reason"]) <= set(lab), "by_reason=%r" % sorted(d["by_reason"]))
+    check("⑫ 逐笔 exit_reason 仍是引擎原值（数据契约不变，中文化只发生在显示层）",
+          all(t["exit_reason"] in lab for t in d["trades"]))
+    check("⑫ 日线全平（未平 0 笔）⇒ 浮动三字段整列为 null",
+          d["run"]["still_open"] == 0
+          and all(t["unrealized_price"] is None and t["unrealized_r"] is None
+                  and t["unrealized_net_return_pct"] is None for t in d["trades"]),
+          "still_open=%r" % d["run"]["still_open"])
+
+    # ── 30m：末尾留 1 笔未平仓 → 浮动字段非空、已平笔恒 null ──
+    kl30 = _page_klines("sz002190_30m.json", minute=True)
+    d30 = _call("sz002190", "30m", kl30)
+    opens = [t for t in d30["trades"] if t["open"]]
+    closed = [t for t in d30["trades"] if not t["open"]]
+    check("⑫ 30m 末尾留 1 笔未平仓（样本前提）", len(opens) == 1,
+          "open=%d closed=%d" % (len(opens), len(closed)))
+    t = opens[0]
+    check("⑫ 未平仓笔浮动三字段齐全（价 / R / 净收益率）",
+          t["unrealized_price"] is not None and t["unrealized_r"] is not None
+          and t["unrealized_net_return_pct"] is not None,
+          "trade=%r" % {k: t[k] for k in ("unrealized_price", "unrealized_r",
+                                          "unrealized_net_return_pct")})
+    check("⑫ ★ 未平仓笔的**已实现**字段恒 null（估值不写进成交结果槽位）",
+          all(t[k] is None for k in ("exit_reason", "exit_date", "bars_held",
+                                     "r_multiple", "net_return_pct", "cost_cash")),
+          "脏字段=%r" % {k: t[k] for k in ("exit_reason", "exit_date", "bars_held",
+                                           "r_multiple", "net_return_pct", "cost_cash")
+                         if t[k] is not None})
+    check("⑫ ★ 已平仓笔的**浮动**字段恒 null（两族字段不共用槽位）",
+          all(x["unrealized_price"] is None and x["unrealized_r"] is None
+              and x["unrealized_net_return_pct"] is None for x in closed),
+          "脏笔=%r" % [x["trade_id"] for x in closed
+                       if x["unrealized_r"] is not None][:3])
+    last_close = kl30[-1]["close"]
+    sign = 1 if t["side"] == "long" else -1
+    check("⑫ unrealized_price ≡ 页面序列最后一根收盘价（估值锚点唯一）",
+          abs(t["unrealized_price"] - last_close) < 1e-9,
+          "got=%r want=%r" % (t["unrealized_price"], last_close))
+    # 手算复核对得上（容差 1e-4：响应侧的 entry_price / r_distance 各自圆到 6 位，
+    #   再由它们反推 —— 与内核里那次 round(...,4) 之间只该差浮点末几位。
+    #   逐字段**精确**相等由 Backtest/Test/test_bt09_display_labels.py 在内核侧钉。）
+    check("⑫ unrealized_r ≡ (last−entry)·sign/R（手算复核，1e-4 容差）",
+          abs(t["unrealized_r"]
+              - (last_close - t["entry_price"]) * sign / t["r_distance"]) < 1e-4,
+          "got=%r" % t["unrealized_r"])
+    check("⑫ 未平仓 落进 run.still_open / 逐笔 open 计数一致",
+          d30["run"]["still_open"] == len(opens)
+          and d30["run"]["closed"] + d30["run"]["still_open"] == d30["run"]["filled"])
+
+    # ── 指数侧：未平仓的净收益率「不适用」，价格侧的 R 照常 ──
+    di = _call("sh000001", "30m", kl30)
+    oi = [x for x in di["trades"] if x["open"]]
+    check("⑫ 指数页未平仓笔：unrealized_net_return_pct = null（不适用）/ 毛 R 保留",
+          len(oi) == 1 and oi[0]["unrealized_net_return_pct"] is None
+          and oi[0]["unrealized_r"] is not None,
+          "open=%r" % (oi[0] if oi else None))
+
+    # ── n==1 的真区间样本：⑷「最好＝最差」说明的样本 ──
+    d1 = _call("sz002190", "15m", _page_klines("sz002190_15m.json", minute=True, hi=200))
+    check("⑫ n==1 样本取自**真区间**（15m 前 200 根：已平 1 / 未平 0）",
+          d1["summary"]["n"] == 1 and d1["run"]["still_open"] == 0,
+          "n=%r still_open=%r" % (d1["summary"]["n"], d1["run"]["still_open"]))
+    check("⑫ n==1 时最好 R ≡ 最差 R（同一笔既是最好也是最差）—— 后端如实给",
+          d1["summary"]["max_win_r"] == d1["summary"]["max_loss_r"]
+          and d1["summary"]["max_win_r"] is not None,
+          "max_win=%r max_loss=%r" % (d1["summary"]["max_win_r"],
+                                      d1["summary"]["max_loss_r"]))
+    return d30, d1
+
+
 def main():
     print("=" * 68)
     print("股票页「回测」护栏（Test/test_stock_backtest.py）")
@@ -790,7 +927,8 @@ def main():
     part6(kl)
     part7()
     d_idx = part11(kl, d)
-    part8_9_10_11(d_idx, d)
+    d30, d1 = part12()
+    part8_9_10_11(d_idx, d, d30, d1)
 
     n_pass = sum(1 for x in _OK if x)
     print("-" * 68)

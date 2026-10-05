@@ -5519,6 +5519,12 @@
 
         function renderBacktest(d) {
             var s = d.summary || {}, run = d.run || {}, cal = d.caliber || {}, tgt = d.target || {};
+            // 出场原因三选一（止损 / 保本(1R) / 跟踪止盈）的文案由**后端下发**
+            //   （SSOT = Backtest/Report.py::exit_reason_labels，与 `python -m Backtest.Runner`
+            //   的控制台摘要同一份）。前端不硬编码任何 reason 文案；查不到的 key **原样显示**
+            //   —— 宁可露出一个英文标识符，也不要把没见过的原因静默吞掉。
+            var reasonLabels = d.exit_reason_labels || {};
+            var reasonLegend = d.exit_reason_legend || {};
             var html = "";
 
             // ① 口径标识置顶（口径先行：先说清这几个数字是在什么口径下算的）
@@ -5565,35 +5571,64 @@
                 + '胜 ' + s.w + ' / 亏 ' + s.l + ' / 平 ' + s.e + (s.u ? ' / 未平 ' + s.u : '') + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">盈亏比 / 盈利因子</span><span class="stats-value">'
                 + _btNum(s.profit_loss_ratio, 3) + ' / ' + _btNum(s.profit_factor, 3) + '</span></div>';
+            // 最好 / 最差 R 都取自**已平仓**笔。已平仓只有 1 笔时二者必然相等
+            //   （同一笔既是最好的也是最差的）—— 那不是 bug，但不加说明就是个
+            //   "看着像坏了"的数字（用户 2026-10-05 就是照这个来问的）。
+            var nClosed = Number(s.n || 0);
+            var rRange;
+            if (nClosed === 0) {
+                rRange = "—";
+            } else if (nClosed === 1) {
+                rRange = '<span style="color:' + _btCol(s.max_win_r) + '">' + _btNum(s.max_win_r, 2)
+                    + '</span> <span style="font-size:10px;color:#8b93a7;">'
+                    + '（仅 1 笔已平仓，最好＝最差）</span>';
+            } else {
+                rRange = '<span style="color:#FF3C3C">' + _btNum(s.max_win_r, 2) + '</span> / '
+                    + '<span style="color:#00F0F0">' + _btNum(s.max_loss_r, 2) + '</span>';
+            }
             html += '<div class="stats-row"><span class="stats-label">平均持仓 / 最好·最差 R</span><span class="stats-value">'
                 + (s.avg_bars_held === null || s.avg_bars_held === undefined
                     ? "—" : Number(s.avg_bars_held).toFixed(1)) + ' 根 / '
-                + '<span style="color:#FF3C3C">' + _btNum(s.max_win_r, 2) + '</span> / '
-                + '<span style="color:#00F0F0">' + _btNum(s.max_loss_r, 2) + '</span></span></div>';
+                + rRange + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">首见信号 / 拒收 / 过滤</span><span class="stats-value">'
                 + run.signals_seen + ' / ' + run.signals_rejected + ' / ' + run.signals_filtered + '</span></div>';
 
-            // 类型拆解（0/1/2/3 类各自的笔数与期望 R）
+            // 类型拆解：`n` = 该类型**已平仓笔数**（≠ 信号数 —— 同一段行情会连着出
+            //   3~4 个右肩信号，§2.7 实测 8 信号→3 笔）；`均R` = 这些笔的平均**毛** R。
+            //   旧写法 `0类(n1/R2.19)` 除了作者没人看得懂，改成带量词的写法。
             var byType = d.by_bsp_type || {};
             var typeKeys = Object.keys(byType).sort();
             if (typeKeys.length) {
                 html += '<div class="stats-row stats-bsp-row">';
                 typeKeys.forEach(function (k) {
                     var g = byType[k] || {};
-                    html += '<span class="stats-bsp-seg">' + statsEsc(k) + '类(n' + (g.n || 0) + '/R'
-                        + (g.expectancy_r === null || g.expectancy_r === undefined
-                            ? "—" : Number(g.expectancy_r).toFixed(2)) + ')</span>';
+                    var r = (g.expectancy_r === null || g.expectancy_r === undefined)
+                        ? "—" : _btNum(g.expectancy_r, 2);
+                    html += '<span class="stats-bsp-seg" title="已平仓笔数 / 平均毛 R 倍数'
+                        + '（笔数少于信号数属正常：一段行情会有多个连续右肩信号）">'
+                        + statsEsc(k) + '类 ' + (g.n || 0) + ' 笔 · 均R '
+                        + '<span style="color:' + _btCol(g.expectancy_r) + '">' + r + '</span>'
+                        + '</span>';
                 });
                 html += '</div>';
             }
 
-            // 出场原因拆解
+            // 出场原因（三选一）：三个枚举**恒显示**，即使某类 0 笔 —— 面板要看的是
+            //   "这三条路各走了几次"，没触发过的那条不出现，就看不出来"这轮压根没走过保本"。
             var byReason = d.by_reason || {};
-            var reasonKeys = Object.keys(byReason).sort();
+            var reasonKeys = Object.keys(reasonLabels);
+            // 后端映射里没有、但桶里真出现过的 key 追加在后（不静默丢）
+            Object.keys(byReason).sort().forEach(function (k) {
+                if (reasonKeys.indexOf(k) < 0) reasonKeys.push(k);
+            });
             if (reasonKeys.length) {
                 var reasonTxt = reasonKeys.map(function (k) {
-                    return statsEsc(k) + ":" + (byReason[k] || {}).n;
-                }).join("  ");
+                    var n = (byReason[k] || {}).n || 0;
+                    var lg = reasonLegend[k];
+                    return '<span' + (lg ? ' title="' + statsEsc(lg) + '"' : '')
+                        + ' style="cursor:' + (lg ? 'help' : 'default') + '">'
+                        + statsEsc(reasonLabels[k] || k) + ' ' + n + '</span>';
+                }).join('<span style="color:#4a5165"> · </span>');
                 html += '<div class="stats-row"><span class="stats-label">出场原因</span><span class="stats-value" style="font-size:11px">'
                     + reasonTxt + '</span></div>';
             }
@@ -5621,16 +5656,41 @@
                 + '<span class="stats-value" style="font-size:11px;color:#a8b2d1;">' + trades.length + ' 笔</span></div>';
             html += trades.map(function (t) {
                 var side = t.side === "long" ? "多" : "空";
-                // 净收益率缺失（指数）时只留 R —— 顶部徽标已说明原因，逐行不再重复
-                var metric = (t.net_return_pct === null || t.net_return_pct === undefined)
-                    ? '<span style="color:' + _btCol(t.r_multiple) + '">'
-                      + _btNum(t.r_multiple, 2) + 'R</span>'
-                    : '<span style="color:' + _btCol(t.net_return_pct) + '">'
-                      + _btPct(t.net_return_pct) + ' (' + _btNum(t.r_multiple, 2) + 'R)</span>';
+                // 出场原因走**后端下发的映射**；未平仓笔没有原因（它还没出场）
+                var reason = (t.exit_reason === null || t.exit_reason === undefined)
+                    ? "" : (reasonLabels[t.exit_reason] || t.exit_reason);
+                var metric;
+                if (t.open) {
+                    // 持仓中：盈亏 = 截止**最后一根 K 线收盘价**的浮动（后端按"假如以该价
+                    //   平掉"估的，成本与已平仓笔同一套函数 ⇒ 两族数字可直接比）。
+                    //   末尾标个「浮」—— 免得把还没落袋的浮动当成成交结果。
+                    var tip = "截止 " + (tgt.date_to || "最新")
+                        + " 收盘价 " + _btNum(t.unrealized_price, 3)
+                        + " 的浮动盈亏（未平仓；成本按该价平仓估算）";
+                    if (t.unrealized_net_return_pct === null
+                        || t.unrealized_net_return_pct === undefined) {
+                        metric = '<span title="' + tip + '" style="color:'
+                            + _btCol(t.unrealized_r) + '">' + _btNum(t.unrealized_r, 2) + 'R</span>'
+                            + '<span style="color:#8b93a7;font-size:10px;"> 浮</span>';
+                    } else {
+                        metric = '<span title="' + tip + '" style="color:'
+                            + _btCol(t.unrealized_net_return_pct) + '">'
+                            + _btPct(t.unrealized_net_return_pct) + ' ('
+                            + _btNum(t.unrealized_r, 2) + 'R)</span>'
+                            + '<span style="color:#8b93a7;font-size:10px;"> 浮</span>';
+                    }
+                } else if (t.net_return_pct === null || t.net_return_pct === undefined) {
+                    // 净收益率缺失（指数）时只留 R —— 顶部徽标已说明原因，逐行不再重复
+                    metric = '<span style="color:' + _btCol(t.r_multiple) + '">'
+                        + _btNum(t.r_multiple, 2) + 'R</span>';
+                } else {
+                    metric = '<span style="color:' + _btCol(t.net_return_pct) + '">'
+                        + _btPct(t.net_return_pct) + ' (' + _btNum(t.r_multiple, 2) + 'R)</span>';
+                }
                 return '<div class="stats-row" style="font-size:11px;">'
                     + '<span class="stats-label">#' + t.trade_id + ' ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
                     + statsEsc(t.entry_date) + ' → ' + statsEsc(t.exit_date || "持仓中")
-                    + ' ' + statsEsc(t.exit_reason || "") + '</span>'
+                    + ' ' + statsEsc(reason) + '</span>'
                     + '<span class="stats-value">' + metric + '</span></div>';
             }).join("");
             html += '</div>';

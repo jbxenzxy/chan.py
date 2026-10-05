@@ -38,6 +38,15 @@ CSV / HTML 报告导出留给 CLI 批跑。
     指数不可交易 ⇒ 这些数字没有对应标的物（实测上证指数 `max_notional` 达
     `target_amount` 的 7.9 倍，纯属"指数点位高/`min_lot` 兜底"的假象）。
     **价格侧口径照常**：胜率 / 毛 R / 盈亏比 / 持仓根数 —— 指数页的价值就在于此。
+  - 出场原因是**三选一**（止损 / 保本(1R) / 跟踪止盈），文案由
+    `Backtest.Report.exit_reason_labels()` 生成并随响应下发（`exit_reason_labels` /
+    `exit_reason_legend`）⇒ 前端**不硬编码**任何 reason 文案，与 `python -m
+    Backtest.Runner` 的控制台摘要永远是同一份。逐笔的 `exit_reason` 仍是引擎原值
+    （数据契约，`sl` / `breakeven` / `trailing`）。
+  - **未平仓笔**多三个字段：`unrealized_price` / `unrealized_r` /
+    `unrealized_net_return_pct` —— 截止**最后一根 K 线收盘价**的"假如现在平"估值。
+    已平仓笔这三项恒为 `null`（两族字段不共用槽位，见 `Backtest/Runner.BtTrade`）。
+    它们**不进**任何胜率口径：`Metrics` 只吃已平仓笔。
 
 依赖方向：FrontAPI（路由）→ AppChart（漏斗壳）→ 本模块 → Backtest / Trading
 （顺向，App 在最上层）。`Backtest/` 对 `App` 零依赖由
@@ -184,7 +193,8 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
         from Backtest import Runner
         from Backtest.Metrics import compute as compute_metrics
         from Backtest.Filter import filter_from_choices
-        from Backtest.Report import caliber_lines
+        from Backtest.Report import (caliber_lines, exit_reason_labels,
+                                     exit_reason_legend)
         from Backtest.ExitParams import TARGET_AMOUNT, lot_rule
     except Exception as e:                                            # noqa: BLE001
         raise AppError("回测初始化失败（Backtest/Trading 导入异常）：{}: {}".format(
@@ -240,6 +250,14 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     notionals = [float(t.shares) * float(t.entry_price or 0.0) for t in res.trades]
     max_notional = max(notionals) if notionals else 0.0
 
+    # ── 出场原因显示文案（三选一）───────────────────────────────────────
+    #    SSOT 在 `Backtest/Report.py`（层表：Backtest 不得 import App，反过来合法）
+    #    ⇒ 前端**不硬编码**任何 reason 文案，只按后端给的映射查表；
+    #    控制台摘要与页面面板因此永远是同一份文案。
+    #    「保本(1R)」里的 1 来自 `res.exit_params`（本轮实际用的参数），不是常量。
+    _reason_labels = exit_reason_labels(res.exit_params)
+    _reason_legend = exit_reason_legend(res.exit_params)
+
     trades = []
     for t in res.trades:
         trades.append({
@@ -259,6 +277,14 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "gross_return_pct": _pct(t.gross_return),
             "net_return_pct": _amt(_pct(t.net_return)),
             "cost_cash": _amt(None if t.cost_cash is None else round(float(t.cost_cash), 4)),
+            # 未平仓浮动（截止最后一根 K 线收盘价的估值，**不是**成交结果）：
+            #   已平笔这三项恒为 null（Runner 只在 `still_open` 上填），前端据此分流。
+            #   指数时百分比不适用（净收益率族）⇒ 只留价格侧的 `unrealized_r`。
+            "unrealized_price": (None if t.unrealized_price is None
+                                 else round(float(t.unrealized_price), 6)),
+            "unrealized_r": (None if t.unrealized_r is None
+                             else round(float(t.unrealized_r), 6)),
+            "unrealized_net_return_pct": _amt(_pct(t.unrealized_net_return)),
             "open": bool(t.open_),
         })
 
@@ -304,6 +330,9 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
         },
         "by_bsp_type": _bucket_rows(met.by_bsp_type, is_index),
         "by_reason": _bucket_rows(met.by_reason, is_index),
+        # 出场原因三选一的显示文案 + 口径说明（键序 = sl / breakeven / trailing，稳定）
+        "exit_reason_labels": _reason_labels,
+        "exit_reason_legend": _reason_legend,
         "trades": trades,
         "caliber": {
             "lines": list(caliber_lines(res)),

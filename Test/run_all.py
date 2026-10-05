@@ -717,6 +717,14 @@ COMPONENTS = [
     ("bt08_ab_57th",
      [sys.executable, os.path.join("Backtest", "Test",
                                    "test_bt08_ab_57th.py")]),
+    # 出场原因显示文案 + 未平仓浮动估值（v1.18，设计文档 §6.1 ⑥）：文案**只有一份来源**
+    # （`Backtest/Report.py::exit_reason_labels`，控制台 / App 响应 / 前端共用），
+    # 且「保本(1R)」的 1R 跟着 `breakeven_trigger_r` 走（不硬编码）；未平仓笔的
+    # `unrealized_*` 与已实现字段**槽位隔离**（填错槽位等于把没平的仓位算进胜率分母）。
+    # 基线 `Backtest/Test/snapshots/p0_display_labels.json`，重冻用 `--freeze`。
+    ("bt09_display_labels",
+     [sys.executable, os.path.join("Backtest", "Test",
+                                   "test_bt09_display_labels.py")]),
     # 股票页「回测」端到端契约（设计文档 §4）：**App 边界**能不能把页面格式的
     # klines（斜杠日期、无 dt）还原成 records —— 与 bt06 共用同一批冻结切片，
     # 故引擎侧与页面侧是**同一份样本**。覆盖响应形状 / 口径披露三项自洽 /
