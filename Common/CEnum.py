@@ -123,6 +123,18 @@ class BI_TYPE(Enum):
 BSP_MAIN_TYPE = Literal['0', '1', '2', '3', '11', '22', '33']
 
 
+# 买卖点类型：
+#   · **现役只有四类** —— T0 / T1 / T2 / T3。它们是唯一与「显示设置 → 买卖点类型」
+#     勾选框（`Trading/Infra/Records.py` 的 BSP_TYPE_CHOICES）、自动下单过滤
+#     （`Trading/Engine/Engine.py` 的 `_bsp_type_allowed`）、成交统计三处对齐的一组。
+#   · **T11 / T11P / T22 / T22S / T33A / T33B 六个细分类型已废弃，不再作为买卖点使用**
+#     （2026-10-05 用户确认）：默认 `bs_type = "0,1,2,3"`（ChanConfig.py）下均不产出；
+#     它们也不在 BSP_TYPE_CHOICES 内 ⇒ 一旦启用类型过滤就一律被忽略 —— 刻意行为，不要"修好"。
+#     其中 T11 / T11P 仍会被**内部计算**（BSPointList.cal() 无条件调 cal_seg_bs11point，
+#     产物进 bsp11_dict 供 22/33 类查 relate_bsp11），但那只是前置依赖 —— 不进
+#     bsp_store_dict（BuySellPoint/BSPointList.py 的 add_bs 只在 is_target_bsp 时
+#     store_add_bsp）、不画在图上、不进自动下单、不进统计。
+#   ⇒ 后续谈"买卖点"一律指 0/1/2/3 四类；不要再就 11/11p/22/22s/33a/33b 提问或扩展勾选框。
 class BSP_TYPE(Enum):
     T0 = '0'      # 0类买卖点（神之一笔，不依赖中枢/背驰）
     T1 = '1'      # 1类买卖点（对应缠论一类买卖点）
