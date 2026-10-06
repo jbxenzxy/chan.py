@@ -158,8 +158,8 @@ def part1():
     check("派生不变量 w + l + e == closed（未平仓不进胜负统计）",
           s["w"] + s["l"] + s["e"] == run["closed"],
           "w/l/e=%r closed=%r" % ((s["w"], s["l"], s["e"]), run["closed"]))
-    check("disclosures 四条非空（T+0 / 涨跌停 / 前复权 / 单窗态）",
-          isinstance(d["disclosures"], list) and len(d["disclosures"]) == 4
+    check("disclosures 两条非空（T+0多空双向 / 涨跌停；2026-10-06 用户裁定收敛）",
+          isinstance(d["disclosures"], list) and len(d["disclosures"]) == 2
           and all(str(x).strip() for x in d["disclosures"]),
           "disclosures=%r" % d.get("disclosures"))
 
@@ -571,13 +571,24 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
         " badge: BT_HTML.indexOf('指数标的（不可交易）') >= 0,"
         " calRow: BT_HTML.indexOf('目标成交额') >= 0,"
         " seen: BT_HTML.indexOf('首见信号') >= 0,"
-        # ⑼⑽⑾ 仓位三行必须紧跟「区间 / K线」，且内部序 = 最小申报 → 目标成交额 →
-        #   最大单笔放大（用字符串下标比先后 —— 不比排版，只比文档顺序）
-        " order: (_i('区间 / K线') >= 0 && _i('区间 / K线') < _i('最小申报 / 借道笔数'))"
-        " && (_i('最小申报 / 借道笔数') < _i('目标成交额'))"
-        " && (_i('目标成交额') < _i('最大单笔放大')),"
+        # ⑼⑽⑾ 仓位两行必须紧跟「区间 / K线」，且内部序 = 目标成交额 → 实际成交额
+        #   （用字符串下标比先后 —— 不比排版，只比文档顺序）
+        " order: (_i('区间 / K线') >= 0 && _i('区间 / K线') < _i('目标成交额'))"
+        " && (_i('目标成交额') < _i('实际成交额')),"
+        # 同日补充：最小申报行已删（旧新文案都不许出现）；逐笔最新在上
+        " minLotGone: BT_HTML.indexOf('最小申报') < 0 && BT_HTML.indexOf('借道') < 0,"
+        " amplGone: BT_HTML.indexOf('最大单笔放大') < 0,"
         # ⑽⑾ 金额一律万元：不许再出现「数字 + 空格 + 元」这种裸元写法
-        " wan: !/\\d+ 元/.test(BT_HTML) && /万元/.test(BT_HTML) }); }\n"
+        " wan: !/\\d+ 元/.test(BT_HTML) && /万元/.test(BT_HTML),"
+        # 同日补充：正值不带 + 号（正负由颜色表达）；`+` 紧贴数字即回潮。
+        #   先剥掉「T+0」字面量 —— 那是口径词汇，不是带符号的数。
+        " plusGone: !/\\+\\d/.test(BT_HTML.replace(/T\\+0/g, '')),"
+        # 逐笔倒序：编号 `N. `（trade_id 原值）在文档里的下标必须随 N 严格递减
+        " tDesc: (function () { var ps = [];"
+        " for (var n = 1; n <= 9; n++) { var p = BT_HTML.indexOf('>' + n + '. '); if (p >= 0) ps.push(p); }"
+        " var ok = ps.length >= 2;"
+        " for (var k = 1; k < ps.length; k++) if (ps[k] >= ps[k - 1]) ok = false;"
+        " return ok; })() }); }\n"
         # ⑷ 核心区标签序列（只取 hero 段，切到 stats-rows 为止 —— 明细区不在内）
         "function _heroLabels() { var i = BT_HTML.indexOf('stats-hero');"
         " if (i < 0) return ''; var j = BT_HTML.indexOf('stats-rows', i);"
@@ -676,9 +687,10 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
     r1, r2 = json.loads(kv["R1"]), json.loads(kv["R2"])
     check("⑪ 指数页渲染出「不可交易」徽标（后端 is_index 直达前端）",
           r1["badge"] is True, kv["R1"])
-    # 6 处 = 徽标 1 + 平均净收益率 1 + 仓位口径三行 3 + 口径披露行 1
-    check("⑪ 指数页「不适用」恰好 6 处（徽标 / 净收益率 / 仓位三行 / 披露行）",
-          r1["na"] == 6, kv["R1"])
+    # 5 处 = 徽标 1 + 净收益率(均) 1 + 仓位两行 2 + 口径披露行 1（最小申报行
+    #   2026-10-06 补充裁定删除 ⇒ 6 → 5）
+    check("⑪ 指数页「不适用」恰好 5 处（徽标 / 净收益率 / 仓位两行 / 披露行）",
+          r1["na"] == 5, kv["R1"])
     check("⑪ 指数页 HTML 只剩胜率一个 %（净收益率族不再印数字）",
           r1["pct"] == 1, kv["R1"])
     check("⑪ 个股页无「不可交易」徽标、无「不适用」（分流不外溢）",
@@ -701,8 +713,14 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
           and "期望 R" not in kv["H2"], kv["H2"])
     check("⑹ 「首见信号 / 拒收 / 过滤」行已从面板移除（后端 run.* 字段照常下发）",
           r1["seen"] is False and r2["seen"] is False, kv["R1"] + " / " + kv["R2"])
-    check("⑼⑽⑾ 仓位三行紧跟「区间 / K线」，序 = 最小申报 → 目标成交额 → 最大单笔放大",
+    check("⑼⑽⑾ 仓位两行紧跟「区间 / K线」，序 = 目标成交额 → 实际成交额",
           r2["order"] is True, kv["R2"])
+    check("⑼补充 「最小申报 / 借道笔数」行已删、「最大单笔放大」已改名（旧文案零残留）",
+          r2["minLotGone"] is True and r2["amplGone"] is True, kv["R2"])
+    check("补充 逐笔明细最新在上（编号下标随 trade_id 严格递减）",
+          r2["tDesc"] is True, kv["R2"])
+    check("补充 正值不带 + 号（`+数字` 零出现；负数 `-` 号不受影响）",
+          r2["plusGone"] is True, kv["R2"])
     check("⑽⑾ 金额一律万元（面板不再出现裸「N 元」）", r2["wan"] is True, kv["R2"])
 
     # ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应渲染）
@@ -713,12 +731,10 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
           f1["rawReason"] is False, kv["F1"])
     check("⑫ 持仓中那笔渲染出浮动标记「浮」",
           f1["float"] is True, kv["F1"])
-    check("⑫ 分类型桶改成可读写法（`笔 · 均R`），旧写法 `(n1/R…)` 不再出现",
-          f1["bucket"] is True and f1["plainBucket"] is False, kv["F1"])
-    check("⑫ n==1 页渲染「最好＝最差」说明（不再给一个看着像坏了的数字）",
-          f2["solo"] is True, kv["F2"])
-    check("⑫ n>=2 页**不**渲染该说明（说明只在样本 1 笔时出现）",
-          f1["solo"] is False, kv["F1"])
+    check("⑫ 分类型桶行已从面板移除（2026-10-06 裁定；旧新写法都不再出现）",
+          f1["bucket"] is False and f1["plainBucket"] is False, kv["F1"])
+    check("⑫ 「最好＝最差」行已从面板移除（同日裁定；任何样本数都不再出现）",
+          f1["solo"] is False and f2["solo"] is False, kv["F1"] + " / " + kv["F2"])
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -827,22 +843,22 @@ def part11(kl, d_stock):
           == [[t[k] for k in _TRADE_KEYS] for t in d_stock["trades"]])
 
     # ④ 口径行 / 披露：只追加一条，不改写既有
-    check("⑪ disclosures：个股 4 条 / 指数 5 条，且末条说「不适用」",
-          len(d_stock["disclosures"]) == 4 and len(d_idx["disclosures"]) == 5
+    check("⑪ disclosures：个股 2 条 / 指数 3 条，且末条说「不适用」",
+          len(d_stock["disclosures"]) == 2 and len(d_idx["disclosures"]) == 3
           and "不适用" in d_idx["disclosures"][-1],
           "idx=%r" % (d_idx["disclosures"],))
-    check("⑪ caliber.lines：个股 5 条 / 指数 6 条，且末条说「不适用」",
-          len(d_stock["caliber"]["lines"]) == 5
-          and len(d_idx["caliber"]["lines"]) == 6
+    check("⑪ caliber.lines：个股 4 条 / 指数 5 条，且末条说「不适用」",
+          len(d_stock["caliber"]["lines"]) == 4
+          and len(d_idx["caliber"]["lines"]) == 5
           and "不适用" in d_idx["caliber"]["lines"][-1],
           "idx_lines=%r" % (d_idx["caliber"]["lines"],))
-    # 口径行 = [0]标的/周期/区间 [1]出场参数 [2]费率 [3]偏离披露 [4]窗口口径（单窗态） [5]指数追加
-    # 只有 [0] 含标的代码故必然不同；[1:5] 四条必须逐字相同 —— 否则就是分流
+    # 口径行 = [0]标的/周期/区间 [1]出场参数 [2]费率 [3]偏离披露 [4]指数追加
+    # 只有 [0] 含标的代码故必然不同；[1:4] 三条必须逐字相同 —— 否则就是分流
     # 顺手改写了既有口径（比"多印一行"坏得多）
-    check("⑪ 口径行 [1:5] 四条两侧逐字相同（出场参数 / 费率 / 偏离披露 / 窗口口径）",
-          d_idx["caliber"]["lines"][1:5] == d_stock["caliber"]["lines"][1:5],
-          "idx=%r stock=%r" % (d_idx["caliber"]["lines"][1:5],
-                               d_stock["caliber"]["lines"][1:5]))
+    check("⑪ 口径行 [1:4] 三条两侧逐字相同（出场参数 / 费率 / 偏离披露）",
+          d_idx["caliber"]["lines"][1:4] == d_stock["caliber"]["lines"][1:4],
+          "idx=%r stock=%r" % (d_idx["caliber"]["lines"][1:4],
+                               d_stock["caliber"]["lines"][1:4]))
     check("⑪ 口径行 [0] 只差「标的」代码（周期 / 区间口径未被分流触碰）",
           d_idx["caliber"]["lines"][0].replace("sh000001", "sz002190")
           == d_stock["caliber"]["lines"][0],
@@ -858,11 +874,11 @@ def part11(kl, d_stock):
     r_idx = RunResult(market="sh", code="000001", freq="d", is_index=True)
     r_stk = RunResult(market="sz", code="002190", freq="d", is_index=False)
     check("⑪ Backtest.Report.caliber_lines 直接吃 RunResult.is_index（不依赖 App 层）",
-          len(caliber_lines(r_idx)) == 6
+          len(caliber_lines(r_idx)) == 5
           and any("不适用" in x for x in caliber_lines(r_idx)),
           "lines=%r" % (caliber_lines(r_idx),))
     check("⑪ is_index=False（默认）时不追加 —— 既有调用方行为零变化",
-          len(caliber_lines(r_stk)) == 5
+          len(caliber_lines(r_stk)) == 4
           and not any("不适用" in x for x in caliber_lines(r_stk)))
     check("⑪ RunResult.is_index 默认 False（不显式注入就不分流）",
           RunResult(market="sh", code="000001", freq="d").is_index is False)

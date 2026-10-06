@@ -5465,20 +5465,22 @@
         //   「—」= 无样本（数据缺失）；「不适用」= 口径在标的上不存在 —— 两者必须分开，
         //   否则指数页会显示一串像真数字的成本与倍率，或把"口径不存在"误读成"没数据"。
         function _btNA() { return '<span style="color:#8b93a7;font-size:11px;">不适用</span>'; }
+        // 2026-10-06 补充裁定：正值**不带 + 号**（红/灰都不带）—— 正负由颜色表达，
+        //   符号再表达一遍是冗余；负数自带的 `-` 号保留。
         function _btPct(x, nd) {
             if (x === null || x === undefined) return "—";
             var v = Number(x);
-            return (v > 0 ? "+" : "") + v.toFixed(nd === undefined ? 2 : nd) + "%";
+            return v.toFixed(nd === undefined ? 2 : nd) + "%";
         }
         function _btNum(x, nd) {
             if (x === null || x === undefined) return "—";
             var v = Number(x);
-            return (v > 0 ? "+" : "") + v.toFixed(nd === undefined ? 3 : nd);
+            return v.toFixed(nd === undefined ? 3 : nd);
         }
         // 金额 → 万元（保留 2 位、去尾零：50000 → "5 万元"，53396 → "5.34 万元"）。
-        //   面板上的金额只有两处（目标成交额 / 最大单笔名义额），量级都在 5 万上下 ——
+        //   面板上的金额只有两处（目标成交额 / 实际成交额），量级都在 5 万上下 ——
         //   用「元」得数位数、用「亿元」又全变成 0.0x，万元是唯一读得顺的档。
-        //   不复用 `_btNum`：那个是"倍数 / R"的格式（正数带 `+` 号），金额不该带。
+        //   不复用 `_btNum`：金额与倍数/R 是两种量纲，格式各写各的。
         function _btWan(x) {
             if (x === null || x === undefined) return "—";
             var s = (Number(x) / 10000).toFixed(2);
@@ -5607,69 +5609,36 @@
             html += '<div class="stats-row"><span class="stats-label">区间 / K线</span><span class="stats-value">'
                 + statsEsc((tgt.date_from || "") + " ~ " + (tgt.date_to || "")) + '（' + tgt.bars + ' 根）</span></div>';
             // 仓位口径三项（§5.4d-quater：报告必须披露放大倍数与 min_lot 借道）
-            //   指数不可交易 ⇒ 整块「不适用」（后端已把这三个字段置 null）
-            //   2026-10-06 用户裁定：三行上移到「区间 / K线」紧后面，且金额一律用**万元**
-            //   —— `50000 元` 要数位数，`5 万元` 一眼读出来。行内顺序 = 最小申报 →
-            //   目标成交额 → 最大单笔放大（由小到大，与"放大"的叙事顺序一致）。
-            html += '<div class="stats-row"><span class="stats-label">最小申报 / 借道笔数</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : ((cal.min_lot || "—") + ' 股 / ' + (cal.min_lot_derived_trades || 0) + ' 笔')) + '</span></div>';
+            //   指数不可交易 ⇒ 整块「不适用」（后端已把这些字段置 null）
+            //   2026-10-06 用户裁定：金额一律用**万元** —— `50000 元` 要数位数，
+            //   `5 万元` 一眼读出来。行序 = 目标成交额 → 实际成交额。
+            //   同日补充裁定：①「最小申报 / 借道笔数」行删除（`min_lot` /
+            //   `min_lot_derived_trades` 照常下发，CLI 摘要照印）；②「最大单笔放大」
+            //   改名「实际成交额」—— 值格式不变（倍数（万元）），名字说人话。
             html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
                 + (isIndex ? _btNA()
                     : (cal.target_amount === undefined || cal.target_amount === null
                         ? "—" : _btWan(cal.target_amount))) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔放大</span><span class="stats-value">'
+            html += '<div class="stats-row"><span class="stats-label">实际成交额</span><span class="stats-value">'
                 + (isIndex ? _btNA()
                     : ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
                         ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
                        + '（' + _btWan(cal.max_notional) + '）')) + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">胜负平</span><span class="stats-value">'
                 + '胜 ' + s.w + ' / 亏 ' + s.l + ' / 平 ' + s.e + (s.u ? ' / 未平 ' + s.u : '') + '</span></div>';
-            // 最好 / 最差 R 都取自**已平仓**笔。已平仓只有 1 笔时二者必然相等
-            //   （同一笔既是最好的也是最差的）—— 那不是 bug，但不加说明就是个
-            //   "看着像坏了"的数字（用户 2026-10-05 就是照这个来问的）。
-            var nClosed = Number(s.n || 0);
-            var rRange;
-            if (nClosed === 0) {
-                rRange = "—";
-            } else if (nClosed === 1) {
-                rRange = '<span style="color:' + _btCol(s.max_win_r) + '">' + _btNum(s.max_win_r, 2)
-                    + '</span> <span style="font-size:10px;color:#8b93a7;">'
-                    + '（仅 1 笔已平仓，最好＝最差）</span>';
-            } else {
-                rRange = '<span style="color:#FF3C3C">' + _btNum(s.max_win_r, 2) + '</span> / '
-                    + '<span style="color:#00F0F0">' + _btNum(s.max_loss_r, 2) + '</span>';
-            }
-            html += '<div class="stats-row"><span class="stats-label">平均持仓 / 最好·最差 R</span><span class="stats-value">'
-                + (s.avg_bars_held === null || s.avg_bars_held === undefined
-                    ? "—" : Number(s.avg_bars_held).toFixed(1)) + ' 根 / '
-                + rRange + '</span></div>';
-            // 「首见信号 / 拒收 / 过滤」行 2026-10-06 用户裁定**移除**：这三个计数是
+            // 「平均持仓 / 最好·最差 R」行 2026-10-06 用户裁定**移除**：样本少时
+            //   "仅 1 笔已平仓，最好＝最差"这类说明比信息本身还长。数据仍在
+            //   summary（avg_bars_held / max_win_r / max_loss_r）里照常下发，
+            //   CLI 摘要照印 —— 只是面板不再占一行版面。
+            // 「首见信号 / 拒收 / 过滤」行同日裁定移除：这三个计数是
             //   引擎内部口径（`首见 = 过滤 + 拒收 + 开仓笔数`），与页面上画出来的买卖点
             //   对不上（图上只画勾选的类型），摆在面板里只会引出"为什么你说是 5 个、
             //   我只看得到 3 个"这类问题。数据仍在 `run` 里照常下发（CLI 摘要照印），
             //   谁要谁取，不再占用面板版面。
 
-            // 类型拆解：`n` = 该类型**已平仓笔数**（≠ 信号数 —— 同一段行情会连着出
-            //   3~4 个右肩信号，§2.7 实测 8 信号→3 笔）；`均R` = 这些笔的平均**毛** R。
-            //   旧写法 `0类(n1/R2.19)` 除了作者没人看得懂，改成带量词的写法。
-            var byType = d.by_bsp_type || {};
-            var typeKeys = Object.keys(byType).sort();
-            if (typeKeys.length) {
-                html += '<div class="stats-row stats-bsp-row">';
-                typeKeys.forEach(function (k) {
-                    var g = byType[k] || {};
-                    var r = (g.expectancy_r === null || g.expectancy_r === undefined)
-                        ? "—" : _btNum(g.expectancy_r, 2);
-                    html += '<span class="stats-bsp-seg" title="已平仓笔数 / 平均毛 R 倍数'
-                        + '（笔数少于信号数属正常：一段行情会有多个连续右肩信号）">'
-                        + statsEsc(k) + '类 ' + (g.n || 0) + ' 笔 · 均R '
-                        + '<span style="color:' + _btCol(g.expectancy_r) + '">' + r + '</span>'
-                        + '</span>';
-                });
-                html += '</div>';
-            }
-
+            // 「类型拆解（0类 1笔·均R +2.1）」行同日裁定**移除**：逐笔明细已逐行
+            //   给出类型与 R 倍数，分组均值在单类型样本下是同义反复。
+            //   `by_bsp_type` 照常下发，CLI 摘要照印 —— 只是面板不再占一行。
             // 出场原因（三选一）：三个枚举**恒显示**，即使某类 0 笔 —— 面板要看的是
             //   "这三条路各走了几次"，没触发过的那条不出现，就看不出来"这轮压根没走过保本"。
             var byReason = d.by_reason || {};
@@ -5679,12 +5648,17 @@
                 if (reasonKeys.indexOf(k) < 0) reasonKeys.push(k);
             });
             if (reasonKeys.length) {
+                // 计数行用**短名**（2026-10-06 用户裁定）：跟踪止盈 → 跟踪。
+                //   只缩这一行 —— 逐笔明细与后端 `exit_reason_labels` 仍是全名
+                //   （那里"跟踪止盈"是规则身份，缩成"跟踪"反而不知道在跟踪什么）。
+                var _rShort = { "跟踪止盈": "跟踪" };
                 var reasonTxt = reasonKeys.map(function (k) {
                     var n = (byReason[k] || {}).n || 0;
                     var lg = reasonLegend[k];
+                    var _nm = _rShort[reasonLabels[k] || k] || reasonLabels[k] || k;
                     return '<span' + (lg ? ' title="' + statsEsc(lg) + '"' : '')
                         + ' style="cursor:' + (lg ? 'help' : 'default') + '">'
-                        + statsEsc(reasonLabels[k] || k) + ' ' + n + '</span>';
+                        + statsEsc(_nm) + ' ' + n + '</span>';
                 }).join('<span style="color:#4a5165"> · </span>');
                 html += '<div class="stats-row"><span class="stats-label">出场原因</span><span class="stats-value" style="font-size:11px">'
                     + reasonTxt + '</span></div>';
@@ -5692,8 +5666,10 @@
 
             html += '</div>';
 
-            // ④ 逐笔明细
-            var trades = d.trades || [];
+            // ④ 逐笔明细 —— **最新在上**（2026-10-06 补充裁定）：倒序渲染，
+            //   编号仍用 `trade_id` 原值（时间正序），别按显示位置重新编号 ——
+            //   编号是跨轮次稳定的笔标识（CLI / 报告同号），倒序只是显示顺序。
+            var trades = (d.trades || []).slice().reverse();
             html += '<div class="stats-rows" style="margin-top:6px;">';
             html += '<div class="stats-row"><span class="stats-label">逐笔明细</span>'
                 + '<span class="stats-value" style="font-size:11px;color:#a8b2d1;">' + trades.length + ' 笔</span></div>';
@@ -5730,10 +5706,18 @@
                     metric = '<span style="color:' + _btCol(t.net_return_pct) + '">'
                         + _btPct(t.net_return_pct) + ' (' + _btNum(t.r_multiple, 2) + 'R)</span>';
                 }
+                // 行首 2026-10-06 用户裁定：`#1` → `1.`；日期后插 `R=xx` =
+                //   该笔**入场时冻结的风险距离**（`r_distance`，单位元，
+                //   `max(结构距离, 2×ATR)`）—— 右端的 (+2.19R) 是"赚了几个 R"，
+                //   这里的 R=0.66 是"1R 有多大"，一个是分母一个是商，缺一读不懂。
+                //   未平仓笔同样有（入场那一刻就定了），故两支都显示。
+                var _rd = (t.r_distance === null || t.r_distance === undefined)
+                    ? "—" : Number(t.r_distance).toFixed(2);
                 return '<div class="stats-row" style="font-size:11px;">'
-                    + '<span class="stats-label">#' + t.trade_id + ' ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
+                    + '<span class="stats-label">' + t.trade_id + '. ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
                     + statsEsc(t.entry_date) + ' → ' + statsEsc(t.exit_date || "持仓中")
-                    + ' ' + statsEsc(reason) + '</span>'
+                    + ' R=' + _rd
+                    + (reason ? ' ' + statsEsc(reason) : '') + '</span>'
                     + '<span class="stats-value">' + metric + '</span></div>';
             }).join("");
             html += '</div>';

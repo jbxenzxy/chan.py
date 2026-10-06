@@ -172,10 +172,12 @@ def exit_reason_legend(exit_params: Optional[Dict[str, Any]] = None) -> Dict[str
     return {
         "sl": "止损：收盘价跌破止损保护线离场。保护线 = 入场价 − R"
               "（R = max(结构距离, 2×ATR)），从未被抬过。",
-        "breakeven": "保本：浮盈 > {tr}R 后把保护线抬到入场价{sign}{buf}R 处，"
+        # 2026-10-06 补充裁定：正值不带 + 号 —— 图例里的线位也改文字表述
+        #   （「上方 / 下方」），不再用 `入场价+0.5R` 这种算式写法。
+        "breakeven": "保本：浮盈 > {tr}R 后把保护线抬到入场价{pos} {buf}R 处，"
                      "收盘价跌破该线离场。".format(
                          tr=_fmt_r(p["breakeven_trigger_r"]),
-                         sign=("+" if p["breakeven_buffer_r"] >= 0 else "−"),
+                         pos=("上方" if p["breakeven_buffer_r"] >= 0 else "下方"),
                          buf=_fmt_r(abs(p["breakeven_buffer_r"]))),
         "trailing": "跟踪止盈：浮盈 > {wl}R 后启动跟踪，保护线 = 至今最有利价 − {td}R，"
                     "收盘价跌破该线离场（该笔锁住多少 R 见行内 R 倍数）。".format(
@@ -195,14 +197,14 @@ def sort_exit_reasons(keys) -> List[str]:
 
 
 def caliber_lines(result: RunResult) -> List[str]:
-    """口径行（区间 / 周期 / 出场参数 / 费率 / 三条偏离）。
+    """口径行（区间 / 周期 / 出场参数 / 费率 / 偏离披露）。
 
     指数标的（`result.is_index`）额外追加一条**不适用**声明：指数不可交易
     ⇒ 费率 / `target_amount` / 股数 / 成本那一整套「元口径」全是虚构的数字，
     必须在口径行里点名，否则摘要上会印出一串看着像真的成本与倍率
     （实测上证指数 `max_notional` 达 `target_amount` 的 7.9 倍 —— 那是因为
     指数点位高、`target_amount/price` 落到了 `min_lot` 上，与"买不买得起"无关）。
-    纯**价格**口径（区间 / 周期 / 出场参数 / 三条偏离）对指数依然成立，故保留。
+    纯**价格**口径（区间 / 周期 / 出场参数 / 偏离披露）对指数依然成立，故保留。
     """
     lo = result.start_dt or "(不限)"
     hi = result.target_dt or "(不限)"
@@ -220,17 +222,17 @@ def caliber_lines(result: RunResult) -> List[str]:
         "过户费 t={:g}；名义 c=2k+s={:.4%}；target_amount=m/k={:.0f} 元".format(
             COMMISSION_RATE, MIN_COMMISSION_CASH, STAMP_DUTY_RATE, TRANSFER_FEE_RATE,
             NOMINAL_COST_RATE, TARGET_AMOUNT),
-        "偏离披露：① 不套 T+1（按 T+0）；② 不建模涨跌停 / 停牌；③ 前复权价（非真实成交价）",
-        # §8.10 后半：前端护栏之外，**报告口径行同样要写明**单窗态 / 未启用区间套。
-        # 前端只挡住"面板打开着却切成双窗"这一种情形，API 可被直接调用 ⇒ 报告侧必须自陈。
-        "窗口口径 单窗态：仅当前周期序列，未启用区间套"
-        "（双窗 / 副级别联立的买卖点不在本次口径内）",
+        # 偏离披露文案 2026-10-06 用户裁定收敛为两条：去掉编号与前复权价
+        #   （前复权对用户是数据源常识、不是"偏离"）；补「多空双向」——
+        #   Runner 按 `sig.side` 开多/开空两向都走（Runner.py:457），卖点信号
+        #   会开空，这不是宣传语而是引擎事实，披露里写明可防"股票怎么会有空单"的疑问。
+        "偏离披露：按 T+0、多空双向；不建模涨跌停 / 停牌",
     ]
     if result.is_index:
         lines.append(
             "⚠ 指数标的（不可交易）：上方「费率 / target_amount」与股数、成本、净收益率"
             "均不适用（该套数字在指数上没有对应标的物）；"
-            "本次结果中仅区间 / 周期 / 出场参数 / 三类偏离以及价格侧指标"
+            "本次结果中仅区间 / 周期 / 出场参数 / 偏离披露以及价格侧指标"
             "（胜率、毛 R、盈亏比、持仓根数）有效。")
     return lines
 
