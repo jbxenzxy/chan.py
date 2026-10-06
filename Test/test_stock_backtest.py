@@ -583,11 +583,12 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
         # 同日补充：正值不带 + 号（正负由颜色表达）；`+` 紧贴数字即回潮。
         #   先剥掉「T+0」字面量 —— 那是口径词汇，不是带符号的数。
         " plusGone: !/\\+\\d/.test(BT_HTML.replace(/T\\+0/g, '')),"
-        # 逐笔倒序：编号 `N. `（trade_id 原值）在文档里的下标必须随 N 严格递减
+        # 逐笔倒序 + 显示位编号（2026-10-06 同日裁定：首行=1 往下递增）：
+        #   编号 `N. ` 在文档里的下标必须随 N 严格**递增**（顶部最小号）。
         " tDesc: (function () { var ps = [];"
         " for (var n = 1; n <= 9; n++) { var p = BT_HTML.indexOf('>' + n + '. '); if (p >= 0) ps.push(p); }"
         " var ok = ps.length >= 2;"
-        " for (var k = 1; k < ps.length; k++) if (ps[k] >= ps[k - 1]) ok = false;"
+        " for (var k = 1; k < ps.length; k++) if (ps[k] <= ps[k - 1]) ok = false;"
         " return ok; })() }); }\n"
         # ⑷ 核心区标签序列（只取 hero 段，切到 stats-rows 为止 —— 明细区不在内）
         "function _heroLabels() { var i = BT_HTML.indexOf('stats-hero');"
@@ -717,7 +718,7 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
           r2["order"] is True, kv["R2"])
     check("⑼补充 「最小申报 / 借道笔数」行已删、「最大单笔放大」已改名（旧文案零残留）",
           r2["minLotGone"] is True and r2["amplGone"] is True, kv["R2"])
-    check("补充 逐笔明细最新在上（编号下标随 trade_id 严格递减）",
+    check("补充 逐笔明细最新在上、首行序号=1（编号下标随 N 严格递增）",
           r2["tDesc"] is True, kv["R2"])
     check("补充 正值不带 + 号（`+数字` 零出现；负数 `-` 号不受影响）",
           r2["plusGone"] is True, kv["R2"])

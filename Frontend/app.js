@@ -5666,14 +5666,15 @@
 
             html += '</div>';
 
-            // ④ 逐笔明细 —— **最新在上**（2026-10-06 补充裁定）：倒序渲染，
-            //   编号仍用 `trade_id` 原值（时间正序），别按显示位置重新编号 ——
-            //   编号是跨轮次稳定的笔标识（CLI / 报告同号），倒序只是显示顺序。
+            // ④ 逐笔明细 —— **最新在上**（2026-10-06 补充裁定）：倒序渲染。
+            //   编号按**显示位置**从 1 递增（2026-10-06 同日裁定：首行必须是 1，
+            //   往下依次增大；trade_id 仍随数据下发，只作跨轮次稳定标识，
+            //   不再直接当序号 —— 倒序显示时它会让首行顶着最大号，违反直觉）。
             var trades = (d.trades || []).slice().reverse();
             html += '<div class="stats-rows" style="margin-top:6px;">';
             html += '<div class="stats-row"><span class="stats-label">逐笔明细</span>'
                 + '<span class="stats-value" style="font-size:11px;color:#a8b2d1;">' + trades.length + ' 笔</span></div>';
-            html += trades.map(function (t) {
+            html += trades.map(function (t, i) {
                 var side = t.side === "long" ? "多" : "空";
                 // 出场原因走**后端下发的映射**；未平仓笔没有原因（它还没出场）
                 var reason = (t.exit_reason === null || t.exit_reason === undefined)
@@ -5706,7 +5707,8 @@
                     metric = '<span style="color:' + _btCol(t.net_return_pct) + '">'
                         + _btPct(t.net_return_pct) + ' (' + _btNum(t.r_multiple, 2) + 'R)</span>';
                 }
-                // 行首 2026-10-06 用户裁定：`#1` → `1.`；日期后插 `R=xx` =
+                // 行首 2026-10-06 用户裁定：`#1` → `1.`；序号 = **显示位置**（i+1，
+                //   首行必为 1）；日期后插 `R=xx` =
                 //   该笔**入场时冻结的风险距离**（`r_distance`，单位元，
                 //   `max(结构距离, 2×ATR)`）—— 右端的 (+2.19R) 是"赚了几个 R"，
                 //   这里的 R=0.66 是"1R 有多大"，一个是分母一个是商，缺一读不懂。
@@ -5714,7 +5716,7 @@
                 var _rd = (t.r_distance === null || t.r_distance === undefined)
                     ? "—" : Number(t.r_distance).toFixed(2);
                 return '<div class="stats-row" style="font-size:11px;">'
-                    + '<span class="stats-label">' + t.trade_id + '. ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
+                    + '<span class="stats-label">' + (i + 1) + '. ' + side + ' ' + statsEsc(t.bsp_type) + '类 '
                     + statsEsc(t.entry_date) + ' → ' + statsEsc(t.exit_date || "持仓中")
                     + ' R=' + _rd
                     + (reason ? ' ' + statsEsc(reason) : '') + '</span>'
