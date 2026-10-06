@@ -2,9 +2,9 @@
 """
 出场原因显示文案 + 未平仓浮动估值（Backtest/Test/test_bt09_display_labels.py）
 ================================================================================
-v1.18 的两条**显示契约**（2026-10-05 用户裁定）：
+v1.18 的两条**显示契约**（2026-10-05 用户裁定），⑩ 的含浮口径为 2026-10-06 追加：
 
-    ⑴ 出场原因三选一 —— 止损 / 保本(1R) / 跟踪止盈
+    ⑴ 出场原因三选一 —— 止损 / 保本 / 跟踪止盈（名称**静态**，不含任何数字）
     ⑵ 未平仓笔显示「截止最新 K 线收盘价的盈亏百分比(xxR)」
 
 为什么这两条值得钉成常驻护栏
@@ -12,17 +12,20 @@ v1.18 的两条**显示契约**（2026-10-05 用户裁定）：
 · 文案能"漂"的地方比想象的多：`Backtest/Report.py`（控制台摘要 + 逐笔表）、
   `App/AppBacktest.py`（下发给前端的两张映射）、`Frontend/app.js`（渲染）——
   三处任一处自己抄一份，改一处就漏两处。所以本用例钉的不是"文案长什么样"，
-  而是**文案只有一份来源**（`exit_reason_labels()`），且它印的 `1R` 跟着
-  `breakeven_trigger_r` 走（阈值改成 1.5 就印「保本(1.5R)」，不许硬编码）。
+  而是**文案只有一份来源**（`exit_reason_labels()`），且**名称里不带任何数字**
+  （2026-10-06 用户裁定去掉「保本(1R)」的括号 ⇒ 阈值怎么调都不会与名字脱节）；
+  带数字的解释归 `exit_reason_legend`，两处同源取参。
 · 浮动估值最危险的错法不是"算错"，而是**填错槽位**：把估值写进 `net_return` /
   `r_multiple`，它就进了 `Metrics` 的胜率分母（`Metrics` 判据是 `net_return` 的
   符号、只吃 `closed`）⇒"一笔没平的仓位先算进胜率，且符号随最后一根 K 线跳"。
-  本用例把"两族字段互不越界"钉在 ⑨，把"估值不进指标"钉在 ⑩。
+  本用例把"两族字段互不越界"钉在 ⑨，把"估值**只进含浮口径、不进已实现口径**"
+  钉在 ⑩（`avg_net_return` 逐字段不变 + `avg_net_return_with_open` 必变，
+  两条合起来才构成隔离证明）。
 
 覆盖
 ---------------------------------------------------------------------
   ① 标签映射三键值 + 键序 ≡ `EXIT_REASON_ORDER`（稳定顺序，前端不必再排一次）
-  ② `1R` **动态**：`breakeven_trigger_r` 改 1.5 ⇒ 文案变「保本(1.5R)」
+  ② 名称**静态**：`breakeven_trigger_r` 改 1.5 后三选一文案逐字不变、且不含数字
   ③ 图例三条非空、与标签同源取参、且不含 Markdown 强调符（`**` 会原样吐到页面上）
   ④ 引擎 reason 词表 ≡ `EXIT_REASON_ORDER`（穷举 `_phase_reason` 的 `_phase` 输入）
   ⑤ 日线切片实跑：三种原因**都真实出现过**（映射的每个键都有样本覆盖，不是死配置）
@@ -169,8 +172,8 @@ def part_labels():
     from Backtest.Report import sort_exit_reasons
 
     lab = exit_reason_labels()
-    check("① 三选一文案 = 止损 / 保本(1R) / 跟踪止盈",
-          lab == {"sl": "止损", "breakeven": "保本(1R)", "trailing": "跟踪止盈"},
+    check("① 三选一文案 = 止损 / 保本 / 跟踪止盈（名称里**不带**数字，2026-10-06）",
+          lab == {"sl": "止损", "breakeven": "保本", "trailing": "跟踪止盈"},
           "labels=%r" % lab)
     check("① 键序 ≡ EXIT_REASON_ORDER（稳定顺序，前端不必再排）",
           list(lab) == list(EXIT_REASON_ORDER) == ["sl", "breakeven", "trailing"],
@@ -179,12 +182,15 @@ def part_labels():
           sort_exit_reasons(["trailing", "zzz", "sl", "aaa", "breakeven"])
           == ["sl", "breakeven", "trailing", "aaa", "zzz"])
 
-    # ② `1R` 必须跟着配置走 —— 硬编码的后果是"改了阈值、文案还写 1R"
+    # ② 名称是**静态词**（2026-10-06 用户裁定：去掉「保本(1R)」的括号）——
+    #    名称里没有数字，就不存在"阈值改了、名字里的数字没跟着改"这种漂移；
+    #    带数字的解释全在 `exit_reason_legend`（下面 ③ 段单独钉）。
     lab15 = exit_reason_labels({"breakeven_trigger_r": 1.5, "win_loss_ratio": 3.0})
-    check("② breakeven_trigger_r=1.5 ⇒ 「保本(1.5R)」（文案不硬编码）",
-          lab15["breakeven"] == "保本(1.5R)", "got=%r" % lab15["breakeven"])
-    check("② sl / trailing 两条文案与参数无关（只有保本那条带数）",
-          lab15["sl"] == lab["sl"] and lab15["trailing"] == lab["trailing"])
+    check("② 换过阈值后三选一文案**逐字不变**（名称不消费任何参数）",
+          lab15 == lab, "lab15=%r lab=%r" % (lab15, lab))
+    check("② 名称里不含任何数字（`保本(1R)` / `保本(1.5R)` 都不许回来）",
+          not any(ch.isdigit() for v in lab.values() for ch in v),
+          "labels=%r" % lab)
     check("② 空表 / None 都按「未指定」→ 回落 STOCK_EXIT_PARAMS",
           resolved_exit_params({}) == resolved_exit_params(None) == resolved_exit_params(),
           "none=%r empty=%r" % (resolved_exit_params(None), resolved_exit_params({})))
@@ -201,9 +207,12 @@ def part_labels():
     check("③ 图例不含 Markdown 强调符（`**` 在页面上会原样吐出来）",
           not any("**" in v for v in lg.values()), "legend=%r" % lg)
     lg15 = exit_reason_legend({"breakeven_trigger_r": 1.5, "win_loss_ratio": 3.0})
-    check("③ 图例与标签**同源取参**（阈值改了两边一起改）",
-          "1.5R" in lg15["breakeven"] and "1.5R" in lab15["breakeven"],
-          "legend=%r label=%r" % (lg15["breakeven"], lab15["breakeven"]))
+    check("③ 图例**消费参数**（阈值改了图例跟着改 —— 数字现在只住在图例里）",
+          "1.5R" in lg15["breakeven"],
+          "legend=%r" % lg15["breakeven"])
+    check("③ 图例与标签**分工**：名称静态（②已钉）、带数字的解释全在图例",
+          "1R" not in lab["breakeven"] and "1.5R" in lg15["breakeven"],
+          "label=%r legend=%r" % (lab["breakeven"], lg15["breakeven"]))
     check("③ 图例把「保本保护线在入场价上方 0.5R」写出来了（1R 是阈值、不是线位）",
           "0.5R" in lg["breakeven"], "legend=%r" % lg["breakeven"])
 
@@ -238,12 +247,14 @@ def part_trades(lab):
     line = [x for x in txt.splitlines() if x.startswith("分原因")]
     check("⑥ 摘要「分原因」行存在且印中文标签",
           len(line) == 1 and "止损" in line[0] and "跟踪止盈" in line[0]
-          and "保本(1R)" in line[0], "line=%r" % line)
+          and "保本" in line[0], "line=%r" % line)
     check("⑥ 摘要「分原因」行**不再**出现英文标识符（sl:/breakeven:/trailing:）",
           not any(k + ":" in line[0] for k in EXIT_REASON_ORDER), "line=%r" % line)
     check("⑥ 摘要里三种原因各出现一次（三选一，无遗漏无重复）",
-          all(line[0].count(x) == 1 for x in ("止损", "保本(1R)", "跟踪止盈")),
+          all(line[0].count(x) == 1 for x in ("止损", "保本", "跟踪止盈")),
           "line=%r" % line)
+    check("⑥ 摘要行里**没有**旧写法「保本(1R)」（名称已去掉括号里的数字）",
+          "保本(1R)" not in line[0], "line=%r" % line)
 
     tbl = trades_table(res)
     head = tbl.splitlines()[0]
@@ -325,7 +336,10 @@ def part_open(lab):
     check("⑨ 逐笔表未平仓行印出浮动 R（%.4f）" % t.unrealized_r,
           ("%.4f" % t.unrealized_r) in open_line[0], "line=%r" % open_line)
 
-    # ⑩ 估值不进指标
+    # ⑩ 估值**只进含浮那一族**，不进任何已实现口径指标
+    #    2026-10-06 把口径拆成两个字段之后，这条护栏的判别力反而更强：
+    #    `avg_net_return`（已实现）必须**不变**，`avg_net_return_with_open`（含浮）
+    #    必须**跟着变**。只证前者 = 漏掉新口径；只证后者 = 没证明隔离。
     before = compute(res)
     t.unrealized_r, t.unrealized_net_return = 999.0, -999.0
     after = compute(res)
@@ -333,12 +347,24 @@ def part_open(lab):
     fields = ("n", "w", "l", "e", "u", "win_rate", "expectancy_r", "avg_net_return",
               "profit_loss_ratio", "profit_factor", "avg_bars_held",
               "max_win_r", "max_loss_r")
-    check("⑩ ★ 把未平仓笔的 unrealized_* 改成 ±999，Metrics 逐字段不变",
+    check("⑩ ★ 把未平仓笔的 unrealized_* 改成 ±999，**已实现**口径逐字段不变",
           all(getattr(before, f) == getattr(after, f) for f in fields)
           and before.by_reason == after.by_reason
           and before.by_bsp_type == after.by_bsp_type,
           {f: (getattr(before, f), getattr(after, f)) for f in fields
            if getattr(before, f) != getattr(after, f)})
+    check("⑩ ★ 同一改动下**含浮**口径必须跟着变（证它真的含浮，不是摆设）",
+          before.avg_net_return_with_open is not None
+          and after.avg_net_return_with_open is not None
+          and before.avg_net_return_with_open != after.avg_net_return_with_open,
+          "before=%r after=%r" % (before.avg_net_return_with_open,
+                                  after.avg_net_return_with_open))
+    check("⑩ 含浮口径 ≡ (Σ已平 + Σ未平浮动) / (已平 + 未平) —— 两个字段各自算对",
+          before.avg_net_return is not None
+          and abs(before.avg_net_return_with_open
+                  - (before.avg_net_return * met.n + exp_net) / (met.n + 1)) < 1e-12,
+          "with_open=%r realized=%r n_closed=%r open_net=%r" % (
+              before.avg_net_return_with_open, before.avg_net_return, met.n, exp_net))
     check("⑩ 指标分母只含已平仓笔（未平仓不计胜负）",
           before.n == len(res.closed) and before.u == len(opens)
           and before.w + before.l + before.e == before.n,

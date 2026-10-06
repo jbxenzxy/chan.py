@@ -263,7 +263,8 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
     #    SSOT 在 `Backtest/Report.py`（层表：Backtest 不得 import App，反过来合法）
     #    ⇒ 前端**不硬编码**任何 reason 文案，只按后端给的映射查表；
     #    控制台摘要与页面面板因此永远是同一份文案。
-    #    「保本(1R)」里的 1 来自 `res.exit_params`（本轮实际用的参数），不是常量。
+    #    标签是**静态词**（止损 / 保本 / 跟踪止盈，名称里不含任何数字）；
+    #    带配置数字的解释在 legend 里，legend 与本轮实际用的 `res.exit_params` 同源。
     _reason_labels = exit_reason_labels(res.exit_params)
     _reason_legend = exit_reason_legend(res.exit_params)
 
@@ -330,6 +331,14 @@ def compute_stock_backtest(code: str, body: Dict[str, Any]) -> Dict[str, Any]:
             "profit_factor": (None if met.profit_factor is None
                               else round(float(met.profit_factor), 6)),
             "avg_net_return_pct": _amt(_pct(met.avg_net_return)),
+            # 含浮口径（面板「净收益率(均)」带「浮」字用的就是它）：
+            #   `*_with_open` = 已平仓 + 未平仓浮动 的等权平均；`*_open_count` = 并进来的
+            #   未平仓笔数（>0 ⇒ 前端加「浮」标）。两者与 `avg_net_return_pct` **并列**
+            #   下发 —— 不是替换后者，前端要能同时讲清"落袋"与"眼下"。
+            #   指数侧同族分流：`_amt` 把整个净收益率族置 null（指数上无金额口径）。
+            "avg_net_return_pct_with_open": _amt(_pct(met.avg_net_return_with_open)),
+            "avg_net_return_open_count": int(sum(
+                1 for t in res.still_open if t.unrealized_net_return is not None)),
             "expectancy_r": (None if met.expectancy_r is None
                              else round(float(met.expectancy_r), 6)),
             "avg_bars_held": (None if met.avg_bars_held is None

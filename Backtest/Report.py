@@ -94,15 +94,17 @@ def write_csv(result: RunResult, path: str) -> str:
 # ⚠ 三件事必须分清，别混：
 #   ① `reason` **只表达规则身份、不表达盈亏**（盈亏口径在 `Metrics`：净收益率三分）。
 #      「跟踪止盈」也可能只小赚甚至因滑点净亏，那是成交结果，不是这个字段的事。
-#   ② `breakeven` 文案里的那个 `1R` 是**触发该层的浮盈阈值**（`breakeven_trigger_r`），
-#      **不是**保护线的位置 —— 保护线落在入场价 **上方 0.5R**（`breakeven_buffer_r`）。
-#      用户口径原文：「保本(1R)」= 浮盈到 1R 就保本（2026-10-05）。
+#   ② `breakeven` 的**触发阈值**（`breakeven_trigger_r`）×R **不是**保护线的位置 ——
+#      保护线落在入场价 **上方 0.5R**（`breakeven_buffer_r`）。这两个数都写在
+#      `exit_reason_legend` 的说明里，不进标签名称。
 #   ③ `trailing` 那一格**不写 R 数**：该笔实际锁住多少 R 就是逐笔明细里的 `r_multiple`，
 #      写两遍只会让人以为是两个不同的数。
 #
-# 为什么文案由**函数**生成而不是模块级常量字典：`1R` 里的 1 必须跟着
-# `breakeven_trigger_r` 走 —— 常量字典会在有人把阈值改成 1.5 之后继续印「保本(1R)」，
-# 正是"配置改了口径文案没改"的经典漂移（改一处必须只改一处）。
+# **名称静态、数字动态，两者分家**（2026-10-06 用户裁定）：`exit_reason_labels`
+# 只给纯静态词（止损 / 保本 / 跟踪止盈），带配置数字的解释一律归
+# `exit_reason_legend`。旧版把 `breakeven_trigger_r` 拼进名称（「保本(1R)」）——
+# 那是为了防"阈值改了名字没改"的漂移；名称里干脆不带数字之后，
+# 这类漂移从根上不可能发生，也就不必再让文案跟着配置走。
 EXIT_REASON_ORDER: Tuple[str, ...] = ("sl", "breakeven", "trailing")
 
 
@@ -141,16 +143,21 @@ def exit_reason_labels(exit_params: Optional[Dict[str, Any]] = None) -> Dict[str
     """出场原因 → 显示文案（三选一；控制台 / 前端 / 图例**共用同一份**）。
 
         止损        触发**止损**保护线离场
-        保本(1R)    触发**保本**保护线离场（括号内 = 触发该层的浮盈阈值，随配置变）
+        保本        触发**保本**保护线离场
         跟踪止盈    触发**跟踪**保护线离场（锁住多少 R 见逐笔 `r_multiple`）
+
+    三条文案**全是静态词**，不含任何随配置变的数字（2026-10-06 用户裁定：去掉
+    「保本(1R)」的括号）⇒ 面板标签再也不会出现"阈值调了、名字里的数字没跟着调"。
+    想看阈值 / 线位的调用方读 `exit_reason_legend`（那三条才是带参数的说明）。
+    `exit_params` 形参**保留**只是为了让调用签名与 `exit_reason_legend` 一致
+    （调用方一律传 `res.exit_params`），本函数不再消费它。
 
     字典的键序 = `EXIT_REASON_ORDER` ⇒ 调用方（含 JS 的 `Object.keys`）拿到的是
     **稳定顺序**，不必再排一次。
     """
-    p = resolved_exit_params(exit_params)
     return {
         "sl": "止损",
-        "breakeven": "保本({}R)".format(_fmt_r(p["breakeven_trigger_r"])),
+        "breakeven": "保本",
         "trailing": "跟踪止盈",
     }
 

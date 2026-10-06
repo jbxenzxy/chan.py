@@ -19,6 +19,12 @@
 ⚠ **两个指标故意用不同口径**（R30）：
     期望 R 倍数用**毛**（不扣成本）= 策略本身的质量，跨标的可比；
     平均净收益率 % 用**净** = 落到口袋的比例。别以为是笔误。
+
+⚠ **含浮口径只此一处**（2026-10-06 用户裁定）
+---------------------------------------------------------------------
+    `avg_net_return_with_open` = 已平仓 + 未平仓浮动 的等权平均 ——
+    面板「净收益率(均)」带「浮」字显示的就是它。其余指标一律**已实现**口径。
+    两族**并列产出**、谁也别顶掉谁：落袋比例与眼下浮盈是两件不同的事。
 """
 from __future__ import annotations
 
@@ -76,7 +82,11 @@ class Metrics:
     win_rate: Optional[float] = None
     profit_loss_ratio: Optional[float] = None
     profit_factor: Optional[float] = None
-    avg_net_return: Optional[float] = None     # 等权算术平均（**不许**金额累加）
+    avg_net_return: Optional[float] = None     # 等权算术平均（**不许**金额累加）；只含已平仓
+    # 同式，但把**未平仓**笔的浮动净收益率一并进分母。面板「净收益率(均)」带「浮」字
+    #   显示的就是它。两个口径**并列保留**而不是二选一：已实现 = 落袋、含浮 = 眼下，
+    #   把后者顶掉前者会让人再也看不到"扣完成本真正到手多少"。
+    avg_net_return_with_open: Optional[float] = None
     expectancy_r: Optional[float] = None       # 毛 R 算术平均
     avg_bars_held: Optional[float] = None
     max_win_r: Optional[float] = None
@@ -86,7 +96,13 @@ class Metrics:
 
 
 def compute(result: RunResult) -> Metrics:
-    """`RunResult` → `Metrics`（只吃**已平仓**笔；未平仓只计数）。"""
+    """`RunResult` → `Metrics`。
+
+    **已平仓口径**（未平仓只计数、不进分母）：`n/w/l/e`、`win_rate`、
+    `profit_loss_ratio`、`profit_factor`、`expectancy_r`、`avg_net_return`、
+    `avg_bars_held`、`max_win_r` / `max_loss_r`。
+    **唯一含浮**：`avg_net_return_with_open` —— 已平仓 + 未平仓浮动的等权平均。
+    """
     closed = result.closed
     m = Metrics(
         n=len(closed),
@@ -95,7 +111,12 @@ def compute(result: RunResult) -> Metrics:
         filtered=result.signals_filtered,
         bars_total=result.bars_total,
     )
-    if not closed:
+    # 未平仓笔的**浮动**净收益率（截止最后一根 K 线收盘价，Runner `_mark_open_positions`
+    #   已算好）。只喂 `_with_open` 那一族；`n/w/l/e`、胜率、盈亏比、盈利因子、期望 R
+    #   一律只认已平仓 —— 把没平的仓位算进胜负分母，等于把浮动当成交结果。
+    open_nets = [t.unrealized_net_return for t in result.still_open
+                 if t.unrealized_net_return is not None]
+    if not closed and not open_nets:
         return m
 
     nets = [t.net_return for t in closed if t.net_return is not None]
@@ -111,6 +132,10 @@ def compute(result: RunResult) -> Metrics:
     if nets:
         m.win_rate = m.w / len(nets)                   # 平计入分母、不计胜
         m.avg_net_return = _mean(nets)
+    if nets or open_nets:
+        # 含浮口径：已平仓 + 未平仓浮动，**同一权重**（每笔等权，不许金额累加）。
+        #   两族可比的前提是 Runner 用同一个 `round_trip_cost` 估浮动 —— 见其 docstring。
+        m.avg_net_return_with_open = _mean(nets + open_nets)
     if wins and losses:
         # 盈亏比 = 盈利笔净收益率**均值** ÷ 亏损笔净收益率**均值**（比值的比）
         m.profit_loss_ratio = _mean(wins) / _mean(losses)

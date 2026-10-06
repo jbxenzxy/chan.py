@@ -5475,6 +5475,16 @@
             var v = Number(x);
             return (v > 0 ? "+" : "") + v.toFixed(nd === undefined ? 3 : nd);
         }
+        // 金额 → 万元（保留 2 位、去尾零：50000 → "5 万元"，53396 → "5.34 万元"）。
+        //   面板上的金额只有两处（目标成交额 / 最大单笔名义额），量级都在 5 万上下 ——
+        //   用「元」得数位数、用「亿元」又全变成 0.0x，万元是唯一读得顺的档。
+        //   不复用 `_btNum`：那个是"倍数 / R"的格式（正数带 `+` 号），金额不该带。
+        function _btWan(x) {
+            if (x === null || x === undefined) return "—";
+            var s = (Number(x) / 10000).toFixed(2);
+            s = s.replace(/\.?0+$/, "");
+            return s + " 万元";
+        }
 
         function runBacktest() {
             if (!chartData || !chartData.meta || !chartData.meta.symbol) {
@@ -5548,31 +5558,73 @@
                     + '口径不适用；下列仅价格侧指标（胜率、毛 R、盈亏比、持仓根数）有效</div>';
             }
 
-            // ② 核心区：一行四格（对齐「成交统计」面板的 .stats-hero）
-            html += '<div class="stats-hero">';
+            // ② 核心区：一行六格（对齐「成交统计」面板的 .stats-hero）
+            //   2026-10-06 用户裁定：四格 → 六格 —— 把明细区的「盈亏比 / 盈利因子」
+            //   提上来，与「交易笔数 / 净收益率(均) / 胜率 / 期望值(R)」并列。
+            //   期望值(R) 的 R 后缀留在标签里（值的量纲是 R 倍数），保留 2 位小数。
+            //   `bt-hero` 是给 CSS 的钩子：六格比期货统计面板的四格挤，
+            //   只给这一处降一号标签字号（见 app.css 的 `.bt-hero` 规则）。
+            html += '<div class="stats-hero bt-hero">';
             html += '<div class="stats-cell"><span class="stats-label">交易笔数</span><span class="stats-value">'
                 + run.filled + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">实际胜率</span><span class="stats-value">'
+            // 净收益率(均)：后端给的是**含浮**口径（`*_with_open` = 已平仓 + 未平仓浮动
+            //   的等权平均），有未平仓笔时值后加「浮」字（与逐笔明细同一套措辞）——
+            //   不标就会被读成"全部已落袋"。笔数取自 `*_open_count`，不用 `s.u` 顶替：
+            //   `s.u` 是全部未平仓笔，含浮平均只并进**算得出净收益率**的那些（指数侧为 0）。
+            var _avgAll = s.avg_net_return_pct_with_open;
+            var _nOpenIn = Number(s.avg_net_return_open_count || 0);
+            html += '<div class="stats-cell"><span class="stats-label">净收益率(均)</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : ('<span style="color:' + _btCol(_avgAll) + '">' + _btPct(_avgAll) + '</span>'
+                       + (_nOpenIn > 0
+                          ? '<span style="color:#8b93a7;font-size:10px;cursor:help;"'
+                            + ' title="含 ' + _nOpenIn + ' 笔未平仓的浮动净收益率'
+                            + '（截止最后一根 K 线收盘价估值，非成交结果）"> 浮</span>'
+                          : ''))) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">胜率</span><span class="stats-value">'
                 + (s.win_rate === null || s.win_rate === undefined
                     ? "—" : (Number(s.win_rate) * 100).toFixed(1) + "%") + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">期望 R</span><span class="stats-value" style="color:'
-                + _btCol(s.expectancy_r) + '">' + _btNum(s.expectancy_r, 3) + '</span></div>';
-            html += '<div class="stats-cell"><span class="stats-label">平均净收益率</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : '<span style="color:' + _btCol(s.avg_net_return_pct) + '">'
-                      + _btPct(s.avg_net_return_pct) + '</span>') + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">盈亏比</span><span class="stats-value">'
+                + _btNum(s.profit_loss_ratio, 3) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">盈利因子</span><span class="stats-value">'
+                + _btNum(s.profit_factor, 3) + '</span></div>';
+            html += '<div class="stats-cell"><span class="stats-label">期望值(R)</span><span class="stats-value" style="color:'
+                + _btCol(s.expectancy_r) + '">' + _btNum(s.expectancy_r, 2) + '</span></div>';
             html += '</div>';
 
             // ③ 明细行
+            //   标的显示**股票名**（2026-10-06 用户裁定）：`chartData.meta.name` 就是页面
+            //   标题一直在用的那份；仅当它与本次响应的标的**同一个**时才替换（防串标的）。
+            //   取不到名字就回落代码 —— 宁可显示 sh600036，也不要留一个空标签。
+            var _dispName = statsEsc(tgt.code || "");
+            if (typeof chartData !== "undefined" && chartData && chartData.meta
+                && chartData.meta.name && chartData.meta.symbol === tgt.code) {
+                _dispName = statsEsc(chartData.meta.name);
+            }
             html += '<div class="stats-rows">';
             html += '<div class="stats-row"><span class="stats-label">标的 / 周期</span><span class="stats-value">'
-                + statsEsc(tgt.code || "") + ' · ' + statsEsc(tgt.freq_label || "") + '</span></div>';
+                + _dispName + ' · ' + statsEsc(tgt.freq_label || "") + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">区间 / K线</span><span class="stats-value">'
                 + statsEsc((tgt.date_from || "") + " ~ " + (tgt.date_to || "")) + '（' + tgt.bars + ' 根）</span></div>';
+            // 仓位口径三项（§5.4d-quater：报告必须披露放大倍数与 min_lot 借道）
+            //   指数不可交易 ⇒ 整块「不适用」（后端已把这三个字段置 null）
+            //   2026-10-06 用户裁定：三行上移到「区间 / K线」紧后面，且金额一律用**万元**
+            //   —— `50000 元` 要数位数，`5 万元` 一眼读出来。行内顺序 = 最小申报 →
+            //   目标成交额 → 最大单笔放大（由小到大，与"放大"的叙事顺序一致）。
+            html += '<div class="stats-row"><span class="stats-label">最小申报 / 借道笔数</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : ((cal.min_lot || "—") + ' 股 / ' + (cal.min_lot_derived_trades || 0) + ' 笔')) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : (cal.target_amount === undefined || cal.target_amount === null
+                        ? "—" : _btWan(cal.target_amount))) + '</span></div>';
+            html += '<div class="stats-row"><span class="stats-label">最大单笔放大</span><span class="stats-value">'
+                + (isIndex ? _btNA()
+                    : ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
+                        ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
+                       + '（' + _btWan(cal.max_notional) + '）')) + '</span></div>';
             html += '<div class="stats-row"><span class="stats-label">胜负平</span><span class="stats-value">'
                 + '胜 ' + s.w + ' / 亏 ' + s.l + ' / 平 ' + s.e + (s.u ? ' / 未平 ' + s.u : '') + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">盈亏比 / 盈利因子</span><span class="stats-value">'
-                + _btNum(s.profit_loss_ratio, 3) + ' / ' + _btNum(s.profit_factor, 3) + '</span></div>';
             // 最好 / 最差 R 都取自**已平仓**笔。已平仓只有 1 笔时二者必然相等
             //   （同一笔既是最好的也是最差的）—— 那不是 bug，但不加说明就是个
             //   "看着像坏了"的数字（用户 2026-10-05 就是照这个来问的）。
@@ -5592,8 +5644,11 @@
                 + (s.avg_bars_held === null || s.avg_bars_held === undefined
                     ? "—" : Number(s.avg_bars_held).toFixed(1)) + ' 根 / '
                 + rRange + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">首见信号 / 拒收 / 过滤</span><span class="stats-value">'
-                + run.signals_seen + ' / ' + run.signals_rejected + ' / ' + run.signals_filtered + '</span></div>';
+            // 「首见信号 / 拒收 / 过滤」行 2026-10-06 用户裁定**移除**：这三个计数是
+            //   引擎内部口径（`首见 = 过滤 + 拒收 + 开仓笔数`），与页面上画出来的买卖点
+            //   对不上（图上只画勾选的类型），摆在面板里只会引出"为什么你说是 5 个、
+            //   我只看得到 3 个"这类问题。数据仍在 `run` 里照常下发（CLI 摘要照印），
+            //   谁要谁取，不再占用面板版面。
 
             // 类型拆解：`n` = 该类型**已平仓笔数**（≠ 信号数 —— 同一段行情会连着出
             //   3~4 个右肩信号，§2.7 实测 8 信号→3 笔）；`均R` = 这些笔的平均**毛** R。
@@ -5635,20 +5690,6 @@
                     + reasonTxt + '</span></div>';
             }
 
-            // 仓位口径三项（§5.4d-quater：报告必须披露放大倍数与 min_lot 借道）
-            //   指数不可交易 ⇒ 整块「不适用」（后端已把这三个字段置 null）
-            html += '<div class="stats-row"><span class="stats-label">目标成交额</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : (cal.target_amount === undefined || cal.target_amount === null
-                        ? "—" : Number(cal.target_amount).toFixed(0) + " 元")) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最小申报 / 借道笔数</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : ((cal.min_lot || "—") + ' 股 / ' + (cal.min_lot_derived_trades || 0) + ' 笔')) + '</span></div>';
-            html += '<div class="stats-row"><span class="stats-label">最大单笔放大</span><span class="stats-value">'
-                + (isIndex ? _btNA()
-                    : ((cal.max_notional_multiple === null || cal.max_notional_multiple === undefined
-                        ? "—" : Number(cal.max_notional_multiple).toFixed(2) + " 倍")
-                       + '（' + Number(cal.max_notional || 0).toFixed(0) + ' 元）')) + '</span></div>';
             html += '</div>';
 
             // ④ 逐笔明细

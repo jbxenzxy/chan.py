@@ -719,7 +719,8 @@ COMPONENTS = [
                                    "test_bt08_ab_57th.py")]),
     # 出场原因显示文案 + 未平仓浮动估值（v1.18，设计文档 §6.1 ⑥）：文案**只有一份来源**
     # （`Backtest/Report.py::exit_reason_labels`，控制台 / App 响应 / 前端共用），
-    # 且「保本(1R)」的 1R 跟着 `breakeven_trigger_r` 走（不硬编码）；未平仓笔的
+    # 三条名称是**静态词**（止损 / 保本 / 跟踪止盈，2026-10-06 起名称里不带数字），
+    # 带配置数字的解释归 `exit_reason_legend`；未平仓笔的
     # `unrealized_*` 与已实现字段**槽位隔离**（填错槽位等于把没平的仓位算进胜率分母）。
     # 基线 `Backtest/Test/snapshots/p0_display_labels.json`，重冻用 `--freeze`。
     ("bt09_display_labels",

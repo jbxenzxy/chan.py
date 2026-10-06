@@ -8,17 +8,17 @@
   "fixture": "sz002190_d.json",
   "labels_in_trade_order": [
    "止损",
-   "保本(1R)",
+   "保本",
    "止损",
-   "保本(1R)",
-   "保本(1R)",
+   "保本",
+   "保本",
    "跟踪止盈"
   ],
   "n": 6,
   "open": 0,
   "summary_last_lines": [
    "分类型 0:n=3 avgR=1.802, 3:n=3 avgR=-0.651",
-   "分原因 止损:n=2, 保本(1R):n=3, 跟踪止盈:n=1"
+   "分原因 止损:n=2, 保本:n=3, 跟踪止盈:n=1"
   ]
  },
  "exit_reason_order": [
@@ -28,7 +28,7 @@
  ],
  "kind": "backtest-display-labels",
  "labels": {
-  "breakeven": "保本(1R)",
+  "breakeven": "保本",
   "sl": "止损",
   "trailing": "跟踪止盈"
  },

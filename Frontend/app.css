@@ -364,13 +364,20 @@
             margin-top: 8px; padding-top: 8px;
             border-top: 1px solid #0f3460;
         }
-        /* flex: 1 1 0 —— 核心区四格等宽。外层 .stats-hero 是
+        /* flex: 1 1 0 —— 核心区每格等宽。外层 .stats-hero 是
            justify-content: space-between，不给 flex-basis 时每格按内容宽度
            分配：3 格时观感尚可，加了「盈利因子」（值普遍比「总净盈亏」短）
-           变 4 格后就肉眼可见不均。0 基准 + 可伸缩 = 四格各占 1/4。 */
-        .stats-cell { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
+           变 4 格后就肉眼可见不均。0 基准 + 可伸缩 = 每格各占 1/N。
+           min-width: 0 —— 6 格时每格 ≈ 69px，允许压到内容宽度以下，
+           否则 flex item 的最小内容宽度会把整行撑破。 */
+        .stats-cell { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
         .stats-cell .stats-label { color: #8892b0; font-size: 11px; }
         .stats-cell .stats-value { color: #a8b2d1; font-weight: 600; font-size: 13px; }
+        /* 回测面板的核心区是**六格**（交易笔数 / 净收益率(均) / 胜率 / 盈亏比 /
+           盈利因子 / 期望值(R)），期货统计面板仍是四格 —— 440px 面板按 6 格分下来
+           每格 ≈ 69px，「净收益率(均)」在 11px 下会折行。只给回测这一处降一号字，
+           期货面板不动（它没有这个约束）。 */
+        .bt-hero .stats-cell .stats-label { font-size: 10px; }
         .stats-rows { margin-top: 8px; padding-top: 8px; border-top: 1px solid #0f3460; }
         .stats-row { display: flex; justify-content: space-between; padding: 3px 0; gap: 10px; }
         .stats-label { color: #8892b0; }

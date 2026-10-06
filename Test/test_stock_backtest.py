@@ -304,11 +304,22 @@ def part45(d):
                         for t in tr if t["r_multiple"] is not None)
         check("逐笔 net_return_pct 与 r_multiple 同号", same_sign,
               "样本=%r" % [(t["net_return_pct"], t["r_multiple"]) for t in tr[:4]])
-        check("avg_net_return_pct == 逐笔 net_return_pct 的均值（同一口径）",
+        check("avg_net_return_pct == 逐笔 net_return_pct 的均值（**已实现**口径）",
               abs(s["avg_net_return_pct"]
                   - sum(t["net_return_pct"] for t in tr) / len(tr)) < 1e-3,
               "summary=%r mean=%.6f" % (s["avg_net_return_pct"],
                                         sum(t["net_return_pct"] for t in tr) / len(tr)))
+        # 含浮口径（2026-10-06 新增）：`*_with_open` = 已平仓 + 未平仓浮动 的等权平均，
+        #   `*_open_count` = 并进来的未平仓笔数。日线样本**全平** ⇒ 两个口径必然相等、
+        #   计数为 0（面板也就不加「浮」字）。"真的含浮"由 ⑫ 段的 30m 样本单独钉
+        #   （那个切片末尾留 1 笔未平仓，是判别力所在）。
+        check("含浮口径：日线全平 ⇒ `*_with_open` ≡ 已实现口径，且 open_count == 0",
+              s["avg_net_return_open_count"] == 0
+              and abs(s["avg_net_return_pct_with_open"]
+                      - s["avg_net_return_pct"]) < 1e-9,
+              "with_open=%r realized=%r open_count=%r" % (
+                  s["avg_net_return_pct_with_open"], s["avg_net_return_pct"],
+                  s["avg_net_return_open_count"]))
     check("by_bsp_type 桶内 avg_net_return_pct 也是百分数（未落下乘 100）",
           all(v["avg_net_return_pct"] is None or abs(float(v["avg_net_return_pct"])) < 1000
               for v in d["by_bsp_type"].values()),
@@ -555,17 +566,34 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
         # ── ⑪ renderBacktest 指数分流（喂**真响应**，不喂手写假数据）──
         "function _naCount() { return (BT_HTML.match(/不适用/g) || []).length; }\n"
         "function _pctCount() { return (BT_HTML.match(/%/g) || []).length; }\n"
+        "function _i(x) { return BT_HTML.indexOf(x); }\n"
         "function _btSnap() { return JSON.stringify({ na: _naCount(), pct: _pctCount(),"
         " badge: BT_HTML.indexOf('指数标的（不可交易）') >= 0,"
-        " calRow: BT_HTML.indexOf('目标成交额') >= 0 }); }\n"
+        " calRow: BT_HTML.indexOf('目标成交额') >= 0,"
+        " seen: BT_HTML.indexOf('首见信号') >= 0,"
+        # ⑼⑽⑾ 仓位三行必须紧跟「区间 / K线」，且内部序 = 最小申报 → 目标成交额 →
+        #   最大单笔放大（用字符串下标比先后 —— 不比排版，只比文档顺序）
+        " order: (_i('区间 / K线') >= 0 && _i('区间 / K线') < _i('最小申报 / 借道笔数'))"
+        " && (_i('最小申报 / 借道笔数') < _i('目标成交额'))"
+        " && (_i('目标成交额') < _i('最大单笔放大')),"
+        # ⑽⑾ 金额一律万元：不许再出现「数字 + 空格 + 元」这种裸元写法
+        " wan: !/\\d+ 元/.test(BT_HTML) && /万元/.test(BT_HTML) }); }\n"
+        # ⑷ 核心区标签序列（只取 hero 段，切到 stats-rows 为止 —— 明细区不在内）
+        "function _heroLabels() { var i = BT_HTML.indexOf('stats-hero');"
+        " if (i < 0) return ''; var j = BT_HTML.indexOf('stats-rows', i);"
+        " var seg = BT_HTML.slice(i, j > i ? j : i + 3000);"
+        " var out = [], m, re = /stats-label\\\">([^<]+)</g;"
+        " while ((m = re.exec(seg))) out.push(m[1]); return out.join('|'); }\n"
         "BT_HTML = ''; renderBacktest(" + json.dumps(d_idx) + ");\n"
         "out.push('R1=' + _btSnap());\n"
+        "out.push('H1=' + _heroLabels());\n"
         "BT_HTML = ''; renderBacktest(" + json.dumps(d_stock) + ");\n"
         "out.push('R2=' + _btSnap());\n"
+        "out.push('H2=' + _heroLabels());\n"
         # ── ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应）──
         "function _tSnap() { return JSON.stringify({"
         " stop: BT_HTML.indexOf('止损') >= 0,"
-        " be: BT_HTML.indexOf('保本(1R)') >= 0,"
+        " be: BT_HTML.indexOf('保本') >= 0 && BT_HTML.indexOf('保本(1R)') < 0,"
         " trail: BT_HTML.indexOf('跟踪止盈') >= 0,"
         " rawReason: /\\b(sl|breakeven|trailing)\\b/.test(BT_HTML),"
         " float: BT_HTML.indexOf('浮') >= 0,"
@@ -587,6 +615,7 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
                + _extract_any_fn(appjs, "_btNA") + "\n"
                + _extract_any_fn(appjs, "_btPct") + "\n"
                + _extract_any_fn(appjs, "_btNum") + "\n"
+               + _extract_any_fn(appjs, "_btWan") + "\n"
                + _extract_any_fn(appjs, "renderBacktest") + "\n"
                + driver)
 
@@ -600,11 +629,11 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
     finally:
         os.unlink(jf.name)
 
-    if proc.returncode != 0 or len(lines) != 14:
-        check("node 执行成功且输出 14 条", False,
+    if proc.returncode != 0 or len(lines) != 16:
+        check("node 执行成功且输出 16 条", False,
               (proc.stderr or proc.stdout)[:400])
         return
-    check("node 执行成功且输出 14 条", True)
+    check("node 执行成功且输出 16 条", True)
     kv = dict(x.split("=", 1) for x in lines)
 
     # ⑧
@@ -659,9 +688,26 @@ def part8_9_10_11(d_idx, d_stock, d30=None, d1=None):
     check("⑪ 两侧都渲染「目标成交额」行（指数只是值变「不适用」，不是删行）",
           r1["calRow"] is True and r2["calRow"] is True, kv["R1"] + " / " + kv["R2"])
 
+    # ⑷ 核心区六格（2026-10-06 用户裁定）：格位与顺序是**契约**，不是排版细节 ——
+    #   前端把「盈亏比 / 盈利因子」从明细区提到核心区，三个标签同时改名
+    #   （实际胜率→胜率、平均净收益率→净收益率(均)、期望 R→期望值(R)）。
+    #   这里钉"有几个格子、各叫什么、什么序"，改了名字/顺序立刻红。
+    check("⑷ 核心区六格顺序 = 交易笔数 / 净收益率(均) / 胜率 / 盈亏比 / 盈利因子 / 期望值(R)",
+          kv["H2"] == "交易笔数|净收益率(均)|胜率|盈亏比|盈利因子|期望值(R)", kv["H2"])
+    check("⑷ 指数页核心区格位同构（只是值变「不适用」，格序不变）",
+          kv["H1"] == kv["H2"], kv["H1"])
+    check("⑷ 旧核心区标签（实际胜率 / 平均净收益率 / 期望 R）已退役",
+          "实际胜率" not in kv["H2"] and "平均净收益率" not in kv["H2"]
+          and "期望 R" not in kv["H2"], kv["H2"])
+    check("⑹ 「首见信号 / 拒收 / 过滤」行已从面板移除（后端 run.* 字段照常下发）",
+          r1["seen"] is False and r2["seen"] is False, kv["R1"] + " / " + kv["R2"])
+    check("⑼⑽⑾ 仓位三行紧跟「区间 / K线」，序 = 最小申报 → 目标成交额 → 最大单笔放大",
+          r2["order"] is True, kv["R2"])
+    check("⑽⑾ 金额一律万元（面板不再出现裸「N 元」）", r2["wan"] is True, kv["R2"])
+
     # ⑫ 出场原因三选一 / 持仓中浮动 / ⑶⑷ 可读性（喂真响应渲染）
     f1, f2 = json.loads(kv["F1"]), json.loads(kv["F2"])
-    check("⑫ 个股 30m 页渲染出三种中文原因（止损 / 保本(1R) / 跟踪止盈）",
+    check("⑫ 个股 30m 页渲染出三种中文原因（止损 / 保本 / 跟踪止盈）",
           f1["stop"] and f1["be"] and f1["trail"], kv["F1"])
     check("⑫ HTML 里**不再出现**英文 reason（sl / breakeven / trailing）",
           f1["rawReason"] is False, kv["F1"])
@@ -859,7 +905,7 @@ def part12():
     lab = d.get("exit_reason_labels") or {}
     check("⑫ 响应带 exit_reason_labels（三选一，键序稳定 = sl/breakeven/trailing）",
           list(lab) == ["sl", "breakeven", "trailing"]
-          and lab == {"sl": "止损", "breakeven": "保本(1R)", "trailing": "跟踪止盈"},
+          and lab == {"sl": "止损", "breakeven": "保本", "trailing": "跟踪止盈"},
           "labels=%r" % lab)
     check("⑫ 响应带 exit_reason_legend（与标签同键、逐条非空）",
           set(d.get("exit_reason_legend") or {}) == set(lab)
@@ -917,6 +963,29 @@ def part12():
     check("⑫ 未平仓 落进 run.still_open / 逐笔 open 计数一致",
           d30["run"]["still_open"] == len(opens)
           and d30["run"]["closed"] + d30["run"]["still_open"] == d30["run"]["filled"])
+
+    # ── 含浮口径（2026-10-06）：30m 切片末尾留 1 笔未平仓 ⇒ 两口径必须**不等** ──
+    #    这才是"真的含浮"的判别力所在：日线样本全平，两口径恒等，什么都证不出来。
+    s30 = d30["summary"]
+    _realized = [t["net_return_pct"] for t in closed]
+    _float = [t["unrealized_net_return_pct"] for t in opens]
+    check("⑫ 含浮口径：open_count == 未平仓笔数（1），且与已实现口径**不等**",
+          s30["avg_net_return_open_count"] == len(opens) == 1
+          and abs(s30["avg_net_return_pct_with_open"]
+                  - s30["avg_net_return_pct"]) > 1e-9,
+          "with_open=%r realized=%r count=%r" % (
+              s30["avg_net_return_pct_with_open"], s30["avg_net_return_pct"],
+              s30["avg_net_return_open_count"]))
+    check("⑫ 含浮均值 ≡ (Σ已平 + Σ未平浮动) / (已平笔数 + 未平笔数)（手算复核）",
+          abs(s30["avg_net_return_pct_with_open"]
+              - (sum(_realized) + sum(_float)) / (len(_realized) + len(_float))) < 1e-3,
+          "with_open=%r hand=%.6f" % (
+              s30["avg_net_return_pct_with_open"],
+              (sum(_realized) + sum(_float)) / (len(_realized) + len(_float))))
+    check("⑫ 已实现口径**不含**未平仓（浮动不许混进已落袋均值）",
+          abs(s30["avg_net_return_pct"] - sum(_realized) / len(_realized)) < 1e-3,
+          "realized=%r closed_mean=%.6f" % (s30["avg_net_return_pct"],
+                                            sum(_realized) / len(_realized)))
 
     # ── 指数侧：未平仓的净收益率「不适用」，价格侧的 R 照常 ──
     di = _call("sh000001", "30m", kl30)

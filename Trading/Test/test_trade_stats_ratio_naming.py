@@ -265,14 +265,47 @@ check_true("[4c] 扫描规模合理（>50 个源文件）",
 print("\n[5] 前端契约：字段名 + 中文标签")
 # ══════════════════════════════════════════════════════════════
 _js = open(os.path.join(_REPO, "Frontend", "app.js"), encoding="utf-8").read()
+
+
+def _extract_fn_js(src, fn_name):
+    """按花括号配平抽一个前端函数体（同 Test/test_stock_backtest.py::_extract_any_fn）。
+
+    为什么 [5c]/[5c2]/[5d] 要限定在 `renderTradeStats` 体内扫描：app.js 同时承载
+    两个统计面板 —— 期货「成交统计」（renderTradeStats）与股票「回测」（renderBacktest）。
+    2026-10-06 用户裁定股票回测面板核心行就叫裸「盈亏比」（两个面板口径不同：
+    期货 = 均值口径赔率，股票 = 已平仓笔均盈/均亏），故"全文件禁裸标签"会误伤。
+    本护栏的靶子是**期货面板**不许退回裸标签 ⇒ 作用域必须收窄到期货函数体。
+    """
+    m = re.search(r"        function " + fn_name + r"\(", src)
+    assert m, "app.js 抽取失败: " + fn_name
+    i = src.index("{", m.end())
+    depth = 0
+    for j in range(i, len(src)):
+        if src[j] == "{":
+            depth += 1
+        elif src[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return src[src.rfind("\n", 0, m.start()) + 1:j + 1], \
+                    src.rfind("\n", 0, m.start()) + 1, j + 1
+    raise AssertionError("app.js 花括号不配平: " + fn_name)
+
+
+_js_tg, _tg_lo, _tg_hi = _extract_fn_js(_js, "renderTradeStats")
+_, _bt_lo, _bt_hi = _extract_fn_js(_js, "renderBacktest")
 check_true("[5a] 前端读的是 d.pl_ratio", "d.pl_ratio" in _js)
 check_true("[5b] 前端仍读 profit_factor", "d.profit_factor" in _js)
 check_true("[5c] 面板有「%s」标签（核心三格）" % _PL_LABEL,
-           '<span class="stats-label">%s</span>' % _PL_LABEL in _js)
-check_true("[5c2] ★ 面板不再有裸「%s」标签（限定词不许被退回）" % _PL_LABEL_BARE,
-           '<span class="stats-label">%s</span>' % _PL_LABEL_BARE not in _js)
+           '<span class="stats-label">%s</span>' % _PL_LABEL in _js_tg)
+check_true("[5c2] ★ 面板不再有裸「%s」标签（限定词不许被退回；限期货面板作用域）" % _PL_LABEL_BARE,
+           '<span class="stats-label">%s</span>' % _PL_LABEL_BARE not in _js_tg)
+check_true("[5c3] ★ 裸「%s」标签只允许出现在股票回测面板 renderBacktest 体内" % _PL_LABEL_BARE,
+           all(not (_tg_lo <= m.start() < _tg_hi)
+               for m in re.finditer(r'<span class="stats-label">%s</span>' % _PL_LABEL_BARE, _js))
+           and all(_bt_lo <= m.start() < _bt_hi
+                   for m in re.finditer(r'<span class="stats-label">%s</span>' % _PL_LABEL_BARE, _js)))
 check_true("[5d] 面板有「盈利因子」标签（明细行）",
-           '<span class="stats-label">盈利因子</span>' in _js)
+           '<span class="stats-label">盈利因子</span>' in _js_tg)
 check_true("[5e] ★ 旧标签「%s」已不存在" % _LEGACY_LABEL, _LEGACY_LABEL not in _js)
 check_true("[5f] 前端不含旧字段名", _LEGACY_FIELD not in _js)
 
