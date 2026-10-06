@@ -63,7 +63,7 @@ KLINE_PIPELINE = [
     "onWheel", "toggleOverlay", "toggleDualWindow",
 ]
 
-# ③ window API 冻结基线：集合字面量即 SSOT，项数不在此写死（③ 处运行时打印实测数；旧数字留档于设计文档 v1.19 修订说明 §五）。
+# ③ window API 冻结基线：集合字面量即 SSOT，项数不在此写死（③ 处运行时打印实测数；旧数字留档于设计文档 v2.0「修订说明（v1.18 → v1.19）」§五）。
 #    「盘后下载」功能下线时曾从中移除 4 个 window 函数
 #    （toggleDownloadPanel / closeDownloadPanel / startDownload / stopDownload）。
 #    **总数不在这里手算**：③ 的期望集 = WINDOW_BASELINE | WINDOW_ALLOWED_NEW

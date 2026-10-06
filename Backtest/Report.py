@@ -214,6 +214,10 @@ def caliber_lines(result: RunResult) -> List[str]:
             COMMISSION_RATE, MIN_COMMISSION_CASH, STAMP_DUTY_RATE, TRANSFER_FEE_RATE,
             NOMINAL_COST_RATE, TARGET_AMOUNT),
         "偏离披露：① 不套 T+1（按 T+0）；② 不建模涨跌停 / 停牌；③ 前复权价（非真实成交价）",
+        # §8.10 后半：前端护栏之外，**报告口径行同样要写明**单窗态 / 未启用区间套。
+        # 前端只挡住"面板打开着却切成双窗"这一种情形，API 可被直接调用 ⇒ 报告侧必须自陈。
+        "窗口口径 单窗态：仅当前周期序列，未启用区间套"
+        "（双窗 / 副级别联立的买卖点不在本次口径内）",
     ]
     if result.is_index:
         lines.append(

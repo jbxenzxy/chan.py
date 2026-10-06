@@ -158,8 +158,8 @@ def part1():
     check("派生不变量 w + l + e == closed（未平仓不进胜负统计）",
           s["w"] + s["l"] + s["e"] == run["closed"],
           "w/l/e=%r closed=%r" % ((s["w"], s["l"], s["e"]), run["closed"]))
-    check("disclosures 三条非空（T+0 / 涨跌停 / 前复权）",
-          isinstance(d["disclosures"], list) and len(d["disclosures"]) == 3
+    check("disclosures 四条非空（T+0 / 涨跌停 / 前复权 / 单窗态）",
+          isinstance(d["disclosures"], list) and len(d["disclosures"]) == 4
           and all(str(x).strip() for x in d["disclosures"]),
           "disclosures=%r" % d.get("disclosures"))
 
@@ -781,22 +781,22 @@ def part11(kl, d_stock):
           == [[t[k] for k in _TRADE_KEYS] for t in d_stock["trades"]])
 
     # ④ 口径行 / 披露：只追加一条，不改写既有
-    check("⑪ disclosures：个股 3 条 / 指数 4 条，且末条说「不适用」",
-          len(d_stock["disclosures"]) == 3 and len(d_idx["disclosures"]) == 4
+    check("⑪ disclosures：个股 4 条 / 指数 5 条，且末条说「不适用」",
+          len(d_stock["disclosures"]) == 4 and len(d_idx["disclosures"]) == 5
           and "不适用" in d_idx["disclosures"][-1],
           "idx=%r" % (d_idx["disclosures"],))
-    check("⑪ caliber.lines：个股 4 条 / 指数 5 条，且末条说「不适用」",
-          len(d_stock["caliber"]["lines"]) == 4
-          and len(d_idx["caliber"]["lines"]) == 5
+    check("⑪ caliber.lines：个股 5 条 / 指数 6 条，且末条说「不适用」",
+          len(d_stock["caliber"]["lines"]) == 5
+          and len(d_idx["caliber"]["lines"]) == 6
           and "不适用" in d_idx["caliber"]["lines"][-1],
           "idx_lines=%r" % (d_idx["caliber"]["lines"],))
-    # 口径行 = [0]标的/周期/区间 [1]出场参数 [2]费率 [3]偏离披露 [4]指数追加
-    # 只有 [0] 含标的代码故必然不同；[1:4] 三条必须逐字相同 —— 否则就是分流
+    # 口径行 = [0]标的/周期/区间 [1]出场参数 [2]费率 [3]偏离披露 [4]窗口口径（单窗态） [5]指数追加
+    # 只有 [0] 含标的代码故必然不同；[1:5] 四条必须逐字相同 —— 否则就是分流
     # 顺手改写了既有口径（比"多印一行"坏得多）
-    check("⑪ 口径行 [1:4] 三条两侧逐字相同（出场参数 / 费率 / 偏离披露）",
-          d_idx["caliber"]["lines"][1:4] == d_stock["caliber"]["lines"][1:4],
-          "idx=%r stock=%r" % (d_idx["caliber"]["lines"][1:4],
-                               d_stock["caliber"]["lines"][1:4]))
+    check("⑪ 口径行 [1:5] 四条两侧逐字相同（出场参数 / 费率 / 偏离披露 / 窗口口径）",
+          d_idx["caliber"]["lines"][1:5] == d_stock["caliber"]["lines"][1:5],
+          "idx=%r stock=%r" % (d_idx["caliber"]["lines"][1:5],
+                               d_stock["caliber"]["lines"][1:5]))
     check("⑪ 口径行 [0] 只差「标的」代码（周期 / 区间口径未被分流触碰）",
           d_idx["caliber"]["lines"][0].replace("sh000001", "sz002190")
           == d_stock["caliber"]["lines"][0],
@@ -812,11 +812,11 @@ def part11(kl, d_stock):
     r_idx = RunResult(market="sh", code="000001", freq="d", is_index=True)
     r_stk = RunResult(market="sz", code="002190", freq="d", is_index=False)
     check("⑪ Backtest.Report.caliber_lines 直接吃 RunResult.is_index（不依赖 App 层）",
-          len(caliber_lines(r_idx)) == 5
+          len(caliber_lines(r_idx)) == 6
           and any("不适用" in x for x in caliber_lines(r_idx)),
           "lines=%r" % (caliber_lines(r_idx),))
     check("⑪ is_index=False（默认）时不追加 —— 既有调用方行为零变化",
-          len(caliber_lines(r_stk)) == 4
+          len(caliber_lines(r_stk)) == 5
           and not any("不适用" in x for x in caliber_lines(r_stk)))
     check("⑪ RunResult.is_index 默认 False（不显式注入就不分流）",
           RunResult(market="sh", code="000001", freq="d").is_index is False)
